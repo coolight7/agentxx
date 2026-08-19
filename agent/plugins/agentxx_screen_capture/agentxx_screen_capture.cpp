@@ -1,6 +1,7 @@
 // agentxx_screen_capture —— 屏幕捕获插件 (Windows)
 // - 从 agentxx_computer_use 拆分独立: 单帧/全部屏幕/鼠标屏/流式推送
-// - 注册工具: agentxx_screen_capture (合并 capture_all / capture_mouse / capture_screen / get_screen_count / streaming)
+// - 注册工具: agentxx_screen_capture (合并 capture_all / capture_mouse / capture_screen /
+// get_screen_count / streaming)
 // - 流式帧经 publish 事件推送 (topic "agentxx_screen_capture.frame")
 // - 像素数据不进入会话消息: 捕获帧经 WIC 编码为 PNG 落盘到宿主 dataDir 的
 //   captures/ 目录, 工具结果只包含元信息 + 文件路径 (消息保持 KB 级);
@@ -124,8 +125,7 @@ static void registerTool(
 // =====================================================================
 
 // 前置声明 (ScreenCaptureHolder 流式回调引用; 定义见下方)
-static codegraph::Json
-    frameToJson(const agentxx::expand::ScreenFrame& f, bool saveImages);
+static codegraph::Json frameToJson(const agentxx::expand::ScreenFrame& f, bool saveImages);
 
 /// 流式采集单例 (ScreenCapture 内部自管线程; unload 时停止)
 struct ScreenCaptureHolder {
@@ -175,13 +175,11 @@ static std::string g_capturesDir;
 
 /// 生成截图文件路径: {capturesDir}/capture_{yyyyMMdd_HHmmss_mmm}_{screen}.png
 static std::string buildCapturePath(int screenIndex) {
-    const auto now    = std::chrono::system_clock::now();
-    const auto tt     = std::chrono::system_clock::to_time_t(now);
-    const auto millis = std::chrono::duration_cast<std::chrono::milliseconds>(
-                            now.time_since_epoch()
-                        )
-                            .count()
-                        % 1000;
+    const auto now = std::chrono::system_clock::now();
+    const auto tt  = std::chrono::system_clock::to_time_t(now);
+    const auto millis
+        = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count()
+          % 1000;
     std::tm tm{};
 #if defined(_WIN32)
     localtime_s(&tm, &tt);
@@ -206,8 +204,7 @@ static std::string buildCapturePath(int screenIndex) {
 /// - saveImages=true 且捕获目录可用时: 编码 PNG 落盘, 结果含 image_path;
 ///   编码/落盘失败在 image_error 标记, 不影响其余元信息返回
 /// - 结果体积控制在 KB 级 (元信息仅数百字节), 不会污染会话上下文
-static codegraph::Json
-    frameToJson(const agentxx::expand::ScreenFrame& f, bool saveImages) {
+static codegraph::Json frameToJson(const agentxx::expand::ScreenFrame& f, bool saveImages) {
     codegraph::Json j = codegraph::Json::object();
     j["width"]        = f.width;
     j["height"]       = f.height;
@@ -230,10 +227,8 @@ static codegraph::Json
 }
 
 /// 帧数组 → JSON (空帧标记失败)
-static std::string framesResult(
-    const std::vector<agentxx::expand::ScreenFrame>& frames,
-    bool                                             saveImages
-) {
+static std::string
+    framesResult(const std::vector<agentxx::expand::ScreenFrame>& frames, bool saveImages) {
     if (frames.empty()) {
         return R"({"ok":false,"error":"capture failed"})";
     }
@@ -257,9 +252,10 @@ static const char* kScreenCaptureDefaultDepict
 static void registerScreenCaptureTool() {
     codegraph::Json cmd = codegraph::Json::object();
     cmd["type"]         = "string";
-    cmd["description"]  = "Operation to perform: capture_all (default), capture_mouse, capture_screen, "
-                          "get_screen_count, start_streaming, stop_streaming.";
-    cmd["enum"]         = codegraph::Json::array(
+    cmd["description"]
+        = "Operation to perform: capture_all (default), capture_mouse, capture_screen, "
+          "get_screen_count, start_streaming, stop_streaming.";
+    cmd["enum"] = codegraph::Json::array(
         {codegraph::Json("capture_all"),
          codegraph::Json("capture_mouse"),
          codegraph::Json("capture_screen"),
@@ -267,23 +263,25 @@ static void registerScreenCaptureTool() {
          codegraph::Json("start_streaming"),
          codegraph::Json("stop_streaming")}
     );
-    codegraph::Json schema                 = codegraph::Json::object();
-    schema["type"]                         = "object";
-    schema["properties"]                   = codegraph::Json::object();
-    schema["properties"]["command"]        = cmd;
-    schema["properties"]["screen_index"]   = codegraph::Json({
-        {"type",        "integer"                                                                               },
-        {"description", "Optional 0-based screen index for capture_screen (or default capture when specified)."}
+    codegraph::Json schema               = codegraph::Json::object();
+    schema["type"]                       = "object";
+    schema["properties"]                 = codegraph::Json::object();
+    schema["properties"]["command"]      = cmd;
+    schema["properties"]["screen_index"] = codegraph::Json({
+        {"type",        "integer"                                                               },
+        {"description",
+         "Optional 0-based screen index for capture_screen (or default capture when specified)."}
     });
-    schema["properties"]["frame_rate"]     = codegraph::Json({
-        {"type",        "integer"                                                   },
+    schema["properties"]["frame_rate"]   = codegraph::Json({
+        {"type",        "integer"                                                  },
         {"description", "Target frame rate (1-30) for start_streaming. Default: 5."}
     });
-    schema["properties"]["save_images"]    = codegraph::Json({
-        {"type",        "boolean"                                               },
-        {"description", "Save each captured frame as a PNG file under the host dataDir "
-                        "'captures/' directory and return its file path. Pixels never "
-                        "enter the conversation. Default: true."}
+    schema["properties"]["save_images"]  = codegraph::Json({
+        {"type",        "boolean"                  },
+        {"description",
+         "Save each captured frame as a PNG file under the host dataDir "
+           "'captures/' directory and return its file path. Pixels never "
+           "enter the conversation. Default: true."}
     });
 
     registerTool(
@@ -301,7 +299,8 @@ static void registerScreenCaptureTool() {
             int64_t idx    = -1;
             bool    hasIdx = jsonGetInt(args.doc().at_pointer("/screen_index"), idx);
 
-            if (!hasCommand || command.empty() || command == "capture" || command == "capture_all") {
+            if (!hasCommand || command.empty() || command == "capture"
+                || command == "capture_all") {
                 if (!hasCommand && hasIdx && idx >= 0) {
                     command = "capture_screen";
                 } else {
@@ -383,21 +382,24 @@ static void ensureToolPromptInHost() {
         return;
     }
 
-    codegraph::Json patch      = codegraph::Json::object();
-    patch["toolPrompt"]        = codegraph::Json::object();
-    bool needUpdate            = false;
+    codegraph::Json patch = codegraph::Json::object();
+    patch["toolPrompt"]   = codegraph::Json::object();
+    bool needUpdate       = false;
 
     if (j.doc().at_pointer("/toolPrompt/agentxx_screen_capture").error()) {
-        codegraph::Json tp     = codegraph::Json::object();
-        tp["depict"]           = std::string{kScreenCaptureDefaultDepict};
-        codegraph::Json args   = codegraph::Json::object();
-        args["command"]      = "Command to execute: capture_all (default), capture_mouse, capture_screen, "
-                               "get_screen_count, start_streaming, stop_streaming.";
-        args["screen_index"] = "Optional 0-based screen index for capture_screen (or default capture when specified).";
-        args["frame_rate"]   = "Target frame rate for start_streaming (1-30). Default: 5.";
-        args["save_images"]  = "Save each captured frame as PNG under the host dataDir 'captures/' and "
-                               "return the file path (pixels never enter the conversation). Default: true.";
-        tp["args"]           = args;
+        codegraph::Json tp   = codegraph::Json::object();
+        tp["depict"]         = std::string{kScreenCaptureDefaultDepict};
+        codegraph::Json args = codegraph::Json::object();
+        args["command"]
+            = "Command to execute: capture_all (default), capture_mouse, capture_screen, "
+              "get_screen_count, start_streaming, stop_streaming.";
+        args["screen_index"]
+            = "Optional 0-based screen index for capture_screen (or default capture when specified).";
+        args["frame_rate"] = "Target frame rate for start_streaming (1-30). Default: 5.";
+        args["save_images"]
+            = "Save each captured frame as PNG under the host dataDir 'captures/' and "
+              "return the file path (pixels never enter the conversation). Default: true.";
+        tp["args"]                                    = args;
         patch["toolPrompt"]["agentxx_screen_capture"] = tp;
         needUpdate                                    = true;
     }
@@ -431,7 +433,8 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_get_inf
     return &info;
 }
 
-extern "C" AGENTXX_PLUGIN_EXPORT int agentxx_plugin_entry(const AgentxxHost* host, void** /*plugin_ctx*/) {
+extern "C" AGENTXX_PLUGIN_EXPORT int
+    agentxx_plugin_entry(const AgentxxHost* host, void** /*plugin_ctx*/) {
     g_host = host;
     // 读取宿主 dataDir (io 线程), 初始化截图落盘目录 {dataDir}/captures
     // - get_config 仅 io 线程可用, execute 运行在线程池, 故此处缓存供后续只读

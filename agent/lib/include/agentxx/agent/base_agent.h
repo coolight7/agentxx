@@ -114,11 +114,11 @@ public:
 
     /// 合并的 run helper: 构造 RunConfig + 执行并收集 content (重构1 收敛三 run* 重复)
     asio::awaitable<SimpleRunResult> runInternalAsync(
-        std::string_view                          threadId,
-        std::vector<neograph::ChatMessage>        messages,
-        neograph::graph::GraphStreamCallback      callback = nullptr,
-        std::string_view                          modelName = "",
-        bool                                      cleanupAfter = false
+        std::string_view                     threadId,
+        std::vector<neograph::ChatMessage>   messages,
+        neograph::graph::GraphStreamCallback callback     = nullptr,
+        std::string_view                     modelName    = "",
+        bool                                 cleanupAfter = false
     );
 
 protected:
@@ -128,14 +128,14 @@ protected:
     // =================================================================
 
     /// 添加中间件到 agentContext->middlewareHandleContext->handles
-    /// - 在 init() 中于 createTools() 之前调用
-    /// - 中间件自带的 toolcalls 会在 createTools() 之后被自动收集
-    virtual asio::awaitable<void> setupMiddleware();
+    /// - 在 init() 中于 initTools() 之前调用
+    /// - 中间件自带的 toolcalls 会在 initTools() 之后被自动收集
+    virtual asio::awaitable<void> initMiddleware();
 
     /// 创建工具列表
-    /// - 在 init() 中于 setupMiddleware() 之后调用
+    /// - 在 init() 中于 initMiddleware() 之后调用
     /// - 返回的工具将被注册到 GraphEngine
-    virtual asio::awaitable<std::vector<std::unique_ptr<agentxx::tools::XXToolBase>>> createTools();
+    virtual asio::awaitable<std::vector<std::unique_ptr<agentxx::tools::XXToolBase>>> initTools();
 
     /// 构建图定义 JSON
     /// - 默认实现返回标准 ReAct 循环:
@@ -165,7 +165,7 @@ protected:
         const std::vector<std::unique_ptr<agentxx::tools::XXToolBase>>& tools
     );
 
-    /// 通知 agent 启动进度 (供 init/createTools 各启动阶段调用):
+    /// 通知 agent 启动进度 (供 init/initTools 各启动阶段调用):
     /// - 经 agentContext->startupNotifier 转发给客户端 (TUI banner 展示);
     ///   未注册回调时 no-op
     /// - 必须由 agent 线程 (init 协程上下文) 调用

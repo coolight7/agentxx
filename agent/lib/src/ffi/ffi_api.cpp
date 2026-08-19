@@ -190,7 +190,7 @@ int agentxx_destroy(AgentxxAgent* a, char** log) {
             rc = a->impl->destroy(err);
         }
     } catch (...) {
-        rc = AGENTXX_ERR_INTERNAL;
+        rc  = AGENTXX_ERR_INTERNAL;
         err = cxxErrText();
     }
     delete a; // 释放句柄 (impl 引用计数随之递减; destroy 已等 io 线程退出)
@@ -246,13 +246,7 @@ int agentxx_select_model(AgentxxAgent* a, const char* model_name, char** log) {
     }
 }
 
-int agentxx_set_permission(
-    AgentxxAgent* a,
-    const char*   path,
-    int           allow,
-    int           op,
-    char**        log
-) {
+int agentxx_set_permission(AgentxxAgent* a, const char* path, int allow, int op, char** log) {
     if (a == nullptr || !a->impl) {
         return ffiFail(AGENTXX_ERR_INVALID, "null handle", log);
     }

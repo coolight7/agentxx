@@ -101,7 +101,7 @@ struct PluginSortItem {
 /// - 无进展 (环/缺失) 时剩余项按原序附后, 由加载路径的依赖检查报错
 template<typename T>
 std::vector<T> topoSortPlugins(std::vector<T> items) {
-    std::vector<T>   ordered;
+    std::vector<T> ordered;
     ordered.reserve(items.size());
     std::vector<bool> placed(items.size(), false);
     size_t            placedCount = 0;
@@ -196,8 +196,11 @@ void ioCallSyncVoid(Mgr* mgr, std::function<void()> fn) {
 /// - onlyEnabled=false: 全部统计 (启用级联: 需恢复被级联禁用的插件)
 /// - PluginMap 元素须含 name(键)/depends/enabled 成员
 template<typename PluginMap>
-std::vector<std::string>
-    collectReverseRequiredDeps(const PluginMap& plugins, const std::string& target, bool onlyEnabled) {
+std::vector<std::string> collectReverseRequiredDeps(
+    const PluginMap&   plugins,
+    const std::string& target,
+    bool               onlyEnabled
+) {
     std::vector<std::string> out;
     for (const auto& [name, inst] : plugins) {
         if (name == target || (onlyEnabled && !inst->enabled)) {

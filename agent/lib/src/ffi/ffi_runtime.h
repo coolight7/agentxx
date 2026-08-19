@@ -47,7 +47,7 @@ class FfiAgentRuntime : public std::enable_shared_from_this<FfiAgentRuntime> {
 public:
 
     enum class State {
-        Created, ///< 已创建未启动
+        Created,  ///< 已创建未启动
         Starting, ///< start 受理, init/装配进行中
         Ready,    ///< 服务端就绪 (EVT_READY 已发), 可正常交互
         Stopping, ///< stop 进行中 (等待 io 线程退出)
@@ -57,8 +57,12 @@ public:
 
     /// 创建运行时 (构造 agent 对象与配置; 不启动线程)
     /// @param err 非 NULL 时失败填入详情
-    static std::shared_ptr<FfiAgentRuntime>
-        create(const char* config_json, const char* model_json, const AgentxxCallbacks* cb, std::string& err);
+    static std::shared_ptr<FfiAgentRuntime> create(
+        const char*             config_json,
+        const char*             model_json,
+        const AgentxxCallbacks* cb,
+        std::string&            err
+    );
 
     ~FfiAgentRuntime();
 
@@ -143,6 +147,7 @@ private:
 
         FfiLogSink(FfiAgentRuntime& owner) :
             owner_(owner) {}
+
         ~FfiLogSink() override {
             shutdownThread();
         }
@@ -178,7 +183,8 @@ private:
     void onSyncReplyOnIoThread(FfiClientAgentIO::SyncKind kind, neograph::json j);
 
     /// 同步查询通用实现; send 为 io 线程执行的请求发送动作
-    std::string syncQuery(FfiClientAgentIO::SyncKind kind, std::function<void()> send, std::string& err);
+    std::string
+        syncQuery(FfiClientAgentIO::SyncKind kind, std::function<void()> send, std::string& err);
 
     /// 生成唯一会话 thread_id
     static std::string generateThreadId();
@@ -187,24 +193,24 @@ private:
     void pushLogItem(LogItem item);
 
     // ---- 运行时拓扑 ----
-    std::shared_ptr<asio::io_context>                 ioCtx_;
+    std::shared_ptr<asio::io_context>                                         ioCtx_;
     std::optional<asio::executor_work_guard<asio::io_context::executor_type>> workGuard_;
-    std::thread                                       ioThread_;
-    std::shared_ptr<agent::CodeAgent>                 agent_;
-    std::shared_ptr<agent::AgentHost>                 host_;
-    std::shared_ptr<agent::SessionServerAgentIO>      serverIO_;
-    std::shared_ptr<FfiClientAgentIO>                 clientIO_;
-    std::string                                       threadId_;
-    std::atomic<State>                                state_{State::Created};
+    std::thread                                                               ioThread_;
+    std::shared_ptr<agent::CodeAgent>                                         agent_;
+    std::shared_ptr<agent::AgentHost>                                         host_;
+    std::shared_ptr<agent::SessionServerAgentIO>                              serverIO_;
+    std::shared_ptr<FfiClientAgentIO>                                         clientIO_;
+    std::string                                                               threadId_;
+    std::atomic<State> state_{State::Created};
 
     /// HIL 中断等待宿主应答超时 (SessionServerAgentIO 配置)
-    std::chrono::milliseconds                        interruptTimeout_{0};
+    std::chrono::milliseconds interruptTimeout_{0};
 
     // ---- 事件回调 (值拷贝) ----
     AgentxxCallbacks callbacks_{};
 
     // ---- 同步查询等待 (syncMutex_ 保护) ----
-    mutable std::mutex syncMutex_;
+    mutable std::mutex                                                          syncMutex_;
     std::map<FfiClientAgentIO::SyncKind, std::deque<std::shared_ptr<SyncWait>>> syncWaits_;
 
     // ---- 日志环形缓冲 (logMutex_ 保护) ----

@@ -358,7 +358,8 @@ void ModelCallWrapNode::repairMessages(neograph::graph::NodeInput& in) {
                             do {
                                 newId = makeUniqueToolCallId(dupSeq.fetch_add(1));
                             } while (!seenIds.insert(newId).second);
-                            // 回退一次插入(上面已插入), 下面 dupMap 持有 newId, seenIds 已占位防后续碰撞
+                            // 回退一次插入(上面已插入), 下面 dupMap 持有 newId, seenIds
+                            // 已占位防后续碰撞
                             dupMap[id].push_back(DupToolCall{mi, ti, std::move(newId)});
                         }
                     }
@@ -378,16 +379,17 @@ void ModelCallWrapNode::repairMessages(neograph::graph::NodeInput& in) {
                 // 第三遍: 按 assistant 声明顺序一一回填 tool 结果 (k+1 偏移: 第1个结果对应原始调用)
                 // - 若 tool 结果缺失/乱序, 仅对存在的 k+1 位置回填, 不会错配到其他 id
                 for (auto& [oldId, infos] : dupMap) {
-                    auto it = toolResultIdxs.find(oldId);
+                    auto                       it = toolResultIdxs.find(oldId);
                     const std::vector<size_t>* resultIdxs
                         = (it == toolResultIdxs.end()) ? nullptr : &it->second;
                     for (size_t k = 0; k < infos.size(); ++k) {
-                        auto& info = infos[k];
+                        auto& info                                  = infos[k];
                         msgs[info.msgIdx].tool_calls[info.tcIdx].id = info.newId;
                         if (resultIdxs && k + 1 < resultIdxs->size()) {
                             msgs[(*resultIdxs)[k + 1]].tool_call_id = info.newId;
                         } else if (resultIdxs && resultIdxs->size() == 1 && k == 0) {
-                            // 边界: 仅1个 tool 结果但出现重复 assistant(重试场景), 不回填保持原结果对应首次调用
+                            // 边界: 仅1个 tool 结果但出现重复 assistant(重试场景),
+                            // 不回填保持原结果对应首次调用
                         }
                         XX_LOGW(
                             "RepairMessages: duplicate tool_call_id '{}' -> '{}' (msg {} tc {})",

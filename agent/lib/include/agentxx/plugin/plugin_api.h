@@ -54,13 +54,13 @@ extern "C" {
 /// 除入口符号外的全部符号 (含插件内部 C++ 符号、第三方静态库符号) 均隐藏,
 /// 避免污染宿主动态符号表与多插件符号冲突。
 #if defined(AGENTXX_PLUGIN_BUILTIN)
-  #define AGENTXX_PLUGIN_EXPORT
+#define AGENTXX_PLUGIN_EXPORT
 #elif defined(_WIN32)
-  #define AGENTXX_PLUGIN_EXPORT __declspec(dllexport)
+#define AGENTXX_PLUGIN_EXPORT __declspec(dllexport)
 #elif defined(__GNUC__) || defined(__clang__)
-  #define AGENTXX_PLUGIN_EXPORT __attribute__((visibility("default")))
+#define AGENTXX_PLUGIN_EXPORT __attribute__((visibility("default")))
 #else
-  #define AGENTXX_PLUGIN_EXPORT
+#define AGENTXX_PLUGIN_EXPORT
 #endif
 
 #define AGENTXX_PLUGIN_API_VERSION 7
@@ -352,12 +352,7 @@ typedef struct AgentxxHostVtable {
     ///   定时器, 回调不会在插件代码段卸载后触发
     /// - 回调执行期间插件代码段由宿主保活 (inflight 计数); 回调内可调用
     ///   publish / offload / log 等任意 API
-    void* (*add_timer)(
-        const AgentxxHost* host,
-        long               interval_ms,
-        void (*fn)(void* ud),
-        void* ud
-    );
+    void* (*add_timer)(const AgentxxHost* host, long interval_ms, void (*fn)(void* ud), void* ud);
     /// 取消定时器 (句柄随后失效; 插件卸载后句柄自动失效, 不得再调用)
     void (*cancel_timer)(const AgentxxHost* host, void* timer);
     /// 在宿主阻塞线程池执行同步回调 (阻塞操作专用: 文件遍历/系统采样等;

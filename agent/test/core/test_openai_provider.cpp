@@ -3472,19 +3472,17 @@ asio::awaitable<void> test_responses_send_thinking(MockOpenAIServer& mock, uint1
 ///   - 请求体不应包含 include 参数
 ///   - 不回传历史 reasoning item (summary 形式)
 ///   - extra_config 显式指定 include 数组时可覆盖默认值
-asio::awaitable<void> test_responses_request_reasoning_summary_disabled(
-    MockOpenAIServer& mock,
-    uint16_t          port
-) {
+asio::awaitable<void>
+    test_responses_request_reasoning_summary_disabled(MockOpenAIServer& mock, uint16_t port) {
     std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
     mock.mode           = MockMode::ResponsesNormal;
 
     // 1) requestReasoningSummary=false: 不请求摘要、不回传历史 reasoning
     {
-        auto mc                     = makeCodexCfg(baseUrl);
-        mc.sendThinking             = true;
-        mc.requestReasoningSummary  = false;
-        auto provider               = server::OpenAIProvider::create(mc);
+        auto mc                    = makeCodexCfg(baseUrl);
+        mc.sendThinking            = true;
+        mc.requestReasoningSummary = false;
+        auto provider              = server::OpenAIProvider::create(mc);
 
         neograph::CompletionParams params;
         params.model    = "gpt-5-codex";
@@ -3515,9 +3513,7 @@ asio::awaitable<void> test_responses_request_reasoning_summary_disabled(
     {
         auto mc         = makeCodexCfg(baseUrl);
         mc.sendThinking = true;
-        mc.extra_config = neograph::json::parse(
-            R"({"include":["reasoning.encrypted_content"]})"
-        );
+        mc.extra_config = neograph::json::parse(R"({"include":["reasoning.encrypted_content"]})");
         auto                       provider = server::OpenAIProvider::create(mc);
         neograph::CompletionParams params;
         params.model    = "gpt-5-codex";
@@ -3531,10 +3527,7 @@ asio::awaitable<void> test_responses_request_reasoning_summary_disabled(
             XX_TEST_EXPECT_TRUE(sent.contains("include"));
             XX_TEST_EXPECT_TRUE(sent["include"].is_array());
             XX_TEST_EXPECT_EQ(sent["include"].size(), (size_t)1);
-            XX_TEST_EXPECT_EQ(
-                sent["include"][0].get<std::string>(),
-                "reasoning.encrypted_content"
-            );
+            XX_TEST_EXPECT_EQ(sent["include"][0].get<std::string>(), "reasoning.encrypted_content");
         } catch (const std::exception& e) {
             XX_TEST_FAILED++;
             TEST_FAIL << "responses extra_config.include override failed: " << e.what()

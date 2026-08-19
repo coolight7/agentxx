@@ -25,9 +25,9 @@ neograph::ChatTool GetCurrentDateTimeTool::get_definition() const {
         get_name(),
         prompt.depict,
         neograph::json{
-            {"type", "object"},
-            {"properties", neograph::json::object()},
-        },
+                       {"type", "object"},
+                       {"properties", neograph::json::object()},
+                       },
     };
 }
 

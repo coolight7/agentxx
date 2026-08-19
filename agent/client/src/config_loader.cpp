@@ -337,13 +337,13 @@ YamlAppConfig loadYamlConfig(
             // 参数): opencode-muse-spark 等网关不支持 reasoning.summary_text 变体,
             // 需设 false, 否则 API 400 (unknown variant reasoning.summary_text)
             if (node["request_reasoning_summary"]) {
-                mc.requestReasoningSummary = resolveEnvVars(
-                                                 (node["request_reasoning_summary"])
-                                                     .as<std::string>("true"),
-                                                 dotEnvVars,
-                                                 overrideEnvVars
-                                             )
-                                             == "true";
+                mc.requestReasoningSummary
+                    = resolveEnvVars(
+                          (node["request_reasoning_summary"]).as<std::string>("true"),
+                          dotEnvVars,
+                          overrideEnvVars
+                      )
+                      == "true";
             }
             if (node["extra_headers"] && node["extra_headers"].IsMap()) {
                 for (const auto& kv : node["extra_headers"]) {
@@ -535,7 +535,9 @@ YamlAppConfig loadYamlConfig(
         );
         // 兼容 true/false, 1/0, yes/no, on/off
         std::string low = val;
-        std::transform(low.begin(), low.end(), low.begin(), [](unsigned char c){ return std::tolower(c); });
+        std::transform(low.begin(), low.end(), low.begin(), [](unsigned char c) {
+            return std::tolower(c);
+        });
         if (low == "false" || low == "0" || low == "no" || low == "off") {
             cfg.enableSubagent = false;
         } else if (low == "true" || low == "1" || low == "yes" || low == "on") {

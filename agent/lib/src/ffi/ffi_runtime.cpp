@@ -163,10 +163,10 @@ FfiAgentRuntime::FfiAgentRuntime() :
     threadId_(generateThreadId()) {}
 
 std::shared_ptr<FfiAgentRuntime> FfiAgentRuntime::create(
-    const char*              config_json,
-    const char*              model_json,
-    const AgentxxCallbacks*  cb,
-    std::string&             err
+    const char*             config_json,
+    const char*             model_json,
+    const AgentxxCallbacks* cb,
+    std::string&            err
 ) {
     auto rt = std::shared_ptr<FfiAgentRuntime>(new FfiAgentRuntime());
     if (cb != nullptr) {
@@ -180,7 +180,11 @@ std::shared_ptr<FfiAgentRuntime> FfiAgentRuntime::create(
     return rt;
 }
 
-bool FfiAgentRuntime::buildConfigs(const char* config_json, const char* model_json, std::string& err) {
+bool FfiAgentRuntime::buildConfigs(
+    const char*  config_json,
+    const char*  model_json,
+    std::string& err
+) {
     auto config = std::make_shared<AgentConfig>();
 
     // ---- AgentConfig 覆盖 JSON ----
@@ -196,11 +200,11 @@ bool FfiAgentRuntime::buildConfigs(const char* config_json, const char* model_js
             err = "config_json 须为 JSON 对象";
             return false;
         }
-        config->dataDir              = jsonStr(cfgJ, "dataDir", "");
+        config->dataDir                  = jsonStr(cfgJ, "dataDir", "");
         config->enableSessionPersistence = jsonBool(cfgJ, "enableSessionPersistence", false);
-        config->sessionPersistenceRoot  = jsonStr(cfgJ, "sessionPersistenceRoot", "");
-        config->agentName               = jsonStr(cfgJ, "agentName", config->agentName);
-        config->llmMaxRetry             = jsonInt(cfgJ, "llmMaxRetry", config->llmMaxRetry);
+        config->sessionPersistenceRoot   = jsonStr(cfgJ, "sessionPersistenceRoot", "");
+        config->agentName                = jsonStr(cfgJ, "agentName", config->agentName);
+        config->llmMaxRetry              = jsonInt(cfgJ, "llmMaxRetry", config->llmMaxRetry);
         config->permissionMode = permissionModeFromString(jsonStr(cfgJ, "permissionMode", "ask"));
         jsonStrArray(cfgJ, "permissionAllowPaths", config->permissionAllowPaths);
         jsonStrArray(cfgJ, "permissionDenyPaths", config->permissionDenyPaths);
@@ -215,9 +219,9 @@ bool FfiAgentRuntime::buildConfigs(const char* config_json, const char* model_js
                     continue;
                 }
                 agentxx::agent::McpServerConfig mc;
-                mc.url          = jsonStr(v, "url", "");
-                const int timeoutSec = jsonInt(v, "timeoutSec", 120);
-                mc.toolTimeout  = std::chrono::milliseconds(timeoutSec * 1000);
+                mc.url                    = jsonStr(v, "url", "");
+                const int timeoutSec      = jsonInt(v, "timeoutSec", 120);
+                mc.toolTimeout            = std::chrono::milliseconds(timeoutSec * 1000);
                 config->mcpServerUrls[ns] = std::move(mc);
             }
         }
@@ -269,12 +273,12 @@ bool FfiAgentRuntime::buildConfigs(const char* config_json, const char* model_js
     mc.apiKey                   = jsonStr(mj, "apiKey", "EMPTY");
     mc.modelName                = jsonStr(mj, "modelName", "");
     mc.apiPath                  = jsonStr(mj, "apiPath", "");
-    mc.connectTimeoutSeconds     = jsonInt(mj, "connectTimeoutSeconds", 16);
-    mc.readChunkTimeoutSeconds   = jsonInt(mj, "readChunkTimeoutSeconds", 100);
-    mc.maxConcurrentConnections  = jsonInt(mj, "maxConcurrentConnections", size_t{5});
-    mc.anthropicVersion          = jsonStr(mj, "anthropicVersion", "2023-06-01");
-    mc.modelContenxtMaxToken     = jsonInt(mj, "modelContextMaxToken", size_t{0});
-    mc.sendThinking              = jsonBool(mj, "sendThinking", false);
+    mc.connectTimeoutSeconds    = jsonInt(mj, "connectTimeoutSeconds", 16);
+    mc.readChunkTimeoutSeconds  = jsonInt(mj, "readChunkTimeoutSeconds", 100);
+    mc.maxConcurrentConnections = jsonInt(mj, "maxConcurrentConnections", size_t{5});
+    mc.anthropicVersion         = jsonStr(mj, "anthropicVersion", "2023-06-01");
+    mc.modelContenxtMaxToken    = jsonInt(mj, "modelContextMaxToken", size_t{0});
+    mc.sendThinking             = jsonBool(mj, "sendThinking", false);
     if (mj.contains("sslVerify") && !mj["sslVerify"].is_null() && mj["sslVerify"].is_boolean()) {
         mc.sslVerify = mj["sslVerify"].get<bool>();
     }
@@ -298,9 +302,9 @@ bool FfiAgentRuntime::buildConfigs(const char* config_json, const char* model_js
         err = "模型配置非法: 需 baseUrl 非空 或 apiKey != \"EMPTY\"";
         return false;
     }
-    config->model              = mc;
+    config->model                    = mc;
     config->availableModels[mc.name] = mc;
-    config->currentModelName   = mc.name;
+    config->currentModelName         = mc.name;
 
     try {
         agent_ = std::make_shared<agentxx::agent::CodeAgent>(config);
@@ -341,8 +345,7 @@ int FfiAgentRuntime::start(std::string& err) {
     const auto agentEx = agent_->ioCtx->get_executor();
 
     // 进程内传输对 (client 端点 / 服务端点同 executor, 单 io 线程)
-    auto [clientTrans, serverTrans]
-        = agent::ChannelAgentIOTransport::makePair(agentEx, agentEx);
+    auto [clientTrans, serverTrans] = agent::ChannelAgentIOTransport::makePair(agentEx, agentEx);
 
     // FFI client 端点
     clientIO_ = std::make_shared<FfiClientAgentIO>(agentEx, callbacks_);
@@ -353,7 +356,7 @@ int FfiAgentRuntime::start(std::string& err) {
     agent::SessionServerAgentIO::Config scCfg;
     scCfg.threadId         = threadId_;
     scCfg.interruptTimeout = interruptTimeout_;
-    serverIO_ = std::make_shared<agent::SessionServerAgentIO>(agentEx, agent_, scCfg);
+    serverIO_              = std::make_shared<agent::SessionServerAgentIO>(agentEx, agent_, scCfg);
     serverIO_->setTransport(std::move(serverTrans));
 
     // 启动进度 → 日志环形缓冲 (EVT_READY 前的启动过程日志, 可经 drain 取走)
@@ -362,7 +365,7 @@ int FfiAgentRuntime::start(std::string& err) {
     };
 
     // 同步应答路由: io 线程收到 WireModelInfo/ContextMessages/SessionList 时完成等待方
-    auto weakSelf = std::weak_ptr<FfiAgentRuntime>{shared_from_this()};
+    auto weakSelf          = std::weak_ptr<FfiAgentRuntime>{shared_from_this()};
     clientIO_->onSyncReply = [weakSelf](FfiClientAgentIO::SyncKind kind, neograph::json j) {
         if (auto sp = weakSelf.lock()) {
             sp->onSyncReplyOnIoThread(kind, std::move(j));
@@ -374,7 +377,7 @@ int FfiAgentRuntime::start(std::string& err) {
 
     // work guard 必须先于 io 线程创建, 避免 run() 因事件队列为空立即返回
     workGuard_.emplace(asio::make_work_guard(*ioCtx_));
-    ioThread_  = std::thread([this]() {
+    ioThread_ = std::thread([this]() {
         ioCtx_->run();
     });
     clientIO_->setAgentThreadId(ioThread_.get_id());
@@ -720,9 +723,9 @@ bool FfiAgentRuntime::hasPendingInterrupt(int64_t interruptId) const {
 }
 
 int FfiAgentRuntime::interruptRespond(
-    int64_t       interruptId,
-    const char*   valuesJson,
-    std::string&  err
+    int64_t      interruptId,
+    const char*  valuesJson,
+    std::string& err
 ) {
     if (!stateUsable(state())) {
         err = "状态错误: 未启动或已停止";

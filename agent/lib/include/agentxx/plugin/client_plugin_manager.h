@@ -156,7 +156,7 @@ public:
 /// - sub 为强引用: 订阅对象从 subscriptions 摘除后仍被本句柄保活,
 ///   unload 回调内退订不会解引用已释放内存
 struct ClientSubscriptionImpl {
-    ClientPluginInstance*                        inst = nullptr;
+    ClientPluginInstance*                               inst = nullptr;
     std::shared_ptr<ClientPluginInstance::Subscription> sub;
 };
 
@@ -220,9 +220,9 @@ public:
     ///   dlopen 的重复加载/卸载)
     /// - 返回插件实例; 加载失败返回 nullptr (错误记日志)
     asio::awaitable<std::shared_ptr<ClientPluginInstance>> loadNativeAsync(
-        std::string path,
-        const agentxx::agent::PluginConfig* cfg = nullptr,
-        bool allowMissingEntry = false
+        std::string                         path,
+        const agentxx::agent::PluginConfig* cfg               = nullptr,
+        bool                                allowMissingEntry = false
     );
 
     /// 卸载插件 (按名称; 等全部在途回调完成后才 dlclose)

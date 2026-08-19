@@ -311,7 +311,8 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_get_inf
     return &info;
 }
 
-extern "C" AGENTXX_PLUGIN_EXPORT int agentxx_plugin_entry(const AgentxxHost* host, void** /*plugin_ctx*/) {
+extern "C" AGENTXX_PLUGIN_EXPORT int
+    agentxx_plugin_entry(const AgentxxHost* host, void** /*plugin_ctx*/) {
     g_host = host;
     // 默认提示词写入宿主 (剥离自 lib AgentPrompt; 用户 yaml 覆盖优先)
     ensureToolPromptInHost();

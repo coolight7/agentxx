@@ -37,7 +37,7 @@ int g_ffi_failed = 0;
 // ---------------------------------------------------------------------------
 
 struct FfiEventRecorder {
-    mutable std::mutex                              m;
+    mutable std::mutex                                    m;
     std::vector<std::pair<AgentxxEventType, std::string>> events;
 
     static void onEvent(AgentxxEventType type, const char* payload, void* ud) {
@@ -61,7 +61,8 @@ struct FfiEventRecorder {
 
     /// 等待某种事件出现 (轮询, 最多 timeoutMs)
     bool wait(AgentxxEventType t, int timeoutMs) {
-        const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
+        const auto deadline
+            = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
         while (std::chrono::steady_clock::now() < deadline) {
             if (has(t)) {
                 return true;
@@ -110,9 +111,9 @@ struct FfiMockLLM {
     std::thread                                thread;
     std::atomic<int>                           requestCount{0};
     /// 首个请求返回工具调用 (模拟需要权限/输入的工具选择)
-    bool  firstIsToolCall = false;
+    bool firstIsToolCall = false;
     /// >0 时响应前延迟 (取消测试用)
-    int   slowMs          = 0;
+    int slowMs = 0;
 
     ~FfiMockLLM() {
         stop();
@@ -191,33 +192,31 @@ struct FfiMockLLM {
     }
 
     bool start(uint16_t& outPort) {
-        server = std::make_unique<agentxx::util::HttpServer>(agentxx::util::HttpServer::Config{
-            .address   = "127.0.0.1",
-            .port      = 0,
-            .ioThreads = 1,
+        server    = std::make_unique<agentxx::util::HttpServer>(agentxx::util::HttpServer::Config{
+               .address   = "127.0.0.1",
+               .port      = 0,
+               .ioThreads = 1,
         });
         auto mock = this;
         server->router().add(
             "/chat/completions",
             2,
             std::make_shared<agentxx::util::HttpServer::Handler>(
-                [mock](agentxx::util::HttpServer::Request& /*req*/,
-                       agentxx::util::HttpServer::Response& resp,
-                       std::string_view /*matched*/) -> asio::awaitable<void> {
+                [mock](
+                    agentxx::util::HttpServer::Request& /*req*/,
+                    agentxx::util::HttpServer::Response& resp,
+                    std::string_view /*matched*/
+                ) -> asio::awaitable<void> {
                     const int n = mock->requestCount.fetch_add(1);
                     if (mock->slowMs > 0) {
-                        std::this_thread::sleep_for(
-                            std::chrono::milliseconds(mock->slowMs)
-                        );
+                        std::this_thread::sleep_for(std::chrono::milliseconds(mock->slowMs));
                     }
                     resp.result(boost::beast::http::status::ok);
                     resp.set(boost::beast::http::field::content_type, "text/event-stream");
                     resp.set(boost::beast::http::field::cache_control, "no-cache");
                     if (n == 0 && mock->firstIsToolCall) {
-                        resp.body() = toolCallSse(
-                            "agentxx_filesystem_read",
-                            R"({"path": "/etc/hostname"})"
-                        );
+                        resp.body(
+                        ) = toolCallSse("agentxx_filesystem_read", R"({"path": "/etc/hostname"})");
                     } else {
                         resp.body() = textSse("hello from ffi mock");
                     }
@@ -254,12 +253,13 @@ struct FfiMockLLM {
     /// 构造 model_json 指向本 mock
     std::string modelJson() const {
         return neograph::json{
-            {"name",     "ffi-mock"                   },
-            {"type",     "openai"                     },
-            {"baseUrl",  "http://127.0.0.1:" + std::to_string(server->port())},
-            {"apiKey",   "EMPTY"                      },
-            {"modelName", "ffi-mock"                  },
-        }.dump();
+            {"name",      "ffi-mock"                                          },
+            {"type",      "openai"                                            },
+            {"baseUrl",   "http://127.0.0.1:" + std::to_string(server->port())},
+            {"apiKey",    "EMPTY"                                             },
+            {"modelName", "ffi-mock"                                          },
+        }
+            .dump();
     }
 };
 
@@ -272,7 +272,9 @@ void testVersionAndMemory() {
     XX_TEST_EXPECT_EQ(agentxx_ffi_api_version(), AGENTXX_FFI_API_VERSION);
     XX_TEST_EXPECT_TRUE(agentxx_ffi_library_version() != nullptr);
     XX_TEST_EXPECT_TRUE(std::string(agentxx_ffi_strerror(AGENTXX_OK)) == "success");
-    XX_TEST_EXPECT_TRUE(std::string(agentxx_ffi_strerror(AGENTXX_ERR_INVALID)) == "invalid argument");
+    XX_TEST_EXPECT_TRUE(
+        std::string(agentxx_ffi_strerror(AGENTXX_ERR_INVALID)) == "invalid argument"
+    );
 
     // strdup_n / free 往返
     const char* text = "hello ffi";
@@ -283,7 +285,7 @@ void testVersionAndMemory() {
 
     // 带 NUL 的任意字节段
     const char bytes[] = {'a', 'b', '\0', 'c', 'd'};
-    char*       p      = agentxx_strdup_n(bytes, sizeof(bytes));
+    char*      p       = agentxx_strdup_n(bytes, sizeof(bytes));
     XX_TEST_EXPECT_TRUE(p != nullptr);
     XX_TEST_EXPECT_TRUE(std::memcmp(p, bytes, sizeof(bytes)) == 0);
     agentxx_free(p);
@@ -336,8 +338,8 @@ void testLifecycleAndConversation() {
     cb.on_event  = FfiEventRecorder::onEvent;
     cb.user_data = &rec;
 
-    char* log = nullptr;
-    AgentxxAgent* a = agentxx_create(nullptr, mock.modelJson().c_str(), &cb, &log);
+    char*         log = nullptr;
+    AgentxxAgent* a   = agentxx_create(nullptr, mock.modelJson().c_str(), &cb, &log);
     if (a == nullptr) {
         TEST_FAIL << "create failed: " << (log ? log : "?") << std::endl;
         agentxx_free(log);
@@ -437,7 +439,7 @@ void testLifecycleAndConversation() {
 void testHilInterrupt() {
     FfiMockLLM mock;
     mock.firstIsToolCall = true;
-    uint16_t   port = 0;
+    uint16_t port        = 0;
     if (!mock.start(port)) {
         TEST_FAIL << "mock LLM server start failed" << std::endl;
         g_ffi_failed++;
@@ -453,8 +455,8 @@ void testHilInterrupt() {
     // 权限模式 all_ask: 全部路径读写均询问 (确保 /etc/hostname 触发权限中断)
     std::string configJson = R"({"permissionMode": "all_ask"})";
 
-    char* log = nullptr;
-    AgentxxAgent* a = agentxx_create(configJson.c_str(), mock.modelJson().c_str(), &cb, &log);
+    char*         log = nullptr;
+    AgentxxAgent* a   = agentxx_create(configJson.c_str(), mock.modelJson().c_str(), &cb, &log);
     if (a == nullptr) {
         TEST_FAIL << "create failed: " << (log ? log : "?") << std::endl;
         agentxx_free(log);
@@ -476,7 +478,7 @@ void testHilInterrupt() {
     {
         auto payload = rec.first(AGENTXX_EVT_INTERRUPT_REQ);
         try {
-            auto j = neograph::json::parse(payload);
+            auto j      = neograph::json::parse(payload);
             interruptId = j.value("interruptId", int64_t{-1});
             XX_TEST_EXPECT_TRUE(interruptId > 0);
             // argJson 应含 permission 上下文
@@ -489,8 +491,8 @@ void testHilInterrupt() {
     }
 
     // 在独立线程延迟应答 allow (模拟宿主 UI 异步操作)
-    int          respondRc = -999;
-    std::thread  responder([a, interruptId, &respondRc]() {
+    int         respondRc = -999;
+    std::thread responder([a, interruptId, &respondRc]() {
         std::this_thread::sleep_for(std::chrono::milliseconds(200));
         char* lg = nullptr;
         // bool 类型输入: "true" = 允许
@@ -529,8 +531,8 @@ void testHilInterrupt() {
 /// 5) 取消: 慢 LLM 响应中取消 → TURN_END interrupted
 void testCancel() {
     FfiMockLLM mock;
-    mock.slowMs = 1500;
-    uint16_t   port = 0;
+    mock.slowMs   = 1500;
+    uint16_t port = 0;
     if (!mock.start(port)) {
         TEST_FAIL << "mock LLM server start failed" << std::endl;
         g_ffi_failed++;
@@ -543,8 +545,8 @@ void testCancel() {
     cb.on_event  = FfiEventRecorder::onEvent;
     cb.user_data = &rec;
 
-    char* log = nullptr;
-    AgentxxAgent* a = agentxx_create(nullptr, mock.modelJson().c_str(), &cb, &log);
+    char*         log = nullptr;
+    AgentxxAgent* a   = agentxx_create(nullptr, mock.modelJson().c_str(), &cb, &log);
     if (a == nullptr) {
         TEST_FAIL << "create failed" << std::endl;
         agentxx_free(log);

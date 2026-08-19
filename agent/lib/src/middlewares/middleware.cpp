@@ -330,7 +330,7 @@ size_t
     // - 注入持久化时由数据库分配 (取现有最大 id + 1, 重启后延续); 落库失败
     //   退回内存分配, 保证本次会话内功能可用
     // - 无持久化时保持原语义: 新 thread 首条为 1, 其后 storeId 递增
-    size_t id = 0;
+    size_t id   = 0;
     bool   dbOk = false;
     if (persistence_) {
         id   = persistence_->addShareStoreItem(thread_id, value);

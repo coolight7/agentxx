@@ -256,8 +256,8 @@ DaSimServer startDaSimServer() {
                     }
                 }
 
-                auto j            = neograph::json::parse(req.body());
-                bool stream       = j.value("stream", false);
+                auto j      = neograph::json::parse(req.body());
+                bool stream = j.value("stream", false);
                 // tool_calls 次数控制: g_da_sim_tool_calls_remaining >= 0 时,
                 // 前 N 次请求返回 tool_calls, 之后返回纯文本 (供嵌套委派等
                 // 需要"先工具后文本"的多请求序列测试); 默认 -1 保持旧行为

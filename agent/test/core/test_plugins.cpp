@@ -657,10 +657,12 @@ asio::awaitable<TestResult> run_plugin_tests() {
     //   回查, manifest name 与目录名不一致时静默丢失)
     {
         std::vector<agentxx::agent::PluginConfig> cfgs;
-        agentxx::agent::PluginConfig pc;
+        agentxx::agent::PluginConfig              pc;
         pc.path    = path;
         pc.enabled = true;
-        pc.args    = neograph::json{{"custom_key", "custom_value"}};
+        pc.args    = neograph::json{
+               {"custom_key", "custom_value"}
+        };
 
         // sides=client: agent 侧跳过
         pc.sides = agentxx::agent::PluginSide::Client;
@@ -676,10 +678,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
         auto inst29 = ctx->pluginManager->find("example_plugin");
         XX_TEST_EXPECT_TRUE(inst29 != nullptr);
         if (inst29) {
-            XX_TEST_EXPECT_EQ(
-                inst29->args.value("custom_key", std::string{}),
-                "custom_value"
-            );
+            XX_TEST_EXPECT_EQ(inst29->args.value("custom_key", std::string{}), "custom_value");
             auto json = ctx->pluginManager->getPluginArgsJson(inst29.get());
             XX_TEST_EXPECT_FALSE(json.empty());
             if (!json.empty()) {
@@ -697,11 +696,8 @@ asio::awaitable<TestResult> run_plugin_tests() {
         if (inst30) {
             // 启用状态: publish 正常
             XX_TEST_EXPECT_EQ(
-                inst30->host.vtable->publish(
-                    &inst30->host,
-                    AGENTXX_SV("demo.topic"),
-                    AGENTXX_SV(R"({"k":"v"})")
-                ),
+                inst30->host.vtable
+                    ->publish(&inst30->host, AGENTXX_SV("demo.topic"), AGENTXX_SV(R"({"k":"v"})")),
                 0
             );
             ctx->pluginManager->disable("example_plugin");

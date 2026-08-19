@@ -135,9 +135,12 @@ public:
 #ifndef NDEBUG
         assert(false && "Session: mutable state must only be accessed on the bound io thread");
 #else
-        XX_LOGE("Session: mutable state accessed off io thread (bound={}, current={})",
+        XX_LOGE(
+            "Session: mutable state accessed off io thread (bound={}, current={})",
             bound == std::thread::id{} ? std::string{"unbound"} : std::string{"bound"},
-            std::this_thread::get_id() == std::thread::id{} ? std::string{"unknown"} : std::string{"other"});
+            std::this_thread::get_id() == std::thread::id{} ? std::string{"unknown"}
+                                                            : std::string{"other"}
+        );
 #endif
     }
 
@@ -316,7 +319,7 @@ public:
     std::weak_ptr<AgentHost> host;
 
     /// agent 启动进度通知回调 (由客户端端点 (TUI) 注册; 无注册则为空, no-op)
-    /// - 调用方: BaseAgent::init() / CodeAgent::createTools() 各启动阶段
+    /// - 调用方: BaseAgent::init() / CodeAgent::initTools() 各启动阶段
     ///   (agent 线程, 同步调用, 不阻塞启动流程)
     /// - 语义: 报告当前正在执行的启动操作 (如 "加载 MCP server: xxx"),
     ///   供 TUI 在"启动中"banner 中逐步展示

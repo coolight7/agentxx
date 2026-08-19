@@ -131,8 +131,8 @@ void EventBridge::handleLLMToken(const neograph::graph::GraphEvent& event) {
     constexpr size_t kBatchChars = 64;
     if (tpsPendingChars_ >= kBatchChars) {
         // 近似折算: 批量按比例估算, 避免逐 token 遍历
-        tpsTokenCount_ += static_cast<double>(tpsPendingChars_) / 4.0;
-        tpsPendingChars_ = 0;
+        tpsTokenCount_   += static_cast<double>(tpsPendingChars_) / 4.0;
+        tpsPendingChars_  = 0;
     }
     // 定时推送一次平均速度 (token/s) - push 时会把 pending 一并结算
     pushTpsIfDue();
@@ -341,8 +341,8 @@ void EventBridge::handleTurnStart() {
 void EventBridge::settleCurrentStream() {
     // 结算 pending 字符
     if (tpsPendingChars_ > 0) {
-        tpsTokenCount_ += static_cast<double>(tpsPendingChars_) / 4.0;
-        tpsPendingChars_ = 0;
+        tpsTokenCount_   += static_cast<double>(tpsPendingChars_) / 4.0;
+        tpsPendingChars_  = 0;
     }
     // 无进行中的流 (当前流无 token 输出) 时跳过
     if (tpsTokenCount_ <= 0.0) {
@@ -471,8 +471,8 @@ void EventBridge::pushTpsIfDue() {
     }
     // 结算 pending 字符再计算窗口 tps
     if (tpsPendingChars_ > 0) {
-        tpsTokenCount_ += static_cast<double>(tpsPendingChars_) / 4.0;
-        tpsPendingChars_ = 0;
+        tpsTokenCount_   += static_cast<double>(tpsPendingChars_) / 4.0;
+        tpsPendingChars_  = 0;
     }
     // 最近一个窗口 (推送周期) 内的平均生成速度:
     // 窗口内 token 增量 / 窗口实际时长, 而非自流开始以来的累计平均

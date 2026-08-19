@@ -12,7 +12,7 @@ namespace agent {
 asio::awaitable<AgentRunner::Outcome> AgentRunner::run(
     std::shared_ptr<AgentContext>                 ctx,
     neograph::graph::GraphEngine*                 engine,
-    std::string_view                             threadId,
+    std::string_view                              threadId,
     neograph::graph::RunConfig                    cfg,
     std::shared_ptr<neograph::graph::CancelToken> cancelToken,
     Hooks                                         hooks,
@@ -62,16 +62,13 @@ asio::awaitable<AgentRunner::Outcome> AgentRunner::run(
         if (hooks.persistCheckpoint) {
             // 本轮 graph 还没有执行完成, 序列化 graphData 到 state checkpoint,
             // 以防中断处理期间程序终止导致 graphData 丢失
-            engine->update_state(
-                std::string{threadId},
-                [&](neograph::graph::GraphState& state) {
-                    auto data = ctx->middlewareHandleContext->getGraphDataToState(state, threadId);
-                    state.overwrite(
-                        agentxx::middleware::MiddlewareContext::channel_savedGraphData,
-                        data
-                    );
-                }
-            );
+            engine->update_state(std::string{threadId}, [&](neograph::graph::GraphState& state) {
+                auto data = ctx->middlewareHandleContext->getGraphDataToState(state, threadId);
+                state.overwrite(
+                    agentxx::middleware::MiddlewareContext::channel_savedGraphData,
+                    data
+                );
+            });
         }
 
         auto crudeResult = std::move(result);
@@ -98,8 +95,12 @@ asio::awaitable<AgentRunner::Outcome> AgentRunner::run(
                 // 已禁用时直接返回错误, 不再派生
                 if (ctx->agentConfig && !ctx->agentConfig->enableSubagent) {
                     XX_LOGW("AgentRunner `{}` subagent disabled, delegation rejected", threadId);
-                    resumeValues[interruptArg.resultId.empty() ? std::to_string(argIndex) : interruptArg.resultId]
-                        = neograph::json{{"error", "subagent disabled by config (subagent.enable=false)"}};
+                    resumeValues
+                        [interruptArg.resultId.empty() ? std::to_string(argIndex)
+                                                       : interruptArg.resultId]
+                        = neograph::json{
+                            {"error", "subagent disabled by config (subagent.enable=false)"}
+                    };
                     continue;
                 }
                 // 统一批量委派: 参数解析收敛到共享实现 (parseSubagentBatchFromInterrupt +
@@ -147,10 +148,11 @@ asio::awaitable<AgentRunner::Outcome> AgentRunner::run(
                     // 避免被总线默认 30s 超时截断 (用户长时间未响应中断弹窗时丢失中断);
                     // <=0 表示不限制
                     auto resp = co_await
-                        [&]() -> asio::awaitable<std::expected<events::RespInterrupt, std::string>> {
+                        [&](
+                        ) -> asio::awaitable<std::expected<events::RespInterrupt, std::string>> {
                         auto req = events::ReqInterrupt{
-                            .agentName = ctx->agentConfig ? ctx->agentConfig->agentName
-                                                          : std::string{},
+                            .agentName
+                            = ctx->agentConfig ? ctx->agentConfig->agentName : std::string{},
                             .threadId          = std::string{threadId},
                             .interruptNode     = interruptNode,
                             .interruptValue    = interruptValue,

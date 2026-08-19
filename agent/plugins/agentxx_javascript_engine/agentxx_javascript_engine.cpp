@@ -1499,7 +1499,8 @@ static char* jsInvoke(
     return nullptr;
 }
 
-extern "C" AGENTXX_PLUGIN_EXPORT int agentxx_plugin_entry(const AgentxxHost* host, void** plugin_ctx) {
+extern "C" AGENTXX_PLUGIN_EXPORT int
+    agentxx_plugin_entry(const AgentxxHost* host, void** plugin_ctx) {
     auto* engine = new JsEngine();
     engine->setEngineHost(host);
 

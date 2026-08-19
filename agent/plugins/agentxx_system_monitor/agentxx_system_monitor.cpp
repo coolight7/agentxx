@@ -453,7 +453,8 @@ static void on_usage_enabled(AgentxxPluginStringView event_json, void* ud) {
     }
 }
 
-extern "C" AGENTXX_PLUGIN_EXPORT int agentxx_plugin_entry(const AgentxxHost* host, void** plugin_ctx) {
+extern "C" AGENTXX_PLUGIN_EXPORT int
+    agentxx_plugin_entry(const AgentxxHost* host, void** plugin_ctx) {
     g_host = host;
 
     // 默认提示词写入宿主 (从 lib AgentPrompt 剥离迁移; 用户 yaml 覆盖优先)
@@ -781,7 +782,8 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxClientPluginInfo* agentxx_client_g
     return &info;
 }
 
-extern "C" AGENTXX_PLUGIN_EXPORT int agentxx_client_entry(const AgentxxClientHost* host, void** plugin_ctx) {
+extern "C" AGENTXX_PLUGIN_EXPORT int
+    agentxx_client_entry(const AgentxxClientHost* host, void** plugin_ctx) {
     g_client_host = host;
     (void)plugin_ctx;
 
