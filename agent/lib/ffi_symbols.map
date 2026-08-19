@@ -1,0 +1,40 @@
+# libagentxx 共享库导出符号白名单 (ELF version script)
+#
+# 目标: 将 libagentxx.so 导出面从"全部 C++ 符号 (约 17 万)"收敛为仅 FFI C API
+# 与既有 C 入口, 供其他语言 FFI 干净调用 (dlopen/dlsym 只按名查找白名单符号):
+#   - FFI C API (agentxx/ffi_api.h): agentxx_create/start/stop/... 等
+#   - 既有 C 入口 (agentxx.h): agentxx_malloc/agentxx_free/agentxx_strdup_n
+#   - 内置插件清单入口: agentxx_get_builtin_plugins (PluginManager 使用)
+# local: * 隐藏其余全部符号 (libagentxx 内部 C++ 符号、静态链接的第三方库
+#         符号: fmt/asio/sqlite/hyperscan/neograph 等), 避免污染 FFI 命名空间
+#
+# 构建侧注入 (agent/lib/CMakeLists.txt):
+#   target_link_options(agentxx_shared PRIVATE "-Wl,--version-script=<本文件>")
+# 仅作用于共享库; agentxx_static (cli/test/benchmark 消费) 不受影响。
+#
+# 注意: 新增导出符号时在此追加 (同时更新 agentxx/ffi_api.h 与文档)。
+{
+  global:
+    agentxx_malloc;
+    agentxx_free;
+    agentxx_strdup_n;
+    agentxx_ffi_api_version;
+    agentxx_ffi_library_version;
+    agentxx_ffi_strerror;
+    agentxx_create;
+    agentxx_start;
+    agentxx_stop;
+    agentxx_destroy;
+    agentxx_send_input;
+    agentxx_cancel;
+    agentxx_select_model;
+    agentxx_set_permission;
+    agentxx_switch_session;
+    agentxx_get_model_info;
+    agentxx_get_context_messages;
+    agentxx_list_sessions;
+    agentxx_interrupt_respond;
+    agentxx_drain_logs;
+    agentxx_get_builtin_plugins;
+  local: *;
+};
