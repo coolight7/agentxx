@@ -321,6 +321,36 @@ else()
     LINK_LIBRARIES_STRATEGY "REORDER_MINIMALLY"
   )
 endif()
+
+# ===== FFI 导出面控制 (仅作用于 agentxx_shared) =====
+# - 目标: 共享库仅导出 ffi_api.h 的 C API 符号 (见 ffi_symbols.map), 供其他
+#   语言 FFI 干净调用; 内部 C++ 符号与静态链接第三方库符号全部隐藏
+#   (与 plugins/CMakeLists.txt 的导出控制同构, 降低库体积与符号冲突风险)
+# - ELF (Linux/Android): version script 白名单 (global: agentxx_*; local: *)
+# - macOS: -exported_symbols_list (符号带 _ 前缀)
+# - Windows/MSVC: 默认不自动导出, 仅 AGENTXX_FFI_EXPORT/FFI_PLUGIN_EXPORT
+#   (__declspec(dllexport)) 标记的符号导出, 无需额外处理
+# - agentxx_static 不受影响 (cli/test/benchmark 及 C++ 嵌入方继续用静态库)
+if (NOT WIN32)
+  if (APPLE)
+    set(_AGENTXX_FFI_EXPORT_SYMS "${CMAKE_CURRENT_SOURCE_DIR}/ffi_exported_symbols_darwin.txt")
+    file(WRITE "${_AGENTXX_FFI_EXPORT_SYMS}" "\n")
+    foreach(_sym agentxx_malloc agentxx_free agentxx_strdup_n
+                 agentxx_ffi_api_version agentxx_ffi_library_version agentxx_ffi_strerror
+                 agentxx_create agentxx_start agentxx_stop agentxx_destroy
+                 agentxx_send_input agentxx_cancel agentxx_select_model agentxx_set_permission
+                 agentxx_switch_session agentxx_get_model_info agentxx_get_context_messages
+                 agentxx_list_sessions agentxx_interrupt_respond agentxx_drain_logs
+                 agentxx_get_builtin_plugins)
+      file(APPEND "${_AGENTXX_FFI_EXPORT_SYMS}" "_${_sym}\n")
+    endforeach()
+    target_link_options(agentxx_shared PRIVATE "-Wl,-exported_symbols_list,${_AGENTXX_FFI_EXPORT_SYMS}")
+  else()
+    target_link_options(agentxx_shared PRIVATE
+      "-Wl,--version-script=${CMAKE_CURRENT_SOURCE_DIR}/ffi_symbols.map")
+  endif()
+  unset(_AGENTXX_FFI_EXPORT_SYMS)
+endif()
 target_link_directories(agentxx_shared PUBLIC "${AGENTXX_INSTALL_DIR}/lib/")
 target_link_directories(agentxx_static PUBLIC "${AGENTXX_INSTALL_DIR}/lib/")
 
