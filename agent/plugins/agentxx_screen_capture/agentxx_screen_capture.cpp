@@ -1,6 +1,6 @@
 // agentxx_screen_capture —— 屏幕捕获插件 (Windows)
 // - 从 agentxx_computer_use 拆分独立: 单帧/全部屏幕/鼠标屏/流式推送
-// - 注册工具: agentxx_screen_capture
+// - 注册工具: agentxx_screen_capture, agentxx_get_screen_frames
 // - 流式帧经 publish 事件推送 (topic "agentxx_screen_capture.frame")
 // - 插件不链接 libagentxx: 描述经 get_tool_prompt 读取, 日志经 vtable log
 #include "codegraph/core/json.hpp"
@@ -216,6 +216,14 @@ struct ScreenCaptureHolder {
     agentxx::expand::ScreenCapture capture_;
 };
 
+static const char* kScreenCaptureDefaultDepict
+    = "Capture screen frames on Windows: all screens, mouse screen, or a specific screen; "
+      "also supports start/stop streaming (frames pushed as plugin events).";
+
+static const char* kGetScreenFramesDefaultDepict
+    = "Get current screen image frame array (one frame per screen for multi-monitor setups). "
+      "Supports specifying a screen index (default: captures all screens if omitted).";
+
 static void registerScreenCaptureTool() {
     codegraph::Json cmd = codegraph::Json::object();
     cmd["type"]         = "string";
@@ -245,8 +253,7 @@ static void registerScreenCaptureTool() {
 
     registerTool(
         "agentxx_screen_capture",
-        "Capture screen frames on Windows: all screens, mouse screen, or a specific screen; "
-        "also supports start/stop streaming (frames pushed as plugin events).",
+        kScreenCaptureDefaultDepict,
         schema.dump(),
         [](SimpleJson& args) -> std::string {
             auto&       capture = ScreenCaptureHolder::instance();
@@ -299,6 +306,115 @@ static void registerScreenCaptureTool() {
     );
 }
 
+static void registerGetScreenFramesTool() {
+    codegraph::Json schema                 = codegraph::Json::object();
+    schema["type"]                         = "object";
+    schema["properties"]                   = codegraph::Json::object();
+    schema["properties"]["screen_index"]   = codegraph::Json({
+        {"type",        "integer"                                                           },
+        {"description", "Optional 0-based screen index. If not specified, captures all screens."}
+    });
+    schema["properties"]["include_pixels"] = codegraph::Json({
+        {"type",        "boolean"                                           },
+        {"description", "Include base64-encoded pixel data. Default: true."}
+    });
+
+    registerTool(
+        "agentxx_get_screen_frames",
+        kGetScreenFramesDefaultDepict,
+        schema.dump(),
+        [](SimpleJson& args) -> std::string {
+            auto&   capture = ScreenCaptureHolder::instance();
+            int64_t idx     = -1;
+            bool    hasIdx  = jsonGetInt(args.doc().at_pointer("/screen_index"), idx);
+
+            bool includePixels = true;
+            bool hasInclude    = jsonGetBool(args.doc().at_pointer("/include_pixels"), includePixels);
+            if (!hasInclude) {
+                includePixels = true;
+            }
+
+            if (!hasIdx || idx < 0) {
+                return framesResult(capture.capture_.captureAllScreens(), includePixels);
+            }
+
+            int screenCount = capture.capture_.getScreenCount();
+            if (idx >= screenCount) {
+                return fmt::format(
+                    // 注意: 原始字符串内容含 `{})"` 序列 (fmt 占位符 + JSON 引号),
+                    // 与默认终止符 `)"` 冲突会导致字符串提前结束, 须用自定义定界符
+                    R"json({{"ok":false,"error":"screen index {} out of range (total screens: {})"}})json",
+                    idx,
+                    screenCount
+                );
+            }
+
+            std::vector<agentxx::expand::ScreenFrame> frames;
+            auto f = capture.capture_.captureScreen(static_cast<int>(idx));
+            if (f.width > 0 && f.height > 0) {
+                frames.push_back(std::move(f));
+            }
+            return framesResult(frames, includePixels);
+        }
+    );
+}
+
+/// 把插件默认提示词写入宿主 toolPrompt (仅当宿主无该条目时; io 线程)
+/// - 用户 yaml 覆盖早于插件加载 → get_prompt 已含覆盖 → 跳过 (尊重用户配置)
+/// - 宿主未提供 get_prompt/set_prompt (旧宿主) → 跳过, registerTool 回退插件默认
+static void ensureToolPromptInHost() {
+    if (!g_host || !g_host->vtable || !g_host->vtable->get_prompt || !g_host->vtable->set_prompt) {
+        return;
+    }
+    char* json = g_host->vtable->get_prompt(g_host);
+    if (!json) {
+        return;
+    }
+    std::string s{json};
+    g_host->vtable->free(json);
+    SimpleJson j(s);
+    if (!j.ok()) {
+        return;
+    }
+
+    codegraph::Json patch      = codegraph::Json::object();
+    patch["toolPrompt"]        = codegraph::Json::object();
+    bool needUpdate            = false;
+
+    if (j.doc().at_pointer("/toolPrompt/agentxx_get_screen_frames").error()) {
+        codegraph::Json tp     = codegraph::Json::object();
+        tp["depict"]           = std::string{kGetScreenFramesDefaultDepict};
+        codegraph::Json args   = codegraph::Json::object();
+        args["screen_index"]   = "Optional 0-based screen index. If omitted, captures all screens.";
+        args["include_pixels"] = "Include base64-encoded pixel data. Default: true.";
+        tp["args"]             = args;
+        patch["toolPrompt"]["agentxx_get_screen_frames"] = tp;
+        needUpdate                                       = true;
+    }
+
+    if (j.doc().at_pointer("/toolPrompt/agentxx_screen_capture").error()) {
+        codegraph::Json tp     = codegraph::Json::object();
+        tp["depict"]           = std::string{kScreenCaptureDefaultDepict};
+        codegraph::Json args   = codegraph::Json::object();
+        args["command"]        = "Command to execute: capture_all, capture_mouse, capture_screen, "
+                                 "get_screen_count, start_streaming, stop_streaming.";
+        args["screen_index"]   = "Screen index for capture_screen.";
+        args["frame_rate"]     = "Target frame rate for start_streaming (1-30). Default: 5.";
+        args["include_pixels"] = "Include base64 pixel data (large!). Default: false.";
+        tp["args"]             = args;
+        patch["toolPrompt"]["agentxx_screen_capture"] = tp;
+        needUpdate                                    = true;
+    }
+
+    if (needUpdate) {
+        std::string payload = patch.dump();
+        if (g_host->vtable->set_prompt(g_host, agentxx_plugin_sv(payload.data(), payload.size()))
+            != 0) {
+            pluginLog(3, "agentxx_screen_capture: set_prompt failed");
+        }
+    }
+}
+
 } // namespace agentxx_screen_capture_plugin
 
 using namespace agentxx_screen_capture_plugin;
@@ -321,12 +437,18 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_get_inf
 
 extern "C" AGENTXX_PLUGIN_EXPORT int agentxx_plugin_entry(const AgentxxHost* host, void** /*plugin_ctx*/) {
     g_host = host;
+    ensureToolPromptInHost();
     registerScreenCaptureTool();
-    pluginLog(2, "agentxx_screen_capture loaded (1 tool)");
+    registerGetScreenFramesTool();
+    pluginLog(2, "agentxx_screen_capture loaded (2 tools)");
     return 0;
 }
 
 extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_unload(void* /*plugin_ctx*/) {
     ScreenCaptureHolder::instance().stopStreaming();
+    if (g_host && g_host->vtable && g_host->vtable->unregister_tool) {
+        g_host->vtable->unregister_tool(g_host, AGENTXX_SV("agentxx_screen_capture"));
+        g_host->vtable->unregister_tool(g_host, AGENTXX_SV("agentxx_get_screen_frames"));
+    }
     pluginLog(2, "agentxx_screen_capture unloaded");
 }
