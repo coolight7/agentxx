@@ -100,6 +100,18 @@ models:
     model_context_max_token: 1000000
     extra_api_config:
       stream: true
+  - name: opencode-muse-spark-1.2-contributor
+    type: "openai-responses"
+    base_url: "https://opencode.ai/zen/go/v1"
+    api_key: "${OPENCODE_API_KEY}"
+    model_name: "muse-spark-1.2-contributor"
+    send_thinking: true
+    model_context_max_token: 1000000
+    extra_api_config:
+      reasoning:
+        effort: max
+      stream: true
+      preserve_thinking: true 
   - name: opencode-ds-v4-flash
     type: "openai-responses"
     base_url: "https://opencode.ai/zen/go/v1"
