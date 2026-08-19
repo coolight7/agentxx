@@ -481,6 +481,49 @@ void test_model_max_concurrent_connections() {
 }
 
 // ---------------------------------------------------------------------------
+// 思考摘要请求配置 (yaml `models[].request_reasoning_summary`, 默认 true):
+// 部分网关 (如 opencode-muse-spark) 不支持 reasoning.summary_text include 变体,
+// 需设 false 避免 API 400
+// ---------------------------------------------------------------------------
+
+void test_model_request_reasoning_summary() {
+    // 未配置: 默认 true (sendThinking 开启时请求思考摘要)
+    auto cfg = loadYaml("models:\n  - name: m1\n    type: \"openai\"\n");
+    auto it  = cfg.models.find("m1");
+    XX_TEST_EXPECT_TRUE(it != cfg.models.end());
+    if (it != cfg.models.end()) {
+        XX_TEST_EXPECT_TRUE(it->second.requestReasoningSummary);
+    }
+
+    // send_thinking: true + 显式 request_reasoning_summary: false (opencode-muse-spark 场景)
+    cfg = loadYaml(R"(models:
+  - name: m2
+    type: "openai-responses"
+    send_thinking: true
+    request_reasoning_summary: false
+)");
+    it = cfg.models.find("m2");
+    XX_TEST_EXPECT_TRUE(it != cfg.models.end());
+    if (it != cfg.models.end()) {
+        XX_TEST_EXPECT_TRUE(it->second.sendThinking);
+        XX_TEST_EXPECT_FALSE(it->second.requestReasoningSummary);
+    }
+
+    // 显式 request_reasoning_summary: true
+    cfg = loadYaml(R"(models:
+  - name: m3
+    type: "openai-responses"
+    send_thinking: true
+    request_reasoning_summary: true
+)");
+    it = cfg.models.find("m3");
+    XX_TEST_EXPECT_TRUE(it != cfg.models.end());
+    if (it != cfg.models.end()) {
+        XX_TEST_EXPECT_TRUE(it->second.requestReasoningSummary);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // codegraph 参数迁移到插件配置 (yaml `plugins` 条目 args):
 // 宿主只整体解析 args json, 不解析其字段语义 (字段由插件自行定义)
 // ---------------------------------------------------------------------------
@@ -838,6 +881,7 @@ TestResult testConfigLoader() {
     test_plugins_missing_path_skipped();
     test_plugins_env_expand();
     test_model_max_concurrent_connections();
+    test_model_request_reasoning_summary();
     test_plugins_empty_by_default();
     test_plugin_name_form_removed();
     test_plugin_args_paths_parse();

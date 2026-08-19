@@ -376,6 +376,11 @@ models:
     model_name: "gpt-4"
     api_path: ""                # 自定义 API 路径 (如 "/v1/chat/completions"); 空则用默认
     send_thinking: false        # 是否把 thinking/reasoning_content 随上下文发送给模型
+    request_reasoning_summary: true # send_thinking 开启时, 是否请求上游返回思考摘要 (Responses
+                                # API 的 include 参数)。opencode-muse-spark 等网关不支持
+                                # reasoning.summary_text 变体, 需设 false, 否则 API 400
+                                # (unknown variant reasoning.summary_text);
+                                # 也可用 extra_api_config 显式指定 include 数组覆盖
     ssl_verify: null            # true/false 显式控制 TLS 证书验证; 省略用默认策略
     connect_timeout: 16
     read_chunk_timeout: 24

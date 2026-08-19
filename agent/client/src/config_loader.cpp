@@ -333,6 +333,18 @@ YamlAppConfig loadYamlConfig(
                                   )
                                   == "true";
             }
+            // sendThinking 开启时是否请求上游返回思考摘要 (Responses API 的 include
+            // 参数): opencode-muse-spark 等网关不支持 reasoning.summary_text 变体,
+            // 需设 false, 否则 API 400 (unknown variant reasoning.summary_text)
+            if (node["request_reasoning_summary"]) {
+                mc.requestReasoningSummary = resolveEnvVars(
+                                                 (node["request_reasoning_summary"])
+                                                     .as<std::string>("true"),
+                                                 dotEnvVars,
+                                                 overrideEnvVars
+                                             )
+                                             == "true";
+            }
             if (node["extra_headers"] && node["extra_headers"].IsMap()) {
                 for (const auto& kv : node["extra_headers"]) {
                     auto k = kv.first.as<std::string>("");
