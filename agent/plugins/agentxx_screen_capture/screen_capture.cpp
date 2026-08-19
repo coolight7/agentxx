@@ -204,11 +204,11 @@ public:
 
         bool ok = false;
         {
-            ComPtr<IWICImagingFactory> factory;
-            ComPtr<IWICBitmapEncoder>  encoder;
+            ComPtr<IWICImagingFactory>    factory;
+            ComPtr<IWICBitmapEncoder>     encoder;
             ComPtr<IWICBitmapFrameEncode> frameEncode;
-            ComPtr<IWICStream> stream;
-            IPropertyBag2* propBag = nullptr;
+            ComPtr<IWICStream>            stream;
+            IPropertyBag2*                propBag = nullptr;
 
             do {
                 hr = CoCreateInstance(
@@ -280,7 +280,7 @@ public:
                     break;
                 }
                 WICPixelFormatGUID format = GUID_WICPixelFormat32bppBGRA;
-                hr = frameEncode->SetPixelFormat(&format);
+                hr                        = frameEncode->SetPixelFormat(&format);
                 if (FAILED(hr)) {
                     break;
                 }

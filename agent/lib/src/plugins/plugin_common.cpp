@@ -88,7 +88,7 @@ std::string resolvePluginEntryPath(const std::filesystem::path& dir, const std::
 #endif
         return p;
     };
-    auto entryPath = fixExt((dir / entry).lexically_normal().string());
+    auto            entryPath = fixExt((dir / entry).lexically_normal().string());
     std::error_code ec;
     if (!std::filesystem::exists(entryPath, ec)) {
         // 多配置生成器 (MSVC Debug/Release): 产物位于配置子目录

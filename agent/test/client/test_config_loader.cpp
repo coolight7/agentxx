@@ -65,6 +65,7 @@ static agentxx::client::YamlAppConfig loadYamlWithDotEnv(
 static void setSystemEnvVar(const std::string& key, const std::string& value) {
     _putenv_s(key.c_str(), value.c_str());
 }
+
 static void clearSystemEnvVar(const std::string& key) {
     _putenv_s(key.c_str(), "");
 }
@@ -72,6 +73,7 @@ static void clearSystemEnvVar(const std::string& key) {
 static void setSystemEnvVar(const std::string& key, const std::string& value) {
     setenv(key.c_str(), value.c_str(), 1);
 }
+
 static void clearSystemEnvVar(const std::string& key) {
     unsetenv(key.c_str());
 }
@@ -80,12 +82,15 @@ static void clearSystemEnvVar(const std::string& key) {
 /// RAII: 设置系统环境变量, 析构时恢复原值/删除
 class SystemEnvGuard {
 public:
-    SystemEnvGuard(const std::string& key, const std::string& value) : key_(key) {
-        const char* had   = std::getenv(key_.c_str());
-        existed_          = had != nullptr;
-        saved_            = had ? std::string{had} : std::string{};
+
+    SystemEnvGuard(const std::string& key, const std::string& value) :
+        key_(key) {
+        const char* had = std::getenv(key_.c_str());
+        existed_        = had != nullptr;
+        saved_          = had ? std::string{had} : std::string{};
         setSystemEnvVar(key_, value);
     }
+
     ~SystemEnvGuard() {
         if (existed_) {
             setSystemEnvVar(key_, saved_);
@@ -93,10 +98,12 @@ public:
             clearSystemEnvVar(key_);
         }
     }
+
     SystemEnvGuard(const SystemEnvGuard&)            = delete;
     SystemEnvGuard& operator=(const SystemEnvGuard&) = delete;
 
 private:
+
     std::string key_;
     bool        existed_ = false;
     std::string saved_;
@@ -502,7 +509,7 @@ void test_model_request_reasoning_summary() {
     send_thinking: true
     request_reasoning_summary: false
 )");
-    it = cfg.models.find("m2");
+    it  = cfg.models.find("m2");
     XX_TEST_EXPECT_TRUE(it != cfg.models.end());
     if (it != cfg.models.end()) {
         XX_TEST_EXPECT_TRUE(it->second.sendThinking);
@@ -516,7 +523,7 @@ void test_model_request_reasoning_summary() {
     send_thinking: true
     request_reasoning_summary: true
 )");
-    it = cfg.models.find("m3");
+    it  = cfg.models.find("m3");
     XX_TEST_EXPECT_TRUE(it != cfg.models.end());
     if (it != cfg.models.end()) {
         XX_TEST_EXPECT_TRUE(it->second.requestReasoningSummary);
@@ -674,9 +681,8 @@ void test_plugin_args_env_expand() {
 void test_builtin_work_dir_default() {
     // 未注入时惰性回退当前工作目录 (正斜杠)
     agentxx::client::setBuiltinEnvVar(agentxx::client::kBuiltinWorkDirEnv, "");
-    auto cfg = loadYaml("data_dir: ${AGENTXX_WORK_DIR}/agentxx-data\n");
-    auto expected
-        = (std::filesystem::current_path() / "agentxx-data").generic_string();
+    auto cfg      = loadYaml("data_dir: ${AGENTXX_WORK_DIR}/agentxx-data\n");
+    auto expected = (std::filesystem::current_path() / "agentxx-data").generic_string();
     XX_TEST_EXPECT_EQ(cfg.dataDir, expected);
 }
 
@@ -717,10 +723,7 @@ void test_builtin_work_dir_priority() {
     },
         {}
     );
-    XX_TEST_EXPECT_EQ(
-        cfg.dataDir,
-        (std::filesystem::current_path() / "data").generic_string()
-    );
+    XX_TEST_EXPECT_EQ(cfg.dataDir, (std::filesystem::current_path() / "data").generic_string());
 
     std::error_code ec;
     fs::remove(path, ec);
@@ -739,7 +742,7 @@ void test_builtin_exec_dir_uninjected_kept() {
     // 未注入且无系统/.env 变量: 保留 ${AGENTXX_EXEC_DIR} 原样 (可执行目录无法惰性推导)
     agentxx::client::setBuiltinEnvVar(agentxx::client::kBuiltinExecDirEnv, "");
     clearSystemEnvVar("AGENTXX_EXEC_DIR");
-    auto cfg = loadYaml("data_dir: ${AGENTXX_EXEC_DIR}/data\n");
+    auto        cfg = loadYaml("data_dir: ${AGENTXX_EXEC_DIR}/data\n");
     const char* cur = std::getenv("AGENTXX_EXEC_DIR");
     if (cur == nullptr) {
         // 变量被真正删除: 保留 ${VAR} 原样
@@ -760,9 +763,11 @@ void test_builtin_exec_dir_uninjected_kept() {
 void test_env_order_dotenv_over_system() {
     // .env 变量优先于系统环境变量 (同 key 时取 .env 值)
     SystemEnvGuard guard{"AGENTXX_TEST_ENV_ORDER", "from-system"};
-    auto          cfg = loadYamlWithDotEnv(
+    auto           cfg = loadYamlWithDotEnv(
         "data_dir: ${AGENTXX_TEST_ENV_ORDER}/data\n",
-        {{"AGENTXX_TEST_ENV_ORDER", "from-dotenv"}}
+        {
+            {"AGENTXX_TEST_ENV_ORDER", "from-dotenv"}
+    }
     );
     XX_TEST_EXPECT_EQ(cfg.dataDir, std::string("from-dotenv/data"));
 }
@@ -770,14 +775,14 @@ void test_env_order_dotenv_over_system() {
 void test_env_order_system_fallback() {
     // .env 未定义、系统环境变量有值: 取系统值
     SystemEnvGuard guard{"AGENTXX_TEST_ENV_ORDER", "from-system"};
-    auto          cfg = loadYaml("data_dir: ${AGENTXX_TEST_ENV_ORDER}/data\n");
+    auto           cfg = loadYaml("data_dir: ${AGENTXX_TEST_ENV_ORDER}/data\n");
     XX_TEST_EXPECT_EQ(cfg.dataDir, std::string("from-system/data"));
 }
 
 void test_env_order_override_highest() {
     // --env 覆盖式文件 (overrideEnvVars) 优先于 .env 与系统环境变量
     SystemEnvGuard guard{"AGENTXX_TEST_ENV_ORDER", "from-system"};
-    auto path = fs::temp_directory_path()
+    auto           path = fs::temp_directory_path()
                 / fmt::format(
                     "agentxx_config_loader_test_{}.yaml",
                     std::chrono::steady_clock::now().time_since_epoch().count()
@@ -791,9 +796,7 @@ void test_env_order_override_highest() {
         {
             {"AGENTXX_TEST_ENV_ORDER", "from-dotenv"}
     },
-        {
-            {"AGENTXX_TEST_ENV_ORDER", "from-override"}
-    }
+        {{"AGENTXX_TEST_ENV_ORDER", "from-override"}}
     );
     std::error_code ec;
     fs::remove(path, ec);
@@ -806,7 +809,7 @@ void test_env_order_unresolved_kept() {
     // 空串同样视为"未定义"(展开为空串); 两种情况分别断言
     const char* key = "AGENTXX_TEST_ENV_MISSING_9F3K2Q";
     clearSystemEnvVar(key);
-    auto cfg = loadYaml("data_dir: ${AGENTXX_TEST_ENV_MISSING_9F3K2Q}/data\n");
+    auto        cfg = loadYaml("data_dir: ${AGENTXX_TEST_ENV_MISSING_9F3K2Q}/data\n");
     const char* cur = std::getenv(key);
     if (cur == nullptr) {
         // 变量被真正删除: 保留 ${VAR} 原样
@@ -825,7 +828,7 @@ void test_env_order_unresolved_kept() {
 void test_dotenv_file_over_system() {
     // loadDotEnv 文件读取: .env 文件值直接生效, 不被系统环境变量覆盖
     SystemEnvGuard guard{"AGENTXX_TEST_ENV_FILE", "from-system"};
-    auto path = fs::temp_directory_path()
+    auto           path = fs::temp_directory_path()
                 / fmt::format(
                     "agentxx_config_loader_test_{}.env",
                     std::chrono::steady_clock::now().time_since_epoch().count()
@@ -834,7 +837,7 @@ void test_dotenv_file_over_system() {
         std::ofstream ofs(path);
         ofs << "AGENTXX_TEST_ENV_FILE=from-file\n";
     }
-    auto vars = agentxx::client::loadDotEnv(path.string());
+    auto            vars = agentxx::client::loadDotEnv(path.string());
     std::error_code ec;
     fs::remove(path, ec);
     auto it = vars.find("AGENTXX_TEST_ENV_FILE");
@@ -854,6 +857,7 @@ void test_subagent_enable_default_true() {
     auto cfg = loadYaml("data_dir: default\n");
     XX_TEST_EXPECT_TRUE(cfg.enableSubagent);
 }
+
 void test_subagent_enable_false() {
     auto cfg = loadYaml("subagent:\n  enable: false\n");
     XX_TEST_EXPECT_FALSE(cfg.enableSubagent);
@@ -862,6 +866,7 @@ void test_subagent_enable_false() {
     cfg = loadYaml("subagent:\n  enable: 'off'\n");
     XX_TEST_EXPECT_FALSE(cfg.enableSubagent);
 }
+
 void test_subagent_enable_true_variants() {
     auto cfg = loadYaml("subagent:\n  enable: true\n");
     XX_TEST_EXPECT_TRUE(cfg.enableSubagent);
@@ -872,16 +877,32 @@ void test_subagent_enable_true_variants() {
     cfg = loadYaml("subagent:\n  enable: 'on'\n");
     XX_TEST_EXPECT_TRUE(cfg.enableSubagent);
 }
+
 void test_subagent_enable_invalid_fallback() {
     auto cfg = loadYaml("subagent:\n  enable: 'maybe'\n");
     XX_TEST_EXPECT_TRUE(cfg.enableSubagent);
 }
+
 void test_subagent_enable_env_expand() {
-    auto path = fs::temp_directory_path() / fmt::format("agentxx_subagent_test_{}.yaml", std::chrono::steady_clock::now().time_since_epoch().count());
-    { std::ofstream ofs(path); ofs << "subagent:\n  enable: ${AGENTXX_TEST_SUBAGENT_ENABLE}\n"; }
-    auto cfg = agentxx::client::loadYamlConfig(path.string(), {{"AGENTXX_TEST_SUBAGENT_ENABLE","false"}}, {});
+    auto path = fs::temp_directory_path()
+                / fmt::format(
+                    "agentxx_subagent_test_{}.yaml",
+                    std::chrono::steady_clock::now().time_since_epoch().count()
+                );
+    {
+        std::ofstream ofs(path);
+        ofs << "subagent:\n  enable: ${AGENTXX_TEST_SUBAGENT_ENABLE}\n";
+    }
+    auto cfg = agentxx::client::loadYamlConfig(
+        path.string(),
+        {
+            {"AGENTXX_TEST_SUBAGENT_ENABLE", "false"}
+    },
+        {}
+    );
     XX_TEST_EXPECT_FALSE(cfg.enableSubagent);
-    std::error_code ec; fs::remove(path, ec);
+    std::error_code ec;
+    fs::remove(path, ec);
 }
 
 TestResult testConfigLoader() {

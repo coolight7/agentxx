@@ -153,7 +153,7 @@ void FfiClientAgentIO::onPeerMessage(agent::WireMessage msg) {
             if constexpr (std::is_same_v<T, agent::WireInterruptRequest>) {
                 // 记录 wire id 供 waitHostInterrupt 使用 (同线程顺序执行);
                 // 过期通知 (WireInterruptExpired) 按该 id 匹配并终止等待
-                auto   ch = std::make_shared<RespChannel>(ex_, 1);
+                auto    ch = std::make_shared<RespChannel>(ex_, 1);
                 int64_t id = m.id;
                 {
                     std::lock_guard<std::mutex> lock(idsMutex_);
@@ -239,16 +239,14 @@ void FfiClientAgentIO::onPeerMessage(agent::WireMessage msg) {
 // 内部
 // ---------------------------------------------------------------------------
 
-asio::awaitable<std::pair<bool, neograph::json>> FfiClientAgentIO::waitHostInterrupt(
-    int64_t id,
-    std::shared_ptr<RespChannel> ch
-) {
+asio::awaitable<std::pair<bool, neograph::json>>
+    FfiClientAgentIO::waitHostInterrupt(int64_t id, std::shared_ptr<RespChannel> ch) {
     neograph::json result  = neograph::json::array();
     bool           gotResp = false;
     co_await agentxx::util::catchErrorAsync<bool>(
         [&]() -> asio::awaitable<bool> {
-            result    = co_await ch->async_receive(asio::use_awaitable);
-            gotResp   = true;
+            result  = co_await ch->async_receive(asio::use_awaitable);
+            gotResp = true;
             co_return true;
         },
         [&](std::string errmsg) -> asio::awaitable<bool> {

@@ -75,7 +75,7 @@ public:
         // 复用 string_util 的绝对化逻辑, 此处仅做轻量处理避免头依赖循环
         if (!std::filesystem::path(s).is_absolute()) {
             std::error_code ec;
-            auto abs = std::filesystem::absolute(s, ec);
+            auto            abs = std::filesystem::absolute(s, ec);
             if (!ec) {
                 return abs.lexically_normal().generic_string();
             }

@@ -22,21 +22,18 @@ namespace tools {
 ///   宿主据此查 threadDepth_ 嵌套深度预算)
 /// - cancelToken: 级联取消令牌 (父取消 → 中止全部在跑子代理; 可空)
 events::ReqSubagentBatch parseSubagentBatchFromInterrupt(
-    const middleware::InterruptHandleArg&              interruptArg,
-    std::string_view                                   agentName,
-    std::string_view                                   threadId,
-    std::shared_ptr<neograph::graph::CancelToken>      cancelToken
+    const middleware::InterruptHandleArg&         interruptArg,
+    std::string_view                              agentName,
+    std::string_view                              threadId,
+    std::shared_ptr<neograph::graph::CancelToken> cancelToken
 );
 
 /// 子代理结果 key 规则: (tool_call_id + "_") + (result_id | 任务序号)
 /// - 前缀避免同一轮多个中断的序号 key 互相覆盖
 /// - 写入侧 (中断处理循环 buildSubagentResumeValues) 与读取侧
 ///   (SubAgentManagerTool::execute_async) 必须使用同一函数
-inline std::string makeSubagentResumeKey(
-    std::string_view toolCallId,
-    std::string_view resultId,
-    size_t           idx
-) {
+inline std::string
+    makeSubagentResumeKey(std::string_view toolCallId, std::string_view resultId, size_t idx) {
     auto key = resultId.empty() ? std::to_string(idx) : std::string{resultId};
     if (!toolCallId.empty()) {
         key = std::string{toolCallId} + "_" + key;

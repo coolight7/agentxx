@@ -502,18 +502,14 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         }
 
         // 8.1 多次订阅 (1→2→4 扩容) + 逐个退订
-        std::atomic<int>        hits{0};
-        AgentxxSubscription*    subs[4]   = {};
-        auto                    subFn = +[](AgentxxPluginStringView, void* ud) {
+        std::atomic<int>     hits{0};
+        AgentxxSubscription* subs[4] = {};
+        auto                 subFn   = +[](AgentxxPluginStringView, void* ud) {
             ++(*static_cast<std::atomic<int>*>(ud));
         };
         for (int i = 0; i < 4; ++i) {
-            subs[i] = inst2->host.vtable->subscribe(
-                &inst2->host,
-                AGENTXX_CLIENT_EVT_CONN_STATE,
-                subFn,
-                &hits
-            );
+            subs[i] = inst2->host.vtable
+                          ->subscribe(&inst2->host, AGENTXX_CLIENT_EVT_CONN_STATE, subFn, &hits);
             XX_TEST_EXPECT_TRUE(subs[i] != nullptr);
         }
         for (int i = 0; i < 4; ++i) {
@@ -525,13 +521,14 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         // 8.2 派发中动态订阅: 订阅回调内再 subscribe → 快照不受影响
         // (旧实现 dispatch 快照存裸指针, 回调内订阅触发 vector 扩容后悬垂)
         struct DynSubState {
-            agentxx::plugin::ClientPluginInstance* inst   = nullptr;
+            agentxx::plugin::ClientPluginInstance* inst = nullptr;
             std::atomic<int>                       hits{0};
             AgentxxSubscription*                   dynSub = nullptr;
             void (*incFn)(AgentxxPluginStringView, void*) = nullptr;
         };
-        auto st  = std::make_shared<DynSubState>();
-        st->inst = inst2.get();
+
+        auto st   = std::make_shared<DynSubState>();
+        st->inst  = inst2.get();
         st->incFn = +[](AgentxxPluginStringView, void* ud) {
             ++(*static_cast<std::atomic<int>*>(ud));
         };
@@ -547,12 +544,9 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 );
             }
         };
-        AgentxxSubscription* a = inst2->host.vtable->subscribe(
-            &inst2->host,
-            AGENTXX_CLIENT_EVT_USER_INPUT,
-            aFn,
-            st.get()
-        );
+        AgentxxSubscription* a
+            = inst2->host.vtable
+                  ->subscribe(&inst2->host, AGENTXX_CLIENT_EVT_USER_INPUT, aFn, st.get());
         XX_TEST_EXPECT_TRUE(a != nullptr);
         mgr->onUserInput("sess-test", "x");
         // 首次派发: 仅快照中的 a 被调 (dynSub 派发后才注册)
@@ -580,7 +574,9 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         agentxx::agent::PluginConfig              pc;
         pc.path    = path;
         pc.enabled = true;
-        pc.args    = neograph::json{{"client_key", "client_val"}};
+        pc.args    = neograph::json{
+               {"client_key", "client_val"}
+        };
 
         // 9.1 sides=Agent: client 侧跳过
         pc.sides = agentxx::agent::PluginSide::Agent;
@@ -596,10 +592,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         auto instCfg = mgr->find("example_plugin");
         XX_TEST_EXPECT_TRUE(instCfg != nullptr);
         if (instCfg) {
-            XX_TEST_EXPECT_EQ(
-                instCfg->args.value("client_key", std::string{}),
-                "client_val"
-            );
+            XX_TEST_EXPECT_EQ(instCfg->args.value("client_key", std::string{}), "client_val");
             // vtable get_plugin_args 返回实例 args
             char* json = instCfg->host.vtable->get_plugin_args(&instCfg->host);
             XX_TEST_EXPECT_TRUE(json != nullptr);

@@ -128,7 +128,7 @@ bool parseCommandAction(const std::string& jsonText, std::string& action) {
     }
 }
 
-} // namespace (匿名: 工具函数)
+} // namespace
 
 // =====================================================================
 // ClientPluginInstance
@@ -178,17 +178,17 @@ void ClientPluginManager::setThreadId(std::string threadId) {
 // ==================== 生命周期 ====================
 
 asio::awaitable<std::shared_ptr<ClientPluginInstance>> ClientPluginManager::loadNativeAsync(
-    std::string                  path,
+    std::string                         path,
     const agentxx::agent::PluginConfig* cfg,
-    bool                         allowMissingEntry
+    bool                                allowMissingEntry
 ) {
     // ---- 目录插件: 解析 plugin.yaml 取 entry 库路径 (与 agent 侧一致) ----
     // - manifest: name/entry/depends/optional_depends
     // - entry 平台化 + 配置子目录回退见公共 resolvePluginEntryPath
     // - 依赖解析与正式加载合并 (B3): 不再先 dlopen 探测再 close 后重新
     //   dlopen —— 本函数一次 dlopen 完成 探测(entry 符号) + 装配
-    std::error_code ec;
-    std::string     libPath = path;
+    std::error_code          ec;
+    std::string              libPath = path;
     std::vector<std::string> depends, optionalDepends;
     if (std::filesystem::is_directory(path, ec)) {
         std::string manifestName, manifestEntry;
@@ -294,10 +294,10 @@ asio::awaitable<std::shared_ptr<ClientPluginInstance>> ClientPluginManager::load
         }
     }
 
-    auto inst             = std::make_shared<ClientPluginInstance>(name);
-    inst->version         = version;
-    inst->description     = desc;
-    inst->path            = path;
+    auto inst         = std::make_shared<ClientPluginInstance>(name);
+    inst->version     = version;
+    inst->description = desc;
+    inst->path        = path;
     // 插件配置参数随加载直接传入 (C2, 与 agent 侧一致): 宿主不解析字段语义,
     // 插件经 vtable get_plugin_args 整体读取; 直连路径 cfg 为 nullptr → {}
     inst->args            = cfg ? cfg->args : neograph::json::object();
@@ -551,8 +551,8 @@ asio::awaitable<void>
         std::string              path;
         std::string              name; ///< 空 = 无法推导 (不影响排序)
         std::vector<std::string> depends;
-        bool                     allowMissingEntry = false; ///< sides==Auto: 无 client 入口静默跳过
-        const PluginConfig*      cfg               = nullptr;
+        bool allowMissingEntry  = false; ///< sides==Auto: 无 client 入口静默跳过
+        const PluginConfig* cfg = nullptr;
     };
 
     std::vector<Item> items;
@@ -564,8 +564,8 @@ asio::awaitable<void>
             continue; // 属于 agent 侧
         }
         Item it;
-        it.path             = pc.path;
-        it.cfg              = &pc;
+        it.path              = pc.path;
+        it.cfg               = &pc;
         it.allowMissingEntry = (pc.sides != agentxx::agent::PluginSide::Client);
         if (std::filesystem::is_directory(std::filesystem::path(pc.path))) {
             std::string              name, entry;
@@ -622,9 +622,7 @@ void ClientPluginManager::shutdownAll() {
     plugins_.clear();
 }
 
-void ClientPluginManager::shutdownClientPlugin(
-    const std::shared_ptr<ClientPluginInstance>& inst
-) {
+void ClientPluginManager::shutdownClientPlugin(const std::shared_ptr<ClientPluginInstance>& inst) {
     if (!inst || inst->unloadRequested) {
         return;
     }
@@ -947,7 +945,7 @@ void ClientPluginManager::detachAll(ClientPluginInstance* inst, bool keepInfo) {
         //   impl->inst 已置空 → xx_cunsubscribe 安全跳过 (句柄由 subHandles
         //   保活到实例析构, 不解引用已释放内存)
         for (const auto& h : inst->subHandles) {
-            auto impl = std::static_pointer_cast<ClientSubscriptionImpl>(h);
+            auto impl  = std::static_pointer_cast<ClientSubscriptionImpl>(h);
             impl->inst = nullptr;
             impl->sub.reset();
         }
@@ -965,7 +963,7 @@ void ClientPluginManager::dispatchEvent(int event, const std::string& payloadJso
     // 快照订阅列表 (shared_ptr 副本: 派发中退订/卸载不会使后续回调悬垂;
     // 订阅对象被 impl 句柄/派发副本保活, alive 位标记已退订)
     struct SubRef {
-        ClientPluginInstance*                        inst;
+        ClientPluginInstance*                               inst;
         std::shared_ptr<ClientPluginInstance::Subscription> sub;
     };
 
@@ -1357,7 +1355,7 @@ void xx_cunsubscribe(AgentxxSubscription* sub) {
     }
     auto impl = reinterpret_cast<ClientSubscriptionImpl*>(sub);
     // impl 由 subHandles 保活到实例析构; 实例已断链 (detachAll) 时跳过
-    auto mgr  = impl->inst ? impl->inst->manager.lock().get() : nullptr;
+    auto mgr = impl->inst ? impl->inst->manager.lock().get() : nullptr;
     if (mgr) {
         ioCallSyncVoid(mgr, [&]() {
             mgr->unsubscribe(reinterpret_cast<AgentxxSubscription*>(impl));

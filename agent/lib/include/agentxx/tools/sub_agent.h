@@ -32,10 +32,7 @@ public:
 class SubAgentNormalTask : public SubAgentTaskBase {
 public:
 
-    SubAgentNormalTask(
-        std::string_view in_subAgentName,
-        std::string_view in_subAgentDepict
-    );
+    SubAgentNormalTask(std::string_view in_subAgentName, std::string_view in_subAgentDepict);
 };
 
 class SubAgentManagerTool : public XXToolBase {

@@ -530,7 +530,8 @@ void PluginManager::shutdownPlugin(const std::shared_ptr<PluginInstance>& inst) 
     }
     inst->unloadRequested = true;
     // 先递归卸载必选依赖本插件的插件 (先子后父)
-    for (const auto& dep : collectReverseRequiredDeps(plugins_, inst->name, /*onlyEnabled=*/false)) {
+    for (const auto& dep :
+         collectReverseRequiredDeps(plugins_, inst->name, /*onlyEnabled=*/false)) {
         auto depInst = find(dep);
         if (depInst && !depInst->unloadRequested) {
             shutdownPlugin(depInst);
@@ -1203,20 +1204,16 @@ static int xx_set_prompt(const AgentxxHost* host, AgentxxPluginStringView prompt
 }
 
 /// 周期定时器 (io 线程约束; 跨线程经 post 同步等待; 回调内快速返回约定)
-static void* xx_add_timer(
-    const AgentxxHost* host,
-    long               interval_ms,
-    void (*fn)(void* ud),
-    void* ud
-) {
+static void*
+    xx_add_timer(const AgentxxHost* host, long interval_ms, void (*fn)(void* ud), void* ud) {
     XX_PLUGIN_CATCH_BEGIN
     auto mgr  = mgrOf(host);
     auto inst = instOf(host);
     if (!mgr || !inst || interval_ms <= 0 || !fn) {
         return nullptr;
     }
-    auto        mgrPtr  = mgr;
-    auto        instPtr = inst;
+    auto mgrPtr  = mgr;
+    auto instPtr = inst;
     return ioCallSync<void*>(mgrPtr, [mgrPtr, instPtr, interval_ms, fn, ud]() {
         return mgrPtr->addTimer(instPtr, interval_ms, fn, ud);
     });
@@ -1299,11 +1296,7 @@ int PluginManager::registerTool(PluginInstance* inst, const AgentxxToolSpec* spe
     if (!shared) {
         return -1;
     }
-    auto tool = std::make_shared<PluginTool>(
-        agentContext_,
-        std::move(shared),
-        *spec
-    );
+    auto tool = std::make_shared<PluginTool>(agentContext_, std::move(shared), *spec);
     if (!registry_->registerTool(tool->get_name(), tool)) {
         XX_LOGW("Plugin `{}` register tool `{}` failed (conflict?)", inst->name, tool->get_name());
         return -1;
@@ -1674,8 +1667,8 @@ namespace {
 /// - 取消/错误 → 不再重新排程 → handler 链终结, state 随之释放
 /// - 回调执行期间 InflightGuard 保活插件代码段 (unload 等计数归零后才 dlclose)
 void pluginTimerLoop(
-    const neograph_asio_error_code&        ec,
-    const std::shared_ptr<PluginTimer>&    state
+    const neograph_asio_error_code&     ec,
+    const std::shared_ptr<PluginTimer>& state
 ) {
     if (ec || state->cancelled || !state->inst) {
         return; // 取消 (operation_aborted) 或宿主销毁
@@ -1742,7 +1735,7 @@ void PluginManager::cancelTimer(PluginInstance* inst, void* timer) {
         (*it)->timer->cancel(); // 中断在途 async_wait (handler 以 aborted 到达退出)
     } catch (...) {
     }
-    inst->timers.erase(it);   // 释放一侧持有; 在途 handler 链自持有到终结
+    inst->timers.erase(it); // 释放一侧持有; 在途 handler 链自持有到终结
 }
 
 void PluginManager::offload(
@@ -1767,7 +1760,7 @@ void PluginManager::offload(
     auto ex = ioExecutor_;
     asio::post(*ctx->blockingPool, [inst, work, done, ud, ex]() {
         // ---- 阻塞池线程: 执行 work ----
-        char* error = nullptr;
+        char* error  = nullptr;
         void* result = work(ud, &error);
         // ---- 投递回 io 线程执行 done (快速返回约定) ----
         asio::post(ex, [inst, done, ud, result, error]() {
@@ -1798,10 +1791,8 @@ static const AgentxxBuiltinPluginInfo* findBuiltinPlugin(std::string_view name) 
     return nullptr;
 }
 
-asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadNativeAsync(
-    std::string                    path,
-    const agentxx::agent::PluginConfig* cfg
-) {
+asio::awaitable<std::shared_ptr<PluginInstance>>
+    PluginManager::loadNativeAsync(std::string path, const agentxx::agent::PluginConfig* cfg) {
     auto ctx = agentContext_.lock();
     if (!ctx || !ctx->blockingPool) {
         XX_LOGE("PluginManager: agent context not ready");
@@ -1934,10 +1925,10 @@ asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadNativeAsync(
 }
 
 asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadBuiltinAsync(
-    std::string              name,
-    std::string              path,
-    std::vector<std::string> depends,
-    std::vector<std::string> optionalDepends,
+    std::string                         name,
+    std::string                         path,
+    std::vector<std::string>            depends,
+    std::vector<std::string>            optionalDepends,
     const agentxx::agent::PluginConfig* cfg
 ) {
     auto ctx = agentContext_.lock();
@@ -2131,9 +2122,7 @@ void PluginManager::addPendingCleanup(const PluginInstance* inst) {
             }
         )
         == pendingCleanup_.end()) {
-        pendingCleanup_.push_back(
-            PendingMiddlewareCleanup{inst->name, inst->middleware}
-        );
+        pendingCleanup_.push_back(PendingMiddlewareCleanup{inst->name, inst->middleware});
     }
 }
 
@@ -2375,7 +2364,8 @@ void PluginManager::enableImpl(std::string_view name, bool userInitiated) {
         capabilities_->registerCapability(c.name, inst->name, c.invoke, c.ctx);
     }
     // 依赖图级联: 再启用必选依赖本插件的插件 (仅未被用户显式禁用的)
-    for (const auto& dep : collectReverseRequiredDeps(plugins_, inst->name, /*onlyEnabled=*/false)) {
+    for (const auto& dep :
+         collectReverseRequiredDeps(plugins_, inst->name, /*onlyEnabled=*/false)) {
         auto depInst = find(dep);
         if (depInst && !depInst->enabled && !depInst->userDisabled) {
             XX_LOGI("Enable `{}` cascades enable of dependent plugin `{}`", inst->name, dep);
@@ -2452,10 +2442,8 @@ bool PluginManager::checkDependencies(
     return true;
 }
 
-asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadPluginAsync(
-    std::string                        path,
-    const agentxx::agent::PluginConfig* cfg
-) {
+asio::awaitable<std::shared_ptr<PluginInstance>>
+    PluginManager::loadPluginAsync(std::string path, const agentxx::agent::PluginConfig* cfg) {
     namespace fs = std::filesystem;
 
     // 显式内置路径 (builtin://<插件名>): 直接从内置注册表加载, 不解析文件
@@ -2488,7 +2476,7 @@ asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadPluginAsync(
         // (脚本能力由插件内部经能力调用委派给 interpreter 引擎, 宿主不参与)
         // - entry 平台化 + 多配置生成器 (MSVC Debug/Release) 配置子目录回退
         //   见公共 resolvePluginEntryPath (plugin_common.h)
-        auto entryPath = resolvePluginEntryPath(fs::path(path), entry);
+        auto            entryPath = resolvePluginEntryPath(fs::path(path), entry);
         std::error_code ec2;
         if (fs::exists(entryPath, ec2)) {
             auto inst = co_await loadNativeAsync(std::move(entryPath), cfg);
@@ -2546,9 +2534,9 @@ asio::awaitable<void>
     // - cfg 指针指向入参 vector 元素, 生命周期覆盖本函数 (co_await 挂起时
     //   入参仍存活)
     struct Item {
-        std::string              path;
-        std::string              name; ///< 空 = 无法推导 (不影响排序)
-        std::vector<std::string> depends;
+        std::string                         path;
+        std::string                         name; ///< 空 = 无法推导 (不影响排序)
+        std::vector<std::string>            depends;
         const agentxx::agent::PluginConfig* cfg = nullptr;
     };
 

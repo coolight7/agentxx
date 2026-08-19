@@ -1,8 +1,8 @@
 // 注意: 必须先包含 test_agent.h (其会重定义 XX_TEST_PASSED/FAILED 为 g_da_*),
 // 再包含 test_agent_host.h (重定义为 g_host_*), 使本文件的断言计数到本模块
 // 计数器; 顺序相反时宏被覆盖, agent_host 模块会显示 passed=0 (预存问题修复)
-#include "test_agent.h"
 #include "test_agent_host.h"
+#include "test_agent.h"
 
 #include "agentxx/agent/agent_host.h"
 #include "agentxx/agent/code_agent.h"
@@ -110,9 +110,9 @@ asio::awaitable<void> test_host_spawn_e2e() {
     auto                                       host = agentxx::agent::AgentHost::create(hostCfg);
     std::shared_ptr<agentxx::agent::CodeAgent> agent;
     std::expected<agentxx::events::RespSubagentBatch, std::string> resp;
-    std::atomic<int>                                                progressCount{0};
-    std::atomic<int>                                                doneCount{0};
-    std::atomic<bool>                                               finished{false};
+    std::atomic<int>                                               progressCount{0};
+    std::atomic<int>                                               doneCount{0};
+    std::atomic<bool>                                              finished{false};
 
     host->hostBus()
         ->get<agentxx::events::EventHostProgress>(agentxx::events::HostTopic::AgentProgress)
@@ -224,7 +224,7 @@ asio::awaitable<void> test_host_spawn_same_context() {
     auto host     = agentxx::agent::AgentHost::create(hostCfg);
     std::expected<agentxx::events::RespSubagentBatch, std::string> sameCtxResp;
     std::expected<agentxx::events::RespSubagentBatch, std::string> normalResp;
-    std::atomic<bool>                                               finished{false};
+    std::atomic<bool>                                              finished{false};
 
     // 透传的结构化消息前缀 (模拟压缩场景: 父 system + 历史消息)
     const neograph::json prefix = neograph::json::array({
@@ -440,7 +440,11 @@ asio::awaitable<void> test_host_spawn_tool_policy() {
                                     std::chrono::seconds(30)
                                 );
                 if (resp.has_value() && !resp->results.empty() && resp->results[0].hasError) {
-                    XX_LOGE("spawn tool-policy `{}` failed: {}", tag, resp->results[0].errorMessage);
+                    XX_LOGE(
+                        "spawn tool-policy `{}` failed: {}",
+                        tag,
+                        resp->results[0].errorMessage
+                    );
                 }
             };
 
@@ -614,7 +618,8 @@ asio::awaitable<void> test_host_spawn_depth_limit() {
 }
 
 /// 验证: 并发预算 (maxConcurrentSubagents=1, 第二个并发派生被拒绝)
-asio::awaitable<void> test_host_spawn_concurrent_limit() {    auto sim     = startDaSimServer();
+asio::awaitable<void> test_host_spawn_concurrent_limit() {
+    auto sim     = startDaSimServer();
     auto baseUrl = "http://127.0.0.1:" + std::to_string(sim.port);
     auto cfg     = makeSimConfig(baseUrl);
 
@@ -705,16 +710,15 @@ asio::awaitable<void> test_host_spawn_nested_delegation() {
     g_da_sim_tool_calls_remaining = 2;
     g_da_sim_tool_calls           = neograph::json::array({
         neograph::json{
-            {"index", 0},
-            {"id", "call_nested_1"},
-            {"type", "function"},
-            {"function",
-             neograph::json{
-                 {"name", "agentxx_subagent"},
-                 {"arguments",
-                  R"({"tasks":[{"subagent":"subagent_task","message":"leaf task"}]})"},
+                       {"index", 0},
+                       {"id", "call_nested_1"},
+                       {"type", "function"},
+                       {"function",
+                       neograph::json{
+                           {"name", "agentxx_subagent"},
+                           {"arguments", R"({"tasks":[{"subagent":"subagent_task","message":"leaf task"}]})"},
              }},
-        },
+                       },
     });
 
     auto                              io = std::make_shared<asio::io_context>();
@@ -784,7 +788,8 @@ asio::awaitable<void> test_host_spawn_nested_delegation() {
 }
 
 /// 验证: 批量派生 (spawnBatch, wait_for_all, 结果顺序一致)
-asio::awaitable<void> test_host_spawn_batch() {    auto sim     = startDaSimServer();
+asio::awaitable<void> test_host_spawn_batch() {
+    auto sim     = startDaSimServer();
     auto baseUrl = "http://127.0.0.1:" + std::to_string(sim.port);
     auto cfg     = makeSimConfig(baseUrl);
 

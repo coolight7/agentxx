@@ -238,9 +238,8 @@ public:
 
 protected:
 
-    asio::awaitable<std::vector<std::unique_ptr<agentxx::tools::XXToolBase>>>
-        createTools() override {
-        auto tools = co_await CodeAgent::createTools();
+    asio::awaitable<std::vector<std::unique_ptr<agentxx::tools::XXToolBase>>> initTools() override {
+        auto tools = co_await CodeAgent::initTools();
         tools.push_back(std::make_unique<InterruptTriggerTool>(agentContext));
         tools.push_back(std::make_unique<FastDoneTool>(agentContext));
         tools.push_back(std::make_unique<SlowHangTool>(agentContext, &slowStarted));

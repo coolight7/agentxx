@@ -53,7 +53,8 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_get_inf
     return &info;
 }
 
-extern "C" AGENTXX_PLUGIN_EXPORT int agentxx_plugin_entry(const AgentxxHost* host, void** plugin_ctx) {
+extern "C" AGENTXX_PLUGIN_EXPORT int
+    agentxx_plugin_entry(const AgentxxHost* host, void** plugin_ctx) {
     (void)plugin_ctx;
     g_host = host;
     if (!host->vtable->has_capability(host, AGENTXX_SV("interpreter.js"))) {

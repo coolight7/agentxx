@@ -107,7 +107,7 @@ static void checkToolSchemaValidity(
     if (schema.contains("items")) {
         // 带 items 时必须声明单一 "array" 类型 (Gemini 谓词校验 $type==Type.ARRAY)
         const bool typeIsArray = schema.contains("type") && schema["type"].is_string()
-                              && schema["type"].get<std::string>() == "array";
+                                 && schema["type"].get<std::string>() == "array";
         if (!typeIsArray) {
             XX_LOGE(
                 "Tool `{}` schema `{}`: items present but type is not single \"array\" "
@@ -168,7 +168,7 @@ asio::awaitable<void> BaseAgent::init() {
 
     // 插件系统装配: 工具注册表 + 插件管理器 (挂在 AgentContext, 供
     // ToolcallWrapNode/ModelCallWrapNode/中间件栈取用)
-    // - 在 setupMiddleware 之前创建: 插件钩子注册 (加载插件时) push 到
+    // - 在 initMiddleware 之前创建: 插件钩子注册 (加载插件时) push 到
     //   handles 栈, 与既有中间件并存
     // - 配置插件的实际加载在 init 末尾 (engine 构建后, 见下方)
     notifyStartup("初始化插件系统 ...");
@@ -185,15 +185,15 @@ asio::awaitable<void> BaseAgent::init() {
     }
 
     notifyStartup("注册中间件 (权限 / Skill / Memory / 规划) ...");
-    co_await setupMiddleware();
+    co_await initMiddleware();
 
     notifyStartup("创建工具集 ...");
-    auto tools = co_await createTools();
+    auto tools = co_await initTools();
 
     collectMiddlewareTools(tools);
 
     // 工具白名单过滤 (子代理"无工具/自定义/继承父工具"场景):
-    // - 作用于 createTools + 中间件收集后的完整工具集
+    // - 作用于 initTools + 中间件收集后的完整工具集
     // - 仅按名称过滤; 白名单中不存在的名称自然跳过 (不报错)
     if (agentContext->agentConfig->enableToolFiltering) {
         const auto& whitelist = agentContext->agentConfig->toolWhitelist;
@@ -467,11 +467,11 @@ neograph::json BaseAgent::buildGraphDefinition() {
     // clang-format on
 }
 
-asio::awaitable<void> BaseAgent::setupMiddleware() {
+asio::awaitable<void> BaseAgent::initMiddleware() {
     co_return;
 }
 
-asio::awaitable<std::vector<std::unique_ptr<agentxx::tools::XXToolBase>>> BaseAgent::createTools() {
+asio::awaitable<std::vector<std::unique_ptr<agentxx::tools::XXToolBase>>> BaseAgent::initTools() {
     std::vector<std::unique_ptr<agentxx::tools::XXToolBase>> tools{};
     tools.push_back(std::make_unique<agentxx::tools::ThreadShareStoreTool>(agentContext));
     tools.push_back(std::make_unique<agentxx::tools::GetCurrentDateTimeTool>(agentContext));
@@ -691,23 +691,20 @@ asio::awaitable<BaseAgent::ConversationTurnResult> BaseAgent::runConversationTur
                 cancelToken,
                 AgentRunner::Hooks{
                     .persistCheckpoint = true,
-                    .onInterruptTip = [&](std::string_view node,
-                                          std::string_view value,
-                                          std::string_view handle) {
-                        // 中断头消息: 由 agent 线程插入会话历史并通知 UI
-                        // (原由 client 端 handleInterrupt 构造); 后续中断
-                        // 输入项消息 (Role::Interrupt) 仍由 client 端插入
-                        std::string msg = fmt::format(
-                            "Interrupted at: {}\nValue: {}",
-                            node,
-                            value
-                        );
-                        if (!handle.empty()) {
-                            msg += fmt::format("\nHandle: {}", handle);
-                        }
-                        insertMessageTip(std::move(msg), ViewMessage::TipLevel::Info);
-                    },
-                    .eventCallback = eventCallback,
+                    .onInterruptTip =
+                        [&](std::string_view node, std::string_view value, std::string_view handle
+                        ) {
+                            // 中断头消息: 由 agent 线程插入会话历史并通知 UI
+                            // (原由 client 端 handleInterrupt 构造); 后续中断
+                            // 输入项消息 (Role::Interrupt) 仍由 client 端插入
+                            std::string msg
+                                = fmt::format("Interrupted at: {}\nValue: {}", node, value);
+                            if (!handle.empty()) {
+                                msg += fmt::format("\nHandle: {}", handle);
+                            }
+                            insertMessageTip(std::move(msg), ViewMessage::TipLevel::Info);
+                        },
+                    .eventCallback  = eventCallback,
                     .onBeforeResume = [&](std::string_view tid) -> asio::awaitable<void> {
                         engine->update_state(
                             std::string{tid},
@@ -717,24 +714,25 @@ asio::awaitable<BaseAgent::ConversationTurnResult> BaseAgent::runConversationTur
                         );
                         co_return;
                     },
-                    .onRunResult = [&](neograph::graph::RunResult& r, std::string_view tid) {
-                        if (r.interrupted) {
-                            // 中断时 [result] 内的 messages 是被 neograph::engine
-                            // 回滚的，本轮 session 的上下文已经被丢弃；应该取中断时
-                            // 保存的 messages
-                            const auto& im = agentContext->middlewareHandleContext
-                                                 ->getGraphDataItemValue<neograph::json>(
-                                                     tid,
-                                                     agentxx::middleware::MiddlewareContext::
-                                                         graphDataKey_tempMessages
-                                                 );
-                            if (im.is_array()) {
-                                session->llmMessages = im;
+                    .onRunResult =
+                        [&](neograph::graph::RunResult& r, std::string_view tid) {
+                            if (r.interrupted) {
+                                // 中断时 [result] 内的 messages 是被 neograph::engine
+                                // 回滚的，本轮 session 的上下文已经被丢弃；应该取中断时
+                                // 保存的 messages
+                                const auto& im = agentContext->middlewareHandleContext
+                                                     ->getGraphDataItemValue<neograph::json>(
+                                                         tid,
+                                                         agentxx::middleware::MiddlewareContext::
+                                                             graphDataKey_tempMessages
+                                                     );
+                                if (im.is_array()) {
+                                    session->llmMessages = im;
+                                }
+                            } else {
+                                session->llmMessages = r.channel_raw("messages");
                             }
-                        } else {
-                            session->llmMessages = r.channel_raw("messages");
-                        }
-                    },
+                        },
                 },
                 recovered
             );
@@ -896,20 +894,24 @@ asio::awaitable<BaseAgent::SimpleRunResult> BaseAgent::runInternalAsync(
                         oss << ch.data;
                     }
                 }
-            } catch (...) {}
+            } catch (...) {
+            }
         }
         if (callback) {
             callback(ev);
         }
     };
-    auto result = co_await engine->run_stream_async(cfg, neograph::graph::GraphStreamCallback{[&](auto& e){ wrappedCb(e); }});
+    auto result
+        = co_await engine->run_stream_async(cfg, neograph::graph::GraphStreamCallback{[&](auto& e) {
+                                                wrappedCb(e);
+                                            }});
     if (cleanupAfter) {
         if (agentContext->middlewareHandleContext) {
             agentContext->middlewareHandleContext->cleanupThread(std::string{threadId});
         }
         agentContext->sessions->remove(threadId);
     }
-    co_return SimpleRunResult{ .content = oss.str(), .fullResult = std::move(result) };
+    co_return SimpleRunResult{.content = oss.str(), .fullResult = std::move(result)};
 }
 
 asio::awaitable<std::string> BaseAgent::runNonStreamAsync(
@@ -920,9 +922,17 @@ asio::awaitable<std::string> BaseAgent::runNonStreamAsync(
 ) {
     neograph::graph::GraphStreamCallback cb;
     if (callback) {
-        cb = [callback](const neograph::graph::GraphEvent& e){ callback(e); };
+        cb = [callback](const neograph::graph::GraphEvent& e) {
+            callback(e);
+        };
     }
-    auto r = co_await runInternalAsync(threadId, std::vector<neograph::ChatMessage>(messages), cb, modelName, false);
+    auto r = co_await runInternalAsync(
+        threadId,
+        std::vector<neograph::ChatMessage>(messages),
+        cb,
+        modelName,
+        false
+    );
     co_return r.content;
 }
 
@@ -934,9 +944,11 @@ asio::awaitable<std::string> BaseAgent::runSingleInputAsync(
 ) {
     std::vector<neograph::ChatMessage> messages;
     if (!systemPrompt.empty()) {
-        messages.push_back(neograph::ChatMessage{ .role = "system", .content = std::string{systemPrompt} });
+        messages.push_back(
+            neograph::ChatMessage{.role = "system", .content = std::string{systemPrompt}}
+        );
     }
-    messages.push_back(neograph::ChatMessage{ .role = "user", .content = std::string{userInput} });
+    messages.push_back(neograph::ChatMessage{.role = "user", .content = std::string{userInput}});
     co_return co_await runNonStreamAsync(threadId, messages, nullptr, modelName);
 }
 
@@ -945,9 +957,15 @@ asio::awaitable<BaseAgent::SimpleRunResult> BaseAgent::runStreamAsync(
     std::string_view                          modelName
 ) {
     static std::atomic<uint64_t> runStreamSeq{0};
-    const auto ts = std::chrono::steady_clock::now().time_since_epoch().count();
-    const auto threadId = fmt::format("subagent_{}_{}", ts, runStreamSeq.fetch_add(1));
-    auto r = co_await runInternalAsync(threadId, std::vector<neograph::ChatMessage>(messages), nullptr, modelName, true);
+    const auto                   ts = std::chrono::steady_clock::now().time_since_epoch().count();
+    const auto threadId             = fmt::format("subagent_{}_{}", ts, runStreamSeq.fetch_add(1));
+    auto       r                    = co_await runInternalAsync(
+        threadId,
+        std::vector<neograph::ChatMessage>(messages),
+        nullptr,
+        modelName,
+        true
+    );
     co_return r;
 }
 

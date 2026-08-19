@@ -198,7 +198,8 @@ static void on_client_hello(AgentxxPluginStringView event_json, void* ud) {
 
 /* ---------------- entry / unload ---------------- */
 
-extern "C" AGENTXX_PLUGIN_EXPORT int agentxx_plugin_entry(const AgentxxHost* host, void** plugin_ctx) {
+extern "C" AGENTXX_PLUGIN_EXPORT int
+    agentxx_plugin_entry(const AgentxxHost* host, void** plugin_ctx) {
     g_host = host;
     (void)plugin_ctx;
 
@@ -482,7 +483,8 @@ static void on_client_plugin_data(AgentxxPluginStringView payload_json, void* ud
 
 /* ---------------- entry / unload ---------------- */
 
-extern "C" AGENTXX_PLUGIN_EXPORT int agentxx_client_entry(const AgentxxClientHost* host, void** plugin_ctx) {
+extern "C" AGENTXX_PLUGIN_EXPORT int
+    agentxx_client_entry(const AgentxxClientHost* host, void** plugin_ctx) {
     g_client_host = host;
     (void)plugin_ctx;
 

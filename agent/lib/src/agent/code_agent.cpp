@@ -46,12 +46,14 @@ CodeAgent::CodeAgent(std::shared_ptr<agentxx::agent::AgentConfig> in_config) :
 
 CodeAgent::~CodeAgent() = default;
 
-asio::awaitable<void> CodeAgent::setupMiddleware() {
+asio::awaitable<void> CodeAgent::initMiddleware() {
     auto config = agentContext->agentConfig;
 
     if (config->enableSubagent) {
-        subagentManagerTool_
-            = std::make_unique<agentxx::tools::SubAgentManagerTool>("subagent_manager", agentContext);
+        subagentManagerTool_ = std::make_unique<agentxx::tools::SubAgentManagerTool>(
+            "subagent_manager",
+            agentContext
+        );
         agentContext->subagentManagerToolPtr = subagentManagerTool_.get();
     }
 
@@ -243,18 +245,18 @@ asio::awaitable<void> CodeAgent::setupMiddleware() {
     co_return;
 }
 
-asio::awaitable<std::vector<std::unique_ptr<agentxx::tools::XXToolBase>>> CodeAgent::createTools() {
+asio::awaitable<std::vector<std::unique_ptr<agentxx::tools::XXToolBase>>> CodeAgent::initTools() {
     auto config = agentContext->agentConfig;
 
     std::vector<std::unique_ptr<agentxx::tools::XXToolBase>> tools
-        = co_await BaseAgent::createTools();
+        = co_await BaseAgent::initTools();
 
     /// MCP tool
     /// - 多个 server 并行初始化 (独立网络 IO, 互不依赖): 串行加载时每个 server
     ///   需 initialize + listTools 两次网络往返, 多 server 会显著拖慢 agent 启动;
     ///   并行化后总耗时约为最慢 server 的单次加载时间
     /// - 同一 ioCtx 协作式调度, 子协程与主协程交错执行, tools 容器无数据竞争;
-    ///   主协程等待全部完成信号后才返回, 期间 createTools 栈帧存活, 引用安全
+    ///   主协程等待全部完成信号后才返回, 期间 initTools 栈帧存活, 引用安全
     /// - 单个 server 失败仅记录日志, 不影响其他 server 与 agent 启动
     const size_t mcpCount = config->mcpServerUrls.size();
     if (mcpCount > 0) {

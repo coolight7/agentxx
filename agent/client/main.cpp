@@ -178,7 +178,7 @@ int main(int argn, char** argv) {
     agentxx::util::LogDispatcher::instance().addSink(defaultLogSink);
 
     std::string configPath = "agentxx-config.yaml";
-    bool        configExplicit = false; ///< --config 是否被显式指定 (指定但文件不存在时报错)
+    bool configExplicit = false; ///< --config 是否被显式指定 (指定但文件不存在时报错)
     std::string overrideEnvPath;
     std::string mode = "tui";
     std::string agentUrl;
@@ -248,7 +248,8 @@ Options:
         } else if (arg == "--ssl-key" && i + 1 < argn) {
             ++i;
             sslKeyFile = argv[i];
-        } else if (arg == "tui" || arg == "cli" || arg == "server" || arg == "acp" || arg == "train") {
+        } else if (arg == "tui" || arg == "cli" || arg == "server" || arg == "acp"
+                   || arg == "train") {
             mode = arg;
         } else {
             XX_LOGE("Unknown arg: `{}`", arg);
@@ -289,7 +290,7 @@ Options:
 
     // 加载 YAML 配置
     YamlAppConfig yamlCfg;
-    bool          configLoaded = false; ///< 配置文件是否成功加载 (用于模型缺失引导文案区分)
+    bool configLoaded = false; ///< 配置文件是否成功加载 (用于模型缺失引导文案区分)
     if (std::filesystem::exists(configPath)) {
         auto code = agentxx::util::catchError<int>(
             [&]() -> int {

@@ -179,7 +179,8 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_get_inf
     return &info;
 }
 
-extern "C" AGENTXX_PLUGIN_EXPORT int agentxx_plugin_entry(const AgentxxHost* host, void** /*plugin_ctx*/) {
+extern "C" AGENTXX_PLUGIN_EXPORT int
+    agentxx_plugin_entry(const AgentxxHost* host, void** /*plugin_ctx*/) {
     g_host = host;
 
     static const std::string kSchema = R"({

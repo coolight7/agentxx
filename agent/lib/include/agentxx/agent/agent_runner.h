@@ -39,8 +39,7 @@ public:
 
         /// 中断头消息回调 (根: 插入会话历史 + MessageTip Delta;
         /// 子代理无 Delta 输出通道: 为空)
-        std::function<void(
-            std::string_view node, std::string_view value, std::string_view handle)>
+        std::function<void(std::string_view node, std::string_view value, std::string_view handle)>
             onInterruptTip;
 
         /// 引擎事件回调 (run/resume 共用; 根: EventBridge,
@@ -78,15 +77,14 @@ public:
     /// @param hooks     调用方差异
     /// @param initialResult 非空时跳过首跑直接进入中断处理循环
     ///   (程序重启恢复中断路径, 由调用方从 checkpoint 重建中断信息)
-    asio::awaitable<Outcome> run(
-        std::shared_ptr<AgentContext>                 ctx,
-        neograph::graph::GraphEngine*                 engine,
-        std::string_view                             threadId,
-        neograph::graph::RunConfig                    cfg,
-        std::shared_ptr<neograph::graph::CancelToken> cancelToken,
-        Hooks                                         hooks,
-        std::optional<neograph::graph::RunResult>     initialResult = std::nullopt
-    );
+    asio::awaitable<Outcome>
+        run(std::shared_ptr<AgentContext>                 ctx,
+            neograph::graph::GraphEngine*                 engine,
+            std::string_view                              threadId,
+            neograph::graph::RunConfig                    cfg,
+            std::shared_ptr<neograph::graph::CancelToken> cancelToken,
+            Hooks                                         hooks,
+            std::optional<neograph::graph::RunResult>     initialResult = std::nullopt);
 };
 
 } // namespace agent

@@ -32,12 +32,12 @@ class PluginInstance; ///< 前向声明 (PluginTimer 引用其指针)
 /// - handler 链自持有 state (shared_ptr), 取消/错误后不再重新排程 → 链终结
 ///   释放 state (无自引用环)
 struct PluginTimer {
-    PluginInstance*                         inst       = nullptr;
-    std::shared_ptr<asio::steady_timer>     timer;
-    long                                    intervalMs = 0;
-    void (*fn)(void* ud)                              = nullptr;
-    void* ud                                          = nullptr;
-    bool  cancelled                                   = false;
+    PluginInstance*                     inst = nullptr;
+    std::shared_ptr<asio::steady_timer> timer;
+    long                                intervalMs = 0;
+    void (*fn)(void* ud)                           = nullptr;
+    void* ud                                       = nullptr;
+    bool  cancelled                                = false;
 };
 
 /// 已加载插件实例 (宿主侧状态)
@@ -283,10 +283,8 @@ public:
     /// - cfg: 插件配置 (yaml `plugins` 条目; 传 args 给插件, 不解析字段语义);
     ///   为 nullptr 时 args 为空对象 (测试/直连路径)
     /// - 返回插件实例; 加载失败返回 nullptr (错误记日志)
-    asio::awaitable<std::shared_ptr<PluginInstance>> loadNativeAsync(
-        std::string path,
-        const agentxx::agent::PluginConfig* cfg = nullptr
-    );
+    asio::awaitable<std::shared_ptr<PluginInstance>>
+        loadNativeAsync(std::string path, const agentxx::agent::PluginConfig* cfg = nullptr);
 
     /// 加载内置插件 (编译进 libagentxx, 无动态库文件; io 线程调用)
     /// - 仅当同名插件已内置 (agentxx_get_builtin_plugins 注册表) 时可用;
@@ -296,10 +294,10 @@ public:
     /// - entry 调用卸载到线程池执行 (与 loadNativeAsync 相同, 避免 io↔引擎
     ///   互等死锁); 返回插件实例; 失败返回 nullptr (错误记日志)
     asio::awaitable<std::shared_ptr<PluginInstance>> loadBuiltinAsync(
-        std::string              name,
-        std::string              path,
-        std::vector<std::string> depends,
-        std::vector<std::string> optionalDepends,
+        std::string                         name,
+        std::string                         path,
+        std::vector<std::string>            depends,
+        std::vector<std::string>            optionalDepends,
         const agentxx::agent::PluginConfig* cfg = nullptr
     );
 
@@ -336,10 +334,8 @@ public:
     /// - cfg: 插件配置 (yaml `plugins` 条目; args 随加载直接传给插件实例,
     ///   不再事后按名回查配置 —— manifest name 与目录/文件名不一致时也能
     ///   正确拿到 args); 为 nullptr 时 args 为空对象
-    asio::awaitable<std::shared_ptr<PluginInstance>> loadPluginAsync(
-        std::string path,
-        const agentxx::agent::PluginConfig* cfg = nullptr
-    );
+    asio::awaitable<std::shared_ptr<PluginInstance>>
+        loadPluginAsync(std::string path, const agentxx::agent::PluginConfig* cfg = nullptr);
 
     /// 同步卸载全部插件 (AgentContext 析构前调用, 断开中间件↔实例循环引用)
     /// - 按依赖图逆序 (先子后父): 脚本插件先卸载, 引擎插件最后 (脚本插件
@@ -396,12 +392,7 @@ public:
     /// 创建周期定时器 (vtable add_timer 实现入口; io 线程)
     /// - 返回句柄 (PluginTimer shared_ptr 裸指针); 失败返回 nullptr
     /// - 回调循环内自行重新 expires_after; cancelTimer 置 cancelled + cancel
-    void* addTimer(
-        PluginInstance* inst,
-        long            intervalMs,
-        void (*fn)(void* ud),
-        void* ud
-    );
+    void* addTimer(PluginInstance* inst, long intervalMs, void (*fn)(void* ud), void* ud);
     /// 取消定时器 (io 线程; 从实例容器移除 + cancelled 标记)
     void cancelTimer(PluginInstance* inst, void* timer);
     /// 阻塞池卸载执行 (vtable offload 实现入口; 任意线程可调用)
@@ -538,9 +529,10 @@ private:
     /// 待轮末摘除的中间件 (弱引用: flush 时不依赖实例存活 —— 加载失败
     /// 路径实例已从插件表移除, 仅中间件持实例弱引用, 摘除后实例自然析构)
     struct PendingMiddlewareCleanup {
-        std::string                                    name; ///< 插件名 (日志/去重用)
-        std::weak_ptr<PluginMiddlewareHandle>          middleware;
+        std::string                           name; ///< 插件名 (日志/去重用)
+        std::weak_ptr<PluginMiddlewareHandle> middleware;
     };
+
     /// 登记待轮末清理的中间件 (按 name 去重)
     void addPendingCleanup(const PluginInstance* inst);
 

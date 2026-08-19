@@ -20,7 +20,7 @@ namespace agent {
 /// 权限询问处理模式 (yaml `permission.mode` 指定; 默认 Ask)
 ///
 /// 服务端 CodeAgent 按模式注册文件系统读写默认规则 (见 code_agent.cpp
-/// setupMiddleware), 白名单/黑名单路径始终优先于模式默认规则;
+/// initMiddleware), 白名单/黑名单路径始终优先于模式默认规则;
 /// 客户端 (TUI/CLI) 仅对仍到达的权限 INTERRUPT 询问作兜底处理。
 ///
 /// - Ask:    当前工作目录内允许读写, 其他路径询问用户
@@ -50,7 +50,7 @@ public:
     int         connectTimeoutSeconds   = 16;
     int         readChunkTimeoutSeconds = 100;
     /// 是否在发送 LLM 请求时携带 thinking 内容
-    bool                sendThinking = false;
+    bool sendThinking = false;
     /// 是否请求上游返回思考摘要 (Responses API 请求体 `include` 参数, yaml
     /// `request_reasoning_summary`)
     /// - sendThinking 开启时默认请求 `include: ["reasoning.summary_text"]` 以便回传展示
@@ -60,8 +60,8 @@ public:
     /// - 关闭后: 不再请求思考摘要, 也不再回传历史 reasoning summary 输入
     ///   (模型仍可正常对话, 只是不展示思考过程)
     /// - 也可通过 extra_api_config 显式指定 `include` 数组覆盖 (优先于本开关)
-    bool requestReasoningSummary = true;
-    std::optional<bool> sslVerify = std::nullopt;
+    bool                requestReasoningSummary = true;
+    std::optional<bool> sslVerify               = std::nullopt;
     /// LLM API 连接池: 该模型端点 (baseUrl) 的最大并发连接数 (yaml `max_concurrent_connections`)
     /// - 默认 5; 0 = 不限制 (仍复用空闲连接)
     /// - LLM 请求启用 HTTP keep-alive 连接池, 复用空闲连接并限制并发建连数,

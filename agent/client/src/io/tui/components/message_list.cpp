@@ -104,8 +104,8 @@ MessageListComponent::MessageListComponent(TUICtx& ctx) :
     // (见 buildMessageItem), 使 maxBytes 直接约束真实驻留内存 —— 旧实现按
     // 源文本字节计 (16MiB 源 ≈ 0.5~1GB 渲染树), 预算形同虚设, 实测 100K/200K
     // 上下文时消息列表渲染树缓存即占 10+ MB。
-    budget.maxItems = 64;               // 条数预算: 可见 ~30 条 + 少量滚动余量
-    budget.maxBytes = 4 * 1024 * 1024;  // 渲染树估算字节预算: 4MiB
+    budget.maxItems = 64;              // 条数预算: 可见 ~30 条 + 少量滚动余量
+    budget.maxBytes = 4 * 1024 * 1024; // 渲染树估算字节预算: 4MiB
     // 字节预算豁免: sourceBytes ≤64KB (即源 ≤1KB 的短消息) 不计入字节预算,
     // 只受 maxItems 条数约束 (64 条 × ~64KB ≈ 4MB 封顶) —— 短消息渲染树
     // 重建成本低, 无需挤占长消息的字节预算; 若连条数预算都不设, 短消息会
@@ -548,7 +548,7 @@ LazyBuiltItem MessageListComponent::buildMessageItem(const TUIMessage& msg, size
     auto block = buildMessageBlock(msg, index, maxWidth, builders);
 
     LazyBuiltItem out;
-    out.element = vbox({std::move(block), text("")});
+    out.element           = vbox({std::move(block), text("")});
     const size_t srcBytes = msg.text.size() + (msg.tool ? msg.tool->toolResult.size() : 0)
                             + (msg.tool ? msg.tool->toolName.size() : 0);
     // 渲染树内存估算: FTXUI 渲染树为源文本 ~30-70 倍 (text() 按 glyph 拆
@@ -638,7 +638,7 @@ LazyBuiltItem MessageListComponent::buildStreamingStable(const TUIRenderState& s
     LazyBuiltItem out;
     out.cacheable = true;
     if (streamRenderer_) {
-        out.element     = vbox({
+        out.element = vbox({
             streamRenderer_->stableBlockElement(bi, theme.markdownTheme, maxWidth) | color(c),
             text(""), // 块间空行分隔 (与整篇解析一致)
         });

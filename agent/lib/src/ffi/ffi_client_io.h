@@ -116,9 +116,8 @@ private:
 
     /// io 线程: 挂起等待宿主应答 (agentxx_interrupt_respond 经 submitInterruptResponse
     /// 完成 channel); 返回 {answered=false} 表示通道被关闭 (过期/停止, 不回送响应)
-    asio::awaitable<std::pair<bool, neograph::json>> waitHostInterrupt(
-        int64_t id, std::shared_ptr<RespChannel> ch
-    );
+    asio::awaitable<std::pair<bool, neograph::json>>
+        waitHostInterrupt(int64_t id, std::shared_ptr<RespChannel> ch);
 
     /// io 线程: 发事件到 C 回调 (异常不外泄)
     void emitEvent(AgentxxEventType type, std::string json);
@@ -134,7 +133,7 @@ private:
 
     /// 挂起的中断应答通道 (wire id → channel; pendingMutex_ 保护)
     std::map<int64_t, std::shared_ptr<RespChannel>> pending_;
-    mutable std::mutex pendingMutex_;
+    mutable std::mutex                              pendingMutex_;
 
     /// 挂起中断 id 快照 (任意线程只读; 仅应答前校验用)
     mutable std::mutex idsMutex_;
