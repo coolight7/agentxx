@@ -57,19 +57,25 @@ endif()
 
 find_package(PkgConfig REQUIRED)
 
-find_package(iconv REQUIRED)
+# 以下依赖一律只使用本项目自编译/自带的库 (均安装于 AGENTXX_INSTALL_DIR
+# 或 BOOST_ROOT, 经 CMAKE_PREFIX_PATH 命中):
+# - iconv/ZLIB/SQLite3/CURL/Boost 必须显式 CONFIG 模式: 避免 CMake 内置
+#   Findiconv/FindZLIB/FindSQLite3/FindCURL/FindBoost 模块 fallback 到系统库
+# - OpenSSL 保持模块模式 (FindOpenSSL): 本项目为预构建目录无 config,
+#   经 OPENSSL_ROOT_DIR 精确指向项目目录
+find_package(iconv CONFIG REQUIRED)
 find_package(uchardet REQUIRED)
 find_package(fmt REQUIRED)
 find_package(simdjson REQUIRED)
-find_package(ZLIB REQUIRED)
+find_package(ZLIB CONFIG REQUIRED)
 find_package(OpenSSL REQUIRED)
-find_package(Boost REQUIRED)
+find_package(Boost CONFIG REQUIRED)
 if (AGENTXX_ENABLE_BOOST_PROCESS)
-  find_package(Boost REQUIRED COMPONENTS process)
+  find_package(Boost CONFIG REQUIRED COMPONENTS process)
 endif()
 find_package(yaml-cpp REQUIRED)
-find_package(CURL REQUIRED)
-find_package(SQLite3 REQUIRED)
+find_package(CURL CONFIG REQUIRED)
+find_package(SQLite3 CONFIG REQUIRED)
 find_package(html2md REQUIRED)
 find_package(Glob REQUIRED)
 

@@ -195,17 +195,28 @@ find_package(PkgConfig REQUIRED)
 # 添加依赖库后应当同步更新 [packageProject:DEPENDENCIES]
 # (agentxx_util 为 libagentxx 的 PUBLIC 依赖: 消费方 find_package
 #  agentxx_shared/agentxx_static 时经 find_dependency(agentxx_util) 传递解析)
-set (agentxx_DEPENDENCIES "Iconv;uchardet;fmt;simdjson;ZLIB;OpenSSL;Boost;yaml-cpp;CURL;SQLite3;html2md;Glob;agentxx_util")
-find_package(iconv REQUIRED)
+set (agentxx_DEPENDENCIES "iconv CONFIG;uchardet;fmt;simdjson;ZLIB CONFIG;OpenSSL;Boost CONFIG;yaml-cpp;CURL CONFIG;SQLite3 CONFIG;html2md;Glob;agentxx_util")
+# 必须显式 CONFIG 模式: CMake >= 3.28 内置 Findiconv.cmake 模块在混合模式下
+# 永远优先于本项目安装的 iconvConfig.cmake (且仅创建 Iconv::Iconv 目标,
+# 无 Iconv::iconv/Iconv::charset, 还可能导致命中系统 iconv);
+# CONFIG 模式强制匹配本项目 libiconv-native 安装的 iconvConfig.cmake
+find_package(iconv CONFIG REQUIRED)
 find_package(uchardet REQUIRED)
 find_package(fmt REQUIRED)
 find_package(simdjson REQUIRED)
-find_package(ZLIB REQUIRED)
+# ZLIB/SQLite3/CURL/Boost 同样必须 CONFIG 模式: 避免 CMake 内置
+# FindZLIB/FindSQLite3/FindCURL/FindBoost 模块 fallback 到系统库
+# (zlib-ng/sqlite3-cmake/curl/boost 均安装了自己的 config 文件,
+# 位于 AGENTXX_INSTALL_DIR 或 BOOST_ROOT, 经 CMAKE_PREFIX_PATH 命中)
+find_package(ZLIB CONFIG REQUIRED)
+# OpenSSL 保持模块模式 (FindOpenSSL): 本项目 OpenSSL 为预构建目录
+# (third_party/OpenSSL-windows-build), 无 OpenSSLConfig.cmake, 模块模式
+# 经 OPENSSL_ROOT_DIR 精确指向项目预构建目录, 不会命中系统 OpenSSL
 find_package(OpenSSL REQUIRED)
-find_package(Boost REQUIRED)
+find_package(Boost CONFIG REQUIRED)
 find_package(yaml-cpp REQUIRED)
-find_package(CURL REQUIRED)
-find_package(SQLite3 REQUIRED)
+find_package(CURL CONFIG REQUIRED)
+find_package(SQLite3 CONFIG REQUIRED)
 find_package(html2md REQUIRED)
 find_package(Glob REQUIRED)
 
@@ -242,10 +253,18 @@ unset(_agentxx_target)
 #   - OpenSSL::SSL / OpenSSL::Crypto 为 imported target, config find_dependency
 #     解析, include 路径随 INTERFACE 传递 (插件 include http_client.h 时
 #     beast ssl 需要 openssl 头, 无需自行配置)
-# - 注意: 链接项必须用 imported target (Iconv::iconv / fmt::fmt ...) 而非
+# - 注意: 链接项必须用 imported target (Iconv::Iconv / fmt::fmt ...) 而非
 #   裸库名 (charset): 裸名导出后消费方需自行配置 link_directories, 插件项目
 #   无此配置会链接失败; 裸库名仅用于 install/lib 内存在的库 (neograph 系/
 #   yyjson/hs_runtime, 经 link_directories 解析)
+# - iconv 目标名兼容: Iconv::Iconv 在两种来源下均存在 (libiconv-native
+#   config 中为 Iconv::iconv 的 ALIAS, CMake 内置 Findiconv.cmake 模块为
+#   原生目标); Iconv::charset 仅 libiconv-native config 提供 (Windows),
+#   模块模式 (glibc 系统 iconv) 下不存在, 下方条件链接
+
+# 裸库名依赖解析目录 (PUBLIC 传播): neograph 系/yyjson/hs_runtime 位于
+# AGENTXX_INSTALL_DIR/lib, 插件消费本库后自动获得, 无需自行 link_directories
+target_link_directories(agentxx_util PUBLIC "${AGENTXX_INSTALL_DIR}/lib/")
 target_link_libraries(agentxx_util PUBLIC
   fmt::fmt
   SQLite::SQLite3
@@ -264,9 +283,6 @@ target_link_libraries(agentxx_util PUBLIC
   OpenSSL::SSL
   OpenSSL::Crypto
 )
-# 裸库名依赖解析目录 (PUBLIC 传播): neograph 系/yyjson/hs_runtime 位于
-# AGENTXX_INSTALL_DIR/lib, 插件消费本库后自动获得, 无需自行 link_directories
-target_link_directories(agentxx_util PUBLIC "${AGENTXX_INSTALL_DIR}/lib/")
 
 # 统一输出名称 libagentxx
 # - 不指定时，部分系统，如win可能编译输出缺少前缀 lib
@@ -364,8 +380,8 @@ set(_AGENTXX_LINK_LIBS
   simdjson::simdjson
   yyjson
   fmt::fmt
-  Iconv::Iconv
-  charset
+  Iconv::iconv
+  Iconv::charset
   uchardet::libuchardet
 )
 # libagentxx 各目标链接 agentxx_util (先于 _AGENTXX_LINK_LIBS 声明, 保证链接行
@@ -385,7 +401,7 @@ target_link_libraries(agentxx_shared PUBLIC ${_AGENTXX_LINK_LIBS})
 target_link_libraries(agentxx_static PUBLIC ${_AGENTXX_LINK_LIBS})
 unset(_AGENTXX_LINK_LIBS)
 if (AGENTXX_ENABLE_BOOST_PROCESS)
-  find_package(Boost REQUIRED COMPONENTS process)
+  find_package(Boost CONFIG REQUIRED COMPONENTS process)
   foreach(_agentxx_target ${_AGENTXX_OBJ_LINK_TARGETS})
     target_link_libraries(${_agentxx_target} PRIVATE Boost::process)
   endforeach()
@@ -472,13 +488,22 @@ packageProject(
 # 中 agentxx_plugins_repo DEPENDS agentxx_lib_repo, 安装产物先于插件构建);
 # 依赖链由 config 内 find_dependency 传递解析
 # (注意: iconv 的 config 文件为 iconvConfig.cmake, find_dependency 须用小写
-# 包名 iconv, 大写 Iconv 无法匹配该文件)
+# 包名 iconv, 大写 Iconv 无法匹配该文件; 且必须显式 CONFIG 模式 ——
+# CMake >= 3.28 内置 FindIconv.cmake 模块 (Windows 大小写不敏感会匹配到
+# FindIconv.cmake) 中 FPHSA 仅设置大写 Iconv_FOUND, 与 find_dependency(iconv)
+# 检查的小写 iconv_FOUND 不匹配, 导致依赖解析误判失败;
+# 故下方 DEPENDENCIES 条目写 "iconv CONFIG" (含空格): 经 PackageProject 模板
+# (Config.cmake.in 的 find_dependency(${args}) 展开) 生成
+# find_dependency(iconv CONFIG), 强制匹配 libiconv-native 安装的
+# iconvConfig.cmake, CONFIG 模式成功时 find_package 框架设置精确的小写
+# iconv_FOUND=TRUE; 若仅写 "iconv" 则会退化为模块模式, 目标 Iconv::iconv/
+# Iconv::charset 不存在, 消费方链接 agentxx_util 时直接报 target not found)
 # - OpenSSL::SSL/Crypto 为 INTERFACE_LINK_LIBRARIES 中的 imported target,
 #   须在 DEPENDENCIES 中声明以便消费方 find_dependency 解析
 # - neograph 系/yyjson/hs_runtime 为裸库名, 经 PUBLIC link_directories 解析,
 #   无需 find_dependency; PkgConfig::hyperscan/uring 由消费方项目自行
 #   pkg_check_modules 定义 (见 plugins/CMakeLists.txt)
-set(agentxx_util_DEPENDENCIES "fmt;SQLite3;uchardet;iconv;OpenSSL")
+set(agentxx_util_DEPENDENCIES "fmt;SQLite3 CONFIG;uchardet;iconv CONFIG;OpenSSL")
 packageProject(
   NAME agentxx_util
   VERSION ${PROJECT_VERSION}

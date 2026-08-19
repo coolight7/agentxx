@@ -23,12 +23,15 @@ pkg-config --version
 ```
 ### Boost 编译
 - 安装或编译 Boost 1.92，推荐和我们的开发版本一致 `1.92`
-- 自行编译, windows CMD:
+- 自行编译, 如果使用 windows CMD:
 ```sh
 # https://github.com/boostorg/boost/releases/
 # 下载 release/boost-xxx-cmake.7z 解压到 agent/third_party/boost/
 cd boost\
 .\bootstrap.bat
+
+# 切换到 cmd
+cmd
 
 # 创建 third_party/boost-windows-build-debug 和 third_party/boost-windows-build-release 目录，并回到 boost 目录
 set "boost_source_dir=%CD%"
@@ -46,22 +49,12 @@ set "boost_install_release_dir=%CD%"
 cd "%boost_source_dir%"
 
 # release / debug 编译/安装
-.\b2.exe install --layout=system --prefix="%boost_install_release_dir%" link=static runtime-link=shared address-model=64 variant=release
+.\b2.exe install --layout=system --prefix="%boost_install_release_dir%" link=static runtime-link=shared runtime-debugging=off address-model=64 variant=release
 
-.\b2.exe --clean-all
-
-.\b2.exe install --layout=system --prefix="%boost_install_debug_dir%" link=static runtime-link=shared address-model=64 variant=debug
+.\b2.exe install --layout=system --prefix="%boost_install_debug_dir%" link=static runtime-link=shared runtime-debugging=on   address-model=64 variant=debug
 
 # 如果想重新构建，可以先执行清理:
 # .\b2.exe --clean-all
-```
-- PowerShell 使用:
-```sh
-.\b2.exe install --layout=system --prefix="$PWD/../boost-build-debug" link=static runtime-link=shared runtime-debugging=on address-model=64 variant=debug
-
-.\b2.exe --clean-all
-
-.\b2.exe install --layout=system --prefix="$PWD/../boost-build-release" link=static runtime-link=shared runtime-debugging=off address-model=64 variant=release 
 ```
 ### 下载预编译的 openssl
 - 前往下载 `https://slproweb.com/products/Win32OpenSSL.html`, 进入网页后往下滑动，找到 `Win64 OpenSSL vx.x.x`，注意没有末尾 Light，下载其 `EXE` 或 `MSI` 都行，然后运行安装，安装目录选择到 `{项目根目录}/agent/third_party/OpenSSL-windows-build/` 即可

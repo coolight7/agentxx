@@ -35,18 +35,28 @@ target_include_directories(agentxx_benchmark PRIVATE "${CMAKE_CURRENT_SOURCE_DIR
 
 find_package(PkgConfig REQUIRED)
 
-find_package(iconv REQUIRED)
+# iconv 必须 CONFIG 模式: 仅使用本项目 libiconv-native 安装的
+# iconvConfig.cmake (提供 Iconv::iconv/Iconv::charset, agentxx_shared 的
+# INTERFACE 链接依赖), 避免 CMake 内置 Findiconv.cmake 模块模式命中系统 iconv
+find_package(iconv CONFIG REQUIRED)
 find_package(uchardet REQUIRED)
 find_package(fmt REQUIRED)
 find_package(simdjson REQUIRED)
+# SQLite3/CURL/Boost 同样必须 CONFIG 模式: 避免 CMake 内置
+# FindSQLite3/FindCURL/FindBoost 模块 fallback 到系统库
+# (sqlite3-cmake/curl/boost 均安装了自己的 config 文件,
+# 位于 AGENTXX_INSTALL_DIR 或 BOOST_ROOT, 经 CMAKE_PREFIX_PATH 命中)
+# OpenSSL 保持模块模式 (FindOpenSSL): 本项目 OpenSSL 为预构建目录
+# (third_party/OpenSSL-windows-build), 无 OpenSSLConfig.cmake, 模块模式
+# 经 OPENSSL_ROOT_DIR 精确指向项目预构建目录, 不会命中系统 OpenSSL
 find_package(OpenSSL REQUIRED)
-find_package(Boost REQUIRED)
+find_package(Boost CONFIG REQUIRED)
 if (AGENTXX_ENABLE_BOOST_PROCESS)
-  find_package(Boost REQUIRED COMPONENTS process)
+  find_package(Boost CONFIG REQUIRED COMPONENTS process)
 endif()
 find_package(yaml-cpp REQUIRED)
-find_package(CURL REQUIRED)
-find_package(SQLite3 REQUIRED)
+find_package(CURL CONFIG REQUIRED)
+find_package(SQLite3 CONFIG REQUIRED)
 find_package(html2md REQUIRED)
 find_package(Glob REQUIRED)
 
