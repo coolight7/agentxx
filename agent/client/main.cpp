@@ -478,12 +478,15 @@ Options:
     config->permissionAllowPaths = yamlCfg.permissionAllowPaths;
     config->permissionDenyPaths  = yamlCfg.permissionDenyPaths;
 
+    // 子代理开关 (yaml `subagent.enable`, 默认 true)
+    config->enableSubagent = yamlCfg.enableSubagent;
     // 插件配置 (yaml `plugins` 段): 相对路径按程序工作目录解析为绝对路径
     // (与 skill/memory 一致; BaseAgent::init 按此加载, 拓扑排序见 PluginManager)
     for (const auto& pc : yamlCfg.plugins) {
         agentxx::agent::PluginConfig pluginCfg;
         pluginCfg.path    = resolvePath(pc.path);
         pluginCfg.enabled = pc.enabled;
+        pluginCfg.sides   = pc.sides;
         pluginCfg.args    = pc.args;
         config->plugins.push_back(std::move(pluginCfg));
     }

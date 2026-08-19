@@ -245,12 +245,18 @@ std::tuple<bool, std::optional<std::string>> agentxx::util::autoConvertCharset(
 
 std::tuple<bool, std::optional<std::string>>
     agentxx::util::autoConvertToUtf8(std::string_view str, bool _) {
+    if (str.empty()) {
+        return {true, std::nullopt};
+    }
     std::string encoding;
     return autoConvertCharset(str, encoding, "UTF-8");
 }
 
 bool agentxx::util::autoConvertToUtf8(std::string& str) {
-    auto [isSuccess, result] = autoConvertToUtf8(str, true);
+    if (str.empty()) {
+        return true;
+    }
+    auto [isSuccess, result] = autoConvertToUtf8(std::string_view{str}, true);
     if (isSuccess && result.has_value()) {
         str = std::move(result.value());
     }

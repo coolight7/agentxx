@@ -112,6 +112,15 @@ public:
         std::string_view                          modelName = ""
     );
 
+    /// 合并的 run helper: 构造 RunConfig + 执行并收集 content (重构1 收敛三 run* 重复)
+    asio::awaitable<SimpleRunResult> runInternalAsync(
+        std::string_view                          threadId,
+        std::vector<neograph::ChatMessage>        messages,
+        neograph::graph::GraphStreamCallback      callback = nullptr,
+        std::string_view                          modelName = "",
+        bool                                      cleanupAfter = false
+    );
+
 protected:
 
     // =================================================================

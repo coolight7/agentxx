@@ -49,9 +49,11 @@ CodeAgent::~CodeAgent() = default;
 asio::awaitable<void> CodeAgent::setupMiddleware() {
     auto config = agentContext->agentConfig;
 
-    subagentManagerTool_
-        = std::make_unique<agentxx::tools::SubAgentManagerTool>("subagent_manager", agentContext);
-    agentContext->subagentManagerToolPtr = subagentManagerTool_.get();
+    if (config->enableSubagent) {
+        subagentManagerTool_
+            = std::make_unique<agentxx::tools::SubAgentManagerTool>("subagent_manager", agentContext);
+        agentContext->subagentManagerToolPtr = subagentManagerTool_.get();
+    }
 
     {
         auto permission
@@ -416,11 +418,11 @@ asio::awaitable<std::vector<std::unique_ptr<agentxx::tools::XXToolBase>>> CodeAg
     tools.push_back(std::make_unique<agentxx::tools::ExecuteBashCommandTool>(agentContext));
 #endif
 
-    /// Subagent
+    /// Subagent (由 AgentConfig::enableSubagent 控制, yaml subagent.enable)
     /// - 注册表仅承载名称/描述等静态元数据 (SubAgentTaskBase);
     ///   实际执行由 AgentHost 派生独立 agent 完成 (中断委派, 不在此创建
     ///   嵌套 subgraph / nodeContext)
-    {
+    if (config->enableSubagent) {
         const auto nodeName = std::string{"subagent_task"};
 
         subagentManagerTool_->subAgentList.insert(std::make_pair(
@@ -432,6 +434,11 @@ asio::awaitable<std::vector<std::unique_ptr<agentxx::tools::XXToolBase>>> CodeAg
         ));
 
         tools.push_back(std::move(subagentManagerTool_));
+    } else {
+        // 已构造的 subagent 管理器无需注册, 清理指针避免悬空
+        subagentManagerTool_.reset();
+        agentContext->subagentManagerToolPtr = nullptr;
+        XX_LOGD("CodeAgent: subagent disabled by config (subagent.enable=false)");
     }
 
     co_return tools;

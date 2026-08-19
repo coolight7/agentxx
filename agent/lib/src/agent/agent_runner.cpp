@@ -95,6 +95,13 @@ asio::awaitable<AgentRunner::Outcome> AgentRunner::run(
             ++argIndex;
 
             if (interruptArg.name == "subagent") {
+                // 已禁用时直接返回错误, 不再派生
+                if (ctx->agentConfig && !ctx->agentConfig->enableSubagent) {
+                    XX_LOGW("AgentRunner `{}` subagent disabled, delegation rejected", threadId);
+                    resumeValues[interruptArg.resultId.empty() ? std::to_string(argIndex) : interruptArg.resultId]
+                        = neograph::json{{"error", "subagent disabled by config (subagent.enable=false)"}};
+                    continue;
+                }
                 // 统一批量委派: 参数解析收敛到共享实现 (parseSubagentBatchFromInterrupt +
                 // buildSubagentResumeValues, 与 SubAgentManagerTool 提取规则一致)
                 // - 经 ctx->bus 请求 service.subagent: 宿主在根与每个子代理的

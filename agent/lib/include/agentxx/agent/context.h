@@ -2,6 +2,7 @@
 
 #include "agentxx/agent/config.h"
 #include "agentxx/agent/conversation_types.h"
+#include "agentxx/util/log.h"
 #include "asio/thread_pool.hpp"
 #include <atomic>
 #include <cassert>
@@ -125,14 +126,19 @@ public:
 
     /// 断言当前线程为已绑定的 io 线程
     /// - 未绑定时 (ioThreadId_ == default) 不触发, 允许初始化阶段使用
-    /// - 已绑定后, 非 io 线程调用将触发 assert 失败 (Debug) / 未定义行为 (Release)
+    /// - 已绑定后, 非 io 线程调用在 Debug 下 assert 失败, Release 下记录错误并返回
     void assertIoThread() const {
-        [[maybe_unused]] auto bound = ioThreadId_.load(std::memory_order_relaxed);
-        assert(
-            (bound == std::thread::id{} || bound == std::this_thread::get_id())
-            && "Session: mutable state (viewMessages/llmMessages/chainHash) must only be "
-               "accessed on the bound io thread"
-        );
+        auto bound = ioThreadId_.load(std::memory_order_relaxed);
+        if (bound == std::thread::id{} || bound == std::this_thread::get_id()) {
+            return;
+        }
+#ifndef NDEBUG
+        assert(false && "Session: mutable state must only be accessed on the bound io thread");
+#else
+        XX_LOGE("Session: mutable state accessed off io thread (bound={}, current={})",
+            bound == std::thread::id{} ? std::string{"unbound"} : std::string{"bound"},
+            std::this_thread::get_id() == std::thread::id{} ? std::string{"unknown"} : std::string{"other"});
+#endif
     }
 
     // -------------------------------------------------------------------

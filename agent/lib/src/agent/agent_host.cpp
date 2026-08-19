@@ -359,8 +359,7 @@ asio::awaitable<events::RespSubagentBatchItem> AgentHost::spawnOneTask(
             if (task.tools->empty()) {
                 // []: 无工具 (纯文本回答)
                 XX_LOGD("spawnOneTask `{}`: tool policy = none", subagentName);
-            } else if (task.tools->size() == 1 && (*task.tools)[0].is_string()
-                       && (*task.tools)[0].get<std::string>() == "*") {
+            } else if (task.tools->size() == 1 && (*task.tools)[0].is_string() && (*task.tools)[0].get<std::string>() == "*") {
                 // ["*"]: 全量继承父 agent 工具 (解析为父工具名白名单;
                 // 子代理未创建的父工具名自然跳过, 不报错)
                 if (rootAgent_ && rootAgent_->getContext()) {
@@ -537,9 +536,10 @@ asio::awaitable<events::RespSubagentBatchItem> AgentHost::spawnOneTask(
                         events::Topic::Subagent
                     )
                     .serve(
-                        [selfWeak, parentCtxWeak, parentThread](const events::ReqSubagentBatch& req,
-                                                                size_t) -> asio::awaitable<
-                                                                    events::RespSubagentBatch> {
+                        [selfWeak, parentCtxWeak, parentThread](
+                            const events::ReqSubagentBatch& req,
+                            size_t
+                        ) -> asio::awaitable<events::RespSubagentBatch> {
                             auto ptr = selfWeak.lock();
                             if (!ptr) {
                                 co_return events::RespSubagentBatch{};
@@ -547,7 +547,7 @@ asio::awaitable<events::RespSubagentBatchItem> AgentHost::spawnOneTask(
                             // 防御: 深度预算按本子代理线程查表 (请求方
                             // AgentRunner 已填 parentThreadId, 此处保证不被
                             // 外部构造的请求改写)
-                            auto r = req;
+                            auto r           = req;
                             r.parentThreadId = parentThread;
                             // 嵌套委派时父上下文是上一级子代理 (HIL 继承查找用)
                             co_return co_await ptr->spawnBatch(r, parentCtxWeak.lock());
@@ -564,7 +564,7 @@ asio::awaitable<events::RespSubagentBatchItem> AgentHost::spawnOneTask(
                 inputMessages = *task.messages;
             } else {
                 inputMessages = neograph::json::array({
-                    {{"role", "system"}, {"content", sysPrompt}              },
+                    {{"role", "system"}, {"content", sysPrompt}                },
                     {{"role", "user"},   {"content", std::string{task.message}}},
                 });
             }
@@ -643,7 +643,7 @@ asio::awaitable<events::RespSubagentBatchItem> AgentHost::spawnOneTask(
                         "Sub-agent interrupted at node `{}` (interrupt not handled in subagent scope)",
                         runnerOutcome.interruptNode
                     ),
-                    .agentId      = agentId,
+                    .agentId = agentId,
                 };
             } else {
                 respItem = events::RespSubagentBatchItem{
@@ -658,10 +658,10 @@ asio::awaitable<events::RespSubagentBatchItem> AgentHost::spawnOneTask(
             if (hostBus_) {
                 asio::co_spawn(
                     hostBus_->executor(),
-                    [bus        = hostBus_,
+                    [bus = hostBus_,
                      agentId,
-                     hasError   = respItem.hasError,
-                     err        = respItem.errorMessage]() -> asio::awaitable<void> {
+                     hasError = respItem.hasError,
+                     err      = respItem.errorMessage]() -> asio::awaitable<void> {
                         co_await bus->publish<events::EventHostDone>(
                             events::HostTopic::AgentDone,
                             events::EventHostDone{
@@ -708,10 +708,11 @@ asio::awaitable<events::RespSubagentBatch> AgentHost::spawnBatch(
     if (req.tasks.empty()) {
         co_return batchResp;
     }
-    auto ex                   = co_await asio::this_coro::executor;
-    using ItemResult          = events::RespSubagentBatchItem;
-    size_t                  n = req.tasks.size();
-    std::vector<ItemResult> results(n);
+    auto ex          = co_await asio::this_coro::executor;
+    using ItemResult = events::RespSubagentBatchItem;
+    size_t n         = req.tasks.size();
+    // results 由 shared_ptr 持有, 避免 spawnBatch 协程取消析构后子协程 UAF
+    auto results = std::make_shared<std::vector<ItemResult>>(n);
 
     // 每个子代理 co_spawn 为独立协程, 完成后向 channel 发送 index (wait_for_all)
     auto doneChannel
@@ -727,7 +728,7 @@ asio::awaitable<events::RespSubagentBatch> AgentHost::spawnBatch(
             [this,
              task,
              parentAgentCtx,
-             &results,
+             results,
              i,
              doneChannel,
              parentThreadId = req.parentThreadId,
@@ -767,7 +768,7 @@ asio::awaitable<events::RespSubagentBatch> AgentHost::spawnBatch(
                         };
                     }
                 );
-                results[i] = std::move(r);
+                (*results)[i] = std::move(r);
             },
             asio::detached
         );
@@ -778,7 +779,7 @@ asio::awaitable<events::RespSubagentBatch> AgentHost::spawnBatch(
         co_await doneChannel->async_receive(asio::as_tuple(asio::use_awaitable));
     }
 
-    batchResp.results = std::move(results);
+    batchResp.results = std::move(*results);
     co_return batchResp;
 }
 

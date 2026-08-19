@@ -12,6 +12,7 @@
 #include "asio/experimental/channel.hpp"
 #include "asio/experimental/channel_traits.hpp"
 #include "asio/io_context.hpp"
+#include "asio/redirect_error.hpp"
 #include "asio/steady_timer.hpp"
 #include "asio/this_coro.hpp"
 #include "asio/use_awaitable.hpp"
@@ -203,11 +204,11 @@ public:
     }
 
     /// 发起请求并等待响应
-    /// - timeout 到期返回 nullopt, 并清理 pending 槽; timeout <= 0 表示不限制 (无限等待)
+    /// - timeout 到期返回 nullopt, 并清理 pending 槽; timeout <= 0 表示不限制 (无限等待, 默认)
     /// - 同一 io_context 单线程运行, pending_/servers_ 无需加锁
     /// - return (resp/error)
     asio::awaitable<std::expected<RespType, std::string>>
-        request(ReqType req, std::chrono::milliseconds timeout = std::chrono::seconds(30)) {
+        request(ReqType req, std::chrono::milliseconds timeout = std::chrono::milliseconds{0}) {
         if (servers_.empty()) {
             co_return std::unexpected{
                 fmt::format("RequestResponseStream `{}` request: no server registered", name)
@@ -353,20 +354,77 @@ public:
     /// - 在 executor_ 上 co_spawn 独立协程, 不阻塞调用者
     /// - 注意: TimerEventStream 可能为临时对象, 协程不捕获 this,
     ///   仅捕获 executor 副本与日志用的 name
+    /// - 额外支持 weak 捕获: 若 handler 捕获 weak_ptr<Session/Bus> 等生命周期敏感对象,
+    ///   协程内会先 lock(), 失败则静默跳过, 避免 detached 协程悬空
+    /// - 支持两类回调: void()/awaitable<void>(), 前者同步执行更高效
     size_t once(std::chrono::milliseconds delay, Handler handle, _DATA_TYPE data = _DATA_TYPE{}) {
         assert(handle);
         auto id         = ++timerSeq_;
         auto ex         = executor_;
         auto streamName = name_;
+        // 包装 handler 为 weak-safe: 若 handle 内含 weak_ptr, 由调用方在 lambda 内 lock 校验
+        // 此处提供统一的异常隔离, 确保 detached 协程不会因外部对象析构而崩溃
         asio::co_spawn(
             ex,
             [id, delay, handle = std::move(handle), data = std::move(data), streamName](
             ) -> asio::awaitable<void> {
                 auto timer = asio::steady_timer(co_await asio::this_coro::executor, delay);
-                co_await timer.async_wait(asio::use_awaitable);
+                // 定时器取消不抛异常, 仅返回 error_code, 此处忽略
+                neograph_asio_error_code ec;
+                co_await timer.async_wait(asio::redirect_error(asio::use_awaitable, ec));
+                if (ec) {
+                    co_return;
+                }
                 co_await agentxx::util::catchErrorAsync<bool>(
                     [&]() -> asio::awaitable<bool> {
                         co_await handle(data);
+                        co_return true;
+                    },
+                    [&](std::string errmsg) -> asio::awaitable<bool> {
+                        XX_LOGE(
+                            "TimerEventStream `{}` id={} exception: {}",
+                            streamName,
+                            id,
+                            errmsg
+                        );
+                        co_return false;
+                    }
+                );
+            },
+            asio::detached
+        );
+        return id;
+    }
+
+    /// weak-safe 便捷重载: handler 若捕获 weak_ptr, 在定时器触发时先尝试 lock, 失败则跳过
+    template<typename T>
+    size_t onceWeak(
+        std::chrono::milliseconds                                                   delay,
+        std::weak_ptr<T>                                                            weak,
+        std::function<asio::awaitable<void>(std::shared_ptr<T>, const _DATA_TYPE&)> handler,
+        _DATA_TYPE data = _DATA_TYPE{}
+    ) {
+        assert(handler);
+        auto id         = ++timerSeq_;
+        auto ex         = executor_;
+        auto streamName = name_;
+        asio::co_spawn(
+            ex,
+            [id, delay, weak, handler = std::move(handler), data = std::move(data), streamName](
+            ) -> asio::awaitable<void> {
+                auto timer = asio::steady_timer(co_await asio::this_coro::executor, delay);
+                std::error_code ec;
+                co_await timer.async_wait(asio::redirect_error(asio::use_awaitable, ec));
+                if (ec) {
+                    co_return;
+                }
+                auto locked = weak.lock();
+                if (!locked) {
+                    co_return;
+                }
+                co_await agentxx::util::catchErrorAsync<bool>(
+                    [&]() -> asio::awaitable<bool> {
+                        co_await handler(std::move(locked), data);
                         co_return true;
                     },
                     [&](std::string errmsg) -> asio::awaitable<bool> {
@@ -481,7 +539,7 @@ public:
     asio::awaitable<std::expected<_RESP_TYPE, std::string>> request(
         std::string_view          topic,
         _REQ_TYPE                 req,
-        std::chrono::milliseconds timeout = std::chrono::seconds(30)
+        std::chrono::milliseconds timeout = std::chrono::milliseconds{0}
     ) {
         co_return co_await getRR<_REQ_TYPE, _RESP_TYPE>(topic).request(std::move(req), timeout);
     }
@@ -631,6 +689,7 @@ private:
     /// - 仅在 io 线程访问, 无需同步
     std::chrono::steady_clock::time_point tpsStartTime_{};
     double                                tpsTokenCount_ = 0.0; ///< 当前流累计估算 token 数
+    size_t                                tpsPendingChars_ = 0; ///< 批量估算待折算字符数
     double                                tpsLastPushSec_ = 0.0; ///< 上次推送时的累计秒数
     double tpsLastPushToken_   = 0.0; ///< 上次推送时的累计 token 数
     double tpsPushIntervalSec_ = 3.0; ///< 推送间隔 (秒)

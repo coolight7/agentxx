@@ -526,6 +526,25 @@ YamlAppConfig loadYamlConfig(
             = resolveEnvVars(root["data_dir"].as<std::string>(""), dotEnvVars, overrideEnvVars);
     }
 
+    // subagent 开关 (yaml `subagent.enable`, 默认 true)
+    if (root["subagent"] && root["subagent"].IsMap() && root["subagent"]["enable"]) {
+        auto val = resolveEnvVars(
+            root["subagent"]["enable"].as<std::string>("true"),
+            dotEnvVars,
+            overrideEnvVars
+        );
+        // 兼容 true/false, 1/0, yes/no, on/off
+        std::string low = val;
+        std::transform(low.begin(), low.end(), low.begin(), [](unsigned char c){ return std::tolower(c); });
+        if (low == "false" || low == "0" || low == "no" || low == "off") {
+            cfg.enableSubagent = false;
+        } else if (low == "true" || low == "1" || low == "yes" || low == "on") {
+            cfg.enableSubagent = true;
+        } else {
+            XX_LOGW("[Config] Warning: unknown subagent.enable '{}', fallback to true", val);
+        }
+    }
+
     // CodeGraph 参数已迁移到插件配置 (yaml `plugins` 段 agentxx_codegraph
     // 条目的 args): 宿主不解析其字段语义, 整体原样传递给插件
 
