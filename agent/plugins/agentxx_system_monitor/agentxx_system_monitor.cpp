@@ -526,7 +526,6 @@ extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_unload(void* plugin_ctx) {
         g_host->vtable->unregister_capability(g_host, AGENTXX_SV("agentxx.system_usage"));
     }
     pluginLog(2, "agentxx_system_monitor unloaded");
-    delete ctx;
 }
 
 /* =====================================================================
