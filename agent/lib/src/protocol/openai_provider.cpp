@@ -347,7 +347,13 @@ neograph::json OpenAIProvider::buildResponsesBody(const neograph::CompletionPara
     //   include 取官方值 "reasoning.summary_text" (流式事件
     //   response.reasoning_summary_text.delta / 非流式 output 的 reasoning_summary item);
     //   "reasoning.summary" 不是合法 include 值, 会导致 API 400
-    if (config_.sendThinking) {
+    // 部分提供商 (如 opencode-muse-spark / ConsoleGo 网关) 不支持该 include 变体
+    // (unknown variant reasoning.summary_text, HTTP 400):
+    //   - 可通过 config.requestReasoningSummary (yaml request_reasoning_summary) 关闭,
+    //     此时既不请求摘要也不回传历史 reasoning summary 输入
+    //   - 也可通过 extra_api_config 显式指定 include 数组覆盖 (优先于默认值)
+    if (config_.sendThinking && config_.requestReasoningSummary
+        && !config_.extra_config.contains("include")) {
         body["include"] = neograph::json::array({"reasoning.summary_text"});
     }
 
@@ -426,10 +432,11 @@ neograph::json OpenAIProvider::buildResponsesBody(const neograph::CompletionPara
                 item["content"] = std::move(content);
                 input.push_back(std::move(item));
             }
-            // 回传历史 thinking 内容 (仅 sendThinking 开启时):
+            // 回传历史 thinking 内容 (仅 sendThinking 开启且未关闭思考摘要请求时):
             // Responses API 的 reasoning item 采用 summary 形式,
             // 缺失原始 id 时网关按摘要处理; 不回传完整 reasoning 文本
-            if (config_.sendThinking && !msg.reasoning_content.empty()) {
+            if (config_.sendThinking && config_.requestReasoningSummary
+                && !msg.reasoning_content.empty()) {
                 input.push_back({
                     {"type",    "reasoning"},
                     {"summary",

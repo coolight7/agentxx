@@ -50,7 +50,17 @@ public:
     int         readChunkTimeoutSeconds = 100;
     /// 是否在发送 LLM 请求时携带 thinking 内容
     bool                sendThinking = false;
-    std::optional<bool> sslVerify    = std::nullopt;
+    /// 是否请求上游返回思考摘要 (Responses API 请求体 `include` 参数, yaml
+    /// `request_reasoning_summary`)
+    /// - sendThinking 开启时默认请求 `include: ["reasoning.summary_text"]` 以便回传展示
+    ///   思考内容; 部分提供商 (如 opencode-muse-spark / ConsoleGo 网关) 不支持该
+    ///   include 变体, 会返回 HTTP 400 (`unknown variant reasoning.summary_text`),
+    ///   需设置为 false 关闭
+    /// - 关闭后: 不再请求思考摘要, 也不再回传历史 reasoning summary 输入
+    ///   (模型仍可正常对话, 只是不展示思考过程)
+    /// - 也可通过 extra_api_config 显式指定 `include` 数组覆盖 (优先于本开关)
+    bool requestReasoningSummary = true;
+    std::optional<bool> sslVerify = std::nullopt;
     /// LLM API 连接池: 该模型端点 (baseUrl) 的最大并发连接数 (yaml `max_concurrent_connections`)
     /// - 默认 5; 0 = 不限制 (仍复用空闲连接)
     /// - LLM 请求启用 HTTP keep-alive 连接池, 复用空闲连接并限制并发建连数,
