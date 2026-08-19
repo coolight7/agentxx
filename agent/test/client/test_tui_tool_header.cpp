@@ -192,7 +192,7 @@ void testTuiToolHeaderOverflow() {
 
     // 摘要含超长路径, 远超视口宽度
     f.pushTool(
-        "agentxx_filesystem_read_text_file",
+        "agentxx_filesystem_read",
         R"({"path":"/very/very/long/path/that/definitely/exceeds/the/narrow/viewport/width/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.cpp","line_offset":0,"line_limit":100})"
     );
     std::string out = f.render();

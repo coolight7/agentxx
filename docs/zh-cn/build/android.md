@@ -30,7 +30,7 @@ cd "$boost_source_dir"
 export CXXFLAGS="-fPIC"
 export CFLAGS="-fPIC"
 
-./build-android.sh --boost=1.91.0 \
+./build-android.sh --boost=1.92.0 \
     --prefix=$boost_install_release_dir \
     --toolchain=llvm \
     --layout=system \

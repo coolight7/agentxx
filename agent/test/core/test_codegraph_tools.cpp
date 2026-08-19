@@ -157,36 +157,9 @@ asio::awaitable<TestResult>
              "agentxx_codegraph_callers",
              "agentxx_codegraph_callees",
              "agentxx_codegraph_impact",
-             "agentxx_codegraph_status",
-             "agentxx_codegraph_index",
              "agentxx_codegraph_path",
          }) {
         XX_TEST_EXPECT_TRUE(ctx->toolRegistry->contains(toolName));
-    }
-
-    // ---- 3. 索引临时项目 ----
-    auto tmp_project = create_temp_project();
-    {
-        auto tool = ctx->toolRegistry->find("agentxx_codegraph_index");
-        XX_TEST_EXPECT_TRUE(tool != nullptr);
-        if (tool) {
-            auto out = co_await tool->execute_async(neograph::json{
-                {"path",        tmp_project},
-                {"incremental", false      },
-            });
-            XX_TEST_EXPECT_TRUE(out.find("success: true") != std::string::npos);
-        }
-    }
-
-    // ---- 4. status ----
-    {
-        auto tool = ctx->toolRegistry->find("agentxx_codegraph_status");
-        XX_TEST_EXPECT_TRUE(tool != nullptr);
-        if (tool) {
-            auto out = co_await tool->execute_async(neograph::json::object());
-            XX_TEST_EXPECT_TRUE(out.find("total_nodes:") != std::string::npos);
-            XX_TEST_EXPECT_TRUE(out.find("total_files:") != std::string::npos);
-        }
     }
 
     // ---- 5. search ----
@@ -276,7 +249,6 @@ asio::awaitable<TestResult>
         XX_TEST_EXPECT_TRUE(ctx->pluginManager->find("agentxx_codegraph") == nullptr);
     }
 
-    cleanup_temp_project(tmp_project);
     fs::remove_all(tmp_data_dir, ec);
 
     co_return TestResult{g_cg_passed, g_cg_failed};

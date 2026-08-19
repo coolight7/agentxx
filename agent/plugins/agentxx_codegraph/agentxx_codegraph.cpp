@@ -744,7 +744,8 @@ struct PluginCtx {
     std::atomic<bool>                                  stop{false};
 };
 
-extern "C" AGENTXX_PLUGIN_EXPORT int agentxx_plugin_entry(const AgentxxHost* host, void** plugin_ctx) {
+extern "C" AGENTXX_PLUGIN_EXPORT int
+    agentxx_plugin_entry(const AgentxxHost* host, void** plugin_ctx) {
     g_host = host;
 
     auto cfg = readHostConfig();
@@ -1050,7 +1051,8 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxClientPluginInfo* agentxx_client_g
     return &info;
 }
 
-extern "C" AGENTXX_PLUGIN_EXPORT int agentxx_client_entry(const AgentxxClientHost* host, void** plugin_ctx) {
+extern "C" AGENTXX_PLUGIN_EXPORT int
+    agentxx_client_entry(const AgentxxClientHost* host, void** plugin_ctx) {
     g_client_host = host;
     (void)plugin_ctx;
 
