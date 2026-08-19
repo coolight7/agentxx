@@ -1,7 +1,9 @@
 # agentxx_screen_capture —— 屏幕捕获插件 (Windows)
 # - 默认: 独立动态库 (MODULE), 仅依赖纯 C ABI 头 + codegraph::Json (simdjson)
 # - 内置模式 (AGENTXX_ENABLE_PLUGIN_BUILTIN=ON): 源文件编译为 OBJECT 库合并进
-#   libagentxx; simdjson/fmt/d3d11/dxgi 均为 libagentxx 既有依赖, 无需补链接
+#   libagentxx; simdjson/fmt 为 libagentxx 既有依赖; DXGI/D3D11/WIC 等平台库
+#   经 AGENTXX_BUILTIN_PLUGIN_LINK_LIBS 补链接 (libagentxx 不再无条件携带
+#   插件专用库)
 # - 提供: agentxx_screen_capture (单帧/全部屏幕/鼠标屏/流式推送)
 # - 从 agentxx_computer_use 拆分独立; agentxx_computer_use 经 plugin.yaml
 #   depends 声明依赖本插件 (须先于其加载)
@@ -28,6 +30,12 @@ if (AGENTXX_ENABLE_PLUGIN_BUILTIN)
   # 复用 agentxx_util 工具库 (libagentxx 已链接本库; 此处经 PRIVATE 链接仅
   # 传递编译宏/头路径: util 头文件依赖 XX_IS_* 宏与 include 路径)
   target_link_libraries(${_target} PRIVATE agentxx_util)
+  if (WIN32)
+    # screen_capture: DXGI/D3D11 (桌面捕获) + WIC windowscodecs (PNG 编码)
+    # - 独立模式经下方独立分支 PRIVATE 链接; 内置模式经本收集通道并入 libagentxx
+    set(AGENTXX_BUILTIN_PLUGIN_LINK_LIBS
+      "${AGENTXX_BUILTIN_PLUGIN_LINK_LIBS}" d3d11 dxgi windowscodecs PARENT_SCOPE)
+  endif()
 set_target_properties(${_target} PROPERTIES
     POSITION_INDEPENDENT_CODE ON
     CXX_STANDARD 26
@@ -80,9 +88,9 @@ target_link_directories(${PLUGIN_NAME} PRIVATE
   "${AGENTXX_INSTALL_DIR}/lib"
 )
 if (WIN32)
-  # screen_capture: DXGI/D3D11/GDI
+  # screen_capture: DXGI/D3D11/GDI + WIC (PNG 编码)
   target_link_libraries(${PLUGIN_NAME} PRIVATE
-    d3d11 dxgi
+    d3d11 dxgi windowscodecs
   )
 endif()
 

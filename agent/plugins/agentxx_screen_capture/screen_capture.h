@@ -47,6 +47,12 @@ public:
 
     bool isStreaming() const;
 
+    /// 把帧像素保存为 PNG 文件 (Windows: WIC 编码; 其他平台恒失败)
+    /// - frame.pixelData 为 BGRA (B8G8R8A8, 32bpp, 行宽 = width*4, 无行填充)
+    /// - path: 目标文件路径 (含 .png 后缀), 目录须已存在
+    /// - 返回 true 成功; false 失败 (非 Windows / 像素为空 / 编码或写文件失败)
+    bool saveFramePng(const ScreenFrame& frame, const std::string& path) const;
+
 private:
 
     class Impl;
