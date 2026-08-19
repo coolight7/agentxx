@@ -131,7 +131,7 @@ asio::awaitable<agentxx::test::TestResult>
     }
     XX_TEST_EXPECT_EQ(inst->name, "agentxx_screen_capture");
     XX_TEST_EXPECT_TRUE(ctx->toolRegistry->contains("agentxx_screen_capture"));
-    XX_TEST_EXPECT_TRUE(ctx->toolRegistry->contains("agentxx_get_screen_frames"));
+    XX_TEST_EXPECT_FALSE(ctx->toolRegistry->contains("agentxx_get_screen_frames"));
     // 独立插件不注册 ui_control 工具 (已从 computer_use 拆分)
     XX_TEST_EXPECT_FALSE(ctx->toolRegistry->contains("agentxx_ui_control_keyboard_mouse"));
 
@@ -168,12 +168,13 @@ asio::awaitable<agentxx::test::TestResult>
         }
     }
 
-    // ---- 5. agentxx_get_screen_frames (默认不指定返回所有屏幕) ----
+    // ---- 5. 默认不传 command (默认 capture_all, 带像素) ----
     {
-        auto tool = ctx->toolRegistry->find("agentxx_get_screen_frames");
-        XX_TEST_EXPECT_TRUE(tool != nullptr);
+        auto tool = ctx->toolRegistry->find("agentxx_screen_capture");
         if (tool) {
-            auto out = co_await tool->execute_async(neograph::json::object());
+            auto out = co_await tool->execute_async(neograph::json{
+                {"include_pixels", true}
+            });
             auto j   = neograph::json::parse(out);
             XX_TEST_EXPECT_EQ(j["ok"].get<bool>(), true);
             XX_TEST_EXPECT_EQ(j["frames"].size(), static_cast<size_t>(screenCount));
@@ -186,13 +187,14 @@ asio::awaitable<agentxx::test::TestResult>
         }
     }
 
-    // ---- 6. agentxx_get_screen_frames (指定屏幕下标 0) ----
+    // ---- 6. capture_screen (指定屏幕下标 0) ----
     {
-        auto tool = ctx->toolRegistry->find("agentxx_get_screen_frames");
+        auto tool = ctx->toolRegistry->find("agentxx_screen_capture");
         if (tool) {
             auto out = co_await tool->execute_async(neograph::json{
-                {"screen_index",   0    },
-                {"include_pixels", false},
+                {"command",        "capture_screen"},
+                {"screen_index",   0               },
+                {"include_pixels", false           },
             });
             auto j   = neograph::json::parse(out);
             XX_TEST_EXPECT_EQ(j["ok"].get<bool>(), true);
@@ -204,12 +206,13 @@ asio::awaitable<agentxx::test::TestResult>
         }
     }
 
-    // ---- 7. agentxx_get_screen_frames (越界屏幕下标) ----
+    // ---- 7. capture_screen (越界屏幕下标) ----
     {
-        auto tool = ctx->toolRegistry->find("agentxx_get_screen_frames");
+        auto tool = ctx->toolRegistry->find("agentxx_screen_capture");
         if (tool) {
             auto out = co_await tool->execute_async(neograph::json{
-                {"screen_index", 99999}
+                {"command",      "capture_screen"},
+                {"screen_index", 99999           }
             });
             auto j   = neograph::json::parse(out);
             XX_TEST_EXPECT_EQ(j["ok"].get<bool>(), false);
