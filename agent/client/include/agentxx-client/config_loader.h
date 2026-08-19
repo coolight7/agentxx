@@ -84,6 +84,8 @@ struct YamlAppConfig {
     /// - enabled: 默认 true; sides: 运行侧 (auto/agent/client, 默认 auto);
     ///   args: 自定义参数 (预留, 存留供查询)
     std::vector<agent::PluginConfig> plugins;
+    /// subagent 总开关 (yaml `subagent.enable`, 默认 true)
+    bool enableSubagent = true;
 };
 
 /// 程序内置环境变量: 程序启动后的工作目录

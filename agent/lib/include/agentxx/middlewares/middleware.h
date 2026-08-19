@@ -13,6 +13,7 @@
 #include <neograph/neograph.h>
 #include <optional>
 #include <sstream>
+#include <unordered_set>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -611,8 +612,8 @@ private:
 
     /// 会话 SQLite 持久化 (为空时 share store 仅内存存储)
     std::shared_ptr<agentxx::agent::SessionPersistence> persistence_ = nullptr;
-    /// 已从持久化加载过 share store 的 thread (避免空存储反复加载)
-    std::vector<std::string> shareStoreLoaded_{};
+    /// 已从持久化加载过 share store 的 thread (避免空存储反复加载) - O(1)
+    std::unordered_set<std::string> shareStoreLoaded_{};
 };
 
 } // namespace middleware

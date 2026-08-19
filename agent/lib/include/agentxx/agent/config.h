@@ -4,6 +4,7 @@
 #include "neograph/json.h"
 #include "prompt.h"
 #include <chrono>
+#include <expected>
 #include <map>
 #include <optional>
 #include <string>
@@ -147,6 +148,12 @@ public:
     ///   避免对透传的上下文前缀二次压缩 (破坏 KV/prefix cache 一致性)
     bool enableSummarization = true;
 
+    /// 是否启用 subagent 委派 (默认 true)
+    /// - false 时 SubAgentManagerTool 不注册, 模型无法发起子代理委派,
+    ///   中断路径 `subagent` 直接返回错误
+    /// - 由 yaml `subagent.enable` 配置
+    bool enableSubagent = true;
+
     /// 主模型配置
     ModelConfig model;
     /// subagent 模型配置
@@ -253,6 +260,10 @@ public:
 
     /// 插件配置 (yaml `plugins` 列表; 启动时由 PluginManager 加载)
     std::vector<PluginConfig> plugins{};
+
+    /// 配置校验 (client 启动时调用, 聚合全部字段合法性)
+    /// - 校验 dataDir 相对路径规范化、模型合法性等, 失败返回错误描述, 避免分散告警
+    std::expected<void, std::string> validate() const;
 };
 
 } // namespace agent

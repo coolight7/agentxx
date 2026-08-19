@@ -227,6 +227,9 @@ neograph::json MiddlewareContext::anyToJson(const std::any& val) {
     if (t == typeid(uint64_t)) {
         return std::any_cast<uint64_t>(val);
     }
+    if (t == typeid(size_t)) {
+        return static_cast<uint64_t>(std::any_cast<size_t>(val));
+    }
     if (t == typeid(float)) {
         return static_cast<double>(std::any_cast<float>(val));
     }
@@ -260,11 +263,17 @@ neograph::json MiddlewareContext::anyToJson(const std::any& val) {
             std::any_cast<const std::vector<InterruptHandleArg>&>(val)
         );
     }
+    // 未覆盖类型: 记录错误并返回 null，避免静默丢值导致 checkpoint 恢复丢失
+    XX_LOGE("MiddlewareContext::anyToJson: unsupported type `{}`, checkpoint value lost", t.name());
     return nullptr;
 }
 
 void MiddlewareContext::ensureShareStoreLoaded(std::string_view thread_id) {
     if (!persistence_ || shareStore.contains(thread_id)) {
+        return;
+    }
+    // 已加载过直接返回, 避免空存储反复查询 (O(1))
+    if (shareStoreLoaded_.contains(std::string{thread_id})) {
         return;
     }
     // 首次访问: 从 SQLite 恢复全部条目与 id 计数器
@@ -273,7 +282,7 @@ void MiddlewareContext::ensureShareStoreLoaded(std::string_view thread_id) {
         std::string{thread_id},
         ThreadShareStore{.store = std::move(loaded.items), .storeId = loaded.nextId}
     );
-    shareStoreLoaded_.push_back(std::string{thread_id});
+    shareStoreLoaded_.insert(std::string{thread_id});
 }
 
 std::optional<std::string>
@@ -322,10 +331,12 @@ size_t
     //   退回内存分配, 保证本次会话内功能可用
     // - 无持久化时保持原语义: 新 thread 首条为 1, 其后 storeId 递增
     size_t id = 0;
+    bool   dbOk = false;
     if (persistence_) {
-        id = persistence_->addShareStoreItem(thread_id, value);
+        id   = persistence_->addShareStoreItem(thread_id, value);
+        dbOk = (id != 0);
     }
-    if (id == 0) {
+    if (!dbOk) {
         auto it = shareStore.find(thread_id);
         if (it != shareStore.end()) {
             id = it->second.getNextId();
@@ -337,8 +348,8 @@ size_t
     auto it = shareStore.find(thread_id);
     if (it != shareStore.end()) {
         it->second.store[id] = std::string{value};
-        // 同步内存计数器: DB 分配优先, 计数器仅作退回路径的兜底
-        if (it->second.storeId <= id) {
+        // 同步内存计数器: 仅 DB 成功时同步到 DB 值, 回退路径已由 getNextId 递增, 不覆盖
+        if (dbOk && it->second.storeId <= id) {
             it->second.storeId = id;
         }
     } else {
@@ -380,14 +391,8 @@ void MiddlewareContext::removeGraphDataItem(std::string_view thread_id, std::str
 void MiddlewareContext::cleanupThread(std::string_view thread_id) {
     graphData.erase(thread_id);
     shareStore.erase(thread_id);
-    // 移除"已从持久化加载过"标记, 避免该 thread 再次出现时跳过加载
-    if (!shareStoreLoaded_.empty()) {
-        auto it
-            = std::find(shareStoreLoaded_.begin(), shareStoreLoaded_.end(), std::string{thread_id});
-        if (it != shareStoreLoaded_.end()) {
-            shareStoreLoaded_.erase(it);
-        }
-    }
+    // 移除"已从持久化加载过"标记, 避免该 thread 再次出现时跳过加载 (O(1))
+    shareStoreLoaded_.erase(std::string{thread_id});
     // 各中间件按 thread 的 state
     for (auto& handle : handles) {
         if (handle) {

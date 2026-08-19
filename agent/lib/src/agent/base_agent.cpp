@@ -863,59 +863,67 @@ std::shared_ptr<AgentContext> BaseAgent::getContext() {
     return agentContext;
 }
 
+asio::awaitable<BaseAgent::SimpleRunResult> BaseAgent::runInternalAsync(
+    std::string_view                     threadId,
+    std::vector<neograph::ChatMessage>   messages,
+    neograph::graph::GraphStreamCallback callback,
+    std::string_view                     modelName,
+    bool                                 cleanupAfter
+) {
+    selectModel(threadId, modelName);
+    auto inputMessages = neograph::json::array();
+    for (auto& msg : messages) {
+        neograph::json j;
+        neograph::to_json(j, msg);
+        inputMessages.push_back(std::move(j));
+    }
+    neograph::graph::RunConfig cfg{
+        .thread_id        = std::string{threadId},
+        .input            = {{"messages", std::move(inputMessages)}},
+        .resume_if_exists = false,
+    };
+    std::ostringstream oss;
+    // 统一的 LLM_TOKEN 收集 + 透传 callback
+    auto wrappedCb = [callback, &oss](const neograph::graph::GraphEvent& ev) {
+        if (ev.type == neograph::graph::GraphEvent::Type::LLM_TOKEN) {
+            try {
+                if (ev.data.is_string()) {
+                    oss << ev.data.get<std::string>();
+                } else if (ev.data.is_object()) {
+                    neograph::ChatStreamChunk ch;
+                    neograph::from_json(ev.data, ch);
+                    if (ch.type != neograph::ChatStreamChunk::TYPE_THINKING) {
+                        oss << ch.data;
+                    }
+                }
+            } catch (...) {}
+        }
+        if (callback) {
+            callback(ev);
+        }
+    };
+    auto result = co_await engine->run_stream_async(cfg, neograph::graph::GraphStreamCallback{[&](auto& e){ wrappedCb(e); }});
+    if (cleanupAfter) {
+        if (agentContext->middlewareHandleContext) {
+            agentContext->middlewareHandleContext->cleanupThread(std::string{threadId});
+        }
+        agentContext->sessions->remove(threadId);
+    }
+    co_return SimpleRunResult{ .content = oss.str(), .fullResult = std::move(result) };
+}
+
 asio::awaitable<std::string> BaseAgent::runNonStreamAsync(
     std::string_view                                        threadId,
     const std::vector<neograph::ChatMessage>&               messages,
     std::function<void(const neograph::graph::GraphEvent&)> callback,
     std::string_view                                        modelName
 ) {
-    selectModel(threadId, modelName);
-    auto inputMessages = neograph::json::array();
-    for (const auto& msg : messages) {
-        neograph::json msgJson;
-        neograph::to_json(msgJson, msg);
-        inputMessages.push_back(std::move(msgJson));
+    neograph::graph::GraphStreamCallback cb;
+    if (callback) {
+        cb = [callback](const neograph::graph::GraphEvent& e){ callback(e); };
     }
-
-    auto cfg = neograph::graph::RunConfig{
-        .thread_id        = std::string{threadId},
-        .input            = {{"messages", std::move(inputMessages)}},
-        .resume_if_exists = false,
-    };
-
-    std::ostringstream oss;
-    auto wrappedCallback = [&oss, callback](const neograph::graph::GraphEvent& event) {
-        switch (event.type) {
-            case neograph::graph::GraphEvent::Type::LLM_TOKEN: {
-                std::string token;
-                std::string kind = "content";
-                if (event.data.is_string()) {
-                    token = event.data.get<std::string>();
-                } else if (event.data.is_object()) {
-                    neograph::ChatStreamChunk chunk;
-                    neograph::from_json(event.data, chunk);
-                    token = std::move(chunk.data);
-                    if (chunk.type == neograph::ChatStreamChunk::TYPE_THINKING) {
-                        kind = "thinking";
-                    }
-                }
-                if (kind == "content") {
-                    oss << token;
-                }
-                if (callback) {
-                    callback(event);
-                }
-            } break;
-            default:
-                if (callback) {
-                    callback(event);
-                }
-                break;
-        }
-    };
-
-    co_await engine->run_stream_async(cfg, wrappedCallback);
-    co_return oss.str();
+    auto r = co_await runInternalAsync(threadId, std::vector<neograph::ChatMessage>(messages), cb, modelName, false);
+    co_return r.content;
 }
 
 asio::awaitable<std::string> BaseAgent::runSingleInputAsync(
@@ -925,19 +933,10 @@ asio::awaitable<std::string> BaseAgent::runSingleInputAsync(
     std::string_view modelName
 ) {
     std::vector<neograph::ChatMessage> messages;
-
     if (!systemPrompt.empty()) {
-        messages.push_back(neograph::ChatMessage{
-            .role    = "system",
-            .content = std::string{systemPrompt},
-        });
+        messages.push_back(neograph::ChatMessage{ .role = "system", .content = std::string{systemPrompt} });
     }
-
-    messages.push_back(neograph::ChatMessage{
-        .role    = "user",
-        .content = std::string{userInput},
-    });
-
+    messages.push_back(neograph::ChatMessage{ .role = "user", .content = std::string{userInput} });
     co_return co_await runNonStreamAsync(threadId, messages, nullptr, modelName);
 }
 
@@ -945,58 +944,11 @@ asio::awaitable<BaseAgent::SimpleRunResult> BaseAgent::runStreamAsync(
     const std::vector<neograph::ChatMessage>& messages,
     std::string_view                          modelName
 ) {
-    // 每次运行生成唯一 thread_id: 时间戳 + 进程内自增序号
-    // (原实现仅用时间戳, 同毫秒并发调用会碰撞, 导致 SessionStore 会话 /
-    //  engine checkpoint 互相覆盖)
     static std::atomic<uint64_t> runStreamSeq{0};
-    const auto                   ts = std::chrono::system_clock::now().time_since_epoch().count();
-    const auto threadId             = fmt::format("subagent_{}_{}", ts, runStreamSeq.fetch_add(1));
-    selectModel(threadId, modelName);
-    auto inputMessages = neograph::json::array();
-    for (const auto& msg : messages) {
-        neograph::json msgJson;
-        neograph::to_json(msgJson, msg);
-        inputMessages.push_back(std::move(msgJson));
-    }
-
-    neograph::graph::RunConfig cfg{
-        .thread_id        = threadId,
-        .input            = {{"messages", std::move(inputMessages)}},
-        .resume_if_exists = false,
-    };
-
-    std::ostringstream oss;
-    auto               callback = [&oss](const neograph::graph::GraphEvent& event) {
-        if (event.type == neograph::graph::GraphEvent::Type::LLM_TOKEN) {
-            std::string token;
-            std::string kind = "content";
-            if (event.data.is_string()) {
-                token = event.data.get<std::string>();
-            } else if (event.data.is_object()) {
-                neograph::ChatStreamChunk chunk;
-                neograph::from_json(event.data, chunk);
-                token = std::move(chunk.data);
-                if (chunk.type == neograph::ChatStreamChunk::TYPE_THINKING) {
-                    kind = "thinking";
-                }
-            }
-            if (kind == "content") {
-                oss << token;
-            }
-        }
-    };
-
-    auto result = co_await engine->run_stream_async(cfg, callback);
-    // 一次性运行结束: 回收该 thread 的会话与中间件状态 (graphData/shareStore/
-    // handles states), 防止每次调用在 SessionStore / 中间件内累积泄漏
-    if (agentContext->middlewareHandleContext) {
-        agentContext->middlewareHandleContext->cleanupThread(threadId);
-    }
-    agentContext->sessions->remove(threadId);
-    co_return SimpleRunResult{
-        .content    = oss.str(),
-        .fullResult = std::move(result),
-    };
+    const auto ts = std::chrono::steady_clock::now().time_since_epoch().count();
+    const auto threadId = fmt::format("subagent_{}_{}", ts, runStreamSeq.fetch_add(1));
+    auto r = co_await runInternalAsync(threadId, std::vector<neograph::ChatMessage>(messages), nullptr, modelName, true);
+    co_return r;
 }
 
 } // namespace agent

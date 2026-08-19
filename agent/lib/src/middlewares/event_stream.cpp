@@ -124,9 +124,17 @@ void EventBridge::handleLLMToken(const neograph::graph::GraphEvent& event) {
         token = event.data.dump();
     }
 
-    // 累计估算 token 数 (content + thinking 均计入生成速度)
-    tpsTokenCount_ += estimateTokens(token);
-    // 定时推送一次平均速度 (token/s)
+    // 累计估算 token 数: 批量估算 (每16 token推送窗口再估, 减少 countTokens 遍历)
+    // 此处仅累加字符数, 推送时统一折算 token, 降低每 token 的估算开销
+    tpsPendingChars_ += token.size();
+    // 每 16 token 或窗口到期再做一次 estimateTokens 批量折算
+    constexpr size_t kBatchChars = 64;
+    if (tpsPendingChars_ >= kBatchChars) {
+        // 近似折算: 批量按比例估算, 避免逐 token 遍历
+        tpsTokenCount_ += static_cast<double>(tpsPendingChars_) / 4.0;
+        tpsPendingChars_ = 0;
+    }
+    // 定时推送一次平均速度 (token/s) - push 时会把 pending 一并结算
     pushTpsIfDue();
 
     // 总线发布 (无订阅者时内部跳过, 零开销)
@@ -325,11 +333,17 @@ void EventBridge::handleTurnStart() {
     // 重置流级统计 (防御: 上轮异常结束可能未结算)
     tpsStartTime_     = {};
     tpsTokenCount_    = 0.0;
+    tpsPendingChars_  = 0;
     tpsLastPushSec_   = 0.0;
     tpsLastPushToken_ = 0.0;
 }
 
 void EventBridge::settleCurrentStream() {
+    // 结算 pending 字符
+    if (tpsPendingChars_ > 0) {
+        tpsTokenCount_ += static_cast<double>(tpsPendingChars_) / 4.0;
+        tpsPendingChars_ = 0;
+    }
     // 无进行中的流 (当前流无 token 输出) 时跳过
     if (tpsTokenCount_ <= 0.0) {
         return;
@@ -345,6 +359,7 @@ void EventBridge::settleCurrentStream() {
     // 重置流级计数 (下一个流重新开始计时)
     tpsStartTime_     = {};
     tpsTokenCount_    = 0.0;
+    tpsPendingChars_  = 0;
     tpsLastPushSec_   = 0.0;
     tpsLastPushToken_ = 0.0;
 }
@@ -453,6 +468,11 @@ void EventBridge::pushTpsIfDue() {
     // 每 [tpsPushIntervalSec_] 秒更新一次平均速度; 流式期间 token 持续到达, 越界即推送
     if (nowSec - tpsLastPushSec_ < tpsPushIntervalSec_) {
         return;
+    }
+    // 结算 pending 字符再计算窗口 tps
+    if (tpsPendingChars_ > 0) {
+        tpsTokenCount_ += static_cast<double>(tpsPendingChars_) / 4.0;
+        tpsPendingChars_ = 0;
     }
     // 最近一个窗口 (推送周期) 内的平均生成速度:
     // 窗口内 token 增量 / 窗口实际时长, 而非自流开始以来的累计平均

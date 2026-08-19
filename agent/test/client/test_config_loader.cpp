@@ -844,6 +844,46 @@ void test_dotenv_file_over_system() {
     }
 }
 
+void test_subagent_enable_default_true();
+void test_subagent_enable_false();
+void test_subagent_enable_true_variants();
+void test_subagent_enable_invalid_fallback();
+void test_subagent_enable_env_expand();
+
+void test_subagent_enable_default_true() {
+    auto cfg = loadYaml("data_dir: default\n");
+    XX_TEST_EXPECT_TRUE(cfg.enableSubagent);
+}
+void test_subagent_enable_false() {
+    auto cfg = loadYaml("subagent:\n  enable: false\n");
+    XX_TEST_EXPECT_FALSE(cfg.enableSubagent);
+    cfg = loadYaml("subagent:\n  enable: '0'\n");
+    XX_TEST_EXPECT_FALSE(cfg.enableSubagent);
+    cfg = loadYaml("subagent:\n  enable: 'off'\n");
+    XX_TEST_EXPECT_FALSE(cfg.enableSubagent);
+}
+void test_subagent_enable_true_variants() {
+    auto cfg = loadYaml("subagent:\n  enable: true\n");
+    XX_TEST_EXPECT_TRUE(cfg.enableSubagent);
+    cfg = loadYaml("subagent:\n  enable: '1'\n");
+    XX_TEST_EXPECT_TRUE(cfg.enableSubagent);
+    cfg = loadYaml("subagent:\n  enable: 'yes'\n");
+    XX_TEST_EXPECT_TRUE(cfg.enableSubagent);
+    cfg = loadYaml("subagent:\n  enable: 'on'\n");
+    XX_TEST_EXPECT_TRUE(cfg.enableSubagent);
+}
+void test_subagent_enable_invalid_fallback() {
+    auto cfg = loadYaml("subagent:\n  enable: 'maybe'\n");
+    XX_TEST_EXPECT_TRUE(cfg.enableSubagent);
+}
+void test_subagent_enable_env_expand() {
+    auto path = fs::temp_directory_path() / fmt::format("agentxx_subagent_test_{}.yaml", std::chrono::steady_clock::now().time_since_epoch().count());
+    { std::ofstream ofs(path); ofs << "subagent:\n  enable: ${AGENTXX_TEST_SUBAGENT_ENABLE}\n"; }
+    auto cfg = agentxx::client::loadYamlConfig(path.string(), {{"AGENTXX_TEST_SUBAGENT_ENABLE","false"}}, {});
+    XX_TEST_EXPECT_FALSE(cfg.enableSubagent);
+    std::error_code ec; fs::remove(path, ec);
+}
+
 TestResult testConfigLoader() {
     g_config_loader_passed = 0;
     g_config_loader_failed = 0;
@@ -887,6 +927,11 @@ TestResult testConfigLoader() {
     test_plugin_args_paths_parse();
     test_plugin_missing_path_skipped();
     test_plugin_args_env_expand();
+    test_subagent_enable_default_true();
+    test_subagent_enable_false();
+    test_subagent_enable_true_variants();
+    test_subagent_enable_invalid_fallback();
+    test_subagent_enable_env_expand();
 
     return TestResult{g_config_loader_passed, g_config_loader_failed};
 }

@@ -334,14 +334,16 @@ void ModelCallWrapNode::repairMessages(neograph::graph::NodeInput& in) {
                 std::string newId;
             };
 
-            // old id -> 重复项列表 (第 2 次及以后出现)
+            // old id -> 重复项列表 (第 2 次及以后出现), 按 assistant 出现顺序精确配对 tool 结果
             std::unordered_map<std::string, std::vector<DupToolCall>> dupMap;
-            // old id -> 对应 tool 结果消息索引 (按出现顺序)
+            // old id -> 对应 tool 结果消息索引 (按出现顺序, 仅在第二遍收集)
             std::unordered_map<std::string, std::vector<size_t>> toolResultIdxs;
-            // 全局已见 id (assistant tool_calls + tool 结果), 生成新 id 时避开
+            // 全局已见 id (assistant tool_calls + tool 结果), 生成新 id 时避开碰撞
             std::unordered_set<std::string> seenIds;
+            // 全局去重序号, 避免同毫秒内 makeUniqueToolCallId(ti) 碰撞
+            static std::atomic<uint64_t> dupSeq{0};
 
-            // 第一遍: 收集 assistant tool_calls 的 id, 标记重复项
+            // 第一遍: 按 assistant 声明顺序收集重复项, 新 id 用全局 seq 保证唯一且不与 seenIds 碰撞
             for (size_t mi = 0; mi < msgs.size(); ++mi) {
                 auto& msg = msgs[mi];
                 if ("assistant" == msg.role) {
@@ -351,37 +353,48 @@ void ModelCallWrapNode::repairMessages(neograph::graph::NodeInput& in) {
                             continue;
                         }
                         if (!seenIds.insert(id).second) {
-                            // 第 2 次及以后出现: 重命名为唯一 id (时间戳+随机数, 无需比较)
-                            dupMap[id].push_back(DupToolCall{mi, ti, makeUniqueToolCallId(ti)});
+                            // 第 2 次及以后出现: 生成全局唯一 id, 循环直到与 seenIds 无碰撞
+                            std::string newId;
+                            do {
+                                newId = makeUniqueToolCallId(dupSeq.fetch_add(1));
+                            } while (!seenIds.insert(newId).second);
+                            // 回退一次插入(上面已插入), 下面 dupMap 持有 newId, seenIds 已占位防后续碰撞
+                            dupMap[id].push_back(DupToolCall{mi, ti, std::move(newId)});
                         }
                     }
                 } else if ("tool" == msg.role && !msg.tool_call_id.empty()) {
-                    // tool 结果消息的 id 也纳入已见集合, 防止新 id 与之冲突
+                    // tool 结果 id 纳入已见, 防止新 id 与之碰撞
                     seenIds.insert(msg.tool_call_id);
                 }
             }
 
             if (!dupMap.empty()) {
-                // 第二遍: 收集 tool 结果消息的 tool_call_id 出现顺序
+                // 第二遍: 收集 tool 结果索引 (按消息顺序)
                 for (size_t mi = 0; mi < msgs.size(); ++mi) {
                     if ("tool" == msgs[mi].role && !msgs[mi].tool_call_id.empty()) {
                         toolResultIdxs[msgs[mi].tool_call_id].push_back(mi);
                     }
                 }
-                // 第三遍: 应用重命名, 重复项与 tool 结果按出现顺序配对
-                for (const auto& [oldId, infos] : dupMap) {
-                    const auto& resultIdxs = toolResultIdxs[oldId];
+                // 第三遍: 按 assistant 声明顺序一一回填 tool 结果 (k+1 偏移: 第1个结果对应原始调用)
+                // - 若 tool 结果缺失/乱序, 仅对存在的 k+1 位置回填, 不会错配到其他 id
+                for (auto& [oldId, infos] : dupMap) {
+                    auto it = toolResultIdxs.find(oldId);
+                    const std::vector<size_t>* resultIdxs
+                        = (it == toolResultIdxs.end()) ? nullptr : &it->second;
                     for (size_t k = 0; k < infos.size(); ++k) {
-                        const auto& info                            = infos[k];
+                        auto& info = infos[k];
                         msgs[info.msgIdx].tool_calls[info.tcIdx].id = info.newId;
-                        if (k + 1 < resultIdxs.size()) {
-                            // 第 1 个 tool 结果对应原始调用, 第 k+1 个对应第 k 个重复项
-                            msgs[resultIdxs[k + 1]].tool_call_id = info.newId;
+                        if (resultIdxs && k + 1 < resultIdxs->size()) {
+                            msgs[(*resultIdxs)[k + 1]].tool_call_id = info.newId;
+                        } else if (resultIdxs && resultIdxs->size() == 1 && k == 0) {
+                            // 边界: 仅1个 tool 结果但出现重复 assistant(重试场景), 不回填保持原结果对应首次调用
                         }
                         XX_LOGW(
-                            "RepairMessages: duplicate tool_call_id '{}' -> '{}'",
+                            "RepairMessages: duplicate tool_call_id '{}' -> '{}' (msg {} tc {})",
                             oldId,
-                            info.newId
+                            info.newId,
+                            info.msgIdx,
+                            info.tcIdx
                         );
                     }
                 }

@@ -65,8 +65,22 @@ public:
     /// - 注意: 该函数仅做路径解析 (供显式构造场景/默认值展示使用);
     ///   agent 是否落盘由调用方判断 dataDir 是否为空
     ///   (dataDir 为空 = 不持久化设置/会话/codegraph, 见 AgentConfig::dataDir)
+    /// - 输入为相对路径时按当前工作目录解析为绝对路径, 并词法规范化
     inline static std::string getDataDir(std::string_view dataDir) noexcept {
-        return dataDir.empty() ? defaultDataDir() : std::string{dataDir};
+        if (dataDir.empty()) {
+            return defaultDataDir();
+        }
+        std::string s{dataDir};
+        // P1-15: 相对路径 normalize (展开 ~/ 相对 CWD, 避免 lib 层拼接错误)
+        // 复用 string_util 的绝对化逻辑, 此处仅做轻量处理避免头依赖循环
+        if (!std::filesystem::path(s).is_absolute()) {
+            std::error_code ec;
+            auto abs = std::filesystem::absolute(s, ec);
+            if (!ec) {
+                return abs.lexically_normal().generic_string();
+            }
+        }
+        return std::filesystem::path(s).lexically_normal().generic_string();
     }
 
     /// sqlite 数据目录: {dataDir}/sqlite/

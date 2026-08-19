@@ -161,7 +161,11 @@ std::string AgentContext::getSessionCurrentModelName(std::string_view threadId) 
 }
 
 const ModelConfig& AgentContext::getSessionCurrentModelConfig(std::string_view threadId) const {
-    return modelRegistry->getModelConfig(getSessionCurrentModelName(threadId));
+    if (modelRegistry) {
+        return modelRegistry->getModelConfig(getSessionCurrentModelName(threadId));
+    }
+    // 未初始化 registry 时(测试/嵌入场景)回退主模型
+    return agentConfig ? agentConfig->model : ModelConfig::defaultModelConfig;
 }
 
 } // namespace agent
