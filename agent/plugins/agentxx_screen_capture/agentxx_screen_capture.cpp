@@ -2,6 +2,9 @@
 // - 从 agentxx_computer_use 拆分独立: 单帧/全部屏幕/鼠标屏/流式推送
 // - 注册工具: agentxx_screen_capture (合并 capture_all / capture_mouse / capture_screen / get_screen_count / streaming)
 // - 流式帧经 publish 事件推送 (topic "agentxx_screen_capture.frame")
+// - 像素数据不进入会话消息: 捕获帧经 WIC 编码为 PNG 落盘到宿主 dataDir 的
+//   captures/ 目录, 工具结果只包含元信息 + 文件路径 (消息保持 KB 级);
+//   避免数 MB 的 base64 像素直接写入 tool 消息 (上下文爆炸/持久化放大/LLM 不可读)
 // - 插件不链接 libagentxx: 描述经 get_tool_prompt 读取, 日志经 vtable log
 #include "codegraph/core/json.hpp"
 #include "fmt/format.h"
@@ -9,8 +12,11 @@
 #include "screen_capture_plugin.h"
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <cstring>
+#include <ctime>
+#include <filesystem>
 #include <functional>
 #include <memory>
 #include <string>
@@ -117,64 +123,9 @@ static void registerTool(
 // agentxx_screen_capture
 // =====================================================================
 
-/// 屏幕帧 → 元信息 JSON (像素可选 base64)
-static codegraph::Json frameToJson(const agentxx::expand::ScreenFrame& f, bool includePixels) {
-    codegraph::Json j = codegraph::Json::object();
-    j["width"]        = f.width;
-    j["height"]       = f.height;
-    j["offset_x"]     = f.offsetX;
-    j["offset_y"]     = f.offsetY;
-    j["screen_index"] = f.screenIndex;
-    j["screen_name"]  = f.screenName;
-    j["is_primary"]   = f.isPrimary;
-    j["pixel_bytes"]  = static_cast<int64_t>(f.pixelData.size());
-    if (includePixels && !f.pixelData.empty()) {
-        static const char* kBase64
-            = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-        std::string b64;
-        b64.reserve(((f.pixelData.size() + 2) / 3) * 4);
-        size_t i = 0;
-        for (; i + 2 < f.pixelData.size(); i += 3) {
-            uint32_t n = (uint32_t{f.pixelData[i]} << 16) | (uint32_t{f.pixelData[i + 1]} << 8)
-                         | uint32_t{f.pixelData[i + 2]};
-            b64.push_back(kBase64[(n >> 18) & 63]);
-            b64.push_back(kBase64[(n >> 12) & 63]);
-            b64.push_back(kBase64[(n >> 6) & 63]);
-            b64.push_back(kBase64[n & 63]);
-        }
-        if (i + 1 == f.pixelData.size()) {
-            uint32_t n = uint32_t{f.pixelData[i]} << 16;
-            b64.push_back(kBase64[(n >> 18) & 63]);
-            b64.push_back(kBase64[(n >> 12) & 63]);
-            b64.push_back('=');
-            b64.push_back('=');
-        } else if (i + 2 == f.pixelData.size()) {
-            uint32_t n = (uint32_t{f.pixelData[i]} << 16) | (uint32_t{f.pixelData[i + 1]} << 8);
-            b64.push_back(kBase64[(n >> 18) & 63]);
-            b64.push_back(kBase64[(n >> 12) & 63]);
-            b64.push_back(kBase64[(n >> 6) & 63]);
-            b64.push_back('=');
-        }
-        j["pixels_base64"] = b64;
-    }
-    return j;
-}
-
-/// 帧数组 → JSON (空帧标记失败)
-static std::string
-    framesResult(const std::vector<agentxx::expand::ScreenFrame>& frames, bool includePixels) {
-    if (frames.empty()) {
-        return R"({"ok":false,"error":"capture failed"})";
-    }
-    codegraph::Json arr = codegraph::Json::array();
-    for (const auto& f : frames) {
-        arr.push_back(frameToJson(f, includePixels));
-    }
-    codegraph::Json j = codegraph::Json::object();
-    j["ok"]           = true;
-    j["frames"]       = arr;
-    return j.dump();
-}
+// 前置声明 (ScreenCaptureHolder 流式回调引用; 定义见下方)
+static codegraph::Json
+    frameToJson(const agentxx::expand::ScreenFrame& f, bool saveImages);
 
 /// 流式采集单例 (ScreenCapture 内部自管线程; unload 时停止)
 struct ScreenCaptureHolder {
@@ -197,6 +148,7 @@ struct ScreenCaptureHolder {
                 codegraph::Json j = codegraph::Json::object();
                 j["frames"]       = codegraph::Json::array();
                 for (const auto& f : frames) {
+                    // 流式帧只推元信息, 不落盘不携带像素
                     j["frames"].push_back(frameToJson(f, false));
                 }
                 std::string payload = j.dump();
@@ -216,9 +168,91 @@ struct ScreenCaptureHolder {
     agentxx::expand::ScreenCapture capture_;
 };
 
+/// 宿主通用配置缓存 (entry 时经 get_config 读取; get_config 仅 io 线程,
+/// execute 运行在线程池, 因此只在装配期读取并缓存, 后续只读)
+/// - capturesDir: 截图 PNG 落盘目录 {dataDir}/captures (空 = 禁用落盘)
+static std::string g_capturesDir;
+
+/// 生成截图文件路径: {capturesDir}/capture_{yyyyMMdd_HHmmss_mmm}_{screen}.png
+static std::string buildCapturePath(int screenIndex) {
+    const auto now    = std::chrono::system_clock::now();
+    const auto tt     = std::chrono::system_clock::to_time_t(now);
+    const auto millis = std::chrono::duration_cast<std::chrono::milliseconds>(
+                            now.time_since_epoch()
+                        )
+                            .count()
+                        % 1000;
+    std::tm tm{};
+#if defined(_WIN32)
+    localtime_s(&tm, &tt);
+#else
+    localtime_r(&tt, &tm);
+#endif
+    return fmt::format(
+        "{}/capture_{:04d}{:02d}{:02d}_{:02d}{:02d}{:02d}_{:03d}_{}.png",
+        g_capturesDir,
+        tm.tm_year + 1900,
+        tm.tm_mon + 1,
+        tm.tm_mday,
+        tm.tm_hour,
+        tm.tm_min,
+        tm.tm_sec,
+        static_cast<int>(millis),
+        screenIndex
+    );
+}
+
+/// 屏幕帧 → 元信息 JSON (像素不入消息: 可选保存 PNG 文件, 返回文件路径)
+/// - saveImages=true 且捕获目录可用时: 编码 PNG 落盘, 结果含 image_path;
+///   编码/落盘失败在 image_error 标记, 不影响其余元信息返回
+/// - 结果体积控制在 KB 级 (元信息仅数百字节), 不会污染会话上下文
+static codegraph::Json
+    frameToJson(const agentxx::expand::ScreenFrame& f, bool saveImages) {
+    codegraph::Json j = codegraph::Json::object();
+    j["width"]        = f.width;
+    j["height"]       = f.height;
+    j["offset_x"]     = f.offsetX;
+    j["offset_y"]     = f.offsetY;
+    j["screen_index"] = f.screenIndex;
+    j["screen_name"]  = f.screenName;
+    j["is_primary"]   = f.isPrimary;
+    j["pixel_bytes"]  = static_cast<int64_t>(f.pixelData.size());
+    if (saveImages && !f.pixelData.empty() && !g_capturesDir.empty()) {
+        std::string path = buildCapturePath(f.screenIndex);
+        if (ScreenCaptureHolder::instance().capture_.saveFramePng(f, path)) {
+            j["image_path"]   = path;
+            j["image_format"] = "png";
+        } else {
+            j["image_error"] = "failed to save png";
+        }
+    }
+    return j;
+}
+
+/// 帧数组 → JSON (空帧标记失败)
+static std::string framesResult(
+    const std::vector<agentxx::expand::ScreenFrame>& frames,
+    bool                                             saveImages
+) {
+    if (frames.empty()) {
+        return R"({"ok":false,"error":"capture failed"})";
+    }
+    codegraph::Json arr = codegraph::Json::array();
+    for (const auto& f : frames) {
+        arr.push_back(frameToJson(f, saveImages));
+    }
+    codegraph::Json j = codegraph::Json::object();
+    j["ok"]           = true;
+    j["frames"]       = arr;
+    return j.dump();
+}
+
 static const char* kScreenCaptureDefaultDepict
     = "Capture screen frames or control streaming on Windows: capture all screens, mouse screen, or a specific screen; "
-      "get screen count; start/stop streaming (streamed frames are pushed as plugin events to topic 'agentxx_screen_capture.frame').";
+      "get screen count; start/stop streaming (streamed frames are pushed as plugin events to topic 'agentxx_screen_capture.frame'). "
+      "Captured frames are saved as PNG files under the host dataDir 'captures/' directory; "
+      "the result only contains frame metadata (size/offset/screen) plus the image file path — "
+      "pixel data never enters the conversation.";
 
 static void registerScreenCaptureTool() {
     codegraph::Json cmd = codegraph::Json::object();
@@ -245,9 +279,11 @@ static void registerScreenCaptureTool() {
         {"type",        "integer"                                                   },
         {"description", "Target frame rate (1-30) for start_streaming. Default: 5."}
     });
-    schema["properties"]["include_pixels"] = codegraph::Json({
-        {"type",        "boolean"                                                     },
-        {"description", "Include base64-encoded pixel data (large!). Default: false."}
+    schema["properties"]["save_images"]    = codegraph::Json({
+        {"type",        "boolean"                                               },
+        {"description", "Save each captured frame as a PNG file under the host dataDir "
+                        "'captures/' directory and return its file path. Pixels never "
+                        "enter the conversation. Default: true."}
     });
 
     registerTool(
@@ -259,8 +295,8 @@ static void registerScreenCaptureTool() {
             std::string command;
             bool        hasCommand = jsonGetString(args.doc().at_pointer("/command"), command);
 
-            bool includePixels = false;
-            jsonGetBool(args.doc().at_pointer("/include_pixels"), includePixels);
+            bool saveImages = true;
+            jsonGetBool(args.doc().at_pointer("/save_images"), saveImages);
 
             int64_t idx    = -1;
             bool    hasIdx = jsonGetInt(args.doc().at_pointer("/screen_index"), idx);
@@ -269,12 +305,12 @@ static void registerScreenCaptureTool() {
                 if (!hasCommand && hasIdx && idx >= 0) {
                     command = "capture_screen";
                 } else {
-                    return framesResult(capture.capture_.captureAllScreens(), includePixels);
+                    return framesResult(capture.capture_.captureAllScreens(), saveImages);
                 }
             }
 
             if (command == "capture_all") {
-                return framesResult(capture.capture_.captureAllScreens(), includePixels);
+                return framesResult(capture.capture_.captureAllScreens(), saveImages);
             }
             if (command == "capture_mouse") {
                 std::vector<agentxx::expand::ScreenFrame> frames;
@@ -282,7 +318,7 @@ static void registerScreenCaptureTool() {
                 if (f.width > 0) {
                     frames.push_back(std::move(f));
                 }
-                return framesResult(frames, includePixels);
+                return framesResult(frames, saveImages);
             }
             if (command == "capture_screen") {
                 int screenCount = capture.capture_.getScreenCount();
@@ -301,7 +337,7 @@ static void registerScreenCaptureTool() {
                 if (f.width > 0 && f.height > 0) {
                     frames.push_back(std::move(f));
                 }
-                return framesResult(frames, includePixels);
+                return framesResult(frames, saveImages);
             }
             if (command == "get_screen_count") {
                 codegraph::Json j = codegraph::Json::object();
@@ -323,7 +359,9 @@ static void registerScreenCaptureTool() {
                 return R"({"ok":true})";
             }
             return R"({"ok":false,"error":"unknown command"})";
-        }
+        },
+        // 防御: 结果意外超长 (如未来新增字段) 时自动经 share_store 截断压缩
+        AGENTXX_TOOL_FLAG_AUTO_SUMMARY
     );
 }
 
@@ -353,12 +391,13 @@ static void ensureToolPromptInHost() {
         codegraph::Json tp     = codegraph::Json::object();
         tp["depict"]           = std::string{kScreenCaptureDefaultDepict};
         codegraph::Json args   = codegraph::Json::object();
-        args["command"]        = "Command to execute: capture_all (default), capture_mouse, capture_screen, "
-                                 "get_screen_count, start_streaming, stop_streaming.";
-        args["screen_index"]   = "Optional 0-based screen index for capture_screen (or default capture when specified).";
-        args["frame_rate"]     = "Target frame rate for start_streaming (1-30). Default: 5.";
-        args["include_pixels"] = "Include base64 pixel data (large!). Default: false.";
-        tp["args"]             = args;
+        args["command"]      = "Command to execute: capture_all (default), capture_mouse, capture_screen, "
+                               "get_screen_count, start_streaming, stop_streaming.";
+        args["screen_index"] = "Optional 0-based screen index for capture_screen (or default capture when specified).";
+        args["frame_rate"]   = "Target frame rate for start_streaming (1-30). Default: 5.";
+        args["save_images"]  = "Save each captured frame as PNG under the host dataDir 'captures/' and "
+                               "return the file path (pixels never enter the conversation). Default: true.";
+        tp["args"]           = args;
         patch["toolPrompt"]["agentxx_screen_capture"] = tp;
         needUpdate                                    = true;
     }
@@ -394,6 +433,42 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_get_inf
 
 extern "C" AGENTXX_PLUGIN_EXPORT int agentxx_plugin_entry(const AgentxxHost* host, void** /*plugin_ctx*/) {
     g_host = host;
+    // 读取宿主 dataDir (io 线程), 初始化截图落盘目录 {dataDir}/captures
+    // - get_config 仅 io 线程可用, execute 运行在线程池, 故此处缓存供后续只读
+    // - dataDir 不可用 (旧宿主) 时 g_capturesDir 为空, 捕获只返回元信息不落盘
+    if (g_host->vtable && g_host->vtable->get_config) {
+        char* json = g_host->vtable->get_config(g_host);
+        if (json) {
+            std::string s{json};
+            g_host->vtable->free(json);
+            SimpleJson j(s);
+            if (j.ok()) {
+                std::string dataDir;
+                if (jsonGetString(j.doc().at_pointer("/dataDir"), dataDir) && !dataDir.empty()) {
+                    g_capturesDir = dataDir + "/captures";
+                    std::error_code ec;
+                    if (std::filesystem::create_directories(g_capturesDir, ec) || !ec) {
+                        pluginLog(
+                            2,
+                            fmt::format(
+                                "agentxx_screen_capture: capture dir ready: {}",
+                                g_capturesDir
+                            )
+                        );
+                    } else {
+                        pluginLog(
+                            3,
+                            fmt::format(
+                                "agentxx_screen_capture: create captures dir failed: {}",
+                                ec.message()
+                            )
+                        );
+                        g_capturesDir.clear();
+                    }
+                }
+            }
+        }
+    }
     ensureToolPromptInHost();
     registerScreenCaptureTool();
     pluginLog(2, "agentxx_screen_capture loaded (1 tool)");

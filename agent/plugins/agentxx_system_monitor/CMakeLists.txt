@@ -64,9 +64,10 @@ extern \"C\" void agentxx_plugin_builtin_unload_${PLUGIN_NAME}(void* plugin_ctx)
     "${AGENTXX_BUILTIN_MANIFEST_ENTRIES}
     {\"${PLUGIN_NAME}\", agentxx_plugin_builtin_get_info_${PLUGIN_NAME}, agentxx_plugin_builtin_entry_${PLUGIN_NAME}, agentxx_plugin_builtin_unload_${PLUGIN_NAME}},")
   if (WIN32)
-    # cpu_gpu_monitor Windows 分支: PDH (性能计数器); DXGI 已由 libagentxx 链接
+    # cpu_gpu_monitor Windows 分支: PDH (性能计数器) + DXGI (GPU 适配器枚举)
+    # - 独立模式经下方独立分支 PRIVATE 链接; 内置模式经本收集通道并入 libagentxx
     set(AGENTXX_BUILTIN_PLUGIN_LINK_LIBS
-      "${AGENTXX_BUILTIN_PLUGIN_LINK_LIBS}" pdh PARENT_SCOPE)
+      "${AGENTXX_BUILTIN_PLUGIN_LINK_LIBS}" pdh dxgi PARENT_SCOPE)
   else()
     # asio 文件 I/O 在 -DASIO_HAS_IO_URING 下引用 io_uring 符号;
     # libagentxx 已按 AGENTXX_LINUX_IO_URING_SUPPORTED 条件链接 liburing

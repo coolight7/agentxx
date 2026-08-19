@@ -438,8 +438,13 @@ if (AGENTXX_ENABLE_PLUGIN_BUILTIN)
 endif()
 unset(_AGENTXX_OBJ_LINK_TARGETS)
 if (XX_IS_WIN_D)
-  target_link_libraries(agentxx_shared PUBLIC d3d11 dxgi dxguid winhttp ws2_32 oleacc ole32 user32 uuid mmdevapi)
-  target_link_libraries(agentxx_static PUBLIC d3d11 dxgi dxguid winhttp ws2_32 oleacc ole32 user32 uuid mmdevapi)
+  # 仅链接 agentxx 自身需要的 Windows 系统库:
+  # - ws2_32: asio 网络栈 (http_client/ws_client/http_server/ws_server) 必需
+  # - 插件专用库 (d3d11/dxgi/windowscodecs/mmdevapi/ole32/oleacc/user32/winhttp)
+  #   由各插件 CMakeLists 声明: 独立模式经插件目标 PRIVATE 链接, 内置合并
+  #   模式经 AGENTXX_BUILTIN_PLUGIN_LINK_LIBS 收集 (见各插件内置分支)
+  target_link_libraries(agentxx_shared PUBLIC ws2_32)
+  target_link_libraries(agentxx_static PUBLIC ws2_32)
 endif()
 
 if (AGENTXX_LINUX_IO_URING_SUPPORTED)

@@ -1,7 +1,8 @@
 # agentxx_audio_stream —— 音频流捕获插件 (Windows WASAPI)
 # - 默认: 独立动态库 (MODULE), 仅依赖纯 C ABI 头 + fmt + simdjson
 # - 内置模式 (AGENTXX_ENABLE_PLUGIN_BUILTIN=ON): 源文件编译为 OBJECT 库合并进
-#   libagentxx; fmt/simdjson 为 libagentxx 既有依赖, 仅补链接平台库 (psapi)
+#   libagentxx; fmt/simdjson 为 libagentxx 既有依赖; WASAPI/COM 等平台库
+#   经 AGENTXX_BUILTIN_PLUGIN_LINK_LIBS 补链接
 # - 从 libagentxx src/expand/audio_stream 拆分独立:
 #   - 工具 agentxx_audio_stream (start/stop/status)
 #   - 捕获帧经 publish 事件推送 (topic "agentxx_audio_stream.audio")
@@ -42,10 +43,10 @@ extern \"C\" void agentxx_plugin_builtin_unload_${PLUGIN_NAME}(void* plugin_ctx)
     "${AGENTXX_BUILTIN_MANIFEST_ENTRIES}
     {\"${PLUGIN_NAME}\", agentxx_plugin_builtin_get_info_${PLUGIN_NAME}, agentxx_plugin_builtin_entry_${PLUGIN_NAME}, agentxx_plugin_builtin_unload_${PLUGIN_NAME}},")
   if (WIN32)
-    # audio_stream: WASAPI (mmdevapi) / COM (ole32) 已由 libagentxx 链接,
-    # 进程名查询 (psapi) 需补链接
+    # audio_stream: WASAPI (mmdevapi) / COM (ole32) / 进程名查询 (psapi)
+    # - 独立模式经下方独立分支 PRIVATE 链接; 内置模式经本收集通道并入 libagentxx
     set(AGENTXX_BUILTIN_PLUGIN_LINK_LIBS
-      "${AGENTXX_BUILTIN_PLUGIN_LINK_LIBS}" psapi PARENT_SCOPE)
+      "${AGENTXX_BUILTIN_PLUGIN_LINK_LIBS}" mmdevapi ole32 psapi PARENT_SCOPE)
   endif()
   set(AGENTXX_BUILTIN_PLUGIN_OBJECT_TARGETS "${AGENTXX_BUILTIN_PLUGIN_OBJECT_TARGETS}" "${_target}" PARENT_SCOPE)
   set(AGENTXX_BUILTIN_MANIFEST_DECLS "${AGENTXX_BUILTIN_MANIFEST_DECLS}" PARENT_SCOPE)

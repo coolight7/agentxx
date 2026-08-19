@@ -9,6 +9,7 @@
 // ---
 #include <d3d11.h>
 #include <dxgi1_2.h>
+#include <wincodec.h>
 #include <wrl/client.h>
 
 using Microsoft::WRL::ComPtr;
@@ -173,6 +174,145 @@ public:
 
     bool isStreaming() const {
         return running_.load();
+    }
+
+    /// WIC 编码 BGRA 像素为 PNG 文件
+    /// - WIC 在调用线程内自管理 COM 初始化 (CoInitializeEx/CoUninitialize),
+    ///   线程池线程安全调用 (宿主 execute 回调即运行在线程池)
+    /// - pixelData 为 B8G8R8A8 (DXGI/GDI 原生内存顺序), 与 WIC 32bppBGRA
+    ///   格式完全一致, 无需像素转换
+    bool saveFramePng(const ScreenFrame& frame, const std::string& path) const {
+        if (frame.width <= 0 || frame.height <= 0 || frame.pixelData.empty()) {
+            XX_LOGW("ScreenCapture: saveFramePng skipped (empty frame)");
+            return false;
+        }
+        const UINT stride = static_cast<UINT>(frame.width) * 4;
+        if (frame.pixelData.size() < static_cast<size_t>(stride) * frame.height) {
+            XX_LOGW("ScreenCapture: saveFramePng skipped (pixel data too small)");
+            return false;
+        }
+
+        HRESULT hr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+        if (hr == RPC_E_CHANGED_MODE) {
+            // 线程已初始化 MTA: WIC 在 MTA 下同样可用
+            hr = S_OK;
+        }
+        if (FAILED(hr)) {
+            XX_LOGW("ScreenCapture: CoInitializeEx failed (0x{:08X})", static_cast<unsigned>(hr));
+            return false;
+        }
+
+        bool ok = false;
+        {
+            ComPtr<IWICImagingFactory> factory;
+            ComPtr<IWICBitmapEncoder>  encoder;
+            ComPtr<IWICBitmapFrameEncode> frameEncode;
+            ComPtr<IWICStream> stream;
+            IPropertyBag2* propBag = nullptr;
+
+            do {
+                hr = CoCreateInstance(
+                    CLSID_WICImagingFactory,
+                    nullptr,
+                    CLSCTX_INPROC_SERVER,
+                    IID_PPV_ARGS(&factory)
+                );
+                if (FAILED(hr)) {
+                    break;
+                }
+                hr = factory->CreateStream(&stream);
+                if (FAILED(hr)) {
+                    break;
+                }
+                // UTF-8 路径 → UTF-16 (WIC 要求宽字符路径)
+                std::wstring wpath;
+                {
+                    int len = MultiByteToWideChar(
+                        CP_UTF8,
+                        0,
+                        path.data(),
+                        static_cast<int>(path.size()),
+                        nullptr,
+                        0
+                    );
+                    if (len > 0) {
+                        wpath.resize(static_cast<size_t>(len));
+                        MultiByteToWideChar(
+                            CP_UTF8,
+                            0,
+                            path.data(),
+                            static_cast<int>(path.size()),
+                            wpath.data(),
+                            len
+                        );
+                    }
+                }
+                hr = stream->InitializeFromFilename(wpath.c_str(), GENERIC_WRITE);
+                if (FAILED(hr)) {
+                    XX_LOGW(
+                        "ScreenCapture: WIC stream open failed for {} (0x{:08X})",
+                        path,
+                        static_cast<unsigned>(hr)
+                    );
+                    break;
+                }
+                hr = factory->CreateEncoder(GUID_ContainerFormatPng, nullptr, &encoder);
+                if (FAILED(hr)) {
+                    break;
+                }
+                hr = encoder->Initialize(stream.Get(), WICBitmapEncoderNoCache);
+                if (FAILED(hr)) {
+                    break;
+                }
+                hr = encoder->CreateNewFrame(&frameEncode, &propBag);
+                if (FAILED(hr)) {
+                    break;
+                }
+                hr = frameEncode->Initialize(propBag);
+                if (FAILED(hr)) {
+                    break;
+                }
+                hr = frameEncode->SetSize(
+                    static_cast<UINT>(frame.width),
+                    static_cast<UINT>(frame.height)
+                );
+                if (FAILED(hr)) {
+                    break;
+                }
+                WICPixelFormatGUID format = GUID_WICPixelFormat32bppBGRA;
+                hr = frameEncode->SetPixelFormat(&format);
+                if (FAILED(hr)) {
+                    break;
+                }
+                hr = frameEncode->WritePixels(
+                    static_cast<UINT>(frame.height),
+                    stride,
+                    static_cast<UINT>(frame.pixelData.size()),
+                    const_cast<BYTE*>(frame.pixelData.data())
+                );
+                if (FAILED(hr)) {
+                    break;
+                }
+                hr = frameEncode->Commit();
+                if (FAILED(hr)) {
+                    break;
+                }
+                hr = encoder->Commit();
+                ok = SUCCEEDED(hr);
+            } while (false);
+
+            if (propBag) {
+                propBag->Release();
+            }
+        }
+        CoUninitialize();
+
+        if (!ok) {
+            XX_LOGW("ScreenCapture: PNG encode failed (0x{:08X})", static_cast<unsigned>(hr));
+        } else {
+            XX_LOGI("ScreenCapture: saved PNG {} ({}x{})", path, frame.width, frame.height);
+        }
+        return ok;
     }
 
 private:
@@ -711,6 +851,11 @@ public:
     bool isStreaming() const {
         return false;
     }
+
+    bool saveFramePng(const ScreenFrame& /*frame*/, const std::string& /*path*/) const {
+        XX_LOGW("ScreenCapture: saveFramePng not supported on this platform");
+        return false;
+    }
 };
 
 #endif
@@ -746,6 +891,10 @@ void ScreenCapture::stopStreaming() {
 
 bool ScreenCapture::isStreaming() const {
     return impl_->isStreaming();
+}
+
+bool ScreenCapture::saveFramePng(const ScreenFrame& frame, const std::string& path) const {
+    return impl_->saveFramePng(frame, path);
 }
 
 } // namespace expand

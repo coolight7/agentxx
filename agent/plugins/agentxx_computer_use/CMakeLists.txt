@@ -28,6 +28,12 @@ if (AGENTXX_ENABLE_PLUGIN_BUILTIN)
   # 复用 agentxx_util 工具库 (libagentxx 已链接本库; 此处经 PRIVATE 链接仅
   # 传递编译宏/头路径: util 头文件依赖 XX_IS_* 宏与 include 路径)
   target_link_libraries(${_target} PRIVATE agentxx_util)
+  if (WIN32)
+    # ui_control: 鼠标/键盘注入与光标查询 (user32)
+    # - 独立模式经下方独立分支 PRIVATE 链接; 内置模式经本收集通道并入 libagentxx
+    set(AGENTXX_BUILTIN_PLUGIN_LINK_LIBS
+      "${AGENTXX_BUILTIN_PLUGIN_LINK_LIBS}" user32 PARENT_SCOPE)
+  endif()
 set_target_properties(${_target} PROPERTIES
     POSITION_INDEPENDENT_CODE ON
     CXX_STANDARD 26
@@ -76,6 +82,10 @@ target_link_libraries(${PLUGIN_NAME} PRIVATE
   simdjson
   fmt::fmt
 )
+if (WIN32)
+  # ui_control: 鼠标/键盘注入与光标查询 (user32)
+  target_link_libraries(${PLUGIN_NAME} PRIVATE user32)
+endif()
 target_link_directories(${PLUGIN_NAME} PRIVATE
   "${AGENTXX_INSTALL_DIR}/lib"
 )
