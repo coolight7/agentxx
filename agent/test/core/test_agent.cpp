@@ -480,8 +480,8 @@ asio::awaitable<void> test_agent_permission_mode_rules() {
                      std::string_view                                                 path,
                      const std::string& sessionId) -> asio::awaitable<bool> {
         auto args = neograph::json{
-            {"path",       std::string{path}},
-            {"session_id", sessionId        }
+            {"path",      std::string{path}},
+            {"sessionId", sessionId        }
         };
         co_return co_await perm->defOnFilesystemHandle(tool, args, kWriteIndex);
     };

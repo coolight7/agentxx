@@ -102,7 +102,7 @@ asio::awaitable<bool> PermissionMiddlewareHandle::requestPermission(
     if (!ctxPtr) {
         co_return false;
     }
-    auto sessionId = args.value("session_id", std::string{});
+    auto sessionId = args.value("sessionId", std::string{});
     auto session   = ctxPtr->sessions->get(sessionId);
     auto bus       = session ? session->bus : nullptr;
     if (!bus) {

@@ -32,19 +32,32 @@ int g_client_plugin_passed = 0;
 int g_client_plugin_failed = 0;
 
 /// 定位示例插件目录 (与 agent 侧 test_plugins 同路径: cwd/plugins/example_plugin)
-/// 兼容从其他 cwd 运行: 优先 cwd/plugins, 回退可执行文件同目录
+/// 兼容从其他 cwd 运行: 优先 exe 同目录的构建产物, cwd 仅作回退;
+/// 校验目录内存在动态库产物, 避免误命中 agent/plugins/ 源码目录
 static std::string findExamplePluginPath() {
     namespace fs = std::filesystem;
     std::error_code       ec;
     std::vector<fs::path> candidates;
-    candidates.push_back(fs::current_path(ec) / "plugins" / "example_plugin");
 #if !XX_IS_WIN_D
     if (auto p = fs::read_symlink("/proc/self/exe", ec); !ec) {
         candidates.push_back(p.parent_path() / "plugins" / "example_plugin");
     }
 #endif
+    candidates.push_back(fs::current_path(ec) / "plugins" / "example_plugin");
+    auto hasLibFile = [](const fs::path& dir) {
+        std::error_code                    ec2;
+        std::filesystem::directory_iterator it(dir, ec2);
+        std::filesystem::directory_iterator end;
+        for (; it != end; it.increment(ec2)) {
+            auto ext = it->path().extension().string();
+            if (ext == ".so" || ext == ".dll" || ext == ".dylib") {
+                return true;
+            }
+        }
+        return false;
+    };
     for (const auto& c : candidates) {
-        if (fs::is_directory(c, ec)) {
+        if (fs::is_directory(c, ec) && hasLibFile(c)) {
             return c.string();
         }
     }

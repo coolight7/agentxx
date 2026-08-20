@@ -68,9 +68,9 @@ std::optional<agentxx::middleware::SummarizationToolHandle>
 }
 
 asio::awaitable<std::string> WritePlanningTool::execute_async(const neograph::json& arguments) {
-    auto session_id = arguments.value("session_id", std::string{});
+    auto session_id = arguments.value("sessionId", std::string{});
     if (session_id.empty()) {
-        co_return R"({"error":"Toolcall inner exec failed, need `session_id`"})";
+        co_return R"({"error":"Toolcall inner exec failed, need `sessionId`"})";
     }
 
     auto roadmap = arguments.value("roadmap", std::string{});

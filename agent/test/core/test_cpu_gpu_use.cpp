@@ -20,10 +20,11 @@ int g_cpu_failed = 0;
 namespace {
 
 /// 定位 agentxx_system_monitor 插件目录
+/// 优先 exe 同目录的构建产物, cwd 仅作回退; 校验目录内存在动态库产物,
+/// 避免 cwd 在源码仓库下时误命中 agent/plugins/ 下的插件源码目录
 static std::string findSystemMonitorPluginPath() {
     std::error_code                    ec;
     std::vector<std::filesystem::path> candidates;
-    candidates.push_back(std::filesystem::current_path(ec) / "plugins" / "agentxx_system_monitor");
 #if XX_IS_WIN_D
     wchar_t buf[4096];
     DWORD   n = ::GetModuleFileNameW(nullptr, buf, 4096);
@@ -63,8 +64,21 @@ static std::string findSystemMonitorPluginPath() {
         );
     }
 #endif
+    candidates.push_back(std::filesystem::current_path(ec) / "plugins" / "agentxx_system_monitor");
+    auto hasLibFile = [](const std::filesystem::path& dir) {
+        std::error_code                          ec2;
+        std::filesystem::directory_iterator      it(dir, ec2);
+        std::filesystem::directory_iterator      end;
+        for (; it != end; it.increment(ec2)) {
+            auto ext = it->path().extension().string();
+            if (ext == ".so" || ext == ".dll" || ext == ".dylib") {
+                return true;
+            }
+        }
+        return false;
+    };
     for (const auto& c : candidates) {
-        if (std::filesystem::is_directory(c, ec)) {
+        if (std::filesystem::is_directory(c, ec) && hasLibFile(c)) {
             return c.string();
         }
     }

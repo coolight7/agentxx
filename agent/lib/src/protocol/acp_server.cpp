@@ -410,7 +410,7 @@ void AcpProtocolHandler::workerRunPrompt(
 
             if (!agentText.empty()) {
                 json chunk                        = json::object();
-                chunk["session_id"]               = sessionId;
+                chunk["sessionId"]                = sessionId;
                 chunk["update"]["session_update"] = "agent_message_chunk";
                 chunk["update"]["content"]        = json{
                            {"type", "text"   },
@@ -499,7 +499,7 @@ void AcpProtocolHandler::emitNotification(std::string_view method, const json& p
 
 void AcpProtocolHandler::emitAgentMessageChunk(std::string_view sessionId, std::string_view text) {
     json chunk;
-    chunk["session_id"]               = sessionId;
+    chunk["sessionId"]                = sessionId;
     chunk["update"]["session_update"] = "agent_message_chunk";
     chunk["update"]["content"]        = json{
                {"type", "text"},
