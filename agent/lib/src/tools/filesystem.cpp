@@ -231,7 +231,7 @@ neograph::ChatTool FileSystemListTool::get_definition() const {
                     {
                         "limit",
                         {
-                            {"type", "number"},
+                            {"type", "integer"},
                             {"description", prompt.getArg("limit")},
                         },
                     },
@@ -444,14 +444,14 @@ neograph::ChatTool FilesystemReadTextFileTool::get_definition() const {
                     {
                         "line_offset",
                         {
-                            {"type", "number"},
+                            {"type", "integer"},
                             {"description", prompt.getArg("line_offset")},
                         },
                     },
                     {
                         "line_limit",
                         {
-                            {"type", "number"},
+                            {"type", "integer"},
                             {"description", prompt.getArg("line_limit")},
                         },
                     },
@@ -1077,7 +1077,7 @@ neograph::ChatTool FilesystemGlobTool::get_definition() const {
                     {
                         "max_depth",
                         {
-                            {"type", "number"},
+                            {"type", "integer"},
                             {"description", prompt.getArg("max_depth")},
                         },
                     },
@@ -1330,14 +1330,14 @@ neograph::ChatTool FilesystemGrepTool::get_definition() const {
                     {
                         "max_count_per_file",
                         {
-                            {"type", "number"},
+                            {"type", "integer"},
                             {"description", prompt.getArg("max_count_per_file")},
                         },
                     },
                     {
                         "context_lines",
                         {
-                            {"type", "number"},
+                            {"type", "integer"},
                             {"description", prompt.getArg("context_lines")},
                         },
                     },
