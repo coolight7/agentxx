@@ -938,8 +938,12 @@ void TUIClientAgentIO::openModelSelector() {
             break;
         }
     }
+    // 确认选择: 不即时通知 agent-io 切换 (不发送 WireSelectModel), 仅记录为
+    // 待应用选择 (setPendingModel), 随下一次发送的用户消息 (WireUserInput.model)
+    // 携带, BaseAgent 执行新一轮会话时 (runTurnAsync 开头 selectModel) 自动切换。
+    // 状态栏显示已由 confirmSelection 更新 cachedModelName, 此处仅登记待应用
     overlay->onConfirm([this](std::string model) {
-        requestSelectModel(currentThreadId(), model);
+        setPendingModel(std::move(model));
     });
     overlay->onClose([this] {
         modal_->popModal();
@@ -1102,7 +1106,7 @@ void TUIClientAgentIO::switchToSession(std::string newThreadId) {
 }
 
 // ---------------------------------------------------------------------------
-// requestCancel / requestSelectModel
+// requestCancel / setPendingModel
 // ---------------------------------------------------------------------------
 
 void TUIClientAgentIO::requestCancel(std::string sessionId) {
@@ -1111,10 +1115,12 @@ void TUIClientAgentIO::requestCancel(std::string sessionId) {
     }
 }
 
-void TUIClientAgentIO::requestSelectModel(std::string sessionId, std::string model) {
-    if (transport_) {
-        sendToPeer(agentxx::agent::WireSelectModel{std::move(sessionId), std::move(model)});
+void TUIClientAgentIO::setPendingModel(std::string model) {
+    if (model.empty()) {
+        return;
     }
+    std::lock_guard<std::mutex> lock(sharedState_.mutex());
+    sharedState_.mutableState().pendingModel = std::move(model);
 }
 
 // ---------------------------------------------------------------------------
@@ -1299,9 +1305,18 @@ void TUIClientAgentIO::sendUserInputLocked(TUIRenderState& st, std::string text)
             messageList_->setStickToBottom(true);
         }
     });
+    // 待应用模型选择: 取走后随本条消息携带给 agent-io (WireUserInput.model),
+    // BaseAgent 执行新一轮会话时自动切换; 清空使模型选择仅对"选择之后发送的
+    // 下一条消息"生效
+    std::string pendingModel = std::move(st.pendingModel);
+    st.pendingModel.clear();
     if (transport_) {
-        sendToPeer(agentxx::agent::WireUserInput{currentThreadId(), text});
+        sendToPeer(agentxx::agent::WireUserInput{
+            currentThreadId(), text, std::move(pendingModel)
+        });
     } else {
+        // 无 transport (遗留直连模式): 输入经本地 channel 送达, 无法携带
+        // 模型选择, 已取走的 pendingModel 直接丢弃 (该模式下不切换模型)
         inputChannel_->async_send(
             neograph_asio_error_code{},
             std::move(text),

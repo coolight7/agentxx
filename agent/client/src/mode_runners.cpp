@@ -533,9 +533,11 @@ static asio::awaitable<void> runRemoteTuiAsync(
     // TUI 覆写版同时置 Connected + flushPendingInput, 幂等)
     io->onServerReady();
 
-    // 指定模型 (经独立的模型选择通道); 先于 GetModel 发送, 使其返回所选模型
+    // 指定模型: 记录为待应用选择 (setPendingModel), 随第一条用户消息
+    // (WireUserInput.model) 携带, BaseAgent 执行新一轮会话时自动切换;
+    // 不即时发送 WireSelectModel (与弹窗选择同一机制, 见 setPendingModel 注释)
     if (!model.empty()) {
-        io->requestSelectModel(sessionId, model);
+        io->setPendingModel(model);
     }
 
     // 请求服务端当前模型信息, 待 onPeerMessage 收到 WireModelInfo 后更新显示

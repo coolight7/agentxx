@@ -8,6 +8,10 @@
 #include <memory>
 #include <string>
 
+namespace agentxx::event {
+class EventBus;
+} // namespace agentxx::event
+
 namespace agentxx {
 namespace server {
 class A2aClient;

@@ -147,6 +147,12 @@ void SessionServerAgentIO::onPeerMessage(WireMessage msg) {
                 handleHello(m);
             } else if constexpr (std::is_same_v<T, WireUserInput>) {
                 cancelGraceTimer();
+                // 携带模型选择时记录为待应用 (run 弹出输入时取走, 作为该轮
+                // modelName 传入 runTurnAsync, 由 BaseAgent 在新一轮会话开始时
+                // selectModel 自动切换; 不即时切换 agent-io)
+                if (!m.model.empty()) {
+                    pendingModel_ = m.model;
+                }
                 inputChannel_->try_send(ErrorCode{}, m.text);
             } else if constexpr (std::is_same_v<T, WireCancel>) {
                 onCancel();
@@ -488,6 +494,11 @@ asio::awaitable<void> SessionServerAgentIO::run() {
             turnActive_.store(false, std::memory_order_release);
             break;
         }
+        // 取走本条输入携带的待应用模型选择 (取走后清空, 仅对轮到本输入的
+        // 该轮会话生效; 轮次进行中到达的后继输入其模型选择互不影响):
+        // 由 BaseAgent 执行新一轮会话开始时 (runTurnAsync 内 selectModel) 自动切换
+        std::string turnModel = std::move(pendingModel_);
+        pendingModel_.clear();
         // catchErrorAsync: 取消类异常 (CancelledException/NodeInterrupt) 与普通异常
         // 一致转为错误消息通知客户端 (onRethrow), 避免异常逃逸 co_spawn 完成处理器;
         // 其余异常同样转为错误消息
@@ -516,8 +527,13 @@ asio::awaitable<void> SessionServerAgentIO::run() {
         co_await agentxx::util::catchErrorAsync<bool>(
             [&]() -> asio::awaitable<bool> {
                 auto result
-                    = co_await agent
-                          ->runTurnAsync(config_.sessionId, *input, firstTurn_, shared_from_this());
+                    = co_await agent->runTurnAsync(
+                        config_.sessionId,
+                        *input,
+                        firstTurn_,
+                        shared_from_this(),
+                        turnModel
+                    );
                 firstTurn_ = false;
                 sendToPeer(WireTurnResult{
                     .sessionId    = config_.sessionId,

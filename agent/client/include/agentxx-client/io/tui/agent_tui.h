@@ -236,7 +236,14 @@ public:
                     std::string_view interruptArgJson
                 ) override;
     void requestCancel(std::string sessionId) override;
-    void requestSelectModel(std::string sessionId, std::string model) override;
+
+    /// 记录待应用模型选择: 不即时通知 agent-io (不发 WireSelectModel),
+    /// 随下一条发送的用户消息 (WireUserInput.model) 携带, BaseAgent 执行
+    /// 新一轮会话时 (runTurnAsync 开头 selectModel) 自动切换。
+    /// - 模型选择弹窗确认 (UI 线程) 与远程 TUI 启动 --model 参数 (client io
+    ///   线程) 共用; 内部加锁, 任意线程可调用
+    /// - 空模型名忽略; 重复选择以最后一次为准
+    void setPendingModel(std::string model);
 
     /// 供组件访问共享状态 (UI 线程渲染/事件时使用)
     TUISharedState& sharedState() {

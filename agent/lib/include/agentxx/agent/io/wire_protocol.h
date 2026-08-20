@@ -284,12 +284,17 @@ inline neograph::json makeHello(
     return j;
 }
 
-inline neograph::json makeUserInput(std::string_view sessionId, std::string_view text) {
-    return neograph::json{
+inline neograph::json
+    makeUserInput(std::string_view sessionId, std::string_view text, std::string_view model = "") {
+    neograph::json j = {
         {"type",      MsgType::UserInput},
         {"sessionId", sessionId         },
         {"text",      text              },
     };
+    if (!model.empty()) {
+        j["model"] = model;
+    }
+    return j;
 }
 
 inline neograph::json makeInterruptResponse(int64_t id, const neograph::json& result) {
