@@ -517,12 +517,7 @@ private:
             argsObj = JS_NewObject(pctx->ctx);
         }
         JSValue ctxObj = JS_NewObject(pctx->ctx);
-        JS_SetPropertyStr(
-            pctx->ctx,
-            ctxObj,
-            "session_id",
-            JS_NewString(pctx->ctx, req.tid.c_str())
-        );
+        JS_SetPropertyStr(pctx->ctx, ctxObj, "sessionId", JS_NewString(pctx->ctx, req.tid.c_str()));
         JS_SetPropertyStr(
             pctx->ctx,
             ctxObj,
@@ -1076,7 +1071,7 @@ JSValue JsEngine::bridgeCall(
                     JS_SetPropertyStr(
                         ctx,
                         ctxObj,
-                        "session_id",
+                        "sessionId",
                         JS_NewString(ctx, sessionId.c_str())
                     );
                     JS_SetPropertyStr(ctx, ctxObj, "toolCallId", JS_NewString(ctx, "js_call"));

@@ -151,7 +151,7 @@ typedef enum AgentxxHookPoint {
 } AgentxxHookPoint;
 
 /// 钩子回调 (io 线程同步调用, 必须快速返回):
-/// - node_input_json: 节点输入摘要 ({"session_id", "node", "messages_count", ...})
+/// - node_input_json: 节点输入摘要 ({"sessionId", "node", "messages_count", ...})
 /// - out_json: 预留, 一期恒为 NULL (回调不得写入)
 /// - 返回 0 成功; 非 0 失败并经 error_out 输出错误 (host->alloc 分配)
 typedef int (*AgentxxHookFn)(

@@ -407,8 +407,8 @@ asio::awaitable<void> test_permission_remember_rule() {
     auto write = [&](std::string_view path) -> asio::awaitable<bool> {
         // 必须携带 sessionId: requestPermission 经 sessions->get(sessionId) 取会话总线
         auto args = neograph::json{
-            {"path",       std::string{path}},
-            {"session_id", "remember_test"  }
+            {"path",      std::string{path}},
+            {"sessionId", "remember_test"  }
         };
         co_return co_await permission->defOnFilesystemHandle(
             item,

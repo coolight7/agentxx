@@ -27,18 +27,32 @@ namespace fs = std::filesystem;
 static std::atomic<int> g_temp_project_counter{0};
 
 /// 定位 agentxx_codegraph 插件目录 (与测试可执行同目录的 plugins/ 下;
-/// 兼容从其他 cwd 运行: 回退可执行文件目录)
+/// 优先 exe 同目录的构建产物, cwd 仅作回退)。
+/// 必须校验目录内存在动态库产物: 避免 cwd 在源码仓库下时误命中
+/// agent/plugins/ 下的插件源码目录 (只有 .cpp/plugin.yaml, 无 .so)
 static std::string findCodegraphPluginPath() {
     std::error_code       ec;
     std::vector<fs::path> candidates;
-    candidates.push_back(fs::current_path(ec) / "plugins" / "agentxx_codegraph");
 #if !XX_IS_WIN_D
     if (auto p = fs::read_symlink("/proc/self/exe", ec); !ec) {
         candidates.push_back(p.parent_path() / "plugins" / "agentxx_codegraph");
     }
 #endif
+    candidates.push_back(fs::current_path(ec) / "plugins" / "agentxx_codegraph");
+    auto hasLibFile = [](const fs::path& dir) {
+        std::error_code                    ec2;
+        std::filesystem::directory_iterator it(dir, ec2);
+        std::filesystem::directory_iterator end;
+        for (; it != end; it.increment(ec2)) {
+            auto ext = it->path().extension().string();
+            if (ext == ".so" || ext == ".dll" || ext == ".dylib") {
+                return true;
+            }
+        }
+        return false;
+    };
     for (const auto& c : candidates) {
-        if (fs::is_directory(c, ec)) {
+        if (fs::is_directory(c, ec) && hasLibFile(c)) {
             return c.string();
         }
     }

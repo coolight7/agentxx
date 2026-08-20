@@ -9,7 +9,7 @@ agentxx.registerTool({
     name: { type: "string", description: "who to greet" },
   },
   execute: (args, ctx) => {
-    agentxx.log(2, "js_hello called, thread=" + ctx.thread_id);
+    agentxx.log(2, "js_hello called, session=" + ctx.sessionId);
     const who = args.name || "world";
     return { greeting: "Hello, " + who + "!", from: "js plugin" };
   },
@@ -21,7 +21,7 @@ agentxx.registerTool({
   description: "JS plugin demo: async function with Promise resolution.",
   execute: async (args, ctx) => {
     await new Promise((resolve) => setTimeout(resolve, 10));
-    return { waited: true, ms: 10, thread: ctx.thread_id };
+    return { waited: true, ms: 10, session: ctx.sessionId };
   },
 });
 

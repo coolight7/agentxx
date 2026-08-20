@@ -539,7 +539,7 @@ asio::awaitable<TestResult> run_summarization_tests() {
             // 子代理名
             XX_TEST_EXPECT_EQ(args.value("subagent", std::string{}), std::string{"subagent_task"});
             // 同上下文: 指定父线程
-            XX_TEST_EXPECT_EQ(args.value("session_id", std::string{}), env->sessionId);
+            XX_TEST_EXPECT_EQ(args.value("sessionId", std::string{}), env->sessionId);
             // 工具策略: 仅 share_store (模型自主外置长内容)
             XX_TEST_EXPECT_TRUE(args["tools"].is_array());
             XX_TEST_EXPECT_EQ(args["tools"].size(), size_t{1});

@@ -37,7 +37,7 @@ events::ReqSubagentBatch parseSubagentBatchFromInterrupt(
                                 ? std::optional<neograph::json>{t["messages"]}
                                 : std::nullopt,
                 // 指定运行 session (同上下文模式): 空时保持默认独立 subagent 线程
-                .sessionId = t.value("session_id", std::string{}),
+                .sessionId = t.value("sessionId", std::string{}),
                 // 工具策略 (无工具/继承父/自定义): 缺省不设置 (子代理默认全量)
                 .tools = (t.contains("tools") && t["tools"].is_array())
                              ? std::optional<neograph::json>{t["tools"]}
@@ -60,7 +60,7 @@ events::ReqSubagentBatch parseSubagentBatchFromInterrupt(
             .messages     = (arg.contains("messages") && arg["messages"].is_array())
                                 ? std::optional<neograph::json>{arg["messages"]}
                                 : std::nullopt,
-            .sessionId    = arg.value("session_id", std::string{}),
+            .sessionId    = arg.value("sessionId", std::string{}),
             .tools        = (arg.contains("tools") && arg["tools"].is_array())
                                 ? std::optional<neograph::json>{arg["tools"]}
                                 : std::nullopt,
@@ -318,7 +318,7 @@ asio::awaitable<std::string> SubAgentManagerTool::execute_async(const neograph::
         task.subagent     = t.value("subagent", std::string{});
         task.systemPrompt = t.value("system_prompt", std::string{});
         task.message      = t.value("message", std::string{});
-        task.sessionId    = t.value("session_id", std::string{});
+        task.sessionId    = t.value("sessionId", std::string{});
         task.resultId     = t.value("result_id", std::string{});
         if (t.contains("messages") && t["messages"].is_array()) {
             task.messages = t["messages"];
@@ -374,8 +374,8 @@ asio::awaitable<std::string> SubAgentManagerTool::execute_async(const neograph::
     if (!agentCtxPtr || !agentCtxPtr->middlewareHandleContext) {
         co_return R"({"error":"AgentContext not available"})";
     }
-    // session_id 由 toolcall 节点在执行前注入 arguments (见 toolcall.cpp)
-    auto sessionId = arguments.value("session_id", std::string{});
+    // sessionId 由 toolcall 节点在执行前注入 arguments (见 toolcall.cpp)
+    auto sessionId = arguments.value("sessionId", std::string{});
     auto resultId  = arguments.value("tool_call_id", std::string{});
 
     // 通过 requestInterrupt 触发/恢复中断
@@ -397,7 +397,7 @@ asio::awaitable<std::string> SubAgentManagerTool::execute_async(const neograph::
                 }
                 // 指定运行 session (同上下文模式): 空时保持默认独立 subagent 线程
                 if (!task.sessionId.empty()) {
-                    t["session_id"] = task.sessionId;
+                    t["sessionId"] = task.sessionId;
                 }
                 // 工具策略 (无工具/继承父/自定义): 缺省不设置 (子代理默认全量)
                 if (task.tools.has_value()) {
