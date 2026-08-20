@@ -352,7 +352,7 @@ void BaseAgent::initModelRegistry() {
 }
 
 void BaseAgent::initEventBus() {
-    agentContext->bus = std::make_shared<agentxx::middleware::EventBus>(ioCtx->get_executor());
+    agentContext->bus = std::make_shared<agentxx::event::EventBus>(ioCtx->get_executor());
 }
 
 void BaseAgent::initRegisterNodes(neograph::graph::GraphRegistry& registry) {
@@ -588,7 +588,7 @@ asio::awaitable<BaseAgent::TurnResult> BaseAgent::runTurnAsync(
 
     if (!session->bus) {
         session->bus
-            = std::make_shared<agentxx::middleware::EventBus>(co_await asio::this_coro::executor);
+            = std::make_shared<agentxx::event::EventBus>(co_await asio::this_coro::executor);
     }
     if (io) {
         io->registerOnBus(session->bus);
@@ -606,7 +606,7 @@ asio::awaitable<BaseAgent::TurnResult> BaseAgent::runTurnAsync(
     // 产出增量事件的唯一出口: 经 EventBridge 分配会话级递增 seq 后 ioPtr->sendToPeer
     // 发往对端 (server 端点会缓冲并经 transport 转发 client; io 为 nullptr 的
     // headless 场景则丢弃)
-    auto eventBridge = std::make_shared<agentxx::middleware::EventBridge>(
+    auto eventBridge = std::make_shared<agentxx::event::EventBridge>(
         agentContext->agentConfig->agentName,
         std::string{sessionId},
         agentContext,

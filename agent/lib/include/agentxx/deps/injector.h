@@ -31,9 +31,9 @@ public:
     DependencyContainer& operator=(DependencyContainer&&) = default;
 
     /// 注册一个依赖项（单例模式，默认延迟初始化）
-    /// @tparam T 依赖项类型
-    /// @param factory 工厂函数，返回 std::any 包装的 T 实例
-    /// @param registerAsEmptyName 是否以空名注册（作为默认实例）
+    /// T 依赖项类型
+    /// - [factory] 工厂函数，返回 std::any 包装的 T 实例
+    /// - [registerAsEmptyName] 是否以空名注册（作为默认实例）
     template<typename T>
     void registerSingleton(FactoryFn factory, bool registerAsEmptyName = true) {
         auto typeId            = typeid(T).name();
@@ -44,9 +44,9 @@ public:
     }
 
     /// 注册一个依赖项（有名称）
-    /// @tparam T 依赖项类型
-    /// @param name 注册名称（用于同名不同类型）
-    /// @param factory 工厂函数
+    /// T 依赖项类型
+    /// - [name] 注册名称（用于同名不同类型）
+    /// - [factory] 工厂函数
     template<typename T>
     void registerNamedSingleton(std::string name, FactoryFn factory) {
         auto typeId = typeid(T).name();
@@ -62,9 +62,9 @@ public:
     }
 
     /// 解析依赖项（按类型和默认名称）
-    /// @tparam T 要解析的类型
-    /// @return T 实例的智能指针
-    /// @throws std::runtime_error 如果找不到注册项或类型转换失败
+    /// T 要解析的类型
+    /// - `return` T 实例的智能指针
+    /// - `throw` std::runtime_error 如果找不到注册项或类型转换失败
     template<typename T>
     std::shared_ptr<T> resolve() {
         auto        typeId = typeid(T).name();
@@ -80,9 +80,9 @@ public:
     }
 
     /// 解析有名称的依赖项
-    /// @tparam T 要解析的类型
-    /// @param name 注册名称
-    /// @return T 实例的智能指针
+    /// T 要解析的类型
+    /// - [name] 注册名称
+    /// - `return` T 实例的智能指针
     template<typename T>
     std::shared_ptr<T> resolveNamed(std::string_view name) {
         auto        typeId       = typeid(T).name();
@@ -91,8 +91,8 @@ public:
     }
 
     /// 检查某个类型是否存在于容器中
-    /// @tparam T 要检查的类型
-    /// @return 存在返回 true
+    /// T 要检查的类型
+    /// - `return` 存在返回 true
     template<typename T>
     bool hasType() const {
         auto typeId = typeid(T).name();
@@ -102,9 +102,9 @@ public:
     }
 
     /// 检查某个特定注册的依赖项是否存在
-    /// @tparam T 要检查的类型
-    /// @param name 注册名称
-    /// @return 存在返回 true
+    /// T 要检查的类型
+    /// - [name] 注册名称
+    /// - `return` 存在返回 true
     template<typename T>
     bool hasNamed(std::string_view name) const {
         auto        typeId       = typeid(T).name();
@@ -114,7 +114,7 @@ public:
 
 private:
 
-    /// 解析指定 key 的类型（内部实现）
+    /// 解析指定 key 的类型
     template<typename T>
     std::shared_ptr<T> resolveTyped(std::string_view key) {
         auto it = registrations_.find(std::string(key));
@@ -140,7 +140,7 @@ private:
 };
 
 // ========================================================================
-// 便捷宏（用于快速注册常用类型）
+// 用于快速注册常用类型
 // ========================================================================
 
 #define DEPS_REGISTER_SINGLETON(container, Type)          \

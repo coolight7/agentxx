@@ -1,8 +1,8 @@
 #include "test_interrupt_bus.h"
 #include "agentxx-client/io/stdio/agent_stdio.h"
 #include "agentxx/agent/context.h"
-#include "agentxx/middlewares/event_stream.h"
-#include "agentxx/middlewares/events.h"
+#include "agentxx/event/event_stream.h"
+#include "agentxx/event/events.h"
 #include "agentxx/middlewares/middleware.h"
 #include "agentxx/middlewares/permission.h"
 #include "agentxx/tools/tool.h"
@@ -55,7 +55,7 @@ public:
 /// 中断总线往返: MockIO 注册后, request 应确定性拿到结果 (不依赖 stdin/不超时)
 asio::awaitable<void> test_interrupt_bus_request_response() {
     auto sessionBus
-        = std::make_shared<agentxx::middleware::EventBus>(co_await asio::this_coro::executor);
+        = std::make_shared<agentxx::event::EventBus>(co_await asio::this_coro::executor);
 
     auto io          = std::make_shared<MockIO>();
     io->interruptTag = "answered";
@@ -83,8 +83,7 @@ asio::awaitable<void> test_interrupt_bus_request_response() {
     XX_TEST_EXPECT_EQ(io->interruptCalls, 1);
 
     // 新总线 (无任何 server) 上 request 应超时返回 nullopt
-    auto deadBus
-        = std::make_shared<agentxx::middleware::EventBus>(co_await asio::this_coro::executor);
+    auto deadBus = std::make_shared<agentxx::event::EventBus>(co_await asio::this_coro::executor);
     auto resp2
         = co_await deadBus->request<agentxx::events::ReqInterrupt, agentxx::events::RespInterrupt>(
             agentxx::events::Topic::Interrupt,
@@ -106,7 +105,7 @@ asio::awaitable<void> test_interrupt_bus_request_response() {
 /// 权限总线往返: MockIO 注册后, request 应确定性拿到 Allow/Deny 决策
 asio::awaitable<void> test_permission_bus_request_response() {
     auto sessionBus
-        = std::make_shared<agentxx::middleware::EventBus>(co_await asio::this_coro::executor);
+        = std::make_shared<agentxx::event::EventBus>(co_await asio::this_coro::executor);
 
     auto io             = std::make_shared<MockIO>();
     io->permissionAllow = true;
@@ -146,9 +145,8 @@ asio::awaitable<void> test_permission_bus_request_response() {
     }
 
     // 无 server 的总线应超时
-    auto deadBus
-        = std::make_shared<agentxx::middleware::EventBus>(co_await asio::this_coro::executor);
-    auto resp2 = co_await deadBus
+    auto deadBus = std::make_shared<agentxx::event::EventBus>(co_await asio::this_coro::executor);
+    auto resp2   = co_await deadBus
                      ->request<agentxx::events::ReqPermission, agentxx::events::RespPermission>(
                          agentxx::events::Topic::Permission,
                          reqAllow,
@@ -162,7 +160,7 @@ asio::awaitable<void> test_permission_bus_request_response() {
 /// #4: 同一 IO 重复 registerOnBus 不应累积 handler (泄漏) 且最新 handler 生效
 asio::awaitable<void> test_registerOnBus_no_accumulation() {
     auto sessionBus
-        = std::make_shared<agentxx::middleware::EventBus>(co_await asio::this_coro::executor);
+        = std::make_shared<agentxx::event::EventBus>(co_await asio::this_coro::executor);
 
     auto& interruptRR
         = sessionBus->getRR<agentxx::events::ReqInterrupt, agentxx::events::RespInterrupt>(
@@ -214,7 +212,7 @@ asio::awaitable<void> test_registerOnBus_no_accumulation() {
 asio::awaitable<void> test_interrupt_bus_custom_handler() {
     auto agentContext = std::make_shared<agentxx::agent::AgentContext>();
     agentContext->bus
-        = std::make_shared<agentxx::middleware::EventBus>(co_await asio::this_coro::executor);
+        = std::make_shared<agentxx::event::EventBus>(co_await asio::this_coro::executor);
 
     // 注册一个自定义 handler, 直接返回固定结果
     auto& rr
@@ -373,7 +371,7 @@ asio::awaitable<void> test_permission_relative_path() {
 /// 后续访问该路径或其子目录直接按规则处理, 不再经总线询问 (prompter 不被调用)
 asio::awaitable<void> test_permission_remember_rule() {
     auto sessionBus
-        = std::make_shared<agentxx::middleware::EventBus>(co_await asio::this_coro::executor);
+        = std::make_shared<agentxx::event::EventBus>(co_await asio::this_coro::executor);
 
     // prompter (模拟客户端权限询问应答): 记录被询问次数
     auto io             = std::make_shared<MockIO>();

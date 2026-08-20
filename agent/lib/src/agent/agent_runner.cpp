@@ -1,7 +1,7 @@
 #include "agentxx/agent/agent_runner.h"
 
 #include "agentxx/agent/io/session_server_agent_io.h"
-#include "agentxx/middlewares/event_stream.h"
+#include "agentxx/event/event_stream.h"
 #include "agentxx/tools/subagent_shared.h"
 #include "agentxx/util/log.h"
 #include <optional>

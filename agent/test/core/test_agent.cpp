@@ -499,9 +499,8 @@ asio::awaitable<void> test_agent_permission_mode_rules() {
         XX_TEST_EXPECT_TRUE(perm != nullptr);
 
         auto session = agent.agentContext->getSession("perm_ask");
-        auto bus
-            = std::make_shared<agentxx::middleware::EventBus>(co_await asio::this_coro::executor);
-        auto io = std::make_shared<PermissionTestIO>();
+        auto bus = std::make_shared<agentxx::event::EventBus>(co_await asio::this_coro::executor);
+        auto io  = std::make_shared<PermissionTestIO>();
         io->registerOnBus(bus);
         session->bus = bus;
 
@@ -550,9 +549,8 @@ asio::awaitable<void> test_agent_permission_mode_rules() {
         auto perm = agent.agentContext->permissionMiddleware;
 
         auto session = agent.agentContext->getSession("perm_allask");
-        auto bus
-            = std::make_shared<agentxx::middleware::EventBus>(co_await asio::this_coro::executor);
-        auto io = std::make_shared<PermissionTestIO>();
+        auto bus = std::make_shared<agentxx::event::EventBus>(co_await asio::this_coro::executor);
+        auto io  = std::make_shared<PermissionTestIO>();
         io->registerOnBus(bus);
         session->bus = bus;
 
@@ -574,9 +572,8 @@ asio::awaitable<void> test_agent_permission_mode_rules() {
         auto perm = agent.agentContext->permissionMiddleware;
 
         auto session = agent.agentContext->getSession("perm_pass");
-        auto bus
-            = std::make_shared<agentxx::middleware::EventBus>(co_await asio::this_coro::executor);
-        auto io = std::make_shared<PermissionTestIO>();
+        auto bus = std::make_shared<agentxx::event::EventBus>(co_await asio::this_coro::executor);
+        auto io  = std::make_shared<PermissionTestIO>();
         io->registerOnBus(bus);
         session->bus = bus;
 
@@ -598,9 +595,8 @@ asio::awaitable<void> test_agent_permission_mode_rules() {
         auto perm = agent.agentContext->permissionMiddleware;
 
         auto session = agent.agentContext->getSession("perm_deny");
-        auto bus
-            = std::make_shared<agentxx::middleware::EventBus>(co_await asio::this_coro::executor);
-        auto io = std::make_shared<PermissionTestIO>();
+        auto bus = std::make_shared<agentxx::event::EventBus>(co_await asio::this_coro::executor);
+        auto io  = std::make_shared<PermissionTestIO>();
         io->registerOnBus(bus);
         session->bus = bus;
 

@@ -27,7 +27,7 @@ Agentxx 是一个使用 C++23 实现的 AI Agent 框架，编译器启用 C++26/
 ### 核心对话能力
 
 - **多轮对话**: 支持完整的多轮对话管理，维护 `viewMessages` (append-only 完整历史) 和 `llmMessages` (可压缩的 LLM 上下文) 双消息集
-- **流式输出**: LLM 响应以增量 Delta 事件推送 (TextToken / ThinkingToken / ToolStart / ToolEnd / TurnStart / TurnEnd / NodeStart / NodeEnd / MessageTip / SystemMessage)，每个 Delta 携带单调递增 seq 用于重放与同步; 轮次统计/错误/取消提示/中断头消息由 agent 线程构造为 SystemMessage 插入会话历史并推送 (携带 msgId), 保证 viewMessages 与 UI 展示一致
+- **流式输出**: LLM 响应以增量 Delta 事件推送 (TextToken / ThinkToken / ToolStart / ToolEnd / TurnStart / TurnEnd / NodeStart / NodeEnd / MessageTip / SystemMessage)，每个 Delta 携带单调递增 seq 用于重放与同步; 轮次统计/错误/取消提示/中断头消息由 agent 线程构造为 SystemMessage 插入会话历史并推送 (携带 msgId), 保证 viewMessages 与 UI 展示一致
 - **多模型支持**: 运行时按会话 (thread_id) 动态切换模型，支持 OpenAI Chat Completions、Anthropic Messages、OpenAI Responses (Codex) 三种 Provider 协议
 - **上下文压缩**: SummarizationMiddleware 在上下文接近模型 token 上限时自动压缩历史消息，支持 toolcall 输出去重与截断
 - **思维链展示**: 支持 LLM 的 thinking/reasoning_content 流式输出与展示
@@ -833,7 +833,7 @@ neograph GraphEngine (run_stream_async)
                 ├── 1. 转发原始回调 origCb (若存在)
                 ├── 2. 按事件类型分派:
                 │     ├── LLM_TOKEN     → publishModelToken (总线, 无订阅者零开销)
-                │     │                   + emitDelta(TextToken/ThinkingToken,
+                │     │                   + emitDelta(TextToken/ThinkToken,
                 │     │                   切换 chunk 类型时附带节点内计时)
                 │     ├── CHANNEL_WRITE → handleChannelWrite:
                 │     │                   - "message_tip" 通道 → Delta::MessageTip
@@ -1104,7 +1104,7 @@ agent/
 │   │   │   ├── memory_file.h     # MemoryFileMiddleware (上下文文件注入)
 │   │   │   ├── summarization.h   # SummarizationMiddleware (上下文压缩)
 │   │   │   ├── planning.h        # PlanningMiddleware (任务规划状态)
-│   │   │   └── host_events.h     # HostBus 事件类型 (agent.spawn/message/progress/done)
+│   │   │   └── event_host.h      # HostBus 事件类型 (agent.spawn/message/progress/done)
 │   │   ├── tools/                # 工具
 │   │   │   ├── tool.h            # XXToolBase / XXToolWrap 工具基类
 │   │   │   ├── filesystem.h      # 文件系统工具 (list/read/write/edit/glob/grep)

@@ -3,7 +3,7 @@
 #include "agentxx/agent/config_static.h"
 #include "agentxx/agent/io/agent_io.h"
 #include "agentxx/agent/io/agent_io_transport.h"
-#include "agentxx/middlewares/event_stream.h"
+#include "agentxx/event/event_stream.h"
 #include "agentxx/plugin/plugin_common.h"
 #include "agentxx/util/async_offload.h"
 #include "agentxx/util/exception.h"
@@ -48,10 +48,10 @@ static std::atomic<size_t> g_pluginCallSeq{0};
 
 /// 事件订阅句柄实现 (全局命名空间, 与 plugin_api.h 的 C 类型一致)
 struct AgentxxSubscription {
-    std::shared_ptr<agentxx::middleware::EventBus> bus;
-    std::string                                    topic; ///< 完整 topic (含 plugin. 前缀)
-    size_t                                         subscriptionId = 0;
-    agentxx::plugin::PluginInstance*               inst           = nullptr;
+    std::shared_ptr<agentxx::event::EventBus> bus;
+    std::string                               topic; ///< 完整 topic (含 plugin. 前缀)
+    size_t                                    subscriptionId      = 0;
+    agentxx::plugin::PluginInstance*          inst                = nullptr;
     void (*handler)(AgentxxPluginStringView event_json, void* ud) = nullptr;
     void* ud                                                      = nullptr;
 };
@@ -337,9 +337,9 @@ asio::awaitable<std::string> PluginTool::execute_async(const neograph::json& arg
 
     // 协程 lambda 对象 (调用 exec() 才得到 awaitable)
     auto exec = [&]() -> asio::awaitable<std::string> {
-        if (agentCtx && agentCtx->blockingPool) {
+        if (agentCtx && agentCtx->threadPool) {
             co_return co_await agentxx::util::offloadCancellableAsync<std::string>(
-                *agentCtx->blockingPool,
+                *agentCtx->threadPool,
                 cancelToken,
                 run
             );
@@ -1748,7 +1748,7 @@ void PluginManager::offload(
         return;
     }
     auto ctx = agentContext_.lock();
-    if (!ctx || !ctx->blockingPool) {
+    if (!ctx || !ctx->threadPool) {
         XX_LOGW("Plugin `{}` offload: blocking pool not ready", inst->name);
         return;
     }
@@ -1758,7 +1758,7 @@ void PluginManager::offload(
     //   done 执行期间计数保持 >0 保活代码段; 不得再用 RAII guard (重复递减)
     inst->inflight.fetch_add(1, std::memory_order_acq_rel);
     auto ex = ioExecutor_;
-    asio::post(*ctx->blockingPool, [inst, work, done, ud, ex]() {
+    asio::post(*ctx->threadPool, [inst, work, done, ud, ex]() {
         // ---- 阻塞池线程: 执行 work ----
         char* error  = nullptr;
         void* result = work(ud, &error);
@@ -1794,7 +1794,7 @@ static const AgentxxBuiltinPluginInfo* findBuiltinPlugin(std::string_view name) 
 asio::awaitable<std::shared_ptr<PluginInstance>>
     PluginManager::loadNativeAsync(std::string path, const agentxx::agent::PluginConfig* cfg) {
     auto ctx = agentContext_.lock();
-    if (!ctx || !ctx->blockingPool) {
+    if (!ctx || !ctx->threadPool) {
         XX_LOGE("PluginManager: agent context not ready");
         co_return nullptr;
     }
@@ -1802,7 +1802,7 @@ asio::awaitable<std::shared_ptr<PluginInstance>>
     // dlopen 卸载到线程池 (避免阻塞 io 线程)
     std::string dlErr;
     void*       handle = co_await agentxx::util::offloadAsync<void*>(
-        *ctx->blockingPool,
+        *ctx->threadPool,
         [path, &dlErr]() -> asio::awaitable<void*> {
             co_return NativeLoader::open(path, dlErr);
         }
@@ -1896,7 +1896,7 @@ asio::awaitable<std::shared_ptr<PluginInstance>>
     //   线程执行则 io↔引擎互等死锁 (见 plugins.md 11.5.2); 线程池执行时
     //   io 线程保持空闲, 可服务注册回调
     int rc = co_await agentxx::util::offloadAsync<int>(
-        *ctx->blockingPool,
+        *ctx->threadPool,
         [inst, entry]() -> asio::awaitable<int> {
             co_return entry(&inst->host, &inst->pluginCtx);
         }
@@ -1937,7 +1937,7 @@ asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadBuiltinAsync
     const agentxx::agent::PluginConfig* cfg
 ) {
     auto ctx = agentContext_.lock();
-    if (!ctx || !ctx->blockingPool) {
+    if (!ctx || !ctx->threadPool) {
         XX_LOGE("PluginManager: agent context not ready");
         co_return nullptr;
     }
@@ -2009,7 +2009,7 @@ asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadBuiltinAsync
     // ioCallSync 回 io 线程; 脚本插件的 entry 会经 invoke_capability 同步
     // 等待引擎线程, entry 在 io 线程执行会 io↔引擎互等死锁)
     int rc = co_await agentxx::util::offloadAsync<int>(
-        *ctx->blockingPool,
+        *ctx->threadPool,
         [inst, entry]() -> asio::awaitable<int> {
             co_return entry->entry(&inst->host, &inst->pluginCtx);
         }

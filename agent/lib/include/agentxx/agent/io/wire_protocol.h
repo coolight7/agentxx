@@ -73,7 +73,7 @@ inline std::string_view deltaTypeToString(Delta::Type t) noexcept {
     switch (t) {
         case T::TextToken:
             return "text_token";
-        case T::ThinkingToken:
+        case T::ThinkToken:
             return "thinking_token";
         case T::ToolStart:
             return "tool_start";
@@ -101,7 +101,7 @@ inline std::optional<Delta::Type> deltaTypeFromString(std::string_view s) noexce
         return T::TextToken;
     }
     if (s == "thinking_token") {
-        return T::ThinkingToken;
+        return T::ThinkToken;
     }
     if (s == "tool_start") {
         return T::ToolStart;

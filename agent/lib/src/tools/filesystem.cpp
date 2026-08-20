@@ -268,7 +268,7 @@ asio::awaitable<std::string> FileSystemListTool::execute_async(const neograph::j
 
     // 获取阻塞操作卸载线程池, 避免 std::filesystem 同步调用阻塞 io_context 事件循环
     auto  agentPtr = agentContext.lock();
-    auto& pool     = *agentPtr->blockingPool;
+    auto& pool     = *agentPtr->threadPool;
     // 会话取消令牌: 取消时由 watcher 置位 cancelFlag, 工作线程提前退出
     auto cancelToken = agentxx::tools::getSessionCancelToken(agentPtr, arguments);
 
@@ -1127,7 +1127,7 @@ asio::awaitable<std::string> FilesystemGlobTool::execute_async(const neograph::j
 
     // 获取阻塞操作卸载线程池, 避免 glob 同步调用阻塞 io_context 事件循环
     auto  agentPtr = agentContext.lock();
-    auto& pool     = *agentPtr->blockingPool;
+    auto& pool     = *agentPtr->threadPool;
     // 会话取消令牌: 取消时由 watcher 置位 cancelFlag, 工作线程提前退出
     auto cancelToken = agentxx::tools::getSessionCancelToken(agentPtr, arguments);
 
@@ -1457,7 +1457,7 @@ asio::awaitable<std::string> FilesystemGrepTool::execute_async(const neograph::j
         std::vector<std::filesystem::path> refilelist{};
         {
             auto  agentPtr = agentContext.lock();
-            auto& pool     = *agentPtr->blockingPool;
+            auto& pool     = *agentPtr->threadPool;
             // 会话取消令牌: 取消时由 watcher 置位 cancelFlag, 工作线程提前退出
             auto cancelToken = agentxx::tools::getSessionCancelToken(agentPtr, arguments);
 

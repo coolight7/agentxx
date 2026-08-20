@@ -396,7 +396,7 @@ public:
     /// 取消定时器 (io 线程; 从实例容器移除 + cancelled 标记)
     void cancelTimer(PluginInstance* inst, void* timer);
     /// 阻塞池卸载执行 (vtable offload 实现入口; 任意线程可调用)
-    /// - work 在 AgentContext::blockingPool 线程执行, done 投递回 io 线程
+    /// - work 在 AgentContext::threadPool 线程执行, done 投递回 io 线程
     /// - 全程 inflight 计数保活插件代码段 (work/done 执行期间可安全卸载等待)
     void offload(
         PluginInstance* inst,

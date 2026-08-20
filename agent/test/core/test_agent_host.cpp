@@ -6,7 +6,7 @@
 
 #include "agentxx/agent/agent_host.h"
 #include "agentxx/agent/code_agent.h"
-#include "agentxx/middlewares/events.h"
+#include "agentxx/event/events.h"
 #include "agentxx/protocol/a2a_client.h"
 #include "agentxx/protocol/a2a_server.h"
 #include "asio/co_spawn.hpp"
@@ -138,8 +138,7 @@ asio::awaitable<void> test_host_spawn_e2e() {
             // 父会话: 供子代理继承 bus (HIL 冒泡路径)
             auto parentSession = agent->getContext()->getSession("parent-session");
             parentSession->bus
-                = std::make_shared<agentxx::middleware::EventBus>(co_await asio::this_coro::executor
-                );
+                = std::make_shared<agentxx::event::EventBus>(co_await asio::this_coro::executor);
 
             // [workaround] 聚合提取为具名变量, 绕过 g++ 16.1 ICE (gimplify.cc:841)
             agentxx::events::ReqSubagentBatch e2eReq{
@@ -243,8 +242,7 @@ asio::awaitable<void> test_host_spawn_same_context() {
             auto parentSession = agent->getContext()->getSession("parent-session");
             parentSession->setModelName("parent-model");
             parentSession->bus
-                = std::make_shared<agentxx::middleware::EventBus>(co_await asio::this_coro::executor
-                );
+                = std::make_shared<agentxx::event::EventBus>(co_await asio::this_coro::executor);
 
             // [workaround] 聚合提取为具名变量, 绕过 g++ 16.1 ICE (gimplify.cc:8406)
             agentxx::events::ReqSubagentBatch sameCtxReq{
@@ -738,8 +736,7 @@ asio::awaitable<void> test_host_spawn_nested_delegation() {
             // 空总线即可)
             auto parentSession = agent->getContext()->getSession("parent-session");
             parentSession->bus
-                = std::make_shared<agentxx::middleware::EventBus>(co_await asio::this_coro::executor
-                );
+                = std::make_shared<agentxx::event::EventBus>(co_await asio::this_coro::executor);
 
             // [workaround] 聚合提取为具名变量, 绕过 g++ 16.1 ICE (gimplify.cc:841)
             agentxx::events::ReqSubagentBatch nestedReq{

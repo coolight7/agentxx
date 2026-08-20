@@ -189,7 +189,7 @@ void SessionServerAgentIO::onPeerMessage(WireMessage msg) {
                 sendToPeer(WireContextMessages{sess->llmMessages});
             } else if constexpr (std::is_same_v<T, WireListSessions>) {
                 // 客户端请求持久化会话列表 (会话选择弹窗数据源):
-                // 目录扫描 + SQLite 读取属阻塞 I/O, 卸载到 blockingPool 执行,
+                // 目录扫描 + SQLite 读取属阻塞 I/O, 卸载到 threadPool 执行,
                 // 避免阻塞 agent io 线程; 完成后经 shared_from_this 回填响应
                 auto agent = agent_.lock();
                 if (!agent || !agent->agentContext
@@ -203,10 +203,10 @@ void SessionServerAgentIO::onPeerMessage(WireMessage msg) {
                     ex_,
                     [self, sessionStore, agent]() -> asio::awaitable<void> {
                         std::vector<SessionInfo> sessions;
-                        if (agent->agentContext->blockingPool) {
+                        if (agent->agentContext->threadPool) {
                             sessions
                                 = co_await agentxx::util::offloadAsync<std::vector<SessionInfo>>(
-                                    *agent->agentContext->blockingPool,
+                                    *agent->agentContext->threadPool,
                                     [sessionStore]() -> asio::awaitable<std::vector<SessionInfo>> {
                                         co_return sessionStore->listSessions();
                                     }
@@ -426,7 +426,7 @@ void SessionServerAgentIO::subscribePluginEvents() {
     // 订阅全部插件事件 (topic `plugin.{插件名}.{事件名}`):
     // - 载荷均为 std::string (JSON); 类型不匹配跳过
     // - 原样转发为 WirePluginData, 宿主不解析语义; 频率由插件控制
-    pluginSubId_ = bus->subscribePrefix(
+    pluginSubId_ = bus->listenPrefix(
         "plugin.",
         [weakSelf = std::weak_ptr<SessionServerAgentIO>{self
          }](std::string_view topic, const std::any& payload) {
@@ -578,7 +578,7 @@ void SessionServerAgentIO::stopImpl() {
     // 退订插件事件前缀 (防止端点析构后回调悬垂)
     if (pluginSubId_ != 0) {
         if (auto agent = agent_.lock(); agent && agent->agentContext && agent->agentContext->bus) {
-            agent->agentContext->bus->unsubscribePrefix(pluginSubId_);
+            agent->agentContext->bus->unlistenPrefix(pluginSubId_);
         }
         pluginSubId_ = 0;
     }

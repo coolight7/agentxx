@@ -1,4 +1,4 @@
-#include "agentxx/middlewares/event_stream.h"
+#include "agentxx/event/event_stream.h"
 
 #include "agentxx/agent/io/agent_io_transport.h"
 #include "agentxx/middlewares/summarization.h"
@@ -6,7 +6,7 @@
 #include "fmt/format.h"
 
 namespace agentxx {
-namespace middleware {
+namespace event {
 
 EventStreamInterface::EventStreamInterface(
     std::string_view      in_name,
@@ -19,7 +19,7 @@ EventBus::EventBus(asio::any_io_executor executor) :
     executor_(executor) {}
 
 bool EventBus::remove(std::string_view topic) {
-    auto it = streams_.find(std::string{topic});
+    auto it = streams_.find(topic);
     if (it == streams_.end()) {
         return false;
     }
@@ -114,7 +114,8 @@ void EventBridge::handleLLMToken(const neograph::graph::GraphEvent& event) {
     } else if (event.data.is_object()) {
         neograph::ChatStreamChunk chunk;
         neograph::from_json(event.data, chunk);
-        token              = std::move(chunk.data);
+        token = std::move(chunk.data);
+        // 类型切换时段落结束，发送其生成耗时
         sendDuration       = (lastChatChunkType_ != chunk.type);
         lastChatChunkType_ = chunk.type;
         if (chunk.type == neograph::ChatStreamChunk::TYPE_THINKING) {
@@ -127,7 +128,7 @@ void EventBridge::handleLLMToken(const neograph::graph::GraphEvent& event) {
     // 累计估算 token 数: 批量估算 (每16 token推送窗口再估, 减少 countTokens 遍历)
     // 此处仅累加字符数, 推送时统一折算 token, 降低每 token 的估算开销
     tpsPendingChars_ += token.size();
-    // 每 16 token 或窗口到期再做一次 estimateTokens 批量折算
+    // 每 16 token (估算 len * 4) 或窗口到期再做一次 countTokens 批量折算
     constexpr size_t kBatchChars = 64;
     if (tpsPendingChars_ >= kBatchChars) {
         // 近似折算: 批量按比例估算, 避免逐 token 遍历
@@ -137,12 +138,12 @@ void EventBridge::handleLLMToken(const neograph::graph::GraphEvent& event) {
     // 定时推送一次平均速度 (token/s) - push 时会把 pending 一并结算
     pushTpsIfDue();
 
-    // 总线发布 (无订阅者时内部跳过, 零开销)
+    // 总线发布
     publishModelToken(token, kind);
 
     emitDelta(agentxx::agent::Delta{
         .type        = (lastChatChunkType_ == neograph::ChatStreamChunk::TYPE_THINKING)
-                           ? agentxx::agent::Delta::Type::ThinkingToken
+                           ? agentxx::agent::Delta::Type::ThinkToken
                            : agentxx::agent::Delta::Type::TextToken,
         .text        = std::move(token),
         .startTimeMs = nodeStartTimeMs_,
@@ -421,8 +422,9 @@ void EventBridge::handleError(const neograph::graph::GraphEvent& event) {
     publishError(std::move(msg), event.node_name);
 }
 
-double EventBridge::estimateTokens(std::string_view text) {
+double EventBridge::countTokens(std::string_view text) {
     // 优先使用 summarization 中间件的 token 计算 (与上下文压缩/上下文统计同口径)
+    // TODO: 由 eventbus 解耦
     if (auto ctxPtr = ctx_.lock()) {
         if (ctxPtr->summarizationMiddleware) {
             return static_cast<double>(ctxPtr->summarizationMiddleware->countTokensForUtf8Str(text)
@@ -500,8 +502,7 @@ void EventBridge::publishModelToken(const std::string& token, std::string_view k
     // 无订阅者时跳过: 避免每个 token 创建一次无消费者的协程
     // (ModelToken topic 当前无生产订阅者, 该检查使热路径零开销)
     if (false
-        == bus.hasSubscribers<agentxx::events::EventModelToken>(agentxx::events::Topic::ModelToken
-        )) {
+        == bus.hasListeners<agentxx::events::EventModelToken>(agentxx::events::Topic::ModelToken)) {
         return;
     }
     asio::co_spawn(
@@ -533,7 +534,7 @@ void EventBridge::publishError(std::string message, std::string where) {
     auto  busPtr = ctxPtr->bus;
     auto& bus    = *busPtr;
     // 无订阅者时跳过 (与 ModelToken 一致, 避免无效协程创建)
-    if (false == bus.hasSubscribers<agentxx::events::EventError>(agentxx::events::Topic::Error)) {
+    if (false == bus.hasListeners<agentxx::events::EventError>(agentxx::events::Topic::Error)) {
         return;
     }
     asio::co_spawn(
@@ -557,5 +558,5 @@ void EventBridge::publishError(std::string message, std::string where) {
     );
 }
 
-} // namespace middleware
+} // namespace event
 } // namespace agentxx

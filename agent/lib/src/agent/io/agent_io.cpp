@@ -1,7 +1,7 @@
 #include "agentxx/agent/io/agent_io.h"
 
-#include "agentxx/middlewares/event_stream.h"
-#include "agentxx/middlewares/events.h"
+#include "agentxx/event/event_stream.h"
+#include "agentxx/event/events.h"
 #include "agentxx/middlewares/middleware.h"
 
 namespace agentxx {
@@ -140,7 +140,7 @@ void AgentIOBase::unregisterFromBus() {
     }
 }
 
-void AgentIOBase::registerOnBus(std::shared_ptr<agentxx::middleware::EventBus> sessionBus) {
+void AgentIOBase::registerOnBus(std::shared_ptr<agentxx::event::EventBus> sessionBus) {
     if (!sessionBus) {
         return;
     }
