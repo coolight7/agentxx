@@ -488,7 +488,7 @@ asio::awaitable<std::string> SummarizationMiddlewareHandle::doSummarizeWithLLM(
     auto args = neograph::json{
         {"subagent",             "subagent_task"                               },
         {"messages",             std::move(reqMsgsJson)                        },
-        {"session_id",           std::string{sessionId}                        },
+        {"sessionId",            std::string{sessionId}                        },
         {"tools",                neograph::json::array({"agentxx_share_store"})},
         {"enable_summarization", false                                         },
     };

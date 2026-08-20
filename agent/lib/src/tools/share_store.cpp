@@ -107,9 +107,9 @@ neograph::ChatTool SessionShareStoreTool::get_definition() const {
 }
 
 asio::awaitable<std::string> SessionShareStoreTool::execute_async(const neograph::json& arguments) {
-    auto session_id = arguments.value("session_id", std::string{});
+    auto session_id = arguments.value("sessionId", std::string{});
     if (session_id.empty()) {
-        co_return R"({"error":"Toolcall inner error, need `session_id`"})";
+        co_return R"({"error":"Toolcall inner error, need `sessionId`"})";
     }
     size_t text_id          = arguments.value<size_t>("id", 0);
     auto   text_line_offset = arguments.value<int64_t>("line_offset", -1);

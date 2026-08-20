@@ -286,7 +286,7 @@ asio::awaitable<std::string> PluginTool::execute_async(const neograph::json& arg
 
     // 参数: toolcall 分发路径已注入 session_id/tool_call_id; call_tool 路径由调用方提供
     std::string argsJson   = arguments.dump();
-    std::string sessionId  = arguments.value("session_id", std::string{});
+    std::string sessionId  = arguments.value("sessionId", std::string{});
     std::string toolCallId = arguments.value("tool_call_id", std::string{});
 
     // 取消令牌 (经 Session 按 session_id 取; 无会话时为空)
@@ -404,7 +404,7 @@ asio::awaitable<void>
 
     // 节点输入摘要 JSON (观测用途; out_json 一期预留)
     neograph::json summary = neograph::json::object();
-    summary["session_id"]  = in.ctx.thread_id;
+    summary["sessionId"]   = in.ctx.thread_id;
     summary["point"]       = static_cast<int>(point);
     try {
         auto msgs                 = in.state.get_messages();
@@ -877,7 +877,7 @@ static char* xx_call_tool(
                 return nullptr;
             }
         }
-        parsed["session_id"]   = tid;
+        parsed["sessionId"]  = tid;
         parsed["tool_call_id"] = fmt::format("plugin_call_{}", ++g_pluginCallSeq);
 
         const auto& spec    = pluginTool->spec();

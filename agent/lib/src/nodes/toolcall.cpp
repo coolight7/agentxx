@@ -417,7 +417,7 @@ asio::awaitable<std::string> ToolcallWrapNode::execTool(
         auto [targetIndex, lineCount, lastLineIndex]
             = agentxx::util::findIndexAndLastLineIndexByUtf8Length(result, limitLength);
         if (targetIndex > 0) {
-            const auto session_id = args.value("session_id", std::string{});
+            const auto session_id = args.value("sessionId", std::string{});
             assert(false == session_id.empty());
             // 超过限制长度，截断并存储原文
             auto storeId
@@ -576,8 +576,8 @@ asio::awaitable<void> ToolcallWrapNode::baseRun(
                             auto args = neograph::json::parse(tc.arguments);
                             if (args.is_object()) {
                                 // append arg `session_id`
-                                args["session_id"] = in.ctx.thread_id;
-                                // - 注入 tool_call_id 供 tool 使用 (如 agentxx_subagent
+                                args["sessionId"] = in.ctx.thread_id;
+                                // - 注入 toolCallId 供 tool 使用 (如 agentxx_subagent
                                 // 的中断 resultId)
                                 args["tool_call_id"] = tc.id;
                             }
@@ -621,10 +621,10 @@ asio::awaitable<void> ToolcallWrapNode::baseRun(
                         auto args = neograph::json::parse(tc.arguments);
                         if (args.is_object()) {
                             // append arg `session_id`
-                            args["session_id"] = in.ctx.thread_id;
+                            args["sessionId"] = in.ctx.thread_id;
                             // - 注入 tool_call_id 供 tool 使用 (如 agentxx_subagent 的中断
                             // resultId)
-                            args["toolCallId"] = tc.id;
+                            args["tool_call_id"] = tc.id;
                         }
                         tool_msg.content = co_await execTool(*it, args, in.ctx.cancel_token);
                         // 取消埋点: tool 执行完成后检查, 避免取消后继续收集/执行后续 tool

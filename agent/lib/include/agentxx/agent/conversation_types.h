@@ -351,10 +351,10 @@ inline neograph::json ViewMessage::toJson() const {
     if (tool) {
         neograph::json t = neograph::json::object();
         if (!tool->toolName.empty()) {
-            t["toolName"] = tool->toolName;
+            t["tool_name"] = tool->toolName;
         }
         if (!tool->toolCallId.empty()) {
-            t["toolCallId"] = tool->toolCallId;
+            t["tool_call_id"] = tool->toolCallId;
         }
         if (!tool->toolResult.empty()) {
             t["tool_result"] = tool->toolResult;
@@ -424,8 +424,8 @@ inline ViewMessage ViewMessage::fromJson(const neograph::json& j) {
             ViewMessage::ToolData t;
             if (j.contains("tool")) {
                 const auto& tj = j["tool"];
-                t.toolName     = tj.value("toolName", std::string{});
-                t.toolCallId   = tj.value("toolCallId", std::string{});
+                t.toolName     = tj.value("tool_name", std::string{});
+                t.toolCallId   = tj.value("tool_call_id", std::string{});
                 t.toolResult   = tj.value("tool_result", std::string{});
                 t.diff         = tj.value("diff", std::string{});
                 t.toolFinished = tj.value("tool_finished", false);
