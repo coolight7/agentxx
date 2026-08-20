@@ -16,6 +16,7 @@
 #include <chrono>
 #include <cstdint>
 #include <memory>
+#include <random>
 
 #ifdef _WIN32
 #include <windows.h> // GetCurrentProcessId
@@ -98,55 +99,42 @@ agentxx::agent::PluginSide pluginSideFromString(const std::string& s) {
 // ---------------------------------------------------------------------------
 
 void FfiAgentRuntime::FfiLogSink::onLog(const util::LogEntry& entry) {
-    // 仅收集 Info(2)/Warn(3)/Error(4), 避免 trace/debug 淹没环形缓冲
-    const int lv = static_cast<int>(entry.level);
-    if (lv < 2 || lv > 4) {
-        return;
-    }
-    owner_.pushLogItem(LogItem{lv, entry.message});
+    owner_.pushLogItem(LogItem{
+        static_cast<int>(entry.level),
+        entry.message,
+    });
 }
 
 void FfiAgentRuntime::pushLogItem(LogItem item) {
     std::lock_guard<std::mutex> lock(logMutex_);
-    logRing_.push_back(std::move(item));
-    while (logRing_.size() > kLogRingCap) {
+    if (logRing_.size() >= kLogRingCap) {
         logRing_.pop_front();
     }
-}
-
-static const char* logLevelName(int lv) {
-    switch (lv) {
-        case 0:
-            return "trace";
-        case 1:
-            return "debug";
-        case 2:
-            return "info";
-        case 3:
-            return "warn";
-        case 4:
-            return "error";
-        default:
-            return "out";
-    }
+    logRing_.push_back(std::move(item));
 }
 
 std::string FfiAgentRuntime::drainLogs() {
-    std::lock_guard<std::mutex> lock(logMutex_);
-    neograph::json              arr = neograph::json::array();
-    for (const auto& item : logRing_) {
-        arr.push_back(neograph::json{
-            {"level",   logLevelName(item.level)},
-            {"message", item.message            },
-        });
+    std::deque<LogItem> drained;
+    {
+        std::lock_guard<std::mutex> lock(logMutex_);
+        drained.swap(logRing_);
     }
-    logRing_.clear();
+    neograph::json arr = neograph::json::array();
+    for (const auto& item : drained) {
+        neograph::json entry;
+        entry["level"]   = item.level;
+        entry["message"] = item.message;
+        arr.push_back(std::move(entry));
+    }
     return arr.dump();
 }
 
 // ---------------------------------------------------------------------------
-// 构造 / 配置
+// 构造 / 创建
 // ---------------------------------------------------------------------------
+
+FfiAgentRuntime::FfiAgentRuntime() :
+    logSink_(std::make_shared<FfiLogSink>(*this)) {}
 
 std::string FfiAgentRuntime::generateSessionId() {
     const auto ts = std::chrono::high_resolution_clock::now().time_since_epoch().count();
@@ -155,12 +143,17 @@ std::string FfiAgentRuntime::generateSessionId() {
 #else
     const long pid = static_cast<long>(::getpid());
 #endif
-    static std::atomic<uint64_t> seq{0};
-    return fmt::format("ffi-{:x}-{}-{:08x}", ts, pid, seq.fetch_add(1, std::memory_order_relaxed));
+    static std::atomic<uint32_t> seq{0};
+    const uint32_t               cnt = seq.fetch_add(1, std::memory_order_relaxed);
+    uint32_t                     seed = 0;
+    try {
+        std::random_device rd;
+        seed = rd();
+    } catch (...) {
+        seed = static_cast<uint32_t>(ts);
+    }
+    return fmt::format("ffi-{:x}-{}-{:08x}-{:04x}", ts, pid, seed, cnt);
 }
-
-FfiAgentRuntime::FfiAgentRuntime() :
-    sessionId_(generateSessionId()) {}
 
 std::shared_ptr<FfiAgentRuntime> FfiAgentRuntime::create(
     const char*             config_json,
@@ -172,11 +165,10 @@ std::shared_ptr<FfiAgentRuntime> FfiAgentRuntime::create(
     if (cb != nullptr) {
         rt->callbacks_ = *cb;
     }
+    rt->sessionId_ = generateSessionId();
     if (!rt->buildConfigs(config_json, model_json, err)) {
         return nullptr;
     }
-    // 日志 ring sink 在 start 时接入 LogDispatcher
-    rt->logSink_ = std::make_shared<FfiLogSink>(*rt);
     return rt;
 }
 
@@ -187,17 +179,13 @@ bool FfiAgentRuntime::buildConfigs(
 ) {
     auto config = std::make_shared<AgentConfig>();
 
-    // ---- AgentConfig 覆盖 JSON ----
-    neograph::json cfgJ = neograph::json::object();
+    // ---- 顶层配置 (config_json) ----
+    neograph::json cfgJ;
     if (config_json != nullptr && *config_json != '\0') {
         try {
             cfgJ = neograph::json::parse(config_json);
         } catch (const std::exception& e) {
             err = fmt::format("config_json 非法 JSON: {}", e.what());
-            return false;
-        }
-        if (!cfgJ.is_object()) {
-            err = "config_json 须为 JSON 对象";
             return false;
         }
         config->dataDir               = jsonStr(cfgJ, "dataDir", "");
@@ -312,22 +300,33 @@ bool FfiAgentRuntime::buildConfigs(
         err = fmt::format("CodeAgent 构造失败: {}", e.what());
         return false;
     }
-    // 复用 CodeAgent 自带的 io_context (BaseAgent 构造函数创建)
-    ioCtx_ = agent_->ioCtx;
+    // 复用 CodeAgent 自带的 io_context 作为 Agent-IO 线程执行器
+    agentIoCtx_ = agent_->ioCtx;
     return true;
 }
 
 FfiAgentRuntime::~FfiAgentRuntime() {
-    // 兜底: 若未显式 stop (异常路径), 保证 io 线程退出
+    // 兜底: 若未显式 stop, 保证内部线程与所有资源安全退出与释放
     if (state() != State::Stopped && state() != State::Created) {
-        if (!isOnAgentThread()) {
+        if (!isOnAnyIoThread()) {
             stopInternal();
         }
+    } else {
+        // Created 状态直接清理对象
+        clientIO_.reset();
+        serverIO_.reset();
+        host_.reset();
+        agent_.reset();
     }
 }
 
 bool FfiAgentRuntime::isOnAgentThread() const {
-    const auto tid = ioThread_.get_id();
+    const auto tid = agentThread_.get_id();
+    return tid != std::thread::id{} && std::this_thread::get_id() == tid;
+}
+
+bool FfiAgentRuntime::isOnClientThread() const {
+    const auto tid = clientThread_.get_id();
     return tid != std::thread::id{} && std::this_thread::get_id() == tid;
 }
 
@@ -342,79 +341,78 @@ int FfiAgentRuntime::start(std::string& err) {
         return AGENTXX_ERR_STATE;
     }
 
-    const auto agentEx = agent_->ioCtx->get_executor();
+    clientIoCtx_       = std::make_shared<asio::io_context>();
+    const auto agentEx = agentIoCtx_->get_executor();
+    const auto clientEx = clientIoCtx_->get_executor();
 
-    // 进程内传输对 (client 端点 / 服务端点同 executor, 单 io 线程)
-    auto [clientTrans, serverTrans] = agent::ChannelAgentIOTransport::makePair(agentEx, agentEx);
+    // 进程内传输对 (跨 Client-IO 线程与 Agent-IO 线程)
+    auto [clientTrans, serverTrans] = agent::ChannelAgentIOTransport::makePair(clientEx, agentEx);
 
-    // FFI client 端点
-    clientIO_ = std::make_shared<FfiClientAgentIO>(agentEx, callbacks_);
+    // FFI client 端点 (绑定 clientEx)
+    clientIO_ = std::make_shared<FfiClientAgentIO>(clientEx, callbacks_);
     clientIO_->setSessionId(sessionId_);
     clientIO_->setTransport(std::move(clientTrans));
 
-    // 服务端点 (被 BaseAgent 驱动)
+    // 服务端点 (绑定 agentEx, 被 BaseAgent 驱动)
     agent::SessionServerAgentIO::Config scCfg;
     scCfg.sessionId        = sessionId_;
     scCfg.interruptTimeout = interruptTimeout_;
     serverIO_              = std::make_shared<agent::SessionServerAgentIO>(agentEx, agent_, scCfg);
     serverIO_->setTransport(std::move(serverTrans));
 
-    // 启动进度 → 日志环形缓冲 (EVT_READY 前的启动过程日志, 可经 drain 取走)
+    // 启动进度 → 日志环形缓冲
     agent_->agentContext->initNotifier = [this](std::string_view step) {
         pushLogItem(LogItem{2, fmt::format("[startup] {}", step)});
     };
 
-    // 同步应答路由: io 线程收到 WireModelInfo/ContextMessages/SessionList 时完成等待方
+    // 同步应答路由: client io 线程收到 Wire 响应时完成对应 promise
     auto weakSelf          = std::weak_ptr<FfiAgentRuntime>{shared_from_this()};
     clientIO_->onSyncReply = [weakSelf](FfiClientAgentIO::SyncKind kind, neograph::json j) {
         if (auto sp = weakSelf.lock()) {
-            sp->onSyncReplyOnIoThread(kind, std::move(j));
+            sp->onSyncReplyOnClientThread(kind, std::move(j));
         }
     };
 
     // 接入日志分发器
     util::LogDispatcher::instance().addSink(logSink_);
 
-    // work guard 必须先于 io 线程创建, 避免 run() 因事件队列为空立即返回
-    workGuard_.emplace(asio::make_work_guard(*ioCtx_));
-    ioThread_ = std::thread([this]() {
-        ioCtx_->run();
-    });
-    clientIO_->setAgentThreadId(ioThread_.get_id());
+    // 创建 work guards
+    agentWorkGuard_.emplace(asio::make_work_guard(*agentIoCtx_));
+    clientWorkGuard_.emplace(asio::make_work_guard(*clientIoCtx_));
 
-    // 装配与启动协程 (io 线程执行)
-    asio::post(*ioCtx_, [self = shared_from_this()]() {
-        self->startOnIoThread();
+    // 启动两条工作线程
+    agentThread_ = std::thread([this]() {
+        agentIoCtx_->run();
+    });
+    clientThread_ = std::thread([this]() {
+        clientIoCtx_->run();
+    });
+
+    clientIO_->setAgentThreadId(agentThread_.get_id());
+    clientIO_->setClientThreadId(clientThread_.get_id());
+
+    // 1) Agent-IO 线程协程: server 接收循环 + init / main
+    asio::post(*agentIoCtx_, [self = shared_from_this()]() {
+        // 先启动 server 接收循环 (init 期间请求如 WireHello/WireGetModel 不排队)
+        asio::co_spawn(*self->agentIoCtx_, self->serverIO_->runTransportLoop(), asio::detached);
+        // 主协程: init → host → ready → serverIO->run()
+        asio::co_spawn(
+            *self->agentIoCtx_,
+            [self]() -> asio::awaitable<void> {
+                co_await self->runAgentMain();
+            },
+            asio::detached
+        );
+    });
+
+    // 2) Client-IO 线程协程: client 接收循环 + hello
+    asio::post(*clientIoCtx_, [self = shared_from_this()]() {
+        asio::co_spawn(*self->clientIoCtx_, self->clientIO_->runTransportLoop(), asio::detached);
+        self->clientIO_->sendToPeer(agent::WireHello{self->sessionId_, "", 0, ""});
+        self->clientIO_->sendToPeer(agent::WireGetModel{self->sessionId_});
     });
 
     return AGENTXX_OK;
-}
-
-void FfiAgentRuntime::startOnIoThread() {
-    // 复刻 setupLocalUnifiedDirect (mode_runners.cpp):
-    // 1) transport 接收循环先于 init() 启动 —— init 期间的客户端请求
-    //    (WireHello/WireGetModel) 有消费方, 不排队积压
-    asio::co_spawn(*ioCtx_, serverIO_->runTransportLoop(), asio::detached);
-    // 2) 主协程: init → host → 组件信息 → ready → 会话驱动循环
-    asio::co_spawn(
-        *ioCtx_,
-        [self = shared_from_this()]() -> asio::awaitable<void> {
-            co_await self->runAgentMain();
-        },
-        asio::detached
-    );
-    // 3) client 接收循环 (事件分发到 C 回调)
-    auto clientIO = clientIO_;
-    asio::co_spawn(
-        *ioCtx_,
-        [clientIO]() -> asio::awaitable<void> {
-            co_await clientIO->runTransportLoop();
-        },
-        asio::detached
-    );
-    // 4) hello 触发服务端全量同步/重放; 请求模型信息供 EVT_MODEL_INFO
-    clientIO_->sendToPeer(agent::WireHello{sessionId_, "", 0, ""});
-    clientIO_->sendToPeer(agent::WireGetModel{sessionId_});
 }
 
 asio::awaitable<void> FfiAgentRuntime::runAgentMain() {
@@ -445,17 +443,16 @@ asio::awaitable<void> FfiAgentRuntime::runAgentMain() {
     host_         = agentxx::agent::AgentHost::create(hostCfg);
     host_->attachRoot(agent_);
 
-    // 启动组件信息 (init 完成后拉取; 响应经 EVT_COMPONENTS 通知)
-    clientIO_->requestAppendComponentInfo(sessionId_);
+    // 启动组件信息 (跨线程请求 Client 端点发送 WireAppendComponentInfo)
+    asio::post(*clientIoCtx_, [clientIO = clientIO_, sid = sessionId_]() {
+        clientIO->requestAppendComponentInfo(sid);
+    });
 
-    // 通知客户端: 服务端就绪 (EVT_READY; 用户输入自此可被有效消费)。
-    // 须先置 Ready 再通知: 回调内 (宿主收到 EVT_READY 后) 立即发起的
-    // send_input 等操作依赖状态机允许投递, 避免竞态返回 ERR_STATE
+    // 通知客户端: 服务端就绪 (EVT_READY; 先置 Ready 状态避免回调内操作遇到 ERR_STATE)
     state_ = State::Ready;
     clientIO_->notifyServerReady();
 
     // 会话驱动循环: 消费用户输入 → runTurnAsync → 推送事件
-    // (持续运行直到 stop(); 停止后协程结束)
     co_await serverIO_->run();
 }
 
@@ -465,46 +462,81 @@ void FfiAgentRuntime::stopInternal() {
         return;
     }
     if (st == State::Created) {
-        // 从未启动: 直接置 Stopped
         state_ = State::Stopped;
         return;
     }
     state_ = State::Stopping;
 
-    // 1) 失败全部 FFI 侧挂起中断 (关闭 channel, 等待协程结束)
-    clientIO_->failAllPendingInterrupts();
-
-    // 2) 关闭 client 传输 (线程安全) → client 接收循环结束
-    if (clientIO_->transport()) {
-        clientIO_->transport()->close();
+    // 1) Client 侧: 中止挂起中断并关闭 client transport
+    if (clientIO_) {
+        clientIO_->failAllPendingInterrupts();
+        if (clientIO_->transport()) {
+            clientIO_->transport()->close();
+        }
     }
 
-    // 3) 停止服务端点 (dispatch 到 io 线程执行 stopImpl: 关闭输入 channel/
-    //    取消轮次/失败 pending); run() 循环随之退出
-    serverIO_->stop();
-
-    // 4) 等待 run() 退出 (io 线程仍在运行, 处理 stopImpl)
-    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{20};
-    while (serverIO_->running() && std::chrono::steady_clock::now() < deadline) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(5));
-    }
-    if (serverIO_->running()) {
-        XX_LOGW("[ffi] stop: serverIO run loop did not exit within 20s, forcing stop");
+    // 2) Server 侧: 停止服务端点 (dispatch 到 agent io 线程执行 stopImpl)
+    if (serverIO_) {
+        serverIO_->stop();
     }
 
-    // 5) 摘除日志 sink / 释放 work guard / 停止并 join io 线程
+    // 3) 等待 serverIO run() 退出 (最长 20s)
+    if (serverIO_) {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{20};
+        while (serverIO_->running() && std::chrono::steady_clock::now() < deadline) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        if (serverIO_->running()) {
+            XX_LOGW("[ffi] stop: serverIO run loop did not exit within 20s, forcing stop");
+        }
+    }
+
+    // 4) 摘除日志 sink
     util::LogDispatcher::instance().removeSink(logSink_);
-    workGuard_.reset();
-    ioCtx_->stop();
-    if (ioThread_.joinable()) {
-        ioThread_.join();
+
+    // 5) 停止并 join Agent-IO 线程
+    if (agentIoCtx_) {
+        agentWorkGuard_.reset();
+        agentIoCtx_->stop();
     }
+    if (agentThread_.joinable()) {
+        agentThread_.join();
+    }
+
+    // 6) 停止并 join Client-IO 线程
+    if (clientIoCtx_) {
+        clientWorkGuard_.reset();
+        clientIoCtx_->stop();
+    }
+    if (clientThread_.joinable()) {
+        clientThread_.join();
+    }
+
+    // 7) 取消所有残留的同步查询等待
+    {
+        std::lock_guard<std::mutex> lock(syncMutex_);
+        for (auto& [kind, q] : syncWaits_) {
+            for (auto& w : q) {
+                try {
+                    w->promise.set_value("{}");
+                } catch (...) {}
+            }
+            q.clear();
+        }
+    }
+
+    // 8) 显式释放所有持有 transport/channel 的对象, 确保它们在 ioCtx 析构前完成清理
+    clientIO_.reset();
+    serverIO_.reset();
+    host_.reset();
+    agent_.reset();
+
     state_ = State::Stopped;
 }
 
 int FfiAgentRuntime::stop(std::string& err) {
-    if (isOnAgentThread()) {
-        err = "不能在 agent io 线程 (事件回调) 内调用 stop; 请从宿主线程调用";
+    if (isOnAnyIoThread()) {
+        err = "不能在 agent/client io 线程 (事件回调) 内调用 stop; 请从宿主线程调用";
         return AGENTXX_ERR_STATE;
     }
     stopInternal();
@@ -512,8 +544,8 @@ int FfiAgentRuntime::stop(std::string& err) {
 }
 
 int FfiAgentRuntime::destroy(std::string& err) {
-    if (isOnAgentThread()) {
-        err = "不能在 agent io 线程 (事件回调) 内调用 destroy; 请从宿主线程调用";
+    if (isOnAnyIoThread()) {
+        err = "不能在 agent/client io 线程 (事件回调) 内调用 destroy; 请从宿主线程调用";
         return AGENTXX_ERR_STATE;
     }
     stopInternal();
@@ -521,12 +553,11 @@ int FfiAgentRuntime::destroy(std::string& err) {
 }
 
 // ---------------------------------------------------------------------------
-// 会话交互 (投递 io 线程)
+// 会话交互 (投递 client io 线程)
 // ---------------------------------------------------------------------------
 
 namespace {
 
-/// 状态可用性检查: Starting/Ready/Failed 可投递 (Failed 仅允许清理类操作)
 bool stateUsable(FfiAgentRuntime::State s) {
     return s == FfiAgentRuntime::State::Starting || s == FfiAgentRuntime::State::Ready;
 }
@@ -545,10 +576,12 @@ int FfiAgentRuntime::sendInput(std::string_view text, std::string& err) {
     auto clientIO = clientIO_;
     auto tid      = sessionId_;
     auto textStr  = std::string{text};
-    // 与 TUI/CLI 同路径: WireUserInput → 服务端 inputChannel
-    asio::post(*ioCtx_, [clientIO, tid = std::move(tid), text = std::move(textStr)]() mutable {
-        clientIO->sendToPeer(agent::WireUserInput{std::move(tid), std::move(text)});
-    });
+    asio::post(
+        *clientIoCtx_,
+        [clientIO, tid = std::move(tid), text = std::move(textStr)]() mutable {
+            clientIO->sendToPeer(agent::WireUserInput{std::move(tid), std::move(text)});
+        }
+    );
     return AGENTXX_OK;
 }
 
@@ -559,7 +592,7 @@ int FfiAgentRuntime::cancel(std::string& err) {
     }
     auto clientIO = clientIO_;
     auto tid      = sessionId_;
-    asio::post(*ioCtx_, [clientIO, tid = std::move(tid)]() mutable {
+    asio::post(*clientIoCtx_, [clientIO, tid = std::move(tid)]() mutable {
         clientIO->sendToPeer(agent::WireCancel{std::move(tid)});
     });
     return AGENTXX_OK;
@@ -577,7 +610,7 @@ int FfiAgentRuntime::selectModel(std::string_view modelName, std::string& err) {
     auto clientIO = clientIO_;
     auto tid      = sessionId_;
     auto model    = std::string{modelName};
-    asio::post(*ioCtx_, [clientIO, tid = std::move(tid), model = std::move(model)]() mutable {
+    asio::post(*clientIoCtx_, [clientIO, tid = std::move(tid), model = std::move(model)]() mutable {
         clientIO->sendToPeer(agent::WireSelectModel{std::move(tid), std::move(model)});
     });
     return AGENTXX_OK;
@@ -596,7 +629,7 @@ int FfiAgentRuntime::setPermission(std::string_view path, int allow, int op, std
     auto tid      = sessionId_;
     auto pathStr  = std::string{path};
     asio::post(
-        *ioCtx_,
+        *clientIoCtx_,
         [clientIO, tid = std::move(tid), path = std::move(pathStr), allow, op]() mutable {
             clientIO->sendToPeer(agent::WireSetPermission{
                 std::move(tid),
@@ -620,7 +653,9 @@ int FfiAgentRuntime::switchSession(std::string_view sessionId, std::string& err)
     }
     auto clientIO = clientIO_;
     auto newTid   = std::string{sessionId};
-    asio::post(*ioCtx_, [clientIO, newTid = std::move(newTid)]() mutable {
+    asio::post(*clientIoCtx_, [this, clientIO, newTid]() mutable {
+        sessionId_ = newTid;
+        clientIO->setSessionId(newTid);
         clientIO->sendToPeer(agent::WireSwitchSession{std::move(newTid)});
     });
     return AGENTXX_OK;
@@ -630,7 +665,7 @@ int FfiAgentRuntime::switchSession(std::string_view sessionId, std::string& err)
 // 同步查询
 // ---------------------------------------------------------------------------
 
-void FfiAgentRuntime::onSyncReplyOnIoThread(FfiClientAgentIO::SyncKind kind, neograph::json j) {
+void FfiAgentRuntime::onSyncReplyOnClientThread(FfiClientAgentIO::SyncKind kind, neograph::json j) {
     std::shared_ptr<SyncWait> waiter;
     {
         std::lock_guard<std::mutex> lock(syncMutex_);
@@ -659,7 +694,7 @@ std::string FfiAgentRuntime::syncQuery(
         std::lock_guard<std::mutex> lock(syncMutex_);
         syncWaits_[kind].push_back(waiter);
     }
-    asio::post(*ioCtx_, std::move(send));
+    asio::post(*clientIoCtx_, std::move(send));
 
     constexpr auto kTimeout = std::chrono::seconds{10};
     auto           fut      = waiter->promise.get_future();
@@ -719,40 +754,37 @@ std::string FfiAgentRuntime::listSessions(std::string& err) {
 // ---------------------------------------------------------------------------
 
 bool FfiAgentRuntime::hasPendingInterrupt(int64_t interruptId) const {
-    return clientIO_ && clientIO_->hasPendingInterrupt(interruptId);
+    if (!clientIO_) {
+        return false;
+    }
+    return clientIO_->hasPendingInterrupt(interruptId);
 }
 
 int FfiAgentRuntime::interruptRespond(
-    int64_t      interruptId,
-    const char*  valuesJson,
+    int64_t     interruptId,
+    const char* valuesJson,
     std::string& err
 ) {
     if (!stateUsable(state())) {
         err = "状态错误: 未启动或已停止";
         return AGENTXX_ERR_STATE;
     }
-    if (valuesJson == nullptr || *valuesJson == '\0') {
-        err = "values_json 为空";
-        return AGENTXX_ERR_INVALID;
-    }
     if (!hasPendingInterrupt(interruptId)) {
-        err = "中断 id 不存在或已应答/已过期";
+        err = fmt::format("中断 #{} 不存在、已应答或已过期", interruptId);
         return AGENTXX_ERR_INTERRUPT;
     }
-    neograph::json values;
-    try {
-        values = neograph::json::parse(valuesJson);
-    } catch (const std::exception& e) {
-        err = fmt::format("values_json 非法 JSON: {}", e.what());
-        return AGENTXX_ERR_JSON;
-    }
-    if (!values.is_array()) {
-        err = "values_json 须为 JSON 数组 (与 inputs 顺序对应)";
-        return AGENTXX_ERR_JSON;
+    neograph::json val = neograph::json::array();
+    if (valuesJson != nullptr && *valuesJson != '\0') {
+        try {
+            val = neograph::json::parse(valuesJson);
+        } catch (const std::exception& e) {
+            err = fmt::format("valuesJson 非法 JSON: {}", e.what());
+            return AGENTXX_ERR_JSON;
+        }
     }
     auto clientIO = clientIO_;
-    asio::post(*ioCtx_, [clientIO, interruptId, values = std::move(values)]() mutable {
-        clientIO->submitInterruptResponse(interruptId, std::move(values));
+    asio::post(*clientIoCtx_, [clientIO, interruptId, val = std::move(val)]() mutable {
+        clientIO->submitInterruptResponse(interruptId, std::move(val));
     });
     return AGENTXX_OK;
 }
