@@ -69,6 +69,7 @@ models:
       stream: true
       # 内部配置字段, 仅 agentxx 使用, 不会发送给上游 API
       preserve_thinking: true
+      reasoning_effort: "high"
 
   - name: openai_response_full_example
     type: "openai-responses" # 必选；模型类型，根据 api 类型选择 openai / openai-responses / anthropic
@@ -140,13 +141,25 @@ models:
     api_key: "${OPENCODE_API_KEY}"
     model_name: "gpt-5.6-luna"
     # 注意: 该模型上游不支持 include:["reasoning.summary_text"],
-    # send_thinking 必须为 false (true 会触发 HTTP 400 invalid_prompt)
+    # send_thinking 必须为 false (否则会触发 HTTP 400 invalid_prompt)
     send_thinking: false
     model_context_max_token: 1000000
     extra_api_config:
       reasoning:
         effort: max
       stream: true
+  - name: gemini-3.7-flash-high-responses
+    type: "openai-responses"
+    base_url: "http://172.29.48.1:8317/v1"
+    api_key: "${GEMINI_API_KEY}"
+    model_name: "gemini-3.7-flash-high"
+    model_context_max_token: 1000000
+    send_thinking: true
+    extra_api_config:
+      stream: true
+      preserve_thinking: true 
+      reasoning:
+        effort: max
   - name: gemini-3.7-flash-high
     type: "openai"
     base_url: "http://172.29.48.1:8317/v1"
@@ -156,6 +169,8 @@ models:
     send_thinking: true
     extra_api_config:
       stream: true
+      preserve_thinking: true 
+      reasoning_effort: max
   - name: opencode-glm-5.3
     type: "openai"
     base_url: "https://opencode.ai/zen/go/v1"
@@ -165,6 +180,7 @@ models:
     send_thinking: true
     extra_api_config:
       stream: true
+      reasoning_effort: "xhigh"
   - name: local
     type: "openai"
     base_url: "http://172.29.48.1:7070/v1"

@@ -1380,7 +1380,7 @@ void TUIClientAgentIO::onDelta(const agentxx::agent::Delta& delta) {
                 m->tool->toolCallId   = delta.toolCallId;
                 m->text               = delta.arguments;
                 m->tool->toolFinished = false;
-                m->collapsed          = false;
+                m->collapsed          = true;
                 m->startTimeMs        = delta.startTimeMs;
                 st.messages.push_back(std::move(m));
                 st.isStreaming = true;

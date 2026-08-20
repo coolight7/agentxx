@@ -1194,26 +1194,27 @@ Element MessageListComponent::buildMessageBlock(
             }
             if (!expanded) {
                 // 折叠状态
-                if (!finished) {
-                    header.push_back(text("running...") | color(theme.toolColor) | dim);
+                auto headerText = buildToolHeaderSummary(msg.tool->toolName, msg.text);
+                if (false == headerText.empty()) {
+                    // 特化渲染 (摘要可能超宽: xflex_shrink 右缘裁剪, 不压缩前缀)
+                    header.push_back(
+                        text(std::move(headerText)) | color(theme.toolColor) | dim
+                        | xflex_shrink
+                    );
+                } else if (!finished) {
+                    header.push_back(
+                        text(fmt::format("{} running...", msg.tool->toolName))
+                        | color(theme.toolColor) | dim | xflex_shrink
+                    );
                 } else {
-                    auto headerText = buildToolHeaderSummary(msg.tool->toolName, msg.text);
-                    if (false == headerText.empty()) {
-                        // 特化渲染 (摘要可能超宽: xflex_shrink 右缘裁剪, 不压缩前缀)
-                        header.push_back(
-                            text(std::move(headerText)) | color(theme.toolColor) | dim
-                            | xflex_shrink
-                        );
-                    } else {
-                        header.push_back(
-                            text(fmt::format(
-                                "{} {}",
-                                msg.tool->toolName,
-                                oneLinePreview(msg.tool->toolResult)
-                            ))
-                            | color(theme.toolColor) | dim | xflex_shrink
-                        );
-                    }
+                    header.push_back(
+                        text(fmt::format(
+                            "{} {}",
+                            msg.tool->toolName,
+                            oneLinePreview(msg.tool->toolResult)
+                        ))
+                        | color(theme.toolColor) | dim | xflex_shrink
+                    );
                 }
             } else {
                 header.push_back(text(msg.tool->toolName) | color(theme.toolColor));
