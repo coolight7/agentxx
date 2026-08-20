@@ -9,6 +9,7 @@
 #include "ftxui/screen/terminal.hpp"
 #include <markdown/dom_builder.hpp>
 #include <markdown/parser.hpp>
+#include <markdown/state_diagram.hpp>
 #include <markdown/text_utils.hpp>
 
 using namespace ftxui;
@@ -105,15 +106,15 @@ size_t estimateMarkdownLines(std::string_view s, int width) {
     if (s.empty()) {
         return 1;
     }
-    const size_t useWidth = (width <= 0) ? 80 : static_cast<size_t>(width);
-    size_t       total    = 0;
-    size_t       blocks   = 0; // 渲染块计数 (块间空行 +1, build_document 语义)
-    bool         inFence  = false;
+    const size_t useWidth       = (width <= 0) ? 80 : static_cast<size_t>(width);
+    size_t       total          = 0;
+    size_t       blocks         = 0; // 渲染块计数 (块间空行 +1, build_document 语义)
+    bool         inFence        = false;
     bool         fenceIsMermaid = false; // 当前围栏是否为 ```mermaid (图形估算)
     size_t       fenceLines     = 0;     // 当前围栏源行数 (含开始/结束围栏)
 
     std::string para; // 普通段落累积 (softbreak -> 空格合并)
-    auto flushParagraph = [&]() {
+    auto        flushParagraph = [&]() {
         if (para.empty()) {
             return;
         }
@@ -137,11 +138,11 @@ size_t estimateMarkdownLines(std::string_view s, int width) {
     const size_t n = s.size();
     size_t       i = 0;
     while (i < n) {
-        const size_t eol     = s.find('\n', i);
-        const size_t lineEnd = (eol == std::string_view::npos) ? n : eol;
-        std::string_view line = s.substr(i, lineEnd - i);
-        const size_t     b    = line.find_first_not_of(" \t");
-        const size_t     e    = line.find_last_not_of(" \t");
+        const size_t     eol     = s.find('\n', i);
+        const size_t     lineEnd = (eol == std::string_view::npos) ? n : eol;
+        std::string_view line    = s.substr(i, lineEnd - i);
+        const size_t     b       = line.find_first_not_of(" \t");
+        const size_t     e       = line.find_last_not_of(" \t");
         line = (b == std::string_view::npos) ? std::string_view{} : line.substr(b, e - b + 1);
         if (line.empty()) {
             // 空行: 段落终止 (围栏内空行属于代码内容, 渲染 1 行)
@@ -157,8 +158,7 @@ size_t estimateMarkdownLines(std::string_view s, int width) {
         if (inFence) {
             ++total;
             ++fenceLines;
-            if (line.size() >= 3
-                && (line.substr(0, 3) == "```" || line.substr(0, 3) == "~~~")) {
+            if (line.size() >= 3 && (line.substr(0, 3) == "```" || line.substr(0, 3) == "~~~")) {
                 inFence = false; // 结束围栏 (已计 1 行)
                 if (fenceIsMermaid) {
                     // 图形高度估算: 源行数 × 3 + 3 (实测 4 节点 5 边 TB 图
@@ -171,32 +171,32 @@ size_t estimateMarkdownLines(std::string_view s, int width) {
             i = (eol == std::string_view::npos) ? n : eol + 1;
             continue;
         }
-        const bool isFenceStart = line.size() >= 3
-                                  && (line.substr(0, 3) == "```" || line.substr(0, 3) == "~~~");
+        const bool isFenceStart
+            = line.size() >= 3 && (line.substr(0, 3) == "```" || line.substr(0, 3) == "~~~");
         if (isFenceStart) {
             flushParagraph();
             ++total; // 开始围栏 1 行
             ++blocks;
-            inFence       = true;
+            inFence        = true;
             fenceIsMermaid = isMermaidInfo(line.substr(3));
             fenceLines     = 1;
-            i = (eol == std::string_view::npos) ? n : eol + 1;
+            i              = (eol == std::string_view::npos) ? n : eol + 1;
             continue;
         }
         // 块级标记行 (标题/引用/列表/分隔线/表格): 每源行渲染 1+ 行
-        const char c0            = line[0];
-        const bool isMarkerLine  = (c0 == '#') || (c0 == '>') || (c0 == '-') || (c0 == '*')
-                                   || (c0 == '+') || (c0 == '|') || (c0 == '=');
-        const bool isOrderedList = (line.size() >= 2 && c0 >= '0' && c0 <= '9'
-                                    && (line[1] == '.' || line[1] == ')'));
+        const char c0           = line[0];
+        const bool isMarkerLine = (c0 == '#') || (c0 == '>') || (c0 == '-') || (c0 == '*')
+                                  || (c0 == '+') || (c0 == '|') || (c0 == '=');
+        const bool isOrderedList
+            = (line.size() >= 2 && c0 >= '0' && c0 <= '9' && (line[1] == '.' || line[1] == ')'));
         if (isMarkerLine || isOrderedList) {
             flushParagraph();
             // 去除行首标记序列后按内容折行估算 (渲染时内容宽度更窄, 已偏低估)
-            const size_t cs = line.find_first_not_of("#>-*+|= .");
-            const auto   content = (cs == std::string_view::npos || cs >= line.size())
-                                       ? std::string_view{}
-                                       : line.substr(cs);
-            total += estimateLines(content, static_cast<int>(useWidth));
+            const size_t cs       = line.find_first_not_of("#>-*+|= .");
+            const auto   content  = (cs == std::string_view::npos || cs >= line.size())
+                                        ? std::string_view{}
+                                        : line.substr(cs);
+            total                += estimateLines(content, static_cast<int>(useWidth));
             ++blocks;
             i = (eol == std::string_view::npos) ? n : eol + 1;
             continue;
@@ -206,7 +206,7 @@ size_t estimateMarkdownLines(std::string_view s, int width) {
             para += ' ';
         }
         para += line;
-        i = (eol == std::string_view::npos) ? n : eol + 1;
+        i     = (eol == std::string_view::npos) ? n : eol + 1;
     }
     flushParagraph();
     // 块间空行 (build_document: 第 2 个块起每块前 1 行空行)
@@ -552,9 +552,9 @@ size_t MessageListComponent::estimateHeight(size_t index, int width) {
                 // 视口 (用户报告"某些消息显示为空白")。故对 edit 工具解析参数,
                 // 用 computeLineDiff 精确估算 diff 行数 (仅 key 变化/宽度变化时调用,
                 // 成本可接受)。
-                const bool isEditTool
-                    = msg.tool && msg.tool->toolName == "agentxx_filesystem_edit";
-                const bool finished = msg.tool && msg.tool->toolFinished;
+                const bool isEditTool = msg.tool && msg.tool->toolName == "agentxx_filesystem_edit";
+                const bool isPlanTool = msg.tool && msg.tool->toolName == "agentxx_planning_write";
+                const bool finished   = msg.tool && msg.tool->toolFinished;
                 if (isEditTool && finished && !isToolResultError(msg.tool->toolResult)) {
                     size_t diffLines = 0;
                     bool   hasPath   = false;
@@ -565,7 +565,7 @@ size_t MessageListComponent::estimateHeight(size_t index, int width) {
                             diffLines = agentxx::util::computeLineDiff(
                                             args.value("old_str", std::string{}),
                                             args.value("new_str", std::string{})
-                                        )
+                            )
                                             .size();
                             return true;
                         },
@@ -575,6 +575,49 @@ size_t MessageListComponent::estimateHeight(size_t index, int width) {
                     );
                     // header + (file 行) + diff 行 + 尾部空行
                     return static_cast<int>(1 + (hasPath ? 1 : 0) + diffLines) + 1;
+                }
+                if (isPlanTool) {
+                    size_t planLines = 1; // header
+                    agentxx::util::catchError<bool>(
+                        [&]() -> bool {
+                            auto       args    = neograph::json::parse(msg.text);
+                            const auto roadmap = args.value("roadmap", std::string{});
+                            if (!roadmap.empty()) {
+                                planLines      += 1; // "State Diagram:"
+                                size_t rmLines  = 1;
+                                for (char ch : roadmap) {
+                                    if (ch == '\n') {
+                                        ++rmLines;
+                                    }
+                                }
+                                planLines += rmLines * 3 + 3;
+                            }
+                            if (args.contains("todos") && args["todos"].is_array()) {
+                                planLines += 1; // "Todos:"
+                                for (const auto& td : args["todos"]) {
+                                    planLines += 1;
+                                    if (td.is_object()
+                                        && !td.value("summary", std::string{}).empty()) {
+                                        planLines += 1;
+                                    }
+                                }
+                            }
+                            if (args.contains("notes")) {
+                                planLines += 1; // "Notes:"
+                                if (args["notes"].is_string()) {
+                                    planLines
+                                        += estimateLines(args["notes"].get<std::string>(), width);
+                                } else if (args["notes"].is_array()) {
+                                    planLines += args["notes"].size();
+                                }
+                            }
+                            return true;
+                        },
+                        [](std::string) -> bool {
+                            return false;
+                        }
+                    );
+                    return static_cast<int>(planLines) + 1; // +1: 尾部空行
                 }
                 size_t lines = 1; // header
                 if (!msg.text.empty()) {
@@ -635,10 +678,7 @@ size_t MessageListComponent::estimateHeight(size_t index, int width) {
         const auto   t = streamRenderer_->text();
         const size_t f = streamRenderer_->frontierStart();
         if (f < t.size()) {
-            return std::max(
-                static_cast<size_t>(1),
-                estimateMarkdownLines(t.substr(f), width)
-            );
+            return std::max(static_cast<size_t>(1), estimateMarkdownLines(t.substr(f), width));
         }
     }
     return 1;
@@ -1058,6 +1098,41 @@ static std::string buildToolHeaderSummary(std::string_view toolName, std::string
         || toolName == "agentxx_execute_javascript_command") {
         return make("Bash", {}, oneLinePreview(getStr("command"), 100));
     }
+    // planning_write: 缩略名称 Plan, 缩略内容取 todos 格式化为一行并用 ; 隔开
+    if (toolName == "agentxx_planning_write") {
+        std::string todosSummary;
+        if (args.contains("todos") && args["todos"].is_array()) {
+            for (const auto& td : args["todos"]) {
+                std::string item;
+                if (td.is_object()) {
+                    const auto state   = td.value("state", std::string{});
+                    const auto content = td.value("content", std::string{});
+                    if (content.empty()) {
+                        continue;
+                    }
+                    std::string icon = "[ ]";
+                    if (state == "in_progress") {
+                        icon = "[~]";
+                    } else if (state == "completed") {
+                        icon = "[#]";
+                    } else if (state == "failed") {
+                        icon = "[!]";
+                    }
+                    item = fmt::format("{} {}", icon, content);
+                } else if (td.is_string()) {
+                    item = td.get<std::string>();
+                }
+                if (item.empty()) {
+                    continue;
+                }
+                if (!todosSummary.empty()) {
+                    todosSummary += "; ";
+                }
+                todosSummary += item;
+            }
+        }
+        return make("Plan", {}, todosSummary);
+    }
     return {};
 }
 
@@ -1182,6 +1257,7 @@ Element MessageListComponent::buildMessageBlock(
             }
             const bool expanded   = !msg.collapsed;
             const bool isEditTool = msg.tool && msg.tool->toolName == "agentxx_filesystem_edit";
+            const bool isPlanTool = msg.tool && msg.tool->toolName == "agentxx_planning_write";
             const bool finished   = msg.tool && msg.tool->toolFinished;
             // TUI 特化: 已知工具头部渲染为 "动词 · 参数摘要"
             // (如 "Read · [0, 100] /path" / "Write · /path"), 未知工具回退原始 toolName
@@ -1198,8 +1274,7 @@ Element MessageListComponent::buildMessageBlock(
                 if (false == headerText.empty()) {
                     // 特化渲染 (摘要可能超宽: xflex_shrink 右缘裁剪, 不压缩前缀)
                     header.push_back(
-                        text(std::move(headerText)) | color(theme.toolColor) | dim
-                        | xflex_shrink
+                        text(std::move(headerText)) | color(theme.toolColor) | dim | xflex_shrink
                     );
                 } else if (!finished) {
                     header.push_back(
@@ -1224,6 +1299,8 @@ Element MessageListComponent::buildMessageBlock(
             if (expanded) {
                 if (isEditTool) {
                     appendEditToolBody(msg, lines);
+                } else if (isPlanTool) {
+                    appendPlanToolBody(msg, lines, maxWidth);
                 } else {
                     if (!msg.text.empty()) {
                         // 参数 JSON 缩进格式化 (2 空格) 便于阅读; 解析失败回退原文
@@ -1432,6 +1509,141 @@ Element MessageListComponent::renderEditToolDiff(std::string_view oldStr, std::s
         separator(),
         vbox(std::move(rightLines)) | flex,
     });
+}
+
+// ---------------------------------------------------------------------------
+// agentxx_planning_write 特化渲染
+// ---------------------------------------------------------------------------
+
+void MessageListComponent::appendPlanToolBody(
+    const TUIMessage& msg,
+    Elements&         lines,
+    int               maxWidth
+) {
+    const auto& theme = *ctx_.theme;
+
+    // 操作失败: 渲染错误信息
+    if (msg.tool && msg.tool->toolFinished && isToolResultError(msg.tool->toolResult)) {
+        lines.push_back(hbox({
+            text("  result: ") | color(theme.toolColor),
+            paragraph(msg.tool->toolResult) | color(theme.errorColor) | xflex_shrink,
+        }));
+        return;
+    }
+
+    neograph::json args;
+    bool           parseOk = agentxx::util::catchError<bool>(
+        [&]() -> bool {
+            args = neograph::json::parse(msg.text);
+            return args.is_object();
+        },
+        [](std::string) -> bool {
+            return false;
+        }
+    );
+
+    if (!parseOk) {
+        if (!msg.text.empty()) {
+            lines.push_back(hbox({
+                text("  args: ") | color(theme.toolColor),
+                paragraph(msg.text) | color(theme.toolColor) | xflex_shrink,
+            }));
+        }
+        return;
+    }
+
+    // ---- Block 1: 状态图 (Roadmap / State Diagram) ----
+    const auto roadmap = args.value("roadmap", std::string{});
+    if (!roadmap.empty()) {
+        auto diagram = markdown::parseMermaidStateDiagram(roadmap);
+        if (!diagram.nodes.empty()) {
+            lines.push_back(hbox({
+                text("  State Diagram:") | color(theme.accentColor) | bold,
+            }));
+            const int diagW  = (maxWidth > 0) ? std::max(20, maxWidth - 4) : 0;
+            auto      diagEl = markdown::renderMermaidStateDiagram(
+                diagram,
+                diagW,
+                theme.normalColor,
+                markdown::diagramNodeColor(theme.markdownTheme)
+            );
+            lines.push_back(hbox({
+                text("    "),
+                diagEl | flex,
+            }));
+        }
+    }
+
+    // ---- Block 2: Todo 列表 ----
+    if (args.contains("todos") && args["todos"].is_array() && !args["todos"].empty()) {
+        lines.push_back(hbox({
+            text("  Todos:") | color(theme.accentColor) | bold,
+        }));
+        for (const auto& td : args["todos"]) {
+            if (td.is_object()) {
+                const auto  state   = td.value("state", std::string{});
+                const auto  content = td.value("content", std::string{});
+                const auto  summary = td.value("summary", std::string{});
+                std::string icon    = "[ ]";
+                Color       c       = theme.hintColor;
+                if (state == "in_progress") {
+                    icon = "[~]";
+                    c    = theme.thinkingColor;
+                } else if (state == "completed") {
+                    icon = "[#]";
+                    c    = theme.accentColor;
+                } else if (state == "failed") {
+                    icon = "[!]";
+                    c    = theme.errorColor;
+                }
+                lines.push_back(hbox({
+                    text(fmt::format("    {} ", icon)) | color(c) | bold,
+                    paragraph(content) | color(c) | xflex_shrink,
+                }));
+                if (!summary.empty()) {
+                    lines.push_back(hbox({
+                        text("        - ") | color(theme.hintColor) | dim,
+                        paragraph(summary) | color(theme.hintColor) | dim | xflex_shrink,
+                    }));
+                }
+            } else if (td.is_string()) {
+                lines.push_back(hbox({
+                    text("    [ ] ") | color(theme.hintColor) | bold,
+                    paragraph(td.get<std::string>()) | color(theme.hintColor) | xflex_shrink,
+                }));
+            }
+        }
+    }
+
+    // ---- Block 3: Note 列表 / 备忘 ----
+    if (args.contains("notes")) {
+        const auto& notesVal = args["notes"];
+        if (notesVal.is_string()) {
+            const auto notes = notesVal.get<std::string>();
+            if (!notes.empty()) {
+                lines.push_back(hbox({
+                    text("  Notes:") | color(theme.accentColor) | bold,
+                }));
+                lines.push_back(hbox({
+                    text("    "),
+                    paragraph(notes) | color(theme.hintColor) | xflex_shrink,
+                }));
+            }
+        } else if (notesVal.is_array() && !notesVal.empty()) {
+            lines.push_back(hbox({
+                text("  Notes:") | color(theme.accentColor) | bold,
+            }));
+            for (const auto& n : notesVal) {
+                std::string noteStr = n.is_string() ? n.get<std::string>() : n.dump();
+                if (!noteStr.empty()) {
+                    lines.push_back(hbox({
+                        text("    • ") | color(theme.hintColor),
+                        paragraph(noteStr) | color(theme.hintColor) | xflex_shrink,
+                    }));
+                }
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

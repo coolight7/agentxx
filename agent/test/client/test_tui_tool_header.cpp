@@ -53,7 +53,7 @@ struct ToolHeaderFixture {
     }
 
     /// 追加一条 Tool 消息 (text 为工具参数 JSON, 与 server 端约定一致)
-    void pushTool(std::string name, std::string args, bool finished = true) {
+    void pushTool(std::string name, std::string args, bool finished = true, bool collapsed = true) {
         sharedState.mutate([&](TUIRenderState& st) {
             auto m                = std::make_shared<TUIMessage>();
             m->role               = TUIMessage::Role::Tool;
@@ -63,7 +63,7 @@ struct ToolHeaderFixture {
             m->tool->toolFinished = finished;
             // Tool 消息默认折叠展示 (与真实 TUI 流一致, 见 agent_tui.cpp);
             // 折叠态头部才显示 "动词 · 参数摘要" 特化渲染
-            m->collapsed = true;
+            m->collapsed = collapsed;
             m->text      = std::move(args);
             st.messages.push_back(std::move(m));
         });
@@ -220,12 +220,48 @@ void testTuiToolHeaderRunning() {
     XX_TEST_EXPECT_TRUE(f2.render().find("custom_tool_run running...") != std::string::npos);
 }
 
+// Plan (planning_write) 特化渲染:
+// 1. 折叠时缩略名称为 Plan, 缩略内容为 todos 格式化为一行并用 ; 隔开
+// 2. 展开时渲染为 状态图、todo 列表、note 列表 三个 block
+void testTuiToolHeaderPlan() {
+    // 折叠测试
+    ToolHeaderFixture f(120, 16);
+    f.pushTool(
+        "agentxx_planning_write",
+        R"({"roadmap":"stateDiagram-v2\n[*] --> s1\ns1 --> [*]","todos":[{"state":"in_progress","content":"reproduce issue","summary":"trying"},{"state":"pending","content":"fix root cause"},{"state":"completed","content":"write tests"}],"notes":"memo 123"})",
+        true,
+        true // 折叠
+    );
+    std::string collapsed = f.render();
+    XX_TEST_EXPECT_TRUE(collapsed.find("+ [Tool] ") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(collapsed.find("Plan · [~] reproduce issue; [ ] fix root cause; [#] write tests") != std::string::npos);
+
+    // 展开测试
+    ToolHeaderFixture f2(120, 24);
+    f2.pushTool(
+        "agentxx_planning_write",
+        R"({"roadmap":"stateDiagram-v2\n[*] --> phase1\nphase1 --> [*]","todos":[{"state":"in_progress","content":"do task A","summary":"working on A"},{"state":"completed","content":"done task B"}],"notes":"my notes content"})",
+        true,
+        false // 展开
+    );
+    std::string expanded = f2.render();
+    XX_TEST_EXPECT_TRUE(expanded.find("- [Tool] Plan") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(expanded.find("State Diagram:") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(expanded.find("Todos:") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(expanded.find("[~] do task A") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(expanded.find("working on A") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(expanded.find("[#] done task B") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(expanded.find("Notes:") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(expanded.find("my notes content") != std::string::npos);
+}
+
 TestResult testTuiToolHeader() {
     testTuiToolHeaderFilesystem();
     testTuiToolHeaderWeb();
     testTuiToolHeaderFallback();
     testTuiToolHeaderOverflow();
     testTuiToolHeaderRunning();
+    testTuiToolHeaderPlan();
     return {g_tui_tool_header_passed, g_tui_tool_header_failed};
 }
 
