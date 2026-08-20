@@ -584,6 +584,80 @@ void testCancel() {
     mock.stop();
 }
 
+/// 6) 多 Runtime 并发独立运行测试 (方案 A 独立线程模型)
+void testMultipleRuntimesConcurrent() {
+    FfiMockLLM mock;
+    uint16_t   port = 0;
+    if (!mock.start(port)) {
+        TEST_FAIL << "mock LLM server start failed" << std::endl;
+        g_ffi_failed++;
+        return;
+    }
+
+    constexpr size_t kRuntimeCount = 3;
+    struct RuntimeSlot {
+        FfiEventRecorder rec;
+        AgentxxCallbacks cb{};
+        AgentxxAgent*    agent = nullptr;
+    };
+    std::vector<RuntimeSlot> slots(kRuntimeCount);
+
+    for (size_t i = 0; i < kRuntimeCount; ++i) {
+        slots[i].cb.on_event  = FfiEventRecorder::onEvent;
+        slots[i].cb.user_data = &slots[i].rec;
+        char* log             = nullptr;
+        slots[i].agent = agentxx_create(nullptr, mock.modelJson().c_str(), &slots[i].cb, &log);
+        XX_TEST_EXPECT_TRUE(slots[i].agent != nullptr);
+        if (log != nullptr) {
+            agentxx_free(log);
+        }
+    }
+
+    // 并发启动
+    for (size_t i = 0; i < kRuntimeCount; ++i) {
+        char* log = nullptr;
+        XX_TEST_EXPECT_EQ(agentxx_start(slots[i].agent, &log), AGENTXX_OK);
+        if (log != nullptr) {
+            agentxx_free(log);
+        }
+    }
+
+    // 等待所有 runtime 就绪
+    for (size_t i = 0; i < kRuntimeCount; ++i) {
+        XX_TEST_EXPECT_TRUE(slots[i].rec.wait(AGENTXX_EVT_READY, 20000));
+    }
+
+    // 并发发送输入
+    for (size_t i = 0; i < kRuntimeCount; ++i) {
+        char* log = nullptr;
+        XX_TEST_EXPECT_EQ(agentxx_send_input(slots[i].agent, "Hello from slot", &log), AGENTXX_OK);
+        if (log != nullptr) {
+            agentxx_free(log);
+        }
+    }
+
+    // 等待各 slot 独立收到 TURN_END
+    for (size_t i = 0; i < kRuntimeCount; ++i) {
+        XX_TEST_EXPECT_TRUE(slots[i].rec.wait(AGENTXX_EVT_TURN_END, 20000));
+    }
+
+    // 并发停止与销毁
+    for (size_t i = 0; i < kRuntimeCount; ++i) {
+        char* log = nullptr;
+        XX_TEST_EXPECT_EQ(agentxx_stop(slots[i].agent, &log), AGENTXX_OK);
+        if (log != nullptr) {
+            agentxx_free(log);
+            log = nullptr;
+        }
+        XX_TEST_EXPECT_EQ(agentxx_destroy(slots[i].agent, &log), AGENTXX_OK);
+        if (log != nullptr) {
+            agentxx_free(log);
+        }
+    }
+
+    mock.stop();
+}
+
 } // namespace
 
 namespace agentxx {
@@ -595,6 +669,7 @@ agentxx::test::TestResult testFfiCApi() {
     testLifecycleAndConversation();
     testHilInterrupt();
     testCancel();
+    testMultipleRuntimesConcurrent();
     return TestResult(g_ffi_passed, g_ffi_failed);
 }
 
