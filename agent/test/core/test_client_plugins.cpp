@@ -247,7 +247,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
     auto adapter = std::make_shared<MockPluginUiAdapter>();
     auto mgr     = std::make_shared<agentxx::plugin::ClientPluginManager>(ex);
     mgr->setUiAdapter(adapter);
-    mgr->setThreadId("sess-test");
+    mgr->setSessionId("sess-test");
 
     // ---- 1. 加载 example_plugin (client 入口) ----
     auto path = findExamplePluginPath();
@@ -321,8 +321,8 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
     // TURN_END: 状态栏项文本更新 (turns: 1)
     {
         agentxx::agent::WireTurnResult r;
-        r.threadId = "sess-test";
-        r.hasError = false;
+        r.sessionId = "sess-test";
+        r.hasError  = false;
         mgr->onTurnResult(r);
     }
     {

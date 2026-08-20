@@ -34,7 +34,7 @@ bool SettingsDb::ensureOpen() {
     if (db_.isOpen()) {
         return true;
     }
-    // 懒创建父目录: 首次使用时才落盘 (与 SessionPersistence 行为一致)
+    // 懒创建父目录: 首次使用时才落盘 (与 SessionStore 行为一致)
     std::error_code ec;
     auto            dir = fs::path(dbPath_).parent_path();
     fs::create_directories(dir, ec);

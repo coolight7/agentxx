@@ -13,7 +13,7 @@ namespace test {
 extern int g_thread_id_passed;
 extern int g_thread_id_failed;
 
-TestResult testThreadId();
+TestResult testSessionId();
 
 } // namespace test
 } // namespace agentxx

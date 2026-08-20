@@ -276,7 +276,7 @@ asio::awaitable<void> test_agent_cancel_llm_request() {
         = co_await asio::experimental::make_parallel_group(
               asio::co_spawn(
                   ex,
-                  agent.runConversationTurnAsync("cancel_llm_test", "Hello", true, nullptr),
+                  agent.runTurnAsync("cancel_llm_test", "Hello", true, nullptr),
                   asio::deferred
               ),
               asio::co_spawn(ex, cancelWatcher(), asio::deferred)
@@ -463,7 +463,7 @@ asio::awaitable<void> test_agent_cancel_toolcall() {
         = co_await asio::experimental::make_parallel_group(
               asio::co_spawn(
                   ex,
-                  agent.runConversationTurnAsync("cancel_tool_test", "Run tools", true, nullptr),
+                  agent.runTurnAsync("cancel_tool_test", "Run tools", true, nullptr),
                   asio::deferred
               ),
               asio::co_spawn(ex, cancelWatcher(), asio::deferred)
@@ -508,7 +508,7 @@ asio::awaitable<void> test_agent_cancel_toolcall() {
             if (im.is_array()) {
                 for (const auto& m : im) {
                     if (m.value("role", std::string{}) == "tool"
-                        && m.value("tool_name", std::string{}) == "test_slow"
+                        && m.value("toolName", std::string{}) == "test_slow"
                         && m.value("content", std::string{}) == "[User canceled]") {
                         slowCanceled = true;
                     }
@@ -516,7 +516,7 @@ asio::awaitable<void> test_agent_cancel_toolcall() {
                     // [User canceled] 保证每条 assistant tool_call 都有结果消息;
                     // 不应出现真实执行结果 "marker"
                     if (m.value("role", std::string{}) == "tool"
-                        && m.value("tool_name", std::string{}) == "test_marker"
+                        && m.value("toolName", std::string{}) == "test_marker"
                         && m.value("content", std::string{}) == "[User canceled]") {
                         markerCanceled = true;
                     }

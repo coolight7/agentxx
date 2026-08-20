@@ -25,8 +25,8 @@ void AgentPrompt::refreshEnvDetectedPrompts() {
     const auto& ps              = cachedPowerShellInfo();
     auto&       win             = toolPrompt["agentxx_execute_windows_command"];
     win.depict                  = winCommandToolDepict();
-    win.args["command_process"] = ps.available ? winCommandProcessPs() : winCommandProcessCmd();
-    win.args["command_popen"]   = ps.available ? winCommandPopenPs() : winCommandPopenCmd();
+    win.args["command_process"] = ps.available ? winCommandProcessPwsh() : winCommandProcessCmd();
+    win.args["command_popen"]   = ps.available ? winCommandPopenPwsh() : winCommandPopenCmd();
 }
 
 neograph::json AgentPrompt::toJson() const {

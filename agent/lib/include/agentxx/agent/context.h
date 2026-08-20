@@ -42,17 +42,19 @@ namespace agent {
 
 class AgentIOBase;
 class ModelProviderRegistry;
-class SessionPersistence;
+class SessionStore;
 class AgentHost;
 
-/// 会话持久化回调 (由 SessionStore 创建 Session 时注入, 解耦 sqlite 依赖)
+/// 会话持久化回调 (由 SessionsManager 创建 Session 时注入, 解耦 sqlite 依赖)
 /// - 所有回调仅做"尽力而为"持久化, 内部已捕获异常并记录日志, 不中断主流程
-struct SessionPersistenceHooks {
+struct SessionStoreHooks {
     /// 追加展示历史消息后调用 (msg 已含分配 id; msgIdCounter 为追加后计数,
     /// 供重启恢复时延续 id 分配)
-    std::function<void(const ViewMessage&, uint64_t msgIdCounter)> onAppendMessage;
+    std::function<void(const ViewMessage&, uint64_t msgIdCounter)> onAppendViewMessage;
+
     /// 更新一条已持久化历史消息后调用 (msg 已含分配 id; 如 tool 结果回填)
-    std::function<void(const ViewMessage&)> onUpdateMessage;
+    std::function<void(const ViewMessage&)> onUpdateViewMessage;
+
     /// 保存 LLM 上下文消息 (每轮对话结束时调用)
     std::function<void(const neograph::json&)> onSaveLlmMessages;
 };
@@ -61,16 +63,18 @@ struct SessionPersistenceHooks {
 /// - 由 SummarizationMiddlewareHandle 在每次 modelcall 前更新
 struct ContextStats {
     /// 当前上下文占用的 token 数
-    std::atomic<size_t> contextTokens{0};
+    size_t contextTokens{0};
+
     /// 模型支持的最大 token 数
-    std::atomic<size_t> maxContextTokens{0};
+    size_t maxContextTokens{0};
+
     /// 当前 ModelCall 的平均生成速度 (token/s, 估算值)
     /// - 由 EventBridge 在流式期间定时更新推送; 无流式时为 0
-    std::atomic<double> tps{0.0};
+    double tps{0.0};
 };
 
 /// 会话当前活动状态
-enum class Activity : uint8_t {
+enum class SessionActivity : uint8_t {
     Idle,
     Streaming,     /// LLM 正在输出 token
     ExecutingTool, /// 工具正在执行
@@ -92,23 +96,29 @@ public:
 
     /// 本会话的 IO
     std::shared_ptr<AgentIOBase> io = nullptr;
+
     /// 本会话的事件总线 (会话级事件: interrupt/permission/tool 等)
     std::shared_ptr<agentxx::middleware::EventBus> bus = nullptr;
-    /// 本会话的上下文统计 (内部原子, 跨线程安全)
+
+    /// 本会话的上下文统计
     std::shared_ptr<ContextStats> contextStats = std::make_shared<ContextStats>();
-    /// 当前活动状态 (IO 通过此字段感知状态变化)
-    Activity activity = Activity::Idle;
+
+    /// 当前活动状态 (io 通过此字段感知状态变化)
+    SessionActivity activity = SessionActivity::Idle;
 
     /// 完整历史消息 (append-only, 永不压缩, 用于 client 同步与展示)
-    /// - 仅 ioContext 线程可读写 (写: appendHistory), 通过 assertIoThread() 强制
+    /// - 仅 ioContext 线程可读写 (写: appendViewMessage), 通过 assertIoThread() 强制
     std::vector<ViewMessage> viewMessages;
+
     /// LLM 上下文消息 (可压缩/裁剪, 仅用于调用 LLM API)
     /// - 仅 ioContext 线程可读写
     neograph::json llmMessages = neograph::json::array();
+
     /// viewMessages 的链式哈希 (用于 client 校验一致性)
-    /// - 仅 ioContext 线程可读写 (appendHistory 内部更新)
+    /// - 仅 ioContext 线程可读写 (appendViewMessage 内部更新)
     ChainHash chainHash;
-    /// Delta 流序号 (单调递增; 仅 io 线程读写, 无需原子)
+
+    /// Delta 流序号 (单调递增; 仅 io 线程读写)
     /// - 由 EventBridge / Session::nextDeltaSeq 统一分配, 服务端增量重放缓冲
     ///   依赖 seq 单调性; 除重放路径外, 新产出的 Delta 必须经 nextDeltaSeq 分配
     uint64_t deltaSeq = 0;
@@ -117,7 +127,7 @@ public:
     // 线程绑定: 强制 viewMessages/llmMessages/chainHash 只在 io 线程写入
     // -------------------------------------------------------------------
 
-    /// 绑定 io 线程 (在 BaseAgent::runConversationTurnAsync 首次使用时调用)
+    /// 绑定 io 线程 (在 BaseAgent::runTurnAsync 首次使用时调用)
     /// - 仅首次调用生效, 后续调用为 no-op
     void bindIoThread() {
         auto expected = std::thread::id{};
@@ -150,7 +160,7 @@ public:
 
     /// 获取完整历史消息副本
     /// - 仅 io 线程调用 (assertIoThread 强制校验); 返回拷贝供 Sync 传输
-    std::vector<ViewMessage> getFullHistoryCopy() const {
+    std::vector<ViewMessage> getFullViewMessagesCopy() const {
         assertIoThread();
         return viewMessages;
     }
@@ -174,20 +184,20 @@ public:
     /// 向 viewMessages 追加一条消息并更新链式哈希，返回分配的 msgId
     /// - 必须在 ioContext 线程内调用 (assertIoThread 强制校验)
     /// - 已绑定持久化回调时同步落库 (失败仅记日志)
-    std::string appendHistory(ViewMessage msg);
+    std::string appendViewMessage(ViewMessage msg);
 
     /// 更新一条已存在的历史消息 (按 msg.id 定位) 并同步持久化
     /// - 必须在 ioContext 线程内调用 (assertIoThread 强制校验)
     /// - 不更新链式哈希 (哈希基于消息内容, 历史内容本不应变化;
     ///   tool 结果回填属于"补齐信息", 与增量 Delta 语义一致)
     /// - 已绑定持久化回调时同步更新库内对应行 (失败仅记日志)
-    void updateHistory(ViewMessage msg);
+    void updateViewMessage(ViewMessage msg);
 
-    /// 绑定持久化回调 (由 SessionStore 创建 Session 时注入; 测试可不绑定)
-    void setPersistenceHooks(SessionPersistenceHooks hooks);
+    /// 绑定持久化回调 (由 SessionsManager 创建 Session 时注入; 测试可不绑定)
+    void setStoreHooks(SessionStoreHooks hooks);
 
     /// 从持久化状态恢复: 重建链式哈希 (对不含 id 的消息内容, 与
-    /// appendHistory 语义一致) 并恢复 msgIdCounter
+    /// appendViewMessage 语义一致) 并恢复 msgIdCounter
     /// - 不触发持久化回调 (恢复本身不产生新的写入)
     void restore(std::vector<ViewMessage> messages, uint64_t msgIdCounter);
 
@@ -197,12 +207,14 @@ public:
 
     /// 设置本会话当前轮次的取消令牌 (仅 io 线程)
     void setCancelToken(std::shared_ptr<neograph::graph::CancelToken> token);
+
     /// 获取本会话当前轮次的取消令牌 (仅 io 线程)
     std::shared_ptr<neograph::graph::CancelToken> getCancelToken();
 
     /// 设置本会话选择的模型名 (仅 io 线程)
     /// - 为空表示使用 ModelProviderRegistry 的默认模型
     void setModelName(std::string_view name);
+
     /// 获取本会话选择的模型名 (仅 io 线程)
     std::string getModelName() const;
 
@@ -225,28 +237,30 @@ private:
     std::atomic<std::thread::id> ioThreadId_{std::thread::id{}};
 
     /// 持久化回调 (可选; 为空时不落库)
-    SessionPersistenceHooks hooks_;
+    SessionStoreHooks hooks_;
 };
 
 /// 会话存储: 按 thread_id 取/建 Session
 /// - 仅在 agent io_context 线程访问, 无需锁保护
 /// - UI 线程通过 Wire 消息间接操作, 不直接访问此存储
-class SessionStore {
+class SessionsManager {
 public:
 
     /// 获取或创建指定 thread_id 的会话
-    /// - 创建时若已注入持久化 (persistence), 从 SQLite 恢复该 thread 的
+    /// - 创建时若已注入持久化 (sessionStore), 从 SQLite 恢复该 thread 的
     ///   历史消息/LLM 上下文, 并绑定持久化回调
-    std::shared_ptr<Session> getOrCreate(std::string_view threadId);
+    std::shared_ptr<Session> getOrCreate(std::string_view sessionId);
 
     /// 获取指定 thread_id 的会话; 不存在时返回 nullptr
-    std::shared_ptr<Session> get(std::string_view threadId);
+    std::shared_ptr<Session> get(std::string_view sessionId);
 
-    void remove(std::string_view threadId);
+    void remove(std::string_view sessionId);
 
-    /// 会话 SQLite 持久化 (由 BaseAgent 注入; 为空时不持久化)
+    /// - 会话 SQLite 持久化 (AgentConfig::enableSessionStore 开启时由
+    /// BaseAgent 创建并注入; 为空表示不持久化)
     /// - 仅 io 线程读写, 无需锁
-    std::shared_ptr<SessionPersistence> persistence = nullptr;
+    /// - 数据目录: {dataDir}/sqlite/sessions/{sessionId}/
+    std::shared_ptr<SessionStore> sessionStore = nullptr;
 
 private:
 
@@ -255,11 +269,13 @@ private:
 
 /// 加载组件信息容器
 struct AgentAppendComponentInfo {
-    // 已成功加载的 MCP 工具命名空间列表
+    /// 已成功加载的 MCP 工具命名空间列表
     std::vector<std::string> mcpTools;
-    // 成功加载的 Skill 名称列表
+
+    /// 成功加载的 Skill 名称列表
     std::vector<std::string> skills;
-    // 成功加载的 Memory 文件路径列表
+
+    /// 成功加载的 Memory 文件路径列表
     std::vector<std::string> memoryFiles;
 };
 
@@ -269,15 +285,19 @@ public:
     /// 析构 (定义于 context.cpp: 需完整类型销毁 plugin 成员)
     ~AgentContext();
 
-    std::shared_ptr<agentxx::agent::AgentConfig>            agentConfig                   = nullptr;
-    std::shared_ptr<agentxx::middleware::MiddlewareContext> middlewareHandleContext       = nullptr;
+    std::shared_ptr<agentxx::agent::AgentConfig>            agentConfig             = nullptr;
+    std::shared_ptr<agentxx::middleware::MiddlewareContext> middlewareHandleContext = nullptr;
+
+    // TODO: 用 eventbus 隔离
     std::shared_ptr<agentxx::middleware::PermissionMiddlewareHandle> permissionMiddleware = nullptr;
     agentxx::tools::SubAgentManagerTool* subagentManagerToolPtr                           = nullptr;
+
     /// 上下文压缩 (summarization) 中间件
     /// - 供 压缩 或 EventBridge 等复用其 token 估算口径 (countTokensForUtf8Str),
     ///   保证 tps/上下文统计与压缩判定使用一致的 token 计算
     std::shared_ptr<agentxx::middleware::SummarizationMiddlewareHandle> summarizationMiddleware
         = nullptr;
+
     /// 事件总线
     /// - 由 BaseAgent 在 init() 中创建并注入; 节点/middleware/tool 经
     ///   weak_ptr<AgentContext> 取用
@@ -290,12 +310,7 @@ public:
     std::shared_ptr<ModelProviderRegistry> modelRegistry = nullptr;
 
     /// 会话存储：按 thread_id 取/建 Session
-    std::shared_ptr<SessionStore> sessions = std::make_shared<SessionStore>();
-
-    /// 会话 SQLite 持久化 (AgentConfig::enableSessionPersistence 开启时由
-    /// BaseAgent 创建并注入; 为空表示不持久化)
-    /// - 数据目录: {dataDir}/sqlite/sessions/{threadId}/
-    std::shared_ptr<SessionPersistence> sessionPersistence = nullptr;
+    std::shared_ptr<SessionsManager> sessions = std::make_shared<SessionsManager>();
 
     /// 组件加载信息
     AgentAppendComponentInfo appendComponentInfo;
@@ -324,7 +339,7 @@ public:
     /// - 语义: 报告当前正在执行的启动操作 (如 "加载 MCP server: xxx"),
     ///   供 TUI 在"启动中"banner 中逐步展示
     /// - 线程安全: 回调实现 (TUI onServerProgress) 内部自行加锁同步
-    std::function<void(std::string_view)> startupNotifier;
+    std::function<void(std::string_view)> initNotifier;
 
     /// 阻塞操作执行线程池 (文件系统遍历、glob、DNS 解析等同步阻塞操作)
     /// - 通过 agentxx::util::offloadAsync / offloadCancellableAsync 使用
@@ -334,11 +349,11 @@ public:
         );
 
     /// 便捷方法：获取或创建指定 thread_id 的会话
-    std::shared_ptr<Session> getSession(std::string_view threadId);
+    std::shared_ptr<Session> getSession(std::string_view sessionId);
 
-    std::string getSessionCurrentModelName(std::string_view threadId) const;
+    std::string getSessionCurrentModelName(std::string_view sessionId) const;
     // 可能会变，建议仅在同步代码中使用
-    const ModelConfig& getSessionCurrentModelConfig(std::string_view threadId) const;
+    const ModelConfig& getSessionCurrentModelConfig(std::string_view sessionId) const;
 };
 
 } // namespace agent

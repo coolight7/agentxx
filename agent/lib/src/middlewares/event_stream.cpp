@@ -33,14 +33,14 @@ bool EventBus::remove(std::string_view topic) {
 
 EventBridge::EventBridge(
     std::string                                  agentName,
-    std::string                                  threadId,
+    std::string                                  sessionId,
     std::weak_ptr<agentxx::agent::AgentContext>  ctx,
     std::shared_ptr<agentxx::agent::Session>     session,
     std::shared_ptr<agentxx::agent::AgentIOBase> io,
     neograph::graph::GraphStreamCallback         origCb
 ) :
     agentName_(std::move(agentName)),
-    threadId_(std::move(threadId)),
+    sessionId_(std::move(sessionId)),
     ctx_(std::move(ctx)),
     session_(std::move(session)),
     io_(std::move(io)),
@@ -149,7 +149,7 @@ void EventBridge::handleLLMToken(const neograph::graph::GraphEvent& event) {
         .durationMs
         = sendDuration ? static_cast<int64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
                                                   std::chrono::system_clock::now() - nodeStartTime_
-                         )
+          )
                                                   .count())
                        : 0,
     });
@@ -165,7 +165,7 @@ void EventBridge::handleChannelWrite(const neograph::graph::GraphEvent& event) {
     // 通用提示消息: 转发为 Delta::MessageUITip, 由 client 端插入提示消息
     if (chan == "message_tip" && value.is_object()) {
         auto       tipType = Delta::TipType::Info;
-        const auto tip     = value.value("tip_type", std::string{"info"});
+        const auto tip     = value.value("tipType", std::string{"info"});
         if (tip == "warning") {
             tipType = Delta::TipType::Warning;
         } else if (tip == "error") {
@@ -197,21 +197,21 @@ void EventBridge::handleChannelWrite(const neograph::graph::GraphEvent& event) {
                 auto m = ViewMessage::makeText(
                     ViewMessage::Role::Think,
                     reasoning,
-                    jm.value("start_time_ms", int64_t{0}),
-                    jm.value("duration_ms", int64_t{0})
+                    jm.value("startTimeMs", int64_t{0}),
+                    jm.value("durationMs", int64_t{0})
                 );
                 m.collapsed = true;
-                session_->appendHistory(std::move(m));
+                session_->appendViewMessage(std::move(m));
             }
             auto content = jm.value("content", std::string{});
             if (!content.empty()) {
                 auto m = ViewMessage::makeText(
                     ViewMessage::Role::Assistant,
                     content,
-                    jm.value("start_time_ms", int64_t{0}),
-                    jm.value("duration_ms", int64_t{0})
+                    jm.value("startTimeMs", int64_t{0}),
+                    jm.value("durationMs", int64_t{0})
                 );
-                session_->appendHistory(std::move(m));
+                session_->appendViewMessage(std::move(m));
             }
             for (const auto& tc : jm["tool_calls"]) {
                 const auto toolName   = tc.value("name", std::string{});
@@ -225,7 +225,7 @@ void EventBridge::handleChannelWrite(const neograph::graph::GraphEvent& event) {
                 m.tool      = ViewMessage::ToolData{};
                 m.tool->toolName   = toolName;
                 m.tool->toolCallId = toolCallId;
-                const auto msgId   = session_->appendHistory(std::move(m));
+                const auto msgId   = session_->appendViewMessage(std::move(m));
                 // 登记 toolCallId → viewMessages 索引, 供 tool 结果回填 O(1) 定位
                 // (viewMessages append-only, 索引不失效)
                 const size_t historyIndex = session_->viewMessages.size() - 1;
@@ -242,8 +242,8 @@ void EventBridge::handleChannelWrite(const neograph::graph::GraphEvent& event) {
             }
         } else if (role == "tool") {
             auto content    = jm.value("content", std::string{});
-            auto toolName   = jm.value("tool_name", std::string{});
-            auto toolCallId = jm.value("tool_call_id", std::string{});
+            auto toolName   = jm.value("toolName", std::string{});
+            auto toolCallId = jm.value("toolCallId", std::string{});
             if (toolCallId.empty()) {
                 continue;
             }
@@ -275,10 +275,10 @@ void EventBridge::handleChannelWrite(const neograph::graph::GraphEvent& event) {
                 target->collapsed          = true;
                 // 回填后同步持久化: 库内该行仍是未完成的 Tool 消息 (tool_finished
                 // 缺失), 若不更新, 重启恢复/会话切换后再展示的 tool 结果会一直
-                // 显示未完成状态。经 Session::updateHistory 触发 onUpdateMessage
+                // 显示未完成状态。经 Session::updateViewMessage 触发 onUpdateViewMessage
                 // 回调覆盖库内对应行 (按 msg.id 定位)。
                 if (!target->id.empty()) {
-                    session_->updateHistory(*target);
+                    session_->updateViewMessage(*target);
                 }
                 // (edit 工具参数 unified diff: 渲染端自行计算, 无消费者, 不再生成;
                 //  ToolData::diff 字段保留供未来)
@@ -299,29 +299,29 @@ void EventBridge::handleChannelWrite(const neograph::graph::GraphEvent& event) {
                 auto m = ViewMessage::makeText(
                     ViewMessage::Role::Think,
                     reasoning,
-                    jm.value("start_time_ms", int64_t{0}),
-                    jm.value("duration_ms", int64_t{0})
+                    jm.value("startTimeMs", int64_t{0}),
+                    jm.value("durationMs", int64_t{0})
                 );
                 m.collapsed = true;
-                session_->appendHistory(std::move(m));
+                session_->appendViewMessage(std::move(m));
             }
             auto content = jm.value("content", std::string{});
             if (!content.empty()) {
                 auto m = ViewMessage::makeText(
                     ViewMessage::Role::Assistant,
                     content,
-                    jm.value("start_time_ms", int64_t{0}),
-                    jm.value("duration_ms", int64_t{0})
+                    jm.value("startTimeMs", int64_t{0}),
+                    jm.value("durationMs", int64_t{0})
                 );
-                session_->appendHistory(std::move(m));
+                session_->appendViewMessage(std::move(m));
             }
         }
     }
     // llm node 执行完成，推送上下文统计更新
     if (hasLLMOutput && io_ && session_->contextStats) {
         io_->sendToPeer(agentxx::agent::WireContextStats{
-            session_->contextStats->contextTokens.load(std::memory_order_relaxed),
-            session_->contextStats->maxContextTokens.load(std::memory_order_relaxed),
+            session_->contextStats->contextTokens,
+            session_->contextStats->maxContextTokens,
         });
     }
 }
@@ -484,8 +484,8 @@ void EventBridge::pushTpsIfDue() {
     tpsLastPushSec_        = nowSec;
     tpsLastPushToken_      = tpsTokenCount_;
     io_->sendToPeer(agentxx::agent::WireContextStats{
-        session_->contextStats->contextTokens.load(std::memory_order_relaxed),
-        session_->contextStats->maxContextTokens.load(std::memory_order_relaxed),
+        session_->contextStats->contextTokens,
+        session_->contextStats->maxContextTokens,
         tps,
     });
 }
@@ -508,14 +508,14 @@ void EventBridge::publishModelToken(const std::string& token, std::string_view k
         bus.executor(),
         [busPtr,
          agentName = agentName_,
-         threadId  = threadId_,
+         sessionId = sessionId_,
          token, // 捕获副本, 协程生命周期独立于本对象
          kind = std::string{kind}]() -> asio::awaitable<void> {
             co_await busPtr->publish<agentxx::events::EventModelToken>(
                 agentxx::events::Topic::ModelToken,
                 agentxx::events::EventModelToken{
                     .agentName = agentName,
-                    .threadId  = threadId,
+                    .sessionId = sessionId,
                     .token     = token,
                     .kind      = kind,
                 }
@@ -540,14 +540,14 @@ void EventBridge::publishError(std::string message, std::string where) {
         bus.executor(),
         [busPtr,
          agentName = agentName_,
-         threadId  = threadId_,
+         sessionId = sessionId_,
          message   = std::move(message),
          where     = std::move(where)]() -> asio::awaitable<void> {
             co_await busPtr->publish<agentxx::events::EventError>(
                 agentxx::events::Topic::Error,
                 agentxx::events::EventError{
                     .agentName = agentName,
-                    .threadId  = threadId,
+                    .sessionId = sessionId,
                     .message   = message,
                     .where     = where,
                 }

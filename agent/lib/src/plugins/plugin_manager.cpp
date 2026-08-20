@@ -284,12 +284,12 @@ asio::awaitable<std::string> PluginTool::execute_async(const neograph::json& arg
         throw std::runtime_error("plugin tool has null execute callback");
     }
 
-    // 参数: toolcall 分发路径已注入 thread_id/tool_call_id; call_tool 路径由调用方提供
+    // 参数: toolcall 分发路径已注入 session_id/tool_call_id; call_tool 路径由调用方提供
     std::string argsJson   = arguments.dump();
-    std::string threadId   = arguments.value("thread_id", std::string{});
+    std::string sessionId  = arguments.value("session_id", std::string{});
     std::string toolCallId = arguments.value("tool_call_id", std::string{});
 
-    // 取消令牌 (经 Session 按 thread_id 取; 无会话时为空)
+    // 取消令牌 (经 Session 按 session_id 取; 无会话时为空)
     auto                                          agentCtx = agentContext.lock();
     std::shared_ptr<neograph::graph::CancelToken> cancelToken;
     if (agentCtx) {
@@ -304,9 +304,9 @@ asio::awaitable<std::string> PluginTool::execute_async(const neograph::json& arg
     //   消除 "超时后卸载 → 执行已卸载代码段" 竞态 (见 plugins.md 11.2)
     std::function<asio::awaitable<std::string>(std::atomic<bool>&)> run
         = [spec,
-           inst     = std::move(inst),
-           argsJson = std::move(argsJson),
-           threadId = std::move(threadId),
+           inst      = std::move(inst),
+           argsJson  = std::move(argsJson),
+           sessionId = std::move(sessionId),
            toolCallId
            = std::move(toolCallId)](std::atomic<bool>& cancelFlag) -> asio::awaitable<std::string> {
         (void)cancelFlag; // 插件回调为黑盒, 无法协作式中止; 等待方取消后线程自然释放
@@ -316,7 +316,7 @@ asio::awaitable<std::string> PluginTool::execute_async(const neograph::json& arg
         char*                         out = spec.execute(
             spec.user_data,
             agentxx_plugin_sv(argsJson.data(), argsJson.size()),
-            agentxx_plugin_sv(threadId.data(), threadId.size()),
+            agentxx_plugin_sv(sessionId.data(), sessionId.size()),
             agentxx_plugin_sv(toolCallId.data(), toolCallId.size()),
             &err
         );
@@ -404,7 +404,7 @@ asio::awaitable<void>
 
     // 节点输入摘要 JSON (观测用途; out_json 一期预留)
     neograph::json summary = neograph::json::object();
-    summary["thread_id"]   = in.ctx.thread_id;
+    summary["session_id"]  = in.ctx.thread_id;
     summary["point"]       = static_cast<int>(point);
     try {
         auto msgs                 = in.state.get_messages();
@@ -828,7 +828,7 @@ static char* xx_call_tool(
     const AgentxxHost*      host,
     AgentxxPluginStringView name,
     AgentxxPluginStringView args_json,
-    AgentxxPluginStringView thread_id,
+    AgentxxPluginStringView session_id,
     char**                  error_out
 ) {
     auto mgr  = mgrOf(host);
@@ -843,7 +843,7 @@ static char* xx_call_tool(
     };
     std::string toolName{name.data ? name.data : "", name.size};
     std::string args{args_json.data ? args_json.data : "", args_json.size};
-    std::string tid{thread_id.data ? thread_id.data : "", thread_id.size};
+    std::string tid{session_id.data ? session_id.data : "", session_id.size};
     try {
         // 1. 查表在 io 线程 (短临界区; 查表/执行分离, 见 plugins.md 11.5.2):
         //    shared_ptr 保活目标插件代码段 —— 执行期间即使目标插件被卸载,
@@ -877,7 +877,7 @@ static char* xx_call_tool(
                 return nullptr;
             }
         }
-        parsed["thread_id"]    = tid;
+        parsed["session_id"]   = tid;
         parsed["tool_call_id"] = fmt::format("plugin_call_{}", ++g_pluginCallSeq);
 
         const auto& spec    = pluginTool->spec();
@@ -963,7 +963,7 @@ static char* xx_get_own_info(const AgentxxHost* host) {
 }
 
 static char*
-    xx_get_share_store(const AgentxxHost* host, AgentxxPluginStringView thread_id, long long id) {
+    xx_get_share_store(const AgentxxHost* host, AgentxxPluginStringView session_id, long long id) {
     XX_PLUGIN_CATCH_BEGIN
     auto mgr  = mgrOf(host);
     auto inst = instOf(host);
@@ -973,7 +973,7 @@ static char*
     // shareStore 仅 io 线程访问 (无锁模型): 跨线程经 post 同步等待
     auto        mgrPtr  = mgr;
     auto        instPtr = inst;
-    std::string tid{thread_id.data ? thread_id.data : "", thread_id.size};
+    std::string tid{session_id.data ? session_id.data : "", session_id.size};
     return ioCallSync<char*>(mgrPtr, [mgrPtr, instPtr, tid, id]() {
         return mgrPtr->getShareStore(instPtr, tid.c_str(), id);
     });
@@ -982,7 +982,7 @@ static char*
 
 static void xx_emit_message_tip(
     const AgentxxHost*      host,
-    AgentxxPluginStringView thread_id,
+    AgentxxPluginStringView session_id,
     AgentxxPluginStringView text,
     int                     level
 ) {
@@ -994,7 +994,7 @@ static void xx_emit_message_tip(
     }
     auto        mgrPtr  = mgr;
     auto        instPtr = inst;
-    std::string tid{thread_id.data ? thread_id.data : "", thread_id.size};
+    std::string tid{session_id.data ? session_id.data : "", session_id.size};
     std::string msg{text.data ? text.data : "", text.size};
     ioCallSyncVoid(mgrPtr, [mgrPtr, instPtr, tid, msg, level]() {
         mgrPtr->emitMessageTip(instPtr, tid.c_str(), msg.c_str(), level);
@@ -1614,8 +1614,8 @@ char* PluginManager::invokeCapability(
 
 // ==================== 会话/上下文访问 ====================
 
-char* PluginManager::getShareStore(PluginInstance* inst, const char* thread_id, long long id) {
-    if (!inst || !thread_id) {
+char* PluginManager::getShareStore(PluginInstance* inst, const char* session_id, long long id) {
+    if (!inst || !session_id) {
         return nullptr;
     }
     auto ctx = agentContext_.lock();
@@ -1623,7 +1623,7 @@ char* PluginManager::getShareStore(PluginInstance* inst, const char* thread_id, 
         return nullptr;
     }
     auto value
-        = ctx->middlewareHandleContext->getShareStoreItemValue(thread_id, static_cast<size_t>(id));
+        = ctx->middlewareHandleContext->getShareStoreItemValue(session_id, static_cast<size_t>(id));
     if (!value) {
         return nullptr;
     }
@@ -1632,18 +1632,18 @@ char* PluginManager::getShareStore(PluginInstance* inst, const char* thread_id, 
 
 void PluginManager::emitMessageTip(
     PluginInstance* inst,
-    const char*     thread_id,
+    const char*     session_id,
     const char*     text,
     int             level
 ) {
-    if (!inst || !thread_id || !text) {
+    if (!inst || !session_id || !text) {
         return;
     }
     auto ctx = agentContext_.lock();
     if (!ctx) {
         return;
     }
-    auto session = ctx->getSession(thread_id);
+    auto session = ctx->getSession(session_id);
     if (!session || !session->io) {
         return;
     }

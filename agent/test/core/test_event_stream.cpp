@@ -98,7 +98,7 @@ asio::awaitable<void> test_requestresponse_normal() {
     auto  bus = agentxx::middleware::EventBus{co_await asio::this_coro::executor};
     auto& rr  = bus.getRR<TestReq, TestResp>("test.qa");
 
-    auto serverId = rr.serve([](const TestReq& req, size_t corrId) -> asio::awaitable<TestResp> {
+    auto serverId = rr.registerServer([](const TestReq& req, size_t corrId) -> asio::awaitable<TestResp> {
         XX_TEST_EXPECT_TRUE(corrId > 0);
         co_return TestResp{.answer = "echo:" + req.question};
     });
@@ -117,7 +117,7 @@ asio::awaitable<void> test_requestresponse_timeout() {
     auto& rr  = bus.getRR<TestReq, TestResp>("test.qa.slow");
 
     // server 永不 respond (sleep 久于 timeout)
-    rr.serve([](const TestReq&, size_t) -> asio::awaitable<TestResp> {
+    rr.registerServer([](const TestReq&, size_t) -> asio::awaitable<TestResp> {
         auto timer
             = asio::steady_timer(co_await asio::this_coro::executor, std::chrono::seconds(1));
         co_await timer.async_wait(asio::use_awaitable);
@@ -154,7 +154,7 @@ asio::awaitable<void> test_requestresponse_server_exception() {
     auto& rr  = bus.getRR<TestReq, TestResp>("test.qa.throw");
 
     // server 处理器抛异常 -> 经 channel_cancelled 传回, 请求方 waitResp 抛异常
-    rr.serve([](const TestReq&, size_t) -> asio::awaitable<TestResp> {
+    rr.registerServer([](const TestReq&, size_t) -> asio::awaitable<TestResp> {
         throw std::runtime_error("handler boom");
         co_return TestResp{.answer = "unreachable"};
     });
@@ -207,7 +207,7 @@ asio::awaitable<void> test_eventbus_convenience() {
     XX_TEST_EXPECT_TRUE(seen.load() == 10);
 
     auto& rr = bus.getRR<TestReq, TestResp>("conv.rr");
-    rr.serve([](const TestReq& req, size_t) -> asio::awaitable<TestResp> {
+    rr.registerServer([](const TestReq& req, size_t) -> asio::awaitable<TestResp> {
         co_return TestResp{.answer = req.question + "!"};
     });
     auto resp = co_await bus.request<TestReq, TestResp>(

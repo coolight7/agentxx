@@ -13,11 +13,11 @@ std::shared_ptr<neograph::graph::CancelToken> getSessionCancelToken(
     if (nullptr == agentCtx || nullptr == agentCtx->sessions) {
         return nullptr;
     }
-    auto thread_id = args.value("thread_id", std::string{});
-    if (thread_id.empty()) {
+    auto session_id = args.value("session_id", std::string{});
+    if (session_id.empty()) {
         return nullptr;
     }
-    auto sess = agentCtx->sessions->get(thread_id);
+    auto sess = agentCtx->sessions->get(session_id);
     if (nullptr == sess) {
         return nullptr;
     }

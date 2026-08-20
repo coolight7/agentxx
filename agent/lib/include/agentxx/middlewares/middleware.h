@@ -72,7 +72,7 @@ public:
     bool disabled = false;
     /// 会被添加移动到 agent 中，完成后此处留空数组
     std::vector<std::unique_ptr<agentxx::tools::XXToolBase>> toolcalls{};
-    /// 每个 [Middleware] 全局共享，按会话ID 取值 <thread_id, state>
+    /// 每个 [Middleware] 全局共享，按会话ID 取值 <sessionId, state>
     std::map<std::string, std::shared_ptr<BaseMiddlewareState>, std::less<>> states{};
 
     BaseMiddlewareHandleInterface(
@@ -191,36 +191,36 @@ public:
 
     /// 延迟加载 state
     /// - 如果 thread 很多，可以等需要时从硬盘加载进内存
-    virtual asio::awaitable<std::shared_ptr<T>> loadStateItem(std::string_view thread_id) {
+    virtual asio::awaitable<std::shared_ptr<T>> loadStateItem(std::string_view sessionId) {
         // TODO: 从磁盘读取
         auto ptr                       = std::make_shared<T>();
-        states[std::string{thread_id}] = ptr;
+        states[std::string{sessionId}] = ptr;
         co_return ptr;
     }
 
-    virtual asio::awaitable<std::shared_ptr<T>> getStateItem(std::string_view thread_id) {
+    virtual asio::awaitable<std::shared_ptr<T>> getStateItem(std::string_view sessionId) {
         {
-            auto it = states.find(thread_id);
+            auto it = states.find(sessionId);
             if (it != states.end()) {
                 co_return (std::static_pointer_cast<T>(it->second));
             }
         }
-        co_return co_await loadStateItem(thread_id);
+        co_return co_await loadStateItem(sessionId);
     }
 
-    virtual asio::awaitable<void> saveStateItem(std::string_view thread_id, bool offload = true) {
+    virtual asio::awaitable<void> saveStateItem(std::string_view sessionId, bool offload = true) {
         std::shared_ptr<agentxx::middleware::BaseMiddlewareState> oldEntity = nullptr;
         bool                                                      doSave    = false;
         if (offload) {
             {
-                auto it = states.find(thread_id);
+                auto it = states.find(sessionId);
                 if (it != states.end()) {
                     doSave    = true;
                     oldEntity = states.erase(it)->second;
                 }
             }
         } else {
-            auto it = states.find(thread_id);
+            auto it = states.find(sessionId);
             if (it != states.end()) {
                 doSave    = true;
                 oldEntity = it->second;
@@ -232,8 +232,8 @@ public:
         co_return;
     }
 
-    virtual bool containsItem(std::string_view thread_id) {
-        return states.contains(thread_id);
+    virtual bool containsItem(std::string_view sessionId) {
+        return states.contains(sessionId);
     }
 };
 
@@ -379,7 +379,7 @@ public:
 class MiddlewareContext {
 public:
 
-    class ThreadShareStore {
+    class SessionShareStore {
     public:
 
         std::map<size_t, std::string> store{};
@@ -417,14 +417,14 @@ public:
     inline static const std::string graphDataKey_interruptToolcallCache{"xx_interruptToolcallCache"
     };
 
-    /// <thread_id, <id, value>>
+    /// <sessionId, <id, value>>
     /// - 存储变量内容，留出 id 到 上下文中，llm 需要时可以通过
     /// toolcall/agentxx_share_store 读取
     /// - 如: 压缩上下文时会将部分长文本存入这里替换为 id
     /// - 内存副本作为读缓存, 写操作同步落库 (持久化注入时)
-    std::map<std::string, ThreadShareStore, std::less<>> shareStore{};
+    std::map<std::string, SessionShareStore, std::less<>> shareStore{};
 
-    /// <thread_id, itemData>
+    /// <sessionId, itemData>
     /// [会话独立] 每次执行的临时数据，在 [AgentStartCall] 时刷新，在
     /// [AgentEndCall] 时清理
     std::map<std::string, std::map<std::string, std::any, std::less<>>, std::less<>> graphData{};
@@ -436,10 +436,10 @@ public:
 
     MiddlewareContext() = default;
 
-    /// @param persistence 会话 SQLite 持久化 (由 BaseAgent::init 注入;
+    /// @param sessionStore 会话 SQLite 持久化 (由 BaseAgent::init 注入;
     ///        为空时 share store 仅内存存储, 不落库)
-    explicit MiddlewareContext(std::shared_ptr<agentxx::agent::SessionPersistence> persistence) :
-        persistence_(persistence) {}
+    explicit MiddlewareContext(std::shared_ptr<agentxx::agent::SessionStore> sessionStore) :
+        persistence_(sessionStore) {}
 
     /// 将 std::any 转为 neograph::json（用于序列化到 state）
     static neograph::json anyToJson(const std::any& val);
@@ -526,26 +526,26 @@ public:
         }
     }
 
-    std::optional<std::string> getShareStoreItemValue(std::string_view thread_id, const size_t id);
+    std::optional<std::string> getShareStoreItemValue(std::string_view sessionId, const size_t id);
 
     void
-        setShareStoreItemValue(std::string_view thread_id, const size_t id, std::string_view value);
+        setShareStoreItemValue(std::string_view sessionId, const size_t id, std::string_view value);
 
-    size_t addShareStoreItemValue(std::string_view thread_id, std::string_view value);
+    size_t addShareStoreItemValue(std::string_view sessionId, std::string_view value);
 
-    void removeShareStoreItemValue(std::string_view thread_id, const size_t id);
+    void removeShareStoreItemValue(std::string_view sessionId, const size_t id);
 
-    void removeGraphDataItem(std::string_view thread_id, std::string_view key);
+    void removeGraphDataItem(std::string_view sessionId, std::string_view key);
 
     /// 清理指定 thread 的全部中间件状态 (graphData / shareStore / 各 handle states)
     /// - 供一次性会话 (subagent、headless run) 结束后的资源回收, 防止按 thread 累积泄漏
     ///   (Session 由 SessionStore::remove 另行移除)
     /// - 须由 agent io 线程调用 (与状态读写同一线程)
-    void cleanupThread(std::string_view thread_id);
+    void cleanupSession(std::string_view sessionId);
 
     template<typename T>
-    T& getGraphDataItemValue(std::string_view thread_id, std::string_view key) {
-        auto& itemGraphData = graphData[std::string{thread_id}];
+    T& getGraphDataItemValue(std::string_view sessionId, std::string_view key) {
+        auto& itemGraphData = graphData[std::string{sessionId}];
         auto  it            = itemGraphData.find(key);
         if (it == itemGraphData.end()) {
             auto [insertIt, _] = itemGraphData.insert(std::pair<std::string, std::any>{key, T{}});
@@ -557,8 +557,8 @@ public:
     }
 
     template<typename T>
-    void setGraphDataItemValue(std::string_view thread_id, std::string_view key, T value) {
-        auto& itemGraphData = graphData[std::string{thread_id}];
+    void setGraphDataItemValue(std::string_view sessionId, std::string_view key, T value) {
+        auto& itemGraphData = graphData[std::string{sessionId}];
         auto  it            = itemGraphData.find(key);
         if (it == itemGraphData.end()) {
             itemGraphData.insert(std::pair<std::string, std::any>{key, std::move(value)});
@@ -569,11 +569,11 @@ public:
 
     template<typename T>
     void modifyGraphDataItemValue(
-        std::string_view          thread_id,
+        std::string_view          sessionId,
         std::string_view          key,
         std::function<void(T&)>&& modify
     ) {
-        auto& itemGraphData = graphData[std::string{thread_id}];
+        auto& itemGraphData = graphData[std::string{sessionId}];
         auto  it            = itemGraphData.find(key);
         if (it == itemGraphData.end()) {
             auto value = T{};
@@ -586,32 +586,32 @@ public:
     }
 
     /// 一般用于捕获到 NodeInterrupt 后重新抛出，而不能作为首次抛出使用
-    void throwNodeInterruptBase(std::string_view thread_id, const neograph::json& msgs);
+    void throwNodeInterruptBase(std::string_view sessionId, const neograph::json& msgs);
 
     /// 工具请求中断：检查已有结果（resume 后）或存储参数并抛异常
     asio::awaitable<neograph::json> requestInterrupt(
-        std::string_view                           thread_id,
+        std::string_view                           sessionId,
         const std::function<InterruptHandleArg()>& onCreateArg,
         const neograph::json&                      msgs
     );
 
     /// 将 graphData 中 JSON 兼容条目序列化到 state channel
     neograph::json
-        getGraphDataToState(neograph::graph::GraphState& state, std::string_view thread_id);
+        getGraphDataToState(neograph::graph::GraphState& state, std::string_view sessionId);
 
     /// 从 state channel 恢复 graphData (用于中断 resume)
-    void setGraphDataFromState(neograph::graph::GraphState& state, std::string_view thread_id);
+    void setGraphDataFromState(neograph::graph::GraphState& state, std::string_view sessionId);
 
-    void setGraphDataFromState(neograph::json j, std::string_view thread_id);
+    void setGraphDataFromState(neograph::json j, std::string_view sessionId);
 
 private:
 
     /// 确保 share store 内存缓存已加载 (首次访问某 thread 时从 SQLite 恢复;
     /// 未注入持久化时 no-op)
-    void ensureShareStoreLoaded(std::string_view thread_id);
+    void ensureShareStoreLoaded(std::string_view sessionId);
 
     /// 会话 SQLite 持久化 (为空时 share store 仅内存存储)
-    std::shared_ptr<agentxx::agent::SessionPersistence> persistence_ = nullptr;
+    std::shared_ptr<agentxx::agent::SessionStore> persistence_ = nullptr;
     /// 已从持久化加载过 share store 的 thread (避免空存储反复加载) - O(1)
     std::unordered_set<std::string> shareStoreLoaded_{};
 };

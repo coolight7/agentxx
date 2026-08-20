@@ -117,8 +117,8 @@ Agentxx 是一个使用 C++23 实现的 AI Agent 框架，编译器启用 C++26/
 
 #### 会话 SQLite 持久化 (消息上下文 / viewMessages / share_store)
 
-- 开关: `AgentConfig::enableSessionPersistence` (默认关闭; agentxx_cli 在 `buildDefaultConfig` 中开启)。
-  开启后由 BaseAgent 创建 `SessionPersistence` 并注入 AgentContext:
+- 开关: `AgentConfig::enableSessionStore` (默认关闭; agentxx_cli 在 `buildDefaultConfig` 中开启)。
+  开启后由 BaseAgent 创建 `SessionStore` 并注入 AgentContext:
   - `AgentContext::sessionPersistence` + `SessionStore::persistence` (会话消息状态)
   - `MiddlewareContext` 构造参数 (share store 写穿)
 - 数据目录: `{dataDir}/sqlite/sessions/{threadId}/` (threadId 经 `sanitizeThreadId` 清洗为安全目录名:
@@ -147,7 +147,7 @@ Agentxx 是一个使用 C++23 实现的 AI Agent 框架，编译器启用 C++26/
 - 容错: 所有落库失败仅记录错误日志, 不影响内存状态与对话主流程 (尽力而为持久化);
   读取路径在目录不存在时直接返回空, 不创建目录/空文件 (避免 subagent 等
   只读访问产生垃圾目录)
-- 线程安全: `SessionPersistence` 内部互斥锁保护; 常规使用下调用发生在 agent io
+- 线程安全: `SessionStore` 内部互斥锁保护; 常规使用下调用发生在 agent io
   线程 (Session 绑定线程/工具执行), 锁仅在多线程并发访问时生效
 
 #### 会话切换 (TUI 会话选择弹窗)
@@ -1068,7 +1068,7 @@ agent/
 │   │   │   │                     #   ViewMessage (UI 展示消息, role 拆分子结构) /
 │   │   │   │                     #   ChainHash / AppendComponentNotification
 │   │   │   ├── model_registry.h  # ModelProviderRegistry (运行时模型切换)
-│   │   │   ├── session_persistence.h # 会话 SQLite 持久化: 按 threadId 分目录,
+│   │   │   ├── session_store.h # 会话 SQLite 持久化: 按 threadId 分目录,
 │   │   │   │                     #   session.db (viewMessages+llmMessages+meta) 与
 │   │   │   │   │                   share_store.db 分库, 读取路径不创建目录
 │   │   │   ├── prompt.h          # AgentPrompt / ToolPrompt 提示词管理

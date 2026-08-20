@@ -222,7 +222,7 @@ static std::string uiControlSchema() {
         {"type",        "number"             },
         {"description", "Wait duration in ms"}
     });
-    p["duration_ms"]             = codegraph::Json({
+    p["durationMs"]              = codegraph::Json({
         {"type", "number"}
     });
 

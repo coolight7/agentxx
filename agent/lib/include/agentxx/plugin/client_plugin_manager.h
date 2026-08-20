@@ -205,9 +205,9 @@ public:
         return uiAdapter_;
     }
 
-    /// 当前会话 threadId (get_client_state 数据源; mode_runners 启动时注入,
+    /// 当前会话 sessionId (get_client_state 数据源; mode_runners 启动时注入,
     /// 会话切换时经 ClientEventSink::onSessionSwitched 自动更新)
-    void setThreadId(std::string threadId);
+    void setSessionId(std::string sessionId);
 
     // ==================== 生命周期 (须 client io 线程) ====================
 
@@ -272,7 +272,7 @@ public:
     // ==================== 会话上下文 (io 线程) ====================
 
     /// 当前 client 状态 JSON (get_client_state 数据源):
-    /// {"threadId","connState","startupProgress","uiCaps"}
+    /// {"sessionId","connState","startupProgress","uiCaps"}
     std::string clientStateJson() const;
 
     // ==================== io 线程投递 ====================
@@ -285,10 +285,10 @@ public:
 
     void onReady() override;
     void onConnStateChanged(std::string_view state, std::string_view progress) override;
-    void onUserInput(std::string_view threadId, std::string_view text) override;
+    void onUserInput(std::string_view sessionId, std::string_view text) override;
     void onDelta(const agentxx::agent::Delta& delta) override;
     void onTurnResult(const agentxx::agent::WireTurnResult& result) override;
-    void onSessionSwitched(std::string_view threadId) override;
+    void onSessionSwitched(std::string_view sessionId) override;
     void onPluginData(const agentxx::agent::WirePluginData& data) override;
 
     // ==================== 内部 (host vtable 回调) ====================
@@ -337,8 +337,8 @@ public:
     std::string getOwnInfoJson(ClientPluginInstance* inst);
     std::string getPluginArgsJson(ClientPluginInstance* inst);
     /// 会话操作 (代理到端点)
-    void sendUserInputToPeer(ClientPluginInstance* inst, const char* threadId, const char* text);
-    void requestCancelToPeer(ClientPluginInstance* inst, const char* threadId);
+    void sendUserInputToPeer(ClientPluginInstance* inst, const char* sessionId, const char* text);
+    void requestCancelToPeer(ClientPluginInstance* inst, const char* sessionId);
     /// 跨端数据 (client → agent): 经端点 WirePluginDataUp 发送
     int sendPluginDataToPeer(ClientPluginInstance* inst, const char* event, const char* json);
 
@@ -395,7 +395,7 @@ private:
     std::shared_ptr<const ClientUiRegistry> uiRegistry_;
 
     /// 会话上下文 (io 线程)
-    std::string threadId_  = "session";
+    std::string sessionId_ = "session";
     std::string connState_ = "connecting";
     std::string startupProgress_;
 
@@ -455,7 +455,7 @@ public:
     virtual void sendPluginMessage(const std::string& /*text*/) {}
 
     /// 请求取消当前会话轮次 (io 线程; 与用户按 Esc 等价)
-    virtual void requestCancel(const std::string& /*threadId*/) {}
+    virtual void requestCancel(const std::string& /*sessionId*/) {}
 
     /// 跨端数据: client → agent (io 线程; 经端点 WirePluginDataUp 发送)
     /// 返回 true 表示已发送 (未连接等失败返回 false)

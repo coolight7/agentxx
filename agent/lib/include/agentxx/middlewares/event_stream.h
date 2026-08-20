@@ -60,7 +60,6 @@ struct EventSubscription {
 };
 
 /// 单向强类型事件流: publish -> 顺序派发到每个订阅者
-/// - 替代旧 EventStreamBase, 修正 id/execHit 混用 bug
 template<typename _DATA_TYPE>
 class EventStream : public EventStreamInterface {
 public:
@@ -117,7 +116,7 @@ public:
         if (listeners_.empty()) {
             co_return;
         }
-        // 快照当前订阅者, 避免派发过程中 map 迭代器失效
+        // 暂存当前订阅者, 避免派发过程中 map 迭代器失效
         auto snapshot = std::vector<EventSubscription<_DATA_TYPE>>{};
         snapshot.reserve(listeners_.size());
         for (auto it = listeners_.begin(); it != listeners_.end();) {
@@ -148,7 +147,7 @@ public:
 };
 
 /// 请求-响应事件流: 用于 HIL (interrupt/permission) 与 subagent 委派
-/// - request() 在调用协程内挂起, 直到 serve 端 respond 或超时
+/// - request() 在调用协程内挂起, 直到 registerServer 端 respond 或超时
 /// - correlationId 关联 request 与 response
 /// - 每个待响应请求持有一个 channel<TResp> 作为结果槽
 template<typename _REQ_TYPE, typename _RESP_TYPE>
@@ -182,14 +181,14 @@ public:
 
     /// 注册服务端处理者; 返回 serverId
     /// - 同一 topic 可多 server 注册, request 轮询派发
-    size_t serve(ServerHandler handler) {
+    size_t registerServer(ServerHandler handler) {
         assert(handler);
         auto id      = ++serverId_;
         servers_[id] = std::move(handler);
         return id;
     }
 
-    bool removeServer(size_t serverId) {
+    bool unregisterServer(size_t serverId) {
         auto it = servers_.find(serverId);
         if (it == servers_.end()) {
             return false;
@@ -580,7 +579,7 @@ private:
 /// GraphEvent -> 会话增量 Delta + EventBus 适配器
 /// - 接替 BaseAgent 的 llm callback 职责: 把 neograph 的 GraphStreamCallback 翻译成:
 ///   1. 会话增量 Delta (TextToken/ThinkingToken/ToolStart/ToolEnd/NodeStart/NodeEnd/MessageUITip),
-///      经 emitDelta 发送到对端 (TUI/stdio), 并写入会话历史 (appendHistory)
+///      经 emitDelta 发送到对端 (TUI/stdio), 并写入会话历史 (appendViewMessage)
 ///   2. 强类型总线事件发布 (EventBus: ModelToken/Error 等)
 ///   3. 可选转发到原始 callback (origCb)
 /// - 有状态: 内部维护流式状态 (chunk 类型切换/节点计时/Delta seq)
@@ -591,14 +590,14 @@ class EventBridge : public std::enable_shared_from_this<EventBridge> {
 public:
 
     /// @param agentName 当前 agent 名 (事件 source)
-    /// @param threadId  当前会话 id
+    /// @param sessionId  当前会话 id
     /// @param ctx       AgentContext (取 bus; 若 bus 为空则只做 Delta 翻译/转发)
-    /// @param session   会话 (appendHistory/contextStats/deltaSeq)
+    /// @param session   会话 (appendViewMessage/contextStats/deltaSeq)
     /// @param io        对端 IO (发送 Delta/ContextStats; 为空表示 headless 场景)
     /// @param origCb    原始回调 (可空)
     EventBridge(
         std::string                                  agentName,
-        std::string                                  threadId,
+        std::string                                  sessionId,
         std::weak_ptr<agentxx::agent::AgentContext>  ctx,
         std::shared_ptr<agentxx::agent::Session>     session,
         std::shared_ptr<agentxx::agent::AgentIOBase> io,
@@ -661,7 +660,7 @@ private:
     void publishError(std::string message, std::string where);
 
     std::string                                  agentName_;
-    std::string                                  threadId_;
+    std::string                                  sessionId_;
     std::weak_ptr<agentxx::agent::AgentContext>  ctx_;
     std::shared_ptr<agentxx::agent::Session>     session_;
     std::shared_ptr<agentxx::agent::AgentIOBase> io_;

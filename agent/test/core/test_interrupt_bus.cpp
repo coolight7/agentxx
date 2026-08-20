@@ -39,7 +39,7 @@ public:
     }
 
     asio::awaitable<neograph::json> handleInterrupt(
-        std::string_view /*threadId*/,
+        std::string_view /*sessionId*/,
         std::string_view interruptNode,
         std::string_view /*interruptValue*/,
         std::string_view /*interruptArgJson*/
@@ -66,7 +66,7 @@ asio::awaitable<void> test_interrupt_bus_request_response() {
                         agentxx::events::Topic::Interrupt,
                         agentxx::events::ReqInterrupt{
                             .agentName         = "test",
-                            .threadId          = "t1",
+                            .sessionId         = "t1",
                             .interruptNode     = "tool_x",
                             .handleName        = "default",
                             .interruptArgsJson = "{}",
@@ -90,7 +90,7 @@ asio::awaitable<void> test_interrupt_bus_request_response() {
             agentxx::events::Topic::Interrupt,
             agentxx::events::ReqInterrupt{
                 .agentName         = "test",
-                .threadId          = "t1",
+                .sessionId         = "t1",
                 .interruptNode     = "n",
                 .handleName        = "x",
                 .interruptArgsJson = "{}",
@@ -114,7 +114,7 @@ asio::awaitable<void> test_permission_bus_request_response() {
 
     auto reqAllow = agentxx::events::ReqPermission{
         .agentName     = "test",
-        .threadId      = "t1",
+        .sessionId     = "t1",
         .toolName      = "filesystem_write",
         .category      = "filesystem_write",
         .target        = "/etc/passwd",
@@ -194,7 +194,7 @@ asio::awaitable<void> test_registerOnBus_no_accumulation() {
                         agentxx::events::Topic::Interrupt,
                         agentxx::events::ReqInterrupt{
                             .agentName         = "t",
-                            .threadId          = "t",
+                            .sessionId         = "t",
                             .interruptNode     = "n",
                             .handleName        = "default",
                             .interruptArgsJson = "{}",
@@ -221,7 +221,7 @@ asio::awaitable<void> test_interrupt_bus_custom_handler() {
         = agentContext->bus->getRR<agentxx::events::ReqInterrupt, agentxx::events::RespInterrupt>(
             agentxx::events::Topic::Interrupt
         );
-    rr.serve(
+    rr.registerServer(
         [](const agentxx::events::ReqInterrupt& req,
            size_t /*corrId*/) -> asio::awaitable<agentxx::events::RespInterrupt> {
             co_return agentxx::events::RespInterrupt{
@@ -236,7 +236,7 @@ asio::awaitable<void> test_interrupt_bus_custom_handler() {
                         agentxx::events::Topic::Interrupt,
                         agentxx::events::ReqInterrupt{
                             .agentName         = "t",
-                            .threadId          = "t",
+                            .sessionId         = "t",
                             .interruptNode     = "n",
                             .handleName        = "myHandle",
                             .interruptArgsJson = "{}",
@@ -405,10 +405,10 @@ asio::awaitable<void> test_permission_remember_rule() {
     const std::string secretPath  = "/data/projects/remember/secret/key.txt";
 
     auto write = [&](std::string_view path) -> asio::awaitable<bool> {
-        // 必须携带 thread_id: requestPermission 经 sessions->get(thread_id) 取会话总线
+        // 必须携带 sessionId: requestPermission 经 sessions->get(sessionId) 取会话总线
         auto args = neograph::json{
-            {"path",      std::string{path}},
-            {"thread_id", "remember_test"  }
+            {"path",       std::string{path}},
+            {"session_id", "remember_test"  }
         };
         co_return co_await permission->defOnFilesystemHandle(
             item,

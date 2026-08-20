@@ -922,7 +922,7 @@ static bool uiControlParseCmd(simdjson::ondemand::value& v, UiCmdFields& f) {
             f.hasButton = jsonGetString(val, f.button);
         } else if (key == "ms") {
             f.hasMs = jsonGetInt(val, f.ms);
-        } else if (key == "duration_ms") {
+        } else if (key == "durationMs") {
             f.hasDuration = jsonGetInt(val, f.duration);
         } else if (key == "keys") {
             simdjson::ondemand::array arr;

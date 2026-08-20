@@ -123,7 +123,7 @@ int agentxx_destroy(AgentxxAgent*, char** log); // 未 stop 自动 stop
 ```jsonc
 {
   "dataDir": "~/.agentxx",            // 空=不持久化
-  "enableSessionPersistence": true,
+  "enableSessionStore": true,
   "sessionPersistenceRoot": "",
   "permissionMode": "ask",            // ask|all_ask|pass|deny
   "permissionAllowPaths": ["..."], "permissionDenyPaths": ["..."],
@@ -155,14 +155,14 @@ payload 全部为 JSON 字符串, 字段与 wire 协议 JSON 一致 (参照
 
 | 事件 | payload |
 |---|---|
-| `EVT_READY` | `{"threadId"}` |
-| `EVT_SYNC` | `{"from_index","tail_hash","messages":[ViewMessage...]}` |
+| `EVT_READY` | `{"sessionId"}` |
+| `EVT_SYNC` | `{"fromIndex","tailHash","messages":[ViewMessage...]}` |
 | `EVT_DELTA` | `{"type":"delta","kind":"text_token\|thinking_token\|tool_start\|tool_end\|turn_start\|turn_end\|node_start\|node_end\|message_tip\|system_message","seq",...}` |
-| `EVT_TURN_END` | `{"has_error","error_message","interrupted","start_time_ms","duration_ms"}` |
-| `EVT_CONTEXT_STATS` | `{"context_tokens","max_context_tokens","tps"}` |
-| `EVT_MODEL_INFO` | `{"current_model","models":[...]}` |
-| `EVT_COMPONENTS` | `{"notifications":[{"type","name","success","error_message"}]}` |
-| `EVT_INTERRUPT_REQ` | `{"interruptId","threadId","node","value","argJson":{...,"inputs":[{"label","depict","type","defaultValue","enumValues"}]}}` |
+| `EVT_TURN_END` | `{"hasError","errorMessage","interrupted","startTimeMs","durationMs"}` |
+| `EVT_CONTEXT_STATS` | `{"contextTokens","maxContextTokens","tps"}` |
+| `EVT_MODEL_INFO` | `{"currentModel","models":[...]}` |
+| `EVT_COMPONENTS` | `{"notifications":[{"type","name","success","errorMessage"}]}` |
+| `EVT_INTERRUPT_REQ` | `{"interruptId","sessionId","node","value","argJson":{...,"inputs":[{"label","depict","type","defaultValue","enumValues"}]}}` |
 | `EVT_INTERRUPT_EXPIRED` | `{"interruptId"}` |
 | `EVT_PLUGIN_DATA` | `{"plugin","event","data"}` |
 | `EVT_ERROR` | `{"code","message"}` |

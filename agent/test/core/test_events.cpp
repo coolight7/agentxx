@@ -31,7 +31,7 @@ void test_events_structs_defaultconstruct() {
     {
         EventAgentTurnStart e{};
         e.agentName = "a";
-        e.threadId  = "t1";
+        e.sessionId = "t1";
         e.userInput = "hi";
         XX_TEST_EXPECT_TRUE(e.agentName == "a" && e.userInput == "hi");
     }

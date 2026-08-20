@@ -10,9 +10,9 @@
 namespace agentxx {
 namespace client {
 
-/// 生成尽量唯一的会话 threadId:
+/// 生成尽量唯一的会话 sessionId:
 /// 高精度时间戳 + 进程 PID + 随机数 + 自增序号 (见 mode_runners.cpp 实现注释)
-std::string generateUniqueThreadId();
+std::string generateUniqueSessionId();
 
 /// client 侧插件配置列表 (yaml `plugins` 段; sides 过滤在 ClientPluginManager
 /// 内完成; 传入空列表 = 不加载 client 插件)

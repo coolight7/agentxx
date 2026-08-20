@@ -298,7 +298,7 @@ struct CodeAgentBenchConfig {
 };
 
 inline void benchCodeAgentRunConversationTurnAsync(const CodeAgentBenchConfig& cfg) {
-    std::cout << "\n=== CodeAgent::runConversationTurnAsync Benchmarks ===" << std::endl;
+    std::cout << "\n=== CodeAgent::runTurnAsync Benchmarks ===" << std::endl;
 
     std::string  baseUrl   = cfg.openAIBaseUrl;
     std::string  apiKey    = cfg.openAIApiKey;
@@ -334,7 +334,7 @@ inline void benchCodeAgentRunConversationTurnAsync(const CodeAgentBenchConfig& c
 
                 auto start = std::chrono::high_resolution_clock::now();
 
-                auto turnResult = co_await agent.runConversationTurnAsync(
+                auto turnResult = co_await agent.runTurnAsync(
                     "bench_session_" + std::to_string(i),
                     cfg.userInput,
                     true,
@@ -388,7 +388,7 @@ inline void benchCodeAgentRunConversationTurnAsync(const CodeAgentBenchConfig& c
     double median_ns = durations[durations.size() / 2];
 
     BenchResult r;
-    r.name       = "CodeAgent::runConversationTurnAsync [LLM end-to-end]";
+    r.name       = "CodeAgent::runTurnAsync [LLM end-to-end]";
     r.iterations = durations.size();
     r.total_ns   = total_ns;
     r.mean_ns    = mean_ns;
@@ -550,7 +550,7 @@ inline void benchCodeAgentSimpleCompletion(const CodeAgentBenchConfig& cfg) {
 // Runs multiple turns sequentially, passing messages between each turn.
 // -----------------------------------------------------------------------
 inline void benchCodeAgentMultiTurn(const CodeAgentBenchConfig& cfg) {
-    std::cout << "\n=== CodeAgent::runConversationTurnAsync [multi-turn] ===" << std::endl;
+    std::cout << "\n=== CodeAgent::runTurnAsync [multi-turn] ===" << std::endl;
 
     std::string  baseUrl   = cfg.openAIBaseUrl;
     std::string  apiKey    = cfg.openAIApiKey;
@@ -584,7 +584,7 @@ inline void benchCodeAgentMultiTurn(const CodeAgentBenchConfig& cfg) {
                 auto start = std::chrono::high_resolution_clock::now();
 
                 for (size_t turn = 0; turn < turnsPerIteration; ++turn) {
-                    auto turnResult = co_await agent.runConversationTurnAsync(
+                    auto turnResult = co_await agent.runTurnAsync(
                         "bench_multi_" + std::to_string(i),
                         cfg.userInput,
                         turn == 0,
@@ -611,7 +611,7 @@ inline void benchCodeAgentMultiTurn(const CodeAgentBenchConfig& cfg) {
     }
 
     reportBenchResult(
-        "CodeAgent::runConversationTurnAsync [multi-turn x" + std::to_string(turnsPerIteration)
+        "CodeAgent::runTurnAsync [multi-turn x" + std::to_string(turnsPerIteration)
             + "]",
         durations
     );
@@ -622,7 +622,7 @@ inline void benchCodeAgentMultiTurn(const CodeAgentBenchConfig& cfg) {
 // Prepares a long message history then runs one final turn.
 // -----------------------------------------------------------------------
 inline void benchCodeAgentLargeHistory(const CodeAgentBenchConfig& cfg) {
-    std::cout << "\n=== CodeAgent::runConversationTurnAsync [large history] ===" << std::endl;
+    std::cout << "\n=== CodeAgent::runTurnAsync [large history] ===" << std::endl;
 
     std::string  baseUrl   = cfg.openAIBaseUrl;
     std::string  apiKey    = cfg.openAIApiKey;
@@ -666,7 +666,7 @@ inline void benchCodeAgentLargeHistory(const CodeAgentBenchConfig& cfg) {
                 }
 
                 auto start      = std::chrono::high_resolution_clock::now();
-                auto turnResult = co_await agent.runConversationTurnAsync(
+                auto turnResult = co_await agent.runTurnAsync(
                     "bench_history_" + std::to_string(i),
                     cfg.userInput,
                     true,
@@ -692,7 +692,7 @@ inline void benchCodeAgentLargeHistory(const CodeAgentBenchConfig& cfg) {
     }
 
     reportBenchResult(
-        "CodeAgent::runConversationTurnAsync [history=" + std::to_string(historyMessages) + "]",
+        "CodeAgent::runTurnAsync [history=" + std::to_string(historyMessages) + "]",
         durations
     );
 }

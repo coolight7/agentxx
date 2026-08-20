@@ -79,12 +79,12 @@ asio::awaitable<TestResult> run_plugin_tests() {
         XX_TEST_EXPECT_TRUE(tool != nullptr);
         if (tool) {
             auto out = co_await tool->execute_async(neograph::json{
-                {"thread_id", "t1"   },
-                {"hello",     "world"},
+                {"session_id", "t1"   },
+                {"hello",      "world"},
             });
             auto j   = neograph::json::parse(out);
             XX_TEST_EXPECT_EQ(j["echo"]["hello"].get<std::string>(), "world");
-            XX_TEST_EXPECT_EQ(j["thread_id"].get<std::string>(), "t1");
+            XX_TEST_EXPECT_EQ(j["session_id"].get<std::string>(), "t1");
         }
     }
 
@@ -94,8 +94,8 @@ asio::awaitable<TestResult> run_plugin_tests() {
         XX_TEST_EXPECT_TRUE(tool != nullptr);
         if (tool) {
             auto out = co_await tool->execute_async(neograph::json{
-                {"thread_id", "t1"},
-                {"x",         42  },
+                {"session_id", "t1"},
+                {"x",          42  },
             });
             auto j   = neograph::json::parse(out);
             XX_TEST_EXPECT_EQ(j["via_call_tool"]["echo"]["x"].get<int>(), 42);
@@ -262,8 +262,8 @@ asio::awaitable<TestResult> run_plugin_tests() {
             XX_TEST_EXPECT_TRUE(tool != nullptr);
             if (tool) {
                 auto out = co_await tool->execute_async(neograph::json{
-                    {"thread_id", "t1"     },
-                    {"name",      "agentxx"},
+                    {"session_id", "t1"     },
+                    {"name",       "agentxx"},
                 });
                 auto j   = neograph::json::parse(out);
                 XX_TEST_EXPECT_EQ(j["greeting"].get<std::string>(), "Hello, agentxx!");
@@ -273,11 +273,11 @@ asio::awaitable<TestResult> run_plugin_tests() {
             XX_TEST_EXPECT_TRUE(asyncTool != nullptr);
             if (asyncTool) {
                 auto out = co_await asyncTool->execute_async(neograph::json{
-                    {"thread_id", "t2"}
+                    {"session_id", "t2"}
                 });
                 auto j   = neograph::json::parse(out);
                 XX_TEST_EXPECT_EQ(j["waited"].get<bool>(), true);
-                XX_TEST_EXPECT_EQ(j["thread"].get<std::string>(), "t2");
+                XX_TEST_EXPECT_EQ(j["session"].get<std::string>(), "t2");
             }
         }
 

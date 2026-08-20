@@ -510,7 +510,7 @@ void A2aServer::executeTask(std::string_view taskId, std::string_view userInput)
             return;
         }
 
-        std::string threadId = fmt::format("a2a_{}", taskId);
+        std::string sessionId = fmt::format("a2a_{}", taskId);
         std::string collected;
 
         // 串行化对共享 BaseAgent 的访问: BaseAgent 设计为单线程/多协程交错执行,
@@ -523,13 +523,13 @@ void A2aServer::executeTask(std::string_view taskId, std::string_view userInput)
             [&]() -> bool {
                 asio::co_spawn(
                     *ioCtx,
-                    [this, &threadId, &userInput, &collected, &cancelFlag](
+                    [this, &sessionId, &userInput, &collected, &cancelFlag](
                     ) -> asio::awaitable<void> {
                         std::vector<neograph::ChatMessage> msgs{
                             neograph::ChatMessage{"user", std::string{userInput}}
                         };
-                        auto result = co_await agent_->runNonStreamAsync(
-                            threadId,
+                        auto result = co_await agent_->runOverMsgsTurnAsync(
+                            sessionId,
                             msgs,
                             [&collected, &cancelFlag](const neograph::graph::GraphEvent& event) {
                                 if (event.type == neograph::graph::GraphEvent::Type::LLM_TOKEN) {

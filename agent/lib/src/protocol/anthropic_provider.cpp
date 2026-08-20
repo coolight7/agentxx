@@ -156,8 +156,7 @@ std::pair<std::string, neograph::json> AnthropicProvider::convertMessages(
             }
             j["content"] = std::move(content_arr);
             arr.push_back(std::move(j));
-        } else if (sendThinking && msg.role == "assistant"
-                   && (!msg.reasoning_content.empty() || hasThinkingBlocks(msg))) {
+        } else if (sendThinking && msg.role == "assistant" && (!msg.reasoning_content.empty() || hasThinkingBlocks(msg))) {
             neograph::json j;
             j["role"]                  = "assistant";
             neograph::json content_arr = neograph::json::array();
@@ -353,8 +352,8 @@ neograph::json AnthropicProvider::buildBody(const neograph::CompletionParams& pa
         body["max_tokens"] = params.max_tokens;
     }
 
-    if (config_.extra_config.is_object()) {
-        for (const auto& [key, val] : config_.extra_config.items()) {
+    if (config_.extraConfig.is_object()) {
+        for (const auto& [key, val] : config_.extraConfig.items()) {
             if (!body.contains(key)) {
                 body[key] = val;
             }

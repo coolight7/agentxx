@@ -18,7 +18,7 @@ extern int g_host_failed;
 
 asio::awaitable<TestResult> run_agent_host_tests();
 
-/// 验证: 同上下文模式派生子代理 (messages 结构化透传 + threadId 指定)
+/// 验证: 同上下文模式派生子代理 (messages 结构化透传 + sessionId 指定)
 /// - messages 原样透传为子代理初始上下文 (含 system, 不做文本转录)
 /// - 子代理运行在指定 thread, 强制使用父会话当前模型 (忽略 subagentModel)
 /// - 三者共同保证"相同上下文前缀 + 相同 threadid + 相同模型"命中 KV cache

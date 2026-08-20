@@ -60,7 +60,7 @@ struct YamlAppConfig {
     /// - 特殊关键字 `default` (仅 tui/cli 模式): 使用当前系统数据目录
     ///   (Linux/macOS: ~/.agentxx/, Windows: %APPDATA%/agentxx/)
     /// - 非空时数据子路径: {dataDir}/sqlite/global.db (全局设置),
-    ///   {dataDir}/sqlite/sessions/{threadId}/ (会话数据),
+    ///   {dataDir}/sqlite/sessions/{sessionId}/ (会话数据),
     ///   {dataDir}/sqlite/codegraph/... (CodeGraph 索引)
     std::string dataDir;
 

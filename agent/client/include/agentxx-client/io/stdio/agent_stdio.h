@@ -29,14 +29,14 @@ private:
     std::shared_ptr<StderrLogSink> logSink_;
     bool                           isThinking_ = false;
     /// 当前会话 thread_id (mode_runners 装配时设置; 插件代发消息用)
-    std::string threadId_;
+    std::string sessionId_;
 
 public:
 
     asio::awaitable<std::optional<std::string>> getInput() override;
 
     asio::awaitable<neograph::json> handleInterrupt(
-        std::string_view threadId,
+        std::string_view sessionId,
         std::string_view interruptNode,
         std::string_view interruptValue,
         std::string_view interruptArgJson
@@ -46,8 +46,8 @@ public:
     ~StdIOClientAgentIO() override;
 
     /// 设置当前会话 thread_id (mode_runners 在建立会话时调用)
-    void setThreadId(std::string threadId) {
-        threadId_ = std::move(threadId);
+    void setSessionId(std::string sessionId) {
+        sessionId_ = std::move(sessionId);
     }
 
     // -----------------------------------------------------------------------

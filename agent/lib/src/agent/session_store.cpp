@@ -1,4 +1,4 @@
-#include "agentxx/agent/session_persistence.h"
+#include "agentxx/agent/session_store.h"
 
 #include "agentxx/agent/config_static.h"
 #include "agentxx/util/exception.h"
@@ -15,9 +15,9 @@ namespace fs = std::filesystem;
 
 namespace {
 
-/// 单个 threadId 目录段最大长度 (截断后含分隔符与 hash 尾缀)
+/// 单个 sessionId 目录段最大长度 (截断后含分隔符与 hash 尾缀)
 /// - Windows 默认 MAX_PATH=260, 需控制单段长度
-static constexpr size_t kMaxThreadDirLen = 96;
+static constexpr size_t kMaxSessionDataDirLen = 96;
 
 /// FNV-1a 64 位哈希 (截断用低 32 位 hex 输出)
 /// - 仅用于清洗后目录名的短标识, 确定性跨平台一致
@@ -103,12 +103,12 @@ CREATE TABLE IF NOT EXISTS item (
 
 /// meta 键名
 static constexpr std::string_view kMetaMsgIdCounter = "msgIdCounter";
-/// 会话元数据 (供会话列表展示): 原始 threadId / 会话名称 / 最近活动时间
-/// - threadId: 目录名经 sanitizeThreadId 清洗后可能失真, 原始值单独存于 meta,
-///   listSessions 恢复真实 threadId; 老数据无此键时回退目录名
+/// 会话元数据 (供会话列表展示): 原始 sessionId / 会话名称 / 最近活动时间
+/// - sessionId: 目录名经 sanitizeSessionId 清洗后可能失真, 原始值单独存于 meta,
+///   listSessions 恢复真实 sessionId; 老数据无此键时回退目录名
 /// - title:    首条用户消息的单行预览 (仅首次写入, 后续不覆盖)
 /// - lastActiveMs: 最近一条消息的开始时间戳 (毫秒), 每次追加消息时更新
-static constexpr std::string_view kMetaThreadId     = "threadId";
+static constexpr std::string_view kMetaSessionId    = "sessionId";
 static constexpr std::string_view kMetaTitle        = "title";
 static constexpr std::string_view kMetaLastActiveMs = "lastActiveMs";
 
@@ -148,15 +148,15 @@ static std::string titlePreview(std::string_view s, size_t max = 60) {
 
 } // namespace
 
-void SessionPersistence::updateViewMessage(std::string_view threadId, const ViewMessage& msg) {
+void SessionStore::updateViewMessage(std::string_view sessionId, const ViewMessage& msg) {
     if (msg.id.empty()) {
-        XX_LOGD("SessionPersistence: updateViewMessage({}) skipped (empty msg id)", threadId);
+        XX_LOGD("SessionStore: updateViewMessage({}) skipped (empty msg id)", sessionId);
         return;
     }
     std::lock_guard<std::mutex> lock(mutex_);
     agentxx::util::catchError<bool>(
         [&]() -> bool {
-            auto& db = dbs(threadId).sessionDb;
+            auto& db = dbs(sessionId).sessionDb;
             // 按消息 id 定位行 (json1 json_extract; sqlite >= 3.38 内置)
             auto update
                 = db.prepare("UPDATE view_message SET json = ? WHERE json_extract(json, '$.id') = ?"
@@ -168,8 +168,8 @@ void SessionPersistence::updateViewMessage(std::string_view threadId, const View
         },
         [&](std::string errmsg) -> bool {
             XX_LOGE(
-                "SessionPersistence: updateViewMessage({}, id={}) failed: {}",
-                threadId,
+                "SessionStore: updateViewMessage({}, id={}) failed: {}",
+                sessionId,
                 msg.id,
                 errmsg
             );
@@ -179,23 +179,23 @@ void SessionPersistence::updateViewMessage(std::string_view threadId, const View
 }
 
 // ---------------------------------------------------------------------------
-// SessionPersistence
+// SessionStore
 // ---------------------------------------------------------------------------
 
-SessionPersistence::SessionPersistence(std::string rootDir) :
+SessionStore::SessionStore(std::string rootDir) :
     rootDir_(rootDir.empty() ? defaultRootDir() : std::move(rootDir)) {}
 
-std::string SessionPersistence::sanitizeThreadId(std::string_view threadId) {
-    if (threadId.empty()) {
+std::string SessionStore::sanitizeSessionId(std::string_view sessionId) {
+    if (sessionId.empty()) {
         return "default";
     }
-    auto seg = sanitizeSegment(threadId);
+    auto seg = sanitizeSegment(sessionId);
     // 空串 / "." / ".." 不能作为目录名 (路径穿越/上级目录)
     if (seg.empty() || seg == "." || seg == "..") {
-        seg = "thread";
+        seg = "session";
     }
-    // 是否发生过改写 (需要附加哈希尾缀保证不同 threadId 不碰撞到同一目录)
-    bool changed = (seg != threadId);
+    // 是否发生过改写 (需要附加哈希尾缀保证不同 sessionId 不碰撞到同一目录)
+    bool changed = (seg != sessionId);
 #if XX_IS_WIN_D
     if (isWindowsReservedName(seg)) {
         seg     = "t_" + seg;
@@ -203,41 +203,41 @@ std::string SessionPersistence::sanitizeThreadId(std::string_view threadId) {
     }
 #endif
     // 超长截断: 保留前部可读信息 + 8 位 hex hash 尾缀防碰撞
-    if (seg.size() > kMaxThreadDirLen) {
-        seg     = seg.substr(0, kMaxThreadDirLen - 9);
+    if (seg.size() > kMaxSessionDataDirLen) {
+        seg     = seg.substr(0, kMaxSessionDataDirLen - 9);
         changed = true;
     }
     if (changed) {
-        seg += fmt::format("_{:08x}", static_cast<uint32_t>(fnv1a64(threadId) & 0xffffffffu));
+        seg += fmt::format("_{:08x}", static_cast<uint32_t>(fnv1a64(sessionId) & 0xffffffffu));
     }
     return seg;
 }
 
-SessionPersistence::ThreadDbs& SessionPersistence::dbs(std::string_view threadId) {
-    // 目录: {root}/{sanitizedThreadId}/
-    auto            dir = fs::path(rootDir_) / sanitizeThreadId(threadId);
+SessionStore::SessionDbs& SessionStore::dbs(std::string_view sessionId) {
+    // 目录: {root}/{sanitizedSessionId}/
+    auto            dir = fs::path(rootDir_) / sanitizeSessionId(sessionId);
     std::error_code ec;
     fs::create_directories(dir, ec);
     if (ec) {
         throw std::runtime_error{
-            fmt::format("SessionPersistence: create dir {} failed: {}", dir.string(), ec.message())
+            fmt::format("SessionStore: create dir {} failed: {}", dir.string(), ec.message())
         };
     }
 
-    auto it = dbs_.find(threadId);
+    auto it = dbs_.find(sessionId);
     if (it != dbs_.end()) {
         return *it->second;
     }
-    auto dbs = std::make_shared<ThreadDbs>();
+    auto dbs = std::make_shared<SessionDbs>();
     // 打开失败 (权限/磁盘) 抛异常, 由上层 catchError 记录日志
     dbs->sessionDb.open((dir / "session.db").string());
     dbs->shareStoreDb.open((dir / "share_store.db").string());
     ensureSchema(dbs->sessionDb, dbs->shareStoreDb);
-    auto [insertIt, _] = dbs_.emplace(std::string{threadId}, std::move(dbs));
+    auto [insertIt, _] = dbs_.emplace(std::string{sessionId}, std::move(dbs));
     return *insertIt->second;
 }
 
-void SessionPersistence::ensureSchema(
+void SessionStore::ensureSchema(
     agentxx::util::SqliteDb& sessionDb,
     agentxx::util::SqliteDb& shareStoreDb
 ) {
@@ -245,21 +245,21 @@ void SessionPersistence::ensureSchema(
     shareStoreDb.exec(kShareStoreSchema);
 }
 
-bool SessionPersistence::threadDirExists(std::string_view threadId) const {
+bool SessionStore::sessionDataDirExists(std::string_view sessionId) const {
     std::error_code ec;
-    return fs::exists(fs::path(rootDir_) / sanitizeThreadId(threadId), ec);
+    return fs::exists(fs::path(rootDir_) / sanitizeSessionId(sessionId), ec);
 }
 
-SessionPersistence::LoadedSession SessionPersistence::loadSession(std::string_view threadId) {
+SessionStore::LoadedSession SessionStore::loadSession(std::string_view sessionId) {
     std::lock_guard<std::mutex> lock(mutex_);
     LoadedSession               out;
     // 目录不存在 = 从未写入过, 直接返回空 (避免只读访问创建目录/空文件)
-    if (!threadDirExists(threadId)) {
+    if (!sessionDataDirExists(sessionId)) {
         return out;
     }
     agentxx::util::catchError<bool>(
         [&]() -> bool {
-            auto& db = dbs(threadId).sessionDb;
+            auto& db = dbs(sessionId).sessionDb;
 
             // 展示历史 (按追加顺序)
             auto stmt = db.prepare("SELECT json FROM view_message ORDER BY seq");
@@ -287,7 +287,7 @@ SessionPersistence::LoadedSession SessionPersistence::loadSession(std::string_vi
             return true;
         },
         [&](std::string errmsg) -> bool {
-            XX_LOGE("SessionPersistence: loadSession({}) failed: {}", threadId, errmsg);
+            XX_LOGE("SessionStore: loadSession({}) failed: {}", sessionId, errmsg);
             out = LoadedSession{};
             return false;
         }
@@ -295,7 +295,7 @@ SessionPersistence::LoadedSession SessionPersistence::loadSession(std::string_vi
     return out;
 }
 
-std::vector<SessionInfo> SessionPersistence::listSessions() {
+std::vector<SessionInfo> SessionStore::listSessions() {
     std::vector<SessionInfo>    out;
     std::lock_guard<std::mutex> lock(mutex_);
     agentxx::util::catchError<bool>(
@@ -311,11 +311,11 @@ std::vector<SessionInfo> SessionPersistence::listSessions() {
                     continue;
                 }
                 // 独立临时连接读取 meta (只读; 不复用 dbs_ 缓存, 也不创建目录):
-                // threadId 优先取 meta 中的原始值 (目录名经 sanitize 后可能失真),
-                // 老数据无 meta.threadId 时回退目录名 (generateUniqueThreadId 生成的
-                // id 仅含安全字符, sanitize 不改写, 目录名即原始 threadId)
+                // sessionId 优先取 meta 中的原始值 (目录名经 sanitize 后可能失真),
+                // 老数据无 meta.sessionId 时回退目录名 (generateUniqueSessionId 生成的
+                // id 仅含安全字符, sanitize 不改写, 目录名即原始 sessionId)
                 SessionInfo info;
-                info.threadId = entry.path().filename().string();
+                info.sessionId = entry.path().filename().string();
                 agentxx::util::catchError<bool>(
                     [&]() -> bool {
                         agentxx::util::SqliteDb db;
@@ -323,10 +323,10 @@ std::vector<SessionInfo> SessionPersistence::listSessions() {
                         auto stmt = db.prepare("SELECT key, value FROM meta");
                         while (stmt.step()) {
                             const auto key = stmt.columnText(0);
-                            if (key == kMetaThreadId) {
+                            if (key == kMetaSessionId) {
                                 const auto tid = stmt.columnText(1);
                                 if (!tid.empty()) {
-                                    info.threadId = tid;
+                                    info.sessionId = tid;
                                 }
                             } else if (key == kMetaTitle) {
                                 info.title = stmt.columnText(1);
@@ -363,7 +363,7 @@ std::vector<SessionInfo> SessionPersistence::listSessions() {
                     },
                     [&](std::string errmsg) -> bool {
                         XX_LOGD(
-                            "SessionPersistence: listSessions read {} failed: {}",
+                            "SessionStore: listSessions read {} failed: {}",
                             entry.path().filename().string(),
                             errmsg
                         );
@@ -372,32 +372,32 @@ std::vector<SessionInfo> SessionPersistence::listSessions() {
                 );
                 out.push_back(std::move(info));
             }
-            // 按最近活动时间降序 (最新在前); 时间相同时按 threadId 字典序保证稳定顺序
+            // 按最近活动时间降序 (最新在前); 时间相同时按 sessionId 字典序保证稳定顺序
             std::sort(out.begin(), out.end(), [](const SessionInfo& a, const SessionInfo& b) {
                 if (a.lastActiveMs != b.lastActiveMs) {
                     return a.lastActiveMs > b.lastActiveMs;
                 }
-                return a.threadId < b.threadId;
+                return a.sessionId < b.sessionId;
             });
             return true;
         },
         [&](std::string errmsg) -> bool {
-            XX_LOGE("SessionPersistence: listSessions failed: {}", errmsg);
+            XX_LOGE("SessionStore: listSessions failed: {}", errmsg);
             return false;
         }
     );
     return out;
 }
 
-void SessionPersistence::appendViewMessage(
-    std::string_view   threadId,
+void SessionStore::appendViewMessage(
+    std::string_view   sessionId,
     const ViewMessage& msg,
     uint64_t           msgIdCounter
 ) {
     std::lock_guard<std::mutex> lock(mutex_);
     agentxx::util::catchError<bool>(
         [&]() -> bool {
-            auto& db = dbs(threadId).sessionDb;
+            auto& db = dbs(sessionId).sessionDb;
             db.beginImmediate();
             bool inTx = true;
             try {
@@ -413,10 +413,10 @@ void SessionPersistence::appendViewMessage(
                 meta.step();
 
                 // ---- 会话列表元数据 (供 listSessions 展示, 与消息同事务提交) ----
-                // 原始 threadId (目录名经清洗后可能失真)
+                // 原始 sessionId (目录名经清洗后可能失真)
                 meta.reset();
-                meta.bindText(1, kMetaThreadId);
-                meta.bindText(2, std::string{threadId});
+                meta.bindText(1, kMetaSessionId);
+                meta.bindText(2, std::string{sessionId});
                 meta.step();
                 // 最近活动时间: 取消息开始时间戳 (毫秒)
                 if (msg.startTimeMs > 0) {
@@ -456,20 +456,17 @@ void SessionPersistence::appendViewMessage(
             return true;
         },
         [&](std::string errmsg) -> bool {
-            XX_LOGE("SessionPersistence: appendViewMessage({}) failed: {}", threadId, errmsg);
+            XX_LOGE("SessionStore: appendViewMessage({}) failed: {}", sessionId, errmsg);
             return false;
         }
     );
 }
 
-void SessionPersistence::saveLlmMessages(
-    std::string_view      threadId,
-    const neograph::json& llmMessages
-) {
+void SessionStore::saveLlmMessages(std::string_view sessionId, const neograph::json& llmMessages) {
     std::lock_guard<std::mutex> lock(mutex_);
     agentxx::util::catchError<bool>(
         [&]() -> bool {
-            auto& db = dbs(threadId).sessionDb;
+            auto& db = dbs(sessionId).sessionDb;
             db.beginImmediate();
             bool inTx = true;
             try {
@@ -497,7 +494,7 @@ void SessionPersistence::saveLlmMessages(
             return true;
         },
         [&](std::string errmsg) -> bool {
-            XX_LOGE("SessionPersistence: saveLlmMessages({}) failed: {}", threadId, errmsg);
+            XX_LOGE("SessionStore: saveLlmMessages({}) failed: {}", sessionId, errmsg);
             return false;
         }
     );
@@ -507,16 +504,16 @@ void SessionPersistence::saveLlmMessages(
 // share store
 // ---------------------------------------------------------------------------
 
-SessionPersistence::LoadedShareStore SessionPersistence::loadShareStore(std::string_view threadId) {
+SessionStore::LoadedShareStore SessionStore::loadShareStore(std::string_view sessionId) {
     std::lock_guard<std::mutex> lock(mutex_);
     LoadedShareStore            out;
     // 目录不存在 = 从未写入过, 直接返回空
-    if (!threadDirExists(threadId)) {
+    if (!sessionDataDirExists(sessionId)) {
         return out;
     }
     agentxx::util::catchError<bool>(
         [&]() -> bool {
-            auto& db   = dbs(threadId).shareStoreDb;
+            auto& db   = dbs(sessionId).shareStoreDb;
             auto  stmt = db.prepare("SELECT id, value FROM item ORDER BY id");
             while (stmt.step()) {
                 out.items[static_cast<size_t>(stmt.columnInt64(0))] = stmt.columnText(1);
@@ -525,7 +522,7 @@ SessionPersistence::LoadedShareStore SessionPersistence::loadShareStore(std::str
             return true;
         },
         [&](std::string errmsg) -> bool {
-            XX_LOGE("SessionPersistence: loadShareStore({}) failed: {}", threadId, errmsg);
+            XX_LOGE("SessionStore: loadShareStore({}) failed: {}", sessionId, errmsg);
             out = LoadedShareStore{};
             return false;
         }
@@ -533,17 +530,16 @@ SessionPersistence::LoadedShareStore SessionPersistence::loadShareStore(std::str
     return out;
 }
 
-std::optional<std::string>
-    SessionPersistence::getShareStoreItem(std::string_view threadId, size_t id) {
+std::optional<std::string> SessionStore::getShareStoreItem(std::string_view sessionId, size_t id) {
     std::lock_guard<std::mutex> lock(mutex_);
     std::optional<std::string>  out;
     // 目录不存在 = 从未写入过, 直接返回 nullopt
-    if (!threadDirExists(threadId)) {
+    if (!sessionDataDirExists(sessionId)) {
         return out;
     }
     agentxx::util::catchError<bool>(
         [&]() -> bool {
-            auto& db   = dbs(threadId).shareStoreDb;
+            auto& db   = dbs(sessionId).shareStoreDb;
             auto  stmt = db.prepare("SELECT value FROM item WHERE id = ?");
             stmt.bindInt64(1, static_cast<int64_t>(id));
             if (stmt.step()) {
@@ -552,27 +548,22 @@ std::optional<std::string>
             return true;
         },
         [&](std::string errmsg) -> bool {
-            XX_LOGE(
-                "SessionPersistence: getShareStoreItem({}, {}) failed: {}",
-                threadId,
-                id,
-                errmsg
-            );
+            XX_LOGE("SessionStore: getShareStoreItem({}, {}) failed: {}", sessionId, id, errmsg);
             return false;
         }
     );
     return out;
 }
 
-void SessionPersistence::setShareStoreItem(
-    std::string_view threadId,
+void SessionStore::setShareStoreItem(
+    std::string_view sessionId,
     size_t           id,
     std::string_view value
 ) {
     std::lock_guard<std::mutex> lock(mutex_);
     agentxx::util::catchError<bool>(
         [&]() -> bool {
-            auto& db   = dbs(threadId).shareStoreDb;
+            auto& db   = dbs(sessionId).shareStoreDb;
             auto  stmt = db.prepare("INSERT INTO item(id, value) VALUES (?, ?) "
                                     "ON CONFLICT(id) DO UPDATE SET value = excluded.value");
             stmt.bindInt64(1, static_cast<int64_t>(id));
@@ -581,25 +572,20 @@ void SessionPersistence::setShareStoreItem(
             return true;
         },
         [&](std::string errmsg) -> bool {
-            XX_LOGE(
-                "SessionPersistence: setShareStoreItem({}, {}) failed: {}",
-                threadId,
-                id,
-                errmsg
-            );
+            XX_LOGE("SessionStore: setShareStoreItem({}, {}) failed: {}", sessionId, id, errmsg);
             return false;
         }
     );
 }
 
-size_t SessionPersistence::addShareStoreItem(std::string_view threadId, std::string_view value) {
+size_t SessionStore::addShareStoreItem(std::string_view sessionId, std::string_view value) {
     std::lock_guard<std::mutex> lock(mutex_);
     size_t                      out = 0;
     agentxx::util::catchError<bool>(
         [&]() -> bool {
-            auto& db = dbs(threadId).shareStoreDb;
+            auto& db = dbs(sessionId).shareStoreDb;
             // 自增 id: 取现有最大 id + 1, 重启后延续; 与内存版
-            // (ThreadShareStore::storeId 递增) 语义一致且更稳健
+            // (SessionShareStore::storeId 递增) 语义一致且更稳健
             auto stmt = db.prepare("INSERT INTO item(id, value) "
                                    "VALUES ((SELECT COALESCE(MAX(id), 0) + 1 FROM item), ?)");
             stmt.bindText(1, value);
@@ -608,30 +594,25 @@ size_t SessionPersistence::addShareStoreItem(std::string_view threadId, std::str
             return true;
         },
         [&](std::string errmsg) -> bool {
-            XX_LOGE("SessionPersistence: addShareStoreItem({}) failed: {}", threadId, errmsg);
+            XX_LOGE("SessionStore: addShareStoreItem({}) failed: {}", sessionId, errmsg);
             return false;
         }
     );
     return out;
 }
 
-void SessionPersistence::removeShareStoreItem(std::string_view threadId, size_t id) {
+void SessionStore::removeShareStoreItem(std::string_view sessionId, size_t id) {
     std::lock_guard<std::mutex> lock(mutex_);
     agentxx::util::catchError<bool>(
         [&]() -> bool {
-            auto& db   = dbs(threadId).shareStoreDb;
+            auto& db   = dbs(sessionId).shareStoreDb;
             auto  stmt = db.prepare("DELETE FROM item WHERE id = ?");
             stmt.bindInt64(1, static_cast<int64_t>(id));
             stmt.step();
             return true;
         },
         [&](std::string errmsg) -> bool {
-            XX_LOGE(
-                "SessionPersistence: removeShareStoreItem({}, {}) failed: {}",
-                threadId,
-                id,
-                errmsg
-            );
+            XX_LOGE("SessionStore: removeShareStoreItem({}, {}) failed: {}", sessionId, id, errmsg);
             return false;
         }
     );

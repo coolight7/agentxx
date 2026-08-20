@@ -50,9 +50,9 @@ int ffiFinish(int rc, const std::string& err, char** log) {
     }
     *log = rc == 0 ? nullptr
                    : agentxx_strdup_n(
-                         err.empty() ? "internal error (no detail)" : err.data(),
-                         err.empty() ? 0 : err.size()
-                     );
+                       err.empty() ? "internal error (no detail)" : err.data(),
+                       err.empty() ? 0 : err.size()
+                   );
     return rc;
 }
 
@@ -262,16 +262,16 @@ int agentxx_set_permission(AgentxxAgent* a, const char* path, int allow, int op,
     }
 }
 
-int agentxx_switch_session(AgentxxAgent* a, const char* thread_id, char** log) {
+int agentxx_switch_session(AgentxxAgent* a, const char* sessionId, char** log) {
     if (a == nullptr || !a->impl) {
         return ffiFail(AGENTXX_ERR_INVALID, "null handle", log);
     }
-    if (thread_id == nullptr) {
-        return ffiFail(AGENTXX_ERR_INVALID, "null thread_id", log);
+    if (sessionId == nullptr) {
+        return ffiFail(AGENTXX_ERR_INVALID, "null sessionId", log);
     }
     std::string err;
     try {
-        const int rc = a->impl->switchSession(thread_id, err);
+        const int rc = a->impl->switchSession(sessionId, err);
         return ffiFinish(rc, err, log);
     } catch (...) {
         return ffiFail(AGENTXX_ERR_INTERNAL, cxxErrText(), log);

@@ -28,7 +28,7 @@ asio::awaitable<void> test_subagent_bus_request_response() {
     auto& rr = agentContext->bus->getRR<events::ReqSubagentBatch, events::RespSubagentBatch>(
         events::Topic::Subagent
     );
-    rr.serve(
+    rr.registerServer(
         [](const events::ReqSubagentBatch& req,
            size_t                          corrId) -> asio::awaitable<events::RespSubagentBatch> {
             XX_TEST_EXPECT_TRUE(corrId > 0);
@@ -50,7 +50,7 @@ asio::awaitable<void> test_subagent_bus_request_response() {
     // [workaround] 聚合提取为具名变量, 绕过 g++ 16.1 ICE (gimplify.cc:841)
     events::ReqSubagentBatch req{
         .parentAgentName = "parent",
-        .parentThreadId  = "t1",
+        .parentSessionId  = "t1",
         .cancelToken     = nullptr,
         .tasks           = {
             events::SubagentBatchItem{
@@ -135,7 +135,7 @@ asio::awaitable<void> test_subagent_bus_timeout() {
     auto& rr = agentContext->bus->getRR<events::ReqSubagentBatch, events::RespSubagentBatch>(
         events::Topic::Subagent
     );
-    rr.serve(
+    rr.registerServer(
         [](const events::ReqSubagentBatch&, size_t) -> asio::awaitable<events::RespSubagentBatch> {
             auto timer
                 = asio::steady_timer(co_await asio::this_coro::executor, std::chrono::seconds(1));
@@ -149,7 +149,7 @@ asio::awaitable<void> test_subagent_bus_timeout() {
     // [workaround] 聚合提取为具名变量, 绕过 g++ 16.1 ICE (gimplify.cc:841)
     events::ReqSubagentBatch req{
         .parentAgentName = "p",
-        .parentThreadId  = "t",
+        .parentSessionId  = "t",
         .cancelToken     = nullptr,
         .tasks           = {
             events::SubagentBatchItem{
@@ -172,7 +172,7 @@ asio::awaitable<void> test_subagent_bus_timeout() {
     co_return;
 }
 
-/// 验证: MiddlewareContext::cleanupThread 清理一次性会话 (subagent) 的
+/// 验证: MiddlewareContext::cleanupSession 清理一次性会话 (subagent) 的
 /// graphData / shareStore / 中间件 states, 防止按 thread 累积泄漏 (P0 修复)
 asio::awaitable<void> test_middleware_cleanup_thread() {
     auto agentContext = std::make_shared<agentxx::agent::AgentContext>();
@@ -198,7 +198,7 @@ asio::awaitable<void> test_middleware_cleanup_thread() {
     XX_TEST_EXPECT_TRUE(handle->states.contains(tid));
 
     // 清理后全部移除
-    agentContext->middlewareHandleContext->cleanupThread(tid);
+    agentContext->middlewareHandleContext->cleanupSession(tid);
     XX_TEST_EXPECT_FALSE(agentContext->middlewareHandleContext->graphData.contains(tid));
     XX_TEST_EXPECT_FALSE(agentContext->middlewareHandleContext->shareStore.contains(tid));
     XX_TEST_EXPECT_FALSE(handle->states.contains(tid));

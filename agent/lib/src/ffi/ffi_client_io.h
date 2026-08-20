@@ -35,8 +35,8 @@ public:
 
     ~FfiClientAgentIO() override;
 
-    /// 设置本端点绑定会话 thread_id (运行层在装配时设置)
-    void setThreadId(std::string threadId);
+    /// 设置本端点绑定会话 sessionId (运行层在装配时设置)
+    void setSessionId(std::string sessionId);
 
     /// 设置 agent io 线程 id (运行层注入; 判 stop/destroy 调用方)
     void setAgentThreadId(std::thread::id tid);
@@ -59,7 +59,7 @@ public:
     /// 本 client 端点不注册会话总线, 此纯虚实现仅满足契约 (返回值未使用);
     /// 真实 HIL 流程: onPeerMessage(WireInterruptRequest) → waitHostInterrupt()
     asio::awaitable<neograph::json> handleInterrupt(
-        std::string_view threadId,
+        std::string_view sessionId,
         std::string_view interruptNode,
         std::string_view interruptValue,
         std::string_view interruptArgJson
@@ -128,8 +128,8 @@ private:
 
     /// 事件回调 (值拷贝, 保持有效)
     AgentxxCallbacks callbacks_;
-    /// 本端点绑定的会话 thread_id (EVT_READY payload 使用)
-    std::string threadId_;
+    /// 本端点绑定的会话 sessionId (EVT_READY payload 使用)
+    std::string sessionId_;
 
     /// 挂起的中断应答通道 (wire id → channel; pendingMutex_ 保护)
     std::map<int64_t, std::shared_ptr<RespChannel>> pending_;

@@ -25,7 +25,7 @@ namespace agent {
 class BaseAgent;
 class Session;
 
-/// 按 threadId 持久的会话控制器 (服务端 AgentIOBase 端点)
+/// 按 sessionId 持久的会话控制器 (服务端 AgentIOBase 端点)
 ///
 /// 数据流: BaseAgent → SessionServerAgentIO → transport → 客户端 AgentIOBase
 ///         客户端 AgentIOBase → transport → SessionServerAgentIO → BaseAgent
@@ -40,7 +40,7 @@ class SessionServerAgentIO : public AgentIOBase,
 public:
 
     struct Config {
-        std::string threadId = "session";
+        std::string sessionId = "session";
         /// 中断/权限等待客户端响应的超时; <=0 表示不限制 (无限等待用户响应)
         std::chrono::milliseconds interruptTimeout = std::chrono::milliseconds{0};
         /// 断线后保持运行中轮次的宽限期; <=0 表示断线立即取消轮次
@@ -59,7 +59,7 @@ public:
     // ----- AgentIOBase: 对端从我这拉取的 (BaseAgent 调用) -----
     asio::awaitable<std::optional<std::string>> getInput() override;
     asio::awaitable<neograph::json>             handleInterrupt(
-                    std::string_view threadId,
+                    std::string_view sessionId,
                     std::string_view interruptNode,
                     std::string_view interruptValue,
                     std::string_view interruptArgJson
@@ -86,8 +86,8 @@ public:
 
     // ----- 查询 -----
 
-    std::string_view threadId() const noexcept {
-        return config_.threadId;
+    std::string_view sessionId() const noexcept {
+        return config_.sessionId;
     }
 
     /// 中断等待超时 (供 BaseAgent 中断请求显式传递, 避免被总线默认超时截断)
@@ -113,11 +113,11 @@ public:
     std::string currentTailHash();
 
     /// 切换本端点绑定的会话 (会话选择弹窗确认后由客户端经 WireSwitchSession 请求)
-    /// - 重新绑定 config_.threadId 到目标会话 (不存在时由 SessionStore 从持久化恢复创建)
+    /// - 重新绑定 config_.sessionId 到目标会话 (不存在时由 SessionStore 从持久化恢复创建)
     /// - 清空 delta 重放缓冲 (新会话 delta seq 独立编号)
     /// - 回推新会话的全量 Sync + 模型信息 + 上下文统计, 客户端据此恢复界面
     /// - 仅当无进行中轮次时生效 (客户端已做前置拦截, 此处双重保护)
-    void switchSession(std::string newThreadId);
+    void switchSession(std::string newSessionId);
 
 protected:
 

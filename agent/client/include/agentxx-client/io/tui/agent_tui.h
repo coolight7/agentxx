@@ -128,8 +128,8 @@ public:
 
     explicit TUIClientAgentIO(
         asio::any_io_executor ex,
-        std::string           threadId = "session",
-        TUITheme              theme    = TUITheme::darkTheme(),
+        std::string           sessionId = "session",
+        TUITheme              theme     = TUITheme::darkTheme(),
         /// 权限询问处理模式 (来自 yaml 配置 `permission.mode`, 见 config.h)
         agentxx::agent::PermissionMode permissionMode = agentxx::agent::PermissionMode::Ask
     );
@@ -152,7 +152,7 @@ public:
     void setPluginManager(std::shared_ptr<agentxx::plugin::ClientPluginManager> mgr) {
         pluginManager_ = std::move(mgr);
         if (pluginManager_) {
-            pluginManager_->setThreadId(currentThreadId());
+            pluginManager_->setSessionId(currentThreadId());
         }
     }
 
@@ -230,13 +230,13 @@ public:
 
     asio::awaitable<std::optional<std::string>> getInput() override;
     asio::awaitable<neograph::json>             handleInterrupt(
-                    std::string_view threadId,
+                    std::string_view sessionId,
                     std::string_view interruptNode,
                     std::string_view interruptValue,
                     std::string_view interruptArgJson
                 ) override;
-    void requestCancel(std::string threadId) override;
-    void requestSelectModel(std::string threadId, std::string model) override;
+    void requestCancel(std::string sessionId) override;
+    void requestSelectModel(std::string sessionId, std::string model) override;
 
     /// 供组件访问共享状态 (UI 线程渲染/事件时使用)
     TUISharedState& sharedState() {
@@ -286,9 +286,9 @@ private:
 
     /// 通知事件接收器: 用户输入已发送 (sendUserInputLocked 内部调用;
     /// 任意线程, 内部按需 post 到 client io 线程)
-    void notifyUserInputSent(const std::string& threadId, const std::string& text);
+    void notifyUserInputSent(const std::string& sessionId, const std::string& text);
     /// 会话选择弹窗确认后的切换逻辑 (UI 线程):
-    /// - 更新本地 threadId 绑定与重连握手 threadId (WS 模式)
+    /// - 更新本地 sessionId 绑定与重连握手 sessionId (WS 模式)
     /// - 发送 WireSwitchSession, 服务端回推全量 Sync/模型/上下文统计 (WireModelInfo
     ///   / WireContextStats) 恢复界面; TUI 不持有 Session (属于 agent-io 线程)
     void switchToSession(std::string newThreadId);
@@ -297,12 +297,12 @@ private:
     /// UI 线程切换会话时写入, client 线程发送用户输入时读取
     std::string currentThreadId() const {
         std::lock_guard<std::mutex> lock(threadIdMutex_);
-        return threadId_;
+        return sessionId_;
     }
 
     void setCurrentThreadId(std::string newThreadId) {
         std::lock_guard<std::mutex> lock(threadIdMutex_);
-        threadId_ = std::move(newThreadId);
+        sessionId_ = std::move(newThreadId);
     }
 
     /// client 插件管理器 (装配后不可变; uiRegistrySnapshot/hasCommand 线程安全)
@@ -328,7 +328,7 @@ private:
     TUITheme theme_;
     /// 当前会话 thread_id (切换会话时由 UI 线程写入, client 线程发送输入时读取;
     /// 经 threadIdMutex_ 保护, 见 currentThreadId()/setCurrentThreadId())
-    std::string           threadId_;
+    std::string           sessionId_;
     mutable std::mutex    threadIdMutex_;
     asio::any_io_executor ex_;
     /// 权限询问处理模式 (yaml 配置 `permission.mode` 注入, 不可运行时切换)

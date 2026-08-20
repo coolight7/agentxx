@@ -418,11 +418,11 @@ asio::awaitable<std::string> ToolcallWrapNode::execTool(
         auto [targetIndex, lineCount, lastLineIndex]
             = agentxx::util::findIndexAndLastLineIndexByUtf8Length(result, limitLength);
         if (targetIndex > 0) {
-            const auto thread_id = args.value("thread_id", std::string{});
-            assert(false == thread_id.empty());
+            const auto session_id = args.value("session_id", std::string{});
+            assert(false == session_id.empty());
             // 超过限制长度，截断并存储原文
             auto storeId
-                = agentCtxPtr->middlewareHandleContext->addShareStoreItemValue(thread_id, result);
+                = agentCtxPtr->middlewareHandleContext->addShareStoreItemValue(session_id, result);
             // 总行数, 写入压缩结果便于后续用 `agentxx_share_store` 按行分页取值
             const auto totalLineCount = agentxx::util::countLines(result);
             // - 如果超过总摘要 1/3，按行摘要，留出行数以便后续用
@@ -576,8 +576,8 @@ asio::awaitable<void> ToolcallWrapNode::baseRun(
                         try {
                             auto args = neograph::json::parse(tc.arguments);
                             if (args.is_object()) {
-                                // append arg `thread_id`
-                                args["thread_id"] = in.ctx.thread_id;
+                                // append arg `session_id`
+                                args["session_id"] = in.ctx.thread_id;
                                 // - 注入 tool_call_id 供 tool 使用 (如 agentxx_subagent
                                 // 的中断 resultId)
                                 args["tool_call_id"] = tc.id;
@@ -621,11 +621,11 @@ asio::awaitable<void> ToolcallWrapNode::baseRun(
                     try {
                         auto args = neograph::json::parse(tc.arguments);
                         if (args.is_object()) {
-                            // append arg `thread_id`
-                            args["thread_id"] = in.ctx.thread_id;
+                            // append arg `session_id`
+                            args["session_id"] = in.ctx.thread_id;
                             // - 注入 tool_call_id 供 tool 使用 (如 agentxx_subagent 的中断
                             // resultId)
-                            args["tool_call_id"] = tc.id;
+                            args["toolCallId"] = tc.id;
                         }
                         tool_msg.content = co_await execTool(*it, args, in.ctx.cancel_token);
                         // 取消埋点: tool 执行完成后检查, 避免取消后继续收集/执行后续 tool

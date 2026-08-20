@@ -95,7 +95,7 @@ asio::awaitable<void> test_eventbridge_token() {
             tokenEventCount++;
             lastToken     = e.token;
             lastAgentName = e.agentName;
-            lastThreadId  = e.threadId;
+            lastThreadId  = e.sessionId;
             co_return;
         });
 
@@ -237,7 +237,7 @@ asio::awaitable<void> test_eventbridge_message_tip() {
                        {"channel", "message_tip"},
                        {"value",
              neograph::json{
-                 {"tip_type", "warning"},
+                 {"tipType", "warning"},
                  {"text", "LLM API 请求失败，6 秒后自动重试 (2/5)"},
              }},
                        }
@@ -260,7 +260,7 @@ asio::awaitable<void> test_eventbridge_message_tip() {
                        {"channel", "message_tip"},
                        {"value",
              neograph::json{
-                 {"tip_type", "error"},
+                 {"tipType", "error"},
                  {"text", "boom"},
              }},
                        }

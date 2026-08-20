@@ -1,5 +1,5 @@
 #include "agentxx/middlewares/middleware.h"
-#include "agentxx/agent/session_persistence.h"
+#include "agentxx/agent/session_store.h"
 #include "agentxx/tools/tool.h"
 #include <algorithm>
 #include <charconv>
@@ -268,27 +268,27 @@ neograph::json MiddlewareContext::anyToJson(const std::any& val) {
     return nullptr;
 }
 
-void MiddlewareContext::ensureShareStoreLoaded(std::string_view thread_id) {
-    if (!persistence_ || shareStore.contains(thread_id)) {
+void MiddlewareContext::ensureShareStoreLoaded(std::string_view sessionId) {
+    if (!persistence_ || shareStore.contains(sessionId)) {
         return;
     }
     // 已加载过直接返回, 避免空存储反复查询 (O(1))
-    if (shareStoreLoaded_.contains(std::string{thread_id})) {
+    if (shareStoreLoaded_.contains(std::string{sessionId})) {
         return;
     }
     // 首次访问: 从 SQLite 恢复全部条目与 id 计数器
-    auto loaded = persistence_->loadShareStore(thread_id);
+    auto loaded = persistence_->loadShareStore(sessionId);
     shareStore.emplace(
-        std::string{thread_id},
-        ThreadShareStore{.store = std::move(loaded.items), .storeId = loaded.nextId}
+        std::string{sessionId},
+        SessionShareStore{.store = std::move(loaded.items), .storeId = loaded.nextId}
     );
-    shareStoreLoaded_.insert(std::string{thread_id});
+    shareStoreLoaded_.insert(std::string{sessionId});
 }
 
 std::optional<std::string>
-    MiddlewareContext::getShareStoreItemValue(std::string_view thread_id, const size_t id) {
-    ensureShareStoreLoaded(thread_id);
-    auto it = shareStore.find(thread_id);
+    MiddlewareContext::getShareStoreItemValue(std::string_view sessionId, const size_t id) {
+    ensureShareStoreLoaded(sessionId);
+    auto it = shareStore.find(sessionId);
     if (shareStore.end() != it) {
         auto result = it->second.store.find(id);
         if (it->second.store.end() != result) {
@@ -299,45 +299,45 @@ std::optional<std::string>
 }
 
 void MiddlewareContext::setShareStoreItemValue(
-    std::string_view thread_id,
+    std::string_view sessionId,
     const size_t     id,
     std::string_view value
 ) {
-    ensureShareStoreLoaded(thread_id);
-    // shareStore[thread_id].store[id] = value;
+    ensureShareStoreLoaded(sessionId);
+    // shareStore[sessionId].store[id] = value;
 
-    auto it = shareStore.find(thread_id);
+    auto it = shareStore.find(sessionId);
     if (it != shareStore.end()) {
         it->second.store[id] = value;
     } else {
         shareStore.emplace(
-            std::string{thread_id},
-            MiddlewareContext::ThreadShareStore{
+            std::string{sessionId},
+            MiddlewareContext::SessionShareStore{
                 .store = std::map<size_t, std::string>{{id, std::string{value}}}
             }
         );
     }
     if (persistence_) {
-        persistence_->setShareStoreItem(thread_id, id, value);
+        persistence_->setShareStoreItem(sessionId, id, value);
     }
 }
 
 size_t
-    MiddlewareContext::addShareStoreItemValue(std::string_view thread_id, std::string_view value) {
-    ensureShareStoreLoaded(thread_id);
+    MiddlewareContext::addShareStoreItemValue(std::string_view sessionId, std::string_view value) {
+    ensureShareStoreLoaded(sessionId);
 
     // 分配 id:
     // - 注入持久化时由数据库分配 (取现有最大 id + 1, 重启后延续); 落库失败
     //   退回内存分配, 保证本次会话内功能可用
-    // - 无持久化时保持原语义: 新 thread 首条为 1, 其后 storeId 递增
+    // - 无持久化时保持原语义: 新 session 首条为 1, 其后 storeId 递增
     size_t id   = 0;
     bool   dbOk = false;
     if (persistence_) {
-        id   = persistence_->addShareStoreItem(thread_id, value);
+        id   = persistence_->addShareStoreItem(sessionId, value);
         dbOk = (id != 0);
     }
     if (!dbOk) {
-        auto it = shareStore.find(thread_id);
+        auto it = shareStore.find(sessionId);
         if (it != shareStore.end()) {
             id = it->second.getNextId();
         } else {
@@ -345,7 +345,7 @@ size_t
         }
     }
 
-    auto it = shareStore.find(thread_id);
+    auto it = shareStore.find(sessionId);
     if (it != shareStore.end()) {
         it->second.store[id] = std::string{value};
         // 同步内存计数器: 仅 DB 成功时同步到 DB 值, 回退路径已由 getNextId 递增, 不覆盖
@@ -354,8 +354,8 @@ size_t
         }
     } else {
         shareStore.emplace(
-            std::string{thread_id},
-            MiddlewareContext::ThreadShareStore{
+            std::string{sessionId},
+            MiddlewareContext::SessionShareStore{
                 .store   = std::map<size_t, std::string>{{id, std::string{value}}},
                 .storeId = id,
             }
@@ -364,9 +364,9 @@ size_t
     return id;
 }
 
-void MiddlewareContext::removeShareStoreItemValue(std::string_view thread_id, const size_t id) {
-    ensureShareStoreLoaded(thread_id);
-    auto it = shareStore.find(thread_id);
+void MiddlewareContext::removeShareStoreItemValue(std::string_view sessionId, const size_t id) {
+    ensureShareStoreLoaded(sessionId);
+    auto it = shareStore.find(sessionId);
     if (shareStore.end() != it) {
         auto resultIt = it->second.store.find(id);
         if (it->second.store.end() != resultIt) {
@@ -374,12 +374,12 @@ void MiddlewareContext::removeShareStoreItemValue(std::string_view thread_id, co
         }
     }
     if (persistence_) {
-        persistence_->removeShareStoreItem(thread_id, id);
+        persistence_->removeShareStoreItem(sessionId, id);
     }
 }
 
-void MiddlewareContext::removeGraphDataItem(std::string_view thread_id, std::string_view key) {
-    auto it = graphData.find(thread_id);
+void MiddlewareContext::removeGraphDataItem(std::string_view sessionId, std::string_view key) {
+    auto it = graphData.find(sessionId);
     if (graphData.end() != it) {
         auto resultIt = it->second.find(key);
         if (it->second.end() != resultIt) {
@@ -388,62 +388,62 @@ void MiddlewareContext::removeGraphDataItem(std::string_view thread_id, std::str
     }
 }
 
-void MiddlewareContext::cleanupThread(std::string_view thread_id) {
-    graphData.erase(thread_id);
-    shareStore.erase(thread_id);
-    // 移除"已从持久化加载过"标记, 避免该 thread 再次出现时跳过加载 (O(1))
-    shareStoreLoaded_.erase(std::string{thread_id});
-    // 各中间件按 thread 的 state
+void MiddlewareContext::cleanupSession(std::string_view sessionId) {
+    graphData.erase(sessionId);
+    shareStore.erase(sessionId);
+    // 移除"已从持久化加载过"标记, 避免该 session 再次出现时跳过加载 (O(1))
+    shareStoreLoaded_.erase(std::string{sessionId});
+    // 各中间件按 session 的 state
     for (auto& handle : handles) {
         if (handle) {
-            handle->states.erase(thread_id);
+            handle->states.erase(sessionId);
         }
     }
 }
 
 void MiddlewareContext::throwNodeInterruptBase(
-    std::string_view      thread_id,
+    std::string_view      sessionId,
     const neograph::json& msgs
 ) {
     // if (msgs.is_array()) {
     // 直接抛异常到 neograph::engine 的话会丢失本轮 session 上下文，因此需要临时保存，这里改为交由
-    // wrap_handle 保存此时的 上下文 setGraphDataItemValue(thread_id,
+    // wrap_handle 保存此时的 上下文 setGraphDataItemValue(sessionId,
     // MiddlewareContext::graphDataKey_tempMessages, msgs);
     // }
     throw neograph::graph::NodeInterrupt{"xx-NodeInterrupt"};
 }
 
 asio::awaitable<neograph::json> MiddlewareContext::requestInterrupt(
-    std::string_view                           thread_id,
+    std::string_view                           sessionId,
     const std::function<InterruptHandleArg()>& onCreateArg,
     const neograph::json&                      msgs
 ) {
     auto result = std::move(getGraphDataItemValue<neograph::json>(
-        thread_id,
+        sessionId,
         MiddlewareContext::graphDataKey_interruptResult
     ));
-    removeGraphDataItem(thread_id, MiddlewareContext::graphDataKey_interruptResult);
+    removeGraphDataItem(sessionId, MiddlewareContext::graphDataKey_interruptResult);
     if (false == result.is_null()) {
         co_return result;
     }
 
     auto arg = onCreateArg();
     modifyGraphDataItemValue<std::vector<InterruptHandleArg>>(
-        thread_id,
+        sessionId,
         MiddlewareContext::graphDataKey_interruptArgs,
         [&](std::vector<InterruptHandleArg>& args) {
             args.push_back(arg);
         }
     );
-    throwNodeInterruptBase(thread_id, msgs);
+    throwNodeInterruptBase(sessionId, msgs);
 }
 
 neograph::json MiddlewareContext::getGraphDataToState(
     neograph::graph::GraphState& state,
-    std::string_view             thread_id
+    std::string_view             sessionId
 ) {
     neograph::json saved = neograph::json::object();
-    auto           it    = graphData.find(thread_id);
+    auto           it    = graphData.find(sessionId);
     if (it != graphData.end()) {
         for (const auto& [key, val] : it->second) {
             saved[key] = anyToJson(val);
@@ -454,22 +454,22 @@ neograph::json MiddlewareContext::getGraphDataToState(
 
 void MiddlewareContext::setGraphDataFromState(
     neograph::graph::GraphState& state,
-    std::string_view             thread_id
+    std::string_view             sessionId
 ) {
-    setGraphDataFromState(state.get(channel_savedGraphData), thread_id);
+    setGraphDataFromState(state.get(channel_savedGraphData), sessionId);
 }
 
-void MiddlewareContext::setGraphDataFromState(neograph::json j, std::string_view thread_id) {
+void MiddlewareContext::setGraphDataFromState(neograph::json j, std::string_view sessionId) {
     if (j.is_object()) {
         auto data = std::map<std::string, std::any, std::less<>>{};
         for (auto it = j.begin(); it != j.end(); ++it) {
             data[it.key()] = it.value();
         }
-        auto it = graphData.find(thread_id); // find 支持异构查找（使用透明比较器）
+        auto it = graphData.find(sessionId); // find 支持异构查找（使用透明比较器）
         if (it != graphData.end()) {
             it->second = std::move(data);
         } else {
-            graphData.emplace(std::string{thread_id}, std::move(data));
+            graphData.emplace(std::string{sessionId}, std::move(data));
         }
     }
 }

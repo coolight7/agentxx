@@ -107,12 +107,12 @@ static bool copyTextToSystemClipboard(const std::string& text) {
 
 TUIClientAgentIO::TUIClientAgentIO(
     asio::any_io_executor          ex,
-    std::string                    threadId,
+    std::string                    sessionId,
     TUITheme                       theme,
     agentxx::agent::PermissionMode permissionMode
 ) :
     theme_(theme),
-    threadId_(std::move(threadId)),
+    sessionId_(std::move(sessionId)),
     ex_(ex),
     permissionMode_(permissionMode),
     inputChannel_(std::make_shared<LineChannel>(ex, 64)),
@@ -252,13 +252,13 @@ bool TUIClientAgentIO::sendPluginDataUp(
     return true;
 }
 
-void TUIClientAgentIO::notifyUserInputSent(const std::string& threadId, const std::string& text) {
+void TUIClientAgentIO::notifyUserInputSent(const std::string& sessionId, const std::string& text) {
     // 事件接收器回调须在 client io 线程 (ClientEventSink 约定):
     // - 本函数可能被 client 线程 (sendUserInputLocked ← dispatchNextPendingInput)
     //   或 UI 线程 (inputCfg.onSend) 调用; 统一 post 到 io 线程执行
     //   (低频事件, post 延迟一个事件循环 tick 可接受)
     auto self = shared_from_this();
-    asio::post(ex_, [self, tid = threadId, t = text]() mutable {
+    asio::post(ex_, [self, tid = sessionId, t = text]() mutable {
         self->emitEventSink([&](agentxx::agent::ClientEventSink& sink) {
             sink.onUserInput(tid, t);
         });
@@ -409,7 +409,7 @@ void TUIClientAgentIO::start() {
             postRedraw();
         };
         ctx_.theme         = &theme_;
-        ctx_.threadId      = currentThreadId();
+        ctx_.sessionId     = currentThreadId();
         ctx_.remoteUrl     = remoteUrl_;
         ctx_.pluginManager = pluginManager_;
         // 注意: 不设置 ctx_.session —— TUI 不持有 Session (属于 agent-io 线程),
@@ -863,7 +863,7 @@ void TUIClientAgentIO::onServerReady() {
 }
 
 void TUIClientAgentIO::onServerProgress(std::string_view step) {
-    // agent 线程同步调用 (startupNotifier → onServerProgress):
+    // agent 线程同步调用 (initNotifier → onServerProgress):
     // 只更新当前步骤文本, 不触碰其他字段; 经 sharedState 锁避免与 UI 快照竞争
     std::string stepCopy{step};
     {
@@ -1045,12 +1045,12 @@ void TUIClientAgentIO::openSessionSelector() {
     overlay->onClose([this] {
         modal_->popModal();
     });
-    overlay->onSelect([this](std::string threadId) {
-        switchToSession(std::move(threadId));
+    overlay->onSelect([this](std::string sessionId) {
+        switchToSession(std::move(sessionId));
     });
     overlay->onNewSession([this] {
-        // 新建会话: 生成全新 threadId 并切换 (无历史, 服务端回推空 Sync)
-        const auto newThreadId = agentxx::client::generateUniqueThreadId();
+        // 新建会话: 生成全新 sessionId 并切换 (无历史, 服务端回推空 Sync)
+        const auto newThreadId = agentxx::client::generateUniqueSessionId();
         XX_LOGI("[tui] new session: {}", newThreadId);
         switchToSession(newThreadId);
     });
@@ -1065,7 +1065,7 @@ void TUIClientAgentIO::switchToSession(std::string newThreadId) {
     XX_LOGI("[tui] switching session: {} -> {}", currentThreadId(), newThreadId);
     setCurrentThreadId(newThreadId);
     // 更新组件共享上下文: 状态栏/会话弹窗据此标记 current 会话
-    ctx_.threadId = newThreadId;
+    ctx_.sessionId = newThreadId;
     // 注意: TUI 不持有 Session (属于 agent-io 线程), 切换后服务端回推
     // 新会话的全量 Sync + WireModelInfo + WireContextStats (WireSwitchSession
     // 处理路径), 客户端界面 (消息历史/模型名/上下文统计) 随之整体更新
@@ -1083,10 +1083,10 @@ void TUIClientAgentIO::switchToSession(std::string newThreadId) {
         st.contextMessages.reset();
         st.showContextOverlay = false;
     });
-    // WS 模式: 更新重连握手 threadId 并复位增量重放状态 (新会话 delta seq 独立编号);
+    // WS 模式: 更新重连握手 sessionId 并复位增量重放状态 (新会话 delta seq 独立编号);
     // Channel/进程内模式为 no-op
     if (transport_) {
-        transport_->updateReconnectThreadId(newThreadId);
+        transport_->updateReconnectSessionId(newThreadId);
         sendToPeer(agentxx::agent::WireSwitchSession{newThreadId});
     }
     postRedraw();
@@ -1105,15 +1105,15 @@ void TUIClientAgentIO::switchToSession(std::string newThreadId) {
 // requestCancel / requestSelectModel
 // ---------------------------------------------------------------------------
 
-void TUIClientAgentIO::requestCancel(std::string threadId) {
+void TUIClientAgentIO::requestCancel(std::string sessionId) {
     if (transport_) {
-        sendToPeer(agentxx::agent::WireCancel{std::move(threadId)});
+        sendToPeer(agentxx::agent::WireCancel{std::move(sessionId)});
     }
 }
 
-void TUIClientAgentIO::requestSelectModel(std::string threadId, std::string model) {
+void TUIClientAgentIO::requestSelectModel(std::string sessionId, std::string model) {
     if (transport_) {
-        sendToPeer(agentxx::agent::WireSelectModel{std::move(threadId), std::move(model)});
+        sendToPeer(agentxx::agent::WireSelectModel{std::move(sessionId), std::move(model)});
     }
 }
 
@@ -1149,9 +1149,12 @@ void TUIClientAgentIO::onPeerMessage(agentxx::agent::WireMessage msg) {
                         // 记录 wire id 供 handleInterrupt 使用 (同线程顺序执行);
                         // 过期通知 (WireInterruptExpired) 按该 id 匹配并终止等待
                         self->interruptWireId_ = req.id;
-                        auto result
-                            = co_await self
-                                  ->handleInterrupt(req.threadId, req.node, req.value, req.argJson);
+                        auto result            = co_await self->handleInterrupt(
+                            req.sessionId,
+                            req.node,
+                            req.value,
+                            req.argJson
+                        );
                         self->sendToPeer(agentxx::agent::WireInterruptResponse{req.id, result});
                     },
                     asio::detached
@@ -1567,7 +1570,7 @@ void TUIClientAgentIO::onContextStats(const agentxx::agent::WireContextStats& st
 // ---------------------------------------------------------------------------
 
 asio::awaitable<neograph::json> TUIClientAgentIO::handleInterrupt(
-    std::string_view threadId,
+    std::string_view sessionId,
     std::string_view interruptNode,
     std::string_view interruptValue,
     std::string_view interruptArgJson
@@ -1725,10 +1728,10 @@ asio::awaitable<neograph::json> TUIClientAgentIO::handleInterrupt(
                   : agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionREAD;
         if (transport_) {
             sendToPeer(agentxx::agent::WireSetPermission{
-                .threadId = std::string{threadId},
-                .path     = permTarget,
-                .allow    = allow,
-                .index    = index,
+                .sessionId = std::string{sessionId},
+                .path      = permTarget,
+                .allow     = allow,
+                .index     = index,
             });
         }
     }

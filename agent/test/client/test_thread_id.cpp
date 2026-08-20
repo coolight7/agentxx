@@ -20,7 +20,7 @@ int g_thread_id_passed = 0;
 int g_thread_id_failed = 0;
 
 // ---------------------------------------------------------------------------
-// generateUniqueThreadId 唯一性验证
+// generateUniqueSessionId 唯一性验证
 // ---------------------------------------------------------------------------
 
 namespace {
@@ -45,7 +45,7 @@ std::vector<std::string> splitId(const std::string& id) {
 
 void test_format() {
     // 格式: "sess-<hex ts>-<pid 十进制>-<8位hex rnd>-<4位hex seq>"
-    const std::string              id    = client::generateUniqueThreadId();
+    const std::string              id    = client::generateUniqueSessionId();
     const std::vector<std::string> parts = splitId(id);
 
     XX_TEST_EXPECT_EQ(parts.size(), (size_t)5);
@@ -69,7 +69,7 @@ void test_uniqueness_many_calls() {
     // 同进程连续大量调用, 不允许重复
     std::set<std::string> seen;
     for (int i = 0; i < 10000; ++i) {
-        const auto id = client::generateUniqueThreadId();
+        const auto id = client::generateUniqueSessionId();
         XX_TEST_EXPECT_TRUE(seen.insert(id).second);
     }
 }
@@ -86,7 +86,7 @@ void test_uniqueness_concurrent() {
     for (int t = 0; t < kThreads; ++t) {
         threads.emplace_back([&] {
             for (int i = 0; i < kPerThread; ++i) {
-                const auto                  id = client::generateUniqueThreadId();
+                const auto                  id = client::generateUniqueSessionId();
                 std::lock_guard<std::mutex> lock(m);
                 results.push_back(id);
             }
@@ -108,7 +108,7 @@ void test_uniqueness_across_processes() {
 #else
     const long pid = static_cast<long>(::getpid());
 #endif
-    const std::string              id    = client::generateUniqueThreadId();
+    const std::string              id    = client::generateUniqueSessionId();
     const std::vector<std::string> parts = splitId(id);
 
     XX_TEST_EXPECT_EQ(parts.size(), (size_t)5);
@@ -117,7 +117,7 @@ void test_uniqueness_across_processes() {
     }
 }
 
-TestResult testThreadId() {
+TestResult testSessionId() {
     g_thread_id_passed = 0;
     g_thread_id_failed = 0;
 

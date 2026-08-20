@@ -139,9 +139,9 @@ Element SessionSelectorOverlay::OnRender() {
     } else {
         for (size_t i = 0; i < st.sessionList.size(); ++i) {
             const auto& s = st.sessionList[i];
-            // 第一行: 会话名称 (title 为空时回退 threadId)
-            const std::string title     = s.title.empty() ? s.threadId : s.title;
-            const bool        isCurrent = (s.threadId == ctx_.threadId);
+            // 第一行: 会话名称 (title 为空时回退 sessionId)
+            const std::string title     = s.title.empty() ? s.sessionId : s.title;
+            const bool        isCurrent = (s.sessionId == ctx_.sessionId);
             // 第二行: 最近活动日期
             auto dateLine = text(agentxx::util::formatDateTimeMilliseconds(s.lastActiveMs)) | dim;
 
@@ -238,7 +238,7 @@ void SessionSelectorOverlay::confirmSelection() {
         // -1: 会话条目从索引 1 开始 (0 为 "新会话" 入口)
         const int sessionIdx = selectedIndex_ - 1;
         if (sessionIdx >= 0 && sessionIdx < static_cast<int>(snap->sessionList.size())) {
-            selected = snap->sessionList[sessionIdx].threadId;
+            selected = snap->sessionList[sessionIdx].sessionId;
         }
     }
     if (onClose_) {

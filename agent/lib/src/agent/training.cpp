@@ -28,7 +28,7 @@ asio::awaitable<std::string> EvolutionTrainingAgent::runLLMAgent(
     std::vector<neograph::ChatMessage> messages           = {
         neograph::ChatMessage{.role = "user", .content = std::string{userContent}},
     };
-    auto result = co_await agent->runStreamAsync(messages);
+    auto result = co_await agent->runStreamTurnAsync(messages);
     co_return result.content;
 }
 
@@ -487,7 +487,7 @@ asio::awaitable<EvolutionTrainingAgent::EvaluationResult> EvolutionTrainingAgent
 
     for (size_t caseIdx = 0; caseIdx < cfg.testCases.size(); ++caseIdx) {
         const auto& testCase = cfg.testCases[caseIdx];
-        const auto  threadId = fmt::format("evotrain_{}_{}_{}", variant.id, caseIdx, testCase.name);
+        const auto sessionId = fmt::format("evotrain_{}_{}_{}", variant.id, caseIdx, testCase.name);
 
         applyVariantToTrainAgent(variant);
 
@@ -502,7 +502,7 @@ asio::awaitable<EvolutionTrainingAgent::EvaluationResult> EvolutionTrainingAgent
         }
 
         std::string agentOutput
-            = co_await trainAgent->runSingleInputAsync(threadId, testCase.input, "");
+            = co_await trainAgent->runSingleInputAsync(sessionId, testCase.input, "");
 
         if (cfg.verbose) {
             XX_LOGD(

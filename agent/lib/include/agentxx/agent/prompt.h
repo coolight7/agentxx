@@ -54,7 +54,7 @@ inline std::string winCommandToolDepict() {
 }
 
 /// boost.process 直传路径 + PowerShell 可用: `command` 参数描述 (PowerShell 语法指引)
-inline std::string winCommandProcessPs() {
+inline std::string winCommandProcessPwsh() {
     const auto& ps = cachedPowerShellInfo();
     return fmt::format(
         R"({}
@@ -108,7 +108,7 @@ cmd.exe syntax essentials:
 /// popen 路径 + PowerShell 可用: `command` 参数描述
 /// - WSL: 外层为 Linux shell, PowerShell 代码需单引号保护
 /// - 原生 Windows: 外层为 cmd.exe, PowerShell 代码需双引号包裹
-inline std::string winCommandPopenPs() {
+inline std::string winCommandPopenPwsh() {
     const auto& ps = cachedPowerShellInfo();
     if (agentxx::util::isRunningInWSL()) {
         return fmt::format(
@@ -197,7 +197,7 @@ If the user provides a Windows path (e.g. `C:\...` or `D:\...`), convert it to a
 // (detectPowerShell 会 spawn 子进程, 每个候选最多阻塞约 12s, 是 client 启动
 // 慢的主因)。BaseAgent::init 在 agent 线程完成探测后调用
 // AgentPrompt::refreshEnvDetectedPrompts() 将其覆盖为真实分支
-// (winCommandToolDepict / winCommandProcessPs / winCommandPopenPs 等)。
+// (winCommandToolDepict / winCommandProcessPwsh / winCommandPopenPwsh 等)。
 
 /// 占位: tool 总体描述 (不声明具体执行器)
 inline std::string winCommandToolDepictPlaceholder() {
@@ -825,8 +825,8 @@ The sub-agent runs with an isolated message context: it cannot see the parent co
                       {"message", "Task content as a user message for the sub-agent."},
                       {"messages",
                        R"(Optional. Structured message list (array of {role, content, tool_calls, ...}) passed through verbatim as the sub-agent's initial context (may include a system message). Takes precedence over `message`. Use this for same-context delegation (e.g. context compression) that must preserve the exact message prefix.)"},
-                      {"thread_id",
-                       R"(Optional. Thread id the sub-agent should run on. Empty (default): the sub-agent runs on its own isolated subagent thread. Non-empty (same-context mode): the sub-agent runs on the given thread with the parent session's current model, so the shared context prefix + thread id + model let the provider reuse its KV/prefix cache.)"},
+                      {"session_id",
+                       R"(Optional. Session id the sub-agent should run on. Empty (default): the sub-agent runs on its own isolated subagent thread. Non-empty (same-context mode): the sub-agent runs on the given thread with the parent session's current model, so the shared context prefix + thread id + model let the provider reuse its KV/prefix cache.)"},
                       {"tools",
                        R"(Optional. Tool policy for the sub-agent, as an array of tool names:
 - `[]` (empty array): no tools at all (pure text answer).

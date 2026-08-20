@@ -4,7 +4,7 @@
 #include "agentxx/agent/checkpoint_store.h"
 #include "agentxx/agent/config_static.h"
 #include "agentxx/agent/io/session_server_agent_io.h"
-#include "agentxx/agent/session_persistence.h"
+#include "agentxx/agent/session_store.h"
 #include "agentxx/middlewares/summarization.h"
 #include "agentxx/plugin/plugin_manager.h"
 #include "agentxx/tools/subagent_shared.h"
@@ -34,23 +34,23 @@ BaseAgent::BaseAgent(std::shared_ptr<agentxx::agent::AgentConfig> in_config) {
     assert(in_config->model.isValid());
 
     // 会话 SQLite 持久化 (开启时): 消息上下文/展示历史/share store
-    // 落库到 {root}/{threadId}/, 供重启恢复; root 可经配置重定向
+    // 落库到 {root}/{sessionId}/, 供重启恢复; root 可经配置重定向
     // - 要求 dataDir 非空 (root 由 {dataDir}/sqlite/sessions/ 派生)
-    //   或显式指定了 sessionPersistenceRoot; 否则不创建持久化实例,
+    //   或显式指定了 sessionStoreDirectory; 否则不创建持久化实例,
     //   会话仅存内存 (SessionStore/MiddlewareContext 均已判空, 安全)
     // - dataDir 未配置的警告在 init() 中输出 (构造函数可能早于日志
     //   sink 注册, 警告会丢失)
-    if (in_config->enableSessionPersistence
-        && (!in_config->dataDir.empty() || !in_config->sessionPersistenceRoot.empty())) {
-        std::string root = in_config->sessionPersistenceRoot;
-        if (root.empty()) {
-            root = agentxx::agent::AgentConfigStatic::getSessionsDir(in_config->dataDir);
+    if (in_config->enableSessionStore) {
+        if (!in_config->dataDir.empty() || !in_config->sessionStoreDirectory.empty()) {
+            std::string root = in_config->sessionStoreDirectory;
+            if (root.empty()) {
+                root = agentxx::agent::AgentConfigStatic::getSessionsDir(in_config->dataDir);
+            }
+            agentContext->sessions->sessionStore = std::make_shared<SessionStore>(std::move(root));
+        } else {
+            XX_LOGD("Session store disabled: dataDir not set and sessionStoreDirectory empty "
+                    "(in-memory only)");
         }
-        agentContext->sessionPersistence    = std::make_shared<SessionPersistence>(std::move(root));
-        agentContext->sessions->persistence = agentContext->sessionPersistence;
-    } else if (in_config->enableSessionPersistence) {
-        XX_LOGD("Session persistence disabled: dataDir not set and sessionPersistenceRoot empty "
-                "(in-memory only)");
     }
 }
 
@@ -118,8 +118,7 @@ static void checkToolSchemaValidity(
                 schema.contains("type") ? schema["type"].dump() : "<missing>"
             );
         }
-    } else if (schema.contains("type") && schema["type"].is_string()
-               && schema["type"].get<std::string>() == "array") {
+    } else if (schema.contains("type") && schema["type"].is_string() && schema["type"].get<std::string>() == "array") {
         // array 类型必须带 items (Gemini 缺 items 报 "missing field")
         XX_LOGE(
             "Tool `{}` schema `{}`: type \"array\" must have an \"items\" field; "
@@ -149,7 +148,7 @@ asio::awaitable<void> BaseAgent::init() {
     }
 
     // 逐步上报启动进度 (客户端 TUI 在"启动中"banner 展示当前正在执行的操作)
-    notifyStartup("检测系统环境 ...");
+    notifyInitProgress("检测系统环境 ...");
     // 在 agent 线程完成环境探测 (PowerShell 等) 并刷新依赖它的提示词:
     // - AgentPrompt 构造时为避免阻塞 UI/主线程启动使用非阻塞占位描述 (不探测)
     // - 此处 (agent ioCtx 线程, UI 已先行启动) 执行阻塞式子进程探测并覆盖占位;
@@ -157,13 +156,14 @@ asio::awaitable<void> BaseAgent::init() {
     //   首个请求前必然拿到最终描述
     agentContext->agentConfig->prompt.refreshEnvDetectedPrompts();
 
-    notifyStartup("初始化模型注册表 ...");
-    setupModelRegistry();
-    notifyStartup("初始化事件总线 ...");
-    setupEventBus();
+    notifyInitProgress("初始化模型注册表 ...");
+    initModelRegistry();
+    notifyInitProgress("初始化事件总线 ...");
+    initEventBus();
 
     agentContext->middlewareHandleContext
-        = std::make_shared<agentxx::middleware::MiddlewareContext>(agentContext->sessionPersistence
+        = std::make_shared<agentxx::middleware::MiddlewareContext>(
+            agentContext->sessions->sessionStore
         );
 
     // 插件系统装配: 工具注册表 + 插件管理器 (挂在 AgentContext, 供
@@ -171,7 +171,7 @@ asio::awaitable<void> BaseAgent::init() {
     // - 在 initMiddleware 之前创建: 插件钩子注册 (加载插件时) push 到
     //   handles 栈, 与既有中间件并存
     // - 配置插件的实际加载在 init 末尾 (engine 构建后, 见下方)
-    notifyStartup("初始化插件系统 ...");
+    notifyInitProgress("初始化插件系统 ...");
     agentContext->toolRegistry  = std::make_shared<agentxx::plugin::ToolRegistry>();
     agentContext->pluginManager = std::make_shared<agentxx::plugin::PluginManager>(agentContext);
     // 装配 io executor: 插件 vtable 的跨线程调用 (JS 线程等) 经 post 到 io 线程
@@ -180,17 +180,17 @@ asio::awaitable<void> BaseAgent::init() {
 
     {
         auto registry = std::make_shared<neograph::graph::GraphRegistry>();
-        registerNodes(*registry);
+        initRegisterNodes(*registry);
         graphRegistry = std::move(registry);
     }
 
-    notifyStartup("注册中间件 (权限 / Skill / Memory / 规划) ...");
+    notifyInitProgress("注册中间件 (权限 / Skill / Memory / 规划) ...");
     co_await initMiddleware();
 
-    notifyStartup("创建工具集 ...");
+    notifyInitProgress("创建工具集 ...");
     auto tools = co_await initTools();
 
-    collectMiddlewareTools(tools);
+    initMiddlewareTools(tools);
 
     // 工具白名单过滤 (子代理"无工具/自定义/继承父工具"场景):
     // - 作用于 initTools + 中间件收集后的完整工具集
@@ -215,8 +215,8 @@ asio::awaitable<void> BaseAgent::init() {
         );
     }
 
-    notifyStartup("初始化上下文压缩 ...");
-    setupSummarizationHandles(tools);
+    notifyInitProgress("初始化上下文压缩 ...");
+    initSummarizationHandles(tools);
 
     // 检查 tools 的提示词 (tool prompt 经 AgentPrompt::toolPrompt 填充到工具
     // 定义; 启动时校验, 避免请求期才暴露问题导致严格网关 HTTP 400)
@@ -240,12 +240,12 @@ asio::awaitable<void> BaseAgent::init() {
         // null 返回 400 "Format Error")
         assert(def.parameters.is_object());
         // - 递归校验 parameters JSON Schema (enum 扁平标量数组等),
-        //   非法 schema 会被严格网关 (如 opencode gpt-5.6-luna) 以 HTTP 400 拒绝
+        //   非法 schema 会被严格网关以 HTTP 400 拒绝
         checkToolSchemaValidity(def.parameters, name, "parameters");
     }
 
-    notifyStartup("构建执行图 ...");
-    auto graphDef = buildGraphDefinition();
+    notifyInitProgress("构建执行图 ...");
+    auto graphDef = initGraphDefinition();
 
     auto config = agentContext->agentConfig;
 
@@ -269,7 +269,7 @@ asio::awaitable<void> BaseAgent::init() {
 
     neograph::graph::EngineConfig engineConfig;
     engineConfig.node_context = std::move(nodeContext);
-    // 仅保留每个 thread 最新一个 checkpoint:
+    // 仅保留每个 session 最新一个 checkpoint:
     // - engine 恢复 (resume / update_state) 只依赖最新 checkpoint 与其 pending writes
     // - 历史 checkpoint 仅用于 fork / 时间旅行, agentxx 未使用
     // - 避免每轮会话累积 O(super-steps) 的 checkpoint 内存, 无需轮末手动裁剪
@@ -312,7 +312,7 @@ asio::awaitable<void> BaseAgent::init() {
     }
 
     // 加载配置启用的插件 (yaml `plugins` 段; 加载失败仅记日志不影响主流程)
-    notifyStartup("加载插件 ...");
+    notifyInitProgress("加载插件 ...");
     if (agentContext->pluginManager && !agentContext->agentConfig->plugins.empty()) {
         co_await agentContext->pluginManager->loadConfiguredPlugins(
             agentContext->agentConfig->plugins
@@ -322,15 +322,15 @@ asio::awaitable<void> BaseAgent::init() {
     co_return;
 }
 
-void BaseAgent::notifyStartup(std::string_view step) {
-    // 启动进度通知经 AgentContext::startupNotifier 转发给客户端端点 (TUI);
+void BaseAgent::notifyInitProgress(std::string_view step) {
+    // 启动进度通知经 AgentContext::initNotifier 转发给客户端端点 (TUI);
     // 未注册回调时为 no-op, 不影响启动流程 (Server/CLI/headless 模式无此显示)
-    if (agentContext && agentContext->startupNotifier) {
-        agentContext->startupNotifier(step);
+    if (agentContext && agentContext->initNotifier) {
+        agentContext->initNotifier(step);
     }
 }
 
-void BaseAgent::setupModelRegistry() {
+void BaseAgent::initModelRegistry() {
     auto config   = agentContext->agentConfig;
     auto registry = std::make_shared<agentxx::agent::ModelProviderRegistry>();
     for (const auto& [name, mc] : config->availableModels) {
@@ -343,19 +343,20 @@ void BaseAgent::setupModelRegistry() {
         if (registry->hasModel(config->currentModelName)) {
             registry->setDefaultModel(config->currentModelName);
         } else {
-            // 仅当显式指定了不存在的模型时才报错;
-            // currentModelName 为空时默认模型为 registerModel 首个注册的模型, 无需提示
+            // 指定了不存在的模型
             XX_LOGE("指定使用的模型不存在: `{}`", config->currentModelName);
         }
     }
+    // currentModelName 为空时默认模型为 registerModel 首个注册的模型
     agentContext->modelRegistry = std::move(registry);
 }
 
-void BaseAgent::setupEventBus() {
+void BaseAgent::initEventBus() {
     agentContext->bus = std::make_shared<agentxx::middleware::EventBus>(ioCtx->get_executor());
 }
 
-void BaseAgent::registerNodes(neograph::graph::GraphRegistry& registry) {
+void BaseAgent::initRegisterNodes(neograph::graph::GraphRegistry& registry) {
+    // TODO: 改为用 agentID 从 AgentHost 查找
     auto ctx = agentContext;
     registry.register_type(
         std::string{agentxx::nodes::AgentStartCallWrapNode::defNodeType},
@@ -391,7 +392,7 @@ void BaseAgent::registerNodes(neograph::graph::GraphRegistry& registry) {
     );
 }
 
-neograph::json BaseAgent::buildGraphDefinition() {
+neograph::json BaseAgent::initGraphDefinition() {
     auto config = agentContext->agentConfig;
 
     // JSON definition equivalent to the Agent::run() ReAct loop:
@@ -473,13 +474,12 @@ asio::awaitable<void> BaseAgent::initMiddleware() {
 
 asio::awaitable<std::vector<std::unique_ptr<agentxx::tools::XXToolBase>>> BaseAgent::initTools() {
     std::vector<std::unique_ptr<agentxx::tools::XXToolBase>> tools{};
-    tools.push_back(std::make_unique<agentxx::tools::ThreadShareStoreTool>(agentContext));
+    tools.push_back(std::make_unique<agentxx::tools::SessionShareStoreTool>(agentContext));
     tools.push_back(std::make_unique<agentxx::tools::GetCurrentDateTimeTool>(agentContext));
     co_return tools;
 }
 
-void BaseAgent::collectMiddlewareTools(
-    std::vector<std::unique_ptr<agentxx::tools::XXToolBase>>& tools
+void BaseAgent::initMiddlewareTools(std::vector<std::unique_ptr<agentxx::tools::XXToolBase>>& tools
 ) {
     for (auto& item : agentContext->middlewareHandleContext->handles) {
         if (false == item->toolcalls.empty()) {
@@ -492,7 +492,7 @@ void BaseAgent::collectMiddlewareTools(
     }
 }
 
-void BaseAgent::setupSummarizationHandles(
+void BaseAgent::initSummarizationHandles(
     const std::vector<std::unique_ptr<agentxx::tools::XXToolBase>>& tools
 ) {
     for (auto& handle : agentContext->middlewareHandleContext->handles) {
@@ -511,31 +511,71 @@ void BaseAgent::setupSummarizationHandles(
     }
 }
 
-void BaseAgent::selectModel(std::string_view threadId, std::string_view modelName) {
+void BaseAgent::selectModel(std::string_view sessionId, std::string_view modelName) {
     if (false == modelName.empty() && agentContext->modelRegistry
         && agentContext->modelRegistry->hasModel(modelName)) {
-        agentContext->getSession(threadId)->setModelName(modelName);
+        agentContext->getSession(sessionId)->setModelName(modelName);
     }
 }
 
-void BaseAgent::collectAppendComponentInfo(std::vector<
-                                           AppendComponentNotification>& /*notifications*/) {
-    // BaseAgent: 空实现，无需收集信息
+void BaseAgent::collectAppendComponentInfo(std::vector<AppendComponentNotification>& notifications
+) {
+    // MCP 工具
+    for (const auto& mcp : agentContext->appendComponentInfo.mcpTools) {
+        notifications.push_back(AppendComponentNotification{
+            .type         = AppendComponentNotification::Type::Mcp,
+            .name         = mcp,
+            .success      = true,
+            .errorMessage = "",
+        });
+    }
+
+    // Skill
+    for (const auto& skill : agentContext->appendComponentInfo.skills) {
+        notifications.push_back(AppendComponentNotification{
+            .type         = AppendComponentNotification::Type::Skill,
+            .name         = skill,
+            .success      = true,
+            .errorMessage = "",
+        });
+    }
+
+    // Memory 文件
+    for (const auto& memory : agentContext->appendComponentInfo.memoryFiles) {
+        notifications.push_back(AppendComponentNotification{
+            .type         = AppendComponentNotification::Type::Memory,
+            .name         = memory,
+            .success      = true,
+            .errorMessage = "",
+        });
+    }
+
+    // Agent 侧加载的插件 (数量 + 列表; success 反映 enabled 状态)
+    if (agentContext->pluginManager) {
+        for (const auto& plugin : agentContext->pluginManager->list()) {
+            notifications.push_back(AppendComponentNotification{
+                .type         = AppendComponentNotification::Type::Plugin,
+                .name         = plugin.name,
+                .success      = plugin.enabled,
+                .errorMessage = "",
+            });
+        }
+    }
 }
 
-std::string BaseAgent::getCurrentModelName(std::string_view threadId) const {
-    return agentContext->getSessionCurrentModelName(threadId);
+std::string BaseAgent::getCurrentModelName(std::string_view sessionId) const {
+    return agentContext->getSessionCurrentModelName(sessionId);
 }
 
-asio::awaitable<BaseAgent::ConversationTurnResult> BaseAgent::runConversationTurnAsync(
-    std::string_view             threadId,
+asio::awaitable<BaseAgent::TurnResult> BaseAgent::runTurnAsync(
+    std::string_view             sessionId,
     std::string_view             userInput,
     bool                         isFirstMsg,
-    std::shared_ptr<AgentIOBase> io,
+    std::shared_ptr<AgentIOBase> io, // agent-io
     std::string_view             modelName
 ) {
-    ConversationTurnResult turnResult;
-    auto                   session = agentContext->getSession(threadId);
+    TurnResult turnResult;
+    auto       session = agentContext->getSession(sessionId);
     session->bindIoThread();
     session->assertIoThread();
 
@@ -558,17 +598,17 @@ asio::awaitable<BaseAgent::ConversationTurnResult> BaseAgent::runConversationTur
     auto ioPtr = session->io;
 
     // 基于 system_clock 记录开始时间，用于后续时长计算
-    const auto start_time = std::chrono::system_clock::now();
+    const auto startTime = std::chrono::system_clock::now();
     // 记录轮次开始时间 (毫秒, Unix 时间戳, 用于显示)
-    const auto start_time_ms = static_cast<int64_t>(
-        std::chrono::duration_cast<std::chrono::milliseconds>(start_time.time_since_epoch()).count()
+    const auto startTimeMs = static_cast<int64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(startTime.time_since_epoch()).count()
     );
-    // 产出增量事件的唯一出站口: 经 EventBridge 分配会话级递增 seq 后 sendToPeer
+    // 产出增量事件的唯一出口: 经 EventBridge 分配会话级递增 seq 后 ioPtr->sendToPeer
     // 发往对端 (server 端点会缓冲并经 transport 转发 client; io 为 nullptr 的
     // headless 场景则丢弃)
     auto eventBridge = std::make_shared<agentxx::middleware::EventBridge>(
         agentContext->agentConfig->agentName,
-        std::string{threadId},
+        std::string{sessionId},
         agentContext,
         session,
         ioPtr
@@ -585,7 +625,7 @@ asio::awaitable<BaseAgent::ConversationTurnResult> BaseAgent::runConversationTur
             }
             auto vm           = ViewMessage::makeText(ViewMessage::Role::Tip, text, startMs, durMs);
             vm.tip->tipLevel  = level;
-            const auto     id = session->appendHistory(std::move(vm));
+            const auto     id = session->appendViewMessage(std::move(vm));
             Delta::TipType tipType = Delta::TipType::Info;
             if (level == ViewMessage::TipLevel::Warning) {
                 tipType = Delta::TipType::Warning;
@@ -607,18 +647,18 @@ asio::awaitable<BaseAgent::ConversationTurnResult> BaseAgent::runConversationTur
 
     eventBridge->emitDelta(Delta{.type = Delta::Type::TurnStart});
 
-    selectModel(threadId, modelName);
+    selectModel(sessionId, modelName);
 
     bool resumeInterrupt = false;
-    if (false == agentContext->middlewareHandleContext->graphData.contains(threadId)) {
-        auto data = engine->get_state(std::string{threadId}).value_or(neograph::json{});
+    if (false == agentContext->middlewareHandleContext->graphData.contains(sessionId)) {
+        auto data = engine->get_state(std::string{sessionId}).value_or(neograph::json{});
         if (data.is_object()
             && data.contains(agentxx::middleware::MiddlewareContext::channel_savedGraphData)
             && data[agentxx::middleware::MiddlewareContext::channel_savedGraphData].is_object()) {
             resumeInterrupt = true;
             agentContext->middlewareHandleContext->setGraphDataFromState(
                 data[agentxx::middleware::MiddlewareContext::channel_savedGraphData],
-                threadId
+                sessionId
             );
         }
     }
@@ -634,8 +674,8 @@ asio::awaitable<BaseAgent::ConversationTurnResult> BaseAgent::runConversationTur
     // 历史用于 client 同步/展示, 上下文仅用于调用 LLM API
     // - 附带开始时间戳: 会话列表的 lastActiveMs 依赖此值 (持久化 meta),
     //   无时间戳时列表无法显示活动时间
-    session->appendHistory(
-        ViewMessage::makeText(ViewMessage::Role::User, processedInput, start_time_ms)
+    session->appendViewMessage(
+        ViewMessage::makeText(ViewMessage::Role::User, processedInput, startTimeMs)
     );
     session->llmMessages.push_back(std::move(userMsgJson));
 
@@ -648,9 +688,9 @@ asio::awaitable<BaseAgent::ConversationTurnResult> BaseAgent::runConversationTur
     // llm callback: 由 EventBridge 统一处理 GraphEvent -> 会话增量 Delta/历史/总线发布
     auto eventCallback = eventBridge->makeCallback();
     auto cfg           = neograph::graph::RunConfig{
-                  .thread_id   = std::string{threadId},
+                  .thread_id   = std::string{sessionId},
                   .input       = {{"messages", session->llmMessages}},
-                  .max_steps   = 1024,
+                  .max_steps   = 1 << 30,
                   .stream_mode = neograph::graph::StreamMode::EVENTS | neograph::graph::StreamMode::TOKENS
                        | neograph::graph::StreamMode::VALUES | neograph::graph::StreamMode::UPDATES,
                   .cancel_token     = cancelToken,
@@ -662,7 +702,7 @@ asio::awaitable<BaseAgent::ConversationTurnResult> BaseAgent::runConversationTur
             // 统一的 "运行 + 中断处理 + 恢复" 循环 (与子代理共用 AgentRunner):
             // - 语义与旧内联循环完全一致 (checkpoint 持久化 / tempMessages 恢复 /
             //   MessageTip / IO 端点 HIL 超时)
-            // - 委派经 ctx->bus 请求 service.subagent (宿主 serve), 不限制超时
+            // - 委派经 ctx->bus 请求 service.subagent (宿主 registerServer), 不限制超时
             //   (修复旧实现总线默认 30s 截断长任务子代理的问题)
             std::optional<neograph::graph::RunResult> recovered;
             if (resumeInterrupt) {
@@ -672,12 +712,12 @@ asio::awaitable<BaseAgent::ConversationTurnResult> BaseAgent::runConversationTur
                 r.interrupted = true;
                 r.interrupt_node
                     = agentContext->middlewareHandleContext->getGraphDataItemValue<std::string>(
-                        threadId,
+                        sessionId,
                         agentxx::middleware::MiddlewareContext::graphDataKey_interruptNode
                     );
                 r.interrupt_value
                     = agentContext->middlewareHandleContext->getGraphDataItemValue<neograph::json>(
-                        threadId,
+                        sessionId,
                         agentxx::middleware::MiddlewareContext::graphDataKey_interruptValue
                     );
                 recovered = std::move(r);
@@ -686,11 +726,11 @@ asio::awaitable<BaseAgent::ConversationTurnResult> BaseAgent::runConversationTur
             auto runnerOutcome = co_await AgentRunner{}.run(
                 agentContext,
                 engine.get(),
-                threadId,
+                sessionId,
                 std::move(cfg),
                 cancelToken,
                 AgentRunner::Hooks{
-                    .persistCheckpoint = true,
+                    .eventCallback = eventCallback,
                     .onInterruptTip =
                         [&](std::string_view node, std::string_view value, std::string_view handle
                         ) {
@@ -704,35 +744,8 @@ asio::awaitable<BaseAgent::ConversationTurnResult> BaseAgent::runConversationTur
                             }
                             insertMessageTip(std::move(msg), ViewMessage::TipLevel::Info);
                         },
-                    .eventCallback  = eventCallback,
-                    .onBeforeResume = [&](std::string_view tid) -> asio::awaitable<void> {
-                        engine->update_state(
-                            std::string{tid},
-                            [&](neograph::graph::GraphState& state) {
-                                state.overwrite("messages", session->llmMessages);
-                            }
-                        );
-                        co_return;
-                    },
-                    .onRunResult =
-                        [&](neograph::graph::RunResult& r, std::string_view tid) {
-                            if (r.interrupted) {
-                                // 中断时 [result] 内的 messages 是被 neograph::engine
-                                // 回滚的，本轮 session 的上下文已经被丢弃；应该取中断时
-                                // 保存的 messages
-                                const auto& im = agentContext->middlewareHandleContext
-                                                     ->getGraphDataItemValue<neograph::json>(
-                                                         tid,
-                                                         agentxx::middleware::MiddlewareContext::
-                                                             graphDataKey_tempMessages
-                                                     );
-                                if (im.is_array()) {
-                                    session->llmMessages = im;
-                                }
-                            } else {
-                                session->llmMessages = r.channel_raw("messages");
-                            }
-                        },
+                    .onBeforeResume = nullptr,
+                    .onRunResult    = nullptr,
                 },
                 recovered
             );
@@ -760,11 +773,12 @@ asio::awaitable<BaseAgent::ConversationTurnResult> BaseAgent::runConversationTur
         // 按取消语义处理, 确保 turnResult 报告 "Cancelled by user" 而非普通错误
         cancelToken
     );
+
     if (turnResult.hasError) {
         // - 出现异常时 state.messages 已经被回滚，提取临时保存的上下文，并写回 state
         const auto& im
             = agentContext->middlewareHandleContext->getGraphDataItemValue<neograph::json>(
-                threadId,
+                sessionId,
                 agentxx::middleware::MiddlewareContext::graphDataKey_tempMessages
             );
         if (im.is_array()) {
@@ -774,13 +788,13 @@ asio::awaitable<BaseAgent::ConversationTurnResult> BaseAgent::runConversationTur
                 im.size()
             );
             session->llmMessages = im;
-            engine->update_state(std::string{threadId}, [&](neograph::graph::GraphState& state) {
+            engine->update_state(std::string{sessionId}, [&](neograph::graph::GraphState& state) {
                 state.overwrite("messages", session->llmMessages);
             });
         }
     }
 
-    engine->update_state(std::string{threadId}, [&](neograph::graph::GraphState& state) {
+    engine->update_state(std::string{sessionId}, [&](neograph::graph::GraphState& state) {
         // 中断已经处理完成，清理 graphData
         state.remove(agentxx::middleware::MiddlewareContext::channel_savedGraphData);
     });
@@ -790,23 +804,22 @@ asio::awaitable<BaseAgent::ConversationTurnResult> BaseAgent::runConversationTur
     session->saveLlmMessages();
 
     // 计算轮次持续时间
-    const auto duration_ms
+    const auto durationMs
         = static_cast<int64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
-                                   std::chrono::system_clock::now() - start_time
+                                   std::chrono::system_clock::now() - startTime
         )
                                    .count());
 
-    // 取走本轮 LLM API 平均生成速度 (token/s), 同时填入 TurnEnd Delta 与
+    // - 取走过本轮 LLM API 平均生成速度 (token/s), 同时填入 TurnEnd Delta 与
     // 轮次统计系统提示
     const double turnTps = eventBridge->takeTurnTps();
 
-    // 发送 TurnEnd Delta，包含时长统计与 LLM API 平均生成速度 (token/s)
     eventBridge->emitDelta(Delta{
         .type         = Delta::Type::TurnEnd,
         .historyCount = session->chainHash.count(),
         .tailHash     = session->chainHash.tailHex(),
-        .startTimeMs  = start_time_ms,
-        .durationMs   = duration_ms,
+        .startTimeMs  = startTimeMs,
+        .durationMs   = durationMs,
         .tps          = turnTps,
     });
 
@@ -814,28 +827,28 @@ asio::awaitable<BaseAgent::ConversationTurnResult> BaseAgent::runConversationTur
     // 在 TurnEnd 时自行构造), 模型名之后显示本轮 LLM API 平均生成速度
     insertMessageTip(
         [&]() {
-            std::string modelText = agentContext->getSessionCurrentModelName(threadId);
+            std::string modelName = agentContext->getSessionCurrentModelName(sessionId);
             if (turnTps > 0.0) {
-                if (modelText.empty()) {
-                    modelText = fmt::format("{:.1f}t/s", turnTps);
+                if (modelName.empty()) {
+                    modelName = fmt::format("{:.1f}t/s", turnTps);
                 } else {
-                    modelText = fmt::format("{} · {:.1f}t/s", modelText, turnTps);
+                    modelName = fmt::format("{} · {:.1f}t/s", modelName, turnTps);
                 }
             }
             return fmt::format(
                 "{} · {} · {}",
-                modelText,
-                agentxx::util::formatDurationMilliseconds(duration_ms),
-                agentxx::util::formatTimestampMilliseconds(start_time_ms + duration_ms)
+                std::move(modelName),
+                agentxx::util::formatDurationMilliseconds(durationMs),
+                agentxx::util::formatTimestampMilliseconds(startTimeMs + durationMs)
             );
         }(),
         ViewMessage::TipLevel::Info,
-        start_time_ms,
-        duration_ms
+        startTimeMs,
+        durationMs
     );
 
     // checkpoint store 采用 InMemorySingleCheckpointStore, save 时自动淘汰
-    // 该 thread 的历史 checkpoint, 轮末无需额外裁剪
+    // 该 session 的历史 checkpoint, 轮末无需额外裁剪
 
     // 插件轮次结束: 正常路径登记轮次退出 (异常路径下轮开始时自愈)
     if (agentContext->pluginManager) {
@@ -853,22 +866,18 @@ neograph::graph::GraphEngine* BaseAgent::getEngine() {
     return engine.get();
 }
 
-const neograph::graph::GraphEngine* BaseAgent::getEngine() const {
-    return engine.get();
-}
-
 std::shared_ptr<AgentContext> BaseAgent::getContext() {
     return agentContext;
 }
 
 asio::awaitable<BaseAgent::SimpleRunResult> BaseAgent::runInternalAsync(
-    std::string_view                     threadId,
+    std::string_view                     sessionId,
     std::vector<neograph::ChatMessage>   messages,
     neograph::graph::GraphStreamCallback callback,
     std::string_view                     modelName,
     bool                                 cleanupAfter
 ) {
-    selectModel(threadId, modelName);
+    selectModel(sessionId, modelName);
     auto inputMessages = neograph::json::array();
     for (auto& msg : messages) {
         neograph::json j;
@@ -876,22 +885,22 @@ asio::awaitable<BaseAgent::SimpleRunResult> BaseAgent::runInternalAsync(
         inputMessages.push_back(std::move(j));
     }
     neograph::graph::RunConfig cfg{
-        .thread_id        = std::string{threadId},
+        .thread_id        = std::string{sessionId},
         .input            = {{"messages", std::move(inputMessages)}},
         .resume_if_exists = false,
     };
-    std::ostringstream oss;
+    std::string oss;
     // 统一的 LLM_TOKEN 收集 + 透传 callback
     auto wrappedCb = [callback, &oss](const neograph::graph::GraphEvent& ev) {
         if (ev.type == neograph::graph::GraphEvent::Type::LLM_TOKEN) {
             try {
                 if (ev.data.is_string()) {
-                    oss << ev.data.get<std::string>();
+                    oss += ev.data.get<std::string>();
                 } else if (ev.data.is_object()) {
                     neograph::ChatStreamChunk ch;
                     neograph::from_json(ev.data, ch);
                     if (ch.type != neograph::ChatStreamChunk::TYPE_THINKING) {
-                        oss << ch.data;
+                        oss += ch.data;
                     }
                 }
             } catch (...) {
@@ -907,15 +916,15 @@ asio::awaitable<BaseAgent::SimpleRunResult> BaseAgent::runInternalAsync(
                                             }});
     if (cleanupAfter) {
         if (agentContext->middlewareHandleContext) {
-            agentContext->middlewareHandleContext->cleanupThread(std::string{threadId});
+            agentContext->middlewareHandleContext->cleanupSession(std::string{sessionId});
         }
-        agentContext->sessions->remove(threadId);
+        agentContext->sessions->remove(sessionId);
     }
-    co_return SimpleRunResult{.content = oss.str(), .fullResult = std::move(result)};
+    co_return SimpleRunResult{.content = std::move(oss), .fullResult = std::move(result)};
 }
 
-asio::awaitable<std::string> BaseAgent::runNonStreamAsync(
-    std::string_view                                        threadId,
+asio::awaitable<std::string> BaseAgent::runOverMsgsTurnAsync(
+    std::string_view                                        sessionId,
     const std::vector<neograph::ChatMessage>&               messages,
     std::function<void(const neograph::graph::GraphEvent&)> callback,
     std::string_view                                        modelName
@@ -927,7 +936,7 @@ asio::awaitable<std::string> BaseAgent::runNonStreamAsync(
         };
     }
     auto r = co_await runInternalAsync(
-        threadId,
+        sessionId,
         std::vector<neograph::ChatMessage>(messages),
         cb,
         modelName,
@@ -937,7 +946,7 @@ asio::awaitable<std::string> BaseAgent::runNonStreamAsync(
 }
 
 asio::awaitable<std::string> BaseAgent::runSingleInputAsync(
-    std::string_view threadId,
+    std::string_view sessionId,
     std::string_view userInput,
     std::string_view systemPrompt,
     std::string_view modelName
@@ -949,18 +958,18 @@ asio::awaitable<std::string> BaseAgent::runSingleInputAsync(
         );
     }
     messages.push_back(neograph::ChatMessage{.role = "user", .content = std::string{userInput}});
-    co_return co_await runNonStreamAsync(threadId, messages, nullptr, modelName);
+    co_return co_await runOverMsgsTurnAsync(sessionId, messages, nullptr, modelName);
 }
 
-asio::awaitable<BaseAgent::SimpleRunResult> BaseAgent::runStreamAsync(
+asio::awaitable<BaseAgent::SimpleRunResult> BaseAgent::runStreamTurnAsync(
     const std::vector<neograph::ChatMessage>& messages,
     std::string_view                          modelName
 ) {
     static std::atomic<uint64_t> runStreamSeq{0};
     const auto                   ts = std::chrono::steady_clock::now().time_since_epoch().count();
-    const auto threadId             = fmt::format("subagent_{}_{}", ts, runStreamSeq.fetch_add(1));
+    const auto sessionId            = fmt::format("subagent_{}_{}", ts, runStreamSeq.fetch_add(1));
     auto       r                    = co_await runInternalAsync(
-        threadId,
+        sessionId,
         std::vector<neograph::ChatMessage>(messages),
         nullptr,
         modelName,

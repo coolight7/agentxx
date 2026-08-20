@@ -79,7 +79,7 @@ struct SummarizationTestEnv {
     std::shared_ptr<agentxx::agent::AgentContext>                       ctx      = nullptr;
     std::shared_ptr<FakeSubAgentManagerTool>                            subagent = nullptr;
     std::shared_ptr<agentxx::middleware::SummarizationMiddlewareHandle> handle   = nullptr;
-    std::string threadId = "sum_test_thread";
+    std::string sessionId = "sum_test_thread";
 
     /// @param in_defaultMaxToken 中间件默认模型上限 (模型配置未指定时使用)
     /// @param in_recentRatio     最近消息 token 预算比例 (测试用小值使切分点可控)
@@ -139,12 +139,12 @@ struct SummarizationTestEnv {
         );
 
         // 预创建会话, 用于校验上下文统计发布
-        ctx->sessions->getOrCreate(threadId);
+        ctx->sessions->getOrCreate(sessionId);
     }
 
     /// 当前会话使用的模型配置 (便于测试中切换模型)
     std::shared_ptr<agentxx::agent::Session> session() const {
-        return ctx->sessions->get(threadId);
+        return ctx->sessions->get(sessionId);
     }
 };
 
@@ -195,21 +195,21 @@ static bool msgHasFlag(const neograph::ChatMessage& m, neograph::MessageFlag fla
 /// 读取当前会话的上下文统计
 static size_t contextTokensOf(
     const std::shared_ptr<agentxx::agent::AgentContext>& ctx,
-    std::string_view                                     threadId
+    std::string_view                                     sessionId
 ) {
-    auto session = ctx->sessions->get(threadId);
+    auto session = ctx->sessions->get(sessionId);
     return (nullptr != session && nullptr != session->contextStats)
-               ? session->contextStats->contextTokens.load()
+               ? session->contextStats->contextTokens
                : 0;
 }
 
 static size_t maxContextTokensOf(
     const std::shared_ptr<agentxx::agent::AgentContext>& ctx,
-    std::string_view                                     threadId
+    std::string_view                                     sessionId
 ) {
-    auto session = ctx->sessions->get(threadId);
+    auto session = ctx->sessions->get(sessionId);
     return (nullptr != session && nullptr != session->contextStats)
-               ? session->contextStats->maxContextTokens.load()
+               ? session->contextStats->maxContextTokens
                : 0;
 }
 
@@ -266,7 +266,7 @@ static agentxx::middleware::SummarizationToolHandle makeBothTruncateHandle() {
 static asio::awaitable<std::vector<neograph::ChatMessage>> runModelcall(
     const std::shared_ptr<agentxx::middleware::SummarizationMiddlewareHandle>& handle,
     const std::shared_ptr<agentxx::agent::AgentContext>&                       ctx,
-    std::string_view                                                           threadId,
+    std::string_view                                                           sessionId,
     std::vector<neograph::ChatMessage>                                         messages,
     std::optional<size_t> apiTokenUsage = std::nullopt
 ) {
@@ -284,19 +284,19 @@ static asio::awaitable<std::vector<neograph::ChatMessage>> runModelcall(
     // 注入/清除 api token usage (模拟上一次 LLM 调用返回的 usage)
     if (apiTokenUsage.has_value()) {
         ctx->middlewareHandleContext->setGraphDataItemValue(
-            threadId,
+            sessionId,
             agentxx::middleware::MiddlewareContext::graphDataKey_LLMTokenUsage,
             neograph::json(*apiTokenUsage)
         );
     } else {
         ctx->middlewareHandleContext->removeGraphDataItem(
-            threadId,
+            sessionId,
             agentxx::middleware::MiddlewareContext::graphDataKey_LLMTokenUsage
         );
     }
 
     neograph::graph::RunContext runCtx;
-    runCtx.thread_id = std::string{threadId};
+    runCtx.thread_id = std::string{sessionId};
     neograph::graph::NodeInput in{state, runCtx, nullptr};
     co_await handle->onModelcallRunFunc(in);
     co_return in.state.get_messages();
@@ -508,14 +508,14 @@ asio::awaitable<TestResult> run_summarization_tests() {
             auto env                         = std::make_shared<SummarizationTestEnv>();
             env->ctx->subagentManagerToolPtr = nullptr;
             std::vector<neograph::ChatMessage> msgs{makeMsg("user", "hi")};
-            auto r = co_await env->handle->doSummarizeWithLLM(env->threadId, msgs);
+            auto r = co_await env->handle->doSummarizeWithLLM(env->sessionId, msgs);
             XX_TEST_EXPECT_EQ(r, std::string{""});
         }
 
         // --- B. 空消息 → 返回空串 ---
         {
             auto env = std::make_shared<SummarizationTestEnv>();
-            auto r   = co_await env->handle->doSummarizeWithLLM(env->threadId, {});
+            auto r   = co_await env->handle->doSummarizeWithLLM(env->sessionId, {});
             XX_TEST_EXPECT_EQ(r, std::string{""});
         }
 
@@ -530,7 +530,7 @@ asio::awaitable<TestResult> run_summarization_tests() {
                 makeAssistantToolcall("", {makeToolcall("c1", "read_file", R"({"path":"A"})")}),
                 makeToolResult("c1", "read_file", "r1"),
             };
-            auto r = co_await env->handle->doSummarizeWithLLM(env->threadId, msgs);
+            auto r = co_await env->handle->doSummarizeWithLLM(env->sessionId, msgs);
             XX_TEST_EXPECT_EQ(r, std::string{"fake summary"});
 
             // 仅调用一次 subagent
@@ -539,7 +539,7 @@ asio::awaitable<TestResult> run_summarization_tests() {
             // 子代理名
             XX_TEST_EXPECT_EQ(args.value("subagent", std::string{}), std::string{"subagent_task"});
             // 同上下文: 指定父线程
-            XX_TEST_EXPECT_EQ(args.value("thread_id", std::string{}), env->threadId);
+            XX_TEST_EXPECT_EQ(args.value("session_id", std::string{}), env->sessionId);
             // 工具策略: 仅 share_store (模型自主外置长内容)
             XX_TEST_EXPECT_TRUE(args["tools"].is_array());
             XX_TEST_EXPECT_EQ(args["tools"].size(), size_t{1});
@@ -576,7 +576,7 @@ asio::awaitable<TestResult> run_summarization_tests() {
             auto env               = std::make_shared<SummarizationTestEnv>();
             env->subagent->summary = ""; // 模拟压缩失败 (子代理失败时 content 为空)
             std::vector<neograph::ChatMessage> msgs{makeMsg("user", "u1")};
-            auto r = co_await env->handle->doSummarizeWithLLM(env->threadId, msgs);
+            auto r = co_await env->handle->doSummarizeWithLLM(env->sessionId, msgs);
             XX_TEST_EXPECT_EQ(r, std::string{""});
             // 仍发起了一次 subagent 调用
             XX_TEST_EXPECT_EQ(env->subagent->receivedArguments.size(), size_t{1});
@@ -594,7 +594,7 @@ asio::awaitable<TestResult> run_summarization_tests() {
                 big1,
                 big2,
             };
-            auto r = co_await env->handle->doSummarizeWithLLM(env->threadId, msgs);
+            auto r = co_await env->handle->doSummarizeWithLLM(env->sessionId, msgs);
             XX_TEST_EXPECT_EQ(r, std::string{"S"});
             XX_TEST_EXPECT_EQ(env->subagent->receivedArguments.size(), size_t{1});
             const auto& reqMsgs = env->subagent->receivedArguments[0]["messages"];
@@ -625,7 +625,7 @@ asio::awaitable<TestResult> run_summarization_tests() {
             env->ctx->agentConfig->prompt.summarizationPrompt
                 = "CUSTOM SUMMARIZE PROMPT {omitted_note}max {max_words}";
             std::vector<neograph::ChatMessage> msgs{makeMsg("user", "u1")};
-            auto r = co_await env->handle->doSummarizeWithLLM(env->threadId, msgs);
+            auto r = co_await env->handle->doSummarizeWithLLM(env->sessionId, msgs);
             XX_TEST_EXPECT_EQ(r, std::string{"S"});
             XX_TEST_EXPECT_EQ(env->subagent->receivedArguments.size(), size_t{1});
             // 定制模板生效: 占位符被替换 (omitted_note 为空, max_words=2048/4=512)
@@ -641,7 +641,7 @@ asio::awaitable<TestResult> run_summarization_tests() {
             auto env = std::make_shared<SummarizationTestEnv>();
             env->ctx->agentConfig->prompt.summarizationPrompt = "";
             std::vector<neograph::ChatMessage> msgs{makeMsg("user", "u1")};
-            auto r = co_await env->handle->doSummarizeWithLLM(env->threadId, msgs);
+            auto r = co_await env->handle->doSummarizeWithLLM(env->sessionId, msgs);
             XX_TEST_EXPECT_EQ(r, std::string{""});
             XX_TEST_EXPECT_EQ(env->subagent->receivedArguments.size(), size_t{0});
         }
@@ -997,10 +997,10 @@ asio::awaitable<TestResult> run_summarization_tests() {
     // --- T1. 空消息 → 直接返回, 不更新上下文统计 ---
     {
         auto env = std::make_shared<SummarizationTestEnv>();
-        auto res = co_await runModelcall(env->handle, env->ctx, env->threadId, {});
+        auto res = co_await runModelcall(env->handle, env->ctx, env->sessionId, {});
         XX_TEST_EXPECT_TRUE(res.empty());
-        XX_TEST_EXPECT_EQ(contextTokensOf(env->ctx, env->threadId), size_t{0});
-        XX_TEST_EXPECT_EQ(maxContextTokensOf(env->ctx, env->threadId), size_t{0});
+        XX_TEST_EXPECT_EQ(contextTokensOf(env->ctx, env->sessionId), size_t{0});
+        XX_TEST_EXPECT_EQ(maxContextTokensOf(env->ctx, env->sessionId), size_t{0});
     }
 
     // --- T2. token 用量低于 65% → 不压缩, 仅发布统计 (count 路径) ---
@@ -1011,13 +1011,13 @@ asio::awaitable<TestResult> run_summarization_tests() {
             makeMsg("assistant", "yo"),
         };
         // count = user(3+1+0) + assistant(3+2+0) = 9
-        auto res = co_await runModelcall(env->handle, env->ctx, env->threadId, msgs);
+        auto res = co_await runModelcall(env->handle, env->ctx, env->sessionId, msgs);
         XX_TEST_EXPECT_EQ(res.size(), size_t{2});
         XX_TEST_EXPECT_EQ(res[0].content, std::string{"hi"});
         XX_TEST_EXPECT_EQ(res[1].content, std::string{"yo"});
         // 默认模型 "fallback" 未指定 maxToken → 使用中间件默认值 2048
-        XX_TEST_EXPECT_EQ(contextTokensOf(env->ctx, env->threadId), size_t{9});
-        XX_TEST_EXPECT_EQ(maxContextTokensOf(env->ctx, env->threadId), size_t{2048});
+        XX_TEST_EXPECT_EQ(contextTokensOf(env->ctx, env->sessionId), size_t{9});
+        XX_TEST_EXPECT_EQ(maxContextTokensOf(env->ctx, env->sessionId), size_t{2048});
     }
 
     // --- T3. apiTokenUsage 存在时优先使用 (而非本地统计) ---
@@ -1027,10 +1027,10 @@ asio::awaitable<TestResult> run_summarization_tests() {
             makeMsg("user", "hi"),
             makeMsg("assistant", "yo"),
         };
-        auto res = co_await runModelcall(env->handle, env->ctx, env->threadId, msgs, 100);
+        auto res = co_await runModelcall(env->handle, env->ctx, env->sessionId, msgs, 100);
         XX_TEST_EXPECT_EQ(res.size(), size_t{2});
-        XX_TEST_EXPECT_EQ(contextTokensOf(env->ctx, env->threadId), size_t{100});
-        XX_TEST_EXPECT_EQ(maxContextTokensOf(env->ctx, env->threadId), size_t{2048});
+        XX_TEST_EXPECT_EQ(contextTokensOf(env->ctx, env->sessionId), size_t{100});
+        XX_TEST_EXPECT_EQ(maxContextTokensOf(env->ctx, env->sessionId), size_t{2048});
     }
 
     // --- T4. 65% ~ 85% 之间: 只做 toolcall 去重 + 噪音清理, 不做 LLM 总结;
@@ -1048,7 +1048,7 @@ asio::awaitable<TestResult> run_summarization_tests() {
             makeToolResult("c2", "read_file", "r2"),
             makeMsg("user", longContent),
         };
-        auto res = co_await runModelcall(env->handle, env->ctx, env->threadId, msgs, 700);
+        auto res = co_await runModelcall(env->handle, env->ctx, env->sessionId, msgs, 700);
         // 消息数量不变 (未做 LLM 总结)
         XX_TEST_EXPECT_EQ(res.size(), size_t{6});
         // toolcall 去重: 旧 response 截断, 新 response 保留
@@ -1059,7 +1059,7 @@ asio::awaitable<TestResult> run_summarization_tests() {
         XX_TEST_EXPECT_FALSE(msgHasFlag(res[5], neograph::MessageFlag::ContentOffloaded));
         // share store 未被写入
         XX_TEST_EXPECT_TRUE(
-            env->ctx->middlewareHandleContext->shareStore.find(env->threadId)
+            env->ctx->middlewareHandleContext->shareStore.find(env->sessionId)
             == env->ctx->middlewareHandleContext->shareStore.end()
         );
         // 没有出现总结消息
@@ -1073,8 +1073,8 @@ asio::awaitable<TestResult> run_summarization_tests() {
         // 未发起压缩 subagent
         XX_TEST_EXPECT_EQ(env->subagent->receivedArguments.size(), size_t{0});
         // 统计发布
-        XX_TEST_EXPECT_EQ(contextTokensOf(env->ctx, env->threadId), size_t{700});
-        XX_TEST_EXPECT_EQ(maxContextTokensOf(env->ctx, env->threadId), size_t{1000});
+        XX_TEST_EXPECT_EQ(contextTokensOf(env->ctx, env->sessionId), size_t{700});
+        XX_TEST_EXPECT_EQ(maxContextTokensOf(env->ctx, env->sessionId), size_t{1000});
     }
 
     // --- T5. >= 85% 且 LLM 总结成功: system + 总结对 + 最近消息 (token 预算切分) ---
@@ -1093,7 +1093,7 @@ asio::awaitable<TestResult> run_summarization_tests() {
             makeMsg("user", "u4"),
             makeMsg("assistant", "a4"),
         };
-        auto res = co_await runModelcall(env->handle, env->ctx, env->threadId, msgs, 900);
+        auto res = co_await runModelcall(env->handle, env->ctx, env->sessionId, msgs, 900);
         // system(1) + 总结对(2) + recent[u2,a2,u3,a3,u4,a4](6) = 9
         // (budget=30: 从后往前 a4(5)u4(4)a3(5)u3(4)a2(5)u2(4)=27, a1(5) 超 → end=3)
         XX_TEST_EXPECT_EQ(res.size(), size_t{9});
@@ -1133,7 +1133,7 @@ asio::awaitable<TestResult> run_summarization_tests() {
         XX_TEST_EXPECT_EQ(reqMsgs[1].value("content", std::string{}), std::string{"u1"});
         XX_TEST_EXPECT_EQ(reqMsgs[2].value("content", std::string{}), std::string{"a1"});
         XX_TEST_EXPECT_EQ(reqMsgs.size(), size_t{4}); // sys + u1 + a1 + 指令
-        XX_TEST_EXPECT_EQ(contextTokensOf(env->ctx, env->threadId), size_t{900});
+        XX_TEST_EXPECT_EQ(contextTokensOf(env->ctx, env->sessionId), size_t{900});
     }
 
     // --- T6. >= 85% 但 LLM 总结失败 (空响应) → 保留原消息, 失败计数 +1 ---
@@ -1152,7 +1152,7 @@ asio::awaitable<TestResult> run_summarization_tests() {
             makeMsg("user", "u4"),
             makeMsg("assistant", "a4"),
         };
-        auto res = co_await runModelcall(env->handle, env->ctx, env->threadId, msgs, 900);
+        auto res = co_await runModelcall(env->handle, env->ctx, env->sessionId, msgs, 900);
         XX_TEST_EXPECT_EQ(res.size(), size_t{9});
         for (size_t i = 0; i < msgs.size(); ++i) {
             XX_TEST_EXPECT_EQ(res[i].role, msgs[i].role);
@@ -1160,7 +1160,7 @@ asio::awaitable<TestResult> run_summarization_tests() {
         }
         // 失败计数 = 1 (未触发硬截断)
         auto failCount = env->ctx->middlewareHandleContext->getGraphDataItemValue<size_t>(
-            env->threadId,
+            env->sessionId,
             agentxx::middleware::MiddlewareContext::graphDataKey_summarizationFailCount
         );
         XX_TEST_EXPECT_EQ(failCount, size_t{1});
@@ -1182,10 +1182,10 @@ asio::awaitable<TestResult> run_summarization_tests() {
             makeMsg("assistant", "a4"),
         };
         // 第一次失败
-        auto res1 = co_await runModelcall(env->handle, env->ctx, env->threadId, msgs, 900);
+        auto res1 = co_await runModelcall(env->handle, env->ctx, env->sessionId, msgs, 900);
         XX_TEST_EXPECT_EQ(res1.size(), size_t{9});
         // 第二次失败 → 硬截断: system + 截断说明 + recent (budget=300 收全部 8 条)
-        auto res2 = co_await runModelcall(env->handle, env->ctx, env->threadId, msgs, 900);
+        auto res2 = co_await runModelcall(env->handle, env->ctx, env->sessionId, msgs, 900);
         XX_TEST_EXPECT_EQ(res2.size(), size_t{10});
         XX_TEST_EXPECT_EQ(res2[0].role, std::string{"system"});
         XX_TEST_EXPECT_EQ(res2[0].content, std::string{"sys"});
@@ -1213,7 +1213,7 @@ asio::awaitable<TestResult> run_summarization_tests() {
             makeToolResult("c4", "read_file", "t4"),
             makeToolResult("c5", "read_file", "t5"),
         };
-        auto res = co_await runModelcall(env->handle, env->ctx, env->threadId, msgs, 900);
+        auto res = co_await runModelcall(env->handle, env->ctx, env->sessionId, msgs, 900);
         // 预算 30 (token: u1=4, tc1=10, t1=4, tc2=10, t2..t5=4):
         // 从后往前收 t5,t4,t3,t2,tc2,t1 (4+4+4+4+10+4=30) → end=2
         // recent 开头 t1 是 tool → 回退到发起组 tc1 → end=1
@@ -1250,23 +1250,23 @@ asio::awaitable<TestResult> run_summarization_tests() {
             makeMsg("assistant", "a4"),
         };
         // 默认模型 "fallback" (max=0) → 中间件默认 2048; 900 < 2048*0.65 → 不压缩
-        auto res1 = co_await runModelcall(env->handle, env->ctx, env->threadId, msgs, 900);
+        auto res1 = co_await runModelcall(env->handle, env->ctx, env->sessionId, msgs, 900);
         XX_TEST_EXPECT_EQ(res1.size(), size_t{8});
-        XX_TEST_EXPECT_EQ(maxContextTokensOf(env->ctx, env->threadId), size_t{2048});
+        XX_TEST_EXPECT_EQ(maxContextTokensOf(env->ctx, env->sessionId), size_t{2048});
 
         // 切换 small (max=1000): 900 >= 850 → LLM 总结
         env->session()->setModelName("small");
         env->subagent->summary = "S";
-        auto res2 = co_await runModelcall(env->handle, env->ctx, env->threadId, msgs, 900);
+        auto res2 = co_await runModelcall(env->handle, env->ctx, env->sessionId, msgs, 900);
         // budget=30: recent=[u2,a2,u3,a3,u4,a4](6) → 总结对 + 6 = 8
         XX_TEST_EXPECT_EQ(res2.size(), size_t{8});
-        XX_TEST_EXPECT_EQ(maxContextTokensOf(env->ctx, env->threadId), size_t{1000});
+        XX_TEST_EXPECT_EQ(maxContextTokensOf(env->ctx, env->sessionId), size_t{1000});
 
         // 切换 big (max=5000): 900 < 5000*0.65 → 不压缩
         env->session()->setModelName("big");
-        auto res3 = co_await runModelcall(env->handle, env->ctx, env->threadId, msgs, 900);
+        auto res3 = co_await runModelcall(env->handle, env->ctx, env->sessionId, msgs, 900);
         XX_TEST_EXPECT_EQ(res3.size(), size_t{8});
-        XX_TEST_EXPECT_EQ(maxContextTokensOf(env->ctx, env->threadId), size_t{5000});
+        XX_TEST_EXPECT_EQ(maxContextTokensOf(env->ctx, env->sessionId), size_t{5000});
     }
 
     // --- T10. sendThinking=true 时统计包含 reasoning_content ---
@@ -1282,12 +1282,12 @@ asio::awaitable<TestResult> run_summarization_tests() {
         };
         // thinking 模型 (sendThinking=true): user(3+1+0) + assistant(3+2+0+1) = 10
         env->session()->setModelName("thinking");
-        auto res1 = co_await runModelcall(env->handle, env->ctx, env->threadId, msgs);
-        XX_TEST_EXPECT_EQ(contextTokensOf(env->ctx, env->threadId), size_t{10});
+        auto res1 = co_await runModelcall(env->handle, env->ctx, env->sessionId, msgs);
+        XX_TEST_EXPECT_EQ(contextTokensOf(env->ctx, env->sessionId), size_t{10});
         // 普通模型 (sendThinking=false): 9
         env->session()->setModelName("small");
-        auto res2 = co_await runModelcall(env->handle, env->ctx, env->threadId, msgs);
-        XX_TEST_EXPECT_EQ(contextTokensOf(env->ctx, env->threadId), size_t{9});
+        auto res2 = co_await runModelcall(env->handle, env->ctx, env->sessionId, msgs);
+        XX_TEST_EXPECT_EQ(contextTokensOf(env->ctx, env->sessionId), size_t{9});
         // 消息均未被压缩
         XX_TEST_EXPECT_EQ(res1.size(), size_t{2});
         XX_TEST_EXPECT_EQ(res2.size(), size_t{2});
@@ -1328,7 +1328,7 @@ asio::awaitable<TestResult> run_summarization_tests() {
             makeMsg("user", "u4"),
             makeMsg("assistant", "a4"),
         };
-        auto res = co_await runModelcall(env->handle, env->ctx, env->threadId, msgs, 900);
+        auto res = co_await runModelcall(env->handle, env->ctx, env->sessionId, msgs, 900);
 
         // ① system 消息不能动: 角色 / 内容 / flags 原样保留
         XX_TEST_EXPECT_EQ(res[0].role, std::string{"system"});
@@ -1401,7 +1401,7 @@ asio::awaitable<TestResult> run_summarization_tests() {
             makeMsg("user", "u4"),
             makeMsg("assistant", "a4"),
         };
-        auto res = co_await runModelcall(env->handle, env->ctx, env->threadId, msgs, 900);
+        auto res = co_await runModelcall(env->handle, env->ctx, env->sessionId, msgs, 900);
         // 总结对 + recent[u2,a2,u3,a3,u4,a4](6) = 8
         // (budget=30: a4(5)u4(4)a3(5)u3(4)a2(5)u2(4)=27, a1(5) 超 → end=2.
         //  recent=[2,8)=u2,a2,u3,a3,u4,a4)
@@ -1437,7 +1437,7 @@ asio::awaitable<TestResult> run_summarization_tests() {
             makeMsg("user", "u4"),
             makeMsg("assistant", "a4"),
         };
-        auto res = co_await runModelcall(env->handle, env->ctx, env->threadId, msgs, 900);
+        auto res = co_await runModelcall(env->handle, env->ctx, env->sessionId, msgs, 900);
         XX_TEST_EXPECT_EQ(res.size(), size_t{8});
         size_t      summaryCount    = 0;
         size_t      summarizedFlags = 0;
@@ -1481,7 +1481,7 @@ asio::awaitable<TestResult> run_summarization_tests() {
             makeMsg("user", "u4"),
             makeMsg("assistant", "a4"),
         };
-        auto res = co_await runModelcall(env->handle, env->ctx, env->threadId, msgs, 900);
+        auto res = co_await runModelcall(env->handle, env->ctx, env->sessionId, msgs, 900);
         // system 原样保留: 不参与噪音清理, 不参与压缩
         XX_TEST_EXPECT_EQ(res[0].role, std::string{"system"});
         XX_TEST_EXPECT_EQ(res[0].content, longSystem);
@@ -1512,7 +1512,7 @@ asio::awaitable<TestResult> run_summarization_tests() {
             makeAssistantToolcall("", {makeToolcall("c1", "read_file", R"({"path":"A"})")}),
             makeToolResult("c1", "read_file", "t1"),
         };
-        auto res = co_await runModelcall(env->handle, env->ctx, env->threadId, msgs, 900);
+        auto res = co_await runModelcall(env->handle, env->ctx, env->sessionId, msgs, 900);
         // budget=30: t1(6)→b=24; tc1(9)→b=15; u3(4)→b=11; a2(5)→b=6; u2(4)→b=2;
         // a1(5) 超 → end=4? 循环: end=8→t1(7): 6<=30→end=7 b=24; tc1(6): 9<=24→end=6 b=15;
         // u3(5): 4<=15→end=5 b=11; a2(4): 5<=11→end=4 b=6; u2(3): 4<=6→end=3 b=2;
@@ -1564,7 +1564,7 @@ asio::awaitable<TestResult> run_summarization_tests() {
             makeMsg("user", "u2"),
             makeMsg("assistant", "a2"),
         };
-        auto res = co_await runModelcall(env->handle, env->ctx, env->threadId, msgs, 700);
+        auto res = co_await runModelcall(env->handle, env->ctx, env->sessionId, msgs, 700);
         // 探索折叠: 3 组连续 read_file → 只保留最后一组 (C)
         XX_TEST_EXPECT_EQ(res.size(), size_t{6}); // sys,u1,tcC,tC,u2,a2
         XX_TEST_EXPECT_EQ(res[0].content, std::string{"sys"});

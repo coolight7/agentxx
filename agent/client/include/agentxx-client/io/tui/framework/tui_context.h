@@ -32,7 +32,7 @@ struct TUICtx {
     TUITheme* theme = nullptr;
 
     /// 本 TUI 绑定的会话 thread_id
-    std::string threadId;
+    std::string sessionId;
 
     /// 远程地址 (空 = 内置)
     std::string remoteUrl;

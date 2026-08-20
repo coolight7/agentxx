@@ -408,7 +408,7 @@ size_t SummarizationMiddlewareHandle::splitRecentByTokenBudget(
 }
 
 asio::awaitable<std::string> SummarizationMiddlewareHandle::doSummarizeWithLLM(
-    std::string_view                          thread_id,
+    std::string_view                          sessionId,
     const std::vector<neograph::ChatMessage>& messages
 ) {
     auto agentCtxPtr = agentContext.lock();
@@ -430,7 +430,7 @@ asio::awaitable<std::string> SummarizationMiddlewareHandle::doSummarizeWithLLM(
     // 因同上下文模式强制使用父会话当前模型)
     size_t modelMaxToken = modelSupportMaxTokenDefault;
     {
-        const auto& currentModelConfig = agentCtxPtr->getSessionCurrentModelConfig(thread_id);
+        const auto& currentModelConfig = agentCtxPtr->getSessionCurrentModelConfig(sessionId);
         if (currentModelConfig.modelContenxtMaxToken > 0) {
             modelMaxToken = currentModelConfig.modelContenxtMaxToken;
         }
@@ -473,7 +473,7 @@ asio::awaitable<std::string> SummarizationMiddlewareHandle::doSummarizeWithLLM(
 
     // 通过 subagent 完成压缩 (同上下文模式):
     // - messages: 结构化透传 (system + 压缩段 + 压缩指令), 无文本转录
-    // - thread_id: 父线程 → 子代理与父会话相同 threadid + 相同模型,
+    // - sessionId: 父线程 → 子代理与父会话相同 session_id + 相同模型,
     //   命中 provider KV/prefix cache
     // - tools: ["agentxx_share_store"] → 模型可自主把长内容写入父会话
     //   store (id 空间一致, 摘要中的 id 父会话可直接读取)
@@ -488,7 +488,7 @@ asio::awaitable<std::string> SummarizationMiddlewareHandle::doSummarizeWithLLM(
     auto args = neograph::json{
         {"subagent",             "subagent_task"                               },
         {"messages",             std::move(reqMsgsJson)                        },
-        {"thread_id",            std::string{thread_id}                        },
+        {"session_id",           std::string{sessionId}                        },
         {"tools",                neograph::json::array({"agentxx_share_store"})},
         {"enable_summarization", false                                         },
     };
@@ -544,13 +544,13 @@ asio::awaitable<void>
         co_return;
     }
 
-    const auto& thread_id = in.ctx.thread_id;
+    const auto& sessionId = in.ctx.thread_id;
 
     // 从会话的模型配置提取模型支持的最大 token, 模型配置未指定时使用默认值
     size_t modelContenxtMaxToken = modelSupportMaxTokenDefault;
     bool   enableCountThinking   = false;
     {
-        const auto& currentModelConfig = agentCtxPtr->getSessionCurrentModelConfig(thread_id);
+        const auto& currentModelConfig = agentCtxPtr->getSessionCurrentModelConfig(sessionId);
         if (currentModelConfig.modelContenxtMaxToken > 0) {
             modelContenxtMaxToken = currentModelConfig.modelContenxtMaxToken;
         }
@@ -575,11 +575,11 @@ asio::awaitable<void>
     const auto countTokenUsage = countTokens({}, messages, enableCountThinking);
     const auto tokenUsage      = (apiTokenUsage > 0) ? apiTokenUsage : countTokenUsage;
     // 发布上下文统计到对应会话, 供 UI 显示上下文占用百分比
-    if (auto session = agentCtxPtr->sessions->get(thread_id)) {
+    if (auto session = agentCtxPtr->sessions->get(sessionId)) {
         if (session->contextStats) {
             // UI显示优先使用 apiTokenUsage 即可
-            session->contextStats->contextTokens.store(tokenUsage);
-            session->contextStats->maxContextTokens.store(modelContenxtMaxToken);
+            session->contextStats->contextTokens    = tokenUsage;
+            session->contextStats->maxContextTokens = modelContenxtMaxToken;
         }
     }
 
@@ -623,7 +623,7 @@ asio::awaitable<void>
             );
 
             /// llm 压缩 (同上下文 subagent, 中断后由 Session 派生并 resume)
-            auto summary = co_await doSummarizeWithLLM(thread_id, toSummarize);
+            auto summary = co_await doSummarizeWithLLM(sessionId, toSummarize);
 
             enum class ReplaceAction {
                 None,
@@ -635,7 +635,7 @@ asio::awaitable<void>
                 action = ReplaceAction::Compact;
                 // 压缩成功: 重置失败计数
                 agentCtxPtr->middlewareHandleContext->setGraphDataItemValue<size_t>(
-                    thread_id,
+                    sessionId,
                     agentxx::middleware::MiddlewareContext::graphDataKey_summarizationFailCount,
                     size_t{0}
                 );
@@ -644,13 +644,13 @@ asio::awaitable<void>
                 // 连续失败 >= 2 次或超限严重 (>= 95%) 时硬截断兜底
                 size_t failCount
                     = agentCtxPtr->middlewareHandleContext->getGraphDataItemValue<size_t>(
-                          thread_id,
+                          sessionId,
                           agentxx::middleware::MiddlewareContext::
                               graphDataKey_summarizationFailCount
                       )
                       + 1;
                 agentCtxPtr->middlewareHandleContext->setGraphDataItemValue<size_t>(
-                    thread_id,
+                    sessionId,
                     agentxx::middleware::MiddlewareContext::graphDataKey_summarizationFailCount,
                     failCount
                 );

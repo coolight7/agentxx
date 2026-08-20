@@ -70,10 +70,10 @@ public:
 
     bool alive() const noexcept override;
 
-    /// 会话切换: 更新重连握手的 threadId 并复位增量重放状态
+    /// 会话切换: 更新重连握手的 sessionId 并复位增量重放状态
     /// (新会话 delta seq 独立编号, 旧会话 seq/tailHash 不再适用)。
     /// 投递到 ex_ 线程执行 (与 readLoop 重连路径同线程, 无数据竞争)
-    void updateReconnectThreadId(std::string newThreadId) override;
+    void updateReconnectSessionId(std::string newThreadId) override;
 
     // ----- 序列化工具 (供 ServerWsIOTransport 复用) -----
 
@@ -119,7 +119,7 @@ private:
     // 重连增量重放状态
     std::atomic<uint64_t> lastDeltaSeq_{0};
     std::string           lastTailHash_;
-    std::string           helloThreadId_; // 首次 connect 时的 threadId, 重连时复用
+    std::string           helloSessionId_; // 首次 connect 时的 sessionId, 重连时复用
 
     /// 握手期间 (connect 等待 HelloAck) 到达的非 HelloAck 消息 (仅 ex_ 线程访问)
     /// - 协议上服务端先发 HelloAck 再重放, 正常为空; 防御性保留先于 HelloAck

@@ -755,7 +755,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
         pluginLog(
             3,
             "agentxx_codegraph: dataDir is not set, skip codegraph tools "
-            "(configure data_dir for index persistence)"
+            "(configure data_dir for index sessionStore)"
         );
         return 0;
     }
