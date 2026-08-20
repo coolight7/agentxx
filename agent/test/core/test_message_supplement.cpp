@@ -97,8 +97,8 @@ public:
                 = static_cast<neograph::MessageFlag>(m.value<unsigned long long>("flags", 0));
             interruptMsgOk = m.value("role", std::string{}) == "tool"
                              && m.value("content", std::string{}) == "[Interrupt]"
-                             && m.value("toolCallId", std::string{}) == "call_it_1"
-                             && m.value("toolName", std::string{}) == "test_interrupt"
+                             && m.value("tool_call_id", std::string{}) == "call_it_1"
+                             && m.value("tool_name", std::string{}) == "test_interrupt"
                              && neograph::hasFlag(flags, neograph::MessageFlag::Interrupt);
         }
 
@@ -143,8 +143,8 @@ public:
         if (!agentCtxPtr || !agentCtxPtr->middlewareHandleContext) {
             co_return R"({"error":"AgentContext not available"})";
         }
-        auto sessionId = arguments.value("session_id", std::string{});
-        auto resultId  = arguments.value("toolCallId", std::string{});
+        auto sessionId = arguments.value("sessionId", std::string{});
+        auto resultId  = arguments.value("tool_call_id", std::string{});
 
         // 通过 requestInterrupt 触发/恢复中断:
         // - 首次: 存储中断参数到 graphData, 抛 NodeInterrupt
@@ -317,9 +317,9 @@ asio::awaitable<void> test_interrupt_auto_supplement() {
                     std::string{"call_it_1"}
                 );
             }
-            XX_TEST_EXPECT_EQ(msgs[3].value("toolCallId", std::string{}), std::string{"call_it_1"});
+            XX_TEST_EXPECT_EQ(msgs[3].value("tool_call_id", std::string{}), std::string{"call_it_1"});
             XX_TEST_EXPECT_EQ(
-                msgs[3].value("toolName", std::string{}),
+                msgs[3].value("tool_name", std::string{}),
                 std::string{"test_interrupt"}
             );
             // resume 后 tool 重新执行返回真实中断结果, 不再是 [Interrupt] 占位
@@ -384,10 +384,10 @@ static bool checkCanceledMessageSequence(const neograph::json& msgs) {
     }
     // 未完成的 tool 自动补充 [User canceled] (按 tool_calls 声明顺序):
     // - slow 先执行, 取消时在途未完成 → 补充 [User canceled]
-    if (msgs[3].value("toolCallId", std::string{}) != "call_slow_1") {
+    if (msgs[3].value("tool_call_id", std::string{}) != "call_slow_1") {
         return false;
     }
-    if (msgs[3].value("toolName", std::string{}) != "test_slow") {
+    if (msgs[3].value("tool_name", std::string{}) != "test_slow") {
         return false;
     }
     if (msgs[3].value("content", std::string{}) != "[User canceled]") {
@@ -401,10 +401,10 @@ static bool checkCanceledMessageSequence(const neograph::json& msgs) {
         }
     }
     // - fast 排在 slow 之后, 取消后未执行 → 同样补充 [User canceled]
-    if (msgs[4].value("toolCallId", std::string{}) != "call_fast_1") {
+    if (msgs[4].value("tool_call_id", std::string{}) != "call_fast_1") {
         return false;
     }
-    if (msgs[4].value("toolName", std::string{}) != "test_fast") {
+    if (msgs[4].value("tool_name", std::string{}) != "test_fast") {
         return false;
     }
     if (msgs[4].value("content", std::string{}) != "[User canceled]") {

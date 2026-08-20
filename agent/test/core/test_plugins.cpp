@@ -25,20 +25,32 @@ int g_plugin_passed = 0;
 int g_plugin_failed = 0;
 
 /// 定位示例插件库 (与测试可执行同目录, 见 test/CMakeLists.txt)
-/// 兼容从其他 cwd 运行: 优先 cwd/plugins, 回退可执行文件同目录
-/// (与 test_codegraph_tools.cpp 的 findCodegraphPluginPath 一致)
+/// 优先 exe 同目录的构建产物, cwd 仅作回退; 校验目录内存在动态库产物,
+/// 避免 cwd 在源码仓库下时误命中 agent/plugins/ 下的插件源码目录
 static std::string findExamplePluginPath() {
     namespace fs = std::filesystem;
     std::error_code       ec;
     std::vector<fs::path> candidates;
-    candidates.push_back(fs::current_path(ec) / "plugins" / "example_plugin");
 #if !XX_IS_WIN_D
     if (auto p = fs::read_symlink("/proc/self/exe", ec); !ec) {
         candidates.push_back(p.parent_path() / "plugins" / "example_plugin");
     }
 #endif
+    candidates.push_back(fs::current_path(ec) / "plugins" / "example_plugin");
+    auto hasLibFile = [](const fs::path& dir) {
+        std::error_code                     ec2;
+        std::filesystem::directory_iterator it(dir, ec2);
+        std::filesystem::directory_iterator end;
+        for (; it != end; it.increment(ec2)) {
+            auto ext = it->path().extension().string();
+            if (ext == ".so" || ext == ".dll" || ext == ".dylib") {
+                return true;
+            }
+        }
+        return false;
+    };
     for (const auto& c : candidates) {
-        if (fs::is_directory(c, ec)) {
+        if (fs::is_directory(c, ec) && hasLibFile(c)) {
             return c.string();
         }
     }
@@ -89,12 +101,12 @@ asio::awaitable<TestResult> run_plugin_tests() {
         XX_TEST_EXPECT_TRUE(tool != nullptr);
         if (tool) {
             auto out = co_await tool->execute_async(neograph::json{
-                {"session_id", "t1"   },
-                {"hello",      "world"},
+                {"sessionId", "t1"   },
+                {"hello",     "world"},
             });
             auto j   = neograph::json::parse(out);
             XX_TEST_EXPECT_EQ(j["echo"]["hello"].get<std::string>(), "world");
-            XX_TEST_EXPECT_EQ(j["session_id"].get<std::string>(), "t1");
+            XX_TEST_EXPECT_EQ(j["sessionId"].get<std::string>(), "t1");
         }
     }
 
@@ -104,8 +116,8 @@ asio::awaitable<TestResult> run_plugin_tests() {
         XX_TEST_EXPECT_TRUE(tool != nullptr);
         if (tool) {
             auto out = co_await tool->execute_async(neograph::json{
-                {"session_id", "t1"},
-                {"x",          42  },
+                {"sessionId", "t1"},
+                {"x",         42  },
             });
             auto j   = neograph::json::parse(out);
             XX_TEST_EXPECT_EQ(j["via_call_tool"]["echo"]["x"].get<int>(), 42);
@@ -272,8 +284,8 @@ asio::awaitable<TestResult> run_plugin_tests() {
             XX_TEST_EXPECT_TRUE(tool != nullptr);
             if (tool) {
                 auto out = co_await tool->execute_async(neograph::json{
-                    {"session_id", "t1"     },
-                    {"name",       "agentxx"},
+                    {"sessionId", "t1"     },
+                    {"name",      "agentxx"},
                 });
                 auto j   = neograph::json::parse(out);
                 XX_TEST_EXPECT_EQ(j["greeting"].get<std::string>(), "Hello, agentxx!");
@@ -283,7 +295,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
             XX_TEST_EXPECT_TRUE(asyncTool != nullptr);
             if (asyncTool) {
                 auto out = co_await asyncTool->execute_async(neograph::json{
-                    {"session_id", "t2"}
+                    {"sessionId", "t2"}
                 });
                 auto j   = neograph::json::parse(out);
                 XX_TEST_EXPECT_EQ(j["waited"].get<bool>(), true);

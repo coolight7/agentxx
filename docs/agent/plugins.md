@@ -208,7 +208,7 @@ typedef enum AgentxxHookPoint {
     AGENTXX_HOOK_COUNT
 } AgentxxHookPoint;
 /// 钩子回调 (io 线程同步调用, 快速返回): node_input_json 为节点输入摘要
-/// ({"session_id","node","messages_count",...}); out_json 预留
+/// ({"sessionId","node","messages_count",...}); out_json 预留
 typedef int (*AgentxxHookFn)(void* user_data, AgentxxHookPoint point,
                              AgentxxPluginStringView node_input_json,
                              char** out_json, char** error_out);

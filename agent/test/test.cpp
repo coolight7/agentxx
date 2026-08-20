@@ -140,7 +140,7 @@ int main(int argn, char** argv) {
     runSync("tui_scroll", agentxx::test::testTuiScroll);
     runSync("tui_stream", agentxx::test::testTuiStream);
     runSync("tui_tool_header", agentxx::test::testTuiToolHeader);
-    runSync("session_id", agentxx::test::testSessionId);
+    runSync("sessionId", agentxx::test::testSessionId);
     runSync("mermaid_state", agentxx::test::testMermaidState);
 #endif
 

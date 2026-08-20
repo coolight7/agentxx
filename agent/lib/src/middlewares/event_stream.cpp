@@ -149,7 +149,7 @@ void EventBridge::handleLLMToken(const neograph::graph::GraphEvent& event) {
         .durationMs
         = sendDuration ? static_cast<int64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
                                                   std::chrono::system_clock::now() - nodeStartTime_
-          )
+                         )
                                                   .count())
                        : 0,
     });
@@ -241,9 +241,12 @@ void EventBridge::handleChannelWrite(const neograph::graph::GraphEvent& event) {
                 });
             }
         } else if (role == "tool") {
-            auto content    = jm.value("content", std::string{});
-            auto toolName   = jm.value("toolName", std::string{});
-            auto toolCallId = jm.value("toolCallId", std::string{});
+            auto content = jm.value("content", std::string{});
+            // 注意: 消息 JSON 由 neograph::ChatMessage::to_json 序列化, tool 结果
+            // 的字段名为 snake_case (tool_name/tool_call_id); 兼容读取 camelCase
+            // (手工构造 JSON 写入 channel 时可能使用), 避免 ToolEnd 关联失败
+            auto toolName   = jm.value("tool_name", jm.value("toolName", std::string{}));
+            auto toolCallId = jm.value("tool_call_id", jm.value("toolCallId", std::string{}));
             if (toolCallId.empty()) {
                 continue;
             }

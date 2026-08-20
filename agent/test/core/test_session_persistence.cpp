@@ -200,7 +200,7 @@ static TestResult testLlmMessagesRoundtrip() {
         });
         ctx.push_back(neograph::json{
             {"role",       "tool"      },
-            {"toolCallId", "call_1"    },
+            {"tool_call_id", "call_1"    },
             {"content",    R"({"r":1})"},
         });
         p->saveLlmMessages("t2", ctx);
@@ -216,7 +216,7 @@ static TestResult testLlmMessagesRoundtrip() {
                 std::string{"system"}
             );
             XX_TEST_EXPECT_EQ(
-                l2.llmMessages[3].value("toolCallId", std::string{}),
+                l2.llmMessages[3].value("tool_call_id", std::string{}),
                 std::string{"call_1"}
             );
         }

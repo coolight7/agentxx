@@ -76,7 +76,7 @@ static char* echo_execute(
     }
     // 结果 JSON: {"echo": <原样参数>}
     const std::string out = fmt::format(
-        R"({{"echo": {},"session_id": {}}})",
+        R"({{"echo": {},"sessionId": {}}})",
         std::string_view{args_json.data ? args_json.data : "{}", args_json.size},
         agentJsonEscape(session_id)
     );

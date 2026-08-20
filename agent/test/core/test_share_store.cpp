@@ -31,7 +31,7 @@ asio::awaitable<TestResult> run_share_store_tests() {
         auto result = co_await tool.execute_async(insertArgs);
         auto id     = neograph::json::parse(result).value<size_t>("id", 0);
         auto get    = co_await tool.execute_async(neograph::json{
-               {"session_id", insertArgs.value("session_id", std::string{"t1"})},
+               {"sessionId", insertArgs.value("sessionId", std::string{"t1"})},
                {"opt", "get"},
                {"id", id},
         });
@@ -41,7 +41,7 @@ asio::awaitable<TestResult> run_share_store_tests() {
     // #2: 行切片必须保留换行符, 且结尾不多余追加换行
     {
         auto get = co_await insertAndGet(neograph::json{
-            {"session_id",  "t1"       },
+            {"sessionId",   "t1"       },
             {"opt",         "insert"   },
             {"text",        "a\nb\nc\n"},
             {"line_offset", 0          },
@@ -53,7 +53,7 @@ asio::awaitable<TestResult> run_share_store_tests() {
     // 中间偏移切片
     {
         auto get = co_await insertAndGet(neograph::json{
-            {"session_id",  "t1"          },
+            {"sessionId",   "t1"          },
             {"opt",         "insert"      },
             {"text",        "a\nb\nc\nd\n"},
             {"line_offset", 1             },
@@ -65,7 +65,7 @@ asio::awaitable<TestResult> run_share_store_tests() {
     // 无结尾换行的输入切片 (EOF 边界: 不应多余追加换行)
     {
         auto get = co_await insertAndGet(neograph::json{
-            {"session_id",  "t1"     },
+            {"sessionId",   "t1"     },
             {"opt",         "insert" },
             {"text",        "a\nb\nc"},
             {"line_offset", 0        },
@@ -77,9 +77,9 @@ asio::awaitable<TestResult> run_share_store_tests() {
     // 不切片 (无 offset/limit): 原样存储
     {
         auto get = co_await insertAndGet(neograph::json{
-            {"session_id", "t1"    },
-            {"opt",        "insert"},
-            {"text",       "x\ny\n"},
+            {"sessionId", "t1"    },
+            {"opt",       "insert"},
+            {"text",      "x\ny\n"},
         });
         XX_TEST_EXPECT_EQ(get, "x\ny\n");
     }
@@ -87,41 +87,41 @@ asio::awaitable<TestResult> run_share_store_tests() {
     // set / delete 生命周期
     {
         auto ins = co_await tool.execute_async(neograph::json{
-            {"session_id", "t1"    },
-            {"opt",        "insert"},
-            {"text",       "hello" },
+            {"sessionId", "t1"    },
+            {"opt",       "insert"},
+            {"text",      "hello" },
         });
         auto id  = neograph::json::parse(ins).value<size_t>("id", 0);
 
         auto get1 = co_await tool.execute_async(neograph::json{
-            {"session_id", "t1" },
-            {"opt",        "get"},
-            {"id",         id   }
+            {"sessionId", "t1" },
+            {"opt",       "get"},
+            {"id",        id   }
         });
         XX_TEST_EXPECT_EQ(get1, "hello");
 
         co_await tool.execute_async(neograph::json{
-            {"session_id", "t1"   },
-            {"opt",        "set"  },
-            {"id",         id     },
-            {"text",       "world"},
+            {"sessionId", "t1"   },
+            {"opt",       "set"  },
+            {"id",        id     },
+            {"text",      "world"},
         });
         auto get2 = co_await tool.execute_async(neograph::json{
-            {"session_id", "t1" },
-            {"opt",        "get"},
-            {"id",         id   }
+            {"sessionId", "t1" },
+            {"opt",       "get"},
+            {"id",        id   }
         });
         XX_TEST_EXPECT_EQ(get2, "world");
 
         co_await tool.execute_async(neograph::json{
-            {"session_id", "t1"    },
-            {"opt",        "delete"},
-            {"id",         id      },
+            {"sessionId", "t1"    },
+            {"opt",       "delete"},
+            {"id",        id      },
         });
         auto get3 = co_await tool.execute_async(neograph::json{
-            {"session_id", "t1" },
-            {"opt",        "get"},
-            {"id",         id   }
+            {"sessionId", "t1" },
+            {"opt",       "get"},
+            {"id",        id   }
         });
         XX_TEST_EXPECT_TRUE(get3.find("\"error\"") != std::string::npos);
     }
@@ -134,7 +134,7 @@ asio::awaitable<TestResult> run_share_store_tests() {
         });
         XX_TEST_EXPECT_TRUE(r1.find("\"error\"") != std::string::npos);
         auto r2 = co_await tool.execute_async(neograph::json{
-            {"session_id", "t1"}
+            {"sessionId", "t1"}
         });
         XX_TEST_EXPECT_TRUE(r2.find("\"error\"") != std::string::npos);
     }

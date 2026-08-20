@@ -141,10 +141,10 @@ inline neograph::json deltaToJson(const Delta& d) {
         j["msgId"] = d.msgId;
     }
     if (!d.toolName.empty()) {
-        j["toolName"] = d.toolName;
+        j["tool_name"] = d.toolName;
     }
     if (!d.toolCallId.empty()) {
-        j["toolCallId"] = d.toolCallId;
+        j["tool_call_id"] = d.toolCallId;
     }
     if (!d.arguments.empty()) {
         j["arguments"] = d.arguments;
@@ -204,8 +204,8 @@ inline std::optional<Delta> deltaFromJson(const neograph::json& j) {
     d.seq          = j.value("seq", uint64_t{0});
     d.text         = j.value("text", std::string{});
     d.msgId        = j.value("msgId", std::string{});
-    d.toolName     = j.value("toolName", std::string{});
-    d.toolCallId   = j.value("toolCallId", std::string{});
+    d.toolName     = j.value("tool_name", std::string{});
+    d.toolCallId   = j.value("tool_call_id", std::string{});
     d.arguments    = j.value("arguments", std::string{});
     d.result       = j.value("result", std::string{});
     d.hasError     = j.value("hasError", false);
