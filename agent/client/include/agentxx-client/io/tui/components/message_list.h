@@ -97,6 +97,17 @@ public:
         return scrollable_->contentWidth();
     }
 
+    /// 测试辅助: 内容总高度 (行; 未测量子项按估算高度) —— 用于断言
+    /// 估算算法合理性 (估算严重高估/低估会反映在总高度与滚动定位上)
+    int totalHeight() const {
+        return scrollable_->totalHeight();
+    }
+
+    /// 测试辅助: 当前滚动偏移 (行)
+    int scrollOffset() const {
+        return scrollable_->scrollOffset();
+    }
+
     /// 主题变化后清空缓存 (颜色已过时)
     void invalidateCache();
 

@@ -200,6 +200,10 @@ void LazyScrollable::ensureElement(size_t index) {
     if (index < hasCache_.size() && hasCache_[index]) {
         // 缓存命中: LRU 提前 (最近使用)
         lruList_.splice(lruList_.begin(), lruList_, itemCache_[index]);
+        // 标记为本帧已确保: evictIfNeeded 不得淘汰本条 (本帧仍要渲染)
+        if (index < protectedIndices_.size()) {
+            protectedIndices_[index] = true;
+        }
         return;
     }
     // 不可缓存项按帧复用: 同一帧内多次布局迭代 (layoutAndMeasure 收敛循环)
@@ -229,6 +233,11 @@ void LazyScrollable::ensureElement(size_t index) {
     itemCache_[index] = lruList_.begin();
     if (index < hasCache_.size()) {
         hasCache_[index] = true;
+    }
+    // 标记为本帧已确保: 本帧阶段 1/2 处理过的条目禁止被 evictIfNeeded 淘汰
+    // (淘汰由本条插入触发的 evictIfNeeded 即时执行, 先标记后淘汰才有效)
+    if (index < protectedIndices_.size()) {
+        protectedIndices_[index] = true;
     }
     // 新构建的元素没有上帧布局状态: 清空其 lastBoxes_, 使阶段 2 的
     // "缓存命中且 box 相同则跳过布局" 判定失效, 强制重新布局 (SetBox)。
@@ -265,6 +274,17 @@ void LazyScrollable::evictIfNeeded() {
     while (!lruList_.empty()
            && (lruList_.size() > budget_.maxItems || cachedBytes_ > budget_.maxBytes)) {
         auto& back = lruList_.back();
+        // 本帧已确保的子项 (阶段 1/2 处理过, 含可见项与容错区项) 禁止淘汰:
+        // 其索引已进入/将进入 visibleIndices_, 渲染时经 elementAt 取缓存;
+        // 若被淘汰, 索引残留在 visibleIndices_ (命中盒正常 -> 可点击), 但
+        // 缓存缺失时 elementAt 回退空 text -> 连续多条消息显示为空白。
+        // LRU 序 = 最近使用在前, 本帧确保过的条目全部位于前部; 从尾部
+        // 淘汰先遇到未确保 (视口外旧缓存) 项, 遇到首个已确保项即停止。
+        // 预算仍超限说明"可见集自身"超预算 (长内容/高终端), 此时保可见集
+        // 优先于压预算 (多余内存由可见集大小界定, 移出窗口即被淘汰释放)。
+        if (back.index < protectedIndices_.size() && protectedIndices_[back.index]) {
+            break;
+        }
         if (back.index < hasCache_.size()) {
             hasCache_[back.index] = false;
         }
@@ -328,6 +348,10 @@ void LazyScrollable::prepareLayout(const ftxui::Box& box) {
     hasCache_.resize(count, false);
     itemCache_.resize(count);
     lastBoxes_.resize(count);
+    // 本布局遍清空"已确保"保护标记 (本遍 ensureElement 重新标记):
+    // prepareLayout 在 FTXUI 布局迭代中可能同帧重入多次, 每遍都从零
+    // 重新标记可见集; 两遍之间无缓存淘汰发生 (淘汰仅在 ensureElement 内)
+    protectedIndices_.assign(count, false);
 
     // key 变化 -> 内容变化: 使该子项缓存失效并重算估算高度。
     // key 未变的子项零成本 (不读内容、不重建)
@@ -370,20 +394,30 @@ void LazyScrollable::prepareLayout(const ftxui::Box& box) {
     // 导致估算/实测高度偏差 (通常 ±1 行), 若在测量前定位, 内容帧会把子项
     // 画在错误的偏移上 (底部多出空行), 下一帧 (如鼠标移动) 才回到正确位置,
     // 帧间交替即表现为消息列表上下抖动
+    //
+    // 可见性判定带估算容错 (kEstimateSlack): 估算高度与实际渲染存在偏差
+    // (markdown 段落折行/mermaid 图形/表格换行等), 若按估算位置严格判定,
+    // 估算偏低的子项会被误判为"完全在可见区上方" (continue 跳过) 而永不
+    // 实测修正 —— 其实际内容占据视口却未渲染, 表现为消息空白; 且其低估
+    // 的高度使总高度偏低, stickToBottom 偏移偏小, 底部内容被推出视口。
+    // 将"实测范围"向视口外扩 kEstimateSlack 行, 估算偏差在该范围内的子项
+    // 提前实测修正, 后续定位即准确 (滑动到该位置时已自愈, 不再空白)。
+    // 注意: 仅扩大"实测范围"; 阶段 2 的定位/渲染仍按精确可见区间。
+    constexpr int kEstimateSlack = 6;
     int  cum       = 0;     // 累计高度 (当前子项的内容顶边, 行)
     bool corrected = false; // 是否有估算高度被实测修正
     for (size_t i = 0; i < count; ++i) {
         const int h   = std::max(1, heights_[i]);
         const int top = cum;
-        if (top >= scrollOffset + vh) {
+        if (top >= scrollOffset + vh + kEstimateSlack) {
             break; // 完全在可见区下方 (后续更靠下, 提前结束)
         }
         cum += h;
-        if (cum <= scrollOffset) {
-            continue; // 完全在可见区上方
+        if (cum <= scrollOffset - kEstimateSlack) {
+            continue; // 完全在可见区上方 (含容错范围外)
         }
 
-        // 与可见区相交 -> 构建 (缓存命中或 buildItem) 并测量
+        // 与 (含容错的) 可见区相交 -> 构建 (缓存命中或 buildItem) 并测量
         ensureElement(i);
         if (!measured_[i]) {
             // 首次布局: 完整迭代布局并测量自然高度, 修正估算值
