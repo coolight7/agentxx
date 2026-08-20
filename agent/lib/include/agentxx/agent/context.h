@@ -98,7 +98,7 @@ public:
     std::shared_ptr<AgentIOBase> io = nullptr;
 
     /// 本会话的事件总线 (会话级事件: interrupt/permission/tool 等)
-    std::shared_ptr<agentxx::middleware::EventBus> bus = nullptr;
+    std::shared_ptr<agentxx::event::EventBus> bus = nullptr;
 
     /// 本会话的上下文统计
     std::shared_ptr<ContextStats> contextStats = std::make_shared<ContextStats>();
@@ -302,7 +302,7 @@ public:
     /// - 由 BaseAgent 在 init() 中创建并注入; 节点/middleware/tool 经
     ///   weak_ptr<AgentContext> 取用
     /// - 完整定义在使用点 (base_agent.h) 引入
-    std::shared_ptr<agentxx::middleware::EventBus> bus = nullptr;
+    std::shared_ptr<agentxx::event::EventBus> bus = nullptr;
 
     /// 模型 Provider 注册表 (共享)
     /// - 由 BaseAgent 在 init() 中创建并注入
@@ -344,7 +344,7 @@ public:
     /// 阻塞操作执行线程池 (文件系统遍历、glob、DNS 解析等同步阻塞操作)
     /// - 通过 agentxx::util::offloadAsync / offloadCancellableAsync 使用
     /// - 避免阻塞操作卡住 io_context 事件循环
-    std::shared_ptr<asio::thread_pool> blockingPool
+    std::shared_ptr<asio::thread_pool> threadPool
         = std::make_shared<asio::thread_pool>(std::max(2u, std::thread::hardware_concurrency() / 2)
         );
 

@@ -1,7 +1,7 @@
 #include "agentxx/middlewares/permission.h"
 
-#include "agentxx/middlewares/event_stream.h"
-#include "agentxx/middlewares/events.h"
+#include "agentxx/event/event_stream.h"
+#include "agentxx/event/events.h"
 #include "agentxx/util/string_util.h"
 #include <cctype>
 

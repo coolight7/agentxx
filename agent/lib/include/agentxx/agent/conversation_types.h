@@ -179,7 +179,7 @@ struct Delta {
 
     enum class Type : uint8_t {
         TextToken,
-        ThinkingToken,
+        ThinkToken,
         ToolStart,
         ToolEnd,
         TurnStart,

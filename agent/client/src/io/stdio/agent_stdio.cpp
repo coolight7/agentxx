@@ -44,7 +44,7 @@ void StdIOClientAgentIO::onDelta(const agentxx::agent::Delta& delta) {
             isThinking_ = false;
             std::cout << delta.text << std::flush;
             break;
-        case Type::ThinkingToken:
+        case Type::ThinkToken:
             if (!isThinking_) {
                 std::cout << std::endl << "[Think] ";
             }

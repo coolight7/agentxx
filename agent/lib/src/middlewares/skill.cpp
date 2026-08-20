@@ -12,9 +12,9 @@ namespace agentxx {
 namespace middleware {
 
 std::string SkillMiddlewareHandle::formatSkillsMetadataList() {
-    std::ostringstream oss;
+    std::string oss;
     for (const auto& item : skillCache.skillData) {
-        oss << fmt::format(
+        oss += fmt::format(
             R"(
 - **{}** Skill: {}
   - compatibility: {}
@@ -28,7 +28,7 @@ std::string SkillMiddlewareHandle::formatSkillsMetadataList() {
             fmt::format("{}/SKILL.md", item.first)
         );
     }
-    return oss.str();
+    return std::move(oss);
 }
 
 asio::awaitable<std::pair<std::string, agentxx::middleware::_SkillMetadata>>

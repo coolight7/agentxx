@@ -1,7 +1,7 @@
 #include "test_plugins.h"
 
 #include "agentxx/agent/context.h"
-#include "agentxx/middlewares/event_stream.h"
+#include "agentxx/event/event_stream.h"
 #include "agentxx/middlewares/middleware.h"
 #include "agentxx/plugin/plugin_manager.h"
 #include "agentxx/util/async_offload.h"
@@ -60,7 +60,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
     auto ctx                     = std::make_shared<agentxx::agent::AgentContext>();
     ctx->agentConfig             = std::make_shared<agentxx::agent::AgentConfig>();
     ctx->middlewareHandleContext = std::make_shared<agentxx::middleware::MiddlewareContext>();
-    ctx->bus = std::make_shared<agentxx::middleware::EventBus>(co_await asio::this_coro::executor);
+    ctx->bus = std::make_shared<agentxx::event::EventBus>(co_await asio::this_coro::executor);
     ctx->toolRegistry  = std::make_shared<agentxx::plugin::ToolRegistry>();
     ctx->pluginManager = std::make_shared<agentxx::plugin::PluginManager>(ctx);
     // 装配 io executor (与 BaseAgent::init 一致): 跨线程 (JS 线程/线程池) 的

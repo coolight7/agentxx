@@ -1,7 +1,7 @@
 #pragma once
 
 #include "agentxx/agent/context.h"
-#include "agentxx/middlewares/events.h"
+#include "agentxx/event/events.h"
 #include "agentxx/middlewares/middleware.h"
 #include "neograph/graph/engine.h"
 #include <chrono>

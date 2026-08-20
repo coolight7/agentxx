@@ -23,13 +23,13 @@
 - [运行&配置文件](#配置文件和运行)
 
 ## 特点
-- c++协程异步实现，程序体积和内存占用少且性能高，可选添加 硬件加速Hyperscan、内置codegraph-cpp 等扩展库
-- 数据安全; Agentxx 不会上传你的数据，如果使用局域网内的 LLM Api Server，完全可以实现全程断网运行; Agentxx 无法确认 LLM Api、MCP、Skill 的数据安全，如果导入需要自行确认
-- 跨系统支持; 优化 windows 兼容，可在 WSL 中直接执行 windows 命令、打开 windows 程序、自动转换文件路径
-- 丰富的 tool
-- c++插件/js插件支持; 已实现 codegraph、系统CPU/GPU/RAM等信息、屏幕截取、鼠标选择文本事件流 等效果显著的功能，通过 C++ Quickjs 插件可以加载实现 js 插件
-- UI与Agent可分离，支持 TUI、cli、接入GUI、Websocket API、动态库/静态库嵌入App，支持单进程、多进程分别启动 UI 和 Agent Websocket Server服务
-- 中断、错误自动处理: 长时间稳定运行、网络重试、动态超时限制、消息上下文角色顺序检查和修正、自动检查和修正字符编码
+- **C++协程异步实现**; 程序体积和内存占用少且性能高，可选添加 硬件加速Hyperscan 等扩展库
+- **数据安全**; Agentxx 不会上传你的数据，如果使用局域网内的 LLM Api Server，完全可以实现全程断网运行; Agentxx 无法确认 LLM Api、MCP、Skill 的数据安全，如果导入需要自行确认
+- **跨系统支持**; 优化 windows 兼容，可在 WSL 中直接执行 windows 命令、打开 windows 程序、自动转换文件路径
+- **丰富的 tool**; 内置 文件读写、命令行执行、任务规划 等，编译时可选自由组合，支持自动纠正 LLM 的参数类型、字符编码
+- **C++插件/js插件支持**; 已实现 codegraph、系统CPU/GPU/RAM等信息、屏幕截取、鼠标选择文本事件流 等效果显著的功能，通过 C++ Quickjs 插件可以加载实现 js 插件
+- **UI与Agent可分离**; 内置支持 TUI、cli、接入GUI、Websocket API、FFI调用、动态库/静态库嵌入App; 支持单进程、多进程分别启动 UI 和 Agent Websocket Server服务
+- **中断、错误自动处理**; 长时间稳定运行、网络重试、动态超时限制、消息上下文角色顺序检查和修正、自动检查和修正字符编码
 
 ## 兼容性
 ### 跨系统支持
@@ -46,6 +46,7 @@
 
 - `libagentxx` Lang Binding:
     - ✅C++ (自身开发语言)
+    - ✅FFI/C-Api动态库符号导出
     - ⬜Flutter/Dart
 - 生成库链接方式:
     - ✅动态链接库`libagentxx`; Debug编译时末尾添加d`libagentxxd`，统一多平台名称，仅后缀区别`.so/.dll/.dylib`.
@@ -111,9 +112,7 @@
             - 结构分割 (较长的再进行 字符分割/定长分割)
             - ⬜语义分割
     - ✅Sub-Agent (支持协程并发执行，并保证返回顺序正确)
-    - ✅RAGSearch
     - ⬜tool_skill_search (延迟加载 tool/skill)
-    - ✅get_system_core_info 获取系统 CPU占用、内存、GPU占用、显存
     - ✅get_current_datetime 获取系统时间戳、本地时间、UTC时间
 - ✅**Tree-Messages**
     - agentxx_share_store (允许存取变量，在 llm-messages、skill、tool 之间传递数据)
@@ -230,6 +229,7 @@
     - 可配置加载路径/忽略路径
     - 默认忽略 .gitignore 规则与 .gitmodules 子模块目录 (可配置关闭 use_gitignore)
 - ✅`agentxx_system_monitor`支持读取 windows/linux 的 CPU占用、内存占用、GPU占用、显存占用
+    - tool/get_system_core_info 获取系统信息
 - ✅`agentxx_screen_capture`支持 DXGI/DGI 捕获屏幕帧
 - ⬜`agentxx_audio_stream`支持捕获系统输出音频、指定程序输出音频、麦克风
 - ✅`agentxx_text_selection_monitor`支持接收各种程序、浏览器的选择文本事件

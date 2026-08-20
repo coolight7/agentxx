@@ -2,7 +2,7 @@
 
 #include "agentxx/agent/context.h"
 #include "agentxx/agent/io/agent_io.h"
-#include "agentxx/middlewares/events.h"
+#include "agentxx/event/events.h"
 #include "agentxx/middlewares/middleware.h"
 #include "agentxx/util/async_offload.h"
 #include "agentxx/util/exception.h"
@@ -34,7 +34,7 @@
 #include <vector>
 
 namespace agentxx {
-namespace middleware {
+namespace event {
 
 /// 仅用作 EventStream<> 模板参数的类型擦除基类
 /// - 所有具体事件流都是 EventStream<T> 或 RequestResponseStream<TReq,TResp>
@@ -51,7 +51,7 @@ public:
 };
 
 /// 单个订阅者: 收到 data 后执行 handle
-/// - execHit: 剩余触发次数; >=1 为有限订阅, ==0 为常驻订阅(永不自删)
+/// - execHit: 剩余触发次数; >=1 为有限订阅, ==0 为常驻订阅
 template<typename _DATA_TYPE>
 struct EventSubscription {
     size_t                                                  id      = 0;
@@ -458,11 +458,15 @@ public:
     /// 获取或创建一个单向事件流; 同 topic 同类型复用
     template<typename _DATA_TYPE>
     EventStream<_DATA_TYPE>& get(std::string_view topic) {
-        auto key = std::string{topic};
-        auto it  = streams_.find(key);
+        auto it = streams_.find(topic);
         if (it == streams_.end()) {
-            auto stream = std::make_shared<EventStream<_DATA_TYPE>>(key);
-            it = streams_.emplace(key, std::static_pointer_cast<EventStreamInterface>(stream))
+            // 新建
+            auto stream = std::make_shared<EventStream<_DATA_TYPE>>(topic);
+            it          = streams_
+                     .emplace(
+                         std::string{topic},
+                         std::static_pointer_cast<EventStreamInterface>(stream)
+                     )
                      .first;
         } else {
             // 类型校验: 同 topic 必须用同一 _DATA_TYPE, 否则 static_cast 是 UB
@@ -478,11 +482,14 @@ public:
     /// 获取或创建一个请求-响应事件流
     template<typename _REQ_TYPE, typename _RESP_TYPE>
     RequestResponseStream<_REQ_TYPE, _RESP_TYPE>& getRR(std::string_view topic) {
-        auto key = std::string{topic};
-        auto it  = streams_.find(key);
+        auto it = streams_.find(topic);
         if (it == streams_.end()) {
-            auto stream = std::make_shared<RequestResponseStream<_REQ_TYPE, _RESP_TYPE>>(key);
-            it = streams_.emplace(key, std::static_pointer_cast<EventStreamInterface>(stream))
+            auto stream = std::make_shared<RequestResponseStream<_REQ_TYPE, _RESP_TYPE>>(topic);
+            it          = streams_
+                     .emplace(
+                         std::string{topic},
+                         std::static_pointer_cast<EventStreamInterface>(stream)
+                     )
                      .first;
         } else {
             assert(
@@ -505,16 +512,16 @@ public:
     /// 单向发布
     template<typename _DATA_TYPE>
     asio::awaitable<void> publish(std::string_view topic, const _DATA_TYPE& data) {
-        // 前缀订阅分派 (如插件事件转发): 仅当前缀订阅表非空时构造 any
-        if (!prefixSubs_.empty()) {
-            for (const auto& [id, sub] : prefixSubs_) {
-                (void)id;
+        // 前缀订阅分派 (如插件事件转发)
+        if (!prefixListeners_.empty()) {
+            for (const auto& [_, sub] : prefixListeners_) {
                 if (topic.size() >= sub.prefix.size()
                     && topic.compare(0, sub.prefix.size(), sub.prefix) == 0) {
                     sub.handler(topic, std::any(data));
                 }
             }
         }
+        // 完全 topic 匹配派发
         co_await get<_DATA_TYPE>(topic).publish(data);
     }
 
@@ -522,8 +529,8 @@ public:
     /// - 模板类型参数用于校验类型一致 (同 get<>), 类型不匹配视为无订阅者
     /// - 供高频发布方在构造事件/co_spawn 前查询, 避免空流上的无效开销
     template<typename _DATA_TYPE>
-    bool hasSubscribers(std::string_view topic) {
-        auto it = streams_.find(std::string{topic});
+    bool hasListeners(std::string_view topic) {
+        auto it = streams_.find(topic);
         if (it == streams_.end()) {
             return false;
         }
@@ -547,19 +554,19 @@ public:
     /// - 载荷经 std::any 类型擦除传递, 回调须自行 any_cast 校验类型
     ///   (插件事件均为 std::string; 不匹配直接返回)
     /// - 回调在发布方线程 (io 线程) 同步调用, 须快速返回
-    /// - 返回订阅 id (unsubscribePrefix 用); 宿主生命周期内有效
-    size_t subscribePrefix(
+    /// - 返回订阅 id (unlistenPrefix 用); 宿主生命周期内有效
+    size_t listenPrefix(
         std::string_view                                                  prefix,
         std::function<void(std::string_view topic, const std::any& data)> handler
     ) {
-        auto id         = ++nextPrefixSubId_;
-        prefixSubs_[id] = PrefixSub{std::string{prefix}, std::move(handler)};
+        auto id              = ++nextPrefixListenerId_;
+        prefixListeners_[id] = PrefixSub{std::string{prefix}, std::move(handler)};
         return id;
     }
 
     /// 取消前缀订阅
-    bool unsubscribePrefix(size_t id) {
-        return prefixSubs_.erase(id) > 0;
+    bool unlistenPrefix(size_t id) {
+        return prefixListeners_.erase(id) > 0;
     }
 
 private:
@@ -570,15 +577,16 @@ private:
         std::function<void(std::string_view, const std::any&)> handler;
     };
 
-    asio::any_io_executor                                        executor_;
-    std::map<std::string, std::shared_ptr<EventStreamInterface>> streams_{};
-    std::map<size_t, PrefixSub>                                  prefixSubs_{};
-    size_t                                                       nextPrefixSubId_ = 0;
+    asio::any_io_executor                                                     executor_;
+    std::map<std::string, std::shared_ptr<EventStreamInterface>, std::less<>> streams_{};
+    std::map<size_t, PrefixSub>                                               prefixListeners_{};
+    size_t nextPrefixListenerId_ = 0;
 };
 
 /// GraphEvent -> 会话增量 Delta + EventBus 适配器
-/// - 接替 BaseAgent 的 llm callback 职责: 把 neograph 的 GraphStreamCallback 翻译成:
-///   1. 会话增量 Delta (TextToken/ThinkingToken/ToolStart/ToolEnd/NodeStart/NodeEnd/MessageUITip),
+/// - 接替 [agentxx::agent::BaseAgent] 的 llm callback 职责: 把 neograph 的 GraphStreamCallback
+/// 翻译成:
+///   1. 会话增量 Delta (TextToken/ThinkToken/ToolStart/ToolEnd/NodeStart/NodeEnd ...),
 ///      经 emitDelta 发送到对端 (TUI/stdio), 并写入会话历史 (appendViewMessage)
 ///   2. 强类型总线事件发布 (EventBus: ModelToken/Error 等)
 ///   3. 可选转发到原始 callback (origCb)
@@ -589,12 +597,12 @@ private:
 class EventBridge : public std::enable_shared_from_this<EventBridge> {
 public:
 
-    /// @param agentName 当前 agent 名 (事件 source)
-    /// @param sessionId  当前会话 id
-    /// @param ctx       AgentContext (取 bus; 若 bus 为空则只做 Delta 翻译/转发)
-    /// @param session   会话 (appendViewMessage/contextStats/deltaSeq)
-    /// @param io        对端 IO (发送 Delta/ContextStats; 为空表示 headless 场景)
-    /// @param origCb    原始回调 (可空)
+    /// - [agentName] 当前 agent 名 (事件 source)
+    /// - [sessionId] 当前会话 id
+    /// - [ctx]       AgentContext (取 bus; 若 bus 为空则只做 Delta 翻译/转发)
+    /// - [session]   会话 (appendViewMessage/contextStats/deltaSeq)
+    /// - [io]        agent-io (发送 Delta/ContextStats; 为空表示 headless 场景)
+    /// - [origCb]    原始回调 (可空)
     EventBridge(
         std::string                                  agentName,
         std::string                                  sessionId,
@@ -642,7 +650,7 @@ private:
     ///   (上下文压缩/上下文统计共用同一口径)
     /// - 无 summarization 时 (如测试/裸 EventBridge) 回退内置估算:
     ///   ascii ≈ 4 字符/token, 非 ascii ≈ 1.1 字符/token
-    double estimateTokens(std::string_view text);
+    double countTokens(std::string_view text);
 
     /// 每 [tpsPushIntervalSec_] 秒推送一次最近窗口内的平均生成速度 (token/s) 到对端
     /// - 经 WireContextStats.tps 携带, 与上下文统计共用同一通道;
@@ -701,5 +709,5 @@ private:
     double turnTpsDurationSec_ = 0.0; ///< 本轮累计流式耗时 (秒)
 };
 
-} // namespace middleware
+} // namespace event
 } // namespace agentxx

@@ -1,8 +1,8 @@
 #include "test_event_bridge.h"
 #include "agentxx/agent/config.h"
 #include "agentxx/agent/context.h"
-#include "agentxx/middlewares/event_stream.h"
-#include "agentxx/middlewares/events.h"
+#include "agentxx/event/event_stream.h"
+#include "agentxx/event/events.h"
 #include "agentxx/middlewares/summarization.h"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
@@ -58,13 +58,13 @@ public:
 };
 
 /// 构造一个完整的 EventBridge (含 bus/session/io)
-static std::shared_ptr<agentxx::middleware::EventBridge> makeTestBridge(
+static std::shared_ptr<agentxx::event::EventBridge> makeTestBridge(
     std::shared_ptr<agentxx::agent::AgentContext> agentContext,
     std::shared_ptr<agentxx::agent::Session>      session,
     std::shared_ptr<TestEbIO>                     io,
     neograph::graph::GraphStreamCallback          origCb = nullptr
 ) {
-    return std::make_shared<agentxx::middleware::EventBridge>(
+    return std::make_shared<agentxx::event::EventBridge>(
         "testAgent",
         "thread_42",
         agentContext,
@@ -81,7 +81,7 @@ asio::awaitable<void> test_eventbridge_token() {
     auto agentContext         = std::make_shared<agentxx::agent::AgentContext>();
     agentContext->agentConfig = agentConfig;
     agentContext->bus
-        = std::make_shared<agentxx::middleware::EventBus>(co_await asio::this_coro::executor);
+        = std::make_shared<agentxx::event::EventBus>(co_await asio::this_coro::executor);
     auto session = std::make_shared<agentxx::agent::Session>();
     auto io      = std::make_shared<TestEbIO>();
 
@@ -186,7 +186,7 @@ asio::awaitable<void> test_eventbridge_nullbus_passthrough() {
 asio::awaitable<void> test_eventbridge_error() {
     auto agentContext = std::make_shared<agentxx::agent::AgentContext>();
     agentContext->bus
-        = std::make_shared<agentxx::middleware::EventBus>(co_await asio::this_coro::executor);
+        = std::make_shared<agentxx::event::EventBus>(co_await asio::this_coro::executor);
     auto session = std::make_shared<agentxx::agent::Session>();
     auto io      = std::make_shared<TestEbIO>();
 
@@ -473,7 +473,7 @@ asio::awaitable<void> test_eventbridge_node_delta() {
 /// - token 估算复用 AgentContext::summarizationMiddleware 的 countTokensForUtf8Str 口径
 asio::awaitable<void> test_eventbridge_tps() {
     auto agentContext = std::make_shared<agentxx::agent::AgentContext>();
-    // 注入 summarization 中间件: estimateTokens 应复用其 token 计算口径
+    // 注入 summarization 中间件: countTokens 应复用其 token 计算口径
     agentContext->summarizationMiddleware
         = std::make_shared<agentxx::middleware::SummarizationMiddlewareHandle>(agentContext);
     auto session = std::make_shared<agentxx::agent::Session>();

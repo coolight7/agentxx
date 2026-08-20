@@ -1,6 +1,6 @@
 #pragma once
 
-#include "agentxx/middlewares/events.h"
+#include "agentxx/event/events.h"
 #include "agentxx/middlewares/middleware.h"
 #include "neograph/graph/cancel.h"
 #include <memory>

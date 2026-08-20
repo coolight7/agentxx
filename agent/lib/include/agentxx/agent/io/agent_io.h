@@ -135,7 +135,7 @@ public:
     /// 在会话总线上注册本 IO 的事件处理器 (interrupt / permission)
     /// - 由 BaseAgent::runTurnAsync 调用
     /// - 重复调用会先移除上一次注册的处理器, 避免 handler 累积、泄漏与悬空 this
-    virtual void registerOnBus(std::shared_ptr<agentxx::middleware::EventBus> sessionBus);
+    virtual void registerOnBus(std::shared_ptr<agentxx::event::EventBus> sessionBus);
 
 protected:
 
@@ -177,11 +177,11 @@ protected:
     /// 从已注册的总线上移除本 IO 的处理器 (若总线仍存活)
     void unregisterFromBus();
 
-    std::shared_ptr<AgentIOTransportBase>        transport_;
-    std::shared_ptr<ClientEventSink>             eventSink_;
-    std::weak_ptr<agentxx::middleware::EventBus> registeredBus_;
-    size_t                                       interruptServerId_  = 0;
-    size_t                                       permissionServerId_ = 0;
+    std::shared_ptr<AgentIOTransportBase>   transport_;
+    std::shared_ptr<ClientEventSink>        eventSink_;
+    std::weak_ptr<agentxx::event::EventBus> registeredBus_;
+    size_t                                  interruptServerId_  = 0;
+    size_t                                  permissionServerId_ = 0;
 };
 
 } // namespace agent

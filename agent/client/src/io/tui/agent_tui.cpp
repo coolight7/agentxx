@@ -1332,9 +1332,9 @@ void TUIClientAgentIO::onDelta(const agentxx::agent::Delta& delta) {
         auto&                       st = sharedState_.mutableState();
         switch (delta.type) {
             case Type::TextToken:
-            case Type::ThinkingToken: {
-                auto role = (delta.type == Type::ThinkingToken) ? TUIMessage::Role::Think
-                                                                : TUIMessage::Role::Assistant;
+            case Type::ThinkToken: {
+                auto role = (delta.type == Type::ThinkToken) ? TUIMessage::Role::Think
+                                                             : TUIMessage::Role::Assistant;
                 if (st.currentTokenRole != role && st.currentToken && !st.currentToken->empty()) {
                     // 先 push 再更新时间戳: pushCurrentTokenLocked 使用
                     // st.pendingToken* 的当前值构造消息, 若先覆盖成新角色的

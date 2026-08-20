@@ -1,7 +1,7 @@
 #pragma once
 
 #include "agentxx/agent/base_agent.h"
-#include "agentxx/middlewares/host_events.h"
+#include "agentxx/event/event_host.h"
 #include "asio/io_context.hpp"
 #include <functional>
 #include <map>
@@ -55,7 +55,7 @@ private:
 
 /// AgentHost: 进程级 agent 宿主
 /// - 所有 agent (主 agent 与子代理) 平等: 统一构造/注册/回收, 经 HostBus 交互
-/// - 持有共享 ioCtx / blockingPool / HostBus (多 agent 共享基础设施, 避免
+/// - 持有共享 ioCtx / threadPool / HostBus (多 agent 共享基础设施, 避免
 ///   每个 agent 各自创建线程池)
 /// - 子代理委派 (service.subagent / service.subagent.batch) 由宿主在根 agent
 ///   全局总线上 registerServer: 派生的是独立 agent (不再复用父 AgentContext/subgraph)
@@ -68,8 +68,8 @@ public:
     struct Config {
         /// 宿主 io_context (空 = 自建, 调用方负责 run)
         std::shared_ptr<asio::io_context> ioCtx = nullptr;
-        /// 共享 blockingPool 线程数 (0 = 默认 hardware_concurrency/2)
-        size_t blockingPoolThreads = 0;
+        /// 共享 threadPool 线程数 (0 = 默认 hardware_concurrency/2)
+        size_t threadPoolWorkers = 0;
         /// 子代理最大嵌套深度 (根 = 0; 超出拒绝派生)
         size_t maxDepth = 3;
         /// 子代理最大并发数 (超出拒绝派生)
@@ -84,13 +84,13 @@ public:
 
     ~AgentHost();
 
-    std::shared_ptr<asio::io_context>              ioCtx();
-    std::shared_ptr<agentxx::middleware::EventBus> hostBus();
-    std::shared_ptr<asio::thread_pool>             blockingPool();
-    AgentRegistry&                                 registry();
+    std::shared_ptr<asio::io_context>         ioCtx();
+    std::shared_ptr<agentxx::event::EventBus> hostBus();
+    std::shared_ptr<asio::thread_pool>        threadPool();
+    AgentRegistry&                            registry();
 
     /// 注册根 agent (主 agent):
-    /// - 注入共享 blockingPool 与宿主引用 (AgentContext::host)
+    /// - 注入共享 threadPool 与宿主引用 (AgentContext::host)
     /// - 在根 agent 全局总线上 registerServer service.subagent (统一批量语义:
     ///   ReqSubagentBatch / RespSubagentBatch, 单任务 = 1 个 task);
     ///   子代理的全局总线由 spawnOneTask 派生时对称 registerServer (嵌套委派
@@ -187,13 +187,13 @@ private:
                std::string_view data
            );
 
-    Config                                         cfg_;
-    std::shared_ptr<asio::io_context>              ioCtx_;
-    std::shared_ptr<asio::thread_pool>             blockingPool_;
-    std::shared_ptr<agentxx::middleware::EventBus> hostBus_;
-    AgentRegistry                                  registry_;
-    std::shared_ptr<BaseAgent>                     rootAgent_;
-    std::map<std::string, Mailbox, std::less<>>    mailboxes_;
+    Config                                      cfg_;
+    std::shared_ptr<asio::io_context>           ioCtx_;
+    std::shared_ptr<asio::thread_pool>          threadPool_;
+    std::shared_ptr<agentxx::event::EventBus>   hostBus_;
+    AgentRegistry                               registry_;
+    std::shared_ptr<BaseAgent>                  rootAgent_;
+    std::map<std::string, Mailbox, std::less<>> mailboxes_;
     /// 远程 agent (A2A 桥接): agentId -> A2A 客户端
     std::map<std::string, std::shared_ptr<agentxx::server::A2aClient>, std::less<>> remoteAgents_;
     /// 根 agent 全局总线上的 subagent server id (attachRoot 注册)

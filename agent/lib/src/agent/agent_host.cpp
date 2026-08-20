@@ -141,12 +141,12 @@ AgentHost::AgentHost(Config cfg) :
     } else {
         ioCtx_ = std::make_shared<asio::io_context>();
     }
-    size_t poolThreads = cfg_.blockingPoolThreads;
+    size_t poolThreads = cfg_.threadPoolWorkers;
     if (0 == poolThreads) {
         poolThreads = std::max(2u, std::thread::hardware_concurrency() / 2);
     }
-    blockingPool_ = std::make_shared<asio::thread_pool>(poolThreads);
-    hostBus_      = std::make_shared<agentxx::middleware::EventBus>(ioCtx_->get_executor());
+    threadPool_ = std::make_shared<asio::thread_pool>(poolThreads);
+    hostBus_    = std::make_shared<agentxx::event::EventBus>(ioCtx_->get_executor());
 }
 
 AgentHost::~AgentHost() = default;
@@ -155,12 +155,12 @@ std::shared_ptr<asio::io_context> AgentHost::ioCtx() {
     return ioCtx_;
 }
 
-std::shared_ptr<agentxx::middleware::EventBus> AgentHost::hostBus() {
+std::shared_ptr<agentxx::event::EventBus> AgentHost::hostBus() {
     return hostBus_;
 }
 
-std::shared_ptr<asio::thread_pool> AgentHost::blockingPool() {
-    return blockingPool_;
+std::shared_ptr<asio::thread_pool> AgentHost::threadPool() {
+    return threadPool_;
 }
 
 AgentRegistry& AgentHost::registry() {
@@ -188,10 +188,10 @@ void AgentHost::attachRoot(std::shared_ptr<BaseAgent> rootAgent) {
     if (!ctx) {
         return;
     }
-    // 注入共享基础设施: blockingPool 上提共享 (避免每 agent 一份线程池),
+    // 注入共享基础设施: threadPool 上提共享 (避免每 agent 一份线程池),
     // host 引用 (供节点/工具经 AgentContext 感知宿主)
-    ctx->blockingPool = blockingPool_;
-    ctx->host         = weak_from_this();
+    ctx->threadPool = threadPool_;
+    ctx->host       = weak_from_this();
 
     if (!ctx->bus) {
         XX_LOGW("AgentHost::attachRoot: root agent bus is null, subagent delegation unavailable");
@@ -415,8 +415,8 @@ asio::awaitable<events::RespSubagentBatchItem> AgentHost::spawnOneTask(
         };
     }
     // 注入共享基础设施与宿主引用
-    subCtx->blockingPool = blockingPool_;
-    subCtx->host         = weak_from_this();
+    subCtx->threadPool = threadPool_;
+    subCtx->host       = weak_from_this();
 
     // 同上下文模式: 子代理的 share_store 工具桥接到父会话的 store
     // (id 空间一致: 子代理写入的长内容, 父会话按摘要中的 id 可直接读取)

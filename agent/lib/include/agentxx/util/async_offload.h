@@ -23,7 +23,7 @@
  *
  * 用法示例:
  * @code
- *   auto& pool = agentCtx->blockingPool;
+ *   auto& pool = agentCtx->threadPool;
  *   auto result = co_await agentxx::util::offloadCancellableAsync<neograph::json>(
  *       *pool,
  *       [](std::atomic<bool>& cancel_flag) -> neograph::json {
