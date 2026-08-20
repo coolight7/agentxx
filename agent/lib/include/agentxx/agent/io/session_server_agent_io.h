@@ -179,6 +179,13 @@ private:
     // 输入 channel (concurrent_channel 内部线程安全)
     std::shared_ptr<InputChannel> inputChannel_;
 
+    /// 客户端随下一次用户消息携带的待应用模型选择 (WireUserInput.model):
+    /// - 仅 ex_ 线程访问 (onPeerMessage 写 / run 读), 无需锁
+    /// - run() 弹出输入时取走并清空, 作为该轮 runTurnAsync 的 modelName,
+    ///   BaseAgent 执行新一轮会话时 (runTurnAsync 开头 selectModel) 自动切换;
+    ///   空 = 保持会话当前模型
+    std::string pendingModel_;
+
     // pending interrupt (仅 ex_ 线程访问: handleInterrupt 写, resolveInterrupt 读)
     std::map<int64_t, PendingInterrupt> pending_;
     int64_t                             nextReqId_ = 1;

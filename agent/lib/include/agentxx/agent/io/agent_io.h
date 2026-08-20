@@ -17,6 +17,10 @@ namespace agentxx::middleware {
 class EventBus;
 } // namespace agentxx::middleware
 
+namespace agentxx::event {
+class EventBus;
+} // namespace agentxx::event
+
 namespace agentxx {
 namespace agent {
 

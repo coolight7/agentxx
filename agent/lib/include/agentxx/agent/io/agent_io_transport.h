@@ -37,6 +37,10 @@ struct WireHelloAck {
 struct WireUserInput {
     std::string sessionId;
     std::string text;
+    /// 本条消息携带的模型选择 (空 = 不切换): TUI 切模型不再即时发送
+    /// WireSelectModel, 而是随下一次用户消息携带, BaseAgent 执行该轮会话
+    /// 开始时 (runTurnAsync 内 selectModel) 自动切换
+    std::string model;
 };
 
 struct WireCancel {

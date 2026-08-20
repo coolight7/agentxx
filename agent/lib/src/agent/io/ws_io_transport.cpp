@@ -444,7 +444,7 @@ std::string WsAgentIOTransport::serialize(const WireMessage& msg) {
             } else if constexpr (std::is_same_v<T, WireHelloAck>) {
                 return io::makeHelloAck(m.ok, m.sessionId, m.tailHash, m.models).dump();
             } else if constexpr (std::is_same_v<T, WireUserInput>) {
-                return io::makeUserInput(m.sessionId, m.text).dump();
+                return io::makeUserInput(m.sessionId, m.text, m.model).dump();
             } else if constexpr (std::is_same_v<T, WireCancel>) {
                 return io::makeCancel(m.sessionId).dump();
             } else if constexpr (std::is_same_v<T, WireSelectModel>) {
@@ -587,6 +587,7 @@ std::optional<WireMessage> WsAgentIOTransport::deserialize(std::string_view json
         WireUserInput input;
         input.sessionId = j.value("sessionId", std::string{});
         input.text      = j.value("text", std::string{});
+        input.model     = j.value("model", std::string{});
         return WireMessage{std::move(input)};
     } else if (t == io::MsgType::Cancel) {
         WireCancel cancel;

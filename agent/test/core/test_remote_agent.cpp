@@ -1,3 +1,6 @@
+// 注意: test_agent.h 会重定义 XX_TEST_PASSED/FAILED 为 g_da_* 计数器,
+// 必须先于 test_remote_agent.h 引入, 使后者 (g_remote_*) 的宏定义最后生效
+#include "test_agent.h" // 本地 LLM 模拟器 startDaSimServer/g_da_sim_*
 #include "test_remote_agent.h"
 #include "agentxx/agent/base_agent.h"
 #include "agentxx/agent/config.h"
@@ -329,7 +332,38 @@ static asio::awaitable<void> test_remote_protocol_roundtrip() {
         }
     }
     {
-        // 会话选择弹窗: ListSessions / SessionList / SwitchSession 序列化往返
+        // 用户输入附带模型选择 (TUI 切模型随下一条消息携带, BaseAgent 新一轮
+        // 会话自动切换): 序列化往返须完整保留 model 字段
+        agentxx::agent::WireUserInput ui{"sess", "hello", "model-b"};
+        auto                          json = WsAgentIOTransport::serialize(WireMessage{ui});
+        auto                          back = WsAgentIOTransport::deserialize(json);
+        XX_TEST_EXPECT_TRUE(back.has_value());
+        if (back) {
+            auto* r = std::get_if<agentxx::agent::WireUserInput>(&*back);
+            XX_TEST_EXPECT_TRUE(r != nullptr);
+            if (r) {
+                XX_TEST_EXPECT_EQ(r->sessionId, std::string("sess"));
+                XX_TEST_EXPECT_EQ(r->text, std::string("hello"));
+                XX_TEST_EXPECT_EQ(r->model, std::string("model-b"));
+            }
+        }
+
+        // 未携带模型: model 为空且 JSON 不输出 "model" 字段 (保持旧格式,
+        // 旧客户端向后兼容)
+        agentxx::agent::WireUserInput plain{"sess", "hi"};
+        auto                          plainJson = WsAgentIOTransport::serialize(WireMessage{plain});
+        XX_TEST_EXPECT_TRUE(plainJson.find("\"model\"") == std::string::npos);
+        auto plainBack = WsAgentIOTransport::deserialize(plainJson);
+        XX_TEST_EXPECT_TRUE(plainBack.has_value());
+        if (plainBack) {
+            auto* r = std::get_if<agentxx::agent::WireUserInput>(&*plainBack);
+            XX_TEST_EXPECT_TRUE(r != nullptr);
+            if (r) {
+                XX_TEST_EXPECT_TRUE(r->model.empty());
+            }
+        }
+    }
+    {
         agentxx::agent::WireListSessions ls{};
         auto back = WsAgentIOTransport::deserialize(WsAgentIOTransport::serialize(WireMessage{ls}));
         XX_TEST_EXPECT_TRUE(back.has_value());
@@ -1768,6 +1802,163 @@ static asio::awaitable<void> test_session_controller_switch_session() {
 }
 
 // ---------------------------------------------------------------------------
+// 20. TUI 切模型随下一条用户消息携带 (WireUserInput.model):
+//     TUI 不再直接通知 agent-io 切换 (WireSelectModel), 而是把选择的模型随
+//     下一次发送的用户消息携带; SessionServerAgentIO 记录待应用模型并传给
+//     runTurnAsync, BaseAgent 执行新一轮会话 (runTurnAsync 开头 selectModel)
+//     时自动切换, 后续轮次沿用该模型 (会话级持久)
+// ---------------------------------------------------------------------------
+
+static asio::awaitable<void> test_model_switch_with_next_input() {
+    auto ex = co_await asio::this_coro::executor;
+
+    // 本地 LLM 模拟器: 记录最近一次 /chat/completions 请求体 (含 model 字段),
+    // 可用于断言实际 LLM API 调用使用的模型
+    auto                          sim     = startDaSimServer();
+    const auto                    baseUrl = "http://127.0.0.1:" + std::to_string(sim.port);
+    g_da_sim_response_content              = "hello from model switch test";
+    g_da_sim_tool_calls                    = neograph::json::array();
+
+    auto cfg             = std::make_shared<agentxx::agent::AgentConfig>();
+    cfg->model.baseUrl   = baseUrl;
+    cfg->model.apiKey    = "EMPTY";
+    cfg->model.modelName = "default-model";
+    auto agent           = std::make_shared<agentxx::agent::BaseAgent>(cfg);
+    co_await agent->init();
+
+    // 注册第二个可用模型: 注册表 key="model-b", 发送给 API 的字段 "model-b-api"
+    agentxx::agent::ModelConfig second;
+    second.name      = "model-b";
+    second.modelName = "model-b-api";
+    second.baseUrl   = baseUrl;
+    second.apiKey    = "EMPTY";
+    agent->agentContext->modelRegistry->registerModel("model-b", second);
+
+    // 通道直连: client 端模拟 TUI 发送 (WireUserInput), server 端为会话控制器
+    auto tp      = agentxx::agent::ChannelAgentIOTransport::makePair(ex, ex);
+    auto clientT = std::move(tp.first);
+    auto serverT = std::move(tp.second);
+
+    agentxx::agent::SessionServerAgentIO::Config scCfg;
+    scCfg.sessionId = "model-switch-session";
+    auto sc         = std::make_shared<agentxx::agent::SessionServerAgentIO>(ex, agent, scCfg);
+    sc->setTransport(std::shared_ptr<agentxx::agent::AgentIOTransportBase>(std::move(serverT)));
+
+    // transport 接收循环 (onPeerMessage 消费客户端消息) + 会话驱动循环 (run)
+    asio::co_spawn(
+        ex,
+        [sc]() -> asio::awaitable<void> {
+            co_await sc->runTransportLoop();
+        },
+        asio::detached
+    );
+    asio::co_spawn(
+        ex,
+        [sc]() -> asio::awaitable<void> {
+            co_await sc->run();
+        },
+        asio::detached
+    );
+
+    // ---- 首条消息携带模型 "model-b": 该轮会话开始时自动切换 ----
+    const int req0 = g_da_sim_request_count;
+    clientT->send(agentxx::agent::WireMessage{agentxx::agent::WireUserInput{
+        "model-switch-session",
+        "switch to model-b",
+        "model-b",
+    }});
+
+    // 等待会话模型切换生效 (selectModel 在 runTurnAsync 开头同步执行)
+    bool switched = false;
+    for (int i = 0; i < 200; ++i) {
+        if (agent->getCurrentModelName("model-switch-session") == "model-b") {
+            switched = true;
+            break;
+        }
+        co_await testSleep(ex, std::chrono::milliseconds{50});
+    }
+    XX_TEST_EXPECT_TRUE(switched);
+
+    // 等待 LLM API 请求到达: 实际调用应使用切换后的模型 (model-b-api)
+    bool sawRequest = false;
+    for (int i = 0; i < 200; ++i) {
+        if (g_da_sim_request_count > req0) {
+            sawRequest = true;
+            break;
+        }
+        co_await testSleep(ex, std::chrono::milliseconds{50});
+    }
+    XX_TEST_EXPECT_TRUE(sawRequest);
+    if (sawRequest) {
+        XX_TEST_EXPECT_EQ(
+            g_da_sim_last_request.value("model", std::string{}),
+            std::string("model-b-api")
+        );
+    }
+
+    // ---- 第二条消息不携带模型: 沿用会话当前模型 (model-b), 不切回默认 ----
+    const int req1 = g_da_sim_request_count;
+    clientT->send(agentxx::agent::WireMessage{agentxx::agent::WireUserInput{
+        "model-switch-session",
+        "keep model-b",
+        "",
+    }});
+    bool secondRequest = false;
+    for (int i = 0; i < 200; ++i) {
+        if (g_da_sim_request_count > req1) {
+            secondRequest = true;
+            break;
+        }
+        co_await testSleep(ex, std::chrono::milliseconds{50});
+    }
+    XX_TEST_EXPECT_TRUE(secondRequest);
+    if (secondRequest) {
+        XX_TEST_EXPECT_EQ(
+            agent->getCurrentModelName("model-switch-session"),
+            std::string("model-b")
+        );
+        XX_TEST_EXPECT_EQ(
+            g_da_sim_last_request.value("model", std::string{}),
+            std::string("model-b-api")
+        );
+    }
+
+    // ---- 未注册的模型名: selectModel 拒绝 (会话模型保持不变) ----
+    const int req2 = g_da_sim_request_count;
+    clientT->send(agentxx::agent::WireMessage{agentxx::agent::WireUserInput{
+        "model-switch-session",
+        "invalid model name",
+        "no-such-model",
+    }});
+    bool thirdRequest = false;
+    for (int i = 0; i < 200; ++i) {
+        if (g_da_sim_request_count > req2) {
+            thirdRequest = true;
+            break;
+        }
+        co_await testSleep(ex, std::chrono::milliseconds{50});
+    }
+    XX_TEST_EXPECT_TRUE(thirdRequest);
+    if (thirdRequest) {
+        // 拒绝无效模型: 会话模型仍为 model-b, LLM 仍用 model-b-api
+        XX_TEST_EXPECT_EQ(
+            agent->getCurrentModelName("model-switch-session"),
+            std::string("model-b")
+        );
+        XX_TEST_EXPECT_EQ(
+            g_da_sim_last_request.value("model", std::string{}),
+            std::string("model-b-api")
+        );
+    }
+
+    // 显式关闭: 使挂起的 recv 完成, 避免挂起协程持有 transport 泄漏
+    clientT->close();
+    sc->stop();
+    sim.stop();
+    co_return;
+}
+
+// ---------------------------------------------------------------------------
 
 asio::awaitable<TestResult> run_remote_agent_tests() {
     std::cout << "  [remote] protocol roundtrip..." << std::endl;
@@ -1829,6 +2020,9 @@ asio::awaitable<TestResult> run_remote_agent_tests() {
 
     std::cout << "  [remote] session controller switch session..." << std::endl;
     co_await test_session_controller_switch_session();
+
+    std::cout << "  [remote] model switch with next input..." << std::endl;
+    co_await test_model_switch_with_next_input();
 
     co_return TestResult{g_remote_passed, g_remote_failed};
 }

@@ -99,6 +99,12 @@ struct TUIRenderState {
     /// - true:  已收到响应 (若列表仍为空则说明确实无可用模型)
     bool modelInfoLoaded = false;
 
+    /// 待应用模型选择 (TUI 切模型不即时通知 agent-io):
+    /// 模型选择弹窗确认后写入, 随下一次发送的用户消息 (WireUserInput.model)
+    /// 携带; BaseAgent 执行新一轮会话时自动切换。发送时取走并清空,
+    /// 仅对"选择之后发送的下一条消息"生效 (重复选择以最后一次为准)
+    std::string pendingModel;
+
     std::deque<TUIPendingInput> pendingInputs;
 
     /// 上下文消息快照 (弹窗展示用); 为 null 表示尚未获取
