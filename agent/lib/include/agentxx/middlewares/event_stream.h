@@ -412,7 +412,7 @@ public:
             [id, delay, weak, handler = std::move(handler), data = std::move(data), streamName](
             ) -> asio::awaitable<void> {
                 auto timer = asio::steady_timer(co_await asio::this_coro::executor, delay);
-                std::error_code ec;
+                neograph_asio_error_code ec;
                 co_await timer.async_wait(asio::redirect_error(asio::use_awaitable, ec));
                 if (ec) {
                     co_return;

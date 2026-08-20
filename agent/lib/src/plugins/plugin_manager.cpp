@@ -1875,6 +1875,19 @@ asio::awaitable<std::shared_ptr<PluginInstance>>
 
     plugins_[name] = inst;
 
+    // 插件配置参数 (yaml `plugins` 条目 args) 随加载直接传入 (C2):
+    // - 宿主不解析字段语义, 插件经 vtable get_plugin_args 整体读取
+    // - 必须【在 entry 调用之前】写入 inst->args —— 插件 entry 装配期
+    //   (readHostConfig) 即经 get_plugin_args 读取 args; 若延迟到 entry
+    //   之后赋值, 插件读到的是空 {} (回退默认配置, 如 codegraph 的
+    //   load_cwd=true / loadPaths 丢失), 动态库插件的 yaml 配置参数
+    //   全部不生效 (回归: codegraph 测试传 paths 索引临时项目失败)
+    // - 不再事后按"配置路径推导名 == 插件名"回查: manifest name 与目录/
+    //   文件名不一致时也能正确拿到 args (直接加载路径 cfg 为 nullptr → {})
+    if (cfg) {
+        inst->args = cfg->args;
+    }
+
     // entry 调用卸载到线程池 (不阻塞 io 线程):
     // - 插件 entry 内的注册动作 (register_tool/hook/capability) 经 vtable
     //   ioCallSync 回 io 线程执行 (契约不变: 注册始终在 io 线程串行)
@@ -1912,14 +1925,6 @@ asio::awaitable<std::shared_ptr<PluginInstance>>
         inst->hookRegistrations.size(),
         inst->capabilityRegistrations.size()
     );
-
-    // 插件配置参数 (yaml `plugins` 条目 args) 随加载直接传入 (C2):
-    // - 宿主不解析字段语义, 插件经 vtable get_plugin_args 整体读取
-    // - 不再事后按"配置路径推导名 == 插件名"回查: manifest name 与目录/
-    //   文件名不一致时也能正确拿到 args (直接加载路径 cfg 为 nullptr → {})
-    if (cfg) {
-        inst->args = cfg->args;
-    }
 
     co_return inst;
 }
@@ -1993,6 +1998,13 @@ asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadBuiltinAsync
 
     plugins_[name] = inst;
 
+    // 插件配置参数随加载直接传入 (同 loadNativeAsync, 见 C2): 在 entry
+    // 调用【之前】写入 inst->args —— 插件 entry 装配期经 get_plugin_args
+    // 读取 args (与 loadNativeAsync 修复同因)
+    if (cfg) {
+        inst->args = cfg->args;
+    }
+
     // entry 调用卸载到线程池 (与 loadNativeAsync 相同: 注册动作经 vtable
     // ioCallSync 回 io 线程; 脚本插件的 entry 会经 invoke_capability 同步
     // 等待引擎线程, entry 在 io 线程执行会 io↔引擎互等死锁)
@@ -2022,11 +2034,6 @@ asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadBuiltinAsync
         inst->hookRegistrations.size(),
         inst->capabilityRegistrations.size()
     );
-
-    // 插件配置参数随加载直接传入 (同 loadNativeAsync, 见 C2)
-    if (cfg) {
-        inst->args = cfg->args;
-    }
 
     co_return inst;
 }

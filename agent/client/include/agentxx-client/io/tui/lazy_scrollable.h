@@ -204,4 +204,17 @@ private:
     /// 可跳过整棵子树的 ComputeRequirement/SetBox 迭代 (见 prepareLayout 阶段 2)
     std::vector<ftxui::Box> lastBoxes_;
     ftxui::Box              box_;
+
+    /// 本帧已确保 (prepareLayout 阶段 1/2 处理过, prepare 布局前被清空重标) 的
+    /// 子项索引标记: evictIfNeeded 禁止淘汰这些条目。
+    ///
+    /// 背景: 预算淘汰在 ensureElement 插入时从 LRU 尾部执行, 尾部先消耗视口外
+    /// 旧缓存, 但当"可见集自身"超过预算 (长消息 x64 折算超 maxBytes / 高终端
+    /// 可见条数超 maxItems) 时, 淘汰会一直延续到本帧已处理、仍待渲染的可见
+    /// 子项 —— 它们仍在 visibleIndices_ (命中盒有效, 可点击折叠/展开), 但
+    /// 缓存被删 (hasCache_=false), 渲染时 elementAt 回退空 text, 连续多条消息
+    /// 显示为空白 (用户报告 "滚动到一定位置时连续几条消息不显示, 再滚动恢复")。
+    /// 标记后淘汰在遇到首个帧内已确保条目时停止 (LRU 序 = 最近使用在前,
+    /// 本帧条目全部位于前部, 尾部未确保条目先被淘汰完), 保证渲染优先于压预算。
+    std::vector<bool> protectedIndices_;
 };

@@ -82,21 +82,21 @@ neograph::ChatTool SessionShareStoreTool::get_definition() const {
                     {
                         "line_offset",
                         {
-                            {"type", "number"},
+                            {"type", "integer"},
                             {"description", prompt.getArg("line_offset")},
                         },
                     },
                     {
                         "line_limit",
                         {
-                            {"type", "number"},
+                            {"type", "integer"},
                             {"description", prompt.getArg("line_limit")},
                         },
                     },
                     {
                         "id",
                         {
-                            {"type", "number"},
+                            {"type", "integer"},
                             {"description", prompt.getArg("id")},
                         },
                     },
