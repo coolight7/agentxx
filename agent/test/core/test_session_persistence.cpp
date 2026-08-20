@@ -6,7 +6,7 @@
 
 #include "agentxx/agent/code_agent.h"
 #include "agentxx/agent/context.h"
-#include "agentxx/agent/session_persistence.h"
+#include "agentxx/agent/session_store.h"
 #include "agentxx/middlewares/middleware.h"
 #include "agentxx/util/log.h"
 #include <asio/co_spawn.hpp>
@@ -89,17 +89,17 @@ agentxx::agent::ViewMessage makeMsg(agentxx::agent::ViewMessage::Role role, std:
 } // namespace
 
 // ---------------------------------------------------------------------------
-// SessionPersistence 单测: viewMessages / llmMessages / meta
+// SessionStore 单测: viewMessages / llmMessages / meta
 // ---------------------------------------------------------------------------
 
 static TestResult testViewMessagesRoundtrip() {
-    using agentxx::agent::SessionPersistence;
+    using agentxx::agent::SessionStore;
     using V = agentxx::agent::ViewMessage;
 
     auto root = makeTempRoot();
     {
         // 写入: user/assistant/tool/system/thinking/interrupt 各一条
-        auto p = std::make_shared<SessionPersistence>(root);
+        auto p = std::make_shared<SessionStore>(root);
         // 只读访问不创建目录/空文件
         auto fresh = p->loadSession("not-exist-yet");
         XX_TEST_EXPECT_TRUE(fresh.viewMessages.empty());
@@ -155,12 +155,12 @@ static TestResult testViewMessagesRoundtrip() {
         XX_TEST_EXPECT_EQ(loaded.msgIdCounter, uint64_t{6});
 
         // 目录布局: {root}/{sanitizedThreadId}/{session.db,share_store.db}
-        auto dir = fs::path(root) / SessionPersistence::sanitizeThreadId("t1");
+        auto dir = fs::path(root) / SessionStore::sanitizeSessionId("t1");
         XX_TEST_EXPECT_TRUE(fs::exists(dir / "session.db"));
         XX_TEST_EXPECT_TRUE(fs::exists(dir / "share_store.db"));
 
         // 模拟重启: 新实例读同一目录
-        auto p2 = std::make_shared<SessionPersistence>(root);
+        auto p2 = std::make_shared<SessionStore>(root);
         auto l2 = p2->loadSession("t1");
         XX_TEST_EXPECT_EQ(l2.viewMessages.size(), msgs.size());
         XX_TEST_EXPECT_EQ(l2.msgIdCounter, uint64_t{6});
@@ -172,11 +172,11 @@ static TestResult testViewMessagesRoundtrip() {
 }
 
 static TestResult testLlmMessagesRoundtrip() {
-    using agentxx::agent::SessionPersistence;
+    using agentxx::agent::SessionStore;
 
     auto root = makeTempRoot();
     {
-        auto p = std::make_shared<SessionPersistence>(root);
+        auto p = std::make_shared<SessionStore>(root);
 
         // 空上下文
         p->saveLlmMessages("t2", neograph::json::array());
@@ -199,14 +199,14 @@ static TestResult testLlmMessagesRoundtrip() {
             {"content", "a1"       },
         });
         ctx.push_back(neograph::json{
-            {"role",         "tool"      },
-            {"tool_call_id", "call_1"    },
-            {"content",      R"({"r":1})"},
+            {"role",       "tool"      },
+            {"toolCallId", "call_1"    },
+            {"content",    R"({"r":1})"},
         });
         p->saveLlmMessages("t2", ctx);
 
         // 重启后恢复
-        auto p2 = std::make_shared<SessionPersistence>(root);
+        auto p2 = std::make_shared<SessionStore>(root);
         auto l2 = p2->loadSession("t2");
         XX_TEST_EXPECT_TRUE(l2.llmMessages.is_array());
         XX_TEST_EXPECT_EQ(l2.llmMessages.size(), ctx.size());
@@ -216,7 +216,7 @@ static TestResult testLlmMessagesRoundtrip() {
                 std::string{"system"}
             );
             XX_TEST_EXPECT_EQ(
-                l2.llmMessages[3].value("tool_call_id", std::string{}),
+                l2.llmMessages[3].value("toolCallId", std::string{}),
                 std::string{"call_1"}
             );
         }
@@ -226,15 +226,15 @@ static TestResult testLlmMessagesRoundtrip() {
 }
 
 // ---------------------------------------------------------------------------
-// SessionPersistence 单测: share store
+// SessionStore 单测: share store
 // ---------------------------------------------------------------------------
 
 static TestResult testShareStoreRoundtrip() {
-    using agentxx::agent::SessionPersistence;
+    using agentxx::agent::SessionStore;
 
     auto root = makeTempRoot();
     {
-        auto p = std::make_shared<SessionPersistence>(root);
+        auto p = std::make_shared<SessionStore>(root);
 
         // 空存储
         auto empty = p->loadShareStore("s1");
@@ -278,7 +278,7 @@ static TestResult testShareStoreRoundtrip() {
         XX_TEST_EXPECT_NULLOPT(p->getShareStoreItem("s1", 9999));
 
         // 模拟重启: 数据与 id 计数器延续 (剩余条目: id1/id3(101)/id100)
-        auto p2     = std::make_shared<SessionPersistence>(root);
+        auto p2     = std::make_shared<SessionStore>(root);
         auto loaded = p2->loadShareStore("s1");
         XX_TEST_EXPECT_EQ(loaded.items.size(), size_t{3});
         XX_TEST_EXPECT_EQ(loaded.nextId, size_t{102}); // max(1,100,101)+1
@@ -297,23 +297,22 @@ static TestResult testShareStoreRoundtrip() {
 }
 
 // ---------------------------------------------------------------------------
-// Session::updateHistory + 持久化: tool 结果回填后重启恢复仍为已完成
+// Session::updateViewMessage + 持久化: tool 结果回填后重启恢复仍为已完成
 // ---------------------------------------------------------------------------
 
 static TestResult testUpdateHistoryPersistence() {
-    using agentxx::agent::SessionPersistence;
     using agentxx::agent::SessionStore;
     using agentxx::agent::ViewMessage;
     using V = ViewMessage;
 
     auto root = makeTempRoot();
     {
-        auto persistence   = std::make_shared<SessionPersistence>(root);
-        auto store         = std::make_shared<SessionStore>();
-        store->persistence = persistence;
+        auto sessionStore   = std::make_shared<SessionStore>(root);
+        auto store          = std::make_shared<agentxx::agent::SessionsManager>();
+        store->sessionStore = sessionStore;
 
         auto s1 = store->getOrCreate("thread-upd");
-        s1->appendHistory(ViewMessage::makeText(V::Role::User, "u1"));
+        s1->appendViewMessage(ViewMessage::makeText(V::Role::User, "u1"));
         // 追加一条未完成的 Tool 消息 (模拟 assistant tool_calls 展开)
         V toolMsg;
         toolMsg.role        = V::Role::Tool;
@@ -325,23 +324,23 @@ static TestResult testUpdateHistoryPersistence() {
         t.toolCallId   = "call_x";
         t.toolFinished = false; // 尚未收到结果
         toolMsg.tool   = std::move(t);
-        auto toolId    = s1->appendHistory(std::move(toolMsg));
+        auto toolId    = s1->appendViewMessage(std::move(toolMsg));
 
-        // 模拟 tool 结果回填: 走 Session::updateHistory (触发 onUpdateMessage 落库)
+        // 模拟 tool 结果回填: 走 Session::updateViewMessage (触发 onUpdateViewMessage 落库)
         auto& stored              = s1->viewMessages.back();
         stored.tool->toolResult   = "file content";
         stored.tool->toolFinished = true;
         stored.collapsed          = true;
-        s1->updateHistory(stored);
+        s1->updateViewMessage(stored);
 
         // 内存中已完成
         XX_TEST_EXPECT_TRUE(s1->viewMessages.back().tool->toolFinished);
 
         // ---- 模拟重启: 新实例恢复, tool 消息应保持已完成 ----
-        auto p2             = std::make_shared<SessionPersistence>(root);
-        auto store2         = std::make_shared<SessionStore>();
-        store2->persistence = p2;
-        auto s2             = store2->getOrCreate("thread-upd");
+        auto p2              = std::make_shared<SessionStore>(root);
+        auto store2          = std::make_shared<agentxx::agent::SessionsManager>();
+        store2->sessionStore = p2;
+        auto s2              = store2->getOrCreate("thread-upd");
         XX_TEST_EXPECT_EQ(s2->viewMessages.size(), size_t{2});
         const auto& toolMsg2 = s2->viewMessages[1];
         XX_TEST_EXPECT_EQ(toolMsg2.id, toolId);
@@ -351,13 +350,13 @@ static TestResult testUpdateHistoryPersistence() {
             XX_TEST_EXPECT_EQ(toolMsg2.tool->toolResult, std::string{"file content"});
         }
 
-        // 链式哈希不受 updateHistory 影响 (历史内容语义不变)
+        // 链式哈希不受 updateViewMessage 影响 (历史内容语义不变)
         XX_TEST_EXPECT_EQ(s2->getHashInfo().count, size_t{2});
 
         // 不存在的 id: 仅记日志, 不崩溃
         V bogus  = ViewMessage::makeText(V::Role::User, "x");
         bogus.id = "msg_999999";
-        s2->updateHistory(bogus);
+        s2->updateViewMessage(bogus);
     }
     fs::remove_all(root);
     return TestResult{};
@@ -368,7 +367,6 @@ static TestResult testUpdateHistoryPersistence() {
 // ---------------------------------------------------------------------------
 
 static TestResult testSessionStoreIntegration() {
-    using agentxx::agent::SessionPersistence;
     using agentxx::agent::SessionStore;
     using agentxx::agent::ViewMessage;
     using V = ViewMessage;
@@ -376,14 +374,14 @@ static TestResult testSessionStoreIntegration() {
     auto root = makeTempRoot();
     {
         // ---- 第一次"运行": 写入历史 + LLM 上下文 ----
-        auto persistence   = std::make_shared<SessionPersistence>(root);
-        auto store         = std::make_shared<SessionStore>();
-        store->persistence = persistence;
+        auto sessionStore   = std::make_shared<SessionStore>(root);
+        auto store          = std::make_shared<agentxx::agent::SessionsManager>();
+        store->sessionStore = sessionStore;
 
         auto s1 = store->getOrCreate("thread-a");
-        s1->appendHistory(ViewMessage::makeText(V::Role::User, "u1"));
-        s1->appendHistory(ViewMessage::makeText(V::Role::Assistant, "a1"));
-        s1->appendHistory(makeMsg(V::Role::Tool, R"({"tool":"x"})"));
+        s1->appendViewMessage(ViewMessage::makeText(V::Role::User, "u1"));
+        s1->appendViewMessage(ViewMessage::makeText(V::Role::Assistant, "a1"));
+        s1->appendViewMessage(makeMsg(V::Role::Tool, R"({"tool":"x"})"));
         s1->llmMessages = neograph::json::array();
         s1->llmMessages.push_back(neograph::json{
             {"role",    "system"},
@@ -397,10 +395,10 @@ static TestResult testSessionStoreIntegration() {
         auto hash1 = s1->getHashInfo();
         XX_TEST_EXPECT_EQ(hash1.count, size_t{3});
 
-        // ---- 第二次"运行" (模拟重启): 新建 store + persistence ----
-        auto p2             = std::make_shared<SessionPersistence>(root);
-        auto store2         = std::make_shared<SessionStore>();
-        store2->persistence = p2;
+        // ---- 第二次"运行" (模拟重启): 新建 store + sessionStore ----
+        auto p2              = std::make_shared<SessionStore>(root);
+        auto store2          = std::make_shared<agentxx::agent::SessionsManager>();
+        store2->sessionStore = p2;
 
         auto s2 = store2->getOrCreate("thread-a");
         XX_TEST_EXPECT_EQ(s2->viewMessages.size(), size_t{3});
@@ -415,19 +413,19 @@ static TestResult testSessionStoreIntegration() {
         XX_TEST_EXPECT_TRUE(s2->llmMessages.is_array());
         XX_TEST_EXPECT_EQ(s2->llmMessages.size(), size_t{2});
         // msg id 延续: 新消息不冲突
-        auto newId = s2->appendHistory(ViewMessage::makeText(V::Role::Assistant, "a2"));
+        auto newId = s2->appendViewMessage(ViewMessage::makeText(V::Role::Assistant, "a2"));
         XX_TEST_EXPECT_EQ(newId, std::string{"msg_000004"});
 
         // 追加后再"重启", 历史含新消息
-        auto p3             = std::make_shared<SessionPersistence>(root);
-        auto store3         = std::make_shared<SessionStore>();
-        store3->persistence = p3;
-        auto s3             = store3->getOrCreate("thread-a");
+        auto p3              = std::make_shared<SessionStore>(root);
+        auto store3          = std::make_shared<agentxx::agent::SessionsManager>();
+        store3->sessionStore = p3;
+        auto s3              = store3->getOrCreate("thread-a");
         XX_TEST_EXPECT_EQ(s3->viewMessages.size(), size_t{4});
         XX_TEST_EXPECT_EQ(s3->viewMessages[3].text, std::string{"a2"});
         XX_TEST_EXPECT_EQ(s3->getHashInfo().count, size_t{4});
         // 计数延续
-        auto newId2 = s3->appendHistory(ViewMessage::makeText(V::Role::User, "u3"));
+        auto newId2 = s3->appendViewMessage(ViewMessage::makeText(V::Role::User, "u3"));
         XX_TEST_EXPECT_EQ(newId2, std::string{"msg_000005"});
 
         // ---- 不同 thread 互不影响 ----
@@ -444,15 +442,15 @@ static TestResult testSessionStoreIntegration() {
 // ---------------------------------------------------------------------------
 
 static TestResult testMiddlewareShareStorePersistence() {
-    using agentxx::agent::SessionPersistence;
+    using agentxx::agent::SessionStore;
     using agentxx::middleware::MiddlewareContext;
 
     auto root = makeTempRoot();
     {
-        auto persistence = std::make_shared<SessionPersistence>(root);
+        auto sessionStore = std::make_shared<SessionStore>(root);
 
         // ---- 第一次运行: 写穿落库 ----
-        auto ctx = std::make_shared<MiddlewareContext>(persistence);
+        auto ctx = std::make_shared<MiddlewareContext>(sessionStore);
         auto id1 = ctx->addShareStoreItemValue("m1", "v1");
         auto id2 = ctx->addShareStoreItemValue("m1", "v2");
         XX_TEST_EXPECT_EQ(id1, size_t{1});
@@ -465,7 +463,7 @@ static TestResult testMiddlewareShareStorePersistence() {
         );
 
         // ---- 模拟重启: 新 MiddlewareContext 从 DB 恢复 ----
-        auto ctx2 = std::make_shared<MiddlewareContext>(persistence);
+        auto ctx2 = std::make_shared<MiddlewareContext>(sessionStore);
         XX_TEST_EXPECT_EQ(
             ctx2->getShareStoreItemValue("m1", id1).value_or(""),
             std::string{"v1-updated"}
@@ -480,7 +478,7 @@ static TestResult testMiddlewareShareStorePersistence() {
         ctx2->removeShareStoreItemValue("m1", id2);
         XX_TEST_EXPECT_NULLOPT(ctx2->getShareStoreItemValue("m1", id2));
         // 重启后删除生效
-        auto ctx3 = std::make_shared<MiddlewareContext>(persistence);
+        auto ctx3 = std::make_shared<MiddlewareContext>(sessionStore);
         XX_TEST_EXPECT_NULLOPT(ctx3->getShareStoreItemValue("m1", id2));
         XX_TEST_EXPECT_EQ(ctx3->getShareStoreItemValue("m1", id3).value_or(""), std::string{"v3"});
     }
@@ -489,17 +487,17 @@ static TestResult testMiddlewareShareStorePersistence() {
 }
 
 // ---------------------------------------------------------------------------
-// threadId 清洗
+// sessionId 清洗
 // ---------------------------------------------------------------------------
 
 static TestResult testSanitizeThreadId() {
-    using agentxx::agent::SessionPersistence;
+    using agentxx::agent::SessionStore;
 
     auto dir = [](std::string_view tid) {
-        return SessionPersistence::sanitizeThreadId(tid);
+        return SessionStore::sanitizeSessionId(tid);
     };
 
-    // 常规 threadId 保持不变 (目录可读)
+    // 常规 sessionId 保持不变 (目录可读)
     XX_TEST_EXPECT_EQ(dir("session"), std::string{"session"});
     XX_TEST_EXPECT_EQ(dir("test-thread_1"), std::string{"test-thread_1"});
 
@@ -513,7 +511,7 @@ static TestResult testSanitizeThreadId() {
         XX_TEST_EXPECT_TRUE(d.find('\\') == std::string::npos);
         XX_TEST_EXPECT_TRUE(d.find(':') == std::string::npos);
         XX_TEST_EXPECT_TRUE(!d.empty());
-        // 发生过改写的 threadId 附带 8 位 hex 尾缀 (与原始 threadId 区分)
+        // 发生过改写的 sessionId 附带 8 位 hex 尾缀 (与原始 sessionId 区分)
         if (tid != d) {
             XX_TEST_EXPECT_TRUE(d.size() >= 9);
             auto suffix = d.substr(d.size() - 9);
@@ -526,7 +524,7 @@ static TestResult testSanitizeThreadId() {
         }
     }
 
-    // 不同 threadId 绝不映射到同一目录 (含清洗碰撞规避)
+    // 不同 sessionId 绝不映射到同一目录 (含清洗碰撞规避)
     {
         std::vector<std::string> ids{"a/b", "a_b", "../x", "..", "x:y", "x*y", "x?y", "CON"};
         for (size_t i = 0; i < ids.size(); ++i) {
@@ -542,7 +540,7 @@ static TestResult testSanitizeThreadId() {
     // 确定性: 同输入同输出
     XX_TEST_EXPECT_EQ(dir("a/b"), dir("a/b"));
 
-    // 超长 threadId 截断 (总长受控)
+    // 超长 sessionId 截断 (总长受控)
     {
         std::string longTid(300, 'x');
         auto        d = dir(longTid);
@@ -565,13 +563,13 @@ static asio::awaitable<void> testSessionPersistenceE2E() {
         auto baseUrl = "http://127.0.0.1:" + std::to_string(sim.port);
 
         auto makeCfg = [&]() {
-            auto cfg                      = std::make_shared<agentxx::agent::AgentConfig>();
-            cfg->model.baseUrl            = baseUrl;
-            cfg->model.apiKey             = "EMPTY";
-            cfg->model.modelName          = "test-sim";
-            cfg->prompt.systemPrompt      = "You are a helpful assistant.";
-            cfg->enableSessionPersistence = true;
-            cfg->sessionPersistenceRoot   = root;
+            auto cfg                   = std::make_shared<agentxx::agent::AgentConfig>();
+            cfg->model.baseUrl         = baseUrl;
+            cfg->model.apiKey          = "EMPTY";
+            cfg->model.modelName       = "test-sim";
+            cfg->prompt.systemPrompt   = "You are a helpful assistant.";
+            cfg->enableSessionStore    = true;
+            cfg->sessionStoreDirectory = root;
             return cfg;
         };
 
@@ -581,12 +579,13 @@ static asio::awaitable<void> testSessionPersistenceE2E() {
                            {"index", 0},
                            {"id", "call_e2e_1"},
                            {"type", "function"},
-                           {"function",
-                       neograph::json{
-                           {"name", "agentxx_filesystem_list"},
-                           {"arguments", "{}"},
-                 }},
-                           },
+                           {
+                    "function",
+                    neograph::json{
+                              {"name", "agentxx_filesystem_list"},
+                              {"arguments", "{}"},
+                    },
+                }, },
         });
         // 模拟 thinking 模型: 首个请求携带 reasoning_content + tool_calls,
         // 验证展开出的 Think 历史消息可持久化并在重启后恢复
@@ -597,8 +596,7 @@ static asio::awaitable<void> testSessionPersistenceE2E() {
             CodeAgent agent(makeCfg());
             co_await agent.init();
 
-            auto result
-                = co_await agent.runConversationTurnAsync("e2e-thread", "Hello", true, nullptr);
+            auto result = co_await agent.runTurnAsync("e2e-thread", "Hello", true, nullptr);
             XX_TEST_EXPECT_FALSE(result.hasError);
             XX_TEST_EXPECT_FALSE(result.interrupted);
 
@@ -621,9 +619,9 @@ static asio::awaitable<void> testSessionPersistenceE2E() {
             );
             XX_TEST_EXPECT_EQ(id, size_t{1});
 
-            // 落盘检查: 目录布局 {root}/{threadId}/{session.db, share_store.db}
-            auto dir = fs::path(root)
-                       / agentxx::agent::SessionPersistence::sanitizeThreadId("e2e-thread");
+            // 落盘检查: 目录布局 {root}/{sessionId}/{session.db, share_store.db}
+            auto dir
+                = fs::path(root) / agentxx::agent::SessionStore::sanitizeSessionId("e2e-thread");
             XX_TEST_EXPECT_TRUE(fs::exists(dir / "session.db"));
             XX_TEST_EXPECT_TRUE(fs::exists(dir / "share_store.db"));
         }
@@ -654,7 +652,7 @@ static asio::awaitable<void> testSessionPersistenceE2E() {
             XX_TEST_EXPECT_TRUE(sess->llmMessages.is_array());
             XX_TEST_EXPECT_TRUE(sess->llmMessages.size() >= size_t{2});
             // msg id 延续
-            auto newId = sess->appendHistory(agentxx::agent::ViewMessage::makeText(
+            auto newId = sess->appendViewMessage(agentxx::agent::ViewMessage::makeText(
                 agentxx::agent::ViewMessage::Role::Assistant,
                 "extra"
             ));

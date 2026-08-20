@@ -248,8 +248,7 @@ Options:
         } else if (arg == "--ssl-key" && i + 1 < argn) {
             ++i;
             sslKeyFile = argv[i];
-        } else if (arg == "tui" || arg == "cli" || arg == "server" || arg == "acp"
-                   || arg == "train") {
+        } else if (arg == "tui" || arg == "cli" || arg == "server" || arg == "acp" || arg == "train") {
             mode = arg;
         } else {
             XX_LOGE("Unknown arg: `{}`", arg);
@@ -320,7 +319,7 @@ Options:
     //   Linux/macOS: ~/.agentxx/, Windows: %APPDATA%/agentxx/)
     // - 其他值: 展开 `~` 为用户主目录; 相对路径按程序工作目录解析为绝对路径
     // - 数据子路径: {dataDir}/sqlite/global.db (全局设置),
-    //   {dataDir}/sqlite/sessions/{threadId}/ (会话数据),
+    //   {dataDir}/sqlite/sessions/{sessionId}/ (会话数据),
     //   {dataDir}/sqlite/codegraph/... (CodeGraph 索引)
     std::string resolvedDataDir;
     if (!yamlCfg.dataDir.empty()) {

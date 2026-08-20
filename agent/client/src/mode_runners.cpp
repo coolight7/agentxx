@@ -42,7 +42,7 @@ namespace agentxx {
 namespace client {
 
 // ---------------------------------------------------------------------------
-// 会话 threadId 生成
+// 会话 sessionId 生成
 // ---------------------------------------------------------------------------
 
 /// 随机数兜底: random_device 在极端环境 (部分旧 Android/嵌入式) 可能抛异常,
@@ -60,12 +60,12 @@ static uint32_t randomSeed() {
     );
 }
 
-/// 生成尽量唯一的会话 threadId:
+/// 生成尽量唯一的会话 sessionId:
 /// - 高精度时间戳: 区分不同时刻启动的会话 (纳秒级)
 /// - 进程 PID:     区分同一主机上的不同进程 (多次启动 agentxx)
 /// - 随机数:       增加不可预测性, 避免并发启动碰撞
 /// - 自增序号:     同进程内极端同纳秒多次调用亦唯一
-std::string generateUniqueThreadId() {
+std::string generateUniqueSessionId() {
     const auto ts = std::chrono::high_resolution_clock::now().time_since_epoch().count();
 #ifdef _WIN32
     const long pid = static_cast<long>(::GetCurrentProcessId());
@@ -89,12 +89,12 @@ template<typename IoT, typename AdapterT>
 static std::shared_ptr<agentxx::plugin::ClientPluginManager> setupClientPlugins(
     asio::any_io_executor      ex,
     std::shared_ptr<IoT>       io,
-    const std::string&         threadId,
+    const std::string&         sessionId,
     const ClientPluginConfigs& plugins
 ) {
     auto mgr = std::make_shared<agentxx::plugin::ClientPluginManager>(ex);
     mgr->setUiAdapter(std::make_shared<AdapterT>(io));
-    mgr->setThreadId(threadId);
+    mgr->setSessionId(sessionId);
     // TUI 端点: 组件上下文 (ctx_.pluginManager) 在 start() 的 UI 线程构建时
     // 读取, 故 setPluginManager 必须在 start() 之前调用 (见各模式装配顺序)
     if constexpr (std::is_same_v<IoT, TUIClientAgentIO>) {
@@ -145,7 +145,7 @@ static std::shared_ptr<agent::SessionServerAgentIO> setupLocalUnifiedDirect(
     asio::any_io_executor               clientEx,
     std::shared_ptr<agent::CodeAgent>   agent,
     std::shared_ptr<agent::AgentIOBase> clientIO,
-    const std::string&                  threadId
+    const std::string&                  sessionId
 ) {
     auto agentEx = agent->ioCtx->get_executor();
     auto [clientTransport, serverTransport]
@@ -157,8 +157,8 @@ static std::shared_ptr<agent::SessionServerAgentIO> setupLocalUnifiedDirect(
 
     // 服务端: SessionServerAgentIO 持有 server transport
     agent::SessionServerAgentIO::Config scCfg;
-    scCfg.threadId = threadId;
-    auto serverIO  = std::make_shared<agent::SessionServerAgentIO>(agentEx, agent, scCfg);
+    scCfg.sessionId = sessionId;
+    auto serverIO   = std::make_shared<agent::SessionServerAgentIO>(agentEx, agent, scCfg);
     serverIO->setTransport(std::shared_ptr<agent::AgentIOTransportBase>(std::move(serverTransport))
     );
 
@@ -168,7 +168,7 @@ static std::shared_ptr<agent::SessionServerAgentIO> setupLocalUnifiedDirect(
     // - 回调内 clientIO 为 shared_ptr 捕获 (TUI 存活期安全); StdIO 端点
     //   不覆写 onServerProgress, 回调为 no-op
     if (auto ctx = agent->agentContext) {
-        ctx->startupNotifier = [clientIO](std::string_view step) {
+        ctx->initNotifier = [clientIO](std::string_view step) {
             clientIO->onServerProgress(step);
         };
     }
@@ -194,10 +194,10 @@ static std::shared_ptr<agent::SessionServerAgentIO> setupLocalUnifiedDirect(
     //   init 前的用户输入会先缓存在 inputChannel, run 启动后正常消费)
     asio::co_spawn(
         *agent->ioCtx,
-        [agent, serverIO, clientIO, threadId]() -> asio::awaitable<void> {
+        [agent, serverIO, clientIO, sessionId]() -> asio::awaitable<void> {
             co_await agent->init();
             // 宿主 (进程级): 主 agent 与子代理平等注册, 经 HostBus 交互;
-            // attachRoot 在根 agent 总线上 serve 子代理委派 (service.subagent),
+            // attachRoot 在根 agent 总线上 registerServer 子代理委派 (service.subagent),
             // 子代理由宿主派生独立 agent 运行 (独立 AgentContext/engine)
             // - 须经 shared_ptr 持有: 总线 handler 以 weak_ptr 捕获, 避免悬空 this
             // - 注: MSVC 不支持带默认成员初始化器的聚合 + 指定初始化器,
@@ -209,7 +209,7 @@ static std::shared_ptr<agent::SessionServerAgentIO> setupLocalUnifiedDirect(
             // 拉取启动信息 (MCP/Skill/Memory): 须在 init 完成后发送 —— transport 接收循环
             // 已先于 init 启动, 若此时 (init 前) 发送会立即得到空列表 (组件尚未加载),
             // 客户端将永远显示不出已加载的组件
-            clientIO->requestAppendComponentInfo(threadId);
+            clientIO->requestAppendComponentInfo(sessionId);
             // 通知客户端: agent-io 就绪 (init/组件加载完成, 会话驱动循环即将
             // 启动并开始消费用户输入)。客户端 (TUI) 据此解除"启动中"输入限制,
             // 刷新连接前排队输入 (此时发送的输入由 agent-io 端 inputChannel 缓存,
@@ -230,7 +230,7 @@ static std::shared_ptr<agent::SessionServerAgentIO> setupLocalUnifiedDirect(
     );
 
     // 发送 hello 触发服务端重放/同步
-    clientIO->sendToPeer(agent::WireHello{threadId, "", 0, ""});
+    clientIO->sendToPeer(agent::WireHello{sessionId, "", 0, ""});
 
     return serverIO;
 }
@@ -258,15 +258,19 @@ static asio::awaitable<void>
     auto clientEx = co_await asio::this_coro::executor;
     auto io       = std::make_shared<StdIOClientAgentIO>();
     // 每次启动生成唯一会话 id, 避免多实例/多次启动共用 "session" 导致会话串扰
-    const std::string threadId = generateUniqueThreadId();
-    io->setThreadId(threadId);
+    const std::string sessionId = generateUniqueSessionId();
+    io->setSessionId(sessionId);
     // client 插件系统: 装配 (事件接收器) + 加载 (sides 过滤在管理器内完成)
-    auto pluginMgr
-        = setupClientPlugins<StdIOClientAgentIO, CliPluginAdapter>(clientEx, io, threadId, plugins);
+    auto pluginMgr = setupClientPlugins<StdIOClientAgentIO, CliPluginAdapter>(
+        clientEx,
+        io,
+        sessionId,
+        plugins
+    );
     co_await pluginMgr->loadConfiguredClientPlugins(plugins);
 
     XX_LOGI("======= Agentxx Client (CLI, in-process unified) =======");
-    auto serverIO = setupLocalUnifiedDirect(clientEx, agent, io, threadId);
+    auto serverIO = setupLocalUnifiedDirect(clientEx, agent, io, sessionId);
     // CLI 输入循环: 从 stdin 读取并发送 (插件命令先拦截)
     std::cout << "\n>>> " << std::flush;
     for (;;) {
@@ -281,7 +285,7 @@ static asio::awaitable<void>
             std::cout << ">>> " << std::flush;
             continue;
         }
-        io->sendToPeer(agent::WireUserInput{threadId, *input});
+        io->sendToPeer(agent::WireUserInput{sessionId, *input});
     }
     // 停止服务端点并等待驱动循环退出 (避免 io_context 析构时销毁其协程导致 use-after-free)
     serverIO->stop();
@@ -303,26 +307,30 @@ static asio::awaitable<void> runLocalTuiUnifiedAsync(
 ) {
     auto clientEx = co_await asio::this_coro::executor;
     // 每次启动生成唯一会话 id, 避免多实例/多次启动共用 "session" 导致会话串扰
-    const std::string threadId = generateUniqueThreadId();
+    const std::string sessionId = generateUniqueSessionId();
 
     // 注意: TUI 不持有 AgentContext/Session (属于 agent-io 线程), 所有
     // agent 侧信息 (模型列表/上下文统计/LLM 上下文) 均经 Wire 消息由服务端获取
-    auto tui
-        = std::make_shared<TUIClientAgentIO>(clientEx, threadId, resolveTuiTheme(), permissionMode);
+    auto tui = std::make_shared<TUIClientAgentIO>(
+        clientEx,
+        sessionId,
+        resolveTuiTheme(),
+        permissionMode
+    );
     // client 插件系统: 装配须在 start() 之前 (ctx_.pluginManager 在 UI 线程
     // 构建组件时读取); 加载 (协程) 在 start() 之后进行, 期间注册的面板经
     // postToUi 排队, UI 线程启动后正常挂载
     auto pluginMgr
-        = setupClientPlugins<TUIClientAgentIO, TuiPluginAdapter>(clientEx, tui, threadId, plugins);
+        = setupClientPlugins<TUIClientAgentIO, TuiPluginAdapter>(clientEx, tui, sessionId, plugins);
     tui->start();
     co_await pluginMgr->loadConfiguredClientPlugins(plugins);
 
-    auto serverIO = setupLocalUnifiedDirect(clientEx, agent, tui, threadId);
+    auto serverIO = setupLocalUnifiedDirect(clientEx, agent, tui, sessionId);
 
     // 请求服务端当前模型信息 (WireModelInfo 回填状态栏模型名/弹窗列表):
     // 本地模式无上下文可解析默认模型, 必须显式请求; 发送时机在 transport 就绪后
     // 即可 (init 前处理 WireGetModel 安全: modelRegistry 为空时回退 agentConfig)
-    tui->sendToPeer(agent::WireGetModel{threadId});
+    tui->sendToPeer(agent::WireGetModel{sessionId});
 
     // TUI 模式下输入由 FTXUI 事件循环驱动 (sendUserInputLocked 经 transport 发送)
     // 此处等待 TUI 停止
@@ -365,14 +373,14 @@ static asio::awaitable<void> runRemoteCliAsync(
     auto ex = co_await asio::this_coro::executor;
     auto io = std::make_shared<StdIOClientAgentIO>();
 
-    // 每次启动生成唯一会话 id: 服务端按 threadId 区分会话,
+    // 每次启动生成唯一会话 id: 服务端按 sessionId 区分会话,
     // 共用 "session" 会使多个客户端实例挂到同一会话上互相串扰
-    const std::string threadId = generateUniqueThreadId();
-    io->setThreadId(threadId);
+    const std::string sessionId = generateUniqueSessionId();
+    io->setSessionId(sessionId);
     // client 插件系统: 装配 + 加载 (远程 client 进程只加载 client 侧插件;
     // 与 agent 侧条目的 sides 过滤由管理器完成)
     auto pluginMgr
-        = setupClientPlugins<StdIOClientAgentIO, CliPluginAdapter>(ex, io, threadId, plugins);
+        = setupClientPlugins<StdIOClientAgentIO, CliPluginAdapter>(ex, io, sessionId, plugins);
     co_await pluginMgr->loadConfiguredClientPlugins(plugins);
 
     agent::WsAgentIOTransport::Config transportCfg;
@@ -391,7 +399,7 @@ static asio::awaitable<void> runRemoteCliAsync(
     XX_LOGI("======= Agentxx Remote Client (CLI, auto-reconnect) =======");
 
     // 连接并握手
-    agent::WireHello hello{threadId, token, 0, ""};
+    agent::WireHello hello{sessionId, token, 0, ""};
     bool             ok = co_await transport->connect(hello);
     if (!ok) {
         XX_LOGE("[remote_cli] connection failed");
@@ -400,14 +408,14 @@ static asio::awaitable<void> runRemoteCliAsync(
 
     // 指定模型 (经独立的模型选择通道, 而非随每条输入发送)
     if (!model.empty()) {
-        io->requestSelectModel(threadId, model);
+        io->requestSelectModel(sessionId, model);
     }
 
     // 启动接收循环
     asio::co_spawn(ex, io->runTransportLoop(), asio::detached);
 
     // 客户端启动后拉取一次启动信息 (MCP/Skill/Memory)
-    io->requestAppendComponentInfo(threadId);
+    io->requestAppendComponentInfo(sessionId);
 
     // 输入循环 (插件命令先拦截)
     std::cout << "\n>>> " << std::flush;
@@ -423,7 +431,7 @@ static asio::awaitable<void> runRemoteCliAsync(
             std::cout << ">>> " << std::flush;
             continue;
         }
-        io->sendToPeer(agent::WireUserInput{threadId, *input});
+        io->sendToPeer(agent::WireUserInput{sessionId, *input});
     }
     transport->close();
 }
@@ -457,17 +465,17 @@ static asio::awaitable<void> runRemoteTuiAsync(
 ) {
     auto ex = co_await asio::this_coro::executor;
 
-    // 每次启动生成唯一会话 id: 服务端按 threadId 区分会话,
+    // 每次启动生成唯一会话 id: 服务端按 sessionId 区分会话,
     // 共用 "session" 会使多个客户端实例挂到同一会话上互相串扰
-    const std::string threadId = generateUniqueThreadId();
+    const std::string sessionId = generateUniqueSessionId();
     // 注意: TUI 不持有 AgentContext/Session (属于 agent-io 线程),
     // 模型名/上下文统计等均经 Wire 消息由服务端获取
-    auto io = std::make_shared<TUIClientAgentIO>(ex, threadId, resolveTuiTheme(), permissionMode);
+    auto io = std::make_shared<TUIClientAgentIO>(ex, sessionId, resolveTuiTheme(), permissionMode);
     io->setRemoteUrl(url);
     // client 插件系统: 装配须在 start() 之前 (ctx_.pluginManager 在 UI 线程
     // 构建组件时读取); 加载在 start() 后进行 (面板经 postToUi 排队挂载)
     auto pluginMgr
-        = setupClientPlugins<TUIClientAgentIO, TuiPluginAdapter>(ex, io, threadId, plugins);
+        = setupClientPlugins<TUIClientAgentIO, TuiPluginAdapter>(ex, io, sessionId, plugins);
     io->start();
     co_await pluginMgr->loadConfiguredClientPlugins(plugins);
 
@@ -481,7 +489,7 @@ static asio::awaitable<void> runRemoteTuiAsync(
     //   返回 false → banner 显示"连接失败 + [重试]"等待用户点击
     // - 用户点击重试 → requestRetry() 置 Connecting 并唤醒 waitRetry 重新循环
     // - TUI 退出 (running_=false) 时流程尽快终止
-    agent::WireHello hello{threadId, token, 0, ""};
+    agent::WireHello hello{sessionId, token, 0, ""};
     bool             connected = false;
     while (!connected) {
         agent::WsAgentIOTransport::Config transportCfg;
@@ -527,14 +535,14 @@ static asio::awaitable<void> runRemoteTuiAsync(
 
     // 指定模型 (经独立的模型选择通道); 先于 GetModel 发送, 使其返回所选模型
     if (!model.empty()) {
-        io->requestSelectModel(threadId, model);
+        io->requestSelectModel(sessionId, model);
     }
 
     // 请求服务端当前模型信息, 待 onPeerMessage 收到 WireModelInfo 后更新显示
-    io->sendToPeer(agent::WireGetModel{threadId});
+    io->sendToPeer(agent::WireGetModel{sessionId});
 
     // 客户端启动后拉取一次启动信息 (MCP/Skill/Memory)
-    io->requestAppendComponentInfo(threadId);
+    io->requestAppendComponentInfo(sessionId);
 
     // 启动接收循环
     asio::co_spawn(ex, io->runTransportLoop(), asio::detached);

@@ -177,7 +177,7 @@ static bool modelUsesMaxCompletionTokens(std::string_view model) {
     return model.starts_with("o1") || model.starts_with("o3") || model.starts_with("o4");
 }
 
-/// agentxx 内部配置字段 (无对应 API 语义), 透传 extra_config 时必须过滤:
+/// agentxx 内部配置字段 (无对应 API 语义), 透传 extraConfig 时必须过滤:
 /// 原样发送给上游会触发部分模型 (如 gpt-5.6-luna) HTTP 400 报错
 static bool isInternalExtraConfigField(std::string_view key) {
     return key == "preserve_thinking";
@@ -304,8 +304,8 @@ neograph::json OpenAIProvider::buildBody(const neograph::CompletionParams& param
         }
     }
 
-    if (config_.extra_config.is_object()) {
-        for (const auto& [key, val] : config_.extra_config.items()) {
+    if (config_.extraConfig.is_object()) {
+        for (const auto& [key, val] : config_.extraConfig.items()) {
             if (body.contains(key)) {
                 continue;
             }
@@ -338,7 +338,7 @@ neograph::json OpenAIProvider::buildResponsesBody(const neograph::CompletionPara
     body["model"] = params.model.empty() ? config_.modelName : params.model;
 
     // Codex/Responses API 默认行为: 不落盘
-    // (reasoning 思考配置不再硬编码, 通过 extra_config / params.extra_fields 的
+    // (reasoning 思考配置不再硬编码, 通过 extraConfig / params.extra_fields 的
     //  "reasoning" 字段控制: {"effort": "none|minimal|low|medium|high|xhigh",
     //   "summary": "detailed|auto|concise"})
     body["store"] = false;
@@ -353,7 +353,7 @@ neograph::json OpenAIProvider::buildResponsesBody(const neograph::CompletionPara
     //     此时既不请求摘要也不回传历史 reasoning summary 输入
     //   - 也可通过 extra_api_config 显式指定 include 数组覆盖 (优先于默认值)
     if (config_.sendThinking && config_.requestReasoningSummary
-        && !config_.extra_config.contains("include")) {
+        && !config_.extraConfig.contains("include")) {
         body["include"] = neograph::json::array({"reasoning.summary_text"});
     }
 
@@ -485,8 +485,8 @@ neograph::json OpenAIProvider::buildResponsesBody(const neograph::CompletionPara
         body["max_output_tokens"] = params.max_tokens;
     }
 
-    if (config_.extra_config.is_object()) {
-        for (const auto& [key, val] : config_.extra_config.items()) {
+    if (config_.extraConfig.is_object()) {
+        for (const auto& [key, val] : config_.extraConfig.items()) {
             if (body.contains(key)) {
                 continue;
             }

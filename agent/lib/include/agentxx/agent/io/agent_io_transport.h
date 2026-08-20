@@ -20,7 +20,7 @@ namespace agent {
 // ---------------------------------------------------------------------------
 
 struct WireHello {
-    std::string threadId;
+    std::string sessionId;
     std::string token;
     uint64_t    lastSeq = 0;
     std::string tailHash;
@@ -29,28 +29,28 @@ struct WireHello {
 
 struct WireHelloAck {
     bool                     ok = false;
-    std::string              threadId;
+    std::string              sessionId;
     std::string              tailHash;
     std::vector<std::string> models;
 };
 
 struct WireUserInput {
-    std::string threadId;
+    std::string sessionId;
     std::string text;
 };
 
 struct WireCancel {
-    std::string threadId;
+    std::string sessionId;
 };
 
 struct WireSelectModel {
-    std::string threadId;
+    std::string sessionId;
     std::string model;
 };
 
 struct WireInterruptRequest {
     int64_t     id = 0;
-    std::string threadId;
+    std::string sessionId;
     std::string node;
     std::string value;
     std::string argJson;
@@ -65,11 +65,11 @@ struct WireInterruptResponse {
 /// - id 对应 WireInterruptRequest.id; 客户端应将对应未操作的中断消息标记为过期
 struct WireInterruptExpired {
     int64_t     id = 0;
-    std::string threadId;
+    std::string sessionId;
 };
 
 struct WireTurnResult {
-    std::string threadId;
+    std::string sessionId;
     bool        hasError = false;
     std::string errorMessage;
     bool        interrupted = false;
@@ -97,7 +97,7 @@ struct WireLog {
 
 /// 客户端请求当前模型信息 (Client -> Server)
 struct WireGetModel {
-    std::string threadId;
+    std::string sessionId;
 };
 
 /// 服务端模型信息响应 (Server -> Client)
@@ -108,7 +108,7 @@ struct WireModelInfo {
 
 /// 客户端请求会话启动信息 (Client -> Server): 拉取已加载的 MCP/Skill/Memory 列表
 struct WireGetAppendComponentInfo {
-    std::string threadId;
+    std::string sessionId;
 };
 
 /// 服务端加载组件响应 (Server -> Client): collectAppendComponentInfo 收集的结果
@@ -118,7 +118,7 @@ struct WireAppendComponentInfo {
 
 /// 客户端请求当前会话 LLM 上下文消息 (Client -> Server)
 struct WireGetContext {
-    std::string threadId;
+    std::string sessionId;
 };
 
 /// 服务端 LLM 上下文消息响应 (Server -> Client)
@@ -127,7 +127,7 @@ struct WireContextMessages {
 };
 
 /// 客户端请求持久化会话列表 (Client -> Server): 会话选择弹窗数据源
-/// - 不携带 threadId: 列举全部持久化会话, 与当前连接会话无关
+/// - 不携带 sessionId: 列举全部持久化会话, 与当前连接会话无关
 struct WireListSessions {};
 
 /// 服务端持久化会话列表响应 (Server -> Client)
@@ -137,16 +137,16 @@ struct WireSessionList {
 };
 
 /// 客户端请求切换当前连接的会话 (Client -> Server): 将会话端点重新绑定到
-/// 目标 threadId, 服务端加载其历史并回推 Sync/模型/上下文统计 (见
+/// 目标 sessionId, 服务端加载其历史并回推 Sync/模型/上下文统计 (见
 /// SessionServerAgentIO::switchSession)
 struct WireSwitchSession {
-    std::string threadId;
+    std::string sessionId;
 };
 
 /// 客户端记住权限选择 (Client -> Server): 将路径规则注册到服务端权限中间件,
 /// 后续访问该路径或其子目录时按规则直接允许/拒绝, 不再询问
 struct WireSetPermission {
-    std::string threadId;
+    std::string sessionId;
     /// 标准化绝对路径 (规则作用于该路径及其子目录, 最长前缀匹配)
     std::string path;
     /// true = 允许 (PermissionOperator::ALLOW), false = 拒绝 (PermissionOperator::DENY)
@@ -250,12 +250,12 @@ public:
     /// 传输是否仍然存活
     virtual bool alive() const noexcept = 0;
 
-    /// 会话切换通知: 更新客户端重连时握手携带的 threadId, 并复位增量重放状态
+    /// 会话切换通知: 更新客户端重连时握手携带的 sessionId, 并复位增量重放状态
     /// (新会话的 delta seq 独立编号, 旧会话的 seq/tailHash 不再适用)。
     /// - WS 客户端模式: 覆写实现 (见 WsAgentIOTransport)
     /// - Channel/服务端模式: 无重连, 默认 no-op
     /// 线程安全: 可从任意线程调用 (实现内部投递回自身 executor)
-    virtual void updateReconnectThreadId(std::string /*newThreadId*/) {}
+    virtual void updateReconnectSessionId(std::string /*newSessionId*/) {}
 };
 
 } // namespace agent

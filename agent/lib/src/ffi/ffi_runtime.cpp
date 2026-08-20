@@ -148,7 +148,7 @@ std::string FfiAgentRuntime::drainLogs() {
 // 构造 / 配置
 // ---------------------------------------------------------------------------
 
-std::string FfiAgentRuntime::generateThreadId() {
+std::string FfiAgentRuntime::generateSessionId() {
     const auto ts = std::chrono::high_resolution_clock::now().time_since_epoch().count();
 #ifdef _WIN32
     const long pid = static_cast<long>(::GetCurrentProcessId());
@@ -160,7 +160,7 @@ std::string FfiAgentRuntime::generateThreadId() {
 }
 
 FfiAgentRuntime::FfiAgentRuntime() :
-    threadId_(generateThreadId()) {}
+    sessionId_(generateSessionId()) {}
 
 std::shared_ptr<FfiAgentRuntime> FfiAgentRuntime::create(
     const char*             config_json,
@@ -200,11 +200,11 @@ bool FfiAgentRuntime::buildConfigs(
             err = "config_json 须为 JSON 对象";
             return false;
         }
-        config->dataDir                  = jsonStr(cfgJ, "dataDir", "");
-        config->enableSessionPersistence = jsonBool(cfgJ, "enableSessionPersistence", false);
-        config->sessionPersistenceRoot   = jsonStr(cfgJ, "sessionPersistenceRoot", "");
-        config->agentName                = jsonStr(cfgJ, "agentName", config->agentName);
-        config->llmMaxRetry              = jsonInt(cfgJ, "llmMaxRetry", config->llmMaxRetry);
+        config->dataDir               = jsonStr(cfgJ, "dataDir", "");
+        config->enableSessionStore    = jsonBool(cfgJ, "enableSessionStore", false);
+        config->sessionStoreDirectory = jsonStr(cfgJ, "sessionStoreDirectory", "");
+        config->agentName             = jsonStr(cfgJ, "agentName", config->agentName);
+        config->llmMaxRetry           = jsonInt(cfgJ, "llmMaxRetry", config->llmMaxRetry);
         config->permissionMode = permissionModeFromString(jsonStr(cfgJ, "permissionMode", "ask"));
         jsonStrArray(cfgJ, "permissionAllowPaths", config->permissionAllowPaths);
         jsonStrArray(cfgJ, "permissionDenyPaths", config->permissionDenyPaths);
@@ -290,7 +290,7 @@ bool FfiAgentRuntime::buildConfigs(
         }
     }
     if (mj.contains("extraConfig") && mj["extraConfig"].is_object()) {
-        mc.extra_config = mj["extraConfig"];
+        mc.extraConfig = mj["extraConfig"];
     }
     if (mc.modelName.empty()) {
         mc.modelName = mc.name.empty() ? "Agentxx" : mc.name;
@@ -349,18 +349,18 @@ int FfiAgentRuntime::start(std::string& err) {
 
     // FFI client 端点
     clientIO_ = std::make_shared<FfiClientAgentIO>(agentEx, callbacks_);
-    clientIO_->setThreadId(threadId_);
+    clientIO_->setSessionId(sessionId_);
     clientIO_->setTransport(std::move(clientTrans));
 
     // 服务端点 (被 BaseAgent 驱动)
     agent::SessionServerAgentIO::Config scCfg;
-    scCfg.threadId         = threadId_;
+    scCfg.sessionId        = sessionId_;
     scCfg.interruptTimeout = interruptTimeout_;
     serverIO_              = std::make_shared<agent::SessionServerAgentIO>(agentEx, agent_, scCfg);
     serverIO_->setTransport(std::move(serverTrans));
 
     // 启动进度 → 日志环形缓冲 (EVT_READY 前的启动过程日志, 可经 drain 取走)
-    agent_->agentContext->startupNotifier = [this](std::string_view step) {
+    agent_->agentContext->initNotifier = [this](std::string_view step) {
         pushLogItem(LogItem{2, fmt::format("[startup] {}", step)});
     };
 
@@ -413,8 +413,8 @@ void FfiAgentRuntime::startOnIoThread() {
         asio::detached
     );
     // 4) hello 触发服务端全量同步/重放; 请求模型信息供 EVT_MODEL_INFO
-    clientIO_->sendToPeer(agent::WireHello{threadId_, "", 0, ""});
-    clientIO_->sendToPeer(agent::WireGetModel{threadId_});
+    clientIO_->sendToPeer(agent::WireHello{sessionId_, "", 0, ""});
+    clientIO_->sendToPeer(agent::WireGetModel{sessionId_});
 }
 
 asio::awaitable<void> FfiAgentRuntime::runAgentMain() {
@@ -446,7 +446,7 @@ asio::awaitable<void> FfiAgentRuntime::runAgentMain() {
     host_->attachRoot(agent_);
 
     // 启动组件信息 (init 完成后拉取; 响应经 EVT_COMPONENTS 通知)
-    clientIO_->requestAppendComponentInfo(threadId_);
+    clientIO_->requestAppendComponentInfo(sessionId_);
 
     // 通知客户端: 服务端就绪 (EVT_READY; 用户输入自此可被有效消费)。
     // 须先置 Ready 再通知: 回调内 (宿主收到 EVT_READY 后) 立即发起的
@@ -454,7 +454,7 @@ asio::awaitable<void> FfiAgentRuntime::runAgentMain() {
     state_ = State::Ready;
     clientIO_->notifyServerReady();
 
-    // 会话驱动循环: 消费用户输入 → runConversationTurnAsync → 推送事件
+    // 会话驱动循环: 消费用户输入 → runTurnAsync → 推送事件
     // (持续运行直到 stop(); 停止后协程结束)
     co_await serverIO_->run();
 }
@@ -543,7 +543,7 @@ int FfiAgentRuntime::sendInput(std::string_view text, std::string& err) {
         return AGENTXX_ERR_INVALID;
     }
     auto clientIO = clientIO_;
-    auto tid      = threadId_;
+    auto tid      = sessionId_;
     auto textStr  = std::string{text};
     // 与 TUI/CLI 同路径: WireUserInput → 服务端 inputChannel
     asio::post(*ioCtx_, [clientIO, tid = std::move(tid), text = std::move(textStr)]() mutable {
@@ -558,7 +558,7 @@ int FfiAgentRuntime::cancel(std::string& err) {
         return AGENTXX_ERR_STATE;
     }
     auto clientIO = clientIO_;
-    auto tid      = threadId_;
+    auto tid      = sessionId_;
     asio::post(*ioCtx_, [clientIO, tid = std::move(tid)]() mutable {
         clientIO->sendToPeer(agent::WireCancel{std::move(tid)});
     });
@@ -575,7 +575,7 @@ int FfiAgentRuntime::selectModel(std::string_view modelName, std::string& err) {
         return AGENTXX_ERR_INVALID;
     }
     auto clientIO = clientIO_;
-    auto tid      = threadId_;
+    auto tid      = sessionId_;
     auto model    = std::string{modelName};
     asio::post(*ioCtx_, [clientIO, tid = std::move(tid), model = std::move(model)]() mutable {
         clientIO->sendToPeer(agent::WireSelectModel{std::move(tid), std::move(model)});
@@ -593,7 +593,7 @@ int FfiAgentRuntime::setPermission(std::string_view path, int allow, int op, std
         return AGENTXX_ERR_INVALID;
     }
     auto clientIO = clientIO_;
-    auto tid      = threadId_;
+    auto tid      = sessionId_;
     auto pathStr  = std::string{path};
     asio::post(
         *ioCtx_,
@@ -609,17 +609,17 @@ int FfiAgentRuntime::setPermission(std::string_view path, int allow, int op, std
     return AGENTXX_OK;
 }
 
-int FfiAgentRuntime::switchSession(std::string_view threadId, std::string& err) {
+int FfiAgentRuntime::switchSession(std::string_view sessionId, std::string& err) {
     if (!stateUsable(state())) {
         err = "状态错误: 未启动或已停止";
         return AGENTXX_ERR_STATE;
     }
-    if (threadId.empty()) {
-        err = "thread_id 为空";
+    if (sessionId.empty()) {
+        err = "sessionId 为空";
         return AGENTXX_ERR_INVALID;
     }
     auto clientIO = clientIO_;
-    auto newTid   = std::string{threadId};
+    auto newTid   = std::string{sessionId};
     asio::post(*ioCtx_, [clientIO, newTid = std::move(newTid)]() mutable {
         clientIO->sendToPeer(agent::WireSwitchSession{std::move(newTid)});
     });
@@ -681,7 +681,7 @@ std::string FfiAgentRuntime::syncQuery(
 
 std::string FfiAgentRuntime::getModelInfo(std::string& err) {
     auto clientIO = clientIO_;
-    auto tid      = threadId_;
+    auto tid      = sessionId_;
     return syncQuery(
         FfiClientAgentIO::SyncKind::ModelInfo,
         [clientIO, tid = std::move(tid)]() mutable {
@@ -693,7 +693,7 @@ std::string FfiAgentRuntime::getModelInfo(std::string& err) {
 
 std::string FfiAgentRuntime::getContextMessages(std::string& err) {
     auto clientIO = clientIO_;
-    auto tid      = threadId_;
+    auto tid      = sessionId_;
     return syncQuery(
         FfiClientAgentIO::SyncKind::ContextMessages,
         [clientIO, tid = std::move(tid)]() mutable {

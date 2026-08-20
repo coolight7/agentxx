@@ -58,9 +58,9 @@ protected:
     /// 子类实现: 将 cp 持久化为该 thread 的最新 checkpoint
     virtual void saveImpl(const neograph::graph::Checkpoint& cp) = 0;
 
-    /// 子类实现: 淘汰 threadId 下除 keepId 外的全部历史数据
+    /// 子类实现: 淘汰 sessionId 下除 keepId 外的全部历史数据
     /// (历史 checkpoint, 以及挂载在历史 checkpoint 上的 pending writes)
-    virtual void evictImpl(std::string_view threadId, std::string_view keepId) = 0;
+    virtual void evictImpl(std::string_view sessionId, std::string_view keepId) = 0;
 };
 
 /**
@@ -115,7 +115,7 @@ public:
 protected:
 
     void saveImpl(const neograph::graph::Checkpoint& cp) override;
-    void evictImpl(std::string_view threadId, std::string_view keepId) override;
+    void evictImpl(std::string_view sessionId, std::string_view keepId) override;
 
 private:
 

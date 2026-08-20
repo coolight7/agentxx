@@ -2,7 +2,7 @@
 
 #include "agentxx/agent/base_agent.h"
 #include "agentxx/agent/context.h"
-#include "agentxx/agent/session_persistence.h"
+#include "agentxx/agent/session_store.h"
 #include "agentxx/middlewares/permission.h"
 #include "agentxx/plugin/plugin_manager.h"
 #include "agentxx/util/async_offload.h"
@@ -80,7 +80,7 @@ asio::awaitable<std::optional<std::string>> SessionServerAgentIO::waitInput() {
 }
 
 asio::awaitable<neograph::json> SessionServerAgentIO::handleInterrupt(
-    std::string_view /*threadId*/,
+    std::string_view /*sessionId*/,
     std::string_view interruptNode,
     std::string_view interruptValue,
     std::string_view interruptArgJson
@@ -97,11 +97,11 @@ asio::awaitable<neograph::json> SessionServerAgentIO::handleInterrupt(
     };
 
     sendToPeer(WireInterruptRequest{
-        .id       = id,
-        .threadId = config_.threadId,
-        .node     = std::string{interruptNode},
-        .value    = std::string{interruptValue},
-        .argJson  = std::string{interruptArgJson},
+        .id        = id,
+        .sessionId = config_.sessionId,
+        .node      = std::string{interruptNode},
+        .value     = std::string{interruptValue},
+        .argJson   = std::string{interruptArgJson},
     });
 
     neograph::json result      = neograph::json::array();
@@ -129,7 +129,7 @@ asio::awaitable<neograph::json> SessionServerAgentIO::handleInterrupt(
         // 超时/异常结束 (用户未响应): 通知客户端该中断已过期,
         // 使客户端将对应未操作的中断消息标记为过期并结束等待
         if (transport_ && transport_->alive()) {
-            sendToPeer(WireInterruptExpired{id, config_.threadId});
+            sendToPeer(WireInterruptExpired{id, config_.sessionId});
         }
     }
     co_return result;
@@ -153,7 +153,7 @@ void SessionServerAgentIO::onPeerMessage(WireMessage msg) {
             } else if constexpr (std::is_same_v<T, WireSelectModel>) {
                 auto agent = agent_.lock();
                 if (agent) {
-                    agent->selectModel(m.threadId, m.model);
+                    agent->selectModel(m.sessionId, m.model);
                 }
             } else if constexpr (std::is_same_v<T, WireInterruptResponse>) {
                 resolveInterrupt(m.id, std::move(m.result));
@@ -162,7 +162,7 @@ void SessionServerAgentIO::onPeerMessage(WireMessage msg) {
                 if (!agent) {
                     return;
                 }
-                std::string              currentModel = agent->getCurrentModelName(m.threadId);
+                std::string              currentModel = agent->getCurrentModelName(m.sessionId);
                 std::vector<std::string> models;
                 if (agent->agentContext && agent->agentContext->agentConfig) {
                     for (const auto& [name, mc] :
@@ -192,26 +192,27 @@ void SessionServerAgentIO::onPeerMessage(WireMessage msg) {
                 // 目录扫描 + SQLite 读取属阻塞 I/O, 卸载到 blockingPool 执行,
                 // 避免阻塞 agent io 线程; 完成后经 shared_from_this 回填响应
                 auto agent = agent_.lock();
-                if (!agent || !agent->agentContext || !agent->agentContext->sessionPersistence) {
+                if (!agent || !agent->agentContext
+                    || !agent->agentContext->sessions->sessionStore) {
                     sendToPeer(WireSessionList{});
                     return;
                 }
-                auto persistence = agent->agentContext->sessionPersistence;
-                auto self        = shared_from_this();
+                auto sessionStore = agent->agentContext->sessions->sessionStore;
+                auto self         = shared_from_this();
                 asio::co_spawn(
                     ex_,
-                    [self, persistence, agent]() -> asio::awaitable<void> {
+                    [self, sessionStore, agent]() -> asio::awaitable<void> {
                         std::vector<SessionInfo> sessions;
                         if (agent->agentContext->blockingPool) {
                             sessions
                                 = co_await agentxx::util::offloadAsync<std::vector<SessionInfo>>(
                                     *agent->agentContext->blockingPool,
-                                    [persistence]() -> asio::awaitable<std::vector<SessionInfo>> {
-                                        co_return persistence->listSessions();
+                                    [sessionStore]() -> asio::awaitable<std::vector<SessionInfo>> {
+                                        co_return sessionStore->listSessions();
                                     }
                                 );
                         } else {
-                            sessions = persistence->listSessions();
+                            sessions = sessionStore->listSessions();
                         }
                         self->sendToPeer(WireSessionList{std::move(sessions)});
                     },
@@ -219,7 +220,7 @@ void SessionServerAgentIO::onPeerMessage(WireMessage msg) {
                 );
             } else if constexpr (std::is_same_v<T, WireSwitchSession>) {
                 // 客户端请求切换会话 (弹窗选择后); 运行态拦截由客户端前置完成
-                switchSession(std::move(m.threadId));
+                switchSession(std::move(m.sessionId));
             } else if constexpr (std::is_same_v<T, WireSetPermission>) {
                 // 客户端记住权限选择: 注册路径规则到权限中间件,
                 // 后续访问该路径或其子目录时按规则直接允许/拒绝, 不再询问
@@ -294,18 +295,18 @@ void SessionServerAgentIO::handleHello(const WireHello& hello, std::vector<std::
             replaySync = buildFullSync();
         }
     } else {
-        if (sess && !sess->getFullHistoryCopy().empty()) {
+        if (sess && !sess->getFullViewMessagesCopy().empty()) {
             replaySync = buildFullSync();
         }
     }
 
     for (const auto& [id, p] : pending_) {
         pendingInterrupts.push_back(WireInterruptRequest{
-            .id       = id,
-            .threadId = config_.threadId,
-            .node     = p.node,
-            .value    = p.value,
-            .argJson  = p.argJson,
+            .id        = id,
+            .sessionId = config_.sessionId,
+            .node      = p.node,
+            .value     = p.value,
+            .argJson   = p.argJson,
         });
     }
 
@@ -313,10 +314,10 @@ void SessionServerAgentIO::handleHello(const WireHello& hello, std::vector<std::
     // 若先重放后 HelloAck, 全量 Sync/增量 Delta 会被客户端丢弃 → 重连后历史丢失。
     // HelloAck 之后发送的重放消息经客户端 recvQueue 缓冲, 由 runTransportLoop 正常处理。
     sendToPeer(WireHelloAck{
-        .ok       = true,
-        .threadId = config_.threadId,
-        .tailHash = std::move(tailHash),
-        .models   = std::move(models),
+        .ok        = true,
+        .sessionId = config_.sessionId,
+        .tailHash  = std::move(tailHash),
+        .models    = std::move(models),
     });
 
     for (const auto& d : replayDeltas) {
@@ -340,9 +341,9 @@ void SessionServerAgentIO::onDisconnect() {
 }
 
 void SessionServerAgentIO::switchSession(std::string newThreadId) {
-    if (newThreadId.empty() || newThreadId == config_.threadId) {
+    if (newThreadId.empty() || newThreadId == config_.sessionId) {
         // 空 id 非法; 同一会话无需切换 (历史已同步, 重复全量 Sync 反而闪烁)
-        if (newThreadId == config_.threadId) {
+        if (newThreadId == config_.sessionId) {
             // 仍回推一次全量 Sync: 客户端可能因本地状态异常需要校准
             auto sync = buildFullSync();
             sendToPeer(std::move(sync));
@@ -353,7 +354,10 @@ void SessionServerAgentIO::switchSession(std::string newThreadId) {
     if (turnActive_.load(std::memory_order_acquire)) {
         // 双重保护: 客户端已拦截运行态切换, 此处再兜底拒绝,
         // 避免轮次进行中被换走导致 Delta/输入错投到新会话
-        XX_LOGW("[session_ctrl] switchSession rejected: turn active (thread={})", config_.threadId);
+        XX_LOGW(
+            "[session_ctrl] switchSession rejected: turn active (thread={})",
+            config_.sessionId
+        );
         return;
     }
 
@@ -362,21 +366,21 @@ void SessionServerAgentIO::switchSession(std::string newThreadId) {
         return;
     }
 
-    const std::string oldThreadId = config_.threadId;
-    config_.threadId              = newThreadId;
+    const std::string oldThreadId = config_.sessionId;
+    config_.sessionId             = newThreadId;
     // delta 重放缓冲属于旧会话的 seq 空间, 新会话 seq 独立编号, 清空避免错配重放
     deltaBuffer_.clear();
     // 新会话对当前连接而言等同于首次接入: 重置 firstTurn_ 使首条输入走
     // resume_if_exists=true 的恢复路径 (与会话重启恢复行为一致)
     firstTurn_ = true;
 
-    XX_LOGI("[session_ctrl] switched session: {} -> {}", oldThreadId, config_.threadId);
+    XX_LOGI("[session_ctrl] switched session: {} -> {}", oldThreadId, config_.sessionId);
 
     // 回推新会话状态: 全量 Sync (历史消息) + 模型信息 + 上下文统计
     auto sync = buildFullSync();
     sendToPeer(std::move(sync));
 
-    std::string              currentModel = agent->getCurrentModelName(config_.threadId);
+    std::string              currentModel = agent->getCurrentModelName(config_.sessionId);
     std::vector<std::string> models;
     if (agent->agentContext->agentConfig) {
         for (const auto& [name, mc] : agent->agentContext->agentConfig->availableModels) {
@@ -488,7 +492,7 @@ asio::awaitable<void> SessionServerAgentIO::run() {
         // 一致转为错误消息通知客户端 (onRethrow), 避免异常逃逸 co_spawn 完成处理器;
         // 其余异常同样转为错误消息
         // 错误提示: agent 线程插入会话历史并发送 MessageTip Delta (覆盖
-        // runConversationTurnAsync 自身抛异常的兜底路径, 与主路径提示一致)
+        // runTurnAsync 自身抛异常的兜底路径, 与主路径提示一致)
         auto sendErrorTip = [&](std::string_view errmsg) {
             auto sess = session();
             if (!sess) {
@@ -496,7 +500,7 @@ asio::awaitable<void> SessionServerAgentIO::run() {
             }
             auto vm          = ViewMessage::makeText(ViewMessage::Role::Tip, std::string{errmsg});
             vm.tip->tipLevel = ViewMessage::TipLevel::Error;
-            const auto id    = sess->appendHistory(std::move(vm));
+            const auto id    = sess->appendViewMessage(std::move(vm));
             // 新产出的 Delta 必须分配会话级 seq (统一经 Session::nextDeltaSeq):
             // 重放缓冲依赖 seq 单调性, 未分配 seq (=0) 的 Delta 不会入缓冲,
             // 断线重连增量重放时该消息会丢失, 导致客户端历史与服务端不一致
@@ -511,15 +515,12 @@ asio::awaitable<void> SessionServerAgentIO::run() {
         };
         co_await agentxx::util::catchErrorAsync<bool>(
             [&]() -> asio::awaitable<bool> {
-                auto result = co_await agent->runConversationTurnAsync(
-                    config_.threadId,
-                    *input,
-                    firstTurn_,
-                    shared_from_this()
-                );
+                auto result
+                    = co_await agent
+                          ->runTurnAsync(config_.sessionId, *input, firstTurn_, shared_from_this());
                 firstTurn_ = false;
                 sendToPeer(WireTurnResult{
-                    .threadId     = config_.threadId,
+                    .sessionId    = config_.sessionId,
                     .hasError     = result.hasError,
                     .errorMessage = result.errorMessage,
                     .interrupted  = result.interrupted,
@@ -531,7 +532,7 @@ asio::awaitable<void> SessionServerAgentIO::run() {
                 XX_LOGE("[session_ctrl] turn error: {}", errmsg);
                 sendErrorTip(errmsg);
                 sendToPeer(WireTurnResult{
-                    .threadId     = config_.threadId,
+                    .sessionId    = config_.sessionId,
                     .hasError     = true,
                     .errorMessage = std::move(errmsg),
                     .interrupted  = false,
@@ -542,7 +543,7 @@ asio::awaitable<void> SessionServerAgentIO::run() {
                 XX_LOGE("[session_ctrl] turn error: {}", errmsg);
                 sendErrorTip(errmsg);
                 sendToPeer(WireTurnResult{
-                    .threadId     = config_.threadId,
+                    .sessionId    = config_.sessionId,
                     .hasError     = true,
                     .errorMessage = std::move(errmsg),
                     .interrupted  = false,
@@ -612,7 +613,7 @@ SyncPayload SessionServerAgentIO::buildFullSync() {
     p.fromIndex = 0;
     auto sess   = session();
     if (sess) {
-        p.messages = sess->getFullHistoryCopy();
+        p.messages = sess->getFullViewMessagesCopy();
         p.tailHash = sess->getHashInfo().tailHex;
     }
     return p;
@@ -628,15 +629,15 @@ void SessionServerAgentIO::sendContextStats() {
     if (!sess || !sess->contextStats) {
         return;
     }
-    auto ctxTokens = sess->contextStats->contextTokens.load(std::memory_order_relaxed);
-    auto maxTokens = sess->contextStats->maxContextTokens.load(std::memory_order_relaxed);
+    auto ctxTokens = sess->contextStats->contextTokens;
+    auto maxTokens = sess->contextStats->maxContextTokens;
     sendToPeer(WireContextStats{ctxTokens, maxTokens});
 }
 
 std::shared_ptr<Session> SessionServerAgentIO::session() {
     auto agent = agent_.lock();
     if (agent && agent->agentContext) {
-        return agent->agentContext->getSession(config_.threadId);
+        return agent->agentContext->getSession(config_.sessionId);
     }
     return nullptr;
 }
@@ -667,7 +668,7 @@ void SessionServerAgentIO::startGraceTimer() {
             if (!hasTransport && self->turnActive_.load(std::memory_order_acquire)) {
                 XX_LOGW(
                     "[session_ctrl] grace period expired, cancelling turn (thread={})",
-                    self->config_.threadId
+                    self->config_.sessionId
                 );
                 self->onCancel();
                 self->failAllPending();
@@ -691,7 +692,7 @@ void SessionServerAgentIO::failAllPending() {
         // 通知客户端该中断已过期 (停止/断线宽限期满/会话取消), 使客户端
         // 将对应未操作的中断消息标记为过期并结束等待
         if (transport_ && transport_->alive()) {
-            sendToPeer(WireInterruptExpired{id, config_.threadId});
+            sendToPeer(WireInterruptExpired{id, config_.sessionId});
         }
         p.ch->close();
     }

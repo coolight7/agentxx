@@ -52,7 +52,7 @@ struct InterruptFixture {
             ++redrawCount;
         };
         ctx.theme     = &theme;
-        ctx.threadId  = "session";
+        ctx.sessionId = "session";
         ctx.remoteUrl = "";
         comp          = std::make_shared<MessageListComponent>(ctx);
     }

@@ -98,28 +98,28 @@ uint16_t AgentServer::port() const {
     return http_ ? http_->port() : 0;
 }
 
-std::shared_ptr<SessionServerAgentIO> AgentServer::getOrCreateController(std::string_view threadId
+std::shared_ptr<SessionServerAgentIO> AgentServer::getOrCreateController(std::string_view sessionId
 ) {
-    auto it = controllers_.find(threadId); // 无锁查找
+    auto it = controllers_.find(sessionId); // 无锁查找
     if (it != controllers_.end()) {
         return it->second;
     }
 
     SessionServerAgentIO::Config cfg;
-    cfg.threadId         = std::string{threadId};
+    cfg.sessionId        = std::string{sessionId};
     cfg.interruptTimeout = config_.interruptTimeout;
     cfg.gracePeriod      = config_.gracePeriod;
     cfg.deltaBufferCap   = config_.deltaBufferCap;
 
-    auto ctrl                           = std::make_shared<SessionServerAgentIO>(ex_, agent_, cfg);
-    controllers_[std::string{threadId}] = ctrl;
+    auto ctrl                            = std::make_shared<SessionServerAgentIO>(ex_, agent_, cfg);
+    controllers_[std::string{sessionId}] = ctrl;
 
-    // threadId 以 std::string 值捕获: string_view 参数引用的原始字符串
+    // sessionId 以 std::string 值捕获: string_view 参数引用的原始字符串
     // (serveTransport 的局部 WireHello) 可能在本协程完成前已析构
     asio::co_spawn(
         ex_,
         ctrl->run(),
-        [ctrl, threadId = std::string{threadId}](std::exception_ptr ep) {
+        [ctrl, sessionId = std::string{sessionId}](std::exception_ptr ep) {
             if (ep) {
                 agentxx::util::catchError<bool>(
                     [&]() {
@@ -127,7 +127,7 @@ std::shared_ptr<SessionServerAgentIO> AgentServer::getOrCreateController(std::st
                         return true;
                     },
                     [&](std::string errmsg) {
-                        XX_LOGE("[agent_server] controller '{}' error: {}", threadId, errmsg);
+                        XX_LOGE("[agent_server] controller '{}' error: {}", sessionId, errmsg);
                         return false;
                     }
                 );
@@ -174,11 +174,11 @@ asio::awaitable<void> AgentServer::serveTransport(std::shared_ptr<AgentIOTranspo
     // 鉴权
     bool authOk = config_.token.empty() || hello->token == config_.token;
     if (!authOk) {
-        transport->send(WireHelloAck{.ok = false, .threadId = hello->threadId});
+        transport->send(WireHelloAck{.ok = false, .sessionId = hello->sessionId});
         co_return;
     }
 
-    auto ctrl = getOrCreateController(hello->threadId);
+    auto ctrl = getOrCreateController(hello->sessionId);
 
     // 收集可用模型
     std::vector<std::string> models;
@@ -188,7 +188,7 @@ asio::awaitable<void> AgentServer::serveTransport(std::shared_ptr<AgentIOTranspo
         }
     }
 
-    // 同一 threadId 已有旧连接时, 先关闭旧 transport:
+    // 同一 sessionId 已有旧连接时, 先关闭旧 transport:
     // 否则旧连接的 runTransportLoop 协程继续存活, 两个接收循环并发处理
     // 同一会话的消息 (输入重复执行/消息交错), 且旧 transport 持续占用资源
     if (auto oldTransport = ctrl->transport();

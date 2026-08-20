@@ -72,7 +72,7 @@ public:
     }
 
     asio::awaitable<neograph::json> handleInterrupt(
-        std::string_view threadId,
+        std::string_view sessionId,
         std::string_view /*interruptNode*/,
         std::string_view /*interruptValue*/,
         std::string_view /*interruptArgJson*/
@@ -88,7 +88,7 @@ public:
         //    - 触发中断的 tool 结果以 [Interrupt] 占位 (role=tool), 保证
         //      assistant tool_call 有对应 tool 回复, 角色顺序完整
         auto cache = graphData->getGraphDataItemValue<neograph::json>(
-            threadId,
+            sessionId,
             agentxx::middleware::MiddlewareContext::graphDataKey_interruptToolcallCache
         );
         if (cache.is_array() && cache.size() == 1) {
@@ -97,8 +97,8 @@ public:
                 = static_cast<neograph::MessageFlag>(m.value<unsigned long long>("flags", 0));
             interruptMsgOk = m.value("role", std::string{}) == "tool"
                              && m.value("content", std::string{}) == "[Interrupt]"
-                             && m.value("tool_call_id", std::string{}) == "call_it_1"
-                             && m.value("tool_name", std::string{}) == "test_interrupt"
+                             && m.value("toolCallId", std::string{}) == "call_it_1"
+                             && m.value("toolName", std::string{}) == "test_interrupt"
                              && neograph::hasFlag(flags, neograph::MessageFlag::Interrupt);
         }
 
@@ -106,7 +106,7 @@ public:
         //    角色顺序应为 system -> user -> assistant(tool_calls)
         //    (modelcall 节点会在 state 头部补充 system 消息)
         auto temp = graphData->getGraphDataItemValue<neograph::json>(
-            threadId,
+            sessionId,
             agentxx::middleware::MiddlewareContext::graphDataKey_tempMessages
         );
         if (temp.is_array() && temp.size() == 3) {
@@ -143,14 +143,14 @@ public:
         if (!agentCtxPtr || !agentCtxPtr->middlewareHandleContext) {
             co_return R"({"error":"AgentContext not available"})";
         }
-        auto threadId = arguments.value("thread_id", std::string{});
-        auto resultId = arguments.value("tool_call_id", std::string{});
+        auto sessionId = arguments.value("session_id", std::string{});
+        auto resultId  = arguments.value("toolCallId", std::string{});
 
         // 通过 requestInterrupt 触发/恢复中断:
         // - 首次: 存储中断参数到 graphData, 抛 NodeInterrupt
         // - 恢复: 从 graphData 读取中断结果, 按 resultId 提取
         auto result = co_await agentCtxPtr->middlewareHandleContext->requestInterrupt(
-            threadId,
+            sessionId,
             [&]() {
                 return agentxx::middleware::InterruptHandleArg{
                     .name     = agentxx::middleware::MiddlewareContext::interruptHandleName_default,
@@ -282,8 +282,7 @@ asio::awaitable<void> test_interrupt_auto_supplement() {
     co_await agent.init();
 
     auto io     = std::make_shared<InterruptMockIO>(agent.agentContext);
-    auto result = co_await agent
-                      .runConversationTurnAsync("interrupt_msg_test", "Please interrupt", true, io);
+    auto result = co_await agent.runTurnAsync("interrupt_msg_test", "Please interrupt", true, io);
 
     // 中断被处理并 resume, 轮次正常完成 (interrupted 标记 true, 无错误)
     XX_TEST_EXPECT_FALSE(result.hasError);
@@ -318,12 +317,9 @@ asio::awaitable<void> test_interrupt_auto_supplement() {
                     std::string{"call_it_1"}
                 );
             }
+            XX_TEST_EXPECT_EQ(msgs[3].value("toolCallId", std::string{}), std::string{"call_it_1"});
             XX_TEST_EXPECT_EQ(
-                msgs[3].value("tool_call_id", std::string{}),
-                std::string{"call_it_1"}
-            );
-            XX_TEST_EXPECT_EQ(
-                msgs[3].value("tool_name", std::string{}),
+                msgs[3].value("toolName", std::string{}),
                 std::string{"test_interrupt"}
             );
             // resume 后 tool 重新执行返回真实中断结果, 不再是 [Interrupt] 占位
@@ -388,10 +384,10 @@ static bool checkCanceledMessageSequence(const neograph::json& msgs) {
     }
     // 未完成的 tool 自动补充 [User canceled] (按 tool_calls 声明顺序):
     // - slow 先执行, 取消时在途未完成 → 补充 [User canceled]
-    if (msgs[3].value("tool_call_id", std::string{}) != "call_slow_1") {
+    if (msgs[3].value("toolCallId", std::string{}) != "call_slow_1") {
         return false;
     }
-    if (msgs[3].value("tool_name", std::string{}) != "test_slow") {
+    if (msgs[3].value("toolName", std::string{}) != "test_slow") {
         return false;
     }
     if (msgs[3].value("content", std::string{}) != "[User canceled]") {
@@ -405,10 +401,10 @@ static bool checkCanceledMessageSequence(const neograph::json& msgs) {
         }
     }
     // - fast 排在 slow 之后, 取消后未执行 → 同样补充 [User canceled]
-    if (msgs[4].value("tool_call_id", std::string{}) != "call_fast_1") {
+    if (msgs[4].value("toolCallId", std::string{}) != "call_fast_1") {
         return false;
     }
-    if (msgs[4].value("tool_name", std::string{}) != "test_fast") {
+    if (msgs[4].value("toolName", std::string{}) != "test_fast") {
         return false;
     }
     if (msgs[4].value("content", std::string{}) != "[User canceled]") {
@@ -492,7 +488,7 @@ asio::awaitable<void> test_cancel_auto_supplement() {
         = co_await asio::experimental::make_parallel_group(
               asio::co_spawn(
                   ex,
-                  agent.runConversationTurnAsync("cancel_msg_test", "Run tools", true, nullptr),
+                  agent.runTurnAsync("cancel_msg_test", "Run tools", true, nullptr),
                   asio::deferred
               ),
               asio::co_spawn(ex, cancelWatcher(), asio::deferred)

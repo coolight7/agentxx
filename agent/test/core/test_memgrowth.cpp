@@ -106,17 +106,17 @@ struct ContainerSnapshot {
 
 ContainerSnapshot snapshotContainers(
     std::shared_ptr<agentxx::agent::AgentContext> ctx,
-    std::string_view                              threadId
+    std::string_view                              sessionId
 ) {
     ContainerSnapshot out;
-    auto              session = ctx->sessions->get(threadId);
+    auto              session = ctx->sessions->get(sessionId);
     if (session) {
         out.fullHistoryCount = session->viewMessages.size();
         out.fullHistoryBytes = estimateHistoryBytes(session->viewMessages);
         out.llmMsgCount      = session->llmMessages.size();
         out.llmMsgBytes      = estimateJsonBytes(session->llmMessages);
     }
-    auto it = ctx->middlewareHandleContext->shareStore.find(std::string{threadId});
+    auto it = ctx->middlewareHandleContext->shareStore.find(std::string{sessionId});
     if (it != ctx->middlewareHandleContext->shareStore.end()) {
         out.shareStoreItems = it->second.store.size();
     }
@@ -128,7 +128,7 @@ asio::awaitable<int> runScenario(
     size_t      responseKB,
     size_t      warmupSkip,
     bool        hugeTokenLimit, // true = 关闭压缩 (模拟不触发 summarization)
-    bool        nonStream,      // true = 使用 runNonStreamAsync (无 token 流式事件)
+    bool        nonStream,      // true = 使用 runOverMsgsTurnAsync (无 token 流式事件)
     bool        runAgentCtx,    // true = 后台线程运行 agent io_context (模拟真实 CLI)
     std::string label
 ) {
@@ -179,7 +179,7 @@ asio::awaitable<int> runScenario(
         });
     }
 
-    const std::string threadId = "memgrowth_" + label;
+    const std::string sessionId = "memgrowth_" + label;
 
 #ifdef _MSC_VER
     // CRT 调试堆快照: lSizes 为"当前存活"分配字节, 区分真泄漏与堆碎片化
@@ -232,7 +232,7 @@ asio::awaitable<int> runScenario(
             auto ch     = std::make_shared<ResCh>(agent->ioCtx->get_executor(), 1);
             asio::co_spawn(
                 *agent->ioCtx,
-                [agent, threadId, input, turn, ch, nonStream]() -> asio::awaitable<void> {
+                [agent, sessionId, input, turn, ch, nonStream]() -> asio::awaitable<void> {
                     bool success = false;
                     if (nonStream) {
                         std::vector<neograph::ChatMessage> msgs;
@@ -240,12 +240,11 @@ asio::awaitable<int> runScenario(
                             .role    = "user",
                             .content = input,
                         });
-                        auto text = co_await agent->runNonStreamAsync(threadId, msgs);
+                        auto text = co_await agent->runOverMsgsTurnAsync(sessionId, msgs);
                         success   = !text.empty();
                     } else {
                         auto result
-                            = co_await agent
-                                  ->runConversationTurnAsync(threadId, input, turn == 0, nullptr);
+                            = co_await agent->runTurnAsync(sessionId, input, turn == 0, nullptr);
                         success = !result.hasError;
                     }
                     co_await ch
@@ -262,13 +261,13 @@ asio::awaitable<int> runScenario(
                 .role    = "user",
                 .content = input,
             });
-            auto text = co_await agent->runNonStreamAsync(threadId, msgs);
+            auto text = co_await agent->runOverMsgsTurnAsync(sessionId, msgs);
             if (text.empty()) {
                 ok = false;
             }
         } else {
-            auto result = co_await agent->runConversationTurnAsync(
-                threadId,
+            auto result = co_await agent->runTurnAsync(
+                sessionId,
                 input,
                 turn == 0,
                 nullptr // headless: 不产生 delta 事件, 排除 client 侧干扰
@@ -286,7 +285,7 @@ asio::awaitable<int> runScenario(
             continue;
         }
         auto mem  = sampleProcessMemory();
-        auto snap = snapshotContainers(agent->agentContext, threadId);
+        auto snap = snapshotContainers(agent->agentContext, sessionId);
         std::printf(
             "%-6zu %10.1f %10.1f | %10zu %10.2f | %8zu %8.2f | %8zu",
             turn + 1,
@@ -322,7 +321,7 @@ asio::awaitable<int> runScenario(
 
     // 最终快照
     auto mem  = sampleProcessMemory();
-    auto snap = snapshotContainers(agent->agentContext, threadId);
+    auto snap = snapshotContainers(agent->agentContext, sessionId);
     std::printf(
         "FINAL turn=%zu RSS=%.1fMB Priv=%.1fMB histCnt=%zu histMB=%.2f llmCnt=%zu llmMB=%.2f "
         "shareN=%zu",

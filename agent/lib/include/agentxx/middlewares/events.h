@@ -68,13 +68,13 @@ struct Topic {
 
 struct EventAgentTurnStart {
     std::string agentName;
-    std::string threadId;
+    std::string sessionId;
     std::string userInput; // 本轮用户输入
 };
 
 struct EventAgentTurnEnd {
     std::string agentName;
-    std::string threadId;
+    std::string sessionId;
     bool        hasError = false;
     std::string errorMessage;
 };
@@ -83,19 +83,19 @@ struct EventAgentTurnEnd {
 
 struct EventModelCallStart {
     std::string agentName;
-    std::string threadId;
+    std::string sessionId;
 };
 
 struct EventModelToken {
     std::string agentName;
-    std::string threadId;
+    std::string sessionId;
     std::string token;            // 增量 token
     std::string kind = "content"; // "content" | "thinking"
 };
 
 struct EventModelCallEnd {
     std::string agentName;
-    std::string threadId;
+    std::string sessionId;
     /// 本轮 LLM 调用产生的 assistant 消息 content (完整, 非 token 流)
     std::string content;
     /// token 使用量 (若 provider 提供)
@@ -106,7 +106,7 @@ struct EventModelCallEnd {
 
 struct EventToolCallStart {
     std::string agentName;
-    std::string threadId;
+    std::string sessionId;
     std::string toolName;
     std::string toolCallId;
     /// 原始 arguments json 字符串 (便于 UI 展示)
@@ -115,7 +115,7 @@ struct EventToolCallStart {
 
 struct EventToolCallEnd {
     std::string agentName;
-    std::string threadId;
+    std::string sessionId;
     std::string toolName;
     std::string toolCallId;
     /// tool 执行结果 (已截断/摘要后的可见内容)
@@ -126,7 +126,7 @@ struct EventToolCallEnd {
 /// ===== subagent =====
 
 struct EventSubagentProgress {
-    /// subagent 会话标识 (父端 correlationId 或 subagent threadId)
+    /// subagent 会话标识 (父端 correlationId 或 subagent sessionId)
     std::string subagentId;
     std::string agentName;
     /// 进度类型: "token" | "tool_start" | "tool_end" | "turn_end"
@@ -149,18 +149,18 @@ struct EventDisplay {
 
 struct EventUserInput {
     std::string agentName;
-    std::string threadId;
+    std::string sessionId;
     std::string content;
 };
 
 struct EventCancel {
-    std::string threadId;
+    std::string sessionId;
     std::string agentName;
 };
 
 struct EventError {
     std::string agentName;
-    std::string threadId;
+    std::string sessionId;
     std::string message;
     std::string where; // 节点/模块名
 };
@@ -171,7 +171,7 @@ struct EventError {
 
 struct ReqInterrupt {
     std::string agentName;
-    std::string threadId;
+    std::string sessionId;
     /// 中断源节点名
     std::string interruptNode;
     /// 中断源节点值 (原始值, 供 UI 展示)
@@ -197,7 +197,7 @@ struct RespInterrupt {
 
 struct ReqPermission {
     std::string agentName;
-    std::string threadId;
+    std::string sessionId;
     std::string toolName;
     /// 权限分类: "filesystem_read" | "filesystem_write" | "command" | ...
     std::string category;
@@ -237,7 +237,7 @@ struct SubagentBatchItem {
     /// 指定子代理运行的 thread id (可选): 为空时使用独立 subagent 线程 id;
     /// 指定时进入"同上下文模式": 运行在指定 thread + 使用父会话当前模型 +
     /// 消息前缀原样透传, 三者共同保证与父会话命中 provider KV/prefix cache
-    std::string threadId;
+    std::string sessionId;
     /// 子代理工具策略 (可选 json 数组, 缺省 = 子代理默认全量工具):
     /// - `[]`: 无工具
     /// - `["*"]`: 全量继承父 agent 的工具 (AgentHost 解析为父工具名白名单)
@@ -256,7 +256,7 @@ struct SubagentBatchItem {
 
 struct ReqSubagentBatch {
     std::string parentAgentName;
-    std::string parentThreadId;
+    std::string parentSessionId;
     /// 父会话取消令牌 (可空): 取消时级联中止全部在跑子代理
     std::shared_ptr<neograph::graph::CancelToken> cancelToken;
     std::vector<SubagentBatchItem>                tasks;
@@ -271,7 +271,7 @@ struct ReqCrossAgent {
     /// 发起查询的 agent 名
     std::string fromAgent;
     /// 发起方的会话 id
-    std::string fromThreadId;
+    std::string fromSessionId;
     /// 目标 agent 名
     std::string toAgent;
     /// 查询消息 (user role 内容)

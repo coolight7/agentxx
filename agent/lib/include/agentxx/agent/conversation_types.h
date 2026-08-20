@@ -54,7 +54,7 @@ struct ViewMessage {
     };
 
     // ---- 通用字段 (所有 role) ----
-    /// 历史消息 id (appendHistory 分配); 客户端本地消息 (如 TUI 中断消息) 可为空
+    /// 历史消息 id (appendViewMessage 分配); 客户端本地消息 (如 TUI 中断消息) 可为空
     std::string id;
     Role        role = Role::User;
     /// 正文: User/Assistant/Think/System 消息文本; Tool 消息为工具参数
@@ -129,11 +129,11 @@ struct ViewMessage {
 };
 
 /// 会话列表条目摘要 (会话选择弹窗展示用)
-/// - threadId:     会话唯一标识
-/// - title:        会话名称 (取首条用户消息的单行预览; 无用户消息时为空, 展示端回退 threadId)
+/// - sessionId:     会话唯一标识
+/// - title:        会话名称 (取首条用户消息的单行预览; 无用户消息时为空, 展示端回退 sessionId)
 /// - lastActiveMs: 最近活动时间 (毫秒时间戳; 取末条消息开始时间, 无消息时为 0)
 struct SessionInfo {
-    std::string threadId;
+    std::string sessionId;
     std::string title;
     int64_t     lastActiveMs = 0;
 };
@@ -188,7 +188,7 @@ struct Delta {
         NodeEnd,
         MessageUITip, ///< 通用提示消息 (info/warning/error, UI 插入提示消息)
         /// 系统消息: 已由 agent 线程插入会话历史 (viewMessages) 的消息
-        /// - 与 MessageUITip 的区别: MessageTip 携带 appendHistory 分配的
+        /// - 与 MessageUITip 的区别: MessageTip 携带 appendViewMessage 分配的
         ///   msgId, 内容/时间戳与 viewMessages 完全一致, UI 端直接追加即可
         ///   (不自行构造文本); 用于轮次统计、错误/取消提示、中断头消息等
         MessageTip,
@@ -341,20 +341,20 @@ inline neograph::json ViewMessage::toJson() const {
     if (!id.empty()) {
         j["id"] = id;
     }
-    j["role"]          = std::string(viewMessageRoleToString(role));
-    j["text"]          = text;
-    j["start_time_ms"] = startTimeMs;
-    j["duration_ms"]   = durationMs;
+    j["role"]        = std::string(viewMessageRoleToString(role));
+    j["text"]        = text;
+    j["startTimeMs"] = startTimeMs;
+    j["durationMs"]  = durationMs;
     if (collapsed) {
         j["collapsed"] = true;
     }
     if (tool) {
         neograph::json t = neograph::json::object();
         if (!tool->toolName.empty()) {
-            t["tool_name"] = tool->toolName;
+            t["toolName"] = tool->toolName;
         }
         if (!tool->toolCallId.empty()) {
-            t["tool_call_id"] = tool->toolCallId;
+            t["toolCallId"] = tool->toolCallId;
         }
         if (!tool->toolResult.empty()) {
             t["tool_result"] = tool->toolResult;
@@ -410,8 +410,8 @@ inline ViewMessage ViewMessage::fromJson(const neograph::json& j) {
     ViewMessage m;
     m.id          = j.value("id", std::string{});
     m.text        = j.value("text", std::string{});
-    m.startTimeMs = j.value("start_time_ms", int64_t{0});
-    m.durationMs  = j.value("duration_ms", int64_t{0});
+    m.startTimeMs = j.value("startTimeMs", int64_t{0});
+    m.durationMs  = j.value("durationMs", int64_t{0});
     m.collapsed   = j.value("collapsed", false);
     if (auto role = viewMessageRoleFromString(j.value("role", std::string{}))) {
         m.role = *role;
@@ -424,8 +424,8 @@ inline ViewMessage ViewMessage::fromJson(const neograph::json& j) {
             ViewMessage::ToolData t;
             if (j.contains("tool")) {
                 const auto& tj = j["tool"];
-                t.toolName     = tj.value("tool_name", std::string{});
-                t.toolCallId   = tj.value("tool_call_id", std::string{});
+                t.toolName     = tj.value("toolName", std::string{});
+                t.toolCallId   = tj.value("toolCallId", std::string{});
                 t.toolResult   = tj.value("tool_result", std::string{});
                 t.diff         = tj.value("diff", std::string{});
                 t.toolFinished = tj.value("tool_finished", false);

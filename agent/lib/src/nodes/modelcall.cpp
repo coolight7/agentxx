@@ -63,12 +63,12 @@ ModelCallWrapNode::ModelCallWrapNode(
 }
 
 std::shared_ptr<neograph::Provider>
-    ModelCallWrapNode::resolveCurrentProvider(std::string_view threadId) {
+    ModelCallWrapNode::resolveCurrentProvider(std::string_view sessionId) {
     if (useDynamicModel_) {
         auto ctxPtr = agentContext.lock();
         if (ctxPtr && ctxPtr->modelRegistry) {
             std::string selected;
-            if (auto session = ctxPtr->sessions->get(threadId)) {
+            if (auto session = ctxPtr->sessions->get(sessionId)) {
                 selected = session->getModelName();
             }
             auto provider = ctxPtr->modelRegistry->getProvider(selected);
@@ -80,12 +80,12 @@ std::shared_ptr<neograph::Provider>
     return provider_;
 }
 
-std::string ModelCallWrapNode::resolveCurrentModelName(std::string_view threadId) const {
+std::string ModelCallWrapNode::resolveCurrentModelName(std::string_view sessionId) const {
     if (useDynamicModel_) {
         auto ctxPtr = agentContext.lock();
         if (ctxPtr && ctxPtr->modelRegistry) {
             std::string selected;
-            if (auto session = ctxPtr->sessions->get(threadId)) {
+            if (auto session = ctxPtr->sessions->get(sessionId)) {
                 selected = session->getModelName();
             }
             const auto& modelName = ctxPtr->modelRegistry->getModelConfig(selected).modelName;
@@ -155,7 +155,7 @@ asio::awaitable<neograph::ChatCompletion> ModelCallWrapNode::onReceiveToken(
 
 neograph::CompletionParams ModelCallWrapNode::build_params(
     const neograph::graph::GraphState& state,
-    std::string_view                   threadId
+    std::string_view                   sessionId
 ) const {
     auto messages = state.get_messages();
 
@@ -200,7 +200,7 @@ neograph::CompletionParams ModelCallWrapNode::build_params(
     }
 
     neograph::CompletionParams params;
-    params.model    = resolveCurrentModelName(threadId);
+    params.model    = resolveCurrentModelName(sessionId);
     params.messages = std::move(messages);
     params.tools    = std::move(tool_defs);
     return params;
@@ -273,7 +273,7 @@ void ModelCallWrapNode::repairMessages(neograph::graph::NodeInput& in) {
     }
 
     auto agentCtxPtr = agentContext.lock();
-    if (agentCtxPtr->agentConfig->checkMessagesBeforeLLM) {
+    if (agentCtxPtr->agentConfig->repairMessages) {
         // - 最终兜底处理，一般生成 message 的代码应该自己处理异常、补充消息
         // - 这里作为最终的预防处理
         auto msgs = in.state.get_messages();
@@ -684,7 +684,7 @@ asio::awaitable<void> ModelCallWrapNode::baseRun(
                        {"channel", "message_tip"},
                        {"value",
                         neograph::json{
-                            {"tip_type", "warning"},
+                            {"tipType", "warning"},
                             {"text",
                              fmt::format(
                           "LLM API 请求失败，{} 秒后自动重试 ({}/{})，错误: {}",

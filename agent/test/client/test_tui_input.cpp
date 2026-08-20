@@ -38,7 +38,7 @@ struct InputFixture {
             ++redrawCount;
         };
         ctx.theme     = &theme;
-        ctx.threadId  = "session";
+        ctx.sessionId = "session";
         ctx.remoteUrl = "";
     }
 

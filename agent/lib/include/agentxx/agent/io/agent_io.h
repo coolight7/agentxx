@@ -56,19 +56,19 @@ public:
     virtual void sendToPeer(WireMessage msg);
 
     /// 请求取消指定会话当前轮次 [client]
-    virtual void requestCancel(std::string threadId);
+    virtual void requestCancel(std::string sessionId);
 
     /// 请求切换指定会话的模型 [client]
-    virtual void requestSelectModel(std::string threadId, std::string model);
+    virtual void requestSelectModel(std::string sessionId, std::string model);
 
     /// 请求拉取会话启动信息 (MCP/Skill/Memory) [client]
     /// - 客户端启动后调用一次; 服务端以 WireAppendComponentInfo 回应, 由 onPeerMessage 处理
-    virtual void requestAppendComponentInfo(std::string threadId);
+    virtual void requestAppendComponentInfo(std::string sessionId);
 
     /// 发送用户输入到对端 [client]
     /// - 是否首轮由服务端自行管理; 模型切换经 requestSelectModel
     /// - 发送后通知事件接收器 (ClientEventSink::onUserInput)
-    virtual void sendUserInput(std::string threadId, std::string text);
+    virtual void sendUserInput(std::string sessionId, std::string text);
 
     /// 服务端就绪通知 [client] (默认空实现, 客户端端点按需覆写):
     /// - 本地模式: agent-io (SessionServerAgentIO) 的会话驱动循环启动前由
@@ -81,7 +81,7 @@ public:
 
     /// 服务端启动进度通知 [client] (默认空实现, 客户端端点按需覆写):
     /// - 本地模式: agent-io 的 init() 各启动阶段 (加载 MCP/Skill/Memory/
-    ///   RAG/CodeGraph 等) 经 AgentContext::startupNotifier → 本接口逐步上报,
+    ///   RAG/CodeGraph 等) 经 AgentContext::initNotifier → 本接口逐步上报,
     ///   客户端 (TUI) 据此在"启动中"banner 中展示当前正在执行的操作
     /// - 由 agent 线程同步调用, 实现须自行加锁同步
     virtual void onServerProgress(std::string_view /*step*/) {}
@@ -98,7 +98,7 @@ public:
     /// - server 侧: 经会话总线 (registerOnBus) 被 BaseAgent 的中断流程调用
     /// - client 侧: 收到对端 WireInterruptRequest 后由 onPeerMessage 调用
     virtual asio::awaitable<neograph::json> handleInterrupt(
-        std::string_view threadId,
+        std::string_view sessionId,
         std::string_view interruptNode,
         std::string_view interruptValue,
         std::string_view interruptArgJson
@@ -133,7 +133,7 @@ public:
     // -----------------------------------------------------------------------
 
     /// 在会话总线上注册本 IO 的事件处理器 (interrupt / permission)
-    /// - 由 BaseAgent::runConversationTurnAsync 调用
+    /// - 由 BaseAgent::runTurnAsync 调用
     /// - 重复调用会先移除上一次注册的处理器, 避免 handler 累积、泄漏与悬空 this
     virtual void registerOnBus(std::shared_ptr<agentxx::middleware::EventBus> sessionBus);
 

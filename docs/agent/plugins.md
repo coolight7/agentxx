@@ -208,7 +208,7 @@ typedef enum AgentxxHookPoint {
     AGENTXX_HOOK_COUNT
 } AgentxxHookPoint;
 /// 钩子回调 (io 线程同步调用, 快速返回): node_input_json 为节点输入摘要
-/// ({"thread_id","node","messages_count",...}); out_json 预留
+/// ({"session_id","node","messages_count",...}); out_json 预留
 typedef int (*AgentxxHookFn)(void* user_data, AgentxxHookPoint point,
                              AgentxxPluginStringView node_input_json,
                              char** out_json, char** error_out);
@@ -678,7 +678,7 @@ typedef struct AgentxxClientPluginInfo {
 | 输入扩展 | `register_command` / `unregister_command` (execute 返回动作 JSON) |
 | 交互原语 | `show_toast` |
 | 事件订阅 | `subscribe` / `unsubscribe` (卸载自动退订) |
-| 会话上下文 | `get_client_state` ({"threadId","connState","model","models","isStreaming","uiCaps"}) |
+| 会话上下文 | `get_client_state` ({"sessionId","connState","model","models","isStreaming","uiCaps"}) |
 | 会话操作 | `send_user_input` (与用户输入同排队语义) / `request_cancel` |
 | 跨端数据 | `send_plugin_data` (client → agent, topic `client.{插件名}.{事件名}`) |
 | 自描述 | `get_own_info` / `get_plugin_args` |
@@ -686,7 +686,7 @@ typedef struct AgentxxClientPluginInfo {
 
 ### 7.6 装配 (mode_runners)
 
-`setupClientPlugins<IoT, AdapterT>` 模板: 创建 `ClientPluginManager` → `setUiAdapter` (TUI/CLI 适配器) → `setThreadId` → TUI 额外 `setPluginManager` (须在 `start()` 之前, ctx_.pluginManager 在 UI 线程构建组件时读取) → `io->setEventSink(mgr)` → 调用方 co_await `loadConfiguredClientPlugins(plugins)`。
+`setupClientPlugins<IoT, AdapterT>` 模板: 创建 `ClientPluginManager` → `setUiAdapter` (TUI/CLI 适配器) → `setSessionId` → TUI 额外 `setPluginManager` (须在 `start()` 之前, ctx_.pluginManager 在 UI 线程构建组件时读取) → `io->setEventSink(mgr)` → 调用方 co_await `loadConfiguredClientPlugins(plugins)`。
 
 4 个模式全部接入:
 - 本地 CLI (runLocalCliUnified): `CliPluginAdapter`; 输入循环发送前 `tryInvokePluginCommand` 拦截 "/" 命令

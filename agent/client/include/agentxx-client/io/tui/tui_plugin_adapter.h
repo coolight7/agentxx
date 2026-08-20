@@ -127,9 +127,9 @@ public:
         }
     }
 
-    void requestCancel(const std::string& threadId) override {
+    void requestCancel(const std::string& sessionId) override {
         if (auto tui = tui_.lock()) {
-            tui->requestCancel(threadId);
+            tui->requestCancel(sessionId);
         }
     }
 

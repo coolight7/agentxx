@@ -24,7 +24,7 @@ class PluginManager;
 class CapabilityRegistry;
 class PluginMiddlewareHandle;
 class PluginTool;
-class PluginInstance; ///< 前向声明 (PluginTimer 引用其指针)
+class PluginInstance;
 
 /// 宿主定时器状态 (vtable add_timer 登记; detachAll 统一取消; 仅 io 线程)
 /// - inst 为裸指针: 生命周期由"实例析构前 handler 链必已终结"保证
@@ -356,7 +356,7 @@ public:
         return runningTurns_ > 0;
     }
 
-    /// 轮次进入/退出计数 (BaseAgent::runConversationTurnAsync 调用)
+    /// 轮次进入/退出计数 (BaseAgent::runTurnAsync 调用)
     void onTurnBegin() {
         ++runningTurns_;
     }

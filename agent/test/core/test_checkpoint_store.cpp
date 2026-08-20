@@ -17,14 +17,14 @@ namespace ngcp = neograph::graph;
 /// 注意: 必须用括号构造 json 标量 —— `neograph::json{msg}` 会被
 /// json(std::initializer_list<json>) 劫持构造为数组而非字符串
 static ngcp::Checkpoint makeCp(
-    const std::string& threadId,
+    const std::string& sessionId,
     const std::string& id,
     int64_t            step,
     const std::string& msg
 ) {
     ngcp::Checkpoint cp;
     cp.id              = id;
-    cp.thread_id       = threadId;
+    cp.thread_id       = sessionId;
     cp.step            = step;
     cp.timestamp       = 1000 + step;
     cp.current_node    = "node_" + id;

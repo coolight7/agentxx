@@ -102,9 +102,9 @@ asio::awaitable<bool> PermissionMiddlewareHandle::requestPermission(
     if (!ctxPtr) {
         co_return false;
     }
-    auto threadId = args.value("thread_id", std::string{});
-    auto session  = ctxPtr->sessions->get(threadId);
-    auto bus      = session ? session->bus : nullptr;
+    auto sessionId = args.value("session_id", std::string{});
+    auto session   = ctxPtr->sessions->get(sessionId);
+    auto bus       = session ? session->bus : nullptr;
     if (!bus) {
         // 无会话总线, 默认拒绝以保安全
         co_return false;
@@ -115,7 +115,7 @@ asio::awaitable<bool> PermissionMiddlewareHandle::requestPermission(
         events::Topic::Permission,
         events::ReqPermission{
             .agentName     = ctxPtr->agentConfig ? ctxPtr->agentConfig->agentName : std::string{},
-            .threadId      = std::move(threadId),
+            .sessionId     = std::move(sessionId),
             .toolName      = item.get_name(),
             .category      = std::move(category),
             .target        = std::move(target),

@@ -47,7 +47,7 @@ struct ScrollFixture {
         ctx.frameState = sharedState.readSnapshot();
         ctx.postRedraw = [] {};
         ctx.theme      = &theme;
-        ctx.threadId   = "s";
+        ctx.sessionId  = "s";
         ctx.remoteUrl  = "";
         comp           = std::make_shared<MessageListComponent>(ctx);
     }

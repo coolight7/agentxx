@@ -18,7 +18,7 @@ namespace io {
 
 /// Agent 服务
 /// - 单 io_context/单线程多协程: 复用 BaseAgent.ioCtx
-/// - 每个 threadId 一个 SessionServerAgentIO (与连接解耦, 支持断线 grace 重挂 + 增量重放)
+/// - 每个 sessionId 一个 SessionServerAgentIO (与连接解耦, 支持断线 grace 重挂 + 增量重放)
 /// - 两种接入方式:
 ///   - WS/WSS 服务: start(ex) 启动 HttpServer, 每个 WS 连接 -> serveTransport
 ///   - 进程内: 直接 serveTransport(ChannelAgentIOTransport) 服务单个进程内连接
@@ -70,8 +70,8 @@ private:
     asio::awaitable<void> handleWs(util::HttpServer::WsStream& ws);
     asio::awaitable<void> handleWss(util::HttpServer::WssStream& ws);
 
-    /// 取/建指定 threadId 的 SessionServerAgentIO (并启动其驱动循环)
-    std::shared_ptr<SessionServerAgentIO> getOrCreateController(std::string_view threadId);
+    /// 取/建指定 sessionId 的 SessionServerAgentIO (并启动其驱动循环)
+    std::shared_ptr<SessionServerAgentIO> getOrCreateController(std::string_view sessionId);
 
     std::shared_ptr<BaseAgent>        agent_;
     Config                            config_;

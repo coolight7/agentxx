@@ -73,10 +73,10 @@ typedef struct AgentxxClientPluginInfo {
 typedef enum AgentxxClientEvent {
     AGENTXX_CLIENT_EVT_READY = 0,      ///< 服务端就绪 {"uiCaps": n} (启动后最早事件)
     AGENTXX_CLIENT_EVT_CONN_STATE,     ///< 连接状态变化 {"connState","startupProgress"}
-    AGENTXX_CLIENT_EVT_USER_INPUT,     ///< 用户输入已发出 {"threadId","text"}
+    AGENTXX_CLIENT_EVT_USER_INPUT,     ///< 用户输入已发出 {"sessionId","text"}
     AGENTXX_CLIENT_EVT_DELTA,          ///< 增量事件 (同 wire delta JSON 字段)
-    AGENTXX_CLIENT_EVT_TURN_END,       ///< 轮次结束 {"threadId","hasError","interrupted",...}
-    AGENTXX_CLIENT_EVT_SESSION_SWITCH, ///< 会话切换 {"threadId"}
+    AGENTXX_CLIENT_EVT_TURN_END,       ///< 轮次结束 {"sessionId","hasError","interrupted",...}
+    AGENTXX_CLIENT_EVT_SESSION_SWITCH, ///< 会话切换 {"sessionId"}
     AGENTXX_CLIENT_EVT_PLUGIN_DATA, ///< 插件事件转发 (WirePluginData) {"plugin","event","data"}
     AGENTXX_CLIENT_EVT_COUNT
 } AgentxxClientEvent;
@@ -104,13 +104,13 @@ typedef struct AgentxxClientHostVtable {
     /* ---- 展示扩展 (语义 JSON; 宿主拷贝后投递 UI 线程, 插件可立即释放内存) ---- */
     /// 注册状态栏项; 返回句柄 (宿主持有; 卸载自动清理)
     /// - id: 全局唯一, 建议 "{插件名}.{项名}" (如 "codegraph.index")
-    /// - initial_json: {"text": "...", "tooltip": "..."} (text 必填)
+    /// - initialJson: {"text": "...", "tooltip": "..."} (text 必填)
     /// - align: 0=左侧 1=右侧; order: 组内排序 (小在前)
     /// - 宿主不支持 (ui_caps 无 STATUS_ITEM) 或 id 冲突时返回 NULL
     AgentxxStatusItem* (*register_status_item)(
         const AgentxxClientHost* host,
         AgentxxPluginStringView  id,
-        AgentxxPluginStringView  initial_json,
+        AgentxxPluginStringView  initialJson,
         int                      align,
         int                      order
     );
@@ -125,14 +125,14 @@ typedef struct AgentxxClientHostVtable {
 
     /// 注册侧边栏面板; 返回句柄 (宿主持有; 卸载自动清理)
     /// - id: 全局唯一, 建议 "{插件名}.{面板名}"
-    /// - props_json: {"title": "..."} (title 必填; 显示在 tab 栏)
+    /// - propsJson: {"title": "..."} (title 必填; 显示在 tab 栏)
     /// - 宿主不支持 (ui_caps 无 PANEL) 或 id 冲突时返回 NULL
     AgentxxPanel* (*register_panel)(
         const AgentxxClientHost* host,
         AgentxxPluginStringView  id,
-        AgentxxPluginStringView  props_json
+        AgentxxPluginStringView  propsJson
     );
-    /// 更新面板内容: items_json = {"items":[{"kind":"text","role":"normal","text":"..."},
+    /// 更新面板内容: itemsJson = {"items":[{"kind":"text","role":"normal","text":"..."},
     ///   {"kind":"progress","label":"...","value":0.5},
     ///   {"kind":"action","id":"rebuild","label":"Rebuild"}, ...]}
     /// - text.role 指定文本样式: "title"=高亮强调 / "normal"=普通文本(默认) /
@@ -142,27 +142,27 @@ typedef struct AgentxxClientHostVtable {
     int (*update_panel)(
         const AgentxxClientHost* host,
         AgentxxPanel*            panel,
-        AgentxxPluginStringView  items_json
+        AgentxxPluginStringView  itemsJson
     );
     /// 注销面板 (句柄随后失效)
     void (*unregister_panel)(const AgentxxClientHost* host, AgentxxPanel* panel);
 
     /// 注册侧边栏 Info 栏段落; 返回句柄 (宿主持有; 卸载自动清理)
     /// - id: 全局唯一, 建议 "{插件名}.{段名}"
-    /// - props_json: {"title": "..."} (title 可选; 空则无段落标题)
+    /// - propsJson: {"title": "..."} (title 可选; 空则无段落标题)
     /// - 宿主不支持 (ui_caps 无 INFO_SECTION) 或 id 冲突时返回 NULL
     AgentxxInfoSection* (*register_info_section)(
         const AgentxxClientHost* host,
         AgentxxPluginStringView  id,
-        AgentxxPluginStringView  props_json
+        AgentxxPluginStringView  propsJson
     );
-    /// 更新 Info 栏段落内容: items_json 同 update_panel 的 items schema
+    /// 更新 Info 栏段落内容: itemsJson 同 update_panel 的 items schema
     ///   ({"items":[{"kind":"text","role":"title|normal|hint","text":"..."}, ...]});
     ///   列表项由宿主按侧边栏 Append 段样式以 "|  xxx" 前缀展示
     int (*update_info_section)(
         const AgentxxClientHost* host,
         AgentxxInfoSection*      section,
-        AgentxxPluginStringView  items_json
+        AgentxxPluginStringView  itemsJson
     );
     /// 注销 Info 栏段落 (句柄随后失效)
     void (*unregister_info_section)(const AgentxxClientHost* host, AgentxxInfoSection* section);
@@ -171,13 +171,13 @@ typedef struct AgentxxClientHostVtable {
     /// 注册斜杠命令: 用户输入 "/{name}" 触发 (name 不含 '/' 与空格)
     /// - name: 全局唯一; description: 帮助/自动补全用
     /// - execute: client io 线程同步调用; 返回动作 JSON (host->alloc), 失败返回
-    ///   NULL 并经 error_out 输出错误 (host->alloc); 宿主解释动作 (见文件头)
+    ///   NULL 并经 errorOut 输出错误 (host->alloc); 宿主解释动作 (见文件头)
     /// - 返回 0 成功; 名字冲突或参数非法返回非 0
     int (*register_command)(
         const AgentxxClientHost* host,
         AgentxxPluginStringView  name,
         AgentxxPluginStringView  description,
-        char* (*execute)(void* ud, AgentxxPluginStringView args_json, char** error_out),
+        char* (*execute)(void* ud, AgentxxPluginStringView argsJson, char** errorOut),
         void* ud
     );
     /// 注销斜杠命令 (按名称); 不存在返回非 0
@@ -191,28 +191,28 @@ typedef struct AgentxxClientHostVtable {
     AgentxxSubscription* (*subscribe)(
         const AgentxxClientHost* host,
         int                      event, /* AgentxxClientEvent */
-        void (*handler)(AgentxxPluginStringView payload_json, void* ud),
+        void (*handler)(AgentxxPluginStringView payloadJson, void* ud),
         void* ud
     );
     void (*unsubscribe)(AgentxxSubscription* sub);
 
     /* ---- 会话上下文 (快照; host->alloc) ---- */
     /// 当前 client 状态 JSON:
-    /// {"threadId","connState","model","models":[],"isStreaming","uiCaps"}
+    /// {"sessionId","connState","model","models":[],"isStreaming","uiCaps"}
     /// (model/models 依赖服务端推送; 未收到时为空)
     char* (*get_client_state)(const AgentxxClientHost* host);
 
     /* ---- 会话操作 (受限; 见插件设计文档安全节) ---- */
-    /// 代发一条用户消息 (thread_id 与当前会话不符时仍按当前会话发送并记日志)
+    /// 代发一条用户消息 (sessionId 与当前会话不符时仍按当前会话发送并记日志)
     /// - 与用户输入同排队语义 (流式中进 pendingInputs), 不绕过 UI 状态机
     /// - 返回 0 成功; 非 0 表示宿主不可用 (未连接等)
     int (*send_user_input)(
         const AgentxxClientHost* host,
-        AgentxxPluginStringView  thread_id,
+        AgentxxPluginStringView  sessionId,
         AgentxxPluginStringView  text
     );
     /// 请求取消当前会话轮次 (与用户按 Esc 等价)
-    void (*request_cancel)(const AgentxxClientHost* host, AgentxxPluginStringView thread_id);
+    void (*request_cancel)(const AgentxxClientHost* host, AgentxxPluginStringView sessionId);
 
     /* ---- 跨端插件数据通道: client 实例 → wire → agent 侧实例 ---- */
     /// 发送事件到 agent 侧: 服务端发布到事件总线 topic `client.{插件名}.{event}`

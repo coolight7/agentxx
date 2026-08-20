@@ -68,9 +68,9 @@ std::optional<agentxx::middleware::SummarizationToolHandle>
 }
 
 asio::awaitable<std::string> WritePlanningTool::execute_async(const neograph::json& arguments) {
-    auto thread_id = arguments.value("thread_id", std::string{});
-    if (thread_id.empty()) {
-        co_return R"({"error":"Toolcall inner exec failed, need `thread_id`"})";
+    auto session_id = arguments.value("session_id", std::string{});
+    if (session_id.empty()) {
+        co_return R"({"error":"Toolcall inner exec failed, need `session_id`"})";
     }
 
     auto roadmap = arguments.value("roadmap", std::string{});
@@ -83,7 +83,7 @@ asio::awaitable<std::string> WritePlanningTool::execute_async(const neograph::js
         co_return R"({"error":"planningContext is null"})";
     }
 
-    auto state = co_await handlePtr->getStateItem(thread_id);
+    auto state = co_await handlePtr->getStateItem(session_id);
 
     neograph::json planStore = neograph::json::object();
     planStore["roadmap"]     = roadmap;
@@ -93,7 +93,7 @@ asio::awaitable<std::string> WritePlanningTool::execute_async(const neograph::js
     if (arguments.contains("notes")) {
         planStore["notes"] = arguments["notes"];
     }
-    state->plannings[thread_id] = planStore;
+    state->plannings[session_id] = planStore;
 
     co_return "success";
 }

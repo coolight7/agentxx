@@ -44,9 +44,9 @@ public:
         }
     }
 
-    void requestCancel(const std::string& threadId) override {
+    void requestCancel(const std::string& sessionId) override {
         if (auto io = io_.lock()) {
-            io->requestCancel(threadId);
+            io->requestCancel(sessionId);
         }
     }
 

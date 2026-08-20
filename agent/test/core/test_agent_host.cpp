@@ -144,7 +144,7 @@ asio::awaitable<void> test_host_spawn_e2e() {
             // [workaround] 聚合提取为具名变量, 绕过 g++ 16.1 ICE (gimplify.cc:841)
             agentxx::events::ReqSubagentBatch e2eReq{
                 .parentAgentName = "root",
-                .parentThreadId  = "parent-session",
+                .parentSessionId  = "parent-session",
                 .cancelToken     = nullptr,
                 .tasks           = {
                     agentxx::events::SubagentBatchItem{
@@ -187,7 +187,7 @@ asio::awaitable<void> test_host_spawn_e2e() {
     co_return;
 }
 
-/// 验证: 同上下文模式派生子代理 (messages 结构化透传 + threadId 指定)
+/// 验证: 同上下文模式派生子代理 (messages 结构化透传 + sessionId 指定)
 /// - messages 原样透传为子代理初始上下文 (含 system, 不做文本转录,
 ///   不插入子代理默认提示)
 /// - 子代理运行在指定 thread, 强制使用父会话当前模型 (忽略子代理 config 默认)
@@ -249,7 +249,7 @@ asio::awaitable<void> test_host_spawn_same_context() {
             // [workaround] 聚合提取为具名变量, 绕过 g++ 16.1 ICE (gimplify.cc:8406)
             agentxx::events::ReqSubagentBatch sameCtxReq{
                 .parentAgentName = "root",
-                .parentThreadId  = "parent-session",
+                .parentSessionId  = "parent-session",
                 .cancelToken     = nullptr,
                 .tasks           = {
                     agentxx::events::SubagentBatchItem{
@@ -259,7 +259,7 @@ asio::awaitable<void> test_host_spawn_same_context() {
                         // 结构化消息透传 (可含 system, 原样透传)
                         .messages = prefix,
                         // 同上下文: 运行在父线程, 共享上下文前缀
-                        .threadId = "parent-session",
+                        .sessionId = "parent-session",
                         .resultId = "call_same_ctx",
                     },
                 },
@@ -273,10 +273,10 @@ asio::awaitable<void> test_host_spawn_same_context() {
                                   std::chrono::seconds(30)
                               );
 
-            // 对照: 默认模式 (无 messages/threadId) → 独立线程 + config 默认模型
+            // 对照: 默认模式 (无 messages/sessionId) → 独立线程 + config 默认模型
             agentxx::events::ReqSubagentBatch normalReq{
                 .parentAgentName = "root",
-                .parentThreadId  = "parent-session",
+                .parentSessionId  = "parent-session",
                 .cancelToken     = nullptr,
                 .tasks           = {
                     agentxx::events::SubagentBatchItem{
@@ -284,7 +284,7 @@ asio::awaitable<void> test_host_spawn_same_context() {
                         .systemPrompt        = "You are a worker.",
                         .message             = "plain task",
                         .messages            = std::nullopt,
-                        .threadId            = "",
+                        .sessionId            = "",
                         .tools               = std::nullopt,
                         .enableSummarization = std::nullopt,
                         .resultId            = "call_normal",
@@ -416,7 +416,7 @@ asio::awaitable<void> test_host_spawn_tool_policy() {
                 // [workaround] 聚合提取为具名变量, 绕过 g++ 16.1 ICE
                 agentxx::events::ReqSubagentBatch req{
                     .parentAgentName = "root",
-                    .parentThreadId  = "parent-session",
+                    .parentSessionId  = "parent-session",
                     .cancelToken     = nullptr,
                     .tasks           = {
                         agentxx::events::SubagentBatchItem{
@@ -424,7 +424,7 @@ asio::awaitable<void> test_host_spawn_tool_policy() {
                             .systemPrompt        = "You are a worker.",
                             .message             = "do " + tag,
                             .messages            = std::nullopt,
-                            .threadId            = "",
+                            .sessionId            = "",
                             .tools               = tools,
                             .enableSummarization = std::nullopt,
                             .resultId            = "call_" + tag,
@@ -694,9 +694,9 @@ asio::awaitable<void> test_host_spawn_concurrent_limit() {
 /// 验证: 嵌套委派 (子代理再派生子代理, P3 扁平化总线路径)
 /// - 根 agent 执行 agentxx_subagent tool → 中断 → 根总线委派 → 宿主派生 A
 /// - A 执行 agentxx_subagent tool → 中断 → A 自身总线 (service.subagent 由
-///   宿主 serve) 委派 → 宿主派生 B (与根委派完全同路径, 无宿主函数直调)
+///   宿主 registerServer) 委派 → 宿主派生 B (与根委派完全同路径, 无宿主函数直调)
 /// - B 纯文本回复 → 结果沿 B → A → 根逐级 resume 回填
-/// - 深度/并发预算、级联取消经 req.parentThreadId / req.cancelToken 生效
+/// - 深度/并发预算、级联取消经 req.parentSessionId / req.cancelToken 生效
 /// - 全部节点回收 (registry 仅剩 root, runningSubagents == 0)
 asio::awaitable<void> test_host_spawn_nested_delegation() {
     auto sim     = startDaSimServer();
@@ -744,7 +744,7 @@ asio::awaitable<void> test_host_spawn_nested_delegation() {
             // [workaround] 聚合提取为具名变量, 绕过 g++ 16.1 ICE (gimplify.cc:841)
             agentxx::events::ReqSubagentBatch nestedReq{
                 .parentAgentName = "root",
-                .parentThreadId  = "parent-session",
+                .parentSessionId  = "parent-session",
                 .cancelToken     = nullptr,
                 .tasks           = {
                     agentxx::events::SubagentBatchItem{
@@ -816,7 +816,7 @@ asio::awaitable<void> test_host_spawn_batch() {
             // (gimplify.cc:8406 internal compiler error)
             agentxx::events::ReqSubagentBatch batchReq{
                 .parentAgentName = "root",
-                .parentThreadId  = "",
+                .parentSessionId  = "",
                 .cancelToken     = nullptr,
                 .tasks           = {
                     agentxx::events::SubagentBatchItem{

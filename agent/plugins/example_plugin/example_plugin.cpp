@@ -64,7 +64,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_get_inf
 static char* echo_execute(
     void*                   user_data,
     AgentxxPluginStringView args_json,
-    AgentxxPluginStringView thread_id,
+    AgentxxPluginStringView session_id,
     AgentxxPluginStringView tool_call_id,
     char**                  error_out
 ) {
@@ -76,9 +76,9 @@ static char* echo_execute(
     }
     // 结果 JSON: {"echo": <原样参数>}
     const std::string out = fmt::format(
-        R"({{"echo": {},"thread_id": {}}})",
+        R"({{"echo": {},"session_id": {}}})",
         std::string_view{args_json.data ? args_json.data : "{}", args_json.size},
-        agentJsonEscape(thread_id)
+        agentJsonEscape(session_id)
     );
     return g_host->vtable->strdup(out.c_str());
 }
@@ -91,12 +91,12 @@ static char* echo_execute(
 static char* sleep_execute(
     void*                   user_data,
     AgentxxPluginStringView args_json,
-    AgentxxPluginStringView thread_id,
+    AgentxxPluginStringView session_id,
     AgentxxPluginStringView tool_call_id,
     char**                  error_out
 ) {
     (void)user_data;
-    (void)thread_id;
+    (void)session_id;
     (void)tool_call_id;
     (void)error_out;
     if (!g_host) {
@@ -105,7 +105,7 @@ static char* sleep_execute(
     // 轻量解析 duration_ms (默认 200)
     int ms = 200;
     if (!agentxx_plugin_sv_empty(args_json)) {
-        char* v = g_host->vtable->json_get_string(g_host, args_json, AGENTXX_SV("duration_ms"));
+        char* v = g_host->vtable->json_get_string(g_host, args_json, AGENTXX_SV("durationMs"));
         if (v) {
             try {
                 ms = std::stoi(v);
@@ -125,7 +125,7 @@ static char* sleep_execute(
 static char* caller_execute(
     void*                   user_data,
     AgentxxPluginStringView args_json,
-    AgentxxPluginStringView thread_id,
+    AgentxxPluginStringView session_id,
     AgentxxPluginStringView tool_call_id,
     char**                  error_out
 ) {
@@ -140,7 +140,7 @@ static char* caller_execute(
         g_host,
         AGENTXX_SV("example_echo"),
         agentxx_plugin_sv_empty(args_json) ? AGENTXX_SV("{}") : args_json,
-        thread_id,
+        session_id,
         &err
     );
     if (!resp) {
@@ -231,7 +231,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
     sleeper.description
         = AGENTXX_SV("Sleep duration_ms milliseconds then return (slow plugin tool).");
     sleeper.parameters_json
-        = AGENTXX_SV(R"({"type":"object","properties":{"duration_ms":{"type":"integer"}}})");
+        = AGENTXX_SV(R"({"type":"object","properties":{"durationMs":{"type":"integer"}}})");
     sleeper.execute            = sleep_execute;
     sleeper.default_timeout_ms = 0; // 无默认超时 (测试用例自行指定)
     if (host->vtable->register_tool(host, &sleeper) != 0) {

@@ -16,12 +16,12 @@ namespace tools {
 events::ReqSubagentBatch parseSubagentBatchFromInterrupt(
     const middleware::InterruptHandleArg&         interruptArg,
     std::string_view                              agentName,
-    std::string_view                              threadId,
+    std::string_view                              sessionId,
     std::shared_ptr<neograph::graph::CancelToken> cancelToken
 ) {
     events::ReqSubagentBatch batchReq{
         .parentAgentName = std::string{agentName},
-        .parentThreadId  = std::string{threadId},
+        .parentSessionId = std::string{sessionId},
         .cancelToken     = std::move(cancelToken),
     };
     const auto& arg = interruptArg.arg;
@@ -36,8 +36,8 @@ events::ReqSubagentBatch parseSubagentBatchFromInterrupt(
                 .messages = (t.contains("messages") && t["messages"].is_array())
                                 ? std::optional<neograph::json>{t["messages"]}
                                 : std::nullopt,
-                // 指定运行 thread (同上下文模式): 空时保持默认独立 subagent 线程
-                .threadId = t.value("thread_id", std::string{}),
+                // 指定运行 session (同上下文模式): 空时保持默认独立 subagent 线程
+                .sessionId = t.value("session_id", std::string{}),
                 // 工具策略 (无工具/继承父/自定义): 缺省不设置 (子代理默认全量)
                 .tools = (t.contains("tools") && t["tools"].is_array())
                              ? std::optional<neograph::json>{t["tools"]}
@@ -60,7 +60,7 @@ events::ReqSubagentBatch parseSubagentBatchFromInterrupt(
             .messages     = (arg.contains("messages") && arg["messages"].is_array())
                                 ? std::optional<neograph::json>{arg["messages"]}
                                 : std::nullopt,
-            .threadId     = arg.value("thread_id", std::string{}),
+            .sessionId    = arg.value("session_id", std::string{}),
             .tools        = (arg.contains("tools") && arg["tools"].is_array())
                                 ? std::optional<neograph::json>{arg["tools"]}
                                 : std::nullopt,
@@ -161,10 +161,10 @@ neograph::ChatTool SubAgentManagerTool::get_definition() const {
                     },
                 },
                 {
-                    "thread_id",
+                    "session_id",
                     {
                         {"type", "string"},
-                        {"description", prompt.getArg("thread_id")},
+                        {"description", prompt.getArg("session_id")},
                     },
                 },
                 {
@@ -264,10 +264,10 @@ neograph::ChatTool SubAgentManagerTool::get_definition() const {
                         },
                     },
                     {
-                        "thread_id",
+                        "session_id",
                         {
                             {"type", "string"},
-                            {"description", prompt.getArg("thread_id")},
+                            {"description", prompt.getArg("session_id")},
                         },
                     },
                     {
@@ -307,7 +307,7 @@ asio::awaitable<std::string> SubAgentManagerTool::execute_async(const neograph::
         std::string                   systemPrompt;
         std::string                   message;
         std::optional<neograph::json> messages;
-        std::string                   threadId;
+        std::string                   sessionId;
         std::optional<neograph::json> tools;
         std::optional<bool>           enableSummarization;
         std::string                   resultId;
@@ -318,7 +318,7 @@ asio::awaitable<std::string> SubAgentManagerTool::execute_async(const neograph::
         task.subagent     = t.value("subagent", std::string{});
         task.systemPrompt = t.value("system_prompt", std::string{});
         task.message      = t.value("message", std::string{});
-        task.threadId     = t.value("thread_id", std::string{});
+        task.sessionId    = t.value("session_id", std::string{});
         task.resultId     = t.value("result_id", std::string{});
         if (t.contains("messages") && t["messages"].is_array()) {
             task.messages = t["messages"];
@@ -374,15 +374,15 @@ asio::awaitable<std::string> SubAgentManagerTool::execute_async(const neograph::
     if (!agentCtxPtr || !agentCtxPtr->middlewareHandleContext) {
         co_return R"({"error":"AgentContext not available"})";
     }
-    // thread_id 由 toolcall 节点在执行前注入 arguments (见 toolcall.cpp)
-    auto threadId = arguments.value("thread_id", std::string{});
-    auto resultId = arguments.value("tool_call_id", std::string{});
+    // session_id 由 toolcall 节点在执行前注入 arguments (见 toolcall.cpp)
+    auto sessionId = arguments.value("session_id", std::string{});
+    auto resultId  = arguments.value("tool_call_id", std::string{});
 
     // 通过 requestInterrupt 触发/恢复中断
     // - 首次: 存储中断参数 (tasks 数组) 到 graphData, 抛出 NodeInterrupt
     // - 恢复: 从 graphData 读取中断结果, 按 resultId 提取
     auto result = co_await agentCtxPtr->middlewareHandleContext->requestInterrupt(
-        threadId,
+        sessionId,
         [&]() {
             auto tasksJson = neograph::json::array();
             for (const auto& task : tasks) {
@@ -395,9 +395,9 @@ asio::awaitable<std::string> SubAgentManagerTool::execute_async(const neograph::
                 if (task.messages.has_value()) {
                     t["messages"] = *task.messages;
                 }
-                // 指定运行 thread (同上下文模式): 空时保持默认独立 subagent 线程
-                if (!task.threadId.empty()) {
-                    t["thread_id"] = task.threadId;
+                // 指定运行 session (同上下文模式): 空时保持默认独立 subagent 线程
+                if (!task.sessionId.empty()) {
+                    t["session_id"] = task.sessionId;
                 }
                 // 工具策略 (无工具/继承父/自定义): 缺省不设置 (子代理默认全量)
                 if (task.tools.has_value()) {

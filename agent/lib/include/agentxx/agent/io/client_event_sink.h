@@ -27,7 +27,7 @@ public:
     virtual ~ClientEventSink() = default;
 
     /// 服务端就绪 (agent init 完成, 会话驱动循环即将开始消费输入)
-    /// - payload: {"uiCaps": n, "threadId": "..."}
+    /// - payload: {"uiCaps": n, "sessionId": "..."}
     virtual void onReady() {}
 
     /// 连接状态变化 (state: "connecting" / "connected" / "failed";
@@ -36,8 +36,8 @@ public:
     virtual void onConnStateChanged(std::string_view state, std::string_view progress) {}
 
     /// 用户输入已发送 (text 为发送原文)
-    /// - payload: {"threadId": "...", "text": "..."}
-    virtual void onUserInput(std::string_view threadId, std::string_view text) {}
+    /// - payload: {"sessionId": "...", "text": "..."}
+    virtual void onUserInput(std::string_view sessionId, std::string_view text) {}
 
     /// 增量事件 (流式 token / tool 生命周期 / 轮次边界等)
     /// - payload: delta JSON (与 wire delta 字段一致)
@@ -47,9 +47,9 @@ public:
     /// - payload: turn result JSON
     virtual void onTurnResult(const WireTurnResult& result) {}
 
-    /// 当前会话切换 (threadId 为切换后的会话)
-    /// - payload: {"threadId": "..."}
-    virtual void onSessionSwitched(std::string_view threadId) {}
+    /// 当前会话切换 (sessionId 为切换后的会话)
+    /// - payload: {"sessionId": "..."}
+    virtual void onSessionSwitched(std::string_view sessionId) {}
 
     /// 插件事件转发 (Server -> Client, WirePluginData)
     /// - payload: {"plugin": "...", "event": "...", "data": "..."}

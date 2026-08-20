@@ -21,8 +21,8 @@ FfiClientAgentIO::~FfiClientAgentIO() {
     failAllPendingInterrupts();
 }
 
-void FfiClientAgentIO::setThreadId(std::string threadId) {
-    threadId_ = std::move(threadId);
+void FfiClientAgentIO::setSessionId(std::string sessionId) {
+    sessionId_ = std::move(sessionId);
 }
 
 void FfiClientAgentIO::setAgentThreadId(std::thread::id tid) {
@@ -64,7 +64,7 @@ asio::awaitable<std::optional<std::string>> FfiClientAgentIO::getInput() {
 }
 
 asio::awaitable<neograph::json> FfiClientAgentIO::handleInterrupt(
-    std::string_view /*threadId*/,
+    std::string_view /*sessionId*/,
     std::string_view /*interruptNode*/,
     std::string_view /*interruptValue*/,
     std::string_view /*interruptArgJson*/
@@ -120,7 +120,7 @@ void FfiClientAgentIO::onTurnResult(const agent::WireTurnResult& result) {
     emitEvent(
         AGENTXX_EVT_TURN_END,
         dump(agent::io::makeTurnResult(
-            result.threadId,
+            result.sessionId,
             result.hasError,
             result.errorMessage,
             result.interrupted,
@@ -142,7 +142,7 @@ void FfiClientAgentIO::onContextStats(const agent::WireContextStats& stats) {
 
 void FfiClientAgentIO::onServerReady() {
     neograph::json j = neograph::json::object();
-    j["threadId"]    = threadId_;
+    j["sessionId"]   = sessionId_;
     emitEvent(AGENTXX_EVT_READY, dump(j));
 }
 
@@ -164,7 +164,7 @@ void FfiClientAgentIO::onPeerMessage(agent::WireMessage msg) {
                 // 事件: 完整中断信息 (argJson 原样透传, 宿主据此渲染询问 UI)
                 neograph::json j = neograph::json::object();
                 j["interruptId"] = id;
-                j["threadId"]    = m.threadId;
+                j["sessionId"]   = m.sessionId;
                 j["node"]        = m.node;
                 j["value"]       = m.value;
                 j["argJson"]     = m.argJson;
@@ -174,7 +174,7 @@ void FfiClientAgentIO::onPeerMessage(agent::WireMessage msg) {
                 auto self = shared_from_this();
                 asio::co_spawn(
                     ex_,
-                    [self, ch, id, threadId = m.threadId]() mutable -> asio::awaitable<void> {
+                    [self, ch, id, sessionId = m.sessionId]() mutable -> asio::awaitable<void> {
                         auto [answered, result] = co_await self->waitHostInterrupt(id, ch);
                         // 仅当宿主真实应答 (非过期/停止关闭通道) 时回送;
                         // 过期路径 server 已发 WireInterruptExpired, 无需回送

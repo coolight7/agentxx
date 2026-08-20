@@ -75,7 +75,7 @@ std::shared_ptr<AgentHost> AgentHost::create(Config cfg) {
     // (包装为单任务批量请求, 统一走 spawnBatch 路径)
     host->hostBus_
         ->getRR<events::ReqHostSpawn, events::RespHostSpawn>(events::HostTopic::AgentSpawn)
-        .serve(
+        .registerServer(
             [self](const events::ReqHostSpawn& req, size_t)
                 -> asio::awaitable<events::RespHostSpawn> {
                 auto ptr = self.lock();
@@ -87,7 +87,7 @@ std::shared_ptr<AgentHost> AgentHost::create(Config cfg) {
                 }
                 auto batchResp = co_await ptr->spawnBatch(events::ReqSubagentBatch{
                     .parentAgentName = "",
-                    .parentThreadId  = req.parentAgentId,
+                    .parentSessionId  = req.parentAgentId,
                     .cancelToken     = req.cancelToken,
                     .tasks           = {
                         events::SubagentBatchItem{
@@ -117,7 +117,7 @@ std::shared_ptr<AgentHost> AgentHost::create(Config cfg) {
     // agent.message (RR): 任意→任意 agent 消息 (mailbox 路由)
     host->hostBus_
         ->getRR<events::ReqHostMessage, events::RespHostMessage>(events::HostTopic::AgentMessage)
-        .serve(
+        .registerServer(
             [self](const events::ReqHostMessage& req, size_t)
                 -> asio::awaitable<events::RespHostMessage> {
                 auto ptr = self.lock();
@@ -198,7 +198,7 @@ void AgentHost::attachRoot(std::shared_ptr<BaseAgent> rootAgent) {
         return;
     }
 
-    // 根 agent 全局总线上 serve 子代理委派 (中断路径, 统一批量语义):
+    // 根 agent 全局总线上 registerServer 子代理委派 (中断路径, 统一批量语义):
     // - SubAgentManagerTool 抛 NodeInterrupt → BaseAgent 中断循环 →
     //   agentContext->bus->request(service.subagent, ReqSubagentBatch) → 到达宿主
     // - 宿主派生独立 agent 运行 (单任务 = 1 个 task), 结果经 interruptResult
@@ -219,7 +219,7 @@ void AgentHost::attachRoot(std::shared_ptr<BaseAgent> rootAgent) {
     auto& rr = ctx->bus->getRR<events::ReqSubagentBatch, events::RespSubagentBatch>(
         events::Topic::Subagent
     );
-    subagentServerId_ = rr.serve(
+    subagentServerId_ = rr.registerServer(
         [self](const events::ReqSubagentBatch& req, size_t)
             -> asio::awaitable<events::RespSubagentBatch> {
             auto ptr = self.lock();
@@ -250,8 +250,8 @@ std::shared_ptr<AgentConfig> AgentHost::makeSubagentConfig(std::shared_ptr<Agent
     cfg->ragDocsPaths.clear();
     cfg->skillDirPaths.clear();
     cfg->memoryFilePaths.clear();
-    cfg->enableSessionPersistence = false;
-    cfg->sessionPersistenceRoot.clear();
+    cfg->enableSessionStore = false;
+    cfg->sessionStoreDirectory.clear();
     // 模型: 与旧 subgraph 语义一致, 默认使用配置的 subagent 模型
     if (cfg->subagentModel.has_value()) {
         cfg->model = *cfg->subagentModel;
@@ -295,14 +295,14 @@ void AgentHost::publishProgress(
 
 asio::awaitable<events::RespSubagentBatchItem> AgentHost::spawnOneTask(
     const events::SubagentBatchItem&              task,
-    std::string_view                              parentThreadId,
+    std::string_view                              parentSessionId,
     std::shared_ptr<neograph::graph::CancelToken> cancelToken,
     std::shared_ptr<AgentContext>                 parentAgentCtx
 ) {
     const auto& subagentName = task.subagentName;
     // ---- 宿主预算检查 (深度 / 并发) ----
     size_t parentDepth = 0;
-    if (auto it = threadDepth_.find(parentThreadId); it != threadDepth_.end()) {
+    if (auto it = sessionDepth_.find(parentSessionId); it != sessionDepth_.end()) {
         parentDepth = it->second;
     }
     const size_t depth = parentDepth + 1;
@@ -359,8 +359,7 @@ asio::awaitable<events::RespSubagentBatchItem> AgentHost::spawnOneTask(
             if (task.tools->empty()) {
                 // []: 无工具 (纯文本回答)
                 XX_LOGD("spawnOneTask `{}`: tool policy = none", subagentName);
-            } else if (task.tools->size() == 1 && (*task.tools)[0].is_string()
-                       && (*task.tools)[0].get<std::string>() == "*") {
+            } else if (task.tools->size() == 1 && (*task.tools)[0].is_string() && (*task.tools)[0].get<std::string>() == "*") {
                 // ["*"]: 全量继承父 agent 工具 (解析为父工具名白名单;
                 // 子代理未创建的父工具名自然跳过, 不报错)
                 if (rootAgent_ && rootAgent_->getContext()) {
@@ -421,20 +420,20 @@ asio::awaitable<events::RespSubagentBatchItem> AgentHost::spawnOneTask(
 
     // 同上下文模式: 子代理的 share_store 工具桥接到父会话的 store
     // (id 空间一致: 子代理写入的长内容, 父会话按摘要中的 id 可直接读取)
-    const bool sameContext = !task.threadId.empty();
+    const bool sameContext = !task.sessionId.empty();
     if (sameContext && rootAgent_ && rootAgent_->getContext()
         && rootAgent_->getContext()->middlewareHandleContext) {
         subCtx->agentConfig->sharedShareStoreContext
             = rootAgent_->getContext()->middlewareHandleContext;
     }
 
-    // 唯一运行 id 与 thread id
+    // 唯一运行 id 与 session id
     const auto agentId  = nextAgentId();
-    const auto parentId = std::string{parentThreadId};
-    // 同上下文模式: 子代理直接运行在指定 thread (与父会话同 thread),
+    const auto parentId = std::string{parentSessionId};
+    // 同上下文模式: 子代理直接运行在指定 session (与父会话同 session),
     // 共享上下文前缀; 默认模式使用独立 subagent 线程 id (上下文隔离)
-    const auto subagentThreadId
-        = sameContext ? task.threadId
+    const auto subagentSessionId
+        = sameContext ? task.sessionId
                       : fmt::format("subagent_{}_{}_{}", subagentName, agentId, agentIdSeq_);
 
     // 注册节点 (平等成员; 父为根节点)
@@ -449,16 +448,16 @@ asio::awaitable<events::RespSubagentBatchItem> AgentHost::spawnOneTask(
     runningSubagentCount_++;
     if (!sameContext) {
         // 同上下文模式共享父线程: 不覆盖父线程深度记录
-        threadDepth_[subagentThreadId] = depth;
+        sessionDepth_[subagentSessionId] = depth;
     }
 
     // 运行边界清理 (成功/错误/取消统一回收节点)
     struct SpawnCleanup {
         std::shared_ptr<AgentHost> host;
         std::string                agentId;
-        std::string                subagentThreadId;
-        bool                       sharedThread = false;
-        bool                       done         = false;
+        std::string                subagentSessionId;
+        bool                       sharedSession = false;
+        bool                       done          = false;
 
         void cleanup() {
             if (done) {
@@ -467,8 +466,8 @@ asio::awaitable<events::RespSubagentBatchItem> AgentHost::spawnOneTask(
             done = true;
             if (host) {
                 host->destroyAgent(agentId);
-                if (!sharedThread) {
-                    host->threadDepth_.erase(subagentThreadId);
+                if (!sharedSession) {
+                    host->sessionDepth_.erase(subagentSessionId);
                 }
                 if (host->runningSubagentCount_ > 0) {
                     host->runningSubagentCount_--;
@@ -479,7 +478,7 @@ asio::awaitable<events::RespSubagentBatchItem> AgentHost::spawnOneTask(
         ~SpawnCleanup() {
             cleanup();
         }
-    } cleanup{shared_from_this(), agentId, subagentThreadId, sameContext};
+    } cleanup{shared_from_this(), agentId, subagentSessionId, sameContext};
 
     // ---- 运行 (engine 直跑: 保留调用方 executor, 无锁交错) ----
     co_return co_await agentxx::util::catchErrorAsync<events::RespSubagentBatchItem>(
@@ -500,7 +499,7 @@ asio::awaitable<events::RespSubagentBatchItem> AgentHost::spawnOneTask(
             // - 父会话从 parentAgentCtx (父 agent 的 SessionStore) 查找:
             //   嵌套委派时父上下文是上一级子代理 (而非根), 保证任意深度
             //   的 HIL 都能找到正确的父会话链
-            auto subSession = subCtx->getSession(subagentThreadId);
+            auto subSession = subCtx->getSession(subagentSessionId);
             if (!parentId.empty()) {
                 auto parentCtx = parentAgentCtx;
                 if (!parentCtx && rootAgent_) {
@@ -513,7 +512,7 @@ asio::awaitable<events::RespSubagentBatchItem> AgentHost::spawnOneTask(
                         subSession->bus = parentSession->bus;
                         if (sameContext) {
                             // 同上下文模式: 强制使用父会话当前模型 (忽略 subagentModel),
-                            // 与父会话相同模型 + 相同 thread + 相同上下文前缀,
+                            // 与父会话相同模型 + 相同 session + 相同上下文前缀,
                             // 三条件共同保证命中 provider KV/prefix cache
                             subSession->setModelName(parentSession->getModelName());
                         }
@@ -521,23 +520,23 @@ asio::awaitable<events::RespSubagentBatchItem> AgentHost::spawnOneTask(
                 }
             }
 
-            // ---- 子代理委派总线 serve (扁平化核心) ----
+            // ---- 子代理委派总线 registerServer (扁平化核心) ----
             // 子代理作用域内的 "subagent" 中断 (嵌套委派) 经本总线请求,
             // 与根委派完全同路径; 宿主是唯一 spawn 服务者, 深度/并发预算
             // 与取消级联在此统一执行
-            // - handler 捕获弱引用 (parentCtx weak): 避免 ctx->bus -> serve
+            // - handler 捕获弱引用 (parentCtx weak): 避免 ctx->bus -> registerServer
             //   handler -> ctx 的 shared_ptr 循环引用 (子代理回收时总线随 ctx
             //   析构, 无悬空)
             if (subCtx->bus) {
                 std::weak_ptr<AgentContext> parentCtxWeak = subCtx;
-                std::string                 parentThread  = subagentThreadId;
+                std::string                 parentSession = subagentSessionId;
                 std::weak_ptr<AgentHost>    selfWeak      = weak_from_this();
                 subCtx->bus
                     ->getRR<events::ReqSubagentBatch, events::RespSubagentBatch>(
                         events::Topic::Subagent
                     )
-                    .serve(
-                        [selfWeak, parentCtxWeak, parentThread](
+                    .registerServer(
+                        [selfWeak, parentCtxWeak, parentSession](
                             const events::ReqSubagentBatch& req,
                             size_t
                         ) -> asio::awaitable<events::RespSubagentBatch> {
@@ -546,10 +545,10 @@ asio::awaitable<events::RespSubagentBatchItem> AgentHost::spawnOneTask(
                                 co_return events::RespSubagentBatch{};
                             }
                             // 防御: 深度预算按本子代理线程查表 (请求方
-                            // AgentRunner 已填 parentThreadId, 此处保证不被
+                            // AgentRunner 已填 parentSessionId, 此处保证不被
                             // 外部构造的请求改写)
-                            auto r           = req;
-                            r.parentThreadId = parentThread;
+                            auto r            = req;
+                            r.parentSessionId = parentSession;
                             // 嵌套委派时父上下文是上一级子代理 (HIL 继承查找用)
                             co_return co_await ptr->spawnBatch(r, parentCtxWeak.lock());
                         }
@@ -571,7 +570,7 @@ asio::awaitable<events::RespSubagentBatchItem> AgentHost::spawnOneTask(
             }
 
             neograph::graph::RunConfig cfg{
-                .thread_id        = subagentThreadId,
+                .thread_id        = subagentSessionId,
                 .input            = {{"messages", std::move(inputMessages)}},
                 .cancel_token     = cancelToken,
                 .resume_if_exists = false,
@@ -615,22 +614,21 @@ asio::awaitable<events::RespSubagentBatchItem> AgentHost::spawnOneTask(
             // 统一的 "运行 + 中断处理 + 恢复" 循环 (与根 agent 共用 AgentRunner):
             // - 语义与旧内联循环完全一致 (无 checkpoint 持久化 / 无 MessageTip /
             //   HIL 超时统一取 IO 端点配置, 与根同策略)
-            // - 嵌套委派: 经本子代理总线 (service.subagent 由宿主 serve) 请求,
+            // - 嵌套委派: 经本子代理总线 (service.subagent 由宿主 registerServer) 请求,
             //   与根委派完全同路径 (扁平化: 无宿主函数直调)
             // - HIL (权限询问等): 子代理会话继承父会话总线, 请求冒泡到父 IO
             //   (弹窗/确认), 结果注入后 resume
             auto runnerOutcome = co_await AgentRunner{}.run(
                 subCtx,
                 subagent->getEngine(),
-                subagentThreadId,
+                subagentSessionId,
                 std::move(cfg),
                 cancelToken,
                 AgentRunner::Hooks{
-                    .persistCheckpoint = false,
-                    .onInterruptTip    = nullptr,
-                    .eventCallback     = progressCb,
-                    .onBeforeResume    = nullptr,
-                    .onRunResult       = nullptr,
+                    .eventCallback  = progressCb,
+                    .onInterruptTip = nullptr,
+                    .onBeforeResume = nullptr,
+                    .onRunResult    = nullptr,
                 }
             );
 
@@ -732,8 +730,8 @@ asio::awaitable<events::RespSubagentBatch> AgentHost::spawnBatch(
              results,
              i,
              doneChannel,
-             parentThreadId = req.parentThreadId,
-             cancelToken    = req.cancelToken]() -> asio::awaitable<void> {
+             parentSessionId = req.parentSessionId,
+             cancelToken     = req.cancelToken]() -> asio::awaitable<void> {
                 // RAII 守卫: 无论 spawnOneTask 如何退出都保证发送完成信号
                 struct BatchDoneGuard {
                     std::shared_ptr<
@@ -756,7 +754,7 @@ asio::awaitable<events::RespSubagentBatch> AgentHost::spawnBatch(
                     [&]() -> asio::awaitable<events::RespSubagentBatchItem> {
                         co_return co_await spawnOneTask(
                             task,
-                            parentThreadId,
+                            parentSessionId,
                             cancelToken,
                             parentAgentCtx
                         );

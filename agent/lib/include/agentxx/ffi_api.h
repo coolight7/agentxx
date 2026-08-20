@@ -103,7 +103,7 @@ AGENTXX_FFI_EXPORT const char* agentxx_ffi_library_version(void);
 
 /// agent 事件种类
 typedef enum AgentxxEventType {
-    AGENTXX_EVT_READY = 0,     ///< 服务端就绪, 可开始发送输入: {"threadId"}
+    AGENTXX_EVT_READY = 0,     ///< 服务端就绪, 可开始发送输入: {"sessionId"}
     AGENTXX_EVT_SYNC,          ///< 全量/部分历史同步: wire sync JSON
     AGENTXX_EVT_DELTA,         ///< 流式增量: wire delta JSON (kind=text_token/...)
     AGENTXX_EVT_TURN_END,      ///< 轮次结束: wire turn_result JSON
@@ -118,7 +118,7 @@ typedef enum AgentxxEventType {
 
 /**
  * EVT_INTERRUPT_REQ payload:
- *   {"interruptId": N, "threadId": "...", "node": "...", "value": "...",
+ *   {"interruptId": N, "sessionId": "...", "node": "...", "value": "...",
  *    "argJson": {"name": "...", "inputs": [
  *        {"label": "...", "depict": "...", "type": "bool|int|double|string|enum",
  *         "defaultValue": "...", "enumValues": [...]}, ...]}}
@@ -141,8 +141,8 @@ typedef struct AgentxxCallbacks {
  * @param config_json NULL 或 AgentConfig 覆盖 JSON (未知字段忽略):
  *   {
  *     "dataDir": "~/.agentxx",          // 空=不持久化 (默认)
- *     "enableSessionPersistence": false,
- *     "sessionPersistenceRoot": "",     // 为空时使用 {dataDir}/sqlite/sessions/
+ *     "enableSessionStore": false,
+ *     "sessionStoreDirectory": "",     // 为空时使用 {dataDir}/sqlite/sessions/
  *     "permissionMode": "ask",          // ask|all_ask|pass|deny
  *     "permissionAllowPaths": ["..."],  // 权限白名单
  *     "permissionDenyPaths": ["..."],   // 权限黑名单
@@ -201,21 +201,21 @@ AGENTXX_FFI_EXPORT int agentxx_select_model(AgentxxAgent* a, const char* model_n
 AGENTXX_FFI_EXPORT int
     agentxx_set_permission(AgentxxAgent* a, const char* path, int allow, int op, char** log);
 
-/// 切换当前连接会话 (thread_id 为空 = 关闭持久化时非法):
+/// 切换当前连接会话 (sessionId 为空 = 关闭持久化时非法):
 /// 重新绑定会话并回推 Sync/ModelInfo/ContextStats (经对应事件通知)
-AGENTXX_FFI_EXPORT int agentxx_switch_session(AgentxxAgent* a, const char* thread_id, char** log);
+AGENTXX_FFI_EXPORT int agentxx_switch_session(AgentxxAgent* a, const char* sessionId, char** log);
 
 /* ==================== 同步查询 (阻塞等待服务端响应, 最长 10s) ====================
  * 返回值: JSON 字符串 (agentxx_free 释放); 失败返回 NULL (log 含详情)
  * 注意: 同一句柄同一时刻仅允许一个在途 (服务端应答为逐条协议) */
 
-/// 当前模型信息: {"current_model","models":[...]}
+/// 当前模型信息: {"currentModel","models":[...]}
 AGENTXX_FFI_EXPORT char* agentxx_get_model_info(AgentxxAgent* a, char** log);
 
 /// 当前会话 LLM 上下文消息: {"messages":[chat message...]}
 AGENTXX_FFI_EXPORT char* agentxx_get_context_messages(AgentxxAgent* a, char** log);
 
-/// 持久化会话列表: {"sessions":[{"thread","title","last_active"},...]}
+/// 持久化会话列表: {"sessions":[{"sessionId","title","lastActiveMs"},...]}
 AGENTXX_FFI_EXPORT char* agentxx_list_sessions(AgentxxAgent* a, char** log);
 
 /* ==================== HIL 中断应答 ==================== */

@@ -28,7 +28,7 @@ void AgentIOBase::setEventSink(std::shared_ptr<ClientEventSink> sink) {
 }
 
 asio::awaitable<void> AgentIOBase::runTransportLoop() {
-    // 捕获局部 transport 引用: 服务端同一 threadId 的新连接替换旧连接
+    // 捕获局部 transport 引用: 服务端同一 sessionId 的新连接替换旧连接
     // (AgentServer::serveTransport 中 setTransport) 时, 本协程应继续消费旧
     // transport 直至其关闭自然退出, 而不是跟随成员 transport_ 切换到新
     // transport 上发起第二个接收循环 (消息被两个循环瓜分 / 协程泄漏)
@@ -62,24 +62,24 @@ void AgentIOBase::sendToPeer(WireMessage msg) {
 // 默认命令实现 (经 transport 发送)
 // ---------------------------------------------------------------------------
 
-void AgentIOBase::requestCancel(std::string threadId) {
-    sendToPeer(WireCancel{std::move(threadId)});
+void AgentIOBase::requestCancel(std::string sessionId) {
+    sendToPeer(WireCancel{std::move(sessionId)});
 }
 
-void AgentIOBase::requestSelectModel(std::string threadId, std::string model) {
-    sendToPeer(WireSelectModel{std::move(threadId), std::move(model)});
+void AgentIOBase::requestSelectModel(std::string sessionId, std::string model) {
+    sendToPeer(WireSelectModel{std::move(sessionId), std::move(model)});
 }
 
-void AgentIOBase::requestAppendComponentInfo(std::string threadId) {
-    sendToPeer(WireGetAppendComponentInfo{std::move(threadId)});
+void AgentIOBase::requestAppendComponentInfo(std::string sessionId) {
+    sendToPeer(WireGetAppendComponentInfo{std::move(sessionId)});
 }
 
-void AgentIOBase::sendUserInput(std::string threadId, std::string text) {
+void AgentIOBase::sendUserInput(std::string sessionId, std::string text) {
     // 通知事件接收器 (client 插件系统订阅用户输入事件)
     emitEventSink([&](ClientEventSink& sink) {
-        sink.onUserInput(threadId, text);
+        sink.onUserInput(sessionId, text);
     });
-    sendToPeer(WireUserInput{std::move(threadId), std::move(text)});
+    sendToPeer(WireUserInput{std::move(sessionId), std::move(text)});
 }
 
 void AgentIOBase::onServerReady() {
@@ -130,12 +130,12 @@ void AgentIOBase::unregisterFromBus() {
     }
     if (interruptServerId_ != 0) {
         bus->getRR<events::ReqInterrupt, events::RespInterrupt>(events::Topic::Interrupt)
-            .removeServer(interruptServerId_);
+            .unregisterServer(interruptServerId_);
         interruptServerId_ = 0;
     }
     if (permissionServerId_ != 0) {
         bus->getRR<events::ReqPermission, events::RespPermission>(events::Topic::Permission)
-            .removeServer(permissionServerId_);
+            .unregisterServer(permissionServerId_);
         permissionServerId_ = 0;
     }
 }
@@ -152,11 +152,11 @@ void AgentIOBase::registerOnBus(std::shared_ptr<agentxx::middleware::EventBus> s
     // 注册 interrupt 处理器
     auto& interruptRR
         = sessionBus->getRR<events::ReqInterrupt, events::RespInterrupt>(events::Topic::Interrupt);
-    interruptServerId_ = interruptRR.serve(
+    interruptServerId_ = interruptRR.registerServer(
         [this](const events::ReqInterrupt& req, size_t /*corrId*/)
             -> asio::awaitable<events::RespInterrupt> {
             auto result = co_await this->handleInterrupt(
-                req.threadId,
+                req.sessionId,
                 req.interruptNode,
                 req.interruptValue,
                 req.interruptArgsJson
@@ -172,7 +172,7 @@ void AgentIOBase::registerOnBus(std::shared_ptr<agentxx::middleware::EventBus> s
     auto& permRR
         = sessionBus->getRR<events::ReqPermission, events::RespPermission>(events::Topic::Permission
         );
-    permissionServerId_ = permRR.serve(
+    permissionServerId_ = permRR.registerServer(
         [this](const events::ReqPermission& req, size_t /*corrId*/)
             -> asio::awaitable<events::RespPermission> {
             auto inputItem   = agentxx::middleware::InterruptHandleArg::InterruptHandleInputItem{};
@@ -194,7 +194,7 @@ void AgentIOBase::registerOnBus(std::shared_ptr<agentxx::middleware::EventBus> s
             };
 
             auto result = co_await this->handleInterrupt(
-                req.threadId,
+                req.sessionId,
                 "permission",
                 req.argumentsJson,
                 arg.toJson().dump()

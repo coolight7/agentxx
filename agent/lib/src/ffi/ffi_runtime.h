@@ -101,7 +101,7 @@ public:
     int cancel(std::string& err);
     int selectModel(std::string_view modelName, std::string& err);
     int setPermission(std::string_view path, int allow, int op, std::string& err);
-    int switchSession(std::string_view threadId, std::string& err);
+    int switchSession(std::string_view sessionId, std::string& err);
 
     // -------------------------------------------------------------------
     // 同步查询 (阻塞等待服务端应答, 最长 10s; 返回 JSON 字符串或空)
@@ -128,9 +128,9 @@ public:
     /// 取走积压日志 JSON 数组并清空
     std::string drainLogs();
 
-    /// 当前绑定会话 thread_id
-    std::string_view threadId() const {
-        return threadId_;
+    /// 当前绑定会话 sessionId
+    std::string_view sessionId() const {
+        return sessionId_;
     }
 
 private:
@@ -186,8 +186,8 @@ private:
     std::string
         syncQuery(FfiClientAgentIO::SyncKind kind, std::function<void()> send, std::string& err);
 
-    /// 生成唯一会话 thread_id
-    static std::string generateThreadId();
+    /// 生成唯一会话 sessionId
+    static std::string generateSessionId();
 
     /// 追加一条日志到环形缓冲 (FfiLogSink 调用; 任意线程)
     void pushLogItem(LogItem item);
@@ -200,7 +200,7 @@ private:
     std::shared_ptr<agent::AgentHost>                                         host_;
     std::shared_ptr<agent::SessionServerAgentIO>                              serverIO_;
     std::shared_ptr<FfiClientAgentIO>                                         clientIO_;
-    std::string                                                               threadId_;
+    std::string                                                               sessionId_;
     std::atomic<State> state_{State::Created};
 
     /// HIL 中断等待宿主应答超时 (SessionServerAgentIO 配置)

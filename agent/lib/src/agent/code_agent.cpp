@@ -219,7 +219,7 @@ asio::awaitable<void> CodeAgent::initMiddleware() {
                 if (auto ctxPtr = ctx.lock()) {
                     auto session = ctxPtr->sessions->get(in.ctx.thread_id);
                     if (session) {
-                        session->activity = Activity::ExecutingTool;
+                        session->activity = SessionActivity::ExecutingTool;
                     }
                 }
                 co_return;
@@ -234,7 +234,7 @@ asio::awaitable<void> CodeAgent::initMiddleware() {
                 if (auto ctxPtr = ctx.lock()) {
                     auto session = ctxPtr->sessions->get(in.ctx.thread_id);
                     if (session) {
-                        session->activity = Activity::Idle;
+                        session->activity = SessionActivity::Idle;
                     }
                 }
                 co_return;
@@ -250,6 +250,96 @@ asio::awaitable<std::vector<std::unique_ptr<agentxx::tools::XXToolBase>>> CodeAg
 
     std::vector<std::unique_ptr<agentxx::tools::XXToolBase>> tools
         = co_await BaseAgent::initTools();
+
+    /// Filesystem
+    tools.push_back(std::make_unique<agentxx::tools::FileSystemListTool>(agentContext));
+    tools.push_back(std::make_unique<agentxx::tools::FilesystemReadTextFileTool>(agentContext));
+    tools.push_back(std::make_unique<agentxx::tools::FilesystemWriteFileTool>(agentContext));
+    tools.push_back(std::make_unique<agentxx::tools::FilesystemEditTextFileTool>(agentContext));
+    tools.push_back(std::make_unique<agentxx::tools::FilesystemGlobTool>(agentContext));
+    tools.push_back(std::make_unique<agentxx::tools::FilesystemGrepTool>(agentContext));
+
+    /// String
+    tools.push_back(std::make_unique<agentxx::tools::StringHtml2MarkdownTool>(agentContext));
+    tools.push_back(std::make_unique<agentxx::tools::StringRegexpTool>(agentContext));
+
+    /// System (系统资源监控工具已迁移至插件 agentxx_system_monitor:
+    /// agentxx_get_system_core_info 由插件注册, 见 agentxx-config.yaml plugins 段)
+
+    /// Web
+    tools.push_back(std::make_unique<agentxx::tools::WebFetchUrlTool>(agentContext));
+    tools.push_back(std::make_unique<agentxx::tools::WebFetchUrlMarkdownTool>(agentContext));
+    if (config->websearchModel.has_value()) {
+        tools.push_back(std::make_unique<agentxx::tools::ModelWebSearchTool>(
+            config->websearchModel.value(),
+            agentContext
+        ));
+    } else if (false == config->websearchApiUrl.empty()) {
+        tools.push_back(std::make_unique<agentxx::tools::WebSearchTool>(
+            config->websearchApiUrl,
+            config->websearchConvertHtml2markdown,
+            agentContext
+        ));
+    }
+
+    /// RAG
+    if (false == config->ragDocsPaths.empty()) {
+        // 逐步上报启动进度: RAG 文档扫描 + embedding 生成耗时较长
+        notifyInitProgress("加载 RAG 文档并生成向量索引 ...");
+        auto client = std::make_shared<agentxx::tools::EmbeddingClient>(
+            config->model.baseUrl,
+            config->model.apiKey,
+            config->model.modelName
+        );
+        auto docsStore = std::make_shared<agentxx::tools::RAGSearchTool::VectorStore>(client);
+        auto docs      = co_await docsStore->scanDocument(config->ragDocsPaths);
+        [[maybe_unused]] auto docxSize     = docs.size();
+        [[maybe_unused]] auto isAddSuccess = co_await docsStore->addDocuments(std::move(docs));
+        XX_LOGD(
+            R"_(
+┏━━━━━━ RAG Embedding ━━━━━━┓
+{}
+┗━━━━━━ RAG Embedding ━━━━━━┛
+)_",
+            isAddSuccess ? fmt::format("┣━ ✅ success: append {} docs", docxSize) : "┣━ ❌ failed"
+        );
+        tools.push_back(std::make_unique<agentxx::tools::RAGSearchTool>(docsStore, agentContext));
+    }
+
+    /// Command execution
+#if XX_IS_WIN_D
+    tools.push_back(std::make_unique<agentxx::tools::ExecuteWindowsCommandTool>(agentContext));
+#elif XX_IS_LINUX_D
+    tools.push_back(std::make_unique<agentxx::tools::ExecuteBashCommandTool>(agentContext));
+    if (agentxx::util::isRunningInWSL()) {
+        tools.push_back(std::make_unique<agentxx::tools::ExecuteWindowsCommandTool>(agentContext));
+    }
+#elif XX_IS_MACOS_D
+    tools.push_back(std::make_unique<agentxx::tools::ExecuteBashCommandTool>(agentContext));
+#endif
+
+    /// Subagent (由 AgentConfig::enableSubagent 控制, yaml subagent.enable)
+    /// - 注册表仅承载名称/描述等静态元数据 (SubAgentTaskBase);
+    ///   实际执行由 AgentHost 派生独立 agent 完成 (中断委派, 不在此创建
+    ///   嵌套 subgraph / nodeContext)
+    if (config->enableSubagent) {
+        const auto nodeName = std::string{"subagent_task"};
+
+        subagentManagerTool_->subAgentList.insert(std::make_pair(
+            nodeName,
+            std::make_shared<agentxx::tools::SubAgentNormalTask>(
+                nodeName,
+                R"(Create a isolation messages context sub agent to exec. (need system prompt))"
+            )
+        ));
+
+        tools.push_back(std::move(subagentManagerTool_));
+    } else {
+        // 已构造的 subagent 管理器无需注册, 清理指针避免悬空
+        subagentManagerTool_.reset();
+        agentContext->subagentManagerToolPtr = nullptr;
+        XX_LOGD("CodeAgent: subagent disabled by config (subagent.enable=false)");
+    }
 
     /// MCP tool
     /// - 多个 server 并行初始化 (独立网络 IO, 互不依赖): 串行加载时每个 server
@@ -270,7 +360,7 @@ asio::awaitable<std::vector<std::unique_ptr<agentxx::tools::XXToolBase>>> CodeAg
             co_await agentxx::util::catchErrorAsync<bool>(
                 [&]() -> asio::awaitable<bool> {
                     // 逐步上报启动进度: MCP 网络连接较慢, 逐 server 报告名称+地址
-                    notifyStartup(fmt::format("加载 MCP server: {} ({})", ns, mcpCfg.url));
+                    notifyInitProgress(fmt::format("加载 MCP: {} ({})", ns, mcpCfg.url));
                     XX_LOGD("load mcp tool: {} | {}", ns, mcpCfg.url);
                     auto mcpClient = std::make_shared<agentxx::server::McpClient>(
                         agentxx::server::McpClient::Config{
@@ -353,142 +443,7 @@ asio::awaitable<std::vector<std::unique_ptr<agentxx::tools::XXToolBase>>> CodeAg
         }
     }
 
-    /// Filesystem
-    tools.push_back(std::make_unique<agentxx::tools::FileSystemListTool>(agentContext));
-    tools.push_back(std::make_unique<agentxx::tools::FilesystemReadTextFileTool>(agentContext));
-    tools.push_back(std::make_unique<agentxx::tools::FilesystemWriteFileTool>(agentContext));
-    tools.push_back(std::make_unique<agentxx::tools::FilesystemEditTextFileTool>(agentContext));
-    tools.push_back(std::make_unique<agentxx::tools::FilesystemGlobTool>(agentContext));
-    tools.push_back(std::make_unique<agentxx::tools::FilesystemGrepTool>(agentContext));
-
-    /// String
-    tools.push_back(std::make_unique<agentxx::tools::StringHtml2MarkdownTool>(agentContext));
-    tools.push_back(std::make_unique<agentxx::tools::StringRegexpTool>(agentContext));
-
-    /// System (系统资源监控工具已迁移至插件 agentxx_system_monitor:
-    /// agentxx_get_system_core_info 由插件注册, 见 agentxx-config.yaml plugins 段)
-
-    /// Web
-    tools.push_back(std::make_unique<agentxx::tools::WebFetchUrlTool>(agentContext));
-    tools.push_back(std::make_unique<agentxx::tools::WebFetchUrlMarkdownTool>(agentContext));
-    if (config->websearchModel.has_value()) {
-        tools.push_back(std::make_unique<agentxx::tools::ModelWebSearchTool>(
-            config->websearchModel.value(),
-            agentContext
-        ));
-    } else if (false == config->websearchApiUrl.empty()) {
-        tools.push_back(std::make_unique<agentxx::tools::WebSearchTool>(
-            config->websearchApiUrl,
-            config->websearchConvertHtml2markdown,
-            agentContext
-        ));
-    }
-
-    /// RAG
-    if (false == config->ragDocsPaths.empty()) {
-        // 逐步上报启动进度: RAG 文档扫描 + embedding 生成耗时较长
-        notifyStartup("加载 RAG 文档并生成向量索引 ...");
-        auto client = std::make_shared<agentxx::tools::EmbeddingClient>(
-            config->model.baseUrl,
-            config->model.apiKey,
-            config->model.modelName
-        );
-        auto docsStore = std::make_shared<agentxx::tools::RAGSearchTool::VectorStore>(client);
-        auto docs      = co_await docsStore->scanDocument(config->ragDocsPaths);
-        [[maybe_unused]] auto docxSize     = docs.size();
-        [[maybe_unused]] auto isAddSuccess = co_await docsStore->addDocuments(std::move(docs));
-        XX_LOGD(
-            R"_(
-┏━━━━━━ RAG Embedding ━━━━━━┓
-{}
-┗━━━━━━ RAG Embedding ━━━━━━┛
-)_",
-            isAddSuccess ? fmt::format("┣━ ✅ success: append {} docs", docxSize) : "┣━ ❌ failed"
-        );
-        tools.push_back(std::make_unique<agentxx::tools::RAGSearchTool>(docsStore, agentContext));
-    }
-
-    /// Command execution
-#if XX_IS_WIN_D
-    tools.push_back(std::make_unique<agentxx::tools::ExecuteWindowsCommandTool>(agentContext));
-#elif XX_IS_LINUX_D
-    tools.push_back(std::make_unique<agentxx::tools::ExecuteBashCommandTool>(agentContext));
-    if (agentxx::util::isRunningInWSL()) {
-        tools.push_back(std::make_unique<agentxx::tools::ExecuteWindowsCommandTool>(agentContext));
-    }
-#elif XX_IS_MACOS_D
-    tools.push_back(std::make_unique<agentxx::tools::ExecuteBashCommandTool>(agentContext));
-#endif
-
-    /// Subagent (由 AgentConfig::enableSubagent 控制, yaml subagent.enable)
-    /// - 注册表仅承载名称/描述等静态元数据 (SubAgentTaskBase);
-    ///   实际执行由 AgentHost 派生独立 agent 完成 (中断委派, 不在此创建
-    ///   嵌套 subgraph / nodeContext)
-    if (config->enableSubagent) {
-        const auto nodeName = std::string{"subagent_task"};
-
-        subagentManagerTool_->subAgentList.insert(std::make_pair(
-            nodeName,
-            std::make_shared<agentxx::tools::SubAgentNormalTask>(
-                nodeName,
-                R"(Create a isolation messages context sub agent to exec. (need system prompt))"
-            )
-        ));
-
-        tools.push_back(std::move(subagentManagerTool_));
-    } else {
-        // 已构造的 subagent 管理器无需注册, 清理指针避免悬空
-        subagentManagerTool_.reset();
-        agentContext->subagentManagerToolPtr = nullptr;
-        XX_LOGD("CodeAgent: subagent disabled by config (subagent.enable=false)");
-    }
-
     co_return tools;
-}
-
-void CodeAgent::collectAppendComponentInfo(std::vector<AppendComponentNotification>& notifications
-) {
-    // MCP 工具
-    for (const auto& mcp : agentContext->appendComponentInfo.mcpTools) {
-        notifications.push_back(AppendComponentNotification{
-            .type         = AppendComponentNotification::Type::Mcp,
-            .name         = mcp,
-            .success      = true,
-            .errorMessage = "",
-        });
-    }
-
-    // Skill
-    for (const auto& skill : agentContext->appendComponentInfo.skills) {
-        notifications.push_back(AppendComponentNotification{
-            .type         = AppendComponentNotification::Type::Skill,
-            .name         = skill,
-            .success      = true,
-            .errorMessage = "",
-        });
-    }
-
-    // Memory 文件
-    for (const auto& memory : agentContext->appendComponentInfo.memoryFiles) {
-        notifications.push_back(AppendComponentNotification{
-            .type         = AppendComponentNotification::Type::Memory,
-            .name         = memory,
-            .success      = true,
-            .errorMessage = "",
-        });
-    }
-
-    // Agent 侧加载的插件 (数量 + 列表; success 反映 enabled 状态)
-    if (agentContext->pluginManager) {
-        for (const auto& plugin : agentContext->pluginManager->list()) {
-            notifications.push_back(AppendComponentNotification{
-                .type         = AppendComponentNotification::Type::Plugin,
-                .name         = plugin.name,
-                .success      = plugin.enabled,
-                .errorMessage = "",
-            });
-        }
-    }
 }
 
 } // namespace agent

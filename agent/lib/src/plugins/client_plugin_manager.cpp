@@ -171,8 +171,8 @@ void ClientPluginManager::setUiAdapter(std::shared_ptr<PluginUiAdapter> adapter)
     uiAdapter_ = std::move(adapter);
 }
 
-void ClientPluginManager::setThreadId(std::string threadId) {
-    threadId_ = std::move(threadId);
+void ClientPluginManager::setSessionId(std::string sessionId) {
+    sessionId_ = std::move(sessionId);
 }
 
 // ==================== 生命周期 ====================
@@ -781,7 +781,7 @@ void ClientPluginManager::dispatchCommandAction(const std::string& actionJson) {
 
 std::string ClientPluginManager::clientStateJson() const {
     neograph::json j     = neograph::json::object();
-    j["threadId"]        = threadId_;
+    j["sessionId"]       = sessionId_;
     j["connState"]       = connState_;
     j["startupProgress"] = startupProgress_;
     j["uiCaps"]          = uiAdapter_ ? static_cast<int>(uiAdapter_->uiCaps()) : 0;
@@ -807,7 +807,7 @@ void ClientPluginManager::postToIo(std::function<void()> fn) const {
 void ClientPluginManager::onReady() {
     neograph::json j = neograph::json::object();
     j["uiCaps"]      = uiAdapter_ ? static_cast<int>(uiAdapter_->uiCaps()) : 0;
-    j["threadId"]    = threadId_;
+    j["sessionId"]   = sessionId_;
     dispatchEvent(AGENTXX_CLIENT_EVT_READY, j.dump());
 }
 
@@ -820,9 +820,9 @@ void ClientPluginManager::onConnStateChanged(std::string_view state, std::string
     dispatchEvent(AGENTXX_CLIENT_EVT_CONN_STATE, j.dump());
 }
 
-void ClientPluginManager::onUserInput(std::string_view threadId, std::string_view text) {
+void ClientPluginManager::onUserInput(std::string_view sessionId, std::string_view text) {
     neograph::json j = neograph::json::object();
-    j["threadId"]    = std::string{threadId};
+    j["sessionId"]   = std::string{sessionId};
     j["text"]        = std::string{text};
     dispatchEvent(AGENTXX_CLIENT_EVT_USER_INPUT, j.dump());
 }
@@ -833,7 +833,7 @@ void ClientPluginManager::onDelta(const agentxx::agent::Delta& delta) {
 
 void ClientPluginManager::onTurnResult(const agentxx::agent::WireTurnResult& result) {
     neograph::json j = neograph::json::object();
-    j["threadId"]    = result.threadId;
+    j["sessionId"]   = result.sessionId;
     j["hasError"]    = result.hasError;
     j["interrupted"] = result.interrupted;
     if (!result.errorMessage.empty()) {
@@ -844,10 +844,10 @@ void ClientPluginManager::onTurnResult(const agentxx::agent::WireTurnResult& res
     dispatchEvent(AGENTXX_CLIENT_EVT_TURN_END, j.dump());
 }
 
-void ClientPluginManager::onSessionSwitched(std::string_view threadId) {
-    threadId_        = std::string{threadId};
+void ClientPluginManager::onSessionSwitched(std::string_view sessionId) {
+    sessionId_        = std::string{sessionId};
     neograph::json j = neograph::json::object();
-    j["threadId"]    = threadId_;
+    j["sessionId"]   = sessionId_;
     dispatchEvent(AGENTXX_CLIENT_EVT_SESSION_SWITCH, j.dump());
 }
 
@@ -2039,10 +2039,10 @@ std::string ClientPluginManager::getPluginArgsJson(ClientPluginInstance* inst) {
 
 void ClientPluginManager::sendUserInputToPeer(
     ClientPluginInstance* inst,
-    const char*           threadId,
+    const char*           sessionId,
     const char*           text
 ) {
-    (void)threadId; // 会话以当前绑定为准 (threadId 不符时由端点兜底)
+    (void)sessionId; // 会话以当前绑定为准 (sessionId 不符时由端点兜底)
     if (!inst || !uiAdapter_) {
         return;
     }
@@ -2050,11 +2050,11 @@ void ClientPluginManager::sendUserInputToPeer(
     uiAdapter_->sendPluginMessage(text ? text : "");
 }
 
-void ClientPluginManager::requestCancelToPeer(ClientPluginInstance* inst, const char* threadId) {
+void ClientPluginManager::requestCancelToPeer(ClientPluginInstance* inst, const char* sessionId) {
     if (!inst || !uiAdapter_) {
         return;
     }
-    uiAdapter_->requestCancel(threadId ? threadId : "");
+    uiAdapter_->requestCancel(sessionId ? sessionId : "");
 }
 
 int ClientPluginManager::sendPluginDataToPeer(

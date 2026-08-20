@@ -10,13 +10,13 @@
 namespace agentxx {
 namespace tools {
 
-ThreadShareStoreTool::ThreadShareStoreTool(
+SessionShareStoreTool::SessionShareStoreTool(
     std::weak_ptr<agentxx::agent::AgentContext> in_agentContext
 ) :
     XXToolBase("agentxx_share_store", in_agentContext, false, false) {}
 
 std::optional<agentxx::middleware::SummarizationToolHandle>
-    ThreadShareStoreTool::createSummarizationToolHandle() const {
+    SessionShareStoreTool::createSummarizationToolHandle() const {
     return agentxx::middleware::SummarizationToolHandle{
         .generateDeduplicationKey = [](const neograph::json& args) -> std::optional<std::string> {
             if (args.is_object() && args["id"].is_string()) {
@@ -46,7 +46,7 @@ std::optional<agentxx::middleware::SummarizationToolHandle>
     };
 }
 
-neograph::ChatTool ThreadShareStoreTool::get_definition() const {
+neograph::ChatTool SessionShareStoreTool::get_definition() const {
     auto        agentPtr = agentContext.lock();
     const auto& prompt   = agentPtr->agentConfig->prompt.toolPrompt[get_name()];
 
@@ -106,10 +106,10 @@ neograph::ChatTool ThreadShareStoreTool::get_definition() const {
     };
 }
 
-asio::awaitable<std::string> ThreadShareStoreTool::execute_async(const neograph::json& arguments) {
-    auto thread_id = arguments.value("thread_id", std::string{});
-    if (thread_id.empty()) {
-        co_return R"({"error":"Toolcall inner error, need `thread_id`"})";
+asio::awaitable<std::string> SessionShareStoreTool::execute_async(const neograph::json& arguments) {
+    auto session_id = arguments.value("session_id", std::string{});
+    if (session_id.empty()) {
+        co_return R"({"error":"Toolcall inner error, need `session_id`"})";
     }
     size_t text_id          = arguments.value<size_t>("id", 0);
     auto   text_line_offset = arguments.value<int64_t>("line_offset", -1);
@@ -181,7 +181,7 @@ asio::awaitable<std::string> ThreadShareStoreTool::execute_async(const neograph:
         mctx = agentContextPtr->middlewareHandleContext;
     }
     if (text_opt == std::string_view{"insert"}) {
-        auto reId = mctx->addShareStoreItemValue(thread_id, sliceByLine(std::move(text)));
+        auto reId = mctx->addShareStoreItemValue(session_id, sliceByLine(std::move(text)));
         co_return neograph::json{
             {"id", reId},
         }
@@ -190,7 +190,7 @@ asio::awaitable<std::string> ThreadShareStoreTool::execute_async(const neograph:
         if (text_id <= 0) {
             co_return R"({"error":"Arg `id` is empty"})";
         }
-        auto result = mctx->getShareStoreItemValue(thread_id, text_id);
+        auto result = mctx->getShareStoreItemValue(session_id, text_id);
         if (false == result.has_value()) {
             co_return R"({"error":"Not found"})";
         }
@@ -200,13 +200,13 @@ asio::awaitable<std::string> ThreadShareStoreTool::execute_async(const neograph:
         if (text_id <= 0) {
             co_return R"({"error":"Arg `id` is empty"})";
         }
-        mctx->setShareStoreItemValue(thread_id, text_id, sliceByLine(std::move(text)));
+        mctx->setShareStoreItemValue(session_id, text_id, sliceByLine(std::move(text)));
         co_return "success";
     } else if (text_opt == std::string_view{"delete"}) {
         if (text_id <= 0) {
             co_return R"({"error":"Arg `id` is empty"})";
         }
-        mctx->removeShareStoreItemValue(thread_id, text_id);
+        mctx->removeShareStoreItemValue(session_id, text_id);
         co_return "success";
     } else {
         co_return R"({"error":"Arg `opt` is invalid"})";

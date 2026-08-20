@@ -14,7 +14,7 @@ namespace agent {
 namespace io {
 
 /// 双向 WS JSON 消息类型常量
-/// - 约定: {"type": "<msgType>", "id": <opt requestId>, "thread": <threadId>, ...payload}
+/// - 约定: {"type": "<msgType>", "id": <opt requestId>, "sessionId": <sessionId>, ...payload}
 struct MsgType {
     // ===== Client -> Server =====
     inline static constexpr std::string_view Hello                  = "hello";
@@ -29,7 +29,7 @@ struct MsgType {
     inline static constexpr std::string_view SetPermission = "set_permission";
     /// 客户端请求持久化会话列表 (会话选择弹窗数据源)
     inline static constexpr std::string_view ListSessions = "list_sessions";
-    /// 客户端请求切换当前连接的会话 (重新绑定 threadId 并回推历史)
+    /// 客户端请求切换当前连接的会话 (重新绑定 sessionId 并回推历史)
     inline static constexpr std::string_view SwitchSession = "switch_session";
 
     // ===== Server -> Client =====
@@ -138,13 +138,13 @@ inline neograph::json deltaToJson(const Delta& d) {
         j["text"] = d.text;
     }
     if (!d.msgId.empty()) {
-        j["msg_id"] = d.msgId;
+        j["msgId"] = d.msgId;
     }
     if (!d.toolName.empty()) {
-        j["tool_name"] = d.toolName;
+        j["toolName"] = d.toolName;
     }
     if (!d.toolCallId.empty()) {
-        j["tool_call_id"] = d.toolCallId;
+        j["toolCallId"] = d.toolCallId;
     }
     if (!d.arguments.empty()) {
         j["arguments"] = d.arguments;
@@ -153,38 +153,38 @@ inline neograph::json deltaToJson(const Delta& d) {
         j["result"] = d.result;
     }
     if (d.hasError) {
-        j["has_error"] = d.hasError;
+        j["hasError"] = d.hasError;
     }
     if (d.historyCount > 0) {
-        j["history_count"] = d.historyCount;
+        j["historyCount"] = d.historyCount;
     }
     if (!d.tailHash.empty()) {
-        j["tail_hash"] = d.tailHash;
+        j["tailHash"] = d.tailHash;
     }
     // 运行时统计字段 (TurnEnd 使用)
     if (d.startTimeMs > 0) {
-        j["start_time_ms"] = d.startTimeMs;
+        j["startTimeMs"] = d.startTimeMs;
     }
     if (d.durationMs > 0) {
-        j["duration_ms"] = d.durationMs;
+        j["durationMs"] = d.durationMs;
     }
     if (d.tps > 0.0) {
         j["tps"] = d.tps;
     }
     if (!d.nodeName.empty()) {
-        j["node_name"] = d.nodeName;
+        j["nodeName"] = d.nodeName;
     }
     // MessageUITip / MessageTip: 提示级别
     if (d.type == Delta::Type::MessageUITip || d.type == Delta::Type::MessageTip) {
         switch (d.tipType) {
             case Delta::TipType::Warning:
-                j["tip_type"] = "warning";
+                j["tipType"] = "warning";
                 break;
             case Delta::TipType::Error:
-                j["tip_type"] = "error";
+                j["tipType"] = "error";
                 break;
             default:
-                j["tip_type"] = "info";
+                j["tipType"] = "info";
                 break;
         }
     }
@@ -203,20 +203,20 @@ inline std::optional<Delta> deltaFromJson(const neograph::json& j) {
     d.type         = typeOpt.value();
     d.seq          = j.value("seq", uint64_t{0});
     d.text         = j.value("text", std::string{});
-    d.msgId        = j.value("msg_id", std::string{});
-    d.toolName     = j.value("tool_name", std::string{});
-    d.toolCallId   = j.value("tool_call_id", std::string{});
+    d.msgId        = j.value("msgId", std::string{});
+    d.toolName     = j.value("toolName", std::string{});
+    d.toolCallId   = j.value("toolCallId", std::string{});
     d.arguments    = j.value("arguments", std::string{});
     d.result       = j.value("result", std::string{});
-    d.hasError     = j.value("has_error", false);
-    d.historyCount = j.value("history_count", uint64_t{0});
-    d.tailHash     = j.value("tail_hash", std::string{});
-    d.startTimeMs  = j.value("start_time_ms", int64_t{0});
-    d.durationMs   = j.value("duration_ms", int64_t{0});
+    d.hasError     = j.value("hasError", false);
+    d.historyCount = j.value("historyCount", uint64_t{0});
+    d.tailHash     = j.value("tailHash", std::string{});
+    d.startTimeMs  = j.value("startTimeMs", int64_t{0});
+    d.durationMs   = j.value("durationMs", int64_t{0});
     d.tps          = j.value("tps", 0.0);
-    d.nodeName     = j.value("node_name", std::string{});
+    d.nodeName     = j.value("nodeName", std::string{});
     if (d.type == Delta::Type::MessageUITip || d.type == Delta::Type::MessageTip) {
-        const auto tip = j.value("tip_type", std::string{"info"});
+        const auto tip = j.value("tipType", std::string{"info"});
         if (tip == "warning") {
             d.tipType = Delta::TipType::Warning;
         } else if (tip == "error") {
@@ -234,8 +234,8 @@ inline std::optional<Delta> deltaFromJson(const neograph::json& j) {
 
 inline neograph::json syncToJson(const SyncPayload& p) {
     neograph::json j   = neograph::json::object();
-    j["from_index"]    = p.fromIndex;
-    j["tail_hash"]     = p.tailHash;
+    j["fromIndex"]     = p.fromIndex;
+    j["tailHash"]      = p.tailHash;
     neograph::json arr = neograph::json::array();
     for (const auto& vm : p.messages) {
         arr.push_back(vm.toJson());
@@ -249,8 +249,8 @@ inline std::optional<SyncPayload> syncFromJson(const neograph::json& j) {
         return std::nullopt;
     }
     SyncPayload p;
-    p.fromIndex = j.value("from_index", uint64_t{0});
-    p.tailHash  = j.value("tail_hash", std::string{});
+    p.fromIndex = j.value("fromIndex", uint64_t{0});
+    p.tailHash  = j.value("tailHash", std::string{});
     auto msgs   = j.value("messages", neograph::json::array());
     if (msgs.is_array()) {
         for (const auto& m : msgs) {
@@ -265,30 +265,30 @@ inline std::optional<SyncPayload> syncFromJson(const neograph::json& j) {
 // ---------------------------------------------------------------------------
 
 inline neograph::json makeHello(
-    std::string_view threadId,
+    std::string_view sessionId,
     std::string_view token,
     uint64_t         lastSeq  = 0,
     std::string_view tailHash = ""
 ) {
     neograph::json j = {
-        {"type",   MsgType::Hello},
-        {"thread", threadId      },
-        {"token",  token         },
+        {"type",      MsgType::Hello},
+        {"sessionId", sessionId     },
+        {"token",     token         },
     };
     if (lastSeq > 0) {
-        j["last_seq"] = lastSeq;
+        j["lastSeq"] = lastSeq;
     }
     if (!tailHash.empty()) {
-        j["tail_hash"] = tailHash;
+        j["tailHash"] = tailHash;
     }
     return j;
 }
 
-inline neograph::json makeUserInput(std::string_view threadId, std::string_view text) {
+inline neograph::json makeUserInput(std::string_view sessionId, std::string_view text) {
     return neograph::json{
-        {"type",   MsgType::UserInput},
-        {"thread", threadId          },
-        {"text",   text              },
+        {"type",      MsgType::UserInput},
+        {"sessionId", sessionId         },
+        {"text",      text              },
     };
 }
 
@@ -300,18 +300,18 @@ inline neograph::json makeInterruptResponse(int64_t id, const neograph::json& re
     };
 }
 
-inline neograph::json makeCancel(std::string_view threadId) {
+inline neograph::json makeCancel(std::string_view sessionId) {
     return neograph::json{
-        {"type",   MsgType::Cancel},
-        {"thread", threadId       },
+        {"type",      MsgType::Cancel},
+        {"sessionId", sessionId      },
     };
 }
 
-inline neograph::json makeSelectModel(std::string_view threadId, std::string_view model) {
+inline neograph::json makeSelectModel(std::string_view sessionId, std::string_view model) {
     return neograph::json{
-        {"type",   MsgType::SelectModel},
-        {"thread", threadId            },
-        {"model",  model               },
+        {"type",      MsgType::SelectModel},
+        {"sessionId", sessionId           },
+        {"model",     model               },
     };
 }
 
@@ -328,17 +328,17 @@ inline neograph::json makePing(int64_t t) {
 
 inline neograph::json makeHelloAck(
     bool                            ok,
-    std::string_view                threadId,
+    std::string_view                sessionId,
     std::string_view                tailHash,
     const std::vector<std::string>& models
 ) {
     neograph::json j = {
-        {"type",   MsgType::HelloAck},
-        {"ok",     ok               },
-        {"thread", threadId         },
+        {"type",      MsgType::HelloAck},
+        {"ok",        ok               },
+        {"sessionId", sessionId        },
     };
     if (!tailHash.empty()) {
-        j["tail_hash"] = tailHash;
+        j["tailHash"] = tailHash;
     }
     if (!models.empty()) {
         j["models"] = models;
@@ -368,7 +368,7 @@ inline neograph::json makeSyncMsg(const SyncPayload& p, uint64_t deltaSeq = 0) {
     neograph::json j = syncToJson(p);
     j["type"]        = MsgType::SyncMsg;
     if (deltaSeq > 0) {
-        j["delta_seq"] = deltaSeq;
+        j["deltaSeq"] = deltaSeq;
     }
     return j;
 }
@@ -379,32 +379,32 @@ inline std::optional<SyncPayload> syncMsgFromJson(const neograph::json& j) {
 
 inline neograph::json makeInterruptRequest(
     int64_t          id,
-    std::string_view threadId,
+    std::string_view sessionId,
     std::string_view node,
     std::string_view value,
     std::string_view argJson
 ) {
     return neograph::json{
-        {"type",     MsgType::InterruptRequest},
-        {"id",       id                       },
-        {"thread",   threadId                 },
-        {"node",     node                     },
-        {"value",    value                    },
-        {"arg_json", argJson                  },
+        {"type",      MsgType::InterruptRequest},
+        {"id",        id                       },
+        {"sessionId", sessionId                },
+        {"node",      node                     },
+        {"value",     value                    },
+        {"argJson",   argJson                  },
     };
 }
 
 /// 服务端通知中断已过期 (超时/取消): 对应 WireInterruptRequest 的 id
-inline neograph::json makeInterruptExpired(int64_t id, std::string_view threadId) {
+inline neograph::json makeInterruptExpired(int64_t id, std::string_view sessionId) {
     return neograph::json{
-        {"type",   MsgType::InterruptExpired},
-        {"id",     id                       },
-        {"thread", threadId                 },
+        {"type",      MsgType::InterruptExpired},
+        {"id",        id                       },
+        {"sessionId", sessionId                },
     };
 }
 
 inline neograph::json makeTurnResult(
-    std::string_view threadId,
+    std::string_view sessionId,
     bool             hasError,
     std::string_view errorMessage,
     bool             interrupted,
@@ -413,18 +413,18 @@ inline neograph::json makeTurnResult(
 ) {
     neograph::json j = {
         {"type",        MsgType::TurnResult},
-        {"thread",      threadId           },
-        {"has_error",   hasError           },
+        {"sessionId",   sessionId          },
+        {"hasError",    hasError           },
         {"interrupted", interrupted        },
     };
     if (!errorMessage.empty()) {
-        j["error_message"] = errorMessage;
+        j["errorMessage"] = errorMessage;
     }
     if (startTimeMs > 0) {
-        j["start_time_ms"] = startTimeMs;
+        j["startTimeMs"] = startTimeMs;
     }
     if (durationMs > 0) {
-        j["duration_ms"] = durationMs;
+        j["durationMs"] = durationMs;
     }
     return j;
 }
@@ -432,9 +432,9 @@ inline neograph::json makeTurnResult(
 inline neograph::json
     makeContextStats(uint64_t contextTokens, uint64_t maxContextTokens, double tps = 0.0) {
     neograph::json j = {
-        {"type",               MsgType::ContextStats},
-        {"context_tokens",     contextTokens        },
-        {"max_context_tokens", maxContextTokens     },
+        {"type",             MsgType::ContextStats},
+        {"contextTokens",    contextTokens        },
+        {"maxContextTokens", maxContextTokens     },
     };
     if (tps > 0.0) {
         j["tps"] = tps;
@@ -450,18 +450,18 @@ inline neograph::json makeError(int code, std::string_view message) {
     };
 }
 
-inline neograph::json makeGetModel(std::string_view threadId) {
+inline neograph::json makeGetModel(std::string_view sessionId) {
     return neograph::json{
-        {"type",   MsgType::GetModel},
-        {"thread", threadId         },
+        {"type",      MsgType::GetModel},
+        {"sessionId", sessionId        },
     };
 }
 
 inline neograph::json
     makeModelInfo(std::string_view currentModel, const std::vector<std::string>& models) {
     neograph::json j = {
-        {"type",          MsgType::ModelInfo},
-        {"current_model", currentModel      },
+        {"type",         MsgType::ModelInfo},
+        {"currentModel", currentModel      },
     };
     if (!models.empty()) {
         j["models"] = models;
@@ -475,10 +475,10 @@ inline neograph::json
 
 inline neograph::json appendComponentNotificationToJson(const AppendComponentNotification& n) {
     return neograph::json{
-        {"type",          static_cast<int>(n.type)},
-        {"name",          n.name                  },
-        {"success",       n.success               },
-        {"error_message", n.errorMessage          },
+        {"type",         static_cast<int>(n.type)},
+        {"name",         n.name                  },
+        {"success",      n.success               },
+        {"errorMessage", n.errorMessage          },
     };
 }
 
@@ -487,14 +487,14 @@ inline AppendComponentNotification appendComponentNotificationFromJson(const neo
     n.type         = static_cast<AppendComponentNotification::Type>(j.value("type", 0));
     n.name         = j.value("name", std::string{});
     n.success      = j.value("success", true);
-    n.errorMessage = j.value("error_message", std::string{});
+    n.errorMessage = j.value("errorMessage", std::string{});
     return n;
 }
 
-inline neograph::json makeGetAppendComponentInfo(std::string_view threadId) {
+inline neograph::json makeGetAppendComponentInfo(std::string_view sessionId) {
     return neograph::json{
-        {"type",   MsgType::GetAppendComponentInfo},
-        {"thread", threadId                       },
+        {"type",      MsgType::GetAppendComponentInfo},
+        {"sessionId", sessionId                      },
     };
 }
 
@@ -530,31 +530,31 @@ inline neograph::json makePong(int64_t t) {
     };
 }
 
-inline neograph::json makeGetContext(std::string_view threadId) {
+inline neograph::json makeGetContext(std::string_view sessionId) {
     return neograph::json{
-        {"type",   MsgType::GetContext},
-        {"thread", threadId           },
+        {"type",      MsgType::GetContext},
+        {"sessionId", sessionId          },
     };
 }
 
 /// 客户端记住权限选择 (Client -> Server): 注册路径规则到服务端权限中间件
 inline neograph::json
-    makeSetPermission(std::string_view threadId, std::string_view path, bool allow, size_t index) {
+    makeSetPermission(std::string_view sessionId, std::string_view path, bool allow, size_t index) {
     return neograph::json{
-        {"type",   MsgType::SetPermission},
-        {"thread", threadId              },
-        {"path",   path                  },
-        {"allow",  allow                 },
-        {"index",  index                 },
+        {"type",      MsgType::SetPermission},
+        {"sessionId", sessionId             },
+        {"path",      path                  },
+        {"allow",     allow                 },
+        {"index",     index                 },
     };
 }
 
 inline WireSetPermission setPermissionFromJson(const neograph::json& j) {
     WireSetPermission m;
-    m.threadId = j.value("thread", std::string{});
-    m.path     = j.value("path", std::string{});
-    m.allow    = j.value("allow", true);
-    m.index    = j.value("index", size_t{0});
+    m.sessionId = j.value("sessionId", std::string{});
+    m.path      = j.value("path", std::string{});
+    m.allow     = j.value("allow", true);
+    m.index     = j.value("index", size_t{0});
     return m;
 }
 
@@ -578,8 +578,8 @@ inline neograph::json makeListSessions() {
 
 inline neograph::json sessionInfoToJson(const SessionInfo& s) {
     neograph::json j = {
-        {"thread",      s.threadId    },
-        {"last_active", s.lastActiveMs},
+        {"sessionId",    s.sessionId   },
+        {"lastActiveMs", s.lastActiveMs},
     };
     if (!s.title.empty()) {
         j["title"] = s.title;
@@ -589,9 +589,9 @@ inline neograph::json sessionInfoToJson(const SessionInfo& s) {
 
 inline SessionInfo sessionInfoFromJson(const neograph::json& j) {
     SessionInfo s;
-    s.threadId     = j.value("thread", std::string{});
+    s.sessionId    = j.value("sessionId", std::string{});
     s.title        = j.value("title", std::string{});
-    s.lastActiveMs = j.value("last_active", int64_t{0});
+    s.lastActiveMs = j.value("lastActiveMs", int64_t{0});
     return s;
 }
 
@@ -619,16 +619,16 @@ inline std::vector<SessionInfo> sessionListFromJson(const neograph::json& j) {
 }
 
 /// 客户端请求切换当前连接的会话
-inline neograph::json makeSwitchSession(std::string_view threadId) {
+inline neograph::json makeSwitchSession(std::string_view sessionId) {
     return neograph::json{
-        {"type",   MsgType::SwitchSession},
-        {"thread", threadId              },
+        {"type",      MsgType::SwitchSession},
+        {"sessionId", sessionId             },
     };
 }
 
 inline WireSwitchSession switchSessionFromJson(const neograph::json& j) {
     WireSwitchSession m;
-    m.threadId = j.value("thread", std::string{});
+    m.sessionId = j.value("sessionId", std::string{});
     return m;
 }
 

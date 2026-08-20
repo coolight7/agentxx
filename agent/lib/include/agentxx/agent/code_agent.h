@@ -33,9 +33,6 @@ protected:
 
     asio::awaitable<std::vector<std::unique_ptr<agentxx::tools::XXToolBase>>> initTools() override;
 
-    void collectAppendComponentInfo(std::vector<AppendComponentNotification>& notifications
-    ) override;
-
 private:
 
     /// subagent 管理工具 (在 initMiddleware 中创建, initTools 中完成配置)

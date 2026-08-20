@@ -164,11 +164,11 @@ asio::awaitable<std::optional<std::string>> StdIOClientAgentIO::getInput() {
 // ---------------------------------------------------------------------------
 
 void StdIOClientAgentIO::sendPluginUserInput(const std::string& text) {
-    if (text.empty() || threadId_.empty()) {
+    if (text.empty() || sessionId_.empty()) {
         return;
     }
     // 与用户输入同路径: 发送 WireUserInput (发送后通知事件接收器)
-    sendUserInput(threadId_, text);
+    sendUserInput(sessionId_, text);
 }
 
 bool StdIOClientAgentIO::sendPluginDataUp(
@@ -189,7 +189,7 @@ bool StdIOClientAgentIO::sendPluginDataUp(
 }
 
 asio::awaitable<neograph::json> StdIOClientAgentIO::handleInterrupt(
-    std::string_view threadId,
+    std::string_view sessionId,
     std::string_view interruptNode,
     std::string_view interruptValue,
     std::string_view interruptArgJson

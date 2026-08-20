@@ -26,7 +26,7 @@ namespace agent {
 
 /// Agent 基类: 提供核心基础设施与 ReAct 执行循环
 /// - 管理 ioCtx / GraphEngine / AgentContext
-/// - 提供会话执行 (runConversationTurnAsync) 与中断恢复
+/// - 提供会话执行 (runTurnAsync) 与中断恢复
 /// - 子类通过 override 虚函数自定义 middleware / tool / 图结构
 /// - 支持多实例: 每个 BaseAgent 使用独立的 GraphRegistry, 不依赖全局 NodeFactory
 class BaseAgent {
@@ -48,7 +48,7 @@ public:
 
     asio::awaitable<void> init();
 
-    struct ConversationTurnResult {
+    struct TurnResult {
         bool        hasError = false;
         std::string errorMessage;
         bool        interrupted = false;
@@ -56,17 +56,17 @@ public:
 
     /// 选择指定会话 modelcall 使用的模型 (运行时切换, 按 thread_id 隔离)
     /// - modelName 为空或不存在时不改变该会话的选择
-    void selectModel(std::string_view threadId, std::string_view modelName);
+    void selectModel(std::string_view sessionId, std::string_view modelName);
 
     /// 指定会话当前实际使用的模型显示名称 (解析会话选择/默认模型)
-    std::string getCurrentModelName(std::string_view threadId) const;
+    std::string getCurrentModelName(std::string_view sessionId) const;
 
     /// 执行一轮对话
     /// - 消息由 Session 内部管理 (viewMessages + llmMessages 双消息集)
     /// - 增量事件经 io->sendToPeer(Delta) 推送 (io 端点须已设置 transport);
     ///   io 传 nullptr 时为 headless 模式, 不产出事件
-    asio::awaitable<ConversationTurnResult> runConversationTurnAsync(
-        std::string_view             threadId,
+    asio::awaitable<TurnResult> runTurnAsync(
+        std::string_view             sessionId,
         std::string_view             userInput,
         bool                         isFirstMsg,
         std::shared_ptr<AgentIOBase> io,
@@ -80,15 +80,14 @@ public:
 
     virtual ~BaseAgent();
 
-    neograph::graph::GraphEngine*       getEngine();
-    const neograph::graph::GraphEngine* getEngine() const;
+    neograph::graph::GraphEngine* getEngine();
 
     std::shared_ptr<AgentContext> getContext();
 
     /// Run agent with custom system prompt and user input, collect full output as
     /// string
-    asio::awaitable<std::string> runNonStreamAsync(
-        std::string_view                                        threadId,
+    asio::awaitable<std::string> runOverMsgsTurnAsync(
+        std::string_view                                        sessionId,
         const std::vector<neograph::ChatMessage>&               messages,
         std::function<void(const neograph::graph::GraphEvent&)> callback  = nullptr,
         std::string_view                                        modelName = ""
@@ -96,7 +95,7 @@ public:
 
     /// Run agent with a single user input and optional custom system prompt
     asio::awaitable<std::string> runSingleInputAsync(
-        std::string_view threadId,
+        std::string_view sessionId,
         std::string_view userInput,
         std::string_view systemPrompt = "",
         std::string_view modelName    = ""
@@ -107,14 +106,14 @@ public:
         neograph::graph::RunResult fullResult;
     };
 
-    asio::awaitable<SimpleRunResult> runStreamAsync(
+    asio::awaitable<SimpleRunResult> runStreamTurnAsync(
         const std::vector<neograph::ChatMessage>& messages,
         std::string_view                          modelName = ""
     );
 
     /// 合并的 run helper: 构造 RunConfig + 执行并收集 content (重构1 收敛三 run* 重复)
     asio::awaitable<SimpleRunResult> runInternalAsync(
-        std::string_view                     threadId,
+        std::string_view                     sessionId,
         std::vector<neograph::ChatMessage>   messages,
         neograph::graph::GraphStreamCallback callback     = nullptr,
         std::string_view                     modelName    = "",
@@ -140,36 +139,36 @@ protected:
     /// 构建图定义 JSON
     /// - 默认实现返回标准 ReAct 循环:
     ///   __start__ → agent_start → llm → [has_tool_calls?] → tools/agent_end → __end__
-    virtual neograph::json buildGraphDefinition();
+    virtual neograph::json initGraphDefinition();
 
     /// 向 per-agent GraphRegistry 注册节点类型
     /// - 默认注册 4 个核心节点: AgentStart / AgentEnd / ModelCall / Toolcall
     /// - 子类可 override 添加自定义节点类型
-    virtual void registerNodes(neograph::graph::GraphRegistry& registry);
+    virtual void initRegisterNodes(neograph::graph::GraphRegistry& registry);
 
     // =================================================================
     // 内部辅助方法
     // =================================================================
 
     /// 创建模型 Provider 注册表并注入 AgentContext
-    void setupModelRegistry();
+    void initModelRegistry();
 
     /// 创建事件总线并注入 AgentContext
-    void setupEventBus();
+    void initEventBus();
 
     /// 收集中间件自带的 toolcalls 到工具列表
-    void collectMiddlewareTools(std::vector<std::unique_ptr<agentxx::tools::XXToolBase>>& tools);
+    void initMiddlewareTools(std::vector<std::unique_ptr<agentxx::tools::XXToolBase>>& tools);
 
     /// 为所有工具创建 summarization 压缩句柄
-    void setupSummarizationHandles(
+    void initSummarizationHandles(
         const std::vector<std::unique_ptr<agentxx::tools::XXToolBase>>& tools
     );
 
     /// 通知 agent 启动进度 (供 init/initTools 各启动阶段调用):
-    /// - 经 agentContext->startupNotifier 转发给客户端 (TUI banner 展示);
+    /// - 经 agentContext->initNotifier 转发给客户端 (TUI banner 展示);
     ///   未注册回调时 no-op
     /// - 必须由 agent 线程 (init 协程上下文) 调用
-    void notifyStartup(std::string_view step);
+    void notifyInitProgress(std::string_view step);
 };
 
 } // namespace agent

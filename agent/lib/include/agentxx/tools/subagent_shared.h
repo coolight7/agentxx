@@ -18,13 +18,13 @@ namespace tools {
 
 /// 从中断参数构建批量委派请求 (统一批量语义)
 /// - agentName: 发起方 agent 名 (ReqSubagentBatch.parentAgentName)
-/// - threadId:  发起方会话 thread (ReqSubagentBatch.parentThreadId,
-///   宿主据此查 threadDepth_ 嵌套深度预算)
+/// - sessionId:  发起方会话 thread (ReqSubagentBatch.parentSessionId,
+///   宿主据此查 sessionDepth_ 嵌套深度预算)
 /// - cancelToken: 级联取消令牌 (父取消 → 中止全部在跑子代理; 可空)
 events::ReqSubagentBatch parseSubagentBatchFromInterrupt(
     const middleware::InterruptHandleArg&         interruptArg,
     std::string_view                              agentName,
-    std::string_view                              threadId,
+    std::string_view                              sessionId,
     std::shared_ptr<neograph::graph::CancelToken> cancelToken
 );
 

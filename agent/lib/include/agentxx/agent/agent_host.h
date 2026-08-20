@@ -58,7 +58,7 @@ private:
 /// - 持有共享 ioCtx / blockingPool / HostBus (多 agent 共享基础设施, 避免
 ///   每个 agent 各自创建线程池)
 /// - 子代理委派 (service.subagent / service.subagent.batch) 由宿主在根 agent
-///   全局总线上 serve: 派生的是独立 agent (不再复用父 AgentContext/subgraph)
+///   全局总线上 registerServer: 派生的是独立 agent (不再复用父 AgentContext/subgraph)
 /// - 强制子代理嵌套深度与并发预算
 /// - 生命周期: spawn 结束/取消后宿主立即回收 AgentNode (Session/中间件状态
 ///   随 AgentContext 析构整体释放, 无按 thread 累积泄漏)
@@ -91,9 +91,9 @@ public:
 
     /// 注册根 agent (主 agent):
     /// - 注入共享 blockingPool 与宿主引用 (AgentContext::host)
-    /// - 在根 agent 全局总线上 serve service.subagent (统一批量语义:
+    /// - 在根 agent 全局总线上 registerServer service.subagent (统一批量语义:
     ///   ReqSubagentBatch / RespSubagentBatch, 单任务 = 1 个 task);
-    ///   子代理的全局总线由 spawnOneTask 派生时对称 serve (嵌套委派
+    ///   子代理的全局总线由 spawnOneTask 派生时对称 registerServer (嵌套委派
     ///   与根委派完全同路径, 扁平化)
     /// - 仅支持单根 (进程级宿主)
     void attachRoot(std::shared_ptr<BaseAgent> rootAgent);
@@ -105,10 +105,10 @@ public:
     ///   (parentAgentCtx 指定父 agent 上下文, 从该上下文的 SessionStore 查找
     ///   父会话; 为空回退根 agent —— 根派生子代理 / 宿主外部调用的默认路径)
     /// - 取消令牌透传: 父取消级联中止子代理
-    /// - 同上下文模式 (messages 或 threadId 非空):
+    /// - 同上下文模式 (messages 或 sessionId 非空):
     ///   - messages: 结构化消息透传作为子代理初始上下文 (可含 system,
     ///     优先于 message 文本)
-    ///   - threadId: 子代理运行在指定 thread (而非独立 subagent 线程),
+    ///   - sessionId: 子代理运行在指定 thread (而非独立 subagent 线程),
     ///     并强制使用该 thread 父会话的当前模型 (忽略 subagentModel);
     ///     两者配合保证"相同上下文前缀 + 相同 threadid + 相同模型",
     ///     以命中 provider KV/prefix cache (如上下文压缩场景)
@@ -162,7 +162,7 @@ private:
     ) const;
     /// 派生单个子代理并等待其完成 (spawnBatch 内部按任务逐个调用)
     /// - 深度/并发预算检查, 独立 agent 构造, 运行边界 RAII 回收
-    /// - 派生时在该子代理全局总线上 serve service.subagent (宿主应答,
+    /// - 派生时在该子代理全局总线上 registerServer service.subagent (宿主应答,
     ///   与 attachRoot 对称): 子代理作用域内再遇 subagent 委派中断,
     ///   经本总线请求递归处理, 与根委派完全同路径 (扁平化)
     /// - HIL 类中断 (权限询问等) 经子代理会话总线冒泡到父 IO:
@@ -170,7 +170,7 @@ private:
     ///   查找父会话), 嵌套时是上一级子代理而非根
     asio::awaitable<events::RespSubagentBatchItem> spawnOneTask(
         const events::SubagentBatchItem&              task,
-        std::string_view                              parentThreadId,
+        std::string_view                              parentSessionId,
         std::shared_ptr<neograph::graph::CancelToken> cancelToken,
         std::shared_ptr<AgentContext>                 parentAgentCtx = nullptr
     );
@@ -202,8 +202,8 @@ private:
     uint64_t agentIdSeq_ = 0;
     /// 当前运行中的子代理数 (并发预算)
     size_t runningSubagentCount_ = 0;
-    /// subagent threadId -> 嵌套深度 (根会话不在表内, 视为 0)
-    std::map<std::string, size_t, std::less<>> threadDepth_;
+    /// subagent sessionId -> 嵌套深度 (根会话不在表内, 视为 0)
+    std::map<std::string, size_t, std::less<>> sessionDepth_;
 };
 
 } // namespace agent

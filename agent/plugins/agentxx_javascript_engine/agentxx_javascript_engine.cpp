@@ -510,18 +510,23 @@ private:
             return;
         }
 
-        // 参数: args 对象 + ctx 对象 {thread_id, tool_call_id}
+        // 参数: args 对象 + ctx 对象 {session_id, tool_call_id}
         JSValue argsObj = JS_ParseJSON(pctx->ctx, req.args.c_str(), req.args.size(), "<args>");
         if (JS_IsException(argsObj)) {
             JS_FreeValue(pctx->ctx, argsObj);
             argsObj = JS_NewObject(pctx->ctx);
         }
         JSValue ctxObj = JS_NewObject(pctx->ctx);
-        JS_SetPropertyStr(pctx->ctx, ctxObj, "thread_id", JS_NewString(pctx->ctx, req.tid.c_str()));
         JS_SetPropertyStr(
             pctx->ctx,
             ctxObj,
-            "tool_call_id",
+            "session_id",
+            JS_NewString(pctx->ctx, req.tid.c_str())
+        );
+        JS_SetPropertyStr(
+            pctx->ctx,
+            ctxObj,
+            "toolCallId",
             JS_NewString(pctx->ctx, req.tcid.c_str())
         );
         JSValue argv[2] = {argsObj, ctxObj};
@@ -1053,7 +1058,7 @@ JSValue JsEngine::bridgeCall(
                     }
                 }
             }
-            std::string threadId = argc >= 3 ? jsToCppString(ctx, argv[2]) : "";
+            std::string sessionId = argc >= 3 ? jsToCppString(ctx, argv[2]) : "";
 
             // 1) 本引擎 JS 工具: 同线程内联执行 (防自锁)
             JSValue entry = JS_GetPropertyStr(ctx, pctx->tools, name.c_str());
@@ -1071,10 +1076,10 @@ JSValue JsEngine::bridgeCall(
                     JS_SetPropertyStr(
                         ctx,
                         ctxObj,
-                        "thread_id",
-                        JS_NewString(ctx, threadId.c_str())
+                        "session_id",
+                        JS_NewString(ctx, sessionId.c_str())
                     );
-                    JS_SetPropertyStr(ctx, ctxObj, "tool_call_id", JS_NewString(ctx, "js_call"));
+                    JS_SetPropertyStr(ctx, ctxObj, "toolCallId", JS_NewString(ctx, "js_call"));
                     JSValue argv2[2] = {argsObj, ctxObj};
                     JSValue ret      = JS_Call(ctx, execFn, JS_UNDEFINED, 2, argv2);
                     JS_FreeValue(ctx, argsObj);
@@ -1095,7 +1100,7 @@ JSValue JsEngine::bridgeCall(
                 host,
                 agentxx_plugin_sv(name.data(), name.size()),
                 agentxx_plugin_sv(argsJson.data(), argsJson.size()),
-                agentxx_plugin_sv(threadId.data(), threadId.size()),
+                agentxx_plugin_sv(sessionId.data(), sessionId.size()),
                 &err
             );
             if (!resp) {
@@ -1115,13 +1120,16 @@ JSValue JsEngine::bridgeCall(
         }
 
         case B_GET_SHARE_STORE: {
-            std::string threadId = argc >= 1 ? jsToCppString(ctx, argv[0]) : "";
-            int64_t     id       = 0;
+            std::string sessionId = argc >= 1 ? jsToCppString(ctx, argv[0]) : "";
+            int64_t     id        = 0;
             if (argc >= 2) {
                 JS_ToInt64(ctx, &id, argv[1]);
             }
-            char* resp
-                = vt.get_share_store(host, agentxx_plugin_sv(threadId.data(), threadId.size()), id);
+            char* resp = vt.get_share_store(
+                host,
+                agentxx_plugin_sv(sessionId.data(), sessionId.size()),
+                id
+            );
             if (!resp) {
                 return JS_NULL;
             }
@@ -1131,9 +1139,9 @@ JSValue JsEngine::bridgeCall(
         }
 
         case B_EMIT_MESSAGE_TIP: {
-            std::string threadId = argc >= 1 ? jsToCppString(ctx, argv[0]) : "";
-            std::string text     = argc >= 2 ? jsToCppString(ctx, argv[1]) : "";
-            int         level    = 0;
+            std::string sessionId = argc >= 1 ? jsToCppString(ctx, argv[0]) : "";
+            std::string text      = argc >= 2 ? jsToCppString(ctx, argv[1]) : "";
+            int         level     = 0;
             if (argc >= 3 && JS_IsNumber(argv[2])) {
                 int32_t lv = 0;
                 JS_ToInt32(ctx, &lv, argv[2]);
@@ -1141,7 +1149,7 @@ JSValue JsEngine::bridgeCall(
             }
             vt.emit_message_tip(
                 host,
-                agentxx_plugin_sv(threadId.data(), threadId.size()),
+                agentxx_plugin_sv(sessionId.data(), sessionId.size()),
                 agentxx_plugin_sv(text.data(), text.size()),
                 level
             );

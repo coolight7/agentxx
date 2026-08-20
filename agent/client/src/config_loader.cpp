@@ -419,7 +419,7 @@ YamlAppConfig loadYamlConfig(
                 }
             }
             if (node["extra_api_config"]) {
-                mc.extra_config = yamlToJson(node["extra_api_config"]);
+                mc.extraConfig = yamlToJson(node["extra_api_config"]);
             }
             if (!mc.name.empty()) {
                 cfg.models[mc.name] = std::move(mc);
@@ -630,8 +630,7 @@ YamlAppConfig loadYamlConfig(
                     pc.sides = agent::PluginSide::Agent;
                 } else if (util::isIgnoreCaseEqual(val, "client")) {
                     pc.sides = agent::PluginSide::Client;
-                } else if (!util::isIgnoreCaseEqual(val, "auto")
-                           && !util::isIgnoreCaseEqual(val, "both")) {
+                } else if (!util::isIgnoreCaseEqual(val, "auto") && !util::isIgnoreCaseEqual(val, "both")) {
                     XX_LOGW(
                         R"([Config] Warning: plugin `{}` invalid sides `{}`, fallback to auto)",
                         pc.path,

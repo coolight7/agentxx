@@ -351,15 +351,15 @@ void testLifecycleAndConversation() {
     // start → 等待 EVT_READY
     XX_TEST_EXPECT_EQ(agentxx_start(a, &log), AGENTXX_OK);
     XX_TEST_EXPECT_TRUE(rec.wait(AGENTXX_EVT_READY, 20000));
-    // READY payload 含 threadId
+    // READY payload 含 sessionId
     {
         auto ready = rec.first(AGENTXX_EVT_READY);
-        XX_TEST_EXPECT_TRUE(ready.find("\"threadId\"") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(ready.find("\"sessionId\"") != std::string::npos);
     }
 
     // 同步查询: 模型信息
     char* mi = agentxx_get_model_info(a, &log);
-    XX_TEST_EXPECT_TRUE(mi != nullptr && std::strstr(mi, "current_model") != nullptr);
+    XX_TEST_EXPECT_TRUE(mi != nullptr && std::strstr(mi, "currentModel") != nullptr);
     agentxx_free(mi);
 
     // 发送输入 → 流式 delta → 轮次结束
@@ -371,7 +371,7 @@ void testLifecycleAndConversation() {
         auto turn = rec.first(AGENTXX_EVT_TURN_END);
         try {
             auto j = neograph::json::parse(turn);
-            XX_TEST_EXPECT_TRUE(j.value("has_error", true) == false);
+            XX_TEST_EXPECT_TRUE(j.value("hasError", true) == false);
         } catch (...) {
             g_ffi_failed++;
             TEST_FAIL << "TURN_END payload not JSON: " << turn << std::endl;
@@ -508,7 +508,7 @@ void testHilInterrupt() {
         auto turn = rec.first(AGENTXX_EVT_TURN_END);
         try {
             auto j = neograph::json::parse(turn);
-            XX_TEST_EXPECT_TRUE(j.value("has_error", true) == false);
+            XX_TEST_EXPECT_TRUE(j.value("hasError", true) == false);
         } catch (...) {
             g_ffi_failed++;
             TEST_FAIL << "TURN_END payload not JSON: " << turn << std::endl;
@@ -568,10 +568,10 @@ void testCancel() {
         try {
             auto j = neograph::json::parse(turn);
             // 用户取消语义: has_error=true + errorMessage="Cancelled by user"
-            // (见 BaseAgent::runConversationTurnAsync 取消分支)
-            XX_TEST_EXPECT_TRUE(j.value("has_error", false) == true);
+            // (见 BaseAgent::runTurnAsync 取消分支)
+            XX_TEST_EXPECT_TRUE(j.value("hasError", false) == true);
             XX_TEST_EXPECT_TRUE(
-                j.value("error_message", std::string{}).find("Cancelled") != std::string::npos
+                j.value("errorMessage", std::string{}).find("Cancelled") != std::string::npos
             );
         } catch (...) {
             g_ffi_failed++;
