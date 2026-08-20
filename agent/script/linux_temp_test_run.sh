@@ -31,4 +31,6 @@ if [[ $? -ne 0 ]]; then
     exit 1
 fi
 
-LD_LIBRARY_PATH=$build_dir/exec $build_dir/exec/test_temp
+# 测试依赖 cwd 下的 plugins/ 等资源: 切到可执行文件目录再运行
+cd "$build_dir/exec" || exit 1
+LD_LIBRARY_PATH=. ./test_temp

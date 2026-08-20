@@ -32,12 +32,21 @@ int g_client_plugin_passed = 0;
 int g_client_plugin_failed = 0;
 
 /// 定位示例插件目录 (与 agent 侧 test_plugins 同路径: cwd/plugins/example_plugin)
+/// 兼容从其他 cwd 运行: 优先 cwd/plugins, 回退可执行文件同目录
 static std::string findExamplePluginPath() {
     namespace fs = std::filesystem;
-    std::error_code ec;
-    auto            cwd = fs::current_path(ec) / "plugins" / "example_plugin";
-    if (!ec) {
-        return cwd.string();
+    std::error_code       ec;
+    std::vector<fs::path> candidates;
+    candidates.push_back(fs::current_path(ec) / "plugins" / "example_plugin");
+#if !XX_IS_WIN_D
+    if (auto p = fs::read_symlink("/proc/self/exe", ec); !ec) {
+        candidates.push_back(p.parent_path() / "plugins" / "example_plugin");
+    }
+#endif
+    for (const auto& c : candidates) {
+        if (fs::is_directory(c, ec)) {
+            return c.string();
+        }
     }
     return "plugins/example_plugin";
 }

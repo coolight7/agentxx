@@ -178,22 +178,22 @@ static std::string uiControlSchema() {
                                            "get_cursor_pos, get_screen_size"}
     });
     p["x"]                       = codegraph::Json({
-        {"type", "number"}
+        {"type", "integer"}
     });
     p["y"]                       = codegraph::Json({
-        {"type", "number"}
+        {"type", "integer"}
     });
     p["x1"]                      = codegraph::Json({
-        {"type", "number"}
+        {"type", "integer"}
     });
     p["y1"]                      = codegraph::Json({
-        {"type", "number"}
+        {"type", "integer"}
     });
     p["x2"]                      = codegraph::Json({
-        {"type", "number"}
+        {"type", "integer"}
     });
     p["y2"]                      = codegraph::Json({
-        {"type", "number"}
+        {"type", "integer"}
     });
     p["button"]                  = codegraph::Json({
         {"type", "string"},
@@ -203,7 +203,7 @@ static std::string uiControlSchema() {
          )               }
     });
     p["delta"]                   = codegraph::Json({
-        {"type", "number"}
+        {"type", "integer"}
     });
     p["key"]                     = codegraph::Json({
         {"type",        "string"                                },
@@ -219,11 +219,11 @@ static std::string uiControlSchema() {
         {"description", "Text string for key_type"}
     });
     p["ms"]                      = codegraph::Json({
-        {"type",        "number"             },
+        {"type",        "integer"            },
         {"description", "Wait duration in ms"}
     });
     p["durationMs"]              = codegraph::Json({
-        {"type", "number"}
+        {"type", "integer"}
     });
 
     codegraph::Json schema              = codegraph::Json::object();
@@ -235,7 +235,7 @@ static std::string uiControlSchema() {
         {"items",       commandsItem                                 }
     });
     schema["properties"]["interval_ms"] = codegraph::Json({
-        {"type",        "number"                                    },
+        {"type",        "integer"                                   },
         {"description", "Delay between commands in ms. Default: 50."}
     });
     schema["required"]                  = codegraph::Json::array({codegraph::Json("commands")});

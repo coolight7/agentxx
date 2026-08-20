@@ -55,6 +55,13 @@ static std::string findSystemMonitorPluginPath() {
             );
         }
     }
+#else
+    // Linux: 回退可执行文件同目录 (兼容从其他 cwd 运行, 与 test_codegraph_tools 一致)
+    if (auto p = std::filesystem::read_symlink("/proc/self/exe", ec); !ec) {
+        candidates.push_back(
+            p.parent_path() / "plugins" / "agentxx_system_monitor"
+        );
+    }
 #endif
     for (const auto& c : candidates) {
         if (std::filesystem::is_directory(c, ec)) {

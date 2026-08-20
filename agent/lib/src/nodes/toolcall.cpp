@@ -151,6 +151,7 @@ bool ToolcallWrapNode::autoFixArgsType(const neograph::ChatTool& def, neograph::
     }
 
     bool changed = false;
+    // TODO: 支持转换 number 和 integer
     for (const auto& [name, schema] : props.items()) {
         // 跳过未传值的参数
         if (!args.contains(name)) {
@@ -170,9 +171,8 @@ bool ToolcallWrapNode::autoFixArgsType(const neograph::ChatTool& def, neograph::
                 args[name] = std::move(arr);
                 fixInfo    = "string -> [string]";
                 changed    = true;
-            }
-            // 2) string -> number/integer (目标不含 string 时)
-            else if (types.isNumeric() && !types.isString) {
+            } else if (types.isNumeric() && !types.isString) {
+                // 2) string -> number/integer (目标不含 string 时)
                 if (types.isNumber) {
                     // 声明了 number: 按浮点解析 (兼容小数/指数)
                     double v = 0;
@@ -190,9 +190,8 @@ bool ToolcallWrapNode::autoFixArgsType(const neograph::ChatTool& def, neograph::
                         changed    = true;
                     }
                 }
-            }
-            // 3) string -> boolean (目标不含 string 时)
-            else if (types.isBool && !types.isString) {
+            } else if (types.isBool && !types.isString) {
+                // 3) string -> boolean (目标不含 string 时)
                 if ("true" == str) {
                     args[name] = true;
                     fixInfo    = "string -> boolean";

@@ -25,12 +25,22 @@ int g_plugin_passed = 0;
 int g_plugin_failed = 0;
 
 /// 定位示例插件库 (与测试可执行同目录, 见 test/CMakeLists.txt)
+/// 兼容从其他 cwd 运行: 优先 cwd/plugins, 回退可执行文件同目录
+/// (与 test_codegraph_tools.cpp 的 findCodegraphPluginPath 一致)
 static std::string findExamplePluginPath() {
     namespace fs = std::filesystem;
-    std::error_code ec;
-    auto            cwd = fs::current_path(ec) / "plugins" / "example_plugin";
-    if (!ec) {
-        return cwd.string();
+    std::error_code       ec;
+    std::vector<fs::path> candidates;
+    candidates.push_back(fs::current_path(ec) / "plugins" / "example_plugin");
+#if !XX_IS_WIN_D
+    if (auto p = fs::read_symlink("/proc/self/exe", ec); !ec) {
+        candidates.push_back(p.parent_path() / "plugins" / "example_plugin");
+    }
+#endif
+    for (const auto& c : candidates) {
+        if (fs::is_directory(c, ec)) {
+            return c.string();
+        }
     }
     // 异常兜底: 返回相对目录路径, loadPluginAsync 解析失败时日志暴露原因
     return "plugins/example_plugin";
