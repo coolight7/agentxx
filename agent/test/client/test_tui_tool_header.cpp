@@ -53,21 +53,18 @@ struct ToolHeaderFixture {
     }
 
     /// 追加一条 Tool 消息 (text 为工具参数 JSON, 与 server 端约定一致)
-    void pushTool(std::string name, std::string args) {
+    void pushTool(std::string name, std::string args, bool finished = true) {
         sharedState.mutate([&](TUIRenderState& st) {
             auto m                = std::make_shared<TUIMessage>();
             m->role               = TUIMessage::Role::Tool;
             m->tool               = TUIMessage::ToolData{};
             m->tool->toolName     = std::move(name);
             m->tool->toolCallId   = "call_1";
-            m->tool->toolFinished = true;
-            // 与实际流水线一致: 已完成的 Tool 消息默认折叠展示 (event_stream 历史
-            // 重连时 collapsed=true), 折叠头部即 "动词 · 参数摘要" 特化渲染
-            m->collapsed = true;
-            m->text      = std::move(args);
+            m->tool->toolFinished = finished;
             // Tool 消息默认折叠展示 (与真实 TUI 流一致, 见 agent_tui.cpp);
             // 折叠态头部才显示 "动词 · 参数摘要" 特化渲染
             m->collapsed = true;
+            m->text      = std::move(args);
             st.messages.push_back(std::move(m));
         });
     }
@@ -209,11 +206,26 @@ void testTuiToolHeaderOverflow() {
     XX_TEST_EXPECT_TRUE(out2.find("+ [Think] ") != std::string::npos);
 }
 
+// 运行中工具消息折叠展示 (默认不自动展开, 头部展示参数摘要或 running...)
+void testTuiToolHeaderRunning() {
+    ToolHeaderFixture f;
+
+    // 已知工具在 running 状态下折叠同样展示参数摘要
+    f.pushTool("agentxx_filesystem_read", R"({"path":"/home/running.cpp"})", false);
+    XX_TEST_EXPECT_TRUE(f.render().find("Read · /home/running.cpp") != std::string::npos);
+
+    // 未知工具在 running 状态下折叠展示 "toolName running..."
+    ToolHeaderFixture f2;
+    f2.pushTool("custom_tool_run", R"({})", false);
+    XX_TEST_EXPECT_TRUE(f2.render().find("custom_tool_run running...") != std::string::npos);
+}
+
 TestResult testTuiToolHeader() {
     testTuiToolHeaderFilesystem();
     testTuiToolHeaderWeb();
     testTuiToolHeaderFallback();
     testTuiToolHeaderOverflow();
+    testTuiToolHeaderRunning();
     return {g_tui_tool_header_passed, g_tui_tool_header_failed};
 }
 

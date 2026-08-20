@@ -12,7 +12,6 @@
 - 特化 Plan 渲染
 - plan tool 重命名、支持 read
 - 排查 gemini 模型时，是否需要保存加密 thinking
-- 末尾 toolcall 不再自动展开
 - 设置开关指定末尾 thinking 展开还是单行截取末尾
 
 ## 提示词优化
