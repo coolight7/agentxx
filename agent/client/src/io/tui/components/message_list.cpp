@@ -975,10 +975,10 @@ struct ToolHeaderSummary {
 };
 
 /// 将工具调用的参数 JSON 摘要为单行头部, 例如:
-/// - agentxx_filesystem_read  -> "Read", " · [0, 100] /path/file" (运行中 " · [running] [0, 100]
+/// - agentxx_filesystem_read  -> "Read", " · [0, 100] /path/file" (运行中 " · [0, 100]
 /// /path/file")
-/// - agentxx_filesystem_write      -> "Write", " · /path/file" (运行中 " · [running] /path/file")
-/// - agentxx_web_search                 -> "Search", " · <query>" (运行中 " · [running] <query>")
+/// - agentxx_filesystem_write      -> "Write", " · /path/file" (运行中 " · /path/file")
+/// - agentxx_web_search                 -> "Search", " · <query>" (运行中 " · <query>")
 /// 未知工具 / 参数解析失败返回空 toolName, 调用方回退显示原始 toolName
 static ToolHeaderSummary
     buildToolHeaderSummary(std::string_view toolName, std::string_view argsText, bool running) {
@@ -1008,13 +1008,10 @@ static ToolHeaderSummary
         return args.value(std::string(key), std::vector<std::string>{});
     };
 
-    /// 拼接 "{action}" 与 " · [running] [{params}] {target}" (params 可空)
+    /// 拼接 "{action}" 与 " · [{params}] {target}" (params 可空)
     auto make = [&](std::string_view action, std::string_view params, std::string_view target
                 ) -> ToolHeaderSummary {
         std::string argsSummary = " ·";
-        if (running) {
-            argsSummary += " [running]";
-        }
         if (!params.empty()) {
             argsSummary += " [";
             argsSummary += params;
@@ -1252,7 +1249,7 @@ Element MessageListComponent::buildMessageBlock(
                 if (!msg.text.empty()) {
                     previewText = oneLinePreview(msg.text);
                 } else if (msg.think && msg.think->reasoningTokens > 0) {
-                    previewText = fmt::format("思考 {} tokens", msg.think->reasoningTokens);
+                    previewText = fmt::format("加密思考 {} tokens", msg.think->reasoningTokens);
                 } else if (msg.think && msg.think->isEncrypted) {
                     previewText = "思考内容被加密";
                 }
@@ -1279,7 +1276,7 @@ Element MessageListComponent::buildMessageBlock(
                 } else {
                     std::string infoText;
                     if (msg.think && msg.think->reasoningTokens > 0) {
-                        infoText = fmt::format("思考 {} tokens", msg.think->reasoningTokens);
+                        infoText = fmt::format("加密思考 {} tokens", msg.think->reasoningTokens);
                     } else if (msg.think && msg.think->isEncrypted) {
                         infoText = "思考内容被加密";
                     }
@@ -1321,7 +1318,7 @@ Element MessageListComponent::buildMessageBlock(
                 } else {
                     displayName = msg.tool->toolName;
                     if (!finished) {
-                        argsSummary = " · [running]";
+                        argsSummary = " ·";
                         if (!msg.text.empty()) {
                             argsSummary += " " + oneLinePreview(msg.text, 80);
                         }

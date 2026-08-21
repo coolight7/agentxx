@@ -228,20 +228,17 @@ void testTuiToolHeaderOverflow() {
     XX_TEST_EXPECT_TRUE(out2.find("+ [Think] ") != std::string::npos);
 }
 
-// 运行中工具消息折叠展示 (默认不自动展开, 头部展示参数开头包含 [running], 且 toolName 高亮)
+// 运行中工具消息折叠展示 (默认不自动展开, 头部展示参数 toolName 高亮)
 void testTuiToolHeaderRunning() {
     ToolHeaderFixture f;
 
-    // 已知工具在 running 状态下折叠展示 "Read · [running] /path"
+    // 已知工具在 running 状态下折叠展示 "Read · /path"
     f.pushTool("agentxx_filesystem_read", R"({"path":"/home/running.cpp"})", false);
-    // 纯文本断言: 参数开头包含 [running]
-    XX_TEST_EXPECT_TRUE(
-        f.plainRender().find("Read · [running] /home/running.cpp") != std::string::npos
-    );
+    XX_TEST_EXPECT_TRUE(f.plainRender().find("Read · /home/running.cpp") != std::string::npos);
     // 样式断言: 包含 accentColor 高亮颜色代码 (102;204;255)
     XX_TEST_EXPECT_TRUE(f.render().find("102;204;255") != std::string::npos);
 
-    // 已知带区间工具在 running 状态下折叠展示 "Read · [running] [0, 100] /path"
+    // 已知带区间工具在 running 状态下折叠展示 "Read · [0, 100] /path"
     ToolHeaderFixture fReadRange;
     fReadRange.pushTool(
         "agentxx_filesystem_read",
@@ -249,16 +246,15 @@ void testTuiToolHeaderRunning() {
         false
     );
     XX_TEST_EXPECT_TRUE(
-        fReadRange.plainRender().find("Read · [running] [0, 100] /home/running.cpp")
-        != std::string::npos
+        fReadRange.plainRender().find("Read · [0, 100] /home/running.cpp") != std::string::npos
     );
 
-    // bash 工具在 running 状态下折叠展示 "Bash · [running] command"
+    // bash 工具在 running 状态下折叠展示 "Bash · command"
     ToolHeaderFixture fBash;
     fBash.pushTool("agentxx_execute_bash_command", R"({"command":"ls -la"})", false);
-    XX_TEST_EXPECT_TRUE(fBash.plainRender().find("Bash · [running] ls -la") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(fBash.plainRender().find("Bash · ls -la") != std::string::npos);
 
-    // plan 工具在 running 状态下折叠展示 "Plan · [running] [~] ..."
+    // plan 工具在 running 状态下折叠展示 "Plan · [~] ..."
     ToolHeaderFixture fPlan;
     fPlan.pushTool(
         "agentxx_planning_write",
@@ -266,19 +262,19 @@ void testTuiToolHeaderRunning() {
         false
     );
     XX_TEST_EXPECT_TRUE(
-        fPlan.plainRender().find("Plan · [running] [~] reproduce issue") != std::string::npos
+        fPlan.plainRender().find("Plan · [~] reproduce issue") != std::string::npos
     );
 
-    // 未知工具在 running 状态下折叠展示 "toolName · [running]"
+    // 未知工具在 running 状态下折叠展示 "toolName · "
     ToolHeaderFixture f2;
     f2.pushTool("custom_tool_run", R"({})", false);
-    XX_TEST_EXPECT_TRUE(f2.plainRender().find("custom_tool_run · [running]") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(f2.plainRender().find("custom_tool_run · ") != std::string::npos);
 
-    // 未知工具带参数在 running 状态下折叠展示 "toolName · [running] args..."
+    // 未知工具带参数在 running 状态下折叠展示 "toolName · args..."
     ToolHeaderFixture f3;
     f3.pushTool("custom_tool_run", R"({"key":"val"})", false);
     XX_TEST_EXPECT_TRUE(
-        f3.plainRender().find("custom_tool_run · [running] {\"key\":\"val\"}") != std::string::npos
+        f3.plainRender().find("custom_tool_run · {\"key\":\"val\"}") != std::string::npos
     );
 }
 

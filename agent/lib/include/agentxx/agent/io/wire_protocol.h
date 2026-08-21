@@ -174,6 +174,18 @@ inline neograph::json deltaToJson(const Delta& d) {
     if (!d.nodeName.empty()) {
         j["nodeName"] = d.nodeName;
     }
+    if (d.think) {
+        neograph::json th = neograph::json::object();
+        if (d.think->reasoningTokens > 0) {
+            th["reasoning_tokens"] = d.think->reasoningTokens;
+        }
+        if (d.think->isEncrypted) {
+            th["is_encrypted"] = true;
+        }
+        if (!th.empty()) {
+            j["think"] = std::move(th);
+        }
+    }
     // MessageUITip / MessageTip: 提示级别
     if (d.type == Delta::Type::MessageUITip || d.type == Delta::Type::MessageTip) {
         switch (d.tipType) {
@@ -215,6 +227,12 @@ inline std::optional<Delta> deltaFromJson(const neograph::json& j) {
     d.durationMs   = j.value("durationMs", int64_t{0});
     d.tps          = j.value("tps", 0.0);
     d.nodeName     = j.value("nodeName", std::string{});
+    if (j.contains("think") && j["think"].is_object()) {
+        ViewMessage::ThinkData th;
+        th.reasoningTokens = j["think"].value("reasoning_tokens", 0);
+        th.isEncrypted     = j["think"].value("is_encrypted", false);
+        d.think            = std::move(th);
+    }
     if (d.type == Delta::Type::MessageUITip || d.type == Delta::Type::MessageTip) {
         const auto tip = j.value("tipType", std::string{"info"});
         if (tip == "warning") {

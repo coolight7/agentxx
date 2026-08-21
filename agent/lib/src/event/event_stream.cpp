@@ -141,11 +141,22 @@ void EventBridge::handleLLMToken(const neograph::graph::GraphEvent& event) {
     // 总线发布
     publishModelToken(token, kind);
 
+    std::optional<agentxx::agent::ViewMessage::ThinkData> thinkData;
+    if (lastChatChunkType_ == neograph::ChatStreamChunk::TYPE_THINKING) {
+        if (token.empty()) {
+            thinkData = agentxx::agent::ViewMessage::ThinkData{
+                .reasoningTokens = 0,
+                .isEncrypted     = true,
+            };
+        }
+    }
+
     emitDelta(agentxx::agent::Delta{
         .type        = (lastChatChunkType_ == neograph::ChatStreamChunk::TYPE_THINKING)
                            ? agentxx::agent::Delta::Type::ThinkToken
                            : agentxx::agent::Delta::Type::TextToken,
         .text        = std::move(token),
+        .think       = std::move(thinkData),
         .startTimeMs = nodeStartTimeMs_,
         .durationMs
         = sendDuration ? static_cast<int64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -186,11 +197,11 @@ void EventBridge::handleChannelWrite(const neograph::graph::GraphEvent& event) {
     bool hasLLMOutput = false;
     for (const auto& jm : value) {
         auto role = jm.value("role", std::string{});
-        if (role == "assistant" && jm.contains("tool_calls")) {
+        if (role == "assistant") {
             hasLLMOutput = true;
-            // 展开: reasoning_content 非空 → Think (折叠); 每条 tool_call →
-            // 一条 Tool 消息 (未完成, 历史默认折叠); content 非空 → 一条
-            // Assistant 消息。顺序与渲染端拆解一致: Think 在前, 其余在后。
+            // 展开: reasoning_content 非空 / 加密思考 → Think (折叠); content 非空 →
+            // Assistant 消息; 每条 tool_call → Tool 消息 (未完成, 历史默认折叠)。
+            // 顺序与渲染端拆解一致: Think 在前, Assistant 在中, Tool 在后。
             // 展开语义与渲染端 (TUI) 同步一致: 历史消息直接就是渲染消息,
             // client 端无需再按 json 拆解
             auto reasoning       = jm.value("reasoning_content", std::string{});
@@ -219,6 +230,18 @@ void EventBridge::handleChannelWrite(const neograph::graph::GraphEvent& event) {
                 }
                 m.collapsed = true;
                 session_->appendViewMessage(std::move(m));
+                if (isEncrypted || reasoningTokens > 0) {
+                    emitDelta(Delta{
+                        .type        = Delta::Type::ThinkToken,
+                        .text        = "",
+                        .think       = ViewMessage::ThinkData{
+                            .reasoningTokens = reasoningTokens,
+                            .isEncrypted     = isEncrypted,
+                        },
+                        .startTimeMs = jm.value("startTimeMs", int64_t{0}),
+                        .durationMs  = jm.value("durationMs", int64_t{0}),
+                    });
+                }
             }
             auto content = jm.value("content", std::string{});
             if (!content.empty()) {
@@ -230,32 +253,34 @@ void EventBridge::handleChannelWrite(const neograph::graph::GraphEvent& event) {
                 );
                 session_->appendViewMessage(std::move(m));
             }
-            for (const auto& tc : jm["tool_calls"]) {
-                const auto toolName   = tc.value("name", std::string{});
-                const auto toolCallId = tc.value("id", std::string{});
-                const auto arguments  = tc.value("arguments", std::string{});
+            if (jm.contains("tool_calls") && jm["tool_calls"].is_array()) {
+                for (const auto& tc : jm["tool_calls"]) {
+                    const auto toolName   = tc.value("name", std::string{});
+                    const auto toolCallId = tc.value("id", std::string{});
+                    const auto arguments  = tc.value("arguments", std::string{});
 
-                ViewMessage m;
-                m.role      = ViewMessage::Role::Tool;
-                m.text      = arguments;
-                m.collapsed = true; // 历史重连默认折叠 (与 onDelta 实时展开不同)
-                m.tool      = ViewMessage::ToolData{};
-                m.tool->toolName   = toolName;
-                m.tool->toolCallId = toolCallId;
-                const auto msgId   = session_->appendViewMessage(std::move(m));
-                // 登记 toolCallId → viewMessages 索引, 供 tool 结果回填 O(1) 定位
-                // (viewMessages append-only, 索引不失效)
-                const size_t historyIndex = session_->viewMessages.size() - 1;
-                if (!toolCallId.empty()) {
-                    toolCallHistoryIndex_[toolCallId] = historyIndex;
+                    ViewMessage m;
+                    m.role      = ViewMessage::Role::Tool;
+                    m.text      = arguments;
+                    m.collapsed = true; // 历史重连默认折叠 (与 onDelta 实时展开不同)
+                    m.tool      = ViewMessage::ToolData{};
+                    m.tool->toolName   = toolName;
+                    m.tool->toolCallId = toolCallId;
+                    const auto msgId   = session_->appendViewMessage(std::move(m));
+                    // 登记 toolCallId → viewMessages 索引, 供 tool 结果回填 O(1) 定位
+                    // (viewMessages append-only, 索引不失效)
+                    const size_t historyIndex = session_->viewMessages.size() - 1;
+                    if (!toolCallId.empty()) {
+                        toolCallHistoryIndex_[toolCallId] = historyIndex;
+                    }
+                    emitDelta(Delta{
+                        .type       = Delta::Type::ToolStart,
+                        .msgId      = msgId,
+                        .toolName   = toolName,
+                        .toolCallId = toolCallId,
+                        .arguments  = arguments,
+                    });
                 }
-                emitDelta(Delta{
-                    .type       = Delta::Type::ToolStart,
-                    .msgId      = msgId,
-                    .toolName   = toolName,
-                    .toolCallId = toolCallId,
-                    .arguments  = arguments,
-                });
             }
         } else if (role == "tool") {
             auto content = jm.value("content", std::string{});
@@ -310,47 +335,6 @@ void EventBridge::handleChannelWrite(const neograph::graph::GraphEvent& event) {
                 .result     = content,
                 .hasError   = false,
             });
-        } else if (role == "assistant") {
-            hasLLMOutput = true;
-            // 展开: reasoning_content 非空 → Think (折叠); content 非空 → Assistant。
-            // 顺序与渲染端拆解一致: Think 在前, Assistant 在后
-            auto reasoning       = jm.value("reasoning_content", std::string{});
-            int  reasoningTokens = 0;
-            bool isEncrypted     = false;
-            if (jm.contains("extra") && jm["extra"].is_object()) {
-                reasoningTokens = jm["extra"].value("reasoning_tokens", 0);
-                if (jm["extra"].contains("responses_reasoning_items")
-                    && jm["extra"]["responses_reasoning_items"].is_array()
-                    && !jm["extra"]["responses_reasoning_items"].empty()) {
-                    isEncrypted = true;
-                }
-            }
-            if (!reasoning.empty() || isEncrypted || reasoningTokens > 0) {
-                auto m = ViewMessage::makeText(
-                    ViewMessage::Role::Think,
-                    reasoning,
-                    jm.value("startTimeMs", int64_t{0}),
-                    jm.value("durationMs", int64_t{0})
-                );
-                if (isEncrypted || reasoningTokens > 0) {
-                    m.think = ViewMessage::ThinkData{
-                        .reasoningTokens = reasoningTokens,
-                        .isEncrypted     = isEncrypted,
-                    };
-                }
-                m.collapsed = true;
-                session_->appendViewMessage(std::move(m));
-            }
-            auto content = jm.value("content", std::string{});
-            if (!content.empty()) {
-                auto m = ViewMessage::makeText(
-                    ViewMessage::Role::Assistant,
-                    content,
-                    jm.value("startTimeMs", int64_t{0}),
-                    jm.value("durationMs", int64_t{0})
-                );
-                session_->appendViewMessage(std::move(m));
-            }
         }
     }
     // llm node 执行完成，推送上下文统计更新

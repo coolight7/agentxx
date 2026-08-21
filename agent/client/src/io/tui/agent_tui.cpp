@@ -1264,18 +1264,26 @@ void TUIClientAgentIO::onPeerMessage(agentxx::agent::WireMessage msg) {
 // ---------------------------------------------------------------------------
 
 void TUIClientAgentIO::pushCurrentTokenLocked(TUIRenderState& st) {
-    if (!st.currentToken || st.currentToken->empty()) {
+    if (!st.hasPendingToken()) {
         return;
     }
     auto msg         = std::make_shared<TUIMessage>();
     msg->role        = st.currentTokenRole;
-    msg->text        = *st.currentToken;
-    msg->collapsed   = (st.currentTokenRole == TUIMessage::Role::Think);
+    if (st.currentToken && !st.currentToken->empty()) {
+        msg->text    = *st.currentToken;
+    }
+    if (st.currentTokenRole == TUIMessage::Role::Think) {
+        msg->collapsed = true;
+        if (st.pendingTokenThink.has_value()) {
+            msg->think = *st.pendingTokenThink;
+        }
+    }
     msg->durationMs  = st.pendingTokenDurationMs;
     msg->startTimeMs = st.pendingTokenStartTimeMs;
     st.messages.push_back(std::move(msg));
     st.pendingTokenDurationMs  = 0;
     st.pendingTokenStartTimeMs = 0;
+    st.pendingTokenThink.reset();
     st.currentToken.reset();
 }
 
@@ -1348,9 +1356,72 @@ void TUIClientAgentIO::onDelta(const agentxx::agent::Delta& delta) {
         switch (delta.type) {
             case Type::TextToken:
             case Type::ThinkToken: {
+                if (delta.type == Type::ThinkToken && delta.text.empty()) {
+                    // 空文本 ThinkToken: 加密思考载体或思考元数据更新 (如 reasoning_tokens/duration)
+                    // 若当前正在累积明文 Think 流 (尚未收到正文 TextToken / ToolStart), 先将已累积的思考文本落盘到 messages
+                    if (st.currentTokenRole == TUIMessage::Role::Think && st.hasPendingToken()) {
+                        pushCurrentTokenLocked(st);
+                    }
+
+                    bool updatedExisting = false;
+                    for (size_t i = st.messages.size(); i > 0; --i) {
+                        const auto r = st.messages[i - 1]->role;
+                        if (r == TUIMessage::Role::User || r == TUIMessage::Role::Tool
+                            || r == TUIMessage::Role::Assistant) {
+                            break; // 遇到用户输入、工具执行或正文回答边界，不得跨越更新前序动作的 Think
+                        }
+                        if (r == TUIMessage::Role::Think) {
+                            auto& m = sharedState_.mutableMessage(st, i - 1);
+                            if (delta.think) {
+                                if (!m.think) {
+                                    m.think = *delta.think;
+                                } else {
+                                    if (delta.think->reasoningTokens > 0) {
+                                        m.think->reasoningTokens = delta.think->reasoningTokens;
+                                    }
+                                    if (delta.think->isEncrypted) {
+                                        m.think->isEncrypted = true;
+                                    }
+                                }
+                            }
+                            if (delta.durationMs > 0) {
+                                m.durationMs = delta.durationMs;
+                            }
+                            if (delta.startTimeMs > 0 && m.startTimeMs == 0) {
+                                m.startTimeMs = delta.startTimeMs;
+                            }
+                            updatedExisting = true;
+                            break;
+                        }
+                    }
+                    if (updatedExisting) {
+                        st.isStreaming = true;
+                        break;
+                    }
+                    // 当前轮次/步骤尚无 Think 消息 (如加密思考首包): 开始思考时立即在消息列表中创建 Think 消息展示
+                    pushCurrentTokenLocked(st);
+                    auto msg         = std::make_shared<TUIMessage>();
+                    msg->role        = TUIMessage::Role::Think;
+                    msg->collapsed   = true;
+                    if (delta.think) {
+                        msg->think = *delta.think;
+                    } else {
+                        msg->think = TUIMessage::ThinkData{
+                            .reasoningTokens = 0,
+                            .isEncrypted     = true,
+                        };
+                    }
+                    msg->startTimeMs = delta.startTimeMs > 0 ? delta.startTimeMs : st.pendingTokenStartTimeMs;
+                    msg->durationMs  = delta.durationMs;
+                    st.messages.push_back(std::move(msg));
+                    st.currentTokenRole = TUIMessage::Role::Assistant;
+                    st.isStreaming      = true;
+                    break;
+                }
+
                 auto role = (delta.type == Type::ThinkToken) ? TUIMessage::Role::Think
                                                              : TUIMessage::Role::Assistant;
-                if (st.currentTokenRole != role && st.currentToken && !st.currentToken->empty()) {
+                if (st.currentTokenRole != role && st.hasPendingToken()) {
                     // 先 push 再更新时间戳: pushCurrentTokenLocked 使用
                     // st.pendingToken* 的当前值构造消息, 若先覆盖成新角色的
                     // 时间戳, 旧 token 的时长/开始时间会丢失 (修复)
@@ -1359,6 +1430,15 @@ void TUIClientAgentIO::onDelta(const agentxx::agent::Delta& delta) {
                     st.pendingTokenDurationMs  = delta.durationMs;
                 }
                 st.currentTokenRole = role;
+                if (delta.type == Type::ThinkToken && delta.think.has_value()) {
+                    st.pendingTokenThink = delta.think;
+                }
+                if (delta.startTimeMs > 0 && st.pendingTokenStartTimeMs == 0) {
+                    st.pendingTokenStartTimeMs = delta.startTimeMs;
+                }
+                if (delta.durationMs > 0) {
+                    st.pendingTokenDurationMs = delta.durationMs;
+                }
                 // 按需 COW: 仅当字符串被 UI 快照共享 (渲染期间) 才复制本体,
                 // 避免每 token 深拷贝整个已累积文本 (O(n²) -> O(n))
                 if (!st.currentToken) {
@@ -1368,7 +1448,9 @@ void TUIClientAgentIO::onDelta(const agentxx::agent::Delta& delta) {
                 } else if (st.currentToken.use_count() > 1) {
                     st.currentToken = std::make_shared<std::string>(*st.currentToken);
                 }
-                st.currentToken->append(delta.text);
+                if (!delta.text.empty()) {
+                    st.currentToken->append(delta.text);
+                }
                 st.isStreaming = true;
             } break;
             case Type::ToolStart: {
@@ -1422,7 +1504,7 @@ void TUIClientAgentIO::onDelta(const agentxx::agent::Delta& delta) {
                 if (st.currentNodeName == delta.nodeName) {
                     st.currentNodeName.clear();
                 }
-                if (st.currentToken && !st.currentToken->empty()) {
+                if (st.hasPendingToken()) {
                     st.pendingTokenStartTimeMs = delta.startTimeMs;
                     st.pendingTokenDurationMs  = delta.durationMs;
                 } else if (!st.messages.empty()) {

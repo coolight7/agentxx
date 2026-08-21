@@ -38,14 +38,17 @@ add_executable(agentxx_test)
 # - core/:   agentxx (lib) 核心测试
 # - client/: client (TUI/CLI) 测试, 仅 AGENTXX_BUILD_CLIENT 时编译其中的
 #            client/src 实现源码 (见下方 AGENTXX_BUILD_CLIENT 分支)
-file(GLOB test_SOURCES 
+file(GLOB test_root_SOURCES 
 	CONFIGURE_DEPENDS
-	"*.cpp" "*.cc" "*.cxx"
-	"core/*.cpp" "core/*.cc" "core/*.cxx"
-	"client/*.cpp" "client/*.cc" "client/*.cxx"
+	"${CMAKE_CURRENT_SOURCE_DIR}/*.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/*.cc" "${CMAKE_CURRENT_SOURCE_DIR}/*.cxx"
+)
+file(GLOB test_core_SOURCES 
+	CONFIGURE_DEPENDS
+	"${CMAKE_CURRENT_SOURCE_DIR}/core/*.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/core/*.cc" "${CMAKE_CURRENT_SOURCE_DIR}/core/*.cxx"
 )
 target_sources(agentxx_test PRIVATE
-	${test_SOURCES}
+	${test_root_SOURCES}
+	${test_core_SOURCES}
 )
 # include path: 根目录 (test_framework.h 等共享头) + core/ + client/
 # 使 test.cpp 的 #include "test_xxx.h" 与子目录测试的
@@ -66,12 +69,17 @@ endif()
 
 if (AGENTXX_BUILD_CLIENT)
   # build client test
+  file(GLOB test_client_SOURCES 
+    CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/client/*.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/client/*.cc" "${CMAKE_CURRENT_SOURCE_DIR}/client/*.cxx"
+  )
   set(AGENTXX_CLIENT_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../client/")
   file(GLOB_RECURSE client_SOURCES 
     CONFIGURE_DEPENDS
     "${AGENTXX_CLIENT_SOURCE_DIR}/src/*.cpp" "${AGENTXX_CLIENT_SOURCE_DIR}/src/*.cc" "${AGENTXX_CLIENT_SOURCE_DIR}/src/*.cxx"
   )
   target_sources(agentxx_test PRIVATE
+    ${test_client_SOURCES}
     ${client_SOURCES}
   )
   target_include_directories(agentxx_test PRIVATE 
