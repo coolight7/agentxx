@@ -1,8 +1,8 @@
 // 注意顺序: test_session_persistence.h 会把 XX_TEST_PASSED/FAILED 重定义为
 // g_sp_*, 必须包含在 test_agent.h 之后 (test_agent.h 会重定义为 g_da_*),
 // 使本模块测试计数回落到 g_sp_* 而非计入 agent 模块
-#include "test_session_persistence.h"
 #include "test_agent.h"
+#include "test_session_persistence.h"
 
 #include "agentxx/agent/code_agent.h"
 #include "agentxx/agent/context.h"

@@ -236,6 +236,33 @@ static asio::awaitable<void> test_remote_protocol_roundtrip() {
         }
     }
     {
+        // ThinkToken: 加密 thinking 载体 Delta 序列化往返
+        Delta d;
+        d.type  = Delta::Type::ThinkToken;
+        d.seq   = 15;
+        d.text  = "";
+        d.think = ViewMessage::ThinkData{
+            .reasoningTokens = 250,
+            .isEncrypted     = true,
+        };
+        auto back = WsAgentIOTransport::deserialize(WsAgentIOTransport::serialize(WireMessage{d}));
+        XX_TEST_EXPECT_TRUE(back.has_value());
+        if (back) {
+            auto* bd = std::get_if<Delta>(&*back);
+            XX_TEST_EXPECT_TRUE(bd != nullptr);
+            if (bd) {
+                XX_TEST_EXPECT_TRUE(bd->type == Delta::Type::ThinkToken);
+                XX_TEST_EXPECT_EQ(bd->seq, uint64_t{15});
+                XX_TEST_EXPECT_TRUE(bd->text.empty());
+                XX_TEST_EXPECT_TRUE(bd->think.has_value());
+                if (bd->think) {
+                    XX_TEST_EXPECT_TRUE(bd->think->isEncrypted);
+                    XX_TEST_EXPECT_EQ(bd->think->reasoningTokens, 250);
+                }
+            }
+        }
+    }
+    {
         SyncPayload p;
         p.fromIndex = 2;
         p.tailHash  = "hash123";

@@ -433,6 +433,45 @@ asio::awaitable<void> test_eventbridge_channel_write_thinking() {
         );
     }
 
+    // ---- 4. 加密 thinking (reasoning_content 为空, extra 含 responses_reasoning_items 与 reasoning_tokens) ----
+    bridgeCb(neograph::graph::GraphEvent{
+        neograph::graph::GraphEvent::Type::CHANNEL_WRITE,
+        "llm",
+        neograph::json{
+                       {"channel", "messages"},
+                       {"value",
+             neograph::json::array({
+                 neograph::json{
+                     {"role", "assistant"},
+                     {"content", "answer"},
+                     {"reasoning_content", ""},
+                     {"extra",
+                      neograph::json{
+                          {"reasoning_tokens", 854},
+                          {"responses_reasoning_items",
+                           neograph::json::array({
+                               neograph::json{{"type", "reasoning"}, {"encrypted_content", "enc_data"}},
+                           })},
+                      }},
+                 },
+             })},
+                       }
+    });
+    XX_TEST_EXPECT_EQ(session->viewMessages.size(), size_t{7});
+    if (session->viewMessages.size() == 7) {
+        const auto& encThink = session->viewMessages[5];
+        XX_TEST_EXPECT_TRUE(encThink.role == agentxx::agent::ViewMessage::Role::Think);
+        XX_TEST_EXPECT_TRUE(encThink.text.empty()); // 保持空内容
+        XX_TEST_EXPECT_TRUE(encThink.think.has_value());
+        if (encThink.think) {
+            XX_TEST_EXPECT_EQ(encThink.think->reasoningTokens, 854);
+            XX_TEST_EXPECT_TRUE(encThink.think->isEncrypted);
+        }
+        const auto& assistant = session->viewMessages[6];
+        XX_TEST_EXPECT_TRUE(assistant.role == agentxx::agent::ViewMessage::Role::Assistant);
+        XX_TEST_EXPECT_EQ(assistant.text, std::string{"answer"});
+    }
+
     co_return;
 }
 

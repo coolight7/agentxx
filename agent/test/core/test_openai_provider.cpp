@@ -3466,6 +3466,390 @@ asio::awaitable<void> test_responses_send_thinking(MockOpenAIServer& mock, uint1
     }
 }
 
+/// Responses API: 加密 thinking (如 Gemini encrypted_content) 捕获与多轮原样回传
+asio::awaitable<void>
+    test_responses_encrypted_thinking_capture_and_forward(MockOpenAIServer& mock, uint16_t port) {
+    std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
+    mock.mode           = MockMode::ResponsesNormal;
+
+    const std::string kMockEncrypted
+        = "cpa-gemini-responses-carrier-v1:previous:text:dGVzdF9lbmNyeXB0ZWRfZGF0YQ==";
+
+    // 1) 测试非流式捕获 encrypted_content 与 reasoning_tokens
+    {
+        mock.customResponse = neograph::json{
+            {"id",         "resp_test_enc"                                             },
+            {"object",     "response"                                                  },
+            {"created_at", 1787260000                                                  },
+            {"status",     "completed"                                                 },
+            {"model",      "gemini-3.7-flash-high"                                     },
+            {"output",
+             neograph::json::array({
+                 {{"id", "rs_test_1"},
+                  {"type", "reasoning"},
+                  {"encrypted_content", kMockEncrypted},
+                  {"summary", neograph::json::array()}},
+                 {{"id", "msg_test_1"},
+                  {"type", "message"},
+                  {"status", "completed"},
+                  {"content",
+                   neograph::json::array({
+                       {{"type", "output_text"}, {"text", "回答内容"}}
+                   })},
+                  {"role", "assistant"}}
+             })                                                                        },
+            {"usage",
+             neograph::json{
+                 {"input_tokens",          10                                          },
+                 {"output_tokens",         20                                          },
+                 {"total_tokens",          30                                          },
+                 {"output_tokens_details", neograph::json{{"reasoning_tokens", 854}}} },
+            }
+        };
+
+        auto mc         = makeCodexCfg(baseUrl);
+        mc.sendThinking = true;
+        auto provider   = server::OpenAIProvider::create(mc);
+
+        neograph::CompletionParams params;
+        params.model    = "gemini-3.7-flash-high";
+        params.messages = {
+            {.role = "user", .content = "1+1=?"}
+        };
+
+        try {
+            auto result = co_await provider->invoke(params, nullptr);
+            XX_TEST_EXPECT_EQ(result.message.content, "回答内容");
+            XX_TEST_EXPECT_EQ(result.usage.reasoning_tokens, 854);
+            XX_TEST_EXPECT_TRUE(result.message.reasoning_content.empty());
+            XX_TEST_EXPECT_EQ(
+                result.message.extra[server::OpenAIProvider::kReasoningTokensKey].get<int>(),
+                854
+            );
+            XX_TEST_EXPECT_TRUE(
+                result.message.extra.contains(server::OpenAIProvider::kResponsesReasoningItemsKey)
+            );
+            const auto& rItems
+                = result.message.extra[server::OpenAIProvider::kResponsesReasoningItemsKey];
+            XX_TEST_EXPECT_TRUE(rItems.is_array());
+            XX_TEST_EXPECT_EQ(rItems.size(), (size_t)1);
+            XX_TEST_EXPECT_EQ(rItems[0]["encrypted_content"].get<std::string>(), kMockEncrypted);
+
+            // 2) 下一轮请求中携带该 assistant 消息，验证是否原样回传 encrypted_content
+            neograph::CompletionParams params2;
+            params2.model    = "gemini-3.7-flash-high";
+            params2.messages = {
+                {.role = "user", .content = "1+1=?"},
+                result.message,
+                {.role = "user", .content = "为什么？"}
+            };
+
+            co_await provider->invoke(params2, nullptr);
+            auto sent = neograph::json::parse(mock.lastRequestBody);
+            XX_TEST_EXPECT_TRUE(sent.contains("input"));
+            const auto& input = sent["input"];
+            int reasoningIndex = -1;
+            int assistantIndex = -1;
+            for (size_t idx = 0; idx < input.size(); ++idx) {
+                const auto& item = input[idx];
+                if (item.is_object()) {
+                    if (item.value("type", std::string{}) == "reasoning"
+                        && item.value("encrypted_content", std::string{}) == kMockEncrypted) {
+                        reasoningIndex = static_cast<int>(idx);
+                    } else if (item.value("role", std::string{}) == "assistant") {
+                        assistantIndex = static_cast<int>(idx);
+                    }
+                }
+            }
+            XX_TEST_EXPECT_TRUE(reasoningIndex >= 0);
+            XX_TEST_EXPECT_TRUE(assistantIndex >= 0);
+            // 严格断言: reasoning item 必须在 assistant message 之前
+            XX_TEST_EXPECT_TRUE(reasoningIndex < assistantIndex);
+        } catch (const std::exception& e) {
+            XX_TEST_FAILED++;
+            TEST_FAIL << "responses encrypted thinking test failed: " << e.what() << std::endl;
+        }
+    }
+
+    // 3) 测试流式响应中正确触发 TYPE_THINKING chunk 并捕获 encrypted_content
+    // (载体信号在 output_item.done 时机发射: added 仅捕获不发信号)
+    {
+        mock.mode = MockMode::ResponsesStreaming;
+        mock.sseChunks = {
+            MockOpenAIServer::sseData(R"({"type":"response.output_item.added","item":{"id":"rs_stream_1","type":"reasoning","encrypted_content":"enc_stream_data"}})") + "\n\n",
+            MockOpenAIServer::sseData(R"({"type":"response.output_item.done","item":{"id":"rs_stream_1","type":"reasoning","encrypted_content":"enc_stream_data","summary":[]}})") + "\n\n",
+            MockOpenAIServer::sseData(R"({"type":"response.output_text.delta","delta":"Hello world"})") + "\n\n",
+            MockOpenAIServer::sseData(R"({"type":"response.completed","response":{"status":"completed","usage":{"input_tokens":5,"output_tokens":10,"total_tokens":15,"output_tokens_details":{"reasoning_tokens":300}}}})") + "\n\n",
+        };
+
+        auto mc         = makeCodexCfg(baseUrl);
+        mc.sendThinking = true;
+        auto provider   = server::OpenAIProvider::create(mc);
+
+        neograph::CompletionParams params;
+        params.model    = "gemini-3.7-flash-high";
+        params.messages = {
+            {.role = "user", .content = "Hi"}
+        };
+
+        std::vector<neograph::ChatStreamChunk> receivedChunks;
+        auto onChunk = [&](const neograph::ChatStreamChunk& chunk) {
+            receivedChunks.push_back(chunk);
+        };
+
+        try {
+            auto result = co_await provider->invoke_format_data(params, onChunk);
+            XX_TEST_EXPECT_EQ(result.message.content, "Hello world");
+            XX_TEST_EXPECT_EQ(result.usage.reasoning_tokens, 300);
+            XX_TEST_EXPECT_TRUE(result.message.reasoning_content.empty());
+            XX_TEST_EXPECT_TRUE(
+                result.message.extra.contains(server::OpenAIProvider::kResponsesReasoningItemsKey)
+            );
+            // 验证 chunk 回调: 包含 TYPE_THINKING (空文本) 和 TYPE_CONTENT ("Hello world")
+            XX_TEST_EXPECT_TRUE(receivedChunks.size() >= 2);
+            if (receivedChunks.size() >= 2) {
+                XX_TEST_EXPECT_EQ(receivedChunks[0].type, neograph::ChatStreamChunk::TYPE_THINKING);
+                XX_TEST_EXPECT_TRUE(receivedChunks[0].data.empty());
+                XX_TEST_EXPECT_EQ(receivedChunks[1].type, neograph::ChatStreamChunk::TYPE_CONTENT);
+                XX_TEST_EXPECT_EQ(receivedChunks[1].data, "Hello world");
+            }
+        } catch (const std::exception& e) {
+            XX_TEST_FAILED++;
+            TEST_FAIL << "responses encrypted thinking streaming test failed: " << e.what() << std::endl;
+        }
+    }
+}
+
+/// Responses API: 回传无 summary 字段的 reasoning item 时自动补 "summary": []
+/// (回归测试: opencode-muse-spark / ConsoleGo 网关返回的 reasoning item 仅含
+///  encrypted_content 无 summary, 原样回传会触发
+///  HTTP 400 "input[N] missing required field summary")
+asio::awaitable<void>
+    test_responses_reasoning_item_missing_summary_normalized(MockOpenAIServer& mock, uint16_t port) {
+    std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
+    mock.mode           = MockMode::ResponsesNormal;
+
+    // 上游返回的 reasoning item 不带 summary 字段 (muse / ConsoleGo 网关行为)
+    mock.customResponse = neograph::json{
+        {"id",         "resp_muse_no_summary"                                      },
+        {"object",     "response"                                                  },
+        {"created_at", 1787260000                                                  },
+        {"status",     "completed"                                                 },
+        {"model",      "muse-spark-1.2-contributor"                                },
+        {"output",
+         neograph::json::array({
+             {{"id", "rs_muse_1"},
+              {"type", "reasoning"},
+              {"encrypted_content", "enc_muse_data"}},
+             {{"id", "msg_muse_1"},
+              {"type", "message"},
+              {"status", "completed"},
+              {"content",
+               neograph::json::array({
+                   {{"type", "output_text"}, {"text", "回答内容"}}
+               })},
+              {"role", "assistant"}}
+         })                                                                        },
+        {"usage",
+         neograph::json{
+             {"input_tokens",  10                                              },
+             {"output_tokens", 20                                              },
+             {"total_tokens",  30                                              }},
+        }
+    };
+
+    auto mc         = makeCodexCfg(baseUrl);
+    mc.sendThinking = true;
+    auto provider   = server::OpenAIProvider::create(mc);
+
+    neograph::CompletionParams params;
+    params.model    = "muse-spark-1.2-contributor";
+    params.messages = {
+        {.role = "user", .content = "1+1=?"}
+    };
+
+    try {
+        // 第一轮: 捕获无 summary 的 reasoning item
+        auto result = co_await provider->invoke(params, nullptr);
+        XX_TEST_EXPECT_EQ(result.message.content, "回答内容");
+        XX_TEST_EXPECT_TRUE(
+            result.message.extra.contains(server::OpenAIProvider::kResponsesReasoningItemsKey)
+        );
+        const auto& rItems
+            = result.message.extra[server::OpenAIProvider::kResponsesReasoningItemsKey];
+        XX_TEST_EXPECT_TRUE(rItems.is_array());
+        XX_TEST_EXPECT_EQ(rItems.size(), (size_t)1);
+        // 捕获阶段保持原样: 无 summary 字段
+        XX_TEST_EXPECT_FALSE(rItems[0].contains("summary"));
+
+        // 第二轮: 回传该 assistant 消息, 验证发送前已补 summary 空数组
+        neograph::CompletionParams params2;
+        params2.model    = "muse-spark-1.2-contributor";
+        params2.messages = {
+            {.role = "user", .content = "1+1=?"},
+            result.message,
+            {.role = "user", .content = "为什么？"}
+        };
+
+        co_await provider->invoke(params2, nullptr);
+        auto sent = neograph::json::parse(mock.lastRequestBody);
+        XX_TEST_EXPECT_TRUE(sent.contains("input"));
+        bool foundNormalized = false;
+        for (const auto& item : sent["input"]) {
+            if (item.is_object()
+                && item.value("type", std::string{}) == "reasoning"
+                && item.value("encrypted_content", std::string{}) == "enc_muse_data") {
+                foundNormalized = true;
+                XX_TEST_EXPECT_TRUE(item.contains("summary"));
+                XX_TEST_EXPECT_TRUE(item["summary"].is_array());
+                XX_TEST_EXPECT_TRUE(item["summary"].empty());
+                // 其余字段应保留
+                XX_TEST_EXPECT_EQ(item["encrypted_content"].get<std::string>(), "enc_muse_data");
+            }
+        }
+        XX_TEST_EXPECT_TRUE(foundNormalized);
+    } catch (const std::exception& e) {
+        XX_TEST_FAILED++;
+        TEST_FAIL << "responses reasoning item missing summary normalized failed: " << e.what()
+                  << std::endl;
+    }
+}
+
+/// Responses API: 加密思考载体信号时机回归测试
+/// (deepseek-v4-flash / opencode zen 网关: output_item.added 即预填 encrypted_content,
+///  随后流式输出明文 reasoning_text.delta; 载体信号应推迟到 done 且该项有可见
+///  思考文本时不发, 避免先弹"加密思考"提示再跟明文思考气泡)
+asio::awaitable<void>
+    test_responses_encrypted_signal_deferred_to_done(MockOpenAIServer& mock, uint16_t port) {
+    std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
+    mock.mode           = MockMode::ResponsesStreaming;
+
+    // 1) deepseek 形态: added 带 enc → 明文思考增量 → done 带可见 content → 无载体信号
+    {
+        mock.sseChunks = {
+            MockOpenAIServer::sseData(
+                R"({"type":"response.output_item.added","item":{"id":"rs_ds_1","type":"reasoning","status":"in_progress","encrypted_content":"enc_ds_ref","content":[],"summary":[]}})"
+            ) + "\n\n",
+            MockOpenAIServer::sseData(R"({"type":"response.reasoning_text.delta","delta":"明文思考一"})")
+                + "\n\n",
+            MockOpenAIServer::sseData(R"({"type":"response.reasoning_text.delta","delta":"明文思考二"})")
+                + "\n\n",
+            MockOpenAIServer::sseData(
+                R"({"type":"response.output_item.done","item":{"id":"rs_ds_1","type":"reasoning","status":"completed","encrypted_content":"enc_ds_ref","content":[{"type":"reasoning_text","text":"明文思考一明文思考二"}],"summary":[]}})"
+            ) + "\n\n",
+            MockOpenAIServer::sseData(R"({"type":"response.output_text.delta","delta":"回答"})") + "\n\n",
+            MockOpenAIServer::sseData(
+                R"({"type":"response.completed","response":{"status":"completed","usage":{"input_tokens":5,"output_tokens":10,"total_tokens":15}}})"
+            ) + "\n\n",
+        };
+
+        auto mc         = makeCodexCfg(baseUrl);
+        mc.sendThinking = true;
+        auto provider   = server::OpenAIProvider::create(mc);
+
+        neograph::CompletionParams params;
+        params.model    = "deepseek-v4-flash";
+        params.messages = {
+            {.role = "user", .content = "hi"}
+        };
+
+        std::vector<neograph::ChatStreamChunk> receivedChunks;
+        auto onChunk = [&](const neograph::ChatStreamChunk& chunk) {
+            receivedChunks.push_back(chunk);
+        };
+
+        try {
+            auto result = co_await provider->invoke_format_data(params, onChunk);
+            XX_TEST_EXPECT_EQ(result.message.content, "回答");
+            XX_TEST_EXPECT_EQ(result.message.reasoning_content, "明文思考一明文思考二");
+            // enc 照常捕获 (多轮回传不受影响)
+            XX_TEST_EXPECT_TRUE(
+                result.message.extra.contains(server::OpenAIProvider::kResponsesReasoningItemsKey)
+            );
+            XX_TEST_EXPECT_EQ(
+                result.message.extra[server::OpenAIProvider::kResponsesReasoningItemsKey].size(),
+                (size_t)1
+            );
+            // 不应有空文本 TYPE_THINKING (加密载体信号), 只允许明文思考增量与正文
+            bool hasEmptyThinking = false;
+            for (const auto& ch : receivedChunks) {
+                if (ch.type == neograph::ChatStreamChunk::TYPE_THINKING && ch.data.empty()) {
+                    hasEmptyThinking = true;
+                }
+            }
+            XX_TEST_EXPECT_FALSE(hasEmptyThinking);
+            // 明文思考增量正常透传
+            bool hasPlainThinking = false;
+            for (const auto& ch : receivedChunks) {
+                if (ch.type == neograph::ChatStreamChunk::TYPE_THINKING && !ch.data.empty()) {
+                    hasPlainThinking = true;
+                }
+            }
+            XX_TEST_EXPECT_TRUE(hasPlainThinking);
+        } catch (const std::exception& e) {
+            XX_TEST_FAILED++;
+            TEST_FAIL << "responses encrypted signal deferred (visible text) failed: " << e.what()
+                      << std::endl;
+        }
+    }
+
+    // 2) 仅 added 带 enc 的网关形态: done 无 enc 字段, 回退检查已捕获项,
+    //    载体信号仍应在 done 时机发出 (无可见思考文本时)
+    {
+        mock.sseChunks = {
+            MockOpenAIServer::sseData(
+                R"({"type":"response.output_item.added","item":{"id":"rs_added_only","type":"reasoning","status":"in_progress","encrypted_content":"enc_added_only"}})"
+            ) + "\n\n",
+            MockOpenAIServer::sseData(
+                R"({"type":"response.output_item.done","item":{"id":"rs_added_only","type":"reasoning","status":"completed","summary":[]}})"
+            ) + "\n\n",
+            MockOpenAIServer::sseData(R"({"type":"response.output_text.delta","delta":"回答"})") + "\n\n",
+            MockOpenAIServer::sseData(
+                R"({"type":"response.completed","response":{"status":"completed","usage":{"input_tokens":5,"output_tokens":10,"total_tokens":15}}})"
+            ) + "\n\n",
+        };
+
+        auto mc         = makeCodexCfg(baseUrl);
+        mc.sendThinking = true;
+        auto provider   = server::OpenAIProvider::create(mc);
+
+        neograph::CompletionParams params;
+        params.model    = "gpt-5-codex";
+        params.messages = {
+            {.role = "user", .content = "hi"}
+        };
+
+        std::vector<neograph::ChatStreamChunk> receivedChunks;
+        auto onChunk = [&](const neograph::ChatStreamChunk& chunk) {
+            receivedChunks.push_back(chunk);
+        };
+
+        try {
+            auto result = co_await provider->invoke_format_data(params, onChunk);
+            // enc 在 added 阶段捕获
+            XX_TEST_EXPECT_TRUE(
+                result.message.extra.contains(server::OpenAIProvider::kResponsesReasoningItemsKey)
+            );
+            XX_TEST_EXPECT_EQ(
+                result.message.extra[server::OpenAIProvider::kResponsesReasoningItemsKey].size(),
+                (size_t)1
+            );
+            // done 时回退判定有载体 → 发出空文本 TYPE_THINKING 信号
+            bool hasEmptyThinking = false;
+            for (const auto& ch : receivedChunks) {
+                if (ch.type == neograph::ChatStreamChunk::TYPE_THINKING && ch.data.empty()) {
+                    hasEmptyThinking = true;
+                }
+            }
+            XX_TEST_EXPECT_TRUE(hasEmptyThinking);
+        } catch (const std::exception& e) {
+            XX_TEST_FAILED++;
+            TEST_FAIL << "responses encrypted signal deferred (added-only enc) failed: " << e.what()
+                      << std::endl;
+        }
+    }
+}
+
 /// Responses API: sendThinking=true 但 requestReasoningSummary=false 时
 /// (如 opencode-muse-spark / ConsoleGo 网关不支持 reasoning.summary_text include 变体,
 ///  需关闭避免 HTTP 400):
@@ -4084,6 +4468,9 @@ asio::awaitable<TestResult> run_openai_provider_tests() {
     co_await test_responses_non_streaming(*mock, port);
     co_await test_responses_reasoning_configurable(*mock, port);
     co_await test_responses_send_thinking(*mock, port);
+    co_await test_responses_encrypted_thinking_capture_and_forward(*mock, port);
+    co_await test_responses_reasoning_item_missing_summary_normalized(*mock, port);
+    co_await test_responses_encrypted_signal_deferred_to_done(*mock, port);
     co_await test_responses_request_reasoning_summary_disabled(*mock, port);
     co_await test_responses_no_send_thinking(*mock, port);
     co_await test_responses_non_streaming_tool_call(*mock, port);

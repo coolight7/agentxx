@@ -4,6 +4,7 @@
 #include "agentxx/util/log.h"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
+#include "asio/post.hpp"
 #include "asio/this_coro.hpp"
 #include "asio/use_awaitable.hpp"
 #include "fmt/format.h"
@@ -25,8 +26,16 @@ void FfiClientAgentIO::setSessionId(std::string sessionId) {
     sessionId_ = std::move(sessionId);
 }
 
+void FfiClientAgentIO::setClientThreadId(std::thread::id tid) {
+    clientThreadId_ = tid;
+}
+
 void FfiClientAgentIO::setAgentThreadId(std::thread::id tid) {
     agentThreadId_ = tid;
+}
+
+bool FfiClientAgentIO::isOnClientThread() const {
+    return clientThreadId_ != std::thread::id{} && std::this_thread::get_id() == clientThreadId_;
 }
 
 bool FfiClientAgentIO::isOnAgentThread() const {
@@ -34,19 +43,23 @@ bool FfiClientAgentIO::isOnAgentThread() const {
 }
 
 void FfiClientAgentIO::notifyServerReady() {
-    // 公开入口 (FfiAgentRuntime 调用; AgentIOBase::onServerReady 为 protected)
-    onServerReady();
+    if (isOnClientThread()) {
+        onServerReady();
+    } else {
+        asio::post(ex_, [self = shared_from_this()]() {
+            self->onServerReady();
+        });
+    }
 }
 
 void FfiClientAgentIO::notifyError(int code, std::string message) {
-    // 任意线程可调用: io 线程内直接发事件, 其他线程投递后发
     auto emit = [this, code, message = std::move(message)]() {
         neograph::json j = neograph::json::object();
         j["code"]        = code;
         j["message"]     = message;
         emitEvent(AGENTXX_EVT_ERROR, dump(j));
     };
-    if (isOnAgentThread()) {
+    if (isOnClientThread()) {
         emit();
     } else {
         asio::post(ex_, std::move(emit));
@@ -58,8 +71,6 @@ void FfiClientAgentIO::notifyError(int code, std::string message) {
 // ---------------------------------------------------------------------------
 
 asio::awaitable<std::optional<std::string>> FfiClientAgentIO::getInput() {
-    // FFI 模式输入由宿主主动调用 agentxx_send_input 经 Wire 消息进入, 客户端
-    // 不设输入拉取循环; 本方法不会被调用, 恒返回输入结束
     co_return std::nullopt;
 }
 
@@ -69,22 +80,27 @@ asio::awaitable<neograph::json> FfiClientAgentIO::handleInterrupt(
     std::string_view /*interruptValue*/,
     std::string_view /*interruptArgJson*/
 ) {
-    // server 端 (SessionServerAgentIO) 经总线调用的是服务端点自身的
-    // handleInterrupt; 本 client 端点不注册总线, 该纯虚实现仅满足契约,
-    // 真实流程见 onPeerMessage(WireInterruptRequest) → waitHostInterrupt()
     co_return neograph::json::array();
 }
 
 // ---------------------------------------------------------------------------
-// FFI 应答通道
+// FFI 应答通道 (Lock-Free 无锁设计)
 // ---------------------------------------------------------------------------
 
 bool FfiClientAgentIO::hasPendingInterrupt(int64_t interruptId) const {
-    std::lock_guard<std::mutex> lock(idsMutex_);
-    return activeIds_.count(interruptId) != 0;
+    return interruptId > 0
+        && currentPendingInterruptId_.load(std::memory_order_acquire) == interruptId;
 }
 
 bool FfiClientAgentIO::submitInterruptResponse(int64_t interruptId, neograph::json values) {
+    int64_t expected = interruptId;
+    if (!currentPendingInterruptId_.compare_exchange_strong(
+            expected,
+            0,
+            std::memory_order_acq_rel
+        )) {
+        return false;
+    }
     auto it = pending_.find(interruptId);
     if (it == pending_.end()) {
         return false;
@@ -95,12 +111,13 @@ bool FfiClientAgentIO::submitInterruptResponse(int64_t interruptId, neograph::js
 }
 
 void FfiClientAgentIO::failAllPendingInterrupts() {
+    currentPendingInterruptId_.store(0, std::memory_order_release);
     for (auto& [id, ch] : pending_) {
-        ch->close();
+        if (ch) {
+            ch->close();
+        }
     }
     pending_.clear();
-    std::lock_guard<std::mutex> lock(idsMutex_);
-    activeIds_.clear();
 }
 
 // ---------------------------------------------------------------------------
@@ -108,7 +125,6 @@ void FfiClientAgentIO::failAllPendingInterrupts() {
 // ---------------------------------------------------------------------------
 
 void FfiClientAgentIO::onDelta(const agent::Delta& delta) {
-    // 与服务端 wire delta JSON 一致 (type=delta, kind=具体类型)
     emitEvent(AGENTXX_EVT_DELTA, dump(agent::io::makeDeltaMsg(delta)));
 }
 
@@ -132,7 +148,7 @@ void FfiClientAgentIO::onTurnResult(const agent::WireTurnResult& result) {
 
 void FfiClientAgentIO::onContextStats(const agent::WireContextStats& stats) {
     if (stats.contextTokens == 0 && stats.maxContextTokens == 0 && stats.tps <= 0.0) {
-        return; // 空统计不打扰宿主
+        return;
     }
     emitEvent(
         AGENTXX_EVT_CONTEXT_STATS,
@@ -151,17 +167,12 @@ void FfiClientAgentIO::onPeerMessage(agent::WireMessage msg) {
         [this](auto&& m) {
             using T = std::decay_t<decltype(m)>;
             if constexpr (std::is_same_v<T, agent::WireInterruptRequest>) {
-                // 记录 wire id 供 waitHostInterrupt 使用 (同线程顺序执行);
-                // 过期通知 (WireInterruptExpired) 按该 id 匹配并终止等待
                 auto    ch = std::make_shared<RespChannel>(ex_, 1);
                 int64_t id = m.id;
-                {
-                    std::lock_guard<std::mutex> lock(idsMutex_);
-                    activeIds_.insert(id);
-                }
                 pending_[id] = ch;
+                currentPendingInterruptId_.store(id, std::memory_order_release);
 
-                // 事件: 完整中断信息 (argJson 原样透传, 宿主据此渲染询问 UI)
+                // 事件: 完整中断信息
                 neograph::json j = neograph::json::object();
                 j["interruptId"] = id;
                 j["sessionId"]   = m.sessionId;
@@ -170,14 +181,12 @@ void FfiClientAgentIO::onPeerMessage(agent::WireMessage msg) {
                 j["argJson"]     = m.argJson;
                 emitEvent(AGENTXX_EVT_INTERRUPT_REQ, dump(j));
 
-                // 挂起等待宿主 agentxx_interrupt_respond, 收到后回 WireInterruptResponse
+                // 挂起等待宿主 agentxx_interrupt_respond
                 auto self = shared_from_this();
                 asio::co_spawn(
                     ex_,
                     [self, ch, id, sessionId = m.sessionId]() mutable -> asio::awaitable<void> {
                         auto [answered, result] = co_await self->waitHostInterrupt(id, ch);
-                        // 仅当宿主真实应答 (非过期/停止关闭通道) 时回送;
-                        // 过期路径 server 已发 WireInterruptExpired, 无需回送
                         if (answered) {
                             self->sendToPeer(agent::WireInterruptResponse{id, std::move(result)});
                         }
@@ -186,15 +195,16 @@ void FfiClientAgentIO::onPeerMessage(agent::WireMessage msg) {
                     asio::detached
                 );
             } else if constexpr (std::is_same_v<T, agent::WireInterruptExpired>) {
-                // server 通知中断已过期 (超时/会话取消): 结束等待并通知宿主
+                int64_t expected = m.id;
+                currentPendingInterruptId_.compare_exchange_strong(
+                    expected,
+                    0,
+                    std::memory_order_acq_rel
+                );
                 auto it = pending_.find(m.id);
                 if (it != pending_.end()) {
                     it->second->close();
                     pending_.erase(it);
-                }
-                {
-                    std::lock_guard<std::mutex> lock(idsMutex_);
-                    activeIds_.erase(m.id);
                 }
                 neograph::json j = neograph::json::object();
                 j["interruptId"] = m.id;
@@ -250,16 +260,17 @@ asio::awaitable<std::pair<bool, neograph::json>>
             co_return true;
         },
         [&](std::string errmsg) -> asio::awaitable<bool> {
-            // 通道被关闭 (过期/停止): 视为无应答, 返回空数组
             XX_LOGW("[ffi] interrupt #{} ended early: {}", id, errmsg);
             co_return false;
         }
     );
+    int64_t expected = id;
+    currentPendingInterruptId_.compare_exchange_strong(
+        expected,
+        0,
+        std::memory_order_acq_rel
+    );
     pending_.erase(id);
-    {
-        std::lock_guard<std::mutex> lock(idsMutex_);
-        activeIds_.erase(id);
-    }
     co_return std::make_pair(gotResp, std::move(result));
 }
 
@@ -270,7 +281,6 @@ void FfiClientAgentIO::emitEvent(AgentxxEventType type, std::string json) {
     try {
         callbacks_.on_event(type, json.c_str(), callbacks_.user_data);
     } catch (const std::exception& e) {
-        // 宿主 (C) 回调不应抛异常; C++ 绑定层例外兜底, 避免中断 agent io 线程
         XX_LOGE("[ffi] on_event callback threw: {}", e.what());
     } catch (...) {
         XX_LOGE("[ffi] on_event callback threw unknown exception");

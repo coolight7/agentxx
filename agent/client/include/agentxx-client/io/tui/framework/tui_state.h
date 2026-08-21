@@ -89,6 +89,17 @@ struct TUIRenderState {
 
     int64_t pendingTokenDurationMs  = 0;
     int64_t pendingTokenStartTimeMs = 0;
+    std::optional<TUIMessage::ThinkData> pendingTokenThink;
+
+    /// 判断当前是否有待提交的流式 token 内容 (文本或加密思考/token统计)
+    bool hasPendingToken() const noexcept {
+        if (currentToken && !currentToken->empty()) {
+            return true;
+        }
+        return (currentTokenRole == TUIMessage::Role::Think)
+               && pendingTokenThink.has_value()
+               && (pendingTokenThink->isEncrypted || pendingTokenThink->reasoningTokens > 0);
+    }
 
     std::string currentNodeName;
 

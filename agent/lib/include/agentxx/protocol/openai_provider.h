@@ -42,6 +42,11 @@ namespace server {
 class OpenAIProvider : public neograph::Provider {
 public:
 
+    /// ChatMessage.extra 中保存 Responses API reasoning 原始项的键 (如 encrypted_content / id 等)
+    static constexpr const char* kResponsesReasoningItemsKey = "responses_reasoning_items";
+    /// ChatMessage.extra 中保存思考 token 数量的键
+    static constexpr const char* kReasoningTokensKey         = "reasoning_tokens";
+
     static std::unique_ptr<OpenAIProvider> create(const agentxx::agent::ModelConfig& config);
 
     static std::shared_ptr<neograph::Provider>

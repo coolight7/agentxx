@@ -150,22 +150,71 @@ static int jsonIntField(const neograph::json& obj, const char* key, int def = 0)
     return def;
 }
 
-/// 从 Responses API 的 usage 对象中提取 token 统计
-/// - 官方字段: input_tokens / output_tokens / total_tokens
-/// - 兼容部分网关沿用 Chat Completions 的 prompt_tokens / completion_tokens 命名
-static void parseResponsesUsage(const neograph::json& u, neograph::ChatCompletion& completion) {
+/// 从 usage 对象中提取 token 统计 (兼容 Chat Completions 与 Responses API 及各类网关字段)
+/// - 官方字段: input_tokens / output_tokens / total_tokens (Responses API) 或 prompt_tokens /
+/// completion_tokens (Chat Completions)
+/// - 推理 token: output_tokens_details / completion_tokens_details / candidates_tokens_details
+/// 等中的 reasoning_tokens
+static void parseUsage(const neograph::json& u, neograph::ChatCompletion& completion) {
     if (!u.is_object()) {
         return;
     }
-    completion.usage.prompt_tokens
-        = jsonIntField(u, "input_tokens", jsonIntField(u, "prompt_tokens"));
-    completion.usage.completion_tokens
-        = jsonIntField(u, "output_tokens", jsonIntField(u, "completion_tokens"));
+    completion.usage.prompt_tokens = jsonIntField(
+        u,
+        "input_tokens",
+        jsonIntField(u, "prompt_tokens", jsonIntField(u, "prompt_token_count"))
+    );
+    completion.usage.completion_tokens = jsonIntField(
+        u,
+        "output_tokens",
+        jsonIntField(u, "completion_tokens", jsonIntField(u, "candidates_token_count"))
+    );
     completion.usage.total_tokens = jsonIntField(
         u,
         "total_tokens",
-        completion.usage.prompt_tokens + completion.usage.completion_tokens
+        jsonIntField(
+            u,
+            "total_token_count",
+            completion.usage.prompt_tokens + completion.usage.completion_tokens
+        )
     );
+
+    auto extractReasoningTokens = [](const neograph::json& details) -> int {
+        if (!details.is_object()) {
+            return 0;
+        }
+        int tokens = jsonIntField(details, "reasoning_tokens");
+        if (tokens == 0) {
+            tokens = jsonIntField(details, "reasoningTokens");
+        }
+        if (tokens == 0) {
+            tokens = jsonIntField(details, "reasoning_token_count");
+        }
+        return tokens;
+    };
+
+    if (u.contains("output_tokens_details")) {
+        completion.usage.reasoning_tokens = extractReasoningTokens(u["output_tokens_details"]);
+    } else if (u.contains("completion_tokens_details")) {
+        completion.usage.reasoning_tokens = extractReasoningTokens(u["completion_tokens_details"]);
+    } else if (u.contains("candidates_tokens_details")) {
+        completion.usage.reasoning_tokens = extractReasoningTokens(u["candidates_tokens_details"]);
+    } else if (u.contains("output_token_details")) {
+        completion.usage.reasoning_tokens = extractReasoningTokens(u["output_token_details"]);
+    }
+
+    if (completion.usage.reasoning_tokens == 0) {
+        completion.usage.reasoning_tokens = jsonIntField(
+            u,
+            "reasoning_tokens",
+            jsonIntField(u, "reasoning_token_count", jsonIntField(u, "reasoningTokens"))
+        );
+    }
+
+    if (completion.usage.reasoning_tokens > 0) {
+        completion.message.extra[OpenAIProvider::kReasoningTokensKey]
+            = completion.usage.reasoning_tokens;
+    }
 }
 
 /// 新模型 (o1/o3/o4/gpt-5 等) 只接受 max_completion_tokens 字段, 旧模型使用 max_tokens
@@ -175,12 +224,6 @@ static bool modelUsesMaxCompletionTokens(std::string_view model) {
     }
     // o1-preview / o3-mini / o4-mini 等以 o1/o3/o4 开头的推理模型
     return model.starts_with("o1") || model.starts_with("o3") || model.starts_with("o4");
-}
-
-/// agentxx 内部配置字段 (无对应 API 语义), 透传 extraConfig 时必须过滤:
-/// 原样发送给上游会触发部分模型 (如 gpt-5.6-luna) HTTP 400 报错
-static bool isInternalExtraConfigField(std::string_view key) {
-    return key == "preserve_thinking";
 }
 
 std::string OpenAIProvider::mapStopReason(std::string_view finishReason) {
@@ -309,10 +352,6 @@ neograph::json OpenAIProvider::buildBody(const neograph::CompletionParams& param
             if (body.contains(key)) {
                 continue;
             }
-            // 过滤 agentxx 内部字段, 避免透传给上游导致 400
-            if (isInternalExtraConfigField(key)) {
-                continue;
-            }
             // 避免同时出现互斥的输出 token 上限字段
             if ((key == "max_tokens" || key == "max_output_tokens" || key == "max_completion_tokens"
                 )
@@ -421,6 +460,36 @@ neograph::json OpenAIProvider::buildResponsesBody(const neograph::CompletionPara
             }
             input.push_back(std::move(item));
         } else if (msg.role == "assistant") {
+            // 回传历史 thinking 内容 (仅 sendThinking 开启时):
+            // - 优先回传保存的原始/加密 reasoning items (含 encrypted_content / id 等)
+            // - 无捕获项时, 降级使用 summary 形式回传 reasoning_content (仅当未关闭思考摘要时)
+            // 顺序: reasoning 在前, output_text 在中, function_call 在后
+            if (config_.sendThinking) {
+                if (msg.extra.contains(kResponsesReasoningItemsKey)
+                    && msg.extra[kResponsesReasoningItemsKey].is_array()
+                    && !msg.extra[kResponsesReasoningItemsKey].empty()) {
+                    for (const auto& rItem : msg.extra[kResponsesReasoningItemsKey]) {
+                        neograph::json item = rItem;
+                        // Responses API 官方 schema 中 reasoning item 的 summary 为必填字段;
+                        // 部分网关 (如 opencode-muse-spark / ConsoleGo) 严格校验, 缺失时
+                        // HTTP 400 "input[N] missing required field summary"。
+                        // 捕获时仅保存 {type, encrypted_content, id}, 此处发送前归一化补
+                        // 空数组 (对官方 API 无影响, 且兼容旧持久化会话数据)
+                        if (!item.contains("summary")) {
+                            item["summary"] = neograph::json::array();
+                        }
+                        input.push_back(std::move(item));
+                    }
+                } else if (config_.requestReasoningSummary && !msg.reasoning_content.empty()) {
+                    input.push_back({
+                        {"type",    "reasoning"},
+                        {"summary",
+                         neograph::json::array(
+                             {{{"type", "summary_text"}, {"text", msg.reasoning_content}}}
+                         )                     },
+                    });
+                }
+            }
             if (!msg.content.empty()) {
                 neograph::json content = neograph::json::array();
                 content.push_back({
@@ -431,19 +500,6 @@ neograph::json OpenAIProvider::buildResponsesBody(const neograph::CompletionPara
                 item["role"]    = "assistant";
                 item["content"] = std::move(content);
                 input.push_back(std::move(item));
-            }
-            // 回传历史 thinking 内容 (仅 sendThinking 开启且未关闭思考摘要请求时):
-            // Responses API 的 reasoning item 采用 summary 形式,
-            // 缺失原始 id 时网关按摘要处理; 不回传完整 reasoning 文本
-            if (config_.sendThinking && config_.requestReasoningSummary
-                && !msg.reasoning_content.empty()) {
-                input.push_back({
-                    {"type",    "reasoning"},
-                    {"summary",
-                     neograph::json::array(
-                         {{{"type", "summary_text"}, {"text", msg.reasoning_content}}}
-                     )                     },
-                });
             }
             for (const auto& tc : msg.tool_calls) {
                 input.push_back({
@@ -488,10 +544,6 @@ neograph::json OpenAIProvider::buildResponsesBody(const neograph::CompletionPara
     if (config_.extraConfig.is_object()) {
         for (const auto& [key, val] : config_.extraConfig.items()) {
             if (body.contains(key)) {
-                continue;
-            }
-            // 过滤 agentxx 内部字段, 避免透传给上游导致 400
-            if (isInternalExtraConfigField(key)) {
                 continue;
             }
             body[key] = val;
@@ -610,10 +662,7 @@ asio::awaitable<neograph::ChatCompletion>
     }
 
     if (respJson.contains("usage") && respJson["usage"].is_object()) {
-        auto u                             = respJson["usage"];
-        completion.usage.prompt_tokens     = jsonIntField(u, "prompt_tokens");
-        completion.usage.completion_tokens = jsonIntField(u, "completion_tokens");
-        completion.usage.total_tokens      = jsonIntField(u, "total_tokens");
+        parseUsage(respJson["usage"], completion);
     }
 
     // 非流式 tool_calls 缺失 id 时同样回填 call_N (与流式路径一致)
@@ -730,6 +779,25 @@ asio::awaitable<neograph::ChatCompletion>
                 tc.arguments = jsonStrField(item, "arguments");
                 completion.message.tool_calls.push_back(std::move(tc));
             } else if (type == "reasoning") {
+                if (item.contains("encrypted_content") && item["encrypted_content"].is_string()) {
+                    auto enc = item["encrypted_content"].get<std::string>();
+                    if (!enc.empty()) {
+                        neograph::json rItem = {
+                            {"type",              "reasoning"},
+                            {"encrypted_content", enc        }
+                        };
+                        if (item.contains("id") && item["id"].is_string()) {
+                            rItem["id"] = item["id"].get<std::string>();
+                        }
+                        if (!completion.message.extra.contains(kResponsesReasoningItemsKey)) {
+                            completion.message.extra[kResponsesReasoningItemsKey]
+                                = neograph::json::array();
+                        }
+                        completion.message.extra[kResponsesReasoningItemsKey].push_back(
+                            std::move(rItem)
+                        );
+                    }
+                }
                 if (item.contains("content") && item["content"].is_array()) {
                     for (const auto& part : item["content"]) {
                         if (jsonStrField(part, "type") == "reasoning_text") {
@@ -753,7 +821,7 @@ asio::awaitable<neograph::ChatCompletion>
     // Responses API usage: input_tokens / output_tokens / total_tokens
     // (兼容部分网关沿用 Chat Completions 的 prompt_tokens/completion_tokens 命名)
     if (respJson.contains("usage") && respJson["usage"].is_object()) {
-        parseResponsesUsage(respJson["usage"], completion);
+        parseUsage(respJson["usage"], completion);
     }
 
     fillMissingToolCallIds(completion);
@@ -1097,14 +1165,7 @@ bool OpenAIProvider::processSseLine(
     );
 
     if (j.contains("usage") && j["usage"].is_object()) {
-        auto u                             = j["usage"];
-        completion.usage.prompt_tokens     = jsonIntField(u, "prompt_tokens");
-        completion.usage.completion_tokens = jsonIntField(u, "completion_tokens");
-        completion.usage.total_tokens      = jsonIntField(
-            u,
-            "total_tokens",
-            completion.usage.prompt_tokens + completion.usage.completion_tokens
-        );
+        parseUsage(j["usage"], completion);
     }
 
     if (!j.contains("choices") || !j["choices"].is_array() || j["choices"].empty()) {
@@ -1303,10 +1364,10 @@ bool OpenAIProvider::processResponsesSseLine(
     // {"type":"response.completed","response":{...,"usage":{...}}}; 部分网关则在事件顶层直接携带
     // usage, 两者都兼容
     if (j.contains("usage") && j["usage"].is_object()) {
-        parseResponsesUsage(j["usage"], completion);
+        parseUsage(j["usage"], completion);
     } else if (j.contains("response") && j["response"].is_object()
                && j["response"].contains("usage")) {
-        parseResponsesUsage(j["response"]["usage"], completion);
+        parseUsage(j["response"]["usage"], completion);
     }
 
     auto type = jsonStrField(j, "type");
@@ -1364,11 +1425,12 @@ bool OpenAIProvider::processResponsesSseLine(
         return false;
     }
 
-    // function_call 项开始: 记录 call_id / name
-    if (type == "response.output_item.added") {
+    // output_item 项处理 (function_call / reasoning)
+    if (type == "response.output_item.added" || type == "response.output_item.done") {
         if (j.contains("item") && j["item"].is_object()) {
-            auto item = j["item"];
-            if (jsonStrField(item, "type") == "function_call") {
+            auto item  = j["item"];
+            auto itype = jsonStrField(item, "type");
+            if (itype == "function_call") {
                 int         idx = safeOutputIndex(j);
                 auto&       tc  = tcMap[idx];
                 std::string id  = jsonStrField(item, "call_id");
@@ -1377,6 +1439,82 @@ bool OpenAIProvider::processResponsesSseLine(
                 }
                 tc.id   = std::move(id);
                 tc.name = jsonStrField(item, "name");
+            } else if (itype == "reasoning") {
+                // 捕获 encrypted_content (added/done 均尝试, 按 enc 值去重):
+                // 部分网关仅在 added 预填 enc (如 opencode zen/deepseek),
+                // 官方则在 done 携带, 两处都捕获保证不漏
+                if (item.contains("encrypted_content") && item["encrypted_content"].is_string()) {
+                    auto enc = item["encrypted_content"].get<std::string>();
+                    if (!enc.empty()) {
+                        neograph::json rItem = {
+                            {"type",              "reasoning"},
+                            {"encrypted_content", enc        }
+                        };
+                        if (item.contains("id") && item["id"].is_string()) {
+                            rItem["id"] = item["id"].get<std::string>();
+                        }
+                        if (!completion.message.extra.contains(kResponsesReasoningItemsKey)) {
+                            completion.message.extra[kResponsesReasoningItemsKey]
+                                = neograph::json::array();
+                        }
+                        bool exists = false;
+                        for (const auto& existing :
+                             completion.message.extra[kResponsesReasoningItemsKey]) {
+                            if (existing.value("encrypted_content", "") == enc) {
+                                exists = true;
+                                break;
+                            }
+                        }
+                        if (!exists) {
+                            completion.message.extra[kResponsesReasoningItemsKey].push_back(
+                                std::move(rItem)
+                            );
+                        }
+                    }
+                }
+                // 加密思考载体信号 (空文本 TYPE_THINKING): 推迟到 done 时机发射,
+                // 且仅当该项最终没有任何可见思考文本时才发:
+                // - deepseek-v4-flash (opencode zen): added 即预填 enc, 随后流式输出
+                //   明文 reasoning_text.delta; 若在 added 立即发信号会先弹一条
+                //   "加密思考" 提示、再跟明文思考气泡 (展示噪音)。done 时 content
+                //   含可见文本 → 不发信号, 仅保留明文思考
+                // - gemini 载体 (cpa-gemini-responses-carrier): summary/content 均空,
+                //   done 时照常发信号 (其事件本就在正文之后, 行为与原先一致)
+                // - enc 判定兼容 "仅 added 带 enc" 的网关: done 项本身无 enc 时,
+                //   回退检查本次调用已捕获的 reasoning items (extra 非空即视为有载体)
+                if (type == "response.output_item.done") {
+                    bool hasVisibleText = false;
+                    if (item.contains("summary") && item["summary"].is_array()
+                        && !item["summary"].empty()) {
+                        hasVisibleText = true;
+                    }
+                    if (!hasVisibleText && item.contains("content")
+                        && item["content"].is_array()) {
+                        for (const auto& part : item["content"]) {
+                            if (jsonStrField(part, "type") == "reasoning_text"
+                                && !jsonStrField(part, "text").empty()) {
+                                hasVisibleText = true;
+                                break;
+                            }
+                        }
+                    }
+                    bool hasEnc = item.contains("encrypted_content")
+                                  && item["encrypted_content"].is_string()
+                                  && !item["encrypted_content"].get<std::string>().empty();
+                    if (!hasVisibleText
+                        && (hasEnc
+                            || (completion.message.extra.contains(kResponsesReasoningItemsKey)
+                                && completion.message.extra[kResponsesReasoningItemsKey].is_array()
+                                && !completion.message.extra[kResponsesReasoningItemsKey]
+                                        .empty()))) {
+                        if (on_chunk) {
+                            on_chunk(neograph::ChatStreamChunk{
+                                neograph::ChatStreamChunk::TYPE_THINKING,
+                                ""
+                            });
+                        }
+                    }
+                }
             }
         }
         return false;

@@ -29,7 +29,7 @@ add_executable(agentxx_cli)
 
 file(GLOB_RECURSE client_SOURCES 
 	CONFIGURE_DEPENDS
-	"*.cpp" "*.cc" "*.cxx"
+	"${CMAKE_CURRENT_SOURCE_DIR}/*.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/*.cc" "${CMAKE_CURRENT_SOURCE_DIR}/*.cxx"
 )
 target_sources(agentxx_cli PRIVATE
 	${client_SOURCES}
