@@ -319,6 +319,11 @@ Element MessageListComponent::OnRender() {
         }
         streamFedLen_ = 0;
         streamEpoch_  = ~0ULL;
+        // 流结束: 清除流式折叠的用户点击覆盖态 (已提交的 Think 消息由
+        // msg.collapsed 管理), 下一次思考回到设置模式的默认展示。
+        // 必须在此处重置: 无 token 时 itemCount 不调用 syncStream,
+        // OnRender 是每帧必经路径
+        streamThinkOverride_ = -1;
     }
 
     // 由上一帧 viewport 可见区域反推可折叠消息的鼠标命中区域。
@@ -327,6 +332,7 @@ Element MessageListComponent::OnRender() {
     // (注意: 本组件采用懒构建, OnRender 阶段不构建任何子项, 仅产出布局节点)
     collapsibleBoxes_.clear();
     collapsibleIndices_.clear();
+    collapsibleIsStream_.clear();
     if (ctx_.frameState) {
         const auto& vboxes = scrollable_->visibleBoxes();
         const auto& msgs   = ctx_.frameState->messages;
@@ -341,6 +347,22 @@ Element MessageListComponent::OnRender() {
             }
             collapsibleBoxes_.push_back(vboxes[i]);
             collapsibleIndices_.push_back(i);
+            collapsibleIsStream_.push_back(0);
+        }
+        // 末尾正在输出的流式 Think 子项同样支持点击折叠/展开:
+        // 流式区子项索引 >= msgs.size(), 登记其上一帧可见区域并以 isStream
+        // 标记区分 (点击切换 streamThinkOverride_ 而非消息 collapsed)。
+        // 非 Think 流式内容 (Assistant 正文) 不可折叠, 不登记。
+        if (hasStreamingToken(*ctx_.frameState)
+            && ctx_.frameState->currentTokenRole == TUIMessage::Role::Think) {
+            for (size_t i = msgs.size(); i < vboxes.size(); ++i) {
+                if (vboxes[i].IsEmpty()) {
+                    continue;
+                }
+                collapsibleBoxes_.push_back(vboxes[i]);
+                collapsibleIndices_.push_back(i);
+                collapsibleIsStream_.push_back(1);
+            }
         }
     }
 
@@ -386,9 +408,24 @@ bool MessageListComponent::handleCollapsibleClick(const Mouse& mouse) {
     if (mouse.x < areaBox_.x_min || mouse.x > areaBox_.x_max) {
         return false;
     }
-    for (size_t k = 0; k < collapsibleBoxes_.size() && k < collapsibleIndices_.size(); ++k) {
+    for (size_t k = 0; k < collapsibleBoxes_.size() && k < collapsibleIndices_.size()
+                      && k < collapsibleIsStream_.size();
+         ++k) {
         if (mouse.y < collapsibleBoxes_[k].y_min || mouse.y > collapsibleBoxes_[k].y_max) {
             continue;
+        }
+        // 流式末尾 Think 子项: 切换流式折叠覆盖态。
+        // 命中区域为上一帧数据, 若期间流已提交为正式消息 (索引落入当前
+        // messages 范围), 回落按普通消息处理 (切换 msg.collapsed), 避免
+        // 提交瞬间的点击被吞掉
+        if (collapsibleIsStream_[k] != 0) {
+            const size_t si = collapsibleIndices_[k];
+            const bool   committedToMessage
+                = ctx_.frameState && si < ctx_.frameState->messages.size();
+            if (!committedToMessage) {
+                toggleStreamThinkCollapsed();
+                return true;
+            }
         }
         const size_t mi      = collapsibleIndices_[k];
         bool         handled = false;
@@ -405,6 +442,23 @@ bool MessageListComponent::handleCollapsibleClick(const Mouse& mouse) {
         return handled;
     }
     return false;
+}
+
+// ---------------------------------------------------------------------------
+// 流式末尾 Think 折叠/展开
+// ---------------------------------------------------------------------------
+
+bool MessageListComponent::streamThinkCollapsed() const {
+    // 用户点击覆盖优先 (仅对当前流生效); 未点击时跟随全局末尾思考模式设置
+    if (streamThinkOverride_ >= 0) {
+        return streamThinkOverride_ == 0;
+    }
+    return TUISettings::instance().tailThinkingMode() == TailThinkingMode::SingleLine;
+}
+
+void MessageListComponent::toggleStreamThinkCollapsed() {
+    streamThinkOverride_ = streamThinkCollapsed() ? 1 : 0;
+    ctx_.postRedraw();
 }
 
 // ---------------------------------------------------------------------------
@@ -502,12 +556,15 @@ uint64_t MessageListComponent::itemKey(size_t index) {
     }
     // ---- 流式区 ----
     if (!streamUseIncremental_) {
-        // 降级路径: 单个 paragraph 项, 以 (指针, 长度, role) 作为 key 触发高度重估
+        // 降级路径: 单个 paragraph 项, 以 (指针, 长度, role) 作为 key 触发高度重估。
+        // 折叠/展开状态计入 key: 点击切换时若 token 长度未变 (帧间无新 token),
+        // 仅凭指针+长度无法使缓存失效, 渲染内容将不随点击更新
         uint64_t h = reinterpret_cast<uint64_t>(st.currentToken.get());
         h          = combine(h, st.currentToken ? st.currentToken->size() : 0);
         h          = combine(h, static_cast<uint64_t>(st.currentTokenRole));
         h          = combine(h, static_cast<uint64_t>(st.pendingTokenDurationMs));
         h          = combine(h, static_cast<uint64_t>(TUISettings::instance().tailThinkingMode()));
+        h          = combine(h, streamThinkCollapsed() ? 1ULL : 0ULL);
         h          = combine(h, 0xDEAD0000ull);
         return h;
     }
@@ -680,8 +737,7 @@ size_t MessageListComponent::estimateHeight(size_t index, int width) {
     }
     // ---- 流式区 ----
     if (!streamUseIncremental_) {
-        if (st.currentTokenRole == TUIMessage::Role::Think
-            && TUISettings::instance().tailThinkingMode() == TailThinkingMode::SingleLine) {
+        if (st.currentTokenRole == TUIMessage::Role::Think && streamThinkCollapsed()) {
             // 单行折叠流式 thinking: 1 行 header + 1 行尾部空行
             return 2;
         }
@@ -849,7 +905,10 @@ LazyBuiltItem MessageListComponent::buildStreamingItem(const TUIRenderState& st)
             durationMs = currentMsg->durationMs;
         }
 
-        if (TUISettings::instance().tailThinkingMode() == TailThinkingMode::SingleLine) {
+        // 折叠态 (SingleLine 设置或用户点击折叠): 单行 header + 末尾截取预览;
+        // 展开态: "- [Think]" header + 全文多行渲染。
+        // 两种形态均支持点击切换 (见 OnRender 流式区命中登记)
+        if (streamThinkCollapsed()) {
             Elements header;
             header.push_back(text("+ [Think] ") | color(theme.thinkingColor));
             if (durationMs > 0) {
@@ -997,12 +1056,17 @@ void MessageListComponent::syncStream(const TUIRenderState& st) {
         // 下一流强制全量重建 (防御: 即使 future 代码在重建 currentToken 时
         // 忘记递增 epoch, 此处兜底也能保证渲染器不与新流串用)
         streamEpoch_ = ~0ULL;
+        // 流结束: 清除流式折叠的用户点击覆盖态 (已提交的 Think 消息由
+        // msg.collapsed 管理), 下一次思考回到设置模式的默认展示
+        streamThinkOverride_ = -1;
         return;
     }
 
-    // 末尾思考单行折叠模式: 不启用增量多行渲染, 走 buildStreamingItem 单行折叠
-    if (st.currentTokenRole == TUIMessage::Role::Think
-        && TUISettings::instance().tailThinkingMode() == TailThinkingMode::SingleLine) {
+    // 末尾思考折叠展示时 (SingleLine 设置或用户点击折叠): 不启用增量多行渲染,
+    // 走 buildStreamingItem 单行折叠子项; 点击展开后恢复增量路径 —— 折叠期间
+    // 不 feed 渲染器、不更新 fedLen/epoch, 恢复后按 fedLen 补齐缺失增量即可
+    // (与下方动画降级路径的恢复语义一致)
+    if (st.currentTokenRole == TUIMessage::Role::Think && streamThinkCollapsed()) {
         return;
     }
 
@@ -1031,6 +1095,9 @@ void MessageListComponent::syncStream(const TUIRenderState& st) {
         streamRenderer_->reset();
         ++streamGen_;
         streamEpoch_ = st.currentTokenEpoch;
+        // 新流开始: 清除上一流的用户点击折叠覆盖态,
+        // 使新一轮思考回到设置模式的默认展示
+        streamThinkOverride_ = -1;
         if (!tok.empty()) {
             streamRenderer_->append(tok);
         }
