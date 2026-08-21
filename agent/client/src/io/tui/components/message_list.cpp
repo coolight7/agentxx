@@ -37,6 +37,18 @@ std::pair<Element, std::unique_ptr<markdown::DomBuilder>> renderMarkdown(
     return {el | ftxui::color(color), std::move(builder)};
 }
 
+/// 折叠消息头部单行预览的可用列数预算 (自适应宽度核心):
+/// 内容区总列数 - 头部前缀显示列数 - 安全余量。
+/// maxWidth 为 scrollable_->contentWidth() (已扣除滚动条 gutter);
+/// 余量 1 列防边界取整溢出 (超宽仍由 xflex_shrink 在右缘兜底裁剪)。
+/// 极窄终端下保底 8 列, 避免预览被完全挤没。
+inline int collapsedPreviewBudget(int maxWidth, int prefixCols) {
+    constexpr int kSlack     = 1;
+    constexpr int kMinBudget = 8;
+    const int     avail      = maxWidth - prefixCols - kSlack;
+    return (avail >= kMinBudget) ? avail : kMinBudget;
+}
+
 /// 估算文本显示行数 (换行符计数 + 按显示宽度折行估算)。
 /// 仅用于不可见子项的高度估算 (影响滚动条/滚动定位), 子项进入视口后实测修正。
 /// 宽字符 (CJK/emoji 等) 按 2 列计, 与 markdown::utf8_display_width 一致,
@@ -307,6 +319,11 @@ Element MessageListComponent::OnRender() {
         }
         streamFedLen_ = 0;
         streamEpoch_  = ~0ULL;
+        // 流结束: 清除流式折叠的用户点击覆盖态 (已提交的 Think 消息由
+        // msg.collapsed 管理), 下一次思考回到设置模式的默认展示。
+        // 必须在此处重置: 无 token 时 itemCount 不调用 syncStream,
+        // OnRender 是每帧必经路径
+        streamThinkOverride_ = -1;
     }
 
     // 由上一帧 viewport 可见区域反推可折叠消息的鼠标命中区域。
@@ -315,6 +332,7 @@ Element MessageListComponent::OnRender() {
     // (注意: 本组件采用懒构建, OnRender 阶段不构建任何子项, 仅产出布局节点)
     collapsibleBoxes_.clear();
     collapsibleIndices_.clear();
+    collapsibleIsStream_.clear();
     if (ctx_.frameState) {
         const auto& vboxes = scrollable_->visibleBoxes();
         const auto& msgs   = ctx_.frameState->messages;
@@ -329,6 +347,22 @@ Element MessageListComponent::OnRender() {
             }
             collapsibleBoxes_.push_back(vboxes[i]);
             collapsibleIndices_.push_back(i);
+            collapsibleIsStream_.push_back(0);
+        }
+        // 末尾正在输出的流式 Think 子项同样支持点击折叠/展开:
+        // 流式区子项索引 >= msgs.size(), 登记其上一帧可见区域并以 isStream
+        // 标记区分 (点击切换 streamThinkOverride_ 而非消息 collapsed)。
+        // 非 Think 流式内容 (Assistant 正文) 不可折叠, 不登记。
+        if (hasStreamingToken(*ctx_.frameState)
+            && ctx_.frameState->currentTokenRole == TUIMessage::Role::Think) {
+            for (size_t i = msgs.size(); i < vboxes.size(); ++i) {
+                if (vboxes[i].IsEmpty()) {
+                    continue;
+                }
+                collapsibleBoxes_.push_back(vboxes[i]);
+                collapsibleIndices_.push_back(i);
+                collapsibleIsStream_.push_back(1);
+            }
         }
     }
 
@@ -374,9 +408,24 @@ bool MessageListComponent::handleCollapsibleClick(const Mouse& mouse) {
     if (mouse.x < areaBox_.x_min || mouse.x > areaBox_.x_max) {
         return false;
     }
-    for (size_t k = 0; k < collapsibleBoxes_.size() && k < collapsibleIndices_.size(); ++k) {
+    for (size_t k = 0; k < collapsibleBoxes_.size() && k < collapsibleIndices_.size()
+                       && k < collapsibleIsStream_.size();
+         ++k) {
         if (mouse.y < collapsibleBoxes_[k].y_min || mouse.y > collapsibleBoxes_[k].y_max) {
             continue;
+        }
+        // 流式末尾 Think 子项: 切换流式折叠覆盖态。
+        // 命中区域为上一帧数据, 若期间流已提交为正式消息 (索引落入当前
+        // messages 范围), 回落按普通消息处理 (切换 msg.collapsed), 避免
+        // 提交瞬间的点击被吞掉
+        if (collapsibleIsStream_[k] != 0) {
+            const size_t si = collapsibleIndices_[k];
+            const bool   committedToMessage
+                = ctx_.frameState && si < ctx_.frameState->messages.size();
+            if (!committedToMessage) {
+                toggleStreamThinkCollapsed();
+                return true;
+            }
         }
         const size_t mi      = collapsibleIndices_[k];
         bool         handled = false;
@@ -393,6 +442,23 @@ bool MessageListComponent::handleCollapsibleClick(const Mouse& mouse) {
         return handled;
     }
     return false;
+}
+
+// ---------------------------------------------------------------------------
+// 流式末尾 Think 折叠/展开
+// ---------------------------------------------------------------------------
+
+bool MessageListComponent::streamThinkCollapsed() const {
+    // 用户点击覆盖优先 (仅对当前流生效); 未点击时跟随全局末尾思考模式设置
+    if (streamThinkOverride_ >= 0) {
+        return streamThinkOverride_ == 0;
+    }
+    return TUISettings::instance().tailThinkingMode() == TailThinkingMode::SingleLine;
+}
+
+void MessageListComponent::toggleStreamThinkCollapsed() {
+    streamThinkOverride_ = streamThinkCollapsed() ? 1 : 0;
+    ctx_.postRedraw();
 }
 
 // ---------------------------------------------------------------------------
@@ -484,18 +550,21 @@ uint64_t MessageListComponent::itemKey(size_t index) {
         if (m.role == TUIMessage::Role::Think) {
             h = combine(h, static_cast<uint64_t>(TUISettings::instance().tailThinkingMode()));
             const bool isTailMsg = (index + 1 == st.messages.size() && !hasStreamingToken(st));
-            h = combine(h, isTailMsg ? 1 : 0);
+            h                    = combine(h, isTailMsg ? 1 : 0);
         }
         return h;
     }
     // ---- 流式区 ----
     if (!streamUseIncremental_) {
-        // 降级路径: 单个 paragraph 项, 以 (指针, 长度, role) 作为 key 触发高度重估
+        // 降级路径: 单个 paragraph 项, 以 (指针, 长度, role) 作为 key 触发高度重估。
+        // 折叠/展开状态计入 key: 点击切换时若 token 长度未变 (帧间无新 token),
+        // 仅凭指针+长度无法使缓存失效, 渲染内容将不随点击更新
         uint64_t h = reinterpret_cast<uint64_t>(st.currentToken.get());
         h          = combine(h, st.currentToken ? st.currentToken->size() : 0);
         h          = combine(h, static_cast<uint64_t>(st.currentTokenRole));
         h          = combine(h, static_cast<uint64_t>(st.pendingTokenDurationMs));
         h          = combine(h, static_cast<uint64_t>(TUISettings::instance().tailThinkingMode()));
+        h          = combine(h, streamThinkCollapsed() ? 1ULL : 0ULL);
         h          = combine(h, 0xDEAD0000ull);
         return h;
     }
@@ -668,8 +737,7 @@ size_t MessageListComponent::estimateHeight(size_t index, int width) {
     }
     // ---- 流式区 ----
     if (!streamUseIncremental_) {
-        if (st.currentTokenRole == TUIMessage::Role::Think
-            && TUISettings::instance().tailThinkingMode() == TailThinkingMode::SingleLine) {
+        if (st.currentTokenRole == TUIMessage::Role::Think && streamThinkCollapsed()) {
             // 单行折叠流式 thinking: 1 行 header + 1 行尾部空行
             return 2;
         }
@@ -837,7 +905,10 @@ LazyBuiltItem MessageListComponent::buildStreamingItem(const TUIRenderState& st)
             durationMs = currentMsg->durationMs;
         }
 
-        if (TUISettings::instance().tailThinkingMode() == TailThinkingMode::SingleLine) {
+        // 折叠态 (SingleLine 设置或用户点击折叠): 单行 header + 末尾截取预览;
+        // 展开态: "- [Think]" header + 全文多行渲染。
+        // 两种形态均支持点击切换 (见 OnRender 流式区命中登记)
+        if (streamThinkCollapsed()) {
             Elements header;
             header.push_back(text("+ [Think] ") | color(theme.thinkingColor));
             if (durationMs > 0) {
@@ -848,10 +919,17 @@ LazyBuiltItem MessageListComponent::buildStreamingItem(const TUIRenderState& st)
                 header.push_back(text(" "));
             }
             if (st.currentToken && !st.currentToken->empty()) {
-                const size_t previewLen = TUISettings::instance().tailThinkingPreviewLength();
+                // 预览自适应宽度: 内容区剩余列数与用户设置截取长度取较小值
+                int prefixCols = 10; // "+ [Think] "
+                if (durationMs > 0) {
+                    prefixCols += 6;
+                }
+                const int budget
+                    = collapsedPreviewBudget(std::max(1, scrollable_->contentWidth()), prefixCols);
+                const size_t previewLen = budget > 0 ? static_cast<size_t>(budget) : prefixCols;
                 header.push_back(
-                    text(tailLinePreview(*st.currentToken, previewLen))
-                    | color(theme.thinkingColor) | dim | xflex_shrink
+                    text(tailLinePreview(*st.currentToken, previewLen)) | color(theme.thinkingColor)
+                    | dim | xflex_shrink
                 );
             } else if (st.pendingTokenThink && st.pendingTokenThink->reasoningTokens > 0) {
                 header.push_back(
@@ -974,12 +1052,17 @@ void MessageListComponent::syncStream(const TUIRenderState& st) {
         // 下一流强制全量重建 (防御: 即使 future 代码在重建 currentToken 时
         // 忘记递增 epoch, 此处兜底也能保证渲染器不与新流串用)
         streamEpoch_ = ~0ULL;
+        // 流结束: 清除流式折叠的用户点击覆盖态 (已提交的 Think 消息由
+        // msg.collapsed 管理), 下一次思考回到设置模式的默认展示
+        streamThinkOverride_ = -1;
         return;
     }
 
-    // 末尾思考单行折叠模式: 不启用增量多行渲染, 走 buildStreamingItem 单行折叠
-    if (st.currentTokenRole == TUIMessage::Role::Think
-        && TUISettings::instance().tailThinkingMode() == TailThinkingMode::SingleLine) {
+    // 末尾思考折叠展示时 (SingleLine 设置或用户点击折叠): 不启用增量多行渲染,
+    // 走 buildStreamingItem 单行折叠子项; 点击展开后恢复增量路径 —— 折叠期间
+    // 不 feed 渲染器、不更新 fedLen/epoch, 恢复后按 fedLen 补齐缺失增量即可
+    // (与下方动画降级路径的恢复语义一致)
+    if (st.currentTokenRole == TUIMessage::Role::Think && streamThinkCollapsed()) {
         return;
     }
 
@@ -1008,6 +1091,9 @@ void MessageListComponent::syncStream(const TUIRenderState& st) {
         streamRenderer_->reset();
         ++streamGen_;
         streamEpoch_ = st.currentTokenEpoch;
+        // 新流开始: 清除上一流的用户点击折叠覆盖态,
+        // 使新一轮思考回到设置模式的默认展示
+        streamThinkOverride_ = -1;
         if (!tok.empty()) {
             streamRenderer_->append(tok);
         }
@@ -1034,8 +1120,26 @@ struct ToolHeaderSummary {
 /// - agentxx_filesystem_write      -> "Write", " · /path/file" (运行中 " · /path/file")
 /// - agentxx_web_search                 -> "Search", " · <query>" (运行中 " · <query>")
 /// 未知工具 / 参数解析失败返回空 toolName, 调用方回退显示原始 toolName
-static ToolHeaderSummary
-    buildToolHeaderSummary(std::string_view toolName, std::string_view argsText, bool running) {
+///
+/// availWidth: 消息列表内容区总列数 (scrollable_->contentWidth()), 用于
+/// 预览自适应截断; <=0 时各预览回退到原固定列数 (供非 TUI 布局路径复用)
+static ToolHeaderSummary buildToolHeaderSummary(
+    std::string_view toolName,
+    std::string_view argsText,
+    bool             running,
+    int              availWidth = 0
+) {
+    // 折叠头部固定开销估算: 折叠标记+角色标签 "+/- [Tool] "(9) + 动作名(≤8)
+    // + 参数分隔 " · []"(≤6) + 安全余量 1 列
+    constexpr int kHeaderOverhead = 9 + 8 + 6 + 1;
+    /// 自适应预览限宽: 内容区总列数扣除固定开销; 空间不足时回退 fallback 固定值
+    auto limit = [&](size_t fallback) -> size_t {
+        if (availWidth <= kHeaderOverhead + 16) {
+            return fallback;
+        }
+        return static_cast<size_t>(availWidth - kHeaderOverhead);
+    };
+
     // 参数 JSON 解析失败 (截断/异常) 或解析结果非对象时回退显示原始 toolName
     bool           parseOk = true;
     neograph::json args    = agentxx::util::catchError<neograph::json>(
@@ -1139,7 +1243,7 @@ static ToolHeaderSummary
                 quoted += ", ";
             }
             quoted += '"';
-            quoted += oneLinePreview(patterns[i], 50);
+            quoted += oneLinePreview(patterns[i], limit(50));
             quoted += '"';
         }
         if (patterns.size() > 2) {
@@ -1148,19 +1252,19 @@ static ToolHeaderSummary
         return make("Grep", quoted, joinList(files));
     }
     if (toolName == "agentxx_web_search") {
-        return make("Search", {}, oneLinePreview(getStr("query"), 100));
+        return make("Search", {}, oneLinePreview(getStr("query"), limit(100)));
     }
     if (toolName == "agentxx_web_fetch") {
-        return make("Fetch", {}, oneLinePreview(getStr("url"), 100));
+        return make("Fetch", {}, oneLinePreview(getStr("url"), limit(100)));
     }
     if (toolName == "agentxx_web_fetch_markdown") {
-        return make("FetchMD", {}, oneLinePreview(getStr("url"), 100));
+        return make("FetchMD", {}, oneLinePreview(getStr("url"), limit(100)));
     }
     // execute 系列 (bash/windows/python/javascript): 统一缩略名 Bash, 内容为命令
     if (toolName == "agentxx_execute_bash_command" || toolName == "agentxx_execute_windows_command"
         || toolName == "agentxx_execute_python_command"
         || toolName == "agentxx_execute_javascript_command") {
-        return make("Bash", {}, oneLinePreview(getStr("command"), 100));
+        return make("Bash", {}, oneLinePreview(getStr("command"), limit(100)));
     }
     // planning_write: 缩略名称 Plan, 缩略内容取 todos 格式化为一行并用 ; 隔开
     if (toolName == "agentxx_planning_write") {
@@ -1238,10 +1342,12 @@ Element MessageListComponent::buildMessageBlock(
             header.push_back(text(expanded ? "- " : "+ ") | color(tipColor));
             header.push_back(text("[System] ") | color(tipColor));
             if (!expanded) {
-                // 预览可能超出宽度: xflex_shrink 使预览吸收剩余宽度并在右缘裁剪,
-                // 避免 hbox 把 "- [System] " 前缀一并压缩 (向左覆盖压缩)
+                // 预览自适应宽度: 按内容区剩余列数截断 (宽字符按 2 列计),
+                // 不再固定 60 字符; 超出部分仍由 xflex_shrink 右缘裁剪兜底
+                const int budget = collapsedPreviewBudget(maxWidth, 11); // "+ [System] "
                 header.push_back(
-                    text(oneLinePreview(msg.text)) | color(tipColor) | dim | xflex_shrink
+                    text(oneLinePreview(msg.text, static_cast<size_t>(budget))) | color(tipColor)
+                    | dim | xflex_shrink
                 );
             }
             lines.push_back(hbox(std::move(header)));
@@ -1275,8 +1381,14 @@ Element MessageListComponent::buildMessageBlock(
             header.push_back(text(expanded ? "- " : "+ ") | color(tipColor));
             header.push_back(text(prefix) | color(tipColor));
             if (!expanded) {
-                // 同 System: 预览超宽时右缘裁剪, 不压缩前缀
-                header.push_back(text(oneLinePreview(msg.text)) | color(tipColor) | xflex_shrink);
+                // 同 System: 预览自适应内容区剩余列宽, 超宽时右缘裁剪兜底
+                const int prefixCols
+                    = static_cast<int>(markdown::utf8_display_width(fmt::format("+ {}", prefix)));
+                const int budget = collapsedPreviewBudget(maxWidth, prefixCols);
+                header.push_back(
+                    text(oneLinePreview(msg.text, static_cast<size_t>(budget))) | color(tipColor)
+                    | xflex_shrink
+                );
             }
             lines.push_back(hbox(std::move(header)));
             if (expanded) {
@@ -1288,29 +1400,35 @@ Element MessageListComponent::buildMessageBlock(
             const bool expanded = !msg.collapsed;
             Elements   lines;
             Elements   header;
+            // 时长文本先计算, 供头部渲染与预览列宽预算共用
+            std::string durationText;
+            if (msg.durationMs > 0) {
+                durationText = agentxx::util::formatDurationMilliseconds(msg.durationMs);
+            }
             header.push_back(text(expanded ? "- " : "+ ") | color(theme.thinkingColor));
             header.push_back(text("[Think] ") | color(theme.thinkingColor));
-            if (msg.durationMs > 0) {
-                header.push_back(
-                    text(agentxx::util::formatDurationMilliseconds(msg.durationMs))
-                    | color(theme.thinkingColor)
-                );
+            if (!durationText.empty()) {
+                header.push_back(text(durationText) | color(theme.thinkingColor));
                 header.push_back(text(" "));
             }
             if (!expanded) {
-                // 同 System: 预览超宽时右缘裁剪, 不压缩前缀
+                // 预览自适应宽度: 前缀列数 = "+/- [Think] "(10) + 时长 + 空格
+                int prefixCols = 10;
+                if (!durationText.empty()) {
+                    prefixCols += 6;
+                }
+                const int   budget = collapsedPreviewBudget(maxWidth, prefixCols);
                 std::string previewText;
                 if (!msg.text.empty()) {
-                    const auto& st        = *ctx_.frameState;
-                    const bool  isTailMsg = (msgIndex + 1 == st.messages.size() && !hasStreamingToken(st));
+                    const auto& st = *ctx_.frameState;
+                    const bool  isTailMsg
+                        = (msgIndex + 1 == st.messages.size() && !hasStreamingToken(st));
                     if (isTailMsg
-                        && TUISettings::instance().tailThinkingMode() == TailThinkingMode::SingleLine) {
-                        previewText = tailLinePreview(
-                            msg.text,
-                            TUISettings::instance().tailThinkingPreviewLength()
-                        );
+                        && TUISettings::instance().tailThinkingMode()
+                               == TailThinkingMode::SingleLine) {
+                        previewText = tailLinePreview(msg.text, static_cast<size_t>(budget));
                     } else {
-                        previewText = oneLinePreview(msg.text);
+                        previewText = oneLinePreview(msg.text, static_cast<size_t>(budget));
                     }
                 } else if (msg.think && msg.think->reasoningTokens > 0) {
                     previewText = fmt::format("加密思考 {} tokens", msg.think->reasoningTokens);
@@ -1372,22 +1490,32 @@ Element MessageListComponent::buildMessageBlock(
                 );
             }
             if (!expanded) {
-                // 折叠状态, 特化渲染
-                auto summary = buildToolHeaderSummary(msg.tool->toolName, msg.text, !finished);
+                // 折叠状态, 特化渲染 (摘要内部预览按内容区剩余列宽自适应截断)
+                auto summary
+                    = buildToolHeaderSummary(msg.tool->toolName, msg.text, !finished, maxWidth);
                 std::string displayName;
                 std::string argsSummary;
                 if (!summary.toolName.empty()) {
                     displayName = std::move(summary.toolName);
                     argsSummary = std::move(summary.argsSummary);
                 } else {
+                    // 未知工具回退: 预览预算扣除 "+/- [Tool] "(9) + 名称 + 分隔符列数
                     displayName = msg.tool->toolName;
+                    const int nameCols
+                        = static_cast<int>(markdown::utf8_display_width(displayName));
                     if (!finished) {
                         argsSummary = " ·";
                         if (!msg.text.empty()) {
-                            argsSummary += " " + oneLinePreview(msg.text, 80);
+                            const int budget
+                                = collapsedPreviewBudget(maxWidth, 9 + nameCols + 3); // " · "
+                            argsSummary
+                                += " " + oneLinePreview(msg.text, static_cast<size_t>(budget));
                         }
                     } else {
-                        auto resPreview = oneLinePreview(msg.tool->toolResult);
+                        const int budget
+                            = collapsedPreviewBudget(maxWidth, 9 + nameCols + 1); // " "
+                        auto resPreview
+                            = oneLinePreview(msg.tool->toolResult, static_cast<size_t>(budget));
                         if (!resPreview.empty()) {
                             argsSummary = " " + std::move(resPreview);
                         }

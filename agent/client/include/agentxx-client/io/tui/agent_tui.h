@@ -19,6 +19,7 @@
 #include "fmt/format.h"
 #include "ftxui/component/component.hpp"
 #include "ftxui/component/screen_interactive.hpp"
+#include "markdown/text_utils.hpp" // utf8_byte_length/utf8_codepoint/codepoint_width (预览按显示列宽截断)
 #include "neograph/api.h"
 #include <atomic>
 #include <chrono>
@@ -40,10 +41,17 @@
 //  系统提示文本复用, 此处仅保留 UI 专用函数)
 // ---------------------------------------------------------------------------
 
+/// 单行预览: 取首个换行前的内容, 按终端显示列宽截断 (宽字符 CJK/emoji 按
+/// 2 列计), 截断时以 "..." 收尾。max 为最大显示列数且含省略号占用;
+/// 折叠消息头部应按实际剩余列宽传入以实现自适应 (而非固定字符数)。
 inline std::string oneLinePreview(std::string_view s, size_t max = 60) {
     const auto  nl = s.find('\n');
     std::string line{(nl == std::string_view::npos) ? s : s.substr(0, nl)};
-    const auto  idx = agentxx::util::findIndexByUtf8Length(line, max);
+    if (max == 0 || line.empty()) {
+        return {};
+    }
+    // 内容预算: 预留省略号 3 列, 保证截断后总宽度不超过 max
+    const auto idx = agentxx::util::findIndexByUtf8Length(line, max);
     if (idx > 0 && idx < line.size()) {
         line.resize(idx);
         line += "...";
@@ -75,13 +83,50 @@ inline std::string tailLinePreview(std::string_view s, size_t max = 60) {
     if (line.empty()) {
         return "";
     }
-    const size_t totalLen = agentxx::util::utf8GetLength(line);
-    if (totalLen <= max) {
+    // 按显示列宽自适应: 保留末尾不超过 budget 列的内容 (宽字符按 2 列计),
+    // 前缀 "..." 占 3 列计入 max。从尾部反向逐码点累积列宽, 放不下即停,
+    // 宽字符跨预算边界时整体舍弃, 不切断码点
+    const size_t budget = (max > 3) ? max - 3 : 0;
+    if (budget == 0) {
+        return "";
+    }
+    size_t totalCol = 0;
+    for (size_t i = 0; i < line.size();) {
+        size_t len  = markdown::utf8_byte_length(line[i]);
+        len         = std::min(len, line.size() - i);
+        totalCol   += static_cast<size_t>(
+            markdown::codepoint_width(markdown::utf8_codepoint(line.data() + i, len))
+        );
+        i += len;
+    }
+    if (totalCol <= budget) {
         return line;
     }
-    const size_t skip    = totalLen - max;
-    const size_t byteIdx = agentxx::util::findIndexByUtf8Length(line, skip);
-    return "..." + line.substr(byteIdx);
+    // 反向找出保留区间的起始字节: 从尾部回溯逐码点累计列宽, 超出预算停止;
+    // 至少强制保留最后一个码点 (极小预算下宁可溢出 1 列也不返回空 "...",
+    // 溢出由渲染层 xflex_shrink 右缘裁剪兜底)
+    size_t startByte = line.size();
+    size_t col       = 0;
+    size_t i         = line.size();
+    bool   keptAny   = false;
+    while (i > 0) {
+        // 回溯找 i 之前最后一个码点的起点 (跳过 UTF-8 续字节)
+        size_t len = 1;
+        while (len < i && (static_cast<unsigned char>(line[i - len]) & 0xC0) == 0x80) {
+            ++len;
+        }
+        const int w
+            = markdown::codepoint_width(markdown::utf8_codepoint(line.data() + i - len, len));
+        // 零宽字符随相邻内容保留; 已有内容且超出预算即停止
+        if (keptAny && w > 0 && col + static_cast<size_t>(w) > budget) {
+            break;
+        }
+        keptAny    = true;
+        col       += static_cast<size_t>(w);
+        i         -= len;
+        startByte  = i;
+    }
+    return "..." + line.substr(startByte);
 }
 
 /// TUI 日志接收器

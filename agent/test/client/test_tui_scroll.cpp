@@ -1341,6 +1341,140 @@ TestResult testTuiScroll() {
             XX_TEST_EXPECT_TRUE(frame.find("THK_TAIL_18C") != std::string::npos);
         }
 
+        // 点击流式末尾 Think 的辅助: 点击第一个非空命中区中心 (返回是否消费)
+        auto clickFirstCollapsible = [](ScrollFixture& fx) -> bool {
+            for (const auto& box : fx.comp->collapsibleBoxes()) {
+                if (box.IsEmpty()) {
+                    continue;
+                }
+                ftxui::Mouse m;
+                m.button = ftxui::Mouse::Left;
+                m.motion = ftxui::Mouse::Released;
+                m.x      = (box.x_min + box.x_max) / 2;
+                m.y      = (box.y_min + box.y_max) / 2;
+                return fx.comp->OnEvent(ftxui::Event::Mouse("", m));
+            }
+            return false;
+        };
+
+        // 18d: SingleLine 模式下点击流式末尾 Think → 展开, 再点击 → 折叠
+        settings.setTailThinkingMode(TailThinkingMode::SingleLine);
+        {
+            ScrollFixture f;
+            f.sharedState.mutate([&](TUIRenderState& st) {
+                st.currentTokenRole  = TUIMessage::Role::Think;
+                st.currentTokenEpoch = 7;
+                st.currentToken      = std::make_shared<std::string>(
+                    "Thinking head line hidden when collapsed THK18D_HEAD\n"
+                    "Thinking step two\nThinking step three tail THK_TAIL_18D"
+                );
+                st.isStreaming = true;
+            });
+            // 两帧建立布局与命中区域
+            std::string frame = f.render();
+            frame             = f.render();
+            XX_TEST_EXPECT_TRUE(frame.find("+ [Think]") != std::string::npos);
+            XX_TEST_EXPECT_TRUE(frame.find("THK18D_HEAD") == std::string::npos);
+            XX_TEST_EXPECT_TRUE(frame.find("THK_TAIL_18D") != std::string::npos);
+            // 流式区子项登记为可点击命中区 (isStream 标记)
+            XX_TEST_EXPECT_TRUE(f.comp->collapsibleBoxes().size() == 1);
+            XX_TEST_EXPECT_TRUE(f.comp->collapsibleIsStream(0));
+
+            // 点击 → 展开 (显示 "- [Think]" 与全文头部)
+            XX_TEST_EXPECT_TRUE(clickFirstCollapsible(f));
+            std::string expanded = f.render();
+            XX_TEST_EXPECT_TRUE(expanded.find("- [Think]") != std::string::npos);
+            XX_TEST_EXPECT_TRUE(expanded.find("THK18D_HEAD") != std::string::npos);
+
+            // 刷新命中区后再点击 → 折叠回单行预览
+            f.render();
+            XX_TEST_EXPECT_TRUE(clickFirstCollapsible(f));
+            std::string collapsedAgain = f.render();
+            XX_TEST_EXPECT_TRUE(collapsedAgain.find("+ [Think]") != std::string::npos);
+            XX_TEST_EXPECT_TRUE(collapsedAgain.find("THK18D_HEAD") == std::string::npos);
+            XX_TEST_EXPECT_TRUE(collapsedAgain.find("THK_TAIL_18D") != std::string::npos);
+        }
+
+        // 18e: AutoExpand 模式下点击流式末尾 Think → 折叠, 再点击 → 展开
+        settings.setTailThinkingMode(TailThinkingMode::AutoExpand);
+        {
+            ScrollFixture f;
+            f.sharedState.mutate([&](TUIRenderState& st) {
+                st.currentTokenRole  = TUIMessage::Role::Think;
+                st.currentTokenEpoch = 8;
+                st.currentToken      = std::make_shared<std::string>(
+                    "Auto expand head line THK18E_HEAD\n"
+                    "Thinking step two\nThinking step three tail THK_TAIL_18E"
+                );
+                st.isStreaming = true;
+            });
+            std::string frame = f.render();
+            frame             = f.render();
+            XX_TEST_EXPECT_TRUE(frame.find("- [Think]") != std::string::npos);
+            XX_TEST_EXPECT_TRUE(frame.find("THK18E_HEAD") != std::string::npos);
+
+            // 点击 → 折叠为单行末尾截取预览 (头部隐藏, 尾部可见)
+            XX_TEST_EXPECT_TRUE(clickFirstCollapsible(f));
+            std::string collapsed = f.render();
+            XX_TEST_EXPECT_TRUE(collapsed.find("+ [Think]") != std::string::npos);
+            XX_TEST_EXPECT_TRUE(collapsed.find("THK18E_HEAD") == std::string::npos);
+            XX_TEST_EXPECT_TRUE(collapsed.find("THK_TAIL_18E") != std::string::npos);
+
+            // 刷新命中区后再点击 → 恢复展开
+            f.render();
+            XX_TEST_EXPECT_TRUE(clickFirstCollapsible(f));
+            std::string expandedAgain = f.render();
+            XX_TEST_EXPECT_TRUE(expandedAgain.find("- [Think]") != std::string::npos);
+            XX_TEST_EXPECT_TRUE(expandedAgain.find("THK18E_HEAD") != std::string::npos);
+        }
+
+        // 18f: 流结束提交后覆盖态重置 —— 新一轮思考回到设置模式默认展示
+        settings.setTailThinkingMode(TailThinkingMode::AutoExpand);
+        {
+            ScrollFixture f;
+            f.sharedState.mutate([&](TUIRenderState& st) {
+                st.currentTokenRole  = TUIMessage::Role::Think;
+                st.currentTokenEpoch = 3;
+                st.currentToken      = std::make_shared<std::string>(
+                    "Stream one head THK18F_HEAD\nStream one tail THK_TAIL_18F"
+                );
+                st.isStreaming = true;
+            });
+            f.render();
+            f.render();
+            // 点击折叠流式 think
+            XX_TEST_EXPECT_TRUE(clickFirstCollapsible(f));
+            XX_TEST_EXPECT_TRUE(f.render().find("+ [Think]") != std::string::npos);
+
+            // 流结束: token 提交为正式 Think 消息 (pushCurrentTokenLocked 语义,
+            // 默认 collapsed=true), 覆盖态应随流结束重置
+            f.sharedState.mutate([&](TUIRenderState& st) {
+                auto m       = std::make_shared<TUIMessage>();
+                m->role      = TUIMessage::Role::Think;
+                m->collapsed = true;
+                m->text      = st.currentToken ? *st.currentToken : "";
+                st.messages.push_back(std::move(m));
+                st.currentToken.reset();
+                st.isStreaming = false;
+            });
+            std::string committedFrame = f.render();
+            XX_TEST_EXPECT_TRUE(committedFrame.find("+ [Think]") != std::string::npos);
+
+            // 新一轮思考开始 (新 epoch): 不沿用上一流的折叠覆盖态, 自动展开
+            f.sharedState.mutate([&](TUIRenderState& st) {
+                st.currentTokenRole  = TUIMessage::Role::Think;
+                st.currentTokenEpoch = 9;
+                st.currentToken      = std::make_shared<std::string>(
+                    "Stream two head THK18F_HEAD2\nStream two tail THK_TAIL_18F2"
+                );
+                st.isStreaming = true;
+            });
+            std::string nextStreamFrame = f.render();
+            nextStreamFrame             = f.render();
+            XX_TEST_EXPECT_TRUE(nextStreamFrame.find("- [Think]") != std::string::npos);
+            XX_TEST_EXPECT_TRUE(nextStreamFrame.find("THK18F_HEAD2") != std::string::npos);
+        }
+
         // 恢复原始设置
         settings.setTailThinkingMode(origMode);
     }

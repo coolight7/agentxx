@@ -118,6 +118,8 @@ public:
     }
 
     /// 处理可折叠消息的鼠标点击 (供外部 CatchEvent 调用); 返回是否消费了事件
+    /// - 普通消息 (Think/Tool/System/Tip): 切换该消息的 collapsed
+    /// - 流式末尾正在输出的 Think 子项: 切换流式折叠覆盖态 (streamThinkOverride_)
     bool handleCollapsibleClick(const ftxui::Mouse& mouse);
 
     /// 测试辅助: 最近一次渲染的中断控件命中区域
@@ -129,6 +131,12 @@ public:
     /// (与 collapsibleIndices_ 对应; 供测试模拟点击折叠/展开)
     const std::vector<ftxui::Box>& collapsibleBoxes() const {
         return collapsibleBoxes_;
+    }
+
+    /// 测试辅助: 指定 collapsibleBoxes 下标是否为流式末尾 Think 命中区
+    /// (流式子项不属于 st.messages, 点击切换流式折叠覆盖态而非消息 collapsed)
+    bool collapsibleIsStream(size_t k) const {
+        return k < collapsibleIsStream_.size() && collapsibleIsStream_[k] != 0;
     }
 
     /// 连接失败 banner 的"重试"按钮命中区域 (渲染时 reflect 填充,
@@ -230,6 +238,14 @@ private:
     LazyBuiltItem buildItem(size_t index);
     bool          fillViewport(size_t index);
 
+    /// 流式末尾正在输出的 Think 当前生效的折叠状态 (UI 线程独占):
+    /// 用户点击覆盖态 (streamThinkOverride_) 优先, 未点击时按 TailThinkingMode 设置。
+    /// 供 syncStream/itemKey/estimateHeight/buildStreamingItem 统一判定渲染形态
+    /// (折叠=单行预览子项, 展开=多行/增量子项)
+    bool streamThinkCollapsed() const;
+    /// 切换流式末尾 Think 折叠状态 (点击命中流式区时调用; 写入用户覆盖态)
+    void toggleStreamThinkCollapsed();
+
     // ---- 子项构建辅助 ----
     LazyBuiltItem  buildMessageItem(const TUIMessage& msg, size_t index);
     LazyBuiltItem  buildStreamingItem(const TUIRenderState& st);
@@ -274,6 +290,11 @@ private:
     uint64_t streamEpoch_ = ~0ULL;
     /// 流式代次: 每重建一次渲染器递增, 用于流式子项 key 防跨流串用缓存
     uint64_t streamGen_ = 0;
+    /// 流式末尾 Think 的用户点击覆盖态 (UI 线程独占; tri-state):
+    /// -1 = 未点击 (跟随 TailThinkingMode 设置), 0 = 用户点击折叠, 1 = 用户点击展开。
+    /// 仅作用于当前正在流式输出的 Think 区; 新流开始/流结束时重置为 -1,
+    /// 使下一次思考回到设置模式的默认展示 (已提交的 Think 消息仍由 msg.collapsed 管理)
+    int streamThinkOverride_ = -1;
 
     /// 增量模式的流式区子项数 = 头部 + 稳定块 + (尾部块存在 ? 1 : 0)
     size_t streamItemCount() const;
@@ -290,5 +311,10 @@ private:
     // ---- 折叠消息命中检测 (由上一帧 visibleBoxes 反推) ----
     std::vector<ftxui::Box> collapsibleBoxes_;
     std::vector<size_t>     collapsibleIndices_;
+    /// 与 collapsibleBoxes_/collapsibleIndices_ 一一对应: 该命中区是否属于
+    /// 流式末尾 Think 子项 (流式区子项索引 >= st.messages.size(), 点击切换
+    /// streamThinkOverride_; 普通消息点击切换 msg.collapsed)。
+    /// 用 char 而非 bool (避免 vector<bool> 代理引用语义)
+    std::vector<char>       collapsibleIsStream_;
     ftxui::Box              areaBox_;
 };
