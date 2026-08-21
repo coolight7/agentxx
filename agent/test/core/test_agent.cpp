@@ -273,6 +273,14 @@ DaSimServer startDaSimServer() {
                 g_da_sim_last_request = j;
                 g_da_sim_requests.push_back(j);
 
+                // provider 层现在把"完全无输出"的成功响应当作生成失败 (抛异常交由
+                // modelcall 重试链路处理), 模拟器遵循同一契约: 未设置内容时使用占位
+                // 文本, 不再产生真正的空响应 (历史用例将 content 设为 "" 仅表示最小
+                // 回复, 并非在测试空响应语义)
+                const std::string respContent
+                    = g_da_sim_response_content.empty() ? std::string{"done"}
+                                                        : g_da_sim_response_content;
+
                 if (stream) {
                     std::string sseBody;
                     auto        append
@@ -320,7 +328,7 @@ DaSimServer startDaSimServer() {
                         append(d, "");
                         append(neograph::json::object(), "tool_calls");
                     } else {
-                        auto&       content = g_da_sim_response_content;
+                        const auto& content = respContent;
                         std::string acc;
                         for (size_t i = 0; i < content.size(); ++i) {
                             acc += content[i];
@@ -356,7 +364,7 @@ DaSimServer startDaSimServer() {
                         msg["content"]    = nullptr;
                         msg["tool_calls"] = g_da_sim_tool_calls;
                     } else {
-                        msg["content"] = g_da_sim_response_content;
+                        msg["content"] = respContent;
                     }
 
                     auto choice             = neograph::json::object();

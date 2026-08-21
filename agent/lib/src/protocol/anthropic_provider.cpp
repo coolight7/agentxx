@@ -23,6 +23,21 @@ std::string makeUniqueToolCallId(size_t i) {
     return fmt::format("call_{}_{}_{:08x}", ts, i, static_cast<uint32_t>(rng()));
 }
 
+// 判定是否为"有效空响应": content / 明文思考 / tool_calls 全空, 且无加密思考块
+// - 带 signature 的 thinking 块存于 message.extra[kThinkingBlocksKey], 属于有效
+//   思考载体 (回传上下文时需要), 不视为空; 数组非空即存在有效载体
+// - 空响应对 Agent 而言等于本次生成失败: 无内容可展示、无 tool_calls 可路由,
+//   由调用方抛出异常, 经 modelcall 重试链路自动重试并提示 UI
+bool isEmptyResponse(const neograph::ChatCompletion& completion) {
+    const auto& msg = completion.message;
+    if (!msg.content.empty() || !msg.reasoning_content.empty() || !msg.tool_calls.empty()) {
+        return false;
+    }
+    return !(msg.extra.contains(AnthropicProvider::kThinkingBlocksKey)
+             && msg.extra[AnthropicProvider::kThinkingBlocksKey].is_array()
+             && !msg.extra[AnthropicProvider::kThinkingBlocksKey].empty());
+}
+
 } // namespace
 
 std::unique_ptr<AnthropicProvider>
@@ -424,6 +439,18 @@ asio::awaitable<neograph::ChatCompletion>
 
     auto respJson   = neograph::json::parse(r.body);
     auto completion = parseResponse(respJson);
+
+    // 空响应视为生成失败, 抛异常交由 modelcall 重试链路处理 (与流式路径行为一致)
+    if (isEmptyResponse(completion)) {
+        throw std::runtime_error(fmt::format(
+            "LLM response is empty | model={} usage={}/{}/{}",
+            params.model.empty() ? config_.modelName : params.model,
+            completion.usage.prompt_tokens,
+            completion.usage.completion_tokens,
+            completion.usage.total_tokens
+        ));
+    }
+
     co_return completion;
 }
 
@@ -543,6 +570,19 @@ asio::awaitable<neograph::ChatCompletion> AnthropicProvider::doStream(
             tc.id = makeUniqueToolCallId(++index);
         }
         completion.message.tool_calls.push_back(std::move(tc));
+    }
+
+    // 流正常结束但无任何有效输出 (content/明文思考/加密思考块/tool_calls 全空):
+    // 视为本次生成失败, 抛异常交由 modelcall 重试链路处理 (UI 警告提示 + 自动重试),
+    // 避免空 assistant 消息静默结束本轮会话
+    if (isEmptyResponse(completion)) {
+        throw std::runtime_error(fmt::format(
+            "LLM stream completed with empty response | model={} content_chars={} "
+            "thinking_chars={}",
+            params.model.empty() ? config_.modelName : params.model,
+            fullContent.size(),
+            fullThinking.size()
+        ));
     }
 
     co_return completion;

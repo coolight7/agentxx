@@ -157,15 +157,6 @@ models:
     extra_api_config:
       reasoning:
         effort: max
-  - name: gemini-3.7-flash-high
-    type: "openai"
-    base_url: "http://172.29.48.1:8317/v1"
-    api_key: "${GEMINI_API_KEY}"
-    model_name: "gemini-3.7-flash-high"
-    model_context_max_token: 1000000
-    send_thinking: true
-    extra_api_config:
-      reasoning_effort: max
   - name: opencode-glm-5.3
     type: "openai"
     base_url: "https://opencode.ai/zen/go/v1"
@@ -183,6 +174,7 @@ models:
     model_context_max_token: 128000
     send_thinking: true
     extra_api_config:
+      reasoning_effort: "max"
       preserve_thinking: true 
 
   # ACP 服务模型
@@ -220,8 +212,8 @@ models:
 # 指定各模式下使用的模型名称（对应上面 models 中的 name）
 use_model:
   # default: local
-  # default: qwenai-deepseek-v4-flash-0731
-  default: opencode-ds-v4-flash
+  # default: opencode-ds-v4-flash
+  default: opencode-ox-alpha
   acp: acp
   # train: train
   train: local

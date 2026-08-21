@@ -573,7 +573,9 @@ static asio::awaitable<void> testSessionPersistenceE2E() {
             return cfg;
         };
 
-        g_da_sim_response_content = "";
+        // 收尾请求返回真实文本 (provider 层已把完全空响应当作生成失败,
+        // 模拟器/用例遵循同一契约: 回合以带内容的 assistant 消息结束)
+        g_da_sim_response_content = "E2E final answer";
         g_da_sim_tool_calls       = neograph::json::array({
             neograph::json{
                            {"index", 0},
@@ -632,9 +634,10 @@ static asio::awaitable<void> testSessionPersistenceE2E() {
             co_await agent.init();
 
             auto sess = agent.agentContext->getSession("e2e-thread");
-            // 展示历史恢复: user + Think + Tool; Think 是本次修复的核心断言,
-            // 修复前 tool_calls 分支不展开 Think, 重启后 Think 丢失
-            XX_TEST_EXPECT_EQ(sess->viewMessages.size(), size_t{3});
+            // 展示历史恢复: user + Think + Tool + Assistant(收尾文本);
+            // Think 是本次修复的核心断言, 修复前 tool_calls 分支不展开 Think,
+            // 重启后 Think 丢失
+            XX_TEST_EXPECT_EQ(sess->viewMessages.size(), size_t{4});
             XX_TEST_EXPECT_EQ(sess->viewMessages[0].id, std::string{"msg_000001"});
             XX_TEST_EXPECT_EQ(sess->viewMessages[0].text, std::string{"Hello"});
             XX_TEST_EXPECT_TRUE(
@@ -648,6 +651,11 @@ static asio::awaitable<void> testSessionPersistenceE2E() {
             XX_TEST_EXPECT_TRUE(
                 sess->viewMessages[2].role == agentxx::agent::ViewMessage::Role::Tool
             );
+            // 收尾 assistant 消息 (带内容) 同样可持久化恢复
+            XX_TEST_EXPECT_TRUE(
+                sess->viewMessages[3].role == agentxx::agent::ViewMessage::Role::Assistant
+            );
+            XX_TEST_EXPECT_EQ(sess->viewMessages[3].text, std::string{"E2E final answer"});
             // LLM 上下文恢复 (system + user + assistant(tool_calls) + tool + assistant)
             XX_TEST_EXPECT_TRUE(sess->llmMessages.is_array());
             XX_TEST_EXPECT_TRUE(sess->llmMessages.size() >= size_t{2});
@@ -656,7 +664,7 @@ static asio::awaitable<void> testSessionPersistenceE2E() {
                 agentxx::agent::ViewMessage::Role::Assistant,
                 "extra"
             ));
-            XX_TEST_EXPECT_EQ(newId, std::string{"msg_000004"});
+            XX_TEST_EXPECT_EQ(newId, std::string{"msg_000005"});
 
             // share store 恢复 (懒加载自 DB)
             auto v = agent.agentContext->middlewareHandleContext->getShareStoreItemValue(
