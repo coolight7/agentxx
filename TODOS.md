@@ -10,8 +10,7 @@
 - 调整插件代码结构，增加测试、划分文件夹
 - 迁移 agent-io 支持消息队列
 - plan tool 重命名、支持 read
-- 排查 gemini 模型时，是否需要保存加密 thinking
-- 设置开关指定末尾 thinking 展开还是单行截取末尾
+- provider 响应 empty 结束时自动警告并重试
 
 ## 提示词优化
 - 如果编译需要配置特定参数，写成脚本或者写入到AGENTS.md
