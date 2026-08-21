@@ -47,6 +47,7 @@
 #include "test_subagent_bus.h"
 #include "test_summarization.h"
 #include "test_text_selection_monitor.h"
+#include "test_training.h"
 #include "test_toolcall_args.h"
 #ifdef AGENTXX_BUILD_CLIENT
 #include "test_config_loader.h"
@@ -129,6 +130,7 @@ int main(int argn, char** argv) {
     runSync("misc_fixes", agentxx::test::testMiscFixes);
     runSync("aho_corasick", agentxx::test::testAhoCorasick);
     runSync("util_misc", agentxx::test::testUtilMisc);
+    runSync("training", agentxx::test::testTraining);
     runSync("settings_db", agentxx::test::testSettingsDb);
     runSync("toolcall_args", agentxx::test::testToolcallArgs);
     runSync("ffi_c_api", agentxx::test::testFfiCApi);

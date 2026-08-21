@@ -5,9 +5,8 @@
 #include <vector>
 
 // ======================== 训练模式 ========================
-
-/// 递归加载目录中所有 JSON 测试用例（含子目录）
-std::vector<agentxx::agent::TrainingTestCase> loadTestCasesRecursive(std::string_view dirPath);
+// 测试用例加载复用 agentxx::agent::loadTestCasesFromDirectory(dir, true)
+// 的递归实现, 不再在客户端重复维护一份目录遍历/JSON 解析代码。
 
 /// 获取项目根目录（agentxx 源码根目录）
 std::string findProjectRoot();

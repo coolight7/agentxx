@@ -1,15 +1,16 @@
 #include "agentxx-client/train/train.h"
 
+#include "agentxx/agent/base_agent.h"
 #include "agentxx/agent/code_agent.h"
-#include "agentxx/agent/training.h"
 #include "agentxx/util/exception.h"
 #include "agentxx/util/log.h"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
 #include "asio/io_context.hpp"
+#include "asio/signal_set.hpp"
 #include "fmt/format.h"
-#include "neograph/api.h"
 #include <chrono>
+#include <csignal>
 #include <filesystem>
 #include <format>
 #include <fstream>
@@ -18,37 +19,6 @@
 #include <string>
 #include <utility>
 #include <vector>
-
-std::vector<agentxx::agent::TrainingTestCase> loadTestCasesRecursive(std::string_view dirPath) {
-    std::vector<agentxx::agent::TrainingTestCase> allCases;
-    agentxx::util::catchError<bool>(
-        [&]() -> bool {
-            for (const auto& entry : std::filesystem::directory_iterator(dirPath)) {
-                if (entry.is_regular_file() && entry.path().extension() == ".json") {
-                    auto fileCases = agentxx::agent::loadTestCasesFromFile(entry.path().string());
-                    allCases.insert(
-                        allCases.end(),
-                        std::make_move_iterator(fileCases.begin()),
-                        std::make_move_iterator(fileCases.end())
-                    );
-                } else if (entry.is_directory()) {
-                    auto subCases = loadTestCasesRecursive(entry.path().string());
-                    allCases.insert(
-                        allCases.end(),
-                        std::make_move_iterator(subCases.begin()),
-                        std::make_move_iterator(subCases.end())
-                    );
-                }
-            }
-            return true;
-        },
-        [dirPath](std::string errmsg) -> bool {
-            XX_LOGE("[Training] Failed to load from directory {}:{}", dirPath, errmsg);
-            return false;
-        }
-    );
-    return allCases;
-}
 
 std::string findProjectRoot() {
     auto exeDir    = std::filesystem::current_path();
@@ -87,12 +57,14 @@ void runTrainingMode(
 ) {
     XX_OUT("======= Agentxx Training Mode =======");
 
-    auto trainAgent                   = std::make_shared<agentxx::agent::CodeAgent>(baseConfig);
-    scorerConfig->prompt.systemPrompt = agentxx::agent::EvolutionTrainingConfig{}.scoringPrompt;
-    auto scorerAgent                  = std::make_shared<agentxx::agent::CodeAgent>(scorerConfig);
-    optimizerConfig->prompt.systemPrompt
-        = agentxx::agent::EvolutionTrainingConfig{}.optimizerPrompt;
-    auto optimizerAgent = std::make_shared<agentxx::agent::CodeAgent>(optimizerConfig);
+    // 训练主代理需要完整工具链, 使用 CodeAgent;
+    // 评分器/优化器只需一次纯文本补全, 使用轻量 BaseAgent:
+    // 不注册编程工具与中间件栈, 避免评分模型误调工具导致输出为空/被污染,
+    // 也省去权限 HIL / summarization 等无谓开销。
+    // (system prompt 由 EvolutionTrainingAgent.runLLMAgent 每次调用时写入 config)
+    auto trainAgent    = std::make_shared<agentxx::agent::CodeAgent>(baseConfig);
+    auto scorerAgent   = std::make_shared<agentxx::agent::BaseAgent>(scorerConfig);
+    auto optimizerAgent = std::make_shared<agentxx::agent::BaseAgent>(optimizerConfig);
 
     std::string projectRoot = findProjectRoot();
     std::string dataDir     = fmt::format("{}/resource/train/data", projectRoot);
@@ -120,7 +92,8 @@ void runTrainingMode(
         XX_OUT("[Training] Loading test cases from: {}", dataDir);
 
         if (std::filesystem::exists(dataDir)) {
-            trainCfg.testCases = loadTestCasesRecursive(dataDir);
+            // 库内递归加载器 (含子目录), 并做用例名唯一化
+            trainCfg.testCases = agentxx::agent::loadTestCasesFromDirectory(dataDir, true);
             replacePlaceholders(trainCfg.testCases, projectRoot);
             XX_OUT(
                 "[Training] Loaded {} test cases from resource/train/data",
@@ -142,18 +115,8 @@ void runTrainingMode(
                     );
                     auto j = neograph::json::parse(content);
                     if (j.is_array()) {
-                        trainCfg.testCases.clear();
-                        for (const auto& item : j) {
-                            agentxx::agent::TrainingTestCase tc;
-                            tc.name           = item.value("name", "");
-                            tc.input          = item.value("input", "");
-                            tc.expectedOutput = item.value("expectedOutput", "");
-                            tc.equalOutput    = item.value("equalOutput", "");
-                            tc.extra          = item.value("extra", neograph::json::object());
-                            if (!tc.name.empty() && !tc.input.empty()) {
-                                trainCfg.testCases.push_back(std::move(tc));
-                            }
-                        }
+                        // 复用库内解析: 字段语义与文件加载完全一致, 含重名唯一化
+                        trainCfg.testCases = agentxx::agent::testCasesFromJson(j);
                         XX_OUT(
                             "[Training] Loaded {} test cases from training_testcases.json",
                             trainCfg.testCases.size()
@@ -181,21 +144,60 @@ void runTrainingMode(
 
     asio::io_context trainIoCtx;
 
+    // 取消令牌: Ctrl+C(SIGINT)/SIGTERM 时优雅停止训练 (保存当前进度后退出)
+    auto cancelToken = std::make_shared<neograph::graph::CancelToken>();
+    trainCfg.cancelToken = cancelToken;
+
+    asio::signal_set signals(trainIoCtx, SIGINT, SIGTERM);
+    signals.async_wait([&cancelToken, &signals](const std::error_code& ec, int sig) {
+        if (ec) {
+            return; // 被主动 cancel, 正常退出路径
+        }
+        XX_LOGW(
+            "[Training] Received signal {}, cancelling training gracefully "
+            "(progress will be saved)...",
+            sig
+        );
+        if (cancelToken) {
+            cancelToken->cancel();
+        }
+        // 注销信号监听: 之后再次 Ctrl+C 按默认行为立即终止进程
+        signals.clear();
+    });
+
     asio::co_spawn(
         trainIoCtx,
-        [trainAgent, scorerAgent, optimizerAgent, trainCfg]() -> asio::awaitable<void> {
-            XX_OUT("[Training] Initializing agents...");
-            co_await trainAgent->init();
-            co_await scorerAgent->init();
-            co_await optimizerAgent->init();
-            XX_OUT("[Training] All agents initialized.");
+        [&]() -> asio::awaitable<void> {
+            // catchErrorAsync: 初始化/训练中的普通错误记录日志后结束;
+            // 取消与中断类异常默认放行 (本项目异常处理约定)
+            co_await agentxx::util::catchErrorAsync<bool>(
+                [&]() -> asio::awaitable<bool> {
+                    XX_OUT("[Training] Initializing agents...");
+                    co_await trainAgent->init();
+                    co_await scorerAgent->init();
+                    co_await optimizerAgent->init();
+                    XX_OUT("[Training] All agents initialized.");
 
-            agentxx::agent::EvolutionTrainingAgent trainer(scorerAgent, trainAgent, optimizerAgent);
-            trainer.seedInitialPopulation(trainAgent->getContext()->agentConfig->prompt.systemPrompt
+                    agentxx::agent::EvolutionTrainingAgent trainer(
+                        scorerAgent,
+                        trainAgent,
+                        optimizerAgent
+                    );
+                    trainer.seedInitialPopulationFromAgent();
+
+                    XX_OUT("[Training] Entering evolution loop...");
+                    co_await trainer.runEvolutionLoop(trainCfg);
+                    co_return true;
+                },
+                [](std::string errmsg) -> asio::awaitable<bool> {
+                    XX_LOGE("[Training] Training stopped by error: {}", errmsg);
+                    co_return false;
+                }
             );
-
-            XX_OUT("[Training] Entering evolution loop...");
-            co_await trainer.runEvolutionLoop(trainCfg);
+            XX_OUT("[Training] Finished.");
+            // 结束信号监听, 让 io_context::run() 可以返回
+            signals.cancel();
+            co_return;
         },
         asio::detached
     );
