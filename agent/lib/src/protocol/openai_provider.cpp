@@ -1440,6 +1440,9 @@ bool OpenAIProvider::processResponsesSseLine(
                 tc.id   = std::move(id);
                 tc.name = jsonStrField(item, "name");
             } else if (itype == "reasoning") {
+                // 捕获 encrypted_content (added/done 均尝试, 按 enc 值去重):
+                // 部分网关仅在 added 预填 enc (如 opencode zen/deepseek),
+                // 官方则在 done 携带, 两处都捕获保证不漏
                 if (item.contains("encrypted_content") && item["encrypted_content"].is_string()) {
                     auto enc = item["encrypted_content"].get<std::string>();
                     if (!enc.empty()) {
@@ -1466,12 +1469,49 @@ bool OpenAIProvider::processResponsesSseLine(
                             completion.message.extra[kResponsesReasoningItemsKey].push_back(
                                 std::move(rItem)
                             );
-                            if (on_chunk) {
-                                on_chunk(neograph::ChatStreamChunk{
-                                    neograph::ChatStreamChunk::TYPE_THINKING,
-                                    ""
-                                });
+                        }
+                    }
+                }
+                // 加密思考载体信号 (空文本 TYPE_THINKING): 推迟到 done 时机发射,
+                // 且仅当该项最终没有任何可见思考文本时才发:
+                // - deepseek-v4-flash (opencode zen): added 即预填 enc, 随后流式输出
+                //   明文 reasoning_text.delta; 若在 added 立即发信号会先弹一条
+                //   "加密思考" 提示、再跟明文思考气泡 (展示噪音)。done 时 content
+                //   含可见文本 → 不发信号, 仅保留明文思考
+                // - gemini 载体 (cpa-gemini-responses-carrier): summary/content 均空,
+                //   done 时照常发信号 (其事件本就在正文之后, 行为与原先一致)
+                // - enc 判定兼容 "仅 added 带 enc" 的网关: done 项本身无 enc 时,
+                //   回退检查本次调用已捕获的 reasoning items (extra 非空即视为有载体)
+                if (type == "response.output_item.done") {
+                    bool hasVisibleText = false;
+                    if (item.contains("summary") && item["summary"].is_array()
+                        && !item["summary"].empty()) {
+                        hasVisibleText = true;
+                    }
+                    if (!hasVisibleText && item.contains("content")
+                        && item["content"].is_array()) {
+                        for (const auto& part : item["content"]) {
+                            if (jsonStrField(part, "type") == "reasoning_text"
+                                && !jsonStrField(part, "text").empty()) {
+                                hasVisibleText = true;
+                                break;
                             }
+                        }
+                    }
+                    bool hasEnc = item.contains("encrypted_content")
+                                  && item["encrypted_content"].is_string()
+                                  && !item["encrypted_content"].get<std::string>().empty();
+                    if (!hasVisibleText
+                        && (hasEnc
+                            || (completion.message.extra.contains(kResponsesReasoningItemsKey)
+                                && completion.message.extra[kResponsesReasoningItemsKey].is_array()
+                                && !completion.message.extra[kResponsesReasoningItemsKey]
+                                        .empty()))) {
+                        if (on_chunk) {
+                            on_chunk(neograph::ChatStreamChunk{
+                                neograph::ChatStreamChunk::TYPE_THINKING,
+                                ""
+                            });
                         }
                     }
                 }
