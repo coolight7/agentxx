@@ -249,6 +249,12 @@ TUI [F4] 打开会话选择弹窗 → WireListSessions (服务端阻塞 I/O 卸�
 - **TUI 模式**: 基于 FTXUI 的终端 UI，支持：
   - 消息列表 (User/Assistant/Thinking/Tool/System/Interrupt 角色)
   - Thinking/Tool 消息自动折叠/展开 (执行中展开，完成后折叠)
+  - 消息与流式末尾 Thinking 支持点击折叠/展开: 已提交消息点击切换
+    msg.collapsed; 流式输出中的末尾 Think 子项点击切换组件内覆盖态
+    (MessageListComponent::streamThinkOverride_, 三态: 未点击跟随
+    TailThinkingMode 设置 / 点击折叠 / 点击展开), 新流开始与流结束时重置,
+    命中区域由上一帧 visibleBoxes 反推 (collapsibleBoxes_ +
+    collapsibleIsStream_ 区分消息区/流式区)
   - 流式 token 实时渲染 (COW 按需拷贝避免 O(n²) 累积拷贝)
   - 权限请求弹窗 + "记住本次选择" (经 WireSetPermission 将路径规则注册到服务端权限中间件)
   - 模型选择器 (运行时切换)
