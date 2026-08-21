@@ -508,6 +508,9 @@ bool PendingInputsOverlay::handleMouse(const Mouse& mouse) {
         return false;
     }
     if (clearBox_.Contain(mouse.x, mouse.y)) {
+        if (onClear_) {
+            onClear_();
+        }
         ctx_.state->mutate([](TUIRenderState& st) {
             st.pendingInputs.clear();
         });
@@ -520,6 +523,10 @@ bool PendingInputsOverlay::handleMouse(const Mouse& mouse) {
     ctx_.state->mutate([&](TUIRenderState& st) {
         for (size_t i = 0; i < delBoxes_.size() && i < st.pendingInputs.size(); ++i) {
             if (delBoxes_[i].Contain(mouse.x, mouse.y)) {
+                auto itemId = st.pendingInputs[i].id;
+                if (onDeleteItem_) {
+                    onDeleteItem_(std::move(itemId));
+                }
                 st.pendingInputs.erase(st.pendingInputs.begin() + static_cast<std::ptrdiff_t>(i));
                 handled = true;
                 return;

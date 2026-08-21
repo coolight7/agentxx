@@ -256,6 +256,49 @@ void test_clear_resets_paste_state() {
     XX_TEST_EXPECT_EQ(comp->inputText(), std::string("b"));
 }
 
+void test_tui_state_message_queue_sync() {
+    TUISharedState sharedState;
+
+    // 模拟收到 WireMessageQueueUpdate 更新 pendingInputs
+    agentxx::agent::WireMessageQueueUpdate update;
+    update.sessionId = "test-session";
+    agentxx::agent::MessageQueueItem it1;
+    it1.id          = "q-1";
+    it1.text        = "msg 1";
+    it1.model       = "m1";
+    it1.createdAtMs = 1000;
+
+    agentxx::agent::MessageQueueItem it2;
+    it2.id          = "q-2";
+    it2.text        = "msg 2";
+    it2.model       = "";
+    it2.createdAtMs = 2000;
+
+    update.items.push_back(it1);
+    update.items.push_back(it2);
+
+    sharedState.mutate([&](TUIRenderState& st) {
+        st.pendingInputs.clear();
+        for (const auto& item : update.items) {
+            TUIPendingInput pi;
+            pi.id          = item.id;
+            pi.text        = item.text;
+            pi.model       = item.model;
+            pi.createdAtMs = item.createdAtMs;
+            st.pendingInputs.push_back(std::move(pi));
+        }
+    });
+
+    auto snap = sharedState.readSnapshot();
+    XX_TEST_EXPECT_EQ(snap->pendingInputs.size(), size_t{2});
+    if (snap->pendingInputs.size() == 2) {
+        XX_TEST_EXPECT_EQ(snap->pendingInputs[0].id, std::string("q-1"));
+        XX_TEST_EXPECT_EQ(snap->pendingInputs[0].text, std::string("msg 1"));
+        XX_TEST_EXPECT_EQ(snap->pendingInputs[1].id, std::string("q-2"));
+        XX_TEST_EXPECT_EQ(snap->pendingInputs[1].text, std::string("msg 2"));
+    }
+}
+
 TestResult testTuiInput() {
     g_tui_input_passed = 0;
     g_tui_input_failed = 0;
@@ -272,6 +315,7 @@ TestResult testTuiInput() {
     test_alt_enter_newline_mid_text();
     test_paste_timeout_recovery();
     test_clear_resets_paste_state();
+    test_tui_state_message_queue_sync();
 
     return TestResult{g_tui_input_passed, g_tui_input_failed};
 }

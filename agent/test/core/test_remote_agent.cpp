@@ -473,6 +473,77 @@ static asio::awaitable<void> test_remote_protocol_roundtrip() {
             }
         }
     }
+    {
+        // 消息队列同步: WireMessageQueueUpdate 序列化往返
+        agentxx::agent::WireMessageQueueUpdate qu;
+        qu.sessionId = "session-q";
+        agentxx::agent::MessageQueueItem it1;
+        it1.id          = "q-1";
+        it1.text        = "task 1";
+        it1.model       = "model-a";
+        it1.createdAtMs = 123456789;
+        qu.items.push_back(it1);
+        auto back = WsAgentIOTransport::deserialize(WsAgentIOTransport::serialize(WireMessage{qu}));
+        XX_TEST_EXPECT_TRUE(back.has_value());
+        if (back) {
+            auto* r = std::get_if<agentxx::agent::WireMessageQueueUpdate>(&*back);
+            XX_TEST_EXPECT_TRUE(r != nullptr);
+            if (r) {
+                XX_TEST_EXPECT_EQ(r->sessionId, qu.sessionId);
+                XX_TEST_EXPECT_EQ(r->items.size(), size_t{1});
+                if (!r->items.empty()) {
+                    XX_TEST_EXPECT_EQ(r->items[0].id, it1.id);
+                    XX_TEST_EXPECT_EQ(r->items[0].text, it1.text);
+                    XX_TEST_EXPECT_EQ(r->items[0].model, it1.model);
+                    XX_TEST_EXPECT_EQ(r->items[0].createdAtMs, it1.createdAtMs);
+                }
+            }
+        }
+    }
+    {
+        // 清空消息队列: WireClearMessageQueue
+        agentxx::agent::WireClearMessageQueue cq;
+        cq.sessionId = "session-q";
+        auto back = WsAgentIOTransport::deserialize(WsAgentIOTransport::serialize(WireMessage{cq}));
+        XX_TEST_EXPECT_TRUE(back.has_value());
+        if (back) {
+            auto* r = std::get_if<agentxx::agent::WireClearMessageQueue>(&*back);
+            XX_TEST_EXPECT_TRUE(r != nullptr);
+            if (r) {
+                XX_TEST_EXPECT_EQ(r->sessionId, cq.sessionId);
+            }
+        }
+    }
+    {
+        // 删除消息队列条目: WireRemoveQueueItem
+        agentxx::agent::WireRemoveQueueItem rq;
+        rq.sessionId = "session-q";
+        rq.itemId    = "q-2";
+        auto back = WsAgentIOTransport::deserialize(WsAgentIOTransport::serialize(WireMessage{rq}));
+        XX_TEST_EXPECT_TRUE(back.has_value());
+        if (back) {
+            auto* r = std::get_if<agentxx::agent::WireRemoveQueueItem>(&*back);
+            XX_TEST_EXPECT_TRUE(r != nullptr);
+            if (r) {
+                XX_TEST_EXPECT_EQ(r->sessionId, rq.sessionId);
+                XX_TEST_EXPECT_EQ(r->itemId, rq.itemId);
+            }
+        }
+    }
+    {
+        // 插队执行: WireInterruptAndRunNext
+        agentxx::agent::WireInterruptAndRunNext in;
+        in.sessionId = "session-q";
+        auto back = WsAgentIOTransport::deserialize(WsAgentIOTransport::serialize(WireMessage{in}));
+        XX_TEST_EXPECT_TRUE(back.has_value());
+        if (back) {
+            auto* r = std::get_if<agentxx::agent::WireInterruptAndRunNext>(&*back);
+            XX_TEST_EXPECT_TRUE(r != nullptr);
+            if (r) {
+                XX_TEST_EXPECT_EQ(r->sessionId, in.sessionId);
+            }
+        }
+    }
     co_return;
 }
 
@@ -1986,6 +2057,166 @@ static asio::awaitable<void> test_model_switch_with_next_input() {
 }
 
 // ---------------------------------------------------------------------------
+// 22. 服务端消息队列与调度: 排队、成功自动连续执行、取消暂停、插队立即执行
+// ---------------------------------------------------------------------------
+
+static asio::awaitable<void> test_session_controller_message_queue() {
+    auto ex = co_await asio::this_coro::executor;
+
+    auto       sim     = startDaSimServer();
+    const auto baseUrl = "http://127.0.0.1:" + std::to_string(sim.port);
+    g_da_sim_response_content = "echo response from queue test";
+    g_da_sim_tool_calls       = neograph::json::array();
+
+    auto cfg             = std::make_shared<agentxx::agent::AgentConfig>();
+    cfg->model.baseUrl   = baseUrl;
+    cfg->model.apiKey    = "EMPTY";
+    cfg->model.modelName = "default-model";
+
+    auto agent = std::make_shared<agentxx::agent::BaseAgent>(cfg);
+    co_await agent->init();
+
+    agentxx::agent::SessionServerAgentIO::Config scCfg;
+    scCfg.sessionId = "queue-test-session";
+
+    auto sc = std::make_shared<agentxx::agent::SessionServerAgentIO>(ex, agent, scCfg);
+
+    auto [clientT, serverT] = agentxx::agent::ChannelAgentIOTransport::makePair(ex, ex);
+    sc->setTransport(std::shared_ptr<agentxx::agent::AgentIOTransportBase>(std::move(serverT)));
+
+    std::vector<agentxx::agent::WireMessageQueueUpdate> queueUpdates;
+    std::vector<agentxx::agent::WireTurnResult>         turnResults;
+    std::mutex                                          mu;
+
+    auto clientLoop = [&]() -> asio::awaitable<void> {
+        while (clientT->alive()) {
+            auto msg = co_await clientT->recv();
+            if (!msg) {
+                break;
+            }
+            std::visit(
+                [&](auto&& m) {
+                    using T = std::decay_t<decltype(m)>;
+                    if constexpr (std::is_same_v<T, agentxx::agent::WireMessageQueueUpdate>) {
+                        std::lock_guard<std::mutex> lk(mu);
+                        queueUpdates.push_back(m);
+                    } else if constexpr (std::is_same_v<T, agentxx::agent::WireTurnResult>) {
+                        std::lock_guard<std::mutex> lk(mu);
+                        turnResults.push_back(m);
+                    }
+                },
+                *msg
+            );
+        }
+    };
+
+    asio::co_spawn(ex, clientLoop(), asio::detached);
+    asio::co_spawn(
+        ex,
+        [sc]() -> asio::awaitable<void> {
+            co_await sc->runTransportLoop();
+        },
+        asio::detached
+    );
+    asio::co_spawn(
+        ex,
+        [sc]() -> asio::awaitable<void> {
+            co_await sc->run();
+        },
+        asio::detached
+    );
+
+    // 发送两轮输入 (第一轮立即执行，第二轮进入队列)
+    clientT->send(agentxx::agent::WireMessage{agentxx::agent::WireUserInput{
+        "queue-test-session", "turn 1", ""
+    }});
+    clientT->send(agentxx::agent::WireMessage{agentxx::agent::WireUserInput{
+        "queue-test-session", "turn 2", ""
+    }});
+
+    // 等待两轮均执行完毕 (因为第一轮成功，自动执行第二轮)
+    for (int i = 0; i < 200; ++i) {
+        {
+            std::lock_guard<std::mutex> lk(mu);
+            if (turnResults.size() >= 2) {
+                break;
+            }
+        }
+        co_await testSleep(ex, std::chrono::milliseconds{50});
+    }
+
+    {
+        std::lock_guard<std::mutex> lk(mu);
+        XX_TEST_EXPECT_EQ(turnResults.size(), size_t{2});
+        if (turnResults.size() >= 2) {
+            XX_TEST_EXPECT_TRUE(!turnResults[0].hasError && !turnResults[0].interrupted);
+            XX_TEST_EXPECT_TRUE(!turnResults[1].hasError && !turnResults[1].interrupted);
+        }
+    }
+
+    // 取消后暂停自动调度：发送 turn 3 和 turn 4，发送取消
+    clientT->send(agentxx::agent::WireMessage{agentxx::agent::WireUserInput{
+        "queue-test-session", "turn 3", ""
+    }});
+    clientT->send(agentxx::agent::WireMessage{agentxx::agent::WireUserInput{
+        "queue-test-session", "turn 4", ""
+    }});
+    clientT->send(agentxx::agent::WireMessage{agentxx::agent::WireCancel{
+        "queue-test-session"
+    }});
+
+    // 等待 turn 3 结束
+    for (int i = 0; i < 200; ++i) {
+        {
+            std::lock_guard<std::mutex> lk(mu);
+            if (turnResults.size() >= 3) {
+                break;
+            }
+        }
+        co_await testSleep(ex, std::chrono::milliseconds{50});
+    }
+
+    co_await testSleep(ex, std::chrono::milliseconds{200});
+
+    // 验证 turn 3 被中断，且 turn 4 并没有自动执行 (turnResults.size() 仍为 3)
+    {
+        std::lock_guard<std::mutex> lk(mu);
+        XX_TEST_EXPECT_EQ(turnResults.size(), size_t{3});
+        if (turnResults.size() >= 3) {
+            XX_TEST_EXPECT_TRUE(turnResults[2].interrupted || turnResults[2].hasError);
+        }
+    }
+
+    // 点击 insert (WireInterruptAndRunNext) 唤醒执行 turn 4
+    clientT->send(agentxx::agent::WireMessage{agentxx::agent::WireInterruptAndRunNext{
+        "queue-test-session"
+    }});
+
+    for (int i = 0; i < 200; ++i) {
+        {
+            std::lock_guard<std::mutex> lk(mu);
+            if (turnResults.size() >= 4) {
+                break;
+            }
+        }
+        co_await testSleep(ex, std::chrono::milliseconds{50});
+    }
+
+    {
+        std::lock_guard<std::mutex> lk(mu);
+        XX_TEST_EXPECT_EQ(turnResults.size(), size_t{4});
+        if (turnResults.size() >= 4) {
+            XX_TEST_EXPECT_TRUE(!turnResults[3].hasError && !turnResults[3].interrupted);
+        }
+    }
+
+    clientT->close();
+    sc->stop();
+    sim.stop();
+    co_return;
+}
+
+// ---------------------------------------------------------------------------
 
 asio::awaitable<TestResult> run_remote_agent_tests() {
     std::cout << "  [remote] protocol roundtrip..." << std::endl;
@@ -2050,6 +2281,9 @@ asio::awaitable<TestResult> run_remote_agent_tests() {
 
     std::cout << "  [remote] model switch with next input..." << std::endl;
     co_await test_model_switch_with_next_input();
+
+    std::cout << "  [remote] session controller message queue..." << std::endl;
+    co_await test_session_controller_message_queue();
 
     co_return TestResult{g_remote_passed, g_remote_failed};
 }

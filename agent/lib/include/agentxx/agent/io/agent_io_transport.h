@@ -187,6 +187,28 @@ struct WirePluginDataUp {
     std::string data;
 };
 
+/// 服务端消息队列同步 (Server -> Client)
+struct WireMessageQueueUpdate {
+    std::string                   sessionId;
+    std::vector<MessageQueueItem> items;
+};
+
+/// 客户端请求清空消息队列 (Client -> Server)
+struct WireClearMessageQueue {
+    std::string sessionId;
+};
+
+/// 客户端请求删除单条排队消息 (Client -> Server)
+struct WireRemoveQueueItem {
+    std::string sessionId;
+    std::string itemId;
+};
+
+/// 客户端请求打断当前会话执行并立即运行消息队列首条 (Client -> Server)
+struct WireInterruptAndRunNext {
+    std::string sessionId;
+};
+
 /// 所有可能的线消息类型 (tagged variant)
 using WireMessage = std::variant<
     WireHello,
@@ -214,7 +236,11 @@ using WireMessage = std::variant<
     WireSwitchSession,
     WireSetPermission,
     WirePluginData,
-    WirePluginDataUp>;
+    WirePluginDataUp,
+    WireMessageQueueUpdate,
+    WireClearMessageQueue,
+    WireRemoveQueueItem,
+    WireInterruptAndRunNext>;
 
 // ---------------------------------------------------------------------------
 // AgentIOTransportBase: 两个 AgentIOBase 端点之间的协议传输层
