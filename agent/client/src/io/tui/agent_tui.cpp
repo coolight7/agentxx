@@ -225,11 +225,11 @@ void TUIClientAgentIO::sendPluginUserInput(std::string text) {
             );
             return; // 中断输入不触发事件接收器 (属于中断响应, 非用户消息)
         }
-        if (st.connState != ConnState::Connected || st.isStreaming) {
-            st.pendingInputs.push_back(TUIPendingInput{std::move(text), false});
-        } else {
-            sendUserInputLocked(st, std::move(text)); // 内部通知事件接收器
+        if (st.connState != ConnState::Connected) {
+            XX_LOGW("[tui] sendPluginUserInput dropped: agent-io not connected");
+            return;
         }
+        sendUserInputLocked(st, std::move(text)); // 内部通知事件接收器
     }
     postRedraw();
 }
@@ -458,15 +458,10 @@ void TUIClientAgentIO::start() {
                     [](neograph_asio_error_code) {}
                 );
             } else if (st.connState != ConnState::Connected) {
-                // agent-io 未就绪 (启动中 Connecting / 连接失败 Failed):
-                // 输入进入待发送队列 (与流式输出期间排队语义一致, 经底部队列
-                // 提示展示), 不置 isStreaming; 连接建立后由 flushPendingInput
-                // 统一发送 — 若在未连接时直接调 sendUserInputLocked, 远程模式下
-                // transport 的写队列尚未创建 (connect 完成前 writeQueue_ 为空),
-                // 消息会被静默丢弃
-                st.pendingInputs.push_back(TUIPendingInput{std::move(text), false});
-            } else if (st.isStreaming) {
-                st.pendingInputs.push_back(TUIPendingInput{std::move(text), false});
+                // agent-io 未初始化完成前不允许发送消息
+                showToast("agent-io 尚未就绪, 请稍后再试");
+                postRedraw();
+                return;
             } else {
                 sendUserInputLocked(st, std::move(text));
             }
@@ -523,6 +518,9 @@ void TUIClientAgentIO::start() {
                     text(" "),
                     text(fmt::format("  · Message Queue: {}", st.pendingInputs.size()))
                         | color(theme_.accentColor) | bold | reflect(pendingCounterBox_),
+                    text(" "),
+                    text(" [insert] ") | bgcolor(theme_.buttonBgColor)
+                        | color(theme_.buttonTextColor) | bold | reflect(pendingInsertButtonBox_),
                     filler(),
                 });
             }
@@ -644,10 +642,38 @@ void TUIClientAgentIO::start() {
                     if (messageList_ && messageList_->handleCollapsibleClick(mouse)) {
                         return true;
                     }
+                    // 待发送消息队列 insert 按钮点击 → 取消当前轮次并立即从队列弹出执行
+                    if (!ctx_.frameState->pendingInputs.empty()
+                        && pendingInsertButtonBox_.Contain(mouse.x, mouse.y)) {
+                        if (transport_) {
+                            sendToPeer(agentxx::agent::WireInterruptAndRunNext{currentThreadId()});
+                        }
+                        std::lock_guard<std::mutex> lock(sharedState_.mutex());
+                        auto&                       st = sharedState_.mutableState();
+                        if (st.isStreaming) {
+                            pushCurrentTokenLocked(st);
+                        }
+                        postRedraw();
+                        return true;
+                    }
                     // 待发送消息计数点击
                     if (!ctx_.frameState->pendingInputs.empty()
                         && pendingCounterBox_.Contain(mouse.x, mouse.y)) {
                         auto overlay = std::make_shared<PendingInputsOverlay>(ctx_);
+                        overlay->onClear([this] {
+                            if (transport_) {
+                                sendToPeer(agentxx::agent::WireClearMessageQueue{currentThreadId()}
+                                );
+                            }
+                        });
+                        overlay->onDeleteItem([this](std::string itemId) {
+                            if (transport_) {
+                                sendToPeer(agentxx::agent::WireRemoveQueueItem{
+                                    currentThreadId(),
+                                    std::move(itemId)
+                                });
+                            }
+                        });
                         overlay->onClose([this] {
                             modal_->popModal();
                         });
@@ -856,8 +882,6 @@ void TUIClientAgentIO::onServerReady() {
         st.startupProgress.clear();
     }
     postRedraw();
-    // 刷新连接前排队的用户输入 (发送首条并置 isStreaming, 后续由 TurnEnd 分发)
-    flushPendingInput();
     // 通知事件接收器: 服务端就绪 (基类默认实现)
     agentxx::agent::AgentIOBase::onServerReady();
 }
@@ -879,15 +903,6 @@ void TUIClientAgentIO::onServerProgress(std::string_view step) {
             sink.onConnStateChanged("connecting", step);
         });
     });
-}
-
-void TUIClientAgentIO::flushPendingInput() {
-    std::lock_guard<std::mutex> lock(sharedState_.mutex());
-    auto&                       st = sharedState_.mutableState();
-    // 与 TurnEnd/TurnResult 后的分发一致: 仅当未处于流式输出且队列非空时
-    // 发送首条 (sendUserInputLocked 内部置 isStreaming, 其余排队输入随后续
-    // 轮次结束依次分发)
-    dispatchNextPendingInput(st);
 }
 
 void TUIClientAgentIO::requestRetry() {
@@ -1253,6 +1268,8 @@ void TUIClientAgentIO::onPeerMessage(agentxx::agent::WireMessage msg) {
                     st.sessionListLoaded           = true;
                 }
                 postRedraw();
+            } else if constexpr (std::is_same_v<T, agentxx::agent::WireMessageQueueUpdate>) {
+                onMessageQueueUpdate(m);
             }
         },
         std::move(msg)
@@ -1267,10 +1284,10 @@ void TUIClientAgentIO::pushCurrentTokenLocked(TUIRenderState& st) {
     if (!st.hasPendingToken()) {
         return;
     }
-    auto msg         = std::make_shared<TUIMessage>();
-    msg->role        = st.currentTokenRole;
+    auto msg  = std::make_shared<TUIMessage>();
+    msg->role = st.currentTokenRole;
     if (st.currentToken && !st.currentToken->empty()) {
-        msg->text    = *st.currentToken;
+        msg->text = *st.currentToken;
     }
     if (st.currentTokenRole == TUIMessage::Role::Think) {
         msg->collapsed = true;
@@ -1293,35 +1310,18 @@ void TUIClientAgentIO::cancelCurrentRunLocked(TUIRenderState& st) {
     // 取消提示由 agent 线程确认取消后经 MessageTip Delta 插入 (原在此处
     // 即时插入 "[Cancel Request]", 迁移后由 agent 端统一插入保证历史一致)
     st.isStreaming = false;
-    dispatchNextPendingInput(st);
 }
 
 void TUIClientAgentIO::sendUserInputLocked(TUIRenderState& st, std::string text) {
-    pushCurrentTokenLocked(st);
-    // 注意: 不能 move text (后续 sendToPeer/inputChannel 仍需要使用);
-    // makeText 按值参数, 此处 lvalue 拷贝一次, 与原聚合初始化拷贝次数一致
-    st.messages.push_back(
-        std::make_shared<TUIMessage>(TUIMessage::makeText(TUIMessage::Role::User, text))
-    );
-    st.isStreaming = true;
     // 事件接收器通知用原文 (inputChannel 分支会 move text, 提前拷贝)
     const std::string notifyText = text;
-    // 消息列表吸附到底部: messageList_ 为 UI 线程独占组件, 本函数可能被
-    // client 线程 (dispatchNextPendingInput) 调用, 须投递到 UI 线程执行
-    enqueueUiAction([this]() {
-        if (messageList_) {
-            messageList_->setStickToBottom(true);
-        }
-    });
     // 待应用模型选择: 取走后随本条消息携带给 agent-io (WireUserInput.model),
     // BaseAgent 执行新一轮会话时自动切换; 清空使模型选择仅对"选择之后发送的
     // 下一条消息"生效
     std::string pendingModel = std::move(st.pendingModel);
     st.pendingModel.clear();
     if (transport_) {
-        sendToPeer(agentxx::agent::WireUserInput{
-            currentThreadId(), text, std::move(pendingModel)
-        });
+        sendToPeer(agentxx::agent::WireUserInput{currentThreadId(), text, std::move(pendingModel)});
     } else {
         // 无 transport (遗留直连模式): 输入经本地 channel 送达, 无法携带
         // 模型选择, 已取走的 pendingModel 直接丢弃 (该模式下不切换模型)
@@ -1335,13 +1335,33 @@ void TUIClientAgentIO::sendUserInputLocked(TUIRenderState& st, std::string text)
     notifyUserInputSent(currentThreadId(), notifyText);
 }
 
-void TUIClientAgentIO::dispatchNextPendingInput(TUIRenderState& st) {
-    if (st.isStreaming || st.pendingInputs.empty()) {
-        return;
+void TUIClientAgentIO::onMessageQueueUpdate(const agentxx::agent::WireMessageQueueUpdate& update) {
+    {
+        std::lock_guard<std::mutex> lock(sharedState_.mutex());
+        auto&                       st = sharedState_.mutableState();
+        if (st.pendingInputs.empty() && update.items.empty()) {
+            return;
+        }
+        std::map<std::string, bool> expandedMap;
+        for (const auto& pi : st.pendingInputs) {
+            auto key         = pi.id.empty() ? pi.text : pi.id;
+            expandedMap[key] = pi.expanded;
+        }
+        st.pendingInputs.clear();
+        for (const auto& item : update.items) {
+            TUIPendingInput pi;
+            pi.id          = item.id;
+            pi.text        = item.text;
+            pi.model       = item.model;
+            pi.createdAtMs = item.createdAtMs;
+            auto key       = pi.id.empty() ? pi.text : pi.id;
+            if (expandedMap.count(key)) {
+                pi.expanded = expandedMap[key];
+            }
+            st.pendingInputs.push_back(std::move(pi));
+        }
     }
-    std::string next = std::move(st.pendingInputs.front().text);
-    st.pendingInputs.pop_front();
-    sendUserInputLocked(st, std::move(next));
+    postRedraw();
 }
 
 // ---------------------------------------------------------------------------
@@ -1357,8 +1377,9 @@ void TUIClientAgentIO::onDelta(const agentxx::agent::Delta& delta) {
             case Type::TextToken:
             case Type::ThinkToken: {
                 if (delta.type == Type::ThinkToken && delta.text.empty()) {
-                    // 空文本 ThinkToken: 加密思考载体或思考元数据更新 (如 reasoning_tokens/duration)
-                    // 若当前正在累积明文 Think 流 (尚未收到正文 TextToken / ToolStart), 先将已累积的思考文本落盘到 messages
+                    // 空文本 ThinkToken: 加密思考载体或思考元数据更新 (如
+                    // reasoning_tokens/duration) 若当前正在累积明文 Think 流 (尚未收到正文
+                    // TextToken / ToolStart), 先将已累积的思考文本落盘到 messages
                     if (st.currentTokenRole == TUIMessage::Role::Think && st.hasPendingToken()) {
                         pushCurrentTokenLocked(st);
                     }
@@ -1368,7 +1389,8 @@ void TUIClientAgentIO::onDelta(const agentxx::agent::Delta& delta) {
                         const auto r = st.messages[i - 1]->role;
                         if (r == TUIMessage::Role::User || r == TUIMessage::Role::Tool
                             || r == TUIMessage::Role::Assistant) {
-                            break; // 遇到用户输入、工具执行或正文回答边界，不得跨越更新前序动作的 Think
+                            break; // 遇到用户输入、工具执行或正文回答边界，不得跨越更新前序动作的
+                                   // Think
                         }
                         if (r == TUIMessage::Role::Think) {
                             auto& m = sharedState_.mutableMessage(st, i - 1);
@@ -1398,11 +1420,12 @@ void TUIClientAgentIO::onDelta(const agentxx::agent::Delta& delta) {
                         st.isStreaming = true;
                         break;
                     }
-                    // 当前轮次/步骤尚无 Think 消息 (如加密思考首包): 开始思考时立即在消息列表中创建 Think 消息展示
+                    // 当前轮次/步骤尚无 Think 消息 (如加密思考首包): 开始思考时立即在消息列表中创建
+                    // Think 消息展示
                     pushCurrentTokenLocked(st);
-                    auto msg         = std::make_shared<TUIMessage>();
-                    msg->role        = TUIMessage::Role::Think;
-                    msg->collapsed   = true;
+                    auto msg       = std::make_shared<TUIMessage>();
+                    msg->role      = TUIMessage::Role::Think;
+                    msg->collapsed = true;
                     if (delta.think) {
                         msg->think = *delta.think;
                     } else {
@@ -1411,8 +1434,9 @@ void TUIClientAgentIO::onDelta(const agentxx::agent::Delta& delta) {
                             .isEncrypted     = true,
                         };
                     }
-                    msg->startTimeMs = delta.startTimeMs > 0 ? delta.startTimeMs : st.pendingTokenStartTimeMs;
-                    msg->durationMs  = delta.durationMs;
+                    msg->startTimeMs
+                        = delta.startTimeMs > 0 ? delta.startTimeMs : st.pendingTokenStartTimeMs;
+                    msg->durationMs = delta.durationMs;
                     st.messages.push_back(std::move(msg));
                     st.currentTokenRole = TUIMessage::Role::Assistant;
                     st.isStreaming      = true;
@@ -1563,15 +1587,25 @@ void TUIClientAgentIO::onDelta(const agentxx::agent::Delta& delta) {
                 st.messages.push_back(std::move(msg));
             } break;
             case Type::TurnStart: {
+                pushCurrentTokenLocked(st);
+                if (!delta.text.empty()) {
+                    auto msg = std::make_shared<TUIMessage>(
+                        TUIMessage::makeText(TUIMessage::Role::User, delta.text, delta.startTimeMs)
+                    );
+                    msg->id = delta.msgId;
+                    st.messages.push_back(std::move(msg));
+                    enqueueUiAction([this]() {
+                        if (messageList_) {
+                            messageList_->setStickToBottom(true);
+                        }
+                    });
+                }
                 st.isStreaming = true;
             } break;
             case Type::TurnEnd: {
                 st.currentNodeName.clear();
                 pushCurrentTokenLocked(st);
                 st.isStreaming = false;
-                // 轮次统计系统提示由 agent 端插入 (MessageTip Delta),
-                // UI 端不再自行构造
-                dispatchNextPendingInput(st);
             } break;
         }
     }
@@ -1593,7 +1627,6 @@ void TUIClientAgentIO::onSync(const agentxx::agent::SyncPayload& payload) {
             st->cachedModelName  = prev->cachedModelName;
             st->modelNames       = prev->modelNames;
             st->appendComponents = prev->appendComponents;
-            st->pendingInputs    = prev->pendingInputs;
             st->contextMessages  = prev->contextMessages;
             st->isStreaming      = false;
             // 连接状态不随 Sync 重置: 握手后服务端回推全量 Sync 时若被重置回
@@ -1602,6 +1635,17 @@ void TUIClientAgentIO::onSync(const agentxx::agent::SyncPayload& payload) {
             // 启动进度不随 Sync 重置: 本地模式下握手后 init 仍在进行,
             // 期间服务端回推的早期 Sync 不应清空正在展示的启动步骤
             st->startupProgress = prev->startupProgress;
+
+            // 消息队列同步 (服务端排队消息镜像)
+            st->pendingInputs.clear();
+            for (const auto& item : payload.messageQueue) {
+                TUIPendingInput pi;
+                pi.id          = item.id;
+                pi.text        = item.text;
+                pi.model       = item.model;
+                pi.createdAtMs = item.createdAtMs;
+                st->pendingInputs.push_back(std::move(pi));
+            }
 
             // 历史消息与 server viewMessages 同型 (ViewMessage), 直接拷贝;
             // 原 json→TUIMessage 拆解逻辑已下沉到 server (event_stream 展开)
@@ -1633,9 +1677,6 @@ void TUIClientAgentIO::onTurnResult(const agentxx::agent::WireTurnResult& /*resu
         std::lock_guard<std::mutex> lock(sharedState_.mutex());
         auto&                       st = sharedState_.mutableState();
         st.isStreaming                 = false;
-        // 错误提示已由 agent 线程插入会话历史并经 MessageTip Delta 送达,
-        // 此处不再自行构造
-        dispatchNextPendingInput(st);
     }
     postRedraw();
 }

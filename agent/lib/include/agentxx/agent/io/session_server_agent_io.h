@@ -138,9 +138,7 @@ private:
     };
 
     using RespChannel  = asio::experimental::concurrent_channel<void(ErrorCode, neograph::json)>;
-    using InputChannel = asio::experimental::concurrent_channel<void(ErrorCode, std::string)>;
-
-    asio::awaitable<std::optional<std::string>> waitInput();
+    using WakeChannel  = asio::experimental::concurrent_channel<void(ErrorCode, int)>;
 
     /// 取 seq 之后的 delta; nullopt 表示需全量 sync
     std::optional<std::vector<Delta>> deltasSince(uint64_t seq);
@@ -150,6 +148,13 @@ private:
 
     /// 向客户端推送当前上下文统计
     void sendContextStats();
+
+    /// 向客户端推送当前消息队列更新
+    void sendMessageQueueUpdate();
+    void pushMessageQueueItem(std::string text, std::string model);
+    void interruptAndRunNext();
+    void clearMessageQueue();
+    void removeQueueItem(std::string_view itemId);
 
     void startGraceTimer();
     void cancelGraceTimer();
@@ -176,15 +181,14 @@ private:
     // delta 环形缓冲 (仅 ex_ 线程访问: sendToPeer 写, handleHello 读)
     std::deque<Delta> deltaBuffer_;
 
-    // 输入 channel (concurrent_channel 内部线程安全)
-    std::shared_ptr<InputChannel> inputChannel_;
+    // 服务端消息队列 (仅 ex_ 线程访问)
+    std::deque<MessageQueueItem> messageQueue_;
+    uint64_t                     nextQueueItemId_ = 1;
+    bool                         queuePaused_     = false;
+    bool                         pendingInsert_   = false;
 
-    /// 客户端随下一次用户消息携带的待应用模型选择 (WireUserInput.model):
-    /// - 仅 ex_ 线程访问 (onPeerMessage 写 / run 读), 无需锁
-    /// - run() 弹出输入时取走并清空, 作为该轮 runTurnAsync 的 modelName,
-    ///   BaseAgent 执行新一轮会话时 (runTurnAsync 开头 selectModel) 自动切换;
-    ///   空 = 保持会话当前模型
-    std::string pendingModel_;
+    // 唤醒 channel (驱动循环等待新输入/事件)
+    std::shared_ptr<WakeChannel> wakeChannel_;
 
     // pending interrupt (仅 ex_ 线程访问: handleInterrupt 写, resolveInterrupt 读)
     std::map<int64_t, PendingInterrupt> pending_;

@@ -31,6 +31,12 @@ struct MsgType {
     inline static constexpr std::string_view ListSessions = "list_sessions";
     /// 客户端请求切换当前连接的会话 (重新绑定 sessionId 并回推历史)
     inline static constexpr std::string_view SwitchSession = "switch_session";
+    /// 客户端请求清空消息队列
+    inline static constexpr std::string_view ClearMessageQueue = "clear_message_queue";
+    /// 客户端请求删除单条排队消息
+    inline static constexpr std::string_view RemoveQueueItem = "remove_queue_item";
+    /// 客户端请求打断当前会话并立即执行队列首条 (insert 按钮)
+    inline static constexpr std::string_view InterruptAndRunNext = "interrupt_and_run_next";
 
     // ===== Server -> Client =====
     inline static constexpr std::string_view HelloAck         = "hello_ack";
@@ -55,6 +61,8 @@ struct MsgType {
     /// client 插件事件上行 (WirePluginDataUp: 插件名 + 事件名 + JSON 载荷;
     /// 服务端发布到事件总线 topic `client.{插件名}.{事件名}`)
     inline static constexpr std::string_view PluginDataUp = "plugin_data_up";
+    /// 服务端消息队列同步 (WireMessageQueueUpdate: 会话 ID + 排队消息列表)
+    inline static constexpr std::string_view MessageQueueUpdate = "message_queue_update";
 };
 
 /// 中断/取消原因 (供 BaseAgent 区分中断来源)
@@ -250,6 +258,27 @@ inline std::optional<Delta> deltaFromJson(const neograph::json& j) {
 // SyncPayload <-> json
 // ---------------------------------------------------------------------------
 
+inline neograph::json messageQueueItemToJson(const MessageQueueItem& item) {
+    neograph::json j = {
+        {"id",          item.id         },
+        {"text",        item.text       },
+        {"createdAtMs", item.createdAtMs},
+    };
+    if (!item.model.empty()) {
+        j["model"] = item.model;
+    }
+    return j;
+}
+
+inline MessageQueueItem messageQueueItemFromJson(const neograph::json& j) {
+    MessageQueueItem item;
+    item.id          = j.value("id", std::string{});
+    item.text        = j.value("text", std::string{});
+    item.model       = j.value("model", std::string{});
+    item.createdAtMs = j.value("createdAtMs", int64_t{0});
+    return item;
+}
+
 inline neograph::json syncToJson(const SyncPayload& p) {
     neograph::json j   = neograph::json::object();
     j["fromIndex"]     = p.fromIndex;
@@ -259,6 +288,13 @@ inline neograph::json syncToJson(const SyncPayload& p) {
         arr.push_back(vm.toJson());
     }
     j["messages"] = std::move(arr);
+    if (!p.messageQueue.empty()) {
+        neograph::json qArr = neograph::json::array();
+        for (const auto& item : p.messageQueue) {
+            qArr.push_back(messageQueueItemToJson(item));
+        }
+        j["message_queue"] = std::move(qArr);
+    }
     return j;
 }
 
@@ -273,6 +309,11 @@ inline std::optional<SyncPayload> syncFromJson(const neograph::json& j) {
     if (msgs.is_array()) {
         for (const auto& m : msgs) {
             p.messages.push_back(ViewMessage::fromJson(m));
+        }
+    }
+    if (j.contains("message_queue") && j["message_queue"].is_array()) {
+        for (const auto& qm : j["message_queue"]) {
+            p.messageQueue.push_back(messageQueueItemFromJson(qm));
         }
     }
     return p;
@@ -699,6 +740,79 @@ inline WirePluginDataUp pluginDataUpFromJson(const neograph::json& j) {
     p.event  = j.value("event", std::string{});
     p.data   = j.value("data", std::string{});
     return p;
+}
+
+// ---------------------------------------------------------------------------
+// 消息队列相关 (Client <-> Server)
+// ---------------------------------------------------------------------------
+
+inline neograph::json makeMessageQueueUpdate(
+    std::string_view                     sessionId,
+    const std::vector<MessageQueueItem>& items
+) {
+    neograph::json j = {
+        {"type",      MsgType::MessageQueueUpdate},
+        {"sessionId", sessionId                  },
+    };
+    neograph::json arr = neograph::json::array();
+    for (const auto& item : items) {
+        arr.push_back(messageQueueItemToJson(item));
+    }
+    j["items"] = std::move(arr);
+    return j;
+}
+
+inline WireMessageQueueUpdate messageQueueUpdateFromJson(const neograph::json& j) {
+    WireMessageQueueUpdate u;
+    u.sessionId = j.value("sessionId", std::string{});
+    if (j.contains("items") && j["items"].is_array()) {
+        for (const auto& item : j["items"]) {
+            u.items.push_back(messageQueueItemFromJson(item));
+        }
+    }
+    return u;
+}
+
+inline neograph::json makeClearMessageQueue(std::string_view sessionId) {
+    return neograph::json{
+        {"type",      MsgType::ClearMessageQueue},
+        {"sessionId", sessionId                 },
+    };
+}
+
+inline WireClearMessageQueue clearMessageQueueFromJson(const neograph::json& j) {
+    WireClearMessageQueue q;
+    q.sessionId = j.value("sessionId", std::string{});
+    return q;
+}
+
+inline neograph::json
+    makeRemoveQueueItem(std::string_view sessionId, std::string_view itemId) {
+    return neograph::json{
+        {"type",      MsgType::RemoveQueueItem},
+        {"sessionId", sessionId               },
+        {"itemId",    itemId                  },
+    };
+}
+
+inline WireRemoveQueueItem removeQueueItemFromJson(const neograph::json& j) {
+    WireRemoveQueueItem q;
+    q.sessionId = j.value("sessionId", std::string{});
+    q.itemId    = j.value("itemId", std::string{});
+    return q;
+}
+
+inline neograph::json makeInterruptAndRunNext(std::string_view sessionId) {
+    return neograph::json{
+        {"type",      MsgType::InterruptAndRunNext},
+        {"sessionId", sessionId                   },
+    };
+}
+
+inline WireInterruptAndRunNext interruptAndRunNextFromJson(const neograph::json& j) {
+    WireInterruptAndRunNext q;
+    q.sessionId = j.value("sessionId", std::string{});
+    return q;
 }
 
 inline neograph::json makeLog(int level, std::string message) {

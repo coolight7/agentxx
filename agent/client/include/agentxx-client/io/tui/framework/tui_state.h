@@ -36,15 +36,18 @@ using InterruptResultChannel = asio::experimental::concurrent_channel<
 ///   不属于消息内容, 由 MessageListComponent 独立维护 (InterruptUIState 表)
 using TUIMessage = agentxx::agent::ViewMessage;
 
-/// 排队等待发送的用户输入
+/// 排队等待发送的用户输入 (服务端消息队列在客户端的镜像)
 struct TUIPendingInput {
+    std::string id;
     std::string text;
-    bool        expanded = false;
+    std::string model;
+    int64_t     createdAtMs = 0;
+    bool        expanded    = false;
 };
 
 /// agent-io 连接状态 (消息列表 banner 显示 + 输入发送限制)
 /// - Connecting: 服务尚未就绪 (本地模式 init 中 / 远程模式连接握手前),
-///   用户输入进入待发送队列 (st.pendingInputs), 连接完成后统一发送
+///   禁止发送消息, banner 显示"启动中"
 /// - Connected:  服务就绪, 输入直接发送
 /// - Failed:     连接失败, banner 显示失败提示 + 可点击的"重试"按钮
 enum class ConnState : uint8_t {

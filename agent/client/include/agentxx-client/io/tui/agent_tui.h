@@ -79,7 +79,7 @@ inline std::string tailLinePreview(std::string_view s, size_t max = 60) {
     if (totalLen <= max) {
         return line;
     }
-    const size_t skip = totalLen - max;
+    const size_t skip    = totalLen - max;
     const size_t byteIdx = agentxx::util::findIndexByUtf8Length(line, skip);
     return "..." + line.substr(byteIdx);
 }
@@ -250,10 +250,6 @@ public:
     /// (agent 线程同步调用, 经 sharedState 锁 + postRedraw 安全更新)
     void onServerProgress(std::string_view step) override;
 
-    /// 连接建立后刷新待发送队列: 发送连接前排队输入的首条
-    /// (置 isStreaming 并经 transport 发送, 后续排队输入由 TurnEnd 分发)
-    void flushPendingInput();
-
     /// 等待用户点击"重试" (连接失败后由连接协程 await; TUI 退出时尽快返回,
     /// 避免失败后用户退出导致协程永久挂起阻塞 io_context)
     asio::awaitable<void> waitRetry();
@@ -301,7 +297,7 @@ private:
     void pushCurrentTokenLocked(TUIRenderState& st);
     void cancelCurrentRunLocked(TUIRenderState& st);
     void sendUserInputLocked(TUIRenderState& st, std::string text);
-    void dispatchNextPendingInput(TUIRenderState& st);
+    void onMessageQueueUpdate(const agentxx::agent::WireMessageQueueUpdate& update);
 
     /// 将 UI 线程独占的组件操作 (弹窗开关/消息列表状态等) 投递到 UI 线程执行。
     /// client 线程 (onDelta/onSync/onPeerMessage) 不得直接触碰组件树
@@ -454,6 +450,7 @@ private:
 
     /// 鼠标命中区域 (渲染时 reflect 填充, 全局事件处理时检测)
     ftxui::Box pendingCounterBox_;
+    ftxui::Box pendingInsertButtonBox_;
     ftxui::Box contextButtonBox_;
     ftxui::Box planDiagramButtonBox_; // Info 侧边栏 Plan 状态图按钮
 

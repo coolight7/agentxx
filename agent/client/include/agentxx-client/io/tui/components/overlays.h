@@ -153,6 +153,14 @@ public:
         onClose_ = std::move(fn);
     }
 
+    void onClear(std::function<void()> fn) {
+        onClear_ = std::move(fn);
+    }
+
+    void onDeleteItem(std::function<void(std::string itemId)> fn) {
+        onDeleteItem_ = std::move(fn);
+    }
+
     bool           OnEvent(ftxui::Event event) override;
     ftxui::Element OnRender() override;
 
@@ -160,8 +168,10 @@ private:
 
     bool handleMouse(const ftxui::Mouse& mouse);
 
-    TUICtx&               ctx_;
-    std::function<void()> onClose_;
+    TUICtx&                                ctx_;
+    std::function<void()>                  onClose_;
+    std::function<void()>                  onClear_;
+    std::function<void(std::string itemId)> onDeleteItem_;
 
     std::vector<ftxui::Box> itemBoxes_;
     std::vector<ftxui::Box> delBoxes_;

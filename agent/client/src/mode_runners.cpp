@@ -549,10 +549,6 @@ static asio::awaitable<void> runRemoteTuiAsync(
     // 启动接收循环
     asio::co_spawn(ex, io->runTransportLoop(), asio::detached);
 
-    // 连接建立后刷新待发送队列: 发送用户连接前排队的输入
-    // (置 isStreaming 并经 transport 发送; 后续排队输入由 TurnEnd 依次分发)
-    io->flushPendingInput();
-
     // 等待 TUI 退出
     while (io->running()) {
         asio::steady_timer timer(ex);

@@ -234,10 +234,19 @@ struct Delta {
     double tps = 0.0;
 };
 
+/// 排队等待发送的消息条目 (服务端按会话维护, 同步到客户端展示)
+struct MessageQueueItem {
+    std::string id;          ///< 条目唯一标识 (如 "q-1")
+    std::string text;        ///< 消息内容
+    std::string model;       ///< 本条消息指定的待应用模型 (空 = 默认/当前)
+    int64_t     createdAtMs = 0; ///< 创建时间戳 (毫秒)
+};
+
 struct SyncPayload {
-    uint64_t                 fromIndex = 0;
-    std::vector<ViewMessage> messages;
-    std::string              tailHash;
+    uint64_t                      fromIndex = 0;
+    std::vector<ViewMessage>      messages;
+    std::string                   tailHash;
+    std::vector<MessageQueueItem> messageQueue;
 };
 
 // ---------------------------------------------------------------------------

@@ -28,7 +28,7 @@ SessionServerAgentIO::SessionServerAgentIO(
     ex_(std::move(ex)),
     agent_(std::move(agent)),
     config_(std::move(config)),
-    inputChannel_(std::make_shared<InputChannel>(ex_, 64)) {}
+    wakeChannel_(std::make_shared<WakeChannel>(ex_, 64)) {}
 
 SessionServerAgentIO::~SessionServerAgentIO() {
     stopImpl();
@@ -68,15 +68,7 @@ void SessionServerAgentIO::onSync(const SyncPayload& /*payload*/) {
 }
 
 asio::awaitable<std::optional<std::string>> SessionServerAgentIO::getInput() {
-    co_return co_await waitInput();
-}
-
-asio::awaitable<std::optional<std::string>> SessionServerAgentIO::waitInput() {
-    co_return co_await agentxx::util::catchErrorToOptionalAsync<std::string>(
-        [&]() -> asio::awaitable<std::optional<std::string>> {
-            co_return co_await inputChannel_->async_receive(asio::use_awaitable);
-        }
-    );
+    co_return std::nullopt;
 }
 
 asio::awaitable<neograph::json> SessionServerAgentIO::handleInterrupt(
@@ -136,6 +128,78 @@ asio::awaitable<neograph::json> SessionServerAgentIO::handleInterrupt(
 }
 
 // ---------------------------------------------------------------------------
+// 消息队列管理 (ex_ 线程)
+// ---------------------------------------------------------------------------
+
+void SessionServerAgentIO::sendMessageQueueUpdate() {
+    sendToPeer(WireMessageQueueUpdate{
+        .sessionId = config_.sessionId,
+        .items     = std::vector<MessageQueueItem>(messageQueue_.begin(), messageQueue_.end()),
+    });
+}
+
+void SessionServerAgentIO::pushMessageQueueItem(std::string text, std::string model) {
+    if (text.empty()) {
+        return;
+    }
+    const auto nowMs = static_cast<int64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch()
+        ).count()
+    );
+    MessageQueueItem item;
+    item.id          = fmt::format("q-{}", nextQueueItemId_++);
+    item.text        = std::move(text);
+    item.model       = std::move(model);
+    item.createdAtMs = nowMs;
+
+    const bool willExecuteImmediately
+        = !turnActive_.load(std::memory_order_acquire) && !queuePaused_ && messageQueue_.empty();
+
+    messageQueue_.push_back(std::move(item));
+
+    if (willExecuteImmediately) {
+        // 当前完全空闲，此条消息将被驱动循环立即弹出执行，不向客户端推送中间的 1->0 队列状态，避免 UI 闪烁
+        wakeChannel_->try_send(ErrorCode{}, 1);
+    } else {
+        // 真正进入排队等待 (前有进行中轮次 / 处于暂停状态 / 前有积压消息)，同步队列给客户端
+        sendMessageQueueUpdate();
+    }
+}
+
+void SessionServerAgentIO::interruptAndRunNext() {
+    if (messageQueue_.empty()) {
+        return;
+    }
+    queuePaused_ = false;
+    if (turnActive_.load(std::memory_order_acquire)) {
+        pendingInsert_ = true;
+        onCancel();
+    } else {
+        wakeChannel_->try_send(ErrorCode{}, 1);
+    }
+}
+
+void SessionServerAgentIO::clearMessageQueue() {
+    messageQueue_.clear();
+    sendMessageQueueUpdate();
+}
+
+void SessionServerAgentIO::removeQueueItem(std::string_view itemId) {
+    auto it = std::find_if(
+        messageQueue_.begin(),
+        messageQueue_.end(),
+        [&](const MessageQueueItem& item) {
+            return item.id == itemId;
+        }
+    );
+    if (it != messageQueue_.end()) {
+        messageQueue_.erase(it);
+        sendMessageQueueUpdate();
+    }
+}
+
+// ---------------------------------------------------------------------------
 // AgentIOBase: 对端 (客户端) 发来的消息分发
 // ---------------------------------------------------------------------------
 
@@ -147,15 +211,16 @@ void SessionServerAgentIO::onPeerMessage(WireMessage msg) {
                 handleHello(m);
             } else if constexpr (std::is_same_v<T, WireUserInput>) {
                 cancelGraceTimer();
-                // 携带模型选择时记录为待应用 (run 弹出输入时取走, 作为该轮
-                // modelName 传入 runTurnAsync, 由 BaseAgent 在新一轮会话开始时
-                // selectModel 自动切换; 不即时切换 agent-io)
-                if (!m.model.empty()) {
-                    pendingModel_ = m.model;
-                }
-                inputChannel_->try_send(ErrorCode{}, m.text);
+                pushMessageQueueItem(std::move(m.text), std::move(m.model));
             } else if constexpr (std::is_same_v<T, WireCancel>) {
+                queuePaused_ = true;
                 onCancel();
+            } else if constexpr (std::is_same_v<T, WireInterruptAndRunNext>) {
+                interruptAndRunNext();
+            } else if constexpr (std::is_same_v<T, WireClearMessageQueue>) {
+                clearMessageQueue();
+            } else if constexpr (std::is_same_v<T, WireRemoveQueueItem>) {
+                removeQueueItem(m.itemId);
             } else if constexpr (std::is_same_v<T, WireSelectModel>) {
                 auto agent = agent_.lock();
                 if (agent) {
@@ -376,6 +441,10 @@ void SessionServerAgentIO::switchSession(std::string newThreadId) {
     config_.sessionId             = newThreadId;
     // delta 重放缓冲属于旧会话的 seq 空间, 新会话 seq 独立编号, 清空避免错配重放
     deltaBuffer_.clear();
+    // 消息队列重置
+    messageQueue_.clear();
+    queuePaused_   = false;
+    pendingInsert_ = false;
     // 新会话对当前连接而言等同于首次接入: 重置 firstTurn_ 使首条输入走
     // resume_if_exists=true 的恢复路径 (与会话重启恢复行为一致)
     firstTurn_ = true;
@@ -479,13 +548,26 @@ asio::awaitable<void> SessionServerAgentIO::run() {
     // 订阅插件事件 (转发 WirePluginData 供客户端展示插件状态)
     subscribePluginEvents();
     while (!stopped_.load(std::memory_order_acquire)) {
-        auto input = co_await waitInput();
-        if (!input.has_value()) {
-            break;
+        if (pendingInsert_) {
+            pendingInsert_ = false;
+            queuePaused_   = false;
         }
-        if (input->empty()) {
+
+        if (queuePaused_ || messageQueue_.empty()) {
+            turnActive_.store(false, std::memory_order_release);
+            auto [ec, val] = co_await wakeChannel_->async_receive(
+                asio::as_tuple(asio::use_awaitable)
+            );
+            if (ec || stopped_.load(std::memory_order_acquire)) {
+                break;
+            }
             continue;
         }
+
+        // 取出队首消息
+        auto currentItem = std::move(messageQueue_.front());
+        messageQueue_.pop_front();
+        sendMessageQueueUpdate();
 
         turnActive_.store(true, std::memory_order_release);
 
@@ -494,11 +576,9 @@ asio::awaitable<void> SessionServerAgentIO::run() {
             turnActive_.store(false, std::memory_order_release);
             break;
         }
-        // 取走本条输入携带的待应用模型选择 (取走后清空, 仅对轮到本输入的
-        // 该轮会话生效; 轮次进行中到达的后继输入其模型选择互不影响):
-        // 由 BaseAgent 执行新一轮会话开始时 (runTurnAsync 内 selectModel) 自动切换
-        std::string turnModel = std::move(pendingModel_);
-        pendingModel_.clear();
+
+        std::string turnModel = std::move(currentItem.model);
+
         // catchErrorAsync: 取消类异常 (CancelledException/NodeInterrupt) 与普通异常
         // 一致转为错误消息通知客户端 (onRethrow), 避免异常逃逸 co_spawn 完成处理器;
         // 其余异常同样转为错误消息
@@ -524,22 +604,24 @@ asio::awaitable<void> SessionServerAgentIO::run() {
             d.seq = sess->nextDeltaSeq();
             sendToPeer(std::move(d));
         };
+
+        BaseAgent::TurnResult turnResult;
+
         co_await agentxx::util::catchErrorAsync<bool>(
             [&]() -> asio::awaitable<bool> {
-                auto result
-                    = co_await agent->runTurnAsync(
-                        config_.sessionId,
-                        *input,
-                        firstTurn_,
-                        shared_from_this(),
-                        turnModel
-                    );
+                turnResult = co_await agent->runTurnAsync(
+                    config_.sessionId,
+                    currentItem.text,
+                    firstTurn_,
+                    shared_from_this(),
+                    turnModel
+                );
                 firstTurn_ = false;
                 sendToPeer(WireTurnResult{
                     .sessionId    = config_.sessionId,
-                    .hasError     = result.hasError,
-                    .errorMessage = result.errorMessage,
-                    .interrupted  = result.interrupted,
+                    .hasError     = turnResult.hasError,
+                    .errorMessage = turnResult.errorMessage,
+                    .interrupted  = turnResult.interrupted,
                 });
                 sendContextStats();
                 co_return true;
@@ -547,6 +629,9 @@ asio::awaitable<void> SessionServerAgentIO::run() {
             [&](std::string errmsg) -> asio::awaitable<bool> {
                 XX_LOGE("[session_ctrl] turn error: {}", errmsg);
                 sendErrorTip(errmsg);
+                turnResult.hasError     = true;
+                turnResult.errorMessage = errmsg;
+                turnResult.interrupted  = false;
                 sendToPeer(WireTurnResult{
                     .sessionId    = config_.sessionId,
                     .hasError     = true,
@@ -558,6 +643,9 @@ asio::awaitable<void> SessionServerAgentIO::run() {
             [&](std::string& errmsg) -> std::optional<bool> {
                 XX_LOGE("[session_ctrl] turn error: {}", errmsg);
                 sendErrorTip(errmsg);
+                turnResult.hasError     = true;
+                turnResult.errorMessage = errmsg;
+                turnResult.interrupted  = false;
                 sendToPeer(WireTurnResult{
                     .sessionId    = config_.sessionId,
                     .hasError     = true,
@@ -568,6 +656,12 @@ asio::awaitable<void> SessionServerAgentIO::run() {
             }
         );
 
+        // 仅当正常执行成功一轮后，才继续自动发送消息队列中的消息
+        if (!turnResult.hasError && !turnResult.interrupted) {
+            queuePaused_ = false;
+        } else {
+            queuePaused_ = true;
+        }
         turnActive_.store(false, std::memory_order_release);
     }
     running_.store(false, std::memory_order_release);
@@ -589,7 +683,7 @@ void SessionServerAgentIO::stopImpl() {
     }
     cancelGraceTimer();
     failAllPending();
-    inputChannel_->close();
+    wakeChannel_->close();
     onCancel();
     // 退订插件事件前缀 (防止端点析构后回调悬垂)
     if (pluginSubId_ != 0) {
@@ -632,6 +726,7 @@ SyncPayload SessionServerAgentIO::buildFullSync() {
         p.messages = sess->getFullViewMessagesCopy();
         p.tailHash = sess->getHashInfo().tailHex;
     }
+    p.messageQueue = std::vector<MessageQueueItem>(messageQueue_.begin(), messageQueue_.end());
     return p;
 }
 

@@ -642,11 +642,6 @@ asio::awaitable<BaseAgent::TurnResult> BaseAgent::runTurnAsync(
             });
         };
 
-    // 记录轮次开始: 重置轮级 LLM API 平均生成速度 (token/s) 统计
-    eventBridge->handleTurnStart();
-
-    eventBridge->emitDelta(Delta{.type = Delta::Type::TurnStart});
-
     selectModel(sessionId, modelName);
 
     bool resumeInterrupt = false;
@@ -674,10 +669,20 @@ asio::awaitable<BaseAgent::TurnResult> BaseAgent::runTurnAsync(
     // 历史用于 client 同步/展示, 上下文仅用于调用 LLM API
     // - 附带开始时间戳: 会话列表的 lastActiveMs 依赖此值 (持久化 meta),
     //   无时间戳时列表无法显示活动时间
-    session->appendViewMessage(
+    const auto userMsgId = session->appendViewMessage(
         ViewMessage::makeText(ViewMessage::Role::User, processedInput, startTimeMs)
     );
     session->llmMessages.push_back(std::move(userMsgJson));
+
+    // 记录轮次开始: 重置轮级 LLM API 平均生成速度 (token/s) 统计
+    eventBridge->handleTurnStart();
+
+    eventBridge->emitDelta(Delta{
+        .type        = Delta::Type::TurnStart,
+        .text        = processedInput,
+        .msgId       = userMsgId,
+        .startTimeMs = startTimeMs,
+    });
 
     auto cancelToken = std::make_shared<neograph::graph::CancelToken>();
     session->setCancelToken(cancelToken);

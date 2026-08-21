@@ -500,6 +500,14 @@ std::string WsAgentIOTransport::serialize(const WireMessage& msg) {
                 return io::makePluginData(m).dump();
             } else if constexpr (std::is_same_v<T, WirePluginDataUp>) {
                 return io::makePluginDataUp(m).dump();
+            } else if constexpr (std::is_same_v<T, WireMessageQueueUpdate>) {
+                return io::makeMessageQueueUpdate(m.sessionId, m.items).dump();
+            } else if constexpr (std::is_same_v<T, WireClearMessageQueue>) {
+                return io::makeClearMessageQueue(m.sessionId).dump();
+            } else if constexpr (std::is_same_v<T, WireRemoveQueueItem>) {
+                return io::makeRemoveQueueItem(m.sessionId, m.itemId).dump();
+            } else if constexpr (std::is_same_v<T, WireInterruptAndRunNext>) {
+                return io::makeInterruptAndRunNext(m.sessionId).dump();
             } else {
                 return "{}";
             }
@@ -659,6 +667,14 @@ std::optional<WireMessage> WsAgentIOTransport::deserialize(std::string_view json
         return WireMessage{io::pluginDataFromJson(j)};
     } else if (t == io::MsgType::PluginDataUp) {
         return WireMessage{io::pluginDataUpFromJson(j)};
+    } else if (t == io::MsgType::MessageQueueUpdate) {
+        return WireMessage{io::messageQueueUpdateFromJson(j)};
+    } else if (t == io::MsgType::ClearMessageQueue) {
+        return WireMessage{io::clearMessageQueueFromJson(j)};
+    } else if (t == io::MsgType::RemoveQueueItem) {
+        return WireMessage{io::removeQueueItemFromJson(j)};
+    } else if (t == io::MsgType::InterruptAndRunNext) {
+        return WireMessage{io::interruptAndRunNextFromJson(j)};
     }
     // Pong / Ping: 心跳内部处理, 不转发给调用方
     return std::nullopt;
