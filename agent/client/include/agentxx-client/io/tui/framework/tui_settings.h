@@ -25,6 +25,16 @@ enum class AnimationLevel : int {
     Ultra    = 4,
 };
 
+/// 末尾思考展示模式
+///
+/// 指定末尾思考 (流式接收中或末尾消息) 的展示形态:
+/// - AutoExpand: 自动展开 (流式阶段实时展开多行 Markdown 渲染思考过程)
+/// - SingleLine: 保持单行折叠截取末尾指定长度字符显示 (终端更整洁, 不刷屏)
+enum class TailThinkingMode : int {
+    AutoExpand = 0, ///< 自动展开 (默认/流式展开渲染)
+    SingleLine = 1, ///< 保持单行折叠截取末尾字符显示
+};
+
 /// 权限询问处理模式已移除: 改为由 yaml 配置文件 `permission.mode` 指定
 /// (ask/all_ask/pass/deny, 见 agentxx/agent/config.h 的 agentxx::agent::PermissionMode),
 /// 服务端 CodeAgent 按模式注册规则, 客户端仅兜底处理到达的询问;
@@ -36,6 +46,7 @@ enum class AnimationLevel : int {
 /// - 主题 (ThemeKind: Dark/Light)
 /// - 动画等级 (AnimationLevel)
 /// - 日志等级 (LogLevel: Trace/Debug/Info/Warn/Error/Out, TUI 日志侧边栏过滤)
+/// - 末尾思考展示模式 (TailThinkingMode: AutoExpand/SingleLine)
 ///
 /// 线程安全: 所有设置项均为 std::atomic, 读写无锁,
 /// 可从 UI 线程 (渲染/事件) 与后台线程并发访问。
@@ -67,6 +78,17 @@ public:
     inline static constexpr agentxx::util::LogLevel kDefaultLogLevel
         = agentxx::util::LogLevel::Info;
 
+    /// 末尾思考模式名称 (供设置弹窗展示)
+    inline static constexpr std::array<const char*, 2> kTailThinkingModeNames
+        = {"Auto Expand", "Single Line"};
+
+    /// 默认末尾思考展示模式: AutoExpand (自动展开)
+    inline static constexpr TailThinkingMode kDefaultTailThinkingMode
+        = TailThinkingMode::AutoExpand;
+
+    /// 单行折叠展示末尾思考时的默认截取字符长度
+    inline static constexpr size_t kDefaultTailThinkingPreviewLength = 60;
+
     /// 主题枚举 (与 tui.theme 库中存储的整数值对应)
     enum ThemeKind : int {
         kThemeDark  = 0, ///< Dark (默认)
@@ -78,7 +100,7 @@ public:
 
     /// 绑定全局设置数据库并加载已存设置 (启动时调用一次)
     /// - 重复调用以首次为准; db 为空时忽略
-    /// - 从库中恢复: 主题 / 动画等级 / 日志等级 (键: tui.*)
+    /// - 从库中恢复: 主题 / 动画等级 / 日志等级 / 末尾思考模式 (键: tui.*)
     inline void attachDb(std::shared_ptr<agentxx::util::SettingsDb> db) noexcept {
         if (db_ || !db) {
             return;
@@ -96,6 +118,14 @@ public:
         auto logLevel = db_->getInt64("tui.logLevel", -1);
         if (logLevel >= 0 && logLevel < static_cast<int64_t>(kLogLevelNames.size())) {
             logLevel_.store(static_cast<int>(logLevel), std::memory_order_release);
+        }
+        auto tailThink = db_->getInt64("tui.tailThinking", -1);
+        if (tailThink >= 0 && tailThink < static_cast<int64_t>(kTailThinkingModeNames.size())) {
+            tailThinkingMode_.store(static_cast<int>(tailThink), std::memory_order_release);
+        }
+        auto tailLen = db_->getInt64("tui.tailThinkingPreviewLen", -1);
+        if (tailLen > 0 && tailLen <= 500) {
+            tailThinkingPreviewLength_.store(static_cast<size_t>(tailLen), std::memory_order_release);
         }
     }
 
@@ -171,6 +201,49 @@ public:
         return logLevelName(logLevel());
     }
 
+    /// 获取末尾思考展示模式
+    TailThinkingMode tailThinkingMode() const noexcept {
+        const int v = tailThinkingMode_.load(std::memory_order_acquire);
+        if (v >= 0 && v < static_cast<int>(kTailThinkingModeNames.size())) {
+            return static_cast<TailThinkingMode>(v);
+        }
+        return kDefaultTailThinkingMode;
+    }
+
+    /// 设置末尾思考展示模式
+    /// - 变更同步持久化到全局设置数据库 (失败仅记日志, 不影响本次设置)
+    inline void setTailThinkingMode(TailThinkingMode mode) noexcept {
+        const int v = static_cast<int>(mode);
+        tailThinkingMode_.store(
+            (v >= 0 && v < static_cast<int>(kTailThinkingModeNames.size()))
+                ? v
+                : static_cast<int>(kDefaultTailThinkingMode),
+            std::memory_order_release
+        );
+        if (db_) {
+            db_->setInt64("tui.tailThinking", tailThinkingMode_.load(std::memory_order_relaxed));
+        }
+    }
+
+    /// 末尾思考展示模式名称 (当前设置值)
+    std::string_view tailThinkingModeName() const noexcept {
+        return tailThinkingModeName(tailThinkingMode());
+    }
+
+    /// 获取单行折叠展示末尾思考时的截取字符长度
+    size_t tailThinkingPreviewLength() const noexcept {
+        return tailThinkingPreviewLength_.load(std::memory_order_acquire);
+    }
+
+    /// 设置单行折叠展示末尾思考时的截取字符长度
+    inline void setTailThinkingPreviewLength(size_t len) noexcept {
+        const size_t v = (len > 0 && len <= 500) ? len : kDefaultTailThinkingPreviewLength;
+        tailThinkingPreviewLength_.store(v, std::memory_order_release);
+        if (db_) {
+            db_->setInt64("tui.tailThinkingPreviewLen", static_cast<int64_t>(v));
+        }
+    }
+
 private:
 
     TUISettings() :
@@ -194,12 +267,25 @@ private:
         return "Unknown";
     }
 
+    /// 末尾思考模式名称 (越界返回 "Unknown")
+    inline static constexpr std::string_view tailThinkingModeName(TailThinkingMode mode) noexcept {
+        const int idx = static_cast<int>(mode);
+        if (idx >= 0 && idx < static_cast<int>(kTailThinkingModeNames.size())) {
+            return kTailThinkingModeNames[static_cast<size_t>(idx)];
+        }
+        return "Unknown";
+    }
+
     /// 主题 (存储为 int 以便原子读写; 0=Dark, 1=Light)
     std::atomic<int> themeKind_{kThemeDark};
     /// 动画等级 (存储为 int 以便原子读写)
     std::atomic<int> animationLevel_;
     /// 日志等级 (存储为 int 以便原子读写; 与 agentxx::util::LogLevel 枚举值对应)
     std::atomic<int> logLevel_{static_cast<int>(kDefaultLogLevel)};
+    /// 末尾思考展示模式 (存储为 int 以便原子读写; 0=AutoExpand, 1=SingleLine)
+    std::atomic<int> tailThinkingMode_{static_cast<int>(kDefaultTailThinkingMode)};
+    /// 单行折叠展示末尾思考时的截取字符长度
+    std::atomic<size_t> tailThinkingPreviewLength_{kDefaultTailThinkingPreviewLength};
     /// 全局设置数据库 (空 = 未持久化, 设置仅存内存)
     std::shared_ptr<agentxx::util::SettingsDb> db_;
 };

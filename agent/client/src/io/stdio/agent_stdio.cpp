@@ -45,11 +45,19 @@ void StdIOClientAgentIO::onDelta(const agentxx::agent::Delta& delta) {
             std::cout << delta.text << std::flush;
             break;
         case Type::ThinkToken:
-            if (!isThinking_) {
-                std::cout << std::endl << "[Think] ";
+            if (!delta.text.empty()) {
+                if (!isThinking_) {
+                    std::cout << std::endl << "[Think] ";
+                    isThinking_ = true;
+                }
+                std::cout << delta.text << std::flush;
+            } else if (delta.think && delta.think->isEncrypted && delta.think->reasoningTokens == 0) {
+                // 加密思考首包: 开始思考提示 (元数据更新包静默处理, 避免正文后重复打印)
+                if (!isThinking_) {
+                    std::cout << std::endl << "[Think] (思考内容被加密)" << std::flush;
+                    isThinking_ = true;
+                }
             }
-            isThinking_ = true;
-            std::cout << delta.text << std::flush;
             break;
         case Type::ToolStart:
             std::cout << std::endl

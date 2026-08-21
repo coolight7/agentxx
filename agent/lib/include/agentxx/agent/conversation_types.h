@@ -80,6 +80,12 @@ struct ViewMessage {
         TipLevel tipLevel = TipLevel::Info;
     };
 
+    // ---- Role::Think 专属 ----
+    struct ThinkData {
+        int  reasoningTokens = 0; ///< 思考消耗 token 数 (若网关提供)
+        bool isEncrypted     = false; ///< 是否为加密 thinking 载体
+    };
+
     // ---- Role::Interrupt 专属 ----
     struct InterruptData {
         /// 中断请求 wire id (对应 WireInterruptRequest.id); 0 = 非中断消息
@@ -103,6 +109,7 @@ struct ViewMessage {
     std::optional<ToolData>      tool;      ///< Role::Tool 有效
     std::optional<TipData>       tip;       ///< Role::Tip 有效
     std::optional<InterruptData> interrupt; ///< Role::Interrupt 有效
+    std::optional<ThinkData>     think;     ///< Role::Think 有效
 
     /// 便捷构造: 纯文本消息 (User/Assistant/Think/System/Tip)
     /// - Tip 消息自动创建 tip 子结构 (tipLevel 默认 Info), 且默认折叠展示
@@ -211,6 +218,9 @@ struct Delta {
 
     // MessageUITip: 通用提示消息 (文本复用 text 字段)
     TipType tipType = TipType::Info; ///< 提示级别 (Info/Warning/Error)
+
+    // Think 结构体 (Role::Think 消息专属, 如加密思考/token统计)
+    std::optional<ViewMessage::ThinkData> think;
 
     uint64_t    historyCount = 0;
     std::string tailHash;
@@ -372,6 +382,18 @@ inline neograph::json ViewMessage::toJson() const {
             {"tip_level", std::string(viewMessageTipLevelToString(tip->tipLevel))},
         };
     }
+    if (think) {
+        neograph::json th = neograph::json::object();
+        if (think->reasoningTokens > 0) {
+            th["reasoning_tokens"] = think->reasoningTokens;
+        }
+        if (think->isEncrypted) {
+            th["is_encrypted"] = true;
+        }
+        if (!th.empty()) {
+            j["think"] = std::move(th);
+        }
+    }
     if (interrupt) {
         neograph::json it  = neograph::json::object();
         it["interrupt_id"] = interrupt->interruptId;
@@ -468,10 +490,18 @@ inline ViewMessage ViewMessage::fromJson(const neograph::json& j) {
             m.interrupt = std::move(it);
             break;
         }
+        case ViewMessage::Role::Think: {
+            if (j.contains("think") && j["think"].is_object()) {
+                ViewMessage::ThinkData th;
+                th.reasoningTokens = j["think"].value("reasoning_tokens", 0);
+                th.isEncrypted     = j["think"].value("is_encrypted", false);
+                m.think            = std::move(th);
+            }
+            break;
+        }
         case ViewMessage::Role::User:
         case ViewMessage::Role::System:
         case ViewMessage::Role::Assistant:
-        case ViewMessage::Role::Think:
             break;
     }
     return m;

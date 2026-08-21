@@ -297,6 +297,21 @@ Element SettingsOverlay::OnRender() {
     }
     items.push_back(logEntry | reflect(logLevelBox_));
 
+    // 末尾思考展示模式 (点击/Enter 循环切换: Auto Expand <-> Single Line)
+    items.push_back(text(" "));
+    items.push_back(text(" Thinking ") | color(theme.hintColor));
+    auto thinkEntry = text(fmt::format(
+        " Tail Thinking: {} ",
+        TUISettings::instance().tailThinkingModeName()
+    ));
+    if (selectedIndex_ == 3) {
+        thinkEntry = thinkEntry | bgcolor(theme.buttonActiveBgColor)
+                     | color(theme.buttonActiveTextColor) | bold | focus;
+    } else {
+        thinkEntry = thinkEntry | bgcolor(theme.buttonBgColor) | color(theme.buttonTextColor);
+    }
+    items.push_back(thinkEntry | reflect(tailThinkingBox_));
+
     return vbox({
                text(" Settings ") | bold | inverted,
                separator(),
@@ -336,6 +351,10 @@ bool SettingsOverlay::OnEvent(Event event) {
             // 日志等级循环切换; 切换后保持弹窗打开, 便于继续调整
             cycleLogLevel();
             ctx_.postRedraw();
+        } else if (selectedIndex_ == 3) {
+            // 末尾思考模式循环切换; 切换后保持弹窗打开, 便于继续调整
+            cycleTailThinkingMode();
+            ctx_.postRedraw();
         }
         return true;
     }
@@ -370,6 +389,10 @@ bool SettingsOverlay::handleMouse(const Mouse& mouse) {
         cycleLogLevel();
         return true;
     }
+    if (tailThinkingBox_.Contain(mouse.x, mouse.y)) {
+        cycleTailThinkingMode();
+        return true;
+    }
     return false;
 }
 
@@ -398,6 +421,13 @@ void SettingsOverlay::cycleLogLevel() {
     if (onLogLevelChange_) {
         onLogLevelChange_();
     }
+}
+
+void SettingsOverlay::cycleTailThinkingMode() {
+    auto&     settings = TUISettings::instance();
+    const int next     = (static_cast<int>(settings.tailThinkingMode()) + 1)
+                     % static_cast<int>(TUISettings::kTailThinkingModeNames.size());
+    settings.setTailThinkingMode(static_cast<TailThinkingMode>(next));
 }
 
 // ---------------------------------------------------------------------------

@@ -251,6 +251,7 @@ private:
 
     void           appendEditToolBody(const TUIMessage& msg, ftxui::Elements& lines);
     ftxui::Element renderEditToolDiff(std::string_view oldStr, std::string_view newStr);
+    void           appendPlanToolBody(const TUIMessage& msg, ftxui::Elements& lines, int maxWidth);
 
     TUICtx&                         ctx_;
     std::shared_ptr<LazyScrollable> scrollable_;
