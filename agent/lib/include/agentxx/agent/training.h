@@ -3,13 +3,9 @@
 #include "agentxx/agent/base_agent.h"
 #include "agentxx/agent/config.h"
 #include "agentxx/agent/config_static.h"
+#include "neograph/graph/cancel.h"
 #include "neograph/json.h"
-#include "neograph/llm/openai_provider.h"
-#include "neograph/types.h"
-#include <agentxx/util/exception.h>
-#include <agentxx/util/log.h>
-#include <filesystem>
-#include <fstream>
+#include <atomic>
 #include <functional>
 #include <map>
 #include <memory>
@@ -31,122 +27,38 @@ struct TrainingTestCase {
     neograph::json extra;
 };
 
-/// 从 JSON 文件中加载测试用例
-inline std::vector<TrainingTestCase> loadTestCasesFromFile(std::string_view filePath) {
-    std::vector<TrainingTestCase> cases;
-    agentxx::util::catchError<bool>(
-        [&]() -> bool {
-            std::ifstream ifs(std::string{filePath});
-            if (!ifs.is_open()) {
-                XX_LOGE("[Training] Failed to open test case file: {}", filePath);
-                return true;
-            }
-            std::string content(
-                (std::istreambuf_iterator<char>(ifs)),
-                std::istreambuf_iterator<char>()
-            );
-            ifs.close();
+/// 从 JSON 数组解析测试用例
+/// - 空名称自动生成 `case_N`；重名自动追加 `#N` 后缀，
+///   保证 perTestCaseScores 的键唯一不互相覆盖
+std::vector<TrainingTestCase> testCasesFromJson(const neograph::json& j);
 
-            auto j = neograph::json::parse(content);
-            if (!j.is_array()) {
-                XX_LOGE("[Training] Test case file is not a JSON array: {}", filePath);
-                return true;
-            }
-            for (const auto& item : j) {
-                TrainingTestCase tc;
-                tc.name           = item.value("name", "");
-                tc.input          = item.value("input", "");
-                tc.expectedOutput = item.value("expectedOutput", "");
-                tc.equalOutput    = item.value("equalOutput", "");
-                tc.extra          = item.value("extra", neograph::json::object());
-                cases.push_back(std::move(tc));
-            }
-            XX_LOGD("[Training] Loaded {} test cases from {}", cases.size(), filePath);
-            return true;
-        },
-        [filePath](std::string errmsg) -> bool {
-            XX_LOGE("[Training] Failed to parse test case file {}: {}", filePath, errmsg);
-            return false;
-        }
-    );
-    return cases;
-}
+/// 从 JSON 文件中加载测试用例 (实现见 training.cpp)
+std::vector<TrainingTestCase> loadTestCasesFromFile(std::string_view filePath);
 
-/// 从目录中加载所有 JSON 测试用例文件
-inline std::vector<TrainingTestCase> loadTestCasesFromDirectory(std::string_view dirPath) {
-    std::vector<TrainingTestCase> allCases;
-    agentxx::util::catchError<bool>(
-        [&]() -> bool {
-            for (const auto& entry : std::filesystem::directory_iterator(dirPath)) {
-                if (entry.is_regular_file() && entry.path().extension() == ".json") {
-                    auto fileCases = loadTestCasesFromFile(entry.path().string());
-                    allCases.insert(
-                        allCases.end(),
-                        std::make_move_iterator(fileCases.begin()),
-                        std::make_move_iterator(fileCases.end())
-                    );
-                }
-            }
-            XX_LOGD(
-                "[Training] Loaded {} total test cases from directory {}",
-                allCases.size(),
-                dirPath
-            );
-            return true;
-        },
-        [dirPath](std::string errmsg) -> bool {
-            XX_LOGE("[Training] Failed to load test cases from directory {}: {}", dirPath, errmsg);
-            return false;
-        }
-    );
-    return allCases;
-}
+/// 从目录中加载所有 JSON 测试用例文件 (recursive=true 时递归子目录)
+std::vector<TrainingTestCase>
+    loadTestCasesFromDirectory(std::string_view dirPath, bool recursive = false);
 
-/// 剥离 LLM 响应中可能存在的 Markdown 代码块标记
-inline std::string stripMarkdownCodeBlock(std::string_view content) {
-    std::string result{content};
-    auto        start = result.find_first_not_of(" \t\n\r");
-    auto        end   = result.find_last_not_of(" \t\n\r");
-    if (start == std::string::npos) {
-        return result;
-    }
-    result = result.substr(start, end - start + 1);
-
-    if (result.size() >= 3 && result.substr(0, 3) == "```") {
-        auto newlinePos = result.find('\n');
-        if (newlinePos != std::string::npos) {
-            result = result.substr(newlinePos + 1);
-        }
-        if (result.size() >= 3 && result.substr(result.size() - 3) == "```") {
-            result = result.substr(0, result.size() - 3);
-        }
-        start = result.find_last_not_of(" \t\n\r");
-        if (start != std::string::npos) {
-            result = result.substr(0, start + 1);
-        }
-    }
-    return result;
-}
+/// 剥离 LLM 响应中可能存在的 Markdown 代码块标记 (实现见 training.cpp)
+std::string stripMarkdownCodeBlock(std::string_view content);
 
 /// 从 LLM 响应中解析 JSON：先剥离 markdown 代码块，失败则尝试提取首个 {...}
-/// 子串
-inline neograph::json parseJsonFromResponse(std::string_view content) {
-    auto stripped = stripMarkdownCodeBlock(content);
-    return agentxx::util::catchError<neograph::json>(
-        [&stripped]() -> neograph::json {
-            return neograph::json::parse(stripped);
-        },
-        [&stripped](std::string errmsg) -> neograph::json {
-            auto first = stripped.find('{');
-            auto last  = stripped.rfind('}');
-            if (first != std::string::npos && last != std::string::npos && last > first) {
-                return neograph::json::parse(stripped.substr(first, last - first + 1));
-            }
-            // 两种解析均失败: 以原始错误信息抛出, 由调用方统一处理
-            throw std::runtime_error(std::move(errmsg));
-        }
-    );
-}
+/// 子串 (实现见 training.cpp)
+neograph::json parseJsonFromResponse(std::string_view content);
+
+/// 规范化优化器/变异器输出的 prompt patch：
+/// - 剔除空串字段：optimizerPrompt/mutationPrompt 均约定 ""=保持不变，
+///   而 AgentPrompt::mergeFromJson 会用 JSON 中存在的字符串字段（含空串）
+///   覆盖现值，必须先经此过滤，否则"想保留字段"会被误清空
+/// - 剔除非 prompt 字段（analysis/strategy 等）与 toolPrompt 中的空 depict/args
+neograph::json normalizePromptPatch(const neograph::json& parsed);
+
+/// 对字符串进行 UTF-8 安全的字符级随机变异：
+/// 以 mutationRate 概率对每个码点执行 插入(ASCII)/替换(ASCII)/删除，
+/// 中文等多字节字符整体参与变异，不会被拆成非法字节序列。
+/// 注意: 字符级变异会破坏 prompt 语义，仅作为 LLM 变异不可用时的降级手段
+std::string
+    mutateStringUtf8(std::string_view input, double mutationRate, std::mt19937& rng);
 
 /// 评分结果
 struct TrainingScore {
@@ -168,12 +80,17 @@ struct OptimizedPrompts {
 /// Prompt 变体：存储完整 AgentPrompt 及其评分
 /// 训练目标是 AgentPrompt 类内定义的全部提示词（含 toolPrompt）
 struct PromptVariant {
-    std::string                   id;
-    AgentPrompt                   prompt;
-    double                        cumulativeScore = 0.0;
-    int                           testCount       = 0;
-    int                           generation      = 0;
-    std::string                   parentId;
+    std::string id;
+    AgentPrompt prompt;
+    double      cumulativeScore = 0.0; // 最近一轮评估的原始总分（覆盖语义，非跨轮累计）
+    int         testCount       = 0;   // 最近一轮的用例数
+    /// 跨轮 EMA 平滑分（精英复评时更新；<0 表示未启用）。
+    /// LLM-as-judge 单次评分噪声大, 排序/收敛判定优先使用平滑分以降噪
+    double      smoothedScore   = -1.0;
+    /// 评估轮数（含精英复评），用于判断平滑分是否已初始化
+    int         evalRounds      = 0;
+    int         generation      = 0;
+    std::string parentId;
     std::map<std::string, double> perTestCaseScores;
     neograph::json                extra;
 
@@ -196,6 +113,16 @@ using TrainingIterationCallback
 // ======================== 进化训练配置 ========================
 
 struct EvolutionTrainingConfig {
+    /// 默认评分器 system prompt（大段文本实现于 training.cpp，
+    /// 避免内联进所有包含本头的编译单元）
+    static std::string defaultScoringPrompt();
+
+    /// 默认优化器 system prompt
+    static std::string defaultOptimizerPrompt();
+
+    /// 默认变异器 system prompt
+    static std::string defaultMutationPrompt();
+
     /// 测试用例列表
     std::vector<TrainingTestCase> testCases;
 
@@ -226,41 +153,24 @@ struct EvolutionTrainingConfig {
     int    earlyTerminationCheckAfter = 2;
     double earlyTerminationScore      = 0.2;
 
+    /// 每代对排序后前 N 个精英复评一次并做 EMA 平滑，降低 LLM 评分噪声
+    /// 对排序与收敛判定的干扰；0 表示关闭精英复评
+    int eliteReevaluatePerGen = 2;
+
+    /// 评估前随机打乱用例顺序：早终检查基于前 k 例均分，
+    /// 固定顺序会让排在后面的用例系统性影响早终判断（排序偏置）
+    bool shuffleTestCases = true;
+
+    /// 取消令牌：在代/用例边界轮询，取消后保存当前 population 并优雅退出。
+    /// 为空则不支持取消。注意: 训练循环严格串行执行（变体写入共享 config），
+    /// 不要在多个线程同时运行同一 trainer 的循环
+    std::shared_ptr<neograph::graph::CancelToken> cancelToken;
+
     /// 保存文件时保留的历史备份数（0 表示不备份）
     int saveFileBackupCount = 3;
 
     /// 评分 subagent 的 system prompt
-    std::string scoringPrompt = R"(
-You are an expert evaluator for an AI agent. Score the agent's response against the test case criteria.
-
-## Scoring Rubric (0.0 to 1.0)
-- 1.0: Excellent — fully satisfies all requirements, no issues
-- 0.8-0.9: Good — meets requirements with minor issues
-- 0.6-0.7: Acceptable — mostly correct, some gaps
-- 0.4-0.5: Weak — partially correct, significant issues
-- 0.2-0.3: Poor — mostly incorrect or missing
-- 0.0-0.1: Fail — incorrect, irrelevant, or no response
-
-## Evaluation Dimensions
-1. Correctness: Is the answer factually/technically correct?
-2. Completeness: Does it address all parts of the request?
-3. Clarity: Is the response clear and well-structured?
-4. Format: Does it match any requested format (exact output, language, etc.)?
-
-## Output
-Output ONLY a JSON object (no markdown fences, no prose outside JSON):
-{
-  "score": <number 0.0-1.0>,
-  "feedback": "<concise: what was good, what was missing, how to improve>",
-  "passed": <true if score >= threshold given below, else false>,
-  "dimensions": {
-    "correctness": <0.0-1.0>,
-    "completeness": <0.0-1.0>,
-    "clarity": <0.0-1.0>,
-    "format": <0.0-1.0>
-  }
-}
-)";
+    std::string scoringPrompt = defaultScoringPrompt();
 
     /// 评分模型名称（为空则使用主 agent 的模型）
     std::string scoringModelName;
@@ -272,47 +182,7 @@ Output ONLY a JSON object (no markdown fences, no prose outside JSON):
     std::string scoringModelBaseUrl;
 
     /// prompt 优化器（调整 prompt）的 system prompt
-    std::string optimizerPrompt = R"(
-You are a prompt engineering expert. Improve the prompts for an AI agent based on observed performance.
-
-## Inputs
-You will receive:
-1. The current prompts (system, planning, skill, and tool prompts) used by the agent
-2. The test case and expected behavior
-3. The agent's actual output
-4. The score and feedback from evaluation
-
-## Your Task
-Write IMPROVED prompts that will help the agent perform better on similar tasks.
-
-## Prompt Engineering Principles
-- Be specific and direct about expected behavior
-- Use structured sections (##) for clarity
-- Prefer positive guidance (what to do) over prohibitions (what not to do)
-- Add concrete examples where helpful
-- Keep prompts concise — avoid redundancy
-- Preserve working parts of the prompt; focus changes on weak areas
-
-## Output
-Output ONLY a JSON object (no markdown fences):
-{
-  "systemPrompt": "<improved main system prompt, or empty to keep current>",
-  "systemPlanningPrompt": "<improved planning prompt, or empty to keep current>",
-  "systemSkillPrompt": "<improved skill prompt, or empty to keep current>",
-  "toolPrompt": {
-    "<tool_name>": {
-      "depict": "<improved tool description, or empty to keep>",
-      "args": {
-        "<arg_name>": "<improved arg description, or empty to keep>"
-      }
-    }
-  },
-  "analysis": "<what was wrong and how you fixed it>"
-}
-
-Leave any field empty ("") to keep it unchanged. Only modify prompts that need improvement.
-Include the "toolPrompt" object only if you want to modify tool prompts.
-)";
+    std::string optimizerPrompt = defaultOptimizerPrompt();
 
     /// 优化器模型名称
     std::string optimizerModelName;
@@ -324,43 +194,7 @@ Include the "toolPrompt" object only if you want to modify tool prompts.
     std::string optimizerModelBaseUrl;
 
     /// LLM 变异 prompt：用于生成多样化的 prompt 变体（探索而非改进）
-    std::string mutationPrompt = R"(
-You are a prompt variation generator. Create a DIVERSE variation of the given AI agent prompts that explores different phrasings while preserving the core intent.
-
-## Goal
-Generate a meaningfully different version to explore the prompt space. The variation should:
-- Keep the core instructions and intent
-- Vary wording, structure, emphasis, or ordering
-- Potentially add helpful guidance or examples
-- NOT just paraphrase — make substantive structural changes
-
-## Variation Strategies (use one or more)
-- Reorganize sections for better logical flow
-- Add concrete examples or analogies
-- Change tone (formal / concise / explicit)
-- Emphasize different aspects of the task
-- Simplify verbose parts or expand terse parts
-
-## Output
-Output ONLY a JSON object (no markdown fences):
-{
-  "systemPrompt": "<varied main system prompt, or empty to keep current>",
-  "systemPlanningPrompt": "<varied planning prompt, or empty to keep current>",
-  "systemSkillPrompt": "<varied skill prompt, or empty to keep current>",
-  "toolPrompt": {
-    "<tool_name>": {
-      "depict": "<varied tool description, or empty to keep>",
-      "args": {
-        "<arg_name>": "<varied arg description, or empty to keep>"
-      }
-    }
-  },
-  "strategy": "<which variation strategy you used>"
-}
-
-Leave any field empty ("") to keep it unchanged.
-Include the "toolPrompt" object only if you want to vary tool prompts.
-)";
+    std::string mutationPrompt = defaultMutationPrompt();
 
     /// 收敛阈值（评分达到此值视为通过）
     double convergenceThreshold = 0.8;
@@ -393,6 +227,8 @@ protected:
     std::vector<PromptVariant> population;
     std::mt19937               rng;
     int                        generationCounter = 0;
+    /// id 序号: 同代内快速生成的变体 id 不依赖时间戳精度, 彻底避免碰撞
+    std::atomic<uint64_t>      idSeq{0};
 
     // ---- 通用 LLM 调用 ----
 
@@ -419,6 +255,7 @@ protected:
     /// 轮转备份保存文件：file -> file.1 -> file.2 -> ... -> file.N
     void rotateSaveFile(std::string_view path, int keepCount);
 
+    /// 原子保存: 先写 {filePath}.tmp 再替换主文件, 避免写入中途崩溃损坏数据
     void savePopulationToFile(std::string_view filePath, int backupCount = 0);
 
     bool loadPopulationFromFile(std::string_view filePath);
@@ -453,7 +290,10 @@ protected:
     /// 注意: 字符级变异会破坏 prompt 语义，仅作为 LLM 变异不可用时的降级手段
     std::string mutateString(std::string_view input, double mutationRate);
 
-    PromptVariant createChildVariantCharMut(const PromptVariant& parent, double mutationRate);
+    PromptVariant createChildVariantCharMut(
+        const PromptVariant& parent,
+        double               mutationRate
+    );
 
     /// 使用 LLM 对 prompt 进行语义级变异，生成多样化的探索变体
     asio::awaitable<PromptVariant>
@@ -468,12 +308,30 @@ protected:
         TrainingScore           worstCaseScore;
     };
 
-    asio::awaitable<EvaluationResult>
-        evaluateVariant(PromptVariant& variant, const EvolutionTrainingConfig& cfg);
+    /// 评估一个变体: 逐用例运行 trainAgent 并评分
+    /// - isEliteReevaluation=false: 首轮评估, 初始化平滑分
+    /// - isEliteReevaluation=true: 精英复评, 与历史平滑分做 EMA 合并降噪
+    asio::awaitable<EvaluationResult> evaluateVariant(
+        PromptVariant&                 variant,
+        const EvolutionTrainingConfig& cfg,
+        bool                           isEliteReevaluation = false
+    );
 
-    // ---- 去重 ----
+    // ---- 去重 / 会话清理 / 取消 ----
 
     void deduplicatePopulation();
+
+    /// 评估候选预去重: 相对现有 population 与批内已接受项按 promptHash 过滤，
+    /// 完全相同的候选直接丢弃，避免浪费评估算力
+    [[nodiscard]] std::vector<PromptVariant>
+        filterDuplicateCandidates(std::vector<PromptVariant>&& candidates) const;
+
+    /// 清理一次评估产生的 trainAgent 会话（内存 SessionStore + 中间件句柄缓存），
+    /// 防止长期训练中会话与 SQLite 数据无限累积
+    void removeTrainSession(std::string_view sessionId) const;
+
+    /// 取消轮询: cancelToken 非空且已取消时返回 true
+    static bool cancelRequested(const EvolutionTrainingConfig& cfg);
 
 public:
 
