@@ -9,7 +9,9 @@
 #include <algorithm>
 #include <cassert>
 #include <charconv>
+#include <cmath>
 #include <iostream>
+#include <limits>
 #include <map>
 #include <set>
 #include <sstream>
@@ -66,6 +68,25 @@ std::string numberToJsonString(const neograph::json& v) {
         return std::to_string(v.get<long long>());
     }
     return fmt::format("{}", v.get<double>());
+}
+
+/// 尝试把 double 无损转换为 long long:
+/// 仅当值为整数值 (如 3.0) 且在 int64 表示范围内时才成功; NaN/Inf/3.5 等返回 false
+bool tryDoubleToInt64(double v, long long& out) {
+    const double t = std::trunc(v);
+    if (t != v) {
+        // 非整数值; NaN 也在此被拒绝 (NaN != NaN 恒为真)
+        return false;
+    }
+    // 边界用可被 double 精确表示的 ±2^63 比较, 避免越界 static_cast 的未定义行为
+    // (-2^63 为闭区间下界, +2^63 为开区间上界)
+    constexpr double kInt64Min   = -9223372036854775808.0;
+    constexpr double kInt64MaxP1 = 9223372036854775808.0;
+    if (!(v >= kInt64Min && v < kInt64MaxP1)) {
+        return false;
+    }
+    out = static_cast<long long>(v);
+    return true;
 }
 
 /// schema 声明的类型集合
@@ -133,6 +154,9 @@ bool isStringArrayItems(const neograph::json& schema) {
 /// - string -> number/integer: 参数声明为数值而传入字符串时, 若字符串可完整解析为数值则转换
 ///   (integer 仅接受整数写法; number 支持小数/指数; 前导 '+', 首尾空白会被容忍)
 /// - number/integer -> string: 参数声明为字符串而传入数值时, 转为十进制字符串
+/// - number(double) <-> integer: 参数声明的数值类型与传入数值类型不同时互相转换
+///   (integer -> number 转为 double; number -> integer 仅当浮点值恰为整数值且在
+///   int64 表示范围内才无损转换, 如 3.0 转 3, 3.5 保持原样)
 /// - bool -> string / string("true"/"false") -> boolean: 布尔与字符串互相转换
 /// - [单字符串数组] -> string: 参数声明为字符串而传入单元素字符串数组时, 解包为字符串
 /// - 仅当目标类型不包含 arg 当前类型时转换; 无法解析或类型不明确时保持原样
@@ -151,7 +175,6 @@ bool ToolcallWrapNode::autoFixArgsType(const neograph::ChatTool& def, neograph::
     }
 
     bool changed = false;
-    // TODO: 支持转换 number 和 integer
     for (const auto& [name, schema] : props.items()) {
         // 跳过未传值的参数
         if (!args.contains(name)) {
@@ -208,6 +231,26 @@ bool ToolcallWrapNode::autoFixArgsType(const neograph::ChatTool& def, neograph::
                 args[name] = numberToJsonString(arg);
                 fixInfo    = "number -> string";
                 changed    = true;
+            } else if (arg.is_number_float()) {
+                // number(double) -> integer: 目标声明 integer 时, 仅当浮点值恰为
+                // 整数值且在 int64 表示范围内才无损转换 (如 LLM 传 3.0 而工具要
+                // integer); 3.5/越界值等保持原样
+                if (types.isInteger && !types.isString) {
+                    long long v = 0;
+                    if (tryDoubleToInt64(arg.get<double>(), v)) {
+                        args[name] = v;
+                        fixInfo    = "number -> integer";
+                        changed    = true;
+                    }
+                }
+            } else {
+                // integer -> number(double): 工具声明 number 即期望 double 类型
+                // (联合类型含 string 或已声明 integer 时 arg 已合法, 不转换)
+                if (types.isNumber && !types.isInteger && !types.isString) {
+                    args[name] = arg.get<double>();
+                    fixInfo    = "integer -> number";
+                    changed    = true;
+                }
             }
         } else if (arg.is_bool()) {
             // bool -> string (目标不含 boolean 时)
