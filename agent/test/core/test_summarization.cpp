@@ -22,7 +22,7 @@
 #include "agentxx/agent/model_registry.h"
 #include "agentxx/middlewares/middleware.h"
 #include "agentxx/middlewares/summarization.h"
-#include "agentxx/tools/sub_agent.h"
+#include "agentxx/tools/subagent.h"
 #include "fmt/format.h"
 #include "neograph/graph/node.h"
 #include "neograph/graph/run_context.h"

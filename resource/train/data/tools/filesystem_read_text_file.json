@@ -84,9 +84,9 @@
         "extra": {}
     },
     {
-        "name": "filesystem_read_text_file - 读取sub_agent.h",
-        "input": "读取文件 {agentxx_root}/agent/lib/include/agentxx/tools/sub_agent.h 的完整内容",
-        "expectedOutput": "返回 sub_agent.h 的完整文本内容",
+        "name": "filesystem_read_text_file - 读取subagent.h",
+        "input": "读取文件 {agentxx_root}/agent/lib/include/agentxx/tools/subagent.h 的完整内容",
+        "expectedOutput": "返回 subagent.h 的完整文本内容",
         "equalOutput": "",
         "extra": {}
     },

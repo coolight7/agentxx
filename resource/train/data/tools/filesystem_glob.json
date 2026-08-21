@@ -135,7 +135,7 @@
     {
         "name": "filesystem_glob - 搜索以特定字符开头的文件",
         "input": "请使用 glob 模式搜索 {agentxx_root}/agent/lib/include/agentxx/tools 目录下所有以 s 开头的文件",
-        "expectedOutput": "返回所有匹配 s* 模式的文件路径列表，应包含 string.h、share_store.h、sub_agent.h 等",
+        "expectedOutput": "返回所有匹配 s* 模式的文件路径列表，应包含 string.h、share_store.h、subagent.h 等",
         "equalOutput": "",
         "extra": {}
     },
@@ -618,7 +618,7 @@
     {
         "name": "filesystem_glob - 搜索所有包含下划线的文件",
         "input": "请使用 glob 模式搜索 {agentxx_root}/agent/lib/include/agentxx/tools 目录下所有包含下划线的头文件",
-        "expectedOutput": "返回所有匹配 *_*.h 模式的文件路径列表，应包含 codegraph_tool.h、sub_agent.h、execute_command.h 等",
+        "expectedOutput": "返回所有匹配 *_*.h 模式的文件路径列表，应包含 codegraph_tool.h、subagent.h、execute_command.h 等",
         "equalOutput": "",
         "extra": {}
     },

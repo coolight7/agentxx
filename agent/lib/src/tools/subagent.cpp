@@ -1,4 +1,4 @@
-#include "agentxx/tools/sub_agent.h"
+#include "agentxx/tools/subagent.h"
 
 #include "agentxx/tools/subagent_shared.h"
 #include "fmt/format.h"
