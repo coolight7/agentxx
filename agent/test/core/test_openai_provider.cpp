@@ -3548,18 +3548,72 @@ asio::awaitable<void>
             auto sent = neograph::json::parse(mock.lastRequestBody);
             XX_TEST_EXPECT_TRUE(sent.contains("input"));
             const auto& input = sent["input"];
-            bool foundEncryptedReasoning = false;
-            for (const auto& item : input) {
-                if (item.is_object() && item.value("type", std::string{}) == "reasoning") {
-                    if (item.value("encrypted_content", std::string{}) == kMockEncrypted) {
-                        foundEncryptedReasoning = true;
+            int reasoningIndex = -1;
+            int assistantIndex = -1;
+            for (size_t idx = 0; idx < input.size(); ++idx) {
+                const auto& item = input[idx];
+                if (item.is_object()) {
+                    if (item.value("type", std::string{}) == "reasoning"
+                        && item.value("encrypted_content", std::string{}) == kMockEncrypted) {
+                        reasoningIndex = static_cast<int>(idx);
+                    } else if (item.value("role", std::string{}) == "assistant") {
+                        assistantIndex = static_cast<int>(idx);
                     }
                 }
             }
-            XX_TEST_EXPECT_TRUE(foundEncryptedReasoning);
+            XX_TEST_EXPECT_TRUE(reasoningIndex >= 0);
+            XX_TEST_EXPECT_TRUE(assistantIndex >= 0);
+            // 严格断言: reasoning item 必须在 assistant message 之前
+            XX_TEST_EXPECT_TRUE(reasoningIndex < assistantIndex);
         } catch (const std::exception& e) {
             XX_TEST_FAILED++;
             TEST_FAIL << "responses encrypted thinking test failed: " << e.what() << std::endl;
+        }
+    }
+
+    // 3) 测试流式响应中正确触发 TYPE_THINKING chunk 并捕获 encrypted_content
+    {
+        mock.mode = MockMode::ResponsesStreaming;
+        mock.sseChunks = {
+            MockOpenAIServer::sseData(R"({"type":"response.output_item.added","item":{"id":"rs_stream_1","type":"reasoning","encrypted_content":"enc_stream_data"}})") + "\n\n",
+            MockOpenAIServer::sseData(R"({"type":"response.output_text.delta","delta":"Hello world"})") + "\n\n",
+            MockOpenAIServer::sseData(R"({"type":"response.completed","response":{"status":"completed","usage":{"input_tokens":5,"output_tokens":10,"total_tokens":15,"output_tokens_details":{"reasoning_tokens":300}}}})") + "\n\n",
+        };
+
+        auto mc         = makeCodexCfg(baseUrl);
+        mc.sendThinking = true;
+        auto provider   = server::OpenAIProvider::create(mc);
+
+        neograph::CompletionParams params;
+        params.model    = "gemini-3.7-flash-high";
+        params.messages = {
+            {.role = "user", .content = "Hi"}
+        };
+
+        std::vector<neograph::ChatStreamChunk> receivedChunks;
+        auto onChunk = [&](const neograph::ChatStreamChunk& chunk) {
+            receivedChunks.push_back(chunk);
+        };
+
+        try {
+            auto result = co_await provider->invoke_format_data(params, onChunk);
+            XX_TEST_EXPECT_EQ(result.message.content, "Hello world");
+            XX_TEST_EXPECT_EQ(result.usage.reasoning_tokens, 300);
+            XX_TEST_EXPECT_TRUE(result.message.reasoning_content.empty());
+            XX_TEST_EXPECT_TRUE(
+                result.message.extra.contains(server::OpenAIProvider::kResponsesReasoningItemsKey)
+            );
+            // 验证 chunk 回调: 包含 TYPE_THINKING (空文本) 和 TYPE_CONTENT ("Hello world")
+            XX_TEST_EXPECT_TRUE(receivedChunks.size() >= 2);
+            if (receivedChunks.size() >= 2) {
+                XX_TEST_EXPECT_EQ(receivedChunks[0].type, neograph::ChatStreamChunk::TYPE_THINKING);
+                XX_TEST_EXPECT_TRUE(receivedChunks[0].data.empty());
+                XX_TEST_EXPECT_EQ(receivedChunks[1].type, neograph::ChatStreamChunk::TYPE_CONTENT);
+                XX_TEST_EXPECT_EQ(receivedChunks[1].data, "Hello world");
+            }
+        } catch (const std::exception& e) {
+            XX_TEST_FAILED++;
+            TEST_FAIL << "responses encrypted thinking streaming test failed: " << e.what() << std::endl;
         }
     }
 }

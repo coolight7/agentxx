@@ -219,6 +219,9 @@ struct Delta {
     // MessageUITip: 通用提示消息 (文本复用 text 字段)
     TipType tipType = TipType::Info; ///< 提示级别 (Info/Warning/Error)
 
+    // Think 结构体 (Role::Think 消息专属, 如加密思考/token统计)
+    std::optional<ViewMessage::ThinkData> think;
+
     uint64_t    historyCount = 0;
     std::string tailHash;
 

@@ -12,7 +12,6 @@
 - plan tool 重命名、支持 read
 - 排查 gemini 模型时，是否需要保存加密 thinking
 - 设置开关指定末尾 thinking 展开还是单行截取末尾
-- tui toocall 运行中需要在缩略消息中显示 running，且 toolName 高亮
 
 ## 提示词优化
 - 如果编译需要配置特定参数，写成脚本或者写入到AGENTS.md
