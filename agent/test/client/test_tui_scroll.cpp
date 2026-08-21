@@ -11,6 +11,7 @@
 
 #include "agentxx-client/io/tui/components/message_list.h"
 #include "agentxx-client/io/tui/framework/tui_context.h"
+#include "agentxx-client/io/tui/framework/tui_settings.h"
 #include "agentxx-client/io/tui/framework/tui_state.h"
 #include "agentxx-client/io/tui/tui_theme.h"
 #include "asio/io_context.hpp"
@@ -1278,6 +1279,70 @@ TestResult testTuiScroll() {
             fprintf(stderr, "[DBG17b] missing visible collapsed markers: %s\n", missing.c_str());
         }
         XX_TEST_EXPECT_TRUE(missing.empty());
+    }
+
+    {
+        // 场景 18: TailThinkingMode 流式与末尾折叠预览测试
+        auto& settings = TUISettings::instance();
+        const auto origMode = settings.tailThinkingMode();
+
+        // 18a: SingleLine 模式下流式 Think 显示单行折叠并截取末尾字符
+        settings.setTailThinkingMode(TailThinkingMode::SingleLine);
+        {
+            ScrollFixture f;
+            f.sharedState.mutate([&](TUIRenderState& st) {
+                st.currentTokenRole = TUIMessage::Role::Think;
+                st.currentToken     = std::make_shared<std::string>(
+                    "Thinking step one\nThinking step two\nThinking step three final tail marker THK_TAIL_18A"
+                );
+                st.isStreaming = true;
+            });
+            std::string frame = f.render();
+            // 单行折叠标志 "+ [Think]"
+            XX_TEST_EXPECT_TRUE(frame.find("+ [Think]") != std::string::npos);
+            // 包含末尾字符 marker
+            XX_TEST_EXPECT_TRUE(frame.find("THK_TAIL_18A") != std::string::npos);
+            // 不应为展开标志 "- [Think]"
+            XX_TEST_EXPECT_TRUE(frame.find("- [Think]") == std::string::npos);
+        }
+
+        // 18b: AutoExpand 模式下流式 Think 自动展开显示
+        settings.setTailThinkingMode(TailThinkingMode::AutoExpand);
+        {
+            ScrollFixture f;
+            f.sharedState.mutate([&](TUIRenderState& st) {
+                st.currentTokenRole = TUIMessage::Role::Think;
+                st.currentToken     = std::make_shared<std::string>(
+                    "Thinking step one auto expand header\nThinking step two\nThinking step three THK_TAIL_18B"
+                );
+                st.isStreaming = true;
+            });
+            std::string frame = f.render();
+            // 自动展开标志 "- [Think]"
+            XX_TEST_EXPECT_TRUE(frame.find("- [Think]") != std::string::npos);
+            // 包含正文内容
+            XX_TEST_EXPECT_TRUE(frame.find("Thinking step one auto expand header") != std::string::npos);
+            XX_TEST_EXPECT_TRUE(frame.find("THK_TAIL_18B") != std::string::npos);
+        }
+
+        // 18c: 历史末尾 Think 消息在 SingleLine 模式下折叠预览显示末尾截取
+        settings.setTailThinkingMode(TailThinkingMode::SingleLine);
+        {
+            ScrollFixture f;
+            f.sharedState.mutate([&](TUIRenderState& st) {
+                auto m = std::make_shared<TUIMessage>();
+                m->role = TUIMessage::Role::Think;
+                m->collapsed = true;
+                m->text = "First line head of thinking that is very long\nSecond line\nTail line with marker THK_TAIL_18C";
+                st.messages.push_back(std::move(m));
+            });
+            std::string frame = f.render();
+            XX_TEST_EXPECT_TRUE(frame.find("+ [Think]") != std::string::npos);
+            XX_TEST_EXPECT_TRUE(frame.find("THK_TAIL_18C") != std::string::npos);
+        }
+
+        // 恢复原始设置
+        settings.setTailThinkingMode(origMode);
     }
 
     return TestResult{g_tui_scroll_passed, g_tui_scroll_failed};

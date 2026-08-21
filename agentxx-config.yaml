@@ -66,9 +66,6 @@ models:
     # LLM 请求启用 HTTP keep-alive 连接池，空闲连接复用，超过上限的并发请求排队等待
     max_concurrent_connections: 5
     extra_api_config:
-      stream: true
-      # 内部配置字段, 仅 agentxx 使用, 不会发送给上游 API
-      preserve_thinking: true
       reasoning_effort: "high"
 
   - name: openai_response_full_example
@@ -91,7 +88,6 @@ models:
     max_concurrent_connections: 5
     model_context_max_token: 262144 # 模型支持的最大上下文 token 数；不指定时上下文压缩使用默认值 256k
     extra_api_config:
-      stream: true
       # - 可选; 思考强度，"none|minimal|low|medium|high|xhigh|max" 
       # 并非所有模型支持的选项都一样，可能有的支持 xhigh 有的支持 max
       # 可以改一个值然后启动聊聊天，如果请求失败再修改试试
@@ -109,8 +105,6 @@ models:
     extra_api_config:
       reasoning:
         effort: xhigh
-      stream: true
-      preserve_thinking: true 
   - name: opencode-ds-v4-flash
     type: "openai-responses"
     base_url: "https://opencode.ai/zen/go/v1"
@@ -121,8 +115,6 @@ models:
     extra_api_config:
       reasoning:
         effort: max
-      stream: true
-      preserve_thinking: true 
   - name: opencode-ds-v4-pro
     type: "openai-responses"
     base_url: "https://opencode.ai/zen/go/v1"
@@ -133,8 +125,6 @@ models:
     extra_api_config:
       reasoning:
         effort: max
-      stream: true
-      preserve_thinking: true 
   - name: opencode-gpt-5.6-luna
     type: "openai-responses"
     base_url: "https://opencode.ai/zen/go/v1"
@@ -147,7 +137,16 @@ models:
     extra_api_config:
       reasoning:
         effort: max
-      stream: true
+  - name: opencode-ox-alpha
+    type: "openai"
+    base_url: "https://opencode.ai/zen/go/v1"
+    api_key: "${OPENCODE_API_KEY}"
+    model_name: "ox-alpha-free"
+    send_thinking: true
+    model_context_max_token: 1000000
+    extra_api_config:
+      reasoning:
+        effort: max
   - name: gemini-3.7-flash-high-responses
     type: "openai-responses"
     base_url: "http://172.29.48.1:8317/v1"
@@ -156,8 +155,6 @@ models:
     model_context_max_token: 1000000
     send_thinking: true
     extra_api_config:
-      stream: true
-      preserve_thinking: true 
       reasoning:
         effort: max
   - name: gemini-3.7-flash-high
@@ -168,8 +165,6 @@ models:
     model_context_max_token: 1000000
     send_thinking: true
     extra_api_config:
-      stream: true
-      preserve_thinking: true 
       reasoning_effort: max
   - name: opencode-glm-5.3
     type: "openai"
@@ -179,7 +174,6 @@ models:
     model_context_max_token: 1000000
     send_thinking: true
     extra_api_config:
-      stream: true
       reasoning_effort: "xhigh"
   - name: local
     type: "openai"
@@ -189,7 +183,6 @@ models:
     model_context_max_token: 128000
     send_thinking: true
     extra_api_config:
-      stream: true
       preserve_thinking: true 
 
   # ACP 服务模型
@@ -242,8 +235,8 @@ use_model:
 mcp:
   # - namespace: musicxx
   #   url: "http://172.29.48.1:17001/mcp"
-  - namespace: exa
-    url: "https://mcp.exa.ai"
+  # - namespace: exa
+  #   url: "https://mcp.exa.ai"
 
 # Skill 文件夹路径列表
 # - 支持绝对路径或相对路径（相对路径按程序工作目录解析）

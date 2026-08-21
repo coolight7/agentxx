@@ -124,19 +124,22 @@ private:
     /// 循环切换日志等级: Trace -> Debug -> Info -> Warn -> Error -> Out -> Trace
     /// (需要访问 onLogLevelChange_, 非静态)
     void cycleLogLevel();
+    /// 循环切换末尾思考展示模式: Auto Expand -> Single Line -> Auto Expand
+    static void cycleTailThinkingMode();
 
     TUICtx& ctx_;
-    /// 条目索引: 0 = 主题, 1 = 动画等级, 2 = 日志等级
+    /// 条目索引: 0 = 主题, 1 = 动画等级, 2 = 日志等级, 3 = 末尾思考模式
     /// Enter/鼠标点击索引时循环切换对应设置
-    static constexpr int  kItemCount     = 3;
+    static constexpr int  kItemCount     = 4;
     int                   selectedIndex_ = 0;
     std::function<void()> onClose_;
     std::function<void()> onThemeChange_;
     std::function<void()> onLogLevelChange_;
 
-    ftxui::Box themeBox_;     // 主题点击区域
-    ftxui::Box animLevelBox_; // 动画等级点击区域
-    ftxui::Box logLevelBox_;  // 日志等级点击区域
+    ftxui::Box themeBox_;        // 主题点击区域
+    ftxui::Box animLevelBox_;    // 动画等级点击区域
+    ftxui::Box logLevelBox_;     // 日志等级点击区域
+    ftxui::Box tailThinkingBox_; // 末尾思考展示模式点击区域
 };
 
 /// 待发送消息队列弹窗组件

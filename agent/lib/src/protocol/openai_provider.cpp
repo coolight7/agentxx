@@ -151,20 +151,32 @@ static int jsonIntField(const neograph::json& obj, const char* key, int def = 0)
 }
 
 /// 从 usage 对象中提取 token 统计 (兼容 Chat Completions 与 Responses API 及各类网关字段)
-/// - 官方字段: input_tokens / output_tokens / total_tokens (Responses API) 或 prompt_tokens / completion_tokens (Chat Completions)
-/// - 推理 token: output_tokens_details / completion_tokens_details / candidates_tokens_details 等中的 reasoning_tokens
+/// - 官方字段: input_tokens / output_tokens / total_tokens (Responses API) 或 prompt_tokens /
+/// completion_tokens (Chat Completions)
+/// - 推理 token: output_tokens_details / completion_tokens_details / candidates_tokens_details
+/// 等中的 reasoning_tokens
 static void parseUsage(const neograph::json& u, neograph::ChatCompletion& completion) {
     if (!u.is_object()) {
         return;
     }
-    completion.usage.prompt_tokens
-        = jsonIntField(u, "input_tokens", jsonIntField(u, "prompt_tokens", jsonIntField(u, "prompt_token_count")));
-    completion.usage.completion_tokens
-        = jsonIntField(u, "output_tokens", jsonIntField(u, "completion_tokens", jsonIntField(u, "candidates_token_count")));
+    completion.usage.prompt_tokens = jsonIntField(
+        u,
+        "input_tokens",
+        jsonIntField(u, "prompt_tokens", jsonIntField(u, "prompt_token_count"))
+    );
+    completion.usage.completion_tokens = jsonIntField(
+        u,
+        "output_tokens",
+        jsonIntField(u, "completion_tokens", jsonIntField(u, "candidates_token_count"))
+    );
     completion.usage.total_tokens = jsonIntField(
         u,
         "total_tokens",
-        jsonIntField(u, "total_token_count", completion.usage.prompt_tokens + completion.usage.completion_tokens)
+        jsonIntField(
+            u,
+            "total_token_count",
+            completion.usage.prompt_tokens + completion.usage.completion_tokens
+        )
     );
 
     auto extractReasoningTokens = [](const neograph::json& details) -> int {
@@ -212,12 +224,6 @@ static bool modelUsesMaxCompletionTokens(std::string_view model) {
     }
     // o1-preview / o3-mini / o4-mini 等以 o1/o3/o4 开头的推理模型
     return model.starts_with("o1") || model.starts_with("o3") || model.starts_with("o4");
-}
-
-/// agentxx 内部配置字段 (无对应 API 语义), 透传 extraConfig 时必须过滤:
-/// 原样发送给上游会触发部分模型 (如 gpt-5.6-luna) HTTP 400 报错
-static bool isInternalExtraConfigField(std::string_view key) {
-    return key == "preserve_thinking";
 }
 
 std::string OpenAIProvider::mapStopReason(std::string_view finishReason) {
@@ -344,10 +350,6 @@ neograph::json OpenAIProvider::buildBody(const neograph::CompletionParams& param
     if (config_.extraConfig.is_object()) {
         for (const auto& [key, val] : config_.extraConfig.items()) {
             if (body.contains(key)) {
-                continue;
-            }
-            // 过滤 agentxx 内部字段, 避免透传给上游导致 400
-            if (isInternalExtraConfigField(key)) {
                 continue;
             }
             // 避免同时出现互斥的输出 token 上限字段
@@ -533,10 +535,6 @@ neograph::json OpenAIProvider::buildResponsesBody(const neograph::CompletionPara
     if (config_.extraConfig.is_object()) {
         for (const auto& [key, val] : config_.extraConfig.items()) {
             if (body.contains(key)) {
-                continue;
-            }
-            // 过滤 agentxx 内部字段, 避免透传给上游导致 400
-            if (isInternalExtraConfigField(key)) {
                 continue;
             }
             body[key] = val;
@@ -1460,11 +1458,10 @@ bool OpenAIProvider::processResponsesSseLine(
                                 std::move(rItem)
                             );
                             if (on_chunk) {
-                                on_chunk(
-                                    neograph::ChatStreamChunk{
-                                        neograph::ChatStreamChunk::TYPE_THINKING, ""
-                                    }
-                                );
+                                on_chunk(neograph::ChatStreamChunk{
+                                    neograph::ChatStreamChunk::TYPE_THINKING,
+                                    ""
+                                });
                             }
                         }
                     }

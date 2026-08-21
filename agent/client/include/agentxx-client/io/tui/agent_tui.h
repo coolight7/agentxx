@@ -51,6 +51,39 @@ inline std::string oneLinePreview(std::string_view s, size_t max = 60) {
     return line;
 }
 
+inline std::string tailLinePreview(std::string_view s, size_t max = 60) {
+    if (s.empty() || max == 0) {
+        return "";
+    }
+    std::string line;
+    line.reserve(std::min(s.size(), max * 4 + 4));
+    bool prevSpace = false;
+    for (char c : s) {
+        if (c == '\r' || c == '\n' || c == '\t' || c == ' ') {
+            if (!prevSpace && !line.empty()) {
+                line.push_back(' ');
+                prevSpace = true;
+            }
+        } else {
+            line.push_back(c);
+            prevSpace = false;
+        }
+    }
+    while (!line.empty() && line.back() == ' ') {
+        line.pop_back();
+    }
+    if (line.empty()) {
+        return "";
+    }
+    const size_t totalLen = agentxx::util::utf8GetLength(line);
+    if (totalLen <= max) {
+        return line;
+    }
+    const size_t skip = totalLen - max;
+    const size_t byteIdx = agentxx::util::findIndexByUtf8Length(line, skip);
+    return "..." + line.substr(byteIdx);
+}
+
 /// TUI 日志接收器
 class TUILogSink : public agentxx::util::LogSink {
 public:

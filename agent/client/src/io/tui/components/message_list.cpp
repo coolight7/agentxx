@@ -481,6 +481,11 @@ uint64_t MessageListComponent::itemKey(size_t index) {
                 h       = combine(h, it != interruptUi_.end() ? it->second.version : 0);
             }
         }
+        if (m.role == TUIMessage::Role::Think) {
+            h = combine(h, static_cast<uint64_t>(TUISettings::instance().tailThinkingMode()));
+            const bool isTailMsg = (index + 1 == st.messages.size() && !hasStreamingToken(st));
+            h = combine(h, isTailMsg ? 1 : 0);
+        }
         return h;
     }
     // ---- 流式区 ----
@@ -488,6 +493,9 @@ uint64_t MessageListComponent::itemKey(size_t index) {
         // 降级路径: 单个 paragraph 项, 以 (指针, 长度, role) 作为 key 触发高度重估
         uint64_t h = reinterpret_cast<uint64_t>(st.currentToken.get());
         h          = combine(h, st.currentToken ? st.currentToken->size() : 0);
+        h          = combine(h, static_cast<uint64_t>(st.currentTokenRole));
+        h          = combine(h, static_cast<uint64_t>(st.pendingTokenDurationMs));
+        h          = combine(h, static_cast<uint64_t>(TUISettings::instance().tailThinkingMode()));
         h          = combine(h, 0xDEAD0000ull);
         return h;
     }
@@ -660,6 +668,11 @@ size_t MessageListComponent::estimateHeight(size_t index, int width) {
     }
     // ---- 流式区 ----
     if (!streamUseIncremental_) {
+        if (st.currentTokenRole == TUIMessage::Role::Think
+            && TUISettings::instance().tailThinkingMode() == TailThinkingMode::SingleLine) {
+            // 单行折叠流式 thinking: 1 行 header + 1 行尾部空行
+            return 2;
+        }
         // 降级路径: 单个 paragraph 项
         return 1 + estimateLines(*st.currentToken, width);
     }
@@ -812,9 +825,6 @@ LazyBuiltItem MessageListComponent::buildStreamingItem(const TUIRenderState& st)
 
     Element block;
     if (st.currentTokenRole == TUIMessage::Role::Think) {
-        Elements lines;
-        Elements header;
-        header.push_back(text("- [Think] ") | color(theme.thinkingColor));
         const TUIMessage* currentMsg = nullptr;
         for (size_t i = st.messages.size(); i > 0; --i) {
             if (st.messages[i - 1]->role == st.currentTokenRole) {
@@ -822,15 +832,53 @@ LazyBuiltItem MessageListComponent::buildStreamingItem(const TUIRenderState& st)
                 break;
             }
         }
-        if (currentMsg && currentMsg->durationMs > 0) {
-            header.push_back(
-                text(agentxx::util::formatDurationMilliseconds(currentMsg->durationMs) + " ")
-                | color(theme.thinkingColor)
-            );
+        int64_t durationMs = st.pendingTokenDurationMs;
+        if (durationMs <= 0 && currentMsg) {
+            durationMs = currentMsg->durationMs;
         }
-        lines.push_back(hbox(std::move(header)));
-        lines.push_back(paragraph(*st.currentToken) | color(theme.thinkingColor));
-        block = vbox(std::move(lines));
+
+        if (TUISettings::instance().tailThinkingMode() == TailThinkingMode::SingleLine) {
+            Elements header;
+            header.push_back(text("+ [Think] ") | color(theme.thinkingColor));
+            if (durationMs > 0) {
+                header.push_back(
+                    text(agentxx::util::formatDurationMilliseconds(durationMs))
+                    | color(theme.thinkingColor)
+                );
+                header.push_back(text(" "));
+            }
+            if (st.currentToken && !st.currentToken->empty()) {
+                const size_t previewLen = TUISettings::instance().tailThinkingPreviewLength();
+                header.push_back(
+                    text(tailLinePreview(*st.currentToken, previewLen))
+                    | color(theme.thinkingColor) | dim | xflex_shrink
+                );
+            } else if (st.pendingTokenThink && st.pendingTokenThink->reasoningTokens > 0) {
+                header.push_back(
+                    text(fmt::format("加密思考 {} tokens", st.pendingTokenThink->reasoningTokens))
+                    | color(theme.thinkingColor) | dim | xflex_shrink
+                );
+            } else if (st.pendingTokenThink && st.pendingTokenThink->isEncrypted) {
+                header.push_back(
+                    text("思考内容被加密") | color(theme.thinkingColor) | dim | xflex_shrink
+                );
+            }
+            block = hbox(std::move(header));
+        } else {
+            Elements lines;
+            Elements header;
+            header.push_back(text("- [Think] ") | color(theme.thinkingColor));
+            if (durationMs > 0) {
+                header.push_back(
+                    text(agentxx::util::formatDurationMilliseconds(durationMs))
+                    | color(theme.thinkingColor)
+                );
+                header.push_back(text(" "));
+            }
+            lines.push_back(hbox(std::move(header)));
+            lines.push_back(paragraph(*st.currentToken) | color(theme.thinkingColor));
+            block = vbox(std::move(lines));
+        }
     } else {
         block = paragraph(*st.currentToken) | color(theme.normalColor);
     }
@@ -926,6 +974,12 @@ void MessageListComponent::syncStream(const TUIRenderState& st) {
         // 下一流强制全量重建 (防御: 即使 future 代码在重建 currentToken 时
         // 忘记递增 epoch, 此处兜底也能保证渲染器不与新流串用)
         streamEpoch_ = ~0ULL;
+        return;
+    }
+
+    // 末尾思考单行折叠模式: 不启用增量多行渲染, 走 buildStreamingItem 单行折叠
+    if (st.currentTokenRole == TUIMessage::Role::Think
+        && TUISettings::instance().tailThinkingMode() == TailThinkingMode::SingleLine) {
         return;
     }
 
@@ -1247,7 +1301,17 @@ Element MessageListComponent::buildMessageBlock(
                 // 同 System: 预览超宽时右缘裁剪, 不压缩前缀
                 std::string previewText;
                 if (!msg.text.empty()) {
-                    previewText = oneLinePreview(msg.text);
+                    const auto& st        = *ctx_.frameState;
+                    const bool  isTailMsg = (msgIndex + 1 == st.messages.size() && !hasStreamingToken(st));
+                    if (isTailMsg
+                        && TUISettings::instance().tailThinkingMode() == TailThinkingMode::SingleLine) {
+                        previewText = tailLinePreview(
+                            msg.text,
+                            TUISettings::instance().tailThinkingPreviewLength()
+                        );
+                    } else {
+                        previewText = oneLinePreview(msg.text);
+                    }
                 } else if (msg.think && msg.think->reasoningTokens > 0) {
                     previewText = fmt::format("加密思考 {} tokens", msg.think->reasoningTokens);
                 } else if (msg.think && msg.think->isEncrypted) {

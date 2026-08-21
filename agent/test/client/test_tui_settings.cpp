@@ -140,6 +140,61 @@ void test_log_level_names_table() {
     XX_TEST_EXPECT_EQ(TUISettings::kLogLevelNames[5], std::string_view("Out"));
 }
 
+void test_tail_thinking_mode_set_get() {
+    auto& settings = TUISettings::instance();
+
+    const struct {
+        TailThinkingMode mode;
+        std::string_view name;
+    } cases[] = {
+        {TailThinkingMode::AutoExpand, "Auto Expand"},
+        {TailThinkingMode::SingleLine, "Single Line"},
+    };
+
+    for (const auto& c : cases) {
+        settings.setTailThinkingMode(c.mode);
+        XX_TEST_EXPECT_TRUE(settings.tailThinkingMode() == c.mode);
+        XX_TEST_EXPECT_EQ(settings.tailThinkingModeName(), c.name);
+    }
+
+    settings.setTailThinkingPreviewLength(80);
+    XX_TEST_EXPECT_EQ(settings.tailThinkingPreviewLength(), size_t{80});
+
+    // 恢复默认
+    settings.setTailThinkingMode(TUISettings::kDefaultTailThinkingMode);
+    settings.setTailThinkingPreviewLength(TUISettings::kDefaultTailThinkingPreviewLength);
+}
+
+void test_tail_thinking_names_table() {
+    XX_TEST_EXPECT_EQ(TUISettings::kTailThinkingModeNames.size(), (size_t)2);
+    XX_TEST_EXPECT_EQ(TUISettings::kTailThinkingModeNames[0], std::string_view("Auto Expand"));
+    XX_TEST_EXPECT_EQ(TUISettings::kTailThinkingModeNames[1], std::string_view("Single Line"));
+}
+
+void test_tail_line_preview() {
+    // 空串或零长度
+    XX_TEST_EXPECT_EQ(tailLinePreview("", 60), "");
+    XX_TEST_EXPECT_EQ(tailLinePreview("   \n\t  ", 60), "");
+    XX_TEST_EXPECT_EQ(tailLinePreview("hello", 0), "");
+
+    // 长度未超 max
+    XX_TEST_EXPECT_EQ(tailLinePreview("hello world", 60), "hello world");
+    XX_TEST_EXPECT_EQ(tailLinePreview("line 1\nline 2\nline 3", 60), "line 1 line 2 line 3");
+
+    // 长度超过 max -> 截取末尾并加 "..."
+    std::string text = "1234567890abcdefghij";
+    XX_TEST_EXPECT_EQ(tailLinePreview(text, 10), "...abcdefghij");
+
+    // UTF-8 多字节测试
+    std::string zh = "第一步分析问题第二步编写代码第三步进行测试";
+    // zh 共 21 个汉字, 截取末尾 7 个汉字
+    XX_TEST_EXPECT_EQ(tailLinePreview(zh, 7), "...第三步进行测试");
+
+    // 换行与空白压缩
+    std::string multiline = "思考过程第一行\n\n思考过程第二行  \n  思考完成";
+    XX_TEST_EXPECT_EQ(tailLinePreview(multiline, 4), "...思考完成");
+}
+
 // TUILogSink 按 TUISettings.logLevel 过滤 (Out 恒显示)
 void test_log_sink_level_filter() {
     auto& settings = TUISettings::instance();
@@ -267,27 +322,37 @@ void test_persist_to_db() {
     settings.setThemeKind(TUISettings::kThemeLight);
     settings.setAnimationLevel(AnimationLevel::Low);
     settings.setLogLevel(agentxx::util::LogLevel::Warn);
+    settings.setTailThinkingMode(TailThinkingMode::SingleLine);
+    settings.setTailThinkingPreviewLength(75);
     {
         auto fresh = agentxx::util::SettingsDb(dbPath);
         XX_TEST_EXPECT_EQ(fresh.getInt64("tui.theme", -1), int64_t{TUISettings::kThemeLight});
         XX_TEST_EXPECT_EQ(fresh.getInt64("tui.animationLevel", -1), int64_t{1}); // Low
         XX_TEST_EXPECT_EQ(fresh.getInt64("tui.logLevel", -1), int64_t{3});       // Warn
+        XX_TEST_EXPECT_EQ(fresh.getInt64("tui.tailThinking", -1), int64_t{1});   // SingleLine
+        XX_TEST_EXPECT_EQ(fresh.getInt64("tui.tailThinkingPreviewLen", -1), int64_t{75});
     }
 
     // 再次变更 → 库文件同步更新
     settings.setThemeKind(TUISettings::kThemeDark);
     settings.setAnimationLevel(AnimationLevel::Ultra);
     settings.setLogLevel(agentxx::util::LogLevel::Debug);
+    settings.setTailThinkingMode(TailThinkingMode::AutoExpand);
+    settings.setTailThinkingPreviewLength(60);
     {
         auto fresh = agentxx::util::SettingsDb(dbPath);
         XX_TEST_EXPECT_EQ(fresh.getInt64("tui.theme", -1), int64_t{TUISettings::kThemeDark});
         XX_TEST_EXPECT_EQ(fresh.getInt64("tui.animationLevel", -1), int64_t{4}); // Ultra
         XX_TEST_EXPECT_EQ(fresh.getInt64("tui.logLevel", -1), int64_t{1});       // Debug
+        XX_TEST_EXPECT_EQ(fresh.getInt64("tui.tailThinking", -1), int64_t{0});   // AutoExpand
+        XX_TEST_EXPECT_EQ(fresh.getInt64("tui.tailThinkingPreviewLen", -1), int64_t{60});
     }
 
     // 恢复默认, 避免影响其他用例
     settings.setAnimationLevel(TUISettings::kDefaultAnimationLevel);
     settings.setLogLevel(TUISettings::kDefaultLogLevel);
+    settings.setTailThinkingMode(TUISettings::kDefaultTailThinkingMode);
+    settings.setTailThinkingPreviewLength(TUISettings::kDefaultTailThinkingPreviewLength);
 
     // 注意: TUISettings 单例持有 db 连接 (进程生命周期), Windows 上无法删除
     // 被占用文件, 故清理失败时忽略 (仅临时目录残留, 不影响测试结果)
@@ -305,6 +370,9 @@ TestResult testTuiSettings() {
     test_level_names_table();
     test_log_level_set_get();
     test_log_level_names_table();
+    test_tail_thinking_mode_set_get();
+    test_tail_thinking_names_table();
+    test_tail_line_preview();
     test_log_sink_level_filter();
     test_concurrent_access();
     test_persist_to_db();
