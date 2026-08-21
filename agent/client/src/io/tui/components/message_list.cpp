@@ -43,9 +43,9 @@ std::pair<Element, std::unique_ptr<markdown::DomBuilder>> renderMarkdown(
 /// 余量 1 列防边界取整溢出 (超宽仍由 xflex_shrink 在右缘兜底裁剪)。
 /// 极窄终端下保底 8 列, 避免预览被完全挤没。
 inline int collapsedPreviewBudget(int maxWidth, int prefixCols) {
-    constexpr int kSlack       = 1;
-    constexpr int kMinBudget   = 8;
-    const int     avail        = maxWidth - prefixCols - kSlack;
+    constexpr int kSlack     = 1;
+    constexpr int kMinBudget = 8;
+    const int     avail      = maxWidth - prefixCols - kSlack;
     return (avail >= kMinBudget) ? avail : kMinBudget;
 }
 
@@ -409,7 +409,7 @@ bool MessageListComponent::handleCollapsibleClick(const Mouse& mouse) {
         return false;
     }
     for (size_t k = 0; k < collapsibleBoxes_.size() && k < collapsibleIndices_.size()
-                      && k < collapsibleIsStream_.size();
+                       && k < collapsibleIsStream_.size();
          ++k) {
         if (mouse.y < collapsibleBoxes_[k].y_min || mouse.y > collapsibleBoxes_[k].y_max) {
             continue;
@@ -550,7 +550,7 @@ uint64_t MessageListComponent::itemKey(size_t index) {
         if (m.role == TUIMessage::Role::Think) {
             h = combine(h, static_cast<uint64_t>(TUISettings::instance().tailThinkingMode()));
             const bool isTailMsg = (index + 1 == st.messages.size() && !hasStreamingToken(st));
-            h = combine(h, isTailMsg ? 1 : 0);
+            h                    = combine(h, isTailMsg ? 1 : 0);
         }
         return h;
     }
@@ -922,18 +922,14 @@ LazyBuiltItem MessageListComponent::buildStreamingItem(const TUIRenderState& st)
                 // 预览自适应宽度: 内容区剩余列数与用户设置截取长度取较小值
                 int prefixCols = 10; // "+ [Think] "
                 if (durationMs > 0) {
-                    prefixCols += static_cast<int>(markdown::utf8_display_width(
-                        agentxx::util::formatDurationMilliseconds(durationMs)
-                    )) + 1;
+                    prefixCols += 6;
                 }
-                const int    budget     = collapsedPreviewBudget(
-                    std::max(1, scrollable_->contentWidth()), prefixCols
-                );
-                const size_t settingLen  = TUISettings::instance().tailThinkingPreviewLength();
-                const size_t previewLen  = std::min(settingLen, static_cast<size_t>(budget));
+                const int budget
+                    = collapsedPreviewBudget(std::max(1, scrollable_->contentWidth()), prefixCols);
+                const size_t previewLen = budget > 0 ? static_cast<size_t>(budget) : prefixCols;
                 header.push_back(
-                    text(tailLinePreview(*st.currentToken, previewLen))
-                    | color(theme.thinkingColor) | dim | xflex_shrink
+                    text(tailLinePreview(*st.currentToken, previewLen)) | color(theme.thinkingColor)
+                    | dim | xflex_shrink
                 );
             } else if (st.pendingTokenThink && st.pendingTokenThink->reasoningTokens > 0) {
                 header.push_back(
@@ -1350,8 +1346,8 @@ Element MessageListComponent::buildMessageBlock(
                 // 不再固定 60 字符; 超出部分仍由 xflex_shrink 右缘裁剪兜底
                 const int budget = collapsedPreviewBudget(maxWidth, 11); // "+ [System] "
                 header.push_back(
-                    text(oneLinePreview(msg.text, static_cast<size_t>(budget)))
-                    | color(tipColor) | dim | xflex_shrink
+                    text(oneLinePreview(msg.text, static_cast<size_t>(budget))) | color(tipColor)
+                    | dim | xflex_shrink
                 );
             }
             lines.push_back(hbox(std::move(header)));
@@ -1386,13 +1382,12 @@ Element MessageListComponent::buildMessageBlock(
             header.push_back(text(prefix) | color(tipColor));
             if (!expanded) {
                 // 同 System: 预览自适应内容区剩余列宽, 超宽时右缘裁剪兜底
-                const int prefixCols = static_cast<int>(
-                    markdown::utf8_display_width(fmt::format("+ {}", prefix))
-                );
+                const int prefixCols
+                    = static_cast<int>(markdown::utf8_display_width(fmt::format("+ {}", prefix)));
                 const int budget = collapsedPreviewBudget(maxWidth, prefixCols);
                 header.push_back(
-                    text(oneLinePreview(msg.text, static_cast<size_t>(budget)))
-                    | color(tipColor) | xflex_shrink
+                    text(oneLinePreview(msg.text, static_cast<size_t>(budget))) | color(tipColor)
+                    | xflex_shrink
                 );
             }
             lines.push_back(hbox(std::move(header)));
@@ -1420,23 +1415,18 @@ Element MessageListComponent::buildMessageBlock(
                 // 预览自适应宽度: 前缀列数 = "+/- [Think] "(10) + 时长 + 空格
                 int prefixCols = 10;
                 if (!durationText.empty()) {
-                    prefixCols += static_cast<int>(markdown::utf8_display_width(durationText)) + 1;
+                    prefixCols += 6;
                 }
-                const int budget = collapsedPreviewBudget(maxWidth, prefixCols);
+                const int   budget = collapsedPreviewBudget(maxWidth, prefixCols);
                 std::string previewText;
                 if (!msg.text.empty()) {
-                    const auto& st        = *ctx_.frameState;
-                    const bool  isTailMsg = (msgIndex + 1 == st.messages.size() && !hasStreamingToken(st));
+                    const auto& st = *ctx_.frameState;
+                    const bool  isTailMsg
+                        = (msgIndex + 1 == st.messages.size() && !hasStreamingToken(st));
                     if (isTailMsg
-                        && TUISettings::instance().tailThinkingMode() == TailThinkingMode::SingleLine) {
-                        // 用户设置的截取长度与自适应预算取较小值:
-                        // 窄终端随宽度收缩, 宽终端仍尊重设置上限
-                        const size_t settingLen
-                            = TUISettings::instance().tailThinkingPreviewLength();
-                        previewText = tailLinePreview(
-                            msg.text,
-                            std::min(settingLen, static_cast<size_t>(budget))
-                        );
+                        && TUISettings::instance().tailThinkingMode()
+                               == TailThinkingMode::SingleLine) {
+                        previewText = tailLinePreview(msg.text, static_cast<size_t>(budget));
                     } else {
                         previewText = oneLinePreview(msg.text, static_cast<size_t>(budget));
                     }
@@ -1501,7 +1491,8 @@ Element MessageListComponent::buildMessageBlock(
             }
             if (!expanded) {
                 // 折叠状态, 特化渲染 (摘要内部预览按内容区剩余列宽自适应截断)
-                auto summary = buildToolHeaderSummary(msg.tool->toolName, msg.text, !finished, maxWidth);
+                auto summary
+                    = buildToolHeaderSummary(msg.tool->toolName, msg.text, !finished, maxWidth);
                 std::string displayName;
                 std::string argsSummary;
                 if (!summary.toolName.empty()) {
@@ -1517,12 +1508,14 @@ Element MessageListComponent::buildMessageBlock(
                         if (!msg.text.empty()) {
                             const int budget
                                 = collapsedPreviewBudget(maxWidth, 9 + nameCols + 3); // " · "
-                            argsSummary += " " + oneLinePreview(msg.text, static_cast<size_t>(budget));
+                            argsSummary
+                                += " " + oneLinePreview(msg.text, static_cast<size_t>(budget));
                         }
                     } else {
                         const int budget
                             = collapsedPreviewBudget(maxWidth, 9 + nameCols + 1); // " "
-                        auto resPreview = oneLinePreview(msg.tool->toolResult, static_cast<size_t>(budget));
+                        auto resPreview
+                            = oneLinePreview(msg.tool->toolResult, static_cast<size_t>(budget));
                         if (!resPreview.empty()) {
                             argsSummary = " " + std::move(resPreview);
                         }
