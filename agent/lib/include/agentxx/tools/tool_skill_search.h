@@ -1,6 +1,6 @@
 #pragma once
 
-#include "agentxx/tools/sub_agent.h"
+#include "agentxx/tools/subagent.h"
 #include <memory>
 #include <string>
 #include <string_view>

@@ -14,7 +14,7 @@
 #include "agentxx/tools/planning.h"
 #include "agentxx/tools/rag_search.h"
 #include "agentxx/tools/string.h"
-#include "agentxx/tools/sub_agent.h"
+#include "agentxx/tools/subagent.h"
 #include "agentxx/tools/system.h"
 #include "agentxx/tools/tool_skill_search.h"
 #include "agentxx/tools/web_search.h"

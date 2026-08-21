@@ -1,7 +1,7 @@
 #include "agentxx/middlewares/summarization.h"
 
 #include "agentxx/agent/model_registry.h"
-#include "agentxx/tools/sub_agent.h"
+#include "agentxx/tools/subagent.h"
 #include "agentxx/util/exception.h"
 #include "fmt/format.h"
 #include <algorithm>

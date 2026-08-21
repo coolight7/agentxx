@@ -16,7 +16,7 @@ ToolSkillSearchSubAgentTask::ToolSkillSearchSubAgentTask(
     ::agentxx::tools::SubAgentTaskBase(
         "tool_skill_search",
         "Search available tool or skill for loading. "
-        "(already set system prompt)",
+        "already set system prompt",
         ""
     ),
     delayToolInfos(in_delayToolInfos),
