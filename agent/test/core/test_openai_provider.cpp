@@ -3618,6 +3618,101 @@ asio::awaitable<void>
     }
 }
 
+/// Responses API: 回传无 summary 字段的 reasoning item 时自动补 "summary": []
+/// (回归测试: opencode-muse-spark / ConsoleGo 网关返回的 reasoning item 仅含
+///  encrypted_content 无 summary, 原样回传会触发
+///  HTTP 400 "input[N] missing required field summary")
+asio::awaitable<void>
+    test_responses_reasoning_item_missing_summary_normalized(MockOpenAIServer& mock, uint16_t port) {
+    std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
+    mock.mode           = MockMode::ResponsesNormal;
+
+    // 上游返回的 reasoning item 不带 summary 字段 (muse / ConsoleGo 网关行为)
+    mock.customResponse = neograph::json{
+        {"id",         "resp_muse_no_summary"                                      },
+        {"object",     "response"                                                  },
+        {"created_at", 1787260000                                                  },
+        {"status",     "completed"                                                 },
+        {"model",      "muse-spark-1.2-contributor"                                },
+        {"output",
+         neograph::json::array({
+             {{"id", "rs_muse_1"},
+              {"type", "reasoning"},
+              {"encrypted_content", "enc_muse_data"}},
+             {{"id", "msg_muse_1"},
+              {"type", "message"},
+              {"status", "completed"},
+              {"content",
+               neograph::json::array({
+                   {{"type", "output_text"}, {"text", "回答内容"}}
+               })},
+              {"role", "assistant"}}
+         })                                                                        },
+        {"usage",
+         neograph::json{
+             {"input_tokens",  10                                              },
+             {"output_tokens", 20                                              },
+             {"total_tokens",  30                                              }},
+        }
+    };
+
+    auto mc         = makeCodexCfg(baseUrl);
+    mc.sendThinking = true;
+    auto provider   = server::OpenAIProvider::create(mc);
+
+    neograph::CompletionParams params;
+    params.model    = "muse-spark-1.2-contributor";
+    params.messages = {
+        {.role = "user", .content = "1+1=?"}
+    };
+
+    try {
+        // 第一轮: 捕获无 summary 的 reasoning item
+        auto result = co_await provider->invoke(params, nullptr);
+        XX_TEST_EXPECT_EQ(result.message.content, "回答内容");
+        XX_TEST_EXPECT_TRUE(
+            result.message.extra.contains(server::OpenAIProvider::kResponsesReasoningItemsKey)
+        );
+        const auto& rItems
+            = result.message.extra[server::OpenAIProvider::kResponsesReasoningItemsKey];
+        XX_TEST_EXPECT_TRUE(rItems.is_array());
+        XX_TEST_EXPECT_EQ(rItems.size(), (size_t)1);
+        // 捕获阶段保持原样: 无 summary 字段
+        XX_TEST_EXPECT_FALSE(rItems[0].contains("summary"));
+
+        // 第二轮: 回传该 assistant 消息, 验证发送前已补 summary 空数组
+        neograph::CompletionParams params2;
+        params2.model    = "muse-spark-1.2-contributor";
+        params2.messages = {
+            {.role = "user", .content = "1+1=?"},
+            result.message,
+            {.role = "user", .content = "为什么？"}
+        };
+
+        co_await provider->invoke(params2, nullptr);
+        auto sent = neograph::json::parse(mock.lastRequestBody);
+        XX_TEST_EXPECT_TRUE(sent.contains("input"));
+        bool foundNormalized = false;
+        for (const auto& item : sent["input"]) {
+            if (item.is_object()
+                && item.value("type", std::string{}) == "reasoning"
+                && item.value("encrypted_content", std::string{}) == "enc_muse_data") {
+                foundNormalized = true;
+                XX_TEST_EXPECT_TRUE(item.contains("summary"));
+                XX_TEST_EXPECT_TRUE(item["summary"].is_array());
+                XX_TEST_EXPECT_TRUE(item["summary"].empty());
+                // 其余字段应保留
+                XX_TEST_EXPECT_EQ(item["encrypted_content"].get<std::string>(), "enc_muse_data");
+            }
+        }
+        XX_TEST_EXPECT_TRUE(foundNormalized);
+    } catch (const std::exception& e) {
+        XX_TEST_FAILED++;
+        TEST_FAIL << "responses reasoning item missing summary normalized failed: " << e.what()
+                  << std::endl;
+    }
+}
+
 /// Responses API: sendThinking=true 但 requestReasoningSummary=false 时
 /// (如 opencode-muse-spark / ConsoleGo 网关不支持 reasoning.summary_text include 变体,
 ///  需关闭避免 HTTP 400):
@@ -4237,6 +4332,7 @@ asio::awaitable<TestResult> run_openai_provider_tests() {
     co_await test_responses_reasoning_configurable(*mock, port);
     co_await test_responses_send_thinking(*mock, port);
     co_await test_responses_encrypted_thinking_capture_and_forward(*mock, port);
+    co_await test_responses_reasoning_item_missing_summary_normalized(*mock, port);
     co_await test_responses_request_reasoning_summary_disabled(*mock, port);
     co_await test_responses_no_send_thinking(*mock, port);
     co_await test_responses_non_streaming_tool_call(*mock, port);

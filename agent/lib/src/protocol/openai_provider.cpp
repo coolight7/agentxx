@@ -469,7 +469,16 @@ neograph::json OpenAIProvider::buildResponsesBody(const neograph::CompletionPara
                     && msg.extra[kResponsesReasoningItemsKey].is_array()
                     && !msg.extra[kResponsesReasoningItemsKey].empty()) {
                     for (const auto& rItem : msg.extra[kResponsesReasoningItemsKey]) {
-                        input.push_back(rItem);
+                        neograph::json item = rItem;
+                        // Responses API 官方 schema 中 reasoning item 的 summary 为必填字段;
+                        // 部分网关 (如 opencode-muse-spark / ConsoleGo) 严格校验, 缺失时
+                        // HTTP 400 "input[N] missing required field summary"。
+                        // 捕获时仅保存 {type, encrypted_content, id}, 此处发送前归一化补
+                        // 空数组 (对官方 API 无影响, 且兼容旧持久化会话数据)
+                        if (!item.contains("summary")) {
+                            item["summary"] = neograph::json::array();
+                        }
+                        input.push_back(std::move(item));
                     }
                 } else if (config_.requestReasoningSummary && !msg.reasoning_content.empty()) {
                     input.push_back({
