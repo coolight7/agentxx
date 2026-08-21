@@ -40,13 +40,16 @@ data_dir: default
 permission:
   mode: ask
   whitelist:
-    - "/tmp/"
-    - "${TEMP}"
+    - "/tmp/"   # linux temp dir
+    - "${TEMP}" # windows temp dir
   #   - "C:/work/trusted"
   #   - "/home/user/shared/**"
   # blacklist:
   #   - "C:/secret"
   #   - "/home/user/.ssh"
+
+subagent:
+  enable: false # 未完善
 
 # === 模型列表
 models:
@@ -177,48 +180,16 @@ models:
       reasoning_effort: "max"
       preserve_thinking: true 
 
-  # ACP 服务模型
-  - name: acp
-    type: "openai"
-    base_url: "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"
-    api_key: "${QWENAI_API_KEY}"
-    model_name: "deepseek-v4-flash"
-    extra_api_config: {}
-
-  # 训练主模型
-  - name: train
-    type: "openai"
-    base_url: "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"
-    api_key: "${QWENAI_API_KEY}"
-    model_name: "deepseek-v4-flash"
-    extra_api_config: {}
-
-  # 训练评分模型
-  - name: train_scorer
-    type: "openai"
-    base_url: "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"
-    api_key: "${QWENAI_API_KEY}"
-    model_name: "deepseek-v4-flash"
-    extra_api_config: {}
-
-  # 训练优化模型
-  - name: train_optimizer
-    type: "openai"
-    base_url: "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"
-    api_key: "${QWENAI_API_KEY}"
-    model_name: "deepseek-v4-flash"
-    extra_api_config: {}
-
 # 指定各模式下使用的模型名称（对应上面 models 中的 name）
 use_model:
   # default: local
   # default: opencode-ds-v4-flash
   default: opencode-ox-alpha
-  acp: acp
-  # train: train
+  subagent: local
+  acp: local
   train: local
-  train_scorer: train_scorer
-  train_optimizer: train_optimizer
+  train_scorer: local
+  train_optimizer: local
 
 # MCP 服务器列表
 # - namespace: 该 MCP 的命名空间，应当唯一；会作为其所有 tool 的名称前缀 (格式 "namespace_toolName")

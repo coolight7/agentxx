@@ -93,24 +93,32 @@ static bool ensureModelConfigured(
     if (resolveModelConfig(models, useModelKey).isValid()) {
         return true;
     }
-    XX_LOGE("[Config] 未配置可用 LLM 模型: {} (use_model.{}), 启动终止。", roleDesc, useModelKey);
     if (!configLoaded) {
         XX_LOGE(
-            "[Config] 未找到配置文件 '{}'。请复制模板创建 (项目根目录 agentxx-config.yaml "
-            "或 README 使用说明), 并配置 models + use_model。",
+            R"_([Config] .yaml config file '{}' not found. 
+Please copy the template to create one (agentxx-config.yaml in the project root directory, or refer to the README for usage instructions), and configure `models` and `use_model`.)_",
             configPath
         );
     } else {
         XX_LOGE(
-            "[Config] 配置文件 '{}' 中未找到有效模型条目 (use_model.{} = '{}')。请在 "
-            "models 列表添加模型并指定默认模型, 例如:\n"
-            "  models:\n"
-            "    - name: my-model\n"
-            "      type: openai\n"
-            "      base_url: https://api.openai.com/v1\n"
-            "      api_key: ${{LLM_API_KEY}}\n"
-            "  use_model:\n"
-            "    default: my-model",
+            "[Config] No available LLM model configured: {} (use_model.{}), startup aborted.",
+            roleDesc,
+            useModelKey
+        );
+        XX_LOGE(
+            R"_([Config] No valid model entry found in .yaml config file '{}' (use_model.{} = '{}'). 
+Please add a model to the models list and specify the default model.
+For example:
+
+models:
+    - name: my-model
+        type: openai
+        base_url: https://api.openai.com/v1
+        api_key: ${{LLM_API_KEY}}
+
+use_model:
+    default: my-model
+)_",
             configPath,
             useModelKey,
             useModelKey
@@ -248,7 +256,8 @@ Options:
         } else if (arg == "--ssl-key" && i + 1 < argn) {
             ++i;
             sslKeyFile = argv[i];
-        } else if (arg == "tui" || arg == "cli" || arg == "server" || arg == "acp" || arg == "train") {
+        } else if (arg == "tui" || arg == "cli" || arg == "server" || arg == "acp"
+                   || arg == "train") {
             mode = arg;
         } else {
             XX_LOGE("Unknown arg: `{}`", arg);
@@ -371,21 +380,21 @@ Options:
         if (!ensureModelConfigured(
                 yamlCfg.models,
                 yamlCfg.useModelTrain,
-                "训练模型",
+                "train model",
                 configPath,
                 configLoaded
             )
             || !ensureModelConfigured(
                 yamlCfg.models,
                 yamlCfg.useModelTrainScorer,
-                "评分模型",
+                "train scorer model",
                 configPath,
                 configLoaded
             )
             || !ensureModelConfigured(
                 yamlCfg.models,
                 yamlCfg.useModelTrainOptimizer,
-                "优化模型",
+                "train ooptimizer model",
                 configPath,
                 configLoaded
             )) {
@@ -424,7 +433,7 @@ Options:
         if (!ensureModelConfigured(
                 yamlCfg.models,
                 yamlCfg.useModelAcp,
-                "ACP 模型",
+                "ACP model",
                 configPath,
                 configLoaded
             )) {
@@ -516,7 +525,7 @@ Options:
         if (!ensureModelConfigured(
                 yamlCfg.models,
                 yamlCfg.useModelDefault,
-                "主模型",
+                "default model",
                 configPath,
                 configLoaded
             )) {
@@ -598,7 +607,7 @@ Options:
     if (!ensureModelConfigured(
             yamlCfg.models,
             yamlCfg.useModelDefault,
-            "主模型",
+            "default model",
             configPath,
             configLoaded
         )) {
