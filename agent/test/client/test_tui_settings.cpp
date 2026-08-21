@@ -156,13 +156,6 @@ void test_tail_thinking_mode_set_get() {
         XX_TEST_EXPECT_TRUE(settings.tailThinkingMode() == c.mode);
         XX_TEST_EXPECT_EQ(settings.tailThinkingModeName(), c.name);
     }
-
-    settings.setTailThinkingPreviewLength(80);
-    XX_TEST_EXPECT_EQ(settings.tailThinkingPreviewLength(), size_t{80});
-
-    // 恢复默认
-    settings.setTailThinkingMode(TUISettings::kDefaultTailThinkingMode);
-    settings.setTailThinkingPreviewLength(TUISettings::kDefaultTailThinkingPreviewLength);
 }
 
 void test_tail_thinking_names_table() {
@@ -336,7 +329,6 @@ void test_persist_to_db() {
     settings.setAnimationLevel(AnimationLevel::Low);
     settings.setLogLevel(agentxx::util::LogLevel::Warn);
     settings.setTailThinkingMode(TailThinkingMode::SingleLine);
-    settings.setTailThinkingPreviewLength(75);
     {
         auto fresh = agentxx::util::SettingsDb(dbPath);
         XX_TEST_EXPECT_EQ(fresh.getInt64("tui.theme", -1), int64_t{TUISettings::kThemeLight});
@@ -351,7 +343,6 @@ void test_persist_to_db() {
     settings.setAnimationLevel(AnimationLevel::Ultra);
     settings.setLogLevel(agentxx::util::LogLevel::Debug);
     settings.setTailThinkingMode(TailThinkingMode::AutoExpand);
-    settings.setTailThinkingPreviewLength(60);
     {
         auto fresh = agentxx::util::SettingsDb(dbPath);
         XX_TEST_EXPECT_EQ(fresh.getInt64("tui.theme", -1), int64_t{TUISettings::kThemeDark});
@@ -365,7 +356,6 @@ void test_persist_to_db() {
     settings.setAnimationLevel(TUISettings::kDefaultAnimationLevel);
     settings.setLogLevel(TUISettings::kDefaultLogLevel);
     settings.setTailThinkingMode(TUISettings::kDefaultTailThinkingMode);
-    settings.setTailThinkingPreviewLength(TUISettings::kDefaultTailThinkingPreviewLength);
 
     // 注意: TUISettings 单例持有 db 连接 (进程生命周期), Windows 上无法删除
     // 被占用文件, 故清理失败时忽略 (仅临时目录残留, 不影响测试结果)
