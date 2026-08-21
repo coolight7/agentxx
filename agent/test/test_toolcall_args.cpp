@@ -435,6 +435,119 @@ TestResult testToolcallArgs() {
         XX_TEST_EXPECT_EQ(args["paths"].size(), size_t{3});
     }
 
+    // ===================== number(double) <-> integer =====================
+    // #28 integer -> number: 整数参数按声明转为 double
+    {
+        neograph::ChatTool def;
+        def.name       = "tool_ac";
+        def.parameters = makeParams({"ratio", {{"type", "number"}}});
+        auto args      = neograph::json{
+                 {"ratio", 42}
+        };
+        XX_TEST_EXPECT_TRUE(agentxx::nodes::ToolcallWrapNode::autoFixArgsType(def, args));
+        XX_TEST_EXPECT_TRUE(args["ratio"].is_number_float());
+        XX_TEST_EXPECT_EQ(args["ratio"].get<double>(), 42.0);
+    }
+
+    // #29 unsigned -> number: 无符号整数同样转为 double
+    {
+        neograph::ChatTool def;
+        def.name       = "tool_ad";
+        def.parameters = makeParams({"size", {{"type", "number"}}});
+        auto args      = neograph::json{
+                 {"size", 12345678901ULL}
+        };
+        XX_TEST_EXPECT_TRUE(agentxx::nodes::ToolcallWrapNode::autoFixArgsType(def, args));
+        XX_TEST_EXPECT_TRUE(args["size"].is_number_float());
+        XX_TEST_EXPECT_EQ(args["size"].get<double>(), 12345678901.0);
+    }
+
+    // #30 number -> integer: 浮点值恰为整数值时无损转换 (3.0 -> 3)
+    {
+        neograph::ChatTool def;
+        def.name       = "tool_ae";
+        def.parameters = makeParams({"count", {{"type", "integer"}}});
+        auto args      = neograph::json{
+                 {"count", 3.0}
+        };
+        XX_TEST_EXPECT_TRUE(agentxx::nodes::ToolcallWrapNode::autoFixArgsType(def, args));
+        XX_TEST_EXPECT_TRUE(args["count"].is_number_integer());
+        XX_TEST_EXPECT_EQ(args["count"].get<long long>(), 3);
+    }
+
+    // #31 number -> integer: 负数整值浮点同样转换 (-3.0 -> -3)
+    {
+        neograph::ChatTool def;
+        def.name       = "tool_af";
+        def.parameters = makeParams({"count", {{"type", "integer"}}});
+        auto args      = neograph::json{
+                 {"count", -3.0}
+        };
+        XX_TEST_EXPECT_TRUE(agentxx::nodes::ToolcallWrapNode::autoFixArgsType(def, args));
+        XX_TEST_EXPECT_TRUE(args["count"].is_number_integer());
+        XX_TEST_EXPECT_EQ(args["count"].get<long long>(), -3);
+    }
+
+    // #32 number -> integer: 非整数值浮点保持原样 (3.5 无法无损转整数)
+    {
+        neograph::ChatTool def;
+        def.name       = "tool_ag";
+        def.parameters = makeParams({"count", {{"type", "integer"}}});
+        auto args      = neograph::json{
+                 {"count", 3.5}
+        };
+        XX_TEST_EXPECT_FALSE(agentxx::nodes::ToolcallWrapNode::autoFixArgsType(def, args));
+        XX_TEST_EXPECT_TRUE(args["count"].is_number_float());
+        XX_TEST_EXPECT_EQ(args["count"].get<double>(), 3.5);
+    }
+
+    // #33 number -> integer: 超出 int64 表示范围保持原样 (1e20)
+    {
+        neograph::ChatTool def;
+        def.name       = "tool_ah";
+        def.parameters = makeParams({"count", {{"type", "integer"}}});
+        auto args      = neograph::json{
+                 {"count", 1e20}
+        };
+        XX_TEST_EXPECT_FALSE(agentxx::nodes::ToolcallWrapNode::autoFixArgsType(def, args));
+        XX_TEST_EXPECT_TRUE(args["count"].is_number_float());
+    }
+
+    // #34 联合类型 ["number", "integer"]: 整数已合法不转换; 整值浮点转为整数
+    {
+        neograph::ChatTool def;
+        def.name = "tool_ai";
+        def.parameters
+            = makeParams({"v", {{"type", neograph::json::array({"number", "integer"})}}});
+        auto args = neograph::json{
+            {"v", 7}
+        };
+        // 整数同时满足两种声明, 不转换
+        XX_TEST_EXPECT_FALSE(agentxx::nodes::ToolcallWrapNode::autoFixArgsType(def, args));
+        XX_TEST_EXPECT_TRUE(args["v"].is_number_integer());
+
+        args = neograph::json{
+            {"v", 2.0}
+        };
+        // 声明含 integer, 整值浮点转为整数后对两种声明均合法
+        XX_TEST_EXPECT_TRUE(agentxx::nodes::ToolcallWrapNode::autoFixArgsType(def, args));
+        XX_TEST_EXPECT_TRUE(args["v"].is_number_integer());
+        XX_TEST_EXPECT_EQ(args["v"].get<long long>(), 2);
+    }
+
+    // #35 联合类型 ["string", "number"]: 数值参数已合法, 不做数值间转换
+    {
+        neograph::ChatTool def;
+        def.name       = "tool_aj";
+        def.parameters = makeParams({"v", {{"type", neograph::json::array({"string", "number"})}}});
+        auto args      = neograph::json{
+                 {"v", 5}
+        };
+        XX_TEST_EXPECT_FALSE(agentxx::nodes::ToolcallWrapNode::autoFixArgsType(def, args));
+        XX_TEST_EXPECT_TRUE(args["v"].is_number_integer());
+        XX_TEST_EXPECT_EQ(args["v"].get<long long>(), 5);
+    }
+
     return TestResult{g_tca_passed, g_tca_failed};
 }
 
