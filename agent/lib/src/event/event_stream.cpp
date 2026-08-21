@@ -193,14 +193,30 @@ void EventBridge::handleChannelWrite(const neograph::graph::GraphEvent& event) {
             // Assistant 消息。顺序与渲染端拆解一致: Think 在前, 其余在后。
             // 展开语义与渲染端 (TUI) 同步一致: 历史消息直接就是渲染消息,
             // client 端无需再按 json 拆解
-            auto reasoning = jm.value("reasoning_content", std::string{});
-            if (!reasoning.empty()) {
+            auto reasoning       = jm.value("reasoning_content", std::string{});
+            int  reasoningTokens = 0;
+            bool isEncrypted     = false;
+            if (jm.contains("extra") && jm["extra"].is_object()) {
+                reasoningTokens = jm["extra"].value("reasoning_tokens", 0);
+                if (jm["extra"].contains("responses_reasoning_items")
+                    && jm["extra"]["responses_reasoning_items"].is_array()
+                    && !jm["extra"]["responses_reasoning_items"].empty()) {
+                    isEncrypted = true;
+                }
+            }
+            if (!reasoning.empty() || isEncrypted || reasoningTokens > 0) {
                 auto m = ViewMessage::makeText(
                     ViewMessage::Role::Think,
                     reasoning,
                     jm.value("startTimeMs", int64_t{0}),
                     jm.value("durationMs", int64_t{0})
                 );
+                if (isEncrypted || reasoningTokens > 0) {
+                    m.think = ViewMessage::ThinkData{
+                        .reasoningTokens = reasoningTokens,
+                        .isEncrypted     = isEncrypted,
+                    };
+                }
                 m.collapsed = true;
                 session_->appendViewMessage(std::move(m));
             }
@@ -298,14 +314,30 @@ void EventBridge::handleChannelWrite(const neograph::graph::GraphEvent& event) {
             hasLLMOutput = true;
             // 展开: reasoning_content 非空 → Think (折叠); content 非空 → Assistant。
             // 顺序与渲染端拆解一致: Think 在前, Assistant 在后
-            auto reasoning = jm.value("reasoning_content", std::string{});
-            if (!reasoning.empty()) {
+            auto reasoning       = jm.value("reasoning_content", std::string{});
+            int  reasoningTokens = 0;
+            bool isEncrypted     = false;
+            if (jm.contains("extra") && jm["extra"].is_object()) {
+                reasoningTokens = jm["extra"].value("reasoning_tokens", 0);
+                if (jm["extra"].contains("responses_reasoning_items")
+                    && jm["extra"]["responses_reasoning_items"].is_array()
+                    && !jm["extra"]["responses_reasoning_items"].empty()) {
+                    isEncrypted = true;
+                }
+            }
+            if (!reasoning.empty() || isEncrypted || reasoningTokens > 0) {
                 auto m = ViewMessage::makeText(
                     ViewMessage::Role::Think,
                     reasoning,
                     jm.value("startTimeMs", int64_t{0}),
                     jm.value("durationMs", int64_t{0})
                 );
+                if (isEncrypted || reasoningTokens > 0) {
+                    m.think = ViewMessage::ThinkData{
+                        .reasoningTokens = reasoningTokens,
+                        .isEncrypted     = isEncrypted,
+                    };
+                }
                 m.collapsed = true;
                 session_->appendViewMessage(std::move(m));
             }
