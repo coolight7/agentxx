@@ -7,10 +7,10 @@
 #include "ftxui/component/event.hpp"
 #include "ftxui/dom/elements.hpp"
 #include "ftxui/screen/terminal.hpp"
-#include <markdown/dom_builder.hpp>
-#include <markdown/parser.hpp>
-#include <markdown/state_diagram.hpp>
-#include <markdown/text_utils.hpp>
+#include "markdown/dom_builder.hpp"
+#include "markdown/parser.hpp"
+#include "markdown/state_diagram.hpp"
+#include "markdown/text_utils.hpp"
 
 using namespace ftxui;
 
@@ -1235,18 +1235,47 @@ Element MessageListComponent::buildMessageBlock(
             }
             if (!expanded) {
                 // 同 System: 预览超宽时右缘裁剪, 不压缩前缀
-                header.push_back(
-                    text(oneLinePreview(msg.text)) | color(theme.thinkingColor) | dim | xflex_shrink
-                );
+                std::string previewText;
+                if (!msg.text.empty()) {
+                    previewText = oneLinePreview(msg.text);
+                } else if (msg.think && msg.think->reasoningTokens > 0) {
+                    previewText = fmt::format("思考 {} tokens", msg.think->reasoningTokens);
+                } else if (msg.think && msg.think->isEncrypted) {
+                    previewText = "思考内容被加密";
+                }
+                if (!previewText.empty()) {
+                    header.push_back(
+                        text(std::move(previewText)) | color(theme.thinkingColor) | dim
+                        | xflex_shrink
+                    );
+                }
             }
             lines.push_back(hbox(std::move(header)));
             if (expanded) {
-                auto [el, builder]
-                    = renderMarkdown(msg.text, theme.thinkingColor, theme.markdownTheme, maxWidth);
-                if (builder) {
-                    mdBuilders.push_back(std::move(builder));
+                if (!msg.text.empty()) {
+                    auto [el, builder] = renderMarkdown(
+                        msg.text,
+                        theme.thinkingColor,
+                        theme.markdownTheme,
+                        maxWidth
+                    );
+                    if (builder) {
+                        mdBuilders.push_back(std::move(builder));
+                    }
+                    lines.push_back(std::move(el));
+                } else {
+                    std::string infoText;
+                    if (msg.think && msg.think->reasoningTokens > 0) {
+                        infoText = fmt::format("思考 {} tokens", msg.think->reasoningTokens);
+                    } else if (msg.think && msg.think->isEncrypted) {
+                        infoText = "思考内容被加密";
+                    }
+                    if (!infoText.empty()) {
+                        lines.push_back(
+                            text(std::move(infoText)) | color(theme.thinkingColor) | dim
+                        );
+                    }
                 }
-                lines.push_back(std::move(el));
             }
             return vbox(std::move(lines));
         }
@@ -1292,7 +1321,9 @@ Element MessageListComponent::buildMessageBlock(
                     );
                 }
             } else {
-                header.push_back(text(msg.tool->toolName) | color(theme.toolColor));
+                header.push_back(
+                    text(isPlanTool ? "Plan" : msg.tool->toolName) | color(theme.toolColor)
+                );
             }
 
             lines.push_back(hbox(std::move(header)));
