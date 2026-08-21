@@ -299,6 +299,23 @@ std::string makeUniqueToolCallId(size_t i = 0) {
     return fmt::format("call_{}_{}_{:08x}", ts, i, static_cast<uint32_t>(rng()));
 }
 
+// 判定是否为"有效空响应": content / 明文思考 / tool_calls 全空, 且无加密思考载体
+// - 加密思考载体 (Responses API reasoning items) 存于 message.extra
+//   [kResponsesReasoningItemsKey], gemini 等载体网关可能返回 summary/content 均空、
+//   仅 enc 的响应, 不视为空; 捕获侧保证 item 的 encrypted_content 非空,
+//   数组非空即存在有效载体
+// - 空响应对 Agent 而言等于本次生成失败: 无内容可展示、无 tool_calls 可路由,
+//   由调用方抛出异常, 经 modelcall 重试链路自动重试并提示 UI
+bool isEmptyResponse(const neograph::ChatCompletion& completion) {
+    const auto& msg = completion.message;
+    if (!msg.content.empty() || !msg.reasoning_content.empty() || !msg.tool_calls.empty()) {
+        return false;
+    }
+    return !(msg.extra.contains(OpenAIProvider::kResponsesReasoningItemsKey)
+             && msg.extra[OpenAIProvider::kResponsesReasoningItemsKey].is_array()
+             && !msg.extra[OpenAIProvider::kResponsesReasoningItemsKey].empty());
+}
+
 } // namespace
 
 void OpenAIProvider::fillMissingToolCallIds(neograph::ChatCompletion& completion) {
@@ -668,6 +685,17 @@ asio::awaitable<neograph::ChatCompletion>
     // 非流式 tool_calls 缺失 id 时同样回填 call_N (与流式路径一致)
     fillMissingToolCallIds(completion);
 
+    // 空响应视为生成失败, 抛异常交由 modelcall 重试链路处理 (与流式路径行为一致)
+    if (isEmptyResponse(completion)) {
+        throw std::runtime_error(fmt::format(
+            "LLM response is empty | model={} usage={}/{}/{}",
+            params.model.empty() ? config_.modelName : params.model,
+            completion.usage.prompt_tokens,
+            completion.usage.completion_tokens,
+            completion.usage.total_tokens
+        ));
+    }
+
     co_return completion;
 }
 
@@ -832,6 +860,17 @@ asio::awaitable<neograph::ChatCompletion>
 
     completion.stop_reason = hasToolCall ? "tool_use" : "end_turn";
 
+    // 空响应视为生成失败, 抛异常交由 modelcall 重试链路处理 (与流式路径行为一致)
+    if (isEmptyResponse(completion)) {
+        throw std::runtime_error(fmt::format(
+            "LLM response is empty | model={} usage={}/{}/{}",
+            params.model.empty() ? config_.modelName : params.model,
+            completion.usage.prompt_tokens,
+            completion.usage.completion_tokens,
+            completion.usage.total_tokens
+        ));
+    }
+
     co_return completion;
 }
 
@@ -951,14 +990,16 @@ asio::awaitable<neograph::ChatCompletion> OpenAIProvider::doStream(
         completion.message.tool_calls.push_back(std::move(tc));
     }
 
-    if (fullContent.empty() && fullThinking.empty() && completion.message.tool_calls.empty()) {
-        XX_LOGW(
+    // 流正常结束但无任何有效输出: 视为本次生成失败, 抛异常交由 modelcall
+    // 重试链路处理 (UI 警告提示 + 自动重试), 避免空 assistant 消息静默结束本轮会话
+    if (isEmptyResponse(completion)) {
+        throw std::runtime_error(fmt::format(
             "LLM stream completed with empty response | model={} usage={}/{}/{}",
-            params.model,
+            params.model.empty() ? config_.modelName : params.model,
             completion.usage.prompt_tokens,
             completion.usage.completion_tokens,
             completion.usage.total_tokens
-        );
+        ));
     }
 
     XX_LOGT("OpenAIProvider::doStream END");
@@ -1085,14 +1126,16 @@ asio::awaitable<neograph::ChatCompletion> OpenAIProvider::doStreamResponses(
     }
     completion.stop_reason = tcMap.empty() ? "end_turn" : "tool_use";
 
-    if (fullContent.empty() && fullThinking.empty() && completion.message.tool_calls.empty()) {
-        XX_LOGW(
+    // 流正常结束但无任何有效输出: 视为本次生成失败, 抛异常交由 modelcall
+    // 重试链路处理 (UI 警告提示 + 自动重试), 避免空 assistant 消息静默结束本轮会话
+    if (isEmptyResponse(completion)) {
+        throw std::runtime_error(fmt::format(
             "LLM stream completed with empty response | model={} usage={}/{}/{}",
-            params.model,
+            params.model.empty() ? config_.modelName : params.model,
             completion.usage.prompt_tokens,
             completion.usage.completion_tokens,
             completion.usage.total_tokens
-        );
+        ));
     }
 
     co_return completion;

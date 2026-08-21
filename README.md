@@ -29,7 +29,7 @@
 - **丰富的 tool**; 内置 文件读写、命令行执行、任务规划 等，编译时可选自由组合，支持自动纠正 LLM 的参数类型、字符编码
 - **C++插件/js插件支持**; 已实现 codegraph、系统CPU/GPU/RAM等信息、屏幕截取、鼠标选择文本事件流 等效果显著的功能，通过 C++ Quickjs 插件可以加载实现 js 插件
 - **UI与Agent可分离**; 内置支持 TUI、cli、接入GUI、Websocket API、FFI调用、动态库/静态库嵌入App; 支持单进程、多进程分别启动 UI 和 Agent Websocket Server服务
-- **中断、错误自动处理**; 长时间稳定运行、网络重试、动态超时限制、消息上下文角色顺序检查和修正、自动检查和修正字符编码
+- **中断、错误自动处理**; 长时间稳定运行、网络重试、动态超时限制、消息上下文角色顺序检查和修正、自动检查和修正字符编码、空响应自动重试
 
 ## 兼容性
 ### 跨系统支持
@@ -55,8 +55,7 @@
     - 默认编译提供 动态库`libagentxx`、静态库`libagentxx_static`, 且统一动态链接 libstdc++/libgcc/msvcrt(/MD|/MDd)
 
 ### 编译后的体积和依赖库
-- Agentxx 编译后输出的 可执行程序`agentxx_cli`、动态库`libagentxx` 都会尽量静态链接依赖库，保持编译结果对动态库的依赖尽量少
-- ⬜编译优化，控制导出符号，裁剪体积
+- Agentxx 编译后输出的 可执行程序`agentxx_cli`、动态库`libagentxx` 都会尽量静态链接依赖库，保持编译结果对动态库的依赖尽量少；编译优化 控制导出符号，裁剪无用符号
 - 以下是`仅编译agentxx，移除大部分不必要的扩展依赖库`时的体积和运行时内存占用，如果需要进一步裁剪体积，可以移除 Hyperscan/codegraph/Boost.process 等可选库、采用 -Os/-Oz 体积编译优化 (commit: 0e2889243389fca8c47420b4410bd7a57e708180)
     - ⬜奇怪的是 debug 和 release 编译出来体积差别很大，但运行时内存占用差别不大，有待排查
 
@@ -189,18 +188,18 @@
     - Openai API
     - Openai Response API
     - Anthropic API
-    - 支持开启发送 Thinking 内容
+    - 支持捕获思考内容，回传 Thinking 内容，加密 Thinking 消息提示和回传
     - 自定义 (BaseUrl/ApiKey/ModelName/ExtraConfig)
+    - 广泛的字段兼容、空响应检查和自动重试
 - ✅**自定义配置**
     - 支持启动时从 agentxx-config.yaml、.env 加载配置文件
-    - yaml 配置支持添加 Memory、MCP、Skill
+    - yaml 配置支持添加 Memory、MCP、Skill、plugins
     - 分离 System/Tool Prompt 到独立配置，以便支持自定义和`Self-upgrade`自动调整适配
 - ✅**网络超时与SSL验证**
     - 支持配置连接超时、动态超时限制 (自动根据请求体大小动态计算发送超时、流式接收间隔超时)
     - 支持关闭SSL验证
 - ✅**队列等待输入**
-    - TUI输入队列
-    - ⬜agent-io 内置正在运行会话时增加用户输入，则添加到队列中，等待会话完成自动插入
+    - agent-io 用户输入队列，等待当前会话执行完成时自动插入继续执行; UI 端支持控制直接中断插入消息
 
 ### UI
 - ✅Cli: `agentxx_cli cli`
