@@ -80,7 +80,24 @@ struct ToolHeaderFixture {
         });
     }
 
-    /// 渲染一帧并返回屏幕文本
+    /// 剥离 ANSI 转义序列, 获取纯文本表示
+    static std::string stripAnsi(std::string_view str) {
+        std::string out;
+        out.reserve(str.size());
+        for (size_t i = 0; i < str.size(); ++i) {
+            if (str[i] == '\033' && i + 1 < str.size() && str[i + 1] == '[') {
+                i += 2;
+                while (i < str.size() && !(str[i] >= '@' && str[i] <= '~')) {
+                    ++i;
+                }
+                continue;
+            }
+            out += str[i];
+        }
+        return out;
+    }
+
+    /// 渲染一帧并返回屏幕文本 (含 ANSI 转义控制字符)
     std::string render() {
         ctx.frameState = sharedState.readSnapshot();
         auto el        = comp->Render();
@@ -90,6 +107,11 @@ struct ToolHeaderFixture {
         );
         ftxui::Render(screen, el);
         return screen.ToString();
+    }
+
+    /// 渲染一帧并返回纯文本 (剥离 ANSI 颜色/样式代码, 方便断言纯文本)
+    std::string plainRender() {
+        return stripAnsi(render());
     }
 };
 
@@ -206,18 +228,58 @@ void testTuiToolHeaderOverflow() {
     XX_TEST_EXPECT_TRUE(out2.find("+ [Think] ") != std::string::npos);
 }
 
-// 运行中工具消息折叠展示 (默认不自动展开, 头部展示参数摘要或 running...)
+// 运行中工具消息折叠展示 (默认不自动展开, 头部展示参数开头包含 [running], 且 toolName 高亮)
 void testTuiToolHeaderRunning() {
     ToolHeaderFixture f;
 
-    // 已知工具在 running 状态下折叠同样展示参数摘要
+    // 已知工具在 running 状态下折叠展示 "Read · [running] /path"
     f.pushTool("agentxx_filesystem_read", R"({"path":"/home/running.cpp"})", false);
-    XX_TEST_EXPECT_TRUE(f.render().find("Read · /home/running.cpp") != std::string::npos);
+    // 纯文本断言: 参数开头包含 [running]
+    XX_TEST_EXPECT_TRUE(
+        f.plainRender().find("Read · [running] /home/running.cpp") != std::string::npos
+    );
+    // 样式断言: 包含 accentColor 高亮颜色代码 (102;204;255)
+    XX_TEST_EXPECT_TRUE(f.render().find("102;204;255") != std::string::npos);
 
-    // 未知工具在 running 状态下折叠展示 "toolName running..."
+    // 已知带区间工具在 running 状态下折叠展示 "Read · [running] [0, 100] /path"
+    ToolHeaderFixture fReadRange;
+    fReadRange.pushTool(
+        "agentxx_filesystem_read",
+        R"({"path":"/home/running.cpp","line_offset":0,"line_limit":100})",
+        false
+    );
+    XX_TEST_EXPECT_TRUE(
+        fReadRange.plainRender().find("Read · [running] [0, 100] /home/running.cpp")
+        != std::string::npos
+    );
+
+    // bash 工具在 running 状态下折叠展示 "Bash · [running] command"
+    ToolHeaderFixture fBash;
+    fBash.pushTool("agentxx_execute_bash_command", R"({"command":"ls -la"})", false);
+    XX_TEST_EXPECT_TRUE(fBash.plainRender().find("Bash · [running] ls -la") != std::string::npos);
+
+    // plan 工具在 running 状态下折叠展示 "Plan · [running] [~] ..."
+    ToolHeaderFixture fPlan;
+    fPlan.pushTool(
+        "agentxx_planning_write",
+        R"({"roadmap":"[*] --> s1\ns1 --> [*]","todos":[{"state":"in_progress","content":"reproduce issue"}]})",
+        false
+    );
+    XX_TEST_EXPECT_TRUE(
+        fPlan.plainRender().find("Plan · [running] [~] reproduce issue") != std::string::npos
+    );
+
+    // 未知工具在 running 状态下折叠展示 "toolName · [running]"
     ToolHeaderFixture f2;
     f2.pushTool("custom_tool_run", R"({})", false);
-    XX_TEST_EXPECT_TRUE(f2.render().find("custom_tool_run running...") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(f2.plainRender().find("custom_tool_run · [running]") != std::string::npos);
+
+    // 未知工具带参数在 running 状态下折叠展示 "toolName · [running] args..."
+    ToolHeaderFixture f3;
+    f3.pushTool("custom_tool_run", R"({"key":"val"})", false);
+    XX_TEST_EXPECT_TRUE(
+        f3.plainRender().find("custom_tool_run · [running] {\"key\":\"val\"}") != std::string::npos
+    );
 }
 
 // Plan (planning_write) 特化渲染:
@@ -234,7 +296,10 @@ void testTuiToolHeaderPlan() {
     );
     std::string collapsed = f.render();
     XX_TEST_EXPECT_TRUE(collapsed.find("+ [Tool] ") != std::string::npos);
-    XX_TEST_EXPECT_TRUE(collapsed.find("Plan · [~] reproduce issue; [ ] fix root cause; [#] write tests") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(
+        collapsed.find("Plan · [~] reproduce issue; [ ] fix root cause; [#] write tests")
+        != std::string::npos
+    );
 
     // 展开测试
     ToolHeaderFixture f2(120, 24);
@@ -245,7 +310,7 @@ void testTuiToolHeaderPlan() {
         false // 展开
     );
     std::string expanded = f2.render();
-    XX_TEST_EXPECT_TRUE(expanded.find("- [Tool] Plan") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(expanded.find("- [Tool] agentxx_planning_write") != std::string::npos);
     XX_TEST_EXPECT_TRUE(expanded.find("State Diagram:") != std::string::npos);
     XX_TEST_EXPECT_TRUE(expanded.find("Todos:") != std::string::npos);
     XX_TEST_EXPECT_TRUE(expanded.find("[~] do task A") != std::string::npos);
