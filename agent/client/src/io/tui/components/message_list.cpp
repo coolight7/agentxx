@@ -969,12 +969,19 @@ void MessageListComponent::syncStream(const TUIRenderState& st) {
 // 工具调用头部摘要 (TUI 特化渲染)
 // ---------------------------------------------------------------------------
 
+struct ToolHeaderSummary {
+    std::string toolName;
+    std::string argsSummary;
+};
+
 /// 将工具调用的参数 JSON 摘要为单行头部, 例如:
-/// - agentxx_filesystem_read  -> "Read · [0, 100] /path/file"
-/// - agentxx_filesystem_write      -> "Write · /path/file"
-/// - agentxx_web_search                 -> "Search · <query>"
-/// 未知工具 / 参数解析失败返回空串, 调用方回退显示原始 toolName
-static std::string buildToolHeaderSummary(std::string_view toolName, std::string_view argsText) {
+/// - agentxx_filesystem_read  -> "Read", " · [0, 100] /path/file" (运行中 " · [running] [0, 100]
+/// /path/file")
+/// - agentxx_filesystem_write      -> "Write", " · /path/file" (运行中 " · [running] /path/file")
+/// - agentxx_web_search                 -> "Search", " · <query>" (运行中 " · [running] <query>")
+/// 未知工具 / 参数解析失败返回空 toolName, 调用方回退显示原始 toolName
+static ToolHeaderSummary
+    buildToolHeaderSummary(std::string_view toolName, std::string_view argsText, bool running) {
     // 参数 JSON 解析失败 (截断/异常) 或解析结果非对象时回退显示原始 toolName
     bool           parseOk = true;
     neograph::json args    = agentxx::util::catchError<neograph::json>(
@@ -1001,20 +1008,26 @@ static std::string buildToolHeaderSummary(std::string_view toolName, std::string
         return args.value(std::string(key), std::vector<std::string>{});
     };
 
-    /// 拼接 "{action} · [{params}] {target}" (params 可空)
-    auto make = [](std::string_view action, std::string_view params, std::string_view target) {
-        std::string out{action};
-        out += " ·";
+    /// 拼接 "{action}" 与 " · [running] [{params}] {target}" (params 可空)
+    auto make = [&](std::string_view action, std::string_view params, std::string_view target
+                ) -> ToolHeaderSummary {
+        std::string argsSummary = " ·";
+        if (running) {
+            argsSummary += " [running]";
+        }
         if (!params.empty()) {
-            out += " [";
-            out += params;
-            out += "]";
+            argsSummary += " [";
+            argsSummary += params;
+            argsSummary += "]";
         }
         if (!target.empty()) {
-            out += " ";
-            out += target;
+            argsSummary += " ";
+            argsSummary += target;
         }
-        return out;
+        return ToolHeaderSummary{
+            .toolName    = std::string(action),
+            .argsSummary = std::move(argsSummary),
+        };
     };
 
     /// "[offset, limit]" 区间参数摘要 (默认 -1/缺省表示不过滤, 不显示)
@@ -1298,32 +1311,48 @@ Element MessageListComponent::buildMessageBlock(
                 );
             }
             if (!expanded) {
-                // 折叠状态
-                auto headerText = buildToolHeaderSummary(msg.tool->toolName, msg.text);
-                if (false == headerText.empty()) {
-                    // 特化渲染 (摘要可能超宽: xflex_shrink 右缘裁剪, 不压缩前缀)
+                // 折叠状态, 特化渲染
+                auto summary = buildToolHeaderSummary(msg.tool->toolName, msg.text, !finished);
+                std::string displayName;
+                std::string argsSummary;
+                if (!summary.toolName.empty()) {
+                    displayName = std::move(summary.toolName);
+                    argsSummary = std::move(summary.argsSummary);
+                } else {
+                    displayName = msg.tool->toolName;
+                    if (!finished) {
+                        argsSummary = " · [running]";
+                        if (!msg.text.empty()) {
+                            argsSummary += " " + oneLinePreview(msg.text, 80);
+                        }
+                    } else {
+                        auto resPreview = oneLinePreview(msg.tool->toolResult);
+                        if (!resPreview.empty()) {
+                            argsSummary = " " + std::move(resPreview);
+                        }
+                    }
+                }
+
+                // toolName: 运行中高亮
+                if (!finished) {
                     header.push_back(
-                        text(std::move(headerText)) | color(theme.toolColor) | dim | xflex_shrink
-                    );
-                } else if (!finished) {
-                    header.push_back(
-                        text(fmt::format("{} running...", msg.tool->toolName))
-                        | color(theme.toolColor) | dim | xflex_shrink
+                        text(std::move(displayName)) | color(theme.accentColor) | bold
                     );
                 } else {
+                    header.push_back(text(std::move(displayName)) | color(theme.toolColor) | dim);
+                }
+
+                if (!argsSummary.empty()) {
                     header.push_back(
-                        text(fmt::format(
-                            "{} {}",
-                            msg.tool->toolName,
-                            oneLinePreview(msg.tool->toolResult)
-                        ))
-                        | color(theme.toolColor) | dim | xflex_shrink
+                        text(std::move(argsSummary)) | color(theme.toolColor) | dim | xflex_shrink
                     );
                 }
             } else {
-                header.push_back(
-                    text(isPlanTool ? "Plan" : msg.tool->toolName) | color(theme.toolColor)
-                );
+                if (!finished) {
+                    header.push_back(text(msg.tool->toolName) | color(theme.accentColor) | bold);
+                } else {
+                    header.push_back(text(msg.tool->toolName) | color(theme.toolColor));
+                }
             }
 
             lines.push_back(hbox(std::move(header)));
