@@ -156,13 +156,6 @@ void test_tail_thinking_mode_set_get() {
         XX_TEST_EXPECT_TRUE(settings.tailThinkingMode() == c.mode);
         XX_TEST_EXPECT_EQ(settings.tailThinkingModeName(), c.name);
     }
-
-    settings.setTailThinkingPreviewLength(80);
-    XX_TEST_EXPECT_EQ(settings.tailThinkingPreviewLength(), size_t{80});
-
-    // 恢复默认
-    settings.setTailThinkingMode(TUISettings::kDefaultTailThinkingMode);
-    settings.setTailThinkingPreviewLength(TUISettings::kDefaultTailThinkingPreviewLength);
 }
 
 void test_tail_thinking_names_table() {
@@ -181,18 +174,31 @@ void test_tail_line_preview() {
     XX_TEST_EXPECT_EQ(tailLinePreview("hello world", 60), "hello world");
     XX_TEST_EXPECT_EQ(tailLinePreview("line 1\nline 2\nline 3", 60), "line 1 line 2 line 3");
 
-    // 长度超过 max -> 截取末尾并加 "..."
+    // max 为最大显示列数 (含 "..." 占 3 列): 超出时截取末尾 budget = max-3 列
     std::string text = "1234567890abcdefghij";
-    XX_TEST_EXPECT_EQ(tailLinePreview(text, 10), "...abcdefghij");
+    XX_TEST_EXPECT_EQ(tailLinePreview(text, 10), "...defghij");
 
-    // UTF-8 多字节测试
+    // UTF-8 多字节: 宽字符按 2 列计, 截断只发生在码点边界
     std::string zh = "第一步分析问题第二步编写代码第三步进行测试";
-    // zh 共 21 个汉字, 截取末尾 7 个汉字
-    XX_TEST_EXPECT_EQ(tailLinePreview(zh, 7), "...第三步进行测试");
+    // zh 共 21 个汉字 (42 列), max=7 -> 内容预算 4 列 = 末尾 2 个汉字
+    XX_TEST_EXPECT_EQ(tailLinePreview(zh, 7), "...测试");
 
-    // 换行与空白压缩
+    // 换行与空白压缩; 极小预算 (max=4 -> 预算 1 列) 至少保留最后一个码点,
+    // 宽字符宁可溢出预算也不返回空内容 (渲染层 xflex_shrink 兜底裁剪)
     std::string multiline = "思考过程第一行\n\n思考过程第二行  \n  思考完成";
-    XX_TEST_EXPECT_EQ(tailLinePreview(multiline, 4), "...思考完成");
+    XX_TEST_EXPECT_EQ(tailLinePreview(multiline, 4), "...成");
+
+    // 恰好等于内容预算: 不加省略号 (4 汉字 8 列 <= max11 - 3)
+    XX_TEST_EXPECT_EQ(tailLinePreview("一二三四", 11), "一二三四");
+
+    // 宽字符跨预算边界: 整体舍弃放不下的码点 (6 汉字 12 列, 预算 8 列 ->
+    // 反向累计 六(2)+五(2)+四(2)+三(2)=8 列, 二 放不下整体舍弃)
+    XX_TEST_EXPECT_EQ(tailLinePreview("一二三四五六", 11), "...三四五六");
+
+    // ASCII 尾部 + CJK 混合截断不切断多字节序列
+    const std::string mixed = "abc中文def";
+    // 总列宽 3+4+3=10 > 预算 (6-3=3): 反向累计 f(1)+e(1)+d(1)=3 列, 中文 放不下整体舍弃
+    XX_TEST_EXPECT_EQ(tailLinePreview(mixed, 6), "...def");
 }
 
 // TUILogSink 按 TUISettings.logLevel 过滤 (Out 恒显示)
@@ -323,7 +329,6 @@ void test_persist_to_db() {
     settings.setAnimationLevel(AnimationLevel::Low);
     settings.setLogLevel(agentxx::util::LogLevel::Warn);
     settings.setTailThinkingMode(TailThinkingMode::SingleLine);
-    settings.setTailThinkingPreviewLength(75);
     {
         auto fresh = agentxx::util::SettingsDb(dbPath);
         XX_TEST_EXPECT_EQ(fresh.getInt64("tui.theme", -1), int64_t{TUISettings::kThemeLight});
@@ -338,7 +343,6 @@ void test_persist_to_db() {
     settings.setAnimationLevel(AnimationLevel::Ultra);
     settings.setLogLevel(agentxx::util::LogLevel::Debug);
     settings.setTailThinkingMode(TailThinkingMode::AutoExpand);
-    settings.setTailThinkingPreviewLength(60);
     {
         auto fresh = agentxx::util::SettingsDb(dbPath);
         XX_TEST_EXPECT_EQ(fresh.getInt64("tui.theme", -1), int64_t{TUISettings::kThemeDark});
@@ -352,7 +356,6 @@ void test_persist_to_db() {
     settings.setAnimationLevel(TUISettings::kDefaultAnimationLevel);
     settings.setLogLevel(TUISettings::kDefaultLogLevel);
     settings.setTailThinkingMode(TUISettings::kDefaultTailThinkingMode);
-    settings.setTailThinkingPreviewLength(TUISettings::kDefaultTailThinkingPreviewLength);
 
     // 注意: TUISettings 单例持有 db 连接 (进程生命周期), Windows 上无法删除
     // 被占用文件, 故清理失败时忽略 (仅临时目录残留, 不影响测试结果)
