@@ -256,6 +256,84 @@ void LazyScrollable::ensureElement(size_t index) {
     evictIfNeeded();
 }
 
+void LazyScrollable::notifyPrepended(size_t count) {
+    if (count == 0) {
+        return;
+    }
+    // 尚未布局过 (首屏填充场景): 无既有视口内容需要稳定, 仅记录条数
+    // (prepareLayout 首次布局时新增区按估算高度参与总高, 无偏移校正必要)
+    if (heights_.empty() && measuredWidth_ < 0) {
+        pendingPrepend_ = PendingPrepend{true, count, 0};
+        return;
+    }
+
+    const size_t oldSize = heights_.size();
+    // 并行数组头部插入 k 个新条目; 既有数据整体后移 —— key 与条目同步平移,
+    // 旧条目 key 校验依然匹配 (缓存 Element/实测高度全保留), 仅新增区为初始值
+    heights_.insert(heights_.begin(), count, -1);
+    measured_.insert(measured_.begin(), count, false);
+    keys_.insert(keys_.begin(), count, 0);
+    hasCache_.insert(hasCache_.begin(), count, false);
+    using ListIt = std::list<Entry>::iterator;
+    itemCache_.insert(itemCache_.begin(), count, ListIt{});
+    lastBoxes_.insert(lastBoxes_.begin(), count, ftxui::Box{});
+    protectedIndices_.insert(protectedIndices_.begin(), count, false);
+    (void)oldSize;
+
+    // LRU 缓存条目索引平移 (list 迭代器稳定, 直接改 index 字段即可;
+    // itemCache_ 中迭代器的存储位置已随 vector 头插对齐到新索引)
+    for (auto& entry : lruList_) {
+        entry.index += count;
+    }
+    // transientItems_ 属于上一帧 (帧边界清理), 索引陈旧无影响
+
+    // 注意: 此处不做估算也不调整滚动偏移 —— 调用方在状态前插后、本帧快照
+    // 刷新前调用 (UI 动作队列语义), 此时经回调估算读到的是旧快照内容,
+    // 口径必然错误。偏移补偿统一下放到下一帧 prepareLayout 内的
+    // applyPrependAnchorCorrection: 该处以新快照口径计算新增区高度,
+    // 相对 appliedRows=0 全额下移偏移, 后续实测修正继续增量收敛
+    pendingPrepend_ = PendingPrepend{true, count, 0};
+}
+
+void LazyScrollable::clearPrependAnchor() {
+    pendingPrepend_ = PendingPrepend{};
+}
+
+void LazyScrollable::applyPrependAnchorCorrection() {
+    if (!pendingPrepend_.active || pendingPrepend_.count == 0) {
+        return;
+    }
+    const size_t n = std::min(pendingPrepend_.count, heights_.size());
+    if (n == 0) {
+        pendingPrepend_ = PendingPrepend{};
+        return;
+    }
+    // 新增区当前已知总高度: 实测优先, 未测子项沿用估算 (滚动接近时再收敛)
+    long long actualRows  = 0;
+    bool      allMeasured = true;
+    for (size_t i = 0; i < n; ++i) {
+        if (!measured_[i]) {
+            allMeasured = false;
+        }
+        actualRows += (heights_[i] >= 0)
+                          ? static_cast<long long>(std::max(1, heights_[i]))
+                          : static_cast<long long>(estimateHeightFor(i));
+    }
+    // 增量补偿: 只应用与已应用值的差值, 多帧多次调用天然幂等收敛
+    const long long delta = actualRows - pendingPrepend_.appliedRows;
+    if (delta != 0) {
+        // stickToBottom 时偏移由吸附接管, 仅同步已应用值避免后续误补偿
+        if (!stickToBottom_) {
+            scrollOffset_ = std::max(0, scrollOffset_ + static_cast<int>(delta));
+        }
+        pendingPrepend_.appliedRows = actualRows;
+    }
+    if (allMeasured) {
+        // 全部实测完成, 校正收敛结束
+        pendingPrepend_ = PendingPrepend{};
+    }
+}
+
 void LazyScrollable::removeCacheAt(size_t index) {
     if (index >= hasCache_.size() || !hasCache_[index]) {
         return;
@@ -445,6 +523,15 @@ void LazyScrollable::prepareLayout(const ftxui::Box& box) {
         } else {
             scrollOffset_ = std::clamp(scrollOffset_, 0, newMaxOffset);
         }
+    }
+
+    // === 头部插入锚定校正 (历史分页前插) ===
+    // 新增区子项被实测后与初始估算的偏差在此增量补偿到滚动偏移 (多帧收敛),
+    // 保证视口内容在分页插入后保持稳定; 补偿后重新夹取防止越界
+    applyPrependAnchorCorrection();
+    {
+        const int maxOff = std::max(0, totalHeight_ - vh);
+        scrollOffset_    = std::clamp(scrollOffset_, 0, maxOff);
     }
     scrollOffset = scrollOffset_;
 

@@ -169,6 +169,28 @@ public:
         return viewMessages;
     }
 
+    /// 历史消息总数 (仅 io 线程调用; 历史分页同步用)
+    size_t viewMessageCount() const {
+        assertIoThread();
+        return viewMessages.size();
+    }
+
+    /// 获取 [start, end) 区间的历史消息副本 (历史分页同步用)
+    /// - 仅 io 线程调用 (assertIoThread 强制校验)
+    /// - start/end 自动收敛到有效区间 (end <= start 时返回空), 避免调用方
+    ///   重复做边界裁剪; 相比 getFullViewMessagesCopy 避免了每页请求的
+    ///   全量拷贝 (长会话分页热路径)
+    std::vector<ViewMessage> getViewMessagesRange(size_t start, size_t end) const {
+        assertIoThread();
+        if (end > viewMessages.size()) {
+            end = viewMessages.size();
+        }
+        if (start >= end) {
+            return {};
+        }
+        return std::vector<ViewMessage>(viewMessages.begin() + start, viewMessages.begin() + end);
+    }
+
     /// 获取链式哈希信息
     /// - 仅 io 线程调用 (assertIoThread 强制校验)
     struct HashInfo {

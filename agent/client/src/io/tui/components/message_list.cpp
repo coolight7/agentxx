@@ -387,7 +387,13 @@ bool MessageListComponent::OnEvent(Event event) {
         if (handleInterruptClick(mouse)) {
             return true;
         }
-        return scrollable_->OnEvent(event);
+        const bool handled = scrollable_->OnEvent(event);
+        // 历史分页: 滚动接近窗口顶部时预取更早历史 (滚轮驱动滚动后才可能
+        // 接近顶部; 点击等其余鼠标事件无需检查)
+        if (mouse.button == Mouse::WheelUp || mouse.button == Mouse::WheelDown) {
+            maybeRequestMoreHistory();
+        }
+        return handled;
     }
     // 键盘: 优先作用于当前激活的中断消息 (输入框编辑/选中切换/确认/取消)
     if (activeInterruptMsg_ != static_cast<size_t>(-1)) {
@@ -768,6 +774,24 @@ size_t MessageListComponent::estimateHeight(size_t index, int width) {
 bool MessageListComponent::fillViewport(size_t index) {
     const auto& st = *ctx_.frameState;
     return index == 0 && st.messages.empty() && !hasStreamingToken(st);
+}
+
+void MessageListComponent::maybeRequestMoreHistory() {
+    if (!ctx_.requestMoreHistory) {
+        return; // 未装配历史分页钩子 (如测试环境)
+    }
+    if (!ctx_.frameState || !ctx_.frameState->hasMoreHistory()) {
+        return; // 无更早历史 (全量同步 / 已加载到会话开头)
+    }
+    // 首帧布局前视口未测量 (高度/偏移未就绪), 不触发
+    if (scrollable_->viewportHeight() <= 0) {
+        return;
+    }
+    if (scrollable_->scrollOffset() > kHistoryPrefetchRows) {
+        return; // 距窗口顶部尚远
+    }
+    // 在途去重与边界校验在实现方内部完成 (historyLoading 原子判定)
+    ctx_.requestMoreHistory();
 }
 
 LazyBuiltItem MessageListComponent::buildItem(size_t index) {

@@ -188,11 +188,153 @@ struct TallScrollFixture : ScrollFixture {
 } // namespace
 
 // ---------------------------------------------------------------------------
+// 历史分页前插锚定 (LazyScrollable::notifyPrepended):
+// 头部插入子项后视口内容保持稳定 —— offset 与总高按新增区估算行数同步
+// 下移, 既有条目的实测高度/渲染缓存随索引平移保留; 渲染画面 (除滚动条
+// gutter 列外) 与前插前完全一致
+// ---------------------------------------------------------------------------
+
+/// 规范化屏幕文本: 去掉右侧滚动条/间隔列并 rstrip, 供逐行画面一致性比较
+static std::string normalizeScreenForCompare(const std::string& s, int width) {
+    const size_t keep = width > 3 ? static_cast<size_t>(width) - 3 : 1;
+    std::string  out;
+    size_t       pos = 0;
+    while (pos <= s.size()) {
+        size_t nl = s.find('\n', pos);
+        std::string line = s.substr(pos, (nl == std::string::npos ? s.size() : nl) - pos);
+        if (line.size() > keep) {
+            line.resize(keep);
+        }
+        while (!line.empty() && line.back() == ' ') {
+            line.pop_back();
+        }
+        out += line;
+        out += '\n';
+        if (nl == std::string::npos) {
+            break;
+        }
+        pos = nl + 1;
+    }
+    return out;
+}
+
+static void testHistoryPrependAnchoring() {
+    // ---- 场景 A: 上滑后前插更早消息, 视口画面与偏移保持稳定 ----
+    {
+        ScrollFixture f;
+        f.addHistory(8);
+        // 模拟尾窗同步窗口元数据: 窗口上方还有 100 条更早历史
+        f.sharedState.mutate([&](TUIRenderState& st) {
+            st.historyWindowStart = 100;
+            st.historyTotal       = 108;
+        });
+        f.render();
+        f.render(); // 两帧建立测量/缓存
+
+        // 向上滚动若干行 (解除吸附, 视口离开底部且远离顶部)
+        for (int i = 0; i < 6; ++i) {
+            (void)f.wheel(ftxui::Mouse::WheelUp);
+        }
+        std::string scrolled = f.render();
+        const int   offset   = f.comp->scrollOffset();
+        const int   total    = f.comp->totalHeight();
+        XX_TEST_EXPECT_TRUE(offset > 0);
+
+        // 模拟分页响应: 窗口上方整体前插 4 条更早消息 + 锚定通知
+        f.sharedState.mutate([&](TUIRenderState& st) {
+            for (int i = 0; i < 4; ++i) {
+                auto m  = std::make_shared<TUIMessage>();
+                m->role = TUIMessage::Role::Assistant;
+                for (int j = 0; j < 40; ++j) {
+                    m->text += "older history " + std::to_string(j) + " words to wrap ";
+                }
+                st.messages.insert(st.messages.begin(), std::move(m));
+            }
+            st.historyWindowStart = 96;
+            st.historyTotal       = 108;
+        });
+        f.comp->onHistoryPrepended(4);
+        std::string after = f.render();
+
+        // 视口内容逐行一致 (新增区在视口上方, 不影响可见内容)
+        XX_TEST_EXPECT_EQ(
+            normalizeScreenForCompare(scrolled, ScrollFixture::kWidth),
+            normalizeScreenForCompare(after, ScrollFixture::kWidth)
+        );
+        // 偏移随新增区估算行数下移, 且与总高增量一致 (未触发新测量时严格相等)
+        XX_TEST_EXPECT_EQ(f.comp->scrollOffset() - offset, f.comp->totalHeight() - total);
+        XX_TEST_EXPECT_TRUE(f.comp->scrollOffset() > offset);
+        XX_TEST_EXPECT_TRUE(f.comp->totalHeight() > total);
+    }
+
+    // ---- 场景 B: 前插后继续上滑到顶部区域, 实测校正收敛不破坏视口 ----
+    {
+        ScrollFixture f;
+        f.addHistory(8);
+        f.sharedState.mutate([&](TUIRenderState& st) {
+            st.historyWindowStart = 100;
+            st.historyTotal       = 108;
+        });
+        f.render();
+        f.render();
+
+        f.sharedState.mutate([&](TUIRenderState& st) {
+            auto m  = std::make_shared<TUIMessage>();
+            m->role = TUIMessage::Role::Assistant;
+            m->text = "PAGED_OLDER_MESSAGE";
+            st.messages.insert(st.messages.begin(), std::move(m));
+            st.historyWindowStart = 99;
+        });
+        f.comp->onHistoryPrepended(1);
+        f.render();
+        f.render();
+
+        // 连续上滑穿过新增区直至顶部: 偏移始终合法 (实测修正会使 offset
+        // 数值小幅波动 —— 上方内容实测变高时同步下移以保持视口内容稳定,
+        // 这正是锚定的目的, 故不断言数值单调)。上限取总高+冗余, 保证可达顶
+        for (int i = 0; i < f.comp->totalHeight() + 100 && f.comp->scrollOffset() > 0; ++i) {
+            (void)f.wheel(ftxui::Mouse::WheelUp);
+            f.render();
+            const int off = f.comp->scrollOffset();
+            XX_TEST_EXPECT_TRUE(off >= 0);
+            XX_TEST_EXPECT_TRUE(off < f.comp->totalHeight());
+        }
+        XX_TEST_EXPECT_EQ(f.comp->scrollOffset(), 0);
+        // 到达顶部后画面可见前插的更早消息
+        XX_TEST_EXPECT_TRUE(
+            normalizeScreenForCompare(f.render(), ScrollFixture::kWidth).find("PAGED_OLDER_MESSAGE")
+            != std::string::npos
+        );
+
+        // 重置锚定状态 (会话切换路径): 幂等无副作用
+        f.comp->resetHistoryPagination();
+        XX_TEST_EXPECT_TRUE(!f.render().empty());
+    }
+
+    // ---- 场景 C: 首屏填充 (前插前列表为空) 不做锚定, 直接展示 ----
+    {
+        ScrollFixture f;
+        f.sharedState.mutate([&](TUIRenderState& st) {
+            auto m  = std::make_shared<TUIMessage>();
+            m->role = TUIMessage::Role::Assistant;
+            m->text = "FIRST_LOADED";
+            st.messages.push_back(std::move(m));
+            st.historyWindowStart = 50;
+        });
+        f.comp->onHistoryPrepended(1); // 空数组上调用安全 (仅记录条数语义)
+        std::string frame = f.render();
+        XX_TEST_EXPECT_TRUE(frame.find("FIRST_LOADED") != std::string::npos);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // 回归: 内容更新帧与同内容再渲染帧必须完全一致 (流式抖动)
 // ---------------------------------------------------------------------------
 
 TestResult testTuiScroll() {
     XX_TEST_EXPECT_TRUE(true);
+
+    testHistoryPrependAnchoring();
 
     {
         // 场景 1: 流式输出中, 内容更新帧 vs 同内容再渲染帧 (鼠标移动帧)

@@ -74,6 +74,11 @@ void AgentIOBase::requestAppendComponentInfo(std::string sessionId) {
     sendToPeer(WireGetAppendComponentInfo{std::move(sessionId)});
 }
 
+void AgentIOBase::requestViewMessagesPage(std::string sessionId, uint64_t beforeIndex, uint32_t count
+) {
+    sendToPeer(WireGetViewMessages{std::move(sessionId), beforeIndex, count});
+}
+
 void AgentIOBase::sendUserInput(std::string sessionId, std::string text) {
     // 通知事件接收器 (client 插件系统订阅用户输入事件)
     emitEventSink([&](ClientEventSink& sink) {

@@ -2057,6 +2057,299 @@ static asio::awaitable<void> test_model_switch_with_next_input() {
 }
 
 // ---------------------------------------------------------------------------
+// 22. viewMessages 历史分页: 尾窗 hello 同步 + WireGetViewMessages 分页拉取
+//     (initialSyncTailCount>0 时首次接入仅同步末尾窗口; 客户端按绝对下标
+//      向上分页拉取更早历史; beforeIndex==0 兜底从末尾取; count==0 用默认页大小;
+//      viewMessages append-only 保证绝对下标恒定)
+// ---------------------------------------------------------------------------
+
+static asio::awaitable<void> test_view_messages_pagination() {
+    auto ex = co_await asio::this_coro::executor;
+
+    auto tp      = agentxx::agent::ChannelAgentIOTransport::makePair(ex, ex);
+    auto clientT = std::move(tp.first);
+    auto serverT = std::move(tp.second);
+
+    // 最小 BaseAgent + 预置 250 条历史消息 (msg_000001..msg_000250 / m1..m250)
+    auto cfg             = std::make_shared<agentxx::agent::AgentConfig>();
+    cfg->model.baseUrl   = "http://127.0.0.1:1";
+    cfg->model.modelName = "test-model";
+    auto agent           = std::make_shared<agentxx::agent::BaseAgent>(cfg);
+
+    const size_t kTotal = 250;
+    auto         sess   = agent->agentContext->getSession("pag-session");
+    for (size_t i = 1; i <= kTotal; ++i) {
+        sess->appendViewMessage(agentxx::agent::ViewMessage::makeText(
+            agentxx::agent::ViewMessage::Role::User,
+            "m" + std::to_string(i)
+        ));
+    }
+
+    SessionServerAgentIO::Config scCfg;
+    scCfg.sessionId            = "pag-session";
+    scCfg.initialSyncTailCount = 100;
+    auto sc                    = std::make_shared<SessionServerAgentIO>(ex, agent, scCfg);
+    sc->setTransport(std::shared_ptr<agentxx::agent::AgentIOTransportBase>(std::move(serverT)));
+
+    // ---- 首次接入 (lastSeq=0): 尾窗 sync [150, 250) ----
+    agentxx::agent::WireHello hello{"pag-session", "", 0, ""};
+    sc->handleHello(hello);
+
+    auto ackMsg = co_await clientT->recv();
+    XX_TEST_EXPECT_TRUE(ackMsg.has_value());
+    if (ackMsg) {
+        auto* ack = std::get_if<agentxx::agent::WireHelloAck>(&*ackMsg);
+        XX_TEST_EXPECT_TRUE(ack != nullptr);
+        if (ack) {
+            XX_TEST_EXPECT_TRUE(ack->ok);
+        }
+    }
+    auto syncMsg = co_await clientT->recv();
+    XX_TEST_EXPECT_TRUE(syncMsg.has_value());
+    uint64_t windowStart = 0;
+    if (syncMsg) {
+        auto* sp = std::get_if<agentxx::agent::SyncPayload>(&*syncMsg);
+        XX_TEST_EXPECT_TRUE(sp != nullptr);
+        if (sp) {
+            XX_TEST_EXPECT_EQ(sp->messages.size(), size_t{100});
+            XX_TEST_EXPECT_EQ(sp->fromIndex, uint64_t{150});
+            XX_TEST_EXPECT_EQ(sp->totalMessages, static_cast<uint64_t>(kTotal));
+            windowStart = sp->fromIndex;
+            if (sp->messages.size() == 100) {
+                // 尾窗内容: msg_000151..msg_000250
+                XX_TEST_EXPECT_EQ(sp->messages.front().id, std::string("msg_000151"));
+                XX_TEST_EXPECT_EQ(sp->messages.back().id, std::string("msg_000250"));
+            }
+        }
+    }
+    // handleHello 尾部: ContextStats (无 pending interrupt)
+    auto statsMsg = co_await clientT->recv();
+    XX_TEST_EXPECT_TRUE(statsMsg.has_value());
+    if (statsMsg) {
+        XX_TEST_EXPECT_TRUE(std::get_if<agentxx::agent::WireContextStats>(&*statsMsg) != nullptr);
+    }
+
+    // ---- 分页请求: 窗口上方 [50, 150) ----
+    sc->onPeerMessage(agentxx::agent::WireMessage{
+        agentxx::agent::WireGetViewMessages{"pag-session", windowStart, 100}
+    });
+    auto page1 = co_await clientT->recv();
+    XX_TEST_EXPECT_TRUE(page1.has_value());
+    if (page1) {
+        auto* pg = std::get_if<agentxx::agent::WireViewMessagesPage>(&*page1);
+        XX_TEST_EXPECT_TRUE(pg != nullptr);
+        if (pg) {
+            XX_TEST_EXPECT_EQ(pg->sessionId, std::string("pag-session"));
+            XX_TEST_EXPECT_EQ(pg->startIndex, uint64_t{50});
+            XX_TEST_EXPECT_EQ(pg->totalCount, static_cast<uint64_t>(kTotal));
+            XX_TEST_EXPECT_EQ(pg->messages.size(), size_t{100});
+            if (pg->messages.size() == 100) {
+                // 绝对下标连续: [50,150) ↔ msg_000051..msg_000150
+                XX_TEST_EXPECT_EQ(pg->messages.front().id, std::string("msg_000051"));
+                XX_TEST_EXPECT_EQ(pg->messages.back().id, std::string("msg_000150"));
+                XX_TEST_EXPECT_EQ(pg->messages.front().text, std::string("m51"));
+            }
+        }
+    }
+
+    // ---- 分页请求: 剩余头部不足一页时截断 [0, 50) ----
+    sc->onPeerMessage(agentxx::agent::WireMessage{
+        agentxx::agent::WireGetViewMessages{"pag-session", 50, 100}
+    });
+    auto page2 = co_await clientT->recv();
+    XX_TEST_EXPECT_TRUE(page2.has_value());
+    if (page2) {
+        auto* pg = std::get_if<agentxx::agent::WireViewMessagesPage>(&*page2);
+        XX_TEST_EXPECT_TRUE(pg != nullptr);
+        if (pg) {
+            XX_TEST_EXPECT_EQ(pg->startIndex, uint64_t{0});
+            XX_TEST_EXPECT_EQ(pg->totalCount, static_cast<uint64_t>(kTotal));
+            XX_TEST_EXPECT_EQ(pg->messages.size(), size_t{50});
+            if (pg->messages.size() == 50) {
+                XX_TEST_EXPECT_EQ(pg->messages.front().id, std::string("msg_000001"));
+                XX_TEST_EXPECT_EQ(pg->messages.back().id, std::string("msg_000050"));
+            }
+        }
+    }
+
+    // ---- beforeIndex == 0 兜底语义: 从末尾向前取 count 条 ----
+    sc->onPeerMessage(agentxx::agent::WireMessage{
+        agentxx::agent::WireGetViewMessages{"pag-session", 0, 3}
+    });
+    auto page3 = co_await clientT->recv();
+    XX_TEST_EXPECT_TRUE(page3.has_value());
+    if (page3) {
+        auto* pg = std::get_if<agentxx::agent::WireViewMessagesPage>(&*page3);
+        XX_TEST_EXPECT_TRUE(pg != nullptr);
+        if (pg) {
+            XX_TEST_EXPECT_EQ(pg->startIndex, static_cast<uint64_t>(kTotal - 3));
+            XX_TEST_EXPECT_EQ(pg->messages.size(), size_t{3});
+            if (pg->messages.size() == 3) {
+                XX_TEST_EXPECT_EQ(pg->messages.back().text, std::string("m250"));
+            }
+        }
+    }
+
+    // ---- count == 0: 使用服务端默认页大小 (100) ----
+    sc->onPeerMessage(agentxx::agent::WireMessage{
+        agentxx::agent::WireGetViewMessages{"pag-session", 200, 0}
+    });
+    auto page4 = co_await clientT->recv();
+    XX_TEST_EXPECT_TRUE(page4.has_value());
+    if (page4) {
+        auto* pg = std::get_if<agentxx::agent::WireViewMessagesPage>(&*page4);
+        XX_TEST_EXPECT_TRUE(pg != nullptr);
+        if (pg) {
+            XX_TEST_EXPECT_EQ(pg->startIndex, uint64_t{100});
+            XX_TEST_EXPECT_EQ(pg->messages.size(), size_t{100});
+        }
+    }
+
+    // ---- 越界 beforeIndex 收敛到总数; 不存在的会话回空页 ----
+    sc->onPeerMessage(agentxx::agent::WireMessage{
+        agentxx::agent::WireGetViewMessages{"pag-session", 99999, 10}
+    });
+    auto page5 = co_await clientT->recv();
+    XX_TEST_EXPECT_TRUE(page5.has_value());
+    if (page5) {
+        auto* pg = std::get_if<agentxx::agent::WireViewMessagesPage>(&*page5);
+        XX_TEST_EXPECT_TRUE(pg != nullptr);
+        if (pg) {
+            XX_TEST_EXPECT_EQ(pg->startIndex, static_cast<uint64_t>(kTotal - 10));
+            XX_TEST_EXPECT_EQ(pg->messages.size(), size_t{10});
+        }
+    }
+    sc->onPeerMessage(agentxx::agent::WireMessage{
+        agentxx::agent::WireGetViewMessages{"no-such-session", 10, 5}
+    });
+    auto page6 = co_await clientT->recv();
+    XX_TEST_EXPECT_TRUE(page6.has_value());
+    if (page6) {
+        auto* pg = std::get_if<agentxx::agent::WireViewMessagesPage>(&*page6);
+        XX_TEST_EXPECT_TRUE(pg != nullptr);
+        if (pg) {
+            XX_TEST_EXPECT_TRUE(pg->messages.empty());
+            XX_TEST_EXPECT_EQ(pg->totalCount, uint64_t{0});
+        }
+    }
+
+    clientT->close();
+    sc->stop();
+    co_return;
+}
+
+// ---------------------------------------------------------------------------
+// 23. 历史分页 wire 序列化 roundtrip (WS JSON):
+//     GetViewMessages / ViewMessagesPage / Sync.totalMessages 字段保真
+// ---------------------------------------------------------------------------
+
+static asio::awaitable<void> test_wire_pagination_roundtrip() {
+    using agentxx::agent::WsAgentIOTransport;
+
+    // ---- WireGetViewMessages roundtrip ----
+    {
+        auto jsonText = WsAgentIOTransport::serialize(
+            agentxx::agent::WireGetViewMessages{"sess-a", 150, 100}
+        );
+        auto msg = WsAgentIOTransport::deserialize(jsonText);
+        XX_TEST_EXPECT_TRUE(msg.has_value());
+        if (msg) {
+            auto* req = std::get_if<agentxx::agent::WireGetViewMessages>(&*msg);
+            XX_TEST_EXPECT_TRUE(req != nullptr);
+            if (req) {
+                XX_TEST_EXPECT_EQ(req->sessionId, std::string("sess-a"));
+                XX_TEST_EXPECT_EQ(req->beforeIndex, uint64_t{150});
+                XX_TEST_EXPECT_EQ(req->count, uint32_t{100});
+            }
+        }
+    }
+
+    // ---- WireViewMessagesPage roundtrip (含 role 专属子结构保真) ----
+    {
+        agentxx::agent::WireViewMessagesPage page;
+        page.sessionId  = "sess-b";
+        page.startIndex = 42;
+        page.totalCount = 250;
+
+        auto user     = agentxx::agent::ViewMessage::makeText(
+            agentxx::agent::ViewMessage::Role::User, "hello"
+        );
+        user.id       = "msg_000043";
+        page.messages.push_back(user);
+
+        auto tool               = agentxx::agent::ViewMessage::makeText(
+            agentxx::agent::ViewMessage::Role::Tool, "{\"path\":\"a.txt\"}"
+        );
+        tool.id                 = "msg_000044";
+        tool.tool               = agentxx::agent::ViewMessage::ToolData{};
+        tool.tool->toolName     = "read";
+        tool.tool->toolCallId   = "tc-1";
+        tool.tool->toolResult   = "content";
+        tool.tool->toolFinished = true;
+        page.messages.push_back(tool);
+
+        auto tip          = agentxx::agent::ViewMessage::makeText(
+            agentxx::agent::ViewMessage::Role::Tip, "warn"
+        );
+        tip.id            = "msg_000045";
+        tip.tip->tipLevel = agentxx::agent::ViewMessage::TipLevel::Warning;
+        page.messages.push_back(tip);
+
+        auto jsonText = WsAgentIOTransport::serialize(agentxx::agent::WireMessage{page});
+        auto msg      = WsAgentIOTransport::deserialize(jsonText);
+        XX_TEST_EXPECT_TRUE(msg.has_value());
+        if (msg) {
+            auto* back = std::get_if<agentxx::agent::WireViewMessagesPage>(&*msg);
+            XX_TEST_EXPECT_TRUE(back != nullptr);
+            if (back) {
+                XX_TEST_EXPECT_EQ(back->sessionId, std::string("sess-b"));
+                XX_TEST_EXPECT_EQ(back->startIndex, uint64_t{42});
+                XX_TEST_EXPECT_EQ(back->totalCount, uint64_t{250});
+                XX_TEST_EXPECT_EQ(back->messages.size(), size_t{3});
+                if (back->messages.size() == 3) {
+                    XX_TEST_EXPECT_EQ(back->messages[0].id, std::string("msg_000043"));
+                    XX_TEST_EXPECT_TRUE(back->messages[1].tool.has_value());
+                    if (back->messages[1].tool) {
+                        XX_TEST_EXPECT_EQ(back->messages[1].tool->toolName, std::string("read"));
+                        XX_TEST_EXPECT_TRUE(back->messages[1].tool->toolFinished);
+                    }
+                    XX_TEST_EXPECT_TRUE(back->messages[2].tip.has_value());
+                    if (back->messages[2].tip) {
+                        XX_TEST_EXPECT_TRUE(
+                            back->messages[2].tip->tipLevel
+                            == agentxx::agent::ViewMessage::TipLevel::Warning
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    // ---- SyncPayload totalMessages / fromIndex roundtrip ----
+    {
+        agentxx::agent::SyncPayload sync;
+        sync.fromIndex     = 150;
+        sync.totalMessages = 250;
+        sync.messages.push_back(agentxx::agent::ViewMessage::makeText(
+            agentxx::agent::ViewMessage::Role::User, "tail"
+        ));
+        auto jsonText = WsAgentIOTransport::serialize(agentxx::agent::WireMessage{sync});
+        auto msg      = WsAgentIOTransport::deserialize(jsonText);
+        XX_TEST_EXPECT_TRUE(msg.has_value());
+        if (msg) {
+            auto* back = std::get_if<agentxx::agent::SyncPayload>(&*msg);
+            XX_TEST_EXPECT_TRUE(back != nullptr);
+            if (back) {
+                XX_TEST_EXPECT_EQ(back->fromIndex, uint64_t{150});
+                XX_TEST_EXPECT_EQ(back->totalMessages, uint64_t{250});
+                XX_TEST_EXPECT_EQ(back->messages.size(), size_t{1});
+            }
+        }
+    }
+    co_return;
+}
+
+// ---------------------------------------------------------------------------
 // 22. 服务端消息队列与调度: 排队、成功自动连续执行、取消暂停、插队立即执行
 // ---------------------------------------------------------------------------
 
@@ -2284,6 +2577,12 @@ asio::awaitable<TestResult> run_remote_agent_tests() {
 
     std::cout << "  [remote] session controller message queue..." << std::endl;
     co_await test_session_controller_message_queue();
+
+    std::cout << "  [remote] view messages pagination..." << std::endl;
+    co_await test_view_messages_pagination();
+
+    std::cout << "  [remote] wire pagination roundtrip..." << std::endl;
+    co_await test_wire_pagination_roundtrip();
 
     co_return TestResult{g_remote_passed, g_remote_failed};
 }
