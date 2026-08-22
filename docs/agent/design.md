@@ -159,7 +159,8 @@ TUI [F4] 打开会话选择弹窗 → WireListSessions (服务端阻塞 I/O 卸�
   → SessionServerAgentIO::switchSession:
       重绑定 config_.threadId → 清空 delta 重放缓冲 (新会话 seq 独立编号)
       → 重置 firstTurn_ (首条输入走 resume_if_exists=true 恢复路径)
-      → 回推新会话全量 Sync + WireModelInfo + WireContextStats
+      → 回推新会话 Sync (按 initialSyncTailCount 尾窗分页; 0=全量)
+        + WireModelInfo + WireContextStats
   → 客户端 (TUI) 更新本地 threadId 绑定; WS 模式同时
     transport->updateReconnectThreadId() (复位重连握手的 threadId/lastSeq/tailHash)
 ```
@@ -228,8 +229,18 @@ TUI [F4] 打开会话选择弹窗 → WireListSessions (服务端阻塞 I/O 卸�
 ### 远程通信
 
 - **WebSocket 服务**: AgentServer 提供 WS/WSS 服务，支持 token 鉴权
-- **Wire Protocol**: 双向 JSON 消息协议 (Hello/HelloAck/UserInput/Cancel/SelectModel/GetModel/Delta/Sync/InterruptRequest/InterruptResponse/InterruptExpired/TurnResult/ContextStats/Error/Log/ModelInfo/GetAppendComponentInfo/AppendComponentInfo/GetContext/ContextMessages/Ping/Pong/SetPermission/ListSessions/SessionList/SwitchSession)
+- **Wire Protocol**: 双向 JSON 消息协议 (Hello/HelloAck/UserInput/Cancel/SelectModel/GetModel/Delta/Sync/InterruptRequest/InterruptResponse/InterruptExpired/TurnResult/ContextStats/Error/Log/ModelInfo/GetAppendComponentInfo/AppendComponentInfo/GetContext/ContextMessages/Ping/Pong/SetPermission/ListSessions/SessionList/SwitchSession/GetViewMessages/ViewMessagesPage)
 - **断线重连**: 客户端自动重连，携带 lastSeq 供增量 Delta 重放，seq 不连续时回退全量 Sync
+- **历史分页 (viewMessages 尾窗同步)**: 长会话恢复时服务端仅同步末尾窗口
+  (SessionServerAgentIO::Config::initialSyncTailCount, 本地 TUI 模式 =100,
+  远程经 AgentServer::Config 透传, 0=全量); SyncPayload.fromIndex 携带窗口
+  起始绝对下标、totalMessages 携带会话总消息数。客户端 (TUI) 向上滚动接近
+  窗口顶部时发送 GetViewMessages(beforeIndex, count) 分页拉取更早历史, 服务端
+  以 ViewMessagesPage(startIndex, totalCount, messages) 回应; viewMessages 为
+  append-only, 绝对下标恒定, 前插不影响既有下标 (无竞态)。TUI 侧前插后经
+  LazyScrollable::notifyPrepended 做滚动锚定 (既有条目缓存/实测高度随索引
+  平移保留, 偏移按新增区高度在 prepareLayout 内以新快照口径全额补偿并随
+  实测增量收敛), 视口内容保持稳定
 - **Grace Period**: 断线后会话保持运行的宽限期，避免误取消进行中的轮次
 - **进程内直连**: ChannelAgentIOTransport 零序列化 Channel 传输，同进程内 client 与 agent 直连
 - **传输层抽象**: `AgentIOTransportBase` 提供统一的 `connect/recv/send/close/alive` 接口，对调用方隐藏传输细节
@@ -264,7 +275,10 @@ TUI [F4] 打开会话选择弹窗 → WireListSessions (服务端阻塞 I/O 卸�
   - Mermaid stateDiagram-v2 状态图渲染 (消息中 ```mermaid 代码块 / Plan 弹窗显示 roadmap 状态图)
   - 上下文 token 占用状态栏
   - 主题切换 (持久化到 {dataDir}/sqlite/global.db)
-  - 会话选择弹窗 (F4): 列出持久化会话 (WireListSessions), 确认后经 WireSwitchSession 切换, 服务端回推新会话全量 Sync/模型/上下文统计
+  - 会话选择弹窗 (F4): 列出持久化会话 (WireListSessions), 确认后经 WireSwitchSession 切换, 服务端回推新会话 Sync (尾窗分页)/模型/上下文统计
+  - 历史分页加载: 恢复长会话时初始仅展示服务端末尾窗口 (本地模式 100 条),
+    向上滚动接近窗口顶部时经 WireGetViewMessages 自动分页拉取更早历史,
+    前插后滚动锚定保持视口稳定; 到达会话开头 (historyWindowStart=0) 后不再请求
   - 启动连接状态 (banner 提示): TUI 启动后消息列表 banner 按 agent-io
     连接状态显示 —— 启动中 (Connecting, 输入进入待发送队列, 连接完成后自动发送) /
     连接失败 (Failed, 显示"连接失败 + [重试]"可点击按钮重新连接) / 已连接 (正常输入);
@@ -819,8 +833,11 @@ AgentIOBase (服务端端点: SessionServerAgentIO)
     ├── run()              → 驱动循环: 取输入 → 执行轮次 → 推送结果
     ├── stop()             → 停止驱动循环 (关闭输入 channel/取消轮次/fail pending)
     ├── onDisconnect()     → 传输断开时启动 grace 定时器 (宽限期满且无连接则取消轮次)
+    ├── handleGetViewMessages() → 历史分页请求: 按绝对下标切片 [before-count, before)
+    │                              回应 WireViewMessagesPage (append-only 下标恒定无竞态;
+    │                              会话不匹配回空页, count=0 用默认页大小 100)
     └── switchSession()    → 会话切换: 重绑定 threadId, 清空 delta 缓冲, 重置 firstTurn_,
-                             回推新会话全量 Sync + 模型信息 + 上下文统计
+                             回推新会话 Sync (按 initialSyncTailCount 尾窗分页) + 模型信息 + 上下文统计
 
 AgentIOTransportBase (传输层抽象)
     ├── connect(hello)     → 建立连接并发送握手
@@ -1041,7 +1058,12 @@ Client                              Server
   │──── ListSessions ─────────────────│ 列举持久化会话 (阻塞 I/O 卸载到线程池)
   │←── SessionList ───────────────────│
   │──── SwitchSession (threadId) ────│ 切换会话绑定: 清空 delta 缓冲,
-  │                                   │ 回推新会话全量 Sync + 模型信息 + 上下文统计
+  │                                   │ 回推新会话 Sync (尾窗分页) + 模型信息 + 上下文统计
+  │                                    │
+  │ (可选) 历史分页 (TUI 向上滚动到窗口顶部)
+  │──── GetViewMessages (before, n) ──│ 切片 [max(0,before-n), before) 回应
+  │←── ViewMessagesPage ──────────────│ (startIndex/totalCount/messages);
+  │                                   │ 客户端前插 + 滚动锚定, 视口内容稳定
   │                                    │
   │ (可选) 中断过期通知
   │←── InterruptExpired ──────────────│ 中断超时/断线宽限期满/会话取消时,

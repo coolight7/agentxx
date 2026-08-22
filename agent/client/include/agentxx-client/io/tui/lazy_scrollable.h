@@ -114,6 +114,23 @@ public:
     /// 清空缓存 (如主题切换后旧 Element 的颜色已过时)
     void clearCache();
 
+    /// 头部插入子项后的滚动锚定 (历史分页前插场景; UI 线程, 帧间调用)
+    ///
+    /// 在并行数组头部插入 count 个新条目 —— 既有条目的缓存 Element 与实测
+    /// 高度随索引整体平移而保留 (key 对齐校验通过, 不失效重建), 仅新增区
+    /// 按初始值占位; 视口稳定所需的滚动偏移下移统一下放到下一帧
+    /// prepareLayout 内的锚定校正完成 (彼时 frameState 已刷新为本帧快照,
+    /// 新增区高度按正确口径计算, appliedRows 自 0 起全额补偿, 后续实测
+    /// 修正增量收敛)。
+    /// - 应在状态前插完成后、下一帧渲染前调用 (UI 动作队列语义)
+    /// - 尚未布局过 (无任何缓存/高度数据) 时仅记录条数不做偏移调整
+    ///   (首屏填充场景无需锚定)
+    void notifyPrepended(size_t count);
+
+    /// 清除头部插入锚定状态 (消息列表整体替换/会话切换时调用:
+    /// 窗口已重建, 对旧窗口的偏移校正不再有意义)
+    void clearPrependAnchor();
+
     /// 清除可见子项残留的鼠标选中高亮 (Text::has_selection_)。
     ///
     /// 背景: 本组件为懒构建/局部布局, 跳过 FTXUI 每帧的 ComputeRequirement
@@ -158,6 +175,12 @@ private:
     void evictIfNeeded();
     /// 估算未测量子项的高度 (行), 兜底 >= 1
     size_t estimateHeightFor(size_t index) const;
+
+    /// 头部插入锚定校正 (prepareLayout 内调用): 新增区子项的已知总高度
+    /// (实测优先, 未测用估算) 与已应用行数的差值增量补偿到 scrollOffset_;
+    /// stickToBottom 时仅同步已应用值 (偏移由吸附逻辑接管, 无需校正)。
+    /// 全部新增区子项实测完成后锚定收敛并自动结束
+    void applyPrependAnchorCorrection();
 
     // ---- 回调 ----
     ItemCountFunc      itemCount_;
@@ -217,4 +240,11 @@ private:
     /// 标记后淘汰在遇到首个帧内已确保条目时停止 (LRU 序 = 最近使用在前,
     /// 本帧条目全部位于前部, 尾部未确保条目先被淘汰完), 保证渲染优先于压预算。
     std::vector<bool> protectedIndices_;
+
+    /// 头部插入滚动锚定状态 (notifyPrepended 设置; prepareLayout 内增量校正收敛)
+    struct PendingPrepend {
+        bool      active      = false;     // 是否有未收敛的头部插入锚定
+        size_t    count       = 0;         // 新增区子项数 [0, count)
+        long long appliedRows = 0;         // 已应用到 scrollOffset_ 的新增区高度 (行)
+    } pendingPrepend_;
 };

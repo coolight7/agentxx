@@ -14,6 +14,7 @@
 #include "asio/dispatch.hpp"
 #include "asio/redirect_error.hpp"
 #include "asio/use_awaitable.hpp"
+#include <algorithm>
 #include "fmt/format.h"
 #include "neograph/graph/cancel.h"
 
@@ -217,6 +218,11 @@ void SessionServerAgentIO::onPeerMessage(WireMessage msg) {
                 onCancel();
             } else if constexpr (std::is_same_v<T, WireInterruptAndRunNext>) {
                 interruptAndRunNext();
+            } else if constexpr (std::is_same_v<T, WireGetViewMessages>) {
+                // 客户端历史分页请求: 切片 [max(0, before-count), before) 回应。
+                // viewMessages 为 append-only, 绝对下标恒定, 轮次进行中追加
+                // 新消息不影响既有下标, 无竞态; 全程 ex_ 线程 (= Session io 线程)
+                handleGetViewMessages(m);
             } else if constexpr (std::is_same_v<T, WireClearMessageQueue>) {
                 clearMessageQueue();
             } else if constexpr (std::is_same_v<T, WireRemoveQueueItem>) {
@@ -363,11 +369,16 @@ void SessionServerAgentIO::handleHello(const WireHello& hello, std::vector<std::
         if (deltas.has_value()) {
             replayDeltas = std::move(deltas.value());
         } else {
+            // delta 缓冲溢出回退全量 sync: 保证重连后客户端与服务端严格一致
+            // (罕见路径, 不走尾窗; 客户端收到后整体重置历史窗口)
             replaySync = buildFullSync();
         }
     } else {
-        if (sess && !sess->getFullViewMessagesCopy().empty()) {
-            replaySync = buildFullSync();
+        // 首次接入: 按 initialSyncTailCount 决定全量或尾窗同步。
+        // 尾窗同步时客户端仅持有末尾窗口, 上方更早历史由其分页拉取
+        // (WireGetViewMessages), 避免长会话恢复时全量传输
+        if (sess && sess->viewMessageCount() > 0) {
+            replaySync = buildTailSync(config_.initialSyncTailCount);
         }
     }
 
@@ -415,8 +426,9 @@ void SessionServerAgentIO::switchSession(std::string newThreadId) {
     if (newThreadId.empty() || newThreadId == config_.sessionId) {
         // 空 id 非法; 同一会话无需切换 (历史已同步, 重复全量 Sync 反而闪烁)
         if (newThreadId == config_.sessionId) {
-            // 仍回推一次全量 Sync: 客户端可能因本地状态异常需要校准
-            auto sync = buildFullSync();
+            // 仍回推一次 Sync 校准客户端 (本地状态异常时); 与首次接入一致
+            // 按尾窗配置分页, 客户端整体重置窗口后可再分页拉取更早历史
+            auto sync = buildTailSync(config_.initialSyncTailCount);
             sendToPeer(std::move(sync));
             sendContextStats();
         }
@@ -451,8 +463,8 @@ void SessionServerAgentIO::switchSession(std::string newThreadId) {
 
     XX_LOGI("[session_ctrl] switched session: {} -> {}", oldThreadId, config_.sessionId);
 
-    // 回推新会话状态: 全量 Sync (历史消息) + 模型信息 + 上下文统计
-    auto sync = buildFullSync();
+    // 回推新会话状态: Sync (历史消息, 按尾窗配置分页) + 模型信息 + 上下文统计
+    auto sync = buildTailSync(config_.initialSyncTailCount);
     sendToPeer(std::move(sync));
 
     std::string              currentModel = agent->getCurrentModelName(config_.sessionId);
@@ -725,14 +737,74 @@ SyncPayload SessionServerAgentIO::buildFullSync() {
     if (sess) {
         p.messages = sess->getFullViewMessagesCopy();
         p.tailHash = sess->getHashInfo().tailHex;
+        p.totalMessages = p.messages.size();
     }
     p.messageQueue = std::vector<MessageQueueItem>(messageQueue_.begin(), messageQueue_.end());
+    return p;
+}
+
+SyncPayload SessionServerAgentIO::buildTailSync(size_t tailCount) {
+    if (tailCount == 0) {
+        return buildFullSync();
+    }
+    SyncPayload p;
+    auto        sess = session();
+    if (!sess) {
+        p.messageQueue = std::vector<MessageQueueItem>(messageQueue_.begin(), messageQueue_.end());
+        return p;
+    }
+    const size_t total = sess->viewMessageCount();
+    // 窗口起始下标: 总数不足窗口大小时从 0 开始 (此时等价全量)
+    const size_t start = (total > tailCount) ? (total - tailCount) : 0;
+    p.fromIndex        = start;
+    p.totalMessages    = total;
+    p.messages         = sess->getViewMessagesRange(start, total);
+    p.tailHash         = sess->getHashInfo().tailHex;
+    p.messageQueue     = std::vector<MessageQueueItem>(messageQueue_.begin(), messageQueue_.end());
     return p;
 }
 
 std::string SessionServerAgentIO::currentTailHash() {
     auto sess = session();
     return sess ? sess->getHashInfo().tailHex : std::string{};
+}
+
+void SessionServerAgentIO::handleGetViewMessages(const WireGetViewMessages& req) {
+    // 默认页大小: 客户端 count==0 时的兜底 (与 TUI 端请求页大小一致)
+    static constexpr uint32_t kDefaultHistoryPageSize = 100;
+
+    WireViewMessagesPage page;
+    page.sessionId = config_.sessionId;
+    // 会话校验: 端点绑定单一会话; 不匹配的请求按错投处理回空页
+    // (切换会话后迟到的旧请求 / 客户端状态异常), 避免泄漏其他会话内容
+    if (!req.sessionId.empty() && req.sessionId != config_.sessionId) {
+        sendToPeer(std::move(page));
+        return;
+    }
+    auto sess = session();
+    if (!sess) {
+        // 会话不存在 (已清理/未创建): 回空页, totalMessages=0 使客户端
+        // 判定无更早历史并复位加载状态
+        sendToPeer(std::move(page));
+        return;
+    }
+    const size_t total = sess->viewMessageCount();
+    page.totalCount    = total;
+    // beforeIndex == 0 视为"从末尾向前取" (客户端首次加载兜底);
+    // 正常分页流程窗口顶部为 0 时客户端不应再发起请求
+    const uint64_t before
+        = (req.beforeIndex == 0) ? total : std::min<uint64_t>(req.beforeIndex, total);
+    const uint32_t count
+        = (req.count == 0) ? kDefaultHistoryPageSize : std::min(req.count, kDefaultHistoryPageSize);
+    const uint64_t cnt = std::min<uint64_t>(count, before);
+    page.startIndex    = before - cnt;
+    if (cnt > 0) {
+        page.messages = sess->getViewMessagesRange(
+            static_cast<size_t>(page.startIndex),
+            static_cast<size_t>(before)
+        );
+    }
+    sendToPeer(std::move(page));
 }
 
 void SessionServerAgentIO::sendContextStats() {

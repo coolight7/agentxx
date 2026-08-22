@@ -9,6 +9,8 @@
 - 插件实现 execute_javascript_command
 - 调整插件代码结构，增加测试、划分文件夹
 - agent-io 异常中断停止执行会话后，tui发送消息会进入消息队列等待
+- tui 权限渲染
+- 验证subagent、summarization
 
 ## 提示词优化
 - 如果编译需要配置特定参数，写成脚本或者写入到AGENTS.md

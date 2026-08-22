@@ -139,6 +139,10 @@ static TUITheme resolveTuiTheme() {
 // Local unified DIRECT (ChannelAgentIOTransport 直连 TUI ↔ SessionServerAgentIO)
 // ---------------------------------------------------------------------------
 
+/// TUI 历史分页尾窗大小: 首次接入/切换会话时服务端仅同步末尾 N 条消息
+/// (与会话分页页大小 TUIClientAgentIO::kHistoryPageSize 保持一致量级)
+static constexpr size_t kTuiInitialSyncTailCount = 100;
+
 /// TUI 持有 client transport, SessionServerAgentIO 持有 server transport
 /// 两端点经 Channel 直连, 无中间包装层
 static std::shared_ptr<agent::SessionServerAgentIO> setupLocalUnifiedDirect(
@@ -158,6 +162,13 @@ static std::shared_ptr<agent::SessionServerAgentIO> setupLocalUnifiedDirect(
     // 服务端: SessionServerAgentIO 持有 server transport
     agent::SessionServerAgentIO::Config scCfg;
     scCfg.sessionId = sessionId;
+    // 历史分页尾窗: 仅对 TUI 客户端启用 —— 恢复长会话时服务端只回推末尾
+    // 100 条 (与 TUIClientAgentIO::kHistoryPageSize 分页页大小一致), 用户
+    // 向上滚动到窗口顶部时经 WireGetViewMessages 分页拉取更早历史;
+    // stdio 客户端无滚动交互, 保持全量同步 (initialSyncTailCount=0)
+    if (dynamic_cast<TUIClientAgentIO*>(clientIO.get()) != nullptr) {
+        scCfg.initialSyncTailCount = kTuiInitialSyncTailCount;
+    }
     auto serverIO   = std::make_shared<agent::SessionServerAgentIO>(agentEx, agent, scCfg);
     serverIO->setTransport(std::shared_ptr<agent::AgentIOTransportBase>(std::move(serverTransport))
     );

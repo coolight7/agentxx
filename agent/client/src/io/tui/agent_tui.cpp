@@ -408,6 +408,12 @@ void TUIClientAgentIO::start() {
         ctx_.postRedraw = [this] {
             postRedraw();
         };
+        // 历史分页钩子: MessageListComponent 滚动接近窗口顶部时触发
+        // (requestOlderHistory 内部做在途去重与边界判断; sendToPeer 经
+        // transport 写队列投递, 线程安全)
+        ctx_.requestMoreHistory = [this] {
+            requestOlderHistory();
+        };
         ctx_.theme         = &theme_;
         ctx_.sessionId     = currentThreadId();
         ctx_.remoteUrl     = remoteUrl_;
@@ -1270,6 +1276,9 @@ void TUIClientAgentIO::onPeerMessage(agentxx::agent::WireMessage msg) {
                 postRedraw();
             } else if constexpr (std::is_same_v<T, agentxx::agent::WireMessageQueueUpdate>) {
                 onMessageQueueUpdate(m);
+            } else if constexpr (std::is_same_v<T, agentxx::agent::WireViewMessagesPage>) {
+                // 历史分页响应: 前插到已加载窗口上方 (向上滚动加载更早历史)
+                onViewMessagesPage(m);
             }
         },
         std::move(msg)
@@ -1362,6 +1371,91 @@ void TUIClientAgentIO::onMessageQueueUpdate(const agentxx::agent::WireMessageQue
         }
     }
     postRedraw();
+}
+
+// ---------------------------------------------------------------------------
+// 历史分页 (client 线程)
+//
+// 长会话恢复时服务端仅同步末尾窗口 (SyncPayload.fromIndex = 窗口起始绝对
+// 下标), 用户向上滚动到已加载窗口顶部时经 WireGetViewMessages 分页拉取
+// 更早历史; 页响应在此前插到本地窗口上方并做滚动锚定。
+// viewMessages 为 append-only, 绝对下标恒定, 前插不影响既有下标。
+// ---------------------------------------------------------------------------
+
+void TUIClientAgentIO::onViewMessagesPage(const agentxx::agent::WireViewMessagesPage& page) {
+    size_t prependedCount = 0;
+    bool   anchored       = false;
+    {
+        std::lock_guard<std::mutex> lock(sharedState_.mutex());
+        auto&                       st = sharedState_.mutableState();
+        // 在途标志复位 (无论本页是否可用, 请求生命周期已结束)
+        st.historyLoading = false;
+        // 会话不匹配: 切换会话后迟到的旧页响应, 丢弃
+        if (!page.sessionId.empty() && page.sessionId != currentThreadId()) {
+            XX_LOGW("[tui] drop stale history page (session {} != {})",
+                    page.sessionId,
+                    currentThreadId());
+            return;
+        }
+        if (page.messages.empty()) {
+            // 空页: 无更早历史 (或会话不存在), 窗口起点归零终止后续触发
+            st.historyWindowStart = 0;
+            if (page.totalCount > 0) {
+                st.historyTotal = page.totalCount;
+            }
+            return;
+        }
+        // 连续性校验: 页尾必须紧贴当前窗口首条 (分页请求按序应答且单在途,
+        // 不连续说明窗口已被 Sync 整体替换, 本页过期丢弃)
+        const uint64_t pageEnd = page.startIndex + page.messages.size();
+        if (st.historyWindowStart != 0 || !st.messages.empty()) {
+            if (pageEnd != st.historyWindowStart) {
+                XX_LOGW(
+                    "[tui] drop non-contiguous history page ([{}, {}) vs window start {})",
+                    page.startIndex,
+                    pageEnd,
+                    st.historyWindowStart
+                );
+                return;
+            }
+        }
+        prependedCount = page.messages.size();
+        anchored       = !st.messages.empty();
+        // ViewMessage → TUIMessage (shared_ptr) 转换后按页内顺序整体前插
+        std::vector<std::shared_ptr<TUIMessage>> converted;
+        converted.reserve(page.messages.size());
+        for (const auto& vm : page.messages) {
+            converted.push_back(std::make_shared<TUIMessage>(vm));
+        }
+        st.messages.insert(st.messages.begin(), converted.begin(), converted.end());
+        st.historyWindowStart = page.startIndex;
+        if (page.totalCount > st.historyTotal) {
+            st.historyTotal = page.totalCount;
+        }
+    }
+    // 滚动锚定: LazyScrollable 为 UI 线程独占, 经动作队列在帧间执行。
+    // anchored=false 表示首屏填充 (前插前无消息), 无需稳定旧视口内容
+    enqueueUiAction([this, prependedCount, anchored]() {
+        if (messageList_ && anchored) {
+            messageList_->onHistoryPrepended(prependedCount);
+        }
+    });
+    postRedraw();
+}
+
+void TUIClientAgentIO::requestOlderHistory() {
+    uint64_t beforeIndex = 0;
+    {
+        std::lock_guard<std::mutex> lock(sharedState_.mutex());
+        auto&                       st = sharedState_.mutableState();
+        // 边界判断 + 在途去重 (UI 线程滚动事件可能高频触发)
+        if (st.historyLoading || !st.hasMoreHistory()) {
+            return;
+        }
+        st.historyLoading = true;
+        beforeIndex       = st.historyWindowStart;
+    }
+    requestViewMessagesPage(currentThreadId(), beforeIndex, kHistoryPageSize);
 }
 
 // ---------------------------------------------------------------------------
@@ -1653,16 +1747,24 @@ void TUIClientAgentIO::onSync(const agentxx::agent::SyncPayload& payload) {
             for (const auto& vm : payload.messages) {
                 st->messages.push_back(std::make_shared<TUIMessage>(vm));
             }
+            // 历史分页窗口元数据: fromIndex = 本批消息的起始绝对下标
+            // (尾窗同步时 > 0, 上方还有更早历史待分页拉取; 全量同步时为 0);
+            // 在途页请求随整体替换作废, 复位加载标志
+            st->historyWindowStart = payload.fromIndex;
+            st->historyTotal       = payload.totalMessages != 0 ? payload.totalMessages
+                                                                : payload.messages.size();
+            st->historyLoading     = false;
             // 直接替换 (旧快照由 UI 线程持有, 自然释放)
             cur = std::move(*st);
         });
     }
-    // 消息列表吸附到底部 + 清理中断 UI 状态 (消息整体替换, 旧状态随之失效):
-    // 组件由 UI 线程独占, 经动作队列投递
+    // 消息列表吸附到底部 + 清理中断 UI 状态 + 重置历史分页锚定 (消息整体
+    // 替换, 旧状态随之失效): 组件由 UI 线程独占, 经动作队列投递
     enqueueUiAction([this]() {
         if (messageList_) {
             messageList_->setStickToBottom(true);
             messageList_->clearInterruptUiState();
+            messageList_->resetHistoryPagination();
         }
     });
     postRedraw();
