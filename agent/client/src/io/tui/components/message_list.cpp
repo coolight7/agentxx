@@ -1603,26 +1603,63 @@ Element MessageListComponent::buildMessageBlock(
                 = msg.interrupt
                   && msg.interrupt->interruptStatus == TUIMessage::InterruptStatus::Waiting;
             if (waiting) {
-                // 头行: 类型 + 进度
-                Elements header;
-                header.push_back(
-                    text(fmt::format(
-                        "! [Interrupt] Input {}/{}: ",
-                        msg.interrupt->inputIndex,
-                        msg.interrupt->inputTotal
-                    ))
-                    | color(theme.accentColor) | bold
-                );
-                header.push_back(
-                    text(msg.interrupt->inputLabel) | color(theme.accentColor) | xflex_shrink
-                );
-                lines.push_back(hbox(std::move(header)));
+                // 是否权限询问 (与控件区判定一致: interruptChannels_ 的 rememberable 标记)
+                const bool isPermission = [&]() -> bool {
+                    auto it = interruptChannels_.find(msg.interrupt->interruptId);
+                    return it != interruptChannels_.end() && it->second.rememberable;
+                }();
 
-                if (!msg.interrupt->inputDepict.empty()) {
-                    lines.push_back(hbox({
-                        text("  ") | color(theme.hintColor),
-                        text(msg.interrupt->inputDepict) | color(theme.hintColor) | xflex_shrink,
-                    }));
+                if (isPermission) {
+                    // 权限询问头两行:
+                    //   行1: ! [Permission] <工具名> <请求的权限>
+                    //   行2: 描述 (受约束目标等)
+                    // label 由服务端拼装为 "{toolName} {category}", 此处拆开分段着色;
+                    // 无空格时整体作为工具名展示 (权限询问恒为单输入项, 不展示进度)
+                    std::string toolName = msg.interrupt->inputLabel;
+                    std::string category;
+                    const auto  sp = msg.interrupt->inputLabel.find(' ');
+                    if (sp != std::string::npos) {
+                        toolName = msg.interrupt->inputLabel.substr(0, sp);
+                        category = msg.interrupt->inputLabel.substr(sp + 1);
+                    }
+                    Elements header;
+                    header.push_back(text("! [Permission] ") | color(theme.errorColor) | bold);
+                    header.push_back(text(toolName) | color(theme.accentColor) | bold);
+                    if (!category.empty()) {
+                        header.push_back(text(" " + category) | color(theme.hintColor));
+                    }
+                    lines.push_back(hbox(std::move(header)));
+
+                    if (!msg.interrupt->inputDepict.empty()) {
+                        // paragraph 自动折行 (长路径不截断), text 仅裁剪
+                        lines.push_back(hbox({
+                            text("  "),
+                            paragraph(msg.interrupt->inputDepict) | color(theme.hintColor)
+                                | xflex_shrink,
+                        }));
+                    }
+                } else {
+                    // 头行: 类型 + 进度
+                    Elements header;
+                    header.push_back(
+                        text(fmt::format(
+                            "! [Interrupt] Input {}/{}: ",
+                            msg.interrupt->inputIndex,
+                            msg.interrupt->inputTotal
+                        ))
+                        | color(theme.accentColor) | bold
+                    );
+                    header.push_back(
+                        text(msg.interrupt->inputLabel) | color(theme.accentColor) | xflex_shrink
+                    );
+                    lines.push_back(hbox(std::move(header)));
+
+                    if (!msg.interrupt->inputDepict.empty()) {
+                        lines.push_back(hbox({
+                            text("  ") | color(theme.hintColor),
+                            text(msg.interrupt->inputDepict) | color(theme.hintColor) | xflex_shrink,
+                        }));
+                    }
                 }
 
                 lines.push_back(text(" "));
@@ -2000,45 +2037,86 @@ Element MessageListComponent::buildInterruptControl(const TUIMessage& msg, size_
         return text(label) | bgcolor(theme.buttonBgColor) | color(theme.buttonTextColor);
     };
 
-    // 确认 / 取消按钮 (共用)
-    auto confirmBox = mkBox();
-    auto cancelBox  = mkBox();
-    auto confirmBtn = btn(" [确认] ", false) | reflect(*confirmBox);
-    auto cancelBtn  = text(" ✕ ") | color(theme.errorColor) | reflect(*cancelBox);
-    hit(kHitConfirm, 0, confirmBox);
-    hit(kHitCancel, 0, cancelBox);
+    // 确认 / 取消按钮行 (按需创建): 命中区域必须与实际渲染的控件一一对应,
+    // 未渲染却注册命中会产生幽灵点击区, 故由各分支调用本函数就地创建;
+    // 权限卡片布局 (bool + rememberable) 不含确认/取消按钮 (允许/拒绝即确认)
+    auto makeConfirmCancelRow = [&]() {
+        auto confirmBox = mkBox();
+        auto cancelBox  = mkBox();
+        hit(kHitConfirm, 0, confirmBox);
+        hit(kHitCancel, 0, cancelBox);
+        return hbox({
+            btn(" [确认] ", false) | reflect(*confirmBox),
+            text("  "),
+            text(" ✕ ") | color(theme.errorColor) | reflect(*cancelBox),
+        });
+    };
 
     Element control;
     if (id.inputType == "bool") {
-        // 权限询问 (rememberable): 额外显示"记住"开关 —— 勾选后确认时按本次
-        // 允许/拒绝注册路径规则, 后续访问该路径或其子目录不再询问
+        // 权限询问 (rememberable): 卡片式布局 ——
+        //   头两行 (工具名+请求权限 / 描述) 由消息块渲染 (见 buildMessageBlock);
+        //   控件区 = 设置项列表 + 底部 允许/拒绝 按钮:
+        //   - 设置项每项一行, 左侧名称右侧选中状态指示 (两端对齐), 整行可点击
+        //     切换 ("记住此选择": 勾选后确认时按本次允许/拒绝注册路径规则,
+        //     后续访问该路径或其子目录不再询问)
+        //   - 允许/拒绝即确认操作 (点击直接回传 true/false), 不再单设确认键;
+        //     键盘 ←/→ 切换高亮项, Enter 确认当前选中项
         const bool rememberable = [&]() -> bool {
             auto it = interruptChannels_.find(id.interruptId);
             return it != interruptChannels_.end() && it->second.rememberable;
         }();
 
-        auto yesBox = mkBox();
-        auto noBox  = mkBox();
-        auto yes    = btn(" 是 ", ui.selected == 0) | reflect(*yesBox);
-        auto no     = btn(" 否 ", ui.selected == 1) | reflect(*noBox);
-        hit(kHitBoolYes, 0, yesBox);
-        hit(kHitBoolNo, 0, noBox);
-        Elements row;
-        row.push_back(yes);
-        row.push_back(text(" "));
-        row.push_back(no);
         if (rememberable) {
-            auto remBox = mkBox();
-            auto rem = btn(ui.remember ? " 记住✓ " : " 记住 ", ui.remember) | reflect(*remBox);
-            hit(kHitRemember, 0, remBox);
-            row.push_back(text("  "));
-            row.push_back(rem);
+            Elements rows;
+
+            // ---- 设置项区: 每项一行, 左侧名称右侧状态指示, 两端对齐 ----
+            // (后续新增设置项在此按同一样式追加)
+            {
+                auto remBox = mkBox();
+                auto indicator = ui.remember ? text(" [ ✓ ] ") | color(theme.accentColor) | bold
+                                             : text(" [   ] ") | color(theme.hintColor);
+                // 两端对齐: filler() 占据中间剩余空间把指示器推到行尾;
+                // reflect 于整行 → 点击行内任意位置均可切换
+                auto row
+                    = hbox({
+                          text(" ◦ ") | color(theme.hintColor),
+                          text("记住此选择") | color(theme.buttonTextColor),
+                          filler(),
+                          std::move(indicator),
+                      })
+                      | reflect(*remBox);
+                hit(kHitRemember, 0, remBox);
+                rows.push_back(std::move(row));
+            }
+
+            // ---- 底部按钮: 允许 / 拒绝 (复用 kHitBoolYes/kHitBoolNo 点击直接确认语义) ----
+            auto allowBox = mkBox();
+            auto denyBox  = mkBox();
+            hit(kHitBoolYes, 0, allowBox);
+            hit(kHitBoolNo, 0, denyBox);
+            rows.push_back(text(" "));
+            rows.push_back(hbox({
+                btn(" [ 允许 ] ", ui.selected == 0) | reflect(*allowBox),
+                text("  "),
+                btn(" [ 拒绝 ] ", ui.selected == 1) | reflect(*denyBox),
+            }));
+            control = vbox(std::move(rows));
+        } else {
+            auto yesBox = mkBox();
+            auto noBox  = mkBox();
+            auto yes    = btn(" 是 ", ui.selected == 0) | reflect(*yesBox);
+            auto no     = btn(" 否 ", ui.selected == 1) | reflect(*noBox);
+            hit(kHitBoolYes, 0, yesBox);
+            hit(kHitBoolNo, 0, noBox);
+            control = hbox({
+                yes,
+                text(" "),
+                no,
+                text("  "),
+                makeConfirmCancelRow(),
+            });
         }
-        row.push_back(text("  "));
-        row.push_back(confirmBtn);
-        row.push_back(text("  "));
-        row.push_back(cancelBtn);
-        control = hbox(std::move(row));
     } else if (id.inputType == "int" || id.inputType == "double") {
         auto minusBox = mkBox();
         auto plusBox  = mkBox();
@@ -2056,9 +2134,7 @@ Element MessageListComponent::buildInterruptControl(const TUIMessage& msg, size_
             text(" "),
             plus,
             text("  "),
-            confirmBtn,
-            text("  "),
-            cancelBtn,
+            makeConfirmCancelRow(),
         });
     } else if (id.inputType == "enum") {
         // 枚举项竖直列表 (选中项高亮)
@@ -2087,11 +2163,7 @@ Element MessageListComponent::buildInterruptControl(const TUIMessage& msg, size_
         control = vbox({
             vbox(std::move(items)),
             text(" "),
-            hbox({
-                confirmBtn,
-                text("  "),
-                cancelBtn,
-            }),
+            makeConfirmCancelRow(),
         });
     } else { // string
         auto editBox = mkBox();
@@ -2100,9 +2172,7 @@ Element MessageListComponent::buildInterruptControl(const TUIMessage& msg, size_
             text(" " + ui.editText + " ") | bgcolor(theme.inputBgColor)
                 | color(theme.inputTextColor) | reflect(*editBox) | xflex_shrink,
             text("  "),
-            confirmBtn,
-            text("  "),
-            cancelBtn,
+            makeConfirmCancelRow(),
         });
     }
     return control;

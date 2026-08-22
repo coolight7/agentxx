@@ -72,13 +72,15 @@ struct InterruptFixture {
         int64_t                                 interruptId  = 1,
         int                                     inputIndex   = 1,
         int                                     inputTotal   = 1,
-        bool                                    rememberable = false
+        bool                                    rememberable = false,
+        std::string                             depict       = ""
     ) {
         auto m                     = std::make_shared<TUIMessage>();
         m->role                    = TUIMessage::Role::Interrupt;
         m->interrupt               = TUIMessage::InterruptData{};
         m->interrupt->interruptId  = interruptId;
         m->interrupt->inputLabel   = label;
+        m->interrupt->inputDepict  = std::move(depict);
         m->interrupt->inputType    = type;
         m->interrupt->inputDefault = defaultValue;
         m->interrupt->inputIndex   = inputIndex;
@@ -302,6 +304,73 @@ void test_permission_remember_without_toggle() {
 }
 
 // ---------------------------------------------------------------------------
+// 权限请求卡片布局:
+// 行1 工具名+请求的权限 / 行2 描述 / 设置项 (每项一行, 右端选中状态指示,
+// 两端对齐) / 底部 允许、拒绝 两个按钮
+// ---------------------------------------------------------------------------
+
+void test_permission_card_layout() {
+    InterruptFixture f;
+    auto             ch = f.makeChannel();
+    f.addInterrupt(
+        ch,
+        "bool",
+        "no",
+        "read_file filesystem_read",
+        {},
+        1,
+        1,
+        1,
+        true,
+        "/workspace/data/x.txt"
+    );
+    const std::string text = f.render();
+    // 行1: 权限标记 + 工具名 + 权限分类; 不再展示通用中断头前缀与进度
+    XX_TEST_EXPECT_TRUE(text.find("! [Permission]") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(text.find("read_file") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(text.find("filesystem_read") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(text.find("[Interrupt] Input") == std::string::npos);
+    // 行2: 描述
+    XX_TEST_EXPECT_TRUE(text.find("/workspace/data/x.txt") != std::string::npos);
+    // 设置项: "记住此选择", 初始未勾选 → 空指示器
+    XX_TEST_EXPECT_TRUE(text.find("记住此选择") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(text.find("[   ]") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(text.find("[ ✓ ]") == std::string::npos);
+    // 底部按钮: 允许 / 拒绝; 权限卡片不再有独立确认按钮
+    XX_TEST_EXPECT_TRUE(text.find("允许") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(text.find("拒绝") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(text.find("确认") == std::string::npos);
+}
+
+void test_permission_remember_indicator_updates() {
+    InterruptFixture f;
+    auto             ch = f.makeChannel();
+    auto             mi = f.addInterrupt(ch, "bool", "no", "perm", {}, 1, 1, 1, true);
+    // 勾选设置项后重渲染: 指示器变为 [ ✓ ]
+    XX_TEST_EXPECT_TRUE(f.click(mi, MessageListComponent::kHitRemember));
+    const std::string text = f.render();
+    XX_TEST_EXPECT_TRUE(text.find("[ ✓ ]") != std::string::npos);
+}
+
+void test_permission_settings_row_full_width() {
+    InterruptFixture f;
+    auto             ch = f.makeChannel();
+    auto             mi = f.addInterrupt(ch, "bool", "no", "perm", {}, 1, 1, 1, true);
+    f.render();
+    // 两端对齐: 设置项行横跨消息区可用宽度 (左名称, 右状态指示)
+    bool foundRow = false;
+    for (const auto& h : f.comp->interruptHitBoxes()) {
+        if (h.msgIndex != mi || h.kind != MessageListComponent::kHitRemember || !h.box) {
+            continue;
+        }
+        foundRow = true;
+        XX_TEST_EXPECT_TRUE(h.box->x_max - h.box->x_min > 60); // 渲染宽度 120 列
+        break;
+    }
+    XX_TEST_EXPECT_TRUE(foundRow);
+}
+
+// ---------------------------------------------------------------------------
 // int: - [输入框] + 步进 1
 // ---------------------------------------------------------------------------
 
@@ -461,7 +530,7 @@ void test_double_invalid_rejected() {
 void test_enum_render_list() {
     InterruptFixture  f;
     auto              ch   = f.makeChannel();
-    auto              mi   = f.addInterrupt(ch, "enum", "", "mode", {"alpha", "beta", "gamma"});
+    f.addInterrupt(ch, "enum", "", "mode", {"alpha", "beta", "gamma"});
     const std::string text = f.render();
     XX_TEST_EXPECT_TRUE(text.find("alpha") != std::string::npos);
     XX_TEST_EXPECT_TRUE(text.find("beta") != std::string::npos);
@@ -731,6 +800,10 @@ TestResult testTuiInterrupt() {
     test_permission_remember_ui_only_for_rememberable();
     test_permission_remember_toggle_and_confirm();
     test_permission_remember_without_toggle();
+    // 权限请求卡片布局
+    test_permission_card_layout();
+    test_permission_remember_indicator_updates();
+    test_permission_settings_row_full_width();
     // 客户端权限通行模式 (yaml permission_mode: pass)
     test_permission_pass_mode();
     // 客户端权限拒绝模式 (yaml permission_mode: deny)
