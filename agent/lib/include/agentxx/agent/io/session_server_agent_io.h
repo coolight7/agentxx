@@ -47,6 +47,12 @@ public:
         std::chrono::milliseconds gracePeriod = std::chrono::seconds{30};
         /// delta 环形缓冲容量 (按消息数)
         size_t deltaBufferCap = 4096;
+        /// 首次接入/切换会话时同步的历史消息窗口大小 (历史分页)
+        /// - 0 = 全量同步 (旧行为)
+        /// - N > 0 = 仅同步末尾 N 条 (fromIndex=窗口起始下标), 客户端
+        ///   (TUI) 向上滚动到窗口顶部时经 WireGetViewMessages 分页拉取
+        ///   更早历史, 避免长会话恢复时全量传输
+        size_t initialSyncTailCount = 0;
     };
 
     SessionServerAgentIO(asio::any_io_executor ex, std::weak_ptr<BaseAgent> agent, Config config);
@@ -144,6 +150,11 @@ private:
     std::optional<std::vector<Delta>> deltasSince(uint64_t seq);
 
     SyncPayload              buildFullSync();
+    /// 构建同步载荷; tailCount>0 时仅取末尾 tailCount 条 (历史分页尾窗)
+    /// - fromIndex = 窗口起始绝对下标, totalMessages = 会话总消息数;
+    ///   客户端据此展示"上方还有更早消息"并按 WireGetViewMessages 分页拉取
+    /// - tailCount==0 时等价 buildFullSync() (全量, fromIndex=0)
+    SyncPayload              buildTailSync(size_t tailCount);
     std::shared_ptr<Session> session();
 
     /// 向客户端推送当前上下文统计
@@ -159,6 +170,9 @@ private:
     void startGraceTimer();
     void cancelGraceTimer();
     void failAllPending();
+
+    /// 处理客户端历史分页请求 (WireGetViewMessages → WireViewMessagesPage)
+    void handleGetViewMessages(const WireGetViewMessages& req);
 
     /// 实际清理逻辑 (须在 ex_ 线程执行)
     void stopImpl();

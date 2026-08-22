@@ -243,9 +243,15 @@ struct MessageQueueItem {
 };
 
 struct SyncPayload {
+    /// 本批 messages 首条在服务端完整 viewMessages 中的绝对下标
+    /// - 全量同步: 0 (兼容旧语义)
+    /// - 尾窗同步 (历史分页, initialSyncTailCount>0): 窗口起始下标 (>0 表示
+    ///   上方还有更早消息未同步), 客户端据此支持"向上滚动加载更早历史"
     uint64_t                      fromIndex = 0;
     std::vector<ViewMessage>      messages;
     std::string                   tailHash;
+    /// 服务端会话总消息数 (0 = 未提供/未知; 全量同步时 == messages.size())
+    uint64_t                      totalMessages = 0;
     std::vector<MessageQueueItem> messageQueue;
 };
 

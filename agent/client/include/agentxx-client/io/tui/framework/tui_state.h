@@ -71,6 +71,21 @@ enum class ConnState : uint8_t {
 ///   每 token 都会复制整个上下文 JSON; 指针化后 COW 拷贝仅 O(1)
 struct TUIRenderState {
     std::vector<std::shared_ptr<TUIMessage>> messages;
+
+    // ---- 历史分页窗口状态 (服务端 viewMessages 尾窗同步 + 分页拉取) ----
+    /// 已加载窗口首条消息在服务端完整 viewMessages 中的绝对下标
+    /// - 全量同步时为 0 (与旧行为一致); 尾窗同步时 > 0 表示上方还有更早历史
+    uint64_t historyWindowStart = 0;
+    /// 服务端会话总消息数 (Sync.totalMessages / Page.totalCount; 0 = 未知)
+    uint64_t historyTotal = 0;
+    /// 是否有在途的历史分页请求 (滚动触发去重)
+    bool historyLoading = false;
+
+    /// 是否还有未加载的更早历史 (historyWindowStart > 0 即窗口上方非空)
+    bool hasMoreHistory() const noexcept {
+        return historyWindowStart > 0;
+    }
+
     std::shared_ptr<std::string>             currentToken;
     TUIMessage::Role                         currentTokenRole = TUIMessage::Role::Assistant;
     bool                                     isStreaming      = false;

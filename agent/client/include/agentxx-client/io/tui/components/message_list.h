@@ -93,6 +93,22 @@ public:
         return scrollable_->isStickToBottom();
     }
 
+    /// 历史分页前插通知 (client 线程经 UI 动作队列调用, 帧间执行):
+    /// - 转发给 LazyScrollable::notifyPrepended 做滚动锚定 (并行数组头插 +
+    ///   按新增区估算行数下移偏移), 保证前插后视口内容稳定不跳动
+    /// - anchor 为 false 时仅同步条数语义 (首屏填充场景无需锚定)
+    void onHistoryPrepended(size_t count) {
+        if (count > 0) {
+            scrollable_->notifyPrepended(count);
+        }
+    }
+
+    /// 重置历史分页锚定状态 (消息列表整体替换/会话切换时调用:
+    /// 窗口已重建, 对旧窗口的偏移校正不再有意义)
+    void resetHistoryPagination() {
+        scrollable_->clearPrependAnchor();
+    }
+
     int contentWidth() const {
         return scrollable_->contentWidth();
     }
@@ -264,6 +280,15 @@ private:
     ftxui::Element buildInterruptControl(const TUIMessage& msg, size_t msgIndex);
     /// 中断消息状态行 (Confirmed/Cancelled/Expired)
     ftxui::Element buildInterruptStatusLine(const TUIMessage& msg);
+
+    /// 历史分页预取判定 (滚轮事件处理后调用): 滚动接近已加载窗口顶部且
+    /// 还有更早历史时经 ctx_.requestMoreHistory 发起分页请求。
+    /// - 在途去重由实现方 (TUIClientAgentIO::requestOlderHistory) 保证,
+    ///   此处仅做廉价条件过滤
+    void maybeRequestMoreHistory();
+    /// 触发预取的距顶阈值 (行): 距窗口顶部不足该行数即提前拉取下一页,
+    /// 用户连续上滑时页面在到达顶部前已就位 (标准聊天应用体验)
+    static constexpr int kHistoryPrefetchRows = 8;
 
     void           appendEditToolBody(const TUIMessage& msg, ftxui::Elements& lines);
     ftxui::Element renderEditToolDiff(std::string_view oldStr, std::string_view newStr);
