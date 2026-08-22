@@ -86,9 +86,9 @@ struct TUIRenderState {
         return historyWindowStart > 0;
     }
 
-    std::shared_ptr<std::string>             currentToken;
-    TUIMessage::Role                         currentTokenRole = TUIMessage::Role::Assistant;
-    bool                                     isStreaming      = false;
+    std::shared_ptr<std::string> currentToken;
+    TUIMessage::Role             currentTokenRole = TUIMessage::Role::Assistant;
+    bool                         isStreaming      = false;
 
     /// agent-io 连接状态 (默认 Connecting: TUI 启动后、服务就绪前输入受限,
     /// banner 显示"启动中"; 连接建立后由 mode_runners 置 Connected)
@@ -105,8 +105,8 @@ struct TUIRenderState {
     ///   替代每帧对整段累积文本做前缀比较 (O(n²) -> O(n))
     uint64_t currentTokenEpoch = 0;
 
-    int64_t pendingTokenDurationMs  = 0;
-    int64_t pendingTokenStartTimeMs = 0;
+    int64_t                              pendingTokenDurationMs  = 0;
+    int64_t                              pendingTokenStartTimeMs = 0;
     std::optional<TUIMessage::ThinkData> pendingTokenThink;
 
     /// 判断当前是否有待提交的流式 token 内容 (文本或加密思考/token统计)
@@ -114,8 +114,7 @@ struct TUIRenderState {
         if (currentToken && !currentToken->empty()) {
             return true;
         }
-        return (currentTokenRole == TUIMessage::Role::Think)
-               && pendingTokenThink.has_value()
+        return (currentTokenRole == TUIMessage::Role::Think) && pendingTokenThink.has_value()
                && (pendingTokenThink->isEncrypted || pendingTokenThink->reasoningTokens > 0);
     }
 

@@ -57,8 +57,7 @@ neograph::json normalizePromptPatch(const neograph::json& parsed);
 /// 以 mutationRate 概率对每个码点执行 插入(ASCII)/替换(ASCII)/删除，
 /// 中文等多字节字符整体参与变异，不会被拆成非法字节序列。
 /// 注意: 字符级变异会破坏 prompt 语义，仅作为 LLM 变异不可用时的降级手段
-std::string
-    mutateStringUtf8(std::string_view input, double mutationRate, std::mt19937& rng);
+std::string mutateStringUtf8(std::string_view input, double mutationRate, std::mt19937& rng);
 
 /// 评分结果
 struct TrainingScore {
@@ -82,15 +81,15 @@ struct OptimizedPrompts {
 struct PromptVariant {
     std::string id;
     AgentPrompt prompt;
-    double      cumulativeScore = 0.0; // 最近一轮评估的原始总分（覆盖语义，非跨轮累计）
-    int         testCount       = 0;   // 最近一轮的用例数
+    double cumulativeScore = 0.0; // 最近一轮评估的原始总分（覆盖语义，非跨轮累计）
+    int testCount = 0;            // 最近一轮的用例数
     /// 跨轮 EMA 平滑分（精英复评时更新；<0 表示未启用）。
     /// LLM-as-judge 单次评分噪声大, 排序/收敛判定优先使用平滑分以降噪
-    double      smoothedScore   = -1.0;
+    double smoothedScore = -1.0;
     /// 评估轮数（含精英复评），用于判断平滑分是否已初始化
-    int         evalRounds      = 0;
-    int         generation      = 0;
-    std::string parentId;
+    int                           evalRounds = 0;
+    int                           generation = 0;
+    std::string                   parentId;
     std::map<std::string, double> perTestCaseScores;
     neograph::json                extra;
 
@@ -228,7 +227,7 @@ protected:
     std::mt19937               rng;
     int                        generationCounter = 0;
     /// id 序号: 同代内快速生成的变体 id 不依赖时间戳精度, 彻底避免碰撞
-    std::atomic<uint64_t>      idSeq{0};
+    std::atomic<uint64_t> idSeq{0};
 
     // ---- 通用 LLM 调用 ----
 
@@ -290,10 +289,7 @@ protected:
     /// 注意: 字符级变异会破坏 prompt 语义，仅作为 LLM 变异不可用时的降级手段
     std::string mutateString(std::string_view input, double mutationRate);
 
-    PromptVariant createChildVariantCharMut(
-        const PromptVariant& parent,
-        double               mutationRate
-    );
+    PromptVariant createChildVariantCharMut(const PromptVariant& parent, double mutationRate);
 
     /// 使用 LLM 对 prompt 进行语义级变异，生成多样化的探索变体
     asio::awaitable<PromptVariant>

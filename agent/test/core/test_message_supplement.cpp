@@ -317,7 +317,10 @@ asio::awaitable<void> test_interrupt_auto_supplement() {
                     std::string{"call_it_1"}
                 );
             }
-            XX_TEST_EXPECT_EQ(msgs[3].value("tool_call_id", std::string{}), std::string{"call_it_1"});
+            XX_TEST_EXPECT_EQ(
+                msgs[3].value("tool_call_id", std::string{}),
+                std::string{"call_it_1"}
+            );
             XX_TEST_EXPECT_EQ(
                 msgs[3].value("tool_name", std::string{}),
                 std::string{"test_interrupt"}

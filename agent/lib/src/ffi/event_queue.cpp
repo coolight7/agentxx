@@ -27,13 +27,13 @@ struct AgentxxEventQueue {
     /// 防止无界增长 OOM; 正常 CLI/GUI 宿主轮询间隔 << 1s, 远达不到该量级
     static constexpr size_t kMaxQueued = 16384;
 
-    std::mutex              m;
-    std::condition_variable cv;
+    std::mutex                                  m;
+    std::condition_variable                     cv;
     std::deque<std::pair<int32_t, std::string>> items;
     /// 正在 pop 内部 (持锁或即将持锁) 的等待者计数: free 时等其归零再 delete,
     /// 避免 "notify 后立即 delete" 与被唤醒者重新上锁之间的 use-after-free
-    std::atomic<int>        waiters{0};
-    bool                    closed = false;
+    std::atomic<int> waiters{0};
+    bool             closed = false;
 };
 
 extern "C" {
@@ -71,7 +71,11 @@ void agentxx_event_queue_free(AgentxxEventQueue* q) {
     delete q;
 }
 
-void agentxx_event_queue_on_event(AgentxxEventType type, const char* payload_json, void* user_data) {
+void agentxx_event_queue_on_event(
+    AgentxxEventType type,
+    const char*      payload_json,
+    void*            user_data
+) {
     auto* q = static_cast<AgentxxEventQueue*>(user_data);
     if (q == nullptr) {
         return;
@@ -86,12 +90,16 @@ void agentxx_event_queue_on_event(AgentxxEventType type, const char* payload_jso
             q->items.pop_front();
             q->items.emplace_back(
                 static_cast<int32_t>(AGENTXX_EVT_ERROR),
-                std::string(R"({"code":-99,"message":"event queue overflow, oldest events dropped"})")
+                std::string(
+                    R"({"code":-99,"message":"event queue overflow, oldest events dropped"})"
+                )
             );
         }
         try {
-            q->items.emplace_back(static_cast<int32_t>(type),
-                                  payload_json == nullptr ? std::string{} : std::string(payload_json));
+            q->items.emplace_back(
+                static_cast<int32_t>(type),
+                payload_json == nullptr ? std::string{} : std::string(payload_json)
+            );
         } catch (...) {
             return; // OOM 等异常: 丢弃本条, 保证 io 线程不受影响
         }
@@ -101,7 +109,12 @@ void agentxx_event_queue_on_event(AgentxxEventType type, const char* payload_jso
     }
 }
 
-int agentxx_event_queue_pop(AgentxxEventQueue* q, int32_t* type_out, char** json_out, uint32_t timeout_ms) {
+int agentxx_event_queue_pop(
+    AgentxxEventQueue* q,
+    int32_t*           type_out,
+    char**             json_out,
+    uint32_t           timeout_ms
+) {
     if (json_out != nullptr) {
         *json_out = nullptr;
     }
@@ -117,6 +130,7 @@ int agentxx_event_queue_pop(AgentxxEventQueue* q, int32_t* type_out, char** json
             q->waiters.fetch_sub(1, std::memory_order_release);
         }
     } guard{q};
+
     q->waiters.fetch_add(1, std::memory_order_acq_rel);
 
     std::pair<int32_t, std::string> item;
@@ -141,7 +155,7 @@ int agentxx_event_queue_pop(AgentxxEventQueue* q, int32_t* type_out, char** json
     char* out = nullptr;
     try {
         const size_t n = item.second.size();
-        out = static_cast<char*>(agentxx_malloc(n + 1));
+        out            = static_cast<char*>(agentxx_malloc(n + 1));
         if (out == nullptr) {
             return AGENTXX_ERR_OOM;
         }

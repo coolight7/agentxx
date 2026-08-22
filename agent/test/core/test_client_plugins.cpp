@@ -45,7 +45,7 @@ static std::string findExamplePluginPath() {
 #endif
     candidates.push_back(fs::current_path(ec) / "plugins" / "example_plugin");
     auto hasLibFile = [](const fs::path& dir) {
-        std::error_code                    ec2;
+        std::error_code                     ec2;
         std::filesystem::directory_iterator it(dir, ec2);
         std::filesystem::directory_iterator end;
         for (; it != end; it.increment(ec2)) {

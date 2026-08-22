@@ -315,9 +315,8 @@ void LazyScrollable::applyPrependAnchorCorrection() {
         if (!measured_[i]) {
             allMeasured = false;
         }
-        actualRows += (heights_[i] >= 0)
-                          ? static_cast<long long>(std::max(1, heights_[i]))
-                          : static_cast<long long>(estimateHeightFor(i));
+        actualRows += (heights_[i] >= 0) ? static_cast<long long>(std::max(1, heights_[i]))
+                                         : static_cast<long long>(estimateHeightFor(i));
     }
     // 增量补偿: 只应用与已应用值的差值, 多帧多次调用天然幂等收敛
     const long long delta = actualRows - pendingPrepend_.appliedRows;
@@ -482,8 +481,8 @@ void LazyScrollable::prepareLayout(const ftxui::Box& box) {
     // 提前实测修正, 后续定位即准确 (滑动到该位置时已自愈, 不再空白)。
     // 注意: 仅扩大"实测范围"; 阶段 2 的定位/渲染仍按精确可见区间。
     constexpr int kEstimateSlack = 6;
-    int  cum       = 0;     // 累计高度 (当前子项的内容顶边, 行)
-    bool corrected = false; // 是否有估算高度被实测修正
+    int           cum            = 0;     // 累计高度 (当前子项的内容顶边, 行)
+    bool          corrected      = false; // 是否有估算高度被实测修正
     for (size_t i = 0; i < count; ++i) {
         const int h   = std::max(1, heights_[i]);
         const int top = cum;

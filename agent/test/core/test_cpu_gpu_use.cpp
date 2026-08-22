@@ -59,16 +59,14 @@ static std::string findSystemMonitorPluginPath() {
 #else
     // Linux: 回退可执行文件同目录 (兼容从其他 cwd 运行, 与 test_codegraph_tools 一致)
     if (auto p = std::filesystem::read_symlink("/proc/self/exe", ec); !ec) {
-        candidates.push_back(
-            p.parent_path() / "plugins" / "agentxx_system_monitor"
-        );
+        candidates.push_back(p.parent_path() / "plugins" / "agentxx_system_monitor");
     }
 #endif
     candidates.push_back(std::filesystem::current_path(ec) / "plugins" / "agentxx_system_monitor");
     auto hasLibFile = [](const std::filesystem::path& dir) {
-        std::error_code                          ec2;
-        std::filesystem::directory_iterator      it(dir, ec2);
-        std::filesystem::directory_iterator      end;
+        std::error_code                     ec2;
+        std::filesystem::directory_iterator it(dir, ec2);
+        std::filesystem::directory_iterator end;
         for (; it != end; it.increment(ec2)) {
             auto ext = it->path().extension().string();
             if (ext == ".so" || ext == ".dll" || ext == ".dylib") {

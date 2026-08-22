@@ -311,9 +311,11 @@ bool isEmptyResponse(const neograph::ChatCompletion& completion) {
     if (!msg.content.empty() || !msg.reasoning_content.empty() || !msg.tool_calls.empty()) {
         return false;
     }
-    return !(msg.extra.contains(OpenAIProvider::kResponsesReasoningItemsKey)
-             && msg.extra[OpenAIProvider::kResponsesReasoningItemsKey].is_array()
-             && !msg.extra[OpenAIProvider::kResponsesReasoningItemsKey].empty());
+    return !(
+        msg.extra.contains(OpenAIProvider::kResponsesReasoningItemsKey)
+        && msg.extra[OpenAIProvider::kResponsesReasoningItemsKey].is_array()
+        && !msg.extra[OpenAIProvider::kResponsesReasoningItemsKey].empty()
+    );
 }
 
 } // namespace
@@ -1531,8 +1533,7 @@ bool OpenAIProvider::processResponsesSseLine(
                         && !item["summary"].empty()) {
                         hasVisibleText = true;
                     }
-                    if (!hasVisibleText && item.contains("content")
-                        && item["content"].is_array()) {
+                    if (!hasVisibleText && item.contains("content") && item["content"].is_array()) {
                         for (const auto& part : item["content"]) {
                             if (jsonStrField(part, "type") == "reasoning_text"
                                 && !jsonStrField(part, "text").empty()) {
@@ -1548,8 +1549,8 @@ bool OpenAIProvider::processResponsesSseLine(
                         && (hasEnc
                             || (completion.message.extra.contains(kResponsesReasoningItemsKey)
                                 && completion.message.extra[kResponsesReasoningItemsKey].is_array()
-                                && !completion.message.extra[kResponsesReasoningItemsKey]
-                                        .empty()))) {
+                                && !completion.message.extra[kResponsesReasoningItemsKey].empty())
+                        )) {
                         if (on_chunk) {
                             on_chunk(neograph::ChatStreamChunk{
                                 neograph::ChatStreamChunk::TYPE_THINKING,

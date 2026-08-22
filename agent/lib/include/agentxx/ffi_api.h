@@ -258,11 +258,8 @@ AGENTXX_FFI_EXPORT void agentxx_event_queue_free(AgentxxEventQueue* q);
 
 /// 内置 on_event 桥接实现 (user_data 必须为 agentxx_event_queue_create 返回值):
 /// 与 AgentxxCallbacks.on_event 签名一致, 任意线程安全, 仅拷贝不阻塞 io
-AGENTXX_FFI_EXPORT void agentxx_event_queue_on_event(
-    AgentxxEventType type,
-    const char*      payload_json,
-    void*            user_data
-);
+AGENTXX_FFI_EXPORT void
+    agentxx_event_queue_on_event(AgentxxEventType type, const char* payload_json, void* user_data);
 
 /**
  * 取出一条事件 (阻塞至多 timeout_ms; 0 = 非阻塞仅探测):

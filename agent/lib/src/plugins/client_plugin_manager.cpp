@@ -845,7 +845,7 @@ void ClientPluginManager::onTurnResult(const agentxx::agent::WireTurnResult& res
 }
 
 void ClientPluginManager::onSessionSwitched(std::string_view sessionId) {
-    sessionId_        = std::string{sessionId};
+    sessionId_       = std::string{sessionId};
     neograph::json j = neograph::json::object();
     j["sessionId"]   = sessionId_;
     dispatchEvent(AGENTXX_CLIENT_EVT_SESSION_SWITCH, j.dump());

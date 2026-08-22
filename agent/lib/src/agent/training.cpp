@@ -5,8 +5,8 @@
 #include <algorithm>
 #include <chrono>
 #include <filesystem>
-#include <fstream>
 #include <fmt/core.h>
+#include <fstream>
 #include <numeric>
 #include <optional>
 #include <random>
@@ -46,7 +46,8 @@ inline size_t utf8CharLen(unsigned char lead) {
 bool agentPromptEquals(const AgentPrompt& a, const AgentPrompt& b) {
     if (a.systemPrompt != b.systemPrompt || a.systemPlanningPrompt != b.systemPlanningPrompt
         || a.systemSkillPrompt != b.systemSkillPrompt
-        || a.summarizationPrompt != b.summarizationPrompt || a.toolPrompt.size() != b.toolPrompt.size()) {
+        || a.summarizationPrompt != b.summarizationPrompt
+        || a.toolPrompt.size() != b.toolPrompt.size()) {
         return false;
     }
     auto itA = a.toolPrompt.begin();
@@ -137,8 +138,7 @@ std::vector<TrainingTestCase> loadTestCasesFromFile(std::string_view filePath) {
     return cases;
 }
 
-std::vector<TrainingTestCase>
-    loadTestCasesFromDirectory(std::string_view dirPath, bool recursive) {
+std::vector<TrainingTestCase> loadTestCasesFromDirectory(std::string_view dirPath, bool recursive) {
     std::vector<TrainingTestCase> allCases;
     agentxx::util::catchError<bool>(
         [&]() -> bool {
@@ -423,10 +423,10 @@ neograph::json EvolutionTrainingAgent::promptVariantToJson(const PromptVariant& 
     j["cumulativeScore"] = v.cumulativeScore;
     j["testCount"]       = v.testCount;
     // 平滑分与评估轮数: 跨代持久化精英复评的去噪结果
-    j["smoothedScore"]   = v.smoothedScore;
-    j["evalRounds"]      = v.evalRounds;
-    j["generation"]      = v.generation;
-    j["parentId"]        = v.parentId;
+    j["smoothedScore"] = v.smoothedScore;
+    j["evalRounds"]    = v.evalRounds;
+    j["generation"]    = v.generation;
+    j["parentId"]      = v.parentId;
     {
         neograph::json scores = neograph::json::object();
         for (const auto& kv : v.perTestCaseScores) {
@@ -530,10 +530,7 @@ void EvolutionTrainingAgent::savePopulationToFile(std::string_view filePath, int
                 bool writeOk = !ofs.fail();
                 ofs.close();
                 if (!writeOk) {
-                    XX_LOGE(
-                        "[EvolutionTraining] Failed to write temp file: {}",
-                        tmpPath.string()
-                    );
+                    XX_LOGE("[EvolutionTraining] Failed to write temp file: {}", tmpPath.string());
                     return false;
                 }
             }
@@ -691,7 +688,7 @@ asio::awaitable<TrainingScore> EvolutionTrainingAgent::defaultScoringWithSubAgen
                 result.feedback = parsed.value("feedback", std::string{});
                 // passed 不信任评分模型自报 (阈值语义可能漂移),
                 // 按收敛阈值本地判定, 保证与 score 数值始终一致
-                result.passed   = result.score >= cfg.convergenceThreshold;
+                result.passed = result.score >= cfg.convergenceThreshold;
                 if (parsed.contains("extra") && parsed["extra"].is_object()) {
                     result.extra = parsed["extra"];
                 }
@@ -828,13 +825,14 @@ std::string mutateStringUtf8(std::string_view input, double mutationRate, std::m
     static const char                      mutationChars[]
         = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 "
           ".,;:!?-_()[]{}\n";
-    static const int                   mutationCharsLen = static_cast<int>(sizeof(mutationChars) - 1);
+    static const int mutationCharsLen = static_cast<int>(sizeof(mutationChars) - 1);
     std::uniform_int_distribution<int> charDist(0, mutationCharsLen - 1);
     std::uniform_int_distribution<int> opDist(0, 2);
 
     size_t i = 0;
     while (i < input.size()) {
-        const size_t charLen = std::min(utf8CharLen(static_cast<unsigned char>(input[i])), input.size() - i);
+        const size_t charLen
+            = std::min(utf8CharLen(static_cast<unsigned char>(input[i])), input.size() - i);
         if (dist(rng) < mutationRate) {
             switch (opDist(rng)) {
                 case 0:
@@ -990,12 +988,12 @@ asio::awaitable<EvolutionTrainingAgent::EvaluationResult> EvolutionTrainingAgent
         std::shuffle(order.begin(), order.end(), rng);
     }
 
-    int                          evaluatedCount = 0;
-    bool                         cancelled      = false;
-    std::map<std::string, int>   scoreKeySeen; // 重名用例计数
+    int                        evaluatedCount = 0;
+    bool                       cancelled      = false;
+    std::map<std::string, int> scoreKeySeen; // 重名用例计数
 
     for (size_t pos = 0; pos < order.size(); ++pos) {
-        const size_t caseIdx = order[pos];
+        const size_t caseIdx  = order[pos];
         const auto&  testCase = cfg.testCases[caseIdx];
         const auto sessionId = fmt::format("evotrain_{}_{}_{}", variant.id, caseIdx, testCase.name);
 
@@ -1017,7 +1015,7 @@ asio::awaitable<EvolutionTrainingAgent::EvaluationResult> EvolutionTrainingAgent
 
         // 单个用例的失败不应终止整个训练: agent 运行/评分异常计 0 分并继续。
         // (catchErrorAsync 把取消类异常也转到这里; 循环边界会再次检测取消)
-        std::string agentOutput;
+        std::string   agentOutput;
         TrainingScore score;
         score.iteration = generationCounter;
         co_await agentxx::util::catchErrorAsync<bool>(
@@ -1069,11 +1067,12 @@ asio::awaitable<EvolutionTrainingAgent::EvaluationResult> EvolutionTrainingAgent
 
         // perTestCaseScores 以用例名为 key; 配置重名时追加 #N 后缀避免覆盖
         ++scoreKeySeen[testCase.name];
-        const std::string scoreKey = scoreKeySeen[testCase.name] == 1
-                                       ? testCase.name
-                                       : fmt::format("{}#{}", testCase.name, scoreKeySeen[testCase.name]);
-        variant.perTestCaseScores[scoreKey] = score.score;
-        totalScore += score.score;
+        const std::string scoreKey
+            = scoreKeySeen[testCase.name] == 1
+                  ? testCase.name
+                  : fmt::format("{}#{}", testCase.name, scoreKeySeen[testCase.name]);
+        variant.perTestCaseScores[scoreKey]  = score.score;
+        totalScore                          += score.score;
         evaluatedCount++;
 
         if (evResult.worstCase == nullptr || score.score < evResult.worstCaseScore.score) {
@@ -1108,7 +1107,8 @@ asio::awaitable<EvolutionTrainingAgent::EvaluationResult> EvolutionTrainingAgent
 
         // 早终检查 (基于随机顺序的前缀均值):
         // 未评估的剩余用例不计入分数统计 (不写 0 分占位, 保持最近一轮真实数据)
-        if (cfg.earlyTerminationCheckAfter > 0 && evaluatedCount >= cfg.earlyTerminationCheckAfter) {
+        if (cfg.earlyTerminationCheckAfter > 0
+            && evaluatedCount >= cfg.earlyTerminationCheckAfter) {
             double avg = totalScore / evaluatedCount;
             if (avg < cfg.earlyTerminationScore) {
                 if (cfg.verbose) {
@@ -1134,8 +1134,8 @@ asio::awaitable<EvolutionTrainingAgent::EvaluationResult> EvolutionTrainingAgent
     variant.testCount       = static_cast<int>(nCases);
     const double roundAvg   = nCases > 0 ? totalScore / static_cast<double>(nCases) : 0.0;
     if (isEliteReevaluation && variant.evalRounds > 0 && variant.smoothedScore >= 0.0) {
-        variant.smoothedScore
-            = kEliteSmoothingAlpha * roundAvg + (1.0 - kEliteSmoothingAlpha) * variant.smoothedScore;
+        variant.smoothedScore = kEliteSmoothingAlpha * roundAvg
+                                + (1.0 - kEliteSmoothingAlpha) * variant.smoothedScore;
         variant.evalRounds++;
     } else {
         variant.smoothedScore = roundAvg;
@@ -1162,7 +1162,7 @@ void EvolutionTrainingAgent::deduplicatePopulation() {
     std::vector<PromptVariant> unique;
     unique.reserve(population.size());
     for (auto& v : population) {
-        auto h  = v.promptHash();
+        auto h   = v.promptHash();
         bool dup = false;
         // hash 相同再做一次完整字段比对, 避免 64 位哈希碰撞误删不同 prompt
         for (const auto& u : unique) {
@@ -1289,13 +1289,9 @@ void EvolutionTrainingAgent::seedInitialPopulationFromAgent() {
 
 asio::awaitable<void> EvolutionTrainingAgent::runEvolutionLoop(const EvolutionTrainingConfig& cfg) {
     auto sortByScore = [](std::vector<PromptVariant>& pop) {
-        std::sort(
-            pop.begin(),
-            pop.end(),
-            [](const PromptVariant& a, const PromptVariant& b) {
-                return a.averageScore() > b.averageScore();
-            }
-        );
+        std::sort(pop.begin(), pop.end(), [](const PromptVariant& a, const PromptVariant& b) {
+            return a.averageScore() > b.averageScore();
+        });
     };
 
     // Step 1: 尝试从文件加载已有 population
@@ -1304,10 +1300,8 @@ asio::awaitable<void> EvolutionTrainingAgent::runEvolutionLoop(const EvolutionTr
     // 无论文件加载失败还是存档为空, 空 population 一律拒绝运行
     // (避免不消耗任何评估的静默空转)
     if (population.empty()) {
-        XX_LOGE(
-            "[EvolutionTraining] No population available. "
-            "Call seedInitialPopulation() first or provide a valid save file."
-        );
+        XX_LOGE("[EvolutionTraining] No population available. "
+                "Call seedInitialPopulation() first or provide a valid save file.");
         co_return;
     }
 
@@ -1320,10 +1314,7 @@ asio::awaitable<void> EvolutionTrainingAgent::runEvolutionLoop(const EvolutionTr
         std::set<std::string> names;
         for (const auto& tc : cfg.testCases) {
             if (!names.insert(tc.name).second) {
-                XX_LOGW(
-                    "[EvolutionTraining] Duplicate test case name '{}' in config",
-                    tc.name
-                );
+                XX_LOGW("[EvolutionTraining] Duplicate test case name '{}' in config", tc.name);
             }
         }
     }
@@ -1357,7 +1348,7 @@ asio::awaitable<void> EvolutionTrainingAgent::runEvolutionLoop(const EvolutionTr
         }
 
         // 2a. 从当前 population 中选取 top 变体进行变异
-        int                        mutateFrom = std::min(cfg.mutateCount, static_cast<int>(population.size()));
+        int mutateFrom = std::min(cfg.mutateCount, static_cast<int>(population.size()));
         std::vector<PromptVariant> newGeneration;
         newGeneration.reserve(static_cast<size_t>(mutateFrom) * cfg.childrenPerParent);
         for (int i = 0; i < mutateFrom; ++i) {
@@ -1529,13 +1520,15 @@ asio::awaitable<void> EvolutionTrainingAgent::runEvolutionLoop(const EvolutionTr
         // 降低 LLM 评分噪声对排序/收敛判定的影响。本代新生成的变体刚评过, 跳过
         bool eliteReevaluated = false;
         if (cfg.eliteReevaluatePerGen > 0) {
-            size_t eliteN
-                = std::min<size_t>(static_cast<size_t>(cfg.eliteReevaluatePerGen), population.size());
+            size_t eliteN = std::min<size_t>(
+                static_cast<size_t>(cfg.eliteReevaluatePerGen),
+                population.size()
+            );
             for (size_t i = 0; i < eliteN; ++i) {
                 if (cancelRequested(cfg)) {
                     break;
                 }
-                auto&       elite = population[i];
+                auto& elite = population[i];
                 if (elite.generation >= generationCounter) {
                     continue; // 本代新产生, 分数新鲜无需复评
                 }

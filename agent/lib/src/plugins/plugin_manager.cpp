@@ -877,7 +877,7 @@ static char* xx_call_tool(
                 return nullptr;
             }
         }
-        parsed["sessionId"]  = tid;
+        parsed["sessionId"]    = tid;
         parsed["tool_call_id"] = fmt::format("plugin_call_{}", ++g_pluginCallSeq);
 
         const auto& spec    = pluginTool->spec();

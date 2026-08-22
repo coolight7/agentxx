@@ -511,12 +511,7 @@ std::string WsAgentIOTransport::serialize(const WireMessage& msg) {
             } else if constexpr (std::is_same_v<T, WireGetViewMessages>) {
                 return io::makeGetViewMessages(m.sessionId, m.beforeIndex, m.count).dump();
             } else if constexpr (std::is_same_v<T, WireViewMessagesPage>) {
-                return io::makeViewMessagesPage(
-                           m.sessionId,
-                           m.startIndex,
-                           m.totalCount,
-                           m.messages
-                )
+                return io::makeViewMessagesPage(m.sessionId, m.startIndex, m.totalCount, m.messages)
                     .dump();
             } else {
                 return "{}";

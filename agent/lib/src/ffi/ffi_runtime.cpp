@@ -144,7 +144,7 @@ std::string FfiAgentRuntime::generateSessionId() {
     const long pid = static_cast<long>(::getpid());
 #endif
     static std::atomic<uint32_t> seq{0};
-    const uint32_t               cnt = seq.fetch_add(1, std::memory_order_relaxed);
+    const uint32_t               cnt  = seq.fetch_add(1, std::memory_order_relaxed);
     uint32_t                     seed = 0;
     try {
         std::random_device rd;
@@ -341,8 +341,8 @@ int FfiAgentRuntime::start(std::string& err) {
         return AGENTXX_ERR_STATE;
     }
 
-    clientIoCtx_       = std::make_shared<asio::io_context>();
-    const auto agentEx = agentIoCtx_->get_executor();
+    clientIoCtx_        = std::make_shared<asio::io_context>();
+    const auto agentEx  = agentIoCtx_->get_executor();
     const auto clientEx = clientIoCtx_->get_executor();
 
     // 进程内传输对 (跨 Client-IO 线程与 Agent-IO 线程)
@@ -381,7 +381,7 @@ int FfiAgentRuntime::start(std::string& err) {
     clientWorkGuard_.emplace(asio::make_work_guard(*clientIoCtx_));
 
     // 启动两条工作线程
-    agentThread_ = std::thread([this]() {
+    agentThread_  = std::thread([this]() {
         agentIoCtx_->run();
     });
     clientThread_ = std::thread([this]() {
@@ -519,7 +519,8 @@ void FfiAgentRuntime::stopInternal() {
             for (auto& w : q) {
                 try {
                     w->promise.set_value("{}");
-                } catch (...) {}
+                } catch (...) {
+                }
             }
             q.clear();
         }
@@ -761,8 +762,8 @@ bool FfiAgentRuntime::hasPendingInterrupt(int64_t interruptId) const {
 }
 
 int FfiAgentRuntime::interruptRespond(
-    int64_t     interruptId,
-    const char* valuesJson,
+    int64_t      interruptId,
+    const char*  valuesJson,
     std::string& err
 ) {
     if (!stateUsable(state())) {

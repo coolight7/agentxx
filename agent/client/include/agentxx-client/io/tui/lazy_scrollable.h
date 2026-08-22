@@ -243,8 +243,8 @@ private:
 
     /// 头部插入滚动锚定状态 (notifyPrepended 设置; prepareLayout 内增量校正收敛)
     struct PendingPrepend {
-        bool      active      = false;     // 是否有未收敛的头部插入锚定
-        size_t    count       = 0;         // 新增区子项数 [0, count)
-        long long appliedRows = 0;         // 已应用到 scrollOffset_ 的新增区高度 (行)
+        bool      active      = false; // 是否有未收敛的头部插入锚定
+        size_t    count       = 0;     // 新增区子项数 [0, count)
+        long long appliedRows = 0;     // 已应用到 scrollOffset_ 的新增区高度 (行)
     } pendingPrepend_;
 };

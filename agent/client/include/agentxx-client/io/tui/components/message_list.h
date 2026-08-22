@@ -340,6 +340,6 @@ private:
     /// 流式末尾 Think 子项 (流式区子项索引 >= st.messages.size(), 点击切换
     /// streamThinkOverride_; 普通消息点击切换 msg.collapsed)。
     /// 用 char 而非 bool (避免 vector<bool> 代理引用语义)
-    std::vector<char>       collapsibleIsStream_;
-    ftxui::Box              areaBox_;
+    std::vector<char> collapsibleIsStream_;
+    ftxui::Box        areaBox_;
 };

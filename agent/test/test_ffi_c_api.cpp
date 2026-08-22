@@ -595,11 +595,13 @@ void testMultipleRuntimesConcurrent() {
     }
 
     constexpr size_t kRuntimeCount = 3;
+
     struct RuntimeSlot {
         FfiEventRecorder rec;
         AgentxxCallbacks cb{};
         AgentxxAgent*    agent = nullptr;
     };
+
     std::vector<RuntimeSlot> slots(kRuntimeCount);
 
     for (size_t i = 0; i < kRuntimeCount; ++i) {

@@ -106,10 +106,10 @@ std::shared_ptr<SessionServerAgentIO> AgentServer::getOrCreateController(std::st
     }
 
     SessionServerAgentIO::Config cfg;
-    cfg.sessionId        = std::string{sessionId};
-    cfg.interruptTimeout = config_.interruptTimeout;
-    cfg.gracePeriod      = config_.gracePeriod;
-    cfg.deltaBufferCap   = config_.deltaBufferCap;
+    cfg.sessionId            = std::string{sessionId};
+    cfg.interruptTimeout     = config_.interruptTimeout;
+    cfg.gracePeriod          = config_.gracePeriod;
+    cfg.deltaBufferCap       = config_.deltaBufferCap;
     cfg.initialSyncTailCount = config_.initialSyncTailCount;
 
     auto ctrl                            = std::make_shared<SessionServerAgentIO>(ex_, agent_, cfg);

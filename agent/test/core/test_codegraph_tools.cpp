@@ -40,7 +40,7 @@ static std::string findCodegraphPluginPath() {
 #endif
     candidates.push_back(fs::current_path(ec) / "plugins" / "agentxx_codegraph");
     auto hasLibFile = [](const fs::path& dir) {
-        std::error_code                    ec2;
+        std::error_code                     ec2;
         std::filesystem::directory_iterator it(dir, ec2);
         std::filesystem::directory_iterator end;
         for (; it != end; it.increment(ec2)) {
@@ -152,7 +152,7 @@ asio::awaitable<TestResult>
     // 索引范围: 显式传入临时项目 (args "paths" = loadPaths) 而非 load_cwd
     // —— codegraph status/index 工具已移除 (2026-08), 插件加载后由后台
     // warmup 线程 (2s 延迟) 按 loadPaths 执行 updateIndex。
-    auto tmp_project = create_temp_project();
+    auto                         tmp_project = create_temp_project();
     agentxx::agent::PluginConfig pc;
     {
         // 注意: 不能写成 json::array({json{path}}) 或 json{path} —— braced
@@ -165,8 +165,8 @@ asio::awaitable<TestResult>
         pc.enabled = true;
         pc.args    = neograph::json{
                {"paths",         std::move(pathsArr)},
-               {"load_cwd",      false},
-               {"use_gitignore", true}
+               {"load_cwd",      false              },
+               {"use_gitignore", true               }
         };
         ctx->agentConfig->plugins.push_back(pc);
     }
@@ -208,16 +208,16 @@ asio::awaitable<TestResult>
             // 完成后 CodeGraphManager 会 invalidate 使缓存失效, 下次查询
             // 即按新数据重算; 临时项目仅 3 个小文件, 索引 <1s, 轮询间隔
             // 500ms, 20s 超时兜底)。
-            auto             exec     = co_await asio::this_coro::executor;
+            auto               exec = co_await asio::this_coro::executor;
             asio::steady_timer timer(exec);
-            int              waitedMs       = 0;
-            const int        kWaitTimeoutMs = 20000;
+            int                waitedMs       = 0;
+            const int          kWaitTimeoutMs = 20000;
             while (out.find("add") == std::string::npos && waitedMs < kWaitTimeoutMs) {
                 timer.expires_after(std::chrono::milliseconds(500));
                 co_await timer.async_wait(asio::use_awaitable);
                 waitedMs += 500;
-                out = co_await tool->execute_async(neograph::json{
-                    {"query", "add"}
+                out       = co_await tool->execute_async(neograph::json{
+                          {"query", "add"}
                 });
             }
             if (out.find("add") == std::string::npos) {

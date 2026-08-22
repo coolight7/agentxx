@@ -277,9 +277,9 @@ DaSimServer startDaSimServer() {
                 // modelcall 重试链路处理), 模拟器遵循同一契约: 未设置内容时使用占位
                 // 文本, 不再产生真正的空响应 (历史用例将 content 设为 "" 仅表示最小
                 // 回复, 并非在测试空响应语义)
-                const std::string respContent
-                    = g_da_sim_response_content.empty() ? std::string{"done"}
-                                                        : g_da_sim_response_content;
+                const std::string respContent = g_da_sim_response_content.empty()
+                                                    ? std::string{"done"}
+                                                    : g_da_sim_response_content;
 
                 if (stream) {
                     std::string sseBody;

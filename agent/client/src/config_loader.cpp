@@ -630,7 +630,8 @@ YamlAppConfig loadYamlConfig(
                     pc.sides = agent::PluginSide::Agent;
                 } else if (util::isIgnoreCaseEqual(val, "client")) {
                     pc.sides = agent::PluginSide::Client;
-                } else if (!util::isIgnoreCaseEqual(val, "auto") && !util::isIgnoreCaseEqual(val, "both")) {
+                } else if (!util::isIgnoreCaseEqual(val, "auto")
+                           && !util::isIgnoreCaseEqual(val, "both")) {
                     XX_LOGW(
                         R"([Config] Warning: plugin `{}` invalid sides `{}`, fallback to auto)",
                         pc.path,

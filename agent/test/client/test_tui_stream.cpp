@@ -324,6 +324,7 @@ TestResult testTuiStream() {
 
         class TestTUIClientIO : public TUIClientAgentIO {
         public:
+
             TestTUIClientIO(asio::io_context& ctx) :
                 TUIClientAgentIO(ctx.get_executor(), "test_session") {}
 
@@ -334,18 +335,20 @@ TestResult testTuiStream() {
 
         asio::io_context ioCtx;
 
-        // 场景 1: 加密 thinking (text 为空, think.isEncrypted=true) -> 思考开始时立即展示 -> 随后收到 assistant 文本 -> 轮次结束回填 token 数
+        // 场景 1: 加密 thinking (text 为空, think.isEncrypted=true) -> 思考开始时立即展示 ->
+        // 随后收到 assistant 文本 -> 轮次结束回填 token 数
         {
             TestTUIClientIO client(ioCtx);
-            Delta d1;
-            d1.type = Delta::Type::ThinkToken;
-            d1.text = "";
-            d1.think = ViewMessage::ThinkData{ .reasoningTokens = 0, .isEncrypted = true };
+            Delta           d1;
+            d1.type        = Delta::Type::ThinkToken;
+            d1.text        = "";
+            d1.think       = ViewMessage::ThinkData{.reasoningTokens = 0, .isEncrypted = true};
             d1.startTimeMs = 1000;
-            d1.durationMs = 0;
+            d1.durationMs  = 0;
             client.testOnDelta(d1);
 
-            // 断言: 刚收到 ThinkToken 尚未收到 assistant 文本时，消息列表中已经立即创建了 Think 消息展示
+            // 断言: 刚收到 ThinkToken 尚未收到 assistant 文本时，消息列表中已经立即创建了 Think
+            // 消息展示
             auto snap1 = client.sharedState().snapshot();
             XX_TEST_EXPECT_EQ(snap1->messages.size(), (size_t)1);
             if (snap1->messages.size() == 1) {
@@ -358,17 +361,17 @@ TestResult testTuiStream() {
             }
 
             Delta d2;
-            d2.type = Delta::Type::TextToken;
-            d2.text = "Hello";
+            d2.type        = Delta::Type::TextToken;
+            d2.text        = "Hello";
             d2.startTimeMs = 1050;
             client.testOnDelta(d2);
 
             // 随后收到 usage 返回的 reasoning_tokens = 854 (由 handleChannelWrite 派发)
             Delta d_usage;
-            d_usage.type = Delta::Type::ThinkToken;
-            d_usage.text = "";
+            d_usage.type       = Delta::Type::ThinkToken;
+            d_usage.text       = "";
             d_usage.durationMs = 80;
-            d_usage.think = ViewMessage::ThinkData{ .reasoningTokens = 854, .isEncrypted = true };
+            d_usage.think = ViewMessage::ThinkData{.reasoningTokens = 854, .isEncrypted = true};
             client.testOnDelta(d_usage);
 
             Delta d3;
@@ -392,39 +395,40 @@ TestResult testTuiStream() {
             }
         }
 
-        // 场景 2: 多步 ReAct 交互 (加密 thinking 1 -> usage 1 -> ToolStart -> ToolEnd -> 加密 thinking 2 -> usage 2 -> Assistant 文本 -> TurnEnd)
-        // 核心验证: 每次新的 think 独立在对应动作位置创建，绝不覆盖开头的 think 消息！
+        // 场景 2: 多步 ReAct 交互 (加密 thinking 1 -> usage 1 -> ToolStart -> ToolEnd -> 加密
+        // thinking 2 -> usage 2 -> Assistant 文本 -> TurnEnd) 核心验证: 每次新的 think
+        // 独立在对应动作位置创建，绝不覆盖开头的 think 消息！
         {
             TestTUIClientIO client(ioCtx);
 
             // Step 1: 首轮思考
             Delta d1_think;
-            d1_think.type = Delta::Type::ThinkToken;
-            d1_think.text = "";
-            d1_think.think = ViewMessage::ThinkData{ .reasoningTokens = 0, .isEncrypted = true };
+            d1_think.type  = Delta::Type::ThinkToken;
+            d1_think.text  = "";
+            d1_think.think = ViewMessage::ThinkData{.reasoningTokens = 0, .isEncrypted = true};
             client.testOnDelta(d1_think);
 
             // Step 1 结束: usage 回填 Think 1
             Delta d1_usage;
-            d1_usage.type = Delta::Type::ThinkToken;
-            d1_usage.text = "";
+            d1_usage.type       = Delta::Type::ThinkToken;
+            d1_usage.text       = "";
             d1_usage.durationMs = 120;
-            d1_usage.think = ViewMessage::ThinkData{ .reasoningTokens = 320, .isEncrypted = true };
+            d1_usage.think = ViewMessage::ThinkData{.reasoningTokens = 320, .isEncrypted = true};
             client.testOnDelta(d1_usage);
 
             // Step 1 调用工具
             Delta d1_tool;
-            d1_tool.type = Delta::Type::ToolStart;
-            d1_tool.toolName = "search";
+            d1_tool.type       = Delta::Type::ToolStart;
+            d1_tool.toolName   = "search";
             d1_tool.toolCallId = "call_1";
-            d1_tool.arguments = "{\"q\":\"test\"}";
+            d1_tool.arguments  = "{\"q\":\"test\"}";
             client.testOnDelta(d1_tool);
 
             Delta d1_tool_end;
-            d1_tool_end.type = Delta::Type::ToolEnd;
-            d1_tool_end.toolName = "search";
+            d1_tool_end.type       = Delta::Type::ToolEnd;
+            d1_tool_end.toolName   = "search";
             d1_tool_end.toolCallId = "call_1";
-            d1_tool_end.result = "ok";
+            d1_tool_end.result     = "ok";
             client.testOnDelta(d1_tool_end);
 
             // 断言 Step 1 完成后有 2 条消息: [Think_1(320 tokens), Tool_1]
@@ -440,12 +444,13 @@ TestResult testTuiStream() {
 
             // Step 2: 第二轮思考 (新的 think 开始)
             Delta d2_think;
-            d2_think.type = Delta::Type::ThinkToken;
-            d2_think.text = "";
-            d2_think.think = ViewMessage::ThinkData{ .reasoningTokens = 0, .isEncrypted = true };
+            d2_think.type  = Delta::Type::ThinkToken;
+            d2_think.text  = "";
+            d2_think.think = ViewMessage::ThinkData{.reasoningTokens = 0, .isEncrypted = true};
             client.testOnDelta(d2_think);
 
-            // 断言 Step 2 思考开始后，立即新增了 Think_2 消息，总数为 3 条 [Think_1, Tool_1, Think_2]，且 Think_1 内容未被破坏
+            // 断言 Step 2 思考开始后，立即新增了 Think_2 消息，总数为 3 条 [Think_1, Tool_1,
+            // Think_2]，且 Think_1 内容未被破坏
             auto snap2 = client.sharedState().snapshot();
             XX_TEST_EXPECT_EQ(snap2->messages.size(), (size_t)3);
             if (snap2->messages.size() == 3) {
@@ -468,10 +473,10 @@ TestResult testTuiStream() {
 
             // Step 2 结束: usage 回填 Think 2
             Delta d2_usage;
-            d2_usage.type = Delta::Type::ThinkToken;
-            d2_usage.text = "";
+            d2_usage.type       = Delta::Type::ThinkToken;
+            d2_usage.text       = "";
             d2_usage.durationMs = 90;
-            d2_usage.think = ViewMessage::ThinkData{ .reasoningTokens = 150, .isEncrypted = true };
+            d2_usage.think = ViewMessage::ThinkData{.reasoningTokens = 150, .isEncrypted = true};
             client.testOnDelta(d2_usage);
 
             Delta d2_end;
@@ -499,10 +504,10 @@ TestResult testTuiStream() {
         // 场景 3: 加密 thinking -> 随后直接 TurnEnd
         {
             TestTUIClientIO client(ioCtx);
-            Delta d1;
-            d1.type = Delta::Type::ThinkToken;
-            d1.text = "";
-            d1.think = ViewMessage::ThinkData{ .reasoningTokens = 50, .isEncrypted = true };
+            Delta           d1;
+            d1.type  = Delta::Type::ThinkToken;
+            d1.text  = "";
+            d1.think = ViewMessage::ThinkData{.reasoningTokens = 50, .isEncrypted = true};
             client.testOnDelta(d1);
 
             Delta d2;
@@ -521,20 +526,21 @@ TestResult testTuiStream() {
             }
         }
 
-        // 场景 4: 明文 thinking (流式) -> 无正文直接结束 -> 收到 usage 回填 (验证不产生重复空 Think 消息)
+        // 场景 4: 明文 thinking (流式) -> 无正文直接结束 -> 收到 usage 回填 (验证不产生重复空 Think
+        // 消息)
         {
             TestTUIClientIO client(ioCtx);
-            Delta d1;
-            d1.type = Delta::Type::ThinkToken;
-            d1.text = "明文思考内容";
+            Delta           d1;
+            d1.type        = Delta::Type::ThinkToken;
+            d1.text        = "明文思考内容";
             d1.startTimeMs = 2000;
             client.testOnDelta(d1);
 
             Delta d_usage;
-            d_usage.type = Delta::Type::ThinkToken;
-            d_usage.text = "";
+            d_usage.type       = Delta::Type::ThinkToken;
+            d_usage.text       = "";
             d_usage.durationMs = 95;
-            d_usage.think = ViewMessage::ThinkData{ .reasoningTokens = 150, .isEncrypted = false };
+            d_usage.think = ViewMessage::ThinkData{.reasoningTokens = 150, .isEncrypted = false};
             client.testOnDelta(d_usage);
 
             Delta d_end;

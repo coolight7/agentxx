@@ -433,7 +433,8 @@ asio::awaitable<void> test_eventbridge_channel_write_thinking() {
         );
     }
 
-    // ---- 4. 加密 thinking (reasoning_content 为空, extra 含 responses_reasoning_items 与 reasoning_tokens) ----
+    // ---- 4. 加密 thinking (reasoning_content 为空, extra 含 responses_reasoning_items 与
+    // reasoning_tokens) ----
     bridgeCb(neograph::graph::GraphEvent{
         neograph::graph::GraphEvent::Type::CHANNEL_WRITE,
         "llm",
@@ -450,7 +451,8 @@ asio::awaitable<void> test_eventbridge_channel_write_thinking() {
                           {"reasoning_tokens", 854},
                           {"responses_reasoning_items",
                            neograph::json::array({
-                               neograph::json{{"type", "reasoning"}, {"encrypted_content", "enc_data"}},
+                               neograph::
+                                   json{{"type", "reasoning"}, {"encrypted_content", "enc_data"}},
                            })},
                       }},
                  },

@@ -357,7 +357,6 @@ private:
     /// 历史分页每页条数 (与服务端 SessionServerAgentIO 的默认兜底一致)
     static constexpr uint32_t kHistoryPageSize = 100;
 
-
     /// 将 UI 线程独占的组件操作 (弹窗开关/消息列表状态等) 投递到 UI 线程执行。
     /// client 线程 (onDelta/onSync/onPeerMessage) 不得直接触碰组件树
     /// (modal_/messageList_ 等由 UI 线程独占), 必须经本接口排队,

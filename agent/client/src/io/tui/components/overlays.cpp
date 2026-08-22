@@ -300,10 +300,8 @@ Element SettingsOverlay::OnRender() {
     // 末尾思考展示模式 (点击/Enter 循环切换: Auto Expand <-> Single Line)
     items.push_back(text(" "));
     items.push_back(text(" Thinking ") | color(theme.hintColor));
-    auto thinkEntry = text(fmt::format(
-        " Tail Thinking: {} ",
-        TUISettings::instance().tailThinkingModeName()
-    ));
+    auto thinkEntry
+        = text(fmt::format(" Tail Thinking: {} ", TUISettings::instance().tailThinkingModeName()));
     if (selectedIndex_ == 3) {
         thinkEntry = thinkEntry | bgcolor(theme.buttonActiveBgColor)
                      | color(theme.buttonActiveTextColor) | bold | focus;

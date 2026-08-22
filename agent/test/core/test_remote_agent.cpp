@@ -1,6 +1,5 @@
 // 注意: test_agent.h 会重定义 XX_TEST_PASSED/FAILED 为 g_da_* 计数器,
 // 必须先于 test_remote_agent.h 引入, 使后者 (g_remote_*) 的宏定义最后生效
-#include "test_agent.h" // 本地 LLM 模拟器 startDaSimServer/g_da_sim_*
 #include "test_remote_agent.h"
 #include "agentxx/agent/base_agent.h"
 #include "agentxx/agent/config.h"
@@ -12,6 +11,7 @@
 #include "agentxx/agent/io/ws_io_transport.h"
 #include "agentxx/util/http_server.h"
 #include "agentxx/util/ws_client.h"
+#include "test_agent.h" // 本地 LLM 模拟器 startDaSimServer/g_da_sim_*
 #include <asio/co_spawn.hpp>
 #include <asio/detached.hpp>
 #include <asio/io_context.hpp>
@@ -1912,10 +1912,10 @@ static asio::awaitable<void> test_model_switch_with_next_input() {
 
     // 本地 LLM 模拟器: 记录最近一次 /chat/completions 请求体 (含 model 字段),
     // 可用于断言实际 LLM API 调用使用的模型
-    auto                          sim     = startDaSimServer();
-    const auto                    baseUrl = "http://127.0.0.1:" + std::to_string(sim.port);
-    g_da_sim_response_content              = "hello from model switch test";
-    g_da_sim_tool_calls                    = neograph::json::array();
+    auto       sim            = startDaSimServer();
+    const auto baseUrl        = "http://127.0.0.1:" + std::to_string(sim.port);
+    g_da_sim_response_content = "hello from model switch test";
+    g_da_sim_tool_calls       = neograph::json::array();
 
     auto cfg             = std::make_shared<agentxx::agent::AgentConfig>();
     cfg->model.baseUrl   = baseUrl;
@@ -1960,11 +1960,11 @@ static asio::awaitable<void> test_model_switch_with_next_input() {
 
     // ---- 首条消息携带模型 "model-b": 该轮会话开始时自动切换 ----
     const int req0 = g_da_sim_request_count;
-    clientT->send(agentxx::agent::WireMessage{agentxx::agent::WireUserInput{
-        "model-switch-session",
-        "switch to model-b",
-        "model-b",
-    }});
+    clientT->send(agentxx::agent::WireMessage{
+        agentxx::agent::WireUserInput{
+                                      "model-switch-session", "switch to model-b",
+                                      "model-b", }
+    });
 
     // 等待会话模型切换生效 (selectModel 在 runTurnAsync 开头同步执行)
     bool switched = false;
@@ -1996,11 +1996,11 @@ static asio::awaitable<void> test_model_switch_with_next_input() {
 
     // ---- 第二条消息不携带模型: 沿用会话当前模型 (model-b), 不切回默认 ----
     const int req1 = g_da_sim_request_count;
-    clientT->send(agentxx::agent::WireMessage{agentxx::agent::WireUserInput{
-        "model-switch-session",
-        "keep model-b",
-        "",
-    }});
+    clientT->send(agentxx::agent::WireMessage{
+        agentxx::agent::WireUserInput{
+                                      "model-switch-session", "keep model-b",
+                                      "", }
+    });
     bool secondRequest = false;
     for (int i = 0; i < 200; ++i) {
         if (g_da_sim_request_count > req1) {
@@ -2023,11 +2023,11 @@ static asio::awaitable<void> test_model_switch_with_next_input() {
 
     // ---- 未注册的模型名: selectModel 拒绝 (会话模型保持不变) ----
     const int req2 = g_da_sim_request_count;
-    clientT->send(agentxx::agent::WireMessage{agentxx::agent::WireUserInput{
-        "model-switch-session",
-        "invalid model name",
-        "no-such-model",
-    }});
+    clientT->send(agentxx::agent::WireMessage{
+        agentxx::agent::WireUserInput{
+                                      "model-switch-session", "invalid model name",
+                                      "no-such-model", }
+    });
     bool thirdRequest = false;
     for (int i = 0; i < 200; ++i) {
         if (g_da_sim_request_count > req2) {
@@ -2248,9 +2248,9 @@ static asio::awaitable<void> test_wire_pagination_roundtrip() {
 
     // ---- WireGetViewMessages roundtrip ----
     {
-        auto jsonText = WsAgentIOTransport::serialize(
-            agentxx::agent::WireGetViewMessages{"sess-a", 150, 100}
-        );
+        auto jsonText
+            = WsAgentIOTransport::serialize(agentxx::agent::WireGetViewMessages{"sess-a", 150, 100}
+            );
         auto msg = WsAgentIOTransport::deserialize(jsonText);
         XX_TEST_EXPECT_TRUE(msg.has_value());
         if (msg) {
@@ -2271,14 +2271,16 @@ static asio::awaitable<void> test_wire_pagination_roundtrip() {
         page.startIndex = 42;
         page.totalCount = 250;
 
-        auto user     = agentxx::agent::ViewMessage::makeText(
-            agentxx::agent::ViewMessage::Role::User, "hello"
+        auto user = agentxx::agent::ViewMessage::makeText(
+            agentxx::agent::ViewMessage::Role::User,
+            "hello"
         );
-        user.id       = "msg_000043";
+        user.id = "msg_000043";
         page.messages.push_back(user);
 
-        auto tool               = agentxx::agent::ViewMessage::makeText(
-            agentxx::agent::ViewMessage::Role::Tool, "{\"path\":\"a.txt\"}"
+        auto tool = agentxx::agent::ViewMessage::makeText(
+            agentxx::agent::ViewMessage::Role::Tool,
+            "{\"path\":\"a.txt\"}"
         );
         tool.id                 = "msg_000044";
         tool.tool               = agentxx::agent::ViewMessage::ToolData{};
@@ -2288,9 +2290,8 @@ static asio::awaitable<void> test_wire_pagination_roundtrip() {
         tool.tool->toolFinished = true;
         page.messages.push_back(tool);
 
-        auto tip          = agentxx::agent::ViewMessage::makeText(
-            agentxx::agent::ViewMessage::Role::Tip, "warn"
-        );
+        auto tip
+            = agentxx::agent::ViewMessage::makeText(agentxx::agent::ViewMessage::Role::Tip, "warn");
         tip.id            = "msg_000045";
         tip.tip->tipLevel = agentxx::agent::ViewMessage::TipLevel::Warning;
         page.messages.push_back(tip);
@@ -2330,9 +2331,9 @@ static asio::awaitable<void> test_wire_pagination_roundtrip() {
         agentxx::agent::SyncPayload sync;
         sync.fromIndex     = 150;
         sync.totalMessages = 250;
-        sync.messages.push_back(agentxx::agent::ViewMessage::makeText(
-            agentxx::agent::ViewMessage::Role::User, "tail"
-        ));
+        sync.messages.push_back(
+            agentxx::agent::ViewMessage::makeText(agentxx::agent::ViewMessage::Role::User, "tail")
+        );
         auto jsonText = WsAgentIOTransport::serialize(agentxx::agent::WireMessage{sync});
         auto msg      = WsAgentIOTransport::deserialize(jsonText);
         XX_TEST_EXPECT_TRUE(msg.has_value());
@@ -2356,8 +2357,8 @@ static asio::awaitable<void> test_wire_pagination_roundtrip() {
 static asio::awaitable<void> test_session_controller_message_queue() {
     auto ex = co_await asio::this_coro::executor;
 
-    auto       sim     = startDaSimServer();
-    const auto baseUrl = "http://127.0.0.1:" + std::to_string(sim.port);
+    auto       sim            = startDaSimServer();
+    const auto baseUrl        = "http://127.0.0.1:" + std::to_string(sim.port);
     g_da_sim_response_content = "echo response from queue test";
     g_da_sim_tool_calls       = neograph::json::array();
 
@@ -2420,12 +2421,12 @@ static asio::awaitable<void> test_session_controller_message_queue() {
     );
 
     // 发送两轮输入 (第一轮立即执行，第二轮进入队列)
-    clientT->send(agentxx::agent::WireMessage{agentxx::agent::WireUserInput{
-        "queue-test-session", "turn 1", ""
-    }});
-    clientT->send(agentxx::agent::WireMessage{agentxx::agent::WireUserInput{
-        "queue-test-session", "turn 2", ""
-    }});
+    clientT->send(agentxx::agent::WireMessage{
+        agentxx::agent::WireUserInput{"queue-test-session", "turn 1", ""}
+    });
+    clientT->send(agentxx::agent::WireMessage{
+        agentxx::agent::WireUserInput{"queue-test-session", "turn 2", ""}
+    });
 
     // 等待两轮均执行完毕 (因为第一轮成功，自动执行第二轮)
     for (int i = 0; i < 200; ++i) {
@@ -2448,15 +2449,13 @@ static asio::awaitable<void> test_session_controller_message_queue() {
     }
 
     // 取消后暂停自动调度：发送 turn 3 和 turn 4，发送取消
-    clientT->send(agentxx::agent::WireMessage{agentxx::agent::WireUserInput{
-        "queue-test-session", "turn 3", ""
-    }});
-    clientT->send(agentxx::agent::WireMessage{agentxx::agent::WireUserInput{
-        "queue-test-session", "turn 4", ""
-    }});
-    clientT->send(agentxx::agent::WireMessage{agentxx::agent::WireCancel{
-        "queue-test-session"
-    }});
+    clientT->send(agentxx::agent::WireMessage{
+        agentxx::agent::WireUserInput{"queue-test-session", "turn 3", ""}
+    });
+    clientT->send(agentxx::agent::WireMessage{
+        agentxx::agent::WireUserInput{"queue-test-session", "turn 4", ""}
+    });
+    clientT->send(agentxx::agent::WireMessage{agentxx::agent::WireCancel{"queue-test-session"}});
 
     // 等待 turn 3 结束
     for (int i = 0; i < 200; ++i) {
@@ -2481,9 +2480,9 @@ static asio::awaitable<void> test_session_controller_message_queue() {
     }
 
     // 点击 insert (WireInterruptAndRunNext) 唤醒执行 turn 4
-    clientT->send(agentxx::agent::WireMessage{agentxx::agent::WireInterruptAndRunNext{
-        "queue-test-session"
-    }});
+    clientT->send(
+        agentxx::agent::WireMessage{agentxx::agent::WireInterruptAndRunNext{"queue-test-session"}}
+    );
 
     for (int i = 0; i < 200; ++i) {
         {

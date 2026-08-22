@@ -17,6 +17,7 @@ namespace test {
 // 访问器: 暴露 EvolutionTrainingAgent 的 protected 成员供测试
 class TrainingTestAccessor : public agentxx::agent::EvolutionTrainingAgent {
 public:
+
     TrainingTestAccessor() :
         agentxx::agent::EvolutionTrainingAgent(nullptr, nullptr, nullptr) {}
 
@@ -37,8 +38,8 @@ using namespace agentxx::agent;
 /// 构造一个指定 systemPrompt 的变体
 PromptVariant makeVariant(const std::string& id, const std::string& systemPrompt) {
     PromptVariant v;
-    v.id                   = id;
-    v.prompt.systemPrompt  = systemPrompt;
+    v.id                  = id;
+    v.prompt.systemPrompt = systemPrompt;
     return v;
 }
 
@@ -49,10 +50,7 @@ void testStripMarkdownCodeBlock() {
         std::string("{\"a\": 1}")
     );
     // 无语言标注围栏
-    XX_TEST_EXPECT_EQ(
-        stripMarkdownCodeBlock("```\nplain\n```"),
-        std::string("plain")
-    );
+    XX_TEST_EXPECT_EQ(stripMarkdownCodeBlock("```\nplain\n```"), std::string("plain"));
     // 无围栏原样返回 (仅去首尾空白)
     XX_TEST_EXPECT_EQ(stripMarkdownCodeBlock("  hello \n"), std::string("hello"));
     // 纯空白输入保持原样 (npos 分支)
@@ -76,7 +74,9 @@ void testParseJsonFromResponse() {
             (void)parseJsonFromResponse("no json at all");
             return true;
         },
-        [](std::string) -> bool { return false; }
+        [](std::string) -> bool {
+            return false;
+        }
     );
     XX_TEST_EXPECT_TRUE(errored);
 }
@@ -107,9 +107,8 @@ void testTestCasesFromJson() {
 }
 
 void testLoadTestCasesFromFile() {
-    namespace fs = std::filesystem;
-    const fs::path tmpPath
-        = fs::temp_directory_path() / "agentxx_training_test_cases.json";
+    namespace fs           = std::filesystem;
+    const fs::path tmpPath = fs::temp_directory_path() / "agentxx_training_test_cases.json";
     {
         std::ofstream ofs(tmpPath, std::ios::out | std::ios::trunc);
         ofs << R"([{"name": "t1", "input": "a"}, {"name": "t2", "input": "b"}])";
@@ -174,7 +173,7 @@ void testNormalizePromptPatch() {
 }
 
 void testMutateStringUtf8() {
-    std::mt19937 rng(42);
+    std::mt19937      rng(42);
     const std::string chinese = "你好世界，提示词测试。English tail.";
     // rate=0 原样返回
     XX_TEST_EXPECT_EQ(mutateStringUtf8(chinese, 0.0, rng), chinese);
@@ -213,7 +212,10 @@ void testVariantSerializationRoundtrip() {
     v.testCount            = 5;
     v.smoothedScore        = 0.77;
     v.evalRounds           = 2;
-    v.perTestCaseScores    = {{"c1", 0.9}, {"c2", 0.5}};
+    v.perTestCaseScores    = {
+        {"c1", 0.9},
+        {"c2", 0.5}
+    };
     agentxx::agent::ToolPrompt tp{.depict = "dd", .args = {{"k", "v"}}};
     v.prompt.toolPrompt.emplace("my_tool", std::move(tp));
 
@@ -230,7 +232,7 @@ void testVariantSerializationRoundtrip() {
     XX_TEST_EXPECT_EQ(back.promptHash(), v.promptHash());
 
     // 兼容旧格式: 无 smoothedScore/evalRounds 字段时取默认值
-    neograph::json old = neograph::json::object();
+    neograph::json old     = neograph::json::object();
     old["id"]              = "legacy";
     old["cumulativeScore"] = 1.0;
     old["testCount"]       = 2;
@@ -276,13 +278,13 @@ void testDedupAndPreFilter() {
 }
 
 void testCancelRequested() {
-    TrainingTestAccessor acc;
+    TrainingTestAccessor    acc;
     EvolutionTrainingConfig cfgNoToken;
     XX_TEST_EXPECT_FALSE(acc.cancelRequested(cfgNoToken));
 
     EvolutionTrainingConfig cfgWithToken;
-    auto token = std::make_shared<neograph::graph::CancelToken>();
-    cfgWithToken.cancelToken = token;
+    auto                    token = std::make_shared<neograph::graph::CancelToken>();
+    cfgWithToken.cancelToken      = token;
     XX_TEST_EXPECT_FALSE(acc.cancelRequested(cfgWithToken));
     token->cancel();
     XX_TEST_EXPECT_TRUE(acc.cancelRequested(cfgWithToken));

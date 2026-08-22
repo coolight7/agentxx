@@ -285,9 +285,9 @@ inline MessageQueueItem messageQueueItemFromJson(const neograph::json& j) {
 }
 
 inline neograph::json syncToJson(const SyncPayload& p) {
-    neograph::json j   = neograph::json::object();
-    j["fromIndex"]     = p.fromIndex;
-    j["tailHash"]      = p.tailHash;
+    neograph::json j = neograph::json::object();
+    j["fromIndex"]   = p.fromIndex;
+    j["tailHash"]    = p.tailHash;
     // 历史分页元数据 (尾窗同步时 fromIndex>0 / totalMessages>0; 全量同步
     // 时 totalMessages == messages.size(), 字段冗余但便于客户端统一判断)
     j["totalMessages"] = p.totalMessages;
@@ -314,7 +314,7 @@ inline std::optional<SyncPayload> syncFromJson(const neograph::json& j) {
     p.fromIndex     = j.value("fromIndex", uint64_t{0});
     p.tailHash      = j.value("tailHash", std::string{});
     p.totalMessages = j.value("totalMessages", uint64_t{0});
-    auto msgs   = j.value("messages", neograph::json::array());
+    auto msgs       = j.value("messages", neograph::json::array());
     if (msgs.is_array()) {
         for (const auto& m : msgs) {
             p.messages.push_back(ViewMessage::fromJson(m));
@@ -755,10 +755,8 @@ inline WirePluginDataUp pluginDataUpFromJson(const neograph::json& j) {
 // 消息队列相关 (Client <-> Server)
 // ---------------------------------------------------------------------------
 
-inline neograph::json makeMessageQueueUpdate(
-    std::string_view                     sessionId,
-    const std::vector<MessageQueueItem>& items
-) {
+inline neograph::json
+    makeMessageQueueUpdate(std::string_view sessionId, const std::vector<MessageQueueItem>& items) {
     neograph::json j = {
         {"type",      MsgType::MessageQueueUpdate},
         {"sessionId", sessionId                  },
@@ -795,8 +793,7 @@ inline WireClearMessageQueue clearMessageQueueFromJson(const neograph::json& j) 
     return q;
 }
 
-inline neograph::json
-    makeRemoveQueueItem(std::string_view sessionId, std::string_view itemId) {
+inline neograph::json makeRemoveQueueItem(std::string_view sessionId, std::string_view itemId) {
     return neograph::json{
         {"type",      MsgType::RemoveQueueItem},
         {"sessionId", sessionId               },
@@ -852,16 +849,16 @@ inline WireGetViewMessages getViewMessagesFromJson(const neograph::json& j) {
 /// 服务端历史分页响应 (Server -> Client): 绝对下标区间
 /// [startIndex, startIndex + messages.size())
 inline neograph::json makeViewMessagesPage(
-    std::string_view         sessionId,
-    uint64_t                 startIndex,
-    uint64_t                 totalCount,
+    std::string_view                sessionId,
+    uint64_t                        startIndex,
+    uint64_t                        totalCount,
     const std::vector<ViewMessage>& messages
 ) {
     neograph::json j = {
-        {"type",        MsgType::ViewMessagesPage},
-        {"sessionId",   sessionId                },
-        {"startIndex",  startIndex               },
-        {"totalCount",  totalCount               },
+        {"type",       MsgType::ViewMessagesPage},
+        {"sessionId",  sessionId                },
+        {"startIndex", startIndex               },
+        {"totalCount", totalCount               },
     };
     neograph::json arr = neograph::json::array();
     for (const auto& vm : messages) {

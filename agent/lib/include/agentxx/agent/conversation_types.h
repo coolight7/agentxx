@@ -82,7 +82,7 @@ struct ViewMessage {
 
     // ---- Role::Think 专属 ----
     struct ThinkData {
-        int  reasoningTokens = 0; ///< 思考消耗 token 数 (若网关提供)
+        int  reasoningTokens = 0;     ///< 思考消耗 token 数 (若网关提供)
         bool isEncrypted     = false; ///< 是否为加密 thinking 载体
     };
 
@@ -236,9 +236,9 @@ struct Delta {
 
 /// 排队等待发送的消息条目 (服务端按会话维护, 同步到客户端展示)
 struct MessageQueueItem {
-    std::string id;          ///< 条目唯一标识 (如 "q-1")
-    std::string text;        ///< 消息内容
-    std::string model;       ///< 本条消息指定的待应用模型 (空 = 默认/当前)
+    std::string id;              ///< 条目唯一标识 (如 "q-1")
+    std::string text;            ///< 消息内容
+    std::string model;           ///< 本条消息指定的待应用模型 (空 = 默认/当前)
     int64_t     createdAtMs = 0; ///< 创建时间戳 (毫秒)
 };
 
@@ -247,9 +247,9 @@ struct SyncPayload {
     /// - 全量同步: 0 (兼容旧语义)
     /// - 尾窗同步 (历史分页, initialSyncTailCount>0): 窗口起始下标 (>0 表示
     ///   上方还有更早消息未同步), 客户端据此支持"向上滚动加载更早历史"
-    uint64_t                      fromIndex = 0;
-    std::vector<ViewMessage>      messages;
-    std::string                   tailHash;
+    uint64_t                 fromIndex = 0;
+    std::vector<ViewMessage> messages;
+    std::string              tailHash;
     /// 服务端会话总消息数 (0 = 未提供/未知; 全量同步时 == messages.size())
     uint64_t                      totalMessages = 0;
     std::vector<MessageQueueItem> messageQueue;

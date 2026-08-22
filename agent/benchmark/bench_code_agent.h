@@ -611,8 +611,7 @@ inline void benchCodeAgentMultiTurn(const CodeAgentBenchConfig& cfg) {
     }
 
     reportBenchResult(
-        "CodeAgent::runTurnAsync [multi-turn x" + std::to_string(turnsPerIteration)
-            + "]",
+        "CodeAgent::runTurnAsync [multi-turn x" + std::to_string(turnsPerIteration) + "]",
         durations
     );
 }

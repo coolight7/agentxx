@@ -200,7 +200,7 @@ static std::string normalizeScreenForCompare(const std::string& s, int width) {
     std::string  out;
     size_t       pos = 0;
     while (pos <= s.size()) {
-        size_t nl = s.find('\n', pos);
+        size_t      nl   = s.find('\n', pos);
         std::string line = s.substr(pos, (nl == std::string::npos ? s.size() : nl) - pos);
         if (line.size() > keep) {
             line.resize(keep);
@@ -719,8 +719,8 @@ TestResult testTuiScroll() {
                 auto m  = std::make_shared<TUIMessage>();
                 m->role = TUIMessage::Role::Assistant;
                 for (int j = 0; j < 40; ++j) {
-                    m->text += "softbreak line " + std::to_string(j) + " msg"
-                               + std::to_string(i) + "\n";
+                    m->text += "softbreak line " + std::to_string(j) + " msg" + std::to_string(i)
+                               + "\n";
                 }
                 st.messages.push_back(std::move(m));
             }
@@ -761,8 +761,8 @@ TestResult testTuiScroll() {
                 auto m  = std::make_shared<TUIMessage>();
                 m->role = TUIMessage::Role::Assistant;
                 for (int j = 0; j < 30; ++j) {
-                    m->text += "soft line " + std::to_string(j) + " mixed" + std::to_string(i)
-                               + "\n";
+                    m->text
+                        += "soft line " + std::to_string(j) + " mixed" + std::to_string(i) + "\n";
                 }
                 st.messages.push_back(std::move(m));
             }
@@ -782,22 +782,23 @@ TestResult testTuiScroll() {
         // 滚动过程中从未出现, 说明该消息被虚拟列表误判为不可见
         // (高度估算与实际渲染偏差导致 continue/break 误判), 即用户
         // 报告的"某些消息显示为空白, 滑动到某些位置又正常"
-        ScrollFixture f;
+        ScrollFixture            f;
         std::vector<std::string> markers;
-        auto mk = [&](int i, const char* tag) {
+        auto                     mk = [&](int i, const char* tag) {
             return fmt::format("MMK{}_{}_", i, tag);
         };
 
         f.sharedState.mutate([&](TUIRenderState& st) {
             for (int i = 0; i < 24; ++i) {
-                auto m  = std::make_shared<TUIMessage>();
+                auto              m      = std::make_shared<TUIMessage>();
                 const std::string marker = mk(i, "A");
                 markers.push_back(marker);
                 switch (i % 6) {
                     case 0: { // 普通 markdown 段落
                         m->role = TUIMessage::Role::Assistant;
-                        m->text = "plain paragraph with marker " + marker + "\n\n"
-                                  "second paragraph with some more text to wrap around.\n";
+                        m->text = "plain paragraph with marker " + marker
+                                  + "\n\n"
+                                    "second paragraph with some more text to wrap around.\n";
                         break;
                     }
                     case 1: { // mermaid 状态图 (planning 常用)
@@ -808,13 +809,15 @@ TestResult testTuiScroll() {
                                   "    phase_b --> phase_c\n"
                                   "    phase_c --> [*]\n"
                                   "```\n"
-                                  "after mermaid marker " + marker + "\n";
+                                  "after mermaid marker "
+                                  + marker + "\n";
                         break;
                     }
                     case 2: { // 表格 (单元格长文本 -> 受限列宽自动换行)
                         m->role = TUIMessage::Role::Assistant;
                         m->text = "| col1 | col2 |\n|---|---|\n"
-                                  "| " + marker + " | " + marker + " |\n";
+                                  "| "
+                                  + marker + " | " + marker + " |\n";
                         break;
                     }
                     case 3: { // 长串无空格文本 (flexbox 不折行, 按列估算会高估)
@@ -828,16 +831,17 @@ TestResult testTuiScroll() {
                         break;
                     }
                     case 5: { // Tool 展开 (多行 JSON 参数 + 长 result)
-                        m->role = TUIMessage::Role::Tool;
-                        m->tool = TUIMessage::ToolData{};
-                        m->tool->toolName      = "agentxx_filesystem_read";
-                        m->tool->toolFinished  = true;
-                        m->tool->toolResult    = "line1 result marker " + marker + "\n"
-                                                 "line2 with some words to wrap if narrow\n"
-                                                 "line3\n";
-                        m->text                = "{\n  \"path\": \"/a/b/c\",\n  \"line_offset\": 0,\n"
-                                                 "  \"line_limit\": 100\n}";
-                        m->collapsed           = false;
+                        m->role               = TUIMessage::Role::Tool;
+                        m->tool               = TUIMessage::ToolData{};
+                        m->tool->toolName     = "agentxx_filesystem_read";
+                        m->tool->toolFinished = true;
+                        m->tool->toolResult   = "line1 result marker " + marker
+                                              + "\n"
+                                                "line2 with some words to wrap if narrow\n"
+                                                "line3\n";
+                        m->text      = "{\n  \"path\": \"/a/b/c\",\n  \"line_offset\": 0,\n"
+                                       "  \"line_limit\": 100\n}";
+                        m->collapsed = false;
                         break;
                     }
                 }
@@ -925,7 +929,7 @@ TestResult testTuiScroll() {
                 }
             };
             addHistory(300, 0);
-            auto mm = std::make_shared<TUIMessage>();
+            auto mm  = std::make_shared<TUIMessage>();
             mm->role = TUIMessage::Role::Assistant;
             mm->text = "```mermaid\nstateDiagram-v2\n"
                        "    [*] --> phase_a\n"
@@ -963,7 +967,9 @@ TestResult testTuiScroll() {
             );
             fprintf(stderr, "[DBG12] frame:\n%s\n", frame.c_str());
         }
-        XX_TEST_EXPECT_TRUE(ScrollFixture::lastLines(frame, 4).find("LAST_MK_9ZQ") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(
+            ScrollFixture::lastLines(frame, 4).find("LAST_MK_9ZQ") != std::string::npos
+        );
     }
 
     {
@@ -1026,9 +1032,9 @@ TestResult testTuiScroll() {
                 st.messages.push_back(std::move(m));
             }
             // 中间一条 filesystem_edit Tool 消息 (展开, 大 diff)
-            auto et  = std::make_shared<TUIMessage>();
-            et->role = TUIMessage::Role::Tool;
-            et->tool = TUIMessage::ToolData{};
+            auto et                = std::make_shared<TUIMessage>();
+            et->role               = TUIMessage::Role::Tool;
+            et->tool               = TUIMessage::ToolData{};
             et->tool->toolName     = "agentxx_filesystem_edit";
             et->tool->toolFinished = true;
             et->tool->toolResult   = "Success, Replace 1 hits"; // 成功 (非错误前缀)
@@ -1057,7 +1063,7 @@ TestResult testTuiScroll() {
                 }
             }
             argsJson += "\"}";
-            et->text = std::move(argsJson);
+            et->text  = std::move(argsJson);
             st.messages.push_back(std::move(et));
             // 后面 5 条历史 + last
             for (int i = 0; i < 5; ++i) {
@@ -1089,10 +1095,10 @@ TestResult testTuiScroll() {
         // 场景 15a (诊断): 单条 Tool 折叠消息的渲染结果
         ScrollFixture g;
         g.sharedState.mutate([&](TUIRenderState& st) {
-            auto m  = std::make_shared<TUIMessage>();
-            m->collapsed = true;
-            m->role = TUIMessage::Role::Tool;
-            m->tool = TUIMessage::ToolData{};
+            auto m                = std::make_shared<TUIMessage>();
+            m->collapsed          = true;
+            m->role               = TUIMessage::Role::Tool;
+            m->tool               = TUIMessage::ToolData{};
             m->tool->toolName     = "agentxx_filesystem_read";
             m->tool->toolFinished = true;
             m->tool->toolResult   = "some result with marker COLX_ZZ";
@@ -1115,29 +1121,30 @@ TestResult testTuiScroll() {
         // "消息都是折叠的, 上下滚动到某些位置时连续几条不显示, 但可以
         // 点击展开, 滚动超过一段距离又好了"。折叠消息估算 2 行 == 实测,
         // 若仍出现缺失, 说明问题不在高度估算, 而在布局/绘制环节
-        ScrollFixture f;
+        ScrollFixture            f;
         std::vector<std::string> markers;
         f.sharedState.mutate([&](TUIRenderState& st) {
             for (int i = 0; i < 60; ++i) {
                 const std::string mk = "COL_" + std::to_string(i) + "_ZQ";
                 markers.push_back(mk);
-                auto m  = std::make_shared<TUIMessage>();
+                auto m       = std::make_shared<TUIMessage>();
                 m->collapsed = true; // 全部折叠
                 if (i % 3 == 0) {
                     // Think 折叠: header "[Think] <时长>" + 折叠预览(正文单行截断)
                     m->role       = TUIMessage::Role::Think;
                     m->durationMs = 1000 + i;
-                    m->text       = "think body content with marker " + mk + " and lots of "
-                                    "text to make preview truncate at the right edge ...";
+                    m->text       = "think body content with marker " + mk
+                              + " and lots of "
+                                "text to make preview truncate at the right edge ...";
                 } else if (i % 3 == 1) {
                     // Tool 折叠: header 显示摘要 (buildToolHeaderSummary);
                     // marker 放入 path, 摘要 "Read · /a/COL_x_ZQ" 会显示出来
-                    m->role                = TUIMessage::Role::Tool;
-                    m->tool                = TUIMessage::ToolData{};
-                    m->tool->toolName      = "agentxx_filesystem_read";
-                    m->tool->toolFinished  = true;
-                    m->tool->toolResult    = "some result text";
-                    m->text                = "{\"path\":\"/a/" + mk + "\"}";
+                    m->role               = TUIMessage::Role::Tool;
+                    m->tool               = TUIMessage::ToolData{};
+                    m->tool->toolName     = "agentxx_filesystem_read";
+                    m->tool->toolFinished = true;
+                    m->tool->toolResult   = "some result text";
+                    m->text               = "{\"path\":\"/a/" + mk + "\"}";
                 } else {
                     // System/Tip 折叠
                     m->role = TUIMessage::Role::Tip;
@@ -1195,8 +1202,12 @@ TestResult testTuiScroll() {
             for (const auto& m : unseen) {
                 fprintf(stderr, "  missing: %s\n", m.c_str());
             }
-            fprintf(stderr, "[DBG15] totalHeight=%d scrollOffset=%d\n",
-                    f.comp->totalHeight(), f.comp->scrollOffset());
+            fprintf(
+                stderr,
+                "[DBG15] totalHeight=%d scrollOffset=%d\n",
+                f.comp->totalHeight(),
+                f.comp->scrollOffset()
+            );
         }
         XX_TEST_EXPECT_TRUE(unseen.empty());
     }
@@ -1206,14 +1217,14 @@ TestResult testTuiScroll() {
         // diff) —— 模拟真实长对话; 逐行滚动遍历, 所有折叠 header 必须渲染
         // (折叠消息估算准确, 若高消息低估导致位置错位, 后续连续折叠消息
         //  会在某些滚动位置显示为空白, 滚动大段距离后恢复 —— 用户报告)
-        ScrollFixture f;
+        ScrollFixture            f;
         std::vector<std::string> markers;
         f.sharedState.mutate([&](TUIRenderState& st) {
             int msgNo = 0;
             for (int i = 0; i < 96; ++i) {
                 // 每 16 条插入一条展开的高消息 (低估源)
                 if (i > 0 && i % 16 == 0) {
-                    auto hm = std::make_shared<TUIMessage>();
+                    auto hm  = std::make_shared<TUIMessage>();
                     hm->role = TUIMessage::Role::Assistant;
                     if (i % 32 == 0) {
                         // mermaid 状态图 (展开)
@@ -1222,8 +1233,8 @@ TestResult testTuiScroll() {
                                    "    p_c --> [*]\n```\n";
                     } else {
                         // filesystem_edit diff (展开)
-                        hm->role = TUIMessage::Role::Tool;
-                        hm->tool = TUIMessage::ToolData{};
+                        hm->role               = TUIMessage::Role::Tool;
+                        hm->tool               = TUIMessage::ToolData{};
                         hm->tool->toolName     = "agentxx_filesystem_edit";
                         hm->tool->toolFinished = true;
                         hm->tool->toolResult   = "Success, Replace 1 hits";
@@ -1249,8 +1260,8 @@ TestResult testTuiScroll() {
                                 aj += c;
                             }
                         }
-                        aj += "\"}";
-                        hm->text = std::move(aj);
+                        aj       += "\"}";
+                        hm->text  = std::move(aj);
                     }
                     st.messages.push_back(std::move(hm));
                     continue;
@@ -1352,12 +1363,18 @@ TestResult testTuiScroll() {
         // 项 x sourceBytes=200 = ~8400), key 恒定无内容变更干扰, 使淘汰
         // 必然触及可见子项
         auto scrollable = std::make_shared<LazyScrollable>(
-            [] { return static_cast<size_t>(60); }, // 60 个子项 (列表 60 行)
-            [](size_t i) { return 0x1000ULL + i; }, // key 恒定
-            [](size_t, int) { return 1; },          // 单行子项 (估算==实测)
+            [] {
+                return static_cast<size_t>(60);
+            }, // 60 个子项 (列表 60 行)
+            [](size_t i) {
+                return 0x1000ULL + i;
+            }, // key 恒定
+            [](size_t, int) {
+                return 1;
+            }, // 单行子项 (估算==实测)
             [](size_t i) {
                 LazyBuiltItem b;
-                b.element     = ftxui::text(
+                b.element = ftxui::text(
                     "MT17 item " + std::to_string(i) + " marker=" + std::to_string(i)
                 );
                 b.sourceBytes = 200; // 模拟 x64 折算后的较大渲染树
@@ -1367,11 +1384,9 @@ TestResult testTuiScroll() {
             nullptr
         );
         scrollable->setStickToBottom(false); // 固定视口在顶部 (offset=0)
-        auto   el     = scrollable->Render() | ftxui::flex;
-        auto   screen = ftxui::Screen::Create(
-            ftxui::Dimension::Fixed(80),
-            ftxui::Dimension::Fixed(30)
-        );
+        auto el = scrollable->Render() | ftxui::flex;
+        auto screen
+            = ftxui::Screen::Create(ftxui::Dimension::Fixed(80), ftxui::Dimension::Fixed(30));
         ftxui::Render(screen, el);
         std::string out = screen.ToString();
         // 视口 (offset 0) 内 0..29 条全部必须渲染 (顶部连续标记缺失即回归)
@@ -1397,10 +1412,10 @@ TestResult testTuiScroll() {
             for (int i = 0; i < 200; ++i) {
                 const std::string mk = "T17B_" + std::to_string(i) + "_END";
                 auto              m  = std::make_shared<TUIMessage>();
-                m->collapsed        = true;
-                m->role             = TUIMessage::Role::Tip;
-                m->tip              = TUIMessage::TipData{};
-                m->text             = "tip " + mk;
+                m->collapsed         = true;
+                m->role              = TUIMessage::Role::Tip;
+                m->tip               = TUIMessage::TipData{};
+                m->text              = "tip " + mk;
                 st.messages.push_back(std::move(m));
             }
         });
@@ -1425,7 +1440,7 @@ TestResult testTuiScroll() {
 
     {
         // 场景 18: TailThinkingMode 流式与末尾折叠预览测试
-        auto& settings = TUISettings::instance();
+        auto&      settings = TUISettings::instance();
         const auto origMode = settings.tailThinkingMode();
 
         // 18a: SingleLine 模式下流式 Think 显示单行折叠并截取末尾字符
@@ -1463,7 +1478,9 @@ TestResult testTuiScroll() {
             // 自动展开标志 "- [Think]"
             XX_TEST_EXPECT_TRUE(frame.find("- [Think]") != std::string::npos);
             // 包含正文内容
-            XX_TEST_EXPECT_TRUE(frame.find("Thinking step one auto expand header") != std::string::npos);
+            XX_TEST_EXPECT_TRUE(
+                frame.find("Thinking step one auto expand header") != std::string::npos
+            );
             XX_TEST_EXPECT_TRUE(frame.find("THK_TAIL_18B") != std::string::npos);
         }
 
@@ -1472,10 +1489,11 @@ TestResult testTuiScroll() {
         {
             ScrollFixture f;
             f.sharedState.mutate([&](TUIRenderState& st) {
-                auto m = std::make_shared<TUIMessage>();
-                m->role = TUIMessage::Role::Think;
+                auto m       = std::make_shared<TUIMessage>();
+                m->role      = TUIMessage::Role::Think;
                 m->collapsed = true;
-                m->text = "First line head of thinking that is very long\nSecond line\nTail line with marker THK_TAIL_18C";
+                m->text
+                    = "First line head of thinking that is very long\nSecond line\nTail line with marker THK_TAIL_18C";
                 st.messages.push_back(std::move(m));
             });
             std::string frame = f.render();
@@ -1508,7 +1526,7 @@ TestResult testTuiScroll() {
                 st.currentTokenEpoch = 7;
                 st.currentToken      = std::make_shared<std::string>(
                     "Thinking head line hidden when collapsed THK18D_HEAD\n"
-                    "Thinking step two\nThinking step three tail THK_TAIL_18D"
+                         "Thinking step two\nThinking step three tail THK_TAIL_18D"
                 );
                 st.isStreaming = true;
             });
@@ -1546,7 +1564,7 @@ TestResult testTuiScroll() {
                 st.currentTokenEpoch = 8;
                 st.currentToken      = std::make_shared<std::string>(
                     "Auto expand head line THK18E_HEAD\n"
-                    "Thinking step two\nThinking step three tail THK_TAIL_18E"
+                         "Thinking step two\nThinking step three tail THK_TAIL_18E"
                 );
                 st.isStreaming = true;
             });

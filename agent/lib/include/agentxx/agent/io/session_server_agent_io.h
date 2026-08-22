@@ -143,13 +143,13 @@ private:
         std::string argJson;
     };
 
-    using RespChannel  = asio::experimental::concurrent_channel<void(ErrorCode, neograph::json)>;
-    using WakeChannel  = asio::experimental::concurrent_channel<void(ErrorCode, int)>;
+    using RespChannel = asio::experimental::concurrent_channel<void(ErrorCode, neograph::json)>;
+    using WakeChannel = asio::experimental::concurrent_channel<void(ErrorCode, int)>;
 
     /// 取 seq 之后的 delta; nullopt 表示需全量 sync
     std::optional<std::vector<Delta>> deltasSince(uint64_t seq);
 
-    SyncPayload              buildFullSync();
+    SyncPayload buildFullSync();
     /// 构建同步载荷; tailCount>0 时仅取末尾 tailCount 条 (历史分页尾窗)
     /// - fromIndex = 窗口起始绝对下标, totalMessages = 会话总消息数;
     ///   客户端据此展示"上方还有更早消息"并按 WireGetViewMessages 分页拉取

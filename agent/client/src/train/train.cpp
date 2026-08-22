@@ -62,8 +62,8 @@ void runTrainingMode(
     // 不注册编程工具与中间件栈, 避免评分模型误调工具导致输出为空/被污染,
     // 也省去权限 HIL / summarization 等无谓开销。
     // (system prompt 由 EvolutionTrainingAgent.runLLMAgent 每次调用时写入 config)
-    auto trainAgent    = std::make_shared<agentxx::agent::CodeAgent>(baseConfig);
-    auto scorerAgent   = std::make_shared<agentxx::agent::BaseAgent>(scorerConfig);
+    auto trainAgent     = std::make_shared<agentxx::agent::CodeAgent>(baseConfig);
+    auto scorerAgent    = std::make_shared<agentxx::agent::BaseAgent>(scorerConfig);
     auto optimizerAgent = std::make_shared<agentxx::agent::BaseAgent>(optimizerConfig);
 
     std::string projectRoot = findProjectRoot();
@@ -145,7 +145,7 @@ void runTrainingMode(
     asio::io_context trainIoCtx;
 
     // 取消令牌: Ctrl+C(SIGINT)/SIGTERM 时优雅停止训练 (保存当前进度后退出)
-    auto cancelToken = std::make_shared<neograph::graph::CancelToken>();
+    auto cancelToken     = std::make_shared<neograph::graph::CancelToken>();
     trainCfg.cancelToken = cancelToken;
 
     asio::signal_set signals(trainIoCtx, SIGINT, SIGTERM);

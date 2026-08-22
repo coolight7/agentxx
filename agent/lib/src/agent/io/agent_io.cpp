@@ -74,7 +74,10 @@ void AgentIOBase::requestAppendComponentInfo(std::string sessionId) {
     sendToPeer(WireGetAppendComponentInfo{std::move(sessionId)});
 }
 
-void AgentIOBase::requestViewMessagesPage(std::string sessionId, uint64_t beforeIndex, uint32_t count
+void AgentIOBase::requestViewMessagesPage(
+    std::string sessionId,
+    uint64_t    beforeIndex,
+    uint32_t    count
 ) {
     sendToPeer(WireGetViewMessages{std::move(sessionId), beforeIndex, count});
 }

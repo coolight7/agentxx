@@ -169,7 +169,7 @@ static std::shared_ptr<agent::SessionServerAgentIO> setupLocalUnifiedDirect(
     if (dynamic_cast<TUIClientAgentIO*>(clientIO.get()) != nullptr) {
         scCfg.initialSyncTailCount = kTuiInitialSyncTailCount;
     }
-    auto serverIO   = std::make_shared<agent::SessionServerAgentIO>(agentEx, agent, scCfg);
+    auto serverIO = std::make_shared<agent::SessionServerAgentIO>(agentEx, agent, scCfg);
     serverIO->setTransport(std::shared_ptr<agent::AgentIOTransportBase>(std::move(serverTransport))
     );
 

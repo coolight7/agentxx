@@ -14,9 +14,9 @@
 #include "asio/dispatch.hpp"
 #include "asio/redirect_error.hpp"
 #include "asio/use_awaitable.hpp"
-#include <algorithm>
 #include "fmt/format.h"
 #include "neograph/graph/cancel.h"
+#include <algorithm>
 
 namespace agentxx {
 namespace agent {
@@ -143,11 +143,10 @@ void SessionServerAgentIO::pushMessageQueueItem(std::string text, std::string mo
     if (text.empty()) {
         return;
     }
-    const auto nowMs = static_cast<int64_t>(
-        std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::system_clock::now().time_since_epoch()
-        ).count()
-    );
+    const auto nowMs = static_cast<int64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                                std::chrono::system_clock::now().time_since_epoch()
+    )
+                                                .count());
     MessageQueueItem item;
     item.id          = fmt::format("q-{}", nextQueueItemId_++);
     item.text        = std::move(text);
@@ -160,7 +159,8 @@ void SessionServerAgentIO::pushMessageQueueItem(std::string text, std::string mo
     messageQueue_.push_back(std::move(item));
 
     if (willExecuteImmediately) {
-        // 当前完全空闲，此条消息将被驱动循环立即弹出执行，不向客户端推送中间的 1->0 队列状态，避免 UI 闪烁
+        // 当前完全空闲，此条消息将被驱动循环立即弹出执行，不向客户端推送中间的 1->0 队列状态，避免
+        // UI 闪烁
         wakeChannel_->try_send(ErrorCode{}, 1);
     } else {
         // 真正进入排队等待 (前有进行中轮次 / 处于暂停状态 / 前有积压消息)，同步队列给客户端
@@ -567,9 +567,8 @@ asio::awaitable<void> SessionServerAgentIO::run() {
 
         if (queuePaused_ || messageQueue_.empty()) {
             turnActive_.store(false, std::memory_order_release);
-            auto [ec, val] = co_await wakeChannel_->async_receive(
-                asio::as_tuple(asio::use_awaitable)
-            );
+            auto [ec, val]
+                = co_await wakeChannel_->async_receive(asio::as_tuple(asio::use_awaitable));
             if (ec || stopped_.load(std::memory_order_acquire)) {
                 break;
             }
@@ -735,8 +734,8 @@ SyncPayload SessionServerAgentIO::buildFullSync() {
     p.fromIndex = 0;
     auto sess   = session();
     if (sess) {
-        p.messages = sess->getFullViewMessagesCopy();
-        p.tailHash = sess->getHashInfo().tailHex;
+        p.messages      = sess->getFullViewMessagesCopy();
+        p.tailHash      = sess->getHashInfo().tailHex;
         p.totalMessages = p.messages.size();
     }
     p.messageQueue = std::vector<MessageQueueItem>(messageQueue_.begin(), messageQueue_.end());

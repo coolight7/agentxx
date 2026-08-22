@@ -230,9 +230,9 @@ struct WireGetViewMessages {
 /// - 携带绝对下标区间 [startIndex, startIndex + messages.size()) 的消息,
 ///   客户端前插到本地已加载窗口上方并按 (startIndex 差值) 做滚动锚定
 struct WireViewMessagesPage {
-    std::string              sessionId;
+    std::string sessionId;
     /// 本页首条消息在服务端完整 viewMessages 中的绝对下标
-    uint64_t                 startIndex = 0;
+    uint64_t startIndex = 0;
     /// 服务端会话总消息数 (供客户端判断 hasMore: startIndex > 0 即还有更早消息)
     uint64_t                 totalCount = 0;
     std::vector<ViewMessage> messages;

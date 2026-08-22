@@ -1392,9 +1392,11 @@ void TUIClientAgentIO::onViewMessagesPage(const agentxx::agent::WireViewMessages
         st.historyLoading = false;
         // 会话不匹配: 切换会话后迟到的旧页响应, 丢弃
         if (!page.sessionId.empty() && page.sessionId != currentThreadId()) {
-            XX_LOGW("[tui] drop stale history page (session {} != {})",
-                    page.sessionId,
-                    currentThreadId());
+            XX_LOGW(
+                "[tui] drop stale history page (session {} != {})",
+                page.sessionId,
+                currentThreadId()
+            );
             return;
         }
         if (page.messages.empty()) {
@@ -1751,9 +1753,9 @@ void TUIClientAgentIO::onSync(const agentxx::agent::SyncPayload& payload) {
             // (尾窗同步时 > 0, 上方还有更早历史待分页拉取; 全量同步时为 0);
             // 在途页请求随整体替换作废, 复位加载标志
             st->historyWindowStart = payload.fromIndex;
-            st->historyTotal       = payload.totalMessages != 0 ? payload.totalMessages
-                                                                : payload.messages.size();
-            st->historyLoading     = false;
+            st->historyTotal
+                = payload.totalMessages != 0 ? payload.totalMessages : payload.messages.size();
+            st->historyLoading = false;
             // 直接替换 (旧快照由 UI 线程持有, 自然释放)
             cur = std::move(*st);
         });

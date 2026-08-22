@@ -177,10 +177,10 @@ void test_fill_missing_tool_call_ids_unique() {
 
 void test_config_defaults() {
     agentxx::agent::ModelConfig mc;
-    mc.name         = "test";
-    mc.apiKey       = "sk-defaults-test";
+    mc.name        = "test";
+    mc.apiKey      = "sk-defaults-test";
     mc.extraConfig = neograph::json::parse(R"({"top_p":0.9,"frequency_penalty":0.2,"seed":42})");
-    auto p          = server::OpenAIProvider::create(mc);
+    auto p         = server::OpenAIProvider::create(mc);
     XX_TEST_EXPECT_TRUE(p != nullptr);
 }
 
@@ -196,10 +196,10 @@ void test_extra_body_with_custom_params() {
     extra["stop"] = neograph::json::parse(R"(["\n\n","STOP"])");
 
     agentxx::agent::ModelConfig mc;
-    mc.name         = "test";
-    mc.apiKey       = "sk-extra";
+    mc.name        = "test";
+    mc.apiKey      = "sk-extra";
     mc.extraConfig = std::move(extra);
-    auto p          = server::OpenAIProvider::create(mc);
+    auto p         = server::OpenAIProvider::create(mc);
     XX_TEST_EXPECT_TRUE(p != nullptr);
     XX_TEST_EXPECT_EQ(p->get_name(), "openai");
 }
@@ -1558,7 +1558,7 @@ asio::awaitable<void> test_extra_body_passthrough(MockOpenAIServer& mock, uint16
     extra["seed"]  = 12345;
 
     agentxx::agent::ModelConfig mc = makeOaiCfg("sk-test", baseUrl);
-    mc.extraConfig                = std::move(extra);
+    mc.extraConfig                 = std::move(extra);
     auto provider                  = server::OpenAIProvider::create(mc);
 
     neograph::CompletionParams params;
@@ -3351,7 +3351,7 @@ asio::awaitable<void> test_responses_reasoning_configurable(MockOpenAIServer& mo
 
     // 1) config 级: extraConfig.reasoning
     {
-        auto mc         = makeCodexCfg(baseUrl);
+        auto mc        = makeCodexCfg(baseUrl);
         mc.extraConfig = neograph::json::parse(R"({"reasoning":{"effort":"medium"}})");
         auto                       provider = server::OpenAIProvider::create(mc);
         neograph::CompletionParams params;
@@ -3372,7 +3372,7 @@ asio::awaitable<void> test_responses_reasoning_configurable(MockOpenAIServer& mo
 
     // 2) per-call 级: params.extra_fields.reasoning 覆盖 config 级
     {
-        auto mc         = makeCodexCfg(baseUrl);
+        auto mc        = makeCodexCfg(baseUrl);
         mc.extraConfig = neograph::json::parse(R"({"reasoning":{"effort":"medium"}})");
         auto                       provider = server::OpenAIProvider::create(mc);
         neograph::CompletionParams params;
@@ -3478,33 +3478,31 @@ asio::awaitable<void>
     // 1) 测试非流式捕获 encrypted_content 与 reasoning_tokens
     {
         mock.customResponse = neograph::json{
-            {"id",         "resp_test_enc"                                             },
-            {"object",     "response"                                                  },
-            {"created_at", 1787260000                                                  },
-            {"status",     "completed"                                                 },
-            {"model",      "gemini-3.7-flash-high"                                     },
+            {"id", "resp_test_enc"},
+            {"object", "response"},
+            {"created_at", 1787260000},
+            {"status", "completed"},
+            {"model", "gemini-3.7-flash-high"},
             {"output",
-             neograph::json::array({
-                 {{"id", "rs_test_1"},
-                  {"type", "reasoning"},
-                  {"encrypted_content", kMockEncrypted},
-                  {"summary", neograph::json::array()}},
-                 {{"id", "msg_test_1"},
-                  {"type", "message"},
-                  {"status", "completed"},
-                  {"content",
-                   neograph::json::array({
-                       {{"type", "output_text"}, {"text", "回答内容"}}
-                   })},
-                  {"role", "assistant"}}
-             })                                                                        },
-            {"usage",
-             neograph::json{
-                 {"input_tokens",          10                                          },
-                 {"output_tokens",         20                                          },
-                 {"total_tokens",          30                                          },
-                 {"output_tokens_details", neograph::json{{"reasoning_tokens", 854}}} },
-            }
+             neograph::json::array(
+                 {{{"id", "rs_test_1"},
+                   {"type", "reasoning"},
+                   {"encrypted_content", kMockEncrypted},
+                   {"summary", neograph::json::array()}},
+                  {{"id", "msg_test_1"},
+                   {"type", "message"},
+                   {"status", "completed"},
+                   {"content",
+                    neograph::json::array({{{"type", "output_text"}, {"text", "回答内容"}}})},
+                   {"role", "assistant"}}}
+             )},
+            {
+             "usage", neograph::json{
+                    {"input_tokens", 10},
+                    {"output_tokens", 20},
+                    {"total_tokens", 30},
+                    {"output_tokens_details", neograph::json{{"reasoning_tokens", 854}}}
+                }, }
         };
 
         auto mc         = makeCodexCfg(baseUrl);
@@ -3539,7 +3537,7 @@ asio::awaitable<void>
             neograph::CompletionParams params2;
             params2.model    = "gemini-3.7-flash-high";
             params2.messages = {
-                {.role = "user", .content = "1+1=?"},
+                {.role = "user", .content = "1+1=?"       },
                 result.message,
                 {.role = "user", .content = "为什么？"}
             };
@@ -3547,9 +3545,9 @@ asio::awaitable<void>
             co_await provider->invoke(params2, nullptr);
             auto sent = neograph::json::parse(mock.lastRequestBody);
             XX_TEST_EXPECT_TRUE(sent.contains("input"));
-            const auto& input = sent["input"];
-            int reasoningIndex = -1;
-            int assistantIndex = -1;
+            const auto& input          = sent["input"];
+            int         reasoningIndex = -1;
+            int         assistantIndex = -1;
             for (size_t idx = 0; idx < input.size(); ++idx) {
                 const auto& item = input[idx];
                 if (item.is_object()) {
@@ -3574,12 +3572,20 @@ asio::awaitable<void>
     // 3) 测试流式响应中正确触发 TYPE_THINKING chunk 并捕获 encrypted_content
     // (载体信号在 output_item.done 时机发射: added 仅捕获不发信号)
     {
-        mock.mode = MockMode::ResponsesStreaming;
+        mock.mode      = MockMode::ResponsesStreaming;
         mock.sseChunks = {
-            MockOpenAIServer::sseData(R"({"type":"response.output_item.added","item":{"id":"rs_stream_1","type":"reasoning","encrypted_content":"enc_stream_data"}})") + "\n\n",
-            MockOpenAIServer::sseData(R"({"type":"response.output_item.done","item":{"id":"rs_stream_1","type":"reasoning","encrypted_content":"enc_stream_data","summary":[]}})") + "\n\n",
-            MockOpenAIServer::sseData(R"({"type":"response.output_text.delta","delta":"Hello world"})") + "\n\n",
-            MockOpenAIServer::sseData(R"({"type":"response.completed","response":{"status":"completed","usage":{"input_tokens":5,"output_tokens":10,"total_tokens":15,"output_tokens_details":{"reasoning_tokens":300}}}})") + "\n\n",
+            MockOpenAIServer::sseData(
+                R"({"type":"response.output_item.added","item":{"id":"rs_stream_1","type":"reasoning","encrypted_content":"enc_stream_data"}})"
+            ) + "\n\n",
+            MockOpenAIServer::sseData(
+                R"({"type":"response.output_item.done","item":{"id":"rs_stream_1","type":"reasoning","encrypted_content":"enc_stream_data","summary":[]}})"
+            ) + "\n\n",
+            MockOpenAIServer::sseData(
+                R"({"type":"response.output_text.delta","delta":"Hello world"})"
+            ) + "\n\n",
+            MockOpenAIServer::sseData(
+                R"({"type":"response.completed","response":{"status":"completed","usage":{"input_tokens":5,"output_tokens":10,"total_tokens":15,"output_tokens_details":{"reasoning_tokens":300}}}})"
+            ) + "\n\n",
         };
 
         auto mc         = makeCodexCfg(baseUrl);
@@ -3615,7 +3621,8 @@ asio::awaitable<void>
             }
         } catch (const std::exception& e) {
             XX_TEST_FAILED++;
-            TEST_FAIL << "responses encrypted thinking streaming test failed: " << e.what() << std::endl;
+            TEST_FAIL << "responses encrypted thinking streaming test failed: " << e.what()
+                      << std::endl;
         }
     }
 }
@@ -3624,38 +3631,33 @@ asio::awaitable<void>
 /// (回归测试: opencode-muse-spark / ConsoleGo 网关返回的 reasoning item 仅含
 ///  encrypted_content 无 summary, 原样回传会触发
 ///  HTTP 400 "input[N] missing required field summary")
-asio::awaitable<void>
-    test_responses_reasoning_item_missing_summary_normalized(MockOpenAIServer& mock, uint16_t port) {
+asio::awaitable<void> test_responses_reasoning_item_missing_summary_normalized(
+    MockOpenAIServer& mock,
+    uint16_t          port
+) {
     std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
     mock.mode           = MockMode::ResponsesNormal;
 
     // 上游返回的 reasoning item 不带 summary 字段 (muse / ConsoleGo 网关行为)
     mock.customResponse = neograph::json{
-        {"id",         "resp_muse_no_summary"                                      },
-        {"object",     "response"                                                  },
-        {"created_at", 1787260000                                                  },
-        {"status",     "completed"                                                 },
-        {"model",      "muse-spark-1.2-contributor"                                },
+        {"id", "resp_muse_no_summary"},
+        {"object", "response"},
+        {"created_at", 1787260000},
+        {"status", "completed"},
+        {"model", "muse-spark-1.2-contributor"},
         {"output",
-         neograph::json::array({
-             {{"id", "rs_muse_1"},
-              {"type", "reasoning"},
-              {"encrypted_content", "enc_muse_data"}},
-             {{"id", "msg_muse_1"},
-              {"type", "message"},
-              {"status", "completed"},
-              {"content",
-               neograph::json::array({
-                   {{"type", "output_text"}, {"text", "回答内容"}}
-               })},
-              {"role", "assistant"}}
-         })                                                                        },
-        {"usage",
-         neograph::json{
-             {"input_tokens",  10                                              },
-             {"output_tokens", 20                                              },
-             {"total_tokens",  30                                              }},
-        }
+         neograph::json::array(
+             {{{"id", "rs_muse_1"}, {"type", "reasoning"}, {"encrypted_content", "enc_muse_data"}},
+              {{"id", "msg_muse_1"},
+               {"type", "message"},
+               {"status", "completed"},
+               {"content", neograph::json::array({{{"type", "output_text"}, {"text", "回答内容"}}})
+               },
+               {"role", "assistant"}}}
+         )},
+        {
+         "usage", neograph::json{{"input_tokens", 10}, {"output_tokens", 20}, {"total_tokens", 30}},
+         }
     };
 
     auto mc         = makeCodexCfg(baseUrl);
@@ -3686,7 +3688,7 @@ asio::awaitable<void>
         neograph::CompletionParams params2;
         params2.model    = "muse-spark-1.2-contributor";
         params2.messages = {
-            {.role = "user", .content = "1+1=?"},
+            {.role = "user", .content = "1+1=?"       },
             result.message,
             {.role = "user", .content = "为什么？"}
         };
@@ -3696,8 +3698,7 @@ asio::awaitable<void>
         XX_TEST_EXPECT_TRUE(sent.contains("input"));
         bool foundNormalized = false;
         for (const auto& item : sent["input"]) {
-            if (item.is_object()
-                && item.value("type", std::string{}) == "reasoning"
+            if (item.is_object() && item.value("type", std::string{}) == "reasoning"
                 && item.value("encrypted_content", std::string{}) == "enc_muse_data") {
                 foundNormalized = true;
                 XX_TEST_EXPECT_TRUE(item.contains("summary"));
@@ -3730,14 +3731,17 @@ asio::awaitable<void>
             MockOpenAIServer::sseData(
                 R"({"type":"response.output_item.added","item":{"id":"rs_ds_1","type":"reasoning","status":"in_progress","encrypted_content":"enc_ds_ref","content":[],"summary":[]}})"
             ) + "\n\n",
-            MockOpenAIServer::sseData(R"({"type":"response.reasoning_text.delta","delta":"明文思考一"})")
-                + "\n\n",
-            MockOpenAIServer::sseData(R"({"type":"response.reasoning_text.delta","delta":"明文思考二"})")
-                + "\n\n",
+            MockOpenAIServer::sseData(
+                R"({"type":"response.reasoning_text.delta","delta":"明文思考一"})"
+            ) + "\n\n",
+            MockOpenAIServer::sseData(
+                R"({"type":"response.reasoning_text.delta","delta":"明文思考二"})"
+            ) + "\n\n",
             MockOpenAIServer::sseData(
                 R"({"type":"response.output_item.done","item":{"id":"rs_ds_1","type":"reasoning","status":"completed","encrypted_content":"enc_ds_ref","content":[{"type":"reasoning_text","text":"明文思考一明文思考二"}],"summary":[]}})"
             ) + "\n\n",
-            MockOpenAIServer::sseData(R"({"type":"response.output_text.delta","delta":"回答"})") + "\n\n",
+            MockOpenAIServer::sseData(R"({"type":"response.output_text.delta","delta":"回答"})")
+                + "\n\n",
             MockOpenAIServer::sseData(
                 R"({"type":"response.completed","response":{"status":"completed","usage":{"input_tokens":5,"output_tokens":10,"total_tokens":15}}})"
             ) + "\n\n",
@@ -3803,7 +3807,8 @@ asio::awaitable<void>
             MockOpenAIServer::sseData(
                 R"({"type":"response.output_item.done","item":{"id":"rs_added_only","type":"reasoning","status":"completed","summary":[]}})"
             ) + "\n\n",
-            MockOpenAIServer::sseData(R"({"type":"response.output_text.delta","delta":"回答"})") + "\n\n",
+            MockOpenAIServer::sseData(R"({"type":"response.output_text.delta","delta":"回答"})")
+                + "\n\n",
             MockOpenAIServer::sseData(
                 R"({"type":"response.completed","response":{"status":"completed","usage":{"input_tokens":5,"output_tokens":10,"total_tokens":15}}})"
             ) + "\n\n",
@@ -3897,7 +3902,7 @@ asio::awaitable<void>
     {
         auto mc         = makeCodexCfg(baseUrl);
         mc.sendThinking = true;
-        mc.extraConfig = neograph::json::parse(R"({"include":["reasoning.encrypted_content"]})");
+        mc.extraConfig  = neograph::json::parse(R"({"include":["reasoning.encrypted_content"]})");
         auto                       provider = server::OpenAIProvider::create(mc);
         neograph::CompletionParams params;
         params.model    = "gpt-5-codex";
@@ -3914,8 +3919,7 @@ asio::awaitable<void>
             XX_TEST_EXPECT_EQ(sent["include"][0].get<std::string>(), "reasoning.encrypted_content");
         } catch (const std::exception& e) {
             XX_TEST_FAILED++;
-            TEST_FAIL << "responses extraConfig.include override failed: " << e.what()
-                      << std::endl;
+            TEST_FAIL << "responses extraConfig.include override failed: " << e.what() << std::endl;
         }
     }
 }

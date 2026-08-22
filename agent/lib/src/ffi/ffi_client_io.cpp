@@ -89,16 +89,13 @@ asio::awaitable<neograph::json> FfiClientAgentIO::handleInterrupt(
 
 bool FfiClientAgentIO::hasPendingInterrupt(int64_t interruptId) const {
     return interruptId > 0
-        && currentPendingInterruptId_.load(std::memory_order_acquire) == interruptId;
+           && currentPendingInterruptId_.load(std::memory_order_acquire) == interruptId;
 }
 
 bool FfiClientAgentIO::submitInterruptResponse(int64_t interruptId, neograph::json values) {
     int64_t expected = interruptId;
-    if (!currentPendingInterruptId_.compare_exchange_strong(
-            expected,
-            0,
-            std::memory_order_acq_rel
-        )) {
+    if (!currentPendingInterruptId_
+             .compare_exchange_strong(expected, 0, std::memory_order_acq_rel)) {
         return false;
     }
     auto it = pending_.find(interruptId);
@@ -167,8 +164,8 @@ void FfiClientAgentIO::onPeerMessage(agent::WireMessage msg) {
         [this](auto&& m) {
             using T = std::decay_t<decltype(m)>;
             if constexpr (std::is_same_v<T, agent::WireInterruptRequest>) {
-                auto    ch = std::make_shared<RespChannel>(ex_, 1);
-                int64_t id = m.id;
+                auto    ch   = std::make_shared<RespChannel>(ex_, 1);
+                int64_t id   = m.id;
                 pending_[id] = ch;
                 currentPendingInterruptId_.store(id, std::memory_order_release);
 
@@ -196,11 +193,8 @@ void FfiClientAgentIO::onPeerMessage(agent::WireMessage msg) {
                 );
             } else if constexpr (std::is_same_v<T, agent::WireInterruptExpired>) {
                 int64_t expected = m.id;
-                currentPendingInterruptId_.compare_exchange_strong(
-                    expected,
-                    0,
-                    std::memory_order_acq_rel
-                );
+                currentPendingInterruptId_
+                    .compare_exchange_strong(expected, 0, std::memory_order_acq_rel);
                 auto it = pending_.find(m.id);
                 if (it != pending_.end()) {
                     it->second->close();
@@ -265,11 +259,7 @@ asio::awaitable<std::pair<bool, neograph::json>>
         }
     );
     int64_t expected = id;
-    currentPendingInterruptId_.compare_exchange_strong(
-        expected,
-        0,
-        std::memory_order_acq_rel
-    );
+    currentPendingInterruptId_.compare_exchange_strong(expected, 0, std::memory_order_acq_rel);
     pending_.erase(id);
     co_return std::make_pair(gotResp, std::move(result));
 }

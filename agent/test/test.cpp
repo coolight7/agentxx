@@ -47,8 +47,8 @@
 #include "test_subagent_bus.h"
 #include "test_summarization.h"
 #include "test_text_selection_monitor.h"
-#include "test_training.h"
 #include "test_toolcall_args.h"
+#include "test_training.h"
 #ifdef AGENTXX_BUILD_CLIENT
 #include "test_config_loader.h"
 #include "test_mermaid_state.h"

@@ -33,9 +33,11 @@ bool isEmptyResponse(const neograph::ChatCompletion& completion) {
     if (!msg.content.empty() || !msg.reasoning_content.empty() || !msg.tool_calls.empty()) {
         return false;
     }
-    return !(msg.extra.contains(AnthropicProvider::kThinkingBlocksKey)
-             && msg.extra[AnthropicProvider::kThinkingBlocksKey].is_array()
-             && !msg.extra[AnthropicProvider::kThinkingBlocksKey].empty());
+    return !(
+        msg.extra.contains(AnthropicProvider::kThinkingBlocksKey)
+        && msg.extra[AnthropicProvider::kThinkingBlocksKey].is_array()
+        && !msg.extra[AnthropicProvider::kThinkingBlocksKey].empty()
+    );
 }
 
 } // namespace
@@ -171,7 +173,8 @@ std::pair<std::string, neograph::json> AnthropicProvider::convertMessages(
             }
             j["content"] = std::move(content_arr);
             arr.push_back(std::move(j));
-        } else if (sendThinking && msg.role == "assistant" && (!msg.reasoning_content.empty() || hasThinkingBlocks(msg))) {
+        } else if (sendThinking && msg.role == "assistant"
+                   && (!msg.reasoning_content.empty() || hasThinkingBlocks(msg))) {
             neograph::json j;
             j["role"]                  = "assistant";
             neograph::json content_arr = neograph::json::array();
