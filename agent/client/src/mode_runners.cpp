@@ -398,13 +398,8 @@ static asio::awaitable<void> runRemoteCliAsync(
     util::WsClientConfig              wsCfg;
     wsCfg.recvTimeout = std::chrono::seconds{60};
 
-    auto transport = std::make_shared<agent::WsAgentIOTransport>(
-        ex,
-        std::move(url),
-        std::move(token),
-        transportCfg,
-        wsCfg
-    );
+    auto transport
+        = std::make_shared<agent::WsAgentIOTransport>(ex, url, token, transportCfg, wsCfg);
     io->setTransport(transport);
 
     XX_LOGI("======= Agentxx Remote Client (CLI, auto-reconnect) =======");

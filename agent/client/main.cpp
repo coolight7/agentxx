@@ -17,6 +17,7 @@
 #include "asio/signal_set.hpp"
 #include <cstdlib>
 #include <filesystem>
+#include <functional>
 #include <iostream>
 #include <string>
 
@@ -150,6 +151,49 @@ static std::string extractTokenFromUrl(std::string& url) {
         pos = amp + 1;
     }
     return token;
+}
+
+/// 应用各模式共享的运行时装配 (MCP / Skill / Memory / 权限 / 子代理 / 插件)
+/// - tui / cli / server / acp 模式共用: 分离进程启动 agent (server/acp) 时
+///   同样需要完整装配, 否则 agent 侧不加载插件等扩展组件
+/// - 相对路径按程序工作目录解析为绝对路径 (resolvePath 由 main 注入)
+static void applySharedRuntimeConfig(
+    std::shared_ptr<agentxx::agent::AgentConfig>&            config,
+    const YamlAppConfig&                                     yamlCfg,
+    const std::function<std::string(std::string_view path)>& resolvePath
+) {
+    // MCP 服务器 (来自 config.yaml 的 mcp, key 为命名空间)
+    config->mcpServerUrls = yamlCfg.mcpServers;
+
+    for (const auto& p : yamlCfg.skillDirPaths) {
+        config->skillDirPaths.push_back(resolvePath(p));
+    }
+    for (const auto& p : yamlCfg.memoryFilePaths) {
+        config->memoryFilePaths.push_back(resolvePath(p));
+    }
+    // CodeGraph 参数经 plugins 配置传递 (宿主不解析 args 字段语义;
+    // 所有插件统一经 path 外置指定加载)
+
+    // 权限配置 (模式 + 白/黑名单; CodeAgent 启动时按此注册文件系统读写规则)
+    config->permissionMode       = yamlCfg.permissionMode;
+    config->permissionAllowPaths = yamlCfg.permissionAllowPaths;
+    config->permissionDenyPaths  = yamlCfg.permissionDenyPaths;
+
+    // 子代理开关 (yaml `subagent.enable`, 默认 true)
+    config->enableSubagent = yamlCfg.enableSubagent;
+    // 插件配置 (yaml `plugins` 段): 相对路径按程序工作目录解析为绝对路径
+    // (与 skill/memory 一致; BaseAgent::init 按此加载, 拓扑排序见 PluginManager)
+    for (const auto& pc : yamlCfg.plugins) {
+        agentxx::agent::PluginConfig pluginCfg;
+        pluginCfg.path    = resolvePath(pc.path);
+        pluginCfg.enabled = pc.enabled;
+        pluginCfg.sides   = pc.sides;
+        pluginCfg.args    = pc.args;
+        config->plugins.push_back(std::move(pluginCfg));
+    }
+    if (!config->plugins.empty()) {
+        XX_LOGI("[Config] plugins: {}", config->plugins.size());
+    }
 }
 
 int main(int argn, char** argv) {
@@ -448,6 +492,10 @@ Options:
         applyModelToConfig(config, yamlCfg.models, yamlCfg.useModelAcp);
         applySubagentModelToConfig(config, yamlCfg.models, yamlCfg.useModelSubagent);
         applyWebSearchModelToConfig(config, yamlCfg.models, yamlCfg.useModelWebSearch);
+        // 共享运行时装配 (插件/MCP/Skill/Memory/权限/子代理): ACP 模式下 agent
+        // 运行在独立进程 (分离进程启动), 与 server/tui 模式一致需要完整装配;
+        // 曾缺失导致 acp 启动的 agent 不加载任何插件
+        applySharedRuntimeConfig(config, yamlCfg, resolvePath);
         // CodeGraph 参数经 plugins 配置传递 (宿主不解析 args 字段语义)
         auto agent = std::make_shared<agentxx::agent::CodeAgent>(config);
         asio::co_spawn(
@@ -470,38 +518,7 @@ Options:
     applySubagentModelToConfig(config, yamlCfg.models, yamlCfg.useModelSubagent);
     applyWebSearchModelToConfig(config, yamlCfg.models, yamlCfg.useModelWebSearch);
     applyAvailableModelsToConfig(config, yamlCfg.models, yamlCfg.useModelDefault);
-    // MCP 服务器 (来自 config.yaml 的 mcp, key 为命名空间)
-    config->mcpServerUrls = yamlCfg.mcpServers;
-
-    for (const auto& p : yamlCfg.skillDirPaths) {
-        config->skillDirPaths.push_back(resolvePath(p));
-    }
-    for (const auto& p : yamlCfg.memoryFilePaths) {
-        config->memoryFilePaths.push_back(resolvePath(p));
-    }
-    // CodeGraph 参数经 plugins 配置传递 (宿主不解析 args 字段语义;
-    // 所有插件统一经 path 外置指定加载)
-
-    // 权限配置 (模式 + 白/黑名单; CodeAgent 启动时按此注册文件系统读写规则)
-    config->permissionMode       = yamlCfg.permissionMode;
-    config->permissionAllowPaths = yamlCfg.permissionAllowPaths;
-    config->permissionDenyPaths  = yamlCfg.permissionDenyPaths;
-
-    // 子代理开关 (yaml `subagent.enable`, 默认 true)
-    config->enableSubagent = yamlCfg.enableSubagent;
-    // 插件配置 (yaml `plugins` 段): 相对路径按程序工作目录解析为绝对路径
-    // (与 skill/memory 一致; BaseAgent::init 按此加载, 拓扑排序见 PluginManager)
-    for (const auto& pc : yamlCfg.plugins) {
-        agentxx::agent::PluginConfig pluginCfg;
-        pluginCfg.path    = resolvePath(pc.path);
-        pluginCfg.enabled = pc.enabled;
-        pluginCfg.sides   = pc.sides;
-        pluginCfg.args    = pc.args;
-        config->plugins.push_back(std::move(pluginCfg));
-    }
-    if (!config->plugins.empty()) {
-        XX_LOGI("[Config] plugins: {}", config->plugins.size());
-    }
+    applySharedRuntimeConfig(config, yamlCfg, resolvePath);
 
     // ======================== TUI 全局设置持久化 ========================
     // 全局设置 (动画等级/日志等级等) 存于 {dataDir}/sqlite/global.db,
