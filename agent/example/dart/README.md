@@ -21,8 +21,9 @@
 # 1) 编译动态库 (若未编译)
 agent/script/windows_debug_build.bat
 
-# 2) 运行 (在 dart/ 目录)
+# 2) 在 cmd 运行 (在 dart/ 目录)
 dart run bin/agentxx_cli.dart ^
+    --dll path/to/libagentxx.dll ^
     --base-url https://api.example.com/v1 ^
     --api-key sk-xxx ^
     --model gpt-4o-mini
