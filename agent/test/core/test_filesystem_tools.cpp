@@ -1001,16 +1001,61 @@ asio::awaitable<void>
         {"output_mode",            "content"                                      },
     };
     auto result = co_await tool.execute_async(args);
-    // content 模式现在返回文本格式: file:line:整行内容 (对齐 grep -n)
-    // test2.txt 第 1 行是 "hello world", 应输出 file:1:hello world
-    if (result.find("test2.txt:1:hello world") != std::string::npos) {
+    // content 模式现在返回按文件分组的文本格式: 每文件组头 "{filepath}:" 仅出现一次,
+    // 之后每行为 "行号:整行内容" (对齐 grep -n 且减少文件路径重复)
+    // test2.txt 第 1 行是 "hello world", 应输出组头 ".../test2.txt:" 与行 "1:hello world"
+    bool hasFileHeader = result.find("test2.txt:\n") != std::string::npos;
+    bool hasMatchLine  = result.find("\n1:hello world\n") != std::string::npos;
+    // 不应再出现旧的逐行路径前缀格式 (file:line:content)
+    bool noLegacyFormat = result.find("test2.txt:1:") == std::string::npos;
+    if (hasFileHeader && hasMatchLine && noLegacyFormat) {
         g_fs_passed++;
-        TEST_PASS << "FilesystemGrepTool content mode returns file:line:content format"
+        TEST_PASS << "FilesystemGrepTool content mode returns grouped-by-file format"
                   << std::endl;
     } else {
         g_fs_failed++;
-        TEST_FAIL << "FilesystemGrepTool content mode format incorrect, got: " << result
+        TEST_FAIL << "FilesystemGrepTool content mode grouped format incorrect, got: " << result
                   << std::endl;
+    }
+    co_return;
+}
+
+asio::awaitable<void> test_grep_content_grouped_multi_files(
+    std::weak_ptr<agentxx::agent::AgentContext> agentContext
+) {
+    auto tool = agentxx::tools::FilesystemGrepTool{agentContext};
+    // 多文件 content 模式: 每个文件应有独立的组头 "{filepath}:",
+    // 且每个文件的组头仅出现一次 (减少路径重复), 各文件行归属自己的组头之下
+    auto args = neograph::json{
+        {"text_patterns_is_regex", true                                        },
+        {"text_patterns",          neograph::json::array({".*e.*"})            },
+        {"file_patterns",          neograph::json::array({testDir + "/*.txt"})},
+        {"output_mode",            "content"                                   },
+        {"max_count_per_file",     1                                           },
+    };
+    auto result = co_await tool.execute_async(args);
+
+    auto countSubstr = [](const std::string& text, std::string_view sub) -> size_t {
+        size_t count = 0;
+        for (auto pos = text.find(sub); pos != std::string::npos;
+             pos     = text.find(sub, pos + 1)) {
+            ++count;
+        }
+        return count;
+    };
+
+    // test1.txt / test2.txt 均为非空文本且含字符 'e', 各应恰好输出一个组头
+    size_t header1 = countSubstr(result, "test1.txt:\n");
+    size_t header2 = countSubstr(result, "test2.txt:\n");
+    if (header1 == 1 && header2 == 1) {
+        g_fs_passed++;
+        TEST_PASS << "FilesystemGrepTool content mode groups output per file header"
+                  << std::endl;
+    } else {
+        g_fs_failed++;
+        TEST_FAIL << "FilesystemGrepTool expected exactly one group header per file "
+                     "(test1.txt=1, test2.txt=1), got "
+                  << header1 << "/" << header2 << ", result: " << result << std::endl;
     }
     co_return;
 }
@@ -1097,11 +1142,13 @@ asio::awaitable<void>
         {"context_lines",          1                                              },
     };
     auto result = co_await tool.execute_async(args);
-    // 匹配行用 `:` 分隔, 上下文行用 `-` 分隔 (对齐 grep -C)
-    bool hasMatchLine   = result.find(":3:line3") != std::string::npos;
-    bool hasContextPrev = result.find("-2-line2") != std::string::npos;
-    bool hasContextNext = result.find("-4-line4") != std::string::npos;
-    if (hasMatchLine && hasContextPrev && hasContextNext) {
+    // 分组格式下组头 "{filepath}:" 仅一次; 匹配行用 `:` 分隔, 上下文行用 `-` 分隔
+    // (对齐 grep -C), 行前缀不再重复文件路径
+    bool hasFileHeader  = result.find("test1.txt:\n") != std::string::npos;
+    bool hasMatchLine   = result.find("\n3:line3") != std::string::npos;
+    bool hasContextPrev = result.find("\n2-line2") != std::string::npos;
+    bool hasContextNext = result.find("\n4-line4") != std::string::npos;
+    if (hasFileHeader && hasMatchLine && hasContextPrev && hasContextNext) {
         g_fs_passed++;
         TEST_PASS << "FilesystemGrepTool context_lines works" << std::endl;
     } else {
@@ -1406,6 +1453,7 @@ asio::awaitable<TestResult>
     co_await run(test_grep_text_search);
     co_await run(test_grep_regex_search);
     co_await run(test_grep_content_mode);
+    co_await run(test_grep_content_grouped_multi_files);
     co_await run(test_grep_case_insensitive);
     co_await run(test_grep_case_sensitive_default);
     co_await run(test_grep_max_count_per_file);

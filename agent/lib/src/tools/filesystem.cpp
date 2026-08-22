@@ -1596,6 +1596,62 @@ asio::awaitable<std::string> FilesystemGrepTool::execute_async(const neograph::j
             co_return filetext;
         };
 
+        /// content 模式输出辅助: 将单个文件的匹配结果以"按文件分组"格式写入输出流。
+        /// 格式设计 (减少每行的文件路径重复, 旧格式为每行重复完整路径 file:line:content):
+        ///   {filepath}:          <- 组头, 每个文件仅输出一次
+        ///   {line}:{content}     <- 匹配行 (对齐 grep -n)
+        ///   {line}-{content}     <- 上下文行 (对齐 grep -n -C)
+        ///   --                   <- 同一文件内不连续的上下文块之间 (对齐 grep -C)
+        auto appendGroupedContent = [&](std::ostringstream&        out,
+                                        const std::string&         filepath,
+                                        std::string_view           filetext,
+                                        const std::vector<size_t>& matchStarts) {
+            auto lineStarts = buildLineStarts(filetext);
+            auto fileLines  = totalLines(filetext);
+
+            // 收集需要输出的行号 (含上下文), 去重后按行号排序输出
+            std::set<size_t> matchLineSet{};   // 匹配行
+            std::set<size_t> contextLineSet{}; // 上下文行
+            for (size_t mi = 0; mi < matchStarts.size(); ++mi) {
+                size_t lineIdx = lineNumberOf(lineStarts, matchStarts[mi]);
+                matchLineSet.insert(lineIdx);
+                if (contextLines > 0) {
+                    size_t ctxStart = (lineIdx > static_cast<size_t>(contextLines))
+                                          ? lineIdx - static_cast<size_t>(contextLines)
+                                          : 0;
+                    size_t ctxEnd   = std::min(
+                        lineIdx + static_cast<size_t>(contextLines),
+                        fileLines > 0 ? fileLines - 1 : 0
+                    );
+                    for (size_t l = ctxStart; l <= ctxEnd; ++l) {
+                        contextLineSet.insert(l);
+                    }
+                }
+            }
+
+            // 合并所有需要输出的行, 按行号排序
+            std::set<size_t> allLines = contextLineSet;
+            allLines.insert(matchLineSet.begin(), matchLineSet.end());
+
+            // 文件路径作为组头仅输出一次, 行前缀不再重复完整路径
+            out << filepath << ":\n";
+            size_t prevLine = 0;
+            bool   first    = true;
+            for (size_t lineIdx : allLines) {
+                // 对齐 grep -C: 不连续的上下文块之间用 -- 分隔
+                if (!first && contextLines > 0 && lineIdx > prevLine + 1) {
+                    out << "--\n";
+                }
+                first = false;
+
+                auto lineContent = extractLine(filetext, lineStarts, lineIdx);
+                // 匹配行用 `:` 分隔, 上下文行用 `-` 分隔 (对齐 grep -n -C)
+                char sep = matchLineSet.count(lineIdx) ? ':' : '-';
+                out << (lineIdx + 1) << sep << lineContent << "\n";
+                prevLine = lineIdx;
+            }
+        };
+
         if (text_patterns_is_regex) {
             // 正则匹配: 大小写不敏感直接由 XXRegex 后端实现
             // (Hyperscan 用 HS_FLAG_CASELESS, std::regex fallback 用 icase),
@@ -1634,51 +1690,14 @@ asio::awaitable<std::string> FilesystemGrepTool::execute_async(const neograph::j
                         // files_with_matches 模式: 输出 file:match_count
                         resultStr << filepath << ":" << effectiveCount << "\n";
                     } else {
-                        // content 模式: 输出匹配整行, 格式 file:line:content (对齐 grep -n)
-                        // 构建行索引, 行号/行内容查询 O(log n)
-                        auto lineStarts = buildLineStarts(filetext);
-                        // 收集需要输出的行号 (含上下文), 去重后按行号排序输出
-                        std::set<size_t> matchLineSet;   // 匹配行
-                        std::set<size_t> contextLineSet; // 上下文行
-                        size_t           fileLines = totalLines(filetext);
-
+                        // content 模式: 输出匹配整行, 按文件分组格式 (见 appendGroupedContent,
+                        // 对齐 grep -n); 行索引构建 + 行号查询 O(log n)
+                        std::vector<size_t> matchStarts;
+                        matchStarts.reserve(effectiveCount);
                         for (size_t mi = 0; mi < effectiveCount; ++mi) {
-                            size_t lineIdx = lineNumberOf(lineStarts, matchs[mi].start);
-                            matchLineSet.insert(lineIdx);
-                            if (contextLines > 0) {
-                                size_t ctxStart = (lineIdx > static_cast<size_t>(contextLines))
-                                                      ? lineIdx - static_cast<size_t>(contextLines)
-                                                      : 0;
-                                size_t ctxEnd   = std::min(
-                                    lineIdx + static_cast<size_t>(contextLines),
-                                    fileLines > 0 ? fileLines - 1 : 0
-                                );
-                                for (size_t l = ctxStart; l <= ctxEnd; ++l) {
-                                    contextLineSet.insert(l);
-                                }
-                            }
+                            matchStarts.push_back(matchs[mi].start);
                         }
-
-                        // 合并所有需要输出的行, 按行号排序
-                        std::set<size_t> allLines = contextLineSet;
-                        allLines.insert(matchLineSet.begin(), matchLineSet.end());
-
-                        size_t prevLine = 0;
-                        bool   first    = true;
-                        for (size_t lineIdx : allLines) {
-                            // 对齐 grep -C: 不连续的上下文块之间用 -- 分隔
-                            if (!first && contextLines > 0 && lineIdx > prevLine + 1) {
-                                resultStr << "--\n";
-                            }
-                            first = false;
-
-                            auto lineContent = extractLine(filetext, lineStarts, lineIdx);
-                            // 匹配行用 `:` 分隔, 上下文行用 `-` 分隔 (对齐 grep -n -C)
-                            char sep = matchLineSet.count(lineIdx) ? ':' : '-';
-                            resultStr << filepath << sep << (lineIdx + 1) << sep << lineContent
-                                      << "\n";
-                            prevLine = lineIdx;
-                        }
+                        appendGroupedContent(resultStr, filepath, filetext, matchStarts);
                     }
                 }
             }
@@ -1710,47 +1729,14 @@ asio::awaitable<std::string> FilesystemGrepTool::execute_async(const neograph::j
                         // files_with_matches 模式: 输出 file:match_count
                         resultStr << filepath << ":" << effectiveCount << "\n";
                     } else {
-                        // content 模式: 输出匹配整行, 格式 file:line:content (对齐 grep -n)
-                        // 构建行索引, 行号/行内容查询 O(log n)
-                        auto             lineStarts = buildLineStarts(filetext);
-                        std::set<size_t> matchLineSet;
-                        std::set<size_t> contextLineSet;
-                        size_t           fileLines = totalLines(filetext);
-
+                        // content 模式: 输出匹配整行, 按文件分组格式 (见 appendGroupedContent,
+                        // 对齐 grep -n); 行索引构建 + 行号查询 O(log n)
+                        std::vector<size_t> matchStarts;
+                        matchStarts.reserve(effectiveCount);
                         for (size_t mi = 0; mi < effectiveCount; ++mi) {
-                            size_t lineIdx = lineNumberOf(lineStarts, matchs[mi].start);
-                            matchLineSet.insert(lineIdx);
-                            if (contextLines > 0) {
-                                size_t ctxStart = (lineIdx > static_cast<size_t>(contextLines))
-                                                      ? lineIdx - static_cast<size_t>(contextLines)
-                                                      : 0;
-                                size_t ctxEnd   = std::min(
-                                    lineIdx + static_cast<size_t>(contextLines),
-                                    fileLines > 0 ? fileLines - 1 : 0
-                                );
-                                for (size_t l = ctxStart; l <= ctxEnd; ++l) {
-                                    contextLineSet.insert(l);
-                                }
-                            }
+                            matchStarts.push_back(matchs[mi].start);
                         }
-
-                        std::set<size_t> allLines = contextLineSet;
-                        allLines.insert(matchLineSet.begin(), matchLineSet.end());
-
-                        size_t prevLine = 0;
-                        bool   first    = true;
-                        for (size_t lineIdx : allLines) {
-                            if (!first && contextLines > 0 && lineIdx > prevLine + 1) {
-                                resultStr << "--\n";
-                            }
-                            first = false;
-
-                            auto lineContent = extractLine(filetext, lineStarts, lineIdx);
-                            char sep         = matchLineSet.count(lineIdx) ? ':' : '-';
-                            resultStr << filepath << sep << (lineIdx + 1) << sep << lineContent
-                                      << "\n";
-                            prevLine = lineIdx;
-                        }
+                        appendGroupedContent(resultStr, filepath, filetext, matchStarts);
                     }
                 }
             }

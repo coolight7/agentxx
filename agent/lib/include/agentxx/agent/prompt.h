@@ -575,7 +575,13 @@ Examples: `/src/**/*.cpp`, `/project/*.h`, `/logs/**/*.log`.)"},
                       {"output_mode",
                        R"(Default: `files_with_matches`.
 `files_with_matches`: Return file paths with match counts (format: `file:count`).
-`content`: Return matching lines with location (format: `file:line:content`).)"},
+`content`: Return matching lines grouped by file to reduce path repetition. Each file
+starts with a header line `{filepath}:`, followed by that file's lines (`{line}:{content}`). Example:
+/path/to/file1:
+12:int foo() {
+40:int bar() {
+/path/to/file2:
+7:return 0;)"},
                       {"case_sensitive",
                        R"(Default `true`. If `false`, matching is case-insensitive (like `grep -i`).)"},
                       {"max_count_per_file",
