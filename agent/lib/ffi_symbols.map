@@ -35,6 +35,10 @@
     agentxx_list_sessions;
     agentxx_interrupt_respond;
     agentxx_drain_logs;
+    agentxx_event_queue_create;
+    agentxx_event_queue_free;
+    agentxx_event_queue_on_event;
+    agentxx_event_queue_pop;
     agentxx_get_builtin_plugins;
   local: *;
 };

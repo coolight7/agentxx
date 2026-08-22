@@ -235,6 +235,49 @@ AGENTXX_FFI_EXPORT int agentxx_interrupt_respond(
 /// {"level": "info|warn|error", "message": "..."}
 AGENTXX_FFI_EXPORT char* agentxx_drain_logs(AgentxxAgent* a, char** log);
 
+/* ==================== 异步安全事件队列 ====================
+ * 背景: on_event 在内部 client-io 线程同步回调, payload 仅回调期间有效。
+ * 部分 FFI 宿主 (如 Dart NativeCallable.listener / Python ctypes 线程转发)
+ * 无法在回调线程内同步拷贝 payload —— 对这类宿主提供队列桥接:
+ *   1. queue = agentxx_event_queue_create()
+ *   2. cb.on_event = agentxx_event_queue_on_event; cb.user_data = queue
+ *      (经 agentxx_create 注册, 桥接函数在 io 线程内同步拷贝 payload 入队)
+ *   3. 宿主线程循环 agentxx_event_queue_pop 取事件 (json 用后 agentxx_free)
+ *   4. 结束: agentxx_event_queue_free (自动丢弃积压事件)
+ * 队列有界 (防宿主停轮询时 OOM): 超限丢最旧事件并补发一条 EVT_ERROR 提示。
+ */
+
+/// 事件队列句柄 (不透明)
+typedef struct AgentxxEventQueue AgentxxEventQueue;
+
+/// 创建空事件队列 (任意线程; 失败返回 NULL)
+AGENTXX_FFI_EXPORT AgentxxEventQueue* agentxx_event_queue_create(void);
+
+/// 销毁队列并释放积压事件 (唤醒全部等待者; 之后句柄失效; 勿与 pop 并发调用)
+AGENTXX_FFI_EXPORT void agentxx_event_queue_free(AgentxxEventQueue* q);
+
+/// 内置 on_event 桥接实现 (user_data 必须为 agentxx_event_queue_create 返回值):
+/// 与 AgentxxCallbacks.on_event 签名一致, 任意线程安全, 仅拷贝不阻塞 io
+AGENTXX_FFI_EXPORT void agentxx_event_queue_on_event(
+    AgentxxEventType type,
+    const char*      payload_json,
+    void*            user_data
+);
+
+/**
+ * 取出一条事件 (阻塞至多 timeout_ms; 0 = 非阻塞仅探测):
+ * - 成功: 返回 AGENTXX_OK, *type_out 填事件种类, *json_out 为 NUL 结尾 UTF-8
+ *   payload (agentxx_malloc 分配, 宿主用后必须 agentxx_free 释放)
+ * - 队列为空且等待超时: 返回 AGENTXX_ERR_TIMEOUT (*json_out 置 NULL)
+ * - 参数非法/队列已销毁: 返回 AGENTXX_ERR_INVALID / AGENTXX_ERR_STATE
+ */
+AGENTXX_FFI_EXPORT int agentxx_event_queue_pop(
+    AgentxxEventQueue* q,
+    int32_t*           type_out,
+    char**             json_out,
+    uint32_t           timeout_ms
+);
+
 #ifdef __cplusplus
 }
 #endif

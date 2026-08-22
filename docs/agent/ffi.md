@@ -13,7 +13,7 @@
 三个核心目标:
 
 1. **导出符号收敛**: 共享库导出面从 ~17 万 C++ 符号 (默认全导出) 收敛为
-   仅 21 个顶层 C 符号, 满足 "导出符号必须是 C Api" 的硬约束 (libstdc++
+   仅 25 个顶层 C 符号, 满足 "导出符号必须是 C Api" 的硬约束 (libstdc++
    等运行库依赖仍为 DT_NEEDED, 属正常动态依赖)。
 2. **交互参考 client**: FFI 层实现一个自定义 `AgentIOBase` client 端点
    (`FfiClientAgentIO`), 经进程内 `ChannelAgentIOTransport` 与
@@ -97,3 +97,27 @@
 #define AGENTXX_ERR_OOM        -8
 #define AGENTXX_ERR_INTERNAL  -99
 ```
+
+### 4.2 异步安全事件队列 (供 Dart/ctypes 等无法同步拷贝 payload 的宿主)
+
+`on_event` 在内部 client-io 线程同步回调, payload 仅回调期间有效 —— 宿主若
+把回调转发到其他线程/事件循环 (如 Dart `NativeCallable.listener`、Python
+queue 转发), 回调返回后 payload 即失效。此类宿主改用内置队列桥接:
+
+```c
+AgentxxEventQueue* q = agentxx_event_queue_create();
+AgentxxCallbacks cb;
+cb.on_event  = agentxx_event_queue_on_event; /* 内置桥接: 同步拷贝入队 */
+cb.user_data = q;
+/* ... agentxx_create/start 后, 宿主线程序列化取事件: */
+int32_t type; char* json;
+while ((rc = agentxx_event_queue_pop(q, &type, &json, 50)) == AGENTXX_OK) {
+    /* 消费 type/json; 用后 agentxx_free(json) */
+}
+agentxx_event_queue_free(q);
+```
+
+- `agentxx_event_queue_pop`: 阻塞至多 timeout_ms; 空/超时返回
+  `AGENTXX_ERR_TIMEOUT`; 队列已销毁返回 `AGENTXX_ERR_STATE`
+- 队列有界 (16384): 宿主停轮询时丢最旧并补发一条 EVT_ERROR 提示
+- 实现: `agent/lib/src/ffi/event_queue.cpp`

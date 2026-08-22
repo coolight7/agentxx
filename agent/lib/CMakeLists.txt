@@ -341,6 +341,8 @@ if (NOT WIN32)
                  agentxx_send_input agentxx_cancel agentxx_select_model agentxx_set_permission
                  agentxx_switch_session agentxx_get_model_info agentxx_get_context_messages
                  agentxx_list_sessions agentxx_interrupt_respond agentxx_drain_logs
+                 agentxx_event_queue_create agentxx_event_queue_free
+                 agentxx_event_queue_on_event agentxx_event_queue_pop
                  agentxx_get_builtin_plugins)
       file(APPEND "${_AGENTXX_FFI_EXPORT_SYMS}" "_${_sym}\n")
     endforeach()
