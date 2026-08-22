@@ -1,0 +1,11 @@
+name: agentxx_ffi_bindings
+description: >-
+  Generated Dart FFI bindings for libagentxx C API (agent/lib/include/agentxx/ffi_api.h).
+  Regenerate with: dart run ffigen
+version: 0.1.0
+
+environment:
+  sdk: ^3.6.0
+
+dev_dependencies:
+  ffigen: ^19.0.0

@@ -1,0 +1,11 @@
+# Dart/Flutter 构建产物
+.dart_tool/
+.packages
+build/
+
+# IDE
+.idea/
+*.iml
+.vscode/
+
+# 本目录为可执行应用 (非库), 按惯例提交 pubspec.lock 以锁定依赖版本

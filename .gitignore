@@ -5,6 +5,7 @@
 __pycache__
 help-dummy.o
 .VSCodeCounter
+.dart_tool
 .env
 crash-*.log
 crash-*.dmp
