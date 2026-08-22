@@ -79,7 +79,8 @@ for abi in ${abi_list[@]}; do
         exit 1
     fi
 
-    $ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip --strip-all "$abi_build_dir/exec/libagentxx.so"
+    "$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip" --strip-unneeded "$abi_build_dir/exec/libagentxx.so"
+    find "$abi_build_dir/exec/plugins/" -type f -name "*.so" -exec "$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip" --strip-unneeded {} \;
 
     echo ""
     echo "============================================"

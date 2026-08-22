@@ -53,5 +53,5 @@ fi
 
 strip --strip-all "$build_dir/exec/agentxx_cli"
 strip --strip-all "$build_dir/exec/agentxx_benchmark"
-strip --strip-all "$build_dir/exec/libagentxx.so"
-strip --strip-all "$build_dir/exec/plugins/*/*.so"
+strip --strip-unneeded "$build_dir/exec/libagentxx.so"
+find "$build_dir/exec/plugins/" -type f -name "*.so" -exec strip --strip-unneeded {} \;
