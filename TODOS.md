@@ -10,6 +10,7 @@
 - 调整插件代码结构，增加测试、划分文件夹
 - 验证subagent、summarization
 - CI/CD
+- 插件加载 mcp、skill、memory
 
 ## 提示词优化
 - 如果编译需要配置特定参数，写成脚本或者写入到AGENTS.md

@@ -1440,8 +1440,13 @@ TestResult testTuiScroll() {
 
     {
         // 场景 18: TailThinkingMode 流式与末尾折叠预览测试
+        // 注: 本场景验证折叠形态与预览截取逻辑, 与加载动画无关 —— 先将动画
+        // 等级临时降为 Low (< High), 使运行中流式 Think 头部回退静态 +/- 标识,
+        // 断言按静态形态编写; 动画形态由场景 19 单独覆盖
         auto&      settings = TUISettings::instance();
         const auto origMode = settings.tailThinkingMode();
+        const auto origAnim = settings.animationLevel();
+        settings.setAnimationLevel(AnimationLevel::Low);
 
         // 18a: SingleLine 模式下流式 Think 显示单行折叠并截取末尾字符
         settings.setTailThinkingMode(TailThinkingMode::SingleLine);
@@ -1637,6 +1642,105 @@ TestResult testTuiScroll() {
 
         // 恢复原始设置
         settings.setTailThinkingMode(origMode);
+        settings.setAnimationLevel(origAnim);
+    }
+
+    {
+        // 场景 19: 运行中 tool/think 头部加载动画 (动画等级 >= High 时以
+        // spinner braille 点阵替代 "+/-" 静态标识, 与输入框前缀动画同款)
+        auto&      settings = TUISettings::instance();
+        const auto origAnim = settings.animationLevel();
+
+        // 19a: 动画等级 High, 流式 Think 展开态头部显示 spinner 首帧 (无静态 "-")
+        settings.setAnimationLevel(AnimationLevel::High);
+        {
+            ScrollFixture f;
+            f.sharedState.mutate([&](TUIRenderState& st) {
+                st.currentTokenRole  = TUIMessage::Role::Think;
+                st.currentTokenEpoch = 1;
+                st.currentToken      = std::make_shared<std::string>("thinking THK19A");
+                st.isStreaming       = true;
+            });
+            std::string frame = f.render();
+            // spinner 默认帧序列首帧; 测试环境无 ScreenInteractive 动画循环,
+            // 帧索引恒为首帧 "⠋"
+            XX_TEST_EXPECT_TRUE(frame.find("⠋ [Think]") != std::string::npos);
+            // 不再出现静态 +/- 标识
+            XX_TEST_EXPECT_TRUE(frame.find("- [Think]") == std::string::npos);
+            XX_TEST_EXPECT_TRUE(frame.find("+ [Think]") == std::string::npos);
+        }
+
+        // 19b: 动画等级 Ultra, 流式 Think 折叠态头部同样使用 spinner
+        settings.setAnimationLevel(AnimationLevel::Ultra);
+        {
+            ScrollFixture f;
+            f.sharedState.mutate([&](TUIRenderState& st) {
+                st.currentTokenRole  = TUIMessage::Role::Think;
+                st.currentTokenEpoch = 2;
+                st.currentToken      = std::make_shared<std::string>(
+                    "head THK19B_HEAD\ntail THK_TAIL_19B"
+                );
+                st.isStreaming = true;
+                st.pendingTokenDurationMs = 1500;
+            });
+            f.render();
+            std::string frame = f.render();
+            XX_TEST_EXPECT_TRUE(frame.find("⠋ [Think]") != std::string::npos);
+            XX_TEST_EXPECT_TRUE(frame.find("+ [Think]") == std::string::npos);
+            XX_TEST_EXPECT_TRUE(frame.find("THK_TAIL_19B") != std::string::npos);
+        }
+
+        // 19c: 运行中 tool (未完成) 折叠头部以 spinner 替代 "+"; 完成后回退
+        // 静态 "+" (消息指针变化驱动缓存失效重建)
+        settings.setAnimationLevel(AnimationLevel::High);
+        {
+            ScrollFixture f;
+            f.sharedState.mutate([&](TUIRenderState& st) {
+                auto m            = std::make_shared<TUIMessage>();
+                m->role           = TUIMessage::Role::Tool;
+                m->text           = R"({"path": "/tmp/a.txt"})";
+                m->tool           = TUIMessage::ToolData{};
+                m->tool->toolName = "agentxx_filesystem_read";
+                m->collapsed      = true;
+                st.messages.push_back(std::move(m));
+            });
+            std::string runningFrame = f.render();
+            XX_TEST_EXPECT_TRUE(runningFrame.find("⠋ [Tool]") != std::string::npos);
+            XX_TEST_EXPECT_TRUE(runningFrame.find("+ [Tool]") == std::string::npos);
+
+            // 工具完成: mutableMessage 复制消息 (指针变化 -> itemKey 失效重建),
+            // 头部回退静态标识
+            f.sharedState.mutate([&](TUIRenderState& st) {
+                auto nm                                = std::make_shared<TUIMessage>(*st.messages.back());
+                nm->tool->toolFinished                 = true;
+                nm->tool->toolResult                   = "ok";
+                st.messages.back()                     = std::move(nm);
+            });
+            std::string doneFrame = f.render();
+            XX_TEST_EXPECT_TRUE(doneFrame.find("+ [Tool]") != std::string::npos);
+            XX_TEST_EXPECT_TRUE(doneFrame.find("⠋ [Tool]") == std::string::npos);
+        }
+
+        // 19d: 动画等级 Low (<High) 时运行中 tool 保持原静态 "+" 标识
+        settings.setAnimationLevel(AnimationLevel::Low);
+        {
+            ScrollFixture f;
+            f.sharedState.mutate([&](TUIRenderState& st) {
+                auto m            = std::make_shared<TUIMessage>();
+                m->role           = TUIMessage::Role::Tool;
+                m->text           = R"({"path": "/tmp/b.txt"})";
+                m->tool           = TUIMessage::ToolData{};
+                m->tool->toolName = "agentxx_filesystem_read";
+                m->collapsed      = true;
+                st.messages.push_back(std::move(m));
+            });
+            std::string frame = f.render();
+            XX_TEST_EXPECT_TRUE(frame.find("+ [Tool]") != std::string::npos);
+            XX_TEST_EXPECT_TRUE(frame.find("⠋ [Tool]") == std::string::npos);
+        }
+
+        // 恢复原始设置
+        settings.setAnimationLevel(origAnim);
     }
 
     return TestResult{g_tui_scroll_passed, g_tui_scroll_failed};

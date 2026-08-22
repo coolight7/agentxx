@@ -27,7 +27,10 @@ InputComponent::InputComponent(TUICtx& ctx, Config config) :
     // 会话运行加载动画 (braille 旋转点阵): 运行状态跟随 isStreaming,
     // 颜色/加粗与原静态 "~" 标记一致; 动画等级不足时组件内部降级为静态帧
     SpinnerComponent::Config spinnerCfg;
-    spinnerCfg.isActive = [this] {
+    // 动画门槛: >= High 才启用旋转动画 (与消息列表运行中 tool/think 头部
+    // 加载动画同等级), 低于 High 时组件内部降级为静态首帧
+    spinnerCfg.requiredLevel = AnimationLevel::High;
+    spinnerCfg.isActive      = [this] {
         return config_.isStreaming && config_.isStreaming();
     };
     spinnerCfg.decorate = [this](Element element) {
@@ -45,7 +48,7 @@ Element InputComponent::OnRender() {
     if (config_.isAwaitingInterrupt && config_.isAwaitingInterrupt()) {
         // 闪烁为 Low 级动画, 动画等级低于 Low (如 Disabled) 时仅静态高亮
         indicator = text("!") | bgcolor(theme.errorColor) | color(Color::White) | bold;
-    } else if (config_.isStreaming && config_.isStreaming()) {
+    } else if (config_.isStreaming && config_.isStreaming() && spinner_->animationEnabled()) {
         // 流式输出: 循环加载动画 (SpinnerComponent, braille 旋转点阵);
         // 动画等级不足时组件内部自动降级为静态帧
         indicator = spinner_->Render();

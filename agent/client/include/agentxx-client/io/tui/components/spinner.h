@@ -31,7 +31,16 @@ public:
 
     /// 默认动画帧序列 (braille 旋转点阵)
     static constexpr std::array<std::string_view, 10> kDefaultFrames = {
-        "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏",
+        "⠋",
+        "⠙",
+        "⠹",
+        "⠸",
+        "⠼",
+        "⠴",
+        "⠦",
+        "⠧",
+        "⠇",
+        "⠏",
     };
 
     struct Config {
@@ -62,13 +71,13 @@ public:
     /// - false: 停止运行 (已入队的最后一次回调中发现非运行态即终止帧循环)
     void setRunning(bool running);
 
+    /// 是否允许动画 (动画等级满足要求)
+    bool animationEnabled() const;
+
 private:
 
     /// 是否处于运行态 (isActive 回调优先于内部状态)
     bool running() const;
-
-    /// 是否允许动画 (动画等级满足要求)
-    bool animationEnabled() const;
 
     Config config_;
 

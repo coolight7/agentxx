@@ -236,9 +236,12 @@
 - ⬜根据 ModelName 动态加载，没有匹配的则取用默认提示词
 
 ### 插件化支持
-- ✅c++插件支持，可对 agent、client-ui 插件化修改；详见[插件开发文档](docs/zh-cn/plugins.md); [内置插件代码实现](/agent/plugins/); [插件示例](/agent/plugins/example_plugin/)
+- ✅c/c++插件支持，可对 agent、client-ui 插件化修改；详见[插件开发文档](docs/zh-cn/plugins.md); [内置插件代码实现](/agent/plugins/); [插件示例](/agent/plugins/example_plugin/)
 - ✅可选外置编译插件为动态库，或是内嵌编译进 libagentxx
-- ✅`agentxx_javascript_engine`由 c++插件实现 js 扩展插件开发支持; [JS插件示例](/agent/plugins/example_js/)
+- 其他编程语言插件: 
+    - 仿照`agentxx_javascript_engine`实现编程语言的执行引擎, 然后新建插件项目, 指定依赖它, 运行时把代码片段发给执行引擎执行即可; 实际上不一定需要由 执行引擎插件 本身来执行代码, 也可以接收代码片段后调用系统安装的 `nodejs、python3` 等直接执行也是可以的
+    - ✅`agentxx_javascript_engine`由 c++插件实现 js 扩展插件开发支持; [JS插件示例](/agent/plugins/example_js/)
+    - ⬜`agentxx_python_engine`
 - ✅`agentxx_codegraph`
     - 分析代码符号、查找定位
     - 保存分析结果到 sqlite
@@ -256,11 +259,13 @@
 - ⬜Qwen3-TTS 文本转语音
 
 ### FFI动态库接口
-- ✅[FFI动态库符号导出](/agent/ffi/); [设计文档](/docs/agent/ffi.md); [示例](/agent/example/ffi/)
-- 生成编程语言SDK:
+- ✅[FFI动态库C-Api符号导出](/agent/ffi/); [设计文档](/docs/agent/ffi.md); [示例](/agent/example/ffi/)
+- 通过SDK, 其他编程语言可以便捷地调用libagentxx动态库创建 agent、执行会话等, 本质上SDK就是将动态库符号套一层, 方便其他编程语言调用, 在其他编程语言里直接加载动态库, 然后搜索函数符号调用也是一样的
+- 编程语言SDK:
     - ✅Flutter/Dart; [SDK](/agent/ffi/dart/); [示例](/agent/example/ffi/dart/)
     - ⬜Javascript
     - ⬜Python
+- 插件与FFI的区别在于, agentxx 加载插件，agentxx 视作主体，在一些事件点时调用插件; 而 FFI 是其他编程语言写的程序为主体, agentxx 被作为一个工具一样创建 agent、执行会话, 更多用于将 agentxx 嵌入到已有的 App 中辅助实现 AI 功能时使用
 
 ### 功能
 - ✅**操作键鼠**

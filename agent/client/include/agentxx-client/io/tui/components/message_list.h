@@ -1,5 +1,6 @@
 #pragma once
 
+#include "agentxx-client/io/tui/components/spinner.h"
 #include "agentxx-client/io/tui/framework/tui_context.h"
 #include "agentxx-client/io/tui/lazy_scrollable.h"
 #include "ftxui/component/component_base.hpp"
@@ -276,6 +277,20 @@ private:
         std::vector<std::unique_ptr<markdown::DomBuilder>>& mdBuilders
     );
 
+    /// 当前帧是否存在 "正在运行" 的条目 (runSpinner_ 的 isActive 判定):
+    /// - 流式输出中且角色为 Think (流式区 [Think] 头部)
+    /// - 存在未完成的 Tool 消息 (!toolFinished)
+    /// 仅在 UI 线程调用 (渲染/OnAnimation), 直接读取本帧快照
+    bool hasRunningToolOrThink() const;
+
+    /// 运行中条目头部的折叠标记字符 (原 "+/-" 静态标识的位置):
+    /// - 动画等级 >= High: 返回 runSpinner_ 当前动画帧 (braille 点阵, 同输入框
+    ///   前缀加载动画; 由调用方按消息角色着色并补后续文本)
+    /// - 否则: 返回静态 +/- 字符 (expanded ? '-' : '+')
+    /// 注意: 返回的 Element 需每帧重建 (见 buildMessageItem/buildStreamingHeader
+    /// 的 cacheable 处理), 缓存的旧帧快照不会随动画推进更新
+    ftxui::Element runningHeaderMark(bool expanded) const;
+
     /// 中断消息控件区 (仅 Waiting 状态; 渲染控件并把命中区域记入 interruptHits_)
     ftxui::Element buildInterruptControl(const TUIMessage& msg, size_t msgIndex);
     /// 中断消息状态行 (Confirmed/Cancelled/Expired)
@@ -296,6 +311,13 @@ private:
 
     TUICtx&                         ctx_;
     std::shared_ptr<LazyScrollable> scrollable_;
+
+    /// 运行中 tool/think 头部加载动画 (动画等级 >= High 时替代 "+/-" 静态标识):
+    /// 复用输入框前缀的 SpinnerComponent (braille 旋转点阵), requiredLevel=High;
+    /// 必须经 Add() 注册为本组件子项 —— FTXUI 的 OnAnimation 由根组件沿组件树
+    /// 转发给已注册的子组件, 未入树的组件收不到动画回调, 帧循环无法推进。
+    /// decorate 留空: 渲染处按消息角色 (tool/thinking 颜色) 在外部着色
+    std::shared_ptr<SpinnerComponent> runSpinner_;
 
     // ---- 流式增量 markdown 渲染器 ----
     // 流式输出期间避免每帧对整段累积文本全量重解析 (O(n^2) -> 稳定块缓存 O(n)):

@@ -321,6 +321,19 @@ MessageListComponent::MessageListComponent(TUICtx& ctx) :
         }
     );
     Add(scrollable_);
+
+    // 运行中 tool/think 头部加载动画 (动画等级 >= High 时替代 "+/-" 静态标识,
+    // 与输入框前缀同款 braille 旋转点阵):
+    // - requiredLevel=High: 等级不足时组件内部自动降级, 渲染分支同步回退静态标识
+    // - isActive 查询本帧快照: 是否存在运行中条目 (无运行中条目时帧循环自然终止)
+    // - 注册为子项: OnAnimation 经组件树转发至此, 帧循环才能持续推进
+    SpinnerComponent::Config spinnerCfg;
+    spinnerCfg.requiredLevel = AnimationLevel::High;
+    spinnerCfg.isActive      = [this] {
+        return ctx_.frameState && hasRunningToolOrThink();
+    };
+    runSpinner_ = std::make_shared<SpinnerComponent>(std::move(spinnerCfg));
+    Add(runSpinner_);
 }
 
 void MessageListComponent::invalidateCache() {
@@ -501,6 +514,34 @@ bool MessageListComponent::hasStreamingToken(const TUIRenderState& st) const {
     return st.isStreaming && st.currentToken && !st.currentToken->empty();
 }
 
+bool MessageListComponent::hasRunningToolOrThink() const {
+    if (!ctx_.frameState) {
+        return false;
+    }
+    const auto& st = *ctx_.frameState;
+    // 流式 think 输出中 (流式区 "[Think]" 头部正在推进)
+    if (hasStreamingToken(st) && st.currentTokenRole == TUIMessage::Role::Think) {
+        return true;
+    }
+    // 存在未完成的 Tool 消息 (串行执行下即当前运行的工具; 全量扫描仅读标志位,
+    // 每帧一次成本可忽略)
+    for (const auto& m : st.messages) {
+        if (m && m->role == TUIMessage::Role::Tool && m->tool && !m->tool->toolFinished) {
+            return true;
+        }
+    }
+    return false;
+}
+
+Element MessageListComponent::runningHeaderMark(bool expanded) const {
+    // 动画等级 >= High: spinner 当前帧 (decorate 留空, 由调用方按角色着色)
+    if (runSpinner_->animationEnabled()) {
+        return runSpinner_->Render();
+    }
+    // 等级不足: 回退原静态 +/- 标识
+    return text(expanded ? "-" : "+");
+}
+
 size_t MessageListComponent::itemCount() {
     const auto& st = *ctx_.frameState;
     if (st.messages.empty() && !hasStreamingToken(st)) {
@@ -584,6 +625,12 @@ uint64_t MessageListComponent::itemKey(size_t index) {
             const bool isTailMsg = (index + 1 == st.messages.size() && !hasStreamingToken(st));
             h                    = combine(h, isTailMsg ? 1 : 0);
         }
+        // Tool/Think 消息头部可能使用加载动画 (动画等级 >= High), 计入动画标志:
+        // 运行期间热切换动画等级时使缓存失效重建 (静态 +/- ↔ spinner 点阵),
+        // 避免缓存残留旧形态的渲染快照
+        if (m.role == TUIMessage::Role::Tool || m.role == TUIMessage::Role::Think) {
+            h = combine(h, runSpinner_->animationEnabled() ? 1ULL : 0ULL);
+        }
         return h;
     }
     // ---- 流式区 ----
@@ -601,9 +648,12 @@ uint64_t MessageListComponent::itemKey(size_t index) {
         return h;
     }
     const size_t si = index - st.messages.size();
-    // 头部项 (thinking 时长行): key 稳定, 帧间缓存
+    // 头部项 (thinking 时长行): key 稳定, 帧间缓存;
+    // 动画标志计入 key: 热切换动画等级时使缓存失效重建 (静态 "-" ↔ spinner 点阵)
     if (si < streamHeaderCount_) {
-        return combine(streamGen_, 0xFACE0000ull);
+        uint64_t h = combine(streamGen_, 0xFACE0000ull);
+        h          = combine(h, runSpinner_->animationEnabled() ? 1ULL : 0ULL);
+        return h;
     }
     const size_t bi = si - streamHeaderCount_;
     if (streamRenderer_ && bi < streamRenderer_->stableBlockCount()) {
@@ -924,7 +974,12 @@ LazyBuiltItem MessageListComponent::buildMessageItem(const TUIMessage& msg, size
     out.sourceBytes = srcBytes * 64;
     // 中断消息不缓存: 每帧重建以刷新控件 reflect 命中区域 (interruptHits_),
     // 否则缓存命中时控件 Box 丢失, 点击无法命中; 中断消息数量少, 成本可忽略
-    out.cacheable = (msg.role != TUIMessage::Role::Interrupt);
+    // 运行中的 Tool 消息在头部使用加载动画时同样不缓存: 缓存命中的旧 Element
+    // 是静止帧快照, 点阵不会随动画推进转动; 每帧重建仅此一条消息, 成本可忽略
+    // (动画等级不足时保持可缓存, 与原行为一致)
+    const bool runToolAnimating = msg.role == TUIMessage::Role::Tool && msg.tool
+                                  && !msg.tool->toolFinished && runSpinner_->animationEnabled();
+    out.cacheable = (msg.role != TUIMessage::Role::Interrupt) && !runToolAnimating;
     // markdown DomBuilder 生命周期与 Element 绑定
     // (Element 内 reflect 的链接 Box 指向 builder 内部容器)
     for (auto& b : builders) {
@@ -960,7 +1015,9 @@ LazyBuiltItem MessageListComponent::buildStreamingItem(const TUIRenderState& st)
         // 两种形态均支持点击切换 (见 OnRender 流式区命中登记)
         if (streamThinkCollapsed()) {
             Elements header;
-            header.push_back(text("+ [Think] ") | color(theme.thinkingColor));
+            // 流式输出中的 think 恒为运行态: 动画等级 >= High 时用加载动画替代 "+"
+            header.push_back(runningHeaderMark(false) | color(theme.thinkingColor));
+            header.push_back(text(" [Think] ") | color(theme.thinkingColor));
             if (durationMs > 0) {
                 header.push_back(
                     text(agentxx::util::formatDurationMilliseconds(durationMs))
@@ -995,7 +1052,9 @@ LazyBuiltItem MessageListComponent::buildStreamingItem(const TUIRenderState& st)
         } else {
             Elements lines;
             Elements header;
-            header.push_back(text("- [Think] ") | color(theme.thinkingColor));
+            // 流式输出中的 think 恒为运行态: 动画等级 >= High 时用加载动画替代 "-"
+            header.push_back(runningHeaderMark(true) | color(theme.thinkingColor));
+            header.push_back(text(" [Think] ") | color(theme.thinkingColor));
             if (durationMs > 0) {
                 header.push_back(
                     text(agentxx::util::formatDurationMilliseconds(durationMs))
@@ -1015,10 +1074,15 @@ LazyBuiltItem MessageListComponent::buildStreamingItem(const TUIRenderState& st)
 }
 
 LazyBuiltItem MessageListComponent::buildStreamingHeader(const TUIRenderState& st) {
-    // thinking 头部项: "[Think] <时长>" 单行, 可缓存 (key 稳定)
+    // thinking 头部项: "[Think] <时长>" 单行
     const auto& theme = *ctx_.theme;
     Elements    header;
-    header.push_back(text("- [Think] ") | color(theme.thinkingColor));
+    // 流式输出中的 think 恒为运行态: 动画等级 >= High 时用加载动画替代 "-"。
+    // 此时该项不可缓存 —— 缓存命中的旧 Element 是静止帧快照, 点阵不会转动;
+    // 不可缓存项由 LazyScrollable 每帧重建, spinner 帧随动画推进刷新
+    const bool animMark = runSpinner_->animationEnabled();
+    header.push_back((animMark ? runningHeaderMark(true) : text("-")) | color(theme.thinkingColor));
+    header.push_back(text(" [Think] ") | color(theme.thinkingColor));
     const TUIMessage* currentMsg = nullptr;
     for (size_t i = st.messages.size(); i > 0; --i) {
         if (st.messages[i - 1]->role == st.currentTokenRole) {
@@ -1033,8 +1097,9 @@ LazyBuiltItem MessageListComponent::buildStreamingHeader(const TUIRenderState& s
         );
     }
     LazyBuiltItem out;
-    out.element     = hbox(std::move(header));
-    out.cacheable   = true;
+    out.element = hbox(std::move(header));
+    // 使用加载动画时不可缓存 (每帧重建刷新点阵帧); 静态标识时保持可缓存
+    out.cacheable   = !animMark;
     out.sourceBytes = 0;
     return out;
 }
@@ -1476,8 +1541,10 @@ Element MessageListComponent::buildMessageBlock(
                     if (isTailMsg
                         && TUISettings::instance().tailThinkingMode()
                                == TailThinkingMode::SingleLine) {
-                        previewText
-                            = tailLinePreview(lastNonBlankLine(msg.text), static_cast<size_t>(budget));
+                        previewText = tailLinePreview(
+                            lastNonBlankLine(msg.text),
+                            static_cast<size_t>(budget)
+                        );
                     } else {
                         previewText = oneLinePreview(msg.text, static_cast<size_t>(budget));
                     }
@@ -1536,9 +1603,15 @@ Element MessageListComponent::buildMessageBlock(
             Elements lines;
             Elements header;
             {
-                header.push_back(
-                    text(fmt::format("{} [Tool] ", expanded ? "-" : "+")) | color(theme.toolColor)
-                );
+                // 头部折叠标记: 运行中且动画等级 >= High 时用加载动画 (braille
+                // 点阵, 同输入框前缀) 替代静态 +/-; 已完成/等级不足保持原标识。
+                // spinner 与 +/- 均为 1 列宽, 后续 "[Tool] " 文本与预览列宽预算不变
+                if (!finished) {
+                    header.push_back(runningHeaderMark(expanded) | color(theme.toolColor));
+                } else {
+                    header.push_back(text(expanded ? "-" : "+") | color(theme.toolColor));
+                }
+                header.push_back(text(" [Tool] ") | color(theme.toolColor));
             }
             if (!expanded) {
                 // 折叠状态, 特化渲染 (摘要内部预览按内容区剩余列宽自适应截断)
