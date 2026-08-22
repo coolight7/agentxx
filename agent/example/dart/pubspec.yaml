@@ -1,0 +1,20 @@
+name: agentxx_dart_cli
+description: >-
+  CLI agent client for libagentxx, implemented in Dart via FFI.
+  Reuses the generated bindings from agent/ffi/dart (agentxx_ffi_bindings) and
+  drives an embedded agent session through libagentxx's C API.
+version: 0.1.0
+publish_to: none
+
+environment:
+  sdk: ^3.6.0
+
+dependencies:
+  # Dart FFI 原生内存辅助 (calloc/Pointer 扩展)
+  ffi: ^2.1.0
+  # 生成的 FFI 符号定义 (agent/lib/include/agentxx/ffi_api.h → dart)
+  agentxx_ffi_bindings:
+    path: ../../ffi/dart
+
+dev_dependencies:
+  lints: ^5.0.0

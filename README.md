@@ -47,7 +47,7 @@
 - `libagentxx` Lang Binding:
     - ✅C++ (自身开发语言)
     - ✅FFI/C-Api动态库符号导出
-    - ⬜Flutter/Dart
+    - ✅Flutter/Dart
 - 生成库链接方式:
     - ✅动态链接库`libagentxx`; Debug编译时末尾添加d`libagentxxd`，统一多平台名称，仅后缀区别`.so/.dll/.dylib`.
     - ✅静态链接库`libagentxx_static`; Debug编译时末尾添加d`libagentxx_staticd`，统一多平台名称，仅后缀区别`.a/.lib`. 支持静态链接所有依赖库，合并生成独立可运行的 `agentxx_cli`, 已在 linux/win 验证. 同理可静态链接`libagentxx_static`及其静态依赖库，即可得到让自己的程序也摆脱动态库依赖
@@ -241,7 +241,7 @@
 ### FFI动态库接口
 - ✅FFI动态库符号导出控制
 - 生成编程语言SDK:
-    - ⬜Flutter/Dart
+    - ✅Flutter/Dart
     - ⬜Javascript
     - ⬜Python
 
