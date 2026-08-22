@@ -30,25 +30,5 @@ public:
     asio::awaitable<std::string> execute_async(const neograph::json& arguments) override;
 };
 
-class ExecutePythonTool : public XXToolBase {
-public:
-
-    ExecutePythonTool(std::weak_ptr<agentxx::agent::AgentContext> in_agentContext);
-
-    neograph::ChatTool get_definition() const override;
-
-    asio::awaitable<std::string> execute_async(const neograph::json& arguments) override;
-};
-
-class ExecuteJavaScriptTool : public XXToolBase {
-public:
-
-    ExecuteJavaScriptTool(std::weak_ptr<agentxx::agent::AgentContext> in_agentContext);
-
-    neograph::ChatTool get_definition() const override;
-
-    asio::awaitable<std::string> execute_async(const neograph::json& arguments) override;
-};
-
 } // namespace tools
 } // namespace agentxx

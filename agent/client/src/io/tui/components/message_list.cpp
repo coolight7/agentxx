@@ -1376,9 +1376,8 @@ static ToolHeaderSummary buildToolHeaderSummary(
         return make("FetchMD", {}, oneLinePreview(getStr("url"), limit(100)));
     }
     // execute 系列 (bash/windows/python/javascript): 统一缩略名 Bash, 内容为命令
-    if (toolName == "agentxx_execute_bash_command" || toolName == "agentxx_execute_windows_command"
-        || toolName == "agentxx_execute_python_command"
-        || toolName == "agentxx_execute_javascript_command") {
+    if (toolName == "agentxx_execute_bash_command"
+        || toolName == "agentxx_execute_windows_command") {
         return make("Bash", {}, oneLinePreview(getStr("command"), limit(100)));
     }
     // planning_write: 缩略名称 Plan, 缩略内容取 todos 格式化为一行并用 ; 隔开

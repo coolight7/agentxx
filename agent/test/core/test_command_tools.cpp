@@ -145,73 +145,6 @@ asio::awaitable<void>
     co_return;
 }
 
-asio::awaitable<void>
-    test_python_command_get_definition(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
-    auto tool = agentxx::tools::ExecutePythonTool{agentContext};
-    auto def  = tool.get_definition();
-    if (def.name == "agentxx_execute_python_command") {
-        g_cmd_passed++;
-        TEST_PASS << "ExecutePythonTool::get_definition() name correct" << std::endl;
-    } else {
-        g_cmd_failed++;
-        TEST_FAIL << "ExecutePythonTool::get_definition() name incorrect" << std::endl;
-    }
-    co_return;
-}
-
-asio::awaitable<void>
-    test_python_command_empty_command(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
-    auto tool = agentxx::tools::ExecutePythonTool{agentContext};
-    auto args = neograph::json{
-        {"command", ""}
-    };
-    auto result = co_await tool.execute_async(args);
-    if (result.find("\"error\"") != std::string::npos) {
-        g_cmd_passed++;
-        TEST_PASS << "ExecutePythonTool returns error for empty command" << std::endl;
-    } else {
-        std::cout << "[FAIL] ExecutePythonTool should return error for empty command, "
-                     "got: "
-                  << result << std::endl;
-    }
-    co_return;
-}
-
-asio::awaitable<void>
-    test_javascript_command_get_definition(std::weak_ptr<agentxx::agent::AgentContext> agentContext
-    ) {
-    auto tool = agentxx::tools::ExecuteJavaScriptTool{agentContext};
-    auto def  = tool.get_definition();
-    if (def.name == "agentxx_execute_javascript_command") {
-        g_cmd_passed++;
-        TEST_PASS << "ExecuteJavaScriptTool::get_definition() name correct" << std::endl;
-    } else {
-        g_cmd_failed++;
-        TEST_FAIL << "ExecuteJavaScriptTool::get_definition() name incorrect" << std::endl;
-    }
-    co_return;
-}
-
-asio::awaitable<void>
-    test_javascript_command_empty_command(std::weak_ptr<agentxx::agent::AgentContext> agentContext
-    ) {
-    auto tool = agentxx::tools::ExecuteJavaScriptTool{agentContext};
-    auto args = neograph::json{
-        {"command", ""}
-    };
-    auto result = co_await tool.execute_async(args);
-    if (result.find("\"error\"") != std::string::npos) {
-        g_cmd_passed++;
-        TEST_PASS << "ExecuteJavaScriptTool returns error for empty command" << std::endl;
-    } else {
-        g_cmd_failed++;
-        TEST_FAIL << "ExecuteJavaScriptTool should return error for empty "
-                     "command, got: "
-                  << result << std::endl;
-    }
-    co_return;
-}
-
 // ---- get_definition details ----
 
 asio::awaitable<void>
@@ -253,34 +186,6 @@ asio::awaitable<void>
     auto def  = tool.get_definition();
 
     XX_TEST_EXPECT_EQ(def.name, "agentxx_execute_windows_command");
-    auto props = def.parameters["properties"];
-    XX_TEST_EXPECT_TRUE(props.contains("timeout"));
-    XX_TEST_EXPECT_EQ(props["timeout"]["type"].get<std::string>(), "integer");
-
-    co_return;
-}
-
-asio::awaitable<void>
-    test_python_get_definition_properties(std::weak_ptr<agentxx::agent::AgentContext> agentContext
-    ) {
-    auto tool = agentxx::tools::ExecutePythonTool{agentContext};
-    auto def  = tool.get_definition();
-
-    XX_TEST_EXPECT_EQ(def.name, "agentxx_execute_python_command");
-    auto props = def.parameters["properties"];
-    XX_TEST_EXPECT_TRUE(props.contains("timeout"));
-    XX_TEST_EXPECT_EQ(props["timeout"]["type"].get<std::string>(), "integer");
-
-    co_return;
-}
-
-asio::awaitable<void> test_javascript_get_definition_properties(
-    std::weak_ptr<agentxx::agent::AgentContext> agentContext
-) {
-    auto tool = agentxx::tools::ExecuteJavaScriptTool{agentContext};
-    auto def  = tool.get_definition();
-
-    XX_TEST_EXPECT_EQ(def.name, "agentxx_execute_javascript_command");
     auto props = def.parameters["properties"];
     XX_TEST_EXPECT_TRUE(props.contains("timeout"));
     XX_TEST_EXPECT_EQ(props["timeout"]["type"].get<std::string>(), "integer");
@@ -408,36 +313,6 @@ asio::awaitable<void>
     auto result = co_await tool.execute_async(args);
     XX_TEST_EXPECT_TRUE(result.find("line_1") != std::string::npos);
     XX_TEST_EXPECT_TRUE(result.find("line_100") != std::string::npos);
-    co_return;
-}
-
-// ---- Python/JavaScript stub timeout param ----
-
-asio::awaitable<void>
-    test_python_timeout_param(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
-    auto tool = agentxx::tools::ExecutePythonTool{agentContext};
-    auto args = neograph::json{
-        {"command", "test"},
-        {"timeout", 30    },
-    };
-    auto result = co_await tool.execute_async(args);
-    // 修复: 未实现必须返回明确错误, 不能返回空串让 LLM 误以为执行成功
-    XX_TEST_EXPECT_TRUE(result.find("\"error\"") != std::string::npos);
-    XX_TEST_EXPECT_TRUE(result.find("not implemented") != std::string::npos);
-    co_return;
-}
-
-asio::awaitable<void>
-    test_javascript_timeout_param(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
-    auto tool = agentxx::tools::ExecuteJavaScriptTool{agentContext};
-    auto args = neograph::json{
-        {"command", "test"},
-        {"timeout", 30    },
-    };
-    auto result = co_await tool.execute_async(args);
-    // 修复: 未实现必须返回明确错误, 不能返回空串让 LLM 误以为执行成功
-    XX_TEST_EXPECT_TRUE(result.find("\"error\"") != std::string::npos);
-    XX_TEST_EXPECT_TRUE(result.find("not implemented") != std::string::npos);
     co_return;
 }
 
@@ -679,14 +554,6 @@ asio::awaitable<TestResult>
     co_await run(test_windows_definition_ps_info);
     co_await run(test_windows_execute_ps);
 
-    co_await run(test_python_command_get_definition);
-    co_await run(test_python_get_definition_properties);
-    co_await run(test_python_command_empty_command);
-    co_await run(test_python_timeout_param);
-    co_await run(test_javascript_command_get_definition);
-    co_await run(test_javascript_get_definition_properties);
-    co_await run(test_javascript_command_empty_command);
-    co_await run(test_javascript_timeout_param);
     co_return TestResult{g_cmd_passed, g_cmd_failed};
 }
 

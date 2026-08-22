@@ -403,34 +403,6 @@ The command string is passed as-is to `bash -c` (no extra escaping layer):
           },
       },
       {
-          "agentxx_execute_python_command",
-          ToolPrompt{
-              .depict = "Execute Python code and return its output.",
-              .args =
-                  {
-                      {"command", "Python code to execute."},
-                      {
-                          "timeout",
-                          R"(Default `60` seconds. Execution timeout in seconds. Set `0` for no limit.)",
-                      },
-                  },
-          },
-      },
-      {
-          "agentxx_execute_javascript_command",
-          ToolPrompt{
-              .depict = "Execute JavaScript code (Node.js) and return its output.",
-              .args =
-                  {
-                      {"command", "JavaScript code to execute."},
-                      {
-                          "timeout",
-                          R"(Default `60` seconds. Execution timeout in seconds. Set `0` for no limit.)",
-                      },
-                  },
-          },
-      },
-      {
           "agentxx_filesystem_list",
           ToolPrompt{
               .depict =

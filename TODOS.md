@@ -1,16 +1,17 @@
 # TODO
 - graph json 定义
 - BaseAgent 增加支持 usage 统计
-- 会话独立日志、yaml配置文件
-- 会话恢复时是否取原来的 配置、插件
+- 会话yaml配置文件、工作目录
 - eventBus 改为tree，命名空间使用 axx/bxx/cc
 - 支持修改上下文
 - 客户端 viewMessage 分页
-- 插件实现 execute_javascript_command
 - 调整插件代码结构，增加测试、划分文件夹
 - 验证subagent、summarization
 - CI/CD
+- 文档翻译
+- 调整 tui 渲染执行失败的 tool
 - 插件加载 mcp、skill、memory
+- 插件框架说明 必须实现的接口、可选实现的接口，插件根据说明列表决定是否启用；以适配不同 client 可能支持的接口不同
 
 ## 提示词优化
 - 如果编译需要配置特定参数，写成脚本或者写入到AGENTS.md

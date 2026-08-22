@@ -107,8 +107,6 @@
     - ✅execute_command (`同步`/`Boost.process 协程异步`执行、超时限制)
         - execute_bash_command
         - execute_windows_command (检测到 WSL 环境时，允许在 linux/wsl 直接执行 windows 命令)
-        - ⬜execute_python_command
-        - ⬜execute_javascript_command
         - 超时限制
         - 区分 stdout、stderr，自动转换输出字符编码到 Utf8
     - ✅web_search (asio 协程异步网络请求)
