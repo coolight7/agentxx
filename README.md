@@ -220,9 +220,9 @@
 - ⬜根据 ModelName 动态加载，没有匹配的则取用默认提示词
 
 ### 插件化支持
-- ✅c++插件支持，可对 agent、client-ui 插件化修改；详见[插件开发文档](docs/zh-cn/plugins.md)
+- ✅c++插件支持，可对 agent、client-ui 插件化修改；详见[插件开发文档](docs/zh-cn/plugins.md); [内置插件代码实现](/agent/plugins/); [插件示例](/agent/plugins/example_plugin/)
 - ✅可选外置编译插件为动态库，或是内嵌编译进 libagentxx
-- ✅`agentxx_javascript_engine`由 c++插件实现 js 扩展插件开发支持
+- ✅`agentxx_javascript_engine`由 c++插件实现 js 扩展插件开发支持; [JS插件示例](/agent/plugins/example_js/)
 - ✅`agentxx_codegraph`
     - 分析代码符号、查找定位
     - 保存分析结果到 sqlite
