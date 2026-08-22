@@ -1657,7 +1657,8 @@ Element MessageListComponent::buildMessageBlock(
                     if (!msg.interrupt->inputDepict.empty()) {
                         lines.push_back(hbox({
                             text("  ") | color(theme.hintColor),
-                            text(msg.interrupt->inputDepict) | color(theme.hintColor) | xflex_shrink,
+                            text(msg.interrupt->inputDepict) | color(theme.hintColor)
+                                | xflex_shrink,
                         }));
                     }
                 }
@@ -2073,19 +2074,15 @@ Element MessageListComponent::buildInterruptControl(const TUIMessage& msg, size_
             // ---- 设置项区: 每项一行, 左侧名称右侧状态指示, 两端对齐 ----
             // (后续新增设置项在此按同一样式追加)
             {
-                auto remBox = mkBox();
-                auto indicator = ui.remember ? text(" [ ✓ ] ") | color(theme.accentColor) | bold
-                                             : text(" [   ] ") | color(theme.hintColor);
-                // 两端对齐: filler() 占据中间剩余空间把指示器推到行尾;
+                auto remBox    = mkBox();
+                auto indicator = ui.remember ? text("[ ✓ ] ") | color(theme.accentColor) | bold
+                                             : text("[   ] ") | color(theme.hintColor);
                 // reflect 于整行 → 点击行内任意位置均可切换
-                auto row
-                    = hbox({
-                          text(" ◦ ") | color(theme.hintColor),
-                          text("记住此选择") | color(theme.buttonTextColor),
-                          filler(),
-                          std::move(indicator),
-                      })
-                      | reflect(*remBox);
+                auto row = hbox({
+                               std::move(indicator),
+                               text("记住此选择") | color(theme.buttonTextColor),
+                           })
+                           | reflect(*remBox);
                 hit(kHitRemember, 0, remBox);
                 rows.push_back(std::move(row));
             }
@@ -2097,9 +2094,9 @@ Element MessageListComponent::buildInterruptControl(const TUIMessage& msg, size_
             hit(kHitBoolNo, 0, denyBox);
             rows.push_back(text(" "));
             rows.push_back(hbox({
-                btn(" [ 允许 ] ", ui.selected == 0) | reflect(*allowBox),
+                btn("[ 允许 ]", ui.selected == 0) | reflect(*allowBox),
                 text("  "),
-                btn(" [ 拒绝 ] ", ui.selected == 1) | reflect(*denyBox),
+                btn("[ 拒绝 ]", ui.selected == 1) | reflect(*denyBox),
             }));
             control = vbox(std::move(rows));
         } else {
