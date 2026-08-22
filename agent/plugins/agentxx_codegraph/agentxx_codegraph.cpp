@@ -742,7 +742,87 @@ struct PluginCtx {
     std::shared_ptr<agentxx::expand::CodeGraphManager> mgr;
     std::thread                                        warmup;
     std::atomic<bool>                                  stop{false};
+    /// 项目根目录 (entry 时确定; client_attached 快照重发时携带)
+    std::string projectRoot;
 };
+
+// ---------------------------------------------------------------------------
+// 宿主约定事件响应 (client_attached): 重发当前状态快照
+//
+// 修复"status/progress 为一次性事件、先于端点订阅或客户端接入而丢失 →
+// 客户端 Info 段永久滞留 'wait for index'"的问题:
+// - 服务端在端点就绪/每次握手后发布 agentxx_host.client_attached (见
+//   SessionServerAgentIO), 本插件收到后重发完整状态快照 (幂等):
+//   status {loaded:true, project_root} + 进度快照 progress
+//   {processed==total==total_files} → 客户端渲染为 "available · N"
+// - getStatus 查 sqlite 统计 (30s LRU 缓存), 经宿主 offload 到阻塞池执行,
+//   done 回 io 线程 publish —— 不阻塞 io 线程
+// ---------------------------------------------------------------------------
+static void snapshotQueryDone(void* ud, void* result, char* error) {
+    auto* ctx   = static_cast<PluginCtx*>(ud);
+    auto* files = static_cast<int64_t*>(result);
+    if (g_host && g_host->vtable && g_host->vtable->publish) {
+        codegraph::Json j = codegraph::Json::object();
+        j["loaded"]       = true;
+        if (ctx && !ctx->projectRoot.empty()) {
+            j["project_root"] = ctx->projectRoot;
+        }
+        std::string payload = j.dump();
+        g_host->vtable->publish(
+            g_host,
+            AGENTXX_SV("agentxx_codegraph.status"),
+            agentxx_plugin_sv(payload.data(), payload.size())
+        );
+        // 进度快照: 已有索引 (total_files>0) 时发"完成"语义进度
+        // (processed==total>0 → 客户端判定索引结束, 显示 available)
+        if (files && *files > 0) {
+            codegraph::Json p = codegraph::Json::object();
+            p["processed"]    = *files;
+            p["total"]        = *files;
+            p["current_file"] = "";
+            std::string pp    = p.dump();
+            g_host->vtable->publish(
+                g_host,
+                AGENTXX_SV("agentxx_codegraph.progress"),
+                agentxx_plugin_sv(pp.data(), pp.size())
+            );
+        }
+    }
+    if (g_host && g_host->vtable && g_host->vtable->free) {
+        if (files) {
+            g_host->vtable->free(files);
+        }
+        if (error) {
+            g_host->vtable->free(error);
+        }
+    }
+}
+
+static void* snapshotQueryWork(void* ud, char** error_out) {
+    (void)error_out;
+    auto* ctx = static_cast<PluginCtx*>(ud);
+    // 结果经宿主堆分配 (offload 契约: result 须 host->alloc, done 内 free)
+    auto  files = static_cast<int64_t*>(g_host->vtable->alloc(sizeof(int64_t)));
+    if (files) {
+        *files = -1;
+    }
+    if (ctx && ctx->mgr && files) {
+        auto st = ctx->mgr->getStatus();
+        if (st.success) {
+            *files = st.total_files;
+        }
+    }
+    return files;
+}
+
+/// 订阅回调: 收到 client_attached 后经阻塞池查询状态并重发快照
+static void on_client_attached(AgentxxPluginStringView event_json, void* ud) {
+    (void)event_json;
+    if (!g_host || !g_host->vtable || !g_host->vtable->offload) {
+        return;
+    }
+    g_host->vtable->offload(g_host, snapshotQueryWork, snapshotQueryDone, ud);
+}
 
 extern "C" AGENTXX_PLUGIN_EXPORT int
     agentxx_plugin_entry(const AgentxxHost* host, void** plugin_ctx) {
@@ -806,6 +886,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
         pluginLog(4, "agentxx_codegraph: initialize failed, skip codegraph tools");
         return 0;
     }
+    ctx->projectRoot = projectRoot;
 
     // 默认提示词写入宿主 (剥离自 lib AgentPrompt; 用户 yaml 覆盖优先)
     ensureToolPromptsInHost();
@@ -831,6 +912,17 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
             fmt::format("[codegraph] background warmup index {} ({}ms)", ok ? "done" : "failed", ms)
         );
     });
+
+    // 订阅宿主约定事件 client_attached: 客户端接入/重连后重发状态快照
+    // (修复晚接入客户端滞留 "wait for index"; 见 snapshotQueryDone 注释)
+    if (!host->vtable->subscribe(
+            host,
+            AGENTXX_SV("agentxx_host.client_attached"),
+            on_client_attached,
+            ctx.get()
+        )) {
+        pluginLog(3, "agentxx_codegraph: subscribe client_attached failed");
+    }
 
     *plugin_ctx = ctx.release();
     pluginLog(2, "agentxx_codegraph loaded (8 tools)");

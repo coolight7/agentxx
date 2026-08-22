@@ -453,6 +453,17 @@ static void on_usage_enabled(AgentxxPluginStringView event_json, void* ud) {
     }
 }
 
+/// 宿主约定事件 client_attached 响应: 把 tick 计数置为"下一个 tick 即采集",
+/// 晚接入/重连的客户端 ≤500ms 内即可收到第一份数据, 无需等满 5s 周期
+/// (开关关闭时不影响 —— tick 到期后仍按 usageEnabled 跳过采集)
+static void on_client_attached(AgentxxPluginStringView event_json, void* ud) {
+    (void)event_json;
+    auto* ctx = static_cast<PluginCtx*>(ud);
+    if (ctx) {
+        ctx->tick = kUsageIntervalSec * 1000 / kUsageTickMs - 1;
+    }
+}
+
 extern "C" AGENTXX_PLUGIN_EXPORT int
     agentxx_plugin_entry(const AgentxxHost* host, void** plugin_ctx) {
     g_host = host;
@@ -496,6 +507,16 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
             ctx.get()
         )) {
         pluginLog(3, "agentxx_system_monitor: subscribe usage_enabled failed");
+    }
+    // 订阅宿主约定事件 client_attached: 客户端接入/重连后立即采集一次
+    // (晚接入客户端 ≤500ms 收到首份数据, 无需等满 5s 周期)
+    if (!host->vtable->subscribe(
+            host,
+            AGENTXX_SV("agentxx_host.client_attached"),
+            on_client_attached,
+            ctx.get()
+        )) {
+        pluginLog(3, "agentxx_system_monitor: subscribe client_attached failed");
     }
     if (host->vtable->add_timer) {
         ctx->timer = host->vtable->add_timer(host, kUsageTickMs, onUsageTick, ctx.get());
@@ -766,6 +787,37 @@ static char* sysinfo_cmd_execute(void* ud, AgentxxPluginStringView args_json, ch
         );
     }
     std::string       text = next ? "System resource info: ON" : "System resource info: OFF";
+    // 对端可用性检查: get_client_state("agentPlugins") 为服务端已加载的
+    // agent 侧插件名列表 (宿主约定事件 server_plugins / HelloAck.plugins;
+    // 空数组 = 服务端未提供, 不据此断言缺失)。agent 侧插件缺失时上行开关
+    // 同步会被静默丢弃 (采集照旧) —— 明确提示, 避免"操作成功"假象
+    {
+        char* stateJson    = g_client_host->vtable->get_client_state(g_client_host);
+        bool  agentMissing = false;
+        if (stateJson) {
+            SimpleJson st{std::string(stateJson)};
+            if (st.ok()) {
+                simdjson::ondemand::array arr;
+                if (!st.doc().at_pointer("/agentPlugins").get(arr)) {
+                    size_t n     = 0;
+                    bool   found = false;
+                    for (auto v : arr) {
+                        ++n;
+                        std::string_view sv;
+                        if (v.get_string().get(sv) == simdjson::SUCCESS
+                            && sv == "agentxx_system_monitor") {
+                            found = true;
+                        }
+                    }
+                    agentMissing = (n > 0 && !found);
+                }
+            }
+            g_client_host->vtable->free(stateJson);
+        }
+        if (agentMissing) {
+            text += " (warn: plugin missing on server side; toggle is local only)";
+        }
+    }
     const std::string out
         = fmt::format(R"({{"action":"toast","text":{},"level":0}})", clientJsonEscape(text));
     return g_client_host->vtable->strdup(out.c_str());

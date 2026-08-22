@@ -579,6 +579,11 @@ asio::awaitable<void>
                 )) {
                 it.name    = name;
                 it.depends = std::move(depends);
+            } else {
+                // 与 agent 侧行为对齐 (agent 侧会走 dlopen 失败报错):
+                // 目录存在但 plugin.yaml 缺失/非法时明确报错, 避免静默跳过
+                // 造成"为什么 client 没加载该插件"无从排查
+                XX_LOGE("[client_plugin] `{}` missing/invalid plugin.yaml, skipped", pc.path);
             }
         } else {
             it.name = pluginNameFromPath(pc.path);
@@ -785,6 +790,8 @@ std::string ClientPluginManager::clientStateJson() const {
     j["connState"]       = connState_;
     j["startupProgress"] = startupProgress_;
     j["uiCaps"]          = uiAdapter_ ? static_cast<int>(uiAdapter_->uiCaps()) : 0;
+    // 服务端已加载的 agent 侧插件名列表 (空数组 = 未知, 见成员注释)
+    j["agentPlugins"]    = serverPlugins_;
     return j.dump();
 }
 
@@ -852,6 +859,53 @@ void ClientPluginManager::onSessionSwitched(std::string_view sessionId) {
 }
 
 void ClientPluginManager::onPluginData(const agentxx::agent::WirePluginData& data) {
+    // 宿主约定事件 (server 端 SessionServerAgentIO 发布, 见该文件 kHostPluginName):
+    // server_plugins → 记录服务端已加载插件名列表, 供 get_client_state
+    // ("agentPlugins") 查询对端可用性; 其余约定事件照常向插件分发
+    if (data.plugin == "agentxx_host" && data.event == "server_plugins") {
+        try {
+            auto          j = neograph::json::parse(data.data);
+            std::vector<std::string> names;
+            if (j.contains("plugins") && j["plugins"].is_array()) {
+                for (const auto& p : j["plugins"]) {
+                    if (p.is_string()) {
+                        names.push_back(p.get<std::string>());
+                    }
+                }
+            }
+            serverPlugins_ = std::move(names);
+        } catch (...) {
+            // 载荷非法: 保留旧值 (不视为致命)
+        }
+    }
+
+    // 对端缺失提示 (每插件名一次): 无任何 client 插件订阅 EVT_PLUGIN_DATA 时,
+    // 该插件事件在本地无人消费 —— 多半是对应插件未在本端加载 (分进程/分设备
+    // 部署时单侧缺失)。仅警告一次, 不随事件频率刷屏; 正常情况 (有插件订阅,
+    // 各自按名过滤) 不受影响。
+    bool hasSubscriber = false;
+    for (const auto& [name, inst] : plugins_) {
+        (void)name;
+        for (const auto& sub : inst->subscriptions) {
+            if (sub && sub->alive && sub->event == AGENTXX_CLIENT_EVT_PLUGIN_DATA) {
+                hasSubscriber = true;
+                break;
+            }
+        }
+        if (hasSubscriber) {
+            break;
+        }
+    }
+    if (!hasSubscriber && pluginDataNoSubWarned_.insert(data.plugin).second) {
+        XX_LOGW(
+            "[client_plugin] plugin data `{}.{}` received but no client plugin subscribed "
+            "(plugin missing on this side? server-side loaded: {})",
+            data.plugin,
+            data.event,
+            serverPlugins_.empty() ? "unknown" : "yes"
+        );
+    }
+
     neograph::json j = neograph::json::object();
     j["plugin"]      = data.plugin;
     j["event"]       = data.event;

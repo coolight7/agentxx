@@ -186,6 +186,9 @@ private:
     /// - 插件 publish 的事件 (topic 约定 `{插件名}.{事件名}`) 原样转发为
     ///   WirePluginData (plugin/event/data), 宿主不解析载荷语义
     /// - 频率由插件自身控制; 客户端据此判断插件可用性并展示
+    /// - 注册成功后向总线发布宿主约定事件 `agentxx_host.client_attached`
+    ///   (见 kHostPluginName 注释), 双端插件可据此重发当前状态快照
+    ///   (修复"一次性 status 事件先于订阅发布而丢失"的滞留显示问题)
     void subscribePluginEvents();
 
     asio::any_io_executor    ex_;
@@ -217,6 +220,10 @@ private:
     bool pluginSubscribed_ = false;
     /// 事件总线前缀订阅 id (0 = 未订阅)
     size_t pluginSubId_ = 0;
+    /// 上行 WirePluginDataUp 对端缺失警告冷却表 (仅 ex_ 线程访问):
+    /// client 插件上行数据但 agent 侧未加载同名插件时, 每插件名最多每
+    /// kUplinkWarnCooldown 一次 XX_LOGW, 防御高频上行刷屏
+    std::map<std::string, std::chrono::steady_clock::time_point> uplinkWarnAt_;
 
     std::atomic<bool> running_{false};
     std::atomic<bool> turnActive_{false};

@@ -645,6 +645,39 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         }
     }
 
+    // ---- 10. 宿主约定事件 (server_plugins) + 对端缺失可观测性 ----
+    // - server_plugins → 记录服务端已加载插件列表, get_client_state 以
+    //   "agentPlugins" 暴露 (client 插件判断对端可用性的正式通道)
+    // - PLUGIN_DATA 无任何 client 订阅者: 不崩溃 (每插件名一次警告, 无法
+    //   断言日志, 仅验证路径安全)
+    {
+        agentxx::agent::WirePluginData d;
+        d.plugin = "agentxx_host";
+        d.event  = "server_plugins";
+        d.data   = R"({"plugins":["agentxx_codegraph","agentxx_system_monitor"]})";
+        mgr->onPluginData(d);
+        auto stateJson = mgr->clientStateJson();
+        XX_TEST_EXPECT_TRUE(stateJson.find("agentPlugins") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(stateJson.find("agentxx_codegraph") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(stateJson.find("agentxx_system_monitor") != std::string::npos);
+
+        // 非法载荷: 保留旧值, 不崩溃
+        agentxx::agent::WirePluginData bad;
+        bad.plugin = "agentxx_host";
+        bad.event  = "server_plugins";
+        bad.data   = "not-json";
+        mgr->onPluginData(bad);
+        auto stateJson2 = mgr->clientStateJson();
+        XX_TEST_EXPECT_TRUE(stateJson2.find("agentxx_codegraph") != std::string::npos);
+
+        // 无订阅者路径 (当前无任何已加载插件): 安全
+        agentxx::agent::WirePluginData orphan;
+        orphan.plugin = "some_plugin";
+        orphan.event  = "progress";
+        orphan.data   = R"({})";
+        mgr->onPluginData(orphan);
+    }
+
     co_return TestResult{g_client_plugin_passed, g_client_plugin_failed};
 }
 

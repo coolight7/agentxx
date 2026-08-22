@@ -21,6 +21,54 @@
 namespace agentxx {
 namespace agent {
 
+// ---------------------------------------------------------------------------
+// 宿主约定事件 (host convention events)
+//
+// 宿主以伪插件名 kHostPluginName 向总线发布约定事件, 经 subscribePluginEvents
+// 的前缀订阅原样转发为 WirePluginData 到客户端, 同时可被 agent 侧插件直接订阅
+// (subscribe 时宿主自动加 "plugin." 前缀)。用于解决跨进程/分端部署时
+// "一次性状态事件先于订阅发布而丢失" 与 "对端插件可用性不可知" 问题:
+//
+// - `agentxx_host.client_attached`: 载荷 {"sessionId":"..."}。端点就绪后发布
+//   (subscribePluginEvents 注册成功时 + handleHello 握手完成时各一次; 重复
+//   发布无害 —— 状态快照重发是幂等的)。双端插件约定: 收到后重发当前完整
+//   状态快照 (如 codegraph 的 status/progress), 使晚接入/晚订阅的客户端
+//   立即得到正确显示。
+// - `agentxx_host.server_plugins`: 载荷 {"plugins":["名",...]} (服务端已加载的
+//   agent 侧插件名列表), 随 handleHello 发布。client 插件经 EVT_PLUGIN_DATA
+//   或 get_client_state("agentPlugins") 查询对端可用性, 缺失时可降级提示,
+//   避免静默丢弃造成"操作成功"假象。
+//
+// 注意: 这两个事件会转发到客户端 (不以 "client." 开头, 不触环回跳过),
+// client 插件同样可订阅消费 (如据 server_plugins 自适应降级)。
+static constexpr std::string_view kHostPluginName    = "agentxx_host";
+static constexpr std::string_view kEvtClientAttached = "client_attached";
+static constexpr std::string_view kEvtServerPlugins  = "server_plugins";
+/// 上行 WirePluginDataUp 对端缺失警告冷却 (同一插件名两次警告最小间隔)
+static constexpr auto kUplinkWarnCooldown = std::chrono::seconds{30};
+
+/// 向总线发布宿主约定事件 (异步投递到总线 executor, 不阻塞调用方;
+/// 总线为空时跳过)。topic 组装为 "plugin.{kHostPluginName}.{event}"。
+static void publishHostEvent(
+    const std::shared_ptr<agentxx::event::EventBus>& bus,
+    std::string_view                                 event,
+    std::string                                      dataJson
+) {
+    if (!bus) {
+        return;
+    }
+    auto topic = fmt::format("plugin.{}.{}", kHostPluginName, event);
+    asio::co_spawn(
+        bus->executor(),
+        [bus, topic = std::move(topic), data = std::move(dataJson)](
+            ) -> asio::awaitable<void> {
+            co_await bus->publish(topic, data);
+            co_return;
+        },
+        asio::detached
+    );
+}
+
 SessionServerAgentIO::SessionServerAgentIO(
     asio::any_io_executor    ex,
     std::weak_ptr<BaseAgent> agent,
@@ -337,6 +385,24 @@ void SessionServerAgentIO::onPeerMessage(WireMessage msg) {
                 // 回客户端 (见该处环回跳过逻辑)
                 auto agent = agent_.lock();
                 if (agent && agent->agentContext && agent->agentContext->bus) {
+                    // 对端缺失检测: agent 侧未加载同名插件时, 上行数据发布后
+                    // 将无订阅者而静默丢弃 —— 按插件名冷却限频警告, 避免静默
+                    // 丢数据造成"操作成功"假象 (如 client /sysinfo 开关同步)
+                    if (agent->agentContext->pluginManager
+                        && !agent->agentContext->pluginManager->find(m.plugin)) {
+                        auto now  = std::chrono::steady_clock::now();
+                        auto& at  = uplinkWarnAt_[m.plugin];
+                        if (at < now - kUplinkWarnCooldown) {
+                            at = now;
+                            XX_LOGW(
+                                "[session_ctrl] WirePluginDataUp from client: agent-side plugin "
+                                "`{}` not loaded on server (event `{}.{}`, data will be dropped)",
+                                m.plugin,
+                                m.plugin,
+                                m.event
+                            );
+                        }
+                    }
                     auto bus   = agent->agentContext->bus;
                     auto topic = "plugin.client." + m.plugin + "." + m.event;
                     auto data  = m.data;
@@ -405,11 +471,20 @@ void SessionServerAgentIO::handleHello(const WireHello& hello, std::vector<std::
     // 先发送 HelloAck 再重放: 客户端 connect() 握手循环会丢弃 HelloAck 之前的消息,
     // 若先重放后 HelloAck, 全量 Sync/增量 Delta 会被客户端丢弃 → 重连后历史丢失。
     // HelloAck 之后发送的重放消息经客户端 recvQueue 缓冲, 由 runTransportLoop 正常处理。
+    // ack.plugins: 服务端已加载的 agent 侧插件名列表 (client 插件判断对端
+    // 可用性的正式通道; 与下方 server_plugins 约定事件二选一消费均可)
+    std::vector<std::string> loadedPlugins;
+    if (auto agent = agent_.lock(); agent && agent->agentContext && agent->agentContext->pluginManager) {
+        for (const auto& p : agent->agentContext->pluginManager->list()) {
+            loadedPlugins.push_back(p.name);
+        }
+    }
     sendToPeer(WireHelloAck{
         .ok        = true,
         .sessionId = config_.sessionId,
         .tailHash  = std::move(tailHash),
         .models    = std::move(models),
+        .plugins   = std::move(loadedPlugins),
     });
 
     for (const auto& d : replayDeltas) {
@@ -423,6 +498,30 @@ void SessionServerAgentIO::handleHello(const WireHello& hello, std::vector<std::
 
     for (auto& req : pendingInterrupts) {
         sendToPeer(std::move(req));
+    }
+
+    // 宿主约定事件 (见文件头 kHostPluginName 注释):
+    // - server_plugins: 同 ack.plugins 的约定事件形态 (供已运行的 client 插件
+    //   经 EVT_PLUGIN_DATA 订阅消费, 不依赖握手字段)
+    // - client_attached: 每次连接握手后重发一次 (重连/同会话新客户端也能
+    //   获得状态快照; 与 subscribePluginEvents 处的发布重复无害)
+    if (auto agent = agent_.lock(); agent && agent->agentContext) {
+        auto pluginNames = neograph::json::array();
+        if (agent->agentContext->pluginManager) {
+            for (const auto& p : agent->agentContext->pluginManager->list()) {
+                pluginNames.push_back(p.name);
+            }
+        }
+        publishHostEvent(
+            agent->agentContext->bus,
+            kEvtServerPlugins,
+            neograph::json{{"plugins", pluginNames}}.dump()
+        );
+        publishHostEvent(
+            agent->agentContext->bus,
+            kEvtClientAttached,
+            fmt::format(R"({{"sessionId":"{}"}})", config_.sessionId)
+        );
     }
 }
 
@@ -559,6 +658,10 @@ void SessionServerAgentIO::subscribePluginEvents() {
         }
     );
     pluginSubscribed_ = true;
+    // 发布宿主约定事件 client_attached: 双端插件据此重发当前状态快照,
+    // 修复"status 等一次性事件先于本订阅发布而丢失 → 客户端滞留初始占位"
+    // 的问题 (晚创建的控制器/晚接入的客户端由此获得快照)
+    publishHostEvent(bus, kEvtClientAttached, fmt::format(R"({{"sessionId":"{}"}})", config_.sessionId));
 }
 
 // ---------------------------------------------------------------------------

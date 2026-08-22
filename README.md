@@ -66,7 +66,7 @@
 | **Linux** | 13.3M | 17.8M | GCC 16.1.0 · x86_64 · -O3 · --strip-all | 打包时建议带上 libstdc++.so.6,libgcc_s.so.1 |
 | **Android** | - | 13.2M | NDK-r29 · Clang 21.0.0 · android-21-arm64-v8a · -O3 · --strip-all | 打包建议带上 libc++.so |
 
-- 插件动态库文件体积:
+- 内置插件动态库文件体积:
 
 | Plugin | Windows/.dll | Linux/.so | TIP |
 |---|---|---|---|

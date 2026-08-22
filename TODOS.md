@@ -11,6 +11,7 @@
 - tui 权限渲染
 - 验证subagent、summarization
 - CI/CD
+- 优化 grep 的结果，减少文件路径重复
 
 ## 提示词优化
 - 如果编译需要配置特定参数，写成脚本或者写入到AGENTS.md

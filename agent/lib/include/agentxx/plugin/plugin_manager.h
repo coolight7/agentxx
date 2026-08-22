@@ -282,9 +282,14 @@ public:
     /// 加载原生 C++ 插件动态库 (io 线程调用; dlopen 卸载到线程池执行)
     /// - cfg: 插件配置 (yaml `plugins` 条目; 传 args 给插件, 不解析字段语义);
     ///   为 nullptr 时 args 为空对象 (测试/直连路径)
+    /// - allowClientOnlySkip: sides==Auto 时无 agent 入口视为纯 client 插件,
+    ///   跳过并警告 (而非报错); 显式 sides==agent 的加载保持错误
     /// - 返回插件实例; 加载失败返回 nullptr (错误记日志)
-    asio::awaitable<std::shared_ptr<PluginInstance>>
-        loadNativeAsync(std::string path, const agentxx::agent::PluginConfig* cfg = nullptr);
+    asio::awaitable<std::shared_ptr<PluginInstance>> loadNativeAsync(
+        std::string                         path,
+        const agentxx::agent::PluginConfig* cfg                = nullptr,
+        bool                                allowClientOnlySkip = false
+    );
 
     /// 加载内置插件 (编译进 libagentxx, 无动态库文件; io 线程调用)
     /// - 仅当同名插件已内置 (agentxx_get_builtin_plugins 注册表) 时可用;
@@ -334,8 +339,14 @@ public:
     /// - cfg: 插件配置 (yaml `plugins` 条目; args 随加载直接传给插件实例,
     ///   不再事后按名回查配置 —— manifest name 与目录/文件名不一致时也能
     ///   正确拿到 args); 为 nullptr 时 args 为空对象
-    asio::awaitable<std::shared_ptr<PluginInstance>>
-        loadPluginAsync(std::string path, const agentxx::agent::PluginConfig* cfg = nullptr);
+    /// - allowClientOnlySkip: sides==Auto 时无 agent 入口视为纯 client 插件,
+    ///   跳过并警告 (与 client 侧 Auto 无 client 入口静默跳过对称);
+    ///   显式 sides==agent 的加载缺失入口仍为错误
+    asio::awaitable<std::shared_ptr<PluginInstance>> loadPluginAsync(
+        std::string                         path,
+        const agentxx::agent::PluginConfig* cfg                 = nullptr,
+        bool                                allowClientOnlySkip = false
+    );
 
     /// 同步卸载全部插件 (AgentContext 析构前调用, 断开中间件↔实例循环引用)
     /// - 按依赖图逆序 (先子后父): 脚本插件先卸载, 引擎插件最后 (脚本插件

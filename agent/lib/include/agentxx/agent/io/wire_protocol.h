@@ -403,7 +403,8 @@ inline neograph::json makeHelloAck(
     bool                            ok,
     std::string_view                sessionId,
     std::string_view                tailHash,
-    const std::vector<std::string>& models
+    const std::vector<std::string>& models,
+    const std::vector<std::string>& plugins = {}
 ) {
     neograph::json j = {
         {"type",      MsgType::HelloAck},
@@ -415,6 +416,11 @@ inline neograph::json makeHelloAck(
     }
     if (!models.empty()) {
         j["models"] = models;
+    }
+    // 服务端已加载插件名列表 (client 插件据此判断对端可用性); 空时不携带
+    // (兼容旧客户端: 缺字段按"服务端未提供"处理)
+    if (!plugins.empty()) {
+        j["plugins"] = plugins;
     }
     return j;
 }

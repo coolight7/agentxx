@@ -442,7 +442,7 @@ std::string WsAgentIOTransport::serialize(const WireMessage& msg) {
             if constexpr (std::is_same_v<T, WireHello>) {
                 return io::makeHello(m.sessionId, m.token, m.lastSeq, m.tailHash).dump();
             } else if constexpr (std::is_same_v<T, WireHelloAck>) {
-                return io::makeHelloAck(m.ok, m.sessionId, m.tailHash, m.models).dump();
+                return io::makeHelloAck(m.ok, m.sessionId, m.tailHash, m.models, m.plugins).dump();
             } else if constexpr (std::is_same_v<T, WireUserInput>) {
                 return io::makeUserInput(m.sessionId, m.text, m.model).dump();
             } else if constexpr (std::is_same_v<T, WireCancel>) {
@@ -585,6 +585,14 @@ std::optional<WireMessage> WsAgentIOTransport::deserialize(std::string_view json
             for (const auto& m : j["models"]) {
                 if (m.is_string()) {
                     ack.models.push_back(m.get<std::string>());
+                }
+            }
+        }
+        // 服务端已加载插件名列表 (旧版服务端不携带 → 保持空数组)
+        if (j.contains("plugins") && j["plugins"].is_array()) {
+            for (const auto& p : j["plugins"]) {
+                if (p.is_string()) {
+                    ack.plugins.push_back(p.get<std::string>());
                 }
             }
         }

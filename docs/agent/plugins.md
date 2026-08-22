@@ -638,6 +638,35 @@ client 插件 send_plugin_data("rebuild_request", {...})
   → 环回防护: "plugin.client." 前缀事件不转发回客户端 (subscribePluginEvents 跳过)
 ```
 
+#### 7.3.1 宿主约定事件 (host convention events, 2026-08)
+
+跨进程/分设备部署时, 插件的 client 端与 agent 端可能只有一侧加载 (另一侧未编译/
+未配置/版本不同)。宿主以伪插件名 `agentxx_host` 发布两个约定事件, 用于状态快照
+与对端可用性检测, 双向通道对缺失对端的行为由"静默丢弃"变为可观测:
+
+| 事件 (topic `plugin.agentxx_host.{事件}`) | 载荷 | 发布时机 | 用途 |
+|------|------|---------|------|
+| `client_attached` | `{"sessionId":"..."}` | subscribePluginEvents 注册成功时 + 每次 handleHello 握手完成后 (重复发布无害, 快照重发幂等) | 双端插件收到后**重发当前完整状态快照** —— 修复"status 等一次性事件先于端点订阅/客户端接入而丢失 → 客户端 UI 永久滞留初始占位 (如 codegraph 'wait for index')" |
+| `server_plugins` | `{"plugins":["名",...]}` | handleHello 握手完成后 (与 HelloAck.plugins 同数据的事件形态) | client 插件查询服务端已加载的 agent 侧插件列表, 对端缺失时降级提示 |
+
+- 两个事件不以 `client.` 开头, 会正常转发到客户端 (client 插件同样可订阅消费,
+  如据 `server_plugins` 自适应降级)
+- **单侧缺失行为** (此前完全静默): server 收到 `WirePluginDataUp` 但 agent 侧无
+  同名插件 → 每插件名冷却限频 `XX_LOGW`; client 收到 `WirePluginData` 但本端无
+  任何插件订阅 EVT_PLUGIN_DATA → 每插件名一次 `XX_LOGW`
+- **对端可用性查询**: `get_client_state` 返回新增字段 `agentPlugins` (数组;
+  空 = 服务端未提供该信息, 不得据此断言"未加载"); 参考实现: system_monitor
+  `/sysinfo` 在 agent 侧插件缺失时 toast 警告"开关仅本地生效"
+
+#### 7.3.2 部署矩阵 (分进程/分设备时的预期行为)
+
+| 部署情形 | 行为 |
+|------|------|
+| 双端均加载同一双端插件 | 完整功能 (工具 + UI + 跨端互通) |
+| 仅 server 加载 (client 未装/未配) | 工具可用; 无对应 UI; server 日志提示上行数据无消费者 (若有), client 日志提示收到的插件事件无订阅者 |
+| 仅 client 加载 | UI 可注册但数据源缺失 (周期型事件自愈为空态); 上行操作 (如 /sysinfo) 经 agentPlugins/toast 明确提示"仅本地生效"; server 日志警告上行被丢弃 |
+| 两端都加载但配置不同 | 各端独立生效 (args 不跨端同步); 状态以 agent 侧为准经事件同步 |
+
 ### 7.4 线程模型
 
 | 线程 | 职责 | 插件可见性 |
@@ -678,7 +707,7 @@ typedef struct AgentxxClientPluginInfo {
 | 输入扩展 | `register_command` / `unregister_command` (execute 返回动作 JSON) |
 | 交互原语 | `show_toast` |
 | 事件订阅 | `subscribe` / `unsubscribe` (卸载自动退订) |
-| 会话上下文 | `get_client_state` ({"sessionId","connState","model","models","isStreaming","uiCaps"}) |
+| 会话上下文 | `get_client_state` ({"sessionId","connState","model","models","isStreaming","uiCaps","agentPlugins"}) |
 | 会话操作 | `send_user_input` (与用户输入同排队语义) / `request_cancel` |
 | 跨端数据 | `send_plugin_data` (client → agent, topic `client.{插件名}.{事件名}`) |
 | 自描述 | `get_own_info` / `get_plugin_args` |
@@ -968,6 +997,16 @@ plugins/
    `json_escape` 的返回值 (带引号的 JSON 字面量) 嵌入模板 `{}` 产生非法 JSON
    (`"text":"Turns: "1""`), 宿主解析失败静默丢弃 (Info 段落恒为空); 改为
    整段文本放入 escape 调用。
+9. **跨端单侧缺失兼容与可观测性 (2026-08, 见 §7.3.1/§7.3.2)**:
+   - 宿主约定事件 `agentxx_host.client_attached` / `server_plugins` (状态快照
+     重发 + 对端插件列表); codegraph/system_monitor 订阅 client_attached
+     重发/加速首份数据
+   - HelloAck 增加 `plugins` 字段; get_client_state 增加 `agentPlugins`
+   - 上行 WirePluginDataUp 缺对端插件 → 冷却限频 WARN; 下行 PLUGIN_DATA 无
+     client 订阅者 → 每插件名一次 WARN
+   - agent 侧 sides=Auto 无入口降级 WARN 跳过 (纯 client 插件误配不再报错;
+     显式 sides=agent 仍为错误)
+   - client 侧目录 manifest 缺失/非法补 XX_LOGE (原静默跳过)
 - **LLM 请求侧工具 schema 静态性**: 原稿只改造了 `toolcall.cpp` 执行侧查表, 但 `ModelCallWrapNode::build_params` 每轮从静态 `tools_` 组装工具定义发给 LLM —— 若不追加插件工具, 模型永远看不到新工具。实现中在 build_params 经 `ToolRegistry::appendDefinitions` 追加 (热注册后下一轮 modelcall 即对模型可见)。
 - **执行中工具悬垂**: 原稿靠插件 inflight 计数, 实现中 `ToolRegistry::find` 返回 shared_ptr 保活 (与 execTool 的裸指针路径并存, 插件工具经 shared_ptr 传入), 双保险。
 - **注册时序**: dlopen 在阻塞线程池, 但 entry 的注册动作必须回到 io 线程 (无锁模型); `loadNativeAsync` 在 io 线程协程内完成 dlopen (卸载到线程池) + entry 同步调用。

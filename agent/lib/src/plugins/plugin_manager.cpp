@@ -1792,7 +1792,11 @@ static const AgentxxBuiltinPluginInfo* findBuiltinPlugin(std::string_view name) 
 }
 
 asio::awaitable<std::shared_ptr<PluginInstance>>
-    PluginManager::loadNativeAsync(std::string path, const agentxx::agent::PluginConfig* cfg) {
+PluginManager::loadNativeAsync(
+    std::string                         path,
+    const agentxx::agent::PluginConfig* cfg,
+    bool                                allowClientOnlySkip
+) {
     auto ctx = agentContext_.lock();
     if (!ctx || !ctx->threadPool) {
         XX_LOGE("PluginManager: agent context not ready");
@@ -1853,12 +1857,24 @@ asio::awaitable<std::shared_ptr<PluginInstance>>
         NativeLoader::sym(handle, AGENTXX_PLUGIN_SYMBOL_ENTRY, err)
     );
     if (!entry) {
-        XX_LOGE(
-            "Plugin `{}` missing entry symbol `{}`: {}",
-            path,
-            AGENTXX_PLUGIN_SYMBOL_ENTRY,
-            err
-        );
+        if (allowClientOnlySkip) {
+            // sides==Auto: 无 agent 入口视为纯 client 插件, 跳过并警告
+            // (与 client 侧 Auto 无 client 入口静默跳过对称; 显式
+            // sides==agent 的加载缺失入口仍为错误 —— 配置写明了期望)
+            XX_LOGW(
+                "Plugin `{}` has no agent entry `{}`, skipped on agent side "
+                "(client-only plugin? check sides config)",
+                path,
+                AGENTXX_PLUGIN_SYMBOL_ENTRY
+            );
+        } else {
+            XX_LOGE(
+                "Plugin `{}` missing entry symbol `{}`: {}",
+                path,
+                AGENTXX_PLUGIN_SYMBOL_ENTRY,
+                err
+            );
+        }
         NativeLoader::close(handle);
         co_return nullptr;
     }
@@ -2450,7 +2466,11 @@ bool PluginManager::checkDependencies(
 }
 
 asio::awaitable<std::shared_ptr<PluginInstance>>
-    PluginManager::loadPluginAsync(std::string path, const agentxx::agent::PluginConfig* cfg) {
+    PluginManager::loadPluginAsync(
+    std::string                         path,
+    const agentxx::agent::PluginConfig* cfg,
+    bool                                allowClientOnlySkip
+) {
     namespace fs = std::filesystem;
 
     // 显式内置路径 (builtin://<插件名>): 直接从内置注册表加载, 不解析文件
@@ -2486,7 +2506,7 @@ asio::awaitable<std::shared_ptr<PluginInstance>>
         auto            entryPath = resolvePluginEntryPath(fs::path(path), entry);
         std::error_code ec2;
         if (fs::exists(entryPath, ec2)) {
-            auto inst = co_await loadNativeAsync(std::move(entryPath), cfg);
+            auto inst = co_await loadNativeAsync(std::move(entryPath), cfg, allowClientOnlySkip);
             if (inst) {
                 inst->depends         = std::move(depends);
                 inst->optionalDepends = std::move(optionalDepends);
@@ -2514,7 +2534,7 @@ asio::awaitable<std::shared_ptr<PluginInstance>>
             );
         }
         // 非内置模式: 保持原行为 (loadNativeAsync 报告 dlopen 失败)
-        co_return co_await loadNativeAsync(std::move(entryPath), cfg);
+        co_return co_await loadNativeAsync(std::move(entryPath), cfg, allowClientOnlySkip);
     }
 
     // ---- 文件: 视为原生库路径 ----
@@ -2528,7 +2548,7 @@ asio::awaitable<std::shared_ptr<PluginInstance>>
             co_return co_await loadBuiltinAsync(builtinName, std::move(path), {}, {}, cfg);
         }
     }
-    co_return co_await loadNativeAsync(std::move(path), cfg);
+    co_return co_await loadNativeAsync(std::move(path), cfg, allowClientOnlySkip);
 }
 
 asio::awaitable<void>
@@ -2574,7 +2594,11 @@ asio::awaitable<void>
     auto ordered = topoSortPlugins(std::move(items));
 
     for (const auto& item : ordered) {
-        co_await loadPluginAsync(item.path, item.cfg);
+        // sides==Auto 的配置项: 无 agent 入口时视为纯 client 插件跳过并警告
+        // (显式 sides==agent 缺入口仍为错误; sides==client 已在上方过滤)
+        bool allowClientOnly
+            = item.cfg && item.cfg->sides == agentxx::agent::PluginSide::Auto;
+        co_await loadPluginAsync(item.path, item.cfg, allowClientOnly);
     }
 }
 

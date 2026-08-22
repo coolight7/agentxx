@@ -28,10 +28,13 @@ struct WireHello {
 };
 
 struct WireHelloAck {
-    bool                     ok = false;
-    std::string              sessionId;
-    std::string              tailHash;
+    bool        ok = false;
+    std::string sessionId;
+    std::string tailHash;
     std::vector<std::string> models;
+    /// 服务端已加载的 agent 侧插件名列表 (供 client 插件判断对端可用性;
+    /// 旧版服务端不携带该字段 → 反序列化为空数组, 客户端按"未知"处理)
+    std::vector<std::string> plugins;
 };
 
 struct WireUserInput {

@@ -12,6 +12,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <set>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -273,7 +274,10 @@ public:
     // ==================== 会话上下文 (io 线程) ====================
 
     /// 当前 client 状态 JSON (get_client_state 数据源):
-    /// {"sessionId","connState","startupProgress","uiCaps"}
+    /// {"sessionId","connState","startupProgress","uiCaps","agentPlugins"}
+    /// - agentPlugins: 服务端已加载的 agent 侧插件名列表 (来自宿主约定事件
+    ///   server_plugins / WireHelloAck.plugins); 空数组 = 未知 (旧版服务端
+    ///   未提供), 插件不得据此断言"对端未加载"
     std::string clientStateJson() const;
 
     // ==================== io 线程投递 ====================
@@ -399,6 +403,16 @@ private:
     std::string sessionId_ = "session";
     std::string connState_ = "connecting";
     std::string startupProgress_;
+
+    /// 服务端已加载的 agent 侧插件名列表 (io 线程写读): 来自宿主约定事件
+    /// `agentxx_host.server_plugins` (WirePluginData); 空数组 = 未知 (旧版
+    /// 服务端未提供)。client 插件经 get_client_state("agentPlugins") 查询,
+    /// 对端缺失时可降级提示, 避免上行数据被静默丢弃的"操作成功"假象
+    std::vector<std::string> serverPlugins_;
+    /// PLUGIN_DATA 无订阅者警告去重 (仅 io 线程; 每插件名只警告一次):
+    /// 收到 WirePluginData 但无任何 client 插件订阅 EVT_PLUGIN_DATA 时,
+    /// 多半是对端插件未在本地加载 —— 提示一次便于排查, 不随事件频率刷屏
+    std::set<std::string> pluginDataNoSubWarned_;
 
     asio::any_io_executor ioExecutor_{};
     std::thread::id       ioThreadId_{};
