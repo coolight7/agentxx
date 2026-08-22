@@ -1,4 +1,4 @@
-# Agentxx 插件系统设计方案
+# Agentxx 插件设计
 
 > 待实现: Wire 远程热管理 / TUI 插件管理面板 / 签名校验
 > 关联: [design.md](design.md)

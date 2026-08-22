@@ -1,4 +1,5 @@
-# Agentxx 设计文档
+# Agentxx 整体设计文档
+> 相关文档: [design.md](design.md) (主程序架构) · [plugins.md](plugins.md) (纯 C ABI 插件范式) · [ffi.md](ffi.md) (FFI 接口设计)
 
 ## 目录
 
