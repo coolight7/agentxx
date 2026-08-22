@@ -447,7 +447,7 @@ std::string b64 = agentxx::util::base64Encode(sv);  // 静态链入本插件副�
 - 全局唯一; 挂在 `AgentContext` (`pluginManager` 成员, `BaseAgent::init` 装配)
 - 所有插件注册/注销/启停操作在 io 线程串行执行 (满足 `assertIoThread` 无锁模型); 非 io 线程 (JS 线程/宿主线程池) 经 `setIoExecutor` 装配的 executor `postToIo`/`ioCallSync` 投递回 io 线程同步等待
 - dlopen + entry 卸载到 `blockingPool` (异步), entry 内的注册动作由 vtable 内部自动回到 io 线程
-- 轮次边界: `runConversationTurnAsync` 每轮开始 `flushPendingCleanup` (异常路径残留自愈) + `onTurnBegin`, 轮末 `onTurnEnd`; `hasRunningTurn()` 决定 disable 立即/延迟生效
+- 轮次边界: `runTurnAsync` 每轮开始 `flushPendingCleanup` (异常路径残留自愈) + `onTurnBegin`, 轮末 `onTurnEnd`; `hasRunningTurn()` 决定 disable 立即/延迟生效
 
 ---
 
@@ -708,14 +708,14 @@ typedef struct AgentxxClientPluginInfo {
 
 ## 8. 内置插件清单
 
-> 全部经 yaml `plugins` 段 path 配置加载 (不区分内置/外置, 无自动加载); 插件动态库输出到 `AGENTXX_EXEC_INSTALL_PREFIX` (与 agentxx_cli/agentxx_test 同目录)。
+> 全部经 yaml `plugins` 段 path 配置加载 (不区分内置/外置, 无自动加载); 插件动态库输出到 `{AGENTXX_EXEC_INSTALL_PREFIX}/plugins/<插件名>/` (与 agentxx_cli/agentxx_test 同级 exec 目录下按插件名分目录; 各 CMakeLists 已按配置统一输出路径, 多配置生成器不再产生 Debug/ 等子目录)。
 
 | 插件 | 目录 | 说明 |
 |------|------|------|
 | example_plugin | `agent/plugins/example_plugin/` | 示例插件 (双端): 3 工具 (echo/caller 互调/sleep 慢工具) + agent_start 钩子 + 事件订阅 + 能力声明 + client 入口 (状态栏/面板/Info 段落/命令/事件/跨端) |
 | example_js | `agent/plugins/example_js/` | JS 示例插件 (C++ 壳 + plugin.js): 4 工具 (同步/async Promise/JS 内互调/宿主互调) + 钩子 + 事件订阅 + 互查 + 顶层异步初始化; depends: agentxx_javascript_engine |
 | agentxx_javascript_engine | `agent/plugins/agentxx_javascript_engine/` | QuickJS 引擎插件 (链接 libqjs.a): 注册能力 `interpreter.js` (方法 load/unload); 专用 JS 线程 + 任务队列 + agentxx 桥 + 沙箱 |
-| agentxx_codegraph | `agent/plugins/agentxx_codegraph/` | CodeGraph 代码分析: 8 工具 (search/context/callers/callees/impact/status/index/path); 索引进度/加载状态经 publish 事件 (topic `{插件名}.{事件名}`) 通知宿主, 由 SessionServerAgentIO 原样转发 WirePluginData; 插件 client 入口 (agentxx_client_entry) 订阅该事件并以侧边栏 Info 栏段落 (CodeGraph) 渲染索引进度/就绪状态 —— TUI 不再直接解析渲染插件载荷; 参数经 yaml plugins args (loadPaths/ignorePaths/loadCwd/useGitignore). 工具提示词默认值从 lib AgentPrompt 剥离迁移 (2026-08), entry 时经 `set_prompt` 写入宿主 toolPrompt (宿主已有条目则跳过, 尊重用户 yaml 覆盖) |
+| agentxx_codegraph | `agent/plugins/agentxx_codegraph/` | CodeGraph 代码分析: 8 工具 (search/context/callers/callees/impact/status/index/path); 索引进度/加载状态经 publish 事件 (topic `{插件名}.{事件名}`) 通知宿主, 由 SessionServerAgentIO 原样转发 WirePluginData; 插件 client 入口 (agentxx_client_entry) 订阅该事件并以侧边栏 Info 栏段落 (CodeGraph) 渲染索引进度/就绪状态 —— TUI 不再直接解析渲染插件载荷; 工具提示词默认值从 lib AgentPrompt 剥离迁移 (2026-08), entry 时经 `set_prompt` 写入宿主 toolPrompt (宿主已有条目则跳过, 尊重用户 yaml 覆盖); 插件参数经 yaml plugins args (paths/ignore_paths/load_cwd/use_gitignore) |
 | agentxx_screen_capture | `agent/plugins/agentxx_screen_capture/` | 屏幕捕获 (仅 Windows): 工具 `agentxx_screen_capture` (单帧/全部屏幕/鼠标屏/指定屏幕/流式推帧事件 topic `agentxx_screen_capture.frame`) |
 | agentxx_computer_use | `agent/plugins/agentxx_computer_use/` | 键鼠控制 (仅 Windows): 工具 `agentxx_ui_control_keyboard_mouse`; plugin.yaml `depends: [agentxx_screen_capture]` (须同时配置加载) |
 | agentxx_system_monitor | `agent/plugins/agentxx_system_monitor/` | 系统资源监控 (从 lib `src/expand/get_cpu_gpu_use` 拆分): 工具 `agentxx_get_system_core_info` (原内置工具迁移, lib 不再内置) + 能力 `agentxx.system_usage` (方法 query) + agent 侧周期采集线程 (每 5s 采样并 publish `agentxx_system_monitor.usage`, 定时/采集/发布完全位于插件内; 显示开关由 client `/sysinfo` 经跨端事件 `usage_enabled` 同步, 关闭期间跳过采集); 载荷为插件定义 schema 的 JSON 字符串, server 经 WirePluginData 原样转发; 插件 client 入口 (agentxx_client_entry) 订阅该事件以状态栏项渲染 CPU/RAM 占用 (快速一览) + 侧边栏 Info 栏段落渲染明细 (CPU/RAM/GPU) —— 采集实现与渲染完全隔离在插件内, lib wire 层不含任何系统资源 DTO |
@@ -733,9 +733,12 @@ plugins:
   - path: ./plugins/agentxx_codegraph   # 插件动态库路径 或 插件目录 (含 plugin.yaml 时按清单分派)
     enabled: true                        # 默认 true
     sides: auto                          # auto|agent|client (双端插件用; 默认 auto)
-    args:                               # 插件参数 (宿主原样保存并整体传递, 不解析字段语义)
-      loadPaths: [src]
-      ignorePaths: [build, third_party]
+    args:                               # 插件参数 (宿主原样保存并整体传递, 字段语义由插件定义;
+                                        #   此为 agentxx_codegraph 的参数键名)
+      paths: [src]                       # 加载(索引)路径列表
+      ignore_paths: [build, third_party] # 忽略路径列表 (支持 * 通配符)
+      load_cwd: true                     # paths 未配置时默认加载当前工作目录
+      use_gitignore: true                # 忽略 .gitignore/.gitmodules/.git
 ```
 
 - `sides` 语义: `agent` 仅 agent 侧加载; `client` 仅 client 侧加载; `auto` (同 `both`) 按导出符号自动决定 (client 侧: 有 `agentxx_client_entry` 才加载, 无则跳过并记日志)
@@ -866,7 +869,7 @@ plugins/
 | `agent/lib/src/nodes/toolcall.cpp` | 工具查找: 静态列表未命中 → `ToolRegistry::find` 回退 (~10 行, 地基) |
 | `agent/lib/src/nodes/modelcall.cpp` | `build_params` 追加 `toolRegistry->appendDefinitions` (热注册后下一轮对模型可见) |
 | `agent/lib/include/agentxx/agent/context.h` | `AgentContext` 增 `toolRegistry` / `pluginManager` 成员 |
-| `agent/lib/src/agent/base_agent.cpp` | `init()` 装配 ToolRegistry/PluginManager + setIoExecutor + 静态工具名收集 (必须在 own_tools 之前) + 加载配置插件; `runConversationTurnAsync` 轮次边界登记 (flushPendingCleanup/onTurnBegin/onTurnEnd) |
+| `agent/lib/src/agent/base_agent.cpp` | `init()` 装配 ToolRegistry/PluginManager + setIoExecutor + 静态工具名收集 (必须在 own_tools 之前) + 加载配置插件; `runTurnAsync` 轮次边界登记 (flushPendingCleanup/onTurnBegin/onTurnEnd) |
 | `agent/lib/include/agentxx/agent/config.h` + `config_loader.cpp` | `plugins:` 配置段 (path/enabled/sides/args; PluginConfig/PluginSide) |
 | `agent/lib/include/agentxx/middlewares/middleware.h` + `nodes/wrap_handle.h` | `BaseMiddlewareHandleInterface::disabled` 位; start/end 跳过 disabled + end 按 start 记录回放 |
 
@@ -970,7 +973,7 @@ plugins/
 - **注册时序**: dlopen 在阻塞线程池, 但 entry 的注册动作必须回到 io 线程 (无锁模型); `loadNativeAsync` 在 io 线程协程内完成 dlopen (卸载到线程池) + entry 同步调用。
 - **卸载超时**: `waitInflightZero` 带超时, 超时放弃卸载 (慢/恶意插件不无限阻塞 io 线程)。
 - **拓扑排序加载**: 配置顺序无关 (Kahn 排序, 依赖者排在被依赖者之后), 避免配置顺序导致必选依赖缺失; 无进展 (环/缺失) 项附后由依赖检查报错。
-- **插件配置 args**: yaml `plugins` 条目 args 宿主原样保存并整体传递 (`get_plugin_args`), 参数语义由插件定义 (如 agentxx_codegraph 的 loadPaths/ignorePaths)。
+- **插件配置 args**: yaml `plugins` 条目 args 宿主原样保存并整体传递 (`get_plugin_args`), 参数语义由插件定义 (如 agentxx_codegraph 的 paths/ignore_paths/load_cwd/use_gitignore)。
 - **禁用立即/延迟生效**: `hasRunningTurn()` 判定 —— 轮次中禁用延迟到轮末摘除中间件, 无轮次立即摘除; 每轮开始 flushPendingCleanup 自愈异常路径残留。
 - **vtable 便捷 API**: `json_get_string` / `json_escape` (替代插件手写 JSON 解析, 对转义/嵌套可靠); `get_config` / `get_tool_prompt` (宿主配置访问, 插件注册工具时生成与内置工具一致的动态描述)。
 

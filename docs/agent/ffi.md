@@ -122,3 +122,80 @@ agentxx_event_queue_free(q);
   `AGENTXX_ERR_TIMEOUT`; 队列已销毁返回 `AGENTXX_ERR_STATE`
 - 队列有界 (16384): 宿主停轮询时丢最旧并补发一条 EVT_ERROR 提示
 - 实现: `agent/lib/src/ffi/event_queue.cpp`
+
+### 4.3 导出符号清单 (25 个, 白名单见 `agent/lib/ffi_symbols.map`)
+
+| 分组 | 符号 | 说明 |
+|------|------|------|
+| 内存 | `agentxx_malloc` / `agentxx_free` / `agentxx_strdup_n` | 跨 CRT 堆边界唯一分配通道 |
+| 版本 | `agentxx_ffi_api_version` / `agentxx_ffi_library_version` | API 版本校验 / 库版本字符串 |
+| 错误 | `agentxx_ffi_strerror` | 错误码 → 静态字符串 |
+| 生命周期 | `agentxx_create` / `agentxx_start` / `agentxx_stop` / `agentxx_destroy` | 创建(不启动线程)/异步启动(EVT_READY)/同步停止(幂等)/销毁(未 stop 自动 stop) |
+| 会话交互 (异步) | `agentxx_send_input` / `agentxx_cancel` / `agentxx_select_model` / `agentxx_set_permission` / `agentxx_switch_session` | 投递 io 线程串行执行; READY 前发送的输入自动缓存 |
+| 同步查询 | `agentxx_get_model_info` / `agentxx_get_context_messages` / `agentxx_list_sessions` | 阻塞等待服务端响应 (最长 10s), 返回 JSON (`agentxx_free`); 同一句柄同一时刻仅允许一个在途 |
+| HIL 应答 | `agentxx_interrupt_respond` | 提交 EVT_INTERRUPT_REQ 的应答 (values_json 数组与 inputs 顺序一一对应) |
+| 日志 | `agentxx_drain_logs` | 取走积压日志 `[{"level","message"},...]` (异常后排障) |
+| 事件队列 | `agentxx_event_queue_create` / `agentxx_free`(队列) / `..._on_event` / `..._pop` | 见 4.2 |
+| 内置插件 | `agentxx_get_builtin_plugins` | 内置合并编译模式插件清单入口 (PluginManager 使用) |
+
+版本策略: 修改契约递增 `AGENTXX_FFI_API_VERSION` (当前为 1);
+新增符号/字段为非破坏性不递增, 删除/重命名或修改参数语义时递增。
+
+### 4.4 事件类型 (`AgentxxEventType`, payload 均为 NUL 结尾 UTF-8 JSON)
+
+| 事件 | payload | 说明 |
+|------|---------|------|
+| `EVT_READY` | `{"sessionId"}` | 服务端就绪, 可开始发送输入 |
+| `EVT_SYNC` | wire sync JSON | 全量/部分历史同步 (含 fromIndex 尾窗语义) |
+| `EVT_DELTA` | wire delta JSON | 流式增量 (kind=text_token/thinking_token/tool_start/tool_end/turn_end/...) |
+| `EVT_TURN_END` | wire turn_result JSON | 轮次结束 (`has_error` 字段报告异步错误) |
+| `EVT_CONTEXT_STATS` | wire context_stats JSON | 上下文 token 统计 (含 tps) |
+| `EVT_MODEL_INFO` | wire model_info JSON | 当前模型信息 (查询/切换结果) |
+| `EVT_COMPONENTS` | wire append_component_info JSON | 启动组件 (MCP/Skill/Memory/插件) 加载信息 |
+| `EVT_INTERRUPT_REQ` | `{"interruptId","sessionId","node","value","argJson"}` | HIL 中断询问 (权限确认/输入收集); argJson.inputs 描述输入项 (bool/int/double/string/enum + defaultValue/enumValues) |
+| `EVT_INTERRUPT_EXPIRED` | `{"interruptId"}` | 中断已过期/取消, 不再可应答 |
+| `EVT_PLUGIN_DATA` | wire plugin_data JSON | agent 侧插件事件转发 (`{plugin,event,data}`) |
+| `EVT_ERROR` | `{"code","message"}` | 内部错误 |
+
+### 4.5 配置与模型 JSON (`agentxx_create` 参数)
+
+```c
+// config_json (可 NULL; 未知字段忽略):
+{ "dataDir": "~/.agentxx",            // 空=不持久化 (默认)
+  "enableSessionStore": false,
+  "sessionStoreDirectory": "",        // 为空时使用 {dataDir}/sqlite/sessions/
+  "permissionMode": "ask",            // ask|all_ask|pass|deny
+  "permissionAllowPaths": ["..."],    // 权限白名单
+  "permissionDenyPaths": ["..."],     // 权限黑名单
+  "skills": ["..."],                  // 技能目录列表
+  "memoryFiles": ["..."],             // 上下文文件列表
+  "mcpServers": {"ns": {"url": "...", "timeoutSec": 120}},
+  "plugins": [{"path":"...", "enabled":true, "sides":"agent|client|auto", "args":{}}],
+  "llmMaxRetry": 5,
+  "agentName": "Agentxx",
+  "interruptTimeoutSec": 0 }          // HIL 等待宿主应答超时, 0=不限 (默认)
+
+// model_json (建议必填; isValid: baseUrl 非空 或 apiKey != "EMPTY"):
+{ "name": "显示名", "type": "openai|anthropic|openai-responses",
+  "baseUrl": "...", "apiKey": "...", "modelName": "(请求 model 字段)",
+  "apiPath": "", "connectTimeoutSeconds": 16, "readChunkTimeoutSeconds": 100,
+  "sslVerify": true|null, "maxConcurrentConnections": 5,
+  "anthropicVersion": "2023-06-01", "modelContextMaxToken": 0,
+  "extraHeaders": {"k":"v"}, "extraConfig": {} }
+```
+
+## 5. 语言绑定与示例
+
+| 目录 | 说明 |
+|------|------|
+| [`agent/ffi/dart/`](/agent/ffi/dart/) | Dart FFI 绑定包: `ffigen.yaml` 由 `ffi_api.h` 自动生成符号定义 (`dart run ffigen --config ffigen.yaml`, 输出 `lib/agentxx_ffi_bindings.dart`) |
+| [`agent/example/ffi/dart/`](/agent/example/ffi/dart/) | Dart CLI 示例 (`agentxx_dart_cli`): 流式渲染/HIL 权限与会话切换/`/model` `/sessions` `/logs` 等命令/Ctrl+C 优雅退出; 含 mock LLM 冒烟检查 (`example/smoke_check.dart`); 详见其 README |
+
+其他语言按同样模式接入: 经 dlopen/dlsym (或平台等价物) 查找白名单符号,
+注册 `AgentxxCallbacks` 回调即可。payload 生命周期敏感的宿主优先使用 4.2
+事件队列桥接。
+
+## 6. 测试
+
+- `agent/test/test_ffi_c_api.cpp` (模块名 `ffi_c_api`): 生命周期/交互/HIL/
+  事件队列/同步查询全覆盖, 内置 mock LLM Server 端到端验证

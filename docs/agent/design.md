@@ -29,7 +29,7 @@ Agentxx 是一个使用 C++23 实现的 AI Agent 框架，编译器启用 C++26/
 
 - **多轮对话**: 支持完整的多轮对话管理，维护 `viewMessages` (append-only 完整历史) 和 `llmMessages` (可压缩的 LLM 上下文) 双消息集
 - **流式输出**: LLM 响应以增量 Delta 事件推送 (TextToken / ThinkToken / ToolStart / ToolEnd / TurnStart / TurnEnd / NodeStart / NodeEnd / MessageTip / SystemMessage)，每个 Delta 携带单调递增 seq 用于重放与同步; 轮次统计/错误/取消提示/中断头消息由 agent 线程构造为 SystemMessage 插入会话历史并推送 (携带 msgId), 保证 viewMessages 与 UI 展示一致
-- **多模型支持**: 运行时按会话 (thread_id) 动态切换模型，支持 OpenAI Chat Completions、Anthropic Messages、OpenAI Responses (Codex) 三种 Provider 协议
+- **多模型支持**: 运行时按会话 (sessionId) 动态切换模型，支持 OpenAI Chat Completions、Anthropic Messages、OpenAI Responses (Codex) 三种 Provider 协议
 - **上下文压缩**: SummarizationMiddleware 在上下文接近模型 token 上限时自动压缩历史消息，支持 toolcall 输出去重与截断
 - **思维链展示**: 支持 LLM 的 thinking/reasoning_content 流式输出与展示
 - **节点级事件**: NodeStart/NodeEnd 事件标记 Graph 节点执行生命周期，便于 UI 展示进度
@@ -59,7 +59,7 @@ Agentxx 是一个使用 C++23 实现的 AI Agent 框架，编译器启用 C++26/
 | | `agentxx_codegraph_index` | 索引目录构建符号数据库 |
 | | `agentxx_codegraph_path` | 查找两符号间的调用链路径 |
 | | `agentxx_codegraph_status` | 索引统计信息 |
-| | | `agentxx_codegraph_*` 系列 tool 仅在配置 `codegraph.enable: true` 且编译启用 `AGENTXX_ENABLE_PLUGIN_CODEGRAPH` 时注册 |
+| | | `agentxx_codegraph_*` 系列 tool 由插件 `agentxx_codegraph` 提供: 仅当该插件经 yaml `plugins` 段配置加载且编译启用 `AGENTXX_ENABLE_PLUGIN_CODEGRAPH` 时注册 |
 | **规划** | `agentxx_planning_write` | 两层任务规划 (Mermaid 状态图 + Todo List + 备忘录) |
 | **子代理** | `agentxx_subagent` | 创建和管理子代理执行委派任务 |
 | | `tool_skill_search` | 延迟加载工具/技能的搜索与发现 |
@@ -101,8 +101,8 @@ Agentxx 是一个使用 C++23 实现的 AI Agent 框架，编译器启用 C++26/
 
 ### 多会话与并发
 
-- **Session 隔离**: 每个 thread_id 独立的 Session，包含 IO、EventBus、ContextStats、CancelToken、模型选择、消息历史
-- **SessionStore**: 会话存储，按 thread_id 取/建 Session (仅 agent io_context 线程访问，无需锁保护)
+- **Session 隔离**: 每个 sessionId 独立的 Session (graph ctx 字段名为 thread_id, 两者同值)，包含 IO、EventBus、ContextStats、CancelToken、模型选择、消息历史
+- **SessionsManager**: 会话管理器，按 sessionId 取/建 Session (仅 agent io_context 线程访问，无需锁保护); `SessionStore` 特指其挂接的 SQLite 持久化实例
 - **单检查点存储**: engine 使用 `InMemorySingleCheckpointStore` (SingleCheckpointStore 策略基类,
   模板方法 save = saveImpl 持久化最新 + evictImpl 淘汰历史)。agentxx 只依赖
   load_latest 的最新 checkpoint 与挂载其上的 pending writes (中断/resume 恢复),
@@ -119,31 +119,35 @@ Agentxx 是一个使用 C++23 实现的 AI Agent 框架，编译器启用 C++26/
 #### 会话 SQLite 持久化 (消息上下文 / viewMessages / share_store)
 
 - 开关: `AgentConfig::enableSessionStore` (默认关闭; agentxx_cli 在 `buildDefaultConfig` 中开启)。
-  开启后由 BaseAgent 创建 `SessionStore` 并注入 AgentContext:
-  - `AgentContext::sessionPersistence` + `SessionStore::persistence` (会话消息状态)
+  开启后由 BaseAgent 创建 `SessionStore` 并注入 AgentContext
+  (`AgentContext::sessions->sessionStore`; 要求 dataDir 非空或显式指定了
+  `sessionStoreDirectory`, 否则自动禁用仅存内存):
+  - 会话消息状态恢复/落库 (经 `SessionsManager` 在创建 Session 时挂接)
   - `MiddlewareContext` 构造参数 (share store 写穿)
-- 数据目录: `{dataDir}/sqlite/sessions/{threadId}/` (threadId 经 `sanitizeThreadId` 清洗为安全目录名:
+- 数据目录: `{dataDir}/sqlite/sessions/{sessionId}/` (sessionId 经 `sanitizeSessionId` 清洗为安全目录名:
   非法字符替换/超长截断/Windows 保留名规避, 发生改写时附加 FNV hash 尾缀防碰撞;
-  dataDir 由 yaml `data_dir` 指定, **未配置 dataDir 时不持久化**:
-  设置/会话/codegraph 数据仅存内存, BaseAgent 初始化时输出警告;
-  sessionPersistenceRoot 显式指定时即使无 dataDir 仍落盘)
+  dataDir 由 yaml `data_dir` 指定, **未配置 dataDir 且未指定 sessionStoreDirectory 时不持久化**:
+  设置/会话/codegraph 数据仅存内存, BaseAgent 初始化时输出警告)
 - 分库设计 (两个 DB 文件, 均启用 WAL + busy_timeout):
   - `session.db`: viewMessages (append-only, 每消息一行 JSON) + llmMessages
-    (单行整体替换, 每轮结束保存) + meta (msgIdCounter)
-    —— 同属"会话消息状态", 同一生命周期 (随 thread 创建/删除), 同一 io 线程写入,
+    (单行整体替换, 每轮结束保存) + meta (msgIdCounter/title/lastActiveMs)
+    —— 同属"会话消息状态", 同一生命周期 (随 session 创建/删除), 同一 io 线程写入,
     一轮对话结束时消息与计数可事务性一起提交
   - `share_store.db`: agentxx_share_store KV 条目 (id 自增 = 现有最大 id + 1,
     重启后延续) —— KV 随机读改写与消息追加模式不同, 本质是上下文卸载缓存,
     内容可丢弃/可清理, 生命周期独立于消息历史; 可能存放大型文本, 独立文件
     避免其膨胀拖慢消息库 WAL checkpoint, 也便于未来独立裁剪/归档
 - 接入点:
-  - `SessionStore::getOrCreate`: 创建 Session 时从 SQLite 恢复 viewMessages/llmMessages,
-    重建链式哈希 (对不含 id 的消息内容, 与 appendHistory 语义一致),
-    恢复 msgIdCounter 保证新消息 id 不冲突; 并绑定 `SessionPersistenceHooks`
+  - `SessionsManager::getOrCreate`: 创建 Session 时从 SQLite 恢复 viewMessages/llmMessages,
+    重建链式哈希 (对不含 id 的消息内容, 与 appendViewMessage 语义一致),
+    恢复 msgIdCounter 保证新消息 id 不冲突; 并绑定 `SessionStoreHooks`
     (std::function 回调, context.h 不依赖 sqlite 头)
-  - `Session::appendHistory`: 追加后回调落库 (消息 + 计数事务提交)
-  - `BaseAgent::runConversationTurnAsync`: 轮末回调保存 llmMessages (整表替换)
-  - `MiddlewareContext` share store 四方法: 内存 map 作读缓存 (首次访问某 thread
+  - `Session::appendViewMessage`: 追加后回调落库 (消息 + 计数事务提交)
+  - `Session::updateViewMessage`: 追加后再变化的消息 (tool 结果回填:
+    toolFinished/toolResult/collapsed) 按 msg.id 更新对应行, 保证重启恢复的
+    历史与内存状态一致
+  - `BaseAgent::runTurnAsync`: 轮末回调保存 llmMessages (整表替换)
+  - `MiddlewareContext` share store 四方法: 内存 map 作读缓存 (首次访问某 session
     时从 DB 恢复全部条目与 id 计数器), 写操作同步写穿 DB
 - 容错: 所有落库失败仅记录错误日志, 不影响内存状态与对话主流程 (尽力而为持久化);
   读取路径在目录不存在时直接返回空, 不创建目录/空文件 (避免 subagent 等
@@ -156,19 +160,19 @@ Agentxx 是一个使用 C++23 实现的 AI Agent 框架，编译器启用 C++26/
 ```
 TUI [F4] 打开会话选择弹窗 → WireListSessions (服务端阻塞 I/O 卸载到 blockingPool)
   → 服务端回 WireSessionList (持久化会话列表, 按最近活动时间降序)
-  → 用户确认 → WireSwitchSession(newThreadId)
+  → 用户确认 → WireSwitchSession(newSessionId)
   → SessionServerAgentIO::switchSession:
-      重绑定 config_.threadId → 清空 delta 重放缓冲 (新会话 seq 独立编号)
+      重绑定 config_.sessionId → 清空 delta 重放缓冲 (新会话 seq 独立编号)
       → 重置 firstTurn_ (首条输入走 resume_if_exists=true 恢复路径)
       → 回推新会话 Sync (按 initialSyncTailCount 尾窗分页; 0=全量)
         + WireModelInfo + WireContextStats
-  → 客户端 (TUI) 更新本地 threadId 绑定; WS 模式同时
-    transport->updateReconnectThreadId() (复位重连握手的 threadId/lastSeq/tailHash)
+  → 客户端 (TUI) 更新本地 sessionId 绑定; WS 模式同时
+    transport->updateReconnectSessionId() (复位重连握手的 sessionId/lastSeq/tailHash)
 ```
 
 - 仅当无进行中轮次时切换 (客户端前置拦截 + 服务端双重保护)
 - 新会话历史由 SessionStore 从持久化恢复 (不存在时创建空会话)
-- 会话列表数据源: `{dataDir}/sqlite/sessions/` 目录扫描 + meta 表 (threadId/title/lastActiveMs)
+- 会话列表数据源: `{dataDir}/sqlite/sessions/` 目录扫描 + meta 表 (sessionId/title/lastActiveMs)
 
 #### Subagent 执行链路 (NodeInterrupt → 总线派发 → 宿主派生独立 agent)
 
@@ -230,7 +234,11 @@ TUI [F4] 打开会话选择弹窗 → WireListSessions (服务端阻塞 I/O 卸�
 ### 远程通信
 
 - **WebSocket 服务**: AgentServer 提供 WS/WSS 服务，支持 token 鉴权
-- **Wire Protocol**: 双向 JSON 消息协议 (Hello/HelloAck/UserInput/Cancel/SelectModel/GetModel/Delta/Sync/InterruptRequest/InterruptResponse/InterruptExpired/TurnResult/ContextStats/Error/Log/ModelInfo/GetAppendComponentInfo/AppendComponentInfo/GetContext/ContextMessages/Ping/Pong/SetPermission/ListSessions/SessionList/SwitchSession/GetViewMessages/ViewMessagesPage)
+- **Wire Protocol**: 双向 JSON 消息协议 (Hello/HelloAck/UserInput/Cancel/SelectModel/GetModel/Delta/Sync/InterruptRequest/InterruptResponse/InterruptExpired/TurnResult/ContextStats/Error/Log/ModelInfo/GetAppendComponentInfo/AppendComponentInfo/GetContext/ContextMessages/Ping/Pong/SetPermission/ListSessions/SessionList/SwitchSession/GetViewMessages/ViewMessagesPage/ClearMessageQueue/RemoveQueueItem/InterruptAndRunNext/MessageQueueUpdate/PluginData/PluginDataUp);
+  排队消息管理: 执行中排队由服务端按会话维护并经 MessageQueueUpdate 同步,
+  客户端可删除单条 (RemoveQueueItem) / 清空队列 (ClearMessageQueue) /
+  打断当前轮次立即执行队列首条 (InterruptAndRunNext); 插件事件经
+  PluginData (agent→client 下行) / PluginDataUp (client→agent 上行) 原样转发
 - **断线重连**: 客户端自动重连，携带 lastSeq 供增量 Delta 重放，seq 不连续时回退全量 Sync
 - **历史分页 (viewMessages 尾窗同步)**: 长会话恢复时服务端仅同步末尾窗口
   (SessionServerAgentIO::Config::initialSyncTailCount, 本地 TUI 模式 =100,
@@ -271,7 +279,12 @@ TUI [F4] 打开会话选择弹窗 → WireListSessions (服务端阻塞 I/O 卸�
   - 权限请求弹窗 + "记住本次选择" (经 WireSetPermission 将路径规则注册到服务端权限中间件)
   - 模型选择器 (运行时切换)
   - 右侧边栏 (日志窗口 / 信息面板 / Planning 展示)
-  - 待发送消息队列 (执行中排队，轮次结束自动派发)
+  - 待发送消息队列 (执行中排队，轮次结束自动派发; 队列由服务端按会话维护并经
+    MessageQueueUpdate 同步展示, 支持删除单条 / 清空队列 / 打断当前轮次立即执行首条
+    —— insert 按钮, 经 WireRemoveQueueItem/WireClearMessageQueue/WireInterruptAndRunNext)
+  - 模型选择待应用机制: 模型选择弹窗确认后不即时切换, 而是随下一条发送的用户消息
+    (WireUserInput.model) 携带, agent 执行新一轮时自动应用 (远程 --model 参数同路径);
+    立即切换仍可经 WireSelectModel
   - 文件编辑 diff 对比渲染
   - Mermaid stateDiagram-v2 状态图渲染 (消息中 ```mermaid 代码块 / Plan 弹窗显示 roadmap 状态图)
   - 上下文 token 占用状态栏
@@ -286,12 +299,14 @@ TUI [F4] 打开会话选择弹窗 → WireListSessions (服务端阻塞 I/O 卸�
     本地模式由 SessionServerAgentIO 驱动循环启动前回调 onServerReady 置就绪,
     远程模式由 mode_runners 连接协程驱动 (ConnState 存于 TUIRenderState::connState)
   - 启动进度逐步展示: agent-io init() 各阶段 (检测系统环境/模型注册表/中间件/
-    加载 MCP server/RAG/CodeGraph 等) 经 AgentContext::startupNotifier →
+    加载 MCP server/RAG/插件等) 经 AgentContext::initNotifier →
     AgentIOBase::onServerProgress 上报, "启动中"banner 同步显示当前执行的操作,
     完成后显示按键提示 (banner itemKey 计入
     connState+startupProgress 使 LazyScrollable 缓存失效重建)
     远程模式由 mode_runners 连接协程驱动 (ConnState 存于 TUIRenderState::connState)
   - 屏幕上方 toast 提示
+  - 鼠标拖选复制: 左键拖选后松开复制到系统剪贴板 (Windows 走 Win32 API,
+    其他平台走 OSC 52 转义序列, 依赖终端支持; 复制结果经 toast 提示)
   - 自动滚动吸附底部 (Scrollable 组件)
   - 系统资源占用 (CPU/内存) 与 CodeGraph 索引状态: 渲染已迁移到对应插件的
     client 侧 (agentxx_system_monitor 侧边栏 Info 栏段落 + 命令 /sysinfo /
@@ -334,13 +349,15 @@ TUI [F4] 打开会话选择弹窗 → WireListSessions (服务端阻塞 I/O 卸�
 
 ### 扩展能力
 
+以下能力均已从 lib 内置拆分为 `agent/plugins/` 下的独立插件 (经 yaml `plugins` 段配置加载, 见 plugins.md):
+
 | 模块 | 说明 |
 |------|------|
-| **ScreenCapture** | 屏幕截图与流式捕获 (多屏支持) |
-| **AudioStream** | 系统音频/麦克风/程序音频流捕获 |
-| **TextSelectionMonitor** | 系统级文本选择事件监听 (Windows UI Automation) |
-| **CpuGpuMonitor** | CPU/内存/GPU 使用率查询 |
-| **CodeGraphManager** | 代码索引与符号分析 (基于 codegraph-cpp)；索引范围由 yaml `codegraph` 块配置 (默认关闭)：`paths` 加载路径列表 (可多个目录，未配置时按 `load_cwd` 默认索引当前工作目录)、`ignore_paths` 忽略路径 (支持 `*` 通配符)、`use_gitignore` 默认忽略 `.gitignore` 规则与 `.gitmodules` 子模块目录；遍历按目录剪枝 (忽略目录整棵子树不进入)，文件监听增量索引应用同一套过滤；sqlite 数据库存于 `{dataDir}/sqlite/codegraph/<折叠路径>/index.db`（深层折叠 + 单段截断控制长度，路径前缀匹配复用；dataDir 由 yaml `data_dir` 指定，未配置 dataDir 时不注册 codegraph 工具，索引不落盘） |
+| **ScreenCapture** | 屏幕截图与流式捕获 (多屏支持; 插件 `agentxx_screen_capture`, 仅 Windows) |
+| **AudioStream** | 系统音频/麦克风/程序音频流捕获 (插件 `agentxx_audio_stream`, 仅 Windows WASAPI) |
+| **TextSelectionMonitor** | 系统级文本选择事件监听 (插件 `agentxx_text_selection_monitor`, 仅 Windows UI Automation) |
+| **CpuGpuMonitor** | CPU/内存/GPU 使用率查询 (插件 `agentxx_system_monitor`; 工具 + 周期采集 + client 侧渲染) |
+| **CodeGraphManager** | 代码索引与符号分析 (基于 codegraph-cpp; 已拆分为插件 `agentxx_codegraph`): 索引范围由插件参数配置 (yaml `plugins` 段该插件条目的 `args`，字段语义由插件定义)：`paths` 加载路径列表 (可多个目录，未配置时按 `load_cwd` 默认索引当前工作目录)、`ignore_paths` 忽略路径 (支持 `*` 通配符)、`use_gitignore` 默认忽略 `.gitignore` 规则与 `.gitmodules` 子模块目录；遍历按目录剪枝 (忽略目录整棵子树不进入)，文件监听增量索引应用同一套过滤；sqlite 数据库存于 `{dataDir}/sqlite/codegraph/<折叠路径>/index.db`（深层折叠 + 单段截断控制长度，路径前缀匹配复用；dataDir 由 yaml `data_dir` 指定，未配置 dataDir 时插件自动跳过、索引不落盘） |
 
 ### 依赖注入
 
@@ -388,8 +405,8 @@ path/to/agentxx_test string_util regex agent
 ```
 
 可用测试模块 (与 `agent/test/test.cpp` 注册列表一致):
-- 同步模块: `string_util` `regex` `diff_util` `events` `concurrency` `misc_fixes` `aho_corasick` `util_misc` `settings_db` `toolcall_args` (及 client 侧: `config_loader` `tui_settings` `tui_input` `tui_interrupt` `tui_scroll` `tui_stream` `thread_id` `mermaid_state`)
-- 异步模块: `event_stream` `event_bridge` `interrupt_bus` `subagent_bus` `string_tools` `share_store` `session_persistence` `rag_search` `datetime` `filesystem` `command` `web_search` `codegraph` `cpu_gpu` `http` `network_timeout` `websocket` `remote_agent` `mcp` `acp` `a2a` `openai_provider` `anthropic_provider` `cancel` `message_supplement` `summarization` `checkpoint_store` `agent` `memgrowth`
+- 同步模块: `string_util` `regex` `diff_util` `events` `concurrency` `misc_fixes` `aho_corasick` `util_misc` `training` `settings_db` `toolcall_args` `ffi_c_api` (及 client 侧: `config_loader` `tui_settings` `tui_input` `tui_interrupt` `tui_scroll` `tui_stream` `tui_tool_header` `sessionId` `mermaid_state`)
+- 异步模块: `event_stream` `event_bridge` `interrupt_bus` `subagent_bus` `agent_host` `string_tools` `share_store` `session_persistence` `rag_search` `datetime` `filesystem` `command` `web_search` `codegraph` `cpu_gpu` `http` `network_timeout` `websocket` `remote_agent` `mcp` `acp` `a2a` `openai_provider` `anthropic_provider` `plugins` `client_plugins` (内置合并编译 AGENTXX_ENABLE_PLUGIN_BUILTIN 时自动跳过) `cancel` `message_supplement` `summarization` `checkpoint_store` `agent` `memgrowth`
 - 平台模块: `screen_capture` `text_selection`
 
 ### 配置文件
@@ -444,27 +461,40 @@ mcp:
 #   - Windows: %APPDATA%/agentxx/
 # 配置后数据子路径:
 #   - {data_dir}/sqlite/global.db                     全局设置 (TUI 设置等)
-#   - {data_dir}/sqlite/sessions/{threadId}/          会话数据 (session.db/share_store.db)
+#   - {data_dir}/sqlite/sessions/{sessionId}/          会话数据 (session.db/share_store.db)
 #   - {data_dir}/sqlite/codegraph/<折叠路径>/index.db CodeGraph 索引
 # data_dir: ~/.agentxx
 
-# CodeGraph 代码分析 (需编译启用 AGENTXX_ENABLE_PLUGIN_CODEGRAPH; 默认关闭)
-codegraph:
-  enable: false             # true 时 CodeAgent 注册 codegraph 系列 tool
-  # paths:                  # 加载(索引)路径列表 (可选; 相对路径按工作目录解析;
-  #   - "/path/to/proj_a"   #   非空时按此列表索引, 可多个目录)
-  #   - "relative/proj_b"
-  # ignore_paths:           # 忽略路径列表 (可选; 相对路径按工作目录解析,
-  #   - "/path/to/proj_a/third_party"   #   支持 * 通配符; 命中即跳过)
-  #   - "**/generated/**"
-  load_cwd: true            # 未配置 paths 时默认加载当前工作目录 (默认 true;
-                            #   false 时仅可手动 agentxx_codegraph_index)
-  use_gitignore: true       # 默认忽略 .gitignore 规则与 .gitmodules 子模块目录
-                            #   (逐层读取各级目录的规则) 及 .git 元数据目录
-                            # 数据库: {data_dir}/sqlite/codegraph/<折叠路径>/index.db
-                            # - 前缀复用: 子目录工作自动复用最近父级索引
-                            # - 长度控制: 深层路径折叠为 hash 段, 单段超长截断,
-                            #   保证不超系统路径限制 (Windows MAX_PATH=260)
+# 技能目录列表 (SKILL.md 渐进式发现与加载; 相对路径按工作目录解析)
+skill:
+  - "./skills"
+
+# 上下文文件列表 (Memory; 每次模型调用时内容注入系统提示词)
+memory:
+  - "./AGENT.md"
+
+# 子代理委派开关 (默认 true; false 时 SubAgentManagerTool 不注册,
+# 模型无法发起子代理委派)
+subagent:
+  enable: true
+
+# 插件配置 (所有插件统一经 path 外置指定加载, 不区分内置/外置;
+# 相对路径按程序工作目录解析为绝对路径; 编译产物位于 exec/plugins/<插件名>/;
+# CodeGraph 即由此加载: 需编译启用 AGENTXX_ENABLE_PLUGIN_CODEGRAPH)
+plugins:
+  - path: "./plugins/agentxx_codegraph"  # 插件动态库路径 或 插件目录 (含 plugin.yaml 时按清单分派)
+    enabled: true                        # 默认 true
+    sides: auto                          # auto|agent|client (双端插件用; 默认 auto 按导出符号自动决定)
+    args:                                # 插件参数 (宿主原样保存并整体传递, 字段语义由插件定义)
+      # ---- agentxx_codegraph 参数 ----
+      paths:                             # 加载(索引)路径列表 (可选, 可多个目录)
+        - "/path/to/proj_a"
+      ignore_paths:                      # 忽略路径列表 (支持 * 通配符; 命中即跳过)
+        - "**/third_party/**"
+      load_cwd: true                     # 未配置 paths 时默认加载当前工作目录
+      use_gitignore: true                # 默认忽略 .gitignore 规则/.gitmodules 子模块/.git
+                                         # 索引库: {data_dir}/sqlite/codegraph/<折叠路径>/index.db
+                                         # (data_dir 未配置时不落盘、插件自动跳过)
 
 # 权限询问处理模式 (默认 ask, 见 PermissionMode)
 # - ask:     当前工作目录内允许读写, 其他路径询问用户 (默认)
@@ -490,7 +520,10 @@ permission:
 >         effort: "high"
 > ```
 
-环境变量加载优先级: `--env 覆盖文件` > `系统环境变量` > `.env 文件`
+环境变量加载优先级: `程序内置变量` > `--env 覆盖文件` > `.env 文件` > `系统环境变量` > 保留 `${VAR}` 原样。
+程序内置变量 (main 启动时注入, 供 yaml `${VAR}` 展开使用):
+- `${AGENTXX_WORK_DIR}`: 程序启动后的工作目录 (正斜杠格式)
+- `${AGENTXX_EXEC_DIR}`: agentxx_cli 可执行程序所在目录 (正斜杠格式)
 
 ### 命令行使用
 
@@ -563,19 +596,19 @@ agentxx::agent::CodeAgent agent(config);
 asio::co_spawn(*agent.ioCtx, [&]() -> asio::awaitable<void> {
     co_await agent.init();
 
-    // 单轮对话
-    auto result = co_await agent.runSingleInputAsync("thread_1", "Hello!");
+    // 单轮对话 (非流式, 返回完整输出文本)
+    auto result = co_await agent.runSingleInputAsync("session_1", "Hello!");
 
-    // 多轮对话
-    auto turn1 = co_await agent.runConversationTurnAsync("thread_1", "Hi", true, io);
-    auto turn2 = co_await agent.runConversationTurnAsync("thread_1", "Tell me more", false, io);
+    // 会话执行一轮对话 (流式增量经 io 端点推送; io 传 nullptr 为 headless 模式)
+    auto turn1 = co_await agent.runTurnAsync("session_1", "Hi", true, io);
+    auto turn2 = co_await agent.runTurnAsync("session_1", "Tell me more", false, io);
 
-    // 非流式调用
+    // 自定义消息调用 (可带 system prompt, 返回完整输出)
     std::vector<neograph::ChatMessage> msgs = {
         {.role = "system", .content = "You are helpful."},
         {.role = "user", .content = "Hello"},
     };
-    auto output = co_await agent.runNonStreamAsync("thread_2", msgs);
+    auto output = co_await agent.runOverMsgsTurnAsync("session_2", msgs);
 }, asio::detached);
 
 agent.ioCtx->run();
@@ -682,7 +715,7 @@ User Input → TUIClientAgentIO/StdIOClientAgentIO
     → ChannelAgentIOTransport::send() (client 端, 零序列化)
     → ChannelAgentIOTransport::recv() (server 端)
     → SessionServerAgentIO.onPeerMessage()
-    → SessionServerAgentIO.run() → BaseAgent.runConversationTurnAsync()
+    → SessionServerAgentIO.run() → BaseAgent.runTurnAsync()
         → GraphEngine (ReAct Loop)
             → ModelCallWrapNode → OpenAI/Anthropic Provider → LLM API
             → ToolcallWrapNode → Tools (filesystem/command/web/...)
@@ -715,7 +748,7 @@ User Input → TUIClientAgentIO/StdIOClientAgentIO
 
 > 两种模式拓扑完全一致 (client 端点 + server 端点 + transport), 仅 transport
 > 实现不同。**强制 transport**: 端点间通信必须经 transport, 不存在无 transport
-> 的直连模式; `runConversationTurnAsync(io=nullptr)` 的 headless 场景除外
+> 的直连模式; `runTurnAsync(io=nullptr)` 的 headless 场景除外
 > (无 io 即无事件输出)。
 
 ### 核心设计模式
@@ -751,7 +784,7 @@ end1  ←   end2  ←   end3
 - 每个中间件实现 `onHandleStart` / `onHandleEnd` 钩子 (可分别挂载到 agent_start、modelcall、toolcall)
 - start 阶段异常时跳过 baseRun，直接执行对应的 end
 - 支持 CancelledException / NodeInterrupt 的重新抛出
-- 中间件按会话 (thread_id) 维护独立 State
+- 中间件按会话 (sessionId) 维护独立 State
 - CodeAgent 注册的中间件栈: Permission → Skill → MemoryFile → Summarization → Planning → LogPrint
 
 #### 取消设计 (CancelToken 双通道)
@@ -830,14 +863,15 @@ AgentIOBase (服务端端点: SessionServerAgentIO)
     ├── handleInterrupt()  → 发送 InterruptRequest，等待客户端响应 (超时/过期通知)
     ├── onPeerMessage()    → 覆写: 处理 Hello/UserInput/Cancel/SelectModel/InterruptResponse/
     │                          GetModel/GetAppendComponentInfo/GetContext/ListSessions/
-    │                          SwitchSession/SetPermission 等
+    │                          SwitchSession/SetPermission/GetViewMessages/ClearMessageQueue/
+    │                          RemoveQueueItem/InterruptAndRunNext/PluginDataUp 等
     ├── run()              → 驱动循环: 取输入 → 执行轮次 → 推送结果
     ├── stop()             → 停止驱动循环 (关闭输入 channel/取消轮次/fail pending)
     ├── onDisconnect()     → 传输断开时启动 grace 定时器 (宽限期满且无连接则取消轮次)
     ├── handleGetViewMessages() → 历史分页请求: 按绝对下标切片 [before-count, before)
     │                              回应 WireViewMessagesPage (append-only 下标恒定无竞态;
     │                              会话不匹配回空页, count=0 用默认页大小 100)
-    └── switchSession()    → 会话切换: 重绑定 threadId, 清空 delta 缓冲, 重置 firstTurn_,
+    └── switchSession()    → 会话切换: 重绑定 sessionId, 清空 delta 缓冲, 重置 firstTurn_,
                              回推新会话 Sync (按 initialSyncTailCount 尾窗分页) + 模型信息 + 上下文统计
 
 AgentIOTransportBase (传输层抽象)
@@ -851,7 +885,7 @@ AgentIOTransportBase (传输层抽象)
 事件产出路径: `BaseAgent` 进程内直调其驱动的端点 (server 端点) ——
 增量事件经 `io->sendToPeer(Delta)` 推送 (server 端点缓冲并经 transport 转发
 client), 上下文统计经 `io->sendToPeer(WireContextStats)`; BaseAgent 不感知
-transport 细节。`runConversationTurnAsync(io=nullptr)` 为 headless 模式, 不产出事件。
+transport 细节。`runTurnAsync(io=nullptr)` 为 headless 模式, 不产出事件。
 
 ##### EventBridge: GraphEvent → 会话增量 Delta + EventBus 适配层
 
@@ -870,11 +904,11 @@ neograph GraphEngine (run_stream_async)
                 │     ├── CHANNEL_WRITE → handleChannelWrite:
                 │     │                   - "message_tip" 通道 → Delta::MessageTip
                 │     │                   - "messages" 通道:
-                │     │                     assistant(tool_calls) → appendHistory
+                │     │                     assistant(tool_calls) → appendViewMessage
                 │     │                       + Delta::ToolStart 流
-                │     │                     tool → appendHistory (edit 工具附带
-                │     │                       diff 渲染字段) + Delta::ToolEnd 流
-                │     │                     assistant → appendHistory
+                │     │                     tool → appendViewMessage + 回填更新
+                │     │                       (edit 工具附带 diff 渲染字段) + Delta::ToolEnd 流
+                │     │                     assistant → appendViewMessage
                 │     │                   - 含 LLM 输出时推送 WireContextStats
                 │     ├── NODE_START/END → 节点计时 + Delta::NodeStart/NodeEnd
                 │     └── ERROR          → publishError (总线, 不产 Delta,
@@ -965,8 +999,8 @@ AgentContext
     ├── bus                  (全局事件总线)
     ├── modelRegistry        (模型注册表)
     ├── host                 (宿主引用, attachRoot/派生时注入)
-    └── sessions (SessionStore)
-         ├── "thread_1" → Session
+    └── sessions (SessionsManager)
+         ├── "session_1" → Session
          │     ├── io                    (AgentIOBase)
          │     ├── bus                   (会话级事件总线)
          │     ├── contextStats          (std::atomic 字段, 跨线程安全)
@@ -975,14 +1009,14 @@ AgentContext
          │     ├── deltaSeq              (普通 uint64_t, 仅 io 线程递增; EventBridge 分配)
          │     ├── cancelToken           (仅 io 线程读写)
          │     └── modelName             (仅 io 线程读写, 经 Wire 切换)
-         └── "thread_2" → Session
+         └── "session_2" → Session
                └── ...
 
 线程安全策略:
   - io 线程: 读写 viewMessages/llmMessages/chainHash/deltaSeq (assertIoThread 强制校验)
   - client/UI: 不直接读取, 由 io 线程拷贝后经 Wire 消息 (Sync/Delta) 传输
   - 取消/切模型: 经 Wire 消息发往 agent 线程处理
-  - SessionStore: 仅在 agent io_context 线程访问, 无需锁
+  - SessionsManager: 仅在 agent io_context 线程访问, 无需锁
   - contextStats: std::atomic 字段, 跨线程可读 (Summarization 写, IO 经 Wire 推送)
   - AsyncMutex: 协程感知互斥锁, 用于跨越 co_await 的临界区保护
 ```
@@ -1020,7 +1054,7 @@ Client                              Server
   │←── HelloAck (ok, models, hash) ───│
   │                                    │
   │──── UserInput (text) ────────────→│
-  │                                    │ runConversationTurnAsync()
+  │                                    │ runTurnAsync()
   │←── Delta (text_token, seq=1) ─────│
   │←── Delta (text_token, seq=2) ─────│
   │←── Delta (tool_start, seq=3) ─────│
@@ -1058,7 +1092,7 @@ Client                              Server
   │ (可选) 会话选择弹窗 (TUI F4)
   │──── ListSessions ─────────────────│ 列举持久化会话 (阻塞 I/O 卸载到线程池)
   │←── SessionList ───────────────────│
-  │──── SwitchSession (threadId) ────│ 切换会话绑定: 清空 delta 缓冲,
+  │──── SwitchSession (sessionId) ───│ 切换会话绑定: 清空 delta 缓冲,
   │                                   │ 回推新会话 Sync (尾窗分页) + 模型信息 + 上下文统计
   │                                    │
   │ (可选) 历史分页 (TUI 向上滚动到窗口顶部)
@@ -1091,12 +1125,16 @@ agent/
 ├── lib/                          # libagentxx 核心库
 │   ├── include/agentxx/
 │   │   ├── agentxx.h             # 库总入口头文件
+│   │   ├── ffi_api.h             # FFI 纯 C ABI 导出契约 (唯一跨语言稳定接口, 见 ffi.md)
 │   │   ├── agent/                # Agent 核心
 │   │   │   ├── base_agent.h      # BaseAgent 基类 (核心基础设施 + ReAct 循环 + 会话执行)
 │   │   │   ├── code_agent.h      # CodeAgent (继承 BaseAgent, 编程工具/中间件)
+│   │   │   ├── agent_host.h      # AgentHost 进程级宿主 (主 agent 与子代理平等注册/派生/回收)
+│   │   │   │                     #   AgentNode / AgentRegistry / spawnBatch / HostBus / A2A 桥接
+│   │   │   ├── agent_runner.h    # AgentRunner 统一 "引擎运行+中断处理+恢复" 循环 (主 agent 与子代理共用)
 │   │   │   ├── config.h          # AgentConfig / ModelConfig 配置
 │   │   │   ├── config_static.h   # 静态路径配置
-│   │   │   ├── context.h         # AgentContext / Session / SessionStore / ContextStats
+│   │   │   ├── context.h         # AgentContext / Session / SessionsManager / ContextStats
 │   │   │   │                     #   Session: 线程绑定 (viewMessages/chainHash 单线程读写)
 │   │   │   ├── checkpoint_store.h # 单检查点存储: SingleCheckpointStore 策略基类 +
 │   │   │   │                     #   InMemorySingleCheckpointStore (每 thread 仅最新,
@@ -1105,21 +1143,27 @@ agent/
 │   │   │   │                     #   ViewMessage (UI 展示消息, role 拆分子结构) /
 │   │   │   │                     #   ChainHash / AppendComponentNotification
 │   │   │   ├── model_registry.h  # ModelProviderRegistry (运行时模型切换)
-│   │   │   ├── session_store.h # 会话 SQLite 持久化: 按 threadId 分目录,
+│   │   │   ├── session_store.h   # 会话 SQLite 持久化: 按 sessionId 分目录,
 │   │   │   │                     #   session.db (viewMessages+llmMessages+meta) 与
-│   │   │   │   │                   share_store.db 分库, 读取路径不创建目录
+│   │   │   │                     #   share_store.db 分库, 读取路径不创建目录
 │   │   │   ├── prompt.h          # AgentPrompt / ToolPrompt 提示词管理
 │   │   │   ├── training.h        # EvolutionTrainingAgent 进化训练 (变异/评估/优化/收敛检测)
-│   │   │   └── io/           # 远程通信
-│   │   │       ├── agent_server.h    # AgentServer (WS 服务, token 鉴权)
-│   │   │       ├── session_server_agent_io.h # SessionServerAgentIO (会话驱动, delta 缓冲/重放, grace)
+│   │   │   └── io/               # 远程通信
+│   │   │       ├── agent_server.h    # AgentServer (WS 服务, token 鉴权; serveTransport 供进程内复用)
+│   │   │       ├── session_server_agent_io.h # SessionServerAgentIO (会话驱动, delta 缓冲/重放, grace,
+│   │   │       │                          #   服务端消息队列, 插件事件转发 WirePluginData)
 │   │   │       ├── wire_protocol.h   # Wire Protocol 消息类型与序列化
 │   │   │       ├── agent_io.h        # AgentIOBase 端点基类 (client/server 操作契约)
+│   │   │       ├── client_event_sink.h # 客户端事件接收器 (向 client 插件系统转发端点事件)
 │   │   │       ├── agent_io_transport.h # 传输层抽象基类 (connect/recv/send/close/alive)
 │   │   │       ├── channel_io_transport.h # 进程内 Channel 传输 (零序列化)
 │   │   │       └── ws_io_transport.h  # WebSocket 传输 (JSON 编解码/心跳/重连)
 │   │   ├── deps/                 # 依赖注入
 │   │   │   └── injector.h        # DependencyContainer (工厂/单例/有名称注册)
+│   │   ├── event/                # 强类型事件系统
+│   │   │   ├── events.h          # 事件类型定义 (Topic 命名空间 / Event structs)
+│   │   │   ├── event_stream.h    # EventBus / EventStream / RequestResponseStream
+│   │   │   └── event_host.h      # HostBus 事件类型 (agent.spawn/message/progress/done)
 │   │   ├── nodes/                # Graph 节点
 │   │   │   ├── wrap_handle.h     # WrapHandleBaseNode 栈式中间件基类
 │   │   │   ├── modelcall.h       # ModelCallWrapNode (LLM 调用, 动态模型切换)
@@ -1131,31 +1175,31 @@ agent/
 │   │   │   │                     #   PluginTool (C 回调→线程池卸载执行) /
 │   │   │   │                     #   PluginMiddlewareHandle (7 钩子→C 回调) /
 │   │   │   │                     #   CapabilityRegistry / NativeLoader (dlopen↔LoadLibraryW)
+│   │   │   ├── plugin_common.h   # 插件宿主侧通用工具
+│   │   │   ├── builtin_plugin.h  # 内置合并编译模式入口 (AGENTXX_ENABLE_PLUGIN_BUILTIN)
+│   │   │   ├── client_plugin_api.h     # client 侧插件纯 C ABI 契约 (UI 无关语义层)
+│   │   │   ├── client_plugin_manager.h # ClientPluginManager (client 侧加载/UI 注册表/命令管线)
 │   │   │   └── tool_registry.h   # 动态插件工具查表 (shared_ptr 保活, 静态工具名冲突检测)
 │   │   ├── middlewares/          # 中间件
 │   │   │   ├── middleware.h      # BaseMiddlewareHandle / MiddlewareContext / State 基类
-│   │   │   ├── events.h          # 事件类型定义 (Topic 命名空间 / Event structs)
-│   │   │   ├── event_stream.h    # EventBus / EventStream / RequestResponseStream
 │   │   │   ├── permission.h      # PermissionMiddleware (工具权限 HIL)
 │   │   │   ├── skill.h           # SkillMiddleware (技能发现与加载)
 │   │   │   ├── memory_file.h     # MemoryFileMiddleware (上下文文件注入)
 │   │   │   ├── summarization.h   # SummarizationMiddleware (上下文压缩)
-│   │   │   ├── planning.h        # PlanningMiddleware (任务规划状态)
-│   │   │   └── event_host.h      # HostBus 事件类型 (agent.spawn/message/progress/done)
+│   │   │   └── planning.h        # PlanningMiddleware (任务规划状态)
 │   │   ├── tools/                # 工具
 │   │   │   ├── tool.h            # XXToolBase / XXToolWrap 工具基类
 │   │   │   ├── filesystem.h      # 文件系统工具 (list/read/write/edit/glob/grep)
 │   │   │   ├── execute_command.h # 命令执行工具 (linux/windows/python/javascript)
 │   │   │   ├── web_search.h      # 网络搜索工具 (search/fetch/fetch_markdown/model_search)
 │   │   │   ├── rag_search.h      # RAG 语义搜索 (EmbeddingClient / VectorStore)
-│   │   │   ├── codegraph_tool.h  # 代码图分析工具 (search/context/callers/callees/impact/index/path/status)
 │   │   │   ├── planning.h        # 规划工具 (planning_write)
 │   │   │   ├── subagent.h       # 子代理管理工具
-│   │   │   ├── tool_skill_search.h # 工具/技能延迟加载搜索
+│   │   │   ├── tool_skill_search.h # 工具/技能延迟加载搜索 (子代理任务)
+│   │   │   ├── subagent_shared.h # 子代理批量委派共享实现 (中断 key/解析)
 │   │   │   ├── share_store.h     # 会话级文本寄存
 │   │   │   ├── string.h          # 字符串工具 (html2md / regexp)
-│   │   │   ├── system.h          # 系统工具 (datetime; cpu_gpu_info 已迁插件)
-│   │   │   └── ui_control.h      # UI 键鼠控制 (Windows)
+│   │   │   └── system.h          # 系统工具 (datetime; cpu_gpu_info 已迁插件 agentxx_system_monitor)
 │   │   ├── protocol/             # 协议实现
 │   │   │   ├── openai_provider.h  # OpenAI Chat Completions API (流式/非流式/SSE)
 │   │   │   ├── anthropic_provider.h # Anthropic Messages API (thinking/tool_use)
@@ -1163,11 +1207,8 @@ agent/
 │   │   │   ├── mcp_server.h      # MCP Server (HTTP + stdio, tool/resource/prompt)
 │   │   │   ├── a2a_client.h      # A2A Client (Agent Card / SendMessage / Task 管理)
 │   │   │   ├── a2a_server.h      # A2A Server (JSON-RPC, 任务状态机)
-│   │   │   └── acp_server.h      # ACP Server (stdio 模式)
-│   │   ├── expand/               # 扩展能力 (已逐步迁移为独立插件, 见 plugins/)
-│   │   │   ├── (codegraph_manager / screen_capture / audio_stream /
-│   │   │   │    text_selection_monitor / get_cpu_gpu_use 均已拆分为
-│   │   │   │    agent/plugins/ 下的独立插件, 2026-08 起 lib 不再内置)
+│   │   │   ├── acp_server.h      # ACP Server (stdio 模式)
+│   │   │   └── protocol_base.h   # 协议基类
 │   │   └── util/                 # 工具类
 │   │       ├── log.h             # 日志系统 (XX_LOG 宏, LogDispatcher, LogSink)
 │   │       ├── string_util.h     # 字符串工具 (编码转换/路径标准化/base64/自然排序/IgnoreCaseMap 等)
@@ -1243,7 +1284,11 @@ agent/
 │   ├── test.cpp                  # 测试入口: 模块注册与调度 (同步/异步/平台模块分组)
 │   ├── test_framework.h          # 测试框架 (断言宏 / TestResult)
 │   ├── core/test_plugins.*       # 插件系统测试 (加载/工具/钩子/事件/热插拔, 模块名 `plugins`)
+│   ├── test_client_plugins.*     # client 侧插件测试 (加载/UI 注册表, 内置合并编译时跳过)
 │   ├── test_agent.*              # CodeAgent 集成测试 (模拟 LLM Server: 工具调用/多轮/权限模式/重试耗尽/异常拦截)
+│   ├── test_agent_host.*         # AgentHost 宿主测试 (子代理派生/深度并发预算/回收)
+│   ├── test_training.*           # 进化训练测试 (变异/评估/优化/收敛/持久化)
+│   ├── test_ffi_c_api.cpp        # FFI C API 测试 (生命周期/交互/HIL/事件队列)
 │   ├── test_events.*             # 事件类型测试
 │   ├── test_event_stream.*       # EventBus / EventStream / RequestResponseStream 测试
 │   ├── test_event_bridge.*       # EventBridge 事件翻译测试
@@ -1287,12 +1332,13 @@ agent/
 │   └── client/                   # client 侧测试 (AGENTXX_BUILD_CLIENT 条件编译)
 │       ├── test_config_loader.*  # YAML 配置加载测试
 │       ├── test_mermaid_state.*  # Mermaid 状态图解析测试
-│       ├── test_thread_id.*      # threadId 生成唯一性测试
+│       ├── test_session_id.*     # sessionId 生成唯一性测试 (test_thread_id.cpp)
 │       ├── test_tui_input.*      # TUI 输入测试
 │       ├── test_tui_interrupt.*  # TUI 中断交互测试
 │       ├── test_tui_scroll.*     # TUI 滚动测试
 │       ├── test_tui_settings.*   # TUI 设置持久化测试
-│       └── test_tui_stream.*     # TUI 流式渲染测试
+│       ├── test_tui_stream.*     # TUI 流式渲染测试
+│       └── test_tui_tool_header.* # TUI 工具消息头部渲染测试
 │
 ├── benchmark/                    # 性能测试 (一般仅 release 编译)
 │
@@ -1318,10 +1364,25 @@ agent/
 │   ├── yaml-cpp/                 # YAML 解析
 │   └── zlib/                     # 压缩
 │
-├── plugins/                      # 插件 (独立动态库/目录, 仅依赖 plugin_api.h)
-│   ├── example_plugin/           # 一期示例: C++ 插件 (工具/钩子/事件/能力)
-│   ├── javascript_engine/                # 二期: JS 解释器插件 (QuickJS, interpreter.js 能力)
-│   └── example_js/               # 二期示例: JS 插件 (plugin.yaml + plugin.js)
+├── ffi/                          # 其他编程语言绑定生成配置
+│   └── dart/                     # Dart FFI 绑定 (ffigen.yaml 由 ffi_api.h 生成
+│                                 #   agentxx_ffi_bindings.dart; dart pub get + ffigen)
+│
+├── example/                      # 嵌入/绑定使用示例
+│   └── ffi/dart/                 # Dart CLI 示例 (经 FFI 驱动 libagentxx:
+│                                 #   流式渲染/HIL 权限与会话切换/mock LLM 冒烟检查)
+│
+├── plugins/                      # 插件 (独立动态库/目录, 仅依赖 plugin_api.h;
+│                                 #   编译产物统一输出到 exec/plugins/<插件名>/)
+│   ├── example_plugin/           # 示例 C++ 插件 (双端): 工具/钩子/事件/能力/client 入口
+│   ├── example_js/               # JS 示例插件 (C++ 壳 + plugin.js; depends: javascript_engine)
+│   ├── agentxx_javascript_engine/ # QuickJS 引擎插件 (能力 interpreter.js; 专用 JS 线程+沙箱)
+│   ├── agentxx_codegraph/        # CodeGraph 代码分析插件 (8 工具 + client Info 栏段落)
+│   ├── agentxx_screen_capture/   # 屏幕捕获插件 (仅 Windows)
+│   ├── agentxx_computer_use/     # 键鼠控制插件 (仅 Windows; depends: screen_capture)
+│   ├── agentxx_system_monitor/   # 系统资源监控插件 (工具 + 周期采集 + client 状态栏渲染)
+│   ├── agentxx_audio_stream/     # 音频流捕获插件 (仅 Windows WASAPI)
+│   └── agentxx_text_selection_monitor/ # 文本选择监听插件 (仅 Windows UIAutomation)
 │
 └── script/                       # 编译/测试脚本
     ├── linux_debug_build.sh
@@ -1341,26 +1402,28 @@ BaseAgent (基类)
   │     ├── ModelCallWrapNode → OpenAIProvider / AnthropicProvider
   │     ├── ToolcallWrapNode → XXToolBase 工具集
   │     └── AgentStart/EndCallWrapNode
+  ├── AgentRunner (统一中断循环, 主 agent 与子代理共用)
   ├── MiddlewareContext → 中间件栈
   ├── AgentContext
-  │     ├── SessionStore → Session (per thread_id)
+  │     ├── sessions (SessionsManager) → Session (per sessionId)
   │     │     ├── viewMessages + chainHash (仅 io 线程读写, client 经 Wire 拷贝传输)
   │     │     ├── llmMessages (io 线程读写)
   │     │     ├── cancelToken / modelName (io 线程读写)
   │     │     ├── activity / contextStats (atomic, 跨线程安全)
   │     │     ├── deltaSeq (普通 uint64_t, 仅 io 线程递增)
   │     │     └── io / bus (会话级)
+  │     ├── sessions->sessionStore (SessionStore, SQLite 持久化; 可空)
   │     ├── ModelProviderRegistry
   │     └── EventBus
   └── AgentConfig → ModelConfig / AgentPrompt
 
 CodeAgent (继承 BaseAgent)
-  ├── 工具: Filesystem | Command | Web | RAG | SubAgent | MCP | CodeGraph | ...
+  ├── 工具: Filesystem | Command | Web | RAG | SubAgent | MCP | ... (CodeGraph 等经插件注入)
   └── 中间件: Permission → Skill → MemoryFile → Summarization → Planning → LogPrint
 
 SessionServerAgentIO (远程会话驱动)
   ├── AgentIOBase (服务端端点)
-  ├── BaseAgent.runConversationTurnAsync()
+  ├── BaseAgent.runTurnAsync()
   ├── deltaBuf (断线缓冲) + grace timer
   └── AgentIOTransportBase (从 AgentServer 传入)
 
