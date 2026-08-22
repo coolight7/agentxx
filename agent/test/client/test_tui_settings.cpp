@@ -335,7 +335,8 @@ void test_persist_to_db() {
         XX_TEST_EXPECT_EQ(fresh.getInt64("tui.animationLevel", -1), int64_t{1}); // Low
         XX_TEST_EXPECT_EQ(fresh.getInt64("tui.logLevel", -1), int64_t{3});       // Warn
         XX_TEST_EXPECT_EQ(fresh.getInt64("tui.tailThinking", -1), int64_t{1});   // SingleLine
-        XX_TEST_EXPECT_EQ(fresh.getInt64("tui.tailThinkingPreviewLen", -1), int64_t{75});
+        // 注: tui.tailThinkingPreviewLen 设置项已移除 (预览长度改为按终端宽度自适应),
+        // 不再有对应持久化键
     }
 
     // 再次变更 → 库文件同步更新
@@ -349,7 +350,6 @@ void test_persist_to_db() {
         XX_TEST_EXPECT_EQ(fresh.getInt64("tui.animationLevel", -1), int64_t{4}); // Ultra
         XX_TEST_EXPECT_EQ(fresh.getInt64("tui.logLevel", -1), int64_t{1});       // Debug
         XX_TEST_EXPECT_EQ(fresh.getInt64("tui.tailThinking", -1), int64_t{0});   // AutoExpand
-        XX_TEST_EXPECT_EQ(fresh.getInt64("tui.tailThinkingPreviewLen", -1), int64_t{60});
     }
 
     // 恢复默认, 避免影响其他用例

@@ -49,6 +49,32 @@ inline int collapsedPreviewBudget(int maxWidth, int prefixCols) {
     return (avail >= kMinBudget) ? avail : kMinBudget;
 }
 
+/// 取最后一个非空行 (供"末尾思考"折叠预览使用):
+/// SingleLine 折叠模式只应展示最新进度行; tailLinePreview 本身会把整段文本
+/// 空白扁平化后截取末尾, 在宽终端下 (预算超过最后一行长度) 会把更早的行
+/// (含首行头部) 一并带入预览。此处先限制在单个行内再交由 tailLinePreview 截取。
+inline std::string_view lastNonBlankLine(std::string_view s) {
+    size_t end = s.size();
+    while (end > 0) {
+        const size_t nl    = s.rfind('\n', end - 1);
+        const size_t begin = (nl == std::string_view::npos) ? 0 : nl + 1;
+        bool         blank = true;
+        for (size_t i = begin; i < end; ++i) {
+            const unsigned char c = static_cast<unsigned char>(s[i]);
+            if (c != ' ' && c != '\t' && c != '\r') {
+                blank = false;
+                break;
+            }
+        }
+        if (!blank) {
+            return s.substr(begin, end - begin);
+        }
+        // 当前行全为空白 (如 token 恰好以换行结尾): 向前回退一行
+        end = (nl == std::string_view::npos) ? 0 : nl;
+    }
+    return {};
+}
+
 /// 估算文本显示行数 (换行符计数 + 按显示宽度折行估算)。
 /// 仅用于不可见子项的高度估算 (影响滚动条/滚动定位), 子项进入视口后实测修正。
 /// 宽字符 (CJK/emoji 等) 按 2 列计, 与 markdown::utf8_display_width 一致,
@@ -952,8 +978,8 @@ LazyBuiltItem MessageListComponent::buildStreamingItem(const TUIRenderState& st)
                     = collapsedPreviewBudget(std::max(1, scrollable_->contentWidth()), prefixCols);
                 const size_t previewLen = budget > 0 ? static_cast<size_t>(budget) : prefixCols;
                 header.push_back(
-                    text(tailLinePreview(*st.currentToken, previewLen)) | color(theme.thinkingColor)
-                    | dim | xflex_shrink
+                    text(tailLinePreview(lastNonBlankLine(*st.currentToken), previewLen))
+                    | color(theme.thinkingColor) | dim | xflex_shrink
                 );
             } else if (st.pendingTokenThink && st.pendingTokenThink->reasoningTokens > 0) {
                 header.push_back(
@@ -1450,7 +1476,8 @@ Element MessageListComponent::buildMessageBlock(
                     if (isTailMsg
                         && TUISettings::instance().tailThinkingMode()
                                == TailThinkingMode::SingleLine) {
-                        previewText = tailLinePreview(msg.text, static_cast<size_t>(budget));
+                        previewText
+                            = tailLinePreview(lastNonBlankLine(msg.text), static_cast<size_t>(budget));
                     } else {
                         previewText = oneLinePreview(msg.text, static_cast<size_t>(budget));
                     }
