@@ -344,6 +344,20 @@ private:
     void sendUserInputLocked(TUIRenderState& st, std::string text);
     void onMessageQueueUpdate(const agentxx::agent::WireMessageQueueUpdate& update);
 
+    // ---- 历史分页 (viewMessages 尾窗同步 + 向上滚动分页拉取) ----
+
+    /// 服务端页响应处理 (client 线程): 校验会话/连续性后前插到已加载窗口
+    /// 上方, 更新窗口元数据; 组件锚定经 UI 动作队列投递 (LazyScrollable
+    /// ::notifyPrepended 保持视口内容稳定)
+    void onViewMessagesPage(const agentxx::agent::WireViewMessagesPage& page);
+    /// 请求更早历史 (ctx_.requestMoreHistory 入口; UI 线程触发):
+    /// - historyLoading 在途去重; hasMoreHistory 边界判断
+    /// - 页大小 kHistoryPageSize 与服务端默认兜底一致
+    void requestOlderHistory();
+    /// 历史分页每页条数 (与服务端 SessionServerAgentIO 的默认兜底一致)
+    static constexpr uint32_t kHistoryPageSize = 100;
+
+
     /// 将 UI 线程独占的组件操作 (弹窗开关/消息列表状态等) 投递到 UI 线程执行。
     /// client 线程 (onDelta/onSync/onPeerMessage) 不得直接触碰组件树
     /// (modal_/messageList_ 等由 UI 线程独占), 必须经本接口排队,

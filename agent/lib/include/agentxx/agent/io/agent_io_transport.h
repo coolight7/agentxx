@@ -209,6 +209,35 @@ struct WireInterruptAndRunNext {
     std::string sessionId;
 };
 
+/// 客户端请求 viewMessages 历史分页 (Client -> Server)
+///
+/// 背景: 长会话恢复时服务端仅同步末尾窗口 (SessionServerAgentIO::Config
+/// ::initialSyncTailCount), 客户端 (TUI) 用户向上滚动到窗口顶部时经本消息
+/// 分页拉取更早历史, 服务端以 WireViewMessagesPage 回应。
+/// - 语义: 请求绝对下标区间 [max(0, beforeIndex - count), beforeIndex) 的消息
+///   (viewMessages 为 append-only, 绝对下标恒定, 无竞态)
+/// - beforeIndex == 0 视为 "从末尾向前取 count 条" (客户端首次加载兜底;
+///   正常分页流程中窗口顶部为 0 时已无更早消息, 客户端不应再请求)
+struct WireGetViewMessages {
+    std::string sessionId;
+    /// 请求该绝对下标之前的消息 (exclusive 上界); 0 = 从末尾向前取
+    uint64_t beforeIndex = 0;
+    /// 请求条数; 0 = 服务端使用默认页大小
+    uint32_t count = 0;
+};
+
+/// 服务端 viewMessages 历史分页响应 (Server -> Client)
+/// - 携带绝对下标区间 [startIndex, startIndex + messages.size()) 的消息,
+///   客户端前插到本地已加载窗口上方并按 (startIndex 差值) 做滚动锚定
+struct WireViewMessagesPage {
+    std::string              sessionId;
+    /// 本页首条消息在服务端完整 viewMessages 中的绝对下标
+    uint64_t                 startIndex = 0;
+    /// 服务端会话总消息数 (供客户端判断 hasMore: startIndex > 0 即还有更早消息)
+    uint64_t                 totalCount = 0;
+    std::vector<ViewMessage> messages;
+};
+
 /// 所有可能的线消息类型 (tagged variant)
 using WireMessage = std::variant<
     WireHello,
@@ -240,7 +269,9 @@ using WireMessage = std::variant<
     WireMessageQueueUpdate,
     WireClearMessageQueue,
     WireRemoveQueueItem,
-    WireInterruptAndRunNext>;
+    WireInterruptAndRunNext,
+    WireGetViewMessages,
+    WireViewMessagesPage>;
 
 // ---------------------------------------------------------------------------
 // AgentIOTransportBase: 两个 AgentIOBase 端点之间的协议传输层

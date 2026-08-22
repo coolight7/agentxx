@@ -28,6 +28,11 @@ struct TUICtx {
     /// 触发 UI 重绘 (线程安全, 可从任意线程调用)
     std::function<void()> postRedraw;
 
+    /// 请求加载更早的历史消息 (历史分页; 线程安全)
+    /// - MessageListComponent 检测到滚动接近窗口顶部时调用; 实现方
+    ///   (TUIClientAgentIO::requestOlderHistory) 内部做在途去重与边界判断
+    std::function<void()> requestMoreHistory;
+
     /// 当前主题 (UI 线程独占, 渲染/事件时直接读取)
     TUITheme* theme = nullptr;
 

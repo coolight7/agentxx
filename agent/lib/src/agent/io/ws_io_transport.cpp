@@ -508,6 +508,16 @@ std::string WsAgentIOTransport::serialize(const WireMessage& msg) {
                 return io::makeRemoveQueueItem(m.sessionId, m.itemId).dump();
             } else if constexpr (std::is_same_v<T, WireInterruptAndRunNext>) {
                 return io::makeInterruptAndRunNext(m.sessionId).dump();
+            } else if constexpr (std::is_same_v<T, WireGetViewMessages>) {
+                return io::makeGetViewMessages(m.sessionId, m.beforeIndex, m.count).dump();
+            } else if constexpr (std::is_same_v<T, WireViewMessagesPage>) {
+                return io::makeViewMessagesPage(
+                           m.sessionId,
+                           m.startIndex,
+                           m.totalCount,
+                           m.messages
+                )
+                    .dump();
             } else {
                 return "{}";
             }
@@ -675,6 +685,13 @@ std::optional<WireMessage> WsAgentIOTransport::deserialize(std::string_view json
         return WireMessage{io::removeQueueItemFromJson(j)};
     } else if (t == io::MsgType::InterruptAndRunNext) {
         return WireMessage{io::interruptAndRunNextFromJson(j)};
+    } else if (t == io::MsgType::GetViewMessages) {
+        return WireMessage{io::getViewMessagesFromJson(j)};
+    } else if (t == io::MsgType::ViewMessagesPage) {
+        auto page = io::viewMessagesPageFromJson(j);
+        if (page.has_value()) {
+            return WireMessage{std::move(page.value())};
+        }
     }
     // Pong / Ping: 心跳内部处理, 不转发给调用方
     return std::nullopt;

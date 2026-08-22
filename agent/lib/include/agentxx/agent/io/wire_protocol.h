@@ -37,6 +37,9 @@ struct MsgType {
     inline static constexpr std::string_view RemoveQueueItem = "remove_queue_item";
     /// 客户端请求打断当前会话并立即执行队列首条 (insert 按钮)
     inline static constexpr std::string_view InterruptAndRunNext = "interrupt_and_run_next";
+    /// 客户端请求 viewMessages 历史分页 (恢复长会话时初始仅同步末尾窗口,
+    /// 用户向上滚动时按页拉取更早历史; 见 WireGetViewMessages)
+    inline static constexpr std::string_view GetViewMessages = "get_view_messages";
 
     // ===== Server -> Client =====
     inline static constexpr std::string_view HelloAck         = "hello_ack";
@@ -63,6 +66,8 @@ struct MsgType {
     inline static constexpr std::string_view PluginDataUp = "plugin_data_up";
     /// 服务端消息队列同步 (WireMessageQueueUpdate: 会话 ID + 排队消息列表)
     inline static constexpr std::string_view MessageQueueUpdate = "message_queue_update";
+    /// 服务端 viewMessages 历史分页响应 (WireViewMessagesPage)
+    inline static constexpr std::string_view ViewMessagesPage = "view_messages_page";
 };
 
 /// 中断/取消原因 (供 BaseAgent 区分中断来源)
@@ -283,6 +288,9 @@ inline neograph::json syncToJson(const SyncPayload& p) {
     neograph::json j   = neograph::json::object();
     j["fromIndex"]     = p.fromIndex;
     j["tailHash"]      = p.tailHash;
+    // 历史分页元数据 (尾窗同步时 fromIndex>0 / totalMessages>0; 全量同步
+    // 时 totalMessages == messages.size(), 字段冗余但便于客户端统一判断)
+    j["totalMessages"] = p.totalMessages;
     neograph::json arr = neograph::json::array();
     for (const auto& vm : p.messages) {
         arr.push_back(vm.toJson());
@@ -303,8 +311,9 @@ inline std::optional<SyncPayload> syncFromJson(const neograph::json& j) {
         return std::nullopt;
     }
     SyncPayload p;
-    p.fromIndex = j.value("fromIndex", uint64_t{0});
-    p.tailHash  = j.value("tailHash", std::string{});
+    p.fromIndex     = j.value("fromIndex", uint64_t{0});
+    p.tailHash      = j.value("tailHash", std::string{});
+    p.totalMessages = j.value("totalMessages", uint64_t{0});
     auto msgs   = j.value("messages", neograph::json::array());
     if (msgs.is_array()) {
         for (const auto& m : msgs) {
@@ -813,6 +822,70 @@ inline WireInterruptAndRunNext interruptAndRunNextFromJson(const neograph::json&
     WireInterruptAndRunNext q;
     q.sessionId = j.value("sessionId", std::string{});
     return q;
+}
+
+// ---------------------------------------------------------------------------
+// viewMessages 历史分页 (Client <-> Server)
+// ---------------------------------------------------------------------------
+
+/// 客户端请求历史分页 (Client -> Server): [max(0, beforeIndex-count), beforeIndex)
+/// - beforeIndex == 0 表示"从末尾向前取 count 条"; count == 0 用服务端默认页大小
+inline neograph::json
+    makeGetViewMessages(std::string_view sessionId, uint64_t beforeIndex, uint32_t count) {
+    neograph::json j = {
+        {"type",        MsgType::GetViewMessages},
+        {"sessionId",   sessionId               },
+        {"beforeIndex", beforeIndex             },
+        {"count",       count                   },
+    };
+    return j;
+}
+
+inline WireGetViewMessages getViewMessagesFromJson(const neograph::json& j) {
+    WireGetViewMessages m;
+    m.sessionId   = j.value("sessionId", std::string{});
+    m.beforeIndex = j.value("beforeIndex", uint64_t{0});
+    m.count       = j.value("count", uint32_t{0});
+    return m;
+}
+
+/// 服务端历史分页响应 (Server -> Client): 绝对下标区间
+/// [startIndex, startIndex + messages.size())
+inline neograph::json makeViewMessagesPage(
+    std::string_view         sessionId,
+    uint64_t                 startIndex,
+    uint64_t                 totalCount,
+    const std::vector<ViewMessage>& messages
+) {
+    neograph::json j = {
+        {"type",        MsgType::ViewMessagesPage},
+        {"sessionId",   sessionId                },
+        {"startIndex",  startIndex               },
+        {"totalCount",  totalCount               },
+    };
+    neograph::json arr = neograph::json::array();
+    for (const auto& vm : messages) {
+        arr.push_back(vm.toJson());
+    }
+    j["messages"] = std::move(arr);
+    return j;
+}
+
+inline std::optional<WireViewMessagesPage> viewMessagesPageFromJson(const neograph::json& j) {
+    if (!j.is_object()) {
+        return std::nullopt;
+    }
+    WireViewMessagesPage p;
+    p.sessionId  = j.value("sessionId", std::string{});
+    p.startIndex = j.value("startIndex", uint64_t{0});
+    p.totalCount = j.value("totalCount", uint64_t{0});
+    auto msgs    = j.value("messages", neograph::json::array());
+    if (msgs.is_array()) {
+        for (const auto& m : msgs) {
+            p.messages.push_back(ViewMessage::fromJson(m));
+        }
+    }
+    return p;
 }
 
 inline neograph::json makeLog(int level, std::string message) {

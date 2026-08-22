@@ -69,6 +69,14 @@ public:
     /// - 客户端启动后调用一次; 服务端以 WireAppendComponentInfo 回应, 由 onPeerMessage 处理
     virtual void requestAppendComponentInfo(std::string sessionId);
 
+    /// 请求拉取 viewMessages 历史分页 [client]
+    /// - 长会话恢复时服务端仅同步末尾窗口 (initialSyncTailCount), 客户端在
+    ///   用户向上滚动到窗口顶部时分页拉取更早历史; 服务端以
+    ///   WireViewMessagesPage 回应 (绝对下标区间 [beforeIndex-count, beforeIndex))
+    /// - beforeIndex == 0 表示"从末尾向前取 count 条"; count == 0 用服务端默认页大小
+    virtual void
+        requestViewMessagesPage(std::string sessionId, uint64_t beforeIndex, uint32_t count);
+
     /// 发送用户输入到对端 [client]
     /// - 是否首轮由服务端自行管理; 模型切换经 requestSelectModel
     /// - 发送后通知事件接收器 (ClientEventSink::onUserInput)
