@@ -2509,6 +2509,142 @@ static asio::awaitable<void> test_session_controller_message_queue() {
 }
 
 // ---------------------------------------------------------------------------
+// 23. 异常中断暂停后新输入应立即执行
+//     (回归: 轮次错误/取消/中断使 queuePaused_ 置位后, 用户后续从 TUI 发送的
+//     新消息曾永久滞留消息队列等待, 只能手动点击 insert 才能恢复)
+// ---------------------------------------------------------------------------
+
+static asio::awaitable<void> test_session_controller_queue_resume_after_abort() {
+    auto ex = co_await asio::this_coro::executor;
+
+    auto       sim            = startDaSimServer();
+    const auto baseUrl        = "http://127.0.0.1:" + std::to_string(sim.port);
+    g_da_sim_response_content = "echo response from queue resume test";
+    g_da_sim_tool_calls       = neograph::json::array();
+    g_da_sim_fail_count       = 0;
+
+    auto cfg             = std::make_shared<agentxx::agent::AgentConfig>();
+    cfg->model.baseUrl   = baseUrl;
+    cfg->model.apiKey    = "EMPTY";
+    cfg->model.modelName = "default-model";
+    // 重试 1 次即停止: 注入失败时轮次确定性地以错误结束 (缩短退避等待)
+    cfg->llmMaxRetry     = 1;
+
+    auto agent = std::make_shared<agentxx::agent::BaseAgent>(cfg);
+    co_await agent->init();
+
+    agentxx::agent::SessionServerAgentIO::Config scCfg;
+    scCfg.sessionId = "queue-resume-test-session";
+
+    auto sc = std::make_shared<agentxx::agent::SessionServerAgentIO>(ex, agent, scCfg);
+
+    auto [clientT, serverT] = agentxx::agent::ChannelAgentIOTransport::makePair(ex, ex);
+    sc->setTransport(std::shared_ptr<agentxx::agent::AgentIOTransportBase>(std::move(serverT)));
+
+    std::vector<agentxx::agent::WireTurnResult> turnResults;
+    std::mutex                                  mu;
+
+    auto clientLoop = [&]() -> asio::awaitable<void> {
+        while (clientT->alive()) {
+            auto msg = co_await clientT->recv();
+            if (!msg) {
+                break;
+            }
+            std::visit(
+                [&](auto&& m) {
+                    using T = std::decay_t<decltype(m)>;
+                    if constexpr (std::is_same_v<T, agentxx::agent::WireTurnResult>) {
+                        std::lock_guard<std::mutex> lk(mu);
+                        turnResults.push_back(m);
+                    }
+                },
+                *msg
+            );
+        }
+    };
+
+    asio::co_spawn(ex, clientLoop(), asio::detached);
+    asio::co_spawn(
+        ex,
+        [sc]() -> asio::awaitable<void> {
+            co_await sc->runTransportLoop();
+        },
+        asio::detached
+    );
+    asio::co_spawn(
+        ex,
+        [sc]() -> asio::awaitable<void> {
+            co_await sc->run();
+        },
+        asio::detached
+    );
+
+    auto waitForTurns = [&](size_t n) -> asio::awaitable<bool> {
+        for (int i = 0; i < 400; ++i) {
+            {
+                std::lock_guard<std::mutex> lk(mu);
+                if (turnResults.size() >= n) {
+                    co_return true;
+                }
+            }
+            co_await testSleep(ex, std::chrono::milliseconds{50});
+        }
+        co_return false;
+    };
+
+    // ---- 1) turn1 正常执行成功 (空闲 + 队列空 → 立即执行) ----
+    clientT->send(agentxx::agent::WireMessage{
+        agentxx::agent::WireUserInput{"queue-resume-test-session", "turn 1", ""}
+    });
+    XX_TEST_EXPECT_TRUE(co_await waitForTurns(1));
+    {
+        std::lock_guard<std::mutex> lk(mu);
+        XX_TEST_EXPECT_TRUE(!turnResults[0].hasError && !turnResults[0].interrupted);
+    }
+
+    // ---- 2) 注入 LLM 失败 → turn2 异常结束, 队列进入暂停态 (queuePaused_=true) ----
+    g_da_sim_fail_count = 2; // 1 次请求失败 + 1 次重试失败
+    clientT->send(agentxx::agent::WireMessage{
+        agentxx::agent::WireUserInput{"queue-resume-test-session", "turn 2", ""}
+    });
+    XX_TEST_EXPECT_TRUE(co_await waitForTurns(2));
+    {
+        std::lock_guard<std::mutex> lk(mu);
+        XX_TEST_EXPECT_TRUE(turnResults[1].hasError);
+    }
+    g_da_sim_fail_count = 0;
+
+    // ---- 3) 回归核心: 异常中断后队列已空且空闲, 用户新输入必须解除暂停立即执行 ----
+    clientT->send(agentxx::agent::WireMessage{
+        agentxx::agent::WireUserInput{"queue-resume-test-session", "turn 3", ""}
+    });
+    XX_TEST_EXPECT_TRUE(co_await waitForTurns(3));
+    {
+        std::lock_guard<std::mutex> lk(mu);
+        XX_TEST_EXPECT_TRUE(!turnResults[2].hasError && !turnResults[2].interrupted);
+    }
+
+    // ---- 4) 空闲时收到取消 (无轮次进行中): 不应使后续新输入滞留队列 ----
+    clientT->send(
+        agentxx::agent::WireMessage{agentxx::agent::WireCancel{"queue-resume-test-session"}}
+    );
+    co_await testSleep(ex, std::chrono::milliseconds{100});
+    clientT->send(agentxx::agent::WireMessage{
+        agentxx::agent::WireUserInput{"queue-resume-test-session", "turn 4", ""}
+    });
+    XX_TEST_EXPECT_TRUE(co_await waitForTurns(4));
+    {
+        std::lock_guard<std::mutex> lk(mu);
+        XX_TEST_EXPECT_TRUE(!turnResults[3].hasError && !turnResults[3].interrupted);
+    }
+
+    clientT->close();
+    sc->stop();
+    sim.stop();
+    co_return;
+}
+
+// ---------------------------------------------------------------------------
 
 asio::awaitable<TestResult> run_remote_agent_tests() {
     std::cout << "  [remote] protocol roundtrip..." << std::endl;
@@ -2576,6 +2712,9 @@ asio::awaitable<TestResult> run_remote_agent_tests() {
 
     std::cout << "  [remote] session controller message queue..." << std::endl;
     co_await test_session_controller_message_queue();
+
+    std::cout << "  [remote] session controller queue resume after abort..." << std::endl;
+    co_await test_session_controller_queue_resume_after_abort();
 
     std::cout << "  [remote] view messages pagination..." << std::endl;
     co_await test_view_messages_pagination();

@@ -153,17 +153,23 @@ void SessionServerAgentIO::pushMessageQueueItem(std::string text, std::string mo
     item.model       = std::move(model);
     item.createdAtMs = nowMs;
 
+    // 注意: 空闲 + 队列为空时即使处于暂停态也立即执行并解除暂停。
+    // - 暂停态来自上一轮的异常/取消/中断 (run() 轮末按结果置位), 用于阻止
+    //   "积压消息"自动继续执行; 但此刻队列已空, 本条是用户主动发送的新输入,
+    //   视为明确的新轮次指令 —— 若不解除暂停, 驱动循环不会消费队列, 该消息
+    //   将永远滞留等待 (异常中断后 TUI 发送消息卡在队列的根因)
     const bool willExecuteImmediately
-        = !turnActive_.load(std::memory_order_acquire) && !queuePaused_ && messageQueue_.empty();
+        = !turnActive_.load(std::memory_order_acquire) && messageQueue_.empty();
 
     messageQueue_.push_back(std::move(item));
 
     if (willExecuteImmediately) {
         // 当前完全空闲，此条消息将被驱动循环立即弹出执行，不向客户端推送中间的 1->0 队列状态，避免
         // UI 闪烁
+        queuePaused_ = false;
         wakeChannel_->try_send(ErrorCode{}, 1);
     } else {
-        // 真正进入排队等待 (前有进行中轮次 / 处于暂停状态 / 前有积压消息)，同步队列给客户端
+        // 真正进入排队等待 (前有进行中轮次 / 前有积压消息)，同步队列给客户端
         sendMessageQueueUpdate();
     }
 }
@@ -214,7 +220,11 @@ void SessionServerAgentIO::onPeerMessage(WireMessage msg) {
                 cancelGraceTimer();
                 pushMessageQueueItem(std::move(m.text), std::move(m.model));
             } else if constexpr (std::is_same_v<T, WireCancel>) {
-                queuePaused_ = true;
+                // 仅在轮次进行中时暂停队列: 空闲时收到取消 (无轮次可取消) 不应
+                // 置位暂停, 否则后续所有新输入都会因队列被误暂停而永远等待执行
+                if (turnActive_.load(std::memory_order_acquire)) {
+                    queuePaused_ = true;
+                }
                 onCancel();
             } else if constexpr (std::is_same_v<T, WireInterruptAndRunNext>) {
                 interruptAndRunNext();
