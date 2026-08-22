@@ -79,6 +79,14 @@ set_target_properties(${PLUGIN_NAME} PROPERTIES
   RUNTIME_OUTPUT_DIRECTORY "${AGENTXX_EXEC_INSTALL_PREFIX}/plugins/${PLUGIN_NAME}/"
   LIBRARY_OUTPUT_DIRECTORY "${AGENTXX_EXEC_INSTALL_PREFIX}/plugins/${PLUGIN_NAME}/"
 )
+foreach(config DEBUG RELEASE MINSIZEREL RELWITHDEBINFO)
+  # 统一复制到 exec 目录时直接将 动态库文件 放到 插件目录下，否则可能会放到 `exec/plugins/agentxx_xxx_plugin/Debug/libxxx.dll`
+  # 修正后统一放到 `exec/plugins/plugin_xxx/libxxx.dll`
+  set_target_properties(${PLUGIN_NAME} PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY_${config} "${AGENTXX_EXEC_INSTALL_PREFIX}/plugins/${PLUGIN_NAME}/"
+    LIBRARY_OUTPUT_DIRECTORY_${config} "${AGENTXX_EXEC_INSTALL_PREFIX}/plugins/${PLUGIN_NAME}/"
+  )
+endforeach()
 add_custom_command(TARGET ${PLUGIN_NAME} POST_BUILD
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
     "${CMAKE_CURRENT_SOURCE_DIR}/plugin.yaml"
