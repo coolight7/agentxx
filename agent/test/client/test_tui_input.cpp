@@ -4,7 +4,9 @@
 #include "agentxx-client/io/tui/framework/tui_context.h"
 #include "agentxx-client/io/tui/framework/tui_state.h"
 #include "agentxx-client/io/tui/tui_theme.h"
+#include "ftxui/component/animation.hpp"
 #include "ftxui/component/event.hpp"
+#include "ftxui/screen/screen.hpp"
 #include <chrono>
 #include <memory>
 #include <string>
@@ -299,6 +301,52 @@ void test_tui_state_message_queue_sync() {
     }
 }
 
+// ---------------------------------------------------------------------------
+// 流式指示 spinner: 动画帧经组件树转发 OnAnimation 推进
+// (回归: SpinnerComponent 若未 Add() 入组件树, 收不到动画回调, 恒显示首帧 ⠋)
+// ---------------------------------------------------------------------------
+void test_spinner_frame_advances_via_tree() {
+    InputFixture f;
+    bool streaming = false;
+    InputComponent::Config cfg;
+    cfg.onSend      = [](std::string) {};
+    cfg.isStreaming = [&streaming] { return streaming; };
+    auto comp       = std::make_shared<InputComponent>(f.ctx, std::move(cfg));
+
+    // 渲染到字符串便于检查指示器字符 (braille 字符在输入栏中唯一)
+    auto renderToString = [](InputComponent& c) {
+        ftxui::Screen screen(80, 5);
+        ftxui::Render(screen, c.OnRender());
+        return screen.ToString();
+    };
+
+    // 非流式: 静态 ">" 提示符, 无 braille 动画字符
+    const std::string idle = renderToString(*comp);
+    XX_TEST_EXPECT_TRUE(idle.find(">") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(idle.find("⠋") == std::string::npos);
+
+    // 流式: 首帧渲染为第 0 帧 ⠋
+    streaming = true;
+    XX_TEST_EXPECT_TRUE(renderToString(*comp).find("⠋") != std::string::npos);
+
+    // 经组件树分发动画步进 (根组件 OnAnimation 默认逐级转发给已注册子组件):
+    // 单次 90ms > 帧间隔 80ms → 推进到第 1 帧 ⠙
+    ftxui::animation::Params params(std::chrono::milliseconds(90));
+    comp->OnAnimation(params);
+    XX_TEST_EXPECT_TRUE(renderToString(*comp).find("⠙") != std::string::npos);
+
+    // 多次小步长累计跨帧: 再累计 10×20ms=200ms ≥ 2×80ms → 第 3 帧 ⠸
+    for (int i = 0; i < 10; ++i) {
+        ftxui::animation::Params small(std::chrono::milliseconds(20));
+        comp->OnAnimation(small);
+    }
+    XX_TEST_EXPECT_TRUE(renderToString(*comp).find("⠸") != std::string::npos);
+
+    // 停止流式: 指示器回到静态 ">"
+    streaming = false;
+    XX_TEST_EXPECT_TRUE(renderToString(*comp).find(">") != std::string::npos);
+}
+
 TestResult testTuiInput() {
     g_tui_input_passed = 0;
     g_tui_input_failed = 0;
@@ -315,6 +363,7 @@ TestResult testTuiInput() {
     test_alt_enter_newline_mid_text();
     test_paste_timeout_recovery();
     test_clear_resets_paste_state();
+    test_spinner_frame_advances_via_tree();
     test_tui_state_message_queue_sync();
 
     return TestResult{g_tui_input_passed, g_tui_input_failed};

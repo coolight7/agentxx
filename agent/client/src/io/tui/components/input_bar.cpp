@@ -23,6 +23,19 @@ InputComponent::InputComponent(TUICtx& ctx, Config config) :
     };
     input_ = Input(&inputText_, option);
     Add(input_);
+
+    // 会话运行加载动画 (braille 旋转点阵): 运行状态跟随 isStreaming,
+    // 颜色/加粗与原静态 "~" 标记一致; 动画等级不足时组件内部降级为静态帧
+    SpinnerComponent::Config spinnerCfg;
+    spinnerCfg.isActive = [this] {
+        return config_.isStreaming && config_.isStreaming();
+    };
+    spinnerCfg.decorate = [this](Element element) {
+        return element | color(ctx_.theme->accentColor) | bold;
+    };
+    spinner_ = std::make_shared<SpinnerComponent>(std::move(spinnerCfg));
+    // 注册为子项: OnAnimation 经组件树转发至此, 帧循环才能持续推进
+    Add(spinner_);
 }
 
 Element InputComponent::OnRender() {
@@ -33,7 +46,9 @@ Element InputComponent::OnRender() {
         // 闪烁为 Low 级动画, 动画等级低于 Low (如 Disabled) 时仅静态高亮
         indicator = text("!") | bgcolor(theme.errorColor) | color(Color::White) | bold;
     } else if (config_.isStreaming && config_.isStreaming()) {
-        indicator = text("~") | color(theme.accentColor) | bold;
+        // 流式输出: 循环加载动画 (SpinnerComponent, braille 旋转点阵);
+        // 动画等级不足时组件内部自动降级为静态帧
+        indicator = spinner_->Render();
     } else {
         indicator = text(">") | color(theme.accentColor) | bold;
     }
