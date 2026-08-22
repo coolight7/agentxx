@@ -1,6 +1,6 @@
 # agentxx_dart_cli
 
-经 **Dart FFI** 驱动 [libagentxx](../../lib/) 内置 agent 会话的命令行客户端。
+经 **Dart FFI** 驱动 [libagentxx](../../../lib/) 内置 agent 会话的命令行客户端。
 
 ```
 ┌─────────────────────────────┐
@@ -22,11 +22,7 @@
 agent/script/windows_debug_build.bat
 
 # 2) 在 cmd 运行 (在 dart/ 目录)
-dart run bin/agentxx_cli.dart ^
-    --dll path/to/libagentxx.dll ^
-    --base-url https://api.example.com/v1 ^
-    --api-key sk-xxx ^
-    --model gpt-4o-mini
+dart run bin/agentxx_cli.dart --dll path/to/libagentxx.dll --base-url https://api.example.com/v1 --api-key sk-xxx --model gpt-4o-mini
 
 # 或使用环境变量 AGENTXX_BASE_URL / AGENTXX_API_KEY / AGENTXX_MODEL_NAME
 # 或直接传契约 JSON 文件:

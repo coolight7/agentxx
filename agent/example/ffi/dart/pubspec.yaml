@@ -14,7 +14,7 @@ dependencies:
   ffi: ^2.1.0
   # 生成的 FFI 符号定义 (agent/lib/include/agentxx/ffi_api.h → dart)
   agentxx_ffi_bindings:
-    path: ../../ffi/dart
+    path: ../../../ffi/dart
 
 dev_dependencies:
   lints: ^5.0.0
