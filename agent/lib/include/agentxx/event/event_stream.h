@@ -5,6 +5,7 @@
 #include "agentxx/event/events.h"
 #include "agentxx/middlewares/middleware.h"
 #include "agentxx/util/async_offload.h"
+#include "agentxx/util/container_util.h"
 #include "agentxx/util/exception.h"
 #include "asio/as_tuple.hpp"
 #include "asio/co_spawn.hpp"
@@ -462,11 +463,11 @@ public:
         if (it == streams_.end()) {
             // 新建
             auto stream = std::make_shared<EventStream<_DATA_TYPE>>(topic);
-            it          = streams_
-                     .emplace(
-                         std::string{topic},
-                         std::static_pointer_cast<EventStreamInterface>(stream)
-                     )
+            it          = util::insertHeterogeneous(
+                     streams_,
+                     std::string{topic},
+                     std::static_pointer_cast<EventStreamInterface>(stream)
+                 )
                      .first;
         } else {
             // 类型校验: 同 topic 必须用同一 _DATA_TYPE, 否则 static_cast 是 UB
@@ -485,11 +486,11 @@ public:
         auto it = streams_.find(topic);
         if (it == streams_.end()) {
             auto stream = std::make_shared<RequestResponseStream<_REQ_TYPE, _RESP_TYPE>>(topic);
-            it          = streams_
-                     .emplace(
-                         std::string{topic},
-                         std::static_pointer_cast<EventStreamInterface>(stream)
-                     )
+            it          = util::insertHeterogeneous(
+                     streams_,
+                     std::string{topic},
+                     std::static_pointer_cast<EventStreamInterface>(stream)
+                 )
                      .first;
         } else {
             assert(

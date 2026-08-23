@@ -37,7 +37,7 @@ bool AgentRegistry::contains(std::string_view agentId) const {
 
 void AgentRegistry::insert(std::shared_ptr<AgentNode> node) {
     assert(node && !node->agentId.empty());
-    nodes_[node->agentId] = std::move(node);
+    util::insertOrAssignHeterogeneous(nodes_, node->agentId, std::move(node));
 }
 
 void AgentRegistry::remove(std::string_view agentId) {
@@ -451,7 +451,7 @@ asio::awaitable<events::RespSubagentBatchItem> AgentHost::spawnOneTask(
     runningSubagentCount_++;
     if (!sameContext) {
         // 同上下文模式共享父线程: 不覆盖父线程深度记录
-        sessionDepth_[subagentSessionId] = depth;
+        util::insertOrAssignHeterogeneous(sessionDepth_, subagentSessionId, depth);
     }
 
     // 运行边界清理 (成功/错误/取消统一回收节点)
@@ -470,7 +470,7 @@ asio::awaitable<events::RespSubagentBatchItem> AgentHost::spawnOneTask(
             if (host) {
                 host->destroyAgent(agentId);
                 if (!sharedSession) {
-                    host->sessionDepth_.erase(subagentSessionId);
+                    util::eraseHeterogeneous(host->sessionDepth_, subagentSessionId);
                 }
                 if (host->runningSubagentCount_ > 0) {
                     host->runningSubagentCount_--;
@@ -811,7 +811,7 @@ void AgentHost::registerRemoteAgent(
     std::shared_ptr<agentxx::server::A2aClient> client
 ) {
     if (client) {
-        remoteAgents_[std::string{agentId}] = std::move(client);
+        util::insertOrAssignHeterogeneous(remoteAgents_, agentId, std::move(client));
     } else {
         util::eraseHeterogeneous(remoteAgents_, agentId); // 异构删除免拷贝
     }
@@ -885,7 +885,7 @@ asio::awaitable<events::RespHostMessage> AgentHost::sendViaA2a(
 
 void AgentHost::setMailbox(std::string_view agentId, Mailbox mailbox) {
     if (mailbox) {
-        mailboxes_[std::string{agentId}] = std::move(mailbox);
+        util::insertOrAssignHeterogeneous(mailboxes_, agentId, std::move(mailbox));
     } else {
         util::eraseHeterogeneous(mailboxes_, agentId); // 异构删除免拷贝
     }

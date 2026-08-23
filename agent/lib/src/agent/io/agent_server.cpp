@@ -1,6 +1,7 @@
 #include "agentxx/agent/io/agent_server.h"
 
 #include "agentxx/agent/io/ws_io_transport.h"
+#include "agentxx/util/container_util.h"
 #include "agentxx/util/log.h"
 #include "agentxx/util/ws_client.h"
 #include "asio/co_spawn.hpp"
@@ -112,8 +113,8 @@ std::shared_ptr<SessionServerAgentIO> AgentServer::getOrCreateController(std::st
     cfg.deltaBufferCap       = config_.deltaBufferCap;
     cfg.initialSyncTailCount = config_.initialSyncTailCount;
 
-    auto ctrl                            = std::make_shared<SessionServerAgentIO>(ex_, agent_, cfg);
-    controllers_[std::string{sessionId}] = ctrl;
+    auto ctrl = std::make_shared<SessionServerAgentIO>(ex_, agent_, cfg);
+    util::insertOrAssignHeterogeneous(controllers_, sessionId, ctrl);
 
     // sessionId 以 std::string 值捕获: string_view 参数引用的原始字符串
     // (serveTransport 的局部 WireHello) 可能在本协程完成前已析构

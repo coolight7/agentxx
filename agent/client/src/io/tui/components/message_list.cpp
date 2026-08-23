@@ -1661,7 +1661,7 @@ Element MessageListComponent::buildMessageBlock(
                     auto      resPreview
                         = oneLinePreview(msg.tool->toolResult, static_cast<size_t>(budget));
                     if (!resPreview.empty()) {
-                        resOrArgsSummary = " " + std::move(resPreview);
+                        resOrArgsSummary = " · " + std::move(resPreview);
                     }
                 } else if (!finished) {
                     if (!summary.argsSummary.empty()) {
@@ -1704,7 +1704,7 @@ Element MessageListComponent::buildMessageBlock(
                 if (!resOrArgsSummary.empty()) {
                     if (isError) {
                         header.push_back(
-                            text(std::move(resOrArgsSummary)) | color(theme.errorColor)
+                            text(std::move(resOrArgsSummary)) | color(theme.errorColor) | dim
                             | xflex_shrink
                         );
                     } else {

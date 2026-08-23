@@ -1,5 +1,6 @@
 #include "agentxx/plugin/tool_registry.h"
 
+#include "agentxx/util/container_util.h"
 #include "agentxx/util/log.h"
 #include <algorithm>
 
@@ -24,11 +25,11 @@ bool ToolRegistry::registerTool(
         XX_LOGW("ToolRegistry: tool `{}` conflicts with built-in tool", name);
         return false;
     }
-    tools_[std::move(name)] = std::move(tool);
+    util::insertHeterogeneous(tools_, std::move(name), std::move(tool));
     return true;
 }
 
-std::shared_ptr<agentxx::tools::XXToolBase> ToolRegistry::unregisterTool(const std::string& name) {
+std::shared_ptr<agentxx::tools::XXToolBase> ToolRegistry::unregisterTool(std::string_view name) {
     auto it = tools_.find(name);
     if (it == tools_.end()) {
         return nullptr;
@@ -38,7 +39,7 @@ std::shared_ptr<agentxx::tools::XXToolBase> ToolRegistry::unregisterTool(const s
     return tool;
 }
 
-std::shared_ptr<agentxx::tools::XXToolBase> ToolRegistry::find(const std::string& name) const {
+std::shared_ptr<agentxx::tools::XXToolBase> ToolRegistry::find(std::string_view name) const {
     auto it = tools_.find(name);
     if (it == tools_.end()) {
         return nullptr;
@@ -46,7 +47,7 @@ std::shared_ptr<agentxx::tools::XXToolBase> ToolRegistry::find(const std::string
     return it->second;
 }
 
-bool ToolRegistry::contains(const std::string& name) const {
+bool ToolRegistry::contains(std::string_view name) const {
     return tools_.contains(name);
 }
 

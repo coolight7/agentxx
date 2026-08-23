@@ -6,6 +6,7 @@
 #include "agentxx/event/event_stream.h"
 #include "agentxx/plugin/plugin_common.h"
 #include "agentxx/util/async_offload.h"
+#include "agentxx/util/container_util.h"
 #include "agentxx/util/exception.h"
 #include "agentxx/util/log.h"
 #include "agentxx/util/string_util.h"
@@ -148,21 +149,22 @@ bool CapabilityRegistry::registerCapability(
         return false;
     }
     // 同名能力重复注册: 拒绝 (能力委派需唯一 provider)
-    if (caps_.contains(std::string{name})) {
+    auto it = caps_.find(name);
+    if (it != caps_.end()) {
         XX_LOGW(
             "CapabilityRegistry: capability `{}` already registered by `{}`",
             name,
-            caps_.at(std::string{name}).provider
+            it->second.provider
         );
         return false;
     }
-    caps_[std::string{name}] = Entry{std::string{provider}, invoke, ctx};
+    util::insertHeterogeneous(caps_, std::string{name}, Entry{std::string{provider}, invoke, ctx});
     XX_LOGI("CapabilityRegistry: `{}` registered by plugin `{}`", name, provider);
     return true;
 }
 
 bool CapabilityRegistry::unregisterCapability(std::string_view name, std::string_view provider) {
-    auto it = caps_.find(std::string{name});
+    auto it = caps_.find(name);
     if (it == caps_.end()) {
         return false;
     }
@@ -180,11 +182,11 @@ bool CapabilityRegistry::unregisterCapability(std::string_view name, std::string
 }
 
 bool CapabilityRegistry::has(std::string_view name) const {
-    return caps_.contains(std::string{name});
+    return caps_.contains(name);
 }
 
 const CapabilityRegistry::Entry* CapabilityRegistry::get(std::string_view name) const {
-    auto it = caps_.find(std::string{name});
+    auto it = caps_.find(name);
     if (it == caps_.end()) {
         return nullptr;
     }
@@ -192,7 +194,7 @@ const CapabilityRegistry::Entry* CapabilityRegistry::get(std::string_view name) 
 }
 
 std::string CapabilityRegistry::providerOf(std::string_view name) const {
-    auto it = caps_.find(std::string{name});
+    auto it = caps_.find(name);
     if (it == caps_.end()) {
         return {};
     }
@@ -1889,7 +1891,7 @@ PluginManager::loadNativeAsync(
     inst->host.vtable = &g_hostVtable;
     inst->host.opaque = inst.get();
 
-    plugins_[name] = inst;
+    util::insertOrAssignHeterogeneous(plugins_, name, inst);
 
     // 插件配置参数 (yaml `plugins` 条目 args) 随加载直接传入 (C2):
     // - 宿主不解析字段语义, 插件经 vtable get_plugin_args 整体读取
@@ -1929,7 +1931,7 @@ PluginManager::loadNativeAsync(
             eraseMiddleware(inst->middleware.get());
             inst->middleware = nullptr;
         }
-        plugins_.erase(name);
+        util::eraseHeterogeneous(plugins_, name);
         co_return nullptr;
     }
 
@@ -2012,7 +2014,7 @@ asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadBuiltinAsync
     inst->host.vtable     = &g_hostVtable;
     inst->host.opaque     = inst.get();
 
-    plugins_[name] = inst;
+    util::insertOrAssignHeterogeneous(plugins_, name, inst);
 
     // 插件配置参数随加载直接传入 (同 loadNativeAsync, 见 C2): 在 entry
     // 调用【之前】写入 inst->args —— 插件 entry 装配期经 get_plugin_args
@@ -2038,7 +2040,7 @@ asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadBuiltinAsync
             eraseMiddleware(inst->middleware.get());
             inst->middleware = nullptr;
         }
-        plugins_.erase(name);
+        util::eraseHeterogeneous(plugins_, name);
         co_return nullptr;
     }
 
@@ -2192,7 +2194,7 @@ void PluginManager::flushPendingCleanup() {
 }
 
 asio::awaitable<bool> PluginManager::unloadAsync(std::string_view name) {
-    auto it = plugins_.find(std::string{name});
+    auto it = plugins_.find(name);
     if (it == plugins_.end()) {
         XX_LOGW("Plugin unload: `{}` not loaded", name);
         co_return false;
@@ -2848,7 +2850,7 @@ std::string PluginManager::getPluginArgsJson(PluginInstance* inst) {
 }
 
 std::shared_ptr<PluginInstance> PluginManager::find(std::string_view name) const {
-    auto it = plugins_.find(std::string{name});
+    auto it = plugins_.find(name);
     if (it == plugins_.end()) {
         return nullptr;
     }

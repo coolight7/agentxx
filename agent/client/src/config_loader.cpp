@@ -1,5 +1,6 @@
 #include "agentxx-client/config_loader.h"
 
+#include "agentxx/util/container_util.h"
 #include "agentxx/util/string_util.h"
 #include "yaml-cpp/yaml.h"
 #include <algorithm>
@@ -101,13 +102,13 @@ std::map<std::string, std::string> loadDotEnv(const std::vector<std::string>& pa
 
 /// 内置环境变量存储 (值由 main 启动时经 setBuiltinEnvVar 注入)
 /// - 空值 = 未注入 (对应变量惰性解析, 如 AGENTXX_WORK_DIR 回退 current_path())
-static std::map<std::string, std::string> g_builtinEnvVars;
+static std::map<std::string, std::string, std::less<>> g_builtinEnvVars;
 
 void setBuiltinEnvVar(std::string_view name, std::string value) {
     if (value.empty()) {
-        g_builtinEnvVars.erase(std::string{name});
+        util::eraseHeterogeneous(g_builtinEnvVars, name);
     } else {
-        g_builtinEnvVars[std::string{name}] = std::move(value);
+        util::insertOrAssignHeterogeneous(g_builtinEnvVars, name, std::move(value));
     }
 }
 
@@ -118,7 +119,7 @@ void setBuiltinEnvVar(std::string_view name, std::string value) {
 ///   (仅 main 入口注入; 未注入时无法惰性推导, 返回 nullopt 保留 ${VAR} 原样)
 static std::optional<std::string> resolveBuiltinEnvVar(std::string_view varName) {
     // 已注入的内置变量: 直接取值
-    auto it = g_builtinEnvVars.find(std::string{varName});
+    auto it = g_builtinEnvVars.find(varName);
     if (it != g_builtinEnvVars.end()) {
         return it->second;
     }

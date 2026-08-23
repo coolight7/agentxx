@@ -2,6 +2,7 @@
 
 #include "agentxx/agent/io/agent_io_transport.h"
 #include "agentxx/middlewares/summarization.h"
+#include "agentxx/util/container_util.h"
 #include "agentxx/util/log.h"
 #include "fmt/format.h"
 
@@ -19,12 +20,7 @@ EventBus::EventBus(asio::any_io_executor executor) :
     executor_(executor) {}
 
 bool EventBus::remove(std::string_view topic) {
-    auto it = streams_.find(topic);
-    if (it == streams_.end()) {
-        return false;
-    }
-    streams_.erase(it);
-    return true;
+    return util::eraseHeterogeneous(streams_, topic);
 }
 
 // ---------------------------------------------------------------------------

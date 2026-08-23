@@ -345,7 +345,7 @@ asio::awaitable<std::shared_ptr<ClientPluginInstance>> ClientPluginManager::load
         co_return nullptr;
     }
 
-    plugins_.emplace(name, inst);
+    util::insertHeterogeneous(plugins_, std::string{name}, inst);
     XX_LOGI("[client_plugin] loaded: {} ({})", name, version);
     co_return inst;
 }
@@ -687,7 +687,7 @@ std::vector<ClientPluginManager::PluginListView> ClientPluginManager::list() con
 }
 
 std::shared_ptr<ClientPluginInstance> ClientPluginManager::find(std::string_view name) const {
-    auto it = plugins_.find(std::string{name});
+    auto it = plugins_.find(name);
     return it == plugins_.end() ? nullptr : it->second;
 }
 

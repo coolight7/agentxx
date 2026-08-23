@@ -1,10 +1,12 @@
 #include "test_util_misc.h"
 
+#include "agentxx/util/container_util.h"
 #include "agentxx/util/exception.h"
 #include "agentxx/util/http_header.h"
 #include "agentxx/util/stream.h"
 #include "agentxx/util/util.h"
 #include <chrono>
+#include <set>
 #include <stdexcept>
 #include <thread>
 
@@ -179,6 +181,102 @@ void test_stream_throttle_debounce() {
     }
 }
 
+// ---------------------------------------------------------------------------
+// util/container_util.h 异构关联容器操作测试
+// ---------------------------------------------------------------------------
+void test_container_util_heterogeneous() {
+    // 1. eraseHeterogeneous
+    {
+        std::map<std::string, int, std::less<>> m;
+        m["hello"] = 42;
+        m["world"] = 100;
+
+        XX_TEST_EXPECT_TRUE(agentxx::util::eraseHeterogeneous(m, std::string_view("hello")));
+        XX_TEST_EXPECT_EQ(m.size(), (size_t)1);
+        XX_TEST_EXPECT_FALSE(agentxx::util::eraseHeterogeneous(m, std::string_view("non_exist")));
+        XX_TEST_EXPECT_EQ(m.size(), (size_t)1);
+
+        std::set<std::string, std::less<>> s{"apple", "banana"};
+        XX_TEST_EXPECT_TRUE(agentxx::util::eraseHeterogeneous(s, std::string_view("apple")));
+        XX_TEST_EXPECT_FALSE(agentxx::util::eraseHeterogeneous(s, std::string_view("orange")));
+        XX_TEST_EXPECT_EQ(s.size(), (size_t)1);
+    }
+
+    // 2. insertHeterogeneous
+    {
+        std::map<std::string, std::string, std::less<>> m;
+        // string_view 参数
+        auto [it1, ok1] = agentxx::util::insertHeterogeneous(m, "k1", "v1");
+        XX_TEST_EXPECT_TRUE(ok1);
+        XX_TEST_EXPECT_EQ(it1->second, std::string("v1"));
+
+        // 重复 key 不覆盖
+        auto [it2, ok2] = agentxx::util::insertHeterogeneous(m, "k1", "v2_ignored");
+        XX_TEST_EXPECT_FALSE(ok2);
+        XX_TEST_EXPECT_EQ(it2->second, std::string("v1"));
+
+        // 右值 string (move 复用)
+        std::string moveKey = "k2";
+        std::string moveVal = "v2";
+        auto [it3, ok3]
+            = agentxx::util::insertHeterogeneous(m, std::move(moveKey), std::move(moveVal));
+        XX_TEST_EXPECT_TRUE(ok3);
+        XX_TEST_EXPECT_EQ(it3->second, std::string("v2"));
+
+        // set 测试
+        std::set<std::string, std::less<>> s;
+        auto [sit1, sok1] = agentxx::util::insertHeterogeneous(s, "item1");
+        XX_TEST_EXPECT_TRUE(sok1);
+        auto [sit2, sok2] = agentxx::util::insertHeterogeneous(s, "item1");
+        XX_TEST_EXPECT_FALSE(sok2);
+    }
+
+    // 3. insertOrAssignHeterogeneous / overwriteHeterogeneous
+    {
+        std::map<std::string, int, std::less<>> m;
+        // 新建插入
+        auto [it1, inserted1]
+            = agentxx::util::insertOrAssignHeterogeneous(m, std::string_view("score"), 100);
+        XX_TEST_EXPECT_TRUE(inserted1);
+        XX_TEST_EXPECT_EQ(it1->second, 100);
+
+        // 已存在时覆盖
+        auto [it2, inserted2]
+            = agentxx::util::insertOrAssignHeterogeneous(m, std::string_view("score"), 200);
+        XX_TEST_EXPECT_FALSE(inserted2);
+        XX_TEST_EXPECT_EQ(it2->second, 200);
+        XX_TEST_EXPECT_EQ(m["score"], 200);
+
+        // overwriteHeterogeneous 别名测试
+        auto [it3, inserted3] = agentxx::util::overwriteHeterogeneous(m, "score", 300);
+        XX_TEST_EXPECT_FALSE(inserted3);
+        XX_TEST_EXPECT_EQ(it3->second, 300);
+        XX_TEST_EXPECT_EQ(m["score"], 300);
+
+        // 右值 string 覆盖
+        std::string rvalKey   = "rkey";
+        auto [it4, inserted4] = agentxx::util::overwriteHeterogeneous(m, std::move(rvalKey), 400);
+        XX_TEST_EXPECT_TRUE(inserted4);
+        XX_TEST_EXPECT_EQ(it4->second, 400);
+    }
+
+    // 4. getOrCreateHeterogeneous
+    {
+        std::map<std::string, std::vector<int>, std::less<>> m;
+        // 不存在则默认构造插入
+        auto& vec = agentxx::util::getOrCreateHeterogeneous(m, std::string_view("numbers"));
+        XX_TEST_EXPECT_TRUE(vec.empty());
+        vec.push_back(1);
+        vec.push_back(2);
+
+        // 再次获取得到相同引用
+        auto& vec2 = agentxx::util::getOrCreateHeterogeneous(m, "numbers");
+        XX_TEST_EXPECT_EQ(vec2.size(), (size_t)2);
+        XX_TEST_EXPECT_EQ(vec2[0], 1);
+        XX_TEST_EXPECT_EQ(vec2[1], 2);
+    }
+}
+
 TestResult testUtilMisc() {
     g_um_passed = 0;
     g_um_failed = 0;
@@ -191,6 +289,7 @@ TestResult testUtilMisc() {
     test_catch_error_unknown();
     test_system_utils();
     test_stream_throttle_debounce();
+    test_container_util_heterogeneous();
 
     return TestResult{g_um_passed, g_um_failed};
 }

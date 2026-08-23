@@ -277,8 +277,12 @@ json AcpProtocolHandler::handleSessionNew(const json& params, const json& id) {
 
     {
         std::lock_guard lk(sessionsMu_);
-        sessions_[sessionId]    = cwd;
-        cancelFlags_[sessionId] = std::make_shared<std::atomic<bool>>(false);
+        util::insertOrAssignHeterogeneous(sessions_, sessionId, cwd);
+        util::insertOrAssignHeterogeneous(
+            cancelFlags_,
+            sessionId,
+            std::make_shared<std::atomic<bool>>(false)
+        );
     }
 
     XX_LOGI("[acp] session/new: {} (cwd={})", sessionId, cwd);
@@ -310,9 +314,7 @@ void AcpProtocolHandler::handleSessionPrompt(const json& env, const json& params
     std::shared_ptr<std::atomic<bool>> cancelFlag;
     {
         std::lock_guard lk(sessionsMu_);
-        if (sessions_.find(sessionId) == sessions_.end()) {
-            sessions_[sessionId] = {};
-        }
+        util::getOrCreateHeterogeneous(sessions_, sessionId);
         auto it = cancelFlags_.find(sessionId);
         if (it == cancelFlags_.end()) {
             it = cancelFlags_.emplace(sessionId, std::make_shared<std::atomic<bool>>(false)).first;
@@ -322,7 +324,7 @@ void AcpProtocolHandler::handleSessionPrompt(const json& env, const json& params
 
     {
         std::lock_guard lk(inflightMu_);
-        if (!inflightSessions_.insert(sessionId).second) {
+        if (!util::insertHeterogeneous(inflightSessions_, sessionId).second) {
             auto err = jsonRpcError(
                 id,
                 -32000,
@@ -459,7 +461,7 @@ void AcpProtocolHandler::workerRunPrompt(
 void AcpProtocolHandler::workerCleanup(std::string_view sessionId) {
     {
         std::lock_guard lk(inflightMu_);
-        util::eraseHeterogeneous(inflightSessions_, sessionId); // 异构删除免拷贝
+        (void)util::eraseHeterogeneous(inflightSessions_, sessionId); // 异构删除免拷贝
     }
     auto prev = inflightCount_.fetch_sub(1, std::memory_order_acq_rel);
     if (prev == 1) {
@@ -480,7 +482,11 @@ void AcpProtocolHandler::handleSessionCancel(const json& params) {
         it->second->store(true, std::memory_order_release);
         XX_LOGI("[acp] session/cancel: {}", sessionId);
     } else {
-        cancelFlags_[sessionId] = std::make_shared<std::atomic<bool>>(true);
+        util::insertOrAssignHeterogeneous(
+            cancelFlags_,
+            sessionId,
+            std::make_shared<std::atomic<bool>>(true)
+        );
     }
 }
 

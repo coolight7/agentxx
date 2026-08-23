@@ -1,6 +1,7 @@
 #pragma once
 
 #include "agentxx/agent/context.h"
+#include "agentxx/util/container_util.h"
 #include "agentxx/util/log.h"
 #include "asio/io_context.hpp"
 #include "fmt/format.h"
@@ -193,8 +194,8 @@ public:
     /// - 如果 thread 很多，可以等需要时从硬盘加载进内存
     virtual asio::awaitable<std::shared_ptr<T>> loadStateItem(std::string_view sessionId) {
         // TODO: 从磁盘读取
-        auto ptr                       = std::make_shared<T>();
-        states[std::string{sessionId}] = ptr;
+        auto ptr = std::make_shared<T>();
+        util::insertOrAssignHeterogeneous(states, sessionId, ptr);
         co_return ptr;
     }
 
@@ -545,10 +546,10 @@ public:
 
     template<typename T>
     T& getGraphDataItemValue(std::string_view sessionId, std::string_view key) {
-        auto& itemGraphData = graphData[std::string{sessionId}];
+        auto& itemGraphData = util::getOrCreateHeterogeneous(graphData, sessionId);
         auto  it            = itemGraphData.find(key);
         if (it == itemGraphData.end()) {
-            auto [insertIt, _] = itemGraphData.insert(std::pair<std::string, std::any>{key, T{}});
+            auto [insertIt, _] = util::insertHeterogeneous(itemGraphData, std::string{key}, T{});
             it                 = insertIt;
         } else {
             ensureAnyType<T>(it->second);
@@ -558,13 +559,8 @@ public:
 
     template<typename T>
     void setGraphDataItemValue(std::string_view sessionId, std::string_view key, T value) {
-        auto& itemGraphData = graphData[std::string{sessionId}];
-        auto  it            = itemGraphData.find(key);
-        if (it == itemGraphData.end()) {
-            itemGraphData.insert(std::pair<std::string, std::any>{key, std::move(value)});
-        } else {
-            it->second = std::move(value);
-        }
+        auto& itemGraphData = util::getOrCreateHeterogeneous(graphData, sessionId);
+        util::insertOrAssignHeterogeneous(itemGraphData, key, std::move(value));
     }
 
     template<typename T>
@@ -573,12 +569,12 @@ public:
         std::string_view          key,
         std::function<void(T&)>&& modify
     ) {
-        auto& itemGraphData = graphData[std::string{sessionId}];
+        auto& itemGraphData = util::getOrCreateHeterogeneous(graphData, sessionId);
         auto  it            = itemGraphData.find(key);
         if (it == itemGraphData.end()) {
             auto value = T{};
             modify(value);
-            itemGraphData.insert(std::pair<std::string, std::any>{key, std::move(value)});
+            util::insertHeterogeneous(itemGraphData, std::string{key}, std::move(value));
         } else {
             ensureAnyType<T>(it->second);
             modify(std::any_cast<T&>((it->second)));

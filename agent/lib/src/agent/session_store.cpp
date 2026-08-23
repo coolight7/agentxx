@@ -1,6 +1,7 @@
 #include "agentxx/agent/session_store.h"
 
 #include "agentxx/agent/config_static.h"
+#include "agentxx/util/container_util.h"
 #include "agentxx/util/exception.h"
 #include "agentxx/util/log.h"
 #include <algorithm>
@@ -233,7 +234,7 @@ SessionStore::SessionDbs& SessionStore::dbs(std::string_view sessionId) {
     dbs->sessionDb.open((dir / "session.db").string());
     dbs->shareStoreDb.open((dir / "share_store.db").string());
     ensureSchema(dbs->sessionDb, dbs->shareStoreDb);
-    auto [insertIt, _] = dbs_.emplace(std::string{sessionId}, std::move(dbs));
+    auto [insertIt, _] = util::insertHeterogeneous(dbs_, std::string{sessionId}, std::move(dbs));
     return *insertIt->second;
 }
 

@@ -139,9 +139,9 @@ private:
     NotificationSink                           sink_;
 
     // -- Sessions --
-    mutable std::mutex                                        sessionsMu_;
-    std::map<std::string, std::string, std::less<>>           sessions_; // sessionId → cwd
-    std::map<std::string, std::shared_ptr<std::atomic<bool>>> cancelFlags_;
+    mutable std::mutex                                                  sessionsMu_;
+    std::map<std::string, std::string, std::less<>>                     sessions_; // sessionId → cwd
+    std::map<std::string, std::shared_ptr<std::atomic<bool>>, std::less<>> cancelFlags_;
 
     // -- In-flight prompt tracking --
     mutable std::mutex                 inflightMu_;

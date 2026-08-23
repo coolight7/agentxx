@@ -279,7 +279,8 @@ void MiddlewareContext::ensureShareStoreLoaded(std::string_view sessionId) {
     }
     // 首次访问: 从 SQLite 恢复全部条目与 id 计数器
     auto loaded = persistence_->loadShareStore(sessionId);
-    shareStore.emplace(
+    util::insertHeterogeneous(
+        shareStore,
         std::string{sessionId},
         SessionShareStore{.store = std::move(loaded.items), .storeId = loaded.nextId}
     );
@@ -311,7 +312,8 @@ void MiddlewareContext::setShareStoreItemValue(
     if (it != shareStore.end()) {
         it->second.store[id] = value;
     } else {
-        shareStore.emplace(
+        util::insertHeterogeneous(
+            shareStore,
             std::string{sessionId},
             MiddlewareContext::SessionShareStore{
                 .store = std::map<size_t, std::string>{{id, std::string{value}}}
@@ -354,7 +356,8 @@ size_t
             it->second.storeId = id;
         }
     } else {
-        shareStore.emplace(
+        util::insertHeterogeneous(
+            shareStore,
             std::string{sessionId},
             MiddlewareContext::SessionShareStore{
                 .store   = std::map<size_t, std::string>{{id, std::string{value}}},
@@ -465,14 +468,9 @@ void MiddlewareContext::setGraphDataFromState(neograph::json j, std::string_view
     if (j.is_object()) {
         auto data = std::map<std::string, std::any, std::less<>>{};
         for (auto it = j.begin(); it != j.end(); ++it) {
-            data[it.key()] = it.value();
+            util::insertOrAssignHeterogeneous(data, it.key(), it.value());
         }
-        auto it = graphData.find(sessionId); // find 支持异构查找（使用透明比较器）
-        if (it != graphData.end()) {
-            it->second = std::move(data);
-        } else {
-            graphData.emplace(std::string{sessionId}, std::move(data));
-        }
+        util::insertOrAssignHeterogeneous(graphData, sessionId, std::move(data));
     }
 }
 

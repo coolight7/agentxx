@@ -131,7 +131,7 @@ std::shared_ptr<Session> SessionsManager::getOrCreate(std::string_view sessionId
                 },
         });
     }
-    sessions_.emplace(sessionId, session);
+    util::insertHeterogeneous(sessions_, std::string{sessionId}, session);
     return session;
 }
 

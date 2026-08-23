@@ -361,7 +361,8 @@ asio::awaitable<std::string> SubAgentManagerTool::execute_async(const neograph::
                 // 注意: raw string 内容不能含 `)"` 序列, 故括号提示移到引号外
                 co_return R"({"error":"Arg `message` is empty"})";
             }
-            if (!subAgentList.contains(task.subagent) || nullptr == subAgentList[task.subagent]) {
+            auto subIt = subAgentList.find(task.subagent);
+            if (subIt == subAgentList.end() || nullptr == subIt->second) {
                 co_return fmt::format(
                     R"({{"error":"Arg `subagent` is not one of [{}]"}})",
                     subagentNames.str()

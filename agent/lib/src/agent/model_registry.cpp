@@ -8,7 +8,7 @@ namespace agentxx {
 namespace agent {
 
 void ModelProviderRegistry::registerModel(std::string_view name, const ModelConfig& config) {
-    models_[std::string{name}] = config;
+    util::insertOrAssignHeterogeneous(models_, name, config);
     // 异构查找删除失效缓存, 免除 string_view→string 拷贝 (libc++ 无异构 erase)
     util::eraseHeterogeneous(providerCache_, name);
     if (defaultName_.empty()) {
@@ -67,7 +67,7 @@ std::shared_ptr<neograph::Provider> ModelProviderRegistry::getProvider(std::stri
         return cacheIt->second;
     }
     auto provider = createProvider(cfgIt->second);
-    providerCache_.emplace(std::string{effective}, provider);
+    util::insertHeterogeneous(providerCache_, std::string{effective}, provider);
     return provider;
 }
 
@@ -77,7 +77,7 @@ void ModelProviderRegistry::setProvider(
 ) {
     // 未注册的模型名也允许注入 (注入后 getProvider 可直接命中缓存;
     // 但 getModelConfig 仍取默认配置, 调用方需自行保证一致性)
-    providerCache_[std::string{name}] = std::move(provider);
+    util::insertOrAssignHeterogeneous(providerCache_, name, std::move(provider));
 }
 
 std::vector<std::string> ModelProviderRegistry::listModelNames() const {

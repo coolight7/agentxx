@@ -1,5 +1,6 @@
 #include "agentxx/protocol/a2a_server.h"
 
+#include "agentxx/util/container_util.h"
 #include "agentxx/util/exception.h"
 #include "agentxx/util/log.h"
 #include "agentxx/util/string_util.h"
@@ -335,7 +336,7 @@ json A2aServer::handleSendMessage(const json& id, const json& params) {
             task->createdAt  = currentTimestamp();
             task->updatedAt  = task->createdAt;
             task->cancelFlag = std::make_shared<std::atomic<bool>>(false);
-            tasks_[taskId]   = task;
+            util::insertOrAssignHeterogeneous(tasks_, taskId, task);
             pruneOldTasks();
         }
 

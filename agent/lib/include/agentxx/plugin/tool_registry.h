@@ -30,13 +30,13 @@ public:
     bool registerTool(std::string name, std::shared_ptr<agentxx::tools::XXToolBase> tool);
 
     /// 摘除工具 (按名称); 返回被摘除的工具 (在途调用靠返回的 shared_ptr 保活)
-    std::shared_ptr<agentxx::tools::XXToolBase> unregisterTool(const std::string& name);
+    std::shared_ptr<agentxx::tools::XXToolBase> unregisterTool(std::string_view name);
 
     /// 查找工具; 返回 shared_ptr (保持代码段存活, 可跨线程使用)
-    std::shared_ptr<agentxx::tools::XXToolBase> find(const std::string& name) const;
+    std::shared_ptr<agentxx::tools::XXToolBase> find(std::string_view name) const;
 
     /// 表内是否已注册 (含禁用摘除前判断)
-    bool contains(const std::string& name) const;
+    bool contains(std::string_view name) const;
 
     /// 追加全部工具定义 (LLM 请求侧工具 schema; 供 ModelCallWrapNode 调用)
     void appendDefinitions(std::vector<neograph::ChatTool>& defs) const;
