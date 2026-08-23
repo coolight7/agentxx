@@ -280,7 +280,7 @@ std::string formatToolArgs(std::string_view argsText) {
 /// 中断为 "[Interrupt]"; 成功结果 (如 "Success, Replace N hits") 不以这些前缀开头
 static bool isToolResultError(std::string_view result) {
     return result.starts_with("[Error]") || result.starts_with("[Exception")
-           || result.starts_with("[Interrupt]") || result.contains("[Permission");
+           || result.starts_with("[Interrupt]") || result.starts_with("[Permission");
 }
 
 } // namespace
