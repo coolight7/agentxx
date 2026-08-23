@@ -59,6 +59,10 @@ target_include_directories(agentxx_test PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}/client/"
 )
 
+if(MSVC)
+  target_compile_options(agentxx_test PRIVATE /FS)
+endif()
+
 # 内置合并编译模式 (顶层 AGENTXX_ENABLE_PLUGIN_BUILTIN=ON, 由 superbuild 传入):
 # - 测试经插件目录路径加载内置插件 (入口文件缺失时 PluginManager 回退内置注册表),
 #   与动态模式配置完全一致

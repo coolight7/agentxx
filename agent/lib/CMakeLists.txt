@@ -155,6 +155,9 @@ endif ()
 target_compile_definitions(agentxx_shared PUBLIC AGENTXX_EXPORTS)
 
 if (XX_IS_MSVC_D)
+  target_compile_options(agentxx_util PRIVATE /FS)
+  target_compile_options(agentxx_shared PRIVATE /FS)
+  target_compile_options(agentxx_static PRIVATE /FS)
   target_compile_definitions(agentxx_shared PUBLIC
     strdup=_strdup
     strcasecmp=_stricmp
