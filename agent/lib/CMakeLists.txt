@@ -21,8 +21,6 @@ option(AGENTXX_ENABLE_PLUGIN_BUILTIN "Merge enabled plugins into libagentxx (bui
 # 内置合并模式下各插件的启用开关 (与 plugins/CMakeLists.txt 同名同默认值;
 # 由顶层 superbuild 统一传入; 仅 AGENTXX_ENABLE_PLUGIN_BUILTIN=ON 时生效)
 option(AGENTXX_ENABLE_PLUGIN_EXAMPLE "Merge example plugin into libagentxx (built-in)." ON)
-option(AGENTXX_ENABLE_PLUGIN_COMPUTER_USE "Merge agentxx_computer_use plugin into libagentxx (built-in)." ON)
-option(AGENTXX_ENABLE_PLUGIN_SCREEN_CAPTURE "Merge agentxx_screen_capture plugin into libagentxx (built-in)." ON)
 # 嵌套构建时由顶层传入；独立构建时自动查找
 find_program(CCACHE_PROGRAM ccache)
 

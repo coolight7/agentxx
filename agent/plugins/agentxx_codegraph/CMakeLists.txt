@@ -60,7 +60,12 @@ extern \"C\" void agentxx_plugin_builtin_unload_${PLUGIN_NAME}(void* plugin_ctx)
     ts_yaml ts_json ts_xml ts_html ts_css ts_zig ts_ruby ts_glsl
   )
   if (UNIX)
-    list(APPEND _codegraph_libs pthread dl m)
+    # Android bionic 将 pthread 并入 libc, 无独立 libpthread 库, 仅链接 dl/m
+    if (CMAKE_SYSTEM_NAME STREQUAL "Android")
+      list(APPEND _codegraph_libs dl m)
+    else()
+      list(APPEND _codegraph_libs pthread dl m)
+    endif()
   endif()
   set(AGENTXX_BUILTIN_PLUGIN_LINK_LIBS
     "${AGENTXX_BUILTIN_PLUGIN_LINK_LIBS}" ${_codegraph_libs} PARENT_SCOPE)
@@ -119,8 +124,13 @@ target_link_libraries(${PLUGIN_NAME} PRIVATE
   fmt::fmt
 )
 # pthread/dl/m 为 Linux 系统库; Windows/MSVC 无对应导入库 (std::thread 原生), 条件链接
+# Android bionic 将 pthread 并入 libc, 无独立 libpthread 库, 仅链接 dl/m
 if (UNIX)
-  target_link_libraries(${PLUGIN_NAME} PRIVATE pthread dl m)
+  if (CMAKE_SYSTEM_NAME STREQUAL "Android")
+    target_link_libraries(${PLUGIN_NAME} PRIVATE dl m)
+  else()
+    target_link_libraries(${PLUGIN_NAME} PRIVATE pthread dl m)
+  endif()
 endif()
 target_link_directories(${PLUGIN_NAME} PRIVATE
   "${AGENTXX_INSTALL_DIR}/lib"

@@ -9,6 +9,7 @@
 - 验证subagent、summarization
 - CI/CD
 - 文档翻译
+- 插件根据支持的系统判断是否启用编译
 - 插件加载 mcp、skill、memory
 - 插件框架说明 必须实现的接口、可选实现的接口，插件根据说明列表决定是否启用；以适配不同 client 可能支持的接口不同
 

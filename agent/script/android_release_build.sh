@@ -41,6 +41,10 @@ for abi in ${abi_list[@]}; do
     echo "  OPENSSL_ROOT_DIR:  $OPENSSL_ROOT_DIR"
     echo "============================================"
 
+    # 启用插件编译: 插件动态库输出到 {build}/exec/plugins/
+    # - AGENTXX_ENABLE_HYPERSCAN 在安卓未配置交叉编译依赖, 保持关闭 (插件会自动跳过对应条件链接)
+    # - AGENTXX_ENABLE_PLUGIN_CODEGRAPH 开启 codegraph 插件 (顶层自动构建其依赖 codegraph-cpp/sqlite3)
+    # 注意: 下方 cmake 参数使用续行符, 注释不能插入续行中间
     cmake -B "$abi_build_dir" -S "$src_dir" \
         -DCMAKE_SYSTEM_NAME="Android" \
         -DCMAKE_TOOLCHAIN_FILE="$TOOLCHAIN_FILE" \
@@ -53,9 +57,8 @@ for abi in ${abi_list[@]}; do
         -DXX_IS_RELEASE_D=1 \
         -DAGENTXX_BUILD_CLIENT=OFF \
         -DAGENTXX_BUILD_TEST=OFF \
-        -DAGENTXX_BUILD_PLUGINS=OFF \
+        -DAGENTXX_BUILD_PLUGINS=ON \
         -DAGENTXX_ENABLE_HYPERSCAN=OFF \
-        -DAGENTXX_ENABLE_PLUGIN_CODEGRAPH=OFF \
         -DAGENTXX_ENABLE_BOOST_PROCESS=ON \
         -G Ninja
 
