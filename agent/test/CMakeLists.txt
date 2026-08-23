@@ -60,7 +60,7 @@ target_include_directories(agentxx_test PRIVATE
 )
 
 if(MSVC)
-  target_compile_options(agentxx_test PRIVATE /FS)
+  target_compile_options(agentxx_test PRIVATE /FS /MP)
 endif()
 
 # 内置合并编译模式 (顶层 AGENTXX_ENABLE_PLUGIN_BUILTIN=ON, 由 superbuild 传入):

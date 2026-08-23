@@ -38,7 +38,7 @@ target_sources(agentxx_cli PRIVATE
 target_include_directories(agentxx_cli PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/include/")
 
 if(MSVC)
-  target_compile_options(agentxx_cli PRIVATE /FS)
+  target_compile_options(agentxx_cli PRIVATE /FS /MP)
 endif()
 
 # PCH: 只预编译稳定第三方头，加速编译 (GCC/Clang，与 lib 保持一致)。

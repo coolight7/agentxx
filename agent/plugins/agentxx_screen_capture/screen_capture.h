@@ -45,6 +45,14 @@ public:
 
     void stopStreaming();
 
+    /// 显式释放全部底层资源 (DXGI/D3D11 设备、GDI 缓存, 并停止流式线程)
+    /// - 必须在插件 unload 回调中调用 (先于宿主 FreeLibrary): GPU 资源若留到
+    ///   DLL 卸载时的静态析构中释放, 会在 Windows loader lock 下执行
+    ///   D3D11 设备销毁 —— 显卡驱动 (如 AMD atidxx64) 的内部工作线程此时无法
+    ///   获取 loader lock 退出, 主线程在 GetExitCodeThread 上无限自旋 (实测挂死)
+    /// - 重复调用安全; 析构函数会再次兜底 (此时已无资源可释放)
+    void shutdown();
+
     bool isStreaming() const;
 
     /// 把帧像素保存为 PNG 文件 (Windows: WIC 编码; 其他平台恒失败)

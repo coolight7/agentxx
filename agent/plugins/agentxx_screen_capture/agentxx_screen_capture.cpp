@@ -479,9 +479,15 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
 }
 
 extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_unload(void* /*plugin_ctx*/) {
-    ScreenCaptureHolder::instance().stopStreaming();
-    if (g_host && g_host->vtable && g_host->vtable->unregister_tool) {
-        g_host->vtable->unregister_tool(g_host, AGENTXX_SV("agentxx_screen_capture"));
-    }
+    // 在宿主 FreeLibrary 之前显式释放 DXGI/D3D11/GDI 资源。
+    // 这些资源由本 DLL 内的函数级静态 (ScreenCaptureHolder) 持有, 若留到
+    // 卸载时的静态析构中释放, D3D11 设备销毁会在 Windows loader lock 下执行,
+    // 显卡驱动内部线程无法退出 → 主线程 GetExitCodeThread 无限自旋挂死
+    // (实测 AMD atidxx64 100% 复现, 见 screen_capture.h shutdown 注释)。
+    // 此处运行于宿主 unload 回调 (正常上下文, 无 loader lock), 静态析构时
+    // 已无 GPU 资源可释放, 安全。
+    // 注: 工具反注册无需在此调用 —— 宿主卸载流程先 detachAll 摘除全部注册,
+    // 之后才调本回调, 手动 unregister 反而会因工具已不存在而告警。
+    ScreenCaptureHolder::instance().capture_.shutdown();
     pluginLog(2, "agentxx_screen_capture unloaded");
 }

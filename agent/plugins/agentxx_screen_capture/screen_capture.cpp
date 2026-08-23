@@ -172,6 +172,12 @@ public:
         XX_LOGI("ScreenCapture: streaming stopped");
     }
 
+    void shutdown() {
+        stopStreaming();
+        cleanupGdiCache();
+        cleanupDxgi();
+    }
+
     bool isStreaming() const {
         return running_.load();
     }
@@ -848,6 +854,8 @@ public:
 
     void stopStreaming() {}
 
+    void shutdown() {}
+
     bool isStreaming() const {
         return false;
     }
@@ -887,6 +895,10 @@ bool ScreenCapture::startStreaming(int frameRate, ScreenFrameListener listener) 
 
 void ScreenCapture::stopStreaming() {
     impl_->stopStreaming();
+}
+
+void ScreenCapture::shutdown() {
+    impl_->shutdown();
 }
 
 bool ScreenCapture::isStreaming() const {

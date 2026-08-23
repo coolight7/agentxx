@@ -67,6 +67,30 @@
 #include <iostream>
 #include <map>
 
+namespace {
+
+/// 测试期日志 sink: 仅把 Warn/Error 输出到 stderr
+/// - 库内错误 (如插件 LoadLibrary 失败 / entry 返回非零) 经 XX_LOGE 上报,
+///   测试进程默认无 sink 时会被静默丢弃, 失败原因不可见; 此处透出便于诊断
+class TestWarnErrorLogSink : public agentxx::util::ThreadedLogSink {
+public:
+
+    ~TestWarnErrorLogSink() override {
+        // 在虚表仍为本类时停止日志线程 (避免延迟到基类析构触发 purecall)
+        shutdownThread();
+    }
+
+    void onLog(const agentxx::util::LogEntry& entry) override {
+        if (entry.level == agentxx::util::LogLevel::Warn
+            || entry.level == agentxx::util::LogLevel::Error) {
+            std::cerr << "[lib:" << (entry.level == agentxx::util::LogLevel::Error ? "E" : "W")
+                      << "] " << entry.message << std::endl;
+        }
+    }
+};
+
+} // namespace
+
 asio::io_context ioCtx;
 
 /// 运行可执行 ../script/test_run.sh
@@ -77,6 +101,10 @@ int main(int argn, char** argv) {
 #if XX_IS_DEBUG_D && (XX_IS_LINUX_D || XX_IS_WIN_D)
     agentxx::util::signalError(argv[0]);
 #endif
+
+    // 注册库日志 sink (Warn/Error → stderr): 插件加载失败等原因不再被静默丢弃
+    auto testLogSink = std::make_shared<TestWarnErrorLogSink>();
+    agentxx::util::LogDispatcher::instance().addSink(testLogSink);
 
     // 解析参数
     std::vector<std::string> selectedModules;

@@ -337,7 +337,7 @@ void testTuiToolHeaderFailed() {
         true,
         "[Error] Path not exist"
     );
-    XX_TEST_EXPECT_TRUE(fRead.plainRender().find("Read [Error] Path not exist") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(fRead.plainRender().find("Read · [Error] Path not exist") != std::string::npos);
     // 样式断言: 异常结果包含 errorColor 颜色代码 (255;85;85)
     XX_TEST_EXPECT_TRUE(fRead.render().find("255;85;85") != std::string::npos);
 
@@ -350,7 +350,7 @@ void testTuiToolHeaderFailed() {
         true,
         "[Error] Arg old_str is empty"
     );
-    XX_TEST_EXPECT_TRUE(fEdit.plainRender().find("Edit [Error] Arg old_str is empty") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(fEdit.plainRender().find("Edit · [Error] Arg old_str is empty") != std::string::npos);
     XX_TEST_EXPECT_TRUE(fEdit.render().find("255;85;85") != std::string::npos);
 
     // 已知工具 (Bash) 执行失败折叠展示
@@ -363,7 +363,7 @@ void testTuiToolHeaderFailed() {
         "[Error] Command failed with code 127"
     );
     XX_TEST_EXPECT_TRUE(
-        fBash.plainRender().find("Bash [Error] Command failed with code 127") != std::string::npos
+        fBash.plainRender().find("Bash · [Error] Command failed with code 127") != std::string::npos
     );
     XX_TEST_EXPECT_TRUE(fBash.render().find("255;85;85") != std::string::npos);
 
@@ -377,7 +377,7 @@ void testTuiToolHeaderFailed() {
         "[Exception aborted: connection timeout]"
     );
     XX_TEST_EXPECT_TRUE(
-        fExcept.plainRender().find("Fetch [Exception aborted: connection timeout]") != std::string::npos
+        fExcept.plainRender().find("Fetch · [Exception aborted: connection timeout]") != std::string::npos
     );
     XX_TEST_EXPECT_TRUE(fExcept.render().find("255;85;85") != std::string::npos);
 
@@ -391,7 +391,7 @@ void testTuiToolHeaderFailed() {
         "[Error] Custom failure"
     );
     XX_TEST_EXPECT_TRUE(
-        fUnknown.plainRender().find("custom_plugin_tool [Error] Custom failure") != std::string::npos
+        fUnknown.plainRender().find("custom_plugin_tool · [Error] Custom failure") != std::string::npos
     );
     XX_TEST_EXPECT_TRUE(fUnknown.render().find("255;85;85") != std::string::npos);
 

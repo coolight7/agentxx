@@ -3,9 +3,11 @@
 #include "agentxx/middlewares/middleware.h"
 #include "agentxx/plugin/plugin_manager.h"
 #include <asio/use_awaitable.hpp>
+#include <chrono>
 #include <filesystem>
 #include <iostream>
 #include <string>
+#include <system_error>
 
 namespace agentxx {
 namespace test {
@@ -121,6 +123,19 @@ asio::awaitable<agentxx::test::TestResult>
     ctx->pluginManager           = std::make_shared<agentxx::plugin::PluginManager>(ctx);
     ctx->pluginManager->setIoExecutor(co_await asio::this_coro::executor);
 
+    // dataDir: 插件 entry 经 get_config 读取, 创建 {dataDir}/captures 作为
+    // 截图 PNG 落盘目录 (save_images=true 时 image_path 指向此目录)。
+    // 唯一化目录名避免多进程/多次运行互相干扰。
+    const auto tmpDataDir = std::filesystem::temp_directory_path()
+                            / ("agentxx_test_screen_capture_"
+                               + std::to_string(
+                                   std::chrono::steady_clock::now().time_since_epoch().count()
+                               ));
+    std::error_code fsEc;
+    std::filesystem::remove_all(tmpDataDir, fsEc);
+    std::filesystem::create_directories(tmpDataDir, fsEc);
+    ctx->agentConfig->dataDir = tmpDataDir.string();
+
     // ---- 2. 加载 agentxx_screen_capture 插件 (独立) ----
     auto path = findScreenCapturePluginPath();
     XX_TEST_EXPECT_TRUE(path.find("agentxx_screen_capture") != std::string::npos);
@@ -151,13 +166,13 @@ asio::awaitable<agentxx::test::TestResult>
         }
     }
 
-    // ---- 4. capture_all (元信息, 不取像素) ----
+    // ---- 4. capture_all (元信息, 不落盘图片) ----
     {
         auto tool = ctx->toolRegistry->find("agentxx_screen_capture");
         if (tool) {
             auto out = co_await tool->execute_async(neograph::json{
-                {"command",        "capture_all"},
-                {"include_pixels", false        },
+                {"command",     "capture_all" },
+                {"save_images", false         },
             });
             auto j   = neograph::json::parse(out);
             XX_TEST_EXPECT_EQ(j["ok"].get<bool>(), true);
@@ -165,15 +180,18 @@ asio::awaitable<agentxx::test::TestResult>
             const auto& f0 = j["frames"][0];
             XX_TEST_EXPECT_TRUE(f0["width"].get<int>() > 0);
             XX_TEST_EXPECT_TRUE(f0["height"].get<int>() > 0);
+            // save_images=false: 不落盘, 无 image_path; 像素也永不进消息
+            XX_TEST_EXPECT_FALSE(f0.contains("image_path"));
+            XX_TEST_EXPECT_FALSE(f0.contains("pixels_base64"));
         }
     }
 
-    // ---- 5. 默认不传 command (默认 capture_all, 带像素) ----
+    // ---- 5. 默认不传 command (默认 capture_all) + save_images 落盘 PNG ----
     {
         auto tool = ctx->toolRegistry->find("agentxx_screen_capture");
         if (tool) {
             auto out = co_await tool->execute_async(neograph::json{
-                {"include_pixels", true}
+                {"save_images", true}
             });
             auto j   = neograph::json::parse(out);
             XX_TEST_EXPECT_EQ(j["ok"].get<bool>(), true);
@@ -182,7 +200,17 @@ asio::awaitable<agentxx::test::TestResult>
                 const auto& f = j["frames"][i];
                 XX_TEST_EXPECT_TRUE(f["width"].get<int>() > 0);
                 XX_TEST_EXPECT_TRUE(f["height"].get<int>() > 0);
-                XX_TEST_EXPECT_TRUE(f.contains("pixels_base64"));
+                // 新契约: 捕获像素经 WIC 编码 PNG 落盘到 {dataDir}/captures/,
+                // 结果仅含元信息 + 文件路径 (pixel_bytes 为原始像素字节数),
+                // 像素数据永不进入会话消息
+                XX_TEST_EXPECT_TRUE(f["pixel_bytes"].get<int64_t>() > 0);
+                XX_TEST_EXPECT_FALSE(f.contains("pixels_base64"));
+                XX_TEST_EXPECT_TRUE(f.contains("image_path"));
+                if (f.contains("image_path")) {
+                    auto imgPath = f["image_path"].get<std::string>();
+                    XX_TEST_EXPECT_TRUE(std::filesystem::exists(imgPath));
+                    XX_TEST_EXPECT_TRUE(std::filesystem::file_size(imgPath) > 0);
+                }
             }
         }
     }
@@ -192,9 +220,9 @@ asio::awaitable<agentxx::test::TestResult>
         auto tool = ctx->toolRegistry->find("agentxx_screen_capture");
         if (tool) {
             auto out = co_await tool->execute_async(neograph::json{
-                {"command",        "capture_screen"},
-                {"screen_index",   0               },
-                {"include_pixels", false           },
+                {"command",      "capture_screen"},
+                {"screen_index", 0               },
+                {"save_images",  false          },
             });
             auto j   = neograph::json::parse(out);
             XX_TEST_EXPECT_EQ(j["ok"].get<bool>(), true);
@@ -238,6 +266,9 @@ asio::awaitable<agentxx::test::TestResult>
         XX_TEST_EXPECT_TRUE(ctx->pluginManager->find("agentxx_screen_capture") == nullptr);
         XX_TEST_EXPECT_TRUE(ctx->pluginManager->find("agentxx_computer_use") == nullptr);
     }
+
+    // 清理临时 dataDir (截图 PNG 已在上方断言过存在性)
+    std::filesystem::remove_all(tmpDataDir, fsEc);
 #else
     TEST_SKIP << "agentxx_screen_capture (screen_capture) 仅支持 Windows 平台" << std::endl;
 #endif

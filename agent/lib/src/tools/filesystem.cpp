@@ -1581,7 +1581,11 @@ asio::awaitable<std::string> FilesystemGrepTool::execute_async(const neograph::j
         };
 
         /// 加载并预处理文本文件: 跳过二进制文件 (含 NUL 字节), 非 UTF-8 编码
-        /// (GBK 等) 转换为 UTF-8, 转换失败视为非文本跳过
+        /// (GBK 等) 转换为 UTF-8, 转换失败视为非文本跳过。
+        /// 额外统一 CRLF -> LF: Windows 文本文件行尾为 \r\n, 若不归一化,
+        /// content 模式输出的匹配行会携带行尾 \r (extractLine 仅剥离 \n),
+        /// 且正则 `$` 等锚点在 CRLF 下语义漂移; 归一化仅作用于本次搜索的
+        /// 内存副本, 不修改原文件
         auto loadSearchableText
             = [&](const std::string& filepath) -> asio::awaitable<std::optional<std::string>> {
             auto filetext = co_await readFileContent(filepath);
@@ -1593,6 +1597,7 @@ asio::awaitable<std::string> FilesystemGrepTool::execute_async(const neograph::j
             if (false == agentxx::util::autoConvertToUtf8(filetext)) {
                 co_return std::nullopt;
             }
+            normalizeCrlfToLf(filetext);
             co_return filetext;
         };
 
