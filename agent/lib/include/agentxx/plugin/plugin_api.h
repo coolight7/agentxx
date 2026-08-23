@@ -63,7 +63,7 @@ extern "C" {
 #define AGENTXX_PLUGIN_EXPORT
 #endif
 
-#define AGENTXX_PLUGIN_API_VERSION 7
+#define AGENTXX_PLUGIN_API_VERSION 8
 
 /* ==================== 字符串视图 (跨边界字符串参数统一形态) ==================== */
 
@@ -368,6 +368,33 @@ typedef struct AgentxxHostVtable {
         void (*done)(void* ud, void* result, char* error),
         void* ud
     );
+
+    /* ---- 会话资源扩展 (v8 新增): 插件向宿主贡献 Skill/Memory/MCP 组件,
+            由 agent-io 管线加载并经 appendComponentInfo 上报客户端 ---- */
+    /// 追加 skill 扫描目录 (io 线程约束, 跨线程经宿主自动投递):
+    /// - path 为目录 (含 SKILL.md 或其父目录); 绝对路径或相对程序工作目录
+    /// - 与主配置 yaml `skill` 段冲突时拒绝 (yaml 优先) 并返回非 0;
+    ///   插件之间先到先得; 同插件重复注册幂等成功
+    /// - 所有权归本插件: 卸载时自动摘除, 禁用时摘除/启用时恢复
+    int (*register_skill_dir)(const AgentxxHost* host, AgentxxPluginStringView path);
+    /// 摘除本插件注册的 skill 目录; 不存在或不属于本插件返回非 0
+    int (*unregister_skill_dir)(const AgentxxHost* host, AgentxxPluginStringView path);
+    /// 追加 memory 上下文文件 (内容注入系统提示词); 冲突/所有权规则同上
+    int (*register_memory_file)(const AgentxxHost* host, AgentxxPluginStringView path);
+    int (*unregister_memory_file)(const AgentxxHost* host, AgentxxPluginStringView path);
+    /// 注册 MCP server (异步连接; 命名空间查重通过即返回 0, 立即返回不等待网络):
+    /// spec_json: {"namespace": "...", "url": "https://...", "timeout": 60(秒,可选)}
+    /// - 连接完成后工具动态进入工具表 (下一轮对模型可见); 连接失败仅记日志,
+    ///   命名空间随即释放 (可重新注册)
+    /// - 命名空间与主配置 yaml / 其他插件冲突时返回非 0 (yaml 优先)
+    int (*register_mcp_server)(const AgentxxHost* host, AgentxxPluginStringView spec_json);
+    /// 注销 MCP server (断开连接 + 摘除其全部动态工具);
+    /// 不存在或不属于本插件的命名空间返回非 0
+    int (*unregister_mcp_server)(const AgentxxHost* host, AgentxxPluginStringView name_space);
+    /// 本插件当前注册的资源快照 JSON (调试/自检; io 线程; host->alloc):
+    /// {"skills":[...],"memory":[...],"mcp":[ns,...]}
+    /// 宿主未装配资源应用器 (BaseAgent 场景) 时返回 NULL
+    char* (*get_own_resources)(const AgentxxHost*);
 } AgentxxHostVtable;
 
 struct AgentxxHost {

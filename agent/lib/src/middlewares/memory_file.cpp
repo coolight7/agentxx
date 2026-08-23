@@ -8,6 +8,7 @@
 #include "asio/this_coro.hpp"
 #include "asio/use_awaitable.hpp"
 #include "fmt/format.h"
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -18,11 +19,13 @@ namespace middleware {
 
 asio::awaitable<void>
     MemoryFileMiddlewareHandle::onAgentcallStartFunc(neograph::graph::NodeInput& in) {
-    if (initMemoryFilePaths.empty()) {
+    if (memoryFilePaths.empty()) {
         co_return;
     }
-    if (false == haveLoaded) {
-        haveLoaded = true;
+    // 首轮懒加载 / 插件运行期增删文件后的全量重读 (自愈缓存)
+    if (false == haveLoaded || needReloadMemoryFiles) {
+        haveLoaded           = true;
+        needReloadMemoryFiles = false;
 
 #if ASIO_HAS_FILE || BOOST_ASIO_HAS_FILE
         auto currentIoCtx = co_await asio::this_coro::executor;
@@ -30,7 +33,7 @@ asio::awaitable<void>
 
         fileContents.clear();
         std::string logContent;
-        for (const auto& filepath : initMemoryFilePaths) {
+        for (const auto& filepath : memoryFilePaths) {
             auto systemCharsetFilePath = filepath;
             agentxx::util::autoConvertToSystemPath(systemCharsetFilePath);
             co_await agentxx::util::catchErrorAsync<bool>(
@@ -106,20 +109,25 @@ asio::awaitable<void>
     // insert
     auto state = co_await getStateItem(in.ctx.thread_id);
 
-    if (state->cacheContextContent.empty() && !fileContents.empty()) {
-        std::ostringstream oss;
-        oss << "\n## Memory Files\n\n";
-        for (const auto& [filepath, content] : fileContents) {
-            oss << fmt::format(
-                R"(<MemoryFile src="{}">
+    // 缓存失效: 首次生成 / 资源纪元变更 (插件增删上下文文件) 时重建
+    if (state->cachedResourceEpoch != resourceEpoch) {
+        state->cachedResourceEpoch  = resourceEpoch;
+        state->cacheContextContent.clear();
+        if (!fileContents.empty()) {
+            std::ostringstream oss;
+            oss << "\n## Memory Files\n\n";
+            for (const auto& [filepath, content] : fileContents) {
+                oss << fmt::format(
+                    R"(<MemoryFile src="{}">
 {}
 </MemoryFile>
 )",
-                filepath,
-                content
-            );
+                    filepath,
+                    content
+                );
+            }
+            state->cacheContextContent = oss.str();
         }
-        state->cacheContextContent = oss.str();
     }
 
     if (!state->cacheContextContent.empty()) {
@@ -132,6 +140,42 @@ asio::awaitable<void>
         appendSystemMsgList.push_back(state->cacheContextContent);
     }
     co_return;
+}
+
+void MemoryFileMiddlewareHandle::addMemoryFiles(std::vector<std::string> paths) {
+    bool changed = false;
+    for (auto& p : paths) {
+        if (p.empty()) {
+            continue;
+        }
+        // 去重: 与 yaml 主配置/已注册文件重复时不重复读取注入
+        if (std::find(memoryFilePaths.begin(), memoryFilePaths.end(), p)
+            == memoryFilePaths.end()) {
+            memoryFilePaths.push_back(std::move(p));
+            changed = true;
+        }
+    }
+    if (!changed) {
+        return;
+    }
+    ++resourceEpoch;
+    needReloadMemoryFiles = haveLoaded;
+}
+
+void MemoryFileMiddlewareHandle::removeMemoryFiles(const std::vector<std::string>& paths) {
+    bool changed = false;
+    for (const auto& p : paths) {
+        auto it = std::find(memoryFilePaths.begin(), memoryFilePaths.end(), p);
+        if (it != memoryFilePaths.end()) {
+            memoryFilePaths.erase(it);
+            changed = true;
+        }
+    }
+    if (!changed) {
+        return;
+    }
+    ++resourceEpoch;
+    needReloadMemoryFiles = haveLoaded;
 }
 
 } // namespace middleware

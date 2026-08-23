@@ -62,6 +62,13 @@ enum BridgeMagic {
     B_CLEAR_TIMEOUT,
     B_LIST_PLUGINS,
     B_GET_PLUGIN,
+    // 会话资源扩展 (宿主 plugin_api v8)
+    B_ADD_SKILL_DIR,
+    B_REMOVE_SKILL_DIR,
+    B_ADD_MEMORY_FILE,
+    B_REMOVE_MEMORY_FILE,
+    B_ADD_MCP_SERVER,
+    B_REMOVE_MCP_SERVER,
 };
 
 /// 工具执行请求/结果 (execute 桥跨线程传递)
@@ -743,6 +750,13 @@ private:
         def("clearTimeout", B_CLEAR_TIMEOUT, 1);
         def("listPlugins", B_LIST_PLUGINS, 0);
         def("getPlugin", B_GET_PLUGIN, 1);
+        // 会话资源扩展 (宿主 plugin_api v8): Skill/Memory/MCP 贡献
+        def("addSkillDir", B_ADD_SKILL_DIR, 1);
+        def("removeSkillDir", B_REMOVE_SKILL_DIR, 1);
+        def("addMemoryFile", B_ADD_MEMORY_FILE, 1);
+        def("removeMemoryFile", B_REMOVE_MEMORY_FILE, 1);
+        def("addMcpServer", B_ADD_MCP_SERVER, 1);
+        def("removeMcpServer", B_REMOVE_MCP_SERVER, 1);
 
         int ok = JS_SetPropertyStr(ctx, global, "agentxx", bridge) >= 0;
         // 常用工具函数注入全局 (沙箱内可用): 裸 setTimeout/clearTimeout
@@ -1391,6 +1405,88 @@ JSValue JsEngine::bridgeCall(
             }
             vt.free(json);
             return out;
+        }
+
+        // ---- 会话资源扩展 (v8): Skill/Memory/MCP 贡献 ----
+        // - 注册失败 (与主配置 yaml/其他插件冲突或宿主不支持) 抛 JS 异常;
+        //   注销失败 (不存在/不属于本插件) 返回 false
+        case B_ADD_SKILL_DIR:
+        case B_ADD_MEMORY_FILE: {
+            if (argc < 1 || !JS_IsString(argv[0])) {
+                return JS_ThrowTypeError(ctx, "path string required");
+            }
+            std::string p = jsToCppString(ctx, argv[0]);
+            int         rc = (magic == B_ADD_SKILL_DIR)
+                                 ? vt.register_skill_dir(host, agentxx_plugin_sv_cstr(p.c_str()))
+                                 : vt.register_memory_file(host, agentxx_plugin_sv_cstr(p.c_str()));
+            if (rc != 0) {
+                return throwJsError(ctx, "register failed (conflict or unsupported): " + p);
+            }
+            return JS_TRUE;
+        }
+
+        case B_REMOVE_SKILL_DIR:
+        case B_REMOVE_MEMORY_FILE: {
+            if (argc < 1 || !JS_IsString(argv[0])) {
+                return JS_ThrowTypeError(ctx, "path string required");
+            }
+            std::string p = jsToCppString(ctx, argv[0]);
+            bool ok = (magic == B_REMOVE_SKILL_DIR)
+                          ? vt.unregister_skill_dir(host, agentxx_plugin_sv_cstr(p.c_str())) == 0
+                          : vt.unregister_memory_file(host, agentxx_plugin_sv_cstr(p.c_str())) == 0;
+            return ok ? JS_TRUE : JS_FALSE;
+        }
+
+        case B_ADD_MCP_SERVER: {
+            if (argc < 1 || !JS_IsObject(argv[0])) {
+                return JS_ThrowTypeError(ctx, "addMcpServer: spec object required");
+            }
+            auto specObj = argv[0];
+            // 命名空间: namespace 字段优先, 兼容 name 简写
+            std::string ns = jsToCppString(ctx, JS_GetPropertyStr(ctx, specObj, "namespace"));
+            if (ns.empty()) {
+                ns = jsToCppString(ctx, JS_GetPropertyStr(ctx, specObj, "name"));
+            }
+            std::string url = jsToCppString(ctx, JS_GetPropertyStr(ctx, specObj, "url"));
+            if (ns.empty() || url.empty()) {
+                return JS_ThrowTypeError(ctx, "addMcpServer: namespace/name and url required");
+            }
+            double timeoutSec = 120;
+            {
+                JSValue tv = JS_GetPropertyStr(ctx, specObj, "timeout");
+                if (JS_IsNumber(tv)) {
+                    JS_ToFloat64(ctx, &timeoutSec, tv);
+                }
+                JS_FreeValue(ctx, tv);
+            }
+            // spec JSON 拼装经宿主 json_escape (防注入/转义错误)
+            char* nsEsc  = vt.json_escape(host, agentxx_plugin_sv(ns.data(), ns.size()));
+            char* urlEsc = vt.json_escape(host, agentxx_plugin_sv(url.data(), url.size()));
+            if (!nsEsc || !urlEsc) {
+                if (nsEsc) vt.free(nsEsc);
+                if (urlEsc) vt.free(urlEsc);
+                return JS_ThrowInternalError(ctx, "addMcpServer: escape failed");
+            }
+            std::string spec = std::string("{\"namespace\":") + nsEsc + ",\"url\":" + urlEsc;
+            vt.free(nsEsc);
+            vt.free(urlEsc);
+            long long t = static_cast<long long>(timeoutSec < 0 ? 0 : timeoutSec);
+            spec += ",\"timeout\":" + std::to_string(t);
+            spec += "}";
+            if (vt.register_mcp_server(host, agentxx_plugin_sv_cstr(spec.c_str())) != 0) {
+                return throwJsError(ctx, "addMcpServer register failed (conflict?): " + ns);
+            }
+            return JS_TRUE;
+        }
+
+        case B_REMOVE_MCP_SERVER: {
+            if (argc < 1 || !JS_IsString(argv[0])) {
+                return JS_ThrowTypeError(ctx, "removeMcpServer: namespace required");
+            }
+            std::string ns = jsToCppString(ctx, argv[0]);
+            return vt.unregister_mcp_server(host, agentxx_plugin_sv(ns.data(), ns.size())) == 0
+                       ? JS_TRUE
+                       : JS_FALSE;
         }
 
         default:

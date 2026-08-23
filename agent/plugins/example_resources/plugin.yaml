@@ -1,0 +1,17 @@
+name: example_resources
+version: 1.0.0
+description: "Example plugin contributing skill/memory/mcp resources"
+entry: libexample_resources.so
+depends:
+# ---- 会话资源声明段 (v8; 相对插件目录解析, entry 成功后由宿主应用) ----
+# - 与主配置 yaml 冲突时跳过并告警 (主程序 yaml 优先)
+skill:
+  - skills
+memory:
+  - assets/NOTES.md
+mcp:
+  # 示例条目: URL 为保留域名 (.invalid), 连接会失败 —— 仅用于演示失败路径
+  # (异步连接失败仅记日志, 命名空间随即释放可重试)
+  - namespace: example_time
+    url: https://mcp.time.example.invalid/sse
+    timeout: 10

@@ -35,6 +35,7 @@
 #include "test_network_timeout.h"
 #include "test_openai_provider.h"
 #include "test_plugins.h"
+#include "test_plugin_resources.h"
 #include "test_rag_search_tools.h"
 #include "test_regex.h"
 #include "test_remote_agent.h"
@@ -240,6 +241,7 @@ int main(int argn, char** argv) {
             co_await run("openai_provider", agentxx::test::run_openai_provider_tests);
             co_await run("anthropic_provider", agentxx::test::run_anthropic_provider_tests);
             co_await run("plugins", agentxx::test::run_plugin_tests);
+            co_await run("plugin_resources", agentxx::test::run_plugin_resource_tests);
 #ifdef AGENTXX_ENABLE_PLUGIN_BUILTIN
             // 内置合并编译模式不产出 client 侧插件动态库 (client 插件仍走独立
             // 构建, 见 plugins.md 11.7.5), client_plugins 测试跳过

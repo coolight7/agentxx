@@ -1,6 +1,7 @@
 #include "agentxx/agent/code_agent.h"
 
 #include "agentxx/agent/config_static.h"
+#include "agentxx/agent/resource_applier.h"
 #include "agentxx/middlewares/memory_file.h"
 #include "agentxx/middlewares/permission.h"
 #include "agentxx/middlewares/planning.h"
@@ -145,30 +146,42 @@ asio::awaitable<void> CodeAgent::initMiddleware() {
         );
     }
     // 添加 Skill Middleware 并记录启动信息
+    std::shared_ptr<agentxx::middleware::SkillMiddlewareHandle> skillMiddleware;
     {
         for (const auto& dirPath : config->skillDirPaths) {
             agentContext->appendComponentInfo.skills.push_back(dirPath);
         }
 
-        auto skillMiddleware = std::make_shared<agentxx::middleware::SkillMiddlewareHandle>(
+        skillMiddleware = std::make_shared<agentxx::middleware::SkillMiddlewareHandle>(
             config->skillDirPaths,
             agentContext
         );
         agentContext->middlewareHandleContext->handles.push_back(skillMiddleware);
     }
     // 添加 Memory File Middleware 并记录启动信息
+    std::shared_ptr<agentxx::middleware::MemoryFileMiddlewareHandle> memoryFileMiddleware;
     {
         for (const auto& memPath : config->memoryFilePaths) {
             agentContext->appendComponentInfo.memoryFiles.push_back(memPath);
         }
 
-        auto memoryFileMiddleware
+        memoryFileMiddleware
             = std::make_shared<agentxx::middleware::MemoryFileMiddlewareHandle>(
                 config->memoryFilePaths,
                 agentContext
             );
         agentContext->middlewareHandleContext->handles.push_back(memoryFileMiddleware);
     }
+    // 会话资源应用器装配 (插件 Skill/Memory/MCP 扩展; 见 resource_applier.h):
+    // - 声明式资源由 PluginManager 在插件 entry 成功后经此应用 (失败不生效)
+    // - 运行时注册经 vtable register_skill_dir 等转发到本应用器
+    // - io executor 记录于本协程 (init 运行在 io 线程), 供 MCP 异步连接派发
+    agentContext->resourceApplier = std::make_shared<agentxx::agent::AgentResourceApplier>(
+        agentContext,
+        co_await asio::this_coro::executor,
+        std::move(skillMiddleware),
+        std::move(memoryFileMiddleware)
+    );
     {
         // 上下文压缩 (summarization) 中间件: 由 AgentConfig::enableSummarization 控制
         // - 子代理默认继承父配置; summarization 发起的压缩子代理显式关闭,

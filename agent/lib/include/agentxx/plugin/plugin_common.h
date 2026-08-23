@@ -28,6 +28,7 @@
 #include <filesystem>
 #include <functional>
 #include <future>
+#include <map>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -71,15 +72,37 @@ namespace plugin {
 ///   `libanalysis`) 保持原名, 避免误剥
 std::string pluginNameFromPath(const std::string& path);
 
+/// 插件清单资源声明 (plugin.yaml 可选段; 相对插件目录的路径已解析为绝对路径)
+/// - 键名与主配置 yaml 的 skill/memory/mcp 段一致 (降低理解成本):
+///     skill:  [dir, ...]                  → skillDirs
+///     memory: [file, ...]                 → memoryFiles
+///     mcp:    [{namespace,url,timeout},…] → mcpServers
+/// - 仅 agent 侧使用; client 侧插件宿主忽略资源声明
+struct PluginManifestResources {
+    /// 单个 MCP server 声明
+    struct McpDecl {
+        std::string url;
+        long long   timeoutMs = 120000; ///< 工具调用超时; 0 = 不限制
+    };
+
+    std::vector<std::string> skillDirs;
+    std::vector<std::string> memoryFiles;
+    /// key = MCP 工具命名空间
+    std::map<std::string, McpDecl> mcpServers;
+};
+
 /// 解析插件目录 plugin.yaml 清单 (name/entry/depends/optional_depends)
 /// - 返回 false 表示解析失败 (目录无 plugin.yaml 或 yaml 非法/缺字段);
 ///   YAML 非法时记日志, 无 manifest 不记 (调用方决定日志策略)
+/// - resources 非空时额外输出资源声明段 (skill/memory/mcp, 见上);
+///   段缺失时保持为空 —— 资源声明不参与 manifest 合法性判定
 bool parsePluginManifest(
     const std::filesystem::path& dir,
     std::string&                 name,
     std::string&                 entry,
     std::vector<std::string>&    depends,
-    std::vector<std::string>&    optionalDepends
+    std::vector<std::string>&    optionalDepends,
+    PluginManifestResources*     resources = nullptr
 );
 
 /// 目录插件 entry 相对路径 → 平台化绝对库路径:

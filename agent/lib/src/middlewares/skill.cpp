@@ -4,6 +4,7 @@
 #include "agentxx/util/string_util.h"
 #include "fmt/format.h"
 #include "yaml-cpp/yaml.h"
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -111,21 +112,26 @@ asio::awaitable<std::pair<std::string, agentxx::middleware::_SkillMetadata>>
 }
 
 asio::awaitable<void> SkillMiddlewareHandle::onAgentcallStartFunc(neograph::graph::NodeInput& in) {
-    if (initSkillDirPaths.empty()) {
+    if (skillDirPaths.empty()) {
         co_return;
     }
 
     // list skills / load skill metadata
-    if (false == haveLoadSkillMetadata) {
+    // - haveLoadSkillMetadata: 首轮懒加载
+    // - needReloadSkillMetadata: 插件运行期增删扫描目录后置位, 全量重扫自愈缓存
+    //   (co_await 挂起期间目录可能再次变更 —— 重扫完成后纪元比对不匹配的线程
+    //   状态会在下轮重建, 最终一致)
+    if (false == haveLoadSkillMetadata || needReloadSkillMetadata) {
         // 先置位防止并发会话重复进入加载; 但加载结果先写入局部变量, 完成后再整体替换 skillCache。
         // 加载循环含 co_await, 挂起期间其他会话若读 skillCache 只会看到空缓存(整体赋值尚未发生),
         // 不会看到半加载状态 (单线程协程模型下整体赋值不被打断)。
-        haveLoadSkillMetadata = true;
+        haveLoadSkillMetadata   = true;
+        needReloadSkillMetadata = false;
 
         decltype(skillCache.skillData)  loadedData;
         decltype(skillCache.loadErrors) loadedErrors;
         auto                            skillQueue
-            = std::vector<std::string>{initSkillDirPaths.begin(), initSkillDirPaths.end()};
+            = std::vector<std::string>{skillDirPaths.begin(), skillDirPaths.end()};
         for (size_t i = 0; i < skillQueue.size(); ++i) {
             auto& itempath = skillQueue[i];
             // catchErrorAsync: 单个目录处理失败仅记录错误, 不中断整体加载
@@ -196,7 +202,9 @@ asio::awaitable<void> SkillMiddlewareHandle::onAgentcallStartFunc(neograph::grap
     {
         auto agentCtxPtr = agentContext.lock();
 
-        if (skillState->cacheFormatSkillPrompt.empty()) {
+        // 缓存失效: 首次生成 / 资源纪元变更 (插件增删 skill 目录) 时重建
+        if (skillState->cacheFormatSkillPrompt.empty()
+            || skillState->cachedResourceEpoch != resourceEpoch) {
             // 生成 skill 系统提示词
             skillState->cacheFormatSkillPrompt = fmt::format(
                 R"_(## Skills System
@@ -212,6 +220,7 @@ You have access to a skills library that provides specialized capabilities and d
                 formatSkillsMetadataList(),
                 agentCtxPtr->agentConfig->prompt.systemSkillPrompt
             );
+            skillState->cachedResourceEpoch = resourceEpoch;
         }
 
         auto& appendSystemMsgList
@@ -222,6 +231,42 @@ You have access to a skills library that provides specialized capabilities and d
         appendSystemMsgList.push_back(skillState->cacheFormatSkillPrompt);
     }
     co_return;
+}
+
+void SkillMiddlewareHandle::addSkillDirs(std::vector<std::string> paths) {
+    bool changed = false;
+    for (auto& p : paths) {
+        if (p.empty()) {
+            continue;
+        }
+        // 去重: 与 yaml 主配置/已注册目录重复时不重复扫描
+        if (std::find(skillDirPaths.begin(), skillDirPaths.end(), p) == skillDirPaths.end()) {
+            skillDirPaths.push_back(std::move(p));
+            changed = true;
+        }
+    }
+    if (!changed) {
+        return;
+    }
+    ++resourceEpoch;
+    // 未加载过 → 首轮自然全量加载; 已加载 → 置重载标记下次轮次重扫
+    needReloadSkillMetadata = haveLoadSkillMetadata;
+}
+
+void SkillMiddlewareHandle::removeSkillDirs(const std::vector<std::string>& paths) {
+    bool changed = false;
+    for (const auto& p : paths) {
+        auto it = std::find(skillDirPaths.begin(), skillDirPaths.end(), p);
+        if (it != skillDirPaths.end()) {
+            skillDirPaths.erase(it);
+            changed = true;
+        }
+    }
+    if (!changed) {
+        return;
+    }
+    ++resourceEpoch;
+    needReloadSkillMetadata = haveLoadSkillMetadata;
 }
 
 } // namespace middleware

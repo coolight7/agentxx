@@ -48,6 +48,8 @@ class AgentIOBase;
 class ModelProviderRegistry;
 class SessionStore;
 class AgentHost;
+/// 会话资源应用器 (Skill/Memory/MCP 扩展; 完整定义见 resource_applier.h)
+class AgentResourceApplier;
 
 /// 会话持久化回调 (由 SessionsManager 创建 Session 时注入, 解耦 sqlite 依赖)
 /// - 所有回调仅做"尽力而为"持久化, 内部已捕获异常并记录日志, 不中断主流程
@@ -354,6 +356,14 @@ public:
     /// 插件管理器 (生命周期/热插拔; 全局唯一)
     /// - 由 BaseAgent::init 创建并注入
     std::shared_ptr<plugin::PluginManager> pluginManager = nullptr;
+
+    /// 会话资源应用器 (插件向宿主贡献 Skill/Memory/MCP 的落地接口)
+    /// - 由 CodeAgent::initMiddleware 构造注入 (单一具体实现,
+    ///   见 resource_applier.h); BaseAgent 场景无中间件 → 保持 nullptr,
+    ///   此时插件的资源注册 vtable API 返回非 0 (不支持)
+    /// - 插件声明式资源在 entry 成功后经 PluginManager 调 applyDecls 应用,
+    ///   卸载/禁用时摘除 (所有权语义见 resource_applier.h)
+    std::shared_ptr<AgentResourceApplier> resourceApplier = nullptr;
 
     /// 宿主引用 (由 AgentHost attachRoot/派生时注入; 无宿主时为空)
     /// - 节点/工具可经此感知宿主 (如查询子代理模板、发起跨 agent 消息)

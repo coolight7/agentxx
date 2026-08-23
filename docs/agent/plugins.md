@@ -3,7 +3,7 @@
 > 待实现: Wire 远程热管理 / TUI 插件管理面板 / 签名校验
 > 关联: [design.md](design.md)
 > 目标: 原生 C++ 插件 + 脚本插件 (由 C++ 插件承载), 支持热插拔、强自定义
-> 本文以当前源码为准 (plugin_api.h v6 / client_plugin_api.h v2), 设计原稿与实现偏差见 [13. 实现状态与偏差](#13-实现状态与偏差)
+> 本文以当前源码为准 (plugin_api.h v8 / client_plugin_api.h v2), 设计原稿与实现偏差见 [13. 实现状态与偏差](#13-实现状态与偏差)
 
 ## 目录
 
@@ -153,7 +153,7 @@ client 侧 (CLI/TUI, 独立宿主)
 
 C++ 跨动态库边界传对象有三大致命问题: 编译器不匹配 (GCC/Clang/MSVC 的 STL/异常 ABI 不同)、`libstdc++`/`libc++` 混用、RTTI/typeid 不一致。故插件接口定义为**纯 C 头 + vtable**, 插件可用任意编译器/任意语言实现, 无需链接 libagentxx。
 
-### 4.2 plugin_api.h 契约要点 (v6, 以实际头文件为准)
+### 4.2 plugin_api.h 契约要点 (v8, 以实际头文件为准)
 
 `agent/lib/include/agentxx/plugin/plugin_api.h` —— 纯 C, 无任何 C++ 类型。要点:
 
@@ -178,6 +178,52 @@ C++ 跨动态库边界传对象有三大致命问题: 编译器不匹配 (GCC/Cl
   不覆盖备份); 插件卸载时 `detachAll` → `restorePromptBackup` 恢复加载前状态
   (原本存在 → 恢复原值; 原本不存在 → 删除条目)
 - disable/enable 不经过回滚 (提示词条目保留, enable 后仍可用)
+
+### 4.2.1 会话资源贡献 (v8 新增: Skill / Memory / MCP)
+
+插件可向宿主贡献三类会话组件, 由 agent-io 管线加载并经 `appendComponentInfo`
+上报客户端 (TUI/CLI 自动可见), 两种通道:
+
+**声明式** (plugin.yaml 可选段, 键名与主配置 yaml 一致; 相对插件目录解析):
+
+```yaml
+name: my_plugin
+entry: libmy.so
+skill:            # 追加 skill 扫描目录 (含 SKILL.md 或其父目录)
+  - skills
+memory:           # 追加 memory 上下文文件 (内容注入系统提示词)
+  - assets/NOTES.md
+mcp:              # 追加 MCP server (与主配置 yaml mcp 列表项同构)
+  - namespace: weather
+    url: https://mcp.example.com/sse
+    timeout: 60   # 秒 (可选)
+```
+
+**运行时** (entry 内经 vtable 实时注册):
+
+```c
+vt.register_skill_dir(host, AGENTXX_SV("/abs/path/skills"));
+vt.register_memory_file(host, AGENTXX_SV("/abs/path/notes.md"));
+vt.register_mcp_server(host, AGENTXX_SV(
+    R"({"namespace":"calc","url":"https://...","timeout":30})"));
+```
+
+**语义约定**:
+
+| 规则 | 说明 |
+|------|------|
+| 冲突 | **主程序 yaml 配置优先**: 与主配置已有 skill 目录/memory 文件路径/MCP 命名空间重复 → 拒绝 + WARN; 插件之间先到先得; 同 owner 重复注册幂等成功 |
+| 失败不生效 | 声明式资源在 entry 成功后才应用 (`applyDeclaredResources`) —— 插件加载失败其声明资源一律不生效 |
+| 所有权 | 生效资源按插件名记录于 `AgentResourceApplier` (单一具体实现); 卸载 → 全部摘除; disable → 摘生效留记录; enable → 按记录恢复 (MCP 重新连接) |
+| MCP 异步 | `register_mcp_server` 仅查重登记后立即返回; 连接协程派发 io executor, 各阶段检查 stale (注销竞态安全); 连接完成后工具动态进入 ToolRegistry (下一轮 modelcall 对模型可见); 连接失败仅记日志, 命名空间随即释放可重试 |
+| 缓存失效 | 中间件扫描列表变更递增资源纪元 (epoch), 各线程状态缓存据此在下次轮次重建 |
+| 装配范围 | `CodeAgent::initMiddleware` 装配 applier; BaseAgent 场景无中间件 → 资源 API 返回非 0 (不支持) |
+
+JS 桥对应 API (脚本插件内): `agentxx.addSkillDir(path)` /
+`removeSkillDir(path)` / `addMemoryFile(path)` / `removeMemoryFile(path)` /
+`addMcpServer({namespace|name, url, timeout?})` / `removeMcpServer(ns)`。
+
+示例插件: `agent/plugins/example_resources/` (双通道示范)。
 
 **工具定义**:
 ```c
@@ -229,6 +275,9 @@ typedef int (*AgentxxHookFn)(void* user_data, AgentxxHookPoint point,
 | 插件互查 | `list_plugins` / `get_plugin` / `get_own_info` | JSON 数组/单对象; 含 name/version/path/enabled/tools/capabilities/depends/optional_depends |
 | JSON 辅助 | `json_get_string` / `json_escape` | 提取 key 字符串值 / 字符串 → 带引号 JSON 字面量 (防注入/语法错误, 替代手写解析) |
 | 宿主配置 | `get_config` / `get_plugin_args` / `get_tool_prompt` | 通用宿主信息 (dataDir/projectRoot/platform) / 本插件 yaml args (宿主不解析) / 工具提示词 (depict/args) |
+| 宿主提示词 | `get_prompt` / `set_prompt` (v6+) | 完整提示词读写; 卸载自动回滚 set_prompt 写入 |
+| 宿主任务调度 | `add_timer` / `cancel_timer` / `offload` (v7+) | 周期定时器 (io 线程触发) / 阻塞池卸载执行; 在途回调经 inflight 保活 |
+| 会话资源 | `register_skill_dir` / `unregister_skill_dir` / `register_memory_file` / `unregister_memory_file` / `register_mcp_server` / `unregister_mcp_server` / `get_own_resources` (v8+) | 插件向宿主贡献 Skill/Memory/MCP 组件 (见 4.2.1); 所有权按插件记录, 卸载摘除/禁用摘生效留记录/启用恢复 |
 
 **入口符号** (dlsym):
 ```c
@@ -559,7 +608,7 @@ agentxx.registerTool({
 agentxx.onHook(0, (info) => agentxx.log(2, "agent_start: " + JSON.stringify(info)));
 ```
 
-**agentxx 桥 API** (每脚本插件独立 JSContext; 经 caller_host 挂到壳插件实例): `registerTool` / `unregisterTool` / `callTool` / `getShareStore` / `emitMessageTip` / `log` / `onHook` / `offHook` / `subscribe` / `unsubscribe` / `publish` / `listPlugins` / `getPlugin` + 全局 `setTimeout` / `clearTimeout` (定时器桥)。
+**agentxx 桥 API** (每脚本插件独立 JSContext; 经 caller_host 挂到壳插件实例): `registerTool` / `unregisterTool` / `callTool` / `getShareStore` / `emitMessageTip` / `log` / `onHook` / `offHook` / `subscribe` / `unsubscribe` / `publish` / `listPlugins` / `getPlugin` + 全局 `setTimeout` / `clearTimeout` (定时器桥) + `addSkillDir` / `removeSkillDir` / `addMemoryFile` / `removeMemoryFile` / `addMcpServer({namespace|name, url, timeout?})` / `removeMcpServer(ns)` (v8 会话资源贡献, 见 4.2.1)。
 
 ### 6.6 依赖检查规则
 
@@ -750,6 +799,7 @@ typedef struct AgentxxClientPluginInfo {
 | agentxx_system_monitor | `agent/plugins/agentxx_system_monitor/` | 系统资源监控 (从 lib `src/expand/get_cpu_gpu_use` 拆分): 工具 `agentxx_get_system_core_info` (原内置工具迁移, lib 不再内置) + 能力 `agentxx.system_usage` (方法 query) + agent 侧周期采集线程 (每 5s 采样并 publish `agentxx_system_monitor.usage`, 定时/采集/发布完全位于插件内; 显示开关由 client `/sysinfo` 经跨端事件 `usage_enabled` 同步, 关闭期间跳过采集); 载荷为插件定义 schema 的 JSON 字符串, server 经 WirePluginData 原样转发; 插件 client 入口 (agentxx_client_entry) 订阅该事件以状态栏项渲染 CPU/RAM 占用 (快速一览) + 侧边栏 Info 栏段落渲染明细 (CPU/RAM/GPU) —— 采集实现与渲染完全隔离在插件内, lib wire 层不含任何系统资源 DTO |
 | agentxx_audio_stream | `agent/plugins/agentxx_audio_stream/` | 音频流捕获 (从 lib `src/expand/audio_stream` 拆分; 仅 Windows WASAPI): 系统输出/程序输出/麦克风; 工具 `agentxx_audio_stream` (start/stop/status); 帧经 publish 事件推送 (topic `agentxx_audio_stream.audio`, base64 PCM); 非 Windows no-op |
 | agentxx_text_selection_monitor | `agent/plugins/agentxx_text_selection_monitor/` | 系统级文本选择事件流 (从 lib `src/expand/text_selection_monitor` 拆分; 仅 Windows UIAutomation/WinEvent/CDP/剪贴板兜底): 工具 `agentxx_text_selection_monitor` (start/stop/status); 选中文本经 publish 事件推送 (topic `agentxx_text_selection_monitor.selection`); 非 Windows no-op |
+| example_resources | `agent/plugins/example_resources/` | 会话资源示例 (v8): 演示插件贡献 Skill/Memory/MCP 的双通道 —— plugin.yaml 声明式段 (skills//assets/NOTES.md/mcp 示例条目) + entry 内 vtable `register_skill_dir` 运行时注册 (skills_runtime/); 语义见 4.2.1 |
 
 ---
 
@@ -784,9 +834,16 @@ description: "..."            # 可选
 entry: libexample_plugin.so   # 必填, 指向动态库 (所有插件统一为 C++ 插件)
 depends: []                   # 可选, 必选依赖 (插件名)
 optional_depends: []          # 可选, 可选依赖 (插件名)
+skill: []                     # 可选 (v8): 会话资源声明 —— skill 扫描目录列表
+memory: []                    # 可选 (v8): memory 上下文文件列表
+mcp: []                       # 可选 (v8): MCP server 列表项 {namespace,url,timeout(秒)}
+                              #   语义见 4.2.1; entry 成功后应用 (失败不生效)
 ```
 
-宿主仅解析 name/entry/depends/optional_depends (YAML::LoadFile); 目录路径可直接传给 `loadPluginAsync` / yaml `plugins[].path`。直接给库路径时插件名按文件名推导 (`pluginNameFromPath`: libfoo.so → foo)。
+宿主解析 name/entry/depends/optional_depends (YAML::LoadFile) + 资源声明段
+(skill/memory/mcp, 见 4.2.1); 目录路径可直接传给 `loadPluginAsync` / yaml
+`plugins[].path`。直接给库路径时插件名按文件名推导 (`pluginNameFromPath`:
+libfoo.so → foo), 资源声明仅目录形态生效。
 
 ### 9.3 构建开关
 
@@ -929,6 +986,10 @@ plugins/
 | `agent/lib/src/agent/base_agent.cpp` | `init()` 装配 ToolRegistry/PluginManager + setIoExecutor + 静态工具名收集 (必须在 own_tools 之前) + 加载配置插件; `runTurnAsync` 轮次边界登记 (flushPendingCleanup/onTurnBegin/onTurnEnd) |
 | `agent/lib/include/agentxx/agent/config.h` + `config_loader.cpp` | `plugins:` 配置段 (path/enabled/sides/args; PluginConfig/PluginSide) |
 | `agent/lib/include/agentxx/middlewares/middleware.h` + `nodes/wrap_handle.h` | `BaseMiddlewareHandleInterface::disabled` 位; start/end 跳过 disabled + end 按 start 记录回放 |
+| `agent/lib/include/agentxx/agent/resource_applier.h` | AgentResourceApplier 接口 + PluginResourceDecls/AgentResourceSnapshot (v8 会话资源) |
+| `agent/lib/include/agentxx/agent/resource_applier.h` + `src/agent/resource_applier.cpp` | AgentResourceApplier 具体实现 (单一实现, 无接口分层): Skill/Memory 中间件转发 + MCP 异步连接状态机 (stale 检查/所有权/冲突规则) |
+| `agent/lib/src/plugins/plugin_common.*` (parsePluginManifest resources 参数) | 清单资源声明段解析 (相对插件目录 → 绝对路径; timeout 秒→毫秒) |
+| `agent/lib/src/plugins/plugin_manager.*` / `agent/lib/src/agent/code_agent.cpp` | applier 装配 (CodeAgent::initMiddleware 注入 AgentContext::resourceApplier); loadNativeAsync/loadBuiltinAsync 成功尾调用 applyDeclaredResources (失败不生效); vtable xx_* 包装; detachAll/disable/enable 联动摘除与恢复 |
 
 ### 12.2 client 侧
 
@@ -965,6 +1026,7 @@ plugins/
 | 统一插件模型 (2026-08) | 所有插件统一为 C++ 插件 (壳 + 能力调用委派); 依赖图级联卸载/禁用; 互查 API; 拓扑排序加载 | ✅ 已实现 |
 | 内置插件化 (2026-08) | codegraph / screen_capture / computer_use / system_monitor / audio_stream / text_selection_monitor 从 lib 拆分独立 | ✅ 已实现 |
 | client 侧插件系统 | client_plugin_api v2 (状态栏/面板/Info 段落/命令/事件/跨端) / ClientPluginManager / UI 适配器 / 双端插件 / WirePluginDataUp | ✅ 已实现 |
+| 会话资源贡献 (v8, 2026-08) | plugin_api v8 (skill/memory/mcp 注册 API + 定时器/offload v7); plugin.yaml 资源声明段; AgentResourceApplier 具体实现 (MCP 异步连接状态机/所有权/冲突规则); 中间件动态增删 + epoch 缓存失效; JS 桥新 API; example_resources 示例 + 测试模块 `plugin_resources` | ✅ 已实现 |
 | 三期 (生态) | Wire 远程热管理 / TUI 插件管理面板 / 签名校验 | ⏳ 待实现 |
 
 ### 13.2 与设计原稿的偏差 (实现为准)

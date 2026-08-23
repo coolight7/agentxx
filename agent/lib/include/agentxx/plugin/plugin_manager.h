@@ -4,6 +4,7 @@
 #include "agentxx/middlewares/middleware.h"
 #include "agentxx/plugin/builtin_plugin.h"
 #include "agentxx/plugin/plugin_api.h"
+#include "agentxx/plugin/plugin_common.h"
 #include "agentxx/plugin/tool_registry.h"
 #include "agentxx/tools/tool.h"
 #include "asio/awaitable.hpp"
@@ -284,11 +285,15 @@ public:
     ///   为 nullptr 时 args 为空对象 (测试/直连路径)
     /// - allowClientOnlySkip: sides==Auto 时无 agent 入口视为纯 client 插件,
     ///   跳过并警告 (而非报错); 显式 sides==agent 的加载保持错误
+    /// - resources: 插件清单资源声明 (skill/memory/mcp; 目录插件经
+    ///   parsePluginManifest 解析后传入) —— entry 成功后经 resourceApplier
+    ///   应用; 加载失败不应用 ("失败不生效")
     /// - 返回插件实例; 加载失败返回 nullptr (错误记日志)
     asio::awaitable<std::shared_ptr<PluginInstance>> loadNativeAsync(
-        std::string                         path,
-        const agentxx::agent::PluginConfig* cfg                = nullptr,
-        bool                                allowClientOnlySkip = false
+        std::string                                path,
+        const agentxx::agent::PluginConfig*        cfg                 = nullptr,
+        bool                                       allowClientOnlySkip = false,
+        const plugin::PluginManifestResources&     resources           = {}
     );
 
     /// 加载内置插件 (编译进 libagentxx, 无动态库文件; io 线程调用)
@@ -298,12 +303,14 @@ public:
     ///   plugin.yaml 解析)
     /// - entry 调用卸载到线程池执行 (与 loadNativeAsync 相同, 避免 io↔引擎
     ///   互等死锁); 返回插件实例; 失败返回 nullptr (错误记日志)
+    /// - resources: 插件清单资源声明 (语义同 loadNativeAsync)
     asio::awaitable<std::shared_ptr<PluginInstance>> loadBuiltinAsync(
-        std::string                         name,
-        std::string                         path,
-        std::vector<std::string>            depends,
-        std::vector<std::string>            optionalDepends,
-        const agentxx::agent::PluginConfig* cfg = nullptr
+        std::string                            name,
+        std::string                            path,
+        std::vector<std::string>               depends,
+        std::vector<std::string>               optionalDepends,
+        const agentxx::agent::PluginConfig*    cfg      = nullptr,
+        const plugin::PluginManifestResources& resources = {}
     );
 
     /// 卸载插件 (按名称; 等全部在途回调完成后才 dlclose)
@@ -384,6 +391,23 @@ public:
     int registerTool(PluginInstance* inst, const AgentxxToolSpec* spec);
     /// 注销工具
     int unregisterTool(PluginInstance* inst, const char* name);
+
+    // ==================== 会话资源注册 (v8: Skill/Memory/MCP; io 线程) ====================
+    /// 以下均转发到 AgentContext::resourceApplier (未装配时返回非 0/空串,
+    /// 如 BaseAgent 场景); 所有权按 inst->name 记录于 applier —— 卸载时
+    /// detachAll 统一摘除, 禁用/启用时摘除/恢复 (与工具行为一致)。
+    /// 冲突规则: 主程序 yaml 配置优先, 插件之间先到先得。
+    int registerSkillDir(PluginInstance* inst, const char* path);
+    int unregisterSkillDir(PluginInstance* inst, const char* path);
+    int registerMemoryFile(PluginInstance* inst, const char* path);
+    int unregisterMemoryFile(PluginInstance* inst, const char* path);
+    /// spec_json: {"namespace":"...","url":"...","timeout":60(秒,可选)}
+    /// → McpServerConfig; 异步连接, 查重通过即返回 0
+    int registerMcpServer(PluginInstance* inst, const char* specJson);
+    int unregisterMcpServer(PluginInstance* inst, const char* nameSpace);
+    /// 本插件资源快照 JSON {"skills":[],"memory":[],"mcp":[]}; 未装配返回空串
+    std::string ownResourcesJson(const PluginInstance* inst);
+
     /// 注册钩子 (push 中间件到 handles, 栈式执行)
     int registerHook(PluginInstance* inst, AgentxxHookPoint point, AgentxxHookFn fn, void* ud);
     int unregisterHook(PluginInstance* inst, AgentxxHookPoint point, AgentxxHookFn fn, void* ud);
@@ -512,6 +536,13 @@ public:
     /// 回滚插件加载期间写入的提示词 (恢复加载前状态; 卸载路径调用)
     /// - 仅删除/恢复该插件写入过的字段, 不影响其他提示词内容
     void restorePromptBackup(PluginInstance* inst);
+    /// 应用插件清单声明的会话资源 (skill/memory/mcp; entry 成功后调用)
+    /// - 经 AgentContext::resourceApplier 分发; 未装配时警告跳过
+    /// - 加载失败路径不会调用本函数 → "失败不生效"由调用时序保证
+    void applyDeclaredResources(
+        PluginInstance&                        inst,
+        const plugin::PluginManifestResources& resources
+    );
     /// 本插件配置参数 JSON (io 线程; 未配置返回 "{}")
     /// - 直接读取实例保存的 args (加载时随配置传入, 宿主不解析字段语义)
     std::string getPluginArgsJson(PluginInstance* inst);
