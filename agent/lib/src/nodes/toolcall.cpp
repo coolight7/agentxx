@@ -10,6 +10,7 @@
 #include <cassert>
 #include <charconv>
 #include <cmath>
+#include <functional>
 #include <iostream>
 #include <limits>
 #include <map>
@@ -148,6 +149,77 @@ bool isStringArrayItems(const neograph::json& schema) {
 }
 
 } // namespace
+
+std::string
+    ToolcallWrapNode::makeRepeatCallKey(std::string_view toolName, std::string_view arguments) {
+    // key = {toolName}_{arg字符串长度}_{arg哈希值}
+    // - 哈希使用进程内稳定的 std::hash; 长度参与拼接降低哈希碰撞导致
+    //   不同参数被误判为相同调用的概率
+    return fmt::format(
+        "{}_{}_{}",
+        toolName,
+        arguments.size(),
+        static_cast<size_t>(std::hash<std::string_view>{}(arguments))
+    );
+}
+
+std::set<std::string> ToolcallWrapNode::findConsecutiveRepeatCallKeys(
+    const std::vector<neograph::ChatMessage>& messages,
+    size_t                                    assistantMsgIndex,
+    size_t                                    threshold
+) {
+    auto triggered = std::set<std::string>{};
+    if (messages.empty() || assistantMsgIndex >= messages.size() || 0 == threshold) {
+        return triggered;
+    }
+    auto counts = std::map<std::string, size_t>{};
+    // 从当前 assistant (带 tool_calls) 起向前回溯, 提前终止条件:
+    // - user/system 等其他角色消息、不带 tool_calls 的最终回复: 打断交替链
+    // - 最多回溯 threshold 条 assistant: 某 key 若真的连续出现达 threshold 次,
+    //   最近 threshold 条 assistant 每条必含该 key, 更早的不可能补足缺口
+    // - 某条 (非当前轮) assistant 的所有 tool_call key 均为全新 (不在已统计
+    //   集合中) 时, 说明该条开启了全新调用, 重复计数至多延续到这里, 终止
+    // - 任一 key 计数达到 threshold: 已确定存在循环调用, 立即返回
+    size_t assistantCount = 0;
+    for (int64_t i = static_cast<int64_t>(assistantMsgIndex); i >= 0; --i) {
+        const auto& msg = messages[i];
+        if (msg.role == "assistant") {
+            if (msg.tool_calls.empty()) {
+                // 不带 tool_calls 的 assistant 是最终文本回复, 打断 llm <-> tool 交替链
+                break;
+            }
+            if (assistantCount >= threshold) {
+                // 已检查满 threshold 条仍未确定循环, 更早的消息不可能再补足
+                break;
+            }
+            ++assistantCount;
+            bool allNewKeys = true;
+            for (const auto& tc : msg.tool_calls) {
+                auto [it, inserted]
+                    = counts.emplace(makeRepeatCallKey(tc.name, tc.arguments), size_t{1});
+                if (!inserted) {
+                    allNewKeys = false;
+                    ++(it->second);
+                    if (it->second >= threshold) {
+                        triggered.insert(it->first);
+                        return triggered;
+                    }
+                }
+            }
+            if (assistantCount > 1 && allNewKeys) {
+                // 非当前轮且与已统计内容零重叠: 该条开启了全新调用,
+                // 重复计数至多延续到这里, 终止回溯
+                break;
+            }
+        } else if (msg.role == "tool") {
+            // tool 结果消息: 属于交替链, 继续向前回溯上一条 assistant
+        } else {
+            // user/system 等其他消息打断连续性: 中间有用户消息则不认为是连续
+            break;
+        }
+    }
+    return triggered;
+}
 
 /// 根据 tool 的参数 JSON Schema 自动修正参数类型兼容性, 尽量让 arg 类型匹配参数需求:
 /// - string -> 字符串数组: 参数声明为数组 (字符串数组) 而传入单个字符串时, 包装为 `[str]`
@@ -299,13 +371,13 @@ void ToolcallWrapNode::onHandleStartError(
     if (false == errorRethrow && isCurrentError) {
         // 回填 tool_call_id/tool_name，确保 ToolEnd 能正确关联
         auto  messages = in.state.get_messages();
-        auto* assistant_msg
+        auto* assistantMsg
             = agentxx::middleware::BaseMiddlewareHandleInterface::getLastAssistantToolcallMessage(
                 messages
             );
-        if (assistant_msg && !assistant_msg->tool_calls.empty()) {
+        if (assistantMsg && !assistantMsg->tool_calls.empty()) {
             auto appendToolResult = neograph::json::array();
-            for (const auto& tool : assistant_msg->tool_calls) {
+            for (const auto& tool : assistantMsg->tool_calls) {
                 auto msg = neograph::ChatMessage{
                     .role         = "tool",
                     .content      = fmt::format("[Start/Exception aborted: {}]", exceptionStr),
@@ -336,13 +408,13 @@ void ToolcallWrapNode::onHandleBaseRunError(
     if (false == errorRethrow && isCurrentError) {
         // 回填 tool_call_id/tool_name，确保 ToolEnd 能正确关联
         auto  messages = in.state.get_messages();
-        auto* assistant_msg
+        auto* assistantMsg
             = agentxx::middleware::BaseMiddlewareHandleInterface::getLastAssistantToolcallMessage(
                 messages
             );
-        if (assistant_msg && !assistant_msg->tool_calls.empty()) {
+        if (assistantMsg && !assistantMsg->tool_calls.empty()) {
             auto appendToolResult = neograph::json::array();
-            for (const auto& tool : assistant_msg->tool_calls) {
+            for (const auto& tool : assistantMsg->tool_calls) {
                 auto msg = neograph::ChatMessage{
                     .role         = "tool",
                     .content      = fmt::format("[BaseRun/Exception aborted: {}]", exceptionStr),
@@ -380,7 +452,9 @@ asio::awaitable<void> ToolcallWrapNode::onHandleEnd(
 asio::awaitable<std::string> ToolcallWrapNode::execTool(
     neograph::Tool*                                      tool,
     neograph::json&                                      args,
-    const std::shared_ptr<neograph::graph::CancelToken>& cancelToken
+    const std::shared_ptr<neograph::graph::CancelToken>& cancelToken,
+    bool                                                 repeatCallTriggered,
+    std::string_view                                     repeatCallKey
 ) const {
     auto agentCtxPtr = agentContext.lock();
     {
@@ -400,6 +474,40 @@ asio::awaitable<std::string> ToolcallWrapNode::execTool(
                 auto allow = co_await it->second(*tool, args);
                 if (false == allow) {
                     co_return "[Permission denied]";
+                }
+            }
+        }
+    }
+    {
+        // 连续重复调用检查 (repeatCallCheck 由 XXToolBase 按 tool 启用, 默认关闭):
+        // - baseRun 已按 messages 的 llm <-> tool 交替链检测出触发阈值的调用
+        //   (见 findConsecutiveRepeatCallKeys, 阈值
+        //   [AgentConfig::toolcallRepeatCheckThreshold] 默认 5), 当前调用命中时
+        //   经 permission 总线发起询问警告用户; 用户确认后继续执行, 拒绝则中止
+        //   本次调用并返回提示 (此后每次重复调用都会再次询问, 持续交由用户监督)
+        // - 用于拦截 LLM 陷入死循环反复以相同参数调用同一工具的情况
+        // - 无 permissionMiddleware 时无询问通道, 与文件系统权限行为一致直接放行
+        if (repeatCallTriggered && agentCtxPtr && agentCtxPtr->permissionMiddleware) {
+            const auto extraIt = tool->extra.find("repeatCallCheck");
+            const bool enabled = (extraIt != tool->extra.end() && extraIt->second == "true");
+            if (enabled) {
+                const auto allow = co_await agentCtxPtr->permissionMiddleware->requestPermission(
+                    *tool,
+                    args,
+                    "repeat_toolcall",
+                    fmt::format("[Repeated identical call] {}", repeatCallKey)
+                );
+                if (false == allow) {
+                    XX_LOGD(
+                        "Toolcall repeat check: deny '{}' ({})",
+                        tool->get_name(),
+                        repeatCallKey
+                    );
+                    co_return fmt::format(
+                        "[Repeated call denied by user: '{}' has been executed repeatedly "
+                        "with identical arguments. Change your approach or the arguments.]",
+                        tool->get_name()
+                    );
                 }
             }
         }
@@ -535,14 +643,16 @@ asio::awaitable<void> ToolcallWrapNode::baseRun(
     }
 
     // Find the last assistant message with tool_calls
-    const neograph::ChatMessage* assistant_msg = nullptr;
+    const neograph::ChatMessage* assistantMsg      = nullptr;
+    size_t                       assistantMsgIndex = 0;
     for (auto it = messages.rbegin(); it != messages.rend(); ++it) {
         if (it->role == "assistant" && !it->tool_calls.empty()) {
-            assistant_msg = &(*it);
+            assistantMsg = &(*it);
             break;
         }
+        ++assistantMsgIndex;
     }
-    if (!assistant_msg) {
+    if (!assistantMsg) {
         out = neograph::graph::NodeOutput{};
         co_return;
     }
@@ -554,7 +664,7 @@ asio::awaitable<void> ToolcallWrapNode::baseRun(
 //   警告日志供排查; 不跳过执行, 避免掩盖真正的问题
 #if XX_IS_DEBUG_D
     {
-        const int64_t assistantIndex = static_cast<int64_t>(assistant_msg - &messages.front());
+        const int64_t assistantIndex = static_cast<int64_t>(assistantMsg - &messages.front());
         std::set<std::string> replied;
         for (size_t i = static_cast<size_t>(assistantIndex) + 1; i < messages.size(); ++i) {
             if (messages[i].role == "tool" && false == messages[i].tool_call_id.empty()) {
@@ -562,8 +672,8 @@ asio::awaitable<void> ToolcallWrapNode::baseRun(
             }
         }
         const bool allReplied = std::all_of(
-            assistant_msg->tool_calls.begin(),
-            assistant_msg->tool_calls.end(),
+            assistantMsg->tool_calls.begin(),
+            assistantMsg->tool_calls.end(),
             [&](const neograph::ToolCall& tc) {
                 return false == tc.id.empty() && replied.count(tc.id) > 0;
             }
@@ -571,7 +681,7 @@ asio::awaitable<void> ToolcallWrapNode::baseRun(
         if (allReplied) {
             XX_LOGW(
                 "Toolcall re-execute check: last assistant tool_calls already fully replied ({} tools); abnormal scheduling suspected",
-                assistant_msg->tool_calls.size()
+                assistantMsg->tool_calls.size()
             );
         }
     }
@@ -584,6 +694,19 @@ asio::awaitable<void> ToolcallWrapNode::baseRun(
     // 已执行完成的 tool_call_id (取消时用于区分已完成/未完成, 未完成的补 [User canceled])
     std::set<std::string> completedToolcallIds{};
     std::exception_ptr    cancelErrorPtr;
+
+    std::set<std::string> repeatTriggeredKeys;
+    if (nullptr != assistantMsg) {
+        // 连续重复调用检测: 以当前 assistant 结尾的 llm <-> tool 交替链内,
+        // 达到阈值 [AgentConfig::toolcallRepeatCheckThreshold] 的重复调用 key 集合
+        // (key = {toolName}_{arg长度}_{arg哈希}); 供 execTool 对启用
+        // [repeatCallCheck] 且命中的 tool 发起用户确认; 阈值 <= 0 时禁用检查
+        const size_t repeatThreshold = (agentCtxPtr && agentCtxPtr->agentConfig)
+                                           ? agentCtxPtr->agentConfig->toolcallRepeatCheckThreshold
+                                           : 0;
+        repeatTriggeredKeys
+            = findConsecutiveRepeatCallKeys(messages, assistantMsgIndex, repeatThreshold);
+    }
 
     auto onExecTool = [&](const neograph::ToolCall& tc) -> asio::awaitable<neograph::ChatMessage> {
         neograph::ChatMessage tool_msg;
@@ -598,6 +721,10 @@ asio::awaitable<void> ToolcallWrapNode::baseRun(
                 co_return tool_msg;
             }
         }
+
+        // 当前调用的重复标识 key 与是否命中循环检测 (仅命中的调用会被询问确认)
+        const auto repeatKey = makeRepeatCallKey(tc.name, tc.arguments);
+        const bool repeatHit = repeatTriggeredKeys.count(repeatKey) > 0;
 
         auto it = std::find_if(tools_.begin(), tools_.end(), [&](neograph::Tool* t) {
             return t->get_name() == tc.name;
@@ -624,8 +751,13 @@ asio::awaitable<void> ToolcallWrapNode::baseRun(
                                 // 的中断 resultId)
                                 args["tool_call_id"] = tc.id;
                             }
-                            tool_msg.content
-                                = co_await execTool(pluginTool.get(), args, in.ctx.cancel_token);
+                            tool_msg.content = co_await execTool(
+                                pluginTool.get(),
+                                args,
+                                in.ctx.cancel_token,
+                                repeatHit,
+                                repeatKey
+                            );
                             // 取消埋点: tool 执行完成后检查, 避免取消后继续收集/执行后续 tool
                             if (in.ctx.cancel_token) {
                                 in.ctx.cancel_token->throw_if_cancelled("after tool execution");
@@ -669,7 +801,13 @@ asio::awaitable<void> ToolcallWrapNode::baseRun(
                             // resultId)
                             args["tool_call_id"] = tc.id;
                         }
-                        tool_msg.content = co_await execTool(*it, args, in.ctx.cancel_token);
+                        tool_msg.content = co_await execTool(
+                            *it,
+                            args,
+                            in.ctx.cancel_token,
+                            repeatHit,
+                            repeatKey
+                        );
                         // 取消埋点: tool 执行完成后检查, 避免取消后继续收集/执行后续 tool
                         if (in.ctx.cancel_token) {
                             in.ctx.cancel_token->throw_if_cancelled("after tool execution");
@@ -705,7 +843,7 @@ asio::awaitable<void> ToolcallWrapNode::baseRun(
 
     /// 执行 toolcall
     std::vector<asio::awaitable<neograph::ChatMessage>> toolcallResults{};
-    for (const auto& tc : assistant_msg->tool_calls) {
+    for (const auto& tc : assistantMsg->tool_calls) {
         toolcallResults.emplace_back(onExecTool(tc));
     }
     for (auto& item : toolcallResults) {
@@ -732,7 +870,7 @@ asio::awaitable<void> ToolcallWrapNode::baseRun(
         //   避免已完成的 tool 结果因 state 回滚而丢失
         // - 未完成的 tool 插入 [User canceled] 提示, 保证每条 assistant tool_call
         //   都有对应的 tool 结果消息, 上下文角色顺序和内容完整
-        for (const auto& tc : assistant_msg->tool_calls) {
+        for (const auto& tc : assistantMsg->tool_calls) {
             if (completedToolcallIds.count(tc.id)) {
                 continue;
             }
@@ -773,15 +911,15 @@ void ToolcallWrapNode::defStdoutLogOnToolcallStart(
     size_t                      limitOutput
 ) {
     auto messages = in.state.get_messages();
-    auto assistant_msg
+    auto assistantMsg
         = agentxx::middleware::BaseMiddlewareHandleInterface::getLastAssistantToolcallMessage(
             messages
         );
 
     std::ostringstream out{};
-    if (assistant_msg) {
+    if (assistantMsg) {
         size_t index = 0;
-        for (auto& item : assistant_msg->tool_calls) {
+        for (auto& item : assistantMsg->tool_calls) {
             ++index;
             out << "┣━ Argument: " << index << ". " << item.name << "/" << item.id << std::endl;
             out << "             - "

@@ -271,6 +271,15 @@ public:
     /// - 功能实现见 [agentxx::node::ToolcallWrapNode::execTool]
     size_t toolcallSummaryLimitOutputLength = 2 * 1024;
 
+    /// 连续相同调用重复检查阈值 (默认 5 次)
+    /// - 当 tool 启用了 [agentxx::tools::XXToolBase::repeatCallCheck] 且同一
+    ///   llm <-> tool 交替链内 (无用户消息打断) 连续相同 tool + 相同参数调用
+    ///   达到该次数时, ToolcallNode 经 permission 总线发起询问警告用户,
+    ///   用户确认后才继续执行, 拒绝则中止本次调用
+    /// - 0 表示禁用检查 (即使 tool 启用了 repeatCallCheck)
+    /// - 功能实现见 [agentxx::node::ToolcallWrapNode::execTool]
+    size_t toolcallRepeatCheckThreshold = 5;
+
     /// TODO: 更换api
     /// - [duckduckgo] `https://duckduckgo.com/html/?q={}` 国内连接不稳定
     std::string websearchApiUrl               = "";

@@ -29,16 +29,19 @@ XXToolBase::XXToolBase(
     std::weak_ptr<agentxx::agent::AgentContext> in_agentContext,
     bool                                        in_autoSummaryOutput,
     bool                                        in_canDelayLoad,
-    size_t                                      in_maxRetry
+    size_t                                      in_maxRetry,
+    bool                                        in_repeatCallCheck
 ) :
     name(in_name),
     agentContext(in_agentContext),
     autoSummaryOutput(in_autoSummaryOutput),
     canDelayLoad(in_canDelayLoad),
-    maxRetry(in_maxRetry) {
+    maxRetry(in_maxRetry),
+    repeatCallCheck(in_repeatCallCheck) {
     extra["autoSummaryOutput"] = autoSummaryOutput ? "true" : "false";
     extra["canDelayLoad"]      = canDelayLoad ? "true" : "false";
     extra["maxRetry"]          = std::to_string(maxRetry);
+    extra["repeatCallCheck"]   = repeatCallCheck ? "true" : "false";
 }
 
 std::string XXToolBase::get_name() const {
@@ -71,14 +74,16 @@ XXToolWrap::XXToolWrap(
     bool                                                        in_autoSummaryOutput,
     bool                                                        in_canDelayLoad,
     size_t                                                      in_maxRetry,
-    std::optional<agentxx::middleware::SummarizationToolHandle> in_summarizationHandle
+    std::optional<agentxx::middleware::SummarizationToolHandle> in_summarizationHandle,
+    bool                                                        in_repeatCallCheck
 ) :
     XXToolBase(
         in_inner->get_name(),
         in_agentContext,
         in_autoSummaryOutput,
         in_canDelayLoad,
-        in_maxRetry
+        in_maxRetry,
+        in_repeatCallCheck
     ),
     inner(std::move(in_inner)),
     summarizationHandle(in_summarizationHandle) {}

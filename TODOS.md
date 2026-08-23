@@ -9,8 +9,6 @@
 - 验证subagent、summarization
 - CI/CD
 - 文档翻译
-- tool 同名同参数重复多次调用检查
-- 插件加载 mcp、skill、memory
 - 插件框架说明 必须实现的接口、可选实现的接口，插件根据说明列表决定是否启用；以适配不同 client 可能支持的接口不同
 
 ## 提示词优化
