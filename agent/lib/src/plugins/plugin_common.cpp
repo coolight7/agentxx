@@ -38,7 +38,8 @@ bool parsePluginManifest(
     std::string&                 name,
     std::string&                 entry,
     std::vector<std::string>&    depends,
-    std::vector<std::string>&    optionalDepends
+    std::vector<std::string>&    optionalDepends,
+    PluginManifestResources*     resources
 ) {
     auto            yamlPath = dir / "plugin.yaml";
     std::error_code ec;
@@ -60,6 +61,81 @@ bool parsePluginManifest(
             for (const auto& d : node["optional_depends"]) {
                 if (d.IsScalar()) {
                     optionalDepends.push_back(d.as<std::string>());
+                }
+            }
+        }
+        // ---- 资源声明段 (skill/memory/mcp; 键名与主配置 yaml 一致) ----
+        // 相对路径按插件目录解析为绝对路径; 段缺失/非法项跳过并告警,
+        // 不影响 manifest 合法性 (声明是可选增强)
+        if (resources) {
+            *resources = PluginManifestResources{};
+            // 绝对路径原样保留; 相对路径按插件目录拼接并规范化
+            auto resolveRel = [&dir](const std::string& p) -> std::string {
+                if (p.empty()) {
+                    return {};
+                }
+                std::filesystem::path fp{p};
+                if (fp.is_absolute()) {
+                    return p;
+                }
+                return (dir / fp).lexically_normal().string();
+            };
+            if (node["skill"] && node["skill"].IsSequence()) {
+                for (const auto& s : node["skill"]) {
+                    if (!s.IsScalar()) {
+                        continue;
+                    }
+                    auto p = resolveRel(s.as<std::string>());
+                    if (!p.empty()) {
+                        resources->skillDirs.push_back(std::move(p));
+                    }
+                }
+            }
+            if (node["memory"] && node["memory"].IsSequence()) {
+                for (const auto& m : node["memory"]) {
+                    if (!m.IsScalar()) {
+                        continue;
+                    }
+                    auto p = resolveRel(m.as<std::string>());
+                    if (!p.empty()) {
+                        resources->memoryFiles.push_back(std::move(p));
+                    }
+                }
+            }
+            if (node["mcp"] && node["mcp"].IsSequence()) {
+                for (const auto& m : node["mcp"]) {
+                    if (!m.IsMap()) {
+                        continue;
+                    }
+                    auto ns  = m["namespace"] ? m["namespace"].as<std::string>() : std::string{};
+                    auto url = m["url"] ? m["url"].as<std::string>() : std::string{};
+                    if (ns.empty() || url.empty()) {
+                        XX_LOGW(
+                            "Plugin manifest `{}` mcp entry missing `namespace`/`url`, skipped",
+                            yamlPath.string()
+                        );
+                        continue;
+                    }
+                    long long timeoutSec = 120; // 与主配置默认一致
+                    if (m["timeout"]) {
+                        try {
+                            timeoutSec = m["timeout"].as<long long>();
+                        } catch (const std::exception&) {
+                            XX_LOGW(
+                                "Plugin manifest `{}` mcp `{}` invalid timeout, using default",
+                                yamlPath.string(),
+                                ns
+                            );
+                        }
+                    }
+                    if (timeoutSec < 0) {
+                        timeoutSec = 0;
+                    }
+                    // 重复命名空间: 后者覆盖前者 (与主配置 override 行为一致)
+                    resources->mcpServers[ns] = PluginManifestResources::McpDecl{
+                        .url       = url,
+                        .timeoutMs = timeoutSec * 1000
+                    };
                 }
             }
         }

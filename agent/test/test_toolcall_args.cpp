@@ -1,9 +1,12 @@
 #include "test_toolcall_args.h"
 
 #include "agentxx/nodes/toolcall.h"
+#include "fmt/format.h"
 #include "neograph/json.h"
+#include <cstddef>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace agentxx {
 namespace test {
@@ -24,6 +27,43 @@ neograph::json makeParams(const std::pair<std::string, neograph::json>& prop) {
         {"type",       "object"                                 },
         {"properties", neograph::json{{prop.first, prop.second}}},
     };
+}
+
+/// 常用测试参数 JSON 字符串 (重复检测用例共用)
+const std::string KEY_A_TXT = R"({"path":"a.txt"})";
+
+/// 构造带 tool_calls 的 assistant 消息 (llm 轮)
+neograph::ChatMessage makeAssistantMsg(const std::vector<std::pair<std::string, std::string>>& calls
+) {
+    neograph::ChatMessage msg;
+    msg.role    = "assistant";
+    msg.content = "";
+    for (const auto& [name, args] : calls) {
+        neograph::ToolCall tc;
+        tc.id        = fmt::format("call_{}_{}", name, args);
+        tc.name      = name;
+        tc.arguments = args;
+        msg.tool_calls.push_back(std::move(tc));
+    }
+    return msg;
+}
+
+/// 构造 tool 结果消息 (与上一条 assistant 的 tool_calls 对应)
+neograph::ChatMessage makeToolResultMsg() {
+    neograph::ChatMessage msg;
+    msg.role         = "tool";
+    msg.content      = "ok";
+    msg.tool_call_id = "call_x";
+    msg.tool_name    = "some_tool";
+    return msg;
+}
+
+/// 构造普通文本消息 (user/system)
+neograph::ChatMessage makeTextMsg(std::string_view role) {
+    neograph::ChatMessage msg;
+    msg.role    = std::string{role};
+    msg.content = "hello";
+    return msg;
 }
 
 } // namespace
@@ -548,6 +588,299 @@ TestResult testToolcallArgs() {
         XX_TEST_EXPECT_EQ(args["v"].get<long long>(), 5);
     }
 
+    // ===================== 连续重复调用检测 =====================
+    using nodes::ToolcallWrapNode;
+
+    // #36 makeRepeatCallKey: 相同 tool + 相同参数得到相同 key
+    {
+        const auto key1 = ToolcallWrapNode::makeRepeatCallKey("tool_a", R"({"p":1})");
+        const auto key2 = ToolcallWrapNode::makeRepeatCallKey("tool_a", R"({"p":1})");
+        XX_TEST_EXPECT_EQ(key1, key2);
+    }
+    // #37 makeRepeatCallKey: 不同 tool / 不同参数得到不同 key
+    {
+        const auto base  = ToolcallWrapNode::makeRepeatCallKey("tool_a", R"({"p":1})");
+        const auto other = ToolcallWrapNode::makeRepeatCallKey("tool_b", R"({"p":1})");
+        XX_TEST_EXPECT_TRUE(base != other);
+        // 参数内容不同 (长度也不同): key 必须不同
+        XX_TEST_EXPECT_TRUE(base != ToolcallWrapNode::makeRepeatCallKey("tool_a", R"({"p":2})"));
+        // key 格式: {toolName}_{arg长度}_{hash}, 以 toolName_ 开头且包含参数长度段
+        XX_TEST_EXPECT_TRUE(base.starts_with("tool_a_7_"));
+    }
+    // #38 makeRepeatCallKey: 长度相同但内容不同的参数 (降低哈希碰撞误判的验证口径)
+    {
+        const auto k1 = ToolcallWrapNode::makeRepeatCallKey("tool_a", "abcdefgh");
+        const auto k2 = ToolcallWrapNode::makeRepeatCallKey("tool_a", "abcdefgi");
+        XX_TEST_EXPECT_TRUE(k1 != k2);
+    }
+
+    // ---- findConsecutiveRepeatCallKeys ----
+    constexpr size_t T5 = 5; // 与 AgentConfig::toolcallRepeatCheckThreshold 默认值一致
+
+    // #39 空入参 / 阈值为 0 (禁用) 防御
+    {
+        auto msgs = std::vector<neograph::ChatMessage>{};
+        XX_TEST_EXPECT_TRUE(ToolcallWrapNode::findConsecutiveRepeatCallKeys(msgs, 0, T5).empty());
+        auto assistant = makeAssistantMsg({
+            {"t", "{}"}
+        });
+        msgs.push_back(assistant);
+        XX_TEST_EXPECT_TRUE(ToolcallWrapNode::findConsecutiveRepeatCallKeys(msgs, 0, T5).empty());
+        auto last = msgs.size() - 1;
+        XX_TEST_EXPECT_TRUE(ToolcallWrapNode::findConsecutiveRepeatCallKeys(msgs, last, 0).empty());
+    }
+    // #40 单次调用不触发 (未达阈值)
+    {
+        auto msgs = std::vector<neograph::ChatMessage>{};
+        msgs.push_back(makeTextMsg("user"));
+        msgs.push_back(makeAssistantMsg({
+            {"read_file", KEY_A_TXT}
+        }));
+        auto last = msgs.size() - 1;
+        XX_TEST_EXPECT_TRUE(ToolcallWrapNode::findConsecutiveRepeatCallKeys(msgs, last, T5).empty()
+        );
+    }
+    // #41 连续 5 次相同调用 (llm -> tool 交替): 触发且返回正确 key
+    {
+        auto msgs = std::vector<neograph::ChatMessage>{};
+        msgs.push_back(makeTextMsg("user"));
+        for (size_t i = 0; i < 4; ++i) {
+            msgs.push_back(makeAssistantMsg({
+                {"read_file", KEY_A_TXT}
+            }));
+            msgs.push_back(makeToolResultMsg());
+        }
+        msgs.push_back(makeAssistantMsg({
+            {"read_file", KEY_A_TXT}
+        }));
+        auto last = msgs.size() - 1;
+        auto hit  = ToolcallWrapNode::findConsecutiveRepeatCallKeys(msgs, last, T5);
+        XX_TEST_EXPECT_EQ(hit.size(), size_t{1});
+        XX_TEST_EXPECT_TRUE(
+            hit.count(ToolcallWrapNode::makeRepeatCallKey("read_file", KEY_A_TXT)) > 0
+        );
+    }
+    // #42 连续 4 次不触发 (差一次达阈值)
+    {
+        auto msgs = std::vector<neograph::ChatMessage>{};
+        msgs.push_back(makeTextMsg("user"));
+        for (size_t i = 0; i < 3; ++i) {
+            msgs.push_back(makeAssistantMsg({
+                {"read_file", KEY_A_TXT}
+            }));
+            msgs.push_back(makeToolResultMsg());
+        }
+        msgs.push_back(makeAssistantMsg({
+            {"read_file", KEY_A_TXT}
+        }));
+        auto last = msgs.size() - 1;
+        XX_TEST_EXPECT_TRUE(ToolcallWrapNode::findConsecutiveRepeatCallKeys(msgs, last, T5).empty()
+        );
+    }
+    // #43 中间有用户消息打断: 仅统计最后一条用户消息之后的连续部分
+    {
+        auto msgs = std::vector<neograph::ChatMessage>{};
+        for (size_t i = 0; i < 6; ++i) {
+            msgs.push_back(makeAssistantMsg({
+                {"read_file", KEY_A_TXT}
+            }));
+            msgs.push_back(makeToolResultMsg());
+        }
+        msgs.push_back(makeTextMsg("user")); // 用户介入, 打断连续性
+        for (size_t i = 0; i < 2; ++i) {
+            msgs.push_back(makeAssistantMsg({
+                {"read_file", KEY_A_TXT}
+            }));
+            msgs.push_back(makeToolResultMsg());
+        }
+        msgs.push_back(makeAssistantMsg({
+            {"read_file", KEY_A_TXT}
+        }));
+        auto last = msgs.size() - 1;
+        // 仅统计用户消息之后的 3 次 (< 5), 不触发
+        XX_TEST_EXPECT_TRUE(ToolcallWrapNode::findConsecutiveRepeatCallKeys(msgs, last, T5).empty()
+        );
+
+        // 用户消息之后补足到 5 次: 触发
+        for (size_t i = 0; i < 2; ++i) {
+            msgs.push_back(makeAssistantMsg({
+                {"read_file", KEY_A_TXT}
+            }));
+            msgs.push_back(makeToolResultMsg());
+        }
+        last     = msgs.size() - 1;
+        auto hit = ToolcallWrapNode::findConsecutiveRepeatCallKeys(msgs, last, T5);
+        XX_TEST_EXPECT_EQ(hit.size(), size_t{1});
+        XX_TEST_EXPECT_TRUE(
+            hit.count(ToolcallWrapNode::makeRepeatCallKey("read_file", KEY_A_TXT)) > 0
+        );
+    }
+    // #44 system 消息同样打断连续性
+    {
+        auto msgs = std::vector<neograph::ChatMessage>{};
+        for (size_t i = 0; i < 6; ++i) {
+            msgs.push_back(makeAssistantMsg({
+                {"run", R"({"cmd":"ls"})"}
+            }));
+            msgs.push_back(makeToolResultMsg());
+        }
+        msgs.push_back(makeTextMsg("system"));
+        msgs.push_back(makeAssistantMsg({
+            {"run", R"({"cmd":"ls"})"}
+        }));
+        auto last = msgs.size() - 1;
+        XX_TEST_EXPECT_TRUE(ToolcallWrapNode::findConsecutiveRepeatCallKeys(msgs, last, T5).empty()
+        );
+    }
+    // #45 不带 tool_calls 的最终回复 assistant 打断连续性
+    {
+        auto msgs = std::vector<neograph::ChatMessage>{};
+        for (size_t i = 0; i < 6; ++i) {
+            msgs.push_back(makeAssistantMsg({
+                {"read_file", KEY_A_TXT}
+            }));
+            msgs.push_back(makeToolResultMsg());
+        }
+        neograph::ChatMessage finalReply;
+        finalReply.role    = "assistant";
+        finalReply.content = "done";
+        msgs.push_back(finalReply);
+        msgs.push_back(makeTextMsg("user"));
+        msgs.push_back(makeAssistantMsg({
+            {"read_file", KEY_A_TXT}
+        }));
+        auto last = msgs.size() - 1;
+        XX_TEST_EXPECT_TRUE(ToolcallWrapNode::findConsecutiveRepeatCallKeys(msgs, last, T5).empty()
+        );
+    }
+    // #46 并行 tool_calls: 同一 assistant 内多个相同调用均计数
+    {
+        auto msgs = std::vector<neograph::ChatMessage>{};
+        msgs.push_back(makeTextMsg("user"));
+        const auto grepKey = R"({"pattern":"x"})";
+        for (size_t i = 0; i < 2; ++i) {
+            msgs.push_back(makeAssistantMsg({
+                {"grep", grepKey},
+                {"grep", grepKey},
+            }));
+            msgs.push_back(makeToolResultMsg());
+        }
+        auto last = msgs.size() - 1;
+        // 两轮各 2 次, 共 4 次: 阈值 4 时触发
+        auto hit = ToolcallWrapNode::findConsecutiveRepeatCallKeys(msgs, last, 4);
+        XX_TEST_EXPECT_EQ(hit.size(), size_t{1});
+        XX_TEST_EXPECT_TRUE(hit.count(ToolcallWrapNode::makeRepeatCallKey("grep", grepKey)) > 0);
+        // 阈值 5 时不触发
+        XX_TEST_EXPECT_TRUE(ToolcallWrapNode::findConsecutiveRepeatCallKeys(msgs, last, 5).empty());
+    }
+    // #47 不同参数/不同工具分开计数, 仅达标者入选
+    // (b.txt 与 a.txt 同轮出现: 避免纯新 key 轮触发零重叠截断, 见 #48)
+    {
+        auto msgs = std::vector<neograph::ChatMessage>{};
+        msgs.push_back(makeTextMsg("user"));
+        for (size_t i = 0; i < 5; ++i) {
+            msgs.push_back(makeAssistantMsg({
+                {"read_file", KEY_A_TXT}
+            }));
+            msgs.push_back(makeToolResultMsg());
+        }
+        for (size_t i = 0; i < 2; ++i) {
+            msgs.push_back(makeAssistantMsg({
+                {"read_file", KEY_A_TXT            },
+                {"read_file", R"({"path":"b.txt"})"},
+            }));
+            msgs.push_back(makeToolResultMsg());
+        }
+        msgs.push_back(makeAssistantMsg({
+            {"read_file", KEY_A_TXT        },
+            {"list_dir",  R"({"path":"."})"},
+        }));
+        auto last = msgs.size() - 1;
+        auto hit  = ToolcallWrapNode::findConsecutiveRepeatCallKeys(msgs, last, T5);
+        // a.txt 达标 (8 次); b.txt (2 次) 与 list_dir (1 次) 不入选
+        XX_TEST_EXPECT_EQ(hit.size(), size_t{1});
+        XX_TEST_EXPECT_TRUE(
+            hit.count(ToolcallWrapNode::makeRepeatCallKey("read_file", KEY_A_TXT)) > 0
+        );
+    }
+    // #48 提前终止 - 全新 key 的 assistant 截断重复计数:
+    // 某条 assistant 的所有 tool_call key 均未出现过时, 该条开启了全新调用,
+    // 重复计数至多延续到这里 (即使更早还有相同调用也不计入)
+    {
+        auto msgs = std::vector<neograph::ChatMessage>{};
+        msgs.push_back(makeTextMsg("user"));
+        for (size_t i = 0; i < 3; ++i) {
+            msgs.push_back(makeAssistantMsg({
+                {"read_file", KEY_A_TXT}
+            }));
+            msgs.push_back(makeToolResultMsg());
+        }
+        // 全新调用的一轮: 截断回溯
+        msgs.push_back(makeAssistantMsg({
+            {"write_file", R"({"path":"b.txt"})"}
+        }));
+        msgs.push_back(makeToolResultMsg());
+        for (size_t i = 0; i < 3; ++i) {
+            msgs.push_back(makeAssistantMsg({
+                {"read_file", KEY_A_TXT}
+            }));
+            msgs.push_back(makeToolResultMsg());
+        }
+        auto last = msgs.size() - 1;
+        // write_file 轮之后仅 3 次 (< 5); 更早的 3 次已被截断, 不触发
+        XX_TEST_EXPECT_TRUE(ToolcallWrapNode::findConsecutiveRepeatCallKeys(msgs, last, T5).empty()
+        );
+
+        // 截断点之后的连续部分补足到 5 次: 触发
+        for (size_t i = 0; i < 2; ++i) {
+            msgs.push_back(makeAssistantMsg({
+                {"read_file", KEY_A_TXT}
+            }));
+            msgs.push_back(makeToolResultMsg());
+        }
+        last     = msgs.size() - 1;
+        auto hit = ToolcallWrapNode::findConsecutiveRepeatCallKeys(msgs, last, T5);
+        XX_TEST_EXPECT_EQ(hit.size(), size_t{1});
+        XX_TEST_EXPECT_TRUE(
+            hit.count(ToolcallWrapNode::makeRepeatCallKey("read_file", KEY_A_TXT)) > 0
+        );
+    }
+    // #49 提前终止 - 回溯上限 threshold 条 assistant:
+    // 某 key 若真的连续出现达 threshold 次, 最近 threshold 条 assistant 每条必含该 key,
+    // 因此检查满 threshold 条仍未确定循环时即可终止 (更早的消息不可能补足缺口)
+    {
+        auto msgs = std::vector<neograph::ChatMessage>{};
+        msgs.push_back(makeTextMsg("user"));
+        // 4 轮 assistant 各含 a.txt/b.txt 两种调用: a/b 各出现 4 次 (< 5)
+        for (size_t i = 0; i < 4; ++i) {
+            msgs.push_back(makeAssistantMsg({
+                {"read_file", KEY_A_TXT            },
+                {"read_file", R"({"path":"b.txt"})"},
+            }));
+            msgs.push_back(makeToolResultMsg());
+        }
+        auto last = msgs.size() - 1;
+        // a/b 均不足 5 次, 不触发; 链内消息数超过回溯上限时同样正确终止
+        XX_TEST_EXPECT_TRUE(ToolcallWrapNode::findConsecutiveRepeatCallKeys(msgs, last, T5).empty()
+        );
+    }
+    // #50 同轮并行即可直接达到阈值 (无需历史)
+    {
+        auto msgs = std::vector<neograph::ChatMessage>{};
+        msgs.push_back(makeTextMsg("user"));
+        const auto grepKey = R"({"pattern":"x"})";
+        msgs.push_back(makeAssistantMsg({
+            {"grep", grepKey},
+            {"grep", grepKey},
+            {"grep", grepKey},
+            {"grep", grepKey},
+            {"grep", grepKey},
+        }));
+        auto last = msgs.size() - 1;
+        auto hit  = ToolcallWrapNode::findConsecutiveRepeatCallKeys(msgs, last, T5);
+        XX_TEST_EXPECT_EQ(hit.size(), size_t{1});
+        XX_TEST_EXPECT_TRUE(hit.count(ToolcallWrapNode::makeRepeatCallKey("grep", grepKey)) > 0);
+    }
     return TestResult{g_tca_passed, g_tca_failed};
 }
 

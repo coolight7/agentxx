@@ -3,6 +3,7 @@
 #include "agentxx/agent/config_static.h"
 #include "agentxx/agent/io/agent_io.h"
 #include "agentxx/agent/io/agent_io_transport.h"
+#include "agentxx/agent/resource_applier.h"
 #include "agentxx/event/event_stream.h"
 #include "agentxx/plugin/plugin_common.h"
 #include "agentxx/util/async_offload.h"
@@ -1207,8 +1208,7 @@ static int xx_set_prompt(const AgentxxHost* host, AgentxxPluginStringView prompt
 
 /// 周期定时器 (io 线程约束; 跨线程经 post 同步等待; 回调内快速返回约定)
 static void*
-    xx_add_timer(const AgentxxHost* host, long interval_ms, void (*fn)(void* ud), void* ud) {
-    XX_PLUGIN_CATCH_BEGIN
+    xx_add_timer(const AgentxxHost* host, long interval_ms, void (*fn)(void* ud), void* ud) {    XX_PLUGIN_CATCH_BEGIN
     auto mgr  = mgrOf(host);
     auto inst = instOf(host);
     if (!mgr || !inst || interval_ms <= 0 || !fn) {
@@ -1254,6 +1254,124 @@ static void xx_offload(
     XX_PLUGIN_CATCH_END_VOID()
 }
 
+// ==================== 会话资源注册 (v8: Skill/Memory/MCP) ====================
+// io 线程约束操作: 非 io 线程调用方经 ioCallSync 投递同步等待 (与工具注册一致)
+
+static int xx_register_skill_dir(const AgentxxHost* host, AgentxxPluginStringView path) {
+    XX_PLUGIN_CATCH_BEGIN
+    auto mgr  = mgrOf(host);
+    auto inst = instOf(host);
+    if (!mgr || !inst || agentxx_plugin_sv_empty(path)) {
+        return -1;
+    }
+    auto        mgrPtr  = mgr;
+    auto        instPtr = inst;
+    std::string p{path.data, path.size};
+    return ioCallSync<int>(mgrPtr, [mgrPtr, instPtr, p]() {
+        return mgrPtr->registerSkillDir(instPtr, p.c_str());
+    });
+    XX_PLUGIN_CATCH_END(-1)
+}
+
+static int xx_unregister_skill_dir(const AgentxxHost* host, AgentxxPluginStringView path) {
+    XX_PLUGIN_CATCH_BEGIN
+    auto mgr  = mgrOf(host);
+    auto inst = instOf(host);
+    if (!mgr || !inst || agentxx_plugin_sv_empty(path)) {
+        return -1;
+    }
+    auto        mgrPtr  = mgr;
+    auto        instPtr = inst;
+    std::string p{path.data, path.size};
+    return ioCallSync<int>(mgrPtr, [mgrPtr, instPtr, p]() {
+        return mgrPtr->unregisterSkillDir(instPtr, p.c_str());
+    });
+    XX_PLUGIN_CATCH_END(-1)
+}
+
+static int xx_register_memory_file(const AgentxxHost* host, AgentxxPluginStringView path) {
+    XX_PLUGIN_CATCH_BEGIN
+    auto mgr  = mgrOf(host);
+    auto inst = instOf(host);
+    if (!mgr || !inst || agentxx_plugin_sv_empty(path)) {
+        return -1;
+    }
+    auto        mgrPtr  = mgr;
+    auto        instPtr = inst;
+    std::string p{path.data, path.size};
+    return ioCallSync<int>(mgrPtr, [mgrPtr, instPtr, p]() {
+        return mgrPtr->registerMemoryFile(instPtr, p.c_str());
+    });
+    XX_PLUGIN_CATCH_END(-1)
+}
+
+static int xx_unregister_memory_file(const AgentxxHost* host, AgentxxPluginStringView path) {
+    XX_PLUGIN_CATCH_BEGIN
+    auto mgr  = mgrOf(host);
+    auto inst = instOf(host);
+    if (!mgr || !inst || agentxx_plugin_sv_empty(path)) {
+        return -1;
+    }
+    auto        mgrPtr  = mgr;
+    auto        instPtr = inst;
+    std::string p{path.data, path.size};
+    return ioCallSync<int>(mgrPtr, [mgrPtr, instPtr, p]() {
+        return mgrPtr->unregisterMemoryFile(instPtr, p.c_str());
+    });
+    XX_PLUGIN_CATCH_END(-1)
+}
+
+static int xx_register_mcp_server(const AgentxxHost* host, AgentxxPluginStringView spec_json) {
+    XX_PLUGIN_CATCH_BEGIN
+    auto mgr  = mgrOf(host);
+    auto inst = instOf(host);
+    if (!mgr || !inst || agentxx_plugin_sv_empty(spec_json)) {
+        return -1;
+    }
+    auto        mgrPtr  = mgr;
+    auto        instPtr = inst;
+    std::string spec{spec_json.data, spec_json.size};
+    return ioCallSync<int>(mgrPtr, [mgrPtr, instPtr, spec]() {
+        return mgrPtr->registerMcpServer(instPtr, spec.c_str());
+    });
+    XX_PLUGIN_CATCH_END(-1)
+}
+
+static int xx_unregister_mcp_server(const AgentxxHost* host, AgentxxPluginStringView name_space) {
+    XX_PLUGIN_CATCH_BEGIN
+    auto mgr  = mgrOf(host);
+    auto inst = instOf(host);
+    if (!mgr || !inst || agentxx_plugin_sv_empty(name_space)) {
+        return -1;
+    }
+    auto        mgrPtr  = mgr;
+    auto        instPtr = inst;
+    std::string ns{name_space.data, name_space.size};
+    return ioCallSync<int>(mgrPtr, [mgrPtr, instPtr, ns]() {
+        return mgrPtr->unregisterMcpServer(instPtr, ns.c_str());
+    });
+    XX_PLUGIN_CATCH_END(-1)
+}
+
+static char* xx_get_own_resources(const AgentxxHost* host) {
+    XX_PLUGIN_CATCH_BEGIN
+    auto mgr  = mgrOf(host);
+    auto inst = instOf(host);
+    if (!mgr || !inst) {
+        return nullptr;
+    }
+    auto mgrPtr  = mgr;
+    auto instPtr = inst;
+    auto json    = ioCallSync<std::string>(mgrPtr, [mgrPtr, instPtr]() {
+        return mgrPtr->ownResourcesJson(instPtr);
+    });
+    if (json.empty()) {
+        return nullptr; // 未装配资源应用器
+    }
+    return host->vtable->strdup(json.c_str());
+    XX_PLUGIN_CATCH_END(nullptr)
+}
+
 static const AgentxxHostVtable g_hostVtable = {
     xx_alloc,
     xx_free,
@@ -1289,6 +1407,13 @@ static const AgentxxHostVtable g_hostVtable = {
     xx_add_timer,
     xx_cancel_timer,
     xx_offload,
+    xx_register_skill_dir,
+    xx_unregister_skill_dir,
+    xx_register_memory_file,
+    xx_unregister_memory_file,
+    xx_register_mcp_server,
+    xx_unregister_mcp_server,
+    xx_get_own_resources,
 };
 
 // ==================== 工具注册/注销 ====================
@@ -1326,6 +1451,207 @@ int PluginManager::unregisterTool(PluginInstance* inst, const char* name) {
     registry_->unregisterTool(name);
     XX_LOGI("Plugin `{}` unregistered tool `{}`", inst->name, name);
     return 0;
+}
+
+// ==================== 会话资源注册 (v8: Skill/Memory/MCP) ====================
+
+/// 获取资源应用器; 未装配 (BaseAgent 场景) 时警告并返回空
+static std::shared_ptr<agentxx::agent::AgentResourceApplier>
+    getResourceApplier(const std::weak_ptr<AgentContext>& ctx, std::string_view apiName) {
+    auto c = ctx.lock();
+    if (!c || !c->resourceApplier) {
+        XX_LOGW(
+            "Plugin resources: `{}` unsupported (no resource applier; BaseAgent has no "
+            "skill/memory middleware?)",
+            apiName
+        );
+        return nullptr;
+    }
+    return c->resourceApplier;
+}
+
+int PluginManager::registerSkillDir(PluginInstance* inst, const char* path) {
+    if (!inst || !path) {
+        return -1;
+    }
+    auto ap = getResourceApplier(agentContext_, "register_skill_dir");
+    if (!ap) {
+        return -1;
+    }
+    std::string err;
+    if (!ap->addSkillDir(inst->name, path, err)) {
+        XX_LOGW("Plugin `{}` register skill dir failed: {}", inst->name, err);
+        return -1;
+    }
+    XX_LOGI("Plugin `{}` registered skill dir `{}`", inst->name, path);
+    return 0;
+}
+
+int PluginManager::unregisterSkillDir(PluginInstance* inst, const char* path) {
+    if (!inst || !path) {
+        return -1;
+    }
+    auto ap = getResourceApplier(agentContext_, "unregister_skill_dir");
+    if (!ap) {
+        return -1;
+    }
+    if (!ap->removeSkillDir(inst->name, path)) {
+        return -1;
+    }
+    XX_LOGI("Plugin `{}` unregistered skill dir `{}`", inst->name, path);
+    return 0;
+}
+
+int PluginManager::registerMemoryFile(PluginInstance* inst, const char* path) {
+    if (!inst || !path) {
+        return -1;
+    }
+    auto ap = getResourceApplier(agentContext_, "register_memory_file");
+    if (!ap) {
+        return -1;
+    }
+    std::string err;
+    if (!ap->addMemoryFile(inst->name, path, err)) {
+        XX_LOGW("Plugin `{}` register memory file failed: {}", inst->name, err);
+        return -1;
+    }
+    XX_LOGI("Plugin `{}` registered memory file `{}`", inst->name, path);
+    return 0;
+}
+
+int PluginManager::unregisterMemoryFile(PluginInstance* inst, const char* path) {
+    if (!inst || !path) {
+        return -1;
+    }
+    auto ap = getResourceApplier(agentContext_, "unregister_memory_file");
+    if (!ap) {
+        return -1;
+    }
+    if (!ap->removeMemoryFile(inst->name, path)) {
+        return -1;
+    }
+    XX_LOGI("Plugin `{}` unregistered memory file `{}`", inst->name, path);
+    return 0;
+}
+
+int PluginManager::registerMcpServer(PluginInstance* inst, const char* specJson) {
+    if (!inst || !specJson) {
+        return -1;
+    }
+    auto ap = getResourceApplier(agentContext_, "register_mcp_server");
+    if (!ap) {
+        return -1;
+    }
+    // 解析 spec: {"namespace":"...","url":"...","timeout":60(秒,可选)}
+    // - 手写解析不可靠 (转义/嵌套), 统一经 JSON 库解析
+    try {
+        auto j       = neograph::json::parse(specJson);
+        auto ns      = j.value("namespace", std::string{});
+        auto url     = j.value("url", std::string{});
+        int  timeoutSec = 120; // 与主配置默认一致
+        if (j.contains("timeout")) {
+            timeoutSec = j.value("timeout", 120);
+        }
+        if (ns.empty() || url.empty()) {
+            XX_LOGW(
+                "Plugin `{}` register_mcp_server failed: namespace/url required",
+                inst->name
+            );
+            return -1;
+        }
+        agentxx::agent::McpServerConfig cfg;
+        cfg.url         = url;
+        cfg.toolTimeout = std::chrono::seconds{std::max(timeoutSec, 0)}; // 秒 → 毫秒(隐式转换)
+        std::string err;
+        if (!ap->addMcpServer(inst->name, ns, cfg, err)) {
+            XX_LOGW("Plugin `{}` register mcp server failed: {}", inst->name, err);
+            return -1;
+        }
+        XX_LOGI("Plugin `{}` registered mcp server `{}` ({})", inst->name, ns, url);
+        return 0;
+    } catch (const std::exception& e) {
+        XX_LOGE("Plugin `{}` register_mcp_server invalid json: {}", inst->name, e.what());
+        return -1;
+    }
+}
+
+int PluginManager::unregisterMcpServer(PluginInstance* inst, const char* nameSpace) {
+    if (!inst || !nameSpace) {
+        return -1;
+    }
+    auto ap = getResourceApplier(agentContext_, "unregister_mcp_server");
+    if (!ap) {
+        return -1;
+    }
+    if (!ap->removeMcpServer(inst->name, nameSpace)) {
+        return -1;
+    }
+    XX_LOGI("Plugin `{}` unregistered mcp server `{}`", inst->name, nameSpace);
+    return 0;
+}
+
+std::string PluginManager::ownResourcesJson(const PluginInstance* inst) {
+    if (!inst) {
+        return {};
+    }
+    auto c = agentContext_.lock();
+    if (!c || !c->resourceApplier) {
+        return {};
+    }
+    auto snap = c->resourceApplier->ownedBy(inst->name);
+    auto toArray = [](const std::vector<std::string>& v) {
+        neograph::json a = neograph::json::array();
+        for (const auto& s : v) {
+            a.push_back(s);
+        }
+        return a;
+    };
+    neograph::json out;
+    out["skills"] = toArray(snap.skillDirs);
+    out["memory"] = toArray(snap.memoryFiles);
+    out["mcp"]    = toArray(snap.mcpNamespaces);
+    return out.dump();
+}
+
+void PluginManager::applyDeclaredResources(
+    PluginInstance&                        inst,
+    const plugin::PluginManifestResources& resources
+) {
+    if (resources.skillDirs.empty() && resources.memoryFiles.empty()
+        && resources.mcpServers.empty()) {
+        return;
+    }
+    auto ctx = agentContext_.lock();
+    if (!ctx || !ctx->resourceApplier) {
+        XX_LOGW(
+            "Plugin `{}` declared {} skill dirs / {} memory files / {} mcp servers, "
+            "but no resource applier is installed (BaseAgent?); skipped",
+            inst.name,
+            resources.skillDirs.size(),
+            resources.memoryFiles.size(),
+            resources.mcpServers.size()
+        );
+        return;
+    }
+    // 清单原始声明 → 宿主资源声明 (超时单位换算: ms → McpServerConfig)
+    agentxx::agent::PluginResourceDecls decls;
+    decls.skillDirs   = resources.skillDirs;
+    decls.memoryFiles = resources.memoryFiles;
+    for (const auto& [ns, d] : resources.mcpServers) {
+        agentxx::agent::McpServerConfig cfg;
+        cfg.url         = d.url;
+        cfg.toolTimeout = std::chrono::milliseconds{d.timeoutMs};
+        decls.mcpServers[ns] = cfg;
+    }
+    XX_LOGI(
+        "Applying declared resources of plugin `{}`: {} skill dirs, {} memory files, "
+        "{} mcp servers",
+        inst.name,
+        decls.skillDirs.size(),
+        decls.memoryFiles.size(),
+        decls.mcpServers.size()
+    );
+    ctx->resourceApplier->applyDecls(inst.name, decls);
 }
 
 // ==================== 钩子注册/注销 ====================
@@ -1795,9 +2121,10 @@ static const AgentxxBuiltinPluginInfo* findBuiltinPlugin(std::string_view name) 
 
 asio::awaitable<std::shared_ptr<PluginInstance>>
 PluginManager::loadNativeAsync(
-    std::string                         path,
-    const agentxx::agent::PluginConfig* cfg,
-    bool                                allowClientOnlySkip
+    std::string                            path,
+    const agentxx::agent::PluginConfig*    cfg,
+    bool                                   allowClientOnlySkip,
+    const plugin::PluginManifestResources& resources
 ) {
     auto ctx = agentContext_.lock();
     if (!ctx || !ctx->threadPool) {
@@ -1944,15 +2271,20 @@ PluginManager::loadNativeAsync(
         inst->capabilityRegistrations.size()
     );
 
+    // 应用清单声明资源 (v8): entry 成功后才应用 —— 上方失败路径不会到达此处,
+    // 满足"插件加载失败则其声明的资源不生效"
+    applyDeclaredResources(*inst, resources);
+
     co_return inst;
 }
 
 asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadBuiltinAsync(
-    std::string                         name,
-    std::string                         path,
-    std::vector<std::string>            depends,
-    std::vector<std::string>            optionalDepends,
-    const agentxx::agent::PluginConfig* cfg
+    std::string                            name,
+    std::string                            path,
+    std::vector<std::string>               depends,
+    std::vector<std::string>               optionalDepends,
+    const agentxx::agent::PluginConfig*    cfg,
+    const plugin::PluginManifestResources& resources
 ) {
     auto ctx = agentContext_.lock();
     if (!ctx || !ctx->threadPool) {
@@ -2053,6 +2385,9 @@ asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadBuiltinAsync
         inst->capabilityRegistrations.size()
     );
 
+    // 应用清单声明资源 (v8; 与 loadNativeAsync 同语义: entry 成功后才应用)
+    applyDeclaredResources(*inst, resources);
+
     co_return inst;
 }
 
@@ -2129,6 +2464,11 @@ void PluginManager::detachAll(PluginInstance* inst) {
         }
     }
     inst->timers.clear();
+    // 会话资源 (v8): 摘除本插件贡献的全部 Skill/Memory/MCP 并清除所有权记录
+    // - 卸载/entry 失败路径: 记录一并清除 (不保留)
+    if (auto ctx = agentContext_.lock(); ctx && ctx->resourceApplier) {
+        ctx->resourceApplier->removeAllOwned(inst->name);
+    }
     // 提示词: 回滚插件加载期间经 set_prompt 写入的修改 (恢复加载前状态)
     // - detachAll 仅被卸载路径调用 (unloadAsync/shutdownPlugin/entry 失败清理),
     //   disable 不经过此路径 (禁用时提示词条目保留, enable 后仍可用)
@@ -2315,6 +2655,11 @@ void PluginManager::disableImpl(std::string_view name, bool userInitiated) {
             inst->middleware = nullptr;
         }
     }
+    // 会话资源 (v8): 摘除生效的 Skill/Memory/MCP (所有权记录保留, enable 恢复),
+    // 与工具行为一致
+    if (auto rctx = agentContext_.lock(); rctx && rctx->resourceApplier) {
+        rctx->resourceApplier->setOwnerEnabled(inst->name, false);
+    }
     XX_LOGI("Plugin disabled: {}", inst->name);
 }
 
@@ -2387,6 +2732,11 @@ void PluginManager::enableImpl(std::string_view name, bool userInitiated) {
     // 能力重新声明 (用保存的完整注册信息, 保留方法回调)
     for (const auto& c : inst->capabilityRegistrations) {
         capabilities_->registerCapability(c.name, inst->name, c.invoke, c.ctx);
+    }
+    // 会话资源 (v8): 按保留的所有权记录恢复生效的 Skill/Memory/MCP
+    // - MCP 重新连接; 与主配置 yaml 的新冲突项跳过并警告
+    if (ctx && ctx->resourceApplier) {
+        ctx->resourceApplier->setOwnerEnabled(inst->name, true);
     }
     // 依赖图级联: 再启用必选依赖本插件的插件 (仅未被用户显式禁用的)
     for (const auto& dep :
@@ -2493,7 +2843,16 @@ asio::awaitable<std::shared_ptr<PluginInstance>>
         // ---- 插件目录: 按 plugin.yaml 清单分派 ----
         std::string              name, entry;
         std::vector<std::string> depends, optionalDepends;
-        if (!parsePluginManifest(fs::path(path), name, entry, depends, optionalDepends)) {
+        // 资源声明段 (v8): skill/memory/mcp —— entry 成功后应用 (失败不生效)
+        plugin::PluginManifestResources manifestResources;
+        if (!parsePluginManifest(
+                fs::path(path),
+                name,
+                entry,
+                depends,
+                optionalDepends,
+                &manifestResources
+            )) {
             XX_LOGW("Plugin dir `{}` manifest invalid or missing", path);
             co_return nullptr;
         }
@@ -2508,7 +2867,12 @@ asio::awaitable<std::shared_ptr<PluginInstance>>
         auto            entryPath = resolvePluginEntryPath(fs::path(path), entry);
         std::error_code ec2;
         if (fs::exists(entryPath, ec2)) {
-            auto inst = co_await loadNativeAsync(std::move(entryPath), cfg, allowClientOnlySkip);
+            auto inst = co_await loadNativeAsync(
+                std::move(entryPath),
+                cfg,
+                allowClientOnlySkip,
+                manifestResources
+            );
             if (inst) {
                 inst->depends         = std::move(depends);
                 inst->optionalDepends = std::move(optionalDepends);
@@ -2532,7 +2896,8 @@ asio::awaitable<std::shared_ptr<PluginInstance>>
                 std::move(entryPath),
                 std::move(depends),
                 std::move(optionalDepends),
-                cfg
+                cfg,
+                manifestResources
             );
         }
         // 非内置模式: 保持原行为 (loadNativeAsync 报告 dlopen 失败)

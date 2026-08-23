@@ -48,13 +48,21 @@ public:
     /// - 如果 [maxRetry] > 0，当 tool 执行抛出异常时，进行重试
     /// - 最多执行 1 + maxRetry(retry) 次
     const size_t maxRetry;
+    /// - 连续相同调用重复检查开关 (默认 false 关闭)
+    /// - `true`: 当同一 llm <-> tool 交替链内连续多次 (阈值
+    ///   [agentxx::agent::AgentConfig::toolcallRepeatCheckThreshold], 默认 5 次)
+    ///   相同 tool + 相同参数调用时, ToolcallNode 会经 permission 总线发起询问
+    ///   警告用户, 用户确认后才继续执行, 拒绝则中止本次调用
+    /// - 功能实现见 [agentxx::nodes::ToolcallWrapNode::execTool]
+    const bool repeatCallCheck;
 
     XXToolBase(
         std::string_view                            in_name,
         std::weak_ptr<agentxx::agent::AgentContext> in_agentContext,
         bool                                        in_autoSummaryOutput = false,
         bool                                        in_canDelayLoad      = true,
-        size_t                                      in_maxRetry          = 0
+        size_t                                      in_maxRetry          = 0,
+        bool                                        in_repeatCallCheck   = false
     );
 
     std::string get_name() const override;
@@ -81,7 +89,8 @@ public:
         bool                                                        in_canDelayLoad      = false,
         size_t                                                      in_maxRetry          = 0,
         std::optional<agentxx::middleware::SummarizationToolHandle> in_summarizationHandle
-        = std::nullopt
+        = std::nullopt,
+        bool in_repeatCallCheck = false
     );
 
     std::string get_name() const override;

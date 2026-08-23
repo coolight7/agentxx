@@ -186,6 +186,7 @@ if (AGENTXX_ENABLE_PLUGIN_BUILTIN)
   # 自行追加 (见各插件), 提前 return 时天然不会误登记
   if (AGENTXX_ENABLE_PLUGIN_EXAMPLE)
     add_subdirectory(example_plugin)
+    add_subdirectory(example_resources)
   endif()
 
   if (AGENTXX_ENABLE_PLUGIN_JS)
@@ -251,6 +252,7 @@ endif()
 #   (见 cmake/plugin_platform_support.cmake 与各插件声明处)
 if (AGENTXX_ENABLE_PLUGIN_EXAMPLE)
   add_subdirectory(example_plugin)
+  add_subdirectory(example_resources)
 endif()
 
 if (AGENTXX_ENABLE_PLUGIN_JS)
