@@ -1052,6 +1052,48 @@ inline PinyinCallback s_pinyinCallback = nullptr;
     return fmt::format("{:.1f}s", sec);
 }
 
+#if XX_IS_ANDROID_D
+// Android NDK libc++ 未实现 chrono 时区数据库 (current_zone/zoned_time 不可
+// 用, 链接期缺 tzdb), 回退为 POSIX localtime_r 格式化本地时间 (bionic 支持)
+#include <cstdio>
+#include <ctime>
+
+/// 格式化时间戳: HH:MM:SS (本地时区)
+[[nodiscard]] inline std::string formatTimestampMilliseconds(int64_t timestamp_ms) {
+    if (timestamp_ms <= 0) {
+        return "00:00:00";
+    }
+    std::time_t sec = static_cast<std::time_t>(timestamp_ms / 1000);
+    std::tm     local{};
+    localtime_r(&sec, &local);
+    char buf[16];
+    std::snprintf(buf, sizeof(buf), "%02d:%02d:%02d", local.tm_hour, local.tm_min, local.tm_sec);
+    return buf;
+}
+
+/// 格式化时间戳: YYYY-MM-DD HH:MM (会话列表展示用)
+[[nodiscard]] inline std::string formatDateTimeMilliseconds(int64_t timestamp_ms) {
+    if (timestamp_ms <= 0) {
+        return "-";
+    }
+    std::time_t sec = static_cast<std::time_t>(timestamp_ms / 1000);
+    std::tm     local{};
+    localtime_r(&sec, &local);
+    char buf[24];
+    std::snprintf(
+        buf,
+        sizeof(buf),
+        "%04d-%02d-%02d %02d:%02d",
+        local.tm_year + 1900,
+        local.tm_mon + 1,
+        local.tm_mday,
+        local.tm_hour,
+        local.tm_min
+    );
+    return buf;
+}
+#else
+
 /// 格式化时间戳: HH:MM:SS (本地时区)
 [[nodiscard]] inline std::string formatTimestampMilliseconds(int64_t timestamp_ms) {
     if (timestamp_ms <= 0) {
@@ -1075,6 +1117,7 @@ inline PinyinCallback s_pinyinCallback = nullptr;
     };
     return std::format("{:%Y-%m-%d %H:%M}", time);
 }
+#endif
 
 [[nodiscard]] inline constexpr bool
     isNotEmptyAndIgnoreCaseContainsAny(std::string_view str1, std::string_view str2) {

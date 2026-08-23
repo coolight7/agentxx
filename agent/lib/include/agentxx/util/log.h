@@ -110,7 +110,53 @@ private:
     bool        idle_    = true; // 受 LogSink::mutex_ 保护; 线程未在 onLog 中时为 true
 };
 
+/// std::atomic<std::shared_ptr<T>> 的可移植封装:
+/// - 主流平台直接用标准原子特化, 读路径完全无锁
+/// - Android NDK libc++ 未实现该特化 (primary template 要求 trivially
+///   copyable, shared_ptr 不满足), 退化为 mutex 保护的普通 shared_ptr:
+///   写路径 (sink 注册/移除) 罕见且持锁短, dispatch 热路径实际接近无锁
+template<typename T>
+class AtomicSharedPtr {
+public:
+
+    AtomicSharedPtr() = default;
+
+    explicit AtomicSharedPtr(std::shared_ptr<T> v) :
+        value_(std::move(v)) {}
+
+    [[nodiscard]] std::shared_ptr<T>
+        load(std::memory_order order = std::memory_order_seq_cst) const {
+#if XX_IS_ANDROID_D
+        (void)order; // 锁本身已提供所需的同步语义
+        std::lock_guard<std::mutex> lock(mutex_);
+        return value_;
+#else
+        return value_.load(order);
+#endif
+    }
+
+    void store(std::shared_ptr<T> desired, std::memory_order order = std::memory_order_seq_cst) {
+#if XX_IS_ANDROID_D
+        (void)order;
+        std::lock_guard<std::mutex> lock(mutex_);
+        value_ = std::move(desired);
+#else
+        value_.store(std::move(desired), order);
+#endif
+    }
+
+private:
+
+#if XX_IS_ANDROID_D
+    mutable std::mutex mutex_;
+    std::shared_ptr<T> value_;
+#else
+    std::atomic<std::shared_ptr<T>> value_;
+#endif
+};
+
 /// 全局日志分发器 (单例)
+
 /// - 线程安全
 /// - XX_LOG 宏将日志格式化后入队到所有已注册的 sink (非阻塞)
 /// - sink 以 weak_ptr 持有, 注册方需自行持有 shared_ptr 以保持其有效
@@ -143,7 +189,7 @@ private:
     /// 仅用于序列化 add/remove 的 copy-on-write (注册罕见, 不在热路径)
     std::mutex mutex_;
     /// sink 快照: dispatch 无锁 load, add/remove 复制后原子 store
-    std::atomic<std::shared_ptr<const SinkList>> sinks_;
+    AtomicSharedPtr<const SinkList> sinks_;
     /// 全局日志序号
     std::atomic<uint64_t> seq_{0};
 };
