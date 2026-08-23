@@ -13,7 +13,7 @@ namespace tools {
 SessionShareStoreTool::SessionShareStoreTool(
     std::weak_ptr<agentxx::agent::AgentContext> in_agentContext
 ) :
-    XXToolBase("agentxx_share_store", in_agentContext, false, false) {}
+    XXToolBase("agentxx_share_store", in_agentContext, false, false, 0, true) {}
 
 std::optional<agentxx::middleware::SummarizationToolHandle>
     SessionShareStoreTool::createSummarizationToolHandle() const {

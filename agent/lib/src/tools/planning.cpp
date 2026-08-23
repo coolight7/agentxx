@@ -10,7 +10,7 @@ WritePlanningTool::WritePlanningTool(
     std::weak_ptr<agentxx::middleware::PlanningMiddlewareHandle> in_planningContext,
     std::weak_ptr<agentxx::agent::AgentContext>                  in_agentContext
 ) :
-    XXToolBase("agentxx_planning_write", in_agentContext, false, false),
+    XXToolBase("agentxx_planning_write", in_agentContext, false, false, 0, true),
     planningContext(in_planningContext) {}
 
 neograph::ChatTool WritePlanningTool::get_definition() const {

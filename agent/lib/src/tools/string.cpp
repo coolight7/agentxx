@@ -14,7 +14,7 @@ namespace tools {
 StringHtml2MarkdownTool::StringHtml2MarkdownTool(
     std::weak_ptr<agentxx::agent::AgentContext> in_agentContext
 ) :
-    XXToolBase("agentxx_string_html_to_markdown", in_agentContext, true, true) {}
+    XXToolBase("agentxx_string_html_to_markdown", in_agentContext, true, true, 0, true) {}
 
 neograph::ChatTool StringHtml2MarkdownTool::get_definition() const {
     auto        agentPtr = agentContext.lock();
