@@ -60,11 +60,20 @@ extern \"C\" void agentxx_plugin_builtin_unload_${PLUGIN_NAME}(void* plugin_ctx)
     ts_yaml ts_json ts_xml ts_html ts_css ts_zig ts_ruby ts_glsl
   )
   if (UNIX)
-    list(APPEND _codegraph_libs pthread dl m)
+    # Android bionic 将 pthread 并入 libc, 无独立 libpthread 库, 仅链接 dl/m
+    if (CMAKE_SYSTEM_NAME STREQUAL "Android")
+      list(APPEND _codegraph_libs dl m)
+    else()
+      list(APPEND _codegraph_libs pthread dl m)
+    endif()
   endif()
   set(AGENTXX_BUILTIN_PLUGIN_LINK_LIBS
     "${AGENTXX_BUILTIN_PLUGIN_LINK_LIBS}" ${_codegraph_libs} PARENT_SCOPE)
   set(AGENTXX_BUILTIN_PLUGIN_OBJECT_TARGETS "${AGENTXX_BUILTIN_PLUGIN_OBJECT_TARGETS}" "${_target}" PARENT_SCOPE)
+  # 登记进内置插件清单 (子目录自登记: 平台不支持时本文件开头已提前 return,
+  # 不会误登记; 原由父目录 plugins/CMakeLists.txt 无条件追加, 现统一走此通道)
+  list(APPEND AGENTXX_BUILTIN_PLUGIN_NAMES ${PLUGIN_NAME})
+  set(AGENTXX_BUILTIN_PLUGIN_NAMES "${AGENTXX_BUILTIN_PLUGIN_NAMES}" PARENT_SCOPE)
   set(AGENTXX_BUILTIN_MANIFEST_DECLS "${AGENTXX_BUILTIN_MANIFEST_DECLS}" PARENT_SCOPE)
   set(AGENTXX_BUILTIN_MANIFEST_ENTRIES "${AGENTXX_BUILTIN_MANIFEST_ENTRIES}" PARENT_SCOPE)
   # 资源: plugin.yaml (运行期目录配置推导 depends/入口)
@@ -119,8 +128,13 @@ target_link_libraries(${PLUGIN_NAME} PRIVATE
   fmt::fmt
 )
 # pthread/dl/m 为 Linux 系统库; Windows/MSVC 无对应导入库 (std::thread 原生), 条件链接
+# Android bionic 将 pthread 并入 libc, 无独立 libpthread 库, 仅链接 dl/m
 if (UNIX)
-  target_link_libraries(${PLUGIN_NAME} PRIVATE pthread dl m)
+  if (CMAKE_SYSTEM_NAME STREQUAL "Android")
+    target_link_libraries(${PLUGIN_NAME} PRIVATE dl m)
+  else()
+    target_link_libraries(${PLUGIN_NAME} PRIVATE pthread dl m)
+  endif()
 endif()
 target_link_directories(${PLUGIN_NAME} PRIVATE
   "${AGENTXX_INSTALL_DIR}/lib"

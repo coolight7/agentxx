@@ -7,6 +7,17 @@
 #   加载时须先于本插件, 拓扑排序自动处理; 内置模式同样适用)
 set(PLUGIN_NAME agentxx_computer_use)
 
+# ===== 平台支持判定 =====
+# 仅 Windows 有真实实现 (user32 鼠标/键盘注入与光标查询); 其余平台
+# uiControlExecute 返回 "not available on current system" 错误桩, 跳过编译;
+# 运行时依赖 agentxx_screen_capture (同样仅 Windows), 平台支持须保持一致
+# (平台矩阵说明见 docs/agent/plugins.md 9.3.1)
+include("${CMAKE_CURRENT_LIST_DIR}/../cmake/plugin_platform_support.cmake")
+agentxx_plugin_platform_gate(${PLUGIN_NAME} _AGENTXX_PLATFORM_OK windows)
+if (NOT _AGENTXX_PLATFORM_OK)
+  return() # 跳过本插件全部目标 (内置合并/独立动态库两模式均在此拦截)
+endif ()
+
 if (AGENTXX_ENABLE_PLUGIN_BUILTIN)
   # ===== 内置合并编译分支 =====
   set(_target abp_${PLUGIN_NAME})
@@ -48,6 +59,10 @@ extern \"C\" void agentxx_plugin_builtin_unload_${PLUGIN_NAME}(void* plugin_ctx)
     "${AGENTXX_BUILTIN_MANIFEST_ENTRIES}
     {\"${PLUGIN_NAME}\", agentxx_plugin_builtin_get_info_${PLUGIN_NAME}, agentxx_plugin_builtin_entry_${PLUGIN_NAME}, agentxx_plugin_builtin_unload_${PLUGIN_NAME}},")
   set(AGENTXX_BUILTIN_PLUGIN_OBJECT_TARGETS "${AGENTXX_BUILTIN_PLUGIN_OBJECT_TARGETS}" "${_target}" PARENT_SCOPE)
+  # 登记进内置插件清单 (子目录自登记: 平台不支持时本文件开头已提前 return,
+  # 不会误登记; 原由父目录 plugins/CMakeLists.txt 无条件追加, 现统一走此通道)
+  list(APPEND AGENTXX_BUILTIN_PLUGIN_NAMES ${PLUGIN_NAME})
+  set(AGENTXX_BUILTIN_PLUGIN_NAMES "${AGENTXX_BUILTIN_PLUGIN_NAMES}" PARENT_SCOPE)
   set(AGENTXX_BUILTIN_MANIFEST_DECLS "${AGENTXX_BUILTIN_MANIFEST_DECLS}" PARENT_SCOPE)
   set(AGENTXX_BUILTIN_MANIFEST_ENTRIES "${AGENTXX_BUILTIN_MANIFEST_ENTRIES}" PARENT_SCOPE)
   # 资源: plugin.yaml (运行期目录配置推导 depends/入口)

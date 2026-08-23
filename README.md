@@ -66,16 +66,16 @@
 | **Linux** | 13.3M | 17.8M | GCC 16.1.0 · x86_64 · -O3 · --strip-all | 打包时建议带上 libstdc++.so.6,libgcc_s.so.1 |
 | **Android** | - | 14.0M | NDK-r29 · Clang 21.0.0 · android-21-arm64-v8a · -O3 · --strip-all | 打包建议带上 libc++.so |
 
-- 内置插件动态库文件体积:
+- 内置插件动态库文件体积 (横线 - 表示该插件不支持此系统):
 
-| Plugin | Windows/.dll | Linux/.so | TIP |
-|---|---|---|---|
-| agentxx_codegraph | 36.9M | 38.2M | - |
-| agentxx_computer_use | 379K | 421K | - |
-| agentxx_javascript_engine | 1.1M | 1.2M | - |
-| agentxx_screen_capture | 383K | 436K | - |
-| agentxx_system_monitor | 428K | 629K | - |
-| agentxx_text_selection_monitor | 399K | 371K | - |
+| Plugin | Windows/.dll | Linux/.so | Androi/.so | TIP |
+|---|---|---|---|---|
+| agentxx_codegraph | 36.9M | 38.2M | 37.6M | - |
+| agentxx_computer_use | 379K | - | - | - |
+| agentxx_javascript_engine | 1.1M | 1.2M | 1.1M | - |
+| agentxx_screen_capture | 383K | - | - | - |
+| agentxx_system_monitor | 428K | 629K | - | - |
+| agentxx_text_selection_monitor | 399K | - | - | - |
 
 - 内存占用:
 

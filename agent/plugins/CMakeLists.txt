@@ -23,6 +23,17 @@ option(AGENTXX_ENABLE_PLUGIN_TEXT_SELECTION "Build agentxx_text_selection_monito
 # 动态库, 无 dlopen); 仅经 libagentxx 构建生效 (见下方"内置合并编译模式")
 option(AGENTXX_ENABLE_PLUGIN_BUILTIN "Merge enabled plugins into libagentxx (built-in, no runtime plugin dlls)." OFF)
 
+# ===== 插件平台支持 =====
+# 各插件并非全平台适配: 源码无对应平台的真实实现时 (仅有 "not supported/
+# not implemented" 桩) 跳过编译该插件, 避免产出无功能意义的动态库。
+# - 判定逻辑分散在各插件自身 CMakeLists.txt 开头 (仅插件清楚自己的实现情况):
+#   声明支持的平台列表并经 cmake/plugin_platform_support.cmake 的
+#   agentxx_plugin_platform_gate() 判定, 不支持则提前 return() 跳过本目录全部
+#   目标; 内置合并模式下的清单登记 (AGENTXX_BUILTIN_PLUGIN_NAMES) 也由此天然
+#   保持正确 (提前 return 时不会误登记)
+# - 平台变量复用顶层传入的 XX_IS_*_D (独立构建时在共享辅助内按顶层规则推导)
+# - 平台矩阵说明与依据: docs/agent/plugins.md 9.3.1
+
 # 嵌套构建时由顶层传入 (见 agent/CMakeLists.txt)；独立构建时取默认值:
 # - AGENTXX_INSTALL_DIR:      依赖库 (如 quickjs 的 libqjs.a / quickjs.h) 的 install 目录
 # - AGENTXX_EXEC_INSTALL_PREFIX: 插件动态库输出目录 (与 agentxx_cli/agentxx_test 同目录,
@@ -101,18 +112,20 @@ if (NOT WIN32)
     add_link_options("-Wl,-exported_symbols_list,${_AGENTXX_EXPORT_SYMS_FILE}")
   else()
     # ELF (Linux/Android): version script 白名单, local: * 隐藏其余全部符号
+    # - 使用通配符而非精确符号名: 单端插件仅定义 agent 入口 (或 client 入口)
+    #   之一, 精确名白名单在 Android lld (-Wl,--fatal-warnings, NDK 默认) 下
+    #   会因 "symbol not defined" 报错; GNU ld 静默忽略但 lld 不会。
+    #   通配符未匹配时不报错, 且仍保证非 agentxx_plugin_/agentxx_client_
+    #   前缀的符号全部隐藏
     set(_AGENTXX_EXPORT_SYMS_FILE "${CMAKE_CURRENT_BINARY_DIR}/plugin_symbols.map")
     file(WRITE "${_AGENTXX_EXPORT_SYMS_FILE}" "# agentxx 插件动态库导出符号白名单
-# 宿主仅经 dlsym/GetProcAddress 按名查找以下入口符号 (见 plugin_api.h)
-# AGENTXX_PLUGIN_EXPORT); local: * 隐藏其余全部符号 (含第三方静态库符号)
+# 宿主仅经 dlsym/GetProcAddress 按名查找以下入口符号 (见 plugin_api.h
+# AGENTXX_PLUGIN_EXPORT); local: * 隐藏其余全部符号 (含第三方静态库符号);
+# 通配符形式兼容单端插件 (仅定义 agent 或 client 之一) 在 lld 下的链接
 {
   global:
-    agentxx_plugin_get_info;
-    agentxx_plugin_entry;
-    agentxx_plugin_unload;
-    agentxx_client_get_info;
-    agentxx_client_entry;
-    agentxx_client_unload;
+    agentxx_plugin_*;
+    agentxx_client_*;
   local: *;
 };
 ")
@@ -167,49 +180,43 @@ if (AGENTXX_ENABLE_PLUGIN_BUILTIN)
   set(AGENTXX_BUILTIN_MANIFEST_ENTRIES "")
   set(AGENTXX_BUILTIN_RESOURCE_OUTPUTS "")
 
-  # 启用条件与下方"各插件子目录"动态编译分支一致
+  # 启用条件与下方"各插件子目录"动态编译分支一致;
+  # 平台不支持时由各插件自身 CMakeLists 开头的判定提前 return() 跳过,
+  # 内置清单登记 (AGENTXX_BUILTIN_PLUGIN_NAMES) 由各插件 builtin 分支
+  # 自行追加 (见各插件), 提前 return 时天然不会误登记
   if (AGENTXX_ENABLE_PLUGIN_EXAMPLE)
     add_subdirectory(example_plugin)
-    list(APPEND AGENTXX_BUILTIN_PLUGIN_NAMES example_plugin)
   endif()
 
   if (AGENTXX_ENABLE_PLUGIN_JS)
     add_subdirectory(agentxx_javascript_engine)
-    list(APPEND AGENTXX_BUILTIN_PLUGIN_NAMES agentxx_javascript_engine)
     if (AGENTXX_ENABLE_PLUGIN_EXAMPLE)
       add_subdirectory(example_js)
-      list(APPEND AGENTXX_BUILTIN_PLUGIN_NAMES example_js)
     endif()
   endif()
 
   if (AGENTXX_ENABLE_PLUGIN_CODEGRAPH)
     add_subdirectory(agentxx_codegraph)
-    list(APPEND AGENTXX_BUILTIN_PLUGIN_NAMES agentxx_codegraph)
   endif()
 
   if (AGENTXX_ENABLE_PLUGIN_SCREEN_CAPTURE)
     add_subdirectory(agentxx_screen_capture)
-    list(APPEND AGENTXX_BUILTIN_PLUGIN_NAMES agentxx_screen_capture)
   endif()
 
   if (AGENTXX_ENABLE_PLUGIN_COMPUTER_USE)
     add_subdirectory(agentxx_computer_use)
-    list(APPEND AGENTXX_BUILTIN_PLUGIN_NAMES agentxx_computer_use)
   endif()
 
   if (AGENTXX_ENABLE_PLUGIN_SYSTEM_MONITOR)
     add_subdirectory(agentxx_system_monitor)
-    list(APPEND AGENTXX_BUILTIN_PLUGIN_NAMES agentxx_system_monitor)
   endif()
 
   if (AGENTXX_ENABLE_PLUGIN_AUDIO_STREAM)
     add_subdirectory(agentxx_audio_stream)
-    list(APPEND AGENTXX_BUILTIN_PLUGIN_NAMES agentxx_audio_stream)
   endif()
 
   if (AGENTXX_ENABLE_PLUGIN_TEXT_SELECTION)
     add_subdirectory(agentxx_text_selection_monitor)
-    list(APPEND AGENTXX_BUILTIN_PLUGIN_NAMES agentxx_text_selection_monitor)
   endif()
 
   # 生成内置插件清单 (编译进 libagentxx; 引用各插件改名后的入口符号)
@@ -240,6 +247,8 @@ endif()
 # ===== 各插件子目录 (独立动态库编译, 默认) =====
 # - 每个插件子目录自带 CMakeLists.txt, 可独立编译
 # - 仅 AGENTXX_ENABLE_PLUGIN_JS 时编译 JS 相关插件 (依赖 quickjs 库)
+# - 平台不支持时由各插件自身 CMakeLists 开头的判定提前 return() 跳过
+#   (见 cmake/plugin_platform_support.cmake 与各插件声明处)
 if (AGENTXX_ENABLE_PLUGIN_EXAMPLE)
   add_subdirectory(example_plugin)
 endif()
@@ -256,7 +265,8 @@ if (AGENTXX_ENABLE_PLUGIN_CODEGRAPH)
   add_subdirectory(agentxx_codegraph)
 endif()
 
-# agentxx_screen_capture (屏幕捕获; 独立插件, agentxx_computer_use depends 依赖它)
+# agentxx_screen_capture (屏幕捕获; 独立插件, agentxx_computer_use depends 依赖它;
+# 与 computer_use 同为仅 Windows 实现, 平台支持须保持一致)
 if (AGENTXX_ENABLE_PLUGIN_SCREEN_CAPTURE)
   add_subdirectory(agentxx_screen_capture)
 endif()
@@ -266,17 +276,20 @@ if (AGENTXX_ENABLE_PLUGIN_COMPUTER_USE)
   add_subdirectory(agentxx_computer_use)
 endif()
 
-# agentxx_system_monitor (系统资源监控: CPU/内存/GPU; 从 lib expand 拆分)
+# agentxx_system_monitor (系统资源监控: CPU/内存/GPU; 从 lib expand 拆分;
+# Windows/Linux 有真实实现, Android 复用 Linux 分支, macOS 为桩跳过)
 if (AGENTXX_ENABLE_PLUGIN_SYSTEM_MONITOR)
   add_subdirectory(agentxx_system_monitor)
 endif()
 
-# agentxx_audio_stream (音频流捕获: 系统输出/程序输出/麦克风; 从 lib expand 拆分)
+# agentxx_audio_stream (音频流捕获: 系统输出/程序输出/麦克风; 从 lib expand 拆分;
+# 当前所有平台实现均未完成 —— Windows WASAPI 被源码 `&& false` 停用, 全平台跳过)
 if (AGENTXX_ENABLE_PLUGIN_AUDIO_STREAM)
   add_subdirectory(agentxx_audio_stream)
 endif()
 
-# agentxx_text_selection_monitor (系统级文本选择事件流; 从 lib expand 拆分)
+# agentxx_text_selection_monitor (系统级文本选择事件流; 从 lib expand 拆分;
+# 仅 Windows 有真实实现)
 if (AGENTXX_ENABLE_PLUGIN_TEXT_SELECTION)
   add_subdirectory(agentxx_text_selection_monitor)
 endif()
