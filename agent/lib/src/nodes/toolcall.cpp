@@ -482,21 +482,63 @@ asio::awaitable<std::string> ToolcallWrapNode::execTool(
         // 连续重复调用检查 (repeatCallCheck 由 XXToolBase 按 tool 启用, 默认关闭):
         // - baseRun 已按 messages 的 llm <-> tool 交替链检测出触发阈值的调用
         //   (见 findConsecutiveRepeatCallKeys, 阈值
-        //   [AgentConfig::toolcallRepeatCheckThreshold] 默认 5), 当前调用命中时
-        //   经 permission 总线发起询问警告用户; 用户确认后继续执行, 拒绝则中止
-        //   本次调用并返回提示 (此后每次重复调用都会再次询问, 持续交由用户监督)
+        //   [AgentConfig::toolcallRepeatCheckThreshold] 默认 5), 当前调用命中且
+        //   该 tool 启用检查时发起 HIL 中断询问用户:
+        //   - 首次: requestInterrupt 存储询问参数并抛出 NodeInterrupt, 由上层
+        //     (agent_runner) 经总线询问外部授权者 (CLI/TUI/ACP 各自注册 interrupt 处理器)
+        //   - 恢复: 图 resume 后本函数重新执行, requestInterrupt 直接返回用户响应,
+        //     确认后继续执行, 拒绝则中止本次调用并插入提示消息让 LLM 改换方式;
+        //     此后的重复调用会再次发起询问, 持续交由用户监督
         // - 用于拦截 LLM 陷入死循环反复以相同参数调用同一工具的情况
-        // - 无 permissionMiddleware 时无询问通道, 与文件系统权限行为一致直接放行
-        if (repeatCallTriggered && agentCtxPtr && agentCtxPtr->permissionMiddleware) {
+        // - 无 middlewareHandleContext 时无询问通道, 直接放行 (与 permission 行为一致)
+        if (repeatCallTriggered && agentCtxPtr && agentCtxPtr->middlewareHandleContext) {
             const auto extraIt = tool->extra.find("repeatCallCheck");
             const bool enabled = (extraIt != tool->extra.end() && extraIt->second == "true");
             if (enabled) {
-                const auto allow = co_await agentCtxPtr->permissionMiddleware->requestPermission(
-                    *tool,
-                    args,
-                    "repeat_toolcall",
-                    fmt::format("[Repeated identical call] {}", repeatCallKey)
+                using InterruptHandleArg = agentxx::middleware::InterruptHandleArg;
+                // sessionId/tool_call_id 由 baseRun 在执行前注入 arguments
+                auto sessionId = args.value("sessionId", std::string{});
+                auto result    = co_await agentCtxPtr->middlewareHandleContext->requestInterrupt(
+                    sessionId,
+                    [&]() -> InterruptHandleArg {
+                        auto arg      = InterruptHandleArg{};
+                        arg.name      = "repeat_toolcall";
+                        arg.resultId  = args.value("tool_call_id", std::string{});
+                        arg.arg       = neograph::json{
+                               {"tool_name", tool->get_name()},
+                               {"key",       repeatCallKey  },
+                        };
+                        auto inputItem           = InterruptHandleArg::InterruptHandleInputItem{};
+                        inputItem.label          = fmt::format(
+                            "[{}] Repeated identical call",
+                            tool->get_name()
+                        );
+                        inputItem.depict         = fmt::format(
+                            "This tool has been called repeatedly with identical arguments "
+                            "({}). Allow it to run again?",
+                            repeatCallKey
+                        );
+                        inputItem.type           = "bool";
+                        inputItem.defaultValue   = "no";
+                        arg.inputs               = {std::move(inputItem)};
+                        return arg;
+                    },
+                    nullptr
                 );
+                // 解析用户响应: agent_runner 将客户端 handleInterrupt 的返回值
+                // (输入项数组, 如 ["true"]) 按 resultId 写入 interruptResult
+                bool allow = false;
+                if (result.is_array() && !result.empty()) {
+                    const auto& val = result[0];
+                    if (val.is_string()) {
+                        allow = (val.get<std::string>() == "true"
+                                 || val.get<std::string>() == "yes");
+                    } else if (val.is_boolean()) {
+                        allow = val.get<bool>();
+                    }
+                } else if (result.is_boolean()) {
+                    allow = result.get<bool>();
+                }
                 if (false == allow) {
                     XX_LOGD(
                         "Toolcall repeat check: deny '{}' ({})",
