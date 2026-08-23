@@ -53,7 +53,13 @@ struct ToolHeaderFixture {
     }
 
     /// 追加一条 Tool 消息 (text 为工具参数 JSON, 与 server 端约定一致)
-    void pushTool(std::string name, std::string args, bool finished = true, bool collapsed = true) {
+    void pushTool(
+        std::string name,
+        std::string args,
+        bool        finished  = true,
+        bool        collapsed = true,
+        std::string result    = ""
+    ) {
         sharedState.mutate([&](TUIRenderState& st) {
             auto m                = std::make_shared<TUIMessage>();
             m->role               = TUIMessage::Role::Tool;
@@ -61,6 +67,7 @@ struct ToolHeaderFixture {
             m->tool->toolName     = std::move(name);
             m->tool->toolCallId   = "call_1";
             m->tool->toolFinished = finished;
+            m->tool->toolResult   = std::move(result);
             // Tool 消息默认折叠展示 (与真实 TUI 流一致, 见 agent_tui.cpp);
             // 折叠态头部才显示 "动词 · 参数摘要" 特化渲染
             m->collapsed = collapsed;
@@ -316,6 +323,92 @@ void testTuiToolHeaderPlan() {
     XX_TEST_EXPECT_TRUE(expanded.find("my notes content") != std::string::npos);
 }
 
+// 执行失败工具折叠与展开渲染:
+// 1. 折叠时保持特化 toolName (如 "Read", "Write", "Bash" 等), 异常结果显示在后面并标红
+// 2. 未知工具折叠时显示原始 toolName + 异常结果并标红
+// 3. 展开时 result 显示为红色
+void testTuiToolHeaderFailed() {
+    // 已知工具 (Read) 执行失败折叠展示: 保持 "Read", 后面紧随异常结果
+    ToolHeaderFixture fRead;
+    fRead.pushTool(
+        "agentxx_filesystem_read",
+        R"({"path":"/nonexistent/file.txt"})",
+        true,
+        true,
+        "[Error] Path not exist"
+    );
+    XX_TEST_EXPECT_TRUE(fRead.plainRender().find("Read [Error] Path not exist") != std::string::npos);
+    // 样式断言: 异常结果包含 errorColor 颜色代码 (255;85;85)
+    XX_TEST_EXPECT_TRUE(fRead.render().find("255;85;85") != std::string::npos);
+
+    // 已知工具 (Edit) 执行失败折叠展示
+    ToolHeaderFixture fEdit;
+    fEdit.pushTool(
+        "agentxx_filesystem_edit",
+        R"({"path":"/a.cpp","old_str":"","new_str":"b"})",
+        true,
+        true,
+        "[Error] Arg old_str is empty"
+    );
+    XX_TEST_EXPECT_TRUE(fEdit.plainRender().find("Edit [Error] Arg old_str is empty") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(fEdit.render().find("255;85;85") != std::string::npos);
+
+    // 已知工具 (Bash) 执行失败折叠展示
+    ToolHeaderFixture fBash;
+    fBash.pushTool(
+        "agentxx_execute_bash_command",
+        R"({"command":"invalid_cmd"})",
+        true,
+        true,
+        "[Error] Command failed with code 127"
+    );
+    XX_TEST_EXPECT_TRUE(
+        fBash.plainRender().find("Bash [Error] Command failed with code 127") != std::string::npos
+    );
+    XX_TEST_EXPECT_TRUE(fBash.render().find("255;85;85") != std::string::npos);
+
+    // 异常中止 ([Exception aborted: ...])
+    ToolHeaderFixture fExcept;
+    fExcept.pushTool(
+        "agentxx_web_fetch",
+        R"({"url":"https://example.com"})",
+        true,
+        true,
+        "[Exception aborted: connection timeout]"
+    );
+    XX_TEST_EXPECT_TRUE(
+        fExcept.plainRender().find("Fetch [Exception aborted: connection timeout]") != std::string::npos
+    );
+    XX_TEST_EXPECT_TRUE(fExcept.render().find("255;85;85") != std::string::npos);
+
+    // 未知工具执行失败折叠展示: 保持原始 toolName + 异常结果
+    ToolHeaderFixture fUnknown;
+    fUnknown.pushTool(
+        "custom_plugin_tool",
+        R"({"foo":"bar"})",
+        true,
+        true,
+        "[Error] Custom failure"
+    );
+    XX_TEST_EXPECT_TRUE(
+        fUnknown.plainRender().find("custom_plugin_tool [Error] Custom failure") != std::string::npos
+    );
+    XX_TEST_EXPECT_TRUE(fUnknown.render().find("255;85;85") != std::string::npos);
+
+    // 展开状态下普通工具的 result: 同样使用 errorColor 标红
+    ToolHeaderFixture fExpanded;
+    fExpanded.pushTool(
+        "agentxx_execute_bash_command",
+        R"({"command":"ls"})",
+        true,
+        false, // 展开
+        "[Error] exit code 1"
+    );
+    XX_TEST_EXPECT_TRUE(fExpanded.plainRender().find("result:") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(fExpanded.plainRender().find("[Error] exit code 1") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(fExpanded.render().find("255;85;85") != std::string::npos);
+}
+
 TestResult testTuiToolHeader() {
     testTuiToolHeaderFilesystem();
     testTuiToolHeaderWeb();
@@ -323,6 +416,7 @@ TestResult testTuiToolHeader() {
     testTuiToolHeaderOverflow();
     testTuiToolHeaderRunning();
     testTuiToolHeaderPlan();
+    testTuiToolHeaderFailed();
     return {g_tui_tool_header_passed, g_tui_tool_header_failed};
 }
 

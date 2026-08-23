@@ -1219,11 +1219,49 @@ struct ToolHeaderSummary {
     std::string argsSummary;
 };
 
+/// 获取已知工具特化动作名称 (如 "Read", "Write", "List" 等), 未知工具返回空
+static std::string_view getSpecializedToolActionName(std::string_view toolName) {
+    if (toolName == "agentxx_filesystem_list") {
+        return "List";
+    }
+    if (toolName == "agentxx_filesystem_read") {
+        return "Read";
+    }
+    if (toolName == "agentxx_filesystem_write") {
+        return "Write";
+    }
+    if (toolName == "agentxx_filesystem_edit") {
+        return "Edit";
+    }
+    if (toolName == "agentxx_filesystem_glob") {
+        return "Glob";
+    }
+    if (toolName == "agentxx_filesystem_grep") {
+        return "Grep";
+    }
+    if (toolName == "agentxx_web_search") {
+        return "Search";
+    }
+    if (toolName == "agentxx_web_fetch") {
+        return "Fetch";
+    }
+    if (toolName == "agentxx_web_fetch_markdown") {
+        return "FetchMD";
+    }
+    if (toolName == "agentxx_execute_bash_command"
+        || toolName == "agentxx_execute_windows_command") {
+        return "Bash";
+    }
+    if (toolName == "agentxx_planning_write") {
+        return "Plan";
+    }
+    return {};
+}
+
 /// 将工具调用的参数 JSON 摘要为单行头部, 例如:
-/// - agentxx_filesystem_read  -> "Read", " · [0, 100] /path/file" (运行中 " · [0, 100]
-/// /path/file")
-/// - agentxx_filesystem_write      -> "Write", " · /path/file" (运行中 " · /path/file")
-/// - agentxx_web_search                 -> "Search", " · <query>" (运行中 " · <query>")
+/// - agentxx_filesystem_read  -> "Read", " · [0, 100] /path/file"
+/// - agentxx_filesystem_write -> "Write", " · /path/file"
+/// - agentxx_web_search       -> "Search", " · <query>"
 /// 未知工具 / 参数解析失败返回空 toolName, 调用方回退显示原始 toolName
 ///
 /// availWidth: 消息列表内容区总列数 (scrollable_->contentWidth()), 用于
@@ -1231,7 +1269,6 @@ struct ToolHeaderSummary {
 static ToolHeaderSummary buildToolHeaderSummary(
     std::string_view toolName,
     std::string_view argsText,
-    bool             running,
     int              availWidth = 0
 ) {
     // 折叠头部固定开销估算: 折叠标记+角色标签 "+/- [Tool] "(9) + 动作名(≤8)
@@ -1322,7 +1359,6 @@ static ToolHeaderSummary buildToolHeaderSummary(
         return out;
     };
 
-    // TODO: 操作失败时显示失败内容
     if (toolName == "agentxx_filesystem_list") {
         return make("List", {}, getStr("path"));
     }
@@ -1587,6 +1623,7 @@ Element MessageListComponent::buildMessageBlock(
             const bool isEditTool = msg.tool && msg.tool->toolName == "agentxx_filesystem_edit";
             const bool isPlanTool = msg.tool && msg.tool->toolName == "agentxx_planning_write";
             const bool finished   = msg.tool && msg.tool->toolFinished;
+            const bool isError    = finished && isToolResultError(msg.tool->toolResult);
             // TUI 特化: 已知工具头部渲染为 "动词 · 参数摘要"
             // (如 "Read · [0, 100] /path" / "Write · /path"), 未知工具回退原始 toolName
             Elements lines;
@@ -1604,33 +1641,48 @@ Element MessageListComponent::buildMessageBlock(
             }
             if (!expanded) {
                 // 折叠状态, 特化渲染 (摘要内部预览按内容区剩余列宽自适应截断)
-                auto summary
-                    = buildToolHeaderSummary(msg.tool->toolName, msg.text, !finished, maxWidth);
+                auto summary = buildToolHeaderSummary(msg.tool->toolName, msg.text, maxWidth);
                 std::string displayName;
-                std::string argsSummary;
+                std::string resOrArgsSummary;
                 if (!summary.toolName.empty()) {
                     displayName = std::move(summary.toolName);
-                    argsSummary = std::move(summary.argsSummary);
+                } else if (isError) {
+                    auto action = getSpecializedToolActionName(msg.tool->toolName);
+                    displayName = !action.empty() ? std::string(action) : msg.tool->toolName;
                 } else {
-                    // 未知工具回退: 预览预算扣除 "+/- [Tool] "(9) + 名称 + 分隔符列数
                     displayName = msg.tool->toolName;
-                    const int nameCols
-                        = static_cast<int>(markdown::utf8_display_width(displayName));
-                    if (!finished) {
-                        argsSummary = " ·";
-                        if (!msg.text.empty()) {
-                            const int budget
-                                = collapsedPreviewBudget(maxWidth, 9 + nameCols + 3); // " · "
-                            argsSummary
-                                += " " + oneLinePreview(msg.text, static_cast<size_t>(budget));
-                        }
+                }
+
+                const int nameCols = static_cast<int>(markdown::utf8_display_width(displayName));
+
+                if (isError) {
+                    // 执行失败: 保持特化 toolName, 后续内容显示为异常结果 (红色)
+                    const int budget = collapsedPreviewBudget(maxWidth, 9 + nameCols + 1); // " "
+                    auto resPreview  = oneLinePreview(msg.tool->toolResult, static_cast<size_t>(budget));
+                    if (!resPreview.empty()) {
+                        resOrArgsSummary = " " + std::move(resPreview);
+                    }
+                } else if (!finished) {
+                    if (!summary.argsSummary.empty()) {
+                        resOrArgsSummary = std::move(summary.argsSummary);
                     } else {
-                        const int budget
-                            = collapsedPreviewBudget(maxWidth, 9 + nameCols + 1); // " "
-                        auto resPreview
-                            = oneLinePreview(msg.tool->toolResult, static_cast<size_t>(budget));
+                        // 未知工具或参数解析失败回退
+                        resOrArgsSummary = " ·";
+                        if (!msg.text.empty()) {
+                            const int budget = collapsedPreviewBudget(maxWidth, 9 + nameCols + 3); // " · "
+                            resOrArgsSummary += " " + oneLinePreview(msg.text, static_cast<size_t>(budget));
+                        }
+                    }
+                } else {
+                    // 执行成功完成
+                    if (!summary.argsSummary.empty()) {
+                        resOrArgsSummary = std::move(summary.argsSummary);
+                    } else {
+                        // 未知工具回退: 展示结果预览
+                        const int budget = collapsedPreviewBudget(maxWidth, 9 + nameCols + 1); // " "
+                        auto resPreview  = oneLinePreview(msg.tool->toolResult, static_cast<size_t>(budget));
                         if (!resPreview.empty()) {
-                            argsSummary = " " + std::move(resPreview);
+                            resOrArgsSummary = " " + std::move(resPreview);
                         }
                     }
                 }
@@ -1644,10 +1696,16 @@ Element MessageListComponent::buildMessageBlock(
                     header.push_back(text(std::move(displayName)) | color(theme.toolColor) | dim);
                 }
 
-                if (!argsSummary.empty()) {
-                    header.push_back(
-                        text(std::move(argsSummary)) | color(theme.toolColor) | dim | xflex_shrink
-                    );
+                if (!resOrArgsSummary.empty()) {
+                    if (isError) {
+                        header.push_back(
+                            text(std::move(resOrArgsSummary)) | color(theme.errorColor) | xflex_shrink
+                        );
+                    } else {
+                        header.push_back(
+                            text(std::move(resOrArgsSummary)) | color(theme.toolColor) | dim | xflex_shrink
+                        );
+                    }
                 }
             } else {
                 if (!finished) {
@@ -1673,9 +1731,12 @@ Element MessageListComponent::buildMessageBlock(
                         }));
                     }
                     if (finished) {
+                        const bool isErr = isToolResultError(msg.tool->toolResult);
                         lines.push_back(hbox({
                             text("  result: ") | color(theme.toolColor),
-                            paragraph(msg.tool->toolResult) | color(theme.toolColor) | xflex_shrink,
+                            paragraph(msg.tool->toolResult)
+                                | color(isErr ? theme.errorColor : theme.toolColor)
+                                | xflex_shrink,
                         }));
                     } else {
                         lines.push_back(text("  running...") | color(theme.toolColor));
