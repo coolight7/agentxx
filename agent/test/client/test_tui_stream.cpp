@@ -619,6 +619,132 @@ TestResult testTuiStream() {
                 XX_TEST_EXPECT_EQ(snap->messages[1]->text, "Answer");
             }
         }
+
+        // 场景 6: Tool 执行中断/未结束 (toolFinished=false) -> 收到新轮次 TurnStart ->
+        // 验证最近连续的 tool 消息被重置为非 running (toolFinished=true)
+        {
+            TestTUIClientIO client(ioCtx);
+
+            // 模拟 ToolStart
+            Delta d_tool;
+            d_tool.type       = Delta::Type::ToolStart;
+            d_tool.toolName   = "agentxx_execute_bash_command";
+            d_tool.toolCallId = "call_bash_1";
+            d_tool.arguments  = "{\"command\":\"sleep 100\"}";
+            client.testOnDelta(d_tool);
+
+            {
+                auto snap = client.sharedState().snapshot();
+                XX_TEST_EXPECT_EQ(snap->messages.size(), (size_t)1);
+                XX_TEST_EXPECT_TRUE(snap->messages[0]->role == TUIMessage::Role::Tool);
+                if (snap->messages[0]->tool) {
+                    XX_TEST_EXPECT_FALSE(snap->messages[0]->tool->toolFinished);
+                }
+            }
+
+            // 模拟重启恢复或中断后收到新消息 (TurnStart)
+            Delta d_turnStart;
+            d_turnStart.type        = Delta::Type::TurnStart;
+            d_turnStart.text        = "新用户消息";
+            d_turnStart.startTimeMs = 5000;
+            client.testOnDelta(d_turnStart);
+
+            {
+                auto snap = client.sharedState().snapshot();
+                XX_TEST_EXPECT_EQ(snap->messages.size(), (size_t)2);
+                XX_TEST_EXPECT_TRUE(snap->messages[0]->role == TUIMessage::Role::Tool);
+                if (snap->messages[0]->tool) {
+                    // 断言: 原处于 running 状态的 tool 消息已被重置为 toolFinished=true
+                    XX_TEST_EXPECT_TRUE(snap->messages[0]->tool->toolFinished);
+                }
+                XX_TEST_EXPECT_TRUE(snap->messages[1]->role == TUIMessage::Role::User);
+                XX_TEST_EXPECT_EQ(snap->messages[1]->text, "新用户消息");
+            }
+        }
+
+        // 场景 7: 多个并行 tool 均未结束 -> 收到 MessageTip (如取消请求) -> 全部连续 tool 消息被重置为 non-running
+        {
+            TestTUIClientIO client(ioCtx);
+
+            Delta d_t1;
+            d_t1.type       = Delta::Type::ToolStart;
+            d_t1.toolName   = "tool1";
+            d_t1.toolCallId = "call_p1";
+            client.testOnDelta(d_t1);
+
+            Delta d_t2;
+            d_t2.type       = Delta::Type::ToolStart;
+            d_t2.toolName   = "tool2";
+            d_t2.toolCallId = "call_p2";
+            client.testOnDelta(d_t2);
+
+            {
+                auto snap = client.sharedState().snapshot();
+                XX_TEST_EXPECT_EQ(snap->messages.size(), (size_t)2);
+                XX_TEST_EXPECT_FALSE(snap->messages[0]->tool->toolFinished);
+                XX_TEST_EXPECT_FALSE(snap->messages[1]->tool->toolFinished);
+            }
+
+            // 收到 MessageTip 取消提示
+            Delta d_tip;
+            d_tip.type    = Delta::Type::MessageTip;
+            d_tip.text    = "[Cancel Request]";
+            d_tip.tipType = Delta::TipType::Info;
+            client.testOnDelta(d_tip);
+
+            {
+                auto snap = client.sharedState().snapshot();
+                XX_TEST_EXPECT_EQ(snap->messages.size(), (size_t)3);
+                XX_TEST_EXPECT_TRUE(snap->messages[0]->tool->toolFinished);
+                XX_TEST_EXPECT_TRUE(snap->messages[1]->tool->toolFinished);
+                XX_TEST_EXPECT_TRUE(snap->messages[2]->role == TUIMessage::Role::Tip);
+            }
+        }
+
+        // 场景 8: 历史中存在已完成的 tool 与未完成的 tool -> 收到 TextToken 时重置
+        {
+            TestTUIClientIO client(ioCtx);
+
+            // Step 1: Tool 1 完成
+            Delta d_t1;
+            d_t1.type       = Delta::Type::ToolStart;
+            d_t1.toolName   = "tool1";
+            d_t1.toolCallId = "call_f1";
+            client.testOnDelta(d_t1);
+
+            Delta d_t1_end;
+            d_t1_end.type       = Delta::Type::ToolEnd;
+            d_t1_end.toolName   = "tool1";
+            d_t1_end.toolCallId = "call_f1";
+            d_t1_end.result     = "ok";
+            client.testOnDelta(d_t1_end);
+
+            // Step 2: Tool 2 未完成
+            Delta d_t2;
+            d_t2.type       = Delta::Type::ToolStart;
+            d_t2.toolName   = "tool2";
+            d_t2.toolCallId = "call_u2";
+            client.testOnDelta(d_t2);
+
+            // 随后直接输出正文 TextToken (未收到 ToolEnd)
+            Delta d_text;
+            d_text.type = Delta::Type::TextToken;
+            d_text.text = "继续输出";
+            client.testOnDelta(d_text);
+
+            Delta d_end;
+            d_end.type = Delta::Type::TurnEnd;
+            client.testOnDelta(d_end);
+
+            {
+                auto snap = client.sharedState().snapshot();
+                XX_TEST_EXPECT_EQ(snap->messages.size(), (size_t)3);
+                XX_TEST_EXPECT_TRUE(snap->messages[0]->tool->toolFinished);
+                XX_TEST_EXPECT_TRUE(snap->messages[1]->tool->toolFinished);
+                XX_TEST_EXPECT_TRUE(snap->messages[2]->role == TUIMessage::Role::Assistant);
+                XX_TEST_EXPECT_EQ(snap->messages[2]->text, "继续输出");
+            }
+        }
     }
 
     return TestResult{g_tui_stream_passed, g_tui_stream_failed};

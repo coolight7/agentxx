@@ -12,6 +12,7 @@
 #include "agentxx/plugin/client_plugin_manager.h"
 #include "agentxx/plugin/plugin_common.h"
 #include "agentxx/plugin/plugin_manager.h" /* NativeLoader (平台 dlopen 封装) */
+#include "agentxx/util/container_util.h"
 
 #include "agentxx/agent/io/wire_protocol.h"
 #include "agentxx/util/async_offload.h"
@@ -389,7 +390,7 @@ asio::awaitable<bool> ClientPluginManager::unloadAsync(std::string_view name) {
         }
     }
     // 从表移除 → 实例析构 → dlclose (~ClientPluginInstance)
-    plugins_.erase(std::string{name});
+    util::eraseHeterogeneous(plugins_, name); // 异构删除免拷贝
     XX_LOGI("[client_plugin] unloaded: {}", inst->name);
     co_return true;
 }

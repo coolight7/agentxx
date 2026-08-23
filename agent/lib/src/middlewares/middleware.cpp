@@ -1,6 +1,7 @@
 #include "agentxx/middlewares/middleware.h"
 #include "agentxx/agent/session_store.h"
 #include "agentxx/tools/tool.h"
+#include "agentxx/util/container_util.h"
 #include <algorithm>
 #include <charconv>
 
@@ -389,14 +390,15 @@ void MiddlewareContext::removeGraphDataItem(std::string_view sessionId, std::str
 }
 
 void MiddlewareContext::cleanupSession(std::string_view sessionId) {
-    graphData.erase(sessionId);
-    shareStore.erase(sessionId);
+    // 异构查找删除, 免除 string_view→string 拷贝 (libc++ 无 C++23 异构 erase)
+    util::eraseHeterogeneous(graphData, sessionId);
+    util::eraseHeterogeneous(shareStore, sessionId);
     // 移除"已从持久化加载过"标记, 避免该 session 再次出现时跳过加载 (O(1))
     shareStoreLoaded_.erase(std::string{sessionId});
     // 各中间件按 session 的 state
     for (auto& handle : handles) {
         if (handle) {
-            handle->states.erase(sessionId);
+            util::eraseHeterogeneous(handle->states, sessionId);
         }
     }
 }

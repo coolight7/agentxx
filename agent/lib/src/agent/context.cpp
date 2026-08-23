@@ -2,6 +2,7 @@
 #include "agentxx/agent/model_registry.h"
 #include "agentxx/agent/session_store.h"
 #include "agentxx/plugin/plugin_manager.h"
+#include "agentxx/util/container_util.h"
 #include "agentxx/util/log.h"
 #include <fmt/format.h>
 
@@ -140,7 +141,8 @@ std::shared_ptr<Session> SessionsManager::get(std::string_view sessionId) {
 }
 
 void SessionsManager::remove(std::string_view sessionId) {
-    sessions_.erase(sessionId);
+    // 异构查找删除, 免除 string_view→string 拷贝 (libc++ 无 C++23 异构 erase)
+    util::eraseHeterogeneous(sessions_, sessionId);
 }
 
 std::shared_ptr<Session> AgentContext::getSession(std::string_view sessionId) {

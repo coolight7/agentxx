@@ -1,5 +1,6 @@
 #include "agentxx/protocol/acp_server.h"
 
+#include "agentxx/util/container_util.h"
 #include "agentxx/util/exception.h"
 #include "agentxx/util/log.h"
 #include <fmt/format.h>
@@ -458,7 +459,7 @@ void AcpProtocolHandler::workerRunPrompt(
 void AcpProtocolHandler::workerCleanup(std::string_view sessionId) {
     {
         std::lock_guard lk(inflightMu_);
-        inflightSessions_.erase(sessionId);
+        util::eraseHeterogeneous(inflightSessions_, sessionId); // 异构删除免拷贝
     }
     auto prev = inflightCount_.fetch_sub(1, std::memory_order_acq_rel);
     if (prev == 1) {

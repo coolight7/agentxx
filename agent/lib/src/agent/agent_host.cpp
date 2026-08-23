@@ -4,6 +4,7 @@
 #include "agentxx/agent/code_agent.h"
 #include "agentxx/protocol/a2a_client.h"
 #include "agentxx/tools/subagent_shared.h"
+#include "agentxx/util/container_util.h"
 #include "agentxx/util/exception.h"
 #include "agentxx/util/log.h"
 #include "asio/as_tuple.hpp"
@@ -40,7 +41,8 @@ void AgentRegistry::insert(std::shared_ptr<AgentNode> node) {
 }
 
 void AgentRegistry::remove(std::string_view agentId) {
-    nodes_.erase(agentId);
+    // 异构查找删除, 免除 string_view→string 拷贝 (libc++ 无 C++23 异构 erase)
+    util::eraseHeterogeneous(nodes_, agentId);
 }
 
 size_t AgentRegistry::size() const {
@@ -811,12 +813,12 @@ void AgentHost::registerRemoteAgent(
     if (client) {
         remoteAgents_[std::string{agentId}] = std::move(client);
     } else {
-        remoteAgents_.erase(agentId);
+        util::eraseHeterogeneous(remoteAgents_, agentId); // 异构删除免拷贝
     }
 }
 
 void AgentHost::unregisterRemoteAgent(std::string_view agentId) {
-    remoteAgents_.erase(agentId);
+    util::eraseHeterogeneous(remoteAgents_, agentId);
 }
 
 asio::awaitable<events::RespHostMessage> AgentHost::sendViaA2a(
@@ -885,7 +887,7 @@ void AgentHost::setMailbox(std::string_view agentId, Mailbox mailbox) {
     if (mailbox) {
         mailboxes_[std::string{agentId}] = std::move(mailbox);
     } else {
-        mailboxes_.erase(agentId);
+        util::eraseHeterogeneous(mailboxes_, agentId); // 异构删除免拷贝
     }
 }
 

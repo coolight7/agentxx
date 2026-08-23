@@ -2,13 +2,15 @@
 
 #include "agentxx/protocol/anthropic_provider.h"
 #include "agentxx/protocol/openai_provider.h"
+#include "agentxx/util/container_util.h"
 
 namespace agentxx {
 namespace agent {
 
 void ModelProviderRegistry::registerModel(std::string_view name, const ModelConfig& config) {
     models_[std::string{name}] = config;
-    providerCache_.erase(name);
+    // 异构查找删除失效缓存, 免除 string_view→string 拷贝 (libc++ 无异构 erase)
+    util::eraseHeterogeneous(providerCache_, name);
     if (defaultName_.empty()) {
         defaultName_ = name;
     }
