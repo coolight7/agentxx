@@ -339,6 +339,10 @@ private:
     // -----------------------------------------------------------------------
     // 协议处理辅助 (client 线程, 须持有 sharedState_.mutex())
     // -----------------------------------------------------------------------
+    /// 重置末尾最近连续处于 running 状态的 tool 消息为非 running (!toolFinished -> toolFinished = true)
+    /// (新消息到达 / 轮次开始 / 输入发送时调用, 避免会话恢复或异常中断后残留的 tool 一直显示正在运行)
+    void resetTrailingRunningToolsLocked(TUIRenderState& st);
+
     void pushCurrentTokenLocked(TUIRenderState& st);
     void cancelCurrentRunLocked(TUIRenderState& st);
     void sendUserInputLocked(TUIRenderState& st, std::string text);

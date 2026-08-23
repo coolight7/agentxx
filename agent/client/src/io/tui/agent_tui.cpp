@@ -209,6 +209,7 @@ void TUIClientAgentIO::sendPluginUserInput(std::string text) {
         auto&                       st = sharedState_.mutableState();
         if (awaitingInterruptInput_.load(std::memory_order_acquire)) {
             pushCurrentTokenLocked(st);
+            resetTrailingRunningToolsLocked(st);
             st.messages.push_back(
                 std::make_shared<TUIMessage>(TUIMessage::makeText(TUIMessage::Role::User, text))
             );
@@ -454,6 +455,7 @@ void TUIClientAgentIO::start() {
             auto&                       st = sharedState_.mutableState();
             if (awaitingInterruptInput_.load(std::memory_order_acquire)) {
                 pushCurrentTokenLocked(st);
+                resetTrailingRunningToolsLocked(st);
                 st.messages.push_back(
                     std::make_shared<TUIMessage>(TUIMessage::makeText(TUIMessage::Role::User, text))
                 );
@@ -1289,10 +1291,24 @@ void TUIClientAgentIO::onPeerMessage(agentxx::agent::WireMessage msg) {
 // 协议处理辅助 (调用方须持有 sharedState_.mutex())
 // ---------------------------------------------------------------------------
 
+void TUIClientAgentIO::resetTrailingRunningToolsLocked(TUIRenderState& st) {
+    for (size_t i = st.messages.size(); i > 0; --i) {
+        const auto& msg = *st.messages[i - 1];
+        if (msg.role != TUIMessage::Role::Tool) {
+            break;
+        }
+        if (msg.tool && !msg.tool->toolFinished) {
+            auto& m              = sharedState_.mutableMessage(st, i - 1);
+            m.tool->toolFinished = true;
+        }
+    }
+}
+
 void TUIClientAgentIO::pushCurrentTokenLocked(TUIRenderState& st) {
     if (!st.hasPendingToken()) {
         return;
     }
+    resetTrailingRunningToolsLocked(st);
     auto msg  = std::make_shared<TUIMessage>();
     msg->role = st.currentTokenRole;
     if (st.currentToken && !st.currentToken->empty()) {
@@ -1316,12 +1332,14 @@ void TUIClientAgentIO::pushCurrentTokenLocked(TUIRenderState& st) {
 void TUIClientAgentIO::cancelCurrentRunLocked(TUIRenderState& st) {
     requestCancel(currentThreadId());
     pushCurrentTokenLocked(st);
+    resetTrailingRunningToolsLocked(st);
     // 取消提示由 agent 线程确认取消后经 MessageTip Delta 插入 (原在此处
     // 即时插入 "[Cancel Request]", 迁移后由 agent 端统一插入保证历史一致)
     st.isStreaming = false;
 }
 
 void TUIClientAgentIO::sendUserInputLocked(TUIRenderState& st, std::string text) {
+    resetTrailingRunningToolsLocked(st);
     // 事件接收器通知用原文 (inputChannel 分支会 move text, 提前拷贝)
     const std::string notifyText = text;
     // 待应用模型选择: 取走后随本条消息携带给 agent-io (WireUserInput.model),
@@ -1519,6 +1537,7 @@ void TUIClientAgentIO::onDelta(const agentxx::agent::Delta& delta) {
                     // 当前轮次/步骤尚无 Think 消息 (如加密思考首包): 开始思考时立即在消息列表中创建
                     // Think 消息展示
                     pushCurrentTokenLocked(st);
+                    resetTrailingRunningToolsLocked(st);
                     auto msg       = std::make_shared<TUIMessage>();
                     msg->role      = TUIMessage::Role::Think;
                     msg->collapsed = true;
@@ -1562,6 +1581,7 @@ void TUIClientAgentIO::onDelta(const agentxx::agent::Delta& delta) {
                 // 按需 COW: 仅当字符串被 UI 快照共享 (渲染期间) 才复制本体,
                 // 避免每 token 深拷贝整个已累积文本 (O(n²) -> O(n))
                 if (!st.currentToken) {
+                    resetTrailingRunningToolsLocked(st);
                     st.currentToken = std::make_shared<std::string>();
                     // 新流开始: 递增流身份 (COW 复制不递增, 见 currentTokenEpoch 注释)
                     ++st.currentTokenEpoch;
@@ -1645,6 +1665,7 @@ void TUIClientAgentIO::onDelta(const agentxx::agent::Delta& delta) {
                 // 通用提示消息: 插入提示消息 (按级别区分显示);
                 // 默认折叠展示 (提示类消息, 与 makeText 的 System 默认折叠语义一致)
                 pushCurrentTokenLocked(st);
+                resetTrailingRunningToolsLocked(st);
                 auto msg       = std::make_shared<TUIMessage>();
                 msg->role      = TUIMessage::Role::Tip;
                 msg->text      = delta.text;
@@ -1669,6 +1690,7 @@ void TUIClientAgentIO::onDelta(const agentxx::agent::Delta& delta) {
                 // 内容/时间戳/级别与历史完全一致, 直接追加即可;
                 // 默认折叠展示 (服务端历史创建时即 collapsed=true, 此处显式同步)
                 pushCurrentTokenLocked(st);
+                resetTrailingRunningToolsLocked(st);
                 auto msg       = std::make_shared<TUIMessage>();
                 msg->role      = TUIMessage::Role::Tip;
                 msg->id        = delta.msgId;
@@ -1692,6 +1714,7 @@ void TUIClientAgentIO::onDelta(const agentxx::agent::Delta& delta) {
             } break;
             case Type::TurnStart: {
                 pushCurrentTokenLocked(st);
+                resetTrailingRunningToolsLocked(st);
                 if (!delta.text.empty()) {
                     auto msg = std::make_shared<TUIMessage>(
                         TUIMessage::makeText(TUIMessage::Role::User, delta.text, delta.startTimeMs)
@@ -1709,6 +1732,7 @@ void TUIClientAgentIO::onDelta(const agentxx::agent::Delta& delta) {
             case Type::TurnEnd: {
                 st.currentNodeName.clear();
                 pushCurrentTokenLocked(st);
+                resetTrailingRunningToolsLocked(st);
                 st.isStreaming = false;
             } break;
         }
@@ -1788,6 +1812,8 @@ void TUIClientAgentIO::onTurnResult(const agentxx::agent::WireTurnResult& /*resu
     {
         std::lock_guard<std::mutex> lock(sharedState_.mutex());
         auto&                       st = sharedState_.mutableState();
+        pushCurrentTokenLocked(st);
+        resetTrailingRunningToolsLocked(st);
         st.isStreaming                 = false;
     }
     postRedraw();
@@ -1868,6 +1894,7 @@ asio::awaitable<neograph::json> TUIClientAgentIO::handleInterrupt(
             {
                 std::lock_guard<std::mutex> lock(sharedState_.mutex());
                 auto&                       st = sharedState_.mutableState();
+                resetTrailingRunningToolsLocked(st);
                 st.messages.push_back(std::make_shared<TUIMessage>(TUIMessage::makeText(
                     TUIMessage::Role::Tip,
                     fmt::format("[Permission] Pass mode: allow {} ({})", shownTarget, permCategory)
@@ -1880,6 +1907,7 @@ asio::awaitable<neograph::json> TUIClientAgentIO::handleInterrupt(
             {
                 std::lock_guard<std::mutex> lock(sharedState_.mutex());
                 auto&                       st = sharedState_.mutableState();
+                resetTrailingRunningToolsLocked(st);
                 st.messages.push_back(std::make_shared<TUIMessage>(TUIMessage::makeText(
                     TUIMessage::Role::Tip,
                     fmt::format("[Permission] Deny mode: reject {} ({})", shownTarget, permCategory)

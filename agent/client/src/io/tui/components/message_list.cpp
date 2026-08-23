@@ -280,7 +280,7 @@ std::string formatToolArgs(std::string_view argsText) {
 /// 中断为 "[Interrupt]"; 成功结果 (如 "Success, Replace N hits") 不以这些前缀开头
 static bool isToolResultError(std::string_view result) {
     return result.starts_with("[Error]") || result.starts_with("[Exception")
-           || result.starts_with("[Interrupt]") || result.contains("Permission");
+           || result.starts_with("[Interrupt]") || result.contains("[Permission");
 }
 
 } // namespace
@@ -1658,7 +1658,8 @@ Element MessageListComponent::buildMessageBlock(
                 if (isError) {
                     // 执行失败: 保持特化 toolName, 后续内容显示为异常结果 (红色)
                     const int budget = collapsedPreviewBudget(maxWidth, 9 + nameCols + 1); // " "
-                    auto resPreview  = oneLinePreview(msg.tool->toolResult, static_cast<size_t>(budget));
+                    auto      resPreview
+                        = oneLinePreview(msg.tool->toolResult, static_cast<size_t>(budget));
                     if (!resPreview.empty()) {
                         resOrArgsSummary = " " + std::move(resPreview);
                     }
@@ -1669,8 +1670,10 @@ Element MessageListComponent::buildMessageBlock(
                         // 未知工具或参数解析失败回退
                         resOrArgsSummary = " ·";
                         if (!msg.text.empty()) {
-                            const int budget = collapsedPreviewBudget(maxWidth, 9 + nameCols + 3); // " · "
-                            resOrArgsSummary += " " + oneLinePreview(msg.text, static_cast<size_t>(budget));
+                            const int budget
+                                = collapsedPreviewBudget(maxWidth, 9 + nameCols + 3); // " · "
+                            resOrArgsSummary
+                                += " " + oneLinePreview(msg.text, static_cast<size_t>(budget));
                         }
                     }
                 } else {
@@ -1679,8 +1682,10 @@ Element MessageListComponent::buildMessageBlock(
                         resOrArgsSummary = std::move(summary.argsSummary);
                     } else {
                         // 未知工具回退: 展示结果预览
-                        const int budget = collapsedPreviewBudget(maxWidth, 9 + nameCols + 1); // " "
-                        auto resPreview  = oneLinePreview(msg.tool->toolResult, static_cast<size_t>(budget));
+                        const int budget
+                            = collapsedPreviewBudget(maxWidth, 9 + nameCols + 1); // " "
+                        auto resPreview
+                            = oneLinePreview(msg.tool->toolResult, static_cast<size_t>(budget));
                         if (!resPreview.empty()) {
                             resOrArgsSummary = " " + std::move(resPreview);
                         }
@@ -1699,11 +1704,13 @@ Element MessageListComponent::buildMessageBlock(
                 if (!resOrArgsSummary.empty()) {
                     if (isError) {
                         header.push_back(
-                            text(std::move(resOrArgsSummary)) | color(theme.errorColor) | xflex_shrink
+                            text(std::move(resOrArgsSummary)) | color(theme.errorColor)
+                            | xflex_shrink
                         );
                     } else {
                         header.push_back(
-                            text(std::move(resOrArgsSummary)) | color(theme.toolColor) | dim | xflex_shrink
+                            text(std::move(resOrArgsSummary)) | color(theme.toolColor) | dim
+                            | xflex_shrink
                         );
                     }
                 }
@@ -1735,8 +1742,7 @@ Element MessageListComponent::buildMessageBlock(
                         lines.push_back(hbox({
                             text("  result: ") | color(theme.toolColor),
                             paragraph(msg.tool->toolResult)
-                                | color(isErr ? theme.errorColor : theme.toolColor)
-                                | xflex_shrink,
+                                | color(isErr ? theme.errorColor : theme.toolColor) | xflex_shrink,
                         }));
                     } else {
                         lines.push_back(text("  running...") | color(theme.toolColor));
