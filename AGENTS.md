@@ -98,8 +98,16 @@ path/to/agentxx_test string_util regex
   (`agentxx_plugin_get_info/entry/unload` + client 侧 `agentxx_client_*`),
   由 `AGENTXX_PLUGIN_EXPORT` 宏标记入口函数 (见 `plugin_api.h`);
   构建侧统一配置: ELF `-fvisibility=hidden` + version script 白名单
-  (隐藏第三方静态库符号), macOS `-exported_symbols_list`, MSVC 不自动导出
-  (仅 dllexport); 见 `agent/plugins/CMakeLists.txt` 与各插件 CMakeLists
+  (隐藏第三方静态库符号; 白名单用通配符 `agentxx_plugin_*`/`agentxx_client_*`,
+  兼容单端插件在 Android lld --fatal-warnings 下链接),
+  macOS `-exported_symbols_list`, MSVC 不自动导出 (仅 dllexport);
+  见 `agent/plugins/CMakeLists.txt` 与各插件 CMakeLists
+- 插件平台支持矩阵: 各插件并非全平台适配, 源码无对应平台真实实现时跳过编译;
+  支持平台声明于各插件自身 CMakeLists.txt 开头 (经
+  `agent/plugins/cmake/plugin_platform_support.cmake` 的 gate 函数判定,
+  复用顶层传入的 XX_IS_*_D 变量), screen_capture/computer_use/
+  text_selection_monitor 仅 Windows, audio_stream 全平台未实现,
+  system_monitor 无 macOS; 跨平台插件默认放行; 见 docs/agent/plugins.md 9.3.1
 - 工具函数复用: 插件复用 `agent/lib/include/agentxx/util` 的全部工具函数经独立
   静态库 `agentxx_util` (src/util/ 全部源文件: http_client/http_server/ws_client/
   string_util/util/sqlite/settings_db/log/regex/http_header),

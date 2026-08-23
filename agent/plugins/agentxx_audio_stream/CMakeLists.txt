@@ -8,6 +8,17 @@
 #   - 捕获帧经 publish 事件推送 (topic "agentxx_audio_stream.audio")
 set(PLUGIN_NAME agentxx_audio_stream)
 
+# ===== 平台支持判定 =====
+# 当前所有平台均无可用实现: Windows WASAPI 实现被源码 `#if XX_IS_WIN_D && false`
+# 停用 (初始拆分提交即如此), 其余平台为 "not implemented" 空桩 → 一律跳过编译;
+# 任一平台实现就绪后 (移除源码 `&& false` 等) 在下方声明中加回对应平台即可
+# (平台矩阵说明见 docs/agent/plugins.md 9.3.1)
+include("${CMAKE_CURRENT_LIST_DIR}/../cmake/plugin_platform_support.cmake")
+agentxx_plugin_platform_gate(${PLUGIN_NAME} _AGENTXX_PLATFORM_OK)
+if (NOT _AGENTXX_PLATFORM_OK)
+  return() # 跳过本插件全部目标 (内置合并/独立动态库两模式均在此拦截)
+endif ()
+
 if (AGENTXX_ENABLE_PLUGIN_BUILTIN)
   # ===== 内置合并编译分支 =====
   set(_target abp_${PLUGIN_NAME})
@@ -49,6 +60,10 @@ extern \"C\" void agentxx_plugin_builtin_unload_${PLUGIN_NAME}(void* plugin_ctx)
       "${AGENTXX_BUILTIN_PLUGIN_LINK_LIBS}" mmdevapi ole32 psapi PARENT_SCOPE)
   endif()
   set(AGENTXX_BUILTIN_PLUGIN_OBJECT_TARGETS "${AGENTXX_BUILTIN_PLUGIN_OBJECT_TARGETS}" "${_target}" PARENT_SCOPE)
+  # 登记进内置插件清单 (子目录自登记: 平台不支持时本文件开头已提前 return,
+  # 不会误登记; 原由父目录 plugins/CMakeLists.txt 无条件追加, 现统一走此通道)
+  list(APPEND AGENTXX_BUILTIN_PLUGIN_NAMES ${PLUGIN_NAME})
+  set(AGENTXX_BUILTIN_PLUGIN_NAMES "${AGENTXX_BUILTIN_PLUGIN_NAMES}" PARENT_SCOPE)
   set(AGENTXX_BUILTIN_MANIFEST_DECLS "${AGENTXX_BUILTIN_MANIFEST_DECLS}" PARENT_SCOPE)
   set(AGENTXX_BUILTIN_MANIFEST_ENTRIES "${AGENTXX_BUILTIN_MANIFEST_ENTRIES}" PARENT_SCOPE)
   # 资源: plugin.yaml (运行期目录配置推导 depends/入口)

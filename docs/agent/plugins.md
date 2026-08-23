@@ -804,6 +804,34 @@ optional_depends: []          # 可选, 可选依赖 (插件名)
 
 每个插件子目录自带 CMakeLists.txt, 可独立构建 (`cmake -B build -S agent/plugins -DAGENTXX_INSTALL_DIR=...`); 插件仅依赖纯 C ABI 头 (libagentxx include 目录), **不链接 libagentxx**。QuickJS 经 `quickjs_repo` ExternalProject 构建 install 到 `AGENTXX_INSTALL_DIR`。
 
+#### 9.3.1 插件平台支持矩阵 (2026-08)
+
+各插件并非全平台适配: 源码无对应平台的真实实现时 (仅有 "not supported/not
+implemented" 桩), 各插件自身 CMakeLists.txt 按声明的平台支持列表跳过编译
+(内置合并编译分支与独立动态库分支均生效, configure 期输出
+`Skip plugin '...'` STATUS 日志)。平台判定复用项目既有 `XX_IS_LINUX_D`/
+`XX_IS_WIN_D`/`XX_IS_MACOS_D`/`XX_IS_ANDROID_D`/`XX_IS_IOS_D` 变量 (嵌套
+构建由顶层经 `_AGENTXX_COMMON_CMAKE_ARGS` 传入; 独立构建时按顶层相同规则
+本地推导), 直接以标志位匹配, 无中间平台标识变量。
+
+| 插件 | Windows | Linux | macOS/iOS | Android | 说明 |
+|------|---------|-------|-----------|---------|------|
+| example_plugin / example_js / javascript_engine / codegraph | ✅ | ✅ | ✅ | ✅ | 纯跨平台实现 |
+| agentxx_system_monitor | ✅ PDH/DXGI | ✅ /proc+sysfs | ❌ 桩 | ✅ 复用 Linux 分支 | 共享头将非 `_WIN32`/非 `__APPLE__` 推导为 `XX_IS_LINUX_D=1`; `/proc/stat`、`/proc/meminfo` 在 Android 可读, GPU 经 sysfs/drm 枚举缺失时优雅降级 |
+| agentxx_screen_capture | ✅ DXGI/GDI/WIC | ❌ 桩 | ❌ 桩 | ❌ 桩 | 仅 Windows 有桌面捕获实现 |
+| agentxx_computer_use | ✅ user32 注入 | ❌ 桩(返回 not available) | ❌ | ❌ | 运行时依赖 screen_capture, 平台矩阵与其保持一致 |
+| agentxx_text_selection_monitor | ✅ UIAutomation/CDP | ❌ 桩 | ❌ 桩 | ❌ 桩 | 仅 Windows 有文本选择监听实现 |
+| agentxx_audio_stream | ❌ | ❌ | ❌ | ❌ | 全平台跳过: Windows WASAPI 实现被源码 `&& false` 停用, 其余平台为桩; 实现就绪后在矩阵中加回对应平台 |
+
+各插件的支持平台声明**分散维护于各自 CMakeLists.txt 开头** (仅插件清楚自身
+实现情况): 经 `agent/plugins/cmake/plugin_platform_support.cmake` 的
+`agentxx_plugin_platform_gate(<名> <结果> <支持平台...>)` 判定, 不支持则提前
+`return()` 跳过本目录全部目标 (内置合并/独立动态库两模式均生效)。跨平台插件
+无需声明 (默认放行); 内置模式下清单登记 `AGENTXX_BUILTIN_PLUGIN_NAMES` 由各
+插件子目录自追加, 提前 return 时天然不会误登记。测试侧对应模块
+(test_screen_capture/test_text_selection_monitor/test_cpu_gpu_use) 已有
+`#if XX_IS_WIN_D` 等编译期门控 + `TEST_SKIP`, 与矩阵一致。
+
 ---
 
 ## 10. 示例插件

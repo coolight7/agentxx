@@ -8,6 +8,18 @@
 #     (WireGetSystemUsage) 经能力调用获取使用率 JSON
 set(PLUGIN_NAME agentxx_system_monitor)
 
+# ===== 平台支持判定 =====
+# Windows (PDH 性能计数器 + DXGI GPU 枚举) 与 Linux (/proc + sysfs 解析) 有
+# 真实实现; Android 复用 Linux 分支 (插件共享头将非 _WIN32/非 __APPLE__ 推导为
+# XX_IS_LINUX_D=1, /proc/stat、/proc/meminfo 在 Android 可读, GPU 经 sysfs/drm
+# 枚举缺失时 readFileContent 返回空串优雅降级); macOS/iOS 为空桩, 跳过编译
+# (平台矩阵说明见 docs/agent/plugins.md 9.3.1)
+include("${CMAKE_CURRENT_LIST_DIR}/../cmake/plugin_platform_support.cmake")
+agentxx_plugin_platform_gate(${PLUGIN_NAME} _AGENTXX_PLATFORM_OK windows linux android)
+if (NOT _AGENTXX_PLATFORM_OK)
+  return() # 跳过本插件全部目标 (内置合并/独立动态库两模式均在此拦截)
+endif ()
+
 if (AGENTXX_ENABLE_PLUGIN_BUILTIN)
   # ===== 内置合并编译分支 =====
   # asio 头文件路径 (BOOST_ROOT 由顶层 superbuild 传入; 与动态分支一致)
@@ -73,6 +85,10 @@ extern \"C\" void agentxx_plugin_builtin_unload_${PLUGIN_NAME}(void* plugin_ctx)
     # libagentxx 已按 AGENTXX_LINUX_IO_URING_SUPPORTED 条件链接 liburing
   endif()
   set(AGENTXX_BUILTIN_PLUGIN_OBJECT_TARGETS "${AGENTXX_BUILTIN_PLUGIN_OBJECT_TARGETS}" "${_target}" PARENT_SCOPE)
+  # 登记进内置插件清单 (子目录自登记: 平台不支持时本文件开头已提前 return,
+  # 不会误登记; 原由父目录 plugins/CMakeLists.txt 无条件追加, 现统一走此通道)
+  list(APPEND AGENTXX_BUILTIN_PLUGIN_NAMES ${PLUGIN_NAME})
+  set(AGENTXX_BUILTIN_PLUGIN_NAMES "${AGENTXX_BUILTIN_PLUGIN_NAMES}" PARENT_SCOPE)
   set(AGENTXX_BUILTIN_MANIFEST_DECLS "${AGENTXX_BUILTIN_MANIFEST_DECLS}" PARENT_SCOPE)
   set(AGENTXX_BUILTIN_MANIFEST_ENTRIES "${AGENTXX_BUILTIN_MANIFEST_ENTRIES}" PARENT_SCOPE)
   # 资源: plugin.yaml (运行期目录配置推导 depends/入口)
