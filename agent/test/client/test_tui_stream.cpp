@@ -560,6 +560,65 @@ TestResult testTuiStream() {
                 XX_TEST_EXPECT_EQ(snap->messages[0]->durationMs, 95);
             }
         }
+
+        // 场景 5: 明文 thinking 流式 -> 思考完成结算包 (空文本 ThinkToken 仅携带
+        // startTimeMs/durationMs) -> NodeEnd -> 正文 -> TurnEnd
+        // 核心验证: think 耗时在输出完成时才由结算包回填; 流式期间不产生消息/
+        // 时长; NodeEnd 的节点级计时不覆盖已回填的 Think 时长
+        {
+            TestTUIClientIO client(ioCtx);
+
+            // 流式思考增量: 尚未完成, 不应落盘消息, 更不应有时长
+            Delta d_think;
+            d_think.type        = Delta::Type::ThinkToken;
+            d_think.text        = "思考中...";
+            d_think.startTimeMs = 3000;
+            client.testOnDelta(d_think);
+
+            {
+                auto snap = client.sharedState().snapshot();
+                XX_TEST_EXPECT_EQ(snap->messages.size(), (size_t)0);
+                XX_TEST_EXPECT_EQ(snap->pendingTokenDurationMs, int64_t{0});
+            }
+
+            // 思考完成结算包 (agent 端 finalizeThinkSegment 发出)
+            Delta d_final;
+            d_final.type        = Delta::Type::ThinkToken;
+            d_final.text        = "";
+            d_final.startTimeMs = 3000;
+            d_final.durationMs  = 1234;
+            client.testOnDelta(d_final);
+
+            // NodeEnd 携带节点级计时, 不得覆盖上面回填的 Think 时长
+            Delta d_nodeEnd;
+            d_nodeEnd.type       = Delta::Type::NodeEnd;
+            d_nodeEnd.nodeName   = "llm";
+            d_nodeEnd.startTimeMs = 2900;
+            d_nodeEnd.durationMs  = 99999;
+            client.testOnDelta(d_nodeEnd);
+
+            // 正文输出后轮次结束
+            Delta d_text;
+            d_text.type        = Delta::Type::TextToken;
+            d_text.text        = "Answer";
+            d_text.startTimeMs = 4300;
+            client.testOnDelta(d_text);
+
+            Delta d_end;
+            d_end.type = Delta::Type::TurnEnd;
+            client.testOnDelta(d_end);
+
+            auto snap = client.sharedState().snapshot();
+            XX_TEST_EXPECT_EQ(snap->messages.size(), (size_t)2);
+            if (snap->messages.size() == 2) {
+                XX_TEST_EXPECT_TRUE(snap->messages[0]->role == TUIMessage::Role::Think);
+                XX_TEST_EXPECT_EQ(snap->messages[0]->text, "思考中...");
+                // 结算包回填的耗时; 未被 NodeEnd 的节点时长 (99999) 覆盖
+                XX_TEST_EXPECT_EQ(snap->messages[0]->durationMs, 1234);
+                XX_TEST_EXPECT_TRUE(snap->messages[1]->role == TUIMessage::Role::Assistant);
+                XX_TEST_EXPECT_EQ(snap->messages[1]->text, "Answer");
+            }
+        }
     }
 
     return TestResult{g_tui_stream_passed, g_tui_stream_failed};

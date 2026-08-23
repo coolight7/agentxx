@@ -67,7 +67,9 @@ asio::awaitable<void>
                     if (!stream.is_open()) {
                         logContent
                             += fmt::format("┣━ ❌ Can not open Memory file: `{}`\n", filepath);
-                        continue;
+                        // NOTE: 此处位于协程 lambda 内 (不在外层 for 循环作用域),
+                        // 打开失败与 asio 分支一致, 记录日志后直接结束本次加载
+                        co_return false;
                     }
                     auto content = std::string{
                         std::istreambuf_iterator<char>(stream),

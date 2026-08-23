@@ -648,6 +648,167 @@ asio::awaitable<void> test_eventbridge_turn_tps() {
     co_return;
 }
 
+/// 验证 THINKING 流段耗时结算 (think 输出完成时才计算耗时并回填):
+/// - token Delta 不再携带 durationMs (修复"流式刚开始就显示耗时")
+/// - 离开 THINKING 时先发空文本 ThinkToken 结算包 (携带 startTimeMs/durationMs),
+///   再发正文首个 token 的 Delta
+/// - 思考后直接 tool_calls (无正文): 结算包先于 ToolStart 到达
+/// - 纯思考流 (无正文无工具): 结算包先于 NodeEnd 到达
+/// - 结算幂等: 同一段落只结算一次
+asio::awaitable<void> test_eventbridge_think_duration() {
+    auto makeChunk = [](int type, std::string data) {
+        return neograph::json{{"type", type}, {"data", std::move(data)}};
+    };
+    using ET = neograph::graph::GraphEvent::Type;
+    using DT = agentxx::agent::Delta::Type;
+
+    // ---- 流程 1: think -> 正文: 切换时结算, 且正文 token 不携带时长 ----
+    {
+        auto agentContext         = std::make_shared<agentxx::agent::AgentContext>();
+        agentContext->agentConfig = std::make_shared<agentxx::agent::AgentConfig>();
+        agentContext->bus = std::make_shared<agentxx::event::EventBus>(co_await asio::this_coro::executor);
+        auto session      = std::make_shared<agentxx::agent::Session>();
+        auto io           = std::make_shared<TestEbIO>();
+        auto bridge       = makeTestBridge(agentContext, session, io);
+        auto bridgeCb     = bridge->makeCallback();
+
+        bridgeCb(neograph::graph::GraphEvent{ET::NODE_START, "llm", neograph::json::object()});
+        bridgeCb(neograph::graph::GraphEvent{
+            ET::LLM_TOKEN, "llm", makeChunk(neograph::ChatStreamChunk::TYPE_THINKING, "a")
+        });
+        co_await asio::steady_timer(co_await asio::this_coro::executor, std::chrono::milliseconds(60))
+            .async_wait(asio::use_awaitable);
+        bridgeCb(neograph::graph::GraphEvent{
+            ET::LLM_TOKEN, "llm", makeChunk(neograph::ChatStreamChunk::TYPE_THINKING, "b")
+        });
+        bridgeCb(neograph::graph::GraphEvent{
+            ET::LLM_TOKEN, "llm", makeChunk(neograph::ChatStreamChunk::TYPE_CONTENT, "x")
+        });
+
+        // NodeStart, Think(a), Think(b), 结算包, Text(x)
+        XX_TEST_EXPECT_EQ(io->deltas.size(), size_t{5});
+        if (io->deltas.size() == 5) {
+            XX_TEST_EXPECT_TRUE(io->deltas[1].type == DT::ThinkToken);
+            XX_TEST_EXPECT_EQ(io->deltas[1].text, std::string{"a"});
+            // 流式 token 不携带时长 (修复点: 首个 think token 即携带微小耗时)
+            XX_TEST_EXPECT_EQ(io->deltas[1].durationMs, int64_t{0});
+            XX_TEST_EXPECT_EQ(io->deltas[2].durationMs, int64_t{0});
+
+            // 结算包: 空文本 ThinkToken, 携带段起点与总耗时 (>= 50ms)
+            const auto& fin = io->deltas[3];
+            XX_TEST_EXPECT_TRUE(fin.type == DT::ThinkToken);
+            XX_TEST_EXPECT_TRUE(fin.text.empty());
+            XX_TEST_EXPECT_FALSE(fin.think.has_value());
+            XX_TEST_EXPECT_TRUE(fin.startTimeMs > 0);
+            XX_TEST_EXPECT_TRUE(fin.durationMs >= 50 && fin.durationMs < 10000);
+
+            // 正文首个 token 在结算包之后, 且不携带时长
+            XX_TEST_EXPECT_TRUE(io->deltas[4].type == DT::TextToken);
+            XX_TEST_EXPECT_EQ(io->deltas[4].text, std::string{"x"});
+            XX_TEST_EXPECT_EQ(io->deltas[4].durationMs, int64_t{0});
+        }
+
+        // 节点结束: 段落已结算, 不再重复发结算包
+        bridgeCb(neograph::graph::GraphEvent{ET::NODE_END, "llm", neograph::json::object()});
+        XX_TEST_EXPECT_EQ(io->deltas.size(), size_t{6});
+        if (io->deltas.size() == 6) {
+            XX_TEST_EXPECT_TRUE(io->deltas[5].type == DT::NodeEnd);
+        }
+    }
+
+    // ---- 流程 2: think -> tool_calls (无正文): CHANNEL_WRITE 前结算 ----
+    {
+        auto agentContext = std::make_shared<agentxx::agent::AgentContext>();
+        auto session      = std::make_shared<agentxx::agent::Session>();
+        auto io           = std::make_shared<TestEbIO>();
+        auto bridge       = makeTestBridge(agentContext, session, io);
+        auto bridgeCb     = bridge->makeCallback();
+
+        bridgeCb(neograph::graph::GraphEvent{ET::NODE_START, "llm", neograph::json::object()});
+        bridgeCb(neograph::graph::GraphEvent{
+            ET::LLM_TOKEN, "llm", makeChunk(neograph::ChatStreamChunk::TYPE_THINKING, "t")
+        });
+        co_await asio::steady_timer(co_await asio::this_coro::executor, std::chrono::milliseconds(50))
+            .async_wait(asio::use_awaitable);
+
+        neograph::json msgJson{
+            {"role",       "assistant"},
+            {"content",    ""         },
+            {"tool_calls",
+             neograph::json::array({
+                 neograph::json{{"id", "call_1"}, {"name", "bash"}, {"arguments", "{}"}},
+             })                       },
+        };
+        bridgeCb(neograph::graph::GraphEvent{
+            ET::CHANNEL_WRITE,
+            "llm",
+            neograph::json{{"channel", "messages"}, {"value", neograph::json::array({msgJson})}}
+        });
+
+        // NodeStart, Think(t), 结算包, ToolStart
+        XX_TEST_EXPECT_EQ(io->deltas.size(), size_t{4});
+        if (io->deltas.size() == 4) {
+            const auto& fin = io->deltas[2];
+            XX_TEST_EXPECT_TRUE(fin.type == DT::ThinkToken);
+            XX_TEST_EXPECT_TRUE(fin.text.empty());
+            XX_TEST_EXPECT_TRUE(fin.durationMs >= 40);
+            XX_TEST_EXPECT_TRUE(io->deltas[3].type == DT::ToolStart);
+        }
+    }
+
+    // ---- 流程 3: 纯思考流 -> NODE_END 前结算 ----
+    {
+        auto agentContext = std::make_shared<agentxx::agent::AgentContext>();
+        auto session      = std::make_shared<agentxx::agent::Session>();
+        auto io           = std::make_shared<TestEbIO>();
+        auto bridge       = makeTestBridge(agentContext, session, io);
+        auto bridgeCb     = bridge->makeCallback();
+
+        bridgeCb(neograph::graph::GraphEvent{ET::NODE_START, "llm", neograph::json::object()});
+        bridgeCb(neograph::graph::GraphEvent{
+            ET::LLM_TOKEN, "llm", makeChunk(neograph::ChatStreamChunk::TYPE_THINKING, "z")
+        });
+        co_await asio::steady_timer(co_await asio::this_coro::executor, std::chrono::milliseconds(50))
+            .async_wait(asio::use_awaitable);
+        bridgeCb(neograph::graph::GraphEvent{ET::NODE_END, "llm", neograph::json::object()});
+
+        // NodeStart, Think(z), 结算包, NodeEnd
+        XX_TEST_EXPECT_EQ(io->deltas.size(), size_t{4});
+        if (io->deltas.size() == 4) {
+            const auto& fin = io->deltas[2];
+            XX_TEST_EXPECT_TRUE(fin.type == DT::ThinkToken);
+            XX_TEST_EXPECT_TRUE(fin.text.empty());
+            XX_TEST_EXPECT_TRUE(fin.durationMs >= 40);
+            XX_TEST_EXPECT_TRUE(io->deltas[3].type == DT::NodeEnd);
+        }
+    }
+
+    // ---- 流程 4: 纯正文流: 不产生结算包 ----
+    {
+        auto agentContext = std::make_shared<agentxx::agent::AgentContext>();
+        auto session      = std::make_shared<agentxx::agent::Session>();
+        auto io           = std::make_shared<TestEbIO>();
+        auto bridge       = makeTestBridge(agentContext, session, io);
+        auto bridgeCb     = bridge->makeCallback();
+
+        bridgeCb(neograph::graph::GraphEvent{ET::NODE_START, "llm", neograph::json::object()});
+        bridgeCb(neograph::graph::GraphEvent{
+            ET::LLM_TOKEN, "llm", makeChunk(neograph::ChatStreamChunk::TYPE_CONTENT, "y")
+        });
+        bridgeCb(neograph::graph::GraphEvent{ET::NODE_END, "llm", neograph::json::object()});
+
+        XX_TEST_EXPECT_EQ(io->deltas.size(), size_t{3});
+        for (const auto& d : io->deltas) {
+            XX_TEST_EXPECT_FALSE(
+                d.type == DT::ThinkToken && d.text.empty()
+                && !d.think.has_value()
+            );
+        }
+    }
+
+    co_return;
+}
+
 asio::awaitable<TestResult> run_event_bridge_tests() {
     g_eb_passed = 0;
     g_eb_failed = 0;
@@ -659,6 +820,7 @@ asio::awaitable<TestResult> run_event_bridge_tests() {
         co_await test_eventbridge_channel_write_messages();
         co_await test_eventbridge_channel_write_thinking();
         co_await test_eventbridge_node_delta();
+        co_await test_eventbridge_think_duration();
         co_await test_eventbridge_tps();
         co_await test_eventbridge_turn_tps();
     } catch (const std::exception& e) {

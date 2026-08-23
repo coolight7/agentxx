@@ -72,7 +72,8 @@ void EventBridge::operator()(const neograph::graph::GraphEvent& event) {
             handleError(event);
             break;
         default:
-            // 未知/未处理事件: 重置 chunk 类型, 使下一个 token 携带时长
+            // 未知/未处理事件: 重置 chunk 类型, 使下一个 token 视为新流开始
+            // (tps 计时重置; THINKING 段由 thinkSegActive_ 跟踪, 不受影响)
             lastChatChunkType_ = neograph::ChatStreamChunk::TYPE_UNKNOWN;
             break;
     }
@@ -97,8 +98,10 @@ neograph::graph::GraphStreamCallback EventBridge::makeCallback() {
 
 void EventBridge::handleLLMToken(const neograph::graph::GraphEvent& event) {
     std::string token;
-    bool        sendDuration = false;
-    std::string kind         = "content";
+    std::string kind = "content";
+    // 进入前的 chunk 类型: 用于检测 THINKING 流段的进入/离开
+    const bool prevWasThinking
+        = (lastChatChunkType_ == neograph::ChatStreamChunk::TYPE_THINKING);
 
     // tps 统计: 新 ModelCall 流开始 (节点开始/结束后的首个 token) 时重置计时与计数
     if (lastChatChunkType_ == neograph::ChatStreamChunk::TYPE_UNKNOWN) {
@@ -114,15 +117,34 @@ void EventBridge::handleLLMToken(const neograph::graph::GraphEvent& event) {
     } else if (event.data.is_object()) {
         neograph::ChatStreamChunk chunk;
         neograph::from_json(event.data, chunk);
-        token = std::move(chunk.data);
-        // 类型切换时段落结束，发送其生成耗时
-        sendDuration       = (lastChatChunkType_ != chunk.type);
+        token              = std::move(chunk.data);
         lastChatChunkType_ = chunk.type;
         if (chunk.type == neograph::ChatStreamChunk::TYPE_THINKING) {
             kind = "thinking";
         }
     } else {
         token = event.data.dump();
+    }
+
+    // THINKING 流段跟踪:
+    // - 进入 THINKING: 记录段起点 (think 耗时从此刻起算, 不随 token 携带时长,
+    //   避免"流式刚开始就显示耗时")
+    // - 离开 THINKING (切换到正文): 先结算 think 段耗时 —— 在正文首个 token 的
+    //   Delta 之前发送空文本 ThinkToken 结算包, client 收到后为已落盘的 Think
+    //   消息回填最终时长 ("输出完成时才计算并显示")
+    const bool curIsThinking
+        = (lastChatChunkType_ == neograph::ChatStreamChunk::TYPE_THINKING);
+    if (!prevWasThinking && curIsThinking) {
+        thinkSegActive_  = true;
+        thinkSegStart_   = std::chrono::system_clock::now();
+        thinkSegStartMs_ = static_cast<int64_t>(
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                thinkSegStart_.time_since_epoch()
+            )
+                .count()
+        );
+    } else if (prevWasThinking && !curIsThinking && thinkSegActive_) {
+        finalizeThinkSegment();
     }
 
     // 累计估算 token 数: 批量估算 (每16 token推送窗口再估, 减少 countTokens 遍历)
@@ -158,18 +180,41 @@ void EventBridge::handleLLMToken(const neograph::graph::GraphEvent& event) {
         .text        = std::move(token),
         .think       = std::move(thinkData),
         .startTimeMs = nodeStartTimeMs_,
-        .durationMs
-        = sendDuration ? static_cast<int64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
-                                                  std::chrono::system_clock::now() - nodeStartTime_
-                         )
-                                                  .count())
-                       : 0,
+        // token Delta 不再携带 durationMs: think 耗时由 finalizeThinkSegment()
+        // 在段落完成时以独立结算包发送 (见 handleLLMToken 内 THINKING 流段跟踪)
+    });
+}
+
+void EventBridge::finalizeThinkSegment() {
+    if (!thinkSegActive_) {
+        return;
+    }
+    thinkSegActive_ = false;
+    // 结算包: 空文本 ThinkToken, 仅携带该思考段的开始时间与总耗时。
+    // client (TUI) 对空文本 ThinkToken 的处理 = 先落盘累积中的 Think 流文本,
+    // 再向前回溯最近一条 Think 消息回填 startTimeMs/durationMs —— 即"输出完成时
+    // 才计算这条消息的耗时并显示"
+    const int64_t durationMs
+        = static_cast<int64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                   std::chrono::system_clock::now() - thinkSegStart_
+        )
+                                   .count());
+    emitDelta(agentxx::agent::Delta{
+        .type        = agentxx::agent::Delta::Type::ThinkToken,
+        .text        = {},
+        .startTimeMs = thinkSegStartMs_,
+        .durationMs  = durationMs,
     });
 }
 
 void EventBridge::handleChannelWrite(const neograph::graph::GraphEvent& event) {
     using agentxx::agent::Delta;
     using agentxx::agent::ViewMessage;
+
+    // 最终 assistant 消息写出即生成结束: 先结算未闭合的 THINKING 流段
+    // (典型场景: 思考后直接发起 tool_calls, 无正文 token 触发类型切换,
+    // 结算包必须先于 ToolStart Delta 到达, client 才能回填 Think 时长)
+    finalizeThinkSegment();
 
     auto chan  = event.data.value("channel", std::string{});
     auto value = event.data.value("value", neograph::json{});
@@ -401,6 +446,8 @@ double EventBridge::takeTurnTps() {
 }
 
 void EventBridge::handleNodeStart(const neograph::graph::GraphEvent& event) {
+    // 防御: 上一节点遗留未结算的 THINKING 段 (正常应已在节点结束/出错时结算)
+    finalizeThinkSegment();
     lastChatChunkType_ = neograph::ChatStreamChunk::TYPE_UNKNOWN;
     nodeStartTime_     = std::chrono::system_clock::now();
     nodeStartTimeMs_   = static_cast<int64_t>(
@@ -417,6 +464,9 @@ void EventBridge::handleNodeStart(const neograph::graph::GraphEvent& event) {
 void EventBridge::handleNodeEnd(const neograph::graph::GraphEvent& event) {
     // 结算当前 LLM 流: 将流耗时累加到轮级 tps 统计 (ModelCall 节点结束即流结束)
     settleCurrentStream();
+    // 结算未闭合的 THINKING 段 (思考后无正文直接结束的流, 如纯思考/仅 tool_calls):
+    // 结算包先于 NodeEnd Delta 发送, client 先回填 Think 时长再收节点结束事件
+    finalizeThinkSegment();
     lastChatChunkType_ = neograph::ChatStreamChunk::TYPE_UNKNOWN;
     // 计算持续时间
     const int64_t duration_ms
@@ -436,6 +486,9 @@ void EventBridge::handleError(const neograph::graph::GraphEvent& event) {
     // 错误不产出会话增量 Delta (由 WireTurnResult 统一报告), 仅发布总线事件
     // 结算当前 LLM 流 (错误/取消可能跳过节点结束, 轮级统计需及时结算)
     settleCurrentStream();
+    // 结算未闭合的 THINKING 段: 错误/取消中断思考流时同样回填已耗时长,
+    // 使 client 已落盘的 Think 消息携带中断前的真实耗时
+    finalizeThinkSegment();
     lastChatChunkType_ = neograph::ChatStreamChunk::TYPE_UNKNOWN;
     auto msg           = event.data.is_string() ? event.data.get<std::string>() : event.data.dump();
     publishError(std::move(msg), event.node_name);

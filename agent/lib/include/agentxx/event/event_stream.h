@@ -645,6 +645,14 @@ private:
     void handleNodeEnd(const neograph::graph::GraphEvent& event);
     void handleError(const neograph::graph::GraphEvent& event);
 
+    /// 结算当前 THINKING 流段: 发送空文本 ThinkToken Delta (仅携带
+    /// startTimeMs/durationMs), client 据此为已提交的 Think 消息回填耗时。
+    /// - think 输出完成 (切换到正文/节点结束/出错/输出最终 assistant 消息) 时调用,
+    ///   耗时 = 完成时刻 - 段起点; 未处于 THINKING 段时为 no-op (幂等)
+    /// - 必须在该段落后续 Delta (正文 token/ToolStart/NodeEnd) 之前发送,
+    ///   保证 client 先落盘 Think 消息并回填时长, 再处理后续内容
+    void finalizeThinkSegment();
+
     /// 估算 UTF-8 字符串对应的 token 数
     /// - 优先使用 AgentContext::summarizationMiddleware 的 countTokensForUtf8Str
     ///   (上下文压缩/上下文统计共用同一口径)
@@ -674,11 +682,20 @@ private:
     std::shared_ptr<agentxx::agent::AgentIOBase> io_;
     neograph::graph::GraphStreamCallback         origCb_;
 
-    /// 最近一次 LLM 流式 chunk 类型 (用于切换 content/thinking 时附带时长)
+    /// 最近一次 LLM 流式 chunk 类型 (用于 think 流段切换检测)
     int lastChatChunkType_ = neograph::ChatStreamChunk::TYPE_UNKNOWN;
     /// 当前节点开始计时 (NODE_START 重置)
     std::chrono::system_clock::time_point nodeStartTime_{};
     int64_t                               nodeStartTimeMs_ = 0;
+
+    /// THINKING 流段计时 (think 消息耗时统计):
+    /// - 进入 THINKING (非 THINKING -> THINKING) 时记录段起点
+    /// - 离开时经 finalizeThinkSegment() 结算: 耗时 = 完成时刻 - 段起点,
+    ///   以空文本 ThinkToken Delta 回传, client 在 Think 输出完成时才显示耗时
+    /// - thinkSegActive_ 保证同一段落只结算一次; 仅 io 线程访问
+    std::chrono::system_clock::time_point thinkSegStart_{};
+    int64_t                               thinkSegStartMs_ = 0;
+    bool                                  thinkSegActive_  = false;
 
     /// toolCallId → viewMessages 索引 映射 (加速 tool 结果回填 O(1) 定位)
     /// - assistant(tool_calls) 消息登记, tool 结果按 id O(1) 定位, 避免每结果

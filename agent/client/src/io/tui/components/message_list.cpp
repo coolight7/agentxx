@@ -998,17 +998,11 @@ LazyBuiltItem MessageListComponent::buildStreamingItem(const TUIRenderState& st)
 
     Element block;
     if (st.currentTokenRole == TUIMessage::Role::Think) {
-        const TUIMessage* currentMsg = nullptr;
-        for (size_t i = st.messages.size(); i > 0; --i) {
-            if (st.messages[i - 1]->role == st.currentTokenRole) {
-                currentMsg = st.messages[i - 1].get();
-                break;
-            }
-        }
-        int64_t durationMs = st.pendingTokenDurationMs;
-        if (durationMs <= 0 && currentMsg) {
-            durationMs = currentMsg->durationMs;
-        }
+        // 流式输出期间不显示耗时: think 耗时在输出完成时才由 agent 端结算
+        // (空文本 ThinkToken 结算包回填到已提交消息), pendingTokenDurationMs
+        // 仅在完成瞬间短暂非零, 平时恒为 0 → 不渲染耗时文本。
+        // 不回退读取上一条同角色消息的时长 (那是旧数据, 与当前流无关)
+        const int64_t durationMs = st.pendingTokenDurationMs;
 
         // 折叠态 (SingleLine 设置或用户点击折叠): 单行 header + 末尾截取预览;
         // 展开态: "- [Think]" header + 全文多行渲染。
@@ -1083,16 +1077,12 @@ LazyBuiltItem MessageListComponent::buildStreamingHeader(const TUIRenderState& s
     const bool animMark = runSpinner_->animationEnabled();
     header.push_back((animMark ? runningHeaderMark(true) : text("-")) | color(theme.thinkingColor));
     header.push_back(text(" [Think] ") | color(theme.thinkingColor));
-    const TUIMessage* currentMsg = nullptr;
-    for (size_t i = st.messages.size(); i > 0; --i) {
-        if (st.messages[i - 1]->role == st.currentTokenRole) {
-            currentMsg = st.messages[i - 1].get();
-            break;
-        }
-    }
-    if (currentMsg && currentMsg->durationMs > 0) {
+    // 流式输出期间不显示耗时 (同 buildStreamingItem): think 耗时在输出完成时
+    // 才由 agent 端结算回填到已提交消息; pendingTokenDurationMs 平时恒为 0。
+    // 不回退读取上一条同角色消息的时长 (旧数据与当前流无关)
+    if (st.pendingTokenDurationMs > 0) {
         header.push_back(
-            text(agentxx::util::formatDurationMilliseconds(currentMsg->durationMs) + " ")
+            text(agentxx::util::formatDurationMilliseconds(st.pendingTokenDurationMs) + " ")
             | color(theme.thinkingColor)
         );
     }

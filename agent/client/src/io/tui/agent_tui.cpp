@@ -1624,10 +1624,18 @@ void TUIClientAgentIO::onDelta(const agentxx::agent::Delta& delta) {
                 if (st.currentNodeName == delta.nodeName) {
                     st.currentNodeName.clear();
                 }
+                // 节点级计时不回填 Think 流: 节点耗时聚合了思考+正文等多个消息,
+                // 直接覆盖会破坏单条消息的准确时长; Think 的耗时由 agent 端在
+                // 思考流完成时经空文本 ThinkToken 结算包 (durationMs) 回填
                 if (st.hasPendingToken()) {
-                    st.pendingTokenStartTimeMs = delta.startTimeMs;
-                    st.pendingTokenDurationMs  = delta.durationMs;
-                } else if (!st.messages.empty()) {
+                    if (st.currentTokenRole != TUIMessage::Role::Think) {
+                        st.pendingTokenStartTimeMs = delta.startTimeMs;
+                        st.pendingTokenDurationMs  = delta.durationMs;
+                    }
+                } else if (
+                    !st.messages.empty()
+                    && st.messages.back()->role != TUIMessage::Role::Think
+                ) {
                     auto& m       = sharedState_.mutableMessage(st, st.messages.size() - 1);
                     m.startTimeMs = delta.startTimeMs;
                     m.durationMs  = delta.durationMs;
