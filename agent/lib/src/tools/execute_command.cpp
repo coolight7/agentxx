@@ -22,10 +22,12 @@
 #include <atomic>
 #include <csignal>
 #include <cstdlib>
+#include <filesystem>
 #include <memory>
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <unordered_map>
 #include <vector>
 
@@ -37,6 +39,28 @@ namespace agentxx {
 namespace tools {
 
 #if defined(BOOST_PROCESS_V2_PROCESS_HPP)
+
+/// 子进程初始工作目录: AgentConfig::workDir 优先 (会话工作目录与进程 cwd 解耦,
+/// 嵌入场景单进程多 agent 实例可各自绑定独立项目目录);
+/// 未配置时回退进程 cwd。始终返回非空串 (兜底 "." 等价于继承当前目录),
+/// 使 process_start_dir 可无条件传入
+static std::string subprocessWorkDir(const std::weak_ptr<agentxx::agent::AgentContext>& ctx) {
+    if (auto c = ctx.lock()) {
+        if (c->agentConfig) {
+            auto dir = c->agentConfig->resolvedWorkDir();
+            if (!dir.empty()) {
+                return dir;
+            }
+        }
+    }
+    std::error_code ec;
+    auto            cwd = std::filesystem::current_path(ec);
+    if (!ec && !cwd.empty()) {
+        return cwd.generic_string();
+    }
+    // 兜底: chdir(".") / current_directory="." 等价于继承 agent 进程当前目录
+    return ".";
+}
 
 /// RAII: 析构时置位 done, 通知取消 watcher 退出循环, 避免其继续引用已析构的 process
 struct ProcCancelGuard {
@@ -252,6 +276,9 @@ asio::awaitable<std::string> ExecuteBashCommandTool::execute_async(const neograp
             procExe,
             procArgs,
             boost::process::process_environment(procEnv),
+            // 子进程初始工作目录: 会话工作目录 (AgentConfig::workDir; 未配置时
+            // 显式取进程 cwd, 行为等价继承, 见 subprocessWorkDir)
+            boost::process::process_start_dir{subprocessWorkDir(agentContext)},
             // stdin 重定向到 null 设备 (Windows: NUL / POSIX: /dev/null),
             // 避免子进程 (如交互式命令) 抢读 agent 进程的终端输入
             boost::process::process_stdio{.in = nullptr, .out = outpip, .err = errpip},
@@ -329,6 +356,8 @@ asio::awaitable<std::string> ExecuteBashCommandTool::execute_async(const neograp
         co_return result.str();
     }
 #else
+    // popen 回退路径: 无法指定子进程工作目录, 继承 agent 进程 cwd
+    // (AgentConfig::workDir 在该回退下不生效; 正常编译均走 boost.process v2 路径)
 #if XX_IS_WIN_D
     auto pipe = std::unique_ptr<FILE, decltype(&_pclose)>{_popen(command.c_str(), "r"), _pclose};
 #else
@@ -446,6 +475,9 @@ asio::awaitable<std::string>
             procExe,
             launch.args,
             boost::process::process_environment(procEnv),
+            // 子进程初始工作目录: 会话工作目录 (AgentConfig::workDir; 未配置时
+            // 显式取进程 cwd, 行为等价继承, 见 subprocessWorkDir)
+            boost::process::process_start_dir{subprocessWorkDir(agentContext)},
             // stdin 重定向到 null 设备, 避免子进程抢读 agent 进程的终端输入
             boost::process::process_stdio{.in = nullptr, .out = outpip, .err = errpip}
         };
@@ -521,6 +553,8 @@ asio::awaitable<std::string>
         co_return result.str();
     }
 #else
+    // popen 回退路径: 无法指定子进程工作目录, 继承 agent 进程 cwd
+    // (AgentConfig::workDir 在该回退下不生效; 正常编译均走 boost.process v2 路径)
 #if XX_IS_WIN_D
     auto pipe = std::unique_ptr<FILE, decltype(&_pclose)>{_popen(command.c_str(), "r"), _pclose};
 #else

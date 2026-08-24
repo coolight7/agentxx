@@ -812,14 +812,17 @@ inline PinyinCallback s_pinyinCallback = nullptr;
     return homePath + "/" + std::string{rest};
 }
 
-/// 将用户提供的路径统一转换为当前系统的绝对路径:
+/// 将用户提供的路径统一转换为当前系统的绝对路径 (相对路径基于指定基准目录):
 /// 1. 展开开头的 `~` 为用户主目录
 /// 2. 规范化分隔符/盘符 (toCurrentSystemStandardPath, 含 Windows 盘符 -> /mnt/ 转换)
-/// 3. 相对路径基于进程当前工作目录拼接为绝对路径
+/// 3. 相对路径基于 baseDir 拼接为绝对路径; baseDir 为空时基于进程当前工作目录
 /// 4. 词法规范化 (去除 `./`、多余的 `../` 等, 不访问文件系统, 对不存在的路径安全)
 /// - 供 filesystem 系列工具与 permission 权限判断使用, 使相对路径
 ///   (如 `src/main.cpp`、`./a.txt`) 也能与绝对路径规则稳定匹配
-[[nodiscard]] inline std::string toCurrentSystemAbsolutePath(std::string_view path) {
+/// - baseDir 用于会话工作目录与进程 cwd 解耦 (AgentConfig::workDir,
+///   嵌入场景单进程多 agent 实例各自独立项目目录); 调用方应传入绝对路径
+[[nodiscard]] inline std::string
+    toCurrentSystemAbsolutePath(std::string_view path, std::string_view baseDir) {
     if (path.empty()) {
         return std::string{path};
     }
@@ -828,7 +831,13 @@ inline PinyinCallback s_pinyinCallback = nullptr;
     if (isAbsolutePath(normalized)) {
         return std::filesystem::path{normalized}.lexically_normal().generic_string();
     }
-    // 相对路径: 基于进程当前工作目录转换为绝对路径
+    if (!baseDir.empty()) {
+        // 相对路径: 基于指定基准目录拼接 (词法规范化, 不访问文件系统)
+        return (std::filesystem::path{baseDir} / std::filesystem::path{normalized})
+            .lexically_normal()
+            .generic_string();
+    }
+    // 无基准目录: 基于进程当前工作目录转换为绝对路径 (旧行为)
     std::error_code ec;
     auto            abs = std::filesystem::absolute(normalized, ec);
     if (ec) {
@@ -836,6 +845,12 @@ inline PinyinCallback s_pinyinCallback = nullptr;
         return std::filesystem::path{normalized}.lexically_normal().generic_string();
     }
     return abs.lexically_normal().generic_string();
+}
+
+/// 将用户提供的路径统一转换为当前系统的绝对路径 (相对路径基于进程当前工作目录):
+/// - 兼容旧接口, 等价于 baseDir 为空的两参版本
+[[nodiscard]] inline std::string toCurrentSystemAbsolutePath(std::string_view path) {
+    return toCurrentSystemAbsolutePath(path, std::string_view{});
 }
 
 [[nodiscard]] inline constexpr std::string_view

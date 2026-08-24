@@ -162,6 +162,12 @@ agentxx_event_queue_free(q);
 ```c
 // config_json (可 NULL; 未知字段忽略):
 { "dataDir": "~/.agentxx",            // 空=不持久化 (默认)
+  "workDir": "/abs/project/dir",      // 会话工作目录; 空=进程 cwd (默认)。
+                                      // 生效范围: permission Ask 放行范围 /
+                                      // filesystem 与权限校验相对路径基准 /
+                                      // 命令执行子进程初始目录 / 插件 projectRoot。
+                                      // 支持 ~/相对路径 (按进程 cwd 展开为绝对);
+                                      // 嵌入多实例 (多句柄) 各自绑定独立项目目录
   "enableSessionStore": false,
   "sessionStoreDirectory": "",        // 为空时使用 {dataDir}/sqlite/sessions/
   "permissionMode": "ask",            // ask|all_ask|pass|deny

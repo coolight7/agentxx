@@ -13,9 +13,19 @@ namespace middleware {
 ///   与请求路径 (模型可能传任意大小写, 如 `d:/...` 或 `D:\...`) 稳定匹配;
 ///   XXRouter 的树节点按字符串精确查找 (区分大小写), 不统一大小写会漏匹配,
 ///   表现为 mode: ask 时工作目录内的读写仍被询问
-static std::string normalizePermissionPath(std::string_view path) {
-    std::string s
-        = agentxx::util::toUnixStandardDirPath(agentxx::util::toCurrentSystemAbsolutePath(path));
+std::string PermissionMiddlewareHandle::normalizePermissionPath(std::string_view path) const {
+    // 相对路径解析基准: AgentConfig::workDir (会话工作目录; 未配置回退进程 cwd),
+    // 与 filesystem 工具的解析基准保持一致, 使注册规则与工具实际访问路径稳定匹配
+    std::string baseDir;
+    if (auto ctx = agentContext.lock()) {
+        if (ctx->agentConfig) {
+            baseDir = ctx->agentConfig->resolvedWorkDir();
+        }
+    }
+    std::string s = agentxx::util::toUnixStandardDirPath(
+        baseDir.empty() ? agentxx::util::toCurrentSystemAbsolutePath(path)
+                        : agentxx::util::toCurrentSystemAbsolutePath(path, baseDir)
+    );
 #if XX_IS_WIN_D
     agentxx::util::toLowerSelf(s);
 #endif
@@ -47,8 +57,9 @@ asio::awaitable<bool> PermissionMiddlewareHandle::defOnFilesystemHandle(
     size_t                index
 ) {
     auto path = args.value<std::string>("path", "");
-    // 支持相对路径: 非绝对路径基于当前工作目录拼接为绝对路径,
-    // 与 filesystem 工具实际访问的路径保持一致, 使注册的绝对路径规则也能匹配相对路径访问
+    // 支持相对路径: 非绝对路径基于会话工作目录 (AgentConfig::workDir, 未配置时
+    // 进程 cwd) 拼接为绝对路径, 与 filesystem 工具实际访问的路径保持一致,
+    // 使注册的绝对路径规则也能匹配相对路径访问
     path = normalizePermissionPath(path);
     if (path.empty()) {
         co_return true;

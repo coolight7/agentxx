@@ -141,6 +141,7 @@ typedef struct AgentxxCallbacks {
  * @param config_json NULL 或 AgentConfig 覆盖 JSON (未知字段忽略):
  *   {
  *     "dataDir": "~/.agentxx",          // 空=不持久化 (默认)
+ *     "workDir": "/abs/project/dir",    // 会话工作目录; 空=进程 cwd (默认)
  *     "enableSessionStore": false,
  *     "sessionStoreDirectory": "",     // 为空时使用 {dataDir}/sqlite/sessions/
  *     "permissionMode": "ask",          // ask|all_ask|pass|deny

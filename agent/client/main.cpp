@@ -391,6 +391,22 @@ Options:
         }
     }
 
+    // 会话工作目录: 可在 yaml 配置 work_dir 指定 (AgentConfig::workDir)
+    // - 为空 (默认): agent 使用进程当前工作目录 (旧行为)
+    // - 非空: 展开 `~`; 相对路径按程序工作目录解析为绝对路径
+    // - 生效范围: permission Ask 默认放行规则 / filesystem 工具与权限校验的
+    //   相对路径解析基准 / 命令执行子进程初始目录 / 插件 projectRoot
+    std::string resolvedWorkDir;
+    if (!yamlCfg.workDir.empty()) {
+        auto workDirExpanded = agentxx::util::expandUserHomePath(yamlCfg.workDir);
+        std::filesystem::path wp{workDirExpanded};
+        resolvedWorkDir
+            = wp.is_absolute()
+                  ? wp.lexically_normal().generic_string()
+                  : (std::filesystem::current_path() / wp).lexically_normal().generic_string();
+        XX_LOGI("[Config] work_dir: {}", resolvedWorkDir);
+    }
+
     // 权限询问处理模式启动提示 (yaml `permission.mode`, 默认 ask):
     // ask = 工作目录内允许/其他询问; all_ask = 全部询问; pass = 全部放行; deny = 全部拒绝
     XX_LOGI(
@@ -447,6 +463,7 @@ Options:
 
         auto config                                    = buildDefaultConfig();
         config->dataDir                                = resolvedDataDir;
+        config->workDir                                = resolvedWorkDir;
         config->logPrintToolcall                       = false;
         config->logPrintMessagesBeforeLLM              = false;
         config->logPrintMessagesBeforeLLMWithSystemMsg = false;
@@ -455,6 +472,7 @@ Options:
 
         auto scorerConfig                                    = buildDefaultConfig();
         scorerConfig->dataDir                                = resolvedDataDir;
+        scorerConfig->workDir                                = resolvedWorkDir;
         scorerConfig->logPrintToolcall                       = false;
         scorerConfig->logPrintMessagesBeforeLLM              = false;
         scorerConfig->logPrintMessagesBeforeLLMWithSystemMsg = false;
@@ -463,6 +481,7 @@ Options:
 
         auto optimizerConfig                                    = buildDefaultConfig();
         optimizerConfig->dataDir                                = resolvedDataDir;
+        optimizerConfig->workDir                                = resolvedWorkDir;
         optimizerConfig->logPrintToolcall                       = false;
         optimizerConfig->logPrintMessagesBeforeLLM              = false;
         optimizerConfig->logPrintMessagesBeforeLLMWithSystemMsg = false;
@@ -486,6 +505,7 @@ Options:
 
         auto config                                   = buildDefaultConfig();
         config->dataDir                               = resolvedDataDir;
+        config->workDir                               = resolvedWorkDir;
         config->logPrintToolcall                      = false;
         config->logPrintMessagesBeforeLLM             = false;
         config->logPrintSummarizationResultTokenCount = false;
@@ -514,6 +534,7 @@ Options:
 
     auto config     = buildDefaultConfig();
     config->dataDir = resolvedDataDir;
+    config->workDir = resolvedWorkDir;
     applyModelToConfig(config, yamlCfg.models, yamlCfg.useModelDefault);
     applySubagentModelToConfig(config, yamlCfg.models, yamlCfg.useModelSubagent);
     applyWebSearchModelToConfig(config, yamlCfg.models, yamlCfg.useModelWebSearch);

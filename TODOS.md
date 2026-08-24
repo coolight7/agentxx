@@ -4,7 +4,6 @@
 - 会话yaml配置文件、工作目录、插件
 - eventBus 改为tree，命名空间使用 axx/bxx/cc
 - 支持修改上下文
-- 客户端 viewMessage 分页
 - 调整插件代码结构，增加测试、划分文件夹
 - 验证subagent、summarization
 - CI/CD

@@ -527,6 +527,13 @@ YamlAppConfig loadYamlConfig(
             = resolveEnvVars(root["data_dir"].as<std::string>(""), dotEnvVars, overrideEnvVars);
     }
 
+    // 会话工作目录 (AgentConfig::workDir; 为空 = 使用进程当前工作目录)
+    // - 相对路径的解析 (按程序工作目录) 与 `~` 展开由调用方完成, 与 data_dir 一致
+    if (root["work_dir"]) {
+        cfg.workDir
+            = resolveEnvVars(root["work_dir"].as<std::string>(""), dotEnvVars, overrideEnvVars);
+    }
+
     // subagent 开关 (yaml `subagent.enable`, 默认 true)
     if (root["subagent"] && root["subagent"].IsMap() && root["subagent"]["enable"]) {
         auto val = resolveEnvVars(

@@ -42,6 +42,27 @@ using agentxx::util::toCurrentSystemAbsolutePath;
 
 namespace {
 
+/// 基于 agent 配置的会话工作目录解析绝对路径
+/// - AgentConfig::workDir 非空时以其为相对路径基准 (会话工作目录与进程 cwd 解耦,
+///   支持嵌入场景单进程多 agent 实例各自绑定独立项目目录)
+/// - 为空时回退进程 cwd (resolvedWorkDir 兜底, 与单参 toCurrentSystemAbsolutePath 一致)
+std::string wsAbs(
+    const std::weak_ptr<agentxx::agent::AgentContext>& ctx,
+    const std::string&                                 path
+) {
+    std::string baseDir;
+    if (auto c = ctx.lock()) {
+        if (c->agentConfig) {
+            baseDir = c->agentConfig->resolvedWorkDir();
+        }
+    }
+    if (baseDir.empty()) {
+        return toCurrentSystemAbsolutePath(path);
+    }
+    return toCurrentSystemAbsolutePath(path, baseDir);
+}
+
+
 /// 将文本中的 CRLF (`\r\n`) 规范化为 LF (`\n`), 返回规范化的副本。
 /// 用于生成 edit 匹配候选变体 (LF 形式)。
 std::string crlfToLfCopy(std::string_view text) {
@@ -159,12 +180,15 @@ bool isExcluded(const std::string& pathStr, const std::vector<std::regex>& exclu
 
 } // namespace
 
-std::optional<std::string> _defFileReadGenerateKey(const neograph::json& args) {
+std::optional<std::string>
+    _defFileReadGenerateKey(const neograph::json& args, const std::weak_ptr<agentxx::agent::AgentContext>& ctx
+    ) {
     if (!args.is_object() || !args["path"].is_string()) {
         return std::nullopt;
     }
     // 统一使用绝对路径生成 key, 避免同一文件以相对/绝对形式出现时去重失效
-    auto path        = toCurrentSystemAbsolutePath(args["path"].get<std::string>());
+    // (相对路径按 agent 会话工作目录解析, 与工具实际访问路径一致)
+    auto path        = wsAbs(ctx, args["path"].get<std::string>());
     auto line_offset = args.value<int64_t>("line_offset", -1);
     auto line_limit  = args.value<int64_t>("line_limit", -1);
     auto recursive   = args.value<bool>("recursive", false);
@@ -179,11 +203,13 @@ std::optional<std::string> _defFileReadGenerateKey(const neograph::json& args) {
     );
 }
 
-std::optional<std::string> _defFileWriteGenerateKey(const neograph::json& args) {
+std::optional<std::string>
+    _defFileWriteGenerateKey(const neograph::json& args, const std::weak_ptr<agentxx::agent::AgentContext>& ctx
+    ) {
     if (args.is_object() && args["path"].is_string()) {
         return fmt::format(
             "filesystem:{}",
-            toCurrentSystemAbsolutePath(args["path"].get<std::string>())
+            wsAbs(ctx, args["path"].get<std::string>())
         );
     }
     return std::nullopt;
@@ -251,14 +277,18 @@ neograph::ChatTool FileSystemListTool::get_definition() const {
 std::optional<agentxx::middleware::SummarizationToolHandle>
     FileSystemListTool::createSummarizationToolHandle() const {
     return agentxx::middleware::SummarizationToolHandle{
-        .generateDeduplicationKey = _defFileReadGenerateKey,
+        // 捕获 agentContext: 相对路径按会话工作目录解析 (见 wsAbs)
+        .generateDeduplicationKey
+        = [ctx = agentContext](const neograph::json& args) {
+              return _defFileReadGenerateKey(args, ctx);
+          },
         .truncateRequest          = nullptr,
         .truncateResponse         = _defTruncateToolcallResponse,
     };
 }
 
 asio::awaitable<std::string> FileSystemListTool::execute_async(const neograph::json& arguments) {
-    auto targetPath = toCurrentSystemAbsolutePath(arguments.value("path", std::string{}));
+    auto targetPath = wsAbs(agentContext, arguments.value("path", std::string{}));
     if (targetPath.empty()) {
         co_return R"([Error] Arg `path` is empty)";
     }
@@ -464,7 +494,11 @@ neograph::ChatTool FilesystemReadTextFileTool::get_definition() const {
 std::optional<agentxx::middleware::SummarizationToolHandle>
     FilesystemReadTextFileTool::createSummarizationToolHandle() const {
     return agentxx::middleware::SummarizationToolHandle{
-        .generateDeduplicationKey = _defFileReadGenerateKey,
+        // 捕获 agentContext: 相对路径按会话工作目录解析 (见 wsAbs)
+        .generateDeduplicationKey
+        = [ctx = agentContext](const neograph::json& args) {
+              return _defFileReadGenerateKey(args, ctx);
+          },
         .truncateRequest          = nullptr,
         .truncateResponse         = _defTruncateToolcallResponse,
     };
@@ -472,7 +506,7 @@ std::optional<agentxx::middleware::SummarizationToolHandle>
 
 asio::awaitable<std::string>
     FilesystemReadTextFileTool::execute_async(const neograph::json& arguments) {
-    auto filepath = toCurrentSystemAbsolutePath(arguments.value("path", std::string{}));
+    auto filepath = wsAbs(agentContext, arguments.value("path", std::string{}));
     if (filepath.empty()) {
         co_return R"([Error] Arg `path` is empty)";
     }
@@ -682,7 +716,11 @@ neograph::ChatTool FilesystemWriteFileTool::get_definition() const {
 std::optional<agentxx::middleware::SummarizationToolHandle>
     FilesystemWriteFileTool::createSummarizationToolHandle() const {
     return agentxx::middleware::SummarizationToolHandle{
-        .generateDeduplicationKey = _defFileWriteGenerateKey,
+        // 捕获 agentContext: 相对路径按会话工作目录解析 (见 wsAbs)
+        .generateDeduplicationKey
+        = [ctx = agentContext](const neograph::json& args) {
+              return _defFileWriteGenerateKey(args, ctx);
+          },
         .truncateRequest          = _defTruncateToolcallRequest,
         .truncateResponse         = nullptr,
     };
@@ -690,7 +728,7 @@ std::optional<agentxx::middleware::SummarizationToolHandle>
 
 asio::awaitable<std::string> FilesystemWriteFileTool::execute_async(const neograph::json& arguments
 ) {
-    auto filepath = toCurrentSystemAbsolutePath(arguments.value("path", std::string{}));
+    auto filepath = wsAbs(agentContext, arguments.value("path", std::string{}));
     if (filepath.empty()) {
         co_return R"([Error] Arg `path` is empty)";
     }
@@ -844,7 +882,11 @@ neograph::ChatTool FilesystemEditTextFileTool::get_definition() const {
 std::optional<agentxx::middleware::SummarizationToolHandle>
     FilesystemEditTextFileTool::createSummarizationToolHandle() const {
     return agentxx::middleware::SummarizationToolHandle{
-        .generateDeduplicationKey = _defFileWriteGenerateKey,
+        // 捕获 agentContext: 相对路径按会话工作目录解析 (见 wsAbs)
+        .generateDeduplicationKey
+        = [ctx = agentContext](const neograph::json& args) {
+              return _defFileWriteGenerateKey(args, ctx);
+          },
         .truncateRequest          = _defTruncateToolcallRequest,
         .truncateResponse         = nullptr,
     };
@@ -852,7 +894,7 @@ std::optional<agentxx::middleware::SummarizationToolHandle>
 
 asio::awaitable<std::string>
     FilesystemEditTextFileTool::execute_async(const neograph::json& arguments) {
-    auto filepath = toCurrentSystemAbsolutePath(arguments.value("path", std::string{}));
+    auto filepath = wsAbs(agentContext, arguments.value("path", std::string{}));
     if (filepath.empty()) {
         co_return "[Error] Arg `path` is empty";
     }
@@ -1109,7 +1151,7 @@ asio::awaitable<std::string> FilesystemGlobTool::execute_async(const neograph::j
     auto timeout = static_cast<int64_t>(arguments.value<double>("timeout", 60.0));
 
     for (auto& item : file_patterns) {
-        item = toCurrentSystemAbsolutePath(item);
+        item = wsAbs(agentContext, item);
     }
 
     // 注: 路径匹配固定为大小写敏感 (移除 case-insensitive 支持)。
@@ -1122,7 +1164,7 @@ asio::awaitable<std::string> FilesystemGlobTool::execute_async(const neograph::j
     auto typeFilter      = collectTypeFilter(arguments.value("type", neograph::json{}));
     auto excludePatterns = arguments.value("exclude_patterns", std::vector<std::string>{});
     for (auto& item : excludePatterns) {
-        item = toCurrentSystemAbsolutePath(item);
+        item = wsAbs(agentContext, item);
     }
 
     // 获取阻塞操作卸载线程池, 避免 glob 同步调用阻塞 io_context 事件循环
@@ -1422,7 +1464,7 @@ asio::awaitable<std::string> FilesystemGrepTool::execute_async(const neograph::j
         co_return R"([Error] Arg `file_patterns` is empty)";
     }
     for (auto& item : file_patterns) {
-        item = toCurrentSystemAbsolutePath(item);
+        item = wsAbs(agentContext, item);
     }
     auto output_mode = arguments.value("output_mode", std::string{"files_with_matches"});
     if (output_mode.empty()) {

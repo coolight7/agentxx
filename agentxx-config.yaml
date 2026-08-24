@@ -27,6 +27,15 @@
 # data_dir: ~/.agentxx
 data_dir: default
 
+# === 会话工作目录 (留空/不配置 = 使用进程当前工作目录, 即 agentxx_cli 启动目录)
+# 支持 `~` 与 ${VAR} 展开, 相对路径按程序工作目录解析; 须为存在的目录
+# 生效范围:
+#   - permission.mode: ask 的默认放行范围 (该目录内读写放行, 其余询问)
+#   - filesystem 工具与权限校验的相对路径解析基准 (如 "src/main.cpp")
+#   - 命令执行工具 (agentxx_execute_*_command) 子进程的初始工作目录
+#   - 插件宿主信息 projectRoot (如 codegraph 未配置 paths 时默认索引该目录)
+# work_dir: ${AGENTXX_WORK_DIR}
+
 # === 权限配置 (该配置项已从 TUI 设置弹窗移除, 启动时提示一次)
 # - mode: 询问处理模式
 #   - ask:     当前工作目录内允许读写, 其他路径询问用户 (默认)

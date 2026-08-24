@@ -6,10 +6,18 @@ namespace agentxx {
 namespace tools {
 
 /// 文件读取 tool 的去重 key 生成（包含 path + offset/limit 等参数）
-std::optional<std::string> _defFileReadGenerateKey(const neograph::json& args);
+/// - ctx: 相对路径按 agent 会话工作目录 (AgentConfig::workDir) 解析
+std::optional<std::string> _defFileReadGenerateKey(
+    const neograph::json&                            args,
+    const std::weak_ptr<agentxx::agent::AgentContext>& ctx
+);
 
 /// 文件写入/编辑 tool 的去重 key 生成（仅用 path，最新写入覆盖旧写入）
-std::optional<std::string> _defFileWriteGenerateKey(const neograph::json& args);
+/// - ctx: 相对路径按 agent 会话工作目录 (AgentConfig::workDir) 解析
+std::optional<std::string> _defFileWriteGenerateKey(
+    const neograph::json&                              args,
+    const std::weak_ptr<agentxx::agent::AgentContext>& ctx
+);
 
 void _defTruncateToolcallRequest(neograph::ToolCall& toolcall);
 

@@ -8,6 +8,7 @@
 #include "agentxx/agent/io/wire_protocol.h"
 #include "agentxx/util/exception.h"
 #include "agentxx/util/log.h"
+#include "agentxx/util/string_util.h"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
 #include "asio/post.hpp"
@@ -15,6 +16,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <filesystem>
 #include <memory>
 #include <random>
 
@@ -189,6 +191,19 @@ bool FfiAgentRuntime::buildConfigs(
             return false;
         }
         config->dataDir               = jsonStr(cfgJ, "dataDir", "");
+        // 会话工作目录: 相对路径/`~` 在此按进程 cwd 展开为绝对路径
+        // (嵌入多实例场景下各句柄可绑定独立项目目录, 见 AgentConfig::workDir)
+        {
+            auto workDir = agentxx::util::expandUserHomePath(jsonStr(cfgJ, "workDir", ""));
+            if (!workDir.empty()) {
+                std::filesystem::path wp{workDir};
+                config->workDir = wp.is_absolute()
+                                      ? wp.lexically_normal().generic_string()
+                                      : (std::filesystem::current_path() / wp)
+                                            .lexically_normal()
+                                            .generic_string();
+            }
+        }
         config->enableSessionStore    = jsonBool(cfgJ, "enableSessionStore", false);
         config->sessionStoreDirectory = jsonStr(cfgJ, "sessionStoreDirectory", "");
         config->agentName             = jsonStr(cfgJ, "agentName", config->agentName);

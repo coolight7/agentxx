@@ -228,6 +228,18 @@ public:
     /// - 相对路径按程序工作目录解析为绝对路径 (由 client 启动时解析)
     std::string dataDir;
 
+    /// 会话工作目录 (yaml `work_dir`; FFI config_json "workDir")
+    /// - 为空 (默认) 时回退进程当前工作目录, 完全保持旧行为 (见 resolvedWorkDir)
+    /// - 非空时应为绝对路径 (client/FFI 装配侧负责把相对路径按进程 cwd 解析),
+    ///   作为本 agent 的逻辑工作目录, 摆脱对进程全局 cwd 的隐式依赖:
+    ///   - permission Ask 模式默认放行规则 (code_agent initMiddleware)
+    ///   - filesystem 工具与权限校验的相对路径解析基准 (toCurrentSystemAbsolutePath)
+    ///   - 命令执行子进程的初始工作目录 (execute_command 工具)
+    ///   - 插件宿主信息 get_config 的 projectRoot (如 codegraph 默认索引根)
+    /// - 用途: 单进程多 agent 实例 (App 嵌入 libagentxx / FFI 多句柄) 各自绑定
+    ///   独立项目目录; 也使 server 部署不再要求以项目目录作为启动目录
+    std::string workDir;
+
     /// CodeGraph 代码分析由插件 agentxx_codegraph 提供 (yaml `plugins` 段配置):
     /// - 插件参数整体存放于 PluginConfig::args (宿主不解析字段语义,
     ///   由插件自行读取: loadPaths/ignorePaths/loadCwd/useGitignore 等)
@@ -304,6 +316,13 @@ public:
     /// 配置校验 (client 启动时调用, 聚合全部字段合法性)
     /// - 校验 dataDir 相对路径规范化、模型合法性等, 失败返回错误描述, 避免分散告警
     std::expected<void, std::string> validate() const;
+
+    /// 解析后的会话工作目录 (各使用点统一经此取值, 不直接读 workDir)
+    /// - workDir 非空: 原样返回 (装配侧负责解析为绝对路径)
+    /// - workDir 为空: 回退进程当前工作目录 (旧行为); 获取失败返回空串
+    ///   (调用方对空串的兜底语义与原 getCurrentWorkPath 一致, 如 permission
+    ///   Ask 模式获取失败时不注册默认放行规则)
+    std::string resolvedWorkDir() const noexcept;
 };
 
 } // namespace agent

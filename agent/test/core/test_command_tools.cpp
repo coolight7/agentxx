@@ -6,8 +6,11 @@
 #include "asio/steady_timer.hpp"
 #include "asio/use_awaitable.hpp"
 #include <chrono>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <string>
+#include <system_error>
 
 namespace agentxx {
 namespace test {
@@ -373,6 +376,86 @@ asio::awaitable<void>
     co_return;
 }
 
+// ---- 子进程工作目录 (AgentConfig::workDir) ----
+
+/// 构造绑定指定会话工作目录的独立 AgentContext (work_dir 相关测试专用)
+static std::shared_ptr<agentxx::agent::AgentContext>
+    makeWorkDirContext(const std::string& dir) {
+    auto ctx                  = std::make_shared<agentxx::agent::AgentContext>();
+    ctx->agentConfig          = std::make_shared<agentxx::agent::AgentConfig>();
+    ctx->agentConfig->workDir = dir;
+    return ctx;
+}
+
+/// 子进程初始工作目录应为会话工作目录 (AgentConfig::workDir):
+/// 在 workDir 下创建 marker 文件后执行无路径参数的列目录命令,
+/// 输出包含 marker 名即证明子进程 cwd 确为 workDir
+/// (避免直接比较路径字符串 —— Windows 盘符大小写/正反斜杠格式差异易误判)
+/// - popen 回退编译 (AGENTXX_ENABLE_BOOST_PROCESS 关闭) 无法指定子进程目录,
+///   此时跳过断言仅记录信息
+asio::awaitable<void>
+    test_command_subprocess_workdir(std::weak_ptr<agentxx::agent::AgentContext>) {
+#if AGENTXX_ENABLE_BOOST_PROCESS
+    namespace fs = std::filesystem;
+    auto wd       = (fs::temp_directory_path() / "agentxx_test_cmd_wd").generic_string();
+    auto markerNm = std::string{"wd_probe_marker_8f3a.txt"};
+    std::error_code ec;
+    fs::remove_all(wd, ec);
+    fs::create_directories(wd, ec);
+    if (ec) {
+        g_cmd_failed++;
+        TEST_FAIL << "create workdir failed: " << ec.message() << std::endl;
+        co_return;
+    }
+    {
+        std::ofstream f((fs::path(wd) / markerNm));
+        f << "probe\n";
+        f.close();
+        if (!f) {
+            g_cmd_failed++;
+            TEST_FAIL << "write marker failed" << std::endl;
+            co_return;
+        }
+    }
+
+    auto ctx = makeWorkDirContext(wd);
+#if XX_IS_WIN_D
+    // 无 PowerShell 时回退 cmd.exe 不识别 PS 语法: 与既有 PS 执行测试一致跳过
+    auto psInfo = agentxx::util::detectPowerShell();
+    if (false == psInfo.available) {
+        TEST_INFO << "skip subprocess workdir assert: PowerShell not available" << std::endl;
+        fs::remove_all(wd, ec);
+        co_return;
+    }
+    auto tool = agentxx::tools::ExecuteWindowsCommandTool{ctx};
+    auto args = neograph::json{
+        {"command", "Get-ChildItem -Name"}
+    };
+#else
+    auto tool = agentxx::tools::ExecuteBashCommandTool{ctx};
+    auto args = neograph::json{
+        {"command", "ls"}
+    };
+#endif
+    auto result = co_await tool.execute_async(args);
+    if (result.find(markerNm) != std::string::npos) {
+        g_cmd_passed++;
+        TEST_PASS << "command subprocess starts in AgentConfig::workDir (" << wd << ")"
+                  << std::endl;
+    } else {
+        g_cmd_failed++;
+        TEST_FAIL << "command subprocess cwd should be workDir=" << wd << ", got: " << result
+                  << std::endl;
+    }
+    fs::remove_all(wd, ec);
+#else
+    TEST_INFO << "skip subprocess workdir test: AGENTXX_ENABLE_BOOST_PROCESS off "
+                 "(popen fallback cannot set child cwd)"
+              << std::endl;
+#endif
+    co_return;
+}
+
 // ---- PowerShell 探测 ----
 
 asio::awaitable<void> test_detect_powershell(std::weak_ptr<agentxx::agent::AgentContext>) {
@@ -550,6 +633,7 @@ asio::awaitable<TestResult>
     }
 #endif
 
+    co_await run(test_command_subprocess_workdir);
     co_await run(test_detect_powershell);
     co_await run(test_windows_definition_ps_info);
     co_await run(test_windows_execute_ps);

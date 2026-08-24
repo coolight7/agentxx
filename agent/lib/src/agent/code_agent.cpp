@@ -110,11 +110,14 @@ asio::awaitable<void> CodeAgent::initMiddleware() {
                 break;
             case agentxx::agent::PermissionMode::Ask:
             default:
-                // 当前工作目录内允许, 其他路径询问
+                // 会话工作目录内允许, 其他路径询问
+                // - 工作目录取 AgentConfig::workDir (yaml work_dir; 未配置回退进程
+                //   cwd), 使嵌入多实例/远程 server 场景下权限边界跟随会话配置而非
+                //   进程启动目录
                 // - 工作目录获取失败 (返回空串) 时不注册默认放行规则, 所有路径
                 //   均询问 (安全兜底: 注册根目录 "/" 会退化为放行所有路径)
                 {
-                    const auto workPath = agentxx::agent::AgentConfigStatic::getCurrentWorkPath();
+                    const auto workPath = config->resolvedWorkDir();
                     if (workPath.empty()) {
                         XX_LOGW("PermissionMode::Ask: getCurrentWorkPath failed, "
                                 "no default allow rule registered, all paths will be asked");

@@ -1,5 +1,6 @@
 #include "agentxx/agent/config.h"
 
+#include "agentxx/agent/config_static.h"
 #include <expected>
 #include <filesystem>
 #include <fmt/format.h>
@@ -27,6 +28,15 @@ const ModelConfig& AgentConfig::getSubagentModel() const {
     return subagentModel.has_value() ? subagentModel.value() : model;
 }
 
+std::string AgentConfig::resolvedWorkDir() const noexcept {
+    // workDir 非空时原样返回 (client/FFI 装配侧已把相对路径按进程 cwd 解析为绝对路径);
+    // 为空时回退进程当前工作目录, 与历史行为完全一致
+    if (!workDir.empty()) {
+        return workDir;
+    }
+    return AgentConfigStatic::getCurrentWorkPath();
+}
+
 std::expected<void, std::string> AgentConfig::validate() const {
     if (!model.isValid() && availableModels.empty()) {
         return std::unexpected{
@@ -51,6 +61,15 @@ std::expected<void, std::string> AgentConfig::validate() const {
             return std::unexpected{"AgentConfig: dataDir is empty path"};
         }
         (void)ec;
+    }
+    // workDir: 非空时必须为绝对路径 (相对路径的解析归属装配侧, 按进程 cwd 展开;
+    // lib 内不隐式解析, 避免"配置相对路径在不同启动目录下语义漂移")
+    if (!workDir.empty() && !std::filesystem::path(workDir).is_absolute()) {
+        return std::unexpected{fmt::format(
+            "AgentConfig: workDir must be an absolute path (got '{}'); "
+            "resolve relative paths against the process cwd at assembly time",
+            workDir
+        )};
     }
     return {};
 }

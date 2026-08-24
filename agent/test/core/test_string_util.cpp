@@ -954,6 +954,50 @@ void test_getFileNameMore() {
     XX_TEST_EXPECT_EQ(agentxx::util::getFileName("a.b.c", true, true), "a.b");
 }
 
+void test_toCurrentSystemAbsolutePathBaseDir() {
+    // 空输入: 原样返回
+    XX_TEST_EXPECT_EQ(agentxx::util::toCurrentSystemAbsolutePath("", "/base"), "");
+
+    // 绝对路径输入: 忽略 baseDir 原样规范化
+    XX_TEST_EXPECT_EQ(
+        agentxx::util::toCurrentSystemAbsolutePath("/abs/x/y", "/base"),
+        std::string("/abs/x/y")
+    );
+
+    // 相对路径: 基于 baseDir 拼接 + 词法规范化
+    XX_TEST_EXPECT_EQ(
+        agentxx::util::toCurrentSystemAbsolutePath("a/b", "/base"),
+        std::string("/base/a/b")
+    );
+    // `..` 收敛
+    XX_TEST_EXPECT_EQ(
+        agentxx::util::toCurrentSystemAbsolutePath("sub/../c.txt", "/base"),
+        std::string("/base/c.txt")
+    );
+    // `./` 收敛
+    XX_TEST_EXPECT_EQ(
+        agentxx::util::toCurrentSystemAbsolutePath("./d", "/base"),
+        std::string("/base/d")
+    );
+
+#if XX_IS_WIN_D
+    // Windows: 分隔符统一 + generic_string 输出正斜杠
+    XX_TEST_EXPECT_EQ(
+        agentxx::util::toCurrentSystemAbsolutePath("a\\b", "D:/work"),
+        std::string("D:/work/a/b")
+    );
+#endif
+
+    // baseDir 为空: 与单参版本行为一致 (基于进程 cwd)
+    {
+        const std::string rel = "ws_abs_probe_dir/file";
+        auto viaSingle = agentxx::util::toCurrentSystemAbsolutePath(rel);
+        auto viaTwoArg = agentxx::util::toCurrentSystemAbsolutePath(rel, "");
+        XX_TEST_EXPECT_EQ(viaSingle, viaTwoArg);
+        XX_TEST_EXPECT_TRUE(agentxx::util::isAbsolutePath(viaTwoArg));
+    }
+}
+
 namespace agentxx {
 namespace test {
 
@@ -989,6 +1033,7 @@ TestResult testStringUtil() {
     test_toCurrentSystemStandardPath();
     test_ignoreCaseContainers();
     test_getFileNameMore();
+    test_toCurrentSystemAbsolutePathBaseDir();
 
     return TestResult{g_su_passed, g_su_failed};
 }

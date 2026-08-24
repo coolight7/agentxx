@@ -56,6 +56,10 @@ public:
 
     void setFilesystemPermission(std::string_view path, PermissionOperator op, size_t index);
 
+    /// 权限路径规范化: 绝对路径 (基准 = AgentConfig::resolvedWorkDir, workDir
+    /// 未配置时回退进程 cwd) + Unix 分隔符 + 目录尾斜杠 (+ Windows 转小写)
+    std::string normalizePermissionPath(std::string_view path) const;
+
     asio::awaitable<bool>
         defOnFilesystemHandle(const neograph::Tool& item, neograph::json& args, size_t index);
 

@@ -465,6 +465,15 @@ mcp:
 #   - {data_dir}/sqlite/codegraph/<折叠路径>/index.db CodeGraph 索引
 # data_dir: ~/.agentxx
 
+# 会话工作目录 (留空/不配置 = 使用进程当前工作目录, 即启动目录)
+# - 支持 ~ 与 ${VAR} 展开, 相对路径按程序工作目录解析
+# - 生效范围: permission.mode=ask 默认放行范围 / filesystem 工具与权限校验的
+#   相对路径解析基准 / 命令执行子进程初始目录 / 插件 projectRoot (get_config;
+#   如 codegraph 未配置 paths 时默认索引该目录)
+# - 用途: server 部署与嵌入多实例 (FFI 多句柄) 场景下, agent 的工作目录跟随
+#   配置而非进程启动目录 (workDir 为空时行为与旧版完全一致)
+# work_dir: ${AGENTXX_WORK_DIR}
+
 # 技能目录列表 (SKILL.md 渐进式发现与加载; 相对路径按工作目录解析)
 skill:
   - "./skills"

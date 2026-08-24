@@ -3068,8 +3068,11 @@ std::string PluginManager::getConfigJson() {
     const auto&    cfg = *ctx->agentConfig;
     neograph::json j   = neograph::json::object();
     j["dataDir"]       = cfg.dataDir;
-    // 当前工作路径 (插件索引项目根用; 失败为空串, 插件自行回退)
-    j["projectRoot"] = agentxx::agent::AgentConfigStatic::getCurrentWorkPath();
+    // 项目根 (插件索引/相对路径解析基准用): AgentConfig::workDir (会话工作目录,
+    // yaml work_dir / FFI "workDir") 优先, 未配置时回退进程 cwd; 失败为空串,
+    // 插件自行回退。插件应优先使用该值而非自行取进程 cwd —— 嵌入多实例场景下
+    // 各 agent 实例的工作目录彼此独立
+    j["projectRoot"] = cfg.resolvedWorkDir();
 #if XX_IS_WIN_D
     j["platform"] = "windows";
 #elif XX_IS_MACOS_D

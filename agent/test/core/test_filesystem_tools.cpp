@@ -198,6 +198,96 @@ asio::awaitable<void>
     co_return;
 }
 
+/// 构造绑定指定会话工作目录的独立 AgentContext (work_dir 相关测试专用)
+/// - 不依赖共享 agentContext: 验证工具以 AgentConfig::resolvedWorkDir 为
+///   相对路径基准时, 结果与进程 cwd 无关 (嵌入场景单进程多 agent 实例
+///   各自绑定独立项目目录的核心语义)
+static std::shared_ptr<agentxx::agent::AgentContext>
+    makeWorkDirContext(const std::string& dir) {
+    auto ctx                  = std::make_shared<agentxx::agent::AgentContext>();
+    ctx->agentConfig          = std::make_shared<agentxx::agent::AgentConfig>();
+    ctx->agentConfig->workDir = dir;
+    return ctx;
+}
+
+/// resolvedWorkDir 纯函数校验: workDir 非空原样返回; 为空回退进程 cwd
+asio::awaitable<void> test_resolved_workdir(std::weak_ptr<agentxx::agent::AgentContext>) {
+    auto cfgWith = std::make_shared<agentxx::agent::AgentConfig>();
+    cfgWith->workDir = "/tmp/proj-a";
+    XX_TEST_EXPECT_EQ(cfgWith->resolvedWorkDir(), std::string{"/tmp/proj-a"});
+
+    auto cfgEmpty = std::make_shared<agentxx::agent::AgentConfig>();
+    XX_TEST_EXPECT_EQ(cfgEmpty->resolvedWorkDir(), std::filesystem::current_path().generic_string()
+    );
+    co_return;
+}
+
+/// 相对路径应以会话工作目录 (workDir) 而非进程 cwd 为基准:
+/// 绑定 workDir=testDir 后传 "." (解析到工作目录自身), 应列出其下文件;
+/// 进程 cwd 与 testDir 无关, 解析错误时将得到空/错误结果而非目录内容
+asio::awaitable<void>
+    test_list_relative_path_with_workdir(std::weak_ptr<agentxx::agent::AgentContext>) {
+    auto ctx  = makeWorkDirContext(testDir);
+    auto tool = agentxx::tools::FileSystemListTool{ctx};
+    auto args = neograph::json{
+        {"path", "."}
+    };
+    auto result = co_await tool.execute_async(args);
+    if (result.find("test1.txt") != std::string::npos
+        && result.find("test2.txt") != std::string::npos
+        && result.find("subdir") != std::string::npos) {
+        g_fs_passed++;
+        TEST_PASS << "FileSystemListTool resolves relative path against workDir" << std::endl;
+    } else {
+        g_fs_failed++;
+        TEST_FAIL << "FileSystemListTool workDir relative path failed, got: " << result << std::endl;
+    }
+    co_return;
+}
+
+/// 相对路径读取: 以 workDir 为基准找到文件 (workDir ≠ 进程 cwd)
+asio::awaitable<void>
+    test_read_relative_with_workdir(std::weak_ptr<agentxx::agent::AgentContext>) {
+    auto ctx  = makeWorkDirContext(testDir);
+    auto tool = agentxx::tools::FilesystemReadTextFileTool{ctx};
+    auto args = neograph::json{
+        {"path", "subdir/subtest.txt"}
+    };
+    auto result = co_await tool.execute_async(args);
+    if (result.find("subdir file content") != std::string::npos) {
+        g_fs_passed++;
+        TEST_PASS << "FilesystemReadTextFileTool resolves relative path against workDir"
+                  << std::endl;
+    } else {
+        g_fs_failed++;
+        TEST_FAIL << "FilesystemReadTextFileTool workDir relative read failed, got: " << result
+                  << std::endl;
+    }
+    co_return;
+}
+
+/// 相对 glob 模式: 以 workDir 为基准展开后匹配
+asio::awaitable<void>
+    test_glob_relative_pattern_with_workdir(std::weak_ptr<agentxx::agent::AgentContext>) {
+    auto ctx  = makeWorkDirContext(testDir);
+    auto tool = agentxx::tools::FilesystemGlobTool{ctx};
+    auto args = neograph::json{
+        {"file_patterns", neograph::json::array({"*.txt"})},
+    };
+    auto result = co_await tool.execute_async(args);
+    if (result.find("test1.txt") != std::string::npos
+        && result.find("test2.txt") != std::string::npos
+        && result.find("subtest.txt") == std::string::npos) {
+        g_fs_passed++;
+        TEST_PASS << "FilesystemGlobTool expands relative pattern against workDir" << std::endl;
+    } else {
+        g_fs_failed++;
+        TEST_FAIL << "FilesystemGlobTool workDir relative pattern failed, got: " << result
+                  << std::endl;
+    }
+    co_return;
+}
+
 /// `~` 前缀应展开为用户主目录。为不污染用户目录, 在主目录下创建临时文件验证后删除。
 asio::awaitable<void>
     test_list_file_tilde_path(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
@@ -1408,6 +1498,10 @@ asio::awaitable<TestResult>
     co_await run(test_list_file_limit);
     co_await run(test_list_file_info_fields);
     co_await run(test_list_file_relative_path);
+    co_await run(test_resolved_workdir);
+    co_await run(test_list_relative_path_with_workdir);
+    co_await run(test_read_relative_with_workdir);
+    co_await run(test_glob_relative_pattern_with_workdir);
     co_await run(test_list_file_tilde_path);
 
     co_await run(test_read_text_file_get_definition);

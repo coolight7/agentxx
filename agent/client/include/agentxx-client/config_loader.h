@@ -64,6 +64,13 @@ struct YamlAppConfig {
     ///   {dataDir}/sqlite/codegraph/... (CodeGraph 索引)
     std::string dataDir;
 
+    /// 会话工作目录 (yaml `work_dir`, 支持 `${VAR}` 展开)
+    /// - 为空 (默认): agent 使用进程当前工作目录 (旧行为)
+    /// - 非空: 相对路径按程序工作目录解析为绝对路径后传入 AgentConfig::workDir,
+    ///   作为 permission Ask 默认放行范围、filesystem 工具与权限校验的相对路径
+    ///   解析基准、命令执行子进程初始目录、插件 projectRoot (codegraph 默认索引根)
+    std::string workDir;
+
     /// 权限询问处理模式 (yaml `permission.mode`: ask/all_ask/pass/deny, 默认 ask)
     /// - ask:     当前工作目录内允许读写, 其他路径询问用户
     /// - all_ask: 所有路径读写均询问用户
