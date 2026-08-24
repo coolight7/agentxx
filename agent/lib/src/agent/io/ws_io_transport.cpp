@@ -489,9 +489,9 @@ std::string WsAgentIOTransport::serialize(const WireMessage& msg) {
             } else if constexpr (std::is_same_v<T, WireContextMessages>) {
                 return io::makeContextMessages(m.messages).dump();
             } else if constexpr (std::is_same_v<T, WireListSessions>) {
-                return io::makeListSessions().dump();
+                return io::makeListSessions(m.beforeMs, m.beforeId, m.limit).dump();
             } else if constexpr (std::is_same_v<T, WireSessionList>) {
-                return io::makeSessionList(m.sessions).dump();
+                return io::makeSessionList(m.sessions, m.totalCount, m.hasMore).dump();
             } else if constexpr (std::is_same_v<T, WireSwitchSession>) {
                 return io::makeSwitchSession(m.sessionId).dump();
             } else if constexpr (std::is_same_v<T, WireSetPermission>) {
@@ -667,11 +667,9 @@ std::optional<WireMessage> WsAgentIOTransport::deserialize(std::string_view json
         resp.messages = j.value("messages", neograph::json::array());
         return WireMessage{std::move(resp)};
     } else if (t == io::MsgType::ListSessions) {
-        return WireMessage{WireListSessions{}};
+        return WireMessage{io::listSessionsFromJson(j)};
     } else if (t == io::MsgType::SessionList) {
-        WireSessionList resp;
-        resp.sessions = io::sessionListFromJson(j);
-        return WireMessage{std::move(resp)};
+        return WireMessage{io::sessionListFromJson(j)};
     } else if (t == io::MsgType::SwitchSession) {
         return WireMessage{io::switchSessionFromJson(j)};
     } else if (t == io::MsgType::SetPermission) {

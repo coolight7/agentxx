@@ -5,6 +5,7 @@
 #include "agentxx/util/exception.h"
 #include "agentxx/util/log.h"
 #include <algorithm>
+#include <chrono>
 #include <cstdlib>
 #include <filesystem>
 #include <fmt/format.h>
@@ -296,6 +297,96 @@ SessionStore::LoadedSession SessionStore::loadSession(std::string_view sessionId
     return out;
 }
 
+/// 会话列表排序: 按最近活动时间降序 (最新在前); 时间相同时按 sessionId 字典序
+/// 保证稳定顺序 (listSessions/listSessionsPage 共用)
+static bool sessionNewerFirst(const SessionInfo& a, const SessionInfo& b) {
+    if (a.lastActiveMs != b.lastActiveMs) {
+        return a.lastActiveMs > b.lastActiveMs;
+    }
+    return a.sessionId < b.sessionId;
+}
+
+/// file_clock 时间戳 → unix 毫秒
+/// - 以"两时钟当前时刻差"运行期锚定一次换算偏移, 避免依赖 clock_cast
+///   (部分 libstdc++ 版本未实现); 偏移在进程生命周期内恒定 (NTP 微调可忽略)
+/// - 供文件修改时间与 meta 中存储的 unix 毫秒时间戳比较/展示统一口径
+static int64_t fileTimeToUnixMs(fs::file_time_type tp) {
+    static const int64_t anchorDelta = [] {
+        const auto fNow = fs::file_time_type::clock::now().time_since_epoch();
+        const auto sNow = std::chrono::system_clock::now().time_since_epoch();
+        return std::chrono::duration_cast<std::chrono::milliseconds>(sNow).count()
+             - std::chrono::duration_cast<std::chrono::milliseconds>(fNow).count();
+    }();
+    return std::chrono::duration_cast<std::chrono::milliseconds>(tp.time_since_epoch()).count()
+         + anchorDelta;
+}
+
+/// 目录最近写入时刻启发式 (unix 毫秒): max(session.db, session.db-wal) 的修改时间。
+/// SQLite 为 WAL 模式 (见 util/sqlite.h), 最近提交可能仍在 -wal 文件中未合并回
+/// 主库, 仅 stat 主库会低估活动时间; 取两者最大值近似最近写入时刻。
+/// - 两个文件都不存在/不可读时返回 0 (排序时自然落在最后)
+static int64_t sessionDirActivityHintMs(const fs::path& dir) {
+    int64_t best = 0;
+    for (const char* name : { "session.db", "session.db-wal" }) {
+        std::error_code ec;
+        const auto      t = fs::last_write_time(dir / name, ec);
+        if (ec) {
+            continue;
+        }
+        best = std::max(best, fileTimeToUnixMs(t));
+    }
+    return best;
+}
+
+/// 读取单个会话目录的 meta 摘要 (只读; 独立临时连接, 不复用 dbs_ 缓存, 也不创建目录):
+/// sessionId 优先取 meta 中的原始值 (目录名经 sanitize 后可能失真),
+/// 老数据无 meta.sessionId 时回退目录名 (generateUniqueSessionId 生成的
+/// id 仅含安全字符, sanitize 不改写, 目录名即原始 sessionId)
+/// - info.sessionId 须已预填目录名作回退值; 打开/读取失败返回 false (info 保持回退值)
+static bool readSessionDirMeta(const fs::path& dir, SessionInfo& info) {
+    return agentxx::util::catchError<bool>(
+        [&]() -> bool {
+            agentxx::util::SqliteDb db;
+            db.open((dir / "session.db").string());
+            auto stmt = db.prepare("SELECT key, value FROM meta");
+            while (stmt.step()) {
+                const auto key = stmt.columnText(0);
+                if (key == kMetaSessionId) {
+                    const auto tid = stmt.columnText(1);
+                    if (!tid.empty()) {
+                        info.sessionId = tid;
+                    }
+                } else if (key == kMetaTitle) {
+                    info.title = stmt.columnText(1);
+                } else if (key == kMetaLastActiveMs) {
+                    info.lastActiveMs = stmt.columnInt64(1);
+                }
+            }
+            // 兜底: 老数据无 lastActiveMs meta 时, 取最新一条
+            // view_message 的开始时间戳 (json1 json_extract); 仍为 0
+            // (历史消息均无时间戳) 时回退 session.db 文件修改时间,
+            // 保证会话列表时间列不为空 (展示端对 0 显示 "-")
+            if (info.lastActiveMs <= 0) {
+                auto lastStmt = db.prepare(
+                    "SELECT json_extract(json, '$.start_time_ms') FROM view_message "
+                    "ORDER BY seq DESC LIMIT 1"
+                );
+                if (lastStmt.step() && !lastStmt.columnIsNull(0)) {
+                    info.lastActiveMs = lastStmt.columnInt64(0);
+                }
+            }
+            if (info.lastActiveMs <= 0) {
+                info.lastActiveMs = sessionDirActivityHintMs(dir);
+            }
+            return true;
+        },
+        [&](std::string errmsg) -> bool {
+            XX_LOGD("SessionStore: read session meta {} failed: {}", dir.filename().string(), errmsg);
+            return false;
+        }
+    );
+}
+
 std::vector<SessionInfo> SessionStore::listSessions() {
     std::vector<SessionInfo>    out;
     std::lock_guard<std::mutex> lock(mutex_);
@@ -311,75 +402,12 @@ std::vector<SessionInfo> SessionStore::listSessions() {
                 if (ec || !entry.is_directory(ec)) {
                     continue;
                 }
-                // 独立临时连接读取 meta (只读; 不复用 dbs_ 缓存, 也不创建目录):
-                // sessionId 优先取 meta 中的原始值 (目录名经 sanitize 后可能失真),
-                // 老数据无 meta.sessionId 时回退目录名 (generateUniqueSessionId 生成的
-                // id 仅含安全字符, sanitize 不改写, 目录名即原始 sessionId)
                 SessionInfo info;
                 info.sessionId = entry.path().filename().string();
-                agentxx::util::catchError<bool>(
-                    [&]() -> bool {
-                        agentxx::util::SqliteDb db;
-                        db.open((entry.path() / "session.db").string());
-                        auto stmt = db.prepare("SELECT key, value FROM meta");
-                        while (stmt.step()) {
-                            const auto key = stmt.columnText(0);
-                            if (key == kMetaSessionId) {
-                                const auto tid = stmt.columnText(1);
-                                if (!tid.empty()) {
-                                    info.sessionId = tid;
-                                }
-                            } else if (key == kMetaTitle) {
-                                info.title = stmt.columnText(1);
-                            } else if (key == kMetaLastActiveMs) {
-                                info.lastActiveMs = stmt.columnInt64(1);
-                            }
-                        }
-                        // 兜底: 老数据无 lastActiveMs meta 时, 取最新一条
-                        // view_message 的开始时间戳 (json1 json_extract); 仍为 0
-                        // (历史消息均无时间戳) 时回退 session.db 文件修改时间,
-                        // 保证会话列表时间列不为空 (展示端对 0 显示 "-")
-                        if (info.lastActiveMs <= 0) {
-                            auto lastStmt = db.prepare(
-                                "SELECT json_extract(json, '$.start_time_ms') FROM view_message "
-                                "ORDER BY seq DESC LIMIT 1"
-                            );
-                            if (lastStmt.step() && !lastStmt.columnIsNull(0)) {
-                                info.lastActiveMs = lastStmt.columnInt64(0);
-                            }
-                        }
-                        if (info.lastActiveMs <= 0) {
-                            std::error_code fec;
-                            const auto      mtime
-                                = fs::last_write_time(entry.path() / "session.db", fec);
-                            if (!fec) {
-                                info.lastActiveMs
-                                    = std::chrono::duration_cast<std::chrono::milliseconds>(
-                                          mtime.time_since_epoch()
-                                    )
-                                          .count();
-                            }
-                        }
-                        return true;
-                    },
-                    [&](std::string errmsg) -> bool {
-                        XX_LOGD(
-                            "SessionStore: listSessions read {} failed: {}",
-                            entry.path().filename().string(),
-                            errmsg
-                        );
-                        return false;
-                    }
-                );
+                readSessionDirMeta(entry.path(), info);
                 out.push_back(std::move(info));
             }
-            // 按最近活动时间降序 (最新在前); 时间相同时按 sessionId 字典序保证稳定顺序
-            std::sort(out.begin(), out.end(), [](const SessionInfo& a, const SessionInfo& b) {
-                if (a.lastActiveMs != b.lastActiveMs) {
-                    return a.lastActiveMs > b.lastActiveMs;
-                }
-                return a.sessionId < b.sessionId;
-            });
+            std::sort(out.begin(), out.end(), sessionNewerFirst);
             return true;
         },
         [&](std::string errmsg) -> bool {
@@ -388,6 +416,112 @@ std::vector<SessionInfo> SessionStore::listSessions() {
         }
     );
     return out;
+}
+
+SessionStore::SessionListPage
+    SessionStore::listSessionsPage(int64_t beforeMs, std::string_view beforeId, uint32_t limit) {
+    // limit == 0 全量路径: 复用 listSessions (其自行加锁, 须在取锁前调用避免重入)
+    if (limit == 0) {
+        SessionListPage page;
+        page.sessions   = listSessions();
+        page.totalCount = page.sessions.size();
+        page.hasMore    = false;
+        return page;
+    }
+
+    SessionListPage             page;
+    std::lock_guard<std::mutex> lock(mutex_);
+    agentxx::util::catchError<bool>(
+        [&]() -> bool {
+            std::error_code ec;
+            fs::path        root{rootDir_};
+            if (!fs::exists(root, ec)) {
+                // 根目录不存在 = 从未持久化过任何会话
+                return true;
+            }
+
+            // ---- 阶段 1: 仅 stat 各目录的有效修改时间 (不打开数据库) ----
+            // 得到近似活动顺序与总会话数; mtime 与 lastActiveMs 强相关但不完全
+            // 一致 (tool 结果回填等只更新文件不改 meta), 故仅作读取顺序启发,
+            // 绝不据此跳过目录 (保证结果精确)
+            struct DirHint {
+                fs::path dir;
+                int64_t  hintMs = 0;
+            };
+            std::vector<DirHint> dirs;
+            for (const auto& entry : fs::directory_iterator(root, ec)) {
+                if (ec || !entry.is_directory(ec)) {
+                    continue;
+                }
+                dirs.push_back({ entry.path(), sessionDirActivityHintMs(entry.path()) });
+            }
+            page.totalCount = dirs.size();
+            std::sort(dirs.begin(), dirs.end(), [](const DirHint& a, const DirHint& b) {
+                if (a.hintMs != b.hintMs) {
+                    return a.hintMs > b.hintMs;
+                }
+                return a.dir.filename().string() < b.dir.filename().string();
+            });
+
+            // 游标过滤: 排序位置严格位于游标之后 (与 sessionNewerFirst 的降序全序
+            // 一致: lastActiveMs 更小, 或同毫秒时 sessionId 更大)
+            auto qualifies = [beforeMs, &beforeId](int64_t la, std::string_view sid) {
+                if (beforeMs <= 0) {
+                    return true;
+                }
+                if (la != beforeMs) {
+                    return la < beforeMs;
+                }
+                return sid > beforeId;
+            };
+
+            // ---- 阶段 2: 按 hint 顺序逐个读取精确 meta 并收集 ----
+            bool stoppedEarly = false;
+            // 是否有符合游标的条目因页满被挤出本页 (排名低于边界, 属于后续页)
+            bool overflowed   = false;
+            for (const auto& d : dirs) {
+                // 安全早停: 本页已收满且当前目录的有效 mtime 严格早于页边界。
+                // 正确性: lastActiveMs 为消息开始时间戳, 写入提交时刻恒 ≥ 它, 即
+                // 有效 mtime ≥ lastActiveMs; 故 mtime 更早的目录其会话必然排在
+                // 边界之后, 不可能进入本页。相等时不早停: 同毫秒会话按 id 升序
+                // 排序, id 更小者仍可能排进本页
+                if (
+                    page.sessions.size() >= static_cast<size_t>(limit)
+                    && d.hintMs < page.sessions.back().lastActiveMs) {
+                    stoppedEarly = true;
+                    break;
+                }
+                SessionInfo info;
+                info.sessionId = d.dir.filename().string();
+                readSessionDirMeta(d.dir, info);
+                if (!qualifies(info.lastActiveMs, info.sessionId)) {
+                    continue;
+                }
+                page.sessions.push_back(std::move(info));
+                // 达到/超出页大小时排序维持边界不变量 (早停判断依赖 back() 为
+                // 当前页最末名); 超出部分排名低于边界不会进本页, 但确实存在,
+                // 置 overflowed 保证 hasMore 语义正确。少量 mtime 乱序由排序纠正
+                const auto want = static_cast<size_t>(limit);
+                if (page.sessions.size() >= want) {
+                    std::sort(page.sessions.begin(), page.sessions.end(), sessionNewerFirst);
+                    if (page.sessions.size() > want) {
+                        overflowed = true;
+                        page.sessions.resize(want);
+                    }
+                }
+            }
+            std::sort(page.sessions.begin(), page.sessions.end(), sessionNewerFirst);
+            // hasMore: 早停 = 边界之后还有未检查的目录; 溢出 = 检查过但有条目
+            // 被挤出本页 (两者都意味着后续页非空)
+            page.hasMore = stoppedEarly || overflowed;
+            return true;
+        },
+        [&](std::string errmsg) -> bool {
+            XX_LOGE("SessionStore: listSessionsPage failed: {}", errmsg);
+            return false;
+        }
+    );
+    return page;
 }
 
 void SessionStore::appendViewMessage(

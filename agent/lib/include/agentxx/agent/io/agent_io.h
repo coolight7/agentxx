@@ -77,6 +77,15 @@ public:
     virtual void
         requestViewMessagesPage(std::string sessionId, uint64_t beforeIndex, uint32_t count);
 
+    /// 请求分页拉取持久化会话列表 [client] (会话选择弹窗数据源)
+    /// - keyset 游标语义: 返回按最近活动时间降序排列中、排序位置严格位于游标
+    ///   (beforeMs, beforeId) 之后的至多 count 条; beforeMs <= 0 表示从最新开始
+    /// - 客户端先加载最新一页, 用户浏览到列表末尾时以上一页最后一条为游标续取,
+    ///   避免一次性加载全量会话; 服务端以 WireSessionList 回应 (携带
+    ///   totalCount/hasMore 分页元数据; 旧版服务端忽略分页参数返回全量列表)
+    virtual void
+        requestSessionListPage(int64_t beforeMs, std::string beforeId, uint32_t count);
+
     /// 发送用户输入到对端 [client]
     /// - 是否首轮由服务端自行管理; 模型切换经 requestSelectModel
     /// - 发送后通知事件接收器 (ClientEventSink::onUserInput)

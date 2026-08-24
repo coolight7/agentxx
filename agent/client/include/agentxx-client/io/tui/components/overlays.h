@@ -47,7 +47,9 @@ private:
 /// - 列表顶部固定一项 "新会话" (选中确认后创建全新会话, 不切换历史)
 /// - 列表项两行: 第一行会话名称 (title, 空时回退 sessionId), 第二行最近活动日期
 /// - Up/Down 选择, Enter/鼠标点击切换会话, Esc 关闭
-/// - 列表加载中 (sessionListLoaded == false) 显示 loading
+/// - 列表分页加载: 打开弹窗先加载最新一页; 选择项下移接近已加载列表末尾时
+///   经 ctx_.requestMoreSessions 自动预取下一页, 尾部显示加载进度提示行
+/// - 首页未到达时显示 loading (sessionListLoaded == false)
 class SessionSelectorOverlay : public ftxui::ComponentBase {
 public:
 

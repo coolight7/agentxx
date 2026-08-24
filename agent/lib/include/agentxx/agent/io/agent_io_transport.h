@@ -135,12 +135,27 @@ struct WireContextMessages {
 
 /// 客户端请求持久化会话列表 (Client -> Server): 会话选择弹窗数据源
 /// - 不携带 sessionId: 列举全部持久化会话, 与当前连接会话无关
-struct WireListSessions {};
+/// - 支持分页 (keyset 游标): 客户端先请求最新一页, 浏览到末尾时按游标续取,
+///   避免会话很多时一次性扫描/传输/渲染全量; limit == 0 为旧行为 (全量),
+///   旧客户端默认构造的空请求即走该路径, 向后兼容
+struct WireListSessions {
+    /// 游标: 仅返回排序位于该时间点之后的会话 (毫秒时间戳); <= 0 = 从最新开始
+    int64_t beforeMs = 0;
+    /// 游标平局裁决: 与 beforeMs 相同时间戳的会话按 sessionId 升序排列,
+    /// 游标取"上一页最后一条"的 (lastActiveMs, sessionId)
+    std::string beforeId;
+    /// 页大小; 0 = 全量列举 (旧行为)
+    uint32_t limit = 0;
+};
 
 /// 服务端持久化会话列表响应 (Server -> Client)
-/// - sessions 按最近活动时间降序排列 (最新在前)
+/// - sessions 按最近活动时间降序排列 (最新在前); 分页响应仅含一页
 struct WireSessionList {
     std::vector<SessionInfo> sessions;
+    /// 持久化会话总数 (供客户端展示 x/y 与判断加载完成); 旧版服务端无此字段 → 0
+    uint64_t totalCount = 0;
+    /// 是否还有未加载的更早会话; 旧版服务端无此字段 → false (视为全量响应)
+    bool hasMore = false;
 };
 
 /// 客户端请求切换当前连接的会话 (Client -> Server): 将会话端点重新绑定到

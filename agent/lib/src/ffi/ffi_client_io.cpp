@@ -215,7 +215,7 @@ void FfiClientAgentIO::onPeerMessage(agent::WireMessage msg) {
                     onSyncReply(SyncKind::ContextMessages, std::move(j));
                 }
             } else if constexpr (std::is_same_v<T, agent::WireSessionList>) {
-                auto j = agent::io::makeSessionList(m.sessions);
+                auto j = agent::io::makeSessionList(m.sessions, m.totalCount, m.hasMore);
                 if (onSyncReply) {
                     onSyncReply(SyncKind::SessionList, std::move(j));
                 }

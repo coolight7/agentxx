@@ -63,6 +63,28 @@ public:
     /// - 打开/读取失败仅记日志并跳过该目录
     std::vector<SessionInfo> listSessions();
 
+    /// 分页列举持久化会话摘要 (keyset 游标分页, 按最近活动时间降序, 最新在前)
+    ///
+    /// 背景: 会话数量可能很大, 一次性扫描/传输/渲染全量列表开销高; 客户端
+    /// (TUI 会话弹窗) 先加载最新一页, 用户浏览到末尾时按游标继续拉取。
+    /// - 游标语义: 返回排序位置严格位于 (beforeMs, beforeId) 之后的至多 limit 条
+    ///   (排序: lastActiveMs 降序, 相同时间按 sessionId 升序; 与 listSessions 一致),
+    ///   即把游标视为"上一页最后一条", 天然规避服务端活跃会话位移导致的
+    ///   offset 分页重复/遗漏问题
+    /// - beforeMs <= 0 表示从最新开始 (首页); limit == 0 等价 listSessions 全量
+    /// - 实现: 两阶段扫描 —— 阶段 1 仅 stat 各目录 session.db/-wal 的修改时间
+    ///   (不打开数据库) 获得近似活动顺序与总数; 阶段 2 按该顺序逐个打开 DB 读
+    ///   精确 meta 收集。mtime 与 lastActiveMs 强相关 (提交时刻恒 ≥ 消息开始
+    ///   时间戳) 但不完全一致 (tool 结果回填等只更新文件不改 meta), 故 mtime 仅
+    ///   作读取顺序启发、绝不据此跳过目录; 已收满一页且剩余目录的有效 mtime
+    ///   严格早于页边界时可安全早停 (更早 mtime 的会话必然排在边界之后)
+    struct SessionListPage {
+        std::vector<SessionInfo> sessions; ///< 本页条目 (已按序排列)
+        uint64_t totalCount = 0;           ///< 当前持久化会话总数 (供 x/y 展示)
+        bool     hasMore    = false;       ///< 是否可能还有未加载的更早会话
+    };
+    SessionListPage listSessionsPage(int64_t beforeMs, std::string_view beforeId, uint32_t limit);
+
     /// 追加一条展示历史消息 (事务: 消息 + msgIdCounter 一起提交)
     /// - msgIdCounter 为追加后会话的计数 (新消息 id 序号), 供重启恢复
     /// - 失败仅记录日志, 不影响内存状态

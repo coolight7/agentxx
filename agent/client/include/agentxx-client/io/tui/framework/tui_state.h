@@ -141,10 +141,19 @@ struct TUIRenderState {
     bool showContextOverlay = false;
 
     /// 持久化会话列表 (会话选择弹窗数据源, WireSessionList 响应填充)
-    /// - sessionListLoaded: false = 列表请求已发出但响应未到达 (弹窗显示 loading);
-    ///   true = 已收到响应 (列表为空则确实无持久化会话)
+    /// - 分页加载: 打开弹窗时先请求最新一页 (keyset 游标), 用户浏览到末尾时
+    ///   以上一条为游标续取; sessionList 始终保持按最近活动时间降序的已加载区间
+    /// - sessionListLoaded: false = 列表请求已发出但首页响应未到达 (弹窗显示
+    ///   loading); true = 已收到响应 (列表为空则确实无持久化会话)
     std::vector<agentxx::agent::SessionInfo> sessionList;
     bool                                     sessionListLoaded = false;
+    /// 是否还有未加载的更早会话 (WireSessionList.hasMore; 旧版服务端全量响应
+    /// 时恒为 false); 末尾空页防御: 收到空页即置 false 终止续取
+    bool     sessionListHasMore     = false;
+    /// 是否有在途的会话列表分页请求 (预取去重, 防止滚动事件高频重复请求)
+    bool     sessionListLoadingMore = false;
+    /// 持久化会话总数 (WireSessionList.totalCount; 0 = 未知, 供弹窗展示 x/y)
+    uint64_t sessionListTotalCount  = 0;
 
     std::vector<agentxx::agent::AppendComponentNotification> appendComponents;
 

@@ -33,6 +33,12 @@ struct TUICtx {
     ///   (TUIClientAgentIO::requestOlderHistory) 内部做在途去重与边界判断
     std::function<void()> requestMoreHistory;
 
+    /// 请求加载更早的持久化会话页 (会话列表分页; 线程安全)
+    /// - SessionSelectorOverlay 选择项接近已加载列表末尾时调用; 实现方
+    ///   (TUIClientAgentIO::requestNextSessionListPage) 内部做在途去重、
+    ///   hasMore 边界判断并以上一页最后一条为 keyset 游标发起请求
+    std::function<void()> requestMoreSessions;
+
     /// 当前主题 (UI 线程独占, 渲染/事件时直接读取)
     TUITheme* theme = nullptr;
 

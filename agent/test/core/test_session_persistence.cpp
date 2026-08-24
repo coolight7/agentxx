@@ -551,6 +551,145 @@ static TestResult testSanitizeThreadId() {
 }
 
 // ---------------------------------------------------------------------------
+// 会话列表 keyset 分页列举 (listSessionsPage: 按最近活动降序, 游标续取)
+// ---------------------------------------------------------------------------
+
+static TestResult testSessionListPagination() {
+    using agentxx::agent::SessionStore;
+    using V = agentxx::agent::ViewMessage;
+
+    auto root = makeTempRoot();
+    {
+        SessionStore store(root);
+
+        // 写入 7 个会话, lastActiveMs 交错; 目录创建顺序与时间顺序不同,
+        // 保证排序/分页不依赖目录迭代序。"t5"/"t6" 同为 400ms 平局对,
+        // 按 sessionId 升序稳定排列 (t5 在前)
+        auto addSession = [&store](std::string_view sid, int64_t tsMs) {
+            auto msg        = V::makeText(V::Role::User, fmt::format("msg-{}", sid));
+            msg.startTimeMs = tsMs;
+            store.appendViewMessage(sid, msg, 1);
+        };
+        addSession("t1", 700);
+        addSession("t2", 600);
+        addSession("t3", 500);
+        addSession("t5", 400);
+        addSession("t4", 300);
+        addSession("t6", 400);
+        addSession("t7", 200);
+
+        // ---- 全量基准: 降序 + 同毫秒按 id 升序 ----
+        const auto all = store.listSessions();
+        XX_TEST_EXPECT_EQ(all.size(), size_t{7});
+        if (all.size() == 7) {
+            XX_TEST_EXPECT_EQ(all[0].sessionId, std::string{"t1"});
+            XX_TEST_EXPECT_EQ(all[1].sessionId, std::string{"t2"});
+            XX_TEST_EXPECT_EQ(all[2].sessionId, std::string{"t3"});
+            XX_TEST_EXPECT_EQ(all[3].sessionId, std::string{"t5"});
+            XX_TEST_EXPECT_EQ(all[4].sessionId, std::string{"t6"});
+            XX_TEST_EXPECT_EQ(all[5].sessionId, std::string{"t4"});
+            XX_TEST_EXPECT_EQ(all[6].sessionId, std::string{"t7"});
+        }
+
+        // ---- 首页 limit=3: 最新三条 + hasMore + 总数 ----
+        auto p1 = store.listSessionsPage(0, "", 3);
+        XX_TEST_EXPECT_EQ(p1.totalCount, uint64_t{7});
+        XX_TEST_EXPECT_TRUE(p1.hasMore);
+        XX_TEST_EXPECT_EQ(p1.sessions.size(), size_t{3});
+        if (p1.sessions.size() == 3) {
+            XX_TEST_EXPECT_EQ(p1.sessions[0].sessionId, std::string{"t1"});
+            XX_TEST_EXPECT_EQ(p1.sessions[2].sessionId, std::string{"t3"});
+        }
+        // title 来自首条用户消息预览
+        if (!p1.sessions.empty()) {
+            XX_TEST_EXPECT_EQ(p1.sessions[0].title, std::string{"msg-t1"});
+        }
+
+        // ---- 游标续取至尽: 全序无重复无遗漏 ----
+        std::vector<std::string> seen;
+        auto                     cursor = p1;
+        while (!cursor.sessions.empty()) {
+            for (const auto& s : cursor.sessions) {
+                seen.push_back(s.sessionId);
+            }
+            if (!cursor.hasMore) {
+                break;
+            }
+            const auto& last = cursor.sessions.back();
+            cursor            = store.listSessionsPage(last.lastActiveMs, last.sessionId, 3);
+        }
+        XX_TEST_EXPECT_EQ(seen.size(), size_t{7});
+        if (seen.size() == 7) {
+            XX_TEST_EXPECT_EQ(seen[0], std::string{"t1"});
+            XX_TEST_EXPECT_EQ(seen[1], std::string{"t2"});
+            XX_TEST_EXPECT_EQ(seen[2], std::string{"t3"});
+            XX_TEST_EXPECT_EQ(seen[3], std::string{"t5"});
+            XX_TEST_EXPECT_EQ(seen[4], std::string{"t6"});
+            XX_TEST_EXPECT_EQ(seen[5], std::string{"t4"});
+            XX_TEST_EXPECT_EQ(seen[6], std::string{"t7"});
+        }
+
+        // ---- 游标平局边界: beforeMs 恰为某会话时间戳时排除该会话本身,
+        //      但包含同毫秒、sessionId 更大的会话 ----
+        // 游标 = (400, "t5") → 之后为 t6(400, id 更大)、t4(300)、t7(200)
+        auto ptie = store.listSessionsPage(400, "t5", 10);
+        XX_TEST_EXPECT_FALSE(ptie.hasMore);
+        XX_TEST_EXPECT_EQ(ptie.totalCount, uint64_t{7});
+        XX_TEST_EXPECT_EQ(ptie.sessions.size(), size_t{3});
+        if (ptie.sessions.size() == 3) {
+            XX_TEST_EXPECT_EQ(ptie.sessions[0].sessionId, std::string{"t6"});
+            XX_TEST_EXPECT_EQ(ptie.sessions[1].sessionId, std::string{"t4"});
+            XX_TEST_EXPECT_EQ(ptie.sessions[2].sessionId, std::string{"t7"});
+        }
+        // 页大小恰好在平局对中间截断: 首页收满后同毫秒的 t6 排在游标之后的
+        // 后续页, 游标携带 sessionId 保证不重不漏
+        auto phalf = store.listSessionsPage(0, "", 4);
+        if (phalf.sessions.size() == 4) {
+            XX_TEST_EXPECT_EQ(phalf.sessions[3].sessionId, std::string{"t5"});
+            XX_TEST_EXPECT_TRUE(phalf.hasMore);
+            auto ptail = store.listSessionsPage(
+                phalf.sessions.back().lastActiveMs, phalf.sessions.back().sessionId, 4
+            );
+            XX_TEST_EXPECT_FALSE(ptail.hasMore);
+            if (ptail.sessions.size() == 3) {
+                XX_TEST_EXPECT_EQ(ptail.sessions[0].sessionId, std::string{"t6"});
+                XX_TEST_EXPECT_EQ(ptail.sessions[1].sessionId, std::string{"t4"});
+                XX_TEST_EXPECT_EQ(ptail.sessions[2].sessionId, std::string{"t7"});
+            }
+        }
+
+        // ---- limit=0 全量路径等价 listSessions ----
+        auto pall = store.listSessionsPage(0, "", 0);
+        XX_TEST_EXPECT_FALSE(pall.hasMore);
+        XX_TEST_EXPECT_EQ(pall.totalCount, uint64_t{7});
+        XX_TEST_EXPECT_EQ(pall.sessions.size(), all.size());
+
+        // ---- 空根目录 (从未持久化): 空页无更多 ----
+        auto emptyRoot = makeTempRoot();
+        {
+            SessionStore emptyStore(emptyRoot);
+            auto         pe = emptyStore.listSessionsPage(0, "", 5);
+            XX_TEST_EXPECT_TRUE(pe.sessions.empty());
+            XX_TEST_EXPECT_FALSE(pe.hasMore);
+            XX_TEST_EXPECT_EQ(pe.totalCount, uint64_t{0});
+        }
+        fs::remove_all(emptyRoot);
+
+        // ---- 追加新会话后排最前, 已有游标序列不受影响 ----
+        addSession("t0-new", 800);
+        auto pn = store.listSessionsPage(0, "", 2);
+        XX_TEST_EXPECT_EQ(pn.totalCount, uint64_t{8});
+        if (pn.sessions.size() == 2) {
+            XX_TEST_EXPECT_EQ(pn.sessions[0].sessionId, std::string{"t0-new"});
+            XX_TEST_EXPECT_EQ(pn.sessions[1].sessionId, std::string{"t1"});
+        }
+        XX_TEST_EXPECT_TRUE(pn.hasMore);
+    }
+    fs::remove_all(root);
+    return TestResult{};
+}
+
+// ---------------------------------------------------------------------------
 // 端到端: 真实 BaseAgent (模拟 LLM Server) + 持久化, 重启后恢复会话
 // ---------------------------------------------------------------------------
 
@@ -700,6 +839,7 @@ asio::awaitable<TestResult> run_session_persistence_tests() {
     testSessionStoreIntegration();
     testMiddlewareShareStorePersistence();
     testSanitizeThreadId();
+    testSessionListPagination();
 
     // E2E 需要独立 io_context (BaseAgent 内部有自身的 io 循环)
     asio::io_context io;

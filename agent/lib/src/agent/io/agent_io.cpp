@@ -82,6 +82,10 @@ void AgentIOBase::requestViewMessagesPage(
     sendToPeer(WireGetViewMessages{std::move(sessionId), beforeIndex, count});
 }
 
+void AgentIOBase::requestSessionListPage(int64_t beforeMs, std::string beforeId, uint32_t count) {
+    sendToPeer(WireListSessions{beforeMs, std::move(beforeId), count});
+}
+
 void AgentIOBase::sendUserInput(std::string sessionId, std::string text) {
     // 通知事件接收器 (client 插件系统订阅用户输入事件)
     emitEventSink([&](ClientEventSink& sink) {

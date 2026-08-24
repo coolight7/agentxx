@@ -415,6 +415,11 @@ void TUIClientAgentIO::start() {
         ctx_.requestMoreHistory = [this] {
             requestOlderHistory();
         };
+        // 会话列表分页钩子: SessionSelectorOverlay 选择项接近已加载列表末尾时
+        // 触发预取下一页 (requestNextSessionListPage 内部做在途去重与边界判断)
+        ctx_.requestMoreSessions = [this] {
+            requestNextSessionListPage();
+        };
         ctx_.theme         = &theme_;
         ctx_.sessionId     = currentThreadId();
         ctx_.remoteUrl     = remoteUrl_;
@@ -1061,12 +1066,17 @@ void TUIClientAgentIO::openSessionSelector() {
         postRedraw();
         return;
     }
-    // 请求服务端持久化会话列表 (WireSessionList 异步回填 sharedState);
-    // 重置 loaded 标志使弹窗先显示 loading
+    // 请求服务端持久化会话列表首页 (WireSessionList 异步回填 sharedState);
+    // 重置分页状态使弹窗先显示 loading; keyset 游标 beforeMs=0 表示从最新开始,
+    // 仅取 kSessionListPageSize 条, 浏览到末尾时经 ctx.requestMoreSessions 续取
     sharedState_.mutate([](TUIRenderState& st) {
-        st.sessionListLoaded = false;
+        st.sessionList.clear();
+        st.sessionListLoaded      = false;
+        st.sessionListHasMore     = false;
+        st.sessionListLoadingMore = false;
+        st.sessionListTotalCount  = 0;
     });
-    sendToPeer(agentxx::agent::WireListSessions{});
+    requestSessionListPage(0, "", kSessionListPageSize);
 
     auto overlay = std::make_shared<SessionSelectorOverlay>(ctx_);
     overlay->onClose([this] {
@@ -1268,14 +1278,8 @@ void TUIClientAgentIO::onPeerMessage(agentxx::agent::WireMessage msg) {
                 });
                 postRedraw();
             } else if constexpr (std::is_same_v<T, agentxx::agent::WireSessionList>) {
-                // 会话选择弹窗数据源: 回填持久化会话列表 (服务端已按最近活动降序)
-                {
-                    std::lock_guard<std::mutex> lock(sharedState_.mutex());
-                    auto&                       st = sharedState_.mutableState();
-                    st.sessionList                 = m.sessions;
-                    st.sessionListLoaded           = true;
-                }
-                postRedraw();
+                // 会话选择弹窗数据源: 分页响应回填/追加到已加载会话列表
+                onSessionListPage(m);
             } else if constexpr (std::is_same_v<T, agentxx::agent::WireMessageQueueUpdate>) {
                 onMessageQueueUpdate(m);
             } else if constexpr (std::is_same_v<T, agentxx::agent::WireViewMessagesPage>) {
@@ -1476,6 +1480,73 @@ void TUIClientAgentIO::requestOlderHistory() {
         beforeIndex       = st.historyWindowStart;
     }
     requestViewMessagesPage(currentThreadId(), beforeIndex, kHistoryPageSize);
+}
+
+// ---------------------------------------------------------------------------
+// 会话列表分页 (client 线程)
+//
+// 会话选择弹窗数据源按 keyset 游标分页加载: 打开弹窗时请求最新一页, 用户浏览
+// 到已加载列表末尾时以上一页最后一条为游标续取 (SessionSelectorOverlay 经
+// ctx_.requestMoreSessions 触发), 避免会话很多时一次性加载/渲染全量。
+// ---------------------------------------------------------------------------
+
+void TUIClientAgentIO::onSessionListPage(const agentxx::agent::WireSessionList& resp) {
+    {
+        std::lock_guard<std::mutex> lock(sharedState_.mutex());
+        auto&                       st = sharedState_.mutableState();
+        // 在途标志复位 (无论本页是否可用, 请求生命周期已结束)
+        st.sessionListLoadingMore = false;
+        // 旧版服务端兼容: 响应无分页元数据 (totalCount==0 && !hasMore) 时视为
+        // 全量列表, 直接替换本地列表
+        const bool legacyFullList = (resp.totalCount == 0 && !resp.hasMore);
+        if (!st.sessionListLoaded || legacyFullList || st.sessionList.empty()) {
+            // 首页 / 全量响应: 替换
+            st.sessionList = resp.sessions;
+        } else {
+            // 后续页: 追加 (服务端保证不与已收页重叠; 双重防御跳过重复项)
+            for (const auto& s : resp.sessions) {
+                bool dup = false;
+                for (const auto& e : st.sessionList) {
+                    if (e.sessionId == s.sessionId) {
+                        dup = true;
+                        break;
+                    }
+                }
+                if (!dup) {
+                    st.sessionList.push_back(s);
+                }
+            }
+        }
+        st.sessionListLoaded = true;
+        if (resp.totalCount > 0) {
+            st.sessionListTotalCount = resp.totalCount;
+        }
+        // hasMore 边界: 服务端标志 + 空页防御 (keyset 边界处可能多给一页空响应,
+        // 此时终止续取) + 已加载数达到总数时收敛
+        st.sessionListHasMore =
+            resp.hasMore && !resp.sessions.empty()
+            && (st.sessionListTotalCount == 0 || st.sessionList.size() < st.sessionListTotalCount);
+    }
+    postRedraw();
+}
+
+void TUIClientAgentIO::requestNextSessionListPage() {
+    int64_t     beforeMs = 0;
+    std::string beforeId;
+    {
+        std::lock_guard<std::mutex> lock(sharedState_.mutex());
+        auto&                       st = sharedState_.mutableState();
+        // 边界判断 + 在途去重 (UI 线程滚动事件可能高频触发)
+        if (!st.sessionListLoaded || !st.sessionListHasMore || st.sessionListLoadingMore
+            || st.sessionList.empty()) {
+            return;
+        }
+        st.sessionListLoadingMore = true;
+        // 游标取已加载列表最后一条 (排序最旧), 服务端返回严格排在其后的至多一页
+        beforeMs                  = st.sessionList.back().lastActiveMs;
+        beforeId                  = st.sessionList.back().sessionId;
+    }
+    requestSessionListPage(beforeMs, std::move(beforeId), kSessionListPageSize);
 }
 
 // ---------------------------------------------------------------------------

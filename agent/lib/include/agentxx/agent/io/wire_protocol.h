@@ -649,10 +649,31 @@ inline neograph::json makeContextMessages(const neograph::json& messages) {
 // ---------------------------------------------------------------------------
 
 /// 客户端请求持久化会话列表 (无载荷; 列举全部持久化会话)
-inline neograph::json makeListSessions() {
-    return neograph::json{
+/// - 分页字段可选: beforeMs/beforeId/limit 均缺省时为旧行为 (全量列举),
+///   与旧版服务端互通
+inline neograph::json
+    makeListSessions(int64_t beforeMs = 0, std::string_view beforeId = "", uint32_t limit = 0) {
+    neograph::json j = {
         {"type", MsgType::ListSessions},
     };
+    if (beforeMs > 0) {
+        j["beforeMs"] = beforeMs;
+    }
+    if (!beforeId.empty()) {
+        j["beforeId"] = beforeId;
+    }
+    if (limit > 0) {
+        j["limit"] = limit;
+    }
+    return j;
+}
+
+inline WireListSessions listSessionsFromJson(const neograph::json& j) {
+    WireListSessions m;
+    m.beforeMs = j.value("beforeMs", int64_t{0});
+    m.beforeId = j.value("beforeId", std::string{});
+    m.limit    = j.value("limit", uint32_t{0});
+    return m;
 }
 
 inline neograph::json sessionInfoToJson(const SessionInfo& s) {
@@ -674,7 +695,11 @@ inline SessionInfo sessionInfoFromJson(const neograph::json& j) {
     return s;
 }
 
-inline neograph::json makeSessionList(const std::vector<SessionInfo>& sessions) {
+inline neograph::json makeSessionList(
+    const std::vector<SessionInfo>& sessions,
+    uint64_t                        totalCount = 0,
+    bool                            hasMore    = false
+) {
     neograph::json j = {
         {"type", MsgType::SessionList}
     };
@@ -683,17 +708,27 @@ inline neograph::json makeSessionList(const std::vector<SessionInfo>& sessions) 
         arr.push_back(sessionInfoToJson(s));
     }
     j["sessions"] = std::move(arr);
+    // 分页元数据 (可选携带; 缺省时旧版客户端按全量列表处理)
+    if (totalCount > 0) {
+        j["totalCount"] = totalCount;
+    }
+    if (hasMore) {
+        j["hasMore"] = true;
+    }
     return j;
 }
 
-inline std::vector<SessionInfo> sessionListFromJson(const neograph::json& j) {
-    std::vector<SessionInfo> out;
-    auto                     arr = j.value("sessions", neograph::json::array());
+inline WireSessionList sessionListFromJson(const neograph::json& j) {
+    WireSessionList out;
+    auto            arr = j.value("sessions", neograph::json::array());
     if (arr.is_array()) {
         for (const auto& item : arr) {
-            out.push_back(sessionInfoFromJson(item));
+            out.sessions.push_back(sessionInfoFromJson(item));
         }
     }
+    // 分页元数据 (旧版服务端不携带 → 0/false, 客户端按全量响应处理)
+    out.totalCount = j.value("totalCount", uint64_t{0});
+    out.hasMore    = j.value("hasMore", false);
     return out;
 }
 

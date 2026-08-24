@@ -57,9 +57,9 @@ if %ERRORLEVEL% neq 0 (
     exit /b 1
 )
 
-rem parallel build jobs, default 6; set AGENTXX_BUILD_PARALLEL to override
+rem parallel build jobs, default 4; set AGENTXX_BUILD_PARALLEL to override
 rem e.g. set AGENTXX_BUILD_PARALLEL=12 && windows_debug_build.bat
-if "%AGENTXX_BUILD_PARALLEL%"=="" set AGENTXX_BUILD_PARALLEL=6
+if "%AGENTXX_BUILD_PARALLEL%"=="" set AGENTXX_BUILD_PARALLEL=4
 
 cmake --build "%build_dir%" --config Debug --parallel %AGENTXX_BUILD_PARALLEL%
 if %ERRORLEVEL% neq 0 (

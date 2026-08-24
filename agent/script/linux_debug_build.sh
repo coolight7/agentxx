@@ -17,10 +17,10 @@ if command -v ccache >/dev/null 2>&1; then
     export CCACHE_BASEDIR="${CCACHE_BASEDIR:-$(cd "$src_dir" && pwd)}"
 fi
 
-# 并行编译任务数: 默认取 CPU 核数。
+# 并行编译任务数: 默认取 4
 # 内存不足/频繁编译器崩溃(ICE) 时调小，例如:
 #   AGENTXX_BUILD_PARALLEL=4 ./linux_debug_build.sh
-AGENTXX_BUILD_PARALLEL="${AGENTXX_BUILD_PARALLEL:-$(nproc)}"
+AGENTXX_BUILD_PARALLEL="${AGENTXX_BUILD_PARALLEL:=4}"
 
 BOOST_ROOT=$(cd "$src_dir/third_party/boost-linux-build-debug/" && pwd)
 OPENSSL_ROOT_DIR=$(cd "$src_dir/third_party/OpenSSL-linux-build/" && pwd)

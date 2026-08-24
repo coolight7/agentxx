@@ -81,6 +81,10 @@ static bool writeTextFile(const std::filesystem::path& p, std::string_view conte
 }
 
 /// 拷贝示例插件动态库到目标文件 (返回是否成功)
+/// - 目标名按 Linux 习惯书写 (.so), 与 manifest entry 一致; Windows/macOS 下
+///   按平台修正扩展名 (.dll/.dylib), 与 lib 端 resolvePluginEntryPath 的
+///   入口平台化映射保持一致, 否则 Windows 下按 .dll 查找会因文件不存在而
+///   LoadLibrary 报 error 126
 static bool copyExampleLib(const std::filesystem::path& target) {
     namespace fs  = std::filesystem;
     auto        ex = findExamplePluginDir();
@@ -88,10 +92,21 @@ static bool copyExampleLib(const std::filesystem::path& target) {
     if (ex.empty()) {
         return false;
     }
+    // 平台化目标扩展名 (manifest 按 Linux 书写, 见 resolvePluginEntryPath)
+    auto dst = target.string();
+#if defined(_WIN32)
+    if (dst.ends_with(".so")) {
+        dst.replace(dst.size() - 3, 3, ".dll");
+    }
+#elif defined(__APPLE__)
+    if (dst.ends_with(".so")) {
+        dst.replace(dst.size() - 3, 3, ".dylib");
+    }
+#endif
     for (fs::directory_iterator it(ex, ec), end; it != end; it.increment(ec)) {
         auto ext = it->path().extension().string();
         if (ext == ".so" || ext == ".dll" || ext == ".dylib") {
-            fs::copy_file(it->path(), target, fs::copy_options::overwrite_existing, ec);
+            fs::copy_file(it->path(), dst, fs::copy_options::overwrite_existing, ec);
             return !ec;
         }
     }

@@ -392,16 +392,44 @@ static asio::awaitable<void> test_remote_protocol_roundtrip() {
     }
     {
         agentxx::agent::WireListSessions ls{};
+        ls.beforeMs = 1712345678000;
+        ls.beforeId = "t9";
+        ls.limit    = 50;
         auto back = WsAgentIOTransport::deserialize(WsAgentIOTransport::serialize(WireMessage{ls}));
         XX_TEST_EXPECT_TRUE(back.has_value());
         if (back) {
-            XX_TEST_EXPECT_TRUE(std::get_if<agentxx::agent::WireListSessions>(&*back) != nullptr);
+            auto* r = std::get_if<agentxx::agent::WireListSessions>(&*back);
+            XX_TEST_EXPECT_TRUE(r != nullptr);
+            if (r) {
+                // 分页字段 (keyset 游标 + 页大小) 经 WS JSON 往返保持
+                XX_TEST_EXPECT_EQ(r->beforeMs, int64_t{1712345678000});
+                XX_TEST_EXPECT_EQ(r->beforeId, std::string("t9"));
+                XX_TEST_EXPECT_EQ(r->limit, uint32_t{50});
+            }
+        }
+    }
+    {
+        agentxx::agent::WireListSessions legacy{};
+        auto back
+            = WsAgentIOTransport::deserialize(WsAgentIOTransport::serialize(WireMessage{legacy}));
+        XX_TEST_EXPECT_TRUE(back.has_value());
+        if (back) {
+            // 缺省请求 (全量列举): 分页字段序列化时省略, 反序列化为默认值
+            auto* r = std::get_if<agentxx::agent::WireListSessions>(&*back);
+            XX_TEST_EXPECT_TRUE(r != nullptr);
+            if (r) {
+                XX_TEST_EXPECT_EQ(r->beforeMs, int64_t{0});
+                XX_TEST_EXPECT_TRUE(r->beforeId.empty());
+                XX_TEST_EXPECT_EQ(r->limit, uint32_t{0});
+            }
         }
     }
     {
         agentxx::agent::WireSessionList sl;
         sl.sessions.push_back(agentxx::agent::SessionInfo{"t1", "title-1", 1712345678000});
         sl.sessions.push_back(agentxx::agent::SessionInfo{"t2", "", 0});
+        sl.totalCount = 42;
+        sl.hasMore    = true;
         auto back = WsAgentIOTransport::deserialize(WsAgentIOTransport::serialize(WireMessage{sl}));
         XX_TEST_EXPECT_TRUE(back.has_value());
         if (back) {
@@ -417,6 +445,9 @@ static asio::awaitable<void> test_remote_protocol_roundtrip() {
                     XX_TEST_EXPECT_TRUE(r->sessions[1].title.empty());
                     XX_TEST_EXPECT_EQ(r->sessions[1].lastActiveMs, int64_t{0});
                 }
+                // 分页元数据往返
+                XX_TEST_EXPECT_EQ(r->totalCount, uint64_t{42});
+                XX_TEST_EXPECT_TRUE(r->hasMore);
             }
         }
     }

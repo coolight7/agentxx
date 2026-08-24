@@ -325,7 +325,9 @@ void SessionServerAgentIO::onPeerMessage(WireMessage msg) {
             } else if constexpr (std::is_same_v<T, WireListSessions>) {
                 // 客户端请求持久化会话列表 (会话选择弹窗数据源):
                 // 目录扫描 + SQLite 读取属阻塞 I/O, 卸载到 threadPool 执行,
-                // 避免阻塞 agent io 线程; 完成后经 shared_from_this 回填响应
+                // 避免阻塞 agent io 线程; 完成后经 shared_from_this 回填响应。
+                // 分页: limit > 0 时走 keyset 游标分页查询 (仅返回一页),
+                // limit == 0 为旧行为 (全量列举, 兼容旧客户端)
                 auto agent = agent_.lock();
                 if (!agent || !agent->agentContext
                     || !agent->agentContext->sessions->sessionStore) {
@@ -336,20 +338,43 @@ void SessionServerAgentIO::onPeerMessage(WireMessage msg) {
                 auto self         = shared_from_this();
                 asio::co_spawn(
                     ex_,
-                    [self, sessionStore, agent]() -> asio::awaitable<void> {
-                        std::vector<SessionInfo> sessions;
+                    [self, sessionStore, agent, req = std::move(m)]() -> asio::awaitable<void> {
+                        WireSessionList resp;
                         if (agent->agentContext->threadPool) {
-                            sessions
-                                = co_await agentxx::util::offloadAsync<std::vector<SessionInfo>>(
-                                    *agent->agentContext->threadPool,
-                                    [sessionStore]() -> asio::awaitable<std::vector<SessionInfo>> {
-                                        co_return sessionStore->listSessions();
+                            resp = co_await agentxx::util::offloadAsync<WireSessionList>(
+                                *agent->agentContext->threadPool,
+                                [sessionStore, req]() -> asio::awaitable<WireSessionList> {
+                                    if (req.limit > 0) {
+                                        // keyset 游标分页: 仅返回一页 + 总数/续取标志
+                                        const auto p = sessionStore->listSessionsPage(
+                                            req.beforeMs,
+                                            req.beforeId,
+                                            req.limit
+                                        );
+                                        co_return WireSessionList{
+                                            std::move(p.sessions), p.totalCount, p.hasMore
+                                        };
                                     }
-                                );
+                                    // 旧行为全量列举 (totalCount/hasMore 旧客户端不消费)
+                                    auto sessions = sessionStore->listSessions();
+                                    co_return WireSessionList{
+                                        std::move(sessions), 0, false
+                                    };
+                                }
+                            );
                         } else {
-                            sessions = sessionStore->listSessions();
+                            if (req.limit > 0) {
+                                const auto p = sessionStore->listSessionsPage(
+                                    req.beforeMs,
+                                    req.beforeId,
+                                    req.limit
+                                );
+                                resp = WireSessionList{std::move(p.sessions), p.totalCount, p.hasMore};
+                            } else {
+                                resp = WireSessionList{sessionStore->listSessions(), 0, false};
+                            }
                         }
-                        self->sendToPeer(WireSessionList{std::move(sessions)});
+                        self->sendToPeer(std::move(resp));
                     },
                     asio::detached
                 );

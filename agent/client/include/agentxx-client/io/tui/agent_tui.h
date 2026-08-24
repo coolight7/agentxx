@@ -361,6 +361,18 @@ private:
     /// 历史分页每页条数 (与服务端 SessionServerAgentIO 的默认兜底一致)
     static constexpr uint32_t kHistoryPageSize = 100;
 
+    // ---- 会话列表分页 (会话选择弹窗数据源, keyset 游标按最近活动降序) ----
+
+    /// 会话列表页响应处理 (client 线程): 首页/全量响应替换本地列表, 后续页追加,
+    /// 更新 totalCount/hasMore 分页元数据 (旧版服务端全量响应按替换处理)
+    void onSessionListPage(const agentxx::agent::WireSessionList& resp);
+    /// 请求下一页会话列表 (ctx_.requestMoreSessions 入口; UI 线程触发):
+    /// - sessionListLoadingMore 在途去重; sessionListHasMore 边界判断
+    /// - 游标取已加载列表最后一条的 (lastActiveMs, sessionId)
+    void requestNextSessionListPage();
+    /// 会话列表分页每页条数 (首屏一页即可覆盖弹窗可视区域数倍, 减少请求次数)
+    static constexpr uint32_t kSessionListPageSize = 50;
+
     /// 将 UI 线程独占的组件操作 (弹窗开关/消息列表状态等) 投递到 UI 线程执行。
     /// client 线程 (onDelta/onSync/onPeerMessage) 不得直接触碰组件树
     /// (modal_/messageList_ 等由 UI 线程独占), 必须经本接口排队,
