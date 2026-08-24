@@ -2,13 +2,14 @@
  * libexample_js.so —— example_js 插件的 C++ 壳 (统一插件模型示例)
  *
  * 所有插件统一为 C++ 插件: 本壳是 example_js 的 C++ 实现部分,
- * 脚本能力经能力调用 (invoke_capability) 委派给 interpreter 引擎插件
- * (agentxx_javascript_engine), 宿主不参与脚本管理。
+ * 脚本能力经能力调用 (agentxx.agent.capabilities 接口表 invoke_capability)
+ * 委派给 interpreter 引擎插件 (agentxx_javascript_engine), 宿主不参与脚本管理。
  *
  * 加载流程 (entry):
- *   1. 检查能力 interpreter.js 可用 (manifest depends 已保证, 此处防御)
- *   2. get_own_info 拿自身 name/path → 推导同目录 plugin.js
- *   3. invoke_capability("interpreter.js", "load", {name, path})
+ *   1. COM 风格接口表查询: 一次性查询缓存全部已知接口表
+ *   2. 检查能力 interpreter.js 可用 (manifest depends 已保证, 此处防御)
+ *   3. get_own_info 拿自身 name/path → 推导同目录 plugin.js
+ *   4. invoke_capability("interpreter.js", "load", {name, path})
  *      → 引擎执行脚本; 脚本内 agentxx.registerTool 等经本壳 host
  *        注册到本插件实例 (宿主 detachAll 统一清理)
  *
@@ -18,14 +19,17 @@
  *     释放对应 JSContext (投递式)
  */
 #include "agentxx/plugin/plugin_api.h"
+#include "agentxx/plugin/plugin_iface_helper.h"
 
 #include <cstdio>
 #include <cstring>
 #include <string>
 
 static const AgentxxHost* g_host = nullptr;
-static std::string        g_name; ///< 本插件名
-static std::string        g_dir;  ///< 本插件目录
+/// 宿主接口表缓存 (entry 时 AgentIfaces::query 一次查询; 进程级静态数据)
+static agentxx::plugin::AgentIfaces g_if{};
+static std::string                  g_name; ///< 本插件名
+static std::string                  g_dir;  ///< 本插件目录
 
 /// 库路径所在目录
 static std::string dirOf(const std::string& path) {
@@ -57,22 +61,31 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
     agentxx_plugin_entry(const AgentxxHost* host, void** plugin_ctx) {
     (void)plugin_ctx;
     g_host = host;
-    if (!host->vtable->has_capability(host, AGENTXX_SV("interpreter.js"))) {
-        host->vtable
-            ->log(host, 4, AGENTXX_SV("example_js: interpreter.js capability not available"));
+    // COM 风格接口表查询: entry 内一次性查询全部已知 IID 并缓存
+    static const agentxx::plugin::AgentIfaces s_if = agentxx::plugin::AgentIfaces::query(host);
+    g_if = s_if;
+    if (!s_if.capabilities || !s_if.plugins || !s_if.json || !s_if.log) {
+        return -1; // 核心依赖的接口表缺失 (宿主过简), 无法工作
+    }
+    auto logE = [&](const std::string& msg) {
+        s_if.log->log(host, 4, agentxx_plugin_sv(msg.data(), msg.size()));
+    };
+
+    if (!s_if.capabilities->has_capability(host, AGENTXX_SV("interpreter.js"))) {
+        logE("example_js: interpreter.js capability not available");
         return -1;
     }
 
     // 自身信息: name + 库路径 (推导插件目录); 字段解析经宿主 json_get_string
     // (对转义字符/嵌套结构可靠, 替代手写字符串扫描)
-    char* info = host->vtable->get_own_info(host);
+    char* info = s_if.plugins->get_own_info(host);
     if (!info) {
-        host->vtable->log(host, 4, AGENTXX_SV("example_js: get_own_info failed"));
+        logE("example_js: get_own_info failed");
         return -1;
     }
     auto field = [&](const char* key) -> std::string {
         char* v
-            = host->vtable->json_get_string(host, agentxx_plugin_sv_cstr(info), AGENTXX_SV(key));
+            = s_if.json->json_get_string(host, agentxx_plugin_sv_cstr(info), AGENTXX_SV(key));
         if (!v) {
             return {};
         }
@@ -84,7 +97,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
     std::string name    = field("name");
     host->vtable->free(info);
     if (name.empty() || libPath.empty()) {
-        host->vtable->log(host, 4, AGENTXX_SV("example_js: own info invalid"));
+        logE("example_js: own info invalid");
         return -1;
     }
     g_name = name;
@@ -106,9 +119,9 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
 
     // 委派加载脚本 (经能力调用 → 引擎执行; 脚本内注册动作挂到本插件实例)
     // - args 经 json_escape 转义字段值, 防止路径含引号/反斜杠破坏 JSON
-    char* escName = host->vtable->json_escape(host, agentxx_plugin_sv(name.data(), name.size()));
+    char* escName = s_if.json->json_escape(host, agentxx_plugin_sv(name.data(), name.size()));
     char* escPath
-        = host->vtable->json_escape(host, agentxx_plugin_sv(scriptPath.data(), scriptPath.size()));
+        = s_if.json->json_escape(host, agentxx_plugin_sv(scriptPath.data(), scriptPath.size()));
     std::string args  = "{\"name\":";
     args             += escName ? escName : "\"\"";
     args             += ",\"path\":";
@@ -121,7 +134,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
         host->vtable->free(escPath);
     }
     char* err  = nullptr;
-    char* resp = host->vtable->invoke_capability(
+    char* resp = s_if.capabilities->invoke_capability(
         host,
         AGENTXX_SV("interpreter.js"),
         AGENTXX_SV("load"),
@@ -131,7 +144,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
     if (!resp) {
         std::string msg  = "example_js: script load failed: ";
         msg             += err ? err : "?";
-        host->vtable->log(host, 4, agentxx_plugin_sv(msg.data(), msg.size()));
+        logE(msg);
         if (err) {
             host->vtable->free(err);
         }
@@ -139,19 +152,19 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
     }
     host->vtable->free(resp);
     std::string okMsg = "example_js: script loaded (" + scriptPath + ")";
-    host->vtable->log(host, 2, agentxx_plugin_sv(okMsg.data(), okMsg.size()));
+    s_if.log->log(host, 2, agentxx_plugin_sv(okMsg.data(), okMsg.size()));
     return 0;
 }
 
 extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_unload(void* plugin_ctx) {
     (void)plugin_ctx;
-    if (!g_host || g_name.empty()) {
+    if (!g_host || !g_if.capabilities || g_name.empty()) {
         return;
     }
     // 通知引擎释放本插件的 JSContext (宿主已先 detachAll 摘除全部注册)
     std::string args = "{\"name\":\"" + g_name + "\"}";
     char*       err  = nullptr;
-    char*       resp = g_host->vtable->invoke_capability(
+    char*       resp = g_if.capabilities->invoke_capability(
         g_host,
         AGENTXX_SV("interpreter.js"),
         AGENTXX_SV("unload"),

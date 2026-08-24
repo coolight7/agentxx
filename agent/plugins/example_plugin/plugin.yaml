@@ -3,3 +3,14 @@ version: 1.0.0
 description: "Example native plugin"
 entry: libexample_plugin.so
 depends:
+# ---- 接口协商示例 ----
+# - require 声明 agentxx.client.command (斜杠命令输入管线): 无命令输入面的宿主
+#   (位未置/清单未声明) 将跳过本插件, 而非加载后半失效
+# - optional 声明 status_item/toast: 缺失仅警告, 插件注册时降级
+interfaces:
+  require:
+    - agentxx.agent.core
+    - agentxx.client.command
+  optional:
+    - agentxx.client.status_item
+    - agentxx.client.toast

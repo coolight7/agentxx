@@ -3,3 +3,11 @@ version: 1.0.0
 description: "CodeGraph code analysis: symbol search/context/callers/callees/impact/index/status/path"
 entry: libagentxx_codegraph.so
 depends:
+# ---- 接口协商 (按前缀归属侧: agent.* 仅 agent 侧检查, client.* 仅 client 侧) ----
+# - agentxx.agent.core: 工具/钩子/事件核心接口 (= api_version 核心, agent 宿主恒支持)
+# - agentxx.client.info_section: 可选 —— CLI 无 Info 栏时注册失败降级 (仅数据不渲染)
+interfaces:
+  require:
+    - agentxx.agent.core
+  optional:
+    - agentxx.client.info_section

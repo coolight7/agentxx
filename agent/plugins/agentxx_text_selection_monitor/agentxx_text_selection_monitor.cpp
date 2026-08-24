@@ -8,6 +8,7 @@
 // - 非 Windows 平台为 no-op (start 返回失败), 工具仍可查询状态
 #include "fmt/format.h"
 #include "text_selection_monitor.h"
+#include "agentxx/plugin/plugin_iface_helper.h"
 #include "text_selection_monitor_plugin.h"
 #include <chrono>
 #include <cstdint>
@@ -47,10 +48,10 @@ const char* sourceName(agentxx::expand::TextSource s) {
 
 /// 转义字符串为 JSON 字面量 (经宿主 vtable json_escape)
 std::string jsonEscape(const std::string& s) {
-    if (!g_host || !g_host->vtable || !g_host->vtable->json_escape || s.empty()) {
+    if (!g_host || !g_if.json || !g_if.json->json_escape || s.empty()) {
         return "\"\"";
     }
-    char* esc = g_host->vtable->json_escape(g_host, agentxx_plugin_sv(s.data(), s.size()));
+    char* esc = g_if.json->json_escape(g_host, agentxx_plugin_sv(s.data(), s.size()));
     if (!esc) {
         return "\"\"";
     }
@@ -74,7 +75,7 @@ struct TextSelectionHolder {
             monitor_.setDebounceMs(debounceMs);
         }
         monitor_.addListener([](const agentxx::expand::TextSelectionEvent& evt) {
-            if (!g_host || !g_host->vtable || !g_host->vtable->publish) {
+            if (!g_host || !g_if.events || !g_if.events->publish) {
                 return;
             }
             auto tsMs = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -87,7 +88,7 @@ struct TextSelectionHolder {
                 jsonEscape(sourceName(evt.source)),
                 tsMs
             );
-            g_host->vtable->publish(
+            g_if.events->publish(
                 g_host,
                 AGENTXX_SV("agentxx_text_selection_monitor.selection"),
                 agentxx_plugin_sv(payload.data(), payload.size())
@@ -200,7 +201,8 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                      "(agentxx_text_selection_monitor.selection).");
     spec.parameters_json = agentxx_plugin_sv(kSchema.data(), kSchema.size());
     spec.execute         = textSelectionExecute;
-    if (host->vtable->register_tool(host, &spec) != 0) {
+    if (!g_if.tools || !g_if.tools->register_tool
+        || g_if.tools->register_tool(host, &spec) != 0) {
         pluginLog(3, "agentxx_text_selection_monitor: register tool failed");
         return -1;
     }
@@ -212,7 +214,8 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
 extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_unload(void* /*plugin_ctx*/) {
     TextSelectionHolder::instance().stop();
     if (g_host && g_host->vtable) {
-        g_host->vtable->unregister_tool(g_host, AGENTXX_SV("agentxx_text_selection_monitor"));
+        if (g_if.tools && g_if.tools->unregister_tool)
+            g_if.tools->unregister_tool(g_host, AGENTXX_SV("agentxx_text_selection_monitor"));
     }
     pluginLog(2, "agentxx_text_selection_monitor unloaded");
 }

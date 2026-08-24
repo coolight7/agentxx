@@ -3,6 +3,10 @@ version: 1.0.0
 description: "Example plugin contributing skill/memory/mcp resources"
 entry: libexample_resources.so
 depends:
+# 接口协商: 会话资源注册 (skill/memory/mcp) 属核心接口范围
+interfaces:
+  require:
+    - agentxx.agent.core
 # ---- 会话资源声明段 (v8; 相对插件目录解析, entry 成功后由宿主应用) ----
 # - 与主配置 yaml 冲突时跳过并告警 (主程序 yaml 优先)
 skill:

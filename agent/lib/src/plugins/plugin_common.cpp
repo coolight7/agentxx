@@ -5,6 +5,7 @@
  */
 #include "agentxx/plugin/plugin_common.h"
 
+#include "agentxx/plugin/client_plugin_api.h"
 #include "agentxx/util/log.h"
 #include "yaml-cpp/yaml.h"
 
@@ -39,7 +40,8 @@ bool parsePluginManifest(
     std::string&                 entry,
     std::vector<std::string>&    depends,
     std::vector<std::string>&    optionalDepends,
-    PluginManifestResources*     resources
+    PluginManifestResources*     resources,
+    PluginManifestInterfaces*    interfaces
 ) {
     auto            yamlPath = dir / "plugin.yaml";
     std::error_code ec;
@@ -139,6 +141,39 @@ bool parsePluginManifest(
                 }
             }
         }
+        // ---- 接口声明段 (require/optional; 见 PluginManifestInterfaces) ----
+        // 段缺失/非法项跳过并告警, 不影响 manifest 合法性 (声明是可选增强);
+        // 名称仅做非空校验, 语义 (前缀归属/宿主支持集比对) 由加载路径的
+        // checkInterfacesForSide 处理 —— 解析与协商解耦, 第三方前缀天然合法
+        if (interfaces) {
+            *interfaces = PluginManifestInterfaces{};
+            auto readList = [&yamlPath](const YAML::Node&      section,
+                                        std::vector<std::string>& out,
+                                        std::string_view          what) {
+                if (!section || !section.IsSequence()) {
+                    return;
+                }
+                for (const auto& item : section) {
+                    if (!item.IsScalar()) {
+                        continue;
+                    }
+                    auto n = item.as<std::string>();
+                    if (n.empty()) {
+                        XX_LOGW(
+                            "Plugin manifest `{}` interfaces.{} has empty name, skipped",
+                            yamlPath.string(),
+                            what
+                        );
+                        continue;
+                    }
+                    out.push_back(std::move(n));
+                }
+            };
+            if (node["interfaces"] && node["interfaces"].IsMap()) {
+                readList(node["interfaces"]["require"], interfaces->require, "require");
+                readList(node["interfaces"]["optional"], interfaces->optional, "optional");
+            }
+        }
     } catch (const std::exception& e) {
         XX_LOGE("Parse plugin manifest `{}` failed: {}", yamlPath.string(), e.what());
         return false;
@@ -177,6 +212,65 @@ std::string resolvePluginEntryPath(const std::filesystem::path& dir, const std::
         }
     }
     return entryPath;
+}
+
+// ==================== 接口协商基础设施 ====================
+
+bool sideCaresAboutInterface(std::string_view name, bool agentSide) {
+    // "agentxx." 为本项目内置接口的保留命名空间; 按子前缀区分归属侧
+    if (name.starts_with("agentxx.agent.")) {
+        return agentSide;
+    }
+    if (name.starts_with("agentxx.client.")) {
+        return !agentSide;
+    }
+    // 无前缀 / <vendor>.* / 其他 agentxx.* 子命名空间: 两侧都检查
+    // (宿主不认识即不支持, 保守安全)
+    return true;
+}
+
+InterfaceCheckResult checkInterfacesForSide(
+    const PluginManifestInterfaces& decl,
+    const InterfaceSet&             hostSupported,
+    bool                            agentSide
+) {
+    InterfaceCheckResult out;
+    auto                 check = [&](const std::vector<std::string>& list, bool required) {
+        for (const auto& n : list) {
+            if (!sideCaresAboutInterface(n, agentSide)) {
+                continue; // 另一侧的声明与本侧无关
+            }
+            if (hostSupported.contains(n)) {
+                continue;
+            }
+            if (required) {
+                out.missingRequired.push_back(n);
+            } else {
+                out.missingOptional.push_back(n);
+            }
+        }
+    };
+    check(decl.require, true);
+    check(decl.optional, false);
+    out.satisfied = out.missingRequired.empty();
+    return out;
+}
+
+RequiredEntrySides requiredEntrySides(const std::vector<std::string>& interfaces) {
+    RequiredEntrySides out;
+    for (const auto& n : interfaces) {
+        if (n.starts_with("agentxx.agent.")) {
+            out.agentEntry = true;
+        } else if (n.starts_with("agentxx.client.")) {
+            out.clientEntry = true;
+        } else {
+            // 无前缀 / vendor 前缀 / 其他 agentxx.* 子命名空间:
+            // 保守视为两侧都可能依赖
+            out.agentEntry  = true;
+            out.clientEntry = true;
+        }
+    }
+    return out;
 }
 
 } // namespace plugin

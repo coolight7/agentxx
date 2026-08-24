@@ -3,6 +3,7 @@
 #include "agentxx/agent/config.h"
 #include "agentxx/agent/io/client_event_sink.h"
 #include "agentxx/plugin/client_plugin_api.h"
+#include "agentxx/plugin/plugin_common.h" /* PluginManifestInterfaces / InterfaceSet */
 #include "asio/any_io_executor.hpp"
 #include "asio/awaitable.hpp"
 #include "asio/thread_pool.hpp"
@@ -87,6 +88,9 @@ public:
     std::vector<std::string> depends;
     /// 可选依赖 (插件名): 未安装仅警告, 不影响加载
     std::vector<std::string> optionalDepends;
+    /// 接口声明 (plugin.yaml `interfaces`; 加载时随 manifest 解析传入,
+    /// 直连库路径为空) —— 宿主门禁依据, 经 list() 暴露供展示/排查
+    PluginManifestInterfaces interfaces;
     void*                    dlHandle  = nullptr; ///< dlopen/LoadLibrary 句柄
     void*                    pluginCtx = nullptr; ///< entry 输出的插件私有上下文
     bool                     enabled   = true; ///< 是否启用 (禁用: UI 项摘除/命令停用)
@@ -189,6 +193,9 @@ public:
         std::vector<std::string> commands;
         std::vector<std::string> depends;
         std::vector<std::string> optionalDepends;
+        /// 接口声明 (plugin.yaml `interfaces`; 空 = 未声明)
+        std::vector<std::string> requiredInterfaces;
+        std::vector<std::string> optionalInterfaces;
     };
 
     explicit ClientPluginManager(asio::any_io_executor ex);
@@ -202,7 +209,7 @@ public:
     /// 注入 UI 适配器 (UI 无关语义层 → 具体 UI 实现; 模式启动时调用一次)
     void setUiAdapter(std::shared_ptr<PluginUiAdapter> adapter);
 
-    /// 当前 UI 适配器 (vtable 查询 uiCaps 用; 任意线程, 装配后不可变)
+    /// 当前 UI 适配器 (supportedInterfaces() 声明宿主接口集; 任意线程, 装配后不可变)
     std::shared_ptr<PluginUiAdapter> uiAdapter() const {
         return uiAdapter_;
     }
@@ -253,6 +260,18 @@ public:
     std::vector<PluginListView>           list() const;
     std::shared_ptr<ClientPluginInstance> find(std::string_view name) const;
 
+    /// 因接口要求未满足而被跳过的插件 (name → 缺失接口描述; io 线程;
+    /// 加载阶段写入, 供展示层/排查 "为什么没加载" —— 跳过的插件不会出现在
+    /// list() 中, 原因单独记录)
+    const std::map<std::string, std::string>& skippedPlugins() const {
+        return skippedPlugins_;
+    }
+
+    /// 宿主当前支持的接口名集合 (由 uiAdapter->supportedInterfaces() 声明;
+    /// io 线程; 门禁检查与 EVT_READY / get_client_state 的
+    /// interfaces 数组共用本结果 —— 单一事实来源)
+    InterfaceSet hostSupportedInterfaces() const;
+
     // ==================== UI 注册表 (任意线程) ====================
 
     /// 注册表快照 (短锁拷贝 shared_ptr; UI 线程渲染无锁读取)
@@ -274,9 +293,10 @@ public:
     // ==================== 会话上下文 (io 线程) ====================
 
     /// 当前 client 状态 JSON (get_client_state 数据源):
-    /// {"sessionId","connState","startupProgress","uiCaps","agentPlugins"}
-    /// - agentPlugins: 服务端已加载的 agent 侧插件名列表 (来自宿主约定事件
-    ///   server_plugins / WireHelloAck.plugins); 空数组 = 未知 (旧版服务端
+    /// {"sessionId","connState","startupProgress","interfaces":[...],
+    ///  "agentPlugins":[{"name","version","interfaces":[...]},...]}
+    /// - agentPlugins: 服务端已加载的 agent 侧插件结构化列表 (来自宿主约定
+    ///   事件 server_plugins / WireHelloAck.plugins); 空数组 = 未知 (服务端
     ///   未提供), 插件不得据此断言"对端未加载"
     std::string clientStateJson() const;
 
@@ -404,15 +424,25 @@ private:
     std::string connState_ = "connecting";
     std::string startupProgress_;
 
-    /// 服务端已加载的 agent 侧插件名列表 (io 线程写读): 来自宿主约定事件
-    /// `agentxx_host.server_plugins` (WirePluginData); 空数组 = 未知 (旧版
-    /// 服务端未提供)。client 插件经 get_client_state("agentPlugins") 查询,
-    /// 对端缺失时可降级提示, 避免上行数据被静默丢弃的"操作成功"假象
-    std::vector<std::string> serverPlugins_;
+    /// 服务端已加载的 agent 侧插件结构化信息 (io 线程写读): 来自宿主约定
+    /// 事件 `agentxx_host.server_plugins` (WirePluginData; 载荷
+    /// [{"name","version","interfaces":[...]},...]); 空数组 = 未知 (服务端
+    /// 未提供)。client 插件经 get_client_state("agentPlugins") 查询对端
+    /// 可用性与声明的接口, 对端缺失时可降级提示, 避免上行数据被静默丢弃
+    /// 的"操作成功"假象
+    struct ServerPluginInfo {
+        std::string              name;
+        std::string              version;
+        std::vector<std::string> interfaces; ///< 该插件声明的接口 (require∪optional)
+    };
+    std::vector<ServerPluginInfo> serverPlugins_;
     /// PLUGIN_DATA 无订阅者警告去重 (仅 io 线程; 每插件名只警告一次):
     /// 收到 WirePluginData 但无任何 client 插件订阅 EVT_PLUGIN_DATA 时,
     /// 多半是对端插件未在本地加载 —— 提示一次便于排查, 不随事件频率刷屏
     std::set<std::string> pluginDataNoSubWarned_;
+
+    /// 因接口要求未满足被跳过的插件 (io 线程; 见 skippedPlugins())
+    std::map<std::string, std::string> skippedPlugins_{};
 
     asio::any_io_executor ioExecutor_{};
     std::thread::id       ioThreadId_{};
@@ -421,7 +451,9 @@ private:
 /// UI 适配器抽象接口 (UI 无关语义层 → 具体 UI 实现)
 ///
 /// 实现方 (TUI/CLI/未来 GUI) 职责:
-/// - uiCaps(): 声明支持的 UI 能力位图 (宿主注册前检查)
+/// - supportedInterfaces(): 声明支持的接口名集合 ("client.panel" 等, 常量见
+///   plugin_common.h plugin_interfaces; 宿主据此装配 "client.ui" 接口表、
+///   子能力门禁判定与插件加载门禁)
 /// - 各回调在 client io 线程调用, 实现必须快速返回; 涉及 UI 线程独占操作
 ///   (组件树修改/重绘) 须自行跨线程投递 (如 TUI 的 enqueueUiAction)
 /// - 注册表数据 (text/items) 由 ClientPluginManager 持有, UI 渲染经
@@ -431,8 +463,9 @@ public:
 
     virtual ~PluginUiAdapter() = default;
 
-    /// 声明支持的 UI 能力位图 (AGENTXX_UI_CAP_*)
-    virtual uint32_t uiCaps() const = 0;
+    /// 声明支持的接口名集合 (plugin_interfaces 常量; 决定 agentxx.client.ui 接口表
+    /// 内哪些成员非 NULL 与加载门禁判定)
+    virtual InterfaceSet supportedInterfaces() const = 0;
 
     /* ---- 信号回调 (client io 线程; 快速返回) ---- */
 

@@ -3,6 +3,7 @@
 #include "agentxx/agent/context.h"
 #include "agentxx/event/event_stream.h"
 #include "agentxx/middlewares/middleware.h"
+#include "agentxx/plugin/plugin_iface_helper.h"
 #include "agentxx/plugin/plugin_manager.h"
 #include "agentxx/util/async_offload.h"
 #include "agentxx/util/log.h"
@@ -716,19 +717,20 @@ asio::awaitable<TestResult> run_plugin_tests() {
         auto inst30 = co_await ctx->pluginManager->loadPluginAsync(path);
         XX_TEST_EXPECT_TRUE(inst30 != nullptr);
         if (inst30) {
-            // 启用状态: publish 正常
+            // 启用状态: publish 正常 (agentxx.agent.events 接口表)
+            const auto ev30 = agentxx::plugin::AgentIfaces::query(&inst30->host).events;
+            XX_TEST_EXPECT_TRUE(ev30 != nullptr && ev30->publish != nullptr);
             XX_TEST_EXPECT_EQ(
-                inst30->host.vtable
-                    ->publish(&inst30->host, AGENTXX_SV("demo.topic"), AGENTXX_SV(R"({"k":"v"})")),
+                ev30 ? ev30->publish(
+                    &inst30->host, AGENTXX_SV("demo.topic"), AGENTXX_SV(R"({"k":"v"})"))
+                     : -1,
                 0
             );
             ctx->pluginManager->disable("example_plugin");
-            // 禁用状态: vtable publish 拒绝 (返回非 0)
-            int rc = inst30->host.vtable->publish(
-                &inst30->host,
-                AGENTXX_SV("demo.topic"),
-                AGENTXX_SV(R"({"k":"v"})")
-            );
+            // 禁用状态: 接口表 publish 拒绝 (返回非 0)
+            int rc = ev30 ? ev30->publish(
+                &inst30->host, AGENTXX_SV("demo.topic"), AGENTXX_SV(R"({"k":"v"})"))
+                          : -1;
             XX_TEST_EXPECT_TRUE(rc != 0);
             co_await ctx->pluginManager->unloadAsync("example_plugin");
         }

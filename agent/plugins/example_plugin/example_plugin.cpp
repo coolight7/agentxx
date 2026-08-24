@@ -20,6 +20,7 @@
  */
 #include "agentxx/plugin/client_plugin_api.h"
 #include "agentxx/plugin/plugin_api.h"
+#include "agentxx/plugin/plugin_iface_helper.h"
 #include "fmt/format.h"
 #include "fmt/ranges.h"
 
@@ -31,14 +32,16 @@
 #include <thread>
 
 static const AgentxxHost* g_host = nullptr;
+/// 宿主接口表缓存 (entry 时 AgentIfaces::query 一次查询; 进程级静态数据)
+static agentxx::plugin::AgentIfaces g_if{};
 
-/// 字符串视图 → JSON 字符串字面量 (agent 侧宿主 vtable json_escape; 结果含
-/// 引号; 供 fmt::format 组装 JSON 时嵌入字段值, 避免手工拼接)
+/// 字符串视图 → JSON 字符串字面量 (agentxx.agent.json 接口表; 结果含引号;
+/// 供 fmt::format 组装 JSON 时嵌入字段值, 避免手工拼接)
 static std::string agentJsonEscape(AgentxxPluginStringView sv) {
-    if (!g_host || agentxx_plugin_sv_empty(sv)) {
+    if (!g_host || !g_if.json || !g_if.json->json_escape || agentxx_plugin_sv_empty(sv)) {
         return "\"\"";
     }
-    char* esc = g_host->vtable->json_escape(g_host, sv);
+    char* esc = g_if.json->json_escape(g_host, sv);
     if (!esc) {
         return "\"\"";
     }
@@ -105,7 +108,8 @@ static char* sleep_execute(
     // 轻量解析 duration_ms (默认 200)
     int ms = 200;
     if (!agentxx_plugin_sv_empty(args_json)) {
-        char* v = g_host->vtable->json_get_string(g_host, args_json, AGENTXX_SV("durationMs"));
+        char* v = g_if.json ? g_if.json->json_get_string(g_host, args_json, AGENTXX_SV("durationMs"))
+                            : nullptr;
         if (v) {
             try {
                 ms = std::stoi(v);
@@ -135,8 +139,11 @@ static char* caller_execute(
         return nullptr;
     }
     // 调用本插件的另一个工具 example_echo, 演示插件互调
+    if (!g_if.tools || !g_if.tools->call_tool) {
+        return nullptr;
+    }
     char* err  = nullptr;
-    char* resp = g_host->vtable->call_tool(
+    char* resp = g_if.tools->call_tool(
         g_host,
         AGENTXX_SV("example_echo"),
         agentxx_plugin_sv_empty(args_json) ? AGENTXX_SV("{}") : args_json,
@@ -170,8 +177,8 @@ static int on_agent_start(
     (void)node_input_json;
     (void)out_json;
     (void)error_out;
-    if (g_host) {
-        g_host->vtable->log(g_host, 2 /* info */, AGENTXX_SV("example hook: agent_start fired"));
+    if (g_host && g_if.log && g_if.log->log) {
+        g_if.log->log(g_host, 2 /* info */, AGENTXX_SV("example hook: agent_start fired"));
     }
     return 0;
 }
@@ -181,8 +188,8 @@ static int on_agent_start(
 static void on_demo_event(AgentxxPluginStringView event_json, void* ud) {
     (void)event_json;
     (void)ud;
-    if (g_host) {
-        g_host->vtable->log(g_host, 2, AGENTXX_SV("example event received"));
+    if (g_host && g_if.log && g_if.log->log) {
+        g_if.log->log(g_host, 2, AGENTXX_SV("example event received"));
     }
 }
 
@@ -191,8 +198,8 @@ static void on_demo_event(AgentxxPluginStringView event_json, void* ud) {
 static void on_client_hello(AgentxxPluginStringView event_json, void* ud) {
     (void)event_json;
     (void)ud;
-    if (g_host) {
-        g_host->vtable->log(g_host, 2, AGENTXX_SV("example received client hello event"));
+    if (g_host && g_if.log && g_if.log->log) {
+        g_if.log->log(g_host, 2, AGENTXX_SV("example received client hello event"));
     }
 }
 
@@ -203,14 +210,22 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
     g_host = host;
     (void)plugin_ctx;
 
-    // 1. 工具
+    // COM 风格接口表查询: entry 内一次性查询全部已知 IID 并缓存
+    // (进程级静态数据, 长期有效; 未实现的表为 NULL, 使用前判空)
+    static const agentxx::plugin::AgentIfaces s_if = agentxx::plugin::AgentIfaces::query(host);
+    g_if = s_if;
+
+    // 1. 工具 (agentxx.agent.tools 接口表)
+    if (!s_if.tools || !s_if.tools->register_tool || !s_if.events) {
+        return -1;
+    }
     AgentxxToolSpec echo{};
     echo.name        = AGENTXX_SV("example_echo");
     echo.description = AGENTXX_SV("Echo the input arguments back as JSON (example plugin tool).");
     echo.parameters_json
         = AGENTXX_SV(R"({"type":"object","properties":{},"additionalProperties":true})");
     echo.execute = echo_execute;
-    if (host->vtable->register_tool(host, &echo) != 0) {
+    if (s_if.tools->register_tool(host, &echo) != 0) {
         return -1;
     }
 
@@ -221,7 +236,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
     caller.parameters_json
         = AGENTXX_SV(R"({"type":"object","properties":{},"additionalProperties":true})");
     caller.execute = caller_execute;
-    if (host->vtable->register_tool(host, &caller) != 0) {
+    if (s_if.tools->register_tool(host, &caller) != 0) {
         return -1;
     }
 
@@ -234,25 +249,27 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
         = AGENTXX_SV(R"({"type":"object","properties":{"durationMs":{"type":"integer"}}})");
     sleeper.execute            = sleep_execute;
     sleeper.default_timeout_ms = 0; // 无默认超时 (测试用例自行指定)
-    if (host->vtable->register_tool(host, &sleeper) != 0) {
+    if (s_if.tools->register_tool(host, &sleeper) != 0) {
         return -1;
     }
 
-    // 2. 钩子 (agent_start)
-    if (host->vtable->register_hook(host, AGENTXX_HOOK_AGENT_START, on_agent_start, nullptr) != 0) {
+    // 2. 钩子 (agentxx.agent.hooks 接口表)
+    if (!s_if.hooks || !s_if.hooks->register_hook
+        || s_if.hooks->register_hook(host, AGENTXX_HOOK_AGENT_START, on_agent_start, nullptr)
+               != 0) {
         return -1;
     }
 
-    // 3. 事件订阅 (topic 自动加 "plugin." 前缀 → plugin.demo.topic)
+    // 3. 事件订阅 (agentxx.agent.events 接口表; topic 自动加 "plugin." 前缀 → plugin.demo.topic)
     AgentxxSubscription* sub
-        = host->vtable->subscribe(host, AGENTXX_SV("demo.topic"), on_demo_event, nullptr);
+        = s_if.events->subscribe(host, AGENTXX_SV("demo.topic"), on_demo_event, nullptr);
     if (!sub) {
         return -1;
     }
 
     // 3.1 跨端事件订阅: client 插件上行 (服务端发布 plugin.client.example_plugin.hello;
     // 插件侧传 "client.example_plugin.hello" 即可)
-    if (!host->vtable->subscribe(
+    if (!s_if.events->subscribe(
             host,
             AGENTXX_SV("client.example_plugin.hello"),
             on_client_hello,
@@ -261,17 +278,18 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
         return -1;
     }
 
-    // 4. 能力
-    if (host->vtable->register_capability(host, AGENTXX_SV("example.demo")) != 0) {
+    // 4. 能力 (agentxx.agent.capabilities 接口表)
+    if (!s_if.capabilities || !s_if.capabilities->register_capability
+        || s_if.capabilities->register_capability(host, AGENTXX_SV("example.demo")) != 0) {
         return -1;
     }
 
-    // 5. 提示词读写演示 (get_prompt/set_prompt; 宿主为旧版本无此 API 时跳过)
+    // 5. 提示词读写演示 (agentxx.agent.prompt 接口表; 宿主未提供该表时跳过)
     //    - 把 example_echo 的默认提示词写入宿主 toolPrompt (仅当宿主无该条目,
     //      用户 yaml 覆盖早于插件加载, 已存在则尊重用户配置不覆盖)
     //    - 宿主卸载插件时自动回滚本次写入 (恢复加载前状态)
-    if (host->vtable->get_prompt && host->vtable->set_prompt) {
-        char* full = host->vtable->get_prompt(host);
+    if (s_if.prompt && s_if.prompt->get_prompt && s_if.prompt->set_prompt) {
+        char* full = s_if.prompt->get_prompt(host);
         if (full) {
             std::string prompt{full};
             host->vtable->free(full);
@@ -279,16 +297,18 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
             if (!hasEntry) {
                 const char* promptJson
                     = R"({"toolPrompt":{"example_echo":{"depict":"Echo the input arguments back as JSON (example plugin tool).","args":{}}}})";
-                int rc = host->vtable->set_prompt(host, AGENTXX_SV(promptJson));
+                int rc = s_if.prompt->set_prompt(host, AGENTXX_SV(promptJson));
                 if (rc != 0) {
-                    host->vtable->log(host, 3, AGENTXX_SV("example plugin set_prompt failed"));
+                    if (s_if.log && s_if.log->log) {
+                        s_if.log->log(host, 3, AGENTXX_SV("example plugin set_prompt failed"));
+                    }
                     return -1;
                 }
             }
         }
     }
 
-    host->vtable->log(host, 2, AGENTXX_SV("example plugin loaded"));
+    s_if.log->log(host, 2, AGENTXX_SV("example plugin loaded"));
     return 0;
 }
 
@@ -297,13 +317,21 @@ extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_unload(void* plugin_ctx) {
     if (!g_host) {
         return;
     }
-    // 主动反注册 (宿主也会自动清理, 这里演示插件侧约定)
-    g_host->vtable->unregister_tool(g_host, AGENTXX_SV("example_echo"));
-    g_host->vtable->unregister_tool(g_host, AGENTXX_SV("example_caller"));
-    g_host->vtable->unregister_tool(g_host, AGENTXX_SV("example_sleep"));
-    g_host->vtable->unregister_hook(g_host, AGENTXX_HOOK_AGENT_START, on_agent_start, nullptr);
-    g_host->vtable->unregister_capability(g_host, AGENTXX_SV("example.demo"));
-    g_host->vtable->log(g_host, 2, AGENTXX_SV("example plugin unloaded"));
+    // 主动反注册 (宿主也会自动清理, 这里演示插件侧约定; 接口表判空遵循契约)
+    if (g_if.tools && g_if.tools->unregister_tool) {
+        g_if.tools->unregister_tool(g_host, AGENTXX_SV("example_echo"));
+        g_if.tools->unregister_tool(g_host, AGENTXX_SV("example_caller"));
+        g_if.tools->unregister_tool(g_host, AGENTXX_SV("example_sleep"));
+    }
+    if (g_if.hooks && g_if.hooks->unregister_hook) {
+        g_if.hooks->unregister_hook(g_host, AGENTXX_HOOK_AGENT_START, on_agent_start, nullptr);
+    }
+    if (g_if.capabilities && g_if.capabilities->unregister_capability) {
+        g_if.capabilities->unregister_capability(g_host, AGENTXX_SV("example.demo"));
+    }
+    if (g_if.log && g_if.log->log) {
+        g_if.log->log(g_host, 2, AGENTXX_SV("example plugin unloaded"));
+    }
     g_host = nullptr;
 }
 
@@ -316,19 +344,26 @@ extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_unload(void* plugin_ctx) {
  * ===================================================================== */
 
 static const AgentxxClientHost* g_client_host  = nullptr;
+/// client 侧接口表缓存 (entry 时 ClientIfaces::query 一次查询)
+static agentxx::plugin::ClientIfaces g_client_if{};
+/// "agentxx.client.ui" 展示接口表 (状态栏/面板/Info 段落/命令/toast; 表内不支持子能力
+/// 成员为 NULL, 调用前判空)
+static const AgentxxClientUiIface* g_client_ui = nullptr;
 static AgentxxStatusItem*       g_status_item  = nullptr;
 static AgentxxPanel*            g_panel        = nullptr;
 static AgentxxInfoSection*      g_info_section = nullptr;
 static int                      g_turn_count   = 0;
 
-/// 字符串 → JSON 字符串字面量 (经宿主 vtable json_escape; 结果含引号;
+/// 字符串 → JSON 字符串字面量 (经宿主 agentxx.client.json 接口表; 结果含引号;
 /// 供 fmt::format 组装 JSON 时嵌入字段值, 避免手工拼接)
 static std::string clientJsonEscape(const std::string& s) {
-    if (!g_client_host || s.empty()) {
+    if (!g_client_host || !g_client_if.json || !g_client_if.json->json_escape || s.empty()) {
         return "\"\"";
     }
-    char* esc
-        = g_client_host->vtable->json_escape(g_client_host, agentxx_plugin_sv(s.data(), s.size()));
+    char* esc = g_client_if.json->json_escape(
+        g_client_host,
+        agentxx_plugin_sv(s.data(), s.size())
+    );
     if (!esc) {
         return "\"\"";
     }
@@ -345,7 +380,8 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxClientPluginInfo* agentxx_client_g
         AGENTXX_SV(
             "Example client plugin: status item, panel, Info section, commands, events, cross-side data"
         ),
-        0, // min_ui_caps: 无最低要求 (无 UI 能力的 CLI 也可加载)
+        // v4 移除 min_ui_caps 位图字段: 最低接口要求改由 plugin.yaml
+        // interfaces.require 声明 (宿主加载前门禁), 见 docs/agent/plugins.md
     };
     return &info;
 }
@@ -359,8 +395,9 @@ static char* example_cmd_execute(void* ud, AgentxxPluginStringView args_json, ch
         return nullptr;
     }
     // 参数: {"text": "..."} (输入 "/example 参数" 的剩余部分)
-    char* argText
-        = g_client_host->vtable->json_get_string(g_client_host, args_json, AGENTXX_SV("text"));
+    char* argText = g_client_if.json ? g_client_if.json->json_get_string(
+                            g_client_host, args_json, AGENTXX_SV("text"))
+                                     : nullptr;
     std::string suffix = argText ? argText : "";
     if (argText) {
         g_client_host->vtable->free(argText);
@@ -383,8 +420,9 @@ static char* example_toast_execute(void* ud, AgentxxPluginStringView args_json, 
     if (!g_client_host) {
         return nullptr;
     }
-    char* argText
-        = g_client_host->vtable->json_get_string(g_client_host, args_json, AGENTXX_SV("text"));
+    char* argText  = g_client_if.json ? g_client_if.json->json_get_string(
+                            g_client_host, args_json, AGENTXX_SV("text"))
+                                      : nullptr;
     std::string text = argText && *argText ? argText : "toast from example plugin";
     if (argText) {
         g_client_host->vtable->free(argText);
@@ -402,14 +440,18 @@ static void on_client_ready(AgentxxPluginStringView payload_json, void* ud) {
     if (!g_client_host) {
         return;
     }
-    g_client_host->vtable->log(g_client_host, 2, AGENTXX_SV("client example: ready"));
-    // 跨端数据: client → agent (服务端发布到 plugin.client.example_plugin.hello,
-    // agent 侧 on_client_hello 订阅消费)
-    g_client_host->vtable->send_plugin_data(
-        g_client_host,
-        AGENTXX_SV("hello"),
-        AGENTXX_SV(R"({"from":"client-example"})")
-    );
+    if (g_client_if.log && g_client_if.log->log) {
+        g_client_if.log->log(g_client_host, 2, AGENTXX_SV("client example: ready"));
+    }
+    // 跨端数据 (agentxx.client.wire 接口表): client → agent (服务端发布到
+    // plugin.client.example_plugin.hello, agent 侧 on_client_hello 订阅消费)
+    if (g_client_if.wire && g_client_if.wire->send_plugin_data) {
+        g_client_if.wire->send_plugin_data(
+            g_client_host,
+            AGENTXX_SV("hello"),
+            AGENTXX_SV(R"({"from":"client-example"})")
+        );
+    }
 }
 
 /// TURN_END: 轮次结束 → 状态栏项文本更新 + Info 栏段落内容更新
@@ -420,19 +462,19 @@ static void on_client_turn_end(AgentxxPluginStringView payload_json, void* ud) {
         return;
     }
     ++g_turn_count;
-    if (g_status_item) {
+    if (g_status_item && g_client_ui && g_client_ui->update_status_item) {
         // json_escape 返回带引号的 JSON 字符串字面量, fmt 直接嵌入
         const std::string json = fmt::format(
             R"({{"text":{}}})",
             clientJsonEscape(fmt::format("turns: {}", g_turn_count))
         );
-        g_client_host->vtable->update_status_item(
+        g_client_ui->update_status_item(
             g_client_host,
             g_status_item,
             agentxx_plugin_sv(json.data(), json.size())
         );
     }
-    if (g_info_section) {
+    if (g_info_section && g_client_ui && g_client_ui->update_info_section) {
         // Info 栏段落: {"items":[{"kind":"text","text":"Turns: N"},
         // {"kind":"text","role":"hint","text":"Example Info section is live"}]}
         // 注意: clientJsonEscape 返回【带引号的 JSON 字面量】(如 "\"Turns: 1\""),
@@ -442,8 +484,7 @@ static void on_client_turn_end(AgentxxPluginStringView payload_json, void* ud) {
             R"({{"items":[{{"kind":"text","text":{}}},{{"kind":"text","role":"hint","text":"Example Info section is live"}}]}})",
             clientJsonEscape(fmt::format("Turns: {}", g_turn_count))
         );
-        g_client_host->vtable
-            ->update_info_section(g_client_host, g_info_section, AGENTXX_SV(json.c_str()));
+        g_client_ui->update_info_section(g_client_host, g_info_section, AGENTXX_SV(json.c_str()));
     }
 }
 
@@ -453,13 +494,19 @@ static void on_client_plugin_data(AgentxxPluginStringView payload_json, void* ud
     if (!g_client_host || !g_panel) {
         return;
     }
+    if (!g_client_if.json || !g_client_if.json->json_get_string) {
+        return;
+    }
     // payload: {"plugin","event","data"}
-    char* plugin
-        = g_client_host->vtable->json_get_string(g_client_host, payload_json, AGENTXX_SV("plugin"));
-    char* event
-        = g_client_host->vtable->json_get_string(g_client_host, payload_json, AGENTXX_SV("event"));
-    char* data
-        = g_client_host->vtable->json_get_string(g_client_host, payload_json, AGENTXX_SV("data"));
+    char* plugin   = g_client_if.json->json_get_string(
+        g_client_host, payload_json, AGENTXX_SV("plugin")
+    );
+    char* event    = g_client_if.json->json_get_string(
+        g_client_host, payload_json, AGENTXX_SV("event")
+    );
+    char* data     = g_client_if.json->json_get_string(
+        g_client_host, payload_json, AGENTXX_SV("data")
+    );
     std::string line = fmt::format("{}.{}", plugin ? plugin : "?", event ? event : "?");
     if (data && *data) {
         line = fmt::format("{}: {}", line, data);
@@ -478,7 +525,9 @@ static void on_client_plugin_data(AgentxxPluginStringView payload_json, void* ud
         R"({{"items":[{{"kind":"text","text":{}}},{{"kind":"badge","text":"updated"}}]}})",
         clientJsonEscape(line)
     );
-    g_client_host->vtable->update_panel(g_client_host, g_panel, AGENTXX_SV(json.c_str()));
+    if (g_client_ui && g_client_ui->update_panel) {
+        g_client_ui->update_panel(g_client_host, g_panel, AGENTXX_SV(json.c_str()));
+    }
 }
 
 /* ---------------- entry / unload ---------------- */
@@ -488,32 +537,46 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
     g_client_host = host;
     (void)plugin_ctx;
 
+    // COM 风格接口表查询: entry 内一次性查询全部已知 IID 并缓存
+    g_client_if  = agentxx::plugin::ClientIfaces::query(host);
+    g_client_ui  = g_client_if.ui;
+
     // 1. 状态栏项 (左侧 align=0, order=10)
-    g_status_item = host->vtable->register_status_item(
-        host,
-        AGENTXX_SV("example_plugin.turns"),
-        AGENTXX_SV(R"({"text":"turns: 0"})"),
-        0,
-        10
-    );
-    // 宿主不支持状态栏 (如 CLI) 时注册返回 NULL, 插件降级 (不视为失败)
+    g_status_item = g_client_ui && g_client_ui->register_status_item
+                      ? g_client_ui->register_status_item(
+                          host,
+                          AGENTXX_SV("example_plugin.turns"),
+                          AGENTXX_SV(R"({"text":"turns: 0"})"),
+                          0,
+                          10
+                      )
+                      : nullptr;
+    // 宿主不支持状态栏 (如 CLI) 时成员为 NULL, 插件降级 (不视为失败)
 
     // 2. 侧边栏面板
-    g_panel = host->vtable->register_panel(
-        host,
-        AGENTXX_SV("example_plugin.panel"),
-        AGENTXX_SV(R"({"title":"Example"})")
-    );
+    g_panel = g_client_ui && g_client_ui->register_panel
+                ? g_client_ui->register_panel(
+                    host,
+                    AGENTXX_SV("example_plugin.panel"),
+                    AGENTXX_SV(R"({"title":"Example"})")
+                )
+                : nullptr;
 
     // 3. 侧边栏 Info 栏段落 (段落标题 "Example Info"; 内容由 TURN_END 更新)
-    g_info_section = host->vtable->register_info_section(
-        host,
-        AGENTXX_SV("example_plugin.info"),
-        AGENTXX_SV(R"({"title":"Example Info"})")
-    );
+    g_info_section = g_client_ui && g_client_ui->register_info_section
+                       ? g_client_ui->register_info_section(
+                           host,
+                           AGENTXX_SV("example_plugin.info"),
+                           AGENTXX_SV(R"({"title":"Example Info"})")
+                       )
+                       : nullptr;
 
-    // 3. 命令
-    if (host->vtable->register_command(
+    // 4. 命令 (命令输入管线接口 agentxx.client.command 不支持的宿主上成员为 NULL:
+    //    命令是本插件核心演示功能, 此时加载失败并报告, 与原行为一致)
+    if (!g_client_ui || !g_client_ui->register_command) {
+        return -1;
+    }
+    if (g_client_ui->register_command(
             host,
             AGENTXX_SV("example"),
             AGENTXX_SV("Send a message from the example plugin"),
@@ -523,7 +586,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
         != 0) {
         return -1;
     }
-    if (host->vtable->register_command(
+    if (g_client_ui->register_command(
             host,
             AGENTXX_SV("example_toast"),
             AGENTXX_SV("Show a toast from the example plugin"),
@@ -534,19 +597,26 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
         return -1;
     }
 
-    // 4. 事件订阅
-    if (!host->vtable->subscribe(host, AGENTXX_CLIENT_EVT_READY, on_client_ready, nullptr)) {
+    // 5. 事件订阅 (agentxx.client.events 接口表)
+    if (!g_client_if.events || !g_client_if.events->subscribe) {
         return -1;
     }
-    if (!host->vtable->subscribe(host, AGENTXX_CLIENT_EVT_TURN_END, on_client_turn_end, nullptr)) {
+    if (!g_client_if.events
+             ->subscribe(host, AGENTXX_CLIENT_EVT_READY, on_client_ready, nullptr)) {
         return -1;
     }
-    if (!host->vtable
+    if (!g_client_if.events
+             ->subscribe(host, AGENTXX_CLIENT_EVT_TURN_END, on_client_turn_end, nullptr)) {
+        return -1;
+    }
+    if (!g_client_if.events
              ->subscribe(host, AGENTXX_CLIENT_EVT_PLUGIN_DATA, on_client_plugin_data, nullptr)) {
         return -1;
     }
 
-    host->vtable->log(host, 2, AGENTXX_SV("example client plugin loaded"));
+    if (g_client_if.log && g_client_if.log->log) {
+        g_client_if.log->log(host, 2, AGENTXX_SV("example client plugin loaded"));
+    }
     return 0;
 }
 
@@ -555,21 +625,31 @@ extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_client_unload(void* plugin_ctx) {
     if (!g_client_host) {
         return;
     }
-    // 主动反注册 (宿主也会自动清理, 这里演示插件侧约定)
-    g_client_host->vtable->unregister_command(g_client_host, AGENTXX_SV("example"));
-    g_client_host->vtable->unregister_command(g_client_host, AGENTXX_SV("example_toast"));
-    if (g_status_item) {
-        g_client_host->vtable->unregister_status_item(g_client_host, g_status_item);
+    // 主动反注册 (宿主也会自动清理, 这里演示插件侧约定; 成员判空遵循
+    // 扩展表契约 —— 不支持的子能力成员为 NULL)
+    if (g_client_ui->unregister_command) {
+        g_client_ui->unregister_command(g_client_host, AGENTXX_SV("example"));
+        g_client_ui->unregister_command(g_client_host, AGENTXX_SV("example_toast"));
+    }
+    if (g_status_item && g_client_ui->unregister_status_item) {
+        g_client_ui->unregister_status_item(g_client_host, g_status_item);
         g_status_item = nullptr;
     }
-    if (g_panel) {
-        g_client_host->vtable->unregister_panel(g_client_host, g_panel);
+    if (g_panel && g_client_ui->unregister_panel) {
+        g_client_ui->unregister_panel(g_client_host, g_panel);
         g_panel = nullptr;
     }
-    if (g_info_section) {
-        g_client_host->vtable->unregister_info_section(g_client_host, g_info_section);
+    if (g_info_section && g_client_ui->unregister_info_section) {
+        g_client_ui->unregister_info_section(g_client_host, g_info_section);
         g_info_section = nullptr;
     }
-    g_client_host->vtable->log(g_client_host, 2, AGENTXX_SV("example client plugin unloaded"));
+    if (g_client_if.log && g_client_if.log->log) {
+        g_client_if.log->log(
+            g_client_host,
+            2,
+            AGENTXX_SV("example client plugin unloaded")
+        );
+    }
     g_client_host = nullptr;
+    g_client_ui   = nullptr;
 }
