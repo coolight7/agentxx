@@ -27,9 +27,13 @@ public:
     explicit TuiPluginAdapter(std::weak_ptr<TUIClientAgentIO> tui) :
         tui_(std::move(tui)) {}
 
-    uint32_t uiCaps() const override {
-        return AGENTXX_UI_CAP_STATUS_ITEM | AGENTXX_UI_CAP_PANEL | AGENTXX_UI_CAP_TOAST
-               | AGENTXX_UI_CAP_INFO_SECTION | AGENTXX_IFACE_COMMAND;
+    agentxx::plugin::InterfaceSet supportedInterfaces() const override {
+        namespace pi = agentxx::plugin::plugin_interfaces;
+        return {std::string{pi::ClientStatusItem},
+                std::string{pi::ClientPanel},
+                std::string{pi::ClientToast},
+                std::string{pi::ClientInfoSection},
+                std::string{pi::ClientCommand}};
     }
 
     // ---- 状态栏项 ----

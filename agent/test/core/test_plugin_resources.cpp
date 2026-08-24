@@ -17,7 +17,6 @@
 #include "agentxx/middlewares/memory_file.h"
 #include "agentxx/middlewares/middleware.h"
 #include "agentxx/middlewares/skill.h"
-#include "agentxx/plugin/client_plugin_api.h" /* AGENTXX_UI_CAP_* / AGENTXX_IFACE_* */
 #include "agentxx/plugin/plugin_common.h"
 #include "agentxx/plugin/plugin_manager.h"
 #include "agentxx/util/log.h"
@@ -239,10 +238,12 @@ interfaces:
         XX_TEST_EXPECT_TRUE(plugin::sideCaresAboutInterface("vendor.custom", true));
         XX_TEST_EXPECT_TRUE(plugin::sideCaresAboutInterface("vendor.custom", false));
 
-        // ---- 宿主支持集门禁 (client 视角) ----
+        // ---- 宿主支持集门禁 (client 视角; v4 起宿主接口集为名字集合,
+        //      位图映射已移除 —— 直接构造支持集) ----
         {
-            auto caps   = AGENTXX_UI_CAP_PANEL | AGENTXX_IFACE_COMMAND;
-            auto hostIf = plugin::clientHostInterfacesFromCaps(caps);
+            plugin::InterfaceSet hostIf;
+            hostIf.insert("client.panel");
+            hostIf.insert("client.command");
             XX_TEST_EXPECT_TRUE(hostIf.contains("client.panel"));
             XX_TEST_EXPECT_TRUE(hostIf.contains("client.command"));
             XX_TEST_EXPECT_FALSE(hostIf.contains("client.toast"));

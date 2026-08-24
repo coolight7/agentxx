@@ -44,30 +44,24 @@
 extern "C" {
 #endif
 
-#define AGENTXX_CLIENT_PLUGIN_API_VERSION 3
+#define AGENTXX_CLIENT_PLUGIN_API_VERSION 4
 
-/* ==================== 能力位 (宿主 ↔ 插件协商) ==================== */
-
-/// 宿主支持的 UI 能力位图 (register_* 前可用 ui_caps() 查询; 不支持则注册失败)
-/// - 低位段 [1<<0, 1<<15): UI 展示类能力 (AGENTXX_UI_CAP_*)
-/// - 高位段 [1<<16, ...): 非展示类接口能力 (AGENTXX_IFACE_*); 语义推广自
-///   v3 的纯 UI 位图 —— 旧宿主不会置高位段, 新插件判位自然降级, 无需
-///   bump API 版本。名称↔位映射表唯一出处见 plugin_common.cpp
-///   (clientHostInterfacesFromCaps); 字符串形式的接口清单另经 EVT_READY /
-///   get_client_state 的 "interfaces" 数组提供 (自描述, 第三方/工具可消费)
-#define AGENTXX_UI_CAP_STATUS_ITEM  (1u << 0) ///< 状态栏项
-#define AGENTXX_UI_CAP_PANEL        (1u << 1) ///< 侧边栏面板
-#define AGENTXX_UI_CAP_TOAST        (1u << 2) ///< toast 提示
-#define AGENTXX_UI_CAP_KEYBIND      (1u << 3) ///< 自定义键位 (预留, 二期)
-#define AGENTXX_UI_CAP_PROMPT       (1u << 4) ///< 模态询问 (预留, 二期)
-#define AGENTXX_UI_CAP_MSG_DECOR    (1u << 5) ///< 消息装饰 (预留, 二期)
-#define AGENTXX_UI_CAP_INFO_SECTION (1u << 6) ///< 侧边栏 Info 栏段落扩展
-
-/// ---- 高位段: 非展示类接口 (AGENTXX_IFACE_*, 接口名见 plugin_interfaces) ----
-/// 斜杠命令输入管线 (用户输入 "/{name}" 触发 register_command 注册的命令):
-/// - CLI/TUI 宿主恒支持; 无命令输入面的宿主 (如某些 GUI) 不置此位,
-///   register_command 将被拒绝 (返回非 0), 插件应降级
-#define AGENTXX_IFACE_COMMAND (1u << 16)
+/* ==================== 接口协商 (字符串集; 取代 v3 及以前的位图方案) ====================
+ *
+ * 宿主与插件间的能力协商统一为【稳定命名字符串接口集】(常量见
+ * plugin_common.h plugin_interfaces; 第三方私有接口用 "<vendor>.<name>",
+ * 宿主不认识的名称一律视为不支持 —— 安全失败):
+ * - 清单声明层: 插件 plugin.yaml `interfaces.require/optional`, 宿主加载前
+ *   门禁 (机制总览见 plugin_common.h 接口协商节);
+ * - 运行时查询层: has_interface() 同步判单名; EVT_READY 与
+ *   get_client_state 的 "interfaces" JSON 数组做全量发现;
+ * - 展示类子能力 (status item/panel/info section/command/toast) 物理迁移到
+ *   "client.ui" 扩展表 (AgentxxClientExtUiVtable, 经 query_extension 获取):
+ *   表内不支持的子能力函数指针为 NULL, 调用前必须判空; has_interface 对
+ *   应成员同步返回 0。
+ * v3 的 AGENTXX_UI_CAP_* / AGENTXX_IFACE_* 位图与本结构体 min_ui_caps 字段
+ * 已移除 (v4 不兼容变更, 迁移说明见 docs/agent/plugins.md 版本历史)。
+ */
 
 /* ==================== 插件元信息 ==================== */
 
@@ -76,14 +70,13 @@ typedef struct AgentxxClientPluginInfo {
     AgentxxPluginStringView name;        ///< 唯一标识 (与 agent 侧插件共用命名空间)
     AgentxxPluginStringView version;
     AgentxxPluginStringView description;
-    uint32_t                min_ui_caps; ///< 宿主 ui_caps() 不满足时拒绝加载 (记日志)
 } AgentxxClientPluginInfo;
 
 /* ==================== client 事件订阅 ==================== */
 
 /// 事件类型 (payload 均为 JSON 字符串, 宿主构造; 语义见注释)
 typedef enum AgentxxClientEvent {
-    AGENTXX_CLIENT_EVT_READY = 0,      ///< 服务端就绪 {"uiCaps": n} (启动后最早事件)
+    AGENTXX_CLIENT_EVT_READY = 0,      ///< 服务端就绪 {"interfaces":[...],"sessionId"} (启动后最早事件)
     AGENTXX_CLIENT_EVT_CONN_STATE,     ///< 连接状态变化 {"connState","startupProgress"}
     AGENTXX_CLIENT_EVT_USER_INPUT,     ///< 用户输入已发出 {"sessionId","text"}
     AGENTXX_CLIENT_EVT_DELTA,          ///< 增量事件 (同 wire delta JSON 字段)
@@ -109,95 +102,18 @@ typedef struct AgentxxClientHostVtable {
     void (*free)(void* ptr);
     char* (*strdup)(const char* s);
 
-    /* ---- 能力协商 ---- */
-    /// 宿主 UI 能力位图 (AGENTXX_UI_CAP_*)
-    uint32_t (*ui_caps)(const AgentxxClientHost* host);
-
-    /* ---- 展示扩展 (语义 JSON; 宿主拷贝后投递 UI 线程, 插件可立即释放内存) ---- */
-    /// 注册状态栏项; 返回句柄 (宿主持有; 卸载自动清理)
-    /// - id: 全局唯一, 建议 "{插件名}.{项名}" (如 "codegraph.index")
-    /// - initialJson: {"text": "...", "tooltip": "..."} (text 必填)
-    /// - align: 0=左侧 1=右侧; order: 组内排序 (小在前)
-    /// - 宿主不支持 (ui_caps 无 STATUS_ITEM) 或 id 冲突时返回 NULL
-    AgentxxStatusItem* (*register_status_item)(
-        const AgentxxClientHost* host,
-        AgentxxPluginStringView  id,
-        AgentxxPluginStringView  initialJson,
-        int                      align,
-        int                      order
-    );
-    /// 更新状态栏项文本 ({"text": "..."}); 句柄无效返回非 0
-    int (*update_status_item)(
-        const AgentxxClientHost* host,
-        AgentxxStatusItem*       item,
-        AgentxxPluginStringView  json
-    );
-    /// 注销状态栏项 (句柄随后失效)
-    void (*unregister_status_item)(const AgentxxClientHost* host, AgentxxStatusItem* item);
-
-    /// 注册侧边栏面板; 返回句柄 (宿主持有; 卸载自动清理)
-    /// - id: 全局唯一, 建议 "{插件名}.{面板名}"
-    /// - propsJson: {"title": "..."} (title 必填; 显示在 tab 栏)
-    /// - 宿主不支持 (ui_caps 无 PANEL) 或 id 冲突时返回 NULL
-    AgentxxPanel* (*register_panel)(
-        const AgentxxClientHost* host,
-        AgentxxPluginStringView  id,
-        AgentxxPluginStringView  propsJson
-    );
-    /// 更新面板内容: itemsJson = {"items":[{"kind":"text","role":"normal","text":"..."},
-    ///   {"kind":"progress","label":"...","value":0.5},
-    ///   {"kind":"action","id":"rebuild","label":"Rebuild"}, ...]}
-    /// - text.role 指定文本样式: "title"=高亮强调 / "normal"=普通文本(默认) /
-    ///   "hint"=减淡提示 (缺省按 normal 渲染; 其余 role 值等同 normal)
-    /// - action 项被用户点击时: 宿主 post 到 client io 线程回调面板注册时经
-    ///   register_panel 关联的 on_action (见 entry 注册流程; 一期经回调参数注入)
-    int (*update_panel)(
-        const AgentxxClientHost* host,
-        AgentxxPanel*            panel,
-        AgentxxPluginStringView  itemsJson
-    );
-    /// 注销面板 (句柄随后失效)
-    void (*unregister_panel)(const AgentxxClientHost* host, AgentxxPanel* panel);
-
-    /// 注册侧边栏 Info 栏段落; 返回句柄 (宿主持有; 卸载自动清理)
-    /// - id: 全局唯一, 建议 "{插件名}.{段名}"
-    /// - propsJson: {"title": "..."} (title 可选; 空则无段落标题)
-    /// - 宿主不支持 (ui_caps 无 INFO_SECTION) 或 id 冲突时返回 NULL
-    AgentxxInfoSection* (*register_info_section)(
-        const AgentxxClientHost* host,
-        AgentxxPluginStringView  id,
-        AgentxxPluginStringView  propsJson
-    );
-    /// 更新 Info 栏段落内容: itemsJson 同 update_panel 的 items schema
-    ///   ({"items":[{"kind":"text","role":"title|normal|hint","text":"..."}, ...]});
-    ///   列表项由宿主按侧边栏 Append 段样式以 "|  xxx" 前缀展示
-    int (*update_info_section)(
-        const AgentxxClientHost* host,
-        AgentxxInfoSection*      section,
-        AgentxxPluginStringView  itemsJson
-    );
-    /// 注销 Info 栏段落 (句柄随后失效)
-    void (*unregister_info_section)(const AgentxxClientHost* host, AgentxxInfoSection* section);
-
-    /* ---- 输入扩展 (斜杠命令) ---- */
-    /// 注册斜杠命令: 用户输入 "/{name}" 触发 (name 不含 '/' 与空格)
-    /// - name: 全局唯一; description: 帮助/自动补全用
-    /// - execute: client io 线程同步调用; 返回动作 JSON (host->alloc), 失败返回
-    ///   NULL 并经 errorOut 输出错误 (host->alloc); 宿主解释动作 (见文件头)
-    /// - 返回 0 成功; 名字冲突或参数非法返回非 0
-    int (*register_command)(
-        const AgentxxClientHost* host,
-        AgentxxPluginStringView  name,
-        AgentxxPluginStringView  description,
-        char* (*execute)(void* ud, AgentxxPluginStringView argsJson, char** errorOut),
-        void* ud
-    );
-    /// 注销斜杠命令 (按名称); 不存在返回非 0
-    int (*unregister_command)(const AgentxxClientHost* host, AgentxxPluginStringView name);
-
-    /* ---- 交互原语 ---- */
-    /// 显示 toast 提示 (level: 0=info 1=warning 2=error; 实现可忽略级别差异)
-    void (*show_toast)(const AgentxxClientHost* host, AgentxxPluginStringView text, int level);
+    /* ---- 接口协商 (字符串集; 见本头 "接口协商" 节) ---- */
+    /// 宿主是否支持指定接口 ("client.panel"/"client.toast"/"<vendor>.x" 等;
+    /// 常量见 plugin_common.h plugin_interfaces; 未知名称返回 0 —— 安全失败)
+    int (*has_interface)(const AgentxxClientHost* host, AgentxxPluginStringView name);
+    /// COM 风格扩展接口表查询 (未实现/未知名称返回 NULL):
+    /// - 已定义扩展表: AGENTXX_CLIENT_EXT_UI ("client.ui", 展示/命令/toast)
+    /// - 扩展表首字段恒为 int version (该扩展接口自身版本, 独立演进, 与全局
+    ///   api_version 解耦); 表内函数指针可能为 NULL (宿主未实现该子能力),
+    ///   调用前必须判空 —— 等价于 has_interface 对应名为假
+    /// - 【契约冻结】核心 vtable 自 v4 起不再增删成员: 未来新增能力一律定义
+    ///   新的扩展表经本函数分发 (三期 COM 化演进, 见 docs/agent/plugins.md)
+    const void* (*query_extension)(const AgentxxClientHost* host, AgentxxPluginStringView name);
 
     /* ---- 事件订阅 (payload JSON 字符串; 卸载自动退订) ---- */
     AgentxxSubscription* (*subscribe)(
@@ -210,8 +126,10 @@ typedef struct AgentxxClientHostVtable {
 
     /* ---- 会话上下文 (快照; host->alloc) ---- */
     /// 当前 client 状态 JSON:
-    /// {"sessionId","connState","model","models":[],"isStreaming","uiCaps"}
-    /// (model/models 依赖服务端推送; 未收到时为空)
+    /// {"sessionId","connState","model","models":[],"isStreaming",
+    ///  "interfaces":["client.panel",...],
+    ///  "agentPlugins":[{"name","version","interfaces":[...]},...]}
+    /// (model/models/agentPlugins 依赖服务端推送; 未收到时为空)
     char* (*get_client_state)(const AgentxxClientHost* host);
 
     /* ---- 会话操作 (受限; 见插件设计文档安全节) ---- */
@@ -257,6 +175,108 @@ typedef struct AgentxxClientHostVtable {
     /// 字符串 → JSON 字符串字面量 (含引号包裹与转义; 结果 host->alloc)
     char* (*json_escape)(const AgentxxClientHost* host, AgentxxPluginStringView s);
 } AgentxxClientHostVtable;
+
+/* ==================== 扩展接口表 (COM 风格; 经 query_extension 获取) ==================== */
+
+/// "client.ui" 展示扩展表 (自核心 vtable 物理迁移; v4 起展示/命令/toast 全部
+/// 经此表访问): 表内函数指针可能为 NULL (宿主未实现该子能力), 调用前必须判空;
+/// 各函数签名与迁移前完全一致, 仅获取途径变化。
+/// 典型用法:
+///   auto ui = (const AgentxxClientExtUiVtable*)
+///       host->vtable->query_extension(host, AGENTXX_CLIENT_EXT_UI);
+///   if (ui && ui->register_panel) { ... }
+#define AGENTXX_CLIENT_EXT_UI         "client.ui"
+#define AGENTXX_CLIENT_EXT_UI_VERSION 1
+
+typedef struct AgentxxClientExtUiVtable {
+    int version; ///< 必须 == AGENTXX_CLIENT_EXT_UI_VERSION
+
+    /* ---- 状态栏项 ---- */
+    /// 注册状态栏项; 返回句柄 (宿主持有; 卸载自动清理)
+    /// - id: 全局唯一, 建议 "{插件名}.{项名}" (如 "codegraph.index")
+    /// - initialJson: {"text": "...", "tooltip": "..."} (text 必填)
+    /// - align: 0=左侧 1=右侧; order: 组内排序 (小在前)
+    /// - 宿主不支持该子能力 (函数指针 NULL) 或 id 冲突时返回 NULL
+    AgentxxStatusItem* (*register_status_item)(
+        const AgentxxClientHost* host,
+        AgentxxPluginStringView  id,
+        AgentxxPluginStringView  initialJson,
+        int                      align,
+        int                      order
+    );
+    /// 更新状态栏项文本 ({"text": "..."}); 句柄无效返回非 0
+    int (*update_status_item)(
+        const AgentxxClientHost* host,
+        AgentxxStatusItem*       item,
+        AgentxxPluginStringView  json
+    );
+    /// 注销状态栏项 (句柄随后失效)
+    void (*unregister_status_item)(const AgentxxClientHost* host, AgentxxStatusItem* item);
+
+    /* ---- 侧边栏面板 ---- */
+    /// 注册侧边栏面板; 返回句柄 (宿主持有; 卸载自动清理)
+    /// - id: 全局唯一, 建议 "{插件名}.{面板名}"
+    /// - propsJson: {"title": "..."} (title 必填; 显示在 tab 栏)
+    AgentxxPanel* (*register_panel)(
+        const AgentxxClientHost* host,
+        AgentxxPluginStringView  id,
+        AgentxxPluginStringView  propsJson
+    );
+    /// 更新面板内容: itemsJson = {"items":[{"kind":"text","role":"normal","text":"..."},
+    ///   {"kind":"progress","label":"...","value":0.5},
+    ///   {"kind":"action","id":"rebuild","label":"Rebuild"}, ...]}
+    /// - text.role 指定文本样式: "title"=高亮强调 / "normal"=普通文本(默认) /
+    ///   "hint"=减淡提示 (缺省按 normal 渲染; 其余 role 值等同 normal)
+    /// - action 项被用户点击时: 宿主 post 到 client io 线程回调面板注册时经
+    ///   register_panel 关联的 on_action (见 entry 注册流程; 一期经回调参数注入)
+    int (*update_panel)(
+        const AgentxxClientHost* host,
+        AgentxxPanel*            panel,
+        AgentxxPluginStringView  itemsJson
+    );
+    /// 注销面板 (句柄随后失效)
+    void (*unregister_panel)(const AgentxxClientHost* host, AgentxxPanel* panel);
+
+    /* ---- 侧边栏 Info 栏段落 ---- */
+    /// 注册 Info 栏段落; 返回句柄 (宿主持有; 卸载自动清理)
+    /// - id: 全局唯一, 建议 "{插件名}.{段名}"
+    /// - propsJson: {"title": "..."} (title 可选; 空则无段落标题)
+    AgentxxInfoSection* (*register_info_section)(
+        const AgentxxClientHost* host,
+        AgentxxPluginStringView  id,
+        AgentxxPluginStringView  propsJson
+    );
+    /// 更新 Info 栏段落内容: itemsJson 同 update_panel 的 items schema
+    ///   ({"items":[{"kind":"text","role":"title|normal|hint","text":"..."}, ...]});
+    ///   列表项由宿主按侧边栏 Append 段样式以 "|  xxx" 前缀展示
+    int (*update_info_section)(
+        const AgentxxClientHost* host,
+        AgentxxInfoSection*      section,
+        AgentxxPluginStringView  itemsJson
+    );
+    /// 注销 Info 栏段落 (句柄随后失效)
+    void (*unregister_info_section)(const AgentxxClientHost* host, AgentxxInfoSection* section);
+
+    /* ---- 斜杠命令 ---- */
+    /// 注册斜杠命令: 用户输入 "/{name}" 触发 (name 不含 '/' 与空格)
+    /// - name: 全局唯一; description: 帮助/自动补全用
+    /// - execute: client io 线程同步调用; 返回动作 JSON (host->alloc), 失败返回
+    ///   NULL 并经 errorOut 输出错误 (host->alloc); 宿主解释动作 (见文件头)
+    /// - 返回 0 成功; 名字冲突或参数非法返回非 0
+    int (*register_command)(
+        const AgentxxClientHost* host,
+        AgentxxPluginStringView  name,
+        AgentxxPluginStringView  description,
+        char* (*execute)(void* ud, AgentxxPluginStringView argsJson, char** errorOut),
+        void* ud
+    );
+    /// 注销斜杠命令 (按名称); 不存在返回非 0
+    int (*unregister_command)(const AgentxxClientHost* host, AgentxxPluginStringView name);
+
+    /* ---- toast 提示 ---- */
+    /// 显示 toast 提示 (level: 0=info 1=warning 2=error; 实现可忽略级别差异)
+    void (*show_toast)(const AgentxxClientHost* host, AgentxxPluginStringView text, int level);
+} AgentxxClientExtUiVtable;
 
 struct AgentxxClientHost {
     const AgentxxClientHostVtable* vtable; ///< 函数表 (宿主静态)

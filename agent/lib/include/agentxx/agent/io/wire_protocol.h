@@ -400,11 +400,11 @@ inline neograph::json makePing(int64_t t) {
 // ---------------------------------------------------------------------------
 
 inline neograph::json makeHelloAck(
-    bool                            ok,
-    std::string_view                sessionId,
-    std::string_view                tailHash,
-    const std::vector<std::string>& models,
-    const std::vector<std::string>& plugins = {}
+    bool                                  ok,
+    std::string_view                      sessionId,
+    std::string_view                      tailHash,
+    const std::vector<std::string>&       models,
+    const std::vector<WireHelloAck::PluginInfo>& plugins = {}
 ) {
     neograph::json j = {
         {"type",      MsgType::HelloAck},
@@ -417,10 +417,16 @@ inline neograph::json makeHelloAck(
     if (!models.empty()) {
         j["models"] = models;
     }
-    // 服务端已加载插件名列表 (client 插件据此判断对端可用性); 空时不携带
-    // (兼容旧客户端: 缺字段按"服务端未提供"处理)
+    // 服务端已加载插件结构化列表 (名字+版本+声明接口, client 插件据此判断
+    // 对端可用性与能力); 空时不携带 (缺字段按"服务端未提供"处理)
     if (!plugins.empty()) {
-        j["plugins"] = plugins;
+        auto arr = neograph::json::array();
+        for (const auto& p : plugins) {
+            arr.push_back({{"name",       p.name     },
+                           {"version",    p.version  },
+                           {"interfaces", p.interfaces}});
+        }
+        j["plugins"] = std::move(arr);
     }
     return j;
 }

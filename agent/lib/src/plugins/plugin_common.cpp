@@ -216,32 +216,6 @@ std::string resolvePluginEntryPath(const std::filesystem::path& dir, const std::
 
 // ==================== 接口协商基础设施 ====================
 
-namespace {
-
-/// 能力位 ↔ 接口名映射条目
-struct CapNameEntry {
-    uint32_t    cap;
-    const char* name;
-};
-
-/// AGENTXX_UI_CAP_* (低位段) → 接口名 (与 client_plugin_api.h 位定义一一对应)
-constexpr CapNameEntry kUiCapNames[] = {
-    {AGENTXX_UI_CAP_STATUS_ITEM,  "client.status_item"},
-    {AGENTXX_UI_CAP_PANEL,        "client.panel"},
-    {AGENTXX_UI_CAP_TOAST,        "client.toast"},
-    {AGENTXX_UI_CAP_KEYBIND,      "client.keybind"},
-    {AGENTXX_UI_CAP_PROMPT,       "client.prompt_modal"},
-    {AGENTXX_UI_CAP_MSG_DECOR,    "client.msg_decor"},
-    {AGENTXX_UI_CAP_INFO_SECTION, "client.info_section"},
-};
-
-/// AGENTXX_IFACE_* (高位段, 非展示类接口) → 接口名
-constexpr CapNameEntry kIfaceCapNames[] = {
-    {AGENTXX_IFACE_COMMAND, "client.command"},
-};
-
-} // namespace
-
 bool sideCaresAboutInterface(std::string_view name, bool agentSide) {
     if (name.starts_with("agent.")) {
         return agentSide;
@@ -291,21 +265,6 @@ RequiredEntrySides requiredEntrySides(const std::vector<std::string>& interfaces
             // 无前缀 / vendor 前缀: 保守视为两侧都可能依赖
             out.agentEntry  = true;
             out.clientEntry = true;
-        }
-    }
-    return out;
-}
-
-InterfaceSet clientHostInterfacesFromCaps(uint32_t caps) {
-    InterfaceSet out;
-    for (const auto& e : kUiCapNames) {
-        if ((caps & e.cap) != 0) {
-            out.insert(e.name);
-        }
-    }
-    for (const auto& e : kIfaceCapNames) {
-        if ((caps & e.cap) != 0) {
-            out.insert(e.name);
         }
     }
     return out;

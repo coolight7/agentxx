@@ -224,6 +224,9 @@ private:
     /// client 插件上行数据但 agent 侧未加载同名插件时, 每插件名最多每
     /// kUplinkWarnCooldown 一次 XX_LOGW, 防御高频上行刷屏
     std::map<std::string, std::chrono::steady_clock::time_point> uplinkWarnAt_;
+    // 注: 同一 controller 可被多个 client 连接/重连 (1:N), 因此不在此存储
+    // 各 client 的接口集上报 —— 收到 client_interfaces 约定事件时仅向 agent
+    // 总线转发 (订阅方按事件到达感知各 client 快照), 不做单值缓存避免覆盖
 
     std::atomic<bool> running_{false};
     std::atomic<bool> turnActive_{false};

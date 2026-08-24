@@ -178,7 +178,10 @@ void ClientPluginManager::setSessionId(std::string sessionId) {
 }
 
 InterfaceSet ClientPluginManager::hostSupportedInterfaces() const {
-    return clientHostInterfacesFromCaps(uiAdapter_ ? uiAdapter_->uiCaps() : 0);
+    // 接口集唯一来源: UI 适配器声明 (位图方案已移除, 见 client_plugin_api.h
+    // "接口协商" 节)。无适配器 (纯测试/直连) 时空集 —— 仅命令输入管线等
+    // 宿主固有能力也由适配器显式声明, 保持单一事实来源
+    return uiAdapter_ ? uiAdapter_->supportedInterfaces() : InterfaceSet{};
 }
 
 // ==================== 生命周期 ====================
@@ -232,7 +235,6 @@ asio::awaitable<std::shared_ptr<ClientPluginInstance>> ClientPluginManager::load
     std::string version;
     std::string desc;
     std::string err;
-    uint32_t    minCaps = 0;
     if (auto getInfo = reinterpret_cast<AgentxxClientPluginGetInfoFn>(
             NativeLoader::sym(handle, AGENTXX_CLIENT_SYMBOL_GET_INFO, err)
         )) {
@@ -254,7 +256,6 @@ asio::awaitable<std::shared_ptr<ClientPluginInstance>> ClientPluginManager::load
                 info->description.data ? info->description.data : "",
                 info->description.size
             };
-            minCaps = info->min_ui_caps;
         }
     }
     if (name.empty()) {
@@ -358,24 +359,8 @@ asio::awaitable<std::shared_ptr<ClientPluginInstance>> ClientPluginManager::load
     inst->host.opaque     = inst.get();
     inst->host.vtable     = hostVtable();
 
-    // UI 能力最低要求检查
-    if (uiAdapter_) {
-        uint32_t caps = uiAdapter_->uiCaps();
-        if ((caps & minCaps) != minCaps) {
-            XX_LOGE(
-                "[client_plugin] `{}` requires ui_caps 0x{:x}, host has 0x{:x}",
-                name,
-                minCaps,
-                caps
-            );
-            NativeLoader::close(handle);
-            co_return nullptr;
-        }
-    } else if (minCaps != 0) {
-        XX_LOGE("[client_plugin] `{}` requires ui_caps 0x{:x}, no UI adapter", name, minCaps);
-        NativeLoader::close(handle);
-        co_return nullptr;
-    }
+    // (v4) min_ui_caps 位图门禁已移除: 接口要求统一由上方清单 interfaces
+    // require 门禁承担 (字符串集, 见 plugin_common.h 接口协商节)
 
     // entry 卸载到内部线程池执行 (A2): 与 agent 侧一致 —— entry 内 vtable
     // 注册动作经 ioCallSync 回 io 线程同步执行; entry 在 io 线程执行会阻塞
@@ -866,20 +851,28 @@ std::string ClientPluginManager::clientStateJson() const {
     j["sessionId"]       = sessionId_;
     j["connState"]       = connState_;
     j["startupProgress"] = startupProgress_;
-    uint32_t caps        = uiAdapter_ ? uiAdapter_->uiCaps() : 0;
-    j["uiCaps"]          = static_cast<int>(caps);
-    // 宿主支持的接口名清单 (uiCaps 位图的自描述镜像; 三层协商第 3 层 ——
-    // 插件据此自行决定启用哪些功能; 见 plugin_common.h 接口协商节)
-    j["interfaces"]      = [caps] {
-        auto          arr = neograph::json::array();
-        const auto    set = clientHostInterfacesFromCaps(caps);
-        for (const auto& n : set) {
+    // 宿主支持的接口名清单 (三层协商第 3 层 —— 插件据此自行决定启用哪些
+    // 功能; 见 plugin_common.h 接口协商节)。位图 uiCaps 字段已移除 (v4)
+    j["interfaces"]      = [&] {
+        auto arr = neograph::json::array();
+        for (const auto& n : hostSupportedInterfaces()) {
             arr.push_back(n);
         }
         return arr;
     }();
-    // 服务端已加载的 agent 侧插件名列表 (空数组 = 未知, 见成员注释)
-    j["agentPlugins"]    = serverPlugins_;
+    // 服务端已加载的 agent 侧插件结构化列表 [{name,version,interfaces},...]
+    // (空数组 = 未知, 见成员注释)
+    j["agentPlugins"] = [&] {
+        auto arr = neograph::json::array();
+        for (const auto& p : serverPlugins_) {
+            arr.push_back(
+                {{"name",      p.name     },
+                 {"version",   p.version  },
+                 {"interfaces", p.interfaces}}
+            );
+        }
+        return arr;
+    }();
     return j.dump();
 }
 
@@ -900,21 +893,27 @@ void ClientPluginManager::postToIo(std::function<void()> fn) const {
 // ==================== ClientEventSink 实现 ====================
 
 void ClientPluginManager::onReady() {
-    neograph::json j = neograph::json::object();
-    uint32_t caps      = uiAdapter_ ? uiAdapter_->uiCaps() : 0;
-    j["uiCaps"]        = static_cast<int>(caps);
-    // 宿主支持的接口名清单 (与 clientStateJson 同源; 启动后最早可得的
-    // 协商结果, 插件在 READY 回调内即可完成功能启用决策)
-    j["interfaces"]    = [caps] {
-        auto       arr = neograph::json::array();
-        const auto set = clientHostInterfacesFromCaps(caps);
-        for (const auto& n : set) {
+    neograph::json j     = neograph::json::object();
+    // 宿主支持的接口名清单 (启动后最早可得的协商结果, 插件在 READY 回调内
+    // 即可完成功能启用决策; 位图 uiCaps 字段已移除, 见 client_plugin_api.h v4)
+    j["interfaces"]    = [&] {
+        auto arr = neograph::json::array();
+        for (const auto& n : hostSupportedInterfaces()) {
             arr.push_back(n);
         }
         return arr;
     }();
     j["sessionId"]     = sessionId_;
     dispatchEvent(AGENTXX_CLIENT_EVT_READY, j.dump());
+    // 三期6: 向服务端上报本 client 支持的接口集 (约定事件, 镜像 server_plugins;
+    // 服务端存储并经事件总线发布, agent 侧插件订阅 "agentxx_host.client_interfaces"
+    // 据此自适应 —— 如 emit_message_tip 在无 toast 接口的宿主上降级)
+    if (uiAdapter_) {
+        neograph::json up   = neograph::json::object();
+        up["sessionId"]     = sessionId_;
+        up["interfaces"]    = j["interfaces"];
+        uiAdapter_->sendPluginData("agentxx_host", "client_interfaces", up.dump());
+    }
 }
 
 void ClientPluginManager::onConnStateChanged(std::string_view state, std::string_view progress) {
@@ -959,22 +958,35 @@ void ClientPluginManager::onSessionSwitched(std::string_view sessionId) {
 
 void ClientPluginManager::onPluginData(const agentxx::agent::WirePluginData& data) {
     // 宿主约定事件 (server 端 SessionServerAgentIO 发布, 见该文件 kHostPluginName):
-    // server_plugins → 记录服务端已加载插件名列表, 供 get_client_state
-    // ("agentPlugins") 查询对端可用性; 其余约定事件照常向插件分发
+    // server_plugins → 记录服务端已加载插件结构化信息 [{name,version,interfaces},...],
+    // 供 get_client_state ("agentPlugins") 查询对端可用性与能力; 其余约定
+    // 事件照常向插件分发
     if (data.plugin == "agentxx_host" && data.event == "server_plugins") {
         try {
-            auto          j = neograph::json::parse(data.data);
-            std::vector<std::string> names;
+            auto                          j = neograph::json::parse(data.data);
+            std::vector<ServerPluginInfo> infos;
             if (j.contains("plugins") && j["plugins"].is_array()) {
                 for (const auto& p : j["plugins"]) {
-                    if (p.is_string()) {
-                        names.push_back(p.get<std::string>());
+                    if (!p.is_object() || !p.contains("name") || !p["name"].is_string()) {
+                        continue;
                     }
+                    ServerPluginInfo info{.name = p["name"].get<std::string>()};
+                    if (p.contains("version") && p["version"].is_string()) {
+                        info.version = p["version"].get<std::string>();
+                    }
+                    if (p.contains("interfaces") && p["interfaces"].is_array()) {
+                        for (const auto& n : p["interfaces"]) {
+                            if (n.is_string()) {
+                                info.interfaces.push_back(n.get<std::string>());
+                            }
+                        }
+                    }
+                    infos.push_back(std::move(info));
                 }
             }
-            serverPlugins_ = std::move(names);
+            serverPlugins_ = std::move(infos);
         } catch (...) {
-            // 载荷非法: 保留旧值 (不视为致命)
+            // 载荷非法: 保留旧值, 不崩溃
         }
     }
 
@@ -1148,6 +1160,10 @@ ClientPluginInstance* clientInstOf(const AgentxxClientHost* host) {
     return (host && host->opaque) ? static_cast<ClientPluginInstance*>(host->opaque) : nullptr;
 }
 
+/// "client.ui" 展示扩展表访问器 (定义于下方 vtable 装配区, 需在
+/// xx_cquery_extension 处前向引用)
+static const AgentxxClientExtUiVtable* clientExtUiVtable();
+
 ClientPluginManager* clientMgrOf(const AgentxxClientHost* host) {
     auto inst = clientInstOf(host);
     return inst ? inst->manager.lock().get() : nullptr;
@@ -1240,16 +1256,33 @@ char* xx_cjson_escape(const AgentxxClientHost* host, AgentxxPluginStringView s) 
     XX_PLUGIN_CATCH_END(nullptr)
 }
 
-// ---- 能力协商 ----
+// ---- 接口协商 ----
 
-uint32_t xx_cui_caps(const AgentxxClientHost* host) {
+int xx_chas_interface(const AgentxxClientHost* host, AgentxxPluginStringView name) {
     XX_PLUGIN_CATCH_BEGIN
     auto mgr = clientMgrOf(host);
-    if (!mgr || !mgr->uiAdapter()) {
+    if (!mgr || !name.data) {
         return 0;
     }
-    return mgr->uiAdapter()->uiCaps();
+    // 宿主接口集 = 适配器声明的名字集合 (位图方案已移除);
+    // "client.ui" 扩展表成员的非空性与该集合保持一致 (单一事实来源)
+    return mgr->hostSupportedInterfaces().contains(std::string{name.data, name.size}) ? 1 : 0;
     XX_PLUGIN_CATCH_END(0)
+}
+
+const void* xx_cquery_extension(const AgentxxClientHost* host, AgentxxPluginStringView name) {
+    XX_PLUGIN_CATCH_BEGIN
+    (void)host;
+    if (!name.data) {
+        return nullptr;
+    }
+    std::string_view n{name.data, name.size};
+    // 已定义扩展表: 展示组 (表内不支持子能力为 NULL 成员, 由适配器声明决定)
+    if (n == AGENTXX_CLIENT_EXT_UI) {
+        return clientExtUiVtable();
+    }
+    return nullptr;
+    XX_PLUGIN_CATCH_END(nullptr)
 }
 
 // ---- 状态栏项 ----
@@ -1621,23 +1654,37 @@ char* xx_cget_plugin_args(const AgentxxClientHost* host) {
     XX_PLUGIN_CATCH_END(nullptr)
 }
 
+/// "client.ui" 展示扩展表访问器 (v4 起 UI 注册函数的宿主实现挂载点):
+/// 表内成员恒非空 (函数实现存在), 子能力是否可用由各 register 入口的
+/// hostSupportedInterfaces 门禁决定 (拒绝时返回 NULL/非 0) —— 与扩展表
+/// "NULL = 不支持" 契约的分工: 表级 NULL 用于宿主整体缺失某子能力入口
+/// 的场景 (当前宿主全量装配, 保留判空语义供第三方精简宿主使用)。
+/// 以函数内静态表实现 (前向引用无需 extern 声明)
+static const AgentxxClientExtUiVtable* clientExtUiVtable() {
+    static const AgentxxClientExtUiVtable table = {
+        /* version */ AGENTXX_CLIENT_EXT_UI_VERSION,
+        /* register_status_item */ xx_cregister_status_item,
+        /* update_status_item */ xx_cupdate_status_item,
+        /* unregister_status_item */ xx_cunregister_status_item,
+        /* register_panel */ xx_cregister_panel,
+        /* update_panel */ xx_cupdate_panel,
+        /* unregister_panel */ xx_cunregister_panel,
+        /* register_info_section */ xx_cregister_info_section,
+        /* update_info_section */ xx_cupdate_info_section,
+        /* unregister_info_section */ xx_cunregister_info_section,
+        /* register_command */ xx_cregister_command,
+        /* unregister_command */ xx_cunregister_command,
+        /* show_toast */ xx_cshow_toast,
+    };
+    return &table;
+}
+
 const AgentxxClientHostVtable g_clientHostVtable = {
     /* alloc */ xx_calloc,
     /* free */ xx_cfree,
     /* strdup */ xx_cstrdup,
-    /* ui_caps */ xx_cui_caps,
-    /* register_status_item */ xx_cregister_status_item,
-    /* update_status_item */ xx_cupdate_status_item,
-    /* unregister_status_item */ xx_cunregister_status_item,
-    /* register_panel */ xx_cregister_panel,
-    /* update_panel */ xx_cupdate_panel,
-    /* unregister_panel */ xx_cunregister_panel,
-    /* register_info_section */ xx_cregister_info_section,
-    /* update_info_section */ xx_cupdate_info_section,
-    /* unregister_info_section */ xx_cunregister_info_section,
-    /* register_command */ xx_cregister_command,
-    /* unregister_command */ xx_cunregister_command,
-    /* show_toast */ xx_cshow_toast,
+    /* has_interface */ xx_chas_interface,
+    /* query_extension */ xx_cquery_extension,
     /* subscribe */ xx_csubscribe,
     /* unsubscribe */ xx_cunsubscribe,
     /* get_client_state */ xx_cget_client_state,
@@ -1671,8 +1718,8 @@ void* ClientPluginManager::registerStatusItem(
     if (!inst) {
         return nullptr;
     }
-    if (uiAdapter_ && !(uiAdapter_->uiCaps() & AGENTXX_UI_CAP_STATUS_ITEM)) {
-        XX_LOGW("[client_plugin] status item `{}` rejected: UI has no STATUS_ITEM cap", id);
+    if (!hostSupportedInterfaces().contains(std::string{plugin_interfaces::ClientStatusItem})) {
+        XX_LOGW("[client_plugin] status item `{}` rejected: interface client.status_item unsupported", id);
         return nullptr;
     }
     // id 冲突检查 (全局)
@@ -1808,8 +1855,8 @@ void* ClientPluginManager::registerPanel(
     if (!inst) {
         return nullptr;
     }
-    if (uiAdapter_ && !(uiAdapter_->uiCaps() & AGENTXX_UI_CAP_PANEL)) {
-        XX_LOGW("[client_plugin] panel `{}` rejected: UI has no PANEL cap", id);
+    if (!hostSupportedInterfaces().contains(std::string{plugin_interfaces::ClientPanel})) {
+        XX_LOGW("[client_plugin] panel `{}` rejected: interface client.panel unsupported", id);
         return nullptr;
     }
     {
@@ -1941,8 +1988,11 @@ void* ClientPluginManager::registerInfoSection(
     if (!inst) {
         return nullptr;
     }
-    if (uiAdapter_ && !(uiAdapter_->uiCaps() & AGENTXX_UI_CAP_INFO_SECTION)) {
-        XX_LOGW("[client_plugin] info section `{}` rejected: UI has no INFO_SECTION cap", id);
+    if (!hostSupportedInterfaces().contains(std::string{plugin_interfaces::ClientInfoSection})) {
+        XX_LOGW(
+            "[client_plugin] info section `{}` rejected: interface client.info_section unsupported",
+            id
+        );
         return nullptr;
     }
     {
@@ -2073,10 +2123,10 @@ int ClientPluginManager::registerCommand(
     if (!inst || !exec) {
         return -1;
     }
-    // 命令输入管线能力位 (AGENTXX_IFACE_COMMAND): 无命令输入面的宿主
-    // (位未置) 拒绝注册 —— 与其他 register_* 的能力门禁行为一致
-    if (uiAdapter_ && !(uiAdapter_->uiCaps() & AGENTXX_IFACE_COMMAND)) {
-        XX_LOGW("[client_plugin] command `{}` rejected: UI has no COMMAND cap", name);
+    // 命令输入管线接口 (client.command): 无命令输入面的宿主拒绝注册 ——
+    // 与其他 register_* 的接口门禁行为一致
+    if (!hostSupportedInterfaces().contains(std::string{plugin_interfaces::ClientCommand})) {
+        XX_LOGW("[client_plugin] command `{}` rejected: interface client.command unsupported", name);
         return -1;
     }
     {

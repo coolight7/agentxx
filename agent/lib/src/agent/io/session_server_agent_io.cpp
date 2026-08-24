@@ -34,16 +34,26 @@ namespace agent {
 //   发布无害 —— 状态快照重发是幂等的)。双端插件约定: 收到后重发当前完整
 //   状态快照 (如 codegraph 的 status/progress), 使晚接入/晚订阅的客户端
 //   立即得到正确显示。
-// - `agentxx_host.server_plugins`: 载荷 {"plugins":["名",...]} (服务端已加载的
-//   agent 侧插件名列表), 随 handleHello 发布。client 插件经 EVT_PLUGIN_DATA
-//   或 get_client_state("agentPlugins") 查询对端可用性, 缺失时可降级提示,
-//   避免静默丢弃造成"操作成功"假象。
+// - `agentxx_host.server_plugins`: 载荷 {"plugins":[{"name","version",
+//   "interfaces":[...]},...]} (服务端已加载的 agent 侧插件结构化信息), 随
+//   handleHello 发布。client 插件经 EVT_PLUGIN_DATA 或 get_client_state
+//   ("agentPlugins") 查询对端可用性与声明的接口, 缺失时可降级提示, 避免
+//   静默丢弃造成"操作成功"假象。
+// - `agentxx_host.client_interfaces`: 载荷 {"sessionId","interfaces":[...]}
+//   (client 宿主支持的接口名集合)。由客户端在 READY 时经上行插件数据通道
+//   上报 (ClientPluginManager::onReady); controller 与 client 是 1:N (同
+//   会话可多 client 接入/重连), 服务端不存储, 仅在 WirePluginDataUp 分支
+//   拦截并发布到 agent 总线 —— agent 侧插件订阅
+//   "agentxx_host.client_interfaces" 按事件到达感知各 client 快照, 据此
+//   自适应 (如 emit_message_tip 在无 toast 接口的宿主上降级)。
 //
-// 注意: 这两个事件会转发到客户端 (不以 "client." 开头, 不触环回跳过),
-// client 插件同样可订阅消费 (如据 server_plugins 自适应降级)。
+// 注意: server_plugins/client_interfaces 会转发到对端 (不以 "client." 开头,
+// 不触环回跳过), 对端插件同样可订阅消费。
 static constexpr std::string_view kHostPluginName    = "agentxx_host";
 static constexpr std::string_view kEvtClientAttached = "client_attached";
 static constexpr std::string_view kEvtServerPlugins  = "server_plugins";
+/// client 宿主接口集上报 (client → server; 见文件头注释)
+static constexpr std::string_view kEvtClientInterfaces = "client_interfaces";
 /// 上行 WirePluginDataUp 对端缺失警告冷却 (同一插件名两次警告最小间隔)
 static constexpr auto kUplinkWarnCooldown = std::chrono::seconds{30};
 
@@ -402,6 +412,18 @@ void SessionServerAgentIO::onPeerMessage(WireMessage msg) {
                     m.index
                 );
             } else if constexpr (std::is_same_v<T, WirePluginDataUp>) {
+                // 宿主约定上行事件拦截: client_interfaces (client 宿主接口集
+                // 上报, 三期6) —— controller 与 client 是 1:N (同会话可多
+                // client 接入/重连), 不做单值存储; 仅向 agent 总线转发
+                // (topic plugin.agentxx_host.client_interfaces, 订阅方按事件
+                // 到达感知各 client 快照), agent 侧插件据此自适应 (如无
+                // toast 接口的宿主上降级提示)
+                if (m.plugin == kHostPluginName && m.event == kEvtClientInterfaces) {
+                    if (auto agt = agent_.lock(); agt && agt->agentContext) {
+                        publishHostEvent(agt->agentContext->bus, kEvtClientInterfaces, m.data);
+                    }
+                    return;
+                }
                 // client 插件事件上行: 发布到 agent 事件总线 topic
                 // `plugin.client.{插件名}.{事件名}` (载荷 std::string), 由 agent
                 // 侧插件经 subscribe("client.{插件名}.{事件名}") 订阅消费
@@ -496,12 +518,18 @@ void SessionServerAgentIO::handleHello(const WireHello& hello, std::vector<std::
     // 先发送 HelloAck 再重放: 客户端 connect() 握手循环会丢弃 HelloAck 之前的消息,
     // 若先重放后 HelloAck, 全量 Sync/增量 Delta 会被客户端丢弃 → 重连后历史丢失。
     // HelloAck 之后发送的重放消息经客户端 recvQueue 缓冲, 由 runTransportLoop 正常处理。
-    // ack.plugins: 服务端已加载的 agent 侧插件名列表 (client 插件判断对端
-    // 可用性的正式通道; 与下方 server_plugins 约定事件二选一消费均可)
-    std::vector<std::string> loadedPlugins;
+    // ack.plugins: 服务端已加载 agent 侧插件结构化信息 (名字+版本+声明接口;
+    // client 插件判断对端可用性与能力的正式通道; 与下方 server_plugins 约定
+    // 事件二选一消费均可)
+    std::vector<WireHelloAck::PluginInfo> loadedPlugins;
     if (auto agent = agent_.lock(); agent && agent->agentContext && agent->agentContext->pluginManager) {
         for (const auto& p : agent->agentContext->pluginManager->list()) {
-            loadedPlugins.push_back(p.name);
+            WireHelloAck::PluginInfo info{.name = p.name, .version = p.version};
+            info.interfaces = p.requiredInterfaces;
+            for (const auto& n : p.optionalInterfaces) {
+                info.interfaces.push_back(n);
+            }
+            loadedPlugins.push_back(std::move(info));
         }
     }
     sendToPeer(WireHelloAck{
@@ -526,21 +554,27 @@ void SessionServerAgentIO::handleHello(const WireHello& hello, std::vector<std::
     }
 
     // 宿主约定事件 (见文件头 kHostPluginName 注释):
-    // - server_plugins: 同 ack.plugins 的约定事件形态 (供已运行的 client 插件
-    //   经 EVT_PLUGIN_DATA 订阅消费, 不依赖握手字段)
+    // - server_plugins: 同 ack.plugins 的约定事件形态 (结构化对象数组, 供
+    //   已运行的 client 插件经 EVT_PLUGIN_DATA 订阅消费, 不依赖握手字段)
     // - client_attached: 每次连接握手后重发一次 (重连/同会话新客户端也能
     //   获得状态快照; 与 subscribePluginEvents 处的发布重复无害)
     if (auto agent = agent_.lock(); agent && agent->agentContext) {
-        auto pluginNames = neograph::json::array();
+        auto pluginInfos = neograph::json::array();
         if (agent->agentContext->pluginManager) {
             for (const auto& p : agent->agentContext->pluginManager->list()) {
-                pluginNames.push_back(p.name);
+                auto interfaces = p.requiredInterfaces;
+                for (const auto& n : p.optionalInterfaces) {
+                    interfaces.push_back(n);
+                }
+                pluginInfos.push_back({{"name",       p.name      },
+                                       {"version",    p.version   },
+                                       {"interfaces", interfaces  }});
             }
         }
         publishHostEvent(
             agent->agentContext->bus,
             kEvtServerPlugins,
-            neograph::json{{"plugins", pluginNames}}.dump()
+            neograph::json{{"plugins", pluginInfos}}.dump()
         );
         publishHostEvent(
             agent->agentContext->bus,

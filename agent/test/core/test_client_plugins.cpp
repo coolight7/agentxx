@@ -69,9 +69,13 @@ static std::string findExamplePluginPath() {
 class MockPluginUiAdapter : public agentxx::plugin::PluginUiAdapter {
 public:
 
-    uint32_t uiCaps() const override {
-        return AGENTXX_UI_CAP_STATUS_ITEM | AGENTXX_UI_CAP_PANEL | AGENTXX_UI_CAP_TOAST
-               | AGENTXX_UI_CAP_INFO_SECTION | AGENTXX_IFACE_COMMAND;
+    agentxx::plugin::InterfaceSet supportedInterfaces() const override {
+        namespace pi = agentxx::plugin::plugin_interfaces;
+        return {std::string{pi::ClientStatusItem},
+                std::string{pi::ClientPanel},
+                std::string{pi::ClientToast},
+                std::string{pi::ClientInfoSection},
+                std::string{pi::ClientCommand}};
     }
 
     void onStatusItemRegistered(
@@ -335,11 +339,14 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
     XX_TEST_EXPECT_EQ(adapter->infoSectionRegistered(), 1);
 
     // ---- 3. 事件分发 ----
-    // READY: 插件回调更新状态栏 + 跨端 send_plugin_data("hello")
+    // READY: 插件回调更新状态栏 + 跨端 send_plugin_data("hello");
+    //        插件事件分发完成后宿主上报 client_interfaces (三期6, 镜像
+    //        server_plugins —— agent 侧插件据此感知 client 接口集)
     mgr->onReady();
-    XX_TEST_EXPECT_TRUE(adapter->dataUpCount() >= 1);
-    XX_TEST_EXPECT_EQ(adapter->lastDataEvent(), "hello");
-    XX_TEST_EXPECT_EQ(adapter->lastDataPlugin(), "example_plugin");
+    XX_TEST_EXPECT_TRUE(adapter->dataUpCount() >= 2);
+    // 宿主接口集上报最后发出 (插件 READY 处理器先行)
+    XX_TEST_EXPECT_EQ(adapter->lastDataEvent(), "client_interfaces");
+    XX_TEST_EXPECT_EQ(adapter->lastDataPlugin(), "agentxx_host");
 
     // TURN_END: 状态栏项文本更新 (turns: 1)
     {
@@ -647,18 +654,23 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
     }
 
     // ---- 10. 宿主约定事件 (server_plugins) + 对端缺失可观测性 ----
-    // - server_plugins → 记录服务端已加载插件列表, get_client_state 以
-    //   "agentPlugins" 暴露 (client 插件判断对端可用性的正式通道)
+    // - server_plugins (结构化载荷) → 记录服务端已加载插件列表, get_client_state
+    //   以 "agentPlugins" 暴露 [{name,version,interfaces},...] (client 插件
+    //   判断对端可用性/能力的正式通道)
     // - PLUGIN_DATA 无任何 client 订阅者: 不崩溃 (每插件名一次警告, 无法
     //   断言日志, 仅验证路径安全)
     {
         agentxx::agent::WirePluginData d;
         d.plugin = "agentxx_host";
         d.event  = "server_plugins";
-        d.data   = R"({"plugins":["agentxx_codegraph","agentxx_system_monitor"]})";
+        d.data   = R"({"plugins":[)"
+                   R"({"name":"agentxx_codegraph","version":"1.0.0","interfaces":["agent.core"]},)"
+                   R"({"name":"agentxx_system_monitor","version":"1.0.0",)"
+                   R"("interfaces":["agent.core"]}]})";
         mgr->onPluginData(d);
         auto stateJson = mgr->clientStateJson();
         XX_TEST_EXPECT_TRUE(stateJson.find("agentPlugins") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(stateJson.find("\"interfaces\"") != std::string::npos);
         XX_TEST_EXPECT_TRUE(stateJson.find("agentxx_codegraph") != std::string::npos);
         XX_TEST_EXPECT_TRUE(stateJson.find("agentxx_system_monitor") != std::string::npos);
 

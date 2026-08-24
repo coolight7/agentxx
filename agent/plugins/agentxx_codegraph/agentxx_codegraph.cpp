@@ -984,6 +984,9 @@ extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_unload(void* plugin_ctx) {
  * ===================================================================== */
 
 static const AgentxxClientHost* g_client_host = nullptr;
+/// "client.ui" 展示扩展表 (v4: Info 段落等经 query_extension 获取; 不支持
+/// 子能力成员为 NULL, 调用前判空)
+static const AgentxxClientExtUiVtable* g_client_ui = nullptr;
 static AgentxxInfoSection*      g_section     = nullptr;
 /// 索引状态缓存 (事件 handler 与面板刷新均在 client io 线程, 无跨线程竞争)
 static bool        g_loaded       = false;
@@ -1065,11 +1068,11 @@ static std::string buildInfoItemsJson() {
 
 /// 用最新缓存刷新 Info 段落 (client io 线程调用)
 static void refreshSection() {
-    if (!g_client_host || !g_section) {
+    if (!g_client_host || !g_section || !g_client_ui || !g_client_ui->update_info_section) {
         return;
     }
     const std::string json = buildInfoItemsJson();
-    g_client_host->vtable->update_info_section(
+    g_client_ui->update_info_section(
         g_client_host,
         g_section,
         agentxx_plugin_sv(json.data(), json.size())
@@ -1138,7 +1141,8 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxClientPluginInfo* agentxx_client_g
         AGENTXX_SV("agentxx_codegraph"),
         AGENTXX_SV("1.0.0"),
         AGENTXX_SV("CodeGraph index status (sidebar Info section)"),
-        0, // min_ui_caps: 无最低要求 (CLI 无 Info 栏时注册失败降级)
+        // v4 移除 min_ui_caps 位图字段: 接口要求改由 plugin.yaml interfaces
+        // 声明 (client.info_section 为 optional, CLI 缺失时降级)
     };
     return &info;
 }
@@ -1148,13 +1152,21 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
     g_client_host = host;
     (void)plugin_ctx;
 
-    // 1. 侧边栏 Info 栏段落 (title "CodeGraph"; 内容由 refreshSection 更新)
-    g_section = host->vtable->register_info_section(
-        host,
-        AGENTXX_SV("agentxx_codegraph.status"),
-        AGENTXX_SV(R"({"title":"CodeGraph"})")
+    // 解析展示扩展表 (v4: Info 段落等迁至 "client.ui" 扩展表; 不支持子能力
+    // 成员为 NULL)
+    g_client_ui = static_cast<const AgentxxClientExtUiVtable*>(
+        host->vtable->query_extension(host, AGENTXX_SV(AGENTXX_CLIENT_EXT_UI))
     );
-    // 宿主不支持 Info 段落 (如 CLI) 时返回 NULL, 插件降级 (不视为失败)
+
+    // 1. 侧边栏 Info 栏段落 (title "CodeGraph"; 内容由 refreshSection 更新)
+    g_section = g_client_ui && g_client_ui->register_info_section
+                  ? g_client_ui->register_info_section(
+                      host,
+                      AGENTXX_SV("agentxx_codegraph.status"),
+                      AGENTXX_SV(R"({"title":"CodeGraph"})")
+                  )
+                  : nullptr;
+    // 宿主不支持 Info 段落 (如 CLI) 时成员为 NULL, 插件降级 (不视为失败)
     if (g_section) {
         refreshSection(); // 初始占位 (等待 agent 侧 status 事件)
     }
@@ -1174,11 +1186,12 @@ extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_client_unload(void* plugin_ctx) {
     if (!g_client_host) {
         return;
     }
-    if (g_section) {
-        g_client_host->vtable->unregister_info_section(g_client_host, g_section);
+    if (g_section && g_client_ui && g_client_ui->unregister_info_section) {
+        g_client_ui->unregister_info_section(g_client_host, g_section);
         g_section = nullptr;
     }
     g_current_file.clear();
     g_client_host->vtable->log(g_client_host, 2, AGENTXX_SV("agentxx_codegraph client unloaded"));
     g_client_host = nullptr;
+    g_client_ui   = nullptr;
 }

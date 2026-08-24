@@ -588,12 +588,25 @@ std::optional<WireMessage> WsAgentIOTransport::deserialize(std::string_view json
                 }
             }
         }
-        // 服务端已加载插件名列表 (旧版服务端不携带 → 保持空数组)
+        // 服务端已加载插件结构化列表 [{name,version,interfaces},...]
+        // (服务端不携带该字段 → 保持空数组, 按"未知"处理)
         if (j.contains("plugins") && j["plugins"].is_array()) {
             for (const auto& p : j["plugins"]) {
-                if (p.is_string()) {
-                    ack.plugins.push_back(p.get<std::string>());
+                if (!p.is_object() || !p.contains("name") || !p["name"].is_string()) {
+                    continue;
                 }
+                WireHelloAck::PluginInfo info{.name = p["name"].get<std::string>()};
+                if (p.contains("version") && p["version"].is_string()) {
+                    info.version = p["version"].get<std::string>();
+                }
+                if (p.contains("interfaces") && p["interfaces"].is_array()) {
+                    for (const auto& n : p["interfaces"]) {
+                        if (n.is_string()) {
+                            info.interfaces.push_back(n.get<std::string>());
+                        }
+                    }
+                }
+                ack.plugins.push_back(std::move(info));
             }
         }
         return WireMessage{std::move(ack)};

@@ -316,6 +316,9 @@ extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_unload(void* plugin_ctx) {
  * ===================================================================== */
 
 static const AgentxxClientHost* g_client_host  = nullptr;
+/// "client.ui" 展示扩展表 (v4: 状态栏/面板/Info 段落/命令/toast 经
+/// query_extension 获取; 表内不支持子能力成员为 NULL, 调用前判空)
+static const AgentxxClientExtUiVtable* g_client_ui = nullptr;
 static AgentxxStatusItem*       g_status_item  = nullptr;
 static AgentxxPanel*            g_panel        = nullptr;
 static AgentxxInfoSection*      g_info_section = nullptr;
@@ -345,7 +348,8 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxClientPluginInfo* agentxx_client_g
         AGENTXX_SV(
             "Example client plugin: status item, panel, Info section, commands, events, cross-side data"
         ),
-        0, // min_ui_caps: 无最低要求 (无 UI 能力的 CLI 也可加载)
+        // v4 移除 min_ui_caps 位图字段: 最低接口要求改由 plugin.yaml
+        // interfaces.require 声明 (宿主加载前门禁), 见 docs/agent/plugins.md
     };
     return &info;
 }
@@ -420,19 +424,19 @@ static void on_client_turn_end(AgentxxPluginStringView payload_json, void* ud) {
         return;
     }
     ++g_turn_count;
-    if (g_status_item) {
+    if (g_status_item && g_client_ui && g_client_ui->update_status_item) {
         // json_escape 返回带引号的 JSON 字符串字面量, fmt 直接嵌入
         const std::string json = fmt::format(
             R"({{"text":{}}})",
             clientJsonEscape(fmt::format("turns: {}", g_turn_count))
         );
-        g_client_host->vtable->update_status_item(
+        g_client_ui->update_status_item(
             g_client_host,
             g_status_item,
             agentxx_plugin_sv(json.data(), json.size())
         );
     }
-    if (g_info_section) {
+    if (g_info_section && g_client_ui && g_client_ui->update_info_section) {
         // Info 栏段落: {"items":[{"kind":"text","text":"Turns: N"},
         // {"kind":"text","role":"hint","text":"Example Info section is live"}]}
         // 注意: clientJsonEscape 返回【带引号的 JSON 字面量】(如 "\"Turns: 1\""),
@@ -442,8 +446,7 @@ static void on_client_turn_end(AgentxxPluginStringView payload_json, void* ud) {
             R"({{"items":[{{"kind":"text","text":{}}},{{"kind":"text","role":"hint","text":"Example Info section is live"}}]}})",
             clientJsonEscape(fmt::format("Turns: {}", g_turn_count))
         );
-        g_client_host->vtable
-            ->update_info_section(g_client_host, g_info_section, AGENTXX_SV(json.c_str()));
+        g_client_ui->update_info_section(g_client_host, g_info_section, AGENTXX_SV(json.c_str()));
     }
 }
 
@@ -478,7 +481,9 @@ static void on_client_plugin_data(AgentxxPluginStringView payload_json, void* ud
         R"({{"items":[{{"kind":"text","text":{}}},{{"kind":"badge","text":"updated"}}]}})",
         clientJsonEscape(line)
     );
-    g_client_host->vtable->update_panel(g_client_host, g_panel, AGENTXX_SV(json.c_str()));
+    if (g_client_ui && g_client_ui->update_panel) {
+        g_client_ui->update_panel(g_client_host, g_panel, AGENTXX_SV(json.c_str()));
+    }
 }
 
 /* ---------------- entry / unload ---------------- */
@@ -488,32 +493,48 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
     g_client_host = host;
     (void)plugin_ctx;
 
-    // 1. 状态栏项 (左侧 align=0, order=10)
-    g_status_item = host->vtable->register_status_item(
-        host,
-        AGENTXX_SV("example_plugin.turns"),
-        AGENTXX_SV(R"({"text":"turns: 0"})"),
-        0,
-        10
+    // 解析展示扩展表 (v4: 状态栏/面板/Info 段落/命令/toast 迁至 "client.ui"
+    // 扩展表; 表内不支持的子能力成员为 NULL, 各注册点判空降级)
+    g_client_ui = static_cast<const AgentxxClientExtUiVtable*>(
+        host->vtable->query_extension(host, AGENTXX_SV(AGENTXX_CLIENT_EXT_UI))
     );
-    // 宿主不支持状态栏 (如 CLI) 时注册返回 NULL, 插件降级 (不视为失败)
+
+    // 1. 状态栏项 (左侧 align=0, order=10)
+    g_status_item = g_client_ui && g_client_ui->register_status_item
+                      ? g_client_ui->register_status_item(
+                          host,
+                          AGENTXX_SV("example_plugin.turns"),
+                          AGENTXX_SV(R"({"text":"turns: 0"})"),
+                          0,
+                          10
+                      )
+                      : nullptr;
+    // 宿主不支持状态栏 (如 CLI) 时成员为 NULL, 插件降级 (不视为失败)
 
     // 2. 侧边栏面板
-    g_panel = host->vtable->register_panel(
-        host,
-        AGENTXX_SV("example_plugin.panel"),
-        AGENTXX_SV(R"({"title":"Example"})")
-    );
+    g_panel = g_client_ui && g_client_ui->register_panel
+                ? g_client_ui->register_panel(
+                    host,
+                    AGENTXX_SV("example_plugin.panel"),
+                    AGENTXX_SV(R"({"title":"Example"})")
+                )
+                : nullptr;
 
     // 3. 侧边栏 Info 栏段落 (段落标题 "Example Info"; 内容由 TURN_END 更新)
-    g_info_section = host->vtable->register_info_section(
-        host,
-        AGENTXX_SV("example_plugin.info"),
-        AGENTXX_SV(R"({"title":"Example Info"})")
-    );
+    g_info_section = g_client_ui && g_client_ui->register_info_section
+                       ? g_client_ui->register_info_section(
+                           host,
+                           AGENTXX_SV("example_plugin.info"),
+                           AGENTXX_SV(R"({"title":"Example Info"})")
+                       )
+                       : nullptr;
 
-    // 3. 命令
-    if (host->vtable->register_command(
+    // 4. 命令 (命令输入管线接口 client.command 不支持的宿主上成员为 NULL:
+    //    命令是本插件核心演示功能, 此时加载失败并报告, 与原行为一致)
+    if (!g_client_ui || !g_client_ui->register_command) {
+        return -1;
+    }
+    if (g_client_ui->register_command(
             host,
             AGENTXX_SV("example"),
             AGENTXX_SV("Send a message from the example plugin"),
@@ -523,7 +544,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
         != 0) {
         return -1;
     }
-    if (host->vtable->register_command(
+    if (g_client_ui->register_command(
             host,
             AGENTXX_SV("example_toast"),
             AGENTXX_SV("Show a toast from the example plugin"),
@@ -552,24 +573,28 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
 
 extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_client_unload(void* plugin_ctx) {
     (void)plugin_ctx;
-    if (!g_client_host) {
+    if (!g_client_host || !g_client_ui) {
         return;
     }
-    // 主动反注册 (宿主也会自动清理, 这里演示插件侧约定)
-    g_client_host->vtable->unregister_command(g_client_host, AGENTXX_SV("example"));
-    g_client_host->vtable->unregister_command(g_client_host, AGENTXX_SV("example_toast"));
-    if (g_status_item) {
-        g_client_host->vtable->unregister_status_item(g_client_host, g_status_item);
+    // 主动反注册 (宿主也会自动清理, 这里演示插件侧约定; 成员判空遵循
+    // 扩展表契约 —— 不支持的子能力成员为 NULL)
+    if (g_client_ui->unregister_command) {
+        g_client_ui->unregister_command(g_client_host, AGENTXX_SV("example"));
+        g_client_ui->unregister_command(g_client_host, AGENTXX_SV("example_toast"));
+    }
+    if (g_status_item && g_client_ui->unregister_status_item) {
+        g_client_ui->unregister_status_item(g_client_host, g_status_item);
         g_status_item = nullptr;
     }
-    if (g_panel) {
-        g_client_host->vtable->unregister_panel(g_client_host, g_panel);
+    if (g_panel && g_client_ui->unregister_panel) {
+        g_client_ui->unregister_panel(g_client_host, g_panel);
         g_panel = nullptr;
     }
-    if (g_info_section) {
-        g_client_host->vtable->unregister_info_section(g_client_host, g_info_section);
+    if (g_info_section && g_client_ui->unregister_info_section) {
+        g_client_ui->unregister_info_section(g_client_host, g_info_section);
         g_info_section = nullptr;
     }
     g_client_host->vtable->log(g_client_host, 2, AGENTXX_SV("example client plugin unloaded"));
     g_client_host = nullptr;
+    g_client_ui   = nullptr;
 }

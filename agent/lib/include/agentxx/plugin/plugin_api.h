@@ -63,7 +63,7 @@ extern "C" {
 #define AGENTXX_PLUGIN_EXPORT
 #endif
 
-#define AGENTXX_PLUGIN_API_VERSION 8
+#define AGENTXX_PLUGIN_API_VERSION 9
 
 /* ==================== 字符串视图 (跨边界字符串参数统一形态) ==================== */
 
@@ -395,6 +395,21 @@ typedef struct AgentxxHostVtable {
     /// {"skills":[...],"memory":[...],"mcp":[ns,...]}
     /// 宿主未装配资源应用器 (BaseAgent 场景) 时返回 NULL
     char* (*get_own_resources)(const AgentxxHost*);
+
+    /* ---- 接口协商 (v9 新增; 取代位图协商, 语义见 plugin_common.h) ---- */
+    /// 宿主是否支持指定接口 (稳定名字符串: "agent.core" 等, 常量见
+    /// plugin_common.h plugin_interfaces; 未知名称返回 0 —— 安全失败)
+    /// - agent 宿主 (libagentxx 单实现): 版本匹配即支持 "agent.core"
+    int (*has_interface)(const AgentxxHost*, AgentxxPluginStringView name);
+    /// COM 风格扩展接口表查询 (未实现/未知名称返回 NULL):
+    /// - 扩展表为纯 C 结构体, 首字段恒为 int version (该扩展接口自身版本,
+    ///   独立演进, 与全局 api_version 解耦); 表内函数指针可能为 NULL
+    ///   (宿主未实现该子能力), 调用前必须判空
+    /// - 【契约冻结】核心 vtable 自 v9 起不再追加新函数: 未来新增能力一律
+    ///   定义新的扩展表经本函数分发, 避免频繁 bump 全局版本号 / 强制全部
+    ///   插件重编译 (三期 COM 化演进的第一步; 现有成员迁移到扩展表需
+    ///   主版本升级, 见 docs/agent/plugins.md)
+    const void* (*query_extension)(const AgentxxHost*, AgentxxPluginStringView name);
 } AgentxxHostVtable;
 
 struct AgentxxHost {

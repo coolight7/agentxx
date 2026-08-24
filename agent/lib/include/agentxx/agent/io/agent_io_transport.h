@@ -28,13 +28,23 @@ struct WireHello {
 };
 
 struct WireHelloAck {
-    bool        ok = false;
-    std::string sessionId;
-    std::string tailHash;
+    bool                     ok = false;
+    std::string              sessionId;
+    std::string              tailHash;
     std::vector<std::string> models;
-    /// 服务端已加载的 agent 侧插件名列表 (供 client 插件判断对端可用性;
-    /// 旧版服务端不携带该字段 → 反序列化为空数组, 客户端按"未知"处理)
-    std::vector<std::string> plugins;
+
+    /// 单个服务端插件的声明信息
+    struct PluginInfo {
+        std::string name;
+        std::string version;
+        /// 插件清单声明的接口名 (interfaces.require ∪ optional; 见
+        /// plugin_common.h 接口协商节), client 插件据此感知对端能力
+        std::vector<std::string> interfaces;
+    };
+
+    /// 服务端已加载的 agent 侧插件列表 (client 插件判断对端可用性/能力的
+    /// 正式通道; 服务端不携带该字段 → 反序列化为空数组, 客户端按"未知"处理)
+    std::vector<PluginInfo> plugins;
 };
 
 struct WireUserInput {

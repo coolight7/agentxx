@@ -1373,6 +1373,30 @@ static char* xx_get_own_resources(const AgentxxHost* host) {
     XX_PLUGIN_CATCH_END(nullptr)
 }
 
+// ---- 接口协商 (v9; 语义见 plugin_common.h 接口协商节) ----
+
+static int xx_has_interface(const AgentxxHost* host, AgentxxPluginStringView name) {
+    XX_PLUGIN_CATCH_BEGIN
+    if (!name.data) {
+        return 0;
+    }
+    // agent 宿主 (libagentxx 单实现): 核心接口集 = {"agent.core"} ——
+    // api_version 精确匹配门禁通过即全集可用; 扩展表当前未定义, 预留
+    // 第三方 agent 宿主按需实现
+    std::string_view n{name.data, name.size};
+    return n == plugin::plugin_interfaces::AgentCore ? 1 : 0;
+    XX_PLUGIN_CATCH_END(0)
+}
+
+static const void* xx_query_extension(const AgentxxHost*, AgentxxPluginStringView name) {
+    XX_PLUGIN_CATCH_BEGIN
+    (void)name;
+    // agent 侧暂无扩展表 (核心 vtable 全量可用); 未来新增能力在此登记,
+    // 不再修改 AgentxxHostVtable 结构本身
+    return nullptr;
+    XX_PLUGIN_CATCH_END(nullptr)
+}
+
 static const AgentxxHostVtable g_hostVtable = {
     xx_alloc,
     xx_free,
@@ -1415,6 +1439,8 @@ static const AgentxxHostVtable g_hostVtable = {
     xx_register_mcp_server,
     xx_unregister_mcp_server,
     xx_get_own_resources,
+    xx_has_interface,
+    xx_query_extension,
 };
 
 // ==================== 工具注册/注销 ====================

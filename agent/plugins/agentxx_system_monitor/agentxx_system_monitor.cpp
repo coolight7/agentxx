@@ -567,6 +567,9 @@ extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_unload(void* plugin_ctx) {
  * ===================================================================== */
 
 static const AgentxxClientHost* g_client_host = nullptr;
+/// "client.ui" 展示扩展表 (v4: Info 段落/命令经 query_extension 获取; 不支持
+/// 子能力成员为 NULL, 调用前判空)
+static const AgentxxClientExtUiVtable* g_client_ui = nullptr;
 static AgentxxInfoSection*      g_section     = nullptr;
 /// 系统资源显示开关 (命令 /sysinfo 切换; 默认开启, 与旧 TUI 设置一致)
 static std::atomic<bool> g_usage_enabled{true};
@@ -715,14 +718,15 @@ static void refreshUsageDisplay() {
         return;
     }
     // Info 段落: 明细 (开关关闭时显示占位)
-    if (g_section && !g_last_usage_json.empty()) {
+    if (g_section && !g_last_usage_json.empty() && g_client_ui
+        && g_client_ui->update_info_section) {
         std::string json;
         if (g_usage_enabled.load(std::memory_order_relaxed)) {
             json = buildUsageInfoItemsJson(parseUsage(g_last_usage_json));
         } else {
             json = R"({"items":[{"kind":"text","role":"hint","text":"System info: OFF"}]})";
         }
-        g_client_host->vtable->update_info_section(
+        g_client_ui->update_info_section(
             g_client_host,
             g_section,
             agentxx_plugin_sv(json.data(), json.size())
@@ -788,9 +792,10 @@ static char* sysinfo_cmd_execute(void* ud, AgentxxPluginStringView args_json, ch
     }
     std::string       text = next ? "System resource info: ON" : "System resource info: OFF";
     // 对端可用性检查: get_client_state("agentPlugins") 为服务端已加载的
-    // agent 侧插件名列表 (宿主约定事件 server_plugins / HelloAck.plugins;
-    // 空数组 = 服务端未提供, 不据此断言缺失)。agent 侧插件缺失时上行开关
-    // 同步会被静默丢弃 (采集照旧) —— 明确提示, 避免"操作成功"假象
+    // agent 侧插件结构化列表 [{name,version,interfaces},...] (宿主约定事件
+    // server_plugins / HelloAck.plugins; 空数组 = 服务端未提供, 不据此断言
+    // 缺失)。agent 侧插件缺失时上行开关同步会被静默丢弃 (采集照旧) ——
+    // 明确提示, 避免"操作成功"假象
     {
         char* stateJson    = g_client_host->vtable->get_client_state(g_client_host);
         bool  agentMissing = false;
@@ -803,8 +808,13 @@ static char* sysinfo_cmd_execute(void* ud, AgentxxPluginStringView args_json, ch
                     bool   found = false;
                     for (auto v : arr) {
                         ++n;
+                        // 元素为对象: 取 name 字段比对
+                        simdjson::ondemand::object obj;
+                        if (v.get_object().get(obj) != simdjson::SUCCESS) {
+                            continue;
+                        }
                         std::string_view sv;
-                        if (v.get_string().get(sv) == simdjson::SUCCESS
+                        if (obj["name"].get_string().get(sv) == simdjson::SUCCESS
                             && sv == "agentxx_system_monitor") {
                             found = true;
                         }
@@ -829,7 +839,8 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxClientPluginInfo* agentxx_client_g
         AGENTXX_SV("agentxx_system_monitor"),
         AGENTXX_SV("1.0.0"),
         AGENTXX_SV("System resource usage: Info section (CPU/RAM/GPU), /sysinfo toggle"),
-        0, // min_ui_caps: 无最低要求 (CLI 无 Info 栏时注册失败降级)
+        // v4 移除 min_ui_caps 位图字段: 接口要求改由 plugin.yaml interfaces
+        // 声明 (client.info_section 为 optional, CLI 缺失时降级)
     };
     return &info;
 }
@@ -839,14 +850,22 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
     g_client_host = host;
     (void)plugin_ctx;
 
+    // 解析展示扩展表 (v4: Info 段落/命令迁至 "client.ui" 扩展表; 不支持
+    // 子能力成员为 NULL)
+    g_client_ui = static_cast<const AgentxxClientExtUiVtable*>(
+        host->vtable->query_extension(host, AGENTXX_SV(AGENTXX_CLIENT_EXT_UI))
+    );
+
     // 1. 侧边栏 Info 栏段落 (资源占用明细: CPU/RAM/GPU; 内容由
     //    refreshUsageDisplay 更新)
-    g_section = host->vtable->register_info_section(
-        host,
-        AGENTXX_SV("agentxx_system_monitor.usage"),
-        AGENTXX_SV(R"({"title":"System"})")
-    );
-    // 宿主不支持 Info 段落时返回 NULL, 插件降级 (不视为失败)
+    g_section = g_client_ui && g_client_ui->register_info_section
+                  ? g_client_ui->register_info_section(
+                      host,
+                      AGENTXX_SV("agentxx_system_monitor.usage"),
+                      AGENTXX_SV(R"({"title":"System"})")
+                  )
+                  : nullptr;
+    // 宿主不支持 Info 段落时成员为 NULL, 插件降级 (不视为失败)
 
     // 2. 事件订阅: 宿主转发的系统资源事件 (WirePluginData agentxx_system_monitor.usage)
     if (!host->vtable
@@ -854,15 +873,17 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
         return -1;
     }
 
-    // 3. 命令 /sysinfo: 切换显示
-    if (host->vtable->register_command(
-            host,
-            AGENTXX_SV("sysinfo"),
-            AGENTXX_SV("Toggle system resource info display (CPU/RAM/GPU Info section)"),
-            sysinfo_cmd_execute,
-            nullptr
-        )
-        != 0) {
+    // 3. 命令 /sysinfo: 切换显示 (无命令输入面的宿主成员为 NULL → 加载失败;
+    //    命令是本插件核心交互, 与原 register 失败行为一致)
+    if (!g_client_ui || !g_client_ui->register_command
+        || g_client_ui->register_command(
+               host,
+               AGENTXX_SV("sysinfo"),
+               AGENTXX_SV("Toggle system resource info display (CPU/RAM/GPU Info section)"),
+               sysinfo_cmd_execute,
+               nullptr
+           )
+               != 0) {
         return -1;
     }
 
@@ -872,16 +893,19 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
 
 extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_client_unload(void* plugin_ctx) {
     (void)plugin_ctx;
-    if (!g_client_host) {
+    if (!g_client_host || !g_client_ui) {
         return;
     }
-    if (g_section) {
-        g_client_host->vtable->unregister_info_section(g_client_host, g_section);
+    if (g_section && g_client_ui->unregister_info_section) {
+        g_client_ui->unregister_info_section(g_client_host, g_section);
         g_section = nullptr;
     }
-    g_client_host->vtable->unregister_command(g_client_host, AGENTXX_SV("sysinfo"));
+    if (g_client_ui->unregister_command) {
+        g_client_ui->unregister_command(g_client_host, AGENTXX_SV("sysinfo"));
+    }
     g_last_usage_json.clear();
     g_client_host->vtable
         ->log(g_client_host, 2, AGENTXX_SV("agentxx_system_monitor client unloaded"));
     g_client_host = nullptr;
+    g_client_ui   = nullptr;
 }

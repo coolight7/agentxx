@@ -288,7 +288,7 @@ typedef int (*AgentxxHookFn)(void* user_data, AgentxxHookPoint point,
 - `entry` 运行在宿主线程池; 其中经 vtable 的注册/订阅等 io 线程约束操作由宿主自动投递回 io 线程串行执行 (插件无感, entry 内可安全调用任意 API)
 - `unload` 在宿主等全部在途回调完成后调用; 宿主会在此之前自动反注册该插件的一切工具/钩子/订阅/能力
 
-**版本策略**: 修改契约时递增 `AGENTXX_PLUGIN_API_VERSION`; 宿主拒绝 api_version 不匹配的插件 (仅拒绝, 不崩溃)。
+**版本策略**: 修改契约时递增 `AGENTXX_PLUGIN_API_VERSION`; 宿主拒绝 api_version 不匹配的插件 (仅拒绝, 不崩溃)。自 **v9 (2026-08)** 起核心 vtable 契约冻结: 新增能力一律定义独立扩展表 (首字段自带 `version`) 经 `query_extension` 分发, 不再递增全局版本号; 既有核心成员物理迁移到扩展表需主版本升级 (client 侧 v4 已将展示/命令/toast 迁至 "client.ui" 扩展表, 见 4.7)。
 
 ### 4.3 宿主侧适配 (vtable → 现有强类型世界)
 
@@ -469,7 +469,7 @@ std::string b64 = agentxx::util::base64Encode(sv);  // 静态链入本插件副�
   程序按需外置), 内置模式不产出 client 插件库; `client_plugins` 测试在
   内置模式下跳过
 
-### 4.7 接口协商 (接口清单声明 / 预载校验 / 运行时发现, 2026-08)
+### 4.7 接口协商 (字符串接口集 + COM 式扩展表, 2026-08 二期)
 
 > 目标: 适配不同 client 宿主 (cli / tui / gui, 甚至第三方 app) 支持的插件
 > 接口各不相同 —— 同一插件目录在能力齐备的宿主全量启用, 在缺能力的宿主
@@ -483,18 +483,18 @@ agent 侧接口集 ≡ 当前 `api_version` 头文件内容 (版本匹配即全�
 **接口命名** (稳定字符串契约, 常量见 `plugin_common.h` 的
 `plugin_interfaces` 命名空间):
 
-| 名称 | 归属侧 | 对应能力位 |
+| 名称 | 归属侧 | 说明 |
 |---|---|---|
-| `agent.core` | agent | (= api_version 核心: 工具/钩子/事件/能力) |
-| `client.status_item` | client | `AGENTXX_UI_CAP_STATUS_ITEM` |
-| `client.panel` | client | `AGENTXX_UI_CAP_PANEL` |
-| `client.toast` | client | `AGENTXX_UI_CAP_TOAST` |
-| `client.keybind` (预留) | client | `AGENTXX_UI_CAP_KEYBIND` |
-| `client.prompt_modal` (预留) | client | `AGENTXX_UI_CAP_PROMPT` |
-| `client.msg_decor` (预留) | client | `AGENTXX_UI_CAP_MSG_DECOR` |
-| `client.info_section` | client | `AGENTXX_UI_CAP_INFO_SECTION` |
-| `client.command` | client | `AGENTXX_IFACE_COMMAND` (高位段 `1<<16`) |
-| `<vendor>.<name>` | 双方 | 无 (宿主不认识即不支持, 安全失败) |
+| `agent.core` | agent | api_version 核心: 工具/钩子/事件/能力 |
+| `client.status_item` | client | 状态栏项 |
+| `client.panel` | client | 侧边栏面板 |
+| `client.toast` | client | toast 提示 |
+| `client.keybind` (预留) | client | 自定义键位 |
+| `client.prompt_modal` (预留) | client | 模态询问 |
+| `client.msg_decor` (预留) | client | 消息装饰 |
+| `client.info_section` | client | 侧边栏 Info 栏段落 |
+| `client.command` | client | 斜杠命令输入管线 |
+| `<vendor>.<name>` | 双方 | 宿主不认识即不支持, 安全失败 |
 
 **三层设计**:
 
@@ -511,30 +511,65 @@ agent 侧接口集 ≡ 当前 `api_version` 头文件内容 (版本匹配即全�
    (`sideCaresAboutInterface`)。
 
 2. **校验层** (框架强制, dlopen 前后两道):
-   - **require 门禁**: 宿主支持集由 `PluginUiAdapter::uiCaps()` 位图经映射
-     表 (`clientHostInterfacesFromCaps`, 唯一出处 plugin_common.cpp) 得出;
-     `checkInterfacesForSide` 比对 require 未满足 → **跳过加载** (INFO 日志
-     + `skippedPlugins()` 记录原因供展示层排查; 非错误 —— 同一插件目录服务
-     多种宿主是预期情况); optional 缺失仅警告。
+   - **require 门禁**: 宿主支持集 = `PluginUiAdapter::supportedInterfaces()`
+     声明的名字集合 (单一事实来源); `checkInterfacesForSide` 比对 require
+     未满足 → **跳过加载** (INFO 日志 + `skippedPlugins()` 记录原因供展示层
+     排查; 非错误 —— 同一插件目录服务多种宿主是预期情况); optional 缺失仅
+     警告。
    - **符号意图预检**: require 声明了某侧接口却未导出该侧入口符号
      (`requiredEntrySides`) → 明确报错, 声明意图优先于 sides==Auto 的静默
      容忍。
    - agent 侧走同一套公共函数, 支持集恒为 `{agent.core}`。
 
-3. **决策层** (插件自主, 零 ABI 变更): 插件 entry 内经既有 `ui_caps()` 位图
-   查询 (高位段 `AGENTXX_IFACE_*` 语义推广, 旧宿主不会置高位段, 判位自然
-   降级), 或读 EVT_READY payload 与 `get_client_state` 新增的
-   `"interfaces": ["client.panel", ...]` 字符串数组 (位图的自描述镜像),
-   自行决定注册哪些功能; agent 侧对应 `get_config` JSON 同名键。
+3. **决策层** (插件自主): 插件 entry 内经 v9/v4 新增的
+   `has_interface(name)` 同步判单名, 或读 EVT_READY payload 与
+   `get_client_state` 的 `"interfaces": ["client.panel", ...]` 字符串数组,
+   自行决定注册哪些功能。
+
+**COM 式扩展表** (`query_extension`, 三期演进落地):
+
+- 核心契约冻结: 自 plugin_api **v9** / client_plugin_api **v4** 起, 核心
+  vtable 不再增删成员 —— 未来新增能力一律定义新的扩展表 (纯 C 结构体,
+  首字段恒为自身 `version`), 经 `query_extension(host, name)` 分发, 与全局
+  版本号解耦, 不再强制全部插件重编译。
+- 已定义扩展表: `AGENTXX_CLIENT_EXT_UI` ("client.ui",
+  `AgentxxClientExtUiVtable`) —— 状态栏/面板/Info 段落/命令/toast 自核心
+  vtable 物理迁移至此。表内不支持的子能力成员为 NULL 函数指针, 插件调用前
+  判空; `has_interface` 对应成员同步为假。典型用法:
+
+  ```c
+  auto ui = (const AgentxxClientExtUiVtable*)
+      host->vtable->query_extension(host, AGENTXX_SV(AGENTXX_CLIENT_EXT_UI));
+  if (ui && ui->register_panel) { /* ... */ }
+  ```
+
+- 第三方精简宿主只需实现核心 + 想支持的扩展表; agent 侧暂无扩展表 (预留)。
 
 **与版本门禁的关系** (重要): `api_version` 精确匹配门禁保留且不被本机制
-替代 —— vtable 是 C 结构体, 老宿主+新插件按新偏移读字段是 UB, 这只能靠
-版本门禁挡住; 接口协商只解决"功能子集"维度。若未来需要放宽到主版本内
-向前兼容, 正确路径是 COM 式 per-interface vtable (远期演进, 当前不做)。
+替代 —— 核心 vtable 是 C 结构体, 老宿主+新插件按新偏移读字段是 UB, 这只能
+靠版本门禁挡住; 接口协商只解决"功能子集"维度, 扩展表机制解决"新增能力不
+动全局版本"维度。物理迁移既有核心成员到扩展表需主版本升级。
 
-**行为变化说明**: `register_command` 现按 `AGENTXX_IFACE_COMMAND` 位门禁
-(与其他 register_* 一致); 内置 CLI/TUI 适配器均已置位, 行为不变; 未置位
-的第三方适配器下命令注册被拒 (返回非 0), 插件应降级。
+**跨端感知与上报** (约定事件, 均以伪插件名 `agentxx_host` 承载):
+- server → client: `server_plugins` 载荷为结构化对象数组
+  `[{"name","version","interfaces":[...]},...]`; `WireHelloAck.plugins`
+  同构。client 插件经 get_client_state 的 `"agentPlugins"` 字段查询对端
+  可用性与声明的接口。
+- client → server: `client_interfaces` (三期6) —— client 在 READY 时上报
+  本宿主接口集 `{"sessionId","interfaces":[...]}`。**controller 与 client
+  是 1:N** (同会话可多 client 接入/重连), 服务端不存储该上报, 仅转发到
+  agent 总线; agent 侧插件订阅 `agentxx_host.client_interfaces`, 按事件
+  到达感知各 client 快照并自适应 (如 emit_message_tip 在无 toast 接口的
+  宿主上降级)。
+
+**v4 行为变化说明**:
+- 位图方案整体移除: `AGENTXX_UI_CAP_*` / `AGENTXX_IFACE_*` /
+  `ui_caps()` / `min_ui_caps` 字段不复存在; 最低接口要求改由清单
+  `interfaces.require` 声明 (宿主加载前门禁)。
+- `register_command` 按 `client.command` 接口门禁 (与其他 register_*
+  一致); CLI/TUI 适配器均声明该接口, 行为不变。
+- 展示/命令/toast 注册函数自核心 vtable 迁至 "client.ui" 扩展表, 插件需
+  改经 `query_extension` 获取 (仓库内全部插件已迁移, 可作参考实现)。
 
 ---
 
@@ -715,19 +750,20 @@ agent 侧插件 (工具/钩子/事件/能力) 已完备, 但 client (CLI/TUI) �
 2. **声明拦截点**: 斜杠命令 (如 `/usage`) —— 回调拿到参数, 返回动作 JSON;
 3. **调用交互原语**: toast / 代发消息 / 请求取消 —— 命令式调用。
 
-每个 UI 实现经 `ui_caps` 位图向插件声明自己支持什么, 不支持的注册项自动失败 (返回 NULL / 非 0), 插件自适应降级:
+每个 UI 实现经 `supportedInterfaces()` 声明自己支持的接口名集合
+(`plugin_interfaces` 常量), 宿主据此装配 "client.ui" 扩展表与加载门禁;
+不支持的注册项自动失败 (返回 NULL / 非 0), 插件自适应降级。展示/命令/toast
+自 client v4 起迁至 "client.ui" 扩展表 (`AgentxxClientExtUiVtable`, 经
+`query_extension` 获取; 表内不支持子能力成员为 NULL):
 
 ```c
-#define AGENTXX_UI_CAP_STATUS_ITEM  (1u << 0) ///< 状态栏项
-#define AGENTXX_UI_CAP_PANEL        (1u << 1) ///< 侧边栏面板
-#define AGENTXX_UI_CAP_TOAST        (1u << 2) ///< toast 提示
-#define AGENTXX_UI_CAP_KEYBIND      (1u << 3) ///< 自定义键位 (预留)
-#define AGENTXX_UI_CAP_PROMPT       (1u << 4) ///< 模态询问 (预留)
-#define AGENTXX_UI_CAP_MSG_DECOR    (1u << 5) ///< 消息装饰 (预留)
-#define AGENTXX_UI_CAP_INFO_SECTION (1u << 6) ///< 侧边栏 Info 栏段落扩展
+auto ui = (const AgentxxClientExtUiVtable*)
+    host->vtable->query_extension(host, AGENTXX_SV(AGENTXX_CLIENT_EXT_UI));
+if (ui && ui->register_panel) { /* ... */ }   /* 成员判空 = 能力判空 */
 ```
 
-CLI 的 caps = `TOAST` (命令为输入管线一部分, 必然支持); TUI = `STATUS_ITEM | PANEL | TOAST | INFO_SECTION`; 未来 GUI 自行声明。
+CLI 声明 `{client.toast, client.command}` (命令为输入管线一部分, 必然支持);
+TUI = `{status_item, panel, toast, info_section, command}`; 未来 GUI 自行声明。
 
 Info 栏段落 (register_info_section): 插件向侧边栏内置 Info tab 注入段落 (id 唯一, props `{"title": "..."}` 可省略), 内容经 update_info_section 更新 (items schema 与面板一致); 渲染在 Info 栏 Append 组件列表之后, 由 TUI 每帧从 UI 注册表快照读取 —— 适合把摘要/状态信息 (如 codegraph 索引状态、系统资源占用) 直接放进常驻 Info 栏, 而无需占用独立 tab。
 
@@ -739,7 +775,7 @@ Info 栏段落 (register_info_section): 插件向侧边栏内置 Info tab 注入
 ```
 
 **client 事件订阅** (`AgentxxClientEvent`, payload 均为 JSON 字符串):
-`READY` (服务端就绪, {"uiCaps": n}) / `CONN_STATE` / `USER_INPUT` / `DELTA` (增量) / `TURN_END` / `SESSION_SWITCH` / `PLUGIN_DATA` (WirePluginData 转发, {"plugin","event","data"})。
+`READY` (服务端就绪, {"interfaces":[...],"sessionId"}) / `CONN_STATE` / `USER_INPUT` / `DELTA` (增量) / `TURN_END` / `SESSION_SWITCH` / `PLUGIN_DATA` (WirePluginData 转发, {"plugin","event","data"})。
 
 ### 7.3 跨端数据流 (本地/远程同路径)
 
@@ -763,7 +799,8 @@ client 插件 send_plugin_data("rebuild_request", {...})
 | 事件 (topic `plugin.agentxx_host.{事件}`) | 载荷 | 发布时机 | 用途 |
 |------|------|---------|------|
 | `client_attached` | `{"sessionId":"..."}` | subscribePluginEvents 注册成功时 + 每次 handleHello 握手完成后 (重复发布无害, 快照重发幂等) | 双端插件收到后**重发当前完整状态快照** —— 修复"status 等一次性事件先于端点订阅/客户端接入而丢失 → 客户端 UI 永久滞留初始占位 (如 codegraph 'wait for index')" |
-| `server_plugins` | `{"plugins":["名",...]}` | handleHello 握手完成后 (与 HelloAck.plugins 同数据的事件形态) | client 插件查询服务端已加载的 agent 侧插件列表, 对端缺失时降级提示 |
+| `server_plugins` | `{"plugins":[{"name","version","interfaces":[...]},...]}` | handleHello 握手完成后 (与 HelloAck.plugins 同数据的事件形态) | client 插件查询服务端已加载的 agent 侧插件及其声明的接口, 对端缺失/缺能力时降级提示 |
+| `client_interfaces` (三期6) | `{"sessionId":"...","interfaces":["client.toast",...]}` | client 端点 READY 时由 ClientPluginManager 上报 (经 WirePluginDataUp) | 服务端不存储 (controller:client = 1:N), 仅转发到 agent 总线; agent 侧插件订阅后按事件到达感知各 client 接口集并自适应 (如 emit_message_tip 在无 toast 接口的宿主上降级) |
 
 - 两个事件不以 `client.` 开头, 会正常转发到客户端 (client 插件同样可订阅消费,
   如据 `server_plugins` 自适应降级)
@@ -797,14 +834,14 @@ client 插件 send_plugin_data("rebuild_request", {...})
 ### 7.5 client 入口 ABI 摘要
 
 ```c
-#define AGENTXX_CLIENT_PLUGIN_API_VERSION 3
+#define AGENTXX_CLIENT_PLUGIN_API_VERSION 4
 
 typedef struct AgentxxClientPluginInfo {
     int api_version;                /* == AGENTXX_CLIENT_PLUGIN_API_VERSION */
     AgentxxPluginStringView name;   /* 全局唯一 (与 agent 侧插件共用命名空间) */
     AgentxxPluginStringView version;
     AgentxxPluginStringView description;
-    uint32_t min_ui_caps;           /* 宿主 ui_caps() 不满足则拒绝加载 */
+    /* v4 移除 min_ui_caps: 接口要求改由 plugin.yaml interfaces.require 声明 */
 } AgentxxClientPluginInfo;
 
 /* 入口符号 */
@@ -813,17 +850,16 @@ typedef struct AgentxxClientPluginInfo {
 #define AGENTXX_CLIENT_SYMBOL_UNLOAD   "agentxx_client_unload"
 ```
 
-`AgentxxClientHostVtable` 分组 (与 agent 侧 vtable 同内存/日志/JSON 语义):
+`AgentxxClientHostVtable` 分组 (与 agent 侧 vtable 同内存/日志/JSON 语义;
+v4 核心契约冻结, 新增能力走 `query_extension` 扩展表):
 
 | 分组 | 函数 |
 |------|------|
 | 内存 | `alloc` / `free` / `strdup` |
-| 能力协商 | `ui_caps` |
-| 展示扩展 | `register_status_item` / `update_status_item` / `unregister_status_item`; `register_panel` / `update_panel` / `unregister_panel`; `register_info_section` / `update_info_section` / `unregister_info_section` (返回句柄, 卸载自动清理) |
-| 输入扩展 | `register_command` / `unregister_command` (execute 返回动作 JSON) |
-| 交互原语 | `show_toast` |
+| 接口协商 | `has_interface(name)`; `query_extension(name)` (COM 式扩展表查询) |
+| 展示/命令/toast 扩展表 ("client.ui") | `register_status_item` / `update_status_item` / `unregister_status_item`; `register_panel` / `update_panel` / `unregister_panel`; `register_info_section` / `update_info_section` / `unregister_info_section`; `register_command` / `unregister_command`; `show_toast` (不支持子能力成员为 NULL) |
 | 事件订阅 | `subscribe` / `unsubscribe` (卸载自动退订) |
-| 会话上下文 | `get_client_state` ({"sessionId","connState","model","models","isStreaming","uiCaps","agentPlugins"}) |
+| 会话上下文 | `get_client_state` ({"sessionId","connState","model","models","isStreaming","interfaces","agentPlugins":[{name,version,interfaces}]}) |
 | 会话操作 | `send_user_input` (与用户输入同排队语义) / `request_cancel` |
 | 跨端数据 | `send_plugin_data` (client → agent, topic `client.{插件名}.{事件名}`) |
 | 自描述 | `get_own_info` / `get_plugin_args` |
@@ -846,8 +882,8 @@ typedef struct AgentxxClientPluginInfo {
 3. **命令动作 JSON**: 支持 `send` / `toast` / `none`; `json_escape` 返回带引号的 JSON 字符串字面量 (与 agent 侧一致), 插件拼装动作 JSON 时不得再额外加引号。
 4. **句柄生命周期**: disable 保留注册信息与句柄 (enable 重建); unload 时句柄存活到实例析构 (插件的 unload 回调可能主动反注册, 句柄必须有效)。
 5. **远程 client 模式**: 只加载 client 侧条目; `io->onServerReady()` 在连接建立后调用 (TUI 覆写版幂等, 同时通知事件接收器)。
-6. **命令注册不占 cap 位**: 命令属于输入管线 (stdin 行解析 / TUI onSend 拦截), 必然支持。
-7. **min_ui_caps**: 插件可声明最低 UI 能力 (如必须面板); 宿主不满足则拒绝加载。
+6. **命令接口声明**: 命令属于输入管线 (stdin 行解析 / TUI onSend 拦截), CLI/TUI 宿主恒声明 `client.command` 接口; 无命令输入面的第三方宿主不声明 → register_command 被拒 (返回非 0), 插件降级。
+7. **最低接口要求**: v4 起经清单 `interfaces.require` 声明 (宿主加载前门禁, 见 4.7); 原 min_ui_caps 位图字段已移除。
 
 ---
 
@@ -1075,7 +1111,7 @@ plugins/
 | `agent/lib/src/agent/io/ws_io_transport.cpp` | serialize/deserialize 支持各 wire 变体 |
 | `agent/lib/src/agent/io/session_server_agent_io.cpp` | onPeerMessage: WirePluginDataUp → 总线 publish `plugin.client.{插件名}.{事件名}` (环回跳过); subscribePluginEvents 转发 `plugin.` 前缀事件 |
 | `agent/client/src/config_loader.cpp` | 解析 `plugins` 段 (path/enabled/sides/args) |
-| `agent/client/include/agentxx-client/io/plugin/plugin_ui_adapter.h` | UI 适配器接口 (uiCaps/注册/更新/toast/sendPluginMessage/sendPluginData) |
+| `agent/client/include/agentxx-client/io/plugin/plugin_ui_adapter.h` | UI 适配器接口 (supportedInterfaces/注册/更新/toast/sendPluginMessage/sendPluginData) |
 | `agent/client/include/agentxx-client/io/tui/tui_plugin_adapter.h` + `io/stdio/cli_plugin_adapter.h` | TUI/CLI 适配器实现 |
 | `agent/client/src/io/tui/agent_tui.h/.cpp` | EventSink 通知点 (WirePluginData 原样转发); 命令管线 (onSend 拦截 `/`); addPluginPanelTab/removePluginPanelTab/renderPluginPanel; sendPluginUserInput/sendPluginDataUp; uiToast |
 | `agent/client/src/io/tui/components/status_bar.cpp` | 插件状态栏项渲染 (左/右分组, order 排序) |
@@ -1098,7 +1134,9 @@ plugins/
 | 内置插件化 (2026-08) | codegraph / screen_capture / computer_use / system_monitor / audio_stream / text_selection_monitor 从 lib 拆分独立 | ✅ 已实现 |
 | client 侧插件系统 | client_plugin_api v2 (状态栏/面板/Info 段落/命令/事件/跨端) / ClientPluginManager / UI 适配器 / 双端插件 / WirePluginDataUp | ✅ 已实现 |
 | 会话资源贡献 (v8, 2026-08) | plugin_api v8 (skill/memory/mcp 注册 API + 定时器/offload v7); plugin.yaml 资源声明段; AgentResourceApplier 具体实现 (MCP 异步连接状态机/所有权/冲突规则); 中间件动态增删 + epoch 缓存失效; JS 桥新 API; example_resources 示例 + 测试模块 `plugin_resources` | ✅ 已实现 |
-| 三期 (生态) | Wire 远程热管理 / TUI 插件管理面板 / 签名校验 | ⏳ 待实现 |
+| 接口协商一期 (2026-08) | plugin.yaml `interfaces.require/optional` 声明; 宿主支持集门禁 (require 缺失跳过 + 原因记录) / 符号意图预检 (requiredEntrySides); READY/get_client_state interfaces 数组 | ✅ 已实现 |
+| 接口协商二期+三期 (2026-08, 本轮) | **位图方案整体移除** (AGENTXX_UI_CAP_*/IFACE_*/ui_caps/min_ui_caps); client_plugin_api v4 + plugin_api v9: `has_interface` 字符串判定; **COM 式扩展表** `query_extension` (核心契约冻结, 新增能力走独立 version 扩展表); 展示/命令/toast 物理迁至 "client.ui" 扩展表 (`AgentxxClientExtUiVtable`); WireHelloAck.plugins 结构化 [{name,version,interfaces}]; server_plugins 约定事件同步升级; get_client_state 的 agentPlugins 为结构化对象数组; client→server 上行约定事件 `client_interfaces` (**1:N 不存储**, 仅转发 agent 总线, 插件订阅 `agentxx_host.client_interfaces` 自适应); CLI/TUI/测试适配器与全部插件迁移完成 | ✅ 已实现 |
+| 三期 (生态) | Wire 远程热管理 / TUI 插件管理面板 / skippedPlugins 展示层接入 / 签名校验 | ⏳ 待实现 |
 
 ### 13.2 与设计原稿的偏差 (实现为准)
 

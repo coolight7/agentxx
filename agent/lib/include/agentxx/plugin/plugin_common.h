@@ -131,12 +131,14 @@ std::string resolvePluginEntryPath(const std::filesystem::path& dir, const std::
  * 2. 校验层: 宿主加载前按前缀过滤出本侧声明, 与宿主支持集比对 ——
  *    require 未满足 → 跳过加载 (INFO + 原因记录, 非错误: 同一插件目录
  *    服务多种宿主是预期情况); 声明了本侧接口却缺对应入口符号 → 明确报错;
- * 3. 决策层: 插件 entry 内经 ui_caps() 位图 / EVT_READY 与
- *    get_client_state 的 "interfaces" 字符串数组自行决定启用哪些功能
- *    (位图与名称的映射见 client_plugin_api.h AGENTXX_IFACE_* 注释)。
+ * 3. 决策层: 插件 entry 内经 has_interface() / EVT_READY 与
+ *    get_client_state 的 "interfaces" 字符串数组自行决定启用哪些功能;
+ *    展示类子能力经 "client.ui" 扩展表访问 (表内不支持项为 NULL 函数指针)
  *
  * api_version 精确匹配门禁保留且不被本机制替代: vtable 是 C 结构体,
  * 老宿主+新插件按新偏移读字段是 UB —— 接口协商只解决"功能子集"维度。
+ * 扩展表机制 (query_extension, v9/v4 引入) 使未来新增能力不再动全局
+ * 版本号: 新扩展表自带 version 字段独立演进。
  */
 
 /// 已知接口名常量 (稳定契约; 第三方私有接口用 "<vendor>.<name>" 自定义,
@@ -198,10 +200,6 @@ struct RequiredEntrySides {
     bool clientEntry = false;
 };
 RequiredEntrySides requiredEntrySides(const std::vector<std::string>& interfaces);
-
-/// client 宿主能力位图 → 支持的接口名集合 (AGENTXX_UI_CAP_* 与高位段
-/// AGENTXX_IFACE_* 的映射表唯一出处, 见 client_plugin_api.h)
-InterfaceSet clientHostInterfacesFromCaps(uint32_t caps);
 
 /// 拓扑排序项 (调用方 Item 须含 path/name/depends 三个成员, 可附带其他字段)
 struct PluginSortItem {

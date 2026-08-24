@@ -11,15 +11,14 @@ namespace client {
 
 /// CLI 插件 UI 适配器: UI 无关语义层 → stdio 终端
 ///
-/// 能力 (uiCaps):
-/// - TOAST: 输出到 stderr (保持 stdout 纯净 —— stdout 是消息渲染通道,
+/// 支持的接口 (supportedInterfaces):
+/// - client.toast: 输出到 stderr (保持 stdout 纯净 —— stdout 是消息渲染通道,
 ///   未来程序化 stdin/stdout 协议依赖此约定)
-/// - COMMAND (AGENTXX_IFACE_COMMAND, 高位段): 命令属于输入管线 (stdin 行
-///   解析), 必然支持 —— 接口协商中显式声明为 `client.command`, 使清单
-///   require 该接口的插件在 CLI 正常加载、无命令输入面的宿主正确跳过
-/// - 其余 UI 能力 (状态栏/面板/Info 栏段落) 不支持: 插件注册时被
-///   ClientPluginManager 拒绝 (返回 NULL / 非 0), 插件自行降级;
-///   清单可用 interfaces.optional 声明可选依赖 (缺失仅警告)
+/// - client.command: 命令属于输入管线 (stdin 行解析), 必然支持 —— 显式声明
+///   使清单 require 该接口的插件在 CLI 正常加载、无命令输入面的宿主正确跳过
+/// - 其余接口 (状态栏/面板/Info 栏段落) 不支持: "client.ui" 扩展表内对应
+///   成员为 NULL, 插件注册时被 ClientPluginManager 拒绝 (返回 NULL / 非 0),
+///   插件自行降级; 清单可用 interfaces.optional 声明可选依赖 (缺失仅警告)
 ///
 /// 线程模型: 回调在 client io 线程同步调用 (输入循环所在线程);
 /// sendPluginMessage 经端点 sendPluginUserInput 发送 (与用户输入同路径)
@@ -29,8 +28,9 @@ public:
     explicit CliPluginAdapter(std::weak_ptr<StdIOClientAgentIO> io) :
         io_(std::move(io)) {}
 
-    uint32_t uiCaps() const override {
-        return AGENTXX_UI_CAP_TOAST | AGENTXX_IFACE_COMMAND;
+    agentxx::plugin::InterfaceSet supportedInterfaces() const override {
+        return {std::string{plugin::plugin_interfaces::ClientToast},
+                std::string{plugin::plugin_interfaces::ClientCommand}};
     }
 
     // ---- toast (stderr, 保持 stdout 纯净) ----
