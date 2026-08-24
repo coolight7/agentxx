@@ -29,7 +29,7 @@ std::string SkillMiddlewareHandle::formatSkillsMetadataList() {
             fmt::format("{}/SKILL.md", item.first)
         );
     }
-    return std::move(oss);
+    return oss;
 }
 
 asio::awaitable<std::pair<std::string, agentxx::middleware::_SkillMetadata>>
@@ -130,8 +130,7 @@ asio::awaitable<void> SkillMiddlewareHandle::onAgentcallStartFunc(neograph::grap
 
         decltype(skillCache.skillData)  loadedData;
         decltype(skillCache.loadErrors) loadedErrors;
-        auto                            skillQueue
-            = std::vector<std::string>{skillDirPaths.begin(), skillDirPaths.end()};
+        auto skillQueue = std::vector<std::string>{skillDirPaths.begin(), skillDirPaths.end()};
         for (size_t i = 0; i < skillQueue.size(); ++i) {
             auto& itempath = skillQueue[i];
             // catchErrorAsync: 单个目录处理失败仅记录错误, 不中断整体加载
