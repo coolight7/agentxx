@@ -137,6 +137,10 @@ path/to/agentxx_test string_util regex
 - 为了减少编译输出内容展示，只捕捉关键词，可以参考: `./path/to/linux_debug_build.sh 2>&1 | grep -E -i "Built target|error|warn" | tail -10`
 
 ## 常见问题
+- Windows/MSVC 禁止添加 `/FS` `/MP` 编译选项 (2026-08): 命令行出现重复 `/FS` 时
+  VS18/MSVC 14.51 的 FileTracker 会失效 (子编译进程不写 per-file 跟踪记录),
+  导致每次构建都全量重编 (增量编译完全失效)。旗标经 superbuild 多层 CMake
+  传递极易重复叠加, 故项目统一不使用这两个选项, 各 CMakeLists 中已有注释标记
 - 如果遇到编译器崩溃 (ICE)，直接重新运行编译尝试即可; 也可能是内存不足或内存中的缓存占用太多了，可以清理一下再编译试试; 如果多次运行都崩溃，则可能确实代码有问题，需要重新检查一下。
 ```sh
 # 清理内存缓存

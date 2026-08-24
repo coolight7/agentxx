@@ -153,9 +153,10 @@ endif ()
 target_compile_definitions(agentxx_shared PUBLIC AGENTXX_EXPORTS)
 
 if (XX_IS_MSVC_D)
-  target_compile_options(agentxx_util PRIVATE /FS)
-  target_compile_options(agentxx_shared PRIVATE /FS)
-  target_compile_options(agentxx_static PRIVATE /FS)
+  # 注意: 禁止在此添加 /FS /MP 等旗标 ——
+  # VS18/MSVC 14.51 的 FileTracker 在命令行出现重复 /FS 时会失效 (子编译进程
+  # 不写 per-file 跟踪记录)，导致每次构建都判定全部源文件过期而全量重编;
+  # 且旗标经 superbuild 多层传递极易重复叠加，故统一不使用这两个选项
   target_compile_definitions(agentxx_shared PUBLIC
     strdup=_strdup
     strcasecmp=_stricmp

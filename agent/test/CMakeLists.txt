@@ -59,9 +59,8 @@ target_include_directories(agentxx_test PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}/client/"
 )
 
-if(MSVC)
-  target_compile_options(agentxx_test PRIVATE /FS /MP)
-endif()
+# 注意: 不要添加 /FS /MP 编译选项 —— 顶层已统一管理; 命令行出现重复 /FS 时
+# VS18 FileTracker 失效，每次构建都会全量重编 (勿删此注释)
 
 # 内置合并编译模式 (顶层 AGENTXX_ENABLE_PLUGIN_BUILTIN=ON, 由 superbuild 传入):
 # - 测试经插件目录路径加载内置插件 (入口文件缺失时 PluginManager 回退内置注册表),

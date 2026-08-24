@@ -37,9 +37,8 @@ target_sources(agentxx_cli PRIVATE
 
 target_include_directories(agentxx_cli PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/include/")
 
-if(MSVC)
-  target_compile_options(agentxx_cli PRIVATE /FS /MP)
-endif()
+# 注意: 不要添加 /FS /MP 编译选项 —— 顶层已统一管理; 命令行出现重复 /FS 时
+# VS18 FileTracker 失效，每次构建都会全量重编 (勿删此注释)
 
 # PCH: 只预编译稳定第三方头，加速编译 (GCC/Clang，与 lib 保持一致)。
 # 第三方头须用 <...> 形式 (见 lib/CMakeLists.txt 说明)
