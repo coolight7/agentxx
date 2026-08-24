@@ -6,4 +6,4 @@ depends:
 # 接口协商: 引擎提供能力调用通道 (invoke_capability), 属核心接口范围
 interfaces:
   require:
-    - agent.core
+    - agentxx.agent.core

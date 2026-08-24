@@ -22,6 +22,7 @@
  */
 #pragma once
 
+#include "agentxx/plugin/client_plugin_api.h" /* 含 plugin_api.h */
 #include "agentxx/util/log.h"
 
 #include <algorithm>
@@ -121,38 +122,64 @@ std::string resolvePluginEntryPath(const std::filesystem::path& dir, const std::
 /* ==================== 接口协商 (三层协商的声明/校验基础设施) ====================
  *
  * 背景: client 宿主形态多样 (cli/tui/gui/第三方 app), 各自支持的插件接口
- * 不同; server (agent-io) 仅有 libagentxx 一个实现, agent 侧接口集 ≡ 当前
- * api_version 头文件内容 (版本匹配即全集)。协商机制因此是不对称的:
+ * 不同; server (agent-io) 仅有 libagentxx 一个实现, agent 侧接口集 ≡ 核心
+ * 契约 + 全部标准接口表 (版本匹配即全集)。协商机制因此是不对称的:
  * 机制通用, 实际起作用的门禁集中在 client 侧。
  *
  * 三层设计 (详见 docs/agent/plugins.md 4.7):
  * 1. 声明层: 插件 plugin.yaml `interfaces.require/optional` 列出依赖的接口
- *    名 (稳定字符串: "agent.*" / "client.*" / "<vendor>.*");
+ *    名 (稳定字符串: 本项目内置为 "agentxx.agent.*" / "agentxx.client.*",
+ *    第三方私有接口用 "<vendor>.*"; agent 侧可用接口表 IID 精确声明,
+ *    如 "agentxx.agent.tools"/"agentxx.agent.prompt");
  * 2. 校验层: 宿主加载前按前缀过滤出本侧声明, 与宿主支持集比对 ——
  *    require 未满足 → 跳过加载 (INFO + 原因记录, 非错误: 同一插件目录
  *    服务多种宿主是预期情况); 声明了本侧接口却缺对应入口符号 → 明确报错;
- * 3. 决策层: 插件 entry 内经 has_interface() / EVT_READY 与
+ * 3. 决策层: 插件 entry 内经 query_interface 判空 / EVT_READY 与
  *    get_client_state 的 "interfaces" 字符串数组自行决定启用哪些功能;
- *    展示类子能力经 "client.ui" 扩展表访问 (表内不支持项为 NULL 函数指针)
+ *    展示类子能力经 "agentxx.client.ui" 接口表访问 (表内不支持项为 NULL
+ *    函数指针)
  *
- * api_version 精确匹配门禁保留且不被本机制替代: vtable 是 C 结构体,
+ * 命名规范: "agentxx." 为本项目内置接口的保留命名空间, 第三方插件不得使用
+ * (第三方私有接口用 "<vendor>.<name>", 宿主不认识的名称一律视为不支持);
+ * 前缀过滤规则见 sideCaresAboutInterface。
+ *
+ * api_version 精确匹配门禁保留且不被本机制替代: 核心结构体是 C 结构,
  * 老宿主+新插件按新偏移读字段是 UB —— 接口协商只解决"功能子集"维度。
- * 扩展表机制 (query_extension, v9/v4 引入) 使未来新增能力不再动全局
- * 版本号: 新扩展表自带 version 字段独立演进。
+ * COM 风格接口表机制使未来新增能力不再动全局版本号: 每个接口表自带
+ * version 字段独立演进。
  */
 
 /// 已知接口名常量 (稳定契约; 第三方私有接口用 "<vendor>.<name>" 自定义,
 /// 宿主不认识的名称一律视为不支持 —— 安全失败)
 namespace plugin_interfaces {
-inline constexpr std::string_view AgentCore        = "agent.core"; ///< 工具/钩子/事件/能力 (= api_version 核心)
-inline constexpr std::string_view ClientStatusItem = "client.status_item";
-inline constexpr std::string_view ClientPanel      = "client.panel";
-inline constexpr std::string_view ClientToast      = "client.toast";
-inline constexpr std::string_view ClientKeybind    = "client.keybind";
-inline constexpr std::string_view ClientPromptModal = "client.prompt_modal";
-inline constexpr std::string_view ClientMsgDecor   = "client.msg_decor";
-inline constexpr std::string_view ClientInfoSection = "client.info_section";
-inline constexpr std::string_view ClientCommand    = "client.command";
+/// 元接口: 宿主实现完整核心契约 (plugin_api.h v1 核心 vtable) + 标准接口表
+/// 全集 (libagentxx 即此类宿主); 精简第三方宿主可仅声明实际实现的下述子集
+inline constexpr std::string_view AgentCore = "agentxx.agent.core";
+/// COM 风格接口表 IID (与 plugin_api.h 的 AGENTXX_IFACE_AGENT_* 宏一一对应;
+/// 清单 interfaces.require 可按插件实际查询的表精确声明)
+inline constexpr std::string_view AgentTools        = AGENTXX_IFACE_AGENT_TOOLS;
+inline constexpr std::string_view AgentHooks        = AGENTXX_IFACE_AGENT_HOOKS;
+inline constexpr std::string_view AgentEvents       = AGENTXX_IFACE_AGENT_EVENTS;
+inline constexpr std::string_view AgentCapabilities = AGENTXX_IFACE_AGENT_CAPABILITIES;
+inline constexpr std::string_view AgentScheduler    = AGENTXX_IFACE_AGENT_SCHEDULER;
+inline constexpr std::string_view AgentSession      = AGENTXX_IFACE_AGENT_SESSION;
+inline constexpr std::string_view AgentPlugins      = AGENTXX_IFACE_AGENT_PLUGINS;
+inline constexpr std::string_view AgentConfig       = AGENTXX_IFACE_AGENT_CONFIG;
+inline constexpr std::string_view AgentPrompt       = AGENTXX_IFACE_AGENT_PROMPT;
+inline constexpr std::string_view AgentJson         = AGENTXX_IFACE_AGENT_JSON;
+inline constexpr std::string_view AgentLog          = AGENTXX_IFACE_AGENT_LOG;
+inline constexpr std::string_view AgentResources    = AGENTXX_IFACE_AGENT_RESOURCES;
+
+/* ---- client 侧: 接口表名 + 细粒度能力名 (映射到 agentxx.client.ui 表的非空成员) ---- */
+inline constexpr std::string_view ClientUi = AGENTXX_IFACE_CLIENT_UI; ///< 展示扩展表整体
+inline constexpr std::string_view ClientStatusItem = "agentxx.client.status_item";
+inline constexpr std::string_view ClientPanel      = "agentxx.client.panel";
+inline constexpr std::string_view ClientToast      = "agentxx.client.toast";
+inline constexpr std::string_view ClientKeybind    = "agentxx.client.keybind";
+inline constexpr std::string_view ClientPromptModal = "agentxx.client.prompt_modal";
+inline constexpr std::string_view ClientMsgDecor   = "agentxx.client.msg_decor";
+inline constexpr std::string_view ClientInfoSection = "agentxx.client.info_section";
+inline constexpr std::string_view ClientCommand    = "agentxx.client.command";
 } // namespace plugin_interfaces
 
 /// 宿主支持的接口集合 (稳定名字符串; io 线程构建后只读)
@@ -160,8 +187,8 @@ using InterfaceSet = std::set<std::string, std::less<>>;
 
 /// 插件清单接口声明 (plugin.yaml 可选段):
 ///   interfaces:
-///     require:  [agent.core, client.command]  # 任一缺失(按前缀过滤后) → 该侧跳过加载
-///     optional: [client.toast]                # 缺失仅警告, 不影响加载
+///     require:  [agentxx.agent.core, agentxx.client.command]  # 任一缺失(按前缀过滤后) → 该侧跳过加载
+///     optional: [agentxx.client.toast]                # 缺失仅警告, 不影响加载
 /// - 同一清单可同时声明两侧接口 (前缀决定归属), 服务 cli/tui/gui 多宿主
 struct PluginManifestInterfaces {
     std::vector<std::string> require;
@@ -171,9 +198,12 @@ struct PluginManifestInterfaces {
 };
 
 /// 本侧是否关心此接口声明 (前缀过滤规则):
-/// - "agent.*": 仅 agent 侧检查 (client 侧忽略)
-/// - "client.*": 仅 client 侧检查 (agent 侧忽略)
-/// - 其他 ("<vendor>.*"): 两侧都检查 (保守: 宿主不认识即不支持)
+/// - "agentxx.agent.*": 仅 agent 侧检查 (client 侧忽略)
+/// - "agentxx.client.*": 仅 client 侧检查 (agent 侧忽略)
+/// - 其他 (无前缀 / "<vendor>.*"): 两侧都检查
+///   (保守: 宿主不认识即不支持; "agentxx." 为本项目保留命名空间,
+///   第三方不得使用, 故 agentxx. 开头但非 agent/client 子前缀的名称同样
+///   两侧都检查)
 bool sideCaresAboutInterface(std::string_view name, bool agentSide);
 
 /// 单侧接口要求检查结果
@@ -192,8 +222,8 @@ InterfaceCheckResult checkInterfacesForSide(
 );
 
 /// require 列表隐含的入口符号需求:
-/// - 含任何 agent.* (或无前缀/vendor 前缀) → 需要 agent 入口符号
-/// - 含任何 client.* (或无前缀/vendor 前缀) → 需要 client 入口符号
+/// - 含任何 agentxx.agent.* (或无前缀/vendor 前缀) → 需要 agent 入口符号
+/// - 含任何 agentxx.client.* (或无前缀/vendor 前缀) → 需要 client 入口符号
 /// 用于加载路径的 dlsym 意图预检: 声明了某侧接口却未导出该侧入口 → 明确报错
 struct RequiredEntrySides {
     bool agentEntry  = false;

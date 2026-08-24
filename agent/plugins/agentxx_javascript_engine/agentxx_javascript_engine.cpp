@@ -19,6 +19,7 @@
  * quickjs-libc (无 os/std 模块); 全局仅注入标准 ECMA 内置 + agentxx 桥
  */
 #include "agentxx/plugin/plugin_api.h"
+#include "agentxx/plugin/plugin_iface_helper.h"
 #include "quickjs.h"
 
 #include <atomic>
@@ -972,7 +973,9 @@ JSValue JsEngine::bridgeCall(
         return JS_ThrowInternalError(ctx, "agentxx bridge: plugin context invalid");
     }
     const AgentxxHost* host   = pctx->host;
-    const auto&        vt     = *host->vtable;
+    const auto&        vt     = *host->vtable; // 核心: alloc/free/strdup
+    // COM 风格接口表查询 (进程级静态数据; 各能力经稳定 IID 分发)
+    const agentxx::plugin::AgentIfaces iface = agentxx::plugin::AgentIfaces::query(host);
     auto*              engine = pctx->engine;
 
     switch (magic) {
@@ -1017,7 +1020,7 @@ JSValue JsEngine::bridgeCall(
             spec.parameters_json = agentxx_plugin_sv(paramsJson.data(), paramsJson.size());
             spec.execute         = &JsEngine::toolExecute;
             spec.user_data       = binding.get();
-            int rc               = vt.register_tool(host, &spec);
+            int rc               = iface.tools->register_tool(host, &spec);
             if (rc != 0) {
                 JS_FreeValue(ctx, execFn);
                 return throwJsError(
@@ -1043,7 +1046,7 @@ JSValue JsEngine::bridgeCall(
             if (name.empty()) {
                 return JS_ThrowTypeError(ctx, "unregisterTool: name required");
             }
-            vt.unregister_tool(host, agentxx_plugin_sv(name.data(), name.size()));
+            iface.tools->unregister_tool(host, agentxx_plugin_sv(name.data(), name.size()));
             JS_SetPropertyStr(ctx, pctx->tools, name.c_str(), JS_UNDEFINED);
             return JS_UNDEFINED;
         }
@@ -1105,7 +1108,7 @@ JSValue JsEngine::bridgeCall(
 
             // 2) 宿主插件工具 (同步互调; vtable 内部保证线程安全)
             char* err  = nullptr;
-            char* resp = vt.call_tool(
+            char* resp = iface.tools->call_tool(
                 host,
                 agentxx_plugin_sv(name.data(), name.size()),
                 agentxx_plugin_sv(argsJson.data(), argsJson.size()),
@@ -1134,7 +1137,7 @@ JSValue JsEngine::bridgeCall(
             if (argc >= 2) {
                 JS_ToInt64(ctx, &id, argv[1]);
             }
-            char* resp = vt.get_share_store(
+            char* resp = iface.session->get_share_store(
                 host,
                 agentxx_plugin_sv(sessionId.data(), sessionId.size()),
                 id
@@ -1156,7 +1159,7 @@ JSValue JsEngine::bridgeCall(
                 JS_ToInt32(ctx, &lv, argv[2]);
                 level = lv;
             }
-            vt.emit_message_tip(
+            iface.session->emit_message_tip(
                 host,
                 agentxx_plugin_sv(sessionId.data(), sessionId.size()),
                 agentxx_plugin_sv(text.data(), text.size()),
@@ -1173,7 +1176,7 @@ JSValue JsEngine::bridgeCall(
                 level = lv;
             }
             std::string msg = argc >= 2 ? jsToCppString(ctx, argv[1]) : "";
-            vt.log(host, level, agentxx_plugin_sv(msg.data(), msg.size()));
+            iface.log->log(host, level, agentxx_plugin_sv(msg.data(), msg.size()));
             return JS_UNDEFINED;
         }
 
@@ -1191,7 +1194,7 @@ JSValue JsEngine::bridgeCall(
             if (JS_IsFunction(ctx, oldFn)) {
                 for (auto& b : pctx->hookBindings) {
                     if (b->point == point) {
-                        vt.unregister_hook(
+                        iface.hooks->unregister_hook(
                             host,
                             static_cast<AgentxxHookPoint>(point),
                             &JsEngine::hookFire,
@@ -1206,7 +1209,7 @@ JSValue JsEngine::bridgeCall(
             binding->engine = engine;
             binding->plugin = pctx->name;
             binding->point  = point;
-            int rc          = vt.register_hook(
+            int rc          = iface.hooks->register_hook(
                 host,
                 static_cast<AgentxxHookPoint>(point),
                 &JsEngine::hookFire,
@@ -1233,7 +1236,7 @@ JSValue JsEngine::bridgeCall(
             JS_ToInt32(ctx, &point, argv[0]);
             for (auto& b : pctx->hookBindings) {
                 if (b->point == point) {
-                    vt.unregister_hook(
+                    iface.hooks->unregister_hook(
                         host,
                         static_cast<AgentxxHookPoint>(point),
                         &JsEngine::hookFire,
@@ -1254,7 +1257,7 @@ JSValue JsEngine::bridgeCall(
             binding->engine     = engine;
             binding->plugin     = pctx->name;
             binding->point      = -1;
-            auto* sub           = vt.subscribe(
+            auto* sub           = iface.events->subscribe(
                 host,
                 agentxx_plugin_sv(topic.data(), topic.size()),
                 &JsEngine::eventFire,
@@ -1312,7 +1315,7 @@ JSValue JsEngine::bridgeCall(
                 JS_FreeValue(ctx, hiV);
                 subPtr = (static_cast<uint64_t>(hi) << 32) | lo;
                 if (subPtr) {
-                    vt.unsubscribe(reinterpret_cast<AgentxxSubscription*>(subPtr));
+                    iface.events->unsubscribe(reinterpret_cast<AgentxxSubscription*>(subPtr));
                 }
                 JS_SetPropertyUint32(ctx, pctx->agents, token, JS_UNDEFINED);
             }
@@ -1336,7 +1339,7 @@ JSValue JsEngine::bridgeCall(
                     }
                 }
             }
-            vt.publish(
+            iface.events->publish(
                 host,
                 agentxx_plugin_sv(topic.data(), topic.size()),
                 agentxx_plugin_sv(payload.data(), payload.size())
@@ -1376,7 +1379,7 @@ JSValue JsEngine::bridgeCall(
         }
 
         case B_LIST_PLUGINS: {
-            char* json = vt.list_plugins(host);
+            char* json = iface.plugins->list_plugins(host);
             if (!json) {
                 return JS_NewArray(ctx);
             }
@@ -1394,7 +1397,7 @@ JSValue JsEngine::bridgeCall(
                 return JS_ThrowTypeError(ctx, "getPlugin: name required");
             }
             std::string name = jsToCppString(ctx, argv[0]);
-            char*       json = vt.get_plugin(host, agentxx_plugin_sv(name.data(), name.size()));
+            char*       json = iface.plugins->get_plugin(host, agentxx_plugin_sv(name.data(), name.size()));
             if (!json) {
                 return JS_NULL; // 未安装
             }
@@ -1417,8 +1420,8 @@ JSValue JsEngine::bridgeCall(
             }
             std::string p = jsToCppString(ctx, argv[0]);
             int         rc = (magic == B_ADD_SKILL_DIR)
-                                 ? vt.register_skill_dir(host, agentxx_plugin_sv_cstr(p.c_str()))
-                                 : vt.register_memory_file(host, agentxx_plugin_sv_cstr(p.c_str()));
+                                 ? iface.resources->register_skill_dir(host, agentxx_plugin_sv_cstr(p.c_str()))
+                                 : iface.resources->register_memory_file(host, agentxx_plugin_sv_cstr(p.c_str()));
             if (rc != 0) {
                 return throwJsError(ctx, "register failed (conflict or unsupported): " + p);
             }
@@ -1432,8 +1435,8 @@ JSValue JsEngine::bridgeCall(
             }
             std::string p = jsToCppString(ctx, argv[0]);
             bool ok = (magic == B_REMOVE_SKILL_DIR)
-                          ? vt.unregister_skill_dir(host, agentxx_plugin_sv_cstr(p.c_str())) == 0
-                          : vt.unregister_memory_file(host, agentxx_plugin_sv_cstr(p.c_str())) == 0;
+                          ? iface.resources->unregister_skill_dir(host, agentxx_plugin_sv_cstr(p.c_str())) == 0
+                          : iface.resources->unregister_memory_file(host, agentxx_plugin_sv_cstr(p.c_str())) == 0;
             return ok ? JS_TRUE : JS_FALSE;
         }
 
@@ -1460,8 +1463,8 @@ JSValue JsEngine::bridgeCall(
                 JS_FreeValue(ctx, tv);
             }
             // spec JSON 拼装经宿主 json_escape (防注入/转义错误)
-            char* nsEsc  = vt.json_escape(host, agentxx_plugin_sv(ns.data(), ns.size()));
-            char* urlEsc = vt.json_escape(host, agentxx_plugin_sv(url.data(), url.size()));
+            char* nsEsc  = iface.json->json_escape(host, agentxx_plugin_sv(ns.data(), ns.size()));
+            char* urlEsc = iface.json->json_escape(host, agentxx_plugin_sv(url.data(), url.size()));
             if (!nsEsc || !urlEsc) {
                 if (nsEsc) vt.free(nsEsc);
                 if (urlEsc) vt.free(urlEsc);
@@ -1473,7 +1476,7 @@ JSValue JsEngine::bridgeCall(
             long long t = static_cast<long long>(timeoutSec < 0 ? 0 : timeoutSec);
             spec += ",\"timeout\":" + std::to_string(t);
             spec += "}";
-            if (vt.register_mcp_server(host, agentxx_plugin_sv_cstr(spec.c_str())) != 0) {
+            if (iface.resources->register_mcp_server(host, agentxx_plugin_sv_cstr(spec.c_str())) != 0) {
                 return throwJsError(ctx, "addMcpServer register failed (conflict?): " + ns);
             }
             return JS_TRUE;
@@ -1484,7 +1487,7 @@ JSValue JsEngine::bridgeCall(
                 return JS_ThrowTypeError(ctx, "removeMcpServer: namespace required");
             }
             std::string ns = jsToCppString(ctx, argv[0]);
-            return vt.unregister_mcp_server(host, agentxx_plugin_sv(ns.data(), ns.size())) == 0
+            return iface.resources->unregister_mcp_server(host, agentxx_plugin_sv(ns.data(), ns.size())) == 0
                        ? JS_TRUE
                        : JS_FALSE;
         }
@@ -1533,9 +1536,15 @@ static char* jsInvoke(
     }
     std::string methodStr{method.data, method.size};
     std::string argsStr{args_json.data ? args_json.data : "{}", args_json.size};
-    // 参数解析经宿主 json_get_string (对转义/嵌套结构可靠, 替代手写字符串扫描)
+    // 参数解析经宿主 client 无关的 agentxx.agent.json 接口表 (对转义/嵌套结构可靠;
+    // caller_host 与本插件同进程, 接口表为同一批静态数据)
+    const agentxx::plugin::AgentIfaces callerIf = agentxx::plugin::AgentIfaces::query(caller_host);
+    if (!callerIf.json || !callerIf.json->json_get_string) {
+        setErr("interpreter.js: host lacks agentxx.agent.json interface");
+        return nullptr;
+    }
     auto argStr = [&](const char* key, std::string& out) -> bool {
-        char* v = caller_host->vtable->json_get_string(
+        char* v = callerIf.json->json_get_string(
             caller_host,
             agentxx_plugin_sv(argsStr.data(), argsStr.size()),
             agentxx_plugin_sv(key, std::strlen(key))
@@ -1603,17 +1612,28 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
     auto* engine = new JsEngine();
     engine->setEngineHost(host);
 
-    // 注册能力 "interpreter.js" (带方法回调): 脚本插件 (C++ 壳) 经
-    // invoke_capability 把脚本代码交给本引擎执行 —— 插件间通信, 宿主不参与
-    int rc = host->vtable
-                 ->register_capability_ex(host, AGENTXX_SV("interpreter.js"), &jsInvoke, engine);
+    // COM 风格接口表查询: entry 内一次性查询缓存全部已知 IID
+    static const agentxx::plugin::AgentIfaces s_if = agentxx::plugin::AgentIfaces::query(host);
+    if (!s_if.capabilities || !s_if.capabilities->register_capability_ex || !s_if.log) {
+        delete engine;
+        return -1;
+    }
+
+    // 注册能力 "interpreter.js" (agentxx.agent.capabilities 接口表, 带方法回调):
+    // 脚本插件 (C++ 壳) 经 invoke_capability 把脚本代码交给本引擎执行
+    // —— 插件间通信, 宿主不参与
+    int rc = s_if.capabilities->register_capability_ex(
+        host,
+        AGENTXX_SV("interpreter.js"),
+        &jsInvoke,
+        engine
+    );
     if (rc != 0) {
         delete engine;
         return -1;
     }
     *plugin_ctx = engine;
-    host->vtable
-        ->log(host, 2, AGENTXX_SV("agentxx_javascript_engine loaded (QuickJS interpreter.js)"));
+    s_if.log->log(host, 2, AGENTXX_SV("agentxx_javascript_engine loaded (QuickJS interpreter.js)"));
     return 0;
 }
 

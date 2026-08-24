@@ -11,4 +11,4 @@ depends:
 # 接口协商: 能力调用属核心接口范围
 interfaces:
   require:
-    - agent.core
+    - agentxx.agent.core

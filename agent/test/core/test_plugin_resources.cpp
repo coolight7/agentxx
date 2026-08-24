@@ -18,6 +18,7 @@
 #include "agentxx/middlewares/middleware.h"
 #include "agentxx/middlewares/skill.h"
 #include "agentxx/plugin/plugin_common.h"
+#include "agentxx/plugin/plugin_iface_helper.h"
 #include "agentxx/plugin/plugin_manager.h"
 #include "agentxx/util/log.h"
 #include <asio/steady_timer.hpp>
@@ -188,10 +189,10 @@ mcp:
     timeout: 7
 interfaces:
   require:
-    - agent.core
-    - client.panel
+    - agentxx.agent.core
+    - agentxx.client.panel
   optional:
-    - client.toast
+    - agentxx.client.toast
 )yaml"
         );
         std::string              name, entry;
@@ -223,18 +224,18 @@ interfaces:
         }
         // ---- 接口声明段解析 (接口协商; 见 plugin_common.h) ----
         XX_TEST_EXPECT_TRUE(ifaces.require.size() == 2);
-        XX_TEST_EXPECT_TRUE(contains(ifaces.require, "agent.core"));
-        XX_TEST_EXPECT_TRUE(contains(ifaces.require, "client.panel"));
+        XX_TEST_EXPECT_TRUE(contains(ifaces.require, "agentxx.agent.core"));
+        XX_TEST_EXPECT_TRUE(contains(ifaces.require, "agentxx.client.panel"));
         XX_TEST_EXPECT_TRUE(ifaces.optional.size() == 1);
         if (ifaces.optional.size() == 1) {
-            XX_TEST_EXPECT_EQ(ifaces.optional[0], std::string{"client.toast"});
+            XX_TEST_EXPECT_EQ(ifaces.optional[0], std::string{"agentxx.client.toast"});
         }
 
-        // ---- 前缀归属: agent.* 仅 agent 侧关心, client.* 仅 client 侧 ----
-        XX_TEST_EXPECT_TRUE(plugin::sideCaresAboutInterface("agent.core", true));
-        XX_TEST_EXPECT_FALSE(plugin::sideCaresAboutInterface("agent.core", false));
-        XX_TEST_EXPECT_TRUE(plugin::sideCaresAboutInterface("client.panel", false));
-        XX_TEST_EXPECT_FALSE(plugin::sideCaresAboutInterface("client.panel", true));
+        // ---- 前缀归属: agentxx.agent.* 仅 agent 侧关心, agentxx.client.* 仅 client 侧 ----
+        XX_TEST_EXPECT_TRUE(plugin::sideCaresAboutInterface("agentxx.agent.core", true));
+        XX_TEST_EXPECT_FALSE(plugin::sideCaresAboutInterface("agentxx.agent.core", false));
+        XX_TEST_EXPECT_TRUE(plugin::sideCaresAboutInterface("agentxx.client.panel", false));
+        XX_TEST_EXPECT_FALSE(plugin::sideCaresAboutInterface("agentxx.client.panel", true));
         XX_TEST_EXPECT_TRUE(plugin::sideCaresAboutInterface("vendor.custom", true));
         XX_TEST_EXPECT_TRUE(plugin::sideCaresAboutInterface("vendor.custom", false));
 
@@ -242,34 +243,34 @@ interfaces:
         //      位图映射已移除 —— 直接构造支持集) ----
         {
             plugin::InterfaceSet hostIf;
-            hostIf.insert("client.panel");
-            hostIf.insert("client.command");
-            XX_TEST_EXPECT_TRUE(hostIf.contains("client.panel"));
-            XX_TEST_EXPECT_TRUE(hostIf.contains("client.command"));
-            XX_TEST_EXPECT_FALSE(hostIf.contains("client.toast"));
+            hostIf.insert("agentxx.client.panel");
+            hostIf.insert("agentxx.client.command");
+            XX_TEST_EXPECT_TRUE(hostIf.contains("agentxx.client.panel"));
+            XX_TEST_EXPECT_TRUE(hostIf.contains("agentxx.client.command"));
+            XX_TEST_EXPECT_FALSE(hostIf.contains("agentxx.client.toast"));
 
-            // 满足场景: require 中 agent.* 被忽略 (client 视角), client.panel
-            // 受支持 → satisfied; 可选 client.toast 缺失仅进 missingOptional
+            // 满足场景: require 中 agentxx.agent.* 被忽略 (client 视角), agentxx.client.panel
+            // 受支持 → satisfied; 可选 agentxx.client.toast 缺失仅进 missingOptional
             auto r1 = plugin::checkInterfacesForSide(ifaces, hostIf, false);
             XX_TEST_EXPECT_TRUE(r1.satisfied);
             XX_TEST_EXPECT_TRUE(r1.missingRequired.empty());
             XX_TEST_EXPECT_TRUE(r1.missingOptional.size() == 1);
-            XX_TEST_EXPECT_TRUE(r1.missingOptional[0] == "client.toast");
+            XX_TEST_EXPECT_TRUE(r1.missingOptional[0] == "agentxx.client.toast");
 
             // 不满足场景: require 声明宿主不支持的接口 → 列出全部缺失项
             plugin::PluginManifestInterfaces unsat;
-            unsat.require.push_back("client.info_section"); // caps 未含
+            unsat.require.push_back("agentxx.client.info_section"); // caps 未含
             unsat.require.push_back("vendor.custom");
             auto r1b = plugin::checkInterfacesForSide(unsat, hostIf, false);
             XX_TEST_EXPECT_TRUE(!r1b.satisfied);
             XX_TEST_EXPECT_TRUE(r1b.missingRequired.size() == 2);
-            XX_TEST_EXPECT_TRUE(contains(r1b.missingRequired, "client.info_section"));
+            XX_TEST_EXPECT_TRUE(contains(r1b.missingRequired, "agentxx.client.info_section"));
             XX_TEST_EXPECT_TRUE(contains(r1b.missingRequired, "vendor.custom"));
 
-            // agent 视角: client.* 全部被忽略, agent.core 受支持 → 满足
-            // (agent 宿主支持集 = {agent.core}, 见接口协商设计)
+            // agent 视角: agentxx.client.* 全部被忽略, agentxx.agent.core 受支持 → 满足
+            // (agent 宿主支持集 = {agentxx.agent.core}, 见接口协商设计)
             plugin::InterfaceSet agentHostIf;
-            agentHostIf.insert("agent.core");
+            agentHostIf.insert("agentxx.agent.core");
             auto r2 = plugin::checkInterfacesForSide(ifaces, agentHostIf, true);
             XX_TEST_EXPECT_TRUE(r2.satisfied && r2.missingRequired.empty());
             // vendor 前缀: 双方都检查 (agent 视角同样不满足)
@@ -282,10 +283,10 @@ interfaces:
         // ---- 入口符号意图推导 ----
         {
             plugin::PluginManifestInterfaces d;
-            d.require = {"agent.core"};
+            d.require = {"agentxx.agent.core"};
             auto s1   = plugin::requiredEntrySides(d.require);
             XX_TEST_EXPECT_TRUE(s1.agentEntry && !s1.clientEntry);
-            d.require = {"client.panel", "client.command"};
+            d.require = {"agentxx.client.panel", "agentxx.client.command"};
             auto s2   = plugin::requiredEntrySides(d.require);
             XX_TEST_EXPECT_TRUE(!s2.agentEntry && s2.clientEntry);
             d.require = {"vendor.x"};
@@ -320,8 +321,9 @@ interfaces:
         ctx->agentConfig->mcpServerUrls.clear();
     }
 
-    // ================= T3. 运行时注册 (vtable) + MCP 注册/冲突/注销 =================
-    TEST_INFO << "[T3] runtime registration via vtable + mcp lifecycle" << std::endl;
+    // ================= T3. 运行时注册 (agentxx.agent.resources 接口表) + MCP 注册/冲突/注销 =================
+    TEST_INFO << "[T3] runtime registration via agentxx.agent.resources iface + mcp lifecycle"
+              << std::endl;
     {
         auto hostDir = tmpRoot / "hostplug";
         fs::create_directories(hostDir, ec);
@@ -334,19 +336,22 @@ interfaces:
             co_return TestResult{g_res_passed, g_res_failed};
         }
         XX_TEST_EXPECT_EQ(inst->name, ownerName);
+        const auto res3 = agentxx::plugin::AgentIfaces::query(&inst->host).resources;
+        XX_TEST_EXPECT_TRUE(res3 != nullptr && res3->register_skill_dir != nullptr);
 
         // ---- 运行时注册 skill 目录 ----
         auto runtimeSkill = tmpRoot / "runtime_skills";
         fs::create_directories(runtimeSkill, ec);
-        int rc = inst->host.vtable->register_skill_dir(
+        int rc = res3 ? res3->register_skill_dir(
             &inst->host,
-            AGENTXX_SV(runtimeSkill.string().c_str())
-        );
+            AGENTXX_SV(runtimeSkill.string().c_str()))
+                      : -1;
         XX_TEST_EXPECT_EQ(rc, 0);
         XX_TEST_EXPECT_TRUE(contains(skillMw->skillDirPathList(), runtimeSkill.string()));
 
         // ---- 快照 JSON (get_own_resources) ----
-        char* json = inst->host.vtable->get_own_resources(&inst->host);
+        char* json = res3 && res3->get_own_resources ? res3->get_own_resources(&inst->host)
+                                                     : nullptr;
         XX_TEST_EXPECT_TRUE(json != nullptr);
         if (json) {
             XX_TEST_EXPECT_TRUE(std::string_view(json).find("runtime_skills")
@@ -355,32 +360,33 @@ interfaces:
         }
 
         // ---- 重复注册幂等成功 ----
-        rc = inst->host.vtable->register_skill_dir(
+        rc = res3 ? res3->register_skill_dir(
             &inst->host,
-            AGENTXX_SV(runtimeSkill.string().c_str())
-        );
+            AGENTXX_SV(runtimeSkill.string().c_str()))
+                  : -1;
         XX_TEST_EXPECT_EQ(rc, 0);
 
         // ---- 注销; 再注销非 0 ----
-        rc = inst->host.vtable->unregister_skill_dir(
+        rc = res3 ? res3->unregister_skill_dir(
             &inst->host,
-            AGENTXX_SV(runtimeSkill.string().c_str())
-        );
+            AGENTXX_SV(runtimeSkill.string().c_str()))
+                  : -1;
         XX_TEST_EXPECT_EQ(rc, 0);
         XX_TEST_EXPECT_FALSE(contains(skillMw->skillDirPathList(), runtimeSkill.string()));
-        rc = inst->host.vtable->unregister_skill_dir(
+        rc = res3 ? res3->unregister_skill_dir(
             &inst->host,
-            AGENTXX_SV(runtimeSkill.string().c_str())
-        );
+            AGENTXX_SV(runtimeSkill.string().c_str()))
+                  : 0;
         XX_TEST_EXPECT_TRUE(rc != 0);
 
         // ---- MCP 注册 (不可达 URL; 失败仅记日志, 所有权记录保留) ----
         const char* mcpSpec = R"({"namespace":"t_mcp","url":"https://127.0.0.1:9/sse","timeout":3})";
-        rc = inst->host.vtable->register_mcp_server(&inst->host, AGENTXX_SV(mcpSpec));
+        rc = res3 ? res3->register_mcp_server(&inst->host, AGENTXX_SV(mcpSpec)) : -1;
         XX_TEST_EXPECT_EQ(rc, 0);
         co_await sleepMs(150); // 让连接协程跑一轮 (无论成败, 记录均在)
         {
-            char* j2 = inst->host.vtable->get_own_resources(&inst->host);
+            char* j2 = res3 && res3->get_own_resources ? res3->get_own_resources(&inst->host)
+                                                       : nullptr;
             XX_TEST_EXPECT_TRUE(j2 != nullptr);
             if (j2) {
                 XX_TEST_EXPECT_TRUE(std::string_view(j2).find("t_mcp") != std::string_view::npos);
@@ -393,7 +399,7 @@ interfaces:
         ycfg.url                                    = "https://yaml.example";
         ctx->agentConfig->mcpServerUrls["yaml_ns2"] = ycfg;
         const char* specConflict = R"({"namespace":"yaml_ns2","url":"https://z"})";
-        rc = inst->host.vtable->register_mcp_server(&inst->host, AGENTXX_SV(specConflict));
+        rc = res3 ? res3->register_mcp_server(&inst->host, AGENTXX_SV(specConflict)) : 0;
         XX_TEST_EXPECT_TRUE(rc != 0);
 
         // ---- 其他 owner 抢注同名命名空间 → 拒绝 (确定性: 所有权记录已存在) ----
@@ -403,7 +409,7 @@ interfaces:
         XX_TEST_EXPECT_FALSE(applier->addMcpServer("other_owner", "t_mcp", anyCfg, err));
 
         // ---- 注销 (连接可能已失败: 幂等语义仍成功) ----
-        rc = inst->host.vtable->unregister_mcp_server(&inst->host, AGENTXX_SV("t_mcp"));
+        rc = res3 ? res3->unregister_mcp_server(&inst->host, AGENTXX_SV("t_mcp")) : -1;
         XX_TEST_EXPECT_EQ(rc, 0);
         auto snapAfter = applier->ownedBy(ownerName);
         XX_TEST_EXPECT_FALSE(contains(snapAfter.mcpNamespaces, "t_mcp"));

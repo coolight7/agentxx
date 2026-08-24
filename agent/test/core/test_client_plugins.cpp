@@ -12,6 +12,7 @@
 #include "test_client_plugins.h"
 
 #include "agentxx/plugin/client_plugin_manager.h"
+#include "agentxx/plugin/plugin_iface_helper.h"
 #include "agentxx/util/log.h"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
@@ -410,13 +411,16 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
     // 未注册命令: 记日志不崩溃
     mgr->invokeCommand("no_such_command", "{}");
 
-    // ---- 5. 跨端数据 (vtable send_plugin_data 路径) ----
+    // ---- 5. 跨端数据 (agentxx.client.wire 接口表 send_plugin_data 路径) ----
     {
-        int rc = inst->host.vtable->send_plugin_data(
+        const auto wire = agentxx::plugin::ClientIfaces::query(&inst->host).wire;
+        XX_TEST_EXPECT_TRUE(wire != nullptr && wire->send_plugin_data != nullptr);
+        int rc = wire ? wire->send_plugin_data(
             &inst->host,
             AGENTXX_SV("rebuild"),
             AGENTXX_SV(R"({"x":1})")
-        );
+        )
+                      : -1;
         XX_TEST_EXPECT_EQ(rc, 0);
     }
     XX_TEST_EXPECT_TRUE(adapter->dataUpCount() >= 2);
@@ -537,13 +541,17 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         auto                 subFn   = +[](AgentxxPluginStringView, void* ud) {
             ++(*static_cast<std::atomic<int>*>(ud));
         };
+        const auto events8 = agentxx::plugin::ClientIfaces::query(&inst2->host).events;
+        XX_TEST_EXPECT_TRUE(events8 != nullptr && events8->subscribe != nullptr);
         for (int i = 0; i < 4; ++i) {
-            subs[i] = inst2->host.vtable
-                          ->subscribe(&inst2->host, AGENTXX_CLIENT_EVT_CONN_STATE, subFn, &hits);
+            subs[i] = events8 ? events8->subscribe(&inst2->host, AGENTXX_CLIENT_EVT_CONN_STATE, subFn, &hits)
+                              : nullptr;
             XX_TEST_EXPECT_TRUE(subs[i] != nullptr);
         }
         for (int i = 0; i < 4; ++i) {
-            inst2->host.vtable->unsubscribe(subs[i]);
+            if (events8) {
+                events8->unsubscribe(subs[i]);
+            }
         }
         mgr->onConnStateChanged("connected", "100%");
         XX_TEST_EXPECT_EQ(hits.load(), 0); // 全部退订后事件不再达
@@ -552,6 +560,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         // (旧实现 dispatch 快照存裸指针, 回调内订阅触发 vector 扩容后悬垂)
         struct DynSubState {
             agentxx::plugin::ClientPluginInstance* inst = nullptr;
+            const AgentxxClientEventsIface* events = nullptr;
             std::atomic<int>                       hits{0};
             AgentxxSubscription*                   dynSub = nullptr;
             void (*incFn)(AgentxxPluginStringView, void*) = nullptr;
@@ -559,6 +568,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
 
         auto st   = std::make_shared<DynSubState>();
         st->inst  = inst2.get();
+        st->events = agentxx::plugin::ClientIfaces::query(&inst2->host).events;
         st->incFn = +[](AgentxxPluginStringView, void* ud) {
             ++(*static_cast<std::atomic<int>*>(ud));
         };
@@ -566,7 +576,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             auto* s = static_cast<DynSubState*>(ud);
             ++s->hits;
             if (!s->dynSub) {
-                s->dynSub = s->inst->host.vtable->subscribe(
+                s->dynSub = s->events->subscribe(
                     &s->inst->host,
                     AGENTXX_CLIENT_EVT_USER_INPUT,
                     s->incFn,
@@ -574,9 +584,9 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 );
             }
         };
-        AgentxxSubscription* a
-            = inst2->host.vtable
-                  ->subscribe(&inst2->host, AGENTXX_CLIENT_EVT_USER_INPUT, aFn, st.get());
+        AgentxxSubscription* a = st->events
+            ? st->events->subscribe(&inst2->host, AGENTXX_CLIENT_EVT_USER_INPUT, aFn, st.get())
+            : nullptr;
         XX_TEST_EXPECT_TRUE(a != nullptr);
         mgr->onUserInput("sess-test", "x");
         // 首次派发: 仅快照中的 a 被调 (dynSub 派发后才注册)
@@ -584,9 +594,11 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         mgr->onUserInput("sess-test", "y");
         // 第二次派发: a + dynSub 都被调
         XX_TEST_EXPECT_EQ(st->hits.load(), 3);
-        inst2->host.vtable->unsubscribe(a);
-        if (st->dynSub) {
-            inst2->host.vtable->unsubscribe(st->dynSub);
+        if (st->events) {
+            st->events->unsubscribe(a);
+        }
+        if (st->dynSub && st->events) {
+            st->events->unsubscribe(st->dynSub);
         }
 
         // 8.3 收尾: 卸载 (unload 回调内 vtable 反注册路径已由段 7 覆盖)
@@ -623,8 +635,9 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         XX_TEST_EXPECT_TRUE(instCfg != nullptr);
         if (instCfg) {
             XX_TEST_EXPECT_EQ(instCfg->args.value("client_key", std::string{}), "client_val");
-            // vtable get_plugin_args 返回实例 args
-            char* json = instCfg->host.vtable->get_plugin_args(&instCfg->host);
+            // agentxx.client.self 接口表 get_plugin_args 返回实例 args
+            const auto self9 = agentxx::plugin::ClientIfaces::query(&instCfg->host).self;
+            char* json = self9 ? self9->get_plugin_args(&instCfg->host) : nullptr;
             XX_TEST_EXPECT_TRUE(json != nullptr);
             if (json) {
                 try {
@@ -664,9 +677,9 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         d.plugin = "agentxx_host";
         d.event  = "server_plugins";
         d.data   = R"({"plugins":[)"
-                   R"({"name":"agentxx_codegraph","version":"1.0.0","interfaces":["agent.core"]},)"
+                   R"({"name":"agentxx_codegraph","version":"1.0.0","interfaces":["agentxx.agent.core"]},)"
                    R"({"name":"agentxx_system_monitor","version":"1.0.0",)"
-                   R"("interfaces":["agent.core"]}]})";
+                   R"("interfaces":["agentxx.agent.core"]}]})";
         mgr->onPluginData(d);
         auto stateJson = mgr->clientStateJson();
         XX_TEST_EXPECT_TRUE(stateJson.find("agentPlugins") != std::string::npos);
@@ -701,11 +714,11 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         //      panel/toast/info_section/command)
         auto stateJson = mgr->clientStateJson();
         XX_TEST_EXPECT_TRUE(stateJson.find("\"interfaces\"") != std::string::npos);
-        XX_TEST_EXPECT_TRUE(stateJson.find("client.panel") != std::string::npos);
-        XX_TEST_EXPECT_TRUE(stateJson.find("client.command") != std::string::npos);
-        XX_TEST_EXPECT_TRUE(stateJson.find("client.status_item") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(stateJson.find("agentxx.client.panel") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(stateJson.find("agentxx.client.command") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(stateJson.find("agentxx.client.status_item") != std::string::npos);
         // 未置位的能力不得出现 (keybind 预留位未置)
-        XX_TEST_EXPECT_FALSE(stateJson.find("client.keybind") != std::string::npos);
+        XX_TEST_EXPECT_FALSE(stateJson.find("agentxx.client.keybind") != std::string::npos);
 
         // 11.2 require 未满足 → 加载跳过并记录原因 (直连路径, dlopen 后门禁):
         // 拷贝真实可加载的示例库, manifest 声明本宿主不支持的必选接口
@@ -736,7 +749,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             {
                 std::ofstream f(gateDir / "plugin.yaml", std::ios::binary | std::ios::trunc);
                 f << "name: gate_missing_iface\nentry: libexample_plugin.so\ndepends:\n"
-                     "interfaces:\n  require:\n    - client.panel\n    - vendor.nonexistent\n";
+                     "interfaces:\n  require:\n    - agentxx.client.panel\n    - vendor.nonexistent\n";
             }
             size_t skippedBefore = mgr->skippedPlugins().size();
             auto   gated         = co_await mgr->loadNativeAsync(gateDir.string());
@@ -757,8 +770,8 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             {
                 std::ofstream f(gateDir / "plugin.yaml", std::ios::binary | std::ios::trunc);
                 f << "name: gate_ok_iface\nentry: libexample_plugin.so\ndepends:\n"
-                     "interfaces:\n  require:\n    - client.panel\n    - client.command\n"
-                     "  optional:\n    - client.toast\n";
+                     "interfaces:\n  require:\n    - agentxx.client.panel\n    - agentxx.client.command\n"
+                     "  optional:\n    - agentxx.client.toast\n";
             }
             auto okInst = co_await mgr->loadNativeAsync(gateDir.string());
             XX_TEST_EXPECT_TRUE(okInst != nullptr);
@@ -774,20 +787,24 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 }
                 XX_TEST_EXPECT_TRUE(foundDecl);
 
-                // READY payload 含 interfaces 数组 (经实例 host vtable 订阅;
+                // READY payload 含 interfaces 数组 (经 agentxx.client.events 接口表订阅;
                 // onReady 同步分发到当前 io 线程)
                 std::string readyPayload;
                 auto        readyFn = +[](AgentxxPluginStringView payload, void* ud) {
                     static_cast<std::string*>(ud)->assign(payload.data, payload.size);
                 };
-                auto sub = okInst->host.vtable
-                               ->subscribe(&okInst->host, AGENTXX_CLIENT_EVT_READY, readyFn,
-                                           &readyPayload);
+                const auto events11
+                    = agentxx::plugin::ClientIfaces::query(&okInst->host).events;
+                auto sub = events11 ? events11->subscribe(&okInst->host, AGENTXX_CLIENT_EVT_READY, readyFn,
+                                           &readyPayload)
+                                    : nullptr;
                 XX_TEST_EXPECT_TRUE(sub != nullptr);
                 mgr->onReady();
                 XX_TEST_EXPECT_TRUE(readyPayload.find("\"interfaces\"") != std::string::npos);
-                XX_TEST_EXPECT_TRUE(readyPayload.find("client.panel") != std::string::npos);
-                okInst->host.vtable->unsubscribe(sub);
+                XX_TEST_EXPECT_TRUE(readyPayload.find("agentxx.client.panel") != std::string::npos);
+                if (events11) {
+                    events11->unsubscribe(sub);
+                }
 
                 co_await mgr->unloadAsync("example_plugin");
                 XX_TEST_EXPECT_TRUE(mgr->find("example_plugin") == nullptr);

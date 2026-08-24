@@ -3,7 +3,7 @@
 > 待实现: Wire 远程热管理 / TUI 插件管理面板 / 签名校验
 > 关联: [design.md](design.md)
 > 目标: 原生 C++ 插件 + 脚本插件 (由 C++ 插件承载), 支持热插拔、强自定义
-> 本文以当前源码为准 (plugin_api.h v8 / client_plugin_api.h v2), 设计原稿与实现偏差见 [13. 实现状态与偏差](#13-实现状态与偏差)
+> 本文以当前源码为准 (plugin_api.h v1 / client_plugin_api.h v1, COM 风格接口表架构), 设计原稿与实现偏差见 [13. 实现状态与偏差](#13-实现状态与偏差)
 
 ## 目录
 
@@ -132,8 +132,9 @@ client 侧 (CLI/TUI, 独立宿主)
 
 | 组件 | 位置 | 说明 |
 |------|------|------|
-| `plugin_api.h` | `include/agentxx/plugin/` | 纯 C ABI 契约头 (v6, 唯一跨版本稳定接口) |
-| `client_plugin_api.h` | `include/agentxx/plugin/` | client 侧纯 C ABI 契约头 (v2, 独立符号集) |
+| `plugin_api.h` | `include/agentxx/plugin/` | 纯 C ABI 契约头 (v1, COM 风格接口表; 唯一跨版本稳定接口) |
+| `client_plugin_api.h` | `include/agentxx/plugin/` | client 侧纯 C ABI 契约头 (v1, 独立符号集; 同架构) |
+| `plugin_iface_helper.h` | `include/agentxx/plugin/` | 插件侧 C++ header-only 便捷层 (AgentIfaces/ClientIfaces 一次查询聚合; 非跨边界 ABI) |
 | `PluginManager` | `src/plugins/plugin_manager.cpp` | agent 侧生命周期管理 (load/enable/disable/unload/shutdownAll + 依赖图) |
 | `ClientPluginManager` | `src/plugins/client_plugin_manager.cpp` | client 侧管理器 (UI 注册表 + 事件分发 + vtable 实现) |
 | `PluginInstance` | `include/agentxx/plugin/plugin_manager.h` | 已加载插件实例 (注册残留/inflight/依赖) |
@@ -260,24 +261,37 @@ typedef int (*AgentxxHookFn)(void* user_data, AgentxxHookPoint point,
                              char** out_json, char** error_out);
 ```
 
-**宿主函数表** (vtable 全部函数内部捕获异常, C ABI 边界无异常外泄):
+**核心 vtable + COM 风格接口表** (v1 全量架构; 所有表函数内部捕获异常, C ABI
+边界无异常外泄):
 
-| 分组 | 函数 | 说明 |
+核心 vtable 极简且【契约冻结】, 仅 4 个成员:
+
+| 成员 | 说明 |
+|------|------|
+| `alloc` / `free` / `strdup` | 跨 CRT 堆边界唯一分配通道 (任意线程可调用) |
+| `query_interface(host, iid)` | 按稳定 IID 字符串查询接口表; 未实现返回 NULL (安全失败) |
+
+其余全部宿主能力按稳定 IID 查询独立接口表获取 (每表首字段为该表自身
+`version`, 独立演进; 表内不支持的子能力成员为 NULL, 调用前判空):
+
+| IID (宏) | 结构体 | 成员 |
 |------|------|------|
-| 内存 | `alloc` / `free` / `strdup` | 跨 CRT 堆边界唯一分配通道 |
-| 工具注册 | `register_tool` / `unregister_tool` | 热插拔; 名称冲突返回非 0 |
-| 中间件钩子 | `register_hook` / `unregister_hook` | 热插拔, 轮次边界生效 |
-| 事件 | `subscribe` / `unsubscribe` / `publish` | topic 自动加 `plugin.` 前缀; 载荷 JSON 字符串; publish 异步投递 |
-| 能力 | `register_capability` / `register_capability_ex` / `unregister_capability` / `has_capability` | `_ex` 附带方法回调 (能力调用 = 通用插件间通信通道, 如 `interpreter.js` 的 load/unload) |
-| 能力调用 | `invoke_capability` | 调用提供者方法; 提供者回调在**调用方线程**执行 (查表短临界区在 io 线程, 防死锁) |
-| 线程投递 | `is_io_thread` / `post_to_io` | 非 io 线程调用方使用; vtable 内部自动处理 |
-| 会话访问 | `call_tool` / `get_share_store` / `emit_message_tip` / `log` | call_tool 仅可调用插件注册的工具 (查表在 io 线程短临界区, 目标 execute 在调用方线程; 目标插件 shared_ptr 保活) |
-| 插件互查 | `list_plugins` / `get_plugin` / `get_own_info` | JSON 数组/单对象; 含 name/version/path/enabled/tools/capabilities/depends/optional_depends |
-| JSON 辅助 | `json_get_string` / `json_escape` | 提取 key 字符串值 / 字符串 → 带引号 JSON 字面量 (防注入/语法错误, 替代手写解析) |
-| 宿主配置 | `get_config` / `get_plugin_args` / `get_tool_prompt` | 通用宿主信息 (dataDir/projectRoot/platform) / 本插件 yaml args (宿主不解析) / 工具提示词 (depict/args) |
-| 宿主提示词 | `get_prompt` / `set_prompt` (v6+) | 完整提示词读写; 卸载自动回滚 set_prompt 写入 |
-| 宿主任务调度 | `add_timer` / `cancel_timer` / `offload` (v7+) | 周期定时器 (io 线程触发) / 阻塞池卸载执行; 在途回调经 inflight 保活 |
-| 会话资源 | `register_skill_dir` / `unregister_skill_dir` / `register_memory_file` / `unregister_memory_file` / `register_mcp_server` / `unregister_mcp_server` / `get_own_resources` (v8+) | 插件向宿主贡献 Skill/Memory/MCP 组件 (见 4.2.1); 所有权按插件记录, 卸载摘除/禁用摘生效留记录/启用恢复 |
+| `agentxx.agent.tools` | `AgentxxToolsIface` | `register_tool` / `unregister_tool` / `call_tool` (互调: 查表 io 线程短临界区, 目标 execute 在调用方线程, 目标插件 shared_ptr 保活) |
+| `agentxx.agent.hooks` | `AgentxxHooksIface` | `register_hook` / `unregister_hook` (热插拔, 轮次边界生效) |
+| `agentxx.agent.events` | `AgentxxEventsIface` | `subscribe` / `unsubscribe` / `publish` (topic 自动加 `plugin.` 前缀; publish 异步投递且拒绝禁用插件) |
+| `agentxx.agent.capabilities` | `AgentxxCapabilitiesIface` | `register_capability` / `register_capability_ex` / `unregister_capability` / `has_capability` / `invoke_capability` (`_ex` 附带方法回调 = 通用插件间通信通道, 如 `interpreter.js`; 提供者回调在【调用方线程】执行防死锁) |
+| `agentxx.agent.scheduler` | `AgentxxSchedulerIface` | `is_io_thread` / `post_to_io` / `add_timer` / `cancel_timer` / `offload` (定时器 io 线程触发; offload 阻塞池执行 + inflight 保活) |
+| `agentxx.agent.session` | `AgentxxSessionIface` | `get_share_store` / `emit_message_tip` (仅 io 线程) |
+| `agentxx.agent.plugins` | `AgentxxPluginsIface` | `list_plugins` / `get_plugin` / `get_own_info` (JSON; name/version/path/enabled/tools/capabilities/depends/optional_depends) |
+| `agentxx.agent.config` | `AgentxxConfigIface` | `get_config` / `get_plugin_args` / `get_tool_prompt` (dataDir/projectRoot/platform; yaml args 宿主不解析) |
+| `agentxx.agent.prompt` | `AgentxxPromptIface` | `get_prompt` / `set_prompt` (完整提示词读写; 卸载自动回滚写入) |
+| `agentxx.agent.json` | `AgentxxJsonIface` | `json_get_string` / `json_escape` (线程安全纯函数, 替代手写解析) |
+| `agentxx.agent.log` | `AgentxxLogIface` | `log` (0=trace..4=error, 线程安全) |
+| `agentxx.agent.resources` | `AgentxxResourcesIface` | `register_skill_dir` / `unregister_skill_dir` / `register_memory_file` / `unregister_memory_file` / `register_mcp_server` / `unregister_mcp_server` / `get_own_resources` (会话资源贡献见 4.2.1; 所有权按插件记录, 卸载摘除/禁用摘生效留记录/启用恢复) |
+
+插件侧便捷设施: `plugin_iface_helper.h` 提供 `AgentIfaces::query(host)` /
+`ClientIfaces::query(host)` 一次性查询聚合 (header-only, 非跨边界 ABI);
+第三方插件可不用它而直接调 `query_interface` (纯 C 路径不受影响)。
 
 **入口符号** (dlsym):
 ```c
@@ -288,7 +302,12 @@ typedef int (*AgentxxHookFn)(void* user_data, AgentxxHookPoint point,
 - `entry` 运行在宿主线程池; 其中经 vtable 的注册/订阅等 io 线程约束操作由宿主自动投递回 io 线程串行执行 (插件无感, entry 内可安全调用任意 API)
 - `unload` 在宿主等全部在途回调完成后调用; 宿主会在此之前自动反注册该插件的一切工具/钩子/订阅/能力
 
-**版本策略**: 修改契约时递增 `AGENTXX_PLUGIN_API_VERSION`; 宿主拒绝 api_version 不匹配的插件 (仅拒绝, 不崩溃)。自 **v9 (2026-08)** 起核心 vtable 契约冻结: 新增能力一律定义独立扩展表 (首字段自带 `version`) 经 `query_extension` 分发, 不再递增全局版本号; 既有核心成员物理迁移到扩展表需主版本升级 (client 侧 v4 已将展示/命令/toast 迁至 "client.ui" 扩展表, 见 4.7)。
+**版本策略 (双层)**: 全局 `AGENTXX_PLUGIN_API_VERSION` (=1) 只覆盖核心契约
+(核心 vtable 形状 + Info 结构 + 入口符号 + 共享类型); 宿主精确匹配门禁,
+api_version 不匹配的插件直接拒绝加载 (仅拒绝不崩溃), **无历史版本兼容路径**
+(v9 及以前的巨型核心 vtable 已废弃)。接口表各自携带 version 独立演进:
+新增能力 = 定义新接口表或在表内追加成员并递增该表版本, 全局版本号不动、
+其他插件与旧宿主二进制不受影响。
 
 ### 4.3 宿主侧适配 (vtable → 现有强类型世界)
 
@@ -469,14 +488,14 @@ std::string b64 = agentxx::util::base64Encode(sv);  // 静态链入本插件副�
   程序按需外置), 内置模式不产出 client 插件库; `client_plugins` 测试在
   内置模式下跳过
 
-### 4.7 接口协商 (字符串接口集 + COM 式扩展表, 2026-08 二期)
+### 4.7 接口协商 (字符串接口集; 全量 COM 式接口表, v1)
 
 > 目标: 适配不同 client 宿主 (cli / tui / gui, 甚至第三方 app) 支持的插件
 > 接口各不相同 —— 同一插件目录在能力齐备的宿主全量启用, 在缺能力的宿主
 > 明确跳过或降级, 而非半失效运行。
 
 **不对称协商的关键事实**: server (agent-io) 只有 libagentxx 一个实现,
-agent 侧接口集 ≡ 当前 `api_version` 头文件内容 (版本匹配即全集), 无需真正
+agent 侧接口集 ≡ 核心契约 + 全部标准接口表 IID (版本匹配即全集), 无需真正
 协商; 协商的主战场在 client 侧。机制因此做成通用对称代码路径, 但实际起
 作用的门禁集中在 client 侧 (第三方 agent 宿主未来可直接复用)。
 
@@ -485,16 +504,22 @@ agent 侧接口集 ≡ 当前 `api_version` 头文件内容 (版本匹配即全�
 
 | 名称 | 归属侧 | 说明 |
 |---|---|---|
-| `agent.core` | agent | api_version 核心: 工具/钩子/事件/能力 |
-| `client.status_item` | client | 状态栏项 |
-| `client.panel` | client | 侧边栏面板 |
-| `client.toast` | client | toast 提示 |
-| `client.keybind` (预留) | client | 自定义键位 |
-| `client.prompt_modal` (预留) | client | 模态询问 |
-| `client.msg_decor` (预留) | client | 消息装饰 |
-| `client.info_section` | client | 侧边栏 Info 栏段落 |
-| `client.command` | client | 斜杠命令输入管线 |
-| `<vendor>.<name>` | 双方 | 宿主不认识即不支持, 安全失败 |
+| `agentxx.agent.core` | agent | 元接口: 宿主实现完整核心契约 + 标准接口表全集 (libagentxx 即此类) |
+| `agentxx.agent.tools` / `agentxx.agent.hooks` / `agentxx.agent.events` / `agentxx.agent.capabilities` / `agentxx.agent.scheduler` / `agentxx.agent.session` / `agentxx.agent.plugins` / `agentxx.agent.config` / `agentxx.agent.prompt` / `agentxx.agent.json` / `agentxx.agent.log` / `agentxx.agent.resources` | agent | COM 风格接口表 IID (= `AGENTXX_IFACE_AGENT_*` 宏); 插件可按实际查询的表精确声明 require |
+| `agentxx.client.ui` | client | 展示扩展接口表整体 (`AGENTXX_IFACE_CLIENT_UI`) |
+| `agentxx.client.status_item` | client | 状态栏项 (映射 agentxx.client.ui 非空成员) |
+| `agentxx.client.panel` | client | 侧边栏面板 |
+| `agentxx.client.toast` | client | toast 提示 |
+| `agentxx.client.keybind` (预留) | client | 自定义键位 |
+| `agentxx.client.prompt_modal` (预留) | client | 模态询问 |
+| `agentxx.client.msg_decor` (预留) | client | 消息装饰 |
+| `agentxx.client.info_section` | client | 侧边栏 Info 栏段落 |
+| `agentxx.client.command` | client | 斜杠命令输入管线 |
+| `<vendor>.<name>` | 双方 | 第三方私有接口 (不得使用保留前缀 `agentxx.`); 宿主不认识即不支持, 安全失败 |
+
+> 命名规范: `agentxx.` 为本项目内置接口的**保留命名空间** —— 全部内置接口
+> 名以 `agentxx.` 开头 (`agentxx.agent.*` / `agentxx.client.*`), 第三方插件
+> 私有接口用 `<vendor>.<name>` 且不得占用该前缀。
 
 **三层设计**:
 
@@ -502,12 +527,12 @@ agent 侧接口集 ≡ 当前 `api_version` 头文件内容 (版本匹配即全�
 
    ```yaml
    interfaces:
-     require:  [agent.core, client.command]  # 缺失任一(按前缀过滤后) → 该侧跳过加载
-     optional: [client.info_section]         # 缺失仅警告, 插件注册时自降级
+     require:  [agentxx.agent.core, agentxx.client.command]  # 缺失任一(按前缀过滤后) → 该侧跳过加载
+     optional: [agentxx.client.info_section]         # 缺失仅警告, 插件注册时自降级
    ```
 
-   同一清单可同时声明两侧接口, 前缀决定归属: `agent.*` 仅 agent 侧检查、
-   `client.*` 仅 client 侧检查、无前缀/`<vendor>.*` 两侧都检查
+   同一清单可同时声明两侧接口, 前缀决定归属: `agentxx.agent.*` 仅 agent 侧
+   检查、`agentxx.client.*` 仅 client 侧检查、无前缀/`<vendor>.*` 两侧都检查
    (`sideCaresAboutInterface`)。
 
 2. **校验层** (框架强制, dlopen 前后两道):
@@ -519,36 +544,45 @@ agent 侧接口集 ≡ 当前 `api_version` 头文件内容 (版本匹配即全�
    - **符号意图预检**: require 声明了某侧接口却未导出该侧入口符号
      (`requiredEntrySides`) → 明确报错, 声明意图优先于 sides==Auto 的静默
      容忍。
-   - agent 侧走同一套公共函数, 支持集恒为 `{agent.core}`。
+   - agent 侧走同一套公共函数, 支持集 = `{agentxx.agent.core}` + 全部标准接口表 IID
+     (`PluginManager::agentHostSupportedInterfaces`)。
 
-3. **决策层** (插件自主): 插件 entry 内经 v9/v4 新增的
-   `has_interface(name)` 同步判单名, 或读 EVT_READY payload 与
-   `get_client_state` 的 `"interfaces": ["client.panel", ...]` 字符串数组,
+3. **决策层** (插件自主): 插件 entry 内经 `query_interface(name) != NULL`
+   判单接口 (或经 `AgentIfaces::query` 聚合判空), 或读 EVT_READY payload 与
+   `get_client_state` 的 `"interfaces": ["agentxx.client.panel", ...]` 字符串数组,
    自行决定注册哪些功能。
 
-**COM 式扩展表** (`query_extension`, 三期演进落地):
+**全量 COM 式接口表** (`query_interface`, v1 架构):
 
-- 核心契约冻结: 自 plugin_api **v9** / client_plugin_api **v4** 起, 核心
-  vtable 不再增删成员 —— 未来新增能力一律定义新的扩展表 (纯 C 结构体,
-  首字段恒为自身 `version`), 经 `query_extension(host, name)` 分发, 与全局
-  版本号解耦, 不再强制全部插件重编译。
-- 已定义扩展表: `AGENTXX_CLIENT_EXT_UI` ("client.ui",
-  `AgentxxClientExtUiVtable`) —— 状态栏/面板/Info 段落/命令/toast 自核心
-  vtable 物理迁移至此。表内不支持的子能力成员为 NULL 函数指针, 插件调用前
-  判空; `has_interface` 对应成员同步为假。典型用法:
+- 核心契约冻结: 核心 vtable 仅 `alloc/free/strdup/query_interface` 四成员
+  —— 一切宿主能力一律定义为独立接口表 (纯 C 结构体, 首字段恒为自身
+  `version`), 经 `query_interface(host, iid)` 分发, 与全局版本号解耦,
+  不再强制全部插件重编译。
+- agent 侧已定义 12 张标准表 (`AGENTXX_IFACE_AGENT_*`, 见 4.2); client 侧
+  已定义 7 张 (`agentxx.client.ui/events/session/wire/self/json/log`)。"agentxx.client.ui"
+  (`AgentxxClientUiIface`) 承载状态栏/面板/Info 段落/命令/toast。
+- 表内不支持的子能力成员为 NULL 函数指针, 插件调用前判空。典型用法:
 
   ```c
-  auto ui = (const AgentxxClientExtUiVtable*)
-      host->vtable->query_extension(host, AGENTXX_SV(AGENTXX_CLIENT_EXT_UI));
+  auto ui = (const AgentxxClientUiIface*)
+      host->vtable->query_interface(host, AGENTXX_SV(AGENTXX_IFACE_CLIENT_UI));
   if (ui && ui->register_panel) { /* ... */ }
   ```
 
-- 第三方精简宿主只需实现核心 + 想支持的扩展表; agent 侧暂无扩展表 (预留)。
+  或经便捷层一次查询聚合:
+
+  ```cpp
+  auto ifs = agentxx::plugin::ClientIfaces::query(host);
+  if (ifs.ui && ifs.ui->register_panel) { /* ... */ }
+  ```
+
+- 第三方精简宿主只需实现核心 + 想支持的接口表 (不查询的表返回 NULL 即可);
+  新增能力永不修改核心结构。
 
 **与版本门禁的关系** (重要): `api_version` 精确匹配门禁保留且不被本机制
-替代 —— 核心 vtable 是 C 结构体, 老宿主+新插件按新偏移读字段是 UB, 这只能
-靠版本门禁挡住; 接口协商只解决"功能子集"维度, 扩展表机制解决"新增能力不
-动全局版本"维度。物理迁移既有核心成员到扩展表需主版本升级。
+替代 —— 核心结构是 C 结构体, 老宿主+新插件按新偏移读字段是 UB, 这只能靠
+版本门禁挡住; 接口协商只解决"功能子集"维度, 接口表机制解决"新增能力不动
+全局版本"维度。
 
 **跨端感知与上报** (约定事件, 均以伪插件名 `agentxx_host` 承载):
 - server → client: `server_plugins` 载荷为结构化对象数组
@@ -562,14 +596,18 @@ agent 侧接口集 ≡ 当前 `api_version` 头文件内容 (版本匹配即全�
   到达感知各 client 快照并自适应 (如 emit_message_tip 在无 toast 接口的
   宿主上降级)。
 
-**v4 行为变化说明**:
-- 位图方案整体移除: `AGENTXX_UI_CAP_*` / `AGENTXX_IFACE_*` /
-  `ui_caps()` / `min_ui_caps` 字段不复存在; 最低接口要求改由清单
-  `interfaces.require` 声明 (宿主加载前门禁)。
-- `register_command` 按 `client.command` 接口门禁 (与其他 register_*
-  一致); CLI/TUI 适配器均声明该接口, 行为不变。
-- 展示/命令/toast 注册函数自核心 vtable 迁至 "client.ui" 扩展表, 插件需
-  改经 `query_extension` 获取 (仓库内全部插件已迁移, 可作参考实现)。
+**v1 重构行为变化** (相对历史版本, 不兼容):
+- 历史巨型核心 vtable (plugin_api ≤v9 / client_plugin_api ≤v4 的全部能力
+  成员) 整体废弃并拆分为命名接口表; 旧版插件因 api_version 门禁被直接拒绝
+  加载, 无兼容路径。
+- 位图方案不复存在; 最低接口要求由清单 `interfaces.require` 声明 (宿主
+  加载前门禁)。
+- `register_command` 按 `agentxx.client.command` 能力名门禁 (映射 agentxx.client.ui 表非空
+  成员); CLI/TUI 适配器均声明该能力, 行为不变。
+- 运行时接口探测统一为 `query_interface` 判空 (`has_interface` 已移除,
+  等价于查询结果非 NULL)。
+- 展示/命令/toast 经 "client.ui" 接口表访问 (仓库内全部插件已迁移, 可作
+  参考实现)。
 
 ---
 
@@ -737,7 +775,7 @@ agent 侧插件 (工具/钩子/事件/能力) 已完备, 但 client (CLI/TUI) �
 | 决策 | 结论 | 理由 |
 |------|------|------|
 | 插件能否直接操作 UI 组件树 | **不能**。扩展点是 UI 无关的"语义层" | 暴露 FTXUI 组件会把插件绑死在 TUI 框架上, GUI 无法复用, CLI 无从谈起 |
-| ABI 组织 | **独立头 `client_plugin_api.h` + 独立入口符号 `agentxx_client_entry` + 独立版本号 (v3)** | client 侧扩展点迭代频繁; 独立符号集使 agent 侧 `plugin_api.h` 零改动, 旧插件不受影响 |
+| ABI 组织 | **独立头 `client_plugin_api.h` + 独立入口符号 `agentxx_client_entry` + 独立版本号 (v1, COM 风格接口表)** | client 侧扩展点迭代频繁; 独立符号集与独立核心版本使两侧契约互不影响; 接口表各自带 version 演进 |
 | 双端插件 | **同一动态库可导出两套入口**, 两个 PluginManager 各自 dlopen/装配 | codegraph 这类插件天然需要 "agent 侧提供工具 + client 侧展示进度" 的成对能力; dlopen 引用计数支持同库双实例 |
 | 跨端通信 | **统一走 wire 协议**: 已有 `WirePluginData` (agent→client), 新增 `WirePluginDataUp` (client→agent) | 本地 Channel 模式与远程 WS 模式路径完全一致, 插件不感知部署形态 |
 | 代码归属 | **UI 无关宿主层放 `agent/lib` (plugin/ 目录), TUI/CLI 适配器放 `agent/client`** | 未来 GUI 只需实现一个 `PluginUiAdapter` 即可复用宿主层 |
@@ -751,18 +789,18 @@ agent 侧插件 (工具/钩子/事件/能力) 已完备, 但 client (CLI/TUI) �
 3. **调用交互原语**: toast / 代发消息 / 请求取消 —— 命令式调用。
 
 每个 UI 实现经 `supportedInterfaces()` 声明自己支持的接口名集合
-(`plugin_interfaces` 常量), 宿主据此装配 "client.ui" 扩展表与加载门禁;
+(`plugin_interfaces` 常量), 宿主据此做子能力门禁与加载门禁;
 不支持的注册项自动失败 (返回 NULL / 非 0), 插件自适应降级。展示/命令/toast
-自 client v4 起迁至 "client.ui" 扩展表 (`AgentxxClientExtUiVtable`, 经
-`query_extension` 获取; 表内不支持子能力成员为 NULL):
+经 "client.ui" 接口表访问 (`AgentxxClientUiIface`, 经 `query_interface`
+获取; 表内不支持子能力成员为 NULL):
 
 ```c
-auto ui = (const AgentxxClientExtUiVtable*)
-    host->vtable->query_extension(host, AGENTXX_SV(AGENTXX_CLIENT_EXT_UI));
+auto ui = (const AgentxxClientUiIface*)
+    host->vtable->query_interface(host, AGENTXX_SV(AGENTXX_IFACE_CLIENT_UI));
 if (ui && ui->register_panel) { /* ... */ }   /* 成员判空 = 能力判空 */
 ```
 
-CLI 声明 `{client.toast, client.command}` (命令为输入管线一部分, 必然支持);
+CLI 声明 `{agentxx.client.toast, agentxx.client.command}` (命令为输入管线一部分, 必然支持);
 TUI = `{status_item, panel, toast, info_section, command}`; 未来 GUI 自行声明。
 
 Info 栏段落 (register_info_section): 插件向侧边栏内置 Info tab 注入段落 (id 唯一, props `{"title": "..."}` 可省略), 内容经 update_info_section 更新 (items schema 与面板一致); 渲染在 Info 栏 Append 组件列表之后, 由 TUI 每帧从 UI 注册表快照读取 —— 适合把摘要/状态信息 (如 codegraph 索引状态、系统资源占用) 直接放进常驻 Info 栏, 而无需占用独立 tab。
@@ -850,20 +888,19 @@ typedef struct AgentxxClientPluginInfo {
 #define AGENTXX_CLIENT_SYMBOL_UNLOAD   "agentxx_client_unload"
 ```
 
-`AgentxxClientHostVtable` 分组 (与 agent 侧 vtable 同内存/日志/JSON 语义;
-v4 核心契约冻结, 新增能力走 `query_extension` 扩展表):
+核心 `AgentxxClientHostVtable` 极简且【契约冻结】(仅 4 成员: alloc/free/
+strdup/query_interface); 其余宿主能力全部按 IID 查询独立接口表 (与 agent
+侧同内存/日志/JSON 语义; 各表首字段 version, 独立演进):
 
-| 分组 | 函数 |
-|------|------|
-| 内存 | `alloc` / `free` / `strdup` |
-| 接口协商 | `has_interface(name)`; `query_extension(name)` (COM 式扩展表查询) |
-| 展示/命令/toast 扩展表 ("client.ui") | `register_status_item` / `update_status_item` / `unregister_status_item`; `register_panel` / `update_panel` / `unregister_panel`; `register_info_section` / `update_info_section` / `unregister_info_section`; `register_command` / `unregister_command`; `show_toast` (不支持子能力成员为 NULL) |
-| 事件订阅 | `subscribe` / `unsubscribe` (卸载自动退订) |
-| 会话上下文 | `get_client_state` ({"sessionId","connState","model","models","isStreaming","interfaces","agentPlugins":[{name,version,interfaces}]}) |
-| 会话操作 | `send_user_input` (与用户输入同排队语义) / `request_cancel` |
-| 跨端数据 | `send_plugin_data` (client → agent, topic `client.{插件名}.{事件名}`) |
-| 自描述 | `get_own_info` / `get_plugin_args` |
-| 日志/JSON | `log` / `json_get_string` / `json_escape` |
+| IID (宏) | 结构体 | 成员 |
+|------|------|------|
+| `agentxx.client.ui` (`AGENTXX_IFACE_CLIENT_UI`) | `AgentxxClientUiIface` | `register/update/unregister_status_item`; `register/update/unregister_panel`; `register/update/unregister_info_section`; `register/unregister_command`; `show_toast` (不支持子能力成员为 NULL) |
+| `agentxx.client.events` | `AgentxxClientEventsIface` | `subscribe` / `unsubscribe` (卸载自动退订) |
+| `agentxx.client.session` | `AgentxxClientSessionIface` | `get_client_state` ({"sessionId","connState","model","models","isStreaming","interfaces","agentPlugins":[{name,version,interfaces}]}) / `send_user_input` (与用户输入同排队语义) / `request_cancel` |
+| `agentxx.client.wire` | `AgentxxClientWireIface` | `send_plugin_data` (client → agent, topic `client.{插件名}.{事件名}`) |
+| `agentxx.client.self` | `AgentxxClientSelfIface` | `get_own_info` / `get_plugin_args` |
+| `agentxx.client.json` | `AgentxxClientJsonIface` | `json_get_string` / `json_escape` |
+| `agentxx.client.log` | `AgentxxClientLogIface` | `log` |
 
 ### 7.6 装配 (mode_runners)
 
@@ -882,8 +919,8 @@ v4 核心契约冻结, 新增能力走 `query_extension` 扩展表):
 3. **命令动作 JSON**: 支持 `send` / `toast` / `none`; `json_escape` 返回带引号的 JSON 字符串字面量 (与 agent 侧一致), 插件拼装动作 JSON 时不得再额外加引号。
 4. **句柄生命周期**: disable 保留注册信息与句柄 (enable 重建); unload 时句柄存活到实例析构 (插件的 unload 回调可能主动反注册, 句柄必须有效)。
 5. **远程 client 模式**: 只加载 client 侧条目; `io->onServerReady()` 在连接建立后调用 (TUI 覆写版幂等, 同时通知事件接收器)。
-6. **命令接口声明**: 命令属于输入管线 (stdin 行解析 / TUI onSend 拦截), CLI/TUI 宿主恒声明 `client.command` 接口; 无命令输入面的第三方宿主不声明 → register_command 被拒 (返回非 0), 插件降级。
-7. **最低接口要求**: v4 起经清单 `interfaces.require` 声明 (宿主加载前门禁, 见 4.7); 原 min_ui_caps 位图字段已移除。
+6. **命令接口声明**: 命令属于输入管线 (stdin 行解析 / TUI onSend 拦截), CLI/TUI 宿主恒声明 `agentxx.client.command` 接口; 无命令输入面的第三方宿主不声明 → register_command 被拒 (返回非 0), 插件降级。
+7. **最低接口要求**: 经清单 `interfaces.require` 声明 (宿主加载前门禁, 见 4.7); 位图方案已废弃。
 
 ---
 
@@ -942,8 +979,8 @@ memory: []                    # 可选 (v8): memory 上下文文件列表
 mcp: []                       # 可选 (v8): MCP server 列表项 {namespace,url,timeout(秒)}
                               #   语义见 4.2.1; entry 成功后应用 (失败不生效)
 interfaces:                   # 可选 (接口协商, 见 4.7):
-  require: [agent.core]       #   必选接口 —— 任一缺失 (按前缀过滤出本侧) 该侧跳过加载
-  optional: [client.toast]    #   可选接口 —— 缺失仅警告, 插件注册时自降级
+  require: [agentxx.agent.core]    #   必选接口 —— 任一缺失 (按前缀过滤出本侧) 该侧跳过加载
+  optional: [agentxx.client.toast] #   可选接口 —— 缺失仅警告, 插件注册时自降级
 ```
 
 宿主解析 name/entry/depends/optional_depends (YAML::LoadFile) + 资源声明段
@@ -1000,13 +1037,15 @@ implemented" 桩), 各插件自身 CMakeLists.txt 按声明的平台支持列表
 
 ## 10. 示例插件
 
-### 10.1 C++ 插件骨架 (与现网 plugin_api.h v6 一致)
+### 10.1 C++ 插件骨架 (与现网 plugin_api.h v1 COM 风格一致)
 
 ```cpp
 // my_tool_plugin.cpp —— 编译为 libmy_tool_plugin.so, 无需链接 libagentxx
 #include "agentxx/plugin/plugin_api.h"
+#include "agentxx/plugin/plugin_iface_helper.h"   // 可选: 一次查询聚合便捷层
 
 static const AgentxxHost* g_host = nullptr;
+static agentxx::plugin::AgentIfaces g_if{};       // 接口表缓存 (entry 时查询)
 
 // execute 回调运行在宿主线程池; 返回字符串必须经宿主分配 (AGENTXX_STRDUP)
 static char* my_exec(void* ud, AgentxxPluginStringView args_json,
@@ -1014,7 +1053,7 @@ static char* my_exec(void* ud, AgentxxPluginStringView args_json,
                      char** err_out) {
     (void)ud; (void)args_json; (void)thread_id; (void)tool_call_id; (void)err_out;
     if (!g_host) return nullptr;
-    return g_host->vtable->strdup("{\"ok\": true}");
+    return g_host->vtable->strdup("{\"ok\": true}");   // 核心内存三件套直接可用
 }
 
 // 可选: 元信息 (加载前校验; 未导出则跳过)
@@ -1032,23 +1071,32 @@ extern "C" const AgentxxPluginInfo* agentxx_plugin_get_info(void) {
 extern "C" int agentxx_plugin_entry(const AgentxxHost* host, void** plugin_ctx) {
     (void)plugin_ctx;
     g_host = host;
+    // COM 风格接口表查询: entry 内一次性查询全部已知 IID 并缓存
+    static const agentxx::plugin::AgentIfaces s_if = agentxx::plugin::AgentIfaces::query(host);
+    g_if = s_if;
+    if (!s_if.tools || !s_if.tools->register_tool) return -1;
+
     AgentxxToolSpec spec{};
     spec.name            = AGENTXX_SV("my_tool");
     spec.description     = AGENTXX_SV("My first plugin tool");
     spec.parameters_json = AGENTXX_SV(R"({"type":"object","properties":{}})");
     spec.execute         = my_exec;
-    return host->vtable->register_tool(host, &spec);   // 0 = ok
+    return s_if.tools->register_tool(host, &spec);   // 0 = ok
 }
 
 // 可选: 卸载通知 (宿主已先自动反注册; 插件侧约定主动清理)
 extern "C" void agentxx_plugin_unload(void* plugin_ctx) {
     (void)plugin_ctx;
-    if (g_host) {
-        g_host->vtable->unregister_tool(g_host, AGENTXX_SV("my_tool"));
+    if (g_host && g_if.tools && g_if.tools->unregister_tool) {
+        g_if.tools->unregister_tool(g_host, AGENTXX_SV("my_tool"));
         g_host = nullptr;
     }
 }
 ```
+
+纯 C 路径 (不用便捷层): `host->vtable->query_interface(host, AGENTXX_SV(
+AGENTXX_IFACE_AGENT_TOOLS))` 返回 `const void*`, 按头文件中 IID 对应的
+`AgentxxToolsIface*` 解释即可。
 
 ### 10.2 插件目录布局
 
@@ -1136,6 +1184,7 @@ plugins/
 | 会话资源贡献 (v8, 2026-08) | plugin_api v8 (skill/memory/mcp 注册 API + 定时器/offload v7); plugin.yaml 资源声明段; AgentResourceApplier 具体实现 (MCP 异步连接状态机/所有权/冲突规则); 中间件动态增删 + epoch 缓存失效; JS 桥新 API; example_resources 示例 + 测试模块 `plugin_resources` | ✅ 已实现 |
 | 接口协商一期 (2026-08) | plugin.yaml `interfaces.require/optional` 声明; 宿主支持集门禁 (require 缺失跳过 + 原因记录) / 符号意图预检 (requiredEntrySides); READY/get_client_state interfaces 数组 | ✅ 已实现 |
 | 接口协商二期+三期 (2026-08, 本轮) | **位图方案整体移除** (AGENTXX_UI_CAP_*/IFACE_*/ui_caps/min_ui_caps); client_plugin_api v4 + plugin_api v9: `has_interface` 字符串判定; **COM 式扩展表** `query_extension` (核心契约冻结, 新增能力走独立 version 扩展表); 展示/命令/toast 物理迁至 "client.ui" 扩展表 (`AgentxxClientExtUiVtable`); WireHelloAck.plugins 结构化 [{name,version,interfaces}]; server_plugins 约定事件同步升级; get_client_state 的 agentPlugins 为结构化对象数组; client→server 上行约定事件 `client_interfaces` (**1:N 不存储**, 仅转发 agent 总线, 插件订阅 `agentxx_host.client_interfaces` 自适应); CLI/TUI/测试适配器与全部插件迁移完成 | ✅ 已实现 |
+| COM 全量接口表重构 (2026-08) | **plugin_api/client_plugin_api 版本重置为 1 (不兼容变更, 抛弃历史兼容)**: 核心 vtable 收缩为 `alloc/free/strdup/query_interface` 四成员并契约冻结; agent 侧拆出 12 张标准接口表 (`agentxx.agent.tools/hooks/events/capabilities/scheduler/session/plugins/config/prompt/json/log/resources`), client 侧拆出 7 张 (`agentxx.client.ui/events/session/wire/self/json/log`), 各表首字段 version 独立演进; **内置接口名统一加保留前缀 `agentxx.`** (第三方私有接口用 `<vendor>.<name>`, 不得占用该前缀; 清单前缀过滤/入口符号推导同步改为 `agentxx.agent.*`/`agentxx.client.*` 规则); 新增 `plugin_iface_helper.h` (AgentIfaces/ClientIfaces 一次查询聚合); 全部插件与测试迁移完成; 旧版插件经 api_version 门禁直接拒绝 | ✅ 已实现 |
 | 三期 (生态) | Wire 远程热管理 / TUI 插件管理面板 / skippedPlugins 展示层接入 / 签名校验 | ⏳ 待实现 |
 
 ### 13.2 与设计原稿的偏差 (实现为准)

@@ -1,35 +1,52 @@
 /*
- * agentxx/plugin/plugin_api.h —— 插件系统纯 C ABI 契约 (唯一跨版本稳定接口)
+ * agentxx/plugin/plugin_api.h —— 插件系统纯 C ABI 契约 (agent 侧; 唯一跨版本稳定接口)
+ *
+ * ════════════════════════════════════════════════════════════════════
+ * 架构: COM 风格接口表查询 (v1 全量重构, 不兼容旧版)
+ * ════════════════════════════════════════════════════════════════════
+ * - 核心 vtable 极简且【契约冻结】: 仅 内存三件套 (alloc/free/strdup) +
+ *   query_interface —— 一切宿主能力都按稳定 IID 字符串查询独立接口表获取
+ *   (COM QueryInterface 风格), 核心永不再增删成员
+ * - 每个接口表为纯 C 结构体, 首字段恒为 int version (该接口自身版本,
+ *   独立演进, 与全局 api_version 解耦); 表内函数指针可能为 NULL
+ *   (宿主未实现该子能力), 调用前必须判空; 查询未知名称返回 NULL (安全失败)
+ * - 版本策略 (双层):
+ *   1) 全局 AGENTXX_PLUGIN_API_VERSION 只覆盖核心契约 (核心 vtable 形状 +
+ *      Info 结构 + 入口符号 + 本头共享类型); 宿主拒绝 api_version 不匹配的
+ *      插件 (仅拒绝, 不崩溃) —— 老版本插件无兼容路径, 直接拒绝加载
+ *   2) 接口表各自携带 version 独立演进: 新增能力 = 定义新接口表或表内
+ *      追加成员并递增该表版本, 全局版本号不动、其他插件不受影响
  *
  * 设计要点:
  * - 纯 C 头: 插件可用任意编译器/任意语言 (C/C++/Rust...) 实现, 与宿主
  *   STL/异常/RTTI ABI 完全解耦; 插件编译无需链接 libagentxx
  * - 跨 CRT 堆边界: 所有"宿主分配"的跨边界内存统一由宿主 alloc/free 管理
- *   (见 AgentxxHostVtable alloc/free/strdup), 插件返回的字符串必须经
- *   host->alloc 分配; 而"字符串参数/字段"一律以 AgentxxPluginStringView
- *   (data + size) 传入, 是只读借用 (不要求 NUL 结尾, 不要求宿主分配)
+ *   (核心 vtable), 插件返回的字符串必须经 host->alloc 分配; 而"字符串参数/
+ *   字段"一律以 AgentxxPluginStringView (data + size) 传入, 是只读借用
+ *   (不要求 NUL 结尾, 不要求宿主分配)
  * - 每插件一个 AgentxxHost (opaque 指向宿主侧插件实例): 注册/订阅自动关联
  *   到调用它的插件, 插件卸载时宿主自动清理其全部注册残留
+ * - 接口表是进程级静态只读数据: entry 时查询一次缓存指针即可长期使用;
+ *   同一进程内任意 host 句柄查到的同一 IID 表指针相同
  * - 线程约定:
- *   - entry/register/unregister/subscribe/unsubscribe/publish/emit_message_tip/
- *     get_share_store 必须在宿主 io 线程调用 (插件入口与钩子回调即在此线程)
+ *   - query_interface 与 alloc/free/strdup 任意线程可调用;
+ *   - 注册类 (tools/hooks/events/capabilities/resources) 与 session/plugins/
+ *     config/prompt/scheduler 的 io 线程约束操作在非 io 线程调用时由宿主
+ *     内部投递同步等待 (插件无感); 各接口表函数注释标注线程属性
  *   - execute 回调运行在宿主线程池, 内仅可调用 call_tool / log / json_*
- *     (线程安全); 其余 API 需经宿主 post 到 io 线程 (二期提供 async 桥)
+ *     (线程安全); 其余 API 经宿主 post 回 io 线程
  * - 回调快速返回约定: 事件订阅回调与钩子回调在 io 线程同步调用, 必须快速
  *   返回, 不得阻塞 (长时间任务请经 call_tool 或自行投递到独立线程)
- * - 异常不外泄: 宿主 vtable 所有函数内部捕获全部异常 (C ABI 边界无异常);
+ * - 异常不外泄: 宿主接口表所有函数内部捕获全部异常 (C ABI 边界无异常);
  *   插件侧 execute/hook/event 回调同样不得让异常逃逸 (宿主调用处已兜底,
  *   但插件自身应遵循)
- * - 字符串约定 (v6 起):
+ * - 字符串约定:
  *   - 所有跨边界"字符串参数/字段"类型为 AgentxxPluginStringView (data+size,
  *     不要求 NUL 结尾, 生命周期仅覆盖本次调用); 便捷构造见
  *     agentxx_plugin_sv / agentxx_plugin_sv_cstr / AGENTXX_SV
  *   - 所有"宿主分配"的字符串返回值 (execute 结果 / error_out /
  *     strdup/list_plugins/get_plugin/... ) 仍为 char* (NUL 结尾, host->alloc),
  *     调用方用完必须 host->free
- *
- * 版本策略: 修改本契约时递增 AGENTXX_PLUGIN_API_VERSION; 宿主拒绝
- * api_version 不匹配的插件 (仅拒绝, 不崩溃)
  */
 #ifndef AGENTXX_PLUGIN_API_H
 #define AGENTXX_PLUGIN_API_H
@@ -63,7 +80,10 @@ extern "C" {
 #define AGENTXX_PLUGIN_EXPORT
 #endif
 
-#define AGENTXX_PLUGIN_API_VERSION 9
+/// 全局 API 版本: 只覆盖核心契约 (核心 vtable 形状 + Info 结构 + 入口符号 +
+/// 本头共享类型)。接口表各自带 version 独立演进, 不影响本版本号。
+/// 宿主精确匹配门禁: info.api_version != 本值 → 拒绝加载 (无历史兼容路径)。
+#define AGENTXX_PLUGIN_API_VERSION 1
 
 /* ==================== 字符串视图 (跨边界字符串参数统一形态) ==================== */
 
@@ -152,7 +172,7 @@ typedef enum AgentxxHookPoint {
 
 /// 钩子回调 (io 线程同步调用, 必须快速返回):
 /// - node_input_json: 节点输入摘要 ({"sessionId", "node", "messages_count", ...})
-/// - out_json: 预留, 一期恒为 NULL (回调不得写入)
+/// - out_json: 预留, 恒为 NULL (回调不得写入)
 /// - 返回 0 成功; 非 0 失败并经 error_out 输出错误 (host->alloc 分配)
 typedef int (*AgentxxHookFn)(
     void*                   user_data,
@@ -162,13 +182,11 @@ typedef int (*AgentxxHookFn)(
     char**                  error_out
 );
 
-/* ==================== 事件订阅 ==================== */
+/* ==================== 事件订阅句柄 / 能力调用回调 ==================== */
 
 typedef struct AgentxxSubscription AgentxxSubscription;
 
-/* ==================== 宿主函数表 ==================== */
-
-typedef struct AgentxxHost AgentxxHost;
+struct AgentxxHost; ///< 前向声明 (能力调用回调签名引用宿主句柄)
 
 /// 能力调用回调 (capability 提供者注册; 通用插件间通信, 如 JS 引擎提供
 /// "interpreter.js" 能力的 load/unload 方法)
@@ -185,19 +203,70 @@ typedef char* (*AgentxxCapabilityInvokeFn)(
     char**                  error_out
 );
 
+/* ==================== 核心宿主函数表 (契约冻结) ==================== */
+
+typedef struct AgentxxHost AgentxxHost;
+
+/// 核心 vtable: 仅内存三件套 + COM 风格接口表查询。
+/// 【契约冻结】本结构自 v1 起不再增删成员: 一切宿主能力经 query_interface
+/// 按稳定 IID 查询独立接口表获取, 未来新增能力不修改本结构。
 typedef struct AgentxxHostVtable {
-    /* ---- 内存 (跨 CRT 堆边界的唯一分配通道) ---- */
+    /* ---- 内存 (跨 CRT 堆边界的唯一分配通道; 任意线程可调用) ---- */
     void* (*alloc)(size_t size);
     void (*free)(void* ptr);
     char* (*strdup)(const char* s);
 
-    /* ---- 工具注册 (热插拔) ---- */
-    /// 注册工具; 名称冲突返回非 0
+    /* ---- COM 风格接口表查询 (QueryInterface; 任意线程可调用) ---- */
+    /// 按稳定 IID 字符串查询接口表; 返回以 int version 为首字段的只读函数表
+    /// (类型按 IID 对应头文件结构体解释), 未实现/未知名称返回 NULL (安全失败)
+    /// - 已知 IID 见下方各 AGENTXX_IFACE_AGENT_* 宏与对应 *Iface 结构体
+    /// - 接口表为进程级静态数据: 返回指针长期有效, 可在 entry 时查询缓存;
+    ///   表内函数指针可能为 NULL (宿主未实现该子能力), 调用前必须判空
+    const void* (*query_interface)(const AgentxxHost* host, AgentxxPluginStringView iid);
+} AgentxxHostVtable;
+
+struct AgentxxHost {
+    const AgentxxHostVtable* vtable; ///< 核心函数表 (宿主静态)
+    void* opaque; ///< 宿主内部 (指向插件实例状态, 插件不得使用)
+};
+
+/// 便捷宏: 查询接口表并转型 (iid_name 为 AGENTXX_IFACE_* 宏或等价字符串字面量)
+#define AGENTXX_QUERY_IFACE(host, IfaceType, iid_name)                                        \
+    ((const IfaceType*)(host)->vtable->query_interface((host), AGENTXX_SV(iid_name)))
+
+/* ==================== 接口表: 工具 (agentxx.agent.tools) ==================== */
+
+#define AGENTXX_IFACE_AGENT_TOOLS         "agentxx.agent.tools"
+#define AGENTXX_IFACE_AGENT_TOOLS_VERSION 1
+
+typedef struct AgentxxToolsIface {
+    int version; ///< 必须 == AGENTXX_IFACE_AGENT_TOOLS_VERSION
+
+    /// 注册工具 (io 线程约束, 非 io 线程由宿主投递同步等待); 名称冲突返回非 0
     int (*register_tool)(const AgentxxHost* host, const AgentxxToolSpec* spec);
     /// 注销工具 (按名称); 不存在返回非 0
     int (*unregister_tool)(const AgentxxHost* host, AgentxxPluginStringView name);
+    /// 调用插件工具 (仅限插件注册的工具, 不暴露宿主内置工具; io 线程查表短
+    /// 临界区, 目标 execute 回调在【调用方线程】执行; 目标插件由宿主引用计数
+    /// 保活): 返回结果 JSON 字符串 (host->alloc), 失败返回 NULL 并 error_out
+    char* (*call_tool)(
+        const AgentxxHost*      host,
+        AgentxxPluginStringView name,
+        AgentxxPluginStringView args_json,
+        AgentxxPluginStringView thread_id,
+        char**                  error_out
+    );
+} AgentxxToolsIface;
 
-    /* ---- 中间件钩子 (热插拔, 轮次边界生效) ---- */
+/* ==================== 接口表: 中间件钩子 (agentxx.agent.hooks) ==================== */
+
+#define AGENTXX_IFACE_AGENT_HOOKS         "agentxx.agent.hooks"
+#define AGENTXX_IFACE_AGENT_HOOKS_VERSION 1
+
+typedef struct AgentxxHooksIface {
+    int version; ///< 必须 == AGENTXX_IFACE_AGENT_HOOKS_VERSION
+
+    /// 注册钩子 (热插拔, 轮次边界生效; io 线程约束)
     int (*register_hook)(
         const AgentxxHost* host,
         AgentxxHookPoint   point,
@@ -210,25 +279,42 @@ typedef struct AgentxxHostVtable {
         AgentxxHookFn      fn,
         void*              user_data
     );
+} AgentxxHooksIface;
 
-    /* ---- 事件 (topic 自动加 "plugin." 前缀, 载荷为 JSON 字符串) ---- */
-    /// 订阅; 返回句柄 (宿主侧持有, 插件卸载时自动退订)
+/* ==================== 接口表: 事件 (agentxx.agent.events) ==================== */
+
+#define AGENTXX_IFACE_AGENT_EVENTS         "agentxx.agent.events"
+#define AGENTXX_IFACE_AGENT_EVENTS_VERSION 1
+
+typedef struct AgentxxEventsIface {
+    int version; ///< 必须 == AGENTXX_IFACE_AGENT_EVENTS_VERSION
+
+    /// 订阅 (topic 自动加 "plugin." 前缀, 载荷为 JSON 字符串); 返回句柄
+    /// (宿主侧持有, 插件卸载时自动退订)
     AgentxxSubscription* (*subscribe)(
-        const AgentxxHost*      host,
+        const AgentxxHost* host,
         AgentxxPluginStringView topic,
         void (*handler)(AgentxxPluginStringView event_json, void* ud),
-        void* ud
+        void*                   ud
     );
     void (*unsubscribe)(AgentxxSubscription* sub);
-    /// 发布 (异步投递, 立即返回)
+    /// 发布 (异步投递, 立即返回; 禁用状态的插件被拒绝)
     int (*publish)(
         const AgentxxHost*      host,
         AgentxxPluginStringView topic,
         AgentxxPluginStringView event_json
     );
+} AgentxxEventsIface;
 
-    /* ---- 能力注册表 (插件互查/委派, 如 "interpreter.js") ---- */
-    /// 声明能力 (无方法回调; 仅标记/互查)
+/* ==================== 接口表: 能力 (agentxx.agent.capabilities) ==================== */
+
+#define AGENTXX_IFACE_AGENT_CAPABILITIES         "agentxx.agent.capabilities"
+#define AGENTXX_IFACE_AGENT_CAPABILITIES_VERSION 1
+
+typedef struct AgentxxCapabilitiesIface {
+    int version; ///< 必须 == AGENTXX_IFACE_AGENT_CAPABILITIES_VERSION
+
+    /// 声明能力 (无方法回调; 仅标记/互查; io 线程约束)
     int (*register_capability)(const AgentxxHost* host, AgentxxPluginStringView capability);
     /// 注册能力并附带方法回调 (能力调用 = 通用插件间通信通道;
     /// 如 JS 引擎注册 "interpreter.js" 提供 load/unload 方法)
@@ -239,10 +325,10 @@ typedef struct AgentxxHostVtable {
         void*                     ctx
     );
     int (*unregister_capability)(const AgentxxHost* host, AgentxxPluginStringView capability);
+    /// 是否存在指定能力 (io 线程查表)
     int (*has_capability)(const AgentxxHost* host, AgentxxPluginStringView capability);
-
-    /* ---- 能力调用 (插件间通信; io 线程约束, 跨线程经 post) ---- */
-    /// 调用能力提供者的方法; 返回结果 JSON (host->alloc), 失败返回 NULL 并 error_out
+    /// 调用能力提供者的方法 (插件间通信; 查表在 io 线程, 提供者回调在
+    /// 【调用方线程】执行): 返回结果 JSON (host->alloc), 失败返回 NULL 并 error_out
     char* (*invoke_capability)(
         const AgentxxHost*      host,
         AgentxxPluginStringView capability,
@@ -250,30 +336,71 @@ typedef struct AgentxxHostVtable {
         AgentxxPluginStringView args_json,
         char**                  error_out
     );
+} AgentxxCapabilitiesIface;
 
-    /* ---- 线程投递 (非 io 线程调用方使用; 二期) ---- */
-    /// 当前线程是否为宿主 io 线程
+/* ==================== 接口表: 任务调度 (agentxx.agent.scheduler) ==================== */
+
+#define AGENTXX_IFACE_AGENT_SCHEDULER         "agentxx.agent.scheduler"
+#define AGENTXX_IFACE_AGENT_SCHEDULER_VERSION 1
+
+typedef struct AgentxxSchedulerIface {
+    int version; ///< 必须 == AGENTXX_IFACE_AGENT_SCHEDULER_VERSION
+
+    /// 当前线程是否为宿主 io 线程 (任意线程可调用)
     int (*is_io_thread)(const AgentxxHost* host);
     /// 投递任务到宿主 io 线程异步执行 (不等待, 线程安全)
     void (*post_to_io)(const AgentxxHost* host, void (*fn)(void* ud), void* ud);
-
-    /* ---- 会话/上下文访问 ---- */
-    /// 调用插件工具 (仅限插件注册的工具, 不暴露宿主内置工具)
-    /// - 查表在宿主 io 线程 (短临界区), 目标工具 execute 回调在【调用方线程】
-    ///   执行: 线程池/JS 线程内调用不阻塞 io 线程; 宿主 io 线程内调用会
-    ///   阻塞 io 线程 (罕见场景, 插件应避免)
-    /// - 目标插件由宿主引用计数保活: 即使目标插件正在被卸载, 本次调用
-    ///   期间其代码段也不会被释放
-    /// - 返回结果 JSON 字符串 (host->alloc); 失败返回 NULL 并经 error_out 输出
-    char* (*call_tool)(
-        const AgentxxHost*      host,
-        AgentxxPluginStringView name,
-        AgentxxPluginStringView args_json,
-        AgentxxPluginStringView thread_id,
-        char**                  error_out
+    /// 周期定时器 (io 线程触发; 回调必须快速返回, 不得阻塞 io 线程)
+    /// - interval_ms > 0; 返回句柄 (宿主持有); 插件卸载时宿主自动取消全部
+    ///   定时器, 回调不会在插件代码段卸载后触发
+    /// - 回调执行期间插件代码段由宿主保活 (inflight 计数); 回调内可调用
+    ///   publish / offload / log 等任意 API
+    void* (*add_timer)(const AgentxxHost* host, long interval_ms, void (*fn)(void* ud), void* ud);
+    /// 取消定时器 (句柄随后失效; 插件卸载后句柄自动失效, 不得再调用)
+    void (*cancel_timer)(const AgentxxHost* host, void* timer);
+    /// 在宿主阻塞线程池执行同步回调 (阻塞操作专用: 文件遍历/系统采样等;
+    /// 池线程数有限, 禁止长时间占用)
+    /// - work: 在阻塞池线程执行; 返回结果与 error_out 须 host->alloc 分配
+    /// - done: work 返回后投递回 io 线程执行 (快速返回约定; result 为 work
+    ///   返回值, error 为 work 填充的错误; 两者均须在 done 内 host->free)
+    /// - work/done 执行期间插件代码段由宿主保活 (inflight 计数); 插件卸载
+    ///   时宿主等待在途 offload 完成后再调 unload 回调
+    void (*offload)(
+        const AgentxxHost* host,
+        void* (*work)(void* ud, char** error_out),
+        void (*done)(void* ud, void* result, char* error),
+        void*                   ud
     );
+} AgentxxSchedulerIface;
 
-    /* ---- 插件互查 (依赖协商/自适应; io 线程约束, 跨线程经 post) ---- */
+/* ==================== 接口表: 会话访问 (agentxx.agent.session) ==================== */
+
+#define AGENTXX_IFACE_AGENT_SESSION         "agentxx.agent.session"
+#define AGENTXX_IFACE_AGENT_SESSION_VERSION 1
+
+typedef struct AgentxxSessionIface {
+    int version; ///< 必须 == AGENTXX_IFACE_AGENT_SESSION_VERSION
+
+    /// 读取会话级 share_store 条目 (仅 io 线程); 不存在返回 NULL (host->alloc)
+    char* (
+        *get_share_store)(const AgentxxHost* host, AgentxxPluginStringView thread_id, long long id);
+    /// 向会话 UI 推送提示消息 (仅 io 线程); level: 0=info 1=warning 2=error
+    void (*emit_message_tip)(
+        const AgentxxHost*      host,
+        AgentxxPluginStringView thread_id,
+        AgentxxPluginStringView text,
+        int                     level
+    );
+} AgentxxSessionIface;
+
+/* ==================== 接口表: 插件互查 (agentxx.agent.plugins) ==================== */
+
+#define AGENTXX_IFACE_AGENT_PLUGINS         "agentxx.agent.plugins"
+#define AGENTXX_IFACE_AGENT_PLUGINS_VERSION 1
+
+typedef struct AgentxxPluginsIface {
+    int version; ///< 必须 == AGENTXX_IFACE_AGENT_PLUGINS_VERSION
+
     /// 全部已安装插件信息 JSON 数组 (host->alloc 分配):
     /// [{"name","version","description","type","enabled","tools":[],"capabilities":[],
     ///   "depends":[],"optional_depends":[]}, ...]
@@ -283,36 +410,16 @@ typedef struct AgentxxHostVtable {
     /// 调用方插件自身信息 JSON {"name","version","description","path","depends":[],...}
     /// (插件加载时常用: 从 path 推导资源目录等; host->alloc)
     char* (*get_own_info)(const AgentxxHost* host);
-    /// 读取会话级 share_store 条目 (仅 io 线程); 不存在返回 NULL
-    char* (*get_share_store)(
-        const AgentxxHost*      host,
-        AgentxxPluginStringView thread_id,
-        long long               id
-    );
-    /// 向会话 UI 推送提示消息 (仅 io 线程); level: 0=info 1=warning 2=error
-    void (*emit_message_tip)(
-        const AgentxxHost*      host,
-        AgentxxPluginStringView thread_id,
-        AgentxxPluginStringView text,
-        int                     level
-    );
-    /// 日志 (线程安全); level 与宿主 XX_LOG 级别对应 (0=trace 1=debug 2=info 3=warn 4=error)
-    void (*log)(const AgentxxHost* host, int level, AgentxxPluginStringView msg);
+} AgentxxPluginsIface;
 
-    /* ---- JSON 辅助 (插件拼装/解析 JSON; 线程安全, 任意线程可调用) ---- */
-    /// 从 JSON 字符串中提取指定 key 的字符串值 (宿主解析; 结果 host->alloc)
-    /// - key 缺失 / 值非字符串 / JSON 非法 返回 NULL
-    /// - 替代插件手写 JSON 解析 (对转义字符/嵌套结构不可靠)
-    char* (*json_get_string)(
-        const AgentxxHost*      host,
-        AgentxxPluginStringView json,
-        AgentxxPluginStringView key
-    );
-    /// 字符串 → JSON 字符串字面量 (含引号包裹与转义; 结果 host->alloc)
-    /// - 用于插件拼装 JSON 时转义字段值 (替代手工拼接, 防注入/语法错误)
-    char* (*json_escape)(const AgentxxHost* host, AgentxxPluginStringView s);
+/* ==================== 接口表: 宿主配置 (agentxx.agent.config) ==================== */
 
-    /* ---- 宿主配置/提示词访问 (插件装配期使用; io 线程, 跨线程经 post) ---- */
+#define AGENTXX_IFACE_AGENT_CONFIG         "agentxx.agent.config"
+#define AGENTXX_IFACE_AGENT_CONFIG_VERSION 1
+
+typedef struct AgentxxConfigIface {
+    int version; ///< 必须 == AGENTXX_IFACE_AGENT_CONFIG_VERSION
+
     /// 宿主 AgentConfig 关键字段 JSON (io 线程; host->alloc):
     /// {"dataDir": "...", "projectRoot": "..."(可为空),
     ///  "platform": "windows"|"linux"|"macos"}
@@ -328,13 +435,20 @@ typedef struct AgentxxHostVtable {
     /// - 工具未配置 prompt 时返回 NULL (插件回退内置默认描述)
     /// - 供插件注册工具时生成与内置工具一致的动态描述 (用户可经 yaml 覆盖)
     char* (*get_tool_prompt)(const AgentxxHost* host, AgentxxPluginStringView tool_name);
+} AgentxxConfigIface;
 
-    /* ---- 宿主提示词读写 (v6 追加, 非破坏性; 插件侧判空调用) ---- */
+/* ==================== 接口表: 宿主提示词读写 (agentxx.agent.prompt) ==================== */
+
+#define AGENTXX_IFACE_AGENT_PROMPT         "agentxx.agent.prompt"
+#define AGENTXX_IFACE_AGENT_PROMPT_VERSION 1
+
+typedef struct AgentxxPromptIface {
+    int version; ///< 必须 == AGENTXX_IFACE_AGENT_PROMPT_VERSION
+
     /// 宿主完整提示词 JSON (io 线程; host->alloc):
     /// {"systemPrompt": "...", "systemPlanningPrompt": "...", "systemSkillPrompt": "...",
     ///  "toolPrompt": {"工具名": {"depict": "...", "args": {"参数名": "说明"}}}}
-    /// - 与 get_tool_prompt 相比返回完整提示词 (含 system 提示词), 供插件
-    ///   读取/修改; 宿主未装配 AgentConfig 时返回 NULL
+    /// - 宿主未装配 AgentConfig 时返回 NULL
     char* (*get_prompt)(const AgentxxHost* host);
     /// 合并更新宿主提示词 (io 线程; 仅覆盖 JSON 中出现的字段, 未出现字段保持不变)
     /// - 与宿主 AgentPrompt::mergeFromJson 语义一致: toolPrompt 条目不存在时插入
@@ -344,38 +458,56 @@ typedef struct AgentxxHostVtable {
     ///   继续经 yaml 覆盖 (覆盖发生在插件加载前, 插件写入前应先 get_prompt
     ///   检查条目是否已存在, 已存在则尊重用户配置不覆盖)
     int (*set_prompt)(const AgentxxHost* host, AgentxxPluginStringView prompt_json);
+} AgentxxPromptIface;
 
-    /* ---- 宿主任务调度 (v7 新增; 插件经此使用宿主阻塞线程池/定时器,
-            大部分场景无需自建线程 —— 线程数量可控、卸载安全由宿主统一保证) ---- */
-    /// 周期定时器 (io 线程触发; 回调必须快速返回, 不得阻塞 io 线程)
-    /// - interval_ms > 0; 返回句柄 (宿主持有); 插件卸载时宿主自动取消全部
-    ///   定时器, 回调不会在插件代码段卸载后触发
-    /// - 回调执行期间插件代码段由宿主保活 (inflight 计数); 回调内可调用
-    ///   publish / offload / log 等任意 API
-    void* (*add_timer)(const AgentxxHost* host, long interval_ms, void (*fn)(void* ud), void* ud);
-    /// 取消定时器 (句柄随后失效; 插件卸载后句柄自动失效, 不得再调用)
-    void (*cancel_timer)(const AgentxxHost* host, void* timer);
-    /// 在宿主阻塞线程池执行同步回调 (阻塞操作专用: 文件遍历/系统采样等;
-    /// 池线程数有限, 禁止长时间占用, 短时阻塞操作完成后应尽快返回)
-    /// - work: 在阻塞池线程执行; 返回结果与 error_out 须 host->alloc 分配
-    /// - done: work 返回后投递回 io 线程执行 (快速返回约定; result 为 work
-    ///   返回值, error 为 work 填充的错误; 两者均须在 done 内 host->free)
-    /// - work/done 执行期间插件代码段由宿主保活 (inflight 计数); 插件卸载
-    ///   时宿主等待在途 offload 完成后再调 unload 回调
-    void (*offload)(
-        const AgentxxHost* host,
-        void* (*work)(void* ud, char** error_out),
-        void (*done)(void* ud, void* result, char* error),
-        void* ud
+/* ==================== 接口表: JSON 辅助 (agentxx.agent.json) ==================== */
+
+#define AGENTXX_IFACE_AGENT_JSON         "agentxx.agent.json"
+#define AGENTXX_IFACE_AGENT_JSON_VERSION 1
+
+typedef struct AgentxxJsonIface {
+    int version; ///< 必须 == AGENTXX_IFACE_AGENT_JSON_VERSION
+
+    /// 从 JSON 字符串中提取指定 key 的字符串值 (宿主解析; 结果 host->alloc;
+    /// 线程安全纯函数): key 缺失 / 值非字符串 / JSON 非法 返回 NULL
+    char* (*json_get_string)(
+        const AgentxxHost*      host,
+        AgentxxPluginStringView json,
+        AgentxxPluginStringView key
     );
+    /// 字符串 → JSON 字符串字面量 (含引号包裹与转义; 结果 host->alloc;
+    /// 线程安全纯函数): 用于拼装 JSON 时转义字段值 (防注入/语法错误)
+    char* (*json_escape)(const AgentxxHost* host, AgentxxPluginStringView s);
+} AgentxxJsonIface;
 
-    /* ---- 会话资源扩展 (v8 新增): 插件向宿主贡献 Skill/Memory/MCP 组件,
-            由 agent-io 管线加载并经 appendComponentInfo 上报客户端 ---- */
-    /// 追加 skill 扫描目录 (io 线程约束, 跨线程经宿主自动投递):
-    /// - path 为目录 (含 SKILL.md 或其父目录); 绝对路径或相对程序工作目录
-    /// - 与主配置 yaml `skill` 段冲突时拒绝 (yaml 优先) 并返回非 0;
-    ///   插件之间先到先得; 同插件重复注册幂等成功
-    /// - 所有权归本插件: 卸载时自动摘除, 禁用时摘除/启用时恢复
+/* ==================== 接口表: 日志 (agentxx.agent.log) ==================== */
+
+#define AGENTXX_IFACE_AGENT_LOG         "agentxx.agent.log"
+#define AGENTXX_IFACE_AGENT_LOG_VERSION 1
+
+typedef struct AgentxxLogIface {
+    int version; ///< 必须 == AGENTXX_IFACE_AGENT_LOG_VERSION
+
+    /// 日志 (线程安全); level 与宿主 XX_LOG 级别对应
+    /// (0=trace 1=debug 2=info 3=warn 4=error)
+    void (*log)(const AgentxxHost* host, int level, AgentxxPluginStringView msg);
+} AgentxxLogIface;
+
+/* ==================== 接口表: 会话资源贡献 (agentxx.agent.resources) ==================== */
+
+#define AGENTXX_IFACE_AGENT_RESOURCES         "agentxx.agent.resources"
+#define AGENTXX_IFACE_AGENT_RESOURCES_VERSION 1
+
+typedef struct AgentxxResourcesIface {
+    int version; ///< 必须 == AGENTXX_IFACE_AGENT_RESOURCES_VERSION
+
+    /* ---- 插件向宿主贡献 Skill/Memory/MCP 组件, 由 agent-io 管线加载并经
+            appendComponentInfo 上报客户端; 所有权归本插件: 卸载时自动摘除,
+            禁用时摘除/启用时恢复; 冲突规则: 主配置 yaml 优先, 插件间先到先得,
+            同插件重复注册幂等成功 (以下均为 io 线程约束) ---- */
+
+    /// 追加 skill 扫描目录 (path 为目录, 含 SKILL.md 或其父目录;
+    /// 绝对路径或相对程序工作目录); 与主配置冲突时拒绝并返回非 0
     int (*register_skill_dir)(const AgentxxHost* host, AgentxxPluginStringView path);
     /// 摘除本插件注册的 skill 目录; 不存在或不属于本插件返回非 0
     int (*unregister_skill_dir)(const AgentxxHost* host, AgentxxPluginStringView path);
@@ -385,8 +517,7 @@ typedef struct AgentxxHostVtable {
     /// 注册 MCP server (异步连接; 命名空间查重通过即返回 0, 立即返回不等待网络):
     /// spec_json: {"namespace": "...", "url": "https://...", "timeout": 60(秒,可选)}
     /// - 连接完成后工具动态进入工具表 (下一轮对模型可见); 连接失败仅记日志,
-    ///   命名空间随即释放 (可重新注册)
-    /// - 命名空间与主配置 yaml / 其他插件冲突时返回非 0 (yaml 优先)
+    ///   命名空间随即释放 (可重新注册); 命名空间冲突返回非 0 (yaml 优先)
     int (*register_mcp_server)(const AgentxxHost* host, AgentxxPluginStringView spec_json);
     /// 注销 MCP server (断开连接 + 摘除其全部动态工具);
     /// 不存在或不属于本插件的命名空间返回非 0
@@ -394,30 +525,8 @@ typedef struct AgentxxHostVtable {
     /// 本插件当前注册的资源快照 JSON (调试/自检; io 线程; host->alloc):
     /// {"skills":[...],"memory":[...],"mcp":[ns,...]}
     /// 宿主未装配资源应用器 (BaseAgent 场景) 时返回 NULL
-    char* (*get_own_resources)(const AgentxxHost*);
-
-    /* ---- 接口协商 (v9 新增; 取代位图协商, 语义见 plugin_common.h) ---- */
-    /// 宿主是否支持指定接口 (稳定名字符串: "agent.core" 等, 常量见
-    /// plugin_common.h plugin_interfaces; 未知名称返回 0 —— 安全失败)
-    /// - agent 宿主 (libagentxx 单实现): 版本匹配即支持 "agent.core"
-    int (*has_interface)(const AgentxxHost*, AgentxxPluginStringView name);
-    /// COM 风格扩展接口表查询 (未实现/未知名称返回 NULL):
-    /// - 扩展表为纯 C 结构体, 首字段恒为 int version (该扩展接口自身版本,
-    ///   独立演进, 与全局 api_version 解耦); 表内函数指针可能为 NULL
-    ///   (宿主未实现该子能力), 调用前必须判空
-    /// - 【契约冻结】核心 vtable 自 v9 起不再追加新函数: 未来新增能力一律
-    ///   定义新的扩展表经本函数分发, 避免频繁 bump 全局版本号 / 强制全部
-    ///   插件重编译 (三期 COM 化演进的第一步; 现有成员迁移到扩展表需
-    ///   主版本升级, 见 docs/agent/plugins.md)
-    const void* (*query_extension)(const AgentxxHost*, AgentxxPluginStringView name);
-} AgentxxHostVtable;
-
-struct AgentxxHost {
-    const AgentxxHostVtable* vtable; ///< 函数表 (宿主静态)
-    void* opaque; ///< 宿主内部 (指向插件实例状态, 插件不得使用)
-};
-
-/* ==================== 脚本引擎注册 (解释器插件委派, 二期) ==================== */
+    char* (*get_own_resources)(const AgentxxHost* host);
+} AgentxxResourcesIface;
 
 /* ==================== 插件入口符号 (dlsym) ==================== */
 
@@ -428,9 +537,9 @@ typedef const AgentxxPluginInfo* (*AgentxxPluginGetInfoFn)(void);
 /// - host: 本插件专属宿主句柄 (opaque 已关联本插件)
 /// - plugin_ctx: 输出插件私有上下文 (透传给 unload)
 /// - 返回 0 成功; 非 0 加载失败 (宿主 dlclose 并报告错误)
-/// - 线程说明: entry 运行在宿主线程池, 但其中经 vtable 的注册/订阅等 io 线程
-///   约束操作由宿主自动投递回 io 线程串行执行 (vtable 内部处理, 插件无感;
-///   因此 entry 内可安全调用 register_tool / invoke_capability 等任意 API)
+/// - 线程说明: entry 运行在宿主线程池, 但其中经接口表的 io 线程约束操作
+///   由宿主自动投递回 io 线程串行执行 (宿主内部处理, 插件无感; 因此 entry
+///   内可安全调用 register_tool / invoke_capability 等任意 API)
 typedef int (*AgentxxPluginEntryFn)(const AgentxxHost* host, void** plugin_ctx);
 
 /// 可选: 插件卸载通知 (宿主等全部在途回调完成后调用; 用于插件业务清理;

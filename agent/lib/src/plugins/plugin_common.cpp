@@ -217,13 +217,15 @@ std::string resolvePluginEntryPath(const std::filesystem::path& dir, const std::
 // ==================== 接口协商基础设施 ====================
 
 bool sideCaresAboutInterface(std::string_view name, bool agentSide) {
-    if (name.starts_with("agent.")) {
+    // "agentxx." 为本项目内置接口的保留命名空间; 按子前缀区分归属侧
+    if (name.starts_with("agentxx.agent.")) {
         return agentSide;
     }
-    if (name.starts_with("client.")) {
+    if (name.starts_with("agentxx.client.")) {
         return !agentSide;
     }
-    // 无前缀 / <vendor>.*: 两侧都检查 (宿主不认识即不支持, 保守安全)
+    // 无前缀 / <vendor>.* / 其他 agentxx.* 子命名空间: 两侧都检查
+    // (宿主不认识即不支持, 保守安全)
     return true;
 }
 
@@ -257,12 +259,13 @@ InterfaceCheckResult checkInterfacesForSide(
 RequiredEntrySides requiredEntrySides(const std::vector<std::string>& interfaces) {
     RequiredEntrySides out;
     for (const auto& n : interfaces) {
-        if (n.starts_with("agent.")) {
+        if (n.starts_with("agentxx.agent.")) {
             out.agentEntry = true;
-        } else if (n.starts_with("client.")) {
+        } else if (n.starts_with("agentxx.client.")) {
             out.clientEntry = true;
         } else {
-            // 无前缀 / vendor 前缀: 保守视为两侧都可能依赖
+            // 无前缀 / vendor 前缀 / 其他 agentxx.* 子命名空间:
+            // 保守视为两侧都可能依赖
             out.agentEntry  = true;
             out.clientEntry = true;
         }

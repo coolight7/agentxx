@@ -7,4 +7,4 @@ depends:
 # 接口协商: 纯 agent 侧工具插件
 interfaces:
   require:
-    - agent.core
+    - agentxx.agent.core

@@ -1,12 +1,13 @@
 // agentxx_codegraph —— CodeGraph 代码分析插件
 // - 从 lib 迁移: CodeGraphManager + 8 个 codegraph 工具
 //   (search/context/callers/callees/impact/status/index/path)
-// - 插件不链接 libagentxx: 装配期经 vtable get_config 读取宿主通用信息
+// - 插件不链接 libagentxx: 装配期经 agentxx.agent.config 接口表 get_config 读取宿主通用信息
 //   (dataDir/projectRoot), 经 get_plugin_args 读取本插件参数 (宿主不解析
 //   字段语义); 索引进度经 publish 事件通知宿主 (topic 约定 `{插件名}.{事件名}`,
 //   宿主原样转发 WirePluginData, 客户端据此展示)
 // - 依赖: codegraph_core + tree_sitter 系 + sqlite3 + simdjson + glob
 #include "agentxx/plugin/client_plugin_api.h"
+#include "agentxx/plugin/plugin_iface_helper.h"
 #include "codegraph_manager.h"
 #include "codegraph_plugin.h"
 #include "fmt/format.h"
@@ -41,12 +42,12 @@ struct HostConfig {
 
 static HostConfig readHostConfig() {
     HostConfig cfg;
-    if (!g_host || !g_host->vtable) {
+    if (!g_host || !g_if.config || !g_if.config->get_config) {
         return cfg;
     }
     // ---- 通用宿主信息 (get_config) ----
-    if (g_host->vtable->get_config) {
-        char* json = g_host->vtable->get_config(g_host);
+    if (g_if.config && g_if.config->get_config) {
+        char* json = g_if.config->get_config(g_host);
         if (json) {
             std::string s{json};
             g_host->vtable->free(json);
@@ -58,8 +59,8 @@ static HostConfig readHostConfig() {
         }
     }
     // ---- 本插件业务参数 (get_plugin_args; 宿主原样传递) ----
-    if (g_host->vtable->get_plugin_args) {
-        char* json = g_host->vtable->get_plugin_args(g_host);
+    if (g_if.config && g_if.config->get_plugin_args) {
+        char* json = g_if.config->get_plugin_args(g_host);
         if (json) {
             std::string s{json};
             g_host->vtable->free(json);
@@ -75,7 +76,7 @@ static HostConfig readHostConfig() {
     return cfg;
 }
 
-/// 工具提示词 (经 vtable get_tool_prompt 读取; 未配置回退内置默认)
+/// 工具提示词 (经 agentxx.agent.config 接口表 get_tool_prompt 读取; 未配置回退内置默认)
 struct ToolPrompt {
     std::string depict;
     std::string query, limit, symbol, maxDepth, path, incremental, from, to;
@@ -83,10 +84,10 @@ struct ToolPrompt {
 
 static ToolPrompt readToolPrompt(const std::string& toolName) {
     ToolPrompt out;
-    if (!g_host || !g_host->vtable || !g_host->vtable->get_tool_prompt) {
+    if (!g_host || !g_if.config || !g_if.config->get_tool_prompt) {
         return out;
     }
-    char* json = g_host->vtable->get_tool_prompt(
+    char* json = g_if.config->get_tool_prompt(
         g_host,
         agentxx_plugin_sv(toolName.data(), toolName.size())
     );
@@ -174,10 +175,10 @@ static ToolPrompt defaultToolPrompt(const std::string& toolName) {
 /// - 用户 yaml 覆盖早于插件加载 → get_prompt 已含覆盖 → 跳过 (尊重用户配置)
 /// - 宿主未提供 get_prompt/set_prompt (旧宿主) → 跳过, registerTool 回退插件默认
 static void ensureToolPromptsInHost() {
-    if (!g_host || !g_host->vtable || !g_host->vtable->get_prompt || !g_host->vtable->set_prompt) {
+    if (!g_host || !g_if.prompt || !g_if.prompt->get_prompt || !g_if.prompt->set_prompt) {
         return;
     }
-    char* json = g_host->vtable->get_prompt(g_host);
+    char* json = g_if.prompt->get_prompt(g_host);
     if (!json) {
         return;
     }
@@ -245,7 +246,7 @@ static void ensureToolPromptsInHost() {
     }
     patch["toolPrompt"] = tools;
     std::string payload = patch.dump();
-    if (g_host->vtable->set_prompt(g_host, agentxx_plugin_sv(payload.data(), payload.size()))
+    if (g_if.prompt->set_prompt(g_host, agentxx_plugin_sv(payload.data(), payload.size()))
         != 0) {
         pluginLog(3, "agentxx_codegraph: set_prompt failed");
     }
@@ -456,7 +457,7 @@ static void registerTool(
             return nullptr;
         }
     };
-    if (g_host->vtable->register_tool(g_host, &spec) != 0) {
+    if (g_if.tools->register_tool(g_host, &spec) != 0) {
         pluginLog(3, fmt::format("agentxx_codegraph: register tool {} failed", name));
     }
 }
@@ -761,14 +762,14 @@ struct PluginCtx {
 static void snapshotQueryDone(void* ud, void* result, char* error) {
     auto* ctx   = static_cast<PluginCtx*>(ud);
     auto* files = static_cast<int64_t*>(result);
-    if (g_host && g_host->vtable && g_host->vtable->publish) {
+    if (g_host && g_if.events && g_if.events->publish) {
         codegraph::Json j = codegraph::Json::object();
         j["loaded"]       = true;
         if (ctx && !ctx->projectRoot.empty()) {
             j["project_root"] = ctx->projectRoot;
         }
         std::string payload = j.dump();
-        g_host->vtable->publish(
+        g_if.events->publish(
             g_host,
             AGENTXX_SV("agentxx_codegraph.status"),
             agentxx_plugin_sv(payload.data(), payload.size())
@@ -781,7 +782,7 @@ static void snapshotQueryDone(void* ud, void* result, char* error) {
             p["total"]        = *files;
             p["current_file"] = "";
             std::string pp    = p.dump();
-            g_host->vtable->publish(
+            g_if.events->publish(
                 g_host,
                 AGENTXX_SV("agentxx_codegraph.progress"),
                 agentxx_plugin_sv(pp.data(), pp.size())
@@ -818,15 +819,22 @@ static void* snapshotQueryWork(void* ud, char** error_out) {
 /// 订阅回调: 收到 client_attached 后经阻塞池查询状态并重发快照
 static void on_client_attached(AgentxxPluginStringView event_json, void* ud) {
     (void)event_json;
-    if (!g_host || !g_host->vtable || !g_host->vtable->offload) {
+    if (!g_host || !g_if.scheduler || !g_if.scheduler->offload) {
         return;
     }
-    g_host->vtable->offload(g_host, snapshotQueryWork, snapshotQueryDone, ud);
+    g_if.scheduler->offload(g_host, snapshotQueryWork, snapshotQueryDone, ud);
 }
 
 extern "C" AGENTXX_PLUGIN_EXPORT int
     agentxx_plugin_entry(const AgentxxHost* host, void** plugin_ctx) {
     g_host = host;
+    // COM 风格接口表查询 (entry 一次性查询缓存; 进程级静态数据, 长期有效)
+    static const agentxx::plugin::AgentIfaces s_if = agentxx::plugin::AgentIfaces::query(host);
+    g_if = s_if;
+    if (!g_if.tools || !g_if.tools->register_tool || !g_if.events) {
+        pluginLog(4, "agentxx_codegraph: host lacks agentxx.agent.tools/agentxx.agent.events interfaces");
+        return -1;
+    }
 
     auto cfg = readHostConfig();
     // 加载由宿主决定 (yaml plugins 条目 enabled + CodeAgent 调用加载);
@@ -854,7 +862,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
     // 索引进度回调 → publish("agentxx_codegraph.progress") 通知宿主
     // (topic 约定 `{插件名}.{事件名}`; 频率由 CodeGraphManager 内部节流)
     ctx->mgr->setProgressCallback([](int processed, int total, std::string_view currentFile) {
-        if (!g_host || !g_host->vtable || !g_host->vtable->publish) {
+        if (!g_host || !g_if.events || !g_if.events->publish) {
             return;
         }
         codegraph::Json j   = codegraph::Json::object();
@@ -862,7 +870,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
         j["total"]          = total;
         j["current_file"]   = std::string{currentFile};
         std::string payload = j.dump();
-        g_host->vtable->publish(
+        g_if.events->publish(
             g_host,
             AGENTXX_SV("agentxx_codegraph.progress"),
             agentxx_plugin_sv(payload.data(), payload.size())
@@ -915,7 +923,8 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
 
     // 订阅宿主约定事件 client_attached: 客户端接入/重连后重发状态快照
     // (修复晚接入客户端滞留 "wait for index"; 见 snapshotQueryDone 注释)
-    if (!host->vtable->subscribe(
+    if (!g_if.events || !g_if.events->subscribe
+        || !g_if.events->subscribe(
             host,
             AGENTXX_SV("agentxx_host.client_attached"),
             on_client_attached,
@@ -928,12 +937,12 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
     pluginLog(2, "agentxx_codegraph loaded (8 tools)");
 
     // 发布加载状态事件 (客户端据此显示插件可用)
-    if (g_host && g_host->vtable && g_host->vtable->publish) {
+    if (g_host && g_if.events && g_if.events->publish) {
         codegraph::Json j   = codegraph::Json::object();
         j["loaded"]         = true;
         j["project_root"]   = projectRoot;
         std::string payload = j.dump();
-        g_host->vtable->publish(
+        g_if.events->publish(
             g_host,
             AGENTXX_SV("agentxx_codegraph.status"),
             agentxx_plugin_sv(payload.data(), payload.size())
@@ -948,11 +957,11 @@ extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_unload(void* plugin_ctx) {
         return;
     }
     // 发布卸载状态事件 (客户端据此隐藏插件状态)
-    if (g_host && g_host->vtable && g_host->vtable->publish) {
+    if (g_host && g_if.events && g_if.events->publish) {
         codegraph::Json j   = codegraph::Json::object();
         j["loaded"]         = false;
         std::string payload = j.dump();
-        g_host->vtable->publish(
+        g_if.events->publish(
             g_host,
             AGENTXX_SV("agentxx_codegraph.status"),
             agentxx_plugin_sv(payload.data(), payload.size())
@@ -984,9 +993,10 @@ extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_unload(void* plugin_ctx) {
  * ===================================================================== */
 
 static const AgentxxClientHost* g_client_host = nullptr;
-/// "client.ui" 展示扩展表 (v4: Info 段落等经 query_extension 获取; 不支持
-/// 子能力成员为 NULL, 调用前判空)
-static const AgentxxClientExtUiVtable* g_client_ui = nullptr;
+/// client 侧接口表缓存 (entry 时 ClientIfaces::query 一次查询)
+static const agentxx::plugin::ClientIfaces* g_client_if = nullptr;
+/// "agentxx.client.ui" 展示接口表 (Info 段落等; 不支持子能力成员为 NULL, 调用前判空)
+static const AgentxxClientUiIface* g_client_ui = nullptr;
 static AgentxxInfoSection*      g_section     = nullptr;
 /// 索引状态缓存 (事件 handler 与面板刷新均在 client io 线程, 无跨线程竞争)
 static bool        g_loaded       = false;
@@ -995,13 +1005,13 @@ static int64_t     g_processed    = 0;
 static int64_t     g_total        = 0;
 static std::string g_current_file;
 
-/// 字符串 → JSON 字符串字面量 (经宿主 vtable json_escape; 结果含引号)
+/// 字符串 → JSON 字符串字面量 (经宿主 agentxx.client.json 接口表; 结果含引号)
 static std::string clientJsonEscape(const std::string& s) {
-    if (!g_client_host || s.empty()) {
+    if (!g_client_host || !g_client_if || !g_client_if->json || s.empty()) {
         return "\"\"";
     }
     char* esc
-        = g_client_host->vtable->json_escape(g_client_host, agentxx_plugin_sv(s.data(), s.size()));
+        = g_client_if->json->json_escape(g_client_host, agentxx_plugin_sv(s.data(), s.size()));
     if (!esc) {
         return "\"\"";
     }
@@ -1087,11 +1097,11 @@ static void on_client_plugin_data(AgentxxPluginStringView payload_json, void* ud
     }
     // payload: {"plugin","event","data"}
     char* plugin
-        = g_client_host->vtable->json_get_string(g_client_host, payload_json, AGENTXX_SV("plugin"));
+        = g_client_if->json->json_get_string(g_client_host, payload_json, AGENTXX_SV("plugin"));
     char* event
-        = g_client_host->vtable->json_get_string(g_client_host, payload_json, AGENTXX_SV("event"));
+        = g_client_if->json->json_get_string(g_client_host, payload_json, AGENTXX_SV("event"));
     char* data
-        = g_client_host->vtable->json_get_string(g_client_host, payload_json, AGENTXX_SV("data"));
+        = g_client_if->json->json_get_string(g_client_host, payload_json, AGENTXX_SV("data"));
     if (plugin && event && data && std::strcmp(plugin, "agentxx_codegraph") == 0) {
         SimpleJson j(std::string{data});
         if (std::strcmp(event, "status") == 0) {
@@ -1141,8 +1151,6 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxClientPluginInfo* agentxx_client_g
         AGENTXX_SV("agentxx_codegraph"),
         AGENTXX_SV("1.0.0"),
         AGENTXX_SV("CodeGraph index status (sidebar Info section)"),
-        // v4 移除 min_ui_caps 位图字段: 接口要求改由 plugin.yaml interfaces
-        // 声明 (client.info_section 为 optional, CLI 缺失时降级)
     };
     return &info;
 }
@@ -1152,11 +1160,10 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
     g_client_host = host;
     (void)plugin_ctx;
 
-    // 解析展示扩展表 (v4: Info 段落等迁至 "client.ui" 扩展表; 不支持子能力
-    // 成员为 NULL)
-    g_client_ui = static_cast<const AgentxxClientExtUiVtable*>(
-        host->vtable->query_extension(host, AGENTXX_SV(AGENTXX_CLIENT_EXT_UI))
-    );
+    // COM 风格接口表查询 (entry 一次性查询缓存; 进程级静态数据)
+    static const agentxx::plugin::ClientIfaces s_if = agentxx::plugin::ClientIfaces::query(host);
+    g_client_if = &s_if;
+    g_client_ui = s_if.ui;
 
     // 1. 侧边栏 Info 栏段落 (title "CodeGraph"; 内容由 refreshSection 更新)
     g_section = g_client_ui && g_client_ui->register_info_section
@@ -1172,18 +1179,25 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
     }
 
     // 2. 事件订阅: agent 侧发布的 codegraph 事件 (服务端转发的 WirePluginData)
-    if (!host->vtable
-             ->subscribe(host, AGENTXX_CLIENT_EVT_PLUGIN_DATA, on_client_plugin_data, nullptr)) {
+    if (!s_if.events || !s_if.events->subscribe
+        || !s_if.events->subscribe(
+            host,
+            AGENTXX_CLIENT_EVT_PLUGIN_DATA,
+            on_client_plugin_data,
+            nullptr
+        )) {
         return -1;
     }
 
-    host->vtable->log(host, 2, AGENTXX_SV("agentxx_codegraph client loaded"));
+    if (s_if.log && s_if.log->log) {
+        s_if.log->log(host, 2, AGENTXX_SV("agentxx_codegraph client loaded"));
+    }
     return 0;
 }
 
 extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_client_unload(void* plugin_ctx) {
     (void)plugin_ctx;
-    if (!g_client_host) {
+    if (!g_client_host || !g_client_if) {
         return;
     }
     if (g_section && g_client_ui && g_client_ui->unregister_info_section) {
@@ -1191,7 +1205,14 @@ extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_client_unload(void* plugin_ctx) {
         g_section = nullptr;
     }
     g_current_file.clear();
-    g_client_host->vtable->log(g_client_host, 2, AGENTXX_SV("agentxx_codegraph client unloaded"));
+    if (g_client_if->log && g_client_if->log->log) {
+        g_client_if->log->log(
+            g_client_host,
+            2,
+            AGENTXX_SV("agentxx_codegraph client unloaded")
+        );
+    }
     g_client_host = nullptr;
+    g_client_if   = nullptr;
     g_client_ui   = nullptr;
 }

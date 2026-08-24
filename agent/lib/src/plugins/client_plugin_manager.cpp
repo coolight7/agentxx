@@ -1160,9 +1160,17 @@ ClientPluginInstance* clientInstOf(const AgentxxClientHost* host) {
     return (host && host->opaque) ? static_cast<ClientPluginInstance*>(host->opaque) : nullptr;
 }
 
-/// "client.ui" 展示扩展表访问器 (定义于下方 vtable 装配区, 需在
-/// xx_cquery_extension 处前向引用)
-static const AgentxxClientExtUiVtable* clientExtUiVtable();
+/// "agentxx.client.ui" 展示接口表访问器 (定义于下方接口表装配区, 需在
+/// xx_cquery_interface 处前向引用)
+static const AgentxxClientUiIface* clientUiIface();
+
+/// 其余标准接口表 (定义于下方装配区; 此处前向引用供 query_interface 分发)
+extern const AgentxxClientEventsIface  g_clientIfaceEvents;
+extern const AgentxxClientSessionIface g_clientIfaceSession;
+extern const AgentxxClientWireIface    g_clientIfaceWire;
+extern const AgentxxClientSelfIface    g_clientIfaceSelf;
+extern const AgentxxClientJsonIface    g_clientIfaceJson;
+extern const AgentxxClientLogIface     g_clientIfaceLog;
 
 ClientPluginManager* clientMgrOf(const AgentxxClientHost* host) {
     auto inst = clientInstOf(host);
@@ -1256,30 +1264,35 @@ char* xx_cjson_escape(const AgentxxClientHost* host, AgentxxPluginStringView s) 
     XX_PLUGIN_CATCH_END(nullptr)
 }
 
-// ---- 接口协商 ----
+// ---- COM 风格接口表查询 ----
 
-int xx_chas_interface(const AgentxxClientHost* host, AgentxxPluginStringView name) {
-    XX_PLUGIN_CATCH_BEGIN
-    auto mgr = clientMgrOf(host);
-    if (!mgr || !name.data) {
-        return 0;
-    }
-    // 宿主接口集 = 适配器声明的名字集合 (位图方案已移除);
-    // "client.ui" 扩展表成员的非空性与该集合保持一致 (单一事实来源)
-    return mgr->hostSupportedInterfaces().contains(std::string{name.data, name.size}) ? 1 : 0;
-    XX_PLUGIN_CATCH_END(0)
-}
-
-const void* xx_cquery_extension(const AgentxxClientHost* host, AgentxxPluginStringView name) {
+const void* xx_cquery_interface(const AgentxxClientHost* host, AgentxxPluginStringView iid) {
     XX_PLUGIN_CATCH_BEGIN
     (void)host;
-    if (!name.data) {
+    if (!iid.data) {
         return nullptr;
     }
-    std::string_view n{name.data, name.size};
-    // 已定义扩展表: 展示组 (表内不支持子能力为 NULL 成员, 由适配器声明决定)
-    if (n == AGENTXX_CLIENT_EXT_UI) {
-        return clientExtUiVtable();
+    std::string_view n{iid.data, iid.size};
+    if (n == AGENTXX_IFACE_CLIENT_UI) {
+        return clientUiIface();
+    }
+    if (n == AGENTXX_IFACE_CLIENT_EVENTS) {
+        return &g_clientIfaceEvents;
+    }
+    if (n == AGENTXX_IFACE_CLIENT_SESSION) {
+        return &g_clientIfaceSession;
+    }
+    if (n == AGENTXX_IFACE_CLIENT_WIRE) {
+        return &g_clientIfaceWire;
+    }
+    if (n == AGENTXX_IFACE_CLIENT_SELF) {
+        return &g_clientIfaceSelf;
+    }
+    if (n == AGENTXX_IFACE_CLIENT_JSON) {
+        return &g_clientIfaceJson;
+    }
+    if (n == AGENTXX_IFACE_CLIENT_LOG) {
+        return &g_clientIfaceLog;
     }
     return nullptr;
     XX_PLUGIN_CATCH_END(nullptr)
@@ -1654,15 +1667,14 @@ char* xx_cget_plugin_args(const AgentxxClientHost* host) {
     XX_PLUGIN_CATCH_END(nullptr)
 }
 
-/// "client.ui" 展示扩展表访问器 (v4 起 UI 注册函数的宿主实现挂载点):
-/// 表内成员恒非空 (函数实现存在), 子能力是否可用由各 register 入口的
-/// hostSupportedInterfaces 门禁决定 (拒绝时返回 NULL/非 0) —— 与扩展表
-/// "NULL = 不支持" 契约的分工: 表级 NULL 用于宿主整体缺失某子能力入口
-/// 的场景 (当前宿主全量装配, 保留判空语义供第三方精简宿主使用)。
-/// 以函数内静态表实现 (前向引用无需 extern 声明)
-static const AgentxxClientExtUiVtable* clientExtUiVtable() {
-    static const AgentxxClientExtUiVtable table = {
-        /* version */ AGENTXX_CLIENT_EXT_UI_VERSION,
+/// "agentxx.client.ui" 展示接口表访问器: 表内成员恒非空 (函数实现存在), 子能力是否
+/// 可用由各 register 入口的 hostSupportedInterfaces 门禁决定 (拒绝时返回
+/// NULL/非 0) —— 与接口表 "NULL = 不支持" 契约的分工: 表级 NULL 用于宿主
+/// 整体缺失某子能力入口的场景 (当前宿主全量装配, 保留判空语义供第三方精简
+/// 宿主使用)。以函数内静态表实现 (前向引用无需 extern 声明)
+static const AgentxxClientUiIface* clientUiIface() {
+    static const AgentxxClientUiIface table = {
+        /* version */ AGENTXX_IFACE_CLIENT_UI_VERSION,
         /* register_status_item */ xx_cregister_status_item,
         /* update_status_item */ xx_cupdate_status_item,
         /* unregister_status_item */ xx_cunregister_status_item,
@@ -1679,23 +1691,49 @@ static const AgentxxClientExtUiVtable* clientExtUiVtable() {
     return &table;
 }
 
+// ---- 其余标准接口表 (进程级静态只读; 经 query_interface 分发) ----
+
+const AgentxxClientEventsIface g_clientIfaceEvents = {
+    /* version */ AGENTXX_IFACE_CLIENT_EVENTS_VERSION,
+    /* subscribe */ xx_csubscribe,
+    /* unsubscribe */ xx_cunsubscribe,
+};
+
+const AgentxxClientSessionIface g_clientIfaceSession = {
+    /* version */ AGENTXX_IFACE_CLIENT_SESSION_VERSION,
+    /* get_client_state */ xx_cget_client_state,
+    /* send_user_input */ xx_csend_user_input,
+    /* request_cancel */ xx_crequest_cancel,
+};
+
+const AgentxxClientWireIface g_clientIfaceWire = {
+    /* version */ AGENTXX_IFACE_CLIENT_WIRE_VERSION,
+    /* send_plugin_data */ xx_csend_plugin_data,
+};
+
+const AgentxxClientSelfIface g_clientIfaceSelf = {
+    /* version */ AGENTXX_IFACE_CLIENT_SELF_VERSION,
+    /* get_own_info */ xx_cget_own_info,
+    /* get_plugin_args */ xx_cget_plugin_args,
+};
+
+const AgentxxClientJsonIface g_clientIfaceJson = {
+    /* version */ AGENTXX_IFACE_CLIENT_JSON_VERSION,
+    /* json_get_string */ xx_cjson_get_string,
+    /* json_escape */ xx_cjson_escape,
+};
+
+const AgentxxClientLogIface g_clientIfaceLog = {
+    /* version */ AGENTXX_IFACE_CLIENT_LOG_VERSION,
+    /* log */ xx_clog,
+};
+
+/// 核心 vtable (契约冻结: 仅内存三件套 + query_interface)
 const AgentxxClientHostVtable g_clientHostVtable = {
     /* alloc */ xx_calloc,
     /* free */ xx_cfree,
     /* strdup */ xx_cstrdup,
-    /* has_interface */ xx_chas_interface,
-    /* query_extension */ xx_cquery_extension,
-    /* subscribe */ xx_csubscribe,
-    /* unsubscribe */ xx_cunsubscribe,
-    /* get_client_state */ xx_cget_client_state,
-    /* send_user_input */ xx_csend_user_input,
-    /* request_cancel */ xx_crequest_cancel,
-    /* send_plugin_data */ xx_csend_plugin_data,
-    /* get_own_info */ xx_cget_own_info,
-    /* get_plugin_args */ xx_cget_plugin_args,
-    /* log */ xx_clog,
-    /* json_get_string */ xx_cjson_get_string,
-    /* json_escape */ xx_cjson_escape,
+    /* query_interface */ xx_cquery_interface,
 };
 
 } // namespace
@@ -1719,7 +1757,7 @@ void* ClientPluginManager::registerStatusItem(
         return nullptr;
     }
     if (!hostSupportedInterfaces().contains(std::string{plugin_interfaces::ClientStatusItem})) {
-        XX_LOGW("[client_plugin] status item `{}` rejected: interface client.status_item unsupported", id);
+        XX_LOGW("[client_plugin] status item `{}` rejected: interface agentxx.client.status_item unsupported", id);
         return nullptr;
     }
     // id 冲突检查 (全局)
@@ -1856,7 +1894,7 @@ void* ClientPluginManager::registerPanel(
         return nullptr;
     }
     if (!hostSupportedInterfaces().contains(std::string{plugin_interfaces::ClientPanel})) {
-        XX_LOGW("[client_plugin] panel `{}` rejected: interface client.panel unsupported", id);
+        XX_LOGW("[client_plugin] panel `{}` rejected: interface agentxx.client.panel unsupported", id);
         return nullptr;
     }
     {
@@ -1990,7 +2028,7 @@ void* ClientPluginManager::registerInfoSection(
     }
     if (!hostSupportedInterfaces().contains(std::string{plugin_interfaces::ClientInfoSection})) {
         XX_LOGW(
-            "[client_plugin] info section `{}` rejected: interface client.info_section unsupported",
+            "[client_plugin] info section `{}` rejected: interface agentxx.client.info_section unsupported",
             id
         );
         return nullptr;
@@ -2123,10 +2161,10 @@ int ClientPluginManager::registerCommand(
     if (!inst || !exec) {
         return -1;
     }
-    // 命令输入管线接口 (client.command): 无命令输入面的宿主拒绝注册 ——
+    // 命令输入管线接口 (agentxx.client.command): 无命令输入面的宿主拒绝注册 ——
     // 与其他 register_* 的接口门禁行为一致
     if (!hostSupportedInterfaces().contains(std::string{plugin_interfaces::ClientCommand})) {
-        XX_LOGW("[client_plugin] command `{}` rejected: interface client.command unsupported", name);
+        XX_LOGW("[client_plugin] command `{}` rejected: interface agentxx.client.command unsupported", name);
         return -1;
     }
     {

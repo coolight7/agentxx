@@ -268,7 +268,7 @@ public:
     }
 
     /// 宿主当前支持的接口名集合 (由 uiAdapter->supportedInterfaces() 声明;
-    /// io 线程; 门禁检查与 has_interface / EVT_READY / get_client_state 的
+    /// io 线程; 门禁检查与 EVT_READY / get_client_state 的
     /// interfaces 数组共用本结果 —— 单一事实来源)
     InterfaceSet hostSupportedInterfaces() const;
 
@@ -452,8 +452,8 @@ private:
 ///
 /// 实现方 (TUI/CLI/未来 GUI) 职责:
 /// - supportedInterfaces(): 声明支持的接口名集合 ("client.panel" 等, 常量见
-///   plugin_common.h plugin_interfaces; 宿主据此装配 "client.ui" 扩展表、
-///   has_interface 判定与插件加载门禁)
+///   plugin_common.h plugin_interfaces; 宿主据此装配 "client.ui" 接口表、
+///   子能力门禁判定与插件加载门禁)
 /// - 各回调在 client io 线程调用, 实现必须快速返回; 涉及 UI 线程独占操作
 ///   (组件树修改/重绘) 须自行跨线程投递 (如 TUI 的 enqueueUiAction)
 /// - 注册表数据 (text/items) 由 ClientPluginManager 持有, UI 渲染经
@@ -463,7 +463,7 @@ public:
 
     virtual ~PluginUiAdapter() = default;
 
-    /// 声明支持的接口名集合 (plugin_interfaces 常量; 决定 client.ui 扩展表
+    /// 声明支持的接口名集合 (plugin_interfaces 常量; 决定 agentxx.client.ui 接口表
     /// 内哪些成员非 NULL 与加载门禁判定)
     virtual InterfaceSet supportedInterfaces() const = 0;
 

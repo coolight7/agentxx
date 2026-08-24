@@ -1,9 +1,11 @@
 // agentxx_codegraph 插件 —— 共享头
-// - 插件不链接 libagentxx: 日志经宿主 vtable log 转发 (替代 XX_LOG)
-// - g_pluginHost 由入口 (agentxx_codegraph.cpp) 在 entry 时装配
+// - 插件不链接 libagentxx: 日志经宿主接口表 log 转发 (替代 XX_LOG)
+// - g_pluginHost/g_ifaces 由入口 (agentxx_codegraph.cpp) 在 entry 时装配
+//   (COM 风格接口表一次性查询缓存, 见 plugin_iface_helper.h)
 #pragma once
 
 #include "agentxx/plugin/plugin_api.h"
+#include "agentxx/plugin/plugin_iface_helper.h"
 #include "codegraph/core/json.hpp"
 #include "fmt/format.h"
 #include <cstring>
@@ -14,10 +16,13 @@ namespace agentxx_codegraph_plugin {
 /// 当前插件宿主句柄 (entry 装配; 线程安全: 只读)
 inline const AgentxxHost* g_host = nullptr;
 
-/// 日志转发到宿主 vtable log (线程安全)
+/// 宿主接口表缓存 (entry 时 AgentIfaces::query 一次查询; 表为进程级静态数据)
+inline agentxx::plugin::AgentIfaces g_if{};
+
+/// 日志转发到宿主 agentxx.agent.log 接口表 (线程安全)
 inline void pluginLog(int level, const std::string& msg) {
-    if (g_host && g_host->vtable && g_host->vtable->log) {
-        g_host->vtable->log(g_host, level, agentxx_plugin_sv(msg.data(), msg.size()));
+    if (g_host && g_if.log && g_if.log->log) {
+        g_if.log->log(g_host, level, agentxx_plugin_sv(msg.data(), msg.size()));
     }
 }
 

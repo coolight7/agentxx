@@ -17,6 +17,7 @@
 // - 插件不链接 libagentxx: 日志经 vtable log, JSON 组装用 fmt + json_escape
 // - RAM/VRAM 等容量展示复用 agentxx_util 的 formatSize (字节入参, 自动选单位)
 #include "agentxx/plugin/client_plugin_api.h"
+#include "agentxx/plugin/plugin_iface_helper.h"
 #include "agentxx/util/string_util.h"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
@@ -65,10 +66,10 @@ static agentxx::expand::CpuGpuUsage querySync() {
 
 /// 转义字符串为 JSON 字面量 (经宿主 vtable json_escape)
 static std::string jsonEscape(const std::string& s) {
-    if (!g_host || !g_host->vtable || !g_host->vtable->json_escape || s.empty()) {
+    if (!g_host || !g_if.json || !g_if.json->json_escape || s.empty()) {
         return "\"\"";
     }
-    char* esc = g_host->vtable->json_escape(g_host, agentxx_plugin_sv(s.data(), s.size()));
+    char* esc = g_if.json->json_escape(g_host, agentxx_plugin_sv(s.data(), s.size()));
     if (!esc) {
         return "\"\"";
     }
@@ -111,10 +112,10 @@ static std::string usageToJson(const agentxx::expand::CpuGpuUsage& u) {
 
 /// 读取宿主 toolPrompt 的 depict; 未配置返回空
 static std::string readToolDepict(const std::string& toolName) {
-    if (!g_host || !g_host->vtable || !g_host->vtable->get_tool_prompt) {
+    if (!g_host || !g_if.config || !g_if.config->get_tool_prompt) {
         return {};
     }
-    char* json = g_host->vtable->get_tool_prompt(
+    char* json = g_if.config->get_tool_prompt(
         g_host,
         agentxx_plugin_sv(toolName.data(), toolName.size())
     );
@@ -165,7 +166,8 @@ static void registerTool(
     spec.user_data       = nullptr;
     spec.flags           = flags;
     spec.execute         = execute;
-    if (g_host->vtable->register_tool(g_host, &spec) != 0) {
+    if (!g_if.tools || !g_if.tools->register_tool
+        || g_if.tools->register_tool(g_host, &spec) != 0) {
         pluginLog(3, fmt::format("agentxx_system_monitor: register tool {} failed", name));
     }
 }
@@ -174,10 +176,10 @@ static void registerTool(
 /// - 用户 yaml 覆盖早于插件加载 → get_prompt 已含覆盖 → 跳过 (尊重用户配置)
 /// - 宿主未提供 get_prompt/set_prompt (旧宿主) → 跳过, registerTool 回退插件默认
 static void ensureToolPromptInHost() {
-    if (!g_host || !g_host->vtable || !g_host->vtable->get_prompt || !g_host->vtable->set_prompt) {
+    if (!g_host || !g_if.prompt || !g_if.prompt->get_prompt || !g_if.prompt->set_prompt) {
         return;
     }
-    char* json = g_host->vtable->get_prompt(g_host);
+    char* json = g_if.prompt->get_prompt(g_host);
     if (!json) {
         return;
     }
@@ -199,7 +201,7 @@ static void ensureToolPromptInHost() {
               string{"Get system resource usage: CPU utilization, memory usage, GPU utilization, and "
                      "GPU memory usage."}
           + R"(","args":{}}}})";
-    if (g_host->vtable->set_prompt(g_host, agentxx_plugin_sv(payload.data(), payload.size()))
+    if (g_if.prompt->set_prompt(g_host, agentxx_plugin_sv(payload.data(), payload.size()))
         != 0) {
         pluginLog(3, "agentxx_system_monitor: set_prompt failed");
     }
@@ -364,7 +366,7 @@ struct PluginCtx {
 /// 周期采集 work: 宿主阻塞池线程执行 (阻塞 ~100ms 采样)
 static void* usageCollectWork(void* ud, char** error_out) {
     auto* ctx = static_cast<PluginCtx*>(ud);
-    if (!ctx || !g_host || !g_host->vtable) {
+    if (!ctx || !g_host) {
         return nullptr;
     }
     try {
@@ -403,9 +405,9 @@ static void usageCollectDone(void* ud, void* result, char* error) {
         return;
     }
     if (result) {
-        if (g_host && g_host->vtable && g_host->vtable->publish) {
+        if (g_host && g_if.events && g_if.events->publish) {
             const char* s = static_cast<const char*>(result);
-            g_host->vtable->publish(
+            g_if.events->publish(
                 g_host,
                 AGENTXX_SV("agentxx_system_monitor.usage"),
                 agentxx_plugin_sv(s, std::strlen(s))
@@ -420,7 +422,7 @@ static void usageCollectDone(void* ud, void* result, char* error) {
 ///   (work 在阻塞池, done 回 io 线程 publish) —— 不再自建采集线程
 static void onUsageTick(void* ud) {
     auto* ctx = static_cast<PluginCtx*>(ud);
-    if (!ctx || !g_host || !g_host->vtable || !g_host->vtable->offload) {
+    if (!ctx || !g_host || !g_if.scheduler || !g_if.scheduler->offload) {
         return;
     }
     if (ctx->collecting) {
@@ -434,7 +436,7 @@ static void onUsageTick(void* ud) {
         return; // 显示关闭: 跳过采集
     }
     ctx->collecting = true;
-    g_host->vtable->offload(g_host, usageCollectWork, usageCollectDone, ctx);
+    g_if.scheduler->offload(g_host, usageCollectWork, usageCollectDone, ctx);
 }
 
 /// 跨端事件: client /sysinfo 开关同步 (WirePluginDataUp 上行后 server 发布到
@@ -467,6 +469,9 @@ static void on_client_attached(AgentxxPluginStringView event_json, void* ud) {
 extern "C" AGENTXX_PLUGIN_EXPORT int
     agentxx_plugin_entry(const AgentxxHost* host, void** plugin_ctx) {
     g_host = host;
+    // COM 风格接口表查询 (entry 一次性查询缓存; 进程级静态数据, 长期有效)
+    static const agentxx::plugin::AgentIfaces s_if = agentxx::plugin::AgentIfaces::query(host);
+    g_if = s_if;
 
     // 默认提示词写入宿主 (从 lib AgentPrompt 剥离迁移; 用户 yaml 覆盖优先)
     ensureToolPromptInHost();
@@ -484,13 +489,15 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
     );
 
     // 2. 能力 agentxx.system_usage (方法 query)
-    if (host->vtable->register_capability_ex(
+    if (!g_if.capabilities || !g_if.capabilities->register_capability_ex
+        || g_if.capabilities->register_capability_ex(
             host,
             AGENTXX_SV("agentxx.system_usage"),
             systemUsageInvoke,
             nullptr
         )
-        != 0) {
+            != 0)
+    {
         pluginLog(3, "agentxx_system_monitor: register capability agentxx.system_usage failed");
     }
 
@@ -500,7 +507,8 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
     //    (work 阻塞池 / done io 线程 publish) —— 不占 io 线程、不自建线程,
     //    卸载安全由宿主统一保证 (定时器取消 + inflight 保活)
     auto ctx = std::make_unique<PluginCtx>();
-    if (!host->vtable->subscribe(
+    if (!g_if.events || !g_if.events->subscribe
+        || !g_if.events->subscribe(
             host,
             AGENTXX_SV("client.agentxx_system_monitor.usage_enabled"),
             on_usage_enabled,
@@ -510,7 +518,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
     }
     // 订阅宿主约定事件 client_attached: 客户端接入/重连后立即采集一次
     // (晚接入客户端 ≤500ms 收到首份数据, 无需等满 5s 周期)
-    if (!host->vtable->subscribe(
+    if (!g_if.events->subscribe(
             host,
             AGENTXX_SV("agentxx_host.client_attached"),
             on_client_attached,
@@ -518,8 +526,8 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
         )) {
         pluginLog(3, "agentxx_system_monitor: subscribe client_attached failed");
     }
-    if (host->vtable->add_timer) {
-        ctx->timer = host->vtable->add_timer(host, kUsageTickMs, onUsageTick, ctx.get());
+    if (g_if.scheduler && g_if.scheduler->add_timer) {
+        ctx->timer = g_if.scheduler->add_timer(host, kUsageTickMs, onUsageTick, ctx.get());
         if (!ctx->timer) {
             pluginLog(3, "agentxx_system_monitor: add_timer failed (collector disabled)");
         }
@@ -537,15 +545,17 @@ extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_unload(void* plugin_ctx) {
     if (ctx) {
         // 取消宿主定时器 (在途 tick/offload 由宿主 inflight 计数等待完成,
         // 此处无任何在途引用后安全释放 ctx)
-        if (g_host && g_host->vtable && g_host->vtable->cancel_timer && ctx->timer) {
-            g_host->vtable->cancel_timer(g_host, ctx->timer);
+        if (g_host && g_if.scheduler && g_if.scheduler->cancel_timer && ctx->timer) {
+            g_if.scheduler->cancel_timer(g_host, ctx->timer);
             ctx->timer = nullptr;
         }
         delete ctx;
     }
-    if (g_host && g_host->vtable) {
-        g_host->vtable->unregister_tool(g_host, AGENTXX_SV("agentxx_get_system_core_info"));
-        g_host->vtable->unregister_capability(g_host, AGENTXX_SV("agentxx.system_usage"));
+    if (g_host && g_if.tools && g_if.tools->unregister_tool) {
+        g_if.tools->unregister_tool(g_host, AGENTXX_SV("agentxx_get_system_core_info"));
+    }
+    if (g_host && g_if.capabilities && g_if.capabilities->unregister_capability) {
+        g_if.capabilities->unregister_capability(g_host, AGENTXX_SV("agentxx.system_usage"));
     }
     pluginLog(2, "agentxx_system_monitor unloaded");
 }
@@ -567,23 +577,24 @@ extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_unload(void* plugin_ctx) {
  * ===================================================================== */
 
 static const AgentxxClientHost* g_client_host = nullptr;
-/// "client.ui" 展示扩展表 (v4: Info 段落/命令经 query_extension 获取; 不支持
-/// 子能力成员为 NULL, 调用前判空)
-static const AgentxxClientExtUiVtable* g_client_ui = nullptr;
+/// client 侧接口表缓存 (entry 时 ClientIfaces::query 一次查询)
+static const agentxx::plugin::ClientIfaces* g_client_if = nullptr;
+/// "agentxx.client.ui" 展示接口表 (Info 段落/命令; 不支持子能力成员为 NULL, 调用前判空)
+static const AgentxxClientUiIface* g_client_ui = nullptr;
 static AgentxxInfoSection*      g_section     = nullptr;
 /// 系统资源显示开关 (命令 /sysinfo 切换; 默认开启, 与旧 TUI 设置一致)
 static std::atomic<bool> g_usage_enabled{true};
 /// 最近一次收到的 usage JSON (原始字符串; 用于开关重新开启时立即刷新)
 static std::string g_last_usage_json;
 
-/// 字符串 → JSON 字符串字面量 (经宿主 vtable json_escape; 结果含引号;
+/// 字符串 → JSON 字符串字面量 (经宿主 agentxx.client.json 接口表; 结果含引号;
 /// 供 fmt::format 组装 JSON 时嵌入字段值, 避免手工拼接)
 static std::string clientJsonEscape(const std::string& s) {
-    if (!g_client_host || s.empty()) {
+    if (!g_client_host || !g_client_if || !g_client_if->json || s.empty()) {
         return "\"\"";
     }
     char* esc
-        = g_client_host->vtable->json_escape(g_client_host, agentxx_plugin_sv(s.data(), s.size()));
+        = g_client_if->json->json_escape(g_client_host, agentxx_plugin_sv(s.data(), s.size()));
     if (!esc) {
         return "\"\"";
     }
@@ -741,12 +752,18 @@ static void on_client_plugin_data(AgentxxPluginStringView payload_json, void* ud
         return;
     }
     // payload: {"plugin","event","data"}
-    char* plugin
-        = g_client_host->vtable->json_get_string(g_client_host, payload_json, AGENTXX_SV("plugin"));
-    char* event
-        = g_client_host->vtable->json_get_string(g_client_host, payload_json, AGENTXX_SV("event"));
-    char* data
-        = g_client_host->vtable->json_get_string(g_client_host, payload_json, AGENTXX_SV("data"));
+    char* plugin   = g_client_if->json
+                         ? g_client_if->json->json_get_string(
+                       g_client_host, payload_json, AGENTXX_SV("plugin"))
+                         : nullptr;
+    char* event    = g_client_if->json
+                        ? g_client_if->json->json_get_string(
+                      g_client_host, payload_json, AGENTXX_SV("event"))
+                        : nullptr;
+    char* data     = g_client_if->json
+                       ? g_client_if->json->json_get_string(
+                     g_client_host, payload_json, AGENTXX_SV("data"))
+                       : nullptr;
     const bool mine = plugin && event && std::strcmp(plugin, "agentxx_system_monitor") == 0
                       && std::strcmp(event, "usage") == 0 && data;
     if (mine) {
@@ -784,10 +801,11 @@ static char* sysinfo_cmd_execute(void* ud, AgentxxPluginStringView args_json, ch
     // 关闭期间跳过周期采集 (省采样开销/网络流量)
     {
         std::string payload = next ? R"({"enabled":true})" : R"({"enabled":false})";
-        g_client_host->vtable->send_plugin_data(
+        if (g_client_if->wire && g_client_if->wire->send_plugin_data)
+            g_client_if->wire->send_plugin_data(
             g_client_host,
-            AGENTXX_SV("usage_enabled"),
-            agentxx_plugin_sv(payload.data(), payload.size())
+              AGENTXX_SV("usage_enabled"),
+              agentxx_plugin_sv(payload.data(), payload.size())
         );
     }
     std::string       text = next ? "System resource info: ON" : "System resource info: OFF";
@@ -797,7 +815,9 @@ static char* sysinfo_cmd_execute(void* ud, AgentxxPluginStringView args_json, ch
     // 缺失)。agent 侧插件缺失时上行开关同步会被静默丢弃 (采集照旧) ——
     // 明确提示, 避免"操作成功"假象
     {
-        char* stateJson    = g_client_host->vtable->get_client_state(g_client_host);
+        char* stateJson    = g_client_if->session && g_client_if->session->get_client_state
+                                          ? g_client_if->session->get_client_state(g_client_host)
+                                          : nullptr;
         bool  agentMissing = false;
         if (stateJson) {
             SimpleJson st{std::string(stateJson)};
@@ -839,8 +859,6 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxClientPluginInfo* agentxx_client_g
         AGENTXX_SV("agentxx_system_monitor"),
         AGENTXX_SV("1.0.0"),
         AGENTXX_SV("System resource usage: Info section (CPU/RAM/GPU), /sysinfo toggle"),
-        // v4 移除 min_ui_caps 位图字段: 接口要求改由 plugin.yaml interfaces
-        // 声明 (client.info_section 为 optional, CLI 缺失时降级)
     };
     return &info;
 }
@@ -850,11 +868,10 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
     g_client_host = host;
     (void)plugin_ctx;
 
-    // 解析展示扩展表 (v4: Info 段落/命令迁至 "client.ui" 扩展表; 不支持
-    // 子能力成员为 NULL)
-    g_client_ui = static_cast<const AgentxxClientExtUiVtable*>(
-        host->vtable->query_extension(host, AGENTXX_SV(AGENTXX_CLIENT_EXT_UI))
-    );
+    // COM 风格接口表查询 (entry 一次性查询缓存; 进程级静态数据)
+    static const agentxx::plugin::ClientIfaces s_if = agentxx::plugin::ClientIfaces::query(host);
+    g_client_if = &s_if;
+    g_client_ui = s_if.ui;
 
     // 1. 侧边栏 Info 栏段落 (资源占用明细: CPU/RAM/GPU; 内容由
     //    refreshUsageDisplay 更新)
@@ -868,8 +885,13 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
     // 宿主不支持 Info 段落时成员为 NULL, 插件降级 (不视为失败)
 
     // 2. 事件订阅: 宿主转发的系统资源事件 (WirePluginData agentxx_system_monitor.usage)
-    if (!host->vtable
-             ->subscribe(host, AGENTXX_CLIENT_EVT_PLUGIN_DATA, on_client_plugin_data, nullptr)) {
+    if (!s_if.events || !s_if.events->subscribe
+        || !s_if.events->subscribe(
+            host,
+            AGENTXX_CLIENT_EVT_PLUGIN_DATA,
+            on_client_plugin_data,
+            nullptr
+        )) {
         return -1;
     }
 
@@ -887,13 +909,15 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
         return -1;
     }
 
-    host->vtable->log(host, 2, AGENTXX_SV("agentxx_system_monitor client loaded"));
+    if (s_if.log && s_if.log->log) {
+        s_if.log->log(host, 2, AGENTXX_SV("agentxx_system_monitor client loaded"));
+    }
     return 0;
 }
 
 extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_client_unload(void* plugin_ctx) {
     (void)plugin_ctx;
-    if (!g_client_host || !g_client_ui) {
+    if (!g_client_host || !g_client_if) {
         return;
     }
     if (g_section && g_client_ui->unregister_info_section) {
@@ -904,8 +928,14 @@ extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_client_unload(void* plugin_ctx) {
         g_client_ui->unregister_command(g_client_host, AGENTXX_SV("sysinfo"));
     }
     g_last_usage_json.clear();
-    g_client_host->vtable
-        ->log(g_client_host, 2, AGENTXX_SV("agentxx_system_monitor client unloaded"));
+    if (g_client_if->log && g_client_if->log->log) {
+        g_client_if->log->log(
+            g_client_host,
+            2,
+            AGENTXX_SV("agentxx_system_monitor client unloaded")
+        );
+    }
     g_client_host = nullptr;
+    g_client_if   = nullptr;
     g_client_ui   = nullptr;
 }

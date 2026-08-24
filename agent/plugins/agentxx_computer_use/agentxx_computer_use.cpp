@@ -5,6 +5,7 @@
 //   depends 声明依赖, 加载时须先于本插件)
 // - 插件不链接 libagentxx: 描述经 get_tool_prompt 读取, 日志经 vtable log
 #include "codegraph/core/json.hpp"
+#include "agentxx/plugin/plugin_iface_helper.h"
 #include "computer_use_plugin.h"
 #include "fmt/format.h"
 #include <cstring>
@@ -28,10 +29,10 @@ namespace agentxx_computer_use_plugin {
 
 /// 读取宿主 toolPrompt 的 depict; 未配置返回空
 static std::string readToolDepict(const std::string& toolName) {
-    if (!g_host || !g_host->vtable || !g_host->vtable->get_tool_prompt) {
+    if (!g_host || !g_if.config || !g_if.config->get_tool_prompt) {
         return {};
     }
-    char* json = g_host->vtable->get_tool_prompt(
+    char* json = g_if.config->get_tool_prompt(
         g_host,
         agentxx_plugin_sv(toolName.data(), toolName.size())
     );
@@ -112,7 +113,8 @@ static void registerTool(
             return nullptr;
         }
     };
-    if (g_host->vtable->register_tool(g_host, &spec) != 0) {
+    if (!g_if.tools || !g_if.tools->register_tool
+        || g_if.tools->register_tool(g_host, &spec) != 0) {
         pluginLog(3, fmt::format("agentxx_computer_use: register tool {} failed", name));
     }
 }
@@ -257,10 +259,10 @@ static void registerUiControlTool() {
 /// - 用户 yaml 覆盖早于插件加载 → get_prompt 已含覆盖 → 跳过 (尊重用户配置)
 /// - 宿主未提供 get_prompt/set_prompt (旧宿主) → 跳过, registerTool 回退插件默认
 static void ensureToolPromptInHost() {
-    if (!g_host || !g_host->vtable || !g_host->vtable->get_prompt || !g_host->vtable->set_prompt) {
+    if (!g_host || !g_if.prompt || !g_if.prompt->get_prompt || !g_if.prompt->set_prompt) {
         return;
     }
-    char* json = g_host->vtable->get_prompt(g_host);
+    char* json = g_if.prompt->get_prompt(g_host);
     if (!json) {
         return;
     }
@@ -285,7 +287,7 @@ static void ensureToolPromptInHost() {
     patch["toolPrompt"]   = codegraph::Json::object();
     patch["toolPrompt"]["agentxx_ui_control_keyboard_mouse"] = tp;
     std::string payload                                      = patch.dump();
-    if (g_host->vtable->set_prompt(g_host, agentxx_plugin_sv(payload.data(), payload.size()))
+    if (g_if.prompt->set_prompt(g_host, agentxx_plugin_sv(payload.data(), payload.size()))
         != 0) {
         pluginLog(3, "agentxx_computer_use: set_prompt failed");
     }

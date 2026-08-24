@@ -6,6 +6,7 @@
 //   JSON: 元信息 + base64 PCM; 频率由捕获速率决定, 消费方自行订阅)
 // - 非 Windows 平台 AudioStream 为 no-op (start 返回失败), 工具仍可查询状态
 #include "audio_stream.h"
+#include "agentxx/plugin/plugin_iface_helper.h"
 #include "audio_stream_plugin.h"
 #include "fmt/format.h"
 #include <atomic>
@@ -74,10 +75,10 @@ std::string toBase64(const std::vector<uint8_t>& data) {
 
 /// 转义字符串为 JSON 字面量 (经宿主 vtable json_escape)
 std::string jsonEscape(const std::string& s) {
-    if (!g_host || !g_host->vtable || !g_host->vtable->json_escape || s.empty()) {
+    if (!g_host || !g_if.json || !g_if.json->json_escape || s.empty()) {
         return "\"\"";
     }
-    char* esc = g_host->vtable->json_escape(g_host, agentxx_plugin_sv(s.data(), s.size()));
+    char* esc = g_if.json->json_escape(g_host, agentxx_plugin_sv(s.data(), s.size()));
     if (!esc) {
         return "\"\"";
     }
@@ -98,7 +99,7 @@ struct AudioStreamHolder {
             return false;
         }
         stream_.addListener([](const agentxx::expand::AudioData& data) {
-            if (!g_host || !g_host->vtable || !g_host->vtable->publish) {
+            if (!g_host || !g_if.events || !g_if.events->publish) {
                 return;
             }
             auto tsMs = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -116,7 +117,7 @@ struct AudioStreamHolder {
                 tsMs,
                 jsonEscape(toBase64(data.data))
             );
-            g_host->vtable->publish(
+            g_if.events->publish(
                 g_host,
                 AGENTXX_SV("agentxx_audio_stream.audio"),
                 agentxx_plugin_sv(payload.data(), payload.size())
@@ -236,7 +237,8 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                      "published as plugin events (agentxx_audio_stream.audio).");
     spec.parameters_json = agentxx_plugin_sv(kSchema.data(), kSchema.size());
     spec.execute         = audioStreamExecute;
-    if (host->vtable->register_tool(host, &spec) != 0) {
+    if (!g_if.tools || !g_if.tools->register_tool
+        || g_if.tools->register_tool(host, &spec) != 0) {
         pluginLog(3, "agentxx_audio_stream: register tool failed");
         return -1;
     }
@@ -248,7 +250,8 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
 extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_unload(void* /*plugin_ctx*/) {
     AudioStreamHolder::instance().stop();
     if (g_host && g_host->vtable) {
-        g_host->vtable->unregister_tool(g_host, AGENTXX_SV("agentxx_audio_stream"));
+        if (g_if.tools && g_if.tools->unregister_tool)
+            g_if.tools->unregister_tool(g_host, AGENTXX_SV("agentxx_audio_stream"));
     }
     pluginLog(2, "agentxx_audio_stream unloaded");
 }

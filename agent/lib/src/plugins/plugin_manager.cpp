@@ -1373,75 +1373,172 @@ static char* xx_get_own_resources(const AgentxxHost* host) {
     XX_PLUGIN_CATCH_END(nullptr)
 }
 
-// ---- 接口协商 (v9; 语义见 plugin_common.h 接口协商节) ----
+// ---- COM 风格接口表装配 (核心契约冻结; 一切宿主能力经 query_interface 分发) ----
+//
+// 各接口表为进程级静态只读数据, 函数实现与旧版逐字节一致, 仅获取途径变化:
+// 插件 entry 时经 query_interface(IID) 查询缓存。新增能力一律定义新的接口
+// 表在此登记, 不再修改 AgentxxHostVtable 核心结构本身。
 
-static int xx_has_interface(const AgentxxHost* host, AgentxxPluginStringView name) {
-    XX_PLUGIN_CATCH_BEGIN
-    if (!name.data) {
-        return 0;
+static const AgentxxToolsIface g_ifaceTools = {
+    /* version */ AGENTXX_IFACE_AGENT_TOOLS_VERSION,
+    /* register_tool */ xx_register_tool,
+    /* unregister_tool */ xx_unregister_tool,
+    /* call_tool */ xx_call_tool,
+};
+
+static const AgentxxHooksIface g_ifaceHooks = {
+    /* version */ AGENTXX_IFACE_AGENT_HOOKS_VERSION,
+    /* register_hook */ xx_register_hook,
+    /* unregister_hook */ xx_unregister_hook,
+};
+
+static const AgentxxEventsIface g_ifaceEvents = {
+    /* version */ AGENTXX_IFACE_AGENT_EVENTS_VERSION,
+    /* subscribe */ xx_subscribe,
+    /* unsubscribe */ xx_unsubscribe,
+    /* publish */ xx_publish,
+};
+
+static const AgentxxCapabilitiesIface g_ifaceCapabilities = {
+    /* version */ AGENTXX_IFACE_AGENT_CAPABILITIES_VERSION,
+    /* register_capability */ xx_register_capability,
+    /* register_capability_ex */ xx_register_capability_ex,
+    /* unregister_capability */ xx_unregister_capability,
+    /* has_capability */ xx_has_capability,
+    /* invoke_capability */ xx_invoke_capability,
+};
+
+static const AgentxxSchedulerIface g_ifaceScheduler = {
+    /* version */ AGENTXX_IFACE_AGENT_SCHEDULER_VERSION,
+    /* is_io_thread */ xx_is_io_thread,
+    /* post_to_io */ xx_post_to_io,
+    /* add_timer */ xx_add_timer,
+    /* cancel_timer */ xx_cancel_timer,
+    /* offload */ xx_offload,
+};
+
+static const AgentxxSessionIface g_ifaceSession = {
+    /* version */ AGENTXX_IFACE_AGENT_SESSION_VERSION,
+    /* get_share_store */ xx_get_share_store,
+    /* emit_message_tip */ xx_emit_message_tip,
+};
+
+static const AgentxxPluginsIface g_ifacePlugins = {
+    /* version */ AGENTXX_IFACE_AGENT_PLUGINS_VERSION,
+    /* list_plugins */ xx_list_plugins,
+    /* get_plugin */ xx_get_plugin,
+    /* get_own_info */ xx_get_own_info,
+};
+
+static const AgentxxConfigIface g_ifaceConfig = {
+    /* version */ AGENTXX_IFACE_AGENT_CONFIG_VERSION,
+    /* get_config */ xx_get_config,
+    /* get_plugin_args */ xx_get_plugin_args,
+    /* get_tool_prompt */ xx_get_tool_prompt,
+};
+
+static const AgentxxPromptIface g_ifacePrompt = {
+    /* version */ AGENTXX_IFACE_AGENT_PROMPT_VERSION,
+    /* get_prompt */ xx_get_prompt,
+    /* set_prompt */ xx_set_prompt,
+};
+
+static const AgentxxJsonIface g_ifaceJson = {
+    /* version */ AGENTXX_IFACE_AGENT_JSON_VERSION,
+    /* json_get_string */ xx_json_get_string,
+    /* json_escape */ xx_json_escape,
+};
+
+static const AgentxxLogIface g_ifaceLog = {
+    /* version */ AGENTXX_IFACE_AGENT_LOG_VERSION,
+    /* log */ xx_log,
+};
+
+static const AgentxxResourcesIface g_ifaceResources = {
+    /* version */ AGENTXX_IFACE_AGENT_RESOURCES_VERSION,
+    /* register_skill_dir */ xx_register_skill_dir,
+    /* unregister_skill_dir */ xx_unregister_skill_dir,
+    /* register_memory_file */ xx_register_memory_file,
+    /* unregister_memory_file */ xx_unregister_memory_file,
+    /* register_mcp_server */ xx_register_mcp_server,
+    /* unregister_mcp_server */ xx_unregister_mcp_server,
+    /* get_own_resources */ xx_get_own_resources,
+};
+
+/// QueryInterface 实现: 按稳定 IID 分发到各静态接口表; 未知名称返回 NULL
+/// (安全失败)。任意线程可调用 (纯只读查表)。
+static const void* xx_query_interface(const AgentxxHost*, AgentxxPluginStringView iid) {
+    if (!iid.data) {
+        return nullptr;
     }
-    // agent 宿主 (libagentxx 单实现): 核心接口集 = {"agent.core"} ——
-    // api_version 精确匹配门禁通过即全集可用; 扩展表当前未定义, 预留
-    // 第三方 agent 宿主按需实现
-    std::string_view n{name.data, name.size};
-    return n == plugin::plugin_interfaces::AgentCore ? 1 : 0;
-    XX_PLUGIN_CATCH_END(0)
-}
-
-static const void* xx_query_extension(const AgentxxHost*, AgentxxPluginStringView name) {
-    XX_PLUGIN_CATCH_BEGIN
-    (void)name;
-    // agent 侧暂无扩展表 (核心 vtable 全量可用); 未来新增能力在此登记,
-    // 不再修改 AgentxxHostVtable 结构本身
+    const std::string_view n{iid.data, iid.size};
+    if (n == AGENTXX_IFACE_AGENT_TOOLS) {
+        return &g_ifaceTools;
+    }
+    if (n == AGENTXX_IFACE_AGENT_HOOKS) {
+        return &g_ifaceHooks;
+    }
+    if (n == AGENTXX_IFACE_AGENT_EVENTS) {
+        return &g_ifaceEvents;
+    }
+    if (n == AGENTXX_IFACE_AGENT_CAPABILITIES) {
+        return &g_ifaceCapabilities;
+    }
+    if (n == AGENTXX_IFACE_AGENT_SCHEDULER) {
+        return &g_ifaceScheduler;
+    }
+    if (n == AGENTXX_IFACE_AGENT_SESSION) {
+        return &g_ifaceSession;
+    }
+    if (n == AGENTXX_IFACE_AGENT_PLUGINS) {
+        return &g_ifacePlugins;
+    }
+    if (n == AGENTXX_IFACE_AGENT_CONFIG) {
+        return &g_ifaceConfig;
+    }
+    if (n == AGENTXX_IFACE_AGENT_PROMPT) {
+        return &g_ifacePrompt;
+    }
+    if (n == AGENTXX_IFACE_AGENT_JSON) {
+        return &g_ifaceJson;
+    }
+    if (n == AGENTXX_IFACE_AGENT_LOG) {
+        return &g_ifaceLog;
+    }
+    if (n == AGENTXX_IFACE_AGENT_RESOURCES) {
+        return &g_ifaceResources;
+    }
     return nullptr;
-    XX_PLUGIN_CATCH_END(nullptr)
 }
 
+/// 核心 vtable (契约冻结: 仅内存三件套 + query_interface)
 static const AgentxxHostVtable g_hostVtable = {
     xx_alloc,
     xx_free,
     xx_strdup,
-    xx_register_tool,
-    xx_unregister_tool,
-    xx_register_hook,
-    xx_unregister_hook,
-    xx_subscribe,
-    xx_unsubscribe,
-    xx_publish,
-    xx_register_capability,
-    xx_register_capability_ex,
-    xx_unregister_capability,
-    xx_has_capability,
-    xx_invoke_capability,
-    xx_is_io_thread,
-    xx_post_to_io,
-    xx_call_tool,
-    xx_list_plugins,
-    xx_get_plugin,
-    xx_get_own_info,
-    xx_get_share_store,
-    xx_emit_message_tip,
-    xx_log,
-    xx_json_get_string,
-    xx_json_escape,
-    xx_get_config,
-    xx_get_plugin_args,
-    xx_get_tool_prompt,
-    xx_get_prompt,
-    xx_set_prompt,
-    xx_add_timer,
-    xx_cancel_timer,
-    xx_offload,
-    xx_register_skill_dir,
-    xx_unregister_skill_dir,
-    xx_register_memory_file,
-    xx_unregister_memory_file,
-    xx_register_mcp_server,
-    xx_unregister_mcp_server,
-    xx_get_own_resources,
-    xx_has_interface,
-    xx_query_extension,
+    xx_query_interface,
 };
+
+/// agent 宿主支持的接口名集合 (接口协商第 2 层门禁用):
+/// 元接口 agentxx.agent.core + 全部标准接口表 IID (libagentxx 是唯一 agent 宿主实现,
+/// api_version 门禁通过即核心与标准表齐备; 精简第三方宿主可仅声明子集)
+static plugin::InterfaceSet agentHostSupportedInterfaces() {
+    plugin::InterfaceSet s;
+    s.insert(std::string{plugin::plugin_interfaces::AgentCore});
+    s.insert(std::string{plugin::plugin_interfaces::AgentTools});
+    s.insert(std::string{plugin::plugin_interfaces::AgentHooks});
+    s.insert(std::string{plugin::plugin_interfaces::AgentEvents});
+    s.insert(std::string{plugin::plugin_interfaces::AgentCapabilities});
+    s.insert(std::string{plugin::plugin_interfaces::AgentScheduler});
+    s.insert(std::string{plugin::plugin_interfaces::AgentSession});
+    s.insert(std::string{plugin::plugin_interfaces::AgentPlugins});
+    s.insert(std::string{plugin::plugin_interfaces::AgentConfig});
+    s.insert(std::string{plugin::plugin_interfaces::AgentPrompt});
+    s.insert(std::string{plugin::plugin_interfaces::AgentJson});
+    s.insert(std::string{plugin::plugin_interfaces::AgentLog});
+    s.insert(std::string{plugin::plugin_interfaces::AgentResources});
+    return s;
+}
 
 // ==================== 工具注册/注销 ====================
 
@@ -2247,13 +2344,13 @@ PluginManager::loadNativeAsync(
     }
 
     // ---- 接口协商门禁 (三层协商第 2 层; 见 plugin_common.h 接口协商节) ----
-    // - agent 宿主仅 libagentxx 一个实现 (api_version 门禁已通过 ⇒ 核心接口
-    //   齐备), 支持集恒为 {agent.core}; require 中 agent.*/vendor.* 未满足
-    //   → 跳过加载 (INFO + 原因), optional 缺失仅警告
+    // - agent 宿主仅 libagentxx 一个实现 (api_version 门禁已通过 ⇒ 核心与
+    //   标准接口表齐备), 支持集 = agentxx.agent.core + 全部接口表 IID;
+    //   require 中 agent.*/vendor.* 未满足 → 跳过加载 (INFO + 原因),
+    //   optional 缺失仅警告
     // - 与 client 侧对称保留统一代码路径 (未来第三方 agent 宿主直接复用)
     {
-        plugin::InterfaceSet hostIfaces;
-        hostIfaces.insert(std::string{plugin::plugin_interfaces::AgentCore});
+        auto  hostIfaces = agentHostSupportedInterfaces();
         auto check = plugin::checkInterfacesForSide(interfaces, hostIfaces, true);
         if (!check.satisfied) {
             XX_LOGI(
@@ -2936,11 +3033,10 @@ asio::awaitable<std::shared_ptr<PluginInstance>>
         if (!checkDependencies(name, depends, optionalDepends)) {
             co_return nullptr;
         }
-        // 接口协商门禁 (agent 侧支持集恒为 {agent.core}: libagentxx 是唯一
-        // agent 宿主实现, api_version 门禁通过即核心齐备)
+        // 接口协商门禁 (agent 侧支持集 = agentxx.agent.core + 全部接口表 IID:
+        // libagentxx 是唯一 agent 宿主实现, api_version 门禁通过即齐备)
         {
-            plugin::InterfaceSet hostIfaces;
-            hostIfaces.insert(std::string{plugin::plugin_interfaces::AgentCore});
+            auto hostIfaces = agentHostSupportedInterfaces();
             auto check
                 = plugin::checkInterfacesForSide(manifestInterfaces, hostIfaces, true);
             if (!check.satisfied) {
@@ -3030,10 +3126,9 @@ asio::awaitable<void>
         const agentxx::agent::PluginConfig* cfg = nullptr;
     };
 
-    // agent 侧宿主支持集 (恒为 {agent.core}: libagentxx 是唯一 agent 宿主
-    // 实现, api_version 门禁通过即核心齐备; 见接口协商设计)
-    plugin::InterfaceSet hostIfaces;
-    hostIfaces.insert(std::string{plugin::plugin_interfaces::AgentCore});
+    // agent 侧宿主支持集 (agentxx.agent.core + 全部接口表 IID: libagentxx 是唯一
+    // agent 宿主实现, api_version 门禁通过即齐备; 见接口协商设计)
+    plugin::InterfaceSet hostIfaces = agentHostSupportedInterfaces();
 
     std::vector<Item> items;
     for (const auto& cfg : plugins) {
@@ -3214,9 +3309,11 @@ std::string PluginManager::getConfigJson() {
     j["platform"] = "linux";
 #endif
     // agent 宿主支持的接口名清单 (接口协商第 3 层: 插件运行时可发现;
-    // libagentxx 是唯一 agent 宿主实现, api_version 匹配即核心齐备)
+    // libagentxx 是唯一 agent 宿主实现, api_version 匹配即核心与标准表齐备)
     j["interfaces"] = neograph::json::array();
-    j["interfaces"].push_back(std::string{plugin::plugin_interfaces::AgentCore});
+    for (const auto& name : agentHostSupportedInterfaces()) {
+        j["interfaces"].push_back(name);
+    }
     return j.dump();
 }
 
