@@ -25,6 +25,7 @@
 #include "asio/thread_pool.hpp"
 #include "asio/use_awaitable.hpp"
 #include "fmt/format.h"
+#include "fmt/ranges.h"
 #include <chrono>
 #include <cstring>
 #include <filesystem>
@@ -176,6 +177,10 @@ void ClientPluginManager::setSessionId(std::string sessionId) {
     sessionId_ = std::move(sessionId);
 }
 
+InterfaceSet ClientPluginManager::hostSupportedInterfaces() const {
+    return clientHostInterfacesFromCaps(uiAdapter_ ? uiAdapter_->uiCaps() : 0);
+}
+
 // ==================== 生命周期 ====================
 
 asio::awaitable<std::shared_ptr<ClientPluginInstance>> ClientPluginManager::loadNativeAsync(
@@ -184,13 +189,14 @@ asio::awaitable<std::shared_ptr<ClientPluginInstance>> ClientPluginManager::load
     bool                                allowMissingEntry
 ) {
     // ---- 目录插件: 解析 plugin.yaml 取 entry 库路径 (与 agent 侧一致) ----
-    // - manifest: name/entry/depends/optional_depends
+    // - manifest: name/entry/depends/optional_depends/interfaces(接口声明)
     // - entry 平台化 + 配置子目录回退见公共 resolvePluginEntryPath
     // - 依赖解析与正式加载合并 (B3): 不再先 dlopen 探测再 close 后重新
     //   dlopen —— 本函数一次 dlopen 完成 探测(entry 符号) + 装配
     std::error_code          ec;
     std::string              libPath = path;
     std::vector<std::string> depends, optionalDepends;
+    PluginManifestInterfaces interfaces;
     if (std::filesystem::is_directory(path, ec)) {
         std::string manifestName, manifestEntry;
         if (!parsePluginManifest(
@@ -198,7 +204,9 @@ asio::awaitable<std::shared_ptr<ClientPluginInstance>> ClientPluginManager::load
                 manifestName,
                 manifestEntry,
                 depends,
-                optionalDepends
+                optionalDepends,
+                nullptr,
+                &interfaces
             )) {
             XX_LOGE("[client_plugin] `{}` missing/invalid plugin.yaml", path);
             co_return nullptr;
@@ -260,13 +268,53 @@ asio::awaitable<std::shared_ptr<ClientPluginInstance>> ClientPluginManager::load
         co_return nullptr;
     }
 
+    // ---- 接口协商门禁 (三层协商第 2 层; 见 plugin_common.h 接口协商节) ----
+    // require 中本侧相关项未满足 → 跳过加载 (INFO + 记录原因, 非错误:
+    // 同一插件目录服务 cli/tui/gui 多宿主, 本宿主缺某接口是预期情况);
+    // optional 缺失仅警告 (插件 entry 内应按 ui_caps()/interfaces 自降级)
+    {
+        auto check = checkInterfacesForSide(interfaces, hostSupportedInterfaces(), false);
+        if (!check.satisfied) {
+            auto missing = fmt::format("{}", fmt::join(check.missingRequired, ", "));
+            XX_LOGI(
+                "[client_plugin] `{}` skipped: host lacks required interface(s) [{}]",
+                name,
+                missing
+            );
+            util::insertOrAssignHeterogeneous(
+                skippedPlugins_,
+                name,
+                "missing required interfaces: " + missing
+            );
+            NativeLoader::close(handle);
+            co_return nullptr;
+        }
+        for (const auto& m : check.missingOptional) {
+            XX_LOGW(
+                "[client_plugin] `{}` optional interface `{}` not supported by host, "
+                "related features disabled",
+                name,
+                m
+            );
+        }
+    }
+
     // entry 入口 (必需): 探测与加载合并 (B3) —— 一次 dlopen 内查符号
     std::string entryErr;
     auto        entryFn = reinterpret_cast<AgentxxClientPluginEntryFn>(
         NativeLoader::sym(handle, AGENTXX_CLIENT_SYMBOL_ENTRY, entryErr)
     );
     if (!entryFn) {
-        if (allowMissingEntry) {
+        // 接口声明意图预检: manifest 声明依赖 client 侧接口却未导出
+        // client 入口 → 明确报错 (声明的期望优先于 sides==Auto 的静默容忍)
+        if (requiredEntrySides(interfaces.require).clientEntry) {
+            XX_LOGE(
+                "[client_plugin] `{}` requires client-side interfaces but missing {}: {}",
+                path,
+                AGENTXX_CLIENT_SYMBOL_ENTRY,
+                entryErr
+            );
+        } else if (allowMissingEntry) {
             // sides==Auto: 无 client 入口视为纯 agent 插件, 静默跳过
             XX_LOGI("[client_plugin] `{}` has no client entry, skipped (agent-only)", name);
         } else {
@@ -305,6 +353,7 @@ asio::awaitable<std::shared_ptr<ClientPluginInstance>> ClientPluginManager::load
     inst->dlHandle        = handle;
     inst->depends         = std::move(depends);
     inst->optionalDepends = std::move(optionalDepends);
+    inst->interfaces      = std::move(interfaces);
     inst->manager         = weak_from_this();
     inst->host.opaque     = inst.get();
     inst->host.vtable     = hostVtable();
@@ -556,6 +605,9 @@ asio::awaitable<void>
         const PluginConfig* cfg = nullptr;
     };
 
+    // 宿主支持接口集 (加载前计算一次; 三层协商第 2 层的 require 门禁数据源)
+    const auto hostIfaces = hostSupportedInterfaces();
+
     std::vector<Item> items;
     for (const auto& pc : plugins) {
         if (!pc.enabled) {
@@ -571,15 +623,37 @@ asio::awaitable<void>
         if (std::filesystem::is_directory(std::filesystem::path(pc.path))) {
             std::string              name, entry;
             std::vector<std::string> depends, optionalDepends;
+            PluginManifestInterfaces ifaces;
             if (parsePluginManifest(
                     std::filesystem::path(pc.path),
                     name,
                     entry,
                     depends,
-                    optionalDepends
+                    optionalDepends,
+                    nullptr,
+                    &ifaces
                 )) {
                 it.name    = name;
                 it.depends = std::move(depends);
+                // 接口协商门禁 (dlopen 前跳过): require 未满足 → 记录原因并
+                // 跳过 (INFO 非错误; loadNativeAsync 内对直连调用有同款检查)
+                auto check = checkInterfacesForSide(ifaces, hostIfaces, false);
+                if (!check.satisfied) {
+                    auto missing = fmt::format("{}", fmt::join(check.missingRequired, ", "));
+                    XX_LOGI(
+                        "[client_plugin] `{}` ({}) skipped: host lacks required "
+                        "interface(s) [{}]",
+                        name,
+                        pc.path,
+                        missing
+                    );
+                    util::insertOrAssignHeterogeneous(
+                        skippedPlugins_,
+                        name,
+                        "missing required interfaces: " + missing
+                    );
+                    continue;
+                }
             } else {
                 // 与 agent 侧行为对齐 (agent 侧会走 dlopen 失败报错):
                 // 目录存在但 plugin.yaml 缺失/非法时明确报错, 避免静默跳过
@@ -669,6 +743,8 @@ std::vector<ClientPluginManager::PluginListView> ClientPluginManager::list() con
         v.inflight        = inst->inflight.load(std::memory_order_relaxed);
         v.depends         = inst->depends;
         v.optionalDepends = inst->optionalDepends;
+        v.requiredInterfaces  = inst->interfaces.require;
+        v.optionalInterfaces  = inst->interfaces.optional;
         for (const auto& s : inst->statusItemRegs) {
             v.statusItems.push_back(s.id);
         }
@@ -790,7 +866,18 @@ std::string ClientPluginManager::clientStateJson() const {
     j["sessionId"]       = sessionId_;
     j["connState"]       = connState_;
     j["startupProgress"] = startupProgress_;
-    j["uiCaps"]          = uiAdapter_ ? static_cast<int>(uiAdapter_->uiCaps()) : 0;
+    uint32_t caps        = uiAdapter_ ? uiAdapter_->uiCaps() : 0;
+    j["uiCaps"]          = static_cast<int>(caps);
+    // 宿主支持的接口名清单 (uiCaps 位图的自描述镜像; 三层协商第 3 层 ——
+    // 插件据此自行决定启用哪些功能; 见 plugin_common.h 接口协商节)
+    j["interfaces"]      = [caps] {
+        auto          arr = neograph::json::array();
+        const auto    set = clientHostInterfacesFromCaps(caps);
+        for (const auto& n : set) {
+            arr.push_back(n);
+        }
+        return arr;
+    }();
     // 服务端已加载的 agent 侧插件名列表 (空数组 = 未知, 见成员注释)
     j["agentPlugins"]    = serverPlugins_;
     return j.dump();
@@ -814,8 +901,19 @@ void ClientPluginManager::postToIo(std::function<void()> fn) const {
 
 void ClientPluginManager::onReady() {
     neograph::json j = neograph::json::object();
-    j["uiCaps"]      = uiAdapter_ ? static_cast<int>(uiAdapter_->uiCaps()) : 0;
-    j["sessionId"]   = sessionId_;
+    uint32_t caps      = uiAdapter_ ? uiAdapter_->uiCaps() : 0;
+    j["uiCaps"]        = static_cast<int>(caps);
+    // 宿主支持的接口名清单 (与 clientStateJson 同源; 启动后最早可得的
+    // 协商结果, 插件在 READY 回调内即可完成功能启用决策)
+    j["interfaces"]    = [caps] {
+        auto       arr = neograph::json::array();
+        const auto set = clientHostInterfacesFromCaps(caps);
+        for (const auto& n : set) {
+            arr.push_back(n);
+        }
+        return arr;
+    }();
+    j["sessionId"]     = sessionId_;
     dispatchEvent(AGENTXX_CLIENT_EVT_READY, j.dump());
 }
 
@@ -1973,6 +2071,12 @@ int ClientPluginManager::registerCommand(
     void* ud
 ) {
     if (!inst || !exec) {
+        return -1;
+    }
+    // 命令输入管线能力位 (AGENTXX_IFACE_COMMAND): 无命令输入面的宿主
+    // (位未置) 拒绝注册 —— 与其他 register_* 的能力门禁行为一致
+    if (uiAdapter_ && !(uiAdapter_->uiCaps() & AGENTXX_IFACE_COMMAND)) {
+        XX_LOGW("[client_plugin] command `{}` rejected: UI has no COMMAND cap", name);
         return -1;
     }
     {

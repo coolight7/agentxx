@@ -8,3 +8,7 @@ description: "Example JS plugin: C++ shell + JS via interpreter.js capability"
 entry: libexample_js.so
 depends:
   - agentxx_javascript_engine
+# 接口协商: 能力调用属核心接口范围
+interfaces:
+  require:
+    - agent.core

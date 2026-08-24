@@ -64,6 +64,9 @@ public:
     std::vector<std::string> depends;
     /// 可选依赖 (插件名): 未安装仅警告, 不影响加载
     std::vector<std::string> optionalDepends;
+    /// 接口声明 (plugin.yaml `interfaces`; 加载时随 manifest 解析传入,
+    /// 直连库路径为空) —— 门禁依据, 经 list()/list_plugins JSON 暴露
+    PluginManifestInterfaces interfaces;
     void*                    dlHandle = nullptr; ///< dlopen/LoadLibrary 句柄 (内置插件为空)
     /// 内置插件卸载回调 (编译进 libagentxx 的插件; dlHandle 为空时使用,
     /// 无需 dlsym 查符号)
@@ -270,6 +273,9 @@ public:
         std::vector<std::string> capabilities;
         std::vector<std::string> depends;
         std::vector<std::string> optionalDepends;
+        /// 接口声明 (plugin.yaml `interfaces`; 空 = 未声明)
+        std::vector<std::string> requiredInterfaces;
+        std::vector<std::string> optionalInterfaces;
     };
 
     explicit PluginManager(std::weak_ptr<agentxx::agent::AgentContext> agentContext);
@@ -284,16 +290,21 @@ public:
     /// - cfg: 插件配置 (yaml `plugins` 条目; 传 args 给插件, 不解析字段语义);
     ///   为 nullptr 时 args 为空对象 (测试/直连路径)
     /// - allowClientOnlySkip: sides==Auto 时无 agent 入口视为纯 client 插件,
-    ///   跳过并警告 (而非报错); 显式 sides==agent 的加载保持错误
+    ///   跳过并警告 (而非报错); 显式 sides==agent 的加载保持错误。
+    ///   例外: manifest interfaces.require 声明了 agent 侧接口 → 缺入口为
+    ///   明确错误 (声明意图优先于 Auto 容忍, 见接口协商设计)
     /// - resources: 插件清单资源声明 (skill/memory/mcp; 目录插件经
     ///   parsePluginManifest 解析后传入) —— entry 成功后经 resourceApplier
     ///   应用; 加载失败不应用 ("失败不生效")
+    /// - interfaces: 插件清单接口声明 (require/optional; 见
+    ///   PluginManifestInterfaces) —— require 未满足时跳过加载
     /// - 返回插件实例; 加载失败返回 nullptr (错误记日志)
     asio::awaitable<std::shared_ptr<PluginInstance>> loadNativeAsync(
         std::string                                path,
         const agentxx::agent::PluginConfig*        cfg                 = nullptr,
         bool                                       allowClientOnlySkip = false,
-        const plugin::PluginManifestResources&     resources           = {}
+        const plugin::PluginManifestResources&     resources           = {},
+        const plugin::PluginManifestInterfaces&    interfaces          = {}
     );
 
     /// 加载内置插件 (编译进 libagentxx, 无动态库文件; io 线程调用)
@@ -303,14 +314,15 @@ public:
     ///   plugin.yaml 解析)
     /// - entry 调用卸载到线程池执行 (与 loadNativeAsync 相同, 避免 io↔引擎
     ///   互等死锁); 返回插件实例; 失败返回 nullptr (错误记日志)
-    /// - resources: 插件清单资源声明 (语义同 loadNativeAsync)
+    /// - resources/interfaces: 插件清单声明 (语义同 loadNativeAsync)
     asio::awaitable<std::shared_ptr<PluginInstance>> loadBuiltinAsync(
         std::string                            name,
         std::string                            path,
         std::vector<std::string>               depends,
         std::vector<std::string>               optionalDepends,
-        const agentxx::agent::PluginConfig*    cfg      = nullptr,
-        const plugin::PluginManifestResources& resources = {}
+        const agentxx::agent::PluginConfig*    cfg        = nullptr,
+        const plugin::PluginManifestResources& resources  = {},
+        const plugin::PluginManifestInterfaces& interfaces = {}
     );
 
     /// 卸载插件 (按名称; 等全部在途回调完成后才 dlclose)

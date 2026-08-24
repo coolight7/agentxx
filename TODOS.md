@@ -1,14 +1,16 @@
 # TODO
-- graph json 定义
 - BaseAgent 增加支持 usage 统计
-- 会话yaml配置文件、工作目录、插件
+- 会话独立 yaml配置文件、工作目录、插件
 - eventBus 改为tree，命名空间使用 axx/bxx/cc
 - 支持修改上下文
-- 客户端 viewMessage 分页
-- 调整插件代码结构，增加测试、划分文件夹
+- ASAN、TSAN、UBSAN
+- git worktree
 - 验证subagent、summarization
 - CI/CD
 - 文档翻译
+- graph json 定义，支持插件生成 graph json、注册 node; (最多只能有一个插件生成 graph，都没有则默认生成 CodeAgent)
+- 调整插件代码结构，增加测试、划分文件夹
+- 部分 tool 拆分为 插件，内置编译
 - 插件框架说明 必须实现的接口、可选实现的接口，插件根据说明列表决定是否启用；以适配不同 client 可能支持的接口不同
 
 ## 提示词优化

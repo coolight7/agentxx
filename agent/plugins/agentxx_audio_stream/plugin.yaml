@@ -3,3 +3,7 @@ version: 1.0.0
 description: "Audio stream capture: system output / program output / microphone (Windows WASAPI)"
 entry: libagentxx_audio_stream.so
 depends:
+# 接口协商: 纯 agent 侧工具插件
+interfaces:
+  require:
+    - agent.core

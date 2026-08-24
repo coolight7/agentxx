@@ -3,3 +3,7 @@ version: 1.0.0
 description: "Screen capture on Windows: all screens, mouse screen, specific screen, and streaming"
 entry: libagentxx_screen_capture.so
 depends:
+# 接口协商: 纯 agent 侧工具插件, 仅依赖核心接口 (client 侧无入口, 自动跳过)
+interfaces:
+  require:
+    - agent.core

@@ -3,6 +3,7 @@
 #include "agentxx/agent/config.h"
 #include "agentxx/agent/io/client_event_sink.h"
 #include "agentxx/plugin/client_plugin_api.h"
+#include "agentxx/plugin/plugin_common.h" /* PluginManifestInterfaces / InterfaceSet */
 #include "asio/any_io_executor.hpp"
 #include "asio/awaitable.hpp"
 #include "asio/thread_pool.hpp"
@@ -87,6 +88,9 @@ public:
     std::vector<std::string> depends;
     /// 可选依赖 (插件名): 未安装仅警告, 不影响加载
     std::vector<std::string> optionalDepends;
+    /// 接口声明 (plugin.yaml `interfaces`; 加载时随 manifest 解析传入,
+    /// 直连库路径为空) —— 宿主门禁依据, 经 list() 暴露供展示/排查
+    PluginManifestInterfaces interfaces;
     void*                    dlHandle  = nullptr; ///< dlopen/LoadLibrary 句柄
     void*                    pluginCtx = nullptr; ///< entry 输出的插件私有上下文
     bool                     enabled   = true; ///< 是否启用 (禁用: UI 项摘除/命令停用)
@@ -189,6 +193,9 @@ public:
         std::vector<std::string> commands;
         std::vector<std::string> depends;
         std::vector<std::string> optionalDepends;
+        /// 接口声明 (plugin.yaml `interfaces`; 空 = 未声明)
+        std::vector<std::string> requiredInterfaces;
+        std::vector<std::string> optionalInterfaces;
     };
 
     explicit ClientPluginManager(asio::any_io_executor ex);
@@ -252,6 +259,17 @@ public:
 
     std::vector<PluginListView>           list() const;
     std::shared_ptr<ClientPluginInstance> find(std::string_view name) const;
+
+    /// 因接口要求未满足而被跳过的插件 (name → 缺失接口描述; io 线程;
+    /// 加载阶段写入, 供展示层/排查 "为什么没加载" —— 跳过的插件不会出现在
+    /// list() 中, 原因单独记录)
+    const std::map<std::string, std::string>& skippedPlugins() const {
+        return skippedPlugins_;
+    }
+
+    /// 宿主当前支持的接口名集合 (由 uiAdapter->uiCaps() 位图映射; io 线程;
+    /// 门禁检查与 EVT_READY / get_client_state 的 interfaces 数组共用本结果)
+    InterfaceSet hostSupportedInterfaces() const;
 
     // ==================== UI 注册表 (任意线程) ====================
 
@@ -413,6 +431,9 @@ private:
     /// 收到 WirePluginData 但无任何 client 插件订阅 EVT_PLUGIN_DATA 时,
     /// 多半是对端插件未在本地加载 —— 提示一次便于排查, 不随事件频率刷屏
     std::set<std::string> pluginDataNoSubWarned_;
+
+    /// 因接口要求未满足被跳过的插件 (io 线程; 见 skippedPlugins())
+    std::map<std::string, std::string> skippedPlugins_{};
 
     asio::any_io_executor ioExecutor_{};
     std::thread::id       ioThreadId_{};

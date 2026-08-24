@@ -3,3 +3,12 @@ version: 1.0.0
 description: "System resource monitor: CPU/memory/GPU usage (tool agentxx_get_system_core_info, capability agentxx.system_usage)"
 entry: libagentxx_system_monitor.so
 depends:
+# ---- 接口协商 (按前缀归属侧: agent.* 仅 agent 侧检查, client.* 仅 client 侧) ----
+# - client.info_section / client.command 可选: CLI 无 Info 栏时注册失败降级;
+#   无命令输入面的宿主下 /sysinfo 不可用 (数据接收不受影响)
+interfaces:
+  require:
+    - agent.core
+  optional:
+    - client.info_section
+    - client.command

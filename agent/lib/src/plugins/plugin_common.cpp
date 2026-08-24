@@ -5,6 +5,7 @@
  */
 #include "agentxx/plugin/plugin_common.h"
 
+#include "agentxx/plugin/client_plugin_api.h"
 #include "agentxx/util/log.h"
 #include "yaml-cpp/yaml.h"
 
@@ -39,7 +40,8 @@ bool parsePluginManifest(
     std::string&                 entry,
     std::vector<std::string>&    depends,
     std::vector<std::string>&    optionalDepends,
-    PluginManifestResources*     resources
+    PluginManifestResources*     resources,
+    PluginManifestInterfaces*    interfaces
 ) {
     auto            yamlPath = dir / "plugin.yaml";
     std::error_code ec;
@@ -139,6 +141,39 @@ bool parsePluginManifest(
                 }
             }
         }
+        // ---- 接口声明段 (require/optional; 见 PluginManifestInterfaces) ----
+        // 段缺失/非法项跳过并告警, 不影响 manifest 合法性 (声明是可选增强);
+        // 名称仅做非空校验, 语义 (前缀归属/宿主支持集比对) 由加载路径的
+        // checkInterfacesForSide 处理 —— 解析与协商解耦, 第三方前缀天然合法
+        if (interfaces) {
+            *interfaces = PluginManifestInterfaces{};
+            auto readList = [&yamlPath](const YAML::Node&      section,
+                                        std::vector<std::string>& out,
+                                        std::string_view          what) {
+                if (!section || !section.IsSequence()) {
+                    return;
+                }
+                for (const auto& item : section) {
+                    if (!item.IsScalar()) {
+                        continue;
+                    }
+                    auto n = item.as<std::string>();
+                    if (n.empty()) {
+                        XX_LOGW(
+                            "Plugin manifest `{}` interfaces.{} has empty name, skipped",
+                            yamlPath.string(),
+                            what
+                        );
+                        continue;
+                    }
+                    out.push_back(std::move(n));
+                }
+            };
+            if (node["interfaces"] && node["interfaces"].IsMap()) {
+                readList(node["interfaces"]["require"], interfaces->require, "require");
+                readList(node["interfaces"]["optional"], interfaces->optional, "optional");
+            }
+        }
     } catch (const std::exception& e) {
         XX_LOGE("Parse plugin manifest `{}` failed: {}", yamlPath.string(), e.what());
         return false;
@@ -177,6 +212,103 @@ std::string resolvePluginEntryPath(const std::filesystem::path& dir, const std::
         }
     }
     return entryPath;
+}
+
+// ==================== 接口协商基础设施 ====================
+
+namespace {
+
+/// 能力位 ↔ 接口名映射条目
+struct CapNameEntry {
+    uint32_t    cap;
+    const char* name;
+};
+
+/// AGENTXX_UI_CAP_* (低位段) → 接口名 (与 client_plugin_api.h 位定义一一对应)
+constexpr CapNameEntry kUiCapNames[] = {
+    {AGENTXX_UI_CAP_STATUS_ITEM,  "client.status_item"},
+    {AGENTXX_UI_CAP_PANEL,        "client.panel"},
+    {AGENTXX_UI_CAP_TOAST,        "client.toast"},
+    {AGENTXX_UI_CAP_KEYBIND,      "client.keybind"},
+    {AGENTXX_UI_CAP_PROMPT,       "client.prompt_modal"},
+    {AGENTXX_UI_CAP_MSG_DECOR,    "client.msg_decor"},
+    {AGENTXX_UI_CAP_INFO_SECTION, "client.info_section"},
+};
+
+/// AGENTXX_IFACE_* (高位段, 非展示类接口) → 接口名
+constexpr CapNameEntry kIfaceCapNames[] = {
+    {AGENTXX_IFACE_COMMAND, "client.command"},
+};
+
+} // namespace
+
+bool sideCaresAboutInterface(std::string_view name, bool agentSide) {
+    if (name.starts_with("agent.")) {
+        return agentSide;
+    }
+    if (name.starts_with("client.")) {
+        return !agentSide;
+    }
+    // 无前缀 / <vendor>.*: 两侧都检查 (宿主不认识即不支持, 保守安全)
+    return true;
+}
+
+InterfaceCheckResult checkInterfacesForSide(
+    const PluginManifestInterfaces& decl,
+    const InterfaceSet&             hostSupported,
+    bool                            agentSide
+) {
+    InterfaceCheckResult out;
+    auto                 check = [&](const std::vector<std::string>& list, bool required) {
+        for (const auto& n : list) {
+            if (!sideCaresAboutInterface(n, agentSide)) {
+                continue; // 另一侧的声明与本侧无关
+            }
+            if (hostSupported.contains(n)) {
+                continue;
+            }
+            if (required) {
+                out.missingRequired.push_back(n);
+            } else {
+                out.missingOptional.push_back(n);
+            }
+        }
+    };
+    check(decl.require, true);
+    check(decl.optional, false);
+    out.satisfied = out.missingRequired.empty();
+    return out;
+}
+
+RequiredEntrySides requiredEntrySides(const std::vector<std::string>& interfaces) {
+    RequiredEntrySides out;
+    for (const auto& n : interfaces) {
+        if (n.starts_with("agent.")) {
+            out.agentEntry = true;
+        } else if (n.starts_with("client.")) {
+            out.clientEntry = true;
+        } else {
+            // 无前缀 / vendor 前缀: 保守视为两侧都可能依赖
+            out.agentEntry  = true;
+            out.clientEntry = true;
+        }
+    }
+    return out;
+}
+
+InterfaceSet clientHostInterfacesFromCaps(uint32_t caps) {
+    InterfaceSet out;
+    for (const auto& e : kUiCapNames) {
+        if ((caps & e.cap) != 0) {
+            out.insert(e.name);
+        }
+    }
+    for (const auto& e : kIfaceCapNames) {
+        if ((caps & e.cap) != 0) {
+            out.insert(e.name);
+        }
+    }
+    return out;
 }
 
 } // namespace plugin

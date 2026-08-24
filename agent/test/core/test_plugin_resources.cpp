@@ -17,6 +17,7 @@
 #include "agentxx/middlewares/memory_file.h"
 #include "agentxx/middlewares/middleware.h"
 #include "agentxx/middlewares/skill.h"
+#include "agentxx/plugin/client_plugin_api.h" /* AGENTXX_UI_CAP_* / AGENTXX_IFACE_* */
 #include "agentxx/plugin/plugin_common.h"
 #include "agentxx/plugin/plugin_manager.h"
 #include "agentxx/util/log.h"
@@ -186,18 +187,26 @@ mcp:
   - namespace: mt
     url: https://a.example.com/sse
     timeout: 7
+interfaces:
+  require:
+    - agent.core
+    - client.panel
+  optional:
+    - client.toast
 )yaml"
         );
         std::string              name, entry;
         std::vector<std::string> depends, optDepends;
-        plugin::PluginManifestResources res;
+        plugin::PluginManifestResources    res;
+        plugin::PluginManifestInterfaces   ifaces;
         XX_TEST_EXPECT_TRUE(plugin::parsePluginManifest(
             dir,
             name,
             entry,
             depends,
             optDepends,
-            &res
+            &res,
+            &ifaces
         ));
         XX_TEST_EXPECT_EQ(name, "mres");
         XX_TEST_EXPECT_TRUE(res.skillDirs.size() == 1);
@@ -212,6 +221,75 @@ mcp:
         if (res.mcpServers.contains("mt")) {
             XX_TEST_EXPECT_EQ(res.mcpServers["mt"].url, std::string{"https://a.example.com/sse"});
             XX_TEST_EXPECT_TRUE(res.mcpServers["mt"].timeoutMs == 7000);
+        }
+        // ---- 接口声明段解析 (接口协商; 见 plugin_common.h) ----
+        XX_TEST_EXPECT_TRUE(ifaces.require.size() == 2);
+        XX_TEST_EXPECT_TRUE(contains(ifaces.require, "agent.core"));
+        XX_TEST_EXPECT_TRUE(contains(ifaces.require, "client.panel"));
+        XX_TEST_EXPECT_TRUE(ifaces.optional.size() == 1);
+        if (ifaces.optional.size() == 1) {
+            XX_TEST_EXPECT_EQ(ifaces.optional[0], std::string{"client.toast"});
+        }
+
+        // ---- 前缀归属: agent.* 仅 agent 侧关心, client.* 仅 client 侧 ----
+        XX_TEST_EXPECT_TRUE(plugin::sideCaresAboutInterface("agent.core", true));
+        XX_TEST_EXPECT_FALSE(plugin::sideCaresAboutInterface("agent.core", false));
+        XX_TEST_EXPECT_TRUE(plugin::sideCaresAboutInterface("client.panel", false));
+        XX_TEST_EXPECT_FALSE(plugin::sideCaresAboutInterface("client.panel", true));
+        XX_TEST_EXPECT_TRUE(plugin::sideCaresAboutInterface("vendor.custom", true));
+        XX_TEST_EXPECT_TRUE(plugin::sideCaresAboutInterface("vendor.custom", false));
+
+        // ---- 宿主支持集门禁 (client 视角) ----
+        {
+            auto caps   = AGENTXX_UI_CAP_PANEL | AGENTXX_IFACE_COMMAND;
+            auto hostIf = plugin::clientHostInterfacesFromCaps(caps);
+            XX_TEST_EXPECT_TRUE(hostIf.contains("client.panel"));
+            XX_TEST_EXPECT_TRUE(hostIf.contains("client.command"));
+            XX_TEST_EXPECT_FALSE(hostIf.contains("client.toast"));
+
+            // 满足场景: require 中 agent.* 被忽略 (client 视角), client.panel
+            // 受支持 → satisfied; 可选 client.toast 缺失仅进 missingOptional
+            auto r1 = plugin::checkInterfacesForSide(ifaces, hostIf, false);
+            XX_TEST_EXPECT_TRUE(r1.satisfied);
+            XX_TEST_EXPECT_TRUE(r1.missingRequired.empty());
+            XX_TEST_EXPECT_TRUE(r1.missingOptional.size() == 1);
+            XX_TEST_EXPECT_TRUE(r1.missingOptional[0] == "client.toast");
+
+            // 不满足场景: require 声明宿主不支持的接口 → 列出全部缺失项
+            plugin::PluginManifestInterfaces unsat;
+            unsat.require.push_back("client.info_section"); // caps 未含
+            unsat.require.push_back("vendor.custom");
+            auto r1b = plugin::checkInterfacesForSide(unsat, hostIf, false);
+            XX_TEST_EXPECT_TRUE(!r1b.satisfied);
+            XX_TEST_EXPECT_TRUE(r1b.missingRequired.size() == 2);
+            XX_TEST_EXPECT_TRUE(contains(r1b.missingRequired, "client.info_section"));
+            XX_TEST_EXPECT_TRUE(contains(r1b.missingRequired, "vendor.custom"));
+
+            // agent 视角: client.* 全部被忽略, agent.core 受支持 → 满足
+            // (agent 宿主支持集 = {agent.core}, 见接口协商设计)
+            plugin::InterfaceSet agentHostIf;
+            agentHostIf.insert("agent.core");
+            auto r2 = plugin::checkInterfacesForSide(ifaces, agentHostIf, true);
+            XX_TEST_EXPECT_TRUE(r2.satisfied && r2.missingRequired.empty());
+            // vendor 前缀: 双方都检查 (agent 视角同样不满足)
+            plugin::PluginManifestInterfaces vendorDecl;
+            vendorDecl.require.push_back("vendor.custom");
+            auto r3 = plugin::checkInterfacesForSide(vendorDecl, agentHostIf, true);
+            XX_TEST_EXPECT_TRUE(!r3.satisfied);
+        }
+
+        // ---- 入口符号意图推导 ----
+        {
+            plugin::PluginManifestInterfaces d;
+            d.require = {"agent.core"};
+            auto s1   = plugin::requiredEntrySides(d.require);
+            XX_TEST_EXPECT_TRUE(s1.agentEntry && !s1.clientEntry);
+            d.require = {"client.panel", "client.command"};
+            auto s2   = plugin::requiredEntrySides(d.require);
+            XX_TEST_EXPECT_TRUE(!s2.agentEntry && s2.clientEntry);
+            d.require = {"vendor.x"};
+            auto s3   = plugin::requiredEntrySides(d.require);
+            XX_TEST_EXPECT_TRUE(s3.agentEntry && s3.clientEntry);
         }
     }
 

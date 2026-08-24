@@ -4,3 +4,7 @@ description: "Computer control on Windows: keyboard/mouse (ui_control); screen c
 entry: libagentxx_computer_use.so
 depends:
   - agentxx_screen_capture
+# 接口协商: 纯 agent 侧工具插件
+interfaces:
+  require:
+    - agent.core

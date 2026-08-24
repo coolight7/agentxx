@@ -18,6 +18,7 @@
 #include "asio/this_coro.hpp"
 #include "asio/use_awaitable.hpp"
 #include "fmt/format.h"
+#include "fmt/ranges.h"
 #include "neograph/graph/cancel.h"
 
 #include <algorithm>
@@ -2124,7 +2125,8 @@ PluginManager::loadNativeAsync(
     std::string                            path,
     const agentxx::agent::PluginConfig*    cfg,
     bool                                   allowClientOnlySkip,
-    const plugin::PluginManifestResources& resources
+    const plugin::PluginManifestResources& resources,
+    const plugin::PluginManifestInterfaces& interfaces
 ) {
     auto ctx = agentContext_.lock();
     if (!ctx || !ctx->threadPool) {
@@ -2186,7 +2188,17 @@ PluginManager::loadNativeAsync(
         NativeLoader::sym(handle, AGENTXX_PLUGIN_SYMBOL_ENTRY, err)
     );
     if (!entry) {
-        if (allowClientOnlySkip) {
+        // 接口声明意图预检: manifest 声明依赖 agent 侧接口却未导出 agent
+        // 入口 → 明确报错 (声明意图优先于 sides==Auto 的容忍; 见接口协商设计)
+        if (plugin::requiredEntrySides(interfaces.require).agentEntry) {
+            XX_LOGE(
+                "Plugin `{}` requires agent-side interfaces but missing entry "
+                "symbol `{}`: {}",
+                path,
+                AGENTXX_PLUGIN_SYMBOL_ENTRY,
+                err
+            );
+        } else if (allowClientOnlySkip) {
             // sides==Auto: 无 agent 入口视为纯 client 插件, 跳过并警告
             // (与 client 侧 Auto 无 client 入口静默跳过对称; 显式
             // sides==agent 的加载缺失入口仍为错误 —— 配置写明了期望)
@@ -2208,6 +2220,34 @@ PluginManager::loadNativeAsync(
         co_return nullptr;
     }
 
+    // ---- 接口协商门禁 (三层协商第 2 层; 见 plugin_common.h 接口协商节) ----
+    // - agent 宿主仅 libagentxx 一个实现 (api_version 门禁已通过 ⇒ 核心接口
+    //   齐备), 支持集恒为 {agent.core}; require 中 agent.*/vendor.* 未满足
+    //   → 跳过加载 (INFO + 原因), optional 缺失仅警告
+    // - 与 client 侧对称保留统一代码路径 (未来第三方 agent 宿主直接复用)
+    {
+        plugin::InterfaceSet hostIfaces;
+        hostIfaces.insert(std::string{plugin::plugin_interfaces::AgentCore});
+        auto check = plugin::checkInterfacesForSide(interfaces, hostIfaces, true);
+        if (!check.satisfied) {
+            XX_LOGI(
+                "Plugin `{}` skipped on agent side: host lacks required interface(s) [{}]",
+                name,
+                fmt::join(check.missingRequired, ", ")
+            );
+            NativeLoader::close(handle);
+            co_return nullptr;
+        }
+        for (const auto& m : check.missingOptional) {
+            XX_LOGW(
+                "Plugin `{}` optional interface `{}` not supported by host, "
+                "related features disabled",
+                name,
+                m
+            );
+        }
+    }
+
     auto inst         = std::make_shared<PluginInstance>(name);
     inst->version     = std::move(version);
     inst->description = std::move(desc);
@@ -2217,6 +2257,9 @@ PluginManager::loadNativeAsync(
     inst->manager     = shared_from_this();
     inst->host.vtable = &g_hostVtable;
     inst->host.opaque = inst.get();
+    // 接口声明随加载传入 (manifest 解析产物; 直连路径为空) —— 经
+    // list()/list_plugins JSON 暴露, 供插件互查与展示层使用
+    inst->interfaces  = interfaces;
 
     util::insertOrAssignHeterogeneous(plugins_, name, inst);
 
@@ -2279,12 +2322,13 @@ PluginManager::loadNativeAsync(
 }
 
 asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadBuiltinAsync(
-    std::string                            name,
-    std::string                            path,
-    std::vector<std::string>               depends,
-    std::vector<std::string>               optionalDepends,
-    const agentxx::agent::PluginConfig*    cfg,
-    const plugin::PluginManifestResources& resources
+    std::string                             name,
+    std::string                             path,
+    std::vector<std::string>                depends,
+    std::vector<std::string>                optionalDepends,
+    const agentxx::agent::PluginConfig*     cfg,
+    const plugin::PluginManifestResources&  resources,
+    const plugin::PluginManifestInterfaces& interfaces
 ) {
     auto ctx = agentContext_.lock();
     if (!ctx || !ctx->threadPool) {
@@ -2341,6 +2385,9 @@ asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadBuiltinAsync
     inst->builtinUnload   = entry->unload;
     inst->depends         = std::move(depends);
     inst->optionalDepends = std::move(optionalDepends);
+    // 接口声明随加载传入 (与 loadNativeAsync 同语义; 内置插件符号天然齐备,
+    // 门禁已在 loadPluginAsync 目录分支完成)
+    inst->interfaces      = interfaces;
     inst->self            = inst;
     inst->manager         = shared_from_this();
     inst->host.vtable     = &g_hostVtable;
@@ -2845,13 +2892,16 @@ asio::awaitable<std::shared_ptr<PluginInstance>>
         std::vector<std::string> depends, optionalDepends;
         // 资源声明段 (v8): skill/memory/mcp —— entry 成功后应用 (失败不生效)
         plugin::PluginManifestResources manifestResources;
+        // 接口声明段 (require/optional): 加载前门禁 (见接口协商设计)
+        plugin::PluginManifestInterfaces manifestInterfaces;
         if (!parsePluginManifest(
                 fs::path(path),
                 name,
                 entry,
                 depends,
                 optionalDepends,
-                &manifestResources
+                &manifestResources,
+                &manifestInterfaces
             )) {
             XX_LOGW("Plugin dir `{}` manifest invalid or missing", path);
             co_return nullptr;
@@ -2859,6 +2909,24 @@ asio::awaitable<std::shared_ptr<PluginInstance>>
         // 依赖检查 (必选缺失/可选警告/环检测)
         if (!checkDependencies(name, depends, optionalDepends)) {
             co_return nullptr;
+        }
+        // 接口协商门禁 (agent 侧支持集恒为 {agent.core}: libagentxx 是唯一
+        // agent 宿主实现, api_version 门禁通过即核心齐备)
+        {
+            plugin::InterfaceSet hostIfaces;
+            hostIfaces.insert(std::string{plugin::plugin_interfaces::AgentCore});
+            auto check
+                = plugin::checkInterfacesForSide(manifestInterfaces, hostIfaces, true);
+            if (!check.satisfied) {
+                XX_LOGI(
+                    "Plugin `{}` ({}) skipped on agent side: host lacks required "
+                    "interface(s) [{}]",
+                    name,
+                    path,
+                    fmt::join(check.missingRequired, ", ")
+                );
+                co_return nullptr;
+            }
         }
         // 所有插件统一为 C++ 插件: entry 总是指向动态库
         // (脚本能力由插件内部经能力调用委派给 interpreter 引擎, 宿主不参与)
@@ -2871,7 +2939,8 @@ asio::awaitable<std::shared_ptr<PluginInstance>>
                 std::move(entryPath),
                 cfg,
                 allowClientOnlySkip,
-                manifestResources
+                manifestResources,
+                manifestInterfaces
             );
             if (inst) {
                 inst->depends         = std::move(depends);
@@ -2897,7 +2966,8 @@ asio::awaitable<std::shared_ptr<PluginInstance>>
                 std::move(depends),
                 std::move(optionalDepends),
                 cfg,
-                manifestResources
+                manifestResources,
+                manifestInterfaces
             );
         }
         // 非内置模式: 保持原行为 (loadNativeAsync 报告 dlopen 失败)
@@ -2934,6 +3004,11 @@ asio::awaitable<void>
         const agentxx::agent::PluginConfig* cfg = nullptr;
     };
 
+    // agent 侧宿主支持集 (恒为 {agent.core}: libagentxx 是唯一 agent 宿主
+    // 实现, api_version 门禁通过即核心齐备; 见接口协商设计)
+    plugin::InterfaceSet hostIfaces;
+    hostIfaces.insert(std::string{plugin::plugin_interfaces::AgentCore});
+
     std::vector<Item> items;
     for (const auto& cfg : plugins) {
         if (!cfg.enabled) {
@@ -2948,7 +3023,29 @@ asio::awaitable<void>
         if (fs::is_directory(cfg.path, ec)) {
             std::string              name, entry;
             std::vector<std::string> depends, optionalDepends;
-            if (parsePluginManifest(fs::path(cfg.path), name, entry, depends, optionalDepends)) {
+            plugin::PluginManifestInterfaces ifaces;
+            if (parsePluginManifest(
+                    fs::path(cfg.path),
+                    name,
+                    entry,
+                    depends,
+                    optionalDepends,
+                    nullptr,
+                    &ifaces
+                )) {
+                // 接口协商门禁 (dlopen 前跳过; loadPluginAsync 内对直连调用
+                // 有同款检查)
+                auto check = plugin::checkInterfacesForSide(ifaces, hostIfaces, true);
+                if (!check.satisfied) {
+                    XX_LOGI(
+                        "[Config] plugin `{}` ({}) skipped on agent side: host lacks "
+                        "required interface(s) [{}]",
+                        name,
+                        cfg.path,
+                        fmt::join(check.missingRequired, ", ")
+                    );
+                    continue;
+                }
                 items.push_back(Item{cfg.path, name, depends, &cfg});
                 continue;
             }
@@ -2989,6 +3086,8 @@ std::vector<PluginManager::PluginListView> PluginManager::list() const {
             std::move(capNames),
             inst->depends,
             inst->optionalDepends,
+            inst->interfaces.require,
+            inst->interfaces.optional,
         });
     }
     return out;
@@ -3020,6 +3119,15 @@ static neograph::json pluginInfoToJson(const PluginManager::PluginListView& p) {
     j["optional_depends"] = neograph::json::array();
     for (const auto& d : p.optionalDepends) {
         j["optional_depends"].push_back(d);
+    }
+    // 接口声明 (接口协商; 空 = 未声明) —— 插件互查/展示层使用
+    j["required_interfaces"] = neograph::json::array();
+    for (const auto& n : p.requiredInterfaces) {
+        j["required_interfaces"].push_back(n);
+    }
+    j["optional_interfaces"] = neograph::json::array();
+    for (const auto& n : p.optionalInterfaces) {
+        j["optional_interfaces"].push_back(n);
     }
     return j;
 }
@@ -3054,6 +3162,8 @@ std::string PluginManager::getPluginJson(const std::string& name) {
         std::move(capNames),
         inst->depends,
         inst->optionalDepends,
+        inst->interfaces.require,
+        inst->interfaces.optional,
     };
     return pluginInfoToJson(p).dump();
 }
@@ -3077,6 +3187,10 @@ std::string PluginManager::getConfigJson() {
 #else
     j["platform"] = "linux";
 #endif
+    // agent 宿主支持的接口名清单 (接口协商第 3 层: 插件运行时可发现;
+    // libagentxx 是唯一 agent 宿主实现, api_version 匹配即核心齐备)
+    j["interfaces"] = neograph::json::array();
+    j["interfaces"].push_back(std::string{plugin::plugin_interfaces::AgentCore});
     return j.dump();
 }
 

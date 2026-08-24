@@ -46,9 +46,15 @@ extern "C" {
 
 #define AGENTXX_CLIENT_PLUGIN_API_VERSION 3
 
-/* ==================== UI 能力位 (宿主 ↔ 插件协商) ==================== */
+/* ==================== 能力位 (宿主 ↔ 插件协商) ==================== */
 
 /// 宿主支持的 UI 能力位图 (register_* 前可用 ui_caps() 查询; 不支持则注册失败)
+/// - 低位段 [1<<0, 1<<15): UI 展示类能力 (AGENTXX_UI_CAP_*)
+/// - 高位段 [1<<16, ...): 非展示类接口能力 (AGENTXX_IFACE_*); 语义推广自
+///   v3 的纯 UI 位图 —— 旧宿主不会置高位段, 新插件判位自然降级, 无需
+///   bump API 版本。名称↔位映射表唯一出处见 plugin_common.cpp
+///   (clientHostInterfacesFromCaps); 字符串形式的接口清单另经 EVT_READY /
+///   get_client_state 的 "interfaces" 数组提供 (自描述, 第三方/工具可消费)
 #define AGENTXX_UI_CAP_STATUS_ITEM  (1u << 0) ///< 状态栏项
 #define AGENTXX_UI_CAP_PANEL        (1u << 1) ///< 侧边栏面板
 #define AGENTXX_UI_CAP_TOAST        (1u << 2) ///< toast 提示
@@ -56,6 +62,12 @@ extern "C" {
 #define AGENTXX_UI_CAP_PROMPT       (1u << 4) ///< 模态询问 (预留, 二期)
 #define AGENTXX_UI_CAP_MSG_DECOR    (1u << 5) ///< 消息装饰 (预留, 二期)
 #define AGENTXX_UI_CAP_INFO_SECTION (1u << 6) ///< 侧边栏 Info 栏段落扩展
+
+/// ---- 高位段: 非展示类接口 (AGENTXX_IFACE_*, 接口名见 plugin_interfaces) ----
+/// 斜杠命令输入管线 (用户输入 "/{name}" 触发 register_command 注册的命令):
+/// - CLI/TUI 宿主恒支持; 无命令输入面的宿主 (如某些 GUI) 不置此位,
+///   register_command 将被拒绝 (返回非 0), 插件应降级
+#define AGENTXX_IFACE_COMMAND (1u << 16)
 
 /* ==================== 插件元信息 ==================== */
 

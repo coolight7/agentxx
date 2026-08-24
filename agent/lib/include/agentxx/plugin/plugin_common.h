@@ -29,6 +29,7 @@
 #include <functional>
 #include <future>
 #include <map>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -96,13 +97,18 @@ struct PluginManifestResources {
 ///   YAML 非法时记日志, 无 manifest 不记 (调用方决定日志策略)
 /// - resources 非空时额外输出资源声明段 (skill/memory/mcp, 见上);
 ///   段缺失时保持为空 —— 资源声明不参与 manifest 合法性判定
+/// - interfaces 非空时额外输出接口声明段 (require/optional, 见
+///   PluginManifestInterfaces); 段缺失时保持为空 —— 接口声明不参与
+///   manifest 合法性判定
+struct PluginManifestInterfaces; // 完整定义见下方接口协商节
 bool parsePluginManifest(
     const std::filesystem::path& dir,
     std::string&                 name,
     std::string&                 entry,
     std::vector<std::string>&    depends,
     std::vector<std::string>&    optionalDepends,
-    PluginManifestResources*     resources = nullptr
+    PluginManifestResources*     resources  = nullptr,
+    PluginManifestInterfaces*    interfaces = nullptr
 );
 
 /// 目录插件 entry 相对路径 → 平台化绝对库路径:
@@ -111,6 +117,91 @@ bool parsePluginManifest(
 ///   找不到时回退 {dir}/{Debug|Release|RelWithDebInfo|MinSizeRel}/{entry}
 /// - 返回绝对路径 (可能不存在, 由调用方处理)
 std::string resolvePluginEntryPath(const std::filesystem::path& dir, const std::string& entry);
+
+/* ==================== 接口协商 (三层协商的声明/校验基础设施) ====================
+ *
+ * 背景: client 宿主形态多样 (cli/tui/gui/第三方 app), 各自支持的插件接口
+ * 不同; server (agent-io) 仅有 libagentxx 一个实现, agent 侧接口集 ≡ 当前
+ * api_version 头文件内容 (版本匹配即全集)。协商机制因此是不对称的:
+ * 机制通用, 实际起作用的门禁集中在 client 侧。
+ *
+ * 三层设计 (详见 docs/agent/plugins.md 4.7):
+ * 1. 声明层: 插件 plugin.yaml `interfaces.require/optional` 列出依赖的接口
+ *    名 (稳定字符串: "agent.*" / "client.*" / "<vendor>.*");
+ * 2. 校验层: 宿主加载前按前缀过滤出本侧声明, 与宿主支持集比对 ——
+ *    require 未满足 → 跳过加载 (INFO + 原因记录, 非错误: 同一插件目录
+ *    服务多种宿主是预期情况); 声明了本侧接口却缺对应入口符号 → 明确报错;
+ * 3. 决策层: 插件 entry 内经 ui_caps() 位图 / EVT_READY 与
+ *    get_client_state 的 "interfaces" 字符串数组自行决定启用哪些功能
+ *    (位图与名称的映射见 client_plugin_api.h AGENTXX_IFACE_* 注释)。
+ *
+ * api_version 精确匹配门禁保留且不被本机制替代: vtable 是 C 结构体,
+ * 老宿主+新插件按新偏移读字段是 UB —— 接口协商只解决"功能子集"维度。
+ */
+
+/// 已知接口名常量 (稳定契约; 第三方私有接口用 "<vendor>.<name>" 自定义,
+/// 宿主不认识的名称一律视为不支持 —— 安全失败)
+namespace plugin_interfaces {
+inline constexpr std::string_view AgentCore        = "agent.core"; ///< 工具/钩子/事件/能力 (= api_version 核心)
+inline constexpr std::string_view ClientStatusItem = "client.status_item";
+inline constexpr std::string_view ClientPanel      = "client.panel";
+inline constexpr std::string_view ClientToast      = "client.toast";
+inline constexpr std::string_view ClientKeybind    = "client.keybind";
+inline constexpr std::string_view ClientPromptModal = "client.prompt_modal";
+inline constexpr std::string_view ClientMsgDecor   = "client.msg_decor";
+inline constexpr std::string_view ClientInfoSection = "client.info_section";
+inline constexpr std::string_view ClientCommand    = "client.command";
+} // namespace plugin_interfaces
+
+/// 宿主支持的接口集合 (稳定名字符串; io 线程构建后只读)
+using InterfaceSet = std::set<std::string, std::less<>>;
+
+/// 插件清单接口声明 (plugin.yaml 可选段):
+///   interfaces:
+///     require:  [agent.core, client.command]  # 任一缺失(按前缀过滤后) → 该侧跳过加载
+///     optional: [client.toast]                # 缺失仅警告, 不影响加载
+/// - 同一清单可同时声明两侧接口 (前缀决定归属), 服务 cli/tui/gui 多宿主
+struct PluginManifestInterfaces {
+    std::vector<std::string> require;
+    std::vector<std::string> optional;
+
+    bool empty() const { return require.empty() && optional.empty(); }
+};
+
+/// 本侧是否关心此接口声明 (前缀过滤规则):
+/// - "agent.*": 仅 agent 侧检查 (client 侧忽略)
+/// - "client.*": 仅 client 侧检查 (agent 侧忽略)
+/// - 其他 ("<vendor>.*"): 两侧都检查 (保守: 宿主不认识即不支持)
+bool sideCaresAboutInterface(std::string_view name, bool agentSide);
+
+/// 单侧接口要求检查结果
+struct InterfaceCheckResult {
+    bool                     satisfied = true; ///< require 是否全部满足
+    std::vector<std::string> missingRequired;  ///< 本侧缺失的必选接口
+    std::vector<std::string> missingOptional;  ///< 本侧缺失的可选接口 (仅警告)
+};
+
+/// 检查插件声明的接口是否被宿主支持集满足 (按前缀过滤出本侧相关项;
+/// agentSide=true 表示以 agent 宿主视角检查, false 为 client 宿主视角)
+InterfaceCheckResult checkInterfacesForSide(
+    const PluginManifestInterfaces& decl,
+    const InterfaceSet&             hostSupported,
+    bool                            agentSide
+);
+
+/// require 列表隐含的入口符号需求:
+/// - 含任何 agent.* (或无前缀/vendor 前缀) → 需要 agent 入口符号
+/// - 含任何 client.* (或无前缀/vendor 前缀) → 需要 client 入口符号
+/// 用于加载路径的 dlsym 意图预检: 声明了某侧接口却未导出该侧入口 → 明确报错
+struct RequiredEntrySides {
+    bool agentEntry  = false;
+    bool clientEntry = false;
+};
+RequiredEntrySides requiredEntrySides(const std::vector<std::string>& interfaces);
+
+/// client 宿主能力位图 → 支持的接口名集合 (AGENTXX_UI_CAP_* 与高位段
+/// AGENTXX_IFACE_* 的映射表唯一出处, 见 client_plugin_api.h)
+InterfaceSet clientHostInterfacesFromCaps(uint32_t caps);
 
 /// 拓扑排序项 (调用方 Item 须含 path/name/depends 三个成员, 可附带其他字段)
 struct PluginSortItem {

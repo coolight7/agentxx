@@ -469,6 +469,73 @@ std::string b64 = agentxx::util::base64Encode(sv);  // 静态链入本插件副�
   程序按需外置), 内置模式不产出 client 插件库; `client_plugins` 测试在
   内置模式下跳过
 
+### 4.7 接口协商 (接口清单声明 / 预载校验 / 运行时发现, 2026-08)
+
+> 目标: 适配不同 client 宿主 (cli / tui / gui, 甚至第三方 app) 支持的插件
+> 接口各不相同 —— 同一插件目录在能力齐备的宿主全量启用, 在缺能力的宿主
+> 明确跳过或降级, 而非半失效运行。
+
+**不对称协商的关键事实**: server (agent-io) 只有 libagentxx 一个实现,
+agent 侧接口集 ≡ 当前 `api_version` 头文件内容 (版本匹配即全集), 无需真正
+协商; 协商的主战场在 client 侧。机制因此做成通用对称代码路径, 但实际起
+作用的门禁集中在 client 侧 (第三方 agent 宿主未来可直接复用)。
+
+**接口命名** (稳定字符串契约, 常量见 `plugin_common.h` 的
+`plugin_interfaces` 命名空间):
+
+| 名称 | 归属侧 | 对应能力位 |
+|---|---|---|
+| `agent.core` | agent | (= api_version 核心: 工具/钩子/事件/能力) |
+| `client.status_item` | client | `AGENTXX_UI_CAP_STATUS_ITEM` |
+| `client.panel` | client | `AGENTXX_UI_CAP_PANEL` |
+| `client.toast` | client | `AGENTXX_UI_CAP_TOAST` |
+| `client.keybind` (预留) | client | `AGENTXX_UI_CAP_KEYBIND` |
+| `client.prompt_modal` (预留) | client | `AGENTXX_UI_CAP_PROMPT` |
+| `client.msg_decor` (预留) | client | `AGENTXX_UI_CAP_MSG_DECOR` |
+| `client.info_section` | client | `AGENTXX_UI_CAP_INFO_SECTION` |
+| `client.command` | client | `AGENTXX_IFACE_COMMAND` (高位段 `1<<16`) |
+| `<vendor>.<name>` | 双方 | 无 (宿主不认识即不支持, 安全失败) |
+
+**三层设计**:
+
+1. **声明层**: 插件 `plugin.yaml` 可选段 (见 9.2):
+
+   ```yaml
+   interfaces:
+     require:  [agent.core, client.command]  # 缺失任一(按前缀过滤后) → 该侧跳过加载
+     optional: [client.info_section]         # 缺失仅警告, 插件注册时自降级
+   ```
+
+   同一清单可同时声明两侧接口, 前缀决定归属: `agent.*` 仅 agent 侧检查、
+   `client.*` 仅 client 侧检查、无前缀/`<vendor>.*` 两侧都检查
+   (`sideCaresAboutInterface`)。
+
+2. **校验层** (框架强制, dlopen 前后两道):
+   - **require 门禁**: 宿主支持集由 `PluginUiAdapter::uiCaps()` 位图经映射
+     表 (`clientHostInterfacesFromCaps`, 唯一出处 plugin_common.cpp) 得出;
+     `checkInterfacesForSide` 比对 require 未满足 → **跳过加载** (INFO 日志
+     + `skippedPlugins()` 记录原因供展示层排查; 非错误 —— 同一插件目录服务
+     多种宿主是预期情况); optional 缺失仅警告。
+   - **符号意图预检**: require 声明了某侧接口却未导出该侧入口符号
+     (`requiredEntrySides`) → 明确报错, 声明意图优先于 sides==Auto 的静默
+     容忍。
+   - agent 侧走同一套公共函数, 支持集恒为 `{agent.core}`。
+
+3. **决策层** (插件自主, 零 ABI 变更): 插件 entry 内经既有 `ui_caps()` 位图
+   查询 (高位段 `AGENTXX_IFACE_*` 语义推广, 旧宿主不会置高位段, 判位自然
+   降级), 或读 EVT_READY payload 与 `get_client_state` 新增的
+   `"interfaces": ["client.panel", ...]` 字符串数组 (位图的自描述镜像),
+   自行决定注册哪些功能; agent 侧对应 `get_config` JSON 同名键。
+
+**与版本门禁的关系** (重要): `api_version` 精确匹配门禁保留且不被本机制
+替代 —— vtable 是 C 结构体, 老宿主+新插件按新偏移读字段是 UB, 这只能靠
+版本门禁挡住; 接口协商只解决"功能子集"维度。若未来需要放宽到主版本内
+向前兼容, 正确路径是 COM 式 per-interface vtable (远期演进, 当前不做)。
+
+**行为变化说明**: `register_command` 现按 `AGENTXX_IFACE_COMMAND` 位门禁
+(与其他 register_* 一致); 内置 CLI/TUI 适配器均已置位, 行为不变; 未置位
+的第三方适配器下命令注册被拒 (返回非 0), 插件应降级。
+
 ---
 
 ## 5. 热插拔机制
@@ -838,12 +905,16 @@ skill: []                     # 可选 (v8): 会话资源声明 —— skill 扫
 memory: []                    # 可选 (v8): memory 上下文文件列表
 mcp: []                       # 可选 (v8): MCP server 列表项 {namespace,url,timeout(秒)}
                               #   语义见 4.2.1; entry 成功后应用 (失败不生效)
+interfaces:                   # 可选 (接口协商, 见 4.7):
+  require: [agent.core]       #   必选接口 —— 任一缺失 (按前缀过滤出本侧) 该侧跳过加载
+  optional: [client.toast]    #   可选接口 —— 缺失仅警告, 插件注册时自降级
 ```
 
 宿主解析 name/entry/depends/optional_depends (YAML::LoadFile) + 资源声明段
-(skill/memory/mcp, 见 4.2.1); 目录路径可直接传给 `loadPluginAsync` / yaml
-`plugins[].path`。直接给库路径时插件名按文件名推导 (`pluginNameFromPath`:
-libfoo.so → foo), 资源声明仅目录形态生效。
+(skill/memory/mcp, 见 4.2.1) + 接口声明段 (require/optional, 见 4.7); 目录
+路径可直接传给 `loadPluginAsync` / yaml `plugins[].path`。直接给库路径时插件
+名按文件名推导 (`pluginNameFromPath`: libfoo.so → foo), 资源/接口声明仅目录
+形态生效。
 
 ### 9.3 构建开关
 

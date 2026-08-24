@@ -20,6 +20,7 @@
 #include <atomic>
 #include <chrono>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <mutex>
 #include <string>
@@ -70,7 +71,7 @@ public:
 
     uint32_t uiCaps() const override {
         return AGENTXX_UI_CAP_STATUS_ITEM | AGENTXX_UI_CAP_PANEL | AGENTXX_UI_CAP_TOAST
-               | AGENTXX_UI_CAP_INFO_SECTION;
+               | AGENTXX_UI_CAP_INFO_SECTION | AGENTXX_IFACE_COMMAND;
     }
 
     void onStatusItemRegistered(
@@ -676,6 +677,114 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         orphan.event  = "progress";
         orphan.data   = R"({})";
         mgr->onPluginData(orphan);
+    }
+
+    // ---- 11. 接口协商: 宿主支持集 / require 门禁 / 发现通道 ----
+    // - 门禁双道生效: dlopen 前跳过 (loadConfiguredClientPlugins) 与
+    //   dlopen 后直连路径 (loadNativeAsync); 此处覆盖后者 + 发现通道
+    {
+        namespace fs = std::filesystem;
+
+        // 11.1 clientStateJson 暴露宿主接口清单 (Mock 适配器: status_item/
+        //      panel/toast/info_section/command)
+        auto stateJson = mgr->clientStateJson();
+        XX_TEST_EXPECT_TRUE(stateJson.find("\"interfaces\"") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(stateJson.find("client.panel") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(stateJson.find("client.command") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(stateJson.find("client.status_item") != std::string::npos);
+        // 未置位的能力不得出现 (keybind 预留位未置)
+        XX_TEST_EXPECT_FALSE(stateJson.find("client.keybind") != std::string::npos);
+
+        // 11.2 require 未满足 → 加载跳过并记录原因 (直连路径, dlopen 后门禁):
+        // 拷贝真实可加载的示例库, manifest 声明本宿主不支持的必选接口
+        auto gateDir = fs::temp_directory_path()
+                     / ("agentxx_iface_gate_"
+                        + std::to_string(
+                            std::chrono::steady_clock::now().time_since_epoch().count()
+                        ));
+        std::error_code ec;
+        fs::create_directories(gateDir, ec);
+        bool copied = false;
+        for (fs::directory_iterator it(findExamplePluginPath(), ec), end; it != end;
+             it.increment(ec)) {
+            auto ext = it->path().extension().string();
+            if (ext == ".so" || ext == ".dll" || ext == ".dylib") {
+                fs::copy_file(
+                    it->path(),
+                    gateDir / it->path().filename(),
+                    fs::copy_options::overwrite_existing,
+                    ec
+                );
+                copied = !ec;
+                break;
+            }
+        }
+        XX_TEST_EXPECT_TRUE(copied);
+        if (copied) {
+            {
+                std::ofstream f(gateDir / "plugin.yaml", std::ios::binary | std::ios::trunc);
+                f << "name: gate_missing_iface\nentry: libexample_plugin.so\ndepends:\n"
+                     "interfaces:\n  require:\n    - client.panel\n    - vendor.nonexistent\n";
+            }
+            size_t skippedBefore = mgr->skippedPlugins().size();
+            auto   gated         = co_await mgr->loadNativeAsync(gateDir.string());
+            XX_TEST_EXPECT_TRUE(gated == nullptr); // 未注册进插件表
+            // 实例名以 get_info 为准 ("example_plugin"; 清单名仅用于依赖/
+            // 排序 —— 既有行为), 跳过记录用同一名字
+            XX_TEST_EXPECT_TRUE(mgr->find("example_plugin") == nullptr);
+            // 跳过原因已记录 (含缺失接口名)
+            XX_TEST_EXPECT_TRUE(mgr->skippedPlugins().size() == skippedBefore + 1);
+            if (mgr->skippedPlugins().contains("example_plugin")) {
+                XX_TEST_EXPECT_TRUE(mgr->skippedPlugins().at("example_plugin")
+                                        .find("vendor.nonexistent")
+                                    != std::string::npos);
+            }
+
+            // 11.3 同一插件声明全部可满足 → 正常加载 (门禁放行回归) +
+            //      READY payload 携带接口清单
+            {
+                std::ofstream f(gateDir / "plugin.yaml", std::ios::binary | std::ios::trunc);
+                f << "name: gate_ok_iface\nentry: libexample_plugin.so\ndepends:\n"
+                     "interfaces:\n  require:\n    - client.panel\n    - client.command\n"
+                     "  optional:\n    - client.toast\n";
+            }
+            auto okInst = co_await mgr->loadNativeAsync(gateDir.string());
+            XX_TEST_EXPECT_TRUE(okInst != nullptr);
+            if (okInst) {
+                // 声明已随加载保存 (list() 可查)
+                bool foundDecl = false;
+                for (const auto& v : mgr->list()) {
+                    if (v.name == "example_plugin") {
+                        foundDecl = true;
+                        XX_TEST_EXPECT_TRUE(v.requiredInterfaces.size() == 2);
+                        XX_TEST_EXPECT_TRUE(v.optionalInterfaces.size() == 1);
+                    }
+                }
+                XX_TEST_EXPECT_TRUE(foundDecl);
+
+                // READY payload 含 interfaces 数组 (经实例 host vtable 订阅;
+                // onReady 同步分发到当前 io 线程)
+                std::string readyPayload;
+                auto        readyFn = +[](AgentxxPluginStringView payload, void* ud) {
+                    static_cast<std::string*>(ud)->assign(payload.data, payload.size);
+                };
+                auto sub = okInst->host.vtable
+                               ->subscribe(&okInst->host, AGENTXX_CLIENT_EVT_READY, readyFn,
+                                           &readyPayload);
+                XX_TEST_EXPECT_TRUE(sub != nullptr);
+                mgr->onReady();
+                XX_TEST_EXPECT_TRUE(readyPayload.find("\"interfaces\"") != std::string::npos);
+                XX_TEST_EXPECT_TRUE(readyPayload.find("client.panel") != std::string::npos);
+                okInst->host.vtable->unsubscribe(sub);
+
+                co_await mgr->unloadAsync("example_plugin");
+                XX_TEST_EXPECT_TRUE(mgr->find("example_plugin") == nullptr);
+            }
+        }
+        fs::remove_all(gateDir, ec);
+
+        // 11.4 加载后 skippedPlugins() 不回退 (仅记录, 不影响后续加载决策)
+        XX_TEST_EXPECT_TRUE(!mgr->skippedPlugins().empty());
     }
 
     co_return TestResult{g_client_plugin_passed, g_client_plugin_failed};

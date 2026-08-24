@@ -29,7 +29,7 @@ public:
 
     uint32_t uiCaps() const override {
         return AGENTXX_UI_CAP_STATUS_ITEM | AGENTXX_UI_CAP_PANEL | AGENTXX_UI_CAP_TOAST
-               | AGENTXX_UI_CAP_INFO_SECTION;
+               | AGENTXX_UI_CAP_INFO_SECTION | AGENTXX_IFACE_COMMAND;
     }
 
     // ---- 状态栏项 ----

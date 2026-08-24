@@ -3,3 +3,7 @@ version: 1.0.0
 description: "System-wide text selection event stream (Windows): tool agentxx_text_selection_monitor, selection events"
 entry: libagentxx_text_selection_monitor.so
 depends:
+# 接口协商: 纯 agent 侧工具插件
+interfaces:
+  require:
+    - agent.core

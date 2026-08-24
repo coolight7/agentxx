@@ -1,5 +1,9 @@
 name: agentxx_javascript_engine
 version: 1.0.0
-description: "Example native plugin"
+description: "JavaScript interpreter engine plugin (capability interpreter.js: load/unload methods)"
 entry: libagentxx_javascript_engine.so
 depends:
+# 接口协商: 引擎提供能力调用通道 (invoke_capability), 属核心接口范围
+interfaces:
+  require:
+    - agent.core
