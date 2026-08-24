@@ -1,9 +1,48 @@
 #include "test_string_tools.h"
+#include <neograph/types.h>
 #include "agentxx/agent/context.h"
-#include "agentxx/tools/string.h"
+// 原 lib 内置工具已迁移至 agentxx_string 插件 (同名同行为); 测试直测插件
+// 同一实现 (string_impl.h), 保证插件行为与测试覆盖一致
+#include "string_impl.h"
 #include <asio/awaitable.hpp>
 #include <iostream>
 #include <string>
+
+namespace agentxx {
+namespace tools {
+
+/// 测试适配: 原工具类的同名薄包装 (execute_async 直调插件实现,
+/// 保持既有用例结构不变; 下同, 各测试文件同模式)
+struct StringHtml2MarkdownTool {
+    explicit StringHtml2MarkdownTool(std::weak_ptr<agentxx::agent::AgentContext>) {}
+
+    neograph::ChatTool get_definition() const {
+        return {"agentxx_string_html_to_markdown",
+                "Convert HTML content to Markdown format.",
+                {}};
+    }
+
+    asio::awaitable<std::string> execute_async(const neograph::json& args) const {
+        co_return agentxx::string_plugin::htmlToMarkdownExecute(args);
+    }
+};
+
+struct StringRegexpTool {
+    explicit StringRegexpTool(std::weak_ptr<agentxx::agent::AgentContext>) {}
+
+    neograph::ChatTool get_definition() const {
+        return {"agentxx_string_regexp",
+                "Search, replace, or remove text using regular expressions.",
+                {}};
+    }
+
+    asio::awaitable<std::string> execute_async(const neograph::json& args) const {
+        co_return agentxx::string_plugin::regexpExecute(args);
+    }
+};
+
+} // namespace tools
+} // namespace agentxx
 
 namespace agentxx {
 namespace test {

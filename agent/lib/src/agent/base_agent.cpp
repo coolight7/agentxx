@@ -475,7 +475,8 @@ asio::awaitable<void> BaseAgent::initMiddleware() {
 asio::awaitable<std::vector<std::unique_ptr<agentxx::tools::XXToolBase>>> BaseAgent::initTools() {
     std::vector<std::unique_ptr<agentxx::tools::XXToolBase>> tools{};
     tools.push_back(std::make_unique<agentxx::tools::SessionShareStoreTool>(agentContext));
-    tools.push_back(std::make_unique<agentxx::tools::GetCurrentDateTimeTool>(agentContext));
+    // agentxx_get_current_datetime 已迁移至 agentxx_system 插件 (同名同行为,
+    // 经 PluginManager 注册)
     co_return tools;
 }
 

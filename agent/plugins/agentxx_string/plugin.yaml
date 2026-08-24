@@ -1,0 +1,9 @@
+name: agentxx_string
+version: 1.0.0
+description: "String tools: html to markdown conversion (agentxx_string_html_to_markdown) and regexp search/replace/remove (agentxx_string_regexp)"
+entry: libagentxx_string.so
+depends:
+interfaces:
+  require:
+    - agentxx.agent.core
+    - agentxx.agent.tools

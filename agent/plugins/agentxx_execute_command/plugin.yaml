@@ -1,0 +1,12 @@
+name: agentxx_execute_command
+version: 1.0.0
+description: "Command execution tools: agentxx_execute_bash_command, agentxx_execute_windows_command (PowerShell/cmd via WSL interop)"
+entry: libagentxx_execute_command.so
+depends:
+interfaces:
+  require:
+    - agentxx.agent.core
+    - agentxx.agent.tools
+  optional:
+    - agentxx.agent.config
+    - agentxx.agent.cancel

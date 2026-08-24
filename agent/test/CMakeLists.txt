@@ -53,10 +53,19 @@ target_sources(agentxx_test PRIVATE
 # include path: 根目录 (test_framework.h 等共享头) + core/ + client/
 # 使 test.cpp 的 #include "test_xxx.h" 与子目录测试的
 # #include "test_framework.h" 均无需改动路径
-target_include_directories(agentxx_test PRIVATE 
+target_include_directories(agentxx_test PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}"
   "${CMAKE_CURRENT_SOURCE_DIR}/core/"
   "${CMAKE_CURRENT_SOURCE_DIR}/client/"
+  # 迁移至插件的内置工具实现 (filesystem/string/system/websearch/rag_search/
+  # execute_command 的 *_impl.h): 测试直测插件同一实现, 保证行为一致
+  "${CMAKE_CURRENT_SOURCE_DIR}/../plugins/agentxx_planning/"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../plugins/agentxx_filesystem/"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../plugins/agentxx_execute_command/"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../plugins/agentxx_string/"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../plugins/agentxx_system/"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../plugins/agentxx_websearch/"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../plugins/agentxx_rag_search/"
 )
 
 # 注意: 不要添加 /FS /MP 编译选项 —— 顶层已统一管理; 命令行出现重复 /FS 时

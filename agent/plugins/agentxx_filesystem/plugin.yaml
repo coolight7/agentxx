@@ -1,0 +1,12 @@
+name: agentxx_filesystem
+version: 1.0.0
+description: "Filesystem tools: list (agentxx_filesystem_list), read (agentxx_filesystem_read), write (agentxx_filesystem_write), edit (agentxx_filesystem_edit), glob (agentxx_filesystem_glob), grep (agentxx_filesystem_grep)"
+entry: libagentxx_filesystem.so
+depends:
+interfaces:
+  require:
+    - agentxx.agent.core
+    - agentxx.agent.tools
+  optional:
+    - agentxx.agent.config
+    - agentxx.agent.cancel

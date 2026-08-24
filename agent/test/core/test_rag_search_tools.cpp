@@ -1,5 +1,7 @@
 #include "test_rag_search_tools.h"
-#include "agentxx/tools/rag_search.h"
+// 原 lib 内置工具已迁移至 agentxx_rag_search 插件 (同名同行为); 测试直测
+// 插件同一实现 (rag_search_impl.h), 保证插件行为与测试覆盖一致
+#include "rag_search_impl.h"
 #include "agentxx/util/string_util.h"
 #include <asio/awaitable.hpp>
 #include <asio/redirect_error.hpp>
@@ -10,8 +12,52 @@
 namespace agentxx {
 namespace test {
 
-using RAGSearchTool = agentxx::tools::RAGSearchTool;
-using VectorStore   = agentxx::tools::RAGSearchTool::VectorStore;
+/// 测试适配: 原 lib 工具类的同名薄包装 (分块/相似度纯函数直调插件实现;
+/// 嵌套类型别名保持 `VectorStore::SplitConfig` 等既有调用形态不变)
+struct RAGSearchTool {
+    using Document    = agentxx::rag_plugin::Document;
+    using SplitMode   = agentxx::rag_plugin::SplitMode;
+    using SplitConfig = agentxx::rag_plugin::SplitConfig;
+
+    static double cosineSimilarity(const std::vector<double>& a, const std::vector<double>& b) {
+        return agentxx::rag_plugin::cosineSimilarity(a, b);
+    }
+
+    struct VectorStore {
+        using Document    = agentxx::rag_plugin::Document;
+        using SplitMode   = agentxx::rag_plugin::SplitMode;
+        using SplitConfig = agentxx::rag_plugin::SplitConfig;
+
+        static auto splitByFixedLength(
+            std::string_view text,
+            size_t           blockSize      = 256,
+            double           overlapPercent = 0.0
+        ) {
+            return agentxx::rag_plugin::splitByFixedLength(text, blockSize, overlapPercent);
+        }
+        static auto splitByDelimiter(std::string_view text, std::string_view delimiter) {
+            return agentxx::rag_plugin::splitByDelimiter(text, delimiter);
+        }
+        static auto splitByStructure(std::string_view text) {
+            return agentxx::rag_plugin::splitByStructure(text);
+        }
+        static auto
+            splitByDelimiters(std::string_view text, size_t maxUtf8Length, const std::vector<std::string>& delimiters) {
+            return agentxx::rag_plugin::splitByDelimiters(text, maxUtf8Length, delimiters);
+        }
+        static auto applyChunkOverlap(
+            const std::vector<std::string>& chunks,
+            size_t                          maxUtf8Length,
+            double                          overlapPercent
+        ) {
+            return agentxx::rag_plugin::applyChunkOverlap(chunks, maxUtf8Length, overlapPercent);
+        }
+        static auto splitTextToChunks(std::string_view text, const SplitConfig& config) {
+            return agentxx::rag_plugin::splitTextToChunks(text, config);
+        }
+    };
+};
+using VectorStore   = RAGSearchTool::VectorStore;
 
 int g_rag_passed = 0;
 int g_rag_failed = 0;

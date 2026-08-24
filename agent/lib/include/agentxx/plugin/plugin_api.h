@@ -415,10 +415,10 @@ typedef struct AgentxxPluginsIface {
 /* ==================== 接口表: 宿主配置 (agentxx.agent.config) ==================== */
 
 #define AGENTXX_IFACE_AGENT_CONFIG         "agentxx.agent.config"
-#define AGENTXX_IFACE_AGENT_CONFIG_VERSION 1
+#define AGENTXX_IFACE_AGENT_CONFIG_VERSION 2
 
 typedef struct AgentxxConfigIface {
-    int version; ///< 必须 == AGENTXX_IFACE_AGENT_CONFIG_VERSION
+    int version; ///< 必须 >= AGENTXX_IFACE_AGENT_CONFIG_VERSION
 
     /// 宿主 AgentConfig 关键字段 JSON (io 线程; host->alloc):
     /// {"dataDir": "...", "projectRoot": "..."(可为空),
@@ -435,7 +435,72 @@ typedef struct AgentxxConfigIface {
     /// - 工具未配置 prompt 时返回 NULL (插件回退内置默认描述)
     /// - 供插件注册工具时生成与内置工具一致的动态描述 (用户可经 yaml 覆盖)
     char* (*get_tool_prompt)(const AgentxxHost* host, AgentxxPluginStringView tool_name);
+
+    /* ---- v2 追加: 会话工作目录 ---- */
+    /// 解析后的会话工作目录 (io 线程; host->alloc; 失败/未装配返回 NULL):
+    /// - AgentConfig::resolvedWorkDir(): yaml work_dir 优先, 为空回退进程 cwd
+    /// - 文件系统/命令执行类插件以此为相对路径基准与子进程初始目录
+    ///   (嵌入多实例场景下各 agent 实例的工作目录彼此独立)
+    char* (*get_work_dir)(const AgentxxHost* host);
 } AgentxxConfigIface;
+
+/* ==================== 接口表: 主模型配置 (agentxx.agent.model) ====================
+ * 供插件按需获取宿主主模型配置 (embedding / 模型搜索等衍生能力复用同一
+ * 服务商配置, 与原 lib 内置工具行为一致); 注意 apiKey 会透出给查询者,
+ * 仅本项目内置插件使用
+ */
+#define AGENTXX_IFACE_AGENT_MODEL         "agentxx.agent.model"
+#define AGENTXX_IFACE_AGENT_MODEL_VERSION 1
+
+typedef struct AgentxxModelIface {
+    int version; ///< 必须 == AGENTXX_IFACE_AGENT_MODEL_VERSION
+
+    /// 宿主主模型及关联配置 JSON (io 线程; host->alloc; 未装配返回 NULL):
+    /// {"baseUrl": "...", "apiKey": "...", "modelName": "...",
+    ///  "websearchApiUrl": "...", "websearchConvertHtml2markdown": true|false,
+    ///  "websearchModel": {...}|null,      // 模型搜索覆盖配置 (ModelConfig 同构)
+    ///  "ragDocsPaths": ["...", ...]}      // RAG 文档扫描路径
+    char* (*get_config)(const AgentxxHost* host);
+} AgentxxModelIface;
+
+/* ==================== 接口表: 会话取消状态 (agentxx.agent.cancel) ====================
+ * 插件 execute 回调运行在宿主线程池, 宿主超时/取消仅终止"等待"; 长任务型
+ * 工具 (如命令执行) 可经本接口轮询会话取消令牌, 自行提前终止子任务
+ * (与原 lib 内置命令工具的取消 watcher 行为一致)
+ */
+#define AGENTXX_IFACE_AGENT_CANCEL         "agentxx.agent.cancel"
+#define AGENTXX_IFACE_AGENT_CANCEL_VERSION 1
+
+typedef struct AgentxxCancelIface {
+    int version; ///< 必须 == AGENTXX_IFACE_AGENT_CANCEL_VERSION
+
+    /// 查询会话当前轮次是否已取消 (任意线程可调用, 宿主内部同步到 io 线程;
+    /// 会话不存在或无取消令牌返回 0): 1 = 已取消, 0 = 未取消
+    int (*is_cancelled)(const AgentxxHost* host, AgentxxPluginStringView thread_id);
+} AgentxxCancelIface;
+
+/* ==================== 接口表: 任务规划 (agentxx.agent.planning) ====================
+ * planning_write 工具的宿主侧落地接口: 写入 PlanningMiddlewareHandle 的
+ * 会话规划 state (system prompt 注入链路读取), 见 middlewares/planning.h
+ */
+#define AGENTXX_IFACE_AGENT_PLANNING         "agentxx.agent.planning"
+#define AGENTXX_IFACE_AGENT_PLANNING_VERSION 1
+
+typedef struct AgentxxPlanningIface {
+    int version; ///< 必须 == AGENTXX_IFACE_AGENT_PLANNING_VERSION
+
+    /// 写入指定会话的两层规划 + 备忘录 (任意线程可调用, 宿主内部同步到 io
+    /// 线程): roadmap 必填 (Mermaid stateDiagram-v2 文本); todos_json 为
+    /// todo 数组的 JSON 字符串 (空视图跳过); notes 为备忘录文本 (空视图跳过)。
+    /// 返回 0 成功; 非 0 失败 (宿主未装配 PlanningMiddleware 等)
+    int (*set_planning)(
+        const AgentxxHost*      host,
+        AgentxxPluginStringView thread_id,
+        AgentxxPluginStringView roadmap,
+        AgentxxPluginStringView todos_json,
+        AgentxxPluginStringView notes
+    );
+} AgentxxPlanningIface;
 
 /* ==================== 接口表: 宿主提示词读写 (agentxx.agent.prompt) ==================== */
 

@@ -1,38 +1,25 @@
-#include "agentxx/tools/system.h"
+// agentxx_system 插件 —— 工具实现 (纯函数, 不含 C ABI 胶水)
+// - 从 libagentxx src/tools/system 拆分: agentxx_get_current_datetime 同名同行为
+// - 头文件-only: 插件入口与测试共同包含, 保证插件行为与测试覆盖一致
+#pragma once
 
-#include "fmt/format.h"
+#include <fmt/format.h>
 #include <chrono>
 #include <ctime>
 #include <format>
-#include <sstream>
 #include <string>
 
+#if !defined(XX_IS_ANDROID_D) && !defined(XX_IS_WIN_D) && !defined(XX_IS_MACOS_D) && \
+    !defined(XX_IS_LINUX_D)
+#define XX_IS_LINUX_D 1
+#endif
+
 namespace agentxx {
-namespace tools {
+namespace system_plugin {
 
-GetCurrentDateTimeTool::GetCurrentDateTimeTool(
-    std::weak_ptr<agentxx::agent::AgentContext> in_agentContext
-) :
-    XXToolBase("agentxx_get_current_datetime", in_agentContext, false, true, 0, true) {}
-
-neograph::ChatTool GetCurrentDateTimeTool::get_definition() const {
-    auto        agentPtr = agentContext.lock();
-    const auto& prompt   = agentPtr->agentConfig->prompt.toolPrompt[get_name()];
-
-    // 无参数工具也声明空对象 schema: parameters 为 null 会被部分严格网关
-    // (如 SCNet) 拒绝, 返回 400 "Format Error"
-    return {
-        get_name(),
-        prompt.depict,
-        neograph::json{
-                       {"type", "object"},
-                       {"properties", neograph::json::object()},
-                       },
-    };
-}
-
-asio::awaitable<std::string> GetCurrentDateTimeTool::execute_async(const neograph::json& arguments
-) {
+/// 获取当前时间描述文本 (原 GetCurrentDateTimeTool::execute_async)
+/// - 输出三行: Timestamp 毫秒 / 本地 24 小时制 / UTC 24 小时制
+inline std::string currentDatetimeExecute() {
     auto now = std::chrono::system_clock::now();
 
     // 本地时间: 优先使用 tzdb (chrono::current_zone), 无 tzdata 环境 (如精简 Android)
@@ -40,7 +27,7 @@ asio::awaitable<std::string> GetCurrentDateTimeTool::execute_async(const neograp
     // NOTE: Android NDK libc++ 未实现 chrono tzdb (current_zone/zoned_time 不存在),
     // 属于编译期缺失而非运行时异常, 必须条件编译直接走 localtime 路径
     std::string localTimeStr;
-#if XX_IS_ANDROID_D
+#if defined(XX_IS_ANDROID_D) && XX_IS_ANDROID_D
     {
         std::time_t t = std::chrono::system_clock::to_time_t(now);
         std::tm     tmv{};
@@ -62,7 +49,7 @@ asio::awaitable<std::string> GetCurrentDateTimeTool::execute_async(const neograp
     } catch (...) {
         std::time_t t = std::chrono::system_clock::to_time_t(now);
         std::tm     tmv{};
-#if XX_IS_WIN_D
+#if defined(XX_IS_WIN_D) && XX_IS_WIN_D
         localtime_s(&tmv, &t);
 #else
         localtime_r(&t, &tmv);
@@ -79,7 +66,7 @@ asio::awaitable<std::string> GetCurrentDateTimeTool::execute_async(const neograp
     }
 #endif
 
-    co_return fmt::format(
+    return fmt::format(
         R"(Timestamp: {} millisecond
 Local Time (24Hour): {}
 UTC Time (24Hour): {})",
@@ -90,5 +77,5 @@ UTC Time (24Hour): {})",
     );
 }
 
-}; // namespace tools
-}; // namespace agentxx
+} // namespace system_plugin
+} // namespace agentxx

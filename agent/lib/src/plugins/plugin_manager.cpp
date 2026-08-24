@@ -5,6 +5,7 @@
 #include "agentxx/agent/io/agent_io_transport.h"
 #include "agentxx/agent/resource_applier.h"
 #include "agentxx/event/event_stream.h"
+#include "agentxx/middlewares/planning.h" // PlanningMiddlewareHandle/State (planning 接口表落地)
 #include "agentxx/plugin/plugin_common.h"
 #include "agentxx/util/async_offload.h"
 #include "agentxx/util/container_util.h"
@@ -238,7 +239,8 @@ PluginTool::PluginTool(
         std::move(agentContext),
         /*autoSummaryOutput=*/(spec.flags & AGENTXX_TOOL_FLAG_AUTO_SUMMARY) != 0,
         /*canDelayLoad=*/false, // 插件工具全量注册, 不延迟加载
-        /*maxRetry=*/0
+        /*maxRetry=*/0,
+        /*repeatCallCheck*/ false
     ),
     name_{spec.name.data ? spec.name.data : "", spec.name.size},
     description_{spec.description.data ? spec.description.data : "", spec.description.size},
@@ -1172,6 +1174,90 @@ static char* xx_get_tool_prompt(const AgentxxHost* host, AgentxxPluginStringView
     XX_PLUGIN_CATCH_END(nullptr)
 }
 
+/// 解析后的会话工作目录 (AgentConfig::resolvedWorkDir; io 线程; 失败 NULL)
+static char* xx_get_work_dir(const AgentxxHost* host) {
+    XX_PLUGIN_CATCH_BEGIN
+    auto mgr  = mgrOf(host);
+    auto inst = instOf(host);
+    if (!mgr || !inst) {
+        return nullptr;
+    }
+    auto     mgrPtr = mgr;
+    auto dir = ioCallSync<std::string>(mgrPtr, [mgrPtr]() {
+        return mgrPtr->getSessionWorkDir();
+    });
+    if (dir.empty()) {
+        return nullptr;
+    }
+    return host->vtable->strdup(dir.c_str());
+    XX_PLUGIN_CATCH_END(nullptr)
+}
+
+/// 宿主主模型及关联配置 → JSON (io 线程; 未装配 AgentConfig 返回 NULL):
+/// {"baseUrl","apiKey","modelName","websearchApiUrl",
+///  "websearchConvertHtml2markdown","websearchModel","ragDocsPaths"}
+/// - 供 websearch/rag_search 插件复用宿主模型配置 (与原 lib 内置工具行为一致)
+static char* xx_model_get_config(const AgentxxHost* host) {
+    XX_PLUGIN_CATCH_BEGIN
+    auto mgr = mgrOf(host);
+    if (!mgr) {
+        return nullptr;
+    }
+    auto mgrPtr = mgr;
+    auto json = ioCallSync<std::string>(mgrPtr, [mgrPtr]() -> std::string {
+        return mgrPtr->getModelConfigJson();
+    });
+    if (json.empty()) {
+        return nullptr;
+    }
+    return host->vtable->strdup(json.c_str());
+    XX_PLUGIN_CATCH_END(nullptr)
+}
+
+/// 会话取消状态查询 (任意线程可调用: 宿主内部同步到 io 线程查会话取消令牌)
+static int xx_cancel_is_cancelled(const AgentxxHost* host, AgentxxPluginStringView thread_id) {
+    XX_PLUGIN_CATCH_BEGIN
+    auto mgr = mgrOf(host);
+    if (!mgr || agentxx_plugin_sv_empty(thread_id)) {
+        return 0;
+    }
+    auto        mgrPtr = mgr;
+    std::string tid{thread_id.data, thread_id.size};
+    return ioCallSync<int>(mgrPtr, [mgrPtr, tid]() -> int {
+        return mgrPtr->isSessionCancelled(tid) ? 1 : 0;
+    });
+    XX_PLUGIN_CATCH_END(0)
+}
+
+/// 写入会话两层规划 + 备忘录 (PlanningMiddlewareHandle state; io 线程经同步等待)
+/// - 与原 lib 内置 WritePlanningTool 行为一致: state->plannings[tid] =
+///   {"roadmap": ..., "todos": ...(可选), "notes": ...(可选)}
+static int xx_planning_set_planning(
+    const AgentxxHost*      host,
+    AgentxxPluginStringView thread_id,
+    AgentxxPluginStringView roadmap,
+    AgentxxPluginStringView todos_json,
+    AgentxxPluginStringView notes
+) {
+    XX_PLUGIN_CATCH_BEGIN
+    auto mgr = mgrOf(host);
+    if (!mgr || agentxx_plugin_sv_empty(thread_id) || agentxx_plugin_sv_empty(roadmap)) {
+        return -1;
+    }
+    auto        mgrPtr  = mgr;
+    std::string tid{thread_id.data, thread_id.size};
+    std::string rm{roadmap.data, roadmap.size};
+    std::string todos = agentxx_plugin_sv_empty(todos_json)
+                            ? std::string{}
+                            : std::string{todos_json.data, todos_json.size};
+    std::string noteStr
+        = agentxx_plugin_sv_empty(notes) ? std::string{} : std::string{notes.data, notes.size};
+    return ioCallSync<int>(mgrPtr, [mgrPtr, tid, rm, todos, noteStr]() -> int {
+        return mgrPtr->setSessionPlanning(tid, rm, todos, noteStr);
+    });
+    XX_PLUGIN_CATCH_END(-1)
+}
+
 /// 宿主完整提示词 → JSON (io 线程; 未装配 AgentConfig 返回 NULL)
 static char* xx_get_prompt(const AgentxxHost* host) {
     XX_PLUGIN_CATCH_BEGIN
@@ -1209,7 +1295,8 @@ static int xx_set_prompt(const AgentxxHost* host, AgentxxPluginStringView prompt
 
 /// 周期定时器 (io 线程约束; 跨线程经 post 同步等待; 回调内快速返回约定)
 static void*
-    xx_add_timer(const AgentxxHost* host, long interval_ms, void (*fn)(void* ud), void* ud) {    XX_PLUGIN_CATCH_BEGIN
+    xx_add_timer(const AgentxxHost* host, long interval_ms, void (*fn)(void* ud), void* ud) {
+    XX_PLUGIN_CATCH_BEGIN
     auto mgr  = mgrOf(host);
     auto inst = instOf(host);
     if (!mgr || !inst || interval_ms <= 0 || !fn) {
@@ -1435,6 +1522,7 @@ static const AgentxxConfigIface g_ifaceConfig = {
     /* get_config */ xx_get_config,
     /* get_plugin_args */ xx_get_plugin_args,
     /* get_tool_prompt */ xx_get_tool_prompt,
+    /* get_work_dir (v2) */ xx_get_work_dir,
 };
 
 static const AgentxxPromptIface g_ifacePrompt = {
@@ -1463,6 +1551,21 @@ static const AgentxxResourcesIface g_ifaceResources = {
     /* register_mcp_server */ xx_register_mcp_server,
     /* unregister_mcp_server */ xx_unregister_mcp_server,
     /* get_own_resources */ xx_get_own_resources,
+};
+
+static const AgentxxModelIface g_ifaceModel = {
+    /* version */ AGENTXX_IFACE_AGENT_MODEL_VERSION,
+    /* get_config */ xx_model_get_config,
+};
+
+static const AgentxxCancelIface g_ifaceCancel = {
+    /* version */ AGENTXX_IFACE_AGENT_CANCEL_VERSION,
+    /* is_cancelled */ xx_cancel_is_cancelled,
+};
+
+static const AgentxxPlanningIface g_ifacePlanning = {
+    /* version */ AGENTXX_IFACE_AGENT_PLANNING_VERSION,
+    /* set_planning */ xx_planning_set_planning,
 };
 
 /// QueryInterface 实现: 按稳定 IID 分发到各静态接口表; 未知名称返回 NULL
@@ -1508,6 +1611,15 @@ static const void* xx_query_interface(const AgentxxHost*, AgentxxPluginStringVie
     if (n == AGENTXX_IFACE_AGENT_RESOURCES) {
         return &g_ifaceResources;
     }
+    if (n == AGENTXX_IFACE_AGENT_MODEL) {
+        return &g_ifaceModel;
+    }
+    if (n == AGENTXX_IFACE_AGENT_CANCEL) {
+        return &g_ifaceCancel;
+    }
+    if (n == AGENTXX_IFACE_AGENT_PLANNING) {
+        return &g_ifacePlanning;
+    }
     return nullptr;
 }
 
@@ -1537,6 +1649,9 @@ static plugin::InterfaceSet agentHostSupportedInterfaces() {
     s.insert(std::string{plugin::plugin_interfaces::AgentJson});
     s.insert(std::string{plugin::plugin_interfaces::AgentLog});
     s.insert(std::string{plugin::plugin_interfaces::AgentResources});
+    s.insert(std::string{plugin::plugin_interfaces::AgentModel});
+    s.insert(std::string{plugin::plugin_interfaces::AgentCancel});
+    s.insert(std::string{plugin::plugin_interfaces::AgentPlanning});
     return s;
 }
 
@@ -1669,22 +1784,19 @@ int PluginManager::registerMcpServer(PluginInstance* inst, const char* specJson)
     // 解析 spec: {"namespace":"...","url":"...","timeout":60(秒,可选)}
     // - 手写解析不可靠 (转义/嵌套), 统一经 JSON 库解析
     try {
-        auto j       = neograph::json::parse(specJson);
-        auto ns      = j.value("namespace", std::string{});
-        auto url     = j.value("url", std::string{});
+        auto j          = neograph::json::parse(specJson);
+        auto ns         = j.value("namespace", std::string{});
+        auto url        = j.value("url", std::string{});
         int  timeoutSec = 120; // 与主配置默认一致
         if (j.contains("timeout")) {
             timeoutSec = j.value("timeout", 120);
         }
         if (ns.empty() || url.empty()) {
-            XX_LOGW(
-                "Plugin `{}` register_mcp_server failed: namespace/url required",
-                inst->name
-            );
+            XX_LOGW("Plugin `{}` register_mcp_server failed: namespace/url required", inst->name);
             return -1;
         }
         agentxx::agent::McpServerConfig cfg;
-        cfg.url         = url;
+        cfg.url = url;
         cfg.toolTimeout = std::chrono::seconds{std::max(timeoutSec, 0)}; // 秒 → 毫秒(隐式转换)
         std::string err;
         if (!ap->addMcpServer(inst->name, ns, cfg, err)) {
@@ -1722,7 +1834,7 @@ std::string PluginManager::ownResourcesJson(const PluginInstance* inst) {
     if (!c || !c->resourceApplier) {
         return {};
     }
-    auto snap = c->resourceApplier->ownedBy(inst->name);
+    auto snap    = c->resourceApplier->ownedBy(inst->name);
     auto toArray = [](const std::vector<std::string>& v) {
         neograph::json a = neograph::json::array();
         for (const auto& s : v) {
@@ -1763,8 +1875,8 @@ void PluginManager::applyDeclaredResources(
     decls.memoryFiles = resources.memoryFiles;
     for (const auto& [ns, d] : resources.mcpServers) {
         agentxx::agent::McpServerConfig cfg;
-        cfg.url         = d.url;
-        cfg.toolTimeout = std::chrono::milliseconds{d.timeoutMs};
+        cfg.url              = d.url;
+        cfg.toolTimeout      = std::chrono::milliseconds{d.timeoutMs};
         decls.mcpServers[ns] = cfg;
     }
     XX_LOGI(
@@ -2243,12 +2355,11 @@ static const AgentxxBuiltinPluginInfo* findBuiltinPlugin(std::string_view name) 
     return nullptr;
 }
 
-asio::awaitable<std::shared_ptr<PluginInstance>>
-PluginManager::loadNativeAsync(
-    std::string                            path,
-    const agentxx::agent::PluginConfig*    cfg,
-    bool                                   allowClientOnlySkip,
-    const plugin::PluginManifestResources& resources,
+asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadNativeAsync(
+    std::string                             path,
+    const agentxx::agent::PluginConfig*     cfg,
+    bool                                    allowClientOnlySkip,
+    const plugin::PluginManifestResources&  resources,
     const plugin::PluginManifestInterfaces& interfaces
 ) {
     auto ctx = agentContext_.lock();
@@ -2350,8 +2461,8 @@ PluginManager::loadNativeAsync(
     //   optional 缺失仅警告
     // - 与 client 侧对称保留统一代码路径 (未来第三方 agent 宿主直接复用)
     {
-        auto  hostIfaces = agentHostSupportedInterfaces();
-        auto check = plugin::checkInterfacesForSide(interfaces, hostIfaces, true);
+        auto hostIfaces = agentHostSupportedInterfaces();
+        auto check      = plugin::checkInterfacesForSide(interfaces, hostIfaces, true);
         if (!check.satisfied) {
             XX_LOGI(
                 "Plugin `{}` skipped on agent side: host lacks required interface(s) [{}]",
@@ -2382,9 +2493,10 @@ PluginManager::loadNativeAsync(
     inst->host.opaque = inst.get();
     // 接口声明随加载传入 (manifest 解析产物; 直连路径为空) —— 经
     // list()/list_plugins JSON 暴露, 供插件互查与展示层使用
-    inst->interfaces  = interfaces;
+    inst->interfaces = interfaces;
 
     util::insertOrAssignHeterogeneous(plugins_, name, inst);
+
 
     // 插件配置参数 (yaml `plugins` 条目 args) 随加载直接传入 (C2):
     // - 宿主不解析字段语义, 插件经 vtable get_plugin_args 整体读取
@@ -2510,13 +2622,14 @@ asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadBuiltinAsync
     inst->optionalDepends = std::move(optionalDepends);
     // 接口声明随加载传入 (与 loadNativeAsync 同语义; 内置插件符号天然齐备,
     // 门禁已在 loadPluginAsync 目录分支完成)
-    inst->interfaces      = interfaces;
-    inst->self            = inst;
-    inst->manager         = shared_from_this();
-    inst->host.vtable     = &g_hostVtable;
-    inst->host.opaque     = inst.get();
+    inst->interfaces  = interfaces;
+    inst->self        = inst;
+    inst->manager     = shared_from_this();
+    inst->host.vtable = &g_hostVtable;
+    inst->host.opaque = inst.get();
 
     util::insertOrAssignHeterogeneous(plugins_, name, inst);
+
 
     // 插件配置参数随加载直接传入 (同 loadNativeAsync, 见 C2): 在 entry
     // 调用【之前】写入 inst->args —— 插件 entry 装配期经 get_plugin_args
@@ -2987,8 +3100,7 @@ bool PluginManager::checkDependencies(
     return true;
 }
 
-asio::awaitable<std::shared_ptr<PluginInstance>>
-    PluginManager::loadPluginAsync(
+asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadPluginAsync(
     std::string                         path,
     const agentxx::agent::PluginConfig* cfg,
     bool                                allowClientOnlySkip
@@ -3037,8 +3149,7 @@ asio::awaitable<std::shared_ptr<PluginInstance>>
         // libagentxx 是唯一 agent 宿主实现, api_version 门禁通过即齐备)
         {
             auto hostIfaces = agentHostSupportedInterfaces();
-            auto check
-                = plugin::checkInterfacesForSide(manifestInterfaces, hostIfaces, true);
+            auto check      = plugin::checkInterfacesForSide(manifestInterfaces, hostIfaces, true);
             if (!check.satisfied) {
                 XX_LOGI(
                     "Plugin `{}` ({}) skipped on agent side: host lacks required "
@@ -3142,8 +3253,8 @@ asio::awaitable<void>
         // 所有插件统一经 path 外置指定 (必填; 不区分内置/外置插件)
         std::error_code ec;
         if (fs::is_directory(cfg.path, ec)) {
-            std::string              name, entry;
-            std::vector<std::string> depends, optionalDepends;
+            std::string                      name, entry;
+            std::vector<std::string>         depends, optionalDepends;
             plugin::PluginManifestInterfaces ifaces;
             if (parsePluginManifest(
                     fs::path(cfg.path),
@@ -3181,8 +3292,7 @@ asio::awaitable<void>
     for (const auto& item : ordered) {
         // sides==Auto 的配置项: 无 agent 入口时视为纯 client 插件跳过并警告
         // (显式 sides==agent 缺入口仍为错误; sides==client 已在上方过滤)
-        bool allowClientOnly
-            = item.cfg && item.cfg->sides == agentxx::agent::PluginSide::Auto;
+        bool allowClientOnly = item.cfg && item.cfg->sides == agentxx::agent::PluginSide::Auto;
         co_await loadPluginAsync(item.path, item.cfg, allowClientOnly);
     }
 }
@@ -3290,6 +3400,95 @@ std::string PluginManager::getPluginJson(const std::string& name) {
 }
 
 // ==================== 宿主配置访问 (vtable get_config/get_tool_prompt) ====================
+
+std::string PluginManager::getSessionWorkDir() {
+    auto ctx = agentContext_.lock();
+    if (!ctx || !ctx->agentConfig) {
+        return {};
+    }
+    return ctx->agentConfig->resolvedWorkDir();
+}
+
+std::string PluginManager::getModelConfigJson() {
+    auto ctx = agentContext_.lock();
+    if (!ctx || !ctx->agentConfig) {
+        return {};
+    }
+    const auto& cfg  = *ctx->agentConfig;
+    neograph::json j = neograph::json::object();
+    j["baseUrl"]     = cfg.model.baseUrl;
+    j["apiKey"]      = cfg.model.apiKey;
+    j["modelName"]   = cfg.model.modelName;
+    // websearch / rag 配置原样透出 (语义见 agent/config.h)
+    j["websearchApiUrl"]               = cfg.websearchApiUrl;
+    j["websearchConvertHtml2markdown"] = cfg.websearchConvertHtml2markdown;
+    if (cfg.websearchModel.has_value()) {
+        const auto& w     = cfg.websearchModel.value();
+        neograph::json wm = neograph::json::object();
+        wm["baseUrl"]     = w.baseUrl;
+        wm["apiKey"]      = w.apiKey;
+        wm["modelName"]   = w.modelName;
+        j["websearchModel"] = wm;
+    } else {
+        j["websearchModel"] = nullptr;
+    }
+    j["ragDocsPaths"] = cfg.ragDocsPaths;
+    return j.dump();
+}
+
+bool PluginManager::isSessionCancelled(const std::string& threadId) {
+    auto ctx = agentContext_.lock();
+    if (!ctx) {
+        return false;
+    }
+    auto session = ctx->sessions->get(threadId);
+    if (!session) {
+        return false;
+    }
+    auto token = session->getCancelToken();
+    return token && token->is_cancelled();
+}
+
+int PluginManager::setSessionPlanning(
+    const std::string& threadId,
+    const std::string& roadmap,
+    const std::string& todosJson,
+    const std::string& notes
+) {
+    if (threadId.empty() || roadmap.empty()) {
+        return -1;
+    }
+    auto ctx = agentContext_.lock();
+    if (!ctx || !ctx->planningMiddleware) {
+        return -1; // 未装配 Planning 中间件 (如 BaseAgent 场景)
+    }
+    // 与 BaseMiddlewareHandle::getStateItem 同语义 (map 查找/懒创建),
+    // 此处运行在 io 线程, 直接操作 state 映射安全
+    auto& states = ctx->planningMiddleware->states;
+    auto  it     = states.find(threadId);
+    std::shared_ptr<agentxx::middleware::PlanningMiddlewareState> state;
+    if (it != states.end()) {
+        state
+            = std::static_pointer_cast<agentxx::middleware::PlanningMiddlewareState>(it->second);
+    } else {
+        state = std::make_shared<agentxx::middleware::PlanningMiddlewareState>();
+        util::insertOrAssignHeterogeneous(states, threadId, state);
+    }
+    neograph::json planStore = neograph::json::object();
+    planStore["roadmap"]     = roadmap;
+    if (!todosJson.empty()) {
+        try {
+            planStore["todos"] = neograph::json::parse(todosJson);
+        } catch (const std::exception&) {
+            return -1; // 非法 JSON
+        }
+    }
+    if (!notes.empty()) {
+        planStore["notes"] = notes;
+    }
+    state->plannings[threadId] = planStore;
+    return 0;
+}
 
 std::string PluginManager::getConfigJson() {
     auto ctx = agentContext_.lock();

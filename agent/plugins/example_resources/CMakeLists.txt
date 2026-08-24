@@ -4,7 +4,7 @@
 #   合并进 libagentxx; 入口符号经编译定义改名 (纯编译期, 不改插件源码)
 set(PLUGIN_NAME example_resources)
 
-if (AGENTXX_ENABLE_PLUGIN_BUILTIN)
+if (_AGENTXX_ADD_AS_BUILTIN)
   # ===== 内置合并编译分支 =====
   set(_target abp_${PLUGIN_NAME})
   add_library(${_target} OBJECT
@@ -64,7 +64,6 @@ extern \"C\" void agentxx_plugin_builtin_unload_${PLUGIN_NAME}(void* plugin_ctx)
       "${CMAKE_CURRENT_SOURCE_DIR}/skills_runtime/extra_skill/SKILL.md"
       "${CMAKE_CURRENT_SOURCE_DIR}/assets/NOTES.md"
     COMMENT "Copy ${PLUGIN_NAME} plugin resources (builtin mode)")
-  set(AGENTXX_BUILTIN_RESOURCE_OUTPUTS "${AGENTXX_BUILTIN_RESOURCE_OUTPUTS}" "${_res_stamp}" PARENT_SCOPE)
   return()
 endif()
 

@@ -19,9 +19,24 @@ option(AGENTXX_ENABLE_PLUGIN_SCREEN_CAPTURE "Build agentxx_screen_capture plugin
 option(AGENTXX_ENABLE_PLUGIN_SYSTEM_MONITOR "Build agentxx_system_monitor plugin (CPU/GPU usage)." ON)
 option(AGENTXX_ENABLE_PLUGIN_AUDIO_STREAM "Build agentxx_audio_stream plugin (audio capture)." ON)
 option(AGENTXX_ENABLE_PLUGIN_TEXT_SELECTION "Build agentxx_text_selection_monitor plugin (text selection)." ON)
+# ---- 从 lib 内置工具迁移的编程工具插件 (同名同行为; 默认启用编译,
+#      是否内置合并经 AGENTXX_PLUGIN_BUILTIN_LIST 门控) ----
+option(AGENTXX_ENABLE_PLUGIN_PLANNING "Build agentxx_planning plugin (task planning write tool)." ON)
+option(AGENTXX_ENABLE_PLUGIN_FILESYSTEM "Build agentxx_filesystem plugin (list/read/write/edit/glob/grep)." ON)
+option(AGENTXX_ENABLE_PLUGIN_EXECUTE_COMMAND "Build agentxx_execute_command plugin (bash/windows command)." ON)
+option(AGENTXX_ENABLE_PLUGIN_STRING "Build agentxx_string plugin (html2markdown/regexp)." ON)
+option(AGENTXX_ENABLE_PLUGIN_SYSTEM "Build agentxx_system plugin (current date/time)." ON)
+option(AGENTXX_ENABLE_PLUGIN_WEBSEARCH "Build agentxx_websearch plugin (search/fetch url)." ON)
+option(AGENTXX_ENABLE_PLUGIN_RAG_SEARCH "Build agentxx_rag_search plugin (embedding based docs search)." ON)
 # 内置合并编译模式: 启用的插件源文件直接编译进 libagentxx (运行期无需插件
 # 动态库, 无 dlopen); 仅经 libagentxx 构建生效 (见下方"内置合并编译模式")
 option(AGENTXX_ENABLE_PLUGIN_BUILTIN "Merge enabled plugins into libagentxx (built-in, no runtime plugin dlls)." OFF)
+# 内置合并名单门控 (仅 AGENTXX_ENABLE_PLUGIN_BUILTIN=ON 时生效):
+# - 未设置/空/"all": 全部启用插件内置合并进 libagentxx
+# - 分号(或逗号)分隔的插件名列表 (如 "agentxx_filesystem;agentxx_planning"):
+#   仅名单内插件内置合并, 名单外启用插件仍编译为独立动态库
+set(AGENTXX_PLUGIN_BUILTIN_LIST "" CACHE STRING
+  "Which enabled plugins to merge into libagentxx when AGENTXX_ENABLE_PLUGIN_BUILTIN=ON ('' or 'all' = all; semicolon list = only listed ones)")
 
 # ===== 插件平台支持 =====
 # 各插件并非全平台适配: 源码无对应平台的真实实现时 (仅有 "not supported/
@@ -146,81 +161,105 @@ if (NOT EXISTS "${AGENTXX_LIB_INCLUDE_DIR}")
   message(FATAL_ERROR "[agentxx_plugins] libagentxx include dir not found: ${AGENTXX_LIB_INCLUDE_DIR}")
 endif()
 
-# ===== 内置合并编译模式 (可选) =====
-# - AGENTXX_ENABLE_PLUGIN_BUILTIN=ON 时, 由 libagentxx 构建经
-#   add_subdirectory 引入本目录 (AGENTXX_IS_LIB_BUILTIN_SUBDIR=1):
-#   各插件子目录仅收集源文件/依赖库/入口符号, 不创建动态库目标;
-#   生成的清单 (builtin_plugins.cpp) 由 libagentxx 编译, 运行期经
-#   agentxx_get_builtin_plugins() 加载 (无 dlopen, 无插件动态库文件)
-# - 资源文件 (plugin.yaml, example_js 的 plugin.js) 仍拷贝到
-#   ${AGENTXX_EXEC_INSTALL_PREFIX}/plugins/<插件名>/ —— 运行期配置沿用
-#   插件目录形态, loadPluginAsync 在入口文件缺失时自动回退内置注册表
-#   (depends/级联卸载/拓扑排序全部复用现有机制)
-# - 独立构建本目录时不支持内置模式 (无 libagentxx 目标可合并)
+
+# --- 名单解析: AGENTXX_PLUGIN_BUILTIN_LIST → ALL 标志 / 具名名单 ---
+set(_AGENTXX_BUILTIN_ALL OFF)
+set(_AGENTXX_BUILTIN_NAMED "")
 if (AGENTXX_ENABLE_PLUGIN_BUILTIN)
+  # 内置合并须由 libagentxx 构建引入 (存在可合并的库目标); 本目录独立构建
+  # 时无 libagentxx 可合并, 直接报错 (与既有行为一致)
   if (NOT AGENTXX_IS_LIB_BUILTIN_SUBDIR)
     message(FATAL_ERROR
       "[agentxx_plugins] AGENTXX_ENABLE_PLUGIN_BUILTIN=ON 须经 libagentxx 构建 "
       "(在顶层 agent/CMakeLists.txt 配置时开启; 本目录独立构建时请关闭该选项)")
   endif()
+  if ("${AGENTXX_PLUGIN_BUILTIN_LIST}" STREQUAL "" OR "${AGENTXX_PLUGIN_BUILTIN_LIST}" STREQUAL "all")
+    set(_AGENTXX_BUILTIN_ALL ON)
+  else()
+    # 宽容处理: 逗号分隔同样接受 (命令行 -D 传分号列表需转义, 逗号更顺手)
+    string(REPLACE "," ";" _AGENTXX_BUILTIN_NAMED "${AGENTXX_PLUGIN_BUILTIN_LIST}")
+    list(REMOVE_ITEM _AGENTXX_BUILTIN_NAMED "")
+  endif()
+endif()
 
+# --- 每插件内置判定 + 统一装载 ---
+# macro (非 function): 不产生新变量作用域, 子目录内置分支的 PARENT_SCOPE
+# 收集变量直接回到本目录作用域; _AGENTXX_ADD_AS_BUILTIN 为目录作用域变量,
+# add_subdirectory 后子目录继承本次判定值 (各插件 CMakeLists 开头消费),
+# 实现"名单内插件内置合并 / 名单外插件独立动态库"的混合模式
+macro(agentxx_load_plugin _dir_name _enable_var)
+  if (${_enable_var})
+    set(_AGENTXX_ADD_AS_BUILTIN OFF)
+    if (AGENTXX_ENABLE_PLUGIN_BUILTIN
+        AND (_AGENTXX_BUILTIN_ALL OR "${_dir_name}" IN_LIST _AGENTXX_BUILTIN_NAMED))
+      set(_AGENTXX_ADD_AS_BUILTIN ON)
+    endif()
+    add_subdirectory(${_dir_name})
+  endif()
+endmacro()
+
+# 内置收集变量初始化 (各插件内置分支追加, 经 PARENT_SCOPE/目录作用域传播
+# 回本目录; 汇总后整体传回 libagentxx 合并进共享/静态库)
+if (AGENTXX_ENABLE_PLUGIN_BUILTIN)
   # MSVC: 插件 OBJECT 库多目标并行编译时 PDB 写 (MSPDBSRV) 偶发 C1041
   # 竞态; 调试信息直接嵌入 .obj (/Z7, 不生成目标 PDB), 从根上消除
   if (MSVC)
     add_compile_options(/Z7)
   endif()
 
-  # 收集变量 (各插件子目录在 AGENTXX_ENABLE_PLUGIN_BUILTIN 分支内创建
-  # OBJECT 库目标并追加, 经 PARENT_SCOPE 传播回本目录作用域; 汇总后
-  # 整体传回 libagentxx, 目标文件合并进共享/静态库)
   set(AGENTXX_BUILTIN_PLUGIN_OBJECT_TARGETS "")
   set(AGENTXX_BUILTIN_PLUGIN_LINK_LIBS "")
   set(AGENTXX_BUILTIN_PLUGIN_NAMES "")
   set(AGENTXX_BUILTIN_MANIFEST_DECLS "")
   set(AGENTXX_BUILTIN_MANIFEST_ENTRIES "")
-  set(AGENTXX_BUILTIN_RESOURCE_OUTPUTS "")
+endif()
 
-  # 启用条件与下方"各插件子目录"动态编译分支一致;
-  # 平台不支持时由各插件自身 CMakeLists 开头的判定提前 return() 跳过,
-  # 内置清单登记 (AGENTXX_BUILTIN_PLUGIN_NAMES) 由各插件 builtin 分支
-  # 自行追加 (见各插件), 提前 return 时天然不会误登记
-  if (AGENTXX_ENABLE_PLUGIN_EXAMPLE)
-    add_subdirectory(example_plugin)
-    add_subdirectory(example_resources)
-  endif()
+# ===== 各插件装载 (启用开关判定 + 内置/动态库双模式) =====
+# - 平台不支持时由各插件自身 CMakeLists 开头的判定提前 return() 跳过
+#   (见 cmake/plugin_platform_support.cmake 与各插件声明处); 内置清单登记
+#   由各插件 builtin 分支自行追加, 提前 return 时天然不会误登记
 
-  if (AGENTXX_ENABLE_PLUGIN_JS)
-    add_subdirectory(agentxx_javascript_engine)
-    if (AGENTXX_ENABLE_PLUGIN_EXAMPLE)
-      add_subdirectory(example_js)
-    endif()
-  endif()
+agentxx_load_plugin(example_plugin AGENTXX_ENABLE_PLUGIN_EXAMPLE)
+agentxx_load_plugin(example_resources AGENTXX_ENABLE_PLUGIN_EXAMPLE)
 
-  if (AGENTXX_ENABLE_PLUGIN_CODEGRAPH)
-    add_subdirectory(agentxx_codegraph)
-  endif()
+# JS 相关 (example_js 依赖 quickjs 引擎目标, 须随引擎同批装载)
+agentxx_load_plugin(agentxx_javascript_engine AGENTXX_ENABLE_PLUGIN_JS)
+agentxx_load_plugin(example_js AGENTXX_ENABLE_PLUGIN_EXAMPLE)
 
-  if (AGENTXX_ENABLE_PLUGIN_SCREEN_CAPTURE)
-    add_subdirectory(agentxx_screen_capture)
-  endif()
+# agentxx_codegraph (需 codegraph-cpp 库; 顶层 AGENTXX_ENABLE_PLUGIN_CODEGRAPH 时构建)
+agentxx_load_plugin(agentxx_codegraph AGENTXX_ENABLE_PLUGIN_CODEGRAPH)
 
-  if (AGENTXX_ENABLE_PLUGIN_COMPUTER_USE)
-    add_subdirectory(agentxx_computer_use)
-  endif()
+# agentxx_screen_capture (屏幕捕获; 独立插件, agentxx_computer_use depends 依赖它;
+# 与 computer_use 同为仅 Windows 实现, 平台支持须保持一致)
+agentxx_load_plugin(agentxx_screen_capture AGENTXX_ENABLE_PLUGIN_SCREEN_CAPTURE)
 
-  if (AGENTXX_ENABLE_PLUGIN_SYSTEM_MONITOR)
-    add_subdirectory(agentxx_system_monitor)
-  endif()
+# agentxx_computer_use (ui_control; 运行时依赖 agentxx_screen_capture, 配置时须同时加载)
+agentxx_load_plugin(agentxx_computer_use AGENTXX_ENABLE_PLUGIN_COMPUTER_USE)
 
-  if (AGENTXX_ENABLE_PLUGIN_AUDIO_STREAM)
-    add_subdirectory(agentxx_audio_stream)
-  endif()
+# agentxx_system_monitor (系统资源监控: CPU/内存/GPU; 从 lib expand 拆分;
+# Windows/Linux 有真实实现, Android 复用 Linux 分支, macOS 为桩跳过)
+agentxx_load_plugin(agentxx_system_monitor AGENTXX_ENABLE_PLUGIN_SYSTEM_MONITOR)
 
-  if (AGENTXX_ENABLE_PLUGIN_TEXT_SELECTION)
-    add_subdirectory(agentxx_text_selection_monitor)
-  endif()
+# agentxx_audio_stream (音频流捕获: 系统输出/程序输出/麦克风; 从 lib expand 拆分;
+# 当前所有平台实现均未完成 —— Windows WASAPI 被源码 `&& false` 停用, 全平台跳过)
+agentxx_load_plugin(agentxx_audio_stream AGENTXX_ENABLE_PLUGIN_AUDIO_STREAM)
 
-  # 生成内置插件清单 (编译进 libagentxx; 引用各插件改名后的入口符号)
+# agentxx_text_selection_monitor (系统级文本选择事件流; 从 lib expand 拆分;
+# 仅 Windows 有真实实现)
+agentxx_load_plugin(agentxx_text_selection_monitor AGENTXX_ENABLE_PLUGIN_TEXT_SELECTION)
+
+# ---- 从 lib 内置工具迁移的编程工具插件 (同名同行为; 默认全部内置编译,
+#      经 AGENTXX_PLUGIN_BUILTIN_LIST 门控, 见文件头说明) ----
+agentxx_load_plugin(agentxx_planning AGENTXX_ENABLE_PLUGIN_PLANNING)
+agentxx_load_plugin(agentxx_filesystem AGENTXX_ENABLE_PLUGIN_FILESYSTEM)
+agentxx_load_plugin(agentxx_execute_command AGENTXX_ENABLE_PLUGIN_EXECUTE_COMMAND)
+agentxx_load_plugin(agentxx_string AGENTXX_ENABLE_PLUGIN_STRING)
+agentxx_load_plugin(agentxx_system AGENTXX_ENABLE_PLUGIN_SYSTEM)
+agentxx_load_plugin(agentxx_websearch AGENTXX_ENABLE_PLUGIN_WEBSEARCH)
+agentxx_load_plugin(agentxx_rag_search AGENTXX_ENABLE_PLUGIN_RAG_SEARCH)
+
+# ===== 内置清单生成 (存在任一实际内置的插件时) =====
+if (AGENTXX_ENABLE_PLUGIN_BUILTIN)
   list(LENGTH AGENTXX_BUILTIN_PLUGIN_NAMES AGENTXX_BUILTIN_PLUGIN_COUNT)
   configure_file(
     "${CMAKE_CURRENT_SOURCE_DIR}/builtin_plugins.cpp.in"
@@ -228,13 +267,6 @@ if (AGENTXX_ENABLE_PLUGIN_BUILTIN)
     @ONLY
   )
 
-  # 资源拷贝 (运行期目录配置需 plugin.yaml; example_js 另需 plugin.js)
-  # - 与动态编译分支的 POST_BUILD 拷贝同目标目录; ALL 保证随 libagentxx 构建执行
-  if (AGENTXX_BUILTIN_RESOURCE_OUTPUTS)
-    add_custom_target(agentxx_builtin_plugin_resources ALL
-      DEPENDS ${AGENTXX_BUILTIN_RESOURCE_OUTPUTS}
-    )
-  endif()
 
   message("[agentxx_plugins] Builtin plugins (merged into libagentxx): ${AGENTXX_BUILTIN_PLUGIN_NAMES}")
 
@@ -242,56 +274,4 @@ if (AGENTXX_ENABLE_PLUGIN_BUILTIN)
   set(AGENTXX_BUILTIN_PLUGIN_OBJECT_TARGETS "${AGENTXX_BUILTIN_PLUGIN_OBJECT_TARGETS}" PARENT_SCOPE)
   set(AGENTXX_BUILTIN_PLUGIN_LINK_LIBS "${AGENTXX_BUILTIN_PLUGIN_LINK_LIBS}" PARENT_SCOPE)
   set(AGENTXX_BUILTIN_MANIFEST_SOURCE "${CMAKE_CURRENT_BINARY_DIR}/builtin_plugins.cpp" PARENT_SCOPE)
-  return()
-endif()
-
-# ===== 各插件子目录 (独立动态库编译, 默认) =====
-# - 每个插件子目录自带 CMakeLists.txt, 可独立编译
-# - 仅 AGENTXX_ENABLE_PLUGIN_JS 时编译 JS 相关插件 (依赖 quickjs 库)
-# - 平台不支持时由各插件自身 CMakeLists 开头的判定提前 return() 跳过
-#   (见 cmake/plugin_platform_support.cmake 与各插件声明处)
-if (AGENTXX_ENABLE_PLUGIN_EXAMPLE)
-  add_subdirectory(example_plugin)
-  add_subdirectory(example_resources)
-endif()
-
-if (AGENTXX_ENABLE_PLUGIN_JS)
-  add_subdirectory(agentxx_javascript_engine)
-  if (AGENTXX_ENABLE_PLUGIN_EXAMPLE)
-    add_subdirectory(example_js)
-  endif()
-endif()
-
-# agentxx_codegraph (需 codegraph-cpp 库; 顶层 AGENTXX_ENABLE_PLUGIN_CODEGRAPH 时构建)
-if (AGENTXX_ENABLE_PLUGIN_CODEGRAPH)
-  add_subdirectory(agentxx_codegraph)
-endif()
-
-# agentxx_screen_capture (屏幕捕获; 独立插件, agentxx_computer_use depends 依赖它;
-# 与 computer_use 同为仅 Windows 实现, 平台支持须保持一致)
-if (AGENTXX_ENABLE_PLUGIN_SCREEN_CAPTURE)
-  add_subdirectory(agentxx_screen_capture)
-endif()
-
-# agentxx_computer_use (ui_control; 运行时依赖 agentxx_screen_capture, 配置时须同时加载)
-if (AGENTXX_ENABLE_PLUGIN_COMPUTER_USE)
-  add_subdirectory(agentxx_computer_use)
-endif()
-
-# agentxx_system_monitor (系统资源监控: CPU/内存/GPU; 从 lib expand 拆分;
-# Windows/Linux 有真实实现, Android 复用 Linux 分支, macOS 为桩跳过)
-if (AGENTXX_ENABLE_PLUGIN_SYSTEM_MONITOR)
-  add_subdirectory(agentxx_system_monitor)
-endif()
-
-# agentxx_audio_stream (音频流捕获: 系统输出/程序输出/麦克风; 从 lib expand 拆分;
-# 当前所有平台实现均未完成 —— Windows WASAPI 被源码 `&& false` 停用, 全平台跳过)
-if (AGENTXX_ENABLE_PLUGIN_AUDIO_STREAM)
-  add_subdirectory(agentxx_audio_stream)
-endif()
-
-# agentxx_text_selection_monitor (系统级文本选择事件流; 从 lib expand 拆分;
-# 仅 Windows 有真实实现)
-if (AGENTXX_ENABLE_PLUGIN_TEXT_SELECTION)
-  add_subdirectory(agentxx_text_selection_monitor)
 endif()

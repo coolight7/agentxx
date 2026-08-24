@@ -447,12 +447,51 @@ std::string b64 = agentxx::util::base64Encode(sv);  // 静态链入本插件副�
 > 目标: 可选把启用的插件源文件直接编译进 libagentxx, 运行期无需插件动态库
 > (无 dlopen; 适合嵌入式/单文件分发/不便携带 .so/.dll 的场景)。
 
+**内置名单门控 (AGENTXX_PLUGIN_BUILTIN_LIST, 2026-08)**:
+
+- `AGENTXX_ENABLE_PLUGIN_BUILTIN=ON` 时经 `AGENTXX_PLUGIN_BUILTIN_LIST`
+  指定哪些启用插件内置合并:
+  - 未设置 / 空 / `"all"`: 全部启用插件内置合并 (默认)
+  - 分号或逗号分隔的插件名列表 (如
+    `"agentxx_filesystem,agentxx_planning"`): 仅名单内插件内置合并,
+    **名单外启用插件仍编译为独立动态库 (混合模式)** —— 运行期动态库优先
+    dlopen 加载, 入口文件缺失时回退内置注册表, 两形态共存无冲突
+- 实现要点: plugins/CMakeLists.txt 以 `agentxx_load_plugin()` macro 统一装载
+  (macro 无新作用域, 子目录 PARENT_SCOPE 收集直接回本目录), 装载前按名单
+  判定并 set 目录变量 `_AGENTXX_ADD_AS_BUILTIN`, 各插件子目录开头据此选择
+  内置 OBJECT 收集分支 / 独立动态库分支
+- 名单内插件的 `plugin.yaml` 资源拷贝为各子目录自包含 ALL custom_target
+  (`<插件名>_builtin_resources`; 原跨目录 add_custom_command(OUTPUT) +
+  父目录 DEPENDS 聚合的写法不会把规则注册进构建图 —— "No rule to make
+  target", 已废弃)
+
+**从 lib 内置工具迁移的编程工具插件 (默认全部内置编译)**:
+
+- `agentxx_planning` (agentxx_planning_write) / `agentxx_filesystem`
+  (list/read/write/edit/glob/grep) / `agentxx_execute_command`
+  (bash/windows) / `agentxx_string` (html2markdown/regexp) /
+  `agentxx_system` (get_current_datetime) / `agentxx_websearch`
+  (web_search/web_fetch/web_fetch_markdown) / `agentxx_rag_search`
+  —— 同名同行为, 实现于各插件 `*_impl.h` (头文件-only 纯函数,
+  测试直测同一实现); 开关 `AGENTXX_ENABLE_PLUGIN_<NAME>`
+- 宿主新增接口表支撑: `agentxx.agent.config` v2 (+`get_work_dir` 会话
+  工作目录) / `agentxx.agent.model` (主模型与 websearch/rag 配置 JSON) /
+  `agentxx.agent.cancel` (会话取消轮询) / `agentxx.agent.planning`
+  (planning state 写入); 见 plugin_api.h 与 PluginManager 对应 vtable 实现
+- 独立动态库链接注意: agentxx_util/libhs/libcrypto 等静态归档成员相互引用
+  (如 libhs 引用 CRYPTO_memcmp、util 引用 html2md), 链接器单遍扫描无法自解析;
+  各插件在链接行**尾部以绝对路径重复提供**相关归档兜底 (target 形式会被
+  CMake 去重/重排, 裸路径不会)
+
 **构建**:
 
-- 顶层 superbuild 加 `-DAGENTXX_ENABLE_PLUGIN_BUILTIN=ON` 后, 跳过
-  `agentxx_plugins_repo` (独立插件动态库构建); 由 `agentxx_lib_repo`
-  (libagentxx) 经 `add_subdirectory(../plugins)` 以内置分支收集启用的插件,
-  与 lib 源码一并编译
+- 顶层 superbuild 加 `-DAGENTXX_ENABLE_PLUGIN_BUILTIN=ON` 后, 由
+  `agentxx_lib_repo` (libagentxx) 经 `add_subdirectory(../plugins)` 收集
+  名单内插件内置合并; **名单外插件仍由本目录编译为独立动态库** (混合模式;
+  全量内置时跳过 `agentxx_plugins_repo` 动态库构建)
+- 冷构建注意: 内置模式下插件子目录的 `find_package(agentxx_util)` 经
+  `if (NOT TARGET agentxx_util)` 门控 —— lib 目标树内 util 已存在 (尚未
+  install), 直接复用; 独立构建插件时才经安装 config 导入
 - 各插件子目录 CMakeLists.txt 内置分支 (AGENTXX_ENABLE_PLUGIN_BUILTIN):
   - 源文件编译为**独立 OBJECT 库** (`abp_<插件名>`, per-plugin 编译定义/
     包含路径互不影响), 目标文件经 `$<TARGET_OBJECTS:...>` 合并进

@@ -21,9 +21,13 @@ if (NOT QUICKJS_LIBRARY OR NOT QUICKJS_INCLUDE_DIR)
     "or pass -DAGENTXX_INSTALL_DIR=<path>")
 endif()
 
-find_package(agentxx_util REQUIRED)
+if (NOT TARGET agentxx_util)
+  # 独立构建本插件时经安装 config 导入; 内置合并模式 (经 libagentxx 构建)
+  # 下 util 目标已存在于宿主工程, 跳过导入 (此时 install 目录尚未生成 config)
+  find_package(agentxx_util REQUIRED)
+endif()
 
-if (AGENTXX_ENABLE_PLUGIN_BUILTIN)
+if (_AGENTXX_ADD_AS_BUILTIN)
   # ===== 内置合并编译分支 =====
   set(_target abp_${PLUGIN_NAME})
   add_library(${_target} OBJECT
@@ -65,12 +69,13 @@ extern \"C\" void agentxx_plugin_builtin_unload_${PLUGIN_NAME}(void* plugin_ctx)
   set(AGENTXX_BUILTIN_MANIFEST_ENTRIES "${AGENTXX_BUILTIN_MANIFEST_ENTRIES}" PARENT_SCOPE)
   # 资源: plugin.yaml (运行期目录配置推导 depends/入口)
   set(_res "${AGENTXX_EXEC_INSTALL_PREFIX}/plugins/${PLUGIN_NAME}/plugin.yaml")
-  add_custom_command(OUTPUT "${_res}"
+  # 资源拷贝 (自包含 ALL 目标: 跨目录 OUTPUT 不进构建图, 见 plugins.md;
+  # ALL 保证随 libagentxx 构建执行; 仅内置合并分支存在本目标)
+  add_custom_target(${PLUGIN_NAME}_builtin_resources ALL
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
       "${CMAKE_CURRENT_SOURCE_DIR}/plugin.yaml" "${_res}"
     DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/plugin.yaml"
     COMMENT "Copy ${PLUGIN_NAME} plugin resource (builtin mode)")
-  set(AGENTXX_BUILTIN_RESOURCE_OUTPUTS "${AGENTXX_BUILTIN_RESOURCE_OUTPUTS}" "${_res}" PARENT_SCOPE)
   return()
 endif()
 

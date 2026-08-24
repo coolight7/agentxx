@@ -5,7 +5,7 @@
 #   get_own_info 的 path 推导同目录 plugin.js, 目录配置加载时回退内置注册表)
 set(PLUGIN_NAME example_js)
 
-if (AGENTXX_ENABLE_PLUGIN_BUILTIN)
+if (_AGENTXX_ADD_AS_BUILTIN)
   # ===== 内置合并编译分支 =====
   set(_target abp_${PLUGIN_NAME})
   add_library(${_target} OBJECT
@@ -42,19 +42,19 @@ extern \"C\" void agentxx_plugin_builtin_unload_${PLUGIN_NAME}(void* plugin_ctx)
   set(AGENTXX_BUILTIN_MANIFEST_ENTRIES "${AGENTXX_BUILTIN_MANIFEST_ENTRIES}" PARENT_SCOPE)
   # 资源: plugin.yaml + plugin.js (壳运行时推导同目录 plugin.js 并委派给引擎)
   set(_res "${AGENTXX_EXEC_INSTALL_PREFIX}/plugins/${PLUGIN_NAME}/plugin.yaml")
-  add_custom_command(OUTPUT "${_res}"
+  # 资源拷贝 (自包含 ALL 目标: 跨目录 OUTPUT 不进构建图, 见 plugins.md;
+  # ALL 保证随 libagentxx 构建执行; 仅内置合并分支存在本目标)
+  add_custom_target(${PLUGIN_NAME}_builtin_resources ALL
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
       "${CMAKE_CURRENT_SOURCE_DIR}/plugin.yaml" "${_res}"
     DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/plugin.yaml"
     COMMENT "Copy ${PLUGIN_NAME} plugin resource (builtin mode)")
-  set(AGENTXX_BUILTIN_RESOURCE_OUTPUTS "${AGENTXX_BUILTIN_RESOURCE_OUTPUTS}" "${_res}" PARENT_SCOPE)
   set(_res "${AGENTXX_EXEC_INSTALL_PREFIX}/plugins/${PLUGIN_NAME}/plugin.js")
   add_custom_command(OUTPUT "${_res}"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
       "${CMAKE_CURRENT_SOURCE_DIR}/plugin.js" "${_res}"
     DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/plugin.js"
     COMMENT "Copy ${PLUGIN_NAME} plugin script (builtin mode)")
-  set(AGENTXX_BUILTIN_RESOURCE_OUTPUTS "${AGENTXX_BUILTIN_RESOURCE_OUTPUTS}" "${_res}" PARENT_SCOPE)
   return()
 endif()
 

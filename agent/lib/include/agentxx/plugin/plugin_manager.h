@@ -559,6 +559,33 @@ public:
     /// - 直接读取实例保存的 args (加载时随配置传入, 宿主不解析字段语义)
     std::string getPluginArgsJson(PluginInstance* inst);
 
+    // ==================== 会话状态访问 (vtable 新增接口表实现入口) ====================
+    /// 以下方法均须在 io 线程调用 (C ABI 回调经 ioCallSync 投递), 内部直接
+    /// 访问 agentContext_ (私有) 并转发到 AgentContext/中间件
+
+    /// 解析后的会话工作目录 (AgentConfig::resolvedWorkDir; 未装配返回空串)
+    /// - vtable agentxx.agent.config v2 get_work_dir 实现入口
+    std::string getSessionWorkDir();
+    /// 宿主主模型及关联配置 JSON (未装配返回空串):
+    /// {"baseUrl","apiKey","modelName","websearchApiUrl",
+    ///  "websearchConvertHtml2markdown","websearchModel","ragDocsPaths"}
+    /// - vtable agentxx.agent.model get_config 实现入口
+    ///   (apiKey 透出仅限本项目内置插件使用, 见 plugin_api.h 注释)
+    std::string getModelConfigJson();
+    /// 查询会话当前轮次是否已取消 (会话不存在/无取消令牌返回 false)
+    /// - vtable agentxx.agent.cancel is_cancelled 实现入口
+    bool isSessionCancelled(const std::string& threadId);
+    /// 写入指定会话的两层规划 + 备忘录 (PlanningMiddlewareHandle state)
+    /// - todosJson 为 todo 数组 JSON 文本 (空串跳过); notes 空串跳过
+    /// - 返回 0 成功; 未装配 PlanningMiddleware/todos 非法 JSON 返回非 0
+    /// - vtable agentxx.agent.planning set_planning 实现入口
+    int setSessionPlanning(
+        const std::string& threadId,
+        const std::string& roadmap,
+        const std::string& todosJson,
+        const std::string& notes
+    );
+
 private:
 
     friend class PluginInstance;

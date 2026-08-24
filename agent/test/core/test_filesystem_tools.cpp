@@ -1,6 +1,9 @@
 #include "test_filesystem_tools.h"
+#include <neograph/types.h>
 #include "agentxx/agent/context.h"
-#include "agentxx/tools/filesystem.h"
+// 原 lib 内置工具已迁移至 agentxx_filesystem 插件 (同名同行为); 测试直测
+// 插件同一实现 (filesystem_impl.h), 保证插件行为与测试覆盖一致
+#include "filesystem_impl.h"
 #include "agentxx/util/string_util.h"
 #include <chrono>
 #include <cstdio>
@@ -8,6 +11,58 @@
 #include <fstream>
 #include <iostream>
 #include <string>
+
+namespace agentxx {
+namespace tools {
+
+/// 会话工作目录解析 (原工具经 AgentContext; 与插件 get_work_dir 同源):
+/// ctx 未装配时回退进程 cwd, 相对路径用例语义不变
+inline std::string testResolvedWorkDir(const std::weak_ptr<agentxx::agent::AgentContext>& ctx) {
+    if (auto p = ctx.lock()) {
+        if (p->agentConfig) {
+            auto dir = p->agentConfig->resolvedWorkDir();
+            if (!dir.empty()) {
+                return dir;
+            }
+        }
+    }
+    return std::filesystem::current_path().generic_string();
+}
+
+/// 测试适配: 原工具类的同名薄包装 (execute_async 直调插件实现;
+/// impl 的取消回调传 nullptr 等价无取消支持, 与原单测语义一致)
+#define AGENTXX_TEST_FS_TOOL(NAME, IMPL_FN, TOOL_NAME, DEPICT)                  \
+    struct NAME {                                                               \
+        std::weak_ptr<agentxx::agent::AgentContext> ctx;                        \
+        explicit NAME(std::weak_ptr<agentxx::agent::AgentContext> c)               \
+            : ctx(std::move(c)) {}                                              \
+        neograph::ChatTool get_definition() const {                              \
+            return {TOOL_NAME, DEPICT, {}};                                     \
+        }                                                                       \
+        asio::awaitable<std::string> execute_async(const neograph::json& args)  \
+            const {                                                             \
+            co_return ::agentxx::filesystem_plugin::IMPL_FN(                    \
+                args, testResolvedWorkDir(ctx), nullptr);                       \
+        }                                                                       \
+    };
+
+AGENTXX_TEST_FS_TOOL(FileSystemListTool,      fileListExecute,   "agentxx_filesystem_list",
+                     R"(List files and directories at a given path, output is multi-line text similar to `ls -l`, one entry per line: `type size last-modified-time path`.)")
+AGENTXX_TEST_FS_TOOL(FilesystemReadTextFileTool, fileReadExecute,  "agentxx_filesystem_read",
+                     R"(Read a text file (e.g. .txt, .md, .json, .log, source code) and return its contents with line numbers.)")
+AGENTXX_TEST_FS_TOOL(FilesystemWriteFileTool, fileWriteExecute,  "agentxx_filesystem_write",
+                     "Create a new file or overwrite an existing file with the given content.")
+AGENTXX_TEST_FS_TOOL(FilesystemEditTextFileTool, fileEditExecute,  "agentxx_filesystem_edit",
+                     R"(Perform exact string replacement in a text file (e.g. *.txt, *.md, *.cpp, *.h).)")
+AGENTXX_TEST_FS_TOOL(FilesystemGlobTool,      fileGlobExecute,   "agentxx_filesystem_glob",
+                     "Find files and directories matching glob patterns.")
+AGENTXX_TEST_FS_TOOL(FilesystemGrepTool,      fileGrepExecute,   "agentxx_filesystem_grep",
+                     R"(Search file contents using text or regular expressions.)")
+
+#undef AGENTXX_TEST_FS_TOOL
+
+} // namespace tools
+} // namespace agentxx
 
 namespace agentxx {
 namespace test {

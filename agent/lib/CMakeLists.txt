@@ -18,6 +18,12 @@ option(AGENTXX_ENABLE_PCH "Enable precompiled headers (GCC/Clang)." ON)
 # 动态库, 无 dlopen); 源文件/依赖库经 plugins/CMakeLists.txt 内置分支收集
 # (add_subdirectory ../plugins), 入口清单 builtin_plugins.cpp 由 libagentxx 编译
 option(AGENTXX_ENABLE_PLUGIN_BUILTIN "Merge enabled plugins into libagentxx (built-in, no runtime plugin dlls)." OFF)
+# 内置合并名单门控: 空/"all" = 全部启用插件内置; 分号列表 = 仅名单内插件内置,
+# 名单外插件仍编译为独立动态库 (混合模式)。由顶层 superbuild 统一传入。
+if (NOT DEFINED AGENTXX_PLUGIN_BUILTIN_LIST)
+  set(AGENTXX_PLUGIN_BUILTIN_LIST "" CACHE STRING
+    "Which enabled plugins to merge into libagentxx ('' or 'all' = all; list = only listed ones)")
+endif()
 # 内置合并模式下各插件的启用开关 (与 plugins/CMakeLists.txt 同名同默认值;
 # 由顶层 superbuild 统一传入; 仅 AGENTXX_ENABLE_PLUGIN_BUILTIN=ON 时生效)
 option(AGENTXX_ENABLE_PLUGIN_EXAMPLE "Merge example plugin into libagentxx (built-in)." ON)

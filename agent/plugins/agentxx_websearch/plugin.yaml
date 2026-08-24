@@ -1,0 +1,11 @@
+name: agentxx_websearch
+version: 1.0.0
+description: "Web tools: search (agentxx_web_search, api url / model driven), fetch url raw (agentxx_web_fetch) / markdown (agentxx_web_fetch_markdown)"
+entry: libagentxx_websearch.so
+depends:
+interfaces:
+  require:
+    - agentxx.agent.core
+    - agentxx.agent.tools
+  optional:
+    - agentxx.agent.model

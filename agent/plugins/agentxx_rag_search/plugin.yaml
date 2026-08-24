@@ -1,0 +1,11 @@
+name: agentxx_rag_search
+version: 1.0.0
+description: "RAG semantic search tool (agentxx_rag_search): embedding based knowledge base search over configured docs paths"
+entry: libagentxx_rag_search.so
+depends:
+interfaces:
+  require:
+    - agentxx.agent.core
+    - agentxx.agent.tools
+  optional:
+    - agentxx.agent.model

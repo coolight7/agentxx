@@ -11,7 +11,8 @@
 #include "agentxx/nodes/modelcall.h"
 #include "agentxx/nodes/toolcall.h"
 #include "agentxx/tools/share_store.h"
-#include "agentxx/tools/system.h"
+// agentxx_get_current_datetime 已迁移至 agentxx_system 插件 (同名同行为,
+// 经 PluginManager 注册), 此处不再包含 tools/system.h
 #include "agentxx/tools/tool.h"
 #include "agentxx/util/log.h"
 #include "asio/io_context.hpp"

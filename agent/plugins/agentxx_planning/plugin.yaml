@@ -1,0 +1,11 @@
+name: agentxx_planning
+version: 1.0.0
+description: "Two-level task planning tool (agentxx_planning_write): roadmap + todo list + memo"
+entry: libagentxx_planning.so
+depends:
+interfaces:
+  require:
+    - agentxx.agent.core
+    - agentxx.agent.tools
+  optional:
+    - agentxx.agent.planning

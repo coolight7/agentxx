@@ -31,6 +31,7 @@ class MiddlewareContext;
 class PermissionMiddlewareHandle;
 class EventBus;
 class SummarizationMiddlewareHandle;
+class PlanningMiddlewareHandle;
 } // namespace middleware
 
 namespace plugin {
@@ -363,6 +364,12 @@ public:
     // TODO: 用 eventbus 隔离
     std::shared_ptr<agentxx::middleware::PermissionMiddlewareHandle> permissionMiddleware = nullptr;
     agentxx::tools::SubAgentManagerTool* subagentManagerToolPtr                           = nullptr;
+
+    /// 任务规划 (planning) 中间件
+    /// - 由 CodeAgent::initMiddleware 创建注入 (BaseAgent 场景为 nullptr);
+    ///   插件系统经 AgentxxPlanningIface 写入会话规划 state 时取用
+    ///   (原 lib 内置 WritePlanningTool 已迁移至 agentxx_planning 插件)
+    std::shared_ptr<agentxx::middleware::PlanningMiddlewareHandle> planningMiddleware = nullptr;
 
     /// 上下文压缩 (summarization) 中间件
     /// - 供 压缩 或 EventBridge 等复用其 token 估算口径 (countTokensForUtf8Str),

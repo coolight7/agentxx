@@ -36,7 +36,12 @@ Agentxx 是一个使用 C++23 实现的 AI Agent 框架，编译器启用 C++26/
 
 ### 工具调用 (ToolCall)
 
-内置丰富的工具集，按功能分类：
+丰富的工具集，按功能分类。编程基础类工具 (文件系统 / 命令执行 / 网络 /
+知识检索 / 字符串 / 系统时间 / 规划写入) 已从 lib 内置实现拆分为**独立插件**
+(同名同行为, 见 `agent/plugins/agentxx_*`)，经 yaml `plugins` 段配置加载，
+或构建期经 `AGENTXX_ENABLE_PLUGIN_BUILTIN=ON` + `AGENTXX_PLUGIN_BUILTIN_LIST`
+合并编译进 libagentxx (默认全量内置)；lib 内仅保留 share_store / subagent /
+tool_skill_search 与延迟加载装配：
 
 | 分类 | 工具 | 说明 |
 |------|------|------|
@@ -69,6 +74,20 @@ Agentxx 是一个使用 C++23 实现的 AI Agent 框架，编译器启用 C++26/
 | **系统** | `agentxx_get_current_datetime` | 获取当前日期时间 |
 | | `agentxx_get_system_core_info` | 获取 CPU/内存/GPU 使用率 |
 | **UI 控制** | `agentxx_ui_control_keyboard_mouse` | Windows 键鼠控制 (仅 Windows) |
+
+> 插件归属 (2026-08 起): 上表中除 `agentxx_subagent` / `tool_skill_search` /
+> `agentxx_share_store` 外 —— 文件系统 6 件套 (`agentxx_filesystem_*`, 插件
+> `agentxx_filesystem`)、命令执行 (`agentxx_execute_bash_command` /
+> `agentxx_execute_windows_command`, 插件 `agentxx_execute_command`)、网络 3 件
+> (`agentxx_web_search` / `agentxx_web_fetch` / `agentxx_web_fetch_markdown`,
+> 插件 `agentxx_websearch`)、知识检索 (`agentxx_rag_search`, 插件
+> `agentxx_rag_search`)、规划 (`agentxx_planning_write`, 插件
+> `agentxx_planning`)、字符串 2 件 (`agentxx_string_html_to_markdown` /
+> `agentxx_string_regexp`, 插件 `agentxx_string`)、系统时间
+> (`agentxx_get_current_datetime`, 插件 `agentxx_system`) —— 均由对应插件注册,
+> 同名同行为 (实现于各插件 `*_impl.h`, 测试直测同一实现); 未配置/未编译该插件
+> 时对应工具不可用。`agentxx_get_system_core_info` 由 `agentxx_system_monitor`
+> 提供 (此前已完成拆分)。
 
 工具特性：
 - **自动压缩**: 工具输出超过阈值时自动调用 LLM 压缩摘要

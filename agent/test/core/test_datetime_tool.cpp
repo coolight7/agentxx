@@ -1,11 +1,35 @@
 #include "test_datetime_tool.h"
 #include "agentxx/agent/context.h"
-#include "agentxx/tools/system.h"
+// 原 lib 内置工具已迁移至 agentxx_system 插件 (同名同行为); 测试直测插件
+// 同一实现 (system_impl.h), 保证插件行为与测试覆盖一致
+#include "system_impl.h"
 #include <asio/awaitable.hpp>
 #include <iostream>
-#include <neograph/api.h>
+#include <neograph/types.h>
 #include <regex>
 #include <string>
+
+namespace agentxx {
+namespace tools {
+
+/// 测试适配: 原 GetCurrentDateTimeTool 的同名薄包装 (工具类已迁移至插件,
+/// execute_async 直调插件实现, 保持既有用例结构不变)
+struct GetCurrentDateTimeTool {
+    explicit GetCurrentDateTimeTool(std::weak_ptr<agentxx::agent::AgentContext>) {}
+
+    neograph::ChatTool get_definition() const {
+        return {"agentxx_get_current_datetime",
+                "Get the current date, time, and Unix timestamp.",
+                {}};
+    }
+
+    asio::awaitable<std::string> execute_async(const neograph::json&) const {
+        co_return agentxx::system_plugin::currentDatetimeExecute();
+    }
+};
+
+} // namespace tools
+} // namespace agentxx
 
 namespace agentxx {
 namespace test {

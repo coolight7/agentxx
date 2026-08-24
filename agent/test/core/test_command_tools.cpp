@@ -1,6 +1,9 @@
 #include "test_command_tools.h"
+#include <neograph/types.h>
 #include "agentxx/agent/context.h"
-#include "agentxx/tools/execute_command.h"
+// 原 lib 内置工具已迁移至 agentxx_execute_command 插件 (同名同行为); 测试
+// 直测插件同一实现 (execute_command_impl.h), 保证插件行为与测试覆盖一致
+#include "execute_command_impl.h"
 #include "agentxx/util/util.h"
 #include "asio/dispatch.hpp"
 #include "asio/steady_timer.hpp"
@@ -11,6 +14,107 @@
 #include <iostream>
 #include <string>
 #include <system_error>
+
+namespace agentxx {
+namespace tools {
+
+/// 与插件入口同源: 优先宿主 toolPrompt (AgentPrompt 含环境探测后的动态
+/// 描述, 经 refreshEnvDetectedPrompts 刷新), 未配置回退内置默认描述
+inline neograph::ChatTool execmdDefinitionOf(
+    const std::weak_ptr<agentxx::agent::AgentContext>& ctx,
+    const char*                                        name,
+    const char*                                        fallbackDepict
+) {
+    std::string depict = fallbackDepict;
+    if (auto p = ctx.lock()) {
+        if (p->agentConfig) {
+            const auto& tp = p->agentConfig->prompt.toolPrompt;
+            if (auto it = tp.find(name); it != tp.end() && !it->second.depict.empty()) {
+                depict = it->second.depict;
+            }
+        }
+    }
+    neograph::json params = neograph::json{
+        {"type", "object"},
+        {"properties",
+         {
+             {"command",
+              {
+                  {"type", "string"},
+                  {"description", depict},
+              }},
+             {"all_output",
+              {{"type", "boolean"},
+               {"description",
+                "Default `true`. `false`: only return stdout and stderr when the command fails."}}},
+             {"timeout", {{"type", "integer"}, {"description", "Default `60` seconds."}}},
+         }},
+        {"required", neograph::json::array({"command"})},
+    };
+    return {name, depict, std::move(params)};
+}
+
+/// 会话工作目录解析 (原工具经 AgentContext; 与插件 get_work_dir 同源):
+/// ctx 未装配时回退进程 cwd, 相对路径用例语义不变
+inline std::string testResolvedWorkDir(const std::weak_ptr<agentxx::agent::AgentContext>& ctx) {
+    if (auto p = ctx.lock()) {
+        if (p->agentConfig) {
+            auto dir = p->agentConfig->resolvedWorkDir();
+            if (!dir.empty()) {
+                return dir;
+            }
+        }
+    }
+    return std::filesystem::current_path().generic_string();
+}
+
+/// 测试适配: 原工具类的同名薄包装 (execute_async 直调插件实现)
+struct ExecuteBashCommandTool {
+    std::weak_ptr<agentxx::agent::AgentContext> ctx;
+    explicit ExecuteBashCommandTool(std::weak_ptr<agentxx::agent::AgentContext> c)
+        : ctx(std::move(c)) {}
+
+    neograph::ChatTool get_definition() const {
+        return execmdDefinitionOf(
+            ctx,
+            "agentxx_execute_bash_command",
+            "Execute a shell/bash command and return its output."
+        );
+    }
+
+    asio::awaitable<std::string> execute_async(const neograph::json& args) const {
+        co_return agentxx::execmd_plugin::bashExecute(
+            args,
+            testResolvedWorkDir(ctx),
+            /*isCancelled=*/nullptr
+        );
+    }
+};
+
+struct ExecuteWindowsCommandTool {
+    std::weak_ptr<agentxx::agent::AgentContext> ctx;
+    explicit ExecuteWindowsCommandTool(std::weak_ptr<agentxx::agent::AgentContext> c)
+        : ctx(std::move(c)) {}
+
+    neograph::ChatTool get_definition() const {
+        return execmdDefinitionOf(
+            ctx,
+            "agentxx_execute_windows_command",
+            "Execute a Windows command via cmd.exe."
+        );
+    }
+
+    asio::awaitable<std::string> execute_async(const neograph::json& args) const {
+        co_return agentxx::execmd_plugin::windowsExecute(
+            args,
+            testResolvedWorkDir(ctx),
+            /*isCancelled=*/nullptr
+        );
+    }
+};
+
+} // namespace tools
+} // namespace agentxx
 
 namespace agentxx {
 namespace test {

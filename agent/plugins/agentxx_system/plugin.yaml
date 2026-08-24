@@ -1,0 +1,9 @@
+name: agentxx_system
+version: 1.0.0
+description: "System info tools: current date/time with Unix timestamp (agentxx_get_current_datetime)"
+entry: libagentxx_system.so
+depends:
+interfaces:
+  require:
+    - agentxx.agent.core
+    - agentxx.agent.tools
