@@ -335,6 +335,8 @@ static TestResult testUpdateHistoryPersistence() {
 
         // 内存中已完成
         XX_TEST_EXPECT_TRUE(s1->viewMessages.back().tool->toolFinished);
+        // 模拟轮末统一补存 (节流窗口内的 append/update 落库)
+        s1->flushViewMessages();
 
         // ---- 模拟重启: 新实例恢复, tool 消息应保持已完成 ----
         auto p2              = std::make_shared<SessionStore>(root);
@@ -392,6 +394,8 @@ static TestResult testSessionStoreIntegration() {
             {"content", "u1"  }
         });
         s1->saveLlmMessages();
+        // 模拟轮末统一补存 (节流窗口内的 append 落库)
+        s1->flushViewMessages();
         auto hash1 = s1->getHashInfo();
         XX_TEST_EXPECT_EQ(hash1.count, size_t{3});
 
@@ -432,6 +436,80 @@ static TestResult testSessionStoreIntegration() {
         auto sOther = store3->getOrCreate("thread-b");
         XX_TEST_EXPECT_EQ(sOther->viewMessages.size(), size_t{0});
         XX_TEST_EXPECT_EQ(sOther->getHashInfo().count, size_t{0});
+    }
+    fs::remove_all(root);
+    return TestResult{};
+}
+
+// ---------------------------------------------------------------------------
+// 持久化节流: 首次触发立即落盘, 窗口内合并, 轮末强制补存收敛
+// ---------------------------------------------------------------------------
+
+static TestResult testPersistThrottle() {
+    using agentxx::agent::SessionStore;
+    using agentxx::agent::SessionsManager;
+    using V = agentxx::agent::ViewMessage;
+
+    auto root = makeTempRoot();
+    {
+        auto sessionStore   = std::make_shared<SessionStore>(root);
+        auto store          = std::make_shared<SessionsManager>();
+        store->sessionStore = sessionStore;
+        auto s1             = store->getOrCreate("throttle");
+
+        // ---- view 节流: 第 1 条窗口未开启 → 立即落盘 ----
+        s1->appendViewMessage(V::makeText(V::Role::User, "u1"));
+        {
+            SessionStore probe(root);
+            XX_TEST_EXPECT_EQ(probe.loadSession("throttle").viewMessages.size(), size_t{1});
+        }
+        // ---- 第 2/3 条: 节流窗口内 (连续触发) → 合并未落盘 ----
+        s1->appendViewMessage(V::makeText(V::Role::Assistant, "a1"));
+        s1->appendViewMessage(V::makeText(V::Role::User, "u2"));
+        {
+            SessionStore probe(root);
+            auto loaded = probe.loadSession("throttle");
+            XX_TEST_EXPECT_EQ(loaded.viewMessages.size(), size_t{1});
+            // msgIdCounter 与已落库条数一致 (兜底恢复语义)
+            XX_TEST_EXPECT_EQ(loaded.msgIdCounter, uint64_t{1});
+        }
+        // ---- llm 节流: 首次结算立即落盘 ----
+        neograph::json ctx = neograph::json::array();
+        ctx.push_back(neograph::json{
+            {"role",    "user"},
+            {"content", "u1"  },
+        });
+        s1->llmMessages = std::move(ctx);
+        s1->requestSaveLlmMessages();
+        {
+            SessionStore probe(root);
+            XX_TEST_EXPECT_EQ(probe.loadSession("throttle").llmMessages.size(), size_t{1});
+        }
+        // ---- 第二次结算 (窗口内): 内存增长, 未落盘 ----
+        s1->appendSettledLlmMessages(neograph::json::array({
+            neograph::json{
+                {"role",    "assistant"},
+                {"content", "a1"       },
+            },
+        }));
+        XX_TEST_EXPECT_EQ(s1->llmMessages.size(), size_t{2});
+        {
+            SessionStore probe(root);
+            XX_TEST_EXPECT_EQ(probe.loadSession("throttle").llmMessages.size(), size_t{1});
+        }
+        // ---- 强制补存后全部收敛 (轮末 saveLlmMessages + flushViewMessages 语义) ----
+        s1->flushViewMessages();
+        s1->saveLlmMessages();
+        {
+            SessionStore probe(root);
+            auto loaded = probe.loadSession("throttle");
+            XX_TEST_EXPECT_EQ(loaded.viewMessages.size(), size_t{3});
+            XX_TEST_EXPECT_EQ(loaded.viewMessages[1].text, std::string{"a1"});
+            XX_TEST_EXPECT_EQ(loaded.viewMessages[2].text, std::string{"u2"});
+            XX_TEST_EXPECT_EQ(loaded.msgIdCounter, uint64_t{3});
+            XX_TEST_EXPECT_TRUE(loaded.llmMessages.is_array());
+            XX_TEST_EXPECT_EQ(loaded.llmMessages.size(), size_t{2});
+        }
     }
     fs::remove_all(root);
     return TestResult{};
@@ -837,6 +915,7 @@ asio::awaitable<TestResult> run_session_persistence_tests() {
     testShareStoreRoundtrip();
     testUpdateHistoryPersistence();
     testSessionStoreIntegration();
+    testPersistThrottle();
     testMiddlewareShareStorePersistence();
     testSanitizeThreadId();
     testSessionListPagination();

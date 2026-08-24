@@ -4,10 +4,22 @@
 #include "agentxx/plugin/plugin_manager.h"
 #include "agentxx/util/container_util.h"
 #include "agentxx/util/log.h"
+#include <chrono>
 #include <fmt/format.h>
 
 namespace agentxx {
 namespace agent {
+
+namespace {
+
+/// 当前 steady 时钟毫秒数 (节流时间戳用, 单调不受系统时钟调整影响)
+int64_t steadyNowMs() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+               std::chrono::steady_clock::now().time_since_epoch())
+        .count();
+}
+
+} // namespace
 
 AgentContext::~AgentContext() {
     // 插件系统先卸载全部插件, 断开中间件↔实例循环引用
@@ -26,9 +38,14 @@ std::string Session::appendViewMessage(ViewMessage msg) {
     auto id = fmt::format("msg_{:06d}", ++msgIdCounter_);
     msg.id  = id;
     viewMessages.push_back(std::move(msg));
-    // 持久化 (尽力而为): 消息 + 追加后计数一起落库, 供重启恢复
+    // 持久化 (节流, 尽力而为): 压入待落盘队列 — 首次立即落库, 节流窗口内合并,
+    // 待下次触发或轮末 flushViewMessages() 补存 (消息 + 追加后计数同事务)
     if (hooks_.onAppendViewMessage) {
-        hooks_.onAppendViewMessage(viewMessages.back(), msgIdCounter_);
+        enqueueViewPersist(PendingViewOp{
+            .isAppend = true,
+            .msg      = viewMessages.back(),
+            .counter  = msgIdCounter_,
+        });
     }
     return id;
 }
@@ -45,9 +62,13 @@ void Session::updateViewMessage(ViewMessage msg) {
     for (auto& m : viewMessages) {
         if (m.id == msg.id) {
             m = std::move(msg);
-            // 持久化 (尽力而为): 覆盖库内对应行, 供重启恢复
+            // 持久化 (节流, 尽力而为): 覆盖库内对应行, 供重启恢复
             if (hooks_.onUpdateViewMessage) {
-                hooks_.onUpdateViewMessage(m);
+                enqueueViewPersist(PendingViewOp{
+                    .isAppend = false,
+                    .msg      = m,
+                    .counter  = 0,
+                });
             }
             return;
         }
@@ -78,7 +99,67 @@ void Session::saveLlmMessages() {
     assertIoThread();
     if (hooks_.onSaveLlmMessages) {
         hooks_.onSaveLlmMessages(llmMessages);
+        // 记录落盘时刻供节流判定 (轮末权威保存同样刷新窗口)
+        llmLastSaveMs_ = steadyNowMs();
     }
+}
+
+void Session::appendSettledLlmMessages(const neograph::json& settledMsgs) {
+    assertIoThread();
+    if (!settledMsgs.is_array() || settledMsgs.empty()) {
+        return;
+    }
+    for (const auto& m : settledMsgs) {
+        llmMessages.push_back(m);
+    }
+    requestSaveLlmMessages();
+}
+
+void Session::requestSaveLlmMessages() {
+    assertIoThread();
+    if (!hooks_.onSaveLlmMessages) {
+        return;
+    }
+    const auto nowMs = steadyNowMs();
+    if (llmLastSaveMs_ == 0 || nowMs - llmLastSaveMs_ >= kPersistThrottleMs) {
+        // 首次触发 / 距上次落盘已超窗口: 立即保存
+        saveLlmMessages();
+    }
+    // 窗口内: 仅更新内存 (llm 内容本身在 llmMessages 中, 无需单独排队),
+    // 待下次结算触发或轮末 saveLlmMessages() 统一落盘
+}
+
+void Session::flushViewMessages() {
+    assertIoThread();
+    flushPendingViewOps();
+}
+
+void Session::enqueueViewPersist(PendingViewOp op) {
+    pendingViewOps_.push_back(std::move(op));
+    const auto nowMs = steadyNowMs();
+    if (viewLastPersistMs_ == 0 || nowMs - viewLastPersistMs_ >= kPersistThrottleMs) {
+        // 首次触发 / 距上次落盘已超窗口: 立即回放全部待落盘操作 (含本条)
+        flushPendingViewOps();
+    }
+}
+
+void Session::flushPendingViewOps() {
+    if (pendingViewOps_.empty()) {
+        return;
+    }
+    for (const auto& op : pendingViewOps_) {
+        if (op.isAppend) {
+            if (hooks_.onAppendViewMessage) {
+                hooks_.onAppendViewMessage(op.msg, op.counter);
+            }
+        } else {
+            if (hooks_.onUpdateViewMessage) {
+                hooks_.onUpdateViewMessage(op.msg);
+            }
+        }
+    }
+    pendingViewOps_.clear();
+    viewLastPersistMs_ = steadyNowMs();
 }
 
 void Session::setCancelToken(std::shared_ptr<neograph::graph::CancelToken> token) {

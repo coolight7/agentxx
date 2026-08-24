@@ -118,8 +118,7 @@ static void checkToolSchemaValidity(
                 schema.contains("type") ? schema["type"].dump() : "<missing>"
             );
         }
-    } else if (schema.contains("type") && schema["type"].is_string()
-               && schema["type"].get<std::string>() == "array") {
+    } else if (schema.contains("type") && schema["type"].is_string() && schema["type"].get<std::string>() == "array") {
         // array 类型必须带 items (Gemini 缺 items 报 "missing field")
         XX_LOGE(
             "Tool `{}` schema `{}`: type \"array\" must have an \"items\" field; "
@@ -569,10 +568,10 @@ std::string BaseAgent::getCurrentModelName(std::string_view sessionId) const {
 }
 
 asio::awaitable<BaseAgent::TurnResult> BaseAgent::runTurnAsync(
-    std::string_view             sessionId,
-    std::string_view             userInput,
-    bool                         isFirstMsg,
-    std::shared_ptr<AgentIOBase> io, // agent-io
+    std::string_view      sessionId,
+    std::string_view      userInput,
+    [[maybe_unused]] bool isFirstMsg, ///< 保留调用方语义表达; 当前引擎侧不再使用
+    std::shared_ptr<AgentIOBase> io,  // agent-io
     std::string_view             modelName
 ) {
     TurnResult turnResult;
@@ -699,8 +698,16 @@ asio::awaitable<BaseAgent::TurnResult> BaseAgent::runTurnAsync(
                   .max_steps   = 1 << 30,
                   .stream_mode = neograph::graph::StreamMode::EVENTS | neograph::graph::StreamMode::TOKENS
                        | neograph::graph::StreamMode::VALUES | neograph::graph::StreamMode::UPDATES,
-                  .cancel_token     = cancelToken,
-                  .resume_if_exists = isFirstMsg,
+                  .cancel_token = cancelToken,
+        // 固定 false, 不随 isFirstMsg 变化:
+        // - 引擎 checkpoint 仅进程内存活 (InMemorySingleCheckpointStore),
+        //   真重启后无 checkpoint, 该标志无效
+        // - 同进程内端点重建 (客户端重连/切换回会话) 时引擎仍有该线程
+        //   checkpoint, 若为 true 会先 restore 再按 append reducer
+        //   应用全量 input (input 每轮携带完整历史), 导致上下文翻倍
+        // - 中断恢复走 AgentRunner 的 initialResult/resume_async 路径,
+        //   不依赖本标志; input 全量历史在 fresh state 上应用即正确
+                  .resume_if_exists = false,
     };
 
     co_await agentxx::util::catchErrorAsync<bool>(
@@ -782,22 +789,27 @@ asio::awaitable<BaseAgent::TurnResult> BaseAgent::runTurnAsync(
 
     if (turnResult.hasError) {
         // - 出现异常时 state.messages 已经被回滚，提取临时保存的上下文，并写回 state
-        const auto& im
-            = agentContext->middlewareHandleContext->getGraphDataItemValue<neograph::json>(
-                sessionId,
-                agentxx::middleware::MiddlewareContext::graphDataKey_tempMessages
-            );
+        auto& im = agentContext->middlewareHandleContext->getGraphDataItemValue<neograph::json>(
+            sessionId,
+            agentxx::middleware::MiddlewareContext::graphDataKey_tempMessages
+        );
         if (im.is_array()) {
             XX_LOGD(
                 "Recover(By exception) LLM-Messages Context: old({}) -> new({})",
                 session->llmMessages.size(),
                 im.size()
             );
-            session->llmMessages = im;
+            session->llmMessages = std::move(im);
             engine->update_state(std::string{sessionId}, [&](neograph::graph::GraphState& state) {
                 state.overwrite("messages", session->llmMessages);
             });
         }
+        // 消费后即清理 (含 getGraphDataItemValue 对缺失键自动创建的空条目):
+        // 防止过期快照残留, 在后续无关错误中被误用作上下文回退源
+        agentContext->middlewareHandleContext->removeGraphDataItem(
+            sessionId,
+            agentxx::middleware::MiddlewareContext::graphDataKey_tempMessages
+        );
     }
 
     engine->update_state(std::string{sessionId}, [&](neograph::graph::GraphState& state) {
@@ -807,7 +819,12 @@ asio::awaitable<BaseAgent::TurnResult> BaseAgent::runTurnAsync(
 
     // 持久化 LLM 上下文消息 (每轮结束时整表替换, 供重启恢复会话)
     // - 持久化回调内部捕获异常, 失败仅记日志, 不影响本轮结果
+    // - 轮内已由 EventBridge 按消息结算节流落盘 (appendSettledLlmMessages),
+    //   此处为权威终态同步; 进程中途被杀最多丢一个节流窗口 (<3s) 的增量
     session->saveLlmMessages();
+    // 补存节流窗口内尚未落库的 view 消息操作, 保证正常结束的轮次其展示历史
+    // 全部落库 (仅进程中途被杀才可能丢失窗口内 <3s 的尾部消息)
+    session->flushViewMessages();
 
     // 计算轮次持续时间
     const auto durationMs

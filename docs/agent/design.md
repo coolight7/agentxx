@@ -130,9 +130,9 @@ Agentxx 是一个使用 C++23 实现的 AI Agent 框架，编译器启用 C++26/
   设置/会话/codegraph 数据仅存内存, BaseAgent 初始化时输出警告)
 - 分库设计 (两个 DB 文件, 均启用 WAL + busy_timeout):
   - `session.db`: viewMessages (append-only, 每消息一行 JSON) + llmMessages
-    (单行整体替换, 每轮结束保存) + meta (msgIdCounter/title/lastActiveMs)
+    (单行整体替换) + meta (msgIdCounter/title/lastActiveMs)
     —— 同属"会话消息状态", 同一生命周期 (随 session 创建/删除), 同一 io 线程写入,
-    一轮对话结束时消息与计数可事务性一起提交
+    落库可事务性一起提交
   - `share_store.db`: agentxx_share_store KV 条目 (id 自增 = 现有最大 id + 1,
     重启后延续) —— KV 随机读改写与消息追加模式不同, 本质是上下文卸载缓存,
     内容可丢弃/可清理, 生命周期独立于消息历史; 可能存放大型文本, 独立文件
@@ -142,11 +142,23 @@ Agentxx 是一个使用 C++23 实现的 AI Agent 框架，编译器启用 C++26/
     重建链式哈希 (对不含 id 的消息内容, 与 appendViewMessage 语义一致),
     恢复 msgIdCounter 保证新消息 id 不冲突; 并绑定 `SessionStoreHooks`
     (std::function 回调, context.h 不依赖 sqlite 头)
-  - `Session::appendViewMessage`: 追加后回调落库 (消息 + 计数事务提交)
-  - `Session::updateViewMessage`: 追加后再变化的消息 (tool 结果回填:
-    toolFinished/toolResult/collapsed) 按 msg.id 更新对应行, 保证重启恢复的
-    历史与内存状态一致
-  - `BaseAgent::runTurnAsync`: 轮末回调保存 llmMessages (整表替换)
+  - `Session::appendViewMessage` / `updateViewMessage`: 追加/回填经节流器落库
+    (消息 + 计数事务提交; update 按 msg.id 更新对应行, 如 tool 结果回填
+    toolFinished/toolResult/collapsed, 保证重启恢复的历史与内存状态一致)
+  - **持久化节流** (`Session::kPersistThrottleMs` = 3s): 首次触发立即落盘,
+    窗口内的后续触发合并 (view 压入待落盘操作队列保持 append/update 顺序回放;
+    llm 仅更新内存), 待下次触发或轮末强制补存收敛。目的: 进程在轮次中途
+    被杀/崩溃/自杀 (如 agent 执行 taskkill 清理自身) 时, 已结算的消息最多丢失
+    一个节流窗口 (<3s), 而非整轮 —— 旧实现 viewMessages 逐条即时落库、
+    llmContext 仅轮末保存, 反复中途被杀的会话会出现"view 完整而 llm 上下文
+    滞后/为空"
+  - `EventBridge::handleChannelWrite`: LLM 上下文增量的结算挂点 —— 节点对
+    messages channel 的写入事件即该批消息定稿 (assistant 回复完成 / tool 结果
+    写回, 非流式 token 粒度), 经 `Session::appendSettledLlmMessages` 追加并触发
+    节流保存。input 注入 / 节点内 overwrite (system 注入、压缩) / cancel 直写
+    不产生该事件, 不会重复追加; 与引擎状态的短暂漂移由轮末权威同步收敛
+  - `BaseAgent::runTurnAsync`: 轮末回调保存 llmMessages (整表替换, 权威终态) +
+    flushViewMessages (补存节流窗口内未落盘的 view 操作)
   - `MiddlewareContext` share store 四方法: 内存 map 作读缓存 (首次访问某 session
     时从 DB 恢复全部条目与 id 计数器), 写操作同步写穿 DB
 - 容错: 所有落库失败仅记录错误日志, 不影响内存状态与对话主流程 (尽力而为持久化);

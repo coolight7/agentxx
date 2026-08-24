@@ -518,10 +518,10 @@ asio::awaitable<void> test_cancel_auto_supplement() {
         neograph::json     im;
         const auto         deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
         while (std::chrono::steady_clock::now() < deadline) {
-            im = agent.agentContext->middlewareHandleContext->getGraphDataItemValue<neograph::json>(
-                "cancel_msg_test",
-                agentxx::middleware::MiddlewareContext::graphDataKey_tempMessages
-            );
+            // 轮末错误路径已把 tempMessages 快照收敛进 llmMessages 并清理
+            // graphData, 断言权威面 (llmMessages) 即可
+            auto sess = agent.agentContext->sessions->get("cancel_msg_test");
+            im        = sess ? sess->llmMessages : neograph::json{};
             if (checkCanceledMessageSequence(im)) {
                 ok = true;
                 break;

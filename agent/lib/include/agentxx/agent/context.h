@@ -233,6 +233,23 @@ public:
     /// - 未绑定回调时为 no-op
     void saveLlmMessages();
 
+    /// 追加一批已结算 (定稿) 的 LLM 上下文消息并请求节流持久化
+    /// - 由 EventBridge 在收到节点写入 messages channel 的 CHANNEL_WRITE 事件时
+    ///   调用 (assistant 回复完成 / tool 结果写回 = 一条消息结算, 非流式 token 粒度)
+    /// - 目的: 进程在轮次中途被杀/崩溃时, 已结算的上下文最多丢失一个节流窗口
+    ///   (kPersistThrottleMs), 而非整轮
+    /// - 节流: 距上次落盘 >= kPersistThrottleMs 时立即保存; 窗口内仅更新内存,
+    ///   待下次结算触发或轮末 saveLlmMessages() 统一落盘
+    void appendSettledLlmMessages(const neograph::json& settledMsgs);
+
+    /// 请求节流保存当前 llmMessages (首次触发立即落盘, 窗口内合并)
+    void requestSaveLlmMessages();
+
+    /// 立即补存节流窗口内未落盘的 viewMessages 操作 (轮末统一调用)
+    /// - 保证正常结束的轮次其 view 消息全部落库, 与旧有逐条即时落盘语义收敛一致;
+    ///   仅进程异常退出时才可能丢失窗口内 (<3s) 的尾部消息
+    void flushViewMessages();
+
     /// 设置本会话当前轮次的取消令牌 (仅 io 线程)
     void setCancelToken(std::shared_ptr<neograph::graph::CancelToken> token);
 
@@ -266,6 +283,33 @@ private:
 
     /// 持久化回调 (可选; 为空时不落库)
     SessionStoreHooks hooks_;
+
+    // -------------------------------------------------------------------
+    // 持久化节流 (仅 io 线程访问)
+    // - 规则: 首次触发立即落盘; 距上次落盘 < kPersistThrottleMs 的后续触发
+    //   合并 (view 压入待落盘队列 / llm 仅更新内存), 待下次触发或轮末强制
+    //   补存。进程异常退出最多丢失一个窗口内的增量
+    // -------------------------------------------------------------------
+
+    /// 节流窗口 (毫秒)
+    static constexpr int64_t kPersistThrottleMs = 3000;
+
+    /// 待落盘的 viewMessages 操作 (保持 append/update 混合顺序, 回放即重放写序列)
+    struct PendingViewOp {
+        bool        isAppend = false;
+        ViewMessage msg;
+        uint64_t    counter = 0; ///< isAppend 时的 msgIdCounter (与消息同事务提交)
+    };
+    std::vector<PendingViewOp> pendingViewOps_;
+    /// 上次 viewMessages 实际落盘时刻 (steady ms; 0 = 本进程内尚未落过)
+    int64_t viewLastPersistMs_ = 0;
+    /// 上次 llm 上下文实际落盘时刻 (steady ms; 0 = 本进程内尚未落过)
+    int64_t llmLastSaveMs_ = 0;
+
+    /// 压入一条待落盘 view 操作并按节流规则决定是否立即刷出
+    void enqueueViewPersist(PendingViewOp op);
+    /// 回放并清空待落盘队列 (更新节流时间戳)
+    void flushPendingViewOps();
 };
 
 /// 会话存储: 按 thread_id 取/建 Session

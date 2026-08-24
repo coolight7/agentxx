@@ -68,7 +68,7 @@ public:
     asio::awaitable<TurnResult> runTurnAsync(
         std::string_view             sessionId,
         std::string_view             userInput,
-        bool                         isFirstMsg,
+        [[maybe_unused]] bool        isFirstMsg, ///< 保留调用方语义表达; 当前引擎侧不再使用
         std::shared_ptr<AgentIOBase> io,
         std::string_view             modelName = ""
     );

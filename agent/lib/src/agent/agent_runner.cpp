@@ -35,15 +35,27 @@ asio::awaitable<AgentRunner::Outcome> AgentRunner::run(
             // 中断时 [result] 内的 messages 是被 neograph::engine
             // 回滚的，本轮 session 的上下文已经被丢弃；应该取中断时
             // 保存的 messages
-            const auto& im = ctx->middlewareHandleContext->getGraphDataItemValue<neograph::json>(
+            auto imCopy = ctx->middlewareHandleContext->getGraphDataItemValue<neograph::json>(
                 sessionId,
                 agentxx::middleware::MiddlewareContext::graphDataKey_tempMessages
             );
-            if (im.is_array()) {
-                session->llmMessages = im;
+            if (imCopy.is_array()) {
+                session->llmMessages = std::move(imCopy);
             }
+            // 注意: 此处不可清理 tempMessages —— 随后的 HIL 处理阶段
+            // (handleInterrupt/权限询问) 仍会读取该快照校验中断时刻上下文;
+            // 清理时机收敛到图完整结束 (下方 else 分支)
         } else {
             session->llmMessages = result.channel_raw("messages");
+            // 图已完整结束: 清理中断/异常期间遗留的 tempMessages 快照。
+            // - 本轮为 resume 完成时快照已被权威结果取代, 留存会误导后续
+            //   错误路径的上下文回退源 (过期回卷)
+            // - getGraphDataItemValue 对缺失键会自动创建空条目, 无论存在与否
+            //   统一移除保持干净
+            ctx->middlewareHandleContext->removeGraphDataItem(
+                sessionId,
+                agentxx::middleware::MiddlewareContext::graphDataKey_tempMessages
+            );
         }
         if (hooks.onRunResult) {
             hooks.onRunResult(result, sessionId);
