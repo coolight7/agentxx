@@ -11,6 +11,9 @@
 - graph json 定义，支持插件生成 graph json、注册 node; (最多只能有一个插件生成 graph，都没有则默认生成 CodeAgent)
 - 调整插件代码结构，增加测试、划分文件夹
 - 插件与主程序交错协程
+- 整理文档
+- 插件 统一拦截 异常
+- 插件宏辅助代码
 - 移除 agent server 的 证书支持
 
 - 请分析如何agent实现gitworktree支持，启用该模式时，独立创建一个worktree环境、编译目录环境，以便在同一目录启动多个agent
