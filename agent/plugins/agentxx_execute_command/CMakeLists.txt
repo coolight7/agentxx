@@ -97,75 +97,101 @@ endif()
 add_library(${PLUGIN_NAME} SHARED
   agentxx_execute_command.cpp
 )
-target_include_directories(${PLUGIN_NAME} PRIVATE
-  "${CMAKE_CURRENT_SOURCE_DIR}"          # agentxx_execmd_plugin.h / execute_command_impl.h
-  "${AGENTXX_LIB_INCLUDE_DIR}"           # agentxx/plugin/plugin_api.h
-  "${AGENTXX_INSTALL_DIR}/include"       # fmt neograph
-  ${_BOOST_INCLUDES}
-)
+
+# ===== 依赖统一查找与链接 =====
+# 仿 agent/lib/CMakeLists.txt 四件套模式: find_package 导入依赖 target /
+# target_include_directories 声明头路径 / target_link_directories 提供裸库名
+# 解析目录 / target_link_libraries 以 imported target + 裸库名链接
 if (NOT TARGET agentxx_util)
   # 独立构建本插件时经安装 config 导入; 内置合并模式 (经 libagentxx 构建)
   # 下 util 目标已存在于宿主工程, 跳过导入 (此时 install 目录尚未生成 config)
   find_package(agentxx_util REQUIRED)
 endif()
-# boost.process v2 为编译库 (非 header-only): get_utf8_category 等
-# BOOST_PROCESS_V2_DECL 符号实现于 libboost_process.a; 经 find_library 直接
-# 定位归档 (不用 find_package(Boost), 其系统 include 会干扰 neograph/yyjson)
-if (WIN32)
-  set(_BP_LIBNAME libboost_process)
-else()
-  set(_BP_LIBNAME libboost_process.a)
-endif()
-find_library(AGENTXX_BOOST_PROCESS_LIB ${_BP_LIBNAME}
-  PATHS "${BOOST_ROOT}/lib" "${AGENTXX_INSTALL_DIR}/lib" NO_DEFAULT_PATH
-)
-if (AGENTXX_BOOST_PROCESS_LIB)
-  target_link_libraries(${PLUGIN_NAME} PRIVATE ${AGENTXX_BOOST_PROCESS_LIB})
-else()
-  message(WARNING "[${PLUGIN_NAME}] libboost_process not found, windows tool may fail to load")
-endif()
-
-if (WIN32)
-  # boost.process v2 直传路径: socket/pipe 相关系统库
-  target_link_libraries(${PLUGIN_NAME} PRIVATE ws2_32 mswsock bcrypt)
-else()
-  # asio 文件/pipe I/O 在 -DASIO_HAS_IO_URING 下引用 io_uring 符号;
-  # 只查找本项目 liburing 安装的库, 避免 fallback 到系统 liburing
-  find_library(AGENTXX_URING_LIB uring PATHS "${AGENTXX_INSTALL_DIR}/lib" NO_DEFAULT_PATH)
-  if (AGENTXX_URING_LIB)
-    target_link_libraries(${PLUGIN_NAME} PRIVATE ${AGENTXX_URING_LIB})
-  endif()
-endif()
-
-
-
-# 循环符号依赖兜底: libhs/libcrypto 等静态归档成员相互引用 (如 libhs 引用
-# CRYPTO_memcmp、util 引用 html2md), 链接器单遍扫描无法自解析; 在链接行
-# 尾部以绝对路径重复提供相关归档 (target 形式会被去重/重排, 裸路径不会);
-# 仅独立动态库分支需要 (内置合并进 libagentxx 由宿主统一链接)
-find_library(AGENTXX_TAIL_LIBHS hs PATHS "${AGENTXX_INSTALL_DIR}/lib" NO_DEFAULT_PATH)
-find_library(AGENTXX_TAIL_HS_RUNTIME hs_runtime PATHS "${AGENTXX_INSTALL_DIR}/lib" NO_DEFAULT_PATH)
-find_library(AGENTXX_TAIL_URING uring PATHS "${AGENTXX_INSTALL_DIR}/lib" NO_DEFAULT_PATH)
-find_library(AGENTXX_TAIL_CRYPTO crypto PATHS "${OPENSSL_ROOT_DIR}/lib64" "${OPENSSL_ROOT_DIR}/lib" NO_DEFAULT_PATH)
-find_library(AGENTXX_TAIL_SSL ssl PATHS "${OPENSSL_ROOT_DIR}/lib64" "${OPENSSL_ROOT_DIR}/lib" NO_DEFAULT_PATH)
-# util 归裁剪收录的对象还可能引用 neograph 系 (mcp from_json 等), 一并尾部提供
-set(AGENTXX_TAIL_NEOGRAPH
-  "${AGENTXX_INSTALL_DIR}/lib/libneograph_core.a"
-  "${AGENTXX_INSTALL_DIR}/lib/libneograph_async.a"
-  "${AGENTXX_INSTALL_DIR}/lib/libneograph_llm.a"
-  "${AGENTXX_INSTALL_DIR}/lib/libneograph_acp.a"
-  "${AGENTXX_INSTALL_DIR}/lib/libneograph_mcp.a"
-  "${AGENTXX_INSTALL_DIR}/lib/libneograph_sqlite.a"
-  "${AGENTXX_INSTALL_DIR}/lib/libyyjson.a"
-)
 find_package(html2md REQUIRED)
+# OpenSSL 保持模块模式 (FindOpenSSL, 与 lib 一致): 本项目 OpenSSL 为预构建
+# 目录 (无 config), OPENSSL_ROOT_DIR 由顶层 superbuild 传入精确指向预构建
+# 目录, 不会命中系统 OpenSSL (独立构建未传时回退系统库)
+find_package(OpenSSL REQUIRED)
+
+target_include_directories(${PLUGIN_NAME} PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}"          # agentxx_execmd_plugin.h / execute_command_impl.h
+  "${AGENTXX_LIB_INCLUDE_DIR}"           # agentxx/plugin/plugin_api.h
+  "${AGENTXX_INSTALL_DIR}/include/"      # fmt neograph
+)
+
+# boost 分发布局: ${BOOST_ROOT}/include/boost/...; 源码用 asio/... 前缀
+# (映射 include/boost/), 而 asio 头内部用 <boost/asio/...> 形式 (映射 include/)。
+# 与 lib 同款经 find_package(Boost CONFIG) 取头路径, SYSTEM 置后声明,
+# 不遮蔽前方项目头路径 (避免干扰 neograph/yyjson 头解析)
+find_package(Boost CONFIG REQUIRED COMPONENTS process)
+target_include_directories(${PLUGIN_NAME} SYSTEM PRIVATE
+  "${Boost_INCLUDE_DIRS}"
+  "${Boost_INCLUDE_DIRS}/boost/"
+)
+
+# 裸库名依赖解析目录 (与 lib 一致): neograph 系/yyjson/hs_runtime 位于
+# AGENTXX_INSTALL_DIR/lib; OpenSSL 预构建归档目录供下方 ELF 尾部兜底裸名
+# (crypto/ssl) 解析
+target_link_directories(${PLUGIN_NAME} PRIVATE
+  "${AGENTXX_INSTALL_DIR}/lib/"
+  "${OPENSSL_ROOT_DIR}/lib64"
+  "${OPENSSL_ROOT_DIR}/lib"
+)
+
 target_link_libraries(${PLUGIN_NAME} PRIVATE
   agentxx_util
-  ${AGENTXX_TAIL_LIBHS} ${AGENTXX_TAIL_HS_RUNTIME} ${AGENTXX_TAIL_URING}
-  ${AGENTXX_TAIL_CRYPTO} ${AGENTXX_TAIL_SSL}
-  ${AGENTXX_TAIL_NEOGRAPH}
   html2md
+  OpenSSL::SSL
+  OpenSSL::Crypto
+  # === neograph vvv 链接顺序是必要的 (与 lib 自身一致) ===
+  neograph_sqlite
+  neograph_acp
+  neograph_mcp
+  neograph_async
+  neograph_llm
+  neograph_core
+  # === neograph ^^^
+  yyjson
 )
+# boost.process v2 为编译库 (非 header-only): get_utf8_category 等
+# BOOST_PROCESS_V2_DECL 符号实现于 boost_process 编译库。与 lib 同款链接
+# Boost::process imported target —— 自动携带传递系统库 (ws2_32/bcrypt/
+# advapi32/ntdll/shell32/user32/synchronization) 与 BOOST_ALL_NO_LIB 宏
+# (禁用 MSVC 自动链接), 无需再手动补链
+if (WIN32)
+  # mswsock 为 asio AcceptEx 等扩展所需 (boost.process 传递依赖之外)
+  target_link_libraries(${PLUGIN_NAME} PRIVATE Boost::process mswsock)
+else()
+  target_link_libraries(${PLUGIN_NAME} PRIVATE Boost::process)
+endif()
+if (AGENTXX_ENABLE_HYPERSCAN)
+  # hyperscan pkg-config 模块由 plugins/CMakeLists.txt 统一定义 (与
+  # lib/client/test 一致); hs_runtime 为裸名经上方 link_directories 解析
+  target_link_libraries(${PLUGIN_NAME} PRIVATE PkgConfig::hyperscan hs_runtime)
+endif()
+if (AGENTXX_LINUX_IO_URING_SUPPORTED)
+  # io_uring 同上由总控统一定义; asio 文件/pipe I/O 在 -DASIO_HAS_IO_URING
+  # 下引用其符号
+  target_link_libraries(${PLUGIN_NAME} PRIVATE PkgConfig::uring)
+endif()
+if (NOT WIN32)
+  # ELF (GNU ld/lld) 单遍扫描无法自解析相互引用的静态归档成员 (libhs↔
+  # libcrypto、util↔html2md/neograph); 尾部以裸库名重复提供打破循环
+  # (裸名字符串不被 CMake 去重, 等价于原先的绝对路径补链; MSVC 多遍解析
+  # 无需此兜底), 解析目录由上方 target_link_directories 提供。
+  # boost_process 编译库同样可能被 util 归裁剪成员引用, 一并尾部提供
+  set(_tail_libs crypto ssl boost_process)
+  if (AGENTXX_ENABLE_HYPERSCAN)
+    list(APPEND _tail_libs hs hs_runtime)
+  endif()
+  if (AGENTXX_LINUX_IO_URING_SUPPORTED)
+    list(APPEND _tail_libs uring)
+  endif()
+  list(APPEND _tail_libs
+    neograph_sqlite neograph_acp neograph_mcp neograph_async neograph_llm neograph_core yyjson)
+  target_link_libraries(${PLUGIN_NAME} PRIVATE ${_tail_libs})
+  unset(_tail_libs)
+endif()
 
 set_target_properties(${PLUGIN_NAME} PROPERTIES
   PREFIX "lib"

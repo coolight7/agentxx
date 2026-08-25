@@ -69,12 +69,11 @@ endif()
 add_library(${PLUGIN_NAME} SHARED
   agentxx_filesystem.cpp
 )
-target_include_directories(${PLUGIN_NAME} PRIVATE
-  "${CMAKE_CURRENT_SOURCE_DIR}"              # fs_plugin.h / filesystem_impl.h
-  "${AGENTXX_LIB_INCLUDE_DIR}"               # agentxx/plugin/plugin_api.h
-  "${AGENTXX_INSTALL_DIR}/include"           # fmt neograph
-  "${AGENTXX_INSTALL_DIR}/include/Glob-1.0"  # glob/glob.h (filesystem_impl.h)
-)
+
+# ===== 依赖统一查找与链接 =====
+# 仿 agent/lib/CMakeLists.txt 四件套模式: find_package 导入依赖 target /
+# target_include_directories 声明头路径 / target_link_directories 提供裸库名
+# 解析目录 / target_link_libraries 以 imported target + 裸库名链接。
 # 复用 agentxx_util 工具库 (插件静态链接, 与宿主副本符号互不冲突;
 # XXRegex/aho_corasick/string_util 实现经静态裁剪自动收录)
 if (NOT TARGET agentxx_util)
@@ -83,39 +82,71 @@ if (NOT TARGET agentxx_util)
   find_package(agentxx_util REQUIRED)
 endif()
 find_package(Glob REQUIRED)
-target_link_libraries(${PLUGIN_NAME} PRIVATE
-  Glob
-)
-
-
-
-# 循环符号依赖兜底: libhs/libcrypto 等静态归档成员相互引用 (如 libhs 引用
-# CRYPTO_memcmp、util 引用 html2md), 链接器单遍扫描无法自解析; 在链接行
-# 尾部以绝对路径重复提供相关归档 (target 形式会被去重/重排, 裸路径不会);
-# 仅独立动态库分支需要 (内置合并进 libagentxx 由宿主统一链接)
-find_library(AGENTXX_TAIL_LIBHS hs PATHS "${AGENTXX_INSTALL_DIR}/lib" NO_DEFAULT_PATH)
-find_library(AGENTXX_TAIL_HS_RUNTIME hs_runtime PATHS "${AGENTXX_INSTALL_DIR}/lib" NO_DEFAULT_PATH)
-find_library(AGENTXX_TAIL_URING uring PATHS "${AGENTXX_INSTALL_DIR}/lib" NO_DEFAULT_PATH)
-find_library(AGENTXX_TAIL_CRYPTO crypto PATHS "${OPENSSL_ROOT_DIR}/lib64" "${OPENSSL_ROOT_DIR}/lib" NO_DEFAULT_PATH)
-find_library(AGENTXX_TAIL_SSL ssl PATHS "${OPENSSL_ROOT_DIR}/lib64" "${OPENSSL_ROOT_DIR}/lib" NO_DEFAULT_PATH)
-# util 归裁剪收录的对象还可能引用 neograph 系 (mcp from_json 等), 一并尾部提供
-set(AGENTXX_TAIL_NEOGRAPH
-  "${AGENTXX_INSTALL_DIR}/lib/libneograph_core.a"
-  "${AGENTXX_INSTALL_DIR}/lib/libneograph_async.a"
-  "${AGENTXX_INSTALL_DIR}/lib/libneograph_llm.a"
-  "${AGENTXX_INSTALL_DIR}/lib/libneograph_acp.a"
-  "${AGENTXX_INSTALL_DIR}/lib/libneograph_mcp.a"
-  "${AGENTXX_INSTALL_DIR}/lib/libneograph_sqlite.a"
-  "${AGENTXX_INSTALL_DIR}/lib/libyyjson.a"
-)
 find_package(html2md REQUIRED)
+# OpenSSL 保持模块模式 (FindOpenSSL, 与 lib 一致): 本项目 OpenSSL 为预构建
+# 目录 (无 config), OPENSSL_ROOT_DIR 由顶层 superbuild 传入精确指向预构建
+# 目录, 不会命中系统 OpenSSL (独立构建未传时回退系统库)
+find_package(OpenSSL REQUIRED)
+
+target_include_directories(${PLUGIN_NAME} PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}"              # fs_plugin.h / filesystem_impl.h
+  "${AGENTXX_LIB_INCLUDE_DIR}"               # agentxx/plugin/plugin_api.h
+  "${AGENTXX_INSTALL_DIR}/include/"          # fmt neograph
+  "${AGENTXX_INSTALL_DIR}/include/Glob-1.0"  # glob/glob.h (filesystem_impl.h)
+)
+
+# 裸库名依赖解析目录 (与 lib 一致): neograph 系/yyjson/hs_runtime 位于
+# AGENTXX_INSTALL_DIR/lib; OpenSSL 预构建归档目录供下方 ELF 尾部兜底裸名
+# (crypto/ssl) 解析
+target_link_directories(${PLUGIN_NAME} PRIVATE
+  "${AGENTXX_INSTALL_DIR}/lib/"
+  "${OPENSSL_ROOT_DIR}/lib64"
+  "${OPENSSL_ROOT_DIR}/lib"
+)
+
 target_link_libraries(${PLUGIN_NAME} PRIVATE
   agentxx_util
-  ${AGENTXX_TAIL_LIBHS} ${AGENTXX_TAIL_HS_RUNTIME} ${AGENTXX_TAIL_URING}
-  ${AGENTXX_TAIL_CRYPTO} ${AGENTXX_TAIL_SSL}
-  ${AGENTXX_TAIL_NEOGRAPH}
+  Glob
   html2md
+  OpenSSL::SSL
+  OpenSSL::Crypto
+  # === neograph vvv 链接顺序是必要的 (与 lib 自身一致) ===
+  neograph_sqlite
+  neograph_acp
+  neograph_mcp
+  neograph_async
+  neograph_llm
+  neograph_core
+  # === neograph ^^^
+  yyjson
 )
+if (AGENTXX_ENABLE_HYPERSCAN)
+  # hyperscan pkg-config 模块由 plugins/CMakeLists.txt 统一定义 (与
+  # lib/client/test 一致); hs_runtime 为裸名经上方 link_directories 解析
+  target_link_libraries(${PLUGIN_NAME} PRIVATE PkgConfig::hyperscan hs_runtime)
+endif()
+if (AGENTXX_LINUX_IO_URING_SUPPORTED)
+  # io_uring 同上由总控统一定义 (util 的 asio 重模块在 -DASIO_HAS_IO_URING
+  # 下引用其符号)
+  target_link_libraries(${PLUGIN_NAME} PRIVATE PkgConfig::uring)
+endif()
+if (NOT WIN32)
+  # ELF (GNU ld/lld) 单遍扫描无法自解析相互引用的静态归档成员 (libhs↔
+  # libcrypto、util↔html2md/neograph); 尾部以裸库名重复提供打破循环
+  # (裸名字符串不被 CMake 去重, 等价于原先的绝对路径补链; MSVC 多遍解析
+  # 无需此兜底), 解析目录由上方 target_link_directories 提供
+  set(_tail_libs crypto ssl)
+  if (AGENTXX_ENABLE_HYPERSCAN)
+    list(APPEND _tail_libs hs hs_runtime)
+  endif()
+  if (AGENTXX_LINUX_IO_URING_SUPPORTED)
+    list(APPEND _tail_libs uring)
+  endif()
+  list(APPEND _tail_libs
+    neograph_sqlite neograph_acp neograph_mcp neograph_async neograph_llm neograph_core yyjson)
+  target_link_libraries(${PLUGIN_NAME} PRIVATE ${_tail_libs})
+  unset(_tail_libs)
+endif()
 
 set_target_properties(${PLUGIN_NAME} PROPERTIES
   PREFIX "lib"
