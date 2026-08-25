@@ -15,25 +15,32 @@
  * 与 AGENTS.md 的 catchError 系列 (放行取消/中断) 不冲突 —— 取消/中断语义由
  * 宿主 op_driver 层负责, 本边界处必须 catch(...) 全拦截。
  *
- * 用法:
- *   1. 插件翻译单元内定义 noexcept 日志函数 (固定签名, 宏按名查找):
+ * 用法 (函数式封装, 以 lambda 包裹原函数体取代旧 XX_PGUARD_* 宏):
+ *   1. 插件翻译单元内定义 noexcept 日志函数 (固定签名, 调用处按名传入):
  *        static void pluginCatchLog(const char* msg) noexcept {
  *            agentxx::plugin_guard::defaultLogTo(
  *                g_host, g_if.log, 4, "my_plugin", msg);
  *        }
- *      未定义会在使用宏处编译报错 (强制作者补齐, 防止静默丢失日志)。
- *   2. 在每个 C ABI 边界函数体外套:
- *        XX_PGUARD_BEGIN
- *        ... 原函数体 ...
- *        XX_PGUARD_END_RET(nullptr)   // 有返回值: 异常时返回 ret
- *        XX_PGUARD_END_VOID()         // 无返回值: 异常时仅记日志返回
+ *      未定义会在守卫函数调用处直接编译报错 (强制作者补齐, 防止静默丢失日志)。
+ *   2. 在每个 C ABI 边界函数体内用守卫函数包裹原函数体 (lambda 捕获引用,
+ *      体内提前 return 的值即边界返回值):
+ *        // 有返回值: 异常时记日志并返回 fallback
+ *        return agentxx::plugin_guard::guardCall(pluginCatchLog, nullptr,
+ *            [&]() -> const AgentxxPluginInfo* {
+ *                ... 原函数体 ...
+ *            });
+ *        // 无返回值: 异常时仅记日志返回
+ *        agentxx::plugin_guard::guardCallVoid(pluginCatchLog, [&] {
+ *            ... 原函数体 ...
+ *        });
  *
  * 边界语义约定 (异常时的返回值):
  *   - get_info            → nullptr (宿主按"未导出"处理, 从库名推导插件名)
  *   - entry               → -1     (加载失败, 宿主走既有失败清理路径)
  *   - unload              → void   (吞掉 + 日志)
- *   - 工具/能力 start     → nullptr + error_out 尽力设置 (映射 OP_FAILED,
- *                            错误文本对 LLM 可见)
+ *   - 工具/能力 start     → nullptr (映射 OP_FAILED; catch 路径禁止分配,
+ *                            故不在此设置 error_out —— 错误文本由函数体内
+ *                            自行 try/catch 设置, 见各工具 execute 实现)
  *   - poll                → AGENTXX_OP_POLL_DONE (终结请求; 与宿主 stepPoll
  *                            违约处理一致)
  *   - cancel / 事件 / 定时器 / offload done / 命令等 void 回调 → 吞掉 + 日志
@@ -48,6 +55,8 @@
 
 #include <cstdio>
 #include <exception> /* std::exception */
+#include <type_traits>
+#include <utility>
 
 #ifdef __cplusplus
 
@@ -125,24 +134,44 @@ inline void reportCurrentException(LogFn&& logFn) noexcept {
     }
 }
 
+/// 有返回值的 C ABI 边界异常守卫 (取代旧 XX_PGUARD_BEGIN + XX_PGUARD_END_RET):
+/// 正常执行返回 fn() 的结果; fn 抛异常时经 reportCurrentException 分类上报
+/// logFn 并返回 fallback。整体 noexcept, 异常绝不外泄。
+///
+/// 用法 (fallback 类型须可转换为 fn 的返回类型; lambda 返回类型建议显式标注):
+///   return plugin_guard::guardCall(pluginCatchLog, nullptr,
+///       [&]() -> const AgentxxPluginInfo* { ... });
+template<typename LogFn, typename Fn>
+[[nodiscard]] inline auto
+    guardCall(LogFn&& logFn, std::invoke_result_t<Fn&> fallback, Fn&& fn) noexcept
+        -> std::invoke_result_t<Fn&> {
+    using Ret = std::invoke_result_t<Fn&>;
+    static_assert(!std::is_void_v<Ret>, "void callable: use plugin_guard::guardCallVoid");
+    try {
+        return fn();
+    } catch (...) {
+        reportCurrentException(std::forward<LogFn>(logFn));
+        return static_cast<Ret>(std::move(fallback));
+    }
+}
+
+/// 无返回值的 C ABI 边界异常守卫 (取代旧 XX_PGUARD_BEGIN + XX_PGUARD_END_VOID):
+/// 正常执行调用 fn(); fn 抛异常时经 reportCurrentException 分类上报 logFn 后
+/// 返回 (吞掉)。整体 noexcept, 异常绝不外泄。
+///
+/// 用法:
+///   plugin_guard::guardCallVoid(pluginCatchLog, [&] { ... });
+template<typename LogFn, typename Fn>
+inline void guardCallVoid(LogFn&& logFn, Fn&& fn) noexcept {
+    try {
+        std::forward<Fn>(fn)();
+    } catch (...) {
+        reportCurrentException(std::forward<LogFn>(logFn));
+    }
+}
+
 } // namespace plugin_guard
 } // namespace agentxx
-
-/// C ABI 边界异常兜底宏 (用法见文件头注释):
-/// - 展开处须存在固定签名 noexcept 函数 `void pluginCatchLog(const char*)`
-#define XX_PGUARD_BEGIN try {
-#define XX_PGUARD_END_RET(ret)                                     \
-    }                                                              \
-    catch (...) {                                                  \
-        ::agentxx::plugin_guard::reportCurrentException(pluginCatchLog); \
-        return (ret);                                              \
-    }
-#define XX_PGUARD_END_VOID()                                       \
-    }                                                              \
-    catch (...) {                                                  \
-        ::agentxx::plugin_guard::reportCurrentException(pluginCatchLog); \
-        return;                                                    \
-    }
 
 #endif /* __cplusplus */
 

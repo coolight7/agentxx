@@ -89,168 +89,174 @@ char* wrapExecute(
 
 extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_get_info(void) {
     // C ABI 边界异常守卫: 异常返回 NULL (宿主按"未导出"处理)
-    XX_PGUARD_BEGIN
-    static const AgentxxPluginInfo info{
-        AGENTXX_PLUGIN_API_VERSION,
-        AGENTXX_SV("agentxx_execute_command"),
-        AGENTXX_SV("1.0.0"),
-        AGENTXX_SV("Command execution tools: bash (and Windows PowerShell/cmd via WSL interop)"),
-    };
-    return &info;
-    XX_PGUARD_END_RET(nullptr)
+    return agentxx::plugin_guard::guardCall(
+        pluginCatchLog,
+        nullptr,
+        [&]() -> const AgentxxPluginInfo* {
+        static const AgentxxPluginInfo info{
+            AGENTXX_PLUGIN_API_VERSION,
+            AGENTXX_SV("agentxx_execute_command"),
+            AGENTXX_SV("1.0.0"),
+            AGENTXX_SV("Command execution tools: bash (and Windows PowerShell/cmd via WSL interop)"),
+        };
+        return &info;
+    });
 }
 
 extern "C" AGENTXX_PLUGIN_EXPORT int
     agentxx_plugin_entry(const AgentxxHost* host, void** plugin_ctx) {
     // C ABI 边界异常守卫: entry 内含 JSON schema 构建等可抛操作, 异常返回 -1
-    XX_PGUARD_BEGIN
-    if (!host || !host->vtable || !plugin_ctx) {
-        return -1;
-    }
-    g_host      = host;
-    g_if        = agentxx::plugin::AgentIfaces::query(host);
-    *plugin_ctx = nullptr;
-
-    static std::vector<std::string> g_storage;
-
-#if XX_IS_WIN_D
-    // 原生 Windows: 仅注册 windows command 工具
-#elif XX_IS_LINUX_D
-    // Linux/WSL: 注册 bash 工具; WSL 下额外注册 windows command 工具
-#else
-    // 其他平台 (macOS): bash 工具
-#endif
-
-    // ---- agentxx_execute_windows_command ----
-    // - 原生 Windows 或 WSL 环境注册 (与原 lib initTools 分支一致)
-    const bool registerWindows =
-#if XX_IS_WIN_D
-        true;
-#elif XX_IS_LINUX_D
-        agentxx::util::isRunningInWSL();
-#else
-        false;
-#endif
-
-    if (registerWindows) {
-        ToolPromptText p      = readToolPrompt(kNameWindows);
-        std::string    depict = p.depict;
-        if (depict.empty()) {
-            depict = kDepictWinPlaceholder;
+    return agentxx::plugin_guard::guardCall(
+        pluginCatchLog,
+        -1,
+        [&]() -> int {
+        if (!host || !host->vtable || !plugin_ctx) {
+            return -1;
         }
-        g_storage.push_back(std::move(depict));
-        // command 参数描述区分直传/popen 路径与 WSL/原生环境 (与 lib prompt 一致,
-        // 宿主 toolPrompt 正常提供完整文案, 此处为兜底简述)
-        const char* commandKey = "command";
-        std::string commandDesc
-            = argDesc(p, commandKey, "The Windows command to execute.");
-        if (argDesc(p, "command_process", "").empty()) {
-            // 宿主条目缺失时兜底 key 也用 command (schema 统一)
-            commandKey = "command";
-        }
-        // 经 json 对象构造后序列化 (commandKey 为运行期键, 直接作对象键使用)
-        std::string schema = neograph::json{
-            {"type", "object"},
-            {"properties",
-             {
-                 {commandKey,
-                  {
-                      {"type", "string"},
-                      {"description", argDesc(p, commandKey, commandDesc)},
-                  }},
-                 {"all_output",
-                  {
-                      {"type", "boolean"},
-                      {"description", argDesc(p, "all_output", kAllOutputDesc)},
-                  }},
-                 {"timeout",
-                  {
-                      {"type", "integer"},
-                      {"description", argDesc(p, "timeout", kTimeoutDesc)},
-                  }},
-             }},
-            {"required", neograph::json::array({std::string{commandKey}})},
-        }
-                              .dump();
-        g_storage.push_back(std::move(schema));
+        g_host      = host;
+        g_if        = agentxx::plugin::AgentIfaces::query(host);
+        *plugin_ctx = nullptr;
 
-        AgentxxSyncToolSpec spec{};
-        spec.name        = agentxx_plugin_sv(kNameWindows, std::strlen(kNameWindows));
-        spec.description = agentxx_plugin_sv(g_storage[0].data(), g_storage[0].size());
-        spec.parameters_json
-            = agentxx_plugin_sv(g_storage[1].data(), g_storage[1].size());
-        spec.user_data = nullptr;
-        spec.flags     = AGENTXX_TOOL_FLAG_AUTO_SUMMARY;
-        spec.execute   = &wrapExecute<agentxx::execmd_plugin::windowsExecute>;
-        if (agentxx_register_sync_tool(g_host, &spec) != 0) {
-            XX_LOGW("agentxx_execute_command: register tool {} failed", kNameWindows);
-        }
-    }
+        static std::vector<std::string> g_storage;
 
-    // ---- agentxx_execute_bash_command ----
-    // - Linux/macOS 注册; 原生 Windows 不注册 (与原 lib initTools 分支一致:
-    //   Windows 下仅当 bash 可用时才走该分支, 此处保持平台判断简化为不注册)
-    const bool registerBash =
-#if XX_IS_WIN_D
-        false;
-#else
-        true;
-#endif
+    #if XX_IS_WIN_D
+        // 原生 Windows: 仅注册 windows command 工具
+    #elif XX_IS_LINUX_D
+        // Linux/WSL: 注册 bash 工具; WSL 下额外注册 windows command 工具
+    #else
+        // 其他平台 (macOS): bash 工具
+    #endif
 
-    if (registerBash) {
-        ToolPromptText p      = readToolPrompt(kNameBash);
-        std::string    depict = p.depict;
-        if (depict.empty()) {
-            depict = kDepictBash;
-        }
-        g_storage.push_back(std::move(depict));
-        std::string schema = neograph::json{
-            {"type", "object"},
-            {"properties",
-             {
-                 {"command",
-                  {
-                      {"type", "string"},
-                      {"description", argDesc(p, "command", kBashCommandDesc)},
-                  }},
-                 {"all_output",
-                  {
-                      {"type", "boolean"},
-                      {"description", argDesc(p, "all_output", kAllOutputDesc)},
-                  }},
-                 {"timeout",
-                  {
-                      {"type", "integer"},
-                      {"description", argDesc(p, "timeout", kTimeoutDesc)},
-                  }},
-             }},
-            {"required", neograph::json::array({"command"})},
-        }
-                              .dump();
-        g_storage.push_back(std::move(schema));
+        // ---- agentxx_execute_windows_command ----
+        // - 原生 Windows 或 WSL 环境注册 (与原 lib initTools 分支一致)
+        const bool registerWindows =
+    #if XX_IS_WIN_D
+            true;
+    #elif XX_IS_LINUX_D
+            agentxx::util::isRunningInWSL();
+    #else
+            false;
+    #endif
 
-        AgentxxSyncToolSpec spec{};
-        spec.name        = agentxx_plugin_sv(kNameBash, std::strlen(kNameBash));
-        spec.description = agentxx_plugin_sv(g_storage[2].data(), g_storage[2].size());
-        spec.parameters_json
-            = agentxx_plugin_sv(g_storage[3].data(), g_storage[3].size());
-        spec.user_data = nullptr;
-        spec.flags     = AGENTXX_TOOL_FLAG_AUTO_SUMMARY;
-        spec.execute   = &wrapExecute<agentxx::execmd_plugin::bashExecute>;
-        if (agentxx_register_sync_tool(g_host, &spec) != 0) {
-            XX_LOGW("agentxx_execute_command: register tool {} failed", kNameBash);
-        }
-    }
+        if (registerWindows) {
+            ToolPromptText p      = readToolPrompt(kNameWindows);
+            std::string    depict = p.depict;
+            if (depict.empty()) {
+                depict = kDepictWinPlaceholder;
+            }
+            g_storage.push_back(std::move(depict));
+            // command 参数描述区分直传/popen 路径与 WSL/原生环境 (与 lib prompt 一致,
+            // 宿主 toolPrompt 正常提供完整文案, 此处为兜底简述)
+            const char* commandKey = "command";
+            std::string commandDesc
+                = argDesc(p, commandKey, "The Windows command to execute.");
+            if (argDesc(p, "command_process", "").empty()) {
+                // 宿主条目缺失时兜底 key 也用 command (schema 统一)
+                commandKey = "command";
+            }
+            // 经 json 对象构造后序列化 (commandKey 为运行期键, 直接作对象键使用)
+            std::string schema = neograph::json{
+                {"type", "object"},
+                {"properties",
+                 {
+                     {commandKey,
+                      {
+                          {"type", "string"},
+                          {"description", argDesc(p, commandKey, commandDesc)},
+                      }},
+                     {"all_output",
+                      {
+                          {"type", "boolean"},
+                          {"description", argDesc(p, "all_output", kAllOutputDesc)},
+                      }},
+                     {"timeout",
+                      {
+                          {"type", "integer"},
+                          {"description", argDesc(p, "timeout", kTimeoutDesc)},
+                      }},
+                 }},
+                {"required", neograph::json::array({std::string{commandKey}})},
+            }
+                                  .dump();
+            g_storage.push_back(std::move(schema));
 
-    return 0;
-    XX_PGUARD_END_RET(-1)
+            AgentxxSyncToolSpec spec{};
+            spec.name        = agentxx_plugin_sv(kNameWindows, std::strlen(kNameWindows));
+            spec.description = agentxx_plugin_sv(g_storage[0].data(), g_storage[0].size());
+            spec.parameters_json
+                = agentxx_plugin_sv(g_storage[1].data(), g_storage[1].size());
+            spec.user_data = nullptr;
+            spec.flags     = AGENTXX_TOOL_FLAG_AUTO_SUMMARY;
+            spec.execute   = &wrapExecute<agentxx::execmd_plugin::windowsExecute>;
+            if (agentxx_register_sync_tool(g_host, &spec) != 0) {
+                XX_LOGW("agentxx_execute_command: register tool {} failed", kNameWindows);
+            }
+        }
+
+        // ---- agentxx_execute_bash_command ----
+        // - Linux/macOS 注册; 原生 Windows 不注册 (与原 lib initTools 分支一致:
+        //   Windows 下仅当 bash 可用时才走该分支, 此处保持平台判断简化为不注册)
+        const bool registerBash =
+    #if XX_IS_WIN_D
+            false;
+    #else
+            true;
+    #endif
+
+        if (registerBash) {
+            ToolPromptText p      = readToolPrompt(kNameBash);
+            std::string    depict = p.depict;
+            if (depict.empty()) {
+                depict = kDepictBash;
+            }
+            g_storage.push_back(std::move(depict));
+            std::string schema = neograph::json{
+                {"type", "object"},
+                {"properties",
+                 {
+                     {"command",
+                      {
+                          {"type", "string"},
+                          {"description", argDesc(p, "command", kBashCommandDesc)},
+                      }},
+                     {"all_output",
+                      {
+                          {"type", "boolean"},
+                          {"description", argDesc(p, "all_output", kAllOutputDesc)},
+                      }},
+                     {"timeout",
+                      {
+                          {"type", "integer"},
+                          {"description", argDesc(p, "timeout", kTimeoutDesc)},
+                      }},
+                 }},
+                {"required", neograph::json::array({"command"})},
+            }
+                                  .dump();
+            g_storage.push_back(std::move(schema));
+
+            AgentxxSyncToolSpec spec{};
+            spec.name        = agentxx_plugin_sv(kNameBash, std::strlen(kNameBash));
+            spec.description = agentxx_plugin_sv(g_storage[2].data(), g_storage[2].size());
+            spec.parameters_json
+                = agentxx_plugin_sv(g_storage[3].data(), g_storage[3].size());
+            spec.user_data = nullptr;
+            spec.flags     = AGENTXX_TOOL_FLAG_AUTO_SUMMARY;
+            spec.execute   = &wrapExecute<agentxx::execmd_plugin::bashExecute>;
+            if (agentxx_register_sync_tool(g_host, &spec) != 0) {
+                XX_LOGW("agentxx_execute_command: register tool {} failed", kNameBash);
+            }
+        }
+
+        return 0;
+    });
 }
 
 extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_unload(void* plugin_ctx) {
     // C ABI 边界异常守卫: 卸载回调异常不得外泄
-    XX_PGUARD_BEGIN
-    (void)plugin_ctx;
-    g_host = nullptr;
-    g_if   = {};
-    XX_PGUARD_END_VOID()
+    agentxx::plugin_guard::guardCallVoid(pluginCatchLog, [&] {
+        (void)plugin_ctx;
+        g_host = nullptr;
+        g_if   = {};
+    });
 }

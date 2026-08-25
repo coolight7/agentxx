@@ -407,30 +407,30 @@ static void* usageCollectWork(void* ud, volatile int* cancel_flag, char** error_
 /// 周期采集 done: io 线程执行 (快速返回; publish 异步投递)
 static void usageCollectDone(void* ud, void* result, char* error) {
     // 异常守卫: 只包处理逻辑; free 移到守卫块后无条件执行防泄漏
-    XX_PGUARD_BEGIN
-    auto* ctx = static_cast<PluginCtx*>(ud);
-    if (ctx) {
-        ctx->collecting = false;
-    }
-    if (error) {
-        pluginLog(3, fmt::format("agentxx_system_monitor: usage collect failed: {}", error));
-        if (g_host && g_host->vtable) {
-            g_host->vtable->free(error);
+    agentxx::plugin_guard::guardCallVoid(pluginCatchLog, [&] {
+        auto* ctx = static_cast<PluginCtx*>(ud);
+        if (ctx) {
+            ctx->collecting = false;
         }
-        return;
-    }
-    if (result) {
-        if (g_host && g_if.events && g_if.events->publish) {
-            const char* s = static_cast<const char*>(result);
-            g_if.events->publish(
-                g_host,
-                AGENTXX_SV("agentxx_system_monitor.usage"),
-                agentxx_plugin_sv(s, std::strlen(s))
-            );
+        if (error) {
+            pluginLog(3, fmt::format("agentxx_system_monitor: usage collect failed: {}", error));
+            if (g_host && g_host->vtable) {
+                g_host->vtable->free(error);
+            }
+            return;
         }
-        g_host->vtable->free(result);
-    }
-    XX_PGUARD_END_VOID()
+        if (result) {
+            if (g_host && g_if.events && g_if.events->publish) {
+                const char* s = static_cast<const char*>(result);
+                g_if.events->publish(
+                    g_host,
+                    AGENTXX_SV("agentxx_system_monitor.usage"),
+                    agentxx_plugin_sv(s, std::strlen(s))
+                );
+            }
+            g_host->vtable->free(result);
+        }
+    });
 }
 
 /// 周期采集 tick (宿主定时器回调, io 线程; 必须快速返回):
@@ -438,24 +438,24 @@ static void usageCollectDone(void* ud, void* result, char* error) {
 ///   (work 在阻塞池, done 回 io 线程 publish) —— 不再自建采集线程
 static void onUsageTick(void* ud) {
     // C ABI 回调异常守卫 (宿主定时器循环直调)
-    XX_PGUARD_BEGIN
-    auto* ctx = static_cast<PluginCtx*>(ud);
-    if (!ctx || !g_host || !g_if.scheduler || !g_if.scheduler->offload) {
-        return;
-    }
-    if (ctx->collecting) {
-        return; // 上次采集未完成 (阻塞池忙), 跳过本 tick
-    }
-    if (++ctx->tick < kUsageIntervalSec * 1000 / kUsageTickMs) {
-        return;
-    }
-    ctx->tick = 0;
-    if (!ctx->usageEnabled.load(std::memory_order_relaxed)) {
-        return; // 显示关闭: 跳过采集
-    }
-    ctx->collecting = true;
-    g_if.scheduler->offload(g_host, &kUsageCancelFlag, usageCollectWork, usageCollectDone, ctx);
-    XX_PGUARD_END_VOID()
+    agentxx::plugin_guard::guardCallVoid(pluginCatchLog, [&] {
+        auto* ctx = static_cast<PluginCtx*>(ud);
+        if (!ctx || !g_host || !g_if.scheduler || !g_if.scheduler->offload) {
+            return;
+        }
+        if (ctx->collecting) {
+            return; // 上次采集未完成 (阻塞池忙), 跳过本 tick
+        }
+        if (++ctx->tick < kUsageIntervalSec * 1000 / kUsageTickMs) {
+            return;
+        }
+        ctx->tick = 0;
+        if (!ctx->usageEnabled.load(std::memory_order_relaxed)) {
+            return; // 显示关闭: 跳过采集
+        }
+        ctx->collecting = true;
+        g_if.scheduler->offload(g_host, &kUsageCancelFlag, usageCollectWork, usageCollectDone, ctx);
+    });
 }
 
 /// 跨端事件: client /sysinfo 开关同步 (WirePluginDataUp 上行后 server 发布到
@@ -463,18 +463,18 @@ static void onUsageTick(void* ud) {
 /// 仅写原子标志, 快速返回)
 static void on_usage_enabled(AgentxxPluginStringView event_json, void* ud) {
     // C ABI 回调异常守卫 (JSON 解析含分配)
-    XX_PGUARD_BEGIN
-    auto* ctx = static_cast<PluginCtx*>(ud);
-    if (!ctx) {
-        return;
-    }
-    std::string json{event_json.data ? event_json.data : "", event_json.size};
-    SimpleJson  j(json);
-    bool        enabled = true;
-    if (j.ok() && jsonGetBool(j.doc().at_pointer("/enabled"), enabled)) {
-        ctx->usageEnabled.store(enabled, std::memory_order_relaxed);
-    }
-    XX_PGUARD_END_VOID()
+    agentxx::plugin_guard::guardCallVoid(pluginCatchLog, [&] {
+        auto* ctx = static_cast<PluginCtx*>(ud);
+        if (!ctx) {
+            return;
+        }
+        std::string json{event_json.data ? event_json.data : "", event_json.size};
+        SimpleJson  j(json);
+        bool        enabled = true;
+        if (j.ok() && jsonGetBool(j.doc().at_pointer("/enabled"), enabled)) {
+            ctx->usageEnabled.store(enabled, std::memory_order_relaxed);
+        }
+    });
 }
 
 /// 宿主约定事件 client_attached 响应: 把 tick 计数置为"下一个 tick 即采集",
@@ -491,103 +491,106 @@ static void on_client_attached(AgentxxPluginStringView event_json, void* ud) {
 extern "C" AGENTXX_PLUGIN_EXPORT int
     agentxx_plugin_entry(const AgentxxHost* host, void** plugin_ctx) {
     // C ABI 边界异常守卫: 异常返回 -1 (加载失败)
-    XX_PGUARD_BEGIN
-    g_host = host;
-    // COM 风格接口表查询 (entry 一次性查询缓存; 进程级静态数据, 长期有效)
-    static const agentxx::plugin::AgentIfaces s_if = agentxx::plugin::AgentIfaces::query(host);
-    g_if = s_if;
+    return agentxx::plugin_guard::guardCall(
+        pluginCatchLog,
+        -1,
+        [&]() -> int {
+        g_host = host;
+        // COM 风格接口表查询 (entry 一次性查询缓存; 进程级静态数据, 长期有效)
+        static const agentxx::plugin::AgentIfaces s_if = agentxx::plugin::AgentIfaces::query(host);
+        g_if = s_if;
 
-    // 默认提示词写入宿主 (从 lib AgentPrompt 剥离迁移; 用户 yaml 覆盖优先)
-    ensureToolPromptInHost();
+        // 默认提示词写入宿主 (从 lib AgentPrompt 剥离迁移; 用户 yaml 覆盖优先)
+        ensureToolPromptInHost();
 
-    // 1. 工具 agentxx_get_system_core_info (与原内置工具同名同行为)
-    static const std::string kSchema
-        = R"({"type":"object","properties":{},"additionalProperties":false})";
-    registerTool(
-        "agentxx_get_system_core_info",
-        // 默认描述 (从 lib AgentPrompt 剥离迁移, 2026-08)
-        "Get system resource usage: CPU utilization, memory usage, GPU utilization, and GPU "
-        "memory usage.",
-        kSchema,
-        getSystemCoreInfoExecute
-    );
+        // 1. 工具 agentxx_get_system_core_info (与原内置工具同名同行为)
+        static const std::string kSchema
+            = R"({"type":"object","properties":{},"additionalProperties":false})";
+        registerTool(
+            "agentxx_get_system_core_info",
+            // 默认描述 (从 lib AgentPrompt 剥离迁移, 2026-08)
+            "Get system resource usage: CPU utilization, memory usage, GPU utilization, and GPU "
+            "memory usage.",
+            kSchema,
+            getSystemCoreInfoExecute
+        );
 
-    // 2. 能力 agentxx.system_usage (方法 query; 内联完成型)
-    if (!g_if.capabilities || !g_if.capabilities->register_capability_ex
-        || g_if.capabilities->register_capability_ex(
-            host,
-            AGENTXX_SV("agentxx.system_usage"),
-            systemUsageInvoke,
-            nullptr,
-            nullptr,
-            nullptr
-        )
-            != 0)
-    {
-        pluginLog(3, "agentxx_system_monitor: register capability agentxx.system_usage failed");
-    }
-
-    // 3. 周期采集: 订阅 client /sysinfo 开关同步事件 + 宿主定时器
-    //    (v7 add_timer): 每 kUsageTickMs 触发一次 tick (io 线程快速返回),
-    //    到 kUsageIntervalSec 后经 host->offload 把阻塞采样卸载到宿主阻塞池
-    //    (work 阻塞池 / done io 线程 publish) —— 不占 io 线程、不自建线程,
-    //    卸载安全由宿主统一保证 (定时器取消 + inflight 保活)
-    auto ctx = std::make_unique<PluginCtx>();
-    if (!g_if.events || !g_if.events->subscribe
-        || !g_if.events->subscribe(
-            host,
-            AGENTXX_SV("client.agentxx_system_monitor.usage_enabled"),
-            on_usage_enabled,
-            ctx.get()
-        )) {
-        pluginLog(3, "agentxx_system_monitor: subscribe usage_enabled failed");
-    }
-    // 订阅宿主约定事件 client_attached: 客户端接入/重连后立即采集一次
-    // (晚接入客户端 ≤500ms 收到首份数据, 无需等满 5s 周期)
-    if (!g_if.events->subscribe(
-            host,
-            AGENTXX_SV("agentxx_host.client_attached"),
-            on_client_attached,
-            ctx.get()
-        )) {
-        pluginLog(3, "agentxx_system_monitor: subscribe client_attached failed");
-    }
-    if (g_if.scheduler && g_if.scheduler->add_timer) {
-        ctx->timer = g_if.scheduler->add_timer(host, kUsageTickMs, onUsageTick, ctx.get());
-        if (!ctx->timer) {
-            pluginLog(3, "agentxx_system_monitor: add_timer failed (collector disabled)");
+        // 2. 能力 agentxx.system_usage (方法 query; 内联完成型)
+        if (!g_if.capabilities || !g_if.capabilities->register_capability_ex
+            || g_if.capabilities->register_capability_ex(
+                host,
+                AGENTXX_SV("agentxx.system_usage"),
+                systemUsageInvoke,
+                nullptr,
+                nullptr,
+                nullptr
+            )
+                != 0)
+        {
+            pluginLog(3, "agentxx_system_monitor: register capability agentxx.system_usage failed");
         }
-    } else {
-        pluginLog(3, "agentxx_system_monitor: host has no add_timer (collector disabled)");
-    }
 
-    *plugin_ctx = ctx.release();
-    pluginLog(2, "agentxx_system_monitor loaded (1 tool, 1 capability, periodic collector)");
-    return 0;
-    XX_PGUARD_END_RET(-1)
+        // 3. 周期采集: 订阅 client /sysinfo 开关同步事件 + 宿主定时器
+        //    (v7 add_timer): 每 kUsageTickMs 触发一次 tick (io 线程快速返回),
+        //    到 kUsageIntervalSec 后经 host->offload 把阻塞采样卸载到宿主阻塞池
+        //    (work 阻塞池 / done io 线程 publish) —— 不占 io 线程、不自建线程,
+        //    卸载安全由宿主统一保证 (定时器取消 + inflight 保活)
+        auto ctx = std::make_unique<PluginCtx>();
+        if (!g_if.events || !g_if.events->subscribe
+            || !g_if.events->subscribe(
+                host,
+                AGENTXX_SV("client.agentxx_system_monitor.usage_enabled"),
+                on_usage_enabled,
+                ctx.get()
+            )) {
+            pluginLog(3, "agentxx_system_monitor: subscribe usage_enabled failed");
+        }
+        // 订阅宿主约定事件 client_attached: 客户端接入/重连后立即采集一次
+        // (晚接入客户端 ≤500ms 收到首份数据, 无需等满 5s 周期)
+        if (!g_if.events->subscribe(
+                host,
+                AGENTXX_SV("agentxx_host.client_attached"),
+                on_client_attached,
+                ctx.get()
+            )) {
+            pluginLog(3, "agentxx_system_monitor: subscribe client_attached failed");
+        }
+        if (g_if.scheduler && g_if.scheduler->add_timer) {
+            ctx->timer = g_if.scheduler->add_timer(host, kUsageTickMs, onUsageTick, ctx.get());
+            if (!ctx->timer) {
+                pluginLog(3, "agentxx_system_monitor: add_timer failed (collector disabled)");
+            }
+        } else {
+            pluginLog(3, "agentxx_system_monitor: host has no add_timer (collector disabled)");
+        }
+
+        *plugin_ctx = ctx.release();
+        pluginLog(2, "agentxx_system_monitor loaded (1 tool, 1 capability, periodic collector)");
+        return 0;
+    });
 }
 
 extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_unload(void* plugin_ctx) {
     // C ABI 边界异常守卫: 卸载回调异常不得外泄
-    XX_PGUARD_BEGIN
-    auto* ctx = static_cast<PluginCtx*>(plugin_ctx);
-    if (ctx) {
-        // 取消宿主定时器 (在途 tick/offload 由宿主 inflight 计数等待完成,
-        // 此处无任何在途引用后安全释放 ctx)
-        if (g_host && g_if.scheduler && g_if.scheduler->cancel_timer && ctx->timer) {
-            g_if.scheduler->cancel_timer(g_host, ctx->timer);
-            ctx->timer = nullptr;
+    agentxx::plugin_guard::guardCallVoid(pluginCatchLog, [&] {
+        auto* ctx = static_cast<PluginCtx*>(plugin_ctx);
+        if (ctx) {
+            // 取消宿主定时器 (在途 tick/offload 由宿主 inflight 计数等待完成,
+            // 此处无任何在途引用后安全释放 ctx)
+            if (g_host && g_if.scheduler && g_if.scheduler->cancel_timer && ctx->timer) {
+                g_if.scheduler->cancel_timer(g_host, ctx->timer);
+                ctx->timer = nullptr;
+            }
+            delete ctx;
         }
-        delete ctx;
-    }
-    if (g_host && g_if.tools && g_if.tools->unregister_tool) {
-        g_if.tools->unregister_tool(g_host, AGENTXX_SV("agentxx_get_system_core_info"));
-    }
-    if (g_host && g_if.capabilities && g_if.capabilities->unregister_capability) {
-        g_if.capabilities->unregister_capability(g_host, AGENTXX_SV("agentxx.system_usage"));
-    }
-    pluginLog(2, "agentxx_system_monitor unloaded");
-    XX_PGUARD_END_VOID()
+        if (g_host && g_if.tools && g_if.tools->unregister_tool) {
+            g_if.tools->unregister_tool(g_host, AGENTXX_SV("agentxx_get_system_core_info"));
+        }
+        if (g_host && g_if.capabilities && g_if.capabilities->unregister_capability) {
+            g_if.capabilities->unregister_capability(g_host, AGENTXX_SV("agentxx.system_usage"));
+        }
+        pluginLog(2, "agentxx_system_monitor unloaded");
+    });
 }
 
 /* =====================================================================
@@ -795,16 +798,16 @@ static void on_client_plugin_data(AgentxxPluginStringView payload_json, void* ud
                      g_client_host, payload_json, AGENTXX_SV("data"))
                        : nullptr;
     // 异常守卫: 处理区含字符串分配/JSON 解析; free 在守卫块后无条件执行防泄漏
-    XX_PGUARD_BEGIN
-    const bool mine = plugin && event && std::strcmp(plugin, "agentxx_system_monitor") == 0
-                      && std::strcmp(event, "usage") == 0 && data;
-    if (mine) {
-        // 缓存原始数据; refreshUsageDisplay 内部按开关状态决定渲染
-        // (开启: Info 明细; 关闭: Info 段落显示占位)
-        g_last_usage_json = data;
-        refreshUsageDisplay();
-    }
-    XX_PGUARD_END_VOID()
+    agentxx::plugin_guard::guardCallVoid(pluginCatchLog, [&] {
+        const bool mine = plugin && event && std::strcmp(plugin, "agentxx_system_monitor") == 0
+                          && std::strcmp(event, "usage") == 0 && data;
+        if (mine) {
+            // 缓存原始数据; refreshUsageDisplay 内部按开关状态决定渲染
+            // (开启: Info 明细; 关闭: Info 段落显示占位)
+            g_last_usage_json = data;
+            refreshUsageDisplay();
+        }
+    });
     if (plugin) {
         g_client_host->vtable->free(plugin);
     }
@@ -824,164 +827,173 @@ static char* sysinfo_cmd_execute(void* ud, AgentxxPluginStringView args_json, ch
     (void)error_out;
     // C ABI 回调异常守卫: 命令执行运行在 client io 线程 (宿主输入管线直调),
     // 内含 JSON 组装/simdjson 解析等可抛路径
-    XX_PGUARD_BEGIN
-    if (!g_client_host) {
-        return nullptr;
-    }
-    const bool next = !g_usage_enabled.load(std::memory_order_relaxed);
-    g_usage_enabled.store(next, std::memory_order_relaxed);
-    // 立即按新开关状态刷新 (重新开启时用缓存的最新数据; 关闭时 Info 段落
-    // 显示占位); 数据在关闭期间仍持续接收缓存
-    refreshUsageDisplay();
-    // 上行同步: agent 侧插件订阅 client.agentxx_system_monitor.usage_enabled,
-    // 关闭期间跳过周期采集 (省采样开销/网络流量)
-    {
-        std::string payload = next ? R"({"enabled":true})" : R"({"enabled":false})";
-        if (g_client_if->wire && g_client_if->wire->send_plugin_data)
-            g_client_if->wire->send_plugin_data(
-            g_client_host,
-              AGENTXX_SV("usage_enabled"),
-              agentxx_plugin_sv(payload.data(), payload.size())
-        );
-    }
-    std::string       text = next ? "System resource info: ON" : "System resource info: OFF";
-    // 对端可用性检查: get_client_state("agentPlugins") 为服务端已加载的
-    // agent 侧插件结构化列表 [{name,version,interfaces},...] (宿主约定事件
-    // server_plugins / HelloAck.plugins; 空数组 = 服务端未提供, 不据此断言
-    // 缺失)。agent 侧插件缺失时上行开关同步会被静默丢弃 (采集照旧) ——
-    // 明确提示, 避免"操作成功"假象
-    {
-        char* stateJson    = g_client_if->session && g_client_if->session->get_client_state
-                                          ? g_client_if->session->get_client_state(g_client_host)
-                                          : nullptr;
-        bool  agentMissing = false;
-        if (stateJson) {
-            SimpleJson st{std::string(stateJson)};
-            if (st.ok()) {
-                simdjson::ondemand::array arr;
-                if (!st.doc().at_pointer("/agentPlugins").get(arr)) {
-                    size_t n     = 0;
-                    bool   found = false;
-                    for (auto v : arr) {
-                        ++n;
-                        // 元素为对象: 取 name 字段比对
-                        simdjson::ondemand::object obj;
-                        if (v.get_object().get(obj) != simdjson::SUCCESS) {
-                            continue;
+    return agentxx::plugin_guard::guardCall(
+        pluginCatchLog,
+        nullptr,
+        [&]() -> char* {
+        if (!g_client_host) {
+            return nullptr;
+        }
+        const bool next = !g_usage_enabled.load(std::memory_order_relaxed);
+        g_usage_enabled.store(next, std::memory_order_relaxed);
+        // 立即按新开关状态刷新 (重新开启时用缓存的最新数据; 关闭时 Info 段落
+        // 显示占位); 数据在关闭期间仍持续接收缓存
+        refreshUsageDisplay();
+        // 上行同步: agent 侧插件订阅 client.agentxx_system_monitor.usage_enabled,
+        // 关闭期间跳过周期采集 (省采样开销/网络流量)
+        {
+            std::string payload = next ? R"({"enabled":true})" : R"({"enabled":false})";
+            if (g_client_if->wire && g_client_if->wire->send_plugin_data)
+                g_client_if->wire->send_plugin_data(
+                g_client_host,
+                  AGENTXX_SV("usage_enabled"),
+                  agentxx_plugin_sv(payload.data(), payload.size())
+            );
+        }
+        std::string       text = next ? "System resource info: ON" : "System resource info: OFF";
+        // 对端可用性检查: get_client_state("agentPlugins") 为服务端已加载的
+        // agent 侧插件结构化列表 [{name,version,interfaces},...] (宿主约定事件
+        // server_plugins / HelloAck.plugins; 空数组 = 服务端未提供, 不据此断言
+        // 缺失)。agent 侧插件缺失时上行开关同步会被静默丢弃 (采集照旧) ——
+        // 明确提示, 避免"操作成功"假象
+        {
+            char* stateJson    = g_client_if->session && g_client_if->session->get_client_state
+                                              ? g_client_if->session->get_client_state(g_client_host)
+                                              : nullptr;
+            bool  agentMissing = false;
+            if (stateJson) {
+                SimpleJson st{std::string(stateJson)};
+                if (st.ok()) {
+                    simdjson::ondemand::array arr;
+                    if (!st.doc().at_pointer("/agentPlugins").get(arr)) {
+                        size_t n     = 0;
+                        bool   found = false;
+                        for (auto v : arr) {
+                            ++n;
+                            // 元素为对象: 取 name 字段比对
+                            simdjson::ondemand::object obj;
+                            if (v.get_object().get(obj) != simdjson::SUCCESS) {
+                                continue;
+                            }
+                            std::string_view sv;
+                            if (obj["name"].get_string().get(sv) == simdjson::SUCCESS
+                                && sv == "agentxx_system_monitor") {
+                                found = true;
+                            }
                         }
-                        std::string_view sv;
-                        if (obj["name"].get_string().get(sv) == simdjson::SUCCESS
-                            && sv == "agentxx_system_monitor") {
-                            found = true;
-                        }
+                        agentMissing = (n > 0 && !found);
                     }
-                    agentMissing = (n > 0 && !found);
                 }
+                g_client_host->vtable->free(stateJson);
             }
-            g_client_host->vtable->free(stateJson);
+            if (agentMissing) {
+                text += " (warn: plugin missing on server side; toggle is local only)";
+            }
         }
-        if (agentMissing) {
-            text += " (warn: plugin missing on server side; toggle is local only)";
-        }
-    }
-    const std::string out
-        = fmt::format(R"({{"action":"toast","text":{},"level":0}})", clientJsonEscape(text));
-    return g_client_host->vtable->strdup(out.c_str());
-    XX_PGUARD_END_RET(nullptr)
+        const std::string out
+            = fmt::format(R"({{"action":"toast","text":{},"level":0}})", clientJsonEscape(text));
+        return g_client_host->vtable->strdup(out.c_str());
+    });
 }
 
 extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxClientPluginInfo* agentxx_client_get_info(void) {
     // C ABI 边界异常守卫: 异常返回 NULL (宿主按"未导出"处理)
-    XX_PGUARD_BEGIN
-    static const AgentxxClientPluginInfo info{
-        AGENTXX_CLIENT_PLUGIN_API_VERSION,
-        AGENTXX_SV("agentxx_system_monitor"),
-        AGENTXX_SV("1.0.0"),
-        AGENTXX_SV("System resource usage: Info section (CPU/RAM/GPU), /sysinfo toggle"),
-    };
-    return &info;
-    XX_PGUARD_END_RET(nullptr)
+    return agentxx::plugin_guard::guardCall(
+        pluginCatchLog,
+        nullptr,
+        [&]() -> const AgentxxClientPluginInfo* {
+        static const AgentxxClientPluginInfo info{
+            AGENTXX_CLIENT_PLUGIN_API_VERSION,
+            AGENTXX_SV("agentxx_system_monitor"),
+            AGENTXX_SV("1.0.0"),
+            AGENTXX_SV("System resource usage: Info section (CPU/RAM/GPU), /sysinfo toggle"),
+        };
+        return &info;
+    });
 }
 
 extern "C" AGENTXX_PLUGIN_EXPORT int
     agentxx_client_entry(const AgentxxClientHost* host, void** plugin_ctx) {
     // C ABI 边界异常守卫: 异常返回 -1 (加载失败)
-    XX_PGUARD_BEGIN
-    g_client_host = host;
-    (void)plugin_ctx;
+    return agentxx::plugin_guard::guardCall(
+        pluginCatchLog,
+        -1,
+        [&]() -> int {
+        g_client_host = host;
+        (void)plugin_ctx;
 
-    // COM 风格接口表查询 (entry 一次性查询缓存; 进程级静态数据)
-    static const agentxx::plugin::ClientIfaces s_if = agentxx::plugin::ClientIfaces::query(host);
-    g_client_if = &s_if;
-    g_client_ui = s_if.ui;
+        // COM 风格接口表查询 (entry 一次性查询缓存; 进程级静态数据)
+        static const agentxx::plugin::ClientIfaces s_if = agentxx::plugin::ClientIfaces::query(host);
+        g_client_if = &s_if;
+        g_client_ui = s_if.ui;
 
-    // 1. 侧边栏 Info 栏段落 (资源占用明细: CPU/RAM/GPU; 内容由
-    //    refreshUsageDisplay 更新)
-    g_section = g_client_ui && g_client_ui->register_info_section
-                  ? g_client_ui->register_info_section(
-                      host,
-                      AGENTXX_SV("agentxx_system_monitor.usage"),
-                      AGENTXX_SV(R"({"title":"System"})")
-                  )
-                  : nullptr;
-    // 宿主不支持 Info 段落时成员为 NULL, 插件降级 (不视为失败)
+        // 1. 侧边栏 Info 栏段落 (资源占用明细: CPU/RAM/GPU; 内容由
+        //    refreshUsageDisplay 更新)
+        g_section = g_client_ui && g_client_ui->register_info_section
+                      ? g_client_ui->register_info_section(
+                          host,
+                          AGENTXX_SV("agentxx_system_monitor.usage"),
+                          AGENTXX_SV(R"({"title":"System"})")
+                      )
+                      : nullptr;
+        // 宿主不支持 Info 段落时成员为 NULL, 插件降级 (不视为失败)
 
-    // 2. 事件订阅: 宿主转发的系统资源事件 (WirePluginData agentxx_system_monitor.usage)
-    if (!s_if.events || !s_if.events->subscribe
-        || !s_if.events->subscribe(
-            host,
-            AGENTXX_CLIENT_EVT_PLUGIN_DATA,
-            on_client_plugin_data,
-            nullptr
-        )) {
-        return -1;
-    }
+        // 2. 事件订阅: 宿主转发的系统资源事件 (WirePluginData agentxx_system_monitor.usage)
+        if (!s_if.events || !s_if.events->subscribe
+            || !s_if.events->subscribe(
+                host,
+                AGENTXX_CLIENT_EVT_PLUGIN_DATA,
+                on_client_plugin_data,
+                nullptr
+            )) {
+            return -1;
+        }
 
-    // 3. 命令 /sysinfo: 切换显示 (无命令输入面的宿主成员为 NULL → 加载失败;
-    //    命令是本插件核心交互, 与原 register 失败行为一致)
-    if (!g_client_ui || !g_client_ui->register_command
-        || g_client_ui->register_command(
-               host,
-               AGENTXX_SV("sysinfo"),
-               AGENTXX_SV("Toggle system resource info display (CPU/RAM/GPU Info section)"),
-               sysinfo_cmd_execute,
-               nullptr
-           )
-               != 0) {
-        return -1;
-    }
+        // 3. 命令 /sysinfo: 切换显示 (无命令输入面的宿主成员为 NULL → 加载失败;
+        //    命令是本插件核心交互, 与原 register 失败行为一致)
+        if (!g_client_ui || !g_client_ui->register_command
+            || g_client_ui->register_command(
+                   host,
+                   AGENTXX_SV("sysinfo"),
+                   AGENTXX_SV("Toggle system resource info display (CPU/RAM/GPU Info section)"),
+                   sysinfo_cmd_execute,
+                   nullptr
+               )
+                   != 0) {
+            return -1;
+        }
 
-    if (s_if.log && s_if.log->log) {
-        s_if.log->log(host, 2, AGENTXX_SV("agentxx_system_monitor client loaded"));
-    }
-    return 0;
-    XX_PGUARD_END_RET(-1)
+        if (s_if.log && s_if.log->log) {
+            s_if.log->log(host, 2, AGENTXX_SV("agentxx_system_monitor client loaded"));
+        }
+        return 0;
+    });
 }
 
 extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_client_unload(void* plugin_ctx) {
     // C ABI 边界异常守卫: 卸载回调异常不得外泄
-    XX_PGUARD_BEGIN
-    (void)plugin_ctx;
-    if (!g_client_host || !g_client_if) {
-        return;
-    }
-    if (g_section && g_client_ui->unregister_info_section) {
-        g_client_ui->unregister_info_section(g_client_host, g_section);
-        g_section = nullptr;
-    }
-    if (g_client_ui->unregister_command) {
-        g_client_ui->unregister_command(g_client_host, AGENTXX_SV("sysinfo"));
-    }
-    g_last_usage_json.clear();
-    if (g_client_if->log && g_client_if->log->log) {
-        g_client_if->log->log(
-            g_client_host,
-            2,
-            AGENTXX_SV("agentxx_system_monitor client unloaded")
-        );
-    }
-    g_client_host = nullptr;
-    g_client_if   = nullptr;
-    g_client_ui   = nullptr;
-    XX_PGUARD_END_VOID()
+    agentxx::plugin_guard::guardCallVoid(pluginCatchLog, [&] {
+        (void)plugin_ctx;
+        if (!g_client_host || !g_client_if) {
+            return;
+        }
+        if (g_section && g_client_ui->unregister_info_section) {
+            g_client_ui->unregister_info_section(g_client_host, g_section);
+            g_section = nullptr;
+        }
+        if (g_client_ui->unregister_command) {
+            g_client_ui->unregister_command(g_client_host, AGENTXX_SV("sysinfo"));
+        }
+        g_last_usage_json.clear();
+        if (g_client_if->log && g_client_if->log->log) {
+            g_client_if->log->log(
+                g_client_host,
+                2,
+                AGENTXX_SV("agentxx_system_monitor client unloaded")
+            );
+        }
+        g_client_host = nullptr;
+        g_client_if   = nullptr;
+        g_client_ui   = nullptr;
+    });
 }

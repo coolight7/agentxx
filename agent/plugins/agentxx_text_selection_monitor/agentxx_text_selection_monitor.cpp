@@ -178,25 +178,31 @@ char* textSelectionExecute(
 
 extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_get_info(void) {
     // C ABI 边界异常守卫: 异常返回 NULL (宿主按"未导出"处理)
-    XX_PGUARD_BEGIN
-    static const AgentxxPluginInfo info{
-        AGENTXX_PLUGIN_API_VERSION,
-        AGENTXX_SV("agentxx_text_selection_monitor"),
-        AGENTXX_SV("1.0.0"),
-        AGENTXX_SV("System-wide text selection event stream: start/stop/status "
-                   "(Windows; other platforms no-op)"),
-    };
-    return &info;
-    XX_PGUARD_END_RET(nullptr)
+    return agentxx::plugin_guard::guardCall(
+        pluginCatchLog,
+        nullptr,
+        [&]() -> const AgentxxPluginInfo* {
+        static const AgentxxPluginInfo info{
+            AGENTXX_PLUGIN_API_VERSION,
+            AGENTXX_SV("agentxx_text_selection_monitor"),
+            AGENTXX_SV("1.0.0"),
+            AGENTXX_SV("System-wide text selection event stream: start/stop/status "
+                       "(Windows; other platforms no-op)"),
+        };
+        return &info;
+    });
 }
 
 extern "C" AGENTXX_PLUGIN_EXPORT int
     agentxx_plugin_entry(const AgentxxHost* host, void** /*plugin_ctx*/) {
     // C ABI 边界异常守卫: 异常返回 -1 (加载失败)
-    XX_PGUARD_BEGIN
-    g_host = host;
+    return agentxx::plugin_guard::guardCall(
+        pluginCatchLog,
+        -1,
+        [&]() -> int {
+        g_host = host;
 
-    static const std::string kSchema = R"({
+        static const std::string kSchema = R"({
         "type": "object",
         "properties": {
             "command": {"type": "string", "enum": ["start", "stop", "status"]},
@@ -205,32 +211,32 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
         "required": ["command"]
     })";
 
-    AgentxxSyncToolSpec spec{};
-    spec.name = AGENTXX_SV("agentxx_text_selection_monitor");
-    spec.description
-        = AGENTXX_SV("Monitor text selections system-wide on Windows. start begins capturing; "
-                     "selected text is published as plugin events "
-                     "(agentxx_text_selection_monitor.selection).");
-    spec.parameters_json = agentxx_plugin_sv(kSchema.data(), kSchema.size());
-    spec.execute         = textSelectionExecute;
-    if (agentxx_register_sync_tool(host, &spec) != 0) {
-        pluginLog(3, "agentxx_text_selection_monitor: register tool failed");
-        return -1;
-    }
+        AgentxxSyncToolSpec spec{};
+        spec.name = AGENTXX_SV("agentxx_text_selection_monitor");
+        spec.description
+            = AGENTXX_SV("Monitor text selections system-wide on Windows. start begins capturing; "
+                         "selected text is published as plugin events "
+                         "(agentxx_text_selection_monitor.selection).");
+        spec.parameters_json = agentxx_plugin_sv(kSchema.data(), kSchema.size());
+        spec.execute         = textSelectionExecute;
+        if (agentxx_register_sync_tool(host, &spec) != 0) {
+            pluginLog(3, "agentxx_text_selection_monitor: register tool failed");
+            return -1;
+        }
 
-    pluginLog(2, "agentxx_text_selection_monitor loaded (1 tool)");
-    return 0;
-    XX_PGUARD_END_RET(-1)
+        pluginLog(2, "agentxx_text_selection_monitor loaded (1 tool)");
+        return 0;
+    });
 }
 
 extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_unload(void* /*plugin_ctx*/) {
     // C ABI 边界异常守卫: 卸载回调异常不得外泄
-    XX_PGUARD_BEGIN
-    TextSelectionHolder::instance().stop();
-    if (g_host && g_host->vtable) {
-        if (g_if.tools && g_if.tools->unregister_tool)
-            g_if.tools->unregister_tool(g_host, AGENTXX_SV("agentxx_text_selection_monitor"));
-    }
-    pluginLog(2, "agentxx_text_selection_monitor unloaded");
-    XX_PGUARD_END_VOID()
+    agentxx::plugin_guard::guardCallVoid(pluginCatchLog, [&] {
+        TextSelectionHolder::instance().stop();
+        if (g_host && g_host->vtable) {
+            if (g_if.tools && g_if.tools->unregister_tool)
+                g_if.tools->unregister_tool(g_host, AGENTXX_SV("agentxx_text_selection_monitor"));
+        }
+        pluginLog(2, "agentxx_text_selection_monitor unloaded");
+    });
 }

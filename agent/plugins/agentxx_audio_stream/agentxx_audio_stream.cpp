@@ -214,25 +214,31 @@ char* audioStreamExecute(
 
 extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_get_info(void) {
     // C ABI 边界异常守卫: 异常返回 NULL (宿主按"未导出"处理)
-    XX_PGUARD_BEGIN
-    static const AgentxxPluginInfo info{
-        AGENTXX_PLUGIN_API_VERSION,
-        AGENTXX_SV("agentxx_audio_stream"),
-        AGENTXX_SV("1.0.0"),
-        AGENTXX_SV("Audio stream capture: system output / program output / microphone "
-                   "(Windows WASAPI; other platforms no-op)"),
-    };
-    return &info;
-    XX_PGUARD_END_RET(nullptr)
+    return agentxx::plugin_guard::guardCall(
+        pluginCatchLog,
+        nullptr,
+        [&]() -> const AgentxxPluginInfo* {
+        static const AgentxxPluginInfo info{
+            AGENTXX_PLUGIN_API_VERSION,
+            AGENTXX_SV("agentxx_audio_stream"),
+            AGENTXX_SV("1.0.0"),
+            AGENTXX_SV("Audio stream capture: system output / program output / microphone "
+                       "(Windows WASAPI; other platforms no-op)"),
+        };
+        return &info;
+    });
 }
 
 extern "C" AGENTXX_PLUGIN_EXPORT int
     agentxx_plugin_entry(const AgentxxHost* host, void** /*plugin_ctx*/) {
     // C ABI 边界异常守卫: 异常返回 -1 (加载失败)
-    XX_PGUARD_BEGIN
-    g_host = host;
+    return agentxx::plugin_guard::guardCall(
+        pluginCatchLog,
+        -1,
+        [&]() -> int {
+        g_host = host;
 
-    static const std::string kSchema = R"({
+        static const std::string kSchema = R"({
         "type": "object",
         "properties": {
             "command": {"type": "string", "enum": ["start", "stop", "status"]},
@@ -242,31 +248,31 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
         "required": ["command"]
     })";
 
-    AgentxxSyncToolSpec spec{};
-    spec.name = AGENTXX_SV("agentxx_audio_stream");
-    spec.description
-        = AGENTXX_SV("Capture audio stream on Windows: start/stop/status. Captured PCM frames are "
-                     "published as plugin events (agentxx_audio_stream.audio).");
-    spec.parameters_json = agentxx_plugin_sv(kSchema.data(), kSchema.size());
-    spec.execute         = audioStreamExecute;
-    if (agentxx_register_sync_tool(host, &spec) != 0) {
-        pluginLog(3, "agentxx_audio_stream: register tool failed");
-        return -1;
-    }
+        AgentxxSyncToolSpec spec{};
+        spec.name = AGENTXX_SV("agentxx_audio_stream");
+        spec.description
+            = AGENTXX_SV("Capture audio stream on Windows: start/stop/status. Captured PCM frames are "
+                         "published as plugin events (agentxx_audio_stream.audio).");
+        spec.parameters_json = agentxx_plugin_sv(kSchema.data(), kSchema.size());
+        spec.execute         = audioStreamExecute;
+        if (agentxx_register_sync_tool(host, &spec) != 0) {
+            pluginLog(3, "agentxx_audio_stream: register tool failed");
+            return -1;
+        }
 
-    pluginLog(2, "agentxx_audio_stream loaded (1 tool)");
-    return 0;
-    XX_PGUARD_END_RET(-1)
+        pluginLog(2, "agentxx_audio_stream loaded (1 tool)");
+        return 0;
+    });
 }
 
 extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_unload(void* /*plugin_ctx*/) {
     // C ABI 边界异常守卫: 卸载回调异常不得外泄
-    XX_PGUARD_BEGIN
-    AudioStreamHolder::instance().stop();
-    if (g_host && g_host->vtable) {
-        if (g_if.tools && g_if.tools->unregister_tool)
-            g_if.tools->unregister_tool(g_host, AGENTXX_SV("agentxx_audio_stream"));
-    }
-    pluginLog(2, "agentxx_audio_stream unloaded");
-    XX_PGUARD_END_VOID()
+    agentxx::plugin_guard::guardCallVoid(pluginCatchLog, [&] {
+        AudioStreamHolder::instance().stop();
+        if (g_host && g_host->vtable) {
+            if (g_if.tools && g_if.tools->unregister_tool)
+                g_if.tools->unregister_tool(g_host, AGENTXX_SV("agentxx_audio_stream"));
+        }
+        pluginLog(2, "agentxx_audio_stream unloaded");
+    });
 }

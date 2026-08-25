@@ -45,7 +45,7 @@ class JsEngine;
 namespace {
 
 // =====================================================================
-// C ABI 边界异常守卫 (XX_PGUARD_* 宏按名查找; entry 装配缓存)
+// C ABI 边界异常守卫 (由守卫函数调用处显式传入; entry 装配缓存)
 // =====================================================================
 
 /// 守卫日志所需宿主缓存 (entry 装配; 进程级静态)
@@ -972,17 +972,17 @@ void* JsEngine::hookStart(
 
 void JsEngine::eventFire(AgentxxPluginStringView event_json, void* ud) {
     // C ABI 回调异常守卫: 事件分发由宿主 io 线程调用, 异常不外泄
-    XX_PGUARD_BEGIN
-    auto* binding = static_cast<JsHookBinding*>(ud);
-    auto* engine  = binding ? binding->engine : nullptr;
-    if (!engine) {
-        return;
-    }
-    std::string payload{event_json.data ? event_json.data : "", event_json.size};
-    engine->post([engine, binding, payload]() {
-        engine->doEventFire(binding, payload);
+    agentxx::plugin_guard::guardCallVoid(pluginCatchLog, [&] {
+        auto* binding = static_cast<JsHookBinding*>(ud);
+        auto* engine  = binding ? binding->engine : nullptr;
+        if (!engine) {
+            return;
+        }
+        std::string payload{event_json.data ? event_json.data : "", event_json.size};
+        engine->post([engine, binding, payload]() {
+            engine->doEventFire(binding, payload);
+        });
     });
-    XX_PGUARD_END_VOID()
 }
 
 namespace {
@@ -1676,56 +1676,59 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
     agentxx_plugin_entry(const AgentxxHost* host, void** plugin_ctx) {
     // C ABI 边界异常守卫: entry 含引擎线程创建/能力注册等可抛操作,
     // 异常返回 -1 走宿主加载失败清理路径
-    XX_PGUARD_BEGIN
-    // 守卫日志缓存 (供各回调异常兜底使用)
-    g_guard_host = host;
-    if (host && host->vtable && host->vtable->query_interface) {
-        g_guard_log = (const AgentxxLogIface*)host->vtable->query_interface(
+    return agentxx::plugin_guard::guardCall(
+        pluginCatchLog,
+        -1,
+        [&]() -> int {
+        // 守卫日志缓存 (供各回调异常兜底使用)
+        g_guard_host = host;
+        if (host && host->vtable && host->vtable->query_interface) {
+            g_guard_log = (const AgentxxLogIface*)host->vtable->query_interface(
+                host,
+                AGENTXX_SV(AGENTXX_IFACE_AGENT_LOG)
+            );
+        }
+        auto* engine = new JsEngine();
+        engine->setEngineHost(host);
+
+        // COM 风格接口表查询: entry 内一次性查询缓存全部已知 IID
+        static const agentxx::plugin::AgentIfaces s_if = agentxx::plugin::AgentIfaces::query(host);
+        if (!s_if.capabilities || !s_if.capabilities->register_capability_ex || !s_if.log) {
+            delete engine;
+            return -1;
+        }
+
+        // 注册能力 "interpreter.js" (agentxx.agent.capabilities 接口表, 异步方法
+        // 处理器三件套): 脚本插件 (C++ 壳) 经 invoke_capability(_async) 把脚本代码
+        // 交给本引擎执行 —— 插件间通信, 宿主不参与; load 为异步完成 (JS 线程执行),
+        // unload 内联完成 (fire-and-forget)
+        int rc = s_if.capabilities->register_capability_ex(
             host,
-            AGENTXX_SV(AGENTXX_IFACE_AGENT_LOG)
+            AGENTXX_SV("interpreter.js"),
+            &jsCapStart,
+            nullptr,
+            nullptr,
+            engine
         );
-    }
-    auto* engine = new JsEngine();
-    engine->setEngineHost(host);
-
-    // COM 风格接口表查询: entry 内一次性查询缓存全部已知 IID
-    static const agentxx::plugin::AgentIfaces s_if = agentxx::plugin::AgentIfaces::query(host);
-    if (!s_if.capabilities || !s_if.capabilities->register_capability_ex || !s_if.log) {
-        delete engine;
-        return -1;
-    }
-
-    // 注册能力 "interpreter.js" (agentxx.agent.capabilities 接口表, 异步方法
-    // 处理器三件套): 脚本插件 (C++ 壳) 经 invoke_capability(_async) 把脚本代码
-    // 交给本引擎执行 —— 插件间通信, 宿主不参与; load 为异步完成 (JS 线程执行),
-    // unload 内联完成 (fire-and-forget)
-    int rc = s_if.capabilities->register_capability_ex(
-        host,
-        AGENTXX_SV("interpreter.js"),
-        &jsCapStart,
-        nullptr,
-        nullptr,
-        engine
-    );
-    if (rc != 0) {
-        delete engine;
-        return -1;
-    }
-    *plugin_ctx = engine;
-    s_if.log->log(host, 2, AGENTXX_SV("agentxx_javascript_engine loaded (QuickJS interpreter.js)"));
-    return 0;
-    XX_PGUARD_END_RET(-1)
+        if (rc != 0) {
+            delete engine;
+            return -1;
+        }
+        *plugin_ctx = engine;
+        s_if.log->log(host, 2, AGENTXX_SV("agentxx_javascript_engine loaded (QuickJS interpreter.js)"));
+        return 0;
+    });
 }
 
 extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_unload(void* plugin_ctx) {
     // C ABI 边界异常守卫: 卸载回调 (delete 引擎 = 停线程 + 释放 runtime)
     // 异常不得外泄, 否则 JS 线程/runtime 泄漏且宿主卸载流程被打断
-    XX_PGUARD_BEGIN
-    auto* engine = static_cast<JsEngine*>(plugin_ctx);
-    if (engine) {
-        delete engine; // 停止 JS 线程并释放 runtime
-    }
-    g_guard_host = nullptr;
-    g_guard_log  = nullptr;
-    XX_PGUARD_END_VOID()
+    agentxx::plugin_guard::guardCallVoid(pluginCatchLog, [&] {
+        auto* engine = static_cast<JsEngine*>(plugin_ctx);
+        if (engine) {
+            delete engine; // 停止 JS 线程并释放 runtime
+        }
+        g_guard_host = nullptr;
+        g_guard_log  = nullptr;
+    });
 }

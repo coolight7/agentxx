@@ -36,7 +36,7 @@ inline char* pluginStrdup(const char* s) {
     return g_host->vtable->strdup(s);
 }
 
-/// C ABI 边界异常守卫日志 (XX_PGUARD_* 宏按名查找; noexcept)
+/// C ABI 边界异常守卫日志 (由守卫函数调用处显式传入; noexcept)
 inline void pluginCatchLog(const char* msg) noexcept {
     agentxx::plugin_guard::defaultLogTo(g_host, g_if.log, 4, "agentxx_system", msg);
 }

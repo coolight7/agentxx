@@ -432,80 +432,86 @@ using namespace agentxx_screen_capture_plugin;
 
 extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_get_info(void) {
     // C ABI 边界异常守卫: 异常返回 NULL (宿主按"未导出"处理)
-    XX_PGUARD_BEGIN
-    static const AgentxxPluginInfo info{
-        AGENTXX_PLUGIN_API_VERSION,
-        AGENTXX_SV("agentxx_screen_capture"),
-        AGENTXX_SV("1.0.0"),
-        AGENTXX_SV(
-            "Screen capture on Windows: all screens, mouse screen, specific screen, and streaming"
-        ),
-    };
-    return &info;
-    XX_PGUARD_END_RET(nullptr)
+    return agentxx::plugin_guard::guardCall(
+        pluginCatchLog,
+        nullptr,
+        [&]() -> const AgentxxPluginInfo* {
+        static const AgentxxPluginInfo info{
+            AGENTXX_PLUGIN_API_VERSION,
+            AGENTXX_SV("agentxx_screen_capture"),
+            AGENTXX_SV("1.0.0"),
+            AGENTXX_SV(
+                "Screen capture on Windows: all screens, mouse screen, specific screen, and streaming"
+            ),
+        };
+        return &info;
+    });
 }
 
 extern "C" AGENTXX_PLUGIN_EXPORT int
     agentxx_plugin_entry(const AgentxxHost* host, void** /*plugin_ctx*/) {
     // C ABI 边界异常守卫: entry 含目录创建/注册等可抛操作, 异常返回 -1
-    XX_PGUARD_BEGIN
-    g_host = host;
-    // 读取宿主 dataDir (io 线程), 初始化截图落盘目录 {dataDir}/captures
-    // - get_config 仅 io 线程可用, execute 运行在线程池, 故此处缓存供后续只读
-    // - dataDir 不可用 (旧宿主) 时 g_capturesDir 为空, 捕获只返回元信息不落盘
-    if (g_if.config && g_if.config->get_config) {
-        char* json = g_if.config->get_config(g_host);
-        if (json) {
-            std::string s{json};
-            g_host->vtable->free(json);
-            SimpleJson j(s);
-            if (j.ok()) {
-                std::string dataDir;
-                if (jsonGetString(j.doc().at_pointer("/dataDir"), dataDir) && !dataDir.empty()) {
-                    g_capturesDir = dataDir + "/captures";
-                    std::error_code ec;
-                    if (std::filesystem::create_directories(g_capturesDir, ec) || !ec) {
-                        pluginLog(
-                            2,
-                            fmt::format(
-                                "agentxx_screen_capture: capture dir ready: {}",
-                                g_capturesDir
-                            )
-                        );
-                    } else {
-                        pluginLog(
-                            3,
-                            fmt::format(
-                                "agentxx_screen_capture: create captures dir failed: {}",
-                                ec.message()
-                            )
-                        );
-                        g_capturesDir.clear();
+    return agentxx::plugin_guard::guardCall(
+        pluginCatchLog,
+        -1,
+        [&]() -> int {
+        g_host = host;
+        // 读取宿主 dataDir (io 线程), 初始化截图落盘目录 {dataDir}/captures
+        // - get_config 仅 io 线程可用, execute 运行在线程池, 故此处缓存供后续只读
+        // - dataDir 不可用 (旧宿主) 时 g_capturesDir 为空, 捕获只返回元信息不落盘
+        if (g_if.config && g_if.config->get_config) {
+            char* json = g_if.config->get_config(g_host);
+            if (json) {
+                std::string s{json};
+                g_host->vtable->free(json);
+                SimpleJson j(s);
+                if (j.ok()) {
+                    std::string dataDir;
+                    if (jsonGetString(j.doc().at_pointer("/dataDir"), dataDir) && !dataDir.empty()) {
+                        g_capturesDir = dataDir + "/captures";
+                        std::error_code ec;
+                        if (std::filesystem::create_directories(g_capturesDir, ec) || !ec) {
+                            pluginLog(
+                                2,
+                                fmt::format(
+                                    "agentxx_screen_capture: capture dir ready: {}",
+                                    g_capturesDir
+                                )
+                            );
+                        } else {
+                            pluginLog(
+                                3,
+                                fmt::format(
+                                    "agentxx_screen_capture: create captures dir failed: {}",
+                                    ec.message()
+                                )
+                            );
+                            g_capturesDir.clear();
+                        }
                     }
                 }
             }
         }
-    }
-    ensureToolPromptInHost();
-    registerScreenCaptureTool();
-    pluginLog(2, "agentxx_screen_capture loaded (1 tool)");
-    return 0;
-    XX_PGUARD_END_RET(-1)
+        ensureToolPromptInHost();
+        registerScreenCaptureTool();
+        pluginLog(2, "agentxx_screen_capture loaded (1 tool)");
+        return 0;
+    });
 }
 
 extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_unload(void* /*plugin_ctx*/) {
     // C ABI 边界异常守卫: 卸载回调异常不得外泄
-    XX_PGUARD_BEGIN
-    // 在宿主 FreeLibrary 之前显式释放 DXGI/D3D11/GDI 资源。
-    // 这些资源由本 DLL 内的函数级静态 (ScreenCaptureHolder) 持有, 若留到
-    // 卸载时的静态析构中释放, D3D11 设备销毁会在 Windows loader lock 下执行,
-    // 显卡驱动内部线程无法退出 → 主线程 GetExitCodeThread 无限自旋挂死
-    // (实测 AMD atidxx64 100% 复现, 见 screen_capture.h shutdown 注释)。
-    // 此处运行于宿主 unload 回调 (正常上下文, 无 loader lock), 静态析构时
-    // 已无 GPU 资源可释放, 安全。
-    // 注: 工具反注册无需在此调用 —— 宿主卸载流程先 detachAll 摘除全部注册,
-    // 之后才调本回调, 手动 unregister 反而会因工具已不存在而告警。
-    ScreenCaptureHolder::instance().capture_.shutdown();
-    pluginLog(2, "agentxx_screen_capture unloaded");
-    XX_PGUARD_END_VOID()
+    agentxx::plugin_guard::guardCallVoid(pluginCatchLog, [&] {
+        // 在宿主 FreeLibrary 之前显式释放 DXGI/D3D11/GDI 资源。
+        // 这些资源由本 DLL 内的函数级静态 (ScreenCaptureHolder) 持有, 若留到
+        // 卸载时的静态析构中释放, D3D11 设备销毁会在 Windows loader lock 下执行,
+        // 显卡驱动内部线程无法退出 → 主线程 GetExitCodeThread 无限自旋挂死
+        // (实测 AMD atidxx64 100% 复现, 见 screen_capture.h shutdown 注释)。
+        // 此处运行于宿主 unload 回调 (正常上下文, 无 loader lock), 静态析构时
+        // 已无 GPU 资源可释放, 安全。
+        // 注: 工具反注册无需在此调用 —— 宿主卸载流程先 detachAll 摘除全部注册,
+        // 之后才调本回调, 手动 unregister 反而会因工具已不存在而告警。
+        ScreenCaptureHolder::instance().capture_.shutdown();
+        pluginLog(2, "agentxx_screen_capture unloaded");
+    });
 }
