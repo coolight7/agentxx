@@ -6,6 +6,7 @@
 #pragma once
 
 #include "agentxx/plugin/plugin_api.h"
+#include "agentxx/plugin/plugin_guard.h"
 #include "agentxx/plugin/plugin_iface_helper.h"
 #include "agentxx/plugin/plugin_tool_sync.h"
 #include <fmt/format.h>
@@ -34,6 +35,11 @@ inline char* pluginStrdup(const char* s) {
         return nullptr;
     }
     return g_host->vtable->strdup(s);
+}
+
+/// C ABI 边界异常守卫日志 (XX_PGUARD_* 宏按名查找; noexcept)
+inline void pluginCatchLog(const char* msg) noexcept {
+    agentxx::plugin_guard::defaultLogTo(g_host, g_if.log, 4, "agentxx_planning", msg);
 }
 
 /// 读取宿主 toolPrompt 的完整条目 {"depict": "...", "args": {...}}

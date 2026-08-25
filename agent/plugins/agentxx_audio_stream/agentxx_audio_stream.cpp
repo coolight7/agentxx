@@ -98,30 +98,35 @@ struct AudioStreamHolder {
         if (stream_.isRunning()) {
             return false;
         }
+        // 异常守卫: 监听回调运行在音频捕获线程, 异常逃逸会 terminate 进程
         stream_.addListener([](const agentxx::expand::AudioData& data) {
-            if (!g_host || !g_if.events || !g_if.events->publish) {
-                return;
+            try {
+                if (!g_host || !g_if.events || !g_if.events->publish) {
+                    return;
+                }
+                auto tsMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                data.timestamp.time_since_epoch()
+                )
+                                .count();
+                std::string payload = fmt::format(
+                    R"({{"sample_rate":{},"channels":{},"bits_per_sample":{},"source":{},"process_id":{},"process_name":{},"timestamp_ms":{},"data_base64":{}}})",
+                    data.sampleRate,
+                    data.channels,
+                    data.bitsPerSample,
+                    jsonEscape(sourceName(data.source)),
+                    data.processId,
+                    jsonEscape(data.processName),
+                    tsMs,
+                    jsonEscape(toBase64(data.data))
+                );
+                g_if.events->publish(
+                    g_host,
+                    AGENTXX_SV("agentxx_audio_stream.audio"),
+                    agentxx_plugin_sv(payload.data(), payload.size())
+                );
+            } catch (...) {
+                pluginCatchLog("audio frame publish");
             }
-            auto tsMs = std::chrono::duration_cast<std::chrono::milliseconds>(
-                            data.timestamp.time_since_epoch()
-            )
-                            .count();
-            std::string payload = fmt::format(
-                R"({{"sample_rate":{},"channels":{},"bits_per_sample":{},"source":{},"process_id":{},"process_name":{},"timestamp_ms":{},"data_base64":{}}})",
-                data.sampleRate,
-                data.channels,
-                data.bitsPerSample,
-                jsonEscape(sourceName(data.source)),
-                data.processId,
-                jsonEscape(data.processName),
-                tsMs,
-                jsonEscape(toBase64(data.data))
-            );
-            g_if.events->publish(
-                g_host,
-                AGENTXX_SV("agentxx_audio_stream.audio"),
-                agentxx_plugin_sv(payload.data(), payload.size())
-            );
         });
         return stream_.start(source, targetProcessId);
     }
@@ -208,6 +213,8 @@ char* audioStreamExecute(
 // =====================================================================
 
 extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_get_info(void) {
+    // C ABI 边界异常守卫: 异常返回 NULL (宿主按"未导出"处理)
+    XX_PGUARD_BEGIN
     static const AgentxxPluginInfo info{
         AGENTXX_PLUGIN_API_VERSION,
         AGENTXX_SV("agentxx_audio_stream"),
@@ -216,10 +223,13 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_get_inf
                    "(Windows WASAPI; other platforms no-op)"),
     };
     return &info;
+    XX_PGUARD_END_RET(nullptr)
 }
 
 extern "C" AGENTXX_PLUGIN_EXPORT int
     agentxx_plugin_entry(const AgentxxHost* host, void** /*plugin_ctx*/) {
+    // C ABI 边界异常守卫: 异常返回 -1 (加载失败)
+    XX_PGUARD_BEGIN
     g_host = host;
 
     static const std::string kSchema = R"({
@@ -246,13 +256,17 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
 
     pluginLog(2, "agentxx_audio_stream loaded (1 tool)");
     return 0;
+    XX_PGUARD_END_RET(-1)
 }
 
 extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_unload(void* /*plugin_ctx*/) {
+    // C ABI 边界异常守卫: 卸载回调异常不得外泄
+    XX_PGUARD_BEGIN
     AudioStreamHolder::instance().stop();
     if (g_host && g_host->vtable) {
         if (g_if.tools && g_if.tools->unregister_tool)
             g_if.tools->unregister_tool(g_host, AGENTXX_SV("agentxx_audio_stream"));
     }
     pluginLog(2, "agentxx_audio_stream unloaded");
+    XX_PGUARD_END_VOID()
 }

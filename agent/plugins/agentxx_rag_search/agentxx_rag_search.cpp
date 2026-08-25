@@ -34,6 +34,8 @@ std::string argDesc(const ToolPromptText& p, const char* key, const char* fallba
 } // namespace
 
 extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_get_info(void) {
+    // C ABI 边界异常守卫: 异常返回 NULL (宿主按"未导出"处理)
+    XX_PGUARD_BEGIN
     static const AgentxxPluginInfo info{
         AGENTXX_PLUGIN_API_VERSION,
         AGENTXX_SV("agentxx_rag_search"),
@@ -41,10 +43,14 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_get_inf
         AGENTXX_SV("RAG semantic search over configured docs paths (embedding based)"),
     };
     return &info;
+    XX_PGUARD_END_RET(nullptr)
 }
 
 extern "C" AGENTXX_PLUGIN_EXPORT int
     agentxx_plugin_entry(const AgentxxHost* host, void** plugin_ctx) {
+    // C ABI 边界异常守卫: entry 含向量索引构建等大量可抛操作 (文档扫描/
+    // embedding HTTP), 异常返回 -1 走宿主加载失败清理路径
+    XX_PGUARD_BEGIN
     if (!host || !host->vtable || !plugin_ctx) {
         return -1;
     }
@@ -226,11 +232,15 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
     }
 
     return 0;
+    XX_PGUARD_END_RET(-1)
 }
 
 extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_unload(void* plugin_ctx) {
+    // C ABI 边界异常守卫: 卸载回调异常不得外泄
+    XX_PGUARD_BEGIN
     (void)plugin_ctx;
     // 向量索引随进程生存 (静态存储), unload 仅解除宿主句柄引用
     g_host = nullptr;
     g_if   = {};
+    XX_PGUARD_END_VOID()
 }

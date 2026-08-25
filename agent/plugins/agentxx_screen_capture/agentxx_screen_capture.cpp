@@ -143,24 +143,29 @@ struct ScreenCaptureHolder {
             return false;
         }
         rate = std::clamp(rate, 1, 30);
+        // 异常守卫: 帧回调运行在采集线程, 异常逃逸会 std::terminate 进程
         return capture_.startStreaming(
             rate,
             [](const std::vector<agentxx::expand::ScreenFrame>& frames) {
-                if (!g_host || !g_if.events || !g_if.events->publish) {
-                    return;
+                try {
+                    if (!g_host || !g_if.events || !g_if.events->publish) {
+                        return;
+                    }
+                    codegraph::Json j = codegraph::Json::object();
+                    j["frames"]       = codegraph::Json::array();
+                    for (const auto& f : frames) {
+                        // 流式帧只推元信息, 不落盘不携带像素
+                        j["frames"].push_back(frameToJson(f, false));
+                    }
+                    std::string payload = j.dump();
+                    g_if.events->publish(
+                        g_host,
+                        AGENTXX_SV("agentxx_screen_capture.frame"),
+                        agentxx_plugin_sv(payload.data(), payload.size())
+                    );
+                } catch (...) {
+                    pluginCatchLog("streaming frame publish");
                 }
-                codegraph::Json j = codegraph::Json::object();
-                j["frames"]       = codegraph::Json::array();
-                for (const auto& f : frames) {
-                    // 流式帧只推元信息, 不落盘不携带像素
-                    j["frames"].push_back(frameToJson(f, false));
-                }
-                std::string payload = j.dump();
-                g_if.events->publish(
-                    g_host,
-                    AGENTXX_SV("agentxx_screen_capture.frame"),
-                    agentxx_plugin_sv(payload.data(), payload.size())
-                );
             }
         );
     }
@@ -426,6 +431,8 @@ using namespace agentxx_screen_capture_plugin;
 // =====================================================================
 
 extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_get_info(void) {
+    // C ABI 边界异常守卫: 异常返回 NULL (宿主按"未导出"处理)
+    XX_PGUARD_BEGIN
     static const AgentxxPluginInfo info{
         AGENTXX_PLUGIN_API_VERSION,
         AGENTXX_SV("agentxx_screen_capture"),
@@ -435,10 +442,13 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_get_inf
         ),
     };
     return &info;
+    XX_PGUARD_END_RET(nullptr)
 }
 
 extern "C" AGENTXX_PLUGIN_EXPORT int
     agentxx_plugin_entry(const AgentxxHost* host, void** /*plugin_ctx*/) {
+    // C ABI 边界异常守卫: entry 含目录创建/注册等可抛操作, 异常返回 -1
+    XX_PGUARD_BEGIN
     g_host = host;
     // 读取宿主 dataDir (io 线程), 初始化截图落盘目录 {dataDir}/captures
     // - get_config 仅 io 线程可用, execute 运行在线程池, 故此处缓存供后续只读
@@ -480,9 +490,12 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
     registerScreenCaptureTool();
     pluginLog(2, "agentxx_screen_capture loaded (1 tool)");
     return 0;
+    XX_PGUARD_END_RET(-1)
 }
 
 extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_unload(void* /*plugin_ctx*/) {
+    // C ABI 边界异常守卫: 卸载回调异常不得外泄
+    XX_PGUARD_BEGIN
     // 在宿主 FreeLibrary 之前显式释放 DXGI/D3D11/GDI 资源。
     // 这些资源由本 DLL 内的函数级静态 (ScreenCaptureHolder) 持有, 若留到
     // 卸载时的静态析构中释放, D3D11 设备销毁会在 Windows loader lock 下执行,
@@ -494,4 +507,5 @@ extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_unload(void* /*plugin_ctx*/
     // 之后才调本回调, 手动 unregister 反而会因工具已不存在而告警。
     ScreenCaptureHolder::instance().capture_.shutdown();
     pluginLog(2, "agentxx_screen_capture unloaded");
+    XX_PGUARD_END_VOID()
 }

@@ -21,6 +21,7 @@
  * unload 回调中的显式反注册仅为 SDK 惯例示范。
  */
 #include "agentxx/plugin/plugin_api.h"
+#include "agentxx/plugin/plugin_guard.h"
 #include "agentxx/plugin/plugin_iface_helper.h"
 
 #include <string>
@@ -28,6 +29,11 @@
 static const AgentxxHost* g_host = nullptr;
 /// 宿主接口表缓存 (entry 时一次查询; 进程级静态数据)
 static agentxx::plugin::AgentIfaces g_if{};
+
+/// C ABI 边界异常守卫日志 (XX_PGUARD_* 宏按名查找; noexcept)
+static void pluginCatchLog(const char* msg) noexcept {
+    agentxx::plugin_guard::defaultLogTo(g_host, g_if.log, 4, "example_resources", msg);
+}
 
 /// 从 get_own_info JSON 中提取字段值 (host->alloc, 用完 free)
 static std::string ownInfoString(const AgentxxHost* host, const char* key) {
@@ -64,6 +70,8 @@ static std::string dirOf(const std::string& path) {
 }
 
 extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_get_info(void) {
+    // C ABI 边界异常守卫: 异常返回 NULL (宿主按"未导出"处理)
+    XX_PGUARD_BEGIN
     static const AgentxxPluginInfo info{
         AGENTXX_PLUGIN_API_VERSION,
         AGENTXX_SV("example_resources"),
@@ -72,9 +80,12 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_get_inf
                    "(declarative manifest + runtime agentxx.agent.resources interface)"),
     };
     return &info;
+    XX_PGUARD_END_RET(nullptr)
 }
 
 extern "C" AGENTXX_PLUGIN_EXPORT int agentxx_plugin_entry(const AgentxxHost* host, void** plugin_ctx) {
+    // C ABI 边界异常守卫: 异常返回 -1 (加载失败)
+    XX_PGUARD_BEGIN
     (void)plugin_ctx;
     g_host = host;
     // COM 风格接口表查询 (entry 一次性查询缓存; 进程级静态数据, 长期有效)
@@ -108,9 +119,12 @@ extern "C" AGENTXX_PLUGIN_EXPORT int agentxx_plugin_entry(const AgentxxHost* hos
     // g_if.resources->register_mcp_server(host, agentxx_plugin_sv(spec.data(), spec.size()));
 
     return 0;
+    XX_PGUARD_END_RET(-1)
 }
 
 extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_unload(void* plugin_ctx) {
+    // C ABI 边界异常守卫: 卸载回调异常不得外泄
+    XX_PGUARD_BEGIN
     (void)plugin_ctx;
     // 宿主 detachAll 已自动摘除本插件的全部资源 (skill/memory/mcp),
     // 此处显式反注册仅为 SDK 惯例示范 (幂等, 失败无副作用)
@@ -135,4 +149,5 @@ extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_unload(void* plugin_ctx) {
         g_host->vtable->free(info);
     }
     g_host = nullptr;
+    XX_PGUARD_END_VOID()
 }

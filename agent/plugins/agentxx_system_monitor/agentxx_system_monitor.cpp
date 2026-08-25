@@ -17,6 +17,7 @@
 // - 插件不链接 libagentxx: 日志经 vtable log, JSON 组装用 fmt + json_escape
 // - RAM/VRAM 等容量展示复用 agentxx_util 的 formatSize (字节入参, 自动选单位)
 #include "agentxx/plugin/client_plugin_api.h"
+#include "agentxx/plugin/plugin_guard.h"
 #include "agentxx/plugin/plugin_iface_helper.h"
 #include "agentxx/util/string_util.h"
 #include "asio/co_spawn.hpp"
@@ -405,6 +406,8 @@ static void* usageCollectWork(void* ud, volatile int* cancel_flag, char** error_
 
 /// 周期采集 done: io 线程执行 (快速返回; publish 异步投递)
 static void usageCollectDone(void* ud, void* result, char* error) {
+    // 异常守卫: 只包处理逻辑; free 移到守卫块后无条件执行防泄漏
+    XX_PGUARD_BEGIN
     auto* ctx = static_cast<PluginCtx*>(ud);
     if (ctx) {
         ctx->collecting = false;
@@ -427,12 +430,15 @@ static void usageCollectDone(void* ud, void* result, char* error) {
         }
         g_host->vtable->free(result);
     }
+    XX_PGUARD_END_VOID()
 }
 
 /// 周期采集 tick (宿主定时器回调, io 线程; 必须快速返回):
 /// - 计数到 kUsageIntervalSec 后经 host->offload 把阻塞采样卸载到宿主阻塞池
 ///   (work 在阻塞池, done 回 io 线程 publish) —— 不再自建采集线程
 static void onUsageTick(void* ud) {
+    // C ABI 回调异常守卫 (宿主定时器循环直调)
+    XX_PGUARD_BEGIN
     auto* ctx = static_cast<PluginCtx*>(ud);
     if (!ctx || !g_host || !g_if.scheduler || !g_if.scheduler->offload) {
         return;
@@ -449,12 +455,15 @@ static void onUsageTick(void* ud) {
     }
     ctx->collecting = true;
     g_if.scheduler->offload(g_host, &kUsageCancelFlag, usageCollectWork, usageCollectDone, ctx);
+    XX_PGUARD_END_VOID()
 }
 
 /// 跨端事件: client /sysinfo 开关同步 (WirePluginDataUp 上行后 server 发布到
 /// plugin.client.agentxx_system_monitor.usage_enabled; 订阅回调在 agent io 线程,
 /// 仅写原子标志, 快速返回)
 static void on_usage_enabled(AgentxxPluginStringView event_json, void* ud) {
+    // C ABI 回调异常守卫 (JSON 解析含分配)
+    XX_PGUARD_BEGIN
     auto* ctx = static_cast<PluginCtx*>(ud);
     if (!ctx) {
         return;
@@ -465,6 +474,7 @@ static void on_usage_enabled(AgentxxPluginStringView event_json, void* ud) {
     if (j.ok() && jsonGetBool(j.doc().at_pointer("/enabled"), enabled)) {
         ctx->usageEnabled.store(enabled, std::memory_order_relaxed);
     }
+    XX_PGUARD_END_VOID()
 }
 
 /// 宿主约定事件 client_attached 响应: 把 tick 计数置为"下一个 tick 即采集",
@@ -480,6 +490,8 @@ static void on_client_attached(AgentxxPluginStringView event_json, void* ud) {
 
 extern "C" AGENTXX_PLUGIN_EXPORT int
     agentxx_plugin_entry(const AgentxxHost* host, void** plugin_ctx) {
+    // C ABI 边界异常守卫: 异常返回 -1 (加载失败)
+    XX_PGUARD_BEGIN
     g_host = host;
     // COM 风格接口表查询 (entry 一次性查询缓存; 进程级静态数据, 长期有效)
     static const agentxx::plugin::AgentIfaces s_if = agentxx::plugin::AgentIfaces::query(host);
@@ -552,9 +564,12 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
     *plugin_ctx = ctx.release();
     pluginLog(2, "agentxx_system_monitor loaded (1 tool, 1 capability, periodic collector)");
     return 0;
+    XX_PGUARD_END_RET(-1)
 }
 
 extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_unload(void* plugin_ctx) {
+    // C ABI 边界异常守卫: 卸载回调异常不得外泄
+    XX_PGUARD_BEGIN
     auto* ctx = static_cast<PluginCtx*>(plugin_ctx);
     if (ctx) {
         // 取消宿主定时器 (在途 tick/offload 由宿主 inflight 计数等待完成,
@@ -572,6 +587,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_unload(void* plugin_ctx) {
         g_if.capabilities->unregister_capability(g_host, AGENTXX_SV("agentxx.system_usage"));
     }
     pluginLog(2, "agentxx_system_monitor unloaded");
+    XX_PGUARD_END_VOID()
 }
 
 /* =====================================================================
@@ -778,6 +794,8 @@ static void on_client_plugin_data(AgentxxPluginStringView payload_json, void* ud
                        ? g_client_if->json->json_get_string(
                      g_client_host, payload_json, AGENTXX_SV("data"))
                        : nullptr;
+    // 异常守卫: 处理区含字符串分配/JSON 解析; free 在守卫块后无条件执行防泄漏
+    XX_PGUARD_BEGIN
     const bool mine = plugin && event && std::strcmp(plugin, "agentxx_system_monitor") == 0
                       && std::strcmp(event, "usage") == 0 && data;
     if (mine) {
@@ -786,6 +804,7 @@ static void on_client_plugin_data(AgentxxPluginStringView payload_json, void* ud
         g_last_usage_json = data;
         refreshUsageDisplay();
     }
+    XX_PGUARD_END_VOID()
     if (plugin) {
         g_client_host->vtable->free(plugin);
     }
@@ -803,6 +822,9 @@ static char* sysinfo_cmd_execute(void* ud, AgentxxPluginStringView args_json, ch
     (void)ud;
     (void)args_json;
     (void)error_out;
+    // C ABI 回调异常守卫: 命令执行运行在 client io 线程 (宿主输入管线直调),
+    // 内含 JSON 组装/simdjson 解析等可抛路径
+    XX_PGUARD_BEGIN
     if (!g_client_host) {
         return nullptr;
     }
@@ -865,9 +887,12 @@ static char* sysinfo_cmd_execute(void* ud, AgentxxPluginStringView args_json, ch
     const std::string out
         = fmt::format(R"({{"action":"toast","text":{},"level":0}})", clientJsonEscape(text));
     return g_client_host->vtable->strdup(out.c_str());
+    XX_PGUARD_END_RET(nullptr)
 }
 
 extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxClientPluginInfo* agentxx_client_get_info(void) {
+    // C ABI 边界异常守卫: 异常返回 NULL (宿主按"未导出"处理)
+    XX_PGUARD_BEGIN
     static const AgentxxClientPluginInfo info{
         AGENTXX_CLIENT_PLUGIN_API_VERSION,
         AGENTXX_SV("agentxx_system_monitor"),
@@ -875,10 +900,13 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxClientPluginInfo* agentxx_client_g
         AGENTXX_SV("System resource usage: Info section (CPU/RAM/GPU), /sysinfo toggle"),
     };
     return &info;
+    XX_PGUARD_END_RET(nullptr)
 }
 
 extern "C" AGENTXX_PLUGIN_EXPORT int
     agentxx_client_entry(const AgentxxClientHost* host, void** plugin_ctx) {
+    // C ABI 边界异常守卫: 异常返回 -1 (加载失败)
+    XX_PGUARD_BEGIN
     g_client_host = host;
     (void)plugin_ctx;
 
@@ -927,9 +955,12 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
         s_if.log->log(host, 2, AGENTXX_SV("agentxx_system_monitor client loaded"));
     }
     return 0;
+    XX_PGUARD_END_RET(-1)
 }
 
 extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_client_unload(void* plugin_ctx) {
+    // C ABI 边界异常守卫: 卸载回调异常不得外泄
+    XX_PGUARD_BEGIN
     (void)plugin_ctx;
     if (!g_client_host || !g_client_if) {
         return;
@@ -952,4 +983,5 @@ extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_client_unload(void* plugin_ctx) {
     g_client_host = nullptr;
     g_client_if   = nullptr;
     g_client_ui   = nullptr;
+    XX_PGUARD_END_VOID()
 }

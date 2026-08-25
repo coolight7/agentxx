@@ -74,25 +74,30 @@ struct TextSelectionHolder {
         if (debounceMs > 0) {
             monitor_.setDebounceMs(debounceMs);
         }
+        // 异常守卫: 监听回调运行在监视线程, 异常逃逸会 terminate 进程
         monitor_.addListener([](const agentxx::expand::TextSelectionEvent& evt) {
-            if (!g_host || !g_if.events || !g_if.events->publish) {
-                return;
+            try {
+                if (!g_host || !g_if.events || !g_if.events->publish) {
+                    return;
+                }
+                auto tsMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                evt.timestamp.time_since_epoch()
+                )
+                                .count();
+                std::string payload = fmt::format(
+                    R"({{"text":{},"source":{},"timestamp_ms":{}}})",
+                    jsonEscape(evt.text),
+                    jsonEscape(sourceName(evt.source)),
+                    tsMs
+                );
+                g_if.events->publish(
+                    g_host,
+                    AGENTXX_SV("agentxx_text_selection_monitor.selection"),
+                    agentxx_plugin_sv(payload.data(), payload.size())
+                );
+            } catch (...) {
+                pluginCatchLog("selection event publish");
             }
-            auto tsMs = std::chrono::duration_cast<std::chrono::milliseconds>(
-                            evt.timestamp.time_since_epoch()
-            )
-                            .count();
-            std::string payload = fmt::format(
-                R"({{"text":{},"source":{},"timestamp_ms":{}}})",
-                jsonEscape(evt.text),
-                jsonEscape(sourceName(evt.source)),
-                tsMs
-            );
-            g_if.events->publish(
-                g_host,
-                AGENTXX_SV("agentxx_text_selection_monitor.selection"),
-                agentxx_plugin_sv(payload.data(), payload.size())
-            );
         });
         return monitor_.start();
     }
@@ -172,6 +177,8 @@ char* textSelectionExecute(
 // =====================================================================
 
 extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_get_info(void) {
+    // C ABI 边界异常守卫: 异常返回 NULL (宿主按"未导出"处理)
+    XX_PGUARD_BEGIN
     static const AgentxxPluginInfo info{
         AGENTXX_PLUGIN_API_VERSION,
         AGENTXX_SV("agentxx_text_selection_monitor"),
@@ -180,10 +187,13 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_get_inf
                    "(Windows; other platforms no-op)"),
     };
     return &info;
+    XX_PGUARD_END_RET(nullptr)
 }
 
 extern "C" AGENTXX_PLUGIN_EXPORT int
     agentxx_plugin_entry(const AgentxxHost* host, void** /*plugin_ctx*/) {
+    // C ABI 边界异常守卫: 异常返回 -1 (加载失败)
+    XX_PGUARD_BEGIN
     g_host = host;
 
     static const std::string kSchema = R"({
@@ -210,13 +220,17 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
 
     pluginLog(2, "agentxx_text_selection_monitor loaded (1 tool)");
     return 0;
+    XX_PGUARD_END_RET(-1)
 }
 
 extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_unload(void* /*plugin_ctx*/) {
+    // C ABI 边界异常守卫: 卸载回调异常不得外泄
+    XX_PGUARD_BEGIN
     TextSelectionHolder::instance().stop();
     if (g_host && g_host->vtable) {
         if (g_if.tools && g_if.tools->unregister_tool)
             g_if.tools->unregister_tool(g_host, AGENTXX_SV("agentxx_text_selection_monitor"));
     }
     pluginLog(2, "agentxx_text_selection_monitor unloaded");
+    XX_PGUARD_END_VOID()
 }

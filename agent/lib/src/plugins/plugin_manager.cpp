@@ -2005,7 +2005,18 @@ AgentxxSubscription* PluginManager::subscribe(
             }
             PluginInstance::InflightGuard guard(sub->inst);
             if (sub->handler) {
-                sub->handler(agentxx_plugin_sv(data.data(), data.size()), sub->ud);
+                // C ABI 回调异常兜底: 插件违约不得打断 EventBus 派发协程
+                // (异常外泄会终止整个派发链, 影响其他订阅者)
+                try {
+                    sub->handler(agentxx_plugin_sv(data.data(), data.size()), sub->ud);
+                } catch (const std::exception& e) {
+                    XX_LOGW("Plugin `{}` event handler threw: {}", sub->inst->name, e.what());
+                } catch (...) {
+                    XX_LOGW(
+                        "Plugin `{}` event handler threw unknown exception",
+                        sub->inst->name
+                    );
+                }
             }
             co_return;
         }
@@ -2481,7 +2492,15 @@ void pluginTimerLoop(
     {
         PluginInstance::InflightGuard guard(inst);
         if (state->fn && !state->cancelled) {
-            state->fn(state->ud); // io 线程; 快速返回约定
+            // C ABI 回调异常兜底: 插件违约不得打断 asio 定时器循环
+            // (异常外泄会终止重排程, 定时器永久失效)
+            try {
+                state->fn(state->ud); // io 线程; 快速返回约定
+            } catch (const std::exception& e) {
+                XX_LOGW("Plugin `{}` timer callback threw: {}", inst->name, e.what());
+            } catch (...) {
+                XX_LOGW("Plugin `{}` timer callback threw unknown exception", inst->name);
+            }
         }
     }
     // 重新排程
@@ -2570,12 +2589,48 @@ void PluginManager::offload(
     auto ex = ioExecutor_;
     asio::post(*ctx->threadPool, [inst, cancel_flag, work, done, ud, ex]() {
         // ---- 阻塞池线程: 执行 work (cancel_flag 为调用方持有) ----
+        // C ABI 回调异常兜底: 插件违约异常转失败结果并【照常投递 done】——
+        // 否则 inflight 永不归零 (插件永久无法卸载), 线程池也会被终止
         char* error  = nullptr;
-        void* result = work(ud, cancel_flag, &error);
+        void* result = nullptr;
+        try {
+            result = work(ud, cancel_flag, &error);
+        } catch (const std::exception& e) {
+            XX_LOGW("Plugin `{}` offload work threw: {}", inst->name, e.what());
+            auto* vt = inst->host.vtable;
+            if (!error && vt && vt->strdup) {
+                error = vt->strdup(e.what());
+            }
+        } catch (...) {
+            XX_LOGW("Plugin `{}` offload work threw unknown exception", inst->name);
+            auto* vt = inst->host.vtable;
+            if (!error && vt && vt->strdup) {
+                error = vt->strdup("offload work: unknown exception");
+            }
+        }
         // ---- 投递回 io 线程执行 done (快速返回约定) ----
         asio::post(ex, [inst, done, ud, result, error]() {
             if (done) {
-                done(ud, result, error);
+                // done 持有 result/error 所有权; 违约抛异常时不代为释放
+                // (无法判定其内部是否已释放, 代放可能双重释放 —— 泄漏优于 UB)
+                try {
+                    done(ud, result, error);
+                } catch (const std::exception& e) {
+                    XX_LOGW("Plugin `{}` offload done threw: {}", inst->name, e.what());
+                } catch (...) {
+                    XX_LOGW("Plugin `{}` offload done threw unknown exception", inst->name);
+                }
+            } else {
+                // 无 done 回调: 结果/错误无人消费, 此处兜底释放防泄漏
+                auto* vt = inst->host.vtable;
+                if (vt && vt->free) {
+                    if (result) {
+                        vt->free(result);
+                    }
+                    if (error) {
+                        vt->free(error);
+                    }
+                }
             }
             inst->inflight.fetch_sub(1, std::memory_order_acq_rel);
         });
@@ -2627,7 +2682,8 @@ asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadNativeAsync(
         co_return nullptr;
     }
 
-    // 元信息 (可选符号)
+    // 元信息 (可选符号; 插件违约抛异常按"未导出"处理 —— 名字从库名推导,
+    // C ABI 回调异常不得外泄进加载协程)
     std::string name;
     std::string version;
     std::string desc;
@@ -2635,7 +2691,14 @@ asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadNativeAsync(
     if (auto getInfo = reinterpret_cast<AgentxxPluginGetInfoFn>(
             NativeLoader::sym(handle, AGENTXX_PLUGIN_SYMBOL_GET_INFO, err)
         )) {
-        auto info = getInfo();
+        const AgentxxPluginInfo* info = nullptr;
+        try {
+            info = getInfo();
+        } catch (const std::exception& e) {
+            XX_LOGW("Plugin `{}` get_info threw: {}", path, e.what());
+        } catch (...) {
+            XX_LOGW("Plugin `{}` get_info threw unknown exception", path);
+        }
         if (info) {
             if (info->api_version != AGENTXX_PLUGIN_API_VERSION) {
                 XX_LOGE(
@@ -2764,10 +2827,19 @@ asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadNativeAsync(
     //   加载脚本, 而 JS 线程内脚本注册又要回 io 线程 —— 若 entry 在 io
     //   线程执行则 io↔引擎互等死锁 (见 plugins.md 11.5.2); 线程池执行时
     //   io 线程保持空闲, 可服务注册回调
+    // - 插件违约抛异常按 rc=-1 处理 (加载失败清理路径), 异常不外泄进
+    //   本协程 (C ABI 回调异常穿越即 UB)
     int rc = co_await agentxx::util::offloadAsync<int>(
         *ctx->threadPool,
         [inst, entry]() -> asio::awaitable<int> {
-            co_return entry(&inst->host, &inst->pluginCtx);
+            try {
+                co_return entry(&inst->host, &inst->pluginCtx);
+            } catch (const std::exception& e) {
+                XX_LOGE("Plugin `{}` entry threw: {}", inst->name, e.what());
+            } catch (...) {
+                XX_LOGE("Plugin `{}` entry threw unknown exception", inst->name);
+            }
+            co_return -1;
         }
     );
     if (rc != 0) {
@@ -2832,11 +2904,19 @@ asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadBuiltinAsync
         co_return nullptr;
     }
 
-    // 元信息 (内置插件直接调用 get_info, 与 loadNativeAsync 的 dlsym 可选符号同语义)
+    // 元信息 (内置插件直接调用 get_info, 与 loadNativeAsync 的 dlsym 可选符号同语义;
+    // 插件违约抛异常按"未导出"处理)
     std::string version;
     std::string desc;
     if (entry->get_info) {
-        auto info = entry->get_info();
+        const AgentxxPluginInfo* info = nullptr;
+        try {
+            info = entry->get_info();
+        } catch (const std::exception& e) {
+            XX_LOGW("Plugin `{}` get_info threw: {}", name, e.what());
+        } catch (...) {
+            XX_LOGW("Plugin `{}` get_info threw unknown exception", name);
+        }
         if (info && info->api_version != AGENTXX_PLUGIN_API_VERSION) {
             XX_LOGE(
                 "Plugin `{}` api_version {} mismatch (host expects {})",
@@ -2886,11 +2966,19 @@ asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadBuiltinAsync
 
     // entry 调用卸载到线程池 (与 loadNativeAsync 相同: 注册动作经 vtable
     // ioCallSync 回 io 线程; 脚本插件的 entry 会经 invoke_capability 同步
-    // 等待引擎线程, entry 在 io 线程执行会 io↔引擎互等死锁)
+    // 等待引擎线程, entry 在 io 线程执行会 io↔引擎互等死锁);
+    // 插件违约抛异常按 rc=-1 处理 (加载失败清理路径)
     int rc = co_await agentxx::util::offloadAsync<int>(
         *ctx->threadPool,
         [inst, entry]() -> asio::awaitable<int> {
-            co_return entry->entry(&inst->host, &inst->pluginCtx);
+            try {
+                co_return entry->entry(&inst->host, &inst->pluginCtx);
+            } catch (const std::exception& e) {
+                XX_LOGE("Plugin `{}` entry threw: {}", inst->name, e.what());
+            } catch (...) {
+                XX_LOGE("Plugin `{}` entry threw unknown exception", inst->name);
+            }
+            co_return -1;
         }
     );
     if (rc != 0) {
@@ -3131,16 +3219,30 @@ asio::awaitable<bool> PluginManager::unloadAsync(std::string_view name) {
 
     // 插件 unload 回调 (业务清理; 宿主已自动反注册全部残留; 内置插件无
     // dlHandle, 直接调用加载时保存的回调, 不 dlsym)
+    // C ABI 回调异常兜底: 插件违约不得打断卸载流程 (否则实例/句柄泄漏,
+    // plugins_ 表状态不一致)
     if (inst->dlHandle) {
         std::string err;
         auto        fn = reinterpret_cast<AgentxxPluginUnloadFn>(
             NativeLoader::sym(inst->dlHandle, AGENTXX_PLUGIN_SYMBOL_UNLOAD, err)
         );
         if (fn) {
-            fn(inst->pluginCtx);
+            try {
+                fn(inst->pluginCtx);
+            } catch (const std::exception& e) {
+                XX_LOGW("Plugin `{}` unload callback threw: {}", inst->name, e.what());
+            } catch (...) {
+                XX_LOGW("Plugin `{}` unload callback threw unknown exception", inst->name);
+            }
         }
     } else if (inst->builtinUnload) {
-        inst->builtinUnload(inst->pluginCtx);
+        try {
+            inst->builtinUnload(inst->pluginCtx);
+        } catch (const std::exception& e) {
+            XX_LOGW("Plugin `{}` unload callback threw: {}", inst->name, e.what());
+        } catch (...) {
+            XX_LOGW("Plugin `{}` unload callback threw unknown exception", inst->name);
+        }
     }
     plugins_.erase(it); // 析构 → dlclose (inst 局部 shared_ptr 保活到函数结束)
     XX_LOGI("Plugin unloaded: {}", inst->name);

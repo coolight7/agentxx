@@ -31,6 +31,7 @@
 #include <string.h>
 
 #ifdef __cplusplus
+#include <exception> /* std::exception: 垫片适配器异常兜底 */
 extern "C" {
 #endif
 
@@ -87,10 +88,43 @@ typedef struct AgentxxSyncJob {
     volatile int       cancelFlag;
 } AgentxxSyncJob;
 
+/// 错误串经宿主堆分配 (host 可空时放弃; 供各适配器异常兜底路径使用)
+static inline char* agentxx_shim_err_dup(const AgentxxHost* host, const char* msg) {
+    if (!host || !host->vtable || !host->vtable->strdup || !msg) {
+        return NULL;
+    }
+    return host->vtable->strdup(msg);
+}
+
 static inline void* agentxx_sync_job_work(void* ud, volatile int* cancel_flag, char** error_out) {
     AgentxxSyncJob* job = (AgentxxSyncJob*)ud;
     /* cancel_flag 与 job->cancelFlag 为同一指针 (offload 契约: 调用方持有);
      * 执行函数返回 char* (host->alloc), 作为通用指针移交 done */
+#ifdef __cplusplus
+    /* 异常兜底: 本函数是宿主 offload 池直接调用的 C ABI 函数, 用户执行函数
+     * 抛出的 C++ 异常绝不能穿越 (跨边界 UB); 转为 error_out + NULL 失败。
+     * 纯 C 编译的用户函数不可能抛异常, C 分支直调 (见文件尾 #else 同理)。 */
+    try {
+        return (void*)job->adapter.fn(
+            job->adapter.ud,
+            agentxx_plugin_sv(job->args, job->argsSize),
+            agentxx_plugin_sv(job->tid, job->tidSize),
+            agentxx_plugin_sv(job->tcid, job->tcidSize),
+            cancel_flag,
+            error_out
+        );
+    } catch (const std::exception& e) {
+        if (error_out && !*error_out) {
+            *error_out = agentxx_shim_err_dup(job->adapter.host, e.what());
+        }
+        return NULL;
+    } catch (...) {
+        if (error_out && !*error_out) {
+            *error_out = agentxx_shim_err_dup(job->adapter.host, "sync tool: unknown exception");
+        }
+        return NULL;
+    }
+#else
     return (void*)job->adapter.fn(
         job->adapter.ud,
         agentxx_plugin_sv(job->args, job->argsSize),
@@ -99,6 +133,7 @@ static inline void* agentxx_sync_job_work(void* ud, volatile int* cancel_flag, c
         cancel_flag,
         error_out
     );
+#endif
 }
 
 static inline void agentxx_sync_job_done(void* ud, void* result, char* error) {
@@ -264,7 +299,25 @@ static inline void* agentxx_inline_adapter_start(
     char**                  error_out
 ) {
     AgentxxInlineAdapter* adapter = (AgentxxInlineAdapter*)user_data;
-    char*                 result  = adapter->fn(adapter->ud, args_json, thread_id, tool_call_id, error_out);
+#ifdef __cplusplus
+    /* 异常兜底: 宿主 io 线程直接调用的 C ABI 函数, 用户执行函数异常不外泄 */
+    char* result = NULL;
+    try {
+        result = adapter->fn(adapter->ud, args_json, thread_id, tool_call_id, error_out);
+    } catch (const std::exception& e) {
+        if (error_out && !*error_out) {
+            *error_out = agentxx_shim_err_dup(adapter->host, e.what());
+        }
+        return NULL;
+    } catch (...) {
+        if (error_out && !*error_out) {
+            *error_out = agentxx_shim_err_dup(adapter->host, "inline tool: unknown exception");
+        }
+        return NULL;
+    }
+#else
+    char* result  = adapter->fn(adapter->ud, args_json, thread_id, tool_call_id, error_out);
+#endif
     if (error_out && *error_out) {
         notify->done(notify->host_ud, AGENTXX_OP_FAILED, *error_out);
         return NULL;
@@ -343,7 +396,21 @@ static inline void* agentxx_sync_hook_adapter_start(
     char**                  error_out
 ) {
     AgentxxSyncHookAdapter* adapter = (AgentxxSyncHookAdapter*)user_data;
+#ifdef __cplusplus
+    /* 异常兜底: 宿主 io 线程直接调用的 C ABI 函数, 用户钩子异常不外泄。
+     * 本适配器不持有 host (无法分配错误串), 异常时置非 0 rc → 无载荷失败 */
+    int rc = 0;
+    try {
+        rc = adapter->fn(adapter->ud, point, node_input_json, error_out);
+    } catch (...) {
+        if (error_out) {
+            *error_out = NULL;
+        }
+        rc = 1;
+    }
+#else
     int rc                          = adapter->fn(adapter->ud, point, node_input_json, error_out);
+#endif
     if (error_out && *error_out) {
         notify->done(notify->host_ud, AGENTXX_OP_FAILED, *error_out);
         return NULL;

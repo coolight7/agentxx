@@ -162,7 +162,17 @@ inline void safeCancelOnce(OpCore& core, const OpDrive& d, void* op) {
     }
 }
 
-/// 推进一步: 返回下一等待 hint (无 poll = 只等通知)
+/// 合成失败终态 (插件违约异常时调用; CAS 保证与 notifier 恰好一次语义)
+inline void synthFail(OpCore& core, std::string msg) {
+    bool expect = false;
+    if (core.notified.compare_exchange_strong(expect, true, std::memory_order_acq_rel)) {
+        core.status.store(AGENTXX_OP_FAILED, std::memory_order_release);
+        core.payload = std::move(msg);
+        core.chan.try_send(OpErrorCode());
+    }
+}
+
+/// 推进步骤: 返回下一等待 hint (无 poll = 只等通知)
 inline int stepPoll(
     OpCore&                  core,
     const OpDrive&           d,
@@ -180,9 +190,16 @@ inline int stepPoll(
         hint = d.poll(op);
     } catch (const std::exception& e) {
         XX_LOGW("Plugin `{}` `{}` poll() threw: {}", name, label, e.what());
-        return AGENTXX_OP_POLL_DONE; // 违约: 视作终结请求 (等 notifier 兜底)
+        // 违约异常合成失败终态: 驱动循环以 notified 为终结条件, 若仅返回
+        // DONE 而插件通知永不到达会无限轮询挂死 io 协程
+        synthFail(core, fmt::format("plugin `{}` `{}` poll() threw: {}", name, label, e.what()));
+        return AGENTXX_OP_POLL_DONE;
     } catch (...) {
         XX_LOGW("Plugin `{}` `{}` poll() threw unknown exception", name, label);
+        synthFail(
+            core,
+            fmt::format("plugin `{}` `{}` poll() threw unknown exception", name, label)
+        );
         return AGENTXX_OP_POLL_DONE;
     }
     wd.exit(name, label);

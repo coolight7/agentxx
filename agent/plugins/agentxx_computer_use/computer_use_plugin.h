@@ -6,6 +6,7 @@
 #pragma once
 
 #include "agentxx/plugin/plugin_api.h"
+#include "agentxx/plugin/plugin_guard.h"
 #include "agentxx/plugin/plugin_iface_helper.h"
 #include "codegraph/core/json.hpp"
 #include "fmt/format.h"
@@ -140,6 +141,11 @@ inline char* pluginStrdup(const char* s) {
         return nullptr;
     }
     return g_host->vtable->strdup(s);
+}
+
+/// C ABI 边界异常守卫日志 (XX_PGUARD_* 宏按名查找; noexcept)
+inline void pluginCatchLog(const char* msg) noexcept {
+    agentxx::plugin_guard::defaultLogTo(g_host, g_if.log, 4, "agentxx_computer_use", msg);
 }
 
 } // namespace agentxx_computer_use_plugin

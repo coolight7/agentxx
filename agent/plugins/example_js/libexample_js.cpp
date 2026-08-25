@@ -19,6 +19,7 @@
  *     释放对应 JSContext (投递式)
  */
 #include "agentxx/plugin/plugin_api.h"
+#include "agentxx/plugin/plugin_guard.h"
 #include "agentxx/plugin/plugin_iface_helper.h"
 
 #include <cstdio>
@@ -30,6 +31,11 @@ static const AgentxxHost* g_host = nullptr;
 static agentxx::plugin::AgentIfaces g_if{};
 static std::string                  g_name; ///< 本插件名
 static std::string                  g_dir;  ///< 本插件目录
+
+/// C ABI 边界异常守卫日志 (XX_PGUARD_* 宏按名查找; noexcept)
+static void pluginCatchLog(const char* msg) noexcept {
+    agentxx::plugin_guard::defaultLogTo(g_host, g_if.log, 4, "example_js", msg);
+}
 
 /// 库路径所在目录
 static std::string dirOf(const std::string& path) {
@@ -48,6 +54,8 @@ static bool fileExists(const std::string& p) {
 }
 
 extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_get_info(void) {
+    // C ABI 边界异常守卫: 异常返回 NULL (宿主按"未导出"处理)
+    XX_PGUARD_BEGIN
     static const AgentxxPluginInfo info{
         AGENTXX_PLUGIN_API_VERSION,
         AGENTXX_SV("example_js"),
@@ -55,10 +63,14 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_get_inf
         AGENTXX_SV("Example JS plugin (C++ shell + JS via interpreter.js capability)"),
     };
     return &info;
+    XX_PGUARD_END_RET(nullptr)
 }
 
 extern "C" AGENTXX_PLUGIN_EXPORT int
     agentxx_plugin_entry(const AgentxxHost* host, void** plugin_ctx) {
+    // C ABI 边界异常守卫: entry 经能力调用同步加载脚本 (含文件读取/JSON
+    // 组装等可抛路径), 异常返回 -1
+    XX_PGUARD_BEGIN
     (void)plugin_ctx;
     g_host = host;
     // COM 风格接口表查询: entry 内一次性查询全部已知 IID 并缓存
@@ -154,9 +166,12 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
     std::string okMsg = "example_js: script loaded (" + scriptPath + ")";
     s_if.log->log(host, 2, agentxx_plugin_sv(okMsg.data(), okMsg.size()));
     return 0;
+    XX_PGUARD_END_RET(-1)
 }
 
 extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_unload(void* plugin_ctx) {
+    // C ABI 边界异常守卫: 卸载回调异常不得外泄
+    XX_PGUARD_BEGIN
     (void)plugin_ctx;
     if (!g_host || !g_if.capabilities || g_name.empty()) {
         return;
@@ -178,4 +193,5 @@ extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_unload(void* plugin_ctx) {
         g_host->vtable->free(err);
     }
     g_host = nullptr;
+    XX_PGUARD_END_VOID()
 }

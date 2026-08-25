@@ -915,6 +915,126 @@ asio::awaitable<TestResult> run_plugin_tests() {
             ctx->sessions->remove("t_plugin_cancel");
         }
 
+        // 31.4 异常守卫: start() 违约抛 C++ 异常 → 宿主转失败终态 (不终止进程)
+        {
+            static AgentxxToolSpec throwSpec;
+            throwSpec.name            = AGENTXX_SV("throwing_start_tool");
+            throwSpec.description     = AGENTXX_SV("tool whose start() throws (contract violation)");
+            throwSpec.parameters_json = AGENTXX_SV("{}");
+            throwSpec.execute_start   = +[](void*,
+                                         AgentxxPluginStringView,
+                                         AgentxxPluginStringView,
+                                         AgentxxPluginStringView,
+                                         const AgentxxOpNotify*,
+                                         char**) -> void* {
+                throw std::runtime_error("boom from plugin start");
+            };
+            XX_TEST_EXPECT_EQ(ctx->pluginManager->registerTool(inst31.get(), &throwSpec), 0);
+            auto throwTool = ctx->toolRegistry->find("throwing_start_tool");
+            XX_TEST_EXPECT_TRUE(throwTool != nullptr);
+            if (throwTool) {
+                bool failedAsExpected = false;
+                try {
+                    auto out = co_await throwTool->execute_async(neograph::json{
+                        {"sessionId", "t31"}
+                    });
+                    (void)out;
+                } catch (const std::exception& e) {
+                    failedAsExpected
+                        = std::string(e.what()).find("threw") != std::string::npos;
+                }
+                XX_TEST_EXPECT_TRUE(failedAsExpected);
+            }
+            ctx->pluginManager->unregisterTool(inst31.get(), "throwing_start_tool");
+        }
+
+        // 31.5 异常守卫: poll() 持续违约抛异常 → 驱动器合成失败终态
+        //      (回归: 原实现仅返回 DONE 等通知, 通知永不到达时无限轮询挂死)
+        {
+            static AgentxxToolSpec throwPollSpec;
+            throwPollSpec.name            = AGENTXX_SV("throwing_poll_tool");
+            throwPollSpec.description     = AGENTXX_SV("tool whose poll() always throws");
+            throwPollSpec.parameters_json = AGENTXX_SV("{}");
+            throwPollSpec.execute_start   = +[](void*,
+                                          AgentxxPluginStringView,
+                                          AgentxxPluginStringView,
+                                          AgentxxPluginStringView,
+                                          const AgentxxOpNotify*,
+                                          char**) -> void* {
+                static int kOpSentinel = 0; ///< 非空占位 op (本工具仅靠 poll 驱动)
+                return &kOpSentinel;
+            };
+            throwPollSpec.execute_poll = +[](void*, void*) -> int {
+                throw std::runtime_error("boom from plugin poll");
+            };
+            XX_TEST_EXPECT_EQ(ctx->pluginManager->registerTool(inst31.get(), &throwPollSpec), 0);
+            auto pollFailTool = ctx->toolRegistry->find("throwing_poll_tool");
+            XX_TEST_EXPECT_TRUE(pollFailTool != nullptr);
+            if (pollFailTool) {
+                bool failedAsExpected = false;
+                try {
+                    auto out = co_await pollFailTool->execute_async(neograph::json{
+                        {"sessionId", "t31"}
+                    });
+                    (void)out;
+                } catch (const std::exception& e) {
+                    failedAsExpected = std::string(e.what()).find("poll() threw")
+                                       != std::string::npos;
+                }
+                XX_TEST_EXPECT_TRUE(failedAsExpected);
+            }
+            ctx->pluginManager->unregisterTool(inst31.get(), "throwing_poll_tool");
+        }
+
+        // 31.6 异常守卫: 同步垫片 work 函数兜底 —— 用户 execute 抛异常时
+        //      垫片转 error_out + NULL, 异常不穿越 C ABI (host 为空也不崩)
+        {
+            static AgentxxSyncJob shimJob{};
+            shimJob.adapter.fn = +[](void*,
+                                     AgentxxPluginStringView,
+                                     AgentxxPluginStringView,
+                                     AgentxxPluginStringView,
+                                     volatile int*,
+                                     char**) -> char* {
+                throw std::runtime_error("shim boom");
+            };
+            shimJob.adapter.host = nullptr; ///< host 缺失时 err_dup 安全放弃
+            char* shimErr        = nullptr;
+            void* shimResult     = agentxx_sync_job_work(&shimJob, nullptr, &shimErr);
+            XX_TEST_EXPECT_TRUE(shimResult == nullptr);
+            XX_TEST_EXPECT_TRUE(shimErr == nullptr); ///< 无宿主无法分配错误串, 安全放弃
+        }
+
+        // 31.7 异常守卫: 事件 handler 违约抛异常 → 宿主派发兜底,
+        //      同 topic 其他订阅者仍正常收到
+        {
+            static bool s_goodHandlerRan = false;
+            s_goodHandlerRan             = false;
+            auto* subBad                 = ctx->pluginManager->subscribe(
+                inst31.get(),
+                "guard_throw.topic",
+                +[](AgentxxPluginStringView, void*) {
+                    throw std::runtime_error("bad handler boom");
+                },
+                nullptr
+            );
+            auto* subGood = ctx->pluginManager->subscribe(
+                inst31.get(),
+                "guard_throw.topic",
+                +[](AgentxxPluginStringView, void* ud) {
+                    *static_cast<bool*>(ud) = true;
+                },
+                &s_goodHandlerRan
+            );
+            XX_TEST_EXPECT_TRUE(subBad != nullptr);
+            XX_TEST_EXPECT_TRUE(subGood != nullptr);
+            XX_TEST_EXPECT_EQ(ctx->pluginManager->publish("guard_throw.topic", "{}"), 0);
+            co_await sleepMs(150); ///< 派发为 EventBus 协程异步执行
+            XX_TEST_EXPECT_TRUE(s_goodHandlerRan); ///< 违约不影响其他订阅者
+            ctx->pluginManager->unsubscribe(subBad);
+            ctx->pluginManager->unsubscribe(subGood);
+        }
+
         auto ok31 = co_await ctx->pluginManager->unloadAsync("example_plugin");
         XX_TEST_EXPECT_TRUE(ok31);
     }

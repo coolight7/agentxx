@@ -20,6 +20,7 @@
  */
 #include "agentxx/plugin/client_plugin_api.h"
 #include "agentxx/plugin/plugin_api.h"
+#include "agentxx/plugin/plugin_guard.h"
 #include "agentxx/plugin/plugin_iface_helper.h"
 #include "agentxx/plugin/plugin_tool_sync.h"
 #include "fmt/format.h"
@@ -35,6 +36,10 @@
 static const AgentxxHost* g_host = nullptr;
 /// 宿主接口表缓存 (entry 时 AgentIfaces::query 一次查询; 进程级静态数据)
 static agentxx::plugin::AgentIfaces g_if{};
+
+/// C ABI 边界异常守卫日志 (XX_PGUARD_* 宏按名查找; 定义见 client 侧全局
+/// 声明之后 —— 需引用双端宿主缓存; noexcept)
+static void pluginCatchLog(const char* msg) noexcept;
 
 /// 字符串视图 → JSON 字符串字面量 (agentxx.agent.json 接口表; 结果含引号;
 /// 供 fmt::format 组装 JSON 时嵌入字段值, 避免手工拼接)
@@ -54,6 +59,8 @@ static std::string agentJsonEscape(AgentxxPluginStringView sv) {
 /* ---------------- get_info ---------------- */
 
 extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_get_info(void) {
+    // C ABI 边界异常守卫: 异常返回 NULL (宿主按"未导出"处理)
+    XX_PGUARD_BEGIN
     static const AgentxxPluginInfo info{
         AGENTXX_PLUGIN_API_VERSION,
         AGENTXX_SV("example_plugin"),
@@ -61,6 +68,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_get_inf
         AGENTXX_SV("Example native plugin: echo tool, hook, event, capability"),
     };
     return &info;
+    XX_PGUARD_END_RET(nullptr)
 }
 
 /* ---------------- tool: example_echo (内联完成型: 快同步, io 线程直接执行) ---------------- */
@@ -75,6 +83,8 @@ static char* echo_execute(
     (void)user_data;
     (void)tool_call_id;
     (void)error_out;
+    // C ABI 回调异常守卫: 内联工具在宿主 io 线程直接执行
+    XX_PGUARD_BEGIN
     if (!g_host) {
         return nullptr; // 宿主不可用: 无法分配错误串 (host 为 null)
     }
@@ -85,6 +95,7 @@ static char* echo_execute(
         agentJsonEscape(session_id)
     );
     return g_host->vtable->strdup(out.c_str());
+    XX_PGUARD_END_RET(nullptr)
 }
 
 /* ---------------- tool: example_sleep (自管异步型演示: 无线程轮询推进) ----------------
@@ -111,6 +122,8 @@ static void* sleep_start(
     (void)thread_id;
     (void)tool_call_id;
     (void)error_out;
+    // C ABI 回调异常守卫: start 由宿主 io 线程调用
+    XX_PGUARD_BEGIN
     if (!g_host) {
         return nullptr;
     }
@@ -133,10 +146,13 @@ static void* sleep_start(
     job->totalMs   = ms > 0 ? ms : 0;
     job->deadline  = std::chrono::steady_clock::now() + std::chrono::milliseconds(job->totalMs);
     return job;
+    XX_PGUARD_END_RET(nullptr)
 }
 
 static int sleep_poll(void* user_data, void* op) {
     (void)user_data;
+    // C ABI 回调异常守卫: poll 由宿主 io 驱动循环调用
+    XX_PGUARD_BEGIN
     auto* job = static_cast<SleepJob*>(op);
     if (!job || job->notify.done == nullptr) {
         return AGENTXX_OP_POLL_DONE;
@@ -157,14 +173,18 @@ static int sleep_poll(void* user_data, void* op) {
     job->notify.done(job->notify.host_ud, AGENTXX_OP_OK, payload);
     delete job;
     return AGENTXX_OP_POLL_DONE;
+    XX_PGUARD_END_RET(AGENTXX_OP_POLL_DONE)
 }
 
 static void sleep_cancel(void* user_data, void* op) {
     (void)user_data;
+    // C ABI 回调异常守卫
+    XX_PGUARD_BEGIN
     auto* job          = static_cast<SleepJob*>(op);
     if (job) {
         job->cancelled = 1;
     }
+    XX_PGUARD_END_VOID()
 }
 
 /* ---------------- tool: example_caller (互调; 阻塞委托型) ---------------- */
@@ -180,6 +200,8 @@ static char* caller_execute(
     (void)user_data;
     (void)tool_call_id;
     (void)cancel_flag;
+    // C ABI 回调异常守卫: 同步工具在宿主阻塞池线程执行
+    XX_PGUARD_BEGIN
     if (!g_host) {
         return nullptr;
     }
@@ -207,6 +229,7 @@ static char* caller_execute(
     const std::string out = fmt::format(R"({{"via_call_tool": {}}})", resp);
     g_host->vtable->free(resp);
     return g_host->vtable->strdup(out.c_str());
+    XX_PGUARD_END_RET(nullptr)
 }
 
 /* ---------------- hook: agent_start (快同步钩子垫片) ---------------- */
@@ -221,10 +244,13 @@ static int on_agent_start(
     (void)point;
     (void)node_input_json;
     (void)error_out;
+    // C ABI 回调异常守卫
+    XX_PGUARD_BEGIN
     if (g_host && g_if.log && g_if.log->log) {
         g_if.log->log(g_host, 2 /* info */, AGENTXX_SV("example hook: agent_start fired"));
     }
     return 0;
+    XX_PGUARD_END_RET(1)
 }
 
 /* ---------------- event ---------------- */
@@ -232,9 +258,12 @@ static int on_agent_start(
 static void on_demo_event(AgentxxPluginStringView event_json, void* ud) {
     (void)event_json;
     (void)ud;
+    // C ABI 回调异常守卫 (宿主 EventBus 派发直调)
+    XX_PGUARD_BEGIN
     if (g_host && g_if.log && g_if.log->log) {
         g_if.log->log(g_host, 2, AGENTXX_SV("example event received"));
     }
+    XX_PGUARD_END_VOID()
 }
 
 /// 跨端事件: client 插件 send_plugin_data("hello") 上行 →
@@ -242,15 +271,20 @@ static void on_demo_event(AgentxxPluginStringView event_json, void* ud) {
 static void on_client_hello(AgentxxPluginStringView event_json, void* ud) {
     (void)event_json;
     (void)ud;
+    // C ABI 回调异常守卫
+    XX_PGUARD_BEGIN
     if (g_host && g_if.log && g_if.log->log) {
         g_if.log->log(g_host, 2, AGENTXX_SV("example received client hello event"));
     }
+    XX_PGUARD_END_VOID()
 }
 
 /* ---------------- entry / unload ---------------- */
 
 extern "C" AGENTXX_PLUGIN_EXPORT int
     agentxx_plugin_entry(const AgentxxHost* host, void** plugin_ctx) {
+    // C ABI 边界异常守卫: entry 含注册/提示词读写等可抛操作, 异常返回 -1
+    XX_PGUARD_BEGIN
     g_host = host;
     (void)plugin_ctx;
 
@@ -361,9 +395,12 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
 
     s_if.log->log(host, 2, AGENTXX_SV("example plugin loaded"));
     return 0;
+    XX_PGUARD_END_RET(-1)
 }
 
 extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_unload(void* plugin_ctx) {
+    // C ABI 边界异常守卫: 卸载回调异常不得外泄
+    XX_PGUARD_BEGIN
     (void)plugin_ctx;
     if (!g_host) {
         return;
@@ -384,6 +421,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_unload(void* plugin_ctx) {
         g_if.log->log(g_host, 2, AGENTXX_SV("example plugin unloaded"));
     }
     g_host = nullptr;
+    XX_PGUARD_END_VOID()
 }
 
 /* =====================================================================
@@ -405,6 +443,24 @@ static AgentxxPanel*            g_panel        = nullptr;
 static AgentxxInfoSection*      g_info_section = nullptr;
 static int                      g_turn_count   = 0;
 
+/// C ABI 边界异常守卫日志 (noexcept; 栈缓冲 + 宿主 log 接口表, 双端插件
+/// agent/client 两侧宿主任一可用即输出)
+static void pluginCatchLog(const char* msg) noexcept {
+    if (g_host && g_if.log && g_if.log->log) {
+        agentxx::plugin_guard::logTo(g_host, g_if.log, 4, "example_plugin", msg);
+        return;
+    }
+    if (g_client_host && g_client_if.log && g_client_if.log->log) {
+        agentxx::plugin_guard::logTo(
+            g_client_host,
+            g_client_if.log,
+            4,
+            "example_plugin",
+            msg
+        );
+    }
+}
+
 /// 字符串 → JSON 字符串字面量 (经宿主 agentxx.client.json 接口表; 结果含引号;
 /// 供 fmt::format 组装 JSON 时嵌入字段值, 避免手工拼接)
 static std::string clientJsonEscape(const std::string& s) {
@@ -424,6 +480,8 @@ static std::string clientJsonEscape(const std::string& s) {
 }
 
 extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxClientPluginInfo* agentxx_client_get_info(void) {
+    // C ABI 边界异常守卫: 异常返回 NULL (宿主按"未导出"处理)
+    XX_PGUARD_BEGIN
     static const AgentxxClientPluginInfo info{
         AGENTXX_CLIENT_PLUGIN_API_VERSION,
         AGENTXX_SV("example_plugin"),
@@ -435,6 +493,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxClientPluginInfo* agentxx_client_g
         // interfaces.require 声明 (宿主加载前门禁), 见 docs/agent/plugins.md
     };
     return &info;
+    XX_PGUARD_END_RET(nullptr)
 }
 
 /* ---------------- 命令: /example (send 动作) ---------------- */
@@ -442,6 +501,8 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxClientPluginInfo* agentxx_client_g
 static char* example_cmd_execute(void* ud, AgentxxPluginStringView args_json, char** error_out) {
     (void)ud;
     (void)error_out;
+    // C ABI 回调异常守卫: 命令执行在 client io 线程 (宿主输入管线直调)
+    XX_PGUARD_BEGIN
     if (!g_client_host) {
         return nullptr;
     }
@@ -461,6 +522,7 @@ static char* example_cmd_execute(void* ud, AgentxxPluginStringView args_json, ch
     // json_escape 返回带引号的 JSON 字符串字面量 (如 "\"abc\""), fmt 直接嵌入
     const std::string out = fmt::format(R"({{"action":"send","text":{}}})", clientJsonEscape(text));
     return g_client_host->vtable->strdup(out.c_str());
+    XX_PGUARD_END_RET(nullptr)
 }
 
 /* ---------------- 命令: /example_toast (toast 动作) ---------------- */
@@ -468,6 +530,8 @@ static char* example_cmd_execute(void* ud, AgentxxPluginStringView args_json, ch
 static char* example_toast_execute(void* ud, AgentxxPluginStringView args_json, char** error_out) {
     (void)ud;
     (void)error_out;
+    // C ABI 回调异常守卫
+    XX_PGUARD_BEGIN
     if (!g_client_host) {
         return nullptr;
     }
@@ -481,6 +545,7 @@ static char* example_toast_execute(void* ud, AgentxxPluginStringView args_json, 
     const std::string out
         = fmt::format(R"({{"action":"toast","text":{},"level":1}})", clientJsonEscape(text));
     return g_client_host->vtable->strdup(out.c_str());
+    XX_PGUARD_END_RET(nullptr)
 }
 
 /* ---------------- 事件订阅 ---------------- */
@@ -488,6 +553,8 @@ static char* example_toast_execute(void* ud, AgentxxPluginStringView args_json, 
 /// READY: 服务端就绪 → 更新状态栏项 + 跨端上行 hello
 static void on_client_ready(AgentxxPluginStringView payload_json, void* ud) {
     (void)ud;
+    // C ABI 回调异常守卫 (client io 线程派发直调)
+    XX_PGUARD_BEGIN
     if (!g_client_host) {
         return;
     }
@@ -503,12 +570,15 @@ static void on_client_ready(AgentxxPluginStringView payload_json, void* ud) {
             AGENTXX_SV(R"({"from":"client-example"})")
         );
     }
+    XX_PGUARD_END_VOID()
 }
 
 /// TURN_END: 轮次结束 → 状态栏项文本更新 + Info 栏段落内容更新
 static void on_client_turn_end(AgentxxPluginStringView payload_json, void* ud) {
     (void)ud;
     (void)payload_json;
+    // C ABI 回调异常守卫
+    XX_PGUARD_BEGIN
     if (!g_client_host) {
         return;
     }
@@ -537,6 +607,7 @@ static void on_client_turn_end(AgentxxPluginStringView payload_json, void* ud) {
         );
         g_client_ui->update_info_section(g_client_host, g_info_section, AGENTXX_SV(json.c_str()));
     }
+    XX_PGUARD_END_VOID()
 }
 
 /// PLUGIN_DATA: 收到 agent 侧插件事件 (WirePluginData) → 面板展示
@@ -558,18 +629,11 @@ static void on_client_plugin_data(AgentxxPluginStringView payload_json, void* ud
     char* data     = g_client_if.json->json_get_string(
         g_client_host, payload_json, AGENTXX_SV("data")
     );
+    // 异常守卫: 处理区含字符串分配; free 在守卫块后无条件执行防泄漏
+    XX_PGUARD_BEGIN
     std::string line = fmt::format("{}.{}", plugin ? plugin : "?", event ? event : "?");
     if (data && *data) {
         line = fmt::format("{}: {}", line, data);
-    }
-    if (plugin) {
-        g_client_host->vtable->free(plugin);
-    }
-    if (event) {
-        g_client_host->vtable->free(event);
-    }
-    if (data) {
-        g_client_host->vtable->free(data);
     }
     // json_escape 返回带引号的 JSON 字符串字面量, fmt 直接嵌入
     const std::string json = fmt::format(
@@ -579,12 +643,24 @@ static void on_client_plugin_data(AgentxxPluginStringView payload_json, void* ud
     if (g_client_ui && g_client_ui->update_panel) {
         g_client_ui->update_panel(g_client_host, g_panel, AGENTXX_SV(json.c_str()));
     }
+    XX_PGUARD_END_VOID()
+    if (plugin) {
+        g_client_host->vtable->free(plugin);
+    }
+    if (event) {
+        g_client_host->vtable->free(event);
+    }
+    if (data) {
+        g_client_host->vtable->free(data);
+    }
 }
 
 /* ---------------- entry / unload ---------------- */
 
 extern "C" AGENTXX_PLUGIN_EXPORT int
     agentxx_client_entry(const AgentxxClientHost* host, void** plugin_ctx) {
+    // C ABI 边界异常守卫: 异常返回 -1 (加载失败)
+    XX_PGUARD_BEGIN
     g_client_host = host;
     (void)plugin_ctx;
 
@@ -669,9 +745,12 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
         g_client_if.log->log(host, 2, AGENTXX_SV("example client plugin loaded"));
     }
     return 0;
+    XX_PGUARD_END_RET(-1)
 }
 
 extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_client_unload(void* plugin_ctx) {
+    // C ABI 边界异常守卫: 卸载回调异常不得外泄
+    XX_PGUARD_BEGIN
     (void)plugin_ctx;
     if (!g_client_host) {
         return;
@@ -703,4 +782,5 @@ extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_client_unload(void* plugin_ctx) {
     }
     g_client_host = nullptr;
     g_client_ui   = nullptr;
+    XX_PGUARD_END_VOID()
 }

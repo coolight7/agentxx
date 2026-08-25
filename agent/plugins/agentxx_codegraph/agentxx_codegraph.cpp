@@ -764,6 +764,9 @@ struct PluginCtx {
 static void snapshotQueryDone(void* ud, void* result, char* error) {
     auto* ctx   = static_cast<PluginCtx*>(ud);
     auto* files = static_cast<int64_t*>(result);
+    // 异常守卫: 只包发布逻辑; free 移到守卫块之后无条件执行 —— 保证
+    // 成功/异常两条路径都不泄漏 (done 持有 result/error 所有权)
+    XX_PGUARD_BEGIN
     if (g_host && g_if.events && g_if.events->publish) {
         codegraph::Json j = codegraph::Json::object();
         j["loaded"]       = true;
@@ -791,6 +794,7 @@ static void snapshotQueryDone(void* ud, void* result, char* error) {
             );
         }
     }
+    XX_PGUARD_END_VOID()
     if (g_host && g_host->vtable && g_host->vtable->free) {
         if (files) {
             g_host->vtable->free(files);
@@ -802,8 +806,9 @@ static void snapshotQueryDone(void* ud, void* result, char* error) {
 }
 
 static void* snapshotQueryWork(void* ud, volatile int* cancel_flag, char** error_out) {
-    (void)error_out;
     (void)cancel_flag;
+    // 异常守卫: offload work 运行在宿主阻塞池线程, 异常逃逸会终止线程池
+    XX_PGUARD_BEGIN
     auto* ctx = static_cast<PluginCtx*>(ud);
     // 结果经宿主堆分配 (offload 契约: result 须 host->alloc, done 内 free)
     auto  files = static_cast<int64_t*>(g_host->vtable->alloc(sizeof(int64_t)));
@@ -817,6 +822,7 @@ static void* snapshotQueryWork(void* ud, volatile int* cancel_flag, char** error
         }
     }
     return files;
+    XX_PGUARD_END_RET(nullptr)
 }
 
 /// 订阅回调: 收到 client_attached 后经阻塞池查询状态并重发快照
@@ -825,14 +831,20 @@ static volatile int kSnapshotCancelFlag = 0;
 
 static void on_client_attached(AgentxxPluginStringView event_json, void* ud) {
     (void)event_json;
+    // C ABI 回调异常守卫 (offload 为宿主 vtable 调用已兜底, 此处统一拦截)
+    XX_PGUARD_BEGIN
     if (!g_host || !g_if.scheduler || !g_if.scheduler->offload) {
         return;
     }
     g_if.scheduler->offload(g_host, &kSnapshotCancelFlag, snapshotQueryWork, snapshotQueryDone, ud);
+    XX_PGUARD_END_VOID()
 }
 
 extern "C" AGENTXX_PLUGIN_EXPORT int
     agentxx_plugin_entry(const AgentxxHost* host, void** plugin_ctx) {
+    // C ABI 边界异常守卫: entry 含索引器构建/线程创建等大量可抛操作,
+    // 异常返回 -1 走宿主加载失败清理路径 (异常穿越 C ABI 即 UB)
+    XX_PGUARD_BEGIN
     g_host = host;
     // COM 风格接口表查询 (entry 一次性查询缓存; 进程级静态数据, 长期有效)
     static const agentxx::plugin::AgentIfaces s_if = agentxx::plugin::AgentIfaces::query(host);
@@ -867,20 +879,26 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
 
     // 索引进度回调 → publish("agentxx_codegraph.progress") 通知宿主
     // (topic 约定 `{插件名}.{事件名}`; 频率由 CodeGraphManager 内部节流)
+    // 异常守卫: 本回调运行在 CodeGraphManager 索引工作线程, 异常逃逸
+    // 线程函数会直接 std::terminate 整个进程
     ctx->mgr->setProgressCallback([](int processed, int total, std::string_view currentFile) {
-        if (!g_host || !g_if.events || !g_if.events->publish) {
-            return;
+        try {
+            if (!g_host || !g_if.events || !g_if.events->publish) {
+                return;
+            }
+            codegraph::Json j   = codegraph::Json::object();
+            j["processed"]      = processed;
+            j["total"]          = total;
+            j["current_file"]   = std::string{currentFile};
+            std::string payload = j.dump();
+            g_if.events->publish(
+                g_host,
+                AGENTXX_SV("agentxx_codegraph.progress"),
+                agentxx_plugin_sv(payload.data(), payload.size())
+            );
+        } catch (...) {
+            pluginCatchLog("progress callback");
         }
-        codegraph::Json j   = codegraph::Json::object();
-        j["processed"]      = processed;
-        j["total"]          = total;
-        j["current_file"]   = std::string{currentFile};
-        std::string payload = j.dump();
-        g_if.events->publish(
-            g_host,
-            AGENTXX_SV("agentxx_codegraph.progress"),
-            agentxx_plugin_sv(payload.data(), payload.size())
-        );
     });
 
     std::string projectRoot = cfg.projectRoot;
@@ -909,22 +927,32 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
 
     // 后台预热索引 (2s 后增量索引; 与原 CodeAgent warmup 一致):
     // - 独立线程 + 原子停止位; unload 时 join, 保证 dlclose 前无执行者
+    // - 异常守卫: 线程函数体内异常逃逸 = std::terminate, 必须整体拦截
     ctx->stop.store(false);
     ctx->warmup = std::thread([ctxPtr = ctx.get()]() {
-        std::this_thread::sleep_for(std::chrono::seconds(2));
-        if (ctxPtr->stop.load(std::memory_order_acquire)) {
-            return;
+        try {
+            std::this_thread::sleep_for(std::chrono::seconds(2));
+            if (ctxPtr->stop.load(std::memory_order_acquire)) {
+                return;
+            }
+            auto t0 = std::chrono::steady_clock::now();
+            bool ok = ctxPtr->mgr->updateIndex();
+            auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                          std::chrono::steady_clock::now() - t0
+            )
+                          .count();
+            pluginLog(
+                ok ? 2 : 3,
+                fmt::format(
+                    "[codegraph] background warmup index {} ({}ms)",
+                    ok ? "done" : "failed",
+                    ms
+                )
+            );
+        } catch (...) {
+            // 线程体异常逃逸会 terminate 进程, 此处全拦截
+            pluginCatchLog("background warmup thread");
         }
-        auto t0 = std::chrono::steady_clock::now();
-        bool ok = ctxPtr->mgr->updateIndex();
-        auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-                      std::chrono::steady_clock::now() - t0
-        )
-                      .count();
-        pluginLog(
-            ok ? 2 : 3,
-            fmt::format("[codegraph] background warmup index {} ({}ms)", ok ? "done" : "failed", ms)
-        );
     });
 
     // 订阅宿主约定事件 client_attached: 客户端接入/重连后重发状态快照
@@ -955,9 +983,13 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
         );
     }
     return 0;
+    XX_PGUARD_END_RET(-1)
 }
 
 extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_unload(void* plugin_ctx) {
+    // C ABI 边界异常守卫: 卸载回调异常不得外泄 (否则宿主卸载流程被打断,
+    // 实例/动态库句柄泄漏)
+    XX_PGUARD_BEGIN
     auto* ctx = static_cast<PluginCtx*>(plugin_ctx);
     if (!ctx) {
         return;
@@ -982,6 +1014,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_unload(void* plugin_ctx) {
     }
     pluginLog(2, "agentxx_codegraph unloaded");
     delete ctx;
+    XX_PGUARD_END_VOID()
 }
 
 /* =====================================================================
@@ -1101,13 +1134,17 @@ static void on_client_plugin_data(AgentxxPluginStringView payload_json, void* ud
     if (!g_client_host || !g_section) {
         return;
     }
-    // payload: {"plugin","event","data"}
+    // payload: {"plugin","event","data"} (字段提取为宿主纯 C 调用, 不抛异常)
     char* plugin
         = g_client_if->json->json_get_string(g_client_host, payload_json, AGENTXX_SV("plugin"));
     char* event
         = g_client_if->json->json_get_string(g_client_host, payload_json, AGENTXX_SV("event"));
     char* data
         = g_client_if->json->json_get_string(g_client_host, payload_json, AGENTXX_SV("data"));
+    // 异常守卫: 解析/刷新区含 JSON 构造与字符串分配等可抛操作; 客户端事件
+    // 回调运行在 client io 线程, 异常不得外泄。free 在守卫块后无条件执行,
+    // 保证成功/异常两条路径都不泄漏
+    XX_PGUARD_BEGIN
     if (plugin && event && data && std::strcmp(plugin, "agentxx_codegraph") == 0) {
         SimpleJson j(std::string{data});
         if (std::strcmp(event, "status") == 0) {
@@ -1140,6 +1177,7 @@ static void on_client_plugin_data(AgentxxPluginStringView payload_json, void* ud
             }
         }
     }
+    XX_PGUARD_END_VOID()
     if (plugin) {
         g_client_host->vtable->free(plugin);
     }
@@ -1152,6 +1190,8 @@ static void on_client_plugin_data(AgentxxPluginStringView payload_json, void* ud
 }
 
 extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxClientPluginInfo* agentxx_client_get_info(void) {
+    // C ABI 边界异常守卫: 异常返回 NULL (宿主按"未导出"处理)
+    XX_PGUARD_BEGIN
     static const AgentxxClientPluginInfo info{
         AGENTXX_CLIENT_PLUGIN_API_VERSION,
         AGENTXX_SV("agentxx_codegraph"),
@@ -1159,10 +1199,13 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxClientPluginInfo* agentxx_client_g
         AGENTXX_SV("CodeGraph index status (sidebar Info section)"),
     };
     return &info;
+    XX_PGUARD_END_RET(nullptr)
 }
 
 extern "C" AGENTXX_PLUGIN_EXPORT int
     agentxx_client_entry(const AgentxxClientHost* host, void** plugin_ctx) {
+    // C ABI 边界异常守卫: 异常返回 -1 (加载失败)
+    XX_PGUARD_BEGIN
     g_client_host = host;
     (void)plugin_ctx;
 
@@ -1199,9 +1242,12 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
         s_if.log->log(host, 2, AGENTXX_SV("agentxx_codegraph client loaded"));
     }
     return 0;
+    XX_PGUARD_END_RET(-1)
 }
 
 extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_client_unload(void* plugin_ctx) {
+    // C ABI 边界异常守卫: 卸载回调异常不得外泄
+    XX_PGUARD_BEGIN
     (void)plugin_ctx;
     if (!g_client_host || !g_client_if) {
         return;
@@ -1221,4 +1267,5 @@ extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_client_unload(void* plugin_ctx) {
     g_client_host = nullptr;
     g_client_if   = nullptr;
     g_client_ui   = nullptr;
+    XX_PGUARD_END_VOID()
 }
