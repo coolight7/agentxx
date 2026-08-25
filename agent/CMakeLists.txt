@@ -60,7 +60,10 @@ option(AGENTXX_ENABLE_PLUGIN_BUILTIN "Merge enabled plugins into libagentxx (bui
 #   编译为独立动态库 (混合模式; 例: -DAGENTXX_PLUGIN_BUILTIN_LIST="agentxx_filesystem,agentxx_planning")
 set(AGENTXX_PLUGIN_BUILTIN_LIST "" CACHE STRING
   "Which enabled plugins to merge into libagentxx when AGENTXX_ENABLE_PLUGIN_BUILTIN=ON ('' or 'all' = all; semicolon/comma list = only listed ones)")
-# ===== Debug 构建加速选项 / Sanitizers (仅 GCC/Clang 的 Debug 配置生效) =====
+# ===== Debug 构建加速选项 / Sanitizers =====
+# - GCC/Clang: 在 Debug 配置注入 -fsanitize=* (见下方非 MSVC 分支)
+# - MSVC: 仅支持 AddressSanitizer (/fsanitize=address, Debug 配置);
+#   UBSan/TSan 无 MSVC 实现, 对应选项开启时仅输出警告并忽略 (不阻断配置)
 # - 关闭后 Debug 构建不再启用 AddressSanitizer，编译与链接显著加快
 #   (仍保留 -fno-omit-frame-pointer 便于调试)，默认开启保持原有行为
 option(AGENTXX_ENABLE_ASAN "Enable AddressSanitizer for Debug builds." ON)
@@ -73,16 +76,14 @@ option(AGENTXX_ENABLE_ASAN "Enable AddressSanitizer for Debug builds." ON)
 option(AGENTXX_ENABLE_UBSAN "Enable UndefinedBehaviorSanitizer for Debug builds (GCC/Clang)." OFF)
 # TSAN: 检测数据竞争。适用本项目并发模型 (io_context 多协程交错/offload 线程池/
 # SessionStore 锁/WS 与 TUI 线程)。限制:
-# - 与 ASAN 运行时互斥不可叠加 (同时启用在下方直接 FATAL_ERROR);
+# - 与 ASAN 运行时互斥不可叠加 (同时启用在编译器确定后 FATAL_ERROR, 见下方);
+# - MSVC 无 TSan 实现, 开启时仅警告忽略;
 # - 预编译三方库 (openssl/curl/hyperscan/sqlite 等, 未插桩) 内部同步对 TSAN
 #   不可见, 可能产生误报/漏报; dlopen 的外置插件同理 (内置合并编译模式无此问题);
 # - 性能开销大 (5-15x), 仅建议定向排查并发问题时临时开启
 option(AGENTXX_ENABLE_TSAN "Enable ThreadSanitizer for Debug builds (GCC/Clang; mutually exclusive with ASAN)." OFF)
-if (AGENTXX_ENABLE_TSAN AND AGENTXX_ENABLE_ASAN)
-  message(FATAL_ERROR
-    "AGENTXX_ENABLE_TSAN 与 AGENTXX_ENABLE_ASAN 运行时互斥, 不可同时启用。"
-    "排查数据竞争请使用: -DAGENTXX_ENABLE_ASAN=OFF -DAGENTXX_ENABLE_TSAN=ON")
-endif()
+# TSAN 与 ASAN 运行时互斥的 guard 在编译器确定后执行 (见下方 XX_IS_MSVC_D 分支):
+# MSVC 下 TSAN 本身无实现会被忽略, 不构成运行时互斥, 不能在此直接 FATAL_ERROR
 # - 关闭后 Debug 构建不带调试符号 (-g)，进一步加快编译/链接
 option(AGENTXX_ENABLE_DEBUG_INFO "Enable debug info (-g) for Debug builds." ON)
 # - 预编译稳定的第三方头文件 (fmt/asio/boost.exception 等) 加速 lib/client/test 编译;
@@ -148,6 +149,28 @@ elseif (CMAKE_C_COMPILER_ID MATCHES "Clang")
   set(XX_IS_CLANG_D 1)
 else ()
   message(FATAL_ERROR "[agentxx] 不支持的编译器: ${CMAKE_C_COMPILER_ID}")
+endif ()
+
+# Sanitizer 可用性 guard / 提示 (需先确定编译器):
+# - TSAN 与 ASAN 运行时互斥仅对 GCC/Clang 有意义 (两者都有真实实现);
+# - MSVC 下 UBSan/TSan 无实现, 按设计仅警告忽略, 不阻断配置
+if (XX_IS_MSVC_D)
+  if (AGENTXX_ENABLE_UBSAN)
+    message(WARNING
+      "[agentxx] MSVC 无 UndefinedBehaviorSanitizer 实现, AGENTXX_ENABLE_UBSAN 已忽略 "
+      "(可用替代: /analyze 静态分析、/RTC1 运行时检查; 或在 Linux 构建中启用)")
+  endif ()
+  if (AGENTXX_ENABLE_TSAN)
+    message(WARNING
+      "[agentxx] MSVC 无 ThreadSanitizer 实现, AGENTXX_ENABLE_TSAN 已忽略 "
+      "(数据竞争排查请使用 Linux/WSL2 构建: -DAGENTXX_ENABLE_ASAN=OFF -DAGENTXX_ENABLE_TSAN=ON)")
+  endif ()
+else ()
+  if (AGENTXX_ENABLE_TSAN AND AGENTXX_ENABLE_ASAN)
+    message(FATAL_ERROR
+      "AGENTXX_ENABLE_TSAN 与 AGENTXX_ENABLE_ASAN 运行时互斥, 不可同时启用。"
+      "排查数据竞争请使用: -DAGENTXX_ENABLE_ASAN=OFF -DAGENTXX_ENABLE_TSAN=ON")
+  endif ()
 endif ()
 
 message("[agentxx] Test Utf8 Log: 你好！")
@@ -248,8 +271,20 @@ if (XX_IS_MSVC_D)
   # 注意: 不要添加 /FS /MP —— VS18/MSVC 14.51 的 FileTracker 在命令行出现
   # 重复 /FS 时会失效 (子编译进程不写跟踪记录)，导致每次构建全量重编;
   # 且旗标经多层 CMake 传递极易重复叠加，故统一不使用这两个选项
-  set(_AGENTXX_C_FLAGS   "${_AGENTXX_COMMON_C_CXX_FLAGS} ${_AGENTXX_C_FLAGS} /bigobj /utf-8 /wd4200 /D_GNU_SOURCE")
-  set(_AGENTXX_CXX_FLAGS "${_AGENTXX_COMMON_C_CXX_FLAGS} ${_AGENTXX_CXX_FLAGS} /bigobj /utf-8 /wd4200 /Zc:__cplusplus")
+  # ASan 开启时需禁用 MSVC STL 容器注解 (_DISABLE_STL_ANNOTATION):
+  # 预编译三方静态库 (libboost_process 等, 未插桩) 不携带 annotate_string/
+  # vector/optional 注解元数据, 与插桩目标混链会触发 LNK2038 "annotate_* 不匹配";
+  # 该官方宏使本侧同样不产生注解元数据, 两侧一致即可链接。作用于全部配置,
+  # 避免多配置生成器下某配置漏加导致的不一致。
+  # 代价: 失去容器内部越界检测 (std::string/vector/optional 容量内 OOB);
+  # 堆级检测 (use-after-free/double-free/跨分配越界) 不受影响。
+  set(_AGENTXX_MSVC_ASAN_DEFS "")
+  if (AGENTXX_ENABLE_ASAN AND NOT XX_IS_RELEASE_D)
+    set(_AGENTXX_MSVC_ASAN_DEFS " /D_DISABLE_STL_ANNOTATION=1")
+  endif ()
+  set(_AGENTXX_C_FLAGS   "${_AGENTXX_COMMON_C_CXX_FLAGS}${_AGENTXX_MSVC_ASAN_DEFS} ${_AGENTXX_C_FLAGS} /bigobj /utf-8 /wd4200 /D_GNU_SOURCE")
+  set(_AGENTXX_CXX_FLAGS "${_AGENTXX_COMMON_C_CXX_FLAGS}${_AGENTXX_MSVC_ASAN_DEFS} ${_AGENTXX_CXX_FLAGS} /bigobj /utf-8 /wd4200 /Zc:__cplusplus")
+  unset(_AGENTXX_MSVC_ASAN_DEFS)
 
   set(CMAKE_C_FLAGS_RELEASE          "${CMAKE_C_FLAGS_RELEASE}          ${_AGENTXX_C_FLAGS}   /Gy")
   set(CMAKE_CXX_FLAGS_RELEASE        "${CMAKE_CXX_FLAGS_RELEASE}        ${_AGENTXX_CXX_FLAGS} /Gy")
@@ -263,8 +298,39 @@ if (XX_IS_MSVC_D)
   if (XX_IS_RELEASE_D)
     set(_AGENTXX_LDFLAGS "${LDFLAGS} ${_AGENTXX_LDFLAGS} /OPT:REF /OPT:ICF")
   else ()
-    # windows/msvc 使用 /fsanitize=address 时可能导致链接错误 (uchatdet)
+    # ===== MSVC Debug Sanitizers =====
+    # AddressSanitizer (/fsanitize=address): MSVC 原生实现 (VS2019 16.9+ 引入,
+    # 本项目要求 VS2026/MSVC 14.5x 完全支持)。运行时经 UCRT 堆函数全进程拦截,
+    # 未插桩的预编译三方库 (OpenSSL/Boost 静态库) 跨模块堆错误仍可检出, 盲区仅
+    # 在库内部。注意与 Linux 差异: MSVC ASan 不包含 LeakSanitizer, 内存泄漏
+    # 检测仍需依赖 Linux 构建。
+    # 历史注释勘误: 早前 "使用 /fsanitize=address 时可能导致链接错误 (uchardet)"
+    # 实为三方库自身在 Debug 注入了 GCC 风格 -fsanitize=address 旗标 (cl.exe
+    # 不识别) 所致, 并非 MSVC ASan 本身不可用 (该块已在 third_party/uchardet
+    # 中注释掉, 见 docs/zh-cn/build/windows.md FAQ)。
+    if (AGENTXX_ENABLE_ASAN)
+      # 冲突旗标清理:
+      # - /RTC*: 与 ASan 插桩互斥 (官方文档明确不兼容; CMake 内置 Debug 默认
+      #   旗标即 "/Zi /Ob0 /Od /RTC1");
+      # - /Zi 保持 ProgramDatabase 即可 (当前生成器默认已是 /Zi, 无需处理;
+      #   cl 选项大小写敏感, /ZI=EditAndContinue 与 ASan 互斥)
+      foreach (_lang IN ITEMS C CXX)
+        string(REGEX REPLACE "(^| )/RTC[A-Za-z0-9]*( |$)" " " CMAKE_${_lang}_FLAGS_DEBUG "${CMAKE_${_lang}_FLAGS_DEBUG}")
+        string(APPEND CMAKE_${_lang}_FLAGS_DEBUG " /fsanitize=address")
+      endforeach ()
+      # - 增量链接与 ASan 互斥: 清理 DEBUG 配置默认的 /INCREMENTAL
+      #   (CMAKE_*_LINKER_FLAGS_DEBUG 内置默认值即 "/debug /INCREMENTAL");
+      #   并在通用 LINKER_FLAGS 显式关闭 (/INCREMENTAL:NO), 保证无论嵌套构建中
+      #   配置旗标与通用旗标的拼接顺序如何, 最终生效的都是非增量链接
+      foreach (_ld IN ITEMS CMAKE_EXE_LINKER_FLAGS_DEBUG CMAKE_SHARED_LINKER_FLAGS_DEBUG)
+        string(REGEX REPLACE "(^| )/INCREMENTAL(:[A-Za-z]+)?( |$)" " " ${_ld} "${${_ld}}")
+        string(APPEND ${_ld} " /INCREMENTAL:NO")
+      endforeach ()
+    endif ()
     set(_AGENTXX_LDFLAGS "${LDFLAGS} ${_AGENTXX_LDFLAGS}")
+    if (AGENTXX_ENABLE_ASAN)
+      string(APPEND _AGENTXX_LDFLAGS " /INCREMENTAL:NO")
+    endif ()
   endif()
 
   # set(CMAKE_INTERPROCEDURAL_OPTIMIZATION TRUE)
@@ -460,6 +526,11 @@ set(_AGENTXX_COMMON_CMAKE_ARGS
     # 链接器 (mold/gold/-fsanitize 等) 同样需要显式传递给嵌套构建
     "-DCMAKE_EXE_LINKER_FLAGS=${CMAKE_EXE_LINKER_FLAGS}"
     "-DCMAKE_SHARED_LINKER_FLAGS=${CMAKE_SHARED_LINKER_FLAGS}"
+    # DEBUG 链接旗标变体同样显式传递: MSVC ASan 开启时顶层已清理 /INCREMENTAL
+    # 并追加 /INCREMENTAL:NO, 嵌套工程需使用一致的值 (否则嵌套会回退到内置
+    # 默认值 "/debug /INCREMENTAL", 与 ASan 互斥)
+    "-DCMAKE_EXE_LINKER_FLAGS_DEBUG=${CMAKE_EXE_LINKER_FLAGS_DEBUG}"
+    "-DCMAKE_SHARED_LINKER_FLAGS_DEBUG=${CMAKE_SHARED_LINKER_FLAGS_DEBUG}"
     "-DCMAKE_INSTALL_PREFIX=${AGENTXX_INSTALL_DIR}"
     -DCMAKE_POSITION_INDEPENDENT_CODE=ON
     -DCMAKE_EXPORT_COMPILE_COMMANDS=${CMAKE_EXPORT_COMPILE_COMMANDS}
@@ -1093,3 +1164,34 @@ if (AGENTXX_BUILD_BENCHMARK)
     TEST_COMMAND ""
   )
 endif()
+
+# ===== MSVC ASan 动态运行时部署 =====
+# /MD(d) + /fsanitize=address 编译的可执行程序运行期需要能找到
+# clang_rt.asan_dynamic-x86_64.dll (随 MSVC 工具集安装在 cl.exe 同目录,
+# 经 delay-load thunk 全进程共享同一份实例)。superbuild 在此自动拷贝到 exec
+# 输出目录, 保证测试/client/插件宿主可直接启动; DEPENDS 各 repo 目标确保在
+# 嵌套构建产出 exec 目录之后再拷贝。仅覆盖 x64 构建 (项目 Windows 脚本均为 -A x64)。
+if (XX_IS_WIN_D AND XX_IS_MSVC_D AND NOT XX_IS_RELEASE_D AND AGENTXX_ENABLE_ASAN)
+  get_filename_component(_AGENTXX_MSVC_BIN_DIR "${CMAKE_CXX_COMPILER}" DIRECTORY)
+  set(_AGENTXX_ASAN_DLL "${_AGENTXX_MSVC_BIN_DIR}/clang_rt.asan_dynamic-x86_64.dll")
+  if (EXISTS "${_AGENTXX_ASAN_DLL}")
+    add_custom_target(agentxx_asan_runtime ALL
+      COMMAND ${CMAKE_COMMAND} -E make_directory "${AGENTXX_EXEC_INSTALL_PREFIX}"
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
+              "${_AGENTXX_ASAN_DLL}" "${AGENTXX_EXEC_INSTALL_PREFIX}/"
+      DEPENDS "${_AGENTXX_ASAN_DLL}"
+      COMMENT "[agentxx] Deploy MSVC ASan runtime -> ${AGENTXX_EXEC_INSTALL_PREFIX}"
+      VERBATIM)
+    foreach (_dep agentxx_lib_repo agentxx_plugins_repo agentxx_client_repo agentxx_test_repo agentxx_benchmark_repo)
+      if (TARGET ${_dep})
+        add_dependencies(agentxx_asan_runtime ${_dep})
+      endif ()
+    endforeach ()
+  else ()
+    message(WARNING
+      "[agentxx] 未找到 MSVC ASan 动态运行库: ${_AGENTXX_ASAN_DLL}; "
+      "请确认已安装 MSVC v143+ x64 工具集, 否则启用了 ASan 的程序无法启动")
+  endif ()
+  unset(_AGENTXX_MSVC_BIN_DIR)
+  unset(_AGENTXX_ASAN_DLL)
+endif ()
