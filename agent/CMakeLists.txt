@@ -60,10 +60,29 @@ option(AGENTXX_ENABLE_PLUGIN_BUILTIN "Merge enabled plugins into libagentxx (bui
 #   编译为独立动态库 (混合模式; 例: -DAGENTXX_PLUGIN_BUILTIN_LIST="agentxx_filesystem,agentxx_planning")
 set(AGENTXX_PLUGIN_BUILTIN_LIST "" CACHE STRING
   "Which enabled plugins to merge into libagentxx when AGENTXX_ENABLE_PLUGIN_BUILTIN=ON ('' or 'all' = all; semicolon/comma list = only listed ones)")
-# ===== Debug 构建加速选项 =====
+# ===== Debug 构建加速选项 / Sanitizers (仅 GCC/Clang 的 Debug 配置生效) =====
 # - 关闭后 Debug 构建不再启用 AddressSanitizer，编译与链接显著加快
 #   (仍保留 -fno-omit-frame-pointer 便于调试)，默认开启保持原有行为
 option(AGENTXX_ENABLE_ASAN "Enable AddressSanitizer for Debug builds." ON)
+# UBSAN: 检测未定义行为 (有符号溢出/数组越界/对齐错误/无效枚举值/空指针解引用等)
+# - 与 ASAN/TSAN 均可叠加, 运行时开销极低 (~2-5%);
+# - 插桩仅作用于本项目编译的代码: 预编译三方库不插桩, 不构成误报源,
+#   报告即项目自身代码问题;
+# - 附带 -fno-sanitize-recover=undefined: 命中即 abort (测试进程退出码非零),
+#   避免报告被静默吞掉; 若三方头文件触发良性 UB 可临时移除该旗标定位
+option(AGENTXX_ENABLE_UBSAN "Enable UndefinedBehaviorSanitizer for Debug builds (GCC/Clang)." OFF)
+# TSAN: 检测数据竞争。适用本项目并发模型 (io_context 多协程交错/offload 线程池/
+# SessionStore 锁/WS 与 TUI 线程)。限制:
+# - 与 ASAN 运行时互斥不可叠加 (同时启用在下方直接 FATAL_ERROR);
+# - 预编译三方库 (openssl/curl/hyperscan/sqlite 等, 未插桩) 内部同步对 TSAN
+#   不可见, 可能产生误报/漏报; dlopen 的外置插件同理 (内置合并编译模式无此问题);
+# - 性能开销大 (5-15x), 仅建议定向排查并发问题时临时开启
+option(AGENTXX_ENABLE_TSAN "Enable ThreadSanitizer for Debug builds (GCC/Clang; mutually exclusive with ASAN)." OFF)
+if (AGENTXX_ENABLE_TSAN AND AGENTXX_ENABLE_ASAN)
+  message(FATAL_ERROR
+    "AGENTXX_ENABLE_TSAN 与 AGENTXX_ENABLE_ASAN 运行时互斥, 不可同时启用。"
+    "排查数据竞争请使用: -DAGENTXX_ENABLE_ASAN=OFF -DAGENTXX_ENABLE_TSAN=ON")
+endif()
 # - 关闭后 Debug 构建不带调试符号 (-g)，进一步加快编译/链接
 option(AGENTXX_ENABLE_DEBUG_INFO "Enable debug info (-g) for Debug builds." ON)
 # - 预编译稳定的第三方头文件 (fmt/asio/boost.exception 等) 加速 lib/client/test 编译;
@@ -266,9 +285,10 @@ else ()
   set(CMAKE_CXX_FLAGS_MINSIZEREL     "${_AGENTXX_CXX_FLAGS} ${CMAKE_CXX_FLAGS_MINSIZEREL}")
   set(CMAKE_C_FLAGS_RELWITHDEBINFO   "${_AGENTXX_C_FLAGS}   ${CMAKE_C_FLAGS_RELWITHDEBINFO}")
   set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "${_AGENTXX_CXX_FLAGS} ${CMAKE_CXX_FLAGS_RELWITHDEBINFO}")
-  # Debug 编译加速: -g / ASAN 均可通过选项关闭;
-  # - 启用 ASAN 时: -fsanitize=address -fno-omit-frame-pointer -fno-optimize-sibling-calls
-  # - 关闭 ASAN 时: 保留 -fno-omit-frame-pointer 便于调试/性能分析
+  # Debug 编译加速: -g / sanitizers 均可通过选项关闭;
+  # - sanitizer 组合 (见顶部选项说明): TSAN 与 ASAN 运行时互斥, 已由前置
+  #   guard 保证不同时启用; UBSAN 可与任一叠加; 全部关闭时仅保留调试辅助旗标
+  # - 通用: -fno-omit-frame-pointer 保证 sanitizer/性能分析的栈回溯完整
   # - 关闭 DEBUG_INFO 时: 需同时剔除 CMake 为 GCC/Clang 默认追加的 -g
   #   (CMAKE_CXX_FLAGS_DEBUG 默认值即 "-g")，否则产物依旧膨胀
   set(_AGENTXX_DEBUG_EXTRA_FLAGS "")
@@ -278,10 +298,14 @@ else ()
     string(REGEX REPLACE "(^| )-g([0-9])?( |$)" " " CMAKE_C_FLAGS_DEBUG   "${CMAKE_C_FLAGS_DEBUG}")
     string(REGEX REPLACE "(^| )-g([0-9])?( |$)" " " CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG}")
   endif()
-  if (AGENTXX_ENABLE_ASAN)
-    string(APPEND _AGENTXX_DEBUG_EXTRA_FLAGS " -fsanitize=address -fno-omit-frame-pointer -fno-optimize-sibling-calls")
-  else()
-    string(APPEND _AGENTXX_DEBUG_EXTRA_FLAGS " -fno-omit-frame-pointer")
+  if (AGENTXX_ENABLE_TSAN)
+    string(APPEND _AGENTXX_DEBUG_EXTRA_FLAGS " -fsanitize=thread")
+  elseif (AGENTXX_ENABLE_ASAN)
+    string(APPEND _AGENTXX_DEBUG_EXTRA_FLAGS " -fsanitize=address -fno-optimize-sibling-calls")
+  endif()
+  string(APPEND _AGENTXX_DEBUG_EXTRA_FLAGS " -fno-omit-frame-pointer")
+  if (AGENTXX_ENABLE_UBSAN)
+    string(APPEND _AGENTXX_DEBUG_EXTRA_FLAGS " -fsanitize=undefined -fno-sanitize-recover=undefined")
   endif()
   set(CMAKE_C_FLAGS_DEBUG            "${_AGENTXX_C_FLAGS}   ${_AGENTXX_DEBUG_EXTRA_FLAGS} ${CMAKE_C_FLAGS_DEBUG}")
   set(CMAKE_CXX_FLAGS_DEBUG          "${_AGENTXX_CXX_FLAGS} ${_AGENTXX_DEBUG_EXTRA_FLAGS} ${CMAKE_CXX_FLAGS_DEBUG}")
@@ -290,11 +314,19 @@ else ()
   if (XX_IS_RELEASE_D)
     set(_AGENTXX_LDFLAGS "${LDFLAGS} ${_AGENTXX_LDFLAGS} -Wl,--gc-sections -flto")
   else ()
-    if (AGENTXX_ENABLE_ASAN)
-      set(_AGENTXX_LDFLAGS "${LDFLAGS} ${_AGENTXX_LDFLAGS} -fsanitize=address")
-    else ()
-      set(_AGENTXX_LDFLAGS "${LDFLAGS} ${_AGENTXX_LDFLAGS}")
+    # sanitizer 运行时须经编译驱动链接 (-fsanitize=*) 才能注入正确运行库:
+    # TSAN/ASAN 互斥 (前置 guard), UBSAN 可与任一叠加
+    set(_AGENTXX_SAN_LINK_FLAGS "")
+    if (AGENTXX_ENABLE_TSAN)
+      string(APPEND _AGENTXX_SAN_LINK_FLAGS " -fsanitize=thread")
+    elseif (AGENTXX_ENABLE_ASAN)
+      string(APPEND _AGENTXX_SAN_LINK_FLAGS " -fsanitize=address")
     endif()
+    if (AGENTXX_ENABLE_UBSAN)
+      string(APPEND _AGENTXX_SAN_LINK_FLAGS " -fsanitize=undefined")
+    endif()
+    set(_AGENTXX_LDFLAGS "${LDFLAGS} ${_AGENTXX_LDFLAGS}${_AGENTXX_SAN_LINK_FLAGS}")
+    unset(_AGENTXX_SAN_LINK_FLAGS)
   endif ()
 endif ()
 string(APPEND CMAKE_EXE_LINKER_FLAGS    " ${_AGENTXX_LDFLAGS}")
@@ -464,6 +496,8 @@ set(_AGENTXX_COMMON_CMAKE_ARGS
     -DYAML_CPP_STATIC_DEFINE=ON
 
     -DAGENTXX_ENABLE_ASAN=${AGENTXX_ENABLE_ASAN}
+    -DAGENTXX_ENABLE_UBSAN=${AGENTXX_ENABLE_UBSAN}
+    -DAGENTXX_ENABLE_TSAN=${AGENTXX_ENABLE_TSAN}
     -DAGENTXX_ENABLE_DEBUG_INFO=${AGENTXX_ENABLE_DEBUG_INFO}
     -DAGENTXX_ENABLE_PCH=${AGENTXX_ENABLE_PCH}
     
