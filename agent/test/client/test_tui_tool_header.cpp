@@ -16,7 +16,6 @@
 #include "ftxui/dom/elements.hpp"
 #include "ftxui/screen/screen.hpp"
 #include "test_framework.h"
-#include <cstdio>
 #include <memory>
 #include <string>
 #include <utility>
@@ -45,6 +44,10 @@ struct ToolHeaderFixture {
     ToolHeaderFixture(int w = 120, int h = 16) :
         width(w),
         height(h) {
+        // 颜色断言依赖真彩色 ANSI 序列 (如 "102;204;255"); FTXUI 会按运行
+        // 环境检测色彩能力, 无 COLORTERM=truecolor 时降级 256 色 (38;5;N)
+        // 导致断言随环境漂移 —— 测试内强制声明 TrueColor 支持
+        ftxui::Terminal::SetColorSupport(ftxui::Terminal::Color::TrueColor);
         ctx.state      = &sharedState;
         ctx.frameState = sharedState.readSnapshot();
         ctx.postRedraw = [] {};
@@ -243,13 +246,6 @@ void testTuiToolHeaderRunning() {
 
     // 已知工具在 running 状态下折叠展示 "Read · /path"
     f.pushTool("agentxx_filesystem_read", R"({"path":"/home/running.cpp"})", false);
-    {
-        const std::string r = f.render();
-        TEST_INFO << "[dbg] escCount=" << static_cast<int>(std::count(r.begin(), r.end(), '\033'))
-                  << " has38_2=" << (r.find("38;2;") != std::string::npos)
-                  << " hasAccent=" << (r.find("102;204;255") != std::string::npos)
-                  << " sample=" << r.substr(0, 60) << "|" << std::endl;
-    }
     XX_TEST_EXPECT_TRUE(f.plainRender().find("Read · /home/running.cpp") != std::string::npos);
     // 样式断言: 包含 accentColor 高亮颜色代码 (102;204;255)
     XX_TEST_EXPECT_TRUE(f.render().find("102;204;255") != std::string::npos);
