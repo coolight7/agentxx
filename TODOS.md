@@ -9,6 +9,7 @@
 - 整理文档
 - release 编译发布时携带 标准库
 - 统一使用 getSessionWorkDir
+- tui 复制缺少空格
 - graph json 定义，支持插件生成 graph json、注册 node; (最多只能有一个插件生成 graph，都没有则默认生成 CodeAgent)
 - Plan 渲染独立为 client 插件
 - 插件宏辅助代码
@@ -16,6 +17,27 @@
 - 插件 readHostConfig 改为直接传入 变量路径 取值
 - 插件内代码命名空间
 - 记录加载失败的 Append 组件，传入tui显示
+
+```sh
+- [Tool] agentxx_filesystem_grep
+  args: {
+"text_patterns":[
+"sanitizer",
+"sanitize",
+"ASAN",
+"fsanitize"
+],
+"file_patterns":[
+"agent/**/*.cmake",
+"agent/**/CMakeLists.txt",
+"agent/script/*.sh",
+"agent/script/*.bat"
+],
+"output_mode":"content",
+"case_sensitive":false
+}
+  result: [Error] No mapping for the Unicode character exists in the target multi-byte codepage.
+```
 
 ## 提示词优化
 - 如果编译需要配置特定参数，写成脚本或者写入到AGENTS.md

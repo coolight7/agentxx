@@ -501,26 +501,24 @@ asio::awaitable<std::string> ToolcallWrapNode::execTool(
                 auto result    = co_await agentCtxPtr->middlewareHandleContext->requestInterrupt(
                     sessionId,
                     [&]() -> InterruptHandleArg {
-                        auto arg      = InterruptHandleArg{};
-                        arg.name      = "repeat_toolcall";
-                        arg.resultId  = args.value("tool_call_id", std::string{});
-                        arg.arg       = neograph::json{
-                               {"tool_name", tool->get_name()},
-                               {"key",       repeatCallKey  },
+                        auto arg     = InterruptHandleArg{};
+                        arg.name     = "repeat_toolcall";
+                        arg.resultId = args.value("tool_call_id", std::string{});
+                        arg.arg      = neograph::json{
+                                    {"tool_name", tool->get_name()},
+                                    {"key",       repeatCallKey   },
                         };
-                        auto inputItem           = InterruptHandleArg::InterruptHandleInputItem{};
-                        inputItem.label          = fmt::format(
-                            "[{}] Repeated identical call",
-                            tool->get_name()
-                        );
-                        inputItem.depict         = fmt::format(
+                        auto inputItem = InterruptHandleArg::InterruptHandleInputItem{};
+                        inputItem.label
+                            = fmt::format("[{}] Repeated identical call", tool->get_name());
+                        inputItem.depict = fmt::format(
                             "This tool has been called repeatedly with identical arguments "
-                            "({}). Allow it to run again?",
+                               "({}). Allow it to run again?",
                             repeatCallKey
                         );
-                        inputItem.type           = "bool";
-                        inputItem.defaultValue   = "no";
-                        arg.inputs               = {std::move(inputItem)};
+                        inputItem.type         = "bool";
+                        inputItem.defaultValue = "no";
+                        arg.inputs             = {std::move(inputItem)};
                         return arg;
                     },
                     nullptr
@@ -531,8 +529,8 @@ asio::awaitable<std::string> ToolcallWrapNode::execTool(
                 if (result.is_array() && !result.empty()) {
                     const auto& val = result[0];
                     if (val.is_string()) {
-                        allow = (val.get<std::string>() == "true"
-                                 || val.get<std::string>() == "yes");
+                        allow
+                            = (val.get<std::string>() == "true" || val.get<std::string>() == "yes");
                     } else if (val.is_boolean()) {
                         allow = val.get<bool>();
                     }
@@ -617,29 +615,29 @@ asio::awaitable<std::string> ToolcallWrapNode::execTool(
                 = agentCtxPtr->middlewareHandleContext->addShareStoreItemValue(session_id, result);
             // 总行数, 写入压缩结果便于后续用 `agentxx_share_store` 按行分页取值
             const auto totalLineCount = agentxx::util::countLines(result);
-            // - 如果超过总摘要 1/3，按行摘要，留出行数以便后续用
+            // - 如果按行摘要超过总摘要长度的 1/3 即为可行，留出行数以便后续用
             // `agentxx_share_store` 分页按行取值 否则取总摘要
             if (lastLineIndex >= targetIndex / 3) {
                 co_return fmt::format(
-                    R"([Content offloaded. Use the `agentxx_share_store` tool to fetch the full content by ID {}. Show {} lines, total {} lines, truncated {} lines]
+                    R"([Content offloaded. Use the `agentxx_share_store` tool to fetch the content by ID {}. Total {} lines, show [0, {}], hide [{}, {}].]
 {}
 ...)",
                     storeId,
-                    lineCount,
                     totalLineCount,
-                    totalLineCount - lineCount,
+                    lineCount,
+                    lineCount + 1,
+                    totalLineCount,
                     std::string_view{result}.substr(0, lastLineIndex)
                 );
             } else {
-                // 无法按行截断时取全部行数 (换行数) 作为截取行数
+                // - 内容集中在某些行，比如只有一行，但内容特别长，此时按 [lastLineIndex] 得到的是
+                // 0, 即为全部隐藏
+                // - 无法按行截断时取全部行数 (换行数) 作为截取行数
                 co_return fmt::format(
-                    R"([Content offloaded. Use the `agentxx_share_store` tool to fetch the full content by ID {}. Show {} chars, total {} lines, truncated {} lines]
-{}
-...)",
+                    R"([Content offloaded. Use the `agentxx_share_store` tool to fetch the full content by ID {}. Total {} lines.]
+{}...)",
                     storeId,
-                    limitLength,
                     totalLineCount,
-                    lineCount,
                     std::string_view{result}.substr(0, targetIndex)
                 );
             }
