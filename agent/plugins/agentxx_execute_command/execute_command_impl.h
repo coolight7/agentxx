@@ -85,10 +85,8 @@ inline std::string subprocessWorkDir(const std::string& workDir) {
 /// - 注意: watcher 只终止、不调用 async_wait —— boost.process v2 的
 ///   async_wait op 内部引用共享的 exit_status_ 成员, 与主协程并发 wait
 ///   会产生数据竞争; 子进程回收由主协程负责
-inline asio::awaitable<void> procCancelWatchLoop(
-    boost::process::process& proc,
-    const IsCancelledFn&     isCancelled
-) {
+inline asio::awaitable<void>
+    procCancelWatchLoop(boost::process::process& proc, const IsCancelledFn& isCancelled) {
     asio::steady_timer timer(co_await asio::this_coro::executor);
     if (!isCancelled) {
         // 无取消源: 挂起直至被并行组取消 (主工作完成)
@@ -194,8 +192,11 @@ inline WinProcLaunch buildWinProcLaunch(std::string_view command) {
 // =====================================================================
 
 /// agentxx_execute_bash_command 执行体 (原 ExecuteBashCommandTool::execute_async)
-inline std::string
-    bashExecute(const neograph::json& arguments, const std::string& workDir, const IsCancelledFn& isCancelled = nullptr) {
+inline std::string bashExecute(
+    const neograph::json& arguments,
+    const std::string&    workDir,
+    const IsCancelledFn&  isCancelled = nullptr
+) {
     auto command = arguments.value("command", std::string{});
     if (command.empty()) {
         return R"({"error":"Arg `command` is empty"})";
@@ -231,10 +232,10 @@ inline std::string
             procExe,
             procArgs,
             boost::process::process_environment(procEnv),
-            // 子进程初始工作目录: 会话工作目录 (未配置时显式取进程 cwd, 行为等价继承)
+ // 子进程初始工作目录: 会话工作目录 (未配置时显式取进程 cwd, 行为等价继承)
             boost::process::process_start_dir{detail::subprocessWorkDir(workDir)},
-            // stdin 重定向到 null 设备 (Windows: NUL / POSIX: /dev/null),
-            // 避免子进程 (如交互式命令) 抢读 agent 进程的终端输入
+ // stdin 重定向到 null 设备 (Windows: NUL / POSIX: /dev/null),
+  // 避免子进程 (如交互式命令) 抢读 agent 进程的终端输入
             boost::process::process_stdio{.in = nullptr, .out = outpip, .err = errpip},
         };
 
@@ -242,7 +243,7 @@ inline std::string
 
         std::string              strout, strerr;
         neograph_asio_error_code errCodeStdOut, errCodeStdErr;
-        auto readStdOutFuture = asio::async_read(
+        auto                     readStdOutFuture = asio::async_read(
             outpip,
             asio::dynamic_buffer(strout),
             asio::transfer_all(),
@@ -255,7 +256,7 @@ inline std::string
             asio::redirect_error(asio::use_awaitable, errCodeStdErr)
         );
 
-        std::string resultStr;
+        std::string        resultStr;
         std::exception_ptr ep{};
         asio::co_spawn(
             io,
@@ -269,23 +270,23 @@ inline std::string
                         std::move(readStdOutFuture) && std::move(readStdErrFuture)
                         && proc.async_wait(asio::use_awaitable)
                     );
-                    const auto exitCode = proc.exit_code();
+                    const auto         exitCode = proc.exit_code();
                     std::ostringstream result;
                     if (timedOut.load(std::memory_order_acquire)) {
                         result << detail::makeTimeoutResult(timeout, strout, strerr);
                     } else {
-                        result << "## ExitCode: " << exitCode << "\n";
+                        result << "[ExitCode]" << exitCode << "\n";
                         if (all_output || 0 != exitCode) {
                             // failed
                             if (strout.empty() || agentxx::util::autoConvertToUtf8(strout)) {
-                                result << "## StdOut:\n" << strout << "\n";
+                                result << "[StdOut]\n" << strout << "\n";
                             } else {
-                                result << "## StdOut conversion to utf8 failed, discard\n";
+                                result << "[StdOut conversion to utf8 failed, discard]\n";
                             }
                             if (strerr.empty() || agentxx::util::autoConvertToUtf8(strerr)) {
-                                result << "## StdErr:\n" << strerr << "\n";
+                                result << "[StdErr]\n" << strerr << "\n";
                             } else {
-                                result << "## StdErr conversion to utf8 failed, discard\n";
+                                result << "[StdErr conversion to utf8 failed, discard]\n";
                             }
                         }
                     }
@@ -318,8 +319,7 @@ inline std::string
                     // 组装前整体取消; 只有主工作完成能终结整体, 完成即取消其余,
                     // io.run() 随之自然返回
                     co_await (
-                        mainWork()
-                        || timeoutGuard()
+                        mainWork() || timeoutGuard()
                         || detail::procCancelWatchLoop(proc, isCancelled)
                     );
                 } catch (...) {
@@ -405,16 +405,16 @@ inline std::string windowsExecute(
             procExe,
             launch.args,
             boost::process::process_environment(procEnv),
-            // 子进程初始工作目录: 会话工作目录 (未配置时显式取进程 cwd, 行为等价继承)
+ // 子进程初始工作目录: 会话工作目录 (未配置时显式取进程 cwd, 行为等价继承)
             boost::process::process_start_dir{detail::subprocessWorkDir(workDir)},
-            // stdin 重定向到 null 设备, 避免子进程抢读 agent 进程的终端输入
+ // stdin 重定向到 null 设备, 避免子进程抢读 agent 进程的终端输入
             boost::process::process_stdio{.in = nullptr, .out = outpip, .err = errpip}
         };
 
         // 会话取消监听: 与主工作并行运行 (见 bashExecute 同款修复说明)
         std::string              strout, strerr;
         neograph_asio_error_code errCodeStdOut, errCodeStdErr;
-        auto readStdOutFuture = asio::async_read(
+        auto                     readStdOutFuture = asio::async_read(
             outpip,
             asio::dynamic_buffer(strout),
             asio::transfer_all(),
@@ -427,7 +427,7 @@ inline std::string windowsExecute(
             asio::redirect_error(asio::use_awaitable, errCodeStdErr)
         );
 
-        std::string resultStr;
+        std::string        resultStr;
         std::exception_ptr ep{};
         asio::co_spawn(
             io,
@@ -440,23 +440,23 @@ inline std::string windowsExecute(
                         std::move(readStdOutFuture) && std::move(readStdErrFuture)
                         && proc.async_wait(asio::use_awaitable)
                     );
-                    const auto exitCode = proc.exit_code();
+                    const auto         exitCode = proc.exit_code();
                     std::ostringstream result;
                     if (timedOut.load(std::memory_order_acquire)) {
                         result << detail::makeTimeoutResult(timeout, strout, strerr);
                     } else {
-                        result << "## ExitCode: " << exitCode << "\n";
+                        result << "[ExitCode] " << exitCode << "\n";
                         if (all_output || 0 != exitCode) {
                             // failed
                             if (strout.empty() || agentxx::util::autoConvertToUtf8(strout)) {
-                                result << "## StdOut:\n" << strout << "\n";
+                                result << "[StdOut]\n" << strout << "\n";
                             } else {
-                                result << "## StdOut conversion to utf8 failed, discard\n";
+                                result << "[StdOut conversion to utf8 failed, discard]\n";
                             }
                             if (strerr.empty() || agentxx::util::autoConvertToUtf8(strerr)) {
-                                result << "## StdErr:\n" << strerr << "\n";
+                                result << "[StdErr]\n" << strerr << "\n";
                             } else {
-                                result << "## StdErr conversion to utf8 failed, discard\n";
+                                result << "[StdErr conversion to utf8 failed, discard]\n";
                             }
                         }
                     }
@@ -483,8 +483,7 @@ inline std::string windowsExecute(
                     using namespace asio::experimental::awaitable_operators;
                     // 三路并行: 主工作 / 超时守护 / 会话取消监听 (语义同 bashExecute)
                     co_await (
-                        mainWork()
-                        || timeoutGuard()
+                        mainWork() || timeoutGuard()
                         || detail::procCancelWatchLoop(proc, isCancelled)
                     );
                 } catch (...) {
