@@ -32,8 +32,10 @@ std::string argDesc(const ToolPromptText& p, const char* key, const char* fallba
     return fallback;
 }
 
-/// 注册无参/常规工具 (schema/描述存储于插件侧静态区; spec 字符串字段以
+/// 注册常规工具 (schema/描述存储于插件侧静态区; spec 字符串字段以
 /// string_view 传入, 宿主注册时拷贝); execute 由调用方提供 (静态函数, 无捕获)
+/// - 统一异步操作模型: 经阻塞委托垫片注册 (offload 池线程执行, io 线程
+///   只等完成通知); execute 签名追加 cancel_flag 形参 (本插件忽略)
 void registerTool(
     const char*        name,
     const char*        defaultDepict,
@@ -43,6 +45,7 @@ void registerTool(
         AgentxxPluginStringView args_json,
         AgentxxPluginStringView thread_id,
         AgentxxPluginStringView tool_call_id,
+        volatile int*           cancel_flag,
         char**                  error_out
     ),
     int flags = 0
@@ -55,7 +58,7 @@ void registerTool(
     g_storage.push_back(std::move(depict));
     g_storage.push_back(schema);
 
-    AgentxxToolSpec spec{};
+    AgentxxSyncToolSpec spec{};
     spec.name        = agentxx_plugin_sv(name, std::strlen(name));
     spec.description = agentxx_plugin_sv(
         g_storage[g_storage.size() - 2].data(),
@@ -65,8 +68,7 @@ void registerTool(
     spec.user_data       = nullptr;
     spec.flags           = flags;
     spec.execute         = execute;
-    if (!g_if.tools || !g_if.tools->register_tool
-        || g_if.tools->register_tool(g_host, &spec) != 0) {
+    if (agentxx_register_sync_tool(g_host, &spec) != 0) {
         XX_LOGW("agentxx_string: register tool {} failed", name);
     }
 }
@@ -78,11 +80,13 @@ char* wrapExecute(
     AgentxxPluginStringView args_json,
     AgentxxPluginStringView thread_id,
     AgentxxPluginStringView tool_call_id,
+    volatile int*           cancel_flag,
     char**                  error_out
 ) {
     (void)user_data;
     (void)thread_id;
     (void)tool_call_id;
+    (void)cancel_flag;
     try {
         std::string argsStr(args_json.data ? args_json.data : "", args_json.size);
         auto        arguments = argsStr.empty() ? neograph::json::object()

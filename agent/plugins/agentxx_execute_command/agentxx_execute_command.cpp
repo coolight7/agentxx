@@ -45,12 +45,14 @@ std::string argDesc(const ToolPromptText& p, const char* key, const std::string&
 
 /// C ABI execute 包装: 解析参数 JSON → 调用实现 → 结果 strdup (异常不外泄)
 /// - workDir/cancel 经宿主接口表在调用时取值 (会话级动态)
+/// - 取消双通道: cancel_flag (宿主 op 驱动器置位) + 会话取消令牌轮询
 template<auto ExecFn>
 char* wrapExecute(
     void*                   user_data,
     AgentxxPluginStringView args_json,
     AgentxxPluginStringView thread_id,
     AgentxxPluginStringView tool_call_id,
+    volatile int*           cancel_flag,
     char**                  error_out
 ) {
     (void)user_data;
@@ -58,9 +60,13 @@ char* wrapExecute(
     try {
         std::string argsStr(args_json.data ? args_json.data : "", args_json.size);
         auto arguments = argsStr.empty() ? neograph::json::object() : neograph::json::parse(argsStr);
-        // 会话取消查询回调: 捕获 thread_id 视图内容 (回调生命周期内有效)
+        // 会话取消查询回调: 捕获 thread_id 视图内容 (回调生命周期内有效);
+        // cancel_flag 置位时同样视为取消 (宿主超时/放弃路径触发)
         std::string tid{thread_id.data ? thread_id.data : "", thread_id.size};
-        auto isCancelled = [tid]() -> bool {
+        auto isCancelled = [tid, cancel_flag]() -> bool {
+            if (cancel_flag && *cancel_flag != 0) {
+                return true;
+            }
             return isSessionCancelled(agentxx_plugin_sv(tid.data(), tid.size()));
         };
         auto workDir = readWorkDir();
@@ -163,7 +169,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                               .dump();
         g_storage.push_back(std::move(schema));
 
-        AgentxxToolSpec spec{};
+        AgentxxSyncToolSpec spec{};
         spec.name        = agentxx_plugin_sv(kNameWindows, std::strlen(kNameWindows));
         spec.description = agentxx_plugin_sv(g_storage[0].data(), g_storage[0].size());
         spec.parameters_json
@@ -171,8 +177,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
         spec.user_data = nullptr;
         spec.flags     = AGENTXX_TOOL_FLAG_AUTO_SUMMARY;
         spec.execute   = &wrapExecute<agentxx::execmd_plugin::windowsExecute>;
-        if (!g_if.tools || !g_if.tools->register_tool
-            || g_if.tools->register_tool(g_host, &spec) != 0) {
+        if (agentxx_register_sync_tool(g_host, &spec) != 0) {
             XX_LOGW("agentxx_execute_command: register tool {} failed", kNameWindows);
         }
     }
@@ -219,7 +224,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                               .dump();
         g_storage.push_back(std::move(schema));
 
-        AgentxxToolSpec spec{};
+        AgentxxSyncToolSpec spec{};
         spec.name        = agentxx_plugin_sv(kNameBash, std::strlen(kNameBash));
         spec.description = agentxx_plugin_sv(g_storage[2].data(), g_storage[2].size());
         spec.parameters_json
@@ -227,8 +232,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
         spec.user_data = nullptr;
         spec.flags     = AGENTXX_TOOL_FLAG_AUTO_SUMMARY;
         spec.execute   = &wrapExecute<agentxx::execmd_plugin::bashExecute>;
-        if (!g_if.tools || !g_if.tools->register_tool
-            || g_if.tools->register_tool(g_host, &spec) != 0) {
+        if (agentxx_register_sync_tool(g_host, &spec) != 0) {
             XX_LOGW("agentxx_execute_command: register tool {} failed", kNameBash);
         }
     }

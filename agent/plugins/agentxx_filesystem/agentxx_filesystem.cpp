@@ -62,6 +62,8 @@ const char* kGlobPatternHelp =
 )";
 
 /// 注册常规工具 (schema/描述存储于插件侧静态区; 宿主注册时拷贝)
+/// - 统一异步操作模型: 经阻塞委托垫片注册 (offload 池线程执行, io 线程
+///   只等完成通知); execute 签名追加 cancel_flag 形参
 void registerTool(
     const char*        name,
     const char*        defaultDepict,
@@ -71,6 +73,7 @@ void registerTool(
         AgentxxPluginStringView args_json,
         AgentxxPluginStringView thread_id,
         AgentxxPluginStringView tool_call_id,
+        volatile int*           cancel_flag,
         char**                  error_out
     )
 ) {
@@ -82,7 +85,7 @@ void registerTool(
     g_storage.push_back(std::move(depict));
     g_storage.push_back(schema);
 
-    AgentxxToolSpec spec{};
+    AgentxxSyncToolSpec spec{};
     spec.name        = agentxx_plugin_sv(name, std::strlen(name));
     spec.description = agentxx_plugin_sv(
         g_storage[g_storage.size() - 2].data(),
@@ -92,20 +95,23 @@ void registerTool(
     spec.user_data       = nullptr;
     spec.flags           = AGENTXX_TOOL_FLAG_NONE;
     spec.execute         = execute;
-    if (!g_if.tools || !g_if.tools->register_tool
-        || g_if.tools->register_tool(g_host, &spec) != 0) {
+    if (agentxx_register_sync_tool(g_host, &spec) != 0) {
         XX_LOGW("agentxx_filesystem: register tool {} failed", name);
     }
 }
 
 /// C ABI execute 包装: 解析参数 JSON → 调用实现 (workDir + 取消查询注入) →
 /// 结果 strdup (异常不外泄; impl 内部已把可预期错误编码进返回文本)
+/// - 取消双通道: cancel_flag 由宿主 op 驱动器在会话取消/超时时置位;
+///   会话取消查询经宿主 cancel 接口表按 thread_id 轮询 (impl 在长遍历
+///   循环内调用; 接口缺失时传 nullptr 等价无取消支持)
 template<auto ExecFn>
 char* wrapExecute(
     void*                   user_data,
     AgentxxPluginStringView args_json,
     AgentxxPluginStringView thread_id,
     AgentxxPluginStringView tool_call_id,
+    volatile int*           cancel_flag,
     char**                  error_out
 ) {
     (void)user_data;
@@ -113,10 +119,17 @@ char* wrapExecute(
     try {
         std::string argsStr(args_json.data ? args_json.data : "", args_json.size);
         auto arguments = argsStr.empty() ? neograph::json::object() : neograph::json::parse(argsStr);
-        // 会话取消查询: 经宿主 cancel 接口表按 thread_id 轮询 (impl 在长遍历
-        // 循环内调用; 接口缺失时传 nullptr 等价无取消支持)
         std::function<bool()> isCancelled;
-        if (g_if.cancel && g_if.cancel->is_cancelled && thread_id.data) {
+        if (cancel_flag) {
+            int flag = *cancel_flag;
+            if (flag) {
+                return pluginStrdup("[Error] Cancelled");
+            }
+            isCancelled = [cancel_flag]() -> bool {
+                return *cancel_flag != 0;
+            };
+        }
+        if (!isCancelled && g_if.cancel && g_if.cancel->is_cancelled && thread_id.data) {
             std::string tid{thread_id.data, thread_id.size};
             isCancelled  = [tid]() -> bool {
                 return g_if.cancel->is_cancelled(

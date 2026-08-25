@@ -154,21 +154,24 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                               .dump();
         g_storage.push_back(std::move(schema));
 
-        AgentxxToolSpec spec{};
+        AgentxxSyncToolSpec spec{};
         spec.name = agentxx_plugin_sv(kNameSearch, std::strlen(kNameSearch));
         spec.description
             = agentxx_plugin_sv(g_storage[0].data(), g_storage[0].size());
         spec.parameters_json = agentxx_plugin_sv(g_storage[1].data(), g_storage[1].size());
         spec.user_data       = nullptr;
         spec.flags           = AGENTXX_TOOL_FLAG_AUTO_SUMMARY;
+        // 阻塞委托型: embedding + 向量检索为慢同步操作 (offload 池线程执行)
         spec.execute         = [](void*                   user_data,
                           AgentxxPluginStringView args_json,
                           AgentxxPluginStringView thread_id,
                           AgentxxPluginStringView tool_call_id,
+                          volatile int*           cancel_flag,
                           char**                  error_out) -> char* {
             (void)user_data;
             (void)thread_id;
             (void)tool_call_id;
+            (void)cancel_flag;
             try {
                 std::string argsStr(args_json.data ? args_json.data : "", args_json.size);
                 auto arguments
@@ -217,8 +220,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                 return nullptr;
             }
         };
-        if (!g_if.tools || !g_if.tools->register_tool
-            || g_if.tools->register_tool(g_host, &spec) != 0) {
+        if (agentxx_register_sync_tool(g_host, &spec) != 0) {
             XX_LOGW("agentxx_rag_search: register tool {} failed", kNameSearch);
         }
     }

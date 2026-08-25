@@ -135,6 +135,8 @@ static std::string readToolDepict(const std::string& toolName) {
 
 /// 注册无参工具 (schema/描述存储于插件侧静态区; spec 字符串字段以 string_view
 /// 传入, 宿主注册时拷贝); execute 由调用方提供 (静态 lambda, 无捕获)
+/// - 统一异步操作模型: 阻塞委托垫片注册 (/proc/PDH 采样为慢同步操作,
+///   offload 池线程执行); execute 签名追加 cancel_flag 形参 (忽略)
 static void registerTool(
     const char*        name,
     const char*        defaultDepict,
@@ -144,6 +146,7 @@ static void registerTool(
         AgentxxPluginStringView args_json,
         AgentxxPluginStringView thread_id,
         AgentxxPluginStringView tool_call_id,
+        volatile int*           cancel_flag,
         char**                  error_out
     ),
     int flags = 0
@@ -156,7 +159,7 @@ static void registerTool(
     g_storage.push_back(std::move(depict));
     g_storage.push_back(schema);
 
-    AgentxxToolSpec spec{};
+    AgentxxSyncToolSpec spec{};
     spec.name        = agentxx_plugin_sv(name, std::strlen(name));
     spec.description = agentxx_plugin_sv(
         g_storage[g_storage.size() - 2].data(),
@@ -166,8 +169,7 @@ static void registerTool(
     spec.user_data       = nullptr;
     spec.flags           = flags;
     spec.execute         = execute;
-    if (!g_if.tools || !g_if.tools->register_tool
-        || g_if.tools->register_tool(g_host, &spec) != 0) {
+    if (agentxx_register_sync_tool(g_host, &spec) != 0) {
         pluginLog(3, fmt::format("agentxx_system_monitor: register tool {} failed", name));
     }
 }
@@ -213,12 +215,14 @@ static char* getSystemCoreInfoExecute(
     AgentxxPluginStringView args_json,
     AgentxxPluginStringView thread_id,
     AgentxxPluginStringView tool_call_id,
+    volatile int*           cancel_flag,
     char**                  error_out
 ) {
     (void)user_data;
     (void)args_json;
     (void)thread_id;
     (void)tool_call_id;
+    (void)cancel_flag;
     try {
         auto              usage = querySync();
         std::stringstream ss;
@@ -286,15 +290,17 @@ static char* getSystemCoreInfoExecute(
 // 能力: agentxx.system_usage (方法 query)
 // - 数据源: 周期采集线程与工具 agentxx_get_system_core_info 均基于
 //   CpuGpuMonitor::query 采样; 本能力供测试/其他插件按需查询
-//   (回调在调用方线程执行, 同步阻塞 ~100ms 采样, 可接受)
+//   (统一异步操作模型: 内联完成型 —— 采样 ~100ms 在 io 线程直接执行,
+//    调用方经 invoke_capability_async 轮询或阻塞版自担阻塞)
 // - 返回 JSON schema 由本插件定义 (usageToJson)
 // =====================================================================
 
-static char* systemUsageInvoke(
+static void* systemUsageInvoke(
     void*                   ctx,
     const AgentxxHost*      caller_host,
     AgentxxPluginStringView method,
     AgentxxPluginStringView args_json,
+    const AgentxxOpNotify*  notify,
     char**                  error_out
 ) {
     (void)ctx;
@@ -305,7 +311,9 @@ static char* systemUsageInvoke(
     try {
         auto usage = querySync();
         auto json  = usageToJson(usage);
-        return pluginStrdup(json.c_str());
+        char* payload = pluginStrdup(json.c_str());
+        notify->done(notify->host_ud, AGENTXX_OP_OK, payload);
+        return nullptr; ///< 内联完成
     } catch (const std::exception& ex) {
         if (error_out) {
             *error_out = pluginStrdup(ex.what());
@@ -363,8 +371,12 @@ struct PluginCtx {
     int tick = 0;
 };
 
+/// offload 取消标志 (调用方持有; 采样不可取消, 宿主从不置位)
+static volatile int kUsageCancelFlag = 0;
+
 /// 周期采集 work: 宿主阻塞池线程执行 (阻塞 ~100ms 采样)
-static void* usageCollectWork(void* ud, char** error_out) {
+static void* usageCollectWork(void* ud, volatile int* cancel_flag, char** error_out) {
+    (void)cancel_flag;
     auto* ctx = static_cast<PluginCtx*>(ud);
     if (!ctx || !g_host) {
         return nullptr;
@@ -436,7 +448,7 @@ static void onUsageTick(void* ud) {
         return; // 显示关闭: 跳过采集
     }
     ctx->collecting = true;
-    g_if.scheduler->offload(g_host, usageCollectWork, usageCollectDone, ctx);
+    g_if.scheduler->offload(g_host, &kUsageCancelFlag, usageCollectWork, usageCollectDone, ctx);
 }
 
 /// 跨端事件: client /sysinfo 开关同步 (WirePluginDataUp 上行后 server 发布到
@@ -488,12 +500,14 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
         getSystemCoreInfoExecute
     );
 
-    // 2. 能力 agentxx.system_usage (方法 query)
+    // 2. 能力 agentxx.system_usage (方法 query; 内联完成型)
     if (!g_if.capabilities || !g_if.capabilities->register_capability_ex
         || g_if.capabilities->register_capability_ex(
             host,
             AGENTXX_SV("agentxx.system_usage"),
             systemUsageInvoke,
+            nullptr,
+            nullptr,
             nullptr
         )
             != 0)

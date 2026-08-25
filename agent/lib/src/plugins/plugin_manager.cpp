@@ -6,6 +6,7 @@
 #include "agentxx/agent/resource_applier.h"
 #include "agentxx/event/event_stream.h"
 #include "agentxx/middlewares/planning.h" // PlanningMiddlewareHandle/State (planning 接口表落地)
+#include "agentxx/plugin/op_driver.h"
 #include "agentxx/plugin/plugin_common.h"
 #include "agentxx/util/async_offload.h"
 #include "agentxx/util/container_util.h"
@@ -46,6 +47,22 @@ using agentxx::agent::AgentContext;
 
 /// 插件互调 tool_call_id 生成 (仅用于标识, 可读性要求不高)
 static std::atomic<size_t> g_pluginCallSeq{0};
+
+/// 统一 error_out 回填 (caller 为空的宿主内直调路径回退进程堆分配)
+static void setErrOut(PluginInstance* caller, char** error_out, const std::string& msg) {
+    if (!error_out || *error_out) {
+        return;
+    }
+    if (caller && caller->host.vtable && caller->host.vtable->strdup) {
+        *error_out = caller->host.vtable->strdup(msg.c_str());
+        return;
+    }
+    auto* p = static_cast<char*>(::malloc(msg.size() + 1));
+    if (p) {
+        std::memcpy(p, msg.c_str(), msg.size() + 1);
+    }
+    *error_out = p;
+}
 
 } // namespace plugin
 } // namespace agentxx
@@ -143,10 +160,12 @@ void NativeLoader::addSearchPath(std::string_view dir) {
 // =====================================================================
 
 bool CapabilityRegistry::registerCapability(
-    std::string_view          name,
-    std::string_view          provider,
-    AgentxxCapabilityInvokeFn invoke,
-    void*                     ctx
+    std::string_view  name,
+    std::string_view  provider,
+    AgentxxCapStartFn start,
+    AgentxxOpPollFn   poll,
+    AgentxxOpCancelFn cancel,
+    void*             ctx
 ) {
     if (name.empty()) {
         return false;
@@ -161,7 +180,11 @@ bool CapabilityRegistry::registerCapability(
         );
         return false;
     }
-    util::insertHeterogeneous(caps_, std::string{name}, Entry{std::string{provider}, invoke, ctx});
+    util::insertHeterogeneous(
+        caps_,
+        std::string{name},
+        Entry{std::string{provider}, start, poll, cancel, ctx}
+    );
     XX_LOGI("CapabilityRegistry: `{}` registered by plugin `{}`", name, provider);
     return true;
 }
@@ -286,8 +309,8 @@ asio::awaitable<std::string> PluginTool::execute_async(const neograph::json& arg
     if (!inst->enabled) {
         throw std::runtime_error("plugin disabled");
     }
-    if (!spec_.execute) {
-        throw std::runtime_error("plugin tool has null execute callback");
+    if (!spec_.execute_start) {
+        throw std::runtime_error("plugin tool has null execute_start callback");
     }
 
     // 参数: toolcall 分发路径已注入 session_id/tool_call_id; call_tool 路径由调用方提供
@@ -302,64 +325,51 @@ asio::awaitable<std::string> PluginTool::execute_async(const neograph::json& arg
         cancelToken = agentxx::tools::getSessionCancelToken(agentCtx, arguments);
     }
 
-    auto spec = spec_; // 拷贝 (跨线程)
-    // 按值捕获 shared_ptr: 即使宿主等待方被取消/超时提前返回, 线程池中的
-    // C 回调执行期间插件实例仍被引用计数保活, 不会走到 dlclose (卸载安全)
-    // - inflight 计数在【线程池入口】递增 (而非协程帧): 超时取消销毁协程帧
-    //   不会提前释放计数, unloadAsync 会等到 C 回调真正返回后才 dlclose,
-    //   消除 "超时后卸载 → 执行已卸载代码段" 竞态 (见 plugins.md 11.2)
-    std::function<asio::awaitable<std::string>(std::atomic<bool>&)> run
-        = [spec,
-           inst      = std::move(inst),
-           argsJson  = std::move(argsJson),
-           sessionId = std::move(sessionId),
-           toolCallId
-           = std::move(toolCallId)](std::atomic<bool>& cancelFlag) -> asio::awaitable<std::string> {
-        (void)cancelFlag; // 插件回调为黑盒, 无法协作式中止; 等待方取消后线程自然释放
-        PluginInstance::InflightGuard guard(inst.get());
-        std::string                   result;
-        char*                         err = nullptr;
-        char*                         out = spec.execute(
+    // 统一异步操作模型: 经 op_driver 在【宿主 io 线程】驱动插件三件套
+    // (start/poll/cancel), 与内置工具协程同线程交错执行; 不再卸载线程池。
+    // - 按值捕获 spec 副本 + 参数字符串: 协程帧/收割协程持有, 不依赖调用方
+    // - inflight 保活在 awaitPluginOp 内装配 (放弃时转移给收割协程,
+    //   unloadAsync 等到操作真正终结才 dlclose —— 卸载安全语义与旧模型一致)
+    auto       ex       = co_await asio::this_coro::executor;
+    const auto spec     = spec_; // 拷贝 (跨协程帧存活)
+    auto       instKeep = inst;  ///< 引用计数保活副本 (协程帧持有)
+
+    plugin::OpDrive drive;
+    drive.start = [spec, instKeep, argsJson, sessionId, toolCallId](
+                      const AgentxxOpNotify* notify,
+                      char**                 err
+                  ) -> void* {
+        return spec.execute_start(
             spec.user_data,
             agentxx_plugin_sv(argsJson.data(), argsJson.size()),
             agentxx_plugin_sv(sessionId.data(), sessionId.size()),
             agentxx_plugin_sv(toolCallId.data(), toolCallId.size()),
-            &err
+            notify,
+            err
         );
-        if (err) {
-            std::string errStr = err;
-            inst->host.vtable->free(err);
-            throw std::runtime_error(
-                fmt::format("plugin tool error: {}", agentxx::util::autoTryConvertToUtf8(errStr))
-            );
+    };
+    drive.poll   = [spec, instKeep](void* op) -> int {
+        return spec.execute_poll ? spec.execute_poll(spec.user_data, op) : AGENTXX_OP_POLL_DONE;
+    };
+    drive.cancel = [spec, instKeep](void* op) {
+        if (spec.execute_cancel) {
+            spec.execute_cancel(spec.user_data, op);
         }
-        if (!out) {
-            throw std::runtime_error("plugin tool returned null");
-        }
-        result = out;
-        inst->host.vtable->free(out);
-        co_return result;
     };
 
-    // 协程 lambda 对象 (调用 exec() 才得到 awaitable)
-    auto exec = [&]() -> asio::awaitable<std::string> {
-        if (agentCtx && agentCtx->threadPool) {
-            co_return co_await agentxx::util::offloadCancellableAsync<std::string>(
-                *agentCtx->threadPool,
-                cancelToken,
-                run
-            );
-        }
-        // 无线程池 (异常环境): 直接执行 (会阻塞 io 线程, 仅兜底)
-        auto flag = std::make_shared<std::atomic<bool>>(false);
-        co_return co_await run(*flag);
+    auto awaitArgs = plugin::PluginOpAwaitArgs{
+        .inst         = std::move(inst),
+        .label        = name_,
+        .ex           = ex,
+        .cancelToken  = std::move(cancelToken),
+        .drive        = std::move(drive),
     };
 
-    if (spec.default_timeout_ms > 0) {
-        auto timeout = std::chrono::milliseconds{spec.default_timeout_ms};
+    if (spec_.default_timeout_ms > 0) {
+        auto timeout = std::chrono::milliseconds{spec_.default_timeout_ms};
         co_return co_await agentxx::util::asyncWithTimeout<std::string>(
-            [&exec]() -> asio::awaitable<std::string> {
-                co_return co_await std::move(exec)();
+            [a = std::move(awaitArgs)]() mutable -> asio::awaitable<std::string> {
+                co_return co_await plugin::awaitPluginOp(std::move(a));
             },
             timeout,
             []() -> std::string {
@@ -367,7 +377,7 @@ asio::awaitable<std::string> PluginTool::execute_async(const neograph::json& arg
             }
         );
     }
-    co_return co_await std::move(exec)();
+    co_return co_await plugin::awaitPluginOp(std::move(awaitArgs));
 }
 
 // =====================================================================
@@ -382,9 +392,9 @@ PluginMiddlewareHandle::PluginMiddlewareHandle(
     BaseMiddlewareHandle<agentxx::middleware::BaseMiddlewareState>(name, std::move(agentContext)),
     instance_(instance) {} // 存弱引用: 与实例互不持有, 消除循环引用
 
-void PluginMiddlewareHandle::setHook(AgentxxHookPoint point, AgentxxHookFn fn, void* user_data) {
-    if (point >= 0 && point < AGENTXX_HOOK_COUNT) {
-        hooks_[point] = HookEntry{fn, user_data, true};
+void PluginMiddlewareHandle::setHook(const AgentxxHookSpec& spec) {
+    if (spec.point >= 0 && spec.point < AGENTXX_HOOK_COUNT) {
+        hooks_[spec.point] = HookEntry{spec.hook_start, spec.hook_poll, spec.hook_cancel, spec.user_data, true};
     }
 }
 
@@ -397,7 +407,7 @@ void PluginMiddlewareHandle::clearHook(AgentxxHookPoint point) {
 asio::awaitable<void>
     PluginMiddlewareHandle::dispatch(AgentxxHookPoint point, const neograph::graph::NodeInput& in) {
     const auto& hook = hooks_[point];
-    if (!hook.set || !hook.fn) {
+    if (!hook.set || !hook.start) {
         co_return;
     }
     // 弱引用临时 lock: dispatch 期间实例保活 (实例已析构则跳过, 此时
@@ -406,9 +416,8 @@ asio::awaitable<void>
     if (!inst || !inst->enabled) {
         co_return;
     }
-    PluginInstance::InflightGuard guard(inst.get());
 
-    // 节点输入摘要 JSON (观测用途; out_json 一期预留)
+    // 节点输入摘要 JSON (观测用途)
     neograph::json summary = neograph::json::object();
     summary["sessionId"]   = in.ctx.thread_id;
     summary["point"]       = static_cast<int>(point);
@@ -426,36 +435,43 @@ asio::awaitable<void>
     } catch (const std::exception&) {
         summary["messages_count"] = -1;
     }
-    auto summaryStr = summary.dump();
+    std::string summaryStr = summary.dump();
 
-    char* out = nullptr;
-    char* err = nullptr;
-    int   rc  = hook.fn(
-        hook.ud,
-        point,
-        agentxx_plugin_sv(summaryStr.data(), summaryStr.size()),
-        &out,
-        &err
-    );
-    if (out) {
-        // 一期忽略 out_json (预留节点输入修改能力)
-        inst->host.vtable->free(out);
+    // 统一异步操作模型: 经 op_driver 在 io 线程驱动钩子三件套
+    // (快钩子内联完成 ≈ 旧同步语义; 慢钩子经 offload/自有 reactor 推进,
+    //  不再违反"快速返回"约定)。钩子无超时/会话取消联动。
+    auto ex = co_await asio::this_coro::executor;
+
+    plugin::OpDrive drive;
+    drive.start = [hook, point, instKeep = inst, text = std::move(summaryStr)](
+                      const AgentxxOpNotify* notify,
+                      char**                 err
+                  ) -> void* {
+        return hook.start(hook.ud, point, agentxx_plugin_sv(text.data(), text.size()), notify, err);
+    };
+    drive.poll   = [hook](void* op) -> int {
+        return hook.poll ? hook.poll(hook.ud, op) : AGENTXX_OP_POLL_DONE;
+    };
+    drive.cancel = [hook](void* op) {
+        if (hook.cancel) {
+            hook.cancel(hook.ud, op);
+        }
+    };
+
+    try {
+        co_await plugin::awaitPluginOp(plugin::PluginOpAwaitArgs{
+            .inst        = inst,
+            .label       = fmt::format("hook#{}", static_cast<int>(point)),
+            .ex          = ex,
+            .cancelToken = nullptr,
+            .drive       = std::move(drive),
+        });
+    } catch (const std::exception& e) {
+        XX_LOGW("Plugin `{}` hook point={} failed: {}", inst->name, static_cast<int>(point), e.what());
+    } catch (...) {
+        XX_LOGW("Plugin `{}` hook point={} unknown failure", inst->name, static_cast<int>(point));
     }
-    if (err) {
-        std::string errStr = err;
-        inst->host.vtable->free(err);
-        XX_LOGW("Plugin hook `{}` point={} error: {}", inst->name, static_cast<int>(point), errStr);
-    }
-    if (rc != 0) {
-        XX_LOGW("Plugin hook `{}` point={} returned {}", inst->name, static_cast<int>(point), rc);
-    }
-    co_return;
 }
-
-#define XX_PLUGIN_HOOK_IMPL(name, point)                                                          \
-    asio::awaitable<void> PluginMiddlewareHandle::name(neograph::graph::NodeInput& in) override { \
-        co_await dispatch(point, in);                                                             \
-    }
 
 asio::awaitable<void> PluginMiddlewareHandle::onAgentcallStartFunc(neograph::graph::NodeInput& in) {
     co_await dispatch(AGENTXX_HOOK_AGENT_START, in);
@@ -634,42 +650,35 @@ static int xx_unregister_tool(const AgentxxHost* host, AgentxxPluginStringView n
     XX_PLUGIN_CATCH_END(-1)
 }
 
-static int xx_register_hook(
-    const AgentxxHost* host,
-    AgentxxHookPoint   point,
-    AgentxxHookFn      fn,
-    void*              user_data
-) {
+static int xx_register_hook(const AgentxxHost* host, const AgentxxHookSpec* spec) {
     XX_PLUGIN_CATCH_BEGIN
     auto mgr  = mgrOf(host);
     auto inst = instOf(host);
-    if (!mgr || !inst) {
+    if (!mgr || !inst || !spec || spec->point < 0 || spec->point >= AGENTXX_HOOK_COUNT
+        || !spec->hook_start) {
         return -1;
     }
-    auto mgrPtr  = mgr;
-    auto instPtr = inst;
-    return ioCallSync<int>(mgrPtr, [mgrPtr, instPtr, point, fn, user_data]() {
-        return mgrPtr->registerHook(instPtr, point, fn, user_data);
+    // io 线程约束操作; spec 内容在 registerHook 内拷贝
+    auto            mgrPtr   = mgr;
+    auto            instPtr  = inst;
+    AgentxxHookSpec specCopy = *spec;
+    return ioCallSync<int>(mgrPtr, [mgrPtr, instPtr, specCopy]() {
+        return mgrPtr->registerHook(instPtr, &specCopy);
     });
     XX_PLUGIN_CATCH_END(-1)
 }
 
-static int xx_unregister_hook(
-    const AgentxxHost* host,
-    AgentxxHookPoint   point,
-    AgentxxHookFn      fn,
-    void*              user_data
-) {
+static int xx_unregister_hook(const AgentxxHost* host, AgentxxHookPoint point) {
     XX_PLUGIN_CATCH_BEGIN
     auto mgr  = mgrOf(host);
     auto inst = instOf(host);
-    if (!mgr || !inst) {
+    if (!mgr || !inst || point < 0 || point >= AGENTXX_HOOK_COUNT) {
         return -1;
     }
-    auto mgrPtr  = mgr;
-    auto instPtr = inst;
-    return ioCallSync<int>(mgrPtr, [mgrPtr, instPtr, point, fn, user_data]() {
-        return mgrPtr->unregisterHook(instPtr, point, fn, user_data);
+    auto        mgrPtr  = mgr;
+    auto        instPtr = inst;
+    return ioCallSync<int>(mgrPtr, [mgrPtr, instPtr, point]() {
+        return mgrPtr->unregisterHook(instPtr, point);
     });
     XX_PLUGIN_CATCH_END(-1)
 }
@@ -786,26 +795,29 @@ static int xx_has_capability(const AgentxxHost* host, AgentxxPluginStringView ca
 }
 
 static int xx_register_capability_ex(
-    const AgentxxHost*        host,
-    AgentxxPluginStringView   capability,
-    AgentxxCapabilityInvokeFn invoke,
-    void*                     ctx
+    const AgentxxHost*      host,
+    AgentxxPluginStringView capability,
+    AgentxxCapStartFn       start,
+    AgentxxOpPollFn         poll,
+    AgentxxOpCancelFn       cancel,
+    void*                   ctx
 ) {
     XX_PLUGIN_CATCH_BEGIN
     auto mgr  = mgrOf(host);
     auto inst = instOf(host);
-    if (!mgr || !inst || agentxx_plugin_sv_empty(capability)) {
+    if (!mgr || !inst || agentxx_plugin_sv_empty(capability) || !start) {
         return -1;
     }
     auto        mgrPtr  = mgr;
     auto        instPtr = inst;
     std::string cap{capability.data, capability.size};
-    return ioCallSync<int>(mgrPtr, [mgrPtr, instPtr, cap, invoke, ctx]() {
-        return mgrPtr->registerCapabilityEx(instPtr, cap.c_str(), invoke, ctx);
+    return ioCallSync<int>(mgrPtr, [mgrPtr, instPtr, cap, start, poll, cancel, ctx]() {
+        return mgrPtr->registerCapabilityEx(instPtr, cap.c_str(), start, poll, cancel, ctx);
     });
     XX_PLUGIN_CATCH_END(-1)
 }
 
+/// 能力调用阻塞便捷版 (内部轮询 invokeCapabilityAsync; io 线程 fail-fast)
 static char* xx_invoke_capability(
     const AgentxxHost*      host,
     AgentxxPluginStringView capability,
@@ -825,12 +837,69 @@ static char* xx_invoke_capability(
     if (args.empty()) {
         args = "{}";
     }
-    // 查表在 io 线程 (invokeCapability 内部), 提供者回调在调用方线程执行
     return mgr->invokeCapability(inst, cap.c_str(), m.c_str(), args.c_str(), error_out);
     XX_PLUGIN_CATCH_END(nullptr)
 }
 
+/// 能力调用异步原语 (目标提供者三件套由宿主在 io 线程驱动; 句柄任意线程轮询)
+static AgentxxHostOp* xx_invoke_capability_async(
+    const AgentxxHost*      host,
+    AgentxxPluginStringView capability,
+    AgentxxPluginStringView method,
+    AgentxxPluginStringView args_json,
+    char**                  error_out
+) {
+    XX_PLUGIN_CATCH_BEGIN
+    auto mgr  = mgrOf(host);
+    auto inst = instOf(host);
+    if (!mgr || !inst || agentxx_plugin_sv_empty(capability) || agentxx_plugin_sv_empty(method)) {
+        return nullptr;
+    }
+    std::string cap{capability.data, capability.size};
+    std::string m{method.data, method.size};
+    std::string args{args_json.data ? args_json.data : "", args_json.size};
+    if (args.empty()) {
+        args = "{}";
+    }
+    return mgr->invokeCapabilityAsync(inst, cap.c_str(), m.c_str(), args.c_str(), error_out);
+    XX_PLUGIN_CATCH_END(nullptr)
+}
+
+/// 工具互调阻塞便捷版 (内部轮询 call_tool_async; io 线程 fail-fast)
 static char* xx_call_tool(
+    const AgentxxHost*      host,
+    AgentxxPluginStringView name,
+    AgentxxPluginStringView args_json,
+    AgentxxPluginStringView session_id,
+    char**                  error_out
+) {
+    auto mgr  = mgrOf(host);
+    auto inst = instOf(host);
+    if (!mgr || !inst) {
+        return nullptr;
+    }
+    std::string toolName{name.data ? name.data : "", name.size};
+    std::string args{args_json.data ? args_json.data : "", args_json.size};
+    std::string tid{session_id.data ? session_id.data : "", session_id.size};
+    try {
+        return mgr->callToolBlocking(inst, toolName.c_str(), args.c_str(), tid.c_str(), error_out);
+    } catch (const std::exception& e) {
+        if (error_out && !*error_out) {
+            *error_out = inst->host.vtable->strdup(
+                fmt::format("plugin call_tool: {}", e.what()).c_str()
+            );
+        }
+        return nullptr;
+    } catch (...) {
+        if (error_out && !*error_out) {
+            *error_out = inst->host.vtable->strdup("plugin call_tool: unknown exception");
+        }
+        return nullptr;
+    }
+}
+
+/// 工具互调异步原语 (目标插件三件套由宿主在 io 线程驱动; 句柄任意线程轮询)
+static AgentxxHostOp* xx_call_tool_async(
     const AgentxxHost*      host,
     AgentxxPluginStringView name,
     AgentxxPluginStringView args_json,
@@ -851,67 +920,12 @@ static char* xx_call_tool(
     std::string args{args_json.data ? args_json.data : "", args_json.size};
     std::string tid{session_id.data ? session_id.data : "", session_id.size};
     try {
-        // 1. 查表在 io 线程 (短临界区; 查表/执行分离, 见 plugins.md 11.5.2):
-        //    shared_ptr 保活目标插件代码段 —— 执行期间即使目标插件被卸载,
-        //    引用计数阻止 ~PluginInstance → dlclose, 无悬垂执行
-        std::shared_ptr<agentxx::tools::XXToolBase> tool;
-        bool found = ioCallSync<bool>(mgr, [mgr, &tool, &toolName]() {
-            tool = mgr->registry()->find(toolName);
-            return tool != nullptr;
-        });
-        if (!found) {
-            setErr(fmt::format("plugin call_tool: tool `{}` not found", toolName));
-            return nullptr;
-        }
-        auto pluginTool = std::dynamic_pointer_cast<PluginTool>(tool);
-        if (!pluginTool) {
-            setErr(fmt::format("plugin call_tool: tool `{}` is not a plugin tool", toolName));
-            return nullptr;
-        }
-        // 2. 目标工具 execute 在【调用方线程】执行 (线程池/JS 线程内安全,
-        //    不阻塞 io 线程; io 线程内调用会阻塞 io 线程, 插件应避免)
-        PluginInstance::InflightGuard guard(inst);
-        neograph::json                parsed = neograph::json::object();
-        if (!args.empty()) {
-            try {
-                auto j = neograph::json::parse(args);
-                if (j.is_object()) {
-                    parsed = std::move(j);
-                }
-            } catch (const std::exception& e) {
-                setErr(fmt::format("plugin call_tool: invalid args_json: {}", e.what()));
-                return nullptr;
-            }
-        }
-        parsed["sessionId"]    = tid;
-        parsed["tool_call_id"] = fmt::format("plugin_call_{}", ++g_pluginCallSeq);
-
-        const auto& spec    = pluginTool->spec();
-        char*       err     = nullptr;
-        std::string argsStr = parsed.dump();
-        char*       out     = spec.execute(
-            spec.user_data,
-            agentxx_plugin_sv(argsStr.data(), argsStr.size()),
-            agentxx_plugin_sv(tid.data(), tid.size()),
-            agentxx_plugin_sv("", 0),
-            &err
-        );
-        if (err) {
-            std::string errStr = err;
-            inst->host.vtable->free(err);
-            setErr(agentxx::util::autoTryConvertToUtf8(errStr));
-            return nullptr;
-        }
-        if (!out) {
-            setErr("plugin call_tool: null result");
-            return nullptr;
-        }
-        return out; // 交由调用方 free
+        return mgr->callToolAsync(inst, toolName.c_str(), args.c_str(), tid.c_str(), error_out);
     } catch (const std::exception& e) {
-        setErr(fmt::format("plugin call_tool: {}", e.what()));
+        setErr(fmt::format("plugin call_tool_async: {}", e.what()));
         return nullptr;
     } catch (...) {
-        setErr("plugin call_tool: unknown exception");
+        setErr("plugin call_tool_async: unknown exception");
         return nullptr;
     }
 }
@@ -1328,7 +1342,8 @@ static void xx_cancel_timer(const AgentxxHost* host, void* timer) {
 /// 阻塞池卸载执行 (任意线程可调用; work/done 期间插件代码段保活)
 static void xx_offload(
     const AgentxxHost* host,
-    void* (*work)(void* ud, char** error_out),
+    volatile int*      cancel_flag,
+    void* (*work)(void* ud, volatile int* cancel_flag, char** error_out),
     void (*done)(void* ud, void* result, char* error),
     void* ud
 ) {
@@ -1338,7 +1353,7 @@ static void xx_offload(
     if (!mgr || !inst || !work) {
         return;
     }
-    mgr->offload(inst, work, done, ud);
+    mgr->offload(inst, cancel_flag, work, done, ud);
     XX_PLUGIN_CATCH_END_VOID()
 }
 
@@ -1470,7 +1485,8 @@ static const AgentxxToolsIface g_ifaceTools = {
     /* version */ AGENTXX_IFACE_AGENT_TOOLS_VERSION,
     /* register_tool */ xx_register_tool,
     /* unregister_tool */ xx_unregister_tool,
-    /* call_tool */ xx_call_tool,
+    /* call_tool_async */ xx_call_tool_async,
+    /* call_tool (阻塞便捷版; io 线程 fail-fast) */ xx_call_tool,
 };
 
 static const AgentxxHooksIface g_ifaceHooks = {
@@ -1492,7 +1508,8 @@ static const AgentxxCapabilitiesIface g_ifaceCapabilities = {
     /* register_capability_ex */ xx_register_capability_ex,
     /* unregister_capability */ xx_unregister_capability,
     /* has_capability */ xx_has_capability,
-    /* invoke_capability */ xx_invoke_capability,
+    /* invoke_capability_async */ xx_invoke_capability_async,
+    /* invoke_capability (阻塞便捷版; io 线程 fail-fast) */ xx_invoke_capability,
 };
 
 static const AgentxxSchedulerIface g_ifaceScheduler = {
@@ -1501,7 +1518,7 @@ static const AgentxxSchedulerIface g_ifaceScheduler = {
     /* post_to_io */ xx_post_to_io,
     /* add_timer */ xx_add_timer,
     /* cancel_timer */ xx_cancel_timer,
-    /* offload */ xx_offload,
+    /* offload (调用方持有 cancel_flag) */ xx_offload,
 };
 
 static const AgentxxSessionIface g_ifaceSession = {
@@ -1892,13 +1909,9 @@ void PluginManager::applyDeclaredResources(
 
 // ==================== 钩子注册/注销 ====================
 
-int PluginManager::registerHook(
-    PluginInstance*  inst,
-    AgentxxHookPoint point,
-    AgentxxHookFn    fn,
-    void*            ud
-) {
-    if (!inst || !fn || point < 0 || point >= AGENTXX_HOOK_COUNT) {
+int PluginManager::registerHook(PluginInstance* inst, const AgentxxHookSpec* spec) {
+    if (!inst || !spec || spec->point < 0 || spec->point >= AGENTXX_HOOK_COUNT
+        || !spec->hook_start) {
         return -1;
     }
     auto ctx = agentContext_.lock();
@@ -1919,29 +1932,30 @@ int PluginManager::registerHook(
         inst->middleware->disabled = !inst->enabled;
         ctx->middlewareHandleContext->handles.push_back(inst->middleware);
     }
-    inst->middleware->setHook(point, fn, ud);
+    inst->middleware->setHook(*spec);
     // 记录注册信息 (enable 重建中间件时恢复; 同点重复注册覆盖旧记录)
     inst->hookRegistrations.erase(
         std::remove_if(
             inst->hookRegistrations.begin(),
             inst->hookRegistrations.end(),
-            [point](const PluginInstance::HookRegistration& h) {
+            [point = spec->point](const PluginInstance::HookRegistration& h) {
                 return h.point == point;
             }
         ),
         inst->hookRegistrations.end()
     );
-    inst->hookRegistrations.push_back(PluginInstance::HookRegistration{point, fn, ud});
-    XX_LOGI("Plugin `{}` registered hook point={}", inst->name, static_cast<int>(point));
+    inst->hookRegistrations.push_back(PluginInstance::HookRegistration{
+        spec->point,
+        spec->hook_start,
+        spec->hook_poll,
+        spec->hook_cancel,
+        spec->user_data
+    });
+    XX_LOGI("Plugin `{}` registered hook point={}", inst->name, static_cast<int>(spec->point));
     return 0;
 }
 
-int PluginManager::unregisterHook(
-    PluginInstance*  inst,
-    AgentxxHookPoint point,
-    AgentxxHookFn    fn,
-    void*            ud
-) {
+int PluginManager::unregisterHook(PluginInstance* inst, AgentxxHookPoint point) {
     if (!inst || point < 0 || point >= AGENTXX_HOOK_COUNT) {
         return -1;
     }
@@ -1952,8 +1966,8 @@ int PluginManager::unregisterHook(
         std::remove_if(
             inst->hookRegistrations.begin(),
             inst->hookRegistrations.end(),
-            [point, fn, ud](const PluginInstance::HookRegistration& h) {
-                return h.point == point && (fn == nullptr || (h.fn == fn && h.ud == ud));
+            [point](const PluginInstance::HookRegistration& h) {
+                return h.point == point;
             }
         ),
         inst->hookRegistrations.end()
@@ -2098,18 +2112,20 @@ int PluginManager::hasCapability(const char* capability) const {
 }
 
 int PluginManager::registerCapabilityEx(
-    PluginInstance*           inst,
-    const char*               capability,
-    AgentxxCapabilityInvokeFn invoke,
-    void*                     ctx
+    PluginInstance*   inst,
+    const char*       capability,
+    AgentxxCapStartFn start,
+    AgentxxOpPollFn   poll,
+    AgentxxOpCancelFn cancel,
+    void*             ctx
 ) {
-    if (!inst || !capability || !*capability || !invoke) {
+    if (!inst || !capability || !*capability || !start) {
         return -1;
     }
-    if (!capabilities_->registerCapability(capability, inst->name, invoke, ctx)) {
+    if (!capabilities_->registerCapability(capability, inst->name, start, poll, cancel, ctx)) {
         return -1;
     }
-    // 记录完整注册信息 (enable 恢复时保留方法回调)
+    // 记录完整注册信息 (enable 恢复时保留方法处理器)
     inst->capabilityRegistrations.erase(
         std::remove_if(
             inst->capabilityRegistrations.begin(),
@@ -2121,9 +2137,242 @@ int PluginManager::registerCapabilityEx(
         inst->capabilityRegistrations.end()
     );
     inst->capabilityRegistrations.push_back(
-        PluginInstance::CapabilityRegistration{capability, invoke, ctx}
+        PluginInstance::CapabilityRegistration{capability, start, poll, cancel, ctx}
     );
     return 0;
+}
+
+/// 装配能力方法调用的 OpDrive (查表拷贝 + 三件套绑定; method/args 值捕获)
+/// - caller 弱引用保活: start 时 lock 取宿主句柄 (脚本插件壳经 caller_host
+///   注册其脚本内工具 —— 契约必须透传); 已卸载则传 NULL
+static bool buildCapabilityDrive(
+    PluginManager&          mgr,
+    PluginInstance*         caller,
+    const char*             capability,
+    const char*             method,
+    const char*             args_json,
+    std::string&            providerName,
+    plugin::OpDrive&        drive,
+    std::string&            err
+) {
+    CapabilityRegistry::Entry entry;
+    bool                      found = false;
+    if (mgr.isIoThread()) {
+        if (const auto* e = mgr.capabilities()->get(capability)) {
+            entry = *e;
+            found = true;
+        }
+    } else {
+        found = ioCallSync<bool>(&mgr, [&mgr, capability, &entry]() {
+            const auto* e = mgr.capabilities()->get(capability);
+            if (!e) {
+                return false;
+            }
+            entry = *e;
+            return true;
+        });
+    }
+    if (!found) {
+        err = fmt::format("invoke_capability: capability `{}` not registered", capability);
+        return false;
+    }
+    if (!entry.start) {
+        err = fmt::format("invoke_capability: capability `{}` has no method handler", capability);
+        return false;
+    }
+    providerName   = entry.provider;
+    auto capStr    = std::string{method};
+    auto argStr    = (args_json && *args_json) ? std::string{args_json} : std::string{"{}"};
+    auto weakCaller = caller ? caller->self : std::weak_ptr<PluginInstance>{};
+    drive.start
+        = [entry, capStr, argStr, weakCaller](const AgentxxOpNotify* notify, char** e) -> void* {
+        const AgentxxHost* callerHost = nullptr;
+        if (auto c = weakCaller.lock()) {
+            callerHost = &c->host;
+        }
+        return entry.start(
+            entry.ctx,
+            callerHost,
+            agentxx_plugin_sv_cstr(capStr.c_str()),
+            agentxx_plugin_sv_cstr(argStr.c_str()),
+            notify,
+            e
+        );
+    };
+    drive.poll   = [entry](void* op) -> int {
+        return entry.poll ? entry.poll(entry.ctx, op) : AGENTXX_OP_POLL_DONE;
+    };
+    drive.cancel = [entry](void* op) {
+        if (entry.cancel) {
+            entry.cancel(entry.ctx, op);
+        }
+    };
+    return true;
+}
+
+AgentxxHostOp* PluginManager::callToolAsync(
+    PluginInstance* caller,
+    const char*     name,
+    const char*     args_json,
+    const char*     thread_id,
+    char**          error_out
+) {
+    auto setErr = [&](const std::string& msg) {
+        setErrOut(caller, error_out, msg);
+    };
+    (void)caller; ///< 目标插件由查表 shared_ptr + 驱动 inflight 保活
+    if (!ioExecutor_) {
+        setErr("call_tool_async: io executor not ready");
+        return nullptr;
+    }
+    // 1. 查表 (io 线程短临界区): shared_ptr 保活目标插件代码段
+    std::string toolName = name ? name : "";
+    std::shared_ptr<agentxx::tools::XXToolBase> tool;
+    bool found = false;
+    if (isIoThread()) {
+        tool  = registry_->find(toolName);
+        found = tool != nullptr;
+    } else {
+        found = ioCallSync<bool>(this, [this, &toolName, &tool]() {
+            tool = registry_->find(toolName);
+            return tool != nullptr;
+        });
+    }
+    if (!found) {
+        setErr(fmt::format("plugin call_tool: tool `{}` not found", toolName));
+        return nullptr;
+    }
+    auto pluginTool = std::dynamic_pointer_cast<PluginTool>(tool);
+    if (!pluginTool) {
+        setErr(fmt::format("plugin call_tool: tool `{}` is not a plugin tool", toolName));
+        return nullptr;
+    }
+    auto targetInst = pluginTool->instance();
+    if (!targetInst || !targetInst->enabled) {
+        setErr(fmt::format("plugin call_tool: tool `{}` plugin disabled/released", toolName));
+        return nullptr;
+    }
+
+    // 2. 装配目标工具三件套驱动 (参数注入 sessionId/tool_call_id 与主链路一致)
+    const auto& spec   = pluginTool->spec();
+    neograph::json parsed = neograph::json::object();
+    if (args_json && *args_json) {
+        try {
+            auto j = neograph::json::parse(args_json);
+            if (j.is_object()) {
+                parsed = std::move(j);
+            }
+        } catch (const std::exception& e) {
+            setErr(fmt::format("plugin call_tool: invalid args_json: {}", e.what()));
+            return nullptr;
+        }
+    }
+    parsed["sessionId"]    = thread_id ? thread_id : "";
+    parsed["tool_call_id"] = fmt::format("plugin_call_{}", ++g_pluginCallSeq);
+    auto argsStr           = parsed.dump();
+
+    plugin::OpDrive drive;
+    drive.start = [spec, targetInst, argsStr,
+                   tid = std::string{thread_id ? thread_id : ""}](
+                      const AgentxxOpNotify* notify,
+                      char**                 err
+                  ) -> void* {
+        return spec.execute_start(
+            spec.user_data,
+            agentxx_plugin_sv(argsStr.data(), argsStr.size()),
+            agentxx_plugin_sv(tid.data(), tid.size()),
+            agentxx_plugin_sv("", 0),
+            notify,
+            err
+        );
+    };
+    drive.poll   = [spec, targetInst](void* op) -> int {
+        return spec.execute_poll ? spec.execute_poll(spec.user_data, op) : AGENTXX_OP_POLL_DONE;
+    };
+    drive.cancel = [spec, targetInst](void* op) {
+        if (spec.execute_cancel) {
+            spec.execute_cancel(spec.user_data, op);
+        }
+    };
+
+    // 3. 后台收割式驱动 (io 线程推进; 目标插件 inflight 由驱动协程装配)
+    auto shared   = std::make_shared<HostOpShared>(ioExecutor_);
+    shared->drive = std::move(drive);
+    shared->name  = targetInst->name;
+    shared->label = fmt::format("tool:{}", toolName);
+    // 目标插件 inflight 保活: makeHostOp 的 guard 参数由调用方装配 —— 但
+    // "孤儿化早于启动不启动"路径需要 guard 可选释放, 故此处直接传入
+    auto guard    = std::make_shared<PluginInstance::InflightGuard>(targetInst.get());
+    return makeHostOp(ioExecutor_, std::move(shared), std::move(guard));
+}
+
+char* PluginManager::callToolBlocking(
+    PluginInstance* caller,
+    const char*     name,
+    const char*     args_json,
+    const char*     thread_id,
+    char**          error_out
+) {
+    auto setErr = [&](const std::string& msg) {
+        setErrOut(caller, error_out, msg);
+    };
+    // 阻塞便捷版禁止在宿主 io 线程调用 (内部驱动运行于 io 线程 → 阻塞即死锁)
+    if (isIoThread()) {
+        setErr("call_tool: blocked on host io thread (deadlock); use call_tool_async "
+               "or call from offload/own thread");
+        return nullptr;
+    }
+    auto* op = callToolAsync(caller, name, args_json, thread_id, error_out);
+    if (!op) {
+        return nullptr;
+    }
+    while (op->poll(op) != AGENTXX_OP_POLL_DONE) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    int   status  = AGENTXX_OP_FAILED;
+    char* payload = nullptr;
+    op->take(op, &status, &payload);
+    op->free(op);
+    if (status != AGENTXX_OP_OK || !payload) {
+        if (payload) {
+            setErr(agentxx::util::autoTryConvertToUtf8(payload));
+            ::free(payload);
+        } else {
+            setErr(fmt::format("plugin call_tool: `{}` failed", name ? name : ""));
+        }
+        return nullptr;
+    }
+    return payload; ///< 所有权移交调用方 (host->alloc)
+}
+
+AgentxxHostOp* PluginManager::invokeCapabilityAsync(
+    PluginInstance* caller,
+    const char*     capability,
+    const char*     method,
+    const char*     args_json,
+    char**          error_out
+) {
+    auto setErr = [&](const std::string& msg) {
+        setErrOut(caller, error_out, msg);
+    };
+    (void)caller; // 目标驱动与调用方实例解耦 (目标插件由宿主引用计数保活)
+    plugin::OpDrive drive;
+    std::string     provider;
+    std::string     err;
+    if (!buildCapabilityDrive(*this, caller, capability, method, args_json, provider, drive, err)) {
+        setErr(err);
+        return nullptr;
+    }
+    if (!ioExecutor_) {
+        setErr("invoke_capability_async: io executor not ready");
+        return nullptr;
+    }
+    // 后台收割式驱动: 结果写入线程安全 sink, 句柄任意线程轮询
+    auto shared           = std::make_shared<HostOpShared>(ioExecutor_);
+    shared->drive         = std::move(drive);
+    shared->name          = provider;
+    shared->label         = fmt::format("cap:{}#{}", capability ? capability : "", method ? method : "");
+    return makeHostOp(ioExecutor_, std::move(shared), nullptr);
 }
 
 char* PluginManager::invokeCapability(
@@ -2134,46 +2383,37 @@ char* PluginManager::invokeCapability(
     char**          error_out
 ) {
     auto setErr = [&](const std::string& msg) {
-        if (error_out && caller) {
-            *error_out = caller->host.vtable->strdup(msg.c_str());
-        }
+        setErrOut(caller, error_out, msg);
     };
-    // 1. io 线程查表并拷贝 (短临界区)
-    CapabilityRegistry::Entry entry;
-    bool                      found = false;
+    // 阻塞便捷版禁止在宿主 io 线程调用: 内部驱动协程运行于 io 线程,
+    // 阻塞等待会饿死驱动 → 死锁 (fail-fast 暴露误用)
     if (isIoThread()) {
-        if (const auto* e = capabilities_->get(capability)) {
-            entry = *e;
-            found = true;
+        setErr("invoke_capability: blocked on host io thread (deadlock); use "
+               "invoke_capability_async or call from offload/own thread");
+        return nullptr;
+    }
+    auto* op = invokeCapabilityAsync(caller, capability, method, args_json, error_out);
+    if (!op) {
+        return nullptr;
+    }
+    // 自旋轮询收尸 (调用方线程允许阻塞; 建议 2ms 间隔)
+    while (op->poll(op) != AGENTXX_OP_POLL_DONE) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    int  status  = AGENTXX_OP_FAILED;
+    char* payload = nullptr;
+    op->take(op, &status, &payload);
+    op->free(op);
+    if (status != AGENTXX_OP_OK || !payload) {
+        if (payload) {
+            setErr(agentxx::util::autoTryConvertToUtf8(payload));
+            ::free(payload);
+        } else {
+            setErr(fmt::format("invoke_capability: `{}`.{} failed", capability, method));
         }
-    } else {
-        found = ioCallSync<bool>(this, [this, capability, &entry]() {
-            const auto* e = capabilities_->get(capability);
-            if (!e) {
-                return false;
-            }
-            entry = *e;
-            return true;
-        });
-    }
-    if (!found) {
-        setErr(fmt::format("invoke_capability: capability `{}` not registered", capability));
         return nullptr;
     }
-    if (!entry.invoke) {
-        setErr(fmt::format("invoke_capability: capability `{}` has no method handler", capability));
-        return nullptr;
-    }
-    // 2. 提供者回调在【调用方线程】执行 (关键: 引擎的 load 会阻塞等待其引擎
-    //    线程, 引擎线程内脚本注册回调又要回 io 线程 —— 若回调在 io 线程执行
-    //    则 io↔引擎互等死锁; 调用方线程执行则 io 线程保持空闲可服务注册回调)
-    return entry.invoke(
-        entry.ctx,
-        caller ? &caller->host : nullptr,
-        agentxx_plugin_sv_cstr(method),
-        agentxx_plugin_sv_cstr(args_json),
-        error_out
-    );
+    return payload; ///< 所有权移交调用方 (host->alloc)
 }
 
 // ==================== 会话/上下文访问 ====================
@@ -2304,12 +2544,18 @@ void PluginManager::cancelTimer(PluginInstance* inst, void* timer) {
 
 void PluginManager::offload(
     PluginInstance* inst,
-    void* (*work)(void* ud, char** error_out),
+    volatile int*   cancel_flag,
+    void* (*work)(void* ud, volatile int* cancel_flag, char** error_out),
     void (*done)(void* ud, void* result, char* error),
     void* ud
 ) {
     if (!inst || !work) {
         return;
+    }
+    // 调用方未关心取消时兜底静态标志 (恒 0; 宿主从不置位)
+    static volatile int kNoCancelFlag = 0;
+    if (!cancel_flag) {
+        cancel_flag = &kNoCancelFlag;
     }
     auto ctx = agentContext_.lock();
     if (!ctx || !ctx->threadPool) {
@@ -2317,15 +2563,15 @@ void PluginManager::offload(
         return;
     }
     // inflight 计数贯穿 work+done: 卸载流程等计数归零后才调 unload 回调,
-    // 保证 work/done 执行期间插件代码段存活 (与 PluginTool 线程池路径一致)
+    // 保证 work/done 执行期间插件代码段存活
     // - fetch_add 一次 (offload 入口), fetch_sub 一次 (done 执行完毕后),
     //   done 执行期间计数保持 >0 保活代码段; 不得再用 RAII guard (重复递减)
     inst->inflight.fetch_add(1, std::memory_order_acq_rel);
     auto ex = ioExecutor_;
-    asio::post(*ctx->threadPool, [inst, work, done, ud, ex]() {
-        // ---- 阻塞池线程: 执行 work ----
+    asio::post(*ctx->threadPool, [inst, cancel_flag, work, done, ud, ex]() {
+        // ---- 阻塞池线程: 执行 work (cancel_flag 为调用方持有) ----
         char* error  = nullptr;
-        void* result = work(ud, &error);
+        void* result = work(ud, cancel_flag, &error);
         // ---- 投递回 io 线程执行 done (快速返回约定) ----
         asio::post(ex, [inst, done, ud, result, error]() {
             if (done) {
@@ -2995,7 +3241,13 @@ void PluginManager::enableImpl(std::string_view name, bool userInitiated) {
                 );
                 mw->disabled = false;
                 for (const auto& h : inst->hookRegistrations) {
-                    mw->setHook(h.point, h.fn, h.ud);
+                    mw->setHook(AgentxxHookSpec{
+                        h.point,
+                        h.start,
+                        h.poll,
+                        h.cancel,
+                        h.ud,
+                    });
                 }
                 ctx->middlewareHandleContext->handles.push_back(mw);
                 inst->middleware = std::move(mw);
@@ -3012,9 +3264,9 @@ void PluginManager::enableImpl(std::string_view name, bool userInitiated) {
             );
         }
     }
-    // 能力重新声明 (用保存的完整注册信息, 保留方法回调)
+    // 能力重新声明 (用保存的完整注册信息, 保留方法处理器)
     for (const auto& c : inst->capabilityRegistrations) {
-        capabilities_->registerCapability(c.name, inst->name, c.invoke, c.ctx);
+        capabilities_->registerCapability(c.name, inst->name, c.start, c.poll, c.cancel, c.ctx);
     }
     // 会话资源 (v8): 按保留的所有权记录恢复生效的 Skill/Memory/MCP
     // - MCP 重新连接; 与主配置 yaml 的新冲突项跳过并警告

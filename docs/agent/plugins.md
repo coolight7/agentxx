@@ -66,7 +66,8 @@
 - **中间件 disabled 位**: `BaseMiddlewareHandleInterface::disabled` (普通中间件恒 false); `WrapHandleBaseNode` start/end 循环均跳过 disabled 项。
 - **Tool 接口被冻结**: `neograph/tool.h` 注释 "the frozen Tool vtable"; `XXToolBase` 是薄封装 (加 autoSummaryOutput / canDelayLoad / maxRetry)。
 - **无锁单线程模型**: Session 可变状态 `assertIoThread()` 强制仅 io 线程读写; 插件注册/注销**必须 post 到 io 线程串行执行** (vtable 内部经 `ioCallSync` 处理, 插件无感)。
-- **现有线程卸载基建**: `blockingPool` + `offloadAsync` / `offloadCancellableAsync` (带 CancelToken watcher) 复用为插件同步 C 回调的异步执行通道; 超时经 `asyncWithTimeout`。
+- **统一异步操作模型 (2026-08 重构)**: 工具/钩子/能力方法一律为 start/poll/cancel 异步三件套, 宿主 op_driver 在 io 线程驱动并与内置工具协程交错执行; 同步插件经纯 C 垫片零成本迁移 (见 4.2.2)。
+- **现有线程卸载基建**: `blockingPool` + `offload` (调用方持有 cancel_flag) 保留为慢同步操作的官方逃生通道; 超时经 `asyncWithTimeout`。
 
 ### 2.3 热插拔可行性矩阵
 
@@ -226,39 +227,46 @@ JS 桥对应 API (脚本插件内): `agentxx.addSkillDir(path)` /
 
 示例插件: `agent/plugins/example_resources/` (双通道示范)。
 
-**工具定义**:
+**工具定义** (统一异步操作模型; 见 4.2.2):
 ```c
 typedef struct AgentxxToolSpec {
     AgentxxPluginStringView name;            ///< 须全局唯一 (与内置/MCP 工具同名注册失败)
     AgentxxPluginStringView description;
     AgentxxPluginStringView parameters_json; ///< JSON Schema 字符串
-    char* (*execute)(void* user_data,         ///< 同步执行回调 (宿主线程池线程)
-                     AgentxxPluginStringView args_json,
-                     AgentxxPluginStringView thread_id,
-                     AgentxxPluginStringView tool_call_id,
-                     char** error_out);       ///< 失败返回 NULL 并 error_out (host->alloc)
+    /// 异步三件套 (start/poll/cancel; 宿主 io 线程驱动, 与内置工具协程交错):
+    void* (*execute_start)(void* user_data,
+                           AgentxxPluginStringView args_json,
+                           AgentxxPluginStringView thread_id,
+                           AgentxxPluginStringView tool_call_id,
+                           const AgentxxOpNotify* notify,
+                           char** error_out);    ///< 启动 (非阻塞; 内联完成可返回 NULL)
+    int   (*execute_poll)(void* user_data, void* op);     ///< 推进 (可空 = 只等通知)
+    void  (*execute_cancel)(void* user_data, void* op);   ///< 协作式取消请求 (可空)
     void* user_data;
     long  default_timeout_ms;                 ///< 0 = 不限制
     int   flags;                              ///< AGENTXX_TOOL_FLAG_AUTO_SUMMARY 等
 } AgentxxToolSpec;
 ```
-- 回调内可调用 `call_tool` / `log` / `json_*`; 不得阻塞宿主 io 线程
-- 宿主超时/取消仅终止"等待", 回调一旦开始执行将持续到返回 (宿主按插件实例 inflight 计数保证执行期间代码段不被卸载)
+- start/poll/cancel 全部在【宿主 io 线程】被驱动调用 (非阻塞快速返回约定);
+  AgentxxOpNotify.done 可从插件任意线程回调 (宿主投递回 io 唤醒等待)
+- 快同步工具在 start 内直接算完并 notify → 返回 NULL (内联完成);
+  慢同步经 `sched->offload` 委托阻塞池; 真实并发 IO 才需自备 reactor
+- 会话取消/超时 → 宿主调 execute_cancel + 后台收割协程推进至真正终结
+  (inflight 保活转移, 卸载安全语义不变)
 
-**钩子点** (与宿主 7 个中间件钩子一一对应):
+**钩子点** (与宿主 7 个中间件钩子一一对应; 同为异步三件套规格):
 ```c
-typedef enum AgentxxHookPoint {
-    AGENTXX_HOOK_AGENT_START, AGENTXX_HOOK_AGENT_END,    ///< 会话轮次开始/结束
-    AGENTXX_HOOK_MODEL_START, AGENTXX_HOOK_MODEL_RUN,    ///< LLM 调用 (RUN 重试时多次)
-    AGENTXX_HOOK_MODEL_END,                              ///< LLM 调用结束
-    AGENTXX_HOOK_TOOL_START,  AGENTXX_HOOK_TOOL_END,     ///< 工具分发开始/结束
-    AGENTXX_HOOK_COUNT
-} AgentxxHookPoint;
-/// 钩子回调 (io 线程同步调用, 快速返回): node_input_json 为节点输入摘要
-/// ({"sessionId","node","messages_count",...}); out_json 预留
-typedef int (*AgentxxHookFn)(void* user_data, AgentxxHookPoint point,
-                             AgentxxPluginStringView node_input_json,
-                             char** out_json, char** error_out);
+typedef struct AgentxxHookSpec {
+    AgentxxHookPoint point;
+    void* (*hook_start)(void* user_data, AgentxxHookPoint point,
+                        AgentxxPluginStringView node_input_json,
+                        const AgentxxOpNotify* notify, char** error_out);
+    int   (*hook_poll)(void* user_data, void* op);     ///< 可空
+    void  (*hook_cancel)(void* user_data, void* op);   ///< 可空
+    void* user_data;
+} AgentxxHookSpec;
+/// 注册: hooks->register_hook(host, &spec); 注销: unregister_hook(host, point)
+/// - 每插件每钩子点至多一个 (重复注册覆盖); 慢钩子经 offload 不再违反快速返回
 ```
 
 **核心 vtable + COM 风格接口表** (v1 全量架构; 所有表函数内部捕获异常, C ABI
@@ -280,7 +288,7 @@ typedef int (*AgentxxHookFn)(void* user_data, AgentxxHookPoint point,
 | `agentxx.agent.hooks` | `AgentxxHooksIface` | `register_hook` / `unregister_hook` (热插拔, 轮次边界生效) |
 | `agentxx.agent.events` | `AgentxxEventsIface` | `subscribe` / `unsubscribe` / `publish` (topic 自动加 `plugin.` 前缀; publish 异步投递且拒绝禁用插件) |
 | `agentxx.agent.capabilities` | `AgentxxCapabilitiesIface` | `register_capability` / `register_capability_ex` / `unregister_capability` / `has_capability` / `invoke_capability` (`_ex` 附带方法回调 = 通用插件间通信通道, 如 `interpreter.js`; 提供者回调在【调用方线程】执行防死锁) |
-| `agentxx.agent.scheduler` | `AgentxxSchedulerIface` | `is_io_thread` / `post_to_io` / `add_timer` / `cancel_timer` / `offload` (定时器 io 线程触发; offload 阻塞池执行 + inflight 保活) |
+| `agentxx.agent.scheduler` | `AgentxxSchedulerIface` | `is_io_thread` / `post_to_io` / `add_timer` / `cancel_timer` / `offload` (定时器 io 线程触发; offload 阻塞池执行 + inflight 保活, 调用方持有 cancel_flag) |
 | `agentxx.agent.session` | `AgentxxSessionIface` | `get_share_store` / `emit_message_tip` (仅 io 线程) |
 | `agentxx.agent.plugins` | `AgentxxPluginsIface` | `list_plugins` / `get_plugin` / `get_own_info` (JSON; name/version/path/enabled/tools/capabilities/depends/optional_depends) |
 | `agentxx.agent.config` | `AgentxxConfigIface` | `get_config` / `get_plugin_args` / `get_tool_prompt` (dataDir/projectRoot/platform; yaml args 宿主不解析) |
@@ -311,10 +319,44 @@ api_version 不匹配的插件直接拒绝加载 (仅拒绝不崩溃), **无历�
 
 ### 4.3 宿主侧适配 (vtable → 现有强类型世界)
 
-- `register_tool` → 包装成 `PluginTool` (`XXToolBase` 子类), `execute_async` 内部经 `offloadCancellableAsync` (+ CancelToken watcher) 卸载到线程池调用 C 回调; 取消/超时语义天然接入 toolcall 链路。字符串字段 (name/description/parameters_json) 构造时从 string_view 拷贝进成员 (不依赖插件侧内存存活)。
-- `register_hook` → `PluginMiddlewareHandle` (`BaseMiddlewareHandle<BaseMiddlewareState>` 子类), 七个覆写转发到 C 回调, **push 进现有 `handles` vector** → 栈式执行、错误重抛、per-thread state 全部复用, 不改 `wrap_handle.h` 引擎逻辑。注册即创建中间件句柄 (懒创建, 一个插件一个), disable 置 disabled 位, 轮末摘除。
+- `register_tool` → 包装成 `PluginTool` (`XXToolBase` 子类), `execute_async` 经
+  **op_driver (`op_driver.h`)** 在宿主 io 线程驱动三件套并与内置工具协程交错
+  执行 —— 不再卸载线程池; 会话 CancelToken 联动 `execute_cancel`, 超时经
+  `asyncWithTimeout`, 放弃路径由收割协程接管 inflight 保活直至插件真正终结。
+  字符串字段 (name/description/parameters_json) 构造时从 string_view 拷贝进成员。
+- `register_hook` → `PluginMiddlewareHandle`, 七个覆写经 op_driver 驱动钩子
+  三件套后**push 进现有 `handles` vector** → 栈式执行、错误重抛、per-thread
+  state 全部复用, 不改 `wrap_handle.h` 引擎逻辑。注册即创建中间件句柄
+  (懒创建, 一个插件一个), disable 置 disabled 位, 轮末摘除。
 - `subscribe` → 直接转发 `EventBus` (topic 加 `plugin.` 前缀, 载荷 `std::string`), 插件卸载自动退订。
-- `call_tool` → 经 ToolRegistry 查表调用; 是插件互调 + JS 插件"工具调用其他工具"的唯一通道。
+- `call_tool` / `invoke_capability` → **异步原语**: `call_tool_async` /
+  `invoke_capability_async` 返回 `AgentxxHostOp` 句柄 (目标插件三件套由宿主在
+  io 线程后台驱动, 调用方任意线程 poll/take/cancel/free); 同名阻塞便捷版内部
+  自旋轮询实现, **io 线程调用 fail-fast 拒绝** (防阻塞死锁)。
+
+#### 4.2.2 统一异步操作模型 (v1 核心)
+
+> 目标: 插件与主程序始终同线程协作 —— 插件操作与内置工具的 asio 协程在
+> 宿主 io 线程上交错执行, 访问会话数据天然单线程安全; 同时保持"仅实现同步
+> 代码"的插件编写体验, 且不强制导入任何异步库。
+
+- **原语**: 被调方操作 = `start`(非阻塞启动, 可内联完成) + `poll`(推进,
+  返回建议延迟 ms 或 DONE) + `cancel`(协作式取消请求); 完成经
+  `AgentxxOpNotify.done(status, payload)` 恰好一次上报。方向无关:
+  宿主→插件 (工具/钩子/能力方法) 由宿主 op_driver 驱动; 插件→宿主
+  (`call_tool_async`/`invoke_capability_async`) 返回 `AgentxxHostOp` 由插件驱动。
+- **驱动器** (`agent/lib/include/agentxx/plugin/op_driver.h`, lib 内部):
+  等待形态 `awaitPluginOp()` (工具/钩子协程挂起等待 + 会话取消 watcher +
+  看门狗慢调用告警) 与句柄形态 `makeHostOp()` (后台收割式驱动 + 线程安全
+  sink)。放弃路径 (超时/取消提前退出) 自动转入收割协程推进至真正终结,
+  inflight 保活随之转移 —— 卸载必须等操作终结的语义不变。
+- **同步垫片** (`plugin_tool_sync.h`, 纯 C header-only): 
+  `agentxx_register_inline_tool` (快同步内联完成) / 
+  `agentxx_register_sync_tool` (慢同步委托 offload, execute 多收一个
+  cancel_flag 形参) / `agentxx_register_sync_hook`; 传统同步函数零改动迁移。
+- **线程契约**: start/poll/cancel 仅 io 线程调用 (单次 ≤~1ms, 宿主看门狗
+  >100ms WARN); notify/HostOp 方法任意线程可调; 阻塞便捷版 call_tool/
+  invoke_capability 禁止 io 线程调用。
 
 ### 4.4 SDK 形态
 
@@ -1224,6 +1266,7 @@ plugins/
 | 接口协商一期 (2026-08) | plugin.yaml `interfaces.require/optional` 声明; 宿主支持集门禁 (require 缺失跳过 + 原因记录) / 符号意图预检 (requiredEntrySides); READY/get_client_state interfaces 数组 | ✅ 已实现 |
 | 接口协商二期+三期 (2026-08, 本轮) | **位图方案整体移除** (AGENTXX_UI_CAP_*/IFACE_*/ui_caps/min_ui_caps); client_plugin_api v4 + plugin_api v9: `has_interface` 字符串判定; **COM 式扩展表** `query_extension` (核心契约冻结, 新增能力走独立 version 扩展表); 展示/命令/toast 物理迁至 "client.ui" 扩展表 (`AgentxxClientExtUiVtable`); WireHelloAck.plugins 结构化 [{name,version,interfaces}]; server_plugins 约定事件同步升级; get_client_state 的 agentPlugins 为结构化对象数组; client→server 上行约定事件 `client_interfaces` (**1:N 不存储**, 仅转发 agent 总线, 插件订阅 `agentxx_host.client_interfaces` 自适应); CLI/TUI/测试适配器与全部插件迁移完成 | ✅ 已实现 |
 | COM 全量接口表重构 (2026-08) | **plugin_api/client_plugin_api 版本重置为 1 (不兼容变更, 抛弃历史兼容)**: 核心 vtable 收缩为 `alloc/free/strdup/query_interface` 四成员并契约冻结; agent 侧拆出 12 张标准接口表 (`agentxx.agent.tools/hooks/events/capabilities/scheduler/session/plugins/config/prompt/json/log/resources`), client 侧拆出 7 张 (`agentxx.client.ui/events/session/wire/self/json/log`), 各表首字段 version 独立演进; **内置接口名统一加保留前缀 `agentxx.`** (第三方私有接口用 `<vendor>.<name>`, 不得占用该前缀; 清单前缀过滤/入口符号推导同步改为 `agentxx.agent.*`/`agentxx.client.*` 规则); 新增 `plugin_iface_helper.h` (AgentIfaces/ClientIfaces 一次查询聚合); 全部插件与测试迁移完成; 旧版插件经 api_version 门禁直接拒绝 | ✅ 已实现 |
+| 统一异步操作模型 (2026-08, 本轮; 不兼容变更) | **工具/钩子/能力方法统一为 start/poll/cancel 异步三件套** (tools/hooks/capabilities/scheduler 表 version → 2): 宿主新增 op_driver (`op_driver.h`) 在 io 线程驱动插件操作并与内置工具协程同线程交错执行 —— 插件不再被线程池黑盒阻塞, 访问会话数据单线程安全; 新增 `call_tool_async`/`invoke_capability_async` 返回 `AgentxxHostOp` 句柄 (宿主后台驱动 + 任意线程轮询), 阻塞便捷版 io 线程 fail-fast; scheduler.offload 增加**调用方持有 cancel_flag** 形参; 纯 C 同步垫片 `plugin_tool_sync.h` (inline/sync 工具 + sync 钩子一行注册); JS 引擎移除 postSync 阻塞桥 (工具 execute 与能力 load 改为 JS 线程任务 + 通知器上报, 根除 io↔引擎互等死锁面); 内置插件全部迁移 (快同步内联 / 慢同步 offload 垫片 / example_sleep 自管异步演示); 会话取消联动 `execute_cancel`; 宿主看门狗 (>100ms WARN) 监控 io 线程被插件卡住; 测试新增 HostOp 语义/poll 推进/取消联动用例 (plugins 模块 159 断言) | ✅ 已实现 |
 | 三期 (生态) | Wire 远程热管理 / TUI 插件管理面板 / skippedPlugins 展示层接入 / 签名校验 | ⏳ 待实现 |
 
 ### 13.2 与设计原稿的偏差 (实现为准)

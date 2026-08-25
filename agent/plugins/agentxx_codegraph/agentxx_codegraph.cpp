@@ -422,7 +422,7 @@ static void registerTool(
     auto* entryPtr                                       = entry.get();
     g_entries.push_back(std::move(entry));
 
-    AgentxxToolSpec spec{};
+    AgentxxSyncToolSpec spec{};
     spec.name        = agentxx_plugin_sv(name, std::strlen(name));
     spec.description = agentxx_plugin_sv(
         g_storage[g_storage.size() - 2].data(),
@@ -431,10 +431,12 @@ static void registerTool(
     spec.parameters_json = agentxx_plugin_sv(g_storage.back().data(), g_storage.back().size());
     spec.user_data       = entryPtr;
     spec.flags           = flags;
+    // 阻塞委托型: 索引查询/构建为慢同步操作 (offload 池线程执行)
     spec.execute         = +[](void*                   ud,
                        AgentxxPluginStringView args_json,
                        AgentxxPluginStringView,
                        AgentxxPluginStringView,
+                       volatile int*,
                        char** err) -> char* {
         auto* e = static_cast<ToolEntry*>(ud);
         try {
@@ -457,7 +459,7 @@ static void registerTool(
             return nullptr;
         }
     };
-    if (g_if.tools->register_tool(g_host, &spec) != 0) {
+    if (agentxx_register_sync_tool(g_host, &spec) != 0) {
         pluginLog(3, fmt::format("agentxx_codegraph: register tool {} failed", name));
     }
 }
@@ -799,8 +801,9 @@ static void snapshotQueryDone(void* ud, void* result, char* error) {
     }
 }
 
-static void* snapshotQueryWork(void* ud, char** error_out) {
+static void* snapshotQueryWork(void* ud, volatile int* cancel_flag, char** error_out) {
     (void)error_out;
+    (void)cancel_flag;
     auto* ctx = static_cast<PluginCtx*>(ud);
     // 结果经宿主堆分配 (offload 契约: result 须 host->alloc, done 内 free)
     auto  files = static_cast<int64_t*>(g_host->vtable->alloc(sizeof(int64_t)));
@@ -817,12 +820,15 @@ static void* snapshotQueryWork(void* ud, char** error_out) {
 }
 
 /// 订阅回调: 收到 client_attached 后经阻塞池查询状态并重发快照
+/// (cancel_flag 传插件侧静态标志 —— 本查询不可取消, 宿主从不置位)
+static volatile int kSnapshotCancelFlag = 0;
+
 static void on_client_attached(AgentxxPluginStringView event_json, void* ud) {
     (void)event_json;
     if (!g_host || !g_if.scheduler || !g_if.scheduler->offload) {
         return;
     }
-    g_if.scheduler->offload(g_host, snapshotQueryWork, snapshotQueryDone, ud);
+    g_if.scheduler->offload(g_host, &kSnapshotCancelFlag, snapshotQueryWork, snapshotQueryDone, ud);
 }
 
 extern "C" AGENTXX_PLUGIN_EXPORT int

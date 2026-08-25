@@ -149,13 +149,14 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                               .dump();
         g_storage.push_back(std::move(schema));
 
-        AgentxxToolSpec spec{};
+        AgentxxInlineToolSpec spec{};
         spec.name        = agentxx_plugin_sv(kNamePlanning, std::strlen(kNamePlanning));
         spec.description = agentxx_plugin_sv(g_storage[0].data(), g_storage[0].size());
         spec.parameters_json
             = agentxx_plugin_sv(g_storage[1].data(), g_storage[1].size());
         spec.user_data = nullptr;
         spec.flags     = AGENTXX_TOOL_FLAG_NONE;
+        // 内联完成型: 快 JSON 写入 (set_planning 在 io 线程直接执行, 无跨线程开销)
         spec.execute   = [](void*                   user_data,
                           AgentxxPluginStringView args_json,
                           AgentxxPluginStringView thread_id,
@@ -209,8 +210,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                 return nullptr;
             }
         };
-        if (!g_if.tools || !g_if.tools->register_tool
-            || g_if.tools->register_tool(g_host, &spec) != 0) {
+        if (agentxx_register_inline_tool(g_host, &spec) != 0) {
             XX_LOGW("agentxx_planning: register tool {} failed", kNamePlanning);
         }
     }

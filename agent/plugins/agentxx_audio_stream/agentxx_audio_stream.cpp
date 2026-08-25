@@ -134,17 +134,19 @@ struct AudioStreamHolder {
     agentxx::expand::AudioStream stream_;
 };
 
-/// 工具执行: command = start|stop|status
+/// 工具执行: command = start|stop|status (阻塞委托型; offload 池线程调用)
 char* audioStreamExecute(
     void*                   user_data,
     AgentxxPluginStringView args_json,
     AgentxxPluginStringView thread_id,
     AgentxxPluginStringView tool_call_id,
+    volatile int*           cancel_flag,
     char**                  error_out
 ) {
     (void)user_data;
     (void)thread_id;
     (void)tool_call_id;
+    (void)cancel_flag;
     try {
         std::string argsStr{args_json.data ? args_json.data : "{}", args_json.size};
         SimpleJson  args(argsStr.empty() ? "{}" : argsStr);
@@ -230,15 +232,14 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
         "required": ["command"]
     })";
 
-    AgentxxToolSpec spec{};
+    AgentxxSyncToolSpec spec{};
     spec.name = AGENTXX_SV("agentxx_audio_stream");
     spec.description
         = AGENTXX_SV("Capture audio stream on Windows: start/stop/status. Captured PCM frames are "
                      "published as plugin events (agentxx_audio_stream.audio).");
     spec.parameters_json = agentxx_plugin_sv(kSchema.data(), kSchema.size());
     spec.execute         = audioStreamExecute;
-    if (!g_if.tools || !g_if.tools->register_tool
-        || g_if.tools->register_tool(host, &spec) != 0) {
+    if (agentxx_register_sync_tool(host, &spec) != 0) {
         pluginLog(3, "agentxx_audio_stream: register tool failed");
         return -1;
     }

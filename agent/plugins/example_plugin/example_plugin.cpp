@@ -21,6 +21,7 @@
 #include "agentxx/plugin/client_plugin_api.h"
 #include "agentxx/plugin/plugin_api.h"
 #include "agentxx/plugin/plugin_iface_helper.h"
+#include "agentxx/plugin/plugin_tool_sync.h"
 #include "fmt/format.h"
 #include "fmt/ranges.h"
 
@@ -62,7 +63,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_get_inf
     return &info;
 }
 
-/* ---------------- tool: example_echo ---------------- */
+/* ---------------- tool: example_echo (内联完成型: 快同步, io 线程直接执行) ---------------- */
 
 static char* echo_execute(
     void*                   user_data,
@@ -86,20 +87,28 @@ static char* echo_execute(
     return g_host->vtable->strdup(out.c_str());
 }
 
-/* ---------------- tool: example_sleep (慢工具, 测试超时/卸载竞态用) ---------------- */
+/* ---------------- tool: example_sleep (自管异步型演示: 无线程轮询推进) ----------------
+ * 展示统一异步操作模型的核心价值 —— 不开线程、不用 asio, 纯状态机实现异步:
+ * start 登记截止时刻立即返回; 宿主 io 协程按 poll 建议延迟挂起等待,
+ * 与其他会话/工具协程交错执行 (旧模型下这是阻塞池线程 600ms 的黑盒)
+ */
+typedef struct SleepJob {
+    AgentxxOpNotify                    notify;
+    std::chrono::steady_clock::time_point deadline;
+    int                                totalMs;
+    int                                cancelled;
+} SleepJob;
 
-/// 阻塞 duration_ms 毫秒后返回 (模拟慢插件工具):
-/// - 宿主超时/取消只终止"等待", 本回调一旦开始执行将持续到返回
-///   (宿主按 inflight 计数保证执行期间插件代码段不被卸载)
-static char* sleep_execute(
+static void* sleep_start(
     void*                   user_data,
     AgentxxPluginStringView args_json,
-    AgentxxPluginStringView session_id,
+    AgentxxPluginStringView thread_id,
     AgentxxPluginStringView tool_call_id,
+    const AgentxxOpNotify*  notify,
     char**                  error_out
 ) {
     (void)user_data;
-    (void)session_id;
+    (void)thread_id;
     (void)tool_call_id;
     (void)error_out;
     if (!g_host) {
@@ -119,26 +128,63 @@ static char* sleep_execute(
             g_host->vtable->free(v);
         }
     }
-    std::this_thread::sleep_for(std::chrono::milliseconds(std::max(ms, 0)));
-    const std::string out = fmt::format(R"({{"slept_ms": {}}})", ms);
-    return g_host->vtable->strdup(out.c_str());
+    auto* job      = new SleepJob{};
+    job->notify    = *notify;
+    job->totalMs   = ms > 0 ? ms : 0;
+    job->deadline  = std::chrono::steady_clock::now() + std::chrono::milliseconds(job->totalMs);
+    return job;
 }
 
-/* ---------------- tool: example_caller (互调) ---------------- */
+static int sleep_poll(void* user_data, void* op) {
+    (void)user_data;
+    auto* job = static_cast<SleepJob*>(op);
+    if (!job || job->notify.done == nullptr) {
+        return AGENTXX_OP_POLL_DONE;
+    }
+    if (job->cancelled) {
+        char* payload = g_host ? g_host->vtable->strdup("{}") : nullptr;
+        job->notify.done(job->notify.host_ud, AGENTXX_OP_CANCELLED, payload);
+        delete job;
+        return AGENTXX_OP_POLL_DONE;
+    }
+    auto now   = std::chrono::steady_clock::now();
+    auto restMs = std::chrono::duration_cast<std::chrono::milliseconds>(job->deadline - now).count();
+    if (restMs > 0) {
+        return static_cast<int>(restMs); ///< 建议宿主睡到截止再问 (不空转不占线程)
+    }
+    const std::string out       = fmt::format(R"({{"slept_ms": {}}})", job->totalMs);
+    char*             payload   = g_host ? g_host->vtable->strdup(out.c_str()) : nullptr;
+    job->notify.done(job->notify.host_ud, AGENTXX_OP_OK, payload);
+    delete job;
+    return AGENTXX_OP_POLL_DONE;
+}
+
+static void sleep_cancel(void* user_data, void* op) {
+    (void)user_data;
+    auto* job          = static_cast<SleepJob*>(op);
+    if (job) {
+        job->cancelled = 1;
+    }
+}
+
+/* ---------------- tool: example_caller (互调; 阻塞委托型) ---------------- */
 
 static char* caller_execute(
     void*                   user_data,
     AgentxxPluginStringView args_json,
     AgentxxPluginStringView session_id,
     AgentxxPluginStringView tool_call_id,
+    volatile int*           cancel_flag,
     char**                  error_out
 ) {
     (void)user_data;
     (void)tool_call_id;
+    (void)cancel_flag;
     if (!g_host) {
         return nullptr;
     }
     // 调用本插件的另一个工具 example_echo, 演示插件互调
+    // (阻塞便捷版运行在 offload 池线程 —— io 线程被 fail-fast 拒绝)
     if (!g_if.tools || !g_if.tools->call_tool) {
         return nullptr;
     }
@@ -163,19 +209,17 @@ static char* caller_execute(
     return g_host->vtable->strdup(out.c_str());
 }
 
-/* ---------------- hook: agent_start ---------------- */
+/* ---------------- hook: agent_start (快同步钩子垫片) ---------------- */
 
 static int on_agent_start(
     void*                   user_data,
     AgentxxHookPoint        point,
     AgentxxPluginStringView node_input_json,
-    char**                  out_json,
     char**                  error_out
 ) {
     (void)user_data;
     (void)point;
     (void)node_input_json;
-    (void)out_json;
     (void)error_out;
     if (g_host && g_if.log && g_if.log->log) {
         g_if.log->log(g_host, 2 /* info */, AGENTXX_SV("example hook: agent_start fired"));
@@ -219,43 +263,50 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
     if (!s_if.tools || !s_if.tools->register_tool || !s_if.events) {
         return -1;
     }
-    AgentxxToolSpec echo{};
+
+    // echo: 内联完成型 (快同步, io 线程直接执行, 零线程切换)
+    AgentxxInlineToolSpec echo{};
     echo.name        = AGENTXX_SV("example_echo");
     echo.description = AGENTXX_SV("Echo the input arguments back as JSON (example plugin tool).");
     echo.parameters_json
         = AGENTXX_SV(R"({"type":"object","properties":{},"additionalProperties":true})");
     echo.execute = echo_execute;
-    if (s_if.tools->register_tool(host, &echo) != 0) {
+    if (agentxx_register_inline_tool(host, &echo) != 0) {
         return -1;
     }
 
-    AgentxxToolSpec caller{};
+    // caller: 阻塞委托型 (经 offload 在池线程执行; 内部用阻塞版 call_tool)
+    AgentxxSyncToolSpec caller{};
     caller.name = AGENTXX_SV("example_caller");
     caller.description
         = AGENTXX_SV("Call example_echo via call_tool to demonstrate plugin interop.");
     caller.parameters_json
         = AGENTXX_SV(R"({"type":"object","properties":{},"additionalProperties":true})");
     caller.execute = caller_execute;
-    if (s_if.tools->register_tool(host, &caller) != 0) {
+    if (agentxx_register_sync_tool(host, &caller) != 0) {
         return -1;
     }
 
-    // 慢工具: 测试插件超时/卸载竞态 (宿主超时后回调仍可能执行, inflight 保活)
+    // sleeper: 自管异步型 (纯状态机轮询推进 —— 不开线程不用异步库;
+    // 宿主 io 协程按 poll 建议延迟挂起, 与其他协程交错执行)
     AgentxxToolSpec sleeper{};
     sleeper.name = AGENTXX_SV("example_sleep");
     sleeper.description
         = AGENTXX_SV("Sleep duration_ms milliseconds then return (slow plugin tool).");
     sleeper.parameters_json
         = AGENTXX_SV(R"({"type":"object","properties":{"durationMs":{"type":"integer"}}})");
-    sleeper.execute            = sleep_execute;
+    sleeper.execute_start      = sleep_start;
+    sleeper.execute_poll       = sleep_poll;
+    sleeper.execute_cancel     = sleep_cancel;
+    sleeper.user_data          = nullptr;
     sleeper.default_timeout_ms = 0; // 无默认超时 (测试用例自行指定)
     if (s_if.tools->register_tool(host, &sleeper) != 0) {
         return -1;
     }
 
-    // 2. 钩子 (agentxx.agent.hooks 接口表)
+    // 2. 钩子 (agentxx.agent.hooks 接口表; 快同步钩子垫片注册)
     if (!s_if.hooks || !s_if.hooks->register_hook
-        || s_if.hooks->register_hook(host, AGENTXX_HOOK_AGENT_START, on_agent_start, nullptr)
+        || agentxx_register_sync_hook(host, AGENTXX_HOOK_AGENT_START, on_agent_start, nullptr)
                != 0) {
         return -1;
     }
@@ -324,7 +375,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_unload(void* plugin_ctx) {
         g_if.tools->unregister_tool(g_host, AGENTXX_SV("example_sleep"));
     }
     if (g_if.hooks && g_if.hooks->unregister_hook) {
-        g_if.hooks->unregister_hook(g_host, AGENTXX_HOOK_AGENT_START, on_agent_start, nullptr);
+        g_if.hooks->unregister_hook(g_host, AGENTXX_HOOK_AGENT_START);
     }
     if (g_if.capabilities && g_if.capabilities->unregister_capability) {
         g_if.capabilities->unregister_capability(g_host, AGENTXX_SV("example.demo"));

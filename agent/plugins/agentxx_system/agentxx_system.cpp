@@ -17,6 +17,8 @@ constexpr auto kDepictDatetime = "Get the current date, time, and Unix timestamp
 
 /// 注册无参工具 (schema/描述存储于插件侧静态区; spec 字符串字段以 string_view
 /// 传入, 宿主注册时拷贝)
+/// - 统一异步操作模型: 快同步工具经内联垫片注册 (宿主 io 线程直接执行,
+///   零线程切换); 执行函数签名与旧同步模型一致
 void registerTool(
     const char*        name,
     const char*        defaultDepict,
@@ -38,7 +40,7 @@ void registerTool(
     g_storage.push_back(std::move(depict));
     g_storage.push_back(schema);
 
-    AgentxxToolSpec spec{};
+    AgentxxInlineToolSpec spec{};
     spec.name        = agentxx_plugin_sv(name, std::strlen(name));
     spec.description = agentxx_plugin_sv(
         g_storage[g_storage.size() - 2].data(),
@@ -48,8 +50,7 @@ void registerTool(
     spec.user_data       = nullptr;
     spec.flags           = flags;
     spec.execute         = execute;
-    if (!g_if.tools || !g_if.tools->register_tool
-        || g_if.tools->register_tool(g_host, &spec) != 0) {
+    if (agentxx_register_inline_tool(g_host, &spec) != 0) {
         XX_LOGW("agentxx_system: register tool {} failed", name);
     }
 }

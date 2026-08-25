@@ -85,15 +85,19 @@ public:
     /// 钩子注册记录 (enable 重建中间件时恢复; 仅 io 线程)
     struct HookRegistration {
         AgentxxHookPoint point;
-        AgentxxHookFn    fn;
-        void*            ud;
+        void* (*start)(void*, AgentxxHookPoint, AgentxxPluginStringView, const AgentxxOpNotify*, char**);
+        int (*poll)(void*, void*);
+        void (*cancel)(void*, void*);
+        void* ud;
     };
 
-    /// 能力注册记录 (含方法回调; enable 恢复完整能力, 而非降级为无方法哑能力)
+    /// 能力注册记录 (含异步方法处理器三件套; enable 恢复完整能力)
     struct CapabilityRegistration {
-        std::string               name;
-        AgentxxCapabilityInvokeFn invoke = nullptr;
-        void*                     ctx    = nullptr;
+        std::string       name;
+        AgentxxCapStartFn start  = nullptr;
+        AgentxxOpPollFn   poll   = nullptr;
+        AgentxxOpCancelFn cancel = nullptr;
+        void*             ctx    = nullptr;
     };
 
     /// 提示词修改备份 (set_prompt 写入前记录, 卸载时回滚)
@@ -159,13 +163,15 @@ public:
     };
 };
 
-/// 插件工具: C ABI spec → XXToolBase 适配
-/// - execute_async 经 offloadCancellableAsync 卸载到宿主线程池调用 C 回调
-///   (取消/超时语义天然接入 toolcall 链路)
+/// 插件工具: C ABI spec → XXToolBase 适配 (统一异步操作模型)
+/// - execute_async 经 op_driver awaitPluginOp 在【io 线程】驱动插件三件套
+///   (start/poll/cancel), 与内置工具协程同线程交错执行; 不再卸载线程池
+/// - 取消: 会话 CancelToken 联动 execute_cancel (协作式); 超时经
+///   asyncWithTimeout, 超时放弃后由收割协程继续推进直至插件终结
+///   (inflight 保活转移, 卸载安全语义与旧模型一致)
 /// - 持有 PluginInstance shared_ptr: 工具执行期间插件不会被卸载
 /// - 字符串字段 (name/description/parameters_json) 在构造时从 string_view
-///   拷贝进成员 (spec_ 指针指向本对象成员, 生命周期与工具一致, 不依赖
-///   插件侧内存存活)
+///   拷贝进成员 (spec_ 指针指向本对象成员, 生命周期与工具一致)
 class PluginTool : public agentxx::tools::XXToolBase {
 public:
 
@@ -213,11 +219,12 @@ public:
         std::shared_ptr<PluginInstance>             instance
     );
 
-    void setHook(AgentxxHookPoint point, AgentxxHookFn fn, void* user_data);
+    /// 设置钩子 (异步三件套规格拷贝存储; 每插件每钩子点至多一个)
+    void setHook(const AgentxxHookSpec& spec);
 
     void clearHook(AgentxxHookPoint point);
 
-    // 7 钩子覆写: 转发到 C 回调 (io 线程同步, 快速返回约定)
+    // 7 钩子覆写: 经 op_driver 在 io 线程驱动钩子三件套 (与工具同模型)
     asio::awaitable<void> onAgentcallStartFunc(neograph::graph::NodeInput& in) override;
     asio::awaitable<void> onAgentcallEndFunc(
         const neograph::graph::NodeInput& in,
@@ -238,9 +245,12 @@ public:
 private:
 
     struct HookEntry {
-        AgentxxHookFn fn  = nullptr;
-        void*         ud  = nullptr;
-        bool          set = false;
+        void* (*start)(void*, AgentxxHookPoint, AgentxxPluginStringView, const AgentxxOpNotify*, char**)
+            = nullptr;
+        int (*poll)(void*, void*)      = nullptr;
+        void (*cancel)(void*, void*)   = nullptr;
+        void*         ud               = nullptr;
+        bool          set              = false;
     };
 
     asio::awaitable<void> dispatch(AgentxxHookPoint point, const neograph::graph::NodeInput& in);
@@ -420,9 +430,10 @@ public:
     /// 本插件资源快照 JSON {"skills":[],"memory":[],"mcp":[]}; 未装配返回空串
     std::string ownResourcesJson(const PluginInstance* inst);
 
-    /// 注册钩子 (push 中间件到 handles, 栈式执行)
-    int registerHook(PluginInstance* inst, AgentxxHookPoint point, AgentxxHookFn fn, void* ud);
-    int unregisterHook(PluginInstance* inst, AgentxxHookPoint point, AgentxxHookFn fn, void* ud);
+    /// 注册钩子 (异步三件套规格拷贝; push 中间件到 handles, 栈式执行)
+    int registerHook(PluginInstance* inst, const AgentxxHookSpec* spec);
+    /// 注销钩子 (按 point 匹配 —— 每插件每钩子点至多一个)
+    int unregisterHook(PluginInstance* inst, AgentxxHookPoint point);
     /// 事件订阅/发布 (topic 加 "plugin." 前缀, 载荷 JSON 字符串)
     AgentxxSubscription* subscribe(
         PluginInstance* inst,
@@ -444,12 +455,53 @@ public:
     void cancelTimer(PluginInstance* inst, void* timer);
     /// 阻塞池卸载执行 (vtable offload 实现入口; 任意线程可调用)
     /// - work 在 AgentContext::threadPool 线程执行, done 投递回 io 线程
+    /// - cancel_flag: 调用方持有 (done 返回前须保持有效); 宿主不主动置位
     /// - 全程 inflight 计数保活插件代码段 (work/done 执行期间可安全卸载等待)
     void offload(
         PluginInstance* inst,
-        void* (*work)(void* ud, char** error_out),
+        volatile int*   cancel_flag,
+        void* (*work)(void* ud, volatile int* cancel_flag, char** error_out),
         void (*done)(void* ud, void* result, char* error),
         void* ud
+    );
+
+    // ==================== 插件互调 / 能力调用 (异步原语) ====================
+    // 目标插件三件套由宿主在 io 线程自动驱动; 调用方任意线程经 AgentxxHostOp
+    // 轮询结果。阻塞便捷版内部轮询实现, 禁止 io 线程调用 (fail-fast)。
+
+    /// 异步调用插件工具 (call_tool_async vtable 实现; 任意线程可调用)
+    /// - 失败返回 NULL 并 error_out (工具不存在/非插件工具/插件禁用等)
+    AgentxxHostOp* callToolAsync(
+        PluginInstance* caller,
+        const char*     name,
+        const char*     args_json,
+        const char*     thread_id,
+        char**          error_out
+    );
+    /// 阻塞便捷版 call_tool (内部轮询 callToolAsync); io 线程调用 fail-fast
+    char* callToolBlocking(
+        PluginInstance* caller,
+        const char*     name,
+        const char*     args_json,
+        const char*     thread_id,
+        char**          error_out
+    );
+    /// 异步调用能力方法 (invoke_capability_async vtable 实现; 任意线程可调用)
+    AgentxxHostOp* invokeCapabilityAsync(
+        PluginInstance* caller,
+        const char*     capability,
+        const char*     method,
+        const char*     args_json,
+        char**          error_out
+    );
+    /// 阻塞便捷版 invoke_capability (内部轮询 invokeCapabilityAsync);
+    /// io 线程调用 fail-fast
+    char* invokeCapability(
+        PluginInstance* caller,
+        const char*     capability,
+        const char*     method,
+        const char*     args_json,
+        char**          error_out
     );
 
     /// 工具注册表 (供 ToolcallWrapNode/ModelCallWrapNode 查表)
@@ -493,29 +545,20 @@ public:
 
     // ==================== 能力注册/调用 (插件间通信) ====================
 
-    /// 声明能力 (无回调; 仅标记/互查)
+    /// 声明能力 (无方法处理器; 仅标记/互查)
     int registerCapability(PluginInstance* inst, const char* capability);
-    /// 注册能力并附带方法回调 (通用插件间通信; 如 JS 引擎 "interpreter.js"
-    /// 提供 load/unload 方法)
+    /// 注册能力并附带异步方法处理器三件套 (通用插件间通信; 如 JS 引擎
+    /// "interpreter.js" 提供 load/unload 方法)
     int registerCapabilityEx(
         PluginInstance*           inst,
         const char*               capability,
-        AgentxxCapabilityInvokeFn invoke,
+        AgentxxCapStartFn         start,
+        AgentxxOpPollFn           poll,
+        AgentxxOpCancelFn         cancel,
         void*                     ctx
     );
     int unregisterCapability(PluginInstance* inst, const char* capability);
     int hasCapability(const char* capability) const;
-
-    /// 调用能力提供者的方法 (io 线程约束; 跨线程经 post 同步等待)
-    /// - 提供者回调在调用方线程执行 (回调内部自行跳转引擎线程)
-    /// - 返回结果 JSON (host->alloc); 失败返回 NULL 并 error_out
-    char* invokeCapability(
-        PluginInstance* caller,
-        const char*     capability,
-        const char*     method,
-        const char*     args_json,
-        char**          error_out
-    );
 
     // ==================== 插件互查 (vtable list_plugins/get_plugin) ====================
 
@@ -652,21 +695,26 @@ private:
 };
 
 /// 能力注册表 (插件互查/委派; 如 JS 解释器能力 "interpreter.js")
-/// - 能力可附带方法回调: 能力调用 = 通用插件间通信通道 (invoke_capability)
+/// - 能力可附带异步方法处理器三件套: 能力调用 = 通用插件间通信通道
+///   (invoke_capability / invoke_capability_async)
 class CapabilityRegistry {
 public:
 
     struct Entry {
-        std::string               provider;         ///< 提供者插件名
-        AgentxxCapabilityInvokeFn invoke = nullptr; ///< 方法回调 (可空)
-        void*                     ctx    = nullptr; ///< 提供者私有上下文
+        std::string       provider;                 ///< 提供者插件名
+        AgentxxCapStartFn start  = nullptr;         ///< 方法启动 (可空 = 无方法)
+        AgentxxOpPollFn   poll   = nullptr;         ///< 推进 (可空)
+        AgentxxOpCancelFn cancel = nullptr;         ///< 取消 (可空)
+        void*             ctx    = nullptr;         ///< 提供者私有上下文
     };
 
     bool registerCapability(
-        std::string_view          name,
-        std::string_view          providerPlugin,
-        AgentxxCapabilityInvokeFn invoke = nullptr,
-        void*                     ctx    = nullptr
+        std::string_view  name,
+        std::string_view  providerPlugin,
+        AgentxxCapStartFn start  = nullptr,
+        AgentxxOpPollFn   poll   = nullptr,
+        AgentxxOpCancelFn cancel = nullptr,
+        void*             ctx    = nullptr
     );
     bool unregisterCapability(std::string_view name, std::string_view providerPlugin);
     bool has(std::string_view name) const;

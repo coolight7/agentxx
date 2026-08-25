@@ -82,7 +82,7 @@ static void registerTool(
     auto* entryPtr                                       = entry.get();
     g_entries.push_back(std::move(entry));
 
-    AgentxxToolSpec spec{};
+    AgentxxSyncToolSpec spec{};
     spec.name        = agentxx_plugin_sv(name, std::strlen(name));
     spec.description = agentxx_plugin_sv(
         g_storage[g_storage.size() - 2].data(),
@@ -91,10 +91,12 @@ static void registerTool(
     spec.parameters_json = agentxx_plugin_sv(g_storage.back().data(), g_storage.back().size());
     spec.user_data       = entryPtr;
     spec.flags           = flags;
+    // 阻塞委托型: 屏幕捕获为慢同步操作 (offload 池线程执行)
     spec.execute         = +[](void*                   ud,
                        AgentxxPluginStringView args_json,
                        AgentxxPluginStringView,
                        AgentxxPluginStringView,
+                       volatile int*,
                        char** err) -> char* {
         auto* e = static_cast<ToolEntry*>(ud);
         try {
@@ -116,8 +118,7 @@ static void registerTool(
             return nullptr;
         }
     };
-    if (!g_if.tools || !g_if.tools->register_tool
-        || g_if.tools->register_tool(g_host, &spec) != 0) {
+    if (agentxx_register_sync_tool(g_host, &spec) != 0) {
         pluginLog(3, fmt::format("agentxx_screen_capture: register tool {} failed", name));
     }
 }

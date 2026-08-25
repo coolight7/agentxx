@@ -24,6 +24,22 @@
  *   (核心 vtable), 插件返回的字符串必须经 host->alloc 分配; 而"字符串参数/
  *   字段"一律以 AgentxxPluginStringView (data + size) 传入, 是只读借用
  *   (不要求 NUL 结尾, 不要求宿主分配)
+ *
+ * ════════════════════════════════════════════════════════════════════
+ * 统一异步操作模型 (v1 核心设计, 见下方 "统一异步操作原语")
+ * ════════════════════════════════════════════════════════════════════
+ * - 工具执行 / 中间件钩子 / 能力方法 等"可能耗时的被调方操作"一律为
+ *   异步三件套 start/poll/cancel —— 宿主在 io 线程驱动轮询, 与内置工具
+ *   的 asio 协程在同一线程上交错执行; 插件不再被线程池黑盒阻塞执行,
+ *   访问宿主会话数据天然单线程安全 (与宿主 assertIoThread 无锁模型一致)
+ * - 被调方不需要任何异步库: 快同步代码在 start 内直接算完并通知完成
+ *   (内联完成); 慢同步代码经 scheduler.offload 委托宿主阻塞池; 仅当插件
+ *   想要真实并发 IO 时才需要自备 reactor (如私有 asio io_context)
+ * - 纯 C 同步垫片 plugin_tool_sync.h 把传统同步函数一行宏包装成三件套
+ * - 反向调用 (插件调用宿主工具 call_tool / 其他插件能力 invoke_capability)
+ *   提供 AgentxxHostOp 句柄: 宿主内部同样在 io 线程驱动目标插件的三件套,
+ *   插件任意线程经句柄查询结果 (阻塞便捷版内部轮询实现, 禁止 io 线程调用)
+ *
  * - 每插件一个 AgentxxHost (opaque 指向宿主侧插件实例): 注册/订阅自动关联
  *   到调用它的插件, 插件卸载时宿主自动清理其全部注册残留
  * - 接口表是进程级静态只读数据: entry 时查询一次缓存指针即可长期使用;
@@ -33,20 +49,24 @@
  *   - 注册类 (tools/hooks/events/capabilities/resources) 与 session/plugins/
  *     config/prompt/scheduler 的 io 线程约束操作在非 io 线程调用时由宿主
  *     内部投递同步等待 (插件无感); 各接口表函数注释标注线程属性
- *   - execute 回调运行在宿主线程池, 内仅可调用 call_tool / log / json_*
- *     (线程安全); 其余 API 经宿主 post 回 io 线程
- * - 回调快速返回约定: 事件订阅回调与钩子回调在 io 线程同步调用, 必须快速
- *   返回, 不得阻塞 (长时间任务请经 call_tool 或自行投递到独立线程)
+ *   - 异步三件套 start/poll/cancel 由宿主在【io 线程】驱动 (非阻塞快速
+ *     返回约定: 单次调用不得超过 ~1ms, 长任务必须切片或委托 offload);
+ *     AgentxxOpNotify.done 可从被调方任意线程回调 (线程安全)
+ *   - AgentxxHostOp 方法任意线程可调用; 阻塞便捷版 call_tool/
+ *     invoke_capability 禁止在宿主 io 线程调用 (会阻塞 io 且死锁, 宿主
+ *     fail-fast 报错)
+ * - 回调快速返回约定: 事件订阅回调与定时器回调在 io 线程同步调用, 必须
+ *   快速返回, 不得阻塞 (长时间任务请经 offload 或自行投递到独立线程)
  * - 异常不外泄: 宿主接口表所有函数内部捕获全部异常 (C ABI 边界无异常);
- *   插件侧 execute/hook/event 回调同样不得让异常逃逸 (宿主调用处已兜底,
- *   但插件自身应遵循)
+ *   插件侧 start/poll/cancel/event 回调同样不得让异常逃逸 (宿主调用处
+ *   已兜底, 但插件自身应遵循)
  * - 字符串约定:
  *   - 所有跨边界"字符串参数/字段"类型为 AgentxxPluginStringView (data+size,
  *     不要求 NUL 结尾, 生命周期仅覆盖本次调用); 便捷构造见
  *     agentxx_plugin_sv / agentxx_plugin_sv_cstr / AGENTXX_SV
- *   - 所有"宿主分配"的字符串返回值 (execute 结果 / error_out /
- *     strdup/list_plugins/get_plugin/... ) 仍为 char* (NUL 结尾, host->alloc),
- *     调用方用完必须 host->free
+ *   - 所有"宿主分配"的字符串返回值 (工具结果 / error_out / HostOp take
+ *     payload / strdup/list_plugins/get_plugin/... ) 仍为 char* (NUL 结尾,
+ *     host->alloc), 调用方用完必须 host->free
  */
 #ifndef AGENTXX_PLUGIN_API_H
 #define AGENTXX_PLUGIN_API_H
@@ -128,6 +148,55 @@ typedef struct AgentxxPluginInfo {
     AgentxxPluginStringView description;
 } AgentxxPluginInfo;
 
+/* ==================== 统一异步操作原语 (v1 核心) ====================
+ *
+ * 所有"可能耗时的被调方操作" (工具执行 / 中间件钩子 / 能力方法) 共用同一
+ * 三件套契约: start / poll / cancel —— 由宿主在【io 线程】驱动轮询, 与宿主
+ * 内置工具的 asio 协程在同一线程上交错执行。被调方不需要任何异步库。
+ *
+ * start 的返回值约定 (三档实现模式):
+ *   1. 内联完成型 (快同步, <~1ms): 直接算完 → notify->done(OK, 结果) →
+ *      返回 NULL 且 *error_out == NULL —— 宿主不再 poll (poll/cancel 可留 NULL)
+ *   2. 慢同步型: 打包任务经 scheduler.offload 委托宿主阻塞池 → 返回非 NULL
+ *      句柄; poll 留 NULL (只等完成通知) 或返回 AGENTXX_OP_POLL_DONE 提示;
+ *      cancel 把取消标志转发给任务
+ *   3. 自管异步型 (真实并发 IO/自有 reactor): start 登记工作后立即返回句柄,
+ *      poll 非阻塞推进状态机/reactor 并按需返回建议延迟, 完成时 notify
+ *   启动失败: 返回 NULL 且 *error_out 输出错误信息 (host->alloc 分配)
+ *   违约检测: 返回 NULL、无 error_out 且未触发 done → 宿主按协议错误处理
+ */
+
+/// 操作终结状态 (AgentxxOpNotify.done 的 status 参数)
+#define AGENTXX_OP_OK        0 ///< 成功 (payload = 结果数据, host->alloc)
+#define AGENTXX_OP_CANCELLED 1 ///< 已取消 (payload 可为 NULL)
+#define AGENTXX_OP_FAILED    2 ///< 失败 (payload = 错误信息, host->alloc)
+
+/// poll 返回值: 操作已终结 (notifier 已调或将在本次调用内被调);
+/// 宿主此后停止 poll。其余返回值 >= 0 = 未完成 + 建议下次推进延迟毫秒
+/// (0 = 尽快; 宿主据此让出执行权/小睡, 保证与其他协程交错且不空转)
+#define AGENTXX_OP_POLL_DONE (-1)
+
+/// 完成通知器 (宿主实现并随 start 下发; 操作终结时被调方须【恰好回调一次】)
+/// - payload: host->alloc 分配的字符串, 所有权移交宿主 (可为 NULL, 如取消时)
+/// - 线程安全: 可从被调方的任意线程回调 (含插件自有线程), 宿主内部投递回
+///   io 线程唤醒等待协程
+typedef struct AgentxxOpNotify {
+    void (*done)(void* host_ud, int status, char* payload);
+    void* host_ud;
+} AgentxxOpNotify;
+
+/// 推进函数通用形态 (【宿主 io 线程调用】, 非阻塞快速返回):
+/// - user_data/op: 注册时与 start 返回的被调方私有数据/句柄
+/// - 返回 AGENTXX_OP_POLL_DONE 或建议延迟毫秒 (见宏注释)
+/// - 内联完成型可留 NULL (宿主只等完成通知)
+typedef int (*AgentxxOpPollFn)(void* user_data, void* op);
+
+/// 协作式取消请求函数 (【宿主 io 线程调用】, 非阻塞):
+/// - 被调方应尽快收尾并经 notifier 上报 CANCELLED; 也允许选择继续完成并
+///   上报 OK/FAILED (与内置工具"取消仅通知, 终态语义由实现决定"一致)
+/// - 不可取消的操作可留 NULL
+typedef void (*AgentxxOpCancelFn)(void* user_data, void* op);
+
 /* ==================== 工具定义 ==================== */
 
 #define AGENTXX_TOOL_FLAG_NONE         0
@@ -137,20 +206,27 @@ typedef struct AgentxxToolSpec {
     AgentxxPluginStringView name; ///< 须全局唯一 (与内置工具/MCP 工具同名将注册失败)
     AgentxxPluginStringView description;
     AgentxxPluginStringView parameters_json; ///< JSON Schema 字符串 (json object)
-    /// 同步执行回调 (宿主线程池线程):
-    /// - args_json/thread_id/tool_call_id: 字符串视图 (只读借用, 仅本次调用有效)
-    /// - 返回: 结果 JSON 字符串, 必须用 host->alloc 分配 (宿主 free);
-    ///   失败时返回 NULL 并经 error_out 输出错误信息 (同样 host->alloc)
-    /// - 回调内可调用 call_tool / log / json_*; 不得阻塞宿主 io 线程
-    /// - 注意: 宿主超时/取消仅终止"等待", 本回调一旦开始执行将持续到返回
-    ///   (宿主按插件实例 inflight 计数保证其执行期间插件代码段不被卸载)
-    char* (*execute)(
+
+    /// 启动执行 (【宿主 io 线程调用】, 非阻塞; 通用契约见"统一异步操作原语"):
+    /// - args_json/thread_id/tool_call_id: 只读借用, 仅本次调用有效
+    /// - 快同步工具: 算完 → notify->done(AGENTXX_OP_OK, 结果 json) → 返回 NULL
+    ///   (结果/错误字符串均须 host->alloc 分配)
+    /// - 回调内可调用 call_tool / log / json_* 等 (注意 io 线程约束:
+    ///   阻塞便捷版 call_tool/invoke_capability 在 io 线程会被 fail-fast 拒绝)
+    void* (*execute_start)(
         void*                   user_data,
         AgentxxPluginStringView args_json,
         AgentxxPluginStringView thread_id,
         AgentxxPluginStringView tool_call_id,
+        const AgentxxOpNotify*  notify,
         char**                  error_out
     );
+    /// 推进执行 (io 线程, 非阻塞; 内联完成型可留 NULL)
+    int (*execute_poll)(void* user_data, void* op);
+    /// 协作式取消请求 (io 线程, 非阻塞; 不可取消可留 NULL)
+    /// - 会话取消/宿主超时/放弃等待时由宿主调用; 插件应尽快收尾并上报终态
+    void (*execute_cancel)(void* user_data, void* op);
+
     void* user_data;
     long  default_timeout_ms; ///< 0 = 不限制 (宿主按调用方取消语义执行)
     int   flags;              ///< AGENTXX_TOOL_FLAG_*
@@ -170,38 +246,77 @@ typedef enum AgentxxHookPoint {
     AGENTXX_HOOK_COUNT
 } AgentxxHookPoint;
 
-/// 钩子回调 (io 线程同步调用, 必须快速返回):
-/// - node_input_json: 节点输入摘要 ({"sessionId", "node", "messages_count", ...})
-/// - out_json: 预留, 恒为 NULL (回调不得写入)
-/// - 返回 0 成功; 非 0 失败并经 error_out 输出错误 (host->alloc 分配)
-typedef int (*AgentxxHookFn)(
-    void*                   user_data,
-    AgentxxHookPoint        point,
-    AgentxxPluginStringView node_input_json,
-    char**                  out_json,
-    char**                  error_out
-);
+/// 钩子规格: 异步三件套形态 (与工具同构; 见"统一异步操作原语")
+/// - hook_start (【宿主 io 线程调用】, 非阻塞):
+///   * node_input_json: 节点输入摘要 ({"sessionId","point","messages_count",...})
+///   * 快钩子: 处理完 → notify->done(OK, NULL) → 返回 NULL
+///   * 慢钩子: 委托 offload / 登记异步工作 → 返回句柄 (宿主轮询推进)
+/// - 每插件每钩子点至多注册一个 (重复注册覆盖旧值); 注销按 point + user_data
+typedef struct AgentxxHookSpec {
+    AgentxxHookPoint point;
+    void* (*hook_start)(
+        void*                   user_data,
+        AgentxxHookPoint        point,
+        AgentxxPluginStringView node_input_json,
+        const AgentxxOpNotify*  notify,
+        char**                  error_out
+    );
+    int (*hook_poll)(void* user_data, void* op);   ///< 可为 NULL (内联完成型)
+    void (*hook_cancel)(void* user_data, void* op); ///< 可为 NULL
+    void* user_data;
+} AgentxxHookSpec;
 
-/* ==================== 事件订阅句柄 / 能力调用回调 ==================== */
+/* ==================== 事件订阅句柄 / 宿主侧异步操作句柄 ==================== */
 
 typedef struct AgentxxSubscription AgentxxSubscription;
 
-struct AgentxxHost; ///< 前向声明 (能力调用回调签名引用宿主句柄)
+struct AgentxxHost; ///< 前向声明 (能力方法处理器签名引用宿主句柄)
 
-/// 能力调用回调 (capability 提供者注册; 通用插件间通信, 如 JS 引擎提供
-/// "interpreter.js" 能力的 load/unload 方法)
+/// 能力方法处理器启动函数 (提供者注册; 通用插件间通信, 如 JS 引擎提供
+/// "interpreter.js" 能力的 load/unload 方法):
 /// - ctx: 提供者私有上下文
 /// - caller_host: 调用方插件宿主句柄 (如脚本插件的 C++ 壳, 脚本内注册的
 ///   工具经此挂到调用方实例)
 /// - method/args_json: 提供者自定义方法契约 (字符串视图, 只读借用)
-/// - 返回: 结果 JSON 字符串 (host->alloc 分配); 失败返回 NULL 并经 error_out 输出
-typedef char* (*AgentxxCapabilityInvokeFn)(
+/// - 三件套通用契约同工具 execute_start (见"统一异步操作原语"):
+///   快方法内联完成; 慢方法 (如 JS 引擎加载脚本) 登记工作后返回句柄
+/// - 结果 JSON 字符串经 notify->done(OK, payload) 上报 (host->alloc)
+typedef void* (*AgentxxCapStartFn)(
     void*                   ctx,
     const AgentxxHost*      caller_host,
     AgentxxPluginStringView method,
     AgentxxPluginStringView args_json,
+    const AgentxxOpNotify*  notify,
     char**                  error_out
 );
+
+/* ---- 宿主侧异步操作句柄 (反向原语: 插件驱动宿主内部驱动的操作) ----
+ * call_tool_async / invoke_capability_async 返回: 目标插件的三件套由宿主
+ * 在 io 线程自动驱动推进, 本句柄仅查询/取消/收尸 —— 全部方法任意线程可调
+ * 用 (线程安全), 但【同一句柄的方法不得并发调用】(典型用法单线程轮询)。
+ * 典型轮询循环:
+ *   int st; char* payload;
+ *   while (op->poll(op) != AGENTXX_OP_POLL_DONE) { sleep_ms(op->poll(op)); }
+ *   op->take(op, &st, &payload);   // 恰一次; 之后句柄失效
+ */
+typedef struct AgentxxHostOp {
+    /// 查询进度: AGENTXX_OP_POLL_DONE = 已终结 (随后 take); >=0 未完成 +
+    /// 建议延迟毫秒 (宿主内部驱动在 io 线程进行, 本函数不阻塞)
+    int (*poll)(struct AgentxxHostOp* op);
+    /// 取终结结果 (恰一次): 0 成功并填充 out_status/out_payload (payload
+    /// host->alloc, 调用方 free); 非 0 = 尚未终结 (应继续 poll)
+    int (*take)(
+        struct AgentxxHostOp* op,
+        int*                  out_status,
+        char**                out_payload
+    );
+    /// 请求协作式取消 (转发给目标操作; 可多次调用; 句柄仍须 poll→take 收尸)
+    void (*cancel)(struct AgentxxHostOp* op);
+    /// 放弃句柄 (未终结时转为后台收割, 终态结果丢弃并释放资源;
+    /// 之后句柄失效不得再用)
+    void (*free)(struct AgentxxHostOp* op);
+    void* internal; ///< 宿主内部状态 (插件不得使用/释放)
+} AgentxxHostOp;
 
 /* ==================== 核心宿主函数表 (契约冻结) ==================== */
 
@@ -237,18 +352,32 @@ struct AgentxxHost {
 /* ==================== 接口表: 工具 (agentxx.agent.tools) ==================== */
 
 #define AGENTXX_IFACE_AGENT_TOOLS         "agentxx.agent.tools"
-#define AGENTXX_IFACE_AGENT_TOOLS_VERSION 1
+#define AGENTXX_IFACE_AGENT_TOOLS_VERSION 2
 
 typedef struct AgentxxToolsIface {
     int version; ///< 必须 == AGENTXX_IFACE_AGENT_TOOLS_VERSION
 
     /// 注册工具 (io 线程约束, 非 io 线程由宿主投递同步等待); 名称冲突返回非 0
+    /// - spec 内容注册时拷贝 (字符串深拷贝), 调用后即可释放
     int (*register_tool)(const AgentxxHost* host, const AgentxxToolSpec* spec);
     /// 注销工具 (按名称); 不存在返回非 0
     int (*unregister_tool)(const AgentxxHost* host, AgentxxPluginStringView name);
-    /// 调用插件工具 (仅限插件注册的工具, 不暴露宿主内置工具; io 线程查表短
-    /// 临界区, 目标 execute 回调在【调用方线程】执行; 目标插件由宿主引用计数
-    /// 保活): 返回结果 JSON 字符串 (host->alloc), 失败返回 NULL 并 error_out
+
+    /* ---- 插件互调: 异步原语 (推荐) ---- */
+    /// 异步调用插件工具 (仅限插件注册的工具, 不暴露宿主内置工具):
+    /// - 目标工具三件套由宿主在 io 线程自动驱动, 调用方任意线程经句柄轮询
+    /// - 查表/装配失败返回 NULL 并 error_out
+    AgentxxHostOp* (*call_tool_async)(
+        const AgentxxHost*      host,
+        AgentxxPluginStringView name,
+        AgentxxPluginStringView args_json,
+        AgentxxPluginStringView thread_id,
+        char**                  error_out
+    );
+    /// 阻塞便捷版 (内部轮询 call_tool_async 实现): 返回结果 JSON 字符串
+    /// (host->alloc), 失败返回 NULL 并 error_out
+    /// - 【禁止在宿主 io 线程调用】(io 线程阻塞会饿死内部驱动 → 死锁,
+    ///   宿主 fail-fast 报错); 适用于 offload 工作线程 / entry / 自有线程
     char* (*call_tool)(
         const AgentxxHost*      host,
         AgentxxPluginStringView name,
@@ -261,24 +390,16 @@ typedef struct AgentxxToolsIface {
 /* ==================== 接口表: 中间件钩子 (agentxx.agent.hooks) ==================== */
 
 #define AGENTXX_IFACE_AGENT_HOOKS         "agentxx.agent.hooks"
-#define AGENTXX_IFACE_AGENT_HOOKS_VERSION 1
+#define AGENTXX_IFACE_AGENT_HOOKS_VERSION 2
 
 typedef struct AgentxxHooksIface {
     int version; ///< 必须 == AGENTXX_IFACE_AGENT_HOOKS_VERSION
 
-    /// 注册钩子 (热插拔, 轮次边界生效; io 线程约束)
-    int (*register_hook)(
-        const AgentxxHost* host,
-        AgentxxHookPoint   point,
-        AgentxxHookFn      fn,
-        void*              user_data
-    );
-    int (*unregister_hook)(
-        const AgentxxHost* host,
-        AgentxxHookPoint   point,
-        AgentxxHookFn      fn,
-        void*              user_data
-    );
+    /// 注册钩子 (异步三件套规格; 热插拔, 轮次边界生效; io 线程约束)
+    /// - 每插件每钩子点至多一个, 重复注册覆盖旧值; 返回 0 成功
+    int (*register_hook)(const AgentxxHost* host, const AgentxxHookSpec* spec);
+    /// 注销钩子 (按 point 匹配 —— 每插件每钩子点至多一个); 不存在返回非 0
+    int (*unregister_hook)(const AgentxxHost* host, AgentxxHookPoint point);
 } AgentxxHooksIface;
 
 /* ==================== 接口表: 事件 (agentxx.agent.events) ==================== */
@@ -309,26 +430,42 @@ typedef struct AgentxxEventsIface {
 /* ==================== 接口表: 能力 (agentxx.agent.capabilities) ==================== */
 
 #define AGENTXX_IFACE_AGENT_CAPABILITIES         "agentxx.agent.capabilities"
-#define AGENTXX_IFACE_AGENT_CAPABILITIES_VERSION 1
+#define AGENTXX_IFACE_AGENT_CAPABILITIES_VERSION 2
 
 typedef struct AgentxxCapabilitiesIface {
     int version; ///< 必须 == AGENTXX_IFACE_AGENT_CAPABILITIES_VERSION
 
-    /// 声明能力 (无方法回调; 仅标记/互查; io 线程约束)
+    /// 声明能力 (无方法处理器; 仅标记/互查; io 线程约束)
     int (*register_capability)(const AgentxxHost* host, AgentxxPluginStringView capability);
-    /// 注册能力并附带方法回调 (能力调用 = 通用插件间通信通道;
-    /// 如 JS 引擎注册 "interpreter.js" 提供 load/unload 方法)
+    /// 注册能力并附带异步方法处理器三件套 (通用插件间通信通道; 如 JS 引擎
+    /// 注册 "interpreter.js" 提供 load/unload 方法; 三件套契约见
+    /// "统一异步操作原语"): 同名能力重复注册失败 (能力委派需唯一 provider)
     int (*register_capability_ex)(
-        const AgentxxHost*        host,
-        AgentxxPluginStringView   capability,
-        AgentxxCapabilityInvokeFn invoke,
-        void*                     ctx
+        const AgentxxHost*      host,
+        AgentxxPluginStringView capability,
+        AgentxxCapStartFn       start,
+        AgentxxOpPollFn         poll,   ///< 可为 NULL (内联完成型方法)
+        AgentxxOpCancelFn       cancel, ///< 可为 NULL
+        void*                   ctx
     );
     int (*unregister_capability)(const AgentxxHost* host, AgentxxPluginStringView capability);
     /// 是否存在指定能力 (io 线程查表)
     int (*has_capability)(const AgentxxHost* host, AgentxxPluginStringView capability);
-    /// 调用能力提供者的方法 (插件间通信; 查表在 io 线程, 提供者回调在
-    /// 【调用方线程】执行): 返回结果 JSON (host->alloc), 失败返回 NULL 并 error_out
+
+    /* ---- 能力调用: 异步原语 (推荐) ---- */
+    /// 异步调用能力提供者的方法: 提供者三件套由宿主在 io 线程自动驱动,
+    /// 调用方任意线程经句柄轮询; 查表/装配失败返回 NULL 并 error_out
+    AgentxxHostOp* (*invoke_capability_async)(
+        const AgentxxHost*      host,
+        AgentxxPluginStringView capability,
+        AgentxxPluginStringView method,
+        AgentxxPluginStringView args_json,
+        char**                  error_out
+    );
+    /// 阻塞便捷版 (内部轮询 invoke_capability_async 实现): 返回结果 JSON
+    /// (host->alloc), 失败返回 NULL 并 error_out
+    /// - 【禁止在宿主 io 线程调用】(同 call_tool 说明);
+    ///   适用于 offload 工作线程 / entry / 自有线程
     char* (*invoke_capability)(
         const AgentxxHost*      host,
         AgentxxPluginStringView capability,
@@ -341,7 +478,7 @@ typedef struct AgentxxCapabilitiesIface {
 /* ==================== 接口表: 任务调度 (agentxx.agent.scheduler) ==================== */
 
 #define AGENTXX_IFACE_AGENT_SCHEDULER         "agentxx.agent.scheduler"
-#define AGENTXX_IFACE_AGENT_SCHEDULER_VERSION 1
+#define AGENTXX_IFACE_AGENT_SCHEDULER_VERSION 2
 
 typedef struct AgentxxSchedulerIface {
     int version; ///< 必须 == AGENTXX_IFACE_AGENT_SCHEDULER_VERSION
@@ -358,16 +495,25 @@ typedef struct AgentxxSchedulerIface {
     void* (*add_timer)(const AgentxxHost* host, long interval_ms, void (*fn)(void* ud), void* ud);
     /// 取消定时器 (句柄随后失效; 插件卸载后句柄自动失效, 不得再调用)
     void (*cancel_timer)(const AgentxxHost* host, void* timer);
-    /// 在宿主阻塞线程池执行同步回调 (阻塞操作专用: 文件遍历/系统采样等;
+
+    /* ---- 阻塞池委托 (慢同步操作的官方逃生通道) ---- */
+    /// 在宿主阻塞线程池执行同步回调 (阻塞操作专用: 文件遍历/HTTP/子进程等;
     /// 池线程数有限, 禁止长时间占用)
-    /// - work: 在阻塞池线程执行; 返回结果与 error_out 须 host->alloc 分配
+    /// - cancel_flag: 【调用方持有】的取消标志 (volatile int; 0=未取消
+    ///   1=已取消), done 返回前必须保持有效 —— 典型用法: 封装进任务上下文,
+    ///   异步操作被 cancel 时置 1, work 内周期轮询协作退出; 无取消需求时
+    ///   可传入指向静态 0 值的指针
+    /// - work: 在阻塞池线程执行, 收到上述 cancel_flag; 返回结果与 error_out
+    ///   须 host->alloc 分配
     /// - done: work 返回后投递回 io 线程执行 (快速返回约定; result 为 work
     ///   返回值, error 为 work 填充的错误; 两者均须在 done 内 host->free)
     /// - work/done 执行期间插件代码段由宿主保活 (inflight 计数); 插件卸载
     ///   时宿主等待在途 offload 完成后再调 unload 回调
+    /// - 任意线程可调用
     void (*offload)(
         const AgentxxHost* host,
-        void* (*work)(void* ud, char** error_out),
+        volatile int*      cancel_flag,
+        void* (*work)(void* ud, volatile int* cancel_flag, char** error_out),
         void (*done)(void* ud, void* result, char* error),
         void*                   ud
     );
@@ -464,9 +610,9 @@ typedef struct AgentxxModelIface {
 } AgentxxModelIface;
 
 /* ==================== 接口表: 会话取消状态 (agentxx.agent.cancel) ====================
- * 插件 execute 回调运行在宿主线程池, 宿主超时/取消仅终止"等待"; 长任务型
- * 工具 (如命令执行) 可经本接口轮询会话取消令牌, 自行提前终止子任务
- * (与原 lib 内置命令工具的取消 watcher 行为一致)
+ * 长任务型工具/钩子 (如命令执行) 可经本接口轮询会话取消令牌, 在 poll 切片
+ * 或 offload work 内自行提前终止子任务; 宿主也会在会话取消时调用操作的
+ * cancel 回调 (协作式通知)
  */
 #define AGENTXX_IFACE_AGENT_CANCEL         "agentxx.agent.cancel"
 #define AGENTXX_IFACE_AGENT_CANCEL_VERSION 1

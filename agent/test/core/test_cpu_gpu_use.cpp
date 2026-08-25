@@ -3,6 +3,7 @@
 #include "agentxx/middlewares/middleware.h"
 #include "agentxx/plugin/plugin_manager.h"
 #include "agentxx/plugin/tool_registry.h"
+#include "asio/this_coro.hpp"
 #include "asio/use_awaitable.hpp"
 #include <cstdlib>
 #include <filesystem>
@@ -127,9 +128,29 @@ asio::awaitable<TestResult>
     // ---- 4. 能力 agentxx.system_usage (agent 侧周期采集 publish 的数据源) ----
     {
         XX_TEST_EXPECT_TRUE(ctx->pluginManager->hasCapability("agentxx.system_usage"));
-        char* err  = nullptr;
-        char* json = ctx->pluginManager
-                         ->invokeCapability(nullptr, "agentxx.system_usage", "query", "{}", &err);
+        // 统一异步操作模型: 阻塞便捷版在 io 线程被 fail-fast 拒绝 (防死锁),
+        // io 线程内调用方使用异步句柄 + 让出式轮询
+        char*         err = nullptr;
+        auto*         op  = ctx->pluginManager->invokeCapabilityAsync(
+            nullptr,
+            "agentxx.system_usage",
+            "query",
+            "{}",
+            &err
+        );
+        XX_TEST_EXPECT_TRUE(op != nullptr);
+        char* json = nullptr;
+        if (op) {
+            while (op->poll(op) != AGENTXX_OP_POLL_DONE) {
+                // 让出 io 线程 (内部驱动协程得以推进), 不阻塞
+                asio::steady_timer t(co_await asio::this_coro::executor);
+                t.expires_after(std::chrono::milliseconds(2));
+                co_await t.async_wait(asio::use_awaitable);
+            }
+            int status = AGENTXX_OP_FAILED;
+            XX_TEST_EXPECT_EQ(op->take(op, &status, &json), 0);
+            op->free(op);
+        }
         XX_TEST_EXPECT_TRUE(json != nullptr);
         if (json) {
             auto j = neograph::json::parse(json);

@@ -8,6 +8,7 @@
 
 #include "agentxx/plugin/plugin_api.h"
 #include "agentxx/plugin/plugin_iface_helper.h"
+#include "agentxx/plugin/plugin_tool_sync.h"
 #include <fmt/format.h>
 #include <neograph/json.h>
 #include <cstring>

@@ -6,6 +6,7 @@
 
 #include "agentxx/plugin/plugin_api.h"
 #include "agentxx/plugin/plugin_iface_helper.h"
+#include "agentxx/plugin/plugin_tool_sync.h"
 #include "codegraph/core/json.hpp"
 #include "fmt/format.h"
 #include <cstring>
