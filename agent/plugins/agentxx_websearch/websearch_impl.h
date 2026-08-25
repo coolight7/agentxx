@@ -23,8 +23,7 @@
 #include <optional>
 #include <string>
 
-namespace agentxx {
-namespace websearch_plugin {
+namespace agentxx_websearch_plugin {
 
 /// 模型搜索配置 (原 ModelWebSearchTool 所需的最小字段集;
 /// 由插件入口从宿主 agentxx.agent.model 接口表 JSON 填充)
@@ -355,5 +354,4 @@ inline std::string
     }
 }
 
-} // namespace websearch_plugin
-} // namespace agentxx
+} // namespace agentxx_websearch_plugin

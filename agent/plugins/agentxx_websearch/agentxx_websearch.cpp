@@ -179,7 +179,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                 {"required", neograph::json::array({"url"})},
             }
                                   .dump();
-            registerTool(kNameFetch, kDepictFetch, schema, &wrapExecute<agentxx::websearch_plugin::webFetchExecute>, AGENTXX_TOOL_FLAG_AUTO_SUMMARY);
+            registerTool(kNameFetch, kDepictFetch, schema, &wrapExecute<agentxx_websearch_plugin::webFetchExecute>, AGENTXX_TOOL_FLAG_AUTO_SUMMARY);
         }
 
         // ---- agentxx_web_fetch_markdown ----
@@ -225,7 +225,7 @@ When resolving relative links found in the returned Markdown, combine them with 
                 kNameFetchMd,
                 kDepictFetchMd,
                 schema,
-                &wrapExecute<agentxx::websearch_plugin::webFetchMarkdownExecute>,
+                &wrapExecute<agentxx_websearch_plugin::webFetchMarkdownExecute>,
                 AGENTXX_TOOL_FLAG_AUTO_SUMMARY
             );
         }
@@ -251,7 +251,7 @@ When resolving relative links found in the returned Markdown, combine them with 
             // 静态上下文: 搜索方式与参数 (entry 时装配, execute 回调只读)
             static std::string     g_searchApiUrl;
             static bool            g_convertHtml2markdown = true;
-            static agentxx::websearch_plugin::ModelSearchConfig g_modelCfg;
+            static agentxx_websearch_plugin::ModelSearchConfig g_modelCfg;
             static bool            g_useModelSearch = false;
 
             if (hasCfg) {
@@ -312,12 +312,12 @@ When resolving relative links found in the returned Markdown, combine them with 
                             = argsStr.empty() ? neograph::json::object() : neograph::json::parse(argsStr);
                         std::string result;
                         if (g_useModelSearch) {
-                            result = agentxx::websearch_plugin::modelWebSearchExecute(
+                            result = agentxx_websearch_plugin::modelWebSearchExecute(
                                 arguments,
                                 g_modelCfg
                             );
                         } else {
-                            result = agentxx::websearch_plugin::webSearchExecute(
+                            result = agentxx_websearch_plugin::webSearchExecute(
                                 arguments,
                                 g_searchApiUrl,
                                 g_convertHtml2markdown

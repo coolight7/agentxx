@@ -25,8 +25,8 @@
 
 namespace agentxx_codegraph_plugin {
 
-/// CodeGraphManager (定义于 agentxx::expand; 插件内简称)
-using CodeGraphManager = agentxx::expand::CodeGraphManager;
+/// CodeGraphManager (定义于 agentxx_codegraph_plugin; 插件内简称)
+using CodeGraphManager = agentxx_codegraph_plugin::CodeGraphManager;
 
 /// 插件配置 (宿主 get_config 通用信息 + get_plugin_args 业务参数)
 /// - 宿主只整体传递 args json, 不解析其字段语义; 字段名由本插件定义:
@@ -742,7 +742,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_get_inf
 }
 
 struct PluginCtx {
-    std::shared_ptr<agentxx::expand::CodeGraphManager> mgr;
+    std::shared_ptr<agentxx_codegraph_plugin::CodeGraphManager> mgr;
     std::thread                                        warmup;
     std::atomic<bool>                                  stop{false};
     /// 项目根目录 (entry 时确定; client_attached 快照重发时携带)
@@ -873,7 +873,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
         }
 
         // 索引过滤配置 (与原 CodeAgent 一致)
-        agentxx::expand::CodeGraphIndexConfig cgConfig;
+        agentxx_codegraph_plugin::CodeGraphIndexConfig cgConfig;
         cgConfig.loadPaths           = cfg.loadPaths;
         cgConfig.ignorePaths         = cfg.ignorePaths;
         cgConfig.useGitignore        = cfg.useGitignore;
@@ -881,7 +881,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
 
         auto        ctx       = std::make_unique<PluginCtx>();
         std::string sqliteDir = (std::filesystem::path(cfg.dataDir) / "sqlite").string();
-        ctx->mgr = std::make_shared<agentxx::expand::CodeGraphManager>(sqliteDir, cgConfig);
+        ctx->mgr = std::make_shared<agentxx_codegraph_plugin::CodeGraphManager>(sqliteDir, cgConfig);
 
         // 索引进度回调 → publish("agentxx_codegraph.progress") 通知宿主
         // (topic 约定 `{插件名}.{事件名}`; 频率由 CodeGraphManager 内部节流)

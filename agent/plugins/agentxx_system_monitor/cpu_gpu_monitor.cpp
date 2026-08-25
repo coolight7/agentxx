@@ -20,8 +20,7 @@
 #undef max
 #undef min
 
-namespace agentxx {
-namespace expand {
+namespace agentxx_system_monitor_plugin {
 
 struct LUIDHash {
     size_t operator()(const LUID& luid) const {
@@ -462,8 +461,7 @@ asio::awaitable<CpuGpuUsage> CpuGpuMonitor::query() {
     co_return co_await impl_->query();
 }
 
-} // namespace expand
-} // namespace agentxx
+} // namespace agentxx_system_monitor_plugin
 
 #elif XX_IS_LINUX_D
 
@@ -492,8 +490,7 @@ asio::awaitable<CpuGpuUsage> CpuGpuMonitor::query() {
 #include <string_view>
 #include <vector>
 
-namespace agentxx {
-namespace expand {
+namespace agentxx_system_monitor_plugin {
 
 /// 原 libagentxx util::removeBetweenSpace 的本地拷贝 (插件不链接 libagentxx):
 /// 移除字符串首尾空白 (可选移除换行), 供解析 sysfs/proc 内容使用
@@ -884,13 +881,11 @@ asio::awaitable<CpuGpuUsage> CpuGpuMonitor::query() {
     co_return co_await impl_->query();
 }
 
-} // namespace expand
-} // namespace agentxx
+} // namespace agentxx_system_monitor_plugin
 
 #else
 
-namespace agentxx {
-namespace expand {
+namespace agentxx_system_monitor_plugin {
 
 class CpuGpuMonitor::Impl {
 public:
@@ -911,7 +906,6 @@ asio::awaitable<CpuGpuUsage> CpuGpuMonitor::query() {
     return impl_->query();
 }
 
-} // namespace expand
-} // namespace agentxx
+} // namespace agentxx_system_monitor_plugin
 
 #endif

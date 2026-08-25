@@ -20,27 +20,27 @@ using namespace agentxx_audio_stream_plugin;
 namespace {
 
 /// 音频数据源枚举 → 字符串
-const char* sourceName(agentxx::expand::AudioDataSource s) {
+const char* sourceName(agentxx_audio_stream_plugin::AudioDataSource s) {
     switch (s) {
-        case agentxx::expand::AudioDataSource::SystemOutput:
+        case agentxx_audio_stream_plugin::AudioDataSource::SystemOutput:
             return "system_output";
-        case agentxx::expand::AudioDataSource::ProgramOutput:
+        case agentxx_audio_stream_plugin::AudioDataSource::ProgramOutput:
             return "program_output";
-        case agentxx::expand::AudioDataSource::MicrophoneInput:
+        case agentxx_audio_stream_plugin::AudioDataSource::MicrophoneInput:
             return "microphone_input";
     }
     return "unknown";
 }
 
 /// 字符串 → 音频数据源枚举 (未知返回 system_output)
-agentxx::expand::AudioDataSource parseSource(const std::string& s) {
+agentxx_audio_stream_plugin::AudioDataSource parseSource(const std::string& s) {
     if (s == "program_output") {
-        return agentxx::expand::AudioDataSource::ProgramOutput;
+        return agentxx_audio_stream_plugin::AudioDataSource::ProgramOutput;
     }
     if (s == "microphone_input") {
-        return agentxx::expand::AudioDataSource::MicrophoneInput;
+        return agentxx_audio_stream_plugin::AudioDataSource::MicrophoneInput;
     }
-    return agentxx::expand::AudioDataSource::SystemOutput;
+    return agentxx_audio_stream_plugin::AudioDataSource::SystemOutput;
 }
 
 /// PCM 字节 → base64 (捕获数据可能较大, 事件载荷为 JSON 字符串)
@@ -94,12 +94,12 @@ struct AudioStreamHolder {
         return holder;
     }
 
-    bool start(agentxx::expand::AudioDataSource source, uint32_t targetProcessId) {
+    bool start(agentxx_audio_stream_plugin::AudioDataSource source, uint32_t targetProcessId) {
         if (stream_.isRunning()) {
             return false;
         }
         // 异常守卫: 监听回调运行在音频捕获线程, 异常逃逸会 terminate 进程
-        stream_.addListener([](const agentxx::expand::AudioData& data) {
+        stream_.addListener([](const agentxx_audio_stream_plugin::AudioData& data) {
             try {
                 if (!g_host || !g_if.events || !g_if.events->publish) {
                     return;
@@ -136,7 +136,7 @@ struct AudioStreamHolder {
         stream_.removeAllListeners();
     }
 
-    agentxx::expand::AudioStream stream_;
+    agentxx_audio_stream_plugin::AudioStream stream_;
 };
 
 /// 工具执行: command = start|stop|status (阻塞委托型; offload 池线程调用)

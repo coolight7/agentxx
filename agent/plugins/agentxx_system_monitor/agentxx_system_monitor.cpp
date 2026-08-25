@@ -43,13 +43,13 @@ using namespace agentxx_system_monitor_plugin;
 //   用局部 io_context 驱动协程至完成 (阻塞调用方线程, 宿主已卸载到线程池)
 // =====================================================================
 
-static agentxx::expand::CpuGpuUsage querySync() {
+static agentxx_system_monitor_plugin::CpuGpuUsage querySync() {
     asio::io_context             io;
-    agentxx::expand::CpuGpuUsage usage;
+    agentxx_system_monitor_plugin::CpuGpuUsage usage;
     asio::co_spawn(
         io,
         [&usage]() -> asio::awaitable<void> {
-            agentxx::expand::CpuGpuMonitor monitor;
+            agentxx_system_monitor_plugin::CpuGpuMonitor monitor;
             usage = co_await monitor.query();
         },
         asio::detached
@@ -79,7 +79,7 @@ static std::string jsonEscape(const std::string& s) {
     return out;
 }
 
-static std::string usageToJson(const agentxx::expand::CpuGpuUsage& u) {
+static std::string usageToJson(const agentxx_system_monitor_plugin::CpuGpuUsage& u) {
     std::string gpus = "[";
     for (size_t i = 0; i < u.gpus.size(); ++i) {
         const auto& g = u.gpus[i];

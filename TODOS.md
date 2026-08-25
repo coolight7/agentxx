@@ -6,9 +6,11 @@
 - 验证subagent、summarization
 - CI/CD
 - 文档翻译
-- release 编译发布时携带 标准库
-- graph json 定义，支持插件生成 graph json、注册 node; (最多只能有一个插件生成 graph，都没有则默认生成 CodeAgent)
 - 整理文档
+- release 编译发布时携带 标准库
+- 统一使用 getSessionWorkDir
+- graph json 定义，支持插件生成 graph json、注册 node; (最多只能有一个插件生成 graph，都没有则默认生成 CodeAgent)
+- Plan 渲染独立为 client 插件
 - 插件宏辅助代码
 - 插件支持多次加载，目前用了许多全局变量存储结构体，可能有问题
 - 插件 readHostConfig 改为直接传入 变量路径 取值

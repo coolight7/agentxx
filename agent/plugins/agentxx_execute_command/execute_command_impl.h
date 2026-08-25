@@ -50,8 +50,7 @@
 #include "boost/process.hpp"
 #endif
 
-namespace agentxx {
-namespace execmd_plugin {
+namespace agentxx_execmd_plugin {
 
 /// 取消查询回调 (返回 true 表示会话已取消); 测试可传 nullptr 等价无取消支持
 using IsCancelledFn = std::function<bool()>;
@@ -528,5 +527,4 @@ inline std::string windowsExecute(
 #endif
 }
 
-} // namespace execmd_plugin
-} // namespace agentxx
+} // namespace agentxx_execmd_plugin

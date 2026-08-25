@@ -129,7 +129,7 @@ static void registerTool(
 // =====================================================================
 
 // 前置声明 (ScreenCaptureHolder 流式回调引用; 定义见下方)
-static codegraph::Json frameToJson(const agentxx::expand::ScreenFrame& f, bool saveImages);
+static codegraph::Json frameToJson(const agentxx_screen_capture_plugin::ScreenFrame& f, bool saveImages);
 
 /// 流式采集单例 (ScreenCapture 内部自管线程; unload 时停止)
 struct ScreenCaptureHolder {
@@ -146,7 +146,7 @@ struct ScreenCaptureHolder {
         // 异常守卫: 帧回调运行在采集线程, 异常逃逸会 std::terminate 进程
         return capture_.startStreaming(
             rate,
-            [](const std::vector<agentxx::expand::ScreenFrame>& frames) {
+            [](const std::vector<agentxx_screen_capture_plugin::ScreenFrame>& frames) {
                 try {
                     if (!g_host || !g_if.events || !g_if.events->publish) {
                         return;
@@ -174,7 +174,7 @@ struct ScreenCaptureHolder {
         capture_.stopStreaming();
     }
 
-    agentxx::expand::ScreenCapture capture_;
+    agentxx_screen_capture_plugin::ScreenCapture capture_;
 };
 
 /// 宿主通用配置缓存 (entry 时经 get_config 读取; get_config 仅 io 线程,
@@ -213,7 +213,7 @@ static std::string buildCapturePath(int screenIndex) {
 /// - saveImages=true 且捕获目录可用时: 编码 PNG 落盘, 结果含 image_path;
 ///   编码/落盘失败在 image_error 标记, 不影响其余元信息返回
 /// - 结果体积控制在 KB 级 (元信息仅数百字节), 不会污染会话上下文
-static codegraph::Json frameToJson(const agentxx::expand::ScreenFrame& f, bool saveImages) {
+static codegraph::Json frameToJson(const agentxx_screen_capture_plugin::ScreenFrame& f, bool saveImages) {
     codegraph::Json j = codegraph::Json::object();
     j["width"]        = f.width;
     j["height"]       = f.height;
@@ -237,7 +237,7 @@ static codegraph::Json frameToJson(const agentxx::expand::ScreenFrame& f, bool s
 
 /// 帧数组 → JSON (空帧标记失败)
 static std::string
-    framesResult(const std::vector<agentxx::expand::ScreenFrame>& frames, bool saveImages) {
+    framesResult(const std::vector<agentxx_screen_capture_plugin::ScreenFrame>& frames, bool saveImages) {
     if (frames.empty()) {
         return R"({"ok":false,"error":"capture failed"})";
     }
@@ -321,7 +321,7 @@ static void registerScreenCaptureTool() {
                 return framesResult(capture.capture_.captureAllScreens(), saveImages);
             }
             if (command == "capture_mouse") {
-                std::vector<agentxx::expand::ScreenFrame> frames;
+                std::vector<agentxx_screen_capture_plugin::ScreenFrame> frames;
                 auto                                      f = capture.capture_.captureMouseScreen();
                 if (f.width > 0) {
                     frames.push_back(std::move(f));
@@ -340,7 +340,7 @@ static void registerScreenCaptureTool() {
                         screenCount
                     );
                 }
-                std::vector<agentxx::expand::ScreenFrame> frames;
+                std::vector<agentxx_screen_capture_plugin::ScreenFrame> frames;
                 auto f = capture.capture_.captureScreen(static_cast<int>(idx));
                 if (f.width > 0 && f.height > 0) {
                     frames.push_back(std::move(f));

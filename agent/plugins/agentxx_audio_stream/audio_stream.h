@@ -7,8 +7,7 @@
 #include <string>
 #include <vector>
 
-namespace agentxx {
-namespace expand {
+namespace agentxx_audio_stream_plugin {
 
 enum class AudioDataSource {
     SystemOutput,
@@ -51,5 +50,4 @@ private:
     std::unique_ptr<Impl> impl_;
 };
 
-} // namespace expand
-} // namespace agentxx
+} // namespace agentxx_audio_stream_plugin

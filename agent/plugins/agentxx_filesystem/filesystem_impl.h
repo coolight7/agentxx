@@ -33,8 +33,7 @@
 #include <string>
 #include <vector>
 
-namespace agentxx {
-namespace filesystem_plugin {
+namespace agentxx_fs_plugin {
 
 /// 取消查询回调 (返回 true 表示会话已取消); 测试可传 nullptr 等价无取消支持
 using IsCancelledFn = std::function<bool()>;
@@ -1060,5 +1059,4 @@ inline std::string fileGrepExecute(
     return detail::asErrorText([&] { return fileGrepExecuteImpl(arguments, workDir, isCancelled); });
 }
 
-} // namespace filesystem_plugin
-} // namespace agentxx
+} // namespace agentxx_fs_plugin

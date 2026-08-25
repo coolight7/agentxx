@@ -16,11 +16,9 @@
 #include <vector>
 
 // ui_control.cpp 提供的执行函数 (Windows 分支; 非 Windows 分支由 ui_control.cpp 提供)
-namespace agentxx {
-namespace tools {
+namespace agentxx_computer_use_plugin {
 std::string uiControlExecute(agentxx_computer_use_plugin::SimpleJson& arguments);
-} // namespace tools
-} // namespace agentxx
+} // namespace agentxx_computer_use_plugin
 
 namespace agentxx_computer_use_plugin {
 
@@ -252,7 +250,7 @@ static void registerUiControlTool() {
         kUiControlDefaultDepict,
         uiControlSchema(),
         [](SimpleJson& args) -> std::string {
-            return agentxx::tools::uiControlExecute(args);
+            return agentxx_computer_use_plugin::uiControlExecute(args);
         }
     );
 }

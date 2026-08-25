@@ -28,8 +28,7 @@ using Microsoft::WRL::ComPtr;
 #include <thread>
 #include <vector>
 
-namespace agentxx {
-namespace expand {
+namespace agentxx_audio_stream_plugin {
 
 #if XX_IS_WIN_D && false
 
@@ -539,5 +538,4 @@ void AudioStream::removeAllListeners() {
     impl_->removeAllListeners();
 }
 
-} // namespace expand
-} // namespace agentxx
+} // namespace agentxx_audio_stream_plugin

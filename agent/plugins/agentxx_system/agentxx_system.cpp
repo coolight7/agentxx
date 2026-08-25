@@ -103,7 +103,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int agentxx_plugin_entry(const AgentxxHost* hos
                 (void)thread_id;
                 (void)tool_call_id;
                 try {
-                    auto result = agentxx::system_plugin::currentDatetimeExecute();
+                    auto result = agentxx_system_plugin::currentDatetimeExecute();
                     return pluginStrdup(result.c_str());
                 } catch (const std::exception& ex) {
                     if (error_out) {

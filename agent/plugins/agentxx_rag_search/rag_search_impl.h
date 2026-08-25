@@ -32,8 +32,7 @@
 #include <utility>
 #include <vector>
 
-namespace agentxx {
-namespace rag_plugin {
+namespace agentxx_rag_plugin {
 
 // =========================================================================
 // Text Chunk Splitting — split modes & config (原 RAGSearchTool::VectorStore)
@@ -703,5 +702,4 @@ inline EmbedFn makeHttpEmbedder(std::string baseUrl, std::string model) {
     };
 }
 
-} // namespace rag_plugin
-} // namespace agentxx
+} // namespace agentxx_rag_plugin

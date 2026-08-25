@@ -10,8 +10,7 @@
 #include "codegraph/core/json.hpp"
 #include "codegraph/core/types.h"
 
-namespace agentxx {
-namespace expand {
+namespace agentxx_codegraph_plugin {
 
 struct CodeGraphSearchResult {
     std::vector<codegraph::Node> nodes;
@@ -121,7 +120,6 @@ private:
     std::unique_ptr<Impl> impl_;
 };
 
-} // namespace expand
-} // namespace agentxx
+} // namespace agentxx_codegraph_plugin
 
 #endif

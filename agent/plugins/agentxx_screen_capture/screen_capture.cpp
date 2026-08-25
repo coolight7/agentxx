@@ -19,8 +19,7 @@ using Microsoft::WRL::ComPtr;
 #include <atomic>
 #include <thread>
 
-namespace agentxx {
-namespace expand {
+namespace agentxx_screen_capture_plugin {
 
 #if XX_IS_WIN_D
 
@@ -909,5 +908,4 @@ bool ScreenCapture::saveFramePng(const ScreenFrame& frame, const std::string& pa
     return impl_->saveFramePng(frame, path);
 }
 
-} // namespace expand
-} // namespace agentxx
+} // namespace agentxx_screen_capture_plugin

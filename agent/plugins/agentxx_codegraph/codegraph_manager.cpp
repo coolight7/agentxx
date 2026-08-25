@@ -32,8 +32,7 @@
 #include "codegraph/search/fts_search.h"
 #include "codegraph/sync/file_watcher.h"
 
-namespace agentxx {
-namespace expand {
+namespace agentxx_codegraph_plugin {
 
 /// 插件侧 catchError (替代 libcatchError):
 /// - 捕获 func 抛出的全部异常, 转错误字符串调 onError 返回
@@ -2254,5 +2253,4 @@ void CodeGraphManager::setProgressCallback(IndexProgressCallback callback) {
     impl_->setProgressCallback(std::move(callback));
 }
 
-} // namespace expand
-} // namespace agentxx
+} // namespace agentxx_codegraph_plugin

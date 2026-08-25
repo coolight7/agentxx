@@ -157,7 +157,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int agentxx_plugin_entry(const AgentxxHost* hos
                 kNameHtml2Md,
                 kDepictHtml2Md,
                 schema,
-                &wrapExecute<agentxx::string_plugin::htmlToMarkdownExecute>,
+                &wrapExecute<agentxx_string_plugin::htmlToMarkdownExecute>,
                 AGENTXX_TOOL_FLAG_AUTO_SUMMARY
             );
         }
@@ -208,7 +208,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int agentxx_plugin_entry(const AgentxxHost* hos
                 kNameRegexp,
                 kDepictRegexp,
                 schema,
-                &wrapExecute<agentxx::string_plugin::regexpExecute>,
+                &wrapExecute<agentxx_string_plugin::regexpExecute>,
                 AGENTXX_TOOL_FLAG_AUTO_SUMMARY
             );
         }

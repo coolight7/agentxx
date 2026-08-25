@@ -117,8 +117,8 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
         }
 
         // ---- 构建向量索引 (文档扫描 + embedding 生成; 耗时操作在线程池内执行) ----
-        static agentxx::rag_plugin::VectorStore g_store
-            = agentxx::rag_plugin::VectorStore(agentxx::rag_plugin::makeHttpEmbedder(baseUrl, modelName));
+        static agentxx_rag_plugin::VectorStore g_store
+            = agentxx_rag_plugin::VectorStore(agentxx_rag_plugin::makeHttpEmbedder(baseUrl, modelName));
 
         // 逐步上报启动进度: RAG 文档扫描 + embedding 生成耗时较长 (原实现同语义;
         // 插件 entry 阶段宿主进度事件不可用, 经日志提示)

@@ -18,8 +18,7 @@
 // agentxx_computer_use_plugin 命名空间, 此处直接使用
 using namespace agentxx_computer_use_plugin;
 
-namespace agentxx {
-namespace tools {
+namespace agentxx_computer_use_plugin {
 
 #if XX_IS_WIN_D
 
@@ -1134,5 +1133,4 @@ std::string uiControlExecute(agentxx_computer_use_plugin::SimpleJson&) {
 }
 #endif
 
-} // namespace tools
-} // namespace agentxx
+} // namespace agentxx_computer_use_plugin

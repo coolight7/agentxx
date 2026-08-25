@@ -5,8 +5,7 @@
 #include <memory>
 #include <string>
 
-namespace agentxx {
-namespace expand {
+namespace agentxx_text_selection_monitor_plugin {
 
 enum class TextSource {
     Unknown,
@@ -55,5 +54,4 @@ private:
     std::unique_ptr<Impl> impl_;
 };
 
-} // namespace expand
-} // namespace agentxx
+} // namespace agentxx_text_selection_monitor_plugin

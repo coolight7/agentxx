@@ -7,8 +7,7 @@
 #include <string>
 #include <vector>
 
-namespace agentxx {
-namespace expand {
+namespace agentxx_screen_capture_plugin {
 
 struct ScreenFrame {
     int                                   width       = 0;
@@ -67,5 +66,4 @@ private:
     std::unique_ptr<Impl> impl_;
 };
 
-} // namespace expand
-} // namespace agentxx
+} // namespace agentxx_screen_capture_plugin

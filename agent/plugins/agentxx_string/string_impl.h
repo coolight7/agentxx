@@ -12,8 +12,7 @@
 #include <string>
 #include <vector>
 
-namespace agentxx {
-namespace string_plugin {
+namespace agentxx_string_plugin {
 
 /// agentxx_string_html_to_markdown 执行体 (原 StringHtml2MarkdownTool::execute_async)
 /// - content 为空返回错误 JSON; 其余异常由调用方 (C ABI 边界) 捕获
@@ -82,5 +81,4 @@ inline std::string regexpExecute(const neograph::json& arguments) {
     return R"({"error":"No match found"})";
 }
 
-} // namespace string_plugin
-} // namespace agentxx
+} // namespace agentxx_string_plugin

@@ -33,8 +33,7 @@ namespace asio                   = ::boost::asio;
 using neograph_asio_system_error = ::boost::system::system_error;
 using neograph_asio_error_code   = ::boost::system::error_code;
 
-namespace agentxx {
-namespace expand {
+namespace agentxx_text_selection_monitor_plugin {
 
 #if XX_IS_WIN_D
 
@@ -1638,5 +1637,4 @@ bool TextSelectionMonitor::isRunning() const {
     return impl_->isRunning();
 }
 
-} // namespace expand
-} // namespace agentxx
+} // namespace agentxx_text_selection_monitor_plugin

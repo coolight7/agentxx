@@ -20,27 +20,27 @@ using namespace agentxx_text_selection_monitor_plugin;
 namespace {
 
 /// 文本来源枚举 → 字符串
-const char* sourceName(agentxx::expand::TextSource s) {
+const char* sourceName(agentxx_text_selection_monitor_plugin::TextSource s) {
     switch (s) {
-        case agentxx::expand::TextSource::Unknown:
+        case agentxx_text_selection_monitor_plugin::TextSource::Unknown:
             return "unknown";
-        case agentxx::expand::TextSource::TextPattern:
+        case agentxx_text_selection_monitor_plugin::TextSource::TextPattern:
             return "text_pattern";
-        case agentxx::expand::TextSource::TextChildPattern:
+        case agentxx_text_selection_monitor_plugin::TextSource::TextChildPattern:
             return "text_child_pattern";
-        case agentxx::expand::TextSource::ValuePattern:
+        case agentxx_text_selection_monitor_plugin::TextSource::ValuePattern:
             return "value_pattern";
-        case agentxx::expand::TextSource::EmGetSel:
+        case agentxx_text_selection_monitor_plugin::TextSource::EmGetSel:
             return "em_get_sel";
-        case agentxx::expand::TextSource::AccessibleObject:
+        case agentxx_text_selection_monitor_plugin::TextSource::AccessibleObject:
             return "accessible_object";
-        case agentxx::expand::TextSource::WmGetText:
+        case agentxx_text_selection_monitor_plugin::TextSource::WmGetText:
             return "wm_get_text";
-        case agentxx::expand::TextSource::DevTools:
+        case agentxx_text_selection_monitor_plugin::TextSource::DevTools:
             return "devtools";
-        case agentxx::expand::TextSource::FlutterAccessibility:
+        case agentxx_text_selection_monitor_plugin::TextSource::FlutterAccessibility:
             return "flutter_accessibility";
-        case agentxx::expand::TextSource::Clipboard:
+        case agentxx_text_selection_monitor_plugin::TextSource::Clipboard:
             return "clipboard";
     }
     return "unknown";
@@ -75,7 +75,7 @@ struct TextSelectionHolder {
             monitor_.setDebounceMs(debounceMs);
         }
         // 异常守卫: 监听回调运行在监视线程, 异常逃逸会 terminate 进程
-        monitor_.addListener([](const agentxx::expand::TextSelectionEvent& evt) {
+        monitor_.addListener([](const agentxx_text_selection_monitor_plugin::TextSelectionEvent& evt) {
             try {
                 if (!g_host || !g_if.events || !g_if.events->publish) {
                     return;
@@ -107,7 +107,7 @@ struct TextSelectionHolder {
         monitor_.removeAllListeners();
     }
 
-    agentxx::expand::TextSelectionMonitor monitor_;
+    agentxx_text_selection_monitor_plugin::TextSelectionMonitor monitor_;
 };
 
 /// 工具执行: command = start|stop|status (阻塞委托型; offload 池线程调用)

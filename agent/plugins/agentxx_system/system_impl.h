@@ -14,8 +14,7 @@
 #define XX_IS_LINUX_D 1
 #endif
 
-namespace agentxx {
-namespace system_plugin {
+namespace agentxx_system_plugin {
 
 /// 获取当前时间描述文本 (原 GetCurrentDateTimeTool::execute_async)
 /// - 输出三行: Timestamp 毫秒 / 本地 24 小时制 / UTC 24 小时制
@@ -77,5 +76,4 @@ UTC Time (24Hour): {})",
     );
 }
 
-} // namespace system_plugin
-} // namespace agentxx
+} // namespace agentxx_system_plugin

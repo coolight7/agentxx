@@ -11,8 +11,7 @@
 
 namespace asio = ::boost::asio;
 
-namespace agentxx {
-namespace expand {
+namespace agentxx_system_monitor_plugin {
 
 struct MemoryInfo {
     uint64_t totalPhysicalMB = 0;
@@ -52,5 +51,4 @@ private:
     std::unique_ptr<Impl> impl_;
 };
 
-} // namespace expand
-} // namespace agentxx
+} // namespace agentxx_system_monitor_plugin

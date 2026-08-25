@@ -187,7 +187,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                 = agentxx_plugin_sv(g_storage[1].data(), g_storage[1].size());
             spec.user_data = nullptr;
             spec.flags     = AGENTXX_TOOL_FLAG_AUTO_SUMMARY;
-            spec.execute   = &wrapExecute<agentxx::execmd_plugin::windowsExecute>;
+            spec.execute   = &wrapExecute<agentxx_execmd_plugin::windowsExecute>;
             if (agentxx_register_sync_tool(g_host, &spec) != 0) {
                 XX_LOGW("agentxx_execute_command: register tool {} failed", kNameWindows);
             }
@@ -242,7 +242,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                 = agentxx_plugin_sv(g_storage[3].data(), g_storage[3].size());
             spec.user_data = nullptr;
             spec.flags     = AGENTXX_TOOL_FLAG_AUTO_SUMMARY;
-            spec.execute   = &wrapExecute<agentxx::execmd_plugin::bashExecute>;
+            spec.execute   = &wrapExecute<agentxx_execmd_plugin::bashExecute>;
             if (agentxx_register_sync_tool(g_host, &spec) != 0) {
                 XX_LOGW("agentxx_execute_command: register tool {} failed", kNameBash);
             }

@@ -226,7 +226,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                 {"required", neograph::json::array({"path"})},
             }
                                   .dump();
-            registerTool(kNameList, kDepictList, schema, &wrapExecute<agentxx::filesystem_plugin::fileListExecute>);
+            registerTool(kNameList, kDepictList, schema, &wrapExecute<agentxx_fs_plugin::fileListExecute>);
         }
 
         // ---- agentxx_filesystem_read ----
@@ -257,7 +257,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                 {"required", neograph::json::array({"path"})},
             }
                                   .dump();
-            registerTool(kNameRead, kDepictRead, schema, &wrapExecute<agentxx::filesystem_plugin::fileReadExecute>);
+            registerTool(kNameRead, kDepictRead, schema, &wrapExecute<agentxx_fs_plugin::fileReadExecute>);
         }
 
         // ---- agentxx_filesystem_write ----
@@ -287,7 +287,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                 {"required", neograph::json::array({"path", "content"})},
             }
                                   .dump();
-            registerTool(kNameWrite, kDepictWrite, schema, &wrapExecute<agentxx::filesystem_plugin::fileWriteExecute>);
+            registerTool(kNameWrite, kDepictWrite, schema, &wrapExecute<agentxx_fs_plugin::fileWriteExecute>);
         }
 
         // ---- agentxx_filesystem_edit ----
@@ -330,7 +330,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                 {"required", neograph::json::array({"path", "old_str", "new_str"})},
             }
                                   .dump();
-            registerTool(kNameEdit, kDepictEdit, schema, &wrapExecute<agentxx::filesystem_plugin::fileEditExecute>);
+            registerTool(kNameEdit, kDepictEdit, schema, &wrapExecute<agentxx_fs_plugin::fileEditExecute>);
         }
 
         // ---- agentxx_filesystem_glob ----
@@ -400,7 +400,7 @@ Example: `["**/node_modules/**", "**/.git/**", "**/build/**"]`.)")},
                 }
                                   .dump();
             }();
-            registerTool(kNameGlob, kDepictGlob, schema, &wrapExecute<agentxx::filesystem_plugin::fileGlobExecute>);
+            registerTool(kNameGlob, kDepictGlob, schema, &wrapExecute<agentxx_fs_plugin::fileGlobExecute>);
         }
 
         // ---- agentxx_filesystem_grep ----
@@ -493,7 +493,7 @@ starts with a header line `{filepath}:`, followed by that file's lines (`{line}:
                 }
                                   .dump();
             }();
-            registerTool(kNameGrep, kDepictGrep, schema, &wrapExecute<agentxx::filesystem_plugin::fileGrepExecute>);
+            registerTool(kNameGrep, kDepictGrep, schema, &wrapExecute<agentxx_fs_plugin::fileGrepExecute>);
         }
 
         return 0;
