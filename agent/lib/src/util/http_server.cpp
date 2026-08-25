@@ -1,4 +1,5 @@
 #include "agentxx/util/http_server.h"
+#include "agentxx/util/http_client.h"
 #include <array>
 
 namespace agentxx {
@@ -149,14 +150,15 @@ void HttpServer::start() {
 
     // Setup SSL context if configured
     if (!config_.sslCertFile.empty() && !config_.sslKeyFile.empty()) {
-        // tls_server (TLS_method) 可自动协商至 TLS 1.3; tlsv12_server 会把版本
-        // 锁死为 1.2, 仅支持 1.3 的客户端无法连接 (同 http_client sharedSslCtx)
+        // tls_server (TLS_method) + enableTlsAutoNegotiate: 对 TLS 1.0 ~ 最高
+        // 版本 (当前 1.3) 全范围自动协商; tlsv12_server 会把版本锁死为 1.2,
+        // 仅支持 1.3 的客户端无法连接
         sslCtx_ = std::make_unique<asio::ssl::context>(asio::ssl::context::tls_server);
         sslCtx_->set_options(
             asio::ssl::context::default_workarounds | asio::ssl::context::no_sslv2
-            | asio::ssl::context::no_sslv3 | asio::ssl::context::no_tlsv1
-            | asio::ssl::context::no_tlsv1_1 | asio::ssl::context::single_dh_use
+            | asio::ssl::context::no_sslv3 | asio::ssl::context::single_dh_use
         );
+        HttpClient::enableTlsAutoNegotiate(*sslCtx_);
         sslCtx_->use_certificate_chain_file(config_.sslCertFile);
         sslCtx_->use_private_key_file(config_.sslKeyFile, asio::ssl::context::pem);
     }
@@ -248,14 +250,15 @@ void HttpServer::startAsync(asio::any_io_executor executor) {
     acceptor_->listen(asio::socket_base::max_listen_connections);
 
     if (!config_.sslCertFile.empty() && !config_.sslKeyFile.empty()) {
-        // tls_server (TLS_method) 可自动协商至 TLS 1.3; tlsv12_server 会把版本
-        // 锁死为 1.2, 仅支持 1.3 的客户端无法连接 (同 http_client sharedSslCtx)
+        // tls_server (TLS_method) + enableTlsAutoNegotiate: 对 TLS 1.0 ~ 最高
+        // 版本 (当前 1.3) 全范围自动协商; tlsv12_server 会把版本锁死为 1.2,
+        // 仅支持 1.3 的客户端无法连接
         sslCtx_ = std::make_unique<asio::ssl::context>(asio::ssl::context::tls_server);
         sslCtx_->set_options(
             asio::ssl::context::default_workarounds | asio::ssl::context::no_sslv2
-            | asio::ssl::context::no_sslv3 | asio::ssl::context::no_tlsv1
-            | asio::ssl::context::no_tlsv1_1 | asio::ssl::context::single_dh_use
+            | asio::ssl::context::no_sslv3 | asio::ssl::context::single_dh_use
         );
+        HttpClient::enableTlsAutoNegotiate(*sslCtx_);
         sslCtx_->use_certificate_chain_file(config_.sslCertFile);
         sslCtx_->use_private_key_file(config_.sslKeyFile, asio::ssl::context::pem);
     }

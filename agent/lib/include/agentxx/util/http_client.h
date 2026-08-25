@@ -121,6 +121,19 @@ public:
     // -----------------------------------------------------------------------
     static asio::ssl::context& sharedSslCtx(bool verify);
 
+    /// TLS 全版本自动协商: 把传入上下文的协议版本范围放宽为
+    /// [TLS 1.0, 编译期支持的最高版本] (当前最高 1.3), 握手时由 OpenSSL
+    /// 自动选取双方共有的最高版本。
+    /// - SSLv2/SSLv3 不在放宽范围 (早已废弃/不安全, 且现代 OpenSSL 构建通常
+    ///   已在编译期移除), 需配合 set_options(no_sslv2 | no_sslv3) 使用
+    /// - 显式将安全等级设为 level 1: 部分 OpenSSL 构建/发行版默认等级更高,
+    ///   其版本回调会直接禁用 < TLS 1.2 的版本, 导致 min_proto_version 放宽
+    ///   无效; level 1 仅禁 SSLv3 及以下与低强度套件 (RSA<1024 等)
+    /// - 必须在 set_options 之后调用 (set_options 内部经 native_handle 写
+    ///   SSL_OP_* 标志, 与本函数的 min/max 版本设置互不覆盖, 但顺序统一
+    ///   更易排查)
+    static void enableTlsAutoNegotiate(asio::ssl::context& ctx);
+
 private:
 
     struct ParsedUrl {

@@ -20,6 +20,7 @@
 #include <map>
 #include <neograph/provider.h>
 #include <openssl/ssl.h>
+#include <openssl/tls1.h> // TLS1_VERSION 等协议版本常量 (enableTlsAutoNegotiate)
 #include <variant>
 #include <vector>
 
@@ -873,6 +874,23 @@ const HeaderMap& HttpClient::defaultHeaders() {
     return headers;
 }
 
+void HttpClient::enableTlsAutoNegotiate(asio::ssl::context& ctx) {
+    auto* raw = ctx.native_handle();
+    if (!raw) {
+        return;
+    }
+    // 协商范围: 下限 TLS 1.0, 上限 0 = 不设上限 (取编译期支持的最高版本,
+    // 当前为 TLS 1.3)。握手时 OpenSSL 自动选取双方共有的最高版本。
+    ::SSL_CTX_set_min_proto_version(raw, TLS1_VERSION);
+    ::SSL_CTX_set_max_proto_version(raw, 0);
+    // 安全等级显式回到 1: 默认等级更高的构建 (部分发行版/未来版本) 其
+    // ssl_security_default_callback 会直接拒绝 < TLS 1.2 的版本, 使上面的
+    // min_proto_version 形同虚设。level 1 的含义:
+    // - 禁用 SSLv3 及更早版本、MD5 MAC 套件、<80 位强度参数 (RSA<1024 等)
+    // - TLS 1.0/1.1 配合现代套件 (如 ECDHE-RSA-AES128-SHA) 可正常协商
+    ::SSL_CTX_set_security_level(raw, 1);
+}
+
 asio::ssl::context& HttpClient::sharedSslCtx(bool verify) {
     static std::unique_ptr<asio::ssl::context> verifiedCtx;
     static std::unique_ptr<asio::ssl::context> unverifiedCtx;
@@ -884,16 +902,18 @@ asio::ssl::context& HttpClient::sharedSslCtx(bool verify) {
     // ClientHello 不带 supported_versions 扩展), 遇到仅支持 TLS 1.3 的服务端
     // (如 mcp.exa.ai) 时握手被服务端以 fatal alert protocol_version 拒绝:
     //   "tlsv1 alert protocol version (SSL routines) [asio.ssl:167773230]"
-    // 通用方法可自动协商至双方共有的最高版本 (含 TLS 1.3); 再显式禁用
-    // SSLv2/SSLv3/TLS1.0/TLS1.1, 安全下限保持为 TLS 1.2, 行为与旧配置兼容。
+    // 通用方法 + enableTlsAutoNegotiate: 对 TLS 1.0 ~ 最高版本 (当前 1.3)
+    // 全范围自动协商, 总是选取双方共有的最高版本; SSLv2/SSLv3 保持禁用
+    // (不安全且无兼容价值)。注: 放宽到 1.0/1.1 仅影响"对方确实只支持旧版本"
+    // 的场景 —— 与新版服务端连接时协商结果不变 (仍选 1.2/1.3)。
     if (verify) {
         std::call_once(verifiedFlag, [] {
             auto ctx = std::make_unique<asio::ssl::context>(asio::ssl::context::tls_client);
             ctx->set_options(
                 asio::ssl::context::default_workarounds | asio::ssl::context::no_sslv2
-                | asio::ssl::context::no_sslv3 | asio::ssl::context::no_tlsv1
-                | asio::ssl::context::no_tlsv1_1
+                | asio::ssl::context::no_sslv3
             );
+            enableTlsAutoNegotiate(*ctx);
             ctx->set_verify_mode(asio::ssl::verify_peer);
             ctx->set_default_verify_paths();
             verifiedCtx = std::move(ctx);
@@ -904,9 +924,9 @@ asio::ssl::context& HttpClient::sharedSslCtx(bool verify) {
             auto ctx = std::make_unique<asio::ssl::context>(asio::ssl::context::tls_client);
             ctx->set_options(
                 asio::ssl::context::default_workarounds | asio::ssl::context::no_sslv2
-                | asio::ssl::context::no_sslv3 | asio::ssl::context::no_tlsv1
-                | asio::ssl::context::no_tlsv1_1
+                | asio::ssl::context::no_sslv3
             );
+            enableTlsAutoNegotiate(*ctx);
             ctx->set_verify_mode(asio::ssl::verify_none);
             unverifiedCtx = std::move(ctx);
         });
