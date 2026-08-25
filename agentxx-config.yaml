@@ -68,11 +68,11 @@ models:
     base_url: "https://api.openai.com/v1" # 可选；默认根据 [type] 选择
     api_path: "/chat/completions" # 可选；自定义路径，默认自动根据 [type] 选择
     api_key: "${OPENAI_API_KEY}" # 可选；如果不需要验证，可以填 EMPTY 等任意字符串
-    model_name: "qwen3.8-max-preview" # 可选；使用的模型名称，建议填写
+    model_name: "deepseek-v4-flash" # 可选；使用的模型名称，建议填写
     model_context_max_token: 262144 # 模型支持的最大上下文 token 数；不指定时上下文压缩使用默认值 256k
     send_thinking: true # 可选，默认 false；是否发送 thinking，部分模型要求发送才能正常使用
     connect_timeout: 30 # seconds 建立连接时的超时限制
-    read_chunk_timeout: 30 # seconds 接收数据时，超过该时长`未收到新数据`时判断为响应超时，即相邻数据间隔应当小于该时长
+    read_chunk_timeout: 60 # seconds 接收数据时，超过该时长`未收到新数据`时判断为响应超时，即相邻数据间隔应当小于该时长
     ssl_verify: true # 是否验证 TLS 证书；不指定时使用全局默认值
     # - [max_concurrent_connections] 可选，默认 5；该模型 API 端点的最大并发连接数（0 = 不限制）。
     # LLM 请求启用 HTTP keep-alive 连接池，空闲连接复用，超过上限的并发请求排队等待
@@ -85,7 +85,7 @@ models:
     base_url: "https://api.openai.com/v1" # 可选；默认根据 [type] 选择
     api_path: "/responses" # 可选；自定义路径，默认自动根据 [type] 选择
     api_key: "${OPENAI_API_KEY}" # 可选；如果不需要验证，可以填 EMPTY 等任意字符串
-    model_name: "qwen3.8-max-preview" # 可选；使用的模型名称，建议填写
+    model_name: "deepseek-v4-flash" # 可选；使用的模型名称，建议填写
     send_thinking: true # 可选，默认 false；是否发送 thinking，部分模型要求发送才能正常使用
     # - [request_reasoning_summary] 是否响应思考内容, 默认为 [true]; send_thinking 开启时, 是否请求上游返回
     # 思考摘要 (Responses API 的 include 参数) muse-spark 等不支持 reasoning.summary_text , 需设 false, 
@@ -93,12 +93,12 @@ models:
     # - 也可用 extra_api_config 显式指定 include 数组覆盖
     request_reasoning_summary: true 
     connect_timeout: 30 # seconds 建立连接时的超时限制
-    read_chunk_timeout: 30 # seconds 接收数据时，超过该时长`未收到新数据`时判断为响应超时，即相邻数据间隔应当小于该时长
+    read_chunk_timeout: 60 # seconds 接收数据时，超过该时长`未收到新数据`时判断为响应超时，即相邻数据间隔应当小于该时长
     ssl_verify: true # 是否验证 TLS 证书；不指定时使用全局默认值
     # - [max_concurrent_connections] 可选，默认 5；该模型 API 端点的最大并发连接数（0 = 不限制）。
     # LLM 请求启用 HTTP keep-alive 连接池，空闲连接复用，超过上限的并发请求排队等待
     max_concurrent_connections: 5
-    model_context_max_token: 262144 # 模型支持的最大上下文 token 数；不指定时上下文压缩使用默认值 256k
+    model_context_max_token: 1000000 # 模型支持的最大上下文 token 数；不指定时上下文压缩使用默认值 256k
     extra_api_config:
       # - 可选; 思考强度，"none|minimal|low|medium|high|xhigh|max" 
       # 并非所有模型支持的选项都一样，可能有的支持 xhigh 有的支持 max

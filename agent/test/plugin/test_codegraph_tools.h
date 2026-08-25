@@ -7,16 +7,8 @@
 
 #include "test_framework.h"
 
-#undef XX_TEST_PASSED
-#undef XX_TEST_FAILED
-#define XX_TEST_PASSED g_cg_passed
-#define XX_TEST_FAILED g_cg_failed
-
 namespace agentxx {
 namespace test {
-
-extern int g_cg_passed;
-extern int g_cg_failed;
 
 /// CodeGraph 插件集成测试:
 /// - 加载 agentxx_codegraph 插件 (位于 {cwd}/plugins/agentxx_codegraph)

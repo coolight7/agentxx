@@ -5,16 +5,9 @@
 #include <string>
 
 #include "test_framework.h"
-#undef XX_TEST_PASSED
-#undef XX_TEST_FAILED
-#define XX_TEST_PASSED g_sc_passed
-#define XX_TEST_FAILED g_sc_failed
 
 namespace agentxx {
 namespace test {
-
-extern int g_sc_passed;
-extern int g_sc_failed;
 
 /// ScreenCapture 插件集成测试 (agentxx_screen_capture):
 /// - 非 Windows 平台: 跳过 (screen_capture 仅 Windows 实现)

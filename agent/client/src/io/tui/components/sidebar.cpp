@@ -108,15 +108,21 @@ void SidebarComponent::buildTabList() {
     for (size_t p = 0; p < pinned_.size(); ++p) {
         const auto& pin   = pinned_[p];
         const int   tabIx = findTabIndex(pin.id);
-        pushButton(tabIx >= 0 && tabIx == activeTab_, pin.title,
-                   ListEntry{true, static_cast<int>(p)});
+        pushButton(
+            tabIx >= 0 && tabIx == activeTab_,
+            pin.title,
+            ListEntry{true, static_cast<int>(p)}
+        );
     }
     for (size_t i = 0; i < tabs_.size(); ++i) {
         if (isPinned(tabs_[i].id)) {
             continue;
         }
-        pushButton(static_cast<int>(i) == activeTab_, tabs_[i].title,
-                   ListEntry{false, static_cast<int>(i)});
+        pushButton(
+            static_cast<int>(i) == activeTab_,
+            tabs_[i].title,
+            ListEntry{false, static_cast<int>(i)}
+        );
     }
 }
 
@@ -136,7 +142,7 @@ Element SidebarComponent::OnRender() {
     measureNode->ComputeRequirement();
     const int listW = measureNode->requirement().min_x + 1;
 
-    auto tabBar = tabList_->Render() | size(WIDTH, EQUAL, listW);
+    auto tabBar = vbox({text(" "), tabList_->Render(), text(" ")}) | size(WIDTH, EQUAL, listW);
 
     auto handle
         = separatorStyled(BorderStyle::LIGHT) | color(theme.inputBgColor) | reflect(handleBox_);
@@ -154,11 +160,12 @@ Element SidebarComponent::OnRender() {
     }
 
     Elements layout;
+    layout.push_back(text(" "));
     layout.push_back(hbox({text(" "), scrollable_->Render() | flex, text(" ")}) | flex);
     if (tabs_[activeTab_].footer) {
         layout.push_back(
             hbox({text(" "), tabs_[activeTab_].footer() | flex, text(" ")}) | xframe
-                | reflect(footerBox_)
+            | reflect(footerBox_)
         );
         layout.push_back(text(" "));
     } else {

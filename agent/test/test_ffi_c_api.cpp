@@ -25,13 +25,15 @@
 #include <thread>
 #include <vector>
 
-#define XX_TEST_PASSED g_ffi_passed
-#define XX_TEST_FAILED g_ffi_failed
-
 namespace {
 
+// 本模块测试计数器 (仅本编译单元可见; 不经头文件 extern 导出)
 int g_ffi_passed = 0;
 int g_ffi_failed = 0;
+
+// 断言计数宏覆盖: 将 test_framework.h 的 XX_TEST_EXPECT_* 映射到本模块计数器
+#define XX_TEST_PASSED g_ffi_passed
+#define XX_TEST_FAILED g_ffi_failed
 
 // ---------------------------------------------------------------------------
 // 事件记录器 (C 回调 → 线程安全事件列表)

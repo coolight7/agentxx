@@ -1,5 +1,3 @@
-// 注意: test_agent.h 会重定义 XX_TEST_PASSED/XX_TEST_FAILED 宏, 必须在
-// test_cancel.h 之前包含, 保证本文件的断言计入 g_cancel_* 计数器
 #include "test_agent.h"
 
 #include "agentxx/agent/code_agent.h"
@@ -26,11 +24,17 @@
 #include <thread>
 #include <vector>
 
-namespace agentxx {
-namespace test {
-
+namespace {
+// 本模块测试计数器 (仅本编译单元可见; 不经头文件 extern 导出)
 int g_cancel_passed = 0;
 int g_cancel_failed = 0;
+} // namespace
+
+// 断言计数宏覆盖: 将 test_framework.h 的 XX_TEST_EXPECT_* 映射到本模块计数器
+#define XX_TEST_PASSED g_cancel_passed
+#define XX_TEST_FAILED g_cancel_failed
+namespace agentxx {
+namespace test {
 
 // ===========================================================================
 // CancelToken 基础行为: 轮询埋点 + fork 级联

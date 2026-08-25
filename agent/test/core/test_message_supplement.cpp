@@ -1,5 +1,3 @@
-// 注意: test_agent.h 会重定义 XX_TEST_PASSED/XX_TEST_FAILED 宏, 必须在
-// test_message_supplement.h 之前包含, 保证本文件的断言计入 g_ms_* 计数器
 #include "test_agent.h"
 
 #include "test_message_supplement.h"
@@ -22,11 +20,17 @@
 #include <string>
 #include <vector>
 
-namespace agentxx {
-namespace test {
-
+namespace {
+// 本模块测试计数器 (仅本编译单元可见; 不经头文件 extern 导出)
 int g_ms_passed = 0;
 int g_ms_failed = 0;
+} // namespace
+
+// 断言计数宏覆盖: 将 test_framework.h 的 XX_TEST_EXPECT_* 映射到本模块计数器
+#define XX_TEST_PASSED g_ms_passed
+#define XX_TEST_FAILED g_ms_failed
+namespace agentxx {
+namespace test {
 
 // ===========================================================================
 // 测试目标: 中断 / 取消(超时停止) 后 BaseAgent 自动补充的消息

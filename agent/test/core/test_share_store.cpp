@@ -7,11 +7,17 @@
 #include <iostream>
 #include <string>
 
-namespace agentxx {
-namespace test {
-
+namespace {
+// 本模块测试计数器 (仅本编译单元可见; 不经头文件 extern 导出)
 int g_ss_passed = 0;
 int g_ss_failed = 0;
+} // namespace
+
+// 断言计数宏覆盖: 将 test_framework.h 的 XX_TEST_EXPECT_* 映射到本模块计数器
+#define XX_TEST_PASSED g_ss_passed
+#define XX_TEST_FAILED g_ss_failed
+namespace agentxx {
+namespace test {
 
 static std::shared_ptr<agentxx::agent::AgentContext> makeShareStoreCtx() {
     auto ctx                     = std::make_shared<agentxx::agent::AgentContext>();

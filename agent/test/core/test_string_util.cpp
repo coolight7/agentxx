@@ -1,9 +1,21 @@
 #include "test_string_util.h"
 
-using namespace agentxx::util;
-
+namespace {
+// 本模块测试计数器 (仅本编译单元可见; 不经头文件 extern 导出)
 int g_su_passed = 0;
 int g_su_failed = 0;
+} // namespace
+
+// 断言计数宏覆盖: 将 test_framework.h 的 XX_TEST_EXPECT_* 映射到本模块计数器
+#define XX_TEST_PASSED g_su_passed
+#define XX_TEST_FAILED g_su_failed
+
+// 组合断言: compareExtend 双向比较结果应互为相反数
+#define shiftCompareExtend(left, right, sub)                           \
+    XX_TEST_EXPECT_EQ(agentxx::util::compareExtend(left, right), sub); \
+    XX_TEST_EXPECT_EQ(agentxx::util::compareExtend(right, left), -(sub));
+
+using namespace agentxx::util;
 
 void test_compareExtend() {
     XX_TEST_EXPECT_EQ(agentxx::util::compareExtend("", ""), 0);

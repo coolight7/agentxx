@@ -9,6 +9,11 @@
 #include <iostream>
 #include <string>
 
+namespace {
+// 本模块测试计数器 (仅本编译单元可见; 不经头文件 extern 导出)
+int g_rag_passed = 0;
+int g_rag_failed = 0;
+} // namespace
 namespace agentxx {
 namespace test {
 
@@ -58,9 +63,6 @@ struct RAGSearchTool {
     };
 };
 using VectorStore   = RAGSearchTool::VectorStore;
-
-int g_rag_passed = 0;
-int g_rag_failed = 0;
 
 // =========================================================================
 // Tests: splitStringByFixedLength

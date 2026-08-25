@@ -6,18 +6,10 @@
 
 #include "test_framework.h"
 
-#undef XX_TEST_PASSED
-#undef XX_TEST_FAILED
-#define XX_TEST_PASSED g_mcp_passed
-#define XX_TEST_FAILED g_mcp_failed
-
 namespace asio = ::boost::asio;
 
 namespace agentxx {
 namespace test {
-
-extern int g_mcp_passed;
-extern int g_mcp_failed;
 
 asio::awaitable<TestResult> run_mcp_tests();
 

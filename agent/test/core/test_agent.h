@@ -10,16 +10,9 @@
 #include <vector>
 
 #include "test_framework.h"
-#undef XX_TEST_PASSED
-#undef XX_TEST_FAILED
-#define XX_TEST_PASSED g_da_passed
-#define XX_TEST_FAILED g_da_failed
 
 namespace agentxx {
 namespace test {
-
-extern int g_da_passed;
-extern int g_da_failed;
 
 // ===========================================================================
 // Local LLM Simulator — an OpenAI-compatible HTTP server

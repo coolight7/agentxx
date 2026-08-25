@@ -61,7 +61,7 @@ public:
     int connectTimeoutSeconds = 16;
 
     /// 接收Api响应数据分段时，分段间隔的超时时间
-    int readChunkTimeoutSeconds = 100;
+    int readChunkTimeoutSeconds = 60;
 
     /// 是否在发送 LLM 请求时携带 thinking 内容
     bool sendThinking = false;

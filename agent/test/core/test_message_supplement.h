@@ -9,9 +9,6 @@ namespace asio = ::boost::asio;
 namespace agentxx {
 namespace test {
 
-extern int g_ms_passed;
-extern int g_ms_failed;
-
 /// 中断 / 取消(超时停止) 后 BaseAgent 自动补充消息的 E2E 测试:
 /// - 中断: 触发中断的 tool 自动补充 [Interrupt] tool 消息 (role/tool_call_id/tool_name/flags)
 /// - 取消/超时停止: 未完成的 tool 自动补充 [User canceled] tool 消息 (AutoInserted)
@@ -21,7 +18,3 @@ asio::awaitable<TestResult> run_message_supplement_tests();
 } // namespace test
 } // namespace agentxx
 
-#undef XX_TEST_PASSED
-#undef XX_TEST_FAILED
-#define XX_TEST_PASSED g_ms_passed
-#define XX_TEST_FAILED g_ms_failed

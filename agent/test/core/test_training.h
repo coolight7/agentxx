@@ -2,14 +2,6 @@
 
 #include "test_framework.h"
 
-#undef XX_TEST_PASSED
-#undef XX_TEST_FAILED
-#define XX_TEST_PASSED g_training_passed
-#define XX_TEST_FAILED g_training_failed
-
-extern int g_training_passed;
-extern int g_training_failed;
-
 namespace agentxx {
 namespace test {
 

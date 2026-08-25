@@ -1,6 +1,3 @@
-// 注意: 必须先包含 test_agent.h (其会重定义 XX_TEST_PASSED/FAILED 为 g_da_*),
-// 再包含 test_agent_host.h (重定义为 g_host_*), 使本文件的断言计数到本模块
-// 计数器; 顺序相反时宏被覆盖, agent_host 模块会显示 passed=0 (预存问题修复)
 #include "test_agent_host.h"
 #include "test_agent.h"
 
@@ -20,11 +17,17 @@
 #include <string>
 #include <thread>
 
-namespace agentxx {
-namespace test {
-
+namespace {
+// 本模块测试计数器 (仅本编译单元可见; 不经头文件 extern 导出)
 int g_host_passed = 0;
 int g_host_failed = 0;
+} // namespace
+
+// 断言计数宏覆盖: 将 test_framework.h 的 XX_TEST_EXPECT_* 映射到本模块计数器
+#define XX_TEST_PASSED g_host_passed
+#define XX_TEST_FAILED g_host_failed
+namespace agentxx {
+namespace test {
 
 namespace {
 
