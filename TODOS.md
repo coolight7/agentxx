@@ -2,22 +2,19 @@
 - BaseAgent 增加支持 usage 统计
 - eventBus 改为tree，命名空间使用 axx/bxx/cc
 - 支持修改上下文
-- ASAN、TSAN、UBSAN
 - 验证subagent、summarization
 - CI/CD
 - 文档翻译
 - 整理文档
 - release 编译发布时携带 标准库
 - 统一使用 getSessionWorkDir
-- tui 复制缺少空格
-- graph json 定义，支持插件生成 graph json、注册 node; (最多只能有一个插件生成 graph，都没有则默认生成 CodeAgent)
 - exec_cmd 手动裁剪 stdout、stderr，而不是通过 toolcallNode
 - 统一命名为 client-io、server-io
-- Plan 渲染独立为 client 插件
+- tui 复制缺少空格
+- graph json 定义，支持插件生成 graph json、注册 node; (最多只能有一个插件生成 graph，都没有则默认生成 CodeAgent)
+- Plan 渲染独立为 client 插件, 增加 read
 - 插件宏辅助代码
-- 插件支持多次加载，目前用了许多全局变量存储结构体，可能有问题
 - 插件 readHostConfig 改为直接传入 变量路径 取值
-- 记录加载失败的 Append 组件，传入tui显示
 
 ```sh
 - [Tool] agentxx_filesystem_grep

@@ -277,7 +277,7 @@ std::vector<ScrollItem> TUIClientAgentIO::renderInfoSidebar() {
             size_t   count = 0;
             Elements elems;
             for (const auto& notif : st.appendComponents) {
-                if (notif.type != type) {
+                if (notif.type != type || !notif.success) {
                     continue;
                 }
                 ++count;
@@ -288,7 +288,7 @@ std::vector<ScrollItem> TUIClientAgentIO::renderInfoSidebar() {
                                      notif.name
                                  ))})
                                : hbox({text("|  "), text(notif.name) | xflex_shrink}))
-                    | color(notif.success ? theme_.hintColor : theme_.errorColor)
+                    | color(theme_.hintColor)
                 );
             }
             if (count > 0) {
@@ -316,10 +316,10 @@ std::vector<ScrollItem> TUIClientAgentIO::renderInfoSidebar() {
         if (failedCount > 0) {
             appendEls.push_back(
                 hbox({text("|- "), text(fmt::format("Failed: {}", failedCount))})
-                    | color(theme_.errorColor)
+                | color(theme_.errorColor)
             );
             appendEls.push_back(hbox({
-                text("| "),
+                text("|  ") | color(theme_.hintColor),
                 text(" [view] ") | bgcolor(theme_.buttonBgColor) | color(theme_.buttonTextColor)
                     | reflect(failedViewButtonBox_),
             }));
