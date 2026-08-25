@@ -6,6 +6,7 @@
 // - 插件不链接 libagentxx: 描述经 get_tool_prompt 读取, 日志经 vtable log
 #include "codegraph/core/json.hpp"
 #include "agentxx/plugin/plugin_iface_helper.h"
+#include "agentxx/plugin/plugin_tool_sync.h"
 #include "computer_use_plugin.h"
 #include "fmt/format.h"
 #include <cstring>

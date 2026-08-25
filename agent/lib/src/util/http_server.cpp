@@ -149,7 +149,9 @@ void HttpServer::start() {
 
     // Setup SSL context if configured
     if (!config_.sslCertFile.empty() && !config_.sslKeyFile.empty()) {
-        sslCtx_ = std::make_unique<asio::ssl::context>(asio::ssl::context::tlsv12_server);
+        // tls_server (TLS_method) 可自动协商至 TLS 1.3; tlsv12_server 会把版本
+        // 锁死为 1.2, 仅支持 1.3 的客户端无法连接 (同 http_client sharedSslCtx)
+        sslCtx_ = std::make_unique<asio::ssl::context>(asio::ssl::context::tls_server);
         sslCtx_->set_options(
             asio::ssl::context::default_workarounds | asio::ssl::context::no_sslv2
             | asio::ssl::context::no_sslv3 | asio::ssl::context::no_tlsv1
@@ -246,7 +248,9 @@ void HttpServer::startAsync(asio::any_io_executor executor) {
     acceptor_->listen(asio::socket_base::max_listen_connections);
 
     if (!config_.sslCertFile.empty() && !config_.sslKeyFile.empty()) {
-        sslCtx_ = std::make_unique<asio::ssl::context>(asio::ssl::context::tlsv12_server);
+        // tls_server (TLS_method) 可自动协商至 TLS 1.3; tlsv12_server 会把版本
+        // 锁死为 1.2, 仅支持 1.3 的客户端无法连接 (同 http_client sharedSslCtx)
+        sslCtx_ = std::make_unique<asio::ssl::context>(asio::ssl::context::tls_server);
         sslCtx_->set_options(
             asio::ssl::context::default_workarounds | asio::ssl::context::no_sslv2
             | asio::ssl::context::no_sslv3 | asio::ssl::context::no_tlsv1

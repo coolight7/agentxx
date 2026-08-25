@@ -5,6 +5,7 @@
 #include "agentxx/middlewares/middleware.h"
 #include "agentxx/plugin/plugin_iface_helper.h"
 #include "agentxx/plugin/plugin_manager.h"
+#include "agentxx/plugin/plugin_tool_sync.h"
 #include "agentxx/util/async_offload.h"
 #include "agentxx/util/log.h"
 #include "asio/co_spawn.hpp"
@@ -449,7 +450,9 @@ asio::awaitable<TestResult> run_plugin_tests() {
         XX_TEST_EXPECT_TRUE(inst23 != nullptr);
         if (inst23) {
             // 注册带超时的慢工具: 超时 100ms, C 回调 sleep 600ms
-            static AgentxxToolSpec slowSpec;
+            // (阻塞委托型同步垫片: execute 经 scheduler.offload 在宿主阻塞池
+            // 线程执行, 与插件作者使用 agentxx_register_sync_tool 的真实路径一致)
+            static AgentxxSyncToolSpec slowSpec;
             slowSpec.name            = AGENTXX_SV("slow_timeout_tool");
             slowSpec.description     = AGENTXX_SV("slow tool for unload race test");
             slowSpec.parameters_json = AGENTXX_SV("{}");
@@ -457,6 +460,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
                                    AgentxxPluginStringView,
                                    AgentxxPluginStringView,
                                    AgentxxPluginStringView,
+                                   volatile int*,
                                    char**) -> char* {
                 std::this_thread::sleep_for(std::chrono::milliseconds(600));
                 char* p = static_cast<char*>(::malloc(3));
@@ -466,7 +470,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
                 return p;
             };
             slowSpec.default_timeout_ms = 100;
-            XX_TEST_EXPECT_EQ(ctx->pluginManager->registerTool(inst23.get(), &slowSpec), 0);
+            XX_TEST_EXPECT_EQ(agentxx_register_sync_tool(&inst23->host, &slowSpec), 0);
 
             auto tool = ctx->toolRegistry->find("slow_timeout_tool");
             XX_TEST_EXPECT_TRUE(tool != nullptr);

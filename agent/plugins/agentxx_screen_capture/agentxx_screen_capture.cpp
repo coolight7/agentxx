@@ -11,6 +11,7 @@
 #include "fmt/format.h"
 #include "screen_capture.h"
 #include "agentxx/plugin/plugin_iface_helper.h"
+#include "agentxx/plugin/plugin_tool_sync.h"
 #include "screen_capture_plugin.h"
 #include <algorithm>
 #include <atomic>

@@ -879,9 +879,21 @@ asio::ssl::context& HttpClient::sharedSslCtx(bool verify) {
     static std::once_flag                      verifiedFlag;
     static std::once_flag                      unverifiedFlag;
 
+    // 注意: 必须使用通用方法 tls_client (TLS_method), 而非 tlsv12_client
+    // (TLSv1_2_client_method)。后者会把协议版本锁死为 TLS 1.2 (min=max=1.2,
+    // ClientHello 不带 supported_versions 扩展), 遇到仅支持 TLS 1.3 的服务端
+    // (如 mcp.exa.ai) 时握手被服务端以 fatal alert protocol_version 拒绝:
+    //   "tlsv1 alert protocol version (SSL routines) [asio.ssl:167773230]"
+    // 通用方法可自动协商至双方共有的最高版本 (含 TLS 1.3); 再显式禁用
+    // SSLv2/SSLv3/TLS1.0/TLS1.1, 安全下限保持为 TLS 1.2, 行为与旧配置兼容。
     if (verify) {
         std::call_once(verifiedFlag, [] {
-            auto ctx = std::make_unique<asio::ssl::context>(asio::ssl::context::tlsv12_client);
+            auto ctx = std::make_unique<asio::ssl::context>(asio::ssl::context::tls_client);
+            ctx->set_options(
+                asio::ssl::context::default_workarounds | asio::ssl::context::no_sslv2
+                | asio::ssl::context::no_sslv3 | asio::ssl::context::no_tlsv1
+                | asio::ssl::context::no_tlsv1_1
+            );
             ctx->set_verify_mode(asio::ssl::verify_peer);
             ctx->set_default_verify_paths();
             verifiedCtx = std::move(ctx);
@@ -889,7 +901,12 @@ asio::ssl::context& HttpClient::sharedSslCtx(bool verify) {
         return *verifiedCtx;
     } else {
         std::call_once(unverifiedFlag, [] {
-            auto ctx = std::make_unique<asio::ssl::context>(asio::ssl::context::tlsv12_client);
+            auto ctx = std::make_unique<asio::ssl::context>(asio::ssl::context::tls_client);
+            ctx->set_options(
+                asio::ssl::context::default_workarounds | asio::ssl::context::no_sslv2
+                | asio::ssl::context::no_sslv3 | asio::ssl::context::no_tlsv1
+                | asio::ssl::context::no_tlsv1_1
+            );
             ctx->set_verify_mode(asio::ssl::verify_none);
             unverifiedCtx = std::move(ctx);
         });
