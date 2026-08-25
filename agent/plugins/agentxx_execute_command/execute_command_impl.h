@@ -75,60 +75,45 @@ inline std::string subprocessWorkDir(const std::string& workDir) {
     return ".";
 }
 
-/// RAII: 析构时置位 done, 通知取消 watcher 退出循环, 避免其继续引用已析构的 process
-struct ProcCancelGuard {
-    std::shared_ptr<std::atomic<bool>> done;
-
-    ~ProcCancelGuard() {
-        if (done) {
-            done->store(true, std::memory_order_release);
+/// 会话取消监听协程体 (与主工作经 awaitable_operators 并行运行):
+/// - 轮询 isCancelled 回调 (宿主会话取消令牌), 取消时终止子进程
+/// - 【关键生命周期语义】动作完成后不立即结束, 而是挂起直至被并行组取消:
+///   || 组合下"任一先完成即整体完成并取消其余", 若本协程在 kill 后立刻返回,
+///   会在主工作组装结果前把它整体取消 (丢失输出); 挂起让主工作自然收尾,
+///   由主工作完成驱动整体终结 —— 同时保证 io.run() 不会被无限轮询的 watcher
+///   吊住 (历史 bug: detached watcher + RAII guard 互相死等)
+/// - Linux: 子进程经 setsid 启动 (pgid == pid), `kill(-pid)` 可整组清理
+/// - 注意: watcher 只终止、不调用 async_wait —— boost.process v2 的
+///   async_wait op 内部引用共享的 exit_status_ 成员, 与主协程并发 wait
+///   会产生数据竞争; 子进程回收由主协程负责
+inline asio::awaitable<void> procCancelWatchLoop(
+    boost::process::process& proc,
+    const IsCancelledFn&     isCancelled
+) {
+    asio::steady_timer timer(co_await asio::this_coro::executor);
+    if (!isCancelled) {
+        // 无取消源: 挂起直至被并行组取消 (主工作完成)
+        timer.expires_after(std::chrono::hours(24));
+        co_await timer.async_wait(asio::as_tuple(asio::use_awaitable));
+        co_return;
+    }
+    while (false == isCancelled()) {
+        timer.expires_after(std::chrono::milliseconds(20));
+        auto [ec] = co_await timer.async_wait(asio::as_tuple(asio::use_awaitable));
+        if (ec) {
+            co_return; // 被并行组取消: 主工作已完成
         }
     }
-};
-
-/// 启动会话取消 watcher: 轮询 isCancelled 回调 (宿主会话取消令牌),
-/// 取消时终止子进程, 避免孤儿进程继续运行
-/// - Linux: 子进程经 setsid 启动 (pgid == pid), `kill(-pid)` 可整组清理 bash 派生的子孙进程
-/// - Windows: proc.terminate()
-/// - 注意: watcher 只终止、不调用 async_wait —— boost.process v2 的 async_wait op 内部
-///   引用共享的 exit_status_ 成员, 与主协程并发 wait 会产生数据竞争; 子进程回收由主协程
-///   负责。若主协程自身被 asio 取消 (异常路径) 未能 wait, 残留僵尸进程在 agent 进程
-///   退出时由系统回收 (比孤儿进程继续运行危害小)
-/// - 返回 RAII guard: 栈展开 (含异常路径) 时置位 done, watcher 退出
-inline ProcCancelGuard startProcCancelWatcher(
-    asio::any_io_executor      ctx,
-    boost::process::process&   proc,
-    const IsCancelledFn&       isCancelled
-) {
-    auto done = std::make_shared<std::atomic<bool>>(false);
-    if (isCancelled) {
-        asio::co_spawn(
-            ctx,
-            [&proc, isCancelled, done]() -> asio::awaitable<void> {
-                asio::steady_timer timer(co_await asio::this_coro::executor);
-                while (false == done->load(std::memory_order_acquire)
-                       && false == isCancelled()) {
-                    timer.expires_after(std::chrono::milliseconds(20));
-                    auto [ec] = co_await timer.async_wait(asio::as_tuple(asio::use_awaitable));
-                    if (ec) {
-                        co_return;
-                    }
-                }
-                if (false == done->load(std::memory_order_acquire)) {
-                    // 会话取消: 终止子进程
+    // 会话取消: 终止子进程后挂起, 让主工作自然收尾
 #if XX_IS_WIN_D
-                    neograph_asio_error_code ec;
-                    proc.terminate(ec);
+    neograph_asio_error_code ec;
+    proc.terminate(ec);
 #else
-                    // setsid 启动, pgid == pid; kill 负 pid 整组清理 (含 bash 派生的子孙进程)
-                    ::kill(-static_cast<pid_t>(proc.id()), SIGKILL);
+    // setsid 启动, pgid == pid; kill 负 pid 整组清理 (含 bash 派生的子孙进程)
+    ::kill(-static_cast<pid_t>(proc.id()), SIGKILL);
 #endif
-                }
-            },
-            asio::detached
-        );
-    }
-    return ProcCancelGuard{std::move(done)};
+    timer.expires_after(std::chrono::hours(24));
+    co_await timer.async_wait(asio::as_tuple(asio::use_awaitable));
 }
 
 /// 终止子进程及其进程组 (Linux: 整组 SIGKILL; Windows: terminate), 用于超时场景
@@ -254,8 +239,7 @@ inline std::string
             boost::process::process_stdio{.in = nullptr, .out = outpip, .err = errpip},
         };
 
-        // 会话取消监听: 取消时终止子进程 (含子孙进程), 避免孤儿进程继续运行
-        auto cancelGuard = detail::startProcCancelWatcher(io.get_executor(), proc, isCancelled);
+        // 会话取消监听: 与主工作并行运行 (见下方 co_spawn 内说明)
 
         std::string              strout, strerr;
         neograph_asio_error_code errCodeStdOut, errCodeStdErr;
@@ -273,63 +257,72 @@ inline std::string
         );
 
         std::string resultStr;
-        bool        threw = false;
         std::exception_ptr ep{};
         asio::co_spawn(
             io,
             [&]() -> asio::awaitable<void> {
-                try {
-                    if (timeout > 0) {
-                        bool isTimeout = false;
-                        co_await agentxx::util::asyncWithTimeout<void>(
-                            [&]() -> asio::awaitable<void> {
-                                using namespace asio::experimental::awaitable_operators;
-                                co_await (
-                                    std::move(readStdOutFuture) && std::move(readStdErrFuture)
-                                    && proc.async_wait(asio::use_awaitable)
-                                );
-                            },
-                            std::chrono::seconds{timeout},
-                            [&]() {
-                                isTimeout = true;
-                            }
-                        );
-                        if (isTimeout) {
-                            // 超时: 整组终止 (Linux 连子孙进程一起清理), 避免 bash 派生的进程继续运行
-                            detail::killProcGroup(proc);
-                            // 回收子进程避免僵尸
-                            neograph_asio_error_code ec;
-                            co_await proc.async_wait(asio::redirect_error(asio::use_awaitable, ec));
-                            resultStr = detail::makeTimeoutResult(timeout, strout, strerr);
-                            co_return;
-                        }
-                    } else {
-                        // 无超时: stdout/stderr/退出 并发等待, 避免串行等待时
-                        // 子进程写满 stderr 管道而 stdout 未关闭导致的双方互等死锁
-                        using namespace asio::experimental::awaitable_operators;
-                        co_await (
-                            std::move(readStdOutFuture) && std::move(readStdErrFuture)
-                            && proc.async_wait(asio::use_awaitable)
-                        );
-                    }
-
-                    const auto         exitCode = proc.exit_code();
+                std::atomic<bool> timedOut{false};
+                // 主工作: stdout/stderr/退出 三方并发等待后组装结果
+                // (并发等待避免子进程写满 stderr 管道与读 stdout 互等死锁)
+                auto mainWork = [&]() -> asio::awaitable<void> {
+                    using namespace asio::experimental::awaitable_operators;
+                    co_await (
+                        std::move(readStdOutFuture) && std::move(readStdErrFuture)
+                        && proc.async_wait(asio::use_awaitable)
+                    );
+                    const auto exitCode = proc.exit_code();
                     std::ostringstream result;
-                    result << "## ExitCode: " << exitCode << "\n";
-                    if (all_output || 0 != exitCode) {
-                        // failed
-                        if (strout.empty() || agentxx::util::autoConvertToUtf8(strout)) {
-                            result << "## StdOut:\n" << strout << "\n";
-                        } else {
-                            result << "## StdOut conversion to utf8 failed, discard\n";
-                        }
-                        if (strerr.empty() || agentxx::util::autoConvertToUtf8(strerr)) {
-                            result << "## StdErr:\n" << strerr << "\n";
-                        } else {
-                            result << "## StdErr conversion to utf8 failed, discard\n";
+                    if (timedOut.load(std::memory_order_acquire)) {
+                        result << detail::makeTimeoutResult(timeout, strout, strerr);
+                    } else {
+                        result << "## ExitCode: " << exitCode << "\n";
+                        if (all_output || 0 != exitCode) {
+                            // failed
+                            if (strout.empty() || agentxx::util::autoConvertToUtf8(strout)) {
+                                result << "## StdOut:\n" << strout << "\n";
+                            } else {
+                                result << "## StdOut conversion to utf8 failed, discard\n";
+                            }
+                            if (strerr.empty() || agentxx::util::autoConvertToUtf8(strerr)) {
+                                result << "## StdErr:\n" << strerr << "\n";
+                            } else {
+                                result << "## StdErr conversion to utf8 failed, discard\n";
+                            }
                         }
                     }
                     resultStr = result.str();
+                };
+                // 超时守护: 到点整组终止 (Linux 连子孙进程一起清理) 并置标记;
+                // 之后挂起直至被并行组取消 —— 由主工作基于 timedOut 组装超时结果。
+                // 【禁止】对已被并行组取消的 async_wait 再补二次等待: bp::v2 的
+                // 退出状态仅投递一次 (SIGCHLD 已被首个 wait 消费), 二次 wait 会
+                // 永久挂起并把 io.run()/整个工具调用吊死 (本次卡死 bug 根因)
+                auto timeoutGuard = [&]() -> asio::awaitable<void> {
+                    if (timeout > 0) {
+                        asio::steady_timer t(co_await asio::this_coro::executor);
+                        t.expires_after(std::chrono::seconds{timeout});
+                        auto [ec] = co_await t.async_wait(asio::as_tuple(asio::use_awaitable));
+                        if (!ec) {
+                            timedOut.store(true, std::memory_order_release);
+                            detail::killProcGroup(proc);
+                        }
+                    }
+                    asio::steady_timer idle(co_await asio::this_coro::executor);
+                    idle.expires_after(std::chrono::hours(24));
+                    co_await idle.async_wait(asio::as_tuple(asio::use_awaitable));
+                };
+                try {
+                    using namespace asio::experimental::awaitable_operators;
+                    // 三路并行: 主工作 / 超时守护 / 会话取消监听。
+                    // 后两者动作完成后挂起而非返回 —— || 组合下"任一先完成即
+                    // 整体完成并取消其余", 若守护/监听抢先返回会把主工作在结果
+                    // 组装前整体取消; 只有主工作完成能终结整体, 完成即取消其余,
+                    // io.run() 随之自然返回
+                    co_await (
+                        mainWork()
+                        || timeoutGuard()
+                        || detail::procCancelWatchLoop(proc, isCancelled)
+                    );
                 } catch (...) {
                     ep = std::current_exception();
                 }
@@ -419,9 +412,7 @@ inline std::string windowsExecute(
             boost::process::process_stdio{.in = nullptr, .out = outpip, .err = errpip}
         };
 
-        // 会话取消监听: 取消时终止子进程, 避免孤儿进程继续运行
-        auto cancelGuard = detail::startProcCancelWatcher(io.get_executor(), proc, isCancelled);
-
+        // 会话取消监听: 与主工作并行运行 (见 bashExecute 同款修复说明)
         std::string              strout, strerr;
         neograph_asio_error_code errCodeStdOut, errCodeStdErr;
         auto readStdOutFuture = asio::async_read(
@@ -437,62 +428,66 @@ inline std::string windowsExecute(
             asio::redirect_error(asio::use_awaitable, errCodeStdErr)
         );
 
-        std::string        resultStr;
+        std::string resultStr;
         std::exception_ptr ep{};
         asio::co_spawn(
             io,
             [&]() -> asio::awaitable<void> {
-                try {
-                    if (timeout > 0) {
-                        bool isTimeout = false;
-                        co_await agentxx::util::asyncWithTimeout<void>(
-                            [&]() -> asio::awaitable<void> {
-                                using namespace asio::experimental::awaitable_operators;
-                                co_await (
-                                    std::move(readStdOutFuture) && std::move(readStdErrFuture)
-                                    && proc.async_wait(asio::use_awaitable)
-                                );
-                            },
-                            std::chrono::seconds{timeout},
-                            [&]() {
-                                isTimeout = true;
-                            }
-                        );
-                        if (isTimeout) {
-                            detail::killProcGroup(proc);
-                            // 回收子进程避免僵尸
-                            neograph_asio_error_code ec;
-                            co_await proc.async_wait(asio::redirect_error(asio::use_awaitable, ec));
-                            resultStr = detail::makeTimeoutResult(timeout, strout, strerr);
-                            co_return;
-                        }
-                    } else {
-                        // 无超时: stdout/stderr/退出 并发等待, 避免串行等待时
-                        // 子进程写满 stderr 管道而 stdout 未关闭导致的双方互等死锁
-                        using namespace asio::experimental::awaitable_operators;
-                        co_await (
-                            std::move(readStdOutFuture) && std::move(readStdErrFuture)
-                            && proc.async_wait(asio::use_awaitable)
-                        );
-                    }
-
-                    const auto         exitCode = proc.exit_code();
+                std::atomic<bool> timedOut{false};
+                // 主工作: stdout/stderr/退出 三方并发等待后组装结果
+                auto mainWork = [&]() -> asio::awaitable<void> {
+                    using namespace asio::experimental::awaitable_operators;
+                    co_await (
+                        std::move(readStdOutFuture) && std::move(readStdErrFuture)
+                        && proc.async_wait(asio::use_awaitable)
+                    );
+                    const auto exitCode = proc.exit_code();
                     std::ostringstream result;
-                    result << "## ExitCode: " << exitCode << "\n";
-                    if (all_output || 0 != exitCode) {
-                        // failed
-                        if (strout.empty() || agentxx::util::autoConvertToUtf8(strout)) {
-                            result << "## StdOut:\n" << strout << "\n";
-                        } else {
-                            result << "## StdOut conversion to utf8 failed, discard\n";
-                        }
-                        if (strerr.empty() || agentxx::util::autoConvertToUtf8(strerr)) {
-                            result << "## StdErr:\n" << strerr << "\n";
-                        } else {
-                            result << "## StdErr conversion to utf8 failed, discard\n";
+                    if (timedOut.load(std::memory_order_acquire)) {
+                        result << detail::makeTimeoutResult(timeout, strout, strerr);
+                    } else {
+                        result << "## ExitCode: " << exitCode << "\n";
+                        if (all_output || 0 != exitCode) {
+                            // failed
+                            if (strout.empty() || agentxx::util::autoConvertToUtf8(strout)) {
+                                result << "## StdOut:\n" << strout << "\n";
+                            } else {
+                                result << "## StdOut conversion to utf8 failed, discard\n";
+                            }
+                            if (strerr.empty() || agentxx::util::autoConvertToUtf8(strerr)) {
+                                result << "## StdErr:\n" << strerr << "\n";
+                            } else {
+                                result << "## StdErr conversion to utf8 failed, discard\n";
+                            }
                         }
                     }
                     resultStr = result.str();
+                };
+                // 超时守护: 到点整组终止并置标记; 之后挂起直至被并行组取消。
+                // 【禁止】对已被取消的 async_wait 再补二次等待 (bp::v2 退出状态
+                // 仅投递一次, 二次 wait 永久挂起) —— 同 bashExecute 修复说明
+                auto timeoutGuard = [&]() -> asio::awaitable<void> {
+                    if (timeout > 0) {
+                        asio::steady_timer t(co_await asio::this_coro::executor);
+                        t.expires_after(std::chrono::seconds{timeout});
+                        auto [ec] = co_await t.async_wait(asio::as_tuple(asio::use_awaitable));
+                        if (!ec) {
+                            timedOut.store(true, std::memory_order_release);
+                            detail::killProcGroup(proc);
+                        }
+                    }
+                    asio::steady_timer idle(co_await asio::this_coro::executor);
+                    idle.expires_after(std::chrono::hours(24));
+                    co_await idle.async_wait(asio::as_tuple(asio::use_awaitable));
+                };
+                try {
+                    using namespace asio::experimental::awaitable_operators;
+                    // 三路并行: 主工作 / 超时守护 / 会话取消监听 (语义同 bashExecute)
+                    co_await (
+                        mainWork()
+                        || timeoutGuard()
+                        || detail::procCancelWatchLoop(proc, isCancelled)
+                    );
                 } catch (...) {
                     ep = std::current_exception();
                 }

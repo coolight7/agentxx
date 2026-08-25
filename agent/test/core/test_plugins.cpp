@@ -441,30 +441,38 @@ asio::awaitable<TestResult> run_plugin_tests() {
     }
 
     // ---- 23. H1 回归: 工具超时后立即卸载不得执行已卸载代码段 ----
-    // - 超时 (asyncWithTimeout) 取消等待协程, 但线程池中的 C 回调仍会跑完
-    // - 修复: inflight 计数在线程池入口递增 + shared_ptr 保活 → unloadAsync
-    //   必须等回调真正返回后才 dlclose (卸载耗时 ≈ 回调剩余时间)
+    // - 统一异步操作模型: 超时 (asyncWithTimeout) 取消等待协程后, 宿主转入
+    //   后台收割协程继续驱动直至插件真正上报终态 —— inflight 保活随之转移,
+    //   unloadAsync 必须等到收割完成才 dlclose (卸载耗时 ≈ 操作剩余时间)
     {
         auto inst23 = co_await ctx->pluginManager->loadPluginAsync(path);
         XX_TEST_EXPECT_TRUE(inst23 != nullptr);
         if (inst23) {
-            // 注册带超时的慢工具: 超时 100ms, C 回调 sleep 600ms
+            // 注册带超时的慢工具: 超时 100ms, 异步操作 600ms 后才上报完成
             static AgentxxToolSpec slowSpec;
             slowSpec.name            = AGENTXX_SV("slow_timeout_tool");
             slowSpec.description     = AGENTXX_SV("slow tool for unload race test");
             slowSpec.parameters_json = AGENTXX_SV("{}");
-            slowSpec.execute         = +[](void*,
+            // 自管异步型 start: 辅助线程睡 600ms 后经通知器上报 (线程安全)
+            slowSpec.execute_start   = +[](void*,
                                    AgentxxPluginStringView,
                                    AgentxxPluginStringView,
                                    AgentxxPluginStringView,
-                                   char**) -> char* {
-                std::this_thread::sleep_for(std::chrono::milliseconds(600));
-                char* p = static_cast<char*>(::malloc(3));
-                p[0]    = '{';
-                p[1]    = '}';
-                p[2]    = '\0';
-                return p;
+                                   const AgentxxOpNotify* notify,
+                                   char**) -> void* {
+                auto t = std::thread([notify]() {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(600));
+                    char* p = static_cast<char*>(::malloc(3));
+                    p[0]    = '{';
+                    p[1]    = '}';
+                    p[2]    = '\0';
+                    notify->done(notify->host_ud, AGENTXX_OP_OK, p);
+                });
+                t.detach();
+                return reinterpret_cast<void*>(1); ///< 活动句柄占位 (poll/cancel 为空)
             };
+            slowSpec.execute_poll     = nullptr; ///< 只等完成通知 (收割协程低频轮询兜底)
+            slowSpec.execute_cancel   = nullptr;
             slowSpec.default_timeout_ms = 100;
             XX_TEST_EXPECT_EQ(ctx->pluginManager->registerTool(inst23.get(), &slowSpec), 0);
 
@@ -733,6 +741,306 @@ asio::awaitable<TestResult> run_plugin_tests() {
                           : -1;
             XX_TEST_EXPECT_TRUE(rc != 0);
             co_await ctx->pluginManager->unloadAsync("example_plugin");
+        }
+    }
+
+    // ---- 31. 统一异步操作模型: HostOp 句柄 / poll 推进 / 会话取消联动 ----
+    {
+        auto inst31 = co_await ctx->pluginManager->loadPluginAsync(path);
+        XX_TEST_EXPECT_TRUE(inst31 != nullptr);
+
+        // 31.1 call_tool_async 句柄语义 (宿主在 io 线程驱动目标工具,
+        //      调用方让出式轮询; take 恰好一次)
+        {
+            char* e   = nullptr;
+            auto* op  = ctx->pluginManager->callToolAsync(
+                inst31.get(),
+                "example_echo",
+                R"({"k":"v"})",
+                "t31",
+                &e
+            );
+            XX_TEST_EXPECT_TRUE(op != nullptr);
+            if (op) {
+                while (op->poll(op) != AGENTXX_OP_POLL_DONE) {
+                    co_await sleepMs(2);
+                }
+                int   status  = -1;
+                char* payload = nullptr;
+                XX_TEST_EXPECT_EQ(op->take(op, &status, &payload), 0);
+                XX_TEST_EXPECT_EQ(status, AGENTXX_OP_OK);
+                XX_TEST_EXPECT_TRUE(payload != nullptr);
+                if (payload) {
+                    XX_TEST_EXPECT_TRUE(std::string(payload).find("k") != std::string::npos);
+                    std::free(payload);
+                }
+                // 二次 take 必须失败 (恰一次契约)
+                char* payload2 = nullptr;
+                XX_TEST_EXPECT_TRUE(op->take(op, &status, &payload2) != 0);
+                op->free(op);
+            }
+            // 不存在的工具: 装配失败返回 NULL 并带错误
+            char* e2  = nullptr;
+            auto* op2 = ctx->pluginManager->callToolAsync(
+                inst31.get(),
+                "not_registered_tool",
+                "{}",
+                "t31",
+                &e2
+            );
+            XX_TEST_EXPECT_TRUE(op2 == nullptr);
+            XX_TEST_EXPECT_TRUE(e2 != nullptr);
+            if (e2) {
+                std::free(e2);
+            }
+        }
+
+        // 31.2 自管异步型工具: 宿主按 poll 建议延迟推进, 状态机第 5 轮上报完成
+        {
+            static int s_pollCount = 0;
+            s_pollCount            = 0;
+            struct PollOp {
+                const AgentxxOpNotify* notify;
+                int                    n;
+            };
+            static AgentxxToolSpec pollSpec;
+            pollSpec.name            = AGENTXX_SV("async_poll_tool");
+            pollSpec.description     = AGENTXX_SV("state-machine async tool for driver test");
+            pollSpec.parameters_json = AGENTXX_SV("{}");
+            pollSpec.execute_start   = +[](void*,
+                                   AgentxxPluginStringView,
+                                   AgentxxPluginStringView,
+                                   AgentxxPluginStringView,
+                                   const AgentxxOpNotify* notify,
+                                   char**) -> void* {
+                return new PollOp{notify, 0};
+            };
+            pollSpec.execute_poll = +[](void*, void* op) -> int {
+                auto* o = static_cast<PollOp*>(op);
+                ++s_pollCount;
+                if (o->n++ >= 4) { ///< 第 5 次推进时终结
+                    char* p = static_cast<char*>(::malloc(3));
+                    p[0]    = '{';
+                    p[1]    = '}';
+                    p[2]    = '\0';
+                    o->notify->done(o->notify->host_ud, AGENTXX_OP_OK, p);
+                    delete o;
+                    return AGENTXX_OP_POLL_DONE;
+                }
+                return 1; ///< 建议 1ms 后再问
+            };
+            XX_TEST_EXPECT_EQ(ctx->pluginManager->registerTool(inst31.get(), &pollSpec), 0);
+            auto pollTool = ctx->toolRegistry->find("async_poll_tool");
+            XX_TEST_EXPECT_TRUE(pollTool != nullptr);
+            if (pollTool) {
+                auto out = co_await pollTool->execute_async(neograph::json{
+                    {"sessionId", "t31"}
+                });
+                XX_TEST_EXPECT_EQ(out, "{}");
+                XX_TEST_EXPECT_TRUE(s_pollCount >= 5); ///< 驱动器确实多轮推进
+            }
+            ctx->pluginManager->unregisterTool(inst31.get(), "async_poll_tool");
+        }
+
+        // 31.3 会话取消联动: CancelToken 取消 → execute_cancel 被调用 →
+        //      插件上报 CANCELLED → 工具协程收到 CancelledException
+        {
+            struct CancelOp {
+                const AgentxxOpNotify* notify;
+                bool                   cancelled = false;
+            };
+            static bool s_cancelCalled = false;
+            s_cancelCalled             = false;
+            static AgentxxToolSpec cSpec;
+            cSpec.name            = AGENTXX_SV("async_cancel_tool");
+            cSpec.description     = AGENTXX_SV("cancellable async tool for cancel test");
+            cSpec.parameters_json = AGENTXX_SV("{}");
+            cSpec.execute_start   = +[](void*,
+                                   AgentxxPluginStringView,
+                                   AgentxxPluginStringView,
+                                   AgentxxPluginStringView,
+                                   const AgentxxOpNotify* notify,
+                                   char**) -> void* { return new CancelOp{notify}; };
+            cSpec.execute_poll = +[](void*, void* op) -> int {
+                auto* o = static_cast<CancelOp*>(op);
+                if (o->cancelled) {
+                    o->notify->done(o->notify->host_ud, AGENTXX_OP_CANCELLED, nullptr);
+                    delete o;
+                    return AGENTXX_OP_POLL_DONE;
+                }
+                return 10; ///< 10ms 后再查取消标志
+            };
+            cSpec.execute_cancel = +[](void*, void* op) {
+                s_cancelCalled = true;
+                static_cast<CancelOp*>(op)->cancelled = true;
+            };
+            XX_TEST_EXPECT_EQ(ctx->pluginManager->registerTool(inst31.get(), &cSpec), 0);
+
+            // 会话装配取消令牌 (与 ToolCallNode 注入路径一致)
+            auto sess = ctx->sessions->getOrCreate("t_plugin_cancel");
+            XX_TEST_EXPECT_TRUE(sess != nullptr);
+            sess->setCancelToken(
+                std::make_shared<neograph::graph::CancelToken>()
+            );
+
+            auto cancelTool = ctx->toolRegistry->find("async_cancel_tool");
+            XX_TEST_EXPECT_TRUE(cancelTool != nullptr);
+
+            // 30ms 后取消令牌 (io 线程定时器)
+            auto ex = co_await asio::this_coro::executor;
+            asio::co_spawn(
+                ex,
+                [sess]() -> asio::awaitable<void> {
+                    asio::steady_timer t(co_await asio::this_coro::executor);
+                    t.expires_after(std::chrono::milliseconds(30));
+                    co_await t.async_wait(asio::use_awaitable);
+                    if (sess->getCancelToken()) {
+                        sess->getCancelToken()->cancel();
+                    }
+                },
+                asio::detached
+            );
+
+            bool cancelledThrown = false;
+            try {
+                auto out = co_await cancelTool->execute_async(neograph::json{
+                    {"sessionId", "t_plugin_cancel"}
+                });
+                (void)out;
+            } catch (const neograph::graph::CancelledException&) {
+                cancelledThrown = true;
+            } catch (const std::exception& e) {
+                TEST_FAIL << "unexpected exception: " << e.what() << std::endl;
+            }
+            XX_TEST_EXPECT_TRUE(cancelledThrown);
+            XX_TEST_EXPECT_TRUE(s_cancelCalled); ///< 底层 cancel 回调被调用
+            ctx->pluginManager->unregisterTool(inst31.get(), "async_cancel_tool");
+            ctx->sessions->remove("t_plugin_cancel");
+        }
+
+        auto ok31 = co_await ctx->pluginManager->unloadAsync("example_plugin");
+        XX_TEST_EXPECT_TRUE(ok31);
+    }
+
+    // ---- 32. exec_command 插件真实链路 (经 shim offload + 宿主驱动) ----
+    {
+        namespace fs2 = std::filesystem;
+        auto        basePath = findExamplePluginPath();
+        std::string execDir  = (fs2::path(basePath).parent_path() / "agentxx_execute_command").string();
+        auto instExec = co_await ctx->pluginManager->loadPluginAsync(execDir);
+        XX_TEST_EXPECT_TRUE(instExec != nullptr);
+        if (instExec) {
+            XX_TEST_EXPECT_TRUE(ctx->toolRegistry->contains("agentxx_execute_bash_command"));
+            auto ex = co_await asio::this_coro::executor;
+
+            // ---- 32.1 bash 工具真实链路 (无会话令牌): 快速完成且输出正确 ----
+            // - 回归背景: 实现层 detached 取消 watcher 曾把局部 io.run() 永久
+            //   吊住 (guard 在 run 之后才析构, 互相死等), 任意命令卡满 timeout;
+            //   修复后主工作与 watcher 经 awaitable_operators 并行, 主完即收
+            {
+                auto t0 = std::chrono::steady_clock::now();
+                char* e = nullptr;
+                auto* op = ctx->pluginManager->callToolAsync(
+                    instExec.get(),
+                    "agentxx_execute_bash_command",
+                    R"({"command":"echo repro_check"})",
+                    "t_exec_no_token",
+                    &e
+                );
+                XX_TEST_EXPECT_TRUE(op != nullptr);
+                if (op) {
+                    while (op->poll(op) != AGENTXX_OP_POLL_DONE) {
+                        asio::steady_timer t(ex);
+                        t.expires_after(std::chrono::milliseconds(2));
+                        co_await t.async_wait(asio::use_awaitable);
+                    }
+                    int st = -1;
+                    char* payload = nullptr;
+                    XX_TEST_EXPECT_EQ(op->take(op, &st, &payload), 0);
+                    op->free(op);
+                    auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                  std::chrono::steady_clock::now() - t0).count();
+                    XX_TEST_EXPECT_EQ(st, AGENTXX_OP_OK);
+                    XX_TEST_EXPECT_TRUE(payload != nullptr);
+                    if (payload) {
+                        XX_TEST_EXPECT_TRUE(std::string(payload).find("repro_check")
+                                            != std::string::npos);
+                        std::free(payload);
+                    }
+                    // echo 级命令必须秒级返回 (历史 bug 下卡满 60s timeout)
+                    XX_TEST_EXPECT_TRUE(ms < 10000);
+                }
+            }
+
+            // ---- 32.2 会话取消令牌存在 (真实 agent 运行态) 同样快速 ----
+            {
+                auto sess = ctx->sessions->getOrCreate("t_exec_with_token");
+                sess->setCancelToken(std::make_shared<neograph::graph::CancelToken>());
+                auto t0 = std::chrono::steady_clock::now();
+                char* e = nullptr;
+                auto* op = ctx->pluginManager->callToolAsync(
+                    instExec.get(),
+                    "agentxx_execute_bash_command",
+                    R"({"command":"echo token_case"})",
+                    "t_exec_with_token",
+                    &e
+                );
+                XX_TEST_EXPECT_TRUE(op != nullptr);
+                if (op) {
+                    while (op->poll(op) != AGENTXX_OP_POLL_DONE) {
+                        asio::steady_timer t(ex);
+                        t.expires_after(std::chrono::milliseconds(2));
+                        co_await t.async_wait(asio::use_awaitable);
+                    }
+                    int st = -1;
+                    char* payload = nullptr;
+                    XX_TEST_EXPECT_EQ(op->take(op, &st, &payload), 0);
+                    op->free(op);
+                    auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                  std::chrono::steady_clock::now() - t0).count();
+                    XX_TEST_EXPECT_EQ(st, AGENTXX_OP_OK);
+                    XX_TEST_EXPECT_TRUE(payload != nullptr);
+                    if (payload) {
+                        XX_TEST_EXPECT_TRUE(std::string(payload).find("token_case")
+                                            != std::string::npos);
+                        std::free(payload);
+                    }
+                    XX_TEST_EXPECT_TRUE(ms < 10000);
+                }
+            }
+
+            // ---- 32.3 超时参数生效: sleep 超过 timeout → 返回超时结果文本 ----
+            {
+                char* e = nullptr;
+                auto* op = ctx->pluginManager->callToolAsync(
+                    instExec.get(),
+                    "agentxx_execute_bash_command",
+                    R"({"command":"sleep 5","timeout":1})",
+                    "t_exec_no_token",
+                    &e
+                );
+                XX_TEST_EXPECT_TRUE(op != nullptr);
+                if (op) {
+                    while (op->poll(op) != AGENTXX_OP_POLL_DONE) {
+                        asio::steady_timer t(ex);
+                        t.expires_after(std::chrono::milliseconds(10));
+                        co_await t.async_wait(asio::use_awaitable);
+                    }
+                    int st = -1;
+                    char* payload = nullptr;
+                    XX_TEST_EXPECT_EQ(op->take(op, &st, &payload), 0);
+                    op->free(op);
+                    XX_TEST_EXPECT_EQ(st, AGENTXX_OP_OK); // 超时是工具的正常结果文本
+                    XX_TEST_EXPECT_TRUE(payload != nullptr);
+                    if (payload) {
+                        XX_TEST_EXPECT_TRUE(std::string(payload).find("timed out")
+                                            != std::string::npos);
+                        std::free(payload);
+                    }
+                }
+            }
+
+            co_await ctx->pluginManager->unloadAsync("agentxx_execute_command");
         }
     }
 
