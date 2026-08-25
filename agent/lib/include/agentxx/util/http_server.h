@@ -14,7 +14,6 @@
 #include <atomic>
 #include <boost/beast/core.hpp>
 #include <boost/beast/http.hpp>
-#include <boost/beast/ssl.hpp>
 #include <boost/beast/version.hpp>
 #include <boost/beast/websocket.hpp>
 #include <chrono>
@@ -27,7 +26,6 @@
 #include <optional>
 #include <string>
 #include <thread>
-#include <type_traits>
 #include <vector>
 
 namespace agentxx {
@@ -62,10 +60,6 @@ public:
     using WsStream  = boost::beast::websocket::stream<boost::beast::tcp_stream>;
     using WsHandler = std::function<asio::awaitable<void>(WsStream&)>;
 
-    using WssStream
-        = boost::beast::websocket::stream<boost::beast::ssl_stream<boost::beast::tcp_stream>>;
-    using WssHandler = std::function<asio::awaitable<void>(WssStream&)>;
-
     /// Streaming SSE connection — the handler can hold onto this to push
     /// events after the initial response header has been sent.
     class SseWriter {
@@ -97,10 +91,6 @@ public:
 
         /// SSE 写入超时: 两次 SSE event 推送之间的最大间隔 (默认 120s, 适应 LLM 长思考)
         std::chrono::seconds sseWriteTimeout{120};
-
-        // SSL (optional – set both to enable)
-        std::string sslCertFile;
-        std::string sslKeyFile;
 
         size_t maxConnections = 8192;
 
@@ -171,9 +161,6 @@ public:
     /// the handler is invoked with the websocket stream.
     void enableWebSocket(std::string_view path, WsHandler handler);
 
-    /// Register a WebSocket endpoint for SSL (wss://) connections.
-    void enableWebSocketSsl(std::string_view path, WssHandler handler);
-
     /// Start the accept loop on the given executor without creating threads.
     /// The caller is responsible for running the io_context.
     /// Suitable for single-threaded server mode (e.g. agent service).
@@ -182,7 +169,7 @@ public:
 private:
 
     // -----------------------------------------------------------------------
-    // SseWriter implementation backed by a TCP/SSL stream
+    // SseWriter implementation backed by a TCP stream
     // -----------------------------------------------------------------------
     template<typename Stream>
     class SseWriterImpl : public SseWriter {
@@ -353,20 +340,8 @@ private:
     /// Serve a TCP connection (member coroutine — avoids dangling lambda captures)
     asio::awaitable<void> serveTcp(std::shared_ptr<boost::beast::tcp_stream> stream);
 
-    /// Serve an SSL connection (member coroutine)
-    asio::awaitable<void>
-        serveSsl(std::shared_ptr<boost::beast::ssl_stream<boost::beast::tcp_stream>> stream);
-
     // -----------------------------------------------------------------------
-    // SSL helper
-    // -----------------------------------------------------------------------
-
-    asio::awaitable<void> sslHandshakeAndServe(
-        std::shared_ptr<boost::beast::ssl_stream<boost::beast::tcp_stream>> stream
-    );
-
-    // -----------------------------------------------------------------------
-    // Session handler (template – works with tcp_stream & ssl_stream)
+    // Session handler (template – works with tcp_stream)
     // -----------------------------------------------------------------------
 
     template<typename Stream>
@@ -551,7 +526,7 @@ private:
             }
 
             // Check for WebSocket upgrade (GET + Upgrade: websocket)
-            if (methodIdx == 0 && !handled && (!wsRoutes_.empty() || !wsSslRoutes_.empty())) {
+            if (methodIdx == 0 && !handled && !wsRoutes_.empty()) {
                 auto upgradeIt = req.find(http::field::upgrade);
                 if (upgradeIt != req.end()
                     && boost::beast::iequals(upgradeIt->value(), "websocket")) {
@@ -560,50 +535,23 @@ private:
                     // 普通路由; CancelledException/NodeInterrupt 保持抛出 (无 onRethrow)
                     auto wsOk = co_await agentxx::util::catchErrorAsync<bool>(
                         [&]() -> asio::awaitable<bool> {
-                            if constexpr (std::is_same_v<Stream, boost::beast::tcp_stream>) {
-                                auto wsIt = wsRoutes_.find(path);
-                                if (wsIt != wsRoutes_.end()) {
-                                    streamMoved = true;
-                                    boost::beast::websocket::stream<boost::beast::tcp_stream> ws(
-                                        std::move(stream)
-                                    );
-                                    ws.set_option(
-                                        boost::beast::websocket::stream_base::timeout::suggested(
-                                            boost::beast::role_type::server
-                                        )
-                                    );
-                                    co_await ws.async_accept(
-                                        req,
-                                        asio::cancel_after(
-                                            std::chrono::seconds{10},
-                                            asio::use_awaitable
-                                        )
-                                    );
-                                    co_await wsIt->second(ws);
-                                    co_return true;
-                                }
-                            } else {
-                                auto wsIt = wsSslRoutes_.find(path);
-                                if (wsIt != wsSslRoutes_.end()) {
-                                    streamMoved = true;
-                                    boost::beast::websocket::stream<
-                                        boost::beast::ssl_stream<boost::beast::tcp_stream>>
-                                        ws(std::move(stream));
-                                    ws.set_option(
-                                        boost::beast::websocket::stream_base::timeout::suggested(
-                                            boost::beast::role_type::server
-                                        )
-                                    );
-                                    co_await ws.async_accept(
-                                        req,
-                                        asio::cancel_after(
-                                            std::chrono::seconds{10},
-                                            asio::use_awaitable
-                                        )
-                                    );
-                                    co_await wsIt->second(ws);
-                                    co_return true;
-                                }
+                            auto wsIt = wsRoutes_.find(path);
+                            if (wsIt != wsRoutes_.end()) {
+                                streamMoved = true;
+                                boost::beast::websocket::stream<boost::beast::tcp_stream> ws(
+                                    std::move(stream)
+                                );
+                                ws.set_option(
+                                    boost::beast::websocket::stream_base::timeout::suggested(
+                                        boost::beast::role_type::server
+                                    )
+                                );
+                                co_await ws.async_accept(
+                                    req,
+                                    asio::cancel_after(std::chrono::seconds{10}, asio::use_awaitable)
+                                );
+                                co_await wsIt->second(ws);
+                                co_return true;
                             }
                             co_return false;
                         },
@@ -773,7 +721,6 @@ private:
     std::vector<std::unique_ptr<Worker>>     workers_;
     std::unique_ptr<Router>                  router_;
     std::unique_ptr<asio::ip::tcp::acceptor> acceptor_;
-    std::unique_ptr<asio::ssl::context>      sslCtx_;
     std::atomic<bool>                        stopped_{false};
     std::atomic<size_t>                      activeConnections_{0};
     std::atomic<size_t>                      nextWorker_{0};
@@ -792,9 +739,6 @@ private:
 
     /// WebSocket routes (GET + Upgrade) — keyed by path
     std::unordered_map<std::string, WsHandler> wsRoutes_;
-
-    /// WebSocket SSL routes (GET + Upgrade over TLS) — keyed by path
-    std::unordered_map<std::string, WssHandler> wsSslRoutes_;
 
     /// Whether startAsync mode is active (single executor, no worker threads)
     bool asyncMode_ = false;

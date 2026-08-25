@@ -536,24 +536,5 @@ std::unique_ptr<WsClient> wrapAcceptedWs(
     return std::unique_ptr<WsClient>(new WsClient(std::move(impl)));
 }
 
-std::unique_ptr<WsClient> wrapAcceptedWss(
-    asio::any_io_executor                                                               ex,
-    boost::beast::websocket::stream<boost::beast::ssl_stream<boost::beast::tcp_stream>> wss,
-    WsClientConfig                                                                      config
-) {
-    auto impl   = std::make_unique<WsClient::Impl>(std::move(ex), std::move(config));
-    impl->isSsl = true;
-    impl->wss   = std::make_unique<WsClient::Impl::WssStream>(std::move(wss));
-    // 禁用 Beast 内部 idle_timeout, 由外部 cancel_after 统一控制超时
-    impl->wss->set_option(boost::beast::websocket::stream_base::timeout{
-        .handshake_timeout = std::chrono::seconds{30},
-        .idle_timeout      = boost::beast::websocket::stream_base::none(),
-        .keep_alive_pings  = false,
-    });
-    impl->wss->read_message_max(impl->config.maxMessageSize);
-    enableWsKeepalive(boost::beast::get_lowest_layer(*impl->wss).socket());
-    return std::unique_ptr<WsClient>(new WsClient(std::move(impl)));
-}
-
 } // namespace util
 } // namespace agentxx

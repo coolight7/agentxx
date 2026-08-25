@@ -104,11 +104,5 @@ std::unique_ptr<WsClient> wrapAcceptedWs(
     WsClientConfig                                            config = {}
 );
 
-std::unique_ptr<WsClient> wrapAcceptedWss(
-    asio::any_io_executor                                                               ex,
-    boost::beast::websocket::stream<boost::beast::ssl_stream<boost::beast::tcp_stream>> wss,
-    WsClientConfig                                                                      config = {}
-);
-
 } // namespace util
 } // namespace agentxx

@@ -238,8 +238,6 @@ int main(int argn, char** argv) {
     std::string remoteModel;
     std::string srvHost = "127.0.0.1";
     uint16_t    srvPort = 7007;
-    std::string sslCertFile;
-    std::string sslKeyFile;
     for (int i = 1; i < argn; ++i) {
         auto arg = std::string_view{argv[i]};
         if (arg == "--help" || arg == "-h") {
@@ -262,8 +260,6 @@ Options:
     --model <model>      远程模型名称
     --host <host>        服务监听地址 (默认: 127.0.0.1)
     --port <port>        服务监听端口 (默认: 7007)
-    --ssl-cert <file>    SSL 证书文件路径
-    --ssl-key <file>     SSL 私钥文件路径
 )_");
             return 0;
         } else if (arg == "--config" && i + 1 < argn) {
@@ -294,12 +290,6 @@ Options:
                 XX_LOGE("Invalid --port value: `{}`", portArg);
                 return 1;
             }
-        } else if (arg == "--ssl-cert" && i + 1 < argn) {
-            ++i;
-            sslCertFile = argv[i];
-        } else if (arg == "--ssl-key" && i + 1 < argn) {
-            ++i;
-            sslKeyFile = argv[i];
         } else if (arg == "tui" || arg == "cli" || arg == "server" || arg == "acp"
                    || arg == "train") {
             mode = arg;
@@ -578,12 +568,10 @@ Options:
         auto agent = std::make_shared<agentxx::agent::CodeAgent>(config);
 
         agentxx::agent::io::AgentServer::Config srvCfg;
-        srvCfg.http.address     = srvHost;
-        srvCfg.http.port        = srvPort;
-        srvCfg.http.sslCertFile = sslCertFile;
-        srvCfg.http.sslKeyFile  = sslKeyFile;
-        srvCfg.token            = agentToken;
-        auto server             = std::make_shared<agentxx::agent::io::AgentServer>(agent, srvCfg);
+        srvCfg.http.address = srvHost;
+        srvCfg.http.port    = srvPort;
+        srvCfg.token        = agentToken;
+        auto server         = std::make_shared<agentxx::agent::io::AgentServer>(agent, srvCfg);
 
         asio::co_spawn(
             *agent->ioCtx,

@@ -61,22 +61,14 @@ std::string AgentServer::generateToken(size_t bytes) {
 }
 
 void AgentServer::start(asio::any_io_executor ex) {
-    ex_      = ex;
-    http_    = std::make_unique<util::HttpServer>(config_.http);
-    bool ssl = !config_.http.sslCertFile.empty() && !config_.http.sslKeyFile.empty();
-    if (ssl) {
-        http_->enableWebSocketSsl(config_.defaultBasePath, [this](util::HttpServer::WssStream& ws) {
-            return handleWss(ws);
-        });
-    } else {
-        http_->enableWebSocket(config_.defaultBasePath, [this](util::HttpServer::WsStream& ws) {
-            return handleWs(ws);
-        });
-    }
+    ex_   = ex;
+    http_ = std::make_unique<util::HttpServer>(config_.http);
+    http_->enableWebSocket(config_.defaultBasePath, [this](util::HttpServer::WsStream& ws) {
+        return handleWs(ws);
+    });
     http_->startAsync(ex);
     XX_OUT(
-        "[agent_server] BaseAgent {} service on {}:{}{} (token={})",
-        ssl ? "WSS" : "WS",
+        "[agent_server] BaseAgent WS service on {}:{}{} (token={})",
         config_.http.address,
         port(),
         config_.defaultBasePath,
@@ -142,14 +134,6 @@ std::shared_ptr<SessionServerAgentIO> AgentServer::getOrCreateController(std::st
 asio::awaitable<void> AgentServer::handleWs(util::HttpServer::WsStream& ws) {
     auto ex     = co_await asio::this_coro::executor;
     auto client = util::wrapAcceptedWs(ex, std::move(ws));
-    auto transport
-        = std::make_shared<WsAgentIOTransport>(ex, std::move(client), WsAgentIOTransport::Config{});
-    co_await serveTransport(std::move(transport));
-}
-
-asio::awaitable<void> AgentServer::handleWss(util::HttpServer::WssStream& ws) {
-    auto ex     = co_await asio::this_coro::executor;
-    auto client = util::wrapAcceptedWss(ex, std::move(ws));
     auto transport
         = std::make_shared<WsAgentIOTransport>(ex, std::move(client), WsAgentIOTransport::Config{});
     co_await serveTransport(std::move(transport));

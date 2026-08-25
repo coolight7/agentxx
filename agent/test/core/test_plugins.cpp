@@ -448,33 +448,29 @@ asio::awaitable<TestResult> run_plugin_tests() {
         auto inst23 = co_await ctx->pluginManager->loadPluginAsync(path);
         XX_TEST_EXPECT_TRUE(inst23 != nullptr);
         if (inst23) {
-            // 注册带超时的慢工具: 超时 100ms, 异步操作 600ms 后才上报完成
+            // 注册带超时的慢工具: 超时 100ms, 阻塞操作 600ms 后才完成
             // (阻塞委托型同步垫片: execute 经 scheduler.offload 在宿主阻塞池
             // 线程执行, 与插件作者使用 agentxx_register_sync_tool 的真实路径一致)
             static AgentxxSyncToolSpec slowSpec;
             slowSpec.name            = AGENTXX_SV("slow_timeout_tool");
             slowSpec.description     = AGENTXX_SV("slow tool for unload race test");
             slowSpec.parameters_json = AGENTXX_SV("{}");
-            // 自管异步型 start: 辅助线程睡 600ms 后经通知器上报 (线程安全)
-            slowSpec.execute_start = +[](void*,
-                                         AgentxxPluginStringView,
-                                         AgentxxPluginStringView,
-                                         AgentxxPluginStringView,
-                                         const AgentxxOpNotify* notify,
-                                         char**) -> void* {
-                auto t = std::thread([notify]() {
-                    std::this_thread::sleep_for(std::chrono::milliseconds(600));
-                    char* p = static_cast<char*>(::malloc(3));
-                    p[0]    = '{';
-                    p[1]    = '}';
-                    p[2]    = '\0';
-                    notify->done(notify->host_ud, AGENTXX_OP_OK, p);
-                });
-                t.detach();
-                return reinterpret_cast<void*>(1); ///< 活动句柄占位 (poll/cancel 为空)
+            // 阻塞委托型 execute: 在宿主阻塞池线程睡 600ms 后返回结果
+            // (模拟不可中断的慢任务, 忽略 cancel_flag)
+            slowSpec.execute = +[](void*,
+                                   AgentxxPluginStringView,
+                                   AgentxxPluginStringView,
+                                   AgentxxPluginStringView,
+                                   volatile int*,
+                                   char**) -> char* {
+                std::this_thread::sleep_for(std::chrono::milliseconds(600));
+                char* p = static_cast<char*>(::malloc(3));
+                p[0]    = '{';
+                p[1]    = '}';
+                p[2]    = '\0';
+                return p;
             };
-            slowSpec.execute_poll = nullptr; ///< 只等完成通知 (收割协程低频轮询兜底)
-            slowSpec.execute_cancel     = nullptr;
+            slowSpec.user_data          = nullptr;
             slowSpec.default_timeout_ms = 100;
             XX_TEST_EXPECT_EQ(agentxx_register_sync_tool(&inst23->host, &slowSpec), 0);
 

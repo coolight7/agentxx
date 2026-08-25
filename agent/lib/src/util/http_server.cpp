@@ -148,25 +148,10 @@ void HttpServer::start() {
     acceptor_->bind(endpoint);
     acceptor_->listen(asio::socket_base::max_listen_connections);
 
-    // Setup SSL context if configured
-    if (!config_.sslCertFile.empty() && !config_.sslKeyFile.empty()) {
-        // tls_server (TLS_method) + enableTlsAutoNegotiate: 对 TLS 1.0 ~ 最高
-        // 版本 (当前 1.3) 全范围自动协商; tlsv12_server 会把版本锁死为 1.2,
-        // 仅支持 1.3 的客户端无法连接
-        sslCtx_ = std::make_unique<asio::ssl::context>(asio::ssl::context::tls_server);
-        sslCtx_->set_options(
-            asio::ssl::context::default_workarounds | asio::ssl::context::no_sslv2
-            | asio::ssl::context::no_sslv3 | asio::ssl::context::single_dh_use
-        );
-        HttpClient::enableTlsAutoNegotiate(*sslCtx_);
-        sslCtx_->use_certificate_chain_file(config_.sslCertFile);
-        sslCtx_->use_private_key_file(config_.sslKeyFile, asio::ssl::context::pem);
-    }
-
     // Spawn listener coroutine on first worker's io_context
     asio::co_spawn(mainCtx, acceptLoop(), asio::detached);
 
-    XX_OUT("[server] Listening on {}:{}{}", config_.address, port(), sslCtx_ ? " (HTTPS)" : "");
+    XX_OUT("[server] Listening on {}:{}", config_.address, port());
 
     // Start worker threads — each runs its own io_context
     for (unsigned i = 0; i < threadCount; ++i) {
@@ -228,10 +213,6 @@ void HttpServer::enableWebSocket(std::string_view path, WsHandler handler) {
     wsRoutes_[std::string{path}] = std::move(handler);
 }
 
-void HttpServer::enableWebSocketSsl(std::string_view path, WssHandler handler) {
-    wsSslRoutes_[std::string{path}] = std::move(handler);
-}
-
 void HttpServer::startAsync(asio::any_io_executor executor) {
     if (stopped_) {
         return;
@@ -249,20 +230,6 @@ void HttpServer::startAsync(asio::any_io_executor executor) {
     acceptor_->bind(endpoint);
     acceptor_->listen(asio::socket_base::max_listen_connections);
 
-    if (!config_.sslCertFile.empty() && !config_.sslKeyFile.empty()) {
-        // tls_server (TLS_method) + enableTlsAutoNegotiate: 对 TLS 1.0 ~ 最高
-        // 版本 (当前 1.3) 全范围自动协商; tlsv12_server 会把版本锁死为 1.2,
-        // 仅支持 1.3 的客户端无法连接
-        sslCtx_ = std::make_unique<asio::ssl::context>(asio::ssl::context::tls_server);
-        sslCtx_->set_options(
-            asio::ssl::context::default_workarounds | asio::ssl::context::no_sslv2
-            | asio::ssl::context::no_sslv3 | asio::ssl::context::single_dh_use
-        );
-        HttpClient::enableTlsAutoNegotiate(*sslCtx_);
-        sslCtx_->use_certificate_chain_file(config_.sslCertFile);
-        sslCtx_->use_private_key_file(config_.sslKeyFile, asio::ssl::context::pem);
-    }
-
     asio::co_spawn(executor, acceptLoopAsync(), asio::detached);
 
     XX_OUT("[server] Listening on {}:{} (async mode)", config_.address, port());
@@ -270,7 +237,7 @@ void HttpServer::startAsync(asio::any_io_executor executor) {
 
 asio::awaitable<void> HttpServer::serveTcp(std::shared_ptr<boost::beast::tcp_stream> stream) {
     ConnectionGuard guard{activeConnections_};
-    // 与 SSL 路径一致: 捕获异常, 避免客户端在读写期间断开时异常逃逸 detached 协程 → terminate;
+    // 捕获异常, 避免客户端在读写期间断开时异常逃逸 detached 协程 → terminate;
     // 取消/中断 (CancelledException/NodeInterrupt, 经 handler 传播) 是预期行为, 静默返回
     try {
         co_await serve(std::move(*stream));
@@ -279,20 +246,12 @@ asio::awaitable<void> HttpServer::serveTcp(std::shared_ptr<boost::beast::tcp_str
     } catch (const neograph::graph::NodeInterrupt&) {
         // 中断: 同上
     } catch (const neograph_asio_system_error& e) {
-        if (e.code() != asio::error::operation_aborted
-            && e.code() != asio::ssl::error::stream_truncated) {
+        if (e.code() != asio::error::operation_aborted) {
             XX_LOGE("[server] TCP error: {}", agentxx::util::autoTryConvertToUtf8(e.what()));
         }
     } catch (const std::exception& e) {
         XX_LOGE("[server] TCP serve error: {}", e.what());
     }
-}
-
-asio::awaitable<void>
-    HttpServer::serveSsl(std::shared_ptr<boost::beast::ssl_stream<boost::beast::tcp_stream>> stream
-    ) {
-    ConnectionGuard guard{activeConnections_};
-    co_await sslHandshakeAndServe(stream);
 }
 
 asio::awaitable<void> HttpServer::acceptLoop() {
@@ -354,16 +313,8 @@ asio::awaitable<void> HttpServer::acceptLoop() {
         tcp::socket workerSocket(targetWorker.ioCtx);
         workerSocket.assign(localEp.protocol(), socket.release());
 
-        if (sslCtx_) {
-            auto sslStream = std::make_shared<boost::beast::ssl_stream<boost::beast::tcp_stream>>(
-                boost::beast::tcp_stream(std::move(workerSocket)),
-                *sslCtx_
-            );
-            asio::co_spawn(targetWorker.ioCtx, serveSsl(std::move(sslStream)), asio::detached);
-        } else {
-            auto stream = std::make_shared<boost::beast::tcp_stream>(std::move(workerSocket));
-            asio::co_spawn(targetWorker.ioCtx, serveTcp(std::move(stream)), asio::detached);
-        }
+        auto stream = std::make_shared<boost::beast::tcp_stream>(std::move(workerSocket));
+        asio::co_spawn(targetWorker.ioCtx, serveTcp(std::move(stream)), asio::detached);
     }
     co_return;
 }
@@ -407,42 +358,10 @@ asio::awaitable<void> HttpServer::acceptLoopAsync() {
 
         activeConnections_.fetch_add(1, std::memory_order_relaxed);
 
-        if (sslCtx_) {
-            auto sslStream = std::make_shared<boost::beast::ssl_stream<boost::beast::tcp_stream>>(
-                boost::beast::tcp_stream(std::move(socket)),
-                *sslCtx_
-            );
-            asio::co_spawn(executor, serveSsl(std::move(sslStream)), asio::detached);
-        } else {
-            auto stream = std::make_shared<boost::beast::tcp_stream>(std::move(socket));
-            asio::co_spawn(executor, serveTcp(std::move(stream)), asio::detached);
-        }
+        auto stream = std::make_shared<boost::beast::tcp_stream>(std::move(socket));
+        asio::co_spawn(executor, serveTcp(std::move(stream)), asio::detached);
     }
     co_return;
-}
-
-asio::awaitable<void> HttpServer::sslHandshakeAndServe(
-    std::shared_ptr<boost::beast::ssl_stream<boost::beast::tcp_stream>> stream
-) {
-    try {
-        co_await stream->async_handshake(
-            asio::ssl::stream_base::server,
-            asio::cancel_after(config_.requestTimeout, asio::use_awaitable)
-        );
-        co_await serve(std::move(*stream));
-    } catch (const neograph::graph::CancelledException&) {
-        // 取消: 连接终止是预期行为, 静默返回
-    } catch (const neograph::graph::NodeInterrupt&) {
-        // 中断: 同上
-    } catch (const neograph_asio_system_error& e) {
-        if (e.code() != asio::error::operation_aborted
-            && e.code() != asio::ssl::error::stream_truncated) {
-            XX_LOGE("[server] SSL error: {}", agentxx::util::autoTryConvertToUtf8(e.what()));
-        }
-    } catch (const std::exception& e) {
-        XX_LOGE("[server] SSL handshake error: {}", e.what());
-    }
-    // activeConnections_ decrement handled by ConnectionGuard in caller
 }
 
 void HttpServer::fillError(

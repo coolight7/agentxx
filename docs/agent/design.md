@@ -264,7 +264,7 @@ TUI [F4] 打开会话选择弹窗 → WireListSessions (服务端阻塞 I/O 卸�
 
 ### 远程通信
 
-- **WebSocket 服务**: AgentServer 提供 WS/WSS 服务，支持 token 鉴权
+- **WebSocket 服务**: AgentServer 提供 WS 服务，支持 token 鉴权
 - **Wire Protocol**: 双向 JSON 消息协议 (Hello/HelloAck/UserInput/Cancel/SelectModel/GetModel/Delta/Sync/InterruptRequest/InterruptResponse/InterruptExpired/TurnResult/ContextStats/Error/Log/ModelInfo/GetAppendComponentInfo/AppendComponentInfo/GetContext/ContextMessages/Ping/Pong/SetPermission/ListSessions/SessionList/SwitchSession/GetViewMessages/ViewMessagesPage/ClearMessageQueue/RemoveQueueItem/InterruptAndRunNext/MessageQueueUpdate/PluginData/PluginDataUp);
   排队消息管理: 执行中排队由服务端按会话维护并经 MessageQueueUpdate 同步,
   客户端可删除单条 (RemoveQueueItem) / 清空队列 (ClearMessageQueue) /
@@ -593,8 +593,6 @@ agentxx_cli [mode] [options]
 | `--model <model>` | 远程模型名称 |
 | `--host <host>` | 服务监听地址 (默认: 127.0.0.1) |
 | `--port <port>` | 服务监听端口 (默认: 7007) |
-| `--ssl-cert <file>` | SSL 证书文件路径 |
-| `--ssl-key <file>` | SSL 私钥文件路径 |
 
 **典型用法:**
 
