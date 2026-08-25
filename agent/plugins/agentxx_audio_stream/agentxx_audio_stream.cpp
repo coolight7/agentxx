@@ -98,30 +98,35 @@ struct AudioStreamHolder {
         if (stream_.isRunning()) {
             return false;
         }
+        // 异常守卫: 监听回调运行在音频捕获线程, 异常逃逸会 terminate 进程
         stream_.addListener([](const agentxx::expand::AudioData& data) {
-            if (!g_host || !g_if.events || !g_if.events->publish) {
-                return;
+            try {
+                if (!g_host || !g_if.events || !g_if.events->publish) {
+                    return;
+                }
+                auto tsMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                data.timestamp.time_since_epoch()
+                )
+                                .count();
+                std::string payload = fmt::format(
+                    R"({{"sample_rate":{},"channels":{},"bits_per_sample":{},"source":{},"process_id":{},"process_name":{},"timestamp_ms":{},"data_base64":{}}})",
+                    data.sampleRate,
+                    data.channels,
+                    data.bitsPerSample,
+                    jsonEscape(sourceName(data.source)),
+                    data.processId,
+                    jsonEscape(data.processName),
+                    tsMs,
+                    jsonEscape(toBase64(data.data))
+                );
+                g_if.events->publish(
+                    g_host,
+                    AGENTXX_SV("agentxx_audio_stream.audio"),
+                    agentxx_plugin_sv(payload.data(), payload.size())
+                );
+            } catch (...) {
+                pluginCatchLog("audio frame publish");
             }
-            auto tsMs = std::chrono::duration_cast<std::chrono::milliseconds>(
-                            data.timestamp.time_since_epoch()
-            )
-                            .count();
-            std::string payload = fmt::format(
-                R"({{"sample_rate":{},"channels":{},"bits_per_sample":{},"source":{},"process_id":{},"process_name":{},"timestamp_ms":{},"data_base64":{}}})",
-                data.sampleRate,
-                data.channels,
-                data.bitsPerSample,
-                jsonEscape(sourceName(data.source)),
-                data.processId,
-                jsonEscape(data.processName),
-                tsMs,
-                jsonEscape(toBase64(data.data))
-            );
-            g_if.events->publish(
-                g_host,
-                AGENTXX_SV("agentxx_audio_stream.audio"),
-                agentxx_plugin_sv(payload.data(), payload.size())
-            );
         });
         return stream_.start(source, targetProcessId);
     }
@@ -208,21 +213,32 @@ char* audioStreamExecute(
 // =====================================================================
 
 extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_get_info(void) {
-    static const AgentxxPluginInfo info{
-        AGENTXX_PLUGIN_API_VERSION,
-        AGENTXX_SV("agentxx_audio_stream"),
-        AGENTXX_SV("1.0.0"),
-        AGENTXX_SV("Audio stream capture: system output / program output / microphone "
-                   "(Windows WASAPI; other platforms no-op)"),
-    };
-    return &info;
+    // C ABI 边界异常守卫: 异常返回 NULL (宿主按"未导出"处理)
+    return agentxx::plugin_guard::guardCall(
+        pluginCatchLog,
+        nullptr,
+        [&]() -> const AgentxxPluginInfo* {
+        static const AgentxxPluginInfo info{
+            AGENTXX_PLUGIN_API_VERSION,
+            AGENTXX_SV("agentxx_audio_stream"),
+            AGENTXX_SV("1.0.0"),
+            AGENTXX_SV("Audio stream capture: system output / program output / microphone "
+                       "(Windows WASAPI; other platforms no-op)"),
+        };
+        return &info;
+    });
 }
 
 extern "C" AGENTXX_PLUGIN_EXPORT int
     agentxx_plugin_entry(const AgentxxHost* host, void** /*plugin_ctx*/) {
-    g_host = host;
+    // C ABI 边界异常守卫: 异常返回 -1 (加载失败)
+    return agentxx::plugin_guard::guardCall(
+        pluginCatchLog,
+        -1,
+        [&]() -> int {
+        g_host = host;
 
-    static const std::string kSchema = R"({
+        static const std::string kSchema = R"({
         "type": "object",
         "properties": {
             "command": {"type": "string", "enum": ["start", "stop", "status"]},
@@ -232,27 +248,31 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
         "required": ["command"]
     })";
 
-    AgentxxSyncToolSpec spec{};
-    spec.name = AGENTXX_SV("agentxx_audio_stream");
-    spec.description
-        = AGENTXX_SV("Capture audio stream on Windows: start/stop/status. Captured PCM frames are "
-                     "published as plugin events (agentxx_audio_stream.audio).");
-    spec.parameters_json = agentxx_plugin_sv(kSchema.data(), kSchema.size());
-    spec.execute         = audioStreamExecute;
-    if (agentxx_register_sync_tool(host, &spec) != 0) {
-        pluginLog(3, "agentxx_audio_stream: register tool failed");
-        return -1;
-    }
+        AgentxxSyncToolSpec spec{};
+        spec.name = AGENTXX_SV("agentxx_audio_stream");
+        spec.description
+            = AGENTXX_SV("Capture audio stream on Windows: start/stop/status. Captured PCM frames are "
+                         "published as plugin events (agentxx_audio_stream.audio).");
+        spec.parameters_json = agentxx_plugin_sv(kSchema.data(), kSchema.size());
+        spec.execute         = audioStreamExecute;
+        if (agentxx_register_sync_tool(host, &spec) != 0) {
+            pluginLog(3, "agentxx_audio_stream: register tool failed");
+            return -1;
+        }
 
-    pluginLog(2, "agentxx_audio_stream loaded (1 tool)");
-    return 0;
+        pluginLog(2, "agentxx_audio_stream loaded (1 tool)");
+        return 0;
+    });
 }
 
 extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_unload(void* /*plugin_ctx*/) {
-    AudioStreamHolder::instance().stop();
-    if (g_host && g_host->vtable) {
-        if (g_if.tools && g_if.tools->unregister_tool)
-            g_if.tools->unregister_tool(g_host, AGENTXX_SV("agentxx_audio_stream"));
-    }
-    pluginLog(2, "agentxx_audio_stream unloaded");
+    // C ABI 边界异常守卫: 卸载回调异常不得外泄
+    agentxx::plugin_guard::guardCallVoid(pluginCatchLog, [&] {
+        AudioStreamHolder::instance().stop();
+        if (g_host && g_host->vtable) {
+            if (g_if.tools && g_if.tools->unregister_tool)
+                g_if.tools->unregister_tool(g_host, AGENTXX_SV("agentxx_audio_stream"));
+        }
+        pluginLog(2, "agentxx_audio_stream unloaded");
+    });
 }

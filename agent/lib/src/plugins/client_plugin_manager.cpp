@@ -238,7 +238,15 @@ asio::awaitable<std::shared_ptr<ClientPluginInstance>> ClientPluginManager::load
     if (auto getInfo = reinterpret_cast<AgentxxClientPluginGetInfoFn>(
             NativeLoader::sym(handle, AGENTXX_CLIENT_SYMBOL_GET_INFO, err)
         )) {
-        auto info = getInfo();
+        // C ABI 回调异常兜底: 插件违约按"未导出"处理 (名字从库名推导)
+        const AgentxxClientPluginInfo* info = nullptr;
+        try {
+            info = getInfo();
+        } catch (const std::exception& e) {
+            XX_LOGW("[client_plugin] `{}` get_info threw: {}", path, e.what());
+        } catch (...) {
+            XX_LOGW("[client_plugin] `{}` get_info threw unknown exception", path);
+        }
         if (info) {
             if (info->api_version != AGENTXX_CLIENT_PLUGIN_API_VERSION) {
                 XX_LOGE(
@@ -365,11 +373,19 @@ asio::awaitable<std::shared_ptr<ClientPluginInstance>> ClientPluginManager::load
     // entry 卸载到内部线程池执行 (A2): 与 agent 侧一致 —— entry 内 vtable
     // 注册动作经 ioCallSync 回 io 线程同步执行; entry 在 io 线程执行会阻塞
     // client io 事件循环 (慢初始化/插件间调用时明显), 且违背契约声明的
-    // "entry 运行在宿主线程池"
+    // "entry 运行在宿主线程池";
+    // 插件违约抛异常按 rc=-1 处理 (加载失败清理路径)
     int rc = co_await agentxx::util::offloadAsync<int>(
         *pool_,
         [inst, entryFn]() -> asio::awaitable<int> {
-            co_return entryFn(&inst->host, &inst->pluginCtx);
+            try {
+                co_return entryFn(&inst->host, &inst->pluginCtx);
+            } catch (const std::exception& e) {
+                XX_LOGE("[client_plugin] `{}` entry threw: {}", inst->name, e.what());
+            } catch (...) {
+                XX_LOGE("[client_plugin] `{}` entry threw unknown exception", inst->name);
+            }
+            co_return -1;
         }
     );
     if (rc != 0) {
@@ -414,13 +430,27 @@ asio::awaitable<bool> ClientPluginManager::unloadAsync(std::string_view name) {
 
     // unload 回调 (业务清理; 宿主已自动反注册全部残留; 句柄仍存活:
     // statusItemHandles/subHandles 等随实例析构释放, 回调内主动反注册安全)
+    // C ABI 回调异常兜底: 插件违约不得打断卸载流程
     if (inst->dlHandle) {
         std::string err;
         auto        fn = reinterpret_cast<AgentxxClientPluginUnloadFn>(
             NativeLoader::sym(inst->dlHandle, AGENTXX_CLIENT_SYMBOL_UNLOAD, err)
         );
         if (fn) {
-            fn(inst->pluginCtx);
+            try {
+                fn(inst->pluginCtx);
+            } catch (const std::exception& e) {
+                XX_LOGW(
+                    "[client_plugin] `{}` unload callback threw: {}",
+                    inst->name,
+                    e.what()
+                );
+            } catch (...) {
+                XX_LOGW(
+                    "[client_plugin] `{}` unload callback threw unknown exception",
+                    inst->name
+                );
+            }
         }
     }
     // 从表移除 → 实例析构 → dlclose (~ClientPluginInstance)
@@ -797,7 +827,16 @@ void ClientPluginManager::invokeCommand(const std::string& name, const std::stri
 
     ClientPluginInstance::InflightGuard guard(inst.get());
     char*                               err = nullptr;
-    char* out = cmd->execute(cmd->ud, agentxx_plugin_sv(argsJson.data(), argsJson.size()), &err);
+    // C ABI 回调异常兜底: 插件违约不得打断 client 输入管线 (命令拦截在
+    // io 线程执行, 异常外泄会终止输入循环)
+    char* out = nullptr;
+    try {
+        out = cmd->execute(cmd->ud, agentxx_plugin_sv(argsJson.data(), argsJson.size()), &err);
+    } catch (const std::exception& e) {
+        XX_LOGW("[client_plugin] command `{}` execute threw: {}", name, e.what());
+    } catch (...) {
+        XX_LOGW("[client_plugin] command `{}` execute threw unknown exception", name);
+    }
     std::string actionJson;
     if (!out) {
         XX_LOGW("[client_plugin] command `{}` failed: {}", name, err ? err : "(no error message)");
@@ -1146,7 +1185,15 @@ void ClientPluginManager::dispatchEvent(int event, const std::string& payloadJso
     }
     for (const auto& ref : refs) {
         ClientPluginInstance::InflightGuard guard(ref.inst);
-        ref.sub->handler(agentxx_plugin_sv(payloadJson.data(), payloadJson.size()), ref.sub->ud);
+        // C ABI 回调异常兜底: 单个插件 handler 违约不得打断整轮派发
+        // (影响其他订阅者与 client io 事件循环)
+        try {
+            ref.sub->handler(agentxx_plugin_sv(payloadJson.data(), payloadJson.size()), ref.sub->ud);
+        } catch (const std::exception& e) {
+            XX_LOGW("[client_plugin] `{}` event handler threw: {}", ref.inst->name, e.what());
+        } catch (...) {
+            XX_LOGW("[client_plugin] `{}` event handler threw unknown exception", ref.inst->name);
+        }
     }
 }
 

@@ -18,6 +18,7 @@
 
 #include <atomic>
 #include <cstring>
+#include <filesystem>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -453,7 +454,37 @@ void testHilInterrupt() {
     cb.user_data = &rec;
 
     // 权限模式 all_ask: 全部路径读写均询问 (确保 /etc/hostname 触发权限中断)
+    // 插件装配: mock 调用的 agentxx_filesystem_read 已从 lib 内置工具迁移为
+    // filesystem 插件 (2026-08 内置插件化), FFI agent 不会自动加载插件,
+    // 须显式配置; 路径按测试可执行同目录 plugins/ 推导 (/proc/self/exe,
+    // 失败回退 cwd/plugins)
+    std::string pluginDir;
+    {
+        std::error_code ec;
+        std::filesystem::path exe = std::filesystem::read_symlink("/proc/self/exe", ec);
+        if (ec) {
+            exe = std::filesystem::current_path(ec) / "agentxx_test";
+        }
+        if (!ec) {
+            pluginDir = (exe.parent_path() / "plugins" / "agentxx_filesystem").string();
+        }
+    }
     std::string configJson = R"({"permissionMode": "all_ask"})";
+    if (!pluginDir.empty()) {
+        // 经 json 库注入 plugins 段 (手拼 raw string 会踩 ")" 定界提前终止坑)
+        try {
+            auto cfg      = neograph::json::parse(configJson);
+            cfg["plugins"] = neograph::json::array(
+                {neograph::json{{"path", pluginDir}}}
+            );
+            configJson = cfg.dump();
+        } catch (...) {
+            TEST_FAIL << "inject plugins config failed" << std::endl;
+            g_ffi_failed++;
+            mock.stop();
+            return;
+        }
+    }
 
     char*         log = nullptr;
     AgentxxAgent* a   = agentxx_create(configJson.c_str(), mock.modelJson().c_str(), &cb, &log);

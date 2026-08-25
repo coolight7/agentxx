@@ -108,6 +108,7 @@ target_link_libraries(${PLUGIN_NAME} PRIVATE
   neograph_sqlite
   neograph_acp
   neograph_mcp
+  neograph_mcp_types
   neograph_async
   neograph_llm
   neograph_core
@@ -137,8 +138,14 @@ if (NOT WIN32)
     list(APPEND _tail_libs uring)
   endif()
   list(APPEND _tail_libs
-    neograph_sqlite neograph_acp neograph_mcp neograph_async neograph_llm neograph_core yyjson)
-  target_link_libraries(${PLUGIN_NAME} PRIVATE ${_tail_libs})
+    neograph_sqlite neograph_acp neograph_mcp neograph_mcp_types neograph_async neograph_llm neograph_core yyjson)
+  # group 迭代扫描: crypto/ssl↔hs↔neograph 归档成员相互引用链较长, 单遍
+    # 扫描两次不足以收敛, start-group 让 ld 反复解析直至无新未定义符号
+    target_link_libraries(${PLUGIN_NAME} PRIVATE
+      "-Wl,--start-group"
+      ${_tail_libs}
+      "-Wl,--end-group"
+    )
   unset(_tail_libs)
 endif()
 

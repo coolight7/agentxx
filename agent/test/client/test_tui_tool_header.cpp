@@ -15,6 +15,7 @@
 #include "asio/io_context.hpp"
 #include "ftxui/dom/elements.hpp"
 #include "ftxui/screen/screen.hpp"
+#include "test_framework.h"
 #include <memory>
 #include <string>
 #include <utility>
@@ -43,6 +44,10 @@ struct ToolHeaderFixture {
     ToolHeaderFixture(int w = 120, int h = 16) :
         width(w),
         height(h) {
+        // 颜色断言依赖真彩色 ANSI 序列 (如 "102;204;255"); FTXUI 会按运行
+        // 环境检测色彩能力, 无 COLORTERM=truecolor 时降级 256 色 (38;5;N)
+        // 导致断言随环境漂移 —— 测试内强制声明 TrueColor 支持
+        ftxui::Terminal::SetColorSupport(ftxui::Terminal::Color::TrueColor);
         ctx.state      = &sharedState;
         ctx.frameState = sharedState.readSnapshot();
         ctx.postRedraw = [] {};

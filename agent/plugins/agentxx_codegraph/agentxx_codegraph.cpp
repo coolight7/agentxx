@@ -764,33 +764,37 @@ struct PluginCtx {
 static void snapshotQueryDone(void* ud, void* result, char* error) {
     auto* ctx   = static_cast<PluginCtx*>(ud);
     auto* files = static_cast<int64_t*>(result);
-    if (g_host && g_if.events && g_if.events->publish) {
-        codegraph::Json j = codegraph::Json::object();
-        j["loaded"]       = true;
-        if (ctx && !ctx->projectRoot.empty()) {
-            j["project_root"] = ctx->projectRoot;
-        }
-        std::string payload = j.dump();
-        g_if.events->publish(
-            g_host,
-            AGENTXX_SV("agentxx_codegraph.status"),
-            agentxx_plugin_sv(payload.data(), payload.size())
-        );
-        // 进度快照: 已有索引 (total_files>0) 时发"完成"语义进度
-        // (processed==total>0 → 客户端判定索引结束, 显示 available)
-        if (files && *files > 0) {
-            codegraph::Json p = codegraph::Json::object();
-            p["processed"]    = *files;
-            p["total"]        = *files;
-            p["current_file"] = "";
-            std::string pp    = p.dump();
+    // 异常守卫: 只包发布逻辑; free 移到守卫块之后无条件执行 —— 保证
+    // 成功/异常两条路径都不泄漏 (done 持有 result/error 所有权)
+    agentxx::plugin_guard::guardCallVoid(pluginCatchLog, [&] {
+        if (g_host && g_if.events && g_if.events->publish) {
+            codegraph::Json j = codegraph::Json::object();
+            j["loaded"]       = true;
+            if (ctx && !ctx->projectRoot.empty()) {
+                j["project_root"] = ctx->projectRoot;
+            }
+            std::string payload = j.dump();
             g_if.events->publish(
                 g_host,
-                AGENTXX_SV("agentxx_codegraph.progress"),
-                agentxx_plugin_sv(pp.data(), pp.size())
+                AGENTXX_SV("agentxx_codegraph.status"),
+                agentxx_plugin_sv(payload.data(), payload.size())
             );
+            // 进度快照: 已有索引 (total_files>0) 时发"完成"语义进度
+            // (processed==total>0 → 客户端判定索引结束, 显示 available)
+            if (files && *files > 0) {
+                codegraph::Json p = codegraph::Json::object();
+                p["processed"]    = *files;
+                p["total"]        = *files;
+                p["current_file"] = "";
+                std::string pp    = p.dump();
+                g_if.events->publish(
+                    g_host,
+                    AGENTXX_SV("agentxx_codegraph.progress"),
+                    agentxx_plugin_sv(pp.data(), pp.size())
+                );
+            }
         }
-    }
+    });
     if (g_host && g_host->vtable && g_host->vtable->free) {
         if (files) {
             g_host->vtable->free(files);
@@ -802,21 +806,26 @@ static void snapshotQueryDone(void* ud, void* result, char* error) {
 }
 
 static void* snapshotQueryWork(void* ud, volatile int* cancel_flag, char** error_out) {
-    (void)error_out;
     (void)cancel_flag;
-    auto* ctx = static_cast<PluginCtx*>(ud);
-    // 结果经宿主堆分配 (offload 契约: result 须 host->alloc, done 内 free)
-    auto  files = static_cast<int64_t*>(g_host->vtable->alloc(sizeof(int64_t)));
-    if (files) {
-        *files = -1;
-    }
-    if (ctx && ctx->mgr && files) {
-        auto st = ctx->mgr->getStatus();
-        if (st.success) {
-            *files = st.total_files;
+    // 异常守卫: offload work 运行在宿主阻塞池线程, 异常逃逸会终止线程池
+    return agentxx::plugin_guard::guardCall(
+        pluginCatchLog,
+        nullptr,
+        [&]() -> void* {
+        auto* ctx = static_cast<PluginCtx*>(ud);
+        // 结果经宿主堆分配 (offload 契约: result 须 host->alloc, done 内 free)
+        auto  files = static_cast<int64_t*>(g_host->vtable->alloc(sizeof(int64_t)));
+        if (files) {
+            *files = -1;
         }
-    }
-    return files;
+        if (ctx && ctx->mgr && files) {
+            auto st = ctx->mgr->getStatus();
+            if (st.success) {
+                *files = st.total_files;
+            }
+        }
+        return files;
+    });
 }
 
 /// 订阅回调: 收到 client_attached 后经阻塞池查询状态并重发快照
@@ -825,163 +834,193 @@ static volatile int kSnapshotCancelFlag = 0;
 
 static void on_client_attached(AgentxxPluginStringView event_json, void* ud) {
     (void)event_json;
-    if (!g_host || !g_if.scheduler || !g_if.scheduler->offload) {
-        return;
-    }
-    g_if.scheduler->offload(g_host, &kSnapshotCancelFlag, snapshotQueryWork, snapshotQueryDone, ud);
+    // C ABI 回调异常守卫 (offload 为宿主 vtable 调用已兜底, 此处统一拦截)
+    agentxx::plugin_guard::guardCallVoid(pluginCatchLog, [&] {
+        if (!g_host || !g_if.scheduler || !g_if.scheduler->offload) {
+            return;
+        }
+        g_if.scheduler->offload(g_host, &kSnapshotCancelFlag, snapshotQueryWork, snapshotQueryDone, ud);
+    });
 }
 
 extern "C" AGENTXX_PLUGIN_EXPORT int
     agentxx_plugin_entry(const AgentxxHost* host, void** plugin_ctx) {
-    g_host = host;
-    // COM 风格接口表查询 (entry 一次性查询缓存; 进程级静态数据, 长期有效)
-    static const agentxx::plugin::AgentIfaces s_if = agentxx::plugin::AgentIfaces::query(host);
-    g_if = s_if;
-    if (!g_if.tools || !g_if.tools->register_tool || !g_if.events) {
-        pluginLog(4, "agentxx_codegraph: host lacks agentxx.agent.tools/agentxx.agent.events interfaces");
-        return -1;
-    }
-
-    auto cfg = readHostConfig();
-    // 加载由宿主决定 (yaml plugins 条目 enabled + CodeAgent 调用加载);
-    // 插件仅需 dataDir 非空才能落盘索引 (内存模式跳过)
-    if (cfg.dataDir.empty()) {
-        pluginLog(
-            3,
-            "agentxx_codegraph: dataDir is not set, skip codegraph tools "
-            "(configure data_dir for index sessionStore)"
-        );
-        return 0;
-    }
-
-    // 索引过滤配置 (与原 CodeAgent 一致)
-    agentxx::expand::CodeGraphIndexConfig cgConfig;
-    cgConfig.loadPaths           = cfg.loadPaths;
-    cgConfig.ignorePaths         = cfg.ignorePaths;
-    cgConfig.useGitignore        = cfg.useGitignore;
-    cgConfig.autoLoadProjectRoot = cfg.loadCwd;
-
-    auto        ctx       = std::make_unique<PluginCtx>();
-    std::string sqliteDir = (std::filesystem::path(cfg.dataDir) / "sqlite").string();
-    ctx->mgr = std::make_shared<agentxx::expand::CodeGraphManager>(sqliteDir, cgConfig);
-
-    // 索引进度回调 → publish("agentxx_codegraph.progress") 通知宿主
-    // (topic 约定 `{插件名}.{事件名}`; 频率由 CodeGraphManager 内部节流)
-    ctx->mgr->setProgressCallback([](int processed, int total, std::string_view currentFile) {
-        if (!g_host || !g_if.events || !g_if.events->publish) {
-            return;
+    // C ABI 边界异常守卫: entry 含索引器构建/线程创建等大量可抛操作,
+    // 异常返回 -1 走宿主加载失败清理路径 (异常穿越 C ABI 即 UB)
+    return agentxx::plugin_guard::guardCall(
+        pluginCatchLog,
+        -1,
+        [&]() -> int {
+        g_host = host;
+        // COM 风格接口表查询 (entry 一次性查询缓存; 进程级静态数据, 长期有效)
+        static const agentxx::plugin::AgentIfaces s_if = agentxx::plugin::AgentIfaces::query(host);
+        g_if = s_if;
+        if (!g_if.tools || !g_if.tools->register_tool || !g_if.events) {
+            pluginLog(4, "agentxx_codegraph: host lacks agentxx.agent.tools/agentxx.agent.events interfaces");
+            return -1;
         }
-        codegraph::Json j   = codegraph::Json::object();
-        j["processed"]      = processed;
-        j["total"]          = total;
-        j["current_file"]   = std::string{currentFile};
-        std::string payload = j.dump();
-        g_if.events->publish(
-            g_host,
-            AGENTXX_SV("agentxx_codegraph.progress"),
-            agentxx_plugin_sv(payload.data(), payload.size())
-        );
+
+        auto cfg = readHostConfig();
+        // 加载由宿主决定 (yaml plugins 条目 enabled + CodeAgent 调用加载);
+        // 插件仅需 dataDir 非空才能落盘索引 (内存模式跳过)
+        if (cfg.dataDir.empty()) {
+            pluginLog(
+                3,
+                "agentxx_codegraph: dataDir is not set, skip codegraph tools "
+                "(configure data_dir for index sessionStore)"
+            );
+            return 0;
+        }
+
+        // 索引过滤配置 (与原 CodeAgent 一致)
+        agentxx::expand::CodeGraphIndexConfig cgConfig;
+        cgConfig.loadPaths           = cfg.loadPaths;
+        cgConfig.ignorePaths         = cfg.ignorePaths;
+        cgConfig.useGitignore        = cfg.useGitignore;
+        cgConfig.autoLoadProjectRoot = cfg.loadCwd;
+
+        auto        ctx       = std::make_unique<PluginCtx>();
+        std::string sqliteDir = (std::filesystem::path(cfg.dataDir) / "sqlite").string();
+        ctx->mgr = std::make_shared<agentxx::expand::CodeGraphManager>(sqliteDir, cgConfig);
+
+        // 索引进度回调 → publish("agentxx_codegraph.progress") 通知宿主
+        // (topic 约定 `{插件名}.{事件名}`; 频率由 CodeGraphManager 内部节流)
+        // 异常守卫: 本回调运行在 CodeGraphManager 索引工作线程, 异常逃逸
+        // 线程函数会直接 std::terminate 整个进程
+        ctx->mgr->setProgressCallback([](int processed, int total, std::string_view currentFile) {
+            try {
+                if (!g_host || !g_if.events || !g_if.events->publish) {
+                    return;
+                }
+                codegraph::Json j   = codegraph::Json::object();
+                j["processed"]      = processed;
+                j["total"]          = total;
+                j["current_file"]   = std::string{currentFile};
+                std::string payload = j.dump();
+                g_if.events->publish(
+                    g_host,
+                    AGENTXX_SV("agentxx_codegraph.progress"),
+                    agentxx_plugin_sv(payload.data(), payload.size())
+                );
+            } catch (...) {
+                pluginCatchLog("progress callback");
+            }
+        });
+
+        std::string projectRoot = cfg.projectRoot;
+        if (projectRoot.empty()) {
+            std::error_code ec;
+            projectRoot = std::filesystem::current_path(ec).string();
+            if (ec) {
+                projectRoot.clear();
+            }
+        }
+        if (projectRoot.empty()) {
+            pluginLog(4, "agentxx_codegraph: get current work path failed, skip codegraph tools");
+            return 0;
+        }
+
+        if (!ctx->mgr->initialize(projectRoot)) {
+            pluginLog(4, "agentxx_codegraph: initialize failed, skip codegraph tools");
+            return 0;
+        }
+        ctx->projectRoot = projectRoot;
+
+        // 默认提示词写入宿主 (剥离自 lib AgentPrompt; 用户 yaml 覆盖优先)
+        ensureToolPromptsInHost();
+
+        registerAllTools(ctx->mgr.get());
+
+        // 后台预热索引 (2s 后增量索引; 与原 CodeAgent warmup 一致):
+        // - 独立线程 + 原子停止位; unload 时 join, 保证 dlclose 前无执行者
+        // - 异常守卫: 线程函数体内异常逃逸 = std::terminate, 必须整体拦截
+        ctx->stop.store(false);
+        ctx->warmup = std::thread([ctxPtr = ctx.get()]() {
+            try {
+                std::this_thread::sleep_for(std::chrono::seconds(2));
+                if (ctxPtr->stop.load(std::memory_order_acquire)) {
+                    return;
+                }
+                auto t0 = std::chrono::steady_clock::now();
+                bool ok = ctxPtr->mgr->updateIndex();
+                auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                              std::chrono::steady_clock::now() - t0
+                )
+                              .count();
+                pluginLog(
+                    ok ? 2 : 3,
+                    fmt::format(
+                        "[codegraph] background warmup index {} ({}ms)",
+                        ok ? "done" : "failed",
+                        ms
+                    )
+                );
+            } catch (...) {
+                // 线程体异常逃逸会 terminate 进程, 此处全拦截
+                pluginCatchLog("background warmup thread");
+            }
+        });
+
+        // 订阅宿主约定事件 client_attached: 客户端接入/重连后重发状态快照
+        // (修复晚接入客户端滞留 "wait for index"; 见 snapshotQueryDone 注释)
+        if (!g_if.events || !g_if.events->subscribe
+            || !g_if.events->subscribe(
+                host,
+                AGENTXX_SV("agentxx_host.client_attached"),
+                on_client_attached,
+                ctx.get()
+            )) {
+            pluginLog(3, "agentxx_codegraph: subscribe client_attached failed");
+        }
+
+        *plugin_ctx = ctx.release();
+        pluginLog(2, "agentxx_codegraph loaded (8 tools)");
+
+        // 发布加载状态事件 (客户端据此显示插件可用)
+        if (g_host && g_if.events && g_if.events->publish) {
+            codegraph::Json j   = codegraph::Json::object();
+            j["loaded"]         = true;
+            j["project_root"]   = projectRoot;
+            std::string payload = j.dump();
+            g_if.events->publish(
+                g_host,
+                AGENTXX_SV("agentxx_codegraph.status"),
+                agentxx_plugin_sv(payload.data(), payload.size())
+            );
+        }
+        return 0;
     });
-
-    std::string projectRoot = cfg.projectRoot;
-    if (projectRoot.empty()) {
-        std::error_code ec;
-        projectRoot = std::filesystem::current_path(ec).string();
-        if (ec) {
-            projectRoot.clear();
-        }
-    }
-    if (projectRoot.empty()) {
-        pluginLog(4, "agentxx_codegraph: get current work path failed, skip codegraph tools");
-        return 0;
-    }
-
-    if (!ctx->mgr->initialize(projectRoot)) {
-        pluginLog(4, "agentxx_codegraph: initialize failed, skip codegraph tools");
-        return 0;
-    }
-    ctx->projectRoot = projectRoot;
-
-    // 默认提示词写入宿主 (剥离自 lib AgentPrompt; 用户 yaml 覆盖优先)
-    ensureToolPromptsInHost();
-
-    registerAllTools(ctx->mgr.get());
-
-    // 后台预热索引 (2s 后增量索引; 与原 CodeAgent warmup 一致):
-    // - 独立线程 + 原子停止位; unload 时 join, 保证 dlclose 前无执行者
-    ctx->stop.store(false);
-    ctx->warmup = std::thread([ctxPtr = ctx.get()]() {
-        std::this_thread::sleep_for(std::chrono::seconds(2));
-        if (ctxPtr->stop.load(std::memory_order_acquire)) {
-            return;
-        }
-        auto t0 = std::chrono::steady_clock::now();
-        bool ok = ctxPtr->mgr->updateIndex();
-        auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-                      std::chrono::steady_clock::now() - t0
-        )
-                      .count();
-        pluginLog(
-            ok ? 2 : 3,
-            fmt::format("[codegraph] background warmup index {} ({}ms)", ok ? "done" : "failed", ms)
-        );
-    });
-
-    // 订阅宿主约定事件 client_attached: 客户端接入/重连后重发状态快照
-    // (修复晚接入客户端滞留 "wait for index"; 见 snapshotQueryDone 注释)
-    if (!g_if.events || !g_if.events->subscribe
-        || !g_if.events->subscribe(
-            host,
-            AGENTXX_SV("agentxx_host.client_attached"),
-            on_client_attached,
-            ctx.get()
-        )) {
-        pluginLog(3, "agentxx_codegraph: subscribe client_attached failed");
-    }
-
-    *plugin_ctx = ctx.release();
-    pluginLog(2, "agentxx_codegraph loaded (8 tools)");
-
-    // 发布加载状态事件 (客户端据此显示插件可用)
-    if (g_host && g_if.events && g_if.events->publish) {
-        codegraph::Json j   = codegraph::Json::object();
-        j["loaded"]         = true;
-        j["project_root"]   = projectRoot;
-        std::string payload = j.dump();
-        g_if.events->publish(
-            g_host,
-            AGENTXX_SV("agentxx_codegraph.status"),
-            agentxx_plugin_sv(payload.data(), payload.size())
-        );
-    }
-    return 0;
 }
 
 extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_unload(void* plugin_ctx) {
-    auto* ctx = static_cast<PluginCtx*>(plugin_ctx);
-    if (!ctx) {
-        return;
-    }
-    // 发布卸载状态事件 (客户端据此隐藏插件状态)
-    if (g_host && g_if.events && g_if.events->publish) {
-        codegraph::Json j   = codegraph::Json::object();
-        j["loaded"]         = false;
-        std::string payload = j.dump();
-        g_if.events->publish(
-            g_host,
-            AGENTXX_SV("agentxx_codegraph.status"),
-            agentxx_plugin_sv(payload.data(), payload.size())
-        );
-    }
-    ctx->stop.store(true, std::memory_order_release);
-    if (ctx->warmup.joinable()) {
-        ctx->warmup.join();
-    }
-    if (ctx->mgr) {
-        ctx->mgr->shutdown();
-    }
-    pluginLog(2, "agentxx_codegraph unloaded");
-    delete ctx;
+    // C ABI 边界异常守卫: 卸载回调异常不得外泄 (否则宿主卸载流程被打断,
+    // 实例/动态库句柄泄漏)
+    agentxx::plugin_guard::guardCallVoid(pluginCatchLog, [&] {
+        auto* ctx = static_cast<PluginCtx*>(plugin_ctx);
+        if (!ctx) {
+            return;
+        }
+        // 发布卸载状态事件 (客户端据此隐藏插件状态)
+        if (g_host && g_if.events && g_if.events->publish) {
+            codegraph::Json j   = codegraph::Json::object();
+            j["loaded"]         = false;
+            std::string payload = j.dump();
+            g_if.events->publish(
+                g_host,
+                AGENTXX_SV("agentxx_codegraph.status"),
+                agentxx_plugin_sv(payload.data(), payload.size())
+            );
+        }
+        ctx->stop.store(true, std::memory_order_release);
+        if (ctx->warmup.joinable()) {
+            ctx->warmup.join();
+        }
+        if (ctx->mgr) {
+            ctx->mgr->shutdown();
+        }
+        pluginLog(2, "agentxx_codegraph unloaded");
+        delete ctx;
+    });
 }
 
 /* =====================================================================
@@ -1101,45 +1140,50 @@ static void on_client_plugin_data(AgentxxPluginStringView payload_json, void* ud
     if (!g_client_host || !g_section) {
         return;
     }
-    // payload: {"plugin","event","data"}
+    // payload: {"plugin","event","data"} (字段提取为宿主纯 C 调用, 不抛异常)
     char* plugin
         = g_client_if->json->json_get_string(g_client_host, payload_json, AGENTXX_SV("plugin"));
     char* event
         = g_client_if->json->json_get_string(g_client_host, payload_json, AGENTXX_SV("event"));
     char* data
         = g_client_if->json->json_get_string(g_client_host, payload_json, AGENTXX_SV("data"));
-    if (plugin && event && data && std::strcmp(plugin, "agentxx_codegraph") == 0) {
-        SimpleJson j(std::string{data});
-        if (std::strcmp(event, "status") == 0) {
-            // 加载状态: {"loaded":bool}; loaded=false 时清空进度缓存
-            bool loaded = false;
-            if (j.ok() && jsonGetBool(j.doc().at_pointer("/loaded"), loaded)) {
-                g_loaded = loaded;
-                if (!loaded) {
-                    g_has_progress = false;
-                    g_processed    = 0;
-                    g_total        = 0;
-                    g_current_file.clear();
+    // 异常守卫: 解析/刷新区含 JSON 构造与字符串分配等可抛操作; 客户端事件
+    // 回调运行在 client io 线程, 异常不得外泄。free 在守卫块后无条件执行,
+    // 保证成功/异常两条路径都不泄漏
+    agentxx::plugin_guard::guardCallVoid(pluginCatchLog, [&] {
+        if (plugin && event && data && std::strcmp(plugin, "agentxx_codegraph") == 0) {
+            SimpleJson j(std::string{data});
+            if (std::strcmp(event, "status") == 0) {
+                // 加载状态: {"loaded":bool}; loaded=false 时清空进度缓存
+                bool loaded = false;
+                if (j.ok() && jsonGetBool(j.doc().at_pointer("/loaded"), loaded)) {
+                    g_loaded = loaded;
+                    if (!loaded) {
+                        g_has_progress = false;
+                        g_processed    = 0;
+                        g_total        = 0;
+                        g_current_file.clear();
+                    }
+                    refreshSection();
                 }
-                refreshSection();
-            }
-        } else if (std::strcmp(event, "progress") == 0) {
-            // 索引进度: {"processed","total","current_file"}
-            if (j.ok()) {
-                int64_t     processed = 0, total = 0;
-                std::string cur;
-                jsonGetInt(j.doc().at_pointer("/processed"), processed);
-                jsonGetInt(j.doc().at_pointer("/total"), total);
-                jsonGetString(j.doc().at_pointer("/current_file"), cur);
-                g_processed    = processed;
-                g_total        = total;
-                g_current_file = std::move(cur);
-                g_has_progress = true;
-                g_loaded       = true;
-                refreshSection();
+            } else if (std::strcmp(event, "progress") == 0) {
+                // 索引进度: {"processed","total","current_file"}
+                if (j.ok()) {
+                    int64_t     processed = 0, total = 0;
+                    std::string cur;
+                    jsonGetInt(j.doc().at_pointer("/processed"), processed);
+                    jsonGetInt(j.doc().at_pointer("/total"), total);
+                    jsonGetString(j.doc().at_pointer("/current_file"), cur);
+                    g_processed    = processed;
+                    g_total        = total;
+                    g_current_file = std::move(cur);
+                    g_has_progress = true;
+                    g_loaded       = true;
+                    refreshSection();
+                }
             }
         }
-    }
+    });
     if (plugin) {
         g_client_host->vtable->free(plugin);
     }
@@ -1152,73 +1196,88 @@ static void on_client_plugin_data(AgentxxPluginStringView payload_json, void* ud
 }
 
 extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxClientPluginInfo* agentxx_client_get_info(void) {
-    static const AgentxxClientPluginInfo info{
-        AGENTXX_CLIENT_PLUGIN_API_VERSION,
-        AGENTXX_SV("agentxx_codegraph"),
-        AGENTXX_SV("1.0.0"),
-        AGENTXX_SV("CodeGraph index status (sidebar Info section)"),
-    };
-    return &info;
+    // C ABI 边界异常守卫: 异常返回 NULL (宿主按"未导出"处理)
+    return agentxx::plugin_guard::guardCall(
+        pluginCatchLog,
+        nullptr,
+        [&]() -> const AgentxxClientPluginInfo* {
+        static const AgentxxClientPluginInfo info{
+            AGENTXX_CLIENT_PLUGIN_API_VERSION,
+            AGENTXX_SV("agentxx_codegraph"),
+            AGENTXX_SV("1.0.0"),
+            AGENTXX_SV("CodeGraph index status (sidebar Info section)"),
+        };
+        return &info;
+    });
 }
 
 extern "C" AGENTXX_PLUGIN_EXPORT int
     agentxx_client_entry(const AgentxxClientHost* host, void** plugin_ctx) {
-    g_client_host = host;
-    (void)plugin_ctx;
+    // C ABI 边界异常守卫: 异常返回 -1 (加载失败)
+    return agentxx::plugin_guard::guardCall(
+        pluginCatchLog,
+        -1,
+        [&]() -> int {
+        g_client_host = host;
+        (void)plugin_ctx;
 
-    // COM 风格接口表查询 (entry 一次性查询缓存; 进程级静态数据)
-    static const agentxx::plugin::ClientIfaces s_if = agentxx::plugin::ClientIfaces::query(host);
-    g_client_if = &s_if;
-    g_client_ui = s_if.ui;
+        // COM 风格接口表查询 (entry 一次性查询缓存; 进程级静态数据)
+        static const agentxx::plugin::ClientIfaces s_if = agentxx::plugin::ClientIfaces::query(host);
+        g_client_if = &s_if;
+        g_client_ui = s_if.ui;
 
-    // 1. 侧边栏 Info 栏段落 (title "CodeGraph"; 内容由 refreshSection 更新)
-    g_section = g_client_ui && g_client_ui->register_info_section
-                  ? g_client_ui->register_info_section(
-                      host,
-                      AGENTXX_SV("agentxx_codegraph.status"),
-                      AGENTXX_SV(R"({"title":"CodeGraph"})")
-                  )
-                  : nullptr;
-    // 宿主不支持 Info 段落 (如 CLI) 时成员为 NULL, 插件降级 (不视为失败)
-    if (g_section) {
-        refreshSection(); // 初始占位 (等待 agent 侧 status 事件)
-    }
+        // 1. 侧边栏 Info 栏段落 (title "CodeGraph"; 内容由 refreshSection 更新)
+        g_section = g_client_ui && g_client_ui->register_info_section
+                      ? g_client_ui->register_info_section(
+                          host,
+                          AGENTXX_SV("agentxx_codegraph.status"),
+                          AGENTXX_SV(R"({"title":"CodeGraph"})")
+                      )
+                      : nullptr;
+        // 宿主不支持 Info 段落 (如 CLI) 时成员为 NULL, 插件降级 (不视为失败)
+        if (g_section) {
+            refreshSection(); // 初始占位 (等待 agent 侧 status 事件)
+        }
 
-    // 2. 事件订阅: agent 侧发布的 codegraph 事件 (服务端转发的 WirePluginData)
-    if (!s_if.events || !s_if.events->subscribe
-        || !s_if.events->subscribe(
-            host,
-            AGENTXX_CLIENT_EVT_PLUGIN_DATA,
-            on_client_plugin_data,
-            nullptr
-        )) {
-        return -1;
-    }
+        // 2. 事件订阅: agent 侧发布的 codegraph 事件 (服务端转发的 WirePluginData)
+        if (!s_if.events || !s_if.events->subscribe
+            || !s_if.events->subscribe(
+                host,
+                AGENTXX_CLIENT_EVT_PLUGIN_DATA,
+                on_client_plugin_data,
+                nullptr
+            )) {
+            return -1;
+        }
 
-    if (s_if.log && s_if.log->log) {
-        s_if.log->log(host, 2, AGENTXX_SV("agentxx_codegraph client loaded"));
-    }
-    return 0;
+        if (s_if.log && s_if.log->log) {
+            s_if.log->log(host, 2, AGENTXX_SV("agentxx_codegraph client loaded"));
+        }
+        return 0;
+    });
 }
 
 extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_client_unload(void* plugin_ctx) {
-    (void)plugin_ctx;
-    if (!g_client_host || !g_client_if) {
-        return;
-    }
-    if (g_section && g_client_ui && g_client_ui->unregister_info_section) {
-        g_client_ui->unregister_info_section(g_client_host, g_section);
-        g_section = nullptr;
-    }
-    g_current_file.clear();
-    if (g_client_if->log && g_client_if->log->log) {
-        g_client_if->log->log(
-            g_client_host,
-            2,
-            AGENTXX_SV("agentxx_codegraph client unloaded")
-        );
-    }
-    g_client_host = nullptr;
-    g_client_if   = nullptr;
-    g_client_ui   = nullptr;
+    // C ABI 边界异常守卫: 卸载回调异常不得外泄
+    agentxx::plugin_guard::guardCallVoid(pluginCatchLog, [&] {
+        (void)plugin_ctx;
+        if (!g_client_host || !g_client_if) {
+            return;
+        }
+        if (g_section && g_client_ui && g_client_ui->unregister_info_section) {
+            g_client_ui->unregister_info_section(g_client_host, g_section);
+            g_section = nullptr;
+        }
+        g_current_file.clear();
+        if (g_client_if->log && g_client_if->log->log) {
+            g_client_if->log->log(
+                g_client_host,
+                2,
+                AGENTXX_SV("agentxx_codegraph client unloaded")
+            );
+        }
+        g_client_host = nullptr;
+        g_client_if   = nullptr;
+        g_client_ui   = nullptr;
+    });
 }

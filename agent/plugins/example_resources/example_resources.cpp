@@ -21,6 +21,7 @@
  * unload 回调中的显式反注册仅为 SDK 惯例示范。
  */
 #include "agentxx/plugin/plugin_api.h"
+#include "agentxx/plugin/plugin_guard.h"
 #include "agentxx/plugin/plugin_iface_helper.h"
 
 #include <string>
@@ -28,6 +29,11 @@
 static const AgentxxHost* g_host = nullptr;
 /// 宿主接口表缓存 (entry 时一次查询; 进程级静态数据)
 static agentxx::plugin::AgentIfaces g_if{};
+
+/// C ABI 边界异常守卫日志 (由守卫函数调用处显式传入; noexcept)
+static void pluginCatchLog(const char* msg) noexcept {
+    agentxx::plugin_guard::defaultLogTo(g_host, g_if.log, 4, "example_resources", msg);
+}
 
 /// 从 get_own_info JSON 中提取字段值 (host->alloc, 用完 free)
 static std::string ownInfoString(const AgentxxHost* host, const char* key) {
@@ -64,75 +70,90 @@ static std::string dirOf(const std::string& path) {
 }
 
 extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_get_info(void) {
-    static const AgentxxPluginInfo info{
-        AGENTXX_PLUGIN_API_VERSION,
-        AGENTXX_SV("example_resources"),
-        AGENTXX_SV("1.0.0"),
-        AGENTXX_SV("Example plugin contributing skill/memory/mcp resources "
-                   "(declarative manifest + runtime agentxx.agent.resources interface)"),
-    };
-    return &info;
+    // C ABI 边界异常守卫: 异常返回 NULL (宿主按"未导出"处理)
+    return agentxx::plugin_guard::guardCall(
+        pluginCatchLog,
+        nullptr,
+        [&]() -> const AgentxxPluginInfo* {
+        static const AgentxxPluginInfo info{
+            AGENTXX_PLUGIN_API_VERSION,
+            AGENTXX_SV("example_resources"),
+            AGENTXX_SV("1.0.0"),
+            AGENTXX_SV("Example plugin contributing skill/memory/mcp resources "
+                       "(declarative manifest + runtime agentxx.agent.resources interface)"),
+        };
+        return &info;
+    });
 }
 
 extern "C" AGENTXX_PLUGIN_EXPORT int agentxx_plugin_entry(const AgentxxHost* host, void** plugin_ctx) {
-    (void)plugin_ctx;
-    g_host = host;
-    // COM 风格接口表查询 (entry 一次性查询缓存; 进程级静态数据, 长期有效)
-    static const agentxx::plugin::AgentIfaces s_if = agentxx::plugin::AgentIfaces::query(host);
-    g_if = s_if;
+    // C ABI 边界异常守卫: 异常返回 -1 (加载失败)
+    return agentxx::plugin_guard::guardCall(
+        pluginCatchLog,
+        -1,
+        [&]() -> int {
+        (void)plugin_ctx;
+        g_host = host;
+        // COM 风格接口表查询 (entry 一次性查询缓存; 进程级静态数据, 长期有效)
+        static const agentxx::plugin::AgentIfaces s_if = agentxx::plugin::AgentIfaces::query(host);
+        g_if = s_if;
 
-    auto base = dirOf(ownInfoString(host, "path"));
+        auto base = dirOf(ownInfoString(host, "path"));
 
-    // ---- 运行时注册: 追加 skill 目录 (声明式段见 plugin.yaml) ----
-    // - 与 yaml 主配置或其他插件冲突时返回非 0 (yaml 优先, 此处仅告警不失败)
-    if (g_if.resources && g_if.resources->register_skill_dir && g_if.log && g_if.log->log) {
-        std::string runtimeSkillDir = base + "/skills_runtime";
-        if (g_if.resources->register_skill_dir(
-                host,
-                agentxx_plugin_sv(runtimeSkillDir.data(), runtimeSkillDir.size())
-            )
-            != 0) {
-            g_if.log->log(host,
-                          3,
-                          AGENTXX_SV("[example_resources] register runtime skill dir failed"));
-        } else {
-            g_if.log->log(host,
-                          2,
-                          AGENTXX_SV("[example_resources] runtime skill dir registered: skills_runtime/"));
+        // ---- 运行时注册: 追加 skill 目录 (声明式段见 plugin.yaml) ----
+        // - 与 yaml 主配置或其他插件冲突时返回非 0 (yaml 优先, 此处仅告警不失败)
+        if (g_if.resources && g_if.resources->register_skill_dir && g_if.log && g_if.log->log) {
+            std::string runtimeSkillDir = base + "/skills_runtime";
+            if (g_if.resources->register_skill_dir(
+                    host,
+                    agentxx_plugin_sv(runtimeSkillDir.data(), runtimeSkillDir.size())
+                )
+                != 0) {
+                g_if.log->log(host,
+                              3,
+                              AGENTXX_SV("[example_resources] register runtime skill dir failed"));
+            } else {
+                g_if.log->log(host,
+                              2,
+                              AGENTXX_SV("[example_resources] runtime skill dir registered: skills_runtime/"));
+            }
         }
-    }
 
-    // ---- 运行时注册 MCP server 示例 (注释状态; 声明式段已示范配置格式) ----
-    // std::string spec = std::string("{\"namespace\":\"example_calc\",\"url\":\"")
-    //     + "https://mcp.example.com/calc\",\"timeout\":30}";
-    // g_if.resources->register_mcp_server(host, agentxx_plugin_sv(spec.data(), spec.size()));
+        // ---- 运行时注册 MCP server 示例 (注释状态; 声明式段已示范配置格式) ----
+        // std::string spec = std::string("{\"namespace\":\"example_calc\",\"url\":\"")
+        //     + "https://mcp.example.com/calc\",\"timeout\":30}";
+        // g_if.resources->register_mcp_server(host, agentxx_plugin_sv(spec.data(), spec.size()));
 
-    return 0;
+        return 0;
+    });
 }
 
 extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_unload(void* plugin_ctx) {
-    (void)plugin_ctx;
-    // 宿主 detachAll 已自动摘除本插件的全部资源 (skill/memory/mcp),
-    // 此处显式反注册仅为 SDK 惯例示范 (幂等, 失败无副作用)
-    if (!g_host || !g_if.plugins || !g_if.resources || !g_if.json) {
-        return;
-    }
-    char* info = g_if.plugins->get_own_info(g_host);
-    if (info) {
-        char* p = g_if.json->json_get_string(
-            g_host,
-            agentxx_plugin_sv_cstr(info),
-            agentxx_plugin_sv_cstr("path")
-        );
-        if (p) {
-            std::string libPath = p;
-            g_host->vtable->free(p);
-            auto        pos = libPath.find_last_of("/\\");
-            std::string base = pos == std::string::npos ? "." : libPath.substr(0, pos);
-            std::string d    = base + "/skills_runtime";
-            g_if.resources->unregister_skill_dir(g_host, agentxx_plugin_sv(d.data(), d.size()));
+    // C ABI 边界异常守卫: 卸载回调异常不得外泄
+    agentxx::plugin_guard::guardCallVoid(pluginCatchLog, [&] {
+        (void)plugin_ctx;
+        // 宿主 detachAll 已自动摘除本插件的全部资源 (skill/memory/mcp),
+        // 此处显式反注册仅为 SDK 惯例示范 (幂等, 失败无副作用)
+        if (!g_host || !g_if.plugins || !g_if.resources || !g_if.json) {
+            return;
         }
-        g_host->vtable->free(info);
-    }
-    g_host = nullptr;
+        char* info = g_if.plugins->get_own_info(g_host);
+        if (info) {
+            char* p = g_if.json->json_get_string(
+                g_host,
+                agentxx_plugin_sv_cstr(info),
+                agentxx_plugin_sv_cstr("path")
+            );
+            if (p) {
+                std::string libPath = p;
+                g_host->vtable->free(p);
+                auto        pos = libPath.find_last_of("/\\");
+                std::string base = pos == std::string::npos ? "." : libPath.substr(0, pos);
+                std::string d    = base + "/skills_runtime";
+                g_if.resources->unregister_skill_dir(g_host, agentxx_plugin_sv(d.data(), d.size()));
+            }
+            g_host->vtable->free(info);
+        }
+        g_host = nullptr;
+    });
 }

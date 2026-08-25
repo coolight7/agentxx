@@ -109,104 +109,119 @@ char* wrapExecute(
 } // namespace
 
 extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_get_info(void) {
-    static const AgentxxPluginInfo info{
-        AGENTXX_PLUGIN_API_VERSION,
-        AGENTXX_SV("agentxx_string"),
-        AGENTXX_SV("1.0.0"),
-        AGENTXX_SV("String tools: html to markdown conversion and regexp search/replace/remove"),
-    };
-    return &info;
+    // C ABI 边界异常守卫: 异常返回 NULL (宿主按"未导出"处理)
+    return agentxx::plugin_guard::guardCall(
+        pluginCatchLog,
+        nullptr,
+        [&]() -> const AgentxxPluginInfo* {
+        static const AgentxxPluginInfo info{
+            AGENTXX_PLUGIN_API_VERSION,
+            AGENTXX_SV("agentxx_string"),
+            AGENTXX_SV("1.0.0"),
+            AGENTXX_SV("String tools: html to markdown conversion and regexp search/replace/remove"),
+        };
+        return &info;
+    });
 }
 
 extern "C" AGENTXX_PLUGIN_EXPORT int agentxx_plugin_entry(const AgentxxHost* host, void** plugin_ctx) {
-    if (!host || !host->vtable || !plugin_ctx) {
-        return -1;
-    }
-    g_host = host;
-    g_if   = agentxx::plugin::AgentIfaces::query(host);
-    *plugin_ctx = nullptr;
-
-    // ---- agentxx_string_html_to_markdown ----
-    {
-        ToolPromptText p = readToolPrompt(kNameHtml2Md);
-        std::string schema = neograph::json{
-            {"type", "object"},
-            {"properties",
-             {
-                 {"content",
-                  {
-                      {"type", "string"},
-                      {"description", argDesc(p, "content", "The HTML string to convert.")},
-                  }},
-             }},
-            {"required", neograph::json::array({"content"})},
+    // C ABI 边界异常守卫: entry 内含 JSON schema 构建等可抛操作, 异常返回 -1
+    return agentxx::plugin_guard::guardCall(
+        pluginCatchLog,
+        -1,
+        [&]() -> int {
+        if (!host || !host->vtable || !plugin_ctx) {
+            return -1;
         }
-                              .dump();
-        registerTool(
-            kNameHtml2Md,
-            kDepictHtml2Md,
-            schema,
-            &wrapExecute<agentxx::string_plugin::htmlToMarkdownExecute>,
-            AGENTXX_TOOL_FLAG_AUTO_SUMMARY
-        );
-    }
+        g_host = host;
+        g_if   = agentxx::plugin::AgentIfaces::query(host);
+        *plugin_ctx = nullptr;
 
-    // ---- agentxx_string_regexp ----
-    {
-        ToolPromptText p   = readToolPrompt(kNameRegexp);
-        std::string schema = neograph::json{
-            {"type", "object"},
-            {"properties",
-             {
-                 {"content",
-                  {
-                      {"type", "string"},
-                      {"description", argDesc(p, "content", "The input text to operate on.")},
-                  }},
-                 {"exps",
-                  {
-                      {"type", "array"},
-                      {"items", neograph::json{{"type", "string"}}},
-                      {"description",
-                       argDesc(p,
-                               "exps",
-                               "Array of regex patterns. A match succeeds if ANY pattern matches.")},
-                  }},
-                 {"opt",
-                  {
-                      {"type", "string"},
-                      {"enum", neograph::json::array({"search", "replace", "remove"})},
-                      {"description",
-                       argDesc(p,
-                               "opt",
-                               "Operation mode:\n`search`: Return all match results.\n`replace`: Replace matches with `replace_str` and return the resulting text.\n`remove`: Remove all matches and return the resulting text.")},
-                  }},
-                 {"replace_str",
-                  {
-                      {"type", "string"},
-                      {"description",
-                       argDesc(p,
-                               "replace_str",
-                               "Default: empty string. The replacement string used when `opt` is `replace`.")},
-                  }},
-             }},
-            {"required", neograph::json::array({"content", "exps", "opt"})},
+        // ---- agentxx_string_html_to_markdown ----
+        {
+            ToolPromptText p = readToolPrompt(kNameHtml2Md);
+            std::string schema = neograph::json{
+                {"type", "object"},
+                {"properties",
+                 {
+                     {"content",
+                      {
+                          {"type", "string"},
+                          {"description", argDesc(p, "content", "The HTML string to convert.")},
+                      }},
+                 }},
+                {"required", neograph::json::array({"content"})},
+            }
+                                  .dump();
+            registerTool(
+                kNameHtml2Md,
+                kDepictHtml2Md,
+                schema,
+                &wrapExecute<agentxx::string_plugin::htmlToMarkdownExecute>,
+                AGENTXX_TOOL_FLAG_AUTO_SUMMARY
+            );
         }
-                              .dump();
-        registerTool(
-            kNameRegexp,
-            kDepictRegexp,
-            schema,
-            &wrapExecute<agentxx::string_plugin::regexpExecute>,
-            AGENTXX_TOOL_FLAG_AUTO_SUMMARY
-        );
-    }
 
-    return 0;
+        // ---- agentxx_string_regexp ----
+        {
+            ToolPromptText p   = readToolPrompt(kNameRegexp);
+            std::string schema = neograph::json{
+                {"type", "object"},
+                {"properties",
+                 {
+                     {"content",
+                      {
+                          {"type", "string"},
+                          {"description", argDesc(p, "content", "The input text to operate on.")},
+                      }},
+                     {"exps",
+                      {
+                          {"type", "array"},
+                          {"items", neograph::json{{"type", "string"}}},
+                          {"description",
+                           argDesc(p,
+                                   "exps",
+                                   "Array of regex patterns. A match succeeds if ANY pattern matches.")},
+                      }},
+                     {"opt",
+                      {
+                          {"type", "string"},
+                          {"enum", neograph::json::array({"search", "replace", "remove"})},
+                          {"description",
+                           argDesc(p,
+                                   "opt",
+                                   "Operation mode:\n`search`: Return all match results.\n`replace`: Replace matches with `replace_str` and return the resulting text.\n`remove`: Remove all matches and return the resulting text.")},
+                      }},
+                     {"replace_str",
+                      {
+                          {"type", "string"},
+                          {"description",
+                           argDesc(p,
+                                   "replace_str",
+                                   "Default: empty string. The replacement string used when `opt` is `replace`.")},
+                      }},
+                 }},
+                {"required", neograph::json::array({"content", "exps", "opt"})},
+            }
+                                  .dump();
+            registerTool(
+                kNameRegexp,
+                kDepictRegexp,
+                schema,
+                &wrapExecute<agentxx::string_plugin::regexpExecute>,
+                AGENTXX_TOOL_FLAG_AUTO_SUMMARY
+            );
+        }
+
+        return 0;
+    });
 }
 
 extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_unload(void* plugin_ctx) {
-    (void)plugin_ctx;
-    g_host = nullptr;
-    g_if   = {};
+    // C ABI 边界异常守卫: 卸载回调异常不得外泄
+    agentxx::plugin_guard::guardCallVoid(pluginCatchLog, [&] {
+        (void)plugin_ctx;
+        g_host = nullptr;
+        g_if   = {};
+    });
 }
