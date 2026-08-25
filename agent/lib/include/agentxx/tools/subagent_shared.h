@@ -52,9 +52,12 @@ inline void buildSubagentResumeValues(
     for (const auto& r : batchResp.results) {
         ++idx;
         auto key = makeSubagentResumeKey(toolCallId, r.resultId, idx);
+        // 注意: 正常结果必须用圆括号直接初始化为标量字符串 (而非 {} 列表初始化,
+        // 否则会命中 initializer_list 构造产生 ["content"] 数组包裹,
+        // 破坏读取端 "单任务返回纯文本" 语义); 错误任务保持 {"error": ...} 对象
         resumeValues[key] = r.hasError
                                 ? neograph::json{{"error", std::string{r.errorMessage}}}
-                                : neograph::json{std::string{r.content}};
+                                : neograph::json(r.content);
     }
 }
 

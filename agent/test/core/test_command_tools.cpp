@@ -92,7 +92,7 @@ struct ExecuteBashCommandTool {
     }
 
     asio::awaitable<std::string> execute_async(const neograph::json& args) const {
-        co_return agentxx::execmd_plugin::bashExecute(
+        co_return agentxx_execmd_plugin::bashExecute(
             args,
             testResolvedWorkDir(ctx),
             /*isCancelled=*/nullptr
@@ -114,7 +114,7 @@ struct ExecuteWindowsCommandTool {
     }
 
     asio::awaitable<std::string> execute_async(const neograph::json& args) const {
-        co_return agentxx::execmd_plugin::windowsExecute(
+        co_return agentxx_execmd_plugin::windowsExecute(
             args,
             testResolvedWorkDir(ctx),
             /*isCancelled=*/nullptr

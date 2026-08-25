@@ -28,7 +28,7 @@ struct StringHtml2MarkdownTool {
     }
 
     asio::awaitable<std::string> execute_async(const neograph::json& args) const {
-        co_return agentxx::string_plugin::htmlToMarkdownExecute(args);
+        co_return agentxx_string_plugin::htmlToMarkdownExecute(args);
     }
 };
 
@@ -42,7 +42,7 @@ struct StringRegexpTool {
     }
 
     asio::awaitable<std::string> execute_async(const neograph::json& args) const {
-        co_return agentxx::string_plugin::regexpExecute(args);
+        co_return agentxx_string_plugin::regexpExecute(args);
     }
 };
 

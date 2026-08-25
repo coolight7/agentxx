@@ -30,6 +30,7 @@
 #include "neograph/types.h"
 #include <cstdint>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -61,6 +62,9 @@ public:
     std::vector<neograph::json> receivedArguments;
     /// 是否返回错误 (true 时返回 error json, 模拟 subagent 执行失败)
     bool failWithError = false;
+    /// 是否抛出异常 (true 时 execute_async 抛 std::runtime_error,
+    /// 模拟 subagent 执行链路异常, 经 catchErrorAsync 捕获降级)
+    bool throwException = false;
 
     FakeSubAgentManagerTool(
         std::string_view                            in_nodeName,
@@ -70,6 +74,9 @@ public:
 
     asio::awaitable<std::string> execute_async(const neograph::json& arguments) override {
         receivedArguments.emplace_back(arguments);
+        if (throwException) {
+            throw std::runtime_error("fake subagent crashed");
+        }
         if (failWithError) {
             co_return R"({"error":"fake subagent failed"})";
         }
@@ -1579,6 +1586,182 @@ asio::awaitable<TestResult> run_summarization_tests() {
         XX_TEST_EXPECT_EQ(res[3].content, std::string{"rC"});
         XX_TEST_EXPECT_EQ(res[4].content, std::string{"u2"});
         XX_TEST_EXPECT_EQ(res[5].content, std::string{"a2"});
+    }
+
+    // ==================== 错误兼容: 真实工具集成与异常路径 ====================
+
+    // --- T17. 集成: 真实 SubAgentManagerTool (非 Fake) 的中断往返 ---
+    // - doSummarizeWithLLM → 真实工具 execute_async → NodeInterrupt 放行传播
+    //   到调用方 (由 Session 派生 subagent); 中断参数完整 (subagent_task /
+    //   父线程 sessionId / 仅 share_store 工具 / 禁二次压缩)
+    // - 预置 interruptResult 后再次调用 → 返回摘要文本
+    {
+        auto ctx = std::make_shared<agentxx::agent::AgentContext>();
+        ctx->agentConfig             = std::make_shared<agentxx::agent::AgentConfig>();
+        ctx->middlewareHandleContext = std::make_shared<agentxx::middleware::MiddlewareContext>();
+        ctx->modelRegistry           = std::make_shared<agentxx::agent::ModelProviderRegistry>();
+        agentxx::agent::ModelConfig mcfg;
+        mcfg.name                  = "m";
+        mcfg.modelName             = "m-model";
+        mcfg.modelContenxtMaxToken = 1000;
+        ctx->modelRegistry->registerModel("m", mcfg);
+        ctx->agentConfig->model.modelName = "m";
+
+        // 真实 SubAgentManagerTool + 注册 CodeAgent 默认的 subagent_task
+        auto realTool = std::make_shared<agentxx::tools::SubAgentManagerTool>(
+            "subagent_manager",
+            ctx
+        );
+        realTool->subAgentList.insert(std::make_pair(
+            "subagent_task",
+            std::make_shared<agentxx::tools::SubAgentNormalTask>("subagent_task", "isolation")
+        ));
+        ctx->subagentManagerToolPtr = realTool.get();
+
+        const std::string sid = "sum_real_tool_thread";
+        ctx->sessions->getOrCreate(sid);
+
+        auto handle
+            = std::make_shared<agentxx::middleware::SummarizationMiddlewareHandle>(ctx);
+
+        std::vector<neograph::ChatMessage> msgs{
+            makeMsg("system", "sys"),
+            makeMsg("user", "u1"),
+            makeMsg("assistant", "a1"),
+        };
+
+        // ① 首次调用: NodeInterrupt 放行 (不捕获), 中断参数写入 graphData
+        bool threwInterrupt = false;
+        try {
+            (void)co_await handle->doSummarizeWithLLM(sid, msgs);
+        } catch (const neograph::graph::NodeInterrupt&) {
+            threwInterrupt = true;
+        }
+        XX_TEST_EXPECT_TRUE(threwInterrupt);
+
+        const auto& stored = ctx->middlewareHandleContext->getGraphDataItemValue<
+            std::vector<agentxx::middleware::InterruptHandleArg>>(
+            sid,
+            agentxx::middleware::MiddlewareContext::graphDataKey_interruptArgs
+        );
+        XX_TEST_EXPECT_EQ(stored.size(), size_t{1});
+        XX_TEST_EXPECT_EQ(stored[0].name, std::string{"subagent"});
+        // 压缩直接调用无 tool_call_id: resultId 为空 (读取端按序号兜底)
+        XX_TEST_EXPECT_EQ(stored[0].resultId, std::string{""});
+        const auto& tasksJson = stored[0].arg["tasks"];
+        XX_TEST_EXPECT_TRUE(tasksJson.is_array());
+        XX_TEST_EXPECT_EQ(tasksJson.size(), size_t{1});
+        XX_TEST_EXPECT_EQ(
+            tasksJson[0].value("subagent", std::string{}),
+            std::string{"subagent_task"}
+        );
+        XX_TEST_EXPECT_EQ(tasksJson[0].value("sessionId", std::string{}), sid);
+        XX_TEST_EXPECT_TRUE(tasksJson[0]["enable_summarization"].is_boolean());
+        XX_TEST_EXPECT_FALSE(tasksJson[0]["enable_summarization"].get<bool>());
+        XX_TEST_EXPECT_TRUE(tasksJson[0]["tools"].is_array());
+        XX_TEST_EXPECT_EQ(tasksJson[0]["tools"].size(), size_t{1});
+        XX_TEST_EXPECT_EQ(
+            tasksJson[0]["tools"][0].get<std::string>(),
+            std::string{"agentxx_share_store"}
+        );
+        // 结构化透传: system + 压缩段 + 末尾压缩指令
+        const auto& reqMsgs = tasksJson[0]["messages"];
+        XX_TEST_EXPECT_TRUE(reqMsgs.is_array());
+        XX_TEST_EXPECT_EQ(reqMsgs.size(), msgs.size() + 1);
+        XX_TEST_EXPECT_EQ(reqMsgs[0].value("role", std::string{}), std::string{"system"});
+        XX_TEST_EXPECT_EQ(reqMsgs.back().value("role", std::string{}), std::string{"user"});
+
+        // ② resume: 按 key 规则回填结果 ("1" = 无 resultId 时按序号兜底),
+        //    再次调用返回摘要文本, 不再抛中断
+        ctx->middlewareHandleContext->setGraphDataItemValue<neograph::json>(
+            sid,
+            agentxx::middleware::MiddlewareContext::graphDataKey_interruptResult,
+            neograph::json{{"1", "real-tool summary"}}
+        );
+        auto r = co_await handle->doSummarizeWithLLM(sid, msgs);
+        XX_TEST_EXPECT_EQ(r, std::string{"real-tool summary"});
+    }
+
+    // --- T18. subagent 执行链路异常 → catchErrorAsync 捕获降级为空串,
+    //           走失败计数路径 (保留原消息), 不向上传播崩溃 ---
+    {
+        auto env                        = std::make_shared<SummarizationTestEnv>();
+        env->session()->setModelName("small");
+        env->subagent->throwException   = true;
+
+        std::vector<neograph::ChatMessage> msgs{
+            makeMsg("system", "sys"),
+            makeMsg("user", "u1"),
+            makeMsg("assistant", "a1"),
+            makeMsg("user", "u2"),
+            makeMsg("assistant", "a2"),
+            makeMsg("user", "u3"),
+            makeMsg("assistant", "a3"),
+            makeMsg("user", "u4"),
+            makeMsg("assistant", "a4"),
+        };
+        auto r = co_await env->handle->doSummarizeWithLLM(env->sessionId, msgs);
+        XX_TEST_EXPECT_EQ(r, std::string{""});
+
+        // onModelcallRunFunc: 失败计数 +1, 未达阈值时保留原消息
+        auto res = co_await runModelcall(env->handle, env->ctx, env->sessionId, msgs, 900);
+        XX_TEST_EXPECT_EQ(res.size(), size_t{9});
+        for (size_t i = 0; i < msgs.size(); ++i) {
+            XX_TEST_EXPECT_EQ(res[i].role, msgs[i].role);
+            XX_TEST_EXPECT_EQ(res[i].content, msgs[i].content);
+        }
+        auto failCount = env->ctx->middlewareHandleContext->getGraphDataItemValue<size_t>(
+            env->sessionId,
+            agentxx::middleware::MiddlewareContext::graphDataKey_summarizationFailCount
+        );
+        XX_TEST_EXPECT_EQ(failCount, size_t{1});
+    }
+
+    // --- T19. AgentContext 失效 (weak_ptr 过期/空) → 返回空串, 不崩溃 ---
+    {
+        auto handle = std::make_shared<agentxx::middleware::SummarizationMiddlewareHandle>(
+            std::weak_ptr<agentxx::agent::AgentContext>{}
+        );
+        std::vector<neograph::ChatMessage> msgs{makeMsg("user", "hi")};
+        auto r = co_await handle->doSummarizeWithLLM("any-thread", msgs);
+        XX_TEST_EXPECT_EQ(r, std::string{""});
+    }
+
+    // --- T20. subagent 失败返回错误 JSON (非空串): 当前实现将其作为
+    //           "摘要文本" 写回上下文 (行为记录: 错误信息透传给父 LLM,
+    //           由其自行识别处理; 后续如改为失败判定需同步更新本用例) ---
+    {
+        auto env                      = std::make_shared<SummarizationTestEnv>();
+        env->session()->setModelName("small");
+        env->subagent->failWithError  = true;
+        env->subagent->summary        = "";
+
+        std::vector<neograph::ChatMessage> msgs{
+            makeMsg("system", "sys"),
+            makeMsg("user", "u1"),
+            makeMsg("assistant", "a1"),
+            makeMsg("user", "u2"),
+            makeMsg("assistant", "a2"),
+            makeMsg("user", "u3"),
+            makeMsg("assistant", "a3"),
+            makeMsg("user", "u4"),
+            makeMsg("assistant", "a4"),
+        };
+        auto r = co_await env->handle->doSummarizeWithLLM(env->sessionId, msgs);
+        // 错误 JSON 非空 → doSummarizeWithLLM 原样返回 (未做失败判定)
+        XX_TEST_EXPECT_EQ(r, std::string{R"({"error":"fake subagent failed"})"});
+
+        // onModelcallRunFunc 视其为成功压缩 → Compact 写回, 摘要内容含错误 JSON
+        auto res = co_await runModelcall(env->handle, env->ctx, env->sessionId, msgs, 900);
+        // 与 T5 同布局: system(1) + 总结对(2) + recent 6 条 = 9
+        XX_TEST_EXPECT_EQ(res.size(), size_t{9});
+        bool hasErrorSummary = false;
+        for (const auto& m : res) {
+            if (m.content.find(R"({"error":"fake subagent failed"})") != std::string::npos) {
+                hasErrorSummary = true;
+            }
+        }
+        XX_TEST_EXPECT_TRUE(hasErrorSummary);
     }
 
     co_return TestResult{g_sum_passed, g_sum_failed};

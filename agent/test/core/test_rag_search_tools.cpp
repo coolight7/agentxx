@@ -20,45 +20,45 @@ namespace test {
 /// 测试适配: 原 lib 工具类的同名薄包装 (分块/相似度纯函数直调插件实现;
 /// 嵌套类型别名保持 `VectorStore::SplitConfig` 等既有调用形态不变)
 struct RAGSearchTool {
-    using Document    = agentxx::rag_plugin::Document;
-    using SplitMode   = agentxx::rag_plugin::SplitMode;
-    using SplitConfig = agentxx::rag_plugin::SplitConfig;
+    using Document    = agentxx_rag_plugin::Document;
+    using SplitMode   = agentxx_rag_plugin::SplitMode;
+    using SplitConfig = agentxx_rag_plugin::SplitConfig;
 
     static double cosineSimilarity(const std::vector<double>& a, const std::vector<double>& b) {
-        return agentxx::rag_plugin::cosineSimilarity(a, b);
+        return agentxx_rag_plugin::cosineSimilarity(a, b);
     }
 
     struct VectorStore {
-        using Document    = agentxx::rag_plugin::Document;
-        using SplitMode   = agentxx::rag_plugin::SplitMode;
-        using SplitConfig = agentxx::rag_plugin::SplitConfig;
+        using Document    = agentxx_rag_plugin::Document;
+        using SplitMode   = agentxx_rag_plugin::SplitMode;
+        using SplitConfig = agentxx_rag_plugin::SplitConfig;
 
         static auto splitByFixedLength(
             std::string_view text,
             size_t           blockSize      = 256,
             double           overlapPercent = 0.0
         ) {
-            return agentxx::rag_plugin::splitByFixedLength(text, blockSize, overlapPercent);
+            return agentxx_rag_plugin::splitByFixedLength(text, blockSize, overlapPercent);
         }
         static auto splitByDelimiter(std::string_view text, std::string_view delimiter) {
-            return agentxx::rag_plugin::splitByDelimiter(text, delimiter);
+            return agentxx_rag_plugin::splitByDelimiter(text, delimiter);
         }
         static auto splitByStructure(std::string_view text) {
-            return agentxx::rag_plugin::splitByStructure(text);
+            return agentxx_rag_plugin::splitByStructure(text);
         }
         static auto
             splitByDelimiters(std::string_view text, size_t maxUtf8Length, const std::vector<std::string>& delimiters) {
-            return agentxx::rag_plugin::splitByDelimiters(text, maxUtf8Length, delimiters);
+            return agentxx_rag_plugin::splitByDelimiters(text, maxUtf8Length, delimiters);
         }
         static auto applyChunkOverlap(
             const std::vector<std::string>& chunks,
             size_t                          maxUtf8Length,
             double                          overlapPercent
         ) {
-            return agentxx::rag_plugin::applyChunkOverlap(chunks, maxUtf8Length, overlapPercent);
+            return agentxx_rag_plugin::applyChunkOverlap(chunks, maxUtf8Length, overlapPercent);
         }
         static auto splitTextToChunks(std::string_view text, const SplitConfig& config) {
-            return agentxx::rag_plugin::splitTextToChunks(text, config);
+            return agentxx_rag_plugin::splitTextToChunks(text, config);
         }
     };
 };

@@ -72,7 +72,7 @@ struct WebSearchTool {
     neograph::ChatTool get_definition() const { return searchDefinition(); }
 
     asio::awaitable<std::string> execute_async(const neograph::json& args) const {
-        co_return agentxx::websearch_plugin::webSearchExecute(
+        co_return agentxx_websearch_plugin::webSearchExecute(
             args,
             searchApiUrl,
             convertHtml2markdown
@@ -90,13 +90,13 @@ struct WebFetchUrlTool {
     }
 
     asio::awaitable<std::string> execute_async(const neograph::json& args) const {
-        co_return agentxx::websearch_plugin::webFetchExecute(args);
+        co_return agentxx_websearch_plugin::webFetchExecute(args);
     }
 };
 
 /// 模型搜索路径薄包装 (构造取最小配置集; schema 与 API 版一致)
 struct ModelWebSearchTool {
-    explicit ModelWebSearchTool(const agentxx::websearch_plugin::ModelSearchConfig& cfg)
+    explicit ModelWebSearchTool(const agentxx_websearch_plugin::ModelSearchConfig& cfg)
         : modelCfg(cfg) {}
 
     neograph::ChatTool get_definition() const {
@@ -118,11 +118,11 @@ struct ModelWebSearchTool {
     }
 
     asio::awaitable<std::string> execute_async(const neograph::json& args) const {
-        co_return agentxx::websearch_plugin::modelWebSearchExecute(args, modelCfg);
+        co_return agentxx_websearch_plugin::modelWebSearchExecute(args, modelCfg);
     }
 
 private:
-    agentxx::websearch_plugin::ModelSearchConfig modelCfg;
+    agentxx_websearch_plugin::ModelSearchConfig modelCfg;
 };
 
 struct WebFetchUrlMarkdownTool {
@@ -135,7 +135,7 @@ struct WebFetchUrlMarkdownTool {
     }
 
     asio::awaitable<std::string> execute_async(const neograph::json& args) const {
-        co_return agentxx::websearch_plugin::webFetchMarkdownExecute(args);
+        co_return agentxx_websearch_plugin::webFetchMarkdownExecute(args);
     }
 };
 
@@ -368,7 +368,7 @@ asio::awaitable<void> test_web_tools_definition_timeout_header(
     }
     {
         // 测试适配: ModelWebSearchTool 同名薄包装 (空 ModelConfig 仅验证 schema)
-        agentxx::websearch_plugin::ModelSearchConfig emptyCfg{};
+        agentxx_websearch_plugin::ModelSearchConfig emptyCfg{};
         auto tool = agentxx::tools::ModelWebSearchTool{emptyCfg};
         checkTool("ModelWebSearchTool", tool.get_definition());
     }

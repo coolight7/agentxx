@@ -29,7 +29,7 @@ struct GetCurrentDateTimeTool {
     }
 
     asio::awaitable<std::string> execute_async(const neograph::json&) const {
-        co_return agentxx::system_plugin::currentDatetimeExecute();
+        co_return agentxx_system_plugin::currentDatetimeExecute();
     }
 };
 

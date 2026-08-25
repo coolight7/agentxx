@@ -50,7 +50,7 @@ inline std::string testResolvedWorkDir(const std::weak_ptr<agentxx::agent::Agent
         }                                                                       \
         asio::awaitable<std::string> execute_async(const neograph::json& args)  \
             const {                                                             \
-            co_return ::agentxx::filesystem_plugin::IMPL_FN(                    \
+            co_return ::agentxx_fs_plugin::IMPL_FN(                    \
                 args, testResolvedWorkDir(ctx), nullptr);                       \
         }                                                                       \
     };

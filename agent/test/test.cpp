@@ -47,6 +47,7 @@
 #include "test_string_util.h"
 #include "test_worktree.h"
 #include "test_subagent_bus.h"
+#include "test_subagent_tool.h"
 #include "test_summarization.h"
 #include "test_text_selection_monitor.h"
 #include "test_toolcall_args.h"
@@ -239,6 +240,7 @@ int main(int argn, char** argv) {
             co_await run("event_bridge", agentxx::test::run_event_bridge_tests);
             co_await run("interrupt_bus", agentxx::test::run_interrupt_bus_tests);
             co_await run("subagent_bus", agentxx::test::run_subagent_bus_tests);
+            co_await run("subagent_tool", agentxx::test::run_subagent_tool_tests);
             co_await run("agent_host", agentxx::test::run_agent_host_tests);
             co_await runCtx("string_tools", agentxx::test::run_string_tools_tests, agentContext);
             co_await run("share_store", agentxx::test::run_share_store_tests);
