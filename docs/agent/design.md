@@ -498,7 +498,7 @@ models:
                                 # 也可用 extra_api_config 显式指定 include 数组覆盖
     ssl_verify: null            # true/false 显式控制 TLS 证书验证; 省略用默认策略
     connect_timeout: 16
-    read_chunk_timeout: 24
+    read_chunk_timeout: 60
     max_concurrent_connections: 5   # 该模型 API 端点的最大并发连接数 (默认 5, 0=不限制)
                                     # LLM 请求启用 HTTP keep-alive 连接池: 空闲连接复用,
                                     # 超过上限的并发请求排队等待空闲连接

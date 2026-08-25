@@ -3,17 +3,16 @@
 - eventBus 改为tree，命名空间使用 axx/bxx/cc
 - 支持修改上下文
 - ASAN、TSAN、UBSAN
-- git worktree
 - 验证subagent、summarization
 - CI/CD
 - 文档翻译
 - release 编译发布时携带 标准库
 - graph json 定义，支持插件生成 graph json、注册 node; (最多只能有一个插件生成 graph，都没有则默认生成 CodeAgent)
-- 调整插件代码结构，增加测试、划分文件夹
 - 整理文档
 - 插件宏辅助代码
 - 插件支持多次加载，目前用了许多全局变量存储结构体，可能有问题
-- 移除 agent server 的 证书支持
+- 插件 readHostConfig 改为直接传入 变量路径 取值
+- 插件内代码命名空间
 - 记录加载失败的 Append 组件，传入tui显示
 
 - 请分析如何agent实现gitworktree支持，启用该模式时，独立创建一个worktree环境、编译目录环境，以便在同一目录启动多个agent

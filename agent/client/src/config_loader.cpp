@@ -374,7 +374,7 @@ YamlAppConfig loadYamlConfig(
             if (node["read_chunk_timeout"]) {
                 // 同上: 容错解析, 避免非法配置导致 std::stoi 抛异常崩溃
                 auto val = resolveEnvVars(
-                    node["read_chunk_timeout"].as<std::string>("100"),
+                    node["read_chunk_timeout"].as<std::string>("60"),
                     dotEnvVars,
                     overrideEnvVars
                 );
