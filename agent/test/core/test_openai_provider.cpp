@@ -22,6 +22,15 @@
 #include <set>
 #include <thread>
 
+namespace {
+// 本模块测试计数器 (仅本编译单元可见; 不经头文件 extern 导出)
+int g_openai_passed = 0;
+int g_openai_failed = 0;
+} // namespace
+
+// 断言计数宏覆盖: 将 test_framework.h 的 XX_TEST_EXPECT_* 映射到本模块计数器
+#define XX_TEST_PASSED g_openai_passed
+#define XX_TEST_FAILED g_openai_failed
 namespace agentxx {
 namespace test {
 
@@ -55,9 +64,6 @@ agentxx::agent::ModelConfig makeCodexCfg(const std::string& baseUrl) {
     return mc;
 }
 } // namespace
-
-int g_openai_passed = 0;
-int g_openai_failed = 0;
 
 // ---------------------------------------------------------------------------
 // Unit tests

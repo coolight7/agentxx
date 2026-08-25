@@ -14,6 +14,11 @@
 #include <thread>
 
 /// web 工具通用参数集 (与插件入口 schema 一致): url/query + timeout/header
+namespace {
+// 本模块测试计数器 (仅本编译单元可见; 不经头文件 extern 导出)
+int g_ws_passed = 0;
+int g_ws_failed = 0;
+} // namespace
 static neograph::json webToolParams(const char* queryKey, const char* timeoutDesc) {
     return neograph::json{
         {"type", "object"},
@@ -139,9 +144,6 @@ struct WebFetchUrlMarkdownTool {
 
 namespace agentxx {
 namespace test {
-
-int g_ws_passed = 0;
-int g_ws_failed = 0;
 
 asio::awaitable<void>
     test_web_search_get_definition(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {

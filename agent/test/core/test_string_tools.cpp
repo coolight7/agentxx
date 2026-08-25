@@ -8,6 +8,11 @@
 #include <iostream>
 #include <string>
 
+namespace {
+// 本模块测试计数器 (仅本编译单元可见; 不经头文件 extern 导出)
+int g_st_passed = 0;
+int g_st_failed = 0;
+} // namespace
 namespace agentxx {
 namespace tools {
 
@@ -46,9 +51,6 @@ struct StringRegexpTool {
 
 namespace agentxx {
 namespace test {
-
-int g_st_passed = 0;
-int g_st_failed = 0;
 
 asio::awaitable<void>
     test_html_to_markdown_basic(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {

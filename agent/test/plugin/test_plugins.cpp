@@ -20,11 +20,17 @@
 #include <string>
 #include <thread>
 
-namespace agentxx {
-namespace test {
-
+namespace {
+// 本模块测试计数器 (仅本编译单元可见; 不经头文件 extern 导出)
 int g_plugin_passed = 0;
 int g_plugin_failed = 0;
+} // namespace
+
+// 断言计数宏覆盖: 将 test_framework.h 的 XX_TEST_EXPECT_* 映射到本模块计数器
+#define XX_TEST_PASSED g_plugin_passed
+#define XX_TEST_FAILED g_plugin_failed
+namespace agentxx {
+namespace test {
 
 /// 定位示例插件库 (与测试可执行同目录, 见 test/CMakeLists.txt)
 /// 优先 exe 同目录的构建产物, cwd 仅作回退; 校验目录内存在动态库产物,

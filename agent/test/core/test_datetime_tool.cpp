@@ -9,6 +9,11 @@
 #include <regex>
 #include <string>
 
+namespace {
+// 本模块测试计数器 (仅本编译单元可见; 不经头文件 extern 导出)
+int g_dt_passed = 0;
+int g_dt_failed = 0;
+} // namespace
 namespace agentxx {
 namespace tools {
 
@@ -33,9 +38,6 @@ struct GetCurrentDateTimeTool {
 
 namespace agentxx {
 namespace test {
-
-int g_dt_passed = 0;
-int g_dt_failed = 0;
 
 asio::awaitable<void>
     test_datetime_get_definition(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {

@@ -1,6 +1,3 @@
-// 注意顺序: test_session_persistence.h 会把 XX_TEST_PASSED/FAILED 重定义为
-// g_sp_*, 必须包含在 test_agent.h 之后 (test_agent.h 会重定义为 g_da_*),
-// 使本模块测试计数回落到 g_sp_* 而非计入 agent 模块
 #include "test_session_persistence.h"
 #include "test_agent.h"
 
@@ -19,11 +16,17 @@
 #include <string>
 #include <vector>
 
-namespace agentxx {
-namespace test {
-
+namespace {
+// 本模块测试计数器 (仅本编译单元可见; 不经头文件 extern 导出)
 int g_sp_passed = 0;
 int g_sp_failed = 0;
+} // namespace
+
+// 断言计数宏覆盖: 将 test_framework.h 的 XX_TEST_EXPECT_* 映射到本模块计数器
+#define XX_TEST_PASSED g_sp_passed
+#define XX_TEST_FAILED g_sp_failed
+namespace agentxx {
+namespace test {
 
 namespace fs = std::filesystem;
 

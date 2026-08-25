@@ -6,16 +6,8 @@
 
 #include "test_framework.h"
 
-#undef XX_TEST_PASSED
-#undef XX_TEST_FAILED
-#define XX_TEST_PASSED g_network_timeout_passed
-#define XX_TEST_FAILED g_network_timeout_failed
-
 namespace agentxx {
 namespace test {
-
-extern int g_network_timeout_passed;
-extern int g_network_timeout_failed;
 
 asio::awaitable<TestResult> run_network_timeout_tests();
 

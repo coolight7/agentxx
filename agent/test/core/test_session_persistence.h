@@ -8,9 +8,6 @@
 namespace agentxx {
 namespace test {
 
-extern int g_sp_passed;
-extern int g_sp_failed;
-
 /// 会话 SQLite 持久化测试: viewMessages/LLM 上下文/share store 的
 /// 落库与重启恢复、id 延续、链式哈希一致性、sessionId 清洗,
 /// 以及真实 BaseAgent 端到端持久化
@@ -19,7 +16,3 @@ asio::awaitable<TestResult> run_session_persistence_tests();
 } // namespace test
 } // namespace agentxx
 
-#undef XX_TEST_PASSED
-#undef XX_TEST_FAILED
-#define XX_TEST_PASSED g_sp_passed
-#define XX_TEST_FAILED g_sp_failed

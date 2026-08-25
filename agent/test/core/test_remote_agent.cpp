@@ -1,5 +1,3 @@
-// 注意: test_agent.h 会重定义 XX_TEST_PASSED/FAILED 为 g_da_* 计数器,
-// 必须先于 test_remote_agent.h 引入, 使后者 (g_remote_*) 的宏定义最后生效
 #include "test_remote_agent.h"
 #include "agentxx/agent/base_agent.h"
 #include "agentxx/agent/config.h"
@@ -29,15 +27,21 @@
 #include <thread>
 #include <vector>
 
+namespace {
+// 本模块测试计数器 (仅本编译单元可见; 不经头文件 extern 导出)
+int g_remote_passed = 0;
+int g_remote_failed = 0;
+} // namespace
+
+// 断言计数宏覆盖: 将 test_framework.h 的 XX_TEST_EXPECT_* 映射到本模块计数器
+#define XX_TEST_PASSED g_remote_passed
+#define XX_TEST_FAILED g_remote_failed
 namespace agentxx {
 namespace test {
 
 using namespace agentxx::util;
 namespace io = agentxx::agent::io;
 using agentxx::agent::SessionServerAgentIO;
-
-int g_remote_passed = 0;
-int g_remote_failed = 0;
 
 // ---------------------------------------------------------------------------
 // 测试用 IO: 记录收到的 delta/sync/turnResult/contextStats

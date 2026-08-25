@@ -27,11 +27,17 @@
 #include <string>
 #include <thread>
 
-namespace agentxx {
-namespace test {
-
+namespace {
+// 本模块测试计数器 (仅本编译单元可见; 不经头文件 extern 导出)
 int g_client_plugin_passed = 0;
 int g_client_plugin_failed = 0;
+} // namespace
+
+// 断言计数宏覆盖: 将 test_framework.h 的 XX_TEST_EXPECT_* 映射到本模块计数器
+#define XX_TEST_PASSED g_client_plugin_passed
+#define XX_TEST_FAILED g_client_plugin_failed
+namespace agentxx {
+namespace test {
 
 /// 定位示例插件目录 (与 agent 侧 test_plugins 同路径: cwd/plugins/example_plugin)
 /// 兼容从其他 cwd 运行: 优先 exe 同目录的构建产物, cwd 仅作回退;

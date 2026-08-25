@@ -25,6 +25,17 @@
 #include <string_view>
 #include <thread>
 #include <vector>
+
+namespace {
+// 本模块测试计数器 (仅本编译单元可见; 不经头文件 extern 导出)
+int g_http_passed = 0;
+int g_http_failed = 0;
+} // namespace
+
+// 断言计数宏覆盖: 将 test_framework.h 的 XX_TEST_EXPECT_* 映射到本模块计数器
+#define XX_TEST_PASSED g_http_passed
+#define XX_TEST_FAILED g_http_failed
+
 #if defined(__linux__)
 #include <unistd.h>
 #endif
@@ -33,9 +44,6 @@ namespace agentxx {
 namespace test {
 
 using namespace agentxx::util;
-
-int g_http_passed = 0;
-int g_http_failed = 0;
 
 template<typename T>
 void expect_has_value_impl(T&& expr, const char* file, int line) {
@@ -52,6 +60,10 @@ void expect_has_value_impl(T&& expr, const char* file, int line) {
         }
     }
 }
+
+// 增强版 HAS_VALUE 断言: 失败时输出文件与错误详情 (仅本模块覆盖框架默认宏)
+#undef XX_TEST_EXPECT_HAS_VALUE
+#define XX_TEST_EXPECT_HAS_VALUE(expr) expect_has_value_impl(expr, __FILE__, __LINE__)
 
 void test_http_client_unit() {
     {

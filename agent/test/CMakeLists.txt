@@ -36,9 +36,12 @@ add_executable(agentxx_test)
 # 测试源按目录划分:
 # - 根目录: 入口 test.cpp (模块注册)
 # - core/:   agentxx (lib) 核心测试
+# - plugin/: 插件测试 (插件系统 PluginManager / 具体插件集成:
+#            plugins, plugin_resources, client_plugins, screen_capture,
+#            text_selection_monitor, cpu_gpu_use(system_monitor), codegraph)
 # - client/: client (TUI/CLI) 测试, 仅 AGENTXX_BUILD_CLIENT 时编译其中的
 #            client/src 实现源码 (见下方 AGENTXX_BUILD_CLIENT 分支)
-file(GLOB test_root_SOURCES 
+file(GLOB test_root_SOURCES
 	CONFIGURE_DEPENDS
 	"${CMAKE_CURRENT_SOURCE_DIR}/*.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/*.cc" "${CMAKE_CURRENT_SOURCE_DIR}/*.cxx"
 )
@@ -46,16 +49,22 @@ file(GLOB test_core_SOURCES
 	CONFIGURE_DEPENDS
 	"${CMAKE_CURRENT_SOURCE_DIR}/core/*.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/core/*.cc" "${CMAKE_CURRENT_SOURCE_DIR}/core/*.cxx"
 )
+file(GLOB test_plugin_SOURCES 
+	CONFIGURE_DEPENDS
+	"${CMAKE_CURRENT_SOURCE_DIR}/plugin/*.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/plugin/*.cc" "${CMAKE_CURRENT_SOURCE_DIR}/plugin/*.cxx"
+)
 target_sources(agentxx_test PRIVATE
 	${test_root_SOURCES}
 	${test_core_SOURCES}
+	${test_plugin_SOURCES}
 )
-# include path: 根目录 (test_framework.h 等共享头) + core/ + client/
+# include path: 根目录 (test_framework.h 等共享头) + core/ + plugin/ + client/
 # 使 test.cpp 的 #include "test_xxx.h" 与子目录测试的
 # #include "test_framework.h" 均无需改动路径
 target_include_directories(agentxx_test PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}"
   "${CMAKE_CURRENT_SOURCE_DIR}/core/"
+  "${CMAKE_CURRENT_SOURCE_DIR}/plugin/"
   "${CMAKE_CURRENT_SOURCE_DIR}/client/"
   # 迁移至插件的内置工具实现 (filesystem/string/system/websearch/rag_search/
   # execute_command 的 *_impl.h): 测试直测插件同一实现, 保证行为一致

@@ -12,6 +12,15 @@
 #include <iostream>
 #include <string>
 
+namespace {
+// 本模块测试计数器 (仅本编译单元可见; 不经头文件 extern 导出)
+int g_fs_passed = 0;
+int g_fs_failed = 0;
+} // namespace
+
+// 断言计数宏覆盖: 将 test_framework.h 的 XX_TEST_EXPECT_* 映射到本模块计数器
+#define XX_TEST_PASSED g_fs_passed
+#define XX_TEST_FAILED g_fs_failed
 namespace agentxx {
 namespace tools {
 
@@ -66,9 +75,6 @@ AGENTXX_TEST_FS_TOOL(FilesystemGrepTool,      fileGrepExecute,   "agentxx_filesy
 
 namespace agentxx {
 namespace test {
-
-int g_fs_passed = 0;
-int g_fs_failed = 0;
 
 const std::string testDir
     = (std::filesystem::temp_directory_path() / "agentxx_test_filesystem").generic_string();

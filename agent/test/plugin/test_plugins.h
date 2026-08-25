@@ -10,8 +10,7 @@
 namespace agentxx {
 namespace test {
 
-asio::awaitable<TestResult>
-    run_datetime_tool_tests(std::weak_ptr<agentxx::agent::AgentContext> agentContext);
+asio::awaitable<TestResult> run_plugin_tests();
 
 } // namespace test
 } // namespace agentxx

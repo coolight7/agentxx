@@ -1,4 +1,4 @@
-# 原生示例插件 (插件系统测试/演示用, 见 test/core/test_plugins.cpp)
+# 原生示例插件 (插件系统测试/演示用, 见 test/plugin/test_plugins.cpp)
 # - 默认: 编译为 MODULE 动态库 (不链接 libagentxx, 仅依赖纯 C ABI 头)
 # - 内置模式 (AGENTXX_ENABLE_PLUGIN_BUILTIN=ON, 由 libagentxx 合并编译):
 #   源文件编译为独立 OBJECT 库 (per-plugin 编译定义/包含路径互不影响),

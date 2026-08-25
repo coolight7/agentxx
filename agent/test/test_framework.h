@@ -73,8 +73,14 @@ void printTestValue(std::ostream& os, const T& v) {
 #define TEST_SKIP agentxx::test::skipStream()
 #define TEST_WARN agentxx::test::warnStream()
 
-// 统一断言宏 — 每个文件需在使用前定义 XX_TEST_PASSED / XX_TEST_FAILED 指向本地计数器
-// 例: #define XX_TEST_PASSED g_regex_passed / #define XX_TEST_FAILED g_regex_failed
+// 统一断言宏 — 断言计数宏覆盖 (XX_TEST_PASSED / XX_TEST_FAILED 指向本模块计数器)
+// 应在模块 cpp 文件中定义: 匿名命名空间计数器 + #define 覆盖, 测试函数末尾
+// return TestResult{g_xxx_passed, g_xxx_failed}; 头文件仅保留函数声明,
+// 不做宏定义/不 extern 导出计数器 (避免跨模块宏泄漏导致计数错乱)
+// 例 (cpp 内):
+//   namespace { int g_regex_passed = 0; int g_regex_failed = 0; } // namespace
+//   #define XX_TEST_PASSED g_regex_passed
+//   #define XX_TEST_FAILED g_regex_failed
 
 #define XX_TEST_EXPECT_TRUE(expr)                                           \
     do {                                                                    \

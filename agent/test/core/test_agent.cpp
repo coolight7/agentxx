@@ -16,11 +16,17 @@
 #include <string>
 #include <vector>
 
-namespace agentxx {
-namespace test {
-
+namespace {
+// 本模块测试计数器 (仅本编译单元可见; 不经头文件 extern 导出)
 int g_da_passed = 0;
 int g_da_failed = 0;
+} // namespace
+
+// 断言计数宏覆盖: 将 test_framework.h 的 XX_TEST_EXPECT_* 映射到本模块计数器
+#define XX_TEST_PASSED g_da_passed
+#define XX_TEST_FAILED g_da_failed
+namespace agentxx {
+namespace test {
 
 /// 测试用 IO: 记录 sendToPeer 产出的事件与 getInput 调用，供验证使用
 /// - 由 BaseAgent 直接驱动 (无 transport/无真实对端), 覆写 sendToPeer 拦截记录事件
@@ -1209,8 +1215,9 @@ asio::awaitable<void> test_agent_toolcall_intercept_exception() {
 }
 
 asio::awaitable<TestResult> run_agent_tests() {
-    g_da_passed = 0;
-    g_da_failed = 0;
+    // 注: 计数器重构后 g_da_* 为本编译单元匿名命名空间私有变量,
+    // 其他模块 (test_agent_host/session_persistence/remote_agent 等) 的断言
+    // 不再可能经头文件宏泄漏计入此处, 无需在此清零防御
 
     try {
         co_await test_agent_init();

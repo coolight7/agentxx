@@ -7,11 +7,17 @@
 #include <memory>
 #include <string>
 
-namespace agentxx {
-namespace test {
-
+namespace {
+// 本模块测试计数器 (仅本编译单元可见; 不经头文件 extern 导出)
 int g_mf_passed = 0;
 int g_mf_failed = 0;
+} // namespace
+
+// 断言计数宏覆盖: 将 test_framework.h 的 XX_TEST_EXPECT_* 映射到本模块计数器
+#define XX_TEST_PASSED g_mf_passed
+#define XX_TEST_FAILED g_mf_failed
+namespace agentxx {
+namespace test {
 
 static void test_lru_cache() {
     // capacity 0 不应崩溃 (修复: 运行时强制最小为 1)
