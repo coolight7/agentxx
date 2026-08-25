@@ -7,9 +7,11 @@
 #include "agentxx/middlewares/planning.h"
 #include "agentxx/middlewares/skill.h"
 #include "agentxx/middlewares/summarization.h"
+#include "agentxx/middlewares/worktree.h"
 #include "agentxx/plugin/plugin_manager.h"
 #include "agentxx/protocol/mcp_client.h"
 #include "agentxx/protocol/openai_provider.h"
+#include "agentxx/tools/git_worktree.h"
 #include "agentxx/tools/subagent.h"
 #include "agentxx/tools/tool_skill_search.h"
 #include "agentxx/util/async_offload.h"
@@ -199,6 +201,16 @@ asio::awaitable<void> CodeAgent::initMiddleware() {
         agentContext->planningMiddleware = planningMiddleware;
         agentContext->middlewareHandleContext->handles.push_back(planningMiddleware);
     }
+    {
+        // worktree 模式提示词中间件 (yaml `worktree.enable`): 每轮按会话绑定
+        // 状态注入行为规范 (未绑定→提示创建 / 已绑定→提交与收尾规范 /
+        // 子代理继承→隔离提醒), 与 PlanningMiddleware 同一注入通道
+        if (config->enableWorktree) {
+            agentContext->middlewareHandleContext->handles.push_back(
+                std::make_shared<agentxx::middleware::WorktreeMiddlewareHandle>(agentContext)
+            );
+        }
+    }
 
     /// Toolcall  应当作为最后一层，输出的日志才会是最终的样子
     agentContext->middlewareHandleContext->handles.push_back(
@@ -287,6 +299,12 @@ asio::awaitable<std::vector<std::unique_ptr<agentxx::tools::XXToolBase>>> CodeAg
         subagentManagerTool_.reset();
         agentContext->subagentManagerToolPtr = nullptr;
         XX_LOGD("CodeAgent: subagent disabled by config (subagent.enable=false)");
+    }
+
+    /// Git worktree 管理 (由 AgentConfig::enableWorktree 控制, yaml worktree.enable)
+    /// - 创建即绑定会话: 相对路径基准/权限隔离边界自动切换, 详见 tools/git_worktree.h
+    if (config->enableWorktree) {
+        tools.push_back(std::make_unique<agentxx::tools::GitWorktreeTool>(agentContext));
     }
 
     /// MCP tool

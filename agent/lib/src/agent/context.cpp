@@ -230,6 +230,25 @@ std::shared_ptr<Session> AgentContext::getSession(std::string_view sessionId) {
     return sessions->getOrCreate(sessionId);
 }
 
+std::string AgentContext::resolveSessionWorkDir(std::string_view sessionId) {
+    // worktree 绑定优先 (worktree 模式; Session 可变状态仅 io 线程读写,
+    // 本方法约定在 io 线程调用 —— 插件宿主侧经 ioCallSync 投递)
+    auto session = sessions->get(sessionId);
+    if (session) {
+        const auto& wb = session->getWorktreeBinding();
+        if (!wb.path.empty()) {
+            return wb.path;
+        }
+    }
+    if (agentConfig) {
+        auto wd = agentConfig->resolvedWorkDir();
+        if (!wd.empty()) {
+            return wd;
+        }
+    }
+    return {};
+}
+
 std::string AgentContext::getSessionCurrentModelName(std::string_view sessionId) const {
     std::string selected;
     auto        session = sessions->get(sessionId);

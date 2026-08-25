@@ -8,19 +8,41 @@
 namespace agentxx {
 namespace middleware {
 
+/// 判断规范化路径 (尾斜杠目录前缀) 是否位于指定目录子树内
+inline bool isUnderDir(std::string_view dirWithTrailingSlash, std::string_view path) {
+    if (dirWithTrailingSlash.empty() || path.empty()) {
+        return false;
+    }
+    if (path == dirWithTrailingSlash) {
+        return true; // 目录自身
+    }
+    // 去掉 path 尾斜杠后做前缀比较 (normalizePermissionPath 输出带尾斜杠)
+    if (!path.empty() && path.back() == '/') {
+        path.remove_suffix(1);
+    }
+    return path.size() >= dirWithTrailingSlash.size()
+        && path.compare(0, dirWithTrailingSlash.size(), dirWithTrailingSlash) == 0;
+}
+
 /// 权限路径规范化: 绝对路径 + Unix 分隔符 + 目录尾斜杠
 /// - Windows 文件系统大小写不敏感, 统一转小写使注册规则 (来自配置/工作目录)
 ///   与请求路径 (模型可能传任意大小写, 如 `d:/...` 或 `D:\...`) 稳定匹配;
 ///   XXRouter 的树节点按字符串精确查找 (区分大小写), 不统一大小写会漏匹配,
 ///   表现为 mode: ask 时工作目录内的读写仍被询问
 std::string PermissionMiddlewareHandle::normalizePermissionPath(std::string_view path) const {
-    // 相对路径解析基准: AgentConfig::workDir (会话工作目录; 未配置回退进程 cwd),
-    // 与 filesystem 工具的解析基准保持一致, 使注册规则与工具实际访问路径稳定匹配
+    return normalizePermissionPath(path, {});
+}
+
+std::string PermissionMiddlewareHandle::normalizePermissionPath(
+    std::string_view path,
+    std::string_view sessionId
+) const {
+    // 相对路径解析基准: 会话生效工作目录 (worktree 绑定优先, 回退 AgentConfig::
+    // workDir / 进程 cwd), 与 filesystem 工具的解析基准保持一致,
+    // 使注册规则与工具实际访问路径稳定匹配
     std::string baseDir;
     if (auto ctx = agentContext.lock()) {
-        if (ctx->agentConfig) {
-            baseDir = ctx->agentConfig->resolvedWorkDir();
-        }
+        baseDir = ctx->resolveSessionWorkDir(sessionId);
     }
     std::string s = agentxx::util::toUnixStandardDirPath(
         baseDir.empty() ? agentxx::util::toCurrentSystemAbsolutePath(path)
@@ -30,6 +52,24 @@ std::string PermissionMiddlewareHandle::normalizePermissionPath(std::string_view
     agentxx::util::toLowerSelf(s);
 #endif
     return s;
+}
+
+void PermissionMiddlewareHandle::setSessionIsolation(
+    std::string_view   sessionId,
+    SessionFsIsolation isolation
+) {
+    sessionIsolations_.insert_or_assign(std::string{sessionId}, std::move(isolation));
+}
+
+void PermissionMiddlewareHandle::clearSessionIsolation(std::string_view sessionId) {
+    sessionIsolations_.erase(std::string_view{sessionId});
+}
+
+const SessionFsIsolation* PermissionMiddlewareHandle::sessionIsolation(
+    std::string_view sessionId
+) const {
+    auto it = sessionIsolations_.find(sessionId);
+    return it == sessionIsolations_.end() ? nullptr : &it->second;
 }
 
 PermissionMiddlewareHandle::PermissionMiddlewareHandle(
@@ -56,13 +96,29 @@ asio::awaitable<bool> PermissionMiddlewareHandle::defOnFilesystemHandle(
     neograph::json&       args,
     size_t                index
 ) {
-    auto path = args.value<std::string>("path", "");
-    // 支持相对路径: 非绝对路径基于会话工作目录 (AgentConfig::workDir, 未配置时
-    // 进程 cwd) 拼接为绝对路径, 与 filesystem 工具实际访问的路径保持一致,
-    // 使注册的绝对路径规则也能匹配相对路径访问
-    path = normalizePermissionPath(path);
+    auto path      = args.value<std::string>("path", "");
+    auto sessionId = args.value("sessionId", std::string{});
+    // 支持相对路径: 非绝对路径基于会话生效工作目录 (worktree 绑定优先, 回退
+    // AgentConfig::workDir / 进程 cwd) 拼接为绝对路径, 与 filesystem 工具实际
+    // 访问的路径保持一致, 使注册的绝对路径规则也能匹配相对路径访问
+    path = normalizePermissionPath(path, sessionId);
     if (path.empty()) {
         co_return true;
+    }
+    // worktree 会话隔离边界 (优先于一切已注册规则):
+    // - 绑定 worktree 的会话对主检出子树的写操作直接拒绝 (读不受限),
+    //   保证多会话并行开发互不干扰; 拒绝以 tool 结果形式反馈给模型
+    if (index == FilesystemPermissionWRITE) {
+        if (auto iso = sessionIsolation(sessionId); iso && !iso->denyWritePath.empty()) {
+            if (isUnderDir(iso->denyWritePath, path)) {
+                XX_LOGD(
+                    "Permission: session '{}' isolated by worktree, deny write to main checkout: {}",
+                    sessionId,
+                    path
+                );
+                co_return false;
+            }
+        }
     }
     std::string re_path;
     // 最长前缀匹配: 注册的文件夹规则 (如 /data/projects) 对其下任意子路径生效

@@ -139,7 +139,7 @@ char* wrapExecute(
                     != 0;
             };
         }
-        auto result = ExecFn(arguments, workDir(), isCancelled);
+        auto result = ExecFn(arguments, sessionWorkDir(thread_id), isCancelled);
         return pluginStrdup(result.c_str());
     } catch (const std::exception& ex) {
         if (error_out) {

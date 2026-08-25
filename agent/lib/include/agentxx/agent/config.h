@@ -183,6 +183,22 @@ public:
     /// - 由 yaml `subagent.enable` 配置
     bool enableSubagent = true;
 
+    /// 是否启用 git worktree 模式 (yaml `worktree.enable`, 默认关闭)
+    /// - 开启后注册 `agentxx_git_worktree` 工具 + 每轮注入 worktree 行为提示词:
+    ///   提示模型在涉及代码修改的任务开始时创建独立 worktree 并绑定会话,
+    ///   实现同仓库多会话并行开发互不影响
+    /// - 绑定语义: create 成功即把当前会话的相对路径解析基准切换到 worktree
+    ///   (Session::WorktreeBinding), 权限层同步注册隔离边界
+    ///   (主检出写 DENY / worktree 读写 ALLOW)
+    /// - 子代理经 AgentHost::spawnOneTask 继承父会话绑定
+    ///   (workDir 预置为 worktree 路径 + inheritedWorktreePath 标记)
+    bool enableWorktree = false;
+
+    /// 子代理继承的父会话 worktree 路径 (非配置项, 由 AgentHost 派生时填充)
+    /// - 仅作提示词展示与权限规则注册依据; 实际路径解析基准经 workDir 字段
+    ///   预置为同一值, 使子代理全部工具链自动落入 worktree
+    std::string inheritedWorktreePath;
+
     /// 主模型配置
     ModelConfig model;
 

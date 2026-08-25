@@ -1207,6 +1207,30 @@ static char* xx_get_work_dir(const AgentxxHost* host) {
     XX_PLUGIN_CATCH_END(nullptr)
 }
 
+/// 指定会话生效的工作目录 (worktree 绑定优先; io 线程; 失败 NULL):
+/// - v3 新增; thread_id 为 execute 回调注入的 sessionId
+static char* xx_get_session_work_dir(const AgentxxHost* host, AgentxxPluginStringView thread_id) {
+    XX_PLUGIN_CATCH_BEGIN
+    auto mgr  = mgrOf(host);
+    auto inst = instOf(host);
+    if (!mgr || !inst || !thread_id.data) {
+        return nullptr;
+    }
+    auto     mgrPtr = mgr;
+    auto tid = std::string{thread_id.data, thread_id.size};
+    if (tid.empty()) {
+        return nullptr;
+    }
+    auto dir = ioCallSync<std::string>(mgrPtr, [mgrPtr, tid]() {
+        return mgrPtr->getSessionWorkDir(tid);
+    });
+    if (dir.empty()) {
+        return nullptr;
+    }
+    return host->vtable->strdup(dir.c_str());
+    XX_PLUGIN_CATCH_END(nullptr)
+}
+
 /// 宿主主模型及关联配置 → JSON (io 线程; 未装配 AgentConfig 返回 NULL):
 /// {"baseUrl","apiKey","modelName","websearchApiUrl",
 ///  "websearchConvertHtml2markdown","websearchModel","ragDocsPaths"}
@@ -1540,6 +1564,7 @@ static const AgentxxConfigIface g_ifaceConfig = {
     /* get_plugin_args */ xx_get_plugin_args,
     /* get_tool_prompt */ xx_get_tool_prompt,
     /* get_work_dir (v2) */ xx_get_work_dir,
+    /* get_session_work_dir (v3, worktree 绑定) */ xx_get_session_work_dir,
 };
 
 static const AgentxxPromptIface g_ifacePrompt = {
@@ -3659,6 +3684,16 @@ std::string PluginManager::getSessionWorkDir() {
         return {};
     }
     return ctx->agentConfig->resolvedWorkDir();
+}
+
+std::string PluginManager::getSessionWorkDir(const std::string& threadId) {
+    auto ctx = agentContext_.lock();
+    if (!ctx) {
+        return {};
+    }
+    // worktree 绑定优先 (Session::WorktreeBinding), 回退 agent 级解析
+    // (AgentContext::resolveSessionWorkDir 已封装该语义)
+    return ctx->resolveSessionWorkDir(threadId);
 }
 
 std::string PluginManager::getModelConfigJson() {

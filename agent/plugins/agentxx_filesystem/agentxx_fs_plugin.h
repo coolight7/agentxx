@@ -98,6 +98,24 @@ inline const std::string& workDir() {
     return kWorkDir;
 }
 
+/// 指定会话生效的工作目录 (execute 回调内逐次调用):
+/// - 优先经 agentxx.agent.config v3 get_session_work_dir 解析 (会话绑定
+///   worktree 时返回 worktree 路径, worktree 模式的路径基准切换点);
+/// - 接口不可用/解析失败时回退 v2 get_work_dir (agent 级, 兼容旧宿主)
+inline std::string sessionWorkDir(AgentxxPluginStringView thread_id) {
+    if (g_host && g_if.config && g_if.config->get_session_work_dir && thread_id.data) {
+        char* dir = g_if.config->get_session_work_dir(g_host, thread_id);
+        if (dir) {
+            std::string s{dir};
+            g_host->vtable->free(dir);
+            if (!s.empty()) {
+                return s;
+            }
+        }
+    }
+    return workDir();
+}
+
 } // namespace agentxx_fs_plugin
 
 // 插件内日志统一经 vtable 转发到宿主 (见 pluginLog), 此处重定义 XX_LOG* 宏;

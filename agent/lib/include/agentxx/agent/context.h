@@ -52,6 +52,20 @@ class AgentHost;
 /// 会话资源应用器 (Skill/Memory/MCP 扩展; 完整定义见 resource_applier.h)
 class AgentResourceApplier;
 
+/// 会话绑定的 git worktree (worktree 模式; 由 agentxx_git_worktree 工具维护)
+/// - 绑定后该会话的相对路径基准、权限隔离边界均切换到 worktree
+/// - 详见 tools/git_worktree.h 与 middlewares/worktree.h
+struct WorktreeBinding {
+    /// worktree 名称 (目录名与自动分支名来源)
+    std::string name;
+    /// worktree 绝对路径 ({repoRoot}/.agentxx/agent/worktrees/{name})
+    std::string path;
+    /// 关联分支名 (agentxx/wt-{name})
+    std::string branch;
+    /// 主检出仓库根绝对路径
+    std::string repoRoot;
+};
+
 /// 会话持久化回调 (由 SessionsManager 创建 Session 时注入, 解耦 sqlite 依赖)
 /// - 所有回调仅做"尽力而为"持久化, 内部已捕获异常并记录日志, 不中断主流程
 struct SessionStoreHooks {
@@ -273,11 +287,37 @@ public:
         return ++deltaSeq;
     }
 
+    // -------------------------------------------------------------------
+    // worktree 绑定 (worktree 模式; 仅 io 线程读写)
+    // - path 非空表示已绑定: 该会话的相对路径解析基准/权限隔离边界切换到 worktree
+    // -------------------------------------------------------------------
+
+    /// 设置会话绑定的 worktree (仅 io 线程)
+    void setWorktreeBinding(WorktreeBinding binding) {
+        assertIoThread();
+        worktreeBinding_ = std::move(binding);
+    }
+
+    /// 清除绑定 (如删除当前 worktree 后; 仅 io 线程)
+    void clearWorktreeBinding() {
+        assertIoThread();
+        worktreeBinding_ = {};
+    }
+
+    /// 获取当前绑定 (仅 io 线程; path 为空 = 未绑定)
+    const WorktreeBinding& getWorktreeBinding() const {
+        assertIoThread();
+        return worktreeBinding_;
+    }
+
 private:
 
     std::shared_ptr<neograph::graph::CancelToken> cancelToken_ = nullptr;
     std::string                                   modelName_;
     uint64_t                                      msgIdCounter_ = 0;
+
+    /// worktree 绑定 (仅 io 线程读写; path 为空 = 未绑定)
+    WorktreeBinding worktreeBinding_;
 
     /// 绑定的 io 线程 id (std::thread::id{} 表示未绑定)
     std::atomic<std::thread::id> ioThreadId_{std::thread::id{}};
@@ -437,6 +477,12 @@ public:
 
     /// 便捷方法：获取或创建指定 thread_id 的会话
     std::shared_ptr<Session> getSession(std::string_view sessionId);
+
+    /// 解析会话生效的工作目录 (io 线程调用)
+    /// - 会话已绑定 worktree 时返回 worktree 路径 (worktree 模式)
+    /// - 否则回退 AgentConfig::resolvedWorkDir() (yaml work_dir / 进程 cwd)
+    /// - 均不可用时返回空串
+    std::string resolveSessionWorkDir(std::string_view sessionId);
 
     std::string getSessionCurrentModelName(std::string_view sessionId) const;
     // 可能会变，建议仅在同步代码中使用

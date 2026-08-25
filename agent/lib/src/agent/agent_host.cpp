@@ -353,6 +353,20 @@ asio::awaitable<events::RespSubagentBatchItem> AgentHost::spawnOneTask(
     }
     auto subCfg = makeSubagentConfig(parentConfig);
 
+    // ---- worktree 绑定继承 (worktree 模式) ----
+    // - 父会话已绑定 worktree 时, 子代理的工作目录预置为同一 worktree:
+    //   resolvedWorkDir()/permission Ask 默认放行规则/子进程 cwd 全链路跟随,
+    //   无需子代理再感知绑定机制; inheritedWorktreePath 供提示词中间件注入
+    //   "继承隔离" 提醒 (避免子代理再创建嵌套 worktree 或改写主检出)
+    if (parentAgentCtx) {
+        auto parentSession = parentAgentCtx->sessions->get(parentSessionId);
+        if (parentSession && !parentSession->getWorktreeBinding().path.empty()) {
+            const auto& wb = parentSession->getWorktreeBinding();
+            subCfg->workDir               = wb.path;
+            subCfg->inheritedWorktreePath = wb.path;
+        }
+    }
+
     // ---- 子代理工具策略 (无工具 / 继承父 / 自定义白名单) ----
     if (task.tools.has_value()) {
         if (task.tools->is_array()) {

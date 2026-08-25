@@ -653,6 +653,36 @@ Use this to record important information, tips, reminders, or identity/role-play
           },
       },
       {
+          "agentxx_git_worktree",
+          ToolPrompt{
+              .depict =
+                  R"(Manage isolated git worktrees for this session.
+
+## Workflow
+- **At the start of a code-modifying task**: call with `opt=create` to make an isolated worktree and BIND this session to it. Afterwards all file operations, builds and tests run inside the worktree automatically (relative paths resolve there; writes into the main checkout are denied).
+- Read-only tasks (analysis/questions) don't need a worktree.
+- Commit your work regularly inside the worktree.
+- **Before finishing**: call with `opt=status`, summarize pending changes, and remind the user to review / commit / merge them.
+- Worktrees are KEPT after tasks; only delete via `opt=remove` when the user explicitly asks (it refuses when uncommitted work exists unless `force=true`).)",
+              .args =
+                  {
+                      {"opt",
+                       R"(Operation to perform:
+`create`: Create an isolated worktree and bind THIS session to it.
+`info`: Show the current binding and all worktrees of the repository.
+`status`: Summarize pending changes (uncommitted files / unpushed commits) of the bound worktree.
+`remove`: Delete a worktree (refuses when it has pending work unless `force`).)"},
+                      {"name",
+                       R"(Worktree name, used as directory name under `{repo}/.agentxx/agent/worktrees/` and in branch `agentxx/wt-{name}`.
+Allowed chars: letters, digits, `.`, `_`, `-`. Required by `create` (auto-generated when empty) and `remove`; ignored by other ops.)"},
+                      {"base_ref",
+                       R"(`create` only. Branch or commit the new worktree is based on. Default: current HEAD.)"},
+                      {"force",
+                       R"(`remove` only. Default `false`. When true, delete even if the worktree has uncommitted/untracked changes or unpushed commits — data-loss risk; prefer committing first.)"},
+                  },
+          },
+      },
+      {
           "agentxx_rag_search",
           ToolPrompt{
               .depict =

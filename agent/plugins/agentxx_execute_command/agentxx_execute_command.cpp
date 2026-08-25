@@ -69,7 +69,7 @@ char* wrapExecute(
             }
             return isSessionCancelled(agentxx_plugin_sv(tid.data(), tid.size()));
         };
-        auto workDir = readWorkDir();
+        auto workDir = readWorkDir(agentxx_plugin_sv(tid.data(), tid.size()));
         auto result  = ExecFn(arguments, workDir, isCancelled);
         return pluginStrdup(result.c_str());
     } catch (const std::exception& ex) {

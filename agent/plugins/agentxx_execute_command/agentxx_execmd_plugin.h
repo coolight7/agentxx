@@ -38,8 +38,23 @@ inline char* pluginStrdup(const char* s) {
 /// 读取会话工作目录 (AgentConfig::resolvedWorkDir; 失败返回空串)
 /// - execute 回调运行在宿主线程池, get_work_dir 为 io 线程约束操作,
 ///   宿主内部自动投递同步等待
-inline std::string readWorkDir() {
-    if (!g_if.config || !g_if.config->get_work_dir) {
+/// - tid 非空且宿主提供 v3 get_session_work_dir 时按会话解析 (worktree
+///   绑定优先), 否则回退 agent 级 get_work_dir (兼容旧宿主)
+inline std::string readWorkDir(AgentxxPluginStringView tid = {}) {
+    if (!g_if.config) {
+        return {};
+    }
+    if (g_if.config->get_session_work_dir && tid.data && tid.size > 0) {
+        char* dir = g_if.config->get_session_work_dir(g_host, tid);
+        if (dir) {
+            std::string out{dir};
+            g_host->vtable->free(dir);
+            if (!out.empty()) {
+                return out;
+            }
+        }
+    }
+    if (!g_if.config->get_work_dir) {
         return {};
     }
     char* dir = g_if.config->get_work_dir(g_host);

@@ -609,6 +609,10 @@ public:
     /// 解析后的会话工作目录 (AgentConfig::resolvedWorkDir; 未装配返回空串)
     /// - vtable agentxx.agent.config v2 get_work_dir 实现入口
     std::string getSessionWorkDir();
+    /// 指定会话生效的工作目录 (worktree 绑定优先, 回退 getSessionWorkDir;
+    /// 未装配/会话不存在返回空串)
+    /// - vtable agentxx.agent.config v3 get_session_work_dir 实现入口
+    std::string getSessionWorkDir(const std::string& threadId);
     /// 宿主主模型及关联配置 JSON (未装配返回空串):
     /// {"baseUrl","apiKey","modelName","websearchApiUrl",
     ///  "websearchConvertHtml2markdown","websearchModel","ragDocsPaths"}

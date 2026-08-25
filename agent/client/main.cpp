@@ -181,6 +181,8 @@ static void applySharedRuntimeConfig(
 
     // 子代理开关 (yaml `subagent.enable`, 默认 true)
     config->enableSubagent = yamlCfg.enableSubagent;
+    // git worktree 模式 (yaml `worktree.enable`, 默认 false)
+    config->enableWorktree = yamlCfg.worktreeEnable;
     // 插件配置 (yaml `plugins` 段): 相对路径按程序工作目录解析为绝对路径
     // (与 skill/memory 一致; BaseAgent::init 按此加载, 拓扑排序见 PluginManager)
     for (const auto& pc : yamlCfg.plugins) {

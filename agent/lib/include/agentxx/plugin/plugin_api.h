@@ -561,7 +561,7 @@ typedef struct AgentxxPluginsIface {
 /* ==================== 接口表: 宿主配置 (agentxx.agent.config) ==================== */
 
 #define AGENTXX_IFACE_AGENT_CONFIG         "agentxx.agent.config"
-#define AGENTXX_IFACE_AGENT_CONFIG_VERSION 2
+#define AGENTXX_IFACE_AGENT_CONFIG_VERSION 3
 
 typedef struct AgentxxConfigIface {
     int version; ///< 必须 >= AGENTXX_IFACE_AGENT_CONFIG_VERSION
@@ -588,6 +588,15 @@ typedef struct AgentxxConfigIface {
     /// - 文件系统/命令执行类插件以此为相对路径基准与子进程初始目录
     ///   (嵌入多实例场景下各 agent 实例的工作目录彼此独立)
     char* (*get_work_dir)(const AgentxxHost* host);
+
+    /* ---- v3 追加: 会话级工作目录 (worktree 绑定) ---- */
+    /// 指定会话生效的工作目录 (io 线程; host->alloc; 失败返回 NULL):
+    /// - 会话已绑定 worktree 时返回 worktree 路径 (worktree 模式, 见
+    ///   Session::WorktreeBinding); 否则与 get_work_dir 等价
+    /// - thread_id 取自 execute 回调注入的参数 (ToolcallNode 注入 sessionId);
+    /// - 调用方约定: 先探测本指针非空且 version >= 3, 返回 NULL 时回退
+    ///   get_work_dir (旧宿主/未绑定会话的兼容语义)
+    char* (*get_session_work_dir)(const AgentxxHost* host, AgentxxPluginStringView thread_id);
 } AgentxxConfigIface;
 
 /* ==================== 接口表: 主模型配置 (agentxx.agent.model) ====================

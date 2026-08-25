@@ -45,6 +45,7 @@
 #include "test_share_store.h"
 #include "test_string_tools.h"
 #include "test_string_util.h"
+#include "test_worktree.h"
 #include "test_subagent_bus.h"
 #include "test_summarization.h"
 #include "test_text_selection_monitor.h"
@@ -246,6 +247,7 @@ int main(int argn, char** argv) {
             co_await runCtx("datetime", agentxx::test::run_datetime_tool_tests, agentContext);
             co_await runCtx("filesystem", agentxx::test::run_filesystem_tools_tests, agentContext);
             co_await runCtx("command", agentxx::test::run_command_tools_tests, agentContext);
+            co_await run("worktree", agentxx::test::run_worktree_tests);
             co_await runCtx("web_search", agentxx::test::run_web_search_tools_tests, agentContext);
             co_await runCtx("codegraph", agentxx::test::run_codegraph_tools_tests, agentContext);
             co_await runCtx(

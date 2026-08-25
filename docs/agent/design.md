@@ -95,6 +95,37 @@ tool_skill_search 与延迟加载装配：
 - **去重机制**: 文件读写等工具支持 SummarizationToolHandle，重复调用时截断旧结果
 - **MCP 扩展**: 通过 MCP Client 连接外部 MCP Server，动态注册远程工具 (支持 HTTP SSE 和 stdio 传输)
 
+### Git Worktree 模式 (yaml `worktree.enable`, 默认关闭)
+
+开启后注册 `agentxx_git_worktree` 工具 (`agentxx::tools::GitWorktreeTool`) 并由
+`WorktreeMiddlewareHandle` 每轮按会话绑定状态注入行为提示词。设计目标: 同一仓库
+目录启动的多个 agent 会话各自在独立 worktree 内开发, 代码修改互不影响
+(参考 Claude Code `--worktree` / `EnterWorktree` 的分层约束设计)。
+
+- **工具操作**: `create` (创建+绑定) / `info` (列表+当前绑定) / `status`
+  (未提交变更与未合并提交摘要) / `remove` (删除; 默认保留策略下唯一删除入口)
+- **创建即绑定**: create 成功即写入 `Session::WorktreeBinding`
+  (`{repoRoot}/.agentxx/agent/worktrees/{name}`, 分支 `agentxx/wt-{name}`,
+  基于 base_ref 参数默认当前 HEAD), 该会话后续所有相对路径解析基准、
+  命令执行子进程初始目录自动切换到 worktree —— 正确行为是平台默认行为而非依赖模型自觉;
+  同时向 `.git/info/exclude` 追加 `.agentxx/` (本地生效不污染 tracked 文件)
+- **权限隔离边界** (代码级约束): 绑定时向 PermissionMiddleware 注册每会话隔离
+  (`SessionFsIsolation`): 主检出子树写操作 DENY (读不受限), 隔离优先于白名单/
+  模式默认规则; filesystem 工具的相对路径经 `normalizePermissionPath(path,
+  sessionId)` 按 worktree 解析, 权限规则与实际访问路径稳定匹配
+- **插件链路跟随**: 插件接口 `AgentxxConfigIface` 升 v3 新增
+  `get_session_work_dir(host, thread_id)` (worktree 绑定优先); filesystem 插件
+  改为每次 execute 按注入的 sessionId 动态解析 (原 entry 时静态缓存),
+  execute_command 插件同语义 —— 会话绑定后两个插件的路径基准即时切换
+- **子代理继承**: AgentHost 派生子代理时继承父会话绑定 (子代理 config.workDir
+  预置为 worktree 路径 + `inheritedWorktreePath` 标记), 其 permission Ask 默认
+  规则/全部工具链自动落入同一 worktree
+- **生命周期**: worktree 始终保留 (keep 策略), 不随会话结束删除; remove 操作
+  经双层脏检查 (未提交变更/未跟踪文件/未合并提交, 无上游时回退统计分支全部提交),
+  有工作成果时拒绝并提醒先 commit, 仅 force=true 可强制删除
+- 底层 git 封装见 `agent/lib/include/agentxx/util/worktree.h` (argv 直调不经
+  shell, 超时整组终止; 测试模块 `worktree`)
+
 ### 中间件系统
 
 采用栈式中间件架构，在 Graph 节点执行前后插入处理逻辑：
@@ -106,6 +137,7 @@ tool_skill_search 与延迟加载装配：
 | **MemoryFileMiddleware** | 上下文文件 (Memory) 读取与缓存，每次模型调用时注入系统提示词 |
 | **SummarizationMiddleware** | 上下文 token 统计与自动压缩，防止超出模型上下文窗口 |
 | **PlanningMiddleware** | 任务规划状态管理，将 planning 数据注入 system prompt |
+| **WorktreeMiddleware** | git worktree 模式提示词注入 (yaml `worktree.enable`): 每轮按会话绑定状态追加行为规范 (未绑定→提示创建 / 已绑定→提交与收尾规范 / 子代理继承→隔离提醒), 经 `graphDataKey_appendSystemMessage` 通道与 Planning 同模式 |
 | **AgentHost** | 进程级 agent 宿主: 主 agent 与子代理平等注册 (AgentNode), 派生独立 agent 运行子代理, 在根与每个子代理的全局总线上 serve service.subagent (委派扁平化: 嵌套委派与根委派同路径), 强制深度/并发预算, HostBus 跨 agent 消息路由, 生命周期回收 |
 | **EventBridge** | 将 GraphEngine 事件翻译为 EventBus 强类型事件 |
 | **LogPrint** | 调试日志输出中间件 (条件编译，按配置控制日志级别) |
@@ -517,6 +549,13 @@ memory:
 # 模型无法发起子代理委派)
 subagent:
   enable: true
+
+# git worktree 模式 (默认 false)
+# - 开启后注册 `agentxx_git_worktree` 工具 + 每轮注入 worktree 行为提示词:
+#   提示模型在涉及代码修改的任务开始时创建独立 worktree 并绑定会话,
+#   实现同仓库多会话并行开发互不影响 (详见下方 "Git Worktree 模式")
+worktree:
+  enable: false
 
 # 插件配置 (所有插件统一经 path 外置指定加载, 不区分内置/外置;
 # 相对路径按程序工作目录解析为绝对路径; 编译产物位于 exec/plugins/<插件名>/;

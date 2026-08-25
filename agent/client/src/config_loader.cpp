@@ -555,6 +555,26 @@ YamlAppConfig loadYamlConfig(
         }
     }
 
+    // git worktree 模式开关 (yaml `worktree.enable`, 默认 false)
+    if (root["worktree"] && root["worktree"].IsMap() && root["worktree"]["enable"]) {
+        auto val = resolveEnvVars(
+            root["worktree"]["enable"].as<std::string>("false"),
+            dotEnvVars,
+            overrideEnvVars
+        );
+        std::string low = val;
+        std::transform(low.begin(), low.end(), low.begin(), [](unsigned char c) {
+            return std::tolower(c);
+        });
+        if (low == "true" || low == "1" || low == "yes" || low == "on") {
+            cfg.worktreeEnable = true;
+        } else if (low == "false" || low == "0" || low == "no" || low == "off") {
+            cfg.worktreeEnable = false;
+        } else {
+            XX_LOGW("[Config] Warning: unknown worktree.enable '{}', fallback to false", val);
+        }
+    }
+
     // CodeGraph 参数已迁移到插件配置 (yaml `plugins` 段 agentxx_codegraph
     // 条目的 args): 宿主不解析其字段语义, 整体原样传递给插件
 

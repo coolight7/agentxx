@@ -93,6 +93,10 @@ struct YamlAppConfig {
     std::vector<agent::PluginConfig> plugins;
     /// subagent 总开关 (yaml `subagent.enable`, 默认 true)
     bool enableSubagent = true;
+    /// git worktree 模式开关 (yaml `worktree.enable`, 默认 false)
+    /// - 开启后注册 agentxx_git_worktree 工具 + 注入行为提示词, 模型在代码
+    ///   修改任务开始时创建独立 worktree 并绑定会话 (详见 tools/git_worktree.h)
+    bool worktreeEnable = false;
 };
 
 /// 程序内置环境变量: 程序启动后的工作目录
