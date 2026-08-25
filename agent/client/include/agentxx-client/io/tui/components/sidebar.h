@@ -9,12 +9,18 @@
 #include <string>
 #include <vector>
 
-/// 右侧边栏组件: tab 栏 + 可滚动内容 + 底部常驻 + 左侧拖拽手柄
+/// 右侧边栏组件: 横向布局 = [当前高亮 tab 内容] | [tabs 竖向可滚动列表] + 左侧拖拽手柄
+///
+/// - 左侧内容区: 当前激活 tab 的可滚动内容 + 底部 footer; 无激活 tab 时不渲染
+///   (此时侧边栏收窄为仅剩 tabs 列表)
+/// - 右侧 tabs 竖向列表: 常驻显示, 超出显示高度时可滚动 (复用 Scrollable);
+///   常驻标签 (如 Info/Logs) 固定显示于列表顶部, 对应 tab 未创建时也可点击创建
 ///
 /// 事件处理:
-/// - tab 左键点击切换, 右键关闭
-/// - 左侧手柄拖拽调整宽度
-/// - 滚轮由内部 Scrollable 处理
+/// - tab 左键点击切换/取消激活 (常驻标签已激活时再点一次取消激活, 内容区隐藏),
+///   右键关闭动态 tab (常驻标签右键仅取消激活, 按钮不可移除)
+/// - 左侧手柄拖拽调整宽度 (作用于有内容时的整体宽度)
+/// - 内容区/列表滚轮分别由各自内部 Scrollable 处理
 class SidebarComponent : public ftxui::ComponentBase {
 public:
 
@@ -25,7 +31,20 @@ public:
         std::function<ftxui::Element()>          footer;
     };
 
+    /// 常驻标签: 始终显示于 tabs 竖向列表顶部的固定按钮
+    struct PinnedTab {
+        std::string           id;
+        std::string           title;
+        /// 左键点击且对应 tab 不存在时调用 (内部应 addTab 创建; addTab 自动激活新 tab)
+        std::function<void()> ensure;
+    };
+
     explicit SidebarComponent(TUICtx& ctx);
+
+    /// 注册常驻标签 (如 Info/Logs); 列表中固定显示于动态 tab 之前
+    void setPinnedTabs(std::vector<PinnedTab> pins) {
+        pinned_ = std::move(pins);
+    }
 
     void addTab(
         std::string_view                         id,
@@ -54,7 +73,7 @@ public:
         return activeTabId() == id;
     }
 
-    /// 侧边栏宽度 (供外部布局使用)
+    /// 侧边栏宽度 (供外部布局使用; 仅在有激活 tab 内容时生效)
     int width() const {
         return width_;
     }
@@ -75,27 +94,44 @@ public:
 
 private:
 
-    bool handleTabMouse(const ftxui::Mouse& mouse);
+    /// tabs 竖向列表条目: 与 tabList_->visibleBoxes() 下标一一对应 (鼠标命中检测)
+    struct ListEntry {
+        bool isPin = false;
+        int  index = -1; // isPin ? pinned_ 下标 : tabs_ 下标
+    };
+
+    /// 构建本帧 tabs 竖向列表按钮 (填充 pendingListItems_ 与 listEntries_)
+    void buildTabList();
+    bool handleListMouse(const ftxui::Mouse& mouse);
     bool handleResizeMouse(const ftxui::Mouse& mouse);
 
-    TUICtx&                     ctx_;
-    std::shared_ptr<Scrollable> scrollable_;
+    /// 返回指定 id 的 tab 下标; 不存在返回 -1
+    int  findTabIndex(std::string_view id) const;
+    bool isPinned(std::string_view id) const;
 
-    std::vector<Tab> tabs_;
-    int              activeTab_ = 0;
+    TUICtx&                     ctx_;
+    std::shared_ptr<Scrollable> scrollable_; // 当前激活 tab 的内容区
+    std::shared_ptr<Scrollable> tabList_;    // tabs 竖向常驻列表
+
+    std::vector<Tab>       tabs_;
+    std::vector<PinnedTab> pinned_;
+    int                    activeTab_ = -1; // -1 = 无激活 tab (内容区不渲染)
 
     int  width_        = kDefaultWidth;
     bool resizing_     = false;
     int  resizeStartX_ = 0;
     int  resizeStartW_ = 0;
 
-    std::vector<ftxui::Box> tabBoxes_;
+    std::vector<ScrollItem> pendingListItems_; // 本帧待渲染的列表按钮 (tabList_ 的 render 源)
+    std::vector<ListEntry>  listEntries_;      // pendingListItems_ 与 tabs_/pinned_ 的映射
     ftxui::Box              handleBox_;
     ftxui::Box              footerBox_;
 
     std::function<bool(const ftxui::Mouse&)> onFooterClick_;
 
-    static constexpr int kMinWidth     = 24;
+    // 横向布局下内容区与竖向列表共享宽度: 相比原垂直布局适度加宽,
+    // 保证左侧内容区在列表占据约 10 列后仍有可用宽度
+    static constexpr int kMinWidth     = 28;
     static constexpr int kMaxWidth     = 120;
-    static constexpr int kDefaultWidth = 40;
+    static constexpr int kDefaultWidth = 46;
 };

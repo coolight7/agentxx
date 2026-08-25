@@ -420,6 +420,10 @@ private:
 
     /// F12: 切换日志窗口 tab
     void toggleLogWindow();
+    /// 确保 Info/Logs 侧边栏 tab 已创建 (不存在时 addTab 并激活;
+    /// 供初始展开判断与 tabs 列表常驻标签点击回调复用)
+    void ensureInfoSidebarTab();
+    void ensureLogSidebarTab();
     /// 打开 Plan 状态图模态 (Info 侧边栏 [View Plan Diagram] 按钮触发)
     void openPlanDiagram();
 

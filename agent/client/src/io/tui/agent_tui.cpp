@@ -433,6 +433,21 @@ void TUIClientAgentIO::start() {
         statusBar_   = std::make_shared<StatusBarComponent>(ctx_);
         sidebar_     = std::make_shared<SidebarComponent>(ctx_);
 
+        // tabs 竖向列表的常驻标签: Info/Logs 始终显示 (对应 tab 未创建时点击经
+        // ensure 回调创建并激活; 已激活再点一次取消激活隐藏内容区)
+        sidebar_->setPinnedTabs({
+            {std::string(kInfoTabId),
+             "Info",
+             [this]() {
+                 ensureInfoSidebarTab();
+             }},
+            {std::string(kLogTabId),
+             "Logs",
+             [this]() {
+                 ensureLogSidebarTab();
+             }},
+        });
+
         InputComponent::Config inputCfg;
         inputCfg.onSend = [this](std::string text) {
             // ---- 插件命令拦截 (UI 线程) ----
@@ -487,18 +502,10 @@ void TUIClientAgentIO::start() {
         };
         inputBar_ = std::make_shared<InputComponent>(ctx_, std::move(inputCfg));
 
-        // 屏幕足够宽时默认显示信息侧边栏
-        if (Terminal::Size().dimx >= kInfoSidebarMinWidth && !sidebar_->hasTab(kInfoTabId)) {
-            sidebar_->addTab(
-                kInfoTabId,
-                "Info",
-                [this]() {
-                    return renderInfoSidebar();
-                },
-                [this]() {
-                    return renderInfoSidebarFooter();
-                }
-            );
+        // 屏幕足够宽时默认展开信息侧边栏
+        // (Info/Logs 标签无论如何都常驻显示于 tabs 竖向列表)
+        if (Terminal::Size().dimx >= kInfoSidebarMinWidth) {
+            ensureInfoSidebarTab();
         }
 
         // 侧边栏 footer 点击: 处理 "上下文" 按钮
@@ -546,13 +553,12 @@ void TUIClientAgentIO::start() {
                 text(" "),
             });
 
-            Element body = mainWidget;
-            if (!sidebar_->empty()) {
-                body = hbox({
-                    mainWidget | flex,
-                    sidebar_->Render(),
-                });
-            }
+            // 侧边栏 tabs 竖向列表常驻显示 (Info/Logs 固定标签),
+            // 故始终参与布局; 无激活 tab 时其内容区自动隐藏、仅显示列表
+            Element body = hbox({
+                mainWidget | flex,
+                sidebar_->Render(),
+            });
             // 屏幕上方 toast 提示 (如会话切换警告): 渲染时检查超时, 超过
             // kToastDuration 自动清除 (toastText_/toastShownAt_ 为 UI 线程独占,
             // 仅在本帧渲染中读写, 无跨线程竞争); 显示期间以 dbox 叠加在
@@ -1016,10 +1022,23 @@ void TUIClientAgentIO::openSettings() {
     postRedraw();
 }
 
-void TUIClientAgentIO::toggleLogWindow() {
-    if (sidebar_->hasTab(kLogTabId)) {
-        sidebar_->removeTab(kLogTabId);
-    } else {
+void TUIClientAgentIO::ensureInfoSidebarTab() {
+    if (!sidebar_->hasTab(kInfoTabId)) {
+        sidebar_->addTab(
+            kInfoTabId,
+            "Info",
+            [this]() {
+                return renderInfoSidebar();
+            },
+            [this]() {
+                return renderInfoSidebarFooter();
+            }
+        );
+    }
+}
+
+void TUIClientAgentIO::ensureLogSidebarTab() {
+    if (!sidebar_->hasTab(kLogTabId)) {
         sidebar_->addTab(
             kLogTabId,
             "Logs",
@@ -1030,6 +1049,14 @@ void TUIClientAgentIO::toggleLogWindow() {
                 return renderLogSidebarFooter();
             }
         );
+    }
+}
+
+void TUIClientAgentIO::toggleLogWindow() {
+    if (sidebar_->hasTab(kLogTabId)) {
+        sidebar_->removeTab(kLogTabId);
+    } else {
+        ensureLogSidebarTab();
     }
     postRedraw();
 }
