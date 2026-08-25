@@ -20,31 +20,47 @@
 
 namespace agentxx_fs_plugin {
 
-/// 当前插件宿主句柄 (entry 装配; 线程安全: 只读)
-inline const AgentxxHost* g_host = nullptr;
+// =====================================================================
+// 多实例约定 (2026-08 API v1): 同一动态库可被同一进程内不同 agent 宿主
+// 各自加载为独立实例, 本插件不持有任何可变全局; 功能状态一律存于每实例
+// PluginCtx (create 创建经 *plugin_ctx 交付宿主, 工具回调经 spec.user_data
+// 恢复); 日志经显式传入的 ctx 路由到宿主接口表。
+// =====================================================================
 
-/// 宿主接口表缓存 (entry 时 AgentIfaces::query 一次查询; 表为进程级静态数据)
-inline agentxx::plugin::AgentIfaces g_if{};
+/// 每实例上下文 (多实例安全的功能状态载体)
+struct PluginCtx {
+    const AgentxxHost*           host    = nullptr;
+    agentxx::plugin::AgentIfaces iface   {};
+    /// spec 字符串稳定存储 (每实例独立, 卸载随 ctx 释放)
+    std::vector<std::string>     storage {};
+    /// 同步垫片适配器存储 (每注册工具一个, 随实例销毁释放; unique_ptr 目标
+    /// 地址稳定 —— 注册后三件套回调引用其内容, 容器扩容不失效)
+    std::vector<std::unique_ptr<AgentxxSyncToolShim>> sync_tool_shims;
+    /// 会话工作目录回退值 (agent 级 get_work_dir; create 时装配一次,
+    /// 每实例独立 —— 原函数级 static 实现会把首实例的值固化给所有后续实例)
+    std::string                  work_dir {};
+};
 
-/// 日志转发到宿主 agentxx.agent.log 接口表 (线程安全)
-inline void pluginLog(int level, const std::string& msg) {
-    if (g_host && g_if.log && g_if.log->log) {
-        g_if.log->log(g_host, level, agentxx_plugin_sv(msg.data(), msg.size()));
+/// 实例日志转发到宿主 agentxx.agent.log 接口表 (ctx 可空时静默丢弃;
+/// noexcept —— catch 路径禁止任何可能再抛异常的操作)
+inline void pluginLog(const PluginCtx* ctx, int level, const std::string& msg) {
+    if (ctx && ctx->host && ctx->iface.log && ctx->iface.log->log) {
+        ctx->iface.log->log(ctx->host, level, agentxx_plugin_sv(msg.data(), msg.size()));
     }
 }
 
-/// 宿主分配字符串 (跨边界内存)
-inline char* pluginStrdup(const char* s) {
-    if (!s) {
+/// 宿主分配字符串 (跨边界内存; host 取自回调恢复的 PluginCtx)
+inline char* pluginStrdup(const AgentxxHost* host, const char* s) {
+    if (!host || !s) {
         return nullptr;
     }
-    return g_host->vtable->strdup(s);
+    return host->vtable->strdup(s);
 }
 
-/// C ABI 边界异常守卫日志 (由守卫函数调用处显式传入; noexcept —— catch 路径
-/// 禁止任何可能再抛异常的操作, 栈缓冲 + 宿主 log 接口表, 缺失时静默丢弃)
-inline void pluginCatchLog(const char* msg) noexcept {
-    agentxx::plugin_guard::defaultLogTo(g_host, g_if.log, 4, "agentxx_filesystem", msg);
+/// C ABI 边界异常守卫日志闭包 (捕获本实例上下文; ctx 为空 = 尚未装配,
+/// 静默丢弃 —— 仅 create 最前段可能发生)
+inline auto ctxGuardLogger(PluginCtx* ctx) noexcept {
+    return [ctx](const char* msg) noexcept { pluginLog(ctx, 4, msg ? msg : ""); };
 }
 
 /// 宿主 toolPrompt 条目 {"depict": "...", "args": {...}} 的解析结果
@@ -54,21 +70,25 @@ struct ToolPromptText {
 };
 
 /// 读取宿主 toolPrompt 的完整条目 (depict + 各参数说明; io 线程约束操作,
-/// 宿主内部自动投递); 未配置返回空结构
-inline ToolPromptText readToolPrompt(const std::string& toolName) {
+/// 宿主内部自动投递); 未配置返回空结构 (host/iface 取自本实例 PluginCtx)
+inline ToolPromptText readToolPrompt(
+    const AgentxxHost*                  host,
+    const agentxx::plugin::AgentIfaces& iface,
+    const std::string&                  toolName
+) {
     ToolPromptText out;
-    if (!g_host || !g_if.config || !g_if.config->get_tool_prompt) {
+    if (!host || !iface.config || !iface.config->get_tool_prompt) {
         return out;
     }
-    char* json = g_if.config->get_tool_prompt(
-        g_host,
+    char* json = iface.config->get_tool_prompt(
+        host,
         agentxx_plugin_sv(toolName.data(), toolName.size())
     );
     if (!json) {
         return out;
     }
     std::string s{json};
-    g_host->vtable->free(json);
+    host->vtable->free(json);
     // 条目 JSON 结构简单固定 ({"depict": str, "args": {k: str}}),
     // 用 neograph::json 解析 (插件经 agentxx_util 传递链接, 与宿主同构)
     try {
@@ -87,40 +107,37 @@ inline ToolPromptText readToolPrompt(const std::string& toolName) {
     return out;
 }
 
-/// 会话工作目录 (agentxx.agent.config v2 get_work_dir); entry 时装配一次,
-/// execute 回调只读 (嵌入多实例场景下各宿主的解析值在各自进程/实例内有效)
-inline const std::string& workDir() {
-    static const std::string kWorkDir = []() -> std::string {
-        if (!g_host || !g_if.config || !g_if.config->get_work_dir) {
-            return {};
-        }
-        char* dir = g_if.config->get_work_dir(g_host);
-        if (!dir) {
-            return {};
-        }
-        std::string s{dir};
-        g_host->vtable->free(dir);
-        return s;
-    }();
-    return kWorkDir;
+/// create 时装配 agent 级工作目录到 ctx->work_dir (每实例独立; 原函数级
+/// static 单例在多实例下会把首实例的值固化给所有后续实例 —— bug 已修)
+inline void loadWorkDir(PluginCtx& ctx) {
+    if (!ctx.host || !ctx.iface.config || !ctx.iface.config->get_work_dir) {
+        return;
+    }
+    char* dir = ctx.iface.config->get_work_dir(ctx.host);
+    if (!dir) {
+        return;
+    }
+    ctx.work_dir = std::string{dir};
+    ctx.host->vtable->free(dir);
 }
 
 /// 指定会话生效的工作目录 (execute 回调内逐次调用):
 /// - 优先经 agentxx.agent.config v3 get_session_work_dir 解析 (会话绑定
 ///   worktree 时返回 worktree 路径, worktree 模式的路径基准切换点);
-/// - 接口不可用/解析失败时回退 v2 get_work_dir (agent 级, 兼容旧宿主)
-inline std::string sessionWorkDir(AgentxxPluginStringView thread_id) {
-    if (g_host && g_if.config && g_if.config->get_session_work_dir && thread_id.data) {
-        char* dir = g_if.config->get_session_work_dir(g_host, thread_id);
+/// - 接口不可用/解析失败时回退 create 时装配的 ctx->work_dir (agent 级)
+inline std::string sessionWorkDir(const PluginCtx* ctx, AgentxxPluginStringView thread_id) {
+    if (ctx && ctx->host && ctx->iface.config && ctx->iface.config->get_session_work_dir
+        && thread_id.data) {
+        char* dir = ctx->iface.config->get_session_work_dir(ctx->host, thread_id);
         if (dir) {
             std::string s{dir};
-            g_host->vtable->free(dir);
+            ctx->host->vtable->free(dir);
             if (!s.empty()) {
                 return s;
             }
         }
     }
-    return workDir();
+    return ctx ? ctx->work_dir : std::string{};
 }
 
 } // namespace agentxx_fs_plugin

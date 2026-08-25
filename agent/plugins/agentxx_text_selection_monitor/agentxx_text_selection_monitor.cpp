@@ -46,38 +46,56 @@ const char* sourceName(agentxx_text_selection_monitor_plugin::TextSource s) {
     return "unknown";
 }
 
-/// 转义字符串为 JSON 字面量 (经宿主 vtable json_escape)
-std::string jsonEscape(const std::string& s) {
-    if (!g_host || !g_if.json || !g_if.json->json_escape || s.empty()) {
+struct PluginCtx;
+
+
+/// 每实例上下文 (多实例契约: 零可变全局; 前置声明见下)
+struct PluginCtx;
+
+/// 文本选择监听 (TextSelectionMonitor 内部自管线程; 原函数级 static 单例
+/// 在多实例下会把首实例的事件发到首实例宿主 —— 已修: monitor 移入每实例
+/// PluginCtx, 监听回调捕获本实例裸指针; 线程存活期 ⊆ 实例存活期)
+struct TextSelectionHolder {
+    bool start(int debounceMs); ///< 定义于 PluginCtx 完整声明后
+    void stop();
+
+    agentxx_text_selection_monitor_plugin::TextSelectionMonitor monitor_;
+    PluginCtx*                                                  ctx = nullptr; ///< 归属实例
+};
+
+/// 每实例上下文 (完整定义 — Holder 之后以避免循环依赖)
+struct PluginCtx {
+    const AgentxxHost*           host  = nullptr;
+    agentxx::plugin::AgentIfaces iface {};
+    TextSelectionHolder          holder; ///< 监听器 (随实例生死)
+    AgentxxSyncToolShim          shim {};///< 垫片适配器 (随实例生死)
+};
+
+/// 转义字符串为 JSON 字面量 (经宿主 vtable json_escape; host 取自本实例 ctx)
+std::string jsonEscape(const PluginCtx& ctx, const std::string& s) {
+    if (!ctx.host || !ctx.iface.json || !ctx.iface.json->json_escape || s.empty()) {
         return "\"\"";
     }
-    char* esc = g_if.json->json_escape(g_host, agentxx_plugin_sv(s.data(), s.size()));
+    char* esc = ctx.iface.json->json_escape(ctx.host, agentxx_plugin_sv(s.data(), s.size()));
     if (!esc) {
         return "\"\"";
     }
     std::string out{esc};
-    g_host->vtable->free(esc);
+    ctx.host->vtable->free(esc);
     return out;
 }
 
-/// 文本选择监听单例 (TextSelectionMonitor 内部自管线程; unload 时停止)
-struct TextSelectionHolder {
-    static TextSelectionHolder& instance() {
-        static TextSelectionHolder holder;
-        return holder;
+bool TextSelectionHolder::start(int debounceMs) {
+    if (monitor_.isRunning()) {
+        return false;
     }
-
-    bool start(int debounceMs) {
-        if (monitor_.isRunning()) {
-            return false;
-        }
-        if (debounceMs > 0) {
-            monitor_.setDebounceMs(debounceMs);
-        }
+    if (debounceMs > 0) {
+        monitor_.setDebounceMs(debounceMs);
+    }
         // 异常守卫: 监听回调运行在监视线程, 异常逃逸会 terminate 进程
-        monitor_.addListener([](const agentxx_text_selection_monitor_plugin::TextSelectionEvent& evt) {
+        monitor_.addListener([ctx = this->ctx](const agentxx_text_selection_monitor_plugin::TextSelectionEvent& evt) {
             try {
-                if (!g_host || !g_if.events || !g_if.events->publish) {
+                if (!ctx || !ctx->host || !ctx->iface.events || !ctx->iface.events->publish) {
                     return;
                 }
                 auto tsMs = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -86,29 +104,30 @@ struct TextSelectionHolder {
                                 .count();
                 std::string payload = fmt::format(
                     R"({{"text":{},"source":{},"timestamp_ms":{}}})",
-                    jsonEscape(evt.text),
-                    jsonEscape(sourceName(evt.source)),
+                    jsonEscape(*ctx, evt.text),
+                    jsonEscape(*ctx, sourceName(evt.source)),
                     tsMs
                 );
-                g_if.events->publish(
-                    g_host,
+                ctx->iface.events->publish(
+                    ctx->host,
                     AGENTXX_SV("agentxx_text_selection_monitor.selection"),
                     agentxx_plugin_sv(payload.data(), payload.size())
                 );
             } catch (...) {
-                pluginCatchLog("selection event publish");
+                pluginLog(ctx ? ctx->host : nullptr,
+                          ctx ? ctx->iface.log : nullptr,
+                          4,
+                          "selection event publish");
             }
         });
         return monitor_.start();
     }
 
-    void stop() {
-        monitor_.stop();
-        monitor_.removeAllListeners();
-    }
 
-    agentxx_text_selection_monitor_plugin::TextSelectionMonitor monitor_;
-};
+void TextSelectionHolder::stop() {
+    monitor_.stop();
+    monitor_.removeAllListeners();
+}
 
 /// 工具执行: command = start|stop|status (阻塞委托型; offload 池线程调用)
 char* textSelectionExecute(
@@ -119,7 +138,8 @@ char* textSelectionExecute(
     volatile int*           cancel_flag,
     char**                  error_out
 ) {
-    (void)user_data;
+    auto* ctx    = static_cast<PluginCtx*>(user_data);
+    auto* host   = ctx ? ctx->host : nullptr; ///< 多实例契约: 结果串走本实例宿主堆
     (void)thread_id;
     (void)tool_call_id;
     (void)cancel_flag;
@@ -133,38 +153,38 @@ char* textSelectionExecute(
         std::string command;
         jsonGetString(args.doc().at_pointer("/command"), command);
 
-        auto& holder = TextSelectionHolder::instance();
+        TextSelectionHolder& holder = ctx->holder;
 
         if (command == "start") {
             int64_t debounceMs = 0;
             jsonGetInt(args.doc().at_pointer("/debounce_ms"), debounceMs);
             bool ok = holder.start(static_cast<int>(debounceMs));
-            return pluginStrdup(
+            return pluginStrdup(host,
                 fmt::format(R"({{"ok":{},"running":true}})", ok ? "true" : "false").c_str()
             );
         }
 
         if (command == "stop") {
             holder.stop();
-            return pluginStrdup(R"({"ok":true,"running":false})");
+            return pluginStrdup(host, R"({"ok":true,"running":false})");
         }
 
         if (command == "status") {
             bool running = holder.monitor_.isRunning();
             return pluginStrdup(
-                fmt::format(R"({{"ok":true,"running":{}}})", running ? "true" : "false").c_str()
+                host, fmt::format(R"({{"ok":true,"running":{}}})", running ? "true" : "false").c_str()
             );
         }
 
-        return pluginStrdup(R"({"ok":false,"error":"unknown command"})");
+        return pluginStrdup(host, R"({"ok":false,"error":"unknown command"})");
     } catch (const std::exception& ex) {
         if (error_out) {
-            *error_out = pluginStrdup(ex.what());
+            *error_out = pluginStrdup(host, ex.what());
         }
         return nullptr;
     } catch (...) {
         if (error_out) {
-            *error_out = pluginStrdup("unknown exception");
+            *error_out = pluginStrdup(host, "unknown exception");
         }
         return nullptr;
     }
@@ -177,9 +197,9 @@ char* textSelectionExecute(
 // =====================================================================
 
 extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_get_info(void) {
-    // C ABI 边界异常守卫: 异常返回 NULL (宿主按"未导出"处理)
+    // C ABI 边界异常守卫: 异常返回 NULL; 本边界为纯静态元数据 → 空操作日志
     return agentxx::plugin_guard::guardCall(
-        pluginCatchLog,
+        [](const char*) noexcept {},
         nullptr,
         [&]() -> const AgentxxPluginInfo* {
         static const AgentxxPluginInfo info{
@@ -194,13 +214,23 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_get_inf
 }
 
 extern "C" AGENTXX_PLUGIN_EXPORT int
-    agentxx_plugin_entry(const AgentxxHost* host, void** /*plugin_ctx*/) {
-    // C ABI 边界异常守卫: 异常返回 -1 (加载失败)
+    agentxx_plugin_create(const AgentxxHost* host, void** plugin_ctx) {
+    // C ABI 边界异常守卫: 异常返回 -1 (创建失败); 日志闭包捕获局部裸指针
+    auto ctx   = std::make_unique<PluginCtx>();
+    PluginCtx* raw = nullptr;
     return agentxx::plugin_guard::guardCall(
-        pluginCatchLog,
+        [&raw](const char* m) noexcept {
+            pluginLog(raw ? raw->host : nullptr, raw ? raw->iface.log : nullptr, 4, m ? m : "");
+        },
         -1,
         [&]() -> int {
-        g_host = host;
+        if (!host || !host->vtable || !plugin_ctx) {
+            return -1;
+        }
+        ctx->host  = host;
+        ctx->iface = agentxx::plugin::AgentIfaces::query(host);
+        raw        = ctx.get();
+        ctx->holder.ctx = ctx.get(); ///< 监听回调经此读本实例宿主
 
         static const std::string kSchema = R"({
         "type": "object",
@@ -218,25 +248,36 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                          "selected text is published as plugin events "
                          "(agentxx_text_selection_monitor.selection).");
         spec.parameters_json = agentxx_plugin_sv(kSchema.data(), kSchema.size());
+        spec.user_data       = ctx.get();
         spec.execute         = textSelectionExecute;
-        if (agentxx_register_sync_tool(host, &spec) != 0) {
-            pluginLog(3, "agentxx_text_selection_monitor: register tool failed");
+        if (agentxx_register_sync_tool(host, &spec, &ctx->shim) != 0) {
+            pluginLog(ctx->host, ctx->iface.log, 3,
+                      "agentxx_text_selection_monitor: register tool failed");
             return -1;
         }
 
-        pluginLog(2, "agentxx_text_selection_monitor loaded (1 tool)");
+        pluginLog(ctx->host, ctx->iface.log, 2, "agentxx_text_selection_monitor loaded (1 tool)");
+        *plugin_ctx = ctx.release(); ///< 所有权移交宿主 (destroy 时取回归还)
         return 0;
     });
 }
 
-extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_unload(void* /*plugin_ctx*/) {
-    // C ABI 边界异常守卫: 卸载回调异常不得外泄
-    agentxx::plugin_guard::guardCallVoid(pluginCatchLog, [&] {
-        TextSelectionHolder::instance().stop();
-        if (g_host && g_host->vtable) {
-            if (g_if.tools && g_if.tools->unregister_tool)
-                g_if.tools->unregister_tool(g_host, AGENTXX_SV("agentxx_text_selection_monitor"));
+extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_destroy(void* plugin_ctx) {
+    auto* ctx = static_cast<PluginCtx*>(plugin_ctx);
+    // C ABI 边界异常守卫: 销毁回调异常不得外泄
+    agentxx::plugin_guard::guardCallVoid(
+        [ctx](const char* m) noexcept {
+            pluginLog(ctx ? ctx->host : nullptr, ctx ? ctx->iface.log : nullptr, 4, m ? m : "");
+        },
+        [&] {
+        if (!ctx) {
+            return;
         }
-        pluginLog(2, "agentxx_text_selection_monitor unloaded");
-    });
+        ctx->holder.stop(); ///< 先停监视线程 (回调捕获 ctx, 必须先于 delete)
+        if (ctx->host && ctx->iface.tools && ctx->iface.tools->unregister_tool)
+            ctx->iface.tools->unregister_tool(ctx->host,
+                                              AGENTXX_SV("agentxx_text_selection_monitor"));
+        pluginLog(ctx->host, ctx->iface.log, 2, "agentxx_text_selection_monitor unloaded");
+        delete ctx;
+        });
 }

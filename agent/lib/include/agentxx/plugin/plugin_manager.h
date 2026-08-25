@@ -70,7 +70,7 @@ public:
     void*                    dlHandle = nullptr; ///< dlopen/LoadLibrary 句柄 (内置插件为空)
     /// 内置插件卸载回调 (编译进 libagentxx 的插件; dlHandle 为空时使用,
     /// 无需 dlsym 查符号)
-    AgentxxPluginUnloadFn builtinUnload = nullptr;
+    AgentxxPluginDestroyFn builtinUnload = nullptr;
     void*                 pluginCtx     = nullptr; ///< entry 输出的插件私有上下文
     bool                  enabled = true; ///< 是否启用 (禁用: 工具摘除/钩子停用)
     bool userDisabled = false; ///< 是否被用户显式禁用 (区别于级联禁用; enable 级联不复活)

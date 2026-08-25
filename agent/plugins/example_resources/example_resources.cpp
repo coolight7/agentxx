@@ -24,29 +24,39 @@
 #include "agentxx/plugin/plugin_guard.h"
 #include "agentxx/plugin/plugin_iface_helper.h"
 
+#include <memory>
 #include <string>
 
-static const AgentxxHost* g_host = nullptr;
-/// 宿主接口表缓存 (entry 时一次查询; 进程级静态数据)
-static agentxx::plugin::AgentIfaces g_if{};
+// 多实例约定 (2026-08 API v1): 零可变全局; 实例状态 (host/iface) 存于
+// ResCtx, create 经 *plugin_ctx 交付宿主 / destroy 释放
+struct ResCtx {
+    const AgentxxHost*           host  = nullptr;
+    agentxx::plugin::AgentIfaces iface {};
 
-/// C ABI 边界异常守卫日志 (由守卫函数调用处显式传入; noexcept)
-static void pluginCatchLog(const char* msg) noexcept {
-    agentxx::plugin_guard::defaultLogTo(g_host, g_if.log, 4, "example_resources", msg);
-}
+    auto logger() const noexcept {
+        return [this](const char* msg) noexcept { logErr(msg ? msg : ""); };
+    }
+    void logErr(const std::string& msg) const {
+        if (host && iface.log && iface.log->log) {
+            iface.log->log(host, 4, agentxx_plugin_sv(msg.data(), msg.size()));
+        }
+    }
+};
 
 /// 从 get_own_info JSON 中提取字段值 (host->alloc, 用完 free)
-static std::string ownInfoString(const AgentxxHost* host, const char* key) {
-    if (!g_if.plugins || !g_if.plugins->get_own_info || !g_if.json
-        || !g_if.json->json_get_string) {
+static std::string
+    ownInfoString(const AgentxxHost* host, const agentxx::plugin::AgentIfaces& iface,
+                  const char* key) {
+    if (!iface.plugins || !iface.plugins->get_own_info || !iface.json
+        || !iface.json->json_get_string) {
         return {};
     }
-    char* info = g_if.plugins->get_own_info(host);
+    char* info = iface.plugins->get_own_info(host);
     if (!info) {
         return {};
     }
     std::string out;
-    char* val = g_if.json->json_get_string(
+    char* val = iface.json->json_get_string(
         host,
         agentxx_plugin_sv_cstr(info),
         agentxx_plugin_sv_cstr(key)
@@ -70,9 +80,9 @@ static std::string dirOf(const std::string& path) {
 }
 
 extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_get_info(void) {
-    // C ABI 边界异常守卫: 异常返回 NULL (宿主按"未导出"处理)
+    // C ABI 边界异常守卫: 异常返回 NULL; 本边界为纯静态元数据 → 空操作日志
     return agentxx::plugin_guard::guardCall(
-        pluginCatchLog,
+        [](const char*) noexcept {},
         nullptr,
         [&]() -> const AgentxxPluginInfo* {
         static const AgentxxPluginInfo info{
@@ -86,36 +96,43 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_get_inf
     });
 }
 
-extern "C" AGENTXX_PLUGIN_EXPORT int agentxx_plugin_entry(const AgentxxHost* host, void** plugin_ctx) {
-    // C ABI 边界异常守卫: 异常返回 -1 (加载失败)
+extern "C" AGENTXX_PLUGIN_EXPORT int agentxx_plugin_create(const AgentxxHost* host, void** plugin_ctx) {
+    // C ABI 边界异常守卫: 异常返回 -1 (创建失败); 日志闭包捕获局部裸指针
+    auto ctx   = std::make_unique<ResCtx>();
+    ResCtx* raw = nullptr;
     return agentxx::plugin_guard::guardCall(
-        pluginCatchLog,
+        [&raw](const char* m) noexcept { if (raw) raw->logErr(m); },
         -1,
         [&]() -> int {
-        (void)plugin_ctx;
-        g_host = host;
-        // COM 风格接口表查询 (entry 一次性查询缓存; 进程级静态数据, 长期有效)
-        static const agentxx::plugin::AgentIfaces s_if = agentxx::plugin::AgentIfaces::query(host);
-        g_if = s_if;
+        if (!host || !host->vtable || !plugin_ctx) {
+            return -1;
+        }
+        ctx->host  = host;
+        // COM 风格接口表查询 (存入本实例上下文; 原函数级 static 缓存多实例不安全)
+        ctx->iface = agentxx::plugin::AgentIfaces::query(host);
+        raw        = ctx.get();
+        const auto& g_if = ctx->iface;
 
-        auto base = dirOf(ownInfoString(host, "path"));
+        auto base = dirOf(ownInfoString(host, ctx->iface, "path"));
 
         // ---- 运行时注册: 追加 skill 目录 (声明式段见 plugin.yaml) ----
         // - 与 yaml 主配置或其他插件冲突时返回非 0 (yaml 优先, 此处仅告警不失败)
-        if (g_if.resources && g_if.resources->register_skill_dir && g_if.log && g_if.log->log) {
+        if (ctx->iface.resources && ctx->iface.resources->register_skill_dir && ctx->iface.log
+            && ctx->iface.log->log) {
             std::string runtimeSkillDir = base + "/skills_runtime";
-            if (g_if.resources->register_skill_dir(
+            if (ctx->iface.resources->register_skill_dir(
                     host,
                     agentxx_plugin_sv(runtimeSkillDir.data(), runtimeSkillDir.size())
                 )
                 != 0) {
-                g_if.log->log(host,
-                              3,
-                              AGENTXX_SV("[example_resources] register runtime skill dir failed"));
+                ctx->iface.log->log(host,
+                                    3,
+                                    AGENTXX_SV("[example_resources] register runtime skill dir failed"));
             } else {
-                g_if.log->log(host,
-                              2,
-                              AGENTXX_SV("[example_resources] runtime skill dir registered: skills_runtime/"));
+                ctx->iface.log->log(
+                    host,
+                    2,
+                    AGENTXX_SV("[example_resources] runtime skill dir registered: skills_runtime/"));
             }
         }
 
@@ -128,32 +145,39 @@ extern "C" AGENTXX_PLUGIN_EXPORT int agentxx_plugin_entry(const AgentxxHost* hos
     });
 }
 
-extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_unload(void* plugin_ctx) {
-    // C ABI 边界异常守卫: 卸载回调异常不得外泄
-    agentxx::plugin_guard::guardCallVoid(pluginCatchLog, [&] {
-        (void)plugin_ctx;
-        // 宿主 detachAll 已自动摘除本插件的全部资源 (skill/memory/mcp),
-        // 此处显式反注册仅为 SDK 惯例示范 (幂等, 失败无副作用)
-        if (!g_host || !g_if.plugins || !g_if.resources || !g_if.json) {
+extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_destroy(void* plugin_ctx) {
+    // C ABI 边界异常守卫: 销毁回调异常不得外泄
+    auto* ctx = static_cast<ResCtx*>(plugin_ctx);
+    agentxx::plugin_guard::guardCallVoid(
+        [ctx](const char* m) noexcept { if (ctx) ctx->logErr(m); },
+        [&] {
+        if (!ctx || !ctx->host || !ctx->iface.plugins || !ctx->iface.resources
+            || !ctx->iface.json) {
+            delete ctx;
             return;
         }
-        char* info = g_if.plugins->get_own_info(g_host);
+        const AgentxxHost* host = ctx->host;
+        const auto&        iface = ctx->iface;
+        // 宿主 detachAll 已自动摘除本插件的全部资源 (skill/memory/mcp),
+        // 此处显式反注册仅为 SDK 惯例示范 (幂等, 失败无副作用)
+        char* info = iface.plugins->get_own_info(host);
         if (info) {
-            char* p = g_if.json->json_get_string(
-                g_host,
+            char* p = iface.json->json_get_string(
+                host,
                 agentxx_plugin_sv_cstr(info),
                 agentxx_plugin_sv_cstr("path")
             );
             if (p) {
                 std::string libPath = p;
-                g_host->vtable->free(p);
+                host->vtable->free(p);
                 auto        pos = libPath.find_last_of("/\\");
                 std::string base = pos == std::string::npos ? "." : libPath.substr(0, pos);
                 std::string d    = base + "/skills_runtime";
-                g_if.resources->unregister_skill_dir(g_host, agentxx_plugin_sv(d.data(), d.size()));
+                iface.resources->unregister_skill_dir(host,
+                                                      agentxx_plugin_sv(d.data(), d.size()));
             }
-            g_host->vtable->free(info);
+            host->vtable->free(info);
         }
-        g_host = nullptr;
-    });
+        delete ctx;
+        });
 }

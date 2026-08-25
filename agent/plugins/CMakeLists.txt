@@ -120,8 +120,8 @@ if (NOT WIN32)
     # macOS: -exported_symbols_list (符号表带 _ 前缀)
     set(_AGENTXX_EXPORT_SYMS_FILE "${CMAKE_CURRENT_BINARY_DIR}/plugin_exported_symbols.txt")
     file(WRITE "${_AGENTXX_EXPORT_SYMS_FILE}" "\n")
-    foreach(_sym agentxx_plugin_get_info agentxx_plugin_entry agentxx_plugin_unload
-                 agentxx_client_get_info agentxx_client_entry agentxx_client_unload)
+    foreach(_sym agentxx_plugin_get_info agentxx_plugin_create agentxx_plugin_destroy
+                 agentxx_client_get_info agentxx_client_create agentxx_client_destroy)
       file(APPEND "${_AGENTXX_EXPORT_SYMS_FILE}" "_${_sym}\n")
     endforeach()
     add_link_options("-Wl,-exported_symbols_list,${_AGENTXX_EXPORT_SYMS_FILE}")

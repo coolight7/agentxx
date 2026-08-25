@@ -32,11 +32,12 @@ std::string argDesc(const ToolPromptText& p, const char* key, const char* fallba
     return fallback;
 }
 
-/// 注册常规工具 (schema/描述存储于插件侧静态区; spec 字符串字段以
+/// 注册常规工具 (schema/描述存储于本实例 ctx->storage; spec 字符串字段以
 /// string_view 传入, 宿主注册时拷贝); execute 由调用方提供 (静态函数, 无捕获)
 /// - 统一异步操作模型: 经阻塞委托垫片注册 (offload 池线程执行, io 线程
 ///   只等完成通知); execute 签名追加 cancel_flag 形参 (本插件忽略)
 void registerTool(
+    PluginCtx*         ctx,
     const char*        name,
     const char*        defaultDepict,
     const std::string& schema,
@@ -50,30 +51,38 @@ void registerTool(
     ),
     int flags = 0
 ) {
-    static std::vector<std::string> g_storage;
-    std::string                     depict = readToolPrompt(name).depict;
+    auto&       storage = ctx->storage;
+    std::string depict  = readToolPrompt(ctx->host, ctx->iface, name).depict;
     if (depict.empty()) {
         depict = defaultDepict;
     }
-    g_storage.push_back(std::move(depict));
-    g_storage.push_back(schema);
+    storage.push_back(std::move(depict));
+    storage.push_back(schema);
+
+    // 垫片适配器: 实例内嵌存储 (ctx 持有, 随实例销毁释放; 多实例契约)
+    auto shim = std::make_unique<AgentxxSyncToolShim>();
 
     AgentxxSyncToolSpec spec{};
     spec.name        = agentxx_plugin_sv(name, std::strlen(name));
     spec.description = agentxx_plugin_sv(
-        g_storage[g_storage.size() - 2].data(),
-        g_storage[g_storage.size() - 2].size()
+        storage[storage.size() - 2].data(),
+        storage[storage.size() - 2].size()
     );
-    spec.parameters_json = agentxx_plugin_sv(g_storage.back().data(), g_storage.back().size());
-    spec.user_data       = nullptr;
+    spec.parameters_json = agentxx_plugin_sv(storage.back().data(), storage.back().size());
+    spec.user_data       = ctx; ///< 回调经 user_data 恢复本实例上下文
     spec.flags           = flags;
     spec.execute         = execute;
-    if (agentxx_register_sync_tool(g_host, &spec) != 0) {
-        XX_LOGW("agentxx_string: register tool {} failed", name);
+    // 注意: 本文件先于本注释包含了 string_impl.h (其引入 util/log.h 重定义
+    // XX_LOG* 宏为库版签名), 故此处直接调用 pluginLog, 不经 XX_LOGW 宏
+    if (agentxx_register_sync_tool(ctx->host, &spec, shim.get()) != 0) {
+        pluginLog(ctx, 3, fmt::format("agentxx_string: register tool {} failed", name));
+        return;
     }
+    ctx->sync_tool_shims.push_back(std::move(shim));
 }
 
-/// C ABI execute 包装: 解析参数 JSON → 调用实现 → 结果 strdup (异常不外泄)
+/// C ABI execute 包装: 解析参数 JSON → 调用实现 → 结果 strdup (异常不外泄);
+/// user_data 即本实例 PluginCtx (多实例安全: 结果分配走本实例宿主堆)
 template<auto ExecFn>
 char* wrapExecute(
     void*                   user_data,
@@ -83,24 +92,24 @@ char* wrapExecute(
     volatile int*           cancel_flag,
     char**                  error_out
 ) {
-    (void)user_data;
     (void)thread_id;
     (void)tool_call_id;
     (void)cancel_flag;
+    auto* ctx = static_cast<PluginCtx*>(user_data);
     try {
         std::string argsStr(args_json.data ? args_json.data : "", args_json.size);
         auto        arguments = argsStr.empty() ? neograph::json::object()
                                                 : neograph::json::parse(argsStr);
         auto result = ExecFn(arguments);
-        return pluginStrdup(result.c_str());
+        return pluginStrdup(ctx ? ctx->host : nullptr, result.c_str());
     } catch (const std::exception& ex) {
         if (error_out) {
-            *error_out = pluginStrdup(ex.what());
+            *error_out = pluginStrdup(ctx ? ctx->host : nullptr, ex.what());
         }
         return nullptr;
     } catch (...) {
         if (error_out) {
-            *error_out = pluginStrdup("unknown exception");
+            *error_out = pluginStrdup(ctx ? ctx->host : nullptr, "unknown exception");
         }
         return nullptr;
     }
@@ -109,9 +118,10 @@ char* wrapExecute(
 } // namespace
 
 extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_get_info(void) {
-    // C ABI 边界异常守卫: 异常返回 NULL (宿主按"未导出"处理)
+    // C ABI 边界异常守卫: 异常返回 NULL (宿主按"未导出"处理);
+    // 本边界为纯静态元数据, 无实例上下文可捕获 → 空操作日志闭包
     return agentxx::plugin_guard::guardCall(
-        pluginCatchLog,
+        [](const char*) noexcept {},
         nullptr,
         [&]() -> const AgentxxPluginInfo* {
         static const AgentxxPluginInfo info{
@@ -124,22 +134,26 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_get_inf
     });
 }
 
-extern "C" AGENTXX_PLUGIN_EXPORT int agentxx_plugin_entry(const AgentxxHost* host, void** plugin_ctx) {
-    // C ABI 边界异常守卫: entry 内含 JSON schema 构建等可抛操作, 异常返回 -1
+extern "C" AGENTXX_PLUGIN_EXPORT int agentxx_plugin_create(const AgentxxHost* host, void** plugin_ctx) {
+    // C ABI 边界异常守卫: create 内含 JSON schema 构建等可抛操作, 异常返回 -1;
+    // 守卫日志闭包捕获局部裸指针 (ctx 装配前置空 → 异常路径静默丢弃)
+    PluginCtx* raw = nullptr;
     return agentxx::plugin_guard::guardCall(
-        pluginCatchLog,
+        [&raw](const char* msg) noexcept { pluginLog(raw, 4, msg ? msg : ""); },
         -1,
         [&]() -> int {
         if (!host || !host->vtable || !plugin_ctx) {
             return -1;
         }
-        g_host = host;
-        g_if   = agentxx::plugin::AgentIfaces::query(host);
-        *plugin_ctx = nullptr;
+        // 每实例上下文 (多实例安全): 成功经 *plugin_ctx 交付宿主, destroy 释放
+        auto ctx   = std::make_unique<PluginCtx>();
+        ctx->host  = host;
+        ctx->iface = agentxx::plugin::AgentIfaces::query(host);
+        raw        = ctx.get();
 
         // ---- agentxx_string_html_to_markdown ----
         {
-            ToolPromptText p = readToolPrompt(kNameHtml2Md);
+            ToolPromptText p   = readToolPrompt(ctx->host, ctx->iface, kNameHtml2Md);
             std::string schema = neograph::json{
                 {"type", "object"},
                 {"properties",
@@ -154,6 +168,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int agentxx_plugin_entry(const AgentxxHost* hos
             }
                                   .dump();
             registerTool(
+                ctx.get(),
                 kNameHtml2Md,
                 kDepictHtml2Md,
                 schema,
@@ -164,7 +179,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int agentxx_plugin_entry(const AgentxxHost* hos
 
         // ---- agentxx_string_regexp ----
         {
-            ToolPromptText p   = readToolPrompt(kNameRegexp);
+            ToolPromptText p   = readToolPrompt(ctx->host, ctx->iface, kNameRegexp);
             std::string schema = neograph::json{
                 {"type", "object"},
                 {"properties",
@@ -205,6 +220,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int agentxx_plugin_entry(const AgentxxHost* hos
             }
                                   .dump();
             registerTool(
+                ctx.get(),
                 kNameRegexp,
                 kDepictRegexp,
                 schema,
@@ -213,15 +229,15 @@ extern "C" AGENTXX_PLUGIN_EXPORT int agentxx_plugin_entry(const AgentxxHost* hos
             );
         }
 
+        *plugin_ctx = ctx.release(); ///< 所有权移交宿主 (destroy 时取回归还)
         return 0;
     });
 }
 
-extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_unload(void* plugin_ctx) {
-    // C ABI 边界异常守卫: 卸载回调异常不得外泄
-    agentxx::plugin_guard::guardCallVoid(pluginCatchLog, [&] {
-        (void)plugin_ctx;
-        g_host = nullptr;
-        g_if   = {};
-    });
+extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_destroy(void* plugin_ctx) {
+    // C ABI 边界异常守卫: 销毁回调异常不得外泄
+    auto* ctx = static_cast<PluginCtx*>(plugin_ctx);
+    agentxx::plugin_guard::guardCallVoid(
+        [ctx](const char* msg) noexcept { pluginLog(ctx, 4, msg ? msg : ""); },
+        [&] { delete ctx; }); // 垫片适配器为 ctx 内嵌存储, 随 ctx 一并释放
 }

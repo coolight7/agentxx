@@ -49,10 +49,11 @@ std::string timeoutDesc(int def) {
     return fmt::format(fmt::runtime(kTimeoutDesc), def);
 }
 
-/// 注册常规工具 (schema/描述存储于插件侧静态区; 宿主注册时拷贝)
+/// 注册常规工具 (schema/描述存储于本实例 ctx->storage; 宿主注册时拷贝)
 /// - 统一异步操作模型: 经阻塞委托垫片注册 (offload 池线程执行, io 线程
 ///   只等完成通知); execute 签名追加 cancel_flag 形参 (本插件忽略)
 void registerTool(
+    PluginCtx*         ctx,
     const char*        name,
     const char*        defaultDepict,
     const std::string& schema,
@@ -66,26 +67,81 @@ void registerTool(
     ),
     int flags = 0
 ) {
-    static std::vector<std::string> g_storage;
-    std::string                     depict = readToolPrompt(name).depict;
+    auto&       storage = ctx->storage;
+    std::string depict  = readToolPrompt(ctx->host, ctx->iface, name).depict;
     if (depict.empty()) {
         depict = defaultDepict;
     }
-    g_storage.push_back(std::move(depict));
-    g_storage.push_back(schema);
+    storage.push_back(std::move(depict));
+    storage.push_back(schema);
+
+    // 垫片适配器: 实例内嵌存储 (ctx 持有, 随实例销毁释放; 多实例契约)
+    auto shim = std::make_unique<AgentxxSyncToolShim>();
 
     AgentxxSyncToolSpec spec{};
     spec.name        = agentxx_plugin_sv(name, std::strlen(name));
     spec.description = agentxx_plugin_sv(
-        g_storage[g_storage.size() - 2].data(),
-        g_storage[g_storage.size() - 2].size()
+        storage[storage.size() - 2].data(),
+        storage[storage.size() - 2].size()
     );
-    spec.parameters_json = agentxx_plugin_sv(g_storage.back().data(), g_storage.back().size());
-    spec.user_data       = nullptr;
+    spec.parameters_json = agentxx_plugin_sv(storage.back().data(), storage.back().size());
+    spec.user_data       = ctx; ///< 回调经 user_data 恢复本实例上下文
     spec.flags           = flags;
     spec.execute         = execute;
-    if (agentxx_register_sync_tool(g_host, &spec) != 0) {
-        XX_LOGW("agentxx_websearch: register tool {} failed", name);
+    // 注意: 本文件先包含了 websearch_impl.h (其引入 util/log.h 重定义
+    // XX_LOG* 宏为库版签名), 故此处直接调用 pluginLog, 不经 XX_LOGW 宏
+    if (agentxx_register_sync_tool(ctx->host, &spec, shim.get()) != 0) {
+        pluginLog(ctx, 3, fmt::format("agentxx_websearch: register tool {} failed", name));
+        return;
+    }
+    ctx->sync_tool_shims.push_back(std::move(shim));
+}
+
+/// agentxx_web_search 执行 (C ABI 静态函数): 配置取自 user_data 恢复的
+/// 本实例 PluginCtx (多实例契约 —— 各实例持有各自配置)
+static char* searchExecute(
+    void*                   user_data,
+    AgentxxPluginStringView args_json,
+    AgentxxPluginStringView thread_id,
+    AgentxxPluginStringView tool_call_id,
+    volatile int*           cancel_flag,
+    char**                  error_out
+) {
+    auto*              ctx  = static_cast<PluginCtx*>(user_data);
+    const AgentxxHost* host = ctx ? ctx->host : nullptr;
+    (void)thread_id;
+    (void)tool_call_id;
+    (void)cancel_flag;
+    try {
+        std::string argsStr(args_json.data ? args_json.data : "", args_json.size);
+        auto arguments
+            = argsStr.empty() ? neograph::json::object() : neograph::json::parse(argsStr);
+        std::string result;
+        if (ctx && ctx->use_model_search) {
+            agentxx_websearch_plugin::ModelSearchConfig mc;
+            mc.baseUrl                 = ctx->model_cfg.baseUrl;
+            mc.apiKey                  = ctx->model_cfg.apiKey;
+            mc.modelName               = ctx->model_cfg.modelName;
+            mc.readChunkTimeoutSeconds = ctx->model_cfg.readChunkTimeoutSeconds;
+            result = agentxx_websearch_plugin::modelWebSearchExecute(arguments, mc);
+        } else {
+            result = agentxx_websearch_plugin::webSearchExecute(
+                arguments,
+                ctx ? ctx->search_api_url : std::string{},
+                ctx ? ctx->convert_html2markdown : true
+            );
+        }
+        return pluginStrdup(host, result.c_str());
+    } catch (const std::exception& ex) {
+        if (error_out) {
+            *error_out = pluginStrdup(host, ex.what());
+        }
+        return nullptr;
+    } catch (...) {
+        if (error_out) {
+            *error_out = pluginStrdup(host, "unknown exception");
+        }
+        return nullptr;
     }
 }
 
@@ -99,23 +155,24 @@ char* wrapExecute(
     volatile int*           cancel_flag,
     char**                  error_out
 ) {
-    (void)user_data;
+    auto* ctx = static_cast<PluginCtx*>(user_data);
     (void)thread_id;
     (void)tool_call_id;
     (void)cancel_flag;
+    const AgentxxHost* host = ctx ? ctx->host : nullptr;
     try {
         std::string argsStr(args_json.data ? args_json.data : "", args_json.size);
         auto arguments = argsStr.empty() ? neograph::json::object() : neograph::json::parse(argsStr);
         auto result    = ExecFn(arguments);
-        return pluginStrdup(result.c_str());
+        return pluginStrdup(host, result.c_str());
     } catch (const std::exception& ex) {
         if (error_out) {
-            *error_out = pluginStrdup(ex.what());
+            *error_out = pluginStrdup(host, ex.what());
         }
         return nullptr;
     } catch (...) {
         if (error_out) {
-            *error_out = pluginStrdup("unknown exception");
+            *error_out = pluginStrdup(host, "unknown exception");
         }
         return nullptr;
     }
@@ -124,9 +181,10 @@ char* wrapExecute(
 } // namespace
 
 extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_get_info(void) {
-    // C ABI 边界异常守卫: 异常返回 NULL (宿主按"未导出"处理)
+    // C ABI 边界异常守卫: 异常返回 NULL (宿主按"未导出"处理);
+    // 本边界为纯静态元数据, 无实例上下文可捕获 → 空操作日志闭包
     return agentxx::plugin_guard::guardCall(
-        pluginCatchLog,
+        [](const char*) noexcept {},
         nullptr,
         [&]() -> const AgentxxPluginInfo* {
         static const AgentxxPluginInfo info{
@@ -140,22 +198,25 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_get_inf
 }
 
 extern "C" AGENTXX_PLUGIN_EXPORT int
-    agentxx_plugin_entry(const AgentxxHost* host, void** plugin_ctx) {
-    // C ABI 边界异常守卫: entry 内含 JSON schema 构建等可抛操作, 异常返回 -1
+    agentxx_plugin_create(const AgentxxHost* host, void** plugin_ctx) {
+    // C ABI 边界异常守卫: create 内含 JSON schema 构建等可抛操作, 异常返回 -1;
+    // 守卫日志闭包捕获局部裸指针 (ctx 装配前置空 → 异常路径静默丢弃)
+    PluginCtx* raw = nullptr;
     return agentxx::plugin_guard::guardCall(
-        pluginCatchLog,
+        [&raw](const char* msg) noexcept { pluginLog(raw, 4, msg ? msg : ""); },
         -1,
         [&]() -> int {
         if (!host || !host->vtable || !plugin_ctx) {
             return -1;
         }
-        g_host      = host;
-        g_if        = agentxx::plugin::AgentIfaces::query(host);
-        *plugin_ctx = nullptr;
+        auto ctx   = std::make_unique<PluginCtx>();
+        ctx->host  = host;
+        ctx->iface = agentxx::plugin::AgentIfaces::query(host);
+        raw        = ctx.get();
 
         // ---- agentxx_web_fetch ----
         {
-            ToolPromptText p      = readToolPrompt(kNameFetch);
+            ToolPromptText p      = readToolPrompt(ctx->host, ctx->iface, kNameFetch);
             std::string    schema = neograph::json{
                 {"type", "object"},
                 {"properties",
@@ -179,12 +240,12 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                 {"required", neograph::json::array({"url"})},
             }
                                   .dump();
-            registerTool(kNameFetch, kDepictFetch, schema, &wrapExecute<agentxx_websearch_plugin::webFetchExecute>, AGENTXX_TOOL_FLAG_AUTO_SUMMARY);
+            registerTool(ctx.get(), kNameFetch, kDepictFetch, schema, &wrapExecute<agentxx_websearch_plugin::webFetchExecute>, AGENTXX_TOOL_FLAG_AUTO_SUMMARY);
         }
 
         // ---- agentxx_web_fetch_markdown ----
         {
-            ToolPromptText p      = readToolPrompt(kNameFetchMd);
+            ToolPromptText p      = readToolPrompt(ctx->host, ctx->iface, kNameFetchMd);
             std::string    schema = neograph::json{
                 {"type", "object"},
                 {"properties",
@@ -222,6 +283,7 @@ When resolving relative links found in the returned Markdown, combine them with 
             }
                                   .dump();
             registerTool(
+                ctx.get(),
                 kNameFetchMd,
                 kDepictFetchMd,
                 schema,
@@ -231,15 +293,16 @@ When resolving relative links found in the returned Markdown, combine them with 
         }
 
         // ---- agentxx_web_search (配置驱动; 与原 lib 行为一致) ----
-        // 从宿主 agentxx.agent.model 接口表读取搜索配置 (yaml 同名字段)
-        if (g_if.model && g_if.model->get_config) {
-            char*         json = g_if.model->get_config(g_host);
-            std::string   cfgJson;
+        // 从宿主 agentxx.agent.model 接口表读取搜索配置 (yaml 同名字段);
+        // 配置存入本实例 ctx (原函数级 static 在多实例下会串配置 —— bug 已修)
+        if (ctx->iface.model && ctx->iface.model->get_config) {
+            char*          json   = ctx->iface.model->get_config(ctx->host);
+            std::string    cfgJson;
             neograph::json cfg;
-            bool          hasCfg = false;
+            bool           hasCfg = false;
             if (json) {
                 cfgJson = json;
-                g_host->vtable->free(json);
+                ctx->host->vtable->free(json);
                 try {
                     cfg    = neograph::json::parse(cfgJson);
                     hasCfg = true;
@@ -248,29 +311,28 @@ When resolving relative links found in the returned Markdown, combine them with 
                 }
             }
 
-            // 静态上下文: 搜索方式与参数 (entry 时装配, execute 回调只读)
-            static std::string     g_searchApiUrl;
-            static bool            g_convertHtml2markdown = true;
-            static agentxx_websearch_plugin::ModelSearchConfig g_modelCfg;
-            static bool            g_useModelSearch = false;
+            auto& searchApiUrl        = ctx->search_api_url;
+            auto& convertHtml2markdown = ctx->convert_html2markdown;
+            auto& modelCfg            = ctx->model_cfg;
+            auto& useModelSearch       = ctx->use_model_search;
 
             if (hasCfg) {
                 if (cfg.contains("websearchModel") && cfg["websearchModel"].is_object()) {
                     // 模型搜索优先 (与原 lib 判断顺序一致)
                     const auto& w = cfg["websearchModel"];
-                    g_modelCfg.baseUrl = w.value("baseUrl", std::string{});
-                    g_modelCfg.apiKey  = w.value("apiKey", std::string{"EMPTY"});
-                    g_modelCfg.modelName = w.value("modelName", std::string{"Agentxx"});
-                    g_useModelSearch    = true;
+                    modelCfg.baseUrl = w.value("baseUrl", std::string{});
+                    modelCfg.apiKey  = w.value("apiKey", std::string{"EMPTY"});
+                    modelCfg.modelName = w.value("modelName", std::string{"Agentxx"});
+                    useModelSearch     = true;
                 } else if (cfg.contains("websearchApiUrl") && cfg["websearchApiUrl"].is_string()
                            && false == cfg["websearchApiUrl"].get<std::string>().empty()) {
-                    g_searchApiUrl        = cfg["websearchApiUrl"].get<std::string>();
-                    g_convertHtml2markdown = cfg.value("websearchConvertHtml2markdown", true);
+                    searchApiUrl          = cfg["websearchApiUrl"].get<std::string>();
+                    convertHtml2markdown  = cfg.value("websearchConvertHtml2markdown", true);
                 }
             }
 
-            if (g_useModelSearch || false == g_searchApiUrl.empty()) {
-                ToolPromptText p      = readToolPrompt(kNameSearch);
+            if (useModelSearch || false == searchApiUrl.empty()) {
+                ToolPromptText p      = readToolPrompt(ctx->host, ctx->iface, kNameSearch);
                 std::string    schema = neograph::json{
                     {"type", "object"},
                     {"properties",
@@ -295,68 +357,30 @@ When resolving relative links found in the returned Markdown, combine them with 
                 }
                                       .dump();
 
-                static const auto execSearch
-                    = [](void*                   user_data,
-                         AgentxxPluginStringView args_json,
-                         AgentxxPluginStringView thread_id,
-                         AgentxxPluginStringView tool_call_id,
-                         volatile int*           cancel_flag,
-                         char**                  error_out) -> char* {
-                    (void)user_data;
-                    (void)thread_id;
-                    (void)tool_call_id;
-                    (void)cancel_flag;
-                    try {
-                        std::string argsStr(args_json.data ? args_json.data : "", args_json.size);
-                        auto arguments
-                            = argsStr.empty() ? neograph::json::object() : neograph::json::parse(argsStr);
-                        std::string result;
-                        if (g_useModelSearch) {
-                            result = agentxx_websearch_plugin::modelWebSearchExecute(
-                                arguments,
-                                g_modelCfg
-                            );
-                        } else {
-                            result = agentxx_websearch_plugin::webSearchExecute(
-                                arguments,
-                                g_searchApiUrl,
-                                g_convertHtml2markdown
-                            );
-                        }
-                        return pluginStrdup(result.c_str());
-                    } catch (const std::exception& ex) {
-                        if (error_out) {
-                            *error_out = pluginStrdup(ex.what());
-                        }
-                        return nullptr;
-                    } catch (...) {
-                        if (error_out) {
-                            *error_out = pluginStrdup("unknown exception");
-                        }
-                        return nullptr;
-                    }
-                };
-
-                registerTool(kNameSearch, kDepictSearch, schema, execSearch, AGENTXX_TOOL_FLAG_AUTO_SUMMARY);
+                registerTool(ctx.get(), kNameSearch, kDepictSearch, schema, &searchExecute, AGENTXX_TOOL_FLAG_AUTO_SUMMARY);
             } else {
-                XX_LOGI(
+                pluginLog(
+                    ctx.get(),
+                    2,
                     "agentxx_websearch: no websearch config (websearch_api_url / websearch_model), "
                     "`agentxx_web_search` not registered"
                 );
             }
         } else {
-            XX_LOGW("agentxx_websearch: host model iface unavailable, `agentxx_web_search` not registered");
+            pluginLog(ctx.get(),
+                      3,
+                      "agentxx_websearch: host model iface unavailable, `agentxx_web_search` not registered");
         }
 
+        *plugin_ctx = ctx.release(); ///< 所有权移交宿主 (destroy 时取回归还)
         return 0;
     });
 }
 
-extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_unload(void* plugin_ctx) {
-    // C ABI 边界异常守卫: 卸载回调异常不得外泄
-    agentxx::plugin_guard::guardCallVoid(pluginCatchLog, [&] {
-        (void)plugin_ctx;
-        g_host = nullptr;
-        g_if   = {};
-    });
+extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_destroy(void* plugin_ctx) {
+    // C ABI 边界异常守卫: 销毁回调异常不得外泄
+    auto* ctx = static_cast<PluginCtx*>(plugin_ctx);
+    agentxx::plugin_guard::guardCallVoid(
+        [ctx](const char* msg) noexcept { pluginLog(ctx, 4, msg ? msg : ""); },
+        [&] { delete ctx; }); // 垫片适配器为 ctx 内嵌存储, 随 ctx 一并释放
 }

@@ -23,23 +23,43 @@ std::string uiControlExecute(agentxx_computer_use_plugin::SimpleJson& arguments)
 namespace agentxx_computer_use_plugin {
 
 // =====================================================================
+// 每实例上下文 (多实例契约: 原进程级 static 存储/取消标志全部移入)
+// =====================================================================
+
+/// 注册工具执行闭包条目 (经 user_data 传递; unique_ptr 保证地址稳定;
+/// 实例生命周期内有效)
+struct ToolEntry {
+    const AgentxxHost*                      host = nullptr;
+    std::function<std::string(SimpleJson&)> fn;
+};
+
+struct PluginCtx {
+    const AgentxxHost*           host  = nullptr;
+    agentxx::plugin::AgentIfaces iface {};
+    /// spec 字符串稳定存储 + 工具闭包条目 + 垫片适配器 (随实例销毁释放;
+    /// 原 static 容器在多实例下互相串状态且只增不减 —— 已修)
+    std::vector<std::string> storage;
+    std::vector<std::unique_ptr<ToolEntry>> tool_entries;
+    std::vector<std::unique_ptr<AgentxxSyncToolShim>> sync_tool_shims;
+};
+
+// =====================================================================
 // 工具注册辅助
 // =====================================================================
 
-/// 读取宿主 toolPrompt 的 depict; 未配置返回空
-static std::string readToolDepict(const std::string& toolName) {
-    if (!g_host || !g_if.config || !g_if.config->get_tool_prompt) {
+static std::string readToolDepict(const PluginCtx& ctx, const std::string& toolName) {
+    if (!ctx.host || !ctx.iface.config || !ctx.iface.config->get_tool_prompt) {
         return {};
     }
-    char* json = g_if.config->get_tool_prompt(
-        g_host,
+    char* json = ctx.iface.config->get_tool_prompt(
+        ctx.host,
         agentxx_plugin_sv(toolName.data(), toolName.size())
     );
     if (!json) {
         return {};
     }
     std::string s{json};
-    g_host->vtable->free(json);
+    ctx.host->vtable->free(json);
     SimpleJson j(s);
     if (!j.ok()) {
         return {};
@@ -49,42 +69,38 @@ static std::string readToolDepict(const std::string& toolName) {
     return depict;
 }
 
-/// 注册工具 (schema/描述存储于插件侧静态区)
-/// - 静态存储: spec.execute 为静态 lambda (无捕获), fn 存于静态区
-///   (unique_ptr 保证地址稳定), 经 user_data 传递; 插件生命周期内有效
-/// - 字符串字段以 string_view 传入 (宿主注册时拷贝, 插件侧静态区存 std::string)
-struct ToolEntry {
-    std::function<std::string(SimpleJson&)> fn;
-};
-
 static void registerTool(
+    PluginCtx&                              ctx,
     const char*                             name,
     const char*                             defaultDepict,
     const std::string&                      schema,
     std::function<std::string(SimpleJson&)> fn,
     int                                     flags = 0
 ) {
-    static std::vector<std::string> g_storage;
-    std::string                     depict = readToolDepict(name);
+    std::string depict = readToolDepict(ctx, name);
     if (depict.empty()) {
         depict = defaultDepict;
     }
-    g_storage.push_back(std::move(depict));
-    g_storage.push_back(schema);
+    ctx.storage.push_back(std::move(depict));
+    ctx.storage.push_back(schema);
 
-    static std::vector<std::unique_ptr<ToolEntry>> g_entries;
-    auto                                           entry = std::make_unique<ToolEntry>();
-    entry->fn                                            = std::move(fn);
-    auto* entryPtr                                       = entry.get();
-    g_entries.push_back(std::move(entry));
+    auto  entry    = std::make_unique<ToolEntry>();
+    entry->host    = ctx.host;
+    entry->fn      = std::move(fn);
+    auto* entryPtr = entry.get();
+    ctx.tool_entries.push_back(std::move(entry));
+
+    // 垫片适配器: 实例内嵌存储 (随实例销毁释放; 多实例契约)
+    ctx.sync_tool_shims.push_back(std::make_unique<AgentxxSyncToolShim>());
+    auto* shim = ctx.sync_tool_shims.back().get();
 
     AgentxxSyncToolSpec spec{};
     spec.name        = agentxx_plugin_sv(name, std::strlen(name));
     spec.description = agentxx_plugin_sv(
-        g_storage[g_storage.size() - 2].data(),
-        g_storage[g_storage.size() - 2].size()
+        ctx.storage[ctx.storage.size() - 2].data(),
+        ctx.storage[ctx.storage.size() - 2].size()
     );
-    spec.parameters_json = agentxx_plugin_sv(g_storage.back().data(), g_storage.back().size());
+    spec.parameters_json = agentxx_plugin_sv(ctx.storage.back().data(), ctx.storage.back().size());
     spec.user_data       = entryPtr;
     spec.flags           = flags;
     // 阻塞委托型: 键鼠注入序列执行为慢同步操作 (offload 池线程)
@@ -101,21 +117,22 @@ static void registerTool(
             if (!args.ok()) {
                 throw std::runtime_error("invalid args json");
             }
-            return pluginStrdup(e->fn(args).c_str());
+            return pluginStrdup(e->host, e->fn(args).c_str());
         } catch (const std::exception& ex) {
             if (err) {
-                *err = pluginStrdup(ex.what());
+                *err = pluginStrdup(e->host, ex.what());
             }
             return nullptr;
         } catch (...) {
             if (err) {
-                *err = pluginStrdup("unknown exception");
+                *err = pluginStrdup(e->host, "unknown exception");
             }
             return nullptr;
         }
     };
-    if (agentxx_register_sync_tool(g_host, &spec) != 0) {
-        pluginLog(3, fmt::format("agentxx_computer_use: register tool {} failed", name));
+    if (agentxx_register_sync_tool(ctx.host, &spec, shim) != 0) {
+        pluginLog(ctx.host, ctx.iface.log, 3,
+                  fmt::format("agentxx_computer_use: register tool {} failed", name));
     }
 }
 
@@ -244,8 +261,9 @@ static std::string uiControlSchema() {
     return schema.dump();
 }
 
-static void registerUiControlTool() {
+static void registerUiControlTool(PluginCtx& ctx) {
     registerTool(
+        ctx,
         "agentxx_ui_control_keyboard_mouse",
         kUiControlDefaultDepict,
         uiControlSchema(),
@@ -258,16 +276,17 @@ static void registerUiControlTool() {
 /// 把插件默认提示词写入宿主 toolPrompt (仅当宿主无该条目时; io 线程)
 /// - 用户 yaml 覆盖早于插件加载 → get_prompt 已含覆盖 → 跳过 (尊重用户配置)
 /// - 宿主未提供 get_prompt/set_prompt (旧宿主) → 跳过, registerTool 回退插件默认
-static void ensureToolPromptInHost() {
-    if (!g_host || !g_if.prompt || !g_if.prompt->get_prompt || !g_if.prompt->set_prompt) {
+static void ensureToolPromptInHost(PluginCtx& ctx) {
+    if (!ctx.host || !ctx.iface.prompt || !ctx.iface.prompt->get_prompt
+        || !ctx.iface.prompt->set_prompt) {
         return;
     }
-    char* json = g_if.prompt->get_prompt(g_host);
+    char* json = ctx.iface.prompt->get_prompt(ctx.host);
     if (!json) {
         return;
     }
     std::string s{json};
-    g_host->vtable->free(json);
+    ctx.host->vtable->free(json);
     SimpleJson j(s);
     if (!j.ok()) {
         return;
@@ -287,9 +306,9 @@ static void ensureToolPromptInHost() {
     patch["toolPrompt"]   = codegraph::Json::object();
     patch["toolPrompt"]["agentxx_ui_control_keyboard_mouse"] = tp;
     std::string payload                                      = patch.dump();
-    if (g_if.prompt->set_prompt(g_host, agentxx_plugin_sv(payload.data(), payload.size()))
+    if (ctx.iface.prompt->set_prompt(ctx.host, agentxx_plugin_sv(payload.data(), payload.size()))
         != 0) {
-        pluginLog(3, "agentxx_computer_use: set_prompt failed");
+        pluginLog(ctx.host, ctx.iface.log, 3, "agentxx_computer_use: set_prompt failed");
     }
 }
 
@@ -302,9 +321,9 @@ using namespace agentxx_computer_use_plugin;
 // =====================================================================
 
 extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_get_info(void) {
-    // C ABI 边界异常守卫: 异常返回 NULL (宿主按"未导出"处理)
+    // C ABI 边界异常守卫: 异常返回 NULL; 本边界为纯静态元数据 → 空操作日志
     return agentxx::plugin_guard::guardCall(
-        pluginCatchLog,
+        [](const char*) noexcept {},
         nullptr,
         [&]() -> const AgentxxPluginInfo* {
         static const AgentxxPluginInfo info{
@@ -320,24 +339,41 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_get_inf
 }
 
 extern "C" AGENTXX_PLUGIN_EXPORT int
-    agentxx_plugin_entry(const AgentxxHost* host, void** /*plugin_ctx*/) {
-    // C ABI 边界异常守卫: 异常返回 -1 (加载失败)
+    agentxx_plugin_create(const AgentxxHost* host, void** plugin_ctx) {
+    // C ABI 边界异常守卫: 异常返回 -1 (创建失败); 日志闭包捕获局部裸指针
+    auto ctx   = std::make_unique<PluginCtx>();
+    PluginCtx* raw = nullptr;
     return agentxx::plugin_guard::guardCall(
-        pluginCatchLog,
+        [&raw](const char* m) noexcept {
+            pluginLog(raw ? raw->host : nullptr, raw ? raw->iface.log : nullptr, 4, m ? m : "");
+        },
         -1,
         [&]() -> int {
-        g_host = host;
+        if (!host || !host->vtable || !plugin_ctx) {
+            return -1;
+        }
+        ctx->host  = host;
+        ctx->iface = agentxx::plugin::AgentIfaces::query(host);
+        raw        = ctx.get();
         // 默认提示词写入宿主 (剥离自 lib AgentPrompt; 用户 yaml 覆盖优先)
-        ensureToolPromptInHost();
-        registerUiControlTool();
-        pluginLog(2, "agentxx_computer_use loaded (1 tool)");
+        ensureToolPromptInHost(*ctx);
+        registerUiControlTool(*ctx);
+        pluginLog(ctx->host, ctx->iface.log, 2, "agentxx_computer_use loaded (1 tool)");
+        *plugin_ctx = ctx.release(); ///< 所有权移交宿主 (destroy 时取回归还)
         return 0;
     });
 }
 
-extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_unload(void* /*plugin_ctx*/) {
-    // C ABI 边界异常守卫: 卸载回调异常不得外泄
-    agentxx::plugin_guard::guardCallVoid(pluginCatchLog, [&] {
-        pluginLog(2, "agentxx_computer_use unloaded");
-    });
+extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_destroy(void* plugin_ctx) {
+    auto* ctx = static_cast<PluginCtx*>(plugin_ctx);
+    // C ABI 边界异常守卫: 销毁回调异常不得外泄
+    agentxx::plugin_guard::guardCallVoid(
+        [ctx](const char* m) noexcept {
+            pluginLog(ctx ? ctx->host : nullptr, ctx ? ctx->iface.log : nullptr, 4, m ? m : "");
+        },
+        [&] {
+        pluginLog(ctx ? ctx->host : nullptr, ctx ? ctx->iface.log : nullptr,
+                  2, "agentxx_computer_use unloaded");
+        delete ctx; // storage/tool_entries/shims 均为 ctx 成员, 随之释放
+        });
 }

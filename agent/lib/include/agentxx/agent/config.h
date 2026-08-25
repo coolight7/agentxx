@@ -124,7 +124,7 @@ struct McpServerConfig {
 };
 
 /// 插件运行侧 (yaml `plugins` 条目 sides)
-/// - auto: 按导出符号自动决定 (client 侧: 有 agentxx_client_entry 才加载)
+/// - auto: 按导出符号自动决定 (client 侧: 有 agentxx_client_create 才加载)
 /// - agent: 仅 agent 侧加载 (client 侧跳过)
 /// - client: 仅 client 侧加载 (agent 侧跳过)
 enum class PluginSide : uint8_t {

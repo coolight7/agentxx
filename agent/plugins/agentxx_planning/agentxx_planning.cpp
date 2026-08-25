@@ -78,9 +78,10 @@ std::string argDesc(const ToolPromptText& p, const char* key, const char* fallba
 } // namespace
 
 extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_get_info(void) {
-    // C ABI 边界异常守卫: 异常返回 NULL (宿主按"未导出"处理)
+    // C ABI 边界异常守卫: 异常返回 NULL (宿主按"未导出"处理);
+    // 本边界为纯静态元数据, 无实例上下文可捕获 → 空操作日志闭包
     return agentxx::plugin_guard::guardCall(
-        pluginCatchLog,
+        [](const char*) noexcept {},
         nullptr,
         [&]() -> const AgentxxPluginInfo* {
         static const AgentxxPluginInfo info{
@@ -94,34 +95,39 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_get_inf
 }
 
 extern "C" AGENTXX_PLUGIN_EXPORT int
-    agentxx_plugin_entry(const AgentxxHost* host, void** plugin_ctx) {
-    // C ABI 边界异常守卫: entry 内含 JSON schema 构建等可抛操作, 异常返回 -1
+    agentxx_plugin_create(const AgentxxHost* host, void** plugin_ctx) {
+    // C ABI 边界异常守卫: create 内含 JSON schema 构建等可抛操作, 异常返回 -1;
+    // 守卫日志闭包捕获局部裸指针 (ctx 装配前置空 → 异常路径静默丢弃)
+    PluginCtx* raw = nullptr;
     return agentxx::plugin_guard::guardCall(
-        pluginCatchLog,
+        [&raw](const char* msg) noexcept { pluginLog(raw, 4, msg ? msg : ""); },
         -1,
         [&]() -> int {
         if (!host || !host->vtable || !plugin_ctx) {
             return -1;
         }
-        g_host      = host;
-        g_if        = agentxx::plugin::AgentIfaces::query(host);
-        *plugin_ctx = nullptr;
+        auto ctx   = std::make_unique<PluginCtx>();
+        ctx->host  = host;
+        ctx->iface = agentxx::plugin::AgentIfaces::query(host);
+        raw        = ctx.get();
 
-        if (!g_if.planning || !g_if.planning->set_planning) {
-            XX_LOGW(
-                "agentxx_planning: host planning iface unavailable, `{}' will register but fail at runtime",
-                kNamePlanning
+        if (!ctx->iface.planning || !ctx->iface.planning->set_planning) {
+            pluginLog(
+                ctx.get(),
+                3,
+                fmt::format("agentxx_planning: host planning iface unavailable, `{}' will register but fail at runtime",
+                            kNamePlanning)
             );
         }
 
-        static std::vector<std::string> g_storage;
         {
-            ToolPromptText p      = readToolPrompt(kNamePlanning);
+            ToolPromptText p      = readToolPrompt(ctx->host, ctx->iface, kNamePlanning);
             std::string    depict = p.depict;
             if (depict.empty()) {
                 depict = kDepictPlanning;
             }
-            g_storage.push_back(std::move(depict));
+            auto& storage = ctx->storage;
+            storage.push_back(std::move(depict));
             // schema 与 lib AgentPrompt 条目一致 (roadmap/todos/notes)
             // schema 与 lib AgentPrompt 条目一致 (roadmap/todos/notes);
             // 经 json 对象构造后序列化 (避免手写转义)
@@ -158,14 +164,17 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                  }},
             }
                                   .dump();
-            g_storage.push_back(std::move(schema));
+            storage.push_back(std::move(schema));
+
+            // 垫片适配器: 实例内嵌存储 (ctx 持有, 随实例销毁释放; 多实例契约)
+            auto shim = std::make_unique<AgentxxInlineToolShim>();
 
             AgentxxInlineToolSpec spec{};
             spec.name        = agentxx_plugin_sv(kNamePlanning, std::strlen(kNamePlanning));
-            spec.description = agentxx_plugin_sv(g_storage[0].data(), g_storage[0].size());
+            spec.description = agentxx_plugin_sv(storage[0].data(), storage[0].size());
             spec.parameters_json
-                = agentxx_plugin_sv(g_storage[1].data(), g_storage[1].size());
-            spec.user_data = nullptr;
+                = agentxx_plugin_sv(storage[1].data(), storage[1].size());
+            spec.user_data = ctx.get();
             spec.flags     = AGENTXX_TOOL_FLAG_NONE;
             // 内联完成型: 快 JSON 写入 (set_planning 在 io 线程直接执行, 无跨线程开销)
             spec.execute   = [](void*                   user_data,
@@ -173,7 +182,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                               AgentxxPluginStringView thread_id,
                               AgentxxPluginStringView tool_call_id,
                               char**                  error_out) -> char* {
-                (void)user_data;
+                auto* ctx = static_cast<PluginCtx*>(user_data);
                 (void)tool_call_id;
                 try {
                     std::string argsStr(args_json.data ? args_json.data : "", args_json.size);
@@ -183,12 +192,14 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                     auto roadmap = arguments.value("roadmap", std::string{});
                     if (roadmap.empty()) {
                         return pluginStrdup(
+                            ctx ? ctx->host : nullptr,
                             R"({"error":"Arg `roadmap` is empty, must provide a stateDiagram-v2 planning string"})"
                         );
                     }
 
-                    if (!g_if.planning || !g_if.planning->set_planning) {
-                        return pluginStrdup(R"({"error":"planningContext is null"})");
+                    if (!ctx || !ctx->iface.planning || !ctx->iface.planning->set_planning) {
+                        return pluginStrdup(ctx ? ctx->host : nullptr,
+                                            R"({"error":"planningContext is null"})");
                     }
 
                     // todos 为数组时序列化透传; notes 为字符串
@@ -198,43 +209,46 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                     }
                     std::string notes = arguments.value("notes", std::string{});
 
-                    auto rc = g_if.planning->set_planning(
-                        g_host,
+                    auto rc = ctx->iface.planning->set_planning(
+                        ctx->host,
                         thread_id,
                         agentxx_plugin_sv(roadmap.data(), roadmap.size()),
                         agentxx_plugin_sv(todosJson.data(), todosJson.size()),
                         agentxx_plugin_sv(notes.data(), notes.size())
                     );
                     if (rc != 0) {
-                        return pluginStrdup(R"({"error":"planningContext is null"})");
+                        return pluginStrdup(ctx->host,
+                                            R"({"error":"planningContext is null"})");
                     }
-                    return pluginStrdup("success");
+                    return pluginStrdup(ctx->host, "success");
                 } catch (const std::exception& ex) {
                     if (error_out) {
-                        *error_out = pluginStrdup(ex.what());
+                        *error_out = pluginStrdup(ctx ? ctx->host : nullptr, ex.what());
                     }
                     return nullptr;
                 } catch (...) {
                     if (error_out) {
-                        *error_out = pluginStrdup("unknown exception");
+                        *error_out = pluginStrdup(ctx ? ctx->host : nullptr, "unknown exception");
                     }
                     return nullptr;
                 }
             };
-            if (agentxx_register_inline_tool(g_host, &spec) != 0) {
-                XX_LOGW("agentxx_planning: register tool {} failed", kNamePlanning);
+            if (agentxx_register_inline_tool(host, &spec, shim.get()) != 0) {
+                pluginLog(ctx.get(), 3, fmt::format("agentxx_planning: register tool {} failed", kNamePlanning));
+            } else {
+                ctx->inline_tool_shims.push_back(std::move(shim));
             }
         }
 
+        *plugin_ctx = ctx.release(); ///< 所有权移交宿主 (destroy 时取回归还)
         return 0;
     });
 }
 
-extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_unload(void* plugin_ctx) {
-    // C ABI 边界异常守卫: 卸载回调异常不得外泄
-    agentxx::plugin_guard::guardCallVoid(pluginCatchLog, [&] {
-        (void)plugin_ctx;
-        g_host = nullptr;
-        g_if   = {};
-    });
+extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_destroy(void* plugin_ctx) {
+    // C ABI 边界异常守卫: 销毁回调异常不得外泄
+    auto* ctx = static_cast<PluginCtx*>(plugin_ctx);
+    agentxx::plugin_guard::guardCallVoid(
+        [ctx](const char* msg) noexcept { pluginLog(ctx, 4, msg ? msg : ""); },
+        [&] { delete ctx; }); // 垫片适配器为 ctx 内嵌存储, 随 ctx 一并释放
 }

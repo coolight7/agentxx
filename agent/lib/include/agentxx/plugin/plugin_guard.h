@@ -16,12 +16,15 @@
  * 宿主 op_driver 层负责, 本边界处必须 catch(...) 全拦截。
  *
  * 用法 (函数式封装, 以 lambda 包裹原函数体取代旧 XX_PGUARD_* 宏):
- *   1. 插件翻译单元内定义 noexcept 日志函数 (固定签名, 调用处按名传入):
- *        static void pluginCatchLog(const char* msg) noexcept {
- *            agentxx::plugin_guard::defaultLogTo(
- *                g_host, g_if.log, 4, "my_plugin", msg);
- *        }
- *      未定义会在守卫函数调用处直接编译报错 (强制作者补齐, 防止静默丢失日志)。
+ *   1. 插件翻译单元内定义 noexcept 日志可调用对象, 调用处按需传入:
+ *      【多实例推荐形态】捕获本实例上下文的闭包 (日志归属精确到实例,
+ *      零进程级全局 —— 同库可被多个宿主各自加载为独立实例):
+ *        auto logFn = [ctx](const char* msg) noexcept { ctxLog(*ctx, msg); };
+ *        return plugin_guard::guardCall(logFn, -1, [&]() -> int { ... });
+ *      无实例边界的入口 (如 get_info, 纯静态元数据) 可传不捕获的静态
+ *      函数或空操作闭包。
+ *      旧式固定签名函数指针 void(*)(const char*) 仍可传入, 但其实现只能
+ *      依赖进程级状态 —— 与多实例契约冲突, 仅限纯静态元数据边界使用。
  *   2. 在每个 C ABI 边界函数体内用守卫函数包裹原函数体 (lambda 捕获引用,
  *      体内提前 return 的值即边界返回值):
  *        // 有返回值: 异常时记日志并返回 fallback

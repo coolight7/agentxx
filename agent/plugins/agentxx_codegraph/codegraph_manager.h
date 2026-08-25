@@ -66,6 +66,16 @@ struct CodeGraphIndexConfig {
 
 class CodeGraphManager {
 public:
+    /// 日志 sink 依赖注入 (多实例契约: 插件层在 create 时注入本实例宿主
+    /// 日志路由; 不注入 = 日志静默丢弃)。manager 层不依赖任何插件头。
+    using LogSink = std::function<void(int level, const std::string& msg)>;
+    void setLogSink(LogSink sink); ///< 实现于 codegraph_manager.cpp
+    /// 成员日志 (本 cpp 的 XX_LOG* 宏经此路由; 仅成员函数内可用)
+    void mgrLog(int level, const std::string& msg) const {
+        if (logSink_) {
+            logSink_(level, msg);
+        }
+    }
 
     /// @param sqliteDir sqlite 数据目录; 为空使用默认 {dataDir}/sqlite/
     ///        (dataDir 为空时 ~/.agentxx/sqlite/, 取不到主目录时回退系统临时目录)
@@ -115,6 +125,8 @@ public:
     void setProgressCallback(IndexProgressCallback callback);
 
 private:
+
+    LogSink logSink_;
 
     class Impl;
     std::unique_ptr<Impl> impl_;

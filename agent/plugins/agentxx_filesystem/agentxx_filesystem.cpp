@@ -7,6 +7,7 @@
 #include "agentxx_fs_plugin.h"
 #include "filesystem_impl.h"
 #include <cstring>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -61,10 +62,11 @@ const char* kGlobPatternHelp =
 | `[!ABC]` | One char NOT in set | `[!ABC]*` matches files not starting with A, B, or C |
 )";
 
-/// 注册常规工具 (schema/描述存储于插件侧静态区; 宿主注册时拷贝)
+/// 注册常规工具 (schema/描述存储于本实例 ctx->storage; 宿主注册时拷贝)
 /// - 统一异步操作模型: 经阻塞委托垫片注册 (offload 池线程执行, io 线程
 ///   只等完成通知); execute 签名追加 cancel_flag 形参
 void registerTool(
+    PluginCtx*         ctx,
     const char*        name,
     const char*        defaultDepict,
     const std::string& schema,
@@ -77,27 +79,32 @@ void registerTool(
         char**                  error_out
     )
 ) {
-    static std::vector<std::string> g_storage;
-    std::string                     depict = readToolPrompt(name).depict;
+    auto&       storage = ctx->storage;
+    std::string depict  = readToolPrompt(ctx->host, ctx->iface, name).depict;
     if (depict.empty()) {
         depict = defaultDepict;
     }
-    g_storage.push_back(std::move(depict));
-    g_storage.push_back(schema);
+    storage.push_back(std::move(depict));
+    storage.push_back(schema);
+
+    // 垫片适配器: 实例内嵌存储 (ctx 持有, 随实例销毁释放; 多实例契约)
+    auto shim = std::make_unique<AgentxxSyncToolShim>();
 
     AgentxxSyncToolSpec spec{};
     spec.name        = agentxx_plugin_sv(name, std::strlen(name));
     spec.description = agentxx_plugin_sv(
-        g_storage[g_storage.size() - 2].data(),
-        g_storage[g_storage.size() - 2].size()
+        storage[storage.size() - 2].data(),
+        storage[storage.size() - 2].size()
     );
-    spec.parameters_json = agentxx_plugin_sv(g_storage.back().data(), g_storage.back().size());
-    spec.user_data       = nullptr;
+    spec.parameters_json = agentxx_plugin_sv(storage.back().data(), storage.back().size());
+    spec.user_data       = ctx; ///< 回调经 user_data 恢复本实例上下文
     spec.flags           = AGENTXX_TOOL_FLAG_NONE;
     spec.execute         = execute;
-    if (agentxx_register_sync_tool(g_host, &spec) != 0) {
-        XX_LOGW("agentxx_filesystem: register tool {} failed", name);
+    if (agentxx_register_sync_tool(ctx->host, &spec, shim.get()) != 0) {
+        pluginLog(ctx, 3, fmt::format("agentxx_filesystem: register tool {} failed", name));
+        return;
     }
+    ctx->sync_tool_shims.push_back(std::move(shim));
 }
 
 /// C ABI execute 包装: 解析参数 JSON → 调用实现 (workDir + 取消查询注入) →
@@ -114,8 +121,9 @@ char* wrapExecute(
     volatile int*           cancel_flag,
     char**                  error_out
 ) {
-    (void)user_data;
+    auto* ctx = static_cast<PluginCtx*>(user_data);
     (void)tool_call_id;
+    const AgentxxHost* host = ctx ? ctx->host : nullptr;
     try {
         std::string argsStr(args_json.data ? args_json.data : "", args_json.size);
         auto arguments = argsStr.empty() ? neograph::json::object() : neograph::json::parse(argsStr);
@@ -123,32 +131,33 @@ char* wrapExecute(
         if (cancel_flag) {
             int flag = *cancel_flag;
             if (flag) {
-                return pluginStrdup("[Error] Cancelled");
+                return pluginStrdup(host, "[Error] Cancelled");
             }
             isCancelled = [cancel_flag]() -> bool {
                 return *cancel_flag != 0;
             };
         }
-        if (!isCancelled && g_if.cancel && g_if.cancel->is_cancelled && thread_id.data) {
+        if (!isCancelled && ctx && ctx->iface.cancel && ctx->iface.cancel->is_cancelled
+            && thread_id.data) {
             std::string tid{thread_id.data, thread_id.size};
-            isCancelled  = [tid]() -> bool {
-                return g_if.cancel->is_cancelled(
-                           g_host,
+            isCancelled  = [ctx, tid]() -> bool {
+                return ctx->iface.cancel->is_cancelled(
+                           ctx->host,
                            agentxx_plugin_sv(tid.data(), tid.size())
                        )
                     != 0;
             };
         }
-        auto result = ExecFn(arguments, sessionWorkDir(thread_id), isCancelled);
-        return pluginStrdup(result.c_str());
+        auto result = ExecFn(arguments, sessionWorkDir(ctx, thread_id), isCancelled);
+        return pluginStrdup(host, result.c_str());
     } catch (const std::exception& ex) {
         if (error_out) {
-            *error_out = pluginStrdup(ex.what());
+            *error_out = pluginStrdup(host, ex.what());
         }
         return nullptr;
     } catch (...) {
         if (error_out) {
-            *error_out = pluginStrdup("unknown exception");
+            *error_out = pluginStrdup(host, "unknown exception");
         }
         return nullptr;
     }
@@ -157,9 +166,10 @@ char* wrapExecute(
 } // namespace
 
 extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_get_info(void) {
-    // C ABI 边界异常守卫: 异常返回 NULL (宿主按"未导出"处理, 从库名推导插件名)
+    // C ABI 边界异常守卫: 异常返回 NULL (宿主按"未导出"处理, 从库名推导插件名);
+    // 本边界为纯静态元数据, 无实例上下文可捕获 → 空操作日志闭包
     return agentxx::plugin_guard::guardCall(
-        pluginCatchLog,
+        [](const char*) noexcept {},
         nullptr,
         [&]() -> const AgentxxPluginInfo* {
         static const AgentxxPluginInfo info{
@@ -173,29 +183,33 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_get_inf
 }
 
 extern "C" AGENTXX_PLUGIN_EXPORT int
-    agentxx_plugin_entry(const AgentxxHost* host, void** plugin_ctx) {
-    // C ABI 边界异常守卫: entry 内含 JSON schema 构建/接口查询等可抛操作,
-    // 异常返回 -1 走宿主加载失败清理路径 (异常穿越 C ABI 即 UB)
+    agentxx_plugin_create(const AgentxxHost* host, void** plugin_ctx) {
+    // C ABI 边界异常守卫: create 内含 JSON schema 构建/接口查询等可抛操作,
+    // 异常返回 -1 走宿主加载失败清理路径 (异常穿越 C ABI 即 UB);
+    // 守卫日志闭包捕获局部裸指针 (ctx 装配前置空 → 异常路径静默丢弃)
+    PluginCtx* raw = nullptr;
     return agentxx::plugin_guard::guardCall(
-        pluginCatchLog,
+        [&raw](const char* msg) noexcept { pluginLog(raw, 4, msg ? msg : ""); },
         -1,
         [&]() -> int {
         if (!host || !host->vtable || !plugin_ctx) {
             return -1;
         }
-        g_host      = host;
-        g_if        = agentxx::plugin::AgentIfaces::query(host);
-        *plugin_ctx = nullptr;
+        auto ctx   = std::make_unique<PluginCtx>();
+        ctx->host  = host;
+        ctx->iface = agentxx::plugin::AgentIfaces::query(host);
+        raw        = ctx.get();
+        loadWorkDir(*ctx); ///< agent 级工作目录装配到本实例 (每实例独立)
 
-        if (workDir().empty()) {
-            XX_LOGW(
-                "agentxx_filesystem: host work_dir unavailable, relative paths resolve against process cwd"
-            );
+        if (ctx->work_dir.empty()) {
+            pluginLog(ctx.get(),
+                      3,
+                      "agentxx_filesystem: host work_dir unavailable, relative paths resolve against process cwd");
         }
 
         // ---- agentxx_filesystem_list ----
         {
-            ToolPromptText p      = readToolPrompt(kNameList);
+            ToolPromptText p      = readToolPrompt(ctx->host, ctx->iface, kNameList);
             std::string schema = neograph::json{
                 {"type", "object"},
                 {"properties",
@@ -226,12 +240,12 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                 {"required", neograph::json::array({"path"})},
             }
                                   .dump();
-            registerTool(kNameList, kDepictList, schema, &wrapExecute<agentxx_fs_plugin::fileListExecute>);
+            registerTool(ctx.get(), kNameList, kDepictList, schema, &wrapExecute<agentxx_fs_plugin::fileListExecute>);
         }
 
         // ---- agentxx_filesystem_read ----
         {
-            ToolPromptText p      = readToolPrompt(kNameRead);
+            ToolPromptText p      = readToolPrompt(ctx->host, ctx->iface, kNameRead);
             std::string schema = neograph::json{
                 {"type", "object"},
                 {"properties",
@@ -257,12 +271,12 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                 {"required", neograph::json::array({"path"})},
             }
                                   .dump();
-            registerTool(kNameRead, kDepictRead, schema, &wrapExecute<agentxx_fs_plugin::fileReadExecute>);
+            registerTool(ctx.get(), kNameRead, kDepictRead, schema, &wrapExecute<agentxx_fs_plugin::fileReadExecute>);
         }
 
         // ---- agentxx_filesystem_write ----
         {
-            ToolPromptText p      = readToolPrompt(kNameWrite);
+            ToolPromptText p      = readToolPrompt(ctx->host, ctx->iface, kNameWrite);
             std::string schema = neograph::json{
                 {"type", "object"},
                 {"properties",
@@ -287,12 +301,12 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                 {"required", neograph::json::array({"path", "content"})},
             }
                                   .dump();
-            registerTool(kNameWrite, kDepictWrite, schema, &wrapExecute<agentxx_fs_plugin::fileWriteExecute>);
+            registerTool(ctx.get(), kNameWrite, kDepictWrite, schema, &wrapExecute<agentxx_fs_plugin::fileWriteExecute>);
         }
 
         // ---- agentxx_filesystem_edit ----
         {
-            ToolPromptText p      = readToolPrompt(kNameEdit);
+            ToolPromptText p      = readToolPrompt(ctx->host, ctx->iface, kNameEdit);
             std::string schema = neograph::json{
                 {"type", "object"},
                 {"properties",
@@ -330,12 +344,12 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                 {"required", neograph::json::array({"path", "old_str", "new_str"})},
             }
                                   .dump();
-            registerTool(kNameEdit, kDepictEdit, schema, &wrapExecute<agentxx_fs_plugin::fileEditExecute>);
+            registerTool(ctx.get(), kNameEdit, kDepictEdit, schema, &wrapExecute<agentxx_fs_plugin::fileEditExecute>);
         }
 
         // ---- agentxx_filesystem_glob ----
         {
-            ToolPromptText p      = readToolPrompt(kNameGlob);
+            ToolPromptText p      = readToolPrompt(ctx->host, ctx->iface, kNameGlob);
             std::string schema = [&p]() {
                 auto patternsDesc = fmt::format(
                     R"(Path with glob patterns to match. Relative paths are resolved against the current working directory; `~` expands to the home directory.
@@ -400,12 +414,12 @@ Example: `["**/node_modules/**", "**/.git/**", "**/build/**"]`.)")},
                 }
                                   .dump();
             }();
-            registerTool(kNameGlob, kDepictGlob, schema, &wrapExecute<agentxx_fs_plugin::fileGlobExecute>);
+            registerTool(ctx.get(), kNameGlob, kDepictGlob, schema, &wrapExecute<agentxx_fs_plugin::fileGlobExecute>);
         }
 
         // ---- agentxx_filesystem_grep ----
         {
-            ToolPromptText p      = readToolPrompt(kNameGrep);
+            ToolPromptText p      = readToolPrompt(ctx->host, ctx->iface, kNameGrep);
             std::string schema = [&p]() {
                 auto filePatternsDesc = fmt::format(
                     R"(Path with glob patterns to select which files to search. Relative paths are resolved against the current working directory; `~` expands to the home directory.
@@ -493,18 +507,18 @@ starts with a header line `{filepath}:`, followed by that file's lines (`{line}:
                 }
                                   .dump();
             }();
-            registerTool(kNameGrep, kDepictGrep, schema, &wrapExecute<agentxx_fs_plugin::fileGrepExecute>);
+            registerTool(ctx.get(), kNameGrep, kDepictGrep, schema, &wrapExecute<agentxx_fs_plugin::fileGrepExecute>);
         }
 
+        *plugin_ctx = ctx.release(); ///< 所有权移交宿主 (destroy 时取回归还)
         return 0;
     });
 }
 
-extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_unload(void* plugin_ctx) {
-    // C ABI 边界异常守卫: 卸载回调异常不得外泄 (否则宿主卸载流程被打断)
-    agentxx::plugin_guard::guardCallVoid(pluginCatchLog, [&] {
-        (void)plugin_ctx;
-        g_host = nullptr;
-        g_if   = {};
-    });
+extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_destroy(void* plugin_ctx) {
+    // C ABI 边界异常守卫: 销毁回调异常不得外泄 (否则宿主卸载流程被打断)
+    auto* ctx = static_cast<PluginCtx*>(plugin_ctx);
+    agentxx::plugin_guard::guardCallVoid(
+        [ctx](const char* msg) noexcept { pluginLog(ctx, 4, msg ? msg : ""); },
+        [&] { delete ctx; }); // 垫片适配器为 ctx 内嵌存储, 随 ctx 一并释放
 }

@@ -478,7 +478,10 @@ asio::awaitable<TestResult> run_plugin_tests() {
             };
             slowSpec.user_data          = nullptr;
             slowSpec.default_timeout_ms = 100;
-            XX_TEST_EXPECT_EQ(agentxx_register_sync_tool(&inst23->host, &slowSpec), 0);
+            // API v1: 垫片适配器为调用方内嵌存储 (随插件实例 ctx 生死; 此处测试
+            // 直接持有 —— 与插件作者真实用法一致)
+            static AgentxxSyncToolShim slowSpecShim;
+            XX_TEST_EXPECT_EQ(agentxx_register_sync_tool(&inst23->host, &slowSpec, &slowSpecShim), 0);
 
             auto tool = ctx->toolRegistry->find("slow_timeout_tool");
             XX_TEST_EXPECT_TRUE(tool != nullptr);
@@ -996,7 +999,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
         //      垫片转 error_out + NULL, 异常不穿越 C ABI (host 为空也不崩)
         {
             static AgentxxSyncJob shimJob{};
-            shimJob.adapter.fn = +[](void*,
+            shimJob.shim.fn = +[](void*,
                                      AgentxxPluginStringView,
                                      AgentxxPluginStringView,
                                      AgentxxPluginStringView,
@@ -1004,7 +1007,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
                                      char**) -> char* {
                 throw std::runtime_error("shim boom");
             };
-            shimJob.adapter.host = nullptr; ///< host 缺失时 err_dup 安全放弃
+            shimJob.shim.host = nullptr; ///< host 缺失时 err_dup 安全放弃
             char* shimErr        = nullptr;
             void* shimResult     = agentxx_sync_job_work(&shimJob, nullptr, &shimErr);
             XX_TEST_EXPECT_TRUE(shimResult == nullptr);

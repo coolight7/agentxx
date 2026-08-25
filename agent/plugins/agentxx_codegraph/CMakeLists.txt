@@ -22,9 +22,9 @@ if (_AGENTXX_ADD_AS_BUILTIN)
   target_compile_definitions(${_target} PRIVATE
     "AGENTXX_PLUGIN_BUILTIN=1"
     "AGENTXX_ENABLE_PLUGIN_CODEGRAPH=1"
-    "agentxx_plugin_entry=agentxx_plugin_builtin_entry_${PLUGIN_NAME}"
+    "agentxx_plugin_create=agentxx_plugin_builtin_create_${PLUGIN_NAME}"
     "agentxx_plugin_get_info=agentxx_plugin_builtin_get_info_${PLUGIN_NAME}"
-    "agentxx_plugin_unload=agentxx_plugin_builtin_unload_${PLUGIN_NAME}"
+    "agentxx_plugin_destroy=agentxx_plugin_builtin_destroy_${PLUGIN_NAME}"
   )
   target_include_directories(${_target} PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}"          # codegraph_manager.h / codegraph_plugin.h
@@ -44,11 +44,11 @@ set_target_properties(${_target} PROPERTIES
   set(AGENTXX_BUILTIN_MANIFEST_DECLS
     "${AGENTXX_BUILTIN_MANIFEST_DECLS}
 extern \"C\" const AgentxxPluginInfo* agentxx_plugin_builtin_get_info_${PLUGIN_NAME}(void);
-extern \"C\" int agentxx_plugin_builtin_entry_${PLUGIN_NAME}(const AgentxxHost* host, void** plugin_ctx);
-extern \"C\" void agentxx_plugin_builtin_unload_${PLUGIN_NAME}(void* plugin_ctx);")
+extern \"C\" int agentxx_plugin_builtin_create_${PLUGIN_NAME}(const AgentxxHost* host, void** plugin_ctx);
+extern \"C\" void agentxx_plugin_builtin_destroy_${PLUGIN_NAME}(void* plugin_ctx);")
   set(AGENTXX_BUILTIN_MANIFEST_ENTRIES
     "${AGENTXX_BUILTIN_MANIFEST_ENTRIES}
-    {\"${PLUGIN_NAME}\", agentxx_plugin_builtin_get_info_${PLUGIN_NAME}, agentxx_plugin_builtin_entry_${PLUGIN_NAME}, agentxx_plugin_builtin_unload_${PLUGIN_NAME}},")
+    {\"${PLUGIN_NAME}\", agentxx_plugin_builtin_get_info_${PLUGIN_NAME}, agentxx_plugin_builtin_create_${PLUGIN_NAME}, agentxx_plugin_builtin_destroy_${PLUGIN_NAME}},")
   # codegraph_core 为静态库, 需连带其传递依赖 (与动态分支链接顺序一致;
   # sqlite3/simdjson/Glob/uchardet/fmt 由 libagentxx 既有链接提供)
   set(_codegraph_libs

@@ -3,6 +3,43 @@
 // - 工具 (codegraph_tools.cpp) 与入口 (agentxx_codegraph.cpp) 同目录
 #include "codegraph_manager.h"
 #include "codegraph_plugin.h"
+
+// ---- 本 TU 日志宏 (多实例契约: sink 由 CodeGraphManager::setLogSink 注入,
+// 路由到【注入方实例】的宿主接口表。注: 同进程多实例时后注入者覆盖前者 ——
+// 仅影响 manager 内部诊断日志的实例归属, 功能数据不受影响) ----
+// manager 内部诊断日志 sink (setLogSink 注入; 见上方多实例说明)
+static std::atomic<agentxx_codegraph_plugin::CodeGraphManager::LogSink*> g_mgr_log_sink{nullptr};
+
+void agentxx_codegraph_plugin::CodeGraphManager::setLogSink(LogSink sink) {
+    logSink_  = std::move(sink);
+    g_mgr_log_sink.store(&logSink_, std::memory_order_release);
+}
+
+#define XX_LOGT(...)                                                           \
+    do {                                                                       \
+        if (auto* sink = g_mgr_log_sink.load(std::memory_order_acquire)) \
+            (*sink)(0, fmt::format(__VA_ARGS__));                             \
+    } while (0)
+#define XX_LOGD(...)                                                           \
+    do {                                                                       \
+        if (auto* sink = g_mgr_log_sink.load(std::memory_order_acquire)) \
+            (*sink)(1, fmt::format(__VA_ARGS__));                             \
+    } while (0)
+#define XX_LOGI(...)                                                           \
+    do {                                                                       \
+        if (auto* sink = g_mgr_log_sink.load(std::memory_order_acquire)) \
+            (*sink)(2, fmt::format(__VA_ARGS__));                             \
+    } while (0)
+#define XX_LOGW(...)                                                           \
+    do {                                                                       \
+        if (auto* sink = g_mgr_log_sink.load(std::memory_order_acquire)) \
+            (*sink)(3, fmt::format(__VA_ARGS__));                             \
+    } while (0)
+#define XX_LOGE(...)                                                           \
+    do {                                                                       \
+        if (auto* sink = g_mgr_log_sink.load(std::memory_order_acquire)) \
+            (*sink)(4, fmt::format(__VA_ARGS__));                             \
+    } while (0)
 #include "glob/glob.h"
 #include <algorithm>
 #include <atomic>

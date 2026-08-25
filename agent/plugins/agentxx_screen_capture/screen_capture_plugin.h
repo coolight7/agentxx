@@ -31,16 +31,23 @@
 
 namespace agentxx_screen_capture_plugin {
 
-/// 当前插件宿主句柄 (entry 装配; 线程安全: 只读)
-inline const AgentxxHost* g_host = nullptr;
+// =====================================================================
+// 多实例约定 (2026-08 API v1): 同一动态库可被同一进程内不同宿主各自
+// 加载为独立实例, 本插件不持有任何可变全局; 功能状态一律存于每实例
+// PluginCtx (定义于主 cpp, create 经 *plugin_ctx 交付宿主, 回调经
+// user_data 恢复); 日志经显式传入的 host/logIf 路由到宿主接口表。
+// =====================================================================
 
-/// 宿主接口表缓存 (entry 时 AgentIfaces::query 一次查询; 表为进程级静态数据)
-inline agentxx::plugin::AgentIfaces g_if{};
-
-/// 日志转发到宿主 agentxx.agent.log 接口表 (线程安全)
-inline void pluginLog(int level, const std::string& msg) {
-    if (g_host && g_if.log && g_if.log->log) {
-        g_if.log->log(g_host, level, agentxx_plugin_sv(msg.data(), msg.size()));
+/// 日志转发到宿主 agentxx.agent.log 接口表 (host/logIf 取自本实例上下文;
+/// 任一为空时静默丢弃)
+inline void pluginLog(
+    const AgentxxHost*     host,
+    const AgentxxLogIface* logIf,
+    int                    level,
+    const std::string&     msg
+) {
+    if (host && logIf && logIf->log) {
+        logIf->log(host, level, agentxx_plugin_sv(msg.data(), msg.size()));
     }
 }
 
@@ -115,19 +122,13 @@ inline bool jsonGetDouble(simdjson::simdjson_result<simdjson::ondemand::value> v
     return !v.value().get_double().get(out);
 }
 
-/// 宿主分配字符串 (跨边界内存)
-inline char* pluginStrdup(const char* s) {
-    if (!s) {
+/// 宿主分配字符串 (跨边界内存; host 取自回调恢复的实例上下文)
+inline char* pluginStrdup(const AgentxxHost* host, const char* s) {
+    if (!host || !s) {
         return nullptr;
     }
-    return g_host->vtable->strdup(s);
+    return host->vtable->strdup(s);
 }
-
-/// C ABI 边界异常守卫日志 (由守卫函数调用处显式传入; noexcept)
-inline void pluginCatchLog(const char* msg) noexcept {
-    agentxx::plugin_guard::defaultLogTo(g_host, g_if.log, 4, "agentxx_screen_capture", msg);
-}
-
 } // namespace agentxx_screen_capture_plugin
 
 #define XX_LOGT(...) ::agentxx_screen_capture_plugin::pluginLog(0, fmt::format(__VA_ARGS__))

@@ -82,10 +82,10 @@ extern "C" {
 
 /// 插件动态库默认隐藏全部符号 (构建时 -fvisibility=hidden / 不自动导出),
 /// 仅入口符号经 AGENTXX_PLUGIN_EXPORT 显式导出 (宿主 dlsym/GetProcAddress
-/// 按名查找): agentxx_plugin_get_info / agentxx_plugin_entry /
-/// agentxx_plugin_unload / agentxx_client_get_info / agentxx_client_entry /
-/// agentxx_client_unload。插件源码定义入口函数时必须加该宏前缀, 例如:
-///   AGENTXX_PLUGIN_EXPORT extern "C" int agentxx_plugin_entry(...)
+/// 按名查找): agentxx_plugin_get_info / agentxx_plugin_create /
+/// agentxx_plugin_destroy / agentxx_client_get_info / agentxx_client_create /
+/// agentxx_client_destroy。插件源码定义入口函数时必须加该宏前缀, 例如:
+///   AGENTXX_PLUGIN_EXPORT extern "C" int agentxx_plugin_create(...)
 /// 内置合并编译模式 (AGENTXX_PLUGIN_BUILTIN=1) 下入口符号直接并入 libagentxx
 /// (不经 dlopen), 无需导出, 宏展开为空。
 /// 除入口符号外的全部符号 (含插件内部 C++ 符号、第三方静态库符号) 均隐藏,
@@ -103,6 +103,9 @@ extern "C" {
 /// 全局 API 版本: 只覆盖核心契约 (核心 vtable 形状 + Info 结构 + 入口符号 +
 /// 本头共享类型)。接口表各自带 version 独立演进, 不影响本版本号。
 /// 宿主精确匹配门禁: info.api_version != 本值 → 拒绝加载 (无历史兼容路径)。
+/// 【v1 (2026-08 重构)】入口符号为 create/destroy 实例对
+/// (agentxx_plugin_create / agentxx_plugin_destroy), 与历史 entry/unload
+/// 命名不兼容; 多实例语义见 AgentxxPluginCreateFn 注释。
 #define AGENTXX_PLUGIN_API_VERSION 1
 
 /* ==================== 字符串视图 (跨边界字符串参数统一形态) ==================== */
@@ -750,25 +753,34 @@ typedef struct AgentxxResourcesIface {
 
 /* ==================== 插件入口符号 (dlsym) ==================== */
 
-/// 可选: 查询插件元信息 (加载前调用, 用于版本/信息校验; 未导出则跳过)
+/// 可选: 查询插件元信息 (加载前调用, 用于版本/信息校验; 未导出则跳过;
+/// 纯静态元数据, 不得读取/依赖任何实例状态)
 typedef const AgentxxPluginInfo* (*AgentxxPluginGetInfoFn)(void);
 
-/// 必需: 插件入口 (宿主线程池调用; 内部注册动作宿主会自动投递回 io 线程)
-/// - host: 本插件专属宿主句柄 (opaque 已关联本插件)
-/// - plugin_ctx: 输出插件私有上下文 (透传给 unload)
-/// - 返回 0 成功; 非 0 加载失败 (宿主 dlclose 并报告错误)
-/// - 线程说明: entry 运行在宿主线程池, 但其中经接口表的 io 线程约束操作
-///   由宿主自动投递回 io 线程串行执行 (宿主内部处理, 插件无感; 因此 entry
+/// 必需: 插件实例创建 (宿主线程池调用; 内部注册动作宿主会自动投递回 io 线程)
+/// 【多实例契约】本函数可重入: 同一动态库可被同一进程内的不同宿主各自
+/// 调用 N 次, 每次产出一个完全独立的存活实例 —— 因此:
+/// - 一切实例状态只能存于 *plugin_ctx 指向的堆块 (禁止任何可变全局/
+///   函数级 static 缓存; 常量表除外);
+/// - 一切注册回调必须设置 spec.user_data = 实例上下文, 回调内经其恢复
+///   自身实例状态, 不得读任何全局;
+/// - 接口表查询结果存入实例上下文 (不得缓存到进程级静态)。
+/// - host: 本实例专属宿主句柄 (opaque 已关联本实例)
+/// - plugin_ctx: 输出本实例私有上下文 (透传给 destroy)
+/// - 返回 0 成功; 非 0 创建失败 (宿主走失败清理路径并报告错误)
+/// - 线程说明: create 运行在宿主线程池, 但其中经接口表的 io 线程约束操作
+///   由宿主自动投递回 io 线程串行执行 (宿主内部处理, 插件无感; 因此 create
 ///   内可安全调用 register_tool / invoke_capability 等任意 API)
-typedef int (*AgentxxPluginEntryFn)(const AgentxxHost* host, void** plugin_ctx);
+typedef int (*AgentxxPluginCreateFn)(const AgentxxHost* host, void** plugin_ctx);
 
-/// 可选: 插件卸载通知 (宿主等全部在途回调完成后调用; 用于插件业务清理;
-/// 宿主会在此之前自动反注册该插件的一切工具/钩子/订阅/能力)
-typedef void (*AgentxxPluginUnloadFn)(void* plugin_ctx);
+/// 可选: 插件实例销毁 (宿主等全部在途回调完成后调用; 用于插件业务清理;
+/// 宿主会在此之前自动反注册该实例的一切工具/钩子/订阅/能力)。
+/// 只销毁对应 create 产出的实例上下文 (释放堆块等), 与其他并存实例无关。
+typedef void (*AgentxxPluginDestroyFn)(void* plugin_ctx);
 
-#define AGENTXX_PLUGIN_SYMBOL_GET_INFO "agentxx_plugin_get_info"
-#define AGENTXX_PLUGIN_SYMBOL_ENTRY    "agentxx_plugin_entry"
-#define AGENTXX_PLUGIN_SYMBOL_UNLOAD   "agentxx_plugin_unload"
+#define AGENTXX_PLUGIN_SYMBOL_GET_INFO  "agentxx_plugin_get_info"
+#define AGENTXX_PLUGIN_SYMBOL_CREATE    "agentxx_plugin_create"
+#define AGENTXX_PLUGIN_SYMBOL_DESTROY   "agentxx_plugin_destroy"
 
 /* ==================== 便捷宏 (插件侧使用) ==================== */
 

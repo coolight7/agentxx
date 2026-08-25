@@ -1,7 +1,10 @@
 // agentxx_codegraph 插件 —— 共享头
 // - 插件不链接 libagentxx: 日志经宿主接口表 log 转发 (替代 XX_LOG)
-// - g_pluginHost/g_ifaces 由入口 (agentxx_codegraph.cpp) 在 entry 时装配
-//   (COM 风格接口表一次性查询缓存, 见 plugin_iface_helper.h)
+//
+// 多实例约定 (2026-08 API v1): 同一动态库可被同一进程内不同 agent 宿主
+// 各自加载为独立实例, 本插件不持有任何可变全局; 功能状态一律存于每实例
+// PluginCtx (create 创建经 *plugin_ctx 交付宿主, 回调经 spec.user_data /
+// 订阅 ud 恢复); 日志经显式传入的 ctx 路由到宿主接口表。
 #pragma once
 
 #include "agentxx/plugin/plugin_api.h"
@@ -11,20 +14,26 @@
 #include "codegraph/core/json.hpp"
 #include "fmt/format.h"
 #include <cstring>
+#include <memory>
 #include <string>
+#include <vector>
 
 namespace agentxx_codegraph_plugin {
 
-/// 当前插件宿主句柄 (entry 装配; 线程安全: 只读)
-inline const AgentxxHost* g_host = nullptr;
+/// CodeGraphManager 前置声明 (完整定义见 codegraph_manager.h; 每实例
+/// PluginCtx 以 shared_ptr 持有 —— 多实例契约下各实例独立索引)
+class CodeGraphManager;
 
-/// 宿主接口表缓存 (entry 时 AgentIfaces::query 一次查询; 表为进程级静态数据)
-inline agentxx::plugin::AgentIfaces g_if{};
-
-/// 日志转发到宿主 agentxx.agent.log 接口表 (线程安全)
-inline void pluginLog(int level, const std::string& msg) {
-    if (g_host && g_if.log && g_if.log->log) {
-        g_if.log->log(g_host, level, agentxx_plugin_sv(msg.data(), msg.size()));
+/// 实例日志转发到宿主 agentxx.agent.log 接口表 (host/logIf 取自本实例
+/// 上下文; 任一为空时静默丢弃)。多实例契约: 不读任何进程级全局。
+inline void pluginLog(
+    const AgentxxHost*     host,
+    const AgentxxLogIface* logIf,
+    int                    level,
+    const std::string&     msg
+) {
+    if (host && logIf && logIf->log) {
+        logIf->log(host, level, agentxx_plugin_sv(msg.data(), msg.size()));
     }
 }
 
@@ -121,23 +130,15 @@ inline bool jsonGetStringArray(
     return true;
 }
 
-/// 宿主分配字符串 (跨边界内存)
-inline char* pluginStrdup(const char* s) {
-    if (!s) {
+/// 宿主分配字符串 (跨边界内存; host 取自回调恢复的实例上下文)
+inline char* pluginStrdup(const AgentxxHost* host, const char* s) {
+    if (!host || !s) {
         return nullptr;
     }
-    return g_host->vtable->strdup(s);
-}
-
-/// C ABI 边界异常守卫日志 (由守卫函数调用处显式传入; noexcept)
-inline void pluginCatchLog(const char* msg) noexcept {
-    agentxx::plugin_guard::defaultLogTo(g_host, g_if.log, 4, "agentxx_codegraph", msg);
+    return host->vtable->strdup(s);
 }
 
 } // namespace agentxx_codegraph_plugin
 
-#define XX_LOGT(...) ::agentxx_codegraph_plugin::pluginLog(0, fmt::format(__VA_ARGS__))
-#define XX_LOGD(...) ::agentxx_codegraph_plugin::pluginLog(1, fmt::format(__VA_ARGS__))
-#define XX_LOGI(...) ::agentxx_codegraph_plugin::pluginLog(2, fmt::format(__VA_ARGS__))
-#define XX_LOGW(...) ::agentxx_codegraph_plugin::pluginLog(3, fmt::format(__VA_ARGS__))
-#define XX_LOGE(...) ::agentxx_codegraph_plugin::pluginLog(4, fmt::format(__VA_ARGS__))
+// 注意: XX_LOG* 宏已移除 (多实例契约要求日志携带实例上下文); 本插件的
+// 日志调用点统一改为 pluginLog(ctx, level, fmt::format(...)) 直调形式

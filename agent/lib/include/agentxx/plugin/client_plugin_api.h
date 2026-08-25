@@ -320,23 +320,28 @@ typedef struct AgentxxClientLogIface {
 
 /* ==================== 插件入口符号 (dlsym) ==================== */
 
-/// 可选: 查询插件元信息 (加载前调用, 用于版本/信息校验; 未导出则跳过)
+/// 可选: 查询插件元信息 (加载前调用, 用于版本/信息校验; 未导出则跳过;
+/// 纯静态元数据, 不得读取/依赖任何实例状态)
 typedef const AgentxxClientPluginInfo* (*AgentxxClientPluginGetInfoFn)(void);
 
-/// 必需: client 侧插件入口 (宿主线程池调用; 内部注册动作宿主自动投递回
-/// client io 线程; 语义同 agent 侧 agentxx_plugin_entry)
-/// - host: 本插件专属宿主句柄 (opaque 已关联本插件)
-/// - plugin_ctx: 输出插件私有上下文 (透传给 unload)
-/// - 返回 0 成功; 非 0 加载失败 (宿主 dlclose 并报告错误)
-typedef int (*AgentxxClientPluginEntryFn)(const AgentxxClientHost* host, void** plugin_ctx);
+/// 必需: client 侧插件实例创建 (宿主线程池调用; 内部注册动作宿主自动投递回
+/// client io 线程; 语义同 agent 侧 agentxx_plugin_create)
+/// 【多实例契约】可重入, 每次调用产出独立存活实例 —— 一切实例状态只能
+/// 存于 *plugin_ctx 指向的堆块 (禁止可变全局/函数级 static 缓存); 一切注册
+/// 回调必须设置 user_data = 实例上下文。
+/// - host: 本实例专属宿主句柄 (opaque 已关联本实例)
+/// - plugin_ctx: 输出本实例私有上下文 (透传给 destroy)
+/// - 返回 0 成功; 非 0 创建失败 (宿主走失败清理路径并报告错误)
+typedef int (*AgentxxClientPluginCreateFn)(const AgentxxClientHost* host, void** plugin_ctx);
 
-/// 可选: 插件卸载通知 (宿主等全部在途回调完成后调用; 宿主会在此之前自动
-/// 反注册该插件的一切 status item/panel/command/订阅)
-typedef void (*AgentxxClientPluginUnloadFn)(void* plugin_ctx);
+/// 可选: 插件实例销毁 (宿主等全部在途回调完成后调用; 宿主会在此之前自动
+/// 反注册该实例的一切 status item/panel/command/订阅)。只销毁对应 create
+/// 产出的实例上下文, 与其他并存实例无关。
+typedef void (*AgentxxClientPluginDestroyFn)(void* plugin_ctx);
 
 #define AGENTXX_CLIENT_SYMBOL_GET_INFO "agentxx_client_get_info"
-#define AGENTXX_CLIENT_SYMBOL_ENTRY    "agentxx_client_entry"
-#define AGENTXX_CLIENT_SYMBOL_UNLOAD   "agentxx_client_unload"
+#define AGENTXX_CLIENT_SYMBOL_CREATE   "agentxx_client_create"
+#define AGENTXX_CLIENT_SYMBOL_DESTROY  "agentxx_client_destroy"
 
 #ifdef __cplusplus
 }

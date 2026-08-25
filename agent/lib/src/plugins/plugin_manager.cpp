@@ -568,8 +568,8 @@ void PluginManager::shutdownPlugin(const std::shared_ptr<PluginInstance>& inst) 
     // - 内置插件无 dlHandle, 直接调用加载时保存的回调
     if (inst->dlHandle) {
         std::string err;
-        auto        fn = reinterpret_cast<AgentxxPluginUnloadFn>(
-            NativeLoader::sym(inst->dlHandle, AGENTXX_PLUGIN_SYMBOL_UNLOAD, err)
+        auto        fn = reinterpret_cast<AgentxxPluginDestroyFn>(
+            NativeLoader::sym(inst->dlHandle, AGENTXX_PLUGIN_SYMBOL_DESTROY, err)
         );
         if (fn) {
             fn(inst->pluginCtx);
@@ -2752,8 +2752,8 @@ asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadNativeAsync(
         co_return nullptr;
     }
 
-    auto entry = reinterpret_cast<AgentxxPluginEntryFn>(
-        NativeLoader::sym(handle, AGENTXX_PLUGIN_SYMBOL_ENTRY, err)
+    auto entry = reinterpret_cast<AgentxxPluginCreateFn>(
+        NativeLoader::sym(handle, AGENTXX_PLUGIN_SYMBOL_CREATE, err)
     );
     if (!entry) {
         // 接口声明意图预检: manifest 声明依赖 agent 侧接口却未导出 agent
@@ -2763,7 +2763,7 @@ asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadNativeAsync(
                 "Plugin `{}` requires agent-side interfaces but missing entry "
                 "symbol `{}`: {}",
                 path,
-                AGENTXX_PLUGIN_SYMBOL_ENTRY,
+                AGENTXX_PLUGIN_SYMBOL_CREATE,
                 err
             );
         } else if (allowClientOnlySkip) {
@@ -2774,13 +2774,13 @@ asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadNativeAsync(
                 "Plugin `{}` has no agent entry `{}`, skipped on agent side "
                 "(client-only plugin? check sides config)",
                 path,
-                AGENTXX_PLUGIN_SYMBOL_ENTRY
+                AGENTXX_PLUGIN_SYMBOL_CREATE
             );
         } else {
             XX_LOGE(
                 "Plugin `{}` missing entry symbol `{}`: {}",
                 path,
-                AGENTXX_PLUGIN_SYMBOL_ENTRY,
+                AGENTXX_PLUGIN_SYMBOL_CREATE,
                 err
             );
         }
@@ -2916,7 +2916,7 @@ asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadBuiltinAsync
 
     // 内置注册表查找 (编译进 libagentxx 的插件; 无 dlopen)
     const AgentxxBuiltinPluginInfo* entry = findBuiltinPlugin(name);
-    if (!entry || !entry->entry) {
+    if (!entry || !entry->create) {
         XX_LOGE(
             "Builtin plugin `{}` not found (not merged into libagentxx; "
             "rebuild with AGENTXX_ENABLE_PLUGIN_BUILTIN=ON and this plugin enabled)",
@@ -2968,7 +2968,7 @@ asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadBuiltinAsync
     // 传配置目录会误推导到上一级, 见 loadPluginAsync 内置回退)
     inst->path            = std::move(path);
     inst->dlHandle        = nullptr; // 内置插件无动态库句柄
-    inst->builtinUnload   = entry->unload;
+    inst->builtinUnload   = entry->destroy;
     inst->depends         = std::move(depends);
     inst->optionalDepends = std::move(optionalDepends);
     // 接口声明随加载传入 (与 loadNativeAsync 同语义; 内置插件符号天然齐备,
@@ -2997,7 +2997,7 @@ asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadBuiltinAsync
         *ctx->threadPool,
         [inst, entry]() -> asio::awaitable<int> {
             try {
-                co_return entry->entry(&inst->host, &inst->pluginCtx);
+                co_return entry->create(&inst->host, &inst->pluginCtx);
             } catch (const std::exception& e) {
                 XX_LOGE("Plugin `{}` entry threw: {}", inst->name, e.what());
             } catch (...) {
@@ -3248,8 +3248,8 @@ asio::awaitable<bool> PluginManager::unloadAsync(std::string_view name) {
     // plugins_ 表状态不一致)
     if (inst->dlHandle) {
         std::string err;
-        auto        fn = reinterpret_cast<AgentxxPluginUnloadFn>(
-            NativeLoader::sym(inst->dlHandle, AGENTXX_PLUGIN_SYMBOL_UNLOAD, err)
+        auto        fn = reinterpret_cast<AgentxxPluginDestroyFn>(
+            NativeLoader::sym(inst->dlHandle, AGENTXX_PLUGIN_SYMBOL_DESTROY, err)
         );
         if (fn) {
             try {

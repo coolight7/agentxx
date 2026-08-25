@@ -55,31 +55,32 @@ char* wrapExecute(
     volatile int*           cancel_flag,
     char**                  error_out
 ) {
-    (void)user_data;
+    auto* ctx = static_cast<PluginCtx*>(user_data);
     (void)tool_call_id;
+    const AgentxxHost* host = ctx ? ctx->host : nullptr;
     try {
         std::string argsStr(args_json.data ? args_json.data : "", args_json.size);
         auto arguments = argsStr.empty() ? neograph::json::object() : neograph::json::parse(argsStr);
         // 会话取消查询回调: 捕获 thread_id 视图内容 (回调生命周期内有效);
         // cancel_flag 置位时同样视为取消 (宿主超时/放弃路径触发)
         std::string tid{thread_id.data ? thread_id.data : "", thread_id.size};
-        auto isCancelled = [tid, cancel_flag]() -> bool {
+        auto isCancelled = [ctx, tid, cancel_flag]() -> bool {
             if (cancel_flag && *cancel_flag != 0) {
                 return true;
             }
-            return isSessionCancelled(agentxx_plugin_sv(tid.data(), tid.size()));
+            return isSessionCancelled(ctx, agentxx_plugin_sv(tid.data(), tid.size()));
         };
-        auto workDir = readWorkDir(agentxx_plugin_sv(tid.data(), tid.size()));
+        auto workDir = readWorkDir(ctx, agentxx_plugin_sv(tid.data(), tid.size()));
         auto result  = ExecFn(arguments, workDir, isCancelled);
-        return pluginStrdup(result.c_str());
+        return pluginStrdup(host, result.c_str());
     } catch (const std::exception& ex) {
         if (error_out) {
-            *error_out = pluginStrdup(ex.what());
+            *error_out = pluginStrdup(host, ex.what());
         }
         return nullptr;
     } catch (...) {
         if (error_out) {
-            *error_out = pluginStrdup("unknown exception");
+            *error_out = pluginStrdup(host, "unknown exception");
         }
         return nullptr;
     }
@@ -88,9 +89,10 @@ char* wrapExecute(
 } // namespace
 
 extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_get_info(void) {
-    // C ABI 边界异常守卫: 异常返回 NULL (宿主按"未导出"处理)
+    // C ABI 边界异常守卫: 异常返回 NULL (宿主按"未导出"处理);
+    // 本边界为纯静态元数据, 无实例上下文可捕获 → 空操作日志闭包
     return agentxx::plugin_guard::guardCall(
-        pluginCatchLog,
+        [](const char*) noexcept {},
         nullptr,
         [&]() -> const AgentxxPluginInfo* {
         static const AgentxxPluginInfo info{
@@ -104,20 +106,22 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_get_inf
 }
 
 extern "C" AGENTXX_PLUGIN_EXPORT int
-    agentxx_plugin_entry(const AgentxxHost* host, void** plugin_ctx) {
-    // C ABI 边界异常守卫: entry 内含 JSON schema 构建等可抛操作, 异常返回 -1
+    agentxx_plugin_create(const AgentxxHost* host, void** plugin_ctx) {
+    // C ABI 边界异常守卫: create 内含 JSON schema 构建等可抛操作, 异常返回 -1;
+    // 守卫日志闭包捕获局部裸指针 (ctx 装配前置空 → 异常路径静默丢弃)
+    PluginCtx* raw = nullptr;
     return agentxx::plugin_guard::guardCall(
-        pluginCatchLog,
+        [&raw](const char* msg) noexcept { pluginLog(raw, 4, msg ? msg : ""); },
         -1,
         [&]() -> int {
         if (!host || !host->vtable || !plugin_ctx) {
             return -1;
         }
-        g_host      = host;
-        g_if        = agentxx::plugin::AgentIfaces::query(host);
-        *plugin_ctx = nullptr;
-
-        static std::vector<std::string> g_storage;
+        auto ctx   = std::make_unique<PluginCtx>();
+        ctx->host  = host;
+        ctx->iface = agentxx::plugin::AgentIfaces::query(host);
+        raw        = ctx.get();
+        auto&      g_storage = ctx->storage; ///< 沿用原局部别名 (现挂到实例)
 
     #if XX_IS_WIN_D
         // 原生 Windows: 仅注册 windows command 工具
@@ -139,7 +143,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
     #endif
 
         if (registerWindows) {
-            ToolPromptText p      = readToolPrompt(kNameWindows);
+            ToolPromptText p      = readToolPrompt(ctx->host, ctx->iface, kNameWindows);
             std::string    depict = p.depict;
             if (depict.empty()) {
                 depict = kDepictWinPlaceholder;
@@ -180,16 +184,22 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                                   .dump();
             g_storage.push_back(std::move(schema));
 
+            // 垫片适配器: 实例内嵌存储 (ctx 持有, 随实例销毁释放)
+            auto shim = std::make_unique<AgentxxSyncToolShim>();
+
             AgentxxSyncToolSpec spec{};
             spec.name        = agentxx_plugin_sv(kNameWindows, std::strlen(kNameWindows));
             spec.description = agentxx_plugin_sv(g_storage[0].data(), g_storage[0].size());
             spec.parameters_json
                 = agentxx_plugin_sv(g_storage[1].data(), g_storage[1].size());
-            spec.user_data = nullptr;
+            spec.user_data = ctx.get();
             spec.flags     = AGENTXX_TOOL_FLAG_AUTO_SUMMARY;
             spec.execute   = &wrapExecute<agentxx_execmd_plugin::windowsExecute>;
-            if (agentxx_register_sync_tool(g_host, &spec) != 0) {
-                XX_LOGW("agentxx_execute_command: register tool {} failed", kNameWindows);
+            if (agentxx_register_sync_tool(host, &spec, shim.get()) != 0) {
+                pluginLog(ctx.get(), 3,
+                          fmt::format("agentxx_execute_command: register tool {} failed", kNameWindows));
+            } else {
+                ctx->sync_tool_shims.push_back(std::move(shim));
             }
         }
 
@@ -204,7 +214,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
     #endif
 
         if (registerBash) {
-            ToolPromptText p      = readToolPrompt(kNameBash);
+            ToolPromptText p      = readToolPrompt(ctx->host, ctx->iface, kNameBash);
             std::string    depict = p.depict;
             if (depict.empty()) {
                 depict = kDepictBash;
@@ -235,28 +245,34 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                                   .dump();
             g_storage.push_back(std::move(schema));
 
+            // 垫片适配器: 实例内嵌存储 (ctx 持有, 随实例销毁释放)
+            auto shim = std::make_unique<AgentxxSyncToolShim>();
+
             AgentxxSyncToolSpec spec{};
             spec.name        = agentxx_plugin_sv(kNameBash, std::strlen(kNameBash));
             spec.description = agentxx_plugin_sv(g_storage[2].data(), g_storage[2].size());
             spec.parameters_json
                 = agentxx_plugin_sv(g_storage[3].data(), g_storage[3].size());
-            spec.user_data = nullptr;
+            spec.user_data = ctx.get();
             spec.flags     = AGENTXX_TOOL_FLAG_AUTO_SUMMARY;
             spec.execute   = &wrapExecute<agentxx_execmd_plugin::bashExecute>;
-            if (agentxx_register_sync_tool(g_host, &spec) != 0) {
-                XX_LOGW("agentxx_execute_command: register tool {} failed", kNameBash);
+            if (agentxx_register_sync_tool(host, &spec, shim.get()) != 0) {
+                pluginLog(ctx.get(), 3,
+                          fmt::format("agentxx_execute_command: register tool {} failed", kNameBash));
+            } else {
+                ctx->sync_tool_shims.push_back(std::move(shim));
             }
         }
 
+        *plugin_ctx = ctx.release(); ///< 所有权移交宿主 (destroy 时取回归还)
         return 0;
     });
 }
 
-extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_unload(void* plugin_ctx) {
-    // C ABI 边界异常守卫: 卸载回调异常不得外泄
-    agentxx::plugin_guard::guardCallVoid(pluginCatchLog, [&] {
-        (void)plugin_ctx;
-        g_host = nullptr;
-        g_if   = {};
-    });
+extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_destroy(void* plugin_ctx) {
+    // C ABI 边界异常守卫: 销毁回调异常不得外泄
+    auto* ctx = static_cast<PluginCtx*>(plugin_ctx);
+    agentxx::plugin_guard::guardCallVoid(
+        [ctx](const char* msg) noexcept { pluginLog(ctx, 4, msg ? msg : ""); },
+        [&] { delete ctx; }); // 垫片适配器为 ctx 内嵌存储, 随 ctx 一并释放
 }

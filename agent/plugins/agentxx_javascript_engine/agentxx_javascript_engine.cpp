@@ -48,22 +48,7 @@ namespace {
 // C ABI 边界异常守卫 (由守卫函数调用处显式传入; entry 装配缓存)
 // =====================================================================
 
-/// 守卫日志所需宿主缓存 (entry 装配; 进程级静态)
-const AgentxxHost*     g_guard_host = nullptr;
-const AgentxxLogIface* g_guard_log  = nullptr;
-
 } // namespace
-
-/// 异常守卫日志 (noexcept; 栈缓冲 + 宿主 log 接口表, 缺失时静默丢弃)
-static void pluginCatchLog(const char* msg) noexcept {
-    agentxx::plugin_guard::defaultLogTo(
-        g_guard_host,
-        g_guard_log,
-        4,
-        "agentxx_javascript_engine",
-        msg
-    );
-}
 
 namespace {
 
@@ -177,12 +162,34 @@ public:
 
     void setEngineHost(const AgentxxHost* host) {
         engineHost_ = host;
+        if (host && host->vtable && host->vtable->query_interface) {
+            logIface_ = static_cast<const AgentxxLogIface*>(host->vtable->query_interface(
+                host, AGENTXX_SV(AGENTXX_IFACE_AGENT_LOG)));
+        }
+    }
+
+    /// 守卫异常日志 (noexcept; 经本实例宿主接口表输出 —— 多实例契约:
+    /// 不读任何全局, 日志归属精确到本引擎实例)
+    void guardLog(const char* msg) const noexcept {
+        agentxx::plugin_guard::logTo(engineHost_, logIface_, 4, "agentxx_javascript_engine",
+                                     msg ? msg : "");
+    }
+
+    /// 守卫日志闭包工厂 (捕获 this; 供静态回调内 guardCall 使用)
+    auto guardLogger() const noexcept {
+        return [this](const char* msg) noexcept { guardLog(msg); };
     }
 
     /// 引擎插件宿主句柄 (供静态桥回调读取; 可空)
     const AgentxxHost* host() const {
         return engineHost_;
     }
+
+private:
+    /// 宿主 log 接口表缓存 (setEngineHost 装配; 随实例生死)
+    const AgentxxLogIface* logIface_ = nullptr;
+
+public:
 
     /// JS 线程内加载脚本 (公共转发; 供能力方法异步任务在 JS 线程内直调)
     int loadScriptOnJsThread(
@@ -892,9 +899,9 @@ void* JsEngine::toolExecuteStart(
 ) {
     // C ABI 回调异常守卫: start 由宿主 io 线程调用 (请求打包/入队含分配),
     // 异常经通知器上报 OP_FAILED, 不外泄
-    try {
     auto* binding = static_cast<JsToolBinding*>(ud);
-    auto* engine  = binding ? binding->engine : nullptr;
+    auto* engine  = binding ? binding->engine : nullptr; ///< 提升至 try 外 (catch 日志闭包使用)
+    try {
     if (!engine || !notify) {
         return nullptr;
     }
@@ -903,10 +910,16 @@ void* JsEngine::toolExecuteStart(
     req->tid   = std::string{thread_id.data ? thread_id.data : "", thread_id.size};
     req->tcid  = std::string{tool_call_id.data ? tool_call_id.data : "", tool_call_id.size};
 
-    // op 句柄仅作占位标识 (生命周期由本函数管理; 宿主不解释其内容)
+    // op 句柄仅作占位标识 (宿主不解释其内容): 所有权随任务闭包移交 JS 线程,
+    // 通知完成后由闭包自身释放 —— 支持同一引擎插件被多实例加载/反复加载
+    // (此前成功路径 new 后无人 delete, 每次工具执行泄漏句柄)
     auto*      op = new int(0);
-    if (!engine->post([engine, binding, req, notify]() {
-            // ---- JS 线程: 执行并上报 ----
+    if (!engine->post([engine, binding, req, notify, op]() {
+            // ---- JS 线程: 执行并上报 (RAII 兜底释放句柄) ----
+            struct OpReleaser {
+                int* p;
+                ~OpReleaser() { delete p; }
+            } releaser{op};
             engine->doToolExecute(binding, *req);
             const AgentxxHost* host = engine->engineHost_;
             if (!req->error.empty()) {
@@ -917,7 +930,7 @@ void* JsEngine::toolExecuteStart(
                 notify->done(notify->host_ud, AGENTXX_OP_OK, payload);
             }
         })) {
-        // 引擎已停止: 启动失败
+        // 引擎已停止: 启动失败 (未入队 → 句柄由本函数直接释放)
         delete op;
         if (error_out && engine->engineHost_) {
             *error_out = engine->engineHost_->vtable->strdup("interpreter.js engine stopped");
@@ -927,7 +940,8 @@ void* JsEngine::toolExecuteStart(
     return op;
     } catch (...) {
         // 异常分类上报 + 经通知器上报失败 (宿主 io 线程等通知, 必须终结)
-        ::agentxx::plugin_guard::reportCurrentException(pluginCatchLog);
+        ::agentxx::plugin_guard::reportCurrentException(
+            [engine](const char* m) noexcept { engine->guardLog(m); });
         if (error_out) {
             *error_out = nullptr;
         }
@@ -947,9 +961,9 @@ void* JsEngine::hookStart(
 ) {
     (void)error_out;
     // C ABI 回调异常守卫: start 由宿主 io 线程调用, 异常经通知器上报
-    try {
     auto* binding = static_cast<JsHookBinding*>(ud);
-    auto* engine  = binding ? binding->engine : nullptr;
+    auto* engine  = binding ? binding->engine : nullptr; ///< 提升至 try 外 (catch 日志闭包使用)
+    try {
     if (!engine || !notify) {
         return nullptr;
     }
@@ -962,7 +976,8 @@ void* JsEngine::hookStart(
     notify->done(notify->host_ud, AGENTXX_OP_OK, nullptr);
     return nullptr;
     } catch (...) {
-        ::agentxx::plugin_guard::reportCurrentException(pluginCatchLog);
+        ::agentxx::plugin_guard::reportCurrentException(
+            [engine](const char* m) noexcept { if (engine) engine->guardLog(m); });
         if (notify && notify->done) {
             notify->done(notify->host_ud, AGENTXX_OP_FAILED, nullptr);
         }
@@ -971,10 +986,12 @@ void* JsEngine::hookStart(
 }
 
 void JsEngine::eventFire(AgentxxPluginStringView event_json, void* ud) {
+    auto* binding = static_cast<JsHookBinding*>(ud);
+    auto* engine  = binding ? binding->engine : nullptr;
     // C ABI 回调异常守卫: 事件分发由宿主 io 线程调用, 异常不外泄
-    agentxx::plugin_guard::guardCallVoid(pluginCatchLog, [&] {
-        auto* binding = static_cast<JsHookBinding*>(ud);
-        auto* engine  = binding ? binding->engine : nullptr;
+    agentxx::plugin_guard::guardCallVoid(
+        [engine](const char* m) noexcept { if (engine) engine->guardLog(m); },
+        [&] {
         if (!engine) {
             return;
         }
@@ -1574,8 +1591,8 @@ static void* jsCapStart(
 ) {
     // C ABI 回调异常守卫: 能力方法 start 由宿主 op 驱动器在 io 线程调用,
     // 内含接口查询/文件读取/字符串操作等可抛路径, 异常转 error_out 失败
+    auto* engine = static_cast<JsEngine*>(ctx); ///< 提升至 try 外 (catch 日志闭包使用)
     try {
-    auto* engine = static_cast<JsEngine*>(ctx);
     auto  setErr = [&](const char* msg) {
         if (error_out && caller_host) {
             *error_out = caller_host->vtable->strdup(msg);
@@ -1664,7 +1681,8 @@ static void* jsCapStart(
     return nullptr;
     } catch (...) {
         // 异常分类上报 + 尽力设置 error_out (宿主按 OP_FAILED 处理)
-        ::agentxx::plugin_guard::reportCurrentException(pluginCatchLog);
+        ::agentxx::plugin_guard::reportCurrentException(
+            [engine](const char* m) noexcept { if (engine) engine->guardLog(m); });
         if (error_out && caller_host && caller_host->vtable && caller_host->vtable->strdup) {
             *error_out = caller_host->vtable->strdup("interpreter.js: internal exception");
         }
@@ -1673,26 +1691,24 @@ static void* jsCapStart(
 }
 
 extern "C" AGENTXX_PLUGIN_EXPORT int
-    agentxx_plugin_entry(const AgentxxHost* host, void** plugin_ctx) {
-    // C ABI 边界异常守卫: entry 含引擎线程创建/能力注册等可抛操作,
-    // 异常返回 -1 走宿主加载失败清理路径
+    agentxx_plugin_create(const AgentxxHost* host, void** plugin_ctx) {
+    // C ABI 边界异常守卫: create 含引擎线程创建/能力注册等可抛操作,
+    // 异常返回 -1 走宿主加载失败清理路径; 日志闭包捕获局部裸指针
+    JsEngine* raw = nullptr;
     return agentxx::plugin_guard::guardCall(
-        pluginCatchLog,
+        [&raw](const char* m) noexcept { if (raw) raw->guardLog(m); },
         -1,
         [&]() -> int {
-        // 守卫日志缓存 (供各回调异常兜底使用)
-        g_guard_host = host;
-        if (host && host->vtable && host->vtable->query_interface) {
-            g_guard_log = (const AgentxxLogIface*)host->vtable->query_interface(
-                host,
-                AGENTXX_SV(AGENTXX_IFACE_AGENT_LOG)
-            );
+        if (!host || !host->vtable || !plugin_ctx) {
+            return -1;
         }
         auto* engine = new JsEngine();
+        raw = engine; ///< create 段内异常路径日志可用 (函数出口随栈帧销毁)
         engine->setEngineHost(host);
 
-        // COM 风格接口表查询: entry 内一次性查询缓存全部已知 IID
-        static const agentxx::plugin::AgentIfaces s_if = agentxx::plugin::AgentIfaces::query(host);
+        // COM 风格接口表查询: entry 内一次性查询全部已知 IID (存入局部;
+        // 不可用函数级 static —— 多实例加载时各宿主接口表指针不同)
+        const agentxx::plugin::AgentIfaces s_if = agentxx::plugin::AgentIfaces::query(host);
         if (!s_if.capabilities || !s_if.capabilities->register_capability_ex || !s_if.log) {
             delete engine;
             return -1;
@@ -1714,21 +1730,28 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
             delete engine;
             return -1;
         }
-        *plugin_ctx = engine;
+        // 先日志后交付: 若日志抛异常走 -1 失败路径时引擎仍由本函数 delete
+        // (避免 ctx 已交付但 rc=-1 的所有权歧义)
         s_if.log->log(host, 2, AGENTXX_SV("agentxx_javascript_engine loaded (QuickJS interpreter.js)"));
+        *plugin_ctx = engine; ///< 所有权移交宿主 (destroy 时取回归还)
         return 0;
     });
 }
 
-extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_unload(void* plugin_ctx) {
-    // C ABI 边界异常守卫: 卸载回调 (delete 引擎 = 停线程 + 释放 runtime)
-    // 异常不得外泄, 否则 JS 线程/runtime 泄漏且宿主卸载流程被打断
-    agentxx::plugin_guard::guardCallVoid(pluginCatchLog, [&] {
-        auto* engine = static_cast<JsEngine*>(plugin_ctx);
-        if (engine) {
-            delete engine; // 停止 JS 线程并释放 runtime
-        }
-        g_guard_host = nullptr;
-        g_guard_log  = nullptr;
-    });
+extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_destroy(void* plugin_ctx) {
+    auto* engine = static_cast<JsEngine*>(plugin_ctx);
+    // C ABI 边界异常守卫: 销毁回调 (delete 引擎 = 停线程 + 释放 runtime)
+    // 异常不得外泄, 否则 JS 线程/runtime 泄漏且宿主卸载流程被打断;
+    // 先借本实例宿主句柄装配日志闭包再 delete (delete 后不得访问成员)
+    const AgentxxHost* ownHost = engine ? engine->host() : nullptr;
+    const AgentxxLogIface* ownLog = nullptr;
+    if (ownHost && ownHost->vtable && ownHost->vtable->query_interface) {
+        ownLog = static_cast<const AgentxxLogIface*>(ownHost->vtable->query_interface(
+            ownHost, AGENTXX_SV(AGENTXX_IFACE_AGENT_LOG)));
+    }
+    agentxx::plugin_guard::guardCallVoid(
+        [ownHost, ownLog](const char* m) noexcept {
+            agentxx::plugin_guard::logTo(ownHost, ownLog, 4, "agentxx_javascript_engine", m);
+        },
+        [engine]() noexcept { delete engine; }); // 停止 JS 线程并释放 runtime
 }

@@ -48,9 +48,9 @@ if (_AGENTXX_ADD_AS_BUILTIN)
   )
   target_compile_definitions(${_target} PRIVATE
     "AGENTXX_PLUGIN_BUILTIN=1"
-    "agentxx_plugin_entry=agentxx_plugin_builtin_entry_${PLUGIN_NAME}"
+    "agentxx_plugin_create=agentxx_plugin_builtin_create_${PLUGIN_NAME}"
     "agentxx_plugin_get_info=agentxx_plugin_builtin_get_info_${PLUGIN_NAME}"
-    "agentxx_plugin_unload=agentxx_plugin_builtin_unload_${PLUGIN_NAME}"
+    "agentxx_plugin_destroy=agentxx_plugin_builtin_destroy_${PLUGIN_NAME}"
   )
   target_include_directories(${_target} PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}"          # cpu_gpu_monitor.h / system_monitor_plugin.h
@@ -70,11 +70,11 @@ set_target_properties(${_target} PROPERTIES
   set(AGENTXX_BUILTIN_MANIFEST_DECLS
     "${AGENTXX_BUILTIN_MANIFEST_DECLS}
 extern \"C\" const AgentxxPluginInfo* agentxx_plugin_builtin_get_info_${PLUGIN_NAME}(void);
-extern \"C\" int agentxx_plugin_builtin_entry_${PLUGIN_NAME}(const AgentxxHost* host, void** plugin_ctx);
-extern \"C\" void agentxx_plugin_builtin_unload_${PLUGIN_NAME}(void* plugin_ctx);")
+extern \"C\" int agentxx_plugin_builtin_create_${PLUGIN_NAME}(const AgentxxHost* host, void** plugin_ctx);
+extern \"C\" void agentxx_plugin_builtin_destroy_${PLUGIN_NAME}(void* plugin_ctx);")
   set(AGENTXX_BUILTIN_MANIFEST_ENTRIES
     "${AGENTXX_BUILTIN_MANIFEST_ENTRIES}
-    {\"${PLUGIN_NAME}\", agentxx_plugin_builtin_get_info_${PLUGIN_NAME}, agentxx_plugin_builtin_entry_${PLUGIN_NAME}, agentxx_plugin_builtin_unload_${PLUGIN_NAME}},")
+    {\"${PLUGIN_NAME}\", agentxx_plugin_builtin_get_info_${PLUGIN_NAME}, agentxx_plugin_builtin_create_${PLUGIN_NAME}, agentxx_plugin_builtin_destroy_${PLUGIN_NAME}},")
   if (WIN32)
     # cpu_gpu_monitor Windows 分支: PDH (性能计数器) + DXGI (GPU 适配器枚举)
     # - 独立模式经下方独立分支 PRIVATE 链接; 内置模式经本收集通道并入 libagentxx

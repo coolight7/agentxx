@@ -301,14 +301,29 @@ typedef struct AgentxxHookSpec {
 `ClientIfaces::query(host)` 一次性查询聚合 (header-only, 非跨边界 ABI);
 第三方插件可不用它而直接调 `query_interface` (纯 C 路径不受影响)。
 
-**入口符号** (dlsym):
+**入口符号** (dlsym; v1 重构 — create/destroy 实例对):
 ```c
-#define AGENTXX_PLUGIN_SYMBOL_GET_INFO "agentxx_plugin_get_info"  ///< 可选: 元信息 (加载前校验)
-#define AGENTXX_PLUGIN_SYMBOL_ENTRY    "agentxx_plugin_entry"     ///< 必需: 入口
-#define AGENTXX_PLUGIN_SYMBOL_UNLOAD   "agentxx_plugin_unload"    ///< 可选: 卸载通知
+#define AGENTXX_PLUGIN_SYMBOL_GET_INFO "agentxx_plugin_get_info"  ///< 可选: 元信息 (纯静态, 加载前校验)
+#define AGENTXX_PLUGIN_SYMBOL_CREATE   "agentxx_plugin_create"    ///< 必需: 创建一个实例
+#define AGENTXX_PLUGIN_SYMBOL_DESTROY  "agentxx_plugin_destroy"   ///< 可选: 销毁对应实例
 ```
-- `entry` 运行在宿主线程池; 其中经 vtable 的注册/订阅等 io 线程约束操作由宿主自动投递回 io 线程串行执行 (插件无感, entry 内可安全调用任意 API)
-- `unload` 在宿主等全部在途回调完成后调用; 宿主会在此之前自动反注册该插件的一切工具/钩子/订阅/能力
+- `create` 可重入: 同一动态库可被同进程内不同宿主各自调用 N 次, 每次产出
+  一个完全独立的存活实例 (COM 类工厂语义)。历史 `entry/unload` 命名已废弃,
+  旧插件经符号查找失败被拒载 (无兼容路径)
+- client 侧对称: `agentxx_client_get_info` / `agentxx_client_create` /
+  `agentxx_client_destroy`
+
+**多实例三铁律 (v1 契约)**:
+1. 禁止任何可变全局 / 函数级 static 缓存 (常量表除外) —— 动态库 dlopen 引用
+   计数共享代码段与 .data/.bss, 全局状态会被所有并存实例共享;
+2. 一切实例状态只能存于 `*plugin_ctx` 指向的堆块; 一切注册回调必须设置
+   `spec.user_data = ctx`, 回调内经其恢复自身实例;
+3. 接口表查询结果存入实例上下文 (`AgentIfaces::query` 结果不得缓存到静态区)。
+
+守卫异常日志经捕获实例上下文的闭包传入 `plugin_guard::guardCall`
+(固定签名函数指针无法携带实例 → 仅限 get_info 纯静态边界使用)。
+同步垫片 (`plugin_tool_sync.h`) 适配器为调用方内嵌存储 (PluginCtx 成员),
+随实例生死 —— 反复加载/多实例零泄漏、零进程级登记。
 
 **版本策略 (双层)**: 全局 `AGENTXX_PLUGIN_API_VERSION` (=1) 只覆盖核心契约
 (核心 vtable 形状 + Info 结构 + 入口符号 + 共享类型); 宿主精确匹配门禁,
@@ -383,7 +398,7 @@ api_version 不匹配的插件直接拒绝加载 (仅拒绝不崩溃), **无历�
      libagentxx, 无需导出)
    - 插件定义入口函数时必须加宏前缀 (宏在 `extern "C"` **之后**):
      ```c
-     extern "C" AGENTXX_PLUGIN_EXPORT int agentxx_plugin_entry(const AgentxxHost* host, void** plugin_ctx);
+     extern "C" AGENTXX_PLUGIN_EXPORT int agentxx_plugin_create(const AgentxxHost* host, void** plugin_ctx);
      ```
 2. **编译期隐藏**: 插件项目统一 `-fvisibility=hidden -fvisibility-inlines-hidden`
    (plugins/CMakeLists.txt `add_compile_options`, 作用于全部插件目标)
@@ -538,7 +553,7 @@ std::string b64 = agentxx::util::base64Encode(sv);  // 静态链入本插件副�
   - 源文件编译为**独立 OBJECT 库** (`abp_<插件名>`, per-plugin 编译定义/
     包含路径互不影响), 目标文件经 `$<TARGET_OBJECTS:...>` 合并进
     agentxx_shared/agentxx_static
-  - 入口符号经编译定义改名, 避免多插件合并编译冲突: `agentxx_plugin_entry`
+  - 入口符号经编译定义改名, 避免多插件合并编译冲突: `agentxx_plugin_create`
     → `agentxx_plugin_builtin_entry_<插件名>` (get_info/unload/client 入口
     同理; 纯编译期 -D, 插件源码零改动)
   - 依赖库登记进 `AGENTXX_BUILTIN_PLUGIN_LINK_LIBS` 由 libagentxx 链接:
@@ -565,7 +580,7 @@ std::string b64 = agentxx::util::base64Encode(sv);  // 静态链入本插件副�
 - `inst->dlHandle` 为空, unload 回调经 `builtinUnload` 直接调用
   (shutdownAll/unloadAsync 两路径均支持)
 - 也支持显式 `builtin://插件名` 路径 (无资源需求的插件/测试直连用)
-- client 侧插件 (agentxx_client_entry) 仍走独立动态库构建 (client 可执行
+- client 侧插件 (agentxx_client_create) 仍走独立动态库构建 (client 可执行
   程序按需外置), 内置模式不产出 client 插件库; `client_plugins` 测试在
   内置模式下跳过
 
@@ -856,7 +871,7 @@ agent 侧插件 (工具/钩子/事件/能力) 已完备, 但 client (CLI/TUI) �
 | 决策 | 结论 | 理由 |
 |------|------|------|
 | 插件能否直接操作 UI 组件树 | **不能**。扩展点是 UI 无关的"语义层" | 暴露 FTXUI 组件会把插件绑死在 TUI 框架上, GUI 无法复用, CLI 无从谈起 |
-| ABI 组织 | **独立头 `client_plugin_api.h` + 独立入口符号 `agentxx_client_entry` + 独立版本号 (v1, COM 风格接口表)** | client 侧扩展点迭代频繁; 独立符号集与独立核心版本使两侧契约互不影响; 接口表各自带 version 演进 |
+| ABI 组织 | **独立头 `client_plugin_api.h` + 独立入口符号 `agentxx_client_create` + 独立版本号 (v1, COM 风格接口表)** | client 侧扩展点迭代频繁; 独立符号集与独立核心版本使两侧契约互不影响; 接口表各自带 version 演进 |
 | 双端插件 | **同一动态库可导出两套入口**, 两个 PluginManager 各自 dlopen/装配 | codegraph 这类插件天然需要 "agent 侧提供工具 + client 侧展示进度" 的成对能力; dlopen 引用计数支持同库双实例 |
 | 跨端通信 | **统一走 wire 协议**: 已有 `WirePluginData` (agent→client), 新增 `WirePluginDataUp` (client→agent) | 本地 Channel 模式与远程 WS 模式路径完全一致, 插件不感知部署形态 |
 | 代码归属 | **UI 无关宿主层放 `agent/lib` (plugin/ 目录), TUI/CLI 适配器放 `agent/client`** | 未来 GUI 只需实现一个 `PluginUiAdapter` 即可复用宿主层 |
@@ -965,8 +980,8 @@ typedef struct AgentxxClientPluginInfo {
 
 /* 入口符号 */
 #define AGENTXX_CLIENT_SYMBOL_GET_INFO "agentxx_client_get_info"
-#define AGENTXX_CLIENT_SYMBOL_ENTRY    "agentxx_client_entry"
-#define AGENTXX_CLIENT_SYMBOL_UNLOAD   "agentxx_client_unload"
+#define AGENTXX_CLIENT_SYMBOL_CREATE   "agentxx_client_create"
+#define AGENTXX_CLIENT_SYMBOL_DESTROY  "agentxx_client_destroy"
 ```
 
 核心 `AgentxxClientHostVtable` 极简且【契约冻结】(仅 4 成员: alloc/free/
@@ -1014,10 +1029,10 @@ strdup/query_interface); 其余宿主能力全部按 IID 查询独立接口表 (
 | example_plugin | `agent/plugins/example_plugin/` | 示例插件 (双端): 3 工具 (echo/caller 互调/sleep 慢工具) + agent_start 钩子 + 事件订阅 + 能力声明 + client 入口 (状态栏/面板/Info 段落/命令/事件/跨端) |
 | example_js | `agent/plugins/example_js/` | JS 示例插件 (C++ 壳 + plugin.js): 4 工具 (同步/async Promise/JS 内互调/宿主互调) + 钩子 + 事件订阅 + 互查 + 顶层异步初始化; depends: agentxx_javascript_engine |
 | agentxx_javascript_engine | `agent/plugins/agentxx_javascript_engine/` | QuickJS 引擎插件 (链接 libqjs.a): 注册能力 `interpreter.js` (方法 load/unload); 专用 JS 线程 + 任务队列 + agentxx 桥 + 沙箱 |
-| agentxx_codegraph | `agent/plugins/agentxx_codegraph/` | CodeGraph 代码分析: 8 工具 (search/context/callers/callees/impact/status/index/path); 索引进度/加载状态经 publish 事件 (topic `{插件名}.{事件名}`) 通知宿主, 由 SessionServerAgentIO 原样转发 WirePluginData; 插件 client 入口 (agentxx_client_entry) 订阅该事件并以侧边栏 Info 栏段落 (CodeGraph) 渲染索引进度/就绪状态 —— TUI 不再直接解析渲染插件载荷; 工具提示词默认值从 lib AgentPrompt 剥离迁移 (2026-08), entry 时经 `set_prompt` 写入宿主 toolPrompt (宿主已有条目则跳过, 尊重用户 yaml 覆盖); 插件参数经 yaml plugins args (paths/ignore_paths/load_cwd/use_gitignore) |
+| agentxx_codegraph | `agent/plugins/agentxx_codegraph/` | CodeGraph 代码分析: 8 工具 (search/context/callers/callees/impact/status/index/path); 索引进度/加载状态经 publish 事件 (topic `{插件名}.{事件名}`) 通知宿主, 由 SessionServerAgentIO 原样转发 WirePluginData; 插件 client 入口订阅该事件并以侧边栏 Info 栏段落 (CodeGraph) 渲染索引进度/就绪状态 —— TUI 不再直接解析渲染插件载荷; 工具提示词默认值从 lib AgentPrompt 剥离迁移 (2026-08), entry 时经 `set_prompt` 写入宿主 toolPrompt (宿主已有条目则跳过, 尊重用户 yaml 覆盖); 插件参数经 yaml plugins args (paths/ignore_paths/load_cwd/use_gitignore) |
 | agentxx_screen_capture | `agent/plugins/agentxx_screen_capture/` | 屏幕捕获 (仅 Windows): 工具 `agentxx_screen_capture` (单帧/全部屏幕/鼠标屏/指定屏幕/流式推帧事件 topic `agentxx_screen_capture.frame`) |
 | agentxx_computer_use | `agent/plugins/agentxx_computer_use/` | 键鼠控制 (仅 Windows): 工具 `agentxx_ui_control_keyboard_mouse`; plugin.yaml `depends: [agentxx_screen_capture]` (须同时配置加载) |
-| agentxx_system_monitor | `agent/plugins/agentxx_system_monitor/` | 系统资源监控 (从 lib `src/expand/get_cpu_gpu_use` 拆分): 工具 `agentxx_get_system_core_info` (原内置工具迁移, lib 不再内置) + 能力 `agentxx.system_usage` (方法 query) + agent 侧周期采集线程 (每 5s 采样并 publish `agentxx_system_monitor.usage`, 定时/采集/发布完全位于插件内; 显示开关由 client `/sysinfo` 经跨端事件 `usage_enabled` 同步, 关闭期间跳过采集); 载荷为插件定义 schema 的 JSON 字符串, server 经 WirePluginData 原样转发; 插件 client 入口 (agentxx_client_entry) 订阅该事件以状态栏项渲染 CPU/RAM 占用 (快速一览) + 侧边栏 Info 栏段落渲染明细 (CPU/RAM/GPU) —— 采集实现与渲染完全隔离在插件内, lib wire 层不含任何系统资源 DTO |
+| agentxx_system_monitor | `agent/plugins/agentxx_system_monitor/` | 系统资源监控 (从 lib `src/expand/get_cpu_gpu_use` 拆分): 工具 `agentxx_get_system_core_info` (原内置工具迁移, lib 不再内置) + 能力 `agentxx.system_usage` (方法 query) + agent 侧周期采集线程 (每 5s 采样并 publish `agentxx_system_monitor.usage`, 定时/采集/发布完全位于插件内; 显示开关由 client `/sysinfo` 经跨端事件 `usage_enabled` 同步, 关闭期间跳过采集); 载荷为插件定义 schema 的 JSON 字符串, server 经 WirePluginData 原样转发; 插件 client 入口订阅该事件以状态栏项渲染 CPU/RAM 占用 (快速一览) + 侧边栏 Info 栏段落渲染明细 (CPU/RAM/GPU) —— 采集实现与渲染完全隔离在插件内, lib wire 层不含任何系统资源 DTO |
 | agentxx_audio_stream | `agent/plugins/agentxx_audio_stream/` | 音频流捕获 (从 lib `src/expand/audio_stream` 拆分; 仅 Windows WASAPI): 系统输出/程序输出/麦克风; 工具 `agentxx_audio_stream` (start/stop/status); 帧经 publish 事件推送 (topic `agentxx_audio_stream.audio`, base64 PCM); 非 Windows no-op |
 | agentxx_text_selection_monitor | `agent/plugins/agentxx_text_selection_monitor/` | 系统级文本选择事件流 (从 lib `src/expand/text_selection_monitor` 拆分; 仅 Windows UIAutomation/WinEvent/CDP/剪贴板兜底): 工具 `agentxx_text_selection_monitor` (start/stop/status); 选中文本经 publish 事件推送 (topic `agentxx_text_selection_monitor.selection`); 非 Windows no-op |
 | example_resources | `agent/plugins/example_resources/` | 会话资源示例 (v8): 演示插件贡献 Skill/Memory/MCP 的双通道 —— plugin.yaml 声明式段 (skills//assets/NOTES.md/mcp 示例条目) + entry 内 vtable `register_skill_dir` 运行时注册 (skills_runtime/); 语义见 4.2.1 |
@@ -1041,7 +1056,7 @@ plugins:
       use_gitignore: true                # 忽略 .gitignore/.gitmodules/.git
 ```
 
-- `sides` 语义: `agent` 仅 agent 侧加载; `client` 仅 client 侧加载; `auto` (同 `both`) 按导出符号自动决定 (client 侧: 有 `agentxx_client_entry` 才加载, 无则跳过并记日志)
+- `sides` 语义: `agent` 仅 agent 侧加载; `client` 仅 client 侧加载; `auto` (同 `both`) 按导出符号自动决定 (client 侧: 有 `agentxx_client_create` 才加载, 无则跳过并记日志)
 - 相对路径按程序工作目录解析为绝对路径 (main.cpp resolvePath)
 - 本地一体模式: agent 侧加载逻辑不变 (BaseAgent::init), client 侧由 mode_runners 加载同一配置 (经 sides 过滤); 双端插件同库被两个管理器各自 dlopen (引用计数互不影响)
 - 远程 client 模式: 只加载 client 侧条目, agent 条目被过滤 (agent 在 server 进程)
@@ -1122,19 +1137,24 @@ implemented" 桩), 各插件自身 CMakeLists.txt 按声明的平台支持列表
 
 ```cpp
 // my_tool_plugin.cpp —— 编译为 libmy_tool_plugin.so, 无需链接 libagentxx
+// 多实例范式: 状态存 ctx, 回调经 user_data 恢复 (详见 4.2 多实例三铁律)
 #include "agentxx/plugin/plugin_api.h"
 #include "agentxx/plugin/plugin_iface_helper.h"   // 可选: 一次查询聚合便捷层
 
-static const AgentxxHost* g_host = nullptr;
-static agentxx::plugin::AgentIfaces g_if{};       // 接口表缓存 (entry 时查询)
+/// 每实例上下文 (create 创建经 *plugin_ctx 交付宿主, destroy 释放)
+struct MyPluginCtx {
+    const AgentxxHost*           host  = nullptr;
+    agentxx::plugin::AgentIfaces iface {};
+};
 
-// execute 回调运行在宿主线程池; 返回字符串必须经宿主分配 (AGENTXX_STRDUP)
+// execute 回调运行在宿主 io 线程; 返回字符串必须经宿主分配 (AGENTXX_STRDUP)
 static char* my_exec(void* ud, AgentxxPluginStringView args_json,
                      AgentxxPluginStringView thread_id, AgentxxPluginStringView tool_call_id,
                      char** err_out) {
-    (void)ud; (void)args_json; (void)thread_id; (void)tool_call_id; (void)err_out;
-    if (!g_host) return nullptr;
-    return g_host->vtable->strdup("{\"ok\": true}");   // 核心内存三件套直接可用
+    auto* ctx = static_cast<MyPluginCtx*>(user_data);
+    (void)args_json; (void)thread_id; (void)tool_call_id; (void)err_out;
+    if (!ctx || !ctx->host) return nullptr;
+    return ctx->host->vtable->strdup("{\"ok\": true}");
 }
 
 // 可选: 元信息 (加载前校验; 未导出则跳过)
@@ -1149,7 +1169,7 @@ extern "C" const AgentxxPluginInfo* agentxx_plugin_get_info(void) {
 }
 
 // 必需: 入口 (宿主线程池调用; 注册动作宿主自动投递回 io 线程)
-extern "C" int agentxx_plugin_entry(const AgentxxHost* host, void** plugin_ctx) {
+extern "C" int agentxx_plugin_create(const AgentxxHost* host, void** plugin_ctx) {
     (void)plugin_ctx;
     g_host = host;
     // COM 风格接口表查询: entry 内一次性查询全部已知 IID 并缓存
@@ -1166,7 +1186,7 @@ extern "C" int agentxx_plugin_entry(const AgentxxHost* host, void** plugin_ctx) 
 }
 
 // 可选: 卸载通知 (宿主已先自动反注册; 插件侧约定主动清理)
-extern "C" void agentxx_plugin_unload(void* plugin_ctx) {
+extern "C" void agentxx_plugin_destroy(void* plugin_ctx) {
     (void)plugin_ctx;
     if (g_host && g_if.tools && g_if.tools->unregister_tool) {
         g_if.tools->unregister_tool(g_host, AGENTXX_SV("my_tool"));
@@ -1192,7 +1212,7 @@ plugins/
 
 ### 10.3 双端插件 (agent + client 入口共存)
 
-同一动态库导出 `agentxx_plugin_entry` (agent 侧工具/钩子) 与 `agentxx_client_entry` (client 侧状态栏/面板/Info 段落/命令/事件/跨端), 两个 PluginManager 各自 dlopen/装配, 实例状态独立, 互通一律走 wire。参考 `agent/plugins/example_plugin/example_plugin.cpp`。
+同一动态库导出 `agentxx_plugin_create` (agent 侧工具/钩子) 与 `agentxx_client_create` (client 侧状态栏/面板/Info 段落/命令/事件/跨端), 两个 PluginManager 各自 dlopen/装配, 实例状态独立, 互通一律走 wire。参考 `agent/plugins/example_plugin/example_plugin.cpp`。
 
 ---
 
