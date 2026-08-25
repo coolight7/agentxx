@@ -301,20 +301,20 @@ plugins:
   # - lib 内置实现已移除, 未配置对应插件时该工具不可用
   # - 构建期也可经 AGENTXX_ENABLE_PLUGIN_BUILTIN=ON + AGENTXX_PLUGIN_BUILTIN_LIST
   #   把它们合并编译进 libagentxx (内置注册表), 运行期配置保持不变
-  # - path: ${AGENTXX_EXEC_DIR}/plugins/agentxx_planning/
-  #   enabled: true
-  # - path: ${AGENTXX_EXEC_DIR}/plugins/agentxx_filesystem/
-  #   enabled: true
-  # - path: ${AGENTXX_EXEC_DIR}/plugins/agentxx_execute_command/
-  #   enabled: true
-  # - path: ${AGENTXX_EXEC_DIR}/plugins/agentxx_string/
-  #   enabled: true
-  # - path: ${AGENTXX_EXEC_DIR}/plugins/agentxx_system/
-  #   enabled: true
-  # - path: ${AGENTXX_EXEC_DIR}/plugins/agentxx_websearch/
-  #   enabled: true
-  # - path: ${AGENTXX_EXEC_DIR}/plugins/agentxx_rag_search/
-  #   enabled: true
+  - path: ${AGENTXX_EXEC_DIR}/plugins/agentxx_planning/
+    enabled: true
+  - path: ${AGENTXX_EXEC_DIR}/plugins/agentxx_filesystem/
+    enabled: true
+  - path: ${AGENTXX_EXEC_DIR}/plugins/agentxx_execute_command/
+    enabled: true
+  - path: ${AGENTXX_EXEC_DIR}/plugins/agentxx_string/
+    enabled: true
+  - path: ${AGENTXX_EXEC_DIR}/plugins/agentxx_system/
+    enabled: true
+  - path: ${AGENTXX_EXEC_DIR}/plugins/agentxx_websearch/
+    enabled: true
+  - path: ${AGENTXX_EXEC_DIR}/plugins/agentxx_rag_search/
+    enabled: true
 
   # === 音频流捕获 (插件 agentxx_audio_stream; 从 lib expand 拆分, 默认关闭)
   # - 工具: agentxx_audio_stream (start/stop/status; 仅 Windows 支持捕获,
