@@ -426,6 +426,8 @@ private:
     void ensureLogSidebarTab();
     /// 打开 Plan 状态图模态 (Info 侧边栏 [View Plan Diagram] 按钮触发)
     void openPlanDiagram();
+    /// 打开加载失败组件列表模态 (Info 侧边栏 Append "Failed" 组 [view] 按钮触发)
+    void openFailedAppendComponents();
 
     /// 侧边栏渲染辅助
     std::vector<ScrollItem>       renderLogWindow();
@@ -531,6 +533,9 @@ private:
     ftxui::Box pendingInsertButtonBox_;
     ftxui::Box contextButtonBox_;
     ftxui::Box planDiagramButtonBox_; // Info 侧边栏 Plan 状态图按钮
+    /// Info 侧边栏 Append "Failed" 组 [view] 按钮命中区域
+    /// (渲染时 reflect; 无失败项时重置为无效区域防误触, 见 renderInfoSidebar)
+    ftxui::Box failedViewButtonBox_;
 
     static constexpr const char* kLogTabId            = "xx_logs";
     static constexpr const char* kInfoTabId           = "xx_info";

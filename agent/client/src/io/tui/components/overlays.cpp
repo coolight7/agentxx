@@ -850,3 +850,137 @@ bool PlanDiagramOverlay::OnEvent(Event event) {
     }
     return true;
 }
+
+// ---------------------------------------------------------------------------
+// FailedComponentsOverlay
+// ---------------------------------------------------------------------------
+
+namespace {
+
+/// AppendComponentNotification 类型 → 展示标签
+const char* appendTypeLabel(agentxx::agent::AppendComponentNotification::Type type) {
+    using T = agentxx::agent::AppendComponentNotification;
+    switch (type) {
+        case T::Type::Mcp: return "MCP";
+        case T::Type::Skill: return "Skill";
+        case T::Type::Memory: return "Memory";
+        case T::Type::Plugin: return "Plugin";
+    }
+    return "Unknown";
+}
+
+} // namespace
+
+FailedComponentsOverlay::FailedComponentsOverlay(TUICtx& ctx) :
+    ctx_(ctx) {
+    scrollable_ = std::make_shared<Scrollable>([this]() -> std::vector<ScrollItem> {
+        return buildItems();
+    });
+    // 失败列表为静态内容: 打开时从顶部开始显示, 而非吸附到底部
+    scrollable_->setStickToBottom(false);
+    Add(scrollable_);
+}
+
+std::vector<ScrollItem> FailedComponentsOverlay::buildItems() {
+    const auto& st    = *ctx_.frameState;
+    const auto& theme = *ctx_.theme;
+
+    // 每帧从本帧状态快照过滤 success=false 项 (数量小, 无需缓存)
+    std::vector<ScrollItem> items;
+    bool                    first = true;
+    for (const auto& notif : st.appendComponents) {
+        if (notif.success) {
+            continue;
+        }
+        if (!first) {
+            items.push_back(ScrollItem{text(""), false});
+        }
+        first = false;
+        // 标题行: "[类型] 名称" (错误色类型标签)
+        items.push_back(ScrollItem{
+            hbox({
+                text(fmt::format("[{}] ", appendTypeLabel(notif.type))) | color(theme.errorColor),
+                text(notif.name) | color(theme.normalColor) | xflex_shrink,
+            }),
+            false
+        });
+        // 错误信息行 (自动换行; 空消息跳过)
+        if (!notif.errorMessage.empty()) {
+            items.push_back(
+                ScrollItem{paragraph(notif.errorMessage) | color(theme.hintColor), false}
+            );
+        }
+    }
+    if (items.empty()) {
+        items.push_back(ScrollItem{text(" (no failed components) ") | dim, false});
+    }
+    return items;
+}
+
+Element FailedComponentsOverlay::OnRender() {
+    const auto& theme  = *ctx_.theme;
+    auto        header = hbox({
+        text(" Failed Components ") | bold,
+        filler(),
+        text(" "),
+    });
+
+    // 弹窗大小: 宽 3/5 屏、高 2/5 屏, 不超过窗口可用空间 (减去边距);
+    // 高度同时给 GREATER_THAN 下限, 避免惰性 viewport 自然高度塌缩成单行
+    // (原因详见 PlanDiagramOverlay::OnRender 注释)
+    const int margin = 2;
+    const int termW  = Terminal::Size().dimx;
+    const int termH  = Terminal::Size().dimy;
+    const int wantW  = std::max(40, termW * 3 / 5);
+    const int wantH  = std::max(10, termH * 2 / 5);
+    const int availW = std::max(1, termW - margin * 2);
+    const int availH = std::max(1, termH - margin * 2);
+    const int popupW = std::min(wantW, availW);
+    const int popupH = std::min(wantH, availH);
+    return vbox({
+               header,
+               separator(),
+               hbox({text(" "), scrollable_->Render() | flex, text(" ")}) | flex,
+               separator(),
+               text(" [Wheel/Up/Down] Scroll  [Esc] Close ") | center | dim,
+           })
+           | border | size(WIDTH, GREATER_THAN, popupW) | size(WIDTH, LESS_THAN, popupW)
+           | size(HEIGHT, GREATER_THAN, popupH) | size(HEIGHT, LESS_THAN, popupH)
+           | color(theme.errorColor);
+}
+
+bool FailedComponentsOverlay::OnEvent(Event event) {
+    if (event == Event::Escape) {
+        ctx_.postRedraw();
+        if (onClose_) {
+            onClose_();
+        }
+        return true;
+    }
+    if (event.is_mouse()) {
+        // 滚轮滚动 (Scrollable 内部处理)
+        if (scrollable_->OnEvent(event)) {
+            ctx_.postRedraw();
+            return true;
+        }
+        return true;
+    }
+    // 键盘滚动 (与 ContextOverlay / PlanDiagramOverlay 交互一致)
+    if (event == Event::ArrowUp) {
+        scrollable_->setScrollOffset(scrollable_->scrollOffset() - 1);
+        scrollable_->setStickToBottom(false);
+        ctx_.postRedraw();
+        return true;
+    }
+    if (event == Event::ArrowDown) {
+        scrollable_->setScrollOffset(scrollable_->scrollOffset() + 1);
+        // 滚到底部恢复吸附
+        if (scrollable_->totalHeight() - scrollable_->viewportHeight()
+            <= scrollable_->scrollOffset()) {
+            scrollable_->setStickToBottom(true);
+        }
+        ctx_.postRedraw();
+        return true;
+    }
+    return true;
+}

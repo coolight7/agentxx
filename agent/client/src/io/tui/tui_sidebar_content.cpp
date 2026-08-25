@@ -264,6 +264,9 @@ std::vector<ScrollItem> TUIClientAgentIO::renderInfoSidebar() {
     // 已加载组件 (Plugin/Memory/Skill/MCP) 展示:
     // - CodeGraph 索引状态与系统资源占用由对应插件经 register_info_section
     //   注入本 Info 栏 (见下方 "插件扩展 Info 段落"), TUI 不再单独渲染
+    // - 本帧渲染前先清空 Failed 组 [view] 按钮命中区域 (Append 段未渲染/
+    //   无失败项时防止残留旧区域误触); 按钮渲染时经 reflect 重新填充
+    failedViewButtonBox_ = ftxui::Box{0, -1, 0, -1};
     if (!st.appendComponents.empty()) {
         Elements appendEls;
         appendEls.push_back(text("Append") | color(theme_.accentColor));
@@ -300,6 +303,27 @@ std::vector<ScrollItem> TUIClientAgentIO::renderInfoSidebar() {
         appendGroup("Skill", agentxx::agent::AppendComponentNotification::Type::Skill, true);
         appendGroup("MCP", agentxx::agent::AppendComponentNotification::Type::Mcp, false);
         appendGroup("Plugins", agentxx::agent::AppendComponentNotification::Type::Plugin, false);
+
+        // 加载失败组件汇总组: 统计 success=false 的通知, 展示 "|- Failed: 数量"
+        // 与 "| [view]" 按钮 (点击弹窗查看失败详情; 命中区域 reflect 到
+        // failedViewButtonBox_, 点击处理见 agent_tui 主鼠标事件分支)
+        size_t failedCount = 0;
+        for (const auto& notif : st.appendComponents) {
+            if (!notif.success) {
+                ++failedCount;
+            }
+        }
+        if (failedCount > 0) {
+            appendEls.push_back(
+                hbox({text("|- "), text(fmt::format("Failed: {}", failedCount))})
+                    | color(theme_.errorColor)
+            );
+            appendEls.push_back(hbox({
+                text("| "),
+                text(" [view] ") | bgcolor(theme_.buttonBgColor) | color(theme_.buttonTextColor)
+                    | reflect(failedViewButtonBox_),
+            }));
+        }
 
         elements.push_back(vbox(std::move(appendEls)));
     }

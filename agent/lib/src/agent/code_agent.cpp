@@ -144,10 +144,28 @@ asio::awaitable<void> CodeAgent::initMiddleware() {
         );
     }
     // 添加 Skill Middleware 并记录启动信息
+    // - 目录不存在的配置项记为加载失败 (failedComponents), 供客户端 "Failed"
+    //   组统计与弹窗查看; 存在的目录照常记录为成功 (实际 SKILL.md 解析错误由
+    //   SkillMiddleware 懒加载时自行处理, 不在此判定)
     std::shared_ptr<agentxx::middleware::SkillMiddlewareHandle> skillMiddleware;
     {
         for (const auto& dirPath : config->skillDirPaths) {
-            agentContext->appendComponentInfo.skills.push_back(dirPath);
+            std::error_code ec;
+            const bool       exists = std::filesystem::is_directory(dirPath, ec);
+            if (exists) {
+                agentContext->appendComponentInfo.skills.push_back(dirPath);
+            } else {
+                agentContext->appendComponentInfo.failedComponents.push_back(
+                    AppendComponentNotification{
+                        .type         = AppendComponentNotification::Type::Skill,
+                        .name         = dirPath,
+                        .success      = false,
+                        .errorMessage = ec ? fmt::format("directory not accessible: {}",
+                                                         ec.message())
+                                           : "directory not found",
+                    }
+                );
+            }
         }
 
         skillMiddleware = std::make_shared<agentxx::middleware::SkillMiddlewareHandle>(
@@ -157,10 +175,27 @@ asio::awaitable<void> CodeAgent::initMiddleware() {
         agentContext->middlewareHandleContext->handles.push_back(skillMiddleware);
     }
     // 添加 Memory File Middleware 并记录启动信息
+    // - 文件不存在的配置项记为加载失败 (failedComponents), 供客户端 "Failed"
+    //   组统计与弹窗查看; 存在的文件照常记录为成功 (读取错误由
+    //   MemoryFileMiddleware 懒加载时自行处理, 不在此判定)
     std::shared_ptr<agentxx::middleware::MemoryFileMiddlewareHandle> memoryFileMiddleware;
     {
         for (const auto& memPath : config->memoryFilePaths) {
-            agentContext->appendComponentInfo.memoryFiles.push_back(memPath);
+            std::error_code ec;
+            const bool      exists = std::filesystem::is_regular_file(memPath, ec);
+            if (exists) {
+                agentContext->appendComponentInfo.memoryFiles.push_back(memPath);
+            } else {
+                agentContext->appendComponentInfo.failedComponents.push_back(
+                    AppendComponentNotification{
+                        .type         = AppendComponentNotification::Type::Memory,
+                        .name         = memPath,
+                        .success      = false,
+                        .errorMessage = ec ? fmt::format("file not accessible: {}", ec.message())
+                                           : "file not found",
+                    }
+                );
+            }
         }
 
         memoryFileMiddleware
@@ -354,6 +389,18 @@ asio::awaitable<std::vector<std::unique_ptr<agentxx::tools::XXToolBase>>> CodeAg
                                 mcpCfg.url,
                                 mcpTools.error()
                             );
+                            // 记录加载失败组件 (供客户端 "Failed" 组统计与弹窗查看)
+                            agentContext->appendComponentInfo.failedComponents.push_back(
+                                AppendComponentNotification{
+                                    .type    = AppendComponentNotification::Type::Mcp,
+                                    .name    = ns,
+                                    .success = false,
+                                    .errorMessage
+                                    = fmt::format("list tools failed: {} ({})",
+                                                  mcpTools.error(),
+                                                  mcpCfg.url),
+                                }
+                            );
                         }
                     } else {
                         XX_LOGE(
@@ -361,6 +408,17 @@ asio::awaitable<std::vector<std::unique_ptr<agentxx::tools::XXToolBase>>> CodeAg
                             ns,
                             mcpCfg.url,
                             result.error()
+                        );
+                        // 记录加载失败组件 (供客户端 "Failed" 组统计与弹窗查看)
+                        agentContext->appendComponentInfo.failedComponents.push_back(
+                            AppendComponentNotification{
+                                .type         = AppendComponentNotification::Type::Mcp,
+                                .name         = ns,
+                                .success      = false,
+                                .errorMessage = fmt::format("initialize failed: {} ({})",
+                                                            result.error(),
+                                                            mcpCfg.url),
+                            }
                         );
                     }
                     co_return true;
@@ -371,6 +429,15 @@ asio::awaitable<std::vector<std::unique_ptr<agentxx::tools::XXToolBase>>> CodeAg
                         ns,
                         mcpCfg.url,
                         errmsg
+                    );
+                    // 异常路径同样记录加载失败组件 (供客户端 "Failed" 组统计与弹窗查看)
+                    agentContext->appendComponentInfo.failedComponents.push_back(
+                        AppendComponentNotification{
+                            .type         = AppendComponentNotification::Type::Mcp,
+                            .name         = ns,
+                            .success      = false,
+                            .errorMessage = fmt::format("{} ({})", errmsg, mcpCfg.url),
+                        }
                     );
                     co_return true;
                 }

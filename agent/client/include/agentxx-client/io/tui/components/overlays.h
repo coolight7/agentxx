@@ -243,3 +243,29 @@ private:
     markdown::MermaidStateDiagram cachedDiagram_;
     ftxui::Element                cachedElement_;
 };
+
+/// 加载失败组件列表弹窗 (Info 侧边栏 Append "Failed" 组 [view] 按钮触发)
+///
+/// 列出启动阶段加载失败的组件 (appendComponents 中 success=false 项):
+/// - 每项两行: "[类型] 名称" / 错误信息 (自动换行, 减淡色)
+/// - 交互: 滚轮 / Up/Down 滚动, Esc 关闭
+class FailedComponentsOverlay : public ftxui::ComponentBase {
+public:
+
+    explicit FailedComponentsOverlay(TUICtx& ctx);
+
+    void onClose(std::function<void()> fn) {
+        onClose_ = std::move(fn);
+    }
+
+    bool           OnEvent(ftxui::Event event) override;
+    ftxui::Element OnRender() override;
+
+private:
+
+    std::vector<ScrollItem> buildItems();
+
+    TUICtx&                     ctx_;
+    std::shared_ptr<Scrollable> scrollable_;
+    std::function<void()>       onClose_;
+};

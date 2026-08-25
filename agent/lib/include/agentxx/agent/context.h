@@ -390,6 +390,13 @@ struct AgentAppendComponentInfo {
 
     /// 成功加载的 Memory 文件路径列表
     std::vector<std::string> memoryFiles;
+
+    /// 加载失败的组件记录 (success=false + errorMessage; 供客户端 "Failed"
+    /// 组统计与弹窗详情展示)
+    /// - 与上方成功列表分离: 失败项不参与运行期资源增删 (resource_applier) 管理,
+    ///   仅在启动加载阶段由各加载点写入 (MCP 连接失败 / Skill 目录不存在 /
+    ///   Memory 文件不存在等)
+    std::vector<AppendComponentNotification> failedComponents;
 };
 
 class AgentContext {

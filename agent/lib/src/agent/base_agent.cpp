@@ -558,9 +558,16 @@ void BaseAgent::collectAppendComponentInfo(std::vector<AppendComponentNotificati
                 .type         = AppendComponentNotification::Type::Plugin,
                 .name         = plugin.name,
                 .success      = plugin.enabled,
-                .errorMessage = "",
+                .errorMessage = plugin.enabled ? "" : "disabled",
             });
         }
+    }
+
+    // 加载失败的组件 (MCP 连接失败 / Skill 目录不存在 / Memory 文件不存在等;
+    // 由各加载点在启动阶段写入, success=false + errorMessage)
+    // - 保留记录不清空: 客户端可能多次拉取 (重连/重同步), 需保证响应一致
+    for (const auto& failed : agentContext->appendComponentInfo.failedComponents) {
+        notifications.push_back(failed);
     }
 }
 

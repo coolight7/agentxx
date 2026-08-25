@@ -705,6 +705,11 @@ void TUIClientAgentIO::start() {
                         openPlanDiagram();
                         return true;
                     }
+                    // Info 侧边栏 Append "Failed" 组 [view] 按钮点击 → 打开失败组件弹窗
+                    if (failedViewButtonBox_.Contain(mouse.x, mouse.y)) {
+                        openFailedAppendComponents();
+                        return true;
+                    }
                     // 状态栏模型区域点击 → 打开模型选择弹窗
                     if (statusBar_ && statusBar_->modelBox().Contain(mouse.x, mouse.y)) {
                         openModelSelector();
@@ -1064,6 +1069,17 @@ void TUIClientAgentIO::toggleLogWindow() {
 void TUIClientAgentIO::openPlanDiagram() {
     if (modal_ && !modal_->hasModal()) {
         auto overlay = std::make_shared<PlanDiagramOverlay>(ctx_);
+        overlay->onClose([this] {
+            modal_->popModal();
+        });
+        modal_->pushModal(overlay);
+    }
+    postRedraw();
+}
+
+void TUIClientAgentIO::openFailedAppendComponents() {
+    if (modal_ && !modal_->hasModal()) {
+        auto overlay = std::make_shared<FailedComponentsOverlay>(ctx_);
         overlay->onClose([this] {
             modal_->popModal();
         });
