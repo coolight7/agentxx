@@ -275,7 +275,7 @@ inline std::string bashExecute(
                     if (timedOut.load(std::memory_order_acquire)) {
                         result << detail::makeTimeoutResult(timeout, strout, strerr);
                     } else {
-                        result << "[ExitCode]" << exitCode << "\n";
+                        result << "[ExitCode]\n" << exitCode << "\n";
                         if (all_output || 0 != exitCode) {
                             // failed
                             if (strout.empty() || agentxx::util::autoConvertToUtf8(strout)) {
@@ -445,7 +445,7 @@ inline std::string windowsExecute(
                     if (timedOut.load(std::memory_order_acquire)) {
                         result << detail::makeTimeoutResult(timeout, strout, strerr);
                     } else {
-                        result << "[ExitCode] " << exitCode << "\n";
+                        result << "[ExitCode]\n" << exitCode << "\n";
                         if (all_output || 0 != exitCode) {
                             // failed
                             if (strout.empty() || agentxx::util::autoConvertToUtf8(strout)) {
