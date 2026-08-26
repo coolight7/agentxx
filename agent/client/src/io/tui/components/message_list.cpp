@@ -1,5 +1,6 @@
 #include "agentxx-client/io/tui/components/message_list.h"
 #include "agentxx-client/io/tui/agent_tui.h" // formatDurationMilliseconds / oneLinePreview
+#include "agentxx/plugin/client_plugin_manager.h" // ClientToolDecor 完整定义 (头文件中仅前置声明)
 #include "agentxx-client/io/tui/framework/tui_settings.h"
 #include "agentxx/util/diff_util.h"
 #include "agentxx/util/exception.h"

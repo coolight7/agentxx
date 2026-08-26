@@ -13,6 +13,13 @@
 #include <string_view>
 #include <vector>
 
+// 前置声明: ClientToolDecor 仅以 const 引用出现在方法签名中,
+// 不直接包含重量级 client_plugin_manager.h (客户端经 agent_tui.h 传递引入,
+// 测试等仅含本头文件的编译单元依赖此前置声明)
+namespace agentxx::plugin {
+struct ClientToolDecor;
+}
+
 /// 消息列表组件 (Flutter ListView.builder 风格)
 ///
 /// 渲染架构: 封装 LazyScrollable, 经 itemCount/itemKey/estimateHeight/buildItem

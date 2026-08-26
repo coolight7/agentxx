@@ -386,7 +386,7 @@ asio::awaitable<void>
     };
     auto result = co_await tool.execute_async(args);
     XX_TEST_EXPECT_TRUE(result.find("success_msg") == std::string::npos);
-    XX_TEST_EXPECT_TRUE(result.find("ExitCode: 0") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(result.find("[ExitCode]\n0") != std::string::npos);
     co_return;
 }
 
@@ -399,7 +399,7 @@ asio::awaitable<void>
     };
     auto result = co_await tool.execute_async(args);
     XX_TEST_EXPECT_TRUE(result.find("fail_msg") != std::string::npos);
-    XX_TEST_EXPECT_TRUE(result.find("ExitCode: 1") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(result.find("[ExitCode]\n1") != std::string::npos);
     co_return;
 }
 
@@ -422,7 +422,7 @@ asio::awaitable<void>
         {"command", "exit 42"}
     };
     auto result = co_await tool.execute_async(args);
-    XX_TEST_EXPECT_TRUE(result.find("ExitCode: 42") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(result.find("[ExitCode]\n42") != std::string::npos);
     co_return;
 }
 
@@ -659,7 +659,7 @@ asio::awaitable<void>
         };
         auto result = co_await tool.execute_async(args);
         XX_TEST_EXPECT_TRUE(result.find("ps_tool_echo_ok") != std::string::npos);
-        XX_TEST_EXPECT_TRUE(result.find("ExitCode: 0") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(result.find("[ExitCode]\n0") != std::string::npos);
     }
     {
         // 字面量 $ 不应被展开 (引号/$ 解析问题的核心回归测试)
@@ -687,7 +687,7 @@ asio::awaitable<void>
         };
         auto result = co_await tool.execute_async(args);
         XX_TEST_EXPECT_TRUE(result.find("before_exit") != std::string::npos);
-        XX_TEST_EXPECT_TRUE(result.find("ExitCode: 42") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(result.find("[ExitCode]\n42") != std::string::npos);
     }
     {
         // 异常 (throw) 转 stdout + exit 1
@@ -696,7 +696,7 @@ asio::awaitable<void>
             {"timeout", 60                                                                },
         };
         auto result = co_await tool.execute_async(args);
-        XX_TEST_EXPECT_TRUE(result.find("ExitCode: 1") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(result.find("[ExitCode]\n1") != std::string::npos);
     }
     {
         // 脚本块花括号 (PS 常用语法; 包装模板的 fmt::format 不应破坏大括号)
@@ -708,7 +708,7 @@ asio::awaitable<void>
         };
         auto result = co_await tool.execute_async(args);
         XX_TEST_EXPECT_TRUE(result.find("pid_ok") != std::string::npos);
-        XX_TEST_EXPECT_TRUE(result.find("ExitCode: 0") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(result.find("[ExitCode]\n0") != std::string::npos);
     }
     co_return;
 }
