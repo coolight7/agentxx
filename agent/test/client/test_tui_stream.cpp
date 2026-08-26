@@ -691,11 +691,10 @@ TestResult testTuiStream() {
                 XX_TEST_EXPECT_FALSE(snap->messages[1]->tool->toolFinished);
             }
 
-            // 收到 MessageTip 取消提示
+            // 收到 InsertMessage 取消提示 (Role::Tip)
             Delta d_tip;
-            d_tip.type    = Delta::Type::MessageTip;
-            d_tip.text    = "[Cancel Request]";
-            d_tip.tipType = Delta::TipType::Info;
+            d_tip.type    = Delta::Type::InsertMessage;
+            d_tip.message = ViewMessage::makeText(ViewMessage::Role::Tip, "[Cancel Request]");
             client.testOnDelta(d_tip);
 
             {

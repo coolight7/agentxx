@@ -1815,31 +1815,6 @@ void TUIClientAgentIO::onDelta(const agentxx::agent::Delta& delta) {
                     st.messages.push_back(std::make_shared<TUIMessage>(*delta.message));
                 }
             } break;
-            case Type::MessageTip: {
-                // 遗留兼容: 系统消息平铺字段拼装
-                pushCurrentTokenLocked(st);
-                resetTrailingRunningToolsLocked(st);
-                auto msg       = std::make_shared<TUIMessage>();
-                msg->role      = TUIMessage::Role::Tip;
-                msg->id        = delta.msgId;
-                msg->text      = delta.text;
-                msg->tip       = TUIMessage::TipData{};
-                msg->collapsed = true;
-                switch (delta.tipType) {
-                    case agentxx::agent::Delta::TipType::Warning:
-                        msg->tip->tipLevel = TUIMessage::TipLevel::Warning;
-                        break;
-                    case agentxx::agent::Delta::TipType::Error:
-                        msg->tip->tipLevel = TUIMessage::TipLevel::Error;
-                        break;
-                    default:
-                        msg->tip->tipLevel = TUIMessage::TipLevel::Info;
-                        break;
-                }
-                msg->startTimeMs = delta.startTimeMs;
-                msg->durationMs  = delta.durationMs;
-                st.messages.push_back(std::move(msg));
-            } break;
             case Type::TurnStart: {
                 pushCurrentTokenLocked(st);
                 resetTrailingRunningToolsLocked(st);
