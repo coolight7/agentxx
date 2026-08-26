@@ -3,6 +3,13 @@
 // - 会话工作目录经宿主 agentxx.agent.config v2 get_work_dir 获取 (相对路径基准,
 //   原实现经 AgentContext::wsAbs 同语义); 取消查询经 agentxx.agent.cancel 接口表
 //   (长遍历 list/glob/grep 循环内轮询, 与原 asyncWithTimeout/取消 watcher 一致)
+// - 统一异步操作模型:
+//   - read/write/edit: poll 寄生驱动注册 (register_polled_tool) —— 工作协程在
+//     实例 PollLoop 上 spawn, 经 asio stream_file 真异步文件 I/O 由宿主 io 线程
+//     非阻塞步进, 与内置工具同线程交错执行 (还原迁移前 lib 内置工具行为);
+//     BOOST_ASIO_HAS_FILE 不可用平台回退 sync 垫片 (offload 池)
+//   - list/glob/grep: 阻塞委托垫片注册 (offload 池线程执行, io 线程只等完成
+//     通知; std::filesystem/glob 长遍历无法协程化)
 // - 业务逻辑在 filesystem_impl.h (纯函数, 测试直测同一实现)
 #include "agentxx_fs_plugin.h"
 #include "filesystem_impl.h"
@@ -62,9 +69,10 @@ const char* kGlobPatternHelp =
 | `[!ABC]` | One char NOT in set | `[!ABC]*` matches files not starting with A, B, or C |
 )";
 
-/// 注册常规工具 (schema/描述存储于本实例 ctx->storage; 宿主注册时拷贝)
-/// - 统一异步操作模型: 经阻塞委托垫片注册 (offload 池线程执行, io 线程
-///   只等完成通知); execute 签名追加 cancel_flag 形参
+/// 注册阻塞委托型工具 (sync 垫片; list/glob/grep 及无文件异步支持平台的
+/// read/write/edit 回退路径): schema/描述存储于本实例 ctx->storage; 宿主
+/// 注册时拷贝。统一异步操作模型: offload 池线程执行, io 线程只等完成通知;
+/// execute 签名追加 cancel_flag 形参
 void registerTool(
     PluginCtx*         ctx,
     const char*        name,
@@ -106,6 +114,73 @@ void registerTool(
     }
     ctx->sync_tool_shims.push_back(std::move(shim));
 }
+
+#if defined(BOOST_ASIO_HAS_FILE)
+/// poll 寄生驱动工作协程: 解析参数 JSON → 调用协程执行体 → PolledOutcome
+/// - 协程运行在实例 PollLoop (宿主 io 线程序列化步进); 异常由适配器兜底转
+///   OP_FAILED, 此处无需自行捕获 (impl 的 *ExecuteAsync 外层已把可预期异常
+///   编码为 "[Error] ..." 文本)
+/// - 取消: job.cancelFlag 由宿主 op 驱动器在会话取消/超时时置位; 单文件
+///   读写为短操作, 入口检查一次即可 (与原实现"短操作不轮询"语义一致)
+/// - 会话工作目录: get_session_work_dir 为 io 线程约束接口, 工作协程运行在
+///   宿主 io 线程的 poll 推进内 → 宿主检测后内联直执行 (无跨线程等待)
+template<auto ExecAsyncFn>
+asio::awaitable<agentxx::plugin::PolledOutcome> fsPolledWork(agentxx::plugin::PolledJob& job) {
+    auto* ctx = static_cast<PluginCtx*>(job.userData);
+    if (job.cancelFlag != 0) {
+        co_return agentxx::plugin::PolledOutcome::cancelled();
+    }
+    auto sv = job.argsView();
+    std::string argsStr(sv.data ? sv.data : "{}", sv.size);
+    auto arguments = argsStr.empty() ? neograph::json::object() : neograph::json::parse(argsStr);
+    std::string tid{job.tidView().data ? job.tidView().data : "", job.tidView().size};
+    auto        workDir = sessionWorkDir(ctx, agentxx_plugin_sv(tid.data(), tid.size()));
+    auto result         = co_await ExecAsyncFn(arguments, workDir);
+    co_return agentxx::plugin::PolledOutcome::ok(std::move(result));
+}
+
+/// poll 寄生驱动注册 (read/write/edit 专用; BOOST_ASIO_HAS_FILE 平台):
+/// schema/描述存储于本实例 ctx->storage; 工作协程在实例 PollLoop 上 spawn,
+/// 由宿主 io 线程经 pollOnce 非阻塞步进 —— asio stream_file 异步文件 I/O
+/// 与内置工具同线程交错执行
+void registerToolPolled(
+    PluginCtx*                        ctx,
+    const char*                       name,
+    const char*                       defaultDepict,
+    const std::string&                schema,
+    agentxx::plugin::PolledWorkFn     workFn
+) {
+    auto&       storage = ctx->storage;
+    std::string depict  = readToolPrompt(ctx->host, ctx->iface, name).depict;
+    if (depict.empty()) {
+        depict = defaultDepict;
+    }
+    storage.push_back(std::move(depict));
+    storage.push_back(schema);
+
+    // 垫片适配器: 实例内嵌存储 (ctx 持有, 随实例销毁释放; 多实例契约)
+    auto shim = std::make_unique<agentxx::plugin::PolledToolShim>();
+    if (agentxx::plugin::register_polled_tool(
+            ctx->host,
+            agentxx_plugin_sv(name, std::strlen(name)),
+            agentxx_plugin_sv(
+                storage[storage.size() - 2].data(),
+                storage[storage.size() - 2].size()
+            ),
+            agentxx_plugin_sv(storage.back().data(), storage.back().size()),
+            ctx->pollLoop,
+            workFn,
+            ctx,
+            shim.get(),
+            /*timeoutMs=*/0,
+            AGENTXX_TOOL_FLAG_NONE
+        ) != 0) {
+        pluginLog(ctx, 3, fmt::format("agentxx_filesystem: register tool {} failed", name));
+        return;
+    }
+    ctx->polled_shims.push_back(std::move(shim));
+}
+#endif // BOOST_ASIO_HAS_FILE
 
 /// C ABI execute 包装: 解析参数 JSON → 调用实现 (workDir + 取消查询注入) →
 /// 结果 strdup (异常不外泄; impl 内部已把可预期错误编码进返回文本)
@@ -271,7 +346,19 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                 {"required", neograph::json::array({"path"})},
             }
                                   .dump();
+            // poll 寄生驱动注册 (统一异步操作模型): asio stream_file 真异步
+            // 文件 I/O; 无文件异步支持平台回退 sync 垫片 (offload 池)
+#if defined(BOOST_ASIO_HAS_FILE)
+            registerToolPolled(
+                ctx.get(),
+                kNameRead,
+                kDepictRead,
+                schema,
+                &fsPolledWork<agentxx_fs_plugin::fileReadExecuteAsync>
+            );
+#else
             registerTool(ctx.get(), kNameRead, kDepictRead, schema, &wrapExecute<agentxx_fs_plugin::fileReadExecute>);
+#endif
         }
 
         // ---- agentxx_filesystem_write ----
@@ -301,7 +388,18 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                 {"required", neograph::json::array({"path", "content"})},
             }
                                   .dump();
+            // poll 寄生驱动注册 (语义同 read 工具)
+#if defined(BOOST_ASIO_HAS_FILE)
+            registerToolPolled(
+                ctx.get(),
+                kNameWrite,
+                kDepictWrite,
+                schema,
+                &fsPolledWork<agentxx_fs_plugin::fileWriteExecuteAsync>
+            );
+#else
             registerTool(ctx.get(), kNameWrite, kDepictWrite, schema, &wrapExecute<agentxx_fs_plugin::fileWriteExecute>);
+#endif
         }
 
         // ---- agentxx_filesystem_edit ----
@@ -344,7 +442,18 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                 {"required", neograph::json::array({"path", "old_str", "new_str"})},
             }
                                   .dump();
+            // poll 寄生驱动注册 (语义同 read 工具)
+#if defined(BOOST_ASIO_HAS_FILE)
+            registerToolPolled(
+                ctx.get(),
+                kNameEdit,
+                kDepictEdit,
+                schema,
+                &fsPolledWork<agentxx_fs_plugin::fileEditExecuteAsync>
+            );
+#else
             registerTool(ctx.get(), kNameEdit, kDepictEdit, schema, &wrapExecute<agentxx_fs_plugin::fileEditExecute>);
+#endif
         }
 
         // ---- agentxx_filesystem_glob ----

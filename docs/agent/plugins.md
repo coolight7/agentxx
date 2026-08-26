@@ -388,6 +388,11 @@ api_version 不匹配的插件直接拒绝加载 (仅拒绝不崩溃), **无历�
 - **事件不丢失**: Linux epoll level-triggered / Windows IOCP 完成包排队,
   两次 poll 之间到达的事件下次 pollOnce 必然取得; 定时器唤醒延迟上界 =
   idleHintMs (默认 15ms, 每次 poll 为微秒级非阻塞取包不忙等)。
+- **poll 前必须 restart**: `scheduler::poll` 在 outstanding_work_ 归零时会
+  内部 stop() 本 io_context, 而 stopped_ 状态下后续 poll() 不再执行任何
+  handler —— 表现为"同一 loop 的第二个工具调用永久挂死" (两次工具调用之间
+  必然经历工作数归零的空闲期)。pollOnce 已在每次步进前显式 `io.restart()`
+  复位 (单线程步进无副作用); 自行手写三件套驱动私有 loop 时同样必须处理。
 - **硬性约束**: 工作协程每次就绪段 (两次挂起间的同步代码) 必须 ~100ms 内
   回到挂起点 (宿主看门狗阈值), 协程体内禁止阻塞调用; CPU/阻塞密集段应切片
   或改走 offload (B 型混合)。协程内调用宿主 io 线程约束接口表 (get_work_dir /

@@ -4,6 +4,9 @@
 // 原 lib 内置工具已迁移至 agentxx_filesystem 插件 (同名同行为); 测试直测
 // 插件同一实现 (filesystem_impl.h), 保证插件行为与测试覆盖一致
 #include "filesystem_impl.h"
+#include "agentxx/event/event_stream.h"
+#include "agentxx/middlewares/middleware.h"
+#include "agentxx/plugin/plugin_manager.h"
 #include "agentxx/util/string_util.h"
 #include <chrono>
 #include <cstdio>
@@ -55,13 +58,31 @@ inline std::string testResolvedWorkDir(const std::weak_ptr<agentxx::agent::Agent
         }                                                                       \
     };
 
+/// 协程版测试适配 (read/write/edit): 直调插件 *ExecuteAsync 协程执行体 ——
+/// 插件运行时经 poll 寄生驱动在实例 PollLoop 上 spawn (asio stream_file 真
+/// 异步文件 I/O), 测试在宿主 io_context 上直接 co_await 同一实现, 覆盖一致
+#define AGENTXX_TEST_FS_TOOL_ASYNC(NAME, IMPL_ASYNC_FN, TOOL_NAME, DEPICT)      \
+    struct NAME {                                                               \
+        std::weak_ptr<agentxx::agent::AgentContext> ctx;                        \
+        explicit NAME(std::weak_ptr<agentxx::agent::AgentContext> c)               \
+            : ctx(std::move(c)) {}                                              \
+        neograph::ChatTool get_definition() const {                              \
+            return {TOOL_NAME, DEPICT, {}};                                     \
+        }                                                                       \
+        asio::awaitable<std::string> execute_async(const neograph::json& args)  \
+            const {                                                             \
+            co_return co_await ::agentxx_fs_plugin::IMPL_ASYNC_FN(              \
+                args, testResolvedWorkDir(ctx));                                \
+        }                                                                       \
+    };
+
 AGENTXX_TEST_FS_TOOL(FileSystemListTool,      fileListExecute,   "agentxx_filesystem_list",
                      R"(List files and directories at a given path, output is multi-line text similar to `ls -l`, one entry per line: `type size last-modified-time path`.)")
-AGENTXX_TEST_FS_TOOL(FilesystemReadTextFileTool, fileReadExecute,  "agentxx_filesystem_read",
+AGENTXX_TEST_FS_TOOL_ASYNC(FilesystemReadTextFileTool, fileReadExecuteAsync,  "agentxx_filesystem_read",
                      R"(Read a text file (e.g. .txt, .md, .json, .log, source code) and return its contents with line numbers.)")
-AGENTXX_TEST_FS_TOOL(FilesystemWriteFileTool, fileWriteExecute,  "agentxx_filesystem_write",
+AGENTXX_TEST_FS_TOOL_ASYNC(FilesystemWriteFileTool, fileWriteExecuteAsync,  "agentxx_filesystem_write",
                      "Create a new file or overwrite an existing file with the given content.")
-AGENTXX_TEST_FS_TOOL(FilesystemEditTextFileTool, fileEditExecute,  "agentxx_filesystem_edit",
+AGENTXX_TEST_FS_TOOL_ASYNC(FilesystemEditTextFileTool, fileEditExecuteAsync,  "agentxx_filesystem_edit",
                      R"(Perform exact string replacement in a text file (e.g. *.txt, *.md, *.cpp, *.h).)")
 AGENTXX_TEST_FS_TOOL(FilesystemGlobTool,      fileGlobExecute,   "agentxx_filesystem_glob",
                      "Find files and directories matching glob patterns.")
@@ -69,6 +90,7 @@ AGENTXX_TEST_FS_TOOL(FilesystemGrepTool,      fileGrepExecute,   "agentxx_filesy
                      R"(Search file contents using text or regular expressions.)")
 
 #undef AGENTXX_TEST_FS_TOOL
+#undef AGENTXX_TEST_FS_TOOL_ASYNC
 
 } // namespace tools
 } // namespace agentxx
@@ -1582,10 +1604,153 @@ asio::awaitable<void> test_grep_mem_stress(std::weak_ptr<agentxx::agent::AgentCo
     TEST_PASS << "FilesystemGrepTool stress 60 iterations ok" << std::endl;
 }
 
+/// 插件真实链路冒烟测试: dlopen agentxx_filesystem .so, 经宿主 PluginManager/
+/// op_driver 全链路执行 —— 覆盖单测直测 impl 纯函数覆盖不到的接线层:
+///   - read/write/edit: poll 寄生驱动三件套 (PolledToolShim start→poll 步进
+///     →done 上报; asio stream_file 异步文件 I/O 在寄生 loop 上推进)
+///   - list/grep: sync 垫片 (offload 池委托)
+/// 会话工作目录经宿主 get_work_dir 接口注入 (绑定 testDir), 同时覆盖
+/// work_dir 接口表装配; 插件未构建 (无 .so 产物) 时优雅跳过
+asio::awaitable<void> test_plugin_real_link() {
+    namespace fs = std::filesystem;
+
+    // 定位插件库目录 (与 test_plugins 同模式: exe 同目录优先, cwd 回退)
+    std::error_code             ec;
+    std::vector<fs::path>       candidates;
+    if (auto p = fs::read_symlink("/proc/self/exe", ec); !ec) {
+        candidates.push_back(p.parent_path() / "plugins" / "agentxx_filesystem");
+    }
+    candidates.push_back(fs::current_path(ec) / "plugins" / "agentxx_filesystem");
+    auto hasLibFile = [](const fs::path& dir) {
+        std::error_code                     ec2;
+        std::filesystem::directory_iterator it(dir, ec2);
+        std::filesystem::directory_iterator end;
+        for (; it != end; it.increment(ec2)) {
+            auto ext = it->path().extension().string();
+            if (ext == ".so" || ext == ".dll" || ext == ".dylib") {
+                return true;
+            }
+        }
+        return false;
+    };
+    std::string pluginDir;
+    for (const auto& c : candidates) {
+        if (fs::is_directory(c, ec) && hasLibFile(c)) {
+            pluginDir = c.string();
+            break;
+        }
+    }
+    if (pluginDir.empty()) {
+        g_fs_passed++;
+        TEST_INFO << "plugin real-link skipped (agentxx_filesystem .so not found)" << std::endl;
+        co_return;
+    }
+
+    // 构造最小 AgentContext (io 线程环境, 与 test_plugins/库内无锁模型一致)
+    auto linkCtx                 = std::make_shared<agentxx::agent::AgentContext>();
+    linkCtx->agentConfig         = std::make_shared<agentxx::agent::AgentConfig>();
+    linkCtx->agentConfig->workDir = testDir; ///< 相对路径基准经宿主接口注入
+    linkCtx->middlewareHandleContext = std::make_shared<agentxx::middleware::MiddlewareContext>();
+    linkCtx->bus = std::make_shared<agentxx::event::EventBus>(co_await asio::this_coro::executor);
+    linkCtx->toolRegistry  = std::make_shared<agentxx::plugin::ToolRegistry>();
+    linkCtx->pluginManager = std::make_shared<agentxx::plugin::PluginManager>(linkCtx);
+    linkCtx->pluginManager->setIoExecutor(co_await asio::this_coro::executor);
+
+    auto inst = co_await linkCtx->pluginManager->loadPluginAsync(pluginDir);
+    XX_TEST_EXPECT_TRUE(inst != nullptr);
+    if (!inst) {
+        g_fs_passed++;
+        TEST_INFO << "plugin real-link skipped (loadPluginAsync failed)" << std::endl;
+        co_return;
+    }
+
+    // 六工具全部注册
+    for (const char* name :
+         {"agentxx_filesystem_list",
+          "agentxx_filesystem_read",
+          "agentxx_filesystem_write",
+          "agentxx_filesystem_edit",
+          "agentxx_filesystem_glob",
+          "agentxx_filesystem_grep"}) {
+        XX_TEST_EXPECT_TRUE(linkCtx->toolRegistry->contains(name));
+    }
+
+    // 经 ToolRegistry 全链路执行 (op_driver 驱动插件三件套); sessionId 注入
+    // thread_id → 会话工作目录解析链路
+    auto callTool = [&](const char* name,
+                        const neograph::json& args) -> asio::awaitable<std::string> {
+        auto tool = linkCtx->toolRegistry->find(name);
+        if (!tool) {
+            co_return "[Error] tool not found";
+        }
+        auto merged = args;
+        merged["sessionId"] = "t_fs_link";
+        co_return co_await tool->execute_async(merged);
+    };
+
+    // write (polled): 相对路径以宿主 workDir 为基准创建文件
+    {
+        auto out = co_await callTool("agentxx_filesystem_write",
+                                     neograph::json{{"path", "link_smoke.txt"},
+                                                    {"content", "alpha\nbeta\n"}});
+        XX_TEST_EXPECT_EQ(out, std::string{"success"});
+        XX_TEST_EXPECT_TRUE(fs::exists(testDir + "/link_smoke.txt"));
+    }
+
+    // read (polled): 完整读取 + offset/limit 分段
+    {
+        auto out = co_await callTool("agentxx_filesystem_read",
+                                     neograph::json{{"path", "link_smoke.txt"}});
+        XX_TEST_EXPECT_TRUE(out.find("alpha") != std::string::npos
+                            && out.find("beta") != std::string::npos);
+        auto part = co_await callTool(
+            "agentxx_filesystem_read",
+            neograph::json{{"path", "link_smoke.txt"}, {"line_offset", 1}, {"line_limit", 1}}
+        );
+        XX_TEST_EXPECT_TRUE(part.find("beta") != std::string::npos
+                            && part.find("alpha") == std::string::npos);
+    }
+
+    // edit (polled): 替换并落盘
+    {
+        auto out = co_await callTool(
+            "agentxx_filesystem_edit",
+            neograph::json{{"path", "link_smoke.txt"}, {"old_str", "beta"}, {"new_str", "gamma"}}
+        );
+        XX_TEST_EXPECT_EQ(out, std::string{"success"});
+        std::ifstream in(testDir + "/link_smoke.txt");
+        std::string   content((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        XX_TEST_EXPECT_EQ(content, std::string{"alpha\ngamma\n"});
+    }
+
+    // list (sync 垫片/offload): 列出目录内容
+    {
+        auto out = co_await callTool("agentxx_filesystem_list", neograph::json{{"path", "."}});
+        XX_TEST_EXPECT_TRUE(out.find("link_smoke.txt") != std::string::npos);
+    }
+
+    // grep (sync 垫片/offload): 文本搜索命中
+    {
+        auto out = co_await callTool(
+            "agentxx_filesystem_grep",
+            neograph::json{{"text_patterns_is_regex", false                           },
+                           {"text_patterns",          neograph::json::array({"gamma"})},
+                           {"file_patterns",          neograph::json::array({"*.txt"})},
+                           {"output_mode",            "files_with_matches"            }}
+        );
+        XX_TEST_EXPECT_TRUE(out.find("link_smoke.txt") != std::string::npos);
+    }
+
+    // 卸载 (寄生 loop / 垫片随实例析构安全)
+    auto okUnload = co_await linkCtx->pluginManager->unloadAsync("agentxx_filesystem");
+    XX_TEST_EXPECT_TRUE(okUnload);
+
+    fs::remove(testDir + "/link_smoke.txt", ec);
+}
+
 asio::awaitable<TestResult>
     run_filesystem_tools_tests(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     setupTestDir();
-
     auto run = [agentContext](auto testFn) -> asio::awaitable<void> {
         try {
             co_await testFn(agentContext);
@@ -1660,6 +1825,15 @@ asio::awaitable<TestResult>
     co_await run(test_grep_no_match_fail_fast);
     co_await run(test_grep_skip_directories);
     co_await run(test_grep_mem_stress);
+
+    // 插件真实链路冒烟 (dlopen + 宿主 op_driver 全链路; 插件未构建时跳过)
+    // - 无 agentContext 形参, 不经 run 适配器直调 (异常兜底语义一致)
+    try {
+        co_await test_plugin_real_link();
+    } catch (const std::exception& e) {
+        g_fs_failed++;
+        TEST_FAIL << "Exception in test_plugin_real_link: " << e.what() << std::endl;
+    }
 
     cleanupTestDir();
     co_return TestResult{g_fs_passed, g_fs_failed};

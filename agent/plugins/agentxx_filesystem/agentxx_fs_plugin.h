@@ -9,6 +9,7 @@
 #include "agentxx/plugin/plugin_api.h"
 #include "agentxx/plugin/plugin_guard.h"
 #include "agentxx/plugin/plugin_iface_helper.h"
+#include "agentxx/plugin/plugin_poll_loop.h"
 #include "agentxx/plugin/plugin_tool_sync.h"
 #include <fmt/format.h>
 #include <neograph/json.h>
@@ -36,6 +37,13 @@ struct PluginCtx {
     /// 同步垫片适配器存储 (每注册工具一个, 随实例销毁释放; unique_ptr 目标
     /// 地址稳定 —— 注册后三件套回调引用其内容, 容器扩容不失效)
     std::vector<std::unique_ptr<AgentxxSyncToolShim>> sync_tool_shims;
+    /// poll 寄生驱动事件循环 (统一异步操作模型: read/write/edit 工作协程在
+    /// 其 io_context 上 spawn, 由宿主 io 线程经 pollOnce 非阻塞步进 —— asio
+    /// stream_file 异步文件 I/O 与内置工具同线程交错执行; list/glob/grep
+    /// 阻塞遍历不走此 loop, 仍由 sync 垫片委托 offload 池)
+    agentxx::plugin::PollLoop pollLoop {};
+    /// poll 寄生驱动垫片适配器存储 (随实例销毁释放; 目标地址稳定)
+    std::vector<std::unique_ptr<agentxx::plugin::PolledToolShim>> polled_shims;
     /// 会话工作目录回退值 (agent 级 get_work_dir; create 时装配一次,
     /// 每实例独立 —— 原函数级 static 实现会把首实例的值固化给所有后续实例)
     std::string                  work_dir {};

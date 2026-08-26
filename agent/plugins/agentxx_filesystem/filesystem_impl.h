@@ -4,8 +4,14 @@
 // - 头文件-only: 插件入口与测试共同包含, 保证插件行为与测试覆盖一致
 // - 与原实现的差异点:
 //   - 会话工作目录经参数注入 (workDir), 由插件入口从宿主接口表取值;
-//   - 原版 asio 异步文件 I/O 改为同步实现 (execute 回调已运行在宿主线程池,
-//     阻塞安全); list/glob/grep 的长遍历循环内检查超时 deadline 与取消标志,
+//   - 统一异步操作模型 (poll 寄生驱动): read/write/edit 提供 *ExecuteAsync
+//     协程执行体 —— 在插件实例 PollLoop 的 io_context 上 spawn, 经 asio
+//     stream_file 真异步文件 I/O 与内置工具同线程交错执行 (还原迁移前
+//     lib 内置工具的异步行为); BOOST_ASIO_HAS_FILE 不可用的平台 (无
+//     io_uring/iocp 文件支持) 回退同步实现, 注册侧相应改走 offload 垫片;
+//     list/glob/grep 为 std::filesystem/glob 阻塞遍历, 维持同步执行体由
+//     入口经 sync 垫片注册 (offload 池线程执行, 不占宿主 io 线程)
+//   - list/glob/grep 的长遍历循环内检查超时 deadline 与取消标志,
 //     语义与原 asyncWithTimeout/取消 watcher 一致; 单文件读写为短操作不轮询
 //   - 取消时返回 "[Error] Cancelled" 文本 (插件 execute 无法向宿主抛出
 //     CancelledException, 宿主按普通工具错误处理)
@@ -17,7 +23,17 @@
 #include "agentxx/util/regex.h"
 #include "agentxx/util/string_util.h"
 #include "agentxx/util/util.h"
+#include "asio/any_io_executor.hpp"
+#include "asio/error.hpp"
+#include "asio/read.hpp"
+#include "asio/read_until.hpp"
+#include "asio/redirect_error.hpp"
+#include "asio/stream_file.hpp"
+#include "asio/this_coro.hpp"
+#include "asio/use_awaitable.hpp"
+#include "asio/write.hpp"
 #include "glob/glob.h"
+#include <neograph/json.h>
 #include <algorithm>
 #include <atomic>
 #include <cctype>
@@ -1057,6 +1073,389 @@ inline std::string fileGrepExecute(
     const IsCancelledFn&  isCancelled = nullptr
 ) {
     return detail::asErrorText([&] { return fileGrepExecuteImpl(arguments, workDir, isCancelled); });
+}
+
+// =====================================================================
+// 协程版执行体 (统一异步操作模型 poll 寄生驱动路径)
+// - 在插件实例 PollLoop 的 io_context 上 spawn (宿主 io 线程经 pollOnce
+//   非阻塞步进), asio stream_file 真异步文件 I/O 与内置工具同线程交错;
+//   还原迁移前 lib 内置工具 FilesystemReadTextFileTool 等的异步行为
+// - 挂起点之间无阻塞调用: 存在性检查/目录创建等元数据操作为快速调用,
+//   与原 lib 实现一致直接内联执行
+// - BOOST_ASIO_HAS_FILE 不可用的平台 (无 io_uring/iocp 文件支持) 回退到
+//   同步实现 (注册侧会相应改走 sync 垫片 offload 路径, 协程内不阻塞)
+// =====================================================================
+namespace detail {
+
+/// stream_file 异步读取完整文件内容 (原始字节; 不做编码转换)
+/// - 打开失败抛出异常; 读到 EOF 视为正常结束
+inline asio::awaitable<std::string> asyncReadWholeFile(
+    const asio::any_io_executor& executor,
+    const std::string&           systemCharsetFilePath
+) {
+    asio::stream_file        stream{executor};
+    neograph_asio_error_code errCode;
+    stream.open(systemCharsetFilePath, asio::stream_file::read_only, errCode);
+    if (false == stream.is_open()) {
+        throw std::runtime_error{fmt::format(R"(Can not open file: {})", errCode.message())};
+    }
+    std::string data;
+    co_await asio::async_read(
+        stream,
+        asio::dynamic_buffer(data),
+        asio::transfer_all(),
+        asio::redirect_error(asio::use_awaitable, errCode)
+    );
+    // transfer_all 在文件结束时以 eof 返回, 属预期终止
+    if (errCode && errCode != asio::error::eof) {
+        throw std::system_error{errCode};
+    }
+    stream.close();
+    co_return data;
+}
+
+} // namespace detail
+
+#if defined(BOOST_ASIO_HAS_FILE)
+
+/// agentxx_filesystem_read 执行体协程版 (原 FilesystemReadTextFileTool::execute_async)
+/// - line_offset/line_limit 模式经 async_read_until 逐行推进 (保留原始换行符);
+///   其余整文件读取; 读取后 autoConvertToUtf8 (保留 crlf 或 \n 原样不转换)
+inline asio::awaitable<std::string> fileReadExecuteAsyncImpl(
+    const neograph::json& arguments,
+    const std::string&    workDir
+) {
+    auto filepath = detail::wsAbs(workDir, arguments.value("path", std::string{}));
+    if (filepath.empty()) {
+        co_return R"([Error] Arg `path` is empty)";
+    }
+    auto systemCharsetFilePath = filepath;
+    agentxx::util::autoConvertToSystemPath(systemCharsetFilePath);
+    auto text_line_offset = arguments.value<int64_t>("line_offset", -1);
+    auto text_line_limit  = arguments.value<int64_t>("line_limit", -1);
+
+    auto executor = co_await asio::this_coro::executor;
+
+    if (text_line_offset >= 0 || text_line_limit > 0) {
+        // 读取部分文件: 逐行 async_read_until, 跳过偏移行后收集至结果
+        asio::stream_file        stream{executor};
+        neograph_asio_error_code errCode;
+        stream.open(systemCharsetFilePath, asio::stream_file::read_only, errCode);
+        if (false == stream.is_open()) {
+            throw std::runtime_error{fmt::format(R"(Can not open file: {})", errCode.message())};
+        }
+
+        const auto offset = (text_line_offset >= 0) ? static_cast<size_t>(text_line_offset) : 0;
+        const auto limit  = (text_line_limit > 0) ? static_cast<size_t>(text_line_limit)
+                                                  : std::numeric_limits<size_t>::max();
+        std::stringstream result{};
+        size_t            lineNum = 0;
+        size_t            endLine = offset;
+        if (offset < std::numeric_limits<size_t>::max() - limit) {
+            // 防止相加溢出回绕
+            endLine = offset + limit;
+        } else {
+            endLine = std::numeric_limits<size_t>::max();
+        }
+
+        for (std::string buf; lineNum < endLine; lineNum++) {
+            auto readlen = co_await asio::async_read_until(
+                stream,
+                asio::dynamic_buffer(buf),
+                '\n',
+                asio::redirect_error(asio::use_awaitable, errCode)
+            );
+
+            if (errCode == asio::error::eof) {
+                // 文件结束 (末行可能无换行符): readlen 为 EOF 前已读入的字节数
+                if (lineNum >= offset) {
+                    auto line = std::string_view{buf}.substr(0, readlen);
+                    result << line;
+                }
+                break;
+            } else if (errCode) {
+                throw std::system_error{errCode};
+            }
+
+            if (lineNum >= offset) {
+                auto line = std::string_view{buf}.substr(0, readlen);
+                result << line;
+            }
+            buf.erase(0, readlen);
+        }
+
+        stream.close();
+        if (lineNum == 0 && offset == 0) {
+            // 空文件: 第 0 行视为空行, 返回空串而非报错
+            co_return "";
+        }
+        if (lineNum <= offset) {
+            // offset 超出文件行数
+            throw std::runtime_error{fmt::format(
+                R"(Arg `line_offset`({} lines) is out of range of file lines({} lines).)",
+                offset,
+                lineNum
+            )};
+        }
+
+        auto rawStr = result.str();
+        // 保留原始的 crlf 或 \n 换行符不转换
+        agentxx::util::autoConvertToUtf8(rawStr);
+        co_return rawStr;
+    }
+
+    // 读取完整文件
+    auto data = co_await detail::asyncReadWholeFile(executor, systemCharsetFilePath);
+    // 保留原始的 crlf 或 \n 换行符不转换
+    agentxx::util::autoConvertToUtf8(data);
+    co_return data;
+}
+
+/// agentxx_filesystem_write 执行体协程版 (原 FilesystemWriteFileTool::execute_async)
+/// - overwrite=false 且目标存在时报错; 自动创建缺失的父目录;
+///   stream_file create|truncate 打开后 async_write 全量写入
+inline asio::awaitable<std::string> fileWriteExecuteAsyncImpl(
+    const neograph::json& arguments,
+    const std::string&    workDir
+) {
+    auto filepath = detail::wsAbs(workDir, arguments.value("path", std::string{}));
+    if (filepath.empty()) {
+        co_return R"([Error] Arg `path` is empty)";
+    }
+    auto systemCharsetFilePath = filepath;
+    agentxx::util::autoConvertToSystemPath(systemCharsetFilePath);
+    auto content   = arguments.value<std::string>("content", std::string{});
+    auto overwrite = arguments.value<bool>("overwrite", false);
+
+    // 存在性检查与父目录创建: 快速元数据操作, 与原实现一致内联执行
+    auto path = std::filesystem::path(filepath);
+    if (false == overwrite && std::filesystem::exists(path)) {
+        throw std::runtime_error{"File already exist. Set `overwrite` = true if want to overwrite."};
+    }
+    if (false == std::filesystem::exists(path.parent_path())
+        && false == std::filesystem::create_directories(path.parent_path())) {
+        throw std::runtime_error{fmt::format(
+            R"(Can not create `path`({})'s parent dirs.)",
+            path.parent_path().generic_string()
+        )};
+    }
+
+    auto executor = co_await asio::this_coro::executor;
+
+    asio::stream_file        stream{executor};
+    neograph_asio_error_code errCode;
+    stream.open(
+        systemCharsetFilePath,
+        asio::stream_file::write_only | asio::stream_file::create | asio::stream_file::truncate,
+        errCode
+    );
+    if (false == stream.is_open()) {
+        throw std::runtime_error{fmt::format(R"(Can not open file: {})", errCode.message())};
+    }
+
+    if (false == content.empty()) {
+        // 写入文本内容
+        co_await asio::async_write(
+            stream,
+            asio::buffer(content),
+            asio::redirect_error(asio::use_awaitable, errCode)
+        );
+        if (errCode) {
+            throw std::system_error{errCode};
+        }
+    }
+
+    stream.close();
+    co_return "success";
+}
+
+/// agentxx_filesystem_edit 执行体协程版 (原 FilesystemEditTextFileTool::execute_async)
+/// - 异步读完整文件 → UTF-8/LF 归一化 → 替换 → 原子写 (同目录临时文件 +
+///   rename 覆盖), 与同步版行为一致
+inline asio::awaitable<std::string> fileEditExecuteAsyncImpl(
+    const neograph::json& arguments,
+    const std::string&    workDir
+) {
+    auto filepath = detail::wsAbs(workDir, arguments.value("path", std::string{}));
+    if (filepath.empty()) {
+        co_return "[Error] Arg `path` is empty";
+    }
+    auto systemCharsetFilePath = filepath;
+    agentxx::util::autoConvertToSystemPath(systemCharsetFilePath);
+    auto old_str = arguments.value<std::string>("old_str", std::string{});
+    if (old_str.empty()) {
+        co_return "[Error] Arg `old_str` is empty";
+    }
+    auto new_str       = arguments.value<std::string>("new_str", std::string{});
+    auto multi_replace = arguments.value<bool>("multi_replace", false);
+
+    if (new_str == old_str) {
+        co_return "[Error] Arg `old_str` and `new_str` are equal and unchanged.";
+    }
+
+    // 统一到 \n 换行符
+    // - 与 filesystem_read 的逻辑不同，read 应当保留原始的内容，edit 应当尽可能保证修改成功，
+    //   如果 llm 需要写回 crlf，可使用 shell
+    detail::normalizeCrlfToLf(old_str);
+    detail::normalizeCrlfToLf(new_str);
+
+    if (false == std::filesystem::exists(std::filesystem::path(filepath))) {
+        throw std::runtime_error{"File not exist"};
+    }
+
+    // 异步读取完整文件并预处理 (先转 UTF-8 使 GBK 等编码文件可正常匹配, 再统一换行符)
+    auto executor = co_await asio::this_coro::executor;
+    std::string content = co_await detail::asyncReadWholeFile(executor, systemCharsetFilePath);
+    agentxx::util::autoConvertToUtf8(content);
+    detail::normalizeCrlfToLf(content);
+
+    int    replaceHit = 0;
+    size_t pos        = 0;
+    while ((pos = content.find(old_str, pos)) != std::string::npos) {
+        replaceHit++;
+        content.replace(pos, old_str.length(), new_str);
+        // 跳过新字符串，避免死循环
+        pos += new_str.length();
+        if (false == multi_replace) {
+            break;
+        }
+    }
+
+    if (0 == replaceHit) {
+        throw std::runtime_error{
+            R"(No match `old_str` found, Try re-reading to get the latest file content.)"
+        };
+    }
+
+    // 原子写: 先写同目录临时文件, 成功后 rename 覆盖原文件,
+    // 避免直接 truncate 原文件后写入中途失败导致原内容永久丢失
+    // (注: 计数器仅保证进程内唯一性, 多实例共享无害, 不属于实例状态)
+    static std::atomic<uint64_t> s_editTmpSeq{0};
+    const auto                   tmpPath = systemCharsetFilePath
+                             + fmt::format(".agentxx_edit_tmp_{}", s_editTmpSeq.fetch_add(1));
+
+    {
+        asio::stream_file        stream{executor};
+        neograph_asio_error_code errCode;
+        stream.open(
+            tmpPath,
+            asio::stream_file::write_only | asio::stream_file::create | asio::stream_file::truncate,
+            errCode
+        );
+        if (false == stream.is_open()) {
+            throw std::runtime_error{
+                fmt::format(R"(Can not open temp file to write: {})", errCode.message())
+            };
+        }
+        co_await asio::async_write(
+            stream,
+            asio::buffer(content),
+            asio::redirect_error(asio::use_awaitable, errCode)
+        );
+        stream.close();
+        if (errCode) {
+            std::error_code rmEc;
+            std::filesystem::remove(tmpPath, rmEc);
+            throw std::system_error{errCode};
+        }
+    }
+
+    std::error_code renameEc;
+    std::filesystem::rename(tmpPath, systemCharsetFilePath, renameEc);
+    if (renameEc) {
+        std::error_code rmEc;
+        std::filesystem::remove(tmpPath, rmEc);
+        throw std::runtime_error{
+            fmt::format(R"(Failed to replace original file: {})", renameEc.message())
+        };
+    }
+
+    if (multi_replace) {
+        co_return fmt::format(R"(Success, Replace {} hits)", replaceHit);
+    }
+    co_return "success";
+}
+
+#else // !BOOST_ASIO_HAS_FILE
+
+/// 文件异步 I/O 不可用平台 (无 io_uring/iocp 文件支持): 回退同步实现。
+/// 注册侧检测同一宏, 会改走 sync 垫片 (offload 池线程) 注册, 本回退仅供
+/// 测试等直调场景保持单一入口
+inline asio::awaitable<std::string> fileReadExecuteAsyncImpl(
+    const neograph::json& arguments,
+    const std::string&    workDir
+) {
+    co_return fileReadExecuteImpl(arguments, workDir);
+}
+
+inline asio::awaitable<std::string> fileWriteExecuteAsyncImpl(
+    const neograph::json& arguments,
+    const std::string&    workDir
+) {
+    co_return fileWriteExecuteImpl(arguments, workDir);
+}
+
+inline asio::awaitable<std::string> fileEditExecuteAsyncImpl(
+    const neograph::json& arguments,
+    const std::string&    workDir
+) {
+    co_return fileEditExecuteImpl(arguments, workDir);
+}
+
+#endif // BOOST_ASIO_HAS_FILE
+
+/// 对外协程执行体: 与同步版 *Execute 外层语义一致 —— 可预期异常统一转为
+/// "[Error] ..." 错误文本返回, 保证 polled 寄生驱动路径与测试直测行为一致
+/// (单文件读写为短操作不轮询取消, 故不设 isCancelled 形参)
+/// - 注意: 本包装自身必须是协程 (而非返回惰性协程的普通函数) —— 参数引用在
+///   协程帧内存续, 若经普通函数中转临时 lambda 会因栈帧提前返回而悬垂
+///   (ASan stack-use-after-return 已复现)
+inline asio::awaitable<std::string> fileReadExecuteAsync(
+    const neograph::json& arguments,
+    const std::string&    workDir
+) {
+    try {
+#if defined(BOOST_ASIO_HAS_FILE)
+        co_return co_await fileReadExecuteAsyncImpl(arguments, workDir);
+#else
+        co_return fileReadExecuteImpl(arguments, workDir);
+#endif
+    } catch (const std::exception& ex) {
+        XX_LOGD("filesystem tool error -> text: {}", ex.what());
+        co_return fmt::format("[Error] {}", ex.what());
+    }
+}
+
+inline asio::awaitable<std::string> fileWriteExecuteAsync(
+    const neograph::json& arguments,
+    const std::string&    workDir
+) {
+    try {
+#if defined(BOOST_ASIO_HAS_FILE)
+        co_return co_await fileWriteExecuteAsyncImpl(arguments, workDir);
+#else
+        co_return fileWriteExecuteImpl(arguments, workDir);
+#endif
+    } catch (const std::exception& ex) {
+        XX_LOGD("filesystem tool error -> text: {}", ex.what());
+        co_return fmt::format("[Error] {}", ex.what());
+    }
+}
+
+inline asio::awaitable<std::string> fileEditExecuteAsync(
+    const neograph::json& arguments,
+    const std::string&    workDir
+) {
+    try {
+#if defined(BOOST_ASIO_HAS_FILE)
+        co_return co_await fileEditExecuteAsyncImpl(arguments, workDir);
+#else
+        co_return fileEditExecuteImpl(arguments, workDir);
+#endif
+    } catch (const std::exception& ex) {
+        XX_LOGD("filesystem tool error -> text: {}", ex.what());
+        co_return fmt::format("[Error] {}", ex.what());
+    }
 }
 
 } // namespace agentxx_fs_plugin

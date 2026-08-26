@@ -79,6 +79,13 @@ struct PollLoop {
     /// - 返回 >=1 = 无就绪事件 (建议小睡 N ms 再来; 内部定时器到期由该次
     ///   poll 触发恢复)
     int pollOnce() {
+        // 必须先 restart: scheduler::poll 在 outstanding_work_ 归零时会内部
+        // stop() 本 io_context (boost/asio/detail/impl/scheduler.ipp), 而
+        // stopped_ 状态下后续 poll() 不再执行任何 handler —— 表现为"同一
+        // loop 的第二个工具调用永久挂死"。本 loop 为寄生事件循环, 两次工具
+        // 调用之间必然经历工作数归零的空闲期, 故每次步进前显式复位停止标志
+        // (单线程步进场景下 restart 无副作用, 与官方 run/poll 前置约定一致)
+        io->restart();
         const size_t n = io->poll(); ///< asio: 非阻塞执行全部就绪 handler
         return n > 0 ? 0 : (idleHintMs > 0 ? idleHintMs : 1);
     }

@@ -12,6 +12,30 @@ if (NOT _AGENTXX_PLATFORM_OK)
   return() # 跳过本插件全部目标 (内置合并/独立动态库两模式均在此拦截)
 endif ()
 
+# asio 头文件路径 (read/write/edit 协程执行体使用 stream_file 异步文件 I/O;
+# BOOST_ROOT 由顶层 superbuild 传入; 独立构建时按构建脚本约定推断默认路径,
+# 与 agentxx_execute_command 同模式)
+if (NOT DEFINED BOOST_ROOT)
+  set(_BOOST_CANDIDATES
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/boost-linux-build-debug"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/boost-linux-build-release"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/boost-windows-build-debug"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/boost-windows-build-release"
+  )
+  foreach (_bc ${_BOOST_CANDIDATES})
+    if (EXISTS "${_bc}/include/boost/asio/awaitable.hpp")
+      set(BOOST_ROOT "${_bc}")
+      break()
+    endif()
+  endforeach()
+endif()
+if (NOT DEFINED BOOST_ROOT OR NOT EXISTS "${BOOST_ROOT}/include/boost/asio/awaitable.hpp")
+  message(FATAL_ERROR "[${PLUGIN_NAME}] BOOST_ROOT not found (asio headers required)")
+endif()
+# boost 分发布局: ${BOOST_ROOT}/include/boost/...; 源码用 asio/... 前缀
+# (映射 include/boost/), 而 asio 头内部用 <boost/asio/...> 形式 (映射 include/)
+set(_BOOST_INCLUDES "${BOOST_ROOT}/include/" "${BOOST_ROOT}/include/boost/")
+
 if (_AGENTXX_ADD_AS_BUILTIN)
   # ===== 内置合并编译分支 =====
   set(_target abp_${PLUGIN_NAME})
@@ -29,6 +53,7 @@ if (_AGENTXX_ADD_AS_BUILTIN)
     "${AGENTXX_LIB_INCLUDE_DIR}"               # agentxx/plugin/plugin_api.h
     "${AGENTXX_INSTALL_DIR}/include"           # fmt neograph
     "${AGENTXX_INSTALL_DIR}/include/Glob-1.0"  # glob/glob.h (filesystem_impl.h)
+    ${_BOOST_INCLUDES}                         # asio stream_file (read/write/edit 协程执行体)
   )
   # 复用 agentxx_util 工具库 (libagentxx 已链接本库; 此处经 PRIVATE 链接仅
   # 传递编译宏/头路径/依赖 include: XXRegex/aho_corasick 实现于 util)
@@ -93,6 +118,11 @@ target_include_directories(${PLUGIN_NAME} PRIVATE
   "${AGENTXX_LIB_INCLUDE_DIR}"               # agentxx/plugin/plugin_api.h
   "${AGENTXX_INSTALL_DIR}/include/"          # fmt neograph
   "${AGENTXX_INSTALL_DIR}/include/Glob-1.0"  # glob/glob.h (filesystem_impl.h)
+)
+# asio 头路径 (read/write/edit 协程执行体 stream_file): SYSTEM 置后声明,
+# 不遮蔽前方项目头路径 (避免干扰 neograph/yyjson 头解析), 与 execute_command 同款
+target_include_directories(${PLUGIN_NAME} SYSTEM PRIVATE
+  ${_BOOST_INCLUDES}
 )
 
 # 裸库名依赖解析目录 (与 lib 一致): neograph 系/yyjson/hs_runtime 位于
