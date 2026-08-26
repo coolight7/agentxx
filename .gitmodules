@@ -42,7 +42,7 @@
 	url = https://github.com/zlib-ng/zlib-ng
 [submodule "agent/third_party/ftxui"]
 	path = agent/third_party/ftxui
-	url = https://github.com/ArthurSonzogni/FTXUI
+	url = https://github.com/coolight7/FTXUI
 [submodule "agent/third_party/markdown_ftxui"]
 	path = agent/third_party/markdown_ftxui
 	url = https://github.com/coolight7/MarkdownFTXUI
