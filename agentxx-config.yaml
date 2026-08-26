@@ -149,15 +149,6 @@ models:
     extra_api_config:
       reasoning:
         effort: max
-  - name: opencode-ox-alpha
-    type: "openai"
-    base_url: "https://opencode.ai/zen/go/v1"
-    api_key: "${OPENCODE_API_KEY}"
-    model_name: "ox-alpha-free"
-    send_thinking: true
-    model_context_max_token: 1000000
-    extra_api_config:
-      reasoning_effort: max
   - name: gemini-3.7-flash-high-responses
     type: "openai-responses"
     base_url: "http://172.29.48.1:8317/v1"
@@ -192,7 +183,7 @@ models:
 use_model:
   # default: local
   # default: opencode-ds-v4-flash
-  default: opencode-ox-alpha
+  default: gemini-3.7-flash-high-responses
   subagent: local
   acp: local
   train: local
