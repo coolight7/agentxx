@@ -89,13 +89,14 @@ struct ToolHeaderFixture {
         });
     }
 
-    /// 追加一条 Think 消息 (折叠状态, 头部为 "-/+/[Think]/预览")
-    void pushThinking(std::string text) {
+    /// 追加一条 Think 消息 (头部为 "-/+/[Think]/预览")
+    void pushThinking(std::string text, bool collapsed = true, int64_t durationMs = 0) {
         sharedState.mutate([&](TUIRenderState& st) {
-            auto m       = std::make_shared<TUIMessage>();
-            m->role      = TUIMessage::Role::Think;
-            m->collapsed = true;
-            m->text      = std::move(text);
+            auto m        = std::make_shared<TUIMessage>();
+            m->role       = TUIMessage::Role::Think;
+            m->collapsed  = collapsed;
+            m->durationMs = durationMs;
+            m->text       = std::move(text);
             st.messages.push_back(std::move(m));
         });
     }
@@ -481,6 +482,20 @@ void testTuiToolHeaderDuration() {
         f1.plainRender().find("- [Tool] agentxx_filesystem_read 1.2s") != std::string::npos
     );
 
+    // 1.1 短耗时 (< 100ms) 工具展开, 耗时显示为毫秒单位 (50ms)
+    ToolHeaderFixture f1ms;
+    f1ms.pushTool(
+        "agentxx_filesystem_read",
+        R"({"path":"/home/a.cpp"})",
+        true,
+        false, // 展开
+        "file content",
+        50
+    );
+    XX_TEST_EXPECT_TRUE(
+        f1ms.plainRender().find("- [Tool] agentxx_filesystem_read 50ms") != std::string::npos
+    );
+
     // 2. 长耗时工具展开, 耗时 1m5s
     ToolHeaderFixture f2;
     f2.pushTool(
@@ -537,6 +552,48 @@ void testTuiToolHeaderDuration() {
     );
     XX_TEST_EXPECT_TRUE(
         f5.plainRender().find("0.0s") == std::string::npos
+    );
+
+    // 6. 已完成但耗时为 0 的工具展开, 不显示耗时 (无 0.0s)
+    ToolHeaderFixture f6;
+    f6.pushTool(
+        "agentxx_filesystem_read",
+        R"({"path":"/home/a.cpp"})",
+        true,
+        false, // 展开
+        "content",
+        0
+    );
+    XX_TEST_EXPECT_TRUE(
+        f6.plainRender().find("- [Tool] agentxx_filesystem_read") != std::string::npos
+    );
+    XX_TEST_EXPECT_TRUE(
+        f6.plainRender().find("0.0s") == std::string::npos
+    );
+
+    // 7. Think 消息: 耗时 > 0 时显示耗时, 耗时为 0 时不显示
+    ToolHeaderFixture f7;
+    f7.pushThinking("thinking content 1", false, 1500); // 展开, 1.5s
+    XX_TEST_EXPECT_TRUE(
+        f7.plainRender().find("- [Think] 1.5s") != std::string::npos
+    );
+
+    ToolHeaderFixture f8;
+    f8.pushThinking("thinking content 2", false, 0); // 展开, 耗时 0
+    XX_TEST_EXPECT_TRUE(
+        f8.plainRender().find("- [Think] ") != std::string::npos
+    );
+    XX_TEST_EXPECT_TRUE(
+        f8.plainRender().find("0.0s") == std::string::npos
+    );
+
+    ToolHeaderFixture f9;
+    f9.pushThinking("thinking content 3", true, 0); // 折叠, 耗时 0
+    XX_TEST_EXPECT_TRUE(
+        f9.plainRender().find("+ [Think] ") != std::string::npos
+    );
+    XX_TEST_EXPECT_TRUE(
+        f9.plainRender().find("0.0s") == std::string::npos
     );
 }
 

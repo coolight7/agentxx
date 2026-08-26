@@ -1045,10 +1045,10 @@ inline PinyinCallback s_pinyinCallback = nullptr;
 // 时长 / 时间戳格式化 (agent 端构造系统提示消息文本时使用, 如轮次统计)
 // ---------------------------------------------------------------------------
 
-/// 格式化运行时长: 1.2s / 3m5s / 1h2m3s
+/// 格式化运行时长: 50ms / 1.2s / 3m5s / 1h2m3s
 [[nodiscard]] inline std::string formatDurationMilliseconds(int64_t milliseconds) {
     if (milliseconds < 0) {
-        return "0.0s";
+        return "0ms";
     }
     const int64_t totalSec = milliseconds / 1000;
     const int64_t hours    = totalSec / 3600;
@@ -1062,6 +1062,9 @@ inline PinyinCallback s_pinyinCallback = nullptr;
             return fmt::format("{}m{}s", minutes, seconds);
         }
         return fmt::format("{}m0s", minutes);
+    }
+    if (milliseconds < 100) {
+        return fmt::format("{}ms", milliseconds);
     }
     const double sec = static_cast<double>(milliseconds) / 1000.0;
     return fmt::format("{:.1f}s", sec);
