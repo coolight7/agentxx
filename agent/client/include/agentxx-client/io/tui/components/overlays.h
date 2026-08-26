@@ -201,48 +201,6 @@ private:
     std::function<void()> onClose_;
 };
 
-/// Plan 状态图弹窗组件
-///
-/// 显示 agentxx_planning_write 工具 roadmap (Mermaid stateDiagram-v2) 的 ASCII 状态图:
-/// - 全宽渲染, 内部 Scrollable 滚动 (滚轮 / Up/Down)
-/// - 节点按 id 状态后缀着色 (_in_progress/_completed/_failed/_pending)
-/// - 弹窗打开期间 plan 消息更新时 (指针/文本长度变化) 重新解析, 其余帧走缓存
-///
-/// 交互: 滚轮 / Up/Down 滚动, 右上 ✕ 或 Esc 关闭
-class PlanDiagramOverlay : public ftxui::ComponentBase {
-public:
-
-    explicit PlanDiagramOverlay(TUICtx& ctx);
-
-    void onClose(std::function<void()> fn) {
-        onClose_ = std::move(fn);
-    }
-
-    bool           OnEvent(ftxui::Event event) override;
-    ftxui::Element OnRender() override;
-
-private:
-
-    std::vector<ScrollItem> buildItems();
-
-    TUICtx&                     ctx_;
-    std::shared_ptr<Scrollable> scrollable_;
-    std::function<void()>       onClose_;
-
-    /// plan 消息 JSON/状态图渲染缓存:
-    /// 仅当消息指针/文本长度/终端宽度/主题任一变化时重新解析并重建 Element。
-    /// 缓存命中时 buildItems 返回同一个 Element 指针, Scrollable 的
-    /// cachedElements_ 指针比较相等 → 高度缓存不失效、不重测,
-    /// 避免弹窗常驻时每帧全量解析 mermaid + 重建整图 Element 的 O(图大小) 开销。
-    const TUIMessage*             cachedMsgPtr_  = nullptr;
-    size_t                        cachedTextLen_ = 0;
-    int                           cachedMaxW_    = 0;
-    std::string                   cachedThemeName_;
-    bool                          cachedValid_ = false;
-    neograph::json                cachedArgs_  = neograph::json::array();
-    markdown::MermaidStateDiagram cachedDiagram_;
-    ftxui::Element                cachedElement_;
-};
 
 /// 加载失败组件列表弹窗 (Info 侧边栏 Append "Failed" 组 [view] 按钮触发)
 ///

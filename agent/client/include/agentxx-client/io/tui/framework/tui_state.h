@@ -2,6 +2,7 @@
 
 #include "agentxx/agent/context.h"
 #include "agentxx/agent/io/agent_io_transport.h"
+#include "agentxx/plugin/client_plugin_manager.h"
 #include "asio/experimental/concurrent_channel.hpp"
 #include "neograph/api.h"
 #include "neograph/define.h"
@@ -70,6 +71,11 @@ enum class ConnState : uint8_t {
 ///   (yyjson_mut_val_mut_copy 全树复制), 若放在 COW 全量拷贝内,
 ///   每 token 都会复制整个上下文 JSON; 指针化后 COW 拷贝仅 O(1)
 struct TUIRenderState {
+    /// client 插件 UI 注册表快照 (工具消息装饰等; 每帧开头由主渲染器从
+    /// ClientPluginManager 拉取, 渲染/事件期间无锁读取; 无插件管理器时为空)
+    /// - 测试可直接经 mutate 注入假注册表, 驱动装饰渲染路径
+    std::shared_ptr<const agentxx::plugin::ClientUiRegistry> pluginRegistry;
+
     std::vector<std::shared_ptr<TUIMessage>> messages;
 
     // ---- 历史分页窗口状态 (服务端 viewMessages 尾窗同步 + 分页拉取) ----

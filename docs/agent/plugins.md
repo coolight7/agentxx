@@ -558,7 +558,8 @@ std::string b64 = agentxx::util::base64Encode(sv);  // 静态链入本插件副�
 
 **从 lib 内置工具迁移的编程工具插件 (默认全部内置编译)**:
 
-- `agentxx_planning` (agentxx_planning_write) / `agentxx_filesystem`
+- `agentxx_planning` (write/read 双模式规划 + client 侧 Info 段落 Plan 渲染)
+  / `agentxx_filesystem`
   (list/read/write/edit/glob/grep) / `agentxx_execute_command`
   (bash/windows) / `agentxx_string` (html2markdown/regexp) /
   `agentxx_system` (get_current_datetime) / `agentxx_websearch`
@@ -642,7 +643,7 @@ agent 侧接口集 ≡ 核心契约 + 全部标准接口表 IID (版本匹配即
 | `agentxx.client.toast` | client | toast 提示 |
 | `agentxx.client.keybind` (预留) | client | 自定义键位 |
 | `agentxx.client.prompt_modal` (预留) | client | 模态询问 |
-| `agentxx.client.msg_decor` (预留) | client | 消息装饰 |
+| `agentxx.client.msg_decor` | client | 工具消息装饰 (映射 agentxx.client.ui 表 v2 `update_tool_decor`; CLI 无消息渲染面不声明) |
 | `agentxx.client.info_section` | client | 侧边栏 Info 栏段落 |
 | `agentxx.client.command` | client | 斜杠命令输入管线 |
 | `<vendor>.<name>` | 双方 | 第三方私有接口 (不得使用保留前缀 `agentxx.`); 宿主不认识即不支持, 安全失败 |
@@ -912,11 +913,16 @@ agent 侧插件 (工具/钩子/事件/能力) 已完备, 但 client (CLI/TUI) �
 
 ### 7.2 UI 无关语义层
 
-插件对 UI 的全部控制力收敛为三件事:
+插件对 UI 的全部控制力收敛为四件事:
 
 1. **声明展示物**: 状态栏项 (id/text/align/order) / 侧边栏面板 (title + items: text(role: title/normal/hint)/progress/badge/action) / 侧边栏 Info 栏段落 (title + items, 同面板 items schema; 列表项按 Append 段样式 "|  xxx" 展示) —— 内容是宿主定义 schema 的 JSON, 不是组件;
-2. **声明拦截点**: 斜杠命令 (如 `/usage`) —— 回调拿到参数, 返回动作 JSON;
-3. **调用交互原语**: toast / 代发消息 / 请求取消 —— 命令式调用。
+2. **声明工具消息装饰** (update_tool_decor, ui 表 v2): 插件对某次工具调用
+   (toolCallId) 推送语义层装饰 JSON —— `{"displayName","summary","items":[text(role)/diagram(mermaid)]}`,
+   宿主按通用渲染器展示: 折叠头显示名与一行摘要 + 展开体 items。宿主不感知任何具体工具语义
+   (参考实现 agentxx_planning: Plan 消息渲染完全由插件驱动); 装饰随 UI 注册表快照每帧读取,
+   version 递增计入消息块缓存 key; 卸载/禁用自动摘除、启用恢复;
+3. **声明拦截点**: 斜杠命令 (如 `/usage`) —— 回调拿到参数, 返回动作 JSON;
+4. **调用交互原语**: toast / 代发消息 / 请求取消 —— 命令式调用。
 
 每个 UI 实现经 `supportedInterfaces()` 声明自己支持的接口名集合
 (`plugin_interfaces` 常量), 宿主据此做子能力门禁与加载门禁;
@@ -1024,7 +1030,7 @@ strdup/query_interface); 其余宿主能力全部按 IID 查询独立接口表 (
 
 | IID (宏) | 结构体 | 成员 |
 |------|------|------|
-| `agentxx.client.ui` (`AGENTXX_IFACE_CLIENT_UI`) | `AgentxxClientUiIface` | `register/update/unregister_status_item`; `register/update/unregister_panel`; `register/update/unregister_info_section`; `register/unregister_command`; `show_toast` (不支持子能力成员为 NULL) |
+| `agentxx.client.ui` (`AGENTXX_IFACE_CLIENT_UI`, v2) | `AgentxxClientUiIface` | `register/update/unregister_status_item`; `register/update/unregister_panel`; `register/update/unregister_info_section`; `register/unregister_command`; `show_toast`; v2 追加 `update_tool_decor` (工具消息装饰; 旧插件按成员判空降级) |
 | `agentxx.client.events` | `AgentxxClientEventsIface` | `subscribe` / `unsubscribe` (卸载自动退订) |
 | `agentxx.client.session` | `AgentxxClientSessionIface` | `get_client_state` ({"sessionId","connState","model","models","isStreaming","interfaces","agentPlugins":[{name,version,interfaces}]}) / `send_user_input` (与用户输入同排队语义) / `request_cancel` |
 | `agentxx.client.wire` | `AgentxxClientWireIface` | `send_plugin_data` (client → agent, topic `client.{插件名}.{事件名}`) |
@@ -1298,7 +1304,7 @@ plugins/
 | `agent/client/include/agentxx-client/io/tui/tui_plugin_adapter.h` + `io/stdio/cli_plugin_adapter.h` | TUI/CLI 适配器实现 |
 | `agent/client/src/io/tui/agent_tui.h/.cpp` | EventSink 通知点 (WirePluginData 原样转发); 命令管线 (onSend 拦截 `/`); addPluginPanelTab/removePluginPanelTab/renderPluginPanel; sendPluginUserInput/sendPluginDataUp; uiToast |
 | `agent/client/src/io/tui/components/status_bar.cpp` | 插件状态栏项渲染 (左/右分组, order 排序) |
-| `agent/client/src/io/tui/tui_sidebar_content.cpp` | Info 侧边栏 (Planning/Append 组件 + 插件 Info 段落); 系统资源与 CodeGraph 渲染已剥离到插件 client 侧 (经 register_info_section) |
+| `agent/client/src/io/tui/tui_sidebar_content.cpp` | Info 侧边栏 (Append 组件 + 插件 Info 段落); 系统资源、CodeGraph 与 Planning 渲染已剥离到插件 client 侧 (经 register_info_section) |
 | `agent/client/src/mode_runners.cpp` + `main.cpp` | 4 个模式装配 ClientPluginManager + 适配器 (setupClientPlugins 模板); 命令拦截 (tryInvokePluginCommand) |
 | `agent/test/core/test_plugins.*` | agent 插件测试模块 `plugins` (140 项断言: 加载/工具执行/互调/钩子/事件/禁用启用/卸载/冲突/列表/JS 引擎/级联/拓扑/超时卸载竞态/shutdownAll/sides 过滤/args 传递/publish 禁用) |
 | `agent/test/core/test_client_plugins.*` | client 插件测试模块 `client_plugins` (69 项断言: 加载/UI 注册表/事件分发/命令/跨端/禁用启用/卸载/订阅扩容与派发中动态订阅/loadConfiguredClientPlugins sides 过滤与 args 传递) |

@@ -174,7 +174,7 @@
 - ✅**压缩上下文** `SummarizationMiddleware`
     - Api TokenUsage / 自动估算 tokens，达到阈值时自动启动压缩
     - toolcall 各自实现压缩处理
-        - 裁剪历史消息中过时的 (filesystem)文件读写、(agentxx_planning_write)任务规划、(agentxx_share_store)变量读写消息
+        - 裁剪历史消息中过时的 (filesystem)文件读写、(planning)任务规划、(share_store)变量读写消息
     - 将部分重要的长消息内容暂存到 `agentxx_share_store`，而不压缩，模型需要时可以提取
     - LLM 总结压缩
     - 保留最近消息

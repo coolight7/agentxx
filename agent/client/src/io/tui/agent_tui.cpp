@@ -530,6 +530,9 @@ void TUIClientAgentIO::start() {
         auto stacked      = Container::Stacked({messageList_, sidebar_, inputBar_});
         auto mainRenderer = Renderer(stacked, [&]() -> Element {
             ctx_.frameState = sharedState_.readSnapshot();
+            // client 插件 UI 注册表快照 (工具消息装饰等; 每帧刷新, 渲染期无锁读)
+            ctx_.frameState->pluginRegistry
+                = pluginManager_ ? pluginManager_->uiRegistrySnapshot() : nullptr;
             const auto& st  = *ctx_.frameState;
 
             Element pendingBar = text("");
@@ -700,11 +703,6 @@ void TUIClientAgentIO::start() {
                         postRedraw();
                         return true;
                     }
-                    // Info 侧边栏 Plan 状态图按钮点击 → 打开弹窗
-                    if (planDiagramButtonBox_.Contain(mouse.x, mouse.y)) {
-                        openPlanDiagram();
-                        return true;
-                    }
                     // Info 侧边栏 Append "Failed" 组 [view] 按钮点击 → 打开失败组件弹窗
                     if (failedViewButtonBox_.Contain(mouse.x, mouse.y)) {
                         openFailedAppendComponents();
@@ -777,6 +775,10 @@ void TUIClientAgentIO::start() {
                 // 每帧开头获取状态快照: 事件处理 (CatchEvent/组件 OnEvent) 与渲染
                 // 期间 frameState 始终有效
                 ctx_.frameState = sharedState_.readSnapshot();
+                // client 插件 UI 注册表快照 (同 mainRenderer 帧首; 供事件处理
+                // 路径读取装饰等插件注册数据)
+                ctx_.frameState->pluginRegistry
+                    = pluginManager_ ? pluginManager_->uiRegistrySnapshot() : nullptr;
                 // 消费 client 线程投递的 UI 动作 (弹窗开关/消息列表吸附等):
                 // 必须在渲染之前执行, 使本帧渲染反映其效果;
                 // 动作仅访问 UI 线程独占组件 (modal_/messageList_), 不依赖本帧快照
@@ -1062,17 +1064,6 @@ void TUIClientAgentIO::toggleLogWindow() {
         sidebar_->removeTab(kLogTabId);
     } else {
         ensureLogSidebarTab();
-    }
-    postRedraw();
-}
-
-void TUIClientAgentIO::openPlanDiagram() {
-    if (modal_ && !modal_->hasModal()) {
-        auto overlay = std::make_shared<PlanDiagramOverlay>(ctx_);
-        overlay->onClose([this] {
-            modal_->popModal();
-        });
-        modal_->pushModal(overlay);
     }
     postRedraw();
 }

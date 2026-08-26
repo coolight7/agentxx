@@ -238,7 +238,7 @@ Your (LLM/Agent) name is Agentxx. There is no need to mention your name in every
 - Locate code first with search tools (`agentxx_filesystem_grep` / `agentxx_filesystem_glob`), then read the relevant files
 - Read and understand existing code before modifying it, and follow the project's conventions
 - After changing code, verify it works when possible (build / run tests) before concluding
-- For large operations or changes, make a plan first (e.g. with `agentxx_planning_write`) and update it after each completed step. After tests pass, review the modified code for issues, then give the final overall summary
+- For large operations or changes, make a plan first (e.g. with `agentxx_planning`) and update it after each completed step. After tests pass, review the modified code for issues, then give the final overall summary
 - To inspect characters that can't be displayed properly in UTF-8 (e.g. binary data or garbled/mojibake text), save the content to a file and view it as hexadecimal
 - Provide accurate, well-structured answers with concrete examples
 
@@ -253,7 +253,7 @@ Your (LLM/Agent) name is Agentxx. There is no need to mention your name in every
     std::string systemPlanningPrompt = R"_(
 ## Planning
 
-You have access to the `agentxx_planning_write` tool to manage and plan complex objectives.
+You have access to the `agentxx_planning` tool to manage and plan complex objectives.
 Use this tool for multi-step tasks to ensure you track each necessary step.
 It helps break down large objectives into smaller, manageable steps.
 
@@ -263,12 +263,15 @@ It helps break down large objectives into smaller, manageable steps.
 
 ### Important Notes
 
-- Never call `agentxx_planning_write` multiple times in parallel.
+- Call with `mode="write"` to save/update the planning content (provide `roadmap`,
+  optional `todos`/`notes`); call with `mode="read"` to retrieve the planning
+  content previously saved in this session (e.g. after context compaction).
+- Never call `agentxx_planning` multiple times in parallel.
 - Revise the plan as new information emerges. Remove irrelevant tasks, add newly discovered ones.
 
 ### Finishing a Task
 
-When all work is done, write your final answer in the message AFTER your last `agentxx_planning_write` call — not in the same turn.
+When all work is done, write your final answer in the message AFTER your last `agentxx_planning` call — not in the same turn.
 Start the final message with the substantive content the user asked for (data, computation, summary, or analysis).
 The user wants the result, not confirmation that the work is done.
 )_";
@@ -571,12 +574,19 @@ Context lines use `-` separator; match lines use `:` separator.)"},
           },
       },
       {
-          "agentxx_planning_write",
+          "agentxx_planning",
           ToolPrompt{
               .depict =
                   R"(Two-level task planning tool for complex multi-step work sessions.
 
-=== Strategic Layer: `roadmap` (required) ===
+=== Modes (`mode`, required) ===
+- `write`: Save/update the planning content (requires `roadmap`; optional
+  `todos`/`notes`). The plan is applied to the session context and persisted,
+  so a later `read` can retrieve it even after context compaction.
+- `read`: Return the planning content previously saved in this session
+  (by an earlier `write`). No other arguments needed.
+
+=== Strategic Layer: `roadmap` (write, required) ===
 A Mermaid stateDiagram-v2 capturing the OVERALL workflow — the big picture.
 This is your roadmap: major phases, dependencies, error recovery paths, and the
 start-to-finish flow. Update this diagram whenever the plan changes (new tasks,
@@ -589,16 +599,17 @@ State diagram conventions:
 - Show branching: what happens on success vs failure
 - Replace the entire diagram each call
 
-=== Tactical Layer: `todos` (optional) ===
+=== Tactical Layer: `todos` (write, optional) ===
 A short list of IMMEDIATE and NEXT-STEP tasks only. Do NOT list every state
 from the diagram — only the tasks you are actively working on or about to start.
 Each item records execution details, lessons learned, and issues encountered
 to help with re-planning.
 
-=== MEMO Layer: `notes` (optional) ===
+=== MEMO Layer: `notes` (write, optional) ===
 Record any important information, tips, reminders, or identity/role-playing prompts.
 
 Example for a "fix a bug" workflow:
+- mode: write
 - roadmap:
 ```mermaid
 stateDiagram-v2
@@ -626,13 +637,17 @@ stateDiagram-v2
 )",
               .args =
                   {
+                      {"mode",
+                       R"(Operation mode:
+`write`: Save/update the planning content (requires `roadmap`; optional `todos`/`notes`).
+`read`: Return the planning content previously saved in this session (no other arguments).)"},
                       {"roadmap",
-                       R"(STRATEGIC LAYER: Mermaid stateDiagram-v2 of the overall workflow.
+                       R"((write only) STRATEGIC LAYER: Mermaid stateDiagram-v2 of the overall workflow.
 Include ALL phases even if not yet started. Each phase gets state nodes for its
 statuses (pending/in_progress/completed/failed) with transitions showing
 dependencies and error recovery paths. Use `[*]` for start/end.
 Replace the entire diagram each call.)"},
-                      {"todos", R"(TACTICAL LAYER: Near-term task items.
+                      {"todos", R"((write only) TACTICAL LAYER: Near-term task items.
 Focus on what you are actively doing NOW and what comes NEXT.
 Do NOT list all phases from the diagram — only immediate execution items.
 Each item records what was tried, what worked, and what to watch out for.
@@ -646,7 +661,7 @@ Item struct:
 }
 )"},
                       {"notes",
-                       R"(MEMO LAYER: Any additional notes.
+                       R"((write only) MEMO LAYER: Any additional notes.
 Use this to record important information, tips, reminders, or identity/role-playing prompts.
 )"},
                   },

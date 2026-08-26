@@ -52,6 +52,21 @@ struct ClientInfoSection {
     neograph::json items = neograph::json::array(); ///< {"items":[{...}]} 内容
 };
 
+/// 工具消息装饰注册记录 (UI 注册表快照条目; update_tool_decor 写入)
+/// - 插件对某次工具调用 (toolCallId) 的语义层渲染声明: 折叠头显示名/一行摘要
+///   + 展开体 items (text/diagram kind); TUI 按通用渲染器展示, 无任何工具特化
+/// - 生命周期: 插件卸载/禁用时自动摘除 (enable 时恢复), 会话切换由插件自行清理
+struct ClientToolDecor {
+    std::string    plugin;      ///< 所属插件名
+    std::string    toolCallId;  ///< 目标工具调用 id
+    std::string    displayName; ///< 折叠头显示名 (空 = 原始 toolName)
+    std::string    summary;     ///< 折叠头一行摘要 (空 = 回退参数预览)
+    neograph::json items = neograph::json::array(); ///< 展开体 items ({"items":[...]})
+    /// 内容版本号 (每次更新递增; 计入 TUI 块缓存 key —— 消息指针不变时
+    /// 装饰更新仍需触发该消息块重建)
+    uint64_t version = 0;
+};
+
 /// 命令注册记录
 struct ClientCommand {
     std::string plugin; ///< 所属插件名
@@ -67,6 +82,7 @@ struct ClientUiRegistry {
     std::vector<ClientPanel>       panels;
     std::vector<ClientInfoSection> infoSections;
     std::vector<ClientCommand>     commands;
+    std::vector<ClientToolDecor>   toolDecors;
 };
 
 /// client 插件实例 (宿主侧状态)
@@ -122,6 +138,8 @@ public:
     std::vector<ClientPanel>       panelRegs;       ///< 面板注册信息 (disable 保留)
     std::vector<ClientInfoSection> infoSectionRegs; ///< Info 段落注册信息 (disable 保留)
     std::vector<ClientCommand>     commandRegs;     ///< 命令注册信息 (disable 保留)
+    /// 工具消息装饰 (disable 保留, enable 恢复; 无句柄 —— 以 plugin+toolCallId 键控)
+    std::vector<ClientToolDecor>   toolDecorRegs;
     std::vector<std::shared_ptr<Subscription>> subscriptions; ///< 已订阅事件 (disable 保留)
     std::vector<std::shared_ptr<void>> statusItemHandles; ///< 状态栏项宿主句柄 (enable 期)
     std::vector<std::shared_ptr<void>> panelHandles;      ///< 面板宿主句柄 (enable 期)
@@ -341,6 +359,13 @@ public:
     /// 更新 Info 栏段落内容; 返回 0 成功
     int  updateInfoSection(ClientPluginInstance* inst, void* section, const char* items_json);
     void unregisterInfoSection(ClientPluginInstance* inst, void* section);
+    /// 更新/删除工具消息装饰 (io 线程); 返回 0 成功
+    /// - tool_call_id 空 = 操作本插件全部; decor_json 空串 = 删除
+    int updateToolDecor(
+        ClientPluginInstance* inst,
+        const char*           tool_call_id,
+        const char*           decor_json
+    );
     /// 注册命令; 返回 0 成功 (名字冲突返回非 0)
     int registerCommand(
         ClientPluginInstance* inst,
@@ -414,6 +439,10 @@ private:
 
     /// 插件表 <name, instance>
     std::map<std::string, std::shared_ptr<ClientPluginInstance>, std::less<>> plugins_{};
+
+    /// 工具消息装饰版本号序列 (io 线程递增; 计入 ClientToolDecor.version,
+    /// 供 TUI 块缓存 key 感知装饰更新)
+    uint64_t toolDecorVersionSeq_ = 1;
 
     /// UI 注册表 (COW: io 线程写, 任意线程快照读)
     mutable std::mutex                      uiMutex_;

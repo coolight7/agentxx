@@ -600,6 +600,22 @@ void ClientPluginManager::enableImpl(std::string_view name, bool userInitiated) 
             uiRegistry_ = std::move(cur);
         }
     }
+    // 工具消息装饰恢复 (无句柄, 直接写回注册表)
+    for (const auto& reg : inst->toolDecorRegs) {
+        std::lock_guard<std::mutex> lock(uiMutex_);
+        auto                        cur = std::make_shared<ClientUiRegistry>(*uiRegistry_);
+        bool                        dup = false;
+        for (const auto& d : cur->toolDecors) {
+            if (d.plugin == inst->name && d.toolCallId == reg.toolCallId) {
+                dup = true;
+                break;
+            }
+        }
+        if (!dup) {
+            cur->toolDecors.push_back(reg);
+        }
+        uiRegistry_ = std::move(cur);
+    }
     XX_LOGI("[client_plugin] enabled: {}", inst->name);
 }
 
@@ -1116,6 +1132,14 @@ void ClientPluginManager::detachAll(ClientPluginInstance* inst, bool keepInfo) {
                 ++it;
             }
         }
+        auto& td = reg->toolDecors;
+        for (auto it = td.begin(); it != td.end();) {
+            if (it->plugin == inst->name) {
+                it = td.erase(it);
+            } else {
+                ++it;
+            }
+        }
         auto& cm = reg->commands;
         for (auto it = cm.begin(); it != cm.end();) {
             if (it->plugin == inst->name) {
@@ -1157,6 +1181,7 @@ void ClientPluginManager::detachAll(ClientPluginInstance* inst, bool keepInfo) {
         inst->panelRegs.clear();
         inst->infoSectionRegs.clear();
         inst->commandRegs.clear();
+        inst->toolDecorRegs.clear();
         inst->subscriptions.clear();
     }
 }
@@ -1516,6 +1541,25 @@ void xx_cunregister_info_section(const AgentxxClientHost* host, AgentxxInfoSecti
     XX_PLUGIN_CATCH_END_VOID()
 }
 
+int xx_cupdate_tool_decor(
+    const AgentxxClientHost* host,
+    AgentxxPluginStringView  tool_call_id,
+    AgentxxPluginStringView  decor_json
+) {
+    XX_PLUGIN_CATCH_BEGIN
+    auto mgr  = clientMgrOf(host);
+    auto inst = clientInstOf(host);
+    if (!mgr || !inst) {
+        return -1;
+    }
+    std::string tid{tool_call_id.data ? tool_call_id.data : "", tool_call_id.size};
+    std::string json{decor_json.data ? decor_json.data : "", decor_json.size};
+    return ioCallSync<int>(mgr, [&]() -> int {
+        return mgr->updateToolDecor(inst, tid.c_str(), json.c_str());
+    });
+    XX_PLUGIN_CATCH_END(-1)
+}
+
 // ---- 命令 ----
 
 int xx_cregister_command(
@@ -1734,6 +1778,7 @@ static const AgentxxClientUiIface* clientUiIface() {
         /* register_command */ xx_cregister_command,
         /* unregister_command */ xx_cunregister_command,
         /* show_toast */ xx_cshow_toast,
+        /* v2: update_tool_decor */ xx_cupdate_tool_decor,
     };
     return &table;
 }
@@ -2196,6 +2241,108 @@ void ClientPluginManager::unregisterInfoSection(ClientPluginInstance* inst, void
         uiAdapter_->onInfoSectionRemoved(h->id);
     }
     h->inst = nullptr;
+}
+
+int ClientPluginManager::updateToolDecor(
+    ClientPluginInstance* inst,
+    const char*           tool_call_id,
+    const char*           decor_json
+) {
+    if (!inst) {
+        return -1;
+    }
+    const std::string tid{tool_call_id ? tool_call_id : ""};
+    const std::string json{decor_json ? decor_json : ""};
+
+    // 删除语义: decor_json 空串 (tid 空 = 本插件全部)
+    if (json.empty()) {
+        {
+            std::lock_guard<std::mutex> lock(uiMutex_);
+            auto                        cur = std::make_shared<ClientUiRegistry>(*uiRegistry_);
+            auto&                       vec = cur->toolDecors;
+            vec.erase(
+                std::remove_if(
+                    vec.begin(),
+                    vec.end(),
+                    [&](const auto& d) {
+                        return d.plugin == inst->name && (tid.empty() || d.toolCallId == tid);
+                    }
+                ),
+                vec.end()
+            );
+            uiRegistry_ = std::move(cur);
+        }
+        auto& regs = inst->toolDecorRegs;
+        regs.erase(
+            std::remove_if(
+                regs.begin(),
+                regs.end(),
+                [&](const auto& d) {
+                    return tid.empty() || d.toolCallId == tid;
+                }
+            ),
+            regs.end()
+        );
+        return 0;
+    }
+
+    // 更新/插入
+    ClientToolDecor decor;
+    try {
+        auto j = neograph::json::parse(json);
+        if (!j.is_object()) {
+            return -1;
+        }
+        if (tid.empty()) {
+            return -1; ///< 更新必须指明 tool_call_id (删除才允许空 = 全部)
+        }
+        decor.toolCallId  = tid;
+        decor.displayName = j.value("displayName", std::string{});
+        decor.summary     = j.value("summary", std::string{});
+        if (j.contains("items") && j["items"].is_array()) {
+            decor.items = j["items"];
+        }
+    } catch (...) {
+        return -1; ///< JSON 非法
+    }
+
+    bool replaced = false;
+    {
+        std::lock_guard<std::mutex> lock(uiMutex_);
+        auto cur = std::make_shared<ClientUiRegistry>(*uiRegistry_);
+        decor.version = toolDecorVersionSeq_++;
+        for (auto& d : cur->toolDecors) {
+            if (d.plugin == inst->name && d.toolCallId == tid) {
+                d.displayName = decor.displayName;
+                d.summary     = decor.summary;
+                d.items       = decor.items;
+                d.version     = decor.version;
+                replaced      = true;
+                break;
+            }
+        }
+        if (!replaced) {
+            cur->toolDecors.push_back(decor);
+        }
+        uiRegistry_ = std::move(cur);
+    }
+    // 实例注册信息同步 (disable/enable 恢复用); 无 adapter 信号 —— 装饰随
+    // 正常帧节奏渲染 (工具消息本身的变化已驱动重绘)
+    auto& regs = inst->toolDecorRegs;
+    for (auto& d : regs) {
+        if (d.toolCallId == tid) {
+            d.displayName = decor.displayName;
+            d.summary     = decor.summary;
+            d.items       = decor.items;
+            d.version     = decor.version;
+            replaced      = true;
+            break;
+        }
+    }
+    if (!replaced) {
+        regs.push_back(decor);
+    }
+    return 0;
 }
 
 int ClientPluginManager::registerCommand(

@@ -29,11 +29,16 @@ public:
 
     agentxx::plugin::InterfaceSet supportedInterfaces() const override {
         namespace pi = agentxx::plugin::plugin_interfaces;
-        return {std::string{pi::ClientStatusItem},
-                std::string{pi::ClientPanel},
-                std::string{pi::ClientToast},
-                std::string{pi::ClientInfoSection},
-                std::string{pi::ClientCommand}};
+        return {
+            std::string{pi::ClientStatusItem},
+            std::string{pi::ClientPanel},
+            std::string{pi::ClientToast},
+            std::string{pi::ClientInfoSection},
+            std::string{pi::ClientCommand},
+            // 工具消息装饰 (ui 表 v2 update_tool_decor): 消息列表按装饰
+            // items 通用渲染插件推送的工具体内容
+            std::string{pi::ClientMsgDecor},
+        };
     }
 
     // ---- 状态栏项 ----

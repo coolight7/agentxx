@@ -16,6 +16,22 @@ using namespace ftxui;
 
 namespace {
 
+/// 查找工具调用装饰 (client 插件经 update_tool_decor 推送的语义层渲染声明;
+/// 每帧快照 pluginRegistry, 无锁读取; 无插件管理器/无装饰返回空)
+/// - TUI 不感知任何具体工具: 装饰内容 (显示名/摘要/items) 完全由插件定义
+const agentxx::plugin::ClientToolDecor*
+    findToolDecor(const TUIRenderState& st, std::string_view toolCallId) {
+    if (!st.pluginRegistry || toolCallId.empty()) {
+        return nullptr;
+    }
+    for (const auto& d : st.pluginRegistry->toolDecors) {
+        if (d.toolCallId == toolCallId) {
+            return &d;
+        }
+    }
+    return nullptr;
+}
+
 /// 渲染 markdown 为 ftxui Element; 其中 ```mermaid 代码块由 DomBuilder 渲染为
 /// 状态图 (见 markdown::build_code_block), 其余按 markdown 主题渲染
 std::pair<Element, std::unique_ptr<markdown::DomBuilder>> renderMarkdown(
@@ -631,6 +647,14 @@ uint64_t MessageListComponent::itemKey(size_t index) {
         if (m.role == TUIMessage::Role::Tool || m.role == TUIMessage::Role::Think) {
             h = combine(h, runSpinner_->animationEnabled() ? 1ULL : 0ULL);
         }
+        // 工具消息装饰版本: 装饰在消息创建后由插件异步推送 (tool_start 事件
+        // 先建消息, 随后 update_tool_decor 到达), 消息指针不变 —— 版本号变化
+        // 触发该块重建, 保证装饰内容及时上屏
+        if (m.role == TUIMessage::Role::Tool) {
+            if (const auto* d = findToolDecor(st, m.tool ? m.tool->toolCallId : std::string{})) {
+                h = combine(h, d->version);
+            }
+        }
         return h;
     }
     // ---- 流式区 ----
@@ -712,7 +736,6 @@ size_t MessageListComponent::estimateHeight(size_t index, int width) {
                 // 用 computeLineDiff 精确估算 diff 行数 (仅 key 变化/宽度变化时调用,
                 // 成本可接受)。
                 const bool isEditTool = msg.tool && msg.tool->toolName == "agentxx_filesystem_edit";
-                const bool isPlanTool = msg.tool && msg.tool->toolName == "agentxx_planning_write";
                 const bool finished   = msg.tool && msg.tool->toolFinished;
                 if (isEditTool && finished && !isToolResultError(msg.tool->toolResult)) {
                     size_t diffLines = 0;
@@ -735,48 +758,37 @@ size_t MessageListComponent::estimateHeight(size_t index, int width) {
                     // header + (file 行) + diff 行 + 尾部空行
                     return static_cast<int>(1 + (hasPath ? 1 : 0) + diffLines) + 1;
                 }
-                if (isPlanTool) {
-                    size_t planLines = 1; // header
-                    agentxx::util::catchError<bool>(
-                        [&]() -> bool {
-                            auto       args    = neograph::json::parse(msg.text);
-                            const auto roadmap = args.value("roadmap", std::string{});
-                            if (!roadmap.empty()) {
-                                planLines      += 1; // "State Diagram:"
-                                size_t rmLines  = 1;
-                                for (char ch : roadmap) {
+                // 插件装饰工具体: 按装饰 items 通用估算 (与 appendToolDecorBody
+                // 的渲染结构对应; TUI 不感知具体工具语义)
+                if (const auto* decor
+                    = findToolDecor(st, msg.tool ? msg.tool->toolCallId : std::string{})) {
+                    size_t decorLines = 1; // header 行
+                    if (finished && isToolResultError(msg.tool->toolResult)) {
+                        // 失败: 渲染为 result 错误行 (与 appendToolDecorBody 一致)
+                        decorLines += estimateLines(msg.tool->toolResult, width);
+                    } else {
+                        for (const auto& it : decor->items) {
+                            if (!it.is_object()) {
+                                continue;
+                            }
+                            const auto kind = it.value("kind", std::string{"text"});
+                            if (kind == "text") {
+                                decorLines += estimateLines(it.value("text", std::string{}), width);
+                            } else if (kind == "diagram") {
+                                // 状态图渲染密度: 每层 ~3 行 (节点/边/间距) + 边界余量,
+                                // 与 renderMermaidStateDiagram 分层布局一致
+                                const auto mermaid = it.value("mermaid", std::string{});
+                                size_t     rmLines = 1;
+                                for (char ch : mermaid) {
                                     if (ch == '\n') {
                                         ++rmLines;
                                     }
                                 }
-                                planLines += rmLines * 3 + 3;
+                                decorLines += rmLines * 3 + 3;
                             }
-                            if (args.contains("todos") && args["todos"].is_array()) {
-                                planLines += 1; // "Todos:"
-                                for (const auto& td : args["todos"]) {
-                                    planLines += 1;
-                                    if (td.is_object()
-                                        && !td.value("summary", std::string{}).empty()) {
-                                        planLines += 1;
-                                    }
-                                }
-                            }
-                            if (args.contains("notes")) {
-                                planLines += 1; // "Notes:"
-                                if (args["notes"].is_string()) {
-                                    planLines
-                                        += estimateLines(args["notes"].get<std::string>(), width);
-                                } else if (args["notes"].is_array()) {
-                                    planLines += args["notes"].size();
-                                }
-                            }
-                            return true;
-                        },
-                        [](std::string) -> bool {
-                            return false;
                         }
-                    );
-                    return static_cast<int>(planLines) + 1; // +1: 尾部空行
+                    }
+                    return static_cast<int>(decorLines) + 1; // +1: 尾部空行
                 }
                 size_t lines = 1; // header
                 if (!msg.text.empty()) {
@@ -1252,9 +1264,6 @@ static std::string_view getSpecializedToolActionName(std::string_view toolName) 
         || toolName == "agentxx_execute_windows_command") {
         return "Bash";
     }
-    if (toolName == "agentxx_planning_write") {
-        return "Plan";
-    }
     return {};
 }
 
@@ -1406,41 +1415,8 @@ static ToolHeaderSummary buildToolHeaderSummary(
         || toolName == "agentxx_execute_windows_command") {
         return make("Bash", {}, oneLinePreview(getStr("command"), limit(100)));
     }
-    // planning_write: 缩略名称 Plan, 缩略内容取 todos 格式化为一行并用 ; 隔开
-    if (toolName == "agentxx_planning_write") {
-        std::string todosSummary;
-        if (args.contains("todos") && args["todos"].is_array()) {
-            for (const auto& td : args["todos"]) {
-                std::string item;
-                if (td.is_object()) {
-                    const auto state   = td.value("state", std::string{});
-                    const auto content = td.value("content", std::string{});
-                    if (content.empty()) {
-                        continue;
-                    }
-                    std::string icon = "[ ]";
-                    if (state == "in_progress") {
-                        icon = "[~]";
-                    } else if (state == "completed") {
-                        icon = "[#]";
-                    } else if (state == "failed") {
-                        icon = "[!]";
-                    }
-                    item = fmt::format("{} {}", icon, content);
-                } else if (td.is_string()) {
-                    item = td.get<std::string>();
-                }
-                if (item.empty()) {
-                    continue;
-                }
-                if (!todosSummary.empty()) {
-                    todosSummary += "; ";
-                }
-                todosSummary += item;
-            }
-        }
-        return make("Plan", {}, todosSummary);
-    }
+    // 其余工具 (含插件装饰工具) 返回空: 折叠头由调用方回退 —— 有装饰时用
+    // 装饰的 displayName/summary (见 buildMessageBlock), 否则显示原始参数
     return {};
 }
 
@@ -1621,9 +1597,11 @@ Element MessageListComponent::buildMessageBlock(
             }
             const bool expanded   = !msg.collapsed;
             const bool isEditTool = msg.tool && msg.tool->toolName == "agentxx_filesystem_edit";
-            const bool isPlanTool = msg.tool && msg.tool->toolName == "agentxx_planning_write";
             const bool finished   = msg.tool && msg.tool->toolFinished;
             const bool isError    = finished && isToolResultError(msg.tool->toolResult);
+            // 插件工具消息装饰 (语义层; TUI 无任何具体工具特化):
+            // 有装饰时折叠头/展开头/展开体全部按装饰内容渲染, 无装饰走通用回退
+            const auto* decor = findToolDecor(*ctx_.frameState, msg.tool->toolCallId);
             // TUI 特化: 已知工具头部渲染为 "动词 · 参数摘要"
             // (如 "Read · [0, 100] /path" / "Write · /path"), 未知工具回退原始 toolName
             Elements lines;
@@ -1644,7 +1622,10 @@ Element MessageListComponent::buildMessageBlock(
                 auto summary = buildToolHeaderSummary(msg.tool->toolName, msg.text, maxWidth);
                 std::string displayName;
                 std::string resOrArgsSummary;
-                if (!summary.toolName.empty()) {
+                if (decor && !decor->displayName.empty()) {
+                    // 插件装饰显示名优先 (如 agentxx_planning → "Plan")
+                    displayName = decor->displayName;
+                } else if (!summary.toolName.empty()) {
                     displayName = std::move(summary.toolName);
                 } else if (isError) {
                     auto action = getSpecializedToolActionName(msg.tool->toolName);
@@ -1663,6 +1644,9 @@ Element MessageListComponent::buildMessageBlock(
                     if (!resPreview.empty()) {
                         resOrArgsSummary = " · " + std::move(resPreview);
                     }
+                } else if (decor && !decor->summary.empty()) {
+                    // 插件装饰摘要优先 (插件已按自身语义格式化为一行)
+                    resOrArgsSummary = " · " + decor->summary;
                 } else if (!finished) {
                     if (!summary.argsSummary.empty()) {
                         resOrArgsSummary = std::move(summary.argsSummary);
@@ -1715,10 +1699,14 @@ Element MessageListComponent::buildMessageBlock(
                     }
                 }
             } else {
+                // 展开头: 插件装饰显示名优先, 回退原始 toolName
+                const auto& shownName
+                    = (decor && !decor->displayName.empty()) ? decor->displayName
+                                                             : msg.tool->toolName;
                 if (!finished) {
-                    header.push_back(text(msg.tool->toolName) | color(theme.accentColor) | bold);
+                    header.push_back(text(shownName) | color(theme.accentColor) | bold);
                 } else {
-                    header.push_back(text(msg.tool->toolName) | color(theme.toolColor));
+                    header.push_back(text(shownName) | color(theme.toolColor));
                 }
             }
 
@@ -1726,8 +1714,9 @@ Element MessageListComponent::buildMessageBlock(
             if (expanded) {
                 if (isEditTool) {
                     appendEditToolBody(msg, lines);
-                } else if (isPlanTool) {
-                    appendPlanToolBody(msg, lines, maxWidth);
+                } else if (decor && !(finished && isError)) {
+                    // 插件装饰工具体 (items 渲染; 失败时回退通用错误展示)
+                    appendDecorToolBody(*decor, lines, maxWidth);
                 } else {
                     if (!msg.text.empty()) {
                         // 参数 JSON 缩进格式化 (2 空格) 便于阅读; 解析失败回退原文
@@ -1979,137 +1968,68 @@ Element MessageListComponent::renderEditToolDiff(std::string_view oldStr, std::s
 }
 
 // ---------------------------------------------------------------------------
-// agentxx_planning_write 特化渲染
+// 插件工具消息装饰渲染 (通用机制, 无任何具体工具特化):
+// 装饰内容 (displayName/summary/items) 由插件经 update_tool_decor 推送,
+// items schema 见 client_plugin_api.h (text/diagram kind)
 // ---------------------------------------------------------------------------
 
-void MessageListComponent::appendPlanToolBody(
-    const TUIMessage& msg,
-    Elements&         lines,
-    int               maxWidth
+void MessageListComponent::appendDecorToolBody(
+    const agentxx::plugin::ClientToolDecor& decor,
+    Elements&                               lines,
+    int                                     maxWidth
 ) {
     const auto& theme = *ctx_.theme;
+    // 状态图渲染宽度预算: 内容缩进 (4) + 边界余量 (2); 下限保底可读
+    const int diagW = (maxWidth > 0) ? std::max(20, maxWidth - 6) : 0;
 
-    // 操作失败: 渲染错误信息
-    if (msg.tool && msg.tool->toolFinished && isToolResultError(msg.tool->toolResult)) {
-        lines.push_back(hbox({
-            text("  result: ") | color(theme.toolColor),
-            paragraph(msg.tool->toolResult) | color(theme.errorColor) | xflex_shrink,
-        }));
-        return;
-    }
-
-    neograph::json args;
-    bool           parseOk = agentxx::util::catchError<bool>(
-        [&]() -> bool {
-            args = neograph::json::parse(msg.text);
-            return args.is_object();
-        },
-        [](std::string) -> bool {
-            return false;
+    for (const auto& it : decor.items) {
+        if (!it.is_object()) {
+            continue;
         }
-    );
-
-    if (!parseOk) {
-        if (!msg.text.empty()) {
-            lines.push_back(hbox({
-                text("  args: ") | color(theme.toolColor),
-                paragraph(msg.text) | color(theme.toolColor) | xflex_shrink,
-            }));
-        }
-        return;
-    }
-
-    // ---- Block 1: 状态图 (Roadmap / State Diagram) ----
-    const auto roadmap = args.value("roadmap", std::string{});
-    if (!roadmap.empty()) {
-        auto diagram = markdown::parseMermaidStateDiagram(roadmap);
-        if (!diagram.nodes.empty()) {
-            lines.push_back(hbox({
-                text("  State Diagram:") | color(theme.accentColor) | bold,
-            }));
-            const int diagW  = (maxWidth > 0) ? std::max(20, maxWidth - 4) : 0;
-            auto      diagEl = markdown::renderMermaidStateDiagram(
-                diagram,
-                diagW,
-                theme.normalColor,
-                markdown::diagramNodeColor(theme.markdownTheme)
-            );
+        const auto kind = it.value("kind", std::string{"text"});
+        if (kind == "text") {
+            // role 样式映射: title=高亮强调 / normal=普通 / hint=减淡提示
+            const auto  role   = it.value("role", std::string{"normal"});
+            const auto& txt    = it.value("text", std::string{});
+            Color       c      = theme.normalColor;
+            bool        isBold = false;
+            bool        isDim  = false;
+            if (role == "title") {
+                c      = theme.accentColor;
+                isBold = true;
+            } else if (role == "hint") {
+                c     = theme.hintColor;
+                isDim = true;
+            }
+            Element el = paragraph(txt) | color(c);
+            if (isBold) {
+                el = el | bold;
+            }
+            if (isDim) {
+                el = el | dim;
+            }
             lines.push_back(hbox({
                 text("    "),
-                diagEl | flex,
+                el | xflex_shrink,
             }));
-        }
-    }
-
-    // ---- Block 2: Todo 列表 ----
-    if (args.contains("todos") && args["todos"].is_array() && !args["todos"].empty()) {
-        lines.push_back(hbox({
-            text("  Todos:") | color(theme.accentColor) | bold,
-        }));
-        for (const auto& td : args["todos"]) {
-            if (td.is_object()) {
-                const auto  state   = td.value("state", std::string{});
-                const auto  content = td.value("content", std::string{});
-                const auto  summary = td.value("summary", std::string{});
-                std::string icon    = "[ ]";
-                Color       c       = theme.hintColor;
-                if (state == "in_progress") {
-                    icon = "[~]";
-                    c    = theme.thinkingColor;
-                } else if (state == "completed") {
-                    icon = "[#]";
-                    c    = theme.accentColor;
-                } else if (state == "failed") {
-                    icon = "[!]";
-                    c    = theme.errorColor;
-                }
-                lines.push_back(hbox({
-                    text(fmt::format("    {} ", icon)) | color(c) | bold,
-                    paragraph(content) | color(c) | xflex_shrink,
-                }));
-                if (!summary.empty()) {
-                    lines.push_back(hbox({
-                        text("        - ") | color(theme.hintColor) | dim,
-                        paragraph(summary) | color(theme.hintColor) | dim | xflex_shrink,
-                    }));
-                }
-            } else if (td.is_string()) {
-                lines.push_back(hbox({
-                    text("    [ ] ") | color(theme.hintColor) | bold,
-                    paragraph(td.get<std::string>()) | color(theme.hintColor) | xflex_shrink,
-                }));
-            }
-        }
-    }
-
-    // ---- Block 3: Note 列表 / 备忘 ----
-    if (args.contains("notes")) {
-        const auto& notesVal = args["notes"];
-        if (notesVal.is_string()) {
-            const auto notes = notesVal.get<std::string>();
-            if (!notes.empty()) {
-                lines.push_back(hbox({
-                    text("  Notes:") | color(theme.accentColor) | bold,
-                }));
+        } else if (kind == "diagram") {
+            // Mermaid stateDiagram-v2 ASCII 状态图 (通用组件; 解析失败静默跳过)
+            const auto mermaid = it.value("mermaid", std::string{});
+            auto diagram = markdown::parseMermaidStateDiagram(mermaid);
+            if (!diagram.nodes.empty()) {
+                auto diagEl = markdown::renderMermaidStateDiagram(
+                    diagram,
+                    diagW,
+                    theme.normalColor,
+                    markdown::diagramNodeColor(theme.markdownTheme)
+                );
                 lines.push_back(hbox({
                     text("    "),
-                    paragraph(notes) | color(theme.hintColor) | xflex_shrink,
+                    diagEl | flex,
                 }));
             }
-        } else if (notesVal.is_array() && !notesVal.empty()) {
-            lines.push_back(hbox({
-                text("  Notes:") | color(theme.accentColor) | bold,
-            }));
-            for (const auto& n : notesVal) {
-                std::string noteStr = n.is_string() ? n.get<std::string>() : n.dump();
-                if (!noteStr.empty()) {
-                    lines.push_back(hbox({
-                        text("    • ") | color(theme.hintColor),
-                        paragraph(noteStr) | color(theme.hintColor) | xflex_shrink,
-                    }));
-                }
-            }
         }
+        // 其余 kind 忽略 (未知项向前兼容)
     }
 }
 

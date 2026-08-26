@@ -98,6 +98,30 @@ struct ToolHeaderFixture {
         });
     }
 
+    /// 注入工具消息装饰 (模拟 planning 插件经 update_tool_decor 推送的
+    /// 语义层装饰; toolCallId 与 pushTool 的 "call_1" 对应)
+    void pushDecor() {
+        sharedState.mutate([&](TUIRenderState& st) {
+            auto reg     = std::make_shared<agentxx::plugin::ClientUiRegistry>();
+            auto& d      = reg->toolDecors.emplace_back();
+            d.plugin     = "agentxx_planning";
+            d.toolCallId = "call_1";
+            d.displayName = "Plan";
+            d.summary    = "[~] reproduce issue; [ ] fix root cause; [#] write tests";
+            d.items      = neograph::json::parse(R"([
+                {"kind":"text","role":"title","text":"State Diagram:"},
+                {"kind":"diagram","mermaid":"stateDiagram-v2\n[*] --> phase1\nphase1 --> [*]"},
+                {"kind":"text","role":"title","text":"Todos:"},
+                {"kind":"text","role":"normal","text":"[~] do task A"},
+                {"kind":"text","role":"hint","text":"- working on A"},
+                {"kind":"text","role":"title","text":"[#] done task B"},
+                {"kind":"text","role":"title","text":"Notes:"},
+                {"kind":"text","role":"hint","text":"my notes content"}
+            ])");
+            st.pluginRegistry = std::move(reg);
+        });
+    }
+
     /// 剥离 ANSI 转义序列, 获取纯文本表示
     static std::string stripAnsi(std::string_view str) {
         std::string out;
@@ -272,13 +296,15 @@ void testTuiToolHeaderRunning() {
     fBash.pushTool("agentxx_execute_bash_command", R"({"command":"ls -la"})", false);
     XX_TEST_EXPECT_TRUE(fBash.plainRender().find("Bash · ls -la") != std::string::npos);
 
-    // plan 工具在 running 状态下折叠展示 "Plan · [~] ..."
+    // plan 工具在 running 状态下折叠展示装饰头 "Plan · [~] ..."
+    // (插件在 tool_start 即推送装饰, 运行中即有摘要)
     ToolHeaderFixture fPlan;
     fPlan.pushTool(
-        "agentxx_planning_write",
-        R"({"roadmap":"[*] --> s1\ns1 --> [*]","todos":[{"state":"in_progress","content":"reproduce issue"}]})",
+        "agentxx_planning",
+        R"({"mode":"write","roadmap":"[*] --> s1\ns1 --> [*]","todos":[{"state":"in_progress","content":"reproduce issue"}]})",
         false
     );
+    fPlan.pushDecor();
     XX_TEST_EXPECT_TRUE(
         fPlan.plainRender().find("Plan · [~] reproduce issue") != std::string::npos
     );
@@ -296,35 +322,39 @@ void testTuiToolHeaderRunning() {
     );
 }
 
-// Plan (planning_write) 特化渲染:
-// 1. 折叠时缩略名称为 Plan, 缩略内容为 todos 格式化为一行并用 ; 隔开
-// 2. 展开时渲染为 状态图、todo 列表、note 列表 三个 block
-void testTuiToolHeaderPlan() {
+// 插件工具消息装饰渲染 (planning 插件经 update_tool_decor 推送装饰):
+// 1. 折叠头显示装饰 displayName ("Plan") + 装饰 summary (todos 一行格式化)
+// 2. 展开头显示装饰 displayName; 展开体按 items 通用渲染 (状态图/todos/notes)
+void testTuiToolHeaderDecor() {
     // 折叠测试
     ToolHeaderFixture f(120, 16);
     f.pushTool(
-        "agentxx_planning_write",
-        R"({"roadmap":"stateDiagram-v2\n[*] --> s1\ns1 --> [*]","todos":[{"state":"in_progress","content":"reproduce issue","summary":"trying"},{"state":"pending","content":"fix root cause"},{"state":"completed","content":"write tests"}],"notes":"memo 123"})",
+        "agentxx_planning",
+        R"({"mode":"write","roadmap":"stateDiagram-v2\n[*] --> s1\ns1 --> [*]","todos":[{"state":"in_progress","content":"reproduce issue","summary":"trying"},{"state":"pending","content":"fix root cause"},{"state":"completed","content":"write tests"}],"notes":"memo 123"})",
         true,
         true // 折叠
     );
+    f.pushDecor();
     std::string collapsed = f.render();
     XX_TEST_EXPECT_TRUE(collapsed.find("+ [Tool] ") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(collapsed.find("Plan · ") != std::string::npos);
     XX_TEST_EXPECT_TRUE(
-        collapsed.find("Plan · [~] reproduce issue; [ ] fix root cause; [#] write tests")
+        collapsed.find("[~] reproduce issue; [ ] fix root cause; [#] write tests")
         != std::string::npos
     );
 
-    // 展开测试
+    // 展开测试 (展开头显示装饰名; 体为 items 通用渲染)
     ToolHeaderFixture f2(120, 24);
     f2.pushTool(
-        "agentxx_planning_write",
-        R"({"roadmap":"stateDiagram-v2\n[*] --> phase1\nphase1 --> [*]","todos":[{"state":"in_progress","content":"do task A","summary":"working on A"},{"state":"completed","content":"done task B"}],"notes":"my notes content"})",
+        "agentxx_planning",
+        R"({"mode":"write","roadmap":"stateDiagram-v2\n[*] --> phase1\nphase1 --> [*]","todos":[{"state":"in_progress","content":"do task A","summary":"working on A"},{"state":"completed","content":"done task B"}],"notes":"my notes content"})",
         true,
         false // 展开
     );
+    f2.pushDecor();
     std::string expanded = f2.render();
-    XX_TEST_EXPECT_TRUE(expanded.find("- [Tool] agentxx_planning_write") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(expanded.find("- [Tool] Plan") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(expanded.find("agentxx_planning") == std::string::npos); ///< 无原始工具名特化
     XX_TEST_EXPECT_TRUE(expanded.find("State Diagram:") != std::string::npos);
     XX_TEST_EXPECT_TRUE(expanded.find("Todos:") != std::string::npos);
     XX_TEST_EXPECT_TRUE(expanded.find("[~] do task A") != std::string::npos);
@@ -332,6 +362,19 @@ void testTuiToolHeaderPlan() {
     XX_TEST_EXPECT_TRUE(expanded.find("[#] done task B") != std::string::npos);
     XX_TEST_EXPECT_TRUE(expanded.find("Notes:") != std::string::npos);
     XX_TEST_EXPECT_TRUE(expanded.find("my notes content") != std::string::npos);
+
+    // 装饰失败回退: 结果错误时展开体回退通用 result 错误展示
+    ToolHeaderFixture f3(120, 16);
+    f3.pushTool(
+        "agentxx_planning",
+        R"({"mode":"read"})",
+        true,
+        false,
+        "[Error] No saved planning in this session."
+    );
+    f3.pushDecor();
+    std::string errBody = f3.plainRender();
+    XX_TEST_EXPECT_TRUE(errBody.find("[Error] No saved planning in this session.") != std::string::npos);
 }
 
 // 执行失败工具折叠与展开渲染:
@@ -426,7 +469,7 @@ TestResult testTuiToolHeader() {
     testTuiToolHeaderFallback();
     testTuiToolHeaderOverflow();
     testTuiToolHeaderRunning();
-    testTuiToolHeaderPlan();
+    testTuiToolHeaderDecor();
     testTuiToolHeaderFailed();
     return {g_tui_tool_header_passed, g_tui_tool_header_failed};
 }

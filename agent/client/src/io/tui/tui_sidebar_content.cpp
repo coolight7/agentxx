@@ -132,113 +132,13 @@ std::vector<ScrollItem> TUIClientAgentIO::renderLogWindow() {
     return items;
 }
 
-std::optional<ftxui::Element> TUIClientAgentIO::renderPlanningInfo() {
-    const auto& st = *ctx_.frameState;
-
-    const TUIMessage* plan = nullptr;
-    for (size_t i = st.messages.size(); i > 0; --i) {
-        const auto& m = *st.messages[i - 1];
-        if (m.role == TUIMessage::Role::Tool && m.tool
-            && m.tool->toolName == "agentxx_planning_write") {
-            plan = st.messages[i - 1].get();
-            break;
-        }
-    }
-    if (!plan) {
-        // 无 plan: 清空状态图按钮命中区域, 避免残留旧区域导致误触
-        planDiagramButtonBox_ = ftxui::Box{0, -1, 0, -1};
-        return std::nullopt;
-    }
-
-    // 解析缓存: plan 消息被修改时 (mutableMessage 总是复制 → 指针变化)
-    // 或文本长度变化时重新解析, 避免每帧重复解析 planning 参数 JSON
-    const bool planFinished = plan->tool && plan->tool->toolFinished;
-    if (planCacheMsgPtr_ != plan || planCacheTextLen_ != plan->text.size()
-        || planCacheFinished_ != planFinished) {
-        planCacheMsgPtr_   = plan;
-        planCacheTextLen_  = plan->text.size();
-        planCacheFinished_ = planFinished;
-        planCacheArgs_     = neograph::json::array();
-        // 解析失败保持 planCacheValid_ = false, 界面显示占位内容而非异常中断渲染
-        planCacheValid_ = agentxx::util::catchError<bool>(
-            [&]() -> bool {
-                planCacheArgs_ = neograph::json::parse(plan->text);
-                return true;
-            },
-            [](std::string) -> bool {
-                return false;
-            }
-        );
-    }
-    if (!planCacheValid_) {
-        planDiagramButtonBox_ = ftxui::Box{0, -1, 0, -1};
-        return std::nullopt;
-    }
-    const auto& args = planCacheArgs_;
-
-    Elements lines;
-    Elements title;
-    title.push_back(text("Plan") | color(theme_.accentColor));
-    // Roadmap 状态图按钮: 点击弹窗查看完整状态图 (PlanDiagramOverlay)
-    // 状态图渲染成本高 (解析 + 分层布局), 侧边栏常驻显示仅保留按钮,
-    // 仅在用户点击时才在弹窗中渲染
-    const auto roadmap = args.value("roadmap", std::string{});
-    if (!planFinished) {
-        title.push_back(text(" Planning...") | color(theme_.hintColor));
-    } else if (!roadmap.empty()) {
-        title.push_back(text(" "));
-        title.push_back(
-            text(" Graph ") | bgcolor(theme_.buttonBgColor) | color(theme_.buttonTextColor)
-            | reflect(planDiagramButtonBox_)
-        );
-    } else {
-        // 无 roadmap: 清空按钮命中区域
-        planDiagramButtonBox_ = ftxui::Box{0, -1, 0, -1};
-    }
-    lines.push_back(hbox(std::move(title)));
-
-    if (args.contains("todos") && args["todos"].is_array()) {
-        for (const auto& td : args["todos"]) {
-            const auto   state   = td.value("state", std::string{});
-            const auto   content = td.value("content", std::string{});
-            std::string  icon    = "[ ]";
-            ftxui::Color c       = theme_.hintColor;
-            if (state == "in_progress") {
-                icon = "[~]";
-                c    = theme_.thinkingColor;
-            } else if (state == "completed") {
-                icon = "[#]";
-                c    = theme_.accentColor;
-            } else if (state == "failed") {
-                icon = "[!]";
-                c    = theme_.errorColor;
-            }
-            lines.push_back(hbox({
-                text(fmt::format("{} ", icon)) | color(c),
-                paragraph(content) | color(c) | xflex_shrink,
-            }));
-        }
-    }
-
-    const auto notes = args.value("notes", std::string{});
-    if (!notes.empty()) {
-        lines.push_back(text(""));
-        lines.push_back(text("Notes") | color(theme_.accentColor));
-        lines.push_back(paragraph(notes) | color(theme_.hintColor));
-    }
-
-    return vbox(std::move(lines));
-}
-
 std::vector<ScrollItem> TUIClientAgentIO::renderInfoSidebar() {
     const auto& st = *ctx_.frameState;
 
     Elements elements;
 
-    if (auto planning = renderPlanningInfo()) {
-        elements.push_back(std::move(*planning));
-        elements.push_back(text(" "));
-    }
+    // Plan 段落已拆分至 agentxx_planning 插件 client 侧 (经 register_info_section
+    // 注入, 见 agent/plugins/agentxx_planning), TUI 不再硬编码渲染
 
     // 插件扩展的 Info 段落 (插件经 register_info_section 注入; UI 线程渲染,
     // 每帧从 client 插件注册表快照读取, 无需缓存):

@@ -178,8 +178,9 @@ inline constexpr std::string_view ClientUi = AGENTXX_IFACE_CLIENT_UI; ///< 展�
 inline constexpr std::string_view ClientStatusItem = "agentxx.client.status_item";
 inline constexpr std::string_view ClientPanel      = "agentxx.client.panel";
 inline constexpr std::string_view ClientToast      = "agentxx.client.toast";
-inline constexpr std::string_view ClientKeybind    = "agentxx.client.keybind";
-inline constexpr std::string_view ClientPromptModal = "agentxx.client.prompt_modal";
+inline constexpr std::string_view ClientKeybind    = "agentxx.client.keybind"; // 预留
+inline constexpr std::string_view ClientPromptModal = "agentxx.client.prompt_modal"; // 预留
+/// 工具消息装饰 (ui 表 v2 update_tool_decor; TUI 声明, CLI 无消息渲染面不声明)
 inline constexpr std::string_view ClientMsgDecor   = "agentxx.client.msg_decor";
 inline constexpr std::string_view ClientInfoSection = "agentxx.client.info_section";
 inline constexpr std::string_view ClientCommand    = "agentxx.client.command";

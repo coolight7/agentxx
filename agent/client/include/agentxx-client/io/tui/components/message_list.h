@@ -307,7 +307,12 @@ private:
 
     void           appendEditToolBody(const TUIMessage& msg, ftxui::Elements& lines);
     ftxui::Element renderEditToolDiff(std::string_view oldStr, std::string_view newStr);
-    void           appendPlanToolBody(const TUIMessage& msg, ftxui::Elements& lines, int maxWidth);
+    /// 插件装饰工具体通用渲染 (items: text/diagram; 内容完全由插件定义)
+    void appendDecorToolBody(
+        const agentxx::plugin::ClientToolDecor& decor,
+        ftxui::Elements&                        lines,
+        int                                     maxWidth
+    );
 
     TUICtx&                         ctx_;
     std::shared_ptr<LazyScrollable> scrollable_;

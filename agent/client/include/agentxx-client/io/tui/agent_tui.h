@@ -424,8 +424,6 @@ private:
     /// 供初始展开判断与 tabs 列表常驻标签点击回调复用)
     void ensureInfoSidebarTab();
     void ensureLogSidebarTab();
-    /// 打开 Plan 状态图模态 (Info 侧边栏 [View Plan Diagram] 按钮触发)
-    void openPlanDiagram();
     /// 打开加载失败组件列表模态 (Info 侧边栏 Append "Failed" 组 [view] 按钮触发)
     void openFailedAppendComponents();
 
@@ -434,7 +432,6 @@ private:
     std::vector<ScrollItem>       renderInfoSidebar();
     ftxui::Element                renderInfoSidebarFooter();
     ftxui::Element                renderLogSidebarFooter();
-    std::optional<ftxui::Element> renderPlanningInfo();
 
     // -----------------------------------------------------------------------
     // 状态
@@ -473,14 +470,6 @@ private:
     uint64_t                    logCachePoppedCount_ = 0;
     /// 上次快照的日志行数 (用于判断日志是否新增, 避免每帧全量 snapshot 拷贝)
     size_t logCacheLineCount_ = 0;
-
-    /// renderPlanningInfo 的解析缓存: 仅当 plan 消息变化 (指针/文本长度/toolFinished)
-    /// 时重新解析 JSON, 避免 Info 侧边栏每帧重复解析 planning 参数
-    const TUIMessage* planCacheMsgPtr_   = nullptr;
-    size_t            planCacheTextLen_  = 0;
-    bool              planCacheFinished_ = false;
-    bool              planCacheValid_    = false;
-    neograph::json    planCacheArgs_     = neograph::json::array();
 
     /// 重绘请求合并 (postRedraw 由 client/UI 线程并发调用):
     /// - redrawPosted_: 在途 Custom 标记, 仅当无在途事件时才 Post, 同帧内多次请求合并为一次
@@ -532,7 +521,6 @@ private:
     ftxui::Box pendingCounterBox_;
     ftxui::Box pendingInsertButtonBox_;
     ftxui::Box contextButtonBox_;
-    ftxui::Box planDiagramButtonBox_; // Info 侧边栏 Plan 状态图按钮
     /// Info 侧边栏 Append "Failed" 组 [view] 按钮命中区域
     /// (渲染时 reflect; 无失败项时重置为无效区域防误触, 见 renderInfoSidebar)
     ftxui::Box failedViewButtonBox_;

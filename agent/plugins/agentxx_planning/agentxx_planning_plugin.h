@@ -1,8 +1,9 @@
 // agentxx_planning 插件 —— 共享头
-// - 从 libagentxx src/tools/planning 拆分独立 (同名同行为):
-//     agentxx_planning_write
+// - agent 侧工具 agentxx_planning (原 agentxx_planning_write 改名):
+//     mode=write 写入会话规划 state + 持久化; mode=read 读取已保存规划
 // - 规划 state 写入经宿主 agentxx.agent.planning 接口表落地到
 //   PlanningMiddlewareHandle (system prompt 注入链路读取)
+// - client 侧入口渲染 Info 栏 Plan 段落 (见 agentxx_planning.cpp)
 #pragma once
 
 #include "agentxx/plugin/plugin_api.h"

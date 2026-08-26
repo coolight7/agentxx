@@ -690,168 +690,6 @@ bool ContextOverlay::OnEvent(Event event) {
 }
 
 // ---------------------------------------------------------------------------
-// PlanDiagramOverlay
-// ---------------------------------------------------------------------------
-
-PlanDiagramOverlay::PlanDiagramOverlay(TUICtx& ctx) :
-    ctx_(ctx) {
-    scrollable_ = std::make_shared<Scrollable>([this]() -> std::vector<ScrollItem> {
-        return buildItems();
-    });
-    // 状态图为静态内容: 打开时从顶部开始显示, 而非吸附到底部
-    // (Scrollable 默认 stickToBottom=true 会把图的下半部分顶到视口,
-    //  图的起始节点/上部分层被裁出视口)
-    scrollable_->setStickToBottom(false);
-    Add(scrollable_);
-}
-
-std::vector<ScrollItem> PlanDiagramOverlay::buildItems() {
-    const auto& st    = *ctx_.frameState;
-    const auto& theme = *ctx_.theme;
-
-    // 定位最近一次 agentxx_planning_write 工具消息 (与 Info 侧边栏 Plan 展示一致)
-    const TUIMessage* plan = nullptr;
-    for (size_t i = st.messages.size(); i > 0; --i) {
-        const auto& m = *st.messages[i - 1];
-        if (m.role == TUIMessage::Role::Tool && m.tool
-            && m.tool->toolName == "agentxx_planning_write") {
-            plan = st.messages[i - 1].get();
-            break;
-        }
-    }
-
-    // 弹窗宽度: 终端宽 - 弹窗边框/留白; 超宽由渲染器按层截断
-    const int maxW = std::max(40, Terminal::Size().dimx - 10);
-
-    // 缓存失效条件: plan 消息变化 (mutableMessage 复制 → 指针变化; 文本长度变化)
-    // / 终端宽度变化 / 主题变化 (Element 着色)
-    const size_t planTextLen = plan ? plan->text.size() : 0;
-    if (cachedMsgPtr_ != plan || cachedTextLen_ != planTextLen || cachedMaxW_ != maxW
-        || cachedThemeName_ != theme.name) {
-        cachedMsgPtr_    = plan;
-        cachedTextLen_   = planTextLen;
-        cachedMaxW_      = maxW;
-        cachedThemeName_ = theme.name;
-        cachedValid_     = false;
-        cachedDiagram_   = {};
-        cachedElement_   = nullptr;
-        if (plan) {
-            // 解析失败保持 cachedValid_ = false, 界面显示占位内容而非异常中断渲染
-            cachedValid_ = agentxx::util::catchError<bool>(
-                [&]() -> bool {
-                    cachedArgs_ = neograph::json::parse(plan->text);
-                    return true;
-                },
-                [](std::string) -> bool {
-                    return false;
-                }
-            );
-            if (cachedValid_) {
-                const auto roadmap = cachedArgs_.value("roadmap", std::string{});
-                cachedDiagram_     = markdown::parseMermaidStateDiagram(roadmap);
-                if (!cachedDiagram_.nodes.empty()) {
-                    // 节点按 id 状态后缀着色 (与 markdown 代码块渲染一致, 见
-                    // markdown::diagramNodeColor); 未着色单元使用 normalColor
-                    cachedElement_ = markdown::renderMermaidStateDiagram(
-                        cachedDiagram_,
-                        maxW,
-                        theme.normalColor,
-                        markdown::diagramNodeColor(theme.markdownTheme)
-                    );
-                }
-            }
-        }
-    }
-
-    if (!cachedValid_ || !cachedElement_) {
-        return {
-            ScrollItem{text(" (no plan roadmap) ") | dim, false}
-        };
-    }
-
-    // 返回缓存的 Element (同一指针): Scrollable 据此判定内容未变,
-    // 高度缓存/布局结果跨帧复用, 免去每帧重建与重测
-    return {
-        ScrollItem{cachedElement_, false}
-    };
-}
-
-Element PlanDiagramOverlay::OnRender() {
-    const auto& theme  = *ctx_.theme;
-    auto        header = hbox({
-        text(" Plan Diagram ") | bold,
-        filler(),
-        text(" "),
-    });
-
-    // 弹窗大小: 期望 4/5 屏, 但不超过窗口可用空间 (减去边距)。
-    // 窗口不足时用尽可用空间而不溢出 —— 弹窗超过窗口会被 center 布局
-    // 裁掉 header/footer, 无法关闭/查看。
-    // 注意: 高度必须同时给 GREATER_THAN 下限 —— Scrollable 的 ListView 为惰性
-    // viewport (ComputeRequirement 返回 min_y=0), 滚动区 hbox 自然高度仅 1 行,
-    // 若只有 LESS_THAN 上限, 弹窗在 center 下按自然高度 (~5 行) 摆放,
-    // 状态图会被压缩成 1 行高度。GREATER_THAN+LESS_THAN 组合等价于固定高度,
-    // 滚动区由内部 |flex 撑满剩余行。
-    // 期望保底: 宽 40 (状态图渲染预算下限); 高 14 (总高扣除 border 2 行 +
-    // header/separator/footer 4 行后, 滚动内容区 >= 8 行, 状态图可读可滚)。
-    const int margin = 2;
-    const int termW  = Terminal::Size().dimx;
-    const int termH  = Terminal::Size().dimy;
-    const int wantW  = std::max(40, termW * 4 / 5);
-    const int wantH  = std::max(14, termH * 4 / 5);
-    const int availW = std::max(1, termW - margin * 2);
-    const int availH = std::max(1, termH - margin * 2);
-    const int popupW = std::min(wantW, availW);
-    const int popupH = std::min(wantH, availH);
-    return vbox({
-               header,
-               separator(),
-               hbox({text(" "), scrollable_->Render() | flex, text(" ")}) | flex,
-               separator(),
-               text(" [Wheel/Up/Down] Scroll  [Esc] Close ") | center | dim,
-           })
-           | border | size(WIDTH, GREATER_THAN, popupW) | size(WIDTH, LESS_THAN, popupW)
-           | size(HEIGHT, GREATER_THAN, popupH) | size(HEIGHT, LESS_THAN, popupH)
-           | color(theme.accentColor);
-}
-
-bool PlanDiagramOverlay::OnEvent(Event event) {
-    if (event == Event::Escape) {
-        ctx_.postRedraw();
-        if (onClose_) {
-            onClose_();
-        }
-        return true;
-    }
-    if (event.is_mouse()) {
-        // 滚轮滚动 (Scrollable 内部处理)
-        if (scrollable_->OnEvent(event)) {
-            ctx_.postRedraw();
-            return true;
-        }
-        return true;
-    }
-    // 键盘滚动 (与 ContextOverlay 交互一致)
-    if (event == Event::ArrowUp) {
-        scrollable_->setScrollOffset(scrollable_->scrollOffset() - 1);
-        scrollable_->setStickToBottom(false);
-        ctx_.postRedraw();
-        return true;
-    }
-    if (event == Event::ArrowDown) {
-        scrollable_->setScrollOffset(scrollable_->scrollOffset() + 1);
-        // 滚到底部恢复吸附
-        if (scrollable_->totalHeight() - scrollable_->viewportHeight()
-            <= scrollable_->scrollOffset()) {
-            scrollable_->setStickToBottom(true);
-        }
-        ctx_.postRedraw();
-        return true;
-    }
-    return true;
-}
-
-// ---------------------------------------------------------------------------
 // FailedComponentsOverlay
 // ---------------------------------------------------------------------------
 
@@ -927,7 +765,7 @@ Element FailedComponentsOverlay::OnRender() {
 
     // 弹窗大小: 宽 3/5 屏、高 2/5 屏, 不超过窗口可用空间 (减去边距);
     // 高度同时给 GREATER_THAN 下限, 避免惰性 viewport 自然高度塌缩成单行
-    // (原因详见 PlanDiagramOverlay::OnRender 注释)
+    // (原因详见下方弹窗 OnRender 注释)
     const int margin = 2;
     const int termW  = Terminal::Size().dimx;
     const int termH  = Terminal::Size().dimy;
@@ -965,7 +803,7 @@ bool FailedComponentsOverlay::OnEvent(Event event) {
         }
         return true;
     }
-    // 键盘滚动 (与 ContextOverlay / PlanDiagramOverlay 交互一致)
+    // 键盘滚动 (与 ContextOverlay 等弹窗交互一致)
     if (event == Event::ArrowUp) {
         scrollable_->setScrollOffset(scrollable_->scrollOffset() - 1);
         scrollable_->setStickToBottom(false);

@@ -65,7 +65,7 @@ tool_skill_search 与延迟加载装配：
 | | `agentxx_codegraph_path` | 查找两符号间的调用链路径 |
 | | `agentxx_codegraph_status` | 索引统计信息 |
 | | | `agentxx_codegraph_*` 系列 tool 由插件 `agentxx_codegraph` 提供: 仅当该插件经 yaml `plugins` 段配置加载且编译启用 `AGENTXX_ENABLE_PLUGIN_CODEGRAPH` 时注册 |
-| **规划** | `agentxx_planning_write` | 两层任务规划 (Mermaid 状态图 + Todo List + 备忘录) |
+| **规划** | `agentxx_planning` | 两层任务规划 (Mermaid 状态图 + Todo List + 备忘录) |
 | **子代理** | `agentxx_subagent` | 创建和管理子代理执行委派任务 |
 | | `tool_skill_search` | 延迟加载工具/技能的搜索与发现 |
 | **数据** | `agentxx_share_store` | 会话级文本寄存，节省上下文 |
@@ -81,7 +81,7 @@ tool_skill_search 与延迟加载装配：
 > `agentxx_execute_windows_command`, 插件 `agentxx_execute_command`)、网络 3 件
 > (`agentxx_web_search` / `agentxx_web_fetch` / `agentxx_web_fetch_markdown`,
 > 插件 `agentxx_websearch`)、知识检索 (`agentxx_rag_search`, 插件
-> `agentxx_rag_search`)、规划 (`agentxx_planning_write`, 插件
+> `agentxx_rag_search`)、规划 (`agentxx_planning`, 插件
 > `agentxx_planning`)、字符串 2 件 (`agentxx_string_html_to_markdown` /
 > `agentxx_string_regexp`, 插件 `agentxx_string`)、系统时间
 > (`agentxx_get_current_datetime`, 插件 `agentxx_system`) —— 均由对应插件注册,

@@ -117,10 +117,10 @@ struct AgentxxClientHost {
 /* ==================== 接口表: 展示/命令/toast (agentxx.client.ui) ==================== */
 
 #define AGENTXX_IFACE_CLIENT_UI         "agentxx.client.ui"
-#define AGENTXX_IFACE_CLIENT_UI_VERSION 1
+#define AGENTXX_IFACE_CLIENT_UI_VERSION 2
 
 typedef struct AgentxxClientUiIface {
-    int version; ///< 必须 == AGENTXX_IFACE_CLIENT_UI_VERSION
+    int version; ///< 必须 >= AGENTXX_IFACE_CLIENT_UI_VERSION (v2 追加 update_tool_decor)
 
     /* ---- 状态栏项 ---- */
     /// 注册状态栏项; 返回句柄 (宿主持有; 卸载自动清理)
@@ -207,6 +207,29 @@ typedef struct AgentxxClientUiIface {
     /* ---- toast 提示 ---- */
     /// 显示 toast 提示 (level: 0=info 1=warning 2=error; 实现可忽略级别差异)
     void (*show_toast)(const AgentxxClientHost* host, AgentxxPluginStringView text, int level);
+
+    /* ---- v2 追加: 工具消息装饰 (UI 无关语义层) ---- */
+    /// 更新/删除本插件对某次工具调用的消息装饰 (io 线程约束):
+    /// - 装饰内容为宿主定义 schema 的语义 JSON (非组件), UI 按通用渲染器
+    ///   展示: 折叠头 displayName/summary + 展开体 items
+    ///   {"displayName": "Plan",              // 可选; 折叠头显示名 (缺省原始 toolName)
+    ///    "summary": "[~] a; [ ] b",          // 可选; 折叠头一行摘要 (缺省回退参数预览)
+    ///    "items": [                          // 可选; 展开体内容 (schema 同面板 items,
+    ///                                        //   另有 diagram kind)
+    ///      {"kind":"text","role":"title|normal|hint","text":"..."},
+    ///      {"kind":"diagram","mermaid":"stateDiagram-v2..."} ]}
+    /// - tool_call_id: 目标工具调用 id (取自 DELTA/tool_start 的 tool_call_id);
+    ///   空视图 = 操作本插件的全部装饰
+    /// - decor_json: 空串 = 删除 (tool_call_id 为空时删除本插件全部);
+    ///   宿主在插件卸载/禁用时自动摘除其全部装饰, 启用时恢复
+    /// - 典型数据源: 订阅 EVT_DELTA (tool_start 携带完整 arguments) 推送;
+    ///   参考实现: agentxx_planning (Plan 渲染完全由插件驱动, TUI 无特化代码)
+    /// 返回 0 成功; 非 0 失败 (宿主不支持/JSON 非法)
+    int (*update_tool_decor)(
+        const AgentxxClientHost* host,
+        AgentxxPluginStringView  tool_call_id,
+        AgentxxPluginStringView  decor_json
+    );
 } AgentxxClientUiIface;
 
 /* ==================== 接口表: 事件订阅 (agentxx.client.events) ==================== */
