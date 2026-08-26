@@ -1,5 +1,6 @@
 // agentxx_codegraph 插件 —— CodeGraphManager 实现 (从 lib 迁移)
-// - 插件不链接 libagentxx: 日志经宿主 vtable log, 数据目录逻辑本地实现
+// - 插件不链接 libagentxx: 日志经宿主 vtable log; 数据目录由宿主接口表提供
+//   (agentxx.agent.config get_config dataDir, 插件不直接读环境变量推导)
 // - 工具 (codegraph_tools.cpp) 与入口 (agentxx_codegraph.cpp) 同目录
 #include "codegraph_manager.h"
 #include "codegraph_plugin.h"
@@ -47,7 +48,6 @@ void agentxx_codegraph_plugin::CodeGraphManager::setLogSink(LogSink sink) {
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
-#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <mutex>
@@ -88,29 +88,15 @@ static T catchError(std::function<T()> func, std::function<T(std::string)> onErr
     return onError(errmsg);
 }
 
-/// 默认数据目录: ~/.agentxx (取不到主目录时回退系统临时目录)
-/// - 与原 lib AgentConfigStatic::agentxxDataDirPath 一致
-static std::string defaultDataDirPath() {
-    std::error_code ec;
-    const char*     home = std::getenv("HOME");
-    if (home && *home) {
-        return (std::filesystem::path(home) / ".agentxx").string();
-    }
-    const char* tmp = std::getenv("TMPDIR");
-    if (tmp && *tmp) {
-        return (std::filesystem::path(tmp) / ".agentxx").string();
-    }
-    return (std::filesystem::path("/tmp") / ".agentxx").string();
-}
-
-/// CodeGraph sqlite 数据库目录: {dataDir}/sqlite
-/// - dataDir 为空时默认 ~/.agentxx/sqlite (取不到主目录时回退系统临时目录)
-static std::string getCodeGraphSqliteDir(std::string_view sqliteDir) {
-    if (!sqliteDir.empty()) {
-        return std::string{sqliteDir};
-    }
-    return (std::filesystem::path(defaultDataDirPath()) / "sqlite").string();
-}
+// ---------------------------------------------------------------------------
+// sqlite 数据目录约定 (插件不直接读环境变量):
+// - 数据目录由宿主提供: 入口 (agentxx_codegraph.cpp) 经 agentxx.agent.config
+//   接口表 get_config 读取 dataDir 后拼接 "{dataDir}/sqlite" 传入构造函数;
+//   环境变量派生配置 (yaml ${VAR}) 由宿主配置加载器统一展开 (.env/内置/系统
+//   变量优先级见 docs/agent/design.md), 插件侧只消费最终值
+// - sqliteDir 为空视为配置缺失: initialize 失败并记日志
+//   (不再从 HOME/TMPDIR 等环境变量自行推导默认目录)
+// ---------------------------------------------------------------------------
 
 namespace fs = std::filesystem;
 
@@ -268,9 +254,10 @@ static std::vector<std::string> foldSegments(const std::vector<std::string>& seg
     return folded;
 }
 
-/// 项目根目录对应的索引数据库路径: {dataDir}/sqlite/codegraph/<折叠路径层级>/index.db
+/// 项目根目录对应的索引数据库路径: {sqliteDir}/codegraph/<折叠路径层级>/index.db
+/// - sqliteDir 由宿主提供 (构造传入), initialize 已保证非空
 static fs::path getIndexDbPath(std::string_view project_root, std::string_view sqliteDir) {
-    fs::path dir = fs::path(getCodeGraphSqliteDir(sqliteDir)) / kCodeGraphSqliteSubDirName;
+    fs::path dir = fs::path(sqliteDir) / kCodeGraphSqliteSubDirName;
     for (const auto& seg : foldSegments(projectRootToSegments(project_root))) {
         dir /= seg;
     }
@@ -287,7 +274,7 @@ static std::optional<fs::path>
     if (segs.empty()) {
         return std::nullopt;
     }
-    fs::path base = fs::path(getCodeGraphSqliteDir(sqliteDir)) / kCodeGraphSqliteSubDirName;
+    fs::path base = fs::path(sqliteDir) / kCodeGraphSqliteSubDirName;
     // 从最深 (最近) 前缀开始逐级缩短检查
     for (size_t n = segs.size(); n > 0; --n) {
         std::vector<std::string> prefix(
@@ -989,6 +976,13 @@ public:
     }
 
     bool initialize(std::string_view project_root) {
+        if (sqlite_dir_.empty()) {
+            // 设计约束: sqlite 数据目录由宿主提供 (agentxx.agent.config
+            // get_config 的 dataDir 派生), 插件不从环境变量推导默认值;
+            // 缺失视为配置错误, 记日志并失败 (插件入口会跳过工具注册)
+            XX_LOGE("CodeGraphManager: sqlite dir is empty (host dataDir not set?)");
+            return false;
+        }
         {
             std::unique_lock<std::shared_mutex> lock(mutex_);
             if (!needs_initialize_ && project_root_ == project_root && db_) {
@@ -1013,8 +1007,7 @@ public:
         //   长度受控不会超过系统路径限制 (Windows MAX_PATH=260 / Linux PATH_MAX)
         // - 支持路径前缀匹配复用 (findNearestExistingIndex):
         //   工作目录为已有索引项目的子目录时, 复用最近父级索引, 无需重新索引
-        auto sqlite_base
-            = fs::path(getCodeGraphSqliteDir(sqlite_dir_)) / kCodeGraphSqliteSubDirName;
+        auto sqlite_base  = fs::path(sqlite_dir_) / kCodeGraphSqliteSubDirName;
         auto     reused     = findNearestExistingIndex(project_root, sqlite_dir_);
         fs::path index_path = reused ? *reused : getIndexDbPath(project_root, sqlite_dir_);
         if (reused) {
@@ -2196,7 +2189,7 @@ private:
     std::atomic<bool> indexing_{false};
     std::atomic<bool> file_watcher_running_{false};
     bool              needs_initialize_;
-    /// sqlite 数据目录 (为空使用默认 {dataDir}/sqlite/, 见 getCodeGraphSqliteDir)
+    /// sqlite 数据目录 ({dataDir}/sqlite; 宿主提供, 为空时 initialize 失败)
     std::string sqlite_dir_;
 
     // ------------------------------------------------------------------
@@ -2210,8 +2203,9 @@ private:
     IndexProgressCallback progress_callback_;
 };
 
-/// @param sqliteDir sqlite 数据目录; 为空使用默认 {dataDir}/sqlite/
-///        (dataDir 为空时 ~/.agentxx/sqlite/, 取不到主目录时回退系统临时目录)
+/// @param sqliteDir sqlite 数据目录 ({dataDir}/sqlite; 由插件入口经宿主
+///        agentxx.agent.config get_config 的 dataDir 拼接提供; 插件不读
+///        环境变量推导默认目录, 为空时 initialize 失败)
 /// @param config 索引过滤配置 (加载路径/忽略路径/gitignore 开关)
 CodeGraphManager::CodeGraphManager(std::string sqliteDir, CodeGraphIndexConfig config) :
     impl_(std::make_unique<Impl>(std::move(sqliteDir), std::move(config))) {}

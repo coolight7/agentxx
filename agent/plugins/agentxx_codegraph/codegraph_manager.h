@@ -77,10 +77,11 @@ public:
         }
     }
 
-    /// @param sqliteDir sqlite 数据目录; 为空使用默认 {dataDir}/sqlite/
-    ///        (dataDir 为空时 ~/.agentxx/sqlite/, 取不到主目录时回退系统临时目录)
+    /// @param sqliteDir sqlite 数据目录 ({dataDir}/sqlite; 由插件入口经宿主
+    ///        agentxx.agent.config get_config 的 dataDir 拼接提供;
+    ///        插件不直接读环境变量, 为空时 initialize 失败并记日志)
     /// @param config    索引过滤配置 (加载路径/忽略路径/gitignore 开关)
-    explicit CodeGraphManager(std::string sqliteDir = "", CodeGraphIndexConfig config = {});
+    explicit CodeGraphManager(std::string sqliteDir, CodeGraphIndexConfig config = {});
     ~CodeGraphManager();
 
     CodeGraphManager(const CodeGraphManager&)            = delete;
