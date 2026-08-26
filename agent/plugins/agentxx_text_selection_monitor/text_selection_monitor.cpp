@@ -20,6 +20,8 @@
 
 #endif
 
+#include "asio/awaitable.hpp"
+#include "asio/use_awaitable.hpp"
 #include "simdjson.h"
 #include "text_selection_monitor.h"
 #include <chrono>
