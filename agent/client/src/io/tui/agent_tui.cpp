@@ -1708,7 +1708,11 @@ void TUIClientAgentIO::onDelta(const agentxx::agent::Delta& delta) {
                 m->text               = delta.arguments;
                 m->tool->toolFinished = false;
                 m->collapsed          = true;
-                m->startTimeMs        = delta.startTimeMs;
+                m->startTimeMs        = delta.startTimeMs > 0 ? delta.startTimeMs : static_cast<int64_t>(
+                    std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::system_clock::now().time_since_epoch()
+                    ).count()
+                );
                 st.messages.push_back(std::move(m));
                 st.isStreaming = true;
             } break;
@@ -1722,8 +1726,19 @@ void TUIClientAgentIO::onDelta(const agentxx::agent::Delta& delta) {
                         m.tool->toolResult   = delta.result;
                         m.tool->toolFinished = true;
                         m.collapsed          = true;
-                        m.startTimeMs        = delta.startTimeMs;
-                        m.durationMs         = delta.durationMs;
+                        if (delta.startTimeMs > 0) {
+                            m.startTimeMs = delta.startTimeMs;
+                        }
+                        if (delta.durationMs > 0) {
+                            m.durationMs = delta.durationMs;
+                        } else if (m.startTimeMs > 0) {
+                            const int64_t nowMs = static_cast<int64_t>(
+                                std::chrono::duration_cast<std::chrono::milliseconds>(
+                                    std::chrono::system_clock::now().time_since_epoch()
+                                ).count()
+                            );
+                            m.durationMs = std::max(int64_t{0}, nowMs - m.startTimeMs);
+                        }
                         found                = true;
                         break;
                     }

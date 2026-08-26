@@ -1708,6 +1708,13 @@ Element MessageListComponent::buildMessageBlock(
                     header.push_back(text(shownName) | color(theme.accentColor) | bold);
                 } else {
                     header.push_back(text(shownName) | color(theme.toolColor));
+                    if (msg.durationMs > 0) {
+                        header.push_back(text(" "));
+                        header.push_back(
+                            text(agentxx::util::formatDurationMilliseconds(msg.durationMs))
+                            | color(theme.toolColor) | dim
+                        );
+                    }
                 }
             }
 

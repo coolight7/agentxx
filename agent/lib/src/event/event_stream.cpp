@@ -300,13 +300,20 @@ void EventBridge::handleChannelWrite(const neograph::graph::GraphEvent& event) {
                     const auto toolCallId = tc.value("id", std::string{});
                     const auto arguments  = tc.value("arguments", std::string{});
 
+                    const int64_t startMs = static_cast<int64_t>(
+                        std::chrono::duration_cast<std::chrono::milliseconds>(
+                            std::chrono::system_clock::now().time_since_epoch()
+                        )
+                            .count()
+                    );
                     ViewMessage m;
-                    m.role      = ViewMessage::Role::Tool;
-                    m.text      = arguments;
-                    m.collapsed = true; // 历史重连默认折叠 (与 onDelta 实时展开不同)
-                    m.tool      = ViewMessage::ToolData{};
+                    m.role        = ViewMessage::Role::Tool;
+                    m.text        = arguments;
+                    m.collapsed   = true; // 历史重连默认折叠 (与 onDelta 实时展开不同)
+                    m.tool        = ViewMessage::ToolData{};
                     m.tool->toolName   = toolName;
                     m.tool->toolCallId = toolCallId;
+                    m.startTimeMs      = startMs;
                     const auto msgId   = session_->appendViewMessage(std::move(m));
                     // 登记 toolCallId → viewMessages 索引, 供 tool 结果回填 O(1) 定位
                     // (viewMessages append-only, 索引不失效)
@@ -315,11 +322,12 @@ void EventBridge::handleChannelWrite(const neograph::graph::GraphEvent& event) {
                         toolCallHistoryIndex_[toolCallId] = historyIndex;
                     }
                     emitDelta(Delta{
-                        .type       = Delta::Type::ToolStart,
-                        .msgId      = msgId,
-                        .toolName   = toolName,
-                        .toolCallId = toolCallId,
-                        .arguments  = arguments,
+                        .type        = Delta::Type::ToolStart,
+                        .msgId       = msgId,
+                        .toolName    = toolName,
+                        .toolCallId  = toolCallId,
+                        .arguments   = arguments,
+                        .startTimeMs = startMs,
                     });
                 }
             }
@@ -332,6 +340,18 @@ void EventBridge::handleChannelWrite(const neograph::graph::GraphEvent& event) {
             auto toolCallId = jm.value("tool_call_id", jm.value("toolCallId", std::string{}));
             if (toolCallId.empty()) {
                 continue;
+            }
+            int64_t toolStartTimeMs = 0;
+            int64_t toolDurationMs  = 0;
+            if (jm.contains("extra") && jm["extra"].is_object()) {
+                toolStartTimeMs = jm["extra"].value("startTimeMs", int64_t{0});
+                toolDurationMs  = jm["extra"].value("durationMs", int64_t{0});
+            }
+            if (toolStartTimeMs == 0) {
+                toolStartTimeMs = jm.value("startTimeMs", int64_t{0});
+            }
+            if (toolDurationMs == 0) {
+                toolDurationMs = jm.value("durationMs", int64_t{0});
             }
             // 回填对应的 Tool 消息 (assistant tool_calls 展开时已登记索引):
             // - 优先 O(1) 索引定位 (本轮已登记)
@@ -359,6 +379,21 @@ void EventBridge::handleChannelWrite(const neograph::graph::GraphEvent& event) {
                 target->tool->toolResult   = content;
                 target->tool->toolFinished = true;
                 target->collapsed          = true;
+                if (toolDurationMs > 0) {
+                    target->durationMs = toolDurationMs;
+                } else if (target->startTimeMs > 0) {
+                    const int64_t nowMs = static_cast<int64_t>(
+                        std::chrono::duration_cast<std::chrono::milliseconds>(
+                            std::chrono::system_clock::now().time_since_epoch()
+                        )
+                            .count()
+                    );
+                    target->durationMs = std::max(int64_t{0}, nowMs - target->startTimeMs);
+                    toolDurationMs     = target->durationMs;
+                }
+                if (toolStartTimeMs > 0) {
+                    target->startTimeMs = toolStartTimeMs;
+                }
                 // 回填后同步持久化: 库内该行仍是未完成的 Tool 消息 (tool_finished
                 // 缺失), 若不更新, 重启恢复/会话切换后再展示的 tool 结果会一直
                 // 显示未完成状态。经 Session::updateViewMessage 触发 onUpdateViewMessage
@@ -370,11 +405,13 @@ void EventBridge::handleChannelWrite(const neograph::graph::GraphEvent& event) {
                 //  ToolData::diff 字段保留供未来)
             }
             emitDelta(Delta{
-                .type       = Delta::Type::ToolEnd,
-                .toolName   = toolName,
-                .toolCallId = toolCallId,
-                .result     = content,
-                .hasError   = false,
+                .type        = Delta::Type::ToolEnd,
+                .toolName    = toolName,
+                .toolCallId  = toolCallId,
+                .result      = content,
+                .hasError    = false,
+                .startTimeMs = target ? target->startTimeMs : toolStartTimeMs,
+                .durationMs  = target ? target->durationMs : toolDurationMs,
             });
         }
     }

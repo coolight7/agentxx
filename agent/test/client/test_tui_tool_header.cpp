@@ -67,9 +67,10 @@ struct ToolHeaderFixture {
     void pushTool(
         std::string name,
         std::string args,
-        bool        finished  = true,
-        bool        collapsed = true,
-        std::string result    = ""
+        bool        finished   = true,
+        bool        collapsed  = true,
+        std::string result     = "",
+        int64_t     durationMs = 0
     ) {
         sharedState.mutate([&](TUIRenderState& st) {
             auto m                = std::make_shared<TUIMessage>();
@@ -79,6 +80,7 @@ struct ToolHeaderFixture {
             m->tool->toolCallId   = "call_1";
             m->tool->toolFinished = finished;
             m->tool->toolResult   = std::move(result);
+            m->durationMs         = durationMs;
             // Tool 消息默认折叠展示 (与真实 TUI 流一致, 见 agent_tui.cpp);
             // 折叠态头部才显示 "动词 · 参数摘要" 特化渲染
             m->collapsed = collapsed;
@@ -463,6 +465,81 @@ void testTuiToolHeaderFailed() {
     XX_TEST_EXPECT_TRUE(fExpanded.render().find("255;85;85") != std::string::npos);
 }
 
+// 展开 Tool 消息时显示耗时
+void testTuiToolHeaderDuration() {
+    // 1. 普通工具展开, 耗时 1.2s
+    ToolHeaderFixture f1;
+    f1.pushTool(
+        "agentxx_filesystem_read",
+        R"({"path":"/home/a.cpp"})",
+        true,
+        false, // 展开
+        "file content",
+        1200
+    );
+    XX_TEST_EXPECT_TRUE(
+        f1.plainRender().find("- [Tool] agentxx_filesystem_read 1.2s") != std::string::npos
+    );
+
+    // 2. 长耗时工具展开, 耗时 1m5s
+    ToolHeaderFixture f2;
+    f2.pushTool(
+        "agentxx_execute_bash_command",
+        R"({"command":"make"})",
+        true,
+        false, // 展开
+        "build ok",
+        65000
+    );
+    XX_TEST_EXPECT_TRUE(
+        f2.plainRender().find("- [Tool] agentxx_execute_bash_command 1m5s") != std::string::npos
+    );
+
+    // 3. 插件装饰工具展开, 耗时 0.3s
+    ToolHeaderFixture f3(120, 24);
+    f3.pushTool(
+        "agentxx_planning",
+        R"({"mode":"read"})",
+        true,
+        false, // 展开
+        "ok",
+        300
+    );
+    f3.pushDecor();
+    XX_TEST_EXPECT_TRUE(f3.plainRender().find("- [Tool] Plan 0.3s") != std::string::npos);
+
+    // 4. filesystem_edit 特化工具展开, 耗时 0.5s
+    ToolHeaderFixture f4;
+    f4.pushTool(
+        "agentxx_filesystem_edit",
+        R"({"path":"/a.cpp","old_str":"foo","new_str":"bar"})",
+        true,
+        false, // 展开
+        "success",
+        450
+    );
+    XX_TEST_EXPECT_TRUE(
+        f4.plainRender().find("- [Tool] agentxx_filesystem_edit 0.5s") != std::string::npos
+    );
+
+    // 5. 运行中的工具展开, 无耗时后缀
+    ToolHeaderFixture f5;
+    f5.pushTool(
+        "agentxx_filesystem_read",
+        R"({"path":"/home/a.cpp"})",
+        false,
+        false, // 展开
+        "",
+        0
+    );
+    XX_TEST_EXPECT_TRUE(
+        f5.plainRender().find("[Tool] agentxx_filesystem_read") != std::string::npos
+    );
+    XX_TEST_EXPECT_TRUE(
+        f5.plainRender().find("0.0s") == std::string::npos
+    );
+}
+
 TestResult testTuiToolHeader() {
     testTuiToolHeaderFilesystem();
     testTuiToolHeaderWeb();
@@ -471,6 +548,7 @@ TestResult testTuiToolHeader() {
     testTuiToolHeaderRunning();
     testTuiToolHeaderDecor();
     testTuiToolHeaderFailed();
+    testTuiToolHeaderDuration();
     return {g_tui_tool_header_passed, g_tui_tool_header_failed};
 }
 
