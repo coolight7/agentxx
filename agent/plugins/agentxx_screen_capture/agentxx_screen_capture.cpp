@@ -54,6 +54,9 @@ struct PluginCtx {
     std::vector<std::unique_ptr<AgentxxSyncToolShim>> sync_tool_shims;
     /// 截图 PNG 落盘目录 {dataDir}/captures (空 = 禁用落盘; create 时装配)
     std::string captures_dir;
+    /// XX_LOG* 宏路由 Sink 闭包存储 (create 时装配并发布到 g_log_sink;
+    /// destroy 时若全局指针仍指向此处则清除 —— 见 screen_capture_plugin.h 注释)
+    PluginLogSink log_sink;
     /// 流式采集 (原函数级 static 单例会把帧发到首实例宿主 —— 已修为每实例)
     std::unique_ptr<ScreenCaptureHolder> holder;
 };
@@ -492,6 +495,12 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
         ctx->host  = host;
         ctx->iface = agentxx::plugin::AgentIfaces::query(host);
         raw        = ctx.get();
+        // 装配 XX_LOG* 宏路由 Sink (screen_capture.cpp 经 g_log_sink 转发宿主日志)
+        ctx->log_sink = PluginLogSink([host, logIf = ctx->iface.log](int level,
+                                                                     const std::string& msg) {
+            pluginLog(host, logIf, level, msg);
+        });
+        g_log_sink.store(&ctx->log_sink, std::memory_order_release);
         // 读取宿主 dataDir (io 线程), 初始化截图落盘目录 {dataDir}/captures
         // - get_config 仅 io 线程可用, execute 运行在线程池, 故此处缓存供后续只读
         // - dataDir 不可用 (旧宿主) 时 captures_dir 为空, 捕获只返回元信息不落盘
@@ -564,6 +573,9 @@ extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_destroy(void* plugin_ctx) {
             ctx->holder->capture_.shutdown();
         }
         pluginLog(ctx->host, ctx->iface.log, 2, "agentxx_screen_capture unloaded");
+        // 全局宏路由指针仍指向本实例 Sink 时清除 (多实例下可能已指向后装配者)
+        const PluginLogSink* expected = &ctx->log_sink;
+        g_log_sink.compare_exchange_strong(expected, nullptr);
         delete ctx; // storage/tool_entries/shims/holder 均为 ctx 成员
         });
 }

@@ -82,6 +82,9 @@ struct PluginCtx {
     bool collecting = false;
     /// tick 计数 (io 线程独占; 每 kUsageIntervalSec 秒采一次)
     int tick = 0;
+    /// XX_LOG* 宏路由 Sink 闭包存储 (create 时装配并发布到 g_log_sink;
+    /// destroy 时若全局指针仍指向此处则清除 —— 见 system_monitor_plugin.h 注释)
+    agentxx_system_monitor_plugin::PluginLogSink log_sink;
 };
 
 /// 实例日志转发 (包装宿主句柄/接口表; 本文件内调用点统一 (ctx, level, msg))
@@ -559,6 +562,15 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
             ctx->iface = agentxx::plugin::AgentIfaces::query(host);
             raw        = ctx.get();
 
+            // 装配 XX_LOG* 宏路由 Sink (cpu_gpu_monitor.cpp 经 g_log_sink 转发宿主日志)
+            ctx->log_sink = agentxx_system_monitor_plugin::PluginLogSink(
+                [host, logIf = ctx->iface.log](int level, const std::string& msg) {
+                    agentxx_system_monitor_plugin::pluginLog(host, logIf, level, msg);
+                }
+            );
+            agentxx_system_monitor_plugin::g_log_sink.store(&ctx->log_sink,
+                                                            std::memory_order_release);
+
             // 默认提示词写入宿主 (从 lib AgentPrompt 剥离迁移; 用户 yaml 覆盖优先)
             ensureToolPromptInHost(*ctx);
 
@@ -676,6 +688,10 @@ extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_destroy(void* plugin_ctx) {
                 ctx->timer = nullptr;
             }
             pluginLog(ctx, 2, "agentxx_system_monitor unloaded");
+            // 全局宏路由指针仍指向本实例 Sink 时清除 (多实例下可能已指向后装配者)
+            const agentxx_system_monitor_plugin::PluginLogSink* expected = &ctx->log_sink;
+            agentxx_system_monitor_plugin::g_log_sink.compare_exchange_strong(expected,
+                                                                              nullptr);
             delete ctx; // 垫片适配器/storage 为 ctx 成员, 随之释放
         }
     );

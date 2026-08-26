@@ -61,6 +61,7 @@
 #include "test_tui_interrupt.h"
 #include "test_tui_scroll.h"
 #include "test_tui_settings.h"
+#include "test_tui_sidebar.h"
 #include "test_tui_stream.h"
 #include "test_tui_tool_header.h"
 #endif
@@ -172,6 +173,7 @@ int main(int argn, char** argv) {
     runSync("tui_input", agentxx::test::testTuiInput);
     runSync("tui_interrupt", agentxx::test::testTuiInterrupt);
     runSync("tui_scroll", agentxx::test::testTuiScroll);
+    runSync("tui_sidebar", agentxx::test::testTuiSidebar);
     runSync("tui_stream", agentxx::test::testTuiStream);
     runSync("tui_tool_header", agentxx::test::testTuiToolHeader);
     runSync("sessionId", agentxx::test::testSessionId);

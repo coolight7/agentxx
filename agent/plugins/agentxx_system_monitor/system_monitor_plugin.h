@@ -11,7 +11,9 @@
 #include "agentxx/plugin/plugin_tool_sync.h"
 #include "fmt/format.h"
 #include "simdjson.h"
+#include <atomic>
 #include <cstring>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -50,6 +52,26 @@ inline void pluginLog(
 ) {
     if (host && logIf && logIf->log) {
         logIf->log(host, level, agentxx_plugin_sv(msg.data(), msg.size()));
+    }
+}
+
+// =====================================================================
+// XX_LOG* 宏路由 Sink: 实现文件 (cpu_gpu_monitor.cpp 等) 内的 XX_LOG* 宏经
+// 此转发到宿主接口表。每实例 Sink 闭包存于入口 cpp 的 PluginCtx::log_sink,
+// create 时装配并发布到 g_log_sink。
+// 多实例说明: 同库多实例共享 .data 段, g_log_sink 为进程级单点 —— 后装配
+// 实例生效 (与 agentxx_codegraph 的 g_mgr_log_sink 同策略); 日志仅为观测
+// 旁路, 不影响功能正确性。未装配/实例已销毁时静默丢弃。
+// =====================================================================
+using PluginLogSink = std::function<void(int level, const std::string& msg)>;
+
+/// 当前生效的实例日志 Sink (指向某实例 PluginCtx 内的闭包存储)
+inline std::atomic<const PluginLogSink*> g_log_sink{nullptr};
+
+/// XX_LOG* 宏路由用重载 (level, msg): 经当前实例 Sink 转发到宿主接口表
+inline void pluginLog(int level, const std::string& msg) {
+    if (const auto* sink = g_log_sink.load(std::memory_order_acquire)) {
+        (*sink)(level, msg);
     }
 }
 

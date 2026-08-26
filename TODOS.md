@@ -10,7 +10,6 @@
 - 统一使用 getSessionWorkDir
 - exec_cmd 手动裁剪 stdout、stderr，而不是通过 toolcallNode
 - 统一命名为 client-io、server-io
-- tui 复制缺少空格
 - graph json 定义，支持插件生成 graph json、注册 node; (最多只能有一个插件生成 graph，都没有则默认生成 CodeAgent)
 - Plan 渲染独立为 client 插件, 增加 read
 - 插件宏辅助代码

@@ -69,6 +69,9 @@ struct PluginCtx {
     agentxx::plugin::AgentIfaces iface {};
     TextSelectionHolder          holder; ///< 监听器 (随实例生死)
     AgentxxSyncToolShim          shim {};///< 垫片适配器 (随实例生死)
+    /// XX_LOG* 宏路由 Sink 闭包存储 (create 时装配并发布到 g_log_sink;
+    /// destroy 时若全局指针仍指向此处则清除 —— 见 text_selection_monitor_plugin.h 注释)
+    agentxx_text_selection_monitor_plugin::PluginLogSink log_sink;
 };
 
 /// 转义字符串为 JSON 字面量 (经宿主 vtable json_escape; host 取自本实例 ctx)
@@ -230,6 +233,14 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
         ctx->host  = host;
         ctx->iface = agentxx::plugin::AgentIfaces::query(host);
         raw        = ctx.get();
+        // 装配 XX_LOG* 宏路由 Sink (text_selection_monitor.cpp 经 g_log_sink 转发宿主日志)
+        ctx->log_sink = agentxx_text_selection_monitor_plugin::PluginLogSink(
+            [host, logIf = ctx->iface.log](int level, const std::string& msg) {
+                agentxx_text_selection_monitor_plugin::pluginLog(host, logIf, level, msg);
+            }
+        );
+        agentxx_text_selection_monitor_plugin::g_log_sink.store(&ctx->log_sink,
+                                                                std::memory_order_release);
         ctx->holder.ctx = ctx.get(); ///< 监听回调经此读本实例宿主
 
         static const std::string kSchema = R"({
@@ -278,6 +289,13 @@ extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_destroy(void* plugin_ctx) {
             ctx->iface.tools->unregister_tool(ctx->host,
                                               AGENTXX_SV("agentxx_text_selection_monitor"));
         pluginLog(ctx->host, ctx->iface.log, 2, "agentxx_text_selection_monitor unloaded");
+        // 全局宏路由指针仍指向本实例 Sink 时清除 (多实例下可能已指向后装配者)
+        const agentxx_text_selection_monitor_plugin::PluginLogSink* expected
+            = &ctx->log_sink;
+        agentxx_text_selection_monitor_plugin::g_log_sink.compare_exchange_strong(
+            expected,
+            nullptr
+        );
         delete ctx;
         });
 }
