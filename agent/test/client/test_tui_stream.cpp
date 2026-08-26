@@ -751,6 +751,36 @@ TestResult testTuiStream() {
                 XX_TEST_EXPECT_EQ(snap->messages[2]->text, "继续输出");
             }
         }
+
+        // 场景 9: 直接收到 InsertMessage (如轮次统计 Tip 或原子消息)
+        {
+            TestTUIClientIO client(ioCtx);
+
+            auto vm          = ViewMessage::makeText(ViewMessage::Role::Tip, "Turn tip message", 1000, 200);
+            vm.id            = "msg_000001";
+            vm.tip->tipLevel = ViewMessage::TipLevel::Warning;
+            vm.collapsed     = true;
+
+            Delta d_insert;
+            d_insert.type    = Delta::Type::InsertMessage;
+            d_insert.message = std::move(vm);
+            client.testOnDelta(d_insert);
+
+            {
+                auto snap = client.sharedState().snapshot();
+                XX_TEST_EXPECT_EQ(snap->messages.size(), (size_t)1);
+                XX_TEST_EXPECT_EQ(snap->messages[0]->id, std::string{"msg_000001"});
+                XX_TEST_EXPECT_EQ(snap->messages[0]->role, TUIMessage::Role::Tip);
+                XX_TEST_EXPECT_EQ(snap->messages[0]->text, std::string{"Turn tip message"});
+                XX_TEST_EXPECT_EQ(snap->messages[0]->startTimeMs, int64_t{1000});
+                XX_TEST_EXPECT_EQ(snap->messages[0]->durationMs, int64_t{200});
+                XX_TEST_EXPECT_TRUE(snap->messages[0]->collapsed);
+                XX_TEST_EXPECT_TRUE(snap->messages[0]->tip.has_value());
+                if (snap->messages[0]->tip) {
+                    XX_TEST_EXPECT_EQ(snap->messages[0]->tip->tipLevel, ViewMessage::TipLevel::Warning);
+                }
+            }
+        }
     }
 
     return TestResult{g_tui_stream_passed, g_tui_stream_failed};

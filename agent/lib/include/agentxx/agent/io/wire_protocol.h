@@ -104,6 +104,8 @@ inline std::string_view deltaTypeToString(Delta::Type t) noexcept {
             return "message_tip";
         case T::MessageTip:
             return "system_message";
+        case T::InsertMessage:
+            return "insert_message";
     }
     return "text_token";
 }
@@ -139,6 +141,9 @@ inline std::optional<Delta::Type> deltaTypeFromString(std::string_view s) noexce
     }
     if (s == "system_message") {
         return T::MessageTip;
+    }
+    if (s == "insert_message") {
+        return T::InsertMessage;
     }
     return std::nullopt;
 }
@@ -199,6 +204,9 @@ inline neograph::json deltaToJson(const Delta& d) {
             j["think"] = std::move(th);
         }
     }
+    if (d.message) {
+        j["message"] = d.message->toJson();
+    }
     // MessageUITip / MessageTip: 提示级别
     if (d.type == Delta::Type::MessageUITip || d.type == Delta::Type::MessageTip) {
         switch (d.tipType) {
@@ -245,6 +253,9 @@ inline std::optional<Delta> deltaFromJson(const neograph::json& j) {
         th.reasoningTokens = j["think"].value("reasoning_tokens", 0);
         th.isEncrypted     = j["think"].value("is_encrypted", false);
         d.think            = std::move(th);
+    }
+    if (j.contains("message") && j["message"].is_object()) {
+        d.message = ViewMessage::fromJson(j["message"]);
     }
     if (d.type == Delta::Type::MessageUITip || d.type == Delta::Type::MessageTip) {
         const auto tip = j.value("tipType", std::string{"info"});

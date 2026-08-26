@@ -623,7 +623,7 @@ asio::awaitable<BaseAgent::TurnResult> BaseAgent::runTurnAsync(
     );
 
     // 插入提示消息: 由 agent 线程追加到会话历史 (viewMessages) 并发送
-    // MessageTip Delta 通知 UI 追加对应消息。UI 端不再自行构造系统提示,
+    // InsertMessage Delta 通知 UI 追加对应消息。UI 端直接消费完整 ViewMessage,
     // 保证 viewMessages / Sync 恢复 / 持久化与展示内容一致。
     // - 无对端 (headless) 时不插入 (提示为展示用途, headless 无消费者)
     auto insertMessageTip =
@@ -631,22 +631,13 @@ asio::awaitable<BaseAgent::TurnResult> BaseAgent::runTurnAsync(
             if (!session->io) {
                 return;
             }
-            auto vm           = ViewMessage::makeText(ViewMessage::Role::Tip, text, startMs, durMs);
-            vm.tip->tipLevel  = level;
-            const auto     id = session->appendViewMessage(std::move(vm));
-            Delta::TipType tipType = Delta::TipType::Info;
-            if (level == ViewMessage::TipLevel::Warning) {
-                tipType = Delta::TipType::Warning;
-            } else if (level == ViewMessage::TipLevel::Error) {
-                tipType = Delta::TipType::Error;
-            }
+            auto vm          = ViewMessage::makeText(ViewMessage::Role::Tip, std::move(text), startMs, durMs);
+            vm.tip->tipLevel = level;
+            vm.collapsed     = true;
+            vm.id            = session->appendViewMessage(vm);
             eventBridge->emitDelta(Delta{
-                .type        = Delta::Type::MessageTip,
-                .text        = std::move(text),
-                .msgId       = id,
-                .tipType     = tipType,
-                .startTimeMs = startMs,
-                .durationMs  = durMs,
+                .type    = Delta::Type::InsertMessage,
+                .message = std::move(vm),
             });
         };
 

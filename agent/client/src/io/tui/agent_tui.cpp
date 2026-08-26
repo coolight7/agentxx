@@ -1806,10 +1806,17 @@ void TUIClientAgentIO::onDelta(const agentxx::agent::Delta& delta) {
                 st.messages.push_back(std::move(msg));
                 st.isStreaming = true;
             } break;
+            case Type::InsertMessage: {
+                // 完整 ViewMessage 消息插入 (轮次统计、系统提示、中断头等):
+                // 服务端已完成 appendViewMessage 与持久化, 客户端直接装载展示
+                pushCurrentTokenLocked(st);
+                resetTrailingRunningToolsLocked(st);
+                if (delta.message) {
+                    st.messages.push_back(std::make_shared<TUIMessage>(*delta.message));
+                }
+            } break;
             case Type::MessageTip: {
-                // 系统消息: 已由 agent 线程插入会话历史 (viewMessages),
-                // 内容/时间戳/级别与历史完全一致, 直接追加即可;
-                // 默认折叠展示 (服务端历史创建时即 collapsed=true, 此处显式同步)
+                // 遗留兼容: 系统消息平铺字段拼装
                 pushCurrentTokenLocked(st);
                 resetTrailingRunningToolsLocked(st);
                 auto msg       = std::make_shared<TUIMessage>();
