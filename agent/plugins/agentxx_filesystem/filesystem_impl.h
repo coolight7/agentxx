@@ -754,11 +754,28 @@ inline std::string fileGrepExecuteImpl(
         }
         // 智能选择 glob/rglob: 含 `**` 的模式使用 rglob (递归), 否则使用 glob
         // (仅当前目录); 路径匹配固定为大小写敏感
+        // 单个 pattern 的遍历失败 (如目录树中存在系统代码页无法表示的文件名,
+        // MSVC 下 fs::path 窄化转换抛 system_error) 不应中断整体搜索,
+        // 经 catchError 隔离后跳过该 pattern 继续其余 pattern
         std::vector<std::filesystem::path> matched;
-        if (glob::has_recursive_segment(pattern)) {
-            matched = glob::rglob(pattern, true, globNeverCancel);
-        } else {
-            matched = glob::glob(pattern, true, globNeverCancel);
+        auto globOk = agentxx::util::catchError<bool>(
+            [&]() -> bool {
+                if (glob::has_recursive_segment(pattern)) {
+                    matched = glob::rglob(pattern, true, globNeverCancel);
+                } else {
+                    matched = glob::glob(pattern, true, globNeverCancel);
+                }
+                return true;
+            },
+            [&](std::string errmsg) -> bool {
+                XX_LOGW("filesystem_grep: glob pattern '{}' failed, skipped: {}",
+                        pattern,
+                        errmsg);
+                return false;
+            }
+        );
+        if (false == globOk || matched.empty()) {
+            continue;
         }
         refilelist.insert(
             refilelist.end(),

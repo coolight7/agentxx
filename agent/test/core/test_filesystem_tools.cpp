@@ -1604,6 +1604,109 @@ asio::awaitable<void> test_grep_mem_stress(std::weak_ptr<agentxx::agent::AgentCo
     TEST_PASS << "FilesystemGrepTool stress 60 iterations ok" << std::endl;
 }
 
+/// 回归测试: glob 遍历含 Unicode/GBK外字符的目录树 (如 "utf8_dir_ßµ™∃")
+/// 验证 1) recursive glob 遍历不抛异常且无损保留 UTF-8 字符;
+///      2) 非 ASCII 字面模式直接匹配该目录下的文件
+asio::awaitable<void>
+    test_glob_unicode_paths(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+    namespace fs = std::filesystem;
+    auto unicodeDir = testDir + "/utf8_glob_ßµ™∃";
+    fs::create_directories(unicodeDir);
+    {
+        std::ofstream f(unicodeDir + "/sample.txt");
+        f << "unicode glob content\n";
+    }
+
+    auto tool = agentxx::tools::FilesystemGlobTool{agentContext};
+
+    // 1) 递归 glob: 应能遍历该目录且路径中包含 UTF-8 字符 (不抛异常)
+    auto argsRec = neograph::json{
+        {"file_patterns", neograph::json::array({testDir + "/**/*"})},
+    };
+    auto resRec = co_await tool.execute_async(argsRec);
+    bool hasFile = resRec.find("sample.txt") != std::string::npos;
+    bool hasUnicodeDir = resRec.find("utf8_glob_ßµ™∃") != std::string::npos;
+
+    // 2) 直接用含非 ASCII 字符的 pattern 匹配
+    auto argsDirect = neograph::json{
+        {"file_patterns", neograph::json::array({unicodeDir + "/*.txt"})},
+    };
+    auto resDirect = co_await tool.execute_async(argsDirect);
+    bool hasDirectMatch = resDirect.find("sample.txt") != std::string::npos;
+
+    fs::remove_all(unicodeDir);
+
+    if (hasFile && hasUnicodeDir && hasDirectMatch) {
+        g_fs_passed++;
+        TEST_PASS << "FilesystemGlobTool handles Unicode/non-GBK directory paths" << std::endl;
+    } else {
+        g_fs_failed++;
+        TEST_FAIL << "FilesystemGlobTool Unicode path failed, resRec: " << resRec
+                  << ", resDirect: " << resDirect << std::endl;
+    }
+    co_return;
+}
+
+/// 回归测试: grep 遍历含 Unicode/GBK外字符的目录树并检索文件内容
+/// 验证 MSVC 下 fs::path 窄化不会抛 ERROR_NO_UNICODE_TRANSLATION
+asio::awaitable<void>
+    test_grep_unicode_path_and_content(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+    namespace fs = std::filesystem;
+    auto unicodeDir = testDir + "/utf8_grep_ßµ™∃";
+    fs::create_directories(unicodeDir);
+    {
+        std::ofstream f(unicodeDir + "/target.txt");
+        f << "match_token_in_unicode_dir_12345\nother content\n";
+    }
+
+    auto tool = agentxx::tools::FilesystemGrepTool{agentContext};
+    auto args = neograph::json{
+        {"text_patterns_is_regex", false                                               },
+        {"text_patterns",          neograph::json::array({"match_token_in_unicode_dir"})},
+        {"file_patterns",          neograph::json::array({testDir + "/**/*"})          },
+        {"output_mode",            "files_with_matches"                                },
+    };
+    auto result = co_await tool.execute_async(args);
+    bool hasMatch = result.find("target.txt") != std::string::npos
+                    && result.find("[Error]") == std::string::npos;
+
+    fs::remove_all(unicodeDir);
+
+    if (hasMatch) {
+        g_fs_passed++;
+        TEST_PASS << "FilesystemGrepTool searches inside Unicode/non-GBK directory paths" << std::endl;
+    } else {
+        g_fs_failed++;
+        TEST_FAIL << "FilesystemGrepTool Unicode search failed, got: " << result << std::endl;
+    }
+    co_return;
+}
+
+/// 回归测试: grep 多 pattern 场景下单 pattern 失败/无匹配被 catchError 隔离,
+/// 其余有效 pattern 仍能正常命中
+asio::awaitable<void>
+    test_grep_multi_pattern_fault_tolerance(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+    auto tool = agentxx::tools::FilesystemGrepTool{agentContext};
+    // 传入两个 pattern: 一个是指向不存在目录的 pattern, 另一个是指向有效文件的 pattern
+    auto args = neograph::json{
+        {"text_patterns_is_regex", false                                                    },
+        {"text_patterns",          neograph::json::array({"hello world"})                   },
+        {"file_patterns",          neograph::json::array({testDir + "/no_such_sub_dir/**/*.txt",
+                                                          testDir + "/test2.txt"})          },
+        {"output_mode",            "files_with_matches"                                     },
+    };
+    auto result = co_await tool.execute_async(args);
+    // 有效 pattern (test2.txt) 应正常命中并返回, 不应因前一个 pattern 为空或报错而整体失败
+    if (result.find("test2.txt") != std::string::npos && result.find("[Error]") == std::string::npos) {
+        g_fs_passed++;
+        TEST_PASS << "FilesystemGrepTool multi-pattern fault tolerance (catchError) works" << std::endl;
+    } else {
+        g_fs_failed++;
+        TEST_FAIL << "FilesystemGrepTool multi-pattern fault tolerance failed, got: " << result << std::endl;
+    }
+    co_return;
+}
+
 /// 插件真实链路冒烟测试: dlopen agentxx_filesystem .so, 经宿主 PluginManager/
 /// op_driver 全链路执行 —— 覆盖单测直测 impl 纯函数覆盖不到的接线层:
 ///   - read/write/edit: poll 寄生驱动三件套 (PolledToolShim start→poll 步进
@@ -1825,6 +1928,9 @@ asio::awaitable<TestResult>
     co_await run(test_grep_no_match_fail_fast);
     co_await run(test_grep_skip_directories);
     co_await run(test_grep_mem_stress);
+    co_await run(test_glob_unicode_paths);
+    co_await run(test_grep_unicode_path_and_content);
+    co_await run(test_grep_multi_pattern_fault_tolerance);
 
     // 插件真实链路冒烟 (dlopen + 宿主 op_driver 全链路; 插件未构建时跳过)
     // - 无 agentContext 形参, 不经 run 适配器直调 (异常兜底语义一致)
