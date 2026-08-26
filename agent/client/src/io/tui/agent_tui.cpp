@@ -449,7 +449,7 @@ void TUIClientAgentIO::start() {
         });
 
         InputComponent::Config inputCfg;
-        inputCfg.onSend = [this](std::string text) {
+        inputCfg.onSend = [this](std::string text) -> bool {
             // ---- 插件命令拦截 (UI 线程) ----
             // 输入以 "/" 开头且匹配插件注册的命令时, 拦截并投递到 client io
             // 线程执行命令回调 (execute 返回动作 JSON, 由宿主解释执行);
@@ -467,8 +467,7 @@ void TUIClientAgentIO::start() {
                     neograph::json args = neograph::json::object();
                     args["text"]        = argsText;
                     pluginManager_->postCommandInvocation(cmdName, args.dump());
-                    inputBar_->clear();
-                    return;
+                    return true;
                 }
             }
             std::lock_guard<std::mutex> lock(sharedState_.mutex());
@@ -485,13 +484,15 @@ void TUIClientAgentIO::start() {
                     std::move(text),
                     [](neograph_asio_error_code) {}
                 );
+                return true;
             } else if (st.connState != ConnState::Connected) {
-                // agent-io 未初始化完成前不允许发送消息
+                // agent-io 未初始化完成前不允许发送消息, 且不清空输入框
                 showToast("agent-io 尚未就绪, 请稍后再试");
                 postRedraw();
-                return;
+                return false;
             } else {
                 sendUserInputLocked(st, std::move(text));
+                return true;
             }
         };
         inputCfg.isAwaitingInterrupt = [this] {

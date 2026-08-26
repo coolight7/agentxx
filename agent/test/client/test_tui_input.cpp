@@ -53,9 +53,10 @@ struct InputFixture {
     /// 创建组件; ComponentBase 不可移动, 使用 shared_ptr 持有
     std::shared_ptr<InputComponent> makeComponent() {
         InputComponent::Config cfg;
-        cfg.onSend = [this](std::string text) {
+        cfg.onSend = [this](std::string text) -> bool {
             sentText = std::move(text);
             sent     = true;
+            return true;
         };
         return std::make_shared<InputComponent>(ctx, std::move(cfg));
     }
@@ -192,6 +193,22 @@ void test_real_enter_sends() {
     XX_TEST_EXPECT_TRUE(comp->inputText().empty());
 }
 
+void test_send_rejected_retains_input() {
+    InputFixture f;
+    InputComponent::Config cfg;
+    // 模拟 agent-io 未初始化就绪, 拒绝发送
+    cfg.onSend = [](std::string) -> bool {
+        return false;
+    };
+    auto comp = std::make_shared<InputComponent>(f.ctx, std::move(cfg));
+
+    InputFixture::type(*comp, "pending message");
+    comp->OnEvent(ftxui::Event::Return);
+
+    // 未就绪拒绝发送时, 输入框内容保留不被清空
+    XX_TEST_EXPECT_EQ(comp->inputText(), std::string("pending message"));
+}
+
 void test_enter_after_paste_sends_all() {
     InputFixture f;
     auto         comp = f.makeComponent();
@@ -315,7 +332,7 @@ void test_spinner_frame_advances_via_tree() {
     InputFixture f;
     bool streaming = false;
     InputComponent::Config cfg;
-    cfg.onSend      = [](std::string) {};
+    cfg.onSend      = [](std::string) -> bool { return true; };
     cfg.isStreaming = [&streaming] { return streaming; };
     auto comp       = std::make_shared<InputComponent>(f.ctx, std::move(cfg));
 
@@ -364,6 +381,7 @@ TestResult testTuiInput() {
     test_paste_trailing_newline_not_sent();
     test_paste_empty_content();
     test_real_enter_sends();
+    test_send_rejected_retains_input();
     test_enter_after_paste_sends_all();
     test_alt_enter_newline_cursor_at_end();
     test_alt_enter_newline_mid_text();
