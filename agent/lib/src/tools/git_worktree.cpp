@@ -182,7 +182,9 @@ asio::awaitable<std::string> GitWorktreeTool::execute_async(const neograph::json
     } else if (!config->inheritedWorktreePath.empty()) {
         effectiveDir = config->inheritedWorktreePath;
     } else {
-        effectiveDir = config->resolvedWorkDir();
+        // 统一经会话级入口解析 (worktree 绑定 > 会话工作目录覆写 >
+        // AgentConfig::workDir / 进程 cwd), 不直接依赖进程 cwd
+        effectiveDir = ctxPtr->getSessionWorkDir(sessionId);
     }
 
     auto cancelToken = getSessionCancelToken(ctxPtr, arguments);

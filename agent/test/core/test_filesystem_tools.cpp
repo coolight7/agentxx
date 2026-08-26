@@ -283,6 +283,49 @@ asio::awaitable<void> test_resolved_workdir(std::weak_ptr<agentxx::agent::AgentC
     co_return;
 }
 
+/// AgentContext::getSessionWorkDir 统一入口的会话级优先级链:
+/// worktree 绑定 > 会话工作目录覆写 > AgentConfig::workDir / 进程 cwd
+/// - 各会话覆写彼此独立 (session 引用 workdir 独立的核心语义);
+///   清除后回退 agent 级配置
+asio::awaitable<void> test_session_workdir_priority(std::weak_ptr<agentxx::agent::AgentContext>) {
+    auto ctx         = std::make_shared<agentxx::agent::AgentContext>();
+    ctx->agentConfig = std::make_shared<agentxx::agent::AgentConfig>();
+
+    // 未做任何会话级设置: 回退 agent 配置 (workDir 非空原样返回)
+    ctx->agentConfig->workDir = "/tmp/proj-a";
+    XX_TEST_EXPECT_EQ(ctx->getSessionWorkDir("s1"), std::string{"/tmp/proj-a"});
+
+    // 会话覆写生效且会话间独立
+    ctx->setSessionWorkDir("s1", "/tmp/proj-b");
+    XX_TEST_EXPECT_EQ(ctx->getSessionWorkDir("s1"), std::string{"/tmp/proj-b"});
+    XX_TEST_EXPECT_EQ(ctx->getSessionWorkDir("s2"), std::string{"/tmp/proj-a"});
+
+    // 空串覆写等价清除; 清除后回退 agent 级配置
+    ctx->setSessionWorkDir("s1", "");
+    XX_TEST_EXPECT_EQ(ctx->getSessionWorkDir("s1"), std::string{"/tmp/proj-a"});
+    ctx->setSessionWorkDir("s1", "/tmp/proj-c");
+    ctx->clearSessionWorkDir("s1");
+    XX_TEST_EXPECT_EQ(ctx->getSessionWorkDir("s1"), std::string{"/tmp/proj-a"});
+
+    // worktree 绑定优先于覆写与配置 (Session 未绑定 io 线程时允许初始化写入)
+    auto session = ctx->sessions->getOrCreate("s3");
+    ctx->setSessionWorkDir("s3", "/tmp/proj-d");
+    session->setWorktreeBinding(agentxx::agent::WorktreeBinding{
+        .name     = "wt",
+        .path     = "/tmp/repo/.agentxx/agent/worktrees/wt",
+        .branch   = "agentxx/wt-wt",
+        .repoRoot = "/tmp/repo",
+    });
+    XX_TEST_EXPECT_EQ(
+        ctx->getSessionWorkDir("s3"),
+        std::string{"/tmp/repo/.agentxx/agent/worktrees/wt"}
+    );
+
+    // 未知会话 id 同样回退 agent 级配置
+    XX_TEST_EXPECT_EQ(ctx->getSessionWorkDir("nonexistent"), std::string{"/tmp/proj-a"});
+    co_return;
+}
+
 /// 相对路径应以会话工作目录 (workDir) 而非进程 cwd 为基准:
 /// 绑定 workDir=testDir 后传 "." (解析到工作目录自身), 应列出其下文件;
 /// 进程 cwd 与 testDir 无关, 解析错误时将得到空/错误结果而非目录内容
@@ -1560,6 +1603,7 @@ asio::awaitable<TestResult>
     co_await run(test_list_file_info_fields);
     co_await run(test_list_file_relative_path);
     co_await run(test_resolved_workdir);
+    co_await run(test_session_workdir_priority);
     co_await run(test_list_relative_path_with_workdir);
     co_await run(test_read_relative_with_workdir);
     co_await run(test_glob_relative_pattern_with_workdir);

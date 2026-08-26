@@ -3793,9 +3793,9 @@ std::string PluginManager::getSessionWorkDir(const std::string& threadId) {
     if (!ctx) {
         return {};
     }
-    // worktree 绑定优先 (Session::WorktreeBinding), 回退 agent 级解析
-    // (AgentContext::resolveSessionWorkDir 已封装该语义)
-    return ctx->resolveSessionWorkDir(threadId);
+    // worktree 绑定优先 (Session::WorktreeBinding), 回退会话覆写/agent 级解析
+    // (AgentContext::getSessionWorkDir 已封装该语义)
+    return ctx->getSessionWorkDir(threadId);
 }
 
 std::string PluginManager::getModelConfigJson() {

@@ -3,6 +3,7 @@
 #include "agentxx/util/container_util.h"
 #include "agentxx/util/exception.h"
 #include "agentxx/util/log.h"
+#include "agentxx/util/string_util.h"
 #include <fmt/format.h>
 #include <iomanip>
 #include <iostream>
@@ -283,6 +284,29 @@ json AcpProtocolHandler::handleSessionNew(const json& params, const json& id) {
             sessionId,
             std::make_shared<std::atomic<bool>>(false)
         );
+    }
+
+    // 会话工作目录独立: 把客户端提供的 cwd 注入本会话 (AgentContext::
+    // getSessionWorkDir 解析时优先于 agent 级配置), filesystem/命令执行等
+    // 工具的相对路径基准与权限放行范围随之切换到该目录 —— 各 ACP 会话可绑定
+    // 不同项目目录, 不再隐式依赖 agent 进程启动目录 (cwd 为空/上下文不可用
+    // 时保持旧行为: 回退 AgentConfig::resolvedWorkDir / 进程 cwd)
+    if (!cwd.empty()) {
+        auto ctx = agent_ ? agent_->getContext() : nullptr;
+        if (ctx) {
+            // 归一为绝对路径 (~ 展开与相对路径按进程 cwd 解析; ACP 客户端
+            // 通常直接发送绝对路径, 此处仅兜底非规范输入)
+            auto absCwd = agentxx::util::toCurrentSystemAbsolutePath(cwd);
+            // 词法规范化对以 '.'/'..' 结尾的路径保留尾部分隔符 (".../dir/"
+            // 形式); 工作目录基准统一去除尾斜杠 (根目录 "/" 除外),
+            // 便于各使用方拼接与比较
+            while (absCwd.size() > 1 && absCwd.back() == '/') {
+                absCwd.pop_back();
+            }
+            if (!absCwd.empty()) {
+                ctx->setSessionWorkDir(sessionId, absCwd);
+            }
+        }
     }
 
     XX_LOGI("[acp] session/new: {} (cwd={})", sessionId, cwd);

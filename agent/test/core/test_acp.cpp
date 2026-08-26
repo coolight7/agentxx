@@ -10,6 +10,7 @@
 #include <asio/steady_timer.hpp>
 #include <asio/use_awaitable.hpp>
 #include <chrono>
+#include <filesystem>
 #include <iostream>
 #include <neograph/graph/engine.h>
 #include <string>
@@ -307,11 +308,72 @@ void test_acp_server_stdio() {
         XX_TEST_EXPECT_TRUE(responses[1].contains("result"));
         XX_TEST_EXPECT_TRUE(responses[1]["result"].contains("sessionId"));
 
+        // 会话工作目录独立: session/new 携带的 cwd 已注入会话
+        // (AgentContext::getSessionWorkDir 对本会话优先返回该值)
+        if (responses[1].contains("result") && responses[1]["result"].contains("sessionId")) {
+            auto sid = responses[1]["result"]["sessionId"].get<std::string>();
+            XX_TEST_EXPECT_EQ(agent->getContext()->getSessionWorkDir(sid), std::string{"/tmp"});
+        }
+
         // Resp 2: nonexistent method
         XX_TEST_EXPECT_EQ(responses[2]["id"].get<int>(), 99);
         XX_TEST_EXPECT_TRUE(responses[2].contains("error"));
         XX_TEST_EXPECT_EQ(responses[2]["error"]["code"].get<int>(), -32601);
     }
+}
+
+/// 各会话工作目录彼此独立: 同一 agent 的多个 session/new 可分别绑定不同
+/// cwd, getSessionWorkDir 按会话隔离取值 (相对路径按进程 cwd 归一为绝对路径)
+void test_acp_server_stdio_session_cwd() {
+    auto agent = makeTestAgent("test-acp-session-cwd");
+    json info{
+        {"name",    "test-acp-session-cwd"},
+        {"version", "0.1.0"               }
+    };
+
+    StdioAcpServer server(agent, info);
+
+    std::string input;
+    input += R"({"jsonrpc":"2.0","id":1,"method":"session/new","params":{"cwd":"/tmp","mcpServers":[]}})"
+             "\n";
+    input += R"({"jsonrpc":"2.0","id":2,"method":"session/new","params":{"cwd":".","mcpServers":[]}})"
+             "\n";
+
+    std::istringstream in(input);
+    std::ostringstream out;
+
+    server.run(in, out);
+
+    std::vector<json> responses;
+    std::istringstream outputStream(out.str());
+    std::string       line;
+    while (std::getline(outputStream, line)) {
+        if (!line.empty()) {
+            responses.push_back(json::parse(line));
+        }
+    }
+    XX_TEST_EXPECT_EQ(responses.size(), (size_t)2);
+    if (responses.size() < 2) {
+        return;
+    }
+
+    auto sidA = responses[0]["result"]["sessionId"].get<std::string>();
+    auto sidB = responses[1]["result"]["sessionId"].get<std::string>();
+    XX_TEST_EXPECT_TRUE(sidA != sidB);
+
+    // 会话 A 绑定 /tmp; 会话 B 相对路径 "." 归一为进程启动 cwd —— 两会话互不影响
+    XX_TEST_EXPECT_EQ(agent->getContext()->getSessionWorkDir(sidA), std::string{"/tmp"});
+    XX_TEST_EXPECT_EQ(
+        agent->getContext()->getSessionWorkDir(sidB),
+        std::filesystem::current_path().generic_string()
+    );
+
+    // 未注册覆写的会话回退 agent 级解析 (config workDir 为空 → 进程 cwd),
+    // 与 A/B 会话的独立绑定互不干扰
+    XX_TEST_EXPECT_EQ(
+        agent->getContext()->getSessionWorkDir("other-session"),
+        std::filesystem::current_path().generic_string()
+    );
 }
 
 void test_acp_server_stdio_errors() {
@@ -609,6 +671,7 @@ asio::awaitable<TestResult> run_acp_tests() {
     co_await test_acp_server_integration();
     co_await test_acp_server_http_errors();
     test_acp_server_stdio();
+    test_acp_server_stdio_session_cwd();
     test_acp_server_stdio_errors();
     test_acp_server_stdio_more();
     test_acp_server_version_negotiation();

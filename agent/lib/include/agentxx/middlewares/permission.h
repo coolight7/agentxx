@@ -82,8 +82,9 @@ public:
     /// 未配置时回退进程 cwd) + Unix 分隔符 + 目录尾斜杠 (+ Windows 转小写)
     std::string normalizePermissionPath(std::string_view path) const;
 
-    /// 同上, 但相对路径解析基准为会话生效工作目录 (worktree 绑定优先,
-    /// 经 AgentContext::resolveSessionWorkDir; sessionId 为空时等价单参版本)
+    /// 同上, 但相对路径解析基准为会话生效工作目录 (worktree 绑定 > 会话
+    /// 工作目录覆写, 经 AgentContext::getSessionWorkDir; sessionId 为空时
+    /// 等价单参版本)
     std::string normalizePermissionPath(std::string_view path, std::string_view sessionId) const;
 
     asio::awaitable<bool>

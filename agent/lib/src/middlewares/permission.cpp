@@ -37,12 +37,12 @@ std::string PermissionMiddlewareHandle::normalizePermissionPath(
     std::string_view path,
     std::string_view sessionId
 ) const {
-    // 相对路径解析基准: 会话生效工作目录 (worktree 绑定优先, 回退 AgentConfig::
-    // workDir / 进程 cwd), 与 filesystem 工具的解析基准保持一致,
-    // 使注册规则与工具实际访问路径稳定匹配
+    // 相对路径解析基准: 会话生效工作目录 (worktree 绑定 > 会话工作目录覆写,
+    // 回退 AgentConfig::workDir / 进程 cwd), 与 filesystem 工具的解析基准
+    // 保持一致, 使注册规则与工具实际访问路径稳定匹配
     std::string baseDir;
     if (auto ctx = agentContext.lock()) {
-        baseDir = ctx->resolveSessionWorkDir(sessionId);
+        baseDir = ctx->getSessionWorkDir(sessionId);
     }
     std::string s = agentxx::util::toUnixStandardDirPath(
         baseDir.empty() ? agentxx::util::toCurrentSystemAbsolutePath(path)

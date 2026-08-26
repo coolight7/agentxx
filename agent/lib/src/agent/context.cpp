@@ -230,7 +230,29 @@ std::shared_ptr<Session> AgentContext::getSession(std::string_view sessionId) {
     return sessions->getOrCreate(sessionId);
 }
 
-std::string AgentContext::resolveSessionWorkDir(std::string_view sessionId) {
+void AgentContext::setSessionWorkDir(std::string_view sessionId, std::string_view absWorkDir) {
+    if (sessionId.empty()) {
+        return;
+    }
+    // mutex 保护: 端点线程 (如 ACP HTTP handler) 与 io 线程并发读写安全
+    std::lock_guard lk(sessionWorkDirMu_);
+    if (absWorkDir.empty()) {
+        util::eraseHeterogeneous(sessionWorkDirs_, sessionId);
+        return;
+    }
+    util::insertOrAssignHeterogeneous(
+        sessionWorkDirs_,
+        std::string{sessionId},
+        std::string{absWorkDir}
+    );
+}
+
+void AgentContext::clearSessionWorkDir(std::string_view sessionId) {
+    std::lock_guard lk(sessionWorkDirMu_);
+    util::eraseHeterogeneous(sessionWorkDirs_, sessionId);
+}
+
+std::string AgentContext::getSessionWorkDir(std::string_view sessionId) {
     // worktree 绑定优先 (worktree 模式; Session 可变状态仅 io 线程读写,
     // 本方法约定在 io 线程调用 —— 插件宿主侧经 ioCallSync 投递)
     auto session = sessions->get(sessionId);
@@ -240,6 +262,15 @@ std::string AgentContext::resolveSessionWorkDir(std::string_view sessionId) {
             return wb.path;
         }
     }
+    // 会话工作目录覆写次之 (各会话独立, 如 ACP 客户端注入的 cwd;
+    // mutex 保护, 任意线程可读)
+    {
+        std::lock_guard lk(sessionWorkDirMu_);
+        if (auto it = sessionWorkDirs_.find(sessionId); it != sessionWorkDirs_.end()) {
+            return it->second;
+        }
+    }
+    // 回退 agent 级配置 (yaml work_dir / 进程 cwd), 保持旧行为兜底
     if (agentConfig) {
         auto wd = agentConfig->resolvedWorkDir();
         if (!wd.empty()) {

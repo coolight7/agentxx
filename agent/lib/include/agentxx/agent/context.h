@@ -9,6 +9,7 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <vector>
@@ -485,15 +486,40 @@ public:
     /// 便捷方法：获取或创建指定 thread_id 的会话
     std::shared_ptr<Session> getSession(std::string_view sessionId);
 
-    /// 解析会话生效的工作目录 (io 线程调用)
+    /// 统一的会话工作目录取值入口 (getSessionWorkDir; 全部使用方经此取值,
+    /// 不直接读进程 cwd / AgentConfig::workDir):
     /// - 会话已绑定 worktree 时返回 worktree 路径 (worktree 模式)
-    /// - 否则回退 AgentConfig::resolvedWorkDir() (yaml work_dir / 进程 cwd)
-    /// - 均不可用时返回空串
-    std::string resolveSessionWorkDir(std::string_view sessionId);
+    /// - 否则返回会话工作目录覆写 (setSessionWorkDir 注入, 如 ACP session/new
+    ///   携带的客户端 cwd) —— 各会话可绑定不同项目目录, 彼此独立
+    /// - 均未设置时回退 AgentConfig::resolvedWorkDir() (yaml work_dir / 进程
+    ///   cwd); 兜底语义: 未做任何配置时与旧版行为完全一致
+    /// - 均不可用时返回空串 (调用方自行兜底)
+    /// - 线程约束: worktree 绑定读取沿用 Session 的 io 线程约定 (插件宿主侧
+    ///   经 ioCallSync 投递); 覆写表经 mutex 保护, 任意线程可读写
+    std::string getSessionWorkDir(std::string_view sessionId);
+
+    /// 设置会话工作目录覆写 (会话级独立工作目录):
+    /// - absWorkDir 应为绝对路径 (相对路径/`~` 由调用方按需归一, 如 ACP 侧
+    ///   经 toCurrentSystemAbsolutePath); 空串等价 clearSessionWorkDir
+    /// - 供端点在会话运行前/外注入 (如 ACP session/new), 与 Session 可变状态
+    ///   的 io 线程约束解耦 —— mutex 保护, 任意线程可调用
+    void setSessionWorkDir(std::string_view sessionId, std::string_view absWorkDir);
+
+    /// 清除会话工作目录覆写 (该会话回退 AgentConfig::resolvedWorkDir)
+    void clearSessionWorkDir(std::string_view sessionId);
 
     std::string getSessionCurrentModelName(std::string_view sessionId) const;
     // 可能会变，建议仅在同步代码中使用
     const ModelConfig& getSessionCurrentModelConfig(std::string_view sessionId) const;
+
+private:
+
+    /// 会话级工作目录覆写 ({sessionId → 绝对路径}; 见 getSessionWorkDir)
+    /// - 与 Session 可变状态的 io 线程约束解耦: 端点线程 (如 ACP HTTP handler)
+    ///   在会话运行前注入, mutex 保护跨线程访问; 不随 Session 销毁自动清理
+    ///   (与 sessions_ 的常驻语义一致, 量级为活跃会话数)
+    std::mutex                                      sessionWorkDirMu_;
+    std::map<std::string, std::string, std::less<>> sessionWorkDirs_;
 };
 
 } // namespace agent
