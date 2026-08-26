@@ -1,7 +1,6 @@
 /isolation/*
 /package/*
 /resource/temp/*
-/resource/history/
 /resource/train/
 .langgraph_api
 __pycache__
