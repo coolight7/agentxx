@@ -22,8 +22,7 @@
 
 #include "simdjson.h"
 #include "text_selection_monitor.h"
-#include <asio/io_context.hpp>
-#include <asio/steady_timer.hpp>
+#include <chrono>
 #include <mutex>
 #include <optional>
 #include <thread>
@@ -1553,9 +1552,10 @@ private:
     }
 
     void delayMs(int ms) {
-        asio::steady_timer timer(ioContext_);
-        timer.expires_after(std::chrono::milliseconds(ms));
-        timer.wait();
+        // 同步睡眠 (自有 worker 线程内调用, 阻塞自身线程无碍);
+        // 原实现借 asio steady_timer::wait() 当 sleep 用 —— 语义等价但误导
+        // (ioContext_ 从未 run(), timer.wait() 本就是同步阻塞), 改为直白实现
+        std::this_thread::sleep_for(std::chrono::milliseconds(ms));
     }
 
     std::atomic<bool>                     running_;
@@ -1577,7 +1577,6 @@ private:
     std::vector<TextSelectionListener>    listeners_;
     volatile LONG                         refCount_;
     std::string                           pendingUiaText_;
-    asio::io_context                      ioContext_;
 };
 
 #else

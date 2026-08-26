@@ -5,6 +5,8 @@
 // 直测插件同一实现 (execute_command_impl.h), 保证插件行为与测试覆盖一致
 #include "execute_command_impl.h"
 #include "agentxx/util/util.h"
+#include "asio/co_spawn.hpp"
+#include "asio/detached.hpp"
 #include "asio/dispatch.hpp"
 #include "asio/steady_timer.hpp"
 #include "asio/use_awaitable.hpp"
@@ -92,11 +94,21 @@ struct ExecuteBashCommandTool {
     }
 
     asio::awaitable<std::string> execute_async(const neograph::json& args) const {
+#if defined(BOOST_PROCESS_V2_PROCESS_HPP)
+        // poll 寄生驱动协程版执行体 (与插件注册路径同一实现)
+        co_return co_await agentxx_execmd_plugin::bashExecuteAsync(
+            args,
+            testResolvedWorkDir(ctx),
+            /*isCancelled=*/nullptr
+        );
+#else
+        // popen 回退 (阻塞实现, 测试协程内直调等价于原同步语义)
         co_return agentxx_execmd_plugin::bashExecute(
             args,
             testResolvedWorkDir(ctx),
             /*isCancelled=*/nullptr
         );
+#endif
     }
 };
 
@@ -114,11 +126,19 @@ struct ExecuteWindowsCommandTool {
     }
 
     asio::awaitable<std::string> execute_async(const neograph::json& args) const {
+#if defined(BOOST_PROCESS_V2_PROCESS_HPP)
+        co_return co_await agentxx_execmd_plugin::windowsExecuteAsync(
+            args,
+            testResolvedWorkDir(ctx),
+            /*isCancelled=*/nullptr
+        );
+#else
         co_return agentxx_execmd_plugin::windowsExecute(
             args,
             testResolvedWorkDir(ctx),
             /*isCancelled=*/nullptr
         );
+#endif
     }
 };
 
@@ -693,6 +713,89 @@ asio::awaitable<void>
     co_return;
 }
 
+#if defined(BOOST_PROCESS_V2_PROCESS_HPP)
+/// poll 寄生驱动并发性: 两条 sleep 命令并行执行总耗时 ≈ 单条 (而非串行 2 倍)
+/// - 寄生 loop 上两个子进程协程交错等待就绪事件, 验证不再"每命令独占线程"
+asio::awaitable<void>
+    test_command_concurrent_commands(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+    auto tool = agentxx::tools::ExecuteBashCommandTool{agentContext};
+    auto args = neograph::json{
+        {"command", "sleep 1 && echo concurrent_done"},
+        {"timeout", 10                               },
+    };
+    auto              ex   = co_await asio::this_coro::executor;
+    std::atomic<int>  done{0};
+    std::string       r1, r2;
+    auto              start = std::chrono::steady_clock::now();
+    asio::co_spawn(
+        ex,
+        [&]() -> asio::awaitable<void> {
+            r1 = co_await tool.execute_async(args);
+            done.fetch_add(1, std::memory_order_release);
+        },
+        asio::detached
+    );
+    asio::co_spawn(
+        ex,
+        [&]() -> asio::awaitable<void> {
+            r2 = co_await tool.execute_async(args);
+            done.fetch_add(1, std::memory_order_release);
+        },
+        asio::detached
+    );
+    while (done.load(std::memory_order_acquire) < 2) {
+        asio::steady_timer t(ex);
+        t.expires_after(std::chrono::milliseconds(20));
+        co_await t.async_wait(asio::as_tuple(asio::use_awaitable));
+    }
+    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                       std::chrono::steady_clock::now() - start
+    )
+                       .count();
+    XX_TEST_EXPECT_TRUE(r1.find("concurrent_done") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(r2.find("concurrent_done") != std::string::npos);
+    // 并行 ≈1s; 串行 (每命令独占驱动) ≥2s。留 800ms 调度余量防 CI 抖动误判
+    XX_TEST_EXPECT_TRUE(elapsed < 1800);
+    TEST_INFO << "two concurrent sleep-1 commands finished in " << elapsed << "ms" << std::endl;
+    co_return;
+}
+
+/// 会话取消及时性: isCancelled 恒真 → watcher 20ms 轮询到后整组 kill 子进程,
+/// 工具应秒级返回而非等满 timeout (寄生驱动下取消传播路径验证)
+/// - 环境门控: 依赖 killpg 整组终止生效; WSL 下与 timeout_triggers 同源受限
+///   (基线即失败, 见 test_linux_timeout_kills_descendants 注释), 门控跳过
+asio::awaitable<void>
+    test_command_cancel_promptly(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+#if XX_IS_LINUX_D
+    if (agentxx::util::isRunningInWSL()) {
+        TEST_INFO << "skip cancel-promptly assert on WSL (process-group kill "
+                     "limited, same as timeout_triggers baseline)"
+                  << std::endl;
+        co_return;
+    }
+#endif
+    auto args = neograph::json{
+        {"command", "sleep 30"},
+        {"timeout", 60        },
+    };
+    auto start   = std::chrono::steady_clock::now();
+    auto result  = co_await agentxx_execmd_plugin::bashExecuteAsync(
+        args,
+        agentxx::tools::testResolvedWorkDir(agentContext),
+        /*isCancelled=*/[]() { return true; }
+    );
+    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                       std::chrono::steady_clock::now() - start
+    )
+                       .count();
+    // watcher 20ms 轮询 + kill 后主工作收尾, 应远小于 sleep 的 30s
+    XX_TEST_EXPECT_TRUE(elapsed < 10000);
+    XX_TEST_EXPECT_TRUE(result.find("ExitCode") != std::string::npos);
+    TEST_INFO << "cancelled sleep-30 command returned in " << elapsed << "ms" << std::endl;
+    co_return;
+}
+#endif // BOOST_PROCESS_V2_PROCESS_HPP
+
 asio::awaitable<TestResult>
     run_command_tools_tests(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     g_cmd_passed = 0;
@@ -727,6 +830,11 @@ asio::awaitable<TestResult>
     co_await run(test_linux_nonzero_exit);
     co_await run(test_linux_special_chars);
     co_await run(test_linux_long_output);
+#if defined(BOOST_PROCESS_V2_PROCESS_HPP)
+    // poll 寄生驱动新增语义验证 (并发不串行阻塞 + 取消及时传播)
+    co_await run(test_command_concurrent_commands);
+    co_await run(test_command_cancel_promptly);
+#endif
 #endif
 
 #if XX_IS_WINDOWS_D

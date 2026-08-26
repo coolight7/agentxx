@@ -3,9 +3,14 @@
 //     agentxx_web_search / agentxx_web_fetch / agentxx_web_fetch_markdown
 // - 头文件-only: 插件入口与测试共同包含, 保证插件行为与测试覆盖一致
 // - 依赖: agentxx_util (HttpClient / 字符串编码转换)
-// - 同步封装: 插件 execute 回调为同步 C 回调 (运行在宿主线程池), HttpClient
-//   为协程接口, 用局部 io_context 驱动至完成 (与 agentxx_system_monitor 的
-//   querySync 同模式); 宿主已把回调卸载到线程池, 阻塞调用方线程安全
+// - 统一异步操作模型 (poll 寄生驱动): 执行体为协程 (*ExecuteAsync), 在插件
+//   实例的 PollLoop (无线程寄生事件循环) 上 spawn, 由宿主 io 线程经 pollOnce
+//   非阻塞步进 —— 与内置工具同线程交错执行; HttpClient 为协程接口直接
+//   co_await, 不再经局部 io_context 同步驱动 (原 runSync 模式已移除)
+// - 取消语义: 协程内阶段边界轮询 cancel_flag (多请求路径的请求间生效);
+//   单请求中断依赖 chunk 超时 (HttpClient 暂未暴露外部 cancellation slot)
+// - html→markdown 转换 (cmark-gfm) 为同步 CPU 段, 典型页面 <10ms; 超大页面
+//   可能触发宿主看门狗告警 (>100ms WARN), 属可接受范围 (与原内置工具一致)
 // - 模型搜索经 OpenAI 兼容 chat/completions 非流式请求实现 (原 lib 版本走
 //   OpenAIProvider, 行为一致: system+user 两条消息, temperature=0,
 //   取回 choices[0].message.content 文本)
@@ -13,9 +18,7 @@
 
 #include "agentxx/util/http_client.h"
 #include "agentxx/util/string_util.h"
-#include "asio/co_spawn.hpp"
-#include "asio/detached.hpp"
-#include "asio/io_context.hpp"
+#include "asio/awaitable.hpp"
 #include <charconv>
 #include <chrono>
 #include <expected>
@@ -130,23 +133,6 @@ inline agentxx::util::HttpClient::RequestConfig
     return config;
 }
 
-/// 局部 io_context 同步驱动协程 (阻塞调用线程至完成; 仅在宿主线程池内调用)
-template<typename T>
-inline T runSync(asio::awaitable<T> work) {
-    asio::io_context io;
-    T                out{};
-    // awaitable 为 move-only: 必须 move 捕获并 co_await 右值 (不可拷贝)
-    asio::co_spawn(
-        io,
-        [&out, w = std::move(work)]() mutable -> asio::awaitable<void> {
-            out = co_await std::move(w);
-        },
-        asio::detached
-    );
-    io.run();
-    return out;
-}
-
 } // namespace detail
 
 // =====================================================================
@@ -156,24 +142,24 @@ inline T runSync(asio::awaitable<T> work) {
 // =====================================================================
 
 /// agentxx_web_fetch 执行体 (原 WebFetchUrlTool::execute_async)
-inline std::string webFetchExecute(const neograph::json& arguments) {
+inline asio::awaitable<std::string> webFetchExecuteAsync(const neograph::json& arguments) {
     auto url = arguments.value("url", std::string{});
     if (url.empty()) {
-        return R"({"error":"Arg `url` is empty"})";
+        co_return R"({"error":"Arg `url` is empty"})";
     }
 
     // 统一的 timeout / header 参数: 支持自定义请求头与请求超时
     const auto headers = detail::parseHeaderArg(arguments);
     const int  timeout = detail::parseTimeoutArg(arguments, 30);
 
-    auto resp = detail::runSync(agentxx::util::HttpClient::getAsync(
+    auto resp = co_await agentxx::util::HttpClient::getAsync(
         url,
         headers,
         detail::makeConfig(timeout, std::chrono::seconds{30})
-    ));
+    );
     if (resp.has_value()) {
         if (false == agentxx::util::HttpClient::respIsSucc(resp.value())) {
-            return fmt::format(
+            co_return fmt::format(
                 R"({{"error":"web_fetch_url failed, status {}, error: {}"}})",
                 resp.value().status,
                 resp.error_or("[unknown]")
@@ -182,52 +168,52 @@ inline std::string webFetchExecute(const neograph::json& arguments) {
 
         auto& data = resp.value().body;
         if (data.empty()) {
-            return R"({"error": "Http GET request Success, but got empty body."})";
+            co_return R"({"error": "Http GET request Success, but got empty body."})";
         }
         if (agentxx::util::autoConvertToUtf8(data)) {
-            return data;
+            co_return data;
         }
-        return data;
+        co_return data;
     }
     throw std::runtime_error(resp.error_or("[unknown]"));
 }
 
 /// agentxx_web_fetch_markdown 执行体 (原 WebFetchUrlMarkdownTool::execute_async)
-inline std::string webFetchMarkdownExecute(const neograph::json& arguments) {
+inline asio::awaitable<std::string> webFetchMarkdownExecuteAsync(const neograph::json& arguments) {
     std::string url = arguments.value("url", std::string{});
     if (url.empty()) {
-        return R"({"error":"Arg `url` is empty"})";
+        co_return R"({"error":"Arg `url` is empty"})";
     }
 
     // 统一的 timeout / header 参数: 支持自定义请求头与请求超时
     const auto headers = detail::parseHeaderArg(arguments);
     const int  timeout = detail::parseTimeoutArg(arguments, 15);
 
-    auto resp = detail::runSync(agentxx::util::HttpClient::fetchMarkdown(
+    auto resp = co_await agentxx::util::HttpClient::fetchMarkdown(
         url,
         headers,
         detail::makeConfig(timeout, std::chrono::seconds{15})
-    ));
+    );
     if (resp.has_value()) {
         auto& data = resp.value();
         if (data.empty()) {
-            return R"({"error": "Request Success, but got empty result."})";
+            co_return R"({"error": "Request Success, but got empty result."})";
         }
-        return data;
+        co_return data;
     }
     throw std::runtime_error(resp.error_or("[unknown]"));
 }
 
 /// agentxx_web_search 执行体 —— API URL 路径 (原 WebSearchTool::execute_async)
 /// - searchApiUrl 含 `{}` 占位符 (fmt::runtime), URL 编码后的 query 填入
-inline std::string webSearchExecute(
+inline asio::awaitable<std::string> webSearchExecuteAsync(
     const neograph::json& arguments,
     std::string_view      searchApiUrl,
     bool                  convertHtml2markdown
 ) {
     std::string query = arguments.value("query", std::string{});
     if (query.empty()) {
-        return R"({"error":"Arg `query` is empty"})";
+        co_return R"({"error":"Arg `query` is empty"})";
     }
     auto search_url
         = fmt::format(fmt::runtime(searchApiUrl), agentxx::util::HttpClient::urlEncode(query));
@@ -240,27 +226,27 @@ inline std::string webSearchExecute(
     std::optional<std::string> out_resp_err;
     if (convertHtml2markdown) {
         // 转换 HTML 结果为 Markdown
-        auto resp    = detail::runSync(agentxx::util::HttpClient::fetchMarkdown(search_url, headers, config));
+        auto resp    = co_await agentxx::util::HttpClient::fetchMarkdown(search_url, headers, config);
         out_resp_err = resp.error_or("unknown");
         if (resp.has_value()) {
             auto& data = resp.value();
             if (data.empty()) {
-                return R"({"error": "Empty search result."})";
+                co_return R"({"error": "Empty search result."})";
             }
-            return data;
+            co_return data;
         }
     } else {
         // 返回原始响应体
-        auto resp    = detail::runSync(agentxx::util::HttpClient::getAsync(search_url, headers, config));
+        auto resp    = co_await agentxx::util::HttpClient::getAsync(search_url, headers, config);
         out_resp_err = resp.error_or("unknown");
         if (resp.has_value()) {
             auto& respVal = resp.value();
             if (agentxx::util::HttpClient::respIsSucc(respVal)) {
                 auto& data = respVal.body;
                 if (data.empty()) {
-                    return R"({"error": "Empty search result."})";
+                    co_return R"({"error": "Empty search result."})";
                 }
-                return data;
+                co_return data;
             }
             // 请求成功但返回非 2xx (如 429/403/500): 拼接状态码与错误响应体
             // (resp.error_or 在有值时返回默认值 "unknown", 因此需手动构造错误信息)
@@ -277,11 +263,13 @@ inline std::string webSearchExecute(
 
 /// agentxx_web_search 执行体 —— 模型搜索路径 (原 ModelWebSearchTool::execute_async)
 /// - 经 OpenAI 兼容 chat/completions 非流式请求实现 (见文件头注释)
-inline std::string
-    modelWebSearchExecute(const neograph::json& arguments, const ModelSearchConfig& modelCfg) {
+inline asio::awaitable<std::string> modelWebSearchExecuteAsync(
+    const neograph::json&      arguments,
+    const ModelSearchConfig&   modelCfg
+) {
     std::string query = arguments.value("query", std::string{});
     if (query.empty()) {
-        return R"({"error":"Arg `query` is empty"})";
+        co_return R"({"error":"Arg `query` is empty"})";
     }
 
     // 统一的 timeout / header 参数: 复制一份模型配置并应用覆盖 (超时 + 自定义请求头)
@@ -328,12 +316,12 @@ inline std::string
     auto defaultSec = cfg.readChunkTimeoutSeconds > 0 ? cfg.readChunkTimeoutSeconds : 100;
     auto config     = detail::makeConfig(cfg.readChunkTimeoutSeconds, std::chrono::seconds{defaultSec});
 
-    auto resp = detail::runSync(agentxx::util::HttpClient::postAsync(
+    auto resp = co_await agentxx::util::HttpClient::postAsync(
         fmt::format("{}/chat/completions", cfg.baseUrl),
         body,
         extraHeaders,
         config
-    ));
+    );
     if (!resp.has_value()) {
         throw std::runtime_error(resp.error_or("[unknown]"));
     }
@@ -346,9 +334,9 @@ inline std::string
         auto parsed  = neograph::json::parse(respVal.body);
         auto content = parsed["choices"][0]["message"]["content"].get<std::string>();
         if (content.empty()) {
-            return R"({"error": "Model web search returned empty result."})";
+            co_return R"({"error": "Model web search returned empty result."})";
         }
-        return content;
+        co_return content;
     } catch (const std::exception&) {
         throw std::runtime_error("Model web search: unexpected response format");
     }

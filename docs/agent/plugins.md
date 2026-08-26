@@ -250,7 +250,8 @@ typedef struct AgentxxToolSpec {
 - start/poll/cancel 全部在【宿主 io 线程】被驱动调用 (非阻塞快速返回约定);
   AgentxxOpNotify.done 可从插件任意线程回调 (宿主投递回 io 唤醒等待)
 - 快同步工具在 start 内直接算完并 notify → 返回 NULL (内联完成);
-  慢同步经 `sched->offload` 委托阻塞池; 真实并发 IO 才需自备 reactor
+  慢同步经 `sched->offload` 委托阻塞池; 真实并发 IO 经 poll 寄生驱动
+  (`plugin_poll_loop.h`) 在宿主 io 线程交错执行 (见 4.2.3)
 - 会话取消/超时 → 宿主调 execute_cancel + 后台收割协程推进至真正终结
   (inflight 保活转移, 卸载安全语义不变)
 
@@ -369,6 +370,39 @@ api_version 不匹配的插件直接拒绝加载 (仅拒绝不崩溃), **无历�
   `agentxx_register_inline_tool` (快同步内联完成) / 
   `agentxx_register_sync_tool` (慢同步委托 offload, execute 多收一个
   cancel_flag 形参) / `agentxx_register_sync_hook`; 传统同步函数零改动迁移。
+- **poll 寄生驱动** (`plugin_poll_loop.h`, C++ header-only): 见 4.2.3 ——
+  协程异步插件的第三姿势, 与内置工具同线程交错执行。
+
+#### 4.2.3 poll 寄生驱动 (协程异步插件, 2026-08)
+
+> 目标: 插件用任意**可步进(embed)**的异步框架编写协程, 经三件套嫁接到宿主
+> io 线程协作式交错执行 —— 与内置工具完全同线程同语义, 零额外线程、零数据
+> 竞争。`example_sleep` 即该模式的纯状态机特例; 内置 execute_command /
+> websearch 插件为其 asio 实现参考。
+
+- **机制**: 插件实例持有无线程寄生事件循环 `PollLoop` (`asio::io_context`,
+  不 run() 不开线程); start 把工作协程 co_spawn 到其上立即返回; poll 调
+  `io.poll()` 非阻塞推进一步 (执行全部就绪 handler), 按返回值建议宿主让出
+  (0 = 本轮有 handler 执行) 或小睡 (>=1 ms); cancel 置 Job.cancelFlag 由
+  协程在阶段边界轮询退出; done 在宿主 io 线程的 poll 推进内上报。
+- **事件不丢失**: Linux epoll level-triggered / Windows IOCP 完成包排队,
+  两次 poll 之间到达的事件下次 pollOnce 必然取得; 定时器唤醒延迟上界 =
+  idleHintMs (默认 15ms, 每次 poll 为微秒级非阻塞取包不忙等)。
+- **硬性约束**: 工作协程每次就绪段 (两次挂起间的同步代码) 必须 ~100ms 内
+  回到挂起点 (宿主看门狗阈值), 协程体内禁止阻塞调用; CPU/阻塞密集段应切片
+  或改走 offload (B 型混合)。协程内调用宿主 io 线程约束接口表 (get_work_dir /
+  is_cancelled 等) 安全 —— 宿主 ioCallSync 检测到已在 io 线程时内联直执行。
+- **适用判据 (三型选型)**:
+  | 操作性质 | 姿势 |
+  |---|---|
+  | A 快同步 <~1ms (JSON/内存/时间) | inline 垫片 |
+  | B 阻塞库调用 (磁盘遍历/sqlite/cmark/CPU 密集), 无异步 API | sync 垫片 (offload 池) |
+  | C 真异步 IO (socket/子进程管道) | poll 寄生驱动 |
+  | 不可步进的异步框架 (自带线程 runtime, 如 Go/阻塞 SDK) | 自有线程 + 手写三件套 notify (JS 引擎模式) 或 offload |
+- **多实例契约**: PollLoop 为 PluginCtx 成员随实例生死; 宿主保证 destroy 前
+  inflight==0 → 析构时无在途工作协程; 协程帧持 io shared_ptr 兜底析构竞态。
+
+
 - **线程契约**: start/poll/cancel 仅 io 线程调用 (单次 ≤~1ms, 宿主看门狗
   >100ms WARN); notify/HostOp 方法任意线程可调; 阻塞便捷版 call_tool/
   invoke_capability 禁止 io 线程调用。
@@ -1287,6 +1321,7 @@ plugins/
 | 接口协商二期+三期 (2026-08, 本轮) | **位图方案整体移除** (AGENTXX_UI_CAP_*/IFACE_*/ui_caps/min_ui_caps); client_plugin_api v4 + plugin_api v9: `has_interface` 字符串判定; **COM 式扩展表** `query_extension` (核心契约冻结, 新增能力走独立 version 扩展表); 展示/命令/toast 物理迁至 "client.ui" 扩展表 (`AgentxxClientExtUiVtable`); WireHelloAck.plugins 结构化 [{name,version,interfaces}]; server_plugins 约定事件同步升级; get_client_state 的 agentPlugins 为结构化对象数组; client→server 上行约定事件 `client_interfaces` (**1:N 不存储**, 仅转发 agent 总线, 插件订阅 `agentxx_host.client_interfaces` 自适应); CLI/TUI/测试适配器与全部插件迁移完成 | ✅ 已实现 |
 | COM 全量接口表重构 (2026-08) | **plugin_api/client_plugin_api 版本重置为 1 (不兼容变更, 抛弃历史兼容)**: 核心 vtable 收缩为 `alloc/free/strdup/query_interface` 四成员并契约冻结; agent 侧拆出 12 张标准接口表 (`agentxx.agent.tools/hooks/events/capabilities/scheduler/session/plugins/config/prompt/json/log/resources`), client 侧拆出 7 张 (`agentxx.client.ui/events/session/wire/self/json/log`), 各表首字段 version 独立演进; **内置接口名统一加保留前缀 `agentxx.`** (第三方私有接口用 `<vendor>.<name>`, 不得占用该前缀; 清单前缀过滤/入口符号推导同步改为 `agentxx.agent.*`/`agentxx.client.*` 规则); 新增 `plugin_iface_helper.h` (AgentIfaces/ClientIfaces 一次查询聚合); 全部插件与测试迁移完成; 旧版插件经 api_version 门禁直接拒绝 | ✅ 已实现 |
 | 统一异步操作模型 (2026-08, 本轮; 不兼容变更) | **工具/钩子/能力方法统一为 start/poll/cancel 异步三件套** (tools/hooks/capabilities/scheduler 表 version → 2): 宿主新增 op_driver (`op_driver.h`) 在 io 线程驱动插件操作并与内置工具协程同线程交错执行 —— 插件不再被线程池黑盒阻塞, 访问会话数据单线程安全; 新增 `call_tool_async`/`invoke_capability_async` 返回 `AgentxxHostOp` 句柄 (宿主后台驱动 + 任意线程轮询), 阻塞便捷版 io 线程 fail-fast; scheduler.offload 增加**调用方持有 cancel_flag** 形参; 纯 C 同步垫片 `plugin_tool_sync.h` (inline/sync 工具 + sync 钩子一行注册); JS 引擎移除 postSync 阻塞桥 (工具 execute 与能力 load 改为 JS 线程任务 + 通知器上报, 根除 io↔引擎互等死锁面); 内置插件全部迁移 (快同步内联 / 慢同步 offload 垫片 / example_sleep 自管异步演示); 会话取消联动 `execute_cancel`; 宿主看门狗 (>100ms WARN) 监控 io 线程被插件卡住; 测试新增 HostOp 语义/poll 推进/取消联动用例 (plugins 模块 159 断言) | ✅ 已实现 |
+| poll 寄生驱动 (2026-08, 本轮) | **协程异步插件第三姿势** `plugin_poll_loop.h`: 插件自有无线程寄生 io_context 由宿主 io 线程经 pollOnce 非阻塞步进, 协程与内置工具完全同线程交错 —— execute_command (bash/windows 子进程管道) / websearch (3 个 HTTP 工具) 自"局部 io_context 同步驱动 + offload 占线"迁移至此 (并发命令共享寄生 loop 不再每命令占死一个阻塞池线程至超时; 删除 runSync/局部 ioctx 模式); system_monitor 能力 system_usage 自"io 线程内联 ~100ms 采样"(违反快速返回契约) 改为寄生三件套; text_selection_monitor delayMs 去 asio 误用; rag_search 维持 sync 垫片 (检索为 CPU 密集 B 型); 测试新增并发不串行/取消及时断言 | ✅ 已实现 |
 | 三期 (生态) | Wire 远程热管理 / TUI 插件管理面板 / skippedPlugins 展示层接入 / 签名校验 | ⏳ 待实现 |
 
 ### 13.2 与设计原稿的偏差 (实现为准)

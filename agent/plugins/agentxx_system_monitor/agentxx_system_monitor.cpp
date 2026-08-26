@@ -19,6 +19,7 @@
 #include "agentxx/plugin/client_plugin_api.h"
 #include "agentxx/plugin/plugin_guard.h"
 #include "agentxx/plugin/plugin_iface_helper.h"
+#include "agentxx/plugin/plugin_poll_loop.h"
 #include "agentxx/util/string_util.h"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
@@ -82,6 +83,10 @@ struct PluginCtx {
     bool collecting = false;
     /// tick 计数 (io 线程独占; 每 kUsageIntervalSec 秒采一次)
     int tick = 0;
+    /// poll 寄生驱动事件循环 (能力方法 agentxx.system_usage 的采样协程在其
+    /// io_context 上 spawn, 由宿主 io 线程经 pollOnce 步进 —— 100ms 采样
+    /// 定时器等待不再阻塞宿主 io 线程, 也不占阻塞池线程)
+    agentxx::plugin::PollLoop pollLoop;
     /// XX_LOG* 宏路由 Sink 闭包存储 (create 时装配并发布到 g_log_sink;
     /// destroy 时若全局指针仍指向此处则清除 —— 见 system_monitor_plugin.h 注释)
     agentxx_system_monitor_plugin::PluginLogSink log_sink;
@@ -332,11 +337,32 @@ static char* getSystemCoreInfoExecute(
 // 能力: agentxx.system_usage (方法 query)
 // - 数据源: 周期采集线程与工具 agentxx_get_system_core_info 均基于
 //   CpuGpuMonitor::query 采样; 本能力供测试/其他插件按需查询
-//   (统一异步操作模型: 内联完成型 —— 采样 ~100ms 在 io 线程直接执行,
-//    调用方经 invoke_capability_async 轮询或阻塞版自担阻塞)
+// - 统一异步操作模型 (poll 寄生驱动): 采样协程在实例 PollLoop 上 spawn,
+//   宿主 io 线程经 pollOnce 非阻塞步进 —— 100ms 采样定时器等待变为宿主
+//   hint 小睡, 不阻塞宿主 io 线程也不占阻塞池线程 (原"内联完成型"直接在
+//   io 线程 querySync 阻塞 ~100ms 违反快速返回契约, 已修复)
 // - 返回 JSON schema 由本插件定义 (usageToJson)
 // =====================================================================
 
+/// 能力调用 Job (start 分配, 终结释放)
+struct SystemUsageCapJob {
+    AgentxxOpNotify    notify{};
+    const AgentxxHost* host = nullptr;
+    PluginCtx*         self = nullptr;
+};
+
+/// 终结上报 + Job 释放 (恰好一次; payload 经宿主堆分配移交宿主 free)
+static void systemUsageCapFinish(SystemUsageCapJob* job, int status, const std::string& payload) {
+    char* dup = (payload.empty() || !job->host || !job->host->vtable)
+                    ? nullptr
+                    : job->host->vtable->strdup(payload.c_str());
+    if (job->notify.done) {
+        job->notify.done(job->notify.host_ud, status, dup);
+    }
+    delete job;
+}
+
+/// start (io 线程, 快速返回): 采样协程 spawn 到实例寄生 loop 并返回句柄
 static void* systemUsageInvoke(
     void*                   ctx,
     const AgentxxHost*      caller_host,
@@ -345,28 +371,65 @@ static void* systemUsageInvoke(
     const AgentxxOpNotify*  notify,
     char**                  error_out
 ) {
-    auto* self = static_cast<PluginCtx*>(ctx);
     (void)caller_host;
     (void)method;
     (void)args_json;
-    const AgentxxHost* host = self ? self->host : nullptr; ///< 提升至守卫外
-    try {
-        auto  usage   = querySync();
-        auto  json    = usageToJson(*self, usage);
-        char* payload = pluginStrdup(host, json.c_str());
-        notify->done(notify->host_ud, AGENTXX_OP_OK, payload);
-        return nullptr; ///< 内联完成
-    } catch (const std::exception& ex) {
-        if (error_out) {
-            *error_out = pluginStrdup(host, ex.what());
+    (void)error_out;
+    auto* self = static_cast<PluginCtx*>(ctx);
+    // C ABI 边界异常守卫: start 由宿主 io 线程调用, 异常不得外泄
+    // (守卫失败值 nullptr 表示未启动, 宿主按协议失败处理)
+    return agentxx::plugin_guard::guardCall(
+        [self](const char* m) noexcept {
+            pluginLog(self, 4, m ? m : "");
+        },
+        static_cast<void*>(nullptr),
+        [&]() -> void* {
+            if (!self || !notify || !notify->done) {
+                return nullptr;
+            }
+            auto* job   = new SystemUsageCapJob{};
+            job->notify = *notify;
+            job->host   = self->host;
+            job->self   = self;
+            auto ioKeep = self->pollLoop.io; ///< 协程帧持 io 保活引用 (析构竞态兜底)
+            try {
+                asio::co_spawn(
+                    *ioKeep,
+                    [job, ioKeep]() -> asio::awaitable<void> {
+                        int         status = AGENTXX_OP_FAILED;
+                        std::string payload;
+                        try {
+                            agentxx_system_monitor_plugin::CpuGpuMonitor monitor;
+                            auto usage = co_await monitor.query(); ///< 含 100ms 采样定时器
+                            status     = AGENTXX_OP_OK;
+                            payload    = usageToJson(*job->self, usage);
+                        } catch (const std::exception& ex) {
+                            status  = AGENTXX_OP_FAILED;
+                            payload = ex.what();
+                        } catch (...) {
+                            status  = AGENTXX_OP_FAILED;
+                            payload = "unknown error";
+                        }
+                        systemUsageCapFinish(job, status, payload);
+                    },
+                    asio::detached
+                );
+            } catch (...) {
+                // co_spawn 失败 (未入队): 直接失败终结
+                systemUsageCapFinish(job, AGENTXX_OP_FAILED, "system_usage: spawn failed");
+            }
+            return job;
         }
-        return nullptr;
-    } catch (...) {
-        if (error_out) {
-            *error_out = pluginStrdup(host, "unknown error");
-        }
-        return nullptr;
+    );
+}
+
+/// poll (io 线程, 快速返回): 推进一步寄生 loop; 终结由协程 done 上报
+static int systemUsagePoll(void* ctx, void* /*op*/) {
+    auto* self = static_cast<PluginCtx*>(ctx);
+    if (!self) {
+        return AGENTXX_OP_POLL_DONE;
     }
+    return self->pollLoop.pollOnce();
 }
 
 // =====================================================================
@@ -568,8 +631,10 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                     agentxx_system_monitor_plugin::pluginLog(host, logIf, level, msg);
                 }
             );
-            agentxx_system_monitor_plugin::g_log_sink.store(&ctx->log_sink,
-                                                            std::memory_order_release);
+            agentxx_system_monitor_plugin::g_log_sink.store(
+                &ctx->log_sink,
+                std::memory_order_release
+            );
 
             // 默认提示词写入宿主 (从 lib AgentPrompt 剥离迁移; 用户 yaml 覆盖优先)
             ensureToolPromptInHost(*ctx);
@@ -587,15 +652,16 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                 getSystemCoreInfoExecute
             );
 
-            // 2. 能力 agentxx.system_usage (方法 query; 内联完成型;
-            //    ctx 参数传本实例 —— 方法回调经其读本实例宿主分配结果串)
+            // 2. 能力 agentxx.system_usage (方法 query; poll 寄生驱动三件套:
+            //    采样协程在寄生 loop 上 spawn, io 线程零阻塞;
+            //    ctx 参数传本实例 —— 回调经其恢复实例上下文)
             if (!ctx->iface.capabilities || !ctx->iface.capabilities->register_capability_ex
                 || ctx->iface.capabilities->register_capability_ex(
                        host,
                        AGENTXX_SV("agentxx.system_usage"),
                        systemUsageInvoke,
-                       nullptr,
-                       nullptr,
+                       systemUsagePoll,
+                       nullptr, ///< 采样 ~100ms 有界且不可中断, 无协作取消点
                        ctx.get()
                    ) != 0) {
                 pluginLog(
@@ -690,8 +756,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_destroy(void* plugin_ctx) {
             pluginLog(ctx, 2, "agentxx_system_monitor unloaded");
             // 全局宏路由指针仍指向本实例 Sink 时清除 (多实例下可能已指向后装配者)
             const agentxx_system_monitor_plugin::PluginLogSink* expected = &ctx->log_sink;
-            agentxx_system_monitor_plugin::g_log_sink.compare_exchange_strong(expected,
-                                                                              nullptr);
+            agentxx_system_monitor_plugin::g_log_sink.compare_exchange_strong(expected, nullptr);
             delete ctx; // 垫片适配器/storage 为 ctx 成员, 随之释放
         }
     );

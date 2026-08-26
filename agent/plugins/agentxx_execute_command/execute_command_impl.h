@@ -6,11 +6,15 @@
 //   - 会话工作目录/取消令牌经参数注入 (workDir / isCancelled 回调),
 //     由插件入口从宿主接口表取值 (agentxx.agent.config.get_work_dir /
 //     agentxx.agent.cancel.is_cancelled), 便于测试直测纯逻辑
-//   - 协程经局部 io_context 同步驱动 (插件 execute 为同步 C 回调,
-//     运行在宿主线程池, 阻塞调用方线程安全, 与其他内置工具插件同模式)
+//   - 统一异步操作模型 (poll 寄生驱动): 协程版执行体 *ExecuteAsync 在插件
+//     实例的 PollLoop (agentxx.plugin.PollLoop, 无线程寄生事件循环) 上运行,
+//     经三件套嫁接到宿主 io 线程协作式交错执行 —— 与内置工具完全同线程,
+//     并发多条命令共享一个寄生 loop 等就绪事件, 不再每命令占死一个阻塞池
+//     线程至超时 (原局部 io_context + io.run() 同步驱动模式已移除)
+//   - AGENTXX_ENABLE_BOOST_PROCESS 关闭时的 popen 回退为阻塞实现 (*Execute
+//     同步函数), 由入口经 plugin_tool_sync.h 的 sync 垫片注册 (offload 池)
 #pragma once
 
-#include "agentxx/util/async_offload.h"
 #include "agentxx/util/log.h"
 #include "agentxx/util/string_util.h"
 #include "agentxx/util/util.h"
@@ -24,6 +28,7 @@
 #include "asio/readable_pipe.hpp"
 #include "asio/redirect_error.hpp"
 #include "asio/steady_timer.hpp"
+#include "asio/this_coro.hpp"
 #include "asio/use_awaitable.hpp"
 #include <array>
 #include <atomic>
@@ -75,11 +80,12 @@ inline std::string subprocessWorkDir(const std::string& workDir) {
 }
 
 /// 会话取消监听协程体 (与主工作经 awaitable_operators 并行运行):
-/// - 轮询 isCancelled 回调 (宿主会话取消令牌), 取消时终止子进程
+/// - 轮询 isCancelled 回调 (宿主会话取消令牌 + op cancel_flag 双通道),
+///   取消时终止子进程
 /// - 【关键生命周期语义】动作完成后不立即结束, 而是挂起直至被并行组取消:
 ///   || 组合下"任一先完成即整体完成并取消其余", 若本协程在 kill 后立刻返回,
 ///   会在主工作组装结果前把它整体取消 (丢失输出); 挂起让主工作自然收尾,
-///   由主工作完成驱动整体终结 —— 同时保证 io.run() 不会被无限轮询的 watcher
+///   由主工作完成驱动整体终结 —— 同时保证寄生 loop 不会被无限轮询的 watcher
 ///   吊住 (历史 bug: detached watcher + RAII guard 互相死等)
 /// - Linux: 子进程经 setsid 启动 (pgid == pid), `kill(-pid)` 可整组清理
 /// - 注意: watcher 只终止、不调用 async_wait —— boost.process v2 的
@@ -182,162 +188,248 @@ inline WinProcLaunch buildWinProcLaunch(std::string_view command) {
         {"/c", std::string{command}}
     };
 }
+
+/// 三路并行等待 stdout/stderr/退出并组装结果 (bash/windows 两执行体共用):
+/// - mainWork / timeoutGuard / procCancelWatchLoop 三路并行, 只有主工作完成能
+///   终结整体 (后两者动作后挂起, 见 procCancelWatchLoop 注释)
+/// - 返回组装后的结果文本; 组合协程异常原样传播 (调用方 C ABI 边界兜底)
+inline asio::awaitable<std::string> runProcPipeline(
+    boost::process::process&                                              proc,
+    asio::readable_pipe&                                                  outpip,
+    asio::readable_pipe&                                                  errpip,
+    int                                                                   timeout,
+    bool                                                                  all_output,
+    const IsCancelledFn&                                                  isCancelled
+) {
+    std::string              strout, strerr;
+    neograph_asio_error_code errCodeStdOut, errCodeStdErr;
+    // awaitable 为 move-only: 创建后 move 进 && 组合 (不可拷贝)
+    auto readStdOutFuture = asio::async_read(
+        outpip,
+        asio::dynamic_buffer(strout),
+        asio::transfer_all(),
+        asio::redirect_error(asio::use_awaitable, errCodeStdOut)
+    );
+    auto readStdErrFuture = asio::async_read(
+        errpip,
+        asio::dynamic_buffer(strerr),
+        asio::transfer_all(),
+        asio::redirect_error(asio::use_awaitable, errCodeStdErr)
+    );
+
+    std::atomic<bool> timedOut{false};
+    std::string       resultStr;
+    // 主工作: stdout/stderr/退出 三方并发等待后组装结果
+    // (并发等待避免子进程写满 stderr 管道与读 stdout 互等死锁)
+    // 【组合约束】三路并行分支必须同为 awaitable<void> (|| 组合要求分支类型
+    // 一致), 结果经捕获引用写入 resultStr —— 与原实现同款结构
+    auto mainWork = [&]() -> asio::awaitable<void> {
+        using namespace asio::experimental::awaitable_operators;
+        co_await (
+            std::move(readStdOutFuture) && std::move(readStdErrFuture)
+            && proc.async_wait(asio::use_awaitable)
+        );
+        const auto         exitCode = proc.exit_code();
+        std::ostringstream result;
+        if (timedOut.load(std::memory_order_acquire)) {
+            result << detail::makeTimeoutResult(timeout, strout, strerr);
+        } else {
+            result << "[ExitCode]\n" << exitCode << "\n";
+            if (all_output || 0 != exitCode) {
+                // failed
+                if (strout.empty() || agentxx::util::autoConvertToUtf8(strout)) {
+                    result << "[StdOut]\n" << strout << "\n";
+                } else {
+                    result << "[StdOut conversion to utf8 failed, discard]\n";
+                }
+                if (strerr.empty() || agentxx::util::autoConvertToUtf8(strerr)) {
+                    result << "[StdErr]\n" << strerr << "\n";
+                } else {
+                    result << "[StdErr conversion to utf8 failed, discard]\n";
+                }
+            }
+        }
+        resultStr = result.str();
+    };
+    // 超时守护: 到点整组终止 (Linux 连子孙进程一起清理) 并置标记;
+    // 之后挂起直至被并行组取消 —— 由主工作基于 timedOut 组装超时结果。
+    // 【禁止】对已被并行组取消的 async_wait 再补二次等待: bp::v2 的
+    // 退出状态仅投递一次 (SIGCHLD 已被首个 wait 消费), 二次 wait 会
+    // 永久挂起并把整个工具调用吊死 (历史卡死 bug 根因)
+    auto timeoutGuard = [&]() -> asio::awaitable<void> {
+        if (timeout > 0) {
+            asio::steady_timer t(co_await asio::this_coro::executor);
+            t.expires_after(std::chrono::seconds{timeout});
+            auto [ec] = co_await t.async_wait(asio::as_tuple(asio::use_awaitable));
+            if (!ec) {
+                timedOut.store(true, std::memory_order_release);
+                detail::killProcGroup(proc);
+            }
+        }
+        asio::steady_timer idle(co_await asio::this_coro::executor);
+        idle.expires_after(std::chrono::hours(24));
+        co_await idle.async_wait(asio::as_tuple(asio::use_awaitable));
+    };
+
+    // 三路并行: 主工作 / 超时守护 / 会话取消监听。
+    // 后两者动作完成后挂起而非返回 —— || 组合下"任一先完成即整体完成并取消
+    // 其余", 若守护/监听抢先返回会把主工作在结果组装前整体取消; 只有主工作
+    // 完成能终结整体
+    {
+        using namespace asio::experimental::awaitable_operators;
+        co_await (mainWork() || timeoutGuard() || detail::procCancelWatchLoop(proc, isCancelled));
+    }
+    co_return resultStr;
+}
+
 #endif // BOOST_PROCESS_V2_PROCESS_HPP
 
 } // namespace detail
 
+#if defined(BOOST_PROCESS_V2_PROCESS_HPP)
 // =====================================================================
-// 执行体
-// - 返回结果文本; 失败抛出异常 (由 C ABI 边界捕获转 error_out)
+// 执行体 —— 协程版 (poll 寄生驱动路径; BOOST_PROCESS 可用时唯一注册路径)
+// - 在插件实例 PollLoop 的 io_context 上 spawn, 挂起点让出给宿主 io 线程;
+//   返回结果文本, 失败抛出异常 (由 C ABI 边界/适配器捕获转 error_out)
 // =====================================================================
 
 /// agentxx_execute_bash_command 执行体 (原 ExecuteBashCommandTool::execute_async)
-inline std::string bashExecute(
+inline asio::awaitable<std::string> bashExecuteAsync(
     const neograph::json& arguments,
     const std::string&    workDir,
     const IsCancelledFn&  isCancelled = nullptr
 ) {
     auto command = arguments.value("command", std::string{});
     if (command.empty()) {
-        return R"({"error":"Arg `command` is empty"})";
+        co_return R"({"error":"Arg `command` is empty"})";
     }
     // [all_output] 为false时，仅执行失败才返回 stdout和stderr
     auto all_output = arguments.value("all_output", true);
     auto timeout    = arguments.value("timeout", 60);
 
-#if defined(BOOST_PROCESS_V2_PROCESS_HPP)
-    {
-        asio::io_context    io;
-        asio::readable_pipe outpip{io}, errpip{io};
-        // 创建管道，用于接收子进程的输出
-        std::unordered_map<boost::process::environment::key, boost::process::environment::value>
-            procEnv;
-        for (const auto& kv : boost::process::environment::current()) {
-            if (kv.key().string() != "SECRET") {
-                procEnv[kv.key()] = kv.value();
-            }
+    // 寄生驱动: 管道/进程绑定到当前协程的 executor (插件实例 PollLoop),
+    // 由宿主 io 线程经 pollOnce 非阻塞步进 (不再自建 io_context + run())
+    auto                ex      = co_await asio::this_coro::executor;
+    asio::readable_pipe outpip{ex}, errpip{ex};
+    // 创建管道，用于接收子进程的输出
+    std::unordered_map<boost::process::environment::key, boost::process::environment::value>
+        procEnv;
+    for (const auto& kv : boost::process::environment::current()) {
+        if (kv.key().string() != "SECRET") {
+            procEnv[kv.key()] = kv.value();
         }
+    }
 
 #if XX_IS_WIN_D
-        auto procExe  = boost::process::environment::find_executable("bash");
-        auto procArgs = std::vector<std::string>{"-c", command};
+    auto procExe  = boost::process::environment::find_executable("bash");
+    auto procArgs = std::vector<std::string>{"-c", command};
 #else
-        // setsid 使子进程成为新会话/进程组 leader (pgid == pid),
-        // 超时时可经 killpg 整组清理 bash 派生的子孙进程, 避免孤儿进程持有管道
-        auto procExe  = boost::process::environment::find_executable("setsid");
-        auto procArgs = std::vector<std::string>{"bash", "-c", command};
+    // setsid 使子进程成为新会话/进程组 leader (pgid == pid),
+    // 超时时可经 killpg 整组清理 bash 派生的子孙进程, 避免孤儿进程持有管道
+    auto procExe  = boost::process::environment::find_executable("setsid");
+    auto procArgs = std::vector<std::string>{"bash", "-c", command};
 #endif
-        auto proc = boost::process::process{
-            io,
-            procExe,
-            procArgs,
-            boost::process::process_environment(procEnv),
- // 子进程初始工作目录: 会话工作目录 (未配置时显式取进程 cwd, 行为等价继承)
-            boost::process::process_start_dir{detail::subprocessWorkDir(workDir)},
- // stdin 重定向到 null 设备 (Windows: NUL / POSIX: /dev/null),
-  // 避免子进程 (如交互式命令) 抢读 agent 进程的终端输入
-            boost::process::process_stdio{.in = nullptr, .out = outpip, .err = errpip},
-        };
+    auto proc = boost::process::process{
+        ex,
+        procExe,
+        procArgs,
+        boost::process::process_environment(procEnv),
+        // 子进程初始工作目录: 会话工作目录 (未配置时显式取进程 cwd, 行为等价继承)
+        boost::process::process_start_dir{detail::subprocessWorkDir(workDir)},
+        // stdin 重定向到 null 设备 (Windows: NUL / POSIX: /dev/null),
+        // 避免子进程 (如交互式命令) 抢读 agent 进程的终端输入
+        boost::process::process_stdio{.in = nullptr, .out = outpip, .err = errpip},
+    };
 
-        // 会话取消监听: 与主工作并行运行 (见下方 co_spawn 内说明)
+    // 会话取消监听: 与主工作并行运行 (见 detail::runProcPipeline 说明)
+    co_return co_await detail::runProcPipeline(
+        proc,
+        outpip,
+        errpip,
+        timeout,
+        all_output,
+        isCancelled
+    );
+}
 
-        std::string              strout, strerr;
-        neograph_asio_error_code errCodeStdOut, errCodeStdErr;
-        auto                     readStdOutFuture = asio::async_read(
-            outpip,
-            asio::dynamic_buffer(strout),
-            asio::transfer_all(),
-            asio::redirect_error(asio::use_awaitable, errCodeStdOut)
-        );
-        auto readStdErrFuture = asio::async_read(
-            errpip,
-            asio::dynamic_buffer(strerr),
-            asio::transfer_all(),
-            asio::redirect_error(asio::use_awaitable, errCodeStdErr)
-        );
-
-        std::string        resultStr;
-        std::exception_ptr ep{};
-        asio::co_spawn(
-            io,
-            [&]() -> asio::awaitable<void> {
-                std::atomic<bool> timedOut{false};
-                // 主工作: stdout/stderr/退出 三方并发等待后组装结果
-                // (并发等待避免子进程写满 stderr 管道与读 stdout 互等死锁)
-                auto mainWork = [&]() -> asio::awaitable<void> {
-                    using namespace asio::experimental::awaitable_operators;
-                    co_await (
-                        std::move(readStdOutFuture) && std::move(readStdErrFuture)
-                        && proc.async_wait(asio::use_awaitable)
-                    );
-                    const auto         exitCode = proc.exit_code();
-                    std::ostringstream result;
-                    if (timedOut.load(std::memory_order_acquire)) {
-                        result << detail::makeTimeoutResult(timeout, strout, strerr);
-                    } else {
-                        result << "[ExitCode]\n" << exitCode << "\n";
-                        if (all_output || 0 != exitCode) {
-                            // failed
-                            if (strout.empty() || agentxx::util::autoConvertToUtf8(strout)) {
-                                result << "[StdOut]\n" << strout << "\n";
-                            } else {
-                                result << "[StdOut conversion to utf8 failed, discard]\n";
-                            }
-                            if (strerr.empty() || agentxx::util::autoConvertToUtf8(strerr)) {
-                                result << "[StdErr]\n" << strerr << "\n";
-                            } else {
-                                result << "[StdErr conversion to utf8 failed, discard]\n";
-                            }
-                        }
-                    }
-                    resultStr = result.str();
-                };
-                // 超时守护: 到点整组终止 (Linux 连子孙进程一起清理) 并置标记;
-                // 之后挂起直至被并行组取消 —— 由主工作基于 timedOut 组装超时结果。
-                // 【禁止】对已被并行组取消的 async_wait 再补二次等待: bp::v2 的
-                // 退出状态仅投递一次 (SIGCHLD 已被首个 wait 消费), 二次 wait 会
-                // 永久挂起并把 io.run()/整个工具调用吊死 (本次卡死 bug 根因)
-                auto timeoutGuard = [&]() -> asio::awaitable<void> {
-                    if (timeout > 0) {
-                        asio::steady_timer t(co_await asio::this_coro::executor);
-                        t.expires_after(std::chrono::seconds{timeout});
-                        auto [ec] = co_await t.async_wait(asio::as_tuple(asio::use_awaitable));
-                        if (!ec) {
-                            timedOut.store(true, std::memory_order_release);
-                            detail::killProcGroup(proc);
-                        }
-                    }
-                    asio::steady_timer idle(co_await asio::this_coro::executor);
-                    idle.expires_after(std::chrono::hours(24));
-                    co_await idle.async_wait(asio::as_tuple(asio::use_awaitable));
-                };
-                try {
-                    using namespace asio::experimental::awaitable_operators;
-                    // 三路并行: 主工作 / 超时守护 / 会话取消监听。
-                    // 后两者动作完成后挂起而非返回 —— || 组合下"任一先完成即
-                    // 整体完成并取消其余", 若守护/监听抢先返回会把主工作在结果
-                    // 组装前整体取消; 只有主工作完成能终结整体, 完成即取消其余,
-                    // io.run() 随之自然返回
-                    co_await (
-                        mainWork() || timeoutGuard()
-                        || detail::procCancelWatchLoop(proc, isCancelled)
-                    );
-                } catch (...) {
-                    ep = std::current_exception();
-                }
-            },
-            asio::detached
-        );
-        io.run();
-        if (ep) {
-            std::rethrow_exception(ep);
-        }
-        return resultStr;
+/// agentxx_execute_windows_command 执行体 (原 ExecuteWindowsCommandTool::execute_async)
+inline asio::awaitable<std::string> windowsExecuteAsync(
+    const neograph::json& arguments,
+    const std::string&    workDir,
+    const IsCancelledFn&  isCancelled = nullptr
+) {
+    auto command = arguments.value("command", std::string{});
+    if (command.empty()) {
+        co_return R"({"error":"Arg `command` is empty"})";
     }
+    auto all_output = arguments.value("all_output", true);
+    auto timeout    = arguments.value("timeout", 60);
+
+    auto                ex      = co_await asio::this_coro::executor;
+    asio::readable_pipe outpip{ex}, errpip{ex};
+    std::unordered_map<boost::process::environment::key, boost::process::environment::value>
+        procEnv;
+    for (const auto& kv : boost::process::environment::current()) {
+        if (kv.key().string() != "SECRET") {
+            procEnv[kv.key()] = kv.value();
+        }
+    }
+
+    auto launch  = detail::buildWinProcLaunch(command);
+    auto procExe = boost::process::environment::find_executable(launch.exeName);
+    if (procExe.empty() && launch.exeName != "cmd.exe") {
+        // 探测到 PowerShell 但 PATH 中找不到 (极端环境): 回退 cmd.exe
+        XX_LOGW(
+            "ExecuteWindowsCommandTool: {} not found in PATH, fallback to cmd.exe",
+            launch.exeName
+        );
+        launch = detail::WinProcLaunch{
+            "cmd.exe",
+            {"/c", command}
+        };
+        procExe = boost::process::environment::find_executable(launch.exeName);
+    }
+    auto proc = boost::process::process{
+        ex,
+        procExe,
+        launch.args,
+        boost::process::process_environment(procEnv),
+        // 子进程初始工作目录: 会话工作目录 (未配置时显式取进程 cwd, 行为等价继承)
+        boost::process::process_start_dir{detail::subprocessWorkDir(workDir)},
+        // stdin 重定向到 null 设备, 避免子进程抢读 agent 进程的终端输入
+        boost::process::process_stdio{.in = nullptr, .out = outpip, .err = errpip}
+    };
+
+    // 会话取消监听: 与主工作并行运行 (语义同 bashExecuteAsync)
+    co_return co_await detail::runProcPipeline(
+        proc,
+        outpip,
+        errpip,
+        timeout,
+        all_output,
+        isCancelled
+    );
+}
+
 #else
-    // popen 回退路径: 无法指定子进程工作目录, 继承 agent 进程 cwd
+// =====================================================================
+// 执行体 —— popen 回退版 (仅 AGENTXX_ENABLE_BOOST_PROCESS 关闭时编译/注册)
+// - 阻塞实现: 只允许经 plugin_tool_sync.h sync 垫片注册 (offload 池线程
+//   执行), 禁止在宿主 io 线程/poll 寄生 loop 上直接调用
+// - 无法指定子进程工作目录 (继承 agent 进程 cwd), 无会话取消支持
+// =====================================================================
+
+inline std::string bashExecute(
+    const neograph::json& arguments,
+    const std::string&    workDir,
+    const IsCancelledFn&  isCancelled = nullptr
+) {
     (void)workDir;
     (void)isCancelled;
+    auto command = arguments.value("command", std::string{});
+    if (command.empty()) {
+        return R"({"error":"Arg `command` is empty"})";
+    }
 #if XX_IS_WIN_D
     auto pipe = std::unique_ptr<FILE, decltype(&_pclose)>{_popen(command.c_str(), "r"), _pclose};
 #else
@@ -356,174 +448,20 @@ inline std::string bashExecute(
     while (fgets(buffer.data(), buffer.size(), pipe.get()) != nullptr) {
         result << buffer.data();
     }
-    return result.str();
-#endif
+    std::string out = result.str();
+    agentxx::util::autoConvertToUtf8(out);
+    return out;
 }
 
-/// agentxx_execute_windows_command 执行体 (原 ExecuteWindowsCommandTool::execute_async)
 inline std::string windowsExecute(
     const neograph::json& arguments,
     const std::string&    workDir,
     const IsCancelledFn&  isCancelled = nullptr
 ) {
-    auto command = arguments.value("command", std::string{});
-    if (command.empty()) {
-        return R"({"error":"Arg `command` is empty"})";
-    }
-    // [all_output] 为false时，仅执行失败才返回 stdout和stderr
-    auto all_output = arguments.value("all_output", true);
-    auto timeout    = arguments.value("timeout", 60);
-
-#if defined(BOOST_PROCESS_V2_PROCESS_HPP)
-    {
-        asio::io_context    io;
-        asio::readable_pipe outpip{io}, errpip{io};
-        std::unordered_map<boost::process::environment::key, boost::process::environment::value>
-            procEnv;
-        for (const auto& kv : boost::process::environment::current()) {
-            if (kv.key().string() != "SECRET") {
-                procEnv[kv.key()] = kv.value();
-            }
-        }
-
-        auto launch  = detail::buildWinProcLaunch(command);
-        auto procExe = boost::process::environment::find_executable(launch.exeName);
-        if (procExe.empty() && launch.exeName != "cmd.exe") {
-            // 探测到 PowerShell 但 PATH 中找不到 (极端环境): 回退 cmd.exe
-            XX_LOGW(
-                "ExecuteWindowsCommandTool: {} not found in PATH, fallback to cmd.exe",
-                launch.exeName
-            );
-            launch = detail::WinProcLaunch{
-                "cmd.exe",
-                {"/c", command}
-            };
-            procExe = boost::process::environment::find_executable(launch.exeName);
-        }
-        auto proc = boost::process::process{
-            io,
-            procExe,
-            launch.args,
-            boost::process::process_environment(procEnv),
- // 子进程初始工作目录: 会话工作目录 (未配置时显式取进程 cwd, 行为等价继承)
-            boost::process::process_start_dir{detail::subprocessWorkDir(workDir)},
- // stdin 重定向到 null 设备, 避免子进程抢读 agent 进程的终端输入
-            boost::process::process_stdio{.in = nullptr, .out = outpip, .err = errpip}
-        };
-
-        // 会话取消监听: 与主工作并行运行 (见 bashExecute 同款修复说明)
-        std::string              strout, strerr;
-        neograph_asio_error_code errCodeStdOut, errCodeStdErr;
-        auto                     readStdOutFuture = asio::async_read(
-            outpip,
-            asio::dynamic_buffer(strout),
-            asio::transfer_all(),
-            asio::redirect_error(asio::use_awaitable, errCodeStdOut)
-        );
-        auto readStdErrFuture = asio::async_read(
-            errpip,
-            asio::dynamic_buffer(strerr),
-            asio::transfer_all(),
-            asio::redirect_error(asio::use_awaitable, errCodeStdErr)
-        );
-
-        std::string        resultStr;
-        std::exception_ptr ep{};
-        asio::co_spawn(
-            io,
-            [&]() -> asio::awaitable<void> {
-                std::atomic<bool> timedOut{false};
-                // 主工作: stdout/stderr/退出 三方并发等待后组装结果
-                auto mainWork = [&]() -> asio::awaitable<void> {
-                    using namespace asio::experimental::awaitable_operators;
-                    co_await (
-                        std::move(readStdOutFuture) && std::move(readStdErrFuture)
-                        && proc.async_wait(asio::use_awaitable)
-                    );
-                    const auto         exitCode = proc.exit_code();
-                    std::ostringstream result;
-                    if (timedOut.load(std::memory_order_acquire)) {
-                        result << detail::makeTimeoutResult(timeout, strout, strerr);
-                    } else {
-                        result << "[ExitCode]\n" << exitCode << "\n";
-                        if (all_output || 0 != exitCode) {
-                            // failed
-                            if (strout.empty() || agentxx::util::autoConvertToUtf8(strout)) {
-                                result << "[StdOut]\n" << strout << "\n";
-                            } else {
-                                result << "[StdOut conversion to utf8 failed, discard]\n";
-                            }
-                            if (strerr.empty() || agentxx::util::autoConvertToUtf8(strerr)) {
-                                result << "[StdErr]\n" << strerr << "\n";
-                            } else {
-                                result << "[StdErr conversion to utf8 failed, discard]\n";
-                            }
-                        }
-                    }
-                    resultStr = result.str();
-                };
-                // 超时守护: 到点整组终止并置标记; 之后挂起直至被并行组取消。
-                // 【禁止】对已被取消的 async_wait 再补二次等待 (bp::v2 退出状态
-                // 仅投递一次, 二次 wait 永久挂起) —— 同 bashExecute 修复说明
-                auto timeoutGuard = [&]() -> asio::awaitable<void> {
-                    if (timeout > 0) {
-                        asio::steady_timer t(co_await asio::this_coro::executor);
-                        t.expires_after(std::chrono::seconds{timeout});
-                        auto [ec] = co_await t.async_wait(asio::as_tuple(asio::use_awaitable));
-                        if (!ec) {
-                            timedOut.store(true, std::memory_order_release);
-                            detail::killProcGroup(proc);
-                        }
-                    }
-                    asio::steady_timer idle(co_await asio::this_coro::executor);
-                    idle.expires_after(std::chrono::hours(24));
-                    co_await idle.async_wait(asio::as_tuple(asio::use_awaitable));
-                };
-                try {
-                    using namespace asio::experimental::awaitable_operators;
-                    // 三路并行: 主工作 / 超时守护 / 会话取消监听 (语义同 bashExecute)
-                    co_await (
-                        mainWork() || timeoutGuard()
-                        || detail::procCancelWatchLoop(proc, isCancelled)
-                    );
-                } catch (...) {
-                    ep = std::current_exception();
-                }
-            },
-            asio::detached
-        );
-        io.run();
-        if (ep) {
-            std::rethrow_exception(ep);
-        }
-        return resultStr;
-    }
-#else
-    // popen 回退路径: 无法指定子进程工作目录, 继承 agent 进程 cwd
-    (void)workDir;
-    (void)isCancelled;
-#if XX_IS_WIN_D
-    auto pipe = std::unique_ptr<FILE, decltype(&_pclose)>{_popen(command.c_str(), "r"), _pclose};
-#else
-    auto pipe = std::unique_ptr<FILE, decltype(&pclose)>{popen(command.c_str(), "r"), pclose};
-#endif
-    if (!pipe) {
-        auto ec = std::error_code{errno, std::system_category()};
-        return neograph::json{
-            {"error", fmt::format("Exec command failed. Error: {}", ec.message())},
-        }
-            .dump();
-    }
-
-    std::array<char, 1024> buffer{};
-    std::ostringstream     out{};
-    while (fgets(buffer.data(), buffer.size(), pipe.get()) != nullptr) {
-        out << buffer.data();
-    }
-    std::string result = out.str();
-    agentxx::util::autoConvertToUtf8(result);
-    return result;
-#endif
+    // 无 bp::v2 时 Windows 命令同样走 popen 回退 (cmd.exe 语义由提示词引导)
+    return bashExecute(arguments, workDir, isCancelled);
 }
+
+#endif // BOOST_PROCESS_V2_PROCESS_HPP
 
 } // namespace agentxx_execmd_plugin

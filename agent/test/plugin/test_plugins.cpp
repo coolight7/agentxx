@@ -32,19 +32,18 @@ int g_plugin_failed = 0;
 namespace agentxx {
 namespace test {
 
-/// 定位示例插件库 (与测试可执行同目录, 见 test/CMakeLists.txt)
-/// 优先 exe 同目录的构建产物, cwd 仅作回退; 校验目录内存在动态库产物,
-/// 避免 cwd 在源码仓库下时误命中 agent/plugins/ 下的插件源码目录
-static std::string findExamplePluginPath() {
+/// 定位插件库目录 (通用; exe 同目录优先, cwd 回退; 校验目录内存在动态库产物,
+/// 避免 cwd 在源码仓库下时误命中 agent/plugins/ 下的插件源码目录)
+static std::string findPluginDir(const char* pluginName) {
     namespace fs = std::filesystem;
     std::error_code       ec;
     std::vector<fs::path> candidates;
 #if !XX_IS_WIN_D
     if (auto p = fs::read_symlink("/proc/self/exe", ec); !ec) {
-        candidates.push_back(p.parent_path() / "plugins" / "example_plugin");
+        candidates.push_back(p.parent_path() / "plugins" / pluginName);
     }
 #endif
-    candidates.push_back(fs::current_path(ec) / "plugins" / "example_plugin");
+    candidates.push_back(fs::current_path(ec) / "plugins" / pluginName);
     auto hasLibFile = [](const fs::path& dir) {
         std::error_code                     ec2;
         std::filesystem::directory_iterator it(dir, ec2);
@@ -63,7 +62,11 @@ static std::string findExamplePluginPath() {
         }
     }
     // 异常兜底: 返回相对目录路径, loadPluginAsync 解析失败时日志暴露原因
-    return "plugins/example_plugin";
+    return std::string{"plugins/"} + pluginName;
+}
+
+static std::string findExamplePluginPath() {
+    return findPluginDir("example_plugin");
 }
 
 static asio::awaitable<void> sleepMs(int ms) {
@@ -129,6 +132,32 @@ asio::awaitable<TestResult> run_plugin_tests() {
             });
             auto j   = neograph::json::parse(out);
             XX_TEST_EXPECT_EQ(j["via_call_tool"]["echo"]["x"].get<int>(), 42);
+        }
+    }
+
+    // ---- 4.5 poll 寄生驱动工具端到端 (agentxx_execute_command 插件):
+    // 加载真实插件 .so, 经 ToolRegistry/op_driver 全链路执行 bash 工具 ——
+    // 覆盖 PolledToolShim 三件套嫁接层 (start→poll 步进→done 上报);
+    // 卸载路径同时验证寄生 loop 随实例析构安全
+    {
+        auto execPath = findPluginDir("agentxx_execute_command");
+        auto execInst = co_await ctx->pluginManager->loadPluginAsync(execPath);
+        XX_TEST_EXPECT_TRUE(execInst != nullptr);
+        if (execInst) {
+            XX_TEST_EXPECT_TRUE(ctx->toolRegistry->contains("agentxx_execute_bash_command"));
+            auto tool = ctx->toolRegistry->find("agentxx_execute_bash_command");
+            if (tool) {
+                auto out = co_await tool->execute_async(neograph::json{
+                    {"command", "echo polled_e2e_ok"},
+                    {"timeout", 15                  },
+                });
+                XX_TEST_EXPECT_TRUE(out.find("polled_e2e_ok") != std::string::npos);
+                XX_TEST_EXPECT_TRUE(out.find("[ExitCode]") != std::string::npos);
+            }
+            co_await ctx->pluginManager->unloadAsync("agentxx_execute_command");
+            XX_TEST_EXPECT_TRUE(
+                false == ctx->toolRegistry->contains("agentxx_execute_bash_command")
+            );
         }
     }
 

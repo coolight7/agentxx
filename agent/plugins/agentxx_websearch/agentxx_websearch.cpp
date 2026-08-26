@@ -6,6 +6,9 @@
 // - 搜索配置 (websearchApiUrl / convertHtml2markdown / websearchModel) 经宿主
 //   agentxx.agent.model 接口表读取 (原 lib AgentConfig 同名字段, yaml 配置不变);
 //   两者均未配置时不注册 agentxx_web_search (与原 lib 行为一致)
+// - 统一异步操作模型 (poll 寄生驱动): 工作协程在实例 PollLoop 上 spawn, 由
+//   宿主 io 线程非阻塞步进, 与内置工具同线程交错执行; HTTP 等待期不占任何
+//   宿主线程池线程 (原局部 io_context 同步驱动模式已移除)
 // - 业务逻辑在 websearch_impl.h (纯函数, 测试直测同一实现)
 #include "agentxx_websearch_plugin.h"
 #include "websearch_impl.h"
@@ -49,23 +52,16 @@ std::string timeoutDesc(int def) {
     return fmt::format(fmt::runtime(kTimeoutDesc), def);
 }
 
-/// 注册常规工具 (schema/描述存储于本实例 ctx->storage; 宿主注册时拷贝)
-/// - 统一异步操作模型: 经阻塞委托垫片注册 (offload 池线程执行, io 线程
-///   只等完成通知); execute 签名追加 cancel_flag 形参 (本插件忽略)
-void registerTool(
-    PluginCtx*         ctx,
-    const char*        name,
-    const char*        defaultDepict,
-    const std::string& schema,
-    char* (*execute)(
-        void*                   user_data,
-        AgentxxPluginStringView args_json,
-        AgentxxPluginStringView thread_id,
-        AgentxxPluginStringView tool_call_id,
-        volatile int*           cancel_flag,
-        char**                  error_out
-    ),
-    int flags = 0
+/// poll 寄生驱动工具注册 (schema/描述存储于本实例 ctx->storage; 宿主注册时拷贝)
+/// - 统一异步操作模型: 工作协程在实例 PollLoop 上 spawn, 宿主 io 线程经
+///   pollOnce 非阻塞步进 —— 与内置工具同线程交错执行, HTTP 等待期零线程占用
+void registerPolledTool(
+    PluginCtx*                        ctx,
+    const char*                       name,
+    const char*                       defaultDepict,
+    const std::string&                schema,
+    agentxx::plugin::PolledWorkFn     execute,
+    int                               flags = 0
 ) {
     auto&       storage = ctx->storage;
     std::string depict  = readToolPrompt(ctx->host, ctx->iface, name).depict;
@@ -75,107 +71,74 @@ void registerTool(
     storage.push_back(std::move(depict));
     storage.push_back(schema);
 
-    // 垫片适配器: 实例内嵌存储 (ctx 持有, 随实例销毁释放; 多实例契约)
-    auto shim = std::make_unique<AgentxxSyncToolShim>();
+    // 寄生驱动垫片适配器: 实例内嵌存储 (ctx 持有, 随实例销毁释放; 多实例契约)
+    auto shim = std::make_unique<agentxx::plugin::PolledToolShim>();
 
-    AgentxxSyncToolSpec spec{};
-    spec.name        = agentxx_plugin_sv(name, std::strlen(name));
-    spec.description = agentxx_plugin_sv(
-        storage[storage.size() - 2].data(),
-        storage[storage.size() - 2].size()
-    );
-    spec.parameters_json = agentxx_plugin_sv(storage.back().data(), storage.back().size());
-    spec.user_data       = ctx; ///< 回调经 user_data 恢复本实例上下文
-    spec.flags           = flags;
-    spec.execute         = execute;
     // 注意: 本文件先包含了 websearch_impl.h (其引入 util/log.h 重定义
     // XX_LOG* 宏为库版签名), 故此处直接调用 pluginLog, 不经 XX_LOGW 宏
-    if (agentxx_register_sync_tool(ctx->host, &spec, shim.get()) != 0) {
+    if (agentxx::plugin::register_polled_tool(
+            ctx->host,
+            agentxx_plugin_sv(name, std::strlen(name)),
+            agentxx_plugin_sv(
+                storage[storage.size() - 2].data(),
+                storage[storage.size() - 2].size()
+            ),
+            agentxx_plugin_sv(storage.back().data(), storage.back().size()),
+            ctx->pollLoop,
+            execute,
+            ctx, ///< 回调经 PolledJob.userData 恢复本实例上下文
+            shim.get(),
+            /*timeoutMs=*/0,
+            flags
+        ) != 0) {
         pluginLog(ctx, 3, fmt::format("agentxx_websearch: register tool {} failed", name));
         return;
     }
-    ctx->sync_tool_shims.push_back(std::move(shim));
+    ctx->polled_shims.push_back(std::move(shim));
 }
 
-/// agentxx_web_search 执行 (C ABI 静态函数): 配置取自 user_data 恢复的
-/// 本实例 PluginCtx (多实例契约 —— 各实例持有各自配置)
-static char* searchExecute(
-    void*                   user_data,
-    AgentxxPluginStringView args_json,
-    AgentxxPluginStringView thread_id,
-    AgentxxPluginStringView tool_call_id,
-    volatile int*           cancel_flag,
-    char**                  error_out
-) {
-    auto*              ctx  = static_cast<PluginCtx*>(user_data);
-    const AgentxxHost* host = ctx ? ctx->host : nullptr;
-    (void)thread_id;
-    (void)tool_call_id;
-    (void)cancel_flag;
-    try {
-        std::string argsStr(args_json.data ? args_json.data : "", args_json.size);
-        auto arguments
-            = argsStr.empty() ? neograph::json::object() : neograph::json::parse(argsStr);
-        std::string result;
-        if (ctx && ctx->use_model_search) {
-            agentxx_websearch_plugin::ModelSearchConfig mc;
-            mc.baseUrl                 = ctx->model_cfg.baseUrl;
-            mc.apiKey                  = ctx->model_cfg.apiKey;
-            mc.modelName               = ctx->model_cfg.modelName;
-            mc.readChunkTimeoutSeconds = ctx->model_cfg.readChunkTimeoutSeconds;
-            result = agentxx_websearch_plugin::modelWebSearchExecute(arguments, mc);
-        } else {
-            result = agentxx_websearch_plugin::webSearchExecute(
-                arguments,
-                ctx ? ctx->search_api_url : std::string{},
-                ctx ? ctx->convert_html2markdown : true
-            );
-        }
-        return pluginStrdup(host, result.c_str());
-    } catch (const std::exception& ex) {
-        if (error_out) {
-            *error_out = pluginStrdup(host, ex.what());
-        }
-        return nullptr;
-    } catch (...) {
-        if (error_out) {
-            *error_out = pluginStrdup(host, "unknown exception");
-        }
-        return nullptr;
-    }
+/// 参数 JSON 解析 (公共): PolledJob.args → neograph::json (空按 {} 处理)
+inline neograph::json parseJobArgs(const agentxx::plugin::PolledJob& job) {
+    auto sv = job.argsView();
+    std::string argsStr(sv.data ? sv.data : "{}", sv.size);
+    return argsStr.empty() ? neograph::json::object() : neograph::json::parse(argsStr);
 }
 
-/// C ABI execute 包装: 解析参数 JSON → 调用实现 → 结果 strdup (异常不外泄)
-template<auto ExecFn>
-char* wrapExecute(
-    void*                   user_data,
-    AgentxxPluginStringView args_json,
-    AgentxxPluginStringView thread_id,
-    AgentxxPluginStringView tool_call_id,
-    volatile int*           cancel_flag,
-    char**                  error_out
-) {
-    auto* ctx = static_cast<PluginCtx*>(user_data);
-    (void)thread_id;
-    (void)tool_call_id;
-    (void)cancel_flag;
-    const AgentxxHost* host = ctx ? ctx->host : nullptr;
-    try {
-        std::string argsStr(args_json.data ? args_json.data : "", args_json.size);
-        auto arguments = argsStr.empty() ? neograph::json::object() : neograph::json::parse(argsStr);
-        auto result    = ExecFn(arguments);
-        return pluginStrdup(host, result.c_str());
-    } catch (const std::exception& ex) {
-        if (error_out) {
-            *error_out = pluginStrdup(host, ex.what());
-        }
-        return nullptr;
-    } catch (...) {
-        if (error_out) {
-            *error_out = pluginStrdup(host, "unknown exception");
-        }
-        return nullptr;
+/// agentxx_web_search 工作协程 (配置取自 user_data 恢复的本实例 PluginCtx;
+/// 多实例契约 —— 各实例持有各自配置; 异常由适配器兜底转 OP_FAILED)
+static asio::awaitable<agentxx::plugin::PolledOutcome>
+    searchWork(agentxx::plugin::PolledJob& job) {
+    auto*          ctx       = static_cast<PluginCtx*>(job.userData);
+    auto           arguments = parseJobArgs(job);
+    if (ctx && ctx->use_model_search) {
+        agentxx_websearch_plugin::ModelSearchConfig mc;
+        mc.baseUrl                 = ctx->model_cfg.baseUrl;
+        mc.apiKey                  = ctx->model_cfg.apiKey;
+        mc.modelName               = ctx->model_cfg.modelName;
+        mc.readChunkTimeoutSeconds = ctx->model_cfg.readChunkTimeoutSeconds;
+        auto result = co_await agentxx_websearch_plugin::modelWebSearchExecuteAsync(arguments, mc);
+        co_return agentxx::plugin::PolledOutcome::ok(std::move(result));
     }
+    auto result = co_await agentxx_websearch_plugin::webSearchExecuteAsync(
+        arguments,
+        ctx ? ctx->search_api_url : std::string{},
+        ctx ? ctx->convert_html2markdown : true
+    );
+    co_return agentxx::plugin::PolledOutcome::ok(std::move(result));
+}
+
+/// agentxx_web_fetch 工作协程
+static asio::awaitable<agentxx::plugin::PolledOutcome>
+    fetchWork(agentxx::plugin::PolledJob& job) {
+    auto result = co_await agentxx_websearch_plugin::webFetchExecuteAsync(parseJobArgs(job));
+    co_return agentxx::plugin::PolledOutcome::ok(std::move(result));
+}
+
+/// agentxx_web_fetch_markdown 工作协程
+static asio::awaitable<agentxx::plugin::PolledOutcome>
+    fetchMarkdownWork(agentxx::plugin::PolledJob& job) {
+    auto result = co_await agentxx_websearch_plugin::webFetchMarkdownExecuteAsync(parseJobArgs(job));
+    co_return agentxx::plugin::PolledOutcome::ok(std::move(result));
 }
 
 } // namespace
@@ -240,7 +203,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                 {"required", neograph::json::array({"url"})},
             }
                                   .dump();
-            registerTool(ctx.get(), kNameFetch, kDepictFetch, schema, &wrapExecute<agentxx_websearch_plugin::webFetchExecute>, AGENTXX_TOOL_FLAG_AUTO_SUMMARY);
+            registerPolledTool(ctx.get(), kNameFetch, kDepictFetch, schema, &fetchWork, AGENTXX_TOOL_FLAG_AUTO_SUMMARY);
         }
 
         // ---- agentxx_web_fetch_markdown ----
@@ -282,12 +245,12 @@ When resolving relative links found in the returned Markdown, combine them with 
                 {"required", neograph::json::array({"url"})},
             }
                                   .dump();
-            registerTool(
+            registerPolledTool(
                 ctx.get(),
                 kNameFetchMd,
                 kDepictFetchMd,
                 schema,
-                &wrapExecute<agentxx_websearch_plugin::webFetchMarkdownExecute>,
+                &fetchMarkdownWork,
                 AGENTXX_TOOL_FLAG_AUTO_SUMMARY
             );
         }
@@ -357,7 +320,7 @@ When resolving relative links found in the returned Markdown, combine them with 
                 }
                                       .dump();
 
-                registerTool(ctx.get(), kNameSearch, kDepictSearch, schema, &searchExecute, AGENTXX_TOOL_FLAG_AUTO_SUMMARY);
+                registerPolledTool(ctx.get(), kNameSearch, kDepictSearch, schema, &searchWork, AGENTXX_TOOL_FLAG_AUTO_SUMMARY);
             } else {
                 pluginLog(
                     ctx.get(),

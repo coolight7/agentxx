@@ -72,7 +72,7 @@ struct WebSearchTool {
     neograph::ChatTool get_definition() const { return searchDefinition(); }
 
     asio::awaitable<std::string> execute_async(const neograph::json& args) const {
-        co_return agentxx_websearch_plugin::webSearchExecute(
+        co_return co_await agentxx_websearch_plugin::webSearchExecuteAsync(
             args,
             searchApiUrl,
             convertHtml2markdown
@@ -90,7 +90,7 @@ struct WebFetchUrlTool {
     }
 
     asio::awaitable<std::string> execute_async(const neograph::json& args) const {
-        co_return agentxx_websearch_plugin::webFetchExecute(args);
+        co_return co_await agentxx_websearch_plugin::webFetchExecuteAsync(args);
     }
 };
 
@@ -118,7 +118,7 @@ struct ModelWebSearchTool {
     }
 
     asio::awaitable<std::string> execute_async(const neograph::json& args) const {
-        co_return agentxx_websearch_plugin::modelWebSearchExecute(args, modelCfg);
+        co_return co_await agentxx_websearch_plugin::modelWebSearchExecuteAsync(args, modelCfg);
     }
 
 private:
@@ -135,7 +135,7 @@ struct WebFetchUrlMarkdownTool {
     }
 
     asio::awaitable<std::string> execute_async(const neograph::json& args) const {
-        co_return agentxx_websearch_plugin::webFetchMarkdownExecute(args);
+        co_return co_await agentxx_websearch_plugin::webFetchMarkdownExecuteAsync(args);
     }
 };
 

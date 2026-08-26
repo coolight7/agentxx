@@ -4,6 +4,10 @@
 //   - agentxx_execute_windows_command (原 ExecuteWindowsCommandTool)
 // - 子进程初始工作目录经宿主 get_work_dir (会话工作目录); 取消 watcher 经
 //   agentxx.agent.cancel 接口轮询会话取消令牌 (与原内置工具行为一致)
+// - 统一异步操作模型 (poll 寄生驱动): BOOST_PROCESS 可用时经
+//   register_polled_tool 注册 —— 工作协程在实例 PollLoop 上 spawn, 由宿主
+//   io 线程非阻塞步进, 与内置工具同线程交错执行; 并发命令共享寄生 loop,
+//   不再每命令占死一个阻塞池线程至超时。bp 关闭时回退 sync 垫片 (popen)
 #include "agentxx_execmd_plugin.h"
 #include "execute_command_impl.h"
 #include <cstring>
@@ -43,7 +47,34 @@ std::string argDesc(const ToolPromptText& p, const char* key, const std::string&
     return fallback;
 }
 
-/// C ABI execute 包装: 解析参数 JSON → 调用实现 → 结果 strdup (异常不外泄)
+#if defined(BOOST_PROCESS_V2_PROCESS_HPP)
+/// poll 寄生驱动工作协程: 解析参数 JSON → 调用协程执行体 → PolledOutcome
+/// - 协程运行在实例 PollLoop (宿主 io 线程序列化步进); 异常由适配器兜底转
+///   OP_FAILED, 此处无需自行捕获
+/// - 取消双通道: job.cancelFlag (宿主 op 驱动器置位) + 会话取消令牌轮询;
+///   is_cancelled 为 io 线程约束接口, 协程已在 io 线程 → 宿主内联直执行
+template<auto ExecAsyncFn>
+asio::awaitable<agentxx::plugin::PolledOutcome> execmdWork(agentxx::plugin::PolledJob& job) {
+    auto* ctx = static_cast<PluginCtx*>(job.userData);
+    auto  sv  = job.argsView();
+    std::string argsStr(sv.data ? sv.data : "{}", sv.size);
+    auto arguments = argsStr.empty() ? neograph::json::object() : neograph::json::parse(argsStr);
+    // 会话取消查询回调: 捕获 thread_id 拷贝与 job 引用 (job 存活至终结上报)
+    auto tid = std::string{job.tidView().data ? job.tidView().data : "", job.tidView().size};
+    auto isCancelled = [ctx, tid, &job]() -> bool {
+        if (job.cancelFlag != 0) {
+            return true;
+        }
+        return isSessionCancelled(ctx, agentxx_plugin_sv(tid.data(), tid.size()));
+    };
+    auto workDir = readWorkDir(ctx, agentxx_plugin_sv(tid.data(), tid.size()));
+    auto result  = co_await ExecAsyncFn(arguments, workDir, isCancelled);
+    co_return agentxx::plugin::PolledOutcome::ok(std::move(result));
+}
+#endif
+
+/// C ABI execute 包装 (popen 回退路径专用): 解析参数 JSON → 调用实现 →
+/// 结果 strdup (异常不外泄)
 /// - workDir/cancel 经宿主接口表在调用时取值 (会话级动态)
 /// - 取消双通道: cancel_flag (宿主 op 驱动器置位) + 会话取消令牌轮询
 template<auto ExecFn>
@@ -184,7 +215,30 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                                   .dump();
             g_storage.push_back(std::move(schema));
 
-            // 垫片适配器: 实例内嵌存储 (ctx 持有, 随实例销毁释放)
+#if defined(BOOST_PROCESS_V2_PROCESS_HPP)
+            // poll 寄生驱动注册 (统一异步操作模型): 工作协程在实例 PollLoop 上
+            // spawn, 宿主 io 线程经 pollOnce 非阻塞步进, 与内置工具同线程交错;
+            // 并发命令共享寄生 loop 等就绪事件 (不再占死阻塞池线程至超时)
+            auto shim = std::make_unique<agentxx::plugin::PolledToolShim>();
+            if (agentxx::plugin::register_polled_tool(
+                    host,
+                    agentxx_plugin_sv(kNameWindows, std::strlen(kNameWindows)),
+                    agentxx_plugin_sv(g_storage[0].data(), g_storage[0].size()),
+                    agentxx_plugin_sv(g_storage[1].data(), g_storage[1].size()),
+                    ctx->pollLoop,
+                    &execmdWork<agentxx_execmd_plugin::windowsExecuteAsync>,
+                    ctx.get(),
+                    shim.get(),
+                    /*timeoutMs=*/0,
+                    AGENTXX_TOOL_FLAG_AUTO_SUMMARY
+                ) != 0) {
+                pluginLog(ctx.get(), 3,
+                          fmt::format("agentxx_execute_command: register tool {} failed", kNameWindows));
+            } else {
+                ctx->polled_shims.push_back(std::move(shim));
+            }
+#else
+            // popen 回退: 阻塞实现经 sync 垫片注册 (offload 池线程执行)
             auto shim = std::make_unique<AgentxxSyncToolShim>();
 
             AgentxxSyncToolSpec spec{};
@@ -201,6 +255,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
             } else {
                 ctx->sync_tool_shims.push_back(std::move(shim));
             }
+#endif
         }
 
         // ---- agentxx_execute_bash_command ----
@@ -245,7 +300,28 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                                   .dump();
             g_storage.push_back(std::move(schema));
 
-            // 垫片适配器: 实例内嵌存储 (ctx 持有, 随实例销毁释放)
+#if defined(BOOST_PROCESS_V2_PROCESS_HPP)
+            // poll 寄生驱动注册 (语义同上方 windows 工具)
+            auto shim = std::make_unique<agentxx::plugin::PolledToolShim>();
+            if (agentxx::plugin::register_polled_tool(
+                    host,
+                    agentxx_plugin_sv(kNameBash, std::strlen(kNameBash)),
+                    agentxx_plugin_sv(g_storage[2].data(), g_storage[2].size()),
+                    agentxx_plugin_sv(g_storage[3].data(), g_storage[3].size()),
+                    ctx->pollLoop,
+                    &execmdWork<agentxx_execmd_plugin::bashExecuteAsync>,
+                    ctx.get(),
+                    shim.get(),
+                    /*timeoutMs=*/0,
+                    AGENTXX_TOOL_FLAG_AUTO_SUMMARY
+                ) != 0) {
+                pluginLog(ctx.get(), 3,
+                          fmt::format("agentxx_execute_command: register tool {} failed", kNameBash));
+            } else {
+                ctx->polled_shims.push_back(std::move(shim));
+            }
+#else
+            // popen 回退: 阻塞实现经 sync 垫片注册 (offload 池线程执行)
             auto shim = std::make_unique<AgentxxSyncToolShim>();
 
             AgentxxSyncToolSpec spec{};
@@ -262,6 +338,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
             } else {
                 ctx->sync_tool_shims.push_back(std::move(shim));
             }
+#endif
         }
 
         *plugin_ctx = ctx.release(); ///< 所有权移交宿主 (destroy 时取回归还)
