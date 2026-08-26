@@ -167,7 +167,7 @@ models:
     model_context_max_token: 1000000
     send_thinking: true
     extra_api_config:
-      reasoning_effort: "xhigh"
+      reasoning_effort: "max"
   - name: local
     type: "openai"
     base_url: "http://172.29.48.1:7070/v1"
