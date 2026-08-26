@@ -116,6 +116,9 @@ enum class SessionActivity : uint8_t {
 class Session {
 public:
 
+    Session() = default;
+    ~Session();
+
     /// 本会话的 IO
     std::shared_ptr<AgentIOBase> io = nullptr;
 

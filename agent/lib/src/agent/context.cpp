@@ -29,6 +29,10 @@ AgentContext::~AgentContext() {
     }
 }
 
+Session::~Session() {
+    flushPendingViewOps();
+}
+
 std::string Session::appendViewMessage(ViewMessage msg) {
     // 强制校验: viewMessages/chainHash/msgIdCounter_ 仅允许 io 线程写入
     assertIoThread();

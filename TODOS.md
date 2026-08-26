@@ -7,6 +7,7 @@
 - 文档翻译
 - 整理文档
 - release 编译发布时携带 标准库
+- filesystem utf8 path
 - exec_cmd 手动裁剪 stdout、stderr，而不是通过 toolcallNode
 
 - 统一命名为 client-io、server-io
@@ -15,27 +16,6 @@
 - 修改插件适配协程异步
 - 插件宏辅助代码
 - codegraph 疑似启动后没有更新索引
-
-```sh
-- [Tool] agentxx_filesystem_grep
-  args: {
-"text_patterns":[
-"sanitizer",
-"sanitize",
-"ASAN",
-"fsanitize"
-],
-"file_patterns":[
-"agent/**/*.cmake",
-"agent/**/CMakeLists.txt",
-"agent/script/*.sh",
-"agent/script/*.bat"
-],
-"output_mode":"content",
-"case_sensitive":false
-}
-  result: [Error] No mapping for the Unicode character exists in the target multi-byte codepage.
-```
 
 ## 提示词优化
 - 如果编译需要配置特定参数，写成脚本或者写入到AGENTS.md

@@ -786,6 +786,7 @@ asio::awaitable<void> SessionServerAgentIO::run() {
             };
             d.seq = sess->nextDeltaSeq();
             sendToPeer(std::move(d));
+            sess->flushViewMessages();
         };
 
         BaseAgent::TurnResult turnResult;

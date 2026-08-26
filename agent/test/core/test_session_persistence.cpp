@@ -3,6 +3,7 @@
 
 #include "agentxx/agent/code_agent.h"
 #include "agentxx/agent/context.h"
+#include "agentxx/agent/io/session_server_agent_io.h"
 #include "agentxx/agent/session_store.h"
 #include "agentxx/middlewares/middleware.h"
 #include "agentxx/util/log.h"
@@ -909,6 +910,104 @@ static asio::awaitable<void> testSessionPersistenceE2E() {
     co_return;
 }
 
+static asio::awaitable<void> testTurnEndTipPersistenceRoundtrip() {
+    using agentxx::agent::CodeAgent;
+    using agentxx::agent::SessionServerAgentIO;
+
+    auto root = makeTempRoot();
+    {
+        auto sim     = startDaSimServer();
+        auto baseUrl = "http://127.0.0.1:" + std::to_string(sim.port);
+
+        auto makeCfg = [&]() {
+            auto cfg                   = std::make_shared<agentxx::agent::AgentConfig>();
+            cfg->model.baseUrl         = baseUrl;
+            cfg->model.apiKey          = "EMPTY";
+            cfg->model.modelName       = "test-model-xyz";
+            cfg->prompt.systemPrompt   = "You are a helpful assistant.";
+            cfg->enableSessionStore    = true;
+            cfg->sessionStoreDirectory = root;
+            return cfg;
+        };
+
+        g_da_sim_response_content  = "Turn result text";
+        g_da_sim_tool_calls        = neograph::json::array();
+        g_da_sim_reasoning_content = "";
+
+        // 第一次运行: 传入 server-io 驱动会话, 验证轮次结束时插入 Tip 消息并落盘
+        {
+            auto agent = std::make_shared<CodeAgent>(makeCfg());
+            co_await agent->init();
+
+            SessionServerAgentIO::Config ioCfg;
+            ioCfg.sessionId = "turn-tip-thread";
+            auto serverIO   = std::make_shared<SessionServerAgentIO>(
+                agent->ioCtx->get_executor(),
+                agent,
+                std::move(ioCfg)
+            );
+
+            auto result = co_await agent->runTurnAsync("turn-tip-thread", "Hello", true, serverIO);
+            XX_TEST_EXPECT_FALSE(result.hasError);
+
+            auto sess = agent->agentContext->getSession("turn-tip-thread");
+            XX_TEST_EXPECT_TRUE(sess != nullptr);
+            if (sess) {
+                // 内存中消息: User + Assistant + Tip (轮次统计: 模型名 · 耗时 · 时间点)
+                XX_TEST_EXPECT_EQ(sess->viewMessages.size(), size_t{3});
+                if (sess->viewMessages.size() >= 3) {
+                    const auto& tipMsg = sess->viewMessages.back();
+                    XX_TEST_EXPECT_EQ(tipMsg.role, agentxx::agent::ViewMessage::Role::Tip);
+                    XX_TEST_EXPECT_TRUE(tipMsg.text.find("test-model-xyz") != std::string::npos);
+                    XX_TEST_EXPECT_TRUE(tipMsg.tip.has_value());
+                    if (tipMsg.tip) {
+                        XX_TEST_EXPECT_EQ(
+                            tipMsg.tip->tipLevel,
+                            agentxx::agent::ViewMessage::TipLevel::Info
+                        );
+                    }
+                }
+            }
+        }
+
+        // 模拟重启: 新 Agent 实例从 SQLite 恢复会话, 验证轮次完成提示消息成功落盘且完整恢复
+        {
+            CodeAgent agent(makeCfg());
+            co_await agent.init();
+
+            auto sess = agent.agentContext->getSession("turn-tip-thread");
+            XX_TEST_EXPECT_TRUE(sess != nullptr);
+            if (sess) {
+                XX_TEST_EXPECT_EQ(sess->viewMessages.size(), size_t{3});
+                if (sess->viewMessages.size() >= 3) {
+                    XX_TEST_EXPECT_EQ(
+                        sess->viewMessages[0].role,
+                        agentxx::agent::ViewMessage::Role::User
+                    );
+                    XX_TEST_EXPECT_EQ(
+                        sess->viewMessages[1].role,
+                        agentxx::agent::ViewMessage::Role::Assistant
+                    );
+                    const auto& tipMsg = sess->viewMessages[2];
+                    XX_TEST_EXPECT_EQ(tipMsg.role, agentxx::agent::ViewMessage::Role::Tip);
+                    XX_TEST_EXPECT_TRUE(tipMsg.text.find("test-model-xyz") != std::string::npos);
+                    XX_TEST_EXPECT_TRUE(tipMsg.tip.has_value());
+                    if (tipMsg.tip) {
+                        XX_TEST_EXPECT_EQ(
+                            tipMsg.tip->tipLevel,
+                            agentxx::agent::ViewMessage::TipLevel::Info
+                        );
+                    }
+                }
+            }
+        }
+
+        sim.stop();
+    }
+    fs::remove_all(root);
+    co_return;
+}
+
 asio::awaitable<TestResult> run_session_persistence_tests() {
     g_sp_passed = 0;
     g_sp_failed = 0;
@@ -929,6 +1028,7 @@ asio::awaitable<TestResult> run_session_persistence_tests() {
         io,
         [&]() -> asio::awaitable<void> {
             co_await testSessionPersistenceE2E();
+            co_await testTurnEndTipPersistenceRoundtrip();
         },
         asio::detached
     );
