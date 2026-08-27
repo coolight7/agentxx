@@ -8,6 +8,7 @@
 
 #include "test_memgrowth.h"
 #include "agentxx/agent/code_agent.h"
+#include "agentxx/plugin/plugin_manager.h"
 #include "agentxx/util/log.h"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
@@ -351,6 +352,9 @@ asio::awaitable<int> runScenario(
 
     // 停止 agent io_context 后台线程
     if (runAgentCtx) {
+        if (agent->agentContext && agent->agentContext->pluginManager) {
+            agent->agentContext->pluginManager->shutdownAll();
+        }
         if (agentWorkGuard) {
             agentWorkGuard->reset();
         }

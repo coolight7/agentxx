@@ -304,7 +304,7 @@ T ioCallSync(Mgr* mgr, std::function<T()> fn) {
     }
     std::promise<T> p;
     auto            fut = p.get_future();
-    mgr->postToIo([&p, fn = std::move(fn)]() mutable {
+    mgr->postToIo([&p, &fn]() {
         try {
             p.set_value(fn());
         } catch (...) {
@@ -326,7 +326,7 @@ void ioCallSyncVoid(Mgr* mgr, std::function<void()> fn) {
     }
     std::promise<void> p;
     auto               fut = p.get_future();
-    mgr->postToIo([&p, fn = std::move(fn)]() mutable {
+    mgr->postToIo([&p, &fn]() {
         try {
             fn();
             p.set_value();

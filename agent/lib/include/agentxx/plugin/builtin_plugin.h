@@ -44,6 +44,24 @@ const AgentxxBuiltinPluginInfo* agentxx_get_builtin_plugins(size_t* count);
 
 #ifdef __cplusplus
 }
+
+#include <string_view>
+
+namespace agentxx {
+namespace plugin {
+inline const AgentxxBuiltinPluginInfo* findBuiltinPlugin(std::string_view name) {
+    size_t count = 0;
+    const auto* list = agentxx_get_builtin_plugins(&count);
+    if (!list) return nullptr;
+    for (size_t i = 0; i < count; ++i) {
+        if (list[i].name && list[i].name == name) {
+            return &list[i];
+        }
+    }
+    return nullptr;
+}
+}
+}
 #endif
 
 #endif /* AGENTXX_BUILTIN_PLUGIN_H */

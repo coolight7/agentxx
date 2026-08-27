@@ -87,7 +87,7 @@ stateDiagram-v2
     - Add unit tests after change.
 )";
 
-std::string argDesc(const ToolPromptText& p, const char* key, const char* fallback) {
+std::string argDesc(const agentxx::kit::ToolPromptText& p, const char* key, const char* fallback) {
     auto it = p.args.find(key);
     if (it != p.args.end() && !it->second.empty()) {
         return it->second;
@@ -319,15 +319,11 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
         }
 
         {
-            ToolPromptText p      = readToolPrompt(ctx->host, ctx->iface, kNamePlanning);
-            std::string    depict = p.depict;
+            agentxx::kit::ToolPromptText p      = ctx->toolPrompt(kNamePlanning);
+            std::string                  depict = p.depict;
             if (depict.empty()) {
                 depict = kDepictPlanning;
             }
-            auto& storage = ctx->storage;
-            storage.push_back(std::move(depict));
-            // schema 与 lib AgentPrompt 条目一致 (mode/roadmap/todos/notes);
-            // 经 json 对象构造后序列化 (避免手写转义)
             std::string schema = neograph::json{
                 {"type", "object"},
                 {"required", neograph::json::array({"mode"})},
@@ -372,123 +368,73 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                  }},
             }
                                   .dump();
-            storage.push_back(std::move(schema));
 
-            // 垫片适配器: 实例内嵌存储 (ctx 持有, 随实例销毁释放; 多实例契约)
-            auto shim = std::make_unique<AgentxxInlineToolShim>();
-
-            AgentxxInlineToolSpec spec{};
-            spec.name        = agentxx_plugin_sv(kNamePlanning, std::strlen(kNamePlanning));
-            spec.description = agentxx_plugin_sv(storage[0].data(), storage[0].size());
-            spec.parameters_json
-                = agentxx_plugin_sv(storage[1].data(), storage[1].size());
-            spec.user_data = ctx.get();
-            spec.flags     = AGENTXX_TOOL_FLAG_NONE;
-            // 内联完成型: 快同步 (JSON 组装 + 小文件读写, io 线程直接执行)
-            spec.execute   = [](void*                   user_data,
-                              AgentxxPluginStringView args_json,
-                              AgentxxPluginStringView thread_id,
-                              AgentxxPluginStringView tool_call_id,
-                              char**                  error_out) -> char* {
-                auto* ctx = static_cast<PluginCtx*>(user_data);
-                (void)tool_call_id;
-                try {
-                    std::string argsStr(args_json.data ? args_json.data : "", args_json.size);
+            agentxx::kit::fast_tool(
+                *ctx,
+                kNamePlanning,
+                depict,
+                schema,
+                [](PluginCtx& c, std::string_view args_json, std::string_view thread_id) -> std::string {
+                    std::string argsStr(args_json.data() ? args_json.data() : "", args_json.size());
                     auto arguments
                         = argsStr.empty() ? neograph::json::object() : neograph::json::parse(argsStr);
 
                     const auto mode = arguments.value("mode", std::string{});
                     if (mode != "write" && mode != "read") {
-                        return pluginStrdup(
-                            ctx ? ctx->host : nullptr,
-                            R"({"error":"Arg `mode` must be \"write\" or \"read\""})"
-                        );
+                        return R"({"error":"Arg `mode` must be \"write\" or \"read\""})";
                     }
 
-                    // ---- read: 返回本会话此前保存的规划内容 ----
                     if (mode == "read") {
-                        if (!ctx || !ctx->host) {
-                            return nullptr;
-                        }
-                        const std::string tid{thread_id.data ? thread_id.data : "", thread_id.size};
-                        auto saved = loadPlanningFile(*ctx, tid);
+                        const std::string tid{thread_id.data() ? thread_id.data() : "", thread_id.size()};
+                        auto saved = loadPlanningFile(c, tid);
                         if (saved.empty()) {
-                            return pluginStrdup(
-                                ctx->host,
-                                R"({"error":"No saved planning in this session. Call with mode=\"write\" first."})"
-                            );
+                            return R"({"error":"No saved planning in this session. Call with mode=\"write\" first."})";
                         }
-                        // 校验合法 JSON (历史残留/半写文件容错), 非法按未保存处理
                         try {
                             auto v = neograph::json::parse(saved);
-                            return pluginStrdup(ctx->host, v.dump(2).c_str());
+                            return v.dump(2);
                         } catch (...) {
-                            return pluginStrdup(
-                                ctx->host,
-                                R"({"error":"Saved planning is corrupted. Rewrite it with mode=\"write\"."})"
-                            );
+                            return R"({"error":"Saved planning is corrupted. Rewrite it with mode=\"write\"."})";
                         }
                     }
 
-                    // ---- write: 会话规划 state 写入 + 本地持久化 + 事件发布 ----
                     auto roadmap = arguments.value("roadmap", std::string{});
                     if (roadmap.empty()) {
-                        return pluginStrdup(
-                            ctx ? ctx->host : nullptr,
-                            R"({"error":"Arg `roadmap` is empty, must provide a stateDiagram-v2 planning string in write mode"})"
-                        );
-                    }
-                    if (!ctx || !ctx->host) {
-                        return nullptr;
+                        return R"({"error":"Arg `roadmap` is empty, must provide a stateDiagram-v2 planning string in write mode"})";
                     }
 
-                    // todos 为数组时序列化透传; notes 为字符串
                     std::string todosJson;
                     if (arguments.contains("todos") && arguments["todos"].is_array()) {
                         todosJson = arguments["todos"].dump();
                     }
                     std::string notes = arguments.value("notes", std::string{});
 
-                    // 组装完整规划 JSON (与宿主 PlanningMiddleware state 同构:
-                    // {"roadmap","todos","notes"}; 持久化与事件共用该形态)
                     neograph::json planStore = neograph::json::object();
                     planStore["roadmap"]     = roadmap;
                     if (!todosJson.empty()) {
                         try {
                             planStore["todos"] = neograph::json::parse(todosJson);
                         } catch (const std::exception&) {
-                            return pluginStrdup(ctx->host, R"({"error":"Arg `todos` is not valid JSON"})");
+                            return R"({"error":"Arg `todos` is not valid JSON"})";
                         }
                     }
                     if (!notes.empty()) {
                         planStore["notes"] = notes;
                     }
-                    std::string planJson;
-                    try {
-                        planJson = planStore.dump();
-                    } catch (const std::exception& ex) {
-                        if (error_out) {
-                            *error_out = pluginStrdup(ctx->host, ex.what());
-                        }
-                        return nullptr;
+                    std::string planJson = planStore.dump();
+
+                    const std::string tid{thread_id.data() ? thread_id.data() : "", thread_id.size()};
+                    if (!savePlanningFile(c, tid, planJson)) {
+                        pluginLog(&c, 3, fmt::format("agentxx_planning: persist planning failed tid={}", tid));
                     }
 
-                    // 1) 本地持久化 (best effort: 失败仅告警, 会话内功能不受影响)
-                    const std::string tid{thread_id.data ? thread_id.data : "", thread_id.size};
-                    if (!savePlanningFile(*ctx, tid, planJson)) {
-                        pluginLog(ctx,
-                                  3,
-                                  fmt::format("agentxx_planning: persist planning failed (dataDir unavailable?) tid={}", tid));
-                    }
-
-                    // 2) 会话规划 state 写入 (system prompt 注入链路; 接口表缺失时跳过)
                     bool sessionApplied = true;
-                    if (!ctx->iface.planning || !ctx->iface.planning->set_planning) {
+                    if (!c.iface.planning || !c.iface.planning->set_planning) {
                         sessionApplied = false;
                     } else {
-                        auto rc       = ctx->iface.planning->set_planning(
-                            ctx->host,
-                            thread_id,
+                        auto rc = c.iface.planning->set_planning(
+                            c.host,
+                            agentxx_plugin_sv(tid.data(), tid.size()),
                             agentxx_plugin_sv(roadmap.data(), roadmap.size()),
                             agentxx_plugin_sv(todosJson.data(), todosJson.size()),
                             agentxx_plugin_sv(notes.data(), notes.size())
@@ -496,32 +442,14 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                         sessionApplied = (rc == 0);
                     }
 
-                    // 3) 事件发布 (client 侧 Info 段落渲染数据源)
-                    publishPlanningEvent(*ctx, planJson);
+                    publishPlanningEvent(c, planJson);
 
                     if (!sessionApplied) {
-                        // 宿主未装配 planning 中间件 (如 BaseAgent 场景):
-                        // 持久化/事件仍可用, 明确提示注入链路未生效
-                        pluginLog(ctx, 3, "agentxx_planning: host planning iface unavailable, session state skipped");
+                        pluginLog(&c, 3, "agentxx_planning: host planning iface unavailable, session state skipped");
                     }
-                    return pluginStrdup(ctx->host, "success");
-                } catch (const std::exception& ex) {
-                    if (error_out) {
-                        *error_out = pluginStrdup(ctx ? ctx->host : nullptr, ex.what());
-                    }
-                    return nullptr;
-                } catch (...) {
-                    if (error_out) {
-                        *error_out = pluginStrdup(ctx ? ctx->host : nullptr, "unknown exception");
-                    }
-                    return nullptr;
+                    return "success";
                 }
-            };
-            if (agentxx_register_inline_tool(host, &spec, shim.get()) != 0) {
-                pluginLog(ctx.get(), 3, fmt::format("agentxx_planning: register tool {} failed", kNamePlanning));
-            } else {
-                ctx->inline_tool_shims.push_back(std::move(shim));
-            }
+            );
         }
 
         // 宿主约定事件 client_attached 订阅: 客户端接入/重连时重发当前会话快照
@@ -544,9 +472,9 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
 extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_destroy(void* plugin_ctx) {
     // C ABI 边界异常守卫: 销毁回调异常不得外泄
     auto* ctx = static_cast<PluginCtx*>(plugin_ctx);
-    agentxx::plugin_guard::guardCallVoid(
-        [ctx](const char* msg) noexcept { pluginLog(ctx, 4, msg ? msg : ""); },
-        [&] { delete ctx; }); // 垫片适配器为 ctx 内嵌存储, 随 ctx 一并释放
+    agentxx::plugin_guard::guardCallVoid(ctxGuardLogger(ctx), [&] {
+        delete ctx;
+    });
 }
 
 /* =====================================================================

@@ -134,33 +134,39 @@ asio::awaitable<TestResult>
     // ---- 4. 能力 agentxx.system_usage (agent 侧周期采集 publish 的数据源) ----
     {
         XX_TEST_EXPECT_TRUE(ctx->pluginManager->hasCapability("agentxx.system_usage"));
-        // 统一异步操作模型: 阻塞便捷版在 io 线程被 fail-fast 拒绝 (防死锁),
-        // io 线程内调用方使用异步句柄 + 让出式轮询
-        char*         err = nullptr;
-        auto*         op  = ctx->pluginManager->invokeCapabilityAsync(
+        char*       err = nullptr;
+        int         opStatus = -1;
+        std::string payload;
+        bool        done = false;
+        using StateTuple = std::tuple<int*, std::string*, bool*>;
+        StateTuple state{&opStatus, &payload, &done};
+
+        auto* op = ctx->pluginManager->invokeCapabilityAsync(
             nullptr,
             "agentxx.system_usage",
             "query",
             "{}",
+            [](void* ud, int st, char* pl) {
+                auto* s = static_cast<StateTuple*>(ud);
+                *std::get<0>(*s) = st;
+                if (pl) {
+                    *std::get<1>(*s) = pl;
+                    std::free(pl);
+                }
+                *std::get<2>(*s) = true;
+            },
+            &state,
             &err
         );
         XX_TEST_EXPECT_TRUE(op != nullptr);
-        char* json = nullptr;
-        if (op) {
-            while (op->poll(op) != AGENTXX_OP_POLL_DONE) {
-                // 让出 io 线程 (内部驱动协程得以推进), 不阻塞
-                asio::steady_timer t(co_await asio::this_coro::executor);
-                t.expires_after(std::chrono::milliseconds(2));
-                co_await t.async_wait(asio::use_awaitable);
-            }
-            int status = AGENTXX_OP_FAILED;
-            XX_TEST_EXPECT_EQ(op->take(op, &status, &json), 0);
-            op->free(op);
+        while (!done) {
+            asio::steady_timer t(co_await asio::this_coro::executor);
+            t.expires_after(std::chrono::milliseconds(2));
+            co_await t.async_wait(asio::use_awaitable);
         }
-        XX_TEST_EXPECT_TRUE(json != nullptr);
-        if (json) {
-            auto j = neograph::json::parse(json);
-            std::free(json);
+        XX_TEST_EXPECT_EQ(opStatus, AGENTXX_OP_OK);
+        if (!payload.empty()) {
+            auto j = neograph::json::parse(payload);
             if (j.is_object()) {
                 double cpu = j.value("cpu", -1.0);
                 XX_TEST_EXPECT_TRUE(cpu >= 0.0 && cpu <= 100.0);

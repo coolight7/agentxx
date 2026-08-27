@@ -16,6 +16,13 @@
 #include "agentxx/util/http_server.h"
 #include "neograph/json.h"
 
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#endif
+
 #include <atomic>
 #include <cstring>
 #include <filesystem>
@@ -26,6 +33,41 @@
 #include <vector>
 
 namespace {
+
+static std::string findPluginDir(const char* pluginName) {
+    namespace fs = std::filesystem;
+    std::error_code       ec;
+    std::vector<fs::path> candidates;
+#if defined(_WIN32)
+    wchar_t buf[MAX_PATH];
+    if (::GetModuleFileNameW(nullptr, buf, MAX_PATH) > 0) {
+        candidates.push_back(fs::path(buf).parent_path() / "plugins" / pluginName);
+    }
+#else
+    if (auto p = fs::read_symlink("/proc/self/exe", ec); !ec) {
+        candidates.push_back(p.parent_path() / "plugins" / pluginName);
+    }
+#endif
+    candidates.push_back(fs::current_path(ec) / "plugins" / pluginName);
+    auto hasLibFile = [](const fs::path& dir) {
+        std::error_code                     ec2;
+        std::filesystem::directory_iterator it(dir, ec2);
+        std::filesystem::directory_iterator end;
+        for (; it != end; it.increment(ec2)) {
+            auto ext = it->path().extension().string();
+            if (ext == ".so" || ext == ".dll" || ext == ".dylib") {
+                return true;
+            }
+        }
+        return false;
+    };
+    for (const auto& c : candidates) {
+        if (fs::is_directory(c, ec) && hasLibFile(c)) {
+            return c.string();
+        }
+    }
+    return std::string{"plugins/"} + pluginName;
+}
 
 // 本模块测试计数器 (仅本编译单元可见; 不经头文件 extern 导出)
 int g_ffi_passed = 0;
@@ -458,19 +500,8 @@ void testHilInterrupt() {
     // 权限模式 all_ask: 全部路径读写均询问 (确保 /etc/hostname 触发权限中断)
     // 插件装配: mock 调用的 agentxx_filesystem_read 已从 lib 内置工具迁移为
     // filesystem 插件 (2026-08 内置插件化), FFI agent 不会自动加载插件,
-    // 须显式配置; 路径按测试可执行同目录 plugins/ 推导 (/proc/self/exe,
-    // 失败回退 cwd/plugins)
-    std::string pluginDir;
-    {
-        std::error_code ec;
-        std::filesystem::path exe = std::filesystem::read_symlink("/proc/self/exe", ec);
-        if (ec) {
-            exe = std::filesystem::current_path(ec) / "agentxx_test";
-        }
-        if (!ec) {
-            pluginDir = (exe.parent_path() / "plugins" / "agentxx_filesystem").string();
-        }
-    }
+    // 须显式配置; 路径按测试可执行同目录 plugins/ 推导
+    std::string pluginDir = findPluginDir("agentxx_filesystem");
     std::string configJson = R"({"permissionMode": "all_ask"})";
     if (!pluginDir.empty()) {
         // 经 json 库注入 plugins 段 (手拼 raw string 会踩 ")" 定界提前终止坑)

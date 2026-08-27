@@ -25,6 +25,16 @@
 #include <utility>
 #include <vector>
 
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#endif
+
 namespace agentxx {
 namespace util {
 
@@ -812,6 +822,43 @@ inline PinyinCallback s_pinyinCallback = nullptr;
     return homePath + "/" + std::string{rest};
 }
 
+/// UTF-8 字符串安全转换为 std::filesystem::path (Windows 下使用宽字符 API 避免 ANSI/GBK 乱码)
+[[nodiscard]] inline std::filesystem::path utf8ToPath(std::string_view utf8) {
+#if defined(_WIN32)
+    if (utf8.empty()) {
+        return std::filesystem::path{};
+    }
+    int wlen = ::MultiByteToWideChar(CP_UTF8, 0, utf8.data(), static_cast<int>(utf8.size()), nullptr, 0);
+    if (wlen <= 0) {
+        return std::filesystem::path{};
+    }
+    std::wstring wstr(static_cast<size_t>(wlen), L'\0');
+    ::MultiByteToWideChar(CP_UTF8, 0, utf8.data(), static_cast<int>(utf8.size()), wstr.data(), wlen);
+    return std::filesystem::path(std::move(wstr));
+#else
+    return std::filesystem::path(utf8);
+#endif
+}
+
+/// std::filesystem::path 安全转换为 UTF-8 字符串 (generic 分隔符 '/')
+[[nodiscard]] inline std::string pathToUtf8Generic(const std::filesystem::path& p) {
+#if defined(_WIN32)
+    auto wstr = p.generic_wstring();
+    if (wstr.empty()) {
+        return {};
+    }
+    int len = ::WideCharToMultiByte(CP_UTF8, 0, wstr.data(), static_cast<int>(wstr.size()), nullptr, 0, nullptr, nullptr);
+    if (len <= 0) {
+        return {};
+    }
+    std::string str(static_cast<size_t>(len), '\0');
+    ::WideCharToMultiByte(CP_UTF8, 0, wstr.data(), static_cast<int>(wstr.size()), str.data(), len, nullptr, nullptr);
+    return str;
+#else
+    return p.generic_string();
+#endif
+}
+
 /// 将用户提供的路径统一转换为当前系统的绝对路径 (相对路径基于指定基准目录):
 /// 1. 展开开头的 `~` 为用户主目录
 /// 2. 规范化分隔符/盘符 (toCurrentSystemStandardPath, 含 Windows 盘符 -> /mnt/ 转换)
@@ -829,22 +876,20 @@ inline PinyinCallback s_pinyinCallback = nullptr;
     auto expanded   = expandUserHomePath(path);
     auto normalized = toCurrentSystemStandardPath(expanded);
     if (isAbsolutePath(normalized)) {
-        return std::filesystem::path{normalized}.lexically_normal().generic_string();
+        return pathToUtf8Generic(utf8ToPath(normalized).lexically_normal());
     }
     if (!baseDir.empty()) {
         // 相对路径: 基于指定基准目录拼接 (词法规范化, 不访问文件系统)
-        return (std::filesystem::path{baseDir} / std::filesystem::path{normalized})
-            .lexically_normal()
-            .generic_string();
+        return pathToUtf8Generic((utf8ToPath(baseDir) / utf8ToPath(normalized)).lexically_normal());
     }
     // 无基准目录: 基于进程当前工作目录转换为绝对路径 (旧行为)
     std::error_code ec;
-    auto            abs = std::filesystem::absolute(normalized, ec);
+    auto            abs = std::filesystem::absolute(utf8ToPath(normalized), ec);
     if (ec) {
         // absolute 仅在获取 cwd 时可能失败, 回退为原规范化路径
-        return std::filesystem::path{normalized}.lexically_normal().generic_string();
+        return pathToUtf8Generic(utf8ToPath(normalized).lexically_normal());
     }
-    return abs.lexically_normal().generic_string();
+    return pathToUtf8Generic(abs.lexically_normal());
 }
 
 /// 将用户提供的路径统一转换为当前系统的绝对路径 (相对路径基于进程当前工作目录):

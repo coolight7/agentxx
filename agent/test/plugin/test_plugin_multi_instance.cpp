@@ -34,9 +34,16 @@ static std::string findExamplePluginDirMI() {
     namespace fs = std::filesystem;
     std::error_code       ec;
     std::vector<fs::path> candidates;
+#if defined(_WIN32)
+    wchar_t buf[MAX_PATH];
+    if (::GetModuleFileNameW(nullptr, buf, MAX_PATH) > 0) {
+        candidates.push_back(fs::path(buf).parent_path() / "plugins" / "example_plugin");
+    }
+#else
     if (auto p = fs::read_symlink("/proc/self/exe", ec); !ec) {
         candidates.push_back(p.parent_path() / "plugins" / "example_plugin");
     }
+#endif
     candidates.push_back(fs::current_path(ec) / "plugins" / "example_plugin");
     auto hasLibFile = [](const fs::path& dir) {
         std::error_code                     ec2;

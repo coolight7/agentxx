@@ -312,7 +312,7 @@ void test_acp_server_stdio() {
         // (AgentContext::getSessionWorkDir 对本会话优先返回该值)
         if (responses[1].contains("result") && responses[1]["result"].contains("sessionId")) {
             auto sid = responses[1]["result"]["sessionId"].get<std::string>();
-            XX_TEST_EXPECT_EQ(agent->getContext()->getSessionWorkDir(sid), std::string{"/tmp"});
+            XX_TEST_EXPECT_EQ(agent->getContext()->getSessionWorkDir(sid), agentxx::util::toCurrentSystemAbsolutePath("/tmp"));
         }
 
         // Resp 2: nonexistent method
@@ -362,7 +362,7 @@ void test_acp_server_stdio_session_cwd() {
     XX_TEST_EXPECT_TRUE(sidA != sidB);
 
     // 会话 A 绑定 /tmp; 会话 B 相对路径 "." 归一为进程启动 cwd —— 两会话互不影响
-    XX_TEST_EXPECT_EQ(agent->getContext()->getSessionWorkDir(sidA), std::string{"/tmp"});
+    XX_TEST_EXPECT_EQ(agent->getContext()->getSessionWorkDir(sidA), agentxx::util::toCurrentSystemAbsolutePath("/tmp"));
     XX_TEST_EXPECT_EQ(
         agent->getContext()->getSessionWorkDir(sidB),
         std::filesystem::current_path().generic_string()

@@ -1611,9 +1611,9 @@ asio::awaitable<void>
     test_glob_unicode_paths(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     namespace fs = std::filesystem;
     auto unicodeDir = testDir + "/utf8_glob_ßµ™∃";
-    fs::create_directories(unicodeDir);
+    fs::create_directories(agentxx::util::utf8ToPath(unicodeDir));
     {
-        std::ofstream f(unicodeDir + "/sample.txt");
+        std::ofstream f(agentxx::util::utf8ToPath(unicodeDir + "/sample.txt"));
         f << "unicode glob content\n";
     }
 
@@ -1622,6 +1622,7 @@ asio::awaitable<void>
     // 1) 递归 glob: 应能遍历该目录且路径中包含 UTF-8 字符 (不抛异常)
     auto argsRec = neograph::json{
         {"file_patterns", neograph::json::array({testDir + "/**/*"})},
+        {"limit",         0                                           },
     };
     auto resRec = co_await tool.execute_async(argsRec);
     bool hasFile = resRec.find("sample.txt") != std::string::npos;
@@ -1634,7 +1635,7 @@ asio::awaitable<void>
     auto resDirect = co_await tool.execute_async(argsDirect);
     bool hasDirectMatch = resDirect.find("sample.txt") != std::string::npos;
 
-    fs::remove_all(unicodeDir);
+    fs::remove_all(agentxx::util::utf8ToPath(unicodeDir));
 
     if (hasFile && hasUnicodeDir && hasDirectMatch) {
         g_fs_passed++;
@@ -1653,9 +1654,9 @@ asio::awaitable<void>
     test_grep_unicode_path_and_content(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     namespace fs = std::filesystem;
     auto unicodeDir = testDir + "/utf8_grep_ßµ™∃";
-    fs::create_directories(unicodeDir);
+    fs::create_directories(agentxx::util::utf8ToPath(unicodeDir));
     {
-        std::ofstream f(unicodeDir + "/target.txt");
+        std::ofstream f(agentxx::util::utf8ToPath(unicodeDir + "/target.txt"));
         f << "match_token_in_unicode_dir_12345\nother content\n";
     }
 
@@ -1670,7 +1671,7 @@ asio::awaitable<void>
     bool hasMatch = result.find("target.txt") != std::string::npos
                     && result.find("[Error]") == std::string::npos;
 
-    fs::remove_all(unicodeDir);
+    fs::remove_all(agentxx::util::utf8ToPath(unicodeDir));
 
     if (hasMatch) {
         g_fs_passed++;

@@ -79,6 +79,11 @@ struct Deadline {
 
 namespace detail {
 
+/// 将 std::filesystem::path 转换为无损 UTF-8 字符串
+inline std::string toUtf8(const std::filesystem::path& p) {
+    return agentxx::util::pathToUtf8Generic(p);
+}
+
 /// 基于 workDir 的会话工作目录解析绝对路径
 /// - workDir 非空时以其为相对路径基准 (会话工作目录与进程 cwd 解耦);
 ///   为空时回退进程 cwd (resolvedWorkDir 兜底, 与单参 toCurrentSystemAbsolutePath 一致)
@@ -181,11 +186,10 @@ inline bool isExcluded(const std::string& pathStr, const std::vector<std::regex>
 
 /// 读取完整文件文本 (同步); 打开失败抛出异常
 inline std::string readFileContent(const std::string& filepath) {
-    auto systemCharsetFilePath = agentxx::util::toCurrentSystemStandardPath(filepath);
-    agentxx::util::autoConvertToSystemPath(systemCharsetFilePath);
+    auto p = agentxx::util::utf8ToPath(filepath);
 
     std::ifstream stream;
-    stream.open(systemCharsetFilePath, std::ios_base::binary);
+    stream.open(p, std::ios_base::binary);
     if (!stream) {
         auto ec = std::error_code{errno, std::system_category()};
         throw std::runtime_error(fmt::format(R"(Can not open file. Error: {})", ec.message()));
@@ -241,14 +245,14 @@ inline std::string fileListExecuteImpl(
                 }
 
                 // 路径列: 目录加 `/` 后缀, 符号链接附加指向目标 (对齐 ls -l)
-                auto pathStr = entity.path().generic_string();
+                auto pathStr = detail::toUtf8(entity.path());
                 if (entity.is_directory()) {
                     pathStr += "/";
                 } else if (entity.is_symlink()) {
                     std::error_code ec;
                     auto            target = std::filesystem::read_symlink(entity.path(), ec);
                     if (!ec) {
-                        pathStr += " -> " + target.generic_string();
+                        pathStr += " -> " + detail::toUtf8(target);
                     }
                 }
 
@@ -259,7 +263,7 @@ inline std::string fileListExecuteImpl(
                 return true;
             },
             [&](std::string errmsg) -> bool {
-                lines.push_back(fmt::format("[Error] {}: {}", entity.path().generic_string(), errmsg));
+                lines.push_back(fmt::format("[Error] {}: {}", detail::toUtf8(entity.path()), errmsg));
                 return false;
             }
         );
@@ -424,13 +428,11 @@ inline std::string fileWriteExecuteImpl(
     if (filepath.empty()) {
         return R"([Error] Arg `path` is empty)";
     }
-    auto systemCharsetFilePath = filepath;
-    agentxx::util::autoConvertToSystemPath(systemCharsetFilePath);
     auto content   = arguments.value<std::string>("content", std::string{});
     auto overwrite = arguments.value<bool>("overwrite", false);
 
     std::ofstream stream;
-    auto          path = std::filesystem::path(filepath);
+    auto          path = agentxx::util::utf8ToPath(filepath);
     if (false == overwrite && std::filesystem::exists(path)) {
         throw std::runtime_error{"File already exist. Set `overwrite` = true if want to overwrite."};
     }
@@ -439,11 +441,11 @@ inline std::string fileWriteExecuteImpl(
         // 创建父目录
         throw std::runtime_error{fmt::format(
             R"(Can not create `path`({})'s parent dirs.)",
-            path.parent_path().generic_string()
+            detail::toUtf8(path.parent_path())
         )};
     }
 
-    stream.open(systemCharsetFilePath, std::ios_base::out | std::ios_base::trunc | std::ios_base::binary);
+    stream.open(path, std::ios_base::out | std::ios_base::trunc | std::ios_base::binary);
     if (!stream) {
         auto ec = std::error_code{errno, std::system_category()};
         throw std::runtime_error{
@@ -655,7 +657,7 @@ inline std::string fileGlobExecuteImpl(
             std::vector<std::filesystem::path> filtered;
             filtered.reserve(resultList.size());
             for (const auto& p : resultList) {
-                if (false == detail::isExcluded(p.generic_string(), excludeRegexes)) {
+                if (false == detail::isExcluded(detail::toUtf8(p), excludeRegexes)) {
                     filtered.push_back(p);
                 }
             }
@@ -704,7 +706,7 @@ inline std::string fileGlobExecuteImpl(
         if (checkCancel() || deadline.expired()) {
             return "[Error] Cancelled or timed out";
         }
-        oss << item.generic_string() << '\n';
+        oss << detail::toUtf8(item) << '\n';
     }
     return oss.str();
 }
@@ -980,7 +982,7 @@ inline std::string fileGrepExecuteImpl(
             if (checkStop()) {
                 return "[Error] Cancelled or timed out";
             }
-            auto filepath = item.generic_string();
+            auto filepath = detail::toUtf8(item);
             // 读取并预处理: 跳过二进制/非文本文件 (glob 阶段已过滤目录)
             auto filetextOpt = loadSearchableText(filepath);
             if (false == filetextOpt.has_value()) {
@@ -999,7 +1001,7 @@ inline std::string fileGrepExecuteImpl(
             if (checkStop()) {
                 return "[Error] Cancelled or timed out";
             }
-            auto filepath = item.generic_string();
+            auto filepath = detail::toUtf8(item);
             auto filetextOpt = loadSearchableText(filepath);
             if (false == filetextOpt.has_value()) {
                 continue;
@@ -1253,7 +1255,7 @@ inline asio::awaitable<std::string> fileWriteExecuteAsyncImpl(
         && false == std::filesystem::create_directories(path.parent_path())) {
         throw std::runtime_error{fmt::format(
             R"(Can not create `path`({})'s parent dirs.)",
-            path.parent_path().generic_string()
+            detail::toUtf8(path.parent_path())
         )};
     }
 

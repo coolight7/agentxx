@@ -1,20 +1,7 @@
 // agentxx_filesystem —— 文件系统工具插件 (list / read / write / edit / glob / grep)
-// - 从 libagentxx src/tools/filesystem 拆分独立 (同名同行为)
-// - 会话工作目录经宿主 agentxx.agent.config v2 get_work_dir 获取 (相对路径基准,
-//   原实现经 AgentContext::wsAbs 同语义); 取消查询经 agentxx.agent.cancel 接口表
-//   (长遍历 list/glob/grep 循环内轮询, 与原 asyncWithTimeout/取消 watcher 一致)
-// - 统一异步操作模型:
-//   - read/write/edit: poll 寄生驱动注册 (register_polled_tool) —— 工作协程在
-//     实例 PollLoop 上 spawn, 经 asio stream_file 真异步文件 I/O 由宿主 io 线程
-//     非阻塞步进, 与内置工具同线程交错执行 (还原迁移前 lib 内置工具行为);
-//     BOOST_ASIO_HAS_FILE 不可用平台回退 sync 垫片 (offload 池)
-//   - list/glob/grep: 阻塞委托垫片注册 (offload 池线程执行, io 线程只等完成
-//     通知; std::filesystem/glob 长遍历无法协程化)
-// - 业务逻辑在 filesystem_impl.h (纯函数, 测试直测同一实现)
 #include "agentxx_fs_plugin.h"
 #include "filesystem_impl.h"
 #include <cstring>
-#include <memory>
 #include <string>
 #include <vector>
 
@@ -42,10 +29,7 @@ constexpr auto kDepictGlob     = "Find files and directories matching glob patte
 constexpr auto kDepictGrep     = R"(Search file contents using text or regular expressions. Supports glob-based file filtering.
 Use this to locate code, find references, or search logs across a project.)";
 
-/// 参数说明兜底 (正常情况下由宿主 toolPrompt 提供完整文案; 默认文案与 lib
-/// prompt.h 同步, 宿主未装配 prompt 接口时保证描述可用)
-/// fallback 兼容字面量与运行期拼接的说明文本 (glob/grep 的通配符表为动态拼接)
-std::string argDesc(const ToolPromptText& p, const char* key, std::string_view fallback) {
+std::string argDesc(const agentxx::kit::ToolPromptText& p, const char* key, std::string_view fallback) {
     auto it = p.args.find(key);
     if (it != p.args.end() && !it->second.empty()) {
         return it->second;
@@ -69,180 +53,198 @@ const char* kGlobPatternHelp =
 | `[!ABC]` | One char NOT in set | `[!ABC]*` matches files not starting with A, B, or C |
 )";
 
-/// 注册阻塞委托型工具 (sync 垫片; list/glob/grep 及无文件异步支持平台的
-/// read/write/edit 回退路径): schema/描述存储于本实例 ctx->storage; 宿主
-/// 注册时拷贝。统一异步操作模型: offload 池线程执行, io 线程只等完成通知;
-/// execute 签名追加 cancel_flag 形参
-void registerTool(
-    PluginCtx*         ctx,
-    const char*        name,
-    const char*        defaultDepict,
-    const std::string& schema,
-    char* (*execute)(
-        void*                   user_data,
-        AgentxxPluginStringView args_json,
-        AgentxxPluginStringView thread_id,
-        AgentxxPluginStringView tool_call_id,
-        volatile int*           cancel_flag,
-        char**                  error_out
-    )
-) {
-    auto&       storage = ctx->storage;
-    std::string depict  = readToolPrompt(ctx->host, ctx->iface, name).depict;
-    if (depict.empty()) {
-        depict = defaultDepict;
-    }
-    storage.push_back(std::move(depict));
-    storage.push_back(schema);
-
-    // 垫片适配器: 实例内嵌存储 (ctx 持有, 随实例销毁释放; 多实例契约)
-    auto shim = std::make_unique<AgentxxSyncToolShim>();
-
-    AgentxxSyncToolSpec spec{};
-    spec.name        = agentxx_plugin_sv(name, std::strlen(name));
-    spec.description = agentxx_plugin_sv(
-        storage[storage.size() - 2].data(),
-        storage[storage.size() - 2].size()
-    );
-    spec.parameters_json = agentxx_plugin_sv(storage.back().data(), storage.back().size());
-    spec.user_data       = ctx; ///< 回调经 user_data 恢复本实例上下文
-    spec.flags           = AGENTXX_TOOL_FLAG_NONE;
-    spec.execute         = execute;
-    if (agentxx_register_sync_tool(ctx->host, &spec, shim.get()) != 0) {
-        pluginLog(ctx, 3, fmt::format("agentxx_filesystem: register tool {} failed", name));
-        return;
-    }
-    ctx->sync_tool_shims.push_back(std::move(shim));
+std::string schemaList(PluginCtx* ctx) {
+    auto p = ctx->toolPrompt(kNameList);
+    return neograph::json{
+        {"type", "object"},
+        {"properties", {
+            {"path", {
+                {"type", "string"},
+                {"description", argDesc(p, "path", kPathDesc)}
+            }},
+            {"recursive", {
+                {"type", "boolean"},
+                {"default", false},
+                {"description", argDesc(p, "recursive", "Default `false`. If `true`, list subdirectories recursively.")}
+            }},
+            {"limit", {
+                {"type", "integer"},
+                {"default", 100},
+                {"description", argDesc(p, "limit", "Default `100`. Maximum number of entries to return. Set `limit <= 0` for unlimited.")}
+            }},
+            {"timeout", {
+                {"type", "number"},
+                {"default", 60},
+                {"description", argDesc(p, "timeout", kTimeoutDesc)}
+            }}
+        }},
+        {"required", neograph::json::array({"path"})}
+    }.dump();
 }
 
-#if defined(BOOST_ASIO_HAS_FILE)
-/// poll 寄生驱动工作协程: 解析参数 JSON → 调用协程执行体 → PolledOutcome
-/// - 协程运行在实例 PollLoop (宿主 io 线程序列化步进); 异常由适配器兜底转
-///   OP_FAILED, 此处无需自行捕获 (impl 的 *ExecuteAsync 外层已把可预期异常
-///   编码为 "[Error] ..." 文本)
-/// - 取消: job.cancelFlag 由宿主 op 驱动器在会话取消/超时时置位; 单文件
-///   读写为短操作, 入口检查一次即可 (与原实现"短操作不轮询"语义一致)
-/// - 会话工作目录: get_session_work_dir 为 io 线程约束接口, 工作协程运行在
-///   宿主 io 线程的 poll 推进内 → 宿主检测后内联直执行 (无跨线程等待)
-template<auto ExecAsyncFn>
-asio::awaitable<agentxx::plugin::PolledOutcome> fsPolledWork(agentxx::plugin::PolledJob& job) {
-    auto* ctx = static_cast<PluginCtx*>(job.userData);
-    if (job.cancelFlag != 0) {
-        co_return agentxx::plugin::PolledOutcome::cancelled();
-    }
-    auto sv = job.argsView();
-    std::string argsStr(sv.data ? sv.data : "{}", sv.size);
-    auto arguments = argsStr.empty() ? neograph::json::object() : neograph::json::parse(argsStr);
-    std::string tid{job.tidView().data ? job.tidView().data : "", job.tidView().size};
-    auto        workDir = sessionWorkDir(ctx, agentxx_plugin_sv(tid.data(), tid.size()));
-    auto result         = co_await ExecAsyncFn(arguments, workDir);
-    co_return agentxx::plugin::PolledOutcome::ok(std::move(result));
+std::string schemaRead(PluginCtx* ctx) {
+    auto p = ctx->toolPrompt(kNameRead);
+    return neograph::json{
+        {"type", "object"},
+        {"properties", {
+            {"path", {
+                {"type", "string"},
+                {"description", argDesc(p, "path", kPathDesc)}
+            }},
+            {"line_offset", {
+                {"type", "integer"},
+                {"default", 0},
+                {"description", argDesc(p, "line_offset", "Number of lines to skip from the beginning. Default `0` (no offset). Returns an error if offset exceeds the file's line count.")}
+            }},
+            {"line_limit", {
+                {"type", "integer"},
+                {"description", argDesc(p, "line_limit", "Maximum number of lines to read. Range: [1, ∞]. Default `null` (read all). Values exceeding the file's line count are allowed without error.")}
+            }}
+        }},
+        {"required", neograph::json::array({"path"})}
+    }.dump();
 }
 
-/// poll 寄生驱动注册 (read/write/edit 专用; BOOST_ASIO_HAS_FILE 平台):
-/// schema/描述存储于本实例 ctx->storage; 工作协程在实例 PollLoop 上 spawn,
-/// 由宿主 io 线程经 pollOnce 非阻塞步进 —— asio stream_file 异步文件 I/O
-/// 与内置工具同线程交错执行
-void registerToolPolled(
-    PluginCtx*                        ctx,
-    const char*                       name,
-    const char*                       defaultDepict,
-    const std::string&                schema,
-    agentxx::plugin::PolledWorkFn     workFn
-) {
-    auto&       storage = ctx->storage;
-    std::string depict  = readToolPrompt(ctx->host, ctx->iface, name).depict;
-    if (depict.empty()) {
-        depict = defaultDepict;
-    }
-    storage.push_back(std::move(depict));
-    storage.push_back(schema);
-
-    // 垫片适配器: 实例内嵌存储 (ctx 持有, 随实例销毁释放; 多实例契约)
-    auto shim = std::make_unique<agentxx::plugin::PolledToolShim>();
-    if (agentxx::plugin::register_polled_tool(
-            ctx->host,
-            agentxx_plugin_sv(name, std::strlen(name)),
-            agentxx_plugin_sv(
-                storage[storage.size() - 2].data(),
-                storage[storage.size() - 2].size()
-            ),
-            agentxx_plugin_sv(storage.back().data(), storage.back().size()),
-            ctx->pollLoop,
-            workFn,
-            ctx,
-            shim.get(),
-            /*timeoutMs=*/0,
-            AGENTXX_TOOL_FLAG_NONE
-        ) != 0) {
-        pluginLog(ctx, 3, fmt::format("agentxx_filesystem: register tool {} failed", name));
-        return;
-    }
-    ctx->polled_shims.push_back(std::move(shim));
+std::string schemaWrite(PluginCtx* ctx) {
+    auto p = ctx->toolPrompt(kNameWrite);
+    return neograph::json{
+        {"type", "object"},
+        {"properties", {
+            {"path", {
+                {"type", "string"},
+                {"description", argDesc(p, "path", "Path to the target file. Relative paths are resolved against the current working directory; `~` expands to the home directory.")}
+            }},
+            {"content", {
+                {"type", "string"},
+                {"description", argDesc(p, "content", "Content to write into the file.")}
+            }},
+            {"overwrite", {
+                {"type", "boolean"},
+                {"default", false},
+                {"description", argDesc(p, "overwrite", "Default `false`. Controls write behavior:\n`true`: Create the file if it doesn't exist; overwrite if it does.\n`false`: Create a new file only; returns an error if the file already exists.")}
+            }}
+        }},
+        {"required", neograph::json::array({"path", "content"})}
+    }.dump();
 }
-#endif // BOOST_ASIO_HAS_FILE
 
-/// C ABI execute 包装: 解析参数 JSON → 调用实现 (workDir + 取消查询注入) →
-/// 结果 strdup (异常不外泄; impl 内部已把可预期错误编码进返回文本)
-/// - 取消双通道: cancel_flag 由宿主 op 驱动器在会话取消/超时时置位;
-///   会话取消查询经宿主 cancel 接口表按 thread_id 轮询 (impl 在长遍历
-///   循环内调用; 接口缺失时传 nullptr 等价无取消支持)
-template<auto ExecFn>
-char* wrapExecute(
-    void*                   user_data,
-    AgentxxPluginStringView args_json,
-    AgentxxPluginStringView thread_id,
-    AgentxxPluginStringView tool_call_id,
-    volatile int*           cancel_flag,
-    char**                  error_out
-) {
-    auto* ctx = static_cast<PluginCtx*>(user_data);
-    (void)tool_call_id;
-    const AgentxxHost* host = ctx ? ctx->host : nullptr;
-    try {
-        std::string argsStr(args_json.data ? args_json.data : "", args_json.size);
-        auto arguments = argsStr.empty() ? neograph::json::object() : neograph::json::parse(argsStr);
-        std::function<bool()> isCancelled;
-        if (cancel_flag) {
-            int flag = *cancel_flag;
-            if (flag) {
-                return pluginStrdup(host, "[Error] Cancelled");
-            }
-            isCancelled = [cancel_flag]() -> bool {
-                return *cancel_flag != 0;
-            };
-        }
-        if (!isCancelled && ctx && ctx->iface.cancel && ctx->iface.cancel->is_cancelled
-            && thread_id.data) {
-            std::string tid{thread_id.data, thread_id.size};
-            isCancelled  = [ctx, tid]() -> bool {
-                return ctx->iface.cancel->is_cancelled(
-                           ctx->host,
-                           agentxx_plugin_sv(tid.data(), tid.size())
-                       )
-                    != 0;
-            };
-        }
-        auto result = ExecFn(arguments, sessionWorkDir(ctx, thread_id), isCancelled);
-        return pluginStrdup(host, result.c_str());
-    } catch (const std::exception& ex) {
-        if (error_out) {
-            *error_out = pluginStrdup(host, ex.what());
-        }
-        return nullptr;
-    } catch (...) {
-        if (error_out) {
-            *error_out = pluginStrdup(host, "unknown exception");
-        }
-        return nullptr;
-    }
+std::string schemaEdit(PluginCtx* ctx) {
+    auto p = ctx->toolPrompt(kNameEdit);
+    return neograph::json{
+        {"type", "object"},
+        {"properties", {
+            {"path", {
+                {"type", "string"},
+                {"description", argDesc(p, "path", kPathDesc)}
+            }},
+            {"old_str", {
+                {"type", "string"},
+                {"description", argDesc(p, "old_str", "The exact string to find and replace. Must be non-empty and match precisely (including whitespace and indentation).")}
+            }},
+            {"new_str", {
+                {"type", "string"},
+                {"description", argDesc(p, "new_str", "The replacement string.")}
+            }},
+            {"multi_replace", {
+                {"type", "boolean"},
+                {"default", false},
+                {"description", argDesc(p, "multi_replace", "Default `false`. If `true`, replace ALL occurrences of `old_str`. If `false`, replace only the first occurrence.")}
+            }}
+        }},
+        {"required", neograph::json::array({"path", "old_str", "new_str"})}
+    }.dump();
+}
+
+std::string schemaGlob(PluginCtx* ctx) {
+    auto p = ctx->toolPrompt(kNameGlob);
+    return neograph::json{
+        {"type", "object"},
+        {"properties", {
+            {"file_patterns", {
+                {"type", "array"},
+                {"items", {{"type", "string"}}},
+                {"description", argDesc(p, "file_patterns", std::string("Path with glob patterns to match. Relative paths are resolved against the current working directory; `~` expands to the home directory.\n") + kGlobPatternHelp)}
+            }},
+            {"exclude_patterns", {
+                {"type", "array"},
+                {"items", {{"type", "string"}}},
+                {"description", argDesc(p, "exclude_patterns", "Glob patterns to exclude from results. Matched paths are removed.\nExample: `[\"**/node_modules/**\", \"**/.git/**\", \"**/build/**\"]`.")}
+            }},
+            {"type", {
+                {"description", argDesc(p, "type", "Filter results by file type. Accepts a string or array of strings.\nValid values: `file`, `dir`, `symlink`, `other`, `any`.\nDefault: `any` (no filter).\nExample: `\"file\"` returns only regular files; `[\"file\",\"symlink\"]` returns files and symlinks.")}
+            }},
+            {"max_depth", {
+                {"type", "integer"},
+                {"default", -1},
+                {"description", argDesc(p, "max_depth", "Maximum directory depth relative to the pattern's base directory.\nDefault `-1` (no limit). Example: `max_depth=1` matches only direct children.\nSimilar to `find -maxdepth`.")}
+            }},
+            {"sort", {
+                {"type", "boolean"},
+                {"default", false},
+                {"description", argDesc(p, "sort", "Default `false`. If `true`, sort results alphabetically.\nResults are always deduplicated regardless of this setting.")}
+            }},
+            {"timeout", {
+                {"type", "number"},
+                {"default", 60},
+                {"description", argDesc(p, "timeout", kTimeoutDesc)}
+            }}
+        }},
+        {"required", neograph::json::array({"file_patterns"})}
+    }.dump();
+}
+
+std::string schemaGrep(PluginCtx* ctx) {
+    auto p = ctx->toolPrompt(kNameGrep);
+    return neograph::json{
+        {"type", "object"},
+        {"properties", {
+            {"text_patterns", {
+                {"type", "array"},
+                {"items", {{"type", "string"}}},
+                {"description", argDesc(p, "text_patterns", "One or more search patterns (text or regex, depending on `text_patterns_is_regex`).\nA match is found if ANY pattern matches.")}
+            }},
+            {"file_patterns", {
+                {"type", "array"},
+                {"items", {{"type", "string"}}},
+                {"description", argDesc(p, "file_patterns", std::string("Path with glob patterns to select which files to search. Relative paths are resolved against the current working directory; `~` expands to the home directory.\n") + kGlobPatternHelp)}
+            }},
+            {"case_sensitive", {
+                {"type", "boolean"},
+                {"default", true},
+                {"description", argDesc(p, "case_sensitive", "Default `true`. If `false`, matching is case-insensitive (like `grep -i`).")}
+            }},
+            {"text_patterns_is_regex", {
+                {"type", "boolean"},
+                {"description", argDesc(p, "text_patterns_is_regex", "Determines how `text_patterns` are interpreted.\n`true`: Patterns are regular expressions.\n`false`: Patterns are literal text strings.")}
+            }},
+            {"output_mode", {
+                {"type", "string"},
+                {"enum", neograph::json::array({"content", "files_with_matches"})},
+                {"description", argDesc(p, "output_mode", "Default: `files_with_matches`.\n`files_with_matches`: Return file paths with match counts (format: `file:count`).\n`content`: Return matching lines grouped by file to reduce path repetition. Each file\nstarts with a header line `{filepath}:`, followed by that file's lines (`{line}:{content}`). Example:\n/path/to/file1:\n12:int foo() {\n40:int bar() {\n/path/to/file2:\n7:return 0;")}
+            }},
+            {"context_lines", {
+                {"type", "integer"},
+                {"default", 0},
+                {"description", argDesc(p, "context_lines", "Default `0`. Number of context lines before and after each match.\nOnly applies to `content` output mode. Similar to `grep -C N`.\nContext lines use `-` separator; match lines use `:` separator.")}
+            }},
+            {"max_count_per_file", {
+                {"type", "integer"},
+                {"default", 0},
+                {"description", argDesc(p, "max_count_per_file", "Default `0` (no limit). Maximum matches to report per file.\nSimilar to `grep -m N`. Example: `max_count_per_file=3` stops after 3 matches per file.")}
+            }},
+            {"timeout", {
+                {"type", "number"},
+                {"default", 60},
+                {"description", argDesc(p, "timeout", kTimeoutDesc)}
+            }}
+        }},
+        {"required", neograph::json::array({"text_patterns", "file_patterns"})}
+    }.dump();
 }
 
 } // namespace
 
 extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_get_info(void) {
-    // C ABI 边界异常守卫: 异常返回 NULL (宿主按"未导出"处理, 从库名推导插件名);
-    // 本边界为纯静态元数据, 无实例上下文可捕获 → 空操作日志闭包
     return agentxx::plugin_guard::guardCall(
         [](const char*) noexcept {},
         nullptr,
@@ -251,383 +253,129 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_get_inf
             AGENTXX_PLUGIN_API_VERSION,
             AGENTXX_SV("agentxx_filesystem"),
             AGENTXX_SV("1.0.0"),
-            AGENTXX_SV("Filesystem tools: list / read / write / edit / glob / grep"),
+            AGENTXX_SV("File system tools: list, read, write, edit, glob, grep"),
         };
         return &info;
     });
 }
 
-extern "C" AGENTXX_PLUGIN_EXPORT int
-    agentxx_plugin_create(const AgentxxHost* host, void** plugin_ctx) {
-    // C ABI 边界异常守卫: create 内含 JSON schema 构建/接口查询等可抛操作,
-    // 异常返回 -1 走宿主加载失败清理路径 (异常穿越 C ABI 即 UB);
-    // 守卫日志闭包捕获局部裸指针 (ctx 装配前置空 → 异常路径静默丢弃)
+extern "C" AGENTXX_PLUGIN_EXPORT int agentxx_plugin_create(const AgentxxHost* host, void** plugin_ctx) {
     PluginCtx* raw = nullptr;
     return agentxx::plugin_guard::guardCall(
-        [&raw](const char* msg) noexcept { pluginLog(raw, 4, msg ? msg : ""); },
+        [&raw](const char* msg) noexcept { ctxGuardLogger(raw)(msg); },
         -1,
         [&]() -> int {
         if (!host || !host->vtable || !plugin_ctx) {
             return -1;
         }
-        auto ctx   = std::make_unique<PluginCtx>();
-        ctx->host  = host;
-        ctx->iface = agentxx::plugin::AgentIfaces::query(host);
-        raw        = ctx.get();
-        loadWorkDir(*ctx); ///< agent 级工作目录装配到本实例 (每实例独立)
+        auto ctx  = std::make_unique<PluginCtx>();
+        ctx->init(host);
+        raw = ctx.get();
 
-        if (ctx->work_dir.empty()) {
-            pluginLog(ctx.get(),
-                      3,
-                      "agentxx_filesystem: host work_dir unavailable, relative paths resolve against process cwd");
+        if (!ctx->iface.tools || !ctx->iface.tools->register_tool) {
+            return -1;
         }
 
-        // ---- agentxx_filesystem_list ----
-        {
-            ToolPromptText p      = readToolPrompt(ctx->host, ctx->iface, kNameList);
-            std::string schema = neograph::json{
-                {"type", "object"},
-                {"properties",
-                 {
-                     {"path", {{"type", "string"}, {"description", argDesc(p, "path", kPathDesc)}}},
-                     {"recursive",
-                      {
-                          {"type", "boolean"},
-                          {"description",
-                           argDesc(p,
-                                   "recursive",
-                                   "Default `false`. If `true`, list subdirectories recursively.")},
-                      }},
-                     {"limit",
-                      {
-                          {"type", "integer"},
-                          {"description",
-                           argDesc(p,
-                                   "limit",
-                                   "Default `100`. Maximum number of entries to return. Set `limit <= 0` for unlimited.")},
-                      }},
-                     {"timeout",
-                      {
-                          {"type", "number"},
-                          {"description", argDesc(p, "timeout", kTimeoutDesc)},
-                      }},
-                 }},
-                {"required", neograph::json::array({"path"})},
+        // list
+        agentxx::kit::blocking_tool(
+            *ctx,
+            kNameList,
+            kDepictList,
+            schemaList(ctx.get()),
+            [](PluginCtx& c, std::string_view args_json, std::string_view tid, volatile int* cancel_flag) -> std::string {
+                auto arguments = args_json.empty() ? neograph::json::object() : neograph::json::parse(args_json);
+                std::string workDir = c.workDir(agentxx_plugin_sv(tid.data(), tid.size()));
+                auto isCancelled = [&c, tid, cancel_flag]() -> bool {
+                    if (cancel_flag && *cancel_flag != 0) return true;
+                    return c.sessionCancelled(agentxx_plugin_sv(tid.data(), tid.size()));
+                };
+                return fileListExecute(arguments, workDir, isCancelled);
             }
-                                  .dump();
-            registerTool(ctx.get(), kNameList, kDepictList, schema, &wrapExecute<agentxx_fs_plugin::fileListExecute>);
-        }
+        );
 
-        // ---- agentxx_filesystem_read ----
-        {
-            ToolPromptText p      = readToolPrompt(ctx->host, ctx->iface, kNameRead);
-            std::string schema = neograph::json{
-                {"type", "object"},
-                {"properties",
-                 {
-                     {"path", {{"type", "string"}, {"description", argDesc(p, "path", kPathDesc)}}},
-                     {"line_offset",
-                      {
-                          {"type", "integer"},
-                          {"description",
-                           argDesc(p,
-                                   "line_offset",
-                                   "Number of lines to skip from the beginning. Default `0` (no offset). Returns an error if offset exceeds the file's line count.")},
-                      }},
-                     {"line_limit",
-                      {
-                          {"type", "integer"},
-                          {"description",
-                           argDesc(p,
-                                   "line_limit",
-                                   "Maximum number of lines to read. Range: [1, ∞]. Default `null` (read all). Values exceeding the file's line count are allowed without error.")},
-                      }},
-                 }},
-                {"required", neograph::json::array({"path"})},
+        // glob
+        agentxx::kit::blocking_tool(
+            *ctx,
+            kNameGlob,
+            kDepictGlob,
+            schemaGlob(ctx.get()),
+            [](PluginCtx& c, std::string_view args_json, std::string_view tid, volatile int* cancel_flag) -> std::string {
+                auto arguments = args_json.empty() ? neograph::json::object() : neograph::json::parse(args_json);
+                std::string workDir = c.workDir(agentxx_plugin_sv(tid.data(), tid.size()));
+                auto isCancelled = [&c, tid, cancel_flag]() -> bool {
+                    if (cancel_flag && *cancel_flag != 0) return true;
+                    return c.sessionCancelled(agentxx_plugin_sv(tid.data(), tid.size()));
+                };
+                return fileGlobExecute(arguments, workDir, isCancelled);
             }
-                                  .dump();
-            // poll 寄生驱动注册 (统一异步操作模型): asio stream_file 真异步
-            // 文件 I/O; 无文件异步支持平台回退 sync 垫片 (offload 池)
-#if defined(BOOST_ASIO_HAS_FILE)
-            registerToolPolled(
-                ctx.get(),
-                kNameRead,
-                kDepictRead,
-                schema,
-                &fsPolledWork<agentxx_fs_plugin::fileReadExecuteAsync>
-            );
-#else
-            registerTool(ctx.get(), kNameRead, kDepictRead, schema, &wrapExecute<agentxx_fs_plugin::fileReadExecute>);
-#endif
-        }
+        );
 
-        // ---- agentxx_filesystem_write ----
-        {
-            ToolPromptText p      = readToolPrompt(ctx->host, ctx->iface, kNameWrite);
-            std::string schema = neograph::json{
-                {"type", "object"},
-                {"properties",
-                 {
-                     {"path", {{"type", "string"}, {"description", argDesc(p, "path", kPathDesc)}}},
-                     {"content",
-                      {
-                          {"type", "string"},
-                          {"description", argDesc(p, "content", "Content to write into the file.")},
-                      }},
-                     {"overwrite",
-                      {
-                          {"type", "boolean"},
-                          {"description",
-                           argDesc(p,
-                                   "overwrite",
-                                   R"(Default `false`. Controls write behavior:
-`true`: Create the file if it doesn't exist; overwrite if it does.
-`false`: Create a new file only; returns an error if the file already exists.)")},
-                      }},
-                 }},
-                {"required", neograph::json::array({"path", "content"})},
+        // grep
+        agentxx::kit::blocking_tool(
+            *ctx,
+            kNameGrep,
+            kDepictGrep,
+            schemaGrep(ctx.get()),
+            [](PluginCtx& c, std::string_view args_json, std::string_view tid, volatile int* cancel_flag) -> std::string {
+                auto arguments = args_json.empty() ? neograph::json::object() : neograph::json::parse(args_json);
+                std::string workDir = c.workDir(agentxx_plugin_sv(tid.data(), tid.size()));
+                auto isCancelled = [&c, tid, cancel_flag]() -> bool {
+                    if (cancel_flag && *cancel_flag != 0) return true;
+                    return c.sessionCancelled(agentxx_plugin_sv(tid.data(), tid.size()));
+                };
+                return fileGrepExecute(arguments, workDir, isCancelled);
             }
-                                  .dump();
-            // poll 寄生驱动注册 (语义同 read 工具)
-#if defined(BOOST_ASIO_HAS_FILE)
-            registerToolPolled(
-                ctx.get(),
-                kNameWrite,
-                kDepictWrite,
-                schema,
-                &fsPolledWork<agentxx_fs_plugin::fileWriteExecuteAsync>
-            );
-#else
-            registerTool(ctx.get(), kNameWrite, kDepictWrite, schema, &wrapExecute<agentxx_fs_plugin::fileWriteExecute>);
-#endif
-        }
+        );
 
-        // ---- agentxx_filesystem_edit ----
-        {
-            ToolPromptText p      = readToolPrompt(ctx->host, ctx->iface, kNameEdit);
-            std::string schema = neograph::json{
-                {"type", "object"},
-                {"properties",
-                 {
-                     {"path",
-                      {
-                          {"type", "string"},
-                          {"description",
-                           argDesc(p,
-                                   "path",
-                                   "Path to the text file. Relative paths are resolved against the current working directory; `~` expands to the home directory.")},
-                      }},
-                     {"old_str",
-                      {
-                          {"type", "string"},
-                          {"description",
-                           argDesc(p,
-                                   "old_str",
-                                   "The exact string to find and replace. Must be non-empty and match precisely (including whitespace and indentation).")},
-                      }},
-                     {"new_str",
-                      {
-                          {"type", "string"},
-                          {"description", argDesc(p, "new_str", "The replacement string.")},
-                      }},
-                     {"multi_replace",
-                      {
-                          {"type", "boolean"},
-                          {"description",
-                           argDesc(p,
-                                   "multi_replace",
-                                   "Default `false`. If `true`, replace ALL occurrences of `old_str`. If `false`, replace only the first occurrence.")},
-                      }},
-                 }},
-                {"required", neograph::json::array({"path", "old_str", "new_str"})},
+        // read
+        agentxx::kit::blocking_tool(
+            *ctx,
+            kNameRead,
+            kDepictRead,
+            schemaRead(ctx.get()),
+            [](PluginCtx& c, std::string_view args_json, std::string_view tid) -> std::string {
+                auto arguments = args_json.empty() ? neograph::json::object() : neograph::json::parse(args_json);
+                std::string workDir = c.workDir(agentxx_plugin_sv(tid.data(), tid.size()));
+                return fileReadExecute(arguments, workDir);
             }
-                                  .dump();
-            // poll 寄生驱动注册 (语义同 read 工具)
-#if defined(BOOST_ASIO_HAS_FILE)
-            registerToolPolled(
-                ctx.get(),
-                kNameEdit,
-                kDepictEdit,
-                schema,
-                &fsPolledWork<agentxx_fs_plugin::fileEditExecuteAsync>
-            );
-#else
-            registerTool(ctx.get(), kNameEdit, kDepictEdit, schema, &wrapExecute<agentxx_fs_plugin::fileEditExecute>);
-#endif
-        }
+        );
 
-        // ---- agentxx_filesystem_glob ----
-        {
-            ToolPromptText p      = readToolPrompt(ctx->host, ctx->iface, kNameGlob);
-            std::string schema = [&p]() {
-                auto patternsDesc = fmt::format(
-                    R"(Path with glob patterns to match. Relative paths are resolved against the current working directory; `~` expands to the home directory.
+        // write
+        agentxx::kit::blocking_tool(
+            *ctx,
+            kNameWrite,
+            kDepictWrite,
+            schemaWrite(ctx.get()),
+            [](PluginCtx& c, std::string_view args_json, std::string_view tid) -> std::string {
+                auto arguments = args_json.empty() ? neograph::json::object() : neograph::json::parse(args_json);
+                std::string workDir = c.workDir(agentxx_plugin_sv(tid.data(), tid.size()));
+                return fileWriteExecute(arguments, workDir);
+            }
+        );
 
-{}
-Examples: `/upload/**/*.txt`, `/src/*[0-9].cpp`, `/usr/include/nc*.h`, `/output/file[0-9].*`.)",
-                    kGlobPatternHelp
-                );
-                return neograph::json{
-                    {"type", "object"},
-                    {"properties",
-                     {
-                         {"file_patterns",
-                          {
-                              {"type", "array"},
-                              {"items", neograph::json{{"type", "string"}}},
-                              {"description", argDesc(p, "file_patterns", patternsDesc)},
-                          }},
-                         {"type",
-                          {
-                              {"description",
-                               argDesc(p,
-                                       "type",
-                                       R"(Filter results by file type. Accepts a string or array of strings.
-Valid values: `file`, `dir`, `symlink`, `other`, `any`.
-Default: `any` (no filter).
-Example: `"file"` returns only regular files; `["file","symlink"]` returns files and symlinks.)")},
-                          }},
-                         {"exclude_patterns",
-                          {
-                              {"type", "array"},
-                              {"items", neograph::json{{"type", "string"}}},
-                              {"description",
-                               argDesc(p,
-                                       "exclude_patterns",
-                                       R"(Glob patterns to exclude from results. Matched paths are removed.
-Example: `["**/node_modules/**", "**/.git/**", "**/build/**"]`.)")},
-                          }},
-                         {"max_depth",
-                          {
-                              {"type", "integer"},
-                              {"description",
-                               argDesc(p,
-                                       "max_depth",
-                                       "Maximum directory depth relative to the pattern's base directory.\nDefault `-1` (no limit). Example: `max_depth=1` matches only direct children.\nSimilar to `find -maxdepth`.")},
-                          }},
-                         {"sort",
-                          {
-                              {"type", "boolean"},
-                              {"description",
-                               argDesc(p,
-                                       "sort",
-                                       "Default `false`. If `true`, sort results alphabetically.\nResults are always deduplicated regardless of this setting.")},
-                          }},
-                         {"timeout",
-                          {
-                              {"type", "number"},
-                              {"description", argDesc(p, "timeout", kTimeoutDesc)},
-                          }},
-                     }},
-                    {"required", neograph::json::array({"file_patterns"})},
-                }
-                                  .dump();
-            }();
-            registerTool(ctx.get(), kNameGlob, kDepictGlob, schema, &wrapExecute<agentxx_fs_plugin::fileGlobExecute>);
-        }
+        // edit
+        agentxx::kit::blocking_tool(
+            *ctx,
+            kNameEdit,
+            kDepictEdit,
+            schemaEdit(ctx.get()),
+            [](PluginCtx& c, std::string_view args_json, std::string_view tid) -> std::string {
+                auto arguments = args_json.empty() ? neograph::json::object() : neograph::json::parse(args_json);
+                std::string workDir = c.workDir(agentxx_plugin_sv(tid.data(), tid.size()));
+                return fileEditExecute(arguments, workDir);
+            }
+        );
 
-        // ---- agentxx_filesystem_grep ----
-        {
-            ToolPromptText p      = readToolPrompt(ctx->host, ctx->iface, kNameGrep);
-            std::string schema = [&p]() {
-                auto filePatternsDesc = fmt::format(
-                    R"(Path with glob patterns to select which files to search. Relative paths are resolved against the current working directory; `~` expands to the home directory.
-
-{}
-Examples: `/src/**/*.cpp`, `/project/*.h`, `/logs/**/*.log`.)",
-                    kGlobPatternHelp
-                );
-                return neograph::json{
-                    {"type", "object"},
-                    {"properties",
-                     {
-                         {"text_patterns_is_regex",
-                          {
-                              {"type", "boolean"},
-                              {"description",
-                               argDesc(p,
-                                       "text_patterns_is_regex",
-                                       "Determines how `text_patterns` are interpreted.\n`true`: Patterns are regular expressions.\n`false`: Patterns are literal text strings.")},
-                          }},
-                         {"text_patterns",
-                          {
-                              {"type", "array"},
-                              {"items", neograph::json{{"type", "string"}}},
-                              {"description",
-                               argDesc(p,
-                                       "text_patterns",
-                                       "One or more search patterns (text or regex, depending on `text_patterns_is_regex`).\nA match is found if ANY pattern matches.")},
-                          }},
-                         {"file_patterns",
-                          {
-                              {"type", "array"},
-                              {"items", neograph::json{{"type", "string"}}},
-                              {"description", argDesc(p, "file_patterns", filePatternsDesc)},
-                          }},
-                         {"output_mode",
-                          {
-                              {"type", "string"},
-                              {"enum", neograph::json::array({"content", "files_with_matches"})},
-                              {"default", "files_with_matches"},
-                              {"description",
-                               argDesc(p,
-                                       "output_mode",
-                                       R"(Default: `files_with_matches`.
-`files_with_matches`: Return file paths with match counts (format: `file:count`).
-`content`: Return matching lines grouped by file to reduce path repetition. Each file
-starts with a header line `{filepath}:`, followed by that file's lines (`{line}:{content}`). Example:
-/path/to/file1:
-12:int foo() {
-40:int bar() {
-/path/to/file2:
-7:return 0;)")},
-                          }},
-                         {"case_sensitive",
-                          {
-                              {"type", "boolean"},
-                              {"description",
-                               argDesc(p,
-                                       "case_sensitive",
-                                       "Default `true`. If `false`, matching is case-insensitive (like `grep -i`).")},
-                          }},
-                         {"max_count_per_file",
-                          {
-                              {"type", "integer"},
-                              {"description",
-                               argDesc(p,
-                                       "max_count_per_file",
-                                       "Default `0` (no limit). Maximum matches to report per file.\nSimilar to `grep -m N`. Example: `max_count_per_file=3` stops after 3 matches per file.")},
-                          }},
-                         {"context_lines",
-                          {
-                              {"type", "integer"},
-                              {"description",
-                               argDesc(p,
-                                       "context_lines",
-                                       "Default `0`. Number of context lines before and after each match.\nOnly applies to `content` output mode. Similar to `grep -C N`.\nContext lines use `-` separator; match lines use `:` separator.")},
-                          }},
-                         {"timeout",
-                          {
-                              {"type", "number"},
-                              {"description", argDesc(p, "timeout", kTimeoutDesc)},
-                          }},
-                     }},
-                    {"required", neograph::json::array({"text_patterns", "file_patterns"})},
-                }
-                                  .dump();
-            }();
-            registerTool(ctx.get(), kNameGrep, kDepictGrep, schema, &wrapExecute<agentxx_fs_plugin::fileGrepExecute>);
-        }
-
-        *plugin_ctx = ctx.release(); ///< 所有权移交宿主 (destroy 时取回归还)
+        *plugin_ctx = ctx.release();
         return 0;
     });
 }
 
 extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_destroy(void* plugin_ctx) {
-    // C ABI 边界异常守卫: 销毁回调异常不得外泄 (否则宿主卸载流程被打断)
     auto* ctx = static_cast<PluginCtx*>(plugin_ctx);
-    agentxx::plugin_guard::guardCallVoid(
-        [ctx](const char* msg) noexcept { pluginLog(ctx, 4, msg ? msg : ""); },
-        [&] { delete ctx; }); // 垫片适配器为 ctx 内嵌存储, 随 ctx 一并释放
+    agentxx::plugin_guard::guardCallVoid(ctxGuardLogger(ctx), [&] {
+        if (ctx) {
+            delete ctx;
+        }
+    });
 }

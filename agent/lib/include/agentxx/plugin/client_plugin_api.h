@@ -117,7 +117,7 @@ struct AgentxxClientHost {
 /* ==================== 接口表: 展示/命令/toast (agentxx.client.ui) ==================== */
 
 #define AGENTXX_IFACE_CLIENT_UI         "agentxx.client.ui"
-#define AGENTXX_IFACE_CLIENT_UI_VERSION 2
+#define AGENTXX_IFACE_CLIENT_UI_VERSION 1
 
 typedef struct AgentxxClientUiIface {
     int version; ///< 必须 >= AGENTXX_IFACE_CLIENT_UI_VERSION (v2 追加 update_tool_decor)

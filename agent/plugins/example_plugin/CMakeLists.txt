@@ -6,6 +6,22 @@
 #   多插件合并时符号冲突 (纯编译期 -D, 不改插件源码)
 set(PLUGIN_NAME example_plugin)
 
+if (NOT DEFINED BOOST_ROOT)
+  set(_BOOST_CANDIDATES
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/boost-windows-build-debug"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/boost-windows-build-release"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/boost-linux-build-debug"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/boost-linux-build-release"
+  )
+  foreach(_bc ${_BOOST_CANDIDATES})
+    if (EXISTS "${_bc}/include/boost/asio/awaitable.hpp")
+      set(BOOST_ROOT "${_bc}")
+      break()
+    endif()
+  endforeach()
+endif()
+set(_BOOST_INCLUDES "${BOOST_ROOT}/include/" "${BOOST_ROOT}/include/boost/")
+
 if (_AGENTXX_ADD_AS_BUILTIN)
   # ===== 内置合并编译分支 =====
   set(_target abp_${PLUGIN_NAME})
@@ -27,6 +43,7 @@ if (_AGENTXX_ADD_AS_BUILTIN)
   target_include_directories(${_target} PRIVATE
     "${AGENTXX_LIB_INCLUDE_DIR}"           # agentxx/plugin/plugin_api.h
     "${AGENTXX_INSTALL_DIR}/include"       # fmt
+    ${_BOOST_INCLUDES}
   )
 set_target_properties(${_target} PROPERTIES
     POSITION_INDEPENDENT_CODE ON
@@ -69,13 +86,18 @@ endif()
 add_library(${PLUGIN_NAME} SHARED
   example_plugin.cpp
 )
+
+if (NOT TARGET agentxx_util)
+  find_package(agentxx_util REQUIRED)
+endif()
+
 target_include_directories(${PLUGIN_NAME} PRIVATE
   "${AGENTXX_LIB_INCLUDE_DIR}"           # agentxx/plugin/plugin_api.h
   "${AGENTXX_INSTALL_DIR}/include"       # fmt
+  ${_BOOST_INCLUDES}
 )
-find_package(fmt REQUIRED)
 target_link_libraries(${PLUGIN_NAME} PRIVATE
-  fmt::fmt
+  agentxx_util
 )
 set_target_properties(${PLUGIN_NAME} PROPERTIES
   PREFIX "lib"

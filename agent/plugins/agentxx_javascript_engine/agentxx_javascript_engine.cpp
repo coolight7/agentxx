@@ -22,6 +22,7 @@
 #include "agentxx/plugin/plugin_api.h"
 #include "agentxx/plugin/plugin_guard.h"
 #include "agentxx/plugin/plugin_iface_helper.h"
+#include "agentxx/plugin/plugin_kit.h"
 #include "quickjs.h"
 
 #include <atomic>
@@ -913,8 +914,9 @@ void* JsEngine::toolExecuteStart(
     // op 句柄仅作占位标识 (宿主不解释其内容): 所有权随任务闭包移交 JS 线程,
     // 通知完成后由闭包自身释放 —— 支持同一引擎插件被多实例加载/反复加载
     // (此前成功路径 new 后无人 delete, 每次工具执行泄漏句柄)
-    auto*      op = new int(0);
-    if (!engine->post([engine, binding, req, notify, op]() {
+    auto*           op      = new int(0);
+    AgentxxOpNotify ntfCopy = *notify;
+    if (!engine->post([engine, binding, req, ntfCopy, op]() {
             // ---- JS 线程: 执行并上报 (RAII 兜底释放句柄) ----
             struct OpReleaser {
                 int* p;
@@ -924,10 +926,10 @@ void* JsEngine::toolExecuteStart(
             const AgentxxHost* host = engine->engineHost_;
             if (!req->error.empty()) {
                 char* payload = host ? host->vtable->strdup(req->error.c_str()) : nullptr;
-                notify->done(notify->host_ud, AGENTXX_OP_FAILED, payload);
+                ntfCopy.done(ntfCopy.host_ud, AGENTXX_OP_FAILED, payload);
             } else {
                 char* payload = host ? host->vtable->strdup(req->result.c_str()) : nullptr;
-                notify->done(notify->host_ud, AGENTXX_OP_OK, payload);
+                ntfCopy.done(ntfCopy.host_ud, AGENTXX_OP_OK, payload);
             }
         })) {
         // 引擎已停止: 启动失败 (未入队 → 句柄由本函数直接释放)
@@ -1095,7 +1097,6 @@ JSValue JsEngine::bridgeCall(
             spec.parameters_json = agentxx_plugin_sv(paramsJson.data(), paramsJson.size());
             // 统一异步操作模型: 异步桥 (JS 线程完成时经通知器上报)
             spec.execute_start   = &JsEngine::toolExecuteStart;
-            spec.execute_poll    = nullptr; ///< 只等完成通知
             spec.execute_cancel  = nullptr;
             spec.user_data       = binding.get();
             int rc               = iface.tools->register_tool(host, &spec);
@@ -1186,11 +1187,13 @@ JSValue JsEngine::bridgeCall(
 
             // 2) 宿主插件工具 (同步互调; vtable 内部保证线程安全)
             char* err  = nullptr;
-            char* resp = iface.tools->call_tool(
+            char* resp = agentxx::kit::call_tool_blocking(
                 host,
-                agentxx_plugin_sv(name.data(), name.size()),
-                agentxx_plugin_sv(argsJson.data(), argsJson.size()),
-                agentxx_plugin_sv(sessionId.data(), sessionId.size()),
+                iface.tools,
+                iface.scheduler,
+                std::string_view(name.data(), name.size()),
+                std::string_view(argsJson.data(), argsJson.size()),
+                std::string_view(sessionId.data(), sessionId.size()),
                 &err
             );
             if (!resp) {
@@ -1281,7 +1284,6 @@ JSValue JsEngine::bridgeCall(
             AgentxxHookSpec hspec{};
             hspec.point      = static_cast<AgentxxHookPoint>(point);
             hspec.hook_start = &JsEngine::hookStart;
-            hspec.hook_poll  = nullptr;
             hspec.hook_cancel = nullptr;
             hspec.user_data  = binding.get();
             int rc           = iface.hooks->register_hook(host, &hspec);
@@ -1645,18 +1647,19 @@ static void* jsCapStart(
         }
         // JS 线程任务: 直接调用 doLoadScript (已在 JS 线程, 无需 postSync),
         // 完成后取工具清单并经通知器上报
-        if (!engine->post([engine, caller_host, notify, name, path, code]() {
+        AgentxxOpNotify ntfCopy = *notify;
+        if (!engine->post([engine, caller_host, ntfCopy, name, path, code]() {
                 std::string err2;
                 const int   rc2 = engine->loadScriptOnJsThread(caller_host, name, path, code, err2);
                 const AgentxxHost* eh = engine->host();
                 if (rc2 != 0) {
                     char* payload = eh ? eh->vtable->strdup(err2.c_str()) : nullptr;
-                    notify->done(notify->host_ud, AGENTXX_OP_FAILED, payload);
+                    ntfCopy.done(ntfCopy.host_ud, AGENTXX_OP_FAILED, payload);
                     return;
                 }
                 std::string tools = engine->loadedToolsJsonOnJsThread(name);
                 char* payload = eh ? eh->vtable->strdup(("{\"ok\": true, \"tools\": " + tools + "}").c_str()) : nullptr;
-                notify->done(notify->host_ud, AGENTXX_OP_OK, payload);
+                ntfCopy.done(ntfCopy.host_ud, AGENTXX_OP_OK, payload);
             })) {
             return setErr("interpreter.js engine stopped");
         }
@@ -1722,7 +1725,6 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
             host,
             AGENTXX_SV("interpreter.js"),
             &jsCapStart,
-            nullptr,
             nullptr,
             engine
         );
