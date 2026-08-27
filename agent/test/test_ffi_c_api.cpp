@@ -172,7 +172,7 @@ struct FfiMockLLM {
             {"object", "chat.completion.chunk"},
             {"model", "ffi-mock"},
             {"choices", neograph::json::array({
-                neograph::json{{"index", 0}, {"delta", {{"role", "assistant"}, {"content", ""}}}, {"finish_reason", nullptr}},
+                neograph::json{{"index", 0}, {"delta", {{"role", "assistant"}, {"content", ""}}}},
             })},
         }.dump() + "\n\n"
         + "data: " + neograph::json{
@@ -180,7 +180,7 @@ struct FfiMockLLM {
             {"object", "chat.completion.chunk"},
             {"model", "ffi-mock"},
             {"choices", neograph::json::array({
-                neograph::json{{"index", 0}, {"delta", {{"content", content}}}, {"finish_reason", nullptr}},
+                neograph::json{{"index", 0}, {"delta", {{"content", content}}}},
             })},
         }.dump() + "\n\n"
         + "data: " + neograph::json{
@@ -204,10 +204,9 @@ struct FfiMockLLM {
             {"choices", neograph::json::array({
                 neograph::json{
                     {"index", 0},
-                    {"delta", {{"role", "assistant"}, {"content", nullptr}, {"tool_calls", neograph::json::array({
+                    {"delta", {{"role", "assistant"}, {"tool_calls", neograph::json::array({
                         neograph::json{{"index", 0}, {"id", "call_ffi_1"}, {"type", "function"}, {"function", {{"name", toolName}, {"arguments", ""}}}},
                     })}}},
-                    {"finish_reason", nullptr},
                 },
             })},
         }.dump() + "\n\n"
@@ -221,7 +220,6 @@ struct FfiMockLLM {
                     {"delta", {{"tool_calls", neograph::json::array({
                         neograph::json{{"index", 0}, {"function", {{"arguments", argsJson}}}},
                     })}}},
-                    {"finish_reason", nullptr},
                 },
             })},
         }.dump() + "\n\n"
@@ -243,33 +241,32 @@ struct FfiMockLLM {
                .ioThreads = 1,
         });
         auto mock = this;
-        server->router().add(
-            "/chat/completions",
-            2,
-            std::make_shared<agentxx::util::HttpServer::Handler>(
-                [mock](
-                    agentxx::util::HttpServer::Request& /*req*/,
-                    agentxx::util::HttpServer::Response& resp,
-                    std::string_view /*matched*/
-                ) -> asio::awaitable<void> {
-                    const int n = mock->requestCount.fetch_add(1);
-                    if (mock->slowMs > 0) {
-                        std::this_thread::sleep_for(std::chrono::milliseconds(mock->slowMs));
-                    }
-                    resp.result(boost::beast::http::status::ok);
-                    resp.set(boost::beast::http::field::content_type, "text/event-stream");
-                    resp.set(boost::beast::http::field::cache_control, "no-cache");
-                    if (n == 0 && mock->firstIsToolCall) {
-                        resp.body(
-                        ) = toolCallSse("agentxx_filesystem_read", R"({"path": "/etc/hostname"})");
-                    } else {
-                        resp.body() = textSse("hello from ffi mock");
-                    }
-                    resp.prepare_payload();
-                    co_return;
+        auto handler = std::make_shared<agentxx::util::HttpServer::Handler>(
+            [mock](
+                agentxx::util::HttpServer::Request& /*req*/,
+                agentxx::util::HttpServer::Response& resp,
+                std::string_view /*matched*/
+            ) -> asio::awaitable<void> {
+                const int n = mock->requestCount.fetch_add(1);
+                if (mock->slowMs > 0) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(mock->slowMs));
                 }
-            )
+                resp.result(boost::beast::http::status::ok);
+                resp.set(boost::beast::http::field::content_type, "text/event-stream");
+                resp.set(boost::beast::http::field::cache_control, "no-cache");
+                resp.keep_alive(false);
+                if (n == 0 && mock->firstIsToolCall) {
+                    resp.body()
+                        = toolCallSse("agentxx_filesystem_read", R"({"path": "/etc/hostname"})");
+                } else {
+                    resp.body() = textSse("hello from ffi mock");
+                }
+                resp.prepare_payload();
+                co_return;
+            }
         );
+        server->router().add("/chat/completions", 2, handler);
+        server->router().add("/v1/chat/completions", 2, handler);
         thread = std::thread([s = server.get()]() {
             s->start();
         });

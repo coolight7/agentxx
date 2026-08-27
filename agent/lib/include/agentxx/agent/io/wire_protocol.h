@@ -250,7 +250,7 @@ inline std::optional<Delta> deltaFromJson(const neograph::json& j) {
         d.think            = std::move(th);
     }
     if (j.contains("message") && j["message"].is_object()) {
-        d.message = ViewMessage::fromJson(j["message"]);
+        d.message = std::make_shared<ViewMessage>(ViewMessage::fromJson(j["message"]));
     }
     if (d.type == Delta::Type::MessageUITip) {
         const auto tip = j.value("tipType", std::string{"info"});

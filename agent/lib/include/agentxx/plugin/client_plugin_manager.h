@@ -473,8 +473,8 @@ private:
     /// 因接口要求未满足被跳过的插件 (io 线程; 见 skippedPlugins())
     std::map<std::string, std::string> skippedPlugins_{};
 
-    asio::any_io_executor ioExecutor_{};
-    std::thread::id       ioThreadId_{};
+    asio::any_io_executor                ioExecutor_{};
+    mutable std::atomic<std::thread::id> ioThreadId_{};
 };
 
 /// UI 适配器抽象接口 (UI 无关语义层 → 具体 UI 实现)

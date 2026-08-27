@@ -637,7 +637,7 @@ asio::awaitable<BaseAgent::TurnResult> BaseAgent::runTurnAsync(
             vm.id            = session->appendViewMessage(vm);
             eventBridge->emitDelta(Delta{
                 .type    = Delta::Type::InsertMessage,
-                .message = std::move(vm),
+                .message = std::make_shared<ViewMessage>(std::move(vm)),
             });
         };
 

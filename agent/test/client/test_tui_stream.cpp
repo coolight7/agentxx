@@ -171,9 +171,7 @@ void expectIncrementalPrefixesEqualFull(std::string_view text, int width) {
     XX_TEST_EXPECT_TRUE(true);
 }
 
-} // namespace
-
-TestResult testTuiStream() {
+void testTuiStreamMarkdown() {
     XX_TEST_EXPECT_TRUE(true);
 
     const int W = 80;
@@ -323,464 +321,506 @@ TestResult testTuiStream() {
         auto el100 = incrementalRenderAll(inc, Color::White, markdown::theme_default(), 100, keep);
         XX_TEST_EXPECT_TRUE(true);
     }
+}
 
-    // ---- 加密 thinking 在 TUI 端通过 onDelta 的处理回归测试 ----
+using namespace agentxx::agent;
+
+class TestTUIClientIO : public TUIClientAgentIO {
+public:
+
+    TestTUIClientIO(asio::io_context& ctx) :
+        TUIClientAgentIO(ctx.get_executor(), "test_session") {}
+
+    void testOnDelta(const Delta& d) {
+        onDelta(d);
+    }
+};
+
+// 场景 1: 加密 thinking (text 为空, think.isEncrypted=true) -> 思考开始时立即展示 ->
+// 随后收到 assistant 文本 -> 轮次结束回填 token 数
+void testTuiStreamScenario1(asio::io_context& ioCtx) {
+    TestTUIClientIO client(ioCtx);
     {
-        using namespace agentxx::agent;
+        Delta d1;
+        d1.type        = Delta::Type::ThinkToken;
+        d1.text        = "";
+        d1.think       = ViewMessage::ThinkData{.reasoningTokens = 0, .isEncrypted = true};
+        d1.startTimeMs = 1000;
+        d1.durationMs  = 0;
+        client.testOnDelta(d1);
+    }
 
-        class TestTUIClientIO : public TUIClientAgentIO {
-        public:
-
-            TestTUIClientIO(asio::io_context& ctx) :
-                TUIClientAgentIO(ctx.get_executor(), "test_session") {}
-
-            void testOnDelta(const Delta& d) {
-                onDelta(d);
-            }
-        };
-
-        asio::io_context ioCtx;
-
-        // 场景 1: 加密 thinking (text 为空, think.isEncrypted=true) -> 思考开始时立即展示 ->
-        // 随后收到 assistant 文本 -> 轮次结束回填 token 数
-        {
-            TestTUIClientIO client(ioCtx);
-            Delta           d1;
-            d1.type        = Delta::Type::ThinkToken;
-            d1.text        = "";
-            d1.think       = ViewMessage::ThinkData{.reasoningTokens = 0, .isEncrypted = true};
-            d1.startTimeMs = 1000;
-            d1.durationMs  = 0;
-            client.testOnDelta(d1);
-
-            // 断言: 刚收到 ThinkToken 尚未收到 assistant 文本时，消息列表中已经立即创建了 Think
-            // 消息展示
-            auto snap1 = client.sharedState().snapshot();
-            XX_TEST_EXPECT_EQ(snap1->messages.size(), (size_t)1);
-            if (snap1->messages.size() == 1) {
-                XX_TEST_EXPECT_TRUE(snap1->messages[0]->role == TUIMessage::Role::Think);
-                XX_TEST_EXPECT_TRUE(snap1->messages[0]->think.has_value());
-                if (snap1->messages[0]->think) {
-                    XX_TEST_EXPECT_TRUE(snap1->messages[0]->think->isEncrypted);
-                    XX_TEST_EXPECT_EQ(snap1->messages[0]->think->reasoningTokens, 0);
-                }
-            }
-
-            Delta d2;
-            d2.type        = Delta::Type::TextToken;
-            d2.text        = "Hello";
-            d2.startTimeMs = 1050;
-            client.testOnDelta(d2);
-
-            // 随后收到 usage 返回的 reasoning_tokens = 854 (由 handleChannelWrite 派发)
-            Delta d_usage;
-            d_usage.type       = Delta::Type::ThinkToken;
-            d_usage.text       = "";
-            d_usage.durationMs = 80;
-            d_usage.think = ViewMessage::ThinkData{.reasoningTokens = 854, .isEncrypted = true};
-            client.testOnDelta(d_usage);
-
-            Delta d3;
-            d3.type = Delta::Type::TurnEnd;
-            client.testOnDelta(d3);
-
-            auto snap = client.sharedState().snapshot();
-            XX_TEST_EXPECT_EQ(snap->messages.size(), (size_t)2);
-            if (snap->messages.size() == 2) {
-                // 第一条 Think 消息已成功回填 reasoningTokens = 854 与 durationMs = 80
-                XX_TEST_EXPECT_TRUE(snap->messages[0]->role == TUIMessage::Role::Think);
-                XX_TEST_EXPECT_TRUE(snap->messages[0]->think.has_value());
-                if (snap->messages[0]->think) {
-                    XX_TEST_EXPECT_TRUE(snap->messages[0]->think->isEncrypted);
-                    XX_TEST_EXPECT_EQ(snap->messages[0]->think->reasoningTokens, 854);
-                }
-                XX_TEST_EXPECT_EQ(snap->messages[0]->durationMs, 80);
-                // 第二条应当是 Assistant 消息
-                XX_TEST_EXPECT_TRUE(snap->messages[1]->role == TUIMessage::Role::Assistant);
-                XX_TEST_EXPECT_EQ(snap->messages[1]->text, "Hello");
-            }
-        }
-
-        // 场景 2: 多步 ReAct 交互 (加密 thinking 1 -> usage 1 -> ToolStart -> ToolEnd -> 加密
-        // thinking 2 -> usage 2 -> Assistant 文本 -> TurnEnd) 核心验证: 每次新的 think
-        // 独立在对应动作位置创建，绝不覆盖开头的 think 消息！
-        {
-            TestTUIClientIO client(ioCtx);
-
-            // Step 1: 首轮思考
-            Delta d1_think;
-            d1_think.type  = Delta::Type::ThinkToken;
-            d1_think.text  = "";
-            d1_think.think = ViewMessage::ThinkData{.reasoningTokens = 0, .isEncrypted = true};
-            client.testOnDelta(d1_think);
-
-            // Step 1 结束: usage 回填 Think 1
-            Delta d1_usage;
-            d1_usage.type       = Delta::Type::ThinkToken;
-            d1_usage.text       = "";
-            d1_usage.durationMs = 120;
-            d1_usage.think = ViewMessage::ThinkData{.reasoningTokens = 320, .isEncrypted = true};
-            client.testOnDelta(d1_usage);
-
-            // Step 1 调用工具
-            Delta d1_tool;
-            d1_tool.type       = Delta::Type::ToolStart;
-            d1_tool.toolName   = "search";
-            d1_tool.toolCallId = "call_1";
-            d1_tool.arguments  = "{\"q\":\"test\"}";
-            client.testOnDelta(d1_tool);
-
-            Delta d1_tool_end;
-            d1_tool_end.type       = Delta::Type::ToolEnd;
-            d1_tool_end.toolName   = "search";
-            d1_tool_end.toolCallId = "call_1";
-            d1_tool_end.result     = "ok";
-            client.testOnDelta(d1_tool_end);
-
-            // 断言 Step 1 完成后有 2 条消息: [Think_1(320 tokens), Tool_1]
-            auto snap1 = client.sharedState().snapshot();
-            XX_TEST_EXPECT_EQ(snap1->messages.size(), (size_t)2);
-            if (snap1->messages.size() == 2) {
-                XX_TEST_EXPECT_TRUE(snap1->messages[0]->role == TUIMessage::Role::Think);
-                if (snap1->messages[0]->think) {
-                    XX_TEST_EXPECT_EQ(snap1->messages[0]->think->reasoningTokens, 320);
-                }
-                XX_TEST_EXPECT_TRUE(snap1->messages[1]->role == TUIMessage::Role::Tool);
-            }
-
-            // Step 2: 第二轮思考 (新的 think 开始)
-            Delta d2_think;
-            d2_think.type  = Delta::Type::ThinkToken;
-            d2_think.text  = "";
-            d2_think.think = ViewMessage::ThinkData{.reasoningTokens = 0, .isEncrypted = true};
-            client.testOnDelta(d2_think);
-
-            // 断言 Step 2 思考开始后，立即新增了 Think_2 消息，总数为 3 条 [Think_1, Tool_1,
-            // Think_2]，且 Think_1 内容未被破坏
-            auto snap2 = client.sharedState().snapshot();
-            XX_TEST_EXPECT_EQ(snap2->messages.size(), (size_t)3);
-            if (snap2->messages.size() == 3) {
-                XX_TEST_EXPECT_TRUE(snap2->messages[0]->role == TUIMessage::Role::Think);
-                if (snap2->messages[0]->think) {
-                    XX_TEST_EXPECT_EQ(snap2->messages[0]->think->reasoningTokens, 320); // 未被覆盖
-                }
-                XX_TEST_EXPECT_TRUE(snap2->messages[1]->role == TUIMessage::Role::Tool);
-                XX_TEST_EXPECT_TRUE(snap2->messages[2]->role == TUIMessage::Role::Think);
-                if (snap2->messages[2]->think) {
-                    XX_TEST_EXPECT_EQ(snap2->messages[2]->think->reasoningTokens, 0); // 新思考
-                }
-            }
-
-            // Step 2 输出正文
-            Delta d2_text;
-            d2_text.type = Delta::Type::TextToken;
-            d2_text.text = "Final answer";
-            client.testOnDelta(d2_text);
-
-            // Step 2 结束: usage 回填 Think 2
-            Delta d2_usage;
-            d2_usage.type       = Delta::Type::ThinkToken;
-            d2_usage.text       = "";
-            d2_usage.durationMs = 90;
-            d2_usage.think = ViewMessage::ThinkData{.reasoningTokens = 150, .isEncrypted = true};
-            client.testOnDelta(d2_usage);
-
-            Delta d2_end;
-            d2_end.type = Delta::Type::TurnEnd;
-            client.testOnDelta(d2_end);
-
-            // 最终断言: [Think_1 (320), Tool_1, Think_2 (150), Assistant ("Final answer")]
-            auto snap3 = client.sharedState().snapshot();
-            XX_TEST_EXPECT_EQ(snap3->messages.size(), (size_t)4);
-            if (snap3->messages.size() == 4) {
-                XX_TEST_EXPECT_TRUE(snap3->messages[0]->role == TUIMessage::Role::Think);
-                if (snap3->messages[0]->think) {
-                    XX_TEST_EXPECT_EQ(snap3->messages[0]->think->reasoningTokens, 320);
-                }
-                XX_TEST_EXPECT_TRUE(snap3->messages[1]->role == TUIMessage::Role::Tool);
-                XX_TEST_EXPECT_TRUE(snap3->messages[2]->role == TUIMessage::Role::Think);
-                if (snap3->messages[2]->think) {
-                    XX_TEST_EXPECT_EQ(snap3->messages[2]->think->reasoningTokens, 150);
-                }
-                XX_TEST_EXPECT_TRUE(snap3->messages[3]->role == TUIMessage::Role::Assistant);
-                XX_TEST_EXPECT_EQ(snap3->messages[3]->text, "Final answer");
-            }
-        }
-
-        // 场景 3: 加密 thinking -> 随后直接 TurnEnd
-        {
-            TestTUIClientIO client(ioCtx);
-            Delta           d1;
-            d1.type  = Delta::Type::ThinkToken;
-            d1.text  = "";
-            d1.think = ViewMessage::ThinkData{.reasoningTokens = 50, .isEncrypted = true};
-            client.testOnDelta(d1);
-
-            Delta d2;
-            d2.type = Delta::Type::TurnEnd;
-            client.testOnDelta(d2);
-
-            auto snap = client.sharedState().snapshot();
-            XX_TEST_EXPECT_EQ(snap->messages.size(), (size_t)1);
-            if (snap->messages.size() == 1) {
-                XX_TEST_EXPECT_TRUE(snap->messages[0]->role == TUIMessage::Role::Think);
-                XX_TEST_EXPECT_TRUE(snap->messages[0]->think.has_value());
-                if (snap->messages[0]->think) {
-                    XX_TEST_EXPECT_TRUE(snap->messages[0]->think->isEncrypted);
-                    XX_TEST_EXPECT_EQ(snap->messages[0]->think->reasoningTokens, 50);
-                }
-            }
-        }
-
-        // 场景 4: 明文 thinking (流式) -> 无正文直接结束 -> 收到 usage 回填 (验证不产生重复空 Think
-        // 消息)
-        {
-            TestTUIClientIO client(ioCtx);
-            Delta           d1;
-            d1.type        = Delta::Type::ThinkToken;
-            d1.text        = "明文思考内容";
-            d1.startTimeMs = 2000;
-            client.testOnDelta(d1);
-
-            Delta d_usage;
-            d_usage.type       = Delta::Type::ThinkToken;
-            d_usage.text       = "";
-            d_usage.durationMs = 95;
-            d_usage.think = ViewMessage::ThinkData{.reasoningTokens = 150, .isEncrypted = false};
-            client.testOnDelta(d_usage);
-
-            Delta d_end;
-            d_end.type = Delta::Type::TurnEnd;
-            client.testOnDelta(d_end);
-
-            auto snap = client.sharedState().snapshot();
-            XX_TEST_EXPECT_EQ(snap->messages.size(), (size_t)1);
-            if (snap->messages.size() == 1) {
-                XX_TEST_EXPECT_TRUE(snap->messages[0]->role == TUIMessage::Role::Think);
-                XX_TEST_EXPECT_EQ(snap->messages[0]->text, "明文思考内容");
-                XX_TEST_EXPECT_TRUE(snap->messages[0]->think.has_value());
-                if (snap->messages[0]->think) {
-                    XX_TEST_EXPECT_FALSE(snap->messages[0]->think->isEncrypted);
-                    XX_TEST_EXPECT_EQ(snap->messages[0]->think->reasoningTokens, 150);
-                }
-                XX_TEST_EXPECT_EQ(snap->messages[0]->durationMs, 95);
-            }
-        }
-
-        // 场景 5: 明文 thinking 流式 -> 思考完成结算包 (空文本 ThinkToken 仅携带
-        // startTimeMs/durationMs) -> NodeEnd -> 正文 -> TurnEnd
-        // 核心验证: think 耗时在输出完成时才由结算包回填; 流式期间不产生消息/
-        // 时长; NodeEnd 的节点级计时不覆盖已回填的 Think 时长
-        {
-            TestTUIClientIO client(ioCtx);
-
-            // 流式思考增量: 尚未完成, 不应落盘消息, 更不应有时长
-            Delta d_think;
-            d_think.type        = Delta::Type::ThinkToken;
-            d_think.text        = "思考中...";
-            d_think.startTimeMs = 3000;
-            client.testOnDelta(d_think);
-
-            {
-                auto snap = client.sharedState().snapshot();
-                XX_TEST_EXPECT_EQ(snap->messages.size(), (size_t)0);
-                XX_TEST_EXPECT_EQ(snap->pendingTokenDurationMs, int64_t{0});
-            }
-
-            // 思考完成结算包 (agent 端 finalizeThinkSegment 发出)
-            Delta d_final;
-            d_final.type        = Delta::Type::ThinkToken;
-            d_final.text        = "";
-            d_final.startTimeMs = 3000;
-            d_final.durationMs  = 1234;
-            client.testOnDelta(d_final);
-
-            // NodeEnd 携带节点级计时, 不得覆盖上面回填的 Think 时长
-            Delta d_nodeEnd;
-            d_nodeEnd.type       = Delta::Type::NodeEnd;
-            d_nodeEnd.nodeName   = "llm";
-            d_nodeEnd.startTimeMs = 2900;
-            d_nodeEnd.durationMs  = 99999;
-            client.testOnDelta(d_nodeEnd);
-
-            // 正文输出后轮次结束
-            Delta d_text;
-            d_text.type        = Delta::Type::TextToken;
-            d_text.text        = "Answer";
-            d_text.startTimeMs = 4300;
-            client.testOnDelta(d_text);
-
-            Delta d_end;
-            d_end.type = Delta::Type::TurnEnd;
-            client.testOnDelta(d_end);
-
-            auto snap = client.sharedState().snapshot();
-            XX_TEST_EXPECT_EQ(snap->messages.size(), (size_t)2);
-            if (snap->messages.size() == 2) {
-                XX_TEST_EXPECT_TRUE(snap->messages[0]->role == TUIMessage::Role::Think);
-                XX_TEST_EXPECT_EQ(snap->messages[0]->text, "思考中...");
-                // 结算包回填的耗时; 未被 NodeEnd 的节点时长 (99999) 覆盖
-                XX_TEST_EXPECT_EQ(snap->messages[0]->durationMs, 1234);
-                XX_TEST_EXPECT_TRUE(snap->messages[1]->role == TUIMessage::Role::Assistant);
-                XX_TEST_EXPECT_EQ(snap->messages[1]->text, "Answer");
-            }
-        }
-
-        // 场景 6: Tool 执行中断/未结束 (toolFinished=false) -> 收到新轮次 TurnStart ->
-        // 验证最近连续的 tool 消息被重置为非 running (toolFinished=true)
-        {
-            TestTUIClientIO client(ioCtx);
-
-            // 模拟 ToolStart
-            Delta d_tool;
-            d_tool.type       = Delta::Type::ToolStart;
-            d_tool.toolName   = "agentxx_execute_bash_command";
-            d_tool.toolCallId = "call_bash_1";
-            d_tool.arguments  = "{\"command\":\"sleep 100\"}";
-            client.testOnDelta(d_tool);
-
-            {
-                auto snap = client.sharedState().snapshot();
-                XX_TEST_EXPECT_EQ(snap->messages.size(), (size_t)1);
-                XX_TEST_EXPECT_TRUE(snap->messages[0]->role == TUIMessage::Role::Tool);
-                if (snap->messages[0]->tool) {
-                    XX_TEST_EXPECT_FALSE(snap->messages[0]->tool->toolFinished);
-                }
-            }
-
-            // 模拟重启恢复或中断后收到新消息 (TurnStart)
-            Delta d_turnStart;
-            d_turnStart.type        = Delta::Type::TurnStart;
-            d_turnStart.text        = "新用户消息";
-            d_turnStart.startTimeMs = 5000;
-            client.testOnDelta(d_turnStart);
-
-            {
-                auto snap = client.sharedState().snapshot();
-                XX_TEST_EXPECT_EQ(snap->messages.size(), (size_t)2);
-                XX_TEST_EXPECT_TRUE(snap->messages[0]->role == TUIMessage::Role::Tool);
-                if (snap->messages[0]->tool) {
-                    // 断言: 原处于 running 状态的 tool 消息已被重置为 toolFinished=true
-                    XX_TEST_EXPECT_TRUE(snap->messages[0]->tool->toolFinished);
-                }
-                XX_TEST_EXPECT_TRUE(snap->messages[1]->role == TUIMessage::Role::User);
-                XX_TEST_EXPECT_EQ(snap->messages[1]->text, "新用户消息");
-            }
-        }
-
-        // 场景 7: 多个并行 tool 均未结束 -> 收到 MessageTip (如取消请求) -> 全部连续 tool 消息被重置为 non-running
-        {
-            TestTUIClientIO client(ioCtx);
-
-            Delta d_t1;
-            d_t1.type       = Delta::Type::ToolStart;
-            d_t1.toolName   = "tool1";
-            d_t1.toolCallId = "call_p1";
-            client.testOnDelta(d_t1);
-
-            Delta d_t2;
-            d_t2.type       = Delta::Type::ToolStart;
-            d_t2.toolName   = "tool2";
-            d_t2.toolCallId = "call_p2";
-            client.testOnDelta(d_t2);
-
-            {
-                auto snap = client.sharedState().snapshot();
-                XX_TEST_EXPECT_EQ(snap->messages.size(), (size_t)2);
-                XX_TEST_EXPECT_FALSE(snap->messages[0]->tool->toolFinished);
-                XX_TEST_EXPECT_FALSE(snap->messages[1]->tool->toolFinished);
-            }
-
-            // 收到 InsertMessage 取消提示 (Role::Tip)
-            Delta d_tip;
-            d_tip.type    = Delta::Type::InsertMessage;
-            d_tip.message = ViewMessage::makeText(ViewMessage::Role::Tip, "[Cancel Request]");
-            client.testOnDelta(d_tip);
-
-            {
-                auto snap = client.sharedState().snapshot();
-                XX_TEST_EXPECT_EQ(snap->messages.size(), (size_t)3);
-                XX_TEST_EXPECT_TRUE(snap->messages[0]->tool->toolFinished);
-                XX_TEST_EXPECT_TRUE(snap->messages[1]->tool->toolFinished);
-                XX_TEST_EXPECT_TRUE(snap->messages[2]->role == TUIMessage::Role::Tip);
-            }
-        }
-
-        // 场景 8: 历史中存在已完成的 tool 与未完成的 tool -> 收到 TextToken 时重置
-        {
-            TestTUIClientIO client(ioCtx);
-
-            // Step 1: Tool 1 完成
-            Delta d_t1;
-            d_t1.type       = Delta::Type::ToolStart;
-            d_t1.toolName   = "tool1";
-            d_t1.toolCallId = "call_f1";
-            client.testOnDelta(d_t1);
-
-            Delta d_t1_end;
-            d_t1_end.type       = Delta::Type::ToolEnd;
-            d_t1_end.toolName   = "tool1";
-            d_t1_end.toolCallId = "call_f1";
-            d_t1_end.result     = "ok";
-            client.testOnDelta(d_t1_end);
-
-            // Step 2: Tool 2 未完成
-            Delta d_t2;
-            d_t2.type       = Delta::Type::ToolStart;
-            d_t2.toolName   = "tool2";
-            d_t2.toolCallId = "call_u2";
-            client.testOnDelta(d_t2);
-
-            // 随后直接输出正文 TextToken (未收到 ToolEnd)
-            Delta d_text;
-            d_text.type = Delta::Type::TextToken;
-            d_text.text = "继续输出";
-            client.testOnDelta(d_text);
-
-            Delta d_end;
-            d_end.type = Delta::Type::TurnEnd;
-            client.testOnDelta(d_end);
-
-            {
-                auto snap = client.sharedState().snapshot();
-                XX_TEST_EXPECT_EQ(snap->messages.size(), (size_t)3);
-                XX_TEST_EXPECT_TRUE(snap->messages[0]->tool->toolFinished);
-                XX_TEST_EXPECT_TRUE(snap->messages[1]->tool->toolFinished);
-                XX_TEST_EXPECT_TRUE(snap->messages[2]->role == TUIMessage::Role::Assistant);
-                XX_TEST_EXPECT_EQ(snap->messages[2]->text, "继续输出");
-            }
-        }
-
-        // 场景 9: 直接收到 InsertMessage (如轮次统计 Tip 或原子消息)
-        {
-            TestTUIClientIO client(ioCtx);
-
-            auto vm          = ViewMessage::makeText(ViewMessage::Role::Tip, "Turn tip message", 1000, 200);
-            vm.id            = "msg_000001";
-            vm.tip->tipLevel = ViewMessage::TipLevel::Warning;
-            vm.collapsed     = true;
-
-            Delta d_insert;
-            d_insert.type    = Delta::Type::InsertMessage;
-            d_insert.message = std::move(vm);
-            client.testOnDelta(d_insert);
-
-            {
-                auto snap = client.sharedState().snapshot();
-                XX_TEST_EXPECT_EQ(snap->messages.size(), (size_t)1);
-                XX_TEST_EXPECT_EQ(snap->messages[0]->id, std::string{"msg_000001"});
-                XX_TEST_EXPECT_EQ(snap->messages[0]->role, TUIMessage::Role::Tip);
-                XX_TEST_EXPECT_EQ(snap->messages[0]->text, std::string{"Turn tip message"});
-                XX_TEST_EXPECT_EQ(snap->messages[0]->startTimeMs, int64_t{1000});
-                XX_TEST_EXPECT_EQ(snap->messages[0]->durationMs, int64_t{200});
-                XX_TEST_EXPECT_TRUE(snap->messages[0]->collapsed);
-                XX_TEST_EXPECT_TRUE(snap->messages[0]->tip.has_value());
-                if (snap->messages[0]->tip) {
-                    XX_TEST_EXPECT_EQ(snap->messages[0]->tip->tipLevel, ViewMessage::TipLevel::Warning);
-                }
-            }
+    auto snap1 = client.sharedState().snapshot();
+    XX_TEST_EXPECT_EQ(snap1->messages.size(), (size_t)1);
+    if (snap1->messages.size() == 1) {
+        XX_TEST_EXPECT_TRUE(snap1->messages[0]->role == TUIMessage::Role::Think);
+        XX_TEST_EXPECT_TRUE(snap1->messages[0]->think.has_value());
+        if (snap1->messages[0]->think) {
+            XX_TEST_EXPECT_TRUE(snap1->messages[0]->think->isEncrypted);
+            XX_TEST_EXPECT_EQ(snap1->messages[0]->think->reasoningTokens, 0);
         }
     }
+
+    {
+        Delta d2;
+        d2.type        = Delta::Type::TextToken;
+        d2.text        = "Hello";
+        d2.startTimeMs = 1050;
+        client.testOnDelta(d2);
+    }
+
+    {
+        Delta d_usage;
+        d_usage.type       = Delta::Type::ThinkToken;
+        d_usage.text       = "";
+        d_usage.durationMs = 80;
+        d_usage.think      = ViewMessage::ThinkData{.reasoningTokens = 854, .isEncrypted = true};
+        client.testOnDelta(d_usage);
+    }
+
+    {
+        Delta d3;
+        d3.type = Delta::Type::TurnEnd;
+        client.testOnDelta(d3);
+    }
+
+    auto snap = client.sharedState().snapshot();
+    XX_TEST_EXPECT_EQ(snap->messages.size(), (size_t)2);
+    if (snap->messages.size() == 2) {
+        XX_TEST_EXPECT_TRUE(snap->messages[0]->role == TUIMessage::Role::Think);
+        XX_TEST_EXPECT_TRUE(snap->messages[0]->think.has_value());
+        if (snap->messages[0]->think) {
+            XX_TEST_EXPECT_TRUE(snap->messages[0]->think->isEncrypted);
+            XX_TEST_EXPECT_EQ(snap->messages[0]->think->reasoningTokens, 854);
+        }
+        XX_TEST_EXPECT_EQ(snap->messages[0]->durationMs, 80);
+        XX_TEST_EXPECT_TRUE(snap->messages[1]->role == TUIMessage::Role::Assistant);
+        XX_TEST_EXPECT_EQ(snap->messages[1]->text, "Hello");
+    }
+}
+
+// 场景 2: 多步 ReAct 交互
+void testTuiStreamScenario2(asio::io_context& ioCtx) {
+    TestTUIClientIO client(ioCtx);
+
+    {
+        Delta d1_think;
+        d1_think.type  = Delta::Type::ThinkToken;
+        d1_think.text  = "";
+        d1_think.think = ViewMessage::ThinkData{.reasoningTokens = 0, .isEncrypted = true};
+        client.testOnDelta(d1_think);
+    }
+
+    {
+        Delta d1_usage;
+        d1_usage.type       = Delta::Type::ThinkToken;
+        d1_usage.text       = "";
+        d1_usage.durationMs = 120;
+        d1_usage.think      = ViewMessage::ThinkData{.reasoningTokens = 320, .isEncrypted = true};
+        client.testOnDelta(d1_usage);
+    }
+
+    {
+        Delta d1_tool;
+        d1_tool.type       = Delta::Type::ToolStart;
+        d1_tool.toolName   = "search";
+        d1_tool.toolCallId = "call_1";
+        d1_tool.arguments  = "{\"q\":\"test\"}";
+        client.testOnDelta(d1_tool);
+    }
+
+    {
+        Delta d1_tool_end;
+        d1_tool_end.type       = Delta::Type::ToolEnd;
+        d1_tool_end.toolName   = "search";
+        d1_tool_end.toolCallId = "call_1";
+        d1_tool_end.result     = "ok";
+        client.testOnDelta(d1_tool_end);
+    }
+
+    auto snap1 = client.sharedState().snapshot();
+    XX_TEST_EXPECT_EQ(snap1->messages.size(), (size_t)2);
+    if (snap1->messages.size() == 2) {
+        XX_TEST_EXPECT_TRUE(snap1->messages[0]->role == TUIMessage::Role::Think);
+        if (snap1->messages[0]->think) {
+            XX_TEST_EXPECT_EQ(snap1->messages[0]->think->reasoningTokens, 320);
+        }
+        XX_TEST_EXPECT_TRUE(snap1->messages[1]->role == TUIMessage::Role::Tool);
+    }
+
+    {
+        Delta d2_think;
+        d2_think.type  = Delta::Type::ThinkToken;
+        d2_think.text  = "";
+        d2_think.think = ViewMessage::ThinkData{.reasoningTokens = 0, .isEncrypted = true};
+        client.testOnDelta(d2_think);
+    }
+
+    auto snap2 = client.sharedState().snapshot();
+    XX_TEST_EXPECT_EQ(snap2->messages.size(), (size_t)3);
+    if (snap2->messages.size() == 3) {
+        XX_TEST_EXPECT_TRUE(snap2->messages[0]->role == TUIMessage::Role::Think);
+        if (snap2->messages[0]->think) {
+            XX_TEST_EXPECT_EQ(snap2->messages[0]->think->reasoningTokens, 320);
+        }
+        XX_TEST_EXPECT_TRUE(snap2->messages[1]->role == TUIMessage::Role::Tool);
+        XX_TEST_EXPECT_TRUE(snap2->messages[2]->role == TUIMessage::Role::Think);
+        if (snap2->messages[2]->think) {
+            XX_TEST_EXPECT_EQ(snap2->messages[2]->think->reasoningTokens, 0);
+        }
+    }
+
+    {
+        Delta d2_text;
+        d2_text.type = Delta::Type::TextToken;
+        d2_text.text = "Final answer";
+        client.testOnDelta(d2_text);
+    }
+
+    {
+        Delta d2_usage;
+        d2_usage.type       = Delta::Type::ThinkToken;
+        d2_usage.text       = "";
+        d2_usage.durationMs = 90;
+        d2_usage.think      = ViewMessage::ThinkData{.reasoningTokens = 150, .isEncrypted = true};
+        client.testOnDelta(d2_usage);
+    }
+
+    {
+        Delta d2_end;
+        d2_end.type = Delta::Type::TurnEnd;
+        client.testOnDelta(d2_end);
+    }
+
+    auto snap3 = client.sharedState().snapshot();
+    XX_TEST_EXPECT_EQ(snap3->messages.size(), (size_t)4);
+    if (snap3->messages.size() == 4) {
+        XX_TEST_EXPECT_TRUE(snap3->messages[0]->role == TUIMessage::Role::Think);
+        if (snap3->messages[0]->think) {
+            XX_TEST_EXPECT_EQ(snap3->messages[0]->think->reasoningTokens, 320);
+        }
+        XX_TEST_EXPECT_TRUE(snap3->messages[1]->role == TUIMessage::Role::Tool);
+        XX_TEST_EXPECT_TRUE(snap3->messages[2]->role == TUIMessage::Role::Think);
+        if (snap3->messages[2]->think) {
+            XX_TEST_EXPECT_EQ(snap3->messages[2]->think->reasoningTokens, 150);
+        }
+        XX_TEST_EXPECT_TRUE(snap3->messages[3]->role == TUIMessage::Role::Assistant);
+        XX_TEST_EXPECT_EQ(snap3->messages[3]->text, "Final answer");
+    }
+}
+
+// 场景 3: 加密 thinking -> 随后直接 TurnEnd
+void testTuiStreamScenario3(asio::io_context& ioCtx) {
+    TestTUIClientIO client(ioCtx);
+    {
+        Delta d1;
+        d1.type  = Delta::Type::ThinkToken;
+        d1.text  = "";
+        d1.think = ViewMessage::ThinkData{.reasoningTokens = 50, .isEncrypted = true};
+        client.testOnDelta(d1);
+    }
+
+    {
+        Delta d2;
+        d2.type = Delta::Type::TurnEnd;
+        client.testOnDelta(d2);
+    }
+
+    auto snap = client.sharedState().snapshot();
+    XX_TEST_EXPECT_EQ(snap->messages.size(), (size_t)1);
+    if (snap->messages.size() == 1) {
+        XX_TEST_EXPECT_TRUE(snap->messages[0]->role == TUIMessage::Role::Think);
+        XX_TEST_EXPECT_TRUE(snap->messages[0]->think.has_value());
+        if (snap->messages[0]->think) {
+            XX_TEST_EXPECT_TRUE(snap->messages[0]->think->isEncrypted);
+            XX_TEST_EXPECT_EQ(snap->messages[0]->think->reasoningTokens, 50);
+        }
+    }
+}
+
+// 场景 4: 明文 thinking (流式) -> 无正文直接结束 -> 收到 usage 回填
+void testTuiStreamScenario4(asio::io_context& ioCtx) {
+    TestTUIClientIO client(ioCtx);
+    {
+        Delta d1;
+        d1.type        = Delta::Type::ThinkToken;
+        d1.text        = "明文思考内容";
+        d1.startTimeMs = 2000;
+        client.testOnDelta(d1);
+    }
+
+    {
+        Delta d_usage;
+        d_usage.type       = Delta::Type::ThinkToken;
+        d_usage.text       = "";
+        d_usage.durationMs = 95;
+        d_usage.think      = ViewMessage::ThinkData{.reasoningTokens = 150, .isEncrypted = false};
+        client.testOnDelta(d_usage);
+    }
+
+    {
+        Delta d_end;
+        d_end.type = Delta::Type::TurnEnd;
+        client.testOnDelta(d_end);
+    }
+
+    auto snap = client.sharedState().snapshot();
+    XX_TEST_EXPECT_EQ(snap->messages.size(), (size_t)1);
+    if (snap->messages.size() == 1) {
+        XX_TEST_EXPECT_TRUE(snap->messages[0]->role == TUIMessage::Role::Think);
+        XX_TEST_EXPECT_EQ(snap->messages[0]->text, "明文思考内容");
+        XX_TEST_EXPECT_TRUE(snap->messages[0]->think.has_value());
+        if (snap->messages[0]->think) {
+            XX_TEST_EXPECT_FALSE(snap->messages[0]->think->isEncrypted);
+            XX_TEST_EXPECT_EQ(snap->messages[0]->think->reasoningTokens, 150);
+        }
+        XX_TEST_EXPECT_EQ(snap->messages[0]->durationMs, 95);
+    }
+}
+
+// 场景 5: 明文 thinking 流式 -> 思考完成结算包 -> NodeEnd -> 正文 -> TurnEnd
+void testTuiStreamScenario5(asio::io_context& ioCtx) {
+    TestTUIClientIO client(ioCtx);
+
+    {
+        Delta d_think;
+        d_think.type        = Delta::Type::ThinkToken;
+        d_think.text        = "思考中...";
+        d_think.startTimeMs = 3000;
+        client.testOnDelta(d_think);
+    }
+
+    {
+        auto snap = client.sharedState().snapshot();
+        XX_TEST_EXPECT_EQ(snap->messages.size(), (size_t)0);
+        XX_TEST_EXPECT_EQ(snap->pendingTokenDurationMs, int64_t{0});
+    }
+
+    {
+        Delta d_final;
+        d_final.type        = Delta::Type::ThinkToken;
+        d_final.text        = "";
+        d_final.startTimeMs = 3000;
+        d_final.durationMs  = 1234;
+        client.testOnDelta(d_final);
+    }
+
+    {
+        Delta d_nodeEnd;
+        d_nodeEnd.type        = Delta::Type::NodeEnd;
+        d_nodeEnd.nodeName    = "llm";
+        d_nodeEnd.startTimeMs = 2900;
+        d_nodeEnd.durationMs  = 99999;
+        client.testOnDelta(d_nodeEnd);
+    }
+
+    {
+        Delta d_text;
+        d_text.type        = Delta::Type::TextToken;
+        d_text.text        = "Answer";
+        d_text.startTimeMs = 4300;
+        client.testOnDelta(d_text);
+    }
+
+    {
+        Delta d_end;
+        d_end.type = Delta::Type::TurnEnd;
+        client.testOnDelta(d_end);
+    }
+
+    auto snap = client.sharedState().snapshot();
+    XX_TEST_EXPECT_EQ(snap->messages.size(), (size_t)2);
+    if (snap->messages.size() == 2) {
+        XX_TEST_EXPECT_TRUE(snap->messages[0]->role == TUIMessage::Role::Think);
+        XX_TEST_EXPECT_EQ(snap->messages[0]->text, "思考中...");
+        XX_TEST_EXPECT_EQ(snap->messages[0]->durationMs, 1234);
+        XX_TEST_EXPECT_TRUE(snap->messages[1]->role == TUIMessage::Role::Assistant);
+        XX_TEST_EXPECT_EQ(snap->messages[1]->text, "Answer");
+    }
+}
+
+// 场景 6: Tool 执行中断/未结束 -> 收到新轮次 TurnStart
+void testTuiStreamScenario6(asio::io_context& ioCtx) {
+    TestTUIClientIO client(ioCtx);
+
+    {
+        Delta d_tool;
+        d_tool.type       = Delta::Type::ToolStart;
+        d_tool.toolName   = "agentxx_execute_bash_command";
+        d_tool.toolCallId = "call_bash_1";
+        d_tool.arguments  = "{\"command\":\"sleep 100\"}";
+        client.testOnDelta(d_tool);
+    }
+
+    {
+        auto snap = client.sharedState().snapshot();
+        XX_TEST_EXPECT_EQ(snap->messages.size(), (size_t)1);
+        XX_TEST_EXPECT_TRUE(snap->messages[0]->role == TUIMessage::Role::Tool);
+        if (snap->messages[0]->tool) {
+            XX_TEST_EXPECT_FALSE(snap->messages[0]->tool->toolFinished);
+        }
+    }
+
+    {
+        Delta d_turnStart;
+        d_turnStart.type        = Delta::Type::TurnStart;
+        d_turnStart.text        = "新用户消息";
+        d_turnStart.startTimeMs = 5000;
+        client.testOnDelta(d_turnStart);
+    }
+
+    {
+        auto snap = client.sharedState().snapshot();
+        XX_TEST_EXPECT_EQ(snap->messages.size(), (size_t)2);
+        XX_TEST_EXPECT_TRUE(snap->messages[0]->role == TUIMessage::Role::Tool);
+        if (snap->messages[0]->tool) {
+            XX_TEST_EXPECT_TRUE(snap->messages[0]->tool->toolFinished);
+        }
+        XX_TEST_EXPECT_TRUE(snap->messages[1]->role == TUIMessage::Role::User);
+        XX_TEST_EXPECT_EQ(snap->messages[1]->text, "新用户消息");
+    }
+}
+
+// 场景 7: 多个并行 tool 均未结束 -> 收到 MessageTip (如取消请求)
+void testTuiStreamScenario7(asio::io_context& ioCtx) {
+    TestTUIClientIO client(ioCtx);
+
+    {
+        Delta d_t1;
+        d_t1.type       = Delta::Type::ToolStart;
+        d_t1.toolName   = "tool1";
+        d_t1.toolCallId = "call_p1";
+        client.testOnDelta(d_t1);
+    }
+
+    {
+        Delta d_t2;
+        d_t2.type       = Delta::Type::ToolStart;
+        d_t2.toolName   = "tool2";
+        d_t2.toolCallId = "call_p2";
+        client.testOnDelta(d_t2);
+    }
+
+    {
+        auto snap = client.sharedState().snapshot();
+        XX_TEST_EXPECT_EQ(snap->messages.size(), (size_t)2);
+        XX_TEST_EXPECT_FALSE(snap->messages[0]->tool->toolFinished);
+        XX_TEST_EXPECT_FALSE(snap->messages[1]->tool->toolFinished);
+    }
+
+    {
+        Delta d_tip;
+        d_tip.type    = Delta::Type::InsertMessage;
+        d_tip.message = std::make_shared<ViewMessage>(
+            ViewMessage::makeText(ViewMessage::Role::Tip, "[Cancel Request]")
+        );
+        client.testOnDelta(d_tip);
+    }
+
+    {
+        auto snap = client.sharedState().snapshot();
+        XX_TEST_EXPECT_EQ(snap->messages.size(), (size_t)3);
+        XX_TEST_EXPECT_TRUE(snap->messages[0]->tool->toolFinished);
+        XX_TEST_EXPECT_TRUE(snap->messages[1]->tool->toolFinished);
+        XX_TEST_EXPECT_TRUE(snap->messages[2]->role == TUIMessage::Role::Tip);
+    }
+}
+
+// 场景 8: 历史中存在已完成的 tool 与未完成的 tool -> 收到 TextToken 时重置
+void testTuiStreamScenario8(asio::io_context& ioCtx) {
+    TestTUIClientIO client(ioCtx);
+
+    {
+        Delta d_t1;
+        d_t1.type       = Delta::Type::ToolStart;
+        d_t1.toolName   = "tool1";
+        d_t1.toolCallId = "call_f1";
+        client.testOnDelta(d_t1);
+
+        Delta d_t1_end;
+        d_t1_end.type       = Delta::Type::ToolEnd;
+        d_t1_end.toolName   = "tool1";
+        d_t1_end.toolCallId = "call_f1";
+        d_t1_end.result     = "ok";
+        client.testOnDelta(d_t1_end);
+    }
+
+    {
+        Delta d_t2;
+        d_t2.type       = Delta::Type::ToolStart;
+        d_t2.toolName   = "tool2";
+        d_t2.toolCallId = "call_u2";
+        client.testOnDelta(d_t2);
+    }
+
+    {
+        Delta d_text;
+        d_text.type = Delta::Type::TextToken;
+        d_text.text = "继续输出";
+        client.testOnDelta(d_text);
+    }
+
+    {
+        Delta d_end;
+        d_end.type = Delta::Type::TurnEnd;
+        client.testOnDelta(d_end);
+    }
+
+    {
+        auto snap = client.sharedState().snapshot();
+        XX_TEST_EXPECT_EQ(snap->messages.size(), (size_t)3);
+        XX_TEST_EXPECT_TRUE(snap->messages[0]->tool->toolFinished);
+        XX_TEST_EXPECT_TRUE(snap->messages[1]->tool->toolFinished);
+        XX_TEST_EXPECT_TRUE(snap->messages[2]->role == TUIMessage::Role::Assistant);
+        XX_TEST_EXPECT_EQ(snap->messages[2]->text, "继续输出");
+    }
+}
+
+// 场景 9: 直接收到 InsertMessage
+void testTuiStreamScenario9(asio::io_context& ioCtx) {
+    TestTUIClientIO client(ioCtx);
+
+    auto vm          = ViewMessage::makeText(ViewMessage::Role::Tip, "Turn tip message", 1000, 200);
+    vm.id            = "msg_000001";
+    vm.tip->tipLevel = ViewMessage::TipLevel::Warning;
+    vm.collapsed     = true;
+
+    Delta d_insert;
+    d_insert.type    = Delta::Type::InsertMessage;
+    d_insert.message = std::make_shared<ViewMessage>(std::move(vm));
+    client.testOnDelta(d_insert);
+
+    {
+        auto snap = client.sharedState().snapshot();
+        XX_TEST_EXPECT_EQ(snap->messages.size(), (size_t)1);
+        XX_TEST_EXPECT_EQ(snap->messages[0]->id, std::string{"msg_000001"});
+        XX_TEST_EXPECT_EQ(snap->messages[0]->role, TUIMessage::Role::Tip);
+        XX_TEST_EXPECT_EQ(snap->messages[0]->text, std::string{"Turn tip message"});
+        XX_TEST_EXPECT_EQ(snap->messages[0]->startTimeMs, int64_t{1000});
+        XX_TEST_EXPECT_EQ(snap->messages[0]->durationMs, int64_t{200});
+        XX_TEST_EXPECT_TRUE(snap->messages[0]->collapsed);
+        XX_TEST_EXPECT_TRUE(snap->messages[0]->tip.has_value());
+        if (snap->messages[0]->tip) {
+            XX_TEST_EXPECT_EQ(snap->messages[0]->tip->tipLevel, ViewMessage::TipLevel::Warning);
+        }
+    }
+}
+
+} // namespace
+
+TestResult testTuiStream() {
+    testTuiStreamMarkdown();
+
+    asio::io_context ioCtx;
+    testTuiStreamScenario1(ioCtx);
+    testTuiStreamScenario2(ioCtx);
+    testTuiStreamScenario3(ioCtx);
+    testTuiStreamScenario4(ioCtx);
+    testTuiStreamScenario5(ioCtx);
+    testTuiStreamScenario6(ioCtx);
+    testTuiStreamScenario7(ioCtx);
+    testTuiStreamScenario8(ioCtx);
+    testTuiStreamScenario9(ioCtx);
 
     return TestResult{g_tui_stream_passed, g_tui_stream_failed};
 }

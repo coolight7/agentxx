@@ -67,29 +67,36 @@ static void
             const auto role = it.value("role", std::string{"normal"});
             const auto txt  = paragraph(it.value("text", std::string{}));
             if (role == "title") {
-                push(txt | color(theme.accentColor) | bold);
+                push(hbox({text("|  ") | color(theme.hintColor), txt | color(theme.accentColor) | bold}));
             } else if (role == "hint") {
-                push(txt | color(theme.hintColor));
+                push(hbox({text("|  ") | color(theme.hintColor), txt | color(theme.hintColor)}));
             } else {
-                push(txt | color(theme.normalColor));
+                push(hbox({text("|  ") | color(theme.hintColor), txt | color(theme.normalColor)}));
             }
         } else if (kind == "progress") {
             const double v      = it.value("value", 0.0);
             const int    w      = 10;
-            const int    filled = static_cast<int>(v * w);
+            const int    filled = std::clamp(static_cast<int>(v * w), 0, w);
             std::string  bar;
             bar.reserve(w);
             for (int i = 0; i < w; ++i) {
                 bar += (i < filled) ? '#' : '-';
             }
             push(hbox({
+                text("|  ") | color(theme.hintColor),
                 text("[" + bar + "]") | color(theme.accentColor),
                 text(fmt::format(" {}%", static_cast<int>(v * 100))) | color(theme.hintColor),
             }));
         } else if (kind == "badge") {
-            push(text("● " + it.value("text", std::string{})) | color(theme.accentColor));
+            push(hbox({
+                text("|  ") | color(theme.hintColor),
+                text("● " + it.value("text", std::string{})) | color(theme.accentColor),
+            }));
         } else if (kind == "separator") {
-            push(text("─") | color(theme.hintColor) | dim);
+            push(hbox({
+                text("|  ") | color(theme.hintColor),
+                text("─") | color(theme.hintColor) | dim,
+            }));
         }
     }
 }
@@ -143,20 +150,24 @@ std::vector<ScrollItem> TUIClientAgentIO::renderInfoSidebar() {
     // 插件扩展的 Info 段落 (插件经 register_info_section 注入; UI 线程渲染,
     // 每帧从 client 插件注册表快照读取, 无需缓存):
     // - 段落在 Append 之后按注册顺序展示 (标题 + items, items schema 同面板)
+    // - 若段落无内容项则跳过，避免仅显示孤立标题
     if (auto mgr = pluginManager_) {
         auto reg = mgr->uiRegistrySnapshot();
         if (reg && !reg->infoSections.empty()) {
             for (const auto& sec : reg->infoSections) {
+                Elements secItems;
+                // Info 栏段落列表项按 Append 段样式 ("|  xxx") 展示
+                appendPluginItems(sec.items, theme_, secItems);
+                if (secItems.empty()) {
+                    continue;
+                }
                 Elements secEls;
                 if (!sec.title.empty()) {
                     secEls.push_back(text(sec.title) | color(theme_.accentColor));
                 }
-                // Info 栏段落列表项按 Append 段样式 ("|  xxx") 展示
-                appendPluginItems(sec.items, theme_, secEls);
-                if (!secEls.empty()) {
-                    elements.push_back(vbox(std::move(secEls)));
-                    elements.push_back(text(" "));
-                }
+                secEls.insert(secEls.end(), std::make_move_iterator(secItems.begin()), std::make_move_iterator(secItems.end()));
+                elements.push_back(vbox(std::move(secEls)));
+                elements.push_back(text(" "));
             }
         }
     }

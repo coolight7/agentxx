@@ -458,7 +458,7 @@ int PluginManager::publish(const char* topic, const char* event_json) {
         asio::co_spawn(
             ioExecutor_,
             [bus = ctx->bus, fullTopic = std::move(fullTopic), payload = std::move(payload)]() -> asio::awaitable<void> {
-                co_await bus->get<std::string>(fullTopic).publish(payload);
+                co_await bus->publish(fullTopic, payload);
             },
             asio::detached
         );

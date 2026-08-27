@@ -794,3 +794,183 @@ extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_destroy(void* plugin_ctx) {
         delete ctx;
     });
 }
+
+/* ==================== client 侧入口 ==================== */
+
+struct ClientPluginCtx {
+    const AgentxxClientHost*      host         = nullptr;
+    agentxx::plugin::ClientIfaces iface        {};
+    const AgentxxClientUiIface*   ui           = nullptr;
+    AgentxxInfoSection*           info_section = nullptr;
+    bool                          loaded       = false;
+    std::string                   project_root;
+    int                           processed    = 0;
+    int                           total        = 0;
+    std::string                   current_file;
+    bool                          indexing     = false;
+};
+
+static auto clientGuardLogger(ClientPluginCtx* ctx) noexcept {
+    return [ctx](const char* msg) noexcept {
+        if (ctx && ctx->host && ctx->iface.log && ctx->iface.log->log) {
+            ctx->iface.log->log(ctx->host, 4, agentxx_plugin_sv(msg, msg ? strlen(msg) : 0));
+        }
+    };
+}
+
+static void refreshCodegraphSection(ClientPluginCtx& ctx) {
+    if (!ctx.host || !ctx.ui) {
+        return;
+    }
+    if (!ctx.info_section && ctx.ui->register_info_section) {
+        ctx.info_section = ctx.ui->register_info_section(
+            ctx.host,
+            AGENTXX_SV("agentxx_codegraph.info"),
+            AGENTXX_SV(R"({"title":"CodeGraph"})")
+        );
+    }
+    if (!ctx.info_section || !ctx.ui->update_info_section) {
+        return;
+    }
+
+    neograph::json items = neograph::json::array();
+    if (ctx.indexing && ctx.total > 0 && ctx.processed < ctx.total) {
+        double pct = static_cast<double>(ctx.processed) / static_cast<double>(ctx.total);
+        items.push_back({
+            {"kind", "text"},
+            {"role", "normal"},
+            {"text", fmt::format("Indexing: {}/{} files", ctx.processed, ctx.total)}
+        });
+        items.push_back({
+            {"kind", "progress"},
+            {"value", pct}
+        });
+        if (!ctx.current_file.empty()) {
+            items.push_back({
+                {"kind", "text"},
+                {"role", "hint"},
+                {"text", ctx.current_file}
+            });
+        }
+    } else {
+        if (ctx.total > 0) {
+            items.push_back({
+                {"kind", "text"},
+                {"role", "normal"},
+                {"text", fmt::format("Indexed: {} files", ctx.total)}
+            });
+        } else if (ctx.loaded) {
+            items.push_back({
+                {"kind", "text"},
+                {"role", "normal"},
+                {"text", "Status: Ready"}
+            });
+        }
+        if (!ctx.project_root.empty()) {
+            items.push_back({
+                {"kind", "text"},
+                {"role", "hint"},
+                {"text", fmt::format("Root: {}", ctx.project_root)}
+            });
+        }
+    }
+
+    if (items.empty()) {
+        return;
+    }
+    neograph::json sectionJson;
+    sectionJson["items"] = std::move(items);
+    std::string out = sectionJson.dump();
+    ctx.ui->update_info_section(ctx.host, ctx.info_section, agentxx_plugin_sv(out.data(), out.size()));
+}
+
+static void onClientPluginData(AgentxxPluginStringView payload_json, void* ud) {
+    auto* ctx = static_cast<ClientPluginCtx*>(ud);
+    if (!ctx || !ctx->ui) {
+        return;
+    }
+    std::string raw(payload_json.data ? payload_json.data : "{}", payload_json.size);
+    try {
+        auto j = neograph::json::parse(raw);
+        if (j.value("plugin", "") != "agentxx_codegraph") {
+            return;
+        }
+        std::string event = j.value("event", "");
+        auto dataVal = j.contains("data") ? j["data"] : neograph::json::object();
+        neograph::json d;
+        if (dataVal.is_string()) {
+            d = neograph::json::parse(dataVal.get<std::string>());
+        } else if (dataVal.is_object()) {
+            d = dataVal;
+        } else {
+            return;
+        }
+
+        if (event == "status") {
+            ctx->loaded = d.value("loaded", true);
+            if (d.contains("project_root") && d["project_root"].is_string()) {
+                ctx->project_root = d["project_root"].get<std::string>();
+            }
+            refreshCodegraphSection(*ctx);
+        } else if (event == "progress") {
+            ctx->processed = d.value("processed", 0);
+            ctx->total = d.value("total", 0);
+            ctx->current_file = d.value("current_file", "");
+            ctx->indexing = (ctx->total > 0 && ctx->processed < ctx->total);
+            refreshCodegraphSection(*ctx);
+        }
+    } catch (...) {}
+}
+
+extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxClientPluginInfo* agentxx_client_get_info(void) {
+    static const AgentxxClientPluginInfo info{
+        AGENTXX_CLIENT_PLUGIN_API_VERSION,
+        AGENTXX_SV("agentxx_codegraph"),
+        AGENTXX_SV("1.0.0"),
+        AGENTXX_SV("CodeGraph code analysis: renders indexing status and progress in sidebar"),
+    };
+    return &info;
+}
+
+extern "C" AGENTXX_PLUGIN_EXPORT int
+    agentxx_client_create(const AgentxxClientHost* host, void** plugin_ctx) {
+    ClientPluginCtx* raw = nullptr;
+    return agentxx::plugin_guard::guardCall(
+        [&raw](const char* msg) noexcept { clientGuardLogger(raw)(msg); },
+        -1,
+        [&]() -> int {
+        if (!host || !host->vtable || !plugin_ctx) return -1;
+        auto ctx = std::make_unique<ClientPluginCtx>();
+        ctx->host = host;
+        ctx->iface = agentxx::plugin::ClientIfaces::query(host);
+        raw = ctx.get();
+
+        ctx->ui = AGENTXX_QUERY_IFACE(host, AgentxxClientUiIface, AGENTXX_IFACE_CLIENT_UI);
+        if (ctx->ui && ctx->ui->register_info_section) {
+            ctx->info_section = ctx->ui->register_info_section(
+                host,
+                AGENTXX_SV("agentxx_codegraph.info"),
+                AGENTXX_SV(R"({"title":"CodeGraph"})")
+            );
+        }
+
+        if (ctx->iface.events && ctx->iface.events->subscribe) {
+            ctx->iface.events->subscribe(host, AGENTXX_CLIENT_EVT_PLUGIN_DATA, onClientPluginData, ctx.get());
+        }
+
+        *plugin_ctx = ctx.release();
+        return 0;
+    });
+}
+
+extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_client_destroy(void* plugin_ctx) {
+    auto* ctx = static_cast<ClientPluginCtx*>(plugin_ctx);
+    agentxx::plugin_guard::guardCallVoid(clientGuardLogger(ctx), [&] {
+        if (!ctx) return;
+        if (ctx->ui && ctx->ui->unregister_info_section && ctx->info_section) {
+            ctx->ui->unregister_info_section(ctx->host, ctx->info_section);
+            ctx->info_section = nullptr;
+        }
+        delete ctx;
+    });
+}

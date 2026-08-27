@@ -368,12 +368,13 @@ public:
     void setIoExecutor(asio::any_io_executor ex) {
         ioExecutor_ = std::move(ex);
         if (ioExecutor_) {
-            ioThreadId_ = std::this_thread::get_id();
+            ioThreadId_.store(std::this_thread::get_id(), std::memory_order_release);
         }
     }
 
     bool isIoThread() const {
-        return !ioExecutor_ || ioThreadId_ == std::this_thread::get_id();
+        const auto tid = ioThreadId_.load(std::memory_order_acquire);
+        return !ioExecutor_ || (tid != std::thread::id{} && tid == std::this_thread::get_id());
     }
 
     mutable std::mutex                             ioTasksMtx_;
@@ -388,6 +389,7 @@ public:
                 ioTasks_.push_back(std::move(fn));
             }
             asio::post(ioExecutor_, [this]() {
+                ioThreadId_.store(std::this_thread::get_id(), std::memory_order_release);
                 runPendingIoTasks();
             });
         } else {
@@ -473,7 +475,7 @@ private:
     std::map<std::string, std::shared_ptr<PluginInstance>, std::less<>> plugins_;
     size_t                                       runningTurns_ = 0;
     asio::any_io_executor                        ioExecutor_{};
-    std::thread::id                              ioThreadId_{};
+    mutable std::atomic<std::thread::id>         ioThreadId_{};
 };
 
 struct NativeLoader {

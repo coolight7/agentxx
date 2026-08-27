@@ -934,14 +934,18 @@ std::string ClientPluginManager::clientStateJson() const {
 // ==================== io 线程投递 ====================
 
 bool ClientPluginManager::isIoThread() const {
-    return ioThreadId_ == std::this_thread::get_id();
+    const auto tid = ioThreadId_.load(std::memory_order_acquire);
+    return tid != std::thread::id{} && tid == std::this_thread::get_id();
 }
 
 void ClientPluginManager::postToIo(std::function<void()> fn) const {
     if (isIoThread()) {
         fn();
     } else {
-        asio::post(ioExecutor_, std::move(fn));
+        asio::post(ioExecutor_, [this, fn = std::move(fn)]() {
+            ioThreadId_.store(std::this_thread::get_id(), std::memory_order_release);
+            fn();
+        });
     }
 }
 
@@ -1189,6 +1193,7 @@ void ClientPluginManager::detachAll(ClientPluginInstance* inst, bool keepInfo) {
 /// 反向必选依赖收集 → 公共 collectReverseRequiredDeps (plugin_common.h)
 
 void ClientPluginManager::dispatchEvent(int event, const std::string& payloadJson) {
+    ioThreadId_.store(std::this_thread::get_id(), std::memory_order_release);
     // 快照订阅列表 (shared_ptr 副本: 派发中退订/卸载不会使后续回调悬垂;
     // 订阅对象被 impl 句柄/派发副本保活, alive 位标记已退订)
     struct SubRef {
@@ -2296,6 +2301,7 @@ int ClientPluginManager::updateToolDecor(
         if (tid.empty()) {
             return -1; ///< 更新必须指明 tool_call_id (删除才允许空 = 全部)
         }
+        decor.plugin      = inst->name;
         decor.toolCallId  = tid;
         decor.displayName = j.value("displayName", std::string{});
         decor.summary     = j.value("summary", std::string{});

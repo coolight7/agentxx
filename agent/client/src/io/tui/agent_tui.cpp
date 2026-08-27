@@ -1813,7 +1813,7 @@ void TUIClientAgentIO::onDelta(const agentxx::agent::Delta& delta) {
                 pushCurrentTokenLocked(st);
                 resetTrailingRunningToolsLocked(st);
                 if (delta.message) {
-                    st.messages.push_back(std::make_shared<TUIMessage>(*delta.message));
+                    st.messages.push_back(delta.message);
                 }
             } break;
             case Type::TurnStart: {

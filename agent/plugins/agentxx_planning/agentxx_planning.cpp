@@ -592,6 +592,9 @@ static std::string buildTodosSummary(const neograph::json& plan) {
 /// 组装展开体 items JSON 数组元素 (状态图 + todos + notes; 与历史 TUI
 /// appendPlanToolBody 的渲染结构对应, 经通用 kind 表达)
 static std::string buildDecorItems(const ClientCtx& ctx, const neograph::json& plan) {
+    if (plan.contains("items") && plan["items"].is_array()) {
+        return plan["items"].dump();
+    }
     std::vector<std::string> items;
     auto textItem = [&](const std::string& text, const std::string& role) {
         items.push_back(fmt::format(

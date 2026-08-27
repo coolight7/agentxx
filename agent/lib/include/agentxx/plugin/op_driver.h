@@ -172,8 +172,8 @@ struct PluginOpAwaitArgs {
 inline asio::awaitable<std::string> awaitPluginOp(PluginOpAwaitArgs args) {
     auto guard = std::make_shared<PluginInstance::InflightGuard>(args.inst.get());
     auto core  = std::make_shared<OpCore>(args.ex, guard);
-    const auto& name  = args.inst->name;
-    const auto& label = args.label;
+    std::string name  = args.inst ? args.inst->name : std::string{};
+    std::string label = args.label;
     OpWatchdog   wd;
 
     if (args.cancelToken && args.cancelToken->is_cancelled()) {

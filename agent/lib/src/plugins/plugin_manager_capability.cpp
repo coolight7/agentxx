@@ -365,6 +365,9 @@ AgentxxOpHandle* PluginManager::callToolAsync(
     }
 
     handle->cancelFn = [core, drive, op]() {
+        if (core->notified.load(std::memory_order_acquire)) {
+            return;
+        }
         core->cancelRequested.store(true, std::memory_order_release);
         detail::safeCancelOnce(*core, drive, op);
     };
@@ -381,6 +384,43 @@ AgentxxOpHandle* PluginManager::callToolAsync(
                     auto [ec] = co_await core->chan.async_receive(asio::as_tuple(asio::use_awaitable));
                     (void)ec;
                 }
+            },
+            asio::detached
+        );
+    }
+    // 自动回收 outstandingOps：操作终态后从调用方列表移除，避免悬垂 handle 在后续 unload 时触发 UAF
+    // 采用轮询 notified 标志而非 chan（避免与上方的 sentinel 协程竞争消费同一 chan 消息）
+    {
+        std::weak_ptr<PluginInstance> weakCaller = caller ? caller->self : std::weak_ptr<PluginInstance>{};
+        std::weak_ptr<AgentxxOpHandle> weakHandle = handle;
+        auto ex = ioExecutor_;
+        asio::co_spawn(
+            ex,
+            [core, weakCaller, weakHandle]() -> asio::awaitable<void> {
+                while (!core->notified.load(std::memory_order_acquire)) {
+                    asio::steady_timer t(co_await asio::this_coro::executor);
+                    t.expires_after(std::chrono::milliseconds(10));
+                    try {
+                        co_await t.async_wait(asio::use_awaitable);
+                    } catch (...) {}
+                }
+                // 确保在 io 线程执行移除（caller 的 vector 非线程安全）
+                auto callerSp = weakCaller.lock();
+                auto handleSp = weakHandle.lock();
+                if (!callerSp || !handleSp) {
+                    co_return;
+                }
+                auto& vec = callerSp->outstandingOps;
+                vec.erase(
+                    std::remove_if(
+                        vec.begin(),
+                        vec.end(),
+                        [&handleSp](const std::shared_ptr<AgentxxOpHandle>& h) {
+                            return h == handleSp;
+                        }
+                    ),
+                    vec.end()
+                );
             },
             asio::detached
         );
@@ -448,6 +488,9 @@ AgentxxOpHandle* PluginManager::invokeCapabilityAsync(
     }
 
     handle->cancelFn = [core, drive, op]() {
+        if (core->notified.load(std::memory_order_acquire)) {
+            return;
+        }
         core->cancelRequested.store(true, std::memory_order_release);
         detail::safeCancelOnce(*core, drive, op);
     };
@@ -464,6 +507,40 @@ AgentxxOpHandle* PluginManager::invokeCapabilityAsync(
                     auto [ec] = co_await core->chan.async_receive(asio::as_tuple(asio::use_awaitable));
                     (void)ec;
                 }
+            },
+            asio::detached
+        );
+    }
+    {
+        std::weak_ptr<PluginInstance> weakCaller = caller ? caller->self : std::weak_ptr<PluginInstance>{};
+        std::weak_ptr<AgentxxOpHandle> weakHandle = handle;
+        auto ex = ioExecutor_;
+        asio::co_spawn(
+            ex,
+            [core, weakCaller, weakHandle]() -> asio::awaitable<void> {
+                while (!core->notified.load(std::memory_order_acquire)) {
+                    asio::steady_timer t(co_await asio::this_coro::executor);
+                    t.expires_after(std::chrono::milliseconds(10));
+                    try {
+                        co_await t.async_wait(asio::use_awaitable);
+                    } catch (...) {}
+                }
+                auto callerSp = weakCaller.lock();
+                auto handleSp = weakHandle.lock();
+                if (!callerSp || !handleSp) {
+                    co_return;
+                }
+                auto& vec = callerSp->outstandingOps;
+                vec.erase(
+                    std::remove_if(
+                        vec.begin(),
+                        vec.end(),
+                        [&handleSp](const std::shared_ptr<AgentxxOpHandle>& h) {
+                            return h == handleSp;
+                        }
+                    ),
+                    vec.end()
+                );
             },
             asio::detached
         );

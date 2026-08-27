@@ -39,24 +39,24 @@ int g_client_plugin_failed = 0;
 namespace agentxx {
 namespace test {
 
-/// 定位示例插件目录 (与 agent 侧 test_plugins 同路径: cwd/plugins/example_plugin)
+/// 定位插件目录 (与 agent 侧 test_plugins 同路径: cwd/plugins/<name>)
 /// 兼容从其他 cwd 运行: 优先 exe 同目录的构建产物, cwd 仅作回退;
 /// 校验目录内存在动态库产物, 避免误命中 agent/plugins/ 源码目录
-static std::string findExamplePluginPath() {
+static std::string findPluginPath(const std::string& name) {
     namespace fs = std::filesystem;
     std::error_code       ec;
     std::vector<fs::path> candidates;
 #if defined(_WIN32)
     wchar_t buf[MAX_PATH];
     if (::GetModuleFileNameW(nullptr, buf, MAX_PATH) > 0) {
-        candidates.push_back(fs::path(buf).parent_path() / "plugins" / "example_plugin");
+        candidates.push_back(fs::path(buf).parent_path() / "plugins" / name);
     }
 #else
     if (auto p = fs::read_symlink("/proc/self/exe", ec); !ec) {
-        candidates.push_back(p.parent_path() / "plugins" / "example_plugin");
+        candidates.push_back(p.parent_path() / "plugins" / name);
     }
 #endif
-    candidates.push_back(fs::current_path(ec) / "plugins" / "example_plugin");
+    candidates.push_back(fs::current_path(ec) / "plugins" / name);
     auto hasLibFile = [](const fs::path& dir) {
         std::error_code                     ec2;
         std::filesystem::directory_iterator it(dir, ec2);
@@ -74,7 +74,11 @@ static std::string findExamplePluginPath() {
             return c.string();
         }
     }
-    return "plugins/example_plugin";
+    return "plugins/" + name;
+}
+
+static std::string findExamplePluginPath() {
+    return findPluginPath("example_plugin");
 }
 
 /// Mock UI 适配器: 记录信号 (线程安全)
@@ -87,7 +91,8 @@ public:
                 std::string{pi::ClientPanel},
                 std::string{pi::ClientToast},
                 std::string{pi::ClientInfoSection},
-                std::string{pi::ClientCommand}};
+                std::string{pi::ClientCommand},
+                std::string{pi::ClientMsgDecor}};
     }
 
     void onStatusItemRegistered(
@@ -825,6 +830,231 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
 
         // 11.4 加载后 skippedPlugins() 不回退 (仅记录, 不影响后续加载决策)
         XX_TEST_EXPECT_TRUE(!mgr->skippedPlugins().empty());
+    }
+
+    // ---- 12. agentxx_codegraph client 插件: 索引状态与进度 Info 栏渲染 ----
+    {
+        auto cgPath = findPluginPath("agentxx_codegraph");
+        auto cgInst = co_await mgr->loadNativeAsync(cgPath);
+        XX_TEST_EXPECT_TRUE(cgInst != nullptr);
+        if (cgInst) {
+            auto reg = mgr->uiRegistrySnapshot();
+            bool hasCgSection = false;
+            for (const auto& sec : reg->infoSections) {
+                if (sec.id == "agentxx_codegraph.info") {
+                    hasCgSection = true;
+                    XX_TEST_EXPECT_EQ(sec.title, std::string{"CodeGraph"});
+                }
+            }
+            XX_TEST_EXPECT_TRUE(hasCgSection);
+
+            // status 事件
+            agentxx::agent::WirePluginData st;
+            st.plugin = "agentxx_codegraph";
+            st.event  = "status";
+            st.data   = R"({"loaded":true,"project_root":"/workspace/test_proj"})";
+            mgr->onPluginData(st);
+
+            reg = mgr->uiRegistrySnapshot();
+            for (const auto& sec : reg->infoSections) {
+                if (sec.id == "agentxx_codegraph.info") {
+                    std::string dump = sec.items.dump();
+                    XX_TEST_EXPECT_TRUE(dump.find("Status: Ready") != std::string::npos);
+                    XX_TEST_EXPECT_TRUE(dump.find("Root: /workspace/test_proj") != std::string::npos);
+                }
+            }
+
+            // progress 事件 (进行中)
+            agentxx::agent::WirePluginData prog;
+            prog.plugin = "agentxx_codegraph";
+            prog.event  = "progress";
+            prog.data   = R"({"processed":25,"total":100,"current_file":"src/main.cpp"})";
+            mgr->onPluginData(prog);
+
+            reg = mgr->uiRegistrySnapshot();
+            for (const auto& sec : reg->infoSections) {
+                if (sec.id == "agentxx_codegraph.info") {
+                    std::string dump = sec.items.dump();
+                    XX_TEST_EXPECT_TRUE(dump.find("Indexing: 25/100 files") != std::string::npos);
+                    XX_TEST_EXPECT_TRUE(dump.find("src/main.cpp") != std::string::npos);
+                    XX_TEST_EXPECT_TRUE(dump.find("progress") != std::string::npos);
+                }
+            }
+
+            // progress 事件 (完成)
+            agentxx::agent::WirePluginData progDone;
+            progDone.plugin = "agentxx_codegraph";
+            progDone.event  = "progress";
+            progDone.data   = R"({"processed":100,"total":100,"current_file":""})";
+            mgr->onPluginData(progDone);
+
+            reg = mgr->uiRegistrySnapshot();
+            for (const auto& sec : reg->infoSections) {
+                if (sec.id == "agentxx_codegraph.info") {
+                    std::string dump = sec.items.dump();
+                    XX_TEST_EXPECT_TRUE(dump.find("Indexed: 100 files") != std::string::npos);
+                }
+            }
+
+            co_await mgr->unloadAsync("agentxx_codegraph");
+            XX_TEST_EXPECT_TRUE(mgr->find("agentxx_codegraph") == nullptr);
+        }
+    }
+
+    // ---- 13. agentxx_system_monitor client 插件: CPU/内存/GPU 资源监控渲染 ----
+    {
+        auto smPath = findPluginPath("agentxx_system_monitor");
+        auto smInst = co_await mgr->loadNativeAsync(smPath);
+        XX_TEST_EXPECT_TRUE(smInst != nullptr);
+        if (smInst) {
+            auto reg = mgr->uiRegistrySnapshot();
+            bool hasSmSection = false;
+            for (const auto& sec : reg->infoSections) {
+                if (sec.id == "agentxx_system_monitor.usage") {
+                    hasSmSection = true;
+                    XX_TEST_EXPECT_EQ(sec.title, std::string{"System Usage"});
+                }
+            }
+            XX_TEST_EXPECT_TRUE(hasSmSection);
+
+            // usage 事件
+            agentxx::agent::WirePluginData usage;
+            usage.plugin = "agentxx_system_monitor";
+            usage.event  = "usage";
+            usage.data
+                = R"({"cpu":35.5,"mem_percent":52.0,"mem_used_mb":8192,"mem_total_mb":16384,"gpus":[{"name":"NVIDIA RTX 4090","dedicated_vram_mb":24576,"dedicated_vram_used_mb":6144,"usage_percent":42.0}]})";
+            mgr->onPluginData(usage);
+
+            reg = mgr->uiRegistrySnapshot();
+            for (const auto& sec : reg->infoSections) {
+                if (sec.id == "agentxx_system_monitor.usage") {
+                    std::string dump = sec.items.dump();
+                    XX_TEST_EXPECT_TRUE(dump.find("CPU: 35.5%") != std::string::npos);
+                    XX_TEST_EXPECT_TRUE(dump.find("RAM: 52.0% (8192/16384 MB)") != std::string::npos);
+                    XX_TEST_EXPECT_TRUE(dump.find("NVIDIA RTX 4090: 42.0% (6144/24576 MB)") != std::string::npos);
+                }
+            }
+
+            // sysinfo 命令执行
+            XX_TEST_EXPECT_TRUE(mgr->hasCommand("sysinfo"));
+            size_t toastBefore = adapter->toastCount();
+            mgr->invokeCommand("sysinfo", R"({})");
+            XX_TEST_EXPECT_TRUE(adapter->toastCount() > toastBefore);
+            XX_TEST_EXPECT_TRUE(adapter->lastToast().find("System monitor display") != std::string::npos);
+
+            co_await mgr->unloadAsync("agentxx_system_monitor");
+            XX_TEST_EXPECT_TRUE(mgr->find("agentxx_system_monitor") == nullptr);
+        }
+    }
+
+    // ---- 14. agentxx_planning client 插件: 工具消息装饰与侧边栏概览 ----
+    {
+        auto plPath = findPluginPath("agentxx_planning");
+        auto plInst = co_await mgr->loadNativeAsync(plPath);
+        XX_TEST_EXPECT_TRUE(plInst != nullptr);
+        if (plInst) {
+            // 14.1 规划事件推送 -> Info 栏段落更新
+            agentxx::agent::WirePluginData plData;
+            plData.plugin = "agentxx_planning";
+            plData.event  = "planning";
+            plData.data
+                = R"({"roadmap":"stateDiagram-v2\n[*] --> step1\nstep1 --> [*]","todos":[{"state":"in_progress","content":"do step 1","summary":"doing step 1"},{"state":"completed","content":"done step 0"}],"notes":"test note 123"})";
+            mgr->onPluginData(plData);
+
+            auto reg = mgr->uiRegistrySnapshot();
+            bool hasPlanSection = false;
+            for (const auto& sec : reg->infoSections) {
+                if (sec.id == "agentxx_planning.plan") {
+                    hasPlanSection = true;
+                    XX_TEST_EXPECT_EQ(sec.title, std::string{"Plan"});
+                    std::string dump = sec.items.dump();
+                    XX_TEST_EXPECT_TRUE(dump.find("Roadmap: 2 steps") != std::string::npos);
+                    XX_TEST_EXPECT_TRUE(dump.find("[~] do step 1") != std::string::npos);
+                    XX_TEST_EXPECT_TRUE(dump.find("doing step 1") != std::string::npos);
+                    XX_TEST_EXPECT_TRUE(dump.find("[#] done step 0") != std::string::npos);
+                    XX_TEST_EXPECT_TRUE(dump.find("test note 123") != std::string::npos);
+                }
+            }
+            XX_TEST_EXPECT_TRUE(hasPlanSection);
+
+            // 14.2 工具调用 Delta: tool_start (write 模式) -> 工具装饰推送
+            agentxx::agent::Delta deltaWriteStart{
+                .type       = agentxx::agent::Delta::Type::ToolStart,
+                .toolName   = "agentxx_planning",
+                .toolCallId = "call_plan_write_1",
+                .arguments  = R"({"mode":"write","roadmap":"stateDiagram-v2\n[*] --> p1\np1 --> [*]","todos":[{"state":"in_progress","content":"write task"}]})",
+            };
+            mgr->onDelta(deltaWriteStart);
+
+            reg = mgr->uiRegistrySnapshot();
+            bool foundDecor = false;
+            for (const auto& d : reg->toolDecors) {
+                if (d.toolCallId == "call_plan_write_1") {
+                    foundDecor = true;
+                    XX_TEST_EXPECT_EQ(d.displayName, std::string{"Plan"});
+                    XX_TEST_EXPECT_TRUE(d.summary.find("[~] write task") != std::string::npos);
+                    std::string dump = d.items.dump();
+                    XX_TEST_EXPECT_TRUE(dump.find("diagram") != std::string::npos);
+                    XX_TEST_EXPECT_TRUE(dump.find("write task") != std::string::npos);
+                }
+            }
+            XX_TEST_EXPECT_TRUE(foundDecor);
+
+            // 14.3 工具调用 Delta: tool_start (read 模式) -> 占位装饰
+            agentxx::agent::Delta deltaReadStart{
+                .type       = agentxx::agent::Delta::Type::ToolStart,
+                .toolName   = "agentxx_planning",
+                .toolCallId = "call_plan_read_1",
+                .arguments  = R"({"mode":"read"})",
+            };
+            mgr->onDelta(deltaReadStart);
+
+            reg = mgr->uiRegistrySnapshot();
+            for (const auto& d : reg->toolDecors) {
+                if (d.toolCallId == "call_plan_read_1") {
+                    std::string dump = d.items.dump();
+                    XX_TEST_EXPECT_TRUE(dump.find("Reading saved planning...") != std::string::npos);
+                }
+            }
+
+            // tool_end (read 模式) -> 结果装饰刷新
+            agentxx::agent::Delta deltaReadEnd{
+                .type       = agentxx::agent::Delta::Type::ToolEnd,
+                .toolName   = "agentxx_planning",
+                .toolCallId = "call_plan_read_1",
+                .result     = R"({"roadmap":"stateDiagram-v2\n[*] --> p2\np2 --> [*]","todos":[{"state":"completed","content":"read task done"}]})",
+            };
+            mgr->onDelta(deltaReadEnd);
+
+            reg = mgr->uiRegistrySnapshot();
+            for (const auto& d : reg->toolDecors) {
+                if (d.toolCallId == "call_plan_read_1") {
+                    std::string dump = d.items.dump();
+                    XX_TEST_EXPECT_TRUE(dump.find("read task done") != std::string::npos);
+                }
+            }
+
+            // 14.4 会话切换 -> 清除装饰与段落
+            mgr->onSessionSwitched("new_session_123");
+            reg = mgr->uiRegistrySnapshot();
+            bool hasPlanSecAfterSwitch = false;
+            for (const auto& sec : reg->infoSections) {
+                if (sec.id == "agentxx_planning.plan") {
+                    hasPlanSecAfterSwitch = true;
+                }
+            }
+            XX_TEST_EXPECT_FALSE(hasPlanSecAfterSwitch);
+            bool hasDecorAfterSwitch = false;
+            for (const auto& d : reg->toolDecors) {
+                if (d.plugin == "agentxx_planning") {
+                    hasDecorAfterSwitch = true;
+                }
+            }
+            XX_TEST_EXPECT_FALSE(hasDecorAfterSwitch);
+
+            co_await mgr->unloadAsync("agentxx_planning");
+            XX_TEST_EXPECT_TRUE(mgr->find("agentxx_planning") == nullptr);
+        }
     }
 
     co_return TestResult{g_client_plugin_passed, g_client_plugin_failed};

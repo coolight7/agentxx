@@ -532,13 +532,13 @@ void SessionServerAgentIO::handleHello(const WireHello& hello, std::vector<std::
             loadedPlugins.push_back(std::move(info));
         }
     }
-    sendToPeer(WireHelloAck{
-        .ok        = true,
-        .sessionId = config_.sessionId,
-        .tailHash  = std::move(tailHash),
-        .models    = std::move(models),
-        .plugins   = std::move(loadedPlugins),
-    });
+    WireHelloAck helloAck;
+    helloAck.ok        = true;
+    helloAck.sessionId = config_.sessionId;
+    helloAck.tailHash  = std::move(tailHash);
+    helloAck.models    = std::move(models);
+    helloAck.plugins   = std::move(loadedPlugins);
+    sendToPeer(std::move(helloAck));
 
     for (const auto& d : replayDeltas) {
         sendToPeer(d);
@@ -781,7 +781,7 @@ asio::awaitable<void> SessionServerAgentIO::run() {
             // 断线重连增量重放时该消息会丢失, 导致客户端历史与服务端不一致
             auto d = Delta{
                 .type    = Delta::Type::InsertMessage,
-                .message = std::move(vm),
+                .message = std::make_shared<ViewMessage>(std::move(vm)),
             };
             d.seq = sess->nextDeltaSeq();
             sendToPeer(std::move(d));

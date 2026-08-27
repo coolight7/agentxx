@@ -25,6 +25,9 @@ if (_AGENTXX_ADD_AS_BUILTIN)
     "agentxx_plugin_create=agentxx_plugin_builtin_create_${PLUGIN_NAME}"
     "agentxx_plugin_get_info=agentxx_plugin_builtin_get_info_${PLUGIN_NAME}"
     "agentxx_plugin_destroy=agentxx_plugin_builtin_destroy_${PLUGIN_NAME}"
+    "agentxx_client_create=agentxx_plugin_builtin_client_entry_${PLUGIN_NAME}"
+    "agentxx_client_get_info=agentxx_plugin_builtin_client_get_info_${PLUGIN_NAME}"
+    "agentxx_client_destroy=agentxx_plugin_builtin_client_unload_${PLUGIN_NAME}"
   )
   target_include_directories(${_target} PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}"          # codegraph_manager.h / codegraph_plugin.h

@@ -1471,11 +1471,21 @@ inline void reactor_tool(
         Ctx*                    ctx  = nullptr;
         ReactorLoop*            loop = nullptr;
         std::decay_t<ReactorFn> fn;
+        std::mutex                                 mtx;
+        std::map<void*, std::shared_ptr<std::atomic<bool>>> flags;
+
+        ReactorShim() = default;
+        ReactorShim(Ctx* c, ReactorLoop* l, std::decay_t<ReactorFn>&& f) :
+            ctx(c), loop(l), fn(std::move(f)) {}
+        ReactorShim(const ReactorShim&) = delete;
+        ReactorShim& operator=(const ReactorShim&) = delete;
     };
 
-    auto shim = ctx.storeShim(std::make_unique<ReactorShim>(
-        ReactorShim{&ctx, &loop, std::forward<ReactorFn>(fn)}
-    ));
+    auto shimPtr = std::make_unique<ReactorShim>();
+    shimPtr->ctx = &ctx;
+    shimPtr->loop = &loop;
+    shimPtr->fn = std::forward<ReactorFn>(fn);
+    auto shim = ctx.storeShim(std::move(shimPtr));
 
     struct Job {
         ReactorShim*                       shim;
@@ -1503,6 +1513,10 @@ inline void reactor_tool(
         (void)error_out;
         auto cancelFlag = std::make_shared<std::atomic<bool>>(false);
         auto* job       = new Job{shim, cancelFlag};
+        {
+            std::lock_guard lk(shim->mtx);
+            shim->flags[job] = cancelFlag;
+        }
         AgentxxOpNotify ntf = notify ? *notify : AgentxxOpNotify{nullptr, nullptr};
 
         std::string argsStr(args_json.data ? args_json.data : "{}", args_json.size);
@@ -1510,7 +1524,7 @@ inline void reactor_tool(
 
         asio::co_spawn(
             shim->loop->io,
-            [shim, argsStr, tidStr, cancelFlag, ntf]() -> asio::awaitable<void> {
+            [shim, argsStr, tidStr, cancelFlag, ntf, job]() -> asio::awaitable<void> {
                 OpCtl ctl{cancelFlag, shim->ctx->host, shim->ctx->iface.cancel, tidStr};
                 try {
                     std::string res     = co_await shim->fn(*shim->ctx, argsStr, ctl);
@@ -1531,6 +1545,11 @@ inline void reactor_tool(
                         ntf.done(ntf.host_ud, AGENTXX_OP_FAILED, shim->ctx->strdup("unknown reactor tool error"));
                     }
                 }
+                {
+                    std::lock_guard lk(shim->mtx);
+                    shim->flags.erase(job);
+                }
+                delete job;
             },
             asio::detached
         );
@@ -1539,14 +1558,27 @@ inline void reactor_tool(
     };
 
     spec.execute_cancel = [](void* user_data, void* op) {
-        (void)user_data;
         if (!op) {
             return;
         }
-        auto* job = static_cast<Job*>(op);
-        if (job->cancelFlag) {
-            job->cancelFlag->store(true, std::memory_order_release);
+        auto* shim = static_cast<ReactorShim*>(user_data);
+        if (!shim) {
+            return;
         }
+        std::shared_ptr<std::atomic<bool>> flag;
+        {
+            std::lock_guard lk(shim->mtx);
+            auto it = shim->flags.find(op);
+            if (it != shim->flags.end()) {
+                flag = it->second;
+            }
+        }
+        if (flag) {
+            flag->store(true, std::memory_order_release);
+            return;
+        }
+        // 兜底：若未在 map 中（极端时序），尝试直接通过 Job 生存期访问（可能已释放则跳过）
+        // 此分支仅为防御，正常路径已通过 map 命中
     };
 
     if (ctx.iface.tools && ctx.iface.tools->register_tool) {

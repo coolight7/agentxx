@@ -106,10 +106,10 @@ struct ViewMessage {
         std::string interruptResult;
     };
 
-    std::optional<ToolData>      tool;      ///< Role::Tool 有效
-    std::optional<TipData>       tip;       ///< Role::Tip 有效
-    std::optional<InterruptData> interrupt; ///< Role::Interrupt 有效
-    std::optional<ThinkData>     think;     ///< Role::Think 有效
+    std::optional<ToolData>      tool      = std::nullopt; ///< Role::Tool 有效
+    std::optional<TipData>       tip       = std::nullopt; ///< Role::Tip 有效
+    std::optional<InterruptData> interrupt = std::nullopt; ///< Role::Interrupt 有效
+    std::optional<ThinkData>     think     = std::nullopt; ///< Role::Think 有效
 
     /// 便捷构造: 纯文本消息 (User/Assistant/Think/System/Tip)
     /// - Tip 消息自动创建 tip 子结构 (tipLevel 默认 Info), 且默认折叠展示
@@ -198,8 +198,8 @@ struct Delta {
         InsertMessage,
     };
 
-    Type     type;
-    uint64_t seq = 0;
+    Type     type = Type::TextToken;
+    uint64_t seq  = 0;
 
     std::string text;
 
@@ -217,7 +217,7 @@ struct Delta {
     TipType tipType = TipType::Info; ///< 提示级别 (Info/Warning/Error)
 
     // Think 结构体 (Role::Think 消息专属, 如加密思考/token统计)
-    std::optional<ViewMessage::ThinkData> think;
+    std::optional<ViewMessage::ThinkData> think = std::nullopt;
 
     uint64_t    historyCount = 0;
     std::string tailHash;
@@ -231,7 +231,7 @@ struct Delta {
     double tps = 0.0;
 
     /// 完整 ViewMessage 载荷 (InsertMessage 使用)
-    std::optional<ViewMessage> message;
+    std::shared_ptr<ViewMessage> message = nullptr;
 };
 
 /// 排队等待发送的消息条目 (服务端按会话维护, 同步到客户端展示)
