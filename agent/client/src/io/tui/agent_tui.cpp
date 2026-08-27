@@ -421,7 +421,7 @@ void TUIClientAgentIO::start() {
             requestNextSessionListPage();
         };
         ctx_.theme         = &theme_;
-        ctx_.sessionId     = currentThreadId();
+        ctx_.sessionId     = currentSessionId();
         ctx_.remoteUrl     = remoteUrl_;
         ctx_.pluginManager = pluginManager_;
         // 注意: 不设置 ctx_.session —— TUI 不持有 Session (属于 agent-io 线程),
@@ -437,13 +437,11 @@ void TUIClientAgentIO::start() {
         // ensure 回调创建并激活; 已激活再点一次取消激活隐藏内容区)
         sidebar_->setPinnedTabs({
             {std::string(kInfoTabId),
-             "Info",
-             [this]() {
+             "Info", [this]() {
                  ensureInfoSidebarTab();
              }},
             {std::string(kLogTabId),
-             "Logs",
-             [this]() {
+             "Logs", [this]() {
                  ensureLogSidebarTab();
              }},
         });
@@ -515,7 +513,7 @@ void TUIClientAgentIO::start() {
             // 经 WireGetContext 由服务端回推 (WireContextMessages → onPeerMessage
             // → sharedState_.contextMessages); 本地/远程模式均有 transport
             if (transport_) {
-                sendToPeer(agentxx::agent::WireGetContext{currentThreadId()});
+                sendToPeer(agentxx::agent::WireGetContext{currentSessionId()});
             }
             if (modal_ && !modal_->hasModal()) {
                 auto overlay = std::make_shared<ContextOverlay>(ctx_);
@@ -534,7 +532,7 @@ void TUIClientAgentIO::start() {
             // client 插件 UI 注册表快照 (工具消息装饰等; 每帧刷新, 渲染期无锁读)
             ctx_.frameState->pluginRegistry
                 = pluginManager_ ? pluginManager_->uiRegistrySnapshot() : nullptr;
-            const auto& st  = *ctx_.frameState;
+            const auto& st = *ctx_.frameState;
 
             Element pendingBar = text("");
             if (!st.pendingInputs.empty()) {
@@ -669,7 +667,7 @@ void TUIClientAgentIO::start() {
                     if (!ctx_.frameState->pendingInputs.empty()
                         && pendingInsertButtonBox_.Contain(mouse.x, mouse.y)) {
                         if (transport_) {
-                            sendToPeer(agentxx::agent::WireInterruptAndRunNext{currentThreadId()});
+                            sendToPeer(agentxx::agent::WireInterruptAndRunNext{currentSessionId()});
                         }
                         std::lock_guard<std::mutex> lock(sharedState_.mutex());
                         auto&                       st = sharedState_.mutableState();
@@ -685,14 +683,14 @@ void TUIClientAgentIO::start() {
                         auto overlay = std::make_shared<PendingInputsOverlay>(ctx_);
                         overlay->onClear([this] {
                             if (transport_) {
-                                sendToPeer(agentxx::agent::WireClearMessageQueue{currentThreadId()}
+                                sendToPeer(agentxx::agent::WireClearMessageQueue{currentSessionId()}
                                 );
                             }
                         });
                         overlay->onDeleteItem([this](std::string itemId) {
                             if (transport_) {
                                 sendToPeer(agentxx::agent::WireRemoveQueueItem{
-                                    currentThreadId(),
+                                    currentSessionId(),
                                     std::move(itemId)
                                 });
                             }
@@ -970,7 +968,7 @@ void TUIClientAgentIO::openModelSelector() {
         return;
     }
     if (transport_) {
-        sendToPeer(agentxx::agent::WireGetModel{currentThreadId()});
+        sendToPeer(agentxx::agent::WireGetModel{currentSessionId()});
     }
     auto overlay = std::make_shared<ModelSelectorOverlay>(ctx_);
     auto snap    = sharedState_.readSnapshot();
@@ -1131,11 +1129,11 @@ void TUIClientAgentIO::openSessionSelector() {
 }
 
 void TUIClientAgentIO::switchToSession(std::string newThreadId) {
-    if (newThreadId.empty() || newThreadId == currentThreadId()) {
+    if (newThreadId.empty() || newThreadId == currentSessionId()) {
         return;
     }
-    XX_LOGI("[tui] switching session: {} -> {}", currentThreadId(), newThreadId);
-    setCurrentThreadId(newThreadId);
+    XX_LOGI("[tui] switching session: {} -> {}", currentSessionId(), newThreadId);
+    setCurrentSessionId(newThreadId);
     // 更新组件共享上下文: 状态栏/会话弹窗据此标记 current 会话
     ctx_.sessionId = newThreadId;
     // 注意: TUI 不持有 Session (属于 agent-io 线程), 切换后服务端回推
@@ -1369,7 +1367,7 @@ void TUIClientAgentIO::pushCurrentTokenLocked(TUIRenderState& st) {
 }
 
 void TUIClientAgentIO::cancelCurrentRunLocked(TUIRenderState& st) {
-    requestCancel(currentThreadId());
+    requestCancel(currentSessionId());
     pushCurrentTokenLocked(st);
     resetTrailingRunningToolsLocked(st);
     // 取消提示由 agent 线程确认取消后经 MessageTip Delta 插入 (原在此处
@@ -1387,7 +1385,8 @@ void TUIClientAgentIO::sendUserInputLocked(TUIRenderState& st, std::string text)
     std::string pendingModel = std::move(st.pendingModel);
     st.pendingModel.clear();
     if (transport_) {
-        sendToPeer(agentxx::agent::WireUserInput{currentThreadId(), text, std::move(pendingModel)});
+        sendToPeer(agentxx::agent::WireUserInput{currentSessionId(), text, std::move(pendingModel)}
+        );
     } else {
         // 无 transport (遗留直连模式): 输入经本地 channel 送达, 无法携带
         // 模型选择, 已取走的 pendingModel 直接丢弃 (该模式下不切换模型)
@@ -1398,7 +1397,7 @@ void TUIClientAgentIO::sendUserInputLocked(TUIRenderState& st, std::string text)
         );
     }
     // 通知事件接收器 (用户输入事件; 任意线程安全, 内部按需 post 到 io 线程)
-    notifyUserInputSent(currentThreadId(), notifyText);
+    notifyUserInputSent(currentSessionId(), notifyText);
 }
 
 void TUIClientAgentIO::onMessageQueueUpdate(const agentxx::agent::WireMessageQueueUpdate& update) {
@@ -1448,11 +1447,11 @@ void TUIClientAgentIO::onViewMessagesPage(const agentxx::agent::WireViewMessages
         // 在途标志复位 (无论本页是否可用, 请求生命周期已结束)
         st.historyLoading = false;
         // 会话不匹配: 切换会话后迟到的旧页响应, 丢弃
-        if (!page.sessionId.empty() && page.sessionId != currentThreadId()) {
+        if (!page.sessionId.empty() && page.sessionId != currentSessionId()) {
             XX_LOGW(
                 "[tui] drop stale history page (session {} != {})",
                 page.sessionId,
-                currentThreadId()
+                currentSessionId()
             );
             return;
         }
@@ -1514,7 +1513,7 @@ void TUIClientAgentIO::requestOlderHistory() {
         st.historyLoading = true;
         beforeIndex       = st.historyWindowStart;
     }
-    requestViewMessagesPage(currentThreadId(), beforeIndex, kHistoryPageSize);
+    requestViewMessagesPage(currentSessionId(), beforeIndex, kHistoryPageSize);
 }
 
 // ---------------------------------------------------------------------------
@@ -1558,9 +1557,9 @@ void TUIClientAgentIO::onSessionListPage(const agentxx::agent::WireSessionList& 
         }
         // hasMore 边界: 服务端标志 + 空页防御 (keyset 边界处可能多给一页空响应,
         // 此时终止续取) + 已加载数达到总数时收敛
-        st.sessionListHasMore =
-            resp.hasMore && !resp.sessions.empty()
-            && (st.sessionListTotalCount == 0 || st.sessionList.size() < st.sessionListTotalCount);
+        st.sessionListHasMore = resp.hasMore && !resp.sessions.empty()
+                                && (st.sessionListTotalCount == 0
+                                    || st.sessionList.size() < st.sessionListTotalCount);
     }
     postRedraw();
 }
@@ -1578,8 +1577,8 @@ void TUIClientAgentIO::requestNextSessionListPage() {
         }
         st.sessionListLoadingMore = true;
         // 游标取已加载列表最后一条 (排序最旧), 服务端返回严格排在其后的至多一页
-        beforeMs                  = st.sessionList.back().lastActiveMs;
-        beforeId                  = st.sessionList.back().sessionId;
+        beforeMs = st.sessionList.back().lastActiveMs;
+        beforeId = st.sessionList.back().sessionId;
     }
     requestSessionListPage(beforeMs, std::move(beforeId), kSessionListPageSize);
 }
@@ -1709,11 +1708,14 @@ void TUIClientAgentIO::onDelta(const agentxx::agent::Delta& delta) {
                 m->text               = delta.arguments;
                 m->tool->toolFinished = false;
                 m->collapsed          = true;
-                m->startTimeMs        = delta.startTimeMs > 0 ? delta.startTimeMs : static_cast<int64_t>(
-                    std::chrono::duration_cast<std::chrono::milliseconds>(
-                        std::chrono::system_clock::now().time_since_epoch()
-                    ).count()
-                );
+                m->startTimeMs        = delta.startTimeMs > 0
+                                            ? delta.startTimeMs
+                                            : static_cast<int64_t>(
+                                           std::chrono::duration_cast<std::chrono::milliseconds>(
+                                               std::chrono::system_clock::now().time_since_epoch()
+                                           )
+                                               .count()
+                                       );
                 st.messages.push_back(std::move(m));
                 st.isStreaming = true;
             } break;
@@ -1736,11 +1738,12 @@ void TUIClientAgentIO::onDelta(const agentxx::agent::Delta& delta) {
                             const int64_t nowMs = static_cast<int64_t>(
                                 std::chrono::duration_cast<std::chrono::milliseconds>(
                                     std::chrono::system_clock::now().time_since_epoch()
-                                ).count()
+                                )
+                                    .count()
                             );
                             m.durationMs = std::max(int64_t{0}, nowMs - m.startTimeMs);
                         }
-                        found                = true;
+                        found = true;
                         break;
                     }
                 }
@@ -1773,10 +1776,8 @@ void TUIClientAgentIO::onDelta(const agentxx::agent::Delta& delta) {
                         st.pendingTokenStartTimeMs = delta.startTimeMs;
                         st.pendingTokenDurationMs  = delta.durationMs;
                     }
-                } else if (
-                    !st.messages.empty()
-                    && st.messages.back()->role != TUIMessage::Role::Think
-                ) {
+                } else if (!st.messages.empty()
+                           && st.messages.back()->role != TUIMessage::Role::Think) {
                     auto& m       = sharedState_.mutableMessage(st, st.messages.size() - 1);
                     m.startTimeMs = delta.startTimeMs;
                     m.durationMs  = delta.durationMs;
@@ -1917,7 +1918,7 @@ void TUIClientAgentIO::onTurnResult(const agentxx::agent::WireTurnResult& /*resu
         auto&                       st = sharedState_.mutableState();
         pushCurrentTokenLocked(st);
         resetTrailingRunningToolsLocked(st);
-        st.isStreaming                 = false;
+        st.isStreaming = false;
     }
     postRedraw();
 }

@@ -34,7 +34,7 @@ public:
     );
 
     /// 解析指定会话使用的 Provider
-    /// - 启用动态切换时按会话 (thread_id) 选择的模型经 modelRegistry 解析
+    /// - 启用动态切换时按会话 (sessionId) 选择的模型经 modelRegistry 解析
     /// - 否则回退到节点构造时的 provider_
     std::shared_ptr<neograph::Provider> resolveCurrentProvider(std::string_view sessionId);
 

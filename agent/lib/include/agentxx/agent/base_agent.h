@@ -55,7 +55,7 @@ public:
         bool        interrupted = false;
     };
 
-    /// 选择指定会话 modelcall 使用的模型 (运行时切换, 按 thread_id 隔离)
+    /// 选择指定会话 modelcall 使用的模型 (运行时切换, 按 sessionId 隔离)
     /// - modelName 为空或不存在时不改变该会话的选择
     void selectModel(std::string_view sessionId, std::string_view modelName);
 
@@ -67,9 +67,9 @@ public:
     /// - 增量事件经 io->sendToPeer(Delta) 推送 (io 端点须已设置 transport);
     ///   io 传 nullptr 时为 headless 模式, 不产出事件
     asio::awaitable<TurnResult> runTurnAsync(
-        std::string_view             sessionId,
-        std::string_view             userInput,
-        [[maybe_unused]] bool        isFirstMsg, ///< 保留调用方语义表达; 当前引擎侧不再使用
+        std::string_view sessionId,
+        std::string_view userInput,
+        [[maybe_unused]] bool isFirstMsg, ///< 保留调用方语义表达; 当前引擎侧不再使用
         std::shared_ptr<AgentIOBase> io,
         std::string_view             modelName = ""
     );

@@ -28,7 +28,7 @@ private:
 
     std::shared_ptr<StderrLogSink> logSink_;
     bool                           isThinking_ = false;
-    /// 当前会话 thread_id (mode_runners 装配时设置; 插件代发消息用)
+    /// 当前会话 sessionId (mode_runners 装配时设置; 插件代发消息用)
     std::string sessionId_;
 
 public:
@@ -45,7 +45,7 @@ public:
     StdIOClientAgentIO();
     ~StdIOClientAgentIO() override;
 
-    /// 设置当前会话 thread_id (mode_runners 在建立会话时调用)
+    /// 设置当前会话 sessionId (mode_runners 在建立会话时调用)
     void setSessionId(std::string sessionId) {
         sessionId_ = std::move(sessionId);
     }

@@ -67,7 +67,7 @@ protected:
  * @brief SingleCheckpointStore 的内存实现
  *
  * 每个 thread 仅存储最新一个 checkpoint; pending writes 按
- * (thread_id, parent_checkpoint_id) 组织, save 时随历史 checkpoint 一并淘汰。
+ * (session_id, parent_checkpoint_id) 组织, save 时随历史 checkpoint 一并淘汰。
  * 线程安全: 单个操作内部以 mutex 保护 (与 neograph::InMemoryCheckpointStore
  * 相同的每调用原子性约定)。
  */
@@ -76,29 +76,29 @@ public:
 
     // ── CheckpointStore 同步接口 (async 侧继承基类默认实现) ─────────────
 
-    std::optional<neograph::graph::Checkpoint> load_latest(const std::string& thread_id) override;
+    std::optional<neograph::graph::Checkpoint> load_latest(const std::string& session_id) override;
 
     /// 仅可能命中某个 thread 的最新 checkpoint; 历史 id 已被淘汰, 返回 nullopt
     std::optional<neograph::graph::Checkpoint> load_by_id(const std::string& id) override;
 
     /// 最多返回最新一条 (limit <= 0 时返回空, 与 neograph 语义一致)
     std::vector<neograph::graph::Checkpoint>
-        list(const std::string& thread_id, int limit = 100) override;
+        list(const std::string& session_id, int limit = 100) override;
 
-    void delete_thread(const std::string& thread_id) override;
+    void delete_thread(const std::string& session_id) override;
 
     // ── pending writes ──────────────────────────────────────────────────
 
     void put_writes(
-        const std::string&                   thread_id,
+        const std::string&                   session_id,
         const std::string&                   parent_checkpoint_id,
         const neograph::graph::PendingWrite& write
     ) override;
 
     std::vector<neograph::graph::PendingWrite>
-        get_writes(const std::string& thread_id, const std::string& parent_checkpoint_id) override;
+        get_writes(const std::string& session_id, const std::string& parent_checkpoint_id) override;
 
-    void clear_writes(const std::string& thread_id, const std::string& parent_checkpoint_id)
+    void clear_writes(const std::string& session_id, const std::string& parent_checkpoint_id)
         override;
 
     // ── 测试辅助 ────────────────────────────────────────────────────────
@@ -108,7 +108,7 @@ public:
 
     /// 指定 checkpoint 上挂载的 pending writes 数量
     std::size_t pending_writes_count(
-        const std::string& thread_id,
+        const std::string& session_id,
         const std::string& parent_checkpoint_id
     ) const;
 
@@ -122,7 +122,7 @@ private:
     mutable std::mutex mutex_;
     /// 每个 thread 仅保留最新 checkpoint
     std::map<std::string, neograph::graph::Checkpoint> latest_;
-    /// pending writes: (thread_id, parent_checkpoint_id) → 按插入顺序的列表
+    /// pending writes: (session_id, parent_checkpoint_id) → 按插入顺序的列表
     std::map<std::pair<std::string, std::string>, std::vector<neograph::graph::PendingWrite>>
         pending_;
 };

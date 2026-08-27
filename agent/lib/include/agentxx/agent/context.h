@@ -103,7 +103,7 @@ enum class SessionActivity : uint8_t {
     WaitingInput,  /// 等待用户输入 (中断/权限)
 };
 
-/// 单个会话的独立状态 (按 thread_id 区分)
+/// 单个会话的独立状态 (按 sessionId 区分)
 /// - 设计目标：单线程/多协程交错执行多会话，会话间状态彼此隔离
 /// - io/bus/contextStats 在 agent 线程 (io_context) 上访问，无需额外同步
 /// - viewMessages/llmMessages/chainHash/cancelToken/modelName 仅在 ioContext 线程读写,
@@ -345,6 +345,7 @@ private:
         ViewMessage msg;
         uint64_t    counter = 0; ///< isAppend 时的 msgIdCounter (与消息同事务提交)
     };
+
     std::vector<PendingViewOp> pendingViewOps_;
     /// 上次 viewMessages 实际落盘时刻 (steady ms; 0 = 本进程内尚未落过)
     int64_t viewLastPersistMs_ = 0;
@@ -357,18 +358,18 @@ private:
     void flushPendingViewOps();
 };
 
-/// 会话存储: 按 thread_id 取/建 Session
+/// 会话存储: 按 sessionId 取/建 Session
 /// - 仅在 agent io_context 线程访问, 无需锁保护
 /// - UI 线程通过 Wire 消息间接操作, 不直接访问此存储
 class SessionsManager {
 public:
 
-    /// 获取或创建指定 thread_id 的会话
+    /// 获取或创建指定 sessionId 的会话
     /// - 创建时若已注入持久化 (sessionStore), 从 SQLite 恢复该 thread 的
     ///   历史消息/LLM 上下文, 并绑定持久化回调
     std::shared_ptr<Session> getOrCreate(std::string_view sessionId);
 
-    /// 获取指定 thread_id 的会话; 不存在时返回 nullptr
+    /// 获取指定 sessionId 的会话; 不存在时返回 nullptr
     std::shared_ptr<Session> get(std::string_view sessionId);
 
     void remove(std::string_view sessionId);
@@ -439,7 +440,7 @@ public:
     /// - 含可用模型与默认模型; 各会话的当前选择记录在 Session 中
     std::shared_ptr<ModelProviderRegistry> modelRegistry = nullptr;
 
-    /// 会话存储：按 thread_id 取/建 Session
+    /// 会话存储：按 sessionId 取/建 Session
     std::shared_ptr<SessionsManager> sessions = std::make_shared<SessionsManager>();
 
     /// 组件加载信息
@@ -486,7 +487,7 @@ public:
         = std::make_shared<asio::thread_pool>(std::max(2u, std::thread::hardware_concurrency() / 2)
         );
 
-    /// 便捷方法：获取或创建指定 thread_id 的会话
+    /// 便捷方法：获取或创建指定 sessionId 的会话
     std::shared_ptr<Session> getSession(std::string_view sessionId);
 
     /// 统一的会话工作目录取值入口 (getSessionWorkDir; 全部使用方经此取值,

@@ -12,7 +12,7 @@ namespace middleware {
 class PlanningMiddlewareState : public BaseMiddlewareState {
 public:
 
-    /// <thread_id, todoListJson>
+    /// <sessionId, todoListJson>
     /// [会话独立] 任务规划列表，由 `agentxx_planning` 工具 (write 模式) 读写
     std::map<std::string, neograph::json> plannings{};
 

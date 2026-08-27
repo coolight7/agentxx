@@ -117,7 +117,7 @@ public:
     /// LLM 同上下文压缩: 通过 subagent 完成 (同上下文模式)
     /// - 请求参数: subagent="subagent_task", messages=压缩段原消息(含 system)
     ///   + 末尾追加 user 压缩指令 (结构化透传, 无文本转录),
-    ///   thread_id=父线程 (与父会话相同 threadid + 相同模型 → 命中 KV cache),
+    ///   sessionId=父线程 (与父会话相同 threadid + 相同模型 → 命中 KV cache),
     ///   tools=["agentxx_share_store"] (模型可自主外置长内容为 id+极简摘要,
     ///   写入父会话 store), enable_summarization=false (禁止二次压缩)
     /// - subagent 内部完成"外置长内容 → 输出摘要"的完整 agent 循环,
@@ -125,7 +125,7 @@ public:
     /// - 通过 NodeInterrupt 中断父轮次派生 subagent, resume 后返回结果;
     ///   无 subagentManager / 消息为空 / 压缩失败时返回空串 (调用方保留原消息)
     asio::awaitable<std::string> doSummarizeWithLLM(
-        std::string_view                          thread_id,
+        std::string_view                          sessionId,
         const std::vector<neograph::ChatMessage>& messages
     );
 

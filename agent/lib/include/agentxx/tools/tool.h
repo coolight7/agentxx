@@ -20,8 +20,8 @@ namespace asio = ::boost::asio;
 namespace agentxx {
 namespace tools {
 
-/// 从 tool 参数中取 thread_id 并获取对应会话的取消令牌
-/// - thread_id 由 ToolCallNode 在调用工具前注入 arguments
+/// 从 tool 参数中取 sessionId 并获取对应会话的取消令牌
+/// - sessionId 由 ToolCallNode 在调用工具前注入 arguments
 /// - 会话不存在 (如非 toolcall 路径调用) 或令牌为空时返回 nullptr (无取消支持)
 std::shared_ptr<neograph::graph::CancelToken> getSessionCancelToken(
     const std::shared_ptr<agentxx::agent::AgentContext>& agentCtx,

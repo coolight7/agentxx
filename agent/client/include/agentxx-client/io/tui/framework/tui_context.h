@@ -42,7 +42,7 @@ struct TUICtx {
     /// 当前主题 (UI 线程独占, 渲染/事件时直接读取)
     TUITheme* theme = nullptr;
 
-    /// 本 TUI 绑定的会话 thread_id
+    /// 本 TUI 绑定的会话 sessionId
     std::string sessionId;
 
     /// 远程地址 (空 = 内置)

@@ -213,7 +213,7 @@ neograph::ChatTool SubAgentManagerTool::get_definition() const {
                             {
                                 "description",
                                 "Optional batch of subagent tasks, each an object of "
-                                "{subagent, system_prompt, message, messages, thread_id, "
+                                "{subagent, system_prompt, message, messages, session_id, "
                                 "tools, enable_summarization, result_id}. When provided "
                                 "(non-empty), the top-level single-task fields are ignored "
                                 "and all tasks run in parallel.",

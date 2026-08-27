@@ -114,7 +114,7 @@ tool_skill_search 与延迟加载装配：
   模式默认规则; filesystem 工具的相对路径经 `normalizePermissionPath(path,
   sessionId)` 按 worktree 解析, 权限规则与实际访问路径稳定匹配
 - **插件链路跟随**: 插件接口 `AgentxxConfigIface` 升 v3 新增
-  `get_session_work_dir(host, thread_id)` (worktree 绑定优先); filesystem 插件
+  `get_session_work_dir(host, session_id)` (worktree 绑定优先); filesystem 插件
   改为每次 execute 按注入的 sessionId 动态解析 (原 entry 时静态缓存),
   execute_command 插件同语义 —— 会话绑定后两个插件的路径基准即时切换
 - **子代理继承**: AgentHost 派生子代理时继承父会话绑定 (子代理 config.workDir

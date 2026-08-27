@@ -230,7 +230,7 @@ public:
     void setPluginManager(std::shared_ptr<agentxx::plugin::ClientPluginManager> mgr) {
         pluginManager_ = std::move(mgr);
         if (pluginManager_) {
-            pluginManager_->setSessionId(currentThreadId());
+            pluginManager_->setSessionId(currentSessionId());
         }
     }
 
@@ -339,8 +339,9 @@ private:
     // -----------------------------------------------------------------------
     // 协议处理辅助 (client 线程, 须持有 sharedState_.mutex())
     // -----------------------------------------------------------------------
-    /// 重置末尾最近连续处于 running 状态的 tool 消息为非 running (!toolFinished -> toolFinished = true)
-    /// (新消息到达 / 轮次开始 / 输入发送时调用, 避免会话恢复或异常中断后残留的 tool 一直显示正在运行)
+    /// 重置末尾最近连续处于 running 状态的 tool 消息为非 running (!toolFinished -> toolFinished =
+    /// true) (新消息到达 / 轮次开始 / 输入发送时调用, 避免会话恢复或异常中断后残留的 tool
+    /// 一直显示正在运行)
     void resetTrailingRunningToolsLocked(TUIRenderState& st);
 
     void pushCurrentTokenLocked(TUIRenderState& st);
@@ -401,18 +402,18 @@ private:
     /// - 更新本地 sessionId 绑定与重连握手 sessionId (WS 模式)
     /// - 发送 WireSwitchSession, 服务端回推全量 Sync/模型/上下文统计 (WireModelInfo
     ///   / WireContextStats) 恢复界面; TUI 不持有 Session (属于 agent-io 线程)
-    void switchToSession(std::string newThreadId);
+    void switchToSession(std::string newSessionId);
 
-    /// 当前会话 thread_id 的跨线程安全读写:
+    /// 当前会话 sessionId 的跨线程安全读写:
     /// UI 线程切换会话时写入, client 线程发送用户输入时读取
-    std::string currentThreadId() const {
-        std::lock_guard<std::mutex> lock(threadIdMutex_);
+    std::string currentSessionId() const {
+        std::lock_guard<std::mutex> lock(sessionIdMutex_);
         return sessionId_;
     }
 
-    void setCurrentThreadId(std::string newThreadId) {
-        std::lock_guard<std::mutex> lock(threadIdMutex_);
-        sessionId_ = std::move(newThreadId);
+    void setCurrentSessionId(std::string newSessionId) {
+        std::lock_guard<std::mutex> lock(sessionIdMutex_);
+        sessionId_ = std::move(newSessionId);
     }
 
     /// client 插件管理器 (装配后不可变; uiRegistrySnapshot/hasCommand 线程安全)
@@ -428,10 +429,10 @@ private:
     void openFailedAppendComponents();
 
     /// 侧边栏渲染辅助
-    std::vector<ScrollItem>       renderLogWindow();
-    std::vector<ScrollItem>       renderInfoSidebar();
-    ftxui::Element                renderInfoSidebarFooter();
-    ftxui::Element                renderLogSidebarFooter();
+    std::vector<ScrollItem> renderLogWindow();
+    std::vector<ScrollItem> renderInfoSidebar();
+    ftxui::Element          renderInfoSidebarFooter();
+    ftxui::Element          renderLogSidebarFooter();
 
     // -----------------------------------------------------------------------
     // 状态
@@ -439,10 +440,10 @@ private:
     TUISharedState sharedState_;
 
     TUITheme theme_;
-    /// 当前会话 thread_id (切换会话时由 UI 线程写入, client 线程发送输入时读取;
-    /// 经 threadIdMutex_ 保护, 见 currentThreadId()/setCurrentThreadId())
+    /// 当前会话 sessionId (切换会话时由 UI 线程写入, client 线程发送输入时读取;
+    /// 经 sessionIdMutex_ 保护, 见 currentSessionId()/setCurrentSessionId())
     std::string           sessionId_;
-    mutable std::mutex    threadIdMutex_;
+    mutable std::mutex    sessionIdMutex_;
     asio::any_io_executor ex_;
     /// 权限询问处理模式 (yaml 配置 `permission.mode` 注入, 不可运行时切换)
     agentxx::agent::PermissionMode permissionMode_ = agentxx::agent::PermissionMode::Ask;
