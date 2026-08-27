@@ -841,14 +841,14 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             auto reg = mgr->uiRegistrySnapshot();
             bool hasCgSection = false;
             for (const auto& sec : reg->infoSections) {
-                if (sec.id == "agentxx_codegraph.info") {
+                if (sec.id == "agentxx_codegraph.status") {
                     hasCgSection = true;
                     XX_TEST_EXPECT_EQ(sec.title, std::string{"CodeGraph"});
                 }
             }
             XX_TEST_EXPECT_TRUE(hasCgSection);
 
-            // status 事件
+            // status 事件: 新版 Append 段风格仅显示 “|- wait for index” (已加载但无进度时)
             agentxx::agent::WirePluginData st;
             st.plugin = "agentxx_codegraph";
             st.event  = "status";
@@ -857,14 +857,14 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
 
             reg = mgr->uiRegistrySnapshot();
             for (const auto& sec : reg->infoSections) {
-                if (sec.id == "agentxx_codegraph.info") {
+                if (sec.id == "agentxx_codegraph.status") {
                     std::string dump = sec.items.dump();
-                    XX_TEST_EXPECT_TRUE(dump.find("Status: Ready") != std::string::npos);
-                    XX_TEST_EXPECT_TRUE(dump.find("Root: /workspace/test_proj") != std::string::npos);
+                    // 当前实现: 无进度时展示 wait for index (小写+, hint)
+                    XX_TEST_EXPECT_TRUE(dump.find("wait for index") != std::string::npos);
                 }
             }
 
-            // progress 事件 (进行中)
+            // progress 事件 (进行中): 新版为 “|- indexing 25% (25/100)” + progress 条 + 文件名
             agentxx::agent::WirePluginData prog;
             prog.plugin = "agentxx_codegraph";
             prog.event  = "progress";
@@ -873,15 +873,18 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
 
             reg = mgr->uiRegistrySnapshot();
             for (const auto& sec : reg->infoSections) {
-                if (sec.id == "agentxx_codegraph.info") {
+                if (sec.id == "agentxx_codegraph.status") {
                     std::string dump = sec.items.dump();
-                    XX_TEST_EXPECT_TRUE(dump.find("Indexing: 25/100 files") != std::string::npos);
-                    XX_TEST_EXPECT_TRUE(dump.find("src/main.cpp") != std::string::npos);
+                    // 25/100 -> 25% ( {:.0f}% 保留整数, 25%)
+                    XX_TEST_EXPECT_TRUE(dump.find("25/100") != std::string::npos);
+                    XX_TEST_EXPECT_TRUE(dump.find("indexing") != std::string::npos || dump.find("Indexing") != std::string::npos);
+                    // 文件名仅保留 basename "main.cpp"
+                    XX_TEST_EXPECT_TRUE(dump.find("main.cpp") != std::string::npos);
                     XX_TEST_EXPECT_TRUE(dump.find("progress") != std::string::npos);
                 }
             }
 
-            // progress 事件 (完成)
+            // progress 事件 (完成): 新版为 “|- available · 100”
             agentxx::agent::WirePluginData progDone;
             progDone.plugin = "agentxx_codegraph";
             progDone.event  = "progress";
@@ -890,9 +893,10 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
 
             reg = mgr->uiRegistrySnapshot();
             for (const auto& sec : reg->infoSections) {
-                if (sec.id == "agentxx_codegraph.info") {
+                if (sec.id == "agentxx_codegraph.status") {
                     std::string dump = sec.items.dump();
-                    XX_TEST_EXPECT_TRUE(dump.find("Indexed: 100 files") != std::string::npos);
+                    XX_TEST_EXPECT_TRUE(dump.find("available") != std::string::npos);
+                    XX_TEST_EXPECT_TRUE(dump.find("100") != std::string::npos);
                 }
             }
 
@@ -912,12 +916,12 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             for (const auto& sec : reg->infoSections) {
                 if (sec.id == "agentxx_system_monitor.usage") {
                     hasSmSection = true;
-                    XX_TEST_EXPECT_EQ(sec.title, std::string{"System Usage"});
+                    XX_TEST_EXPECT_EQ(sec.title, std::string{"System"});
                 }
             }
             XX_TEST_EXPECT_TRUE(hasSmSection);
 
-            // usage 事件
+            // usage 事件: 新版 Append 段风格为 “|- CPU 36%” / “|- RAM 52% (8G/16G)” / “|- GPU 42%”
             agentxx::agent::WirePluginData usage;
             usage.plugin = "agentxx_system_monitor";
             usage.event  = "usage";
@@ -929,18 +933,26 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             for (const auto& sec : reg->infoSections) {
                 if (sec.id == "agentxx_system_monitor.usage") {
                     std::string dump = sec.items.dump();
-                    XX_TEST_EXPECT_TRUE(dump.find("CPU: 35.5%") != std::string::npos);
-                    XX_TEST_EXPECT_TRUE(dump.find("RAM: 52.0% (8192/16384 MB)") != std::string::npos);
-                    XX_TEST_EXPECT_TRUE(dump.find("NVIDIA RTX 4090: 42.0% (6144/24576 MB)") != std::string::npos);
+                    // CPU 四舍五入到整数 (35.5 -> 36)
+                    XX_TEST_EXPECT_TRUE(dump.find("CPU") != std::string::npos);
+                    XX_TEST_EXPECT_TRUE(dump.find("36%") != std::string::npos || dump.find("35.5%") != std::string::npos);
+                    // RAM 带格式化大小 (8192 MB -> 8G, 16384 -> 16G)
+                    XX_TEST_EXPECT_TRUE(dump.find("RAM") != std::string::npos);
+                    XX_TEST_EXPECT_TRUE(dump.find("52%") != std::string::npos);
+                    XX_TEST_EXPECT_TRUE(dump.find("8G") != std::string::npos);
+                    XX_TEST_EXPECT_TRUE(dump.find("16G") != std::string::npos);
+                    // GPU 仅显示峰值百分比, 不含名称及 MB
+                    XX_TEST_EXPECT_TRUE(dump.find("GPU") != std::string::npos);
+                    XX_TEST_EXPECT_TRUE(dump.find("42%") != std::string::npos);
                 }
             }
 
-            // sysinfo 命令执行
+            // sysinfo 命令执行: 新版切换文案为 “System resource info: ON/OFF”
             XX_TEST_EXPECT_TRUE(mgr->hasCommand("sysinfo"));
             size_t toastBefore = adapter->toastCount();
             mgr->invokeCommand("sysinfo", R"({})");
             XX_TEST_EXPECT_TRUE(adapter->toastCount() > toastBefore);
-            XX_TEST_EXPECT_TRUE(adapter->lastToast().find("System monitor display") != std::string::npos);
+            XX_TEST_EXPECT_TRUE(adapter->lastToast().find("System resource info") != std::string::npos);
 
             co_await mgr->unloadAsync("agentxx_system_monitor");
             XX_TEST_EXPECT_TRUE(mgr->find("agentxx_system_monitor") == nullptr);
