@@ -449,7 +449,7 @@ void TUIClientAgentIO::start() {
         });
 
         InputComponent::Config inputCfg;
-        inputCfg.onSend = [this](std::string text) {
+        inputCfg.onSend = [this](std::string text) -> bool {
             // ---- 插件命令拦截 (UI 线程) ----
             // 输入以 "/" 开头且匹配插件注册的命令时, 拦截并投递到 client io
             // 线程执行命令回调 (execute 返回动作 JSON, 由宿主解释执行);
@@ -467,8 +467,7 @@ void TUIClientAgentIO::start() {
                     neograph::json args = neograph::json::object();
                     args["text"]        = argsText;
                     pluginManager_->postCommandInvocation(cmdName, args.dump());
-                    inputBar_->clear();
-                    return;
+                    return true;
                 }
             }
             std::lock_guard<std::mutex> lock(sharedState_.mutex());
@@ -485,13 +484,15 @@ void TUIClientAgentIO::start() {
                     std::move(text),
                     [](neograph_asio_error_code) {}
                 );
+                return true;
             } else if (st.connState != ConnState::Connected) {
-                // agent-io 未初始化完成前不允许发送消息
+                // agent-io 未初始化完成前不允许发送消息, 且不清空输入框
                 showToast("agent-io 尚未就绪, 请稍后再试");
                 postRedraw();
-                return;
+                return false;
             } else {
                 sendUserInputLocked(st, std::move(text));
+                return true;
             }
         };
         inputCfg.isAwaitingInterrupt = [this] {
@@ -1708,7 +1709,11 @@ void TUIClientAgentIO::onDelta(const agentxx::agent::Delta& delta) {
                 m->text               = delta.arguments;
                 m->tool->toolFinished = false;
                 m->collapsed          = true;
-                m->startTimeMs        = delta.startTimeMs;
+                m->startTimeMs        = delta.startTimeMs > 0 ? delta.startTimeMs : static_cast<int64_t>(
+                    std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::system_clock::now().time_since_epoch()
+                    ).count()
+                );
                 st.messages.push_back(std::move(m));
                 st.isStreaming = true;
             } break;
@@ -1722,8 +1727,19 @@ void TUIClientAgentIO::onDelta(const agentxx::agent::Delta& delta) {
                         m.tool->toolResult   = delta.result;
                         m.tool->toolFinished = true;
                         m.collapsed          = true;
-                        m.startTimeMs        = delta.startTimeMs;
-                        m.durationMs         = delta.durationMs;
+                        if (delta.startTimeMs > 0) {
+                            m.startTimeMs = delta.startTimeMs;
+                        }
+                        if (delta.durationMs > 0) {
+                            m.durationMs = delta.durationMs;
+                        } else if (m.startTimeMs > 0) {
+                            const int64_t nowMs = static_cast<int64_t>(
+                                std::chrono::duration_cast<std::chrono::milliseconds>(
+                                    std::chrono::system_clock::now().time_since_epoch()
+                                ).count()
+                            );
+                            m.durationMs = std::max(int64_t{0}, nowMs - m.startTimeMs);
+                        }
                         found                = true;
                         break;
                     }
@@ -1790,32 +1806,14 @@ void TUIClientAgentIO::onDelta(const agentxx::agent::Delta& delta) {
                 st.messages.push_back(std::move(msg));
                 st.isStreaming = true;
             } break;
-            case Type::MessageTip: {
-                // 系统消息: 已由 agent 线程插入会话历史 (viewMessages),
-                // 内容/时间戳/级别与历史完全一致, 直接追加即可;
-                // 默认折叠展示 (服务端历史创建时即 collapsed=true, 此处显式同步)
+            case Type::InsertMessage: {
+                // 完整 ViewMessage 消息插入 (轮次统计、系统提示、中断头等):
+                // 服务端已完成 appendViewMessage 与持久化, 客户端直接装载展示
                 pushCurrentTokenLocked(st);
                 resetTrailingRunningToolsLocked(st);
-                auto msg       = std::make_shared<TUIMessage>();
-                msg->role      = TUIMessage::Role::Tip;
-                msg->id        = delta.msgId;
-                msg->text      = delta.text;
-                msg->tip       = TUIMessage::TipData{};
-                msg->collapsed = true;
-                switch (delta.tipType) {
-                    case agentxx::agent::Delta::TipType::Warning:
-                        msg->tip->tipLevel = TUIMessage::TipLevel::Warning;
-                        break;
-                    case agentxx::agent::Delta::TipType::Error:
-                        msg->tip->tipLevel = TUIMessage::TipLevel::Error;
-                        break;
-                    default:
-                        msg->tip->tipLevel = TUIMessage::TipLevel::Info;
-                        break;
+                if (delta.message) {
+                    st.messages.push_back(std::make_shared<TUIMessage>(*delta.message));
                 }
-                msg->startTimeMs = delta.startTimeMs;
-                msg->durationMs  = delta.durationMs;
-                st.messages.push_back(std::move(msg));
             } break;
             case Type::TurnStart: {
                 pushCurrentTokenLocked(st);

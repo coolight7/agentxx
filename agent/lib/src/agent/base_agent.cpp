@@ -623,7 +623,7 @@ asio::awaitable<BaseAgent::TurnResult> BaseAgent::runTurnAsync(
     );
 
     // 插入提示消息: 由 agent 线程追加到会话历史 (viewMessages) 并发送
-    // MessageTip Delta 通知 UI 追加对应消息。UI 端不再自行构造系统提示,
+    // InsertMessage Delta 通知 UI 追加对应消息。UI 端直接消费完整 ViewMessage,
     // 保证 viewMessages / Sync 恢复 / 持久化与展示内容一致。
     // - 无对端 (headless) 时不插入 (提示为展示用途, headless 无消费者)
     auto insertMessageTip =
@@ -631,22 +631,13 @@ asio::awaitable<BaseAgent::TurnResult> BaseAgent::runTurnAsync(
             if (!session->io) {
                 return;
             }
-            auto vm           = ViewMessage::makeText(ViewMessage::Role::Tip, text, startMs, durMs);
-            vm.tip->tipLevel  = level;
-            const auto     id = session->appendViewMessage(std::move(vm));
-            Delta::TipType tipType = Delta::TipType::Info;
-            if (level == ViewMessage::TipLevel::Warning) {
-                tipType = Delta::TipType::Warning;
-            } else if (level == ViewMessage::TipLevel::Error) {
-                tipType = Delta::TipType::Error;
-            }
+            auto vm          = ViewMessage::makeText(ViewMessage::Role::Tip, std::move(text), startMs, durMs);
+            vm.tip->tipLevel = level;
+            vm.collapsed     = true;
+            vm.id            = session->appendViewMessage(vm);
             eventBridge->emitDelta(Delta{
-                .type        = Delta::Type::MessageTip,
-                .text        = std::move(text),
-                .msgId       = id,
-                .tipType     = tipType,
-                .startTimeMs = startMs,
-                .durationMs  = durMs,
+                .type    = Delta::Type::InsertMessage,
+                .message = std::move(vm),
             });
         };
 
@@ -825,15 +816,6 @@ asio::awaitable<BaseAgent::TurnResult> BaseAgent::runTurnAsync(
         state.remove(agentxx::middleware::MiddlewareContext::channel_savedGraphData);
     });
 
-    // 持久化 LLM 上下文消息 (每轮结束时整表替换, 供重启恢复会话)
-    // - 持久化回调内部捕获异常, 失败仅记日志, 不影响本轮结果
-    // - 轮内已由 EventBridge 按消息结算节流落盘 (appendSettledLlmMessages),
-    //   此处为权威终态同步; 进程中途被杀最多丢一个节流窗口 (<3s) 的增量
-    session->saveLlmMessages();
-    // 补存节流窗口内尚未落库的 view 消息操作, 保证正常结束的轮次其展示历史
-    // 全部落库 (仅进程中途被杀才可能丢失窗口内 <3s 的尾部消息)
-    session->flushViewMessages();
-
     // 计算轮次持续时间
     const auto durationMs
         = static_cast<int64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -845,17 +827,9 @@ asio::awaitable<BaseAgent::TurnResult> BaseAgent::runTurnAsync(
     // 轮次统计系统提示
     const double turnTps = eventBridge->takeTurnTps();
 
-    eventBridge->emitDelta(Delta{
-        .type         = Delta::Type::TurnEnd,
-        .historyCount = session->chainHash.count(),
-        .tailHash     = session->chainHash.tailHex(),
-        .startTimeMs  = startTimeMs,
-        .durationMs   = durationMs,
-        .tps          = turnTps,
-    });
-
     // 轮次统计系统提示: 由 agent 线程插入会话历史并发送 Delta (原由 UI 端
-    // 在 TurnEnd 时自行构造), 模型名之后显示本轮 LLM API 平均生成速度
+    // 在 TurnEnd 时自行构造), 模型名之后显示本轮 LLM API 平均生成速度;
+    // 必须在 flushViewMessages 之前插入, 确保提示消息落盘持久化到 SQLite
     insertMessageTip(
         [&]() {
             std::string modelName = agentContext->getSessionCurrentModelName(sessionId);
@@ -877,6 +851,24 @@ asio::awaitable<BaseAgent::TurnResult> BaseAgent::runTurnAsync(
         startTimeMs,
         durationMs
     );
+
+    // 持久化 LLM 上下文消息 (每轮结束时整表替换, 供重启恢复会话)
+    // - 持久化回调内部捕获异常, 失败仅记日志, 不影响本轮结果
+    // - 轮内已由 EventBridge 按消息结算节流落盘 (appendSettledLlmMessages),
+    //   此处为权威终态同步; 进程中途被杀最多丢一个节流窗口 (<3s) 的增量
+    session->saveLlmMessages();
+    // 补存节流窗口内尚未落库的 view 消息操作, 保证正常结束的轮次其展示历史
+    // 全部落库 (含刚插入的轮次统计系统提示; 仅进程中途被杀才可能丢失窗口内 <3s 的尾部消息)
+    session->flushViewMessages();
+
+    eventBridge->emitDelta(Delta{
+        .type         = Delta::Type::TurnEnd,
+        .historyCount = session->chainHash.count(),
+        .tailHash     = session->chainHash.tailHex(),
+        .startTimeMs  = startTimeMs,
+        .durationMs   = durationMs,
+        .tps          = turnTps,
+    });
 
     // checkpoint store 采用 InMemorySingleCheckpointStore, save 时自动淘汰
     // 该 session 的历史 checkpoint, 轮末无需额外裁剪

@@ -87,6 +87,28 @@ void StdIOClientAgentIO::onDelta(const agentxx::agent::Delta& delta) {
             std::cout << std::endl << prefix << delta.text << std::endl;
             break;
         }
+        case Type::InsertMessage: {
+            if (delta.message) {
+                using namespace agentxx::agent;
+                const auto& msg = *delta.message;
+                std::string prefix;
+                if (msg.role == ViewMessage::Role::Tip && msg.tip) {
+                    switch (msg.tip->tipLevel) {
+                        case ViewMessage::TipLevel::Warning:
+                            prefix = "[Warning] ";
+                            break;
+                        case ViewMessage::TipLevel::Error:
+                            prefix = "[Error] ";
+                            break;
+                        default:
+                            prefix = "[Info] ";
+                            break;
+                    }
+                }
+                std::cout << std::endl << prefix << msg.text << std::endl;
+            }
+            break;
+        }
         case Type::TurnStart:
             isThinking_ = false;
             break;

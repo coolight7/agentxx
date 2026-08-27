@@ -885,6 +885,19 @@ void test_formatSize() {
     XX_TEST_EXPECT_EQ(agentxx::util::formatSize(1024ull * 1024 * 1024 * 1024), std::string("1T"));
 }
 
+void test_formatDurationMilliseconds() {
+    XX_TEST_EXPECT_EQ(agentxx::util::formatDurationMilliseconds(-1), std::string("0ms"));
+    XX_TEST_EXPECT_EQ(agentxx::util::formatDurationMilliseconds(0), std::string("0ms"));
+    XX_TEST_EXPECT_EQ(agentxx::util::formatDurationMilliseconds(15), std::string("15ms"));
+    XX_TEST_EXPECT_EQ(agentxx::util::formatDurationMilliseconds(99), std::string("99ms"));
+    XX_TEST_EXPECT_EQ(agentxx::util::formatDurationMilliseconds(100), std::string("0.1s"));
+    XX_TEST_EXPECT_EQ(agentxx::util::formatDurationMilliseconds(500), std::string("0.5s"));
+    XX_TEST_EXPECT_EQ(agentxx::util::formatDurationMilliseconds(1200), std::string("1.2s"));
+    XX_TEST_EXPECT_EQ(agentxx::util::formatDurationMilliseconds(60000), std::string("1m0s"));
+    XX_TEST_EXPECT_EQ(agentxx::util::formatDurationMilliseconds(65000), std::string("1m5s"));
+    XX_TEST_EXPECT_EQ(agentxx::util::formatDurationMilliseconds(3661000), std::string("1h1m1s"));
+}
+
 void test_collapsePaths() {
     XX_TEST_EXPECT_EQ(agentxx::util::collapseSlashes(""), "");
     XX_TEST_EXPECT_EQ(agentxx::util::collapseSlashes("a//b///c"), "a/b/c");
@@ -1041,6 +1054,7 @@ TestResult testStringUtil() {
     test_toStringNotNull();
     test_parseNumberFromString();
     test_formatSize();
+    test_formatDurationMilliseconds();
     test_collapsePaths();
     test_toCurrentSystemStandardPath();
     test_ignoreCaseContainers();

@@ -749,6 +749,11 @@ asio::awaitable<void> ToolcallWrapNode::baseRun(
     }
 
     auto onExecTool = [&](const neograph::ToolCall& tc) -> asio::awaitable<neograph::ChatMessage> {
+        const auto    execStartTime = std::chrono::system_clock::now();
+        const int64_t startMs       = static_cast<int64_t>(
+            std::chrono::duration_cast<std::chrono::milliseconds>(execStartTime.time_since_epoch())
+                .count()
+        );
         neograph::ChatMessage tool_msg;
         tool_msg.role         = "tool";
         tool_msg.tool_call_id = tc.id;
@@ -757,7 +762,9 @@ asio::awaitable<void> ToolcallWrapNode::baseRun(
             // 尝试缓存
             auto cacheit = toolcallsCache.find(tc.id);
             if (cacheit != toolcallsCache.end()) {
-                tool_msg.content = cacheit->second;
+                tool_msg.content              = cacheit->second;
+                tool_msg.extra["startTimeMs"] = startMs;
+                tool_msg.extra["durationMs"]  = 0;
                 co_return tool_msg;
             }
         }
@@ -878,6 +885,16 @@ asio::awaitable<void> ToolcallWrapNode::baseRun(
                 std::rethrow_exception(errorPtr);
             }
         }
+        const auto    execEndTime = std::chrono::system_clock::now();
+        const int64_t durationMs  = std::max(
+            int64_t{0},
+            static_cast<int64_t>(
+                std::chrono::duration_cast<std::chrono::milliseconds>(execEndTime - execStartTime)
+                    .count()
+            )
+        );
+        tool_msg.extra["startTimeMs"] = startMs;
+        tool_msg.extra["durationMs"]  = durationMs;
         co_return tool_msg;
     };
 

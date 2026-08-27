@@ -903,13 +903,14 @@ asio::awaitable<void> test_agent_turn_system_message() {
     }
     XX_TEST_EXPECT_TRUE(foundStat);
 
-    // io 应收到 MessageTip Delta, msgId 与历史消息一致
+    // io 应收到 InsertMessage Delta, 携带完整 ViewMessage, msgId 与历史消息一致
     bool foundDelta = false;
     for (const auto& d : io->deltas) {
-        if (d.type == agentxx::agent::Delta::Type::MessageTip) {
+        if (d.type == agentxx::agent::Delta::Type::InsertMessage && d.message) {
             foundDelta = true;
-            XX_TEST_EXPECT_EQ(d.msgId, statMsgId);
-            XX_TEST_EXPECT_TRUE(!d.text.empty());
+            XX_TEST_EXPECT_EQ(d.message->id, statMsgId);
+            XX_TEST_EXPECT_TRUE(!d.message->text.empty());
+            XX_TEST_EXPECT_EQ(d.message->role, agentxx::agent::ViewMessage::Role::Tip);
         }
     }
     XX_TEST_EXPECT_TRUE(foundDelta);

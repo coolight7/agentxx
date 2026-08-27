@@ -193,12 +193,9 @@ struct Delta {
         TurnEnd,
         NodeStart,
         NodeEnd,
-        MessageUITip, ///< 通用提示消息 (info/warning/error, UI 插入提示消息)
-        /// 系统消息: 已由 agent 线程插入会话历史 (viewMessages) 的消息
-        /// - 与 MessageUITip 的区别: MessageTip 携带 appendViewMessage 分配的
-        ///   msgId, 内容/时间戳与 viewMessages 完全一致, UI 端直接追加即可
-        ///   (不自行构造文本); 用于轮次统计、错误/取消提示、中断头消息等
-        MessageTip,
+        MessageUITip,  ///< 通用瞬态提示消息 (info/warning/error, 仅 UI 瞬态展示, 不入会话历史)
+        /// 完整 ViewMessage 消息插入 (原子消息载荷, 如 Tip 提示、完整卡片等)
+        InsertMessage,
     };
 
     Type     type;
@@ -232,6 +229,9 @@ struct Delta {
     // 轮次统计 (TurnEnd 使用): 本轮会话 LLM API 平均生成速度 (token/s, 估算值)
     // - 0 = 本轮无 LLM 流式输出 (如纯工具错误轮)
     double tps = 0.0;
+
+    /// 完整 ViewMessage 载荷 (InsertMessage 使用)
+    std::optional<ViewMessage> message;
 };
 
 /// 排队等待发送的消息条目 (服务端按会话维护, 同步到客户端展示)

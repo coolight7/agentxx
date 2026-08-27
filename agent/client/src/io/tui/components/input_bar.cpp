@@ -154,10 +154,13 @@ bool InputComponent::OnEvent(Event event) {
             text = text.substr(start);
         }
         if (!text.empty()) {
+            bool handled = false;
             if (config_.onSend) {
-                config_.onSend(std::move(text));
+                handled = config_.onSend(std::move(text));
             }
-            inputText_.clear();
+            if (handled) {
+                inputText_.clear();
+            }
         }
         ctx_.postRedraw();
         return true;
