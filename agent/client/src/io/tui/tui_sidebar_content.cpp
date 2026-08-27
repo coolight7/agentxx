@@ -54,7 +54,6 @@ static void
     if (!items.is_array()) {
         return;
     }
-    /// 行内元素 → 按列表样式加 "|  " 前缀后入列
     auto push = [&](ftxui::Element el) {
         out.push_back(std::move(el));
     };
@@ -67,36 +66,29 @@ static void
             const auto role = it.value("role", std::string{"normal"});
             const auto txt  = paragraph(it.value("text", std::string{}));
             if (role == "title") {
-                push(hbox({text("|  ") | color(theme.hintColor), txt | color(theme.accentColor) | bold}));
+                push(txt | color(theme.accentColor) | bold);
             } else if (role == "hint") {
-                push(hbox({text("|  ") | color(theme.hintColor), txt | color(theme.hintColor)}));
+                push(txt | color(theme.hintColor));
             } else {
-                push(hbox({text("|  ") | color(theme.hintColor), txt | color(theme.normalColor)}));
+                push(txt | color(theme.normalColor));
             }
         } else if (kind == "progress") {
             const double v      = it.value("value", 0.0);
             const int    w      = 10;
-            const int    filled = std::clamp(static_cast<int>(v * w), 0, w);
+            const int    filled = static_cast<int>(v * w);
             std::string  bar;
             bar.reserve(w);
             for (int i = 0; i < w; ++i) {
                 bar += (i < filled) ? '#' : '-';
             }
             push(hbox({
-                text("|  ") | color(theme.hintColor),
                 text("[" + bar + "]") | color(theme.accentColor),
                 text(fmt::format(" {}%", static_cast<int>(v * 100))) | color(theme.hintColor),
             }));
         } else if (kind == "badge") {
-            push(hbox({
-                text("|  ") | color(theme.hintColor),
-                text("● " + it.value("text", std::string{})) | color(theme.accentColor),
-            }));
+            push(text("● " + it.value("text", std::string{})) | color(theme.accentColor));
         } else if (kind == "separator") {
-            push(hbox({
-                text("|  ") | color(theme.hintColor),
-                text("─") | color(theme.hintColor) | dim,
-            }));
+            push(text("─") | color(theme.hintColor) | dim);
         }
     }
 }

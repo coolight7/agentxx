@@ -271,22 +271,180 @@ extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_destroy(void* plugin_ctx) {
     });
 }
 
-/* ==================== client 侧入口 ==================== */
 
-struct ClientPluginCtx {
-    const AgentxxClientHost*      host         = nullptr;
-    agentxx::plugin::ClientIfaces iface        {};
-    const AgentxxClientUiIface*   ui           = nullptr;
-    AgentxxInfoSection*           info_section = nullptr;
-    bool                          enabled      = true;
+
+/* ==================== client 侧入口 —— 系统资源占用渲染 (Append 段风格, 恢复 1e524e62) ==================== */
+
+struct ClientCtx {
+    const AgentxxClientHost*      host = nullptr;
+    agentxx::plugin::ClientIfaces iface{};
+    const AgentxxClientUiIface*   ui = nullptr;
+    AgentxxInfoSection*           section = nullptr;
+    std::atomic<bool> usage_enabled{true};
+    std::string       last_usage_json;
+
+    void logErr(const char* m) const noexcept {
+        agentxx::plugin_guard::logTo(host, iface.log, 4, "agentxx_system_monitor", m ? m : "");
+    }
 };
 
-static auto clientGuardLogger(ClientPluginCtx* ctx) noexcept {
-    return [ctx](const char* msg) noexcept {
-        if (ctx && ctx->host && ctx->iface.log && ctx->iface.log->log) {
-            ctx->iface.log->log(ctx->host, 4, agentxx_plugin_sv(msg, msg ? strlen(msg) : 0));
+struct UsageStat {
+    double  cpu        = 0.0;
+    double  memPct     = 0.0;
+    int64_t memUsedMb  = 0;
+    int64_t memTotalMb = 0;
+    size_t  gpuCount   = 0;
+    double  gpuPeakPct = 0.0;
+};
+
+static UsageStat parseUsage(const std::string& raw) {
+    UsageStat st;
+    try {
+        auto j = neograph::json::parse(raw);
+        st.cpu = j.value("cpu", 0.0);
+        st.memPct = j.value("mem_percent", 0.0);
+        st.memUsedMb = j.value<int64_t>("mem_used_mb", 0);
+        st.memTotalMb = j.value<int64_t>("mem_total_mb", 0);
+        if (j.contains("gpus") && j["gpus"].is_array()) {
+            for (const auto& elem : j["gpus"]) {
+                ++st.gpuCount;
+                double u = 0.0;
+                if (elem.is_object() && elem.contains("usage_percent")) {
+                    u = elem.value("usage_percent", 0.0);
+                }
+                if (u > st.gpuPeakPct) st.gpuPeakPct = u;
+            }
         }
+    } catch (...) {}
+    return st;
+}
+
+static std::string buildUsageInfoItemsJson(const ClientCtx& ctx, const UsageStat& st) {
+    (void)ctx;
+    neograph::json items = neograph::json::array();
+    auto pushText = [&](const std::string& text, const std::string& role = "normal") {
+        neograph::json it;
+        it["kind"] = "text";
+        it["role"] = role;
+        it["text"] = text;
+        items.push_back(std::move(it));
     };
+    pushText(fmt::format("|- CPU {:.0f}%", st.cpu), "normal");
+    std::string ram = fmt::format("|- RAM {:.0f}%", st.memPct);
+    if (st.memTotalMb > 0) {
+        const auto mbToBytes = [](int64_t mb) { return static_cast<uint64_t>(mb) * 1024 * 1024; };
+        ram = fmt::format("{} ({}/{})", ram,
+            agentxx::util::formatSize(mbToBytes(st.memUsedMb), 1024, false),
+            agentxx::util::formatSize(mbToBytes(st.memTotalMb), 1024, false));
+    }
+    pushText(ram, "normal");
+    if (st.gpuCount == 1) {
+        pushText(fmt::format("|- GPU {:.0f}%", st.gpuPeakPct), "normal");
+    } else if (st.gpuCount > 1) {
+        pushText(fmt::format("|- GPU {}x \u00b7 {:.0f}%", st.gpuCount, st.gpuPeakPct), "normal");
+    }
+    neograph::json out;
+    out["items"] = std::move(items);
+    return out.dump();
+}
+
+static void refreshUsageDisplay(ClientCtx& ctx) {
+    if (!ctx.host) return;
+    if (!ctx.section && ctx.ui && ctx.ui->register_info_section) {
+        ctx.section = ctx.ui->register_info_section(
+            ctx.host,
+            AGENTXX_SV("agentxx_system_monitor.usage"),
+            AGENTXX_SV(R"({"title":"System"})")
+        );
+    }
+    if (!ctx.section || !ctx.ui || !ctx.ui->update_info_section || ctx.last_usage_json.empty()) {
+        return;
+    }
+    std::string json;
+    if (ctx.usage_enabled.load(std::memory_order_relaxed)) {
+        json = buildUsageInfoItemsJson(ctx, parseUsage(ctx.last_usage_json));
+    } else {
+        neograph::json off;
+        off["items"] = neograph::json::array();
+        neograph::json it;
+        it["kind"] = "text";
+        it["role"] = "hint";
+        it["text"] = "System info: OFF";
+        off["items"].push_back(std::move(it));
+        json = off.dump();
+    }
+    ctx.ui->update_info_section(ctx.host, ctx.section, agentxx_plugin_sv(json.data(), json.size()));
+}
+
+static void onClientPluginData(AgentxxPluginStringView payload_json, void* ud) {
+    auto* ctx = static_cast<ClientCtx*>(ud);
+    if (!ctx || !ctx->host) return;
+    std::string raw(payload_json.data ? payload_json.data : "{}", payload_json.size);
+    try {
+        auto j = neograph::json::parse(raw);
+        if (j.value("plugin", std::string{}) != "agentxx_system_monitor" || j.value("event", std::string{}) != "usage") return;
+        neograph::json u;
+        if (j.contains("data")) {
+            auto dv = j["data"];
+            if (dv.is_string()) {
+                try { u = neograph::json::parse(dv.get<std::string>()); } catch(...) { return; }
+            } else if (dv.is_object()) {
+                u = dv;
+            } else return;
+        } else return;
+        ctx->last_usage_json = u.dump();
+        refreshUsageDisplay(*ctx);
+    } catch (...) {}
+}
+
+static char* cmdSysinfoExecute(void* ud, AgentxxPluginStringView args_json, char** errorOut) {
+    (void)args_json;
+    (void)errorOut;
+    auto* ctx = static_cast<ClientCtx*>(ud);
+    if (!ctx || !ctx->host) return nullptr;
+    return agentxx::plugin_guard::guardCall(
+        [ctx](const char* m) noexcept { ctx->logErr(m); },
+        nullptr,
+        [&]() -> char* {
+            const bool next = !ctx->usage_enabled.load(std::memory_order_relaxed);
+            ctx->usage_enabled.store(next, std::memory_order_relaxed);
+            refreshUsageDisplay(*ctx);
+            if (ctx->iface.wire && ctx->iface.wire->send_plugin_data) {
+                std::string payload = next ? R"({"enabled":true})" : R"({"enabled":false})";
+                ctx->iface.wire->send_plugin_data(ctx->host, AGENTXX_SV("usage_enabled"), agentxx_plugin_sv(payload.data(), payload.size()));
+            }
+            std::string text = next ? "System resource info: ON" : "System resource info: OFF";
+            {
+                char* stateJson = ctx->iface.session && ctx->iface.session->get_client_state ? ctx->iface.session->get_client_state(ctx->host) : nullptr;
+                bool agentMissing = false;
+                if (stateJson) {
+                    try {
+                        auto st = neograph::json::parse(std::string(stateJson));
+                        if (st.contains("agentPlugins") && st["agentPlugins"].is_array()) {
+                            size_t n = 0; bool found=false;
+                            for (const auto& v : st["agentPlugins"]) {
+                                ++n;
+                                if (v.is_object() && v.value("name", std::string{}) == "agentxx_system_monitor") found=true;
+                            }
+                            agentMissing = (n>0 && !found);
+                        }
+                    } catch(...) {}
+                    ctx->host->vtable->free(stateJson);
+                }
+                if (agentMissing) text += " (warn: plugin missing on server side; toggle is local only)";
+            }
+            neograph::json esc;
+            esc["text"] = text;
+            // use simple json escape via neograph dump then extract? easier use clientJson logic via neograph
+            // 但 toast 的 text 需要 json 转义，neograph 会自动处理，直接构造
+            neograph::json out;
+            out["action"] = "toast";
+            out["text"] = text;
+            out["level"] = 0;
+            std::string dumped = out.dump();
+            return ctx->host->vtable->strdup(dumped.c_str());
+        }
+    );
 }
 
 extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxClientPluginInfo* agentxx_client_get_info(void) {
@@ -294,136 +452,68 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxClientPluginInfo* agentxx_client_g
         AGENTXX_CLIENT_PLUGIN_API_VERSION,
         AGENTXX_SV("agentxx_system_monitor"),
         AGENTXX_SV("1.0.0"),
-        AGENTXX_SV("System resource monitor: renders CPU/RAM/GPU usage in sidebar"),
+        AGENTXX_SV("System resource usage: Info section (CPU/RAM/GPU), /sysinfo toggle"),
     };
     return &info;
 }
 
-static void onClientPluginData(AgentxxPluginStringView payload_json, void* ud) {
-    auto* ctx = static_cast<ClientPluginCtx*>(ud);
-    if (!ctx || !ctx->ui || !ctx->enabled) {
-        return;
-    }
-    std::string raw(payload_json.data ? payload_json.data : "{}", payload_json.size);
-    try {
-        auto j = neograph::json::parse(raw);
-        if (j.value("plugin", "") != "agentxx_system_monitor" || j.value("event", "") != "usage") {
-            return;
-        }
-        auto dataVal = j.contains("data") ? j["data"] : neograph::json::object();
-        neograph::json u;
-        if (dataVal.is_string()) {
-            u = neograph::json::parse(dataVal.get<std::string>());
-        } else if (dataVal.is_object()) {
-            u = dataVal;
-        } else {
-            return;
-        }
-
-        double cpu = u.value("cpu", 0.0);
-        double memPct = u.value("mem_percent", 0.0);
-        uint64_t memUsed = u.value<uint64_t>("mem_used_mb", 0);
-        uint64_t memTotal = u.value<uint64_t>("mem_total_mb", 0);
-
-        std::string cpuLine = fmt::format("CPU: {:.1f}%", cpu);
-        std::string memLine = fmt::format("RAM: {:.1f}% ({}/{} MB)", memPct, memUsed, memTotal);
-
-        neograph::json items = neograph::json::array();
-        items.push_back({{"kind", "text"}, {"role", "normal"}, {"text", cpuLine}});
-        items.push_back({{"kind", "text"}, {"role", "normal"}, {"text", memLine}});
-
-        if (u.contains("gpus") && u["gpus"].is_array()) {
-            for (const auto& g : u["gpus"]) {
-                std::string gName = g.value("name", "GPU");
-                double gUsage = g.value("usage_percent", 0.0);
-                uint64_t vramUsed = g.value<uint64_t>("dedicated_vram_used_mb", 0);
-                uint64_t vramTotal = g.value<uint64_t>("dedicated_vram_mb", 0);
-                std::string gLine = fmt::format("{}: {:.1f}% ({}/{} MB)", gName, gUsage, vramUsed, vramTotal);
-                items.push_back({{"kind", "text"}, {"role", "normal"}, {"text", gLine}});
-            }
-        }
-
-        if (!ctx->info_section && ctx->ui->register_info_section) {
-            ctx->info_section = ctx->ui->register_info_section(
-                ctx->host,
-                AGENTXX_SV("agentxx_system_monitor.usage"),
-                AGENTXX_SV(R"({"title":"System Usage"})")
-            );
-        }
-        if (ctx->info_section && ctx->ui->update_info_section) {
-            neograph::json sectionJson;
-            sectionJson["items"] = std::move(items);
-            std::string out = sectionJson.dump();
-            ctx->ui->update_info_section(ctx->host, ctx->info_section, agentxx_plugin_sv(out.data(), out.size()));
-        }
-    } catch (...) {}
-}
-
-static char* cmdSysinfoExecute(void* ud, AgentxxPluginStringView, char** errorOut) {
-    (void)errorOut;
-    auto* ctx = static_cast<ClientPluginCtx*>(ud);
-    if (!ctx || !ctx->host || !ctx->host->vtable || !ctx->host->vtable->strdup) return nullptr;
-    ctx->enabled = !ctx->enabled;
-
-    if (ctx->iface.wire && ctx->iface.wire->send_plugin_data) {
-        std::string j = fmt::format(R"({{"enabled":{}}})", ctx->enabled ? "true" : "false");
-        ctx->iface.wire->send_plugin_data(ctx->host, AGENTXX_SV("usage_enabled"), agentxx_plugin_sv(j.data(), j.size()));
-    }
-
-    std::string toast = fmt::format("System monitor display: {}", ctx->enabled ? "ON" : "OFF");
-    std::string action = fmt::format(R"({{"action":"toast","text":"{}","level":0}})", toast);
-    return ctx->host->vtable->strdup(action.c_str());
-}
-
 extern "C" AGENTXX_PLUGIN_EXPORT int
     agentxx_client_create(const AgentxxClientHost* host, void** plugin_ctx) {
-    ClientPluginCtx* raw = nullptr;
+    ClientCtx* raw = nullptr;
     return agentxx::plugin_guard::guardCall(
-        [&raw](const char* msg) noexcept { clientGuardLogger(raw)(msg); },
+        [&raw](const char* m) noexcept { if (raw) raw->logErr(m); },
         -1,
         [&]() -> int {
         if (!host || !host->vtable || !plugin_ctx) return -1;
-        auto ctx = std::make_unique<ClientPluginCtx>();
+        auto ctx = std::make_unique<ClientCtx>();
         ctx->host = host;
         ctx->iface = agentxx::plugin::ClientIfaces::query(host);
+        ctx->ui = AGENTXX_QUERY_IFACE(host, AgentxxClientUiIface, AGENTXX_IFACE_CLIENT_UI);
         raw = ctx.get();
 
-        ctx->ui = AGENTXX_QUERY_IFACE(host, AgentxxClientUiIface, AGENTXX_IFACE_CLIENT_UI);
-        if (ctx->ui) {
-            if (ctx->ui->register_info_section) {
-                ctx->info_section = ctx->ui->register_info_section(
-                    host,
-                    AGENTXX_SV("agentxx_system_monitor.usage"),
-                    AGENTXX_SV(R"({"title":"System Usage"})")
-                );
-            }
-            if (ctx->ui->register_command) {
-                ctx->ui->register_command(
-                    host,
-                    AGENTXX_SV("sysinfo"),
-                    AGENTXX_SV("Toggle system monitor sidebar display"),
-                    cmdSysinfoExecute,
-                    ctx.get()
-                );
+        if (ctx->ui && ctx->ui->register_info_section) {
+            ctx->section = ctx->ui->register_info_section(
+                host,
+                AGENTXX_SV("agentxx_system_monitor.usage"),
+                AGENTXX_SV(R"({"title":"System"})")
+            );
+        }
+
+        if (!ctx->iface.events || !ctx->iface.events->subscribe ||
+            !ctx->iface.events->subscribe(host, AGENTXX_CLIENT_EVT_PLUGIN_DATA, onClientPluginData, ctx.get())) {
+            return -1;
+        }
+
+        if (ctx->ui && ctx->ui->register_command) {
+            if (ctx->ui->register_command(host, AGENTXX_SV("sysinfo"), AGENTXX_SV("Toggle system resource info display (CPU/RAM/GPU Info section)"), cmdSysinfoExecute, ctx.get()) != 0) {
+                return -1;
             }
         }
 
-        if (ctx->iface.events && ctx->iface.events->subscribe) {
-            ctx->iface.events->subscribe(host, AGENTXX_CLIENT_EVT_PLUGIN_DATA, onClientPluginData, ctx.get());
+        if (ctx->iface.log && ctx->iface.log->log) {
+            ctx->iface.log->log(host, 2, AGENTXX_SV("agentxx_system_monitor client loaded"));
         }
-
         *plugin_ctx = ctx.release();
         return 0;
     });
 }
 
 extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_client_destroy(void* plugin_ctx) {
-    auto* ctx = static_cast<ClientPluginCtx*>(plugin_ctx);
-    agentxx::plugin_guard::guardCallVoid(clientGuardLogger(ctx), [&] {
-        if (!ctx) return;
-        if (ctx->ui && ctx->ui->unregister_info_section && ctx->info_section) {
-            ctx->ui->unregister_info_section(ctx->host, ctx->info_section);
-            ctx->info_section = nullptr;
+    auto* ctx = static_cast<ClientCtx*>(plugin_ctx);
+    agentxx::plugin_guard::guardCallVoid(
+        [ctx](const char* m) noexcept { if (ctx) ctx->logErr(m); },
+        [&] {
+        if (!ctx || !ctx->host) { delete ctx; return; }
+        if (ctx->section && ctx->ui && ctx->ui->unregister_info_section) {
+            ctx->ui->unregister_info_section(ctx->host, ctx->section);
+            ctx->section = nullptr;
+        }
+        if (ctx->ui && ctx->ui->unregister_command) {
+            ctx->ui->unregister_command(ctx->host, AGENTXX_SV("sysinfo"));
+        }
+        ctx->last_usage_json.clear();
+        if (ctx->iface.log && ctx->iface.log->log) {
+            ctx->iface.log->log(ctx->host, 2, AGENTXX_SV("agentxx_system_monitor client unloaded"));
         }
         delete ctx;
     });
