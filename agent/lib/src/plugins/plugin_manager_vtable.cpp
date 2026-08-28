@@ -362,6 +362,27 @@ static char*
     XX_PLUGIN_CATCH_END(nullptr)
 }
 
+static long long xx_add_share_store(
+    const AgentxxHost*      host,
+    AgentxxPluginStringView session_id,
+    AgentxxPluginStringView content
+) {
+    XX_PLUGIN_CATCH_BEGIN
+    auto mgr  = mgrOf(host);
+    auto inst = instOf(host);
+    if (!mgr || !inst) {
+        return -1;
+    }
+    auto        mgrPtr  = mgr;
+    auto        instPtr = inst;
+    std::string tid{session_id.data ? session_id.data : "", session_id.size};
+    std::string txt{content.data ? content.data : "", content.size};
+    return ioCallSync<long long>(mgrPtr, [mgrPtr, instPtr, tid, txt]() {
+        return mgrPtr->addShareStore(instPtr, tid.c_str(), txt.c_str());
+    });
+    XX_PLUGIN_CATCH_END(-1)
+}
+
 static void xx_emit_message_tip(
     const AgentxxHost*      host,
     AgentxxPluginStringView session_id,
@@ -866,6 +887,7 @@ static const AgentxxSessionIface g_ifaceSession = {
     /* version */ AGENTXX_IFACE_AGENT_SESSION_VERSION,
     /* get_share_store */ xx_get_share_store,
     /* emit_message_tip */ xx_emit_message_tip,
+    /* add_share_store */ xx_add_share_store,
 };
 
 static const AgentxxPluginsIface g_ifacePlugins = {
@@ -1347,6 +1369,18 @@ char* PluginManager::getShareStore(PluginInstance* inst, const char* session_id,
     auto itemIt = it->second.store.find(static_cast<size_t>(id));
     if (itemIt == it->second.store.end()) return nullptr;
     return inst->host.vtable->strdup(itemIt->second.c_str());
+}
+
+long long PluginManager::addShareStore(PluginInstance* inst, const char* session_id, const char* content) {
+    if (!inst || !session_id || !content) return -1;
+    auto ctx = agentContext_.lock();
+    if (!ctx || !ctx->middlewareHandleContext) return -1;
+    try {
+        size_t id = ctx->middlewareHandleContext->addShareStoreItemValue(session_id, content);
+        return static_cast<long long>(id);
+    } catch (...) {
+        return -1;
+    }
 }
 
 void PluginManager::emitMessageTip(

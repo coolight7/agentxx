@@ -405,6 +405,17 @@ struct PluginBase {
         return iface.cancel->is_cancelled(host, tid) != 0;
     }
 
+    long long addShareStore(AgentxxPluginStringView tid, std::string_view content) const {
+        if (!host || !iface.session || !iface.session->add_share_store) {
+            return -1;
+        }
+        return iface.session->add_share_store(
+            host,
+            tid,
+            agentxx_plugin_sv(content.data(), content.size())
+        );
+    }
+
     char* strdup(const char* s) const {
         if (!host || !host->vtable || !host->vtable->strdup || !s) {
             return nullptr;

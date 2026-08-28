@@ -123,6 +123,9 @@ extern "C" AGENTXX_PLUGIN_EXPORT int agentxx_plugin_create(const AgentxxHost* ho
         std::string depictWin = pWin.depict.empty() ? kDepictWinPlaceholder : pWin.depict;
 
 #if defined(BOOST_PROCESS_V2_PROCESS_HPP)
+        // 手动裁剪 stdout/stderr (execute_command_impl.h 内 per-stream 30k 限制),
+        // 格式对标 ToolcallNode 的 [Content offloaded...] 并通过 share_store
+        // offload 完整内容 (超限时 storeFn 返回 ID)，不依赖 ToolcallNode 全局卸载
         agentxx::kit::reactor_tool(
             *ctx,
             ctx->reactor,
@@ -133,10 +136,23 @@ extern "C" AGENTXX_PLUGIN_EXPORT int agentxx_plugin_create(const AgentxxHost* ho
                 auto arguments = args_json.empty() ? neograph::json::object() : neograph::json::parse(args_json);
                 auto isCancelled = [&ctl]() -> bool { return ctl.cancelled(); };
                 auto workDir = c.workDir(agentxx_plugin_sv(ctl.threadId.data(), ctl.threadId.size()));
-                co_return co_await windowsExecuteAsync(arguments, workDir, isCancelled);
-            }
+                StoreFn storeFn = nullptr;
+                if (!ctl.threadId.empty() && c.iface.session && c.iface.session->add_share_store) {
+                    std::string tidCopy = ctl.threadId;
+                    storeFn = [&c, tidCopy](std::string_view content) -> long long {
+                        return c.addShareStore(
+                            agentxx_plugin_sv(tidCopy.data(), tidCopy.size()),
+                            content
+                        );
+                    };
+                }
+                co_return co_await windowsExecuteAsync(arguments, workDir, isCancelled, storeFn);
+            },
+            0,
+            AGENTXX_TOOL_FLAG_NONE
         );
 #else
+        // 手动裁剪同上 (阻塞回退同样截断+share_store)，不启用 AUTO_SUMMARY
         agentxx::kit::blocking_tool(
             *ctx,
             kNameWindows,
@@ -149,8 +165,20 @@ extern "C" AGENTXX_PLUGIN_EXPORT int agentxx_plugin_create(const AgentxxHost* ho
                     return c.sessionCancelled(agentxx_plugin_sv(tid.data(), tid.size()));
                 };
                 auto workDir = c.workDir(agentxx_plugin_sv(tid.data(), tid.size()));
-                return windowsExecute(arguments, workDir, isCancelled);
-            }
+                StoreFn storeFn = nullptr;
+                if (!tid.empty() && c.iface.session && c.iface.session->add_share_store) {
+                    std::string tidCopy(tid);
+                    storeFn = [&c, tidCopy](std::string_view content) -> long long {
+                        return c.addShareStore(
+                            agentxx_plugin_sv(tidCopy.data(), tidCopy.size()),
+                            content
+                        );
+                    };
+                }
+                return windowsExecute(arguments, workDir, isCancelled, storeFn);
+            },
+            0,
+            AGENTXX_TOOL_FLAG_NONE
         );
 #endif
 
@@ -159,6 +187,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int agentxx_plugin_create(const AgentxxHost* ho
         std::string depictBash = pBash.depict.empty() ? kDepictBash : pBash.depict;
 
 #if defined(BOOST_PROCESS_V2_PROCESS_HPP)
+        // 手动裁剪 stdout/stderr (per-stream 30k, 统一 Toolcall 格式 + share_store ID)
         agentxx::kit::reactor_tool(
             *ctx,
             ctx->reactor,
@@ -169,8 +198,20 @@ extern "C" AGENTXX_PLUGIN_EXPORT int agentxx_plugin_create(const AgentxxHost* ho
                 auto arguments = args_json.empty() ? neograph::json::object() : neograph::json::parse(args_json);
                 auto isCancelled = [&ctl]() -> bool { return ctl.cancelled(); };
                 auto workDir = c.workDir(agentxx_plugin_sv(ctl.threadId.data(), ctl.threadId.size()));
-                co_return co_await bashExecuteAsync(arguments, workDir, isCancelled);
-            }
+                StoreFn storeFn = nullptr;
+                if (!ctl.threadId.empty() && c.iface.session && c.iface.session->add_share_store) {
+                    std::string tidCopy = ctl.threadId;
+                    storeFn = [&c, tidCopy](std::string_view content) -> long long {
+                        return c.addShareStore(
+                            agentxx_plugin_sv(tidCopy.data(), tidCopy.size()),
+                            content
+                        );
+                    };
+                }
+                co_return co_await bashExecuteAsync(arguments, workDir, isCancelled, storeFn);
+            },
+            0,
+            AGENTXX_TOOL_FLAG_NONE
         );
 #else
         agentxx::kit::blocking_tool(
@@ -185,8 +226,20 @@ extern "C" AGENTXX_PLUGIN_EXPORT int agentxx_plugin_create(const AgentxxHost* ho
                     return c.sessionCancelled(agentxx_plugin_sv(tid.data(), tid.size()));
                 };
                 auto workDir = c.workDir(agentxx_plugin_sv(tid.data(), tid.size()));
-                return bashExecute(arguments, workDir, isCancelled);
-            }
+                StoreFn storeFn = nullptr;
+                if (!tid.empty() && c.iface.session && c.iface.session->add_share_store) {
+                    std::string tidCopy(tid);
+                    storeFn = [&c, tidCopy](std::string_view content) -> long long {
+                        return c.addShareStore(
+                            agentxx_plugin_sv(tidCopy.data(), tidCopy.size()),
+                            content
+                        );
+                    };
+                }
+                return bashExecute(arguments, workDir, isCancelled, storeFn);
+            },
+            0,
+            AGENTXX_TOOL_FLAG_NONE
         );
 #endif
 

@@ -408,6 +408,13 @@ typedef struct AgentxxSessionIface {
         AgentxxPluginStringView text,
         int                     level
     );
+    /// 写入会话级 share_store 条目并返回 ID (仅 io 线程); 失败返回 -1
+    /// - content 为待存储的完整文本 (host 侧按行切片等处理与工具侧一致)
+    long long (*add_share_store)(
+        const AgentxxHost*      host,
+        AgentxxPluginStringView thread_id,
+        AgentxxPluginStringView content
+    );
 } AgentxxSessionIface;
 
 /* ==================== 接口表: 插件互查 (agentxx.agent.plugins) ==================== */

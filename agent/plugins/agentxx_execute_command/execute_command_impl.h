@@ -13,6 +13,18 @@
 //     线程至超时 (原局部 io_context + io.run() 同步驱动模式已移除)
 //   - AGENTXX_ENABLE_BOOST_PROCESS 关闭时的 popen 回退为阻塞实现 (*Execute
 //     同步函数), 由入口经 plugin_tool_sync.h 的 sync 垫片注册 (offload 池)
+
+// ## 输出结果压缩
+// - 禁用 ToolcallNode 的自动压缩，改由自己实现压缩, 分别独立对 stdout、stderr 压缩
+// - 格式:
+// [ExitCode]0
+// [StdOut][Content offloaded. xxx]
+// xxx
+// [StdErr][Content offloaded. xxx]
+// xxx
+//
+// - 这是为了方便 LLM 判断是否存在 [StdErr] 内容，由 ToolcallNode 压缩时如果 [StdOut] 过长，
+// 可能导致 [StdErr] 全部被裁剪隐藏，LLM 需要额外读取全量才能判断是否存在 [StdErr] 内容
 #pragma once
 
 #include "agentxx/util/log.h"
@@ -60,7 +72,120 @@ namespace agentxx_execmd_plugin {
 /// 取消查询回调 (返回 true 表示会话已取消); 测试可传 nullptr 等价无取消支持
 using IsCancelledFn = std::function<bool()>;
 
+/// 写入 share_store 回调 (返回 ID，失败返回 -1); 插件侧注入，测试可传 nullptr
+using StoreFn = std::function<long long(std::string_view)>;
+
 namespace detail {
+
+// ---------------------------------------------------------------------
+// 手动裁剪 stdout / stderr (插件侧自治, 不依赖 ToolcallNode 的 share_store 卸载)
+// - 每路独立按 UTF-8 字符数限制, 超限时截断并以 toolcall 同款格式提示
+//   [Content offloaded. Use the `agentxx_share_store` tool ... Total X lines,
+//    show [0, Y], hide [Y+1, X]]\n<cropped>...
+//   与 ToolcallNode::execTool 的 offload 格式统一, 便于模型用
+//   agentxx_share_store 按行分页取回 (当前插件侧暂不实际 offload 到
+//   share_store，storeId==-1 时省略 ID，仅提示可用 share_store)
+// - 保持 UTF-8 安全, 使用 findIndexAndLastLineIndexByUtf8Length (行边界优先)
+// - 限制值选取 30k 字符/每路 (≈ 30KB 文本, 远大于 ToolcallNode 的 2k 全局限制
+//   但足以避免 60k+ 超长输出撑爆 LLM 上下文); 总结果 ≤ 60k+ 开销, 适中
+// ---------------------------------------------------------------------
+constexpr size_t kMaxStdOutUtf8Length = 30000;
+constexpr size_t kMaxStdErrUtf8Length = 30000;
+
+/// 统一格式的截断实现 (对标 ToolcallNode::execTool)
+inline std::string truncateWithStoreFormat(
+    const std::string& s,
+    size_t             maxLen,
+    long long          storeId = -1 // -1 表示未 offload，不带 ID
+) {
+    if (s.empty()) {
+        return s;
+    }
+    // 快速路径: 未超限直接返回 (先按字节粗判，避免大串的 utf8GetLength 开销)
+    // 与 ToolcallNode 保持一致: 先判字节 size >= limit 再按 utf8 长度
+    if (s.size() < maxLen) {
+        const size_t totalLen = agentxx::util::utf8GetLength(s);
+        if (totalLen <= maxLen) {
+            return s;
+        }
+    } else {
+        // 大串仍需精确 utf8 长度判断
+        const size_t totalLen = agentxx::util::utf8GetLength(s);
+        if (totalLen <= maxLen) {
+            return s;
+        }
+    }
+    auto [targetIndex, lineCount, lastLineIndex]
+        = agentxx::util::findIndexAndLastLineIndexByUtf8Length(s, maxLen);
+    if (targetIndex == 0) {
+        // 极端情况 (如非法 UTF-8 导致 0) 回退按字节截断，避免返回空
+        const size_t cut        = std::min(s.size(), maxLen);
+        const size_t totalLines = agentxx::util::countLines(s);
+        std::string  truncated(s.data(), cut);
+        std::string  header;
+        if (storeId >= 0) {
+            header = fmt::format(
+                "[Content offloaded. Use the `agentxx_share_store` tool to fetch the content by ID {}. Total {} lines.]",
+                storeId,
+                totalLines
+            );
+        } else {
+            header = fmt::format(
+                "[Content offloaded. Use the `agentxx_share_store` tool to fetch the full content. Total {} lines.]",
+                totalLines
+            );
+        }
+        return fmt::format("{}\n{}...", header, truncated);
+    }
+    const size_t totalLineCount = agentxx::util::countLines(s);
+    if (lastLineIndex >= targetIndex / 3) {
+        // 行边界截断可行: 显示 [0, lineCount], 隐藏 [lineCount+1, total]
+        std::string header;
+        if (storeId >= 0) {
+            header = fmt::format(
+                "[Content offloaded. Use the `agentxx_share_store` tool to fetch the content by ID {}. Total {} lines, show [0, {}], hide [{}, {}].]",
+                storeId,
+                totalLineCount,
+                lineCount,
+                lineCount + 1,
+                totalLineCount
+            );
+        } else {
+            header = fmt::format(
+                "[Content offloaded. Use the `agentxx_share_store` tool to fetch the content. Total {} lines, show [0, {}], hide [{}, {}].]",
+                totalLineCount,
+                lineCount,
+                lineCount + 1,
+                totalLineCount
+            );
+        }
+        return fmt::format("{}\n{}...", header, std::string_view{s}.substr(0, lastLineIndex));
+    } else {
+        // 无法按行截断 (如单行超长): 按字符截断
+        std::string header;
+        if (storeId >= 0) {
+            header = fmt::format(
+                "[Content offloaded. Use the `agentxx_share_store` tool to fetch the full content by ID {}. Total {} lines.]",
+                storeId,
+                totalLineCount
+            );
+        } else {
+            header = fmt::format(
+                "[Content offloaded. Use the `agentxx_share_store` tool to fetch the full content. Total {} lines.]",
+                totalLineCount
+            );
+        }
+        return fmt::format("{}\n{}...", header, std::string_view{s}.substr(0, targetIndex));
+    }
+}
+
+inline std::string truncateStdOut(const std::string& s, long long storeId = -1) {
+    return truncateWithStoreFormat(s, kMaxStdOutUtf8Length, storeId);
+}
+
+inline std::string truncateStdErr(const std::string& s, long long storeId = -1) {
+    return truncateWithStoreFormat(s, kMaxStdErrUtf8Length, storeId);
+}
 
 #if defined(BOOST_PROCESS_V2_PROCESS_HPP)
 
@@ -131,20 +256,38 @@ inline void killProcGroup(boost::process::process& proc) {
 }
 
 /// 构造超时错误结果文本 (多行纯文本输出, 非 JSON)
-inline std::string makeTimeoutResult(int timeout, std::string strout, std::string strerr) {
+inline std::string makeTimeoutResult(
+    int            timeout,
+    std::string    strout,
+    std::string    strerr,
+    const StoreFn& storeFn = nullptr
+) {
     if (false == (strout.empty() || agentxx::util::autoConvertToUtf8(strout))) {
         strout = "[StdOut conversion to utf8 failed, discard]";
+    } else if (!strout.empty()) {
+        long long id = -1;
+        // 仅超限时才 offload 到 share_store
+        if (storeFn && agentxx::util::utf8GetLength(strout) > kMaxStdOutUtf8Length) {
+            id = storeFn(strout);
+        }
+        strout = truncateStdOut(strout, id);
     }
     if (false == (strerr.empty() || agentxx::util::autoConvertToUtf8(strerr))) {
         strerr = "[StdErr conversion to utf8 failed, discard]";
+    } else if (!strerr.empty()) {
+        long long id = -1;
+        if (storeFn && agentxx::util::utf8GetLength(strerr) > kMaxStdErrUtf8Length) {
+            id = storeFn(strerr);
+        }
+        strerr = truncateStdErr(strerr, id);
     }
     return fmt::format(
         R"_(
-## Error
+[Error]
 Command timed out after {} seconds. If this command is expected to take longer and is not waiting for interactive input, retry with a larger timeout value.
-## StdOut
+[StdOut]
 {}
-## StdErr
+[StdErr]
 {}
 )_",
         timeout,
@@ -194,12 +337,13 @@ inline WinProcLaunch buildWinProcLaunch(std::string_view command) {
 ///   终结整体 (后两者动作后挂起, 见 procCancelWatchLoop 注释)
 /// - 返回组装后的结果文本; 组合协程异常原样传播 (调用方 C ABI 边界兜底)
 inline asio::awaitable<std::string> runProcPipeline(
-    boost::process::process&                                              proc,
-    asio::readable_pipe&                                                  outpip,
-    asio::readable_pipe&                                                  errpip,
-    int                                                                   timeout,
-    bool                                                                  all_output,
-    const IsCancelledFn&                                                  isCancelled
+    boost::process::process& proc,
+    asio::readable_pipe&     outpip,
+    asio::readable_pipe&     errpip,
+    int                      timeout,
+    bool                     all_output,
+    const IsCancelledFn&     isCancelled,
+    const StoreFn&           storeFn = nullptr
 ) {
     std::string              strout, strerr;
     neograph_asio_error_code errCodeStdOut, errCodeStdErr;
@@ -232,18 +376,47 @@ inline asio::awaitable<std::string> runProcPipeline(
         const auto         exitCode = proc.exit_code();
         std::ostringstream result;
         if (timedOut.load(std::memory_order_acquire)) {
-            result << detail::makeTimeoutResult(timeout, strout, strerr);
+            result << detail::makeTimeoutResult(timeout, strout, strerr, storeFn);
         } else {
             result << "[ExitCode]\n" << exitCode << "\n";
             if (all_output || 0 != exitCode) {
-                // failed
+                // 手动裁剪: 每路 stdout/stderr 独立按 UTF-8 长度限制, 格式对标
+                // ToolcallNode::execTool 的 [Content offloaded...]，通过 storeFn
+                // 将完整内容 offload 到 share_store（超限时）并带 ID
                 if (strout.empty() || agentxx::util::autoConvertToUtf8(strout)) {
-                    result << "[StdOut]\n" << strout << "\n";
+                    if (!strout.empty()) {
+                        long long id = -1;
+                        if (storeFn
+                            && agentxx::util::utf8GetLength(strout)
+                                   > detail::kMaxStdOutUtf8Length) {
+                            id = storeFn(strout);
+                        }
+                        strout = detail::truncateStdOut(strout, id);
+                    }
+                    // 预期紧凑格式: [StdOut][Content offloaded...] 截断时同行，无截断时换行
+                    if (!strout.empty() && strout.rfind("[Content", 0) == 0) {
+                        result << "[StdOut]" << strout << "\n";
+                    } else {
+                        result << "[StdOut]\n" << strout << "\n";
+                    }
                 } else {
                     result << "[StdOut conversion to utf8 failed, discard]\n";
                 }
                 if (strerr.empty() || agentxx::util::autoConvertToUtf8(strerr)) {
-                    result << "[StdErr]\n" << strerr << "\n";
+                    if (!strerr.empty()) {
+                        long long id = -1;
+                        if (storeFn
+                            && agentxx::util::utf8GetLength(strerr)
+                                   > detail::kMaxStdErrUtf8Length) {
+                            id = storeFn(strerr);
+                        }
+                        strerr = detail::truncateStdErr(strerr, id);
+                    }
+                    if (!strerr.empty() && strerr.rfind("[Content", 0) == 0) {
+                        result << "[StdErr]" << strerr << "\n";
+                    } else {
+                        result << "[StdErr]\n" << strerr << "\n";
+                    }
                 } else {
                     result << "[StdErr conversion to utf8 failed, discard]\n";
                 }
@@ -297,7 +470,8 @@ inline asio::awaitable<std::string> runProcPipeline(
 inline asio::awaitable<std::string> bashExecuteAsync(
     const neograph::json& arguments,
     const std::string&    workDir,
-    const IsCancelledFn&  isCancelled = nullptr
+    const IsCancelledFn&  isCancelled = nullptr,
+    const StoreFn&        storeFn     = nullptr
 ) {
     auto command = arguments.value("command", std::string{});
     if (command.empty()) {
@@ -309,7 +483,7 @@ inline asio::awaitable<std::string> bashExecuteAsync(
 
     // 寄生驱动: 管道/进程绑定到当前协程的 executor (插件实例 PollLoop),
     // 由宿主 io 线程经 pollOnce 非阻塞步进 (不再自建 io_context + run())
-    auto                ex      = co_await asio::this_coro::executor;
+    auto                ex = co_await asio::this_coro::executor;
     asio::readable_pipe outpip{ex}, errpip{ex};
     // 创建管道，用于接收子进程的输出
     std::unordered_map<boost::process::environment::key, boost::process::environment::value>
@@ -348,7 +522,8 @@ inline asio::awaitable<std::string> bashExecuteAsync(
         errpip,
         timeout,
         all_output,
-        isCancelled
+        isCancelled,
+        storeFn
     );
 }
 
@@ -356,7 +531,8 @@ inline asio::awaitable<std::string> bashExecuteAsync(
 inline asio::awaitable<std::string> windowsExecuteAsync(
     const neograph::json& arguments,
     const std::string&    workDir,
-    const IsCancelledFn&  isCancelled = nullptr
+    const IsCancelledFn&  isCancelled = nullptr,
+    const StoreFn&        storeFn     = nullptr
 ) {
     auto command = arguments.value("command", std::string{});
     if (command.empty()) {
@@ -365,7 +541,7 @@ inline asio::awaitable<std::string> windowsExecuteAsync(
     auto all_output = arguments.value("all_output", true);
     auto timeout    = arguments.value("timeout", 60);
 
-    auto                ex      = co_await asio::this_coro::executor;
+    auto                ex = co_await asio::this_coro::executor;
     asio::readable_pipe outpip{ex}, errpip{ex};
     std::unordered_map<boost::process::environment::key, boost::process::environment::value>
         procEnv;
@@ -407,7 +583,8 @@ inline asio::awaitable<std::string> windowsExecuteAsync(
         errpip,
         timeout,
         all_output,
-        isCancelled
+        isCancelled,
+        storeFn
     );
 }
 
@@ -422,7 +599,8 @@ inline asio::awaitable<std::string> windowsExecuteAsync(
 inline std::string bashExecute(
     const neograph::json& arguments,
     const std::string&    workDir,
-    const IsCancelledFn&  isCancelled = nullptr
+    const IsCancelledFn&  isCancelled = nullptr,
+    const StoreFn&        storeFn     = nullptr
 ) {
     (void)workDir;
     (void)isCancelled;
@@ -450,16 +628,25 @@ inline std::string bashExecute(
     }
     std::string out = result.str();
     agentxx::util::autoConvertToUtf8(out);
+    // 手动裁剪: popen 回退同样按 stdout 限制截断 (不依赖 ToolcallNode)
+    if (!out.empty()) {
+        long long id = -1;
+        if (storeFn && agentxx::util::utf8GetLength(out) > detail::kMaxStdOutUtf8Length) {
+            id = storeFn(out);
+        }
+        out = detail::truncateStdOut(out, id);
+    }
     return out;
 }
 
 inline std::string windowsExecute(
     const neograph::json& arguments,
     const std::string&    workDir,
-    const IsCancelledFn&  isCancelled = nullptr
+    const IsCancelledFn&  isCancelled = nullptr,
+    const StoreFn&        storeFn     = nullptr
 ) {
     // 无 bp::v2 时 Windows 命令同样走 popen 回退 (cmd.exe 语义由提示词引导)
-    return bashExecute(arguments, workDir, isCancelled);
+    return bashExecute(arguments, workDir, isCancelled, storeFn);
 }
 
 #endif // BOOST_PROCESS_V2_PROCESS_HPP

@@ -325,6 +325,7 @@ public:
     void unsubscribe(AgentxxSubscription* sub);
     int  publish(const char* topic, const char* event_json);
     char* getShareStore(PluginInstance* inst, const char* thread_id, long long id);
+    long long addShareStore(PluginInstance* inst, const char* thread_id, const char* content);
     void  emitMessageTip(PluginInstance* inst, const char* thread_id, const char* text, int level);
 
     void* sleep(PluginInstance* inst, long ms, void (*cb)(void* ud), void* ud);
