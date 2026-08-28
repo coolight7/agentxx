@@ -3,9 +3,13 @@
 #include "agentxx/plugin/op_driver.h"
 #include "agentxx/util/container_util.h"
 #include "agentxx/util/log.h"
+#include "asio/as_tuple.hpp"
+#include "asio/bind_cancellation_slot.hpp"
 #include "asio/co_spawn.hpp"
+#include "asio/deferred.hpp"
 #include "asio/detached.hpp"
 #include "asio/post.hpp"
+#include "asio/steady_timer.hpp"
 #include "asio/use_awaitable.hpp"
 #include "fmt/format.h"
 
@@ -389,7 +393,7 @@ AgentxxOpHandle* PluginManager::callToolAsync(
         );
     }
     // 自动回收 outstandingOps：操作终态后从调用方列表移除，避免悬垂 handle 在后续 unload 时触发 UAF
-    // 采用轮询 notified 标志而非 chan（避免与上方的 sentinel 协程竞争消费同一 chan 消息）
+    // 零轮询：等待 doneSignal 事件（避免与上方的 sentinel 协程竞争同一 chan 消消息）
     {
         std::weak_ptr<PluginInstance> weakCaller = caller ? caller->self : std::weak_ptr<PluginInstance>{};
         std::weak_ptr<AgentxxOpHandle> weakHandle = handle;
@@ -397,12 +401,12 @@ AgentxxOpHandle* PluginManager::callToolAsync(
         asio::co_spawn(
             ex,
             [core, weakCaller, weakHandle]() -> asio::awaitable<void> {
-                while (!core->notified.load(std::memory_order_acquire)) {
+                if (!core->notified.load(std::memory_order_acquire)) {
                     asio::steady_timer t(co_await asio::this_coro::executor);
-                    t.expires_after(std::chrono::milliseconds(10));
-                    try {
-                        co_await t.async_wait(asio::use_awaitable);
-                    } catch (...) {}
+                    t.expires_at(std::chrono::steady_clock::time_point::max());
+                    co_await t.async_wait(
+                        asio::bind_cancellation_slot(core->doneSignal.slot(), asio::as_tuple(asio::use_awaitable))
+                    );
                 }
                 // 确保在 io 线程执行移除（caller 的 vector 非线程安全）
                 auto callerSp = weakCaller.lock();
@@ -518,12 +522,12 @@ AgentxxOpHandle* PluginManager::invokeCapabilityAsync(
         asio::co_spawn(
             ex,
             [core, weakCaller, weakHandle]() -> asio::awaitable<void> {
-                while (!core->notified.load(std::memory_order_acquire)) {
+                if (!core->notified.load(std::memory_order_acquire)) {
                     asio::steady_timer t(co_await asio::this_coro::executor);
-                    t.expires_after(std::chrono::milliseconds(10));
-                    try {
-                        co_await t.async_wait(asio::use_awaitable);
-                    } catch (...) {}
+                    t.expires_at(std::chrono::steady_clock::time_point::max());
+                    co_await t.async_wait(
+                        asio::bind_cancellation_slot(core->doneSignal.slot(), asio::as_tuple(asio::use_awaitable))
+                    );
                 }
                 auto callerSp = weakCaller.lock();
                 auto handleSp = weakHandle.lock();

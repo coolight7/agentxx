@@ -40,7 +40,9 @@
  */
 
 #include "asio/as_tuple.hpp"
+#include "asio/bind_cancellation_slot.hpp"
 #include "asio/co_spawn.hpp"
+#include "asio/deferred.hpp"
 #include "asio/detached.hpp"
 #include "asio/error.hpp"
 #include "asio/experimental/awaitable_operators.hpp"
@@ -167,32 +169,39 @@ asio::awaitable<T> offloadCancellableAsync(
     std::shared_ptr<neograph::graph::CancelToken>         cancelToken,
     std::function<asio::awaitable<T>(std::atomic<bool>&)> fn
 ) {
-    std::shared_ptr<std::atomic<bool>> watcherDone;
+    std::shared_ptr<asio::steady_timer> watcherTimer;
+    std::shared_ptr<std::atomic<bool>>  watcherDone;
+    std::shared_ptr<neograph::graph::CancelToken> cancelOp;
     if (nullptr != cancelToken) {
         if (cancelToken->is_cancelled()) {
             // 已取消: 直接置位, 工作线程轮询检测后退出
             cancelFlag->store(true, std::memory_order_release);
         } else {
-            watcherDone = std::make_shared<std::atomic<bool>>(false);
-            auto ex     = co_await asio::this_coro::executor;
-            asio::co_spawn(
-                ex,
-                [cancelFlag, cancelToken, watcherDone]() -> asio::awaitable<void> {
-                    asio::steady_timer timer(co_await asio::this_coro::executor);
-                    while (false == watcherDone->load(std::memory_order_acquire)
-                           && false == cancelToken->is_cancelled()) {
-                        timer.expires_after(std::chrono::milliseconds(20));
-                        auto [ec] = co_await timer.async_wait(asio::as_tuple(asio::use_awaitable));
-                        if (ec) {
+            auto ex = co_await asio::this_coro::executor;
+            cancelOp = cancelToken->fork();
+            cancelOp->bind_executor(ex);
+            if (cancelOp->is_cancelled()) {
+                cancelFlag->store(true, std::memory_order_release);
+            } else {
+                watcherDone = std::make_shared<std::atomic<bool>>(false);
+                watcherTimer = std::make_shared<asio::steady_timer>(ex);
+                watcherTimer->expires_at(std::chrono::steady_clock::time_point::max());
+                asio::co_spawn(
+                    ex,
+                    [cancelFlag, cancelOp, watcherDone, watcherTimer]() -> asio::awaitable<void> {
+                        auto [ec] = co_await watcherTimer->async_wait(
+                            asio::bind_cancellation_slot(cancelOp->slot(), asio::as_tuple(asio::use_awaitable))
+                        );
+                        if (watcherDone->load(std::memory_order_acquire)) {
                             co_return;
                         }
-                    }
-                    if (false == watcherDone->load(std::memory_order_acquire)) {
-                        cancelFlag->store(true, std::memory_order_release);
-                    }
-                },
-                asio::detached
-            );
+                        if (cancelOp->is_cancelled()) {
+                            cancelFlag->store(true, std::memory_order_release);
+                        }
+                    },
+                    asio::detached
+                );
+            }
         }
     }
     try {
@@ -205,12 +214,18 @@ asio::awaitable<T> offloadCancellableAsync(
         );
         if (watcherDone) {
             watcherDone->store(true, std::memory_order_release);
+            if (watcherTimer) {
+                watcherTimer->cancel();
+            }
         }
         co_return result;
     } catch (...) {
         // 异常，通知工作线程退出、watcher 结束
         if (watcherDone) {
             watcherDone->store(true, std::memory_order_release);
+            if (watcherTimer) {
+                watcherTimer->cancel();
+            }
         }
         cancelFlag->store(true, std::memory_order_release);
         throw;

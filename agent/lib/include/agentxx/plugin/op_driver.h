@@ -85,6 +85,7 @@ struct OpCore : std::enable_shared_from_this<OpCore> {
     std::atomic<bool> cancelSent{false};
 
     asio::experimental::concurrent_channel<void(OpErrorCode)> chan;
+    asio::cancellation_signal                                 doneSignal;
     OpGuardPtr                                                guard;
     AgentxxOpCb                                               cb   = nullptr;
     void*                                                     cbUd = nullptr;
@@ -107,6 +108,7 @@ struct OpCore : std::enable_shared_from_this<OpCore> {
             ::free(payload_cstr);
         }
         self->chan.try_send(OpErrorCode());
+        self->doneSignal.emit(asio::cancellation_type::all);
         self->guard.reset();
         if (self->cb) {
             auto  cb   = self->cb;
