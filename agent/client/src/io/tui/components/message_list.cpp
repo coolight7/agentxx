@@ -775,6 +775,8 @@ size_t MessageListComponent::estimateHeight(size_t index, int width) {
                             const auto kind = it.value("kind", std::string{"text"});
                             if (kind == "text") {
                                 decorLines += estimateLines(it.value("text", std::string{}), width);
+                            } else if (kind == "button") {
+                                decorLines += 1;
                             } else if (kind == "diagram") {
                                 // 状态图渲染密度: 每层 ~3 行 (节点/边/间距) + 边界余量,
                                 // 与 renderMermaidStateDiagram 分层布局一致
@@ -2019,6 +2021,15 @@ void MessageListComponent::appendDecorToolBody(
             lines.push_back(hbox({
                 text("    "),
                 el | xflex_shrink,
+            }));
+        } else if (kind == "button") {
+            // Graph 按钮 (点击弹窗): 渲染为带背景的标签, 与 Todo/Note 视觉分区
+            const auto label = it.value("label", std::string{"Button"});
+            // 若携带 mermaid，则为 Graph 弹窗按钮；否则为通用操作按钮
+            Element btn = text(" " + label + " ") | bgcolor(theme.buttonBgColor) | color(theme.buttonTextColor) | bold;
+            lines.push_back(hbox({
+                text("    "),
+                btn | xflex_shrink,
             }));
         } else if (kind == "diagram") {
             // Mermaid stateDiagram-v2 ASCII 状态图 (通用组件; 解析失败静默跳过)

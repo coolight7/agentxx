@@ -707,6 +707,11 @@ void TUIClientAgentIO::start() {
                         openFailedAppendComponents();
                         return true;
                     }
+                    // Info 侧边栏 Plan Graph 按钮点击 → 打开状态图弹窗
+                    if (planGraphButtonBox_.Contain(mouse.x, mouse.y) && !planGraphMermaid_.empty()) {
+                        openMermaidDiagram(planGraphMermaid_);
+                        return true;
+                    }
                     // 状态栏模型区域点击 → 打开模型选择弹窗
                     if (statusBar_ && statusBar_->modelBox().Contain(mouse.x, mouse.y)) {
                         openModelSelector();
@@ -1070,6 +1075,17 @@ void TUIClientAgentIO::toggleLogWindow() {
 void TUIClientAgentIO::openFailedAppendComponents() {
     if (modal_ && !modal_->hasModal()) {
         auto overlay = std::make_shared<FailedComponentsOverlay>(ctx_);
+        overlay->onClose([this] {
+            modal_->popModal();
+        });
+        modal_->pushModal(overlay);
+    }
+    postRedraw();
+}
+
+void TUIClientAgentIO::openMermaidDiagram(const std::string& mermaid) {
+    if (modal_ && !modal_->hasModal() && !mermaid.empty()) {
+        auto overlay = std::make_shared<MermaidDiagramOverlay>(ctx_, mermaid);
         overlay->onClose([this] {
             modal_->popModal();
         });

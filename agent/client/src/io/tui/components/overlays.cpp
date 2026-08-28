@@ -690,6 +690,105 @@ bool ContextOverlay::OnEvent(Event event) {
 }
 
 // ---------------------------------------------------------------------------
+// MermaidDiagramOverlay
+// ---------------------------------------------------------------------------
+
+MermaidDiagramOverlay::MermaidDiagramOverlay(TUICtx& ctx, std::string mermaid) :
+    ctx_(ctx),
+    mermaid_(std::move(mermaid)) {
+    scrollable_ = std::make_shared<Scrollable>([this]() -> std::vector<ScrollItem> {
+        return buildItems();
+    });
+    scrollable_->setStickToBottom(false);
+    Add(scrollable_);
+}
+
+std::vector<ScrollItem> MermaidDiagramOverlay::buildItems() {
+    const auto& theme = *ctx_.theme;
+    const int   maxW  = std::max(40, ftxui::Terminal::Size().dimx - 10);
+    if (cachedMermaid_ != mermaid_ || cachedMaxW_ != maxW || cachedThemeName_ != theme.name) {
+        cachedMermaid_   = mermaid_;
+        cachedMaxW_      = maxW;
+        cachedThemeName_ = theme.name;
+        cachedDiagram_   = markdown::parseMermaidStateDiagram(mermaid_);
+        if (!cachedDiagram_.nodes.empty()) {
+            cachedElement_ = markdown::renderMermaidStateDiagram(
+                cachedDiagram_,
+                maxW,
+                theme.normalColor,
+                markdown::diagramNodeColor(theme.markdownTheme)
+            );
+        } else {
+            cachedElement_ = nullptr;
+        }
+    }
+    if (!cachedElement_) {
+        return {ScrollItem{ftxui::text(" (no diagram) ") | ftxui::dim, false}};
+    }
+    return {ScrollItem{cachedElement_, false}};
+}
+
+ftxui::Element MermaidDiagramOverlay::OnRender() {
+    const auto& theme  = *ctx_.theme;
+    auto        header = ftxui::hbox({
+        ftxui::text(" Graph ") | ftxui::bold,
+        ftxui::filler(),
+        ftxui::text(" "),
+    });
+    const int margin = 2;
+    const int termW  = ftxui::Terminal::Size().dimx;
+    const int termH  = ftxui::Terminal::Size().dimy;
+    const int wantW  = std::max(40, termW * 4 / 5);
+    const int wantH  = std::max(14, termH * 4 / 5);
+    const int availW = std::max(1, termW - margin * 2);
+    const int availH = std::max(1, termH - margin * 2);
+    const int popupW = std::min(wantW, availW);
+    const int popupH = std::min(wantH, availH);
+    return ftxui::vbox({
+               header,
+               ftxui::separator(),
+               ftxui::hbox({ftxui::text(" "), scrollable_->Render() | ftxui::flex, ftxui::text(" ")}) | ftxui::flex,
+               ftxui::separator(),
+               ftxui::text(" [Wheel/Up/Down] Scroll  [Esc] Close ") | ftxui::center | ftxui::dim,
+           })
+           | ftxui::border | ftxui::size(ftxui::WIDTH, ftxui::GREATER_THAN, popupW)
+           | ftxui::size(ftxui::WIDTH, ftxui::LESS_THAN, popupW)
+           | ftxui::size(ftxui::HEIGHT, ftxui::GREATER_THAN, popupH)
+           | ftxui::size(ftxui::HEIGHT, ftxui::LESS_THAN, popupH)
+           | ftxui::color(theme.accentColor);
+}
+
+bool MermaidDiagramOverlay::OnEvent(ftxui::Event event) {
+    if (event == ftxui::Event::Escape) {
+        ctx_.postRedraw();
+        if (onClose_) onClose_();
+        return true;
+    }
+    if (event.is_mouse()) {
+        if (scrollable_->OnEvent(event)) {
+            ctx_.postRedraw();
+            return true;
+        }
+        return true;
+    }
+    if (event == ftxui::Event::ArrowUp) {
+        scrollable_->setScrollOffset(scrollable_->scrollOffset() - 1);
+        scrollable_->setStickToBottom(false);
+        ctx_.postRedraw();
+        return true;
+    }
+    if (event == ftxui::Event::ArrowDown) {
+        scrollable_->setScrollOffset(scrollable_->scrollOffset() + 1);
+        if (scrollable_->totalHeight() - scrollable_->viewportHeight() <= scrollable_->scrollOffset()) {
+            scrollable_->setStickToBottom(true);
+        }
+        ctx_.postRedraw();
+        return true;
+    }
+    return true;
+}
+
+// ---------------------------------------------------------------------------
 // FailedComponentsOverlay
 // ---------------------------------------------------------------------------
 

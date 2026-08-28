@@ -427,6 +427,8 @@ private:
     void ensureLogSidebarTab();
     /// 打开加载失败组件列表模态 (Info 侧边栏 Append "Failed" 组 [view] 按钮触发)
     void openFailedAppendComponents();
+    /// 打开 Graph 状态图弹窗 (Info 侧边栏 Plan Graph 按钮 / 工具消息 Graph 按钮触发)
+    void openMermaidDiagram(const std::string& mermaid);
 
     /// 侧边栏渲染辅助
     std::vector<ScrollItem> renderLogWindow();
@@ -525,6 +527,10 @@ private:
     /// Info 侧边栏 Append "Failed" 组 [view] 按钮命中区域
     /// (渲染时 reflect; 无失败项时重置为无效区域防误触, 见 renderInfoSidebar)
     ftxui::Box failedViewButtonBox_;
+    /// Info 侧边栏 Plan Graph 按钮命中区域 (渲染时 reflect; 无 Plan 时无效)
+    ftxui::Box planGraphButtonBox_;
+    /// 当前 Plan 的 mermaid 源码 (与 planGraphButtonBox_ 同步更新, 点击时用于弹窗)
+    std::string planGraphMermaid_;
 
     static constexpr const char* kLogTabId            = "xx_logs";
     static constexpr const char* kInfoTabId           = "xx_info";

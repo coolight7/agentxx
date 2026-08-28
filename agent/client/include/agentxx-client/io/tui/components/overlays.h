@@ -202,6 +202,42 @@ private:
 };
 
 
+/// Mermaid 状态图弹窗 (Plan Graph 按钮触发)
+///
+/// 显示单条 roadmap (Mermaid stateDiagram-v2) 的 ASCII 状态图:
+/// - 全宽渲染, 内部 Scrollable 滚动 (滚轮 / Up/Down)
+/// - 节点按 id 状态后缀着色 (_in_progress/_completed/_failed/_pending)
+/// - 支持动态 mermaid 字符串 (构造时传入), 弹窗打开期间不变
+/// 交互: 滚轮 / Up/Down 滚动, Esc 关闭
+class MermaidDiagramOverlay : public ftxui::ComponentBase {
+public:
+
+    explicit MermaidDiagramOverlay(TUICtx& ctx, std::string mermaid);
+
+    void onClose(std::function<void()> fn) {
+        onClose_ = std::move(fn);
+    }
+
+    bool           OnEvent(ftxui::Event event) override;
+    ftxui::Element OnRender() override;
+
+private:
+
+    std::vector<ScrollItem> buildItems();
+
+    TUICtx&                     ctx_;
+    std::string                 mermaid_;
+    std::shared_ptr<Scrollable> scrollable_;
+    std::function<void()>       onClose_;
+
+    /// 状态图渲染缓存: 仅当 mermaid/终端宽度/主题任一变化时重新解析重建 Element
+    std::string                   cachedMermaid_;
+    int                           cachedMaxW_ = 0;
+    std::string                   cachedThemeName_;
+    markdown::MermaidStateDiagram cachedDiagram_;
+    ftxui::Element                cachedElement_;
+};
+
 /// 加载失败组件列表弹窗 (Info 侧边栏 Append "Failed" 组 [view] 按钮触发)
 ///
 /// 列出启动阶段加载失败的组件 (appendComponents 中 success=false 项):
