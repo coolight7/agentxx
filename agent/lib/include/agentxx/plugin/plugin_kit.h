@@ -445,11 +445,13 @@ struct PluginBase {
     }
 
     // 后台任务记录
+    // 堆稳定地址：spawn 时以 shared_ptr 存于 vector，post_to_io 传递堆地址
+    // 避免 vector 扩容导致 &spawns_.back() 悬垂（A）
     struct SpawnRecord {
         std::function<void()>              starter;
         std::shared_ptr<std::atomic<bool>> cancelFlag;
     };
-    std::vector<SpawnRecord> spawns_;
+    std::vector<std::shared_ptr<SpawnRecord>> spawns_;
 
     template<typename Fn>
     void spawn(Fn&& fn);
@@ -597,20 +599,25 @@ struct OffloadAwaiter {
     void* coroAddr_ = nullptr;
 };
 
-struct CallToolAwaiter {
-    const AgentxxHost*       host           = nullptr;
-    const AgentxxToolsIface* tools          = nullptr;
-    std::string_view         name;
-    std::string_view         argsJson;
-    std::string_view         threadId;
-    AgentxxOpHandle*         opHandle       = nullptr;
-    int                      status         = AGENTXX_OP_OK;
+struct CallToolState {
+    const AgentxxHost*       host = nullptr;
+    const AgentxxToolsIface* tools = nullptr;
+    std::string              name;
+    std::string              argsJson;
+    std::string              threadId;
+    AgentxxOpHandle*         opHandle = nullptr;
+    int                      status = AGENTXX_OP_OK;
     std::string              payload;
     std::string              startError;
-    bool                     suspended_     = false;
-    bool                     callbackFired_ = false;
-    void*                    coroAddr_      = nullptr;
-    void (*schedPost_)(const AgentxxHost*, void*) = nullptr;
+    std::atomic<bool>        suspended{false};
+    std::atomic<bool>        callbackFired{false};
+    void*                    coroAddr = nullptr;
+    void (*schedPost)(const AgentxxHost*, void*) = nullptr;
+    std::atomic<bool>        destroyed{false};
+};
+
+struct CallToolAwaiter {
+    std::shared_ptr<CallToolState> st;
 
     CallToolAwaiter(
         const AgentxxHost*       in_host,
@@ -620,46 +627,61 @@ struct CallToolAwaiter {
         std::string_view         in_tid,
         void (*in_post)(const AgentxxHost*, void*) = nullptr
     ) :
-        host(in_host),
-        tools(in_tools),
-        name(in_name),
-        argsJson(in_args),
-        threadId(in_tid),
-        schedPost_(in_post) {}
+        st(std::make_shared<CallToolState>()) {
+        st->host      = in_host;
+        st->tools     = in_tools;
+        st->name      = std::string(in_name);
+        st->argsJson  = std::string(in_args);
+        st->threadId  = std::string(in_tid);
+        st->schedPost = in_post;
+    }
+
+    ~CallToolAwaiter() {
+        if (st) {
+            st->destroyed.store(true, std::memory_order_release);
+        }
+    }
 
     bool await_ready() const noexcept {
-        return !tools || !tools->call_tool_async;
+        return !st || !st->tools || !st->tools->call_tool_async;
     }
 
     template<typename Promise>
     bool await_suspend(std::coroutine_handle<Promise> h) {
-        coroAddr_      = h.address();
-        suspended_     = false;
-        callbackFired_ = false;
-        char* err      = nullptr;
-        opHandle       = tools->call_tool_async(
-            host,
-            agentxx_plugin_sv(name.data(), name.size()),
-            agentxx_plugin_sv(argsJson.data(), argsJson.size()),
-            agentxx_plugin_sv(threadId.data(), threadId.size()),
-            [](void* ud, int st, char* pl) {
-                auto* self   = static_cast<CallToolAwaiter*>(ud);
-                self->status = st;
+        st->coroAddr = h.address();
+        st->suspended.store(false, std::memory_order_release);
+        st->callbackFired.store(false, std::memory_order_release);
+        st->destroyed.store(false, std::memory_order_release);
+        auto* holder = new std::shared_ptr<CallToolState>(st);
+        char* err    = nullptr;
+        st->opHandle = st->tools->call_tool_async(
+            st->host,
+            agentxx_plugin_sv(st->name.data(), st->name.size()),
+            agentxx_plugin_sv(st->argsJson.data(), st->argsJson.size()),
+            agentxx_plugin_sv(st->threadId.data(), st->threadId.size()),
+            [](void* ud, int cbSt, char* pl) {
+                auto* hp = static_cast<std::shared_ptr<CallToolState>*>(ud);
+                auto  s  = *hp;
+                delete hp;
+                s->status = cbSt;
                 if (pl) {
-                    self->payload = pl;
-                    if (self->host && self->host->vtable && self->host->vtable->free) {
-                        self->host->vtable->free(pl);
+                    s->payload.assign(pl);
+                    if (s->host && s->host->vtable && s->host->vtable->free) {
+                        s->host->vtable->free(pl);
                     }
                 }
-                if (!self->suspended_) {
-                    self->callbackFired_ = true;
+                if (!s->suspended.load(std::memory_order_acquire)) {
+                    s->callbackFired.store(true, std::memory_order_release);
                     return;
                 }
-                auto  handle = std::coroutine_handle<Promise>::from_address(self->coroAddr_);
-                auto& prom   = handle.promise();
+                if (s->destroyed.load(std::memory_order_acquire)) {
+                    return;
+                }
+                auto handle = std::coroutine_handle<Promise>::from_address(s->coroAddr);
+                auto& prom  = handle.promise();
                 prom.clear_outstanding();
-                if (self->schedPost_) {
-                    self->schedPost_(self->host, self->coroAddr_);
+                if (s->schedPost) {
+                    s->schedPost(s->host, s->coroAddr);
                 } else {
                     try {
                         handle.resume();
@@ -669,64 +691,78 @@ struct CallToolAwaiter {
                     finishIfDone(handle);
                 }
             },
-            this,
+            holder,
             &err
         );
 
-        if (callbackFired_) {
+        if (st->callbackFired.load(std::memory_order_acquire)) {
             return false;
         }
 
-        if (!opHandle && err) {
-            startError = err;
-            if (host && host->vtable && host->vtable->free) {
-                host->vtable->free(err);
+        if (!st->opHandle && err) {
+            st->startError.assign(err);
+            if (st->host && st->host->vtable && st->host->vtable->free) {
+                st->host->vtable->free(err);
             }
+            delete holder;
             return false;
         }
 
-        if (opHandle) {
-            h.promise().set_outstanding([tools = this->tools, op = this->opHandle]() {
-                if (tools && tools->op_cancel && op) {
-                    tools->op_cancel(op);
+        if (st->opHandle) {
+            h.promise().set_outstanding([st = this->st]() {
+                if (st->tools && st->tools->op_cancel && st->opHandle) {
+                    st->tools->op_cancel(st->opHandle);
                 }
             });
         }
 
-        suspended_ = true;
+        st->suspended.store(true, std::memory_order_release);
+        // 竞态窗口：回调可能在上一次 callbackFired 检查之后、suspended 置 true 之前触发，
+        // 此时回调已将 callbackFired 置 true 但未恢复协程（因 suspended 当时为 false）。
+        // 再次检查，若已触发则不应挂起，由本线程直接返回 false 让 await_resume 处理结果，
+        // 并清理 outstanding（回调未清理）。
+        if (st->callbackFired.load(std::memory_order_acquire)) {
+            h.promise().clear_outstanding();
+            return false;
+        }
         return true;
     }
 
     std::string await_resume() {
-        if (!startError.empty()) {
-            throw std::runtime_error(startError);
+        if (!st->startError.empty()) {
+            throw std::runtime_error(st->startError);
         }
-        if (status == AGENTXX_OP_CANCELLED) {
-            throw CancelledException(fmt::format("tool `{}` cancelled", name));
+        if (st->status == AGENTXX_OP_CANCELLED) {
+            throw CancelledException(fmt::format("tool `{}` cancelled", st->name));
         }
-        if (status != AGENTXX_OP_OK) {
+        if (st->status != AGENTXX_OP_OK) {
             throw std::runtime_error(
-                payload.empty() ? fmt::format("tool `{}` failed", name) : payload
+                st->payload.empty() ? fmt::format("tool `{}` failed", st->name) : st->payload
             );
         }
-        return std::move(payload);
+        return std::move(st->payload);
     }
 };
 
-struct InvokeCapAwaiter {
-    const AgentxxHost*              host           = nullptr;
-    const AgentxxCapabilitiesIface* caps           = nullptr;
-    std::string_view                capability;
-    std::string_view                method;
-    std::string_view                argsJson;
-    AgentxxOpHandle*                opHandle       = nullptr;
-    int                             status         = AGENTXX_OP_OK;
+struct InvokeCapState {
+    const AgentxxHost*              host = nullptr;
+    const AgentxxCapabilitiesIface* caps = nullptr;
+    std::string                     capability;
+    std::string                     method;
+    std::string                     argsJson;
+    AgentxxOpHandle*                opHandle = nullptr;
+    int                             status = AGENTXX_OP_OK;
     std::string                     payload;
     std::string                     startError;
-    bool                            suspended_     = false;
-    bool                            callbackFired_ = false;
-    void*                           coroAddr_      = nullptr;
-    void (*schedPost_)(const AgentxxHost*, void*) = nullptr;
+    std::atomic<bool>               suspended{false};
+    std::atomic<bool>               callbackFired{false};
+    void*                           coroAddr = nullptr;
+    void (*schedPost)(const AgentxxHost*, void*) = nullptr;
+    std::atomic<bool>               destroyed{false};
+};
+
+struct InvokeCapAwaiter {
+    std::shared_ptr<InvokeCapState> st;
 
     InvokeCapAwaiter(
         const AgentxxHost*              in_host,
@@ -736,46 +772,61 @@ struct InvokeCapAwaiter {
         std::string_view                in_args,
         void (*in_post)(const AgentxxHost*, void*) = nullptr
     ) :
-        host(in_host),
-        caps(in_caps),
-        capability(in_cap),
-        method(in_method),
-        argsJson(in_args),
-        schedPost_(in_post) {}
+        st(std::make_shared<InvokeCapState>()) {
+        st->host       = in_host;
+        st->caps       = in_caps;
+        st->capability = std::string(in_cap);
+        st->method     = std::string(in_method);
+        st->argsJson   = std::string(in_args);
+        st->schedPost  = in_post;
+    }
+
+    ~InvokeCapAwaiter() {
+        if (st) {
+            st->destroyed.store(true, std::memory_order_release);
+        }
+    }
 
     bool await_ready() const noexcept {
-        return !caps || !caps->invoke_capability_async;
+        return !st || !st->caps || !st->caps->invoke_capability_async;
     }
 
     template<typename Promise>
     bool await_suspend(std::coroutine_handle<Promise> h) {
-        coroAddr_      = h.address();
-        suspended_     = false;
-        callbackFired_ = false;
-        char* err      = nullptr;
-        opHandle       = caps->invoke_capability_async(
-            host,
-            agentxx_plugin_sv(capability.data(), capability.size()),
-            agentxx_plugin_sv(method.data(), method.size()),
-            agentxx_plugin_sv(argsJson.data(), argsJson.size()),
-            [](void* ud, int st, char* pl) {
-                auto* self   = static_cast<InvokeCapAwaiter*>(ud);
-                self->status = st;
+        st->coroAddr = h.address();
+        st->suspended.store(false, std::memory_order_release);
+        st->callbackFired.store(false, std::memory_order_release);
+        st->destroyed.store(false, std::memory_order_release);
+        auto* holder = new std::shared_ptr<InvokeCapState>(st);
+        char* err    = nullptr;
+        st->opHandle = st->caps->invoke_capability_async(
+            st->host,
+            agentxx_plugin_sv(st->capability.data(), st->capability.size()),
+            agentxx_plugin_sv(st->method.data(), st->method.size()),
+            agentxx_plugin_sv(st->argsJson.data(), st->argsJson.size()),
+            [](void* ud, int cbSt, char* pl) {
+                auto* hp = static_cast<std::shared_ptr<InvokeCapState>*>(ud);
+                auto  s  = *hp;
+                delete hp;
+                s->status = cbSt;
                 if (pl) {
-                    self->payload = pl;
-                    if (self->host && self->host->vtable && self->host->vtable->free) {
-                        self->host->vtable->free(pl);
+                    s->payload.assign(pl);
+                    if (s->host && s->host->vtable && s->host->vtable->free) {
+                        s->host->vtable->free(pl);
                     }
                 }
-                if (!self->suspended_) {
-                    self->callbackFired_ = true;
+                if (!s->suspended.load(std::memory_order_acquire)) {
+                    s->callbackFired.store(true, std::memory_order_release);
                     return;
                 }
-                auto  handle = std::coroutine_handle<Promise>::from_address(self->coroAddr_);
-                auto& prom   = handle.promise();
+                if (s->destroyed.load(std::memory_order_acquire)) {
+                    return;
+                }
+                auto handle = std::coroutine_handle<Promise>::from_address(s->coroAddr);
+                auto& prom  = handle.promise();
                 prom.clear_outstanding();
-                if (self->schedPost_) {
-                    self->schedPost_(self->host, self->coroAddr_);
+                if (s->schedPost) {
+                    s->schedPost(s->host, s->coroAddr);
                 } else {
                     try {
                         handle.resume();
@@ -785,47 +836,52 @@ struct InvokeCapAwaiter {
                     finishIfDone(handle);
                 }
             },
-            this,
+            holder,
             &err
         );
 
-        if (callbackFired_) {
+        if (st->callbackFired.load(std::memory_order_acquire)) {
             return false;
         }
 
-        if (!opHandle && err) {
-            startError = err;
-            if (host && host->vtable && host->vtable->free) {
-                host->vtable->free(err);
+        if (!st->opHandle && err) {
+            st->startError.assign(err);
+            if (st->host && st->host->vtable && st->host->vtable->free) {
+                st->host->vtable->free(err);
             }
+            delete holder;
             return false;
         }
 
-        if (opHandle) {
-            h.promise().set_outstanding([caps = this->caps, op = this->opHandle]() {
-                if (caps && caps->op_cancel && op) {
-                    caps->op_cancel(op);
+        if (st->opHandle) {
+            h.promise().set_outstanding([st = this->st]() {
+                if (st->caps && st->caps->op_cancel && st->opHandle) {
+                    st->caps->op_cancel(st->opHandle);
                 }
             });
         }
 
-        suspended_ = true;
+        st->suspended.store(true, std::memory_order_release);
+        if (st->callbackFired.load(std::memory_order_acquire)) {
+            h.promise().clear_outstanding();
+            return false;
+        }
         return true;
     }
 
     std::string await_resume() {
-        if (!startError.empty()) {
-            throw std::runtime_error(startError);
+        if (!st->startError.empty()) {
+            throw std::runtime_error(st->startError);
         }
-        if (status == AGENTXX_OP_CANCELLED) {
-            throw CancelledException(fmt::format("cap `{}` cancelled", capability));
+        if (st->status == AGENTXX_OP_CANCELLED) {
+            throw CancelledException(fmt::format("cap `{}` cancelled", st->capability));
         }
-        if (status != AGENTXX_OP_OK) {
+        if (st->status != AGENTXX_OP_OK) {
             throw std::runtime_error(
-                payload.empty() ? fmt::format("cap `{}` failed", capability) : payload
+                st->payload.empty() ? fmt::format("cap `{}` failed", st->capability) : st->payload
             );
         }
-        return std::move(payload);
+        return std::move(st->payload);
     }
 };
 
@@ -930,8 +986,10 @@ void PluginBase::spawn(Fn&& fn) {
         }
     };
 
-    spawns_.push_back(SpawnRecord{starter, cancelFlag});
+    auto rec = std::make_shared<SpawnRecord>(SpawnRecord{starter, cancelFlag});
+    spawns_.push_back(rec);
     if (iface.scheduler && iface.scheduler->post_to_io) {
+        SpawnRecord* raw = rec.get();
         iface.scheduler->post_to_io(
             host,
             [](void* ud) {
@@ -940,7 +998,7 @@ void PluginBase::spawn(Fn&& fn) {
                     rec->starter();
                 }
             },
-            &spawns_.back()
+            raw
         );
     }
 }
@@ -966,8 +1024,10 @@ inline void spawn(Ctx& ctx, Fn&& fn) {
         }
     };
 
-    ctx.spawns_.push_back(PluginBase::SpawnRecord{starter, cancelFlag});
+    auto rec = std::make_shared<PluginBase::SpawnRecord>(PluginBase::SpawnRecord{starter, cancelFlag});
+    ctx.spawns_.push_back(rec);
     if (ctx.iface.scheduler && ctx.iface.scheduler->post_to_io) {
+        PluginBase::SpawnRecord* raw = rec.get();
         ctx.iface.scheduler->post_to_io(
             ctx.host,
             [](void* ud) {
@@ -976,7 +1036,7 @@ inline void spawn(Ctx& ctx, Fn&& fn) {
                     rec->starter();
                 }
             },
-            &ctx.spawns_.back()
+            raw
         );
     }
 }

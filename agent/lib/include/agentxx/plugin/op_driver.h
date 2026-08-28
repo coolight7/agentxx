@@ -7,6 +7,7 @@
 #include "agentxx/plugin/plugin_manager.h"
 #include "agentxx/util/log.h"
 #include "asio/as_tuple.hpp"
+#include "asio/bind_cancellation_slot.hpp"
 #include "asio/co_spawn.hpp"
 #include "asio/deferred.hpp"
 #include "asio/detached.hpp"
@@ -176,8 +177,13 @@ inline asio::awaitable<std::string> awaitPluginOp(PluginOpAwaitArgs args) {
     std::string label = args.label;
     OpWatchdog   wd;
 
-    if (args.cancelToken && args.cancelToken->is_cancelled()) {
-        core->cancelRequested.store(true, std::memory_order_release);
+    std::shared_ptr<neograph::graph::CancelToken> cancelOp;
+    if (args.cancelToken) {
+        cancelOp = args.cancelToken->fork();
+        cancelOp->bind_executor(args.ex);
+        if (cancelOp->is_cancelled()) {
+            core->cancelRequested.store(true, std::memory_order_release);
+        }
     }
 
     char* err        = nullptr;
@@ -210,7 +216,7 @@ inline asio::awaitable<std::string> awaitPluginOp(PluginOpAwaitArgs args) {
     std::exception_ptr abort;
     try {
         while (!core->notified.load(std::memory_order_acquire)) {
-            if (args.cancelToken && args.cancelToken->is_cancelled()) {
+            if (cancelOp && cancelOp->is_cancelled()) {
                 core->cancelRequested.store(true, std::memory_order_release);
             }
             if (core->cancelRequested.load(std::memory_order_acquire)) {
@@ -220,18 +226,29 @@ inline asio::awaitable<std::string> awaitPluginOp(PluginOpAwaitArgs args) {
                 break;
             }
 
-            if (args.cancelToken) {
-                asio::steady_timer timer(args.ex);
-                timer.expires_after(std::chrono::milliseconds(100));
-
-                auto [order, ec_chan, ec_timer] = co_await asio::experimental::make_parallel_group(
-                    core->chan.async_receive(asio::deferred),
-                    timer.async_wait(asio::deferred)
-                ).async_wait(asio::experimental::wait_for_one(), asio::use_awaitable);
-
-                (void)order;
-                (void)ec_chan;
-                (void)ec_timer;
+            if (cancelOp) {
+                // 零轮询：已请求取消则仅等待完成；否则同时等待完成或取消信号（经 cancelOp->slot 事件驱动）
+                if (core->cancelRequested.load(std::memory_order_acquire)) {
+                    auto [ec] = co_await core->chan.async_receive(asio::as_tuple(asio::use_awaitable));
+                    (void)ec;
+                } else {
+                    asio::steady_timer cancelTimer(args.ex);
+                    cancelTimer.expires_at(std::chrono::steady_clock::time_point::max());
+                    auto [order, ec_chan, ec_cancel] = co_await asio::experimental::make_parallel_group(
+                        core->chan.async_receive(asio::deferred),
+                        cancelTimer.async_wait(
+                            asio::bind_cancellation_slot(cancelOp->slot(), asio::deferred)
+                        )
+                    )
+                                                           .async_wait(
+                                                               asio::experimental::wait_for_one(),
+                                                               asio::use_awaitable
+                                                           );
+                    (void)order;
+                    (void)ec_chan;
+                    (void)ec_cancel;
+                    // 若取消分支先完成（operation_aborted），循环顶部将检测 is_cancelled 并触发 safeCancelOnce
+                }
             } else {
                 auto [ec] = co_await core->chan.async_receive(asio::as_tuple(asio::use_awaitable));
                 (void)ec;
