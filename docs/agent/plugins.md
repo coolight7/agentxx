@@ -1,168 +1,255 @@
 # 插件系统开发指南
 
-- 内置插件示例参考 [plugins](/agent/plugins/)
-- 详细设计与内部实现架构参考 [plugins.md](/docs/agent/plugins.md)
+> 关联: [design.md](design.md) (主程序架构) · [ffi.md](ffi.md) (FFI) · 源码: [agent/plugins/](../../agent/plugins/) · C ABI 契约: [plugin_api.h](../../agent/lib/include/agentxx/plugin/plugin_api.h) / [client_plugin_api.h](../../agent/lib/include/agentxx/plugin/client_plugin_api.h) / SDK: [plugin_kit.h](../../agent/lib/include/agentxx/plugin/plugin_kit.h)
 
 ---
 
-## 核心架构与兼容性准则
+## 1. 总览
 
-Agentxx 插件系统采用 **纯 C ABI + COM 风格接口表查询**（API v1 架构）：
-- **跨编译器与标准库兼容**：主程序与插件动态库允许由不同的编译器、不同的 C++ 标准库版本（`libstdc++` / `libc++` / MSVC STL）或不同语言独立编译，运行时均能稳定兼容。
-- **纯 C 边界**：宿主与插件动态库跨边界仅传递纯 C 基本类型、函数指针、不透明句柄和 `AgentxxPluginStringView`（只读借用），严禁直接跨边界传递 C++ 标准库对象（如 `std::string`、`std::vector`、`std::function`）或 C++ 异常。
-- **内存所有权与生命周期**：所有跨边界返回的堆内存统一通过宿主核心 vtable 的 `host->alloc` 分配，接收方用完后负责通过 `host->vtable->free` 释放。
-- **无锁单线程会话契约**：宿主会话可变状态仅在主 IO 线程访问；插件注册/注销及状态访问均串行于该线程。
-- **锚定协程并发模型 (SDK)**：通过 `plugin_kit.h` 提供的 `Task<T>`，插件协程物理执行于宿主 IO 线程，挂起让出、完成通过 IO 线程回调唤醒，与内置工具原生交错，零轮询、零私有事件循环开销。
+Agentxx 插件系统采用 **纯 C ABI + COM 风格接口表查询**：
 
----
-
-## 多实例三铁律
-
-同一插件动态库在单进程内可能被多个独立的 Agent 宿主分别加载并创建多个并存实例：
-1. **禁止可变全局/函数级 static 变量**：插件的所有可变状态必须封装在随实例创建的上下文堆对象中（`*plugin_ctx`，通常继承 `agentxx::kit::PluginBase`）。
-2. **状态经上下文闭包恢复**：所有工具、钩子、事件回调必须通过 `spec.user_data` 恢复当前实例上下文。
-3. **接口表缓存存入实例上下文**：接口表查询结果（如 `AgentIfaces`）保存在实例上下文成员中，各实例互不干扰。
+- **跨编译器/标准库/语言兼容**：主程序与插件可由不同编译器、不同 STL (libstdc++/libc++/MSVC STL) 或不同语言独立编译，运行时稳定兼容
+- **纯 C 边界**：跨边界仅传递纯 C 基本类型、函数指针、不透明句柄与 `AgentxxPluginStringView` (data+size 只读借用，不要求 NUL 结尾)，严禁直接传递 `std::string/vector/function` 或 C++ 异常
+- **内存所有权**：所有跨边界堆内存统一经 `host->alloc/free/strdup` (核心 vtable) 管理，接收方用后 `host->free`
+- **单线程会话契约**：宿主会话可变状态仅在主 IO 线程串行访问；插件注册/状态访问由宿主内部按需 `post` 回 IO 线程，插件无感
+- **锚定协程模型**：经 `plugin_kit.h` 的 `Task<T>`，插件协程物理执行于宿主 IO 线程，挂起让出、完成经 IO 线程回调唤醒，零轮询、零私有事件循环
 
 ---
 
-## 导出符号控制
+## 2. 核心架构与兼容性准则
 
-插件动态库默认隐藏全部符号，仅导出宿主按名查找的入口符号。插件源码定义入口函数时必须使用 `AGENTXX_PLUGIN_EXPORT` 宏标记（定义于 `plugin_api.h`，位于 `extern "C"` 内）：
+```
+宿主 (libagentxx / agentxx_cli)
+  核心 vtable (冻结) ── alloc / free / strdup / query_interface (IID → 接口表)
+                       │
+         ┌─────────────┼─────────────┬──────────────┬─────────────┐
+         │ tools       │ hooks       │ events       │ scheduler   │  ...13 张
+         │ register/   │ 7 钩子点     │ publish/     │ sleep/      │  capabilities/
+         │ call_tool   │             │ subscribe    │ offload     │  session/plugins/
+         └─────────────┘             └──────────────┘             │  config/model/cancel/...
+插件动态库 (任意编译器) ── AGENTXX_PLUGIN_EXPORT 入口 ── PluginBase 上下文堆 ── SDK 注册族
+```
+
+- **核心 vtable 冻结**：仅 `alloc/free/strdup + query_interface`，永不增删；一切宿主能力按稳定 `IID` 字符串查询独立接口表获取 (`AGENTXX_QUERY_IFACE` 宏)
+- **接口表独立演进**：每张表首字段 `int version` 独立版本号；表内函数指针可能为 `NULL` (宿主未实现该子能力，调用前判空)
+- **版本门禁**：全局 `AGENTXX_PLUGIN_API_VERSION` / `AGENTXX_CLIENT_PLUGIN_API_VERSION` 精确匹配，否则拒绝加载 (无历史兼容路径)；新增能力 = 新增接口表或表内追加成员并递增该表版本，全局版本号不动
+- **线程约定**：`query_interface/alloc` 任意线程；注册类与 session/config/prompt 等 IO 约束操作由宿主内部投递同步等待；两件套 `start/cancel` 由宿主在 IO 线程驱动 (单次 <~1ms)；`AgentxxOpNotify.done` 可任意线程回调；宿主派发给插件的完成回调 (`AgentxxOpCb`/sleep/offload done) 保证在 IO 线程 `post` 入队
+
+---
+
+## 3. 多实例三铁律
+
+同一插件动态库在单进程内可能被多个独立 Agent 宿主分别加载并创建多个并存实例 (如 FFI 多句柄、AgentHost 子代理)：
+
+1. **禁止可变全局/函数级 static**：所有可变状态必须封装在随实例创建的上下文堆对象 (`*plugin_ctx`，通常继承 `kit::PluginBase`)
+2. **状态经上下文闭包恢复**：所有工具/钩子/事件回调必须通过 `spec.user_data` 恢复当前实例上下文
+3. **接口表缓存存入实例上下文**：`AgentIfaces` 查询结果存实例成员，各实例互不干扰；同步垫片 (`plugin_tool_sync.h`) 适配器为调用方内嵌存储，随实例销毁释放
+
+---
+
+## 4. 导出符号控制
+
+插件动态库默认隐藏全部符号，仅导出宿主按名查找的入口符号。入口函数必须以 `AGENTXX_PLUGIN_EXPORT` 标记 (位于 `extern "C"` 内)：
 
 ```c
 #include "agentxx/plugin/plugin_api.h"
-
 extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_get_info(void);
 extern "C" AGENTXX_PLUGIN_EXPORT int agentxx_plugin_create(const AgentxxHost* host, void** plugin_ctx);
 extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_destroy(void* plugin_ctx);
 ```
 
 - **入口符号集**：
-  - Agent 侧插件：`agentxx_plugin_get_info` / `agentxx_plugin_create` / `agentxx_plugin_destroy`
-  - Client 侧插件（双端或纯 UI 插件）：`agentxx_client_get_info` / `agentxx_client_create` / `agentxx_client_destroy`
-- **构建侧自动化配置**：`plugins/CMakeLists.txt` 已统一配置 ELF `-fvisibility=hidden` + version script 白名单（macOS `-exported_symbols_list`，MSVC `dllexport`），第三方静态库符号与内部 C++ 符号会被自动隐藏。
+  - Agent 侧：`agentxx_plugin_get_info` / `agentxx_plugin_create` / `agentxx_plugin_destroy`
+  - Client 侧 (双端/纯 UI)：`agentxx_client_get_info` / `agentxx_client_create` / `agentxx_client_destroy`
+- **构建侧自动化**：`plugins/CMakeLists.txt` 统一配置 ELF `-fvisibility=hidden` + version script 白名单 (通配符 `agentxx_plugin_*`/`agentxx_client_*`，兼容单端插件在 Android lld 下链接)，macOS `-exported_symbols_list`，MSVC `dllexport`；第三方静态库符号自动隐藏
 
 ---
 
-## 工具函数复用 (`agentxx_util`)
+## 5. 工具函数复用 (`agentxx_util`)
 
-面向项目内置插件，可通过独立静态库 `agentxx_util` 复用主程序的全部基础工具函数（字符串/字符编码检测/UTF-8转换/路径规范化/Base64/HTTP客户端/SQLite/正则等）。libagentxx 与各插件各自静态链接一份副本，符号经导出控制严格隐藏，互不冲突：
+面向项目内置插件，可通过独立静态库 `agentxx_util` 复用主程序全部基础工具 (字符串/编码检测/UTF-8 转换/路径规范化/Base64/HTTP/SQLite/正则/日志等)：
 
 ```cmake
-# 插件 CMakeLists.txt
 find_package(agentxx_util REQUIRED)
 target_link_libraries(${PLUGIN_NAME} PRIVATE agentxx_util)
 ```
 
-使用示例：
 ```cpp
 #include "agentxx/util/string_util.h"
 auto b64 = agentxx::util::base64Encode(data);
 ```
 
-> **注意**：`agentxx_util` 仅供内置插件便捷开发；第三方插件直接包含纯 C 头文件 `plugin_api.h`（或 SDK `plugin_kit.h`）即可开发，无需链接任何宿主库。
+- `agentxx_util` 由 `agent/lib/src/util/` 全部源文件编译，libagentxx 与各插件各自静态链接一份副本，符号经导出控制隐藏互不冲突；依赖全部 `PUBLIC` 传递 (fmt/sqlite3/uchardet/iconv + neograph/yyjson/OpenSSL/hyperscan/uring)
+- 定位为内置插件便捷库 (与主程序同一 superbuild 构建、依赖齐全)；第三方插件仅需纯 C 头 `plugin_api.h` / SDK `plugin_kit.h`，无需链接宿主库
+- 未引用模块按目标文件提取自动裁剪 (9 插件 `DT_NEEDED` 仅系统库)
 
 ---
 
-## C++ 插件开发方式 (使用 SDK `plugin_kit.h`)
+## 6. C++ 插件开发方式 (SDK `plugin_kit.h`)
 
-推荐使用官方 C++ 开发套件 `plugin_kit.h`（header-only，仅依赖 `plugin_api.h`）：
+推荐使用官方 header-only SDK `plugin_kit.h` (仅依赖 `plugin_api.h`)：
 
 ```cpp
 #include "agentxx/plugin/plugin_kit.h"
-
-struct MyPluginCtx : public agentxx::kit::PluginBase {
-    // 实例级状态存放于此
-};
+struct MyPluginCtx : public agentxx::kit::PluginBase {};
 
 extern "C" AGENTXX_PLUGIN_EXPORT int agentxx_plugin_create(const AgentxxHost* host, void** plugin_ctx) {
     auto ctx = std::make_unique<MyPluginCtx>();
     ctx->init(host);
 
-    // 1. 注册 Task 锚定协程工具 (支持精确 sleep / yield / call_tool 等)
-    agentxx::kit::tool(
-        *ctx,
-        "my_async_tool",
-        "Tool description",
-        R"({"type":"object","properties":{}})",
+    // Task 锚定协程工具 (可精确 sleep / yield / call_tool / offload)
+    agentxx::kit::tool(*ctx, "my_async_tool", "desc", R"({"type":"object","properties":{}})",
         [](MyPluginCtx& c, std::string_view args_json, agentxx::kit::OpCtl ctl) -> agentxx::kit::Task<std::string> {
             co_await agentxx::kit::sleep(c, 100);
             ctl.throw_if_cancelled();
+            // 跨插件互调: co_await agentxx::kit::call_tool(c, "other_tool", "{}", threadId);
             co_return R"({"status":"ok"})";
-        }
-    );
+        });
 
-    // 2. 注册快同步内联工具 (<~1ms，直接在 IO 线程计算并返回)
-    agentxx::kit::fast_tool(
-        *ctx,
-        "my_fast_tool",
-        "Fast tool description",
-        R"({"type":"object","properties":{}})",
+    // 快同步内联 (<~1ms, IO 线程直接计算返回)
+    agentxx::kit::fast_tool(*ctx, "my_fast_tool", "desc", R"({"type":"object","properties":{}})",
         [](MyPluginCtx& c, std::string_view args_json, std::string_view tid) -> std::string {
-            return R"({"result": 42})";
-        }
-    );
+            return R"({"result":42})";
+        });
 
-    // 3. 注册阻塞工具 (自动卸载到宿主阻塞线程池执行，不占 IO 线程)
-    agentxx::kit::blocking_tool(
-        *ctx,
-        "my_blocking_tool",
-        "Blocking tool description",
-        R"({"type":"object","properties":{}})",
+    // 阻塞工具 (自动卸载到宿主 blockingPool, 不占 IO 线程)
+    agentxx::kit::blocking_tool(*ctx, "my_blocking_tool", "desc", R"({"type":"object","properties":{}})",
         [](MyPluginCtx& c, std::string_view args_json) -> std::string {
-            // 在工作线程池中执行重型计算或同步文件/网络操作
-            return R"({"done": true})";
-        }
-    );
+            // 重型计算/同步文件/网络操作
+            return R"({"done":true})";
+        });
 
-    // 4. 注册后台协作任务 (替代周期定时器)
+    // 后台协作任务 (替代周期定时器, 随实例销毁自动取消)
     agentxx::kit::spawn(*ctx, [](MyPluginCtx& c, agentxx::kit::OpCtl ctl) -> agentxx::kit::Task<void> {
         while (!ctl.cancelled()) {
             co_await agentxx::kit::sleep(c, 5000);
             if (ctl.cancelled()) break;
-            // 定期执行采集并发布事件
+            // 采集并 publish 事件
         }
     });
+
+    // 钩子 (7 钩子点: agent_start/end, model_start/run/end, tool_start/end)
+    agentxx::kit::hook(*ctx, AGENTXX_HOOK_MODEL_START, [](MyPluginCtx& c, std::string_view in){ /*...*/ });
+
+    // 能力 (跨插件通用 RPC 通道)
+    agentxx::kit::capability(*ctx, "my.cap", [](MyPluginCtx& c, const AgentxxHost* caller, std::string_view method, std::string_view args){ return "{}"; });
 
     *plugin_ctx = ctx.release();
     return 0;
 }
-
 extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_destroy(void* plugin_ctx) {
     delete static_cast<MyPluginCtx*>(plugin_ctx);
 }
 ```
 
+**统一异步操作模型 (两件套 start/cancel)**：工具/钩子/能力均为 `start` (IO 线程非阻塞启动) + `cancel` (协作式) 两件套，终结经 `AgentxxOpNotify.done(status,payload)` 恰好一次上报；`Task` 协程帧先销毁后 `done` 上报，支持 `offload` 阻塞池委托与 `call_tool`/`invoke_cap` 锚定互调。
+
 ---
 
-## 插件分类与编译模式
+## 7. 插件分类与编译模式
 
 1. **按功能划分**：
-   - **Agent 插件**：扩展 Agent 会话执行流（工具 Tool / 中间件钩子 Hook / 事件 Event / 能力 Capability / 资源声明 Resources）。
-   - **Client 插件**：扩展 TUI / CLI 等客户端界面（状态栏 StatusItem / 弹窗面板 Panel / 侧边栏 InfoSection / 命令 Command）。
-   - **双端插件**：同时导出 Agent 侧与 Client 侧入口，一份动态库同时服务两端。
+   - **Agent 插件**：扩展会话执行流 (Tool / Hook / Event / Capability / Resources)
+   - **Client 插件**：扩展 TUI/CLI 界面 (StatusItem / Panel / InfoSection / Command / ToolDecor)
+   - **双端插件**：同时导出 Agent 与 Client 入口，一份动态库同时服务两端；跨端通信统一走 Wire (`PluginData` agent→client / `PluginDataUp` client→agent)
+
 2. **编译与分发模式**：
-   - **独立动态库模式（默认）**：插件编译为独立动态库，通过 `agentxx-config.yaml` 的 `plugins` 字段按目录路径动态加载。
-   - **内置合并编译模式**：开启 `AGENTXX_ENABLE_PLUGIN_BUILTIN=ON` 时，指定插件源码直接编译并合并进 `libagentxx`，运行期无需外部动态库即可零开销直接调用。
+   - **独立动态库 (默认)**：编译为独立动态库，经 `agentxx-config.yaml` 的 `plugins` 字段按 `path` 动态加载 (支持插件目录含 `plugin.yaml` 清单分派)
+   - **内置合并编译**：`AGENTXX_ENABLE_PLUGIN_BUILTIN=ON` + `AGENTXX_PLUGIN_BUILTIN_LIST` 指定插件源码直接编译进 `libagentxx`，运行期无需外部动态库零开销调用；此时 `plugins` 段仍可配置参数，但无需 `path`
 
 ---
 
-## Javascript 插件 (基于 QuickJS 引擎插件)
+## 8. Agent 侧接口表一览
 
-Agentxx 原生只维护单一的 C++ 插件基础设施。JS 脚本插件通过内置的 **[agentxx_javascript_engine](/agent/plugins/agentxx_javascript_engine/)** 引擎插件承载：
-- 采用 **统一插件模型**：所有插件都是 C++ 插件。JS 脚本插件表现为一个标准的 C++ 动态库外壳（如 [example_js](/agent/plugins/example_js/)）附带 `plugin.js` 脚本。
-- **执行流程**：
-  ```
-  宿主加载 JS 插件壳 (libexample_js.dll/.so)
-      └── 插件壳在 create 阶段调用 "interpreter.js" 能力将 plugin.js 交给 QuickJS 引擎
-          └── QuickJS 引擎在专用线程中解析并执行脚本，将脚本中声明的工具/钩子反向注册到宿主
-  ```
-- 开发者亦可开发自研的脚本引擎插件（如 Python、Lua 等）替换或扩充脚本能力。
+| IID | 版本 | 能力 |
+|-----|------|------|
+| `agentxx.agent.tools` | 1 | `register_tool/unregister_tool`, `call_tool_async/op_cancel` (插件互调, cb 保证 IO 线程 post) |
+| `agentxx.agent.hooks` | 1 | `register_hook/unregister_hook` (7 钩子点, 两件套) |
+| `agentxx.agent.events` | 1 | `subscribe/unsubscribe/publish` (topic 自动加 `plugin.` 前缀, 载荷 JSON) |
+| `agentxx.agent.capabilities` | 1 | `register_capability(_ex)/unregister/has_capability`, `invoke_capability_async/op_cancel` |
+| `agentxx.agent.scheduler` | 1 | `is_io_thread/post_to_io/pump_io`, `sleep/cancel_sleep`, `offload` (阻塞池委托, 需 cancel_flag) |
+| `agentxx.agent.session` | 1 | `get_share_store/add_share_store/emit_message_tip` (IO 线程) |
+| `agentxx.agent.plugins` | 1 | `list_plugins/get_plugin/get_own_info` (JSON) |
+| `agentxx.agent.config` | 1 | `get_config/get_plugin_args/get_tool_prompt/get_work_dir/get_session_work_dir` (后者 worktree 绑定优先) |
+| `agentxx.agent.model` | 1 | `get_config` (主模型及关联配置 JSON) |
+| `agentxx.agent.cancel` | 1 | `is_cancelled(threadId)` (advisory, 权威通知为 cancel 回调) |
+| `agentxx.agent.planning` | 1 | `set_planning(threadId, roadmap, todos_json, notes)` |
+| `agentxx.agent.prompt` | 1 | `get_prompt/set_prompt` (宿主提示词读写) |
+| `agentxx.agent.json` | 1 | `json_get_string/json_escape` |
+| `agentxx.agent.log` | 1 | `log(level, msg)` (0 trace .. 4 error) |
+| `agentxx.agent.resources` | 1 | `register/unregister_skill_dir/memory_file/mcp_server`, `get_own_resources` |
 
 ---
 
-## 插件示例索引
+## 9. Client 侧接口表一览
 
-- [example_plugin](/agent/plugins/example_plugin/)：原生 C++ 插件综合示例（包含 fast_tool、Task 协程工具、插件互调 call_tool、精确 sleep、中间件钩子、事件订阅与能力注册）。
-- [example_js](/agent/plugins/example_js/)：JS 脚本插件示例。
-- [example_resources](/agent/plugins/example_resources/)：会话资源贡献插件示例（声明式与编程式 MCP / Skill / 规则 / 会话环境资源注入）。
+| IID | 版本 | 能力 |
+|-----|------|------|
+| `agentxx.client.ui` | 1 (+v2 `update_tool_decor`) | `register_status_item/update/unregister`, `register_panel/update/unregister`, `register_info_section/update/unregister`, `register_command/unregister`, `show_toast`, `update_tool_decor(tool_call_id, decor_json)` |
+| `agentxx.client.events` | 1 | `subscribe/unsubscribe` (事件见 `AgentxxClientEvent`: READY/CONN_STATE/USER_INPUT/DELTA/TURN_END/SESSION_SWITCH/PLUGIN_DATA) |
+| `agentxx.client.session` | 1 | `get_client_state` (快照 JSON), `send_user_input`, `request_cancel` |
+| `agentxx.client.wire` | 1 | `send_plugin_data(event, json)` → 服务端 `client.{插件}.{event}` |
+| `agentxx.client.self` | 1 | `get_own_info/get_plugin_args` |
+| `agentxx.client.json` | 1 | `json_get_string/json_escape` |
+| `agentxx.client.log` | 1 | `log(level, msg)` |
+
+`update_tool_decor` (v2) 用于插件驱动工具消息装饰：订阅 `EVT_DELTA` 的 `tool_start` (含完整 `arguments`) 后，按 `tool_call_id` 推送 `{displayName, summary, items[]}` 语义 JSON (items schema 同 panel，另含 `diagram` kind)，宿主自动管理卸载/禁用时的摘除与恢复；典型实现见 `agentxx_planning` (Plan 渲染完全由插件驱动)。
+
+---
+
+## 10. 会话资源贡献 (Skill / Memory / MCP)
+
+- **声明式**：插件目录随 `plugin.yaml` 声明资源 (框架在 entry 成功后经 `AgentResourceApplier` 统一 `applyDecls` 应用，卸载/禁用时摘除)
+- **编程式**：运行时经 `agentxx.agent.resources` 接口表动态注册/注销 (如 `agentxx_codegraph` 按 args 动态注册索引路径)
+- 宿主对声明式+编程式资源做去重与生命周期管理 (所有权语义见 `resource_applier.h`)；失败项经 `AppendComponentNotification` 单独统计 (供客户端 Failed 组展示)
+
+---
+
+## 11. Worktree 与会话工作目录
+
+- 插件经 `AgentxxConfigIface::get_session_work_dir(host, thread_id)` 取当前会话生效工作目录 (worktree 绑定优先，回退 `get_work_dir`)
+- `blocking_tool` 的 `workDir` 参数由 SDK 在 IO 线程预取并注入，避免 worker 线程跨线程 `ioCallSync`
+- 文件系统 / 命令执行插件每次 `execute` 按注入 `sessionId` 动态解析路径，会话绑定后基准即时切换
+
+---
+
+## 12. Javascript 插件 (基于 QuickJS 引擎插件)
+
+Agentxx 仅维护单一 C++ 插件基础设施；JS 脚本插件经内置 `agentxx_javascript_engine` 引擎插件承载：
+
+- **统一插件模型**：所有插件都是 C++ 插件；JS 插件表现为标准 C++ 动态库外壳 (如 `example_js`) 附带 `plugin.js`
+- **执行流程**：宿主加载 JS 插件壳 → 壳在 `create` 阶段调用 `interpreter.js` 能力将 `plugin.js` 交给 QuickJS 引擎 → 引擎在专用线程中解析并执行脚本，将脚本中声明的工具/钩子反向注册到宿主
+- 可自研脚本引擎插件 (Python/Lua 等) 替换或扩充脚本能力
+
+---
+
+## 13. 插件示例索引
+
+| 插件 | 说明 |
+|------|------|
+| `example_plugin` | 原生 C++ 综合示例 (fast_tool/Task 协程/call_tool/sleep/钩子/事件/能力/client 入口) |
+| `example_js` | JS 脚本插件示例 (C++ 壳 + `plugin.js`) |
+| `example_resources` | 会话资源贡献示例 (声明式与编程式 MCP/Skill/规则/会话环境) |
+| `agentxx_filesystem` | 文件系统 6 工具 (list/read/write/edit/glob/grep, 含 `*_impl.h` 直测实现) |
+| `agentxx_execute_command` | 命令执行 2 工具 (bash/windows, 含超时与 PowerShell 探测) |
+| `agentxx_websearch` | 网络搜索 3 工具 (search/fetch/fetch_markdown) |
+| `agentxx_rag_search` | 向量语义搜索 |
+| `agentxx_string` | 字符串 2 工具 (html_to_markdown/regexp) |
+| `agentxx_system` | 系统时间 (`get_current_datetime`) |
+| `agentxx_system_monitor` | 系统资源监控 (工具 + 周期采集 + client 侧 Info/状态栏渲染) |
+| `agentxx_planning` | 规划工具 + client 侧 Plan 装饰 |
+| `agentxx_codegraph` | 代码索引 8 工具 + client Info 栏 |
+| `agentxx_screen_capture` | 屏幕捕获 (仅 Windows) |
+| `agentxx_computer_use` | 键鼠控制 (仅 Windows, depends: screen_capture) |
+| `agentxx_audio_stream` | 音频流捕获 (仅 Windows WASAPI) |
+| `agentxx_text_selection_monitor` | 文本选择监听 (仅 Windows UIAutomation) |
+| `agentxx_javascript_engine` | QuickJS 引擎 (能力 `interpreter.js`) |
+
+---
+
+## 14. 构建与平台
+
+- **平台矩阵**：各插件在自身 `CMakeLists.txt` 开头经 `plugin_platform_support.cmake` 的 `gate` 函数判定，复用顶层 `XX_IS_*_D` 变量；不支持的平台跳过编译 (screen_capture/computer_use/text_selection_monitor 仅 Windows, audio_stream 全平台未实现等)
+- **内置合并编译**：`AGENTXX_ENABLE_PLUGIN_BUILTIN=ON` 时按 `AGENTXX_PLUGIN_BUILTIN_LIST` 合并进 `libagentxx`；此时 `test_ffi_c_api` 与 `client_plugins` 测试按条件跳过动态库路径
+- **产物布局**：独立动态库模式产物统一输出到 `{build}/exec/plugins/<插件名>/` (含 `plugin.yaml` 清单时按目录分派)
+

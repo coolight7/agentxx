@@ -40,7 +40,7 @@
 
 | Status | System | TIP |
 |---|---|---|
-| ✅ | Windows 10+ | - |
+| ✅ | Windows 10+ | Win编译/Linux 交叉编译 |
 | ✅ | Linux | 在WSL运行时额外支持直接执行 windows 程序和命令 |
 | ✅ | Android 5.0+ | Linux 交叉编译 |
 | ⬜ | Macos | 待测试兼容 |
@@ -234,7 +234,7 @@
 - ⬜根据 ModelName 动态加载，没有匹配的则取用默认提示词
 
 ### 插件化支持
-- ✅c/c++插件支持，可对 agent、client-ui 插件化修改；详见[插件开发文档](docs/zh-cn/plugins.md); [内置插件代码实现](/agent/plugins/); [插件示例](/agent/plugins/example_plugin/)
+- ✅c/c++插件支持，可对 agent、client-ui 插件化修改；详见[插件开发文档](docs/agent/plugins.md); [内置插件代码实现](/agent/plugins/); [插件示例](/agent/plugins/example_plugin/)
 - ✅可选外置编译插件为动态库，或是内嵌编译进 libagentxx
 - 其他编程语言插件: 
     - 仿照`agentxx_javascript_engine`实现编程语言的执行引擎, 然后新建插件项目, 指定依赖它, 运行时把代码片段发给执行引擎执行即可; 实际上不一定需要由 执行引擎插件 本身来执行代码, 也可以接收代码片段后调用系统安装的 `nodejs、python3` 等直接执行也是可以的

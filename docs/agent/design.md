@@ -1255,8 +1255,14 @@ agent/
 │   │   │   ├── modelcall.h       # ModelCallWrapNode (LLM 调用, 动态模型切换)
 │   │   │   ├── toolcall.h        # ToolcallWrapNode (工具分发, 自动压缩)
 │   │   │   └── agentcall.h       # AgentStart/EndCallWrapNode (会话生命周期)
-│   │   ├── plugin/               # 插件系统 (热插拔原生 C++ 插件, 纯 C ABI)
-│   │   │   ├── plugin_api.h      # 纯 C ABI 契约 (唯一跨版本稳定接口, 见 docs/zh-cn/plugins.md)
+│   │   ├── plugin/               # 插件系统 (热插拔原生 C++ 插件, 纯 C ABI, API v1 —— 冻结核心 vtable + 13 张接口表)
+│   │   │   ├── plugin_api.h      # 纯 C ABI 契约 (唯一跨版本稳定接口, 见 docs/agent/plugins.md) — 核心 vtable 冻结 + COM QueryInterface
+│   │   │   ├── plugin_kit.h      # C++ SDK header-only (PluginBase/Task/awaiters/tool/hook/capability/spawn)
+│   │   │   ├── op_driver.h       # 异步操作驱动 (AgentxxOpNotify Done 协议)
+│   │   │   ├── plugin_guard.h    # 插件调用 RAII 守卫
+│   │   │   ├── plugin_iface_helper.h # 接口表查询缓存 (AgentIfaces)
+│   │   │   ├── plugin_poll_loop.h    # 旧轮询驱动兼容 (已移除轮询, 保留类型占位)
+│   │   │   ├── plugin_tool_sync.h    # 同步垫片适配器 (调用方内嵌存储)
 │   │   │   ├── plugin_manager.h  # PluginManager 生命周期 (load/enable/disable/unload) /
 │   │   │   │                     #   PluginTool (C 回调→线程池卸载执行) /
 │   │   │   │                     #   PluginMiddlewareHandle (7 钩子→C 回调) /
@@ -1272,7 +1278,8 @@ agent/
 │   │   │   ├── skill.h           # SkillMiddleware (技能发现与加载)
 │   │   │   ├── memory_file.h     # MemoryFileMiddleware (上下文文件注入)
 │   │   │   ├── summarization.h   # SummarizationMiddleware (上下文压缩)
-│   │   │   └── planning.h        # PlanningMiddleware (任务规划状态)
+│   │   │   ├── planning.h        # PlanningMiddleware (任务规划状态)
+│   │   │   └── worktree.h        # WorktreeMiddleware (git worktree 行为提示词注入)
 │   │   ├── tools/                # 工具
 │   │   │   ├── tool.h            # XXToolBase / XXToolWrap 工具基类
 │   │   │   ├── filesystem.h      # 文件系统工具 (list/read/write/edit/glob/grep)
@@ -1285,7 +1292,8 @@ agent/
 │   │   │   ├── subagent_shared.h # 子代理批量委派共享实现 (中断 key/解析)
 │   │   │   ├── share_store.h     # 会话级文本寄存
 │   │   │   ├── string.h          # 字符串工具 (html2md / regexp)
-│   │   │   └── system.h          # 系统工具 (datetime; cpu_gpu_info 已迁插件 agentxx_system_monitor)
+│   │   │   ├── system.h          # 系统工具 (datetime; cpu_gpu_info 已迁插件 agentxx_system_monitor)
+│   │   │   └── git_worktree.h    # Git Worktree 工具 (create/info/status/remove)
 │   │   ├── protocol/             # 协议实现
 │   │   │   ├── openai_provider.h  # OpenAI Chat Completions API (流式/非流式/SSE)
 │   │   │   ├── anthropic_provider.h # Anthropic Messages API (thinking/tool_use)
@@ -1317,6 +1325,7 @@ agent/
 │   │       ├── async_mutex.h     # 协程感知异步互斥锁 (基于 concurrent_channel)
 │   │       ├── async_offload.h   # 阻塞操作线程池卸载 (offloadAsync /
 │   │       │                     #   offloadCancellableAsync / asyncWithTimeout)
+│   │       ├── worktree.h        # Git worktree 封装 (argv 直调/超时整组终止)
 │   │       └── util.h            # 通用工具 (系统检测等)
 │   └── src/                      # 实现文件 (与 include 目录结构对应)
 │
@@ -1415,6 +1424,7 @@ agent/
 │   ├── plugin/                   # 插件测试 (插件系统 + 各具体插件集成)
 │   │   ├── test_plugins.*        # 插件系统测试 (加载/工具/钩子/事件/热插拔, 模块名 `plugins`)
 │   │   ├── test_plugin_resources.* # 插件会话资源扩展测试 (Skill/Memory/MCP 声明式+运行时)
+│   │   ├── test_plugin_multi_instance.* # 插件多实例隔离测试 (三铁律)
 │   │   ├── test_client_plugins.* # client 侧插件测试 (内置合并编译时跳过)
 │   │   ├── test_codegraph_tools.* # CodeGraph 插件集成测试 (索引/搜索/上下文/路径等 8 工具)
 │   │   ├── test_cpu_gpu_use.*    # system_monitor 插件集成测试 (系统资源监控)
@@ -1467,8 +1477,16 @@ agent/
 │                                 #   编译产物统一输出到 exec/plugins/<插件名>/)
 │   ├── example_plugin/           # 示例 C++ 插件 (双端): 工具/钩子/事件/能力/client 入口
 │   ├── example_js/               # JS 示例插件 (C++ 壳 + plugin.js; depends: javascript_engine)
+│   ├── example_resources/        # 会话资源贡献示例 (声明式与编程式 MCP/Skill/规则)
 │   ├── agentxx_javascript_engine/ # QuickJS 引擎插件 (能力 interpreter.js; 专用 JS 线程+沙箱)
 │   ├── agentxx_codegraph/        # CodeGraph 代码分析插件 (8 工具 + client Info 栏段落)
+│   ├── agentxx_filesystem/       # 文件系统 6 工具 (list/read/write/edit/glob/grep)
+│   ├── agentxx_execute_command/  # 命令执行 2 工具 (bash/windows)
+│   ├── agentxx_websearch/        # 网络搜索 3 工具 (search/fetch/fetch_markdown)
+│   ├── agentxx_rag_search/       # 向量语义搜索
+│   ├── agentxx_string/           # 字符串 2 工具 (html_to_markdown/regexp)
+│   ├── agentxx_system/           # 系统时间 (get_current_datetime)
+│   ├── agentxx_planning/         # 规划工具 + client 侧 Plan 装饰
 │   ├── agentxx_screen_capture/   # 屏幕捕获插件 (仅 Windows)
 │   ├── agentxx_computer_use/     # 键鼠控制插件 (仅 Windows; depends: screen_capture)
 │   ├── agentxx_system_monitor/   # 系统资源监控插件 (工具 + 周期采集 + client 状态栏渲染)
@@ -1531,3 +1549,58 @@ EventBus (事件总线)
   ├── EventStream<T> (单向: publish/subscribe/unsubscribe)
   ├── RequestResponseStream<Req, Resp> (双向: request/serve)
   └── 主题表 (Topic 命名空间常量)
+---
+
+## 附录 A: 核心数据模型 (conversation_types.h)
+
+### ViewMessage (UI 展示消息)
+- 通用字段: id (msgId, appendViewMessage 分配), role, text, startTimeMs/durationMs, collapsed
+- 角色枚举 Role: User / Assistant / Think / System / Tool / Interrupt / Tip
+- 角色专属 optional 子结构:
+  - Tool: ToolData {toolName, toolCallId, toolResult, diff (edit diff 预留), toolFinished}
+  - Think: ThinkData {reasoningTokens, isEncrypted}
+  - Tip: TipData {tipLevel: Info/Warning/Error} — 系统提示与 Turn 统计经 InsertMessage 原子插入
+  - Interrupt: InterruptData {interruptId, inputLabel/Depict/Type/Default/Enums, inputIndex/Total, interruptStatus (Waiting/Confirmed/Cancelled/Expired), interruptResult}
+- 序列化: toJson/fromJson 供 Wire Sync 与链式哈希共用; 对应 role 下保证子结构非空
+
+### Delta (流式增量事件, 统一 seq)
+- Type: TextToken / ThinkToken / ToolStart / ToolEnd / TurnStart / TurnEnd / NodeStart / NodeEnd / MessageUITip / InsertMessage
+- 公共字段: seq (会话级单调递增, EventBridge 与 SessionServerAgentIO 共用 Session::nextDeltaSeq 分配), text, msgId, toolName/toolCallId/arguments/result/hasError, nodeName, think (ThinkData), tipType (MessageUITip 时), message (InsertMessage 时携带完整 ViewMessage 指针), historyCount/tailHash, startTimeMs/durationMs, tps (TurnEnd 轮级平均速度)
+- MessageUITip: 瞬态提示, 仅 UI 展示不入 viewMessages; InsertMessage: 原子插入完整 ViewMessage (如 Tip/统计), 入历史并同步
+
+### SyncPayload / MessageQueueItem
+- SyncPayload {fromIndex (窗口首条绝对下标), messages[], tailHash, totalMessages, messageQueue[]}
+  - 全量同步: fromIndex=0, totalMessages==messages.size()
+  - 尾窗同步: fromIndex=窗口起始下标 (>0 表示上方还有更早消息), totalMessages=会话总消息数, 客户端按 WireGetViewMessages 分页拉取
+- MessageQueueItem {id, text, model (待应用模型, 空=默认), createdAtMs}
+- ChainHash: FNV-1a 链式哈希, append(string) 累积, tailHex 供 Hello/Sync 校验
+
+### Wire 协议分页语义
+- ListSessions: keyset 游标 {beforeMs, beforeId, limit} 按 lastActiveMs 降序分页; 服务端回 WireSessionList {sessions[], totalCount, hasMore}
+- GetViewMessages: {beforeIndex, count} 请求 [max(0,before-count), before) 区间; 服务端回 WireViewMessagesPage {startIndex, totalCount, messages[]} (append-only 下标恒定, 无竞态)
+- GetContext 等同步查询: 阻塞等待服务端响应 (最长 10s, 同一句柄同一时刻仅允许一个在途)
+
+---
+
+## 附录 B: 插件系统 v1 要点 (详见 plugins.md)
+
+- COM 风格接口表查询: 核心 vtable 冻结 (alloc/free/strdup + query_interface), 能力按 IID 字符串查询独立接口表 (首字段 version 独立演进)
+- Agent 侧 13 张接口表: tools / hooks / events / capabilities / scheduler / session / plugins / config / model / cancel / planning / prompt / json / log / resources
+- Client 侧 7 张接口表: ui / events / session / wire / self / json / log (详见 client_plugin_api.h)
+- SDK (plugin_kit.h): PluginBase 状态基类 + Task<T> 锚定协程 + sleep/yield/offload/call_tool/invoke_cap awaiter + tool/fast_tool/blocking_tool/hook/capability/spawn 注册族; 后台任务 spawn 以 post_to_io 锚定宿主 io 线程
+- 多实例三铁律: 禁止可变全局 static / 状态经 user_data 闭包恢复 / 接口表缓存入实例上下文
+- 导出控制: -fvisibility=hidden + version script 白名单 (AGENTXX_PLUGIN_EXPORT), 单端插件兼容 Android lld
+- 平台矩阵: 各插件 CMakeLists 开头经 plugin_platform_support.cmake 判定 (screen_capture/computer_use/text_selection_monitor 仅 Windows 等)
+- 工具复用: 内置插件经 agentxx_util 静态库复用全部 util (各自静态链接, 符号隐藏互不冲突)
+
+---
+
+## 附录 C: 会话工作目录多源回退 (AgentContext::getSessionWorkDir)
+
+回退链 (优先级从高到低):
+1. Session::WorktreeBinding.path (worktree 模式已绑定)
+2. AgentContext::sessionWorkDirs_[sessionId] (会话级覆写, 如 ACP session/new 携带的客户端 cwd, mutex 保护任意线程注入)
+3. AgentConfig::resolvedWorkDir() (yaml work_dir / 进程 cwd)
+- 调用方统一经 getSessionWorkDir(sessionId) 取值, 不直接读进程 cwd / workDir
+- 失效时返回空串由调用方兜底 (如 Permission Ask 模式无 workDir 时不注册默认放行规则)
+

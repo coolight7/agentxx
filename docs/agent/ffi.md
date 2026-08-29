@@ -136,7 +136,7 @@ agentxx_event_queue_free(q);
 | HIL 应答 | `agentxx_interrupt_respond` | 提交 EVT_INTERRUPT_REQ 的应答 (values_json 数组与 inputs 顺序一一对应) |
 | 日志 | `agentxx_drain_logs` | 取走积压日志 `[{"level","message"},...]` (异常后排障) |
 | 事件队列 | `agentxx_event_queue_create` / `agentxx_free`(队列) / `..._on_event` / `..._pop` | 见 4.2 |
-| 内置插件 | `agentxx_get_builtin_plugins` | 内置合并编译模式插件清单入口 (PluginManager 使用) |
+| 内置插件 | `agentxx_get_builtin_plugins` | 内置合并编译模式插件清单入口 (PluginManager 使用; 白名单第 25 个符号, 隐藏 17 万 C++ 符号) |
 
 版本策略: 修改契约递增 `AGENTXX_FFI_API_VERSION` (当前为 1);
 新增符号/字段为非破坏性不递增, 删除/重命名或修改参数语义时递增。
@@ -170,7 +170,7 @@ agentxx_event_queue_free(q);
                                       // 嵌入多实例 (多句柄) 各自绑定独立项目目录
   "enableSessionStore": false,
   "sessionStoreDirectory": "",        // 为空时使用 {dataDir}/sqlite/sessions/
-  "permissionMode": "ask",            // ask|all_ask|pass|deny
+  "permissionMode": "ask",            // ask|all_ask|pass|deny (yaml permission.mode 同值; ask=工作目录内 ALLOW 其余 INTERRUPT)
   "permissionAllowPaths": ["..."],    // 权限白名单
   "permissionDenyPaths": ["..."],     // 权限黑名单
   "skills": ["..."],                  // 技能目录列表
@@ -205,3 +205,16 @@ agentxx_event_queue_free(q);
 
 - `agent/test/test_ffi_c_api.cpp` (模块名 `ffi_c_api`): 生命周期/交互/HIL/
   事件队列/同步查询全覆盖, 内置 mock LLM Server 端到端验证
+
+---
+
+## 7. 实现细节补充 (2026-08 刷新)
+
+- **Channel 直连**：FFI 层复用 `ChannelAgentIOTransport::makePair` (零序列化 concurrent_channel), 非 WS；`SessionServerAgentIO` 视为服务端端点，`FfiClientAgentIO` 为 client 端点，二者完全同构于 TUI/CLI 的 transport 抽象
+- **工作目录回退**：`config_json.workDir` 支持 `~`/`\${VAR}` 展开与相对路径 (按进程 cwd 解析为绝对)；未配置时回退进程 `cwd`，与 `AgentConfig::resolvedWorkDir()` 语义一致；会话级 worktree 绑定 (`Session::WorktreeBinding`) 与 `AgentContext::getSessionWorkDir` 的多源回退对 FFI 句柄同样生效 (会话内所有相对路径自动切换)
+- **权限 sides**：`plugins[].sides` 取值 `auto` (默认, 按导出符号 `agentxx_client_create` 自动决定) / `agent` (仅 agent 侧加载) / `client` (仅 client 侧，FFI 场景通常为 agent)
+- **同步查询约束**：`get_model_info/get_context_messages/list_sessions` 同一句柄同一时刻仅允许一个在途 (服务端逐条协议)；超时 10s 返回 `AGENTXX_ERR_TIMEOUT`，payload 为 `{"code","message"}` 的 `EVT_ERROR` 也会并发上报
+- **HIL 输入描述**：`EVT_INTERRUPT_REQ` 的 `argJson` 为 `InterruptHandleArg` 序列化，`inputs[]` 含 `label/depict/type (bool/int/double/string/enum)/defaultValue/enumValues`；空 `type` 表示无需输入 (应答空数组 `[]` 即可)
+- **跨 CRT 堆**：所有 `char*` 返回值与 `char** log` 均经 `agentxx_malloc` 分配，宿主必须 `agentxx_free` 释放；`agentxx_strdup_n` 为统一拷贝入口
+
+

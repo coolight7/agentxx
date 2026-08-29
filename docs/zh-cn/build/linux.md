@@ -69,6 +69,12 @@ cd {项目根目录}/agent
 ./script/linux_release_build.sh
 ```
 
+## 产物布局
+
+- 可执行文件: `agent/build/{platform}-{mode}/exec/agentxx_cli` / `agentxx_test` / `agentxx_benchmark`
+- 插件动态库 (独立动态库模式): `agent/build/{platform}-{mode}/exec/plugins/<插件名>/` (含 `plugin.yaml` 清单时按目录分派)
+- 共享库 (FFI): `agent/build/{platform}-{mode}/lib/libagentxx_shared.so` (导出面仅 25 个 C 符号, 见 `agent/lib/ffi_symbols.map`)
+
 ## Debug 构建加速
 
 Debug 构建脚本 (`script/linux_debug_build.sh`) 默认已启用以下加速手段，可直接使用:
