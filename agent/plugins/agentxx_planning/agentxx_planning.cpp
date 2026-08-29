@@ -826,6 +826,9 @@ static std::string buildDecorItems(const ClientCtx& ctx, const neograph::json& p
             clientJsonEscape(ctx, mermaid)
         ));
     };
+    auto separatorItem = [&]() {
+        items.push_back(R"({"kind":"separator"})");
+    };
 
     // ---- Graph: 状态图 (按钮，点击弹窗) ----
     const auto roadmap = plan.value("roadmap", std::string{});
@@ -840,7 +843,11 @@ static std::string buildDecorItems(const ClientCtx& ctx, const neograph::json& p
     }
 
     // ---- Todo: 待办列表 ----
-    if (plan.contains("todos") && plan["todos"].is_array() && !plan["todos"].empty()) {
+    const bool hasTodos = plan.contains("todos") && plan["todos"].is_array() && !plan["todos"].empty();
+    if (hasTodos) {
+        if (!items.empty()) {
+            separatorItem();
+        }
         textItem("|- Todo", "title");
         for (const auto& td : plan["todos"]) {
             if (td.is_object()) {
@@ -862,13 +869,25 @@ static std::string buildDecorItems(const ClientCtx& ctx, const neograph::json& p
         }
     }
 
-    // ---- Note: 备忘 ----
+    // ---- Note: 备忘 (与 Todo 分区独立渲染, 避免交错) ----
+    bool hasNotes = false;
     if (plan.contains("notes")) {
         const auto& nv = plan["notes"];
         if (nv.is_string() && !nv.get<std::string>().empty()) {
+            hasNotes = true;
+        } else if (nv.is_array() && !nv.empty()) {
+            hasNotes = true;
+        }
+    }
+    if (hasNotes) {
+        if (!items.empty()) {
+            separatorItem();
+        }
+        const auto& nv = plan["notes"];
+        if (nv.is_string()) {
             textItem("|- Note", "title");
             textItem(nv.get<std::string>(), "hint");
-        } else if (nv.is_array() && !nv.empty()) {
+        } else if (nv.is_array()) {
             textItem("|- Note", "title");
             for (const auto& n : nv) {
                 const auto s = n.is_string() ? n.get<std::string>() : n.dump();
@@ -971,6 +990,9 @@ static void refreshPlanSection(ClientCtx& ctx) {
             clientJsonEscape(ctx, mermaid)
         ));
     };
+    auto separatorItem = [&]() {
+        items.push_back(R"({"kind":"separator"})");
+    };
 
     // ---- Graph: 状态图按钮 + 概要 ----
     const auto roadmap = plan.value("roadmap", std::string{});
@@ -979,8 +1001,12 @@ static void refreshPlanSection(ClientCtx& ctx) {
         buttonItem(" Graph ", roadmap);
     }
 
-    // ---- Todo: 待办列表 ----
-    if (plan.contains("todos") && plan["todos"].is_array() && !plan["todos"].empty()) {
+    // ---- Todo: 待办列表 (独立分区) ----
+    const bool hasTodos = plan.contains("todos") && plan["todos"].is_array() && !plan["todos"].empty();
+    if (hasTodos) {
+        if (!items.empty()) {
+            separatorItem();
+        }
         textItem("|- Todo", "title");
         for (const auto& td : plan["todos"]) {
             if (td.is_object()) {
@@ -1002,25 +1028,29 @@ static void refreshPlanSection(ClientCtx& ctx) {
         }
     }
 
-    // ---- Note: 备忘 ----
+    // ---- Note: 备忘 (独立分区, 与 Todo 分隔) ----
+    bool hasNote = false;
     if (plan.contains("notes")) {
-        const auto& nv      = plan["notes"];
-        bool        hasNote = false;
+        const auto& nv = plan["notes"];
         if (nv.is_string() && !nv.get<std::string>().empty()) {
             hasNote = true;
         } else if (nv.is_array() && !nv.empty()) {
             hasNote = true;
         }
-        if (hasNote) {
-            textItem("|- Note", "title");
-            if (nv.is_string()) {
-                textItem(nv.get<std::string>(), "hint");
-            } else if (nv.is_array()) {
-                for (const auto& n : nv) {
-                    const auto s = n.is_string() ? n.get<std::string>() : n.dump();
-                    if (!s.empty()) {
-                        textItem(fmt::format("- {}", s), "hint");
-                    }
+    }
+    if (hasNote) {
+        if (!items.empty()) {
+            separatorItem();
+        }
+        const auto& nv = plan["notes"];
+        textItem("|- Note", "title");
+        if (nv.is_string()) {
+            textItem(nv.get<std::string>(), "hint");
+        } else if (nv.is_array()) {
+            for (const auto& n : nv) {
+                const auto s = n.is_string() ? n.get<std::string>() : n.dump();
+                if (!s.empty()) {
+                    textItem(fmt::format("- {}", s), "hint");
                 }
             }
         }

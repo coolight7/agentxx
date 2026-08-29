@@ -777,6 +777,8 @@ size_t MessageListComponent::estimateHeight(size_t index, int width) {
                                 decorLines += estimateLines(it.value("text", std::string{}), width);
                             } else if (kind == "button") {
                                 decorLines += 1;
+                            } else if (kind == "separator") {
+                                decorLines += 1;
                             } else if (kind == "diagram") {
                                 // 状态图渲染密度: 每层 ~3 行 (节点/边/间距) + 边界余量,
                                 // 与 renderMermaidStateDiagram 分层布局一致
@@ -2047,6 +2049,12 @@ void MessageListComponent::appendDecorToolBody(
                     diagEl | flex,
                 }));
             }
+        } else if (kind == "separator") {
+            // 分区分隔线 (Todo / Note 独立分区)
+            lines.push_back(hbox({
+                text("    "),
+                text("─") | color(theme.hintColor) | dim | xflex_shrink,
+            }));
         }
         // 其余 kind 忽略 (未知项向前兼容)
     }

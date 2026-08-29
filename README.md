@@ -7,7 +7,7 @@
 - 目标支持嵌入App实现高性能的Agent功能，顺带实现 cli/TUI 的 Code Agent; GUI客户端计划将由[Lumenxx](https://github.com/coolight7/lumenxx-docx)支持，并实现 音视频处理、自动化控制 等 Agent 
 - 已实测过最长单轮任务自动运行5小时完成，本项目已由 Agentxx 自身介入开发
 
-> - 早期开发中...
+> 初步完成 agent核心及服务、TUI、插件接口、FFI接口，但仍可能大幅度重构，接口可能大改动.
 
 - [特点](#特点)
 - [兼容性](#兼容性)
