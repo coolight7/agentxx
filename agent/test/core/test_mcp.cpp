@@ -3928,37 +3928,68 @@ asio::awaitable<void> test_mcp_client_session_rebuild() {
 }
 
 asio::awaitable<TestResult> run_mcp_tests() {
+    std::cout << "  [mcp] version_negotiation_unit..." << std::endl;
     test_mcp_version_negotiation_unit();
+    std::cout << "  [mcp] server_unit..." << std::endl;
     test_mcp_server_unit();
+    std::cout << "  [mcp] server_integration..." << std::endl;
     co_await test_mcp_server_integration();
+    std::cout << "  [mcp] server_version_negotiation..." << std::endl;
     test_mcp_server_version_negotiation();
+    std::cout << "  [mcp] server_lenient_parsing..." << std::endl;
     test_mcp_server_lenient_parsing();
+    std::cout << "  [mcp] server_stdio_resources_prompts..." << std::endl;
     test_mcp_server_stdio_resources_prompts();
+    std::cout << "  [mcp] server_stdio_basic..." << std::endl;
     test_mcp_server_stdio_basic();
+    std::cout << "  [mcp] server_stdio_errors..." << std::endl;
     test_mcp_server_stdio_errors();
+    std::cout << "  [mcp] server_2025_features..." << std::endl;
     test_mcp_server_2025_features();
+    std::cout << "  [mcp] server_2025_03_features..." << std::endl;
     test_mcp_server_2025_03_features();
+    std::cout << "  [mcp] server_2025_06_features..." << std::endl;
     test_mcp_server_2025_06_features();
+    std::cout << "  [mcp] server_cross_version_stdio..." << std::endl;
     test_mcp_server_cross_version_stdio();
+    std::cout << "  [mcp] server_2025_03_26_stdio..." << std::endl;
     test_mcp_server_2025_03_26_stdio();
+    std::cout << "  [mcp] client_http..." << std::endl;
     co_await test_mcp_client_http();
+    std::cout << "  [mcp] client_tool_namespace..." << std::endl;
     co_await test_mcp_client_tool_namespace();
+    std::cout << "  [mcp] client_tool_timeout..." << std::endl;
     co_await test_mcp_client_tool_timeout();
+    std::cout << "  [mcp] client_2025_version..." << std::endl;
     co_await test_mcp_client_2025_version();
+    std::cout << "  [mcp] server_cross_version_http..." << std::endl;
     co_await test_mcp_server_cross_version_http();
+    std::cout << "  [mcp] client_accept_header..." << std::endl;
     co_await test_mcp_client_accept_header();
+    std::cout << "  [mcp] server_accept_sse..." << std::endl;
     co_await test_mcp_server_accept_sse();
     // 2026-07-28
+    std::cout << "  [mcp] server_2026_discover_stdio..." << std::endl;
     test_mcp_server_2026_discover_stdio();
+    std::cout << "  [mcp] server_2026_version_gate..." << std::endl;
     test_mcp_server_2026_version_gate();
+    std::cout << "  [mcp] server_2026_modern_results..." << std::endl;
     test_mcp_server_2026_modern_results();
+    std::cout << "  [mcp] server_2026_subscriptions_stdio..." << std::endl;
     test_mcp_server_2026_subscriptions_stdio();
+    std::cout << "  [mcp] server_2026_subscriptions_http..." << std::endl;
     co_await test_mcp_server_2026_subscriptions_http();
+    std::cout << "  [mcp] server_2026_http_headers..." << std::endl;
     co_await test_mcp_server_2026_http_headers();
+    std::cout << "  [mcp] server_2026_x_mcp_header..." << std::endl;
     co_await test_mcp_server_2026_x_mcp_header();
+    std::cout << "  [mcp] client_2026_modern_http..." << std::endl;
     co_await test_mcp_client_2026_modern_http();
+    std::cout << "  [mcp] client_2026_legacy_fallback..." << std::endl;
     co_await test_mcp_client_2026_legacy_fallback();
+    std::cout << "  [mcp] client_truncated_retry..." << std::endl;
     co_await test_mcp_client_truncated_retry();
+    std::cout << "  [mcp] client_session_rebuild..." << std::endl;
     co_await test_mcp_client_session_rebuild();
     co_return TestResult{g_mcp_passed, g_mcp_failed};
 }

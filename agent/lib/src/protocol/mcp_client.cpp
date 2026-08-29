@@ -1283,29 +1283,32 @@ asio::awaitable<void> McpClient::discoverSseEndpoint() {
     auto headers = util::HeaderMap{};
     headers.set("Accept", "text/event-stream");
 
-    auto resp = co_await util::HttpClient::getAsync(
-        sseUrl,
-        headers,
-        util::HttpClient::RequestConfig{.readChunkTimeout = config_.initTimeout}
-    );
-
-    if (!resp.has_value()) {
-        XX_LOGW(
-            "[McpClient] SSE discovery failed ({}), falling back to "
-            "direct POST",
-            resp.error()
+    std::string sseBody;
+    try {
+        co_await util::HttpClient::requestSseAsync(
+            "GET",
+            sseUrl,
+            "",
+            "",
+            headers,
+            util::HttpClient::RequestConfig{
+                .readChunkTimeout = std::min(config_.initTimeout, std::chrono::milliseconds(800))
+            },
+            [&](std::string_view chunk) -> bool {
+                sseBody.append(chunk);
+                if (sseBody.find("\n\n") != std::string::npos) {
+                    return true; // 收到初始 endpoint 事件后立即关闭连接
+                }
+                return false;
+            }
         );
+    } catch (...) {
         httpMessageUrl_ = config_.serverUrl;
         sseDiscovered_.store(true);
         co_return;
     }
 
-    auto sessionIdHdr = resp.value().findHeader("mcp-session-id");
-    if (!sessionIdHdr.empty()) {
-        mcpSessionId_ = sessionIdHdr;
-    }
-
-    auto events = parseSseEvents(resp.value().body);
+    auto events = parseSseEvents(sseBody);
     for (const auto& ev : events) {
         if (ev.event == "endpoint") {
             std::string path = ev.data;
