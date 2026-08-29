@@ -215,6 +215,7 @@ protected:
 
     /// 路由查找缓存容量
     static constexpr size_t routerCacheCapacity = 1024;
+
     /// 路由查找 LRU 缓存 (函数内 thread_local 避免 inline 变量在 MinGW+libc++ 下的重复符号)
     static agentxx::util::LruCache<std::string, _RouterCacheValue_s>& getCacheMap() {
         thread_local agentxx::util::LruCache<std::string, _RouterCacheValue_s> instance{

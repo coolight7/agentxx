@@ -33,6 +33,7 @@ int g_tui_scroll_failed = 0;
 // 断言计数宏覆盖: 将 test_framework.h 的 XX_TEST_EXPECT_* 映射到本模块计数器
 #define XX_TEST_PASSED g_tui_scroll_passed
 #define XX_TEST_FAILED g_tui_scroll_failed
+
 namespace agentxx {
 namespace test {
 
@@ -1683,10 +1684,9 @@ TestResult testTuiScroll() {
             f.sharedState.mutate([&](TUIRenderState& st) {
                 st.currentTokenRole  = TUIMessage::Role::Think;
                 st.currentTokenEpoch = 2;
-                st.currentToken      = std::make_shared<std::string>(
-                    "head THK19B_HEAD\ntail THK_TAIL_19B"
-                );
-                st.isStreaming = true;
+                st.currentToken
+                    = std::make_shared<std::string>("head THK19B_HEAD\ntail THK_TAIL_19B");
+                st.isStreaming            = true;
                 st.pendingTokenDurationMs = 1500;
             });
             f.render();
@@ -1717,10 +1717,10 @@ TestResult testTuiScroll() {
             // 工具完成: mutableMessage 复制消息 (指针变化 -> itemKey 失效重建),
             // 头部回退静态标识
             f.sharedState.mutate([&](TUIRenderState& st) {
-                auto nm                                = std::make_shared<TUIMessage>(*st.messages.back());
-                nm->tool->toolFinished                 = true;
-                nm->tool->toolResult                   = "ok";
-                st.messages.back()                     = std::move(nm);
+                auto nm                = std::make_shared<TUIMessage>(*st.messages.back());
+                nm->tool->toolFinished = true;
+                nm->tool->toolResult   = "ok";
+                st.messages.back()     = std::move(nm);
             });
             std::string doneFrame = f.render();
             XX_TEST_EXPECT_TRUE(doneFrame.find("+ [Tool]") != std::string::npos);

@@ -21,6 +21,7 @@ int g_tui_input_failed = 0;
 // 断言计数宏覆盖: 将 test_framework.h 的 XX_TEST_EXPECT_* 映射到本模块计数器
 #define XX_TEST_PASSED g_tui_input_passed
 #define XX_TEST_FAILED g_tui_input_failed
+
 namespace agentxx {
 namespace test {
 
@@ -194,7 +195,7 @@ void test_real_enter_sends() {
 }
 
 void test_send_rejected_retains_input() {
-    InputFixture f;
+    InputFixture           f;
     InputComponent::Config cfg;
     // 模拟 agent-io 未初始化就绪, 拒绝发送
     cfg.onSend = [](std::string) -> bool {
@@ -329,12 +330,16 @@ void test_tui_state_message_queue_sync() {
 // (回归: SpinnerComponent 若未 Add() 入组件树, 收不到动画回调, 恒显示首帧 ⠋)
 // ---------------------------------------------------------------------------
 void test_spinner_frame_advances_via_tree() {
-    InputFixture f;
-    bool streaming = false;
+    InputFixture           f;
+    bool                   streaming = false;
     InputComponent::Config cfg;
-    cfg.onSend      = [](std::string) -> bool { return true; };
-    cfg.isStreaming = [&streaming] { return streaming; };
-    auto comp       = std::make_shared<InputComponent>(f.ctx, std::move(cfg));
+    cfg.onSend = [](std::string) -> bool {
+        return true;
+    };
+    cfg.isStreaming = [&streaming] {
+        return streaming;
+    };
+    auto comp = std::make_shared<InputComponent>(f.ctx, std::move(cfg));
 
     // 渲染到字符串便于检查指示器字符 (braille 字符在输入栏中唯一)
     auto renderToString = [](InputComponent& c) {

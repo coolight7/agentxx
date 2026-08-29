@@ -548,7 +548,10 @@ private:
                                 );
                                 co_await ws.async_accept(
                                     req,
-                                    asio::cancel_after(std::chrono::seconds{10}, asio::use_awaitable)
+                                    asio::cancel_after(
+                                        std::chrono::seconds{10},
+                                        asio::use_awaitable
+                                    )
                                 );
                                 co_await wsIt->second(ws);
                                 co_return true;

@@ -84,7 +84,8 @@ static void xx_op_cancel(::AgentxxOpHandle* op) {
         if (op->cancelFn) {
             try {
                 op->cancelFn();
-            } catch (...) {}
+            } catch (...) {
+            }
         }
     }
 }
@@ -290,7 +291,8 @@ static ::AgentxxOpHandle* xx_invoke_capability_async(
     if (args.empty()) {
         args = "{}";
     }
-    return mgr->invokeCapabilityAsync(inst, cap.c_str(), m.c_str(), args.c_str(), cb, ud, error_out);
+    return mgr
+        ->invokeCapabilityAsync(inst, cap.c_str(), m.c_str(), args.c_str(), cb, ud, error_out);
     XX_PLUGIN_CATCH_END(nullptr)
 }
 
@@ -483,12 +485,23 @@ static void xx_log(const AgentxxHost* host, int level, AgentxxPluginStringView m
     using agentxx::util::LogLevel;
     LogLevel lv = LogLevel::Info;
     switch (level) {
-        case 0: lv = LogLevel::Trace; break;
-        case 1: lv = LogLevel::Debug; break;
-        case 2: lv = LogLevel::Info; break;
-        case 3: lv = LogLevel::Warn; break;
-        case 4: lv = LogLevel::Error; break;
-        default: break;
+        case 0:
+            lv = LogLevel::Trace;
+            break;
+        case 1:
+            lv = LogLevel::Debug;
+            break;
+        case 2:
+            lv = LogLevel::Info;
+            break;
+        case 3:
+            lv = LogLevel::Warn;
+            break;
+        case 4:
+            lv = LogLevel::Error;
+            break;
+        default:
+            break;
     }
     agentxx::util::xxLogPrint(lv, std::string{msg.data ? msg.data : "", msg.size});
 }
@@ -509,7 +522,8 @@ static char* xx_json_get_string(
         if (j.is_object() && j.contains(keyStr) && j[keyStr].is_string()) {
             return inst->host.vtable->strdup(j[keyStr].get<std::string>().c_str());
         }
-    } catch (...) {}
+    } catch (...) {
+    }
     return nullptr;
 }
 
@@ -524,13 +538,27 @@ static char* xx_json_escape(const AgentxxHost* host, AgentxxPluginStringView s) 
     for (size_t i = 0; i < s.size; ++i) {
         const unsigned char c = static_cast<unsigned char>(s.data[i]);
         switch (c) {
-            case '"': out += "\\\""; break;
-            case '\\': out += "\\\\"; break;
-            case '\b': out += "\\b"; break;
-            case '\f': out += "\\f"; break;
-            case '\n': out += "\\n"; break;
-            case '\r': out += "\\r"; break;
-            case '\t': out += "\\t"; break;
+            case '"':
+                out += "\\\"";
+                break;
+            case '\\':
+                out += "\\\\";
+                break;
+            case '\b':
+                out += "\\b";
+                break;
+            case '\f':
+                out += "\\f";
+                break;
+            case '\n':
+                out += "\\n";
+                break;
+            case '\r':
+                out += "\\r";
+                break;
+            case '\t':
+                out += "\\t";
+                break;
             default:
                 if (c < 0x20) {
                     out += fmt::format("\\u{:04x}", c);
@@ -602,8 +630,8 @@ static char* xx_get_work_dir(const AgentxxHost* host) {
     if (!mgr || !inst) {
         return nullptr;
     }
-    auto     mgrPtr = mgr;
-    auto dir = ioCallSync<std::string>(mgrPtr, [mgrPtr]() {
+    auto mgrPtr = mgr;
+    auto dir    = ioCallSync<std::string>(mgrPtr, [mgrPtr]() {
         return mgrPtr->getSessionWorkDir();
     });
     if (dir.empty()) {
@@ -613,10 +641,7 @@ static char* xx_get_work_dir(const AgentxxHost* host) {
     XX_PLUGIN_CATCH_END(nullptr)
 }
 
-static char* xx_get_session_work_dir(
-    const AgentxxHost*      host,
-    AgentxxPluginStringView thread_id
-) {
+static char* xx_get_session_work_dir(const AgentxxHost* host, AgentxxPluginStringView thread_id) {
     XX_PLUGIN_CATCH_BEGIN
     auto mgr  = mgrOf(host);
     auto inst = instOf(host);
@@ -685,10 +710,7 @@ static char* xx_model_get_config(const AgentxxHost* host) {
     XX_PLUGIN_CATCH_END(nullptr)
 }
 
-static int xx_cancel_is_cancelled(
-    const AgentxxHost*      host,
-    AgentxxPluginStringView thread_id
-) {
+static int xx_cancel_is_cancelled(const AgentxxHost* host, AgentxxPluginStringView thread_id) {
     XX_PLUGIN_CATCH_BEGIN
     auto mgr = mgrOf(host);
     if (!mgr || agentxx_plugin_sv_empty(thread_id)) {
@@ -696,11 +718,14 @@ static int xx_cancel_is_cancelled(
     }
     auto        mgrPtr = mgr;
     std::string tid{thread_id.data, thread_id.size};
-    return ioCallSync<bool>(mgrPtr, [mgrPtr, tid]() {
-        return mgrPtr->isSessionCancelled(tid);
-    })
-        ? 1
-        : 0;
+    return ioCallSync<bool>(
+               mgrPtr,
+               [mgrPtr, tid]() {
+                   return mgrPtr->isSessionCancelled(tid);
+               }
+           )
+               ? 1
+               : 0;
     XX_PLUGIN_CATCH_END(0)
 }
 
@@ -716,10 +741,11 @@ static int xx_planning_set_planning(
     if (!mgr || agentxx_plugin_sv_empty(thread_id)) {
         return -1;
     }
-    auto        mgrPtr  = mgr;
-    std::string tid     = {thread_id.data, thread_id.size};
-    std::string road    = roadmap.data ? std::string{roadmap.data, roadmap.size} : std::string{};
-    std::string todos   = todos_json.data ? std::string{todos_json.data, todos_json.size} : std::string{};
+    auto        mgrPtr = mgr;
+    std::string tid    = {thread_id.data, thread_id.size};
+    std::string road   = roadmap.data ? std::string{roadmap.data, roadmap.size} : std::string{};
+    std::string todos
+        = todos_json.data ? std::string{todos_json.data, todos_json.size} : std::string{};
     std::string noteStr = notes.data ? std::string{notes.data, notes.size} : std::string{};
     return ioCallSync<int>(mgrPtr, [mgrPtr, tid, road, todos, noteStr]() {
         return mgrPtr->setSessionPlanning(tid, road, todos, noteStr);
@@ -1035,9 +1061,13 @@ static std::shared_ptr<agentxx::agent::AgentResourceApplier> getResourceApplier(
 }
 
 int PluginManager::registerSkillDir(PluginInstance* inst, const char* path) {
-    if (!inst || !path) return -1;
+    if (!inst || !path) {
+        return -1;
+    }
     auto ap = getResourceApplier(agentContext_, "register_skill_dir");
-    if (!ap) return -1;
+    if (!ap) {
+        return -1;
+    }
     std::string err;
     if (!ap->addSkillDir(inst->name, path, err)) {
         XX_LOGW("Plugin `{}` register skill dir failed: {}", inst->name, err);
@@ -1048,18 +1078,28 @@ int PluginManager::registerSkillDir(PluginInstance* inst, const char* path) {
 }
 
 int PluginManager::unregisterSkillDir(PluginInstance* inst, const char* path) {
-    if (!inst || !path) return -1;
+    if (!inst || !path) {
+        return -1;
+    }
     auto ap = getResourceApplier(agentContext_, "unregister_skill_dir");
-    if (!ap) return -1;
-    if (!ap->removeSkillDir(inst->name, path)) return -1;
+    if (!ap) {
+        return -1;
+    }
+    if (!ap->removeSkillDir(inst->name, path)) {
+        return -1;
+    }
     XX_LOGI("Plugin `{}` unregistered skill dir `{}`", inst->name, path);
     return 0;
 }
 
 int PluginManager::registerMemoryFile(PluginInstance* inst, const char* path) {
-    if (!inst || !path) return -1;
+    if (!inst || !path) {
+        return -1;
+    }
     auto ap = getResourceApplier(agentContext_, "register_memory_file");
-    if (!ap) return -1;
+    if (!ap) {
+        return -1;
+    }
     std::string err;
     if (!ap->addMemoryFile(inst->name, path, err)) {
         XX_LOGW("Plugin `{}` register memory file failed: {}", inst->name, err);
@@ -1070,24 +1110,36 @@ int PluginManager::registerMemoryFile(PluginInstance* inst, const char* path) {
 }
 
 int PluginManager::unregisterMemoryFile(PluginInstance* inst, const char* path) {
-    if (!inst || !path) return -1;
+    if (!inst || !path) {
+        return -1;
+    }
     auto ap = getResourceApplier(agentContext_, "unregister_memory_file");
-    if (!ap) return -1;
-    if (!ap->removeMemoryFile(inst->name, path)) return -1;
+    if (!ap) {
+        return -1;
+    }
+    if (!ap->removeMemoryFile(inst->name, path)) {
+        return -1;
+    }
     XX_LOGI("Plugin `{}` unregistered memory file `{}`", inst->name, path);
     return 0;
 }
 
 int PluginManager::registerMcpServer(PluginInstance* inst, const char* specJson) {
-    if (!inst || !specJson) return -1;
+    if (!inst || !specJson) {
+        return -1;
+    }
     auto ap = getResourceApplier(agentContext_, "register_mcp_server");
-    if (!ap) return -1;
+    if (!ap) {
+        return -1;
+    }
     try {
         auto j          = neograph::json::parse(specJson);
         auto ns         = j.value("namespace", std::string{});
         auto url        = j.value("url", std::string{});
         int  timeoutSec = 120;
-        if (j.contains("timeout")) timeoutSec = j.value("timeout", 120);
+        if (j.contains("timeout")) {
+            timeoutSec = j.value("timeout", 120);
+        }
         if (ns.empty() || url.empty()) {
             XX_LOGW("Plugin `{}` register_mcp_server failed: namespace/url required", inst->name);
             return -1;
@@ -1109,22 +1161,34 @@ int PluginManager::registerMcpServer(PluginInstance* inst, const char* specJson)
 }
 
 int PluginManager::unregisterMcpServer(PluginInstance* inst, const char* nameSpace) {
-    if (!inst || !nameSpace) return -1;
+    if (!inst || !nameSpace) {
+        return -1;
+    }
     auto ap = getResourceApplier(agentContext_, "unregister_mcp_server");
-    if (!ap) return -1;
-    if (!ap->removeMcpServer(inst->name, nameSpace)) return -1;
+    if (!ap) {
+        return -1;
+    }
+    if (!ap->removeMcpServer(inst->name, nameSpace)) {
+        return -1;
+    }
     XX_LOGI("Plugin `{}` unregistered mcp server `{}`", inst->name, nameSpace);
     return 0;
 }
 
 std::string PluginManager::ownResourcesJson(const PluginInstance* inst) {
-    if (!inst) return {};
+    if (!inst) {
+        return {};
+    }
     auto c = agentContext_.lock();
-    if (!c || !c->resourceApplier) return {};
+    if (!c || !c->resourceApplier) {
+        return {};
+    }
     auto snap    = c->resourceApplier->ownedBy(inst->name);
     auto toArray = [](const std::vector<std::string>& v) {
         neograph::json a = neograph::json::array();
-        for (const auto& s : v) a.push_back(s);
+        for (const auto& s : v) {
+            a.push_back(s);
+        }
         return a;
     };
     neograph::json out;
@@ -1138,7 +1202,8 @@ void PluginManager::applyDeclaredResources(
     PluginInstance&                        inst,
     const plugin::PluginManifestResources& resources
 ) {
-    if (resources.skillDirs.empty() && resources.memoryFiles.empty() && resources.mcpServers.empty()) {
+    if (resources.skillDirs.empty() && resources.memoryFiles.empty()
+        && resources.mcpServers.empty()) {
         return;
     }
     auto ctx = agentContext_.lock();
@@ -1160,7 +1225,9 @@ void PluginManager::applyDeclaredResources(
 
 std::string PluginManager::getConfigJson() {
     auto c = agentContext_.lock();
-    if (!c || !c->agentConfig) return {};
+    if (!c || !c->agentConfig) {
+        return {};
+    }
     neograph::json out;
     out["dataDir"]     = c->agentConfig->dataDir;
     out["projectRoot"] = c->agentConfig->workDir;
@@ -1176,37 +1243,51 @@ std::string PluginManager::getConfigJson() {
 
 std::string PluginManager::getToolPromptJson(const std::string& toolName) {
     auto c = agentContext_.lock();
-    if (!c || !c->agentConfig) return {};
+    if (!c || !c->agentConfig) {
+        return {};
+    }
     const auto& prompts = c->agentConfig->prompt.toolPrompt;
     auto        it      = prompts.find(toolName);
-    if (it == prompts.end()) return {};
+    if (it == prompts.end()) {
+        return {};
+    }
     neograph::json out;
-    out["depict"] = it->second.depict;
+    out["depict"]       = it->second.depict;
     neograph::json args = neograph::json::object();
-    for (const auto& [k, v] : it->second.args) args[k] = v;
+    for (const auto& [k, v] : it->second.args) {
+        args[k] = v;
+    }
     out["args"] = std::move(args);
     return out.dump();
 }
 
 std::string PluginManager::getPromptJson() {
     auto c = agentContext_.lock();
-    if (!c || !c->agentConfig) return {};
+    if (!c || !c->agentConfig) {
+        return {};
+    }
     return c->agentConfig->prompt.toJson().dump();
 }
 
 int PluginManager::setPromptJson(PluginInstance* inst, const char* prompt_json) {
-    if (!inst || !prompt_json || !*prompt_json) return -1;
+    if (!inst || !prompt_json || !*prompt_json) {
+        return -1;
+    }
     auto c = agentContext_.lock();
-    if (!c || !c->agentConfig) return -1;
+    if (!c || !c->agentConfig) {
+        return -1;
+    }
     try {
         auto j = neograph::json::parse(prompt_json);
-        if (!j.is_object()) return -1;
+        if (!j.is_object()) {
+            return -1;
+        }
 
         if (!inst->promptBackup.backedUpSystem) {
-            inst->promptBackup.backedUpSystem = true;
-            inst->promptBackup.systemPrompt = c->agentConfig->prompt.systemPrompt;
+            inst->promptBackup.backedUpSystem       = true;
+            inst->promptBackup.systemPrompt         = c->agentConfig->prompt.systemPrompt;
             inst->promptBackup.systemPlanningPrompt = c->agentConfig->prompt.systemPlanningPrompt;
-            inst->promptBackup.systemSkillPrompt = c->agentConfig->prompt.systemSkillPrompt;
+            inst->promptBackup.systemSkillPrompt    = c->agentConfig->prompt.systemSkillPrompt;
         }
 
         if (j.contains("toolPrompt") && j["toolPrompt"].is_object()) {
@@ -1236,16 +1317,20 @@ int PluginManager::setPromptJson(PluginInstance* inst, const char* prompt_json) 
 }
 
 void PluginManager::restorePromptBackup(PluginInstance* inst) {
-    if (!inst) return;
+    if (!inst) {
+        return;
+    }
     auto c = agentContext_.lock();
-    if (!c || !c->agentConfig) return;
+    if (!c || !c->agentConfig) {
+        return;
+    }
     auto& pb = inst->promptBackup;
 
     if (pb.backedUpSystem) {
-        pb.backedUpSystem = false;
-        c->agentConfig->prompt.systemPrompt = pb.systemPrompt.value_or("");
+        pb.backedUpSystem                           = false;
+        c->agentConfig->prompt.systemPrompt         = pb.systemPrompt.value_or("");
         c->agentConfig->prompt.systemPlanningPrompt = pb.systemPlanningPrompt.value_or("");
-        c->agentConfig->prompt.systemSkillPrompt = pb.systemSkillPrompt.value_or("");
+        c->agentConfig->prompt.systemSkillPrompt    = pb.systemSkillPrompt.value_or("");
     }
 
     for (const auto& [toolName, origPrompt] : pb.toolPrompt) {
@@ -1260,19 +1345,25 @@ void PluginManager::restorePromptBackup(PluginInstance* inst) {
 }
 
 std::string PluginManager::getPluginArgsJson(PluginInstance* inst) {
-    if (!inst) return "{}";
+    if (!inst) {
+        return "{}";
+    }
     return inst->args.is_object() ? inst->args.dump() : "{}";
 }
 
 std::string PluginManager::getSessionWorkDir() {
     auto c = agentContext_.lock();
-    if (!c || !c->agentConfig) return {};
+    if (!c || !c->agentConfig) {
+        return {};
+    }
     return c->agentConfig->resolvedWorkDir();
 }
 
 std::string PluginManager::getSessionWorkDir(const std::string& threadId) {
     auto c = agentContext_.lock();
-    if (!c) return {};
+    if (!c) {
+        return {};
+    }
     auto session = c->getSession(threadId);
     if (session && !session->getWorktreeBinding().path.empty()) {
         return session->getWorktreeBinding().path;
@@ -1282,13 +1373,15 @@ std::string PluginManager::getSessionWorkDir(const std::string& threadId) {
 
 std::string PluginManager::getModelConfigJson() {
     auto c = agentContext_.lock();
-    if (!c || !c->agentConfig) return {};
-    const auto& cfg = *c->agentConfig;
+    if (!c || !c->agentConfig) {
+        return {};
+    }
+    const auto&    cfg = *c->agentConfig;
     neograph::json out;
-    out["baseUrl"]                      = cfg.model.baseUrl;
-    out["apiKey"]                       = cfg.model.apiKey;
-    out["modelName"]                    = cfg.model.modelName;
-    out["websearchApiUrl"]              = cfg.websearchApiUrl;
+    out["baseUrl"]                       = cfg.model.baseUrl;
+    out["apiKey"]                        = cfg.model.apiKey;
+    out["modelName"]                     = cfg.model.modelName;
+    out["websearchApiUrl"]               = cfg.websearchApiUrl;
     out["websearchConvertHtml2markdown"] = cfg.websearchConvertHtml2markdown;
     if (cfg.websearchModel) {
         neograph::json wm;
@@ -1306,9 +1399,13 @@ std::string PluginManager::getModelConfigJson() {
 
 bool PluginManager::isSessionCancelled(const std::string& threadId) {
     auto c = agentContext_.lock();
-    if (!c || threadId.empty()) return false;
+    if (!c || threadId.empty()) {
+        return false;
+    }
     auto session = c->getSession(threadId);
-    if (!session || !session->getCancelToken()) return false;
+    if (!session || !session->getCancelToken()) {
+        return false;
+    }
     return session->getCancelToken()->is_cancelled();
 }
 
@@ -1318,21 +1415,30 @@ int PluginManager::setSessionPlanning(
     const std::string& todosJson,
     const std::string& notes
 ) {
-    if (threadId.empty() || roadmap.empty()) return -1;
+    if (threadId.empty() || roadmap.empty()) {
+        return -1;
+    }
     auto ctx = agentContext_.lock();
-    if (!ctx || !ctx->middlewareHandleContext) return -1;
+    if (!ctx || !ctx->middlewareHandleContext) {
+        return -1;
+    }
 
     std::shared_ptr<agentxx::middleware::PlanningMiddlewareHandle> planHandle;
     for (const auto& h : ctx->middlewareHandleContext->handles) {
         if (h && (h->name == "PlanningMiddlewareHandle" || h->name == "planning_middleware")) {
-            planHandle = std::dynamic_pointer_cast<agentxx::middleware::PlanningMiddlewareHandle>(h);
-            if (planHandle) break;
+            planHandle
+                = std::dynamic_pointer_cast<agentxx::middleware::PlanningMiddlewareHandle>(h);
+            if (planHandle) {
+                break;
+            }
         }
     }
     if (!planHandle && ctx->planningMiddleware) {
         planHandle = ctx->planningMiddleware;
     }
-    if (!planHandle) return -1;
+    if (!planHandle) {
+        return -1;
+    }
 
     auto it = planHandle->states.find(threadId);
     std::shared_ptr<agentxx::middleware::PlanningMiddlewareState> state;
@@ -1345,7 +1451,7 @@ int PluginManager::setSessionPlanning(
     }
 
     neograph::json j = neograph::json::object();
-    j["roadmap"] = roadmap;
+    j["roadmap"]     = roadmap;
     if (!todosJson.empty()) {
         try {
             j["todos"] = neograph::json::parse(todosJson);
@@ -1361,20 +1467,36 @@ int PluginManager::setSessionPlanning(
 }
 
 char* PluginManager::getShareStore(PluginInstance* inst, const char* session_id, long long id) {
-    if (!inst || !session_id) return nullptr;
+    if (!inst || !session_id) {
+        return nullptr;
+    }
     auto ctx = agentContext_.lock();
-    if (!ctx || !ctx->middlewareHandleContext) return nullptr;
+    if (!ctx || !ctx->middlewareHandleContext) {
+        return nullptr;
+    }
     auto it = ctx->middlewareHandleContext->shareStore.find(session_id);
-    if (it == ctx->middlewareHandleContext->shareStore.end()) return nullptr;
+    if (it == ctx->middlewareHandleContext->shareStore.end()) {
+        return nullptr;
+    }
     auto itemIt = it->second.store.find(static_cast<size_t>(id));
-    if (itemIt == it->second.store.end()) return nullptr;
+    if (itemIt == it->second.store.end()) {
+        return nullptr;
+    }
     return inst->host.vtable->strdup(itemIt->second.c_str());
 }
 
-long long PluginManager::addShareStore(PluginInstance* inst, const char* session_id, const char* content) {
-    if (!inst || !session_id || !content) return -1;
+long long PluginManager::addShareStore(
+    PluginInstance* inst,
+    const char*     session_id,
+    const char*     content
+) {
+    if (!inst || !session_id || !content) {
+        return -1;
+    }
     auto ctx = agentContext_.lock();
-    if (!ctx || !ctx->middlewareHandleContext) return -1;
+    if (!ctx || !ctx->middlewareHandleContext) {
+        return -1;
+    }
     try {
         size_t id = ctx->middlewareHandleContext->addShareStoreItemValue(session_id, content);
         return static_cast<long long>(id);
@@ -1389,11 +1511,17 @@ void PluginManager::emitMessageTip(
     const char*     text,
     int             level
 ) {
-    if (!inst || !session_id || !text) return;
+    if (!inst || !session_id || !text) {
+        return;
+    }
     auto ctx = agentContext_.lock();
-    if (!ctx) return;
+    if (!ctx) {
+        return;
+    }
     auto session = ctx->getSession(session_id);
-    if (!session || !session->io) return;
+    if (!session || !session->io) {
+        return;
+    }
     agentxx::agent::Delta delta;
     delta.type    = agentxx::agent::Delta::Type::MessageUITip;
     delta.text    = text;

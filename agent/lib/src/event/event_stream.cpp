@@ -96,8 +96,7 @@ void EventBridge::handleLLMToken(const neograph::graph::GraphEvent& event) {
     std::string token;
     std::string kind = "content";
     // 进入前的 chunk 类型: 用于检测 THINKING 流段的进入/离开
-    const bool prevWasThinking
-        = (lastChatChunkType_ == neograph::ChatStreamChunk::TYPE_THINKING);
+    const bool prevWasThinking = (lastChatChunkType_ == neograph::ChatStreamChunk::TYPE_THINKING);
 
     // tps 统计: 新 ModelCall 流开始 (节点开始/结束后的首个 token) 时重置计时与计数
     if (lastChatChunkType_ == neograph::ChatStreamChunk::TYPE_UNKNOWN) {
@@ -128,15 +127,12 @@ void EventBridge::handleLLMToken(const neograph::graph::GraphEvent& event) {
     // - 离开 THINKING (切换到正文): 先结算 think 段耗时 —— 在正文首个 token 的
     //   Delta 之前发送空文本 ThinkToken 结算包, client 收到后为已落盘的 Think
     //   消息回填最终时长 ("输出完成时才计算并显示")
-    const bool curIsThinking
-        = (lastChatChunkType_ == neograph::ChatStreamChunk::TYPE_THINKING);
+    const bool curIsThinking = (lastChatChunkType_ == neograph::ChatStreamChunk::TYPE_THINKING);
     if (!prevWasThinking && curIsThinking) {
         thinkSegActive_  = true;
         thinkSegStart_   = std::chrono::system_clock::now();
         thinkSegStartMs_ = static_cast<int64_t>(
-            std::chrono::duration_cast<std::chrono::milliseconds>(
-                thinkSegStart_.time_since_epoch()
-            )
+            std::chrono::duration_cast<std::chrono::milliseconds>(thinkSegStart_.time_since_epoch())
                 .count()
         );
     } else if (prevWasThinking && !curIsThinking && thinkSegActive_) {
@@ -307,10 +303,10 @@ void EventBridge::handleChannelWrite(const neograph::graph::GraphEvent& event) {
                             .count()
                     );
                     ViewMessage m;
-                    m.role        = ViewMessage::Role::Tool;
-                    m.text        = arguments;
-                    m.collapsed   = true; // 历史重连默认折叠 (与 onDelta 实时展开不同)
-                    m.tool        = ViewMessage::ToolData{};
+                    m.role      = ViewMessage::Role::Tool;
+                    m.text      = arguments;
+                    m.collapsed = true; // 历史重连默认折叠 (与 onDelta 实时展开不同)
+                    m.tool      = ViewMessage::ToolData{};
                     m.tool->toolName   = toolName;
                     m.tool->toolCallId = toolCallId;
                     m.startTimeMs      = startMs;

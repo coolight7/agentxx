@@ -1,13 +1,13 @@
 #include "test_filesystem_tools.h"
-#include <neograph/types.h>
 #include "agentxx/agent/context.h"
+#include <neograph/types.h>
 // 原 lib 内置工具已迁移至 agentxx_filesystem 插件 (同名同行为); 测试直测
 // 插件同一实现 (filesystem_impl.h), 保证插件行为与测试覆盖一致
-#include "filesystem_impl.h"
 #include "agentxx/event/event_stream.h"
 #include "agentxx/middlewares/middleware.h"
 #include "agentxx/plugin/plugin_manager.h"
 #include "agentxx/util/string_util.h"
+#include "filesystem_impl.h"
 #include <chrono>
 #include <cstdio>
 #include <filesystem>
@@ -24,6 +24,7 @@ int g_fs_failed = 0;
 // 断言计数宏覆盖: 将 test_framework.h 的 XX_TEST_EXPECT_* 映射到本模块计数器
 #define XX_TEST_PASSED g_fs_passed
 #define XX_TEST_FAILED g_fs_failed
+
 namespace agentxx {
 namespace tools {
 
@@ -43,51 +44,71 @@ inline std::string testResolvedWorkDir(const std::weak_ptr<agentxx::agent::Agent
 
 /// 测试适配: 原工具类的同名薄包装 (execute_async 直调插件实现;
 /// impl 的取消回调传 nullptr 等价无取消支持, 与原单测语义一致)
-#define AGENTXX_TEST_FS_TOOL(NAME, IMPL_FN, TOOL_NAME, DEPICT)                  \
-    struct NAME {                                                               \
-        std::weak_ptr<agentxx::agent::AgentContext> ctx;                        \
-        explicit NAME(std::weak_ptr<agentxx::agent::AgentContext> c)               \
-            : ctx(std::move(c)) {}                                              \
-        neograph::ChatTool get_definition() const {                              \
-            return {TOOL_NAME, DEPICT, {}};                                     \
-        }                                                                       \
-        asio::awaitable<std::string> execute_async(const neograph::json& args)  \
-            const {                                                             \
-            co_return ::agentxx_fs_plugin::IMPL_FN(                    \
-                args, testResolvedWorkDir(ctx), nullptr);                       \
-        }                                                                       \
+#define AGENTXX_TEST_FS_TOOL(NAME, IMPL_FN, TOOL_NAME, DEPICT)                               \
+    struct NAME {                                                                            \
+        std::weak_ptr<agentxx::agent::AgentContext> ctx;                                     \
+        explicit NAME(std::weak_ptr<agentxx::agent::AgentContext> c) :                       \
+            ctx(std::move(c)) {}                                                             \
+        neograph::ChatTool get_definition() const {                                          \
+            return {TOOL_NAME, DEPICT, {}};                                                  \
+        }                                                                                    \
+        asio::awaitable<std::string> execute_async(const neograph::json& args) const {       \
+            co_return ::agentxx_fs_plugin::IMPL_FN(args, testResolvedWorkDir(ctx), nullptr); \
+        }                                                                                    \
     };
 
 /// 协程版测试适配 (read/write/edit): 直调插件 *ExecuteAsync 协程执行体 ——
 /// 插件运行时经 poll 寄生驱动在实例 PollLoop 上 spawn (asio stream_file 真
 /// 异步文件 I/O), 测试在宿主 io_context 上直接 co_await 同一实现, 覆盖一致
-#define AGENTXX_TEST_FS_TOOL_ASYNC(NAME, IMPL_ASYNC_FN, TOOL_NAME, DEPICT)      \
-    struct NAME {                                                               \
-        std::weak_ptr<agentxx::agent::AgentContext> ctx;                        \
-        explicit NAME(std::weak_ptr<agentxx::agent::AgentContext> c)               \
-            : ctx(std::move(c)) {}                                              \
-        neograph::ChatTool get_definition() const {                              \
-            return {TOOL_NAME, DEPICT, {}};                                     \
-        }                                                                       \
-        asio::awaitable<std::string> execute_async(const neograph::json& args)  \
-            const {                                                             \
-            co_return co_await ::agentxx_fs_plugin::IMPL_ASYNC_FN(              \
-                args, testResolvedWorkDir(ctx));                                \
-        }                                                                       \
+#define AGENTXX_TEST_FS_TOOL_ASYNC(NAME, IMPL_ASYNC_FN, TOOL_NAME, DEPICT)                         \
+    struct NAME {                                                                                  \
+        std::weak_ptr<agentxx::agent::AgentContext> ctx;                                           \
+        explicit NAME(std::weak_ptr<agentxx::agent::AgentContext> c) :                             \
+            ctx(std::move(c)) {}                                                                   \
+        neograph::ChatTool get_definition() const {                                                \
+            return {TOOL_NAME, DEPICT, {}};                                                        \
+        }                                                                                          \
+        asio::awaitable<std::string> execute_async(const neograph::json& args) const {             \
+            co_return co_await ::agentxx_fs_plugin::IMPL_ASYNC_FN(args, testResolvedWorkDir(ctx)); \
+        }                                                                                          \
     };
 
-AGENTXX_TEST_FS_TOOL(FileSystemListTool,      fileListExecute,   "agentxx_filesystem_list",
-                     R"(List files and directories at a given path, output is multi-line text similar to `ls -l`, one entry per line: `type size last-modified-time path`.)")
-AGENTXX_TEST_FS_TOOL_ASYNC(FilesystemReadTextFileTool, fileReadExecuteAsync,  "agentxx_filesystem_read",
-                     R"(Read a text file (e.g. .txt, .md, .json, .log, source code) and return its contents with line numbers.)")
-AGENTXX_TEST_FS_TOOL_ASYNC(FilesystemWriteFileTool, fileWriteExecuteAsync,  "agentxx_filesystem_write",
-                     "Create a new file or overwrite an existing file with the given content.")
-AGENTXX_TEST_FS_TOOL_ASYNC(FilesystemEditTextFileTool, fileEditExecuteAsync,  "agentxx_filesystem_edit",
-                     R"(Perform exact string replacement in a text file (e.g. *.txt, *.md, *.cpp, *.h).)")
-AGENTXX_TEST_FS_TOOL(FilesystemGlobTool,      fileGlobExecute,   "agentxx_filesystem_glob",
-                     "Find files and directories matching glob patterns.")
-AGENTXX_TEST_FS_TOOL(FilesystemGrepTool,      fileGrepExecute,   "agentxx_filesystem_grep",
-                     R"(Search file contents using text or regular expressions.)")
+AGENTXX_TEST_FS_TOOL(
+    FileSystemListTool,
+    fileListExecute,
+    "agentxx_filesystem_list",
+    R"(List files and directories at a given path, output is multi-line text similar to `ls -l`, one entry per line: `type size last-modified-time path`.)"
+)
+AGENTXX_TEST_FS_TOOL_ASYNC(
+    FilesystemReadTextFileTool,
+    fileReadExecuteAsync,
+    "agentxx_filesystem_read",
+    R"(Read a text file (e.g. .txt, .md, .json, .log, source code) and return its contents with line numbers.)"
+)
+AGENTXX_TEST_FS_TOOL_ASYNC(
+    FilesystemWriteFileTool,
+    fileWriteExecuteAsync,
+    "agentxx_filesystem_write",
+    "Create a new file or overwrite an existing file with the given content."
+)
+AGENTXX_TEST_FS_TOOL_ASYNC(
+    FilesystemEditTextFileTool,
+    fileEditExecuteAsync,
+    "agentxx_filesystem_edit",
+    R"(Perform exact string replacement in a text file (e.g. *.txt, *.md, *.cpp, *.h).)"
+)
+AGENTXX_TEST_FS_TOOL(
+    FilesystemGlobTool,
+    fileGlobExecute,
+    "agentxx_filesystem_glob",
+    "Find files and directories matching glob patterns."
+)
+AGENTXX_TEST_FS_TOOL(
+    FilesystemGrepTool,
+    fileGrepExecute,
+    "agentxx_filesystem_grep",
+    R"(Search file contents using text or regular expressions.)"
+)
 
 #undef AGENTXX_TEST_FS_TOOL
 #undef AGENTXX_TEST_FS_TOOL_ASYNC
@@ -285,8 +306,7 @@ asio::awaitable<void>
 /// - 不依赖共享 agentContext: 验证工具以 AgentConfig::resolvedWorkDir 为
 ///   相对路径基准时, 结果与进程 cwd 无关 (嵌入场景单进程多 agent 实例
 ///   各自绑定独立项目目录的核心语义)
-static std::shared_ptr<agentxx::agent::AgentContext>
-    makeWorkDirContext(const std::string& dir) {
+static std::shared_ptr<agentxx::agent::AgentContext> makeWorkDirContext(const std::string& dir) {
     auto ctx                  = std::make_shared<agentxx::agent::AgentContext>();
     ctx->agentConfig          = std::make_shared<agentxx::agent::AgentConfig>();
     ctx->agentConfig->workDir = dir;
@@ -295,12 +315,14 @@ static std::shared_ptr<agentxx::agent::AgentContext>
 
 /// resolvedWorkDir 纯函数校验: workDir 非空原样返回; 为空回退进程 cwd
 asio::awaitable<void> test_resolved_workdir(std::weak_ptr<agentxx::agent::AgentContext>) {
-    auto cfgWith = std::make_shared<agentxx::agent::AgentConfig>();
+    auto cfgWith     = std::make_shared<agentxx::agent::AgentConfig>();
     cfgWith->workDir = "/tmp/proj-a";
     XX_TEST_EXPECT_EQ(cfgWith->resolvedWorkDir(), std::string{"/tmp/proj-a"});
 
     auto cfgEmpty = std::make_shared<agentxx::agent::AgentConfig>();
-    XX_TEST_EXPECT_EQ(cfgEmpty->resolvedWorkDir(), std::filesystem::current_path().generic_string()
+    XX_TEST_EXPECT_EQ(
+        cfgEmpty->resolvedWorkDir(),
+        std::filesystem::current_path().generic_string()
     );
     co_return;
 }
@@ -366,14 +388,14 @@ asio::awaitable<void>
         TEST_PASS << "FileSystemListTool resolves relative path against workDir" << std::endl;
     } else {
         g_fs_failed++;
-        TEST_FAIL << "FileSystemListTool workDir relative path failed, got: " << result << std::endl;
+        TEST_FAIL << "FileSystemListTool workDir relative path failed, got: " << result
+                  << std::endl;
     }
     co_return;
 }
 
 /// 相对路径读取: 以 workDir 为基准找到文件 (workDir ≠ 进程 cwd)
-asio::awaitable<void>
-    test_read_relative_with_workdir(std::weak_ptr<agentxx::agent::AgentContext>) {
+asio::awaitable<void> test_read_relative_with_workdir(std::weak_ptr<agentxx::agent::AgentContext>) {
     auto ctx  = makeWorkDirContext(testDir);
     auto tool = agentxx::tools::FilesystemReadTextFileTool{ctx};
     auto args = neograph::json{
@@ -1226,8 +1248,7 @@ asio::awaitable<void>
     bool noLegacyFormat = result.find("test2.txt:1:") == std::string::npos;
     if (hasFileHeader && hasMatchLine && noLegacyFormat) {
         g_fs_passed++;
-        TEST_PASS << "FilesystemGrepTool content mode returns grouped-by-file format"
-                  << std::endl;
+        TEST_PASS << "FilesystemGrepTool content mode returns grouped-by-file format" << std::endl;
     } else {
         g_fs_failed++;
         TEST_FAIL << "FilesystemGrepTool content mode grouped format incorrect, got: " << result
@@ -1236,25 +1257,24 @@ asio::awaitable<void>
     co_return;
 }
 
-asio::awaitable<void> test_grep_content_grouped_multi_files(
-    std::weak_ptr<agentxx::agent::AgentContext> agentContext
-) {
+asio::awaitable<void>
+    test_grep_content_grouped_multi_files(std::weak_ptr<agentxx::agent::AgentContext> agentContext
+    ) {
     auto tool = agentxx::tools::FilesystemGrepTool{agentContext};
     // 多文件 content 模式: 每个文件应有独立的组头 "{filepath}:",
     // 且每个文件的组头仅出现一次 (减少路径重复), 各文件行归属自己的组头之下
     auto args = neograph::json{
-        {"text_patterns_is_regex", true                                        },
-        {"text_patterns",          neograph::json::array({".*e.*"})            },
+        {"text_patterns_is_regex", true                                       },
+        {"text_patterns",          neograph::json::array({".*e.*"})           },
         {"file_patterns",          neograph::json::array({testDir + "/*.txt"})},
-        {"output_mode",            "content"                                   },
-        {"max_count_per_file",     1                                           },
+        {"output_mode",            "content"                                  },
+        {"max_count_per_file",     1                                          },
     };
     auto result = co_await tool.execute_async(args);
 
     auto countSubstr = [](const std::string& text, std::string_view sub) -> size_t {
         size_t count = 0;
-        for (auto pos = text.find(sub); pos != std::string::npos;
-             pos     = text.find(sub, pos + 1)) {
+        for (auto pos = text.find(sub); pos != std::string::npos; pos = text.find(sub, pos + 1)) {
             ++count;
         }
         return count;
@@ -1265,8 +1285,7 @@ asio::awaitable<void> test_grep_content_grouped_multi_files(
     size_t header2 = countSubstr(result, "test2.txt:\n");
     if (header1 == 1 && header2 == 1) {
         g_fs_passed++;
-        TEST_PASS << "FilesystemGrepTool content mode groups output per file header"
-                  << std::endl;
+        TEST_PASS << "FilesystemGrepTool content mode groups output per file header" << std::endl;
     } else {
         g_fs_failed++;
         TEST_FAIL << "FilesystemGrepTool expected exactly one group header per file "
@@ -1609,7 +1628,7 @@ asio::awaitable<void> test_grep_mem_stress(std::weak_ptr<agentxx::agent::AgentCo
 ///      2) 非 ASCII 字面模式直接匹配该目录下的文件
 asio::awaitable<void>
     test_glob_unicode_paths(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
-    namespace fs = std::filesystem;
+    namespace fs    = std::filesystem;
     auto unicodeDir = testDir + "/utf8_glob_ßµ™∃";
     fs::create_directories(agentxx::util::utf8ToPath(unicodeDir));
     {
@@ -1622,17 +1641,17 @@ asio::awaitable<void>
     // 1) 递归 glob: 应能遍历该目录且路径中包含 UTF-8 字符 (不抛异常)
     auto argsRec = neograph::json{
         {"file_patterns", neograph::json::array({testDir + "/**/*"})},
-        {"limit",         0                                           },
+        {"limit",         0                                         },
     };
-    auto resRec = co_await tool.execute_async(argsRec);
-    bool hasFile = resRec.find("sample.txt") != std::string::npos;
+    auto resRec        = co_await tool.execute_async(argsRec);
+    bool hasFile       = resRec.find("sample.txt") != std::string::npos;
     bool hasUnicodeDir = resRec.find("utf8_glob_ßµ™∃") != std::string::npos;
 
     // 2) 直接用含非 ASCII 字符的 pattern 匹配
     auto argsDirect = neograph::json{
         {"file_patterns", neograph::json::array({unicodeDir + "/*.txt"})},
     };
-    auto resDirect = co_await tool.execute_async(argsDirect);
+    auto resDirect      = co_await tool.execute_async(argsDirect);
     bool hasDirectMatch = resDirect.find("sample.txt") != std::string::npos;
 
     fs::remove_all(agentxx::util::utf8ToPath(unicodeDir));
@@ -1652,7 +1671,7 @@ asio::awaitable<void>
 /// 验证 MSVC 下 fs::path 窄化不会抛 ERROR_NO_UNICODE_TRANSLATION
 asio::awaitable<void>
     test_grep_unicode_path_and_content(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
-    namespace fs = std::filesystem;
+    namespace fs    = std::filesystem;
     auto unicodeDir = testDir + "/utf8_grep_ßµ™∃";
     fs::create_directories(agentxx::util::utf8ToPath(unicodeDir));
     {
@@ -1662,12 +1681,12 @@ asio::awaitable<void>
 
     auto tool = agentxx::tools::FilesystemGrepTool{agentContext};
     auto args = neograph::json{
-        {"text_patterns_is_regex", false                                               },
+        {"text_patterns_is_regex", false                                                },
         {"text_patterns",          neograph::json::array({"match_token_in_unicode_dir"})},
-        {"file_patterns",          neograph::json::array({testDir + "/**/*"})          },
-        {"output_mode",            "files_with_matches"                                },
+        {"file_patterns",          neograph::json::array({testDir + "/**/*"})           },
+        {"output_mode",            "files_with_matches"                                 },
     };
-    auto result = co_await tool.execute_async(args);
+    auto result   = co_await tool.execute_async(args);
     bool hasMatch = result.find("target.txt") != std::string::npos
                     && result.find("[Error]") == std::string::npos;
 
@@ -1675,7 +1694,8 @@ asio::awaitable<void>
 
     if (hasMatch) {
         g_fs_passed++;
-        TEST_PASS << "FilesystemGrepTool searches inside Unicode/non-GBK directory paths" << std::endl;
+        TEST_PASS << "FilesystemGrepTool searches inside Unicode/non-GBK directory paths"
+                  << std::endl;
     } else {
         g_fs_failed++;
         TEST_FAIL << "FilesystemGrepTool Unicode search failed, got: " << result << std::endl;
@@ -1686,24 +1706,28 @@ asio::awaitable<void>
 /// 回归测试: grep 多 pattern 场景下单 pattern 失败/无匹配被 catchError 隔离,
 /// 其余有效 pattern 仍能正常命中
 asio::awaitable<void>
-    test_grep_multi_pattern_fault_tolerance(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+    test_grep_multi_pattern_fault_tolerance(std::weak_ptr<agentxx::agent::AgentContext> agentContext
+    ) {
     auto tool = agentxx::tools::FilesystemGrepTool{agentContext};
     // 传入两个 pattern: 一个是指向不存在目录的 pattern, 另一个是指向有效文件的 pattern
     auto args = neograph::json{
-        {"text_patterns_is_regex", false                                                    },
-        {"text_patterns",          neograph::json::array({"hello world"})                   },
-        {"file_patterns",          neograph::json::array({testDir + "/no_such_sub_dir/**/*.txt",
-                                                          testDir + "/test2.txt"})          },
-        {"output_mode",            "files_with_matches"                                     },
+        {"text_patterns_is_regex", false                                                       },
+        {"text_patterns",          neograph::json::array({"hello world"})                      },
+        {"file_patterns",
+         neograph::json::array({testDir + "/no_such_sub_dir/**/*.txt", testDir + "/test2.txt"})},
+        {"output_mode",            "files_with_matches"                                        },
     };
     auto result = co_await tool.execute_async(args);
     // 有效 pattern (test2.txt) 应正常命中并返回, 不应因前一个 pattern 为空或报错而整体失败
-    if (result.find("test2.txt") != std::string::npos && result.find("[Error]") == std::string::npos) {
+    if (result.find("test2.txt") != std::string::npos
+        && result.find("[Error]") == std::string::npos) {
         g_fs_passed++;
-        TEST_PASS << "FilesystemGrepTool multi-pattern fault tolerance (catchError) works" << std::endl;
+        TEST_PASS << "FilesystemGrepTool multi-pattern fault tolerance (catchError) works"
+                  << std::endl;
     } else {
         g_fs_failed++;
-        TEST_FAIL << "FilesystemGrepTool multi-pattern fault tolerance failed, got: " << result << std::endl;
+        TEST_FAIL << "FilesystemGrepTool multi-pattern fault tolerance failed, got: " << result
+                  << std::endl;
     }
     co_return;
 }
@@ -1719,8 +1743,8 @@ asio::awaitable<void> test_plugin_real_link() {
     namespace fs = std::filesystem;
 
     // 定位插件库目录 (与 test_plugins 同模式: exe 同目录优先, cwd 回退)
-    std::error_code             ec;
-    std::vector<fs::path>       candidates;
+    std::error_code       ec;
+    std::vector<fs::path> candidates;
     if (auto p = fs::read_symlink("/proc/self/exe", ec); !ec) {
         candidates.push_back(p.parent_path() / "plugins" / "agentxx_filesystem");
     }
@@ -1751,9 +1775,9 @@ asio::awaitable<void> test_plugin_real_link() {
     }
 
     // 构造最小 AgentContext (io 线程环境, 与 test_plugins/库内无锁模型一致)
-    auto linkCtx                 = std::make_shared<agentxx::agent::AgentContext>();
-    linkCtx->agentConfig         = std::make_shared<agentxx::agent::AgentConfig>();
-    linkCtx->agentConfig->workDir = testDir; ///< 相对路径基准经宿主接口注入
+    auto linkCtx                     = std::make_shared<agentxx::agent::AgentContext>();
+    linkCtx->agentConfig             = std::make_shared<agentxx::agent::AgentConfig>();
+    linkCtx->agentConfig->workDir    = testDir; ///< 相对路径基准经宿主接口注入
     linkCtx->middlewareHandleContext = std::make_shared<agentxx::middleware::MiddlewareContext>();
     linkCtx->bus = std::make_shared<agentxx::event::EventBus>(co_await asio::this_coro::executor);
     linkCtx->toolRegistry  = std::make_shared<agentxx::plugin::ToolRegistry>();
@@ -1781,55 +1805,78 @@ asio::awaitable<void> test_plugin_real_link() {
 
     // 经 ToolRegistry 全链路执行 (op_driver 驱动插件三件套); sessionId 注入
     // thread_id → 会话工作目录解析链路
-    auto callTool = [&](const char* name,
-                        const neograph::json& args) -> asio::awaitable<std::string> {
+    auto callTool
+        = [&](const char* name, const neograph::json& args) -> asio::awaitable<std::string> {
         auto tool = linkCtx->toolRegistry->find(name);
         if (!tool) {
             co_return "[Error] tool not found";
         }
-        auto merged = args;
+        auto merged         = args;
         merged["sessionId"] = "t_fs_link";
         co_return co_await tool->execute_async(merged);
     };
 
     // write (polled): 相对路径以宿主 workDir 为基准创建文件
     {
-        auto out = co_await callTool("agentxx_filesystem_write",
-                                     neograph::json{{"path", "link_smoke.txt"},
-                                                    {"content", "alpha\nbeta\n"}});
+        auto out = co_await callTool(
+            "agentxx_filesystem_write",
+            neograph::json{
+                {"path",    "link_smoke.txt"},
+                {"content", "alpha\nbeta\n" }
+        }
+        );
         XX_TEST_EXPECT_EQ(out, std::string{"success"});
         XX_TEST_EXPECT_TRUE(fs::exists(testDir + "/link_smoke.txt"));
     }
 
     // read (polled): 完整读取 + offset/limit 分段
     {
-        auto out = co_await callTool("agentxx_filesystem_read",
-                                     neograph::json{{"path", "link_smoke.txt"}});
-        XX_TEST_EXPECT_TRUE(out.find("alpha") != std::string::npos
-                            && out.find("beta") != std::string::npos);
+        auto out = co_await callTool(
+            "agentxx_filesystem_read",
+            neograph::json{
+                {"path", "link_smoke.txt"}
+        }
+        );
+        XX_TEST_EXPECT_TRUE(
+            out.find("alpha") != std::string::npos && out.find("beta") != std::string::npos
+        );
         auto part = co_await callTool(
             "agentxx_filesystem_read",
-            neograph::json{{"path", "link_smoke.txt"}, {"line_offset", 1}, {"line_limit", 1}}
+            neograph::json{
+                {"path",        "link_smoke.txt"},
+                {"line_offset", 1               },
+                {"line_limit",  1               }
+        }
         );
-        XX_TEST_EXPECT_TRUE(part.find("beta") != std::string::npos
-                            && part.find("alpha") == std::string::npos);
+        XX_TEST_EXPECT_TRUE(
+            part.find("beta") != std::string::npos && part.find("alpha") == std::string::npos
+        );
     }
 
     // edit (polled): 替换并落盘
     {
         auto out = co_await callTool(
             "agentxx_filesystem_edit",
-            neograph::json{{"path", "link_smoke.txt"}, {"old_str", "beta"}, {"new_str", "gamma"}}
+            neograph::json{
+                {"path",    "link_smoke.txt"},
+                {"old_str", "beta"          },
+                {"new_str", "gamma"         }
+        }
         );
         XX_TEST_EXPECT_EQ(out, std::string{"success"});
         std::ifstream in(testDir + "/link_smoke.txt");
-        std::string   content((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        std::string content((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
         XX_TEST_EXPECT_EQ(content, std::string{"alpha\ngamma\n"});
     }
 
     // list (sync 垫片/offload): 列出目录内容
     {
-        auto out = co_await callTool("agentxx_filesystem_list", neograph::json{{"path", "."}});
+        auto out = co_await callTool(
+            "agentxx_filesystem_list",
+            neograph::json{
+                {"path", "."}
+        }
+        );
         XX_TEST_EXPECT_TRUE(out.find("link_smoke.txt") != std::string::npos);
     }
 
@@ -1837,10 +1884,12 @@ asio::awaitable<void> test_plugin_real_link() {
     {
         auto out = co_await callTool(
             "agentxx_filesystem_grep",
-            neograph::json{{"text_patterns_is_regex", false                           },
-                           {"text_patterns",          neograph::json::array({"gamma"})},
-                           {"file_patterns",          neograph::json::array({"*.txt"})},
-                           {"output_mode",            "files_with_matches"            }}
+            neograph::json{
+                {"text_patterns_is_regex", false                           },
+                {"text_patterns",          neograph::json::array({"gamma"})},
+                {"file_patterns",          neograph::json::array({"*.txt"})},
+                {"output_mode",            "files_with_matches"            }
+        }
         );
         XX_TEST_EXPECT_TRUE(out.find("link_smoke.txt") != std::string::npos);
     }

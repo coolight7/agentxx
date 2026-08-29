@@ -48,7 +48,7 @@ struct TextSelectionHolder {
 };
 
 struct PluginCtx : public agentxx::kit::PluginBase {
-    TextSelectionHolder holder;
+    TextSelectionHolder                                  holder;
     agentxx_text_selection_monitor_plugin::PluginLogSink log_sink;
 };
 
@@ -80,32 +80,34 @@ bool TextSelectionHolder::start(int debounceMs) {
     if (debounceMs > 0) {
         monitor_.setDebounceMs(debounceMs);
     }
-    monitor_.addListener([ctx = this->ctx](const agentxx_text_selection_monitor_plugin::TextSelectionEvent& evt) {
-        try {
-            if (!ctx || !ctx->host || !ctx->iface.events || !ctx->iface.events->publish) {
-                return;
-            }
-            auto tsMs = std::chrono::duration_cast<std::chrono::milliseconds>(
-                            evt.timestamp.time_since_epoch()
-            )
-                            .count();
-            std::string payload = fmt::format(
-                R"({{"text":{},"source":{},"timestamp_ms":{}}})",
-                jsonEscape(*ctx, evt.text),
-                jsonEscape(*ctx, sourceName(evt.source)),
-                tsMs
-            );
-            ctx->iface.events->publish(
-                ctx->host,
-                AGENTXX_SV("agentxx_text_selection_monitor.selection"),
-                agentxx_plugin_sv(payload.data(), payload.size())
-            );
-        } catch (...) {
-            if (ctx) {
-                ctx->log.error("selection event publish failed");
+    monitor_.addListener(
+        [ctx = this->ctx](const agentxx_text_selection_monitor_plugin::TextSelectionEvent& evt) {
+            try {
+                if (!ctx || !ctx->host || !ctx->iface.events || !ctx->iface.events->publish) {
+                    return;
+                }
+                auto tsMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                evt.timestamp.time_since_epoch()
+                )
+                                .count();
+                std::string payload = fmt::format(
+                    R"({{"text":{},"source":{},"timestamp_ms":{}}})",
+                    jsonEscape(*ctx, evt.text),
+                    jsonEscape(*ctx, sourceName(evt.source)),
+                    tsMs
+                );
+                ctx->iface.events->publish(
+                    ctx->host,
+                    AGENTXX_SV("agentxx_text_selection_monitor.selection"),
+                    agentxx_plugin_sv(payload.data(), payload.size())
+                );
+            } catch (...) {
+                if (ctx) {
+                    ctx->log.error("selection event publish failed");
+                }
             }
         }
-    });
+    );
     return monitor_.start();
 }
 
@@ -130,33 +132,38 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
     agentxx_plugin_create(const AgentxxHost* host, void** plugin_ctx) {
     PluginCtx* raw = nullptr;
     return agentxx::plugin_guard::guardCall(
-        [&raw](const char* msg) noexcept { ctxGuardLogger(raw)(msg); },
+        [&raw](const char* msg) noexcept {
+            ctxGuardLogger(raw)(msg);
+        },
         -1,
         [&]() -> int {
-        if (!host || !host->vtable || !plugin_ctx) {
-            return -1;
-        }
-        auto ctx         = std::make_unique<PluginCtx>();
-        ctx->init(host);
-        ctx->holder.ctx  = ctx.get();
-        raw              = ctx.get();
-
-        ctx->log_sink = [raw = ctx.get()](int level, const std::string& msg) {
-            if (raw) {
-                raw->log.log(level, msg);
+            if (!host || !host->vtable || !plugin_ctx) {
+                return -1;
             }
-        };
-        agentxx_text_selection_monitor_plugin::g_log_sink.store(&ctx->log_sink, std::memory_order_release);
+            auto ctx = std::make_unique<PluginCtx>();
+            ctx->init(host);
+            ctx->holder.ctx = ctx.get();
+            raw             = ctx.get();
 
-        if (!ctx->iface.tools || !ctx->iface.tools->register_tool) {
-            return -1;
-        }
+            ctx->log_sink = [raw = ctx.get()](int level, const std::string& msg) {
+                if (raw) {
+                    raw->log.log(level, msg);
+                }
+            };
+            agentxx_text_selection_monitor_plugin::g_log_sink.store(
+                &ctx->log_sink,
+                std::memory_order_release
+            );
 
-        agentxx::kit::blocking_tool(
-            *ctx,
-            "agentxx_text_selection_monitor",
-            "Monitor system-wide text selection events. Supports start, stop, and status query.",
-            R"({
+            if (!ctx->iface.tools || !ctx->iface.tools->register_tool) {
+                return -1;
+            }
+
+            agentxx::kit::blocking_tool(
+                *ctx,
+                "agentxx_text_selection_monitor",
+                "Monitor system-wide text selection events. Supports start, stop, and status query.",
+                R"({
   "type": "object",
   "properties": {
     "command": {
@@ -171,42 +178,49 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
   },
   "required": ["command"]
 })",
-            [](PluginCtx& c, std::string_view args_json) -> std::string {
-                std::string argsStr(args_json.data() ? args_json.data() : "{}", args_json.size());
-                SimpleJson  args(argsStr.empty() ? "{}" : argsStr);
-                if (!args.ok()) {
-                    throw std::runtime_error("invalid args json");
+                [](PluginCtx& c, std::string_view args_json) -> std::string {
+                    std::string argsStr(
+                        args_json.data() ? args_json.data() : "{}",
+                        args_json.size()
+                    );
+                    SimpleJson args(argsStr.empty() ? "{}" : argsStr);
+                    if (!args.ok()) {
+                        throw std::runtime_error("invalid args json");
+                    }
+
+                    std::string command;
+                    jsonGetString(args.doc().at_pointer("/command"), command);
+
+                    TextSelectionHolder& holder = c.holder;
+
+                    if (command == "start") {
+                        int64_t debounceMs = 0;
+                        jsonGetInt(args.doc().at_pointer("/debounce_ms"), debounceMs);
+                        bool ok = holder.start(static_cast<int>(debounceMs));
+                        return fmt::format(R"({{"ok":{},"running":true}})", ok ? "true" : "false");
+                    }
+
+                    if (command == "stop") {
+                        holder.stop();
+                        return R"({"ok":true,"running":false})";
+                    }
+
+                    if (command == "status") {
+                        bool running = holder.monitor_.isRunning();
+                        return fmt::format(
+                            R"({{"ok":true,"running":{}}})",
+                            running ? "true" : "false"
+                        );
+                    }
+
+                    return R"({"ok":false,"error":"unknown command"})";
                 }
+            );
 
-                std::string command;
-                jsonGetString(args.doc().at_pointer("/command"), command);
-
-                TextSelectionHolder& holder = c.holder;
-
-                if (command == "start") {
-                    int64_t debounceMs = 0;
-                    jsonGetInt(args.doc().at_pointer("/debounce_ms"), debounceMs);
-                    bool ok = holder.start(static_cast<int>(debounceMs));
-                    return fmt::format(R"({{"ok":{},"running":true}})", ok ? "true" : "false");
-                }
-
-                if (command == "stop") {
-                    holder.stop();
-                    return R"({"ok":true,"running":false})";
-                }
-
-                if (command == "status") {
-                    bool running = holder.monitor_.isRunning();
-                    return fmt::format(R"({{"ok":true,"running":{}}})", running ? "true" : "false");
-                }
-
-                return R"({"ok":false,"error":"unknown command"})";
-            }
-        );
-
-        *plugin_ctx = ctx.release();
-        return 0;
-    });
+            *plugin_ctx = ctx.release();
+            return 0;
+        }
+    );
 }
 
 extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_destroy(void* plugin_ctx) {

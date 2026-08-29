@@ -5,13 +5,16 @@ using namespace ftxui;
 
 SpinnerComponent::SpinnerComponent(Config config) :
     config_(std::move(config)),
-    frames_(config_.frames.empty()
-                ? std::vector<std::string>(kDefaultFrames.begin(), kDefaultFrames.end())
-                : std::move(config_.frames)) {
+    frames_(
+        config_.frames.empty()
+            ? std::vector<std::string>(kDefaultFrames.begin(), kDefaultFrames.end())
+            : std::move(config_.frames)
+    ) {
     // 帧间隔下限保护: 非正值视为每次动画回调推进一帧 (实际仍受 FTXUI 帧率上限约束)
-    interval_ = config_.frameInterval > std::chrono::milliseconds(0)
-                    ? std::chrono::duration_cast<std::chrono::duration<float>>(config_.frameInterval)
-                    : std::chrono::duration<float>(0.f);
+    interval_
+        = config_.frameInterval > std::chrono::milliseconds(0)
+              ? std::chrono::duration_cast<std::chrono::duration<float>>(config_.frameInterval)
+              : std::chrono::duration<float>(0.f);
 }
 
 bool SpinnerComponent::running() const {
@@ -29,8 +32,8 @@ Element SpinnerComponent::OnRender() {
         // 运行中且允许动画: 首次渲染 (或循环终止后的重启) 时启动帧循环;
         // 即使此前 RequestAnimationFrame 被丢弃 (如屏幕尚未启动), 渲染仍会重新发起
         if (!animating_) {
-            elapsed_    = {};
-            animating_  = true;
+            elapsed_   = {};
+            animating_ = true;
             animation::RequestAnimationFrame();
         }
     } else {
@@ -43,8 +46,8 @@ Element SpinnerComponent::OnRender() {
         }
     }
 
-    const size_t idx = frameIndex_ % frames_.size();
-    Element element  = text(frames_[idx]);
+    const size_t idx     = frameIndex_ % frames_.size();
+    Element      element = text(frames_[idx]);
     if (config_.decorate) {
         element = config_.decorate(std::move(element));
     }
@@ -65,8 +68,8 @@ void SpinnerComponent::OnAnimation(animation::Params& params) {
     if (interval_.count() > 0.f) {
         int guard = static_cast<int>(1.f / interval_.count()) + 1;
         while (elapsed_ >= interval_ && guard-- > 0) {
-            elapsed_ -= interval_;
-            frameIndex_ = (frameIndex_ + 1) % frames_.size();
+            elapsed_    -= interval_;
+            frameIndex_  = (frameIndex_ + 1) % frames_.size();
         }
         if (guard <= 0) {
             elapsed_ = {};
@@ -86,7 +89,7 @@ void SpinnerComponent::setRunning(bool runningState) {
     if (runningState == running_) {
         return;
     }
-    running_   = runningState;
+    running_    = runningState;
     frameIndex_ = 0;
     elapsed_    = {};
 }

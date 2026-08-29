@@ -30,6 +30,7 @@ int g_tui_tool_header_failed = 0;
 // 断言计数宏覆盖: 将 test_framework.h 的 XX_TEST_EXPECT_* 映射到本模块计数器
 #define XX_TEST_PASSED g_tui_tool_header_passed
 #define XX_TEST_FAILED g_tui_tool_header_failed
+
 namespace agentxx {
 namespace test {
 
@@ -105,13 +106,13 @@ struct ToolHeaderFixture {
     /// 语义层装饰; toolCallId 与 pushTool 的 "call_1" 对应)
     void pushDecor() {
         sharedState.mutate([&](TUIRenderState& st) {
-            auto reg     = std::make_shared<agentxx::plugin::ClientUiRegistry>();
-            auto& d      = reg->toolDecors.emplace_back();
-            d.plugin     = "agentxx_planning";
-            d.toolCallId = "call_1";
-            d.displayName = "Plan";
-            d.summary    = "[~] reproduce issue; [ ] fix root cause; [#] write tests";
-            d.items      = neograph::json::parse(R"([
+            auto  reg         = std::make_shared<agentxx::plugin::ClientUiRegistry>();
+            auto& d           = reg->toolDecors.emplace_back();
+            d.plugin          = "agentxx_planning";
+            d.toolCallId      = "call_1";
+            d.displayName     = "Plan";
+            d.summary         = "[~] reproduce issue; [ ] fix root cause; [#] write tests";
+            d.items           = neograph::json::parse(R"([
                 {"kind":"text","role":"title","text":"State Diagram:"},
                 {"kind":"diagram","mermaid":"stateDiagram-v2\n[*] --> phase1\nphase1 --> [*]"},
                 {"kind":"text","role":"title","text":"Todos:"},
@@ -357,7 +358,9 @@ void testTuiToolHeaderDecor() {
     f2.pushDecor();
     std::string expanded = f2.render();
     XX_TEST_EXPECT_TRUE(expanded.find("- [Tool] Plan") != std::string::npos);
-    XX_TEST_EXPECT_TRUE(expanded.find("agentxx_planning") == std::string::npos); ///< 无原始工具名特化
+    XX_TEST_EXPECT_TRUE(
+        expanded.find("agentxx_planning") == std::string::npos
+    ); ///< 无原始工具名特化
     XX_TEST_EXPECT_TRUE(expanded.find("State Diagram:") != std::string::npos);
     XX_TEST_EXPECT_TRUE(expanded.find("Todos:") != std::string::npos);
     XX_TEST_EXPECT_TRUE(expanded.find("[~] do task A") != std::string::npos);
@@ -377,7 +380,9 @@ void testTuiToolHeaderDecor() {
     );
     f3.pushDecor();
     std::string errBody = f3.plainRender();
-    XX_TEST_EXPECT_TRUE(errBody.find("[Error] No saved planning in this session.") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(
+        errBody.find("[Error] No saved planning in this session.") != std::string::npos
+    );
 }
 
 // 执行失败工具折叠与展开渲染:
@@ -394,7 +399,9 @@ void testTuiToolHeaderFailed() {
         true,
         "[Error] Path not exist"
     );
-    XX_TEST_EXPECT_TRUE(fRead.plainRender().find("Read · [Error] Path not exist") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(
+        fRead.plainRender().find("Read · [Error] Path not exist") != std::string::npos
+    );
     // 样式断言: 异常结果包含 errorColor 颜色代码 (255;85;85)
     XX_TEST_EXPECT_TRUE(fRead.render().find("255;85;85") != std::string::npos);
 
@@ -407,7 +414,9 @@ void testTuiToolHeaderFailed() {
         true,
         "[Error] Arg old_str is empty"
     );
-    XX_TEST_EXPECT_TRUE(fEdit.plainRender().find("Edit · [Error] Arg old_str is empty") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(
+        fEdit.plainRender().find("Edit · [Error] Arg old_str is empty") != std::string::npos
+    );
     XX_TEST_EXPECT_TRUE(fEdit.render().find("255;85;85") != std::string::npos);
 
     // 已知工具 (Bash) 执行失败折叠展示
@@ -434,21 +443,18 @@ void testTuiToolHeaderFailed() {
         "[Exception aborted: connection timeout]"
     );
     XX_TEST_EXPECT_TRUE(
-        fExcept.plainRender().find("Fetch · [Exception aborted: connection timeout]") != std::string::npos
+        fExcept.plainRender().find("Fetch · [Exception aborted: connection timeout]")
+        != std::string::npos
     );
     XX_TEST_EXPECT_TRUE(fExcept.render().find("255;85;85") != std::string::npos);
 
     // 未知工具执行失败折叠展示: 保持原始 toolName + 异常结果
     ToolHeaderFixture fUnknown;
-    fUnknown.pushTool(
-        "custom_plugin_tool",
-        R"({"foo":"bar"})",
-        true,
-        true,
-        "[Error] Custom failure"
-    );
+    fUnknown
+        .pushTool("custom_plugin_tool", R"({"foo":"bar"})", true, true, "[Error] Custom failure");
     XX_TEST_EXPECT_TRUE(
-        fUnknown.plainRender().find("custom_plugin_tool · [Error] Custom failure") != std::string::npos
+        fUnknown.plainRender().find("custom_plugin_tool · [Error] Custom failure")
+        != std::string::npos
     );
     XX_TEST_EXPECT_TRUE(fUnknown.render().find("255;85;85") != std::string::npos);
 
@@ -550,9 +556,7 @@ void testTuiToolHeaderDuration() {
     XX_TEST_EXPECT_TRUE(
         f5.plainRender().find("[Tool] agentxx_filesystem_read") != std::string::npos
     );
-    XX_TEST_EXPECT_TRUE(
-        f5.plainRender().find("0.0s") == std::string::npos
-    );
+    XX_TEST_EXPECT_TRUE(f5.plainRender().find("0.0s") == std::string::npos);
 
     // 6. 已完成但耗时为 0 的工具展开, 不显示耗时 (无 0.0s)
     ToolHeaderFixture f6;
@@ -567,34 +571,22 @@ void testTuiToolHeaderDuration() {
     XX_TEST_EXPECT_TRUE(
         f6.plainRender().find("- [Tool] agentxx_filesystem_read") != std::string::npos
     );
-    XX_TEST_EXPECT_TRUE(
-        f6.plainRender().find("0.0s") == std::string::npos
-    );
+    XX_TEST_EXPECT_TRUE(f6.plainRender().find("0.0s") == std::string::npos);
 
     // 7. Think 消息: 耗时 > 0 时显示耗时, 耗时为 0 时不显示
     ToolHeaderFixture f7;
     f7.pushThinking("thinking content 1", false, 1500); // 展开, 1.5s
-    XX_TEST_EXPECT_TRUE(
-        f7.plainRender().find("- [Think] 1.5s") != std::string::npos
-    );
+    XX_TEST_EXPECT_TRUE(f7.plainRender().find("- [Think] 1.5s") != std::string::npos);
 
     ToolHeaderFixture f8;
     f8.pushThinking("thinking content 2", false, 0); // 展开, 耗时 0
-    XX_TEST_EXPECT_TRUE(
-        f8.plainRender().find("- [Think] ") != std::string::npos
-    );
-    XX_TEST_EXPECT_TRUE(
-        f8.plainRender().find("0.0s") == std::string::npos
-    );
+    XX_TEST_EXPECT_TRUE(f8.plainRender().find("- [Think] ") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(f8.plainRender().find("0.0s") == std::string::npos);
 
     ToolHeaderFixture f9;
     f9.pushThinking("thinking content 3", true, 0); // 折叠, 耗时 0
-    XX_TEST_EXPECT_TRUE(
-        f9.plainRender().find("+ [Think] ") != std::string::npos
-    );
-    XX_TEST_EXPECT_TRUE(
-        f9.plainRender().find("0.0s") == std::string::npos
-    );
+    XX_TEST_EXPECT_TRUE(f9.plainRender().find("+ [Think] ") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(f9.plainRender().find("0.0s") == std::string::npos);
 }
 
 TestResult testTuiToolHeader() {

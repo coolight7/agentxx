@@ -26,6 +26,7 @@ int g_sp_failed = 0;
 // 断言计数宏覆盖: 将 test_framework.h 的 XX_TEST_EXPECT_* 映射到本模块计数器
 #define XX_TEST_PASSED g_sp_passed
 #define XX_TEST_FAILED g_sp_failed
+
 namespace agentxx {
 namespace test {
 
@@ -450,8 +451,8 @@ static TestResult testSessionStoreIntegration() {
 // ---------------------------------------------------------------------------
 
 static TestResult testPersistThrottle() {
-    using agentxx::agent::SessionStore;
     using agentxx::agent::SessionsManager;
+    using agentxx::agent::SessionStore;
     using V = agentxx::agent::ViewMessage;
 
     auto root = makeTempRoot();
@@ -472,7 +473,7 @@ static TestResult testPersistThrottle() {
         s1->appendViewMessage(V::makeText(V::Role::User, "u2"));
         {
             SessionStore probe(root);
-            auto loaded = probe.loadSession("throttle");
+            auto         loaded = probe.loadSession("throttle");
             XX_TEST_EXPECT_EQ(loaded.viewMessages.size(), size_t{1});
             // msgIdCounter 与已落库条数一致 (兜底恢复语义)
             XX_TEST_EXPECT_EQ(loaded.msgIdCounter, uint64_t{1});
@@ -492,9 +493,9 @@ static TestResult testPersistThrottle() {
         // ---- 第二次结算 (窗口内): 内存增长, 未落盘 ----
         s1->appendSettledLlmMessages(neograph::json::array({
             neograph::json{
-                {"role",    "assistant"},
-                {"content", "a1"       },
-            },
+                           {"role", "assistant"},
+                           {"content", "a1"},
+                           },
         }));
         XX_TEST_EXPECT_EQ(s1->llmMessages.size(), size_t{2});
         {
@@ -506,7 +507,7 @@ static TestResult testPersistThrottle() {
         s1->saveLlmMessages();
         {
             SessionStore probe(root);
-            auto loaded = probe.loadSession("throttle");
+            auto         loaded = probe.loadSession("throttle");
             XX_TEST_EXPECT_EQ(loaded.viewMessages.size(), size_t{3});
             XX_TEST_EXPECT_EQ(loaded.viewMessages[1].text, std::string{"a1"});
             XX_TEST_EXPECT_EQ(loaded.viewMessages[2].text, std::string{"u2"});
@@ -698,7 +699,7 @@ static TestResult testSessionListPagination() {
                 break;
             }
             const auto& last = cursor.sessions.back();
-            cursor            = store.listSessionsPage(last.lastActiveMs, last.sessionId, 3);
+            cursor           = store.listSessionsPage(last.lastActiveMs, last.sessionId, 3);
         }
         XX_TEST_EXPECT_EQ(seen.size(), size_t{7});
         if (seen.size() == 7) {
@@ -730,7 +731,9 @@ static TestResult testSessionListPagination() {
             XX_TEST_EXPECT_EQ(phalf.sessions[3].sessionId, std::string{"t5"});
             XX_TEST_EXPECT_TRUE(phalf.hasMore);
             auto ptail = store.listSessionsPage(
-                phalf.sessions.back().lastActiveMs, phalf.sessions.back().sessionId, 4
+                phalf.sessions.back().lastActiveMs,
+                phalf.sessions.back().sessionId,
+                4
             );
             XX_TEST_EXPECT_FALSE(ptail.hasMore);
             if (ptail.sessions.size() == 3) {

@@ -12,12 +12,12 @@
 #include "agentxx/util/exception.h"
 #include "agentxx/util/log.h"
 
+#include <algorithm>
 #include <asio/co_spawn.hpp>
 #include <asio/detached.hpp>
 #include <asio/this_coro.hpp>
-#include <fmt/format.h>
-#include <algorithm>
 #include <filesystem>
+#include <fmt/format.h>
 
 namespace agentxx {
 namespace agent {
@@ -48,7 +48,7 @@ std::string AgentResourceApplier::normalizePath(std::string_view p) {
         return {};
     }
     std::error_code ec;
-    auto abs = fs::absolute(fs::path(p), ec);
+    auto            abs = fs::absolute(fs::path(p), ec);
     if (ec) {
         return std::string{p};
     }
@@ -116,7 +116,8 @@ bool AgentResourceApplier::addSkillDirImpl(
         }
         if (std::find(rec.applied.skillDirs.begin(), rec.applied.skillDirs.end(), normPath)
             != rec.applied.skillDirs.end()) {
-            errOut = fmt::format("skill dir `{}` already owned by plugin `{}`", normPath, otherOwner);
+            errOut
+                = fmt::format("skill dir `{}` already owned by plugin `{}`", normPath, otherOwner);
             XX_LOGW("[Resources] Plugin `{}` {}: skipped", owner, errOut);
             return false;
         }
@@ -146,12 +147,8 @@ bool AgentResourceApplier::removeSkillDir(const std::string& owner, const std::s
     auto it   = owned_.find(owner);
     if (it == owned_.end()
         || std::find(it->second.applied.skillDirs.begin(), it->second.applied.skillDirs.end(), norm)
-            == it->second.applied.skillDirs.end()) {
-        XX_LOGW(
-            "[Resources] Plugin `{}` remove skill dir `{}` failed (not owned)",
-            owner,
-            norm
-        );
+               == it->second.applied.skillDirs.end()) {
+        XX_LOGW("[Resources] Plugin `{}` remove skill dir `{}` failed (not owned)", owner, norm);
         return false;
     }
     deactivateSkill(owner, norm, /*keepOwned=*/false);
@@ -220,8 +217,11 @@ bool AgentResourceApplier::addMemoryFileImpl(
         }
         if (std::find(rec.applied.memoryFiles.begin(), rec.applied.memoryFiles.end(), normPath)
             != rec.applied.memoryFiles.end()) {
-            errOut
-                = fmt::format("memory file `{}` already owned by plugin `{}`", normPath, otherOwner);
+            errOut = fmt::format(
+                "memory file `{}` already owned by plugin `{}`",
+                normPath,
+                otherOwner
+            );
             XX_LOGW("[Resources] Plugin `{}` {}: skipped", owner, errOut);
             return false;
         }
@@ -250,11 +250,10 @@ bool AgentResourceApplier::removeMemoryFile(const std::string& owner, const std:
     auto it   = owned_.find(owner);
     if (it == owned_.end()
         || std::find(
-                   it->second.applied.memoryFiles.begin(),
-                   it->second.applied.memoryFiles.end(),
-                   norm
-               )
-            == it->second.applied.memoryFiles.end()) {
+               it->second.applied.memoryFiles.begin(),
+               it->second.applied.memoryFiles.end(),
+               norm
+           ) == it->second.applied.memoryFiles.end()) {
         XX_LOGW("[Resources] Plugin `{}` remove memory file `{}` failed (not owned)", owner, norm);
         return false;
     }
@@ -335,10 +334,10 @@ bool AgentResourceApplier::addMcpServer(
         .toolCallTimeout = cfg.toolTimeout,
     });
 
-    auto& entry    = mcpEntries_[ns];
-    entry.owner    = owner;
-    entry.cfg      = cfg;
-    entry.client   = client;
+    auto& entry                          = mcpEntries_[ns];
+    entry.owner                          = owner;
+    entry.cfg                            = cfg;
+    entry.client                         = client;
     owned_[owner].applied.mcpServers[ns] = cfg;
 
     spawnMcpConnect(ns, std::move(client));
@@ -396,7 +395,9 @@ bool AgentResourceApplier::deactivateMcp(std::string_view nameSpace) {
     return true;
 }
 
-void AgentResourceApplier::failMcp(const std::string& ns, const std::shared_ptr<server::McpClient>& client
+void AgentResourceApplier::failMcp(
+    const std::string&                        ns,
+    const std::shared_ptr<server::McpClient>& client
 ) {
     auto it = mcpEntries_.find(ns);
     if (it == mcpEntries_.end() || it->second.client != client) {
@@ -407,8 +408,8 @@ void AgentResourceApplier::failMcp(const std::string& ns, const std::shared_ptr<
 }
 
 void AgentResourceApplier::spawnMcpConnect(
-    std::string                                   ns,
-    std::shared_ptr<server::McpClient>            client
+    std::string                        ns,
+    std::shared_ptr<server::McpClient> client
 ) {
     // self 保活: applier 析构 (随 AgentContext) 后协程仍可安全完成清理;
     // 各阶段经 ctx 弱引用判活, agent 已销毁时静默退出
@@ -479,7 +480,10 @@ void AgentResourceApplier::spawnMcpConnect(
                             }
                         }
                     } else {
-                        XX_LOGE("[Resources] mcp `{}`: no tool registry, skip tool registration", ns);
+                        XX_LOGE(
+                            "[Resources] mcp `{}`: no tool registry, skip tool registration",
+                            ns
+                        );
                     }
                     entry->status = McpEntry::Status::Ready;
                     if (ctx) {

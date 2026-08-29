@@ -33,8 +33,8 @@ public:
 
     /// 常驻标签: 始终显示于 tabs 竖向列表顶部的固定按钮
     struct PinnedTab {
-        std::string           id;
-        std::string           title;
+        std::string id;
+        std::string title;
         /// 左键点击且对应 tab 不存在时调用 (内部应 addTab 创建; addTab 自动激活新 tab)
         std::function<void()> ensure;
     };
@@ -123,9 +123,9 @@ private:
     int  resizeStartW_ = 0;
 
     std::vector<ScrollItem> pendingListItems_; // 本帧待渲染的列表按钮 (tabList_ 的 render 源)
-    std::vector<ListEntry>  listEntries_;      // pendingListItems_ 与 tabs_/pinned_ 的映射
-    ftxui::Box              handleBox_;
-    ftxui::Box              footerBox_;
+    std::vector<ListEntry> listEntries_;       // pendingListItems_ 与 tabs_/pinned_ 的映射
+    ftxui::Box             handleBox_;
+    ftxui::Box             footerBox_;
 
     std::function<bool(const ftxui::Mouse&)> onFooterClick_;
 

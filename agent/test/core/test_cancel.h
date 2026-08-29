@@ -13,4 +13,3 @@ asio::awaitable<TestResult> run_cancel_tests();
 
 } // namespace test
 } // namespace agentxx
-

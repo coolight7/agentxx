@@ -14,8 +14,8 @@
 namespace {
 
 struct ShellCtx {
-    const AgentxxHost*           host  = nullptr;
-    agentxx::plugin::AgentIfaces iface {};
+    const AgentxxHost*           host = nullptr;
+    agentxx::plugin::AgentIfaces iface{};
     std::string                  name;
     std::string                  dir;
 };
@@ -47,154 +47,170 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_get_inf
         [](const char*) noexcept {},
         nullptr,
         [&]() -> const AgentxxPluginInfo* {
-        static const AgentxxPluginInfo info{
-            AGENTXX_PLUGIN_API_VERSION,
-            AGENTXX_SV("example_js"),
-            AGENTXX_SV("1.0.0"),
-            AGENTXX_SV("Example JS plugin (C++ shell + JS via interpreter.js capability)"),
-        };
-        return &info;
-    });
+            static const AgentxxPluginInfo info{
+                AGENTXX_PLUGIN_API_VERSION,
+                AGENTXX_SV("example_js"),
+                AGENTXX_SV("1.0.0"),
+                AGENTXX_SV("Example JS plugin (C++ shell + JS via interpreter.js capability)"),
+            };
+            return &info;
+        }
+    );
 }
 
 extern "C" AGENTXX_PLUGIN_EXPORT int
     agentxx_plugin_create(const AgentxxHost* host, void** plugin_ctx) {
     ShellCtx* raw = nullptr;
     return agentxx::plugin_guard::guardCall(
-        [&raw](const char* msg) noexcept { shellLog(raw, msg ? msg : ""); },
+        [&raw](const char* msg) noexcept {
+            shellLog(raw, msg ? msg : "");
+        },
         -1,
         [&]() -> int {
-        if (!host || !host->vtable || !plugin_ctx) {
-            return -1;
-        }
-        auto ctx  = std::make_unique<ShellCtx>();
-        ctx->host = host;
-        ctx->iface = agentxx::plugin::AgentIfaces::query(host);
-        raw        = ctx.get();
-        if (!ctx->iface.capabilities || !ctx->iface.plugins || !ctx->iface.json
-            || !ctx->iface.log) {
-            return -1;
-        }
-        const auto& s_if = ctx->iface;
-        auto logE = [&](const std::string& msg) {
-            s_if.log->log(host, 4, agentxx_plugin_sv(msg.data(), msg.size()));
-        };
-
-        if (!s_if.capabilities->has_capability(host, AGENTXX_SV("interpreter.js"))) {
-            logE("example_js: interpreter.js capability not available");
-            return -1;
-        }
-
-        char* info = s_if.plugins->get_own_info(host);
-        if (!info) {
-            logE("example_js: get_own_info failed");
-            return -1;
-        }
-        auto field = [&](const char* key) -> std::string {
-            char* v
-                = s_if.json->json_get_string(host, agentxx_plugin_sv_cstr(info), AGENTXX_SV(key));
-            if (!v) {
-                return {};
+            if (!host || !host->vtable || !plugin_ctx) {
+                return -1;
             }
-            std::string s = v;
-            host->vtable->free(v);
-            return s;
-        };
-        std::string libPath = field("path");
-        ctx->name           = field("name");
-        host->vtable->free(info);
-        if (ctx->name.empty() || libPath.empty()) {
-            logE("example_js: own info invalid");
-            return -1;
-        }
-        ctx->dir = dirOf(libPath);
+            auto ctx   = std::make_unique<ShellCtx>();
+            ctx->host  = host;
+            ctx->iface = agentxx::plugin::AgentIfaces::query(host);
+            raw        = ctx.get();
+            if (!ctx->iface.capabilities || !ctx->iface.plugins || !ctx->iface.json
+                || !ctx->iface.log) {
+                return -1;
+            }
+            const auto& s_if = ctx->iface;
+            auto        logE = [&](const std::string& msg) {
+                s_if.log->log(host, 4, agentxx_plugin_sv(msg.data(), msg.size()));
+            };
 
-        std::string scriptPath = ctx->dir + "/plugin.js";
-        if (!fileExists(scriptPath)) {
-            auto pos = ctx->dir.find_last_of("/\\");
-            if (pos != std::string::npos) {
-                std::string parent = ctx->dir.substr(0, pos);
-                if (fileExists(parent + "/plugin.js")) {
-                    ctx->dir   = parent;
-                    scriptPath = parent + "/plugin.js";
+            if (!s_if.capabilities->has_capability(host, AGENTXX_SV("interpreter.js"))) {
+                logE("example_js: interpreter.js capability not available");
+                return -1;
+            }
+
+            char* info = s_if.plugins->get_own_info(host);
+            if (!info) {
+                logE("example_js: get_own_info failed");
+                return -1;
+            }
+            auto field = [&](const char* key) -> std::string {
+                char* v = s_if.json->json_get_string(
+                    host,
+                    agentxx_plugin_sv_cstr(info),
+                    AGENTXX_SV(key)
+                );
+                if (!v) {
+                    return {};
+                }
+                std::string s = v;
+                host->vtable->free(v);
+                return s;
+            };
+            std::string libPath = field("path");
+            ctx->name           = field("name");
+            host->vtable->free(info);
+            if (ctx->name.empty() || libPath.empty()) {
+                logE("example_js: own info invalid");
+                return -1;
+            }
+            ctx->dir = dirOf(libPath);
+
+            std::string scriptPath = ctx->dir + "/plugin.js";
+            if (!fileExists(scriptPath)) {
+                auto pos = ctx->dir.find_last_of("/\\");
+                if (pos != std::string::npos) {
+                    std::string parent = ctx->dir.substr(0, pos);
+                    if (fileExists(parent + "/plugin.js")) {
+                        ctx->dir   = parent;
+                        scriptPath = parent + "/plugin.js";
+                    }
                 }
             }
-        }
 
-        char* escName = s_if.json->json_escape(
-            host, agentxx_plugin_sv(ctx->name.data(), ctx->name.size()));
-        char* escPath = s_if.json->json_escape(
-            host, agentxx_plugin_sv(scriptPath.data(), scriptPath.size()));
-        std::string args  = "{\"name\":";
-        args             += escName ? escName : "\"\"";
-        args             += ",\"path\":";
-        args             += escPath ? escPath : "\"\"";
-        args             += "}";
-        if (escName) {
-            host->vtable->free(escName);
-        }
-        if (escPath) {
-            host->vtable->free(escPath);
-        }
-        char* err  = nullptr;
-        char* resp = agentxx::kit::invoke_capability_blocking(
-            host,
-            s_if.capabilities,
-            s_if.scheduler,
-            "interpreter.js",
-            "load",
-            args,
-            &err
-        );
-        if (!resp) {
-            std::string errStr = err ? err : "load script failed";
-            if (err) {
-                host->vtable->free(err);
+            char* escName = s_if.json->json_escape(
+                host,
+                agentxx_plugin_sv(ctx->name.data(), ctx->name.size())
+            );
+            char* escPath = s_if.json->json_escape(
+                host,
+                agentxx_plugin_sv(scriptPath.data(), scriptPath.size())
+            );
+            std::string args  = "{\"name\":";
+            args             += escName ? escName : "\"\"";
+            args             += ",\"path\":";
+            args             += escPath ? escPath : "\"\"";
+            args             += "}";
+            if (escName) {
+                host->vtable->free(escName);
             }
-            logE(std::string("example_js: ") + errStr);
-            return -1;
-        }
-        host->vtable->free(resp);
+            if (escPath) {
+                host->vtable->free(escPath);
+            }
+            char* err  = nullptr;
+            char* resp = agentxx::kit::invoke_capability_blocking(
+                host,
+                s_if.capabilities,
+                s_if.scheduler,
+                "interpreter.js",
+                "load",
+                args,
+                &err
+            );
+            if (!resp) {
+                std::string errStr = err ? err : "load script failed";
+                if (err) {
+                    host->vtable->free(err);
+                }
+                logE(std::string("example_js: ") + errStr);
+                return -1;
+            }
+            host->vtable->free(resp);
 
-        *plugin_ctx = ctx.release();
-        return 0;
-    });
+            *plugin_ctx = ctx.release();
+            return 0;
+        }
+    );
 }
 
 extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_destroy(void* plugin_ctx) {
     auto* ctx = static_cast<ShellCtx*>(plugin_ctx);
     agentxx::plugin_guard::guardCallVoid(
-        [ctx](const char* msg) noexcept { shellLog(ctx, msg ? msg : ""); },
+        [ctx](const char* msg) noexcept {
+            shellLog(ctx, msg ? msg : "");
+        },
         [&] {
-        if (!ctx || !ctx->host) {
+            if (!ctx || !ctx->host) {
+                delete ctx;
+                return;
+            }
+            const AgentxxHost* host = ctx->host;
+            if (ctx->iface.capabilities && !ctx->name.empty() && ctx->iface.json) {
+                char* esc = ctx->iface.json->json_escape(
+                    host,
+                    agentxx_plugin_sv(ctx->name.data(), ctx->name.size())
+                );
+                std::string args = std::string("{\"name\":") + (esc ? esc : "\"\"") + "}";
+                if (esc) {
+                    host->vtable->free(esc);
+                }
+                char* err  = nullptr;
+                char* resp = agentxx::kit::invoke_capability_blocking(
+                    host,
+                    ctx->iface.capabilities,
+                    ctx->iface.scheduler,
+                    "interpreter.js",
+                    "unload",
+                    args,
+                    &err
+                );
+                if (resp) {
+                    host->vtable->free(resp);
+                }
+                if (err) {
+                    host->vtable->free(err);
+                }
+            }
             delete ctx;
-            return;
         }
-        const AgentxxHost* host = ctx->host;
-        if (ctx->iface.capabilities && !ctx->name.empty() && ctx->iface.json) {
-            char* esc = ctx->iface.json->json_escape(
-                host, agentxx_plugin_sv(ctx->name.data(), ctx->name.size()));
-            std::string args = std::string("{\"name\":") + (esc ? esc : "\"\"") + "}";
-            if (esc) {
-                host->vtable->free(esc);
-            }
-            char* err = nullptr;
-            char* resp = agentxx::kit::invoke_capability_blocking(
-                host,
-                ctx->iface.capabilities,
-                ctx->iface.scheduler,
-                "interpreter.js",
-                "unload",
-                args,
-                &err
-            );
-            if (resp) {
-                host->vtable->free(resp);
-            }
-            if (err) {
-                host->vtable->free(err);
-            }
-        }
-        delete ctx;
-    });
+    );
 }

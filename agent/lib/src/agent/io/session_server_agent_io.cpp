@@ -70,8 +70,7 @@ static void publishHostEvent(
     auto topic = fmt::format("plugin.{}.{}", kHostPluginName, event);
     asio::co_spawn(
         bus->executor(),
-        [bus, topic = std::move(topic), data = std::move(dataJson)](
-            ) -> asio::awaitable<void> {
+        [bus, topic = std::move(topic), data = std::move(dataJson)]() -> asio::awaitable<void> {
             co_await bus->publish(topic, data);
             co_return;
         },
@@ -362,14 +361,14 @@ void SessionServerAgentIO::onPeerMessage(WireMessage msg) {
                                             req.limit
                                         );
                                         co_return WireSessionList{
-                                            std::move(p.sessions), p.totalCount, p.hasMore
+                                            std::move(p.sessions),
+                                            p.totalCount,
+                                            p.hasMore
                                         };
                                     }
                                     // 旧行为全量列举 (totalCount/hasMore 旧客户端不消费)
                                     auto sessions = sessionStore->listSessions();
-                                    co_return WireSessionList{
-                                        std::move(sessions), 0, false
-                                    };
+                                    co_return WireSessionList{std::move(sessions), 0, false};
                                 }
                             );
                         } else {
@@ -379,7 +378,11 @@ void SessionServerAgentIO::onPeerMessage(WireMessage msg) {
                                     req.beforeId,
                                     req.limit
                                 );
-                                resp = WireSessionList{std::move(p.sessions), p.totalCount, p.hasMore};
+                                resp = WireSessionList{
+                                    std::move(p.sessions),
+                                    p.totalCount,
+                                    p.hasMore
+                                };
                             } else {
                                 resp = WireSessionList{sessionStore->listSessions(), 0, false};
                             }
@@ -437,7 +440,7 @@ void SessionServerAgentIO::onPeerMessage(WireMessage msg) {
                     // 丢数据造成"操作成功"假象 (如 client /sysinfo 开关同步)
                     if (agent->agentContext->pluginManager
                         && !agent->agentContext->pluginManager->find(m.plugin)) {
-                        auto now  = std::chrono::steady_clock::now();
+                        auto  now = std::chrono::steady_clock::now();
                         auto& at  = uplinkWarnAt_[m.plugin];
                         if (at < now - kUplinkWarnCooldown) {
                             at = now;
@@ -522,7 +525,8 @@ void SessionServerAgentIO::handleHello(const WireHello& hello, std::vector<std::
     // client 插件判断对端可用性与能力的正式通道; 与下方 server_plugins 约定
     // 事件二选一消费均可)
     std::vector<WireHelloAck::PluginInfo> loadedPlugins;
-    if (auto agent = agent_.lock(); agent && agent->agentContext && agent->agentContext->pluginManager) {
+    if (auto agent = agent_.lock();
+        agent && agent->agentContext && agent->agentContext->pluginManager) {
         for (const auto& p : agent->agentContext->pluginManager->list()) {
             WireHelloAck::PluginInfo info{.name = p.name, .version = p.version};
             info.interfaces = p.requiredInterfaces;
@@ -566,15 +570,19 @@ void SessionServerAgentIO::handleHello(const WireHello& hello, std::vector<std::
                 for (const auto& n : p.optionalInterfaces) {
                     interfaces.push_back(n);
                 }
-                pluginInfos.push_back({{"name",       p.name      },
-                                       {"version",    p.version   },
-                                       {"interfaces", interfaces  }});
+                pluginInfos.push_back({
+                    {"name",       p.name    },
+                    {"version",    p.version },
+                    {"interfaces", interfaces}
+                });
             }
         }
         publishHostEvent(
             agent->agentContext->bus,
             kEvtServerPlugins,
-            neograph::json{{"plugins", pluginInfos}}.dump()
+            neograph::json{
+                {"plugins", pluginInfos}
+        }.dump()
         );
         publishHostEvent(
             agent->agentContext->bus,
@@ -720,7 +728,11 @@ void SessionServerAgentIO::subscribePluginEvents() {
     // 发布宿主约定事件 client_attached: 双端插件据此重发当前状态快照,
     // 修复"status 等一次性事件先于本订阅发布而丢失 → 客户端滞留初始占位"
     // 的问题 (晚创建的控制器/晚接入的客户端由此获得快照)
-    publishHostEvent(bus, kEvtClientAttached, fmt::format(R"({{"sessionId":"{}"}})", config_.sessionId));
+    publishHostEvent(
+        bus,
+        kEvtClientAttached,
+        fmt::format(R"({{"sessionId":"{}"}})", config_.sessionId)
+    );
 }
 
 // ---------------------------------------------------------------------------

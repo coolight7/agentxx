@@ -8,8 +8,7 @@
 namespace agentxx_computer_use_plugin {
 std::string uiControlExecute(agentxx_computer_use_plugin::SimpleJson& arguments);
 
-struct PluginCtx : public agentxx::kit::PluginBase {
-};
+struct PluginCtx : public agentxx::kit::PluginBase {};
 
 static auto ctxGuardLogger(PluginCtx* ctx) noexcept {
     return [ctx](const char* msg) noexcept {
@@ -28,70 +27,73 @@ static const char* kUiControlDefaultDepict
       "Shortcut execution automatically presses modifier keys, presses target key, and releases in reverse order.";
 
 static std::string makeUiControlSchema() {
-    codegraph::Json schema                    = codegraph::Json::object();
-    schema["type"]                            = "object";
-    schema["required"]                        = codegraph::Json::array({codegraph::Json("actions")});
-    schema["properties"]                      = codegraph::Json::object();
-    schema["properties"]["actions"]           = codegraph::Json::object();
-    schema["properties"]["actions"]["type"]   = "array";
-    schema["properties"]["actions"]["items"]  = codegraph::Json::object();
+    codegraph::Json schema                   = codegraph::Json::object();
+    schema["type"]                           = "object";
+    schema["required"]                       = codegraph::Json::array({codegraph::Json("actions")});
+    schema["properties"]                     = codegraph::Json::object();
+    schema["properties"]["actions"]          = codegraph::Json::object();
+    schema["properties"]["actions"]["type"]  = "array";
+    schema["properties"]["actions"]["items"] = codegraph::Json::object();
     schema["properties"]["actions"]["items"]["type"] = "object";
     schema["properties"]["actions"]["items"]["required"]
         = codegraph::Json::array({codegraph::Json("action")});
-    schema["properties"]["actions"]["items"]["properties"]           = codegraph::Json::object();
-    schema["properties"]["actions"]["items"]["properties"]["action"] = codegraph::Json({
+    schema["properties"]["actions"]["items"]["properties"]              = codegraph::Json::object();
+    schema["properties"]["actions"]["items"]["properties"]["action"]    = codegraph::Json({
         {"type", "string"},
         {"enum",
          codegraph::Json::array(
              {codegraph::Json("move_cursor"),
-              codegraph::Json("mouse_down"),
-              codegraph::Json("mouse_up"),
-              codegraph::Json("click"),
-              codegraph::Json("double_click"),
-              codegraph::Json("triple_click"),
-              codegraph::Json("middle_click"),
-              codegraph::Json("right_click"),
-              codegraph::Json("drag_and_drop"),
-              codegraph::Json("mouse_scroll"),
-              codegraph::Json("type_text"),
-              codegraph::Json("key_down"),
-              codegraph::Json("key_up"),
-              codegraph::Json("press_key"),
-              codegraph::Json("shortcut"),
-              codegraph::Json("wait")}
-         )}
+                 codegraph::Json("mouse_down"),
+                 codegraph::Json("mouse_up"),
+                 codegraph::Json("click"),
+                 codegraph::Json("double_click"),
+                 codegraph::Json("triple_click"),
+                 codegraph::Json("middle_click"),
+                 codegraph::Json("right_click"),
+                 codegraph::Json("drag_and_drop"),
+                 codegraph::Json("mouse_scroll"),
+                 codegraph::Json("type_text"),
+                 codegraph::Json("key_down"),
+                 codegraph::Json("key_up"),
+                 codegraph::Json("press_key"),
+                 codegraph::Json("shortcut"),
+                 codegraph::Json("wait")}
+         )               }
     });
-    schema["properties"]["actions"]["items"]["properties"]["x"] = codegraph::Json({
+    schema["properties"]["actions"]["items"]["properties"]["x"]         = codegraph::Json({
         {"type", "integer"}
     });
-    schema["properties"]["actions"]["items"]["properties"]["y"] = codegraph::Json({
+    schema["properties"]["actions"]["items"]["properties"]["y"]         = codegraph::Json({
         {"type", "integer"}
     });
-    schema["properties"]["actions"]["items"]["properties"]["button"] = codegraph::Json({
+    schema["properties"]["actions"]["items"]["properties"]["button"]    = codegraph::Json({
         {"type", "string"},
-        {"enum", codegraph::Json::array({codegraph::Json("left"), codegraph::Json("right"), codegraph::Json("middle")})}
+        {"enum",
+         codegraph::Json::array(
+             {codegraph::Json("left"), codegraph::Json("right"), codegraph::Json("middle")}
+         )               }
     });
-    schema["properties"]["actions"]["items"]["properties"]["clicks"] = codegraph::Json({
+    schema["properties"]["actions"]["items"]["properties"]["clicks"]    = codegraph::Json({
         {"type", "integer"}
     });
-    schema["properties"]["actions"]["items"]["properties"]["amount"] = codegraph::Json({
+    schema["properties"]["actions"]["items"]["properties"]["amount"]    = codegraph::Json({
         {"type", "integer"}
     });
     schema["properties"]["actions"]["items"]["properties"]["direction"] = codegraph::Json({
-        {"type", "string"},
+        {"type", "string"                                                                },
         {"enum", codegraph::Json::array({codegraph::Json("up"), codegraph::Json("down")})}
     });
-    schema["properties"]["actions"]["items"]["properties"]["text"] = codegraph::Json({
+    schema["properties"]["actions"]["items"]["properties"]["text"]      = codegraph::Json({
         {"type", "string"}
     });
-    schema["properties"]["actions"]["items"]["properties"]["key"] = codegraph::Json({
+    schema["properties"]["actions"]["items"]["properties"]["key"]       = codegraph::Json({
         {"type", "string"}
     });
-    schema["properties"]["actions"]["items"]["properties"]["keys"] = codegraph::Json({
-        {"type", "array"},
+    schema["properties"]["actions"]["items"]["properties"]["keys"]      = codegraph::Json({
+        {"type",  "array"                              },
         {"items", codegraph::Json({{"type", "string"}})}
     });
-    schema["properties"]["actions"]["items"]["properties"]["delay_ms"] = codegraph::Json({
+    schema["properties"]["actions"]["items"]["properties"]["delay_ms"]  = codegraph::Json({
         {"type", "integer"}
     });
     schema["properties"]["actions"]["items"]["properties"]["duration_ms"] = codegraph::Json({
@@ -109,7 +111,9 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_get_inf
         AGENTXX_PLUGIN_API_VERSION,
         AGENTXX_SV("agentxx_computer_use"),
         AGENTXX_SV("1.0.0"),
-        AGENTXX_SV("Computer control on Windows: mouse, keyboard, and scroll input (SendInput based)"),
+        AGENTXX_SV(
+            "Computer control on Windows: mouse, keyboard, and scroll input (SendInput based)"
+        ),
     };
     return &info;
 }
@@ -118,41 +122,47 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
     agentxx_plugin_create(const AgentxxHost* host, void** plugin_ctx) {
     PluginCtx* raw = nullptr;
     return agentxx::plugin_guard::guardCall(
-        [&raw](const char* msg) noexcept { ctxGuardLogger(raw)(msg); },
+        [&raw](const char* msg) noexcept {
+            ctxGuardLogger(raw)(msg);
+        },
         -1,
         [&]() -> int {
-        if (!host || !host->vtable || !plugin_ctx) {
-            return -1;
-        }
-        auto ctx = std::make_unique<PluginCtx>();
-        ctx->init(host);
-        raw = ctx.get();
-
-        if (!ctx->iface.tools || !ctx->iface.tools->register_tool) {
-            return -1;
-        }
-
-        auto p = ctx->toolPrompt("agentxx_ui_control_keyboard_mouse");
-        std::string depict = p.depict.empty() ? kUiControlDefaultDepict : p.depict;
-
-        agentxx::kit::blocking_tool(
-            *ctx,
-            "agentxx_ui_control_keyboard_mouse",
-            depict,
-            makeUiControlSchema(),
-            [](PluginCtx&, std::string_view args_json) -> std::string {
-                std::string argsStr(args_json.data() ? args_json.data() : "{}", args_json.size());
-                SimpleJson args(argsStr.empty() ? "{}" : argsStr);
-                if (!args.ok()) {
-                    throw std::runtime_error("invalid args json");
-                }
-                return uiControlExecute(args);
+            if (!host || !host->vtable || !plugin_ctx) {
+                return -1;
             }
-        );
+            auto ctx = std::make_unique<PluginCtx>();
+            ctx->init(host);
+            raw = ctx.get();
 
-        *plugin_ctx = ctx.release();
-        return 0;
-    });
+            if (!ctx->iface.tools || !ctx->iface.tools->register_tool) {
+                return -1;
+            }
+
+            auto        p      = ctx->toolPrompt("agentxx_ui_control_keyboard_mouse");
+            std::string depict = p.depict.empty() ? kUiControlDefaultDepict : p.depict;
+
+            agentxx::kit::blocking_tool(
+                *ctx,
+                "agentxx_ui_control_keyboard_mouse",
+                depict,
+                makeUiControlSchema(),
+                [](PluginCtx&, std::string_view args_json) -> std::string {
+                    std::string argsStr(
+                        args_json.data() ? args_json.data() : "{}",
+                        args_json.size()
+                    );
+                    SimpleJson args(argsStr.empty() ? "{}" : argsStr);
+                    if (!args.ok()) {
+                        throw std::runtime_error("invalid args json");
+                    }
+                    return uiControlExecute(args);
+                }
+            );
+
+            *plugin_ctx = ctx.release();
+            return 0;
+        }
+    );
 }
 
 extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_destroy(void* plugin_ctx) {

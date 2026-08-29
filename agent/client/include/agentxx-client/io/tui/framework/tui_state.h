@@ -155,11 +155,11 @@ struct TUIRenderState {
     bool                                     sessionListLoaded = false;
     /// 是否还有未加载的更早会话 (WireSessionList.hasMore; 旧版服务端全量响应
     /// 时恒为 false); 末尾空页防御: 收到空页即置 false 终止续取
-    bool     sessionListHasMore     = false;
+    bool sessionListHasMore = false;
     /// 是否有在途的会话列表分页请求 (预取去重, 防止滚动事件高频重复请求)
-    bool     sessionListLoadingMore = false;
+    bool sessionListLoadingMore = false;
     /// 持久化会话总数 (WireSessionList.totalCount; 0 = 未知, 供弹窗展示 x/y)
-    uint64_t sessionListTotalCount  = 0;
+    uint64_t sessionListTotalCount = 0;
 
     std::vector<agentxx::agent::AppendComponentNotification> appendComponents;
 

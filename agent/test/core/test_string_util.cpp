@@ -1015,9 +1015,9 @@ void test_toCurrentSystemAbsolutePathBaseDir() {
 
     // baseDir 为空: 与单参版本行为一致 (基于进程 cwd)
     {
-        const std::string rel = "ws_abs_probe_dir/file";
-        auto viaSingle = agentxx::util::toCurrentSystemAbsolutePath(rel);
-        auto viaTwoArg = agentxx::util::toCurrentSystemAbsolutePath(rel, "");
+        const std::string rel       = "ws_abs_probe_dir/file";
+        auto              viaSingle = agentxx::util::toCurrentSystemAbsolutePath(rel);
+        auto              viaTwoArg = agentxx::util::toCurrentSystemAbsolutePath(rel, "");
         XX_TEST_EXPECT_EQ(viaSingle, viaTwoArg);
         XX_TEST_EXPECT_TRUE(agentxx::util::isAbsolutePath(viaTwoArg));
     }

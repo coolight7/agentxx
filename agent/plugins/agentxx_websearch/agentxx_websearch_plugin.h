@@ -5,8 +5,8 @@
 #include "agentxx/plugin/plugin_guard.h"
 #include "agentxx/plugin/plugin_kit.h"
 #include <fmt/format.h>
-#include <neograph/json.h>
 #include <memory>
+#include <neograph/json.h>
 #include <string>
 
 namespace agentxx_websearch_plugin {
@@ -19,10 +19,10 @@ struct WebSearchConfig {
 };
 
 struct PluginCtx : public agentxx::kit::PluginBase {
-    bool                      use_model_search      = false;
-    bool                      convert_html2markdown = true;
-    std::string               search_api_url;
-    WebSearchConfig           model_cfg{};
+    bool            use_model_search      = false;
+    bool            convert_html2markdown = true;
+    std::string     search_api_url;
+    WebSearchConfig model_cfg{};
 };
 
 inline void pluginLog(const PluginCtx* ctx, int level, const std::string& msg) {

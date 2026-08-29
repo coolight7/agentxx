@@ -11,4 +11,3 @@ TestResult testSettingsDb();
 
 } // namespace test
 } // namespace agentxx
-

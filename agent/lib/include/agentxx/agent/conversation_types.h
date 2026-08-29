@@ -193,7 +193,7 @@ struct Delta {
         TurnEnd,
         NodeStart,
         NodeEnd,
-        MessageUITip,  ///< 通用瞬态提示消息 (info/warning/error, 仅 UI 瞬态展示, 不入会话历史)
+        MessageUITip, ///< 通用瞬态提示消息 (info/warning/error, 仅 UI 瞬态展示, 不入会话历史)
         /// 完整 ViewMessage 消息插入 (原子消息载荷, 如 Tip 提示、完整卡片等)
         InsertMessage,
     };

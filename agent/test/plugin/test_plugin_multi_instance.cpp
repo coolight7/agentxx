@@ -89,7 +89,7 @@ asio::awaitable<TestResult> run_plugin_multi_instance_tests() {
     }
 
     // ---- 1. 双宿主并存加载同一插件 ----
-    auto ex  = co_await asio::this_coro::executor;
+    auto ex   = co_await asio::this_coro::executor;
     auto ctxA = makeAgentCtx(ex);
     auto ctxB = makeAgentCtx(ex);
 
@@ -110,8 +110,12 @@ asio::awaitable<TestResult> run_plugin_multi_instance_tests() {
         XX_TEST_EXPECT_TRUE(toolA != nullptr);
         XX_TEST_EXPECT_TRUE(toolB != nullptr);
         if (toolA && toolB) {
-            auto outA = co_await toolA->execute_async(neograph::json{{"sessionId", "from-A"}});
-            auto outB = co_await toolB->execute_async(neograph::json{{"sessionId", "from-B"}});
+            auto outA = co_await toolA->execute_async(neograph::json{
+                {"sessionId", "from-A"}
+            });
+            auto outB = co_await toolB->execute_async(neograph::json{
+                {"sessionId", "from-B"}
+            });
             // echo 原样回显参数 → 结果携带各自标识, 且互不串扰
             XX_TEST_EXPECT_TRUE(outA.find("from-A") != std::string::npos);
             XX_TEST_EXPECT_TRUE(outB.find("from-B") != std::string::npos);
@@ -132,7 +136,9 @@ asio::awaitable<TestResult> run_plugin_multi_instance_tests() {
         if (!toolB) {
             co_return TestResult{g_mi_passed, g_mi_failed};
         }
-        auto outB = co_await toolB->execute_async(neograph::json{{"sessionId", "after-A-unload"}});
+        auto outB = co_await toolB->execute_async(neograph::json{
+            {"sessionId", "after-A-unload"}
+        });
         XX_TEST_EXPECT_TRUE(outB.find("after-A-unload") != std::string::npos);
     }
 
@@ -145,7 +151,9 @@ asio::awaitable<TestResult> run_plugin_multi_instance_tests() {
             auto toolB2 = ctxB->toolRegistry->find("example_echo");
             XX_TEST_EXPECT_TRUE(toolB2 != nullptr);
             if (toolB2) {
-                auto out = co_await toolB2->execute_async(neograph::json{{"sessionId", "reloaded"}});
+                auto out = co_await toolB2->execute_async(neograph::json{
+                    {"sessionId", "reloaded"}
+                });
                 XX_TEST_EXPECT_TRUE(out.find("reloaded") != std::string::npos);
             }
             XX_TEST_EXPECT_TRUE(co_await ctxB->pluginManager->unloadAsync("example_plugin"));
@@ -156,8 +164,8 @@ asio::awaitable<TestResult> run_plugin_multi_instance_tests() {
     ctxA->pluginManager->shutdownAll();
     ctxB->pluginManager->shutdownAll();
 
-    std::cout << "[INFO] multi-instance done: passed=" << g_mi_passed
-              << " failed=" << g_mi_failed << std::endl;
+    std::cout << "[INFO] multi-instance done: passed=" << g_mi_passed << " failed=" << g_mi_failed
+              << std::endl;
     co_return TestResult{g_mi_passed, g_mi_failed};
 }
 

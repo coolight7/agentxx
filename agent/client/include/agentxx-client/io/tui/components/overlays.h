@@ -201,7 +201,6 @@ private:
     std::function<void()> onClose_;
 };
 
-
 /// Mermaid 状态图弹窗 (Plan Graph 按钮触发)
 ///
 /// 显示单条 roadmap (Mermaid stateDiagram-v2) 的 ASCII 状态图:

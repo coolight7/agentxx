@@ -498,16 +498,14 @@ void testHilInterrupt() {
     // 插件装配: mock 调用的 agentxx_filesystem_read 已从 lib 内置工具迁移为
     // filesystem 插件 (2026-08 内置插件化), FFI agent 不会自动加载插件,
     // 须显式配置; 路径按测试可执行同目录 plugins/ 推导
-    std::string pluginDir = findPluginDir("agentxx_filesystem");
+    std::string pluginDir  = findPluginDir("agentxx_filesystem");
     std::string configJson = R"({"permissionMode": "all_ask"})";
     if (!pluginDir.empty()) {
         // 经 json 库注入 plugins 段 (手拼 raw string 会踩 ")" 定界提前终止坑)
         try {
-            auto cfg      = neograph::json::parse(configJson);
-            cfg["plugins"] = neograph::json::array(
-                {neograph::json{{"path", pluginDir}}}
-            );
-            configJson = cfg.dump();
+            auto cfg       = neograph::json::parse(configJson);
+            cfg["plugins"] = neograph::json::array({neograph::json{{"path", pluginDir}}});
+            configJson     = cfg.dump();
         } catch (...) {
             TEST_FAIL << "inject plugins config failed" << std::endl;
             g_ffi_failed++;

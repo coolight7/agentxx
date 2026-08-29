@@ -74,7 +74,7 @@ public:
 class SkillMiddlewareState : public BaseMiddlewareState {
 public:
 
-    std::string   cacheFormatSkillPrompt;
+    std::string cacheFormatSkillPrompt;
     /// 生成缓存时的资源纪元 (SkillMiddlewareHandle::resourceEpoch;
     /// 插件运行期增删 skill 目录后纪元递增, 缓存据此失效重建)
     uint64_t      cachedResourceEpoch = 0;

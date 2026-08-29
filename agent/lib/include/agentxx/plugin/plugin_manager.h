@@ -23,10 +23,12 @@ namespace agentxx {
 namespace agent {
 class AgentContext;
 class AgentResourceApplier;
-}
+} // namespace agent
+
 namespace event {
 class EventBus;
 }
+
 namespace plugin {
 
 class PluginManager;
@@ -38,9 +40,9 @@ class PluginInstance;
 struct PluginSleepTimer {
     std::weak_ptr<PluginInstance>       inst;
     std::shared_ptr<asio::steady_timer> timer;
-    void (*cb)(void* ud)                = nullptr;
-    void* ud                            = nullptr;
-    std::atomic<bool>                   triggered{false};
+    void (*cb)(void* ud) = nullptr;
+    void*             ud = nullptr;
+    std::atomic<bool> triggered{false};
 };
 
 } // namespace plugin
@@ -67,22 +69,22 @@ namespace plugin {
 class PluginInstance {
 public:
 
-    std::string name;
-    std::string version;
-    std::string description;
-    std::string path;
-    neograph::json args = neograph::json::object();
+    std::string              name;
+    std::string              version;
+    std::string              description;
+    std::string              path;
+    neograph::json           args = neograph::json::object();
     std::vector<std::string> depends;
     std::vector<std::string> optionalDepends;
     PluginManifestInterfaces interfaces;
-    void*                    dlHandle = nullptr;
-    AgentxxPluginDestroyFn   builtinUnload = nullptr;
-    void*                    pluginCtx     = nullptr;
-    bool                     enabled = true;
-    bool userDisabled = false;
-    bool unloadRequested = false;
+    void*                    dlHandle        = nullptr;
+    AgentxxPluginDestroyFn   builtinUnload   = nullptr;
+    void*                    pluginCtx       = nullptr;
+    bool                     enabled         = true;
+    bool                     userDisabled    = false;
+    bool                     unloadRequested = false;
 
-    AgentxxHost host{};
+    AgentxxHost         host{};
     std::atomic<size_t> inflight{0};
 
     struct HookRegistration {
@@ -104,24 +106,24 @@ public:
         std::optional<std::string> systemPlanningPrompt;
         std::optional<std::string> systemSkillPrompt;
         std::map<std::string, std::optional<agentxx::agent::ToolPrompt>, std::less<>> toolPrompt;
-        std::vector<std::string> backedUpTools;
+        std::vector<std::string>                                                      backedUpTools;
         bool backedUpSystem = false;
     };
 
-    std::vector<std::string>      toolNames;
-    std::vector<HookRegistration> hookRegistrations;
+    std::vector<std::string>                          toolNames;
+    std::vector<HookRegistration>                     hookRegistrations;
     std::vector<std::shared_ptr<AgentxxSubscription>> subscriptions;
-    std::vector<CapabilityRegistration> capabilityRegistrations;
+    std::vector<CapabilityRegistration>               capabilityRegistrations;
     // B6: sleep 定时器改为哈希表 O(1) 取消，避免 vector 线性查找 O(n) 与卸载时 O(n²)
     std::unordered_map<void*, std::shared_ptr<PluginSleepTimer>> sleepTimers;
-    std::vector<std::shared_ptr<AgentxxOpHandle>> outstandingOps;
-    PromptBackup promptBackup;
+    std::vector<std::shared_ptr<AgentxxOpHandle>>                outstandingOps;
+    PromptBackup                                                 promptBackup;
 
-    std::shared_ptr<PluginMiddlewareHandle> middleware = nullptr;
+    std::shared_ptr<PluginMiddlewareHandle>  middleware = nullptr;
     std::vector<std::shared_ptr<PluginTool>> tools;
 
     std::weak_ptr<PluginInstance> self{};
-    std::weak_ptr<PluginManager> manager{};
+    std::weak_ptr<PluginManager>  manager{};
 
     explicit PluginInstance(std::string in_name) :
         name(std::move(in_name)) {}
@@ -176,11 +178,11 @@ public:
 
 private:
 
-    std::string     name_;
-    std::string     description_;
-    std::string     parametersJson_;
-    AgentxxToolSpec spec_;
-    neograph::json  parameters_;
+    std::string                   name_;
+    std::string                   description_;
+    std::string                   parametersJson_;
+    AgentxxToolSpec               spec_;
+    neograph::json                parameters_;
     std::weak_ptr<PluginInstance> instance_;
 };
 
@@ -219,9 +221,9 @@ private:
     struct HookEntry {
         void* (*start)(void*, AgentxxHookPoint, AgentxxPluginStringView, const AgentxxOpNotify*, char**)
             = nullptr;
-        void (*cancel)(void*, void*)   = nullptr;
-        void*         ud               = nullptr;
-        bool          set              = false;
+        void (*cancel)(void*, void*) = nullptr;
+        void* ud                     = nullptr;
+        bool  set                    = false;
     };
 
     asio::awaitable<void> dispatch(AgentxxHookPoint point, const neograph::graph::NodeInput& in);
@@ -255,27 +257,27 @@ public:
     PluginManager& operator=(const PluginManager&) = delete;
 
     asio::awaitable<std::shared_ptr<PluginInstance>> loadNativeAsync(
-        std::string                                path,
-        const agentxx::agent::PluginConfig*        cfg                 = nullptr,
-        bool                                       allowClientOnlySkip = false,
-        const plugin::PluginManifestResources&     resources           = {},
-        const plugin::PluginManifestInterfaces&    interfaces          = {}
+        std::string                             path,
+        const agentxx::agent::PluginConfig*     cfg                 = nullptr,
+        bool                                    allowClientOnlySkip = false,
+        const plugin::PluginManifestResources&  resources           = {},
+        const plugin::PluginManifestInterfaces& interfaces          = {}
     );
 
     asio::awaitable<std::shared_ptr<PluginInstance>> loadBuiltinAsync(
-        std::string                            name,
-        std::string                            path,
-        std::vector<std::string>               depends,
-        std::vector<std::string>               optionalDepends,
-        const agentxx::agent::PluginConfig*    cfg        = nullptr,
-        const plugin::PluginManifestResources& resources  = {},
+        std::string                             name,
+        std::string                             path,
+        std::vector<std::string>                depends,
+        std::vector<std::string>                optionalDepends,
+        const agentxx::agent::PluginConfig*     cfg        = nullptr,
+        const plugin::PluginManifestResources&  resources  = {},
         const plugin::PluginManifestInterfaces& interfaces = {}
     );
 
     asio::awaitable<bool> unloadAsync(std::string_view name);
-    void disable(std::string_view name);
-    void enable(std::string_view name);
-    void flushPendingCleanup();
+    void                  disable(std::string_view name);
+    void                  enable(std::string_view name);
+    void                  flushPendingCleanup();
 
     asio::awaitable<void>
         loadConfiguredPlugins(const std::vector<agentxx::agent::PluginConfig>& plugins);
@@ -308,37 +310,37 @@ public:
     int registerTool(PluginInstance* inst, const AgentxxToolSpec* spec);
     int unregisterTool(PluginInstance* inst, const char* name);
 
-    int registerSkillDir(PluginInstance* inst, const char* path);
-    int unregisterSkillDir(PluginInstance* inst, const char* path);
-    int registerMemoryFile(PluginInstance* inst, const char* path);
-    int unregisterMemoryFile(PluginInstance* inst, const char* path);
-    int registerMcpServer(PluginInstance* inst, const char* specJson);
-    int unregisterMcpServer(PluginInstance* inst, const char* nameSpace);
+    int         registerSkillDir(PluginInstance* inst, const char* path);
+    int         unregisterSkillDir(PluginInstance* inst, const char* path);
+    int         registerMemoryFile(PluginInstance* inst, const char* path);
+    int         unregisterMemoryFile(PluginInstance* inst, const char* path);
+    int         registerMcpServer(PluginInstance* inst, const char* specJson);
+    int         unregisterMcpServer(PluginInstance* inst, const char* nameSpace);
     std::string ownResourcesJson(const PluginInstance* inst);
 
-    int registerHook(PluginInstance* inst, const AgentxxHookSpec* spec);
-    int unregisterHook(PluginInstance* inst, AgentxxHookPoint point);
+    int                  registerHook(PluginInstance* inst, const AgentxxHookSpec* spec);
+    int                  unregisterHook(PluginInstance* inst, AgentxxHookPoint point);
     AgentxxSubscription* subscribe(
         PluginInstance* inst,
         const char*     topic,
         void (*handler)(AgentxxPluginStringView event_json, void* ud),
         void* ud
     );
-    void unsubscribe(AgentxxSubscription* sub);
-    int  publish(const char* topic, const char* event_json);
-    char* getShareStore(PluginInstance* inst, const char* thread_id, long long id);
+    void      unsubscribe(AgentxxSubscription* sub);
+    int       publish(const char* topic, const char* event_json);
+    char*     getShareStore(PluginInstance* inst, const char* thread_id, long long id);
     long long addShareStore(PluginInstance* inst, const char* thread_id, const char* content);
-    void  emitMessageTip(PluginInstance* inst, const char* thread_id, const char* text, int level);
+    void emitMessageTip(PluginInstance* inst, const char* thread_id, const char* text, int level);
 
     void* sleep(PluginInstance* inst, long ms, void (*cb)(void* ud), void* ud);
-    void cancelSleep(PluginInstance* inst, void* timer);
-    void offload(
-        PluginInstance* inst,
-        volatile int*   cancel_flag,
-        void* (*work)(void* ud, volatile int* cancel_flag, char** error_out),
-        void (*done)(void* ud, void* result, char* error),
-        void* ud
-    );
+    void  cancelSleep(PluginInstance* inst, void* timer);
+    void  offload(
+         PluginInstance* inst,
+         volatile int*   cancel_flag,
+         void* (*work)(void* ud, volatile int* cancel_flag, char** error_out),
+         void (*done)(void* ud, void* result, char* error),
+         void* ud
+     );
 
     AgentxxOpHandle* callToolAsync(
         PluginInstance* caller,
@@ -380,8 +382,8 @@ public:
         return !ioExecutor_ || (tid != std::thread::id{} && tid == std::this_thread::get_id());
     }
 
-    mutable std::mutex                             ioTasksMtx_;
-    mutable std::deque<std::function<void()>>      ioTasks_;
+    mutable std::mutex                        ioTasksMtx_;
+    mutable std::deque<std::function<void()>> ioTasks_;
 
     void postToIo(std::function<void()> fn) const {
         if (isIoThread()) {
@@ -430,18 +432,19 @@ public:
             if (t) {
                 try {
                     t();
-                } catch (...) {}
+                } catch (...) {
+                }
             }
         }
     }
 
     int registerCapability(PluginInstance* inst, const char* capability);
     int registerCapabilityEx(
-        PluginInstance*           inst,
-        const char*               capability,
-        AgentxxCapStartFn         start,
-        AgentxxOpCancelFn         cancel,
-        void*                     ctx
+        PluginInstance*   inst,
+        const char*       capability,
+        AgentxxCapStartFn start,
+        AgentxxOpCancelFn cancel,
+        void*             ctx
     );
     int unregisterCapability(PluginInstance* inst, const char* capability);
     int hasCapability(const char* capability) const;
@@ -452,24 +455,24 @@ public:
     std::string getConfigJson();
     std::string getToolPromptJson(const std::string& toolName);
     std::string getPromptJson();
-    int setPromptJson(PluginInstance* inst, const char* prompt_json);
-    void restorePromptBackup(PluginInstance* inst);
-    void applyDeclaredResources(
-        PluginInstance&                        inst,
-        const plugin::PluginManifestResources& resources
-    );
+    int         setPromptJson(PluginInstance* inst, const char* prompt_json);
+    void        restorePromptBackup(PluginInstance* inst);
+    void        applyDeclaredResources(
+               PluginInstance&                        inst,
+               const plugin::PluginManifestResources& resources
+           );
     std::string getPluginArgsJson(PluginInstance* inst);
 
     std::string getSessionWorkDir();
     std::string getSessionWorkDir(const std::string& threadId);
     std::string getModelConfigJson();
-    bool isSessionCancelled(const std::string& threadId);
-    int setSessionPlanning(
-        const std::string& threadId,
-        const std::string& roadmap,
-        const std::string& todosJson,
-        const std::string& notes
-    );
+    bool        isSessionCancelled(const std::string& threadId);
+    int         setSessionPlanning(
+                const std::string& threadId,
+                const std::string& roadmap,
+                const std::string& todosJson,
+                const std::string& notes
+            );
 
 private:
 
@@ -487,17 +490,18 @@ private:
         std::string                           name;
         std::weak_ptr<PluginMiddlewareHandle> mw;
     };
+
     std::vector<PendingMiddlewareCleanup> pendingCleanups_;
 
     void shutdownPlugin(const std::shared_ptr<PluginInstance>& inst);
 
-    std::weak_ptr<agentxx::agent::AgentContext>  agentContext_;
-    std::shared_ptr<ToolRegistry>                registry_;
-    std::shared_ptr<CapabilityRegistry>          capabilities_;
+    std::weak_ptr<agentxx::agent::AgentContext>                         agentContext_;
+    std::shared_ptr<ToolRegistry>                                       registry_;
+    std::shared_ptr<CapabilityRegistry>                                 capabilities_;
     std::map<std::string, std::shared_ptr<PluginInstance>, std::less<>> plugins_;
-    size_t                                       runningTurns_ = 0;
-    asio::any_io_executor                        ioExecutor_{};
-    mutable std::atomic<std::thread::id>         ioThreadId_{};
+    size_t                                                              runningTurns_ = 0;
+    asio::any_io_executor                                               ioExecutor_{};
+    mutable std::atomic<std::thread::id>                                ioThreadId_{};
 };
 
 struct NativeLoader {
@@ -525,10 +529,10 @@ public:
         void*             ctx    = nullptr
     );
 
-    bool unregisterCapability(std::string_view name, std::string_view provider);
-    bool has(std::string_view name) const;
-    const Entry* get(std::string_view name) const;
-    std::string  providerOf(std::string_view name) const;
+    bool                     unregisterCapability(std::string_view name, std::string_view provider);
+    bool                     has(std::string_view name) const;
+    const Entry*             get(std::string_view name) const;
+    std::string              providerOf(std::string_view name) const;
     std::vector<std::string> names() const;
 
 private:

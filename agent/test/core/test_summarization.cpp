@@ -43,6 +43,7 @@ int g_sum_failed = 0;
 // 断言计数宏覆盖: 将 test_framework.h 的 XX_TEST_EXPECT_* 映射到本模块计数器
 #define XX_TEST_PASSED g_sum_passed
 #define XX_TEST_FAILED g_sum_failed
+
 namespace agentxx {
 namespace test {
 
@@ -1596,7 +1597,7 @@ asio::awaitable<TestResult> run_summarization_tests() {
     //   父线程 sessionId / 仅 share_store 工具 / 禁二次压缩)
     // - 预置 interruptResult 后再次调用 → 返回摘要文本
     {
-        auto ctx = std::make_shared<agentxx::agent::AgentContext>();
+        auto ctx                     = std::make_shared<agentxx::agent::AgentContext>();
         ctx->agentConfig             = std::make_shared<agentxx::agent::AgentConfig>();
         ctx->middlewareHandleContext = std::make_shared<agentxx::middleware::MiddlewareContext>();
         ctx->modelRegistry           = std::make_shared<agentxx::agent::ModelProviderRegistry>();
@@ -1608,10 +1609,8 @@ asio::awaitable<TestResult> run_summarization_tests() {
         ctx->agentConfig->model.modelName = "m";
 
         // 真实 SubAgentManagerTool + 注册 CodeAgent 默认的 subagent_task
-        auto realTool = std::make_shared<agentxx::tools::SubAgentManagerTool>(
-            "subagent_manager",
-            ctx
-        );
+        auto realTool
+            = std::make_shared<agentxx::tools::SubAgentManagerTool>("subagent_manager", ctx);
         realTool->subAgentList.insert(std::make_pair(
             "subagent_task",
             std::make_shared<agentxx::tools::SubAgentNormalTask>("subagent_task", "isolation")
@@ -1621,8 +1620,7 @@ asio::awaitable<TestResult> run_summarization_tests() {
         const std::string sid = "sum_real_tool_thread";
         ctx->sessions->getOrCreate(sid);
 
-        auto handle
-            = std::make_shared<agentxx::middleware::SummarizationMiddlewareHandle>(ctx);
+        auto handle = std::make_shared<agentxx::middleware::SummarizationMiddlewareHandle>(ctx);
 
         std::vector<neograph::ChatMessage> msgs{
             makeMsg("system", "sys"),
@@ -1639,11 +1637,12 @@ asio::awaitable<TestResult> run_summarization_tests() {
         }
         XX_TEST_EXPECT_TRUE(threwInterrupt);
 
-        const auto& stored = ctx->middlewareHandleContext->getGraphDataItemValue<
-            std::vector<agentxx::middleware::InterruptHandleArg>>(
-            sid,
-            agentxx::middleware::MiddlewareContext::graphDataKey_interruptArgs
-        );
+        const auto& stored
+            = ctx->middlewareHandleContext
+                  ->getGraphDataItemValue<std::vector<agentxx::middleware::InterruptHandleArg>>(
+                      sid,
+                      agentxx::middleware::MiddlewareContext::graphDataKey_interruptArgs
+                  );
         XX_TEST_EXPECT_EQ(stored.size(), size_t{1});
         XX_TEST_EXPECT_EQ(stored[0].name, std::string{"subagent"});
         // 压缩直接调用无 tool_call_id: resultId 为空 (读取端按序号兜底)
@@ -1676,7 +1675,9 @@ asio::awaitable<TestResult> run_summarization_tests() {
         ctx->middlewareHandleContext->setGraphDataItemValue<neograph::json>(
             sid,
             agentxx::middleware::MiddlewareContext::graphDataKey_interruptResult,
-            neograph::json{{"1", "real-tool summary"}}
+            neograph::json{
+                {"1", "real-tool summary"}
+        }
         );
         auto r = co_await handle->doSummarizeWithLLM(sid, msgs);
         XX_TEST_EXPECT_EQ(r, std::string{"real-tool summary"});
@@ -1685,9 +1686,9 @@ asio::awaitable<TestResult> run_summarization_tests() {
     // --- T18. subagent 执行链路异常 → catchErrorAsync 捕获降级为空串,
     //           走失败计数路径 (保留原消息), 不向上传播崩溃 ---
     {
-        auto env                        = std::make_shared<SummarizationTestEnv>();
+        auto env = std::make_shared<SummarizationTestEnv>();
         env->session()->setModelName("small");
-        env->subagent->throwException   = true;
+        env->subagent->throwException = true;
 
         std::vector<neograph::ChatMessage> msgs{
             makeMsg("system", "sys"),
@@ -1731,10 +1732,10 @@ asio::awaitable<TestResult> run_summarization_tests() {
     //           "摘要文本" 写回上下文 (行为记录: 错误信息透传给父 LLM,
     //           由其自行识别处理; 后续如改为失败判定需同步更新本用例) ---
     {
-        auto env                      = std::make_shared<SummarizationTestEnv>();
+        auto env = std::make_shared<SummarizationTestEnv>();
         env->session()->setModelName("small");
-        env->subagent->failWithError  = true;
-        env->subagent->summary        = "";
+        env->subagent->failWithError = true;
+        env->subagent->summary       = "";
 
         std::vector<neograph::ChatMessage> msgs{
             makeMsg("system", "sys"),

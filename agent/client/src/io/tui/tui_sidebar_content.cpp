@@ -93,7 +93,10 @@ static void
             // 通用按钮 (如 Plan Graph 弹窗触发): 渲染为带背景的标签
             const auto label = it.value("label", it.value("text", std::string{"Button"}));
             // 普通按钮样式 (无点击捕获时仅视觉区分)
-            push(text(" " + label + " ") | bgcolor(theme.buttonBgColor) | color(theme.buttonTextColor) | bold);
+            push(
+                text(" " + label + " ") | bgcolor(theme.buttonBgColor)
+                | color(theme.buttonTextColor) | bold
+            );
         }
     }
 }
@@ -174,8 +177,8 @@ std::vector<ScrollItem> TUIClientAgentIO::renderInfoSidebar() {
                         if (!graphMermaid.empty()) {
                             titleRow.push_back(text(" "));
                             titleRow.push_back(
-                                text(" Graph ") | bgcolor(theme_.buttonBgColor) | color(theme_.buttonTextColor)
-                                | reflect(planGraphButtonBox_)
+                                text(" Graph ") | bgcolor(theme_.buttonBgColor)
+                                | color(theme_.buttonTextColor) | reflect(planGraphButtonBox_)
                             );
                             planGraphMermaid_ = graphMermaid;
                         }
@@ -184,7 +187,9 @@ std::vector<ScrollItem> TUIClientAgentIO::renderInfoSidebar() {
                     // 剩余 items: 按通用渲染 but 跳过已处理的 button (已在标题行渲染)
                     bool isFirstGraphButtonSkipped = false;
                     for (const auto& it : sec.items) {
-                        if (!it.is_object()) continue;
+                        if (!it.is_object()) {
+                            continue;
+                        }
                         const auto kind = it.value("kind", std::string{"text"});
                         if (kind == "button" && !isFirstGraphButtonSkipped) {
                             // 首个 Graph 按钮已在标题行渲染，跳过避免重复
@@ -193,13 +198,17 @@ std::vector<ScrollItem> TUIClientAgentIO::renderInfoSidebar() {
                         }
                         // Graph 段的 "Graph:" title 已在按钮行体现, 跳过重复标题?
                         // 保留 Todo/Note 的 title 文本
-                        Elements tmp;
+                        Elements       tmp;
                         neograph::json arr = neograph::json::array();
                         arr.push_back(it);
                         appendPluginItems(arr, theme_, tmp);
-                        for (auto& el : tmp) secEls.push_back(std::move(el));
+                        for (auto& el : tmp) {
+                            secEls.push_back(std::move(el));
+                        }
                     }
-                    if (secEls.empty()) continue;
+                    if (secEls.empty()) {
+                        continue;
+                    }
                     elements.push_back(vbox(std::move(secEls)));
                     elements.push_back(text(" "));
                 } else {
@@ -213,7 +222,11 @@ std::vector<ScrollItem> TUIClientAgentIO::renderInfoSidebar() {
                     if (!sec.title.empty()) {
                         secEls.push_back(text(sec.title) | color(theme_.accentColor));
                     }
-                    secEls.insert(secEls.end(), std::make_move_iterator(secItems.begin()), std::make_move_iterator(secItems.end()));
+                    secEls.insert(
+                        secEls.end(),
+                        std::make_move_iterator(secItems.begin()),
+                        std::make_move_iterator(secItems.end())
+                    );
                     elements.push_back(vbox(std::move(secEls)));
                     elements.push_back(text(" "));
                 }

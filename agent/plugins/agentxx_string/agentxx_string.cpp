@@ -26,43 +26,48 @@ std::string argDesc(const agentxx::kit::ToolPromptText& p, const char* key, cons
 std::string schemaHtml2Md(PluginCtx* ctx) {
     auto p = ctx->toolPrompt(kNameHtml2Md);
     return neograph::json{
-        {"type", "object"},
-        {"properties", {
-            {"content", {
-                {"type", "string"},
-                {"description", argDesc(p, "content", "The HTML string to convert.")}
-            }}
-        }},
-        {"required", neograph::json::array({"content"})}
+        {"type",       "object"                                                     },
+        {"properties",
+         {{"content",
+           {{"type", "string"},
+            {"description", argDesc(p, "content", "The HTML string to convert.")}}}}},
+        {"required",   neograph::json::array({"content"})                           }
     }.dump();
 }
 
 std::string schemaRegexp(PluginCtx* ctx) {
     auto p = ctx->toolPrompt(kNameRegexp);
     return neograph::json{
-        {"type", "object"},
-        {"properties", {
-            {"content", {
-                {"type", "string"},
-                {"description", argDesc(p, "content", "The input text to operate on.")}
-            }},
-            {"exps", {
-                {"type", "array"},
-                {"items", {{"type", "string"}}},
-                {"description", argDesc(p, "exps", "Array of regex patterns. A match succeeds if ANY pattern matches.")}
-            }},
-            {"opt", {
-                {"type", "string"},
-                {"enum", neograph::json::array({"search", "replace", "remove"})},
-                {"description", argDesc(p, "opt", "Operation mode:\n`search`: Return all match results.\n`replace`: Replace matches with `replace_str` and return the resulting text.\n`remove`: Remove all matches and return the resulting text.\n")}
-            }},
-            {"replace_str", {
-                {"type", "string"},
-                {"default", ""},
-                {"description", argDesc(p, "replace_str", "Default: empty string. The replacement string used when `opt` is `replace`.")}
-            }}
-        }},
-        {"required", neograph::json::array({"content", "exps", "opt"})}
+        {"type",       "object"                                         },
+        {"properties",
+         {{"content",
+           {{"type", "string"},
+            {"description", argDesc(p, "content", "The input text to operate on.")}}},
+          {"exps",
+           {{"type", "array"},
+            {"items", {{"type", "string"}}},
+            {"description",
+             argDesc(p, "exps", "Array of regex patterns. A match succeeds if ANY pattern matches.")
+            }}},
+          {"opt",
+           {{"type", "string"},
+            {"enum", neograph::json::array({"search", "replace", "remove"})},
+            {"description",
+             argDesc(
+                 p,
+                 "opt",
+                 "Operation mode:\n`search`: Return all match results.\n`replace`: Replace matches with `replace_str` and return the resulting text.\n`remove`: Remove all matches and return the resulting text.\n"
+             )}}},
+          {"replace_str",
+           {{"type", "string"},
+            {"default", ""},
+            {"description",
+             argDesc(
+                 p,
+                 "replace_str",
+                 "Default: empty string. The replacement string used when `opt` is `replace`."
+             )}}}}                                                      },
+        {"required",   neograph::json::array({"content", "exps", "opt"})}
     }.dump();
 }
 
@@ -75,61 +80,67 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_get_inf
         [](const char*) noexcept {},
         nullptr,
         [&]() -> const AgentxxPluginInfo* {
-        static const AgentxxPluginInfo info{
-            AGENTXX_PLUGIN_API_VERSION,
-            AGENTXX_SV("agentxx_string"),
-            AGENTXX_SV("1.0.0"),
-            AGENTXX_SV("String tools: regex operations and html to markdown conversion"),
-        };
-        return &info;
-    });
+            static const AgentxxPluginInfo info{
+                AGENTXX_PLUGIN_API_VERSION,
+                AGENTXX_SV("agentxx_string"),
+                AGENTXX_SV("1.0.0"),
+                AGENTXX_SV("String tools: regex operations and html to markdown conversion"),
+            };
+            return &info;
+        }
+    );
 }
 
 extern "C" AGENTXX_PLUGIN_EXPORT int
     agentxx_plugin_create(const AgentxxHost* host, void** plugin_ctx) {
     PluginCtx* raw = nullptr;
     return agentxx::plugin_guard::guardCall(
-        [&raw](const char* msg) noexcept { ctxGuardLogger(raw)(msg); },
+        [&raw](const char* msg) noexcept {
+            ctxGuardLogger(raw)(msg);
+        },
         -1,
         [&]() -> int {
-        if (!host || !host->vtable || !plugin_ctx) {
-            return -1;
-        }
-        auto ctx  = std::make_unique<PluginCtx>();
-        ctx->init(host);
-        raw = ctx.get();
-
-        if (!ctx->iface.tools || !ctx->iface.tools->register_tool) {
-            return -1;
-        }
-
-        // 1. agentxx_string_html_to_markdown (blocking_tool)
-        agentxx::kit::blocking_tool(
-            *ctx,
-            kNameHtml2Md,
-            kDepictHtml2Md,
-            schemaHtml2Md(ctx.get()),
-            [](std::string_view args_json) -> std::string {
-                auto arguments = args_json.empty() ? neograph::json::object() : neograph::json::parse(args_json);
-                return htmlToMarkdownExecute(arguments);
+            if (!host || !host->vtable || !plugin_ctx) {
+                return -1;
             }
-        );
+            auto ctx = std::make_unique<PluginCtx>();
+            ctx->init(host);
+            raw = ctx.get();
 
-        // 2. agentxx_string_regexp (blocking_tool)
-        agentxx::kit::blocking_tool(
-            *ctx,
-            kNameRegexp,
-            kDepictRegexp,
-            schemaRegexp(ctx.get()),
-            [](std::string_view args_json) -> std::string {
-                auto arguments = args_json.empty() ? neograph::json::object() : neograph::json::parse(args_json);
-                return regexpExecute(arguments);
+            if (!ctx->iface.tools || !ctx->iface.tools->register_tool) {
+                return -1;
             }
-        );
 
-        *plugin_ctx = ctx.release();
-        return 0;
-    });
+            // 1. agentxx_string_html_to_markdown (blocking_tool)
+            agentxx::kit::blocking_tool(
+                *ctx,
+                kNameHtml2Md,
+                kDepictHtml2Md,
+                schemaHtml2Md(ctx.get()),
+                [](std::string_view args_json) -> std::string {
+                    auto arguments = args_json.empty() ? neograph::json::object()
+                                                       : neograph::json::parse(args_json);
+                    return htmlToMarkdownExecute(arguments);
+                }
+            );
+
+            // 2. agentxx_string_regexp (blocking_tool)
+            agentxx::kit::blocking_tool(
+                *ctx,
+                kNameRegexp,
+                kDepictRegexp,
+                schemaRegexp(ctx.get()),
+                [](std::string_view args_json) -> std::string {
+                    auto arguments = args_json.empty() ? neograph::json::object()
+                                                       : neograph::json::parse(args_json);
+                    return regexpExecute(arguments);
+                }
+            );
+
+            *plugin_ctx = ctx.release();
+            return 0;
+        }
+    );
 }
 
 extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_destroy(void* plugin_ctx) {

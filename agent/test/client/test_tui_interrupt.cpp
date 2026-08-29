@@ -26,6 +26,7 @@ int g_tui_interrupt_failed = 0;
 // 断言计数宏覆盖: 将 test_framework.h 的 XX_TEST_EXPECT_* 映射到本模块计数器
 #define XX_TEST_PASSED g_tui_interrupt_passed
 #define XX_TEST_FAILED g_tui_interrupt_failed
+
 namespace agentxx {
 namespace test {
 
@@ -534,8 +535,8 @@ void test_double_invalid_rejected() {
 // ---------------------------------------------------------------------------
 
 void test_enum_render_list() {
-    InterruptFixture  f;
-    auto              ch   = f.makeChannel();
+    InterruptFixture f;
+    auto             ch = f.makeChannel();
     f.addInterrupt(ch, "enum", "", "mode", {"alpha", "beta", "gamma"});
     const std::string text = f.render();
     XX_TEST_EXPECT_TRUE(text.find("alpha") != std::string::npos);

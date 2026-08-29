@@ -7,10 +7,10 @@
 // ---
 #include <ws2tcpip.h>
 // ---
-#include <windows.h>
+#include <UIAutomation.h>
 #include <ole2.h>
 #include <oleacc.h>
-#include <UIAutomation.h>
+#include <windows.h>
 #include <winhttp.h>
 
 #undef max

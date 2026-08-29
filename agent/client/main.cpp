@@ -390,7 +390,7 @@ Options:
     //   相对路径解析基准 / 命令执行子进程初始目录 / 插件 projectRoot
     std::string resolvedWorkDir;
     if (!yamlCfg.workDir.empty()) {
-        auto workDirExpanded = agentxx::util::expandUserHomePath(yamlCfg.workDir);
+        auto                  workDirExpanded = agentxx::util::expandUserHomePath(yamlCfg.workDir);
         std::filesystem::path wp{workDirExpanded};
         resolvedWorkDir
             = wp.is_absolute()

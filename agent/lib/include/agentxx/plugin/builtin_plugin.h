@@ -32,9 +32,9 @@ extern "C" {
 /// 内置插件描述 (编译进 libagentxx 的插件; 静态数组, 进程生命周期有效)
 typedef struct AgentxxBuiltinPluginInfo {
     const char* name; ///< 插件唯一名 (如 "example_plugin"); NULL = 空表占位
-    AgentxxPluginGetInfoFn get_info;  ///< 可空 (加载前元信息校验, 与 dlsym 可选符号同语义)
-    AgentxxPluginCreateFn  create;    ///< 必需 (实例创建, 与 agentxx_plugin_create 同契约)
-    AgentxxPluginDestroyFn destroy;   ///< 可空 (实例销毁, 与 agentxx_plugin_destroy 同契约)
+    AgentxxPluginGetInfoFn get_info; ///< 可空 (加载前元信息校验, 与 dlsym 可选符号同语义)
+    AgentxxPluginCreateFn  create;  ///< 必需 (实例创建, 与 agentxx_plugin_create 同契约)
+    AgentxxPluginDestroyFn destroy; ///< 可空 (实例销毁, 与 agentxx_plugin_destroy 同契约)
 } AgentxxBuiltinPluginInfo;
 
 /// 查询全部内置插件 (libagentxx 实现; 返回静态数组, count 输出条目数)
@@ -50,9 +50,11 @@ const AgentxxBuiltinPluginInfo* agentxx_get_builtin_plugins(size_t* count);
 namespace agentxx {
 namespace plugin {
 inline const AgentxxBuiltinPluginInfo* findBuiltinPlugin(std::string_view name) {
-    size_t count = 0;
-    const auto* list = agentxx_get_builtin_plugins(&count);
-    if (!list) return nullptr;
+    size_t      count = 0;
+    const auto* list  = agentxx_get_builtin_plugins(&count);
+    if (!list) {
+        return nullptr;
+    }
     for (size_t i = 0; i < count; ++i) {
         if (list[i].name && list[i].name == name) {
             return &list[i];
@@ -60,8 +62,8 @@ inline const AgentxxBuiltinPluginInfo* findBuiltinPlugin(std::string_view name) 
     }
     return nullptr;
 }
-}
-}
+} // namespace plugin
+} // namespace agentxx
 #endif
 
 #endif /* AGENTXX_BUILTIN_PLUGIN_H */

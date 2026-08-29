@@ -139,7 +139,7 @@ public:
     std::vector<ClientInfoSection> infoSectionRegs; ///< Info 段落注册信息 (disable 保留)
     std::vector<ClientCommand>     commandRegs;     ///< 命令注册信息 (disable 保留)
     /// 工具消息装饰 (disable 保留, enable 恢复; 无句柄 —— 以 plugin+toolCallId 键控)
-    std::vector<ClientToolDecor>   toolDecorRegs;
+    std::vector<ClientToolDecor>               toolDecorRegs;
     std::vector<std::shared_ptr<Subscription>> subscriptions; ///< 已订阅事件 (disable 保留)
     std::vector<std::shared_ptr<void>> statusItemHandles; ///< 状态栏项宿主句柄 (enable 期)
     std::vector<std::shared_ptr<void>> panelHandles;      ///< 面板宿主句柄 (enable 期)
@@ -465,6 +465,7 @@ private:
         std::string              version;
         std::vector<std::string> interfaces; ///< 该插件声明的接口 (require∪optional)
     };
+
     std::vector<ServerPluginInfo> serverPlugins_;
     /// PLUGIN_DATA 无订阅者警告去重 (仅 io 线程; 每插件名只警告一次):
     /// 收到 WirePluginData 但无任何 client 插件订阅 EVT_PLUGIN_DATA 时,

@@ -21,10 +21,10 @@
 #include "agentxx/plugin/plugin_iface_helper.h"
 #include "agentxx/plugin/plugin_manager.h"
 #include "agentxx/util/log.h"
+#include <algorithm>
 #include <asio/steady_timer.hpp>
 #include <asio/this_coro.hpp>
 #include <asio/use_awaitable.hpp>
-#include <algorithm>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
@@ -39,6 +39,7 @@ int g_res_failed = 0;
 // 断言计数宏覆盖: 将 test_framework.h 的 XX_TEST_EXPECT_* 映射到本模块计数器
 #define XX_TEST_PASSED g_res_passed
 #define XX_TEST_FAILED g_res_failed
+
 namespace agentxx {
 namespace test {
 
@@ -98,8 +99,8 @@ static bool writeTextFile(const std::filesystem::path& p, std::string_view conte
 ///   入口平台化映射保持一致, 否则 Windows 下按 .dll 查找会因文件不存在而
 ///   LoadLibrary 报 error 126
 static bool copyExampleLib(const std::filesystem::path& target) {
-    namespace fs  = std::filesystem;
-    auto        ex = findExamplePluginDir();
+    namespace fs       = std::filesystem;
+    auto            ex = findExamplePluginDir();
     std::error_code ec;
     if (ex.empty()) {
         return false;
@@ -167,11 +168,10 @@ asio::awaitable<TestResult> run_plugin_resource_tests() {
     ctx->resourceApplier = applier;
 
     // 临时工作目录 (进程内唯一; 结束时清理)
-    auto tmpRoot = fs::temp_directory_path()
-                 / ("agentxx_res_test_"
-                    + std::to_string(
-                        std::chrono::steady_clock::now().time_since_epoch().count()
-                    ));
+    auto tmpRoot
+        = fs::temp_directory_path()
+          / ("agentxx_res_test_"
+             + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
     std::error_code ec;
     fs::remove_all(tmpRoot, ec);
     fs::create_directories(tmpRoot, ec);
@@ -206,19 +206,13 @@ interfaces:
     - agentxx.client.toast
 )yaml"
         );
-        std::string              name, entry;
-        std::vector<std::string> depends, optDepends;
-        plugin::PluginManifestResources    res;
-        plugin::PluginManifestInterfaces   ifaces;
-        XX_TEST_EXPECT_TRUE(plugin::parsePluginManifest(
-            dir,
-            name,
-            entry,
-            depends,
-            optDepends,
-            &res,
-            &ifaces
-        ));
+        std::string                      name, entry;
+        std::vector<std::string>         depends, optDepends;
+        plugin::PluginManifestResources  res;
+        plugin::PluginManifestInterfaces ifaces;
+        XX_TEST_EXPECT_TRUE(
+            plugin::parsePluginManifest(dir, name, entry, depends, optDepends, &res, &ifaces)
+        );
         XX_TEST_EXPECT_EQ(name, "mres");
         XX_TEST_EXPECT_TRUE(res.skillDirs.size() == 1);
         if (res.skillDirs.size() == 1) {
@@ -322,7 +316,7 @@ interfaces:
         XX_TEST_EXPECT_TRUE(snap.skillDirs.empty() && snap.memoryFiles.empty());
 
         agentxx::agent::McpServerConfig mc;
-        mc.url                            = "https://yaml.example";
+        mc.url                                     = "https://yaml.example";
         ctx->agentConfig->mcpServerUrls["yaml_ns"] = mc;
         XX_TEST_EXPECT_FALSE(applier->addMcpServer("p_conflict", "yaml_ns", mc, err));
 
@@ -332,14 +326,18 @@ interfaces:
         ctx->agentConfig->mcpServerUrls.clear();
     }
 
-    // ================= T3. 运行时注册 (agentxx.agent.resources 接口表) + MCP 注册/冲突/注销 =================
+    // ================= T3. 运行时注册 (agentxx.agent.resources 接口表) + MCP 注册/冲突/注销
+    // =================
     TEST_INFO << "[T3] runtime registration via agentxx.agent.resources iface + mcp lifecycle"
               << std::endl;
     {
         auto hostDir = tmpRoot / "hostplug";
         fs::create_directories(hostDir, ec);
         XX_TEST_EXPECT_TRUE(copyExampleLib(hostDir / "libtest_host.so"));
-        writeTextFile(hostDir / "plugin.yaml", "name: res_host\nentry: libtest_host.so\ndepends:\n");
+        writeTextFile(
+            hostDir / "plugin.yaml",
+            "name: res_host\nentry: libtest_host.so\ndepends:\n"
+        );
 
         auto inst = co_await ctx->pluginManager->loadPluginAsync(hostDir.string());
         XX_TEST_EXPECT_TRUE(inst != nullptr);
@@ -353,51 +351,53 @@ interfaces:
         // ---- 运行时注册 skill 目录 ----
         auto runtimeSkill = tmpRoot / "runtime_skills";
         fs::create_directories(runtimeSkill, ec);
-        int rc = res3 ? res3->register_skill_dir(
-            &inst->host,
-            AGENTXX_SV(runtimeSkill.string().c_str()))
-                      : -1;
+        int rc
+            = res3
+                  ? res3->register_skill_dir(&inst->host, AGENTXX_SV(runtimeSkill.string().c_str()))
+                  : -1;
         XX_TEST_EXPECT_EQ(rc, 0);
         XX_TEST_EXPECT_TRUE(contains(skillMw->skillDirPathList(), runtimeSkill.string()));
 
         // ---- 快照 JSON (get_own_resources) ----
-        char* json = res3 && res3->get_own_resources ? res3->get_own_resources(&inst->host)
-                                                     : nullptr;
+        char* json
+            = res3 && res3->get_own_resources ? res3->get_own_resources(&inst->host) : nullptr;
         XX_TEST_EXPECT_TRUE(json != nullptr);
         if (json) {
-            XX_TEST_EXPECT_TRUE(std::string_view(json).find("runtime_skills")
-                                != std::string_view::npos);
+            XX_TEST_EXPECT_TRUE(
+                std::string_view(json).find("runtime_skills") != std::string_view::npos
+            );
             inst->host.vtable->free(json);
         }
 
         // ---- 重复注册幂等成功 ----
-        rc = res3 ? res3->register_skill_dir(
-            &inst->host,
-            AGENTXX_SV(runtimeSkill.string().c_str()))
+        rc = res3 ? res3->register_skill_dir(&inst->host, AGENTXX_SV(runtimeSkill.string().c_str()))
                   : -1;
         XX_TEST_EXPECT_EQ(rc, 0);
 
         // ---- 注销; 再注销非 0 ----
         rc = res3 ? res3->unregister_skill_dir(
-            &inst->host,
-            AGENTXX_SV(runtimeSkill.string().c_str()))
+                        &inst->host,
+                        AGENTXX_SV(runtimeSkill.string().c_str())
+                    )
                   : -1;
         XX_TEST_EXPECT_EQ(rc, 0);
         XX_TEST_EXPECT_FALSE(contains(skillMw->skillDirPathList(), runtimeSkill.string()));
         rc = res3 ? res3->unregister_skill_dir(
-            &inst->host,
-            AGENTXX_SV(runtimeSkill.string().c_str()))
+                        &inst->host,
+                        AGENTXX_SV(runtimeSkill.string().c_str())
+                    )
                   : 0;
         XX_TEST_EXPECT_TRUE(rc != 0);
 
         // ---- MCP 注册 (不可达 URL; 失败仅记日志, 所有权记录保留) ----
-        const char* mcpSpec = R"({"namespace":"t_mcp","url":"https://127.0.0.1:9/sse","timeout":3})";
+        const char* mcpSpec
+            = R"({"namespace":"t_mcp","url":"https://127.0.0.1:9/sse","timeout":3})";
         rc = res3 ? res3->register_mcp_server(&inst->host, AGENTXX_SV(mcpSpec)) : -1;
         XX_TEST_EXPECT_EQ(rc, 0);
         co_await sleepMs(150); // 让连接协程跑一轮 (无论成败, 记录均在)
         {
-            char* j2 = res3 && res3->get_own_resources ? res3->get_own_resources(&inst->host)
-                                                       : nullptr;
+            char* j2
+                = res3 && res3->get_own_resources ? res3->get_own_resources(&inst->host) : nullptr;
             XX_TEST_EXPECT_TRUE(j2 != nullptr);
             if (j2) {
                 XX_TEST_EXPECT_TRUE(std::string_view(j2).find("t_mcp") != std::string_view::npos);
@@ -435,8 +435,10 @@ interfaces:
         auto declDir = tmpRoot / "declplug";
         fs::create_directories(declDir / "skills/hello", ec);
         fs::create_directories(declDir / "assets", ec);
-        writeTextFile(declDir / "skills/hello/SKILL.md",
-                      "---\nname: hello-x\ndescription: demo\n---\n# hi\n");
+        writeTextFile(
+            declDir / "skills/hello/SKILL.md",
+            "---\nname: hello-x\ndescription: demo\n---\n# hi\n"
+        );
         writeTextFile(declDir / "assets/NOTES.md", "# notes\n");
         XX_TEST_EXPECT_TRUE(copyExampleLib(declDir / "libdecl.so"));
         writeTextFile(
@@ -490,8 +492,9 @@ mcp:
         auto ok = co_await ctx->pluginManager->unloadAsync(ownerName);
         XX_TEST_EXPECT_TRUE(ok);
         snap = applier->ownedBy(ownerName);
-        XX_TEST_EXPECT_TRUE(snap.skillDirs.empty() && snap.memoryFiles.empty()
-                            && snap.mcpNamespaces.empty());
+        XX_TEST_EXPECT_TRUE(
+            snap.skillDirs.empty() && snap.memoryFiles.empty() && snap.mcpNamespaces.empty()
+        );
         XX_TEST_EXPECT_FALSE(contains(skillMw->skillDirPathList(), absSkill));
         XX_TEST_EXPECT_FALSE(contains(memMw->memoryFilePathList(), absMem));
         XX_TEST_EXPECT_FALSE(contains(ctx->appendComponentInfo.skills, absSkill));
@@ -521,8 +524,9 @@ mcp:
         auto inst         = co_await ctx->pluginManager->loadPluginAsync(failDir.string());
         XX_TEST_EXPECT_TRUE(inst == nullptr);
         auto snap = applier->ownedBy("failp");
-        XX_TEST_EXPECT_TRUE(snap.skillDirs.empty() && snap.memoryFiles.empty()
-                            && snap.mcpNamespaces.empty());
+        XX_TEST_EXPECT_TRUE(
+            snap.skillDirs.empty() && snap.memoryFiles.empty() && snap.mcpNamespaces.empty()
+        );
         XX_TEST_EXPECT_TRUE(skillMw->skillDirPathList() == beforeSkills); // 未被污染
     }
 

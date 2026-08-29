@@ -109,11 +109,11 @@ asio::awaitable<std::string> PluginTool::execute_async(const neograph::json& arg
     };
 
     auto awaitArgs = plugin::PluginOpAwaitArgs{
-        .inst         = std::move(inst),
-        .label        = name_,
-        .ex           = ex,
-        .cancelToken  = std::move(cancelToken),
-        .drive        = std::move(drive),
+        .inst        = std::move(inst),
+        .label       = name_,
+        .ex          = ex,
+        .cancelToken = std::move(cancelToken),
+        .drive       = std::move(drive),
     };
 
     if (spec_.default_timeout_ms > 0) {
@@ -147,11 +147,11 @@ void PluginMiddlewareHandle::setHook(const AgentxxHookSpec& spec) {
     if (spec.point < 0 || spec.point >= AGENTXX_HOOK_COUNT) {
         return;
     }
-    auto& h   = hooks_[static_cast<size_t>(spec.point)];
-    h.start   = spec.hook_start;
-    h.cancel  = spec.hook_cancel;
-    h.ud      = spec.user_data;
-    h.set     = spec.hook_start != nullptr;
+    auto& h  = hooks_[static_cast<size_t>(spec.point)];
+    h.start  = spec.hook_start;
+    h.cancel = spec.hook_cancel;
+    h.ud     = spec.user_data;
+    h.set    = spec.hook_start != nullptr;
 }
 
 void PluginMiddlewareHandle::clearHook(AgentxxHookPoint point) {
@@ -161,20 +161,16 @@ void PluginMiddlewareHandle::clearHook(AgentxxHookPoint point) {
     hooks_[static_cast<size_t>(point)] = HookEntry{};
 }
 
-static neograph::json summarizeNodeInput(
-    AgentxxHookPoint                  point,
-    const neograph::graph::NodeInput& in
-) {
+static neograph::json
+    summarizeNodeInput(AgentxxHookPoint point, const neograph::graph::NodeInput& in) {
     neograph::json j;
     j["sessionId"] = in.ctx.thread_id;
     j["point"]     = static_cast<int>(point);
     return j;
 }
 
-asio::awaitable<void> PluginMiddlewareHandle::dispatch(
-    AgentxxHookPoint                  point,
-    const neograph::graph::NodeInput& in
-) {
+asio::awaitable<void>
+    PluginMiddlewareHandle::dispatch(AgentxxHookPoint point, const neograph::graph::NodeInput& in) {
     if (point < 0 || point >= AGENTXX_HOOK_COUNT) {
         co_return;
     }
@@ -187,15 +183,13 @@ asio::awaitable<void> PluginMiddlewareHandle::dispatch(
         co_return;
     }
 
-    auto        inputJson = summarizeNodeInput(point, in).dump();
-    auto        ex        = co_await asio::this_coro::executor;
-    auto        instKeep  = inst;
+    auto inputJson = summarizeNodeInput(point, in).dump();
+    auto ex        = co_await asio::this_coro::executor;
+    auto instKeep  = inst;
 
     plugin::OpDrive drive;
-    drive.start = [hook, instKeep, inputJson, point](
-                      const AgentxxOpNotify* notify,
-                      char**                 err
-                  ) -> void* {
+    drive.start
+        = [hook, instKeep, inputJson, point](const AgentxxOpNotify* notify, char** err) -> void* {
         return hook.start(
             hook.ud,
             point,
@@ -219,7 +213,12 @@ asio::awaitable<void> PluginMiddlewareHandle::dispatch(
             .drive       = std::move(drive),
         });
     } catch (const std::exception& e) {
-        XX_LOGW("Plugin `{}` hook point={} failed: {}", inst->name, static_cast<int>(point), e.what());
+        XX_LOGW(
+            "Plugin `{}` hook point={} failed: {}",
+            inst->name,
+            static_cast<int>(point),
+            e.what()
+        );
     } catch (...) {
         XX_LOGW("Plugin `{}` hook point={} unknown failure", inst->name, static_cast<int>(point));
     }
@@ -342,9 +341,12 @@ int PluginManager::registerHook(PluginInstance* inst, const AgentxxHookSpec* spe
         ),
         inst->hookRegistrations.end()
     );
-    inst->hookRegistrations.push_back(
-        PluginInstance::HookRegistration{spec->point, spec->hook_start, spec->hook_cancel, spec->user_data}
-    );
+    inst->hookRegistrations.push_back(PluginInstance::HookRegistration{
+        spec->point,
+        spec->hook_start,
+        spec->hook_cancel,
+        spec->user_data
+    });
     return 0;
 }
 
@@ -386,7 +388,7 @@ AgentxxSubscription* PluginManager::subscribe(
     if (!fullTopic.starts_with("plugin.") && !fullTopic.starts_with("client.")) {
         fullTopic = "plugin." + fullTopic;
     }
-    auto sub = std::make_shared<AgentxxSubscription>();
+    auto sub     = std::make_shared<AgentxxSubscription>();
     sub->bus     = ctx->bus;
     sub->topic   = fullTopic;
     sub->inst    = inst;
@@ -457,7 +459,8 @@ int PluginManager::publish(const char* topic, const char* event_json) {
     if (ioExecutor_) {
         asio::co_spawn(
             ioExecutor_,
-            [bus = ctx->bus, fullTopic = std::move(fullTopic), payload = std::move(payload)]() -> asio::awaitable<void> {
+            [bus = ctx->bus, fullTopic = std::move(fullTopic), payload = std::move(payload)](
+            ) -> asio::awaitable<void> {
                 co_await bus->publish(fullTopic, payload);
             },
             asio::detached

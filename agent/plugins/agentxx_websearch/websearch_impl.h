@@ -226,7 +226,7 @@ inline asio::awaitable<std::string> webSearchExecuteAsync(
     std::optional<std::string> out_resp_err;
     if (convertHtml2markdown) {
         // 转换 HTML 结果为 Markdown
-        auto resp    = co_await agentxx::util::HttpClient::fetchMarkdown(search_url, headers, config);
+        auto resp = co_await agentxx::util::HttpClient::fetchMarkdown(search_url, headers, config);
         out_resp_err = resp.error_or("unknown");
         if (resp.has_value()) {
             auto& data = resp.value();
@@ -263,10 +263,8 @@ inline asio::awaitable<std::string> webSearchExecuteAsync(
 
 /// agentxx_web_search 执行体 —— 模型搜索路径 (原 ModelWebSearchTool::execute_async)
 /// - 经 OpenAI 兼容 chat/completions 非流式请求实现 (见文件头注释)
-inline asio::awaitable<std::string> modelWebSearchExecuteAsync(
-    const neograph::json&      arguments,
-    const ModelSearchConfig&   modelCfg
-) {
+inline asio::awaitable<std::string>
+    modelWebSearchExecuteAsync(const neograph::json& arguments, const ModelSearchConfig& modelCfg) {
     std::string query = arguments.value("query", std::string{});
     if (query.empty()) {
         co_return R"({"error":"Arg `query` is empty"})";
@@ -289,18 +287,18 @@ inline asio::awaitable<std::string> modelWebSearchExecuteAsync(
 
     // 构造 chat/completions 请求体: system+user 两条消息, temperature=0
     // (与原 OpenAIProvider 调用参数一致)
-    neograph::json body         = neograph::json::object();
-    body["model"]               = cfg.modelName;
-    body["temperature"]         = 0.0f;
-    body["messages"]            = neograph::json::array({
+    neograph::json body = neograph::json::object();
+    body["model"]       = cfg.modelName;
+    body["temperature"] = 0.0f;
+    body["messages"]    = neograph::json::array({
         neograph::json{
-            {"role", "system"},
-            {"content",
-             "You are a web search assistant. Search the internet "
-             "for the user's query and provide comprehensive, "
-             "accurate results with sources. Respond in the same "
-             "language as the query."},
-        },
+                       {"role", "system"},
+                       {"content",
+                "You are a web search assistant. Search the internet "
+                   "for the user's query and provide comprehensive, "
+                   "accurate results with sources. Respond in the same "
+                   "language as the query."},
+                       },
         neograph::json{
                        {"role", "user"},
                        {"content", query},
@@ -314,7 +312,7 @@ inline asio::awaitable<std::string> modelWebSearchExecuteAsync(
     }
 
     auto defaultSec = cfg.readChunkTimeoutSeconds > 0 ? cfg.readChunkTimeoutSeconds : 100;
-    auto config     = detail::makeConfig(cfg.readChunkTimeoutSeconds, std::chrono::seconds{defaultSec});
+    auto config = detail::makeConfig(cfg.readChunkTimeoutSeconds, std::chrono::seconds{defaultSec});
 
     auto resp = co_await agentxx::util::HttpClient::postAsync(
         fmt::format("{}/chat/completions", cfg.baseUrl),

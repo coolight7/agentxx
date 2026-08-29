@@ -315,10 +315,10 @@ static int64_t fileTimeToUnixMs(fs::file_time_type tp) {
         const auto fNow = fs::file_time_type::clock::now().time_since_epoch();
         const auto sNow = std::chrono::system_clock::now().time_since_epoch();
         return std::chrono::duration_cast<std::chrono::milliseconds>(sNow).count()
-             - std::chrono::duration_cast<std::chrono::milliseconds>(fNow).count();
+               - std::chrono::duration_cast<std::chrono::milliseconds>(fNow).count();
     }();
     return std::chrono::duration_cast<std::chrono::milliseconds>(tp.time_since_epoch()).count()
-         + anchorDelta;
+           + anchorDelta;
 }
 
 /// 目录最近写入时刻启发式 (unix 毫秒): max(session.db, session.db-wal) 的修改时间。
@@ -327,7 +327,7 @@ static int64_t fileTimeToUnixMs(fs::file_time_type tp) {
 /// - 两个文件都不存在/不可读时返回 0 (排序时自然落在最后)
 static int64_t sessionDirActivityHintMs(const fs::path& dir) {
     int64_t best = 0;
-    for (const char* name : { "session.db", "session.db-wal" }) {
+    for (const char* name : {"session.db", "session.db-wal"}) {
         std::error_code ec;
         const auto      t = fs::last_write_time(dir / name, ec);
         if (ec) {
@@ -367,10 +367,9 @@ static bool readSessionDirMeta(const fs::path& dir, SessionInfo& info) {
             // (历史消息均无时间戳) 时回退 session.db 文件修改时间,
             // 保证会话列表时间列不为空 (展示端对 0 显示 "-")
             if (info.lastActiveMs <= 0) {
-                auto lastStmt = db.prepare(
-                    "SELECT json_extract(json, '$.start_time_ms') FROM view_message "
-                    "ORDER BY seq DESC LIMIT 1"
-                );
+                auto lastStmt
+                    = db.prepare("SELECT json_extract(json, '$.start_time_ms') FROM view_message "
+                                 "ORDER BY seq DESC LIMIT 1");
                 if (lastStmt.step() && !lastStmt.columnIsNull(0)) {
                     info.lastActiveMs = lastStmt.columnInt64(0);
                 }
@@ -381,7 +380,11 @@ static bool readSessionDirMeta(const fs::path& dir, SessionInfo& info) {
             return true;
         },
         [&](std::string errmsg) -> bool {
-            XX_LOGD("SessionStore: read session meta {} failed: {}", dir.filename().string(), errmsg);
+            XX_LOGD(
+                "SessionStore: read session meta {} failed: {}",
+                dir.filename().string(),
+                errmsg
+            );
             return false;
         }
     );
@@ -453,7 +456,7 @@ SessionStore::SessionListPage
                 if (ec || !entry.is_directory(ec)) {
                     continue;
                 }
-                dirs.push_back({ entry.path(), sessionDirActivityHintMs(entry.path()) });
+                dirs.push_back({entry.path(), sessionDirActivityHintMs(entry.path())});
             }
             page.totalCount = dirs.size();
             std::sort(dirs.begin(), dirs.end(), [](const DirHint& a, const DirHint& b) {
@@ -478,15 +481,14 @@ SessionStore::SessionListPage
             // ---- 阶段 2: 按 hint 顺序逐个读取精确 meta 并收集 ----
             bool stoppedEarly = false;
             // 是否有符合游标的条目因页满被挤出本页 (排名低于边界, 属于后续页)
-            bool overflowed   = false;
+            bool overflowed = false;
             for (const auto& d : dirs) {
                 // 安全早停: 本页已收满且当前目录的有效 mtime 严格早于页边界。
                 // 正确性: lastActiveMs 为消息开始时间戳, 写入提交时刻恒 ≥ 它, 即
                 // 有效 mtime ≥ lastActiveMs; 故 mtime 更早的目录其会话必然排在
                 // 边界之后, 不可能进入本页。相等时不早停: 同毫秒会话按 id 升序
                 // 排序, id 更小者仍可能排进本页
-                if (
-                    page.sessions.size() >= static_cast<size_t>(limit)
+                if (page.sessions.size() >= static_cast<size_t>(limit)
                     && d.hintMs < page.sessions.back().lastActiveMs) {
                     stoppedEarly = true;
                     break;

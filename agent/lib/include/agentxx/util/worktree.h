@@ -31,8 +31,8 @@
 #include <csignal>
 #include <cstdlib>
 #include <filesystem>
-#include <fstream>
 #include <fmt/format.h>
+#include <fstream>
 #include <neograph/define.h>
 #include <optional>
 #include <string>
@@ -71,7 +71,7 @@ inline bool isValidWorktreeName(std::string_view name) {
     }
     return std::all_of(name.begin(), name.end(), [](char c) {
         return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
-            || c == '.' || c == '_' || c == '-';
+               || c == '.' || c == '_' || c == '-';
     });
 }
 
@@ -107,18 +107,18 @@ inline std::string sanitizeWorktreeName(std::string_view candidate) {
     }
     out = out.substr(b, e - b);
     // Windows 保留名规避 (con/prn/aux/nul/com1-9/lpt1-9, 不区分大小写且可带扩展名)
-    static const char* kReserved[] = {"con", "prn", "aux",  "nul",  "com1", "com2", "com3",
-                                      "com4", "com5", "com6", "com7", "com8", "com9",
-                                      "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7",
-                                      "lpt8", "lpt9"};
+    static const char* kReserved[]
+        = {"con",  "prn",  "aux",  "nul",  "com1", "com2", "com3", "com4", "com5", "com6", "com7",
+           "com8", "com9", "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8", "lpt9"};
     for (const auto* r : kReserved) {
         std::string lower;
         lower.reserve(out.size());
         for (char c : out) {
             lower.push_back((char)std::tolower((unsigned char)c));
         }
-        if (lower == r || (lower.size() > std::strlen(r) && lower.compare(0, std::strlen(r), r) == 0
-                           && lower[std::strlen(r)] == '.')) {
+        if (lower == r
+            || (lower.size() > std::strlen(r) && lower.compare(0, std::strlen(r), r) == 0
+                && lower[std::strlen(r)] == '.')) {
             // 前缀 '_' 隔离保留名; 紧随的 '.' 改为 '-' (避免 aux.txt 形态被系统按设备解析)
             out.insert(out.begin(), '_');
             if (lower.size() > std::strlen(r) && lower[std::strlen(r)] == '.') {
@@ -136,8 +136,8 @@ inline std::string sanitizeWorktreeName(std::string_view candidate) {
 /// git 命令执行结果
 struct GitResult {
     int         exitCode = -1;
-    std::string out;  ///< stdout (utf-8 直传, git 默认输出 ascii 路径加引号转义)
-    std::string err;  ///< stderr
+    std::string out; ///< stdout (utf-8 直传, git 默认输出 ascii 路径加引号转义)
+    std::string err; ///< stderr
 
     bool ok() const {
         return exitCode == 0;
@@ -160,18 +160,19 @@ namespace detail {
 /// 同步执行 git 子进程并捕获 stdout/stderr (超时整组终止)
 /// - Linux 经 setsid 启动 (pgid == pid), 超时 killpg 整组清理
 /// - cwd 为空时继承当前进程工作目录
-inline GitResult runGitImpl(const std::vector<std::string>& args, const std::string& cwd, int timeoutSec) {
-    GitResult result;
-    asio::io_context io;
+inline GitResult
+    runGitImpl(const std::vector<std::string>& args, const std::string& cwd, int timeoutSec) {
+    GitResult           result;
+    asio::io_context    io;
     asio::readable_pipe outpip{io}, errpip{io};
 
     std::vector<std::string> procArgs;
     const char*              exeName = nullptr;
 #if XX_IS_WIN_D
-    exeName = "git.exe";
+    exeName  = "git.exe";
     procArgs = args;
 #else
-    exeName  = "setsid";
+    exeName = "setsid";
     procArgs.reserve(args.size() + 1);
     procArgs.push_back("git");
     procArgs.insert(procArgs.end(), args.begin(), args.end());
@@ -194,7 +195,7 @@ inline GitResult runGitImpl(const std::vector<std::string>& args, const std::str
         };
 
         neograph_asio_error_code ecOut, ecErr;
-        auto readOut = asio::async_read(
+        auto                     readOut = asio::async_read(
             outpip,
             asio::dynamic_buffer(result.out),
             asio::transfer_all(),
@@ -215,7 +216,8 @@ inline GitResult runGitImpl(const std::vector<std::string>& args, const std::str
                 auto mainWork = [&]() -> asio::awaitable<void> {
                     using namespace asio::experimental::awaitable_operators;
                     co_await (
-                        std::move(readOut) && std::move(readErr) && proc.async_wait(asio::use_awaitable)
+                        std::move(readOut) && std::move(readErr)
+                        && proc.async_wait(asio::use_awaitable)
                     );
                 };
                 auto timeoutGuard = [&]() -> asio::awaitable<void> {
@@ -287,8 +289,8 @@ inline GitResult runGit(
 /// (lib 正常构建均定义 AGENTXX_ENABLE_BOOST_PROCESS, 此分支兜底保证可编译)
 inline GitResult runGit(
     const std::vector<std::string>&,
-    const std::string& = {},
-    int                = kDefaultTimeoutSec,
+    const std::string&       = {},
+    int                      = kDefaultTimeoutSec,
     const std::atomic<bool>* = nullptr
 ) {
     GitResult r;
@@ -318,8 +320,8 @@ inline std::optional<std::string> repoRoot(const std::string& dir) {
         return std::nullopt;
     }
     std::error_code ec;
-    auto p = std::filesystem::path{root}.lexically_normal().make_preferred();
-    auto abs = std::filesystem::absolute(p, ec);
+    auto            p   = std::filesystem::path{root}.lexically_normal().make_preferred();
+    auto            abs = std::filesystem::absolute(p, ec);
     return ec ? root : abs.generic_string();
 }
 
@@ -338,9 +340,9 @@ inline std::optional<std::string> headCommit(const std::string& dir) {
 
 /// worktree 条目 (git worktree list --porcelain 输出行)
 struct WorktreeEntry {
-    std::string path;     ///< 绝对路径
-    std::string head;     ///< HEAD 提交哈希
-    std::string branch;   ///< refs/heads/... 或空 (detached/bare)
+    std::string path;   ///< 绝对路径
+    std::string head;   ///< HEAD 提交哈希
+    std::string branch; ///< refs/heads/... 或空 (detached/bare)
     bool        bare     = false;
     bool        detached = false;
 };
@@ -348,7 +350,7 @@ struct WorktreeEntry {
 /// 列举仓库全部 worktree (解析失败返回空列表)
 inline std::vector<WorktreeEntry> listWorktrees(const std::string& repoRootDir) {
     std::vector<WorktreeEntry> out;
-    auto r = runGit({"worktree", "list", "--porcelain"}, repoRootDir, 60);
+    auto                       r = runGit({"worktree", "list", "--porcelain"}, repoRootDir, 60);
     if (!r.ok()) {
         return out;
     }
@@ -361,7 +363,7 @@ inline std::vector<WorktreeEntry> listWorktrees(const std::string& repoRootDir) 
         cur    = {};
         hasCur = false;
     };
-    size_t pos = 0;
+    size_t pos      = 0;
     auto   nextLine = [&](std::string& line) {
         if (pos > r.out.size()) {
             return false;
@@ -383,7 +385,7 @@ inline std::vector<WorktreeEntry> listWorktrees(const std::string& repoRootDir) 
         } else if (line.rfind("HEAD ", 0) == 0) {
             cur.head = line.substr(5);
         } else if (line.rfind("branch ", 0) == 0) {
-            std::string b = line.substr(7);
+            std::string                b         = line.substr(7);
             constexpr std::string_view refsHeads = "refs/heads/";
             if (b.rfind(refsHeads, 0) == 0) {
                 b.erase(0, refsHeads.size());
@@ -416,8 +418,8 @@ inline std::string branchForName(std::string_view name) {
 /// 已存在相同行时幂等返回。失败仅记日志不致命 (untracked 显示不影响功能)
 inline void ensureInfoExcluded(const std::string& repoRootDir, std::string_view pattern) {
     std::error_code ec;
-    auto excludePath = std::filesystem::path{repoRootDir} / ".git" / "info" / "exclude";
-    std::string existing;
+    auto            excludePath = std::filesystem::path{repoRootDir} / ".git" / "info" / "exclude";
+    std::string     existing;
     {
         std::ifstream in{excludePath, std::ios::binary};
         if (in) {
@@ -427,13 +429,14 @@ inline void ensureInfoExcluded(const std::string& repoRootDir, std::string_view 
     // 按行精确匹配检查 (忽略 \r)
     size_t s = 0;
     while (s <= existing.size()) {
-        auto nl = existing.find('\n', s);
-        size_t e = (nl == std::string::npos) ? existing.size() : nl;
+        auto   nl  = existing.find('\n', s);
+        size_t e   = (nl == std::string::npos) ? existing.size() : nl;
         size_t len = e - s;
         while (len > 0 && (existing[s + len - 1] == '\r' || existing[s + len - 1] == ' ')) {
             --len;
         }
-        if (len == pattern.size() && existing.compare(s, len, pattern.data(), pattern.size()) == 0) {
+        if (len == pattern.size()
+            && existing.compare(s, len, pattern.data(), pattern.size()) == 0) {
             return; // 已存在
         }
         if (nl == std::string::npos) {
@@ -459,19 +462,19 @@ inline void ensureInfoExcluded(const std::string& repoRootDir, std::string_view 
 
 /// 工作区状态摘要 (基于 status --porcelain=v1 -b)
 struct StatusSummary {
-    size_t modified  = 0;  ///< M (staged/unstaged modified)
-    size_t added     = 0;  ///< A
-    size_t deleted   = 0;  ///< D
-    size_t renamed   = 0;  ///< R
-    size_t untracked = 0;  ///< ?? 条目数
-    size_t ahead     = 0;  ///< 领先上游提交数 (无上游时为 0 且 hasUpstream=false)
-    size_t behind    = 0;
+    size_t modified    = 0; ///< M (staged/unstaged modified)
+    size_t added       = 0; ///< A
+    size_t deleted     = 0; ///< D
+    size_t renamed     = 0; ///< R
+    size_t untracked   = 0; ///< ?? 条目数
+    size_t ahead       = 0; ///< 领先上游提交数 (无上游时为 0 且 hasUpstream=false)
+    size_t behind      = 0;
     bool   hasUpstream = false;
     /// 未合并到主干参照的提交数 (保护性统计, 见 kUnmergedFallback*)
     /// - 解析顺序: 上游分支 → 主干参照分支 (main/master 等) → 回退整分支提交数
-    size_t unmerged   = 0;
-    bool   usedFallbackUnmerged = false;
-    std::string headLine;  ///< porcelain 首行原文 (## ...)
+    size_t      unmerged             = 0;
+    bool        usedFallbackUnmerged = false;
+    std::string headLine; ///< porcelain 首行原文 (## ...)
 
     /// 是否有未提交的工作成果 (变更或未跟踪文件)
     bool dirtyFiles() const {
@@ -534,21 +537,22 @@ inline std::optional<StatusSummary> statusSummary(const std::string& worktreePat
         return std::nullopt;
     }
     StatusSummary st;
-    size_t pos = 0;
-    bool   first = true;
-    std::string branch;
+    size_t        pos   = 0;
+    bool          first = true;
+    std::string   branch;
     while (pos <= r.out.size()) {
         auto nl = r.out.find('\n', pos);
         if (nl == std::string::npos && pos > r.out.size()) {
             break;
         }
-        std::string line = r.out.substr(pos, nl == std::string::npos ? std::string::npos : nl - pos);
+        std::string line
+            = r.out.substr(pos, nl == std::string::npos ? std::string::npos : nl - pos);
         while (!line.empty() && (line.back() == '\r')) {
             line.pop_back();
         }
         pos = (nl == std::string::npos) ? r.out.size() + 1 : nl + 1;
         if (first) {
-            first    = false;
+            first       = false;
             st.headLine = line;
             // ## HEAD(no branch)/## main...origin/main [ahead 1, behind 2]
             if (line.rfind("## ", 0) == 0) {
@@ -618,7 +622,7 @@ inline GitResult createWorktree(
         return fail;
     }
     std::error_code ec;
-    auto rootDir = std::filesystem::path{worktreesRoot(repoRootDir)};
+    auto            rootDir = std::filesystem::path{worktreesRoot(repoRootDir)};
     std::filesystem::create_directories(rootDir, ec);
 
     auto wtPath = (rootDir / std::string{name}).generic_string();
@@ -644,7 +648,8 @@ inline GitResult createWorktree(
 /// 删除 worktree: `git worktree remove [--force] {path}` + 删除自动分支 (best effort)
 /// - 保护检查: force=false 时若工作区有未提交变更/未跟踪文件/未合并提交,
 ///   拒绝删除并在 err 中返回摘要 (与工具层语义一致, 双层防护)
-inline GitResult removeWorktree(const std::string& repoRootDir, const std::string& wtPath, bool force) {
+inline GitResult
+    removeWorktree(const std::string& repoRootDir, const std::string& wtPath, bool force) {
     GitResult refused;
     if (!force) {
         if (auto st = statusSummary(wtPath); st && st->hasWork()) {
@@ -676,8 +681,8 @@ inline GitResult removeWorktree(const std::string& repoRootDir, const std::strin
     runGit({"branch", "-D", branchForName(leaf)}, repoRootDir, 30);
     // 清理空的父目录链 (.agentxx/agent/worktrees → .agentxx → 仓库根止步)
     std::error_code ec;
-    auto dir = std::filesystem::path{wtPath}.parent_path();
-    auto stop = std::filesystem::path{repoRootDir};
+    auto            dir  = std::filesystem::path{wtPath}.parent_path();
+    auto            stop = std::filesystem::path{repoRootDir};
     while (dir != stop && !dir.empty()) {
         if (!std::filesystem::is_empty(dir, ec) || ec) {
             break;
@@ -691,7 +696,8 @@ inline GitResult removeWorktree(const std::string& repoRootDir, const std::strin
 }
 
 /// 按 worktree 名删除 (等价 removeWorktree(repoRoot, worktreesRoot/name, force))
-inline GitResult removeWorktreeByName(const std::string& repoRootDir, std::string_view name, bool force) {
+inline GitResult
+    removeWorktreeByName(const std::string& repoRootDir, std::string_view name, bool force) {
     return removeWorktree(
         repoRootDir,
         (std::filesystem::path{worktreesRoot(repoRootDir)} / std::string{name}).generic_string(),

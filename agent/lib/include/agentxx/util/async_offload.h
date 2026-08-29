@@ -169,29 +169,30 @@ asio::awaitable<T> offloadCancellableAsync(
     std::shared_ptr<neograph::graph::CancelToken>         cancelToken,
     std::function<asio::awaitable<T>(std::atomic<bool>&)> fn
 ) {
-    std::shared_ptr<asio::steady_timer> watcherTimer;
-    std::shared_ptr<std::atomic<bool>>  watcherDone;
+    std::shared_ptr<asio::steady_timer>           watcherTimer;
+    std::shared_ptr<std::atomic<bool>>            watcherDone;
     std::shared_ptr<neograph::graph::CancelToken> cancelOp;
     if (nullptr != cancelToken) {
         if (cancelToken->is_cancelled()) {
             // 已取消: 直接置位, 工作线程轮询检测后退出
             cancelFlag->store(true, std::memory_order_release);
         } else {
-            auto ex = co_await asio::this_coro::executor;
+            auto ex  = co_await asio::this_coro::executor;
             cancelOp = cancelToken->fork();
             cancelOp->bind_executor(ex);
             if (cancelOp->is_cancelled()) {
                 cancelFlag->store(true, std::memory_order_release);
             } else {
-                watcherDone = std::make_shared<std::atomic<bool>>(false);
+                watcherDone  = std::make_shared<std::atomic<bool>>(false);
                 watcherTimer = std::make_shared<asio::steady_timer>(ex);
                 watcherTimer->expires_at(std::chrono::steady_clock::time_point::max());
                 asio::co_spawn(
                     ex,
                     [cancelFlag, cancelOp, watcherDone, watcherTimer]() -> asio::awaitable<void> {
-                        auto [ec] = co_await watcherTimer->async_wait(
-                            asio::bind_cancellation_slot(cancelOp->slot(), asio::as_tuple(asio::use_awaitable))
-                        );
+                        auto [ec] = co_await watcherTimer->async_wait(asio::bind_cancellation_slot(
+                            cancelOp->slot(),
+                            asio::as_tuple(asio::use_awaitable)
+                        ));
                         if (watcherDone->load(std::memory_order_acquire)) {
                             co_return;
                         }

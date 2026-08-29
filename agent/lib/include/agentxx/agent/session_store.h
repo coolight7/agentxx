@@ -79,10 +79,11 @@ public:
     ///   作读取顺序启发、绝不据此跳过目录; 已收满一页且剩余目录的有效 mtime
     ///   严格早于页边界时可安全早停 (更早 mtime 的会话必然排在边界之后)
     struct SessionListPage {
-        std::vector<SessionInfo> sessions; ///< 本页条目 (已按序排列)
-        uint64_t totalCount = 0;           ///< 当前持久化会话总数 (供 x/y 展示)
-        bool     hasMore    = false;       ///< 是否可能还有未加载的更早会话
+        std::vector<SessionInfo> sessions;       ///< 本页条目 (已按序排列)
+        uint64_t                 totalCount = 0; ///< 当前持久化会话总数 (供 x/y 展示)
+        bool                     hasMore    = false; ///< 是否可能还有未加载的更早会话
     };
+
     SessionListPage listSessionsPage(int64_t beforeMs, std::string_view beforeId, uint32_t limit);
 
     /// 追加一条展示历史消息 (事务: 消息 + msgIdCounter 一起提交)

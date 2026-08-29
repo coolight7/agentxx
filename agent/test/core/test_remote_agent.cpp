@@ -36,6 +36,7 @@ int g_remote_failed = 0;
 // 断言计数宏覆盖: 将 test_framework.h 的 XX_TEST_EXPECT_* 映射到本模块计数器
 #define XX_TEST_PASSED g_remote_passed
 #define XX_TEST_FAILED g_remote_failed
+
 namespace agentxx {
 namespace test {
 
@@ -414,7 +415,7 @@ static asio::awaitable<void> test_remote_protocol_roundtrip() {
     }
     {
         agentxx::agent::WireListSessions legacy{};
-        auto back
+        auto                             back
             = WsAgentIOTransport::deserialize(WsAgentIOTransport::serialize(WireMessage{legacy}));
         XX_TEST_EXPECT_TRUE(back.has_value());
         if (back) {
@@ -2563,7 +2564,7 @@ static asio::awaitable<void> test_session_controller_queue_resume_after_abort() 
     cfg->model.apiKey    = "EMPTY";
     cfg->model.modelName = "default-model";
     // 重试 1 次即停止: 注入失败时轮次确定性地以错误结束 (缩短退避等待)
-    cfg->llmMaxRetry     = 1;
+    cfg->llmMaxRetry = 1;
 
     auto agent = std::make_shared<agentxx::agent::BaseAgent>(cfg);
     co_await agent->init();
@@ -2660,9 +2661,8 @@ static asio::awaitable<void> test_session_controller_queue_resume_after_abort() 
     }
 
     // ---- 4) 空闲时收到取消 (无轮次进行中): 不应使后续新输入滞留队列 ----
-    clientT->send(
-        agentxx::agent::WireMessage{agentxx::agent::WireCancel{"queue-resume-test-session"}}
-    );
+    clientT->send(agentxx::agent::WireMessage{agentxx::agent::WireCancel{"queue-resume-test-session"
+    }});
     co_await testSleep(ex, std::chrono::milliseconds{100});
     clientT->send(agentxx::agent::WireMessage{
         agentxx::agent::WireUserInput{"queue-resume-test-session", "turn 4", ""}

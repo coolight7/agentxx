@@ -64,22 +64,24 @@ public:
         ok_  = true;
     }
 
-    bool                     ok() const {
+    bool ok() const {
         return ok_;
     }
+
     simdjson::ondemand::document& doc() {
         return doc_;
     }
 
 private:
 
-    simdjson::ondemand::parser                  parser_{};
-    std::unique_ptr<simdjson::padded_string>    padded_{};
-    simdjson::ondemand::document                doc_{};
-    bool                                        ok_ = false;
+    simdjson::ondemand::parser               parser_{};
+    std::unique_ptr<simdjson::padded_string> padded_{};
+    simdjson::ondemand::document             doc_{};
+    bool                                     ok_ = false;
 };
 
-inline bool jsonGetString(simdjson::simdjson_result<simdjson::ondemand::value> val, std::string& out) {
+inline bool
+    jsonGetString(simdjson::simdjson_result<simdjson::ondemand::value> val, std::string& out) {
     if (val.error()) {
         return false;
     }

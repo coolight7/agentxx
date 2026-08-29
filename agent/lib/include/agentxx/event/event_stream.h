@@ -467,7 +467,7 @@ public:
                      streams_,
                      std::string{topic},
                      std::static_pointer_cast<EventStreamInterface>(stream)
-                 )
+            )
                      .first;
         } else {
             // 类型校验: 同 topic 必须用同一 _DATA_TYPE, 否则 static_cast 是 UB
@@ -490,7 +490,7 @@ public:
                      streams_,
                      std::string{topic},
                      std::static_pointer_cast<EventStreamInterface>(stream)
-                 )
+            )
                      .first;
         } else {
             assert(

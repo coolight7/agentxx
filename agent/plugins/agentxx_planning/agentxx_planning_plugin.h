@@ -5,14 +5,13 @@
 #include "agentxx/plugin/plugin_guard.h"
 #include "agentxx/plugin/plugin_kit.h"
 #include <fmt/format.h>
-#include <neograph/json.h>
 #include <memory>
+#include <neograph/json.h>
 #include <string>
 
 namespace agentxx_planning_plugin {
 
-struct PluginCtx : public agentxx::kit::PluginBase {
-};
+struct PluginCtx : public agentxx::kit::PluginBase {};
 
 inline void pluginLog(const PluginCtx* ctx, int level, const std::string& msg) {
     if (ctx) {

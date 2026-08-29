@@ -95,8 +95,8 @@ static inline void* agentxx_sync_job_work(void* ud, volatile int* cancel_flag, c
 }
 
 static inline void agentxx_sync_job_done(void* ud, void* result, char* error) {
-    AgentxxSyncJob* job = (AgentxxSyncJob*)ud;
-    int             st  = AGENTXX_OP_OK;
+    AgentxxSyncJob* job     = (AgentxxSyncJob*)ud;
+    int             st      = AGENTXX_OP_OK;
     char*           payload = (char*)result;
 
     if (error) {
@@ -110,9 +110,15 @@ static inline void agentxx_sync_job_done(void* ud, void* result, char* error) {
         job->notify.done(job->notify.host_ud, st, payload);
     }
 
-    if (job->args) free(job->args);
-    if (job->tid) free(job->tid);
-    if (job->tcid) free(job->tcid);
+    if (job->args) {
+        free(job->args);
+    }
+    if (job->tid) {
+        free(job->tid);
+    }
+    if (job->tcid) {
+        free(job->tcid);
+    }
     free(job);
 }
 
@@ -127,7 +133,8 @@ static inline void* agentxx_sync_tool_start(
     AgentxxSyncToolShim* shim = (AgentxxSyncToolShim*)user_data;
     if (!shim || !shim->sched || !shim->sched->offload) {
         if (error_out) {
-            *error_out = agentxx_shim_err_dup(shim ? shim->host : NULL, "scheduler iface not available");
+            *error_out
+                = agentxx_shim_err_dup(shim ? shim->host : NULL, "scheduler iface not available");
         }
         return NULL;
     }
@@ -142,15 +149,17 @@ static inline void* agentxx_sync_tool_start(
     job->shim       = *shim;
     job->notify     = *notify;
     job->cancelFlag = 0;
-    job->args = NULL;
-    job->tid  = NULL;
-    job->tcid = NULL;
+    job->args       = NULL;
+    job->tid        = NULL;
+    job->tcid       = NULL;
 
     if (args_json.size) {
         job->args = (char*)malloc(args_json.size);
         if (!job->args) {
             free(job);
-            if (error_out) *error_out = agentxx_shim_err_dup(shim->host, "out of memory allocating args");
+            if (error_out) {
+                *error_out = agentxx_shim_err_dup(shim->host, "out of memory allocating args");
+            }
             return NULL;
         }
         memcpy(job->args, args_json.data, args_json.size);
@@ -160,9 +169,13 @@ static inline void* agentxx_sync_tool_start(
     if (thread_id.size) {
         job->tid = (char*)malloc(thread_id.size);
         if (!job->tid) {
-            if (job->args) free(job->args);
+            if (job->args) {
+                free(job->args);
+            }
             free(job);
-            if (error_out) *error_out = agentxx_shim_err_dup(shim->host, "out of memory allocating thread_id");
+            if (error_out) {
+                *error_out = agentxx_shim_err_dup(shim->host, "out of memory allocating thread_id");
+            }
             return NULL;
         }
         memcpy(job->tid, thread_id.data, thread_id.size);
@@ -172,10 +185,17 @@ static inline void* agentxx_sync_tool_start(
     if (tool_call_id.size) {
         job->tcid = (char*)malloc(tool_call_id.size);
         if (!job->tcid) {
-            if (job->args) free(job->args);
-            if (job->tid) free(job->tid);
+            if (job->args) {
+                free(job->args);
+            }
+            if (job->tid) {
+                free(job->tid);
+            }
             free(job);
-            if (error_out) *error_out = agentxx_shim_err_dup(shim->host, "out of memory allocating tool_call_id");
+            if (error_out) {
+                *error_out
+                    = agentxx_shim_err_dup(shim->host, "out of memory allocating tool_call_id");
+            }
             return NULL;
         }
         memcpy(job->tcid, tool_call_id.data, tool_call_id.size);
@@ -194,9 +214,11 @@ static inline void* agentxx_sync_tool_start(
 
 static inline void agentxx_sync_tool_cancel(void* user_data, void* op) {
     (void)user_data;
-    if (!op) return;
+    if (!op) {
+        return;
+    }
     AgentxxSyncJob* job = (AgentxxSyncJob*)op;
-    job->cancelFlag = 1;
+    job->cancelFlag     = 1;
 }
 
 static inline int agentxx_register_sync_tool(
@@ -207,8 +229,10 @@ static inline int agentxx_register_sync_tool(
     if (!host || !host->vtable || !sync_spec || !out_shim || !sync_spec->execute) {
         return -1;
     }
-    const AgentxxToolsIface* tools = AGENTXX_QUERY_IFACE(host, AgentxxToolsIface, AGENTXX_IFACE_AGENT_TOOLS);
-    const AgentxxSchedulerIface* sched = AGENTXX_QUERY_IFACE(host, AgentxxSchedulerIface, AGENTXX_IFACE_AGENT_SCHEDULER);
+    const AgentxxToolsIface* tools
+        = AGENTXX_QUERY_IFACE(host, AgentxxToolsIface, AGENTXX_IFACE_AGENT_TOOLS);
+    const AgentxxSchedulerIface* sched
+        = AGENTXX_QUERY_IFACE(host, AgentxxSchedulerIface, AGENTXX_IFACE_AGENT_SCHEDULER);
     if (!tools || !tools->register_tool || !sched) {
         return -1;
     }
@@ -294,7 +318,7 @@ static inline void* agentxx_inline_tool_start(
         if (notify && notify->done) {
             // 执行期失败：经 notify 上报，error_out 清零避免宿主 double-free / 误判为 start 失败
             char* errPayload = *error_out;
-            *error_out = NULL;
+            *error_out       = NULL;
             notify->done(notify->host_ud, AGENTXX_OP_FAILED, errPayload);
         }
     } else {
@@ -313,7 +337,8 @@ static inline int agentxx_register_inline_tool(
     if (!host || !host->vtable || !inline_spec || !out_shim || !inline_spec->execute) {
         return -1;
     }
-    const AgentxxToolsIface* tools = AGENTXX_QUERY_IFACE(host, AgentxxToolsIface, AGENTXX_IFACE_AGENT_TOOLS);
+    const AgentxxToolsIface* tools
+        = AGENTXX_QUERY_IFACE(host, AgentxxToolsIface, AGENTXX_IFACE_AGENT_TOOLS);
     if (!tools || !tools->register_tool) {
         return -1;
     }
@@ -397,7 +422,8 @@ static inline int agentxx_register_sync_hook(
     if (!host || !host->vtable || !fn || !out_shim || point < 0 || point >= AGENTXX_HOOK_COUNT) {
         return -1;
     }
-    const AgentxxHooksIface* hooks = AGENTXX_QUERY_IFACE(host, AgentxxHooksIface, AGENTXX_IFACE_AGENT_HOOKS);
+    const AgentxxHooksIface* hooks
+        = AGENTXX_QUERY_IFACE(host, AgentxxHooksIface, AGENTXX_IFACE_AGENT_HOOKS);
     if (!hooks || !hooks->register_hook) {
         return -1;
     }

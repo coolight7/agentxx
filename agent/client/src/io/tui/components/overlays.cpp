@@ -166,14 +166,13 @@ Element SessionSelectorOverlay::OnRender() {
         if (st.sessionListLoadingMore) {
             items.push_back(text("↓ 加载中...") | dim);
         } else if (st.sessionListHasMore) {
-            const std::string hint =
-                st.sessionListTotalCount > 0
-                    ? fmt::format(
-                        "已加载 {}/{}  ↓ 下移加载更多",
-                        st.sessionList.size(),
-                        st.sessionListTotalCount
-                    )
-                    : std::string("↓ 下移加载更多");
+            const std::string hint = st.sessionListTotalCount > 0
+                                         ? fmt::format(
+                                               "已加载 {}/{}  ↓ 下移加载更多",
+                                               st.sessionList.size(),
+                                               st.sessionListTotalCount
+                                           )
+                                         : std::string("↓ 下移加载更多");
             items.push_back(text(hint) | dim);
         }
     }
@@ -723,9 +722,13 @@ std::vector<ScrollItem> MermaidDiagramOverlay::buildItems() {
         }
     }
     if (!cachedElement_) {
-        return {ScrollItem{ftxui::text(" (no diagram) ") | ftxui::dim, false}};
+        return {
+            ScrollItem{ftxui::text(" (no diagram) ") | ftxui::dim, false}
+        };
     }
-    return {ScrollItem{cachedElement_, false}};
+    return {
+        ScrollItem{cachedElement_, false}
+    };
 }
 
 ftxui::Element MermaidDiagramOverlay::OnRender() {
@@ -735,33 +738,35 @@ ftxui::Element MermaidDiagramOverlay::OnRender() {
         ftxui::filler(),
         ftxui::text(" "),
     });
-    const int margin = 2;
-    const int termW  = ftxui::Terminal::Size().dimx;
-    const int termH  = ftxui::Terminal::Size().dimy;
-    const int wantW  = std::max(40, termW * 4 / 5);
-    const int wantH  = std::max(14, termH * 4 / 5);
-    const int availW = std::max(1, termW - margin * 2);
-    const int availH = std::max(1, termH - margin * 2);
-    const int popupW = std::min(wantW, availW);
-    const int popupH = std::min(wantH, availH);
+    const int   margin = 2;
+    const int   termW  = ftxui::Terminal::Size().dimx;
+    const int   termH  = ftxui::Terminal::Size().dimy;
+    const int   wantW  = std::max(40, termW * 4 / 5);
+    const int   wantH  = std::max(14, termH * 4 / 5);
+    const int   availW = std::max(1, termW - margin * 2);
+    const int   availH = std::max(1, termH - margin * 2);
+    const int   popupW = std::min(wantW, availW);
+    const int   popupH = std::min(wantH, availH);
     return ftxui::vbox({
                header,
                ftxui::separator(),
-               ftxui::hbox({ftxui::text(" "), scrollable_->Render() | ftxui::flex, ftxui::text(" ")}) | ftxui::flex,
+               ftxui::hbox({ftxui::text(" "), scrollable_->Render() | ftxui::flex, ftxui::text(" ")}
+               ) | ftxui::flex,
                ftxui::separator(),
                ftxui::text(" [Wheel/Up/Down] Scroll  [Esc] Close ") | ftxui::center | ftxui::dim,
            })
            | ftxui::border | ftxui::size(ftxui::WIDTH, ftxui::GREATER_THAN, popupW)
            | ftxui::size(ftxui::WIDTH, ftxui::LESS_THAN, popupW)
            | ftxui::size(ftxui::HEIGHT, ftxui::GREATER_THAN, popupH)
-           | ftxui::size(ftxui::HEIGHT, ftxui::LESS_THAN, popupH)
-           | ftxui::color(theme.accentColor);
+           | ftxui::size(ftxui::HEIGHT, ftxui::LESS_THAN, popupH) | ftxui::color(theme.accentColor);
 }
 
 bool MermaidDiagramOverlay::OnEvent(ftxui::Event event) {
     if (event == ftxui::Event::Escape) {
         ctx_.postRedraw();
-        if (onClose_) onClose_();
+        if (onClose_) {
+            onClose_();
+        }
         return true;
     }
     if (event.is_mouse()) {
@@ -779,7 +784,8 @@ bool MermaidDiagramOverlay::OnEvent(ftxui::Event event) {
     }
     if (event == ftxui::Event::ArrowDown) {
         scrollable_->setScrollOffset(scrollable_->scrollOffset() + 1);
-        if (scrollable_->totalHeight() - scrollable_->viewportHeight() <= scrollable_->scrollOffset()) {
+        if (scrollable_->totalHeight() - scrollable_->viewportHeight()
+            <= scrollable_->scrollOffset()) {
             scrollable_->setStickToBottom(true);
         }
         ctx_.postRedraw();
@@ -798,10 +804,14 @@ namespace {
 const char* appendTypeLabel(agentxx::agent::AppendComponentNotification::Type type) {
     using T = agentxx::agent::AppendComponentNotification;
     switch (type) {
-        case T::Type::Mcp: return "MCP";
-        case T::Type::Skill: return "Skill";
-        case T::Type::Memory: return "Memory";
-        case T::Type::Plugin: return "Plugin";
+        case T::Type::Mcp:
+            return "MCP";
+        case T::Type::Skill:
+            return "Skill";
+        case T::Type::Memory:
+            return "Memory";
+        case T::Type::Plugin:
+            return "Plugin";
     }
     return "Unknown";
 }

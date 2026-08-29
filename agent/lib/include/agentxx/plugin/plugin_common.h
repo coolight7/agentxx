@@ -175,15 +175,15 @@ inline constexpr std::string_view AgentPlanning     = AGENTXX_IFACE_AGENT_PLANNI
 
 /* ---- client 侧: 接口表名 + 细粒度能力名 (映射到 agentxx.client.ui 表的非空成员) ---- */
 inline constexpr std::string_view ClientUi = AGENTXX_IFACE_CLIENT_UI; ///< 展示扩展表整体
-inline constexpr std::string_view ClientStatusItem = "agentxx.client.status_item";
-inline constexpr std::string_view ClientPanel      = "agentxx.client.panel";
-inline constexpr std::string_view ClientToast      = "agentxx.client.toast";
-inline constexpr std::string_view ClientKeybind    = "agentxx.client.keybind"; // 预留
+inline constexpr std::string_view ClientStatusItem  = "agentxx.client.status_item";
+inline constexpr std::string_view ClientPanel       = "agentxx.client.panel";
+inline constexpr std::string_view ClientToast       = "agentxx.client.toast";
+inline constexpr std::string_view ClientKeybind     = "agentxx.client.keybind";      // 预留
 inline constexpr std::string_view ClientPromptModal = "agentxx.client.prompt_modal"; // 预留
 /// 工具消息装饰 (ui 表 v2 update_tool_decor; TUI 声明, CLI 无消息渲染面不声明)
-inline constexpr std::string_view ClientMsgDecor   = "agentxx.client.msg_decor";
+inline constexpr std::string_view ClientMsgDecor    = "agentxx.client.msg_decor";
 inline constexpr std::string_view ClientInfoSection = "agentxx.client.info_section";
-inline constexpr std::string_view ClientCommand    = "agentxx.client.command";
+inline constexpr std::string_view ClientCommand     = "agentxx.client.command";
 } // namespace plugin_interfaces
 
 /// 宿主支持的接口集合 (稳定名字符串; io 线程构建后只读)
@@ -191,14 +191,16 @@ using InterfaceSet = std::set<std::string, std::less<>>;
 
 /// 插件清单接口声明 (plugin.yaml 可选段):
 ///   interfaces:
-///     require:  [agentxx.agent.core, agentxx.client.command]  # 任一缺失(按前缀过滤后) → 该侧跳过加载
-///     optional: [agentxx.client.toast]                # 缺失仅警告, 不影响加载
+///     require:  [agentxx.agent.core, agentxx.client.command]  # 任一缺失(按前缀过滤后) →
+///     该侧跳过加载 optional: [agentxx.client.toast]                # 缺失仅警告, 不影响加载
 /// - 同一清单可同时声明两侧接口 (前缀决定归属), 服务 cli/tui/gui 多宿主
 struct PluginManifestInterfaces {
     std::vector<std::string> require;
     std::vector<std::string> optional;
 
-    bool empty() const { return require.empty() && optional.empty(); }
+    bool empty() const {
+        return require.empty() && optional.empty();
+    }
 };
 
 /// 本侧是否关心此接口声明 (前缀过滤规则):
@@ -233,6 +235,7 @@ struct RequiredEntrySides {
     bool agentEntry  = false;
     bool clientEntry = false;
 };
+
 RequiredEntrySides requiredEntrySides(const std::vector<std::string>& interfaces);
 
 /// 拓扑排序项 (调用方 Item 须含 path/name/depends 三个成员, 可附带其他字段)

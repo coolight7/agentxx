@@ -25,6 +25,7 @@ int g_cg_failed = 0;
 // 断言计数宏覆盖: 将 test_framework.h 的 XX_TEST_EXPECT_* 映射到本模块计数器
 #define XX_TEST_PASSED g_cg_passed
 #define XX_TEST_FAILED g_cg_failed
+
 namespace agentxx {
 namespace test {
 
@@ -146,10 +147,10 @@ asio::awaitable<TestResult>
     // 目录名唯一化 (时间戳): 若此前有测试进程异常退出仍持有旧目录内的
     // 索引数据库句柄, 固定名目录的 remove_all 会静默失败, 插件打开被锁
     // 数据库 → 初始化失败 → loadPluginAsync 返回 nullptr; 唯一名彻底规避
-    auto            tmp_data_dir = fs::temp_directory_path()
-                        / ("codegraph_plugin_data_"
-                           + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count())
-                        );
+    auto tmp_data_dir
+        = fs::temp_directory_path()
+          / ("codegraph_plugin_data_"
+             + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
     std::error_code ec;
     fs::remove_all(tmp_data_dir, ec);
     fs::create_directories(tmp_data_dir, ec);

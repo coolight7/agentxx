@@ -75,7 +75,8 @@ private:
     bool                                     ok_ = false;
 };
 
-inline bool jsonGetString(simdjson::simdjson_result<simdjson::ondemand::value> val, std::string& out) {
+inline bool
+    jsonGetString(simdjson::simdjson_result<simdjson::ondemand::value> val, std::string& out) {
     if (val.error()) {
         return false;
     }

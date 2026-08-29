@@ -1,7 +1,7 @@
 #include "agentxx-client/io/tui/components/message_list.h"
 #include "agentxx-client/io/tui/agent_tui.h" // formatDurationMilliseconds / oneLinePreview
-#include "agentxx/plugin/client_plugin_manager.h" // ClientToolDecor 完整定义 (头文件中仅前置声明)
 #include "agentxx-client/io/tui/framework/tui_settings.h"
+#include "agentxx/plugin/client_plugin_manager.h" // ClientToolDecor 完整定义 (头文件中仅前置声明)
 #include "agentxx/util/diff_util.h"
 #include "agentxx/util/exception.h"
 #include "agentxx/util/string_util.h"
@@ -1705,9 +1705,8 @@ Element MessageListComponent::buildMessageBlock(
                 }
             } else {
                 // 展开头: 插件装饰显示名优先, 回退原始 toolName
-                const auto& shownName
-                    = (decor && !decor->displayName.empty()) ? decor->displayName
-                                                             : msg.tool->toolName;
+                const auto& shownName = (decor && !decor->displayName.empty()) ? decor->displayName
+                                                                               : msg.tool->toolName;
                 if (!finished) {
                     header.push_back(text(shownName) | color(theme.accentColor) | bold);
                 } else {
@@ -2028,7 +2027,8 @@ void MessageListComponent::appendDecorToolBody(
             // Graph 按钮 (点击弹窗): 渲染为带背景的标签, 与 Todo/Note 视觉分区
             const auto label = it.value("label", std::string{"Button"});
             // 若携带 mermaid，则为 Graph 弹窗按钮；否则为通用操作按钮
-            Element btn = text(" " + label + " ") | bgcolor(theme.buttonBgColor) | color(theme.buttonTextColor) | bold;
+            Element btn = text(" " + label + " ") | bgcolor(theme.buttonBgColor)
+                          | color(theme.buttonTextColor) | bold;
             lines.push_back(hbox({
                 text("    "),
                 btn | xflex_shrink,
@@ -2036,7 +2036,7 @@ void MessageListComponent::appendDecorToolBody(
         } else if (kind == "diagram") {
             // Mermaid stateDiagram-v2 ASCII 状态图 (通用组件; 解析失败静默跳过)
             const auto mermaid = it.value("mermaid", std::string{});
-            auto diagram = markdown::parseMermaidStateDiagram(mermaid);
+            auto       diagram = markdown::parseMermaidStateDiagram(mermaid);
             if (!diagram.nodes.empty()) {
                 auto diagEl = markdown::renderMermaidStateDiagram(
                     diagram,

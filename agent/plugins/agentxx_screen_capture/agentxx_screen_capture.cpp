@@ -64,7 +64,8 @@ inline bool ScreenCaptureHolder::startStreaming(int frameRate) {
                         agentxx_plugin_sv(payload.data(), payload.size())
                     );
                 }
-            } catch (...) {}
+            } catch (...) {
+            }
         }
     );
 }
@@ -107,7 +108,11 @@ static std::string buildCapturePath(PluginCtx& ctx, int screenIndex) {
     );
 }
 
-static codegraph::Json frameToJson(PluginCtx& ctx, const agentxx_screen_capture_plugin::ScreenFrame& f, bool saveImages) {
+static codegraph::Json frameToJson(
+    PluginCtx&                                        ctx,
+    const agentxx_screen_capture_plugin::ScreenFrame& f,
+    bool                                              saveImages
+) {
     codegraph::Json j = codegraph::Json::object();
     j["width"]        = f.width;
     j["height"]       = f.height;
@@ -129,8 +134,11 @@ static codegraph::Json frameToJson(PluginCtx& ctx, const agentxx_screen_capture_
     return j;
 }
 
-static std::string
-    framesResult(PluginCtx& ctx, const std::vector<agentxx_screen_capture_plugin::ScreenFrame>& frames, bool saveImages) {
+static std::string framesResult(
+    PluginCtx&                                                     ctx,
+    const std::vector<agentxx_screen_capture_plugin::ScreenFrame>& frames,
+    bool                                                           saveImages
+) {
     if (frames.empty()) {
         return R"({"ok":false,"error":"capture failed"})";
     }
@@ -186,7 +194,7 @@ static void registerScreenCaptureTool(PluginCtx& ctx) {
            "enter the conversation. Default: true."}
     });
 
-    auto p = ctx.toolPrompt("agentxx_screen_capture");
+    auto        p      = ctx.toolPrompt("agentxx_screen_capture");
     std::string depict = p.depict.empty() ? kScreenCaptureDefaultDepict : p.depict;
 
     agentxx::kit::blocking_tool(
@@ -196,14 +204,14 @@ static void registerScreenCaptureTool(PluginCtx& ctx) {
         schema.dump(),
         [](PluginCtx& c, std::string_view args_json) -> std::string {
             std::string argsStr(args_json.data() ? args_json.data() : "{}", args_json.size());
-            SimpleJson args(argsStr.empty() ? "{}" : argsStr);
+            SimpleJson  args(argsStr.empty() ? "{}" : argsStr);
             if (!args.ok()) {
                 throw std::runtime_error("invalid args json");
             }
 
             ScreenCaptureHolder& capture = *c.holder;
-            std::string command;
-            bool        hasCommand = jsonGetString(args.doc().at_pointer("/command"), command);
+            std::string          command;
+            bool hasCommand = jsonGetString(args.doc().at_pointer("/command"), command);
 
             bool saveImages = true;
             jsonGetBool(args.doc().at_pointer("/save_images"), saveImages);
@@ -225,7 +233,7 @@ static void registerScreenCaptureTool(PluginCtx& ctx) {
             }
             if (command == "capture_mouse") {
                 std::vector<agentxx_screen_capture_plugin::ScreenFrame> frames;
-                auto                                      f = capture.capture_.captureMouseScreen();
+                auto f = capture.capture_.captureMouseScreen();
                 if (f.width > 0) {
                     frames.push_back(std::move(f));
                 }
@@ -276,14 +284,16 @@ static void registerScreenCaptureTool(PluginCtx& ctx) {
     );
 }
 
-} // namespace
+} // namespace agentxx_screen_capture_plugin
 
 extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_get_info(void) {
     static const AgentxxPluginInfo info{
         AGENTXX_PLUGIN_API_VERSION,
         AGENTXX_SV("agentxx_screen_capture"),
         AGENTXX_SV("1.0.0"),
-        AGENTXX_SV("Screen capture and streaming on Windows (DXGI Desktop Duplication with GDI fallback)"),
+        AGENTXX_SV(
+            "Screen capture and streaming on Windows (DXGI Desktop Duplication with GDI fallback)"
+        ),
     };
     return &info;
 }
@@ -292,56 +302,62 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
     agentxx_plugin_create(const AgentxxHost* host, void** plugin_ctx) {
     PluginCtx* raw = nullptr;
     return agentxx::plugin_guard::guardCall(
-        [&raw](const char* msg) noexcept { ctxGuardLogger(raw)(msg); },
+        [&raw](const char* msg) noexcept {
+            ctxGuardLogger(raw)(msg);
+        },
         -1,
         [&]() -> int {
-        if (!host || !host->vtable || !plugin_ctx) {
-            return -1;
-        }
-        auto ctx     = std::make_unique<PluginCtx>();
-        ctx->init(host);
-        ctx->holder      = std::make_unique<ScreenCaptureHolder>();
-        ctx->holder->ctx = ctx.get();
-        raw              = ctx.get();
-
-        ctx->log_sink = [raw = ctx.get()](int level, const std::string& msg) {
-            if (raw) {
-                raw->log.log(level, msg);
+            if (!host || !host->vtable || !plugin_ctx) {
+                return -1;
             }
-        };
-        agentxx_screen_capture_plugin::g_log_sink.store(&ctx->log_sink, std::memory_order_release);
+            auto ctx = std::make_unique<PluginCtx>();
+            ctx->init(host);
+            ctx->holder      = std::make_unique<ScreenCaptureHolder>();
+            ctx->holder->ctx = ctx.get();
+            raw              = ctx.get();
 
-        if (ctx->iface.config && ctx->iface.config->get_config) {
-            char* json = ctx->iface.config->get_config(ctx->host);
-            if (json) {
-                std::string s{json};
-                ctx->host->vtable->free(json);
-                SimpleJson j(s);
-                if (j.ok()) {
-                    std::string dataDir;
-                    if (jsonGetString(j.doc().at_pointer("/dataDir"), dataDir)
-                        && !dataDir.empty()) {
-                        namespace fs       = std::filesystem;
-                        fs::path targetDir = fs::path(dataDir) / "captures";
-                        std::error_code ec;
-                        fs::create_directories(targetDir, ec);
-                        if (!ec) {
-                            ctx->captures_dir = targetDir.string();
+            ctx->log_sink = [raw = ctx.get()](int level, const std::string& msg) {
+                if (raw) {
+                    raw->log.log(level, msg);
+                }
+            };
+            agentxx_screen_capture_plugin::g_log_sink.store(
+                &ctx->log_sink,
+                std::memory_order_release
+            );
+
+            if (ctx->iface.config && ctx->iface.config->get_config) {
+                char* json = ctx->iface.config->get_config(ctx->host);
+                if (json) {
+                    std::string s{json};
+                    ctx->host->vtable->free(json);
+                    SimpleJson j(s);
+                    if (j.ok()) {
+                        std::string dataDir;
+                        if (jsonGetString(j.doc().at_pointer("/dataDir"), dataDir)
+                            && !dataDir.empty()) {
+                            namespace fs              = std::filesystem;
+                            fs::path        targetDir = fs::path(dataDir) / "captures";
+                            std::error_code ec;
+                            fs::create_directories(targetDir, ec);
+                            if (!ec) {
+                                ctx->captures_dir = targetDir.string();
+                            }
                         }
                     }
                 }
             }
+
+            if (!ctx->iface.tools || !ctx->iface.tools->register_tool) {
+                return -1;
+            }
+
+            registerScreenCaptureTool(*ctx);
+
+            *plugin_ctx = ctx.release();
+            return 0;
         }
-
-        if (!ctx->iface.tools || !ctx->iface.tools->register_tool) {
-            return -1;
-        }
-
-        registerScreenCaptureTool(*ctx);
-
-        *plugin_ctx = ctx.release();
-        return 0;
-    });
+    );
 }
 
 extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_destroy(void* plugin_ctx) {

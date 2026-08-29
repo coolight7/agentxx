@@ -57,21 +57,27 @@ bool parseFullNumber(std::string_view s, T& out) {
     // llvm-mingw libc++ 的 from_chars 浮点特化缺失/被 delete，回退到 strtod/strtof
     if constexpr (std::is_floating_point_v<T>) {
         std::string tmp(s);
-        char* end = nullptr;
-        errno = 0;
+        char*       end = nullptr;
+        errno           = 0;
         if constexpr (std::is_same_v<T, float>) {
             float fv = std::strtof(tmp.c_str(), &end);
-            if (errno != 0 || end != tmp.c_str() + tmp.size() || !std::isfinite(fv)) return false;
+            if (errno != 0 || end != tmp.c_str() + tmp.size() || !std::isfinite(fv)) {
+                return false;
+            }
             out = static_cast<T>(fv);
             return true;
         } else if constexpr (std::is_same_v<T, double>) {
             double dv = std::strtod(tmp.c_str(), &end);
-            if (errno != 0 || end != tmp.c_str() + tmp.size() || !std::isfinite(dv)) return false;
+            if (errno != 0 || end != tmp.c_str() + tmp.size() || !std::isfinite(dv)) {
+                return false;
+            }
             out = static_cast<T>(dv);
             return true;
         } else {
             long double ldv = std::strtold(tmp.c_str(), &end);
-            if (errno != 0 || end != tmp.c_str() + tmp.size() || !std::isfinite(ldv)) return false;
+            if (errno != 0 || end != tmp.c_str() + tmp.size() || !std::isfinite(ldv)) {
+                return false;
+            }
             out = static_cast<T>(ldv);
             return true;
         }

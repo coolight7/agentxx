@@ -406,10 +406,10 @@ inline neograph::json makePing(int64_t t) {
 // ---------------------------------------------------------------------------
 
 inline neograph::json makeHelloAck(
-    bool                                  ok,
-    std::string_view                      sessionId,
-    std::string_view                      tailHash,
-    const std::vector<std::string>&       models,
+    bool                                         ok,
+    std::string_view                             sessionId,
+    std::string_view                             tailHash,
+    const std::vector<std::string>&              models,
     const std::vector<WireHelloAck::PluginInfo>& plugins = {}
 ) {
     neograph::json j = {
@@ -428,9 +428,11 @@ inline neograph::json makeHelloAck(
     if (!plugins.empty()) {
         auto arr = neograph::json::array();
         for (const auto& p : plugins) {
-            arr.push_back({{"name",       p.name     },
-                           {"version",    p.version  },
-                           {"interfaces", p.interfaces}});
+            arr.push_back({
+                {"name",       p.name      },
+                {"version",    p.version   },
+                {"interfaces", p.interfaces}
+            });
         }
         j["plugins"] = std::move(arr);
     }

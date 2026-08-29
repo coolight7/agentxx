@@ -1,10 +1,10 @@
 #include "test_web_search_tools.h"
-#include <neograph/types.h>
 #include "agentxx/agent/context.h"
+#include <neograph/types.h>
 // 原 lib 内置工具已迁移至 agentxx_websearch 插件 (同名同行为); 测试直测
 // 插件同一实现 (websearch_impl.h), 保证插件行为与测试覆盖一致
-#include "websearch_impl.h"
 #include "agentxx/util/http_server.h"
+#include "websearch_impl.h"
 #include <asio/awaitable.hpp>
 #include <asio/redirect_error.hpp>
 #include <asio/use_awaitable.hpp>
@@ -19,9 +19,10 @@ namespace {
 int g_ws_passed = 0;
 int g_ws_failed = 0;
 } // namespace
+
 static neograph::json webToolParams(const char* queryKey, const char* timeoutDesc) {
     return neograph::json{
-        {"type", "object"},
+        {"type",       "object"                         },
         {"properties",
          {
              {queryKey,
@@ -32,8 +33,8 @@ static neograph::json webToolParams(const char* queryKey, const char* timeoutDes
              {"timeout", {{"type", "number"}, {"description", timeoutDesc}}},
              {"header",
               {{"type", "object"}, {"description", "Custom HTTP request headers to send."}}},
-         }},
-        {"required", neograph::json::array({queryKey})},
+         }                                              },
+        {"required",   neograph::json::array({queryKey})},
     };
 }
 
@@ -47,29 +48,32 @@ struct WebSearchTool {
     std::string searchApiUrl;
     bool        convertHtml2markdown = true;
 
-    WebSearchTool(std::string_view url, bool conv, std::weak_ptr<agentxx::agent::AgentContext>)
-        : searchApiUrl(url),
-          convertHtml2markdown(conv) {}
+    WebSearchTool(std::string_view url, bool conv, std::weak_ptr<agentxx::agent::AgentContext>) :
+        searchApiUrl(url),
+        convertHtml2markdown(conv) {}
 
     static neograph::ChatTool searchDefinition() {
-        return {"agentxx_web_search",
-                "Perform a web search. Returns a markdown-formatted list of results.",
-                // schema 结构与 lib prompt 条目一致: required 含 query
-                neograph::json{
-                    {"type", "object"},
-                    {"properties",
-                     {
-                         {"query", {{"type", "string"}, {"description", "The search query."}}},
-                         {"timeout",
-                          {{"type", "number"}, {"description", "Default `15` seconds."}}},
-                         {"header",
-                          {{"type", "object"}, {"description", "Custom HTTP request headers."}}},
-                     }},
-                    {"required", neograph::json::array({"query"})},
-                }};
+        return {
+            "agentxx_web_search",
+            "Perform a web search. Returns a markdown-formatted list of results.",
+            // schema 结构与 lib prompt 条目一致: required 含 query
+            neograph::json{
+                           {"type", "object"},
+                           {"properties",
+                 {
+                     {"query", {{"type", "string"}, {"description", "The search query."}}},
+                     {"timeout", {{"type", "number"}, {"description", "Default `15` seconds."}}},
+                     {"header",
+                      {{"type", "object"}, {"description", "Custom HTTP request headers."}}},
+                 }},
+                           {"required", neograph::json::array({"query"})},
+                           }
+        };
     }
 
-    neograph::ChatTool get_definition() const { return searchDefinition(); }
+    neograph::ChatTool get_definition() const {
+        return searchDefinition();
+    }
 
     asio::awaitable<std::string> execute_async(const neograph::json& args) const {
         co_return co_await agentxx_websearch_plugin::webSearchExecuteAsync(
@@ -84,9 +88,11 @@ struct WebFetchUrlTool {
     explicit WebFetchUrlTool(std::weak_ptr<agentxx::agent::AgentContext>) {}
 
     neograph::ChatTool get_definition() const {
-        return {"agentxx_web_fetch",
-                "Perform an HTTP GET request and return the raw response body.",
-                webToolParams("url", "Default `30` seconds. Request timeout in seconds.")};
+        return {
+            "agentxx_web_fetch",
+            "Perform an HTTP GET request and return the raw response body.",
+            webToolParams("url", "Default `30` seconds. Request timeout in seconds.")
+        };
     }
 
     asio::awaitable<std::string> execute_async(const neograph::json& args) const {
@@ -96,25 +102,26 @@ struct WebFetchUrlTool {
 
 /// 模型搜索路径薄包装 (构造取最小配置集; schema 与 API 版一致)
 struct ModelWebSearchTool {
-    explicit ModelWebSearchTool(const agentxx_websearch_plugin::ModelSearchConfig& cfg)
-        : modelCfg(cfg) {}
+    explicit ModelWebSearchTool(const agentxx_websearch_plugin::ModelSearchConfig& cfg) :
+        modelCfg(cfg) {}
 
     neograph::ChatTool get_definition() const {
-        return {"agentxx_web_search",
-                "Perform a web search. Returns a markdown-formatted list of results.",
-                neograph::json{
-                    {"type", "object"},
-                    {"properties",
-                     {
-                         {"query",
-                          {{"type", "string"}, {"description", "The search query string."}}},
-                         {"timeout", {{"type", "number"}, {"description", "Default `60` seconds."}}},
-                         {"header",
-                          {{"type", "object"},
-                           {"description", "Custom HTTP request headers to send."}}},
-                     }},
-                    {"required", neograph::json::array({"query"})},
-                }};
+        return {
+            "agentxx_web_search",
+            "Perform a web search. Returns a markdown-formatted list of results.",
+            neograph::json{
+                           {"type", "object"},
+                           {"properties",
+                 {
+                     {"query", {{"type", "string"}, {"description", "The search query string."}}},
+                     {"timeout", {{"type", "number"}, {"description", "Default `60` seconds."}}},
+                     {"header",
+                      {{"type", "object"}, {"description", "Custom HTTP request headers to send."}}
+                     },
+                 }},
+                           {"required", neograph::json::array({"query"})},
+                           }
+        };
     }
 
     asio::awaitable<std::string> execute_async(const neograph::json& args) const {
@@ -122,6 +129,7 @@ struct ModelWebSearchTool {
     }
 
 private:
+
     agentxx_websearch_plugin::ModelSearchConfig modelCfg;
 };
 
@@ -129,9 +137,11 @@ struct WebFetchUrlMarkdownTool {
     explicit WebFetchUrlMarkdownTool(std::weak_ptr<agentxx::agent::AgentContext>) {}
 
     neograph::ChatTool get_definition() const {
-        return {"agentxx_web_fetch_markdown",
-                "Perform an HTTP GET request and return the page content converted to Markdown.",
-                webToolParams("url", "Default `15` seconds. Request timeout in seconds.")};
+        return {
+            "agentxx_web_fetch_markdown",
+            "Perform an HTTP GET request and return the page content converted to Markdown.",
+            webToolParams("url", "Default `15` seconds. Request timeout in seconds.")
+        };
     }
 
     asio::awaitable<std::string> execute_async(const neograph::json& args) const {

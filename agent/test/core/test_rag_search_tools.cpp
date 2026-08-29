@@ -1,8 +1,8 @@
 #include "test_rag_search_tools.h"
 // 原 lib 内置工具已迁移至 agentxx_rag_search 插件 (同名同行为); 测试直测
 // 插件同一实现 (rag_search_impl.h), 保证插件行为与测试覆盖一致
-#include "rag_search_impl.h"
 #include "agentxx/util/string_util.h"
+#include "rag_search_impl.h"
 #include <asio/awaitable.hpp>
 #include <asio/redirect_error.hpp>
 #include <asio/use_awaitable.hpp>
@@ -14,6 +14,7 @@ namespace {
 int g_rag_passed = 0;
 int g_rag_failed = 0;
 } // namespace
+
 namespace agentxx {
 namespace test {
 
@@ -40,16 +41,23 @@ struct RAGSearchTool {
         ) {
             return agentxx_rag_plugin::splitByFixedLength(text, blockSize, overlapPercent);
         }
+
         static auto splitByDelimiter(std::string_view text, std::string_view delimiter) {
             return agentxx_rag_plugin::splitByDelimiter(text, delimiter);
         }
+
         static auto splitByStructure(std::string_view text) {
             return agentxx_rag_plugin::splitByStructure(text);
         }
-        static auto
-            splitByDelimiters(std::string_view text, size_t maxUtf8Length, const std::vector<std::string>& delimiters) {
+
+        static auto splitByDelimiters(
+            std::string_view                text,
+            size_t                          maxUtf8Length,
+            const std::vector<std::string>& delimiters
+        ) {
             return agentxx_rag_plugin::splitByDelimiters(text, maxUtf8Length, delimiters);
         }
+
         static auto applyChunkOverlap(
             const std::vector<std::string>& chunks,
             size_t                          maxUtf8Length,
@@ -57,12 +65,14 @@ struct RAGSearchTool {
         ) {
             return agentxx_rag_plugin::applyChunkOverlap(chunks, maxUtf8Length, overlapPercent);
         }
+
         static auto splitTextToChunks(std::string_view text, const SplitConfig& config) {
             return agentxx_rag_plugin::splitTextToChunks(text, config);
         }
     };
 };
-using VectorStore   = RAGSearchTool::VectorStore;
+
+using VectorStore = RAGSearchTool::VectorStore;
 
 // =========================================================================
 // Tests: splitStringByFixedLength

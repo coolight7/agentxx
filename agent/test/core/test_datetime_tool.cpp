@@ -14,6 +14,7 @@ namespace {
 int g_dt_passed = 0;
 int g_dt_failed = 0;
 } // namespace
+
 namespace agentxx {
 namespace tools {
 
@@ -23,9 +24,11 @@ struct GetCurrentDateTimeTool {
     explicit GetCurrentDateTimeTool(std::weak_ptr<agentxx::agent::AgentContext>) {}
 
     neograph::ChatTool get_definition() const {
-        return {"agentxx_get_current_datetime",
-                "Get the current date, time, and Unix timestamp.",
-                {}};
+        return {
+            "agentxx_get_current_datetime",
+            "Get the current date, time, and Unix timestamp.",
+            {}
+        };
     }
 
     asio::awaitable<std::string> execute_async(const neograph::json&) const {

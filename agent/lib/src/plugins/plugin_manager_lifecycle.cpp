@@ -43,14 +43,7 @@ void* NativeLoader::open(const std::string& path, std::string& err) {
         int len = ::MultiByteToWideChar(CP_UTF8, 0, path.c_str(), -1, nullptr, 0);
         if (len > 0) {
             wpath.resize(static_cast<size_t>(len) - 1);
-            ::MultiByteToWideChar(
-                CP_UTF8,
-                0,
-                path.c_str(),
-                -1,
-                wpath.data(),
-                len
-            );
+            ::MultiByteToWideChar(CP_UTF8, 0, path.c_str(), -1, wpath.data(), len);
         }
     }
     HMODULE h = ::LoadLibraryW(wpath.c_str());
@@ -197,7 +190,8 @@ void PluginManager::detachAll(PluginInstance* inst) {
             if (op->cancelFn) {
                 try {
                     op->cancelFn();
-                } catch (...) {}
+                } catch (...) {
+                }
             }
         }
     }
@@ -261,8 +255,7 @@ void PluginManager::disable(std::string_view name) {
         return;
     }
     inst->enabled = false;
-    for (const auto& dep :
-         collectReverseRequiredDeps(plugins_, inst->name, /*onlyEnabled=*/true)) {
+    for (const auto& dep : collectReverseRequiredDeps(plugins_, inst->name, /*onlyEnabled=*/true)) {
         auto depInst = find(dep);
         if (depInst && depInst->enabled) {
             depInst->enabled = false;
@@ -316,13 +309,7 @@ void PluginManager::enable(std::string_view name) {
     }
     for (const auto& cap : inst->capabilityRegistrations) {
         if (cap.start) {
-            capabilities_->registerCapability(
-                cap.name,
-                inst->name,
-                cap.start,
-                cap.cancel,
-                cap.ctx
-            );
+            capabilities_->registerCapability(cap.name, inst->name, cap.start, cap.cancel, cap.ctx);
         } else {
             capabilities_->registerCapability(cap.name, inst->name);
         }
@@ -350,7 +337,7 @@ asio::awaitable<bool> PluginManager::waitInflightZero(
     if (!inst) {
         co_return true;
     }
-    auto start = std::chrono::steady_clock::now();
+    auto               start = std::chrono::steady_clock::now();
     asio::steady_timer timer(co_await asio::this_coro::executor);
     while (inst->inflight.load(std::memory_order_acquire) > 0) {
         if (std::chrono::steady_clock::now() - start > timeout) {
@@ -540,27 +527,32 @@ asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadNativeAsync(
         co_return nullptr;
     }
 
-    std::string name = info && info->name.data ? std::string(info->name.data, info->name.size) : std::filesystem::path(path).stem().string();
+    std::string name = info && info->name.data ? std::string(info->name.data, info->name.size)
+                                               : std::filesystem::path(path).stem().string();
     if (name.starts_with("lib")) {
         name = name.substr(3);
     }
 
-    auto inst = std::make_shared<PluginInstance>(name);
-    inst->version = info && info->version.data ? std::string(info->version.data, info->version.size) : "1.0.0";
-    inst->description = info && info->description.data ? std::string(info->description.data, info->description.size) : "";
-    inst->path = path;
-    inst->dlHandle = dl;
-    inst->interfaces = interfaces;
-    inst->self = inst;
-    inst->manager = shared_from_this();
-    inst->host.vtable = (const AgentxxHostVtable*)xx_query_interface(nullptr, agentxx_plugin_sv_cstr("__vtable"));
+    auto inst     = std::make_shared<PluginInstance>(name);
+    inst->version = info && info->version.data ? std::string(info->version.data, info->version.size)
+                                               : "1.0.0";
+    inst->description = info && info->description.data
+                            ? std::string(info->description.data, info->description.size)
+                            : "";
+    inst->path        = path;
+    inst->dlHandle    = dl;
+    inst->interfaces  = interfaces;
+    inst->self        = inst;
+    inst->manager     = shared_from_this();
+    inst->host.vtable
+        = (const AgentxxHostVtable*)xx_query_interface(nullptr, agentxx_plugin_sv_cstr("__vtable"));
     inst->host.opaque = inst.get();
     if (cfg) {
         inst->args = cfg->args;
     }
 
     plugins_[name] = inst;
-    int rc = createFn(&inst->host, &inst->pluginCtx);
+    int rc         = createFn(&inst->host, &inst->pluginCtx);
     if (rc != 0) {
         plugins_.erase(name);
         NativeLoader::close(dl);
@@ -589,22 +581,23 @@ asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadBuiltinAsync
         co_return nullptr;
     }
 
-    auto inst = std::make_shared<PluginInstance>(name);
-    inst->path = path;
-    inst->depends = std::move(depends);
+    auto inst             = std::make_shared<PluginInstance>(name);
+    inst->path            = path;
+    inst->depends         = std::move(depends);
     inst->optionalDepends = std::move(optionalDepends);
-    inst->interfaces = interfaces;
-    inst->self = inst;
-    inst->manager = shared_from_this();
-    inst->host.vtable = (const AgentxxHostVtable*)xx_query_interface(nullptr, agentxx_plugin_sv_cstr("__vtable"));
-    inst->host.opaque = inst.get();
+    inst->interfaces      = interfaces;
+    inst->self            = inst;
+    inst->manager         = shared_from_this();
+    inst->host.vtable
+        = (const AgentxxHostVtable*)xx_query_interface(nullptr, agentxx_plugin_sv_cstr("__vtable"));
+    inst->host.opaque   = inst.get();
     inst->builtinUnload = entry->destroy;
     if (cfg) {
         inst->args = cfg->args;
     }
 
     plugins_[name] = inst;
-    int rc = entry->create(&inst->host, &inst->pluginCtx);
+    int rc         = entry->create(&inst->host, &inst->pluginCtx);
     if (rc != 0) {
         plugins_.erase(name);
         XX_LOGE("Builtin plugin `{}` create failed (code={})", name, rc);
@@ -714,16 +707,17 @@ asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadPluginAsync(
     co_return co_await loadNativeAsync(path, cfg, allowClientOnlySkip);
 }
 
-asio::awaitable<void> PluginManager::loadConfiguredPlugins(
-    const std::vector<agentxx::agent::PluginConfig>& plugins
-) {
+asio::awaitable<void>
+    PluginManager::loadConfiguredPlugins(const std::vector<agentxx::agent::PluginConfig>& plugins) {
     namespace fs = std::filesystem;
+
     struct SortItem {
-        std::string                          name;
-        std::vector<std::string>             depends;
-        const agentxx::agent::PluginConfig*  cfg = nullptr;
-        std::string                          path;
+        std::string                         name;
+        std::vector<std::string>            depends;
+        const agentxx::agent::PluginConfig* cfg = nullptr;
+        std::string                         path;
     };
+
     std::vector<SortItem> items;
     items.reserve(plugins.size());
 
@@ -737,7 +731,7 @@ asio::awaitable<void> PluginManager::loadConfiguredPlugins(
         SortItem it;
         it.path = pc.path;
         it.cfg  = &pc;
-        fs::path p(pc.path);
+        fs::path        p(pc.path);
         std::error_code ec;
         if (fs::is_directory(p, ec)) {
             std::string              manifestName, manifestEntry;

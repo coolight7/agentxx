@@ -19,6 +19,7 @@ int g_cpu_failed = 0;
 // 断言计数宏覆盖: 将 test_framework.h 的 XX_TEST_EXPECT_* 映射到本模块计数器
 #define XX_TEST_PASSED g_cpu_passed
 #define XX_TEST_FAILED g_cpu_failed
+
 namespace agentxx {
 namespace test {
 
@@ -134,7 +135,7 @@ asio::awaitable<TestResult>
     // ---- 4. 能力 agentxx.system_usage (agent 侧周期采集 publish 的数据源) ----
     {
         XX_TEST_EXPECT_TRUE(ctx->pluginManager->hasCapability("agentxx.system_usage"));
-        char*       err = nullptr;
+        char*       err      = nullptr;
         int         opStatus = -1;
         std::string payload;
         bool        done = false;
@@ -147,7 +148,7 @@ asio::awaitable<TestResult>
             "query",
             "{}",
             [](void* ud, int st, char* pl) {
-                auto* s = static_cast<StateTuple*>(ud);
+                auto* s          = static_cast<StateTuple*>(ud);
                 *std::get<0>(*s) = st;
                 if (pl) {
                     *std::get<1>(*s) = pl;

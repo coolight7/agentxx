@@ -37,7 +37,7 @@ namespace {
 /// 测试夹具: 最小 TUICtx + SidebarComponent (常驻 Info/Logs 标签)
 struct SidebarFixture {
     TUISharedState sharedState;
-    TUITheme       theme = TUITheme::darkTheme();
+    TUITheme       theme       = TUITheme::darkTheme();
     int            redrawCount = 0;
 
     TUICtx ctx;
@@ -63,13 +63,11 @@ struct SidebarFixture {
         comp          = std::make_shared<SidebarComponent>(ctx);
         comp->setPinnedTabs({
             {kInfoTabId,
-             "Info",
-             [this] {
+             "Info", [this] {
                  ensureInfo();
              }},
             {kLogTabId,
-             "Logs",
-             [this] {
+             "Logs", [this] {
                  ensureLogs();
              }},
         });
@@ -82,7 +80,9 @@ struct SidebarFixture {
                 kInfoTabId,
                 "Info",
                 []() -> std::vector<ScrollItem> {
-                    return {ScrollItem{ftxui::text("INFO_CONTENT_MARK"), false}};
+                    return {
+                        ScrollItem{ftxui::text("INFO_CONTENT_MARK"), false}
+                    };
                 },
                 []() -> ftxui::Element {
                     return ftxui::hbox({ftxui::text("INFO_FOOTER_MARK")});
@@ -98,7 +98,9 @@ struct SidebarFixture {
                 kLogTabId,
                 "Logs",
                 []() -> std::vector<ScrollItem> {
-                    return {ScrollItem{ftxui::text("[Empty]") | ftxui::dim, false}};
+                    return {
+                        ScrollItem{ftxui::text("[Empty]") | ftxui::dim, false}
+                    };
                 },
                 []() -> ftxui::Element {
                     return ftxui::hbox({
@@ -134,8 +136,7 @@ struct SidebarFixture {
                 size_t j = i + 1;
                 if (j < raw.size() && raw[j] == '[') {
                     ++j;
-                    while (j < raw.size()
-                           && !(isalpha(static_cast<unsigned char>(raw[j])))) {
+                    while (j < raw.size() && !(isalpha(static_cast<unsigned char>(raw[j])))) {
                         ++j;
                     }
                     if (j < raw.size()) {
@@ -161,14 +162,15 @@ struct SidebarFixture {
     }
 
     /// 在渲染文本中定位 needle 首次出现的 (x, y) 屏幕坐标
-    static bool findText(const std::string& screen, const std::string& needle, int& outX, int& outY) {
-        int   y   = 0;
+    static bool
+        findText(const std::string& screen, const std::string& needle, int& outX, int& outY) {
+        int    y     = 0;
         size_t start = 0;
         while (start <= screen.size()) {
-            size_t      end  = screen.find('\n', start);
-            std::string line = screen.substr(start, end == std::string::npos ? std::string::npos
-                                                                             : end - start);
-            size_t      pos  = line.find(needle);
+            size_t      end = screen.find('\n', start);
+            std::string line
+                = screen.substr(start, end == std::string::npos ? std::string::npos : end - start);
+            size_t pos = line.find(needle);
             if (pos != std::string::npos) {
                 outX = static_cast<int>(pos);
                 outY = y;
@@ -219,7 +221,8 @@ TestResult testTuiSidebar() {
             };
         });
         auto el     = scroll->Render();
-        auto screen = ftxui::Screen::Create(ftxui::Dimension::Fixed(20), ftxui::Dimension::Fixed(6));
+        auto screen
+            = ftxui::Screen::Create(ftxui::Dimension::Fixed(20), ftxui::Dimension::Fixed(6));
         ftxui::Render(screen, el);
         auto out = screen.ToString();
         XX_TEST_EXPECT_TRUE(out.find("AAA") != std::string::npos);
@@ -280,13 +283,11 @@ TestResult testTuiSidebar() {
         SidebarFixture fx;
         fx.ensureLogs();
         // addTab 自动激活 logs; 再直接添加 info 动态 tab (模拟外部状态注入)
-        fx.comp->addTab(
-            "dyn",
-            "Dyn",
-            []() -> std::vector<ScrollItem> {
-                return {ScrollItem{ftxui::text("DYN_CONTENT_MARK"), false}};
-            }
-        );
+        fx.comp->addTab("dyn", "Dyn", []() -> std::vector<ScrollItem> {
+            return {
+                ScrollItem{ftxui::text("DYN_CONTENT_MARK"), false}
+            };
+        });
         XX_TEST_EXPECT_TRUE(fx.comp->isTabActive("dyn"));
         auto screen = fx.render();
         int  xi = -1, yi = -1, xd = -1, yd = -1;

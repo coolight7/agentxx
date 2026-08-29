@@ -146,10 +146,12 @@ bool parsePluginManifest(
         // 名称仅做非空校验, 语义 (前缀归属/宿主支持集比对) 由加载路径的
         // checkInterfacesForSide 处理 —— 解析与协商解耦, 第三方前缀天然合法
         if (interfaces) {
-            *interfaces = PluginManifestInterfaces{};
-            auto readList = [&yamlPath](const YAML::Node&      section,
-                                        std::vector<std::string>& out,
-                                        std::string_view          what) {
+            *interfaces   = PluginManifestInterfaces{};
+            auto readList = [&yamlPath](
+                                const YAML::Node&         section,
+                                std::vector<std::string>& out,
+                                std::string_view          what
+                            ) {
                 if (!section || !section.IsSequence()) {
                     return;
                 }

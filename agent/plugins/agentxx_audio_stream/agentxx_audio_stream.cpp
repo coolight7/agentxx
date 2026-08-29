@@ -66,8 +66,7 @@ std::string toBase64(const std::vector<uint8_t>& data) {
 struct PluginCtx;
 
 struct AudioStreamHolder {
-    bool start(agentxx_audio_stream_plugin::AudioDataSource source,
-               uint32_t                                      targetProcessId);
+    bool start(agentxx_audio_stream_plugin::AudioDataSource source, uint32_t targetProcessId);
     void stop();
 
     agentxx_audio_stream_plugin::AudioStream stream_;
@@ -162,27 +161,29 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
     agentxx_plugin_create(const AgentxxHost* host, void** plugin_ctx) {
     PluginCtx* raw = nullptr;
     return agentxx::plugin_guard::guardCall(
-        [&raw](const char* msg) noexcept { ctxGuardLogger(raw)(msg); },
+        [&raw](const char* msg) noexcept {
+            ctxGuardLogger(raw)(msg);
+        },
         -1,
         [&]() -> int {
-        if (!host || !host->vtable || !plugin_ctx) {
-            return -1;
-        }
-        auto ctx         = std::make_unique<PluginCtx>();
-        ctx->init(host);
-        ctx->holder      = std::make_unique<AudioStreamHolder>();
-        ctx->holder->ctx = ctx.get();
-        raw              = ctx.get();
+            if (!host || !host->vtable || !plugin_ctx) {
+                return -1;
+            }
+            auto ctx = std::make_unique<PluginCtx>();
+            ctx->init(host);
+            ctx->holder      = std::make_unique<AudioStreamHolder>();
+            ctx->holder->ctx = ctx.get();
+            raw              = ctx.get();
 
-        if (!ctx->iface.tools || !ctx->iface.tools->register_tool) {
-            return -1;
-        }
+            if (!ctx->iface.tools || !ctx->iface.tools->register_tool) {
+                return -1;
+            }
 
-        agentxx::kit::blocking_tool(
-            *ctx,
-            "agentxx_audio_stream",
-            "Capture system audio or microphone stream on Windows (WASAPI). Audio frames are pushed as plugin events to topic 'agentxx_audio_stream.audio'. Supports start, stop, and status query.",
-            R"({
+            agentxx::kit::blocking_tool(
+                *ctx,
+                "agentxx_audio_stream",
+                "Capture system audio or microphone stream on Windows (WASAPI). Audio frames are pushed as plugin events to topic 'agentxx_audio_stream.audio'. Supports start, stop, and status query.",
+                R"({
   "type": "object",
   "properties": {
     "command": {
@@ -202,46 +203,53 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
   },
   "required": ["command"]
 })",
-            [](PluginCtx& c, std::string_view args_json) -> std::string {
-                std::string argsStr(args_json.data() ? args_json.data() : "{}", args_json.size());
-                SimpleJson  args(argsStr.empty() ? "{}" : argsStr);
-                if (!args.ok()) {
-                    throw std::runtime_error("invalid args json");
+                [](PluginCtx& c, std::string_view args_json) -> std::string {
+                    std::string argsStr(
+                        args_json.data() ? args_json.data() : "{}",
+                        args_json.size()
+                    );
+                    SimpleJson args(argsStr.empty() ? "{}" : argsStr);
+                    if (!args.ok()) {
+                        throw std::runtime_error("invalid args json");
+                    }
+
+                    std::string command;
+                    jsonGetString(args.doc().at_pointer("/command"), command);
+
+                    AudioStreamHolder& holder = *c.holder;
+
+                    if (command == "start") {
+                        std::string srcStr = "system_output";
+                        jsonGetString(args.doc().at_pointer("/source"), srcStr);
+                        int64_t pid64 = 0;
+                        jsonGetInt(args.doc().at_pointer("/target_process_id"), pid64);
+
+                        auto source = parseSource(srcStr);
+                        bool ok     = holder.start(source, static_cast<uint32_t>(pid64));
+                        return fmt::format(R"({{"ok":{},"running":true}})", ok ? "true" : "false");
+                    }
+
+                    if (command == "stop") {
+                        holder.stop();
+                        return R"({"ok":true,"running":false})";
+                    }
+
+                    if (command == "status") {
+                        bool running = holder.stream_.isRunning();
+                        return fmt::format(
+                            R"({{"ok":true,"running":{}}})",
+                            running ? "true" : "false"
+                        );
+                    }
+
+                    return R"({"ok":false,"error":"unknown command"})";
                 }
+            );
 
-                std::string command;
-                jsonGetString(args.doc().at_pointer("/command"), command);
-
-                AudioStreamHolder& holder = *c.holder;
-
-                if (command == "start") {
-                    std::string srcStr = "system_output";
-                    jsonGetString(args.doc().at_pointer("/source"), srcStr);
-                    int64_t pid64 = 0;
-                    jsonGetInt(args.doc().at_pointer("/target_process_id"), pid64);
-
-                    auto source = parseSource(srcStr);
-                    bool ok     = holder.start(source, static_cast<uint32_t>(pid64));
-                    return fmt::format(R"({{"ok":{},"running":true}})", ok ? "true" : "false");
-                }
-
-                if (command == "stop") {
-                    holder.stop();
-                    return R"({"ok":true,"running":false})";
-                }
-
-                if (command == "status") {
-                    bool running = holder.stream_.isRunning();
-                    return fmt::format(R"({{"ok":true,"running":{}}})", running ? "true" : "false");
-                }
-
-                return R"({"ok":false,"error":"unknown command"})";
-            }
-        );
-
-        *plugin_ctx = ctx.release();
-        return 0;
-    });
+            *plugin_ctx = ctx.release();
+            return 0;
+        }
+    );
 }
 
 extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_destroy(void* plugin_ctx) {

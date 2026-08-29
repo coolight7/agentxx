@@ -147,7 +147,7 @@ inline void reportCurrentException(LogFn&& logFn) noexcept {
 template<typename LogFn, typename Fn>
 [[nodiscard]] inline auto
     guardCall(LogFn&& logFn, std::invoke_result_t<Fn&> fallback, Fn&& fn) noexcept
-        -> std::invoke_result_t<Fn&> {
+    -> std::invoke_result_t<Fn&> {
     using Ret = std::invoke_result_t<Fn&>;
     static_assert(!std::is_void_v<Ret>, "void callable: use plugin_guard::guardCallVoid");
     try {

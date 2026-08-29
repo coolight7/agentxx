@@ -29,8 +29,10 @@ public:
         io_(std::move(io)) {}
 
     agentxx::plugin::InterfaceSet supportedInterfaces() const override {
-        return {std::string{plugin::plugin_interfaces::ClientToast},
-                std::string{plugin::plugin_interfaces::ClientCommand}};
+        return {
+            std::string{plugin::plugin_interfaces::ClientToast},
+            std::string{plugin::plugin_interfaces::ClientCommand}
+        };
     }
 
     // ---- toast (stderr, 保持 stdout 纯净) ----

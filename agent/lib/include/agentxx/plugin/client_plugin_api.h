@@ -71,7 +71,7 @@ typedef struct AgentxxClientPluginInfo {
 
 /// 事件类型 (payload 均为 JSON 字符串, 宿主构造; 语义见注释)
 typedef enum AgentxxClientEvent {
-    AGENTXX_CLIENT_EVT_READY = 0,      ///< 服务端就绪 {"interfaces":[...],"sessionId"} (启动后最早事件)
+    AGENTXX_CLIENT_EVT_READY = 0, ///< 服务端就绪 {"interfaces":[...],"sessionId"} (启动后最早事件)
     AGENTXX_CLIENT_EVT_CONN_STATE,     ///< 连接状态变化 {"connState","startupProgress"}
     AGENTXX_CLIENT_EVT_USER_INPUT,     ///< 用户输入已发出 {"sessionId","text"}
     AGENTXX_CLIENT_EVT_DELTA,          ///< 增量事件 (同 wire delta JSON 字段)
@@ -199,7 +199,7 @@ typedef struct AgentxxClientUiIface {
         AgentxxPluginStringView  name,
         AgentxxPluginStringView  description,
         char* (*execute)(void* ud, AgentxxPluginStringView argsJson, char** errorOut),
-        void*                    ud
+        void* ud
     );
     /// 注销斜杠命令 (按名称); 不存在返回非 0
     int (*unregister_command)(const AgentxxClientHost* host, AgentxxPluginStringView name);
@@ -246,7 +246,7 @@ typedef struct AgentxxClientEventsIface {
         const AgentxxClientHost* host,
         int                      event, /* AgentxxClientEvent */
         void (*handler)(AgentxxPluginStringView payloadJson, void* ud),
-        void*                    ud
+        void* ud
     );
     void (*unsubscribe)(AgentxxSubscription* sub);
 } AgentxxClientEventsIface;

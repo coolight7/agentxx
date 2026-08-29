@@ -361,7 +361,7 @@ asio::awaitable<events::RespSubagentBatchItem> AgentHost::spawnOneTask(
     if (parentAgentCtx) {
         auto parentSession = parentAgentCtx->sessions->get(parentSessionId);
         if (parentSession && !parentSession->getWorktreeBinding().path.empty()) {
-            const auto& wb = parentSession->getWorktreeBinding();
+            const auto& wb                = parentSession->getWorktreeBinding();
             subCfg->workDir               = wb.path;
             subCfg->inheritedWorktreePath = wb.path;
         }

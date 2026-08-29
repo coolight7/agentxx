@@ -146,11 +146,11 @@ Element SidebarComponent::OnRender() {
     // flex 分配空间 (见 scrollable.h) —— 此处必须加 |flex 占据 vbox 剩余高度,
     // 否则列表被分配 0 行, 常驻标签 (Info/Logs) 与 tab 按钮全部不可见
     auto tabBar = vbox({
-                       text(" "),
-                       tabList_->Render() | flex,
-                       text(" "),
-                   })
-                   | size(WIDTH, EQUAL, listW);
+                      text(" "),
+                      tabList_->Render() | flex,
+                      text(" "),
+                  })
+                  | size(WIDTH, EQUAL, listW);
 
     auto handle
         = separatorStyled(BorderStyle::LIGHT) | color(theme.inputBgColor) | reflect(handleBox_);

@@ -10,18 +10,13 @@
 namespace agentxx {
 namespace plugin {
 
-void* PluginManager::sleep(
-    PluginInstance* inst,
-    long            ms,
-    void (*cb)(void* ud),
-    void* ud
-) {
+void* PluginManager::sleep(PluginInstance* inst, long ms, void (*cb)(void* ud), void* ud) {
     if (!inst || !cb || ms < 0 || !ioExecutor_) {
         return nullptr;
     }
-    auto timer = std::make_shared<asio::steady_timer>(ioExecutor_);
-    auto item  = std::make_shared<PluginSleepTimer>();
-    item->inst = inst ? inst->self : std::weak_ptr<PluginInstance>{};
+    auto timer  = std::make_shared<asio::steady_timer>(ioExecutor_);
+    auto item   = std::make_shared<PluginSleepTimer>();
+    item->inst  = inst ? inst->self : std::weak_ptr<PluginInstance>{};
     item->timer = timer;
     item->cb    = cb;
     item->ud    = ud;
@@ -71,7 +66,8 @@ void PluginManager::cancelSleep(PluginInstance* inst, void* timerPtr) {
                         PluginInstance::InflightGuard guard(inst);
                         try {
                             item->cb(item->ud);
-                        } catch (...) {}
+                        } catch (...) {
+                        }
                     }
                 });
             }
@@ -97,7 +93,7 @@ void PluginManager::offload(
 
     struct OffloadTask {
         std::shared_ptr<PluginInstance> instKeep;
-        volatile int*   cancel_flag;
+        volatile int*                   cancel_flag;
         void* (*work)(void* ud, volatile int* cancel_flag, char** error_out);
         void (*done)(void* ud, void* result, char* error);
         void*                 ud;
@@ -110,69 +106,59 @@ void PluginManager::offload(
     if (!instKeep) {
         return;
     }
-    auto task = std::make_shared<OffloadTask>(OffloadTask{
-        instKeep,
-        cancel_flag,
-        work,
-        done,
-        ud,
-        nullptr,
-        nullptr,
-        ioExecutor_
-    });
+    auto task = std::make_shared<OffloadTask>(
+        OffloadTask{instKeep, cancel_flag, work, done, ud, nullptr, nullptr, ioExecutor_}
+    );
 
     inst->inflight.fetch_add(1, std::memory_order_acq_rel);
 
-    asio::post(
-        *ctx->threadPool,
-        [task]() {
-            auto* instPtr = task->instKeep.get();
-            try {
-                task->result = task->work(task->ud, task->cancel_flag, &task->error);
-            } catch (const std::exception& e) {
-                if (instPtr && instPtr->host.vtable && instPtr->host.vtable->strdup) {
-                    task->error = instPtr->host.vtable->strdup(e.what());
-                } else {
-                    task->error = ::strdup(e.what());
-                }
-            } catch (...) {
-                if (instPtr && instPtr->host.vtable && instPtr->host.vtable->strdup) {
-                    task->error = instPtr->host.vtable->strdup("unknown error in plugin offload");
-                } else {
-                    task->error = ::strdup("unknown error in plugin offload");
-                }
-            }
-
-            if (task->ex) {
-                asio::post(
-                    task->ex,
-                    [task]() {
-                        auto* instPtr2 = task->instKeep.get();
-                        if (task->done) {
-                            try {
-                                task->done(task->ud, task->result, task->error);
-                            } catch (const std::exception& e) {
-                                if (instPtr2) {
-                                    XX_LOGW("Plugin `{}` offload done threw: {}", instPtr2->name, e.what());
-                                }
-                            } catch (...) {
-                                if (instPtr2) {
-                                    XX_LOGW("Plugin `{}` offload done threw unknown exception", instPtr2->name);
-                                }
-                            }
-                        }
-                        if (instPtr2) {
-                            instPtr2->inflight.fetch_sub(1, std::memory_order_acq_rel);
-                        }
-                    }
-                );
+    asio::post(*ctx->threadPool, [task]() {
+        auto* instPtr = task->instKeep.get();
+        try {
+            task->result = task->work(task->ud, task->cancel_flag, &task->error);
+        } catch (const std::exception& e) {
+            if (instPtr && instPtr->host.vtable && instPtr->host.vtable->strdup) {
+                task->error = instPtr->host.vtable->strdup(e.what());
             } else {
-                if (instPtr) {
-                    instPtr->inflight.fetch_sub(1, std::memory_order_acq_rel);
-                }
+                task->error = ::strdup(e.what());
+            }
+        } catch (...) {
+            if (instPtr && instPtr->host.vtable && instPtr->host.vtable->strdup) {
+                task->error = instPtr->host.vtable->strdup("unknown error in plugin offload");
+            } else {
+                task->error = ::strdup("unknown error in plugin offload");
             }
         }
-    );
+
+        if (task->ex) {
+            asio::post(task->ex, [task]() {
+                auto* instPtr2 = task->instKeep.get();
+                if (task->done) {
+                    try {
+                        task->done(task->ud, task->result, task->error);
+                    } catch (const std::exception& e) {
+                        if (instPtr2) {
+                            XX_LOGW("Plugin `{}` offload done threw: {}", instPtr2->name, e.what());
+                        }
+                    } catch (...) {
+                        if (instPtr2) {
+                            XX_LOGW(
+                                "Plugin `{}` offload done threw unknown exception",
+                                instPtr2->name
+                            );
+                        }
+                    }
+                }
+                if (instPtr2) {
+                    instPtr2->inflight.fetch_sub(1, std::memory_order_acq_rel);
+                }
+            });
+        } else {
+            if (instPtr) {
+                instPtr->inflight.fetch_sub(1, std::memory_order_acq_rel);
+            }
+        }
+    });
 }
 
 } // namespace plugin

@@ -41,33 +41,24 @@ struct AgentIfaces {
         if (!host || !host->vtable || !host->vtable->query_interface) {
             return f;
         }
-        f.tools        = AGENTXX_QUERY_IFACE(host, AgentxxToolsIface, AGENTXX_IFACE_AGENT_TOOLS);
-        f.hooks        = AGENTXX_QUERY_IFACE(host, AgentxxHooksIface, AGENTXX_IFACE_AGENT_HOOKS);
-        f.events       = AGENTXX_QUERY_IFACE(host, AgentxxEventsIface, AGENTXX_IFACE_AGENT_EVENTS);
-        f.capabilities = AGENTXX_QUERY_IFACE(
-            host,
-            AgentxxCapabilitiesIface,
-            AGENTXX_IFACE_AGENT_CAPABILITIES
-        );
-        f.scheduler = AGENTXX_QUERY_IFACE(
-            host,
-            AgentxxSchedulerIface,
-            AGENTXX_IFACE_AGENT_SCHEDULER
-        );
-        f.session   = AGENTXX_QUERY_IFACE(host, AgentxxSessionIface, AGENTXX_IFACE_AGENT_SESSION);
-        f.plugins   = AGENTXX_QUERY_IFACE(host, AgentxxPluginsIface, AGENTXX_IFACE_AGENT_PLUGINS);
-        f.config    = AGENTXX_QUERY_IFACE(host, AgentxxConfigIface, AGENTXX_IFACE_AGENT_CONFIG);
-        f.prompt    = AGENTXX_QUERY_IFACE(host, AgentxxPromptIface, AGENTXX_IFACE_AGENT_PROMPT);
-        f.json      = AGENTXX_QUERY_IFACE(host, AgentxxJsonIface, AGENTXX_IFACE_AGENT_JSON);
-        f.log       = AGENTXX_QUERY_IFACE(host, AgentxxLogIface, AGENTXX_IFACE_AGENT_LOG);
-        f.resources = AGENTXX_QUERY_IFACE(
-            host,
-            AgentxxResourcesIface,
-            AGENTXX_IFACE_AGENT_RESOURCES
-        );
-        f.model     = AGENTXX_QUERY_IFACE(host, AgentxxModelIface, AGENTXX_IFACE_AGENT_MODEL);
-        f.cancel    = AGENTXX_QUERY_IFACE(host, AgentxxCancelIface, AGENTXX_IFACE_AGENT_CANCEL);
-        f.planning  = AGENTXX_QUERY_IFACE(host, AgentxxPlanningIface, AGENTXX_IFACE_AGENT_PLANNING);
+        f.tools  = AGENTXX_QUERY_IFACE(host, AgentxxToolsIface, AGENTXX_IFACE_AGENT_TOOLS);
+        f.hooks  = AGENTXX_QUERY_IFACE(host, AgentxxHooksIface, AGENTXX_IFACE_AGENT_HOOKS);
+        f.events = AGENTXX_QUERY_IFACE(host, AgentxxEventsIface, AGENTXX_IFACE_AGENT_EVENTS);
+        f.capabilities
+            = AGENTXX_QUERY_IFACE(host, AgentxxCapabilitiesIface, AGENTXX_IFACE_AGENT_CAPABILITIES);
+        f.scheduler
+            = AGENTXX_QUERY_IFACE(host, AgentxxSchedulerIface, AGENTXX_IFACE_AGENT_SCHEDULER);
+        f.session = AGENTXX_QUERY_IFACE(host, AgentxxSessionIface, AGENTXX_IFACE_AGENT_SESSION);
+        f.plugins = AGENTXX_QUERY_IFACE(host, AgentxxPluginsIface, AGENTXX_IFACE_AGENT_PLUGINS);
+        f.config  = AGENTXX_QUERY_IFACE(host, AgentxxConfigIface, AGENTXX_IFACE_AGENT_CONFIG);
+        f.prompt  = AGENTXX_QUERY_IFACE(host, AgentxxPromptIface, AGENTXX_IFACE_AGENT_PROMPT);
+        f.json    = AGENTXX_QUERY_IFACE(host, AgentxxJsonIface, AGENTXX_IFACE_AGENT_JSON);
+        f.log     = AGENTXX_QUERY_IFACE(host, AgentxxLogIface, AGENTXX_IFACE_AGENT_LOG);
+        f.resources
+            = AGENTXX_QUERY_IFACE(host, AgentxxResourcesIface, AGENTXX_IFACE_AGENT_RESOURCES);
+        f.model    = AGENTXX_QUERY_IFACE(host, AgentxxModelIface, AGENTXX_IFACE_AGENT_MODEL);
+        f.cancel   = AGENTXX_QUERY_IFACE(host, AgentxxCancelIface, AGENTXX_IFACE_AGENT_CANCEL);
+        f.planning = AGENTXX_QUERY_IFACE(host, AgentxxPlanningIface, AGENTXX_IFACE_AGENT_PLANNING);
         return f;
     }
 };
@@ -88,13 +79,10 @@ struct ClientIfaces {
         if (!host || !host->vtable || !host->vtable->query_interface) {
             return f;
         }
-        f.ui      = AGENTXX_QUERY_IFACE(host, AgentxxClientUiIface, AGENTXX_IFACE_CLIENT_UI);
-        f.events  = AGENTXX_QUERY_IFACE(host, AgentxxClientEventsIface, AGENTXX_IFACE_CLIENT_EVENTS);
-        f.session = AGENTXX_QUERY_IFACE(
-            host,
-            AgentxxClientSessionIface,
-            AGENTXX_IFACE_CLIENT_SESSION
-        );
+        f.ui     = AGENTXX_QUERY_IFACE(host, AgentxxClientUiIface, AGENTXX_IFACE_CLIENT_UI);
+        f.events = AGENTXX_QUERY_IFACE(host, AgentxxClientEventsIface, AGENTXX_IFACE_CLIENT_EVENTS);
+        f.session
+            = AGENTXX_QUERY_IFACE(host, AgentxxClientSessionIface, AGENTXX_IFACE_CLIENT_SESSION);
         f.wire = AGENTXX_QUERY_IFACE(host, AgentxxClientWireIface, AGENTXX_IFACE_CLIENT_WIRE);
         f.self = AGENTXX_QUERY_IFACE(host, AgentxxClientSelfIface, AGENTXX_IFACE_CLIENT_SELF);
         f.json = AGENTXX_QUERY_IFACE(host, AgentxxClientJsonIface, AGENTXX_IFACE_CLIENT_JSON);

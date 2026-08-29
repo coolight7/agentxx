@@ -27,7 +27,8 @@ class InputComponent : public ftxui::ComponentBase {
 public:
 
     struct Config {
-        /// 发送回调: 参数为去除首尾换行后的文本; 返回 true 表示发送成功并清空输入框, 返回 false 表示发送未成功保留输入框内容
+        /// 发送回调: 参数为去除首尾换行后的文本; 返回 true 表示发送成功并清空输入框, 返回 false
+        /// 表示发送未成功保留输入框内容
         std::function<bool(std::string)> onSend;
         /// 是否处于中断等待输入模式 (影响指示器显示)
         std::function<bool()> isAwaitingInterrupt;

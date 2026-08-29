@@ -84,19 +84,14 @@ struct Document {
 /// 批量 embedding 回调: 输入文本块列表, 输出等长向量列表或错误信息
 /// (插件入口装配 HttpClient 实现; 测试注入假实现)
 using EmbedFn = std::function<
-    std::expected<std::vector<std::vector<double>>, std::string>(
-        const std::vector<std::string>&
-    )>;
+    std::expected<std::vector<std::vector<double>>, std::string>(const std::vector<std::string>&)>;
 
 // =========================================================================
 // 分块纯函数 (与原 lib 实现逐行一致)
 // =========================================================================
 
-inline std::vector<std::string> splitByFixedLength(
-    std::string_view text,
-    size_t           blockSize      = 256,
-    double           overlapPercent = 0.0
-) {
+inline std::vector<std::string>
+    splitByFixedLength(std::string_view text, size_t blockSize = 256, double overlapPercent = 0.0) {
     if (overlapPercent <= 0.0 || overlapPercent >= 100.0) {
         auto result = std::vector<std::string>{};
         for (size_t index = 0; index < text.size();) {
@@ -137,7 +132,8 @@ inline std::vector<std::string> splitByFixedLength(
     return result;
 }
 
-inline std::vector<std::string> splitByDelimiter(std::string_view text, std::string_view delimiter) {
+inline std::vector<std::string>
+    splitByDelimiter(std::string_view text, std::string_view delimiter) {
     auto result = std::vector<std::string>{};
     if (delimiter.empty()) {
         if (!text.empty()) {
@@ -357,7 +353,8 @@ inline std::vector<std::string> applyChunkOverlap(
     return result;
 }
 
-inline std::vector<std::string> splitTextToChunks(std::string_view text, const SplitConfig& config) {
+inline std::vector<std::string>
+    splitTextToChunks(std::string_view text, const SplitConfig& config) {
     if (text.empty()) {
         return {};
     }
@@ -452,11 +449,13 @@ inline double cosineSimilarity(const std::vector<double>& a, const std::vector<d
 /// 内存向量库 (embedder 经 EmbedFn 注入; 全部接口同步, 仅宿主线程池内调用)
 class VectorStore {
 public:
-    explicit VectorStore(EmbedFn in_embedder) : embedder(std::move(in_embedder)) {}
 
-    VectorStore(EmbedFn in_embedder, const SplitConfig& in_splitCfg)
-        : splitConfig(in_splitCfg),
-          embedder(std::move(in_embedder)) {}
+    explicit VectorStore(EmbedFn in_embedder) :
+        embedder(std::move(in_embedder)) {}
+
+    VectorStore(EmbedFn in_embedder, const SplitConfig& in_splitCfg) :
+        splitConfig(in_splitCfg),
+        embedder(std::move(in_embedder)) {}
 
     /// 扫描路径下的 .md 文档并分块 (单文件读取失败仅记录日志, 不中断整体扫描)
     std::vector<Document> scanDocument(const std::vector<std::string>& pathlist) {
@@ -570,8 +569,10 @@ public:
             auto start = embVec.begin();
             for (size_t i = 0; i < appendDocs.size(); ++i) {
                 if (false == appendDocs[i].content.empty()) {
-                    appendDocs[i].embedding
-                        = std::vector<std::vector<double>>{start, start + appendDocs[i].content.size()};
+                    appendDocs[i].embedding = std::vector<std::vector<double>>{
+                        start,
+                        start + appendDocs[i].content.size()
+                    };
                     start += appendDocs[i].content.size();
                     docs.push_back(std::move(appendDocs[i]));
                 }
@@ -627,8 +628,9 @@ public:
     }
 
 protected:
-    SplitConfig splitConfig{};
-    EmbedFn     embedder;
+
+    SplitConfig           splitConfig{};
+    EmbedFn               embedder;
     std::vector<Document> docs;
 };
 
@@ -639,8 +641,8 @@ protected:
 /// 构造真实 EmbedFn (OpenAI 兼容 POST {baseUrl}/embeddings; 局部 io_context
 /// 同步驱动, 仅宿主线程池内调用; readChunkTimeout=15s 与原实现一致)
 inline EmbedFn makeHttpEmbedder(std::string baseUrl, std::string model) {
-    return [baseUrl = std::move(baseUrl), model = std::move(model)](
-               const std::vector<std::string>& texts
+    return [baseUrl = std::move(baseUrl),
+            model   = std::move(model)](const std::vector<std::string>& texts
            ) -> std::expected<std::vector<std::vector<double>>, std::string> {
         if (texts.empty()) {
             return std::vector<std::vector<double>>{};
@@ -657,8 +659,7 @@ inline EmbedFn makeHttpEmbedder(std::string baseUrl, std::string model) {
             fmt::format("{}/embeddings", baseUrl),
             body,
             agentxx::util::HeaderMap{},
-            agentxx::util::HttpClient::RequestConfig{.readChunkTimeout = std::chrono::seconds{15}
-            }
+            agentxx::util::HttpClient::RequestConfig{.readChunkTimeout = std::chrono::seconds{15}}
         );
         std::expected<agentxx::util::HttpResponse, std::string> resp;
         // awaitable 为 move-only: 必须 move 捕获并 co_await 右值 (不可拷贝)

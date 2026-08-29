@@ -199,7 +199,11 @@ bool savePlanningFile(const PluginCtx& ctx, const std::string& tid, const std::s
         {
             std::wstring wTmp  = tmp.wstring();
             std::wstring wPath = path.wstring();
-            if (::MoveFileExW(wTmp.c_str(), wPath.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+            if (::MoveFileExW(
+                    wTmp.c_str(),
+                    wPath.c_str(),
+                    MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH
+                )) {
                 return true;
             }
             // 回退：先删后改名（极端权限场景）
@@ -843,7 +847,8 @@ static std::string buildDecorItems(const ClientCtx& ctx, const neograph::json& p
     }
 
     // ---- Todo: 待办列表 ----
-    const bool hasTodos = plan.contains("todos") && plan["todos"].is_array() && !plan["todos"].empty();
+    const bool hasTodos
+        = plan.contains("todos") && plan["todos"].is_array() && !plan["todos"].empty();
     if (hasTodos) {
         if (!items.empty()) {
             separatorItem();
@@ -1002,7 +1007,8 @@ static void refreshPlanSection(ClientCtx& ctx) {
     }
 
     // ---- Todo: 待办列表 (独立分区) ----
-    const bool hasTodos = plan.contains("todos") && plan["todos"].is_array() && !plan["todos"].empty();
+    const bool hasTodos
+        = plan.contains("todos") && plan["todos"].is_array() && !plan["todos"].empty();
     if (hasTodos) {
         if (!items.empty()) {
             separatorItem();

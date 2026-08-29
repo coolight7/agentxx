@@ -36,7 +36,7 @@ namespace plugin {
 
 struct OpDrive {
     std::function<void*(const AgentxxOpNotify* notify, char** err)> start;
-    std::function<void(void* op)>                                  cancel;
+    std::function<void(void* op)>                                   cancel;
 };
 
 using OpErrorCode = neograph_asio_error_code;
@@ -91,7 +91,8 @@ struct OpCore : std::enable_shared_from_this<OpCore> {
     void*                                                     cbUd = nullptr;
 
     explicit OpCore(const asio::any_io_executor& ex, OpGuardPtr g = nullptr) :
-        chan(ex, 4), guard(std::move(g)) {}
+        chan(ex, 4),
+        guard(std::move(g)) {}
 
     static void onDone(void* ud, int st, char* payload_cstr) {
         auto* self   = static_cast<OpCore*>(ud);
@@ -111,9 +112,9 @@ struct OpCore : std::enable_shared_from_this<OpCore> {
         self->doneSignal.emit(asio::cancellation_type::all);
         self->guard.reset();
         if (self->cb) {
-            auto  cb   = self->cb;
-            auto* cbUd = self->cbUd;
-            self->cb   = nullptr;
+            auto  cb                = self->cb;
+            auto* cbUd              = self->cbUd;
+            self->cb                = nullptr;
             std::string payloadCopy = self->payload;
             // 宿主约定：完成回调在 io 线程派发且经 post 入队，禁止同步重入；
             // 插件的 done 可能来自任意线程（阻塞池/自管线程），此处恒异步投递回 io
@@ -123,14 +124,16 @@ struct OpCore : std::enable_shared_from_this<OpCore> {
                     char* pl = payloadCopy.empty() ? nullptr : ::strdup(payloadCopy.c_str());
                     try {
                         cb(cbUd, st, pl);
-                    } catch (...) {}
+                    } catch (...) {
+                    }
                 });
             } catch (const std::bad_weak_ptr&) {
                 // 极端：不在 shared_ptr 管理下（不应发生），回退为直接调用
                 char* pl = payloadCopy.empty() ? nullptr : ::strdup(payloadCopy.c_str());
                 try {
                     cb(cbUd, st, pl);
-                } catch (...) {}
+                } catch (...) {
+                }
             }
         }
     }
@@ -187,11 +190,11 @@ struct PluginOpAwaitArgs {
 };
 
 inline asio::awaitable<std::string> awaitPluginOp(PluginOpAwaitArgs args) {
-    auto guard = std::make_shared<PluginInstance::InflightGuard>(args.inst.get());
-    auto core  = std::make_shared<OpCore>(args.ex, guard);
+    auto        guard = std::make_shared<PluginInstance::InflightGuard>(args.inst.get());
+    auto        core  = std::make_shared<OpCore>(args.ex, guard);
     std::string name  = args.inst ? args.inst->name : std::string{};
     std::string label = args.label;
-    OpWatchdog   wd;
+    OpWatchdog  wd;
 
     std::shared_ptr<neograph::graph::CancelToken> cancelOp;
     if (args.cancelToken) {
@@ -202,10 +205,10 @@ inline asio::awaitable<std::string> awaitPluginOp(PluginOpAwaitArgs args) {
         }
     }
 
-    char* err        = nullptr;
-    void* op         = nullptr;
-    bool  startThrew = false;
-    AgentxxOpNotify ntf = core->notify();
+    char*           err        = nullptr;
+    void*           op         = nullptr;
+    bool            startThrew = false;
+    AgentxxOpNotify ntf        = core->notify();
     wd.enter("start");
     try {
         op = args.drive.start(&ntf, &err);
@@ -246,10 +249,12 @@ inline asio::awaitable<std::string> awaitPluginOp(PluginOpAwaitArgs args) {
         cancelWatcherTimer->expires_at(std::chrono::steady_clock::time_point::max());
         asio::co_spawn(
             args.ex,
-            [core, drive = args.drive, op, cancelOp, cancelWatcherDone, cancelWatcherTimer]() -> asio::awaitable<void> {
-                auto [ec] = co_await cancelWatcherTimer->async_wait(
-                    asio::bind_cancellation_slot(cancelOp->slot(), asio::as_tuple(asio::use_awaitable))
-                );
+            [core, drive = args.drive, op, cancelOp, cancelWatcherDone, cancelWatcherTimer](
+            ) -> asio::awaitable<void> {
+                auto [ec] = co_await cancelWatcherTimer->async_wait(asio::bind_cancellation_slot(
+                    cancelOp->slot(),
+                    asio::as_tuple(asio::use_awaitable)
+                ));
                 if (cancelWatcherDone->load(std::memory_order_acquire)) {
                     co_return;
                 }
@@ -296,9 +301,9 @@ inline asio::awaitable<std::string> awaitPluginOp(PluginOpAwaitArgs args) {
         throw neograph::graph::CancelledException(fmt::format("plugin op `{}` cancelled", label));
     }
     if (st != AGENTXX_OP_OK) {
-        throw std::runtime_error(payload.empty()
-                                     ? fmt::format("plugin op `{}` failed", label)
-                                     : payload);
+        throw std::runtime_error(
+            payload.empty() ? fmt::format("plugin op `{}` failed", label) : payload
+        );
     }
     co_return payload;
 }

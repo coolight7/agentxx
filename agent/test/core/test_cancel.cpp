@@ -33,6 +33,7 @@ int g_cancel_failed = 0;
 // 断言计数宏覆盖: 将 test_framework.h 的 XX_TEST_EXPECT_* 映射到本模块计数器
 #define XX_TEST_PASSED g_cancel_passed
 #define XX_TEST_FAILED g_cancel_failed
+
 namespace agentxx {
 namespace test {
 
@@ -505,8 +506,8 @@ asio::awaitable<void> test_agent_cancel_toolcall() {
         while (std::chrono::steady_clock::now() < deadline) {
             // 轮末错误路径已把 tempMessages 快照收敛进 llmMessages 并清理
             // graphData, 断言权威面 (llmMessages) 即可
-            auto sess = agent.agentContext->sessions->get("cancel_tool_test");
-            im        = sess ? sess->llmMessages : neograph::json{};
+            auto sess      = agent.agentContext->sessions->get("cancel_tool_test");
+            im             = sess ? sess->llmMessages : neograph::json{};
             slowCanceled   = false;
             markerCanceled = false;
             if (im.is_array()) {

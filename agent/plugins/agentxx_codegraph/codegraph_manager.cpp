@@ -12,34 +12,34 @@
 static std::atomic<agentxx_codegraph_plugin::CodeGraphManager::LogSink*> g_mgr_log_sink{nullptr};
 
 void agentxx_codegraph_plugin::CodeGraphManager::setLogSink(LogSink sink) {
-    logSink_  = std::move(sink);
+    logSink_ = std::move(sink);
     g_mgr_log_sink.store(&logSink_, std::memory_order_release);
 }
 
-#define XX_LOGT(...)                                                           \
-    do {                                                                       \
+#define XX_LOGT(...)                                                     \
+    do {                                                                 \
         if (auto* sink = g_mgr_log_sink.load(std::memory_order_acquire)) \
-            (*sink)(0, fmt::format(__VA_ARGS__));                             \
+            (*sink)(0, fmt::format(__VA_ARGS__));                        \
     } while (0)
-#define XX_LOGD(...)                                                           \
-    do {                                                                       \
+#define XX_LOGD(...)                                                     \
+    do {                                                                 \
         if (auto* sink = g_mgr_log_sink.load(std::memory_order_acquire)) \
-            (*sink)(1, fmt::format(__VA_ARGS__));                             \
+            (*sink)(1, fmt::format(__VA_ARGS__));                        \
     } while (0)
-#define XX_LOGI(...)                                                           \
-    do {                                                                       \
+#define XX_LOGI(...)                                                     \
+    do {                                                                 \
         if (auto* sink = g_mgr_log_sink.load(std::memory_order_acquire)) \
-            (*sink)(2, fmt::format(__VA_ARGS__));                             \
+            (*sink)(2, fmt::format(__VA_ARGS__));                        \
     } while (0)
-#define XX_LOGW(...)                                                           \
-    do {                                                                       \
+#define XX_LOGW(...)                                                     \
+    do {                                                                 \
         if (auto* sink = g_mgr_log_sink.load(std::memory_order_acquire)) \
-            (*sink)(3, fmt::format(__VA_ARGS__));                             \
+            (*sink)(3, fmt::format(__VA_ARGS__));                        \
     } while (0)
-#define XX_LOGE(...)                                                           \
-    do {                                                                       \
+#define XX_LOGE(...)                                                     \
+    do {                                                                 \
         if (auto* sink = g_mgr_log_sink.load(std::memory_order_acquire)) \
-            (*sink)(4, fmt::format(__VA_ARGS__));                             \
+            (*sink)(4, fmt::format(__VA_ARGS__));                        \
     } while (0)
 #include "glob/glob.h"
 #include <algorithm>
@@ -1007,9 +1007,9 @@ public:
         //   长度受控不会超过系统路径限制 (Windows MAX_PATH=260 / Linux PATH_MAX)
         // - 支持路径前缀匹配复用 (findNearestExistingIndex):
         //   工作目录为已有索引项目的子目录时, 复用最近父级索引, 无需重新索引
-        auto sqlite_base  = fs::path(sqlite_dir_) / kCodeGraphSqliteSubDirName;
-        auto     reused     = findNearestExistingIndex(project_root, sqlite_dir_);
-        fs::path index_path = reused ? *reused : getIndexDbPath(project_root, sqlite_dir_);
+        auto     sqlite_base = fs::path(sqlite_dir_) / kCodeGraphSqliteSubDirName;
+        auto     reused      = findNearestExistingIndex(project_root, sqlite_dir_);
+        fs::path index_path  = reused ? *reused : getIndexDbPath(project_root, sqlite_dir_);
         if (reused) {
             XX_LOGI(
                 "CodeGraphManager: reuse existing index db from parent path: {}",

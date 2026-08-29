@@ -24,7 +24,7 @@ asio::awaitable<void>
     }
     // 首轮懒加载 / 插件运行期增删文件后的全量重读 (自愈缓存)
     if (false == haveLoaded || needReloadMemoryFiles) {
-        haveLoaded           = true;
+        haveLoaded            = true;
         needReloadMemoryFiles = false;
 
 #if ASIO_HAS_FILE || BOOST_ASIO_HAS_FILE
@@ -111,7 +111,7 @@ asio::awaitable<void>
 
     // 缓存失效: 首次生成 / 资源纪元变更 (插件增删上下文文件) 时重建
     if (state->cachedResourceEpoch != resourceEpoch) {
-        state->cachedResourceEpoch  = resourceEpoch;
+        state->cachedResourceEpoch = resourceEpoch;
         state->cacheContextContent.clear();
         if (!fileContents.empty()) {
             std::ostringstream oss;
@@ -149,8 +149,7 @@ void MemoryFileMiddlewareHandle::addMemoryFiles(std::vector<std::string> paths) 
             continue;
         }
         // 去重: 与 yaml 主配置/已注册文件重复时不重复读取注入
-        if (std::find(memoryFilePaths.begin(), memoryFilePaths.end(), p)
-            == memoryFilePaths.end()) {
+        if (std::find(memoryFilePaths.begin(), memoryFilePaths.end(), p) == memoryFilePaths.end()) {
             memoryFilePaths.push_back(std::move(p));
             changed = true;
         }

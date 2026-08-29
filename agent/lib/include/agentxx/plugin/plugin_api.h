@@ -245,10 +245,10 @@ typedef struct AgentxxHostVtable {
 
 struct AgentxxHost {
     const AgentxxHostVtable* vtable; ///< 核心函数表 (宿主静态)
-    void* opaque;                    ///< 宿主内部 (指向插件实例状态, 插件不得使用)
+    void* opaque; ///< 宿主内部 (指向插件实例状态, 插件不得使用)
 };
 
-#define AGENTXX_QUERY_IFACE(host, IfaceType, iid_name)                                        \
+#define AGENTXX_QUERY_IFACE(host, IfaceType, iid_name) \
     ((const IfaceType*)(host)->vtable->query_interface((host), AGENTXX_SV(iid_name)))
 
 /* ==================== 接口表: 工具 (agentxx.agent.tools) ==================== */
@@ -305,10 +305,10 @@ typedef struct AgentxxEventsIface {
 
     /// 订阅 (topic 自动加 "plugin." 前缀, 载荷为 JSON 字符串); 返回句柄
     AgentxxSubscription* (*subscribe)(
-        const AgentxxHost* host,
+        const AgentxxHost*      host,
         AgentxxPluginStringView topic,
         void (*handler)(AgentxxPluginStringView event_json, void* ud),
-        void*                   ud
+        void* ud
     );
     void (*unsubscribe)(AgentxxSubscription* sub);
     /// 发布 (异步投递, 立即返回; 禁用状态的插件被拒绝)
@@ -386,7 +386,7 @@ typedef struct AgentxxSchedulerIface {
         volatile int*      cancel_flag,
         void* (*work)(void* ud, volatile int* cancel_flag, char** error_out),
         void (*done)(void* ud, void* result, char* error),
-        void*                   ud
+        void* ud
     );
 } AgentxxSchedulerIface;
 
@@ -399,8 +399,11 @@ typedef struct AgentxxSessionIface {
     int version; ///< 必须 == AGENTXX_IFACE_AGENT_SESSION_VERSION
 
     /// 读取会话级 share_store 条目 (仅 io 线程); 不存在返回 NULL (host->alloc)
-    char* (
-        *get_share_store)(const AgentxxHost* host, AgentxxPluginStringView thread_id, long long id);
+    char* (*get_share_store)(
+        const AgentxxHost*      host,
+        AgentxxPluginStringView thread_id,
+        long long               id
+    );
     /// 向会话 UI 推送提示消息 (仅 io 线程); level: 0=info 1=warning 2=error
     void (*emit_message_tip)(
         const AgentxxHost*      host,
@@ -558,9 +561,9 @@ typedef const AgentxxPluginInfo* (*AgentxxPluginGetInfoFn)(void);
 typedef int (*AgentxxPluginCreateFn)(const AgentxxHost* host, void** plugin_ctx);
 typedef void (*AgentxxPluginDestroyFn)(void* plugin_ctx);
 
-#define AGENTXX_PLUGIN_SYMBOL_GET_INFO  "agentxx_plugin_get_info"
-#define AGENTXX_PLUGIN_SYMBOL_CREATE    "agentxx_plugin_create"
-#define AGENTXX_PLUGIN_SYMBOL_DESTROY   "agentxx_plugin_destroy"
+#define AGENTXX_PLUGIN_SYMBOL_GET_INFO "agentxx_plugin_get_info"
+#define AGENTXX_PLUGIN_SYMBOL_CREATE   "agentxx_plugin_create"
+#define AGENTXX_PLUGIN_SYMBOL_DESTROY  "agentxx_plugin_destroy"
 
 /* ==================== 便捷宏 (插件侧使用) ==================== */
 

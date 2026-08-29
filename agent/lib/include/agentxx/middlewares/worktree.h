@@ -19,8 +19,7 @@ namespace middleware {
 class WorktreeMiddlewareHandle : public BaseMiddlewareHandle<BaseMiddlewareState> {
 public:
 
-    explicit WorktreeMiddlewareHandle(std::weak_ptr<agentxx::agent::AgentContext> in_agentContext
-    ) :
+    explicit WorktreeMiddlewareHandle(std::weak_ptr<agentxx::agent::AgentContext> in_agentContext) :
         BaseMiddlewareHandle<BaseMiddlewareState>("WorktreeMiddlewareHandle", in_agentContext) {}
 
     asio::awaitable<void> onAgentcallStartFunc(neograph::graph::NodeInput& in) override;

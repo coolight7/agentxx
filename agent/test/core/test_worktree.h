@@ -8,8 +8,8 @@
 #include "test_framework.h"
 #undef XX_TEST_PASSED
 #undef XX_TEST_FAILED
-#define XX_TEST_PASSED  g_wt_passed
-#define XX_TEST_FAILED  g_wt_failed
+#define XX_TEST_PASSED g_wt_passed
+#define XX_TEST_FAILED g_wt_failed
 
 namespace agentxx {
 namespace test {

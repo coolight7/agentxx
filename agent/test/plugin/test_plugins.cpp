@@ -29,6 +29,7 @@ int g_plugin_failed = 0;
 // 断言计数宏覆盖: 将 test_framework.h 的 XX_TEST_EXPECT_* 映射到本模块计数器
 #define XX_TEST_PASSED g_plugin_passed
 #define XX_TEST_FAILED g_plugin_failed
+
 namespace agentxx {
 namespace test {
 
@@ -162,9 +163,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
                 XX_TEST_EXPECT_TRUE(out.find("[ExitCode]") != std::string::npos);
             }
             co_await ctx->pluginManager->unloadAsync("agentxx_execute_command");
-            XX_TEST_EXPECT_TRUE(
-                false == ctx->toolRegistry->contains(cmdToolName)
-            );
+            XX_TEST_EXPECT_TRUE(false == ctx->toolRegistry->contains(cmdToolName));
         }
     }
 
@@ -517,7 +516,10 @@ asio::awaitable<TestResult> run_plugin_tests() {
             // API v1: 垫片适配器为调用方内嵌存储 (随插件实例 ctx 生死; 此处测试
             // 直接持有 —— 与插件作者真实用法一致)
             static AgentxxSyncToolShim slowSpecShim;
-            XX_TEST_EXPECT_EQ(agentxx_register_sync_tool(&inst23->host, &slowSpec, &slowSpecShim), 0);
+            XX_TEST_EXPECT_EQ(
+                agentxx_register_sync_tool(&inst23->host, &slowSpec, &slowSpecShim),
+                0
+            );
 
             auto tool = ctx->toolRegistry->find("slow_timeout_tool");
             XX_TEST_EXPECT_TRUE(tool != nullptr);
@@ -773,20 +775,20 @@ asio::awaitable<TestResult> run_plugin_tests() {
             XX_TEST_EXPECT_TRUE(ev30 != nullptr && ev30->publish != nullptr);
             XX_TEST_EXPECT_EQ(
                 ev30 ? ev30->publish(
-                    &inst30->host,
-                    AGENTXX_SV("demo.topic"),
-                    AGENTXX_SV(R"({"k":"v"})")
-                )
+                           &inst30->host,
+                           AGENTXX_SV("demo.topic"),
+                           AGENTXX_SV(R"({"k":"v"})")
+                       )
                      : -1,
                 0
             );
             ctx->pluginManager->disable("example_plugin");
             // 禁用状态: 接口表 publish 拒绝 (返回非 0)
             int rc = ev30 ? ev30->publish(
-                         &inst30->host,
-                         AGENTXX_SV("demo.topic"),
-                         AGENTXX_SV(R"({"k":"v"})")
-                     )
+                                &inst30->host,
+                                AGENTXX_SV("demo.topic"),
+                                AGENTXX_SV(R"({"k":"v"})")
+                            )
                           : -1;
             XX_TEST_EXPECT_TRUE(rc != 0);
             co_await ctx->pluginManager->unloadAsync("example_plugin");
@@ -800,11 +802,11 @@ asio::awaitable<TestResult> run_plugin_tests() {
 
         // 31.1 call_tool_async 回调语义 (宿主在 io 线程派发 cb; 恰好一次)
         {
-            char*       e         = nullptr;
-            int         cbStatus  = -1;
+            char*       e        = nullptr;
+            int         cbStatus = -1;
             std::string cbPayload;
-            bool        cbDone    = false;
-            using StateTuple = std::tuple<int*, std::string*, bool*>;
+            bool        cbDone = false;
+            using StateTuple   = std::tuple<int*, std::string*, bool*>;
             StateTuple state{&cbStatus, &cbPayload, &cbDone};
 
             auto* op = ctx->pluginManager->callToolAsync(
@@ -813,7 +815,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
                 R"({"k":"v"})",
                 "t31",
                 [](void* ud, int st, char* pl) {
-                    auto* s = static_cast<StateTuple*>(ud);
+                    auto* s          = static_cast<StateTuple*>(ud);
                     *std::get<0>(*s) = st;
                     if (pl) {
                         *std::get<1>(*s) = pl;
@@ -856,11 +858,11 @@ asio::awaitable<TestResult> run_plugin_tests() {
             asyncSpec.description     = AGENTXX_SV("async tool for notify test");
             asyncSpec.parameters_json = AGENTXX_SV("{}");
             asyncSpec.execute_start   = +[](void*,
-                                         AgentxxPluginStringView,
-                                         AgentxxPluginStringView,
-                                         AgentxxPluginStringView,
-                                         const AgentxxOpNotify* notify,
-                                         char**) -> void* {
+                                          AgentxxPluginStringView,
+                                          AgentxxPluginStringView,
+                                          AgentxxPluginStringView,
+                                          const AgentxxOpNotify* notify,
+                                          char**) -> void* {
                 char* p = static_cast<char*>(::malloc(3));
                 p[0]    = '{';
                 p[1]    = '}';
@@ -887,9 +889,9 @@ asio::awaitable<TestResult> run_plugin_tests() {
                 AgentxxOpNotify notify;
             };
 
-            static bool      s_cancelCalled = false;
-            s_cancelCalled                  = false;
-            static CancelOp* s_activeOp     = nullptr;
+            static bool s_cancelCalled        = false;
+            s_cancelCalled                    = false;
+            static CancelOp*       s_activeOp = nullptr;
             static AgentxxToolSpec cSpec;
             cSpec.name            = AGENTXX_SV("async_cancel_tool");
             cSpec.description     = AGENTXX_SV("cancellable async tool for cancel test");
@@ -905,7 +907,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
             };
             cSpec.execute_cancel = +[](void*, void* op) {
                 s_cancelCalled = true;
-                auto* o = static_cast<CancelOp*>(op);
+                auto* o        = static_cast<CancelOp*>(op);
                 if (o && o->notify.done) {
                     o->notify.done(o->notify.host_ud, AGENTXX_OP_CANCELLED, nullptr);
                 }
@@ -957,15 +959,15 @@ asio::awaitable<TestResult> run_plugin_tests() {
         // 31.4 异常守卫: start() 违约抛 C++ 异常 → 宿主转失败终态 (不终止进程)
         {
             static AgentxxToolSpec throwSpec;
-            throwSpec.name            = AGENTXX_SV("throwing_start_tool");
-            throwSpec.description     = AGENTXX_SV("tool whose start() throws (contract violation)");
+            throwSpec.name        = AGENTXX_SV("throwing_start_tool");
+            throwSpec.description = AGENTXX_SV("tool whose start() throws (contract violation)");
             throwSpec.parameters_json = AGENTXX_SV("{}");
             throwSpec.execute_start   = +[](void*,
-                                         AgentxxPluginStringView,
-                                         AgentxxPluginStringView,
-                                         AgentxxPluginStringView,
-                                         const AgentxxOpNotify*,
-                                         char**) -> void* {
+                                          AgentxxPluginStringView,
+                                          AgentxxPluginStringView,
+                                          AgentxxPluginStringView,
+                                          const AgentxxOpNotify*,
+                                          char**) -> void* {
                 throw std::runtime_error("boom from plugin start");
             };
             XX_TEST_EXPECT_EQ(ctx->pluginManager->registerTool(inst31.get(), &throwSpec), 0);
@@ -995,11 +997,11 @@ asio::awaitable<TestResult> run_plugin_tests() {
             nullSpec.description     = AGENTXX_SV("tool whose start() returns NULL without done");
             nullSpec.parameters_json = AGENTXX_SV("{}");
             nullSpec.execute_start   = +[](void*,
-                                          AgentxxPluginStringView,
-                                          AgentxxPluginStringView,
-                                          AgentxxPluginStringView,
-                                          const AgentxxOpNotify*,
-                                          char**) -> void* {
+                                         AgentxxPluginStringView,
+                                         AgentxxPluginStringView,
+                                         AgentxxPluginStringView,
+                                         const AgentxxOpNotify*,
+                                         char**) -> void* {
                 return nullptr; ///< 违约: 未 call notify->done 且未设 error_out
             };
             XX_TEST_EXPECT_EQ(ctx->pluginManager->registerTool(inst31.get(), &nullSpec), 0);
@@ -1025,16 +1027,16 @@ asio::awaitable<TestResult> run_plugin_tests() {
         {
             static AgentxxSyncJob shimJob{};
             shimJob.shim.fn = +[](void*,
-                                     AgentxxPluginStringView,
-                                     AgentxxPluginStringView,
-                                     AgentxxPluginStringView,
-                                     volatile int*,
-                                     char**) -> char* {
+                                  AgentxxPluginStringView,
+                                  AgentxxPluginStringView,
+                                  AgentxxPluginStringView,
+                                  volatile int*,
+                                  char**) -> char* {
                 throw std::runtime_error("shim boom");
             };
             shimJob.shim.host = nullptr; ///< host 缺失时 err_dup 安全放弃
-            char* shimErr        = nullptr;
-            void* shimResult     = agentxx_sync_job_work(&shimJob, nullptr, &shimErr);
+            char* shimErr     = nullptr;
+            void* shimResult  = agentxx_sync_job_work(&shimJob, nullptr, &shimErr);
             XX_TEST_EXPECT_TRUE(shimResult == nullptr);
             XX_TEST_EXPECT_TRUE(shimErr == nullptr); ///< 无宿主无法分配错误串, 安全放弃
         }
@@ -1063,7 +1065,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
             XX_TEST_EXPECT_TRUE(subBad != nullptr);
             XX_TEST_EXPECT_TRUE(subGood != nullptr);
             XX_TEST_EXPECT_EQ(ctx->pluginManager->publish("guard_throw.topic", "{}"), 0);
-            co_await sleepMs(150); ///< 派发为 EventBus 协程异步执行
+            co_await sleepMs(150);                 ///< 派发为 EventBus 协程异步执行
             XX_TEST_EXPECT_TRUE(s_goodHandlerRan); ///< 违约不影响其他订阅者
             ctx->pluginManager->unsubscribe(subBad);
             ctx->pluginManager->unsubscribe(subGood);
@@ -1091,9 +1093,9 @@ asio::awaitable<TestResult> run_plugin_tests() {
             auto ex = co_await asio::this_coro::executor;
 
             struct AsyncRes {
-                int               status = -1;
+                int               status  = -1;
                 char*             payload = nullptr;
-                std::atomic<bool> done = false;
+                std::atomic<bool> done    = false;
             };
 
             // ---- 32.1 命令真实链路 (无会话令牌): 快速完成且输出正确 ----
@@ -1107,7 +1109,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
                     R"({"command":"echo repro_check"})",
                     "t_exec_no_token",
                     [](void* ud, int st, char* pl) {
-                        auto* r   = static_cast<AsyncRes*>(ud);
+                        auto* r    = static_cast<AsyncRes*>(ud);
                         r->status  = st;
                         r->payload = pl;
                         r->done    = true;
@@ -1149,7 +1151,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
                     R"({"command":"echo token_case"})",
                     "t_exec_with_token",
                     [](void* ud, int st, char* pl) {
-                        auto* r   = static_cast<AsyncRes*>(ud);
+                        auto* r    = static_cast<AsyncRes*>(ud);
                         r->status  = st;
                         r->payload = pl;
                         r->done    = true;
@@ -1193,7 +1195,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
                     timeoutCmd,
                     "t_exec_no_token",
                     [](void* ud, int st, char* pl) {
-                        auto* r   = static_cast<AsyncRes*>(ud);
+                        auto* r    = static_cast<AsyncRes*>(ud);
                         r->status  = st;
                         r->payload = pl;
                         r->done    = true;
@@ -1231,7 +1233,9 @@ asio::awaitable<TestResult> run_plugin_tests() {
             XX_TEST_EXPECT_TRUE(tool != nullptr);
             if (tool) {
                 auto t0  = std::chrono::steady_clock::now();
-                auto out = co_await tool->execute_async(neograph::json{{"durationMs", 50}});
+                auto out = co_await tool->execute_async(neograph::json{
+                    {"durationMs", 50}
+                });
                 auto ms  = std::chrono::duration_cast<std::chrono::milliseconds>(
                               std::chrono::steady_clock::now() - t0
                 )
@@ -1250,10 +1254,11 @@ asio::awaitable<TestResult> run_plugin_tests() {
         if (instEx) {
             auto  ex = co_await asio::this_coro::executor;
             char* e  = nullptr;
+
             struct CancelRes {
-                int               status = -1;
+                int               status  = -1;
                 char*             payload = nullptr;
-                std::atomic<bool> done = false;
+                std::atomic<bool> done    = false;
             } cres;
 
             auto* op = ctx->pluginManager->callToolAsync(
@@ -1262,7 +1267,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
                 R"({"durationMs":60000})",
                 "t_unload_cancel",
                 [](void* ud, int st, char* pl) {
-                    auto* r   = static_cast<CancelRes*>(ud);
+                    auto* r    = static_cast<CancelRes*>(ud);
                     r->status  = st;
                     r->payload = pl;
                     r->done    = true;

@@ -25,6 +25,7 @@ int g_ib_failed = 0;
 // 断言计数宏覆盖: 将 test_framework.h 的 XX_TEST_EXPECT_* 映射到本模块计数器
 #define XX_TEST_PASSED g_ib_passed
 #define XX_TEST_FAILED g_ib_failed
+
 namespace agentxx {
 namespace test {
 

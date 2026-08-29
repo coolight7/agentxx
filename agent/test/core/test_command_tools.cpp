@@ -1,15 +1,15 @@
 #include "test_command_tools.h"
-#include <neograph/types.h>
 #include "agentxx/agent/context.h"
+#include <neograph/types.h>
 // 原 lib 内置工具已迁移至 agentxx_execute_command 插件 (同名同行为); 测试
 // 直测插件同一实现 (execute_command_impl.h), 保证插件行为与测试覆盖一致
-#include "execute_command_impl.h"
 #include "agentxx/util/util.h"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
 #include "asio/dispatch.hpp"
 #include "asio/steady_timer.hpp"
 #include "asio/use_awaitable.hpp"
+#include "execute_command_impl.h"
 #include <chrono>
 #include <filesystem>
 #include <fstream>
@@ -26,6 +26,7 @@ int g_cmd_failed = 0;
 // 断言计数宏覆盖: 将 test_framework.h 的 XX_TEST_EXPECT_* 映射到本模块计数器
 #define XX_TEST_PASSED g_cmd_passed
 #define XX_TEST_FAILED g_cmd_failed
+
 namespace agentxx {
 namespace tools {
 
@@ -46,7 +47,7 @@ inline neograph::ChatTool execmdDefinitionOf(
         }
     }
     neograph::json params = neograph::json{
-        {"type", "object"},
+        {"type",       "object"                          },
         {"properties",
          {
              {"command",
@@ -59,8 +60,8 @@ inline neograph::ChatTool execmdDefinitionOf(
                {"description",
                 "Default `true`. `false`: only return stdout and stderr when the command fails."}}},
              {"timeout", {{"type", "integer"}, {"description", "Default `60` seconds."}}},
-         }},
-        {"required", neograph::json::array({"command"})},
+         }                                               },
+        {"required",   neograph::json::array({"command"})},
     };
     return {name, depict, std::move(params)};
 }
@@ -82,8 +83,9 @@ inline std::string testResolvedWorkDir(const std::weak_ptr<agentxx::agent::Agent
 /// 测试适配: 原工具类的同名薄包装 (execute_async 直调插件实现)
 struct ExecuteBashCommandTool {
     std::weak_ptr<agentxx::agent::AgentContext> ctx;
-    explicit ExecuteBashCommandTool(std::weak_ptr<agentxx::agent::AgentContext> c)
-        : ctx(std::move(c)) {}
+
+    explicit ExecuteBashCommandTool(std::weak_ptr<agentxx::agent::AgentContext> c) :
+        ctx(std::move(c)) {}
 
     neograph::ChatTool get_definition() const {
         return execmdDefinitionOf(
@@ -114,8 +116,9 @@ struct ExecuteBashCommandTool {
 
 struct ExecuteWindowsCommandTool {
     std::weak_ptr<agentxx::agent::AgentContext> ctx;
-    explicit ExecuteWindowsCommandTool(std::weak_ptr<agentxx::agent::AgentContext> c)
-        : ctx(std::move(c)) {}
+
+    explicit ExecuteWindowsCommandTool(std::weak_ptr<agentxx::agent::AgentContext> c) :
+        ctx(std::move(c)) {}
 
     neograph::ChatTool get_definition() const {
         return execmdDefinitionOf(
@@ -509,8 +512,7 @@ asio::awaitable<void>
 // ---- 子进程工作目录 (AgentConfig::workDir) ----
 
 /// 构造绑定指定会话工作目录的独立 AgentContext (work_dir 相关测试专用)
-static std::shared_ptr<agentxx::agent::AgentContext>
-    makeWorkDirContext(const std::string& dir) {
+static std::shared_ptr<agentxx::agent::AgentContext> makeWorkDirContext(const std::string& dir) {
     auto ctx                  = std::make_shared<agentxx::agent::AgentContext>();
     ctx->agentConfig          = std::make_shared<agentxx::agent::AgentConfig>();
     ctx->agentConfig->workDir = dir;
@@ -523,12 +525,11 @@ static std::shared_ptr<agentxx::agent::AgentContext>
 /// (避免直接比较路径字符串 —— Windows 盘符大小写/正反斜杠格式差异易误判)
 /// - popen 回退编译 (AGENTXX_ENABLE_BOOST_PROCESS 关闭) 无法指定子进程目录,
 ///   此时跳过断言仅记录信息
-asio::awaitable<void>
-    test_command_subprocess_workdir(std::weak_ptr<agentxx::agent::AgentContext>) {
+asio::awaitable<void> test_command_subprocess_workdir(std::weak_ptr<agentxx::agent::AgentContext>) {
 #if AGENTXX_ENABLE_BOOST_PROCESS
-    namespace fs = std::filesystem;
-    auto wd       = (fs::temp_directory_path() / "agentxx_test_cmd_wd").generic_string();
-    auto markerNm = std::string{"wd_probe_marker_8f3a.txt"};
+    namespace fs             = std::filesystem;
+    auto            wd       = (fs::temp_directory_path() / "agentxx_test_cmd_wd").generic_string();
+    auto            markerNm = std::string{"wd_probe_marker_8f3a.txt"};
     std::error_code ec;
     fs::remove_all(wd, ec);
     fs::create_directories(wd, ec);
@@ -723,10 +724,10 @@ asio::awaitable<void>
         {"command", "sleep 1 && echo concurrent_done"},
         {"timeout", 10                               },
     };
-    auto              ex   = co_await asio::this_coro::executor;
-    std::atomic<int>  done{0};
-    std::string       r1, r2;
-    auto              start = std::chrono::steady_clock::now();
+    auto             ex = co_await asio::this_coro::executor;
+    std::atomic<int> done{0};
+    std::string      r1, r2;
+    auto             start = std::chrono::steady_clock::now();
     asio::co_spawn(
         ex,
         [&]() -> asio::awaitable<void> {
@@ -778,11 +779,14 @@ asio::awaitable<void>
         {"command", "sleep 30"},
         {"timeout", 60        },
     };
-    auto start   = std::chrono::steady_clock::now();
-    auto result  = co_await agentxx_execmd_plugin::bashExecuteAsync(
+    auto start  = std::chrono::steady_clock::now();
+    auto result = co_await agentxx_execmd_plugin::bashExecuteAsync(
         args,
         agentxx::tools::testResolvedWorkDir(agentContext),
-        /*isCancelled=*/[]() { return true; }
+        /*isCancelled=*/
+        []() {
+            return true;
+        }
     );
     auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
                        std::chrono::steady_clock::now() - start

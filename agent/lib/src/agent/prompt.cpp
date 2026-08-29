@@ -23,9 +23,9 @@ void AgentPrompt::refreshEnvDetectedPrompts() {
     // - 探测结果同时供 execute_command tool 运行时使用 (见 buildWinProcLaunch),
     //   与提示词文本相互独立, 刷新前后执行均正确
     (void)agentxx::util::detectPowerShell();
-    const auto& ps              = cachedPowerShellInfo();
-    auto&       win             = util::getOrCreateHeterogeneous(toolPrompt, "agentxx_execute_windows_command");
-    win.depict                  = winCommandToolDepict();
+    const auto& ps  = cachedPowerShellInfo();
+    auto&       win = util::getOrCreateHeterogeneous(toolPrompt, "agentxx_execute_windows_command");
+    win.depict      = winCommandToolDepict();
     util::insertOrAssignHeterogeneous(
         win.args,
         "command_process",
@@ -81,9 +81,9 @@ void AgentPrompt::mergeFromJson(const neograph::json& j) {
     if (j.contains("toolPrompt") && j["toolPrompt"].is_object()) {
         auto tools = j["toolPrompt"];
         for (const auto& item : tools.items()) {
-            const auto& name   = item.first;
-            const auto& tp     = item.second;
-            auto&       target = util::getOrCreateHeterogeneous(toolPrompt, name); // 不存在则默认构造插入
+            const auto& name = item.first;
+            const auto& tp   = item.second;
+            auto& target = util::getOrCreateHeterogeneous(toolPrompt, name); // 不存在则默认构造插入
             if (tp.contains("depict") && tp["depict"].is_string()) {
                 target.depict = tp["depict"].get<std::string>();
             }
@@ -91,7 +91,11 @@ void AgentPrompt::mergeFromJson(const neograph::json& j) {
                 auto args = tp["args"];
                 for (const auto& a : args.items()) {
                     if (a.second.is_string()) {
-                        util::insertOrAssignHeterogeneous(target.args, a.first, a.second.get<std::string>());
+                        util::insertOrAssignHeterogeneous(
+                            target.args,
+                            a.first,
+                            a.second.get<std::string>()
+                        );
                     }
                 }
             }

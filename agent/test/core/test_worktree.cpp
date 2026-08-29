@@ -26,10 +26,9 @@ void rmRf(const std::filesystem::path& p) {
 /// 创建唯一临时目录
 std::filesystem::path makeTempDir(const std::string& tag) {
     static std::mt19937 rng{std::random_device{}()};
-    auto base = std::filesystem::temp_directory_path();
+    auto                base = std::filesystem::temp_directory_path();
     for (int i = 0; i < 64; ++i) {
-        auto candidate
-            = base / fmt::format("agentxx_wt_{}_{}", tag, rng() % 100000000);
+        auto            candidate = base / fmt::format("agentxx_wt_{}_{}", tag, rng() % 100000000);
         std::error_code ec;
         if (!std::filesystem::exists(candidate, ec)
             && std::filesystem::create_directories(candidate, ec)) {
@@ -80,17 +79,18 @@ asio::awaitable<TestResult> run_worktree_tests() {
             const char* in;
             const char* expect;
         };
+
         static const std::vector<Case> cases{
-            {"feature-a",         "feature-a"   },
-            {"Fix_Bug.123",       "Fix_Bug.123" },
-            {"../../etc/passwd",  "etc-passwd"  },
-            {"a/b\\c:d*e?f",      "a-b-c-d-e-f" },
-            {".hidden",           "hidden"      },
-            {"-lead",             "lead"        },
-            {"con",               "_con"        },
-            {"aux.txt",           "_aux-txt"    },
-            {"",                  ""            },
-            {"!!!",               ""            },
+            {"feature-a",        "feature-a"  },
+            {"Fix_Bug.123",      "Fix_Bug.123"},
+            {"../../etc/passwd", "etc-passwd" },
+            {"a/b\\c:d*e?f",     "a-b-c-d-e-f"},
+            {".hidden",          "hidden"     },
+            {"-lead",            "lead"       },
+            {"con",              "_con"       },
+            {"aux.txt",          "_aux-txt"   },
+            {"",                 ""           },
+            {"!!!",              ""           },
         };
         int okCount = 0;
         for (const auto& c : cases) {
@@ -163,11 +163,13 @@ asio::awaitable<TestResult> run_worktree_tests() {
         fw::ensureInfoExcluded(repo, ".agentxx/");
         {
             std::ifstream in{std::filesystem::path{repo} / ".git" / "info" / "exclude"};
-            std::string content{std::istreambuf_iterator<char>(in),
-                                std::istreambuf_iterator<char>{}};
+            std::string   content{
+                std::istreambuf_iterator<char>(in),
+                std::istreambuf_iterator<char>{}
+            };
             size_t cnt = 0;
             for (size_t p = content.find(".agentxx/"); p != std::string::npos;
-                 p     = content.find(".agentxx/", p + 1)) {
+                 p        = content.find(".agentxx/", p + 1)) {
                 ++cnt;
             }
             XX_TEST_EXPECT_EQ(cnt, (size_t)1);

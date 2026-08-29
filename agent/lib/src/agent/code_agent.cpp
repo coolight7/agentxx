@@ -151,18 +151,18 @@ asio::awaitable<void> CodeAgent::initMiddleware() {
     {
         for (const auto& dirPath : config->skillDirPaths) {
             std::error_code ec;
-            const bool       exists = std::filesystem::is_directory(dirPath, ec);
+            const bool      exists = std::filesystem::is_directory(dirPath, ec);
             if (exists) {
                 agentContext->appendComponentInfo.skills.push_back(dirPath);
             } else {
                 agentContext->appendComponentInfo.failedComponents.push_back(
                     AppendComponentNotification{
-                        .type         = AppendComponentNotification::Type::Skill,
-                        .name         = dirPath,
-                        .success      = false,
-                        .errorMessage = ec ? fmt::format("directory not accessible: {}",
-                                                         ec.message())
-                                           : "directory not found",
+                        .type    = AppendComponentNotification::Type::Skill,
+                        .name    = dirPath,
+                        .success = false,
+                        .errorMessage
+                        = ec ? fmt::format("directory not accessible: {}", ec.message())
+                             : "directory not found",
                     }
                 );
             }
@@ -198,11 +198,10 @@ asio::awaitable<void> CodeAgent::initMiddleware() {
             }
         }
 
-        memoryFileMiddleware
-            = std::make_shared<agentxx::middleware::MemoryFileMiddlewareHandle>(
-                config->memoryFilePaths,
-                agentContext
-            );
+        memoryFileMiddleware = std::make_shared<agentxx::middleware::MemoryFileMiddlewareHandle>(
+            config->memoryFilePaths,
+            agentContext
+        );
         agentContext->middlewareHandleContext->handles.push_back(memoryFileMiddleware);
     }
     // 会话资源应用器装配 (插件 Skill/Memory/MCP 扩展; 见 resource_applier.h):
@@ -392,13 +391,14 @@ asio::awaitable<std::vector<std::unique_ptr<agentxx::tools::XXToolBase>>> CodeAg
                             // 记录加载失败组件 (供客户端 "Failed" 组统计与弹窗查看)
                             agentContext->appendComponentInfo.failedComponents.push_back(
                                 AppendComponentNotification{
-                                    .type    = AppendComponentNotification::Type::Mcp,
-                                    .name    = ns,
-                                    .success = false,
-                                    .errorMessage
-                                    = fmt::format("list tools failed: {} ({})",
-                                                  mcpTools.error(),
-                                                  mcpCfg.url),
+                                    .type         = AppendComponentNotification::Type::Mcp,
+                                    .name         = ns,
+                                    .success      = false,
+                                    .errorMessage = fmt::format(
+                                        "list tools failed: {} ({})",
+                                        mcpTools.error(),
+                                        mcpCfg.url
+                                    ),
                                 }
                             );
                         }
@@ -415,9 +415,11 @@ asio::awaitable<std::vector<std::unique_ptr<agentxx::tools::XXToolBase>>> CodeAg
                                 .type         = AppendComponentNotification::Type::Mcp,
                                 .name         = ns,
                                 .success      = false,
-                                .errorMessage = fmt::format("initialize failed: {} ({})",
-                                                            result.error(),
-                                                            mcpCfg.url),
+                                .errorMessage = fmt::format(
+                                    "initialize failed: {} ({})",
+                                    result.error(),
+                                    mcpCfg.url
+                                ),
                             }
                         );
                     }

@@ -18,6 +18,7 @@ int g_sc_failed = 0;
 // 断言计数宏覆盖: 将 test_framework.h 的 XX_TEST_EXPECT_* 映射到本模块计数器
 #define XX_TEST_PASSED g_sc_passed
 #define XX_TEST_FAILED g_sc_failed
+
 namespace agentxx {
 namespace test {
 
@@ -132,11 +133,10 @@ asio::awaitable<agentxx::test::TestResult>
     // dataDir: 插件 entry 经 get_config 读取, 创建 {dataDir}/captures 作为
     // 截图 PNG 落盘目录 (save_images=true 时 image_path 指向此目录)。
     // 唯一化目录名避免多进程/多次运行互相干扰。
-    const auto tmpDataDir = std::filesystem::temp_directory_path()
-                            / ("agentxx_test_screen_capture_"
-                               + std::to_string(
-                                   std::chrono::steady_clock::now().time_since_epoch().count()
-                               ));
+    const auto tmpDataDir
+        = std::filesystem::temp_directory_path()
+          / ("agentxx_test_screen_capture_"
+             + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
     std::error_code fsEc;
     std::filesystem::remove_all(tmpDataDir, fsEc);
     std::filesystem::create_directories(tmpDataDir, fsEc);
@@ -177,8 +177,8 @@ asio::awaitable<agentxx::test::TestResult>
         auto tool = ctx->toolRegistry->find("agentxx_screen_capture");
         if (tool) {
             auto out = co_await tool->execute_async(neograph::json{
-                {"command",     "capture_all" },
-                {"save_images", false         },
+                {"command",     "capture_all"},
+                {"save_images", false        },
             });
             auto j   = neograph::json::parse(out);
             XX_TEST_EXPECT_EQ(j["ok"].get<bool>(), true);
@@ -228,7 +228,7 @@ asio::awaitable<agentxx::test::TestResult>
             auto out = co_await tool->execute_async(neograph::json{
                 {"command",      "capture_screen"},
                 {"screen_index", 0               },
-                {"save_images",  false          },
+                {"save_images",  false           },
             });
             auto j   = neograph::json::parse(out);
             XX_TEST_EXPECT_EQ(j["ok"].get<bool>(), true);

@@ -25,6 +25,7 @@ int g_acp_failed = 0;
 // 断言计数宏覆盖: 将 test_framework.h 的 XX_TEST_EXPECT_* 映射到本模块计数器
 #define XX_TEST_PASSED g_acp_passed
 #define XX_TEST_FAILED g_acp_failed
+
 namespace agentxx {
 namespace test {
 
@@ -312,7 +313,10 @@ void test_acp_server_stdio() {
         // (AgentContext::getSessionWorkDir 对本会话优先返回该值)
         if (responses[1].contains("result") && responses[1]["result"].contains("sessionId")) {
             auto sid = responses[1]["result"]["sessionId"].get<std::string>();
-            XX_TEST_EXPECT_EQ(agent->getContext()->getSessionWorkDir(sid), agentxx::util::toCurrentSystemAbsolutePath("/tmp"));
+            XX_TEST_EXPECT_EQ(
+                agent->getContext()->getSessionWorkDir(sid),
+                agentxx::util::toCurrentSystemAbsolutePath("/tmp")
+            );
         }
 
         // Resp 2: nonexistent method
@@ -334,19 +338,21 @@ void test_acp_server_stdio_session_cwd() {
     StdioAcpServer server(agent, info);
 
     std::string input;
-    input += R"({"jsonrpc":"2.0","id":1,"method":"session/new","params":{"cwd":"/tmp","mcpServers":[]}})"
-             "\n";
-    input += R"({"jsonrpc":"2.0","id":2,"method":"session/new","params":{"cwd":".","mcpServers":[]}})"
-             "\n";
+    input
+        += R"({"jsonrpc":"2.0","id":1,"method":"session/new","params":{"cwd":"/tmp","mcpServers":[]}})"
+           "\n";
+    input
+        += R"({"jsonrpc":"2.0","id":2,"method":"session/new","params":{"cwd":".","mcpServers":[]}})"
+           "\n";
 
     std::istringstream in(input);
     std::ostringstream out;
 
     server.run(in, out);
 
-    std::vector<json> responses;
+    std::vector<json>  responses;
     std::istringstream outputStream(out.str());
-    std::string       line;
+    std::string        line;
     while (std::getline(outputStream, line)) {
         if (!line.empty()) {
             responses.push_back(json::parse(line));
@@ -362,7 +368,10 @@ void test_acp_server_stdio_session_cwd() {
     XX_TEST_EXPECT_TRUE(sidA != sidB);
 
     // 会话 A 绑定 /tmp; 会话 B 相对路径 "." 归一为进程启动 cwd —— 两会话互不影响
-    XX_TEST_EXPECT_EQ(agent->getContext()->getSessionWorkDir(sidA), agentxx::util::toCurrentSystemAbsolutePath("/tmp"));
+    XX_TEST_EXPECT_EQ(
+        agent->getContext()->getSessionWorkDir(sidA),
+        agentxx::util::toCurrentSystemAbsolutePath("/tmp")
+    );
     XX_TEST_EXPECT_EQ(
         agent->getContext()->getSessionWorkDir(sidB),
         std::filesystem::current_path().generic_string()

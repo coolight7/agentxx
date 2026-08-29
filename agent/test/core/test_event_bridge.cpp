@@ -13,7 +13,6 @@
 #include <memory>
 #include <string>
 
-
 namespace {
 // 本模块测试计数器 (仅本编译单元可见; 不经头文件 extern 导出)
 int g_eb_passed = 0;
@@ -23,6 +22,7 @@ int g_eb_failed = 0;
 // 断言计数宏覆盖: 将 test_framework.h 的 XX_TEST_EXPECT_* 映射到本模块计数器
 #define XX_TEST_PASSED g_eb_passed
 #define XX_TEST_FAILED g_eb_failed
+
 namespace agentxx {
 namespace test {
 
@@ -664,7 +664,10 @@ asio::awaitable<void> test_eventbridge_turn_tps() {
 /// - 结算幂等: 同一段落只结算一次
 asio::awaitable<void> test_eventbridge_think_duration() {
     auto makeChunk = [](int type, std::string data) {
-        return neograph::json{{"type", type}, {"data", std::move(data)}};
+        return neograph::json{
+            {"type", type           },
+            {"data", std::move(data)}
+        };
     };
     using ET = neograph::graph::GraphEvent::Type;
     using DT = agentxx::agent::Delta::Type;
@@ -673,23 +676,33 @@ asio::awaitable<void> test_eventbridge_think_duration() {
     {
         auto agentContext         = std::make_shared<agentxx::agent::AgentContext>();
         agentContext->agentConfig = std::make_shared<agentxx::agent::AgentConfig>();
-        agentContext->bus = std::make_shared<agentxx::event::EventBus>(co_await asio::this_coro::executor);
-        auto session      = std::make_shared<agentxx::agent::Session>();
-        auto io           = std::make_shared<TestEbIO>();
-        auto bridge       = makeTestBridge(agentContext, session, io);
-        auto bridgeCb     = bridge->makeCallback();
+        agentContext->bus
+            = std::make_shared<agentxx::event::EventBus>(co_await asio::this_coro::executor);
+        auto session  = std::make_shared<agentxx::agent::Session>();
+        auto io       = std::make_shared<TestEbIO>();
+        auto bridge   = makeTestBridge(agentContext, session, io);
+        auto bridgeCb = bridge->makeCallback();
 
         bridgeCb(neograph::graph::GraphEvent{ET::NODE_START, "llm", neograph::json::object()});
         bridgeCb(neograph::graph::GraphEvent{
-            ET::LLM_TOKEN, "llm", makeChunk(neograph::ChatStreamChunk::TYPE_THINKING, "a")
+            ET::LLM_TOKEN,
+            "llm",
+            makeChunk(neograph::ChatStreamChunk::TYPE_THINKING, "a")
         });
-        co_await asio::steady_timer(co_await asio::this_coro::executor, std::chrono::milliseconds(60))
+        co_await asio::steady_timer(
+            co_await asio::this_coro::executor,
+            std::chrono::milliseconds(60)
+        )
             .async_wait(asio::use_awaitable);
         bridgeCb(neograph::graph::GraphEvent{
-            ET::LLM_TOKEN, "llm", makeChunk(neograph::ChatStreamChunk::TYPE_THINKING, "b")
+            ET::LLM_TOKEN,
+            "llm",
+            makeChunk(neograph::ChatStreamChunk::TYPE_THINKING, "b")
         });
         bridgeCb(neograph::graph::GraphEvent{
-            ET::LLM_TOKEN, "llm", makeChunk(neograph::ChatStreamChunk::TYPE_CONTENT, "x")
+            ET::LLM_TOKEN,
+            "llm",
+            makeChunk(neograph::ChatStreamChunk::TYPE_CONTENT, "x")
         });
 
         // NodeStart, Think(a), Think(b), 结算包, Text(x)
@@ -733,9 +746,14 @@ asio::awaitable<void> test_eventbridge_think_duration() {
 
         bridgeCb(neograph::graph::GraphEvent{ET::NODE_START, "llm", neograph::json::object()});
         bridgeCb(neograph::graph::GraphEvent{
-            ET::LLM_TOKEN, "llm", makeChunk(neograph::ChatStreamChunk::TYPE_THINKING, "t")
+            ET::LLM_TOKEN,
+            "llm",
+            makeChunk(neograph::ChatStreamChunk::TYPE_THINKING, "t")
         });
-        co_await asio::steady_timer(co_await asio::this_coro::executor, std::chrono::milliseconds(50))
+        co_await asio::steady_timer(
+            co_await asio::this_coro::executor,
+            std::chrono::milliseconds(50)
+        )
             .async_wait(asio::use_awaitable);
 
         neograph::json msgJson{
@@ -773,9 +791,14 @@ asio::awaitable<void> test_eventbridge_think_duration() {
 
         bridgeCb(neograph::graph::GraphEvent{ET::NODE_START, "llm", neograph::json::object()});
         bridgeCb(neograph::graph::GraphEvent{
-            ET::LLM_TOKEN, "llm", makeChunk(neograph::ChatStreamChunk::TYPE_THINKING, "z")
+            ET::LLM_TOKEN,
+            "llm",
+            makeChunk(neograph::ChatStreamChunk::TYPE_THINKING, "z")
         });
-        co_await asio::steady_timer(co_await asio::this_coro::executor, std::chrono::milliseconds(50))
+        co_await asio::steady_timer(
+            co_await asio::this_coro::executor,
+            std::chrono::milliseconds(50)
+        )
             .async_wait(asio::use_awaitable);
         bridgeCb(neograph::graph::GraphEvent{ET::NODE_END, "llm", neograph::json::object()});
 
@@ -800,15 +823,16 @@ asio::awaitable<void> test_eventbridge_think_duration() {
 
         bridgeCb(neograph::graph::GraphEvent{ET::NODE_START, "llm", neograph::json::object()});
         bridgeCb(neograph::graph::GraphEvent{
-            ET::LLM_TOKEN, "llm", makeChunk(neograph::ChatStreamChunk::TYPE_CONTENT, "y")
+            ET::LLM_TOKEN,
+            "llm",
+            makeChunk(neograph::ChatStreamChunk::TYPE_CONTENT, "y")
         });
         bridgeCb(neograph::graph::GraphEvent{ET::NODE_END, "llm", neograph::json::object()});
 
         XX_TEST_EXPECT_EQ(io->deltas.size(), size_t{3});
         for (const auto& d : io->deltas) {
             XX_TEST_EXPECT_FALSE(
-                d.type == DT::ThinkToken && d.text.empty()
-                && !d.think.has_value()
+                d.type == DT::ThinkToken && d.text.empty() && !d.think.has_value()
             );
         }
     }

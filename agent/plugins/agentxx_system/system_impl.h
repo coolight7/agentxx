@@ -3,14 +3,14 @@
 // - 头文件-only: 插件入口与测试共同包含, 保证插件行为与测试覆盖一致
 #pragma once
 
-#include <fmt/format.h>
 #include <chrono>
 #include <ctime>
+#include <fmt/format.h>
 #include <format>
 #include <string>
 
-#if !defined(XX_IS_ANDROID_D) && !defined(XX_IS_WIN_D) && !defined(XX_IS_MACOS_D) && \
-    !defined(XX_IS_LINUX_D)
+#if !defined(XX_IS_ANDROID_D) && !defined(XX_IS_WIN_D) && !defined(XX_IS_MACOS_D) \
+    && !defined(XX_IS_LINUX_D)
 #define XX_IS_LINUX_D 1
 #endif
 
@@ -26,7 +26,8 @@ inline std::string currentDatetimeExecute() {
     // NOTE: Android NDK / llvm-mingw libc++ 未实现 chrono tzdb (current_zone/zoned_time 不存在),
     // 属于编译期缺失而非运行时异常, 必须条件编译直接走 localtime 路径
     std::string localTimeStr;
-#if (defined(XX_IS_ANDROID_D) && XX_IS_ANDROID_D) || defined(_LIBCPP_VERSION) || defined(__MINGW32__) || (defined(_WIN32) && !defined(_MSC_VER))
+#if (defined(XX_IS_ANDROID_D) && XX_IS_ANDROID_D) || defined(_LIBCPP_VERSION) \
+    || defined(__MINGW32__) || (defined(_WIN32) && !defined(_MSC_VER))
     {
         std::time_t t = std::chrono::system_clock::to_time_t(now);
         std::tm     tmv{};

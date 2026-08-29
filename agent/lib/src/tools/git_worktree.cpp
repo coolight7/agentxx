@@ -16,7 +16,8 @@ using agentxx::util::worktree::GitResult;
 
 /// 读取工具参数中的字符串 (缺失/类型不符回退默认值)
 /// - neograph::json 的 contains/operator[] 不接受 string_view, 键统一用 std::string
-std::string argString(const neograph::json& args, const std::string& key, std::string_view def = {}) {
+std::string
+    argString(const neograph::json& args, const std::string& key, std::string_view def = {}) {
     if (args.contains(key) && args[key].is_string()) {
         return args[key].get<std::string>();
     }
@@ -26,12 +27,12 @@ std::string argString(const neograph::json& args, const std::string& key, std::s
 /// 生成自动 worktree 名称: wt-{unix秒}-{自增序号} (同秒冲突时递增序号)
 std::string generateWorktreeName(const std::string& repoRootDir) {
     namespace fw = agentxx::util::worktree;
-    auto now = std::chrono::duration_cast<std::chrono::seconds>(
+    auto now     = std::chrono::duration_cast<std::chrono::seconds>(
                    std::chrono::system_clock::now().time_since_epoch()
     )
                    .count();
     for (unsigned i = 0; i < 100; ++i) {
-        auto name = fmt::format("wt-{:x}-{}", now, i);
+        auto            name = fmt::format("wt-{:x}-{}", now, i);
         std::error_code ec;
         if (!std::filesystem::exists(fw::worktreesRoot(repoRootDir) + "/" + name, ec)) {
             return name;
@@ -71,7 +72,9 @@ void bindSession(
 }
 
 /// 解绑会话并清除权限隔离边界 (io 线程调用)
-void unbindSession(const std::shared_ptr<agentxx::agent::AgentContext>& ctx, const std::string& sessionId
+void unbindSession(
+    const std::shared_ptr<agentxx::agent::AgentContext>& ctx,
+    const std::string&                                   sessionId
 ) {
     auto session = ctx->sessions->get(sessionId);
     if (session && !session->getWorktreeBinding().path.empty()) {
@@ -83,7 +86,8 @@ void unbindSession(const std::shared_ptr<agentxx::agent::AgentContext>& ctx, con
 }
 
 /// 格式化单个 worktree 条目行 (info 列表用)
-std::string formatEntryLine(const agentxx::util::worktree::WorktreeEntry& e, bool dirty, bool isCurrent) {
+std::string
+    formatEntryLine(const agentxx::util::worktree::WorktreeEntry& e, bool dirty, bool isCurrent) {
     std::string headDisp = e.head.empty() ? "(unknown)" : e.head.substr(0, 8);
     std::string line     = fmt::format(
         "- {}{} branch={} head={}{}{}",
@@ -100,9 +104,11 @@ std::string formatEntryLine(const agentxx::util::worktree::WorktreeEntry& e, boo
 } // namespace
 
 GitWorktreeTool::GitWorktreeTool(std::weak_ptr<agentxx::agent::AgentContext> in_agentContext) :
-    XXToolBase("agentxx_git_worktree", std::move(in_agentContext),
-               /*autoSummaryOutput=*/false,
-               /*canDelayLoad=*/false // 核心工作流工具, 始终完整注册不延迟加载
+    XXToolBase(
+        "agentxx_git_worktree",
+        std::move(in_agentContext),
+        /*autoSummaryOutput=*/false,
+        /*canDelayLoad=*/false // 核心工作流工具, 始终完整注册不延迟加载
     ) {}
 
 neograph::ChatTool GitWorktreeTool::get_definition() const {
@@ -122,37 +128,44 @@ neograph::ChatTool GitWorktreeTool::get_definition() const {
         }
     }
     neograph::json params = neograph::json{
-        {"type", "object"},
+        {"type",       "object"                      },
         {"properties",
          {
              {"opt",
-              {{"type", "string"},
-               {"enum", neograph::json::array({"create", "info", "status", "remove"})},
-               {"description",
-                R"(Operation to perform:
+              {
+                  {"type", "string"},
+                  {"enum", neograph::json::array({"create", "info", "status", "remove"})},
+                  {"description",
+                   R"(Operation to perform:
 `create`: Create an isolated worktree and bind THIS session to it. Use at the start of code-modifying tasks.
 `info`: Show the current binding and all worktrees of the repository.
 `status`: Summarize pending changes in the bound worktree.
 `remove`: Delete a worktree (refuses when it has uncommitted work unless `force`.)"},
-             }},
+              }},
              {"name",
-              {{"type", "string"},
-               {"description",
-                R"(Worktree name (used as directory name and in the branch `agentxx/wt-{name}`).
-Allowed chars: letters, digits, `.`, `_`, `-`. Required by `create` (a timestamped name is generated when empty) and `remove`; ignored by others.)"},
-             }},
+              {
+                  {"type", "string"},
+                  {"description",
+                   R"(Worktree name (used as directory name and in the branch `agentxx/wt-{name}`).
+Allowed chars: letters, digits, `.`, `_`, `-`. Required by `create` (a timestamped name is generated when empty) and `remove`; ignored by others.)"
+                  },
+              }},
              {"base_ref",
-              {{"type", "string"},
-               {"description",
-                R"(`create` only. Branch/commit to base the new worktree on; default: current HEAD.)"},
-             }},
+              {
+                  {"type", "string"},
+                  {"description",
+                   R"(`create` only. Branch/commit to base the new worktree on; default: current HEAD.)"
+                  },
+              }},
              {"force",
-              {{"type", "boolean"},
-               {"description",
-                R"(`remove` only. Default `false`. When true, delete even if the worktree has uncommitted/untracked changes or unpushed commits — data loss risk; prefer committing first.)"},
-             }},
-         }},
-        {"required", neograph::json::array({"opt"})},
+              {
+                  {"type", "boolean"},
+                  {"description",
+                   R"(`remove` only. Default `false`. When true, delete even if the worktree has uncommitted/untracked changes or unpushed commits — data loss risk; prefer committing first.)"
+                  },
+              }},
+         }                                           },
+        {"required",   neograph::json::array({"opt"})},
     };
     return {name, depict, std::move(params)};
 }
@@ -194,10 +207,9 @@ asio::awaitable<std::string> GitWorktreeTool::execute_async(const neograph::json
         auto result = co_await agentxx::util::offloadCancellableAsync<std::string>(
             *ctxPtr->threadPool,
             cancelToken,
-            [&, effectiveDir, knownRepoRoot](
-                std::atomic<bool>& cancelFlag
+            [&, effectiveDir, knownRepoRoot](std::atomic<bool>& cancelFlag
             ) -> asio::awaitable<std::string> {
-                namespace fw = agentxx::util::worktree;
+                namespace fw     = agentxx::util::worktree;
                 std::string root = knownRepoRoot;
                 if (root.empty()) {
                     if (effectiveDir.empty() || !fw::isInsideWorkTree(effectiveDir)) {
@@ -209,9 +221,9 @@ asio::awaitable<std::string> GitWorktreeTool::execute_async(const neograph::json
                     }
                     root = *r;
                 }
-                auto entries = fw::listWorktrees(root);
-                neograph::json arr = neograph::json::array();
-                std::string boundName;
+                auto           entries = fw::listWorktrees(root);
+                neograph::json arr     = neograph::json::array();
+                std::string    boundName;
                 if (binding != nullptr) {
                     boundName = binding->name;
                 }
@@ -219,36 +231,37 @@ asio::awaitable<std::string> GitWorktreeTool::execute_async(const neograph::json
                     if (cancelFlag.load(std::memory_order_acquire)) {
                         co_return R"({"error":"cancelled"})";
                     }
-                    auto st   = fw::statusSummary(e.path);
+                    auto st    = fw::statusSummary(e.path);
                     bool dirty = st ? st->dirtyFiles() : false;
                     arr.push_back(neograph::json{
-                        {"path", e.path},
-                        {"branch", e.branch},
-                        {"head", e.head},
-                        {"bare", e.bare},
-                        {"detached", e.detached},
-                        {"dirty", dirty},
+                        {"path",     e.path     },
+                        {"branch",   e.branch   },
+                        {"head",     e.head     },
+                        {"bare",     e.bare     },
+                        {"detached", e.detached },
+                        {"dirty",    dirty      },
                         {"current",
                          !boundName.empty()
-                             && std::filesystem::path{e.path}.filename().generic_string() == boundName},
+                             && std::filesystem::path{e.path}.filename().generic_string()
+                                    == boundName},
                     });
                 }
                 neograph::json out{
-                    {"repoRoot", root},
-                    {"worktrees", arr},
+                    {"repoRoot",  root},
+                    {"worktrees", arr },
                 };
                 if (binding != nullptr) {
                     out["current"] = neograph::json{
-                        {"name", binding->name},
-                        {"path", binding->path},
+                        {"name",   binding->name  },
+                        {"path",   binding->path  },
                         {"branch", binding->branch},
                     };
                 } else if (!config->inheritedWorktreePath.empty()) {
                     out["inherited"] = config->inheritedWorktreePath;
                 } else {
                     out["current"] = nullptr;
-                    out["hint"] =
-                        "Not in a worktree yet. Call opt=create to start an isolated workspace for code-modifying tasks.";
+                    out["hint"]
+                        = "Not in a worktree yet. Call opt=create to start an isolated workspace for code-modifying tasks.";
                 }
                 co_return out.dump();
             }
@@ -260,11 +273,11 @@ asio::awaitable<std::string> GitWorktreeTool::execute_async(const neograph::json
     if (opt == "create") {
         if (binding != nullptr) {
             co_return neograph::json{
-                {"error", fmt::format(
-                              "session already bound to worktree '{}' ({})",
-                              binding->name,
-                              binding->path
-                          )},
+                {"error",
+                 fmt::format(
+                     "session already bound to worktree '{}' ({})", binding->name,
+                 binding->path
+                 )},
                 {"hint", "Use opt=remove to delete it first, or opt=status/info to inspect."},
             }
                 .dump();
@@ -273,7 +286,9 @@ asio::awaitable<std::string> GitWorktreeTool::execute_async(const neograph::json
         auto baseRef  = argString(arguments, "base_ref");
 
         // 名称清洗/生成 (纯函数, io 线程可做); 冲突检查在 offload 内以最终状态为准
-        std::string name = userName.empty() ? std::string{} : agentxx::util::worktree::sanitizeWorktreeName(userName);
+        std::string name = userName.empty()
+                               ? std::string{}
+                               : agentxx::util::worktree::sanitizeWorktreeName(userName);
         if (!userName.empty() && name.empty()) {
             co_return neograph::json{
                 {"error", fmt::format("invalid worktree name '{}'", userName)},
@@ -290,12 +305,12 @@ asio::awaitable<std::string> GitWorktreeTool::execute_async(const neograph::json
             std::string error;
             bool        ok = false;
         };
+
         // 仓库探测 + 创建全部卸载到线程池 (git 子进程调用不可在 io 线程阻塞)
         auto outcome = co_await agentxx::util::offloadCancellableAsync<CreateOutcome>(
             *ctxPtr->threadPool,
             cancelToken,
-            [effectiveDir, name, baseRef](
-                std::atomic<bool>& cancelFlag
+            [effectiveDir, name, baseRef](std::atomic<bool>& cancelFlag
             ) -> asio::awaitable<CreateOutcome> {
                 namespace fw = agentxx::util::worktree;
                 CreateOutcome out;
@@ -309,7 +324,9 @@ asio::awaitable<std::string> GitWorktreeTool::execute_async(const neograph::json
                     co_return out;
                 }
                 const std::string repoRootDir = *rootOpt;
-                out.name = name.empty() ? fw::sanitizeWorktreeName(generateWorktreeName(repoRootDir)) : name;
+                out.name                      = name.empty()
+                                                    ? fw::sanitizeWorktreeName(generateWorktreeName(repoRootDir))
+                                                    : name;
                 if (out.name.empty()) {
                     out.error = "failed to generate a valid worktree name";
                     co_return out;
@@ -321,11 +338,8 @@ asio::awaitable<std::string> GitWorktreeTool::execute_async(const neograph::json
                         co_return out;
                     }
                     if (std::filesystem::path{e.path}.filename().generic_string() == out.name) {
-                        out.error = fmt::format(
-                            "worktree '{}' already exists at {}",
-                            out.name,
-                            e.path
-                        );
+                        out.error
+                            = fmt::format("worktree '{}' already exists at {}", out.name, e.path);
                         co_return out;
                     }
                 }
@@ -335,7 +349,8 @@ asio::awaitable<std::string> GitWorktreeTool::execute_async(const neograph::json
                     co_return out;
                 }
                 out.repoRoot = repoRootDir;
-                out.path   = (std::filesystem::path{fw::worktreesRoot(repoRootDir)} / out.name).generic_string();
+                out.path     = (std::filesystem::path{fw::worktreesRoot(repoRootDir)} / out.name)
+                               .generic_string();
                 out.branch = fw::branchForName(out.name);
                 out.ok     = true;
                 co_return out;
@@ -343,12 +358,14 @@ asio::awaitable<std::string> GitWorktreeTool::execute_async(const neograph::json
         );
 
         if (!outcome.ok) {
-            co_return neograph::json{{"error", outcome.error}}.dump();
+            co_return neograph::json{
+                {"error", outcome.error}
+            }.dump();
         }
         if (sessionId.empty()) {
             co_return neograph::json{
                 {"error", "no session id available, cannot bind"},
-                {"path", outcome.path},
+                {"path",  outcome.path                          },
             }
                 .dump();
         }
@@ -362,23 +379,24 @@ asio::awaitable<std::string> GitWorktreeTool::execute_async(const neograph::json
             outcome.repoRoot
         );
         co_return neograph::json{
-            {"ok", true},
-            {"op", "create"},
-            {"name", outcome.name},
-            {"path", outcome.path},
-            {"branch", outcome.branch},
-            {"repoRoot", outcome.repoRoot},
+            {"ok",       true                                                                        },
+            {"op",       "create"                                                                    },
+            {"name",     outcome.name                                                                },
+            {"path",     outcome.path                                                                },
+            {"branch",   outcome.branch                                                              },
+            {"repoRoot", outcome.repoRoot                                                            },
             {"note",
              "Session is now bound to this worktree: relative paths resolve here, writes into the main "
              "checkout are denied. Commit regularly; before finishing run opt=status and remind the user "
-             "to review/commit/merge. The worktree is kept after the task unless explicitly removed."},
+             "to review/commit/merge. The worktree is kept after the task unless explicitly removed."
+            },
         }
             .dump();
     }
 
     // ---- status: 当前(或指定) worktree 的工作区摘要 ----
     if (opt == "status") {
-        auto targetName = argString(arguments, "name");
+        auto        targetName = argString(arguments, "name");
         std::string targetPath;
         std::string rootForList = knownRepoRoot;
         if (binding != nullptr && targetName.empty()) {
@@ -389,10 +407,9 @@ asio::awaitable<std::string> GitWorktreeTool::execute_async(const neograph::json
         auto result = co_await agentxx::util::offloadCancellableAsync<std::string>(
             *ctxPtr->threadPool,
             cancelToken,
-            [&, targetName, targetPath, rootForList, effectiveDir](
-                std::atomic<bool>&
-            ) -> asio::awaitable<std::string> {
-                namespace fw = agentxx::util::worktree;
+            [&, targetName, targetPath, rootForList, effectiveDir](std::atomic<bool>&)
+                -> asio::awaitable<std::string> {
+                namespace fw     = agentxx::util::worktree;
                 std::string root = rootForList;
                 std::string path = targetPath;
                 if (path.empty()) {
@@ -407,42 +424,46 @@ asio::awaitable<std::string> GitWorktreeTool::execute_async(const neograph::json
                         }
                         root = *r;
                     }
-                    auto cleanName = targetName.empty() ? std::string{}
-                                                        : fw::sanitizeWorktreeName(targetName);
+                    auto cleanName
+                        = targetName.empty() ? std::string{} : fw::sanitizeWorktreeName(targetName);
                     if (cleanName.empty()) {
                         co_return R"({"error":"no active worktree for this session; pass `name` or create one first"})";
                     }
-                    path = (std::filesystem::path{fw::worktreesRoot(root)} / cleanName).generic_string();
+                    path = (std::filesystem::path{fw::worktreesRoot(root)} / cleanName)
+                               .generic_string();
                 }
                 if (!std::filesystem::exists(path)) {
                     co_return neograph::json{
                         {"error", fmt::format("worktree directory not found: {}", path)},
-                        {"hint",
-                         "it may have been removed; use opt=info to list existing worktrees"},
+                        {"hint", "it may have been removed; use opt=info to list existing worktrees"
+                        },
                     }
                         .dump();
                 }
                 auto st = fw::statusSummary(path);
                 if (!st) {
-                    co_return neograph::json{{"error", "git status failed"}, {"path", path}}.dump();
+                    co_return neograph::json{
+                        {"error", "git status failed"},
+                        {"path",  path               }
+                    }.dump();
                 }
                 neograph::json out{
-                    {"path", path},
-                    {"modified", st->modified},
-                    {"added", st->added},
-                    {"deleted", st->deleted},
-                    {"renamed", st->renamed},
-                    {"untracked", st->untracked},
-                    {"ahead", st->ahead},
-                    {"behind", st->behind},
-                    {"headLine", st->headLine},
+                    {"path",           path         },
+                    {"modified",       st->modified },
+                    {"added",          st->added    },
+                    {"deleted",        st->deleted  },
+                    {"renamed",        st->renamed  },
+                    {"untracked",      st->untracked},
+                    {"ahead",          st->ahead    },
+                    {"behind",         st->behind   },
+                    {"headLine",       st->headLine },
                     {"hasPendingWork", st->hasWork()},
                 };
                 if (st->hasWork()) {
-                    out["reminder"] =
-                        "There are uncommitted changes or unpushed commits. Before finishing, summarize them "
-                        "and remind the user to review / commit / merge. Do NOT delete the worktree unless "
-                        "the user explicitly confirms.";
+                    out["reminder"]
+                        = "There are uncommitted changes or unpushed commits. Before finishing, summarize them "
+                          "and remind the user to review / commit / merge. Do NOT delete the worktree unless "
+                          "the user explicitly confirms.";
                 }
                 co_return out.dump();
             }
@@ -457,10 +478,13 @@ asio::awaitable<std::string> GitWorktreeTool::execute_async(const neograph::json
         if (targetName.empty() && binding == nullptr) {
             co_return R"({"error":"no active worktree for this session; pass `name` or bind one first"})";
         }
-        std::string name = targetName.empty() ? binding->name
-                                              : agentxx::util::worktree::sanitizeWorktreeName(targetName);
+        std::string name = targetName.empty()
+                               ? binding->name
+                               : agentxx::util::worktree::sanitizeWorktreeName(targetName);
         if (name.empty()) {
-            co_return neograph::json{{"error", "invalid worktree name"}}.dump();
+            co_return neograph::json{
+                {"error", "invalid worktree name"}
+            }.dump();
         }
         bool removesCurrent = (binding != nullptr && binding->name == name);
 
@@ -471,15 +495,14 @@ asio::awaitable<std::string> GitWorktreeTool::execute_async(const neograph::json
             size_t      untracked = 0, ahead = 0, unmerged = 0;
             bool        removed = false;
         };
+
         auto outcome = co_await agentxx::util::offloadCancellableAsync<RemoveOutcome>(
             *ctxPtr->threadPool,
             cancelToken,
-            [&, name, force](
-                std::atomic<bool>& cancelFlag
-            ) -> asio::awaitable<RemoveOutcome> {
+            [&, name, force](std::atomic<bool>& cancelFlag) -> asio::awaitable<RemoveOutcome> {
                 namespace fw = agentxx::util::worktree;
                 RemoveOutcome out;
-                std::string root;
+                std::string   root;
                 {
                     // remove 必然发生在主检出上下文 (当前会话绑定时 repoRoot 已知;
                     // 指定名字删除时从进程工作目录解析)
@@ -496,15 +519,15 @@ asio::awaitable<std::string> GitWorktreeTool::execute_async(const neograph::json
                     root = *r;
                 }
                 // 目标必须是本约定目录下的已注册 worktree (防误删任意路径)
-                auto expected = (std::filesystem::path{fw::worktreesRoot(root)} / name).generic_string();
-                bool found    = false;
+                auto expected
+                    = (std::filesystem::path{fw::worktreesRoot(root)} / name).generic_string();
+                bool found = false;
                 for (const auto& e : fw::listWorktrees(root)) {
                     if (cancelFlag.load(std::memory_order_acquire)) {
                         out.error = "[cancelled]";
                         co_return out;
                     }
-                    if (std::filesystem::absolute(std::filesystem::path{e.path})
-                            .generic_string()
+                    if (std::filesystem::absolute(std::filesystem::path{e.path}).generic_string()
                         == expected) {
                         found = true;
                         break;
@@ -517,15 +540,15 @@ asio::awaitable<std::string> GitWorktreeTool::execute_async(const neograph::json
                 // 脏检查: 有未提交工作或未合并提交且未显式 force 时拒绝 (提醒先提交)
                 auto st = fw::statusSummary(expected);
                 if (st && st->hasWork() && !force) {
-                    out.summary = st->headLine;
-                    out.modified = st->modified;
-                    out.added = st->added;
-                    out.deleted = st->deleted;
-                    out.renamed = st->renamed;
+                    out.summary   = st->headLine;
+                    out.modified  = st->modified;
+                    out.added     = st->added;
+                    out.deleted   = st->deleted;
+                    out.renamed   = st->renamed;
                     out.untracked = st->untracked;
-                    out.ahead = st->ahead;
-                    out.unmerged = st->unmerged;
-                    out.error = fmt::format(
+                    out.ahead     = st->ahead;
+                    out.unmerged  = st->unmerged;
+                    out.error     = fmt::format(
                         "worktree '{}' has pending work (modified:{} added:{} deleted:{} renamed:{} untracked:{} unmerged-commits:{}); commit them first or pass force=true",
                         name,
                         st->modified,
@@ -549,18 +572,21 @@ asio::awaitable<std::string> GitWorktreeTool::execute_async(const neograph::json
 
         if (!outcome.removed) {
             neograph::json out{
-                {"error", outcome.error},
-                {"removed", false},
+                {"error",   outcome.error},
+                {"removed", false        },
             };
             if (!outcome.summary.empty()) {
                 out["pending"] = neograph::json{
-                    {"modified", outcome.modified},   {"added", outcome.added},
-                    {"deleted", outcome.deleted},     {"renamed", outcome.renamed},
-                    {"untracked", outcome.untracked}, {"ahead", outcome.ahead},
-                    {"unmerged", outcome.unmerged},
+                    {"modified",  outcome.modified },
+                    {"added",     outcome.added    },
+                    {"deleted",   outcome.deleted  },
+                    {"renamed",   outcome.renamed  },
+                    {"untracked", outcome.untracked},
+                    {"ahead",     outcome.ahead    },
+                    {"unmerged",  outcome.unmerged },
                 };
-                out["reminder"] =
-                    "Remind the user about these pending changes: they can commit/merge them, then call remove again (or force=true to discard).";
+                out["reminder"]
+                    = "Remind the user about these pending changes: they can commit/merge them, then call remove again (or force=true to discard).";
             }
             co_return out.dump();
         }
@@ -568,9 +594,9 @@ asio::awaitable<std::string> GitWorktreeTool::execute_async(const neograph::json
             unbindSession(ctxPtr, sessionId);
         }
         co_return neograph::json{
-            {"ok", true},
-            {"op", "remove"},
-            {"name", name},
+            {"ok",      true          },
+            {"op",      "remove"      },
+            {"name",    name          },
             {"unbound", removesCurrent},
         }
             .dump();

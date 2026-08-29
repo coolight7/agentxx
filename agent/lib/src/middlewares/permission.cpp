@@ -21,7 +21,7 @@ inline bool isUnderDir(std::string_view dirWithTrailingSlash, std::string_view p
         path.remove_suffix(1);
     }
     return path.size() >= dirWithTrailingSlash.size()
-        && path.compare(0, dirWithTrailingSlash.size(), dirWithTrailingSlash) == 0;
+           && path.compare(0, dirWithTrailingSlash.size(), dirWithTrailingSlash) == 0;
 }
 
 /// 权限路径规范化: 绝对路径 + Unix 分隔符 + 目录尾斜杠
@@ -65,8 +65,7 @@ void PermissionMiddlewareHandle::clearSessionIsolation(std::string_view sessionI
     sessionIsolations_.erase(std::string(sessionId));
 }
 
-const SessionFsIsolation* PermissionMiddlewareHandle::sessionIsolation(
-    std::string_view sessionId
+const SessionFsIsolation* PermissionMiddlewareHandle::sessionIsolation(std::string_view sessionId
 ) const {
     auto it = sessionIsolations_.find(std::string(sessionId));
     return it == sessionIsolations_.end() ? nullptr : &it->second;

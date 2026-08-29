@@ -440,16 +440,9 @@ asio::awaitable<bool> ClientPluginManager::unloadAsync(std::string_view name) {
             try {
                 fn(inst->pluginCtx);
             } catch (const std::exception& e) {
-                XX_LOGW(
-                    "[client_plugin] `{}` unload callback threw: {}",
-                    inst->name,
-                    e.what()
-                );
+                XX_LOGW("[client_plugin] `{}` unload callback threw: {}", inst->name, e.what());
             } catch (...) {
-                XX_LOGW(
-                    "[client_plugin] `{}` unload callback threw unknown exception",
-                    inst->name
-                );
+                XX_LOGW("[client_plugin] `{}` unload callback threw unknown exception", inst->name);
             }
         }
     }
@@ -766,16 +759,16 @@ std::vector<ClientPluginManager::PluginListView> ClientPluginManager::list() con
     for (const auto& [name, inst] : plugins_) {
         (void)name;
         PluginListView v;
-        v.name            = inst->name;
-        v.version         = inst->version;
-        v.description     = inst->description;
-        v.path            = inst->path;
-        v.enabled         = inst->enabled;
-        v.inflight        = inst->inflight.load(std::memory_order_relaxed);
-        v.depends         = inst->depends;
-        v.optionalDepends = inst->optionalDepends;
-        v.requiredInterfaces  = inst->interfaces.require;
-        v.optionalInterfaces  = inst->interfaces.optional;
+        v.name               = inst->name;
+        v.version            = inst->version;
+        v.description        = inst->description;
+        v.path               = inst->path;
+        v.enabled            = inst->enabled;
+        v.inflight           = inst->inflight.load(std::memory_order_relaxed);
+        v.depends            = inst->depends;
+        v.optionalDepends    = inst->optionalDepends;
+        v.requiredInterfaces = inst->interfaces.require;
+        v.optionalInterfaces = inst->interfaces.optional;
         for (const auto& s : inst->statusItemRegs) {
             v.statusItems.push_back(s.id);
         }
@@ -908,7 +901,7 @@ std::string ClientPluginManager::clientStateJson() const {
     j["startupProgress"] = startupProgress_;
     // 宿主支持的接口名清单 (三层协商第 3 层 —— 插件据此自行决定启用哪些
     // 功能; 见 plugin_common.h 接口协商节)。位图 uiCaps 字段已移除 (v4)
-    j["interfaces"]      = [&] {
+    j["interfaces"] = [&] {
         auto arr = neograph::json::array();
         for (const auto& n : hostSupportedInterfaces()) {
             arr.push_back(n);
@@ -920,11 +913,11 @@ std::string ClientPluginManager::clientStateJson() const {
     j["agentPlugins"] = [&] {
         auto arr = neograph::json::array();
         for (const auto& p : serverPlugins_) {
-            arr.push_back(
-                {{"name",      p.name     },
-                 {"version",   p.version  },
-                 {"interfaces", p.interfaces}}
-            );
+            arr.push_back({
+                {"name",       p.name      },
+                {"version",    p.version   },
+                {"interfaces", p.interfaces}
+            });
         }
         return arr;
     }();
@@ -959,25 +952,25 @@ void ClientPluginManager::postToIoAsync(std::function<void()> fn) const {
 // ==================== ClientEventSink 实现 ====================
 
 void ClientPluginManager::onReady() {
-    neograph::json j     = neograph::json::object();
+    neograph::json j = neograph::json::object();
     // 宿主支持的接口名清单 (启动后最早可得的协商结果, 插件在 READY 回调内
     // 即可完成功能启用决策; 位图 uiCaps 字段已移除, 见 client_plugin_api.h v4)
-    j["interfaces"]    = [&] {
+    j["interfaces"] = [&] {
         auto arr = neograph::json::array();
         for (const auto& n : hostSupportedInterfaces()) {
             arr.push_back(n);
         }
         return arr;
     }();
-    j["sessionId"]     = sessionId_;
+    j["sessionId"] = sessionId_;
     dispatchEvent(AGENTXX_CLIENT_EVT_READY, j.dump());
     // 三期6: 向服务端上报本 client 支持的接口集 (约定事件, 镜像 server_plugins;
     // 服务端存储并经事件总线发布, agent 侧插件订阅 "agentxx_host.client_interfaces"
     // 据此自适应 —— 如 emit_message_tip 在无 toast 接口的宿主上降级)
     if (uiAdapter_) {
-        neograph::json up   = neograph::json::object();
-        up["sessionId"]     = sessionId_;
-        up["interfaces"]    = j["interfaces"];
+        neograph::json up = neograph::json::object();
+        up["sessionId"]   = sessionId_;
+        up["interfaces"]  = j["interfaces"];
         uiAdapter_->sendPluginData("agentxx_host", "client_interfaces", up.dump());
     }
 }
@@ -1201,6 +1194,7 @@ void ClientPluginManager::detachAll(ClientPluginInstance* inst, bool keepInfo) {
 
 void ClientPluginManager::dispatchEvent(int event, const std::string& payloadJson) {
     ioThreadId_.store(std::this_thread::get_id(), std::memory_order_release);
+
     // 快照订阅列表 (shared_ptr 副本: 派发中退订/卸载不会使后续回调悬垂;
     // 订阅对象被 impl 句柄/派发副本保活, alive 位标记已退订)
     struct SubRef {
@@ -1225,7 +1219,10 @@ void ClientPluginManager::dispatchEvent(int event, const std::string& payloadJso
         // C ABI 回调异常兜底: 单个插件 handler 违约不得打断整轮派发
         // (影响其他订阅者与 client io 事件循环)
         try {
-            ref.sub->handler(agentxx_plugin_sv(payloadJson.data(), payloadJson.size()), ref.sub->ud);
+            ref.sub->handler(
+                agentxx_plugin_sv(payloadJson.data(), payloadJson.size()),
+                ref.sub->ud
+            );
         } catch (const std::exception& e) {
             XX_LOGW("[client_plugin] `{}` event handler threw: {}", ref.inst->name, e.what());
         } catch (...) {
@@ -1351,8 +1348,7 @@ char* xx_cjson_escape(const AgentxxClientHost* host, AgentxxPluginStringView s) 
 // ---- COM 风格接口表查询 ----
 
 const void* xx_cquery_interface(const AgentxxClientHost* host, AgentxxPluginStringView iid) {
-    XX_PLUGIN_CATCH_BEGIN
-    (void)host;
+    XX_PLUGIN_CATCH_BEGIN(void) host;
     if (!iid.data) {
         return nullptr;
     }
@@ -1861,7 +1857,10 @@ void* ClientPluginManager::registerStatusItem(
         return nullptr;
     }
     if (!hostSupportedInterfaces().contains(std::string{plugin_interfaces::ClientStatusItem})) {
-        XX_LOGW("[client_plugin] status item `{}` rejected: interface agentxx.client.status_item unsupported", id);
+        XX_LOGW(
+            "[client_plugin] status item `{}` rejected: interface agentxx.client.status_item unsupported",
+            id
+        );
         return nullptr;
     }
     // id 冲突检查 (全局)
@@ -1998,7 +1997,10 @@ void* ClientPluginManager::registerPanel(
         return nullptr;
     }
     if (!hostSupportedInterfaces().contains(std::string{plugin_interfaces::ClientPanel})) {
-        XX_LOGW("[client_plugin] panel `{}` rejected: interface agentxx.client.panel unsupported", id);
+        XX_LOGW(
+            "[client_plugin] panel `{}` rejected: interface agentxx.client.panel unsupported",
+            id
+        );
         return nullptr;
     }
     {
@@ -2322,8 +2324,8 @@ int ClientPluginManager::updateToolDecor(
     bool replaced = false;
     {
         std::lock_guard<std::mutex> lock(uiMutex_);
-        auto cur = std::make_shared<ClientUiRegistry>(*uiRegistry_);
-        decor.version = toolDecorVersionSeq_++;
+        auto                        cur = std::make_shared<ClientUiRegistry>(*uiRegistry_);
+        decor.version                   = toolDecorVersionSeq_++;
         for (auto& d : cur->toolDecors) {
             if (d.plugin == inst->name && d.toolCallId == tid) {
                 d.displayName = decor.displayName;
@@ -2371,7 +2373,10 @@ int ClientPluginManager::registerCommand(
     // 命令输入管线接口 (agentxx.client.command): 无命令输入面的宿主拒绝注册 ——
     // 与其他 register_* 的接口门禁行为一致
     if (!hostSupportedInterfaces().contains(std::string{plugin_interfaces::ClientCommand})) {
-        XX_LOGW("[client_plugin] command `{}` rejected: interface agentxx.client.command unsupported", name);
+        XX_LOGW(
+            "[client_plugin] command `{}` rejected: interface agentxx.client.command unsupported",
+            name
+        );
         return -1;
     }
     {

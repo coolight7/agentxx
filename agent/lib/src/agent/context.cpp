@@ -15,7 +15,8 @@ namespace {
 /// 当前 steady 时钟毫秒数 (节流时间戳用, 单调不受系统时钟调整影响)
 int64_t steadyNowMs() {
     return std::chrono::duration_cast<std::chrono::milliseconds>(
-               std::chrono::steady_clock::now().time_since_epoch())
+               std::chrono::steady_clock::now().time_since_epoch()
+    )
         .count();
 }
 
