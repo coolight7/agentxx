@@ -268,9 +268,12 @@ endif()
 
 message("[agentxx] CMAKE_CXX_COMPILER_ID: ${CMAKE_CXX_COMPILER_ID}")
 if (XX_IS_MSVC_D)
-  # 注意: 不要添加 /FS /MP —— VS18/MSVC 14.51 的 FileTracker 在命令行出现
-  # 重复 /FS 时会失效 (子编译进程不写跟踪记录)，导致每次构建全量重编;
-  # 且旗标经多层 CMake 传递极易重复叠加，故统一不使用这两个选项
+  # 使用 /Z7 (Embedded) 替代 /Zi: 调试信息直接嵌入各 .obj 文件,
+  # 彻底避免多进程并行编译时对编译器 PDB (vc14x.pdb / static.pdb) 的写入竞争/锁死 (C1041),
+  # 同时消除链接时的 LNK4099 警告, 且完美支持 ASan 与多工程并行构建
+  cmake_policy(SET CMP0141 NEW)
+  set(CMAKE_MSVC_DEBUG_INFORMATION_FORMAT "Embedded")
+
   # ASan 开启时需禁用 MSVC STL 容器注解 (_DISABLE_STL_ANNOTATION):
   # 预编译三方静态库 (libboost_process 等, 未插桩) 不携带 annotate_string/
   # vector/optional 注解元数据, 与插桩目标混链会触发 LNK2038 "annotate_* 不匹配";
@@ -282,8 +285,8 @@ if (XX_IS_MSVC_D)
   if (AGENTXX_ENABLE_ASAN AND NOT XX_IS_RELEASE_D)
     set(_AGENTXX_MSVC_ASAN_DEFS " /D_DISABLE_STL_ANNOTATION=1")
   endif ()
-  set(_AGENTXX_C_FLAGS   "${_AGENTXX_COMMON_C_CXX_FLAGS}${_AGENTXX_MSVC_ASAN_DEFS} ${_AGENTXX_C_FLAGS} /bigobj /utf-8 /wd4200 /D_GNU_SOURCE")
-  set(_AGENTXX_CXX_FLAGS "${_AGENTXX_COMMON_C_CXX_FLAGS}${_AGENTXX_MSVC_ASAN_DEFS} ${_AGENTXX_CXX_FLAGS} /bigobj /utf-8 /wd4200 /Zc:__cplusplus")
+  set(_AGENTXX_C_FLAGS   "${_AGENTXX_COMMON_C_CXX_FLAGS}${_AGENTXX_MSVC_ASAN_DEFS} ${_AGENTXX_C_FLAGS} /bigobj /utf-8 /wd4200 /D_GNU_SOURCE /FS")
+  set(_AGENTXX_CXX_FLAGS "${_AGENTXX_COMMON_C_CXX_FLAGS}${_AGENTXX_MSVC_ASAN_DEFS} ${_AGENTXX_CXX_FLAGS} /bigobj /utf-8 /wd4200 /Zc:__cplusplus /FS")
   unset(_AGENTXX_MSVC_ASAN_DEFS)
 
   set(CMAKE_C_FLAGS_RELEASE          "${CMAKE_C_FLAGS_RELEASE}          ${_AGENTXX_C_FLAGS}   /Gy")
@@ -294,6 +297,11 @@ if (XX_IS_MSVC_D)
   set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "${CMAKE_CXX_FLAGS_RELWITHDEBINFO} ${_AGENTXX_CXX_FLAGS}")
   set(CMAKE_C_FLAGS_DEBUG            "${CMAKE_C_FLAGS_DEBUG}            ${_AGENTXX_C_FLAGS}")
   set(CMAKE_CXX_FLAGS_DEBUG          "${CMAKE_CXX_FLAGS_DEBUG}          ${_AGENTXX_CXX_FLAGS}")
+
+  foreach (_lang IN ITEMS C CXX)
+    string(REGEX REPLACE "(^| )/Zi( |$)" " /Z7 " CMAKE_${_lang}_FLAGS_DEBUG "${CMAKE_${_lang}_FLAGS_DEBUG}")
+    string(REGEX REPLACE "(^| )/Zi( |$)" " /Z7 " CMAKE_${_lang}_FLAGS_RELWITHDEBINFO "${CMAKE_${_lang}_FLAGS_RELWITHDEBINFO}")
+  endforeach ()
 
   if (XX_IS_RELEASE_D)
     set(_AGENTXX_LDFLAGS "${LDFLAGS} ${_AGENTXX_LDFLAGS} /OPT:REF /OPT:ICF")
@@ -312,8 +320,6 @@ if (XX_IS_MSVC_D)
       # 冲突旗标清理:
       # - /RTC*: 与 ASan 插桩互斥 (官方文档明确不兼容; CMake 内置 Debug 默认
       #   旗标即 "/Zi /Ob0 /Od /RTC1");
-      # - /Zi 保持 ProgramDatabase 即可 (当前生成器默认已是 /Zi, 无需处理;
-      #   cl 选项大小写敏感, /ZI=EditAndContinue 与 ASan 互斥)
       foreach (_lang IN ITEMS C CXX)
         string(REGEX REPLACE "(^| )/RTC[A-Za-z0-9]*( |$)" " " CMAKE_${_lang}_FLAGS_DEBUG "${CMAKE_${_lang}_FLAGS_DEBUG}")
         string(APPEND CMAKE_${_lang}_FLAGS_DEBUG " /fsanitize=address")
@@ -538,8 +544,10 @@ set(_AGENTXX_COMMON_CMAKE_ARGS
     "-DCMAKE_MSVC_RUNTIME_LIBRARY=${CMAKE_MSVC_RUNTIME_LIBRARY}"
     -DCMAKE_POLICY_DEFAULT_CMP0074=NEW
     -DCMAKE_POLICY_DEFAULT_CMP0091=NEW
+    -DCMAKE_POLICY_DEFAULT_CMP0141=NEW
     -DCMAKE_POLICY_DEFAULT_CMP0144=NEW
     -DCMAKE_POLICY_DEFAULT_CMP0167=OLD
+    "-DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=${CMAKE_MSVC_DEBUG_INFORMATION_FORMAT}"
 
     "-DCMAKE_CONFIGURATION_TYPES=${CMAKE_CONFIGURATION_TYPES}"
     "-DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}"
