@@ -5,7 +5,7 @@
 // include 顺序是必要的
 #include <winsock2.h>
 // ---
-#include <Ws2tcpip.h>
+#include <ws2tcpip.h>
 // ---
 #include <windows.h>
 #include <ole2.h>

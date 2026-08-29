@@ -62,13 +62,13 @@ void PermissionMiddlewareHandle::setSessionIsolation(
 }
 
 void PermissionMiddlewareHandle::clearSessionIsolation(std::string_view sessionId) {
-    sessionIsolations_.erase(std::string_view{sessionId});
+    sessionIsolations_.erase(std::string(sessionId));
 }
 
 const SessionFsIsolation* PermissionMiddlewareHandle::sessionIsolation(
     std::string_view sessionId
 ) const {
-    auto it = sessionIsolations_.find(sessionId);
+    auto it = sessionIsolations_.find(std::string(sessionId));
     return it == sessionIsolations_.end() ? nullptr : &it->second;
 }
 

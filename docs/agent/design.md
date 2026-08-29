@@ -448,8 +448,11 @@ agent\script\windows_debug_build.bat
 # Windows Release
 agent\script\windows_release_build.bat
 
+# Windows Release (Linux 交叉编译)
+bash agent/script/cross_windows_release_build.sh
+
 # Android (Linux 交叉编译)
-bash agent/script/android_release_build.sh
+bash agent/script/cross_android_release_build.sh
 ```
 
 编译产物位于 `agent/build/{platform}-{mode}/exec/` 目录。
@@ -1479,7 +1482,8 @@ agent/
     ├── windows_debug_build.bat
     ├── windows_release_build.bat
     ├── windows_test_run.bat
-    └── android_release_build.sh
+    ├── cross_windows_release_build.sh
+    └── cross_android_release_build.sh
 ```
 
 ### 关键依赖关系

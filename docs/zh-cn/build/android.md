@@ -68,7 +68,7 @@ make install
 - 启动编译 agentxx, release 编译可以运行:
 ```sh
 cd {项目根目录}/agent
-./script/android_release_build.sh
+./script/cross_android_release_build.sh
 ```
 
 ## 常见错误

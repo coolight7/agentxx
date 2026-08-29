@@ -17,6 +17,16 @@ agentxx_plugin_platform_gate(${PLUGIN_NAME} _AGENTXX_PLATFORM_OK windows)
 if (NOT _AGENTXX_PLATFORM_OK)
   return() # 跳过本插件全部目标 (内置合并/独立动态库两模式均在此拦截)
 endif ()
+# llvm-mingw (MinGW 交叉) 的 sysroot 未提供 UIAutomation.h (仅较新 Windows SDK 含)，
+# 此时无法编译该插件，跳过以免阻断整体交叉构建
+if (WIN32 AND NOT MSVC)
+  include(CheckIncludeFileCXX)
+  check_include_file_cxx("UIAutomation.h" _HAS_UIAUTOMATION)
+  if (NOT _HAS_UIAUTOMATION)
+    message(STATUS "[${PLUGIN_NAME}] Skip on MinGW cross: UIAutomation.h not found in sysroot")
+    return()
+  endif()
+endif()
 
 if (_AGENTXX_ADD_AS_BUILTIN)
   # ===== 内置合并编译分支 =====

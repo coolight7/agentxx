@@ -36,6 +36,7 @@ int g_client_plugin_failed = 0;
 // 断言计数宏覆盖: 将 test_framework.h 的 XX_TEST_EXPECT_* 映射到本模块计数器
 #define XX_TEST_PASSED g_client_plugin_passed
 #define XX_TEST_FAILED g_client_plugin_failed
+
 namespace agentxx {
 namespace test {
 
@@ -46,7 +47,7 @@ static std::string findPluginPath(const std::string& name) {
     namespace fs = std::filesystem;
     std::error_code       ec;
     std::vector<fs::path> candidates;
-#if defined(_WIN32)
+#if XX_IS_WIN_D
     wchar_t buf[MAX_PATH];
     if (::GetModuleFileNameW(nullptr, buf, MAX_PATH) > 0) {
         candidates.push_back(fs::path(buf).parent_path() / "plugins" / name);
@@ -87,12 +88,14 @@ public:
 
     agentxx::plugin::InterfaceSet supportedInterfaces() const override {
         namespace pi = agentxx::plugin::plugin_interfaces;
-        return {std::string{pi::ClientStatusItem},
-                std::string{pi::ClientPanel},
-                std::string{pi::ClientToast},
-                std::string{pi::ClientInfoSection},
-                std::string{pi::ClientCommand},
-                std::string{pi::ClientMsgDecor}};
+        return {
+            std::string{pi::ClientStatusItem},
+            std::string{pi::ClientPanel},
+            std::string{pi::ClientToast},
+            std::string{pi::ClientInfoSection},
+            std::string{pi::ClientCommand},
+            std::string{pi::ClientMsgDecor}
+        };
     }
 
     void onStatusItemRegistered(
@@ -432,10 +435,10 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         const auto wire = agentxx::plugin::ClientIfaces::query(&inst->host).wire;
         XX_TEST_EXPECT_TRUE(wire != nullptr && wire->send_plugin_data != nullptr);
         int rc = wire ? wire->send_plugin_data(
-            &inst->host,
-            AGENTXX_SV("rebuild"),
-            AGENTXX_SV(R"({"x":1})")
-        )
+                            &inst->host,
+                            AGENTXX_SV("rebuild"),
+                            AGENTXX_SV(R"({"x":1})")
+                        )
                       : -1;
         XX_TEST_EXPECT_EQ(rc, 0);
     }
@@ -560,8 +563,11 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         const auto events8 = agentxx::plugin::ClientIfaces::query(&inst2->host).events;
         XX_TEST_EXPECT_TRUE(events8 != nullptr && events8->subscribe != nullptr);
         for (int i = 0; i < 4; ++i) {
-            subs[i] = events8 ? events8->subscribe(&inst2->host, AGENTXX_CLIENT_EVT_CONN_STATE, subFn, &hits)
-                              : nullptr;
+            subs[i]
+                = events8
+                      ? events8
+                            ->subscribe(&inst2->host, AGENTXX_CLIENT_EVT_CONN_STATE, subFn, &hits)
+                      : nullptr;
             XX_TEST_EXPECT_TRUE(subs[i] != nullptr);
         }
         for (int i = 0; i < 4; ++i) {
@@ -575,17 +581,17 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         // 8.2 派发中动态订阅: 订阅回调内再 subscribe → 快照不受影响
         // (旧实现 dispatch 快照存裸指针, 回调内订阅触发 vector 扩容后悬垂)
         struct DynSubState {
-            agentxx::plugin::ClientPluginInstance* inst = nullptr;
-            const AgentxxClientEventsIface* events = nullptr;
+            agentxx::plugin::ClientPluginInstance* inst   = nullptr;
+            const AgentxxClientEventsIface*        events = nullptr;
             std::atomic<int>                       hits{0};
             AgentxxSubscription*                   dynSub = nullptr;
             void (*incFn)(AgentxxPluginStringView, void*) = nullptr;
         };
 
-        auto st   = std::make_shared<DynSubState>();
-        st->inst  = inst2.get();
+        auto st    = std::make_shared<DynSubState>();
+        st->inst   = inst2.get();
         st->events = agentxx::plugin::ClientIfaces::query(&inst2->host).events;
-        st->incFn = +[](AgentxxPluginStringView, void* ud) {
+        st->incFn  = +[](AgentxxPluginStringView, void* ud) {
             ++(*static_cast<std::atomic<int>*>(ud));
         };
         auto aFn = +[](AgentxxPluginStringView, void* ud) {
@@ -600,9 +606,11 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 );
             }
         };
-        AgentxxSubscription* a = st->events
-            ? st->events->subscribe(&inst2->host, AGENTXX_CLIENT_EVT_USER_INPUT, aFn, st.get())
-            : nullptr;
+        AgentxxSubscription* a
+            = st->events
+                  ? st->events
+                        ->subscribe(&inst2->host, AGENTXX_CLIENT_EVT_USER_INPUT, aFn, st.get())
+                  : nullptr;
         XX_TEST_EXPECT_TRUE(a != nullptr);
         mgr->onUserInput("sess-test", "x");
         // 首次派发: 仅快照中的 a 被调 (dynSub 派发后才注册)
@@ -653,7 +661,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             XX_TEST_EXPECT_EQ(instCfg->args.value("client_key", std::string{}), "client_val");
             // agentxx.client.self 接口表 get_plugin_args 返回实例 args
             const auto self9 = agentxx::plugin::ClientIfaces::query(&instCfg->host).self;
-            char* json = self9 ? self9->get_plugin_args(&instCfg->host) : nullptr;
+            char*      json  = self9 ? self9->get_plugin_args(&instCfg->host) : nullptr;
             XX_TEST_EXPECT_TRUE(json != nullptr);
             if (json) {
                 try {
@@ -692,10 +700,11 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         agentxx::agent::WirePluginData d;
         d.plugin = "agentxx_host";
         d.event  = "server_plugins";
-        d.data   = R"({"plugins":[)"
-                   R"({"name":"agentxx_codegraph","version":"1.0.0","interfaces":["agentxx.agent.core"]},)"
-                   R"({"name":"agentxx_system_monitor","version":"1.0.0",)"
-                   R"("interfaces":["agentxx.agent.core"]}]})";
+        d.data
+            = R"({"plugins":[)"
+              R"({"name":"agentxx_codegraph","version":"1.0.0","interfaces":["agentxx.agent.core"]},)"
+              R"({"name":"agentxx_system_monitor","version":"1.0.0",)"
+              R"("interfaces":["agentxx.agent.core"]}]})";
         mgr->onPluginData(d);
         auto stateJson = mgr->clientStateJson();
         XX_TEST_EXPECT_TRUE(stateJson.find("agentPlugins") != std::string::npos);
@@ -738,11 +747,10 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
 
         // 11.2 require 未满足 → 加载跳过并记录原因 (直连路径, dlopen 后门禁):
         // 拷贝真实可加载的示例库, manifest 声明本宿主不支持的必选接口
-        auto gateDir = fs::temp_directory_path()
-                     / ("agentxx_iface_gate_"
-                        + std::to_string(
-                            std::chrono::steady_clock::now().time_since_epoch().count()
-                        ));
+        auto gateDir
+            = fs::temp_directory_path()
+              / ("agentxx_iface_gate_"
+                 + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
         std::error_code ec;
         fs::create_directories(gateDir, ec);
         bool copied = false;
@@ -776,9 +784,10 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             // 跳过原因已记录 (含缺失接口名)
             XX_TEST_EXPECT_TRUE(mgr->skippedPlugins().size() == skippedBefore + 1);
             if (mgr->skippedPlugins().contains("example_plugin")) {
-                XX_TEST_EXPECT_TRUE(mgr->skippedPlugins().at("example_plugin")
-                                        .find("vendor.nonexistent")
-                                    != std::string::npos);
+                XX_TEST_EXPECT_TRUE(
+                    mgr->skippedPlugins().at("example_plugin").find("vendor.nonexistent")
+                    != std::string::npos
+                );
             }
 
             // 11.3 同一插件声明全部可满足 → 正常加载 (门禁放行回归) +
@@ -809,11 +818,14 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 auto        readyFn = +[](AgentxxPluginStringView payload, void* ud) {
                     static_cast<std::string*>(ud)->assign(payload.data, payload.size);
                 };
-                const auto events11
-                    = agentxx::plugin::ClientIfaces::query(&okInst->host).events;
-                auto sub = events11 ? events11->subscribe(&okInst->host, AGENTXX_CLIENT_EVT_READY, readyFn,
-                                           &readyPayload)
-                                    : nullptr;
+                const auto events11 = agentxx::plugin::ClientIfaces::query(&okInst->host).events;
+                auto       sub      = events11 ? events11->subscribe(
+                                          &okInst->host,
+                                          AGENTXX_CLIENT_EVT_READY,
+                                          readyFn,
+                                          &readyPayload
+                                      )
+                                               : nullptr;
                 XX_TEST_EXPECT_TRUE(sub != nullptr);
                 mgr->onReady();
                 XX_TEST_EXPECT_TRUE(readyPayload.find("\"interfaces\"") != std::string::npos);
@@ -838,7 +850,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         auto cgInst = co_await mgr->loadNativeAsync(cgPath);
         XX_TEST_EXPECT_TRUE(cgInst != nullptr);
         if (cgInst) {
-            auto reg = mgr->uiRegistrySnapshot();
+            auto reg          = mgr->uiRegistrySnapshot();
             bool hasCgSection = false;
             for (const auto& sec : reg->infoSections) {
                 if (sec.id == "agentxx_codegraph.status") {
@@ -877,7 +889,10 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                     std::string dump = sec.items.dump();
                     // 25/100 -> 25% ( {:.0f}% 保留整数, 25%)
                     XX_TEST_EXPECT_TRUE(dump.find("25/100") != std::string::npos);
-                    XX_TEST_EXPECT_TRUE(dump.find("indexing") != std::string::npos || dump.find("Indexing") != std::string::npos);
+                    XX_TEST_EXPECT_TRUE(
+                        dump.find("indexing") != std::string::npos
+                        || dump.find("Indexing") != std::string::npos
+                    );
                     // 文件名仅保留 basename "main.cpp"
                     XX_TEST_EXPECT_TRUE(dump.find("main.cpp") != std::string::npos);
                     XX_TEST_EXPECT_TRUE(dump.find("progress") != std::string::npos);
@@ -911,7 +926,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         auto smInst = co_await mgr->loadNativeAsync(smPath);
         XX_TEST_EXPECT_TRUE(smInst != nullptr);
         if (smInst) {
-            auto reg = mgr->uiRegistrySnapshot();
+            auto reg          = mgr->uiRegistrySnapshot();
             bool hasSmSection = false;
             for (const auto& sec : reg->infoSections) {
                 if (sec.id == "agentxx_system_monitor.usage") {
@@ -935,7 +950,10 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                     std::string dump = sec.items.dump();
                     // CPU 四舍五入到整数 (35.5 -> 36)
                     XX_TEST_EXPECT_TRUE(dump.find("CPU") != std::string::npos);
-                    XX_TEST_EXPECT_TRUE(dump.find("36%") != std::string::npos || dump.find("35.5%") != std::string::npos);
+                    XX_TEST_EXPECT_TRUE(
+                        dump.find("36%") != std::string::npos
+                        || dump.find("35.5%") != std::string::npos
+                    );
                     // RAM 带格式化大小 (8192 MB -> 8G, 16384 -> 16G)
                     XX_TEST_EXPECT_TRUE(dump.find("RAM") != std::string::npos);
                     XX_TEST_EXPECT_TRUE(dump.find("52%") != std::string::npos);
@@ -952,7 +970,9 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             size_t toastBefore = adapter->toastCount();
             mgr->invokeCommand("sysinfo", R"({})");
             XX_TEST_EXPECT_TRUE(adapter->toastCount() > toastBefore);
-            XX_TEST_EXPECT_TRUE(adapter->lastToast().find("System resource info") != std::string::npos);
+            XX_TEST_EXPECT_TRUE(
+                adapter->lastToast().find("System resource info") != std::string::npos
+            );
 
             co_await mgr->unloadAsync("agentxx_system_monitor");
             XX_TEST_EXPECT_TRUE(mgr->find("agentxx_system_monitor") == nullptr);
@@ -973,7 +993,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 = R"({"roadmap":"stateDiagram-v2\n[*] --> step1\nstep1 --> [*]","todos":[{"state":"in_progress","content":"do step 1","summary":"doing step 1"},{"state":"completed","content":"done step 0"}],"notes":"test note 123"})";
             mgr->onPluginData(plData);
 
-            auto reg = mgr->uiRegistrySnapshot();
+            auto reg            = mgr->uiRegistrySnapshot();
             bool hasPlanSection = false;
             for (const auto& sec : reg->infoSections) {
                 if (sec.id == "agentxx_planning.plan") {
@@ -994,11 +1014,12 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 .type       = agentxx::agent::Delta::Type::ToolStart,
                 .toolName   = "agentxx_planning",
                 .toolCallId = "call_plan_write_1",
-                .arguments  = R"({"mode":"write","roadmap":"stateDiagram-v2\n[*] --> p1\np1 --> [*]","todos":[{"state":"in_progress","content":"write task"}]})",
+                .arguments
+                = R"({"mode":"write","roadmap":"stateDiagram-v2\n[*] --> p1\np1 --> [*]","todos":[{"state":"in_progress","content":"write task"}]})",
             };
             mgr->onDelta(deltaWriteStart);
 
-            reg = mgr->uiRegistrySnapshot();
+            reg             = mgr->uiRegistrySnapshot();
             bool foundDecor = false;
             for (const auto& d : reg->toolDecors) {
                 if (d.toolCallId == "call_plan_write_1") {
@@ -1025,7 +1046,9 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             for (const auto& d : reg->toolDecors) {
                 if (d.toolCallId == "call_plan_read_1") {
                     std::string dump = d.items.dump();
-                    XX_TEST_EXPECT_TRUE(dump.find("Reading saved planning...") != std::string::npos);
+                    XX_TEST_EXPECT_TRUE(
+                        dump.find("Reading saved planning...") != std::string::npos
+                    );
                 }
             }
 
@@ -1034,7 +1057,8 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 .type       = agentxx::agent::Delta::Type::ToolEnd,
                 .toolName   = "agentxx_planning",
                 .toolCallId = "call_plan_read_1",
-                .result     = R"({"roadmap":"stateDiagram-v2\n[*] --> p2\np2 --> [*]","todos":[{"state":"completed","content":"read task done"}]})",
+                .result
+                = R"({"roadmap":"stateDiagram-v2\n[*] --> p2\np2 --> [*]","todos":[{"state":"completed","content":"read task done"}]})",
             };
             mgr->onDelta(deltaReadEnd);
 
@@ -1048,7 +1072,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
 
             // 14.4 会话切换 -> 清除装饰与段落
             mgr->onSessionSwitched("new_session_123");
-            reg = mgr->uiRegistrySnapshot();
+            reg                        = mgr->uiRegistrySnapshot();
             bool hasPlanSecAfterSwitch = false;
             for (const auto& sec : reg->infoSections) {
                 if (sec.id == "agentxx_planning.plan") {

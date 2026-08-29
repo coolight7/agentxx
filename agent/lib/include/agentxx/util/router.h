@@ -215,10 +215,13 @@ protected:
 
     /// 路由查找缓存容量
     static constexpr size_t routerCacheCapacity = 1024;
-    /// 路由查找 LRU 缓存
-    inline static thread_local agentxx::util::LruCache<std::string, _RouterCacheValue_s> cacheMap{
-        routerCacheCapacity
-    };
+    /// 路由查找 LRU 缓存 (函数内 thread_local 避免 inline 变量在 MinGW+libc++ 下的重复符号)
+    static agentxx::util::LruCache<std::string, _RouterCacheValue_s>& getCacheMap() {
+        thread_local agentxx::util::LruCache<std::string, _RouterCacheValue_s> instance{
+            routerCacheCapacity
+        };
+        return instance;
+    }
 
     // 路由字典树
     RouterTreePort routerTree;
@@ -260,7 +263,7 @@ public:
     /// 的原始节点指针; 树销毁后必须清空, 否则后续其他路由实例 (如按模式重建的
     /// 权限中间件) 可能命中悬空指针导致 use-after-free
     ~XXRouter() {
-        this->cacheMap.clear();
+        getCacheMap().clear();
     }
 
     /// 添加路由
@@ -269,7 +272,7 @@ public:
     /// - 路径中连续的 / 将被视为仅一个 /，结尾的 / 将被忽略（文件夹路径与文件路径等价注册）
     /// - 即 /a//b///c 等同于 /a/b/c；/a/b/ 等同于 /a/b
     bool add(std::string_view in_path, int in_index, std::shared_ptr<HANLDE_TPYE> in_fun) {
-        this->cacheMap.clear();
+        getCacheMap().clear();
         const char* strp = in_path.data();
         while ('/' == *strp) {
             ++strp;
@@ -294,7 +297,7 @@ public:
             int                in_index,
             std::string&       re_path,
             bool               prefix_fallback = false) {
-        auto                      cached  = this->cacheMap.get(in_path);
+        auto                      cached  = getCacheMap().get(in_path);
         XXRouter::RouterTreePort* treeptr = nullptr;
         if (cached.has_value()) {
             treeptr = cached->treeptr;
@@ -305,7 +308,7 @@ public:
         if (treeptr != nullptr) {
             auto handles = treeptr->getHandle(in_index);
             if (handles) {
-                this->cacheMap.put(in_path, {re_path, treeptr});
+                getCacheMap().put(in_path, {re_path, treeptr});
             } else if (prefix_fallback) {
                 // 节点自身无对应处理函数时，沿父链向上回退查找
                 // 父链回退命中的结果不写缓存（缓存条目需保证节点自身持有处理函数）
@@ -356,7 +359,7 @@ public:
         std::string re_path{};
         auto        treep = this->routerTree.getChild(strp, re_path, false);
         if (treep) {
-            this->cacheMap.clear();
+            getCacheMap().clear();
             auto handles = treep->getHandle(in_index);
             treep->setHandle(nullptr, in_index);
             return handles;
@@ -366,13 +369,13 @@ public:
 
     /// 清理缓存
     void clearCache() {
-        this->cacheMap.clear();
+        getCacheMap().clear();
     }
 
     /// 清空路由
     void clear() {
         this->routerTree.clearChild();
         // 节点已释放, 清空缓存
-        this->cacheMap.clear();
+        getCacheMap().clear();
     }
 };

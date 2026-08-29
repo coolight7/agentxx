@@ -173,6 +173,15 @@ else ()
   endif ()
 endif ()
 
+# MinGW 交叉编译不受支持的特性自动降级:
+# - HyperScan 仅支持 Linux (MSVC 分支受限支持), MinGW (GCC 交叉到 Windows)
+#   无可用实现, 强制关闭以避免 hyperscan_repo ExternalProject 构建失败;
+#   正则能力自动回退到 std::regex (见 lib/src/util/regex.cpp)
+if (CMAKE_CROSSCOMPILING AND CMAKE_SYSTEM_NAME STREQUAL "Windows" AND NOT XX_IS_MSVC_D AND AGENTXX_ENABLE_HYPERSCAN)
+  message(WARNING "[agentxx] HyperScan not supported on MinGW cross (Windows+GCC), force AGENTXX_ENABLE_HYPERSCAN=OFF")
+  set(AGENTXX_ENABLE_HYPERSCAN OFF CACHE BOOL "Add HyperScan for regex support. Use std::regex if disable." FORCE)
+endif()
+
 message("[agentxx] Test Utf8 Log: 你好！")
 message("[agentxx] Current Configure Type: ${CMAKE_CONFIGURATION_TYPES}")
 message("[agentxx] Current Build Type: ${CMAKE_BUILD_TYPE}")
@@ -351,8 +360,15 @@ else ()
   # 在所有 TU 中于 config.hpp 处理前已定义, 统一推导结果。
   set(_AGENTXX_CXX_FLAGS "${_AGENTXX_COMMON_C_CXX_FLAGS} ${_AGENTXX_CXX_FLAGS} -fvisibility=default -ffunction-sections -fdata-sections -Wall -fPIC -pipe -include cstddef")
   
-  set(CMAKE_C_FLAGS_RELEASE          "${_AGENTXX_C_FLAGS}   -O3 -flto ${CMAKE_C_FLAGS_RELEASE}")
-  set(CMAKE_CXX_FLAGS_RELEASE        "${_AGENTXX_CXX_FLAGS} -O3 -flto ${CMAKE_CXX_FLAGS_RELEASE}")
+  # 交叉编译到 Windows (MinGW) 时禁用 LTO: 旧版 bfd ld 无 LLVMgold 插件, 无法链接 -flto 产生的 LLVM bitcode
+  # (需 lld 才能处理, 但为简化 hermetic 构建, 直接禁用 LTO, 仅影响 Release 性能, 不影响功能)
+  if (CMAKE_CROSSCOMPILING AND CMAKE_SYSTEM_NAME STREQUAL "Windows")
+    set(_AGENTXX_LTO_FLAGS "")
+  else()
+    set(_AGENTXX_LTO_FLAGS "-flto")
+  endif()
+  set(CMAKE_C_FLAGS_RELEASE          "${_AGENTXX_C_FLAGS}   -O3 ${_AGENTXX_LTO_FLAGS} ${CMAKE_C_FLAGS_RELEASE}")
+  set(CMAKE_CXX_FLAGS_RELEASE        "${_AGENTXX_CXX_FLAGS} -O3 ${_AGENTXX_LTO_FLAGS} ${CMAKE_CXX_FLAGS_RELEASE}")
   set(CMAKE_C_FLAGS_MINSIZEREL       "${_AGENTXX_C_FLAGS}   ${CMAKE_C_FLAGS_MINSIZEREL}")
   set(CMAKE_CXX_FLAGS_MINSIZEREL     "${_AGENTXX_CXX_FLAGS} ${CMAKE_CXX_FLAGS_MINSIZEREL}")
   set(CMAKE_C_FLAGS_RELWITHDEBINFO   "${_AGENTXX_C_FLAGS}   ${CMAKE_C_FLAGS_RELWITHDEBINFO}")
@@ -384,7 +400,7 @@ else ()
   unset(_AGENTXX_DEBUG_EXTRA_FLAGS)
 
   if (XX_IS_RELEASE_D)
-    set(_AGENTXX_LDFLAGS "${LDFLAGS} ${_AGENTXX_LDFLAGS} -Wl,--gc-sections -flto")
+    set(_AGENTXX_LDFLAGS "${LDFLAGS} ${_AGENTXX_LDFLAGS} -Wl,--gc-sections ${_AGENTXX_LTO_FLAGS}")
   else ()
     # sanitizer 运行时须经编译驱动链接 (-fsanitize=*) 才能注入正确运行库:
     # TSAN/ASAN 互斥 (前置 guard), UBSAN 可与任一叠加
@@ -404,6 +420,22 @@ endif ()
 string(APPEND CMAKE_EXE_LINKER_FLAGS    " ${_AGENTXX_LDFLAGS}")
 string(APPEND CMAKE_SHARED_LINKER_FLAGS " ${_AGENTXX_LDFLAGS}")
 
+# 交叉到 Windows 时, 基础 FLAGS 也需包含 WINNT 定义, 供 try_compile (curl 等) 检测使用
+# 仅设置 CMAKE_C_FLAGS_RELEASE 等变体不足以被不带 CONFIG 的 try_compile 继承
+if (CMAKE_CROSSCOMPILING AND CMAKE_SYSTEM_NAME STREQUAL "Windows")
+  if (NOT XX_IS_MSVC_D)
+    # 将通用 WINNT 定义注入基础 FLAGS, 使子项目 (ExternalProject) 的 try_compile 可见
+    # 避免 curl 误判 _WIN32_WINNT=0x0502 而报错 "Vista or newer is required"
+    if (NOT CMAKE_C_FLAGS MATCHES "_WIN32_WINNT")
+      set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -D_WIN32_WINNT=0x0A00 -DWINVER=0x0A00" CACHE STRING "" FORCE)
+    endif()
+    if (NOT CMAKE_CXX_FLAGS MATCHES "_WIN32_WINNT")
+      set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -D_WIN32_WINNT=0x0A00 -DWINVER=0x0A00" CACHE STRING "" FORCE)
+    endif()
+  endif()
+  add_compile_definitions(_WIN32_WINNT=0x0A00 WINVER=0x0A00 NTDDI_VERSION=0x0A000000 _WIN32_IE=0x0A00)
+endif()
+
 # 快速链接器 (GCC/Clang): mold > gold > 默认 bfd，大幅减少大体积二进制链接时间
 # - auto: 自动检测 mold / ld.gold，均未安装时使用默认链接器
 # - 也可通过 -DAGENTXX_LINKER=mold|gold|bfd 显式指定
@@ -411,11 +443,12 @@ string(APPEND CMAKE_SHARED_LINKER_FLAGS " ${_AGENTXX_LDFLAGS}")
 if (NOT XX_IS_MSVC_D)
   set(_AGENTXX_LINKER_FLAG "")
   if (AGENTXX_LINKER STREQUAL "auto")
-    # NOTE: android 交叉编译时不可用宿主机的 mold/gold: NDK clang 的 LTO 链接
-    # 需要 NDK 内的 LLVMgold.so 插件, 宿主链接器会因找不到插件而失败
-    # (mold: fatal: could not open plugin file .../lib/LLVMgold.so)
-    if (ANDROID OR CMAKE_SYSTEM_NAME STREQUAL "Android")
-      message("[agentxx] Android cross compile, use default linker")
+    # NOTE: 交叉编译时不可用宿主机的 mold/gold:
+    # - Android: NDK clang 的 LTO 链接需要 NDK 内的 LLVMgold.so 插件, 宿主链接器会因
+    #   找不到插件而失败 (mold: fatal: could not open plugin file .../lib/LLVMgold.so)
+    # - Windows/MinGW: 宿主 mold/gold 与 MinGW ld 不兼容, -fuse-ld=mold 会导致链接失败
+    if (ANDROID OR CMAKE_SYSTEM_NAME STREQUAL "Android" OR CMAKE_CROSSCOMPILING)
+      message("[agentxx] Cross compile, use default linker")
     else ()
       find_program(_AGENTXX_MOLD_EXECUTABLE mold)
       find_program(_AGENTXX_GOLD_EXECUTABLE ld.gold)
@@ -925,7 +958,14 @@ ExternalProject_Add(
   TEST_COMMAND ""
 )
 
-# yaml-cpp
+# yaml-cpp: MinGW libstdc++ 10 (apt) 与 Clang 18 在 C++23 下 valarray 异常规格不兼容
+# 交叉到 Windows 时降至 C++14 以避免 /usr/lib/gcc/.../valarray:1224 报错
+# (C++17 仍触发相同错误, 需更低)
+if (CMAKE_CROSSCOMPILING AND CMAKE_SYSTEM_NAME STREQUAL "Windows")
+  set(_YAML_CPP_CXX_STD 14)
+else()
+  set(_YAML_CPP_CXX_STD 23)
+endif()
 ExternalProject_Add(
   yaml_cpp_repo
   SOURCE_DIR "${AGENTXX_THIRD_PARTY_DIR}/yaml-cpp/"
@@ -933,7 +973,7 @@ ExternalProject_Add(
   CMAKE_ARGS
     ${_AGENTXX_COMMON_CMAKE_ARGS}
     -DCMAKE_C_STANDARD=${CMAKE_C_STANDARD}
-    -DCMAKE_CXX_STANDARD=23
+    -DCMAKE_CXX_STANDARD=${_YAML_CPP_CXX_STD}
     -DYAML_CPP_BUILD_CONTRIB=OFF
     -DYAML_CPP_BUILD_TOOLS=ON
     -DYAML_BUILD_SHARED_LIBS=OFF
@@ -949,15 +989,20 @@ ExternalProject_Add(
   TEST_COMMAND ""
 )
 
-# glob
+# glob: 交叉到 Windows 时测试可执行 (glob_tests) 依赖 pthread/dupenv_s 等,
+# 在 MinGW + Clang 下链接失败 (见 cross-windows 构建日志), 但库本身 (Glob) 已成功构建;
+# 仅构建/安装库目标, 跳过测试可执行, 避免由此阻塞整体构建
 ExternalProject_Add(
   glob_repo
   SOURCE_DIR "${AGENTXX_THIRD_PARTY_DIR}/glob/"
   INSTALL_DIR "${AGENTXX_INSTALL_DIR}"
   CMAKE_ARGS
     ${_AGENTXX_COMMON_CMAKE_ARGS}
+    -DBUILD_TESTING=OFF
   CMAKE_CACHE_ARGS
     ${_AGENTXX_COMMON_CMAKE_CACHE_ARGS}
+  BUILD_COMMAND ${CMAKE_COMMAND} --build <BINARY_DIR> --config $<CONFIG> --target Glob
+  INSTALL_COMMAND ${CMAKE_COMMAND} --install <BINARY_DIR> --config $<CONFIG>
   TEST_COMMAND ""
 )
 

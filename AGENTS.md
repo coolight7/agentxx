@@ -135,11 +135,11 @@ path/to/agentxx_test string_util regex
     - 使用 bat 脚本编译: [windows_debug_build.bat](agent/script/windows_debug_build.bat) 或 [windows_release_build.bat](agent/script/windows_release_build.bat)
     - 运行测试 [windows_test_run.bat](agent/script/windows_test_run.bat)
 - Android:
-    - 在 Linux 上使用 shell 脚本交叉编译: [android_release_build.sh](agent/script/android_release_build.sh)
+    - 在 Linux 上使用 shell 脚本交叉编译: [cross_android_release_build.sh](agent/script/cross_android_release_build.sh)
 - 编译脚本创建的 build 目录一般为:
     - debug_build: `agent/build/linux-debug/` 或 `agent/build/windows-debug/`
     - release_build: `agent/build/linux-release/` 或 `agent/build/windows-release/`
-    - android_release_build: `agent/build/android-release/`
+    - cross_android_release_build: `agent/build/android-release/`
     - 注意，修改文件时不建议修改 build 目录内的文件，编译时可能被覆盖
 - 为了减少编译输出内容展示，只捕捉关键词，可以参考: `./path/to/linux_debug_build.sh 2>&1 | grep -E -i "Built target|error|warn" | tail -10`
 

@@ -3,6 +3,7 @@
 - 系统环境: Windows
 - C++ 标准: Requires C++26+.
 - 编译器: MSVC
+- 关联: [Linux交叉编译windows可执行程序、动态库](cross-linux-for-windows.md)
 
 ## 开始
 ### 安装 Visual-Studio-2026

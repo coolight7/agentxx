@@ -3,6 +3,7 @@
 #include "agentxx/util/log.h"
 #include <algorithm>
 #include <cassert>
+#include <cerrno>
 #include <charconv>
 #include <chrono>
 #include <cstdlib>
@@ -550,8 +551,41 @@ bool autoConvertToUtf8(std::string& str);
 bool autoConvertToSystemPath(std::string& str);
 
 template<typename T>
-inline constexpr std::from_chars_result parseNumberFromString(std::string_view str, T& num) {
+inline std::from_chars_result parseNumberFromString(std::string_view str, T& num) {
+#if defined(_LIBCPP_VERSION) && __has_include(<cstdlib>)
+    if constexpr (std::is_floating_point_v<T>) {
+        // libc++ (llvm-mingw) 的 from_chars 浮点特化缺失，回退到 strto*
+        std::string tmp(str);
+        char*       end = nullptr;
+        errno           = 0;
+        if constexpr (std::is_same_v<T, float>) {
+            float v = std::strtof(tmp.c_str(), &end);
+            if (errno == 0 && end == tmp.c_str() + tmp.size()) {
+                num = v;
+                return {str.data() + (end - tmp.c_str()), std::errc{}};
+            }
+            return {str.data(), std::errc::invalid_argument};
+        } else if constexpr (std::is_same_v<T, double>) {
+            double v = std::strtod(tmp.c_str(), &end);
+            if (errno == 0 && end == tmp.c_str() + tmp.size()) {
+                num = v;
+                return {str.data() + (end - tmp.c_str()), std::errc{}};
+            }
+            return {str.data(), std::errc::invalid_argument};
+        } else {
+            long double v = std::strtold(tmp.c_str(), &end);
+            if (errno == 0 && end == tmp.c_str() + tmp.size()) {
+                num = static_cast<T>(v);
+                return {str.data() + (end - tmp.c_str()), std::errc{}};
+            }
+            return {str.data(), std::errc::invalid_argument};
+        }
+    } else {
+        return std::from_chars(str.data(), str.data() + str.size(), num);
+    }
+#else
     return std::from_chars(str.data(), str.data() + str.size(), num);
+#endif
 }
 
 inline PinyinCallback s_pinyinCallback = nullptr;
@@ -824,16 +858,24 @@ inline PinyinCallback s_pinyinCallback = nullptr;
 
 /// UTF-8 字符串安全转换为 std::filesystem::path (Windows 下使用宽字符 API 避免 ANSI/GBK 乱码)
 [[nodiscard]] inline std::filesystem::path utf8ToPath(std::string_view utf8) {
-#if defined(_WIN32)
+#if XX_IS_WIN_D
     if (utf8.empty()) {
         return std::filesystem::path{};
     }
-    int wlen = ::MultiByteToWideChar(CP_UTF8, 0, utf8.data(), static_cast<int>(utf8.size()), nullptr, 0);
+    int wlen
+        = ::MultiByteToWideChar(CP_UTF8, 0, utf8.data(), static_cast<int>(utf8.size()), nullptr, 0);
     if (wlen <= 0) {
         return std::filesystem::path{};
     }
     std::wstring wstr(static_cast<size_t>(wlen), L'\0');
-    ::MultiByteToWideChar(CP_UTF8, 0, utf8.data(), static_cast<int>(utf8.size()), wstr.data(), wlen);
+    ::MultiByteToWideChar(
+        CP_UTF8,
+        0,
+        utf8.data(),
+        static_cast<int>(utf8.size()),
+        wstr.data(),
+        wlen
+    );
     return std::filesystem::path(std::move(wstr));
 #else
     return std::filesystem::path(utf8);
@@ -842,17 +884,35 @@ inline PinyinCallback s_pinyinCallback = nullptr;
 
 /// std::filesystem::path 安全转换为 UTF-8 字符串 (generic 分隔符 '/')
 [[nodiscard]] inline std::string pathToUtf8Generic(const std::filesystem::path& p) {
-#if defined(_WIN32)
+#if XX_IS_WIN_D
     auto wstr = p.generic_wstring();
     if (wstr.empty()) {
         return {};
     }
-    int len = ::WideCharToMultiByte(CP_UTF8, 0, wstr.data(), static_cast<int>(wstr.size()), nullptr, 0, nullptr, nullptr);
+    int len = ::WideCharToMultiByte(
+        CP_UTF8,
+        0,
+        wstr.data(),
+        static_cast<int>(wstr.size()),
+        nullptr,
+        0,
+        nullptr,
+        nullptr
+    );
     if (len <= 0) {
         return {};
     }
     std::string str(static_cast<size_t>(len), '\0');
-    ::WideCharToMultiByte(CP_UTF8, 0, wstr.data(), static_cast<int>(wstr.size()), str.data(), len, nullptr, nullptr);
+    ::WideCharToMultiByte(
+        CP_UTF8,
+        0,
+        wstr.data(),
+        static_cast<int>(wstr.size()),
+        str.data(),
+        len,
+        nullptr,
+        nullptr
+    );
     return str;
 #else
     return p.generic_string();
@@ -1115,9 +1175,10 @@ inline PinyinCallback s_pinyinCallback = nullptr;
     return fmt::format("{:.1f}s", sec);
 }
 
-#if XX_IS_ANDROID_D
-// Android NDK libc++ 未实现 chrono 时区数据库 (current_zone/zoned_time 不可
-// 用, 链接期缺 tzdb), 回退为 POSIX localtime_r 格式化本地时间 (bionic 支持)
+#if XX_IS_ANDROID_D || defined(_LIBCPP_VERSION) || (XX_IS_WIN_D && !XX_IS_MSVC_D)
+// Android NDK / llvm-mingw libc++ / MinGW-Clang 均未实现 chrono 时区数据库
+// (current_zone/zoned_time 不可用或链接期缺 tzdb), 回退为 POSIX/Win32 本地时间格式化
+// - bionic 与 MinGW 提供 localtime_r/localtime_s, MSVC 仅 localtime_s
 #include <cstdio>
 #include <ctime>
 
@@ -1128,7 +1189,11 @@ inline PinyinCallback s_pinyinCallback = nullptr;
     }
     std::time_t sec = static_cast<std::time_t>(timestamp_ms / 1000);
     std::tm     local{};
+#if XX_IS_WIN_D
+    localtime_s(&local, &sec);
+#else
     localtime_r(&sec, &local);
+#endif
     char buf[16];
     std::snprintf(buf, sizeof(buf), "%02d:%02d:%02d", local.tm_hour, local.tm_min, local.tm_sec);
     return buf;
@@ -1141,7 +1206,11 @@ inline PinyinCallback s_pinyinCallback = nullptr;
     }
     std::time_t sec = static_cast<std::time_t>(timestamp_ms / 1000);
     std::tm     local{};
+#if XX_IS_WIN_D
+    localtime_s(&local, &sec);
+#else
     localtime_r(&sec, &local);
+#endif
     char buf[24];
     std::snprintf(
         buf,

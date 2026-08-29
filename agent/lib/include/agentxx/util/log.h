@@ -112,9 +112,12 @@ private:
 
 /// std::atomic<std::shared_ptr<T>> 的可移植封装:
 /// - 主流平台直接用标准原子特化, 读路径完全无锁
-/// - Android NDK libc++ 未实现该特化 (primary template 要求 trivially
-///   copyable, shared_ptr 不满足), 退化为 mutex 保护的普通 shared_ptr:
-///   写路径 (sink 注册/移除) 罕见且持锁短, dispatch 热路径实际接近无锁
+/// - Android NDK libc++ / llvm-mingw libc++ 未实现该特化 (primary template
+///   要求 trivially copyable, shared_ptr 不满足), 退化为 mutex 保护的普通
+///   shared_ptr: 写路径 (sink 注册/移除) 罕见且持锁短, dispatch 热路径实际
+///   接近无锁
+/// - 检测: _LIBCPP_VERSION 表示使用 libc++ (不论 Android/Windows/Linux),
+///   其 atomic<shared_ptr> 特化在部分版本/配置下缺失, 统一回退
 template<typename T>
 class AtomicSharedPtr {
 public:
@@ -126,7 +129,7 @@ public:
 
     [[nodiscard]] std::shared_ptr<T>
         load(std::memory_order order = std::memory_order_seq_cst) const {
-#if XX_IS_ANDROID_D
+#if XX_IS_ANDROID_D || defined(_LIBCPP_VERSION)
         (void)order; // 锁本身已提供所需的同步语义
         std::lock_guard<std::mutex> lock(mutex_);
         return value_;
@@ -136,7 +139,7 @@ public:
     }
 
     void store(std::shared_ptr<T> desired, std::memory_order order = std::memory_order_seq_cst) {
-#if XX_IS_ANDROID_D
+#if XX_IS_ANDROID_D || defined(_LIBCPP_VERSION)
         (void)order;
         std::lock_guard<std::mutex> lock(mutex_);
         value_ = std::move(desired);
@@ -147,7 +150,7 @@ public:
 
 private:
 
-#if XX_IS_ANDROID_D
+#if XX_IS_ANDROID_D || defined(_LIBCPP_VERSION)
     mutable std::mutex mutex_;
     std::shared_ptr<T> value_;
 #else

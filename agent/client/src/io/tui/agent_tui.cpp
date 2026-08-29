@@ -44,7 +44,7 @@ using namespace ftxui;
 // - 其他平台 (Linux/macOS/WSL): OSC 52 转义序列写入终端主剪贴板,
 //   依赖终端模拟器支持 (xterm/Windows Terminal/wezterm/kitty 等; tmux 需配置)
 
-#if defined(_WIN32)
+#if XX_IS_WIN_D
 #include <windows.h>
 
 /// Windows: UTF-8 文本写入系统剪贴板 (UTF-8 -> UTF-16)
@@ -708,7 +708,8 @@ void TUIClientAgentIO::start() {
                         return true;
                     }
                     // Info 侧边栏 Plan Graph 按钮点击 → 打开状态图弹窗
-                    if (planGraphButtonBox_.Contain(mouse.x, mouse.y) && !planGraphMermaid_.empty()) {
+                    if (planGraphButtonBox_.Contain(mouse.x, mouse.y)
+                        && !planGraphMermaid_.empty()) {
                         openMermaidDiagram(planGraphMermaid_);
                         return true;
                     }

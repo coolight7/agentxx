@@ -8,8 +8,10 @@
 #include "fmt/format.h"
 #include <algorithm>
 #include <cassert>
+#include <cerrno>
 #include <charconv>
 #include <cmath>
+#include <cstdlib>
 #include <functional>
 #include <iostream>
 #include <limits>
@@ -51,6 +53,38 @@ bool parseFullNumber(std::string_view s, T& out) {
             return false;
         }
     }
+#if defined(_LIBCPP_VERSION)
+    // llvm-mingw libc++ 的 from_chars 浮点特化缺失/被 delete，回退到 strtod/strtof
+    if constexpr (std::is_floating_point_v<T>) {
+        std::string tmp(s);
+        char* end = nullptr;
+        errno = 0;
+        if constexpr (std::is_same_v<T, float>) {
+            float fv = std::strtof(tmp.c_str(), &end);
+            if (errno != 0 || end != tmp.c_str() + tmp.size() || !std::isfinite(fv)) return false;
+            out = static_cast<T>(fv);
+            return true;
+        } else if constexpr (std::is_same_v<T, double>) {
+            double dv = std::strtod(tmp.c_str(), &end);
+            if (errno != 0 || end != tmp.c_str() + tmp.size() || !std::isfinite(dv)) return false;
+            out = static_cast<T>(dv);
+            return true;
+        } else {
+            long double ldv = std::strtold(tmp.c_str(), &end);
+            if (errno != 0 || end != tmp.c_str() + tmp.size() || !std::isfinite(ldv)) return false;
+            out = static_cast<T>(ldv);
+            return true;
+        }
+    } else {
+        T    v;
+        auto result = std::from_chars(s.data(), s.data() + s.size(), v);
+        if (result.ec == std::errc{} && result.ptr == s.data() + s.size()) {
+            out = v;
+            return true;
+        }
+        return false;
+    }
+#else
     T    v;
     auto result = std::from_chars(s.data(), s.data() + s.size(), v);
     if (result.ec == std::errc{} && result.ptr == s.data() + s.size()) {
@@ -58,6 +92,7 @@ bool parseFullNumber(std::string_view s, T& out) {
         return true;
     }
     return false;
+#endif
 }
 
 /// 数值 json -> 十进制字符串 (整数用 to_string, 浮点用最短可往返表示)

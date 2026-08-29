@@ -23,14 +23,18 @@ inline std::string currentDatetimeExecute() {
 
     // 本地时间: 优先使用 tzdb (chrono::current_zone), 无 tzdata 环境 (如精简 Android)
     // 会抛异常, 降级为 C 库 localtime 计算
-    // NOTE: Android NDK libc++ 未实现 chrono tzdb (current_zone/zoned_time 不存在),
+    // NOTE: Android NDK / llvm-mingw libc++ 未实现 chrono tzdb (current_zone/zoned_time 不存在),
     // 属于编译期缺失而非运行时异常, 必须条件编译直接走 localtime 路径
     std::string localTimeStr;
-#if defined(XX_IS_ANDROID_D) && XX_IS_ANDROID_D
+#if (defined(XX_IS_ANDROID_D) && XX_IS_ANDROID_D) || defined(_LIBCPP_VERSION) || defined(__MINGW32__) || (defined(_WIN32) && !defined(_MSC_VER))
     {
         std::time_t t = std::chrono::system_clock::to_time_t(now);
         std::tm     tmv{};
+#if defined(_WIN32)
+        localtime_s(&tmv, &t);
+#else
         localtime_r(&t, &tmv);
+#endif
         localTimeStr = fmt::format(
             "{:04d}-{:02d}-{:02d} {:02d}:{:02d}:{:02d}",
             tmv.tm_year + 1900,

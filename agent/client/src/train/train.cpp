@@ -78,9 +78,22 @@ void runTrainingMode(
     trainCfg.convergenceThreshold = 0.7;
     trainCfg.verbose              = true;
     {
-        auto                    now = std::chrono::system_clock::now();
+        auto now = std::chrono::system_clock::now();
+#if XX_IS_WIN_D || defined(_LIBCPP_VERSION)
+        std::time_t t = std::chrono::system_clock::to_time_t(now);
+        std::tm     tm{};
+#if XX_IS_WIN_D
+        localtime_s(&tm, &t);
+#else
+        localtime_r(&t, &tm);
+#endif
+        char buf[32];
+        std::strftime(buf, sizeof(buf), "%Y%m%d_%H%M%S", &tm);
+        std::string timestamp(buf);
+#else
         std::chrono::zoned_time local_time{std::chrono::current_zone(), now};
         std::string             timestamp = std::format("{:%Y%m%d_%H%M%S}", local_time);
+#endif
 
         trainCfg.saveFilePath = (std::filesystem::path(resultsDir)
                                  / fmt::format("training_prompts_{}.json", timestamp))

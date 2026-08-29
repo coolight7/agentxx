@@ -87,9 +87,23 @@ public:
             }
         }
 
-        auto                    now = std::chrono::system_clock::now();
+        auto now = std::chrono::system_clock::now();
+#if XX_IS_WIN_D || defined(_LIBCPP_VERSION)
+        // Windows/MinGW 与 libc++ 的 zoned_time 缺失，回退为本地 tm
+        std::time_t t = std::chrono::system_clock::to_time_t(now);
+        std::tm     tm{};
+#if XX_IS_WIN_D
+        localtime_s(&tm, &t);
+#else
+        localtime_r(&t, &tm);
+#endif
+        char buf[32];
+        std::strftime(buf, sizeof(buf), "%Y%m%d_%H%M%S", &tm);
+        std::string timestamp(buf);
+#else
         std::chrono::zoned_time local_time{std::chrono::current_zone(), now};
         std::string             timestamp = std::format("{:%Y%m%d_%H%M%S}", local_time);
+#endif
 
         fs::path filePath = dir / fmt::format("bench_{}.json", timestamp);
 

@@ -17,7 +17,7 @@ int g_mermaid_state_failed = 0;
 // 断言计数宏覆盖: 将 test_framework.h 的 XX_TEST_EXPECT_* 映射到本模块计数器
 #define XX_TEST_PASSED g_mermaid_state_passed
 #define XX_TEST_FAILED g_mermaid_state_failed
-#if defined(_WIN32)
+#if XX_IS_WIN_D
 #define NOMINMAX
 #include <windows.h>
 #else
@@ -365,7 +365,7 @@ public:
 
     TerminalSizeFix() {
         ftxui::Terminal::SetFallbackSize({120, 50});
-#if defined(_WIN32)
+#if XX_IS_WIN_D
         oldOut_ = GetStdHandle(STD_OUTPUT_HANDLE);
         nul_    = CreateFileW(
             L"NUL",
@@ -391,7 +391,7 @@ public:
     }
 
     ~TerminalSizeFix() {
-#if defined(_WIN32)
+#if XX_IS_WIN_D
         if (oldOut_ != INVALID_HANDLE_VALUE) {
             SetStdHandle(STD_OUTPUT_HANDLE, oldOut_);
         }
@@ -413,7 +413,7 @@ public:
 
 private:
 
-#if defined(_WIN32)
+#if XX_IS_WIN_D
     HANDLE oldOut_ = INVALID_HANDLE_VALUE;
     HANDLE nul_    = INVALID_HANDLE_VALUE;
 #else
