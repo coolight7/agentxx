@@ -215,49 +215,54 @@ inline asio::awaitable<std::string> awaitPluginOp(PluginOpAwaitArgs args) {
         throw std::runtime_error(fmt::format("plugin `{}` op {} failed: {}", name, label, msg));
     }
 
+    if (cancelOp && cancelOp->is_cancelled()) {
+        core->cancelRequested.store(true, std::memory_order_release);
+    }
+    if (core->cancelRequested.load(std::memory_order_acquire)) {
+        detail::safeCancelOnce(*core, args.drive, op);
+    }
+
+    // 零轮询事件驱动取消：通过 watcher 协程监听 cancelOp->slot() 信号
+    std::shared_ptr<asio::steady_timer> cancelWatcherTimer;
+    std::shared_ptr<std::atomic<bool>>  cancelWatcherDone;
+    if (cancelOp && !core->cancelRequested.load(std::memory_order_acquire)
+        && !core->notified.load(std::memory_order_acquire)) {
+        cancelWatcherDone  = std::make_shared<std::atomic<bool>>(false);
+        cancelWatcherTimer = std::make_shared<asio::steady_timer>(args.ex);
+        cancelWatcherTimer->expires_at(std::chrono::steady_clock::time_point::max());
+        asio::co_spawn(
+            args.ex,
+            [core, drive = args.drive, op, cancelOp, cancelWatcherDone, cancelWatcherTimer]() -> asio::awaitable<void> {
+                auto [ec] = co_await cancelWatcherTimer->async_wait(
+                    asio::bind_cancellation_slot(cancelOp->slot(), asio::as_tuple(asio::use_awaitable))
+                );
+                if (cancelWatcherDone->load(std::memory_order_acquire)) {
+                    co_return;
+                }
+                if (cancelOp->is_cancelled()) {
+                    core->cancelRequested.store(true, std::memory_order_release);
+                    detail::safeCancelOnce(*core, drive, op);
+                }
+            },
+            asio::detached
+        );
+    }
+
     std::exception_ptr abort;
     try {
         while (!core->notified.load(std::memory_order_acquire)) {
-            if (cancelOp && cancelOp->is_cancelled()) {
-                core->cancelRequested.store(true, std::memory_order_release);
-            }
-            if (core->cancelRequested.load(std::memory_order_acquire)) {
-                detail::safeCancelOnce(*core, args.drive, op);
-            }
-            if (core->notified.load(std::memory_order_acquire)) {
-                break;
-            }
-
-            if (cancelOp) {
-                // 零轮询：已请求取消则仅等待完成；否则同时等待完成或取消信号（经 cancelOp->slot 事件驱动）
-                if (core->cancelRequested.load(std::memory_order_acquire)) {
-                    auto [ec] = co_await core->chan.async_receive(asio::as_tuple(asio::use_awaitable));
-                    (void)ec;
-                } else {
-                    asio::steady_timer cancelTimer(args.ex);
-                    cancelTimer.expires_at(std::chrono::steady_clock::time_point::max());
-                    auto [order, ec_chan, ec_cancel] = co_await asio::experimental::make_parallel_group(
-                        core->chan.async_receive(asio::deferred),
-                        cancelTimer.async_wait(
-                            asio::bind_cancellation_slot(cancelOp->slot(), asio::deferred)
-                        )
-                    )
-                                                           .async_wait(
-                                                               asio::experimental::wait_for_one(),
-                                                               asio::use_awaitable
-                                                           );
-                    (void)order;
-                    (void)ec_chan;
-                    (void)ec_cancel;
-                    // 若取消分支先完成（operation_aborted），循环顶部将检测 is_cancelled 并触发 safeCancelOnce
-                }
-            } else {
-                auto [ec] = co_await core->chan.async_receive(asio::as_tuple(asio::use_awaitable));
-                (void)ec;
-            }
+            auto [ec] = co_await core->chan.async_receive(asio::as_tuple(asio::use_awaitable));
+            (void)ec;
         }
     } catch (...) {
         abort = std::current_exception();
+    }
+
+    if (cancelWatcherDone) {
+        cancelWatcherDone->store(true, std::memory_order_release);
+        if (cancelWatcherTimer) {
+            cancelWatcherTimer->cancel();
+        }
     }
 
     if (abort) {
