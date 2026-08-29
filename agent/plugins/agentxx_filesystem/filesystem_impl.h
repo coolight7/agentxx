@@ -620,7 +620,7 @@ inline std::string fileGlobExecuteImpl(
     }
 
     if (resultList.empty()) {
-        return R"([Error] No match `file_patterns` found)";
+        return R"([Error] No match `file_patterns` file found)";
     }
 
     // 默认去重: 多 pattern 可能匹配到相同路径
@@ -690,7 +690,7 @@ inline std::string fileGlobExecuteImpl(
     }
 
     if (resultList.empty()) {
-        return R"([Error] No match `file_patterns` found after filtering)";
+        return R"([Error] No match `file_patterns` file found after filtering)";
     }
 
     auto oss = std::ostringstream{};
