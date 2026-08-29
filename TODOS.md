@@ -4,17 +4,13 @@
 - 支持修改上下文
 - 验证subagent、summarization
 - CI/CD
-- 文档翻译
+- 文档翻译， 统一命名为 client-io、server-io
 - 整理文档
 - release 编译发布时携带 标准库
 - filesystem utf8 path
-- exec_cmd 手动裁剪 stdout、stderr，而不是通过 toolcallNode
 
-- 统一命名为 client-io、server-io
 - graph json 定义，支持插件生成 graph json、注册 node; (最多只能有一个插件生成 graph，都没有则默认生成 CodeAgent)
 - 插件 readHostConfig 改为直接传入 变量路径 取值，变量取值交由主程序解析
-- 修改插件适配协程异步
-- 插件宏辅助代码
 - codegraph 疑似启动后没有更新索引
 
 ## 提示词优化
