@@ -1,6 +1,9 @@
 // agentxx_websearch —— 网络访问工具插件
 #include "agentxx_websearch_plugin.h"
 #include "websearch_impl.h"
+#include "asio/co_spawn.hpp"
+#include "asio/detached.hpp"
+#include "asio/io_context.hpp"
 #include <string>
 
 using namespace agentxx_websearch_plugin;
@@ -175,56 +178,101 @@ extern "C" AGENTXX_PLUGIN_EXPORT int agentxx_plugin_create(const AgentxxHost* ho
             return -1;
         }
 
-        // 1. agentxx_web_fetch
-        agentxx::kit::reactor_tool(
+        // 1. agentxx_web_fetch（阻塞池 + 临时 io_context 同步驱动异步 HttpClient）
+        agentxx::kit::blocking_tool(
             *ctx,
-            ctx->reactor,
             kNameFetch,
             kDepictFetch,
             schemaFetch(ctx.get()),
-            [](PluginCtx&, std::string_view args_json, agentxx::kit::OpCtl) -> asio::awaitable<std::string> {
+            [](PluginCtx&, std::string_view args_json) -> std::string {
                 auto arguments = args_json.empty() ? neograph::json::object() : neograph::json::parse(args_json);
-                co_return co_await webFetchExecuteAsync(arguments);
+                asio::io_context io;
+                std::string result;
+                std::exception_ptr ep;
+                asio::co_spawn(
+                    io,
+                    [&]() -> asio::awaitable<void> {
+                        try {
+                            result = co_await webFetchExecuteAsync(arguments);
+                        } catch (...) {
+                            ep = std::current_exception();
+                        }
+                    },
+                    asio::detached
+                );
+                io.run();
+                if (ep) std::rethrow_exception(ep);
+                return result;
             }
         );
 
         // 2. agentxx_web_fetch_markdown
-        agentxx::kit::reactor_tool(
+        agentxx::kit::blocking_tool(
             *ctx,
-            ctx->reactor,
             kNameFetchMd,
             kDepictFetchMd,
             schemaFetchMd(ctx.get()),
-            [](PluginCtx&, std::string_view args_json, agentxx::kit::OpCtl) -> asio::awaitable<std::string> {
+            [](PluginCtx&, std::string_view args_json) -> std::string {
                 auto arguments = args_json.empty() ? neograph::json::object() : neograph::json::parse(args_json);
-                co_return co_await webFetchMarkdownExecuteAsync(arguments);
+                asio::io_context io;
+                std::string result;
+                std::exception_ptr ep;
+                asio::co_spawn(
+                    io,
+                    [&]() -> asio::awaitable<void> {
+                        try {
+                            result = co_await webFetchMarkdownExecuteAsync(arguments);
+                        } catch (...) {
+                            ep = std::current_exception();
+                        }
+                    },
+                    asio::detached
+                );
+                io.run();
+                if (ep) std::rethrow_exception(ep);
+                return result;
             }
         );
 
-        // 3. agentxx_web_search (仅在配置了 api_url 或 model 时注册)
+        // 3. agentxx_web_search（同上，模型/ API 搜索）
         if (ctx->use_model_search || !ctx->search_api_url.empty()) {
-            agentxx::kit::reactor_tool(
+            agentxx::kit::blocking_tool(
                 *ctx,
-                ctx->reactor,
                 kNameSearch,
                 kDepictSearch,
                 schemaSearch(ctx.get()),
-                [](PluginCtx& c, std::string_view args_json, agentxx::kit::OpCtl) -> asio::awaitable<std::string> {
+                [](PluginCtx& c, std::string_view args_json) -> std::string {
                     auto arguments = args_json.empty() ? neograph::json::object() : neograph::json::parse(args_json);
-                    if (c.use_model_search) {
-                        ModelSearchConfig mcfg;
-                        mcfg.baseUrl                 = c.model_cfg.baseUrl;
-                        mcfg.apiKey                  = c.model_cfg.apiKey;
-                        mcfg.modelName               = c.model_cfg.modelName;
-                        mcfg.readChunkTimeoutSeconds = c.model_cfg.readChunkTimeoutSeconds;
-                        co_return co_await modelWebSearchExecuteAsync(arguments, mcfg);
-                    } else {
-                        co_return co_await webSearchExecuteAsync(
-                            arguments,
-                            c.search_api_url,
-                            c.convert_html2markdown
-                        );
-                    }
+                    asio::io_context io;
+                    std::string result;
+                    std::exception_ptr ep;
+                    asio::co_spawn(
+                        io,
+                        [&]() -> asio::awaitable<void> {
+                            try {
+                                if (c.use_model_search) {
+                                    ModelSearchConfig mcfg;
+                                    mcfg.baseUrl                 = c.model_cfg.baseUrl;
+                                    mcfg.apiKey                  = c.model_cfg.apiKey;
+                                    mcfg.modelName               = c.model_cfg.modelName;
+                                    mcfg.readChunkTimeoutSeconds = c.model_cfg.readChunkTimeoutSeconds;
+                                    result = co_await modelWebSearchExecuteAsync(arguments, mcfg);
+                                } else {
+                                    result = co_await webSearchExecuteAsync(
+                                        arguments,
+                                        c.search_api_url,
+                                        c.convert_html2markdown
+                                    );
+                                }
+                            } catch (...) {
+                                ep = std::current_exception();
+                            }
+                        },
+                        asio::detached
+                    );
+                    io.run();
+                    if (ep) std::rethrow_exception(ep);
+                    return result;
                 }
             );
         }
@@ -237,9 +285,6 @@ extern "C" AGENTXX_PLUGIN_EXPORT int agentxx_plugin_create(const AgentxxHost* ho
 extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_destroy(void* plugin_ctx) {
     auto* ctx = static_cast<PluginCtx*>(plugin_ctx);
     agentxx::plugin_guard::guardCallVoid(ctxGuardLogger(ctx), [&] {
-        if (ctx) {
-            ctx->reactor.stop();
-            delete ctx;
-        }
+        delete ctx;
     });
 }

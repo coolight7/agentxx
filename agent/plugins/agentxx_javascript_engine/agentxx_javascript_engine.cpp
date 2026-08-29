@@ -684,8 +684,26 @@ private:
         }
         // 等待上限: interrupt handler (60s) 负责打断长任务; 此处 120s 兜底
         // (sleep 期间 interrupt 不检查, 由本 guard 控制总等待)
+        // B4: drivePromise 期间泵主队列，避免单 Promise 阻塞导致同引擎其他脚本任务饥饿
         int guard = 0;
         while (JS_PromiseState(pctx->ctx, value) == JS_PROMISE_PENDING && guard++ < 120000) {
+            // 先泵已入队的主队列任务（工具并发调用等），避免饥饿
+            {
+                std::function<void()> queued;
+                {
+                    std::lock_guard<std::mutex> lk(mtx_);
+                    if (!queue_.empty()) {
+                        queued = std::move(queue_.front());
+                        queue_.pop_front();
+                    }
+                }
+                if (queued) {
+                    try {
+                        queued();
+                    } catch (...) {}
+                    continue;
+                }
+            }
             JSContext* jobCtx = nullptr;
             int        rc     = JS_ExecutePendingJob(rt_, &jobCtx);
             if (rc < 0) {

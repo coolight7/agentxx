@@ -12,7 +12,6 @@
 namespace agentxx_execmd_plugin {
 
 struct PluginCtx : public agentxx::kit::PluginBase {
-    agentxx::kit::ReactorLoop reactor;
 };
 
 inline void pluginLog(const PluginCtx* ctx, int level, const std::string& msg) {

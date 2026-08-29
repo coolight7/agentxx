@@ -949,6 +949,13 @@ void ClientPluginManager::postToIo(std::function<void()> fn) const {
     }
 }
 
+void ClientPluginManager::postToIoAsync(std::function<void()> fn) const {
+    asio::post(ioExecutor_, [this, fn = std::move(fn)]() {
+        ioThreadId_.store(std::this_thread::get_id(), std::memory_order_release);
+        fn();
+    });
+}
+
 // ==================== ClientEventSink 实现 ====================
 
 void ClientPluginManager::onReady() {

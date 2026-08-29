@@ -322,6 +322,7 @@ public:
 
     bool isIoThread() const;
     void postToIo(std::function<void()> fn) const;
+    void postToIoAsync(std::function<void()> fn) const;
 
     // ==================== ClientEventSink 实现 (io 线程) ====================
     // 端点事件 → JSON payload → 分发到订阅了对应事件的插件回调

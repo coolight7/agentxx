@@ -123,48 +123,18 @@ extern "C" AGENTXX_PLUGIN_EXPORT int agentxx_plugin_create(const AgentxxHost* ho
         std::string depictWin = pWin.depict.empty() ? kDepictWinPlaceholder : pWin.depict;
 
 #if defined(BOOST_PROCESS_V2_PROCESS_HPP)
-        // 手动裁剪 stdout/stderr (execute_command_impl.h 内 per-stream 30k 限制),
-        // 格式对标 ToolcallNode 的 [Content offloaded...] 并通过 share_store
-        // offload 完整内容 (超限时 storeFn 返回 ID)，不依赖 ToolcallNode 全局卸载
-        agentxx::kit::reactor_tool(
-            *ctx,
-            ctx->reactor,
-            kNameWindows,
-            depictWin,
-            schemaWindows(ctx.get()),
-            [](PluginCtx& c, std::string_view args_json, agentxx::kit::OpCtl ctl) -> asio::awaitable<std::string> {
-                auto arguments = args_json.empty() ? neograph::json::object() : neograph::json::parse(args_json);
-                auto isCancelled = [&ctl]() -> bool { return ctl.cancelled(); };
-                auto workDir = c.workDir(agentxx_plugin_sv(ctl.threadId.data(), ctl.threadId.size()));
-                StoreFn storeFn = nullptr;
-                if (!ctl.threadId.empty() && c.iface.session && c.iface.session->add_share_store) {
-                    std::string tidCopy = ctl.threadId;
-                    storeFn = [&c, tidCopy](std::string_view content) -> long long {
-                        return c.addShareStore(
-                            agentxx_plugin_sv(tidCopy.data(), tidCopy.size()),
-                            content
-                        );
-                    };
-                }
-                co_return co_await windowsExecuteAsync(arguments, workDir, isCancelled, storeFn);
-            },
-            0,
-            AGENTXX_TOOL_FLAG_NONE
-        );
-#else
-        // 手动裁剪同上 (阻塞回退同样截断+share_store)，不启用 AUTO_SUMMARY
+        // 异步管线改为 blocking_tool + 临时 io_context 同步驱动（无私有 Reactor 线程）
         agentxx::kit::blocking_tool(
             *ctx,
             kNameWindows,
             depictWin,
             schemaWindows(ctx.get()),
-            [](PluginCtx& c, std::string_view args_json, std::string_view tid, volatile int* cancel_flag) -> std::string {
+            [](PluginCtx& c, std::string_view args_json, std::string_view tid, std::string_view workDir, volatile int* cancel_flag) -> std::string {
                 auto arguments = args_json.empty() ? neograph::json::object() : neograph::json::parse(args_json);
                 auto isCancelled = [&c, tid, cancel_flag]() -> bool {
                     if (cancel_flag && *cancel_flag != 0) return true;
                     return c.sessionCancelled(agentxx_plugin_sv(tid.data(), tid.size()));
                 };
-                auto workDir = c.workDir(agentxx_plugin_sv(tid.data(), tid.size()));
                 StoreFn storeFn = nullptr;
                 if (!tid.empty() && c.iface.session && c.iface.session->add_share_store) {
                     std::string tidCopy(tid);
@@ -175,7 +145,50 @@ extern "C" AGENTXX_PLUGIN_EXPORT int agentxx_plugin_create(const AgentxxHost* ho
                         );
                     };
                 }
-                return windowsExecute(arguments, workDir, isCancelled, storeFn);
+                asio::io_context io;
+                std::string result;
+                std::exception_ptr ep;
+                asio::co_spawn(
+                    io,
+                    [&]() -> asio::awaitable<void> {
+                        try {
+                            result = co_await windowsExecuteAsync(arguments, std::string(workDir), isCancelled, storeFn);
+                        } catch (...) {
+                            ep = std::current_exception();
+                        }
+                    },
+                    asio::detached
+                );
+                io.run();
+                if (ep) std::rethrow_exception(ep);
+                return result;
+            },
+            0,
+            AGENTXX_TOOL_FLAG_NONE
+        );
+#else
+        agentxx::kit::blocking_tool(
+            *ctx,
+            kNameWindows,
+            depictWin,
+            schemaWindows(ctx.get()),
+            [](PluginCtx& c, std::string_view args_json, std::string_view tid, std::string_view workDir, volatile int* cancel_flag) -> std::string {
+                auto arguments = args_json.empty() ? neograph::json::object() : neograph::json::parse(args_json);
+                auto isCancelled = [&c, tid, cancel_flag]() -> bool {
+                    if (cancel_flag && *cancel_flag != 0) return true;
+                    return c.sessionCancelled(agentxx_plugin_sv(tid.data(), tid.size()));
+                };
+                StoreFn storeFn = nullptr;
+                if (!tid.empty() && c.iface.session && c.iface.session->add_share_store) {
+                    std::string tidCopy(tid);
+                    storeFn = [&c, tidCopy](std::string_view content) -> long long {
+                        return c.addShareStore(
+                            agentxx_plugin_sv(tidCopy.data(), tidCopy.size()),
+                            content
+                        );
+                    };
+                }
+                return windowsExecute(arguments, std::string(workDir), isCancelled, storeFn);
             },
             0,
             AGENTXX_TOOL_FLAG_NONE
@@ -187,45 +200,17 @@ extern "C" AGENTXX_PLUGIN_EXPORT int agentxx_plugin_create(const AgentxxHost* ho
         std::string depictBash = pBash.depict.empty() ? kDepictBash : pBash.depict;
 
 #if defined(BOOST_PROCESS_V2_PROCESS_HPP)
-        // 手动裁剪 stdout/stderr (per-stream 30k, 统一 Toolcall 格式 + share_store ID)
-        agentxx::kit::reactor_tool(
-            *ctx,
-            ctx->reactor,
-            kNameBash,
-            depictBash,
-            schemaBash(ctx.get()),
-            [](PluginCtx& c, std::string_view args_json, agentxx::kit::OpCtl ctl) -> asio::awaitable<std::string> {
-                auto arguments = args_json.empty() ? neograph::json::object() : neograph::json::parse(args_json);
-                auto isCancelled = [&ctl]() -> bool { return ctl.cancelled(); };
-                auto workDir = c.workDir(agentxx_plugin_sv(ctl.threadId.data(), ctl.threadId.size()));
-                StoreFn storeFn = nullptr;
-                if (!ctl.threadId.empty() && c.iface.session && c.iface.session->add_share_store) {
-                    std::string tidCopy = ctl.threadId;
-                    storeFn = [&c, tidCopy](std::string_view content) -> long long {
-                        return c.addShareStore(
-                            agentxx_plugin_sv(tidCopy.data(), tidCopy.size()),
-                            content
-                        );
-                    };
-                }
-                co_return co_await bashExecuteAsync(arguments, workDir, isCancelled, storeFn);
-            },
-            0,
-            AGENTXX_TOOL_FLAG_NONE
-        );
-#else
         agentxx::kit::blocking_tool(
             *ctx,
             kNameBash,
             depictBash,
             schemaBash(ctx.get()),
-            [](PluginCtx& c, std::string_view args_json, std::string_view tid, volatile int* cancel_flag) -> std::string {
+            [](PluginCtx& c, std::string_view args_json, std::string_view tid, std::string_view workDir, volatile int* cancel_flag) -> std::string {
                 auto arguments = args_json.empty() ? neograph::json::object() : neograph::json::parse(args_json);
                 auto isCancelled = [&c, tid, cancel_flag]() -> bool {
                     if (cancel_flag && *cancel_flag != 0) return true;
                     return c.sessionCancelled(agentxx_plugin_sv(tid.data(), tid.size()));
                 };
-                auto workDir = c.workDir(agentxx_plugin_sv(tid.data(), tid.size()));
                 StoreFn storeFn = nullptr;
                 if (!tid.empty() && c.iface.session && c.iface.session->add_share_store) {
                     std::string tidCopy(tid);
@@ -236,7 +221,50 @@ extern "C" AGENTXX_PLUGIN_EXPORT int agentxx_plugin_create(const AgentxxHost* ho
                         );
                     };
                 }
-                return bashExecute(arguments, workDir, isCancelled, storeFn);
+                asio::io_context io;
+                std::string result;
+                std::exception_ptr ep;
+                asio::co_spawn(
+                    io,
+                    [&]() -> asio::awaitable<void> {
+                        try {
+                            result = co_await bashExecuteAsync(arguments, std::string(workDir), isCancelled, storeFn);
+                        } catch (...) {
+                            ep = std::current_exception();
+                        }
+                    },
+                    asio::detached
+                );
+                io.run();
+                if (ep) std::rethrow_exception(ep);
+                return result;
+            },
+            0,
+            AGENTXX_TOOL_FLAG_NONE
+        );
+#else
+        agentxx::kit::blocking_tool(
+            *ctx,
+            kNameBash,
+            depictBash,
+            schemaBash(ctx.get()),
+            [](PluginCtx& c, std::string_view args_json, std::string_view tid, std::string_view workDir, volatile int* cancel_flag) -> std::string {
+                auto arguments = args_json.empty() ? neograph::json::object() : neograph::json::parse(args_json);
+                auto isCancelled = [&c, tid, cancel_flag]() -> bool {
+                    if (cancel_flag && *cancel_flag != 0) return true;
+                    return c.sessionCancelled(agentxx_plugin_sv(tid.data(), tid.size()));
+                };
+                StoreFn storeFn = nullptr;
+                if (!tid.empty() && c.iface.session && c.iface.session->add_share_store) {
+                    std::string tidCopy(tid);
+                    storeFn = [&c, tidCopy](std::string_view content) -> long long {
+                        return c.addShareStore(
+                            agentxx_plugin_sv(tidCopy.data(), tidCopy.size()),
+                            content
+                        );
+                    };
+                }
+                return bashExecute(arguments, std::string(workDir), isCancelled, storeFn);
             },
             0,
             AGENTXX_TOOL_FLAG_NONE
@@ -253,9 +281,6 @@ extern "C" AGENTXX_PLUGIN_EXPORT int agentxx_plugin_create(const AgentxxHost* ho
 extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_destroy(void* plugin_ctx) {
     auto* ctx = static_cast<PluginCtx*>(plugin_ctx);
     agentxx::plugin_guard::guardCallVoid(ctxGuardLogger(ctx), [&] {
-        if (ctx) {
-            ctx->reactor.stop();
-            delete ctx;
-        }
+        delete ctx;
     });
 }

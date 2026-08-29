@@ -16,6 +16,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <vector>
 
 namespace agentxx {
@@ -111,7 +112,8 @@ public:
     std::vector<HookRegistration> hookRegistrations;
     std::vector<std::shared_ptr<AgentxxSubscription>> subscriptions;
     std::vector<CapabilityRegistration> capabilityRegistrations;
-    std::vector<std::shared_ptr<PluginSleepTimer>> sleepTimers;
+    // B6: sleep 定时器改为哈希表 O(1) 取消，避免 vector 线性查找 O(n) 与卸载时 O(n²)
+    std::unordered_map<void*, std::shared_ptr<PluginSleepTimer>> sleepTimers;
     std::vector<std::shared_ptr<AgentxxOpHandle>> outstandingOps;
     PromptBackup promptBackup;
 
@@ -395,6 +397,25 @@ public:
             });
         } else {
             XX_LOGW("PluginManager::postToIo: no io executor, executing on caller thread");
+            fn();
+        }
+    }
+
+    /// 异步投递到 io 线程（恒经 asio::post 入队，禁止同步重入）：
+    /// 供 SchedulerIface::post_to_io / YieldAwaiter 等锚定协程恢复路径使用，
+    /// 即使调用方已在 io 线程也一律异步，避免 await_suspend 内的重入 UB
+    void postToIoAsync(std::function<void()> fn) const {
+        if (ioExecutor_) {
+            {
+                std::lock_guard lk(ioTasksMtx_);
+                ioTasks_.push_back(std::move(fn));
+            }
+            asio::post(ioExecutor_, [this]() {
+                ioThreadId_.store(std::this_thread::get_id(), std::memory_order_release);
+                runPendingIoTasks();
+            });
+        } else {
+            XX_LOGW("PluginManager::postToIoAsync: no io executor, executing on caller thread");
             fn();
         }
     }

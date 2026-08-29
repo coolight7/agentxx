@@ -25,7 +25,7 @@ void* PluginManager::sleep(
     item->timer = timer;
     item->cb    = cb;
     item->ud    = ud;
-    inst->sleepTimers.push_back(item);
+    inst->sleepTimers.emplace(item.get(), item);
 
     timer->expires_after(std::chrono::milliseconds(ms));
     timer->async_wait([item, ex = ioExecutor_](const neograph_asio_error_code& ec) {
@@ -55,15 +55,9 @@ void PluginManager::cancelSleep(PluginInstance* inst, void* timerPtr) {
     if (!inst || !timerPtr) {
         return;
     }
-    auto it = std::find_if(
-        inst->sleepTimers.begin(),
-        inst->sleepTimers.end(),
-        [timerPtr](const std::shared_ptr<PluginSleepTimer>& t) {
-            return t.get() == timerPtr;
-        }
-    );
+    auto it = inst->sleepTimers.find(timerPtr);
     if (it != inst->sleepTimers.end()) {
-        auto item = *it;
+        auto item = it->second;
         inst->sleepTimers.erase(it);
         if (item->timer) {
             item->timer->cancel();
@@ -102,7 +96,7 @@ void PluginManager::offload(
     }
 
     struct OffloadTask {
-        PluginInstance* inst;
+        std::shared_ptr<PluginInstance> instKeep;
         volatile int*   cancel_flag;
         void* (*work)(void* ud, volatile int* cancel_flag, char** error_out);
         void (*done)(void* ud, void* result, char* error);
@@ -112,8 +106,12 @@ void PluginManager::offload(
         asio::any_io_executor ex;
     };
 
+    auto instKeep = inst->self.lock();
+    if (!instKeep) {
+        return;
+    }
     auto task = std::make_shared<OffloadTask>(OffloadTask{
-        inst,
+        instKeep,
         cancel_flag,
         work,
         done,
@@ -127,33 +125,51 @@ void PluginManager::offload(
 
     asio::post(
         *ctx->threadPool,
-        [task, this]() {
+        [task]() {
+            auto* instPtr = task->instKeep.get();
             try {
                 task->result = task->work(task->ud, task->cancel_flag, &task->error);
             } catch (const std::exception& e) {
-                task->error = task->inst->host.vtable->strdup(e.what());
+                if (instPtr && instPtr->host.vtable && instPtr->host.vtable->strdup) {
+                    task->error = instPtr->host.vtable->strdup(e.what());
+                } else {
+                    task->error = ::strdup(e.what());
+                }
             } catch (...) {
-                task->error = task->inst->host.vtable->strdup("unknown error in plugin offload");
+                if (instPtr && instPtr->host.vtable && instPtr->host.vtable->strdup) {
+                    task->error = instPtr->host.vtable->strdup("unknown error in plugin offload");
+                } else {
+                    task->error = ::strdup("unknown error in plugin offload");
+                }
             }
 
             if (task->ex) {
                 asio::post(
                     task->ex,
                     [task]() {
+                        auto* instPtr2 = task->instKeep.get();
                         if (task->done) {
                             try {
                                 task->done(task->ud, task->result, task->error);
                             } catch (const std::exception& e) {
-                                XX_LOGW("Plugin `{}` offload done threw: {}", task->inst->name, e.what());
+                                if (instPtr2) {
+                                    XX_LOGW("Plugin `{}` offload done threw: {}", instPtr2->name, e.what());
+                                }
                             } catch (...) {
-                                XX_LOGW("Plugin `{}` offload done threw unknown exception", task->inst->name);
+                                if (instPtr2) {
+                                    XX_LOGW("Plugin `{}` offload done threw unknown exception", instPtr2->name);
+                                }
                             }
                         }
-                        task->inst->inflight.fetch_sub(1, std::memory_order_acq_rel);
+                        if (instPtr2) {
+                            instPtr2->inflight.fetch_sub(1, std::memory_order_acq_rel);
+                        }
                     }
                 );
             } else {
-                task->inst->inflight.fetch_sub(1, std::memory_order_acq_rel);
+                if (instPtr) {
+                    instPtr->inflight.fetch_sub(1, std::memory_order_acq_rel);
+                }
             }
         }
     );

@@ -19,6 +19,15 @@
 #include <fmt/ranges.h>
 #include <fstream>
 #include <string>
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
 #include <vector>
 
 using namespace agentxx_planning_plugin;
@@ -185,9 +194,27 @@ bool savePlanningFile(const PluginCtx& ctx, const std::string& tid, const std::s
                 return false;
             }
         }
-        // Windows rename 不覆盖已有目标: 先移除旧文件 (remove 不存在时报错被忽略)
-        std::error_code rmEc;
-        std::filesystem::remove(path, rmEc);
+        // B5: 原子替换（POSIX rename 原子覆盖；Windows 用 MoveFileExW 原子替换）
+#ifdef _WIN32
+        {
+            std::wstring wTmp  = tmp.wstring();
+            std::wstring wPath = path.wstring();
+            if (::MoveFileExW(wTmp.c_str(), wPath.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+                return true;
+            }
+            // 回退：先删后改名（极端权限场景）
+            std::error_code rmEc;
+            std::filesystem::remove(path, rmEc);
+            ec.clear();
+            std::filesystem::rename(tmp, path, ec);
+            if (ec) {
+                std::error_code cleanEc;
+                std::filesystem::remove(tmp, cleanEc);
+                return false;
+            }
+            return true;
+        }
+#else
         std::filesystem::rename(tmp, path, ec);
         if (ec) {
             std::error_code cleanEc;
@@ -195,6 +222,7 @@ bool savePlanningFile(const PluginCtx& ctx, const std::string& tid, const std::s
             return false;
         }
         return true;
+#endif
     } catch (...) {
         return false;
     }

@@ -276,20 +276,19 @@ extern "C" AGENTXX_PLUGIN_EXPORT int agentxx_plugin_create(const AgentxxHost* ho
             return -1;
         }
 
-        // list
+        // list (workDir 预取在 io 线程，避免 worker 跨线程 ioCallSync)
         agentxx::kit::blocking_tool(
             *ctx,
             kNameList,
             kDepictList,
             schemaList(ctx.get()),
-            [](PluginCtx& c, std::string_view args_json, std::string_view tid, volatile int* cancel_flag) -> std::string {
+            [](PluginCtx& c, std::string_view args_json, std::string_view tid, std::string_view workDir, volatile int* cancel_flag) -> std::string {
                 auto arguments = args_json.empty() ? neograph::json::object() : neograph::json::parse(args_json);
-                std::string workDir = c.workDir(agentxx_plugin_sv(tid.data(), tid.size()));
                 auto isCancelled = [&c, tid, cancel_flag]() -> bool {
                     if (cancel_flag && *cancel_flag != 0) return true;
                     return c.sessionCancelled(agentxx_plugin_sv(tid.data(), tid.size()));
                 };
-                return fileListExecute(arguments, workDir, isCancelled);
+                return fileListExecute(arguments, std::string(workDir), isCancelled);
             }
         );
 
@@ -299,14 +298,13 @@ extern "C" AGENTXX_PLUGIN_EXPORT int agentxx_plugin_create(const AgentxxHost* ho
             kNameGlob,
             kDepictGlob,
             schemaGlob(ctx.get()),
-            [](PluginCtx& c, std::string_view args_json, std::string_view tid, volatile int* cancel_flag) -> std::string {
+            [](PluginCtx& c, std::string_view args_json, std::string_view tid, std::string_view workDir, volatile int* cancel_flag) -> std::string {
                 auto arguments = args_json.empty() ? neograph::json::object() : neograph::json::parse(args_json);
-                std::string workDir = c.workDir(agentxx_plugin_sv(tid.data(), tid.size()));
                 auto isCancelled = [&c, tid, cancel_flag]() -> bool {
                     if (cancel_flag && *cancel_flag != 0) return true;
                     return c.sessionCancelled(agentxx_plugin_sv(tid.data(), tid.size()));
                 };
-                return fileGlobExecute(arguments, workDir, isCancelled);
+                return fileGlobExecute(arguments, std::string(workDir), isCancelled);
             }
         );
 
@@ -316,27 +314,26 @@ extern "C" AGENTXX_PLUGIN_EXPORT int agentxx_plugin_create(const AgentxxHost* ho
             kNameGrep,
             kDepictGrep,
             schemaGrep(ctx.get()),
-            [](PluginCtx& c, std::string_view args_json, std::string_view tid, volatile int* cancel_flag) -> std::string {
+            [](PluginCtx& c, std::string_view args_json, std::string_view tid, std::string_view workDir, volatile int* cancel_flag) -> std::string {
                 auto arguments = args_json.empty() ? neograph::json::object() : neograph::json::parse(args_json);
-                std::string workDir = c.workDir(agentxx_plugin_sv(tid.data(), tid.size()));
                 auto isCancelled = [&c, tid, cancel_flag]() -> bool {
                     if (cancel_flag && *cancel_flag != 0) return true;
                     return c.sessionCancelled(agentxx_plugin_sv(tid.data(), tid.size()));
                 };
-                return fileGrepExecute(arguments, workDir, isCancelled);
+                return fileGrepExecute(arguments, std::string(workDir), isCancelled);
             }
         );
 
-        // read
+        // read (workDir 预取)
         agentxx::kit::blocking_tool(
             *ctx,
             kNameRead,
             kDepictRead,
             schemaRead(ctx.get()),
-            [](PluginCtx& c, std::string_view args_json, std::string_view tid) -> std::string {
+            [](PluginCtx& c, std::string_view args_json, std::string_view tid, std::string_view workDir) -> std::string {
                 auto arguments = args_json.empty() ? neograph::json::object() : neograph::json::parse(args_json);
-                std::string workDir = c.workDir(agentxx_plugin_sv(tid.data(), tid.size()));
-                return fileReadExecute(arguments, workDir);
+                (void)c; (void)tid;
+                return fileReadExecute(arguments, std::string(workDir));
             }
         );
 
@@ -346,10 +343,10 @@ extern "C" AGENTXX_PLUGIN_EXPORT int agentxx_plugin_create(const AgentxxHost* ho
             kNameWrite,
             kDepictWrite,
             schemaWrite(ctx.get()),
-            [](PluginCtx& c, std::string_view args_json, std::string_view tid) -> std::string {
+            [](PluginCtx& c, std::string_view args_json, std::string_view tid, std::string_view workDir) -> std::string {
                 auto arguments = args_json.empty() ? neograph::json::object() : neograph::json::parse(args_json);
-                std::string workDir = c.workDir(agentxx_plugin_sv(tid.data(), tid.size()));
-                return fileWriteExecute(arguments, workDir);
+                (void)c; (void)tid;
+                return fileWriteExecute(arguments, std::string(workDir));
             }
         );
 
@@ -359,10 +356,10 @@ extern "C" AGENTXX_PLUGIN_EXPORT int agentxx_plugin_create(const AgentxxHost* ho
             kNameEdit,
             kDepictEdit,
             schemaEdit(ctx.get()),
-            [](PluginCtx& c, std::string_view args_json, std::string_view tid) -> std::string {
+            [](PluginCtx& c, std::string_view args_json, std::string_view tid, std::string_view workDir) -> std::string {
                 auto arguments = args_json.empty() ? neograph::json::object() : neograph::json::parse(args_json);
-                std::string workDir = c.workDir(agentxx_plugin_sv(tid.data(), tid.size()));
-                return fileEditExecute(arguments, workDir);
+                (void)c; (void)tid;
+                return fileEditExecute(arguments, std::string(workDir));
             }
         );
 

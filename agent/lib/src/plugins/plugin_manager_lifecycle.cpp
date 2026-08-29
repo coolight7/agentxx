@@ -203,7 +203,8 @@ void PluginManager::detachAll(PluginInstance* inst) {
     }
     inst->outstandingOps.clear();
 
-    for (auto& timer : inst->sleepTimers) {
+    for (auto& [key, timer] : inst->sleepTimers) {
+        (void)key;
         if (timer && timer->timer) {
             timer->timer->cancel();
         }

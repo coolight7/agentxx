@@ -1223,18 +1223,16 @@ inline void fast_tool(
                 notify->done(notify->host_ud, AGENTXX_OP_OK, payload);
             }
         } catch (const std::exception& e) {
-            if (error_out) {
-                *error_out = shim->ctx->strdup(e.what());
-            }
             if (notify && notify->done) {
                 notify->done(notify->host_ud, AGENTXX_OP_FAILED, shim->ctx->strdup(e.what()));
+            } else if (error_out) {
+                *error_out = shim->ctx->strdup(e.what());
             }
         } catch (...) {
-            if (error_out) {
-                *error_out = shim->ctx->strdup("unknown error in fast_tool");
-            }
             if (notify && notify->done) {
                 notify->done(notify->host_ud, AGENTXX_OP_FAILED, shim->ctx->strdup("unknown error"));
+            } else if (error_out) {
+                *error_out = shim->ctx->strdup("unknown error in fast_tool");
             }
         }
         return nullptr;
@@ -1278,6 +1276,7 @@ inline void blocking_tool(
         std::string     args;
         std::string     tid;
         std::string     tcid;
+        std::string     workDir; ///< 预取的会话工作目录（io 线程解析，避免 worker 跨线程 ioCallSync）
         volatile int    cancelFlag = 0;
     };
 
@@ -1299,12 +1298,21 @@ inline void blocking_tool(
     ) -> void* {
         auto* shim = static_cast<BlockShim*>(user_data);
         (void)error_out;
+        std::string tidStr(thread_id.data ? thread_id.data : "", thread_id.size);
+        // B3: 预取 workDir（io 线程），避免阻塞池线程跨线程 ioCallSync
+        std::string workDirCache;
+        if (!tidStr.empty() && shim->ctx) {
+            workDirCache = shim->ctx->workDir(agentxx_plugin_sv(tidStr.data(), tidStr.size()));
+        } else if (shim->ctx) {
+            workDirCache = shim->ctx->workDir();
+        }
         auto* job = new Job{
             shim,
             notify ? *notify : AgentxxOpNotify{nullptr, nullptr},
             std::string(args_json.data ? args_json.data : "{}", args_json.size),
-            std::string(thread_id.data ? thread_id.data : "", thread_id.size),
+            std::move(tidStr),
             std::string(tool_call_id.data ? tool_call_id.data : "", tool_call_id.size),
+            std::move(workDirCache),
             0
         };
 
@@ -1316,8 +1324,13 @@ inline void blocking_tool(
                     auto* j = static_cast<Job*>(ud);
                     try {
                         std::string res;
-                        if constexpr (std::is_invocable_v<BlockFn, Ctx&, std::string_view, std::string_view, volatile int*>) {
+                        // 优先匹配含 workDir 的新签名，避免 worker 再次 ioCallSync
+                        if constexpr (std::is_invocable_v<BlockFn, Ctx&, std::string_view, std::string_view, std::string_view, volatile int*>) {
+                            res = j->shim->fn(*j->shim->ctx, j->args, j->tid, j->workDir, cflag);
+                        } else if constexpr (std::is_invocable_v<BlockFn, Ctx&, std::string_view, std::string_view, volatile int*>) {
                             res = j->shim->fn(*j->shim->ctx, j->args, j->tid, cflag);
+                        } else if constexpr (std::is_invocable_v<BlockFn, Ctx&, std::string_view, std::string_view, std::string_view>) {
+                            res = j->shim->fn(*j->shim->ctx, j->args, j->tid, j->workDir);
                         } else if constexpr (std::is_invocable_v<BlockFn, Ctx&, std::string_view, volatile int*>) {
                             res = j->shim->fn(*j->shim->ctx, j->args, cflag);
                         } else if constexpr (std::is_invocable_v<BlockFn, std::string_view, volatile int*>) {
@@ -1489,174 +1502,12 @@ inline void capability(Ctx& ctx, std::string_view capName, CapFn&& fn) {
     }
 }
 
-#if defined(AGENTXX_KIT_HAS_ASIO)
-/* ==================== Reactor 工具桥接模板 ==================== */
-
-struct ReactorLoop {
-    asio::io_context                                                          io;
-    std::optional<asio::executor_work_guard<asio::io_context::executor_type>> guard;
-    std::thread                                                               thread;
-
-    ReactorLoop() {
-        guard.emplace(asio::make_work_guard(io));
-        thread = std::thread([this]() {
-            io.run();
-        });
-    }
-
-    ~ReactorLoop() {
-        stop();
-    }
-
-    void stop() {
-        if (guard) {
-            guard.reset();
-            io.stop();
-            if (thread.joinable()) {
-                thread.join();
-            }
-        }
-    }
-};
-
-template<typename Ctx, typename ReactorFn>
-inline void reactor_tool(
-    Ctx&             ctx,
-    ReactorLoop&     loop,
-    std::string_view name,
-    std::string_view depict,
-    std::string_view schema,
-    ReactorFn&&      fn,
-    long             default_timeout_ms = 0,
-    int              flags              = 0
-) {
-    auto&       storage = ctx.storage_;
-    std::string finalDepict = ctx.toolPrompt(name).depict;
-    if (finalDepict.empty()) {
-        finalDepict = depict;
-    }
-    storage.push_back(std::move(finalDepict));
-    storage.push_back(std::string(schema));
-
-    struct ReactorShim {
-        Ctx*                    ctx  = nullptr;
-        ReactorLoop*            loop = nullptr;
-        std::decay_t<ReactorFn> fn;
-        std::mutex                                 mtx;
-        std::map<void*, std::shared_ptr<std::atomic<bool>>> flags;
-
-        ReactorShim() = default;
-        ReactorShim(Ctx* c, ReactorLoop* l, std::decay_t<ReactorFn>&& f) :
-            ctx(c), loop(l), fn(std::move(f)) {}
-        ReactorShim(const ReactorShim&) = delete;
-        ReactorShim& operator=(const ReactorShim&) = delete;
-    };
-
-    auto shimPtr = std::make_unique<ReactorShim>();
-    shimPtr->ctx = &ctx;
-    shimPtr->loop = &loop;
-    shimPtr->fn = std::forward<ReactorFn>(fn);
-    auto shim = ctx.storeShim(std::move(shimPtr));
-
-    struct Job {
-        ReactorShim*                       shim;
-        std::shared_ptr<std::atomic<bool>> cancelFlag;
-    };
-
-    AgentxxToolSpec spec{};
-    spec.name            = agentxx_plugin_sv(name.data(), name.size());
-    spec.description     = agentxx_plugin_sv(storage[storage.size() - 2].data(), storage[storage.size() - 2].size());
-    spec.parameters_json = agentxx_plugin_sv(storage.back().data(), storage.back().size());
-    spec.user_data       = shim;
-    spec.default_timeout_ms = default_timeout_ms;
-    spec.flags           = flags;
-
-    spec.execute_start = [](
-        void*                   user_data,
-        AgentxxPluginStringView args_json,
-        AgentxxPluginStringView thread_id,
-        AgentxxPluginStringView tool_call_id,
-        const AgentxxOpNotify*  notify,
-        char**                  error_out
-    ) -> void* {
-        auto* shim = static_cast<ReactorShim*>(user_data);
-        (void)tool_call_id;
-        (void)error_out;
-        auto cancelFlag = std::make_shared<std::atomic<bool>>(false);
-        auto* job       = new Job{shim, cancelFlag};
-        {
-            std::lock_guard lk(shim->mtx);
-            shim->flags[job] = cancelFlag;
-        }
-        AgentxxOpNotify ntf = notify ? *notify : AgentxxOpNotify{nullptr, nullptr};
-
-        std::string argsStr(args_json.data ? args_json.data : "{}", args_json.size);
-        std::string tidStr(thread_id.data ? thread_id.data : "", thread_id.size);
-
-        asio::co_spawn(
-            shim->loop->io,
-            [shim, argsStr, tidStr, cancelFlag, ntf, job]() -> asio::awaitable<void> {
-                OpCtl ctl{cancelFlag, shim->ctx->host, shim->ctx->iface.cancel, tidStr};
-                try {
-                    std::string res     = co_await shim->fn(*shim->ctx, argsStr, ctl);
-                    char*       payload = shim->ctx->strdup(res.c_str());
-                    if (ntf.done) {
-                        ntf.done(ntf.host_ud, AGENTXX_OP_OK, payload);
-                    }
-                } catch (const CancelledException&) {
-                    if (ntf.done) {
-                        ntf.done(ntf.host_ud, AGENTXX_OP_CANCELLED, nullptr);
-                    }
-                } catch (const std::exception& e) {
-                    if (ntf.done) {
-                        ntf.done(ntf.host_ud, AGENTXX_OP_FAILED, shim->ctx->strdup(e.what()));
-                    }
-                } catch (...) {
-                    if (ntf.done) {
-                        ntf.done(ntf.host_ud, AGENTXX_OP_FAILED, shim->ctx->strdup("unknown reactor tool error"));
-                    }
-                }
-                {
-                    std::lock_guard lk(shim->mtx);
-                    shim->flags.erase(job);
-                }
-                delete job;
-            },
-            asio::detached
-        );
-
-        return job;
-    };
-
-    spec.execute_cancel = [](void* user_data, void* op) {
-        if (!op) {
-            return;
-        }
-        auto* shim = static_cast<ReactorShim*>(user_data);
-        if (!shim) {
-            return;
-        }
-        std::shared_ptr<std::atomic<bool>> flag;
-        {
-            std::lock_guard lk(shim->mtx);
-            auto it = shim->flags.find(op);
-            if (it != shim->flags.end()) {
-                flag = it->second;
-            }
-        }
-        if (flag) {
-            flag->store(true, std::memory_order_release);
-            return;
-        }
-        // 兜底：若未在 map 中（极端时序），尝试直接通过 Job 生存期访问（可能已释放则跳过）
-        // 此分支仅为防御，正常路径已通过 map 命中
-    };
-
-    if (ctx.iface.tools && ctx.iface.tools->register_tool) {
-        ctx.iface.tools->register_tool(ctx.host, &spec);
-    }
-}
-#endif
+/* ReactorLoop / reactor_tool 已移除（2026-08 重构）：
+ * 私有 io 循环 per-plugin 增加线程与生命周期复杂度，且与锚定协程模型重复；
+ * 现统一由 kit::tool（锚定协程，宿主 io 线程）+ kit::blocking_tool（阻塞池）承载，
+ * 网络/子进程等异步操作在 blocking_tool 内以临时 io_context 同步驱动（见插件侧 sync 包装），
+ * 或在 kit::tool 内以 offload 委托。历史代码已迁移，无需兼容。
+ */
 
 /* ==================== 阻塞便捷助手 (基于 condvar) ==================== */
 
@@ -1672,6 +1523,14 @@ inline char* call_tool_blocking(
     if (!host || !tools || !tools->call_tool_async) {
         if (error_out && host && host->vtable && host->vtable->strdup) {
             *error_out = host->vtable->strdup("tools iface not available");
+        }
+        return nullptr;
+    }
+    if (sched && sched->is_io_thread && sched->is_io_thread(host)) {
+        if (error_out && host->vtable && host->vtable->strdup) {
+            *error_out = host->vtable->strdup(
+                "call_tool_blocking cannot be called on io thread; use co_await call_tool instead"
+            );
         }
         return nullptr;
     }
@@ -1705,19 +1564,7 @@ inline char* call_tool_blocking(
         return nullptr;
     }
 
-    if (sched && sched->is_io_thread && sched->is_io_thread(host)) {
-        while (!state.done) {
-            {
-                std::unique_lock lk(state.mtx);
-                state.cv.wait_for(lk, std::chrono::milliseconds(2), [&]() {
-                    return state.done;
-                });
-            }
-            if (sched->pump_io) {
-                sched->pump_io(host);
-            }
-        }
-    } else {
+    {
         std::unique_lock lk(state.mtx);
         state.cv.wait(lk, [&]() {
             return state.done;
@@ -1751,6 +1598,14 @@ inline char* invoke_capability_blocking(
         }
         return nullptr;
     }
+    if (sched && sched->is_io_thread && sched->is_io_thread(host)) {
+        if (error_out && host->vtable && host->vtable->strdup) {
+            *error_out = host->vtable->strdup(
+                "invoke_capability_blocking cannot be called on io thread; use co_await invoke_cap instead"
+            );
+        }
+        return nullptr;
+    }
 
     struct SyncState {
         std::mutex              mtx;
@@ -1781,19 +1636,7 @@ inline char* invoke_capability_blocking(
         return nullptr;
     }
 
-    if (sched && sched->is_io_thread && sched->is_io_thread(host)) {
-        while (!state.done) {
-            {
-                std::unique_lock lk(state.mtx);
-                state.cv.wait_for(lk, std::chrono::milliseconds(2), [&]() {
-                    return state.done;
-                });
-            }
-            if (sched->pump_io) {
-                sched->pump_io(host);
-            }
-        }
-    } else {
+    {
         std::unique_lock lk(state.mtx);
         state.cv.wait(lk, [&]() {
             return state.done;

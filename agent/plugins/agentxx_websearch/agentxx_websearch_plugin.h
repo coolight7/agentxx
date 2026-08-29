@@ -19,7 +19,6 @@ struct WebSearchConfig {
 };
 
 struct PluginCtx : public agentxx::kit::PluginBase {
-    agentxx::kit::ReactorLoop reactor;
     bool                      use_model_search      = false;
     bool                      convert_html2markdown = true;
     std::string               search_api_url;

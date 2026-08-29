@@ -142,17 +142,44 @@ static inline void* agentxx_sync_tool_start(
     job->shim       = *shim;
     job->notify     = *notify;
     job->cancelFlag = 0;
+    job->args = NULL;
+    job->tid  = NULL;
+    job->tcid = NULL;
 
-    job->args = args_json.size ? (char*)malloc(args_json.size) : NULL;
-    if (args_json.size && job->args) memcpy(job->args, args_json.data, args_json.size);
+    if (args_json.size) {
+        job->args = (char*)malloc(args_json.size);
+        if (!job->args) {
+            free(job);
+            if (error_out) *error_out = agentxx_shim_err_dup(shim->host, "out of memory allocating args");
+            return NULL;
+        }
+        memcpy(job->args, args_json.data, args_json.size);
+    }
     job->argsSize = args_json.size;
 
-    job->tid = thread_id.size ? (char*)malloc(thread_id.size) : NULL;
-    if (thread_id.size && job->tid) memcpy(job->tid, thread_id.data, thread_id.size);
+    if (thread_id.size) {
+        job->tid = (char*)malloc(thread_id.size);
+        if (!job->tid) {
+            if (job->args) free(job->args);
+            free(job);
+            if (error_out) *error_out = agentxx_shim_err_dup(shim->host, "out of memory allocating thread_id");
+            return NULL;
+        }
+        memcpy(job->tid, thread_id.data, thread_id.size);
+    }
     job->tidSize = thread_id.size;
 
-    job->tcid = tool_call_id.size ? (char*)malloc(tool_call_id.size) : NULL;
-    if (tool_call_id.size && job->tcid) memcpy(job->tcid, tool_call_id.data, tool_call_id.size);
+    if (tool_call_id.size) {
+        job->tcid = (char*)malloc(tool_call_id.size);
+        if (!job->tcid) {
+            if (job->args) free(job->args);
+            if (job->tid) free(job->tid);
+            free(job);
+            if (error_out) *error_out = agentxx_shim_err_dup(shim->host, "out of memory allocating tool_call_id");
+            return NULL;
+        }
+        memcpy(job->tcid, tool_call_id.data, tool_call_id.size);
+    }
     job->tcidSize = tool_call_id.size;
 
     shim->sched->offload(
@@ -265,7 +292,10 @@ static inline void* agentxx_inline_tool_start(
 
     if (error_out && *error_out) {
         if (notify && notify->done) {
-            notify->done(notify->host_ud, AGENTXX_OP_FAILED, *error_out);
+            // 执行期失败：经 notify 上报，error_out 清零避免宿主 double-free / 误判为 start 失败
+            char* errPayload = *error_out;
+            *error_out = NULL;
+            notify->done(notify->host_ud, AGENTXX_OP_FAILED, errPayload);
         }
     } else {
         if (notify && notify->done) {

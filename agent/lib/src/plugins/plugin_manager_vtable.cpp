@@ -463,7 +463,7 @@ static void xx_post_to_io(const AgentxxHost* host, void (*fn)(void* ud), void* u
     if (!mgr || !fn) {
         return;
     }
-    mgr->postToIo([fn, ud]() {
+    mgr->postToIoAsync([fn, ud]() {
         fn(ud);
     });
     XX_PLUGIN_CATCH_END_VOID()

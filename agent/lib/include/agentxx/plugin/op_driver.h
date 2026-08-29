@@ -114,10 +114,24 @@ struct OpCore : std::enable_shared_from_this<OpCore> {
             auto  cb   = self->cb;
             auto* cbUd = self->cbUd;
             self->cb   = nullptr;
-            char* pl   = self->payload.empty() ? nullptr : ::strdup(self->payload.c_str());
+            std::string payloadCopy = self->payload;
+            // 宿主约定：完成回调在 io 线程派发且经 post 入队，禁止同步重入；
+            // 插件的 done 可能来自任意线程（阻塞池/自管线程），此处恒异步投递回 io
             try {
-                cb(cbUd, st, pl);
-            } catch (...) {}
+                auto selfKeep = self->shared_from_this();
+                asio::post(self->chan.get_executor(), [selfKeep, cb, cbUd, st, payloadCopy]() {
+                    char* pl = payloadCopy.empty() ? nullptr : ::strdup(payloadCopy.c_str());
+                    try {
+                        cb(cbUd, st, pl);
+                    } catch (...) {}
+                });
+            } catch (const std::bad_weak_ptr&) {
+                // 极端：不在 shared_ptr 管理下（不应发生），回退为直接调用
+                char* pl = payloadCopy.empty() ? nullptr : ::strdup(payloadCopy.c_str());
+                try {
+                    cb(cbUd, st, pl);
+                } catch (...) {}
+            }
         }
     }
 
