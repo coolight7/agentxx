@@ -4,13 +4,11 @@ description: "Two-level task planning tool (agentxx_planning, write/read modes: 
 entry: libagentxx_planning.so
 depends:
 # ---- 接口协商 (按前缀归属侧: agent.* 仅 agent 侧检查, client.* 仅 client 侧) ----
-# - agentxx.agent.planning 可选: 缺失时 write 仅本地持久化 + 事件发布,
-#   会话 system prompt 注入链路跳过 (如 BaseAgent 场景)
 # - agentxx.client.info_section 可选: CLI 无 Info 栏时注册失败降级 (仅数据不渲染)
+#   (规划不再依赖专用 planning 接口，改用通用持久化+事件)
 interfaces:
   require:
     - agentxx.agent.core
     - agentxx.agent.tools
   optional:
-    - agentxx.agent.planning
     - agentxx.client.info_section

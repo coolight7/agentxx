@@ -348,7 +348,7 @@ interfaces:
         const auto res3 = agentxx::plugin::AgentIfaces::query(&inst->host).resources;
         XX_TEST_EXPECT_TRUE(res3 != nullptr && res3->register_skill_dir != nullptr);
 
-        // ---- 运行时注册 skill 目录 ----
+        // ---- 运行时注册 skill 目录 (冻结后应拒绝: 仅 yaml 与初始化时追加生效) ----
         auto runtimeSkill = tmpRoot / "runtime_skills";
         fs::create_directories(runtimeSkill, ec);
         int rc = res3 ? res3->register_skill_dir(
@@ -356,35 +356,35 @@ interfaces:
                             agentxx_plugin_sv_cstr(runtimeSkill.string().c_str())
                         )
                       : -1;
-        XX_TEST_EXPECT_EQ(rc, 0);
-        XX_TEST_EXPECT_TRUE(contains(skillMw->skillDirPathList(), runtimeSkill.string()));
+        XX_TEST_EXPECT_TRUE(rc != 0); // frozen after init
+        XX_TEST_EXPECT_FALSE(contains(skillMw->skillDirPathList(), runtimeSkill.string()));
 
-        // ---- 快照 JSON (get_own_resources) ----
+        // ---- 快照 JSON (get_own_resources) - 运行时 skill 未注册故不含 ----
         char* json
             = res3 && res3->get_own_resources ? res3->get_own_resources(&inst->host) : nullptr;
         XX_TEST_EXPECT_TRUE(json != nullptr);
         if (json) {
             XX_TEST_EXPECT_TRUE(
-                std::string_view(json).find("runtime_skills") != std::string_view::npos
+                std::string_view(json).find("runtime_skills") == std::string_view::npos
             );
             inst->host.vtable->free(json);
         }
 
-        // ---- 重复注册幂等成功 ----
+        // ---- 重复注册亦拒绝 (冻结) ----
         rc = res3 ? res3->register_skill_dir(
                         &inst->host,
                         agentxx_plugin_sv_cstr(runtimeSkill.string().c_str())
                     )
                   : -1;
-        XX_TEST_EXPECT_EQ(rc, 0);
+        XX_TEST_EXPECT_TRUE(rc != 0);
 
-        // ---- 注销; 再注销非 0 ----
+        // ---- 注销亦拒绝 (冻结) ----
         rc = res3 ? res3->unregister_skill_dir(
                         &inst->host,
                         agentxx_plugin_sv_cstr(runtimeSkill.string().c_str())
                     )
                   : -1;
-        XX_TEST_EXPECT_EQ(rc, 0);
+        XX_TEST_EXPECT_TRUE(rc != 0);
         XX_TEST_EXPECT_FALSE(contains(skillMw->skillDirPathList(), runtimeSkill.string()));
         rc = res3 ? res3->unregister_skill_dir(
                         &inst->host,
@@ -393,23 +393,23 @@ interfaces:
                   : 0;
         XX_TEST_EXPECT_TRUE(rc != 0);
 
-        // ---- MCP 注册 (不可达 URL; 失败仅记日志, 所有权记录保留) ----
+        // ---- MCP 注册亦拒绝 (冻结) ----
         const char* mcpSpec
             = R"({"namespace":"t_mcp","url":"https://127.0.0.1:9/sse","timeout":3})";
         rc = res3 ? res3->register_mcp_server(&inst->host, agentxx_plugin_sv_cstr(mcpSpec)) : -1;
-        XX_TEST_EXPECT_EQ(rc, 0);
-        co_await sleepMs(150); // 让连接协程跑一轮 (无论成败, 记录均在)
+        XX_TEST_EXPECT_TRUE(rc != 0);
+        co_await sleepMs(150);
         {
             char* j2
                 = res3 && res3->get_own_resources ? res3->get_own_resources(&inst->host) : nullptr;
             XX_TEST_EXPECT_TRUE(j2 != nullptr);
             if (j2) {
-                XX_TEST_EXPECT_TRUE(std::string_view(j2).find("t_mcp") != std::string_view::npos);
+                XX_TEST_EXPECT_TRUE(std::string_view(j2).find("t_mcp") == std::string_view::npos);
                 inst->host.vtable->free(j2);
             }
         }
 
-        // ---- 主配置命名空间冲突 → 拒绝 ----
+        // ---- 主配置命名空间冲突 → 拒绝 (冻结亦拒绝) ----
         agentxx::agent::McpServerConfig ycfg;
         ycfg.url                                    = "https://yaml.example";
         ctx->agentConfig->mcpServerUrls["yaml_ns2"] = ycfg;
@@ -418,15 +418,17 @@ interfaces:
                   : 0;
         XX_TEST_EXPECT_TRUE(rc != 0);
 
-        // ---- 其他 owner 抢注同名命名空间 → 拒绝 (确定性: 所有权记录已存在) ----
+        // ---- 其他 owner 抢注同名命名空间: 因 t_mcp 未注册(冻结)故可成功 ----
         agentxx::agent::McpServerConfig anyCfg;
         anyCfg.url = "https://any";
         std::string err;
-        XX_TEST_EXPECT_FALSE(applier->addMcpServer("other_owner", "t_mcp", anyCfg, err));
+        XX_TEST_EXPECT_TRUE(applier->addMcpServer("other_owner", "t_mcp", anyCfg, err));
+        // 清理 other_owner 的 t_mcp 以免影响后续
+        applier->removeMcpServer("other_owner", "t_mcp");
 
-        // ---- 注销 (连接可能已失败: 幂等语义仍成功) ----
+        // ---- 注销亦拒绝 (未注册且冻结) ----
         rc = res3 ? res3->unregister_mcp_server(&inst->host, agentxx_plugin_sv_cstr("t_mcp")) : -1;
-        XX_TEST_EXPECT_EQ(rc, 0);
+        XX_TEST_EXPECT_TRUE(rc != 0);
         auto snapAfter = applier->ownedBy(ownerName);
         XX_TEST_EXPECT_FALSE(contains(snapAfter.mcpNamespaces, "t_mcp"));
 

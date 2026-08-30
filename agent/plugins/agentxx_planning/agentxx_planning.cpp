@@ -1,8 +1,8 @@
 // agentxx_planning —— 两层任务规划工具插件 (双端: agent 工具 + client 渲染)
 // - 从 libagentxx src/tools/planning 拆分独立:
 //   - agent 侧工具 agentxx_planning (原 agentxx_planning_write 改名):
-//     mode=write 写入会话规划 state (经宿主 agentxx.agent.planning 接口表,
-//     原 PlanningMiddlewareHandle plannings 链路不变) 并持久化到
+//     mode=write 写入会话规划 state (经通用接口: 持久化到
+//     {dataDir}/plans + 发布 planning 事件, 不再依赖专用 planning 接口表) 并持久化到
 //     {dataDir}/plans/{thread_id}.json (供 read 模式跨轮次读取);
 //     mode=read 返回本会话此前保存的规划内容
 //   - 规划写入成功后发布 "agentxx_planning.planning" 插件事件 (载荷为完整
@@ -346,16 +346,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                     ctx->iface = agentxx::plugin::AgentIfaces::query(host);
                     raw        = ctx.get();
 
-                    if (!ctx->iface.planning || !ctx->iface.planning->set_planning) {
-                        pluginLog(
-                            ctx.get(),
-                            3,
-                            fmt::format(
-                                "agentxx_planning: host planning iface unavailable, `{}' write falls back to local persistence only",
-                                kNamePlanning
-                            )
-                        );
-                    }
+                    // 规划持久化 + 事件发布为通用接口 (不再依赖专用 planning iface)
 
                     {
                         agentxx::kit::ToolPromptText p      = ctx->toolPrompt(kNamePlanning);
@@ -598,72 +589,12 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                                                                                                                          );
                                                                                                                      }
 
-                                                                                                                     bool
-                                                                                                                         sessionApplied
-                                                                                                                         = true;
-                                                                                                                     if (!c.iface
-                                                                                                                              .planning
-                                                                                                                         || !c.iface
-                                                                                                                                 .planning
-                                                                                                                                 ->set_planning) {
-                                                                                                                         sessionApplied
-                                                                                                                             = false;
-                                                                                                                     } else {
-                                                                                                                         auto
-                                                                                                                             rc
-                                                                                                                             = c.iface
-                                                                                                                                   .planning
-                                                                                                                                   ->set_planning(
-                                                                                                                                       c.host,
-                                                                                                                                       agentxx_plugin_sv(
-                                                                                                                                           tid.data(
-                                                                                                                                           ),
-                                                                                                                                           tid.size(
-                                                                                                                                           )
-                                                                                                                                       ),
-                                                                                                                                       agentxx_plugin_sv(
-                                                                                                                                           roadmap
-                                                                                                                                               .data(
-                                                                                                                                               ),
-                                                                                                                                           roadmap
-                                                                                                                                               .size(
-                                                                                                                                               )
-                                                                                                                                       ),
-                                                                                                                                       agentxx_plugin_sv(
-                                                                                                                                           todosJson
-                                                                                                                                               .data(
-                                                                                                                                               ),
-                                                                                                                                           todosJson
-                                                                                                                                               .size(
-                                                                                                                                               )
-                                                                                                                                       ),
-                                                                                                                                       agentxx_plugin_sv(
-                                                                                                                                           notes
-                                                                                                                                               .data(
-                                                                                                                                               ),
-                                                                                                                                           notes
-                                                                                                                                               .size(
-                                                                                                                                               )
-                                                                                                                                       )
-                                                                                                                                   );
-                                                                                                                         sessionApplied
-                                                                                                                             = (rc
-                                                                                                                                == 0
-                                                                                                                             );
-                                                                                                                     }
-
+                                                                                                                     // 通用接口: 持久化到 {dataDir}/plans + 事件发布 (宿主/客户端通用消费)
                                                                                                                      publishPlanningEvent(
                                                                                                                          c,
                                                                                                                          planJson
                                                                                                                      );
 
-                                                                                                                     if (!sessionApplied) {
-                                                                                                                         pluginLog(
-                                                                                                                             &c,
-                                                                                                                             3,
-                                                                                                                             "agentxx_planning: host planning iface unavailable, session state skipped"
-                                                                                                                         );
-                                                                                                                     }
                                                                                                                      return "success";
                                                                                                                  }
                                 );

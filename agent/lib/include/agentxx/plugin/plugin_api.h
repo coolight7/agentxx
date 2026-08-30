@@ -488,23 +488,6 @@ typedef struct AgentxxPluginCancelIface {
     int (*is_cancelled)(const AgentxxPluginHost* host, AgentxxPluginStringView session_id);
 } AgentxxPluginCancelIface;
 
-/* ==================== 接口表: 任务规划 (agentxx.agent.planning) ==================== */
-
-#define AGENTXX_PLUGIN_IFACE_AGENT_PLANNING         "agentxx.agent.planning"
-#define AGENTXX_PLUGIN_IFACE_AGENT_PLANNING_VERSION 1
-
-typedef struct AgentxxPluginPlanningIface {
-    int version; ///< 必须 == AGENTXX_PLUGIN_IFACE_AGENT_PLANNING_VERSION
-
-    int (*set_planning)(
-        const AgentxxPluginHost* host,
-        AgentxxPluginStringView  session_id,
-        AgentxxPluginStringView  roadmap,
-        AgentxxPluginStringView  todos_json,
-        AgentxxPluginStringView  notes
-    );
-} AgentxxPluginPlanningIface;
-
 /* ==================== 接口表: 宿主提示词读写 (agentxx.agent.prompt) ==================== */
 
 #define AGENTXX_PLUGIN_IFACE_AGENT_PROMPT         "agentxx.agent.prompt"
@@ -545,9 +528,14 @@ typedef struct AgentxxPluginLogIface {
 } AgentxxPluginLogIface;
 
 /* ==================== 接口表: 会话资源贡献 (agentxx.agent.resources) ==================== */
+/* 注: 仅支持两类来源 —— 1) plugin.yaml 声明式段 (skill/memory/mcp, 见
+ * PluginManifestResources) 2) 插件初始化时 (agentxx_plugin_agent_create 内)
+ * 追加注册。初始化完成后资源冻结，后续固定不可变以防上下文变化；
+ * 运行时 register/unregister 在冻结后返回非 0 失败 (宿主日志 WARN)。
+ */
 
 #define AGENTXX_PLUGIN_IFACE_AGENT_RESOURCES         "agentxx.agent.resources"
-#define AGENTXX_PLUGIN_IFACE_AGENT_RESOURCES_VERSION 1
+#define AGENTXX_PLUGIN_IFACE_AGENT_RESOURCES_VERSION 2
 
 typedef struct AgentxxPluginResourcesIface {
     int version; ///< 必须 == AGENTXX_PLUGIN_IFACE_AGENT_RESOURCES_VERSION

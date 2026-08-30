@@ -230,8 +230,8 @@ asio::awaitable<void> CodeAgent::initMiddleware() {
         auto planningMiddleware
             = std::make_shared<agentxx::middleware::PlanningMiddlewareHandle>(agentContext);
         // 规划写入工具 (agentxx_planning_write) 已迁移至 agentxx_planning 插件
-        // (经 AgentxxPluginPlanningIface 写入 state); 此处仅记录句柄到上下文,
-        // 供插件系统与 system prompt 注入链路取用
+        // (经通用持久化+事件发布); 此处仅记录句柄到上下文,
+        // 供 system prompt 注入链路取用
         agentContext->planningMiddleware = planningMiddleware;
         agentContext->middlewareHandleContext->handles.push_back(planningMiddleware);
     }
