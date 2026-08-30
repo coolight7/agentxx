@@ -409,7 +409,9 @@ asio::awaitable<TestResult> run_plugin_tests() {
                 XX_TEST_EXPECT_TRUE(false);
                 co_return TestResult{g_plugin_passed, g_plugin_failed};
             }
-            for (int i = 0; i < 20 && !ctx->toolRegistry->contains("js_hello"); ++i) co_await sleepMs(50);
+            for (int i = 0; i < 20 && !ctx->toolRegistry->contains("js_hello"); ++i) {
+                co_await sleepMs(50);
+            }
             XX_TEST_EXPECT_TRUE(ctx->toolRegistry->contains("js_hello"));
             // 卸载引擎 → 级联卸载 example_js (依赖图: example_js depends 引擎)
             auto ok = co_await ctx->pluginManager->unloadAsync("agentxx_javascript_engine");
@@ -433,7 +435,9 @@ asio::awaitable<TestResult> run_plugin_tests() {
             XX_TEST_EXPECT_TRUE(engine3 != nullptr);
             auto js4 = co_await ctx->pluginManager->loadPluginAsync(jsDir);
             XX_TEST_EXPECT_TRUE(js4 != nullptr);
-            for (int i = 0; i < 20 && js4 && !ctx->toolRegistry->contains("js_hello"); ++i) co_await sleepMs(50);
+            for (int i = 0; i < 20 && js4 && !ctx->toolRegistry->contains("js_hello"); ++i) {
+                co_await sleepMs(50);
+            }
             if (js4) {
                 // 脚本内互查已由 plugin.js 顶层执行 (日志); 此处验证宿主侧 JSON
                 auto engineJson = ctx->pluginManager->getPluginJson("agentxx_javascript_engine");
@@ -499,9 +503,9 @@ asio::awaitable<TestResult> run_plugin_tests() {
             // (阻塞委托型同步垫片: execute 经 scheduler.offload 在宿主阻塞池
             // 线程执行, 与插件作者使用 agentxx_register_sync_tool 的真实路径一致)
             static AgentxxSyncToolSpec slowSpec;
-            slowSpec.name            = AGENTXX_PLUGIN_SV("slow_timeout_tool");
-            slowSpec.description     = AGENTXX_PLUGIN_SV("slow tool for unload race test");
-            slowSpec.parameters_json = AGENTXX_PLUGIN_SV("{}");
+            slowSpec.name            = agentxx_plugin_sv_cstr("slow_timeout_tool");
+            slowSpec.description     = agentxx_plugin_sv_cstr("slow tool for unload race test");
+            slowSpec.parameters_json = agentxx_plugin_sv_cstr("{}");
             // 阻塞委托型 execute: 在宿主阻塞池线程睡 600ms 后返回结果
             // (模拟不可中断的慢任务, 忽略 cancel_flag)
             slowSpec.execute = +[](void*,
@@ -606,7 +610,9 @@ asio::awaitable<TestResult> run_plugin_tests() {
         XX_TEST_EXPECT_TRUE(engine25 != nullptr);
         auto js25 = co_await ctx->pluginManager->loadPluginAsync(jsDir);
         XX_TEST_EXPECT_TRUE(js25 != nullptr);
-        for (int i = 0; i < 20 && js25 && !ctx->toolRegistry->contains("js_hello"); ++i) co_await sleepMs(50);
+        for (int i = 0; i < 20 && js25 && !ctx->toolRegistry->contains("js_hello"); ++i) {
+            co_await sleepMs(50);
+        }
         if (engine25 && js25) {
             ctx->pluginManager->disable("example_js"); // 用户手动禁用
             XX_TEST_EXPECT_FALSE(ctx->pluginManager->find("example_js")->enabled);
@@ -629,7 +635,9 @@ asio::awaitable<TestResult> run_plugin_tests() {
         XX_TEST_EXPECT_TRUE(engine26 != nullptr);
         auto js26 = co_await ctx->pluginManager->loadPluginAsync(jsDir);
         XX_TEST_EXPECT_TRUE(js26 != nullptr);
-        for (int i = 0; i < 10 && js26 && !ctx->toolRegistry->contains("js_hello"); ++i) co_await sleepMs(50);
+        for (int i = 0; i < 10 && js26 && !ctx->toolRegistry->contains("js_hello"); ++i) {
+            co_await sleepMs(50);
+        }
         ctx->pluginManager->shutdownAll();
         XX_TEST_EXPECT_TRUE(ctx->pluginManager->find("example_js") == nullptr);
         XX_TEST_EXPECT_TRUE(ctx->pluginManager->find("agentxx_javascript_engine") == nullptr);
@@ -650,7 +658,9 @@ asio::awaitable<TestResult> run_plugin_tests() {
         engCfg.enabled = true;
         cfgs.push_back(engCfg);
         co_await ctx->pluginManager->loadConfiguredPlugins(cfgs);
-        for (int i=0;i<20 && !ctx->toolRegistry->contains("js_hello");++i) co_await sleepMs(50);
+        for (int i = 0; i < 20 && !ctx->toolRegistry->contains("js_hello"); ++i) {
+            co_await sleepMs(50);
+        }
         // 两者都应加载成功 (拓扑排序保证引擎先加载)
         XX_TEST_EXPECT_TRUE(ctx->pluginManager->find("agentxx_javascript_engine") != nullptr);
         XX_TEST_EXPECT_TRUE(ctx->pluginManager->find("example_js") != nullptr);
@@ -784,20 +794,20 @@ asio::awaitable<TestResult> run_plugin_tests() {
             XX_TEST_EXPECT_TRUE(ev30 != nullptr && ev30->publish != nullptr);
             XX_TEST_EXPECT_EQ(
                 ev30 ? ev30->publish(
-                    &inst30->host,
-                    AGENTXX_PLUGIN_SV("demo.topic"),
-                    AGENTXX_PLUGIN_SV(R"({"k":"v"})")
-                )
+                           &inst30->host,
+                           agentxx_plugin_sv_cstr("demo.topic"),
+                           agentxx_plugin_sv_cstr(R"({"k":"v"})")
+                       )
                      : -1,
                 0
             );
             ctx->pluginManager->disable("example_plugin");
             // 禁用状态: 接口表 publish 拒绝 (返回非 0)
             int rc = ev30 ? ev30->publish(
-                         &inst30->host,
-                         AGENTXX_PLUGIN_SV("demo.topic"),
-                         AGENTXX_PLUGIN_SV(R"({"k":"v"})")
-                     )
+                                &inst30->host,
+                                agentxx_plugin_sv_cstr("demo.topic"),
+                                agentxx_plugin_sv_cstr(R"({"k":"v"})")
+                            )
                           : -1;
             XX_TEST_EXPECT_TRUE(rc != 0);
             co_await ctx->pluginManager->unloadAsync("example_plugin");
@@ -863,9 +873,9 @@ asio::awaitable<TestResult> run_plugin_tests() {
         // 31.2 异步工具两件套: 经 notify.done 上报完成
         {
             static AgentxxPluginToolSpec asyncSpec;
-            asyncSpec.name            = AGENTXX_PLUGIN_SV("async_notify_tool");
-            asyncSpec.description     = AGENTXX_PLUGIN_SV("async tool for notify test");
-            asyncSpec.parameters_json = AGENTXX_PLUGIN_SV("{}");
+            asyncSpec.name            = agentxx_plugin_sv_cstr("async_notify_tool");
+            asyncSpec.description     = agentxx_plugin_sv_cstr("async tool for notify test");
+            asyncSpec.parameters_json = agentxx_plugin_sv_cstr("{}");
             asyncSpec.execute_start   = +[](void*,
                                           AgentxxPluginStringView,
                                           AgentxxPluginStringView,
@@ -902,9 +912,9 @@ asio::awaitable<TestResult> run_plugin_tests() {
             s_cancelCalled                          = false;
             static CancelOp*             s_activeOp = nullptr;
             static AgentxxPluginToolSpec cSpec;
-            cSpec.name            = AGENTXX_PLUGIN_SV("async_cancel_tool");
-            cSpec.description     = AGENTXX_PLUGIN_SV("cancellable async tool for cancel test");
-            cSpec.parameters_json = AGENTXX_PLUGIN_SV("{}");
+            cSpec.name        = agentxx_plugin_sv_cstr("async_cancel_tool");
+            cSpec.description = agentxx_plugin_sv_cstr("cancellable async tool for cancel test");
+            cSpec.parameters_json = agentxx_plugin_sv_cstr("{}");
             cSpec.execute_start   = +[](void*,
                                       AgentxxPluginStringView,
                                       AgentxxPluginStringView,
@@ -968,10 +978,10 @@ asio::awaitable<TestResult> run_plugin_tests() {
         // 31.4 异常守卫: start() 违约抛 C++ 异常 → 宿主转失败终态 (不终止进程)
         {
             static AgentxxPluginToolSpec throwSpec;
-            throwSpec.name = AGENTXX_PLUGIN_SV("throwing_start_tool");
+            throwSpec.name = agentxx_plugin_sv_cstr("throwing_start_tool");
             throwSpec.description
-                = AGENTXX_PLUGIN_SV("tool whose start() throws (contract violation)");
-            throwSpec.parameters_json = AGENTXX_PLUGIN_SV("{}");
+                = agentxx_plugin_sv_cstr("tool whose start() throws (contract violation)");
+            throwSpec.parameters_json = agentxx_plugin_sv_cstr("{}");
             throwSpec.execute_start   = +[](void*,
                                           AgentxxPluginStringView,
                                           AgentxxPluginStringView,
@@ -1003,10 +1013,10 @@ asio::awaitable<TestResult> run_plugin_tests() {
         // 31.5 违约检测: start() 返回 NULL 且未 done 且无 error → 宿主按协议违约合成失败
         {
             static AgentxxPluginToolSpec nullSpec;
-            nullSpec.name = AGENTXX_PLUGIN_SV("null_start_tool");
+            nullSpec.name = agentxx_plugin_sv_cstr("null_start_tool");
             nullSpec.description
-                = AGENTXX_PLUGIN_SV("tool whose start() returns NULL without done");
-            nullSpec.parameters_json = AGENTXX_PLUGIN_SV("{}");
+                = agentxx_plugin_sv_cstr("tool whose start() returns NULL without done");
+            nullSpec.parameters_json = agentxx_plugin_sv_cstr("{}");
             nullSpec.execute_start   = +[](void*,
                                          AgentxxPluginStringView,
                                          AgentxxPluginStringView,

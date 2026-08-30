@@ -49,9 +49,10 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_agent_g
         [&]() -> const AgentxxPluginInfo* {
             static const AgentxxPluginInfo info{
                 AGENTXX_PLUGIN_API_VERSION,
-                AGENTXX_PLUGIN_SV("example_js"),
-                AGENTXX_PLUGIN_SV("1.0.0"),
-                AGENTXX_PLUGIN_SV("Example JS plugin (C++ shell + JS via interpreter.js capability)"
+                agentxx_plugin_sv_cstr("example_js"),
+                agentxx_plugin_sv_cstr("1.0.0"),
+                agentxx_plugin_sv_cstr(
+                    "Example JS plugin (C++ shell + JS via interpreter.js capability)"
                 ),
             };
             return &info;
@@ -84,7 +85,8 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                 s_if.log->log(host, 4, agentxx_plugin_sv(msg.data(), msg.size()));
             };
 
-            if (!s_if.capabilities->has_capability(host, AGENTXX_PLUGIN_SV("interpreter.js"))) {
+            if (!s_if.capabilities
+                     ->has_capability(host, agentxx_plugin_sv_cstr("interpreter.js"))) {
                 logE("example_js: interpreter.js capability not available");
                 return -1;
             }
@@ -98,7 +100,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                 char* v = s_if.json->json_get_string(
                     host,
                     agentxx_plugin_sv_cstr(info),
-                    AGENTXX_PLUGIN_SV(key)
+                    agentxx_plugin_sv_cstr(key)
                 );
                 if (!v) {
                     return {};
@@ -148,15 +150,20 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                 host->vtable->free(escPath);
             }
             char* err = nullptr;
-            auto* h = s_if.capabilities->invoke_capability_async(
+            auto* h   = s_if.capabilities->invoke_capability_async(
                 host,
-                AGENTXX_SV("interpreter.js"),
-                AGENTXX_SV("load"),
+                agentxx_plugin_sv_cstr("interpreter.js"),
+                agentxx_plugin_sv_cstr("load"),
                 agentxx_plugin_sv(args.data(), args.size()),
-                nullptr, nullptr, &err);
+                nullptr,
+                nullptr,
+                &err
+            );
             if (!h) {
                 std::string errStr = err ? err : "load script async dispatch failed";
-                if (err) host->vtable->free(err);
+                if (err) {
+                    host->vtable->free(err);
+                }
                 logE(std::string("example_js: ") + errStr);
                 return -1;
             }
@@ -184,16 +191,26 @@ extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_agent_destroy(void* plugin_
                     agentxx_plugin_sv(ctx->name.data(), ctx->name.size())
                 );
                 std::string args = std::string("{\"name\":") + (esc ? esc : "\"\"") + "}";
-                if (esc) host->vtable->free(esc);
+                if (esc) {
+                    host->vtable->free(esc);
+                }
                 char* err = nullptr;
-                auto* h = ctx->iface.capabilities->invoke_capability_async(
+                auto* h   = ctx->iface.capabilities->invoke_capability_async(
                     host,
-                    AGENTXX_SV("interpreter.js"),
-                    AGENTXX_SV("unload"),
+                    agentxx_plugin_sv_cstr("interpreter.js"),
+                    agentxx_plugin_sv_cstr("unload"),
                     agentxx_plugin_sv(args.data(), args.size()),
-                    nullptr, nullptr, &err);
-                if (!h) { if(err) host->vtable->free(err); }
-                else if (err) host->vtable->free(err);
+                    nullptr,
+                    nullptr,
+                    &err
+                );
+                if (!h) {
+                    if (err) {
+                        host->vtable->free(err);
+                    }
+                } else if (err) {
+                    host->vtable->free(err);
+                }
             }
             delete ctx;
         }

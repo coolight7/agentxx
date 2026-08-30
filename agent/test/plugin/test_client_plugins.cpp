@@ -435,10 +435,10 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         const auto wire = agentxx::plugin::ClientIfaces::query(&inst->host).wire;
         XX_TEST_EXPECT_TRUE(wire != nullptr && wire->send_plugin_data != nullptr);
         int rc = wire ? wire->send_plugin_data(
-                     &inst->host,
-                     AGENTXX_PLUGIN_SV("rebuild"),
-                     AGENTXX_PLUGIN_SV(R"({"x":1})")
-                 )
+                            &inst->host,
+                            agentxx_plugin_sv_cstr("rebuild"),
+                            agentxx_plugin_sv_cstr(R"({"x":1})")
+                        )
                       : -1;
         XX_TEST_EXPECT_EQ(rc, 0);
     }
@@ -820,11 +820,11 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 };
                 const auto events11 = agentxx::plugin::ClientIfaces::query(&okInst->host).events;
                 auto       sub      = events11 ? events11->subscribe(
-                               &okInst->host,
-                               AGENTXX_CLIENT_EVT_READY,
-                               readyFn,
-                               &readyPayload
-                           )
+                                          &okInst->host,
+                                          AGENTXX_CLIENT_EVT_READY,
+                                          readyFn,
+                                          &readyPayload
+                                      )
                                                : nullptr;
                 XX_TEST_EXPECT_TRUE(sub != nullptr);
                 mgr->onReady();

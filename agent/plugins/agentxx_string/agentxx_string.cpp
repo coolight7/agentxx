@@ -82,9 +82,11 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_agent_g
         [&]() -> const AgentxxPluginInfo* {
             static const AgentxxPluginInfo info{
                 AGENTXX_PLUGIN_API_VERSION,
-                AGENTXX_PLUGIN_SV("agentxx_string"),
-                AGENTXX_PLUGIN_SV("1.0.0"),
-                AGENTXX_PLUGIN_SV("String tools: regex operations and html to markdown conversion"),
+                agentxx_plugin_sv_cstr("agentxx_string"),
+                agentxx_plugin_sv_cstr("1.0.0"),
+                agentxx_plugin_sv_cstr(
+                    "String tools: regex operations and html to markdown conversion"
+                ),
             };
             return &info;
         }

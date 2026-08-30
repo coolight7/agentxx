@@ -317,9 +317,9 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_agent_g
         [&]() -> const AgentxxPluginInfo* {
             static const AgentxxPluginInfo info{
                 AGENTXX_PLUGIN_API_VERSION,
-                AGENTXX_PLUGIN_SV("agentxx_filesystem"),
-                AGENTXX_PLUGIN_SV("1.0.0"),
-                AGENTXX_PLUGIN_SV("File system tools: list, read, write, edit, glob, grep"),
+                agentxx_plugin_sv_cstr("agentxx_filesystem"),
+                agentxx_plugin_sv_cstr("1.0.0"),
+                agentxx_plugin_sv_cstr("File system tools: list, read, write, edit, glob, grep"),
             };
             return &info;
         }

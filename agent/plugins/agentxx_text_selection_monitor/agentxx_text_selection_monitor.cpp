@@ -98,7 +98,7 @@ bool TextSelectionHolder::start(int debounceMs) {
                 );
                 ctx->iface.events->publish(
                     ctx->host,
-                    AGENTXX_PLUGIN_SV("agentxx_text_selection_monitor.selection"),
+                    agentxx_plugin_sv_cstr("agentxx_text_selection_monitor.selection"),
                     agentxx_plugin_sv(payload.data(), payload.size())
                 );
             } catch (...) {
@@ -121,9 +121,9 @@ void TextSelectionHolder::stop() {
 extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_agent_get_info(void) {
     static const AgentxxPluginInfo info{
         AGENTXX_PLUGIN_API_VERSION,
-        AGENTXX_PLUGIN_SV("agentxx_text_selection_monitor"),
-        AGENTXX_PLUGIN_SV("1.0.0"),
-        AGENTXX_PLUGIN_SV("System-wide text selection monitor event stream"),
+        agentxx_plugin_sv_cstr("agentxx_text_selection_monitor"),
+        agentxx_plugin_sv_cstr("1.0.0"),
+        agentxx_plugin_sv_cstr("System-wide text selection monitor event stream"),
     };
     return &info;
 }

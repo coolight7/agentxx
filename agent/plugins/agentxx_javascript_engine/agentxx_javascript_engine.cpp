@@ -166,7 +166,7 @@ public:
         if (host && host->vtable && host->vtable->query_interface) {
             logIface_ = static_cast<const AgentxxPluginLogIface*>(host->vtable->query_interface(
                 host,
-                AGENTXX_PLUGIN_SV(AGENTXX_PLUGIN_IFACE_AGENT_LOG)
+                agentxx_plugin_sv_cstr(AGENTXX_PLUGIN_IFACE_AGENT_LOG)
             ));
         }
     }
@@ -1527,9 +1527,9 @@ JSValue JsEngine::bridgeCall(
                 = (magic == B_ADD_SKILL_DIR)
                       ? iface.resources->register_skill_dir(host, agentxx_plugin_sv_cstr(p.c_str()))
                       : iface.resources->register_memory_file(
-                          host,
-                          agentxx_plugin_sv_cstr(p.c_str())
-                      );
+                            host,
+                            agentxx_plugin_sv_cstr(p.c_str())
+                        );
             if (rc != 0) {
                 return throwJsError(ctx, "register failed (conflict or unsupported): " + p);
             }
@@ -1625,9 +1625,9 @@ JSValue JsEngine::bridgeCall(
 extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_agent_get_info(void) {
     static const AgentxxPluginInfo info{
         AGENTXX_PLUGIN_API_VERSION,
-        AGENTXX_PLUGIN_SV("agentxx_javascript_engine"),
-        AGENTXX_PLUGIN_SV("1.0.0"),
-        AGENTXX_PLUGIN_SV("JS interpreter plugin (QuickJS): hosts type:js plugins"),
+        agentxx_plugin_sv_cstr("agentxx_javascript_engine"),
+        agentxx_plugin_sv_cstr("1.0.0"),
+        agentxx_plugin_sv_cstr("JS interpreter plugin (QuickJS): hosts type:js plugins"),
     };
     return &info;
 }
@@ -1719,8 +1719,8 @@ static void* jsCapStart(
                     }
                     std::string tools   = engine->loadedToolsJsonOnJsThread(name);
                     char*       payload = eh ? eh->vtable->strdup(
-                                        ("{\"ok\": true, \"tools\": " + tools + "}").c_str()
-                                    )
+                                             ("{\"ok\": true, \"tools\": " + tools + "}").c_str()
+                                         )
                                              : nullptr;
                     ntfCopy.done(ntfCopy.host_ud, AGENTXX_PLUGIN_OPERATOR_OK, payload);
                 })) {
@@ -1793,7 +1793,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
             // unload 内联完成 (fire-and-forget)
             int rc = s_if.capabilities->register_capability_ex(
                 host,
-                AGENTXX_PLUGIN_SV("interpreter.js"),
+                agentxx_plugin_sv_cstr("interpreter.js"),
                 &jsCapStart,
                 nullptr,
                 engine
@@ -1807,7 +1807,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
             s_if.log->log(
                 host,
                 2,
-                AGENTXX_PLUGIN_SV("agentxx_javascript_engine loaded (QuickJS interpreter.js)")
+                agentxx_plugin_sv_cstr("agentxx_javascript_engine loaded (QuickJS interpreter.js)")
             );
             *plugin_ctx = engine; ///< 所有权移交宿主 (destroy 时取回归还)
             return 0;
@@ -1825,7 +1825,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_agent_destroy(void* plugin_
     if (ownHost && ownHost->vtable && ownHost->vtable->query_interface) {
         ownLog = static_cast<const AgentxxPluginLogIface*>(ownHost->vtable->query_interface(
             ownHost,
-            AGENTXX_PLUGIN_SV(AGENTXX_PLUGIN_IFACE_AGENT_LOG)
+            agentxx_plugin_sv_cstr(AGENTXX_PLUGIN_IFACE_AGENT_LOG)
         ));
     }
     agentxx::plugin_guard::guardCallVoid(

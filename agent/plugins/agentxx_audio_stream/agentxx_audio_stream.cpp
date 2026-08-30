@@ -128,7 +128,7 @@ bool AudioStreamHolder::start(
             );
             ctx->iface.events->publish(
                 ctx->host,
-                AGENTXX_PLUGIN_SV("agentxx_audio_stream.audio"),
+                agentxx_plugin_sv_cstr("agentxx_audio_stream.audio"),
                 agentxx_plugin_sv(payload.data(), payload.size())
             );
         } catch (...) {
@@ -150,9 +150,9 @@ void AudioStreamHolder::stop() {
 extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_agent_get_info(void) {
     static const AgentxxPluginInfo info{
         AGENTXX_PLUGIN_API_VERSION,
-        AGENTXX_PLUGIN_SV("agentxx_audio_stream"),
-        AGENTXX_PLUGIN_SV("1.0.0"),
-        AGENTXX_PLUGIN_SV(
+        agentxx_plugin_sv_cstr("agentxx_audio_stream"),
+        agentxx_plugin_sv_cstr("1.0.0"),
+        agentxx_plugin_sv_cstr(
             "System audio stream capture event stream (WASAPI loopback/mic on Windows)"
         ),
     };

@@ -122,10 +122,10 @@ static std::string formatUsageText(const agentxx_system_monitor_plugin::CpuGpuUs
 extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_agent_get_info(void) {
     static const AgentxxPluginInfo info{
         AGENTXX_PLUGIN_API_VERSION,
-        AGENTXX_PLUGIN_SV("agentxx_system_monitor"),
-        AGENTXX_PLUGIN_SV("1.0.0"),
-        AGENTXX_PLUGIN_SV("System resource monitor: CPU/memory/GPU usage tool and "
-                          "agentxx.system_usage capability"),
+        agentxx_plugin_sv_cstr("agentxx_system_monitor"),
+        agentxx_plugin_sv_cstr("1.0.0"),
+        agentxx_plugin_sv_cstr("System resource monitor: CPU/memory/GPU usage tool and "
+                               "agentxx.system_usage capability"),
     };
     return &info;
 }
@@ -187,7 +187,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
             if (ctx->iface.events && ctx->iface.events->subscribe) {
                 ctx->iface.events->subscribe(
                     host,
-                    AGENTXX_PLUGIN_SV("client.agentxx_system_monitor.usage_enabled"),
+                    agentxx_plugin_sv_cstr("client.agentxx_system_monitor.usage_enabled"),
                     [](AgentxxPluginStringView event_json, void* ud) {
                         auto* c = static_cast<PluginCtx*>(ud);
                         if (!c) {
@@ -212,7 +212,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                 // 客户端接入/重连时立即发布一次状态快照 (修复初始状态滞留为空)
                 ctx->iface.events->subscribe(
                     host,
-                    AGENTXX_PLUGIN_SV("agentxx_host.client_attached"),
+                    agentxx_plugin_sv_cstr("agentxx_host.client_attached"),
                     [](AgentxxPluginStringView, void* ud) {
                         auto* c = static_cast<PluginCtx*>(ud);
                         if (!c || !c->usageEnabled.load(std::memory_order_relaxed)) {
@@ -235,7 +235,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                                     std::string json = usageToJson(*u);
                                     c->iface.events->publish(
                                         c->host,
-                                        AGENTXX_PLUGIN_SV("agentxx_system_monitor.usage"),
+                                        agentxx_plugin_sv_cstr("agentxx_system_monitor.usage"),
                                         agentxx_plugin_sv(json.data(), json.size())
                                     );
                                 }
@@ -268,7 +268,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                             if (c.iface.events && c.iface.events->publish) {
                                 c.iface.events->publish(
                                     c.host,
-                                    AGENTXX_PLUGIN_SV("agentxx_system_monitor.usage"),
+                                    agentxx_plugin_sv_cstr("agentxx_system_monitor.usage"),
                                     agentxx_plugin_sv(json.data(), json.size())
                                 );
                             }
@@ -386,8 +386,8 @@ static void refreshUsageDisplay(ClientCtx& ctx) {
     if (!ctx.section && ctx.ui && ctx.ui->register_info_section) {
         ctx.section = ctx.ui->register_info_section(
             ctx.host,
-            AGENTXX_PLUGIN_SV("agentxx_system_monitor.usage"),
-            AGENTXX_PLUGIN_SV(R"({"title":"System"})")
+            agentxx_plugin_sv_cstr("agentxx_system_monitor.usage"),
+            agentxx_plugin_sv_cstr(R"({"title":"System"})")
         );
     }
     if (!ctx.section || !ctx.ui || !ctx.ui->update_info_section || ctx.last_usage_json.empty()) {
@@ -464,7 +464,7 @@ static char* cmdSysinfoExecute(void* ud, AgentxxPluginStringView args_json, char
                 std::string payload = next ? R"({"enabled":true})" : R"({"enabled":false})";
                 ctx->iface.wire->send_plugin_data(
                     ctx->host,
-                    AGENTXX_PLUGIN_SV("usage_enabled"),
+                    agentxx_plugin_sv_cstr("usage_enabled"),
                     agentxx_plugin_sv(payload.data(), payload.size())
                 );
             }
@@ -515,9 +515,10 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxClientPluginInfo* agentxx_plugin_c
 ) {
     static const AgentxxClientPluginInfo info{
         AGENTXX_CLIENT_PLUGIN_API_VERSION,
-        AGENTXX_PLUGIN_SV("agentxx_system_monitor"),
-        AGENTXX_PLUGIN_SV("1.0.0"),
-        AGENTXX_PLUGIN_SV("System resource usage: Info section (CPU/RAM/GPU), /sysinfo toggle"),
+        agentxx_plugin_sv_cstr("agentxx_system_monitor"),
+        agentxx_plugin_sv_cstr("1.0.0"),
+        agentxx_plugin_sv_cstr("System resource usage: Info section (CPU/RAM/GPU), /sysinfo toggle"
+        ),
     };
     return &info;
 }
@@ -546,8 +547,8 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
             if (ctx->ui && ctx->ui->register_info_section) {
                 ctx->section = ctx->ui->register_info_section(
                     host,
-                    AGENTXX_PLUGIN_SV("agentxx_system_monitor.usage"),
-                    AGENTXX_PLUGIN_SV(R"({"title":"System"})")
+                    agentxx_plugin_sv_cstr("agentxx_system_monitor.usage"),
+                    agentxx_plugin_sv_cstr(R"({"title":"System"})")
                 );
             }
 
@@ -564,8 +565,8 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
             if (ctx->ui && ctx->ui->register_command) {
                 if (ctx->ui->register_command(
                         host,
-                        AGENTXX_PLUGIN_SV("sysinfo"),
-                        AGENTXX_PLUGIN_SV(
+                        agentxx_plugin_sv_cstr("sysinfo"),
+                        agentxx_plugin_sv_cstr(
                             "Toggle system resource info display (CPU/RAM/GPU Info section)"
                         ),
                         cmdSysinfoExecute,
@@ -578,7 +579,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
 
             if (ctx->iface.log && ctx->iface.log->log) {
                 ctx->iface.log
-                    ->log(host, 2, AGENTXX_PLUGIN_SV("agentxx_system_monitor client loaded"));
+                    ->log(host, 2, agentxx_plugin_sv_cstr("agentxx_system_monitor client loaded"));
             }
             *plugin_ctx = ctx.release();
             return 0;
@@ -604,14 +605,14 @@ extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_client_destroy(void* plugin
                 ctx->section = nullptr;
             }
             if (ctx->ui && ctx->ui->unregister_command) {
-                ctx->ui->unregister_command(ctx->host, AGENTXX_PLUGIN_SV("sysinfo"));
+                ctx->ui->unregister_command(ctx->host, agentxx_plugin_sv_cstr("sysinfo"));
             }
             ctx->last_usage_json.clear();
             if (ctx->iface.log && ctx->iface.log->log) {
                 ctx->iface.log->log(
                     ctx->host,
                     2,
-                    AGENTXX_PLUGIN_SV("agentxx_system_monitor client unloaded")
+                    agentxx_plugin_sv_cstr("agentxx_system_monitor client unloaded")
                 );
             }
             delete ctx;

@@ -34,9 +34,10 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_agent_g
         [&]() -> const AgentxxPluginInfo* {
             static const AgentxxPluginInfo info{
                 AGENTXX_PLUGIN_API_VERSION,
-                AGENTXX_PLUGIN_SV("agentxx_rag_search"),
-                AGENTXX_PLUGIN_SV("1.0.0"),
-                AGENTXX_PLUGIN_SV("RAG semantic search over configured docs paths (embedding based)"
+                agentxx_plugin_sv_cstr("agentxx_rag_search"),
+                agentxx_plugin_sv_cstr("1.0.0"),
+                agentxx_plugin_sv_cstr(
+                    "RAG semantic search over configured docs paths (embedding based)"
                 ),
             };
             return &info;

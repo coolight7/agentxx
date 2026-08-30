@@ -60,7 +60,7 @@
 /// - 字符串约定:
 ///   - 所有跨边界"字符串参数/字段"类型为 AgentxxPluginStringView (data+size,
 ///     不要求 NUL 结尾, 生命周期仅覆盖本次调用); 便捷构造见
-///     agentxx_plugin_sv / agentxx_plugin_sv_cstr / AGENTXX_PLUGIN_SV
+///     agentxx_plugin_sv / agentxx_plugin_sv_cstr / agentxx_plugin_sv_cstr
 ///   - 所有"宿主分配"的字符串返回值 (工具结果 / error_out / payload /
 ///     strdup/list_plugins/get_plugin/... ) 仍为 char* (NUL 结尾, host->alloc),
 ///     调用方用完必须 host->free
@@ -115,8 +115,6 @@ static inline AgentxxPluginStringView agentxx_plugin_sv_cstr(const char* s) {
 static inline int agentxx_plugin_sv_empty(AgentxxPluginStringView sv) {
     return sv.data == NULL || sv.size == 0;
 }
-
-#define AGENTXX_PLUGIN_SV(s) agentxx_plugin_sv_cstr((s))
 
 /// ==================== 插件元信息 ====================
 
@@ -252,7 +250,7 @@ struct AgentxxPluginHost {
 };
 
 #define AGENTXX_PLUGIN_QUERY_IFACE(host, IfaceType, iid_name) \
-    ((const IfaceType*)(host)->vtable->query_interface((host), AGENTXX_PLUGIN_SV(iid_name)))
+    ((const IfaceType*)(host)->vtable->query_interface((host), agentxx_plugin_sv_cstr(iid_name)))
 
 /* ==================== 接口表: 工具 (agentxx.agent.tools) ==================== */
 

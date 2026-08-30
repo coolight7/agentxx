@@ -92,9 +92,9 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_agent_g
         [&]() -> const AgentxxPluginInfo* {
             static const AgentxxPluginInfo info{
                 AGENTXX_PLUGIN_API_VERSION,
-                AGENTXX_PLUGIN_SV("example_resources"),
-                AGENTXX_PLUGIN_SV("1.0.0"),
-                AGENTXX_PLUGIN_SV(
+                agentxx_plugin_sv_cstr("example_resources"),
+                agentxx_plugin_sv_cstr("1.0.0"),
+                agentxx_plugin_sv_cstr(
                     "Example plugin contributing skill/memory/mcp resources "
                     "(declarative manifest + runtime agentxx.agent.resources interface)"
                 ),
@@ -141,13 +141,15 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                     ctx->iface.log->log(
                         host,
                         3,
-                        AGENTXX_PLUGIN_SV("[example_resources] register runtime skill dir failed")
+                        agentxx_plugin_sv_cstr(
+                            "[example_resources] register runtime skill dir failed"
+                        )
                     );
                 } else {
                     ctx->iface.log->log(
                         host,
                         2,
-                        AGENTXX_PLUGIN_SV(
+                        agentxx_plugin_sv_cstr(
                             "[example_resources] runtime skill dir registered: skills_runtime/"
                         )
                     );

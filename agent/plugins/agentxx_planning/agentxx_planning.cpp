@@ -265,7 +265,7 @@ void publishPlanningEvent(PluginCtx& ctx, const std::string& planJson) {
     }
     ctx.iface.events->publish(
         ctx.host,
-        AGENTXX_PLUGIN_SV("agentxx_planning.planning"),
+        agentxx_plugin_sv_cstr("agentxx_planning.planning"),
         agentxx_plugin_sv(planJson.data(), planJson.size())
     );
 }
@@ -314,9 +314,9 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_agent_g
         [&]() -> const AgentxxPluginInfo* {
             static const AgentxxPluginInfo info{
                 AGENTXX_PLUGIN_API_VERSION,
-                AGENTXX_PLUGIN_SV("agentxx_planning"),
-                AGENTXX_PLUGIN_SV("1.1.0"),
-                AGENTXX_PLUGIN_SV(
+                agentxx_plugin_sv_cstr("agentxx_planning"),
+                agentxx_plugin_sv_cstr("1.1.0"),
+                agentxx_plugin_sv_cstr(
                     "Two-level task planning tool (write/read modes) + client-side Plan rendering"
                 ),
             };
@@ -434,12 +434,12 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                                                                                                                          = argsStr.empty(
                                                                                                                            )
                                                                                                                                ? neograph::
-                                                                                                                                   json::object(
-                                                                                                                                   )
+                                                                                                                                     json::object(
+                                                                                                                                     )
                                                                                                                                : neograph::
-                                                                                                                                   json::parse(
-                                                                                                                                       argsStr
-                                                                                                                                   );
+                                                                                                                                     json::parse(
+                                                                                                                                         argsStr
+                                                                                                                                     );
 
                                                                                                                      const auto
                                                                                                                          mode
@@ -673,7 +673,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                     if (ctx->iface.events && ctx->iface.events->subscribe) {
                         if (!ctx->iface.events->subscribe(
                                 host,
-                                AGENTXX_PLUGIN_SV("agentxx_host.client_attached"),
+                                agentxx_plugin_sv_cstr("agentxx_host.client_attached"),
                                 on_client_attached,
                                 ctx.get()
                             )) {
@@ -941,8 +941,8 @@ static void ensureSection(ClientCtx& ctx) {
     }
     ctx.section = ctx.ui->register_info_section(
         ctx.host,
-        AGENTXX_PLUGIN_SV(kSectionId),
-        AGENTXX_PLUGIN_SV(R"({"title":"Plan"})")
+        agentxx_plugin_sv_cstr(kSectionId),
+        agentxx_plugin_sv_cstr(R"({"title":"Plan"})")
     );
 }
 
@@ -1081,21 +1081,24 @@ static void on_client_plugin_data(AgentxxPluginStringView payload_json, void* ud
         }
         char*      plugin = ctx->iface.json && ctx->iface.json->json_get_string
                                 ? ctx->iface.json->json_get_string(
-                               ctx->host,
-                               payload_json,
-                               AGENTXX_PLUGIN_SV("plugin")
-                           )
+                                 ctx->host,
+                                 payload_json,
+                                 agentxx_plugin_sv_cstr("plugin")
+                             )
                                 : nullptr;
         char*      event  = ctx->iface.json && ctx->iface.json->json_get_string
                                 ? ctx->iface.json->json_get_string(
-                              ctx->host,
-                              payload_json,
-                              AGENTXX_PLUGIN_SV("event")
-                          )
+                                ctx->host,
+                                payload_json,
+                                agentxx_plugin_sv_cstr("event")
+                            )
                                 : nullptr;
         char*      data   = ctx->iface.json && ctx->iface.json->json_get_string
-                                ? ctx->iface.json
-                               ->json_get_string(ctx->host, payload_json, AGENTXX_PLUGIN_SV("data"))
+                                ? ctx->iface.json->json_get_string(
+                               ctx->host,
+                               payload_json,
+                               agentxx_plugin_sv_cstr("data")
+                           )
                                 : nullptr;
         const bool mine   = plugin && event && data && std::strcmp(plugin, "agentxx_planning") == 0
                           && std::strcmp(event, "planning") == 0;
@@ -1231,9 +1234,9 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxClientPluginInfo* agentxx_plugin_c
         [&]() -> const AgentxxClientPluginInfo* {
             static const AgentxxClientPluginInfo info{
                 AGENTXX_CLIENT_PLUGIN_API_VERSION,
-                AGENTXX_PLUGIN_SV("agentxx_planning"),
-                AGENTXX_PLUGIN_SV("1.1.0"),
-                AGENTXX_PLUGIN_SV(
+                agentxx_plugin_sv_cstr("agentxx_planning"),
+                agentxx_plugin_sv_cstr("1.1.0"),
+                agentxx_plugin_sv_cstr(
                     "Plan rendering driven entirely by plugin: message decor + sidebar overview"
                 ),
             };
@@ -1294,7 +1297,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
 
             if (ctx->iface.log && ctx->iface.log->log) {
                 ctx->iface.log
-                    ->log(host, 2, AGENTXX_PLUGIN_SV("agentxx_planning client plugin loaded"));
+                    ->log(host, 2, agentxx_plugin_sv_cstr("agentxx_planning client plugin loaded"));
             }
             *plugin_ctx = ctx.release(); ///< 所有权移交宿主 (destroy 时取回归还)
             return 0;
@@ -1313,8 +1316,11 @@ extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_client_destroy(void* plugin
         // 主动反注册段落 (装饰由宿主卸载路径自动摘除; 成员判空遵循扩展表契约)
         clearSection(*ctx);
         if (ctx->iface.log && ctx->iface.log->log) {
-            ctx->iface.log
-                ->log(ctx->host, 2, AGENTXX_PLUGIN_SV("agentxx_planning client plugin unloaded"));
+            ctx->iface.log->log(
+                ctx->host,
+                2,
+                agentxx_plugin_sv_cstr("agentxx_planning client plugin unloaded")
+            );
         }
         delete ctx;
     });
