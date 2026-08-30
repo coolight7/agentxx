@@ -67,12 +67,24 @@ extern \"C\" void agentxx_plugin_agent_builtin_destroy_${PLUGIN_NAME}(void* plug
   return()
 endif()
 
+if (NOT TARGET agentxx_util)
+  # 独立构建本插件时经安装 config 导入; 内置合并模式 (经 libagentxx 构建)
+  # 下 util 目标已存在于宿主工程, 跳过导入 (此时 install 目录尚未生成 config)
+  find_package(agentxx_util REQUIRED)
+endif()
 # ===== 独立动态库编译 (默认) =====
 add_library(${PLUGIN_NAME} SHARED
   example_resources.cpp
 )
 target_include_directories(${PLUGIN_NAME} PRIVATE
   "${AGENTXX_LIB_INCLUDE_DIR}"           # agentxx/plugin/plugin_api.h
+  "${AGENTXX_INSTALL_DIR}/include/"      # fmt
+)
+target_link_directories(${PLUGIN_NAME} PRIVATE
+  "${AGENTXX_INSTALL_DIR}/lib/"
+)
+target_link_libraries(${PLUGIN_NAME} PRIVATE
+  agentxx_util
 )
 set_target_properties(${PLUGIN_NAME} PROPERTIES
   PREFIX "lib"

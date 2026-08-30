@@ -351,6 +351,20 @@ MessageListComponent::MessageListComponent(TUICtx& ctx) :
     };
     runSpinner_ = std::make_shared<SpinnerComponent>(std::move(spinnerCfg));
     Add(runSpinner_);
+
+    // 初始化加载提示的加载动画 (startupProgress 行首 "~" → 旋转点阵):
+    // - 与 runSpinner_/输入框前缀同款 braille 帧, 门槛同为 High;
+    //   等级不足时 buildBanner 回退静态 "~"
+    // - isActive 仅在 Connecting 且存在启动进度文本时为真, 避免空转
+    SpinnerComponent::Config startupCfg;
+    startupCfg.requiredLevel = AnimationLevel::High;
+    startupCfg.isActive      = [this] {
+        return ctx_.frameState && ctx_.frameState->connState == ConnState::Connecting
+               && !ctx_.frameState->startupProgress.empty();
+    };
+    // decorate 留空: buildBanner 按 theme.accentColor 在外部着色 (与原 "~" 一致)
+    startupSpinner_ = std::make_shared<SpinnerComponent>(std::move(startupCfg));
+    Add(startupSpinner_);
 }
 
 void MessageListComponent::invalidateCache() {
@@ -602,6 +616,9 @@ uint64_t MessageListComponent::itemKey(size_t index) {
         for (const char c : st.startupProgress) {
             h = combine(h, static_cast<uint64_t>(static_cast<uint8_t>(c)));
         }
+        // 动画等级切换 (High 阈值) 影响 banner 首字符形态 ("~" ↔ spinner 帧):
+        // 计入 key 使缓存失效重建, 避免等级热切换后仍显示旧形态的缓存快照
+        h = combine(h, (startupSpinner_ && startupSpinner_->animationEnabled()) ? 1ULL : 0ULL);
         return h;
     }
     if (index < st.messages.size()) {
@@ -891,8 +908,14 @@ LazyBuiltItem MessageListComponent::buildItem(size_t index) {
     const auto& st = *ctx_.frameState;
     if (st.messages.empty() && !hasStreamingToken(st)) {
         LazyBuiltItem out;
-        out.element   = buildBanner();
-        out.cacheable = true;
+        out.element = buildBanner();
+        // 启动进度行使用加载动画时不可缓存: 缓存命中的旧 Element 是静止帧快照,
+        // 点阵不会随动画推进转动; 每帧重建仅此一条 banner, 成本可忽略。
+        // 动画等级不足 (静态 "~") 时保持可缓存, 与原行为一致
+        const bool bannerAnimating = startupSpinner_ && startupSpinner_->animationEnabled()
+                                     && st.connState == ConnState::Connecting
+                                     && !st.startupProgress.empty();
+        out.cacheable = !bannerAnimating;
         return out;
     }
     if (index < st.messages.size()) {
@@ -927,14 +950,25 @@ Element MessageListComponent::buildBanner() {
     switch (st.connState) {
         case ConnState::Connecting: {
             Elements els;
-            els.push_back(text("输入消息将在连接完成后自动发送") | color(theme.hintColor) | center);
-            els.push_back(text("server-io 正在启动中 ...") | color(theme.hintColor) | center);
+            els.push_back(text("server-io 正在启动中...") | color(theme.hintColor) | center);
             if (!st.startupProgress.empty()) {
-                // 当前正在执行的启动步骤 (agent 线程逐步上报)
-                els.push_back(
-                    text(fmt::format("~ {}", st.startupProgress)) | color(theme.accentColor)
-                    | center
-                );
+                // 当前正在执行的启动步骤 (agent 线程逐步上报):
+                // 动画等级 >= High 时行首 "~" 替换为 braille 旋转加载动画,
+                // 等级不足时保持静态 "~" (与 runSpinner_/输入框前缀同门槛)
+                if (startupSpinner_ && startupSpinner_->animationEnabled()) {
+                    els.push_back(
+                        hbox({
+                            startupSpinner_->Render() | color(theme.accentColor),
+                            text(" " + st.startupProgress) | color(theme.accentColor),
+                        })
+                        | center
+                    );
+                } else {
+                    els.push_back(
+                        text(fmt::format("~ {}", st.startupProgress)) | color(theme.accentColor)
+                        | center
+                    );
+                }
             }
             statusLine = vbox(std::move(els));
             break;

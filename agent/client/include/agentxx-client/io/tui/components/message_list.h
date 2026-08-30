@@ -331,6 +331,12 @@ private:
     /// decorate 留空: 渲染处按消息角色 (tool/thinking 颜色) 在外部着色
     std::shared_ptr<SpinnerComponent> runSpinner_;
 
+    /// 初始化加载提示的加载动画 (Connecting 状态 startupProgress 行首):
+    /// - requiredLevel=High: 动画等级不足时降级为静态 "~" (与需求一致)
+    /// - isActive 绑定 Connecting 且 startupProgress 非空 (仅启动阶段运行)
+    /// - 注册为子项以接收 OnAnimation, 与 runSpinner_ 同款 braille 点阵
+    std::shared_ptr<SpinnerComponent> startupSpinner_;
+
     // ---- 流式增量 markdown 渲染器 ----
     // 流式输出期间避免每帧对整段累积文本全量重解析 (O(n^2) -> 稳定块缓存 O(n)):
     // 已闭合的顶层块作为独立可缓存子项 (LazyScrollable 仅布局可见子项, 避免
