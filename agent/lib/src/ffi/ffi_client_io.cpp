@@ -14,7 +14,7 @@
 namespace agentxx {
 namespace ffi {
 
-FfiClientAgentIO::FfiClientAgentIO(asio::any_io_executor ex, AgentxxCallbacks callbacks) :
+FfiClientAgentIO::FfiClientAgentIO(asio::any_io_executor ex, AgentxxFFICallbacks callbacks) :
     ex_(std::move(ex)),
     callbacks_(callbacks) {}
 
@@ -57,7 +57,7 @@ void FfiClientAgentIO::notifyError(int code, std::string message) {
         neograph::json j = neograph::json::object();
         j["code"]        = code;
         j["message"]     = message;
-        emitEvent(AGENTXX_EVT_ERROR, dump(j));
+        emitEvent(AGENTXX_FFI_EVT_ERROR, dump(j));
     };
     if (isOnClientThread()) {
         emit();
@@ -122,16 +122,16 @@ void FfiClientAgentIO::failAllPendingInterrupts() {
 // ---------------------------------------------------------------------------
 
 void FfiClientAgentIO::onDelta(const agent::WireDelta& delta) {
-    emitEvent(AGENTXX_EVT_DELTA, dump(agent::io::makeDeltaMsg(delta)));
+    emitEvent(AGENTXX_FFI_EVT_DELTA, dump(agent::io::makeDeltaMsg(delta)));
 }
 
 void FfiClientAgentIO::onSync(const agent::WireSyncPayload& payload) {
-    emitEvent(AGENTXX_EVT_SYNC, dump(agent::io::syncToJson(payload)));
+    emitEvent(AGENTXX_FFI_EVT_SYNC, dump(agent::io::syncToJson(payload)));
 }
 
 void FfiClientAgentIO::onTurnResult(const agent::WireTurnResult& result) {
     emitEvent(
-        AGENTXX_EVT_TURN_END,
+        AGENTXX_FFI_EVT_TURN_END,
         dump(agent::io::makeTurnResult(
             result.sessionId,
             result.hasError,
@@ -148,7 +148,7 @@ void FfiClientAgentIO::onContextStats(const agent::WireContextStats& stats) {
         return;
     }
     emitEvent(
-        AGENTXX_EVT_CONTEXT_STATS,
+        AGENTXX_FFI_EVT_CONTEXT_STATS,
         dump(agent::io::makeContextStats(stats.contextTokens, stats.maxContextTokens, stats.tps))
     );
 }
@@ -156,7 +156,7 @@ void FfiClientAgentIO::onContextStats(const agent::WireContextStats& stats) {
 void FfiClientAgentIO::onServerReady() {
     neograph::json j = neograph::json::object();
     j["sessionId"]   = sessionId_;
-    emitEvent(AGENTXX_EVT_READY, dump(j));
+    emitEvent(AGENTXX_FFI_EVT_READY, dump(j));
 }
 
 void FfiClientAgentIO::onPeerMessage(agent::WireMessage msg) {
@@ -176,9 +176,9 @@ void FfiClientAgentIO::onPeerMessage(agent::WireMessage msg) {
                 j["node"]        = m.node;
                 j["value"]       = m.value;
                 j["argJson"]     = m.argJson;
-                emitEvent(AGENTXX_EVT_INTERRUPT_REQ, dump(j));
+                emitEvent(AGENTXX_FFI_EVT_INTERRUPT_REQ, dump(j));
 
-                // 挂起等待宿主 agentxx_interrupt_respond
+                // 挂起等待宿主 agentxx_ffi_interrupt_respond
                 auto self = shared_from_this();
                 asio::co_spawn(
                     ex_,
@@ -202,10 +202,10 @@ void FfiClientAgentIO::onPeerMessage(agent::WireMessage msg) {
                 }
                 neograph::json j = neograph::json::object();
                 j["interruptId"] = m.id;
-                emitEvent(AGENTXX_EVT_INTERRUPT_EXPIRED, dump(j));
+                emitEvent(AGENTXX_FFI_EVT_INTERRUPT_EXPIRED, dump(j));
             } else if constexpr (std::is_same_v<T, agent::WireModelInfo>) {
                 auto j = agent::io::makeModelInfo(m.currentModel, m.models);
-                emitEvent(AGENTXX_EVT_MODEL_INFO, dump(j));
+                emitEvent(AGENTXX_FFI_EVT_MODEL_INFO, dump(j));
                 if (onSyncReply) {
                     onSyncReply(SyncKind::ModelInfo, std::move(j));
                 }
@@ -221,16 +221,16 @@ void FfiClientAgentIO::onPeerMessage(agent::WireMessage msg) {
                 }
             } else if constexpr (std::is_same_v<T, agent::WireAppendComponentInfo>) {
                 emitEvent(
-                    AGENTXX_EVT_COMPONENTS,
+                    AGENTXX_FFI_EVT_COMPONENTS,
                     dump(agent::io::makeAppendComponentInfo(m.notifications))
                 );
             } else if constexpr (std::is_same_v<T, agent::WirePluginData>) {
-                emitEvent(AGENTXX_EVT_PLUGIN_DATA, dump(agent::io::makePluginData(m)));
+                emitEvent(AGENTXX_FFI_EVT_PLUGIN_DATA, dump(agent::io::makePluginData(m)));
             } else if constexpr (std::is_same_v<T, agent::WireError>) {
                 neograph::json j = neograph::json::object();
                 j["code"]        = m.code;
                 j["message"]     = m.message;
-                emitEvent(AGENTXX_EVT_ERROR, dump(j));
+                emitEvent(AGENTXX_FFI_EVT_ERROR, dump(j));
             } else {
                 agent::AgentIOBase::onPeerMessage(agent::WireMessage{std::move(m)});
             }
@@ -264,7 +264,7 @@ asio::awaitable<std::pair<bool, neograph::json>>
     co_return std::make_pair(gotResp, std::move(result));
 }
 
-void FfiClientAgentIO::emitEvent(AgentxxEventType type, std::string json) {
+void FfiClientAgentIO::emitEvent(AgentxxFFIEventType type, std::string json) {
     if (callbacks_.on_event == nullptr) {
         return; // headless
     }

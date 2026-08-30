@@ -1,12 +1,12 @@
 /// AgentClient —— libagentxx C API 的 Dart 面向对象封装。
 ///
 /// 线程/并发模型 (与 C++ FFI 层契约对应):
-/// - 事件经 "异步安全事件队列桥接" 接收: 创建时把 AgentxxCallbacks.on_event
-///   指向导出符号 `agentxx_event_queue_on_event`, user_data 指向队列句柄。
+/// - 事件经 "异步安全事件队列桥接" 接收: 创建时把 AgentxxFFICallbacks.on_event
+///   指向导出符号 `agentxx_ffi_event_queue_on_event`, user_data 指向队列句柄。
 ///   原生 io 线程在回调内同步拷贝 payload 入队, 本类随后台轮询循环取出并
 ///   解析为 [AgentEvent] 广播到 [events] 流 —— 全程无悬垂指针风险
 ///   (直接用 NativeCallable.listener 会因 "payload 仅回调期间有效" 而悬垂)。
-/// - 同步查询 (get_model_info 等) 直接转发原生调用; 返回字符串经 agentxx_free
+/// - 同步查询 (get_model_info 等) 直接转发原生调用; 返回字符串经 agentxx_ffi_free
 ///   释放。同一句柄同一时刻仅允许一个在途同步查询 (见 ffi_api.h 注释)。
 /// - stop/destroy 必须在回调线程以外调用 —— Dart 主 isolate 天然满足。
 library;
@@ -53,10 +53,10 @@ class AgentClient {
   late final bind.AgentxxFfiBindings _bind;
 
   /// 事件队列句柄 (异步安全桥接; 见文件头注释)
-  Pointer<bind.AgentxxEventQueue>? _queue;
+  Pointer<bind.AgentxxFFIEventQueue>? _queue;
 
   /// 运行时句柄
-  Pointer<bind.AgentxxAgent> _handle = nullptr;
+  Pointer<bind.AgentxxFFIAgent> _handle = nullptr;
 
   bool _running = false;
   Future<void> _pollFuture = Future.value();
@@ -93,21 +93,20 @@ class AgentClient {
       throw StateError('请先订阅 events 流再 start (否则会丢失 READY 前事件)');
     }
 
-    _queue = _bind.agentxx_event_queue_create();
+    _queue = _bind.agentxx_ffi_event_queue_create();
     final q = _queue;
     if (q == null || q == nullptr) {
-      throw const AgentxxException(bind.AGENTXX_ERR_OOM, '创建事件队列失败');
+      throw const AgentxxException(bind.AGENTXX_FFI_ERR_OOM, '创建事件队列失败');
     }
 
-
-    // 注册事件队列桥接: on_event = 导出符号 agentxx_event_queue_on_event,
-    // 签名与 AgentxxCallbacks.on_event 完全一致, user_data = 队列句柄。
+    // 注册事件队列桥接: on_event = 导出符号 agentxx_ffi_event_queue_on_event,
+    // 签名与 AgentxxFFICallbacks.on_event 完全一致, user_data = 队列句柄。
     // 原生侧 create 时对 callbacks "值拷贝", 故临时 cb 结构可随即释放。
     final trampoline = _lib.lookup<
         NativeFunction<
-            Void Function(
-                UnsignedInt, Pointer<Char>, Pointer<Void>)>>('agentxx_event_queue_on_event');
-    final cb = calloc<bind.AgentxxCallbacks>();
+            Void Function(UnsignedInt, Pointer<Char>,
+                Pointer<Void>)>>('agentxx_ffi_event_queue_on_event');
+    final cb = calloc<bind.AgentxxFFICallbacks>();
     try {
       cb.ref.on_event = trampoline;
       cb.ref.user_data = Pointer<Void>.fromAddress(q.address);
@@ -116,16 +115,16 @@ class AgentClient {
       final created = withUtf8(_nullIfEmpty(configJson), (configPtr) {
         return withUtf8(_nullIfEmpty(modelJson), (modelPtr) {
           return _withLog((logPtr) =>
-              _bind.agentxx_create(configPtr, modelPtr, cb, logPtr));
+              _bind.agentxx_ffi_create(configPtr, modelPtr, cb, logPtr));
         });
       });
       final (handle, log) = created;
       if (handle == nullptr) {
         // create 失败清理: 队列一并释放, 恢复可重试状态
-        _bind.agentxx_event_queue_free(q);
+        _bind.agentxx_ffi_event_queue_free(q);
         _queue = null;
         throw AgentxxException(
-          bind.AGENTXX_ERR_INIT,
+          bind.AGENTXX_FFI_ERR_INIT,
           log ?? 'create 失败 (未返回句柄)',
         );
       }
@@ -137,30 +136,26 @@ class AgentClient {
     // 异步启动: 立即受理, 就绪经 EVT_READY / 启动失败经 EVT_ERROR 上报
     try {
       final (startRc, startLog) =
-          _withLog((logPtr) => _bind.agentxx_start(_handle, logPtr));
-      if (startRc != bind.AGENTXX_OK) {
+          _withLog((logPtr) => _bind.agentxx_ffi_start(_handle, logPtr));
+      if (startRc != bind.AGENTXX_FFI_OK) {
         throw AgentxxException(startRc, startLog ?? 'start 受理失败');
       }
     } on Object {
       // 失败清理: 销毁句柄与事件队列, 恢复到可重试的初始状态 (不吞异常)
       if (_handle != nullptr) {
-        _bind.agentxx_destroy(_handle, nullptr);
+        _bind.agentxx_ffi_destroy(_handle, nullptr);
         _handle = nullptr;
       }
       final q = _queue;
       if (q != null && q != nullptr) {
-        _bind.agentxx_event_queue_free(q);
+        _bind.agentxx_ffi_event_queue_free(q);
         _queue = null;
       }
       rethrow;
     }
 
     // READY 后记录 sessionId (供 switch_session 等使用)
-    events
-        .where((e) => e is ReadyEvent)
-        .cast<ReadyEvent>()
-        .take(1)
-        .listen((e) {
+    events.where((e) => e is ReadyEvent).cast<ReadyEvent>().take(1).listen((e) {
       sessionId = e.sessionId;
       if (!_readyCompleter.isCompleted) {
         _readyCompleter.complete();
@@ -183,13 +178,13 @@ class AgentClient {
     await _pollFuture;
 
     if (_handle != nullptr) {
-      _bind.agentxx_stop(_handle, nullptr);
-      _bind.agentxx_destroy(_handle, nullptr);
+      _bind.agentxx_ffi_stop(_handle, nullptr);
+      _bind.agentxx_ffi_destroy(_handle, nullptr);
       _handle = nullptr;
     }
     final q = _queue;
     if (q != null && q != nullptr) {
-      _bind.agentxx_event_queue_free(q);
+      _bind.agentxx_ffi_event_queue_free(q);
       _queue = null;
     }
     await _eventsController.close();
@@ -202,9 +197,11 @@ class AgentClient {
   /// 发送用户输入 (READY 前发送会被服务端缓存, 就绪后按序消费)
   void sendInput(String text) {
     _checkHandle('发送输入');
-    final (rc, log) = withUtf8(text,
-        (textPtr) => _withLog((logPtr) => _bind.agentxx_send_input(_handle, textPtr, logPtr)));
-    if (rc != bind.AGENTXX_OK) {
+    final (rc, log) = withUtf8(
+        text,
+        (textPtr) => _withLog((logPtr) =>
+            _bind.agentxx_ffi_send_input(_handle, textPtr, logPtr)));
+    if (rc != bind.AGENTXX_FFI_OK) {
       throw AgentxxException(rc, log ?? '发送输入失败');
     }
   }
@@ -212,8 +209,9 @@ class AgentClient {
   /// 取消当前轮次
   void cancel() {
     _checkHandle('取消轮次');
-    final (rc, log) = _withLog((logPtr) => _bind.agentxx_cancel(_handle, logPtr));
-    if (rc != bind.AGENTXX_OK) {
+    final (rc, log) =
+        _withLog((logPtr) => _bind.agentxx_ffi_cancel(_handle, logPtr));
+    if (rc != bind.AGENTXX_FFI_OK) {
       throw AgentxxException(rc, log ?? '取消当前轮次失败');
     }
   }
@@ -223,9 +221,9 @@ class AgentClient {
     _checkHandle('切换模型');
     final (rc, log) = withUtf8(
         modelName,
-        (namePtr) =>
-            _withLog((logPtr) => _bind.agentxx_select_model(_handle, namePtr, logPtr)));
-    if (rc != bind.AGENTXX_OK) {
+        (namePtr) => _withLog((logPtr) =>
+            _bind.agentxx_ffi_select_model(_handle, namePtr, logPtr)));
+    if (rc != bind.AGENTXX_FFI_OK) {
       throw AgentxxException(rc, log ?? '切换模型失败');
     }
   }
@@ -235,9 +233,9 @@ class AgentClient {
     _checkHandle('记住权限');
     final (rc, log) = withUtf8(
         path,
-        (pathPtr) => _withLog((logPtr) =>
-            _bind.agentxx_set_permission(_handle, pathPtr, allow ? 1 : 0, op, logPtr)));
-    if (rc != bind.AGENTXX_OK) {
+        (pathPtr) => _withLog((logPtr) => _bind.agentxx_ffi_set_permission(
+            _handle, pathPtr, allow ? 1 : 0, op, logPtr)));
+    if (rc != bind.AGENTXX_FFI_OK) {
       throw AgentxxException(rc, log ?? '记住权限失败');
     }
   }
@@ -245,9 +243,11 @@ class AgentClient {
   /// 切换会话 (需开启持久化; 结果经 Sync/ModelInfo/ContextStats 事件回推)
   void switchSession(String sid) {
     _checkHandle('切换会话');
-    final (rc, log) = withUtf8(sid,
-        (sidPtr) => _withLog((logPtr) => _bind.agentxx_switch_session(_handle, sidPtr, logPtr)));
-    if (rc != bind.AGENTXX_OK) {
+    final (rc, log) = withUtf8(
+        sid,
+        (sidPtr) => _withLog((logPtr) =>
+            _bind.agentxx_ffi_switch_session(_handle, sidPtr, logPtr)));
+    if (rc != bind.AGENTXX_FFI_OK) {
       throw AgentxxException(rc, log ?? '切换会话失败');
     }
   }
@@ -257,9 +257,9 @@ class AgentClient {
     _checkHandle('应答中断');
     final (rc, log) = withUtf8(
         valuesJson,
-        (valuesPtr) => _withLog(
-            (logPtr) => _bind.agentxx_interrupt_respond(_handle, interruptId, valuesPtr, logPtr)));
-    if (rc != bind.AGENTXX_OK) {
+        (valuesPtr) => _withLog((logPtr) => _bind.agentxx_ffi_interrupt_respond(
+            _handle, interruptId, valuesPtr, logPtr)));
+    if (rc != bind.AGENTXX_FFI_OK) {
       throw AgentxxException(rc, log ?? '应答中断失败');
     }
   }
@@ -271,25 +271,25 @@ class AgentClient {
   String? lastQueryError;
 
   Map<String, dynamic>? getModelInfo() =>
-      _syncQuery((h, log) => _bind.agentxx_get_model_info(h, log));
+      _syncQuery((h, log) => _bind.agentxx_ffi_get_model_info(h, log));
 
   Map<String, dynamic>? getContextMessages() =>
-      _syncQuery((h, log) => _bind.agentxx_get_context_messages(h, log));
+      _syncQuery((h, log) => _bind.agentxx_ffi_get_context_messages(h, log));
 
   Map<String, dynamic>? listSessions() =>
-      _syncQuery((h, log) => _bind.agentxx_list_sessions(h, log));
+      _syncQuery((h, log) => _bind.agentxx_ffi_list_sessions(h, log));
 
   /// 取走积压日志 (排障用): [{"level","message"},...]
   List<dynamic>? drainLogs() {
     if (_handle == nullptr) {
       return null;
     }
-    final p = _bind.agentxx_drain_logs(_handle, nullptr);
+    final p = _bind.agentxx_ffi_drain_logs(_handle, nullptr);
     if (p == nullptr) {
       return null;
     }
     final text = _readCString(p);
-    _bind.agentxx_free(p.cast<Void>());
+    _bind.agentxx_ffi_free(p.cast<Void>());
     try {
       final v = jsonDecode(text);
       return v is List ? v : null;
@@ -314,7 +314,9 @@ class AgentClient {
   }
 
   Map<String, dynamic>? _syncQuery(
-    Pointer<Char> Function(Pointer<bind.AgentxxAgent>, Pointer<Pointer<Char>>) fn,
+    Pointer<Char> Function(
+            Pointer<bind.AgentxxFFIAgent>, Pointer<Pointer<Char>>)
+        fn,
   ) {
     if (_handle == nullptr) {
       lastQueryError = '未启动';
@@ -329,7 +331,7 @@ class AgentClient {
         return null;
       }
       final text = _readCString(result);
-      _bind.agentxx_free(result.cast<Void>());
+      _bind.agentxx_ffi_free(result.cast<Void>());
       try {
         final v = jsonDecode(text);
         return v is Map<String, dynamic> ? v : {'raw': text};
@@ -366,21 +368,21 @@ class AgentClient {
         var queueEmpty = false;
         while (drained < maxBatchPerYield) {
           // timeout=0: 非阻塞探测, 排空当前积压即止
-          final rc = _bind.agentxx_event_queue_pop(q, typeOut, jsonOut, 0);
+          final rc = _bind.agentxx_ffi_event_queue_pop(q, typeOut, jsonOut, 0);
           switch (rc) {
-            case bind.AGENTXX_OK:
+            case bind.AGENTXX_FFI_OK:
               final payload =
                   jsonOut.value == nullptr ? '' : _readCString(jsonOut.value);
               if (jsonOut.value != nullptr) {
-                _bind.agentxx_free(jsonOut.value.cast<Void>());
+                _bind.agentxx_ffi_free(jsonOut.value.cast<Void>());
               }
               final event = parseAgentEvent(typeOut.value, payload);
               if (event != null && !_eventsController.isClosed) {
                 _eventsController.add(event);
               }
               drained++;
-            case bind.AGENTXX_ERR_TIMEOUT:
-            case bind.AGENTXX_ERR_STATE:
+            case bind.AGENTXX_FFI_ERR_TIMEOUT:
+            case bind.AGENTXX_FFI_ERR_STATE:
               queueEmpty = true;
             default:
               // INVALID 等意外错误: 上报并结束轮询避免死循环
@@ -413,7 +415,7 @@ class AgentClient {
       // 以 AgentxxException 而非 StateError 抛出: 交互层统一按可恢复错误
       // 捕获展示 (与 dispose 竞态时不至于因未捕获异常终止进程)
       throw AgentxxException(
-          bind.AGENTXX_ERR_STATE, 'AgentClient 未启动或已销毁, 无法执行: $what');
+          bind.AGENTXX_FFI_ERR_STATE, 'AgentClient 未启动或已销毁, 无法执行: $what');
     }
   }
 
@@ -455,14 +457,14 @@ class AgentClient {
     return utf8.decode(p.cast<Uint8>().asTypedList(len), allowMalformed: true);
   }
 
-  /// 读取并以 agentxx_free 释放 char** log 出参内容; 无内容时返回 null
+  /// 读取并以 agentxx_ffi_free 释放 char** log 出参内容; 无内容时返回 null
   String? _takeLog(Pointer<Pointer<Char>> logPtr) {
     final p = logPtr.value;
     if (p == nullptr) {
       return null;
     }
     final s = _readCString(p);
-    _bind.agentxx_free(p.cast<Void>());
+    _bind.agentxx_ffi_free(p.cast<Void>());
     return s;
   }
 }

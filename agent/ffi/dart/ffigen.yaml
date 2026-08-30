@@ -22,37 +22,37 @@ compiler-opts:
 llvm-path:
 functions:
   include: # 精确放行 ffi_api.h 全部导出符号, 保证导出面收敛于契约
-    - 'agentxx_malloc'
-    - 'agentxx_free'
-    - 'agentxx_strdup_n'
+    - 'agentxx_ffi_malloc'
+    - 'agentxx_ffi_free'
+    - 'agentxx_ffi_strdup_n'
     - 'agentxx_ffi_api_version'
     - 'agentxx_ffi_library_version'
     - 'agentxx_ffi_strerror'
-    - 'agentxx_create'
-    - 'agentxx_start'
-    - 'agentxx_stop'
-    - 'agentxx_destroy'
-    - 'agentxx_send_input'
-    - 'agentxx_cancel'
-    - 'agentxx_select_model'
-    - 'agentxx_set_permission'
-    - 'agentxx_switch_session'
-    - 'agentxx_get_model_info'
-    - 'agentxx_get_context_messages'
-    - 'agentxx_list_sessions'
-    - 'agentxx_interrupt_respond'
-    - 'agentxx_drain_logs'
+    - 'agentxx_ffi_create'
+    - 'agentxx_ffi_start'
+    - 'agentxx_ffi_stop'
+    - 'agentxx_ffi_destroy'
+    - 'agentxx_ffi_send_input'
+    - 'agentxx_ffi_cancel'
+    - 'agentxx_ffi_select_model'
+    - 'agentxx_ffi_set_permission'
+    - 'agentxx_ffi_switch_session'
+    - 'agentxx_ffi_get_model_info'
+    - 'agentxx_ffi_get_context_messages'
+    - 'agentxx_ffi_list_sessions'
+    - 'agentxx_ffi_interrupt_respond'
+    - 'agentxx_ffi_drain_logs'
     # 异步安全事件队列桥接 (ffi_api.h "异步安全事件队列" 节)
-    - 'agentxx_event_queue_create'
-    - 'agentxx_event_queue_free'
-    - 'agentxx_event_queue_on_event'
-    - 'agentxx_event_queue_pop'
+    - 'agentxx_ffi_event_queue_create'
+    - 'agentxx_ffi_event_queue_free'
+    - 'agentxx_ffi_event_queue_on_event'
+    - 'agentxx_ffi_event_queue_pop'
 structs:
   include:
-    - 'AgentxxCallbacks'
+    - 'AgentxxFFICallbacks'
 enums:
   include:
-    - 'AgentxxEventType'
+    - 'AgentxxFFIEventType'
 unnamed-enums:
   include:
     - 'AGENTXX_(OK|ERR_.*).*' # 错误码宏常量
@@ -63,7 +63,7 @@ preamble: |
   // 再生命令: 在本目录执行 `dart run ffigen` (配置见同目录 ffigen.yaml)。
   // 使用前应以 apiVersion 校验 AGENTXX_FFI_API_VERSION 契约一致性。
   // ---------------------------------------------------------------------------
-# C 枚举整型宽度由实现定义 (ffi_api.h 的 AgentxxEventType 实际为 int32);
+# C 枚举整型宽度由实现定义 (ffi_api.h 的 AgentxxFFIEventType 实际为 int32);
 # ffigen 按主流编译器尺寸模拟映射为 Int32, 显式确认以消除警告
 silence-enum-warning: true
 sort: true

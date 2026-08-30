@@ -1,6 +1,6 @@
 /// agent 事件模型 —— FFI 事件 payload (wire 协议 JSON) 的 Dart 侧解析。
 ///
-/// 事件种类对应 ffi_api.h 的 AgentxxEventType; 各 payload 字段与服务端
+/// 事件种类对应 ffi_api.h 的 AgentxxFFIEventType; 各 payload 字段与服务端
 /// wire 协议一致 (agent/lib/include/agentxx/agent/io/wire_protocol.h):
 /// - delta: {"kind","seq","text","msgId","tool_name","tool_call_id",
 ///           "arguments","result","hasError","tipType",...}
@@ -92,7 +92,8 @@ class PluginDataEvent extends AgentEvent {
 
 /// HIL 中断输入项 (InterruptHandleArg::InterruptHandleInputItem 对应)
 class InterruptInputItem {
-  InterruptInputItem._(this.label, this.depict, this.type, this.defaultValue, this.enumValues);
+  InterruptInputItem._(
+      this.label, this.depict, this.type, this.defaultValue, this.enumValues);
 
   factory InterruptInputItem.fromJson(Map<String, dynamic> j) {
     return InterruptInputItem._(
@@ -184,7 +185,8 @@ class ErrorEvent extends AgentEvent {
 AgentEvent? parseAgentEvent(int typeValue, String payloadJson) {
   Map<String, dynamic> json;
   try {
-    final decoded = jsonDecode(payloadJson.isEmpty || payloadJson.trim().isEmpty ? '{}' : payloadJson);
+    final decoded = jsonDecode(
+        payloadJson.isEmpty || payloadJson.trim().isEmpty ? '{}' : payloadJson);
     if (decoded is! Map<String, dynamic>) {
       return null;
     }
@@ -193,24 +195,29 @@ AgentEvent? parseAgentEvent(int typeValue, String payloadJson) {
     return null;
   }
 
-  final bind.AgentxxEventType type;
+  final bind.AgentxxFFIEventType type;
   try {
-    type = bind.AgentxxEventType.fromValue(typeValue);
+    type = bind.AgentxxFFIEventType.fromValue(typeValue);
   } on ArgumentError {
     return null; // 未知事件种类 (新版本动态库新增): 忽略
   }
 
   return switch (type) {
-    bind.AgentxxEventType.AGENTXX_EVT_READY => ReadyEvent(json),
-    bind.AgentxxEventType.AGENTXX_EVT_SYNC => SyncEvent(json),
-    bind.AgentxxEventType.AGENTXX_EVT_DELTA => DeltaEvent(json),
-    bind.AgentxxEventType.AGENTXX_EVT_TURN_END => TurnEndEvent(json),
-    bind.AgentxxEventType.AGENTXX_EVT_CONTEXT_STATS => ContextStatsEvent(json),
-    bind.AgentxxEventType.AGENTXX_EVT_MODEL_INFO => ModelInfoEvent(json),
-    bind.AgentxxEventType.AGENTXX_EVT_COMPONENTS => ComponentsEvent(json),
-    bind.AgentxxEventType.AGENTXX_EVT_INTERRUPT_REQ => InterruptReqEvent(json),
-    bind.AgentxxEventType.AGENTXX_EVT_INTERRUPT_EXPIRED => InterruptExpiredEvent(json),
-    bind.AgentxxEventType.AGENTXX_EVT_PLUGIN_DATA => PluginDataEvent(json),
-    bind.AgentxxEventType.AGENTXX_EVT_ERROR => ErrorEvent(json),
+    bind.AgentxxFFIEventType.AGENTXX_FFI_EVT_READY => ReadyEvent(json),
+    bind.AgentxxFFIEventType.AGENTXX_FFI_EVT_SYNC => SyncEvent(json),
+    bind.AgentxxFFIEventType.AGENTXX_FFI_EVT_DELTA => DeltaEvent(json),
+    bind.AgentxxFFIEventType.AGENTXX_FFI_EVT_TURN_END => TurnEndEvent(json),
+    bind.AgentxxFFIEventType.AGENTXX_FFI_EVT_CONTEXT_STATS =>
+      ContextStatsEvent(json),
+    bind.AgentxxFFIEventType.AGENTXX_FFI_EVT_MODEL_INFO => ModelInfoEvent(json),
+    bind.AgentxxFFIEventType.AGENTXX_FFI_EVT_COMPONENTS =>
+      ComponentsEvent(json),
+    bind.AgentxxFFIEventType.AGENTXX_FFI_EVT_INTERRUPT_REQ =>
+      InterruptReqEvent(json),
+    bind.AgentxxFFIEventType.AGENTXX_FFI_EVT_INTERRUPT_EXPIRED =>
+      InterruptExpiredEvent(json),
+    bind.AgentxxFFIEventType.AGENTXX_FFI_EVT_PLUGIN_DATA =>
+      PluginDataEvent(json),
+    bind.AgentxxFFIEventType.AGENTXX_FFI_EVT_ERROR => ErrorEvent(json),
   };
 }

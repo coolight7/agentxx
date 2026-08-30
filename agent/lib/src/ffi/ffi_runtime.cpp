@@ -158,10 +158,10 @@ std::string FfiAgentRuntime::generateSessionId() {
 }
 
 std::shared_ptr<FfiAgentRuntime> FfiAgentRuntime::create(
-    const char*             config_json,
-    const char*             model_json,
-    const AgentxxCallbacks* cb,
-    std::string&            err
+    const char*                config_json,
+    const char*                model_json,
+    const AgentxxFFICallbacks* cb,
+    std::string&               err
 ) {
     auto rt = std::shared_ptr<FfiAgentRuntime>(new FfiAgentRuntime());
     if (cb != nullptr) {
@@ -352,7 +352,7 @@ int FfiAgentRuntime::start(std::string& err) {
     State expected = State::Created;
     if (!state_.compare_exchange_strong(expected, State::Starting)) {
         err = "状态错误: 仅 Created 状态可 start";
-        return AGENTXX_ERR_STATE;
+        return AGENTXX_FFI_ERR_STATE;
     }
 
     clientIoCtx_        = std::make_shared<asio::io_context>();
@@ -426,7 +426,7 @@ int FfiAgentRuntime::start(std::string& err) {
         self->clientIO_->sendToPeer(agent::WireGetModel{self->sessionId_});
     });
 
-    return AGENTXX_OK;
+    return AGENTXX_FFI_OK;
 }
 
 asio::awaitable<void> FfiAgentRuntime::runAgentMain() {
@@ -439,7 +439,7 @@ asio::awaitable<void> FfiAgentRuntime::runAgentMain() {
         [self = shared_from_this()](std::string errmsg) -> asio::awaitable<bool> {
             XX_LOGE("[ffi] agent init failed: {}", errmsg);
             self->clientIO_->notifyError(
-                AGENTXX_ERR_INIT,
+                AGENTXX_FFI_ERR_INIT,
                 fmt::format("agent init failed: {}", errmsg)
             );
             self->state_ = State::Failed;
@@ -552,19 +552,19 @@ void FfiAgentRuntime::stopInternal() {
 int FfiAgentRuntime::stop(std::string& err) {
     if (isOnAnyIoThread()) {
         err = "不能在 agent/client io 线程 (事件回调) 内调用 stop; 请从宿主线程调用";
-        return AGENTXX_ERR_STATE;
+        return AGENTXX_FFI_ERR_STATE;
     }
     stopInternal();
-    return AGENTXX_OK;
+    return AGENTXX_FFI_OK;
 }
 
 int FfiAgentRuntime::destroy(std::string& err) {
     if (isOnAnyIoThread()) {
         err = "不能在 agent/client io 线程 (事件回调) 内调用 destroy; 请从宿主线程调用";
-        return AGENTXX_ERR_STATE;
+        return AGENTXX_FFI_ERR_STATE;
     }
     stopInternal();
-    return AGENTXX_OK;
+    return AGENTXX_FFI_OK;
 }
 
 // ---------------------------------------------------------------------------
@@ -582,11 +582,11 @@ bool stateUsable(FfiAgentRuntime::State s) {
 int FfiAgentRuntime::sendInput(std::string_view text, std::string& err) {
     if (!stateUsable(state())) {
         err = "状态错误: 未启动或已停止";
-        return AGENTXX_ERR_STATE;
+        return AGENTXX_FFI_ERR_STATE;
     }
     if (text.empty()) {
         err = "输入文本为空";
-        return AGENTXX_ERR_INVALID;
+        return AGENTXX_FFI_ERR_INVALID;
     }
     auto clientIO = clientIO_;
     auto tid      = sessionId_;
@@ -597,30 +597,30 @@ int FfiAgentRuntime::sendInput(std::string_view text, std::string& err) {
             clientIO->sendToPeer(agent::WireUserInput{std::move(tid), std::move(text)});
         }
     );
-    return AGENTXX_OK;
+    return AGENTXX_FFI_OK;
 }
 
 int FfiAgentRuntime::cancel(std::string& err) {
     if (!stateUsable(state())) {
         err = "状态错误: 未启动或已停止";
-        return AGENTXX_ERR_STATE;
+        return AGENTXX_FFI_ERR_STATE;
     }
     auto clientIO = clientIO_;
     auto tid      = sessionId_;
     asio::post(*clientIoCtx_, [clientIO, tid = std::move(tid)]() mutable {
         clientIO->sendToPeer(agent::WireCancel{std::move(tid)});
     });
-    return AGENTXX_OK;
+    return AGENTXX_FFI_OK;
 }
 
 int FfiAgentRuntime::selectModel(std::string_view modelName, std::string& err) {
     if (!stateUsable(state())) {
         err = "状态错误: 未启动或已停止";
-        return AGENTXX_ERR_STATE;
+        return AGENTXX_FFI_ERR_STATE;
     }
     if (modelName.empty()) {
         err = "模型名为空";
-        return AGENTXX_ERR_INVALID;
+        return AGENTXX_FFI_ERR_INVALID;
     }
     auto clientIO = clientIO_;
     auto tid      = sessionId_;
@@ -628,17 +628,17 @@ int FfiAgentRuntime::selectModel(std::string_view modelName, std::string& err) {
     asio::post(*clientIoCtx_, [clientIO, tid = std::move(tid), model = std::move(model)]() mutable {
         clientIO->sendToPeer(agent::WireSelectModel{std::move(tid), std::move(model)});
     });
-    return AGENTXX_OK;
+    return AGENTXX_FFI_OK;
 }
 
 int FfiAgentRuntime::setPermission(std::string_view path, int allow, int op, std::string& err) {
     if (!stateUsable(state())) {
         err = "状态错误: 未启动或已停止";
-        return AGENTXX_ERR_STATE;
+        return AGENTXX_FFI_ERR_STATE;
     }
     if (path.empty()) {
         err = "路径为空";
-        return AGENTXX_ERR_INVALID;
+        return AGENTXX_FFI_ERR_INVALID;
     }
     auto clientIO = clientIO_;
     auto tid      = sessionId_;
@@ -654,17 +654,17 @@ int FfiAgentRuntime::setPermission(std::string_view path, int allow, int op, std
             });
         }
     );
-    return AGENTXX_OK;
+    return AGENTXX_FFI_OK;
 }
 
 int FfiAgentRuntime::switchSession(std::string_view sessionId, std::string& err) {
     if (!stateUsable(state())) {
         err = "状态错误: 未启动或已停止";
-        return AGENTXX_ERR_STATE;
+        return AGENTXX_FFI_ERR_STATE;
     }
     if (sessionId.empty()) {
         err = "sessionId 为空";
-        return AGENTXX_ERR_INVALID;
+        return AGENTXX_FFI_ERR_INVALID;
     }
     auto clientIO = clientIO_;
     auto newTid   = std::string{sessionId};
@@ -673,7 +673,7 @@ int FfiAgentRuntime::switchSession(std::string_view sessionId, std::string& err)
         clientIO->setSessionId(newTid);
         clientIO->sendToPeer(agent::WireSwitchSession{std::move(newTid)});
     });
-    return AGENTXX_OK;
+    return AGENTXX_FFI_OK;
 }
 
 // ---------------------------------------------------------------------------
@@ -782,11 +782,11 @@ int FfiAgentRuntime::interruptRespond(
 ) {
     if (!stateUsable(state())) {
         err = "状态错误: 未启动或已停止";
-        return AGENTXX_ERR_STATE;
+        return AGENTXX_FFI_ERR_STATE;
     }
     if (!hasPendingInterrupt(interruptId)) {
         err = fmt::format("中断 #{} 不存在、已应答或已过期", interruptId);
-        return AGENTXX_ERR_INTERRUPT;
+        return AGENTXX_FFI_ERR_INTERRUPT;
     }
     neograph::json val = neograph::json::array();
     if (valuesJson != nullptr && *valuesJson != '\0') {
@@ -794,14 +794,14 @@ int FfiAgentRuntime::interruptRespond(
             val = neograph::json::parse(valuesJson);
         } catch (const std::exception& e) {
             err = fmt::format("valuesJson 非法 JSON: {}", e.what());
-            return AGENTXX_ERR_JSON;
+            return AGENTXX_FFI_ERR_JSON;
         }
     }
     auto clientIO = clientIO_;
     asio::post(*clientIoCtx_, [clientIO, interruptId, val = std::move(val)]() mutable {
         clientIO->submitInterruptResponse(interruptId, std::move(val));
     });
-    return AGENTXX_OK;
+    return AGENTXX_FFI_OK;
 }
 
 } // namespace ffi

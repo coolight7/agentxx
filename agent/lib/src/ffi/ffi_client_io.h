@@ -29,7 +29,7 @@ class FfiClientAgentIO : public agent::AgentIOBase,
                          public std::enable_shared_from_this<FfiClientAgentIO> {
 public:
 
-    FfiClientAgentIO(asio::any_io_executor ex, AgentxxCallbacks callbacks);
+    FfiClientAgentIO(asio::any_io_executor ex, AgentxxFFICallbacks callbacks);
 
     ~FfiClientAgentIO() override;
 
@@ -123,20 +123,20 @@ private:
     using ErrorCode   = neograph_asio_error_code;
     using RespChannel = asio::experimental::concurrent_channel<void(ErrorCode, neograph::json)>;
 
-    /// client io 线程: 挂起等待宿主应答 (agentxx_interrupt_respond 经 submitInterruptResponse
+    /// client io 线程: 挂起等待宿主应答 (agentxx_ffi_interrupt_respond 经 submitInterruptResponse
     /// 完成 channel); 返回 {answered=false} 表示通道被关闭 (过期/停止, 不回送响应)
     asio::awaitable<std::pair<bool, neograph::json>>
         waitHostInterrupt(int64_t id, std::shared_ptr<RespChannel> ch);
 
     /// client io 线程: 发事件到 C 回调 (异常不外泄)
-    void emitEvent(AgentxxEventType type, std::string json);
+    void emitEvent(AgentxxFFIEventType type, std::string json);
 
     static std::string dump(const neograph::json& j);
 
     asio::any_io_executor ex_;
 
     /// 事件回调 (值拷贝, 保持有效)
-    AgentxxCallbacks callbacks_;
+    AgentxxFFICallbacks callbacks_;
     /// 本端点绑定的会话 sessionId (EVT_READY payload 使用)
     std::string sessionId_;
 

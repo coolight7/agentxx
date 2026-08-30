@@ -343,14 +343,14 @@ if (NOT WIN32)
   if (APPLE)
     set(_AGENTXX_FFI_EXPORT_SYMS "${CMAKE_CURRENT_SOURCE_DIR}/ffi_exported_symbols_darwin.txt")
     file(WRITE "${_AGENTXX_FFI_EXPORT_SYMS}" "\n")
-    foreach(_sym agentxx_malloc agentxx_free agentxx_strdup_n
+    foreach(_sym agentxx_ffi_malloc agentxx_ffi_free agentxx_ffi_strdup_n
                  agentxx_ffi_api_version agentxx_ffi_library_version agentxx_ffi_strerror
-                 agentxx_create agentxx_start agentxx_stop agentxx_destroy
-                 agentxx_send_input agentxx_cancel agentxx_select_model agentxx_set_permission
-                 agentxx_switch_session agentxx_get_model_info agentxx_get_context_messages
-                 agentxx_list_sessions agentxx_interrupt_respond agentxx_drain_logs
-                 agentxx_event_queue_create agentxx_event_queue_free
-                 agentxx_event_queue_on_event agentxx_event_queue_pop
+                 agentxx_ffi_create agentxx_ffi_start agentxx_ffi_stop agentxx_ffi_destroy
+                 agentxx_ffi_send_input agentxx_ffi_cancel agentxx_ffi_select_model agentxx_ffi_set_permission
+                 agentxx_ffi_switch_session agentxx_ffi_get_model_info agentxx_ffi_get_context_messages
+                 agentxx_ffi_list_sessions agentxx_ffi_interrupt_respond agentxx_ffi_drain_logs
+                 agentxx_ffi_event_queue_create agentxx_ffi_event_queue_free
+                 agentxx_ffi_event_queue_on_event agentxx_ffi_event_queue_pop
                  agentxx_get_builtin_plugins)
       file(APPEND "${_AGENTXX_FFI_EXPORT_SYMS}" "_${_sym}\n")
     endforeach()

@@ -2,8 +2,8 @@
 #
 # 目标: 将 libagentxx.so 导出面从"全部 C++ 符号 (约 17 万)"收敛为仅 FFI C API
 # 与既有 C 入口, 供其他语言 FFI 干净调用 (dlopen/dlsym 只按名查找白名单符号):
-#   - FFI C API (agentxx/ffi_api.h): agentxx_create/start/stop/... 等
-#   - 既有 C 入口 (agentxx.h): agentxx_malloc/agentxx_free/agentxx_strdup_n
+#   - FFI C API (agentxx/ffi_api.h): agentxx_ffi_create/start/stop/... 等
+#   - 既有 C 入口 (agentxx.h): agentxx_ffi_malloc/agentxx_ffi_free/agentxx_ffi_strdup_n
 #   - 内置插件清单入口: agentxx_get_builtin_plugins (PluginManager 使用)
 # local: * 隐藏其余全部符号 (libagentxx 内部 C++ 符号、静态链接的第三方库
 #         符号: fmt/asio/sqlite/hyperscan/neograph 等), 避免污染 FFI 命名空间
@@ -15,30 +15,30 @@
 # 注意: 新增导出符号时在此追加 (同时更新 agentxx/ffi_api.h 与文档)。
 {
   global:
-    agentxx_malloc;
-    agentxx_free;
-    agentxx_strdup_n;
+    agentxx_ffi_malloc;
+    agentxx_ffi_free;
+    agentxx_ffi_strdup_n;
     agentxx_ffi_api_version;
     agentxx_ffi_library_version;
     agentxx_ffi_strerror;
-    agentxx_create;
-    agentxx_start;
-    agentxx_stop;
-    agentxx_destroy;
-    agentxx_send_input;
-    agentxx_cancel;
-    agentxx_select_model;
-    agentxx_set_permission;
-    agentxx_switch_session;
-    agentxx_get_model_info;
-    agentxx_get_context_messages;
-    agentxx_list_sessions;
-    agentxx_interrupt_respond;
-    agentxx_drain_logs;
-    agentxx_event_queue_create;
-    agentxx_event_queue_free;
-    agentxx_event_queue_on_event;
-    agentxx_event_queue_pop;
+    agentxx_ffi_create;
+    agentxx_ffi_start;
+    agentxx_ffi_stop;
+    agentxx_ffi_destroy;
+    agentxx_ffi_send_input;
+    agentxx_ffi_cancel;
+    agentxx_ffi_select_model;
+    agentxx_ffi_set_permission;
+    agentxx_ffi_switch_session;
+    agentxx_ffi_get_model_info;
+    agentxx_ffi_get_context_messages;
+    agentxx_ffi_list_sessions;
+    agentxx_ffi_interrupt_respond;
+    agentxx_ffi_drain_logs;
+    agentxx_ffi_event_queue_create;
+    agentxx_ffi_event_queue_free;
+    agentxx_ffi_event_queue_on_event;
+    agentxx_ffi_event_queue_pop;
     agentxx_get_builtin_plugins;
   local: *;
 };

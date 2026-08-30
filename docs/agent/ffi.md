@@ -21,7 +21,7 @@
    `SessionServerAgentIO` (由 BaseAgent 驱动) 通信——与 TUI/CLI client
    **完全同构**, agent 核心零改动。
 3. **错误处理双通道**: 同步错误 = 返回值错误码 + 可选的 `char** log` 参数
-   (内部填充执行过程日志/错误详情, 宿主 `agentxx_free` 释放); 异步错误 =
+   (内部填充执行过程日志/错误详情, 宿主 `agentxx_ffi_free` 释放); 异步错误 =
    `EVT_ERROR` / `EVT_TURN_END {has_error}` 事件。
 
 ## 2. 总体架构与线程拓扑 (方案 A: 独立双线程模型)
@@ -31,7 +31,7 @@
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │ 宿主程序 (Python/Rust/Go/... 经各自 FFI 绑定)                  │
-│   持有多个 AgentxxAgent* 句柄, 注册 AgentxxCallbacks C 回调    │
+│   持有多个 AgentxxFFIAgent* 句柄, 注册 AgentxxFFICallbacks C 回调    │
 └──────────────┬──────────────────────────────────────────────┘
                │ extern "C" API (agentxx/ffi_api.h, 纯 C)
 ┌──────────────▼──────────────────────────────────────────────┐
@@ -80,23 +80,23 @@
 - **保护 Agent 核心**: 宿主在 `on_event` 事件回调中的任何耗时逻辑仅发生在 `client-io` 线程，绝对不会阻塞 `server-io` 线程的 ReAct 循环、LLM 数据接收和工具调用。
 - **实例强隔离**: 多 Runtime 并发创建时，每个 Runtime 的生命周期、事件处理和会话状态完全正交，无全局锁竞争。
 - **C API 任意线程可调用**: 会话交互类经 `asio::post` 投递 `client-io` 线程串行执行; 同步查询类经 promise/future 等待 (最长 10s)。
-- **约束**: `agentxx_stop`/`agentxx_destroy` 不得在内部 io 线程 (即 client/agent 回调线程) 内调用, 返回 `AGENTXX_ERR_STATE` (避免自 join 死锁); 宿主需从自己的线程调用。
+- **约束**: `agentxx_ffi_stop`/`agentxx_ffi_destroy` 不得在内部 io 线程 (即 client/agent 回调线程) 内调用, 返回 `AGENTXX_FFI_ERR_STATE` (避免自 join 死锁); 宿主需从自己的线程调用。
 
 ## 4. C API 契约 (`agent/lib/include/agentxx/ffi_api.h`)
 
 ### 4.1 错误码与 `char** log`
 
 ```c
-#define AGENTXX_OK              0
-#define AGENTXX_ERR_INVALID    -1   /* 参数非法 (NULL 句柄/空串等) */
-#define AGENTXX_ERR_STATE      -2   /* 状态错误 (未 start / 已 stop / io 线程内 stop) */
-#define AGENTXX_ERR_JSON       -3   /* JSON 解析失败 */
-#define AGENTXX_ERR_CONFIG     -4   /* 配置非法 (模型缺失/字段类型错误) */
-#define AGENTXX_ERR_INIT       -5   /* agent init 失败 */
-#define AGENTXX_ERR_INTERRUPT  -6   /* 中断 id 无效/已应答/已过期 */
-#define AGENTXX_ERR_TIMEOUT    -7   /* 同步查询超时 (10s) */
-#define AGENTXX_ERR_OOM        -8
-#define AGENTXX_ERR_INTERNAL  -99
+#define AGENTXX_FFI_OK              0
+#define AGENTXX_FFI_ERR_INVALID    -1   /* 参数非法 (NULL 句柄/空串等) */
+#define AGENTXX_FFI_ERR_STATE      -2   /* 状态错误 (未 start / 已 stop / io 线程内 stop) */
+#define AGENTXX_FFI_ERR_JSON       -3   /* JSON 解析失败 */
+#define AGENTXX_FFI_ERR_CONFIG     -4   /* 配置非法 (模型缺失/字段类型错误) */
+#define AGENTXX_FFI_ERR_INIT       -5   /* agent init 失败 */
+#define AGENTXX_FFI_ERR_INTERRUPT  -6   /* 中断 id 无效/已应答/已过期 */
+#define AGENTXX_FFI_ERR_TIMEOUT    -7   /* 同步查询超时 (10s) */
+#define AGENTXX_FFI_ERR_OOM        -8
+#define AGENTXX_FFI_ERR_INTERNAL  -99
 ```
 
 ### 4.2 异步安全事件队列 (供 Dart/ctypes 等无法同步拷贝 payload 的宿主)
@@ -106,20 +106,20 @@
 queue 转发), 回调返回后 payload 即失效。此类宿主改用内置队列桥接:
 
 ```c
-AgentxxEventQueue* q = agentxx_event_queue_create();
-AgentxxCallbacks cb;
-cb.on_event  = agentxx_event_queue_on_event; /* 内置桥接: 同步拷贝入队 */
+AgentxxFFIEventQueue* q = agentxx_ffi_event_queue_create();
+AgentxxFFICallbacks cb;
+cb.on_event  = agentxx_ffi_event_queue_on_event; /* 内置桥接: 同步拷贝入队 */
 cb.user_data = q;
-/* ... agentxx_create/start 后, 宿主线程序列化取事件: */
+/* ... agentxx_ffi_create/start 后, 宿主线程序列化取事件: */
 int32_t type; char* json;
-while ((rc = agentxx_event_queue_pop(q, &type, &json, 50)) == AGENTXX_OK) {
-    /* 消费 type/json; 用后 agentxx_free(json) */
+while ((rc = agentxx_ffi_event_queue_pop(q, &type, &json, 50)) == AGENTXX_FFI_OK) {
+    /* 消费 type/json; 用后 agentxx_ffi_free(json) */
 }
-agentxx_event_queue_free(q);
+agentxx_ffi_event_queue_free(q);
 ```
 
-- `agentxx_event_queue_pop`: 阻塞至多 timeout_ms; 空/超时返回
-  `AGENTXX_ERR_TIMEOUT`; 队列已销毁返回 `AGENTXX_ERR_STATE`
+- `agentxx_ffi_event_queue_pop`: 阻塞至多 timeout_ms; 空/超时返回
+  `AGENTXX_FFI_ERR_TIMEOUT`; 队列已销毁返回 `AGENTXX_FFI_ERR_STATE`
 - 队列有界 (16384): 宿主停轮询时丢最旧并补发一条 EVT_ERROR 提示
 - 实现: `agent/lib/src/ffi/event_queue.cpp`
 
@@ -127,21 +127,21 @@ agentxx_event_queue_free(q);
 
 | 分组 | 符号 | 说明 |
 |------|------|------|
-| 内存 | `agentxx_malloc` / `agentxx_free` / `agentxx_strdup_n` | 跨 CRT 堆边界唯一分配通道 |
+| 内存 | `agentxx_ffi_malloc` / `agentxx_ffi_free` / `agentxx_ffi_strdup_n` | 跨 CRT 堆边界唯一分配通道 |
 | 版本 | `agentxx_ffi_api_version` / `agentxx_ffi_library_version` | API 版本校验 / 库版本字符串 |
 | 错误 | `agentxx_ffi_strerror` | 错误码 → 静态字符串 |
-| 生命周期 | `agentxx_create` / `agentxx_start` / `agentxx_stop` / `agentxx_destroy` | 创建(不启动线程)/异步启动(EVT_READY)/同步停止(幂等)/销毁(未 stop 自动 stop) |
-| 会话交互 (异步) | `agentxx_send_input` / `agentxx_cancel` / `agentxx_select_model` / `agentxx_set_permission` / `agentxx_switch_session` | 投递 io 线程串行执行; READY 前发送的输入自动缓存 |
-| 同步查询 | `agentxx_get_model_info` / `agentxx_get_context_messages` / `agentxx_list_sessions` | 阻塞等待服务端响应 (最长 10s), 返回 JSON (`agentxx_free`); 同一句柄同一时刻仅允许一个在途 |
-| HIL 应答 | `agentxx_interrupt_respond` | 提交 EVT_INTERRUPT_REQ 的应答 (values_json 数组与 inputs 顺序一一对应) |
-| 日志 | `agentxx_drain_logs` | 取走积压日志 `[{"level","message"},...]` (异常后排障) |
-| 事件队列 | `agentxx_event_queue_create` / `agentxx_free`(队列) / `..._on_event` / `..._pop` | 见 4.2 |
+| 生命周期 | `agentxx_ffi_create` / `agentxx_ffi_start` / `agentxx_ffi_stop` / `agentxx_ffi_destroy` | 创建(不启动线程)/异步启动(EVT_READY)/同步停止(幂等)/销毁(未 stop 自动 stop) |
+| 会话交互 (异步) | `agentxx_ffi_send_input` / `agentxx_ffi_cancel` / `agentxx_ffi_select_model` / `agentxx_ffi_set_permission` / `agentxx_ffi_switch_session` | 投递 io 线程串行执行; READY 前发送的输入自动缓存 |
+| 同步查询 | `agentxx_ffi_get_model_info` / `agentxx_ffi_get_context_messages` / `agentxx_ffi_list_sessions` | 阻塞等待服务端响应 (最长 10s), 返回 JSON (`agentxx_ffi_free`); 同一句柄同一时刻仅允许一个在途 |
+| HIL 应答 | `agentxx_ffi_interrupt_respond` | 提交 EVT_INTERRUPT_REQ 的应答 (values_json 数组与 inputs 顺序一一对应) |
+| 日志 | `agentxx_ffi_drain_logs` | 取走积压日志 `[{"level","message"},...]` (异常后排障) |
+| 事件队列 | `agentxx_ffi_event_queue_create` / `agentxx_ffi_free`(队列) / `..._on_event` / `..._pop` | 见 4.2 |
 | 内置插件 | `agentxx_get_builtin_plugins` | 内置合并编译模式插件清单入口 (PluginManager 使用; 白名单第 25 个符号, 隐藏 17 万 C++ 符号) |
 
 版本策略: 修改契约递增 `AGENTXX_FFI_API_VERSION` (当前为 1);
 新增符号/字段为非破坏性不递增, 删除/重命名或修改参数语义时递增。
 
-### 4.4 事件类型 (`AgentxxEventType`, payload 均为 NUL 结尾 UTF-8 JSON)
+### 4.4 事件类型 (`AgentxxFFIEventType`, payload 均为 NUL 结尾 UTF-8 JSON)
 
 | 事件 | payload | 说明 |
 |------|---------|------|
@@ -157,7 +157,7 @@ agentxx_event_queue_free(q);
 | `EVT_PLUGIN_DATA` | wire plugin_data JSON | agent 侧插件事件转发 (`{plugin,event,data}`) |
 | `EVT_ERROR` | `{"code","message"}` | 内部错误 |
 
-### 4.5 配置与模型 JSON (`agentxx_create` 参数)
+### 4.5 配置与模型 JSON (`agentxx_ffi_create` 参数)
 
 ```c
 // config_json (可 NULL; 未知字段忽略):
@@ -198,7 +198,7 @@ agentxx_event_queue_free(q);
 | [`agent/example/ffi/dart/`](/agent/example/ffi/dart/) | Dart CLI 示例 (`agentxx_dart_cli`): 流式渲染/HIL 权限与会话切换/`/model` `/sessions` `/logs` 等命令/Ctrl+C 优雅退出; 含 mock LLM 冒烟检查 (`example/smoke_check.dart`); 详见其 README |
 
 其他语言按同样模式接入: 经 dlopen/dlsym (或平台等价物) 查找白名单符号,
-注册 `AgentxxCallbacks` 回调即可。payload 生命周期敏感的宿主优先使用 4.2
+注册 `AgentxxFFICallbacks` 回调即可。payload 生命周期敏感的宿主优先使用 4.2
 事件队列桥接。
 
 ## 6. 测试
@@ -213,8 +213,8 @@ agentxx_event_queue_free(q);
 - **Channel 直连**：FFI 层复用 `ChannelAgentIOTransport::makePair` (零序列化 concurrent_channel), 非 WS；`SessionServerAgentIO` 视为服务端端点，`FfiClientAgentIO` 为 client 端点，二者完全同构于 TUI/CLI 的 transport 抽象
 - **工作目录回退**：`config_json.workDir` 支持 `~`/`\${VAR}` 展开与相对路径 (按进程 cwd 解析为绝对)；未配置时回退进程 `cwd`，与 `AgentConfig::resolvedWorkDir()` 语义一致；会话级 worktree 绑定 (`Session::WorktreeBinding`) 与 `AgentContext::getSessionWorkDir` 的多源回退对 FFI 句柄同样生效 (会话内所有相对路径自动切换)
 - **权限 sides**：`plugins[].sides` 取值 `auto` (默认, 按导出符号 `agentxx_plugin_client_create` 自动决定) / `agent` (仅 agent 侧加载) / `client` (仅 client 侧，FFI 场景通常为 agent)
-- **同步查询约束**：`get_model_info/get_context_messages/list_sessions` 同一句柄同一时刻仅允许一个在途 (服务端逐条协议)；超时 10s 返回 `AGENTXX_ERR_TIMEOUT`，payload 为 `{"code","message"}` 的 `EVT_ERROR` 也会并发上报
+- **同步查询约束**：`get_model_info/get_context_messages/list_sessions` 同一句柄同一时刻仅允许一个在途 (服务端逐条协议)；超时 10s 返回 `AGENTXX_FFI_ERR_TIMEOUT`，payload 为 `{"code","message"}` 的 `EVT_ERROR` 也会并发上报
 - **HIL 输入描述**：`EVT_INTERRUPT_REQ` 的 `argJson` 为 `InterruptHandleArg` 序列化，`inputs[]` 含 `label/depict/type (bool/int/double/string/enum)/defaultValue/enumValues`；空 `type` 表示无需输入 (应答空数组 `[]` 即可)
-- **跨 CRT 堆**：所有 `char*` 返回值与 `char** log` 均经 `agentxx_malloc` 分配，宿主必须 `agentxx_free` 释放；`agentxx_strdup_n` 为统一拷贝入口
+- **跨 CRT 堆**：所有 `char*` 返回值与 `char** log` 均经 `agentxx_ffi_malloc` 分配，宿主必须 `agentxx_ffi_free` 释放；`agentxx_ffi_strdup_n` 为统一拷贝入口
 
 

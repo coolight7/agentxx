@@ -43,7 +43,7 @@ dart run bin/agentxx_cli.dart --model-json model.json --config-json config.json
 
 ### 事件接收为何走队列桥接?
 
-`AgentxxCallbacks.on_event` 在原生 client-io 线程同步回调, payload
+`AgentxxFFICallbacks.on_event` 在原生 client-io 线程同步回调, payload
 **仅回调期间有效**。Dart 的 `NativeCallable.listener` 异步投递事件,
 指针所指内存可能已释放 —— 直接使用存在悬垂风险。
 

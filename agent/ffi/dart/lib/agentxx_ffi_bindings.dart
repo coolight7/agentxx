@@ -28,8 +28,8 @@ class AgentxxFfiBindings {
       : _lookup = lookup;
 
   /// 请求取消当前轮次
-  int agentxx_cancel(
-    ffi.Pointer<AgentxxAgent> a,
+  int agentxx_ffi_cancel(
+    ffi.Pointer<AgentxxFFIAgent> a,
     ffi.Pointer<ffi.Pointer<ffi.Char>> log,
   ) {
     return _agentxx_cancel(
@@ -40,11 +40,11 @@ class AgentxxFfiBindings {
 
   late final _agentxx_cancelPtr = _lookup<
       ffi.NativeFunction<
-          ffi.Int Function(ffi.Pointer<AgentxxAgent>,
-              ffi.Pointer<ffi.Pointer<ffi.Char>>)>>('agentxx_cancel');
+          ffi.Int Function(ffi.Pointer<AgentxxFFIAgent>,
+              ffi.Pointer<ffi.Pointer<ffi.Char>>)>>('agentxx_ffi_cancel');
   late final _agentxx_cancel = _agentxx_cancelPtr.asFunction<
       int Function(
-          ffi.Pointer<AgentxxAgent>, ffi.Pointer<ffi.Pointer<ffi.Char>>)>();
+          ffi.Pointer<AgentxxFFIAgent>, ffi.Pointer<ffi.Pointer<ffi.Char>>)>();
 
   /// 创建 agent 运行时句柄 (未启动; 构造对象, 不启动线程)
   /// @param config_json NULL 或 AgentConfig 覆盖 JSON (未知字段忽略):
@@ -73,12 +73,12 @@ class AgentxxFfiBindings {
   /// "extraHeaders": {"k": "v"}, "extraConfig": {}
   /// }
   /// @param cb 事件回调 (可 NULL = 纯 headless; 内部值拷贝, 回调期间必有效)
-  /// @param log 非 NULL 时失败填入错误详情 (agentxx_free 释放)
+  /// @param log 非 NULL 时失败填入错误详情 (agentxx_ffi_free 释放)
   /// @return 句柄; 失败返回 NULL
-  ffi.Pointer<AgentxxAgent> agentxx_create(
+  ffi.Pointer<AgentxxFFIAgent> agentxx_ffi_create(
     ffi.Pointer<ffi.Char> config_json,
     ffi.Pointer<ffi.Char> model_json,
-    ffi.Pointer<AgentxxCallbacks> cb,
+    ffi.Pointer<AgentxxFFICallbacks> cb,
     ffi.Pointer<ffi.Pointer<ffi.Char>> log,
   ) {
     return _agentxx_create(
@@ -91,21 +91,21 @@ class AgentxxFfiBindings {
 
   late final _agentxx_createPtr = _lookup<
       ffi.NativeFunction<
-          ffi.Pointer<AgentxxAgent> Function(
+          ffi.Pointer<AgentxxFFIAgent> Function(
               ffi.Pointer<ffi.Char>,
               ffi.Pointer<ffi.Char>,
-              ffi.Pointer<AgentxxCallbacks>,
-              ffi.Pointer<ffi.Pointer<ffi.Char>>)>>('agentxx_create');
+              ffi.Pointer<AgentxxFFICallbacks>,
+              ffi.Pointer<ffi.Pointer<ffi.Char>>)>>('agentxx_ffi_create');
   late final _agentxx_create = _agentxx_createPtr.asFunction<
-      ffi.Pointer<AgentxxAgent> Function(
+      ffi.Pointer<AgentxxFFIAgent> Function(
           ffi.Pointer<ffi.Char>,
           ffi.Pointer<ffi.Char>,
-          ffi.Pointer<AgentxxCallbacks>,
+          ffi.Pointer<AgentxxFFICallbacks>,
           ffi.Pointer<ffi.Pointer<ffi.Char>>)>();
 
   /// 销毁句柄 (未 stop 时自动 stop; 之后句柄失效; 不得在回调线程内调用)
-  int agentxx_destroy(
-    ffi.Pointer<AgentxxAgent> a,
+  int agentxx_ffi_destroy(
+    ffi.Pointer<AgentxxFFIAgent> a,
     ffi.Pointer<ffi.Pointer<ffi.Char>> log,
   ) {
     return _agentxx_destroy(
@@ -116,17 +116,17 @@ class AgentxxFfiBindings {
 
   late final _agentxx_destroyPtr = _lookup<
       ffi.NativeFunction<
-          ffi.Int Function(ffi.Pointer<AgentxxAgent>,
-              ffi.Pointer<ffi.Pointer<ffi.Char>>)>>('agentxx_destroy');
+          ffi.Int Function(ffi.Pointer<AgentxxFFIAgent>,
+              ffi.Pointer<ffi.Pointer<ffi.Char>>)>>('agentxx_ffi_destroy');
   late final _agentxx_destroy = _agentxx_destroyPtr.asFunction<
       int Function(
-          ffi.Pointer<AgentxxAgent>, ffi.Pointer<ffi.Pointer<ffi.Char>>)>();
+          ffi.Pointer<AgentxxFFIAgent>, ffi.Pointer<ffi.Pointer<ffi.Char>>)>();
 
   /// 取走运行期间积压的日志条目 (JSON 数组 [{"level","message"},...]; 取走后清空;
-  /// agentxx_free 释放) —— 供宿主在异常后转储排障:
+  /// agentxx_ffi_free 释放) —— 供宿主在异常后转储排障:
   /// {"level": "info|warn|error", "message": "..."}
-  ffi.Pointer<ffi.Char> agentxx_drain_logs(
-    ffi.Pointer<AgentxxAgent> a,
+  ffi.Pointer<ffi.Char> agentxx_ffi_drain_logs(
+    ffi.Pointer<AgentxxFFIAgent> a,
     ffi.Pointer<ffi.Pointer<ffi.Char>> log,
   ) {
     return _agentxx_drain_logs(
@@ -137,26 +137,26 @@ class AgentxxFfiBindings {
 
   late final _agentxx_drain_logsPtr = _lookup<
       ffi.NativeFunction<
-          ffi.Pointer<ffi.Char> Function(ffi.Pointer<AgentxxAgent>,
-              ffi.Pointer<ffi.Pointer<ffi.Char>>)>>('agentxx_drain_logs');
+          ffi.Pointer<ffi.Char> Function(ffi.Pointer<AgentxxFFIAgent>,
+              ffi.Pointer<ffi.Pointer<ffi.Char>>)>>('agentxx_ffi_drain_logs');
   late final _agentxx_drain_logs = _agentxx_drain_logsPtr.asFunction<
       ffi.Pointer<ffi.Char> Function(
-          ffi.Pointer<AgentxxAgent>, ffi.Pointer<ffi.Pointer<ffi.Char>>)>();
+          ffi.Pointer<AgentxxFFIAgent>, ffi.Pointer<ffi.Pointer<ffi.Char>>)>();
 
   /// 创建空事件队列 (任意线程; 失败返回 NULL)
-  ffi.Pointer<AgentxxEventQueue> agentxx_event_queue_create() {
+  ffi.Pointer<AgentxxFFIEventQueue> agentxx_ffi_event_queue_create() {
     return _agentxx_event_queue_create();
   }
 
   late final _agentxx_event_queue_createPtr =
-      _lookup<ffi.NativeFunction<ffi.Pointer<AgentxxEventQueue> Function()>>(
-          'agentxx_event_queue_create');
+      _lookup<ffi.NativeFunction<ffi.Pointer<AgentxxFFIEventQueue> Function()>>(
+          'agentxx_ffi_event_queue_create');
   late final _agentxx_event_queue_create = _agentxx_event_queue_createPtr
-      .asFunction<ffi.Pointer<AgentxxEventQueue> Function()>();
+      .asFunction<ffi.Pointer<AgentxxFFIEventQueue> Function()>();
 
   /// 销毁队列并释放积压事件 (唤醒全部等待者; 之后句柄失效; 勿与 pop 并发调用)
-  void agentxx_event_queue_free(
-    ffi.Pointer<AgentxxEventQueue> q,
+  void agentxx_ffi_event_queue_free(
+    ffi.Pointer<AgentxxFFIEventQueue> q,
   ) {
     return _agentxx_event_queue_free(
       q,
@@ -164,16 +164,16 @@ class AgentxxFfiBindings {
   }
 
   late final _agentxx_event_queue_freePtr = _lookup<
-          ffi
-          .NativeFunction<ffi.Void Function(ffi.Pointer<AgentxxEventQueue>)>>(
-      'agentxx_event_queue_free');
+          ffi.NativeFunction<
+              ffi.Void Function(ffi.Pointer<AgentxxFFIEventQueue>)>>(
+      'agentxx_ffi_event_queue_free');
   late final _agentxx_event_queue_free = _agentxx_event_queue_freePtr
-      .asFunction<void Function(ffi.Pointer<AgentxxEventQueue>)>();
+      .asFunction<void Function(ffi.Pointer<AgentxxFFIEventQueue>)>();
 
-  /// 内置 on_event 桥接实现 (user_data 必须为 agentxx_event_queue_create 返回值):
-  /// 与 AgentxxCallbacks.on_event 签名一致, 任意线程安全, 仅拷贝不阻塞 io
-  void agentxx_event_queue_on_event(
-    AgentxxEventType type,
+  /// 内置 on_event 桥接实现 (user_data 必须为 agentxx_ffi_event_queue_create 返回值):
+  /// 与 AgentxxFFICallbacks.on_event 签名一致, 任意线程安全, 仅拷贝不阻塞 io
+  void agentxx_ffi_event_queue_on_event(
+    AgentxxFFIEventType type,
     ffi.Pointer<ffi.Char> payload_json,
     ffi.Pointer<ffi.Void> user_data,
   ) {
@@ -187,18 +187,18 @@ class AgentxxFfiBindings {
   late final _agentxx_event_queue_on_eventPtr = _lookup<
       ffi.NativeFunction<
           ffi.Void Function(ffi.UnsignedInt, ffi.Pointer<ffi.Char>,
-              ffi.Pointer<ffi.Void>)>>('agentxx_event_queue_on_event');
+              ffi.Pointer<ffi.Void>)>>('agentxx_ffi_event_queue_on_event');
   late final _agentxx_event_queue_on_event =
       _agentxx_event_queue_on_eventPtr.asFunction<
           void Function(int, ffi.Pointer<ffi.Char>, ffi.Pointer<ffi.Void>)>();
 
   /// 取出一条事件 (阻塞至多 timeout_ms; 0 = 非阻塞仅探测):
-  /// - 成功: 返回 AGENTXX_OK, *type_out 填事件种类, *json_out 为 NUL 结尾 UTF-8
-  /// payload (agentxx_malloc 分配, 宿主用后必须 agentxx_free 释放)
-  /// - 队列为空且等待超时: 返回 AGENTXX_ERR_TIMEOUT (*json_out 置 NULL)
-  /// - 参数非法/队列已销毁: 返回 AGENTXX_ERR_INVALID / AGENTXX_ERR_STATE
-  int agentxx_event_queue_pop(
-    ffi.Pointer<AgentxxEventQueue> q,
+  /// - 成功: 返回 AGENTXX_FFI_OK, *type_out 填事件种类, *json_out 为 NUL 结尾 UTF-8
+  /// payload (agentxx_ffi_malloc 分配, 宿主用后必须 agentxx_ffi_free 释放)
+  /// - 队列为空且等待超时: 返回 AGENTXX_FFI_ERR_TIMEOUT (*json_out 置 NULL)
+  /// - 参数非法/队列已销毁: 返回 AGENTXX_FFI_ERR_INVALID / AGENTXX_FFI_ERR_STATE
+  int agentxx_ffi_event_queue_pop(
+    ffi.Pointer<AgentxxFFIEventQueue> q,
     ffi.Pointer<ffi.Int32> type_out,
     ffi.Pointer<ffi.Pointer<ffi.Char>> json_out,
     int timeout_ms,
@@ -214,12 +214,12 @@ class AgentxxFfiBindings {
   late final _agentxx_event_queue_popPtr = _lookup<
       ffi.NativeFunction<
           ffi.Int Function(
-              ffi.Pointer<AgentxxEventQueue>,
+              ffi.Pointer<AgentxxFFIEventQueue>,
               ffi.Pointer<ffi.Int32>,
               ffi.Pointer<ffi.Pointer<ffi.Char>>,
-              ffi.Uint32)>>('agentxx_event_queue_pop');
+              ffi.Uint32)>>('agentxx_ffi_event_queue_pop');
   late final _agentxx_event_queue_pop = _agentxx_event_queue_popPtr.asFunction<
-      int Function(ffi.Pointer<AgentxxEventQueue>, ffi.Pointer<ffi.Int32>,
+      int Function(ffi.Pointer<AgentxxFFIEventQueue>, ffi.Pointer<ffi.Int32>,
           ffi.Pointer<ffi.Pointer<ffi.Char>>, int)>();
 
   /// 当前 FFI API 版本 (== AGENTXX_FFI_API_VERSION)
@@ -259,7 +259,7 @@ class AgentxxFfiBindings {
   late final _agentxx_ffi_strerror = _agentxx_ffi_strerrorPtr
       .asFunction<ffi.Pointer<ffi.Char> Function(int)>();
 
-  void agentxx_free(
+  void agentxx_ffi_free(
     ffi.Pointer<ffi.Void> ptr,
   ) {
     return _agentxx_free(
@@ -269,13 +269,13 @@ class AgentxxFfiBindings {
 
   late final _agentxx_freePtr =
       _lookup<ffi.NativeFunction<ffi.Void Function(ffi.Pointer<ffi.Void>)>>(
-          'agentxx_free');
+          'agentxx_ffi_free');
   late final _agentxx_free =
       _agentxx_freePtr.asFunction<void Function(ffi.Pointer<ffi.Void>)>();
 
   /// 当前会话 LLM 上下文消息: {"messages":[chat message...]}
-  ffi.Pointer<ffi.Char> agentxx_get_context_messages(
-    ffi.Pointer<AgentxxAgent> a,
+  ffi.Pointer<ffi.Char> agentxx_ffi_get_context_messages(
+    ffi.Pointer<AgentxxFFIAgent> a,
     ffi.Pointer<ffi.Pointer<ffi.Char>> log,
   ) {
     return _agentxx_get_context_messages(
@@ -286,17 +286,17 @@ class AgentxxFfiBindings {
 
   late final _agentxx_get_context_messagesPtr = _lookup<
           ffi.NativeFunction<
-              ffi.Pointer<ffi.Char> Function(ffi.Pointer<AgentxxAgent>,
+              ffi.Pointer<ffi.Char> Function(ffi.Pointer<AgentxxFFIAgent>,
                   ffi.Pointer<ffi.Pointer<ffi.Char>>)>>(
-      'agentxx_get_context_messages');
+      'agentxx_ffi_get_context_messages');
   late final _agentxx_get_context_messages =
       _agentxx_get_context_messagesPtr.asFunction<
-          ffi.Pointer<ffi.Char> Function(
-              ffi.Pointer<AgentxxAgent>, ffi.Pointer<ffi.Pointer<ffi.Char>>)>();
+          ffi.Pointer<ffi.Char> Function(ffi.Pointer<AgentxxFFIAgent>,
+              ffi.Pointer<ffi.Pointer<ffi.Char>>)>();
 
   /// 当前模型信息: {"currentModel","models":[...]}
-  ffi.Pointer<ffi.Char> agentxx_get_model_info(
-    ffi.Pointer<AgentxxAgent> a,
+  ffi.Pointer<ffi.Char> agentxx_ffi_get_model_info(
+    ffi.Pointer<AgentxxFFIAgent> a,
     ffi.Pointer<ffi.Pointer<ffi.Char>> log,
   ) {
     return _agentxx_get_model_info(
@@ -306,16 +306,17 @@ class AgentxxFfiBindings {
   }
 
   late final _agentxx_get_model_infoPtr = _lookup<
-      ffi.NativeFunction<
-          ffi.Pointer<ffi.Char> Function(ffi.Pointer<AgentxxAgent>,
-              ffi.Pointer<ffi.Pointer<ffi.Char>>)>>('agentxx_get_model_info');
+          ffi.NativeFunction<
+              ffi.Pointer<ffi.Char> Function(ffi.Pointer<AgentxxFFIAgent>,
+                  ffi.Pointer<ffi.Pointer<ffi.Char>>)>>(
+      'agentxx_ffi_get_model_info');
   late final _agentxx_get_model_info = _agentxx_get_model_infoPtr.asFunction<
       ffi.Pointer<ffi.Char> Function(
-          ffi.Pointer<AgentxxAgent>, ffi.Pointer<ffi.Pointer<ffi.Char>>)>();
+          ffi.Pointer<AgentxxFFIAgent>, ffi.Pointer<ffi.Pointer<ffi.Char>>)>();
 
   /// 提交 EVT_INTERRUPT_REQ 的应答 (values_json 见该事件注释; 任意线程可调用)
-  int agentxx_interrupt_respond(
-    ffi.Pointer<AgentxxAgent> a,
+  int agentxx_ffi_interrupt_respond(
+    ffi.Pointer<AgentxxFFIAgent> a,
     int interrupt_id,
     ffi.Pointer<ffi.Char> values_json,
     ffi.Pointer<ffi.Pointer<ffi.Char>> log,
@@ -330,17 +331,17 @@ class AgentxxFfiBindings {
 
   late final _agentxx_interrupt_respondPtr = _lookup<
           ffi.NativeFunction<
-              ffi.Int Function(ffi.Pointer<AgentxxAgent>, ffi.Int64,
+              ffi.Int Function(ffi.Pointer<AgentxxFFIAgent>, ffi.Int64,
                   ffi.Pointer<ffi.Char>, ffi.Pointer<ffi.Pointer<ffi.Char>>)>>(
-      'agentxx_interrupt_respond');
+      'agentxx_ffi_interrupt_respond');
   late final _agentxx_interrupt_respond =
       _agentxx_interrupt_respondPtr.asFunction<
-          int Function(ffi.Pointer<AgentxxAgent>, int, ffi.Pointer<ffi.Char>,
+          int Function(ffi.Pointer<AgentxxFFIAgent>, int, ffi.Pointer<ffi.Char>,
               ffi.Pointer<ffi.Pointer<ffi.Char>>)>();
 
   /// 持久化会话列表: {"sessions":[{"sessionId","title","lastActiveMs"},...]}
-  ffi.Pointer<ffi.Char> agentxx_list_sessions(
-    ffi.Pointer<AgentxxAgent> a,
+  ffi.Pointer<ffi.Char> agentxx_ffi_list_sessions(
+    ffi.Pointer<AgentxxFFIAgent> a,
     ffi.Pointer<ffi.Pointer<ffi.Char>> log,
   ) {
     return _agentxx_list_sessions(
@@ -350,14 +351,15 @@ class AgentxxFfiBindings {
   }
 
   late final _agentxx_list_sessionsPtr = _lookup<
-      ffi.NativeFunction<
-          ffi.Pointer<ffi.Char> Function(ffi.Pointer<AgentxxAgent>,
-              ffi.Pointer<ffi.Pointer<ffi.Char>>)>>('agentxx_list_sessions');
+          ffi.NativeFunction<
+              ffi.Pointer<ffi.Char> Function(ffi.Pointer<AgentxxFFIAgent>,
+                  ffi.Pointer<ffi.Pointer<ffi.Char>>)>>(
+      'agentxx_ffi_list_sessions');
   late final _agentxx_list_sessions = _agentxx_list_sessionsPtr.asFunction<
       ffi.Pointer<ffi.Char> Function(
-          ffi.Pointer<AgentxxAgent>, ffi.Pointer<ffi.Pointer<ffi.Char>>)>();
+          ffi.Pointer<AgentxxFFIAgent>, ffi.Pointer<ffi.Pointer<ffi.Char>>)>();
 
-  ffi.Pointer<ffi.Void> agentxx_malloc(
+  ffi.Pointer<ffi.Void> agentxx_ffi_malloc(
     int size,
   ) {
     return _agentxx_malloc(
@@ -367,13 +369,13 @@ class AgentxxFfiBindings {
 
   late final _agentxx_mallocPtr =
       _lookup<ffi.NativeFunction<ffi.Pointer<ffi.Void> Function(ffi.Size)>>(
-          'agentxx_malloc');
+          'agentxx_ffi_malloc');
   late final _agentxx_malloc =
       _agentxx_mallocPtr.asFunction<ffi.Pointer<ffi.Void> Function(int)>();
 
   /// 切换当前会话所用模型 (结果经 EVT_MODEL_INFO 通知)
-  int agentxx_select_model(
-    ffi.Pointer<AgentxxAgent> a,
+  int agentxx_ffi_select_model(
+    ffi.Pointer<AgentxxFFIAgent> a,
     ffi.Pointer<ffi.Char> model_name,
     ffi.Pointer<ffi.Pointer<ffi.Char>> log,
   ) {
@@ -386,15 +388,15 @@ class AgentxxFfiBindings {
 
   late final _agentxx_select_modelPtr = _lookup<
       ffi.NativeFunction<
-          ffi.Int Function(ffi.Pointer<AgentxxAgent>, ffi.Pointer<ffi.Char>,
-              ffi.Pointer<ffi.Pointer<ffi.Char>>)>>('agentxx_select_model');
+          ffi.Int Function(ffi.Pointer<AgentxxFFIAgent>, ffi.Pointer<ffi.Char>,
+              ffi.Pointer<ffi.Pointer<ffi.Char>>)>>('agentxx_ffi_select_model');
   late final _agentxx_select_model = _agentxx_select_modelPtr.asFunction<
-      int Function(ffi.Pointer<AgentxxAgent>, ffi.Pointer<ffi.Char>,
+      int Function(ffi.Pointer<AgentxxFFIAgent>, ffi.Pointer<ffi.Char>,
           ffi.Pointer<ffi.Pointer<ffi.Char>>)>();
 
   /// 发送用户输入 (EVT_READY 前发送会缓存, 就绪后按序消费)
-  int agentxx_send_input(
-    ffi.Pointer<AgentxxAgent> a,
+  int agentxx_ffi_send_input(
+    ffi.Pointer<AgentxxFFIAgent> a,
     ffi.Pointer<ffi.Char> text,
     ffi.Pointer<ffi.Pointer<ffi.Char>> log,
   ) {
@@ -407,16 +409,16 @@ class AgentxxFfiBindings {
 
   late final _agentxx_send_inputPtr = _lookup<
       ffi.NativeFunction<
-          ffi.Int Function(ffi.Pointer<AgentxxAgent>, ffi.Pointer<ffi.Char>,
-              ffi.Pointer<ffi.Pointer<ffi.Char>>)>>('agentxx_send_input');
+          ffi.Int Function(ffi.Pointer<AgentxxFFIAgent>, ffi.Pointer<ffi.Char>,
+              ffi.Pointer<ffi.Pointer<ffi.Char>>)>>('agentxx_ffi_send_input');
   late final _agentxx_send_input = _agentxx_send_inputPtr.asFunction<
-      int Function(ffi.Pointer<AgentxxAgent>, ffi.Pointer<ffi.Char>,
+      int Function(ffi.Pointer<AgentxxFFIAgent>, ffi.Pointer<ffi.Char>,
           ffi.Pointer<ffi.Pointer<ffi.Char>>)>();
 
   /// 记住权限选择 (服务端注册路径规则, 后续同路径不再询问):
   /// op: 0=读取 1=写入; allow: 1=允许 0=拒绝
-  int agentxx_set_permission(
-    ffi.Pointer<AgentxxAgent> a,
+  int agentxx_ffi_set_permission(
+    ffi.Pointer<AgentxxFFIAgent> a,
     ffi.Pointer<ffi.Char> path,
     int allow,
     int op,
@@ -432,22 +434,23 @@ class AgentxxFfiBindings {
   }
 
   late final _agentxx_set_permissionPtr = _lookup<
-      ffi.NativeFunction<
-          ffi.Int Function(
-              ffi.Pointer<AgentxxAgent>,
-              ffi.Pointer<ffi.Char>,
-              ffi.Int,
-              ffi.Int,
-              ffi.Pointer<ffi.Pointer<ffi.Char>>)>>('agentxx_set_permission');
+          ffi.NativeFunction<
+              ffi.Int Function(
+                  ffi.Pointer<AgentxxFFIAgent>,
+                  ffi.Pointer<ffi.Char>,
+                  ffi.Int,
+                  ffi.Int,
+                  ffi.Pointer<ffi.Pointer<ffi.Char>>)>>(
+      'agentxx_ffi_set_permission');
   late final _agentxx_set_permission = _agentxx_set_permissionPtr.asFunction<
-      int Function(ffi.Pointer<AgentxxAgent>, ffi.Pointer<ffi.Char>, int, int,
-          ffi.Pointer<ffi.Pointer<ffi.Char>>)>();
+      int Function(ffi.Pointer<AgentxxFFIAgent>, ffi.Pointer<ffi.Char>, int,
+          int, ffi.Pointer<ffi.Pointer<ffi.Char>>)>();
 
   /// 异步启动 (创建 agent io 线程 + init + 会话驱动循环):
-  /// - 立即返回 AGENTXX_OK 表示已受理; 就绪后回调 EVT_READY
-  /// - 启动失败经 EVT_ERROR 上报 (可经 agentxx_drain_logs 取详情)
-  int agentxx_start(
-    ffi.Pointer<AgentxxAgent> a,
+  /// - 立即返回 AGENTXX_FFI_OK 表示已受理; 就绪后回调 EVT_READY
+  /// - 启动失败经 EVT_ERROR 上报 (可经 agentxx_ffi_drain_logs 取详情)
+  int agentxx_ffi_start(
+    ffi.Pointer<AgentxxFFIAgent> a,
     ffi.Pointer<ffi.Pointer<ffi.Char>> log,
   ) {
     return _agentxx_start(
@@ -458,15 +461,15 @@ class AgentxxFfiBindings {
 
   late final _agentxx_startPtr = _lookup<
       ffi.NativeFunction<
-          ffi.Int Function(ffi.Pointer<AgentxxAgent>,
-              ffi.Pointer<ffi.Pointer<ffi.Char>>)>>('agentxx_start');
+          ffi.Int Function(ffi.Pointer<AgentxxFFIAgent>,
+              ffi.Pointer<ffi.Pointer<ffi.Char>>)>>('agentxx_ffi_start');
   late final _agentxx_start = _agentxx_startPtr.asFunction<
       int Function(
-          ffi.Pointer<AgentxxAgent>, ffi.Pointer<ffi.Pointer<ffi.Char>>)>();
+          ffi.Pointer<AgentxxFFIAgent>, ffi.Pointer<ffi.Pointer<ffi.Char>>)>();
 
   /// 同步停止并回收 (阻塞到 agent io 线程退出; 幂等; 不得在回调线程内调用)
-  int agentxx_stop(
-    ffi.Pointer<AgentxxAgent> a,
+  int agentxx_ffi_stop(
+    ffi.Pointer<AgentxxFFIAgent> a,
     ffi.Pointer<ffi.Pointer<ffi.Char>> log,
   ) {
     return _agentxx_stop(
@@ -477,14 +480,14 @@ class AgentxxFfiBindings {
 
   late final _agentxx_stopPtr = _lookup<
       ffi.NativeFunction<
-          ffi.Int Function(ffi.Pointer<AgentxxAgent>,
-              ffi.Pointer<ffi.Pointer<ffi.Char>>)>>('agentxx_stop');
+          ffi.Int Function(ffi.Pointer<AgentxxFFIAgent>,
+              ffi.Pointer<ffi.Pointer<ffi.Char>>)>>('agentxx_ffi_stop');
   late final _agentxx_stop = _agentxx_stopPtr.asFunction<
       int Function(
-          ffi.Pointer<AgentxxAgent>, ffi.Pointer<ffi.Pointer<ffi.Char>>)>();
+          ffi.Pointer<AgentxxFFIAgent>, ffi.Pointer<ffi.Pointer<ffi.Char>>)>();
 
   /// 分配并拷贝 NUL 结尾字符串 (字符串返回值的统一分配通道)
-  ffi.Pointer<ffi.Char> agentxx_strdup_n(
+  ffi.Pointer<ffi.Char> agentxx_ffi_strdup_n(
     ffi.Pointer<ffi.Char> s,
     int size,
   ) {
@@ -497,14 +500,14 @@ class AgentxxFfiBindings {
   late final _agentxx_strdup_nPtr = _lookup<
       ffi.NativeFunction<
           ffi.Pointer<ffi.Char> Function(
-              ffi.Pointer<ffi.Char>, ffi.Size)>>('agentxx_strdup_n');
+              ffi.Pointer<ffi.Char>, ffi.Size)>>('agentxx_ffi_strdup_n');
   late final _agentxx_strdup_n = _agentxx_strdup_nPtr
       .asFunction<ffi.Pointer<ffi.Char> Function(ffi.Pointer<ffi.Char>, int)>();
 
   /// 切换当前连接会话 (sessionId 为空 = 关闭持久化时非法):
   /// 重新绑定会话并回推 Sync/ModelInfo/ContextStats (经对应事件通知)
-  int agentxx_switch_session(
-    ffi.Pointer<AgentxxAgent> a,
+  int agentxx_ffi_switch_session(
+    ffi.Pointer<AgentxxFFIAgent> a,
     ffi.Pointer<ffi.Char> sessionId,
     ffi.Pointer<ffi.Pointer<ffi.Char>> log,
   ) {
@@ -516,48 +519,49 @@ class AgentxxFfiBindings {
   }
 
   late final _agentxx_switch_sessionPtr = _lookup<
-      ffi.NativeFunction<
-          ffi.Int Function(ffi.Pointer<AgentxxAgent>, ffi.Pointer<ffi.Char>,
-              ffi.Pointer<ffi.Pointer<ffi.Char>>)>>('agentxx_switch_session');
+          ffi.NativeFunction<
+              ffi.Int Function(ffi.Pointer<AgentxxFFIAgent>,
+                  ffi.Pointer<ffi.Char>, ffi.Pointer<ffi.Pointer<ffi.Char>>)>>(
+      'agentxx_ffi_switch_session');
   late final _agentxx_switch_session = _agentxx_switch_sessionPtr.asFunction<
-      int Function(ffi.Pointer<AgentxxAgent>, ffi.Pointer<ffi.Char>,
+      int Function(ffi.Pointer<AgentxxFFIAgent>, ffi.Pointer<ffi.Char>,
           ffi.Pointer<ffi.Pointer<ffi.Char>>)>();
 }
 
-const int AGENTXX_ERR_CONFIG = -4;
+const int AGENTXX_FFI_ERR_CONFIG = -4;
 
-const int AGENTXX_ERR_INIT = -5;
+const int AGENTXX_FFI_ERR_INIT = -5;
 
-const int AGENTXX_ERR_INTERNAL = -99;
+const int AGENTXX_FFI_ERR_INTERNAL = -99;
 
-const int AGENTXX_ERR_INTERRUPT = -6;
+const int AGENTXX_FFI_ERR_INTERRUPT = -6;
 
-const int AGENTXX_ERR_INVALID = -1;
+const int AGENTXX_FFI_ERR_INVALID = -1;
 
-const int AGENTXX_ERR_JSON = -3;
+const int AGENTXX_FFI_ERR_JSON = -3;
 
-const int AGENTXX_ERR_OOM = -8;
+const int AGENTXX_FFI_ERR_OOM = -8;
 
-const int AGENTXX_ERR_STATE = -2;
+const int AGENTXX_FFI_ERR_STATE = -2;
 
-const int AGENTXX_ERR_TIMEOUT = -7;
+const int AGENTXX_FFI_ERR_TIMEOUT = -7;
 
 const int AGENTXX_FFI_API_VERSION = 1;
 
-const int AGENTXX_OK = 0;
+const int AGENTXX_FFI_OK = 0;
 
-final class AgentxxAgent extends ffi.Opaque {}
+final class AgentxxFFIAgent extends ffi.Opaque {}
 
 /// EVT_INTERRUPT_REQ payload:
 /// {"interruptId": N, "sessionId": "...", "node": "...", "value": "...",
 /// "argJson": {"name": "...", "inputs": [
 /// {"label": "...", "depict": "...", "type": "bool|int|double|string|enum",
 /// "defaultValue": "...", "enumValues": [...]}, ...]}}
-/// 宿主应 UI 展示后调用 agentxx_interrupt_respond() 应答:
+/// 宿主应 UI 展示后调用 agentxx_ffi_interrupt_respond() 应答:
 /// values_json 为 JSON 数组, 与 inputs 顺序一一对应:
 /// bool → "true"/"false"; int/double → 数字字符串; enum → 枚举值字符串;
 /// string → 文本; type 为空 → 无需输入 (应答空数组即可)
-final class AgentxxCallbacks extends ffi.Struct {
+final class AgentxxFFICallbacks extends ffi.Struct {
   /// 事件回调 (agent io 线程; payload_json 为 NUL 结尾 UTF-8, 仅回调期间有效)
   external ffi.Pointer<
       ffi.NativeFunction<
@@ -570,58 +574,59 @@ final class AgentxxCallbacks extends ffi.Struct {
   external ffi.Pointer<ffi.Void> user_data;
 }
 
-final class AgentxxEventQueue extends ffi.Opaque {}
+final class AgentxxFFIEventQueue extends ffi.Opaque {}
 
 /// agent 事件种类
-enum AgentxxEventType {
+enum AgentxxFFIEventType {
   /// < 服务端就绪, 可开始发送输入: {"sessionId"}
-  AGENTXX_EVT_READY(0),
+  AGENTXX_FFI_EVT_READY(0),
 
   /// < 全量/部分历史同步: wire sync JSON
-  AGENTXX_EVT_SYNC(1),
+  AGENTXX_FFI_EVT_SYNC(1),
 
   /// < 流式增量: wire delta JSON (kind=text_token/...)
-  AGENTXX_EVT_DELTA(2),
+  AGENTXX_FFI_EVT_DELTA(2),
 
   /// < 轮次结束: wire turn_result JSON
-  AGENTXX_EVT_TURN_END(3),
+  AGENTXX_FFI_EVT_TURN_END(3),
 
   /// < 上下文统计: wire context_stats JSON
-  AGENTXX_EVT_CONTEXT_STATS(4),
+  AGENTXX_FFI_EVT_CONTEXT_STATS(4),
 
   /// < 模型信息 (查询/切换结果): wire model_info JSON
-  AGENTXX_EVT_MODEL_INFO(5),
+  AGENTXX_FFI_EVT_MODEL_INFO(5),
 
   /// < 启动组件 (MCP/Skill/Memory/插件): wire append_component_info JSON
-  AGENTXX_EVT_COMPONENTS(6),
+  AGENTXX_FFI_EVT_COMPONENTS(6),
 
   /// < HIL 中断询问 (权限确认/输入收集): 见注释
-  AGENTXX_EVT_INTERRUPT_REQ(7),
+  AGENTXX_FFI_EVT_INTERRUPT_REQ(7),
 
   /// < 中断已过期/已取消: {"interruptId"}
-  AGENTXX_EVT_INTERRUPT_EXPIRED(8),
+  AGENTXX_FFI_EVT_INTERRUPT_EXPIRED(8),
 
   /// < 插件事件转发: wire plugin_data JSON
-  AGENTXX_EVT_PLUGIN_DATA(9),
+  AGENTXX_FFI_EVT_PLUGIN_DATA(9),
 
   /// < 内部错误: {"code","message"}
-  AGENTXX_EVT_ERROR(10);
+  AGENTXX_FFI_EVT_ERROR(10);
 
   final int value;
-  const AgentxxEventType(this.value);
+  const AgentxxFFIEventType(this.value);
 
-  static AgentxxEventType fromValue(int value) => switch (value) {
-        0 => AGENTXX_EVT_READY,
-        1 => AGENTXX_EVT_SYNC,
-        2 => AGENTXX_EVT_DELTA,
-        3 => AGENTXX_EVT_TURN_END,
-        4 => AGENTXX_EVT_CONTEXT_STATS,
-        5 => AGENTXX_EVT_MODEL_INFO,
-        6 => AGENTXX_EVT_COMPONENTS,
-        7 => AGENTXX_EVT_INTERRUPT_REQ,
-        8 => AGENTXX_EVT_INTERRUPT_EXPIRED,
-        9 => AGENTXX_EVT_PLUGIN_DATA,
-        10 => AGENTXX_EVT_ERROR,
-        _ => throw ArgumentError('Unknown value for AgentxxEventType: $value'),
+  static AgentxxFFIEventType fromValue(int value) => switch (value) {
+        0 => AGENTXX_FFI_EVT_READY,
+        1 => AGENTXX_FFI_EVT_SYNC,
+        2 => AGENTXX_FFI_EVT_DELTA,
+        3 => AGENTXX_FFI_EVT_TURN_END,
+        4 => AGENTXX_FFI_EVT_CONTEXT_STATS,
+        5 => AGENTXX_FFI_EVT_MODEL_INFO,
+        6 => AGENTXX_FFI_EVT_COMPONENTS,
+        7 => AGENTXX_FFI_EVT_INTERRUPT_REQ,
+        8 => AGENTXX_FFI_EVT_INTERRUPT_EXPIRED,
+        9 => AGENTXX_FFI_EVT_PLUGIN_DATA,
+        10 => AGENTXX_FFI_EVT_ERROR,
+        _ =>
+          throw ArgumentError('Unknown value for AgentxxFFIEventType: $value'),
       };
 }
