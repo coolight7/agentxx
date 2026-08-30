@@ -409,6 +409,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
                 XX_TEST_EXPECT_TRUE(false);
                 co_return TestResult{g_plugin_passed, g_plugin_failed};
             }
+            for (int i = 0; i < 20 && !ctx->toolRegistry->contains("js_hello"); ++i) co_await sleepMs(50);
             XX_TEST_EXPECT_TRUE(ctx->toolRegistry->contains("js_hello"));
             // 卸载引擎 → 级联卸载 example_js (依赖图: example_js depends 引擎)
             auto ok = co_await ctx->pluginManager->unloadAsync("agentxx_javascript_engine");
@@ -432,6 +433,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
             XX_TEST_EXPECT_TRUE(engine3 != nullptr);
             auto js4 = co_await ctx->pluginManager->loadPluginAsync(jsDir);
             XX_TEST_EXPECT_TRUE(js4 != nullptr);
+            for (int i = 0; i < 20 && js4 && !ctx->toolRegistry->contains("js_hello"); ++i) co_await sleepMs(50);
             if (js4) {
                 // 脚本内互查已由 plugin.js 顶层执行 (日志); 此处验证宿主侧 JSON
                 auto engineJson = ctx->pluginManager->getPluginJson("agentxx_javascript_engine");
@@ -604,6 +606,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
         XX_TEST_EXPECT_TRUE(engine25 != nullptr);
         auto js25 = co_await ctx->pluginManager->loadPluginAsync(jsDir);
         XX_TEST_EXPECT_TRUE(js25 != nullptr);
+        for (int i = 0; i < 20 && js25 && !ctx->toolRegistry->contains("js_hello"); ++i) co_await sleepMs(50);
         if (engine25 && js25) {
             ctx->pluginManager->disable("example_js"); // 用户手动禁用
             XX_TEST_EXPECT_FALSE(ctx->pluginManager->find("example_js")->enabled);
@@ -626,6 +629,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
         XX_TEST_EXPECT_TRUE(engine26 != nullptr);
         auto js26 = co_await ctx->pluginManager->loadPluginAsync(jsDir);
         XX_TEST_EXPECT_TRUE(js26 != nullptr);
+        for (int i = 0; i < 10 && js26 && !ctx->toolRegistry->contains("js_hello"); ++i) co_await sleepMs(50);
         ctx->pluginManager->shutdownAll();
         XX_TEST_EXPECT_TRUE(ctx->pluginManager->find("example_js") == nullptr);
         XX_TEST_EXPECT_TRUE(ctx->pluginManager->find("agentxx_javascript_engine") == nullptr);
@@ -646,6 +650,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
         engCfg.enabled = true;
         cfgs.push_back(engCfg);
         co_await ctx->pluginManager->loadConfiguredPlugins(cfgs);
+        for (int i=0;i<20 && !ctx->toolRegistry->contains("js_hello");++i) co_await sleepMs(50);
         // 两者都应加载成功 (拓扑排序保证引擎先加载)
         XX_TEST_EXPECT_TRUE(ctx->pluginManager->find("agentxx_javascript_engine") != nullptr);
         XX_TEST_EXPECT_TRUE(ctx->pluginManager->find("example_js") != nullptr);

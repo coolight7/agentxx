@@ -695,15 +695,34 @@ struct CallToolAwaiter {
                 auto  handle = std::coroutine_handle<Promise>::from_address(s->coroAddr);
                 auto& prom   = handle.promise();
                 prom.clear_outstanding();
-                if (s->schedPost) {
-                    s->schedPost(s->host, s->coroAddr);
-                } else {
-                    try {
-                        handle.resume();
-                    } catch (...) {
-                        prom.set_exception(std::current_exception());
+                {
+                    bool needPost = false;
+                    if (s->host) {
+                        auto ifs = agentxx::plugin::AgentIfaces::query(s->host);
+                        if (ifs.scheduler && ifs.scheduler->is_io_thread) {
+                            needPost = !ifs.scheduler->is_io_thread(s->host);
+                        }
                     }
-                    finishIfDone(handle);
+                    if (needPost) {
+                        auto ifs = agentxx::plugin::AgentIfaces::query(s->host);
+                        if (ifs.scheduler && ifs.scheduler->post_to_io) {
+                            struct ResumeData { std::coroutine_handle<Promise> h; };
+                            auto* d = new ResumeData{handle};
+                            ifs.scheduler->post_to_io(
+                                s->host,
+                                [](void* ud) {
+                                    auto* d = static_cast<ResumeData*>(ud);
+                                    try { d->h.resume(); } catch (...) { d->h.promise().set_exception(std::current_exception()); }
+                                    detail::finishIfDone(d->h); delete d;
+                                }, d);
+                        } else {
+                            try { handle.resume(); } catch (...) { prom.set_exception(std::current_exception()); }
+                            finishIfDone(handle);
+                        }
+                    } else {
+                        try { handle.resume(); } catch (...) { prom.set_exception(std::current_exception()); }
+                        finishIfDone(handle);
+                    }
                 }
             },
             holder,
@@ -840,15 +859,34 @@ struct InvokeCapAwaiter {
                 auto  handle = std::coroutine_handle<Promise>::from_address(s->coroAddr);
                 auto& prom   = handle.promise();
                 prom.clear_outstanding();
-                if (s->schedPost) {
-                    s->schedPost(s->host, s->coroAddr);
-                } else {
-                    try {
-                        handle.resume();
-                    } catch (...) {
-                        prom.set_exception(std::current_exception());
+                {
+                    bool needPost = false;
+                    if (s->host) {
+                        auto ifs = agentxx::plugin::AgentIfaces::query(s->host);
+                        if (ifs.scheduler && ifs.scheduler->is_io_thread) {
+                            needPost = !ifs.scheduler->is_io_thread(s->host);
+                        }
                     }
-                    finishIfDone(handle);
+                    if (needPost) {
+                        auto ifs = agentxx::plugin::AgentIfaces::query(s->host);
+                        if (ifs.scheduler && ifs.scheduler->post_to_io) {
+                            struct ResumeData { std::coroutine_handle<Promise> h; };
+                            auto* d = new ResumeData{handle};
+                            ifs.scheduler->post_to_io(
+                                s->host,
+                                [](void* ud) {
+                                    auto* d = static_cast<ResumeData*>(ud);
+                                    try { d->h.resume(); } catch (...) { d->h.promise().set_exception(std::current_exception()); }
+                                    detail::finishIfDone(d->h); delete d;
+                                }, d);
+                        } else {
+                            try { handle.resume(); } catch (...) { prom.set_exception(std::current_exception()); }
+                            finishIfDone(handle);
+                        }
+                    } else {
+                        try { handle.resume(); } catch (...) { prom.set_exception(std::current_exception()); }
+                        finishIfDone(handle);
+                    }
                 }
             },
             holder,

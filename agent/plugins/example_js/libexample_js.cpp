@@ -147,26 +147,19 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
             if (escPath) {
                 host->vtable->free(escPath);
             }
-            char* err  = nullptr;
-            char* resp = agentxx::kit::invoke_capability_blocking(
+            char* err = nullptr;
+            auto* h = s_if.capabilities->invoke_capability_async(
                 host,
-                s_if.capabilities,
-                s_if.scheduler,
-                "interpreter.js",
-                "load",
-                args,
-                &err
-            );
-            if (!resp) {
-                std::string errStr = err ? err : "load script failed";
-                if (err) {
-                    host->vtable->free(err);
-                }
+                AGENTXX_SV("interpreter.js"),
+                AGENTXX_SV("load"),
+                agentxx_plugin_sv(args.data(), args.size()),
+                nullptr, nullptr, &err);
+            if (!h) {
+                std::string errStr = err ? err : "load script async dispatch failed";
+                if (err) host->vtable->free(err);
                 logE(std::string("example_js: ") + errStr);
                 return -1;
             }
-            host->vtable->free(resp);
-
             *plugin_ctx = ctx.release();
             return 0;
         }
@@ -191,25 +184,16 @@ extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_agent_destroy(void* plugin_
                     agentxx_plugin_sv(ctx->name.data(), ctx->name.size())
                 );
                 std::string args = std::string("{\"name\":") + (esc ? esc : "\"\"") + "}";
-                if (esc) {
-                    host->vtable->free(esc);
-                }
-                char* err  = nullptr;
-                char* resp = agentxx::kit::invoke_capability_blocking(
+                if (esc) host->vtable->free(esc);
+                char* err = nullptr;
+                auto* h = ctx->iface.capabilities->invoke_capability_async(
                     host,
-                    ctx->iface.capabilities,
-                    ctx->iface.scheduler,
-                    "interpreter.js",
-                    "unload",
-                    args,
-                    &err
-                );
-                if (resp) {
-                    host->vtable->free(resp);
-                }
-                if (err) {
-                    host->vtable->free(err);
-                }
+                    AGENTXX_SV("interpreter.js"),
+                    AGENTXX_SV("unload"),
+                    agentxx_plugin_sv(args.data(), args.size()),
+                    nullptr, nullptr, &err);
+                if (!h) { if(err) host->vtable->free(err); }
+                else if (err) host->vtable->free(err);
             }
             delete ctx;
         }
