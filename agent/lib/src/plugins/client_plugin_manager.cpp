@@ -991,7 +991,7 @@ void ClientPluginManager::onUserInput(std::string_view sessionId, std::string_vi
     dispatchEvent(AGENTXX_CLIENT_EVT_USER_INPUT, j.dump());
 }
 
-void ClientPluginManager::onDelta(const agentxx::agent::Delta& delta) {
+void ClientPluginManager::onDelta(const agentxx::agent::WireDelta& delta) {
     dispatchEvent(AGENTXX_CLIENT_EVT_DELTA, agentxx::agent::io::deltaToJson(delta).dump());
 }
 

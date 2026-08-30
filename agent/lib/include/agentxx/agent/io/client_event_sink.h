@@ -41,7 +41,7 @@ public:
 
     /// 增量事件 (流式 token / tool 生命周期 / 轮次边界等)
     /// - payload: delta JSON (与 wire delta 字段一致)
-    virtual void onDelta(const Delta& delta) {}
+    virtual void onDelta(const WireDelta& delta) {}
 
     /// 轮次结束
     /// - payload: turn result JSON

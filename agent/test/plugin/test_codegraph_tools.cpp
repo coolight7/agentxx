@@ -205,7 +205,6 @@ asio::awaitable<TestResult>
              "agentxx_codegraph_context",
              "agentxx_codegraph_callers",
              "agentxx_codegraph_callees",
-             "agentxx_codegraph_impact",
              "agentxx_codegraph_path",
          }) {
         XX_TEST_EXPECT_TRUE(ctx->toolRegistry->contains(toolName));
@@ -291,16 +290,6 @@ asio::awaitable<TestResult>
             XX_TEST_EXPECT_TRUE(
                 out.find("Callees (") != std::string::npos
                 || out.find("error:") != std::string::npos
-            );
-        }
-        auto impact = ctx->toolRegistry->find("agentxx_codegraph_impact");
-        XX_TEST_EXPECT_TRUE(impact != nullptr);
-        if (impact) {
-            auto out = co_await impact->execute_async(neograph::json{
-                {"symbol", "add"}
-            });
-            XX_TEST_EXPECT_TRUE(
-                out.find("Impact (") != std::string::npos || out.find("error:") != std::string::npos
             );
         }
         auto pathTool = ctx->toolRegistry->find("agentxx_codegraph_path");

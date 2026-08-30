@@ -64,12 +64,11 @@ public:
 
     /// 执行一轮对话
     /// - 消息由 Session 内部管理 (viewMessages + llmMessages 双消息集)
-    /// - 增量事件经 io->sendToPeer(Delta) 推送 (io 端点须已设置 transport);
+    /// - 增量事件经 io->sendToPeer(WireDelta) 推送 (io 端点须已设置 transport);
     ///   io 传 nullptr 时为 headless 模式, 不产出事件
     asio::awaitable<TurnResult> runTurnAsync(
-        std::string_view sessionId,
-        std::string_view userInput,
-        [[maybe_unused]] bool isFirstMsg, ///< 保留调用方语义表达; 当前引擎侧不再使用
+        std::string_view             sessionId,
+        std::string_view             userInput,
         std::shared_ptr<AgentIOBase> io,
         std::string_view             modelName = ""
     );

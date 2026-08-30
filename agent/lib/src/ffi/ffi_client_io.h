@@ -104,9 +104,9 @@ public:
 protected:
 
     // ---- AgentIOBase 被动接收回调 (均在 client io 线程执行) ----
-    void onDelta(const agent::Delta& delta) override;
+    void onDelta(const agent::WireDelta& delta) override;
 
-    void onSync(const agent::SyncPayload& payload) override;
+    void onSync(const agent::WireSyncPayload& payload) override;
 
     void onTurnResult(const agent::WireTurnResult& result) override;
 

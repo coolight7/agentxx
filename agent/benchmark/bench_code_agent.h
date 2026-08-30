@@ -337,7 +337,6 @@ inline void benchCodeAgentRunConversationTurnAsync(const CodeAgentBenchConfig& c
                 auto turnResult = co_await agent.runTurnAsync(
                     "bench_session_" + std::to_string(i),
                     cfg.userInput,
-                    true,
                     nullptr
                 );
 
@@ -587,7 +586,6 @@ inline void benchCodeAgentMultiTurn(const CodeAgentBenchConfig& cfg) {
                     auto turnResult = co_await agent.runTurnAsync(
                         "bench_multi_" + std::to_string(i),
                         cfg.userInput,
-                        turn == 0,
                         nullptr
                     );
                     if (turnResult.hasError) {
@@ -668,7 +666,6 @@ inline void benchCodeAgentLargeHistory(const CodeAgentBenchConfig& cfg) {
                 auto turnResult = co_await agent.runTurnAsync(
                     "bench_history_" + std::to_string(i),
                     cfg.userInput,
-                    true,
                     nullptr
                 );
                 auto end = std::chrono::high_resolution_clock::now();

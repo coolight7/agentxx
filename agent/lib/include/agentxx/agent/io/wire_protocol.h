@@ -78,11 +78,11 @@ struct CloseReason {
 };
 
 // ---------------------------------------------------------------------------
-// Delta <-> json
+// WireDelta <-> json
 // ---------------------------------------------------------------------------
 
-inline std::string_view deltaTypeToString(Delta::Type t) noexcept {
-    using T = Delta::Type;
+inline std::string_view deltaTypeToString(WireDelta::Type t) noexcept {
+    using T = WireDelta::Type;
     switch (t) {
         case T::TextToken:
             return "text_token";
@@ -108,8 +108,8 @@ inline std::string_view deltaTypeToString(Delta::Type t) noexcept {
     return "text_token";
 }
 
-inline std::optional<Delta::Type> deltaTypeFromString(std::string_view s) noexcept {
-    using T = Delta::Type;
+inline std::optional<WireDelta::Type> deltaTypeFromString(std::string_view s) noexcept {
+    using T = WireDelta::Type;
     if (s == "text_token") {
         return T::TextToken;
     }
@@ -143,7 +143,7 @@ inline std::optional<Delta::Type> deltaTypeFromString(std::string_view s) noexce
     return std::nullopt;
 }
 
-inline neograph::json deltaToJson(const Delta& d) {
+inline neograph::json deltaToJson(const WireDelta& d) {
     neograph::json j = neograph::json::object();
     j["type"]        = std::string(deltaTypeToString(d.type));
     j["seq"]         = d.seq;
@@ -203,12 +203,12 @@ inline neograph::json deltaToJson(const Delta& d) {
         j["message"] = d.message->toJson();
     }
     // MessageUITip: 提示级别
-    if (d.type == Delta::Type::MessageUITip) {
+    if (d.type == WireDelta::Type::MessageUITip) {
         switch (d.tipType) {
-            case Delta::TipType::Warning:
+            case WireDelta::TipType::Warning:
                 j["tipType"] = "warning";
                 break;
-            case Delta::TipType::Error:
+            case WireDelta::TipType::Error:
                 j["tipType"] = "error";
                 break;
             default:
@@ -219,7 +219,7 @@ inline neograph::json deltaToJson(const Delta& d) {
     return j;
 }
 
-inline std::optional<Delta> deltaFromJson(const neograph::json& j) {
+inline std::optional<WireDelta> deltaFromJson(const neograph::json& j) {
     if (!j.is_object()) {
         return std::nullopt;
     }
@@ -227,7 +227,7 @@ inline std::optional<Delta> deltaFromJson(const neograph::json& j) {
     if (!typeOpt.has_value()) {
         return std::nullopt;
     }
-    Delta d;
+    WireDelta d;
     d.type         = typeOpt.value();
     d.seq          = j.value("seq", uint64_t{0});
     d.text         = j.value("text", std::string{});
@@ -252,21 +252,21 @@ inline std::optional<Delta> deltaFromJson(const neograph::json& j) {
     if (j.contains("message") && j["message"].is_object()) {
         d.message = std::make_shared<ViewMessage>(ViewMessage::fromJson(j["message"]));
     }
-    if (d.type == Delta::Type::MessageUITip) {
+    if (d.type == WireDelta::Type::MessageUITip) {
         const auto tip = j.value("tipType", std::string{"info"});
         if (tip == "warning") {
-            d.tipType = Delta::TipType::Warning;
+            d.tipType = WireDelta::TipType::Warning;
         } else if (tip == "error") {
-            d.tipType = Delta::TipType::Error;
+            d.tipType = WireDelta::TipType::Error;
         } else {
-            d.tipType = Delta::TipType::Info;
+            d.tipType = WireDelta::TipType::Info;
         }
     }
     return d;
 }
 
 // ---------------------------------------------------------------------------
-// SyncPayload <-> json
+// WireSyncPayload <-> json
 // ---------------------------------------------------------------------------
 
 inline neograph::json messageQueueItemToJson(const MessageQueueItem& item) {
@@ -290,7 +290,7 @@ inline MessageQueueItem messageQueueItemFromJson(const neograph::json& j) {
     return item;
 }
 
-inline neograph::json syncToJson(const SyncPayload& p) {
+inline neograph::json syncToJson(const WireSyncPayload& p) {
     neograph::json j = neograph::json::object();
     j["fromIndex"]   = p.fromIndex;
     j["tailHash"]    = p.tailHash;
@@ -312,11 +312,11 @@ inline neograph::json syncToJson(const SyncPayload& p) {
     return j;
 }
 
-inline std::optional<SyncPayload> syncFromJson(const neograph::json& j) {
+inline std::optional<WireSyncPayload> syncFromJson(const neograph::json& j) {
     if (!j.is_object()) {
         return std::nullopt;
     }
-    SyncPayload p;
+    WireSyncPayload p;
     p.fromIndex     = j.value("fromIndex", uint64_t{0});
     p.tailHash      = j.value("tailHash", std::string{});
     p.totalMessages = j.value("totalMessages", uint64_t{0});
@@ -439,7 +439,7 @@ inline neograph::json makeHelloAck(
     return j;
 }
 
-inline neograph::json makeDeltaMsg(const Delta& d) {
+inline neograph::json makeDeltaMsg(const WireDelta& d) {
     neograph::json j = deltaToJson(d);
     // 复用 deltaToJson 的字段, 但信封 type 固定为 "delta"
     j["type"] = MsgType::DeltaMsg;
@@ -447,8 +447,8 @@ inline neograph::json makeDeltaMsg(const Delta& d) {
     return j;
 }
 
-/// 从 "delta" 信封还原 Delta (type 字段取自 "kind")
-inline std::optional<Delta> deltaMsgFromJson(const neograph::json& j) {
+/// 从 "delta" 信封还原 WireDelta (type 字段取自 "kind")
+inline std::optional<WireDelta> deltaMsgFromJson(const neograph::json& j) {
     if (!j.is_object()) {
         return std::nullopt;
     }
@@ -457,7 +457,7 @@ inline std::optional<Delta> deltaMsgFromJson(const neograph::json& j) {
     return deltaFromJson(patched);
 }
 
-inline neograph::json makeSyncMsg(const SyncPayload& p, uint64_t deltaSeq = 0) {
+inline neograph::json makeSyncMsg(const WireSyncPayload& p, uint64_t deltaSeq = 0) {
     neograph::json j = syncToJson(p);
     j["type"]        = MsgType::SyncMsg;
     if (deltaSeq > 0) {
@@ -466,7 +466,7 @@ inline neograph::json makeSyncMsg(const SyncPayload& p, uint64_t deltaSeq = 0) {
     return j;
 }
 
-inline std::optional<SyncPayload> syncMsgFromJson(const neograph::json& j) {
+inline std::optional<WireSyncPayload> syncMsgFromJson(const neograph::json& j) {
     return syncFromJson(j);
 }
 

@@ -24,7 +24,7 @@ bool EventBus::remove(std::string_view topic) {
 }
 
 // ---------------------------------------------------------------------------
-// EventBridge: GraphEvent -> 会话增量 Delta + EventBus 发布
+// EventBridge: GraphEvent -> 会话增量 WireDelta + EventBus 发布
 // ---------------------------------------------------------------------------
 
 EventBridge::EventBridge(
@@ -49,7 +49,7 @@ void EventBridge::operator()(const neograph::graph::GraphEvent& event) {
     }
 
     // 统一处理: 每个事件类型仅一个 handler, 同时负责对内 (总线发布) 与对外
-    // (会话增量 Delta/历史) 处理, 避免同一事件在多处维护
+    // (会话增量 WireDelta/历史) 处理, 避免同一事件在多处维护
     using T = neograph::graph::GraphEvent::Type;
     switch (event.type) {
         case T::LLM_TOKEN:
@@ -75,10 +75,10 @@ void EventBridge::operator()(const neograph::graph::GraphEvent& event) {
     }
 }
 
-void EventBridge::emitDelta(agentxx::agent::Delta delta) {
-    // Delta 流序号: 会话级单调递增 (服务端增量重放缓冲依赖 seq 单调性)
+void EventBridge::emitDelta(agentxx::agent::WireDelta delta) {
+    // WireDelta 流序号: 会话级单调递增 (服务端增量重放缓冲依赖 seq 单调性)
     // 统一经 Session::nextDeltaSeq 分配 (与 SessionServerAgentIO 的新产出
-    // Delta 共用同一入口, 保证所有新 Delta 都携带有效 seq 入重放缓冲)
+    // WireDelta 共用同一入口, 保证所有新 WireDelta 都携带有效 seq 入重放缓冲)
     delta.seq = session_->nextDeltaSeq();
     if (io_) {
         io_->sendToPeer(std::move(delta));
@@ -125,7 +125,7 @@ void EventBridge::handleLLMToken(const neograph::graph::GraphEvent& event) {
     // - 进入 THINKING: 记录段起点 (think 耗时从此刻起算, 不随 token 携带时长,
     //   避免"流式刚开始就显示耗时")
     // - 离开 THINKING (切换到正文): 先结算 think 段耗时 —— 在正文首个 token 的
-    //   Delta 之前发送空文本 ThinkToken 结算包, client 收到后为已落盘的 Think
+    //   WireDelta 之前发送空文本 ThinkToken 结算包, client 收到后为已落盘的 Think
     //   消息回填最终时长 ("输出完成时才计算并显示")
     const bool curIsThinking = (lastChatChunkType_ == neograph::ChatStreamChunk::TYPE_THINKING);
     if (!prevWasThinking && curIsThinking) {
@@ -165,14 +165,14 @@ void EventBridge::handleLLMToken(const neograph::graph::GraphEvent& event) {
         }
     }
 
-    emitDelta(agentxx::agent::Delta{
+    emitDelta(agentxx::agent::WireDelta{
         .type        = (lastChatChunkType_ == neograph::ChatStreamChunk::TYPE_THINKING)
-                           ? agentxx::agent::Delta::Type::ThinkToken
-                           : agentxx::agent::Delta::Type::TextToken,
+                           ? agentxx::agent::WireDelta::Type::ThinkToken
+                           : agentxx::agent::WireDelta::Type::TextToken,
         .text        = std::move(token),
         .think       = std::move(thinkData),
         .startTimeMs = nodeStartTimeMs_,
-        // token Delta 不再携带 durationMs: think 耗时由 finalizeThinkSegment()
+        // token WireDelta 不再携带 durationMs: think 耗时由 finalizeThinkSegment()
         // 在段落完成时以独立结算包发送 (见 handleLLMToken 内 THINKING 流段跟踪)
     });
 }
@@ -191,8 +191,8 @@ void EventBridge::finalizeThinkSegment() {
                                    std::chrono::system_clock::now() - thinkSegStart_
         )
                                    .count());
-    emitDelta(agentxx::agent::Delta{
-        .type        = agentxx::agent::Delta::Type::ThinkToken,
+    emitDelta(agentxx::agent::WireDelta{
+        .type        = agentxx::agent::WireDelta::Type::ThinkToken,
         .text        = {},
         .startTimeMs = thinkSegStartMs_,
         .durationMs  = durationMs,
@@ -200,28 +200,28 @@ void EventBridge::finalizeThinkSegment() {
 }
 
 void EventBridge::handleChannelWrite(const neograph::graph::GraphEvent& event) {
-    using agentxx::agent::Delta;
     using agentxx::agent::ViewMessage;
+    using agentxx::agent::WireDelta;
 
     // 最终 assistant 消息写出即生成结束: 先结算未闭合的 THINKING 流段
     // (典型场景: 思考后直接发起 tool_calls, 无正文 token 触发类型切换,
-    // 结算包必须先于 ToolStart Delta 到达, client 才能回填 Think 时长)
+    // 结算包必须先于 ToolStart WireDelta 到达, client 才能回填 Think 时长)
     finalizeThinkSegment();
 
     auto chan  = event.data.value("channel", std::string{});
     auto value = event.data.value("value", neograph::json{});
 
-    // 通用提示消息: 转发为 Delta::MessageUITip, 由 client 端插入提示消息
+    // 通用提示消息: 转发为 WireDelta::MessageUITip, 由 client 端插入提示消息
     if (chan == "message_tip" && value.is_object()) {
-        auto       tipType = Delta::TipType::Info;
+        auto       tipType = WireDelta::TipType::Info;
         const auto tip     = value.value("tipType", std::string{"info"});
         if (tip == "warning") {
-            tipType = Delta::TipType::Warning;
+            tipType = WireDelta::TipType::Warning;
         } else if (tip == "error") {
-            tipType = Delta::TipType::Error;
+            tipType = WireDelta::TipType::Error;
         }
-        emitDelta(Delta{
-            .type    = Delta::Type::MessageUITip,
+        emitDelta(WireDelta{
+            .type    = WireDelta::Type::MessageUITip,
             .text    = value.value("text", std::string{}),
             .tipType = tipType,
         });
@@ -268,8 +268,8 @@ void EventBridge::handleChannelWrite(const neograph::graph::GraphEvent& event) {
                 m.collapsed = true;
                 session_->appendViewMessage(std::move(m));
                 if (isEncrypted || reasoningTokens > 0) {
-                    emitDelta(Delta{
-                        .type        = Delta::Type::ThinkToken,
+                    emitDelta(WireDelta{
+                        .type        = WireDelta::Type::ThinkToken,
                         .text        = "",
                         .think       = ViewMessage::ThinkData{
                             .reasoningTokens = reasoningTokens,
@@ -317,8 +317,8 @@ void EventBridge::handleChannelWrite(const neograph::graph::GraphEvent& event) {
                     if (!toolCallId.empty()) {
                         toolCallHistoryIndex_[toolCallId] = historyIndex;
                     }
-                    emitDelta(Delta{
-                        .type        = Delta::Type::ToolStart,
+                    emitDelta(WireDelta{
+                        .type        = WireDelta::Type::ToolStart,
                         .msgId       = msgId,
                         .toolName    = toolName,
                         .toolCallId  = toolCallId,
@@ -400,8 +400,8 @@ void EventBridge::handleChannelWrite(const neograph::graph::GraphEvent& event) {
                 // (edit 工具参数 unified diff: 渲染端自行计算, 无消费者, 不再生成;
                 //  ToolData::diff 字段保留供未来)
             }
-            emitDelta(Delta{
-                .type        = Delta::Type::ToolEnd,
+            emitDelta(WireDelta{
+                .type        = WireDelta::Type::ToolEnd,
                 .toolName    = toolName,
                 .toolCallId  = toolCallId,
                 .result      = content,
@@ -493,8 +493,8 @@ void EventBridge::handleNodeStart(const neograph::graph::GraphEvent& event) {
         std::chrono::duration_cast<std::chrono::milliseconds>(nodeStartTime_.time_since_epoch())
             .count()
     );
-    emitDelta(agentxx::agent::Delta{
-        .type        = agentxx::agent::Delta::Type::NodeStart,
+    emitDelta(agentxx::agent::WireDelta{
+        .type        = agentxx::agent::WireDelta::Type::NodeStart,
         .nodeName    = event.node_name,
         .startTimeMs = nodeStartTimeMs_,
     });
@@ -504,7 +504,7 @@ void EventBridge::handleNodeEnd(const neograph::graph::GraphEvent& event) {
     // 结算当前 LLM 流: 将流耗时累加到轮级 tps 统计 (ModelCall 节点结束即流结束)
     settleCurrentStream();
     // 结算未闭合的 THINKING 段 (思考后无正文直接结束的流, 如纯思考/仅 tool_calls):
-    // 结算包先于 NodeEnd Delta 发送, client 先回填 Think 时长再收节点结束事件
+    // 结算包先于 NodeEnd WireDelta 发送, client 先回填 Think 时长再收节点结束事件
     finalizeThinkSegment();
     lastChatChunkType_ = neograph::ChatStreamChunk::TYPE_UNKNOWN;
     // 计算持续时间
@@ -513,8 +513,8 @@ void EventBridge::handleNodeEnd(const neograph::graph::GraphEvent& event) {
                                    std::chrono::system_clock::now() - nodeStartTime_
         )
                                    .count());
-    emitDelta(agentxx::agent::Delta{
-        .type        = agentxx::agent::Delta::Type::NodeEnd,
+    emitDelta(agentxx::agent::WireDelta{
+        .type        = agentxx::agent::WireDelta::Type::NodeEnd,
         .nodeName    = event.node_name,
         .startTimeMs = nodeStartTimeMs_,
         .durationMs  = duration_ms,
@@ -522,7 +522,7 @@ void EventBridge::handleNodeEnd(const neograph::graph::GraphEvent& event) {
 }
 
 void EventBridge::handleError(const neograph::graph::GraphEvent& event) {
-    // 错误不产出会话增量 Delta (由 WireTurnResult 统一报告), 仅发布总线事件
+    // 错误不产出会话增量 WireDelta (由 WireTurnResult 统一报告), 仅发布总线事件
     // 结算当前 LLM 流 (错误/取消可能跳过节点结束, 轮级统计需及时结算)
     settleCurrentStream();
     // 结算未闭合的 THINKING 段: 错误/取消中断思考流时同样回填已耗时长,

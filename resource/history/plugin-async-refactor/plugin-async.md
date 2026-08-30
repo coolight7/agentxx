@@ -90,7 +90,7 @@ C++20 协程帧是插件自己的堆内存；**`coroutine_handle::resume()` 从�
 | 完成机制假设有运行中的 scheduler | asio 定时器/socket 的完成 handler 由其关联 reactor 事件循环驱动；锚定模型里唯一的循环是宿主线程，asio 无法把 handler 投进去 |
 | 手动 resume 不被支持 | 锚定模型的引擎是「宿主回调里 `resume()`」；`awaitable_frame` 生命周期由 `co_spawn` 私有管理 |
 
-结论：自定义极简 `Task<T>`（约 150 行 header-only）作为锚定载体；需要真 socket/子进程异步管道的插件自带线程跑裸 asio（见 5.6 `reactor_tool`）。两者分层共存，中间地带全部删除。
+结论：自定义极简 `Task<T>`（约 150 行 header-only）作为锚定载体；两者分层共存，中间地带全部删除。
 
 ### 2.3 操作协议：从三件套到两件套
 
@@ -373,16 +373,6 @@ system_monitor 采集器、text_selection 监听等全部迁到此形态；`add_
 自 ABI 删除，"定时器"概念统一为「任务里的 sleep 循环」。
 后台任务持有 inflight guard；卸载时置取消并等终结（30s 超时放弃，契约注明任务必须可取消）。
 
-### 5.6 reactor_tool —— 自有线程插件的桥接模板
-
-```cpp
-kit::reactor_tool(base, loop /*实例私有 io_context+thread*/, &my_reactor_task);
-// start → post spawn 到 loop 线程; 完成 → notify (任意线程可调); cancel → flag + loop.post
-```
-
-execute_command (bp::v2 异步管道)、未来高并发网络型插件使用此形态；
-loop 线程空闲 park 在 cv 上零 CPU，destroy 时 join（JS 引擎成熟模式复用）。
-
 ---
 
 ## 6. 宿主侧实现要点
@@ -450,11 +440,11 @@ awaitPluginOp(args):
 |------|--------|--------|------|
 | string / system / planning / rag_search | sync 垫片 | `blocking_tool` | 语义不变，样板消失 |
 | **filesystem** glob/grep/list 等 CPU 型 | sync 垫片 | `blocking_tool` | 不变 |
-| **filesystem** read/write/edit（真异步 stream_file） | polled (asio stream_file 私有 loop) | **默认** `blocking_tool`(offload 阻塞 IO)；备选 `reactor_tool` 保真异步 | impl 已是 asio 协程 → 升级路径几乎零改动（仅换 loop 宿主为专用线程）。触发升级条件：大文件高并发吞吐导致池线程饥饿。默认取简单优先 |
+| **filesystem** read/write/edit（真异步 stream_file） | polled (asio stream_file 私有 loop) | **默认** `blocking_tool`(offload 阻塞 IO) | impl 已是 asio 协程 → 升级路径几乎零改动（仅换 loop 宿主为专用线程）。触发升级条件：大文件高并发吞吐导致池线程饥饿。默认取简单优先 |
 | example_plugin echo 等 | inline 垫片 | `fast_tool` | |
 | example_plugin sleeper（手写三件套 sleep_poll） | 手写三件套 | `tool` + `co_await c.sleep()` | 成为锚定模型教学样本 |
-| **websearch** | polled (asio http 私有 loop) | **默认** `reactor_tool`（现有 asio http impl 原样挂到实例专用线程 loop，行为零差异）；`blocking_tool`+curl easy 为将来可选简化 | 与 filesystem 同理：impl 已是 asio 协程，reactor 迁移几乎零改动；curl 重写自带编码/压缩/代理行为差异风险（§10），不应作为默认；reactor 形态天然支持高并发，无需预留升级触发条件 |
-| **execute_command** | polled (bp::v2) + popen 双路径 | `reactor_tool` (每实例一线程保 bp::v2 异步管道) + popen 回退并入 `blocking_tool` | 保留精确唤醒/超时击杀语义；双路径样板消失 |
+| **websearch** | polled (asio http 私有 loop) | `blocking_tool`+curl easy 为将来可选简化 | 与 filesystem 同理：impl 已是 asio 协程，reactor 迁移几乎零改动；curl 重写自带编码/压缩/代理行为差异风险（§10），不应作为默认；reactor 形态天然支持高并发，无需预留升级触发条件 |
+| **execute_command** | polled (bp::v2) + popen 双路径 | popen 回退并入 `blocking_tool` | 保留精确唤醒/超时击杀语义；双路径样板消失 |
 | **system_monitor** 能力采样 | polled (100ms 定时等待) | `tool` + `c.sleep(100)` | 教科书式受益者 |
 | system_monitor 周期采集 | add_timer + offload | `spawn` + sleep 循环 + offload | add_timer 消费者清零 |
 | text_selection_monitor delayMs | sync 垫片（delayMs 在执行函数内） | `blocking_tool` | 机械替换 |
@@ -487,7 +477,7 @@ Phase A  lib 内核 (纯增量, 旧 ABI 面不动): scheduler 追加 sleep/cance
          暂留; 过渡期接口表成员追加仅限仓内同步重编译——项目无外部二进制消费者)
          └─ 验收: 现有 plugins 测试模块全绿 (旧路径行为不变) + 取消延迟专项测试
 Phase B  plugin_kit.h: PluginBase / Task<T> (含完成协议, 见 5.2) / 原语族 /
-         注册族 / spawn / reactor_tool / Logger / 阻塞助手 (condvar)
+         注册族 / spawn / Logger / 阻塞助手 (condvar)
 Phase C  14 个内置插件逐个迁移到 kit 注册族 (新旧姿势并存, 每迁一个跑一次测试);
          test_plugins.cpp 的 3 组 poll 用例 + 4 组 HostOp 用例随迁移改写为回调形
 Phase C2 ABI 收尾 (最后一个旧姿势消费者迁完后一次性执行):
@@ -553,7 +543,6 @@ Phase A 即删 poll/HostOp，会使 4 个 polled 插件与 7 组测试用例当�
 | 卸载撞上挂起中的长 sleep / 不可取消后台任务 | detachAll 对 outstanding-op 登记表逐项发 cancel（§3.3）；仍不可取消者走既有 30s 超时放弃路径 |
 | Task 帧销毁与 done/guard 释放时序错位 → 卸载后跑析构 | finishIfDone 单点收尾：先销毁帧再 done（§5.2）；测试 #3/#6 覆盖 |
 | op_cancel 迟到调用（完成后/退休后） | 句柄归宿主、挂实例登记表、随 detach 退休（§4.3 生命周期），迟到调用幂等无害 |
-| websearch 迁移行为差异（编码/压缩/代理） | 默认 reactor_tool 保 asio http 零行为差异；curl+blocking 仅作将来可选简化且需单独对比测试 |
 
 ## 11. 与旧设计的差异对照
 

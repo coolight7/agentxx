@@ -51,21 +51,21 @@ using agentxx::agent::SessionServerAgentIO;
 class TestIO : public agentxx::agent::AgentIOBase {
 public:
 
-    std::vector<agentxx::agent::Delta> deltas;
-    std::atomic<int>                   syncCount{0};
-    std::atomic<int>                   turnResultCount{0};
-    std::atomic<bool>                  lastTurnInterrupted{false};
-    std::atomic<uint64_t>              lastCtxTokens{0};
-    std::atomic<uint64_t>              lastMaxTokens{0};
-    std::atomic<double>                lastTps{0.0};
-    std::mutex                         mu;
+    std::vector<agentxx::agent::WireDelta> deltas;
+    std::atomic<int>                       syncCount{0};
+    std::atomic<int>                       turnResultCount{0};
+    std::atomic<bool>                      lastTurnInterrupted{false};
+    std::atomic<uint64_t>                  lastCtxTokens{0};
+    std::atomic<uint64_t>                  lastMaxTokens{0};
+    std::atomic<double>                    lastTps{0.0};
+    std::mutex                             mu;
 
-    void onDelta(const agentxx::agent::Delta& delta) override {
+    void onDelta(const agentxx::agent::WireDelta& delta) override {
         std::lock_guard<std::mutex> lock(mu);
         deltas.push_back(delta);
     }
 
-    void onSync(const agentxx::agent::SyncPayload&) override {
+    void onSync(const agentxx::agent::WireSyncPayload&) override {
         syncCount.fetch_add(1);
     }
 
@@ -153,15 +153,15 @@ static uint16_t startServerAndWait(HttpServer& server, std::thread& th) {
 // ---------------------------------------------------------------------------
 
 static asio::awaitable<void> test_remote_protocol_roundtrip() {
-    using agentxx::agent::Delta;
-    using agentxx::agent::SyncPayload;
     using agentxx::agent::ViewMessage;
+    using agentxx::agent::WireDelta;
     using agentxx::agent::WireMessage;
+    using agentxx::agent::WireSyncPayload;
     using agentxx::agent::WsAgentIOTransport;
 
     {
-        Delta d;
-        d.type    = Delta::Type::TextToken;
+        WireDelta d;
+        d.type    = WireDelta::Type::TextToken;
         d.seq     = 5;
         d.text    = "abc";
         d.msgId   = "m1";
@@ -169,10 +169,10 @@ static asio::awaitable<void> test_remote_protocol_roundtrip() {
         auto back = WsAgentIOTransport::deserialize(json);
         XX_TEST_EXPECT_TRUE(back.has_value());
         if (back) {
-            auto* bd = std::get_if<Delta>(&*back);
+            auto* bd = std::get_if<WireDelta>(&*back);
             XX_TEST_EXPECT_TRUE(bd != nullptr);
             if (bd) {
-                XX_TEST_EXPECT_TRUE(bd->type == Delta::Type::TextToken);
+                XX_TEST_EXPECT_TRUE(bd->type == WireDelta::Type::TextToken);
                 XX_TEST_EXPECT_EQ(bd->seq, uint64_t{5});
                 XX_TEST_EXPECT_EQ(bd->text, std::string("abc"));
                 XX_TEST_EXPECT_EQ(bd->msgId, std::string("m1"));
@@ -180,8 +180,8 @@ static asio::awaitable<void> test_remote_protocol_roundtrip() {
         }
     }
     {
-        Delta d;
-        d.type       = Delta::Type::ToolEnd;
+        WireDelta d;
+        d.type       = WireDelta::Type::ToolEnd;
         d.seq        = 9;
         d.toolName   = "bash";
         d.toolCallId = "tc1";
@@ -190,10 +190,10 @@ static asio::awaitable<void> test_remote_protocol_roundtrip() {
         auto back = WsAgentIOTransport::deserialize(WsAgentIOTransport::serialize(WireMessage{d}));
         XX_TEST_EXPECT_TRUE(back.has_value());
         if (back) {
-            auto* bd = std::get_if<Delta>(&*back);
+            auto* bd = std::get_if<WireDelta>(&*back);
             XX_TEST_EXPECT_TRUE(bd != nullptr);
             if (bd) {
-                XX_TEST_EXPECT_TRUE(bd->type == Delta::Type::ToolEnd);
+                XX_TEST_EXPECT_TRUE(bd->type == WireDelta::Type::ToolEnd);
                 XX_TEST_EXPECT_EQ(bd->toolName, std::string("bash"));
                 XX_TEST_EXPECT_EQ(bd->toolCallId, std::string("tc1"));
                 XX_TEST_EXPECT_TRUE(bd->hasError);
@@ -202,19 +202,19 @@ static asio::awaitable<void> test_remote_protocol_roundtrip() {
     }
     {
         // MessageUITip: 通用提示消息 delta 序列化往返
-        Delta d;
-        d.type    = Delta::Type::MessageUITip;
+        WireDelta d;
+        d.type    = WireDelta::Type::MessageUITip;
         d.seq     = 11;
-        d.tipType = Delta::TipType::Warning;
+        d.tipType = WireDelta::TipType::Warning;
         d.text    = "LLM API 请求失败，6 秒后自动重试 (2/5)，错误: connection reset";
         auto back = WsAgentIOTransport::deserialize(WsAgentIOTransport::serialize(WireMessage{d}));
         XX_TEST_EXPECT_TRUE(back.has_value());
         if (back) {
-            auto* bd = std::get_if<Delta>(&*back);
+            auto* bd = std::get_if<WireDelta>(&*back);
             XX_TEST_EXPECT_TRUE(bd != nullptr);
             if (bd) {
-                XX_TEST_EXPECT_TRUE(bd->type == Delta::Type::MessageUITip);
-                XX_TEST_EXPECT_TRUE(bd->tipType == Delta::TipType::Warning);
+                XX_TEST_EXPECT_TRUE(bd->type == WireDelta::Type::MessageUITip);
+                XX_TEST_EXPECT_TRUE(bd->tipType == WireDelta::TipType::Warning);
                 XX_TEST_EXPECT_EQ(
                     bd->text,
                     std::string("LLM API 请求失败，6 秒后自动重试 (2/5)，错误: connection reset")
@@ -224,26 +224,26 @@ static asio::awaitable<void> test_remote_protocol_roundtrip() {
     }
     {
         // MessageUITip: Error 级别往返
-        Delta d;
-        d.type    = Delta::Type::MessageUITip;
-        d.tipType = Delta::TipType::Error;
+        WireDelta d;
+        d.type    = WireDelta::Type::MessageUITip;
+        d.tipType = WireDelta::TipType::Error;
         d.text    = "something went wrong";
         auto back = WsAgentIOTransport::deserialize(WsAgentIOTransport::serialize(WireMessage{d}));
         XX_TEST_EXPECT_TRUE(back.has_value());
         if (back) {
-            auto* bd = std::get_if<Delta>(&*back);
+            auto* bd = std::get_if<WireDelta>(&*back);
             XX_TEST_EXPECT_TRUE(bd != nullptr);
             if (bd) {
-                XX_TEST_EXPECT_TRUE(bd->type == Delta::Type::MessageUITip);
-                XX_TEST_EXPECT_TRUE(bd->tipType == Delta::TipType::Error);
+                XX_TEST_EXPECT_TRUE(bd->type == WireDelta::Type::MessageUITip);
+                XX_TEST_EXPECT_TRUE(bd->tipType == WireDelta::TipType::Error);
                 XX_TEST_EXPECT_EQ(bd->text, std::string("something went wrong"));
             }
         }
     }
     {
-        // ThinkToken: 加密 thinking 载体 Delta 序列化往返
-        Delta d;
-        d.type  = Delta::Type::ThinkToken;
+        // ThinkToken: 加密 thinking 载体 WireDelta 序列化往返
+        WireDelta d;
+        d.type  = WireDelta::Type::ThinkToken;
         d.seq   = 15;
         d.text  = "";
         d.think = ViewMessage::ThinkData{
@@ -253,10 +253,10 @@ static asio::awaitable<void> test_remote_protocol_roundtrip() {
         auto back = WsAgentIOTransport::deserialize(WsAgentIOTransport::serialize(WireMessage{d}));
         XX_TEST_EXPECT_TRUE(back.has_value());
         if (back) {
-            auto* bd = std::get_if<Delta>(&*back);
+            auto* bd = std::get_if<WireDelta>(&*back);
             XX_TEST_EXPECT_TRUE(bd != nullptr);
             if (bd) {
-                XX_TEST_EXPECT_TRUE(bd->type == Delta::Type::ThinkToken);
+                XX_TEST_EXPECT_TRUE(bd->type == WireDelta::Type::ThinkToken);
                 XX_TEST_EXPECT_EQ(bd->seq, uint64_t{15});
                 XX_TEST_EXPECT_TRUE(bd->text.empty());
                 XX_TEST_EXPECT_TRUE(bd->think.has_value());
@@ -268,7 +268,7 @@ static asio::awaitable<void> test_remote_protocol_roundtrip() {
         }
     }
     {
-        SyncPayload p;
+        WireSyncPayload p;
         p.fromIndex = 2;
         p.tailHash  = "hash123";
         auto vm     = ViewMessage::makeText(ViewMessage::Role::User, "hi");
@@ -277,7 +277,7 @@ static asio::awaitable<void> test_remote_protocol_roundtrip() {
         auto back = WsAgentIOTransport::deserialize(WsAgentIOTransport::serialize(WireMessage{p}));
         XX_TEST_EXPECT_TRUE(back.has_value());
         if (back) {
-            auto* sp = std::get_if<SyncPayload>(&*back);
+            auto* sp = std::get_if<WireSyncPayload>(&*back);
             XX_TEST_EXPECT_TRUE(sp != nullptr);
             if (sp) {
                 XX_TEST_EXPECT_EQ(sp->fromIndex, uint64_t{2});
@@ -673,8 +673,8 @@ static asio::awaitable<void> fakeAgentHandler(HttpServer::WsStream& ws) {
         }
         auto t = io::msgType(*j);
         if (t == io::MsgType::UserInput) {
-            agentxx::agent::Delta d;
-            d.type = agentxx::agent::Delta::Type::TextToken;
+            agentxx::agent::WireDelta d;
+            d.type = agentxx::agent::WireDelta::Type::TextToken;
             d.seq  = 1;
             d.text = "hello from server";
             co_await wsSendJson(ws, io::makeDeltaMsg(d));
@@ -789,8 +789,8 @@ static asio::awaitable<void> test_session_controller_replay() {
     sc->setTransport(std::shared_ptr<agentxx::agent::AgentIOTransportBase>(std::move(serverT)));
 
     for (uint64_t s = 1; s <= 5; ++s) {
-        agentxx::agent::Delta d;
-        d.type = agentxx::agent::Delta::Type::TextToken;
+        agentxx::agent::WireDelta d;
+        d.type = agentxx::agent::WireDelta::Type::TextToken;
         d.seq  = s;
         d.text = "t" + std::to_string(s);
         sc->sendToPeer(d);
@@ -815,7 +815,7 @@ static asio::awaitable<void> test_session_controller_replay() {
     if (received.size() >= 8) {
         // 前 5 条为实时转发的 delta
         for (uint64_t s = 1; s <= 5; ++s) {
-            auto* d = std::get_if<agentxx::agent::Delta>(&received[s - 1]);
+            auto* d = std::get_if<agentxx::agent::WireDelta>(&received[s - 1]);
             XX_TEST_EXPECT_TRUE(d != nullptr);
             if (d) {
                 XX_TEST_EXPECT_EQ(d->seq, s);
@@ -827,8 +827,8 @@ static asio::awaitable<void> test_session_controller_replay() {
             XX_TEST_EXPECT_TRUE(ack->ok);
         }
         // 重放的 delta 不应重复写入缓冲 (seq 守卫), 此处收到重放 seq 4,5
-        auto* d0 = std::get_if<agentxx::agent::Delta>(&received[6]);
-        auto* d1 = std::get_if<agentxx::agent::Delta>(&received[7]);
+        auto* d0 = std::get_if<agentxx::agent::WireDelta>(&received[6]);
+        auto* d1 = std::get_if<agentxx::agent::WireDelta>(&received[7]);
         XX_TEST_EXPECT_TRUE(d0 != nullptr);
         XX_TEST_EXPECT_TRUE(d1 != nullptr);
         if (d0 && d1) {
@@ -866,8 +866,8 @@ static asio::awaitable<void> test_session_controller_replay_fallback() {
     sc->setTransport(std::shared_ptr<agentxx::agent::AgentIOTransportBase>(std::move(serverT)));
 
     for (uint64_t s = 1; s <= 10; ++s) {
-        agentxx::agent::Delta d;
-        d.type = agentxx::agent::Delta::Type::TextToken;
+        agentxx::agent::WireDelta d;
+        d.type = agentxx::agent::WireDelta::Type::TextToken;
         d.seq  = s;
         sc->sendToPeer(d);
     }
@@ -882,7 +882,7 @@ static asio::awaitable<void> test_session_controller_replay_fallback() {
         XX_TEST_EXPECT_TRUE(liveMsg.has_value());
     }
 
-    // HelloAck 须最先到达, 随后全量 SyncPayload
+    // HelloAck 须最先到达, 随后全量 WireSyncPayload
     auto ackMsg = co_await clientT->recv();
     XX_TEST_EXPECT_TRUE(ackMsg.has_value());
     if (ackMsg) {
@@ -891,7 +891,7 @@ static asio::awaitable<void> test_session_controller_replay_fallback() {
     auto msg = co_await clientT->recv();
     XX_TEST_EXPECT_TRUE(msg.has_value());
     if (msg) {
-        auto* sp = std::get_if<agentxx::agent::SyncPayload>(&*msg);
+        auto* sp = std::get_if<agentxx::agent::WireSyncPayload>(&*msg);
         XX_TEST_EXPECT_TRUE(sp != nullptr);
     }
     // 显式关闭: 使挂起的 recv 完成, 避免挂起协程持有 transport 泄漏
@@ -1029,8 +1029,8 @@ static asio::awaitable<void> test_remote_client_reconnect() {
         if (myConn == 1) {
             auto j = co_await wsRecvJson(ws);
             if (j) {
-                agentxx::agent::Delta d;
-                d.type = agentxx::agent::Delta::Type::TextToken;
+                agentxx::agent::WireDelta d;
+                d.type = agentxx::agent::WireDelta::Type::TextToken;
                 d.seq  = 1;
                 d.text = "before-drop";
                 co_await wsSendJson(ws, io::makeDeltaMsg(d));
@@ -1168,9 +1168,9 @@ static asio::awaitable<void> test_run_transport_loop_replace_transport() {
         oldLoopExited.store(true, std::memory_order_release);
     });
 
-    // 旧连接上收一条 Delta (确认循环工作)
-    agentxx::agent::Delta da;
-    da.type = agentxx::agent::Delta::Type::TextToken;
+    // 旧连接上收一条 WireDelta (确认循环工作)
+    agentxx::agent::WireDelta da;
+    da.type = agentxx::agent::WireDelta::Type::TextToken;
     da.text = "a";
     tAPeer->send(agentxx::agent::WireMessage{da});
     co_await testSleep(ex, std::chrono::milliseconds{50});
@@ -1199,8 +1199,8 @@ static asio::awaitable<void> test_run_transport_loop_replace_transport() {
     });
 
     // 新连接上收发消息正常 (无两个循环瓜分)
-    agentxx::agent::Delta db;
-    db.type = agentxx::agent::Delta::Type::TextToken;
+    agentxx::agent::WireDelta db;
+    db.type = agentxx::agent::WireDelta::Type::TextToken;
     db.text = "b";
     tBPeer->send(agentxx::agent::WireMessage{db});
     co_await testSleep(ex, std::chrono::milliseconds{50});
@@ -1321,8 +1321,8 @@ static asio::awaitable<void> test_channel_client_integration() {
                 }
                 auto* ui = std::get_if<agentxx::agent::WireUserInput>(&*m);
                 if (ui) {
-                    agentxx::agent::Delta d;
-                    d.type = agentxx::agent::Delta::Type::TextToken;
+                    agentxx::agent::WireDelta d;
+                    d.type = agentxx::agent::WireDelta::Type::TextToken;
                     d.seq  = 1;
                     d.text = "chan-reply";
                     st->send(agentxx::agent::WireMessage{d});
@@ -1380,9 +1380,9 @@ static asio::awaitable<void> test_remote_echo() {
                 co_return;
             }
             if (io::msgType(*j) == io::MsgType::UserInput) {
-                auto                  text = j->value("text", std::string{});
-                agentxx::agent::Delta d;
-                d.type = agentxx::agent::Delta::Type::TextToken;
+                auto                      text = j->value("text", std::string{});
+                agentxx::agent::WireDelta d;
+                d.type = agentxx::agent::WireDelta::Type::TextToken;
                 d.seq  = ++seq;
                 d.text = "echo:" + text;
                 co_await wsSendJson(ws, io::makeDeltaMsg(d));
@@ -1667,8 +1667,8 @@ static asio::awaitable<void> test_remote_reconnect_sync() {
         if (myConn == 1) {
             auto j = co_await wsRecvJson(ws);
             if (j) {
-                agentxx::agent::Delta d;
-                d.type = agentxx::agent::Delta::Type::TextToken;
+                agentxx::agent::WireDelta d;
+                d.type = agentxx::agent::WireDelta::Type::TextToken;
                 d.seq  = 1;
                 d.text = "x";
                 co_await wsSendJson(ws, io::makeDeltaMsg(d));
@@ -1679,7 +1679,7 @@ static asio::awaitable<void> test_remote_reconnect_sync() {
             }
             co_return;
         }
-        agentxx::agent::SyncPayload sp;
+        agentxx::agent::WireSyncPayload sp;
         sp.tailHash = "reconnect-sync";
         co_await wsSendJson(ws, io::makeSyncMsg(sp, 1));
         for (;;) {
@@ -1879,7 +1879,7 @@ static asio::awaitable<void> test_session_controller_switch_session() {
     auto syncMsg = co_await clientT->recv();
     XX_TEST_EXPECT_TRUE(syncMsg.has_value());
     if (syncMsg) {
-        auto* sp = std::get_if<agentxx::agent::SyncPayload>(&*syncMsg);
+        auto* sp = std::get_if<agentxx::agent::WireSyncPayload>(&*syncMsg);
         XX_TEST_EXPECT_TRUE(sp != nullptr);
         if (sp) {
             XX_TEST_EXPECT_EQ(sp->messages.size(), size_t{1});
@@ -1917,7 +1917,7 @@ static asio::awaitable<void> test_session_controller_switch_session() {
     auto reSyncMsg = co_await clientT->recv();
     XX_TEST_EXPECT_TRUE(reSyncMsg.has_value());
     if (reSyncMsg) {
-        XX_TEST_EXPECT_TRUE(std::get_if<agentxx::agent::SyncPayload>(&*reSyncMsg) != nullptr);
+        XX_TEST_EXPECT_TRUE(std::get_if<agentxx::agent::WireSyncPayload>(&*reSyncMsg) != nullptr);
     }
     auto reStatsMsg = co_await clientT->recv();
     XX_TEST_EXPECT_TRUE(reStatsMsg.has_value());
@@ -1937,7 +1937,7 @@ static asio::awaitable<void> test_session_controller_switch_session() {
 
 // ---------------------------------------------------------------------------
 // 20. TUI 切模型随下一条用户消息携带 (WireUserInput.model):
-//     TUI 不再直接通知 agent-io 切换 (WireSelectModel), 而是把选择的模型随
+//     TUI 不再直接通知 server-io 切换 (WireSelectModel), 而是把选择的模型随
 //     下一次发送的用户消息携带; SessionServerAgentIO 记录待应用模型并传给
 //     runTurnAsync, BaseAgent 执行新一轮会话 (runTurnAsync 开头 selectModel)
 //     时自动切换, 后续轮次沿用该模型 (会话级持久)
@@ -2144,7 +2144,7 @@ static asio::awaitable<void> test_view_messages_pagination() {
     XX_TEST_EXPECT_TRUE(syncMsg.has_value());
     uint64_t windowStart = 0;
     if (syncMsg) {
-        auto* sp = std::get_if<agentxx::agent::SyncPayload>(&*syncMsg);
+        auto* sp = std::get_if<agentxx::agent::WireSyncPayload>(&*syncMsg);
         XX_TEST_EXPECT_TRUE(sp != nullptr);
         if (sp) {
             XX_TEST_EXPECT_EQ(sp->messages.size(), size_t{100});
@@ -2362,9 +2362,9 @@ static asio::awaitable<void> test_wire_pagination_roundtrip() {
         }
     }
 
-    // ---- SyncPayload totalMessages / fromIndex roundtrip ----
+    // ---- WireSyncPayload totalMessages / fromIndex roundtrip ----
     {
-        agentxx::agent::SyncPayload sync;
+        agentxx::agent::WireSyncPayload sync;
         sync.fromIndex     = 150;
         sync.totalMessages = 250;
         sync.messages.push_back(
@@ -2374,7 +2374,7 @@ static asio::awaitable<void> test_wire_pagination_roundtrip() {
         auto msg      = WsAgentIOTransport::deserialize(jsonText);
         XX_TEST_EXPECT_TRUE(msg.has_value());
         if (msg) {
-            auto* back = std::get_if<agentxx::agent::SyncPayload>(&*msg);
+            auto* back = std::get_if<agentxx::agent::WireSyncPayload>(&*msg);
             XX_TEST_EXPECT_TRUE(back != nullptr);
             if (back) {
                 XX_TEST_EXPECT_EQ(back->fromIndex, uint64_t{150});

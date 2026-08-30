@@ -1522,12 +1522,12 @@ void PluginManager::emitMessageTip(
     if (!session || !session->io) {
         return;
     }
-    agentxx::agent::Delta delta;
-    delta.type    = agentxx::agent::Delta::Type::MessageUITip;
+    agentxx::agent::WireDelta delta;
+    delta.type    = agentxx::agent::WireDelta::Type::MessageUITip;
     delta.text    = text;
-    delta.tipType = level >= 2 ? agentxx::agent::Delta::TipType::Error
-                               : (level == 1 ? agentxx::agent::Delta::TipType::Warning
-                                             : agentxx::agent::Delta::TipType::Info);
+    delta.tipType = level >= 2 ? agentxx::agent::WireDelta::TipType::Error
+                               : (level == 1 ? agentxx::agent::WireDelta::TipType::Warning
+                                             : agentxx::agent::WireDelta::TipType::Info);
     delta.seq     = session->nextDeltaSeq();
     session->io->sendToPeer(delta);
 }

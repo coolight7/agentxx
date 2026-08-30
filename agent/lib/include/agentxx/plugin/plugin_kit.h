@@ -9,7 +9,6 @@
  * - 注册族: tool (Task协程) / fast_tool (快同步内联) / blocking_tool (阻塞池委托) / hook /
  * capability
  * - spawn: 后台协作任务 (sleep 循环, 卸载取消)
- * - reactor_tool: 自有线程私有 loop 桥接模板 (需要 asio 支持)
  * - 阻塞便捷助手: 供 JS 引擎及非 io 线程使用 (基于 condvar)
  */
 #pragma once
@@ -19,15 +18,6 @@
 #include "agentxx/plugin/plugin_iface_helper.h"
 #include "fmt/format.h"
 #include "neograph/json.h"
-
-#if __has_include("asio/io_context.hpp")
-#include "asio/co_spawn.hpp"
-#include "asio/detached.hpp"
-#include "asio/executor_work_guard.hpp"
-#include "asio/io_context.hpp"
-#include "asio/post.hpp"
-#define AGENTXX_KIT_HAS_ASIO 1
-#endif
 
 #include <atomic>
 #include <chrono>
@@ -1069,8 +1059,8 @@ inline void spawn(Ctx& ctx, Fn&& fn) {
     }
 }
 
-/* ==================== 注册族 (kit::tool / fast_tool / blocking_tool / hook / capability)
- * ==================== */
+/// ==================== (kit::tool / fast_tool / blocking_tool / hook / capability)
+/// ====================
 
 template<typename Ctx, typename TaskFn>
 inline void tool(
@@ -1560,14 +1550,7 @@ inline void capability(Ctx& ctx, std::string_view capName, CapFn&& fn) {
     }
 }
 
-/* ReactorLoop / reactor_tool 已移除（2026-08 重构）：
- * 私有 io 循环 per-plugin 增加线程与生命周期复杂度，且与锚定协程模型重复；
- * 现统一由 kit::tool（锚定协程，宿主 io 线程）+ kit::blocking_tool（阻塞池）承载，
- * 网络/子进程等异步操作在 blocking_tool 内以临时 io_context 同步驱动（见插件侧 sync 包装），
- * 或在 kit::tool 内以 offload 委托。历史代码已迁移，无需兼容。
- */
-
-/* ==================== 阻塞便捷助手 (基于 condvar) ==================== */
+/* ==================== 阻塞便捷函数 (基于 condvar) ==================== */
 
 inline char* call_tool_blocking(
     const AgentxxHost*           host,

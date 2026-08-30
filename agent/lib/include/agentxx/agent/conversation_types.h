@@ -35,7 +35,7 @@ struct ViewMessage {
         /// 消息提示
         Tip
     };
-    /// 提示消息级别 (System 提示消息使用, 与 agentxx::agent::Delta::TipType 对应)
+    /// 提示消息级别 (System 提示消息使用, 与 agentxx::agent::WireDelta::TipType 对应)
     enum class TipLevel : uint8_t {
         Info,
         Warning,
@@ -176,7 +176,7 @@ private:
     uint64_t count_ = 0;
 };
 
-struct Delta {
+struct WireDelta {
     /// 提示消息级别 (MessageUITip 使用)
     enum class TipType : uint8_t {
         Info,    ///< 普通提示
@@ -242,7 +242,7 @@ struct MessageQueueItem {
     int64_t     createdAtMs = 0; ///< 创建时间戳 (毫秒)
 };
 
-struct SyncPayload {
+struct WireSyncPayload {
     /// 本批 messages 首条在服务端完整 viewMessages 中的绝对下标
     /// - 全量同步: 0 (兼容旧语义)
     /// - 尾窗同步 (历史分页, initialSyncTailCount>0): 窗口起始下标 (>0 表示

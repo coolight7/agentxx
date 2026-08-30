@@ -918,7 +918,7 @@ Element MessageListComponent::buildBanner() {
     const auto& st    = *ctx_.frameState;
 
     // 连接状态行 (banner 下半部):
-    // - Connecting: agent-io 正在启动, 下方逐步显示当前正在执行的启动
+    // - Connecting: server-io 正在启动, 下方逐步显示当前正在执行的启动
     //   操作 (如"加载 MCP server: xxx"), 并提示输入将在连接完成后自动发送
     // - Failed:     连接失败提示 + 可点击的 [重试] 按钮 (TUIClientAgentIO 全局
     //               鼠标事件经 retryButtonBox 命中检测, 点击重新发起连接)
@@ -928,7 +928,7 @@ Element MessageListComponent::buildBanner() {
         case ConnState::Connecting: {
             Elements els;
             els.push_back(text("输入消息将在连接完成后自动发送") | color(theme.hintColor) | center);
-            els.push_back(text("agent-io 正在启动中 ...") | color(theme.hintColor) | center);
+            els.push_back(text("server-io 正在启动中 ...") | color(theme.hintColor) | center);
             if (!st.startupProgress.empty()) {
                 // 当前正在执行的启动步骤 (agent 线程逐步上报)
                 els.push_back(
@@ -944,7 +944,7 @@ Element MessageListComponent::buildBanner() {
             retryButtonBox_ = ftxui::Box{};
             statusLine      = hbox({
                 filler(),
-                text("  agent-io 连接失败  ") | color(theme.errorColor),
+                text("  server-io 连接失败  ") | color(theme.errorColor),
                 text("  [ 重试 ]  ") | bgcolor(theme.buttonBgColor) | color(theme.buttonTextColor)
                     | bold | reflect(retryButtonBox_),
                 filler(),

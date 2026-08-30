@@ -47,7 +47,7 @@ struct AgentResourceSnapshot {
 
 /// 宿主会话组件资源应用器 (Skill / Memory / MCP)
 ///
-/// 职责: 把插件贡献的资源接入宿主管线 (由 agent-io 驱动加载并经
+/// 职责: 把插件贡献的资源接入宿主管线 (由 server-io 驱动加载并经
 /// appendComponentInfo 上报客户端):
 /// - 声明式: PluginManager 在插件 entry 成功后调用 applyDecls
 ///   (加载失败不会到达此处 → "加载失败则声明资源不生效"天然满足)

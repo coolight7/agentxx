@@ -68,9 +68,9 @@ public:
     explicit InterruptMockIO(std::shared_ptr<agentxx::agent::AgentContext> ctx) :
         agentContext(ctx) {}
 
-    void onDelta(const agentxx::agent::Delta&) override {}
+    void onDelta(const agentxx::agent::WireDelta&) override {}
 
-    void onSync(const agentxx::agent::SyncPayload&) override {}
+    void onSync(const agentxx::agent::WireSyncPayload&) override {}
 
     asio::awaitable<std::optional<std::string>> getInput() override {
         co_return std::nullopt;
@@ -287,7 +287,7 @@ asio::awaitable<void> test_interrupt_auto_supplement() {
     co_await agent.init();
 
     auto io     = std::make_shared<InterruptMockIO>(agent.agentContext);
-    auto result = co_await agent.runTurnAsync("interrupt_msg_test", "Please interrupt", true, io);
+    auto result = co_await agent.runTurnAsync("interrupt_msg_test", "Please interrupt", io);
 
     // 中断被处理并 resume, 轮次正常完成 (interrupted 标记 true, 无错误)
     XX_TEST_EXPECT_FALSE(result.hasError);
@@ -496,7 +496,7 @@ asio::awaitable<void> test_cancel_auto_supplement() {
         = co_await asio::experimental::make_parallel_group(
               asio::co_spawn(
                   ex,
-                  agent.runTurnAsync("cancel_msg_test", "Run tools", true, nullptr),
+                  agent.runTurnAsync("cancel_msg_test", "Run tools", nullptr),
                   asio::deferred
               ),
               asio::co_spawn(ex, cancelWatcher(), asio::deferred)

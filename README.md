@@ -214,7 +214,7 @@
     - 支持配置连接超时、动态超时限制 (自动根据请求体大小动态计算发送超时、流式接收间隔超时)
     - 支持关闭SSL验证
 - ✅**队列等待输入**
-    - agent-io 用户输入队列，等待当前会话执行完成时自动插入继续执行; UI 端支持控制直接中断插入消息
+    - server-io 用户输入队列，等待当前会话执行完成时自动插入继续执行; UI 端支持控制直接中断插入消息
 
 ### UI
 - ✅Cli: `agentxx_cli cli`
@@ -361,17 +361,17 @@ cd {项目根目录}
 #       修改 .env 添加环境变量 api key
 
 # client 负责UI渲染和输入输出交互
-# agent-io 运行 agent-loop 的 server 端，负责执行会话、调用 llm api 等实际操作
+# server-io 运行 agent-loop 的 server 端，负责执行会话、调用 llm api 等实际操作
 # agentxx_cli 启动时可以选择 `启动UI+server` 或 `仅启动UI，网络连接server` 或 `仅启动 server`
 
-# client + agent-io 在同一个进程内启动, agentxx_cli 内的 client 包含两种UI:
-agentxx_cli tui # 一个进程启动 TUI 界面 + agent-io
-agentxx_cli cli # 一个进程启动 cli + agent-io
+# client + server-io 在同一个进程内启动, agentxx_cli 内的 client 包含两种UI:
+agentxx_cli tui # 一个进程启动 TUI 界面 + server-io
+agentxx_cli cli # 一个进程启动 cli + server-io
 
-# - client 和 agent-io 分离为两个进程，两者使用 websocket 网络连接
+# - client 和 server-io 分离为两个进程，两者使用 websocket 网络连接
 # - 自己开发 GUI 连接 server 可使用该方式连接
-agentxx_cli server --host 0.0.0.0 --port 7007 --token passwd # 启动 agent-io
-agentxx_cli tui --agent ws://127.0.0.1:7007/agent --token passwd # 启动 TUI界面，并连接 agent-io
+agentxx_cli server --host 0.0.0.0 --port 7007 --token passwd # 启动 server-io
+agentxx_cli tui --agent ws://127.0.0.1:7007/agent --token passwd # 启动 TUI界面，并连接 server-io
 ```
 
 ## LICENSE & THIRD_PARTY

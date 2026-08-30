@@ -46,7 +46,7 @@
 │  └─────────────┬───────────┘  └─────────────┬─────────────┘ │
 │                │ ChannelAgentIOTransport    │ (进程内跨线程)│
 │  ┌─────────────▼────────────────────────────▼─────────────┐ │
-│  │ Agent-IO 线程 (专属 agentIoCtx_)                        │ │
+│  │ Server-IO 线程 (专属 agentIoCtx_)                      │ │
 │  │ SessionServerAgentIO + CodeAgent + AgentHost           │ │
 │  │ - ReAct 循环 / LLM 流式拉取 / 工具调用 / SQLite 会话存储 │ │
 │  └────────────────────────────────────────────────────────┘ │
@@ -76,8 +76,8 @@
 
 ## 3. 线程模型特性
 
-- **双线程完全解耦**: 每个 `FfiAgentRuntime` 持有一条专属的 `agent-io` 线程和一条专属的 `client-io` 线程。
-- **保护 Agent 核心**: 宿主在 `on_event` 事件回调中的任何耗时逻辑仅发生在 `client-io` 线程，绝对不会阻塞 `agent-io` 线程的 ReAct 循环、LLM 数据接收和工具调用。
+- **双线程完全解耦**: 每个 `FfiAgentRuntime` 持有一条专属的 `server-io` 线程和一条专属的 `client-io` 线程。
+- **保护 Agent 核心**: 宿主在 `on_event` 事件回调中的任何耗时逻辑仅发生在 `client-io` 线程，绝对不会阻塞 `server-io` 线程的 ReAct 循环、LLM 数据接收和工具调用。
 - **实例强隔离**: 多 Runtime 并发创建时，每个 Runtime 的生命周期、事件处理和会话状态完全正交，无全局锁竞争。
 - **C API 任意线程可调用**: 会话交互类经 `asio::post` 投递 `client-io` 线程串行执行; 同步查询类经 promise/future 等待 (最长 10s)。
 - **约束**: `agentxx_stop`/`agentxx_destroy` 不得在内部 io 线程 (即 client/agent 回调线程) 内调用, 返回 `AGENTXX_ERR_STATE` (避免自 join 死锁); 宿主需从自己的线程调用。

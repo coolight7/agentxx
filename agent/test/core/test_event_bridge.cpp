@@ -30,11 +30,11 @@ namespace test {
 class TestEbIO : public agentxx::agent::AgentIOBase {
 public:
 
-    std::vector<agentxx::agent::Delta>            deltas;
+    std::vector<agentxx::agent::WireDelta>        deltas;
     std::vector<agentxx::agent::WireContextStats> stats;
 
     void sendToPeer(agentxx::agent::WireMessage msg) override {
-        if (auto* d = std::get_if<agentxx::agent::Delta>(&msg)) {
+        if (auto* d = std::get_if<agentxx::agent::WireDelta>(&msg)) {
             deltas.push_back(*d);
         } else if (auto* s = std::get_if<agentxx::agent::WireContextStats>(&msg)) {
             stats.push_back(*s);
@@ -43,11 +43,11 @@ public:
         }
     }
 
-    void onDelta(const agentxx::agent::Delta& delta) override {
+    void onDelta(const agentxx::agent::WireDelta& delta) override {
         deltas.push_back(delta);
     }
 
-    void onSync(const agentxx::agent::SyncPayload&) override {}
+    void onSync(const agentxx::agent::WireSyncPayload&) override {}
 
     void onTurnResult(const agentxx::agent::WireTurnResult&) override {}
 
@@ -150,10 +150,10 @@ asio::awaitable<void> test_eventbridge_token() {
     // 同时应产出 TextToken delta, 且 seq 会话级单调递增
     XX_TEST_EXPECT_EQ(io->deltas.size(), size_t{2});
     if (io->deltas.size() == 2) {
-        XX_TEST_EXPECT_TRUE(io->deltas[0].type == agentxx::agent::Delta::Type::TextToken);
+        XX_TEST_EXPECT_TRUE(io->deltas[0].type == agentxx::agent::WireDelta::Type::TextToken);
         XX_TEST_EXPECT_EQ(io->deltas[0].seq, uint64_t{1});
         XX_TEST_EXPECT_EQ(io->deltas[0].text, std::string{"Hello"});
-        XX_TEST_EXPECT_TRUE(io->deltas[1].type == agentxx::agent::Delta::Type::TextToken);
+        XX_TEST_EXPECT_TRUE(io->deltas[1].type == agentxx::agent::WireDelta::Type::TextToken);
         XX_TEST_EXPECT_EQ(io->deltas[1].seq, uint64_t{2});
         XX_TEST_EXPECT_EQ(io->deltas[1].text, std::string{" World"});
     }
@@ -161,7 +161,7 @@ asio::awaitable<void> test_eventbridge_token() {
     co_return;
 }
 
-/// 验证 bus 为空时, EventBridge 仍转发原始 callback 并产出 Delta
+/// 验证 bus 为空时, EventBridge 仍转发原始 callback 并产出 WireDelta
 asio::awaitable<void> test_eventbridge_nullbus_passthrough() {
     auto agentContext = std::make_shared<agentxx::agent::AgentContext>();
     // 不设置 bus (bus == nullptr)
@@ -183,7 +183,7 @@ asio::awaitable<void> test_eventbridge_nullbus_passthrough() {
         neograph::json(std::string{"x"})
     });
     XX_TEST_EXPECT_EQ(origCbCount.load(), 1);
-    // 无 bus 时 Delta 翻译仍正常
+    // 无 bus 时 WireDelta 翻译仍正常
     XX_TEST_EXPECT_EQ(io->deltas.size(), size_t{1});
 
     co_return;
@@ -221,13 +221,13 @@ asio::awaitable<void> test_eventbridge_error() {
     XX_TEST_EXPECT_EQ(errCount.load(), 1);
     XX_TEST_EXPECT_EQ(lastMsg, std::string{"boom"});
     XX_TEST_EXPECT_EQ(lastWhere, std::string{"tool_x"});
-    // ERROR 不产出 Delta
+    // ERROR 不产出 WireDelta
     XX_TEST_EXPECT_EQ(io->deltas.size(), size_t{0});
 
     co_return;
 }
 
-/// 验证 MessageUITip: CHANNEL_WRITE "message_tip" -> Delta::MessageUITip (warning/error/info)
+/// 验证 MessageUITip: CHANNEL_WRITE "message_tip" -> WireDelta::MessageUITip (warning/error/info)
 asio::awaitable<void> test_eventbridge_message_tip() {
     auto agentContext = std::make_shared<agentxx::agent::AgentContext>();
     auto session      = std::make_shared<agentxx::agent::Session>();
@@ -251,8 +251,8 @@ asio::awaitable<void> test_eventbridge_message_tip() {
     });
     XX_TEST_EXPECT_EQ(io->deltas.size(), size_t{1});
     if (!io->deltas.empty()) {
-        XX_TEST_EXPECT_TRUE(io->deltas[0].type == agentxx::agent::Delta::Type::MessageUITip);
-        XX_TEST_EXPECT_TRUE(io->deltas[0].tipType == agentxx::agent::Delta::TipType::Warning);
+        XX_TEST_EXPECT_TRUE(io->deltas[0].type == agentxx::agent::WireDelta::Type::MessageUITip);
+        XX_TEST_EXPECT_TRUE(io->deltas[0].tipType == agentxx::agent::WireDelta::TipType::Warning);
         XX_TEST_EXPECT_EQ(
             io->deltas[0].text,
             std::string{"LLM API 请求失败，6 秒后自动重试 (2/5)"}
@@ -274,7 +274,7 @@ asio::awaitable<void> test_eventbridge_message_tip() {
     });
     XX_TEST_EXPECT_EQ(io->deltas.size(), size_t{2});
     if (io->deltas.size() >= 2) {
-        XX_TEST_EXPECT_TRUE(io->deltas[1].tipType == agentxx::agent::Delta::TipType::Error);
+        XX_TEST_EXPECT_TRUE(io->deltas[1].tipType == agentxx::agent::WireDelta::TipType::Error);
         XX_TEST_EXPECT_EQ(io->deltas[1].text, std::string{"boom"});
     }
 
@@ -289,7 +289,7 @@ asio::awaitable<void> test_eventbridge_message_tip() {
     });
     XX_TEST_EXPECT_EQ(io->deltas.size(), size_t{3});
     if (io->deltas.size() >= 3) {
-        XX_TEST_EXPECT_TRUE(io->deltas[2].tipType == agentxx::agent::Delta::TipType::Info);
+        XX_TEST_EXPECT_TRUE(io->deltas[2].tipType == agentxx::agent::WireDelta::TipType::Info);
     }
 
     co_return;
@@ -328,7 +328,7 @@ asio::awaitable<void> test_eventbridge_channel_write_messages() {
     // 产出 ToolStart delta
     XX_TEST_EXPECT_EQ(io->deltas.size(), size_t{1});
     if (!io->deltas.empty()) {
-        XX_TEST_EXPECT_TRUE(io->deltas[0].type == agentxx::agent::Delta::Type::ToolStart);
+        XX_TEST_EXPECT_TRUE(io->deltas[0].type == agentxx::agent::WireDelta::Type::ToolStart);
         XX_TEST_EXPECT_EQ(io->deltas[0].toolName, std::string{"bash"});
         XX_TEST_EXPECT_EQ(io->deltas[0].toolCallId, std::string{"call_1"});
     }
@@ -506,9 +506,9 @@ asio::awaitable<void> test_eventbridge_node_delta() {
 
     XX_TEST_EXPECT_EQ(io->deltas.size(), size_t{2});
     if (io->deltas.size() == 2) {
-        XX_TEST_EXPECT_TRUE(io->deltas[0].type == agentxx::agent::Delta::Type::NodeStart);
+        XX_TEST_EXPECT_TRUE(io->deltas[0].type == agentxx::agent::WireDelta::Type::NodeStart);
         XX_TEST_EXPECT_EQ(io->deltas[0].nodeName, std::string{"llm"});
-        XX_TEST_EXPECT_TRUE(io->deltas[1].type == agentxx::agent::Delta::Type::NodeEnd);
+        XX_TEST_EXPECT_TRUE(io->deltas[1].type == agentxx::agent::WireDelta::Type::NodeEnd);
         XX_TEST_EXPECT_EQ(io->deltas[1].nodeName, std::string{"llm"});
     }
 
@@ -656,9 +656,9 @@ asio::awaitable<void> test_eventbridge_turn_tps() {
 }
 
 /// 验证 THINKING 流段耗时结算 (think 输出完成时才计算耗时并回填):
-/// - token Delta 不再携带 durationMs (修复"流式刚开始就显示耗时")
+/// - token WireDelta 不再携带 durationMs (修复"流式刚开始就显示耗时")
 /// - 离开 THINKING 时先发空文本 ThinkToken 结算包 (携带 startTimeMs/durationMs),
-///   再发正文首个 token 的 Delta
+///   再发正文首个 token 的 WireDelta
 /// - 思考后直接 tool_calls (无正文): 结算包先于 ToolStart 到达
 /// - 纯思考流 (无正文无工具): 结算包先于 NodeEnd 到达
 /// - 结算幂等: 同一段落只结算一次
@@ -670,7 +670,7 @@ asio::awaitable<void> test_eventbridge_think_duration() {
         };
     };
     using ET = neograph::graph::GraphEvent::Type;
-    using DT = agentxx::agent::Delta::Type;
+    using DT = agentxx::agent::WireDelta::Type;
 
     // ---- 流程 1: think -> 正文: 切换时结算, 且正文 token 不携带时长 ----
     {

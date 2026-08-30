@@ -118,8 +118,7 @@ static void checkToolSchemaValidity(
                 schema.contains("type") ? schema["type"].dump() : "<missing>"
             );
         }
-    } else if (schema.contains("type") && schema["type"].is_string()
-               && schema["type"].get<std::string>() == "array") {
+    } else if (schema.contains("type") && schema["type"].is_string() && schema["type"].get<std::string>() == "array") {
         // array 类型必须带 items (Gemini 缺 items 报 "missing field")
         XX_LOGE(
             "Tool `{}` schema `{}`: type \"array\" must have an \"items\" field; "
@@ -577,10 +576,9 @@ std::string BaseAgent::getCurrentModelName(std::string_view sessionId) const {
 }
 
 asio::awaitable<BaseAgent::TurnResult> BaseAgent::runTurnAsync(
-    std::string_view      sessionId,
-    std::string_view      userInput,
-    [[maybe_unused]] bool isFirstMsg, ///< 保留调用方语义表达; 当前引擎侧不再使用
-    std::shared_ptr<AgentIOBase> io,  // agent-io
+    std::string_view             sessionId,
+    std::string_view             userInput,
+    std::shared_ptr<AgentIOBase> io, // server-io
     std::string_view             modelName
 ) {
     TurnResult turnResult;
@@ -624,7 +622,7 @@ asio::awaitable<BaseAgent::TurnResult> BaseAgent::runTurnAsync(
     );
 
     // 插入提示消息: 由 agent 线程追加到会话历史 (viewMessages) 并发送
-    // InsertMessage Delta 通知 UI 追加对应消息。UI 端直接消费完整 ViewMessage,
+    // InsertMessage WireDelta 通知 UI 追加对应消息。UI 端直接消费完整 ViewMessage,
     // 保证 viewMessages / Sync 恢复 / 持久化与展示内容一致。
     // - 无对端 (headless) 时不插入 (提示为展示用途, headless 无消费者)
     auto insertMessageTip =
@@ -637,8 +635,8 @@ asio::awaitable<BaseAgent::TurnResult> BaseAgent::runTurnAsync(
             vm.tip->tipLevel = level;
             vm.collapsed     = true;
             vm.id            = session->appendViewMessage(vm);
-            eventBridge->emitDelta(Delta{
-                .type    = Delta::Type::InsertMessage,
+            eventBridge->emitDelta(WireDelta{
+                .type    = WireDelta::Type::InsertMessage,
                 .message = std::make_shared<ViewMessage>(std::move(vm)),
             });
         };
@@ -678,8 +676,8 @@ asio::awaitable<BaseAgent::TurnResult> BaseAgent::runTurnAsync(
     // 记录轮次开始: 重置轮级 LLM API 平均生成速度 (token/s) 统计
     eventBridge->handleTurnStart();
 
-    eventBridge->emitDelta(Delta{
-        .type        = Delta::Type::TurnStart,
+    eventBridge->emitDelta(WireDelta{
+        .type        = WireDelta::Type::TurnStart,
         .text        = processedInput,
         .msgId       = userMsgId,
         .startTimeMs = startTimeMs,
@@ -691,7 +689,7 @@ asio::awaitable<BaseAgent::TurnResult> BaseAgent::runTurnAsync(
     // 中断等待超时: 由 AgentRunner 内部统一解析 (取 IO 端点
     // SessionServerAgentIO::interruptTimeout 配置, <=0 不限制)
 
-    // llm callback: 由 EventBridge 统一处理 GraphEvent -> 会话增量 Delta/历史/总线发布
+    // llm callback: 由 EventBridge 统一处理 GraphEvent -> 会话增量 WireDelta/历史/总线发布
     auto eventCallback = eventBridge->makeCallback();
     auto cfg           = neograph::graph::RunConfig{
                   .thread_id   = std::string{sessionId},
@@ -825,11 +823,11 @@ asio::awaitable<BaseAgent::TurnResult> BaseAgent::runTurnAsync(
         )
                                    .count());
 
-    // - 取走过本轮 LLM API 平均生成速度 (token/s), 同时填入 TurnEnd Delta 与
+    // - 取走过本轮 LLM API 平均生成速度 (token/s), 同时填入 TurnEnd WireDelta 与
     // 轮次统计系统提示
     const double turnTps = eventBridge->takeTurnTps();
 
-    // 轮次统计系统提示: 由 agent 线程插入会话历史并发送 Delta (原由 UI 端
+    // 轮次统计系统提示: 由 agent 线程插入会话历史并发送 WireDelta (原由 UI 端
     // 在 TurnEnd 时自行构造), 模型名之后显示本轮 LLM API 平均生成速度;
     // 必须在 flushViewMessages 之前插入, 确保提示消息落盘持久化到 SQLite
     insertMessageTip(
@@ -863,8 +861,8 @@ asio::awaitable<BaseAgent::TurnResult> BaseAgent::runTurnAsync(
     // 全部落库 (含刚插入的轮次统计系统提示; 仅进程中途被杀才可能丢失窗口内 <3s 的尾部消息)
     session->flushViewMessages();
 
-    eventBridge->emitDelta(Delta{
-        .type         = Delta::Type::TurnEnd,
+    eventBridge->emitDelta(WireDelta{
+        .type         = WireDelta::Type::TurnEnd,
         .historyCount = session->chainHash.count(),
         .tailHash     = session->chainHash.tailHex(),
         .startTimeMs  = startTimeMs,

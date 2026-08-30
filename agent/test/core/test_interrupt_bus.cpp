@@ -37,9 +37,9 @@ public:
     bool        permissionAllow = true;
     int         interruptCalls  = 0;
 
-    void onDelta(const agentxx::agent::Delta&) override {}
+    void onDelta(const agentxx::agent::WireDelta&) override {}
 
-    void onSync(const agentxx::agent::SyncPayload&) override {}
+    void onSync(const agentxx::agent::WireSyncPayload&) override {}
 
     asio::awaitable<std::optional<std::string>> getInput() override {
         co_return std::nullopt;

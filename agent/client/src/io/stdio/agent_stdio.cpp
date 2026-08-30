@@ -34,8 +34,8 @@ StdIOClientAgentIO::~StdIOClientAgentIO() {
     }
 }
 
-void StdIOClientAgentIO::onDelta(const agentxx::agent::Delta& delta) {
-    using Type = agentxx::agent::Delta::Type;
+void StdIOClientAgentIO::onDelta(const agentxx::agent::WireDelta& delta) {
+    using Type = agentxx::agent::WireDelta::Type;
     switch (delta.type) {
         case Type::TextToken:
             if (isThinking_) {
@@ -51,8 +51,7 @@ void StdIOClientAgentIO::onDelta(const agentxx::agent::Delta& delta) {
                     isThinking_ = true;
                 }
                 std::cout << delta.text << std::flush;
-            } else if (delta.think && delta.think->isEncrypted
-                       && delta.think->reasoningTokens == 0) {
+            } else if (delta.think && delta.think->isEncrypted && delta.think->reasoningTokens == 0) {
                 // 加密思考首包: 开始思考提示 (元数据更新包静默处理, 避免正文后重复打印)
                 if (!isThinking_) {
                     std::cout << std::endl << "[Think] (思考内容被加密)" << std::flush;
@@ -72,7 +71,7 @@ void StdIOClientAgentIO::onDelta(const agentxx::agent::Delta& delta) {
             break;
         case Type::MessageUITip: {
             std::string prefix;
-            using TipType = agentxx::agent::Delta::TipType;
+            using TipType = agentxx::agent::WireDelta::TipType;
             switch (delta.tipType) {
                 case TipType::Warning:
                     prefix = "[Warning] ";
@@ -143,7 +142,7 @@ void StdIOClientAgentIO::onDelta(const agentxx::agent::Delta& delta) {
     }
 }
 
-void StdIOClientAgentIO::onSync(const agentxx::agent::SyncPayload& payload) {
+void StdIOClientAgentIO::onSync(const agentxx::agent::WireSyncPayload& payload) {
     for (const auto& vm : payload.messages) {
         if (vm.role == agentxx::agent::ViewMessage::Role::User) {
             std::cout << "> " << vm.text << std::endl;

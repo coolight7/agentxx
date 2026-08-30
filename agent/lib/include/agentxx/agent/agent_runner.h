@@ -37,8 +37,8 @@ public:
         /// 子代理: token 收集 + hostBus 进度发布)
         neograph::graph::GraphStreamCallback eventCallback;
 
-        /// 中断头消息回调 (根: 插入会话历史 + MessageTip Delta;
-        /// 子代理无 Delta 输出通道: 为空)
+        /// 中断头消息回调 (根: 插入会话历史 + MessageTip WireDelta;
+        /// 子代理无 WireDelta 输出通道: 为空)
         std::function<void(std::string_view node, std::string_view value, std::string_view handle)>
             onInterruptTip;
 

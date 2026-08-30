@@ -60,10 +60,7 @@ tool_skill_search 与延迟加载装配：
 | **代码分析** | `agentxx_codegraph_search` | 按名称搜索代码符号 |
 | | `agentxx_codegraph_context` | 获取符号的定义、调用者、被调用者 |
 | | `agentxx_codegraph_callers` / `agentxx_codegraph_callees` | 调用图正向/反向追踪 |
-| | `agentxx_codegraph_impact` | 修改影响分析 |
-| | `agentxx_codegraph_index` | 索引目录构建符号数据库 |
 | | `agentxx_codegraph_path` | 查找两符号间的调用链路径 |
-| | `agentxx_codegraph_status` | 索引统计信息 |
 | | | `agentxx_codegraph_*` 系列 tool 由插件 `agentxx_codegraph` 提供: 仅当该插件经 yaml `plugins` 段配置加载且编译启用 `AGENTXX_ENABLE_PLUGIN_CODEGRAPH` 时注册 |
 | **规划** | `agentxx_planning` | 两层任务规划 (Mermaid 状态图 + Todo List + 备忘录) |
 | **子代理** | `agentxx_subagent` | 创建和管理子代理执行委派任务 |
@@ -74,20 +71,6 @@ tool_skill_search 与延迟加载装配：
 | **系统** | `agentxx_get_current_datetime` | 获取当前日期时间 |
 | | `agentxx_get_system_core_info` | 获取 CPU/内存/GPU 使用率 |
 | **UI 控制** | `agentxx_ui_control_keyboard_mouse` | Windows 键鼠控制 (仅 Windows) |
-
-> 插件归属 (2026-08 起): 上表中除 `agentxx_subagent` / `tool_skill_search` /
-> `agentxx_share_store` 外 —— 文件系统 6 件套 (`agentxx_filesystem_*`, 插件
-> `agentxx_filesystem`)、命令执行 (`agentxx_execute_bash_command` /
-> `agentxx_execute_windows_command`, 插件 `agentxx_execute_command`)、网络 3 件
-> (`agentxx_web_search` / `agentxx_web_fetch` / `agentxx_web_fetch_markdown`,
-> 插件 `agentxx_websearch`)、知识检索 (`agentxx_rag_search`, 插件
-> `agentxx_rag_search`)、规划 (`agentxx_planning`, 插件
-> `agentxx_planning`)、字符串 2 件 (`agentxx_string_html_to_markdown` /
-> `agentxx_string_regexp`, 插件 `agentxx_string`)、系统时间
-> (`agentxx_get_current_datetime`, 插件 `agentxx_system`) —— 均由对应插件注册,
-> 同名同行为 (实现于各插件 `*_impl.h`, 测试直测同一实现); 未配置/未编译该插件
-> 时对应工具不可用。`agentxx_get_system_core_info` 由 `agentxx_system_monitor`
-> 提供 (此前已完成拆分)。
 
 工具特性：
 - **自动压缩**: 工具输出超过阈值时自动调用 LLM 压缩摘要
@@ -356,12 +339,12 @@ TUI [F4] 打开会话选择弹窗 → WireListSessions (服务端阻塞 I/O 卸�
   - 历史分页加载: 恢复长会话时初始仅展示服务端末尾窗口 (本地模式 100 条),
     向上滚动接近窗口顶部时经 WireGetViewMessages 自动分页拉取更早历史,
     前插后滚动锚定保持视口稳定; 到达会话开头 (historyWindowStart=0) 后不再请求
-  - 启动连接状态 (banner 提示): TUI 启动后消息列表 banner 按 agent-io
+  - 启动连接状态 (banner 提示): TUI 启动后消息列表 banner 按 server-io
     连接状态显示 —— 启动中 (Connecting, 输入进入待发送队列, 连接完成后自动发送) /
     连接失败 (Failed, 显示"连接失败 + [重试]"可点击按钮重新连接) / 已连接 (正常输入);
     本地模式由 SessionServerAgentIO 驱动循环启动前回调 onServerReady 置就绪,
     远程模式由 mode_runners 连接协程驱动 (ConnState 存于 TUIRenderState::connState)
-  - 启动进度逐步展示: agent-io init() 各阶段 (检测系统环境/模型注册表/中间件/
+  - 启动进度逐步展示: server-io init() 各阶段 (检测系统环境/模型注册表/中间件/
     加载 MCP server/RAG/插件等) 经 AgentContext::initNotifier →
     AgentIOBase::onServerProgress 上报, "启动中"banner 同步显示当前执行的操作,
     完成后显示按键提示 (banner itemKey 计入
@@ -686,8 +669,8 @@ asio::co_spawn(*agent.ioCtx, [&]() -> asio::awaitable<void> {
     auto result = co_await agent.runSingleInputAsync("session_1", "Hello!");
 
     // 会话执行一轮对话 (流式增量经 io 端点推送; io 传 nullptr 为 headless 模式)
-    auto turn1 = co_await agent.runTurnAsync("session_1", "Hi", true, io);
-    auto turn2 = co_await agent.runTurnAsync("session_1", "Tell me more", false, io);
+    auto turn1 = co_await agent.runTurnAsync("session_1", "Hi", io);
+    auto turn2 = co_await agent.runTurnAsync("session_1", "Tell me more", io);
 
     // 自定义消息调用 (可带 system prompt, 返回完整输出)
     std::vector<neograph::ChatMessage> msgs = {
@@ -1261,7 +1244,6 @@ agent/
 │   │   │   ├── op_driver.h       # 异步操作驱动 (AgentxxOpNotify Done 协议)
 │   │   │   ├── plugin_guard.h    # 插件调用 RAII 守卫
 │   │   │   ├── plugin_iface_helper.h # 接口表查询缓存 (AgentIfaces)
-│   │   │   ├── plugin_poll_loop.h    # 旧轮询驱动兼容 (已移除轮询, 保留类型占位)
 │   │   │   ├── plugin_tool_sync.h    # 同步垫片适配器 (调用方内嵌存储)
 │   │   │   ├── plugin_manager.h  # PluginManager 生命周期 (load/enable/disable/unload) /
 │   │   │   │                     #   PluginTool (C 回调→线程池卸载执行) /

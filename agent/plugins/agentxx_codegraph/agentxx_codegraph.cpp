@@ -156,14 +156,6 @@ static ToolPrompt defaultToolPrompt(std::string_view name) {
               "Returns plain multi-line text: \"Callees (N):\" followed by one block per symbol.";
         p.symbol   = "Symbol name to find callees for.";
         p.maxDepth = "Maximum traversal depth. Default: 3.";
-    } else if (name == "agentxx_codegraph_impact") {
-        p.depict
-            = "Analyze the impact of modifying a symbol. Finds all downstream symbols that may be\n"
-              "affected (callers, references). Use this before refactoring to assess blast "
-              "radius.\n"
-              "Returns plain multi-line text: \"Impact (N):\" followed by one block per symbol.";
-        p.symbol   = "Symbol name to analyze impact for.";
-        p.maxDepth = "Maximum traversal depth. Default: 5.";
     } else if (name == "agentxx_codegraph_path") {
         p.depict
             = "Find the call-chain path between two symbols in the call graph.\n"
@@ -197,7 +189,6 @@ static void
         "agentxx_codegraph_context",
         "agentxx_codegraph_callers",
         "agentxx_codegraph_callees",
-        "agentxx_codegraph_impact",
         "agentxx_codegraph_path",
     };
     codegraph::Json patch = codegraph::Json::object();
@@ -576,44 +567,6 @@ static void registerAllTools(PluginCtx& ctx) {
                     return fmt::format("error: {}", r.error);
                 }
                 return impactToText("Callees", r.impact, c.mgr.get());
-            },
-            0,
-            kAutoSummary
-        );
-    }
-
-    // agentxx_codegraph_impact
-    {
-        auto        p = ctx.toolPrompt("agentxx_codegraph_impact");
-        std::string depict
-            = p.depict.empty() ? defaultToolPrompt("agentxx_codegraph_impact").depict : p.depict;
-        SchemaBuilder b;
-        b.str("symbol", p.args.contains("symbol") ? p.args["symbol"] : "Target symbol name.");
-        b.num(
-            "max_depth",
-            p.args.contains("max_depth") ? p.args["max_depth"]
-                                         : "Maximum traversal depth. Default: 5."
-        );
-        agentxx::kit::blocking_tool(
-            ctx,
-            "agentxx_codegraph_impact",
-            depict,
-            b.dump({"symbol"}),
-            [](PluginCtx& c, std::string_view args_json) -> std::string {
-                std::string argsStr(args_json.data() ? args_json.data() : "{}", args_json.size());
-                SimpleJson  a(argsStr.empty() ? "{}" : argsStr);
-                std::string symbol;
-                jsonGetString(a.doc().at_pointer("/symbol"), symbol);
-                if (symbol.empty()) {
-                    return "error: Arg `symbol` is empty";
-                }
-                int64_t depth64 = 5;
-                jsonGetInt(a.doc().at_pointer("/max_depth"), depth64);
-                auto r = c.mgr->getImpact(symbol, static_cast<int>(depth64));
-                if (!r.success) {
-                    return fmt::format("error: {}", r.error);
-                }
-                return impactToText("Impact", r.impact, c.mgr.get());
             },
             0,
             kAutoSummary

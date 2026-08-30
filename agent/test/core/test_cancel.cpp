@@ -281,7 +281,7 @@ asio::awaitable<void> test_agent_cancel_llm_request() {
         = co_await asio::experimental::make_parallel_group(
               asio::co_spawn(
                   ex,
-                  agent.runTurnAsync("cancel_llm_test", "Hello", true, nullptr),
+                  agent.runTurnAsync("cancel_llm_test", "Hello", nullptr),
                   asio::deferred
               ),
               asio::co_spawn(ex, cancelWatcher(), asio::deferred)
@@ -468,7 +468,7 @@ asio::awaitable<void> test_agent_cancel_toolcall() {
         = co_await asio::experimental::make_parallel_group(
               asio::co_spawn(
                   ex,
-                  agent.runTurnAsync("cancel_tool_test", "Run tools", true, nullptr),
+                  agent.runTurnAsync("cancel_tool_test", "Run tools", nullptr),
                   asio::deferred
               ),
               asio::co_spawn(ex, cancelWatcher(), asio::deferred)

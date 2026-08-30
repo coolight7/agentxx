@@ -121,11 +121,11 @@ void FfiClientAgentIO::failAllPendingInterrupts() {
 // 被动接收回调
 // ---------------------------------------------------------------------------
 
-void FfiClientAgentIO::onDelta(const agent::Delta& delta) {
+void FfiClientAgentIO::onDelta(const agent::WireDelta& delta) {
     emitEvent(AGENTXX_EVT_DELTA, dump(agent::io::makeDeltaMsg(delta)));
 }
 
-void FfiClientAgentIO::onSync(const agent::SyncPayload& payload) {
+void FfiClientAgentIO::onSync(const agent::WireSyncPayload& payload) {
     emitEvent(AGENTXX_EVT_SYNC, dump(agent::io::syncToJson(payload)));
 }
 

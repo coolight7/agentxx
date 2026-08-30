@@ -822,7 +822,7 @@ static asio::awaitable<void> testSessionPersistenceE2E() {
             CodeAgent agent(makeCfg());
             co_await agent.init();
 
-            auto result = co_await agent.runTurnAsync("e2e-thread", "Hello", true, nullptr);
+            auto result = co_await agent.runTurnAsync("e2e-thread", "Hello", nullptr);
             XX_TEST_EXPECT_FALSE(result.hasError);
             XX_TEST_EXPECT_FALSE(result.interrupted);
 
@@ -950,7 +950,7 @@ static asio::awaitable<void> testTurnEndTipPersistenceRoundtrip() {
                 std::move(ioCfg)
             );
 
-            auto result = co_await agent->runTurnAsync("turn-tip-thread", "Hello", true, serverIO);
+            auto result = co_await agent->runTurnAsync("turn-tip-thread", "Hello", serverIO);
             XX_TEST_EXPECT_FALSE(result.hasError);
 
             auto sess = agent->agentContext->getSession("turn-tip-thread");

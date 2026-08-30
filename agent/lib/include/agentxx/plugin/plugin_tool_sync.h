@@ -17,7 +17,7 @@ extern "C" {
 typedef char* (*AgentxxSyncToolFn)(
     void*                   user_data,
     AgentxxPluginStringView args_json,
-    AgentxxPluginStringView thread_id,
+    AgentxxPluginStringView session_id,
     AgentxxPluginStringView tool_call_id,
     volatile int*           cancel_flag,
     char**                  error_out
@@ -125,7 +125,7 @@ static inline void agentxx_sync_job_done(void* ud, void* result, char* error) {
 static inline void* agentxx_sync_tool_start(
     void*                   user_data,
     AgentxxPluginStringView args_json,
-    AgentxxPluginStringView thread_id,
+    AgentxxPluginStringView session_id,
     AgentxxPluginStringView tool_call_id,
     const AgentxxOpNotify*  notify,
     char**                  error_out
@@ -166,21 +166,22 @@ static inline void* agentxx_sync_tool_start(
     }
     job->argsSize = args_json.size;
 
-    if (thread_id.size) {
-        job->tid = (char*)malloc(thread_id.size);
+    if (session_id.size) {
+        job->tid = (char*)malloc(session_id.size);
         if (!job->tid) {
             if (job->args) {
                 free(job->args);
             }
             free(job);
             if (error_out) {
-                *error_out = agentxx_shim_err_dup(shim->host, "out of memory allocating thread_id");
+                *error_out
+                    = agentxx_shim_err_dup(shim->host, "out of memory allocating session_id");
             }
             return NULL;
         }
-        memcpy(job->tid, thread_id.data, thread_id.size);
+        memcpy(job->tid, session_id.data, session_id.size);
     }
-    job->tidSize = thread_id.size;
+    job->tidSize = session_id.size;
 
     if (tool_call_id.size) {
         job->tcid = (char*)malloc(tool_call_id.size);
@@ -258,7 +259,7 @@ static inline int agentxx_register_sync_tool(
 typedef char* (*AgentxxInlineToolFn)(
     void*                   user_data,
     AgentxxPluginStringView args_json,
-    AgentxxPluginStringView thread_id,
+    AgentxxPluginStringView session_id,
     AgentxxPluginStringView tool_call_id,
     char**                  error_out
 );
@@ -282,7 +283,7 @@ typedef struct AgentxxInlineToolShim {
 static inline void* agentxx_inline_tool_start(
     void*                   user_data,
     AgentxxPluginStringView args_json,
-    AgentxxPluginStringView thread_id,
+    AgentxxPluginStringView session_id,
     AgentxxPluginStringView tool_call_id,
     const AgentxxOpNotify*  notify,
     char**                  error_out
@@ -298,7 +299,7 @@ static inline void* agentxx_inline_tool_start(
     char* result = NULL;
 #ifdef __cplusplus
     try {
-        result = shim->fn(shim->ud, args_json, thread_id, tool_call_id, error_out);
+        result = shim->fn(shim->ud, args_json, session_id, tool_call_id, error_out);
     } catch (const std::exception& e) {
         if (error_out && !*error_out) {
             *error_out = agentxx_shim_err_dup(shim->host, e.what());
@@ -311,7 +312,7 @@ static inline void* agentxx_inline_tool_start(
         result = NULL;
     }
 #else
-    result = shim->fn(shim->ud, args_json, thread_id, tool_call_id, error_out);
+    result = shim->fn(shim->ud, args_json, session_id, tool_call_id, error_out);
 #endif
 
     if (error_out && *error_out) {

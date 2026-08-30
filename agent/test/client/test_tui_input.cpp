@@ -197,7 +197,7 @@ void test_real_enter_sends() {
 void test_send_rejected_retains_input() {
     InputFixture           f;
     InputComponent::Config cfg;
-    // 模拟 agent-io 未初始化就绪, 拒绝发送
+    // 模拟 server-io 未初始化就绪, 拒绝发送
     cfg.onSend = [](std::string) -> bool {
         return false;
     };

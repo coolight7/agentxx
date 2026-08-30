@@ -117,7 +117,7 @@ TUIClientAgentIO::TUIClientAgentIO(
     permissionMode_(permissionMode),
     inputChannel_(std::make_shared<LineChannel>(ex, 64)),
     logSink_(std::make_shared<TUILogSink>()) {
-    // 注意: TUI 是纯 client 端点, 不持有 AgentContext/Session (属于 agent-io
+    // 注意: TUI 是纯 client 端点, 不持有 AgentContext/Session (属于 server-io
     // 线程); 模型名/上下文统计等所有 agent 侧信息均经 Wire 消息 (WireModelInfo /
     // WireContextStats) 由服务端推送获取, cachedModelName 初始为空,
     // 收到 WireModelInfo 后更新 (调用方在连接建立后发送 WireGetModel 请求)
@@ -227,7 +227,7 @@ void TUIClientAgentIO::sendPluginUserInput(std::string text) {
             return; // 中断输入不触发事件接收器 (属于中断响应, 非用户消息)
         }
         if (st.connState != ConnState::Connected) {
-            XX_LOGW("[tui] sendPluginUserInput dropped: agent-io not connected");
+            XX_LOGW("[tui] sendPluginUserInput dropped: server-io not connected");
             return;
         }
         sendUserInputLocked(st, std::move(text)); // 内部通知事件接收器
@@ -424,7 +424,7 @@ void TUIClientAgentIO::start() {
         ctx_.sessionId     = currentSessionId();
         ctx_.remoteUrl     = remoteUrl_;
         ctx_.pluginManager = pluginManager_;
-        // 注意: 不设置 ctx_.session —— TUI 不持有 Session (属于 agent-io 线程),
+        // 注意: 不设置 ctx_.session —— TUI 不持有 Session (属于 server-io 线程),
         // 上下文统计经 WireContextStats → onContextStats → sharedState_ 更新,
         // 状态栏等组件从 frameState 读取 (见 status_bar.cpp)
 
@@ -484,8 +484,8 @@ void TUIClientAgentIO::start() {
                 );
                 return true;
             } else if (st.connState != ConnState::Connected) {
-                // agent-io 未初始化完成前不允许发送消息, 且不清空输入框
-                showToast("agent-io 尚未就绪, 请稍后再试");
+                // server-io 未初始化完成前不允许发送消息, 且不清空输入框
+                showToast("server-io 尚未就绪, 请稍后再试");
                 postRedraw();
                 return false;
             } else {
@@ -509,7 +509,7 @@ void TUIClientAgentIO::start() {
 
         // 侧边栏 footer 点击: 处理 "上下文" 按钮
         sidebar_->onFooterClick([this](const Mouse&) -> bool {
-            // LLM 上下文消息在 agent-io 侧 (Session::llmMessages), TUI 不持有,
+            // LLM 上下文消息在 server-io 侧 (Session::llmMessages), TUI 不持有,
             // 经 WireGetContext 由服务端回推 (WireContextMessages → onPeerMessage
             // → sharedState_.contextMessages); 本地/远程模式均有 transport
             if (transport_) {
@@ -966,10 +966,10 @@ asio::awaitable<void> TUIClientAgentIO::waitRetry() {
 // ---------------------------------------------------------------------------
 
 void TUIClientAgentIO::openModelSelector() {
-    // agent-io 未就绪时请求会被 transport 丢弃 (远程模式写队列未创建/
+    // server-io 未就绪时请求会被 transport 丢弃 (远程模式写队列未创建/
     // 本地模式服务尚未启动), 弹窗将永远显示 loading; 提示用户等待连接完成
     if (ctx_.frameState && ctx_.frameState->connState != ConnState::Connected) {
-        showToast("agent-io 尚未就绪, 请稍后再试");
+        showToast("server-io 尚未就绪, 请稍后再试");
         postRedraw();
         return;
     }
@@ -984,7 +984,7 @@ void TUIClientAgentIO::openModelSelector() {
             break;
         }
     }
-    // 确认选择: 不即时通知 agent-io 切换 (不发送 WireSelectModel), 仅记录为
+    // 确认选择: 不即时通知 server-io 切换 (不发送 WireSelectModel), 仅记录为
     // 待应用选择 (setPendingModel), 随下一次发送的用户消息 (WireUserInput.model)
     // 携带, BaseAgent 执行新一轮会话时 (runTurnAsync 开头 selectModel) 自动切换。
     // 状态栏显示已由 confirmSelection 更新 cachedModelName, 此处仅登记待应用
@@ -1099,14 +1099,14 @@ void TUIClientAgentIO::openSessionSelector() {
     if (!modal_ || modal_->hasModal()) {
         return;
     }
-    // agent-io 未就绪时 WireListSessions/WireSwitchSession 无法送达,
+    // server-io 未就绪时 WireListSessions/WireSwitchSession 无法送达,
     // 会话列表将永远显示 loading; 提示用户等待连接完成
     if (ctx_.frameState && ctx_.frameState->connState != ConnState::Connected) {
-        showToast("agent-io 尚未就绪, 请稍后再试");
+        showToast("server-io 尚未就绪, 请稍后再试");
         postRedraw();
         return;
     }
-    // 仅当前会话非运行状态时可切换: 轮次进行中切换会话会使 Delta/输入错投,
+    // 仅当前会话非运行状态时可切换: 轮次进行中切换会话会使 WireDelta/输入错投,
     // 请先停止当前会话 (Esc 或点击停止)
     // 提示以屏幕上方 toast 展示 (3 秒自动消失), 不插入消息列表
     const bool busy = (ctx_.frameState && ctx_.frameState->isStreaming)
@@ -1153,7 +1153,7 @@ void TUIClientAgentIO::switchToSession(std::string newThreadId) {
     setCurrentSessionId(newThreadId);
     // 更新组件共享上下文: 状态栏/会话弹窗据此标记 current 会话
     ctx_.sessionId = newThreadId;
-    // 注意: TUI 不持有 Session (属于 agent-io 线程), 切换后服务端回推
+    // 注意: TUI 不持有 Session (属于 server-io 线程), 切换后服务端回推
     // 新会话的全量 Sync + WireModelInfo + WireContextStats (WireSwitchSession
     // 处理路径), 客户端界面 (消息历史/模型名/上下文统计) 随之整体更新
     // 清理上一会话遗留的消息列表吸附/中断 UI 状态;
@@ -1214,13 +1214,13 @@ void TUIClientAgentIO::onPeerMessage(agentxx::agent::WireMessage msg) {
     std::visit(
         [this](auto&& m) {
             using T = std::decay_t<decltype(m)>;
-            if constexpr (std::is_same_v<T, agentxx::agent::Delta>) {
+            if constexpr (std::is_same_v<T, agentxx::agent::WireDelta>) {
                 // 通知事件接收器 (client 插件系统订阅 delta 事件)
                 emitEventSink([&](agentxx::agent::ClientEventSink& sink) {
                     sink.onDelta(m);
                 });
                 onDelta(m);
-            } else if constexpr (std::is_same_v<T, agentxx::agent::SyncPayload>) {
+            } else if constexpr (std::is_same_v<T, agentxx::agent::WireSyncPayload>) {
                 onSync(m);
             } else if constexpr (std::is_same_v<T, agentxx::agent::WireTurnResult>) {
                 // 通知事件接收器 (client 插件系统订阅轮次结束事件)
@@ -1387,7 +1387,7 @@ void TUIClientAgentIO::cancelCurrentRunLocked(TUIRenderState& st) {
     requestCancel(currentSessionId());
     pushCurrentTokenLocked(st);
     resetTrailingRunningToolsLocked(st);
-    // 取消提示由 agent 线程确认取消后经 MessageTip Delta 插入 (原在此处
+    // 取消提示由 agent 线程确认取消后经 MessageTip WireDelta 插入 (原在此处
     // 即时插入 "[Cancel Request]", 迁移后由 agent 端统一插入保证历史一致)
     st.isStreaming = false;
 }
@@ -1396,7 +1396,7 @@ void TUIClientAgentIO::sendUserInputLocked(TUIRenderState& st, std::string text)
     resetTrailingRunningToolsLocked(st);
     // 事件接收器通知用原文 (inputChannel 分支会 move text, 提前拷贝)
     const std::string notifyText = text;
-    // 待应用模型选择: 取走后随本条消息携带给 agent-io (WireUserInput.model),
+    // 待应用模型选择: 取走后随本条消息携带给 server-io (WireUserInput.model),
     // BaseAgent 执行新一轮会话时自动切换; 清空使模型选择仅对"选择之后发送的
     // 下一条消息"生效
     std::string pendingModel = std::move(st.pendingModel);
@@ -1449,7 +1449,7 @@ void TUIClientAgentIO::onMessageQueueUpdate(const agentxx::agent::WireMessageQue
 // ---------------------------------------------------------------------------
 // 历史分页 (client 线程)
 //
-// 长会话恢复时服务端仅同步末尾窗口 (SyncPayload.fromIndex = 窗口起始绝对
+// 长会话恢复时服务端仅同步末尾窗口 (WireSyncPayload.fromIndex = 窗口起始绝对
 // 下标), 用户向上滚动到已加载窗口顶部时经 WireGetViewMessages 分页拉取
 // 更早历史; 页响应在此前插到本地窗口上方并做滚动锚定。
 // viewMessages 为 append-only, 绝对下标恒定, 前插不影响既有下标。
@@ -1604,8 +1604,8 @@ void TUIClientAgentIO::requestNextSessionListPage() {
 // onDelta (client 线程)
 // ---------------------------------------------------------------------------
 
-void TUIClientAgentIO::onDelta(const agentxx::agent::Delta& delta) {
-    using Type = agentxx::agent::Delta::Type;
+void TUIClientAgentIO::onDelta(const agentxx::agent::WireDelta& delta) {
+    using Type = agentxx::agent::WireDelta::Type;
     {
         std::lock_guard<std::mutex> lock(sharedState_.mutex());
         auto&                       st = sharedState_.mutableState();
@@ -1728,11 +1728,11 @@ void TUIClientAgentIO::onDelta(const agentxx::agent::Delta& delta) {
                 m->startTimeMs        = delta.startTimeMs > 0
                                             ? delta.startTimeMs
                                             : static_cast<int64_t>(
-                                           std::chrono::duration_cast<std::chrono::milliseconds>(
-                                               std::chrono::system_clock::now().time_since_epoch()
-                                           )
-                                               .count()
-                                       );
+                                         std::chrono::duration_cast<std::chrono::milliseconds>(
+                                             std::chrono::system_clock::now().time_since_epoch()
+                                         )
+                                             .count()
+                                     );
                 st.messages.push_back(std::move(m));
                 st.isStreaming = true;
             } break;
@@ -1793,8 +1793,7 @@ void TUIClientAgentIO::onDelta(const agentxx::agent::Delta& delta) {
                         st.pendingTokenStartTimeMs = delta.startTimeMs;
                         st.pendingTokenDurationMs  = delta.durationMs;
                     }
-                } else if (!st.messages.empty()
-                           && st.messages.back()->role != TUIMessage::Role::Think) {
+                } else if (!st.messages.empty() && st.messages.back()->role != TUIMessage::Role::Think) {
                     auto& m       = sharedState_.mutableMessage(st, st.messages.size() - 1);
                     m.startTimeMs = delta.startTimeMs;
                     m.durationMs  = delta.durationMs;
@@ -1811,13 +1810,13 @@ void TUIClientAgentIO::onDelta(const agentxx::agent::Delta& delta) {
                 msg->tip       = TUIMessage::TipData{};
                 msg->collapsed = true;
                 switch (delta.tipType) {
-                    case agentxx::agent::Delta::TipType::Info:
+                    case agentxx::agent::WireDelta::TipType::Info:
                         msg->tip->tipLevel = TUIMessage::TipLevel::Info;
                         break;
-                    case agentxx::agent::Delta::TipType::Warning:
+                    case agentxx::agent::WireDelta::TipType::Warning:
                         msg->tip->tipLevel = TUIMessage::TipLevel::Warning;
                         break;
-                    case agentxx::agent::Delta::TipType::Error:
+                    case agentxx::agent::WireDelta::TipType::Error:
                         msg->tip->tipLevel = TUIMessage::TipLevel::Error;
                         break;
                 }
@@ -1865,7 +1864,7 @@ void TUIClientAgentIO::onDelta(const agentxx::agent::Delta& delta) {
 // onSync (client 线程)
 // ---------------------------------------------------------------------------
 
-void TUIClientAgentIO::onSync(const agentxx::agent::SyncPayload& payload) {
+void TUIClientAgentIO::onSync(const agentxx::agent::WireSyncPayload& payload) {
     {
         // 单次 mutate (内部加锁): 不得在持锁状态下再调 mutate() ——
         // 旧实现先 lock_guard 再调 mutate() 会对同一非递归 mutex 二次加锁,
@@ -1942,7 +1941,7 @@ void TUIClientAgentIO::onTurnResult(const agentxx::agent::WireTurnResult& /*resu
 
 void TUIClientAgentIO::onContextStats(const agentxx::agent::WireContextStats& stats) {
     // 上下文统计写入 sharedState_ (而非 Session::contextStats —— TUI 不持有
-    // Session, 属于 agent-io 线程); 状态栏等组件从 frameState 读取。
+    // Session, 属于 server-io 线程); 状态栏等组件从 frameState 读取。
     // 会话切换后服务端推送新会话的 WireContextStats (#switchSession 路径),
     // 显示自动跟随新会话
     {
@@ -2041,7 +2040,7 @@ asio::awaitable<neograph::json> TUIClientAgentIO::handleInterrupt(
 
     awaitingInterruptInput_.store(true, std::memory_order_release);
 
-    // 中断头消息已由 agent 线程插入会话历史并经 MessageTip Delta 送达
+    // 中断头消息已由 agent 线程插入会话历史并经 MessageTip WireDelta 送达
     // (在发起中断请求前插入, 顺序先于本函数的输入项消息), 此处不再构造
 
     // 每个输入项一条中断消息 (共享结果通道)

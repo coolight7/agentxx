@@ -133,7 +133,7 @@ struct TUIRenderState {
     /// - true:  已收到响应 (若列表仍为空则说明确实无可用模型)
     bool modelInfoLoaded = false;
 
-    /// 待应用模型选择 (TUI 切模型不即时通知 agent-io):
+    /// 待应用模型选择:
     /// 模型选择弹窗确认后写入, 随下一次发送的用户消息 (WireUserInput.model)
     /// 携带; BaseAgent 执行新一轮会话时自动切换。发送时取走并清空,
     /// 仅对"选择之后发送的下一条消息"生效 (重复选择以最后一次为准)
@@ -164,7 +164,7 @@ struct TUIRenderState {
     std::vector<agentxx::agent::AppendComponentNotification> appendComponents;
 
     /// 上下文统计 (WireContextStats 响应填充; 状态栏显示用)
-    /// - TUI 不持有 agent-io 的 Session, 统计经 Wire 消息获取后存于此
+    /// - TUI 不持有 server-io 的 Session, 统计经 Wire 消息获取后存于此
     /// - 0/0 表示尚未收到服务端推送
     size_t contextTokens    = 0;
     size_t maxContextTokens = 0;

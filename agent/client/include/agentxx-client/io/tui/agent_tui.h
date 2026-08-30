@@ -311,7 +311,7 @@ public:
                 ) override;
     void requestCancel(std::string sessionId) override;
 
-    /// 记录待应用模型选择: 不即时通知 agent-io (不发 WireSelectModel),
+    /// 记录待应用模型选择
     /// 随下一条发送的用户消息 (WireUserInput.model) 携带, BaseAgent 执行
     /// 新一轮会话时 (runTurnAsync 开头 selectModel) 自动切换。
     /// - 模型选择弹窗确认 (UI 线程) 与远程 TUI 启动 --model 参数 (client io
@@ -327,8 +327,8 @@ public:
 protected:
 
     // ---- AgentIOBase 被动接收回调 (client 端点实现; 仅由 onPeerMessage 分发) ----
-    void onDelta(const agentxx::agent::Delta& delta) override;
-    void onSync(const agentxx::agent::SyncPayload& payload) override;
+    void onDelta(const agentxx::agent::WireDelta& delta) override;
+    void onSync(const agentxx::agent::WireSyncPayload& payload) override;
     void onTurnResult(const agentxx::agent::WireTurnResult& result) override;
     void onContextStats(const agentxx::agent::WireContextStats& stats) override;
 
@@ -401,7 +401,7 @@ private:
     /// 会话选择弹窗确认后的切换逻辑 (UI 线程):
     /// - 更新本地 sessionId 绑定与重连握手 sessionId (WS 模式)
     /// - 发送 WireSwitchSession, 服务端回推全量 Sync/模型/上下文统计 (WireModelInfo
-    ///   / WireContextStats) 恢复界面; TUI 不持有 Session (属于 agent-io 线程)
+    ///   / WireContextStats) 恢复界面; TUI 不持有 Session (属于 server-io 线程)
     void switchToSession(std::string newSessionId);
 
     /// 当前会话 sessionId 的跨线程安全读写:

@@ -69,9 +69,9 @@ public:
 protected:
 
     // ---- AgentIOBase 被动接收回调 (client 端点实现; 仅由 onPeerMessage 分发) ----
-    void onDelta(const agentxx::agent::Delta& delta) override;
+    void onDelta(const agentxx::agent::WireDelta& delta) override;
 
-    void onSync(const agentxx::agent::SyncPayload& payload) override;
+    void onSync(const agentxx::agent::WireSyncPayload& payload) override;
 
     /// 处理对端消息: 拦截 WireAppendComponentInfo (启动信息统计), 其余委托基类
     void onPeerMessage(agentxx::agent::WireMessage msg) override;

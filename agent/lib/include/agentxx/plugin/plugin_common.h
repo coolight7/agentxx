@@ -122,7 +122,7 @@ std::string resolvePluginEntryPath(const std::filesystem::path& dir, const std::
 /* ==================== 接口协商 (三层协商的声明/校验基础设施) ====================
  *
  * 背景: client 宿主形态多样 (cli/tui/gui/第三方 app), 各自支持的插件接口
- * 不同; server (agent-io) 仅有 libagentxx 一个实现, agent 侧接口集 ≡ 核心
+ * 不同; server (server-io) 仅有 libagentxx 一个实现, agent 侧接口集 ≡ 核心
  * 契约 + 全部标准接口表 (版本匹配即全集)。协商机制因此是不对称的:
  * 机制通用, 实际起作用的门禁集中在 client 侧。
  *

@@ -314,8 +314,8 @@ bool FfiAgentRuntime::buildConfigs(
         err = fmt::format("CodeAgent 构造失败: {}", e.what());
         return false;
     }
-    // 复用 CodeAgent 自带的 io_context 作为 Agent-IO 线程执行器
-    agentIoCtx_ = agent_->ioCtx;
+    // 复用 CodeAgent 自带的 io_context 作为 Server-IO 线程执行器
+    serverIoCtx_ = agent_->ioCtx;
     return true;
 }
 
@@ -335,7 +335,7 @@ FfiAgentRuntime::~FfiAgentRuntime() {
 }
 
 bool FfiAgentRuntime::isOnAgentThread() const {
-    const auto tid = agentThread_.get_id();
+    const auto tid = serverThread_.get_id();
     return tid != std::thread::id{} && std::this_thread::get_id() == tid;
 }
 
@@ -356,10 +356,10 @@ int FfiAgentRuntime::start(std::string& err) {
     }
 
     clientIoCtx_        = std::make_shared<asio::io_context>();
-    const auto agentEx  = agentIoCtx_->get_executor();
+    const auto agentEx  = serverIoCtx_->get_executor();
     const auto clientEx = clientIoCtx_->get_executor();
 
-    // 进程内传输对 (跨 Client-IO 线程与 Agent-IO 线程)
+    // 进程内传输对 (跨 Client-IO 线程与 Server-IO 线程)
     auto [clientTrans, serverTrans] = agent::ChannelAgentIOTransport::makePair(clientEx, agentEx);
 
     // FFI client 端点 (绑定 clientEx)
@@ -391,27 +391,27 @@ int FfiAgentRuntime::start(std::string& err) {
     util::LogDispatcher::instance().addSink(logSink_);
 
     // 创建 work guards
-    agentWorkGuard_.emplace(asio::make_work_guard(*agentIoCtx_));
+    serverWorkGuard_.emplace(asio::make_work_guard(*serverIoCtx_));
     clientWorkGuard_.emplace(asio::make_work_guard(*clientIoCtx_));
 
     // 启动两条工作线程
-    agentThread_  = std::thread([this]() {
-        agentIoCtx_->run();
+    serverThread_ = std::thread([this]() {
+        serverIoCtx_->run();
     });
     clientThread_ = std::thread([this]() {
         clientIoCtx_->run();
     });
 
-    clientIO_->setAgentThreadId(agentThread_.get_id());
+    clientIO_->setAgentThreadId(serverThread_.get_id());
     clientIO_->setClientThreadId(clientThread_.get_id());
 
-    // 1) Agent-IO 线程协程: server 接收循环 + init / main
-    asio::post(*agentIoCtx_, [self = shared_from_this()]() {
+    // 1) Server-IO 线程协程: server 接收循环 + init / main
+    asio::post(*serverIoCtx_, [self = shared_from_this()]() {
         // 先启动 server 接收循环 (init 期间请求如 WireHello/WireGetModel 不排队)
-        asio::co_spawn(*self->agentIoCtx_, self->serverIO_->runTransportLoop(), asio::detached);
+        asio::co_spawn(*self->serverIoCtx_, self->serverIO_->runTransportLoop(), asio::detached);
         // 主协程: init → host → ready → serverIO->run()
         asio::co_spawn(
-            *self->agentIoCtx_,
+            *self->serverIoCtx_,
             [self]() -> asio::awaitable<void> {
                 co_await self->runAgentMain();
             },
@@ -508,13 +508,13 @@ void FfiAgentRuntime::stopInternal() {
     // 4) 摘除日志 sink
     util::LogDispatcher::instance().removeSink(logSink_);
 
-    // 5) 停止并 join Agent-IO 线程
-    if (agentIoCtx_) {
-        agentWorkGuard_.reset();
-        agentIoCtx_->stop();
+    // 5) 停止并 join Server-IO 线程
+    if (serverIoCtx_) {
+        serverWorkGuard_.reset();
+        serverIoCtx_->stop();
     }
-    if (agentThread_.joinable()) {
-        agentThread_.join();
+    if (serverThread_.joinable()) {
+        serverThread_.join();
     }
 
     // 6) 停止并 join Client-IO 线程

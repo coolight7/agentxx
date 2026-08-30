@@ -32,9 +32,6 @@ struct Topic {
     inline static constexpr std::string_view ToolCallStart{"agent.tool.start"};
     inline static constexpr std::string_view ToolCallEnd{"agent.tool.end"};
 
-    /// subagent 进度 (单向, 供 UI 观测): EventSubagentProgress
-    inline static constexpr std::string_view SubagentProgress{"subagent.progress"};
-
     /// 通用显示输出: EventDisplay
     inline static constexpr std::string_view Display{"io.display"};
 
@@ -57,6 +54,9 @@ struct Topic {
     /// subagent 委派 (统一批量语义): ReqSubagentBatch / RespSubagentBatch
     /// - 单任务与多任务统一为 tasks 数组 (单任务 = 1 个 task)
     inline static constexpr std::string_view Subagent{"service.subagent"};
+
+    /// subagent 进度 (单向, 供 UI 观测): EventSubagentProgress
+    inline static constexpr std::string_view SubagentProgress{"subagent.progress"};
 
     /// 跨 agent 查询: ReqCrossAgent / RespCrossAgent
     /// - 任一 agent (含 subagent) 可向指定 agentName 发起查询

@@ -675,7 +675,7 @@ asio::awaitable<void> ModelCallWrapNode::baseRun(
             agentCtxPtr->agentConfig->llmMaxRetry,
             errInfo
         );
-        // 通知 UI 层: LLM API 调用失败, 即将自动重试 (经 base_agent 转为 Delta::MessageUITip,
+        // 通知 UI 层: LLM API 调用失败, 即将自动重试 (经 base_agent 转为 WireDelta::MessageUITip,
         // 由 client 端 (TUI/stdio) 插入提示消息)
         if (nullptr != in.stream_cb) {
             // 实际等待时长: retry*3 秒 + 限速附加延时 (appendDelay 单位: 秒)

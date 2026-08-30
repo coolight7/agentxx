@@ -34,19 +34,19 @@ namespace test {
 class TestAgentIO : public agentxx::agent::AgentIOBase {
 public:
 
-    std::vector<agentxx::agent::Delta> deltas;
-    std::atomic<int>                   deltaCount{0};
-    std::atomic<int>                   syncCount{0};
-    bool                               failGetInput = false;
+    std::vector<agentxx::agent::WireDelta> deltas;
+    std::atomic<int>                       deltaCount{0};
+    std::atomic<int>                       syncCount{0};
+    bool                                   failGetInput = false;
 
     void sendToPeer(agentxx::agent::WireMessage msg) override {
         std::visit(
             [this](auto&& m) {
                 using T = std::decay_t<decltype(m)>;
-                if constexpr (std::is_same_v<T, agentxx::agent::Delta>) {
+                if constexpr (std::is_same_v<T, agentxx::agent::WireDelta>) {
                     deltas.push_back(std::move(m));
                     deltaCount++;
-                } else if constexpr (std::is_same_v<T, agentxx::agent::SyncPayload>) {
+                } else if constexpr (std::is_same_v<T, agentxx::agent::WireSyncPayload>) {
                     syncCount++;
                 }
             },
@@ -55,9 +55,9 @@ public:
     }
 
     // 被动接收回调: 测试中不会被调用 (无对端消息), 空实现满足纯虚契约
-    void onDelta(const agentxx::agent::Delta& /*delta*/) override {}
+    void onDelta(const agentxx::agent::WireDelta& /*delta*/) override {}
 
-    void onSync(const agentxx::agent::SyncPayload& /*payload*/) override {}
+    void onSync(const agentxx::agent::WireSyncPayload& /*payload*/) override {}
 
     asio::awaitable<std::optional<std::string>> getInput() override {
         if (failGetInput) {
@@ -84,9 +84,9 @@ public:
 
     void sendToPeer(agentxx::agent::WireMessage /*msg*/) override {}
 
-    void onDelta(const agentxx::agent::Delta& /*delta*/) override {}
+    void onDelta(const agentxx::agent::WireDelta& /*delta*/) override {}
 
-    void onSync(const agentxx::agent::SyncPayload& /*payload*/) override {}
+    void onSync(const agentxx::agent::WireSyncPayload& /*payload*/) override {}
 
     asio::awaitable<std::optional<std::string>> getInput() override {
         co_return std::nullopt;
@@ -670,7 +670,7 @@ asio::awaitable<void> test_agent_conversation_turn() {
     agentxx::agent::CodeAgent agent(cfg);
     co_await agent.init();
 
-    auto result = co_await agent.runTurnAsync("conv_test", "What is the weather?", true, nullptr);
+    auto result = co_await agent.runTurnAsync("conv_test", "What is the weather?", nullptr);
 
     XX_TEST_EXPECT_FALSE(result.hasError);
     XX_TEST_EXPECT_FALSE(result.interrupted);
@@ -705,7 +705,7 @@ asio::awaitable<void> test_agent_tool_calls() {
     agentxx::agent::CodeAgent agent(cfg);
     co_await agent.init();
 
-    auto result = co_await agent.runTurnAsync("tool_test", "List files", true, nullptr);
+    auto result = co_await agent.runTurnAsync("tool_test", "List files", nullptr);
 
     XX_TEST_EXPECT_FALSE(result.hasError);
 
@@ -730,7 +730,7 @@ asio::awaitable<void> test_agent_multi_turn() {
 
     for (int turn = 0; turn < 3; ++turn) {
         auto input  = "Turn " + std::to_string(turn) + " input";
-        auto result = co_await agent.runTurnAsync("multi_turn_test", input, turn == 0, nullptr);
+        auto result = co_await agent.runTurnAsync("multi_turn_test", input, nullptr);
 
         XX_TEST_EXPECT_FALSE(result.hasError);
         XX_TEST_EXPECT_FALSE(result.interrupted);
@@ -755,7 +755,7 @@ asio::awaitable<void> test_agent_large_history() {
     agentxx::agent::CodeAgent agent(cfg);
     co_await agent.init();
 
-    auto result = co_await agent.runTurnAsync("history_test", "Final question", true, nullptr);
+    auto result = co_await agent.runTurnAsync("history_test", "Final question", nullptr);
 
     XX_TEST_EXPECT_FALSE(result.hasError);
 
@@ -847,7 +847,7 @@ asio::awaitable<void> test_agent_io_session_bus() {
 
     auto io = std::make_shared<TestAgentIO>();
     // 首次调用, 应创建 session bus 并注册 IO
-    auto result = co_await agent.runTurnAsync("io_session_test", "Hello", true, io);
+    auto result = co_await agent.runTurnAsync("io_session_test", "Hello", io);
 
     XX_TEST_EXPECT_FALSE(result.hasError);
     // session bus 应已创建
@@ -866,7 +866,7 @@ asio::awaitable<void> test_agent_io_session_bus() {
 /// 轮次统计系统提示由 agent 线程插入:
 /// - 带 io 运行一轮后, viewMessages 末尾应包含 System 消息 (轮次统计, 含
 ///   模型名 / tps / 时长)
-/// - io 应收到 MessageTip Delta, 其 msgId 与 viewMessages 中消息 id 一致
+/// - io 应收到 MessageTip WireDelta, 其 msgId 与 viewMessages 中消息 id 一致
 asio::awaitable<void> test_agent_turn_system_message() {
     auto sim     = startDaSimServer();
     auto baseUrl = "http://127.0.0.1:" + std::to_string(sim.port);
@@ -883,7 +883,7 @@ asio::awaitable<void> test_agent_turn_system_message() {
     co_await agent.init();
 
     auto io     = std::make_shared<TestAgentIO>();
-    auto result = co_await agent.runTurnAsync("sysmsg_test", "Hello", true, io);
+    auto result = co_await agent.runTurnAsync("sysmsg_test", "Hello", io);
     XX_TEST_EXPECT_FALSE(result.hasError);
 
     auto session = agent.agentContext->sessions->get("sysmsg_test");
@@ -904,10 +904,10 @@ asio::awaitable<void> test_agent_turn_system_message() {
     }
     XX_TEST_EXPECT_TRUE(foundStat);
 
-    // io 应收到 InsertMessage Delta, 携带完整 ViewMessage, msgId 与历史消息一致
+    // io 应收到 InsertMessage WireDelta, 携带完整 ViewMessage, msgId 与历史消息一致
     bool foundDelta = false;
     for (const auto& d : io->deltas) {
-        if (d.type == agentxx::agent::Delta::Type::InsertMessage && d.message) {
+        if (d.type == agentxx::agent::WireDelta::Type::InsertMessage && d.message) {
             foundDelta = true;
             XX_TEST_EXPECT_EQ(d.message->id, statMsgId);
             XX_TEST_EXPECT_TRUE(!d.message->text.empty());
@@ -934,7 +934,7 @@ asio::awaitable<void> test_agent_io_null() {
     co_await agent.init();
 
     // 传入 nullptr IO, 验证不崩溃
-    auto result = co_await agent.runTurnAsync("null_io_test", "test", true, nullptr);
+    auto result = co_await agent.runTurnAsync("null_io_test", "test", nullptr);
 
     XX_TEST_EXPECT_FALSE(result.hasError);
 
@@ -956,7 +956,7 @@ asio::awaitable<void> test_agent_session_activity_streaming() {
     co_await agent.init();
 
     auto io     = std::make_shared<TestAgentIO>();
-    auto result = co_await agent.runTurnAsync("activity_stream_test", "Check", true, io);
+    auto result = co_await agent.runTurnAsync("activity_stream_test", "Check", io);
 
     XX_TEST_EXPECT_FALSE(result.hasError);
     auto session = agent.agentContext->sessions->get("activity_stream_test");
@@ -993,7 +993,7 @@ asio::awaitable<void> test_agent_session_activity_toolcall() {
     co_await agent.init();
 
     auto io     = std::make_shared<TestAgentIO>();
-    auto result = co_await agent.runTurnAsync("activity_tool_test", "List", true, io);
+    auto result = co_await agent.runTurnAsync("activity_tool_test", "List", io);
 
     XX_TEST_EXPECT_FALSE(result.hasError);
     auto session = agent.agentContext->sessions->get("activity_tool_test");
@@ -1020,10 +1020,10 @@ asio::awaitable<void> test_agent_multi_session_io() {
     auto ioA = std::make_shared<TestAgentIO>();
     auto ioB = std::make_shared<TestAgentIO>();
 
-    auto resA = co_await agent.runTurnAsync("session_a", "Hello A", true, ioA);
+    auto resA = co_await agent.runTurnAsync("session_a", "Hello A", ioA);
     XX_TEST_EXPECT_FALSE(resA.hasError);
 
-    auto resB = co_await agent.runTurnAsync("session_b", "Hello B", true, ioB);
+    auto resB = co_await agent.runTurnAsync("session_b", "Hello B", ioB);
     XX_TEST_EXPECT_FALSE(resB.hasError);
 
     // 两个 session 应独立, 都有自己的 bus
@@ -1058,13 +1058,13 @@ asio::awaitable<void> test_agent_reuse_session_bus() {
     auto io = std::make_shared<TestAgentIO>();
 
     // 多轮: 同一 session, bus 应只创建一次
-    auto r1 = co_await agent.runTurnAsync("reuse_test", "Turn 1", true, io);
+    auto r1 = co_await agent.runTurnAsync("reuse_test", "Turn 1", io);
     XX_TEST_EXPECT_FALSE(r1.hasError);
 
     auto session = agent.agentContext->sessions->get("reuse_test");
     auto busPtr  = session->bus.get();
 
-    auto r2 = co_await agent.runTurnAsync("reuse_test", "Turn 2", false, io);
+    auto r2 = co_await agent.runTurnAsync("reuse_test", "Turn 2", io);
     XX_TEST_EXPECT_FALSE(r2.hasError);
 
     // 同一 session 应复用同一个 bus (指针不变)
@@ -1109,7 +1109,7 @@ asio::awaitable<void> test_agent_llm_retry_exhaust() {
                        },
     });
 
-    auto r1 = co_await agent.runTurnAsync("retry_test", "List files", true, nullptr);
+    auto r1 = co_await agent.runTurnAsync("retry_test", "List files", nullptr);
     XX_TEST_EXPECT_FALSE(r1.hasError);
     // 2 次请求: tool_calls 请求 + tools 执行后回 llm 的收尾请求
     XX_TEST_EXPECT_EQ(g_da_sim_request_count, 2);
@@ -1120,7 +1120,7 @@ asio::awaitable<void> test_agent_llm_retry_exhaust() {
     // 接下来 2 次请求返回 500: 第 1 次失败 + 1 次重试失败
     g_da_sim_fail_count = 2;
 
-    auto r2 = co_await agent.runTurnAsync("retry_test", "Continue", false, nullptr);
+    auto r2 = co_await agent.runTurnAsync("retry_test", "Continue", nullptr);
 
     // 重试耗尽后停止会话执行 (重抛 -> base_agent 报告错误): 共 4 次请求
     // (第一轮 2 次 + 本轮 2 次失败), 不再继续请求
@@ -1186,7 +1186,7 @@ asio::awaitable<void> test_agent_toolcall_intercept_exception() {
         std::make_shared<ThrowToolcallStartMiddleware>(agent.agentContext)
     );
 
-    auto result = co_await agent.runTurnAsync("intercept_test", "Run tool", true, nullptr);
+    auto result = co_await agent.runTurnAsync("intercept_test", "Run tool", nullptr);
 
     // toolcall 拦截异常 -> agent 继续运行 -> 会话正常结束 (非错误/非中断)
     XX_TEST_EXPECT_FALSE(result.hasError);

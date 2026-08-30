@@ -1,70 +1,70 @@
-/*
- * agentxx/plugin/plugin_api.h —— 插件系统纯 C ABI 契约 (agent 侧; 唯一跨版本稳定接口)
- *
- * ════════════════════════════════════════════════════════════════════
- * 架构: COM 风格接口表查询 (v1 全量重构, 锚定协程模型)
- * ════════════════════════════════════════════════════════════════════
- * - 核心 vtable 极简且【契约冻结】: 仅 内存三件套 (alloc/free/strdup) +
- *   query_interface —— 一切宿主能力都按稳定 IID 字符串查询独立接口表获取
- *   (COM QueryInterface 风格), 核心永不再增删成员
- * - 每个接口表为纯 C 结构体, 首字段恒为 int version (该接口自身版本,
- *   独立演进, 与全局 api_version 解耦); 表内函数指针可能为 NULL
- *   (宿主未实现该子能力), 调用前必须判空; 查询未知名称返回 NULL (安全失败)
- * - 版本策略 (双层):
- *   1) 全局 AGENTXX_PLUGIN_API_VERSION 只覆盖核心契约 (核心 vtable 形状 +
- *      Info 结构 + 入口符号 + 本头共享类型); 宿主精确匹配门禁: api_version
- *      不匹配直接拒绝加载 (无历史兼容路径)
- *   2) 接口表各自携带 version 独立演进: 新增能力 = 定义新接口表或表内
- *      追加成员并递增该表版本, 全局版本号不动、其他插件不受影响
- *
- * 设计要点:
- * - 纯 C 头: 插件可用任意编译器/任意语言 (C/C++/Rust...) 实现, 与宿主
- *   STL/异常/RTTI ABI 完全解耦; 插件编译无需链接 libagentxx
- * - 跨 CRT 堆边界: 所有"宿主分配"的跨边界内存统一由宿主 alloc/free 管理
- *   (核心 vtable), 插件返回的字符串必须经 host->alloc 分配; 而"字符串参数/
- *   字段"一律以 AgentxxPluginStringView (data + size) 传入, 是只读借用
- *   (不要求 NUL 结尾, 不要求宿主分配)
- *
- * ════════════════════════════════════════════════════════════════════
- * 统一异步操作模型 (两件套 start/cancel + 锚定协程)
- * ════════════════════════════════════════════════════════════════════
- * - 工具执行 / 中间件钩子 / 能力方法 等"可能耗时的被调方操作"一律为
- *   两件套 start/cancel —— 宿主在 io 线程启动操作, 终结由 AgentxxOpNotify.done
- *   恰好一次上报; 配合 SDK (plugin_kit.h) 的 Task 协程, 挂起与恢复均经
- *   宿主在 io 线程派发的回调完成, 协程段物理执行于宿主 io 线程, 原生交错
- * - 被调方不需要任何复杂事件循环:
- *   * 内联完成型 (快同步, <~1ms): 在 start 内直接算完并 done(OK) 上报, 返回 NULL;
- *   * 锚定协程型 (推荐): 创建 Task 帧并 resume 到首挂起点, 返回 job 句柄;
- *   * 阻塞委托型: 经 scheduler.offload 委托宿主阻塞池;
- *   * 自管线程型: 登记工作到专用线程, 完成时任意线程调用 notify.done
- * - 反向调用 (插件调用宿主工具 call_tool_async / 其他插件能力 invoke_capability_async)
- *   提供完成回调形接口与 AgentxxOpHandle 句柄 (仅用于 cancel, 宿主托管生命周期)
- *
- * - 每插件一个 AgentxxHost (opaque 指向宿主侧插件实例): 注册/订阅自动关联
- *   到调用它的插件, 插件卸载时宿主自动清理其全部注册残留
- * - 接口表是进程级静态只读数据: entry 时查询一次缓存指针即可长期使用;
- *   同一进程内任意 host 句柄查到的同一 IID 表指针相同
- * - 线程约定:
- *   - query_interface 与 alloc/free/strdup 任意线程可调用;
- *   - 注册类 (tools/hooks/events/capabilities/resources) 与 session/plugins/
- *     config/prompt/scheduler 的 io 线程约束操作在非 io 线程调用时由宿主
- *     内部投递同步等待 (插件无感); 各接口表函数注释标注线程属性
- *   - 异步两件套 start/cancel 由宿主在【io 线程】驱动 (非阻塞快速
- *     返回约定: 单次调用不得超过 ~1ms);
- *   - AgentxxOpNotify.done 可从被调方任意线程回调 (线程安全)
- *   - 宿主派发给插件的完成回调 (AgentxxOpCb / sleep cb / offload done)
- *     保证在【宿主 io 线程】派发, 且一律经 asio::post 入队, 禁止同步重入
- * - 回调快速返回约定: 事件订阅回调在 io 线程同步调用, 必须快速返回
- * - 异常不外泄: 宿主接口表所有函数内部捕获全部异常 (C ABI 边界无异常);
- *   插件侧 start/cancel/event 回调同样不得让异常逃逸
- * - 字符串约定:
- *   - 所有跨边界"字符串参数/字段"类型为 AgentxxPluginStringView (data+size,
- *     不要求 NUL 结尾, 生命周期仅覆盖本次调用); 便捷构造见
- *     agentxx_plugin_sv / agentxx_plugin_sv_cstr / AGENTXX_SV
- *   - 所有"宿主分配"的字符串返回值 (工具结果 / error_out / payload /
- *     strdup/list_plugins/get_plugin/... ) 仍为 char* (NUL 结尾, host->alloc),
- *     调用方用完必须 host->free
- */
+///
+/// agentxx/plugin/plugin_api.h —— 插件系统纯 C ABI 契约 (agent 侧; 唯一跨版本稳定接口)
+///
+/// ════════════════════════════════════════════════════════════════════
+/// 架构: COM 风格接口表查询
+/// ════════════════════════════════════════════════════════════════════
+/// - 核心 vtable [冻结]: 仅 内存三件套 (alloc/free/strdup) +
+///   query_interface —— 一切宿主能力都按稳定 IID 字符串查询独立接口表获取
+///   (COM QueryInterface 风格), 核心永不再增删成员
+/// - 每个接口表为纯 C 结构体, 首字段恒为 int version (该接口自身版本,
+///   独立演进, 与全局 api_version 解耦); 表内函数指针可能为 NULL
+///   (宿主未实现该子能力), 调用前必须判空; 查询未知名称返回 NULL (安全失败)
+/// - 版本策略 (双层):
+///   1) 全局 AGENTXX_PLUGIN_API_VERSION 只覆盖核心契约 (核心 vtable 形状 +
+///      Info 结构 + 入口符号 + 本头共享类型); 宿主精确匹配门禁: api_version
+///      不匹配直接拒绝加载 (无历史兼容路径)
+///   2) 接口表各自携带 version 独立演进: 新增能力 = 定义新接口表或表内
+///      追加成员并递增该表版本, 全局版本号不动、其他插件不受影响
+///
+/// 设计要点:
+/// - 纯 C 头: 插件可用任意编译器/任意语言 (C/C++/Rust...) 实现, 与宿主
+///   STL/异常/RTTI ABI 完全解耦; 插件编译无需链接 libagentxx
+/// - 跨 CRT 堆边界: 所有"宿主分配"的跨边界内存统一由宿主 alloc/free 管理
+///   (核心 vtable), 插件返回的字符串必须经 host->alloc 分配; 而"字符串参数/
+///   字段"一律以 AgentxxPluginStringView (data + size) 传入, 是只读借用
+///   (不要求 NUL 结尾, 不要求宿主分配)
+///
+/// ════════════════════════════════════════════════════════════════════
+/// 统一异步操作模型 (两件套 start/cancel + 锚定协程)
+/// ════════════════════════════════════════════════════════════════════
+/// - 工具执行 / 中间件钩子 / 能力方法 等"可能耗时的被调方操作"一律为
+///   两件套 start/cancel —— 宿主在 io 线程启动操作, 终结由 AgentxxOpNotify.done
+///   恰好一次上报; 配合 SDK (plugin_kit.h) 的 Task 协程, 挂起与恢复均经
+///   宿主在 io 线程派发的回调完成, 协程段物理执行于宿主 io 线程, 原生交错
+/// - 被调方不需要任何复杂事件循环:
+///   * 内联完成型 (快同步, <~1ms): 在 start 内直接算完并 done(OK) 上报, 返回 NULL;
+///   * 锚定协程型 (推荐): 创建 Task 帧并 resume 到首挂起点, 返回 job 句柄;
+///   * 阻塞委托型: 经 scheduler.offload 委托宿主阻塞池;
+///   * 自管线程型: 登记工作到专用线程, 完成时任意线程调用 notify.done
+/// - 反向调用 (插件调用宿主工具 call_tool_async / 其他插件能力 invoke_capability_async)
+///   提供完成回调形接口与 AgentxxOpHandle 句柄 (仅用于 cancel, 宿主托管生命周期)
+///
+/// - 每插件一个 AgentxxHost (opaque 指向宿主侧插件实例): 注册/订阅自动关联
+///   到调用它的插件, 插件卸载时宿主自动清理其全部注册残留
+/// - 接口表是进程级静态只读数据: entry 时查询一次缓存指针即可长期使用;
+///   同一进程内任意 host 句柄查到的同一 IID 表指针相同
+/// - 线程约定:
+///   - query_interface 与 alloc/free/strdup 任意线程可调用;
+///   - 注册类 (tools/hooks/events/capabilities/resources) 与 session/plugins/
+///     config/prompt/scheduler 的 io 线程约束操作在非 io 线程调用时由宿主
+///     内部投递同步等待 (插件无感); 各接口表函数注释标注线程属性
+///   - 异步两件套 start/cancel 由宿主在【io 线程】驱动 (非阻塞快速
+///     返回约定: 单次调用不得超过 ~1ms);
+///   - AgentxxOpNotify.done 可从被调方任意线程回调 (线程安全)
+///   - 宿主派发给插件的完成回调 (AgentxxOpCb / sleep cb / offload done)
+///     保证在【宿主 io 线程】派发, 且一律经 asio::post 入队, 禁止同步重入
+/// - 回调快速返回约定: 事件订阅回调在 io 线程同步调用, 必须快速返回
+/// - 异常不外泄: 宿主接口表所有函数内部捕获全部异常 (C ABI 边界无异常);
+///   插件侧 start/cancel/event 回调同样不得让异常逃逸
+/// - 字符串约定:
+///   - 所有跨边界"字符串参数/字段"类型为 AgentxxPluginStringView (data+size,
+///     不要求 NUL 结尾, 生命周期仅覆盖本次调用); 便捷构造见
+///     agentxx_plugin_sv / agentxx_plugin_sv_cstr / AGENTXX_SV
+///   - 所有"宿主分配"的字符串返回值 (工具结果 / error_out / payload /
+///     strdup/list_plugins/get_plugin/... ) 仍为 char* (NUL 结尾, host->alloc),
+///     调用方用完必须 host->free
+///
 #ifndef AGENTXX_PLUGIN_API_H
 #define AGENTXX_PLUGIN_API_H
 
@@ -87,7 +87,7 @@ extern "C" {
 #define AGENTXX_PLUGIN_EXPORT
 #endif
 
-/// 全局 API 版本: 1 (锚定协程模型重构)
+/// 全局 API 版本
 #define AGENTXX_PLUGIN_API_VERSION 1
 
 /* ==================== 字符串视图 (跨边界字符串参数统一形态) ==================== */
@@ -118,7 +118,7 @@ static inline int agentxx_plugin_sv_empty(AgentxxPluginStringView sv) {
 
 #define AGENTXX_SV(s) agentxx_plugin_sv_cstr((s))
 
-/* ==================== 插件元信息 ==================== */
+/// ==================== 插件元信息 ====================
 
 typedef struct AgentxxPluginInfo {
     int                     api_version; ///< 必须 == AGENTXX_PLUGIN_API_VERSION
@@ -127,7 +127,7 @@ typedef struct AgentxxPluginInfo {
     AgentxxPluginStringView description;
 } AgentxxPluginInfo;
 
-/* ==================== 统一异步操作原语 (两件套) ==================== */
+/// ==================== 统一异步操作原语 ====================
 
 /// 操作终结状态 (AgentxxOpNotify.done 的 status 参数)
 #define AGENTXX_OP_OK        0 ///< 成功 (payload = 结果数据, host->alloc)
@@ -165,14 +165,14 @@ typedef struct AgentxxToolSpec {
     AgentxxPluginStringView parameters_json; ///< JSON Schema 字符串 (json object)
 
     /// 启动执行 (【宿主 io 线程调用】, 非阻塞; 两件套契约):
-    /// - args_json/thread_id/tool_call_id: 只读借用, 仅本次调用有效
+    /// - args_json/session_id/tool_call_id: 只读借用, 仅本次调用有效
     /// - 快同步工具: 算完 → notify->done(AGENTXX_OP_OK, 结果 json) → 返回 NULL
     /// - 锚定协程/自管异步: 创建/挂起任务 → 返回 op 句柄
     /// - 失败: 返回 NULL 且 *error_out 输出错误 (host->alloc 分配)
     void* (*execute_start)(
         void*                   user_data,
         AgentxxPluginStringView args_json,
-        AgentxxPluginStringView thread_id,
+        AgentxxPluginStringView session_id,
         AgentxxPluginStringView tool_call_id,
         const AgentxxOpNotify*  notify,
         char**                  error_out
@@ -228,11 +228,14 @@ typedef void* (*AgentxxCapStartFn)(
     char**                  error_out
 );
 
-/* ==================== 核心宿主函数表 (契约冻结) ==================== */
+/* ==================== 核心宿主函数表 ==================== */
 
 typedef struct AgentxxHost AgentxxHost;
 
-/// 核心 vtable: 仅内存三件套 + COM 风格接口表查询。【契约冻结】
+/// 核心 vtable: 仅内存三件套 + COM 风格接口表查询
+/// - 不建议更改该结构体，应当冻结
+/// - 后续若实在需要破坏性更改，可通过声明不同版本的 [AgentxxHostVtable]，然后运行时框架根据插件版本
+/// 自动兼容创建不同版本的 [AgentxxHostVtable] 适配
 typedef struct AgentxxHostVtable {
     /* ---- 内存 (跨 CRT 堆边界的唯一分配通道; 任意线程可调用) ---- */
     void* (*alloc)(size_t size);
@@ -259,9 +262,11 @@ struct AgentxxHost {
 typedef struct AgentxxToolsIface {
     int version; ///< 必须 == AGENTXX_IFACE_AGENT_TOOLS_VERSION
 
-    /// 注册工具 (io 线程约束, 非 io 线程由宿主投递同步等待); 名称冲突返回非 0
+    /// 注册工具 (io 线程约束, 非 io 线程由宿主投递同步等待)
+    /// `return`: 名称冲突返回非 0
     int (*register_tool)(const AgentxxHost* host, const AgentxxToolSpec* spec);
-    /// 注销工具 (按名称); 不存在返回非 0
+    /// 注销工具 (按名称)
+    /// `return`: 不存在返回非 0
     int (*unregister_tool)(const AgentxxHost* host, AgentxxPluginStringView name);
 
     /* ---- 插件互调: 完成回调形 (推荐) ---- */
@@ -272,7 +277,7 @@ typedef struct AgentxxToolsIface {
         const AgentxxHost*      host,
         AgentxxPluginStringView name,
         AgentxxPluginStringView args_json,
-        AgentxxPluginStringView thread_id,
+        AgentxxPluginStringView session_id,
         AgentxxOpCb             cb,
         void*                   ud,
         char**                  error_out
@@ -401,13 +406,13 @@ typedef struct AgentxxSessionIface {
     /// 读取会话级 share_store 条目 (仅 io 线程); 不存在返回 NULL (host->alloc)
     char* (*get_share_store)(
         const AgentxxHost*      host,
-        AgentxxPluginStringView thread_id,
+        AgentxxPluginStringView session_id,
         long long               id
     );
     /// 向会话 UI 推送提示消息 (仅 io 线程); level: 0=info 1=warning 2=error
     void (*emit_message_tip)(
         const AgentxxHost*      host,
-        AgentxxPluginStringView thread_id,
+        AgentxxPluginStringView session_id,
         AgentxxPluginStringView text,
         int                     level
     );
@@ -415,7 +420,7 @@ typedef struct AgentxxSessionIface {
     /// - content 为待存储的完整文本 (host 侧按行切片等处理与工具侧一致)
     long long (*add_share_store)(
         const AgentxxHost*      host,
-        AgentxxPluginStringView thread_id,
+        AgentxxPluginStringView session_id,
         AgentxxPluginStringView content
     );
 } AgentxxSessionIface;
@@ -455,7 +460,7 @@ typedef struct AgentxxConfigIface {
     /// 解析后的会话工作目录 (io 线程; host->alloc; 失败/未装配返回 NULL)
     char* (*get_work_dir)(const AgentxxHost* host);
     /// 指定会话生效的工作目录 (worktree 绑定优先, 回退 get_work_dir; io 线程; host->alloc)
-    char* (*get_session_work_dir)(const AgentxxHost* host, AgentxxPluginStringView thread_id);
+    char* (*get_session_work_dir)(const AgentxxHost* host, AgentxxPluginStringView session_id);
 } AgentxxConfigIface;
 
 /* ==================== 接口表: 主模型配置 (agentxx.agent.model) ==================== */
@@ -479,7 +484,7 @@ typedef struct AgentxxCancelIface {
     int version; ///< 必须 == AGENTXX_IFACE_AGENT_CANCEL_VERSION
 
     /// 查询会话当前轮次是否已取消 (advisory 定位; 权威通知始终是 cancel 回调)
-    int (*is_cancelled)(const AgentxxHost* host, AgentxxPluginStringView thread_id);
+    int (*is_cancelled)(const AgentxxHost* host, AgentxxPluginStringView session_id);
 } AgentxxCancelIface;
 
 /* ==================== 接口表: 任务规划 (agentxx.agent.planning) ==================== */
@@ -492,7 +497,7 @@ typedef struct AgentxxPlanningIface {
 
     int (*set_planning)(
         const AgentxxHost*      host,
-        AgentxxPluginStringView thread_id,
+        AgentxxPluginStringView session_id,
         AgentxxPluginStringView roadmap,
         AgentxxPluginStringView todos_json,
         AgentxxPluginStringView notes

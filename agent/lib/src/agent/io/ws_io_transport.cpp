@@ -283,7 +283,7 @@ asio::awaitable<void> WsAgentIOTransport::readLoop() {
                 continue;
             }
 
-            if (auto* delta = std::get_if<Delta>(&wireMsg.value())) {
+            if (auto* delta = std::get_if<WireDelta>(&wireMsg.value())) {
                 uint64_t seq = delta->seq;
                 uint64_t cur = lastDeltaSeq_.load(std::memory_order_acquire);
                 // 重连重放可能重复投递已交付的 delta; 丢弃已见序号, 避免 UI 重复渲染。
@@ -295,7 +295,7 @@ asio::awaitable<void> WsAgentIOTransport::readLoop() {
                        && !lastDeltaSeq_.compare_exchange_weak(cur, seq, std::memory_order_acq_rel)
                 ) {
                 }
-            } else if (auto* sync = std::get_if<SyncPayload>(&wireMsg.value())) {
+            } else if (auto* sync = std::get_if<WireSyncPayload>(&wireMsg.value())) {
                 lastTailHash_ = sync->tailHash;
             } else if (auto* ack = std::get_if<WireHelloAck>(&wireMsg.value())) {
                 if (ack->ok) {
@@ -456,9 +456,9 @@ std::string WsAgentIOTransport::serialize(const WireMessage& msg) {
                 return io::makeInterruptResponse(m.id, m.result).dump();
             } else if constexpr (std::is_same_v<T, WireInterruptExpired>) {
                 return io::makeInterruptExpired(m.id, m.sessionId).dump();
-            } else if constexpr (std::is_same_v<T, Delta>) {
+            } else if constexpr (std::is_same_v<T, WireDelta>) {
                 return io::makeDeltaMsg(m).dump();
-            } else if constexpr (std::is_same_v<T, SyncPayload>) {
+            } else if constexpr (std::is_same_v<T, WireSyncPayload>) {
                 return io::makeSyncMsg(m).dump();
             } else if constexpr (std::is_same_v<T, WireTurnResult>) {
                 return io::makeTurnResult(

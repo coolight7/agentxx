@@ -29,13 +29,13 @@ namespace ffi {
 
 /// FFI 运行时 (agentxx_create 返回句柄的实体)
 ///
-/// 线程拓扑 (独立 Client-IO 线程 + 独立 Agent-IO 线程):
-/// - Agent-IO 线程 (agentThread_ 运行 agentIoCtx_):
+/// 线程拓扑 (独立 Client-IO 线程 + 独立 Server-IO 线程):
+/// - Server-IO 线程 (serverThread_ 运行 serverIoCtx_):
 ///   运行 CodeAgent / AgentHost / SessionServerAgentIO,
 ///   处理 ReAct 循环、工具调用、LLM 流式请求、SessionStore (单线程读写保证安全)。
 /// - Client-IO 线程 (clientThread_ 运行 clientIoCtx_):
 ///   运行 FfiClientAgentIO (客户端端点), 处理 Wire 协议编解码、事件分发与宿主
-///   C 回调 (on_event)、挂起的中断等待与超时。与 Agent-IO 线程完全解耦，宿主
+///   C 回调 (on_event)、挂起的中断等待与超时。与 Server-IO 线程完全解耦，宿主
 ///   在回调中的耗时不会阻塞 Agent 核心调度。
 /// - 两端点通过进程内 ChannelAgentIOTransport::makePair(clientEx, agentEx) 直连。
 /// - 对外 C API (ffi_api.cpp) 可在宿主任意线程调用; 会话交互类经 asio::post
@@ -197,11 +197,11 @@ private:
     void pushLogItem(LogItem item);
 
     // ---- 1. io_context 执行器 (必须最先声明，以便最后析构) ----
-    std::shared_ptr<asio::io_context>                                         agentIoCtx_;
+    std::shared_ptr<asio::io_context>                                         serverIoCtx_;
     std::shared_ptr<asio::io_context>                                         clientIoCtx_;
-    std::optional<asio::executor_work_guard<asio::io_context::executor_type>> agentWorkGuard_;
+    std::optional<asio::executor_work_guard<asio::io_context::executor_type>> serverWorkGuard_;
     std::optional<asio::executor_work_guard<asio::io_context::executor_type>> clientWorkGuard_;
-    std::thread                                                               agentThread_;
+    std::thread                                                               serverThread_;
     std::thread                                                               clientThread_;
 
     // ---- 2. 依赖 io_context 的实体对象 (后声明，先析构) ----

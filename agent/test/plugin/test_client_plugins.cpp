@@ -435,10 +435,10 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         const auto wire = agentxx::plugin::ClientIfaces::query(&inst->host).wire;
         XX_TEST_EXPECT_TRUE(wire != nullptr && wire->send_plugin_data != nullptr);
         int rc = wire ? wire->send_plugin_data(
-                            &inst->host,
-                            AGENTXX_SV("rebuild"),
-                            AGENTXX_SV(R"({"x":1})")
-                        )
+                     &inst->host,
+                     AGENTXX_SV("rebuild"),
+                     AGENTXX_SV(R"({"x":1})")
+                 )
                       : -1;
         XX_TEST_EXPECT_EQ(rc, 0);
     }
@@ -820,11 +820,11 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 };
                 const auto events11 = agentxx::plugin::ClientIfaces::query(&okInst->host).events;
                 auto       sub      = events11 ? events11->subscribe(
-                                          &okInst->host,
-                                          AGENTXX_CLIENT_EVT_READY,
-                                          readyFn,
-                                          &readyPayload
-                                      )
+                               &okInst->host,
+                               AGENTXX_CLIENT_EVT_READY,
+                               readyFn,
+                               &readyPayload
+                           )
                                                : nullptr;
                 XX_TEST_EXPECT_TRUE(sub != nullptr);
                 mgr->onReady();
@@ -1009,9 +1009,9 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             }
             XX_TEST_EXPECT_TRUE(hasPlanSection);
 
-            // 14.2 工具调用 Delta: tool_start (write 模式) -> 工具装饰推送
-            agentxx::agent::Delta deltaWriteStart{
-                .type       = agentxx::agent::Delta::Type::ToolStart,
+            // 14.2 工具调用 WireDelta: tool_start (write 模式) -> 工具装饰推送
+            agentxx::agent::WireDelta deltaWriteStart{
+                .type       = agentxx::agent::WireDelta::Type::ToolStart,
                 .toolName   = "agentxx_planning",
                 .toolCallId = "call_plan_write_1",
                 .arguments
@@ -1033,9 +1033,9 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             }
             XX_TEST_EXPECT_TRUE(foundDecor);
 
-            // 14.3 工具调用 Delta: tool_start (read 模式) -> 占位装饰
-            agentxx::agent::Delta deltaReadStart{
-                .type       = agentxx::agent::Delta::Type::ToolStart,
+            // 14.3 工具调用 WireDelta: tool_start (read 模式) -> 占位装饰
+            agentxx::agent::WireDelta deltaReadStart{
+                .type       = agentxx::agent::WireDelta::Type::ToolStart,
                 .toolName   = "agentxx_planning",
                 .toolCallId = "call_plan_read_1",
                 .arguments  = R"({"mode":"read"})",
@@ -1053,8 +1053,8 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             }
 
             // tool_end (read 模式) -> 结果装饰刷新
-            agentxx::agent::Delta deltaReadEnd{
-                .type       = agentxx::agent::Delta::Type::ToolEnd,
+            agentxx::agent::WireDelta deltaReadEnd{
+                .type       = agentxx::agent::WireDelta::Type::ToolEnd,
                 .toolName   = "agentxx_planning",
                 .toolCallId = "call_plan_read_1",
                 .result

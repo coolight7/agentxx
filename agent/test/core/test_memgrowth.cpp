@@ -244,9 +244,8 @@ asio::awaitable<int> runScenario(
                         auto text = co_await agent->runOverMsgsTurnAsync(sessionId, msgs);
                         success   = !text.empty();
                     } else {
-                        auto result
-                            = co_await agent->runTurnAsync(sessionId, input, turn == 0, nullptr);
-                        success = !result.hasError;
+                        auto result = co_await agent->runTurnAsync(sessionId, input, nullptr);
+                        success     = !result.hasError;
                     }
                     co_await ch
                         ->async_send(neograph_asio_error_code{}, success, asio::use_awaitable);
@@ -270,7 +269,6 @@ asio::awaitable<int> runScenario(
             auto result = co_await agent->runTurnAsync(
                 sessionId,
                 input,
-                turn == 0,
                 nullptr // headless: 不产生 delta 事件, 排除 client 侧干扰
             );
             ok = !result.hasError;

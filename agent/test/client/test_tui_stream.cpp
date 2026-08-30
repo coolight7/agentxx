@@ -332,7 +332,7 @@ public:
     TestTUIClientIO(asio::io_context& ctx) :
         TUIClientAgentIO(ctx.get_executor(), "test_session") {}
 
-    void testOnDelta(const Delta& d) {
+    void testOnDelta(const WireDelta& d) {
         onDelta(d);
     }
 };
@@ -342,8 +342,8 @@ public:
 void testTuiStreamScenario1(asio::io_context& ioCtx) {
     TestTUIClientIO client(ioCtx);
     {
-        Delta d1;
-        d1.type        = Delta::Type::ThinkToken;
+        WireDelta d1;
+        d1.type        = WireDelta::Type::ThinkToken;
         d1.text        = "";
         d1.think       = ViewMessage::ThinkData{.reasoningTokens = 0, .isEncrypted = true};
         d1.startTimeMs = 1000;
@@ -363,16 +363,16 @@ void testTuiStreamScenario1(asio::io_context& ioCtx) {
     }
 
     {
-        Delta d2;
-        d2.type        = Delta::Type::TextToken;
+        WireDelta d2;
+        d2.type        = WireDelta::Type::TextToken;
         d2.text        = "Hello";
         d2.startTimeMs = 1050;
         client.testOnDelta(d2);
     }
 
     {
-        Delta d_usage;
-        d_usage.type       = Delta::Type::ThinkToken;
+        WireDelta d_usage;
+        d_usage.type       = WireDelta::Type::ThinkToken;
         d_usage.text       = "";
         d_usage.durationMs = 80;
         d_usage.think      = ViewMessage::ThinkData{.reasoningTokens = 854, .isEncrypted = true};
@@ -380,8 +380,8 @@ void testTuiStreamScenario1(asio::io_context& ioCtx) {
     }
 
     {
-        Delta d3;
-        d3.type = Delta::Type::TurnEnd;
+        WireDelta d3;
+        d3.type = WireDelta::Type::TurnEnd;
         client.testOnDelta(d3);
     }
 
@@ -405,16 +405,16 @@ void testTuiStreamScenario2(asio::io_context& ioCtx) {
     TestTUIClientIO client(ioCtx);
 
     {
-        Delta d1_think;
-        d1_think.type  = Delta::Type::ThinkToken;
+        WireDelta d1_think;
+        d1_think.type  = WireDelta::Type::ThinkToken;
         d1_think.text  = "";
         d1_think.think = ViewMessage::ThinkData{.reasoningTokens = 0, .isEncrypted = true};
         client.testOnDelta(d1_think);
     }
 
     {
-        Delta d1_usage;
-        d1_usage.type       = Delta::Type::ThinkToken;
+        WireDelta d1_usage;
+        d1_usage.type       = WireDelta::Type::ThinkToken;
         d1_usage.text       = "";
         d1_usage.durationMs = 120;
         d1_usage.think      = ViewMessage::ThinkData{.reasoningTokens = 320, .isEncrypted = true};
@@ -422,8 +422,8 @@ void testTuiStreamScenario2(asio::io_context& ioCtx) {
     }
 
     {
-        Delta d1_tool;
-        d1_tool.type       = Delta::Type::ToolStart;
+        WireDelta d1_tool;
+        d1_tool.type       = WireDelta::Type::ToolStart;
         d1_tool.toolName   = "search";
         d1_tool.toolCallId = "call_1";
         d1_tool.arguments  = "{\"q\":\"test\"}";
@@ -431,8 +431,8 @@ void testTuiStreamScenario2(asio::io_context& ioCtx) {
     }
 
     {
-        Delta d1_tool_end;
-        d1_tool_end.type       = Delta::Type::ToolEnd;
+        WireDelta d1_tool_end;
+        d1_tool_end.type       = WireDelta::Type::ToolEnd;
         d1_tool_end.toolName   = "search";
         d1_tool_end.toolCallId = "call_1";
         d1_tool_end.result     = "ok";
@@ -450,8 +450,8 @@ void testTuiStreamScenario2(asio::io_context& ioCtx) {
     }
 
     {
-        Delta d2_think;
-        d2_think.type  = Delta::Type::ThinkToken;
+        WireDelta d2_think;
+        d2_think.type  = WireDelta::Type::ThinkToken;
         d2_think.text  = "";
         d2_think.think = ViewMessage::ThinkData{.reasoningTokens = 0, .isEncrypted = true};
         client.testOnDelta(d2_think);
@@ -472,15 +472,15 @@ void testTuiStreamScenario2(asio::io_context& ioCtx) {
     }
 
     {
-        Delta d2_text;
-        d2_text.type = Delta::Type::TextToken;
+        WireDelta d2_text;
+        d2_text.type = WireDelta::Type::TextToken;
         d2_text.text = "Final answer";
         client.testOnDelta(d2_text);
     }
 
     {
-        Delta d2_usage;
-        d2_usage.type       = Delta::Type::ThinkToken;
+        WireDelta d2_usage;
+        d2_usage.type       = WireDelta::Type::ThinkToken;
         d2_usage.text       = "";
         d2_usage.durationMs = 90;
         d2_usage.think      = ViewMessage::ThinkData{.reasoningTokens = 150, .isEncrypted = true};
@@ -488,8 +488,8 @@ void testTuiStreamScenario2(asio::io_context& ioCtx) {
     }
 
     {
-        Delta d2_end;
-        d2_end.type = Delta::Type::TurnEnd;
+        WireDelta d2_end;
+        d2_end.type = WireDelta::Type::TurnEnd;
         client.testOnDelta(d2_end);
     }
 
@@ -514,16 +514,16 @@ void testTuiStreamScenario2(asio::io_context& ioCtx) {
 void testTuiStreamScenario3(asio::io_context& ioCtx) {
     TestTUIClientIO client(ioCtx);
     {
-        Delta d1;
-        d1.type  = Delta::Type::ThinkToken;
+        WireDelta d1;
+        d1.type  = WireDelta::Type::ThinkToken;
         d1.text  = "";
         d1.think = ViewMessage::ThinkData{.reasoningTokens = 50, .isEncrypted = true};
         client.testOnDelta(d1);
     }
 
     {
-        Delta d2;
-        d2.type = Delta::Type::TurnEnd;
+        WireDelta d2;
+        d2.type = WireDelta::Type::TurnEnd;
         client.testOnDelta(d2);
     }
 
@@ -543,16 +543,16 @@ void testTuiStreamScenario3(asio::io_context& ioCtx) {
 void testTuiStreamScenario4(asio::io_context& ioCtx) {
     TestTUIClientIO client(ioCtx);
     {
-        Delta d1;
-        d1.type        = Delta::Type::ThinkToken;
+        WireDelta d1;
+        d1.type        = WireDelta::Type::ThinkToken;
         d1.text        = "明文思考内容";
         d1.startTimeMs = 2000;
         client.testOnDelta(d1);
     }
 
     {
-        Delta d_usage;
-        d_usage.type       = Delta::Type::ThinkToken;
+        WireDelta d_usage;
+        d_usage.type       = WireDelta::Type::ThinkToken;
         d_usage.text       = "";
         d_usage.durationMs = 95;
         d_usage.think      = ViewMessage::ThinkData{.reasoningTokens = 150, .isEncrypted = false};
@@ -560,8 +560,8 @@ void testTuiStreamScenario4(asio::io_context& ioCtx) {
     }
 
     {
-        Delta d_end;
-        d_end.type = Delta::Type::TurnEnd;
+        WireDelta d_end;
+        d_end.type = WireDelta::Type::TurnEnd;
         client.testOnDelta(d_end);
     }
 
@@ -584,8 +584,8 @@ void testTuiStreamScenario5(asio::io_context& ioCtx) {
     TestTUIClientIO client(ioCtx);
 
     {
-        Delta d_think;
-        d_think.type        = Delta::Type::ThinkToken;
+        WireDelta d_think;
+        d_think.type        = WireDelta::Type::ThinkToken;
         d_think.text        = "思考中...";
         d_think.startTimeMs = 3000;
         client.testOnDelta(d_think);
@@ -598,8 +598,8 @@ void testTuiStreamScenario5(asio::io_context& ioCtx) {
     }
 
     {
-        Delta d_final;
-        d_final.type        = Delta::Type::ThinkToken;
+        WireDelta d_final;
+        d_final.type        = WireDelta::Type::ThinkToken;
         d_final.text        = "";
         d_final.startTimeMs = 3000;
         d_final.durationMs  = 1234;
@@ -607,8 +607,8 @@ void testTuiStreamScenario5(asio::io_context& ioCtx) {
     }
 
     {
-        Delta d_nodeEnd;
-        d_nodeEnd.type        = Delta::Type::NodeEnd;
+        WireDelta d_nodeEnd;
+        d_nodeEnd.type        = WireDelta::Type::NodeEnd;
         d_nodeEnd.nodeName    = "llm";
         d_nodeEnd.startTimeMs = 2900;
         d_nodeEnd.durationMs  = 99999;
@@ -616,16 +616,16 @@ void testTuiStreamScenario5(asio::io_context& ioCtx) {
     }
 
     {
-        Delta d_text;
-        d_text.type        = Delta::Type::TextToken;
+        WireDelta d_text;
+        d_text.type        = WireDelta::Type::TextToken;
         d_text.text        = "Answer";
         d_text.startTimeMs = 4300;
         client.testOnDelta(d_text);
     }
 
     {
-        Delta d_end;
-        d_end.type = Delta::Type::TurnEnd;
+        WireDelta d_end;
+        d_end.type = WireDelta::Type::TurnEnd;
         client.testOnDelta(d_end);
     }
 
@@ -645,8 +645,8 @@ void testTuiStreamScenario6(asio::io_context& ioCtx) {
     TestTUIClientIO client(ioCtx);
 
     {
-        Delta d_tool;
-        d_tool.type       = Delta::Type::ToolStart;
+        WireDelta d_tool;
+        d_tool.type       = WireDelta::Type::ToolStart;
         d_tool.toolName   = "agentxx_execute_bash_command";
         d_tool.toolCallId = "call_bash_1";
         d_tool.arguments  = "{\"command\":\"sleep 100\"}";
@@ -663,8 +663,8 @@ void testTuiStreamScenario6(asio::io_context& ioCtx) {
     }
 
     {
-        Delta d_turnStart;
-        d_turnStart.type        = Delta::Type::TurnStart;
+        WireDelta d_turnStart;
+        d_turnStart.type        = WireDelta::Type::TurnStart;
         d_turnStart.text        = "新用户消息";
         d_turnStart.startTimeMs = 5000;
         client.testOnDelta(d_turnStart);
@@ -687,16 +687,16 @@ void testTuiStreamScenario7(asio::io_context& ioCtx) {
     TestTUIClientIO client(ioCtx);
 
     {
-        Delta d_t1;
-        d_t1.type       = Delta::Type::ToolStart;
+        WireDelta d_t1;
+        d_t1.type       = WireDelta::Type::ToolStart;
         d_t1.toolName   = "tool1";
         d_t1.toolCallId = "call_p1";
         client.testOnDelta(d_t1);
     }
 
     {
-        Delta d_t2;
-        d_t2.type       = Delta::Type::ToolStart;
+        WireDelta d_t2;
+        d_t2.type       = WireDelta::Type::ToolStart;
         d_t2.toolName   = "tool2";
         d_t2.toolCallId = "call_p2";
         client.testOnDelta(d_t2);
@@ -710,8 +710,8 @@ void testTuiStreamScenario7(asio::io_context& ioCtx) {
     }
 
     {
-        Delta d_tip;
-        d_tip.type    = Delta::Type::InsertMessage;
+        WireDelta d_tip;
+        d_tip.type    = WireDelta::Type::InsertMessage;
         d_tip.message = std::make_shared<ViewMessage>(
             ViewMessage::makeText(ViewMessage::Role::Tip, "[Cancel Request]")
         );
@@ -732,14 +732,14 @@ void testTuiStreamScenario8(asio::io_context& ioCtx) {
     TestTUIClientIO client(ioCtx);
 
     {
-        Delta d_t1;
-        d_t1.type       = Delta::Type::ToolStart;
+        WireDelta d_t1;
+        d_t1.type       = WireDelta::Type::ToolStart;
         d_t1.toolName   = "tool1";
         d_t1.toolCallId = "call_f1";
         client.testOnDelta(d_t1);
 
-        Delta d_t1_end;
-        d_t1_end.type       = Delta::Type::ToolEnd;
+        WireDelta d_t1_end;
+        d_t1_end.type       = WireDelta::Type::ToolEnd;
         d_t1_end.toolName   = "tool1";
         d_t1_end.toolCallId = "call_f1";
         d_t1_end.result     = "ok";
@@ -747,23 +747,23 @@ void testTuiStreamScenario8(asio::io_context& ioCtx) {
     }
 
     {
-        Delta d_t2;
-        d_t2.type       = Delta::Type::ToolStart;
+        WireDelta d_t2;
+        d_t2.type       = WireDelta::Type::ToolStart;
         d_t2.toolName   = "tool2";
         d_t2.toolCallId = "call_u2";
         client.testOnDelta(d_t2);
     }
 
     {
-        Delta d_text;
-        d_text.type = Delta::Type::TextToken;
+        WireDelta d_text;
+        d_text.type = WireDelta::Type::TextToken;
         d_text.text = "继续输出";
         client.testOnDelta(d_text);
     }
 
     {
-        Delta d_end;
-        d_end.type = Delta::Type::TurnEnd;
+        WireDelta d_end;
+        d_end.type = WireDelta::Type::TurnEnd;
         client.testOnDelta(d_end);
     }
 
@@ -786,8 +786,8 @@ void testTuiStreamScenario9(asio::io_context& ioCtx) {
     vm.tip->tipLevel = ViewMessage::TipLevel::Warning;
     vm.collapsed     = true;
 
-    Delta d_insert;
-    d_insert.type    = Delta::Type::InsertMessage;
+    WireDelta d_insert;
+    d_insert.type    = WireDelta::Type::InsertMessage;
     d_insert.message = std::make_shared<ViewMessage>(std::move(vm));
     client.testOnDelta(d_insert);
 

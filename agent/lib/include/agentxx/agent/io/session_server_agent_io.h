@@ -59,7 +59,7 @@ public:
 
     ~SessionServerAgentIO() override;
 
-    // ----- AgentIOBase: 主动发送 (覆写: 新产出的 Delta 先写入重放缓冲再转发客户端) -----
+    // ----- AgentIOBase: 主动发送 (覆写: 新产出的 WireDelta 先写入重放缓冲再转发客户端) -----
     void sendToPeer(WireMessage msg) override;
 
     // ----- AgentIOBase: 对端从我这拉取的 (BaseAgent 调用) -----
@@ -129,8 +129,8 @@ protected:
 
     // ----- AgentIOBase: 被动接收回调 (server 端点不会从 client 收到这些消息,
     //       空实现仅用于满足纯虚契约) -----
-    void onDelta(const Delta& delta) override;
-    void onSync(const SyncPayload& payload) override;
+    void onDelta(const WireDelta& delta) override;
+    void onSync(const WireSyncPayload& payload) override;
 
 private:
 
@@ -147,14 +147,14 @@ private:
     using WakeChannel = asio::experimental::concurrent_channel<void(ErrorCode, int)>;
 
     /// 取 seq 之后的 delta; nullopt 表示需全量 sync
-    std::optional<std::vector<Delta>> deltasSince(uint64_t seq);
+    std::optional<std::vector<WireDelta>> deltasSince(uint64_t seq);
 
-    SyncPayload buildFullSync();
+    WireSyncPayload buildFullSync();
     /// 构建同步载荷; tailCount>0 时仅取末尾 tailCount 条 (历史分页尾窗)
     /// - fromIndex = 窗口起始绝对下标, totalMessages = 会话总消息数;
     ///   客户端据此展示"上方还有更早消息"并按 WireGetViewMessages 分页拉取
     /// - tailCount==0 时等价 buildFullSync() (全量, fromIndex=0)
-    SyncPayload              buildTailSync(size_t tailCount);
+    WireSyncPayload          buildTailSync(size_t tailCount);
     std::shared_ptr<Session> session();
 
     /// 向客户端推送当前上下文统计
@@ -196,7 +196,7 @@ private:
     Config                   config_;
 
     // delta 环形缓冲 (仅 ex_ 线程访问: sendToPeer 写, handleHello 读)
-    std::deque<Delta> deltaBuffer_;
+    std::deque<WireDelta> deltaBuffer_;
 
     // 服务端消息队列 (仅 ex_ 线程访问)
     std::deque<MessageQueueItem> messageQueue_;

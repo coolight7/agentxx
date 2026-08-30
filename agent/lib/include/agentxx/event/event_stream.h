@@ -584,14 +584,14 @@ private:
     size_t nextPrefixListenerId_ = 0;
 };
 
-/// GraphEvent -> 会话增量 Delta + EventBus 适配器
+/// GraphEvent -> 会话增量 WireDelta + EventBus 适配器
 /// - 接替 [agentxx::agent::BaseAgent] 的 llm callback 职责: 把 neograph 的 GraphStreamCallback
 /// 翻译成:
-///   1. 会话增量 Delta (TextToken/ThinkToken/ToolStart/ToolEnd/NodeStart/NodeEnd ...),
+///   1. 会话增量 WireDelta (TextToken/ThinkToken/ToolStart/ToolEnd/NodeStart/NodeEnd ...),
 ///      经 emitDelta 发送到对端 (TUI/stdio), 并写入会话历史 (appendViewMessage)
 ///   2. 强类型总线事件发布 (EventBus: ModelToken/Error 等)
 ///   3. 可选转发到原始 callback (origCb)
-/// - 有状态: 内部维护流式状态 (chunk 类型切换/节点计时/Delta seq)
+/// - 有状态: 内部维护流式状态 (chunk 类型切换/节点计时/WireDelta seq)
 /// - 新增 GraphEvent 处理时只需扩展本类, 无需修改 BaseAgent
 /// - 调用者保证 AgentContext 及其 bus、Session、io 在回调期间存活
 ///   (makeCallback 内部经 shared_from_this 持有本对象)
@@ -600,9 +600,9 @@ public:
 
     /// - [agentName] 当前 agent 名 (事件 source)
     /// - [sessionId] 当前会话 id
-    /// - [ctx]       AgentContext (取 bus; 若 bus 为空则只做 Delta 翻译/转发)
+    /// - [ctx]       AgentContext (取 bus; 若 bus 为空则只做 WireDelta 翻译/转发)
     /// - [session]   会话 (appendViewMessage/contextStats/deltaSeq)
-    /// - [io]        agent-io (发送 Delta/ContextStats; 为空表示 headless 场景)
+    /// - [io]        server-io (发送 WireDelta/ContextStats; 为空表示 headless 场景)
     /// - [origCb]    原始回调 (可空)
     EventBridge(
         std::string                                  agentName,
@@ -616,9 +616,9 @@ public:
     /// 处理一个 GraphEvent (GraphStreamCallback 调用入口)
     void operator()(const neograph::graph::GraphEvent& event);
 
-    /// 发送增量 Delta 到对端 (分配会话单调递增 seq; io 为空时丢弃)
+    /// 发送增量 WireDelta 到对端 (分配会话单调递增 seq; io 为空时丢弃)
     /// - 会话外的增量 (TurnStart/TurnEnd) 也可经此发送, 保证 seq 全局单调
-    void emitDelta(agentxx::agent::Delta delta);
+    void emitDelta(agentxx::agent::WireDelta delta);
 
     /// 包装为 GraphStreamCallback (shared_from_this 持有, 回调期间本对象存活)
     neograph::graph::GraphStreamCallback makeCallback();
@@ -629,11 +629,11 @@ public:
     }
 
     /// 记录一轮会话开始: 重置轮级 tps 统计
-    /// - 由 BaseAgent 在发送 TurnStart Delta 前调用
+    /// - 由 BaseAgent 在发送 TurnStart WireDelta 前调用
     void handleTurnStart();
 
     /// 取走本轮会话的 LLM API 平均生成速度 (token/s) 并重置轮级统计
-    /// - 由 BaseAgent 在发送 TurnEnd Delta 前调用, 结果填入 Delta::tps
+    /// - 由 BaseAgent 在发送 TurnEnd WireDelta 前调用, 结果填入 WireDelta::tps
     /// - 计算口径: 本轮所有 ModelCall 的累计估算 token / 累计流式耗时;
     ///   无 LLM 流式输出时返回 0
     double takeTurnTps();
@@ -646,11 +646,11 @@ private:
     void handleNodeEnd(const neograph::graph::GraphEvent& event);
     void handleError(const neograph::graph::GraphEvent& event);
 
-    /// 结算当前 THINKING 流段: 发送空文本 ThinkToken Delta (仅携带
+    /// 结算当前 THINKING 流段: 发送空文本 ThinkToken WireDelta (仅携带
     /// startTimeMs/durationMs), client 据此为已提交的 Think 消息回填耗时。
     /// - think 输出完成 (切换到正文/节点结束/出错/输出最终 assistant 消息) 时调用,
     ///   耗时 = 完成时刻 - 段起点; 未处于 THINKING 段时为 no-op (幂等)
-    /// - 必须在该段落后续 Delta (正文 token/ToolStart/NodeEnd) 之前发送,
+    /// - 必须在该段落后续 WireDelta (正文 token/ToolStart/NodeEnd) 之前发送,
     ///   保证 client 先落盘 Think 消息并回填时长, 再处理后续内容
     void finalizeThinkSegment();
 
@@ -692,7 +692,7 @@ private:
     /// THINKING 流段计时 (think 消息耗时统计):
     /// - 进入 THINKING (非 THINKING -> THINKING) 时记录段起点
     /// - 离开时经 finalizeThinkSegment() 结算: 耗时 = 完成时刻 - 段起点,
-    ///   以空文本 ThinkToken Delta 回传, client 在 Think 输出完成时才显示耗时
+    ///   以空文本 ThinkToken WireDelta 回传, client 在 Think 输出完成时才显示耗时
     /// - thinkSegActive_ 保证同一段落只结算一次; 仅 io 线程访问
     std::chrono::system_clock::time_point thinkSegStart_{};
     int64_t                               thinkSegStartMs_ = 0;

@@ -102,7 +102,7 @@ void SessionServerAgentIO::sendToPeer(WireMessage msg) {
     // - 新 delta: seq 由 BaseAgent deltaSeq 单调递增分配, 严格大于缓冲尾 seq → 入缓冲
     // - 重放 delta: 来自缓冲内部 (handleHello 重放), seq <= 缓冲尾 seq → 不重复入缓冲
     // 由此重放路径无需特殊发送通道, 也不会污染缓冲
-    if (const auto* d = std::get_if<Delta>(&msg)) {
+    if (const auto* d = std::get_if<WireDelta>(&msg)) {
         if (deltaBuffer_.empty() || d->seq > deltaBuffer_.back().seq) {
             deltaBuffer_.push_back(*d);
             while (deltaBuffer_.size() > config_.deltaBufferCap) {
@@ -117,12 +117,12 @@ void SessionServerAgentIO::sendToPeer(WireMessage msg) {
 // AgentIOBase: 被动接收回调 (server 端点不会从 client 收到这些消息)
 // ---------------------------------------------------------------------------
 
-void SessionServerAgentIO::onDelta(const Delta& /*delta*/) {
-    // 空实现仅满足纯虚契约; client→server 协议不包含 Delta
+void SessionServerAgentIO::onDelta(const WireDelta& /*delta*/) {
+    // 空实现仅满足纯虚契约; client→server 协议不包含 WireDelta
 }
 
-void SessionServerAgentIO::onSync(const SyncPayload& /*payload*/) {
-    // 空实现仅满足纯虚契约; client→server 协议不包含 SyncPayload
+void SessionServerAgentIO::onSync(const WireSyncPayload& /*payload*/) {
+    // 空实现仅满足纯虚契约; client→server 协议不包含 WireSyncPayload
 }
 
 asio::awaitable<std::optional<std::string>> SessionServerAgentIO::getInput() {
@@ -482,8 +482,8 @@ void SessionServerAgentIO::onPeerMessage(WireMessage msg) {
 void SessionServerAgentIO::handleHello(const WireHello& hello, std::vector<std::string> models) {
     cancelGraceTimer();
 
-    std::vector<Delta>                replayDeltas;
-    std::optional<SyncPayload>        replaySync;
+    std::vector<WireDelta>            replayDeltas;
+    std::optional<WireSyncPayload>    replaySync;
     std::string                       tailHash;
     std::vector<WireInterruptRequest> pendingInterrupts;
 
@@ -519,7 +519,7 @@ void SessionServerAgentIO::handleHello(const WireHello& hello, std::vector<std::
     }
 
     // 先发送 HelloAck 再重放: 客户端 connect() 握手循环会丢弃 HelloAck 之前的消息,
-    // 若先重放后 HelloAck, 全量 Sync/增量 Delta 会被客户端丢弃 → 重连后历史丢失。
+    // 若先重放后 HelloAck, 全量 Sync/增量 WireDelta 会被客户端丢弃 → 重连后历史丢失。
     // HelloAck 之后发送的重放消息经客户端 recvQueue 缓冲, 由 runTransportLoop 正常处理。
     // ack.plugins: 服务端已加载 agent 侧插件结构化信息 (名字+版本+声明接口;
     // client 插件判断对端可用性与能力的正式通道; 与下方 server_plugins 约定
@@ -612,7 +612,7 @@ void SessionServerAgentIO::switchSession(std::string newThreadId) {
     }
     if (turnActive_.load(std::memory_order_acquire)) {
         // 双重保护: 客户端已拦截运行态切换, 此处再兜底拒绝,
-        // 避免轮次进行中被换走导致 Delta/输入错投到新会话
+        // 避免轮次进行中被换走导致 WireDelta/输入错投到新会话
         XX_LOGW(
             "[session_ctrl] switchSession rejected: turn active (thread={})",
             config_.sessionId
@@ -633,9 +633,6 @@ void SessionServerAgentIO::switchSession(std::string newThreadId) {
     messageQueue_.clear();
     queuePaused_   = false;
     pendingInsert_ = false;
-    // 新会话对当前连接而言等同于首次接入: 重置 firstTurn_ 使首条输入走
-    // resume_if_exists=true 的恢复路径 (与会话重启恢复行为一致)
-    firstTurn_ = true;
 
     XX_LOGI("[session_ctrl] switched session: {} -> {}", oldThreadId, config_.sessionId);
 
@@ -777,7 +774,7 @@ asio::awaitable<void> SessionServerAgentIO::run() {
         // catchErrorAsync: 取消类异常 (CancelledException/NodeInterrupt) 与普通异常
         // 一致转为错误消息通知客户端 (onRethrow), 避免异常逃逸 co_spawn 完成处理器;
         // 其余异常同样转为错误消息
-        // 错误提示: agent 线程插入会话历史并发送 MessageTip Delta (覆盖
+        // 错误提示: agent 线程插入会话历史并发送 MessageTip WireDelta (覆盖
         // runTurnAsync 自身抛异常的兜底路径, 与主路径提示一致)
         auto sendErrorTip = [&](std::string_view errmsg) {
             auto sess = session();
@@ -788,11 +785,11 @@ asio::awaitable<void> SessionServerAgentIO::run() {
             vm.tip->tipLevel = ViewMessage::TipLevel::Error;
             vm.collapsed     = true;
             vm.id            = sess->appendViewMessage(vm);
-            // 新产出的 Delta 必须分配会话级 seq (统一经 Session::nextDeltaSeq):
-            // 重放缓冲依赖 seq 单调性, 未分配 seq (=0) 的 Delta 不会入缓冲,
+            // 新产出的 WireDelta 必须分配会话级 seq (统一经 Session::nextDeltaSeq):
+            // 重放缓冲依赖 seq 单调性, 未分配 seq (=0) 的 WireDelta 不会入缓冲,
             // 断线重连增量重放时该消息会丢失, 导致客户端历史与服务端不一致
-            auto d = Delta{
-                .type    = Delta::Type::InsertMessage,
+            auto d = WireDelta{
+                .type    = WireDelta::Type::InsertMessage,
                 .message = std::make_shared<ViewMessage>(std::move(vm)),
             };
             d.seq = sess->nextDeltaSeq();
@@ -807,11 +804,9 @@ asio::awaitable<void> SessionServerAgentIO::run() {
                 turnResult = co_await agent->runTurnAsync(
                     config_.sessionId,
                     currentItem.text,
-                    firstTurn_,
                     shared_from_this(),
                     turnModel
                 );
-                firstTurn_ = false;
                 sendToPeer(WireTurnResult{
                     .sessionId    = config_.sessionId,
                     .hasError     = turnResult.hasError,
@@ -896,7 +891,7 @@ void SessionServerAgentIO::stopImpl() {
 // 推送 / 缓冲
 // ---------------------------------------------------------------------------
 
-std::optional<std::vector<Delta>> SessionServerAgentIO::deltasSince(uint64_t seq) {
+std::optional<std::vector<WireDelta>> SessionServerAgentIO::deltasSince(uint64_t seq) {
     if (deltaBuffer_.empty()) {
         return std::nullopt;
     }
@@ -904,7 +899,7 @@ std::optional<std::vector<Delta>> SessionServerAgentIO::deltasSince(uint64_t seq
     if (seq + 1 < oldest) {
         return std::nullopt;
     }
-    std::vector<Delta> out;
+    std::vector<WireDelta> out;
     for (const auto& d : deltaBuffer_) {
         if (d.seq > seq) {
             out.push_back(d);
@@ -913,8 +908,8 @@ std::optional<std::vector<Delta>> SessionServerAgentIO::deltasSince(uint64_t seq
     return out;
 }
 
-SyncPayload SessionServerAgentIO::buildFullSync() {
-    SyncPayload p;
+WireSyncPayload SessionServerAgentIO::buildFullSync() {
+    WireSyncPayload p;
     p.fromIndex = 0;
     auto sess   = session();
     if (sess) {
@@ -926,12 +921,12 @@ SyncPayload SessionServerAgentIO::buildFullSync() {
     return p;
 }
 
-SyncPayload SessionServerAgentIO::buildTailSync(size_t tailCount) {
+WireSyncPayload SessionServerAgentIO::buildTailSync(size_t tailCount) {
     if (tailCount == 0) {
         return buildFullSync();
     }
-    SyncPayload p;
-    auto        sess = session();
+    WireSyncPayload p;
+    auto            sess = session();
     if (!sess) {
         p.messageQueue = std::vector<MessageQueueItem>(messageQueue_.begin(), messageQueue_.end());
         return p;

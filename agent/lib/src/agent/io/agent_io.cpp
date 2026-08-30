@@ -109,12 +109,12 @@ void AgentIOBase::onPeerMessage(WireMessage msg) {
     std::visit(
         [this](auto&& m) {
             using T = std::decay_t<decltype(m)>;
-            if constexpr (std::is_same_v<T, Delta>) {
+            if constexpr (std::is_same_v<T, WireDelta>) {
                 emitEventSink([&](ClientEventSink& sink) {
                     sink.onDelta(m);
                 });
                 onDelta(m);
-            } else if constexpr (std::is_same_v<T, SyncPayload>) {
+            } else if constexpr (std::is_same_v<T, WireSyncPayload>) {
                 onSync(m);
             } else if constexpr (std::is_same_v<T, WireTurnResult>) {
                 emitEventSink([&](ClientEventSink& sink) {

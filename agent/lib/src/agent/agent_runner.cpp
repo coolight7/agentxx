@@ -172,8 +172,8 @@ asio::awaitable<AgentRunner::Outcome> AgentRunner::run(
                     );
                 }
             } else {
-                // HIL: 中断头消息 (根插入会话历史 + MessageTip Delta;
-                // 子代理无 Delta 输出通道, hook 为空)
+                // HIL: 中断头消息 (根插入会话历史 + MessageTip WireDelta;
+                // 子代理无 WireDelta 输出通道, hook 为空)
                 if (hooks.onInterruptTip) {
                     hooks.onInterruptTip(interruptNode, interruptValue, interruptArg.name);
                 }

@@ -330,7 +330,7 @@ public:
     void onReady() override;
     void onConnStateChanged(std::string_view state, std::string_view progress) override;
     void onUserInput(std::string_view sessionId, std::string_view text) override;
-    void onDelta(const agentxx::agent::Delta& delta) override;
+    void onDelta(const agentxx::agent::WireDelta& delta) override;
     void onTurnResult(const agentxx::agent::WireTurnResult& result) override;
     void onSessionSwitched(std::string_view sessionId) override;
     void onPluginData(const agentxx::agent::WirePluginData& data) override;
