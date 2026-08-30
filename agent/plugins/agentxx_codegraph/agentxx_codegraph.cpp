@@ -197,7 +197,7 @@ static void ensureToolPromptsInHost(
     codegraph::Json tools = codegraph::Json::object();
     bool            dirty = false;
     for (const char* name : kToolNames) {
-        std::string pointer = "/toolPrompt/" + std::string{name};
+        std::string pointer = fmt::format("/toolPrompt/{}", name);
         if (!j.doc().at_pointer(pointer).error()) {
             continue;
         }
@@ -343,7 +343,7 @@ static std::string
         out += fmt::format("{} (0):\n  (none)", title);
     }
     if (impact.contains("edges") && impact["edges"].is_array() && impact["edges"].size() > 0) {
-        out += "\n" + jsonEdgesToText(impact["edges"]);
+        out += fmt::format("\n{}", jsonEdgesToText(impact["edges"]));
     }
     if (m && m->isIndexing()) {
         out += "\nwarning: CodeGraph is still indexing, results may be incomplete";

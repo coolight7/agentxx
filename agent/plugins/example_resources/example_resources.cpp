@@ -26,6 +26,7 @@
 
 #include <memory>
 #include <string>
+#include "fmt/format.h"
 
 // 多实例约定 (2026-08 API v1): 零可变全局; 实例状态 (host/iface) 存于
 // ResCtx, create 经 *plugin_ctx 交付宿主 / destroy 释放
@@ -132,7 +133,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
             // - 与 yaml 主配置或其他插件冲突时返回非 0 (yaml 优先, 此处仅告警不失败)
             if (ctx->iface.resources && ctx->iface.resources->register_skill_dir && ctx->iface.log
                 && ctx->iface.log->log) {
-                std::string runtimeSkillDir = base + "/skills_runtime";
+                std::string runtimeSkillDir = fmt::format("{}/skills_runtime", base);
                 if (ctx->iface.resources->register_skill_dir(
                         host,
                         agentxx_plugin_sv(runtimeSkillDir.data(), runtimeSkillDir.size())
@@ -198,7 +199,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_agent_destroy(void* plugin_
                     host->vtable->free(p);
                     auto        pos  = libPath.find_last_of("/\\");
                     std::string base = pos == std::string::npos ? "." : libPath.substr(0, pos);
-                    std::string d    = base + "/skills_runtime";
+                    std::string d    = fmt::format("{}/skills_runtime", base);
                     iface.resources->unregister_skill_dir(
                         host,
                         agentxx_plugin_sv(d.data(), d.size())

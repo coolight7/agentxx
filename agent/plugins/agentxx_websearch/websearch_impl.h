@@ -335,7 +335,7 @@ inline asio::awaitable<std::string>
             co_return R"({"error": "Model web search returned empty result."})";
         }
         co_return content;
-    } catch (const std::exception&) {
+    } catch (...) {
         throw std::runtime_error("Model web search: unexpected response format");
     }
 }

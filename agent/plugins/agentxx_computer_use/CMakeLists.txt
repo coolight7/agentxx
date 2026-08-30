@@ -1,7 +1,7 @@
 # agentxx_computer_use —— 计算机控制插件 (Windows)
-# - 默认: 独立动态库 (MODULE), 仅依赖纯 C ABI 头 + codegraph::Json (simdjson)
+# - 默认: 独立动态库 (MODULE), 仅依赖纯 C ABI 头 + neograph::json (yyjson) + simdjson
 # - 内置模式 (AGENTXX_ENABLE_PLUGIN_BUILTIN=ON): 源文件编译为 OBJECT 库合并进
-#   libagentxx; simdjson/fmt 为 libagentxx 既有依赖, 无需补链接
+#   libagentxx; neograph/yyjson/fmt/simdjson 为 libagentxx 既有依赖, 无需补链接
 # - 提供: agentxx_ui_control_keyboard_mouse
 # - 屏幕捕获已拆分为独立插件 agentxx_screen_capture (见 plugin.yaml depends,
 #   加载时须先于本插件, 拓扑排序自动处理; 内置模式同样适用)
@@ -34,7 +34,7 @@ if (_AGENTXX_ADD_AS_BUILTIN)
   target_include_directories(${_target} PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}"          # computer_use_plugin.h
     "${AGENTXX_LIB_INCLUDE_DIR}"           # agentxx/plugin/plugin_api.h
-    "${AGENTXX_INSTALL_DIR}/include"       # codegraph/core/json.hpp simdjson.h fmt
+    "${AGENTXX_INSTALL_DIR}/include"       # fmt neograph simdjson.h
   )
   # 复用 agentxx_util 工具库 (libagentxx 已链接本库; 此处经 PRIVATE 链接仅
   # 传递编译宏/头路径: util 头文件依赖 XX_IS_* 宏与 include 路径)
@@ -82,33 +82,95 @@ add_library(${PLUGIN_NAME} SHARED
   agentxx_computer_use.cpp
   ui_control.cpp
 )
-target_include_directories(${PLUGIN_NAME} PRIVATE
-  "${CMAKE_CURRENT_SOURCE_DIR}"          # computer_use_plugin.h
-  "${AGENTXX_LIB_INCLUDE_DIR}"           # agentxx/plugin/plugin_api.h
-  "${AGENTXX_INSTALL_DIR}/include"       # codegraph/core/json.hpp simdjson.h fmt
-)
-# codegraph::Json 为 header-only (simdjson 单头), 链接 simdjson 库
+
+# ===== 依赖统一查找与链接 =====
+# 仿 agent/lib/CMakeLists.txt 四件套模式: find_package 导入依赖 target /
+# target_include_directories 声明头路径 / target_link_directories 提供裸库名
+# 解析目录 / target_link_libraries 以 imported target + 裸库名链接。
 # 复用 agentxx_util 工具库 (插件静态链接, 与宿主副本符号互不冲突;
-# find_package 经 AGENTXX_INSTALL_DIR 的 agentxx_util config 解析,
-# 依赖链 fmt/SQLite3/uchardet/Iconv 由 config 内 find_dependency 传递)
+# neograph::json 实现经 yyjson)
 if (NOT TARGET agentxx_util)
   # 独立构建本插件时经安装 config 导入; 内置合并模式 (经 libagentxx 构建)
   # 下 util 目标已存在于宿主工程, 跳过导入 (此时 install 目录尚未生成 config)
   find_package(agentxx_util REQUIRED)
 endif()
+find_package(html2md REQUIRED)
+# OpenSSL 保持模块模式 (FindOpenSSL, 与 lib 一致): 本项目 OpenSSL 为预构建
+# 目录 (无 config), OPENSSL_ROOT_DIR 由顶层 superbuild 传入精确指向预构建
+# 目录, 不会命中系统 OpenSSL (独立构建未传时回退系统库)
+find_package(OpenSSL REQUIRED)
 find_package(fmt REQUIRED)
+
+target_include_directories(${PLUGIN_NAME} PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}"          # computer_use_plugin.h
+  "${AGENTXX_LIB_INCLUDE_DIR}"           # agentxx/plugin/plugin_api.h
+  "${AGENTXX_INSTALL_DIR}/include/"      # fmt neograph simdjson.h
+)
+
+# 裸库名依赖解析目录 (与 lib 一致): neograph 系/yyjson/hs_runtime 位于
+# AGENTXX_INSTALL_DIR/lib; OpenSSL 预构建归档目录供下方 ELF 尾部兜底裸名
+# (crypto/ssl) 解析
+target_link_directories(${PLUGIN_NAME} PRIVATE
+  "${AGENTXX_INSTALL_DIR}/lib/"
+  "${OPENSSL_ROOT_DIR}/lib64"
+  "${OPENSSL_ROOT_DIR}/lib"
+)
+
 target_link_libraries(${PLUGIN_NAME} PRIVATE
   agentxx_util
   simdjson
   fmt::fmt
+  html2md
+  OpenSSL::SSL
+  OpenSSL::Crypto
+  # === neograph vvv 链接顺序是必要的 (与 lib 自身一致) ===
+  neograph_sqlite
+  neograph_acp
+  neograph_mcp
+  neograph_mcp_types
+  neograph_async
+  neograph_llm
+  neograph_core
+  # === neograph ^^^
+  yyjson
 )
+if (AGENTXX_ENABLE_HYPERSCAN)
+  # hyperscan pkg-config 模块由 plugins/CMakeLists.txt 统一定义 (与
+  # lib/client/test 一致); hs_runtime 为裸名经上方 link_directories 解析
+  target_link_libraries(${PLUGIN_NAME} PRIVATE PkgConfig::hyperscan hs_runtime)
+endif()
+if (AGENTXX_LINUX_IO_URING_SUPPORTED)
+  # io_uring 同上由总控统一定义 (util 的 asio 重模块在 -DASIO_HAS_IO_URING
+  # 下引用其符号)
+  target_link_libraries(${PLUGIN_NAME} PRIVATE PkgConfig::uring)
+endif()
 if (WIN32)
   # ui_control: 鼠标/键盘注入与光标查询 (user32)
   target_link_libraries(${PLUGIN_NAME} PRIVATE user32)
 endif()
-target_link_directories(${PLUGIN_NAME} PRIVATE
-  "${AGENTXX_INSTALL_DIR}/lib"
-)
+if (NOT WIN32)
+  # ELF (GNU ld/lld) 单遍扫描无法自解析相互引用的静态归档成员 (libhs↔
+  # libcrypto、util↔html2md/neograph); 尾部以裸库名重复提供打破循环
+  # (裸名字符串不被 CMake 去重, 等价于原先的绝对路径补链; MSVC 多遍解析
+  # 无需此兜底), 解析目录由上方 target_link_directories 提供
+  set(_tail_libs crypto ssl)
+  if (AGENTXX_ENABLE_HYPERSCAN)
+    list(APPEND _tail_libs hs hs_runtime)
+  endif()
+  if (AGENTXX_LINUX_IO_URING_SUPPORTED)
+    list(APPEND _tail_libs uring)
+  endif()
+  list(APPEND _tail_libs
+    neograph_sqlite neograph_acp neograph_mcp neograph_mcp_types neograph_async neograph_llm neograph_core yyjson)
+  # group 迭代扫描: crypto/ssl↔hs↔neograph 归档成员相互引用链较长, 单遍
+    # 扫描两次不足以收敛, start-group 让 ld 反复解析直至无新未定义符号
+    target_link_libraries(${PLUGIN_NAME} PRIVATE
+      "-Wl,--start-group"
+      ${_tail_libs}
+      "-Wl,--end-group"
+    )
+  unset(_tail_libs)
+endif()
 
 set_target_properties(${PLUGIN_NAME} PROPERTIES
   PREFIX "lib"
