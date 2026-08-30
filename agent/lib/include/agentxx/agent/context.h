@@ -419,7 +419,7 @@ public:
 
     /// 任务规划 (planning) 中间件
     /// - 由 CodeAgent::initMiddleware 创建注入 (BaseAgent 场景为 nullptr);
-    ///   插件系统经 AgentxxPlanningIface 写入会话规划 state 时取用
+    ///   插件系统经 AgentxxPluginPlanningIface 写入会话规划 state 时取用
     ///   (原 lib 内置 WritePlanningTool 已迁移至 agentxx_planning 插件)
     std::shared_ptr<agentxx::middleware::PlanningMiddlewareHandle> planningMiddleware = nullptr;
 

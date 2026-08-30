@@ -1625,7 +1625,7 @@ void xx_cshow_toast(const AgentxxClientHost* host, AgentxxPluginStringView text,
 
 // ---- 事件订阅 ----
 
-AgentxxSubscription* xx_csubscribe(
+AgentxxPluginSubscription* xx_csubscribe(
     const AgentxxClientHost* host,
     int                      event,
     void (*handler)(AgentxxPluginStringView, void*),
@@ -1640,13 +1640,13 @@ AgentxxSubscription* xx_csubscribe(
     if (event < 0 || event >= AGENTXX_CLIENT_EVT_COUNT) {
         return nullptr;
     }
-    return ioCallSync<AgentxxSubscription*>(mgr, [&]() -> AgentxxSubscription* {
-        return static_cast<AgentxxSubscription*>(mgr->subscribe(inst, event, handler, ud));
+    return ioCallSync<AgentxxPluginSubscription*>(mgr, [&]() -> AgentxxPluginSubscription* {
+        return static_cast<AgentxxPluginSubscription*>(mgr->subscribe(inst, event, handler, ud));
     });
     XX_PLUGIN_CATCH_END(nullptr)
 }
 
-void xx_cunsubscribe(AgentxxSubscription* sub) {
+void xx_cunsubscribe(AgentxxPluginSubscription* sub) {
     XX_PLUGIN_CATCH_BEGIN
     if (!sub) {
         return;
@@ -1656,7 +1656,7 @@ void xx_cunsubscribe(AgentxxSubscription* sub) {
     auto mgr = impl->inst ? impl->inst->manager.lock().get() : nullptr;
     if (mgr) {
         ioCallSyncVoid(mgr, [&]() {
-            mgr->unsubscribe(reinterpret_cast<AgentxxSubscription*>(impl));
+            mgr->unsubscribe(reinterpret_cast<AgentxxPluginSubscription*>(impl));
         });
     }
     impl->inst = nullptr;
@@ -2434,7 +2434,7 @@ int ClientPluginManager::unregisterCommand(ClientPluginInstance* inst, const cha
     return 0;
 }
 
-AgentxxSubscription* ClientPluginManager::subscribe(
+AgentxxPluginSubscription* ClientPluginManager::subscribe(
     ClientPluginInstance* inst,
     int                   event,
     void (*handler)(AgentxxPluginStringView, void*),
@@ -2453,10 +2453,10 @@ AgentxxSubscription* ClientPluginManager::subscribe(
     inst->subscriptions.push_back(s);
     sub->sub = s; // 强引用: 订阅对象从 vector 摘除后仍被句柄保活 (unload 回调内退订安全)
     inst->subHandles.push_back(sub);
-    return reinterpret_cast<AgentxxSubscription*>(sub.get());
+    return reinterpret_cast<AgentxxPluginSubscription*>(sub.get());
 }
 
-void ClientPluginManager::unsubscribe(AgentxxSubscription* sub) {
+void ClientPluginManager::unsubscribe(AgentxxPluginSubscription* sub) {
     auto impl = reinterpret_cast<ClientSubscriptionImpl*>(sub);
     if (!impl || !impl->inst || !impl->sub) {
         return;

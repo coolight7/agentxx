@@ -30,7 +30,7 @@
 namespace agentxx {
 namespace plugin {
 
-const void* xx_query_interface(const AgentxxHost*, AgentxxPluginStringView iid);
+const void* xx_query_interface(const AgentxxPluginHost*, AgentxxPluginStringView iid);
 
 // =====================================================================
 // NativeLoader
@@ -298,7 +298,7 @@ void PluginManager::enable(std::string_view name) {
             );
             ctx->middlewareHandleContext->handles.push_back(inst->middleware);
             for (const auto& hook : inst->hookRegistrations) {
-                AgentxxHookSpec spec{};
+                AgentxxPluginHookSpec spec{};
                 spec.point       = hook.point;
                 spec.hook_start  = hook.start;
                 spec.hook_cancel = hook.cancel;

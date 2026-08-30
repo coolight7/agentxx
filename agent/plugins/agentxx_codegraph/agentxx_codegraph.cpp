@@ -52,7 +52,7 @@ static auto ctxGuardLogger(PluginCtx* ctx) noexcept {
 }
 
 static HostConfig
-    readHostConfig(const AgentxxHost* host, const agentxx::plugin::AgentIfaces& iface) {
+    readHostConfig(const AgentxxPluginHost* host, const agentxx::plugin::AgentIfaces& iface) {
     HostConfig cfg;
     if (!host || !iface.config) {
         return cfg;
@@ -169,8 +169,10 @@ static ToolPrompt defaultToolPrompt(std::string_view name) {
     return p;
 }
 
-static void
-    ensureToolPromptsInHost(const AgentxxHost* host, const agentxx::plugin::AgentIfaces& iface) {
+static void ensureToolPromptsInHost(
+    const AgentxxPluginHost*            host,
+    const agentxx::plugin::AgentIfaces& iface
+) {
     if (!host || !iface.prompt || !iface.prompt->get_prompt || !iface.prompt->set_prompt) {
         return;
     }
@@ -382,7 +384,7 @@ struct SchemaBuilder {
 };
 
 static void registerAllTools(PluginCtx& ctx) {
-    constexpr int kAutoSummary = AGENTXX_TOOL_FLAG_AUTO_SUMMARY;
+    constexpr int kAutoSummary = AGENTXX_PLUGIN_TOOL_FLAG_AUTO_SUMMARY;
 
     // agentxx_codegraph_search
     {
@@ -654,7 +656,7 @@ static void snapshotQueryDone(void* ud, void* result, char* error) {
                 std::string payload = j.dump();
                 ctx->iface.events->publish(
                     ctx->host,
-                    AGENTXX_SV("agentxx_codegraph.status"),
+                    AGENTXX_PLUGIN_SV("agentxx_codegraph.status"),
                     agentxx_plugin_sv(payload.data(), payload.size())
                 );
                 if (files && *files > 0) {
@@ -665,7 +667,7 @@ static void snapshotQueryDone(void* ud, void* result, char* error) {
                     std::string pp    = p.dump();
                     ctx->iface.events->publish(
                         ctx->host,
-                        AGENTXX_SV("agentxx_codegraph.progress"),
+                        AGENTXX_PLUGIN_SV("agentxx_codegraph.progress"),
                         agentxx_plugin_sv(pp.data(), pp.size())
                     );
                 }
@@ -734,15 +736,17 @@ using namespace agentxx_codegraph_plugin;
 extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_agent_get_info(void) {
     static const AgentxxPluginInfo info{
         AGENTXX_PLUGIN_API_VERSION,
-        AGENTXX_SV("agentxx_codegraph"),
-        AGENTXX_SV("1.0.0"),
-        AGENTXX_SV("CodeGraph code analysis: symbol search/context/callers/callees/impact/path"),
+        AGENTXX_PLUGIN_SV("agentxx_codegraph"),
+        AGENTXX_PLUGIN_SV("1.0.0"),
+        AGENTXX_PLUGIN_SV(
+            "CodeGraph code analysis: symbol search/context/callers/callees/impact/path"
+        ),
     };
     return &info;
 }
 
 extern "C" AGENTXX_PLUGIN_EXPORT int
-    agentxx_plugin_agent_create(const AgentxxHost* host, void** plugin_ctx) {
+    agentxx_plugin_agent_create(const AgentxxPluginHost* host, void** plugin_ctx) {
     PluginCtx* raw    = nullptr;
     auto       logger = [&raw](const char* m) noexcept {
         pluginLog(raw ? raw->host : nullptr, raw ? raw->iface.log : nullptr, 4, m ? m : "");
@@ -805,7 +809,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                     std::string payload = j.dump();
                     ctxRaw->iface.events->publish(
                         ctxRaw->host,
-                        AGENTXX_SV("agentxx_codegraph.progress"),
+                        AGENTXX_PLUGIN_SV("agentxx_codegraph.progress"),
                         agentxx_plugin_sv(payload.data(), payload.size())
                     );
                 } catch (...) {
@@ -867,7 +871,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
         if (ctx->iface.events && ctx->iface.events->subscribe) {
             ctx->iface.events->subscribe(
                 host,
-                AGENTXX_SV("agentxx_host.client_attached"),
+                AGENTXX_PLUGIN_SV("agentxx_host.client_attached"),
                 on_client_attached,
                 ctx.get()
             );
@@ -882,7 +886,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
             std::string payload = j.dump();
             ctx->iface.events->publish(
                 ctx->host,
-                AGENTXX_SV("agentxx_codegraph.status"),
+                AGENTXX_PLUGIN_SV("agentxx_codegraph.status"),
                 agentxx_plugin_sv(payload.data(), payload.size())
             );
         }
@@ -981,8 +985,8 @@ static void refreshSection(ClientCtx& c) {
     if (!c.section && c.ui->register_info_section) {
         c.section = c.ui->register_info_section(
             c.host,
-            AGENTXX_SV("agentxx_codegraph.status"),
-            AGENTXX_SV(R"({"title":"CodeGraph"})")
+            AGENTXX_PLUGIN_SV("agentxx_codegraph.status"),
+            AGENTXX_PLUGIN_SV(R"({"title":"CodeGraph"})")
         );
     }
     if (!c.section) {
@@ -1047,9 +1051,9 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxClientPluginInfo* agentxx_plugin_c
 ) {
     static const AgentxxClientPluginInfo info{
         AGENTXX_CLIENT_PLUGIN_API_VERSION,
-        AGENTXX_SV("agentxx_codegraph"),
-        AGENTXX_SV("1.0.0"),
-        AGENTXX_SV("CodeGraph index status (sidebar Info section)"),
+        AGENTXX_PLUGIN_SV("agentxx_codegraph"),
+        AGENTXX_PLUGIN_SV("1.0.0"),
+        AGENTXX_PLUGIN_SV("CodeGraph index status (sidebar Info section)"),
     };
     return &info;
 }
@@ -1071,14 +1075,15 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
             auto ctx   = std::make_unique<ClientCtx>();
             ctx->host  = host;
             ctx->iface = agentxx::plugin::ClientIfaces::query(host);
-            ctx->ui    = AGENTXX_QUERY_IFACE(host, AgentxxClientUiIface, AGENTXX_IFACE_CLIENT_UI);
-            raw        = ctx.get();
+            ctx->ui
+                = AGENTXX_PLUGIN_QUERY_IFACE(host, AgentxxClientUiIface, AGENTXX_IFACE_CLIENT_UI);
+            raw = ctx.get();
 
             if (ctx->ui && ctx->ui->register_info_section) {
                 ctx->section = ctx->ui->register_info_section(
                     host,
-                    AGENTXX_SV("agentxx_codegraph.status"),
-                    AGENTXX_SV(R"({"title":"CodeGraph"})")
+                    AGENTXX_PLUGIN_SV("agentxx_codegraph.status"),
+                    AGENTXX_PLUGIN_SV(R"({"title":"CodeGraph"})")
                 );
                 if (ctx->section) {
                     refreshSection(*ctx);
@@ -1096,7 +1101,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
             }
 
             if (ctx->iface.log && ctx->iface.log->log) {
-                ctx->iface.log->log(host, 2, AGENTXX_SV("agentxx_codegraph client loaded"));
+                ctx->iface.log->log(host, 2, AGENTXX_PLUGIN_SV("agentxx_codegraph client loaded"));
             }
             *plugin_ctx = ctx.release();
             return 0;
@@ -1123,7 +1128,8 @@ extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_client_destroy(void* plugin
             }
             ctx->current_file.clear();
             if (ctx->iface.log && ctx->iface.log->log) {
-                ctx->iface.log->log(ctx->host, 2, AGENTXX_SV("agentxx_codegraph client unloaded"));
+                ctx->iface.log
+                    ->log(ctx->host, 2, AGENTXX_PLUGIN_SV("agentxx_codegraph client unloaded"));
             }
             delete ctx;
         }

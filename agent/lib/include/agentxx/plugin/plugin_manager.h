@@ -48,13 +48,13 @@ struct PluginSleepTimer {
 } // namespace plugin
 } // namespace agentxx
 
-struct AgentxxOpHandle {
+struct AgentxxPluginOperatorHandle {
     agentxx::plugin::PluginInstance* caller = nullptr;
     std::function<void()>            cancelFn;
     std::atomic<bool>                cancelled{false};
 };
 
-struct AgentxxSubscription {
+struct AgentxxPluginSubscription {
     std::shared_ptr<agentxx::event::EventBus> bus;
     std::string                               topic;
     size_t                                    subscriptionId      = 0;
@@ -84,21 +84,21 @@ public:
     bool                     userDisabled    = false;
     bool                     unloadRequested = false;
 
-    AgentxxHost         host{};
+    AgentxxPluginHost   host{};
     std::atomic<size_t> inflight{0};
 
     struct HookRegistration {
-        AgentxxHookPoint point;
-        void* (*start)(void*, AgentxxHookPoint, AgentxxPluginStringView, const AgentxxOpNotify*, char**);
+        AgentxxPluginHookPoint point;
+        void* (*start)(void*, AgentxxPluginHookPoint, AgentxxPluginStringView, const AgentxxPluginOperatorNotify*, char**);
         void (*cancel)(void*, void*);
         void* ud;
     };
 
     struct CapabilityRegistration {
-        std::string       name;
-        AgentxxCapStartFn start  = nullptr;
-        AgentxxOpCancelFn cancel = nullptr;
-        void*             ctx    = nullptr;
+        std::string                          name;
+        AgentxxPluginCapabilityStartFunction start  = nullptr;
+        AgentxxPluginOperatorCancelFunction  cancel = nullptr;
+        void*                                ctx    = nullptr;
     };
 
     struct PromptBackup {
@@ -110,13 +110,13 @@ public:
         bool backedUpSystem = false;
     };
 
-    std::vector<std::string>                          toolNames;
-    std::vector<HookRegistration>                     hookRegistrations;
-    std::vector<std::shared_ptr<AgentxxSubscription>> subscriptions;
-    std::vector<CapabilityRegistration>               capabilityRegistrations;
+    std::vector<std::string>                                toolNames;
+    std::vector<HookRegistration>                           hookRegistrations;
+    std::vector<std::shared_ptr<AgentxxPluginSubscription>> subscriptions;
+    std::vector<CapabilityRegistration>                     capabilityRegistrations;
     // B6: sleep 定时器改为哈希表 O(1) 取消，避免 vector 线性查找 O(n) 与卸载时 O(n²)
     std::unordered_map<void*, std::shared_ptr<PluginSleepTimer>> sleepTimers;
-    std::vector<std::shared_ptr<AgentxxOpHandle>>                outstandingOps;
+    std::vector<std::shared_ptr<AgentxxPluginOperatorHandle>>    outstandingOps;
     PromptBackup                                                 promptBackup;
 
     std::shared_ptr<PluginMiddlewareHandle>  middleware = nullptr;
@@ -161,7 +161,7 @@ public:
     PluginTool(
         std::weak_ptr<agentxx::agent::AgentContext> agentContext,
         std::shared_ptr<PluginInstance>             instance,
-        AgentxxToolSpec                             spec
+        AgentxxPluginToolSpec                       spec
     );
 
     neograph::ChatTool get_definition() const override;
@@ -172,7 +172,7 @@ public:
         return instance_.lock();
     }
 
-    const AgentxxToolSpec& spec() const {
+    const AgentxxPluginToolSpec& spec() const {
         return spec_;
     }
 
@@ -181,7 +181,7 @@ private:
     std::string                   name_;
     std::string                   description_;
     std::string                   parametersJson_;
-    AgentxxToolSpec               spec_;
+    AgentxxPluginToolSpec         spec_;
     neograph::json                parameters_;
     std::weak_ptr<PluginInstance> instance_;
 };
@@ -196,8 +196,8 @@ public:
         std::shared_ptr<PluginInstance>             instance
     );
 
-    void setHook(const AgentxxHookSpec& spec);
-    void clearHook(AgentxxHookPoint point);
+    void setHook(const AgentxxPluginHookSpec& spec);
+    void clearHook(AgentxxPluginHookPoint point);
 
     asio::awaitable<void> onAgentcallStartFunc(neograph::graph::NodeInput& in) override;
     asio::awaitable<void> onAgentcallEndFunc(
@@ -219,17 +219,18 @@ public:
 private:
 
     struct HookEntry {
-        void* (*start)(void*, AgentxxHookPoint, AgentxxPluginStringView, const AgentxxOpNotify*, char**)
+        void* (*start)(void*, AgentxxPluginHookPoint, AgentxxPluginStringView, const AgentxxPluginOperatorNotify*, char**)
             = nullptr;
         void (*cancel)(void*, void*) = nullptr;
         void* ud                     = nullptr;
         bool  set                    = false;
     };
 
-    asio::awaitable<void> dispatch(AgentxxHookPoint point, const neograph::graph::NodeInput& in);
+    asio::awaitable<void>
+        dispatch(AgentxxPluginHookPoint point, const neograph::graph::NodeInput& in);
 
-    std::weak_ptr<PluginInstance>             instance_;
-    std::array<HookEntry, AGENTXX_HOOK_COUNT> hooks_{};
+    std::weak_ptr<PluginInstance>                    instance_;
+    std::array<HookEntry, AGENTXX_PLUGIN_HOOK_COUNT> hooks_{};
 };
 
 class PluginManager : public std::enable_shared_from_this<PluginManager> {
@@ -307,7 +308,7 @@ public:
         }
     }
 
-    int registerTool(PluginInstance* inst, const AgentxxToolSpec* spec);
+    int registerTool(PluginInstance* inst, const AgentxxPluginToolSpec* spec);
     int unregisterTool(PluginInstance* inst, const char* name);
 
     int         registerSkillDir(PluginInstance* inst, const char* path);
@@ -318,15 +319,15 @@ public:
     int         unregisterMcpServer(PluginInstance* inst, const char* nameSpace);
     std::string ownResourcesJson(const PluginInstance* inst);
 
-    int                  registerHook(PluginInstance* inst, const AgentxxHookSpec* spec);
-    int                  unregisterHook(PluginInstance* inst, AgentxxHookPoint point);
-    AgentxxSubscription* subscribe(
+    int registerHook(PluginInstance* inst, const AgentxxPluginHookSpec* spec);
+    int unregisterHook(PluginInstance* inst, AgentxxPluginHookPoint point);
+    AgentxxPluginSubscription* subscribe(
         PluginInstance* inst,
         const char*     topic,
         void (*handler)(AgentxxPluginStringView event_json, void* ud),
         void* ud
     );
-    void      unsubscribe(AgentxxSubscription* sub);
+    void      unsubscribe(AgentxxPluginSubscription* sub);
     int       publish(const char* topic, const char* event_json);
     char*     getShareStore(PluginInstance* inst, const char* session_id, long long id);
     long long addShareStore(PluginInstance* inst, const char* session_id, const char* content);
@@ -342,24 +343,24 @@ public:
          void* ud
      );
 
-    AgentxxOpHandle* callToolAsync(
-        PluginInstance* caller,
-        const char*     name,
-        const char*     args_json,
-        const char*     session_id,
-        AgentxxOpCb     cb,
-        void*           ud,
-        char**          error_out
+    AgentxxPluginOperatorHandle* callToolAsync(
+        PluginInstance*               caller,
+        const char*                   name,
+        const char*                   args_json,
+        const char*                   session_id,
+        AgentxxPluginOperatorCallback cb,
+        void*                         ud,
+        char**                        error_out
     );
 
-    AgentxxOpHandle* invokeCapabilityAsync(
-        PluginInstance* caller,
-        const char*     capability,
-        const char*     method,
-        const char*     args_json,
-        AgentxxOpCb     cb,
-        void*           ud,
-        char**          error_out
+    AgentxxPluginOperatorHandle* invokeCapabilityAsync(
+        PluginInstance*               caller,
+        const char*                   capability,
+        const char*                   method,
+        const char*                   args_json,
+        AgentxxPluginOperatorCallback cb,
+        void*                         ud,
+        char**                        error_out
     );
 
     std::shared_ptr<ToolRegistry> registry() const {
@@ -440,11 +441,11 @@ public:
 
     int registerCapability(PluginInstance* inst, const char* capability);
     int registerCapabilityEx(
-        PluginInstance*   inst,
-        const char*       capability,
-        AgentxxCapStartFn start,
-        AgentxxOpCancelFn cancel,
-        void*             ctx
+        PluginInstance*                      inst,
+        const char*                          capability,
+        AgentxxPluginCapabilityStartFunction start,
+        AgentxxPluginOperatorCancelFunction  cancel,
+        void*                                ctx
     );
     int unregisterCapability(PluginInstance* inst, const char* capability);
     int hasCapability(const char* capability) const;
@@ -515,18 +516,18 @@ class CapabilityRegistry {
 public:
 
     struct Entry {
-        std::string       provider;
-        AgentxxCapStartFn start  = nullptr;
-        AgentxxOpCancelFn cancel = nullptr;
-        void*             ctx    = nullptr;
+        std::string                          provider;
+        AgentxxPluginCapabilityStartFunction start  = nullptr;
+        AgentxxPluginOperatorCancelFunction  cancel = nullptr;
+        void*                                ctx    = nullptr;
     };
 
     bool registerCapability(
-        std::string_view  name,
-        std::string_view  provider,
-        AgentxxCapStartFn start  = nullptr,
-        AgentxxOpCancelFn cancel = nullptr,
-        void*             ctx    = nullptr
+        std::string_view                     name,
+        std::string_view                     provider,
+        AgentxxPluginCapabilityStartFunction start  = nullptr,
+        AgentxxPluginOperatorCancelFunction  cancel = nullptr,
+        void*                                ctx    = nullptr
     );
 
     bool                     unregisterCapability(std::string_view name, std::string_view provider);

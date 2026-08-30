@@ -19,12 +19,12 @@ namespace plugin {
 PluginTool::PluginTool(
     std::weak_ptr<agentxx::agent::AgentContext> agentContext,
     std::shared_ptr<PluginInstance>             instance,
-    AgentxxToolSpec                             spec
+    AgentxxPluginToolSpec                       spec
 ) :
     XXToolBase(
         std::string{spec.name.data ? spec.name.data : "", spec.name.size},
         std::move(agentContext),
-        (spec.flags & AGENTXX_TOOL_FLAG_AUTO_SUMMARY) != 0,
+        (spec.flags & AGENTXX_PLUGIN_TOOL_FLAG_AUTO_SUMMARY) != 0,
         false,
         0,
         false
@@ -90,8 +90,8 @@ asio::awaitable<std::string> PluginTool::execute_async(const neograph::json& arg
 
     plugin::OpDrive drive;
     drive.start = [spec, instKeep, argsJson, sessionId, toolCallId](
-                      const AgentxxOpNotify* notify,
-                      char**                 err
+                      const AgentxxPluginOperatorNotify* notify,
+                      char**                             err
                   ) -> void* {
         return spec.execute_start(
             spec.user_data,
@@ -143,8 +143,8 @@ PluginMiddlewareHandle::PluginMiddlewareHandle(
     BaseMiddlewareHandle(name, std::move(agentContext)),
     instance_(instance) {}
 
-void PluginMiddlewareHandle::setHook(const AgentxxHookSpec& spec) {
-    if (spec.point < 0 || spec.point >= AGENTXX_HOOK_COUNT) {
+void PluginMiddlewareHandle::setHook(const AgentxxPluginHookSpec& spec) {
+    if (spec.point < 0 || spec.point >= AGENTXX_PLUGIN_HOOK_COUNT) {
         return;
     }
     auto& h  = hooks_[static_cast<size_t>(spec.point)];
@@ -154,24 +154,26 @@ void PluginMiddlewareHandle::setHook(const AgentxxHookSpec& spec) {
     h.set    = spec.hook_start != nullptr;
 }
 
-void PluginMiddlewareHandle::clearHook(AgentxxHookPoint point) {
-    if (point < 0 || point >= AGENTXX_HOOK_COUNT) {
+void PluginMiddlewareHandle::clearHook(AgentxxPluginHookPoint point) {
+    if (point < 0 || point >= AGENTXX_PLUGIN_HOOK_COUNT) {
         return;
     }
     hooks_[static_cast<size_t>(point)] = HookEntry{};
 }
 
 static neograph::json
-    summarizeNodeInput(AgentxxHookPoint point, const neograph::graph::NodeInput& in) {
+    summarizeNodeInput(AgentxxPluginHookPoint point, const neograph::graph::NodeInput& in) {
     neograph::json j;
     j["sessionId"] = in.ctx.thread_id;
     j["point"]     = static_cast<int>(point);
     return j;
 }
 
-asio::awaitable<void>
-    PluginMiddlewareHandle::dispatch(AgentxxHookPoint point, const neograph::graph::NodeInput& in) {
-    if (point < 0 || point >= AGENTXX_HOOK_COUNT) {
+asio::awaitable<void> PluginMiddlewareHandle::dispatch(
+    AgentxxPluginHookPoint            point,
+    const neograph::graph::NodeInput& in
+) {
+    if (point < 0 || point >= AGENTXX_PLUGIN_HOOK_COUNT) {
         co_return;
     }
     const auto& hook = hooks_[static_cast<size_t>(point)];
@@ -188,8 +190,10 @@ asio::awaitable<void>
     auto instKeep  = inst;
 
     plugin::OpDrive drive;
-    drive.start
-        = [hook, instKeep, inputJson, point](const AgentxxOpNotify* notify, char** err) -> void* {
+    drive.start = [hook,
+                   instKeep,
+                   inputJson,
+                   point](const AgentxxPluginOperatorNotify* notify, char** err) -> void* {
         return hook.start(
             hook.ud,
             point,
@@ -225,41 +229,41 @@ asio::awaitable<void>
 }
 
 asio::awaitable<void> PluginMiddlewareHandle::onAgentcallStartFunc(neograph::graph::NodeInput& in) {
-    co_await dispatch(AGENTXX_HOOK_AGENT_START, in);
+    co_await dispatch(AGENTXX_PLUGIN_HOOK_AGENT_START, in);
 }
 
 asio::awaitable<void> PluginMiddlewareHandle::
     onAgentcallEndFunc(const neograph::graph::NodeInput& in, neograph::graph::NodeOutput&) {
-    co_await dispatch(AGENTXX_HOOK_AGENT_END, in);
+    co_await dispatch(AGENTXX_PLUGIN_HOOK_AGENT_END, in);
 }
 
 asio::awaitable<void> PluginMiddlewareHandle::onModelcallStartFunc(neograph::graph::NodeInput& in) {
-    co_await dispatch(AGENTXX_HOOK_MODEL_START, in);
+    co_await dispatch(AGENTXX_PLUGIN_HOOK_MODEL_START, in);
 }
 
 asio::awaitable<void> PluginMiddlewareHandle::onModelcallRunFunc(neograph::graph::NodeInput& in) {
-    co_await dispatch(AGENTXX_HOOK_MODEL_RUN, in);
+    co_await dispatch(AGENTXX_PLUGIN_HOOK_MODEL_RUN, in);
 }
 
 asio::awaitable<void> PluginMiddlewareHandle::
     onModelcallEndFunc(const neograph::graph::NodeInput& in, neograph::graph::NodeOutput&) {
-    co_await dispatch(AGENTXX_HOOK_MODEL_END, in);
+    co_await dispatch(AGENTXX_PLUGIN_HOOK_MODEL_END, in);
 }
 
 asio::awaitable<void> PluginMiddlewareHandle::onToolcallStartFunc(neograph::graph::NodeInput& in) {
-    co_await dispatch(AGENTXX_HOOK_TOOL_START, in);
+    co_await dispatch(AGENTXX_PLUGIN_HOOK_TOOL_START, in);
 }
 
 asio::awaitable<void> PluginMiddlewareHandle::
     onToolcallEndFunc(const neograph::graph::NodeInput& in, neograph::graph::NodeOutput&) {
-    co_await dispatch(AGENTXX_HOOK_TOOL_END, in);
+    co_await dispatch(AGENTXX_PLUGIN_HOOK_TOOL_END, in);
 }
 
 // =====================================================================
 // 注册与事件方法
 // =====================================================================
 
-int PluginManager::registerTool(PluginInstance* inst, const AgentxxToolSpec* spec) {
+int PluginManager::registerTool(PluginInstance* inst, const AgentxxPluginToolSpec* spec) {
     if (!inst || !spec || agentxx_plugin_sv_empty(spec->name)) {
         return -1;
     }
@@ -308,8 +312,8 @@ int PluginManager::unregisterTool(PluginInstance* inst, const char* name) {
     return 0;
 }
 
-int PluginManager::registerHook(PluginInstance* inst, const AgentxxHookSpec* spec) {
-    if (!inst || !spec || spec->point < 0 || spec->point >= AGENTXX_HOOK_COUNT
+int PluginManager::registerHook(PluginInstance* inst, const AgentxxPluginHookSpec* spec) {
+    if (!inst || !spec || spec->point < 0 || spec->point >= AGENTXX_PLUGIN_HOOK_COUNT
         || !spec->hook_start) {
         return -1;
     }
@@ -350,8 +354,8 @@ int PluginManager::registerHook(PluginInstance* inst, const AgentxxHookSpec* spe
     return 0;
 }
 
-int PluginManager::unregisterHook(PluginInstance* inst, AgentxxHookPoint point) {
-    if (!inst || point < 0 || point >= AGENTXX_HOOK_COUNT) {
+int PluginManager::unregisterHook(PluginInstance* inst, AgentxxPluginHookPoint point) {
+    if (!inst || point < 0 || point >= AGENTXX_PLUGIN_HOOK_COUNT) {
         return -1;
     }
     auto it = std::find_if(
@@ -371,7 +375,7 @@ int PluginManager::unregisterHook(PluginInstance* inst, AgentxxHookPoint point) 
     return 0;
 }
 
-AgentxxSubscription* PluginManager::subscribe(
+AgentxxPluginSubscription* PluginManager::subscribe(
     PluginInstance* inst,
     const char*     topic,
     void (*handler)(AgentxxPluginStringView event_json, void* ud),
@@ -388,7 +392,7 @@ AgentxxSubscription* PluginManager::subscribe(
     if (!fullTopic.starts_with("plugin.") && !fullTopic.starts_with("client.")) {
         fullTopic = "plugin." + fullTopic;
     }
-    auto sub     = std::make_shared<AgentxxSubscription>();
+    auto sub     = std::make_shared<AgentxxPluginSubscription>();
     sub->bus     = ctx->bus;
     sub->topic   = fullTopic;
     sub->inst    = inst;
@@ -423,7 +427,7 @@ AgentxxSubscription* PluginManager::subscribe(
     return sub.get();
 }
 
-void PluginManager::unsubscribe(AgentxxSubscription* sub) {
+void PluginManager::unsubscribe(AgentxxPluginSubscription* sub) {
     if (!sub || !sub->bus || sub->subscriptionId == 0) {
         return;
     }
@@ -433,7 +437,7 @@ void PluginManager::unsubscribe(AgentxxSubscription* sub) {
         auto it = std::find_if(
             sub->inst->subscriptions.begin(),
             sub->inst->subscriptions.end(),
-            [sub](const std::shared_ptr<AgentxxSubscription>& s) {
+            [sub](const std::shared_ptr<AgentxxPluginSubscription>& s) {
                 return s.get() == sub;
             }
         );

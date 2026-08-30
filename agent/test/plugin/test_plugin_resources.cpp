@@ -351,10 +351,11 @@ interfaces:
         // ---- 运行时注册 skill 目录 ----
         auto runtimeSkill = tmpRoot / "runtime_skills";
         fs::create_directories(runtimeSkill, ec);
-        int rc
-            = res3
-                  ? res3->register_skill_dir(&inst->host, AGENTXX_SV(runtimeSkill.string().c_str()))
-                  : -1;
+        int rc = res3 ? res3->register_skill_dir(
+                     &inst->host,
+                     AGENTXX_PLUGIN_SV(runtimeSkill.string().c_str())
+                 )
+                      : -1;
         XX_TEST_EXPECT_EQ(rc, 0);
         XX_TEST_EXPECT_TRUE(contains(skillMw->skillDirPathList(), runtimeSkill.string()));
 
@@ -370,29 +371,32 @@ interfaces:
         }
 
         // ---- 重复注册幂等成功 ----
-        rc = res3 ? res3->register_skill_dir(&inst->host, AGENTXX_SV(runtimeSkill.string().c_str()))
+        rc = res3 ? res3->register_skill_dir(
+                 &inst->host,
+                 AGENTXX_PLUGIN_SV(runtimeSkill.string().c_str())
+             )
                   : -1;
         XX_TEST_EXPECT_EQ(rc, 0);
 
         // ---- 注销; 再注销非 0 ----
         rc = res3 ? res3->unregister_skill_dir(
-                        &inst->host,
-                        AGENTXX_SV(runtimeSkill.string().c_str())
-                    )
+                 &inst->host,
+                 AGENTXX_PLUGIN_SV(runtimeSkill.string().c_str())
+             )
                   : -1;
         XX_TEST_EXPECT_EQ(rc, 0);
         XX_TEST_EXPECT_FALSE(contains(skillMw->skillDirPathList(), runtimeSkill.string()));
         rc = res3 ? res3->unregister_skill_dir(
-                        &inst->host,
-                        AGENTXX_SV(runtimeSkill.string().c_str())
-                    )
+                 &inst->host,
+                 AGENTXX_PLUGIN_SV(runtimeSkill.string().c_str())
+             )
                   : 0;
         XX_TEST_EXPECT_TRUE(rc != 0);
 
         // ---- MCP 注册 (不可达 URL; 失败仅记日志, 所有权记录保留) ----
         const char* mcpSpec
             = R"({"namespace":"t_mcp","url":"https://127.0.0.1:9/sse","timeout":3})";
-        rc = res3 ? res3->register_mcp_server(&inst->host, AGENTXX_SV(mcpSpec)) : -1;
+        rc = res3 ? res3->register_mcp_server(&inst->host, AGENTXX_PLUGIN_SV(mcpSpec)) : -1;
         XX_TEST_EXPECT_EQ(rc, 0);
         co_await sleepMs(150); // 让连接协程跑一轮 (无论成败, 记录均在)
         {
@@ -410,7 +414,7 @@ interfaces:
         ycfg.url                                    = "https://yaml.example";
         ctx->agentConfig->mcpServerUrls["yaml_ns2"] = ycfg;
         const char* specConflict = R"({"namespace":"yaml_ns2","url":"https://z"})";
-        rc = res3 ? res3->register_mcp_server(&inst->host, AGENTXX_SV(specConflict)) : 0;
+        rc = res3 ? res3->register_mcp_server(&inst->host, AGENTXX_PLUGIN_SV(specConflict)) : 0;
         XX_TEST_EXPECT_TRUE(rc != 0);
 
         // ---- 其他 owner 抢注同名命名空间 → 拒绝 (确定性: 所有权记录已存在) ----
@@ -420,7 +424,7 @@ interfaces:
         XX_TEST_EXPECT_FALSE(applier->addMcpServer("other_owner", "t_mcp", anyCfg, err));
 
         // ---- 注销 (连接可能已失败: 幂等语义仍成功) ----
-        rc = res3 ? res3->unregister_mcp_server(&inst->host, AGENTXX_SV("t_mcp")) : -1;
+        rc = res3 ? res3->unregister_mcp_server(&inst->host, AGENTXX_PLUGIN_SV("t_mcp")) : -1;
         XX_TEST_EXPECT_EQ(rc, 0);
         auto snapAfter = applier->ownedBy(ownerName);
         XX_TEST_EXPECT_FALSE(contains(snapAfter.mcpNamespaces, "t_mcp"));

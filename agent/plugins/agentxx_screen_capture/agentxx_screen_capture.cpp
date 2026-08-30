@@ -60,7 +60,7 @@ inline bool ScreenCaptureHolder::startStreaming(int frameRate) {
                     );
                     ctx->iface.events->publish(
                         ctx->host,
-                        AGENTXX_SV("agentxx_screen_capture.frame"),
+                        AGENTXX_PLUGIN_SV("agentxx_screen_capture.frame"),
                         agentxx_plugin_sv(payload.data(), payload.size())
                     );
                 }
@@ -280,7 +280,7 @@ static void registerScreenCaptureTool(PluginCtx& ctx) {
             return R"({"ok":false,"error":"unknown command"})";
         },
         0,
-        AGENTXX_TOOL_FLAG_AUTO_SUMMARY
+        AGENTXX_PLUGIN_TOOL_FLAG_AUTO_SUMMARY
     );
 }
 
@@ -289,9 +289,9 @@ static void registerScreenCaptureTool(PluginCtx& ctx) {
 extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_agent_get_info(void) {
     static const AgentxxPluginInfo info{
         AGENTXX_PLUGIN_API_VERSION,
-        AGENTXX_SV("agentxx_screen_capture"),
-        AGENTXX_SV("1.0.0"),
-        AGENTXX_SV(
+        AGENTXX_PLUGIN_SV("agentxx_screen_capture"),
+        AGENTXX_PLUGIN_SV("1.0.0"),
+        AGENTXX_PLUGIN_SV(
             "Screen capture and streaming on Windows (DXGI Desktop Duplication with GDI fallback)"
         ),
     };
@@ -299,7 +299,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_agent_g
 }
 
 extern "C" AGENTXX_PLUGIN_EXPORT int
-    agentxx_plugin_agent_create(const AgentxxHost* host, void** plugin_ctx) {
+    agentxx_plugin_agent_create(const AgentxxPluginHost* host, void** plugin_ctx) {
     PluginCtx* raw = nullptr;
     return agentxx::plugin_guard::guardCall(
         [&raw](const char* msg) noexcept {

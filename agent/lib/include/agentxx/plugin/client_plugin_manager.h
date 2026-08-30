@@ -377,13 +377,13 @@ public:
     );
     int unregisterCommand(ClientPluginInstance* inst, const char* name);
     /// 事件订阅; 返回句柄 (宿主持有; 卸载自动退订)
-    AgentxxSubscription* subscribe(
+    AgentxxPluginSubscription* subscribe(
         ClientPluginInstance* inst,
         int                   event,
         void (*handler)(AgentxxPluginStringView, void*),
         void* ud
     );
-    void unsubscribe(AgentxxSubscription* sub);
+    void unsubscribe(AgentxxPluginSubscription* sub);
     /// 自描述
     std::string getOwnInfoJson(ClientPluginInstance* inst);
     std::string getPluginArgsJson(ClientPluginInstance* inst);

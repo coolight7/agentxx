@@ -28,17 +28,17 @@
 namespace agentxx_audio_stream_plugin {
 
 inline void pluginLog(
-    const AgentxxHost*     host,
-    const AgentxxLogIface* logIf,
-    int                    level,
-    const std::string&     msg
+    const AgentxxPluginHost*     host,
+    const AgentxxPluginLogIface* logIf,
+    int                          level,
+    const std::string&           msg
 ) {
     if (host && logIf && logIf->log) {
         logIf->log(host, level, agentxx_plugin_sv(msg.data(), msg.size()));
     }
 }
 
-inline char* pluginStrdup(const AgentxxHost* host, const char* s) {
+inline char* pluginStrdup(const AgentxxPluginHost* host, const char* s) {
     if (!host || !s) {
         return nullptr;
     }

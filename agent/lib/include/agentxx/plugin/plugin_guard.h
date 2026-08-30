@@ -69,11 +69,11 @@ namespace plugin_guard {
 /// 栈缓冲日志 (noexcept): "[插件名] exception: msg" 经宿主 log 接口表输出;
 /// host/logIf 缺失时静默丢弃 (catch 路径不得再失败)
 inline void logTo(
-    const AgentxxHost*     host,
-    const AgentxxLogIface* logIf,
-    int                    level,
-    const char*            pluginName,
-    const char*            msg
+    const AgentxxPluginHost*     host,
+    const AgentxxPluginLogIface* logIf,
+    int                          level,
+    const char*                  pluginName,
+    const char*                  msg
 ) noexcept {
     if (!host || !logIf || !logIf->log || !msg) {
         return;
@@ -113,11 +113,11 @@ inline void logTo(
 
 /// 兼容别名 (早期调用方使用)
 inline void defaultLogTo(
-    const AgentxxHost*     host,
-    const AgentxxLogIface* logIf,
-    int                    level,
-    const char*            pluginName,
-    const char*            msg
+    const AgentxxPluginHost*     host,
+    const AgentxxPluginLogIface* logIf,
+    int                          level,
+    const char*                  pluginName,
+    const char*                  msg
 ) noexcept {
     logTo(host, logIf, level, pluginName, msg);
 }

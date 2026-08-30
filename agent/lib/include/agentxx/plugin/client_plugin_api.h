@@ -46,8 +46,8 @@
 #include <stdint.h>
 #include <string.h>
 
-#include "agentxx/plugin/plugin_api.h" /* AgentxxPluginStringView / AgentxxSubscription /
-                                          AGENTXX_QUERY_IFACE / 核心契约共享类型 */
+#include "agentxx/plugin/plugin_api.h" /* AgentxxPluginStringView / AgentxxPluginSubscription /
+                                          AGENTXX_PLUGIN_QUERY_IFACE / 核心契约共享类型 */
 
 #ifdef __cplusplus
 extern "C" {
@@ -242,13 +242,13 @@ typedef struct AgentxxClientEventsIface {
 
     /// 订阅 client 事件 (payload JSON 字符串; 卸载自动退订); event 为
     /// AgentxxClientEvent 枚举值; 失败返回 NULL
-    AgentxxSubscription* (*subscribe)(
+    AgentxxPluginSubscription* (*subscribe)(
         const AgentxxClientHost* host,
         int                      event, /* AgentxxClientEvent */
         void (*handler)(AgentxxPluginStringView payloadJson, void* ud),
         void* ud
     );
-    void (*unsubscribe)(AgentxxSubscription* sub);
+    void (*unsubscribe)(AgentxxPluginSubscription* sub);
 } AgentxxClientEventsIface;
 
 /* ==================== 接口表: 会话上下文与操作 (agentxx.client.session) ==================== */

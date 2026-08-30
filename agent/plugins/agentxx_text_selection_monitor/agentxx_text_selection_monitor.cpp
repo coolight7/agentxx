@@ -98,7 +98,7 @@ bool TextSelectionHolder::start(int debounceMs) {
                 );
                 ctx->iface.events->publish(
                     ctx->host,
-                    AGENTXX_SV("agentxx_text_selection_monitor.selection"),
+                    AGENTXX_PLUGIN_SV("agentxx_text_selection_monitor.selection"),
                     agentxx_plugin_sv(payload.data(), payload.size())
                 );
             } catch (...) {
@@ -121,15 +121,15 @@ void TextSelectionHolder::stop() {
 extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_agent_get_info(void) {
     static const AgentxxPluginInfo info{
         AGENTXX_PLUGIN_API_VERSION,
-        AGENTXX_SV("agentxx_text_selection_monitor"),
-        AGENTXX_SV("1.0.0"),
-        AGENTXX_SV("System-wide text selection monitor event stream"),
+        AGENTXX_PLUGIN_SV("agentxx_text_selection_monitor"),
+        AGENTXX_PLUGIN_SV("1.0.0"),
+        AGENTXX_PLUGIN_SV("System-wide text selection monitor event stream"),
     };
     return &info;
 }
 
 extern "C" AGENTXX_PLUGIN_EXPORT int
-    agentxx_plugin_agent_create(const AgentxxHost* host, void** plugin_ctx) {
+    agentxx_plugin_agent_create(const AgentxxPluginHost* host, void** plugin_ctx) {
     PluginCtx* raw = nullptr;
     return agentxx::plugin_guard::guardCall(
         [&raw](const char* msg) noexcept {

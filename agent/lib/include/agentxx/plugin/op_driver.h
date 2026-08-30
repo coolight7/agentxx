@@ -35,8 +35,8 @@ namespace agentxx {
 namespace plugin {
 
 struct OpDrive {
-    std::function<void*(const AgentxxOpNotify* notify, char** err)> start;
-    std::function<void(void* op)>                                   cancel;
+    std::function<void*(const AgentxxPluginOperatorNotify* notify, char** err)> start;
+    std::function<void(void* op)>                                               cancel;
 };
 
 using OpErrorCode = neograph_asio_error_code;
@@ -79,7 +79,7 @@ using OpGuardPtr = std::shared_ptr<PluginInstance::InflightGuard>;
 
 struct OpCore : std::enable_shared_from_this<OpCore> {
     std::atomic<bool> notified{false};
-    std::atomic<int>  status{AGENTXX_OP_OK};
+    std::atomic<int>  status{AGENTXX_PLUGIN_OPERATOR_OK};
     std::string       payload;
     std::atomic<bool> cancelRequested{false};
     std::atomic<bool> cancelSent{false};
@@ -87,7 +87,7 @@ struct OpCore : std::enable_shared_from_this<OpCore> {
     asio::experimental::concurrent_channel<void(OpErrorCode)> chan;
     asio::cancellation_signal                                 doneSignal;
     OpGuardPtr                                                guard;
-    AgentxxOpCb                                               cb   = nullptr;
+    AgentxxPluginOperatorCallback                             cb   = nullptr;
     void*                                                     cbUd = nullptr;
 
     explicit OpCore(const asio::any_io_executor& ex, OpGuardPtr g = nullptr) :
@@ -138,8 +138,8 @@ struct OpCore : std::enable_shared_from_this<OpCore> {
         }
     }
 
-    AgentxxOpNotify notify() {
-        return AgentxxOpNotify{&OpCore::onDone, this};
+    AgentxxPluginOperatorNotify notify() {
+        return AgentxxPluginOperatorNotify{&OpCore::onDone, this};
     }
 };
 
@@ -205,10 +205,10 @@ inline asio::awaitable<std::string> awaitPluginOp(PluginOpAwaitArgs args) {
         }
     }
 
-    char*           err        = nullptr;
-    void*           op         = nullptr;
-    bool            startThrew = false;
-    AgentxxOpNotify ntf        = core->notify();
+    char*                       err        = nullptr;
+    void*                       op         = nullptr;
+    bool                        startThrew = false;
+    AgentxxPluginOperatorNotify ntf        = core->notify();
     wd.enter("start");
     try {
         op = args.drive.start(&ntf, &err);
@@ -297,10 +297,10 @@ inline asio::awaitable<std::string> awaitPluginOp(PluginOpAwaitArgs args) {
     guard.reset();
     int         st      = core->status.load(std::memory_order_acquire);
     std::string payload = std::move(core->payload);
-    if (st == AGENTXX_OP_CANCELLED) {
+    if (st == AGENTXX_PLUGIN_OPERATOR_CANCELLED) {
         throw neograph::graph::CancelledException(fmt::format("plugin op `{}` cancelled", label));
     }
-    if (st != AGENTXX_OP_OK) {
+    if (st != AGENTXX_PLUGIN_OPERATOR_OK) {
         throw std::runtime_error(
             payload.empty() ? fmt::format("plugin op `{}` failed", label) : payload
         );

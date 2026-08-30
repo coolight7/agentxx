@@ -14,7 +14,7 @@
 namespace {
 
 struct ShellCtx {
-    const AgentxxHost*           host = nullptr;
+    const AgentxxPluginHost*     host = nullptr;
     agentxx::plugin::AgentIfaces iface{};
     std::string                  name;
     std::string                  dir;
@@ -49,9 +49,10 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_agent_g
         [&]() -> const AgentxxPluginInfo* {
             static const AgentxxPluginInfo info{
                 AGENTXX_PLUGIN_API_VERSION,
-                AGENTXX_SV("example_js"),
-                AGENTXX_SV("1.0.0"),
-                AGENTXX_SV("Example JS plugin (C++ shell + JS via interpreter.js capability)"),
+                AGENTXX_PLUGIN_SV("example_js"),
+                AGENTXX_PLUGIN_SV("1.0.0"),
+                AGENTXX_PLUGIN_SV("Example JS plugin (C++ shell + JS via interpreter.js capability)"
+                ),
             };
             return &info;
         }
@@ -59,7 +60,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_agent_g
 }
 
 extern "C" AGENTXX_PLUGIN_EXPORT int
-    agentxx_plugin_agent_create(const AgentxxHost* host, void** plugin_ctx) {
+    agentxx_plugin_agent_create(const AgentxxPluginHost* host, void** plugin_ctx) {
     ShellCtx* raw = nullptr;
     return agentxx::plugin_guard::guardCall(
         [&raw](const char* msg) noexcept {
@@ -83,7 +84,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                 s_if.log->log(host, 4, agentxx_plugin_sv(msg.data(), msg.size()));
             };
 
-            if (!s_if.capabilities->has_capability(host, AGENTXX_SV("interpreter.js"))) {
+            if (!s_if.capabilities->has_capability(host, AGENTXX_PLUGIN_SV("interpreter.js"))) {
                 logE("example_js: interpreter.js capability not available");
                 return -1;
             }
@@ -97,7 +98,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                 char* v = s_if.json->json_get_string(
                     host,
                     agentxx_plugin_sv_cstr(info),
-                    AGENTXX_SV(key)
+                    AGENTXX_PLUGIN_SV(key)
                 );
                 if (!v) {
                     return {};
@@ -183,7 +184,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_agent_destroy(void* plugin_
                 delete ctx;
                 return;
             }
-            const AgentxxHost* host = ctx->host;
+            const AgentxxPluginHost* host = ctx->host;
             if (ctx->iface.capabilities && !ctx->name.empty() && ctx->iface.json) {
                 char* esc = ctx->iface.json->json_escape(
                     host,

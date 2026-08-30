@@ -63,9 +63,9 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_agent_g
         [&]() -> const AgentxxPluginInfo* {
             static const AgentxxPluginInfo info{
                 AGENTXX_PLUGIN_API_VERSION,
-                AGENTXX_SV("example_plugin"),
-                AGENTXX_SV("1.0.0"),
-                AGENTXX_SV("Example native plugin: echo tool, hook, event, capability"),
+                AGENTXX_PLUGIN_SV("example_plugin"),
+                AGENTXX_PLUGIN_SV("1.0.0"),
+                AGENTXX_PLUGIN_SV("Example native plugin: echo tool, hook, event, capability"),
             };
             return &info;
         }
@@ -99,7 +99,7 @@ static void on_client_hello(AgentxxPluginStringView event_json, void* ud) {
 /* ---------------- entry / unload ---------------- */
 
 extern "C" AGENTXX_PLUGIN_EXPORT int
-    agentxx_plugin_agent_create(const AgentxxHost* host, void** plugin_ctx) {
+    agentxx_plugin_agent_create(const AgentxxPluginHost* host, void** plugin_ctx) {
     AgentCtx* raw = nullptr;
     return agentxx::plugin_guard::guardCall(
         [&raw](const char* msg) noexcept {
@@ -173,25 +173,29 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
             if (ctx->iface.hooks && ctx->iface.hooks->register_hook) {
                 agentxx::kit::hook(
                     *ctx,
-                    AGENTXX_HOOK_AGENT_START,
-                    [](AgentCtx& c, AgentxxHookPoint, std::string_view) {
+                    AGENTXX_PLUGIN_HOOK_AGENT_START,
+                    [](AgentCtx& c, AgentxxPluginHookPoint, std::string_view) {
                         c.log.info("example hook: agent_start fired");
                     }
                 );
             }
 
             // 3. 事件订阅
-            ctx->iface.events->subscribe(host, AGENTXX_SV("demo.topic"), on_demo_event, ctx.get());
+            ctx->iface.events
+                ->subscribe(host, AGENTXX_PLUGIN_SV("demo.topic"), on_demo_event, ctx.get());
             ctx->iface.events->subscribe(
                 host,
-                AGENTXX_SV("client.example_plugin.hello"),
+                AGENTXX_PLUGIN_SV("client.example_plugin.hello"),
                 on_client_hello,
                 ctx.get()
             );
 
             // 4. 能力
             if (ctx->iface.capabilities && ctx->iface.capabilities->register_capability) {
-                ctx->iface.capabilities->register_capability(host, AGENTXX_SV("example.demo"));
+                ctx->iface.capabilities->register_capability(
+                    host,
+                    AGENTXX_PLUGIN_SV("example.demo")
+                );
             }
 
             // 5. 提示词读写
@@ -204,7 +208,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                     if (prompt.find("\"example_echo\"") == std::string::npos) {
                         const char* promptJson
                             = R"({"toolPrompt":{"example_echo":{"depict":"Echo the input arguments back as JSON (example plugin tool).","args":{}}}})";
-                        ctx->iface.prompt->set_prompt(host, AGENTXX_SV(promptJson));
+                        ctx->iface.prompt->set_prompt(host, AGENTXX_PLUGIN_SV(promptJson));
                     }
                 }
             }
@@ -230,16 +234,19 @@ extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_agent_destroy(void* plugin_
  * client 侧入口 (agentxx_client_*)
  * ===================================================================== */
 
-extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxClientPluginInfo* agentxx_plugin_client_get_info(void) {
+extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxClientPluginInfo* agentxx_plugin_client_get_info(void
+) {
     return agentxx::plugin_guard::guardCall(
         [](const char*) noexcept {},
         nullptr,
         [&]() -> const AgentxxClientPluginInfo* {
             static const AgentxxClientPluginInfo info{
                 AGENTXX_CLIENT_PLUGIN_API_VERSION,
-                AGENTXX_SV("example_plugin"),
-                AGENTXX_SV("1.0.0"),
-                AGENTXX_SV("Example client plugin: status item, panel, commands, event bridge"),
+                AGENTXX_PLUGIN_SV("example_plugin"),
+                AGENTXX_PLUGIN_SV("1.0.0"),
+                AGENTXX_PLUGIN_SV(
+                    "Example client plugin: status item, panel, commands, event bridge"
+                ),
             };
             return &info;
         }
@@ -268,7 +275,8 @@ static char* example_cmd_execute(void* ud, AgentxxPluginStringView args_json, ch
         }
         std::string suffix;
         if (ctx->iface.json && ctx->iface.json->json_get_string) {
-            char* text = ctx->iface.json->json_get_string(ctx->host, args_json, AGENTXX_SV("text"));
+            char* text
+                = ctx->iface.json->json_get_string(ctx->host, args_json, AGENTXX_PLUGIN_SV("text"));
             if (text) {
                 suffix = text;
                 ctx->host->vtable->free(text);
@@ -291,11 +299,11 @@ static char* example_toast_execute(void* ud, AgentxxPluginStringView args_json, 
         if (!ctx || !ctx->host) {
             return nullptr;
         }
-        char* argText
-            = ctx->iface.json
-                  ? ctx->iface.json->json_get_string(ctx->host, args_json, AGENTXX_SV("text"))
-                  : nullptr;
-        std::string text = argText && *argText ? argText : "toast from example plugin";
+        char*       argText = ctx->iface.json
+                                  ? ctx->iface.json
+                                  ->json_get_string(ctx->host, args_json, AGENTXX_PLUGIN_SV("text"))
+                                  : nullptr;
+        std::string text    = argText && *argText ? argText : "toast from example plugin";
         if (argText) {
             ctx->host->vtable->free(argText);
         }
@@ -316,13 +324,13 @@ static void on_client_ready(AgentxxPluginStringView payload_json, void* ud) {
             return;
         }
         if (ctx->iface.log && ctx->iface.log->log) {
-            ctx->iface.log->log(ctx->host, 2, AGENTXX_SV("client example: ready"));
+            ctx->iface.log->log(ctx->host, 2, AGENTXX_PLUGIN_SV("client example: ready"));
         }
         if (ctx->iface.wire && ctx->iface.wire->send_plugin_data) {
             ctx->iface.wire->send_plugin_data(
                 ctx->host,
-                AGENTXX_SV("hello"),
-                AGENTXX_SV(R"({"from":"client-example"})")
+                AGENTXX_PLUGIN_SV("hello"),
+                AGENTXX_PLUGIN_SV(R"({"from":"client-example"})")
             );
         }
     });
@@ -353,7 +361,11 @@ static void on_client_turn_end(AgentxxPluginStringView payload_json, void* ud) {
                 R"({{"items":[{{"kind":"text","text":{}}},{{"kind":"text","role":"hint","text":"Example Info section is live"}}]}})",
                 clientJsonEscape(*ctx, fmt::format("Turns: {}", ctx->turn_count))
             );
-            ctx->ui->update_info_section(ctx->host, ctx->info_section, AGENTXX_SV(json.c_str()));
+            ctx->ui->update_info_section(
+                ctx->host,
+                ctx->info_section,
+                AGENTXX_PLUGIN_SV(json.c_str())
+            );
         }
     });
 }
@@ -366,9 +378,12 @@ static void on_client_plugin_data(AgentxxPluginStringView payload_json, void* ud
     if (!ctx->iface.json || !ctx->iface.json->json_get_string) {
         return;
     }
-    char* plugin = ctx->iface.json->json_get_string(ctx->host, payload_json, AGENTXX_SV("plugin"));
-    char* event  = ctx->iface.json->json_get_string(ctx->host, payload_json, AGENTXX_SV("event"));
-    char* data   = ctx->iface.json->json_get_string(ctx->host, payload_json, AGENTXX_SV("data"));
+    char* plugin
+        = ctx->iface.json->json_get_string(ctx->host, payload_json, AGENTXX_PLUGIN_SV("plugin"));
+    char* event
+        = ctx->iface.json->json_get_string(ctx->host, payload_json, AGENTXX_PLUGIN_SV("event"));
+    char* data
+        = ctx->iface.json->json_get_string(ctx->host, payload_json, AGENTXX_PLUGIN_SV("data"));
     agentxx::plugin_guard::guardCallVoid(clientGuardLogger(ctx), [&] {
         std::string line = fmt::format("{}.{}", plugin ? plugin : "?", event ? event : "?");
         if (data && *data) {
@@ -379,7 +394,7 @@ static void on_client_plugin_data(AgentxxPluginStringView payload_json, void* ud
             clientJsonEscape(*ctx, line)
         );
         if (ctx->ui && ctx->ui->update_panel) {
-            ctx->ui->update_panel(ctx->host, ctx->panel, AGENTXX_SV(json.c_str()));
+            ctx->ui->update_panel(ctx->host, ctx->panel, AGENTXX_PLUGIN_SV(json.c_str()));
         }
     });
     if (plugin) {
@@ -413,28 +428,27 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
 
             ctx->status_item = ctx->ui && ctx->ui->register_status_item
                                    ? ctx->ui->register_status_item(
-                                         host,
-                                         AGENTXX_SV("example_plugin.turns"),
-                                         AGENTXX_SV(R"({"text":"turns: 0"})"),
-                                         0,
-                                         10
-                                     )
+                                       host,
+                                       AGENTXX_PLUGIN_SV("example_plugin.turns"),
+                                       AGENTXX_PLUGIN_SV(R"({"text":"turns: 0"})"),
+                                       0,
+                                       10
+                                   )
                                    : nullptr;
 
-            ctx->panel = ctx->ui && ctx->ui->register_panel
-                             ? ctx->ui->register_panel(
-                                   host,
-                                   AGENTXX_SV("example_plugin.panel"),
-                                   AGENTXX_SV(R"({"title":"Example"})")
-                               )
-                             : nullptr;
+            ctx->panel = ctx->ui && ctx->ui->register_panel ? ctx->ui->register_panel(
+                             host,
+                             AGENTXX_PLUGIN_SV("example_plugin.panel"),
+                             AGENTXX_PLUGIN_SV(R"({"title":"Example"})")
+                         )
+                                                            : nullptr;
 
             ctx->info_section = ctx->ui && ctx->ui->register_info_section
                                     ? ctx->ui->register_info_section(
-                                          host,
-                                          AGENTXX_SV("example_plugin.info"),
-                                          AGENTXX_SV(R"({"title":"Example Info"})")
-                                      )
+                                        host,
+                                        AGENTXX_PLUGIN_SV("example_plugin.info"),
+                                        AGENTXX_PLUGIN_SV(R"({"title":"Example Info"})")
+                                    )
                                     : nullptr;
 
             if (!ctx->ui || !ctx->ui->register_command) {
@@ -442,8 +456,8 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
             }
             if (ctx->ui->register_command(
                     host,
-                    AGENTXX_SV("example"),
-                    AGENTXX_SV("Send a message from the example plugin"),
+                    AGENTXX_PLUGIN_SV("example"),
+                    AGENTXX_PLUGIN_SV("Send a message from the example plugin"),
                     example_cmd_execute,
                     ctx.get()
                 )
@@ -452,8 +466,8 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
             }
             if (ctx->ui->register_command(
                     host,
-                    AGENTXX_SV("example_toast"),
-                    AGENTXX_SV("Show a toast from the example plugin"),
+                    AGENTXX_PLUGIN_SV("example_toast"),
+                    AGENTXX_PLUGIN_SV("Show a toast from the example plugin"),
                     example_toast_execute,
                     ctx.get()
                 )
@@ -486,7 +500,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
             }
 
             if (ctx->iface.log && ctx->iface.log->log) {
-                ctx->iface.log->log(host, 2, AGENTXX_SV("example client plugin loaded"));
+                ctx->iface.log->log(host, 2, AGENTXX_PLUGIN_SV("example client plugin loaded"));
             }
             *plugin_ctx = ctx.release();
             return 0;
@@ -502,8 +516,8 @@ extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_client_destroy(void* plugin
             return;
         }
         if (ctx->ui && ctx->ui->unregister_command) {
-            ctx->ui->unregister_command(ctx->host, AGENTXX_SV("example"));
-            ctx->ui->unregister_command(ctx->host, AGENTXX_SV("example_toast"));
+            ctx->ui->unregister_command(ctx->host, AGENTXX_PLUGIN_SV("example"));
+            ctx->ui->unregister_command(ctx->host, AGENTXX_PLUGIN_SV("example_toast"));
         }
         if (ctx->status_item && ctx->ui && ctx->ui->unregister_status_item) {
             ctx->ui->unregister_status_item(ctx->host, ctx->status_item);
@@ -518,7 +532,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_client_destroy(void* plugin
             ctx->info_section = nullptr;
         }
         if (ctx->iface.log && ctx->iface.log->log) {
-            ctx->iface.log->log(ctx->host, 2, AGENTXX_SV("example client plugin unloaded"));
+            ctx->iface.log->log(ctx->host, 2, AGENTXX_PLUGIN_SV("example client plugin unloaded"));
         }
         delete ctx;
     });

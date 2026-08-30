@@ -436,8 +436,8 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         XX_TEST_EXPECT_TRUE(wire != nullptr && wire->send_plugin_data != nullptr);
         int rc = wire ? wire->send_plugin_data(
                      &inst->host,
-                     AGENTXX_SV("rebuild"),
-                     AGENTXX_SV(R"({"x":1})")
+                     AGENTXX_PLUGIN_SV("rebuild"),
+                     AGENTXX_PLUGIN_SV(R"({"x":1})")
                  )
                       : -1;
         XX_TEST_EXPECT_EQ(rc, 0);
@@ -555,9 +555,9 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         }
 
         // 8.1 多次订阅 (1→2→4 扩容) + 逐个退订
-        std::atomic<int>     hits{0};
-        AgentxxSubscription* subs[4] = {};
-        auto                 subFn   = +[](AgentxxPluginStringView, void* ud) {
+        std::atomic<int>           hits{0};
+        AgentxxPluginSubscription* subs[4] = {};
+        auto                       subFn   = +[](AgentxxPluginStringView, void* ud) {
             ++(*static_cast<std::atomic<int>*>(ud));
         };
         const auto events8 = agentxx::plugin::ClientIfaces::query(&inst2->host).events;
@@ -584,7 +584,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             agentxx::plugin::ClientPluginInstance* inst   = nullptr;
             const AgentxxClientEventsIface*        events = nullptr;
             std::atomic<int>                       hits{0};
-            AgentxxSubscription*                   dynSub = nullptr;
+            AgentxxPluginSubscription*             dynSub = nullptr;
             void (*incFn)(AgentxxPluginStringView, void*) = nullptr;
         };
 
@@ -606,7 +606,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 );
             }
         };
-        AgentxxSubscription* a
+        AgentxxPluginSubscription* a
             = st->events
                   ? st->events
                         ->subscribe(&inst2->host, AGENTXX_CLIENT_EVT_USER_INPUT, aFn, st.get())

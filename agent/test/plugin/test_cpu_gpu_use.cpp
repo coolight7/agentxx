@@ -165,7 +165,7 @@ asio::awaitable<TestResult>
             t.expires_after(std::chrono::milliseconds(2));
             co_await t.async_wait(asio::use_awaitable);
         }
-        XX_TEST_EXPECT_EQ(opStatus, AGENTXX_OP_OK);
+        XX_TEST_EXPECT_EQ(opStatus, AGENTXX_PLUGIN_OPERATOR_OK);
         if (!payload.empty()) {
             auto j = neograph::json::parse(payload);
             if (j.is_object()) {

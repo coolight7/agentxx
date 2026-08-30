@@ -497,9 +497,9 @@ asio::awaitable<TestResult> run_plugin_tests() {
             // (阻塞委托型同步垫片: execute 经 scheduler.offload 在宿主阻塞池
             // 线程执行, 与插件作者使用 agentxx_register_sync_tool 的真实路径一致)
             static AgentxxSyncToolSpec slowSpec;
-            slowSpec.name            = AGENTXX_SV("slow_timeout_tool");
-            slowSpec.description     = AGENTXX_SV("slow tool for unload race test");
-            slowSpec.parameters_json = AGENTXX_SV("{}");
+            slowSpec.name            = AGENTXX_PLUGIN_SV("slow_timeout_tool");
+            slowSpec.description     = AGENTXX_PLUGIN_SV("slow tool for unload race test");
+            slowSpec.parameters_json = AGENTXX_PLUGIN_SV("{}");
             // 阻塞委托型 execute: 在宿主阻塞池线程睡 600ms 后返回结果
             // (模拟不可中断的慢任务, 忽略 cancel_flag)
             slowSpec.execute = +[](void*,
@@ -779,20 +779,20 @@ asio::awaitable<TestResult> run_plugin_tests() {
             XX_TEST_EXPECT_TRUE(ev30 != nullptr && ev30->publish != nullptr);
             XX_TEST_EXPECT_EQ(
                 ev30 ? ev30->publish(
-                           &inst30->host,
-                           AGENTXX_SV("demo.topic"),
-                           AGENTXX_SV(R"({"k":"v"})")
-                       )
+                    &inst30->host,
+                    AGENTXX_PLUGIN_SV("demo.topic"),
+                    AGENTXX_PLUGIN_SV(R"({"k":"v"})")
+                )
                      : -1,
                 0
             );
             ctx->pluginManager->disable("example_plugin");
             // 禁用状态: 接口表 publish 拒绝 (返回非 0)
             int rc = ev30 ? ev30->publish(
-                                &inst30->host,
-                                AGENTXX_SV("demo.topic"),
-                                AGENTXX_SV(R"({"k":"v"})")
-                            )
+                         &inst30->host,
+                         AGENTXX_PLUGIN_SV("demo.topic"),
+                         AGENTXX_PLUGIN_SV(R"({"k":"v"})")
+                     )
                           : -1;
             XX_TEST_EXPECT_TRUE(rc != 0);
             co_await ctx->pluginManager->unloadAsync("example_plugin");
@@ -834,7 +834,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
             while (!cbDone) {
                 co_await sleepMs(2);
             }
-            XX_TEST_EXPECT_EQ(cbStatus, AGENTXX_OP_OK);
+            XX_TEST_EXPECT_EQ(cbStatus, AGENTXX_PLUGIN_OPERATOR_OK);
             XX_TEST_EXPECT_TRUE(cbPayload.find("k") != std::string::npos);
 
             // 不存在的工具: 装配失败返回 NULL 并带错误
@@ -857,21 +857,21 @@ asio::awaitable<TestResult> run_plugin_tests() {
 
         // 31.2 异步工具两件套: 经 notify.done 上报完成
         {
-            static AgentxxToolSpec asyncSpec;
-            asyncSpec.name            = AGENTXX_SV("async_notify_tool");
-            asyncSpec.description     = AGENTXX_SV("async tool for notify test");
-            asyncSpec.parameters_json = AGENTXX_SV("{}");
+            static AgentxxPluginToolSpec asyncSpec;
+            asyncSpec.name            = AGENTXX_PLUGIN_SV("async_notify_tool");
+            asyncSpec.description     = AGENTXX_PLUGIN_SV("async tool for notify test");
+            asyncSpec.parameters_json = AGENTXX_PLUGIN_SV("{}");
             asyncSpec.execute_start   = +[](void*,
                                           AgentxxPluginStringView,
                                           AgentxxPluginStringView,
                                           AgentxxPluginStringView,
-                                          const AgentxxOpNotify* notify,
+                                          const AgentxxPluginOperatorNotify* notify,
                                           char**) -> void* {
                 char* p = static_cast<char*>(::malloc(3));
                 p[0]    = '{';
                 p[1]    = '}';
                 p[2]    = '\0';
-                notify->done(notify->host_ud, AGENTXX_OP_OK, p);
+                notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, p);
                 return nullptr;
             };
             XX_TEST_EXPECT_EQ(ctx->pluginManager->registerTool(inst31.get(), &asyncSpec), 0);
@@ -890,30 +890,30 @@ asio::awaitable<TestResult> run_plugin_tests() {
         //      插件上报 CANCELLED → 工具协程收到 CancelledException
         {
             struct CancelOp {
-                AgentxxOpNotify notify;
+                AgentxxPluginOperatorNotify notify;
             };
 
-            static bool s_cancelCalled        = false;
-            s_cancelCalled                    = false;
-            static CancelOp*       s_activeOp = nullptr;
-            static AgentxxToolSpec cSpec;
-            cSpec.name            = AGENTXX_SV("async_cancel_tool");
-            cSpec.description     = AGENTXX_SV("cancellable async tool for cancel test");
-            cSpec.parameters_json = AGENTXX_SV("{}");
+            static bool s_cancelCalled              = false;
+            s_cancelCalled                          = false;
+            static CancelOp*             s_activeOp = nullptr;
+            static AgentxxPluginToolSpec cSpec;
+            cSpec.name            = AGENTXX_PLUGIN_SV("async_cancel_tool");
+            cSpec.description     = AGENTXX_PLUGIN_SV("cancellable async tool for cancel test");
+            cSpec.parameters_json = AGENTXX_PLUGIN_SV("{}");
             cSpec.execute_start   = +[](void*,
                                       AgentxxPluginStringView,
                                       AgentxxPluginStringView,
                                       AgentxxPluginStringView,
-                                      const AgentxxOpNotify* notify,
+                                      const AgentxxPluginOperatorNotify* notify,
                                       char**) -> void* {
-                s_activeOp = new CancelOp{notify ? *notify : AgentxxOpNotify{}};
+                s_activeOp = new CancelOp{notify ? *notify : AgentxxPluginOperatorNotify{}};
                 return s_activeOp;
             };
             cSpec.execute_cancel = +[](void*, void* op) {
                 s_cancelCalled = true;
                 auto* o        = static_cast<CancelOp*>(op);
                 if (o && o->notify.done) {
-                    o->notify.done(o->notify.host_ud, AGENTXX_OP_CANCELLED, nullptr);
+                    o->notify.done(o->notify.host_ud, AGENTXX_PLUGIN_OPERATOR_CANCELLED, nullptr);
                 }
                 delete o;
                 s_activeOp = nullptr;
@@ -962,15 +962,16 @@ asio::awaitable<TestResult> run_plugin_tests() {
 
         // 31.4 异常守卫: start() 违约抛 C++ 异常 → 宿主转失败终态 (不终止进程)
         {
-            static AgentxxToolSpec throwSpec;
-            throwSpec.name        = AGENTXX_SV("throwing_start_tool");
-            throwSpec.description = AGENTXX_SV("tool whose start() throws (contract violation)");
-            throwSpec.parameters_json = AGENTXX_SV("{}");
+            static AgentxxPluginToolSpec throwSpec;
+            throwSpec.name = AGENTXX_PLUGIN_SV("throwing_start_tool");
+            throwSpec.description
+                = AGENTXX_PLUGIN_SV("tool whose start() throws (contract violation)");
+            throwSpec.parameters_json = AGENTXX_PLUGIN_SV("{}");
             throwSpec.execute_start   = +[](void*,
                                           AgentxxPluginStringView,
                                           AgentxxPluginStringView,
                                           AgentxxPluginStringView,
-                                          const AgentxxOpNotify*,
+                                          const AgentxxPluginOperatorNotify*,
                                           char**) -> void* {
                 throw std::runtime_error("boom from plugin start");
             };
@@ -996,15 +997,16 @@ asio::awaitable<TestResult> run_plugin_tests() {
 
         // 31.5 违约检测: start() 返回 NULL 且未 done 且无 error → 宿主按协议违约合成失败
         {
-            static AgentxxToolSpec nullSpec;
-            nullSpec.name            = AGENTXX_SV("null_start_tool");
-            nullSpec.description     = AGENTXX_SV("tool whose start() returns NULL without done");
-            nullSpec.parameters_json = AGENTXX_SV("{}");
+            static AgentxxPluginToolSpec nullSpec;
+            nullSpec.name = AGENTXX_PLUGIN_SV("null_start_tool");
+            nullSpec.description
+                = AGENTXX_PLUGIN_SV("tool whose start() returns NULL without done");
+            nullSpec.parameters_json = AGENTXX_PLUGIN_SV("{}");
             nullSpec.execute_start   = +[](void*,
                                          AgentxxPluginStringView,
                                          AgentxxPluginStringView,
                                          AgentxxPluginStringView,
-                                         const AgentxxOpNotify*,
+                                         const AgentxxPluginOperatorNotify*,
                                          char**) -> void* {
                 return nullptr; ///< 违约: 未 call notify->done 且未设 error_out
             };
@@ -1131,7 +1133,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
                               std::chrono::steady_clock::now() - t0
                 )
                               .count();
-                XX_TEST_EXPECT_EQ(ares.status, AGENTXX_OP_OK);
+                XX_TEST_EXPECT_EQ(ares.status, AGENTXX_PLUGIN_OPERATOR_OK);
                 XX_TEST_EXPECT_TRUE(ares.payload != nullptr);
                 if (ares.payload) {
                     XX_TEST_EXPECT_TRUE(
@@ -1173,7 +1175,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
                               std::chrono::steady_clock::now() - t0
                 )
                               .count();
-                XX_TEST_EXPECT_EQ(ares.status, AGENTXX_OP_OK);
+                XX_TEST_EXPECT_EQ(ares.status, AGENTXX_PLUGIN_OPERATOR_OK);
                 XX_TEST_EXPECT_TRUE(ares.payload != nullptr);
                 if (ares.payload) {
                     XX_TEST_EXPECT_TRUE(
@@ -1213,7 +1215,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
                     t.expires_after(std::chrono::milliseconds(10));
                     co_await t.async_wait(asio::use_awaitable);
                 }
-                XX_TEST_EXPECT_EQ(ares.status, AGENTXX_OP_OK);
+                XX_TEST_EXPECT_EQ(ares.status, AGENTXX_PLUGIN_OPERATOR_OK);
                 XX_TEST_EXPECT_TRUE(ares.payload != nullptr);
                 if (ares.payload) {
                     XX_TEST_EXPECT_TRUE(

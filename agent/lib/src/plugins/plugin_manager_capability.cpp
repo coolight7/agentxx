@@ -41,11 +41,11 @@ static void setErrOut(PluginInstance* caller, char** error_out, const std::strin
 // =====================================================================
 
 bool CapabilityRegistry::registerCapability(
-    std::string_view  name,
-    std::string_view  provider,
-    AgentxxCapStartFn start,
-    AgentxxOpCancelFn cancel,
-    void*             ctx
+    std::string_view                     name,
+    std::string_view                     provider,
+    AgentxxPluginCapabilityStartFunction start,
+    AgentxxPluginOperatorCancelFunction  cancel,
+    void*                                ctx
 ) {
     if (name.empty()) {
         return false;
@@ -167,11 +167,11 @@ int PluginManager::hasCapability(const char* capability) const {
 }
 
 int PluginManager::registerCapabilityEx(
-    PluginInstance*   inst,
-    const char*       capability,
-    AgentxxCapStartFn start,
-    AgentxxOpCancelFn cancel,
-    void*             ctx
+    PluginInstance*                      inst,
+    const char*                          capability,
+    AgentxxPluginCapabilityStartFunction start,
+    AgentxxPluginOperatorCancelFunction  cancel,
+    void*                                ctx
 ) {
     if (!inst || !capability || !*capability || !start) {
         return -1;
@@ -234,9 +234,11 @@ static bool buildCapabilityDrive(
     auto capStr     = std::string{method};
     auto argStr     = (args_json && *args_json) ? std::string{args_json} : std::string{"{}"};
     auto weakCaller = caller ? caller->self : std::weak_ptr<PluginInstance>{};
-    drive.start
-        = [entry, capStr, argStr, weakCaller](const AgentxxOpNotify* notify, char** e) -> void* {
-        const AgentxxHost* callerHost = nullptr;
+    drive.start     = [entry,
+                   capStr,
+                   argStr,
+                   weakCaller](const AgentxxPluginOperatorNotify* notify, char** e) -> void* {
+        const AgentxxPluginHost* callerHost = nullptr;
         if (auto c = weakCaller.lock()) {
             callerHost = &c->host;
         }
@@ -257,14 +259,14 @@ static bool buildCapabilityDrive(
     return true;
 }
 
-AgentxxOpHandle* PluginManager::callToolAsync(
-    PluginInstance* caller,
-    const char*     name,
-    const char*     args_json,
-    const char*     thread_id,
-    AgentxxOpCb     cb,
-    void*           ud,
-    char**          error_out
+AgentxxPluginOperatorHandle* PluginManager::callToolAsync(
+    PluginInstance*               caller,
+    const char*                   name,
+    const char*                   args_json,
+    const char*                   thread_id,
+    AgentxxPluginOperatorCallback cb,
+    void*                         ud,
+    char**                        error_out
 ) {
     auto setErr = [&](const std::string& msg) {
         setErrOut(caller, error_out, msg);
@@ -319,7 +321,7 @@ AgentxxOpHandle* PluginManager::callToolAsync(
     auto        argsStr    = parsed.dump();
     std::string sessionId  = thread_id ? thread_id : "";
 
-    auto handle    = std::make_shared<AgentxxOpHandle>();
+    auto handle    = std::make_shared<AgentxxPluginOperatorHandle>();
     handle->caller = caller;
     if (caller) {
         caller->outstandingOps.push_back(handle);
@@ -331,7 +333,8 @@ AgentxxOpHandle* PluginManager::callToolAsync(
     core->cbUd = ud;
 
     plugin::OpDrive drive;
-    drive.start = [spec, argsStr, sessionId](const AgentxxOpNotify* notify, char** err) -> void* {
+    drive.start =
+        [spec, argsStr, sessionId](const AgentxxPluginOperatorNotify* notify, char** err) -> void* {
         return spec.execute_start(
             spec.user_data,
             agentxx_plugin_sv(argsStr.data(), argsStr.size()),
@@ -361,7 +364,7 @@ AgentxxOpHandle* PluginManager::callToolAsync(
         char* errMsg = startErr ? startErr : ::strdup("protocol violation");
         setErr(errMsg);
         if (cb) {
-            cb(ud, AGENTXX_OP_FAILED, errMsg);
+            cb(ud, AGENTXX_PLUGIN_OPERATOR_FAILED, errMsg);
         } else if (startErr) {
             ::free(startErr);
         }
@@ -398,8 +401,8 @@ AgentxxOpHandle* PluginManager::callToolAsync(
     {
         std::weak_ptr<PluginInstance> weakCaller
             = caller ? caller->self : std::weak_ptr<PluginInstance>{};
-        std::weak_ptr<AgentxxOpHandle> weakHandle = handle;
-        auto                           ex         = ioExecutor_;
+        std::weak_ptr<AgentxxPluginOperatorHandle> weakHandle = handle;
+        auto                                       ex         = ioExecutor_;
         asio::co_spawn(
             ex,
             [core, weakCaller, weakHandle]() -> asio::awaitable<void> {
@@ -422,7 +425,7 @@ AgentxxOpHandle* PluginManager::callToolAsync(
                     std::remove_if(
                         vec.begin(),
                         vec.end(),
-                        [&handleSp](const std::shared_ptr<AgentxxOpHandle>& h) {
+                        [&handleSp](const std::shared_ptr<AgentxxPluginOperatorHandle>& h) {
                             return h == handleSp;
                         }
                     ),
@@ -436,14 +439,14 @@ AgentxxOpHandle* PluginManager::callToolAsync(
     return handle.get();
 }
 
-AgentxxOpHandle* PluginManager::invokeCapabilityAsync(
-    PluginInstance* caller,
-    const char*     capability,
-    const char*     method,
-    const char*     args_json,
-    AgentxxOpCb     cb,
-    void*           ud,
-    char**          error_out
+AgentxxPluginOperatorHandle* PluginManager::invokeCapabilityAsync(
+    PluginInstance*               caller,
+    const char*                   capability,
+    const char*                   method,
+    const char*                   args_json,
+    AgentxxPluginOperatorCallback cb,
+    void*                         ud,
+    char**                        error_out
 ) {
     auto setErr = [&](const std::string& msg) {
         setErrOut(caller, error_out, msg);
@@ -462,7 +465,7 @@ AgentxxOpHandle* PluginManager::invokeCapabilityAsync(
     }
 
     auto providerInst = find(provider);
-    auto handle       = std::make_shared<AgentxxOpHandle>();
+    auto handle       = std::make_shared<AgentxxPluginOperatorHandle>();
     handle->caller    = caller;
     if (caller) {
         caller->outstandingOps.push_back(handle);
@@ -488,7 +491,7 @@ AgentxxOpHandle* PluginManager::invokeCapabilityAsync(
         char* errMsg = startErr ? startErr : ::strdup("protocol violation");
         setErr(errMsg);
         if (cb) {
-            cb(ud, AGENTXX_OP_FAILED, errMsg);
+            cb(ud, AGENTXX_PLUGIN_OPERATOR_FAILED, errMsg);
         } else if (startErr) {
             ::free(startErr);
         }
@@ -523,8 +526,8 @@ AgentxxOpHandle* PluginManager::invokeCapabilityAsync(
     {
         std::weak_ptr<PluginInstance> weakCaller
             = caller ? caller->self : std::weak_ptr<PluginInstance>{};
-        std::weak_ptr<AgentxxOpHandle> weakHandle = handle;
-        auto                           ex         = ioExecutor_;
+        std::weak_ptr<AgentxxPluginOperatorHandle> weakHandle = handle;
+        auto                                       ex         = ioExecutor_;
         asio::co_spawn(
             ex,
             [core, weakCaller, weakHandle]() -> asio::awaitable<void> {
@@ -546,7 +549,7 @@ AgentxxOpHandle* PluginManager::invokeCapabilityAsync(
                     std::remove_if(
                         vec.begin(),
                         vec.end(),
-                        [&handleSp](const std::shared_ptr<AgentxxOpHandle>& h) {
+                        [&handleSp](const std::shared_ptr<AgentxxPluginOperatorHandle>& h) {
                             return h == handleSp;
                         }
                     ),

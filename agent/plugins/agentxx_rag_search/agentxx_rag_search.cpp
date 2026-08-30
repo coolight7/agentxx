@@ -34,9 +34,10 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_agent_g
         [&]() -> const AgentxxPluginInfo* {
             static const AgentxxPluginInfo info{
                 AGENTXX_PLUGIN_API_VERSION,
-                AGENTXX_SV("agentxx_rag_search"),
-                AGENTXX_SV("1.0.0"),
-                AGENTXX_SV("RAG semantic search over configured docs paths (embedding based)"),
+                AGENTXX_PLUGIN_SV("agentxx_rag_search"),
+                AGENTXX_PLUGIN_SV("1.0.0"),
+                AGENTXX_PLUGIN_SV("RAG semantic search over configured docs paths (embedding based)"
+                ),
             };
             return &info;
         }
@@ -44,7 +45,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_agent_g
 }
 
 extern "C" AGENTXX_PLUGIN_EXPORT int
-    agentxx_plugin_agent_create(const AgentxxHost* host, void** plugin_ctx) {
+    agentxx_plugin_agent_create(const AgentxxPluginHost* host, void** plugin_ctx) {
     PluginCtx* raw = nullptr;
     return agentxx::plugin_guard::guardCall(
         [&raw](const char* msg) noexcept {

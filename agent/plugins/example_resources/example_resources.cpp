@@ -30,7 +30,7 @@
 // 多实例约定 (2026-08 API v1): 零可变全局; 实例状态 (host/iface) 存于
 // ResCtx, create 经 *plugin_ctx 交付宿主 / destroy 释放
 struct ResCtx {
-    const AgentxxHost*           host = nullptr;
+    const AgentxxPluginHost*     host = nullptr;
     agentxx::plugin::AgentIfaces iface{};
 
     auto logger() const noexcept {
@@ -48,7 +48,7 @@ struct ResCtx {
 
 /// 从 get_own_info JSON 中提取字段值 (host->alloc, 用完 free)
 static std::string ownInfoString(
-    const AgentxxHost*                  host,
+    const AgentxxPluginHost*            host,
     const agentxx::plugin::AgentIfaces& iface,
     const char*                         key
 ) {
@@ -92,10 +92,12 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_agent_g
         [&]() -> const AgentxxPluginInfo* {
             static const AgentxxPluginInfo info{
                 AGENTXX_PLUGIN_API_VERSION,
-                AGENTXX_SV("example_resources"),
-                AGENTXX_SV("1.0.0"),
-                AGENTXX_SV("Example plugin contributing skill/memory/mcp resources "
-                           "(declarative manifest + runtime agentxx.agent.resources interface)"),
+                AGENTXX_PLUGIN_SV("example_resources"),
+                AGENTXX_PLUGIN_SV("1.0.0"),
+                AGENTXX_PLUGIN_SV(
+                    "Example plugin contributing skill/memory/mcp resources "
+                    "(declarative manifest + runtime agentxx.agent.resources interface)"
+                ),
             };
             return &info;
         }
@@ -103,7 +105,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_agent_g
 }
 
 extern "C" AGENTXX_PLUGIN_EXPORT int
-    agentxx_plugin_agent_create(const AgentxxHost* host, void** plugin_ctx) {
+    agentxx_plugin_agent_create(const AgentxxPluginHost* host, void** plugin_ctx) {
     // C ABI 边界异常守卫: 异常返回 -1 (创建失败); 日志闭包捕获局部裸指针
     auto    ctx = std::make_unique<ResCtx>();
     ResCtx* raw = nullptr;
@@ -139,13 +141,13 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                     ctx->iface.log->log(
                         host,
                         3,
-                        AGENTXX_SV("[example_resources] register runtime skill dir failed")
+                        AGENTXX_PLUGIN_SV("[example_resources] register runtime skill dir failed")
                     );
                 } else {
                     ctx->iface.log->log(
                         host,
                         2,
-                        AGENTXX_SV(
+                        AGENTXX_PLUGIN_SV(
                             "[example_resources] runtime skill dir registered: skills_runtime/"
                         )
                     );
@@ -178,8 +180,8 @@ extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_agent_destroy(void* plugin_
                 delete ctx;
                 return;
             }
-            const AgentxxHost* host  = ctx->host;
-            const auto&        iface = ctx->iface;
+            const AgentxxPluginHost* host  = ctx->host;
+            const auto&              iface = ctx->iface;
             // 宿主 detachAll 已自动摘除本插件的全部资源 (skill/memory/mcp),
             // 此处显式反注册仅为 SDK 惯例示范 (幂等, 失败无副作用)
             char* info = iface.plugins->get_own_info(host);

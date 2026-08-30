@@ -19,7 +19,7 @@ inline void pluginLog(const PluginCtx* ctx, int level, const std::string& msg) {
     }
 }
 
-inline char* pluginStrdup(const AgentxxHost* host, const char* s) {
+inline char* pluginStrdup(const AgentxxPluginHost* host, const char* s) {
     if (!host || !s) {
         return nullptr;
     }

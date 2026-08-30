@@ -61,8 +61,8 @@ public:
 /* ==================== 实例级 Logger ==================== */
 
 struct Logger {
-    const AgentxxHost*     host     = nullptr;
-    const AgentxxLogIface* logIface = nullptr;
+    const AgentxxPluginHost*     host     = nullptr;
+    const AgentxxPluginLogIface* logIface = nullptr;
 
     void log(int level, std::string_view msg) const noexcept {
         if (host && logIface && logIface->log) {
@@ -95,8 +95,8 @@ struct Logger {
 
 struct OpCtl {
     std::shared_ptr<std::atomic<bool>> cancelFlag;
-    const AgentxxHost*                 host        = nullptr;
-    const AgentxxCancelIface*          cancelIface = nullptr;
+    const AgentxxPluginHost*           host        = nullptr;
+    const AgentxxPluginCancelIface*    cancelIface = nullptr;
     std::string                        threadId;
 
     bool cancelled() const noexcept {
@@ -139,18 +139,18 @@ void finishIfDone(std::coroutine_handle<Promise> h) {
     if (!h || !h.done()) {
         return;
     }
-    auto&              p           = h.promise();
-    AgentxxOpNotify    notify      = p.notify_;
-    const AgentxxHost* host        = p.host_;
-    int                status      = AGENTXX_OP_OK;
-    char*              payload_out = nullptr;
+    auto&                       p           = h.promise();
+    AgentxxPluginOperatorNotify notify      = p.notify_;
+    const AgentxxPluginHost*    host        = p.host_;
+    int                         status      = AGENTXX_PLUGIN_OPERATOR_OK;
+    char*                       payload_out = nullptr;
 
     if (p.has_exception()) {
-        status = AGENTXX_OP_FAILED;
+        status = AGENTXX_PLUGIN_OPERATOR_FAILED;
         try {
             std::rethrow_exception(p.exception());
         } catch (const CancelledException&) {
-            status = AGENTXX_OP_CANCELLED;
+            status = AGENTXX_PLUGIN_OPERATOR_CANCELLED;
         } catch (const std::exception& e) {
             payload_out = host && host->vtable && host->vtable->strdup
                               ? host->vtable->strdup(e.what())
@@ -180,8 +180,8 @@ template<typename T>
 struct PromiseBase {
     using value_type = T;
 
-    AgentxxOpNotify                    notify_{nullptr, nullptr};
-    const AgentxxHost*                 host_{nullptr};
+    AgentxxPluginOperatorNotify        notify_{nullptr, nullptr};
+    const AgentxxPluginHost*           host_{nullptr};
     std::shared_ptr<std::atomic<bool>> cancelFlag_{nullptr};
     std::function<void()>              outstandingCancel_{nullptr};
     std::exception_ptr                 exception_{nullptr};
@@ -324,13 +324,13 @@ struct Task<void> {
 /* ==================== PluginBase 实例上下文基类 ==================== */
 
 struct PluginBase {
-    const AgentxxHost*           host = nullptr;
+    const AgentxxPluginHost*     host = nullptr;
     agentxx::plugin::AgentIfaces iface{};
     Logger                       log{};
 
     virtual ~PluginBase() = default;
 
-    void init(const AgentxxHost* in_host) {
+    void init(const AgentxxPluginHost* in_host) {
         host = in_host;
         if (host) {
             iface = agentxx::plugin::AgentIfaces::query(host);
@@ -477,10 +477,10 @@ struct PluginBase {
 namespace detail {
 
 struct SleepAwaiter {
-    const AgentxxHost*           host;
-    const AgentxxSchedulerIface* sched;
-    long                         ms;
-    void*                        timer = nullptr;
+    const AgentxxPluginHost*           host;
+    const AgentxxPluginSchedulerIface* sched;
+    long                               ms;
+    void*                              timer = nullptr;
 
     bool await_ready() const noexcept {
         return ms <= 0 || !sched || !sched->sleep;
@@ -516,8 +516,8 @@ struct SleepAwaiter {
 };
 
 struct YieldAwaiter {
-    const AgentxxHost*           host;
-    const AgentxxSchedulerIface* sched;
+    const AgentxxPluginHost*           host;
+    const AgentxxPluginSchedulerIface* sched;
 
     bool await_ready() const noexcept {
         return !sched || !sched->post_to_io;
@@ -548,12 +548,12 @@ template<typename WorkFn>
 struct OffloadAwaiter {
     using ResultType = std::decay_t<std::invoke_result_t<WorkFn, volatile int*>>;
 
-    const AgentxxHost*           host;
-    const AgentxxSchedulerIface* sched;
-    WorkFn                       work;
-    volatile int                 cancelFlag = 0;
-    std::exception_ptr           exPtr      = nullptr;
-    std::optional<ResultType>    result;
+    const AgentxxPluginHost*           host;
+    const AgentxxPluginSchedulerIface* sched;
+    WorkFn                             work;
+    volatile int                       cancelFlag = 0;
+    std::exception_ptr                 exPtr      = nullptr;
+    std::optional<ResultType>          result;
 
     bool await_ready() const noexcept {
         return !sched || !sched->offload;
@@ -615,19 +615,19 @@ struct OffloadAwaiter {
 };
 
 struct CallToolState {
-    const AgentxxHost*       host  = nullptr;
-    const AgentxxToolsIface* tools = nullptr;
-    std::string              name;
-    std::string              argsJson;
-    std::string              threadId;
-    AgentxxOpHandle*         opHandle = nullptr;
-    int                      status   = AGENTXX_OP_OK;
-    std::string              payload;
-    std::string              startError;
-    std::atomic<bool>        suspended{false};
-    std::atomic<bool>        callbackFired{false};
-    void*                    coroAddr            = nullptr;
-    void (*schedPost)(const AgentxxHost*, void*) = nullptr;
+    const AgentxxPluginHost*       host  = nullptr;
+    const AgentxxPluginToolsIface* tools = nullptr;
+    std::string                    name;
+    std::string                    argsJson;
+    std::string                    threadId;
+    AgentxxPluginOperatorHandle*   opHandle = nullptr;
+    int                            status   = AGENTXX_PLUGIN_OPERATOR_OK;
+    std::string                    payload;
+    std::string                    startError;
+    std::atomic<bool>              suspended{false};
+    std::atomic<bool>              callbackFired{false};
+    void*                          coroAddr            = nullptr;
+    void (*schedPost)(const AgentxxPluginHost*, void*) = nullptr;
     std::atomic<bool> destroyed{false};
 };
 
@@ -635,12 +635,12 @@ struct CallToolAwaiter {
     std::shared_ptr<CallToolState> st;
 
     CallToolAwaiter(
-        const AgentxxHost*       in_host,
-        const AgentxxToolsIface* in_tools,
-        std::string_view         in_name,
-        std::string_view         in_args,
-        std::string_view         in_tid,
-        void (*in_post)(const AgentxxHost*, void*) = nullptr
+        const AgentxxPluginHost*       in_host,
+        const AgentxxPluginToolsIface* in_tools,
+        std::string_view               in_name,
+        std::string_view               in_args,
+        std::string_view               in_tid,
+        void (*in_post)(const AgentxxPluginHost*, void*) = nullptr
     ) :
         st(std::make_shared<CallToolState>()) {
         st->host      = in_host;
@@ -747,10 +747,10 @@ struct CallToolAwaiter {
         if (!st->startError.empty()) {
             throw std::runtime_error(st->startError);
         }
-        if (st->status == AGENTXX_OP_CANCELLED) {
+        if (st->status == AGENTXX_PLUGIN_OPERATOR_CANCELLED) {
             throw CancelledException(fmt::format("tool `{}` cancelled", st->name));
         }
-        if (st->status != AGENTXX_OP_OK) {
+        if (st->status != AGENTXX_PLUGIN_OPERATOR_OK) {
             throw std::runtime_error(
                 st->payload.empty() ? fmt::format("tool `{}` failed", st->name) : st->payload
             );
@@ -760,19 +760,19 @@ struct CallToolAwaiter {
 };
 
 struct InvokeCapState {
-    const AgentxxHost*              host = nullptr;
-    const AgentxxCapabilitiesIface* caps = nullptr;
-    std::string                     capability;
-    std::string                     method;
-    std::string                     argsJson;
-    AgentxxOpHandle*                opHandle = nullptr;
-    int                             status   = AGENTXX_OP_OK;
-    std::string                     payload;
-    std::string                     startError;
-    std::atomic<bool>               suspended{false};
-    std::atomic<bool>               callbackFired{false};
-    void*                           coroAddr     = nullptr;
-    void (*schedPost)(const AgentxxHost*, void*) = nullptr;
+    const AgentxxPluginHost*              host = nullptr;
+    const AgentxxPluginCapabilitiesIface* caps = nullptr;
+    std::string                           capability;
+    std::string                           method;
+    std::string                           argsJson;
+    AgentxxPluginOperatorHandle*          opHandle = nullptr;
+    int                                   status   = AGENTXX_PLUGIN_OPERATOR_OK;
+    std::string                           payload;
+    std::string                           startError;
+    std::atomic<bool>                     suspended{false};
+    std::atomic<bool>                     callbackFired{false};
+    void*                                 coroAddr     = nullptr;
+    void (*schedPost)(const AgentxxPluginHost*, void*) = nullptr;
     std::atomic<bool> destroyed{false};
 };
 
@@ -780,12 +780,12 @@ struct InvokeCapAwaiter {
     std::shared_ptr<InvokeCapState> st;
 
     InvokeCapAwaiter(
-        const AgentxxHost*              in_host,
-        const AgentxxCapabilitiesIface* in_caps,
-        std::string_view                in_cap,
-        std::string_view                in_method,
-        std::string_view                in_args,
-        void (*in_post)(const AgentxxHost*, void*) = nullptr
+        const AgentxxPluginHost*              in_host,
+        const AgentxxPluginCapabilitiesIface* in_caps,
+        std::string_view                      in_cap,
+        std::string_view                      in_method,
+        std::string_view                      in_args,
+        void (*in_post)(const AgentxxPluginHost*, void*) = nullptr
     ) :
         st(std::make_shared<InvokeCapState>()) {
         st->host       = in_host;
@@ -888,10 +888,10 @@ struct InvokeCapAwaiter {
         if (!st->startError.empty()) {
             throw std::runtime_error(st->startError);
         }
-        if (st->status == AGENTXX_OP_CANCELLED) {
+        if (st->status == AGENTXX_PLUGIN_OPERATOR_CANCELLED) {
             throw CancelledException(fmt::format("cap `{}` cancelled", st->capability));
         }
-        if (st->status != AGENTXX_OP_OK) {
+        if (st->status != AGENTXX_PLUGIN_OPERATOR_OK) {
             throw std::runtime_error(
                 st->payload.empty() ? fmt::format("cap `{}` failed", st->capability) : st->payload
             );
@@ -934,7 +934,7 @@ inline detail::CallToolAwaiter call_tool(
         name,
         argsJson,
         threadId,
-        [](const AgentxxHost* h, void* addr) {
+        [](const AgentxxPluginHost* h, void* addr) {
             auto ifaces = agentxx::plugin::AgentIfaces::query(h);
             if (ifaces.scheduler && ifaces.scheduler->post_to_io) {
                 ifaces.scheduler->post_to_io(
@@ -963,7 +963,7 @@ inline detail::InvokeCapAwaiter invoke_cap(
         cap,
         method,
         argsJson,
-        [](const AgentxxHost* h, void* addr) {
+        [](const AgentxxPluginHost* h, void* addr) {
             auto ifaces = agentxx::plugin::AgentIfaces::query(h);
             if (ifaces.scheduler && ifaces.scheduler->post_to_io) {
                 ifaces.scheduler->post_to_io(
@@ -1096,7 +1096,7 @@ inline void tool(
         void*                              coroAddr = nullptr;
     };
 
-    AgentxxToolSpec spec{};
+    AgentxxPluginToolSpec spec{};
     spec.name = agentxx_plugin_sv(name.data(), name.size());
     spec.description
         = agentxx_plugin_sv(storage[storage.size() - 2].data(), storage[storage.size() - 2].size());
@@ -1105,12 +1105,12 @@ inline void tool(
     spec.default_timeout_ms = default_timeout_ms;
     spec.flags              = flags;
 
-    spec.execute_start = [](void*                   user_data,
-                            AgentxxPluginStringView args_json,
-                            AgentxxPluginStringView thread_id,
-                            AgentxxPluginStringView tool_call_id,
-                            const AgentxxOpNotify*  notify,
-                            char**                  error_out) -> void* {
+    spec.execute_start = [](void*                              user_data,
+                            AgentxxPluginStringView            args_json,
+                            AgentxxPluginStringView            thread_id,
+                            AgentxxPluginStringView            tool_call_id,
+                            const AgentxxPluginOperatorNotify* notify,
+                            char**                             error_out) -> void* {
         auto* shim = static_cast<ToolShim*>(user_data);
         (void)tool_call_id;
         (void)error_out;
@@ -1131,7 +1131,7 @@ inline void tool(
         auto h        = task.handle_;
         task.handle_  = nullptr;
         auto& p       = h.promise();
-        p.notify_     = notify ? *notify : AgentxxOpNotify{nullptr, nullptr};
+        p.notify_     = notify ? *notify : AgentxxPluginOperatorNotify{nullptr, nullptr};
         p.host_       = shim->ctx->host;
         p.cancelFlag_ = cancelFlag;
 
@@ -1196,7 +1196,7 @@ inline void fast_tool(
 
     auto shim = ctx.storeShim(std::make_unique<FastShim>(FastShim{&ctx, std::forward<SyncFn>(fn)}));
 
-    AgentxxToolSpec spec{};
+    AgentxxPluginToolSpec spec{};
     spec.name = agentxx_plugin_sv(name.data(), name.size());
     spec.description
         = agentxx_plugin_sv(storage[storage.size() - 2].data(), storage[storage.size() - 2].size());
@@ -1205,12 +1205,12 @@ inline void fast_tool(
     spec.default_timeout_ms = default_timeout_ms;
     spec.flags              = flags;
 
-    spec.execute_start = [](void*                   user_data,
-                            AgentxxPluginStringView args_json,
-                            AgentxxPluginStringView thread_id,
-                            AgentxxPluginStringView tool_call_id,
-                            const AgentxxOpNotify*  notify,
-                            char**                  error_out) -> void* {
+    spec.execute_start = [](void*                              user_data,
+                            AgentxxPluginStringView            args_json,
+                            AgentxxPluginStringView            thread_id,
+                            AgentxxPluginStringView            tool_call_id,
+                            const AgentxxPluginOperatorNotify* notify,
+                            char**                             error_out) -> void* {
         auto* shim = static_cast<FastShim*>(user_data);
         (void)tool_call_id;
         try {
@@ -1227,18 +1227,25 @@ inline void fast_tool(
 
             char* payload = shim->ctx->strdup(res.c_str());
             if (notify && notify->done) {
-                notify->done(notify->host_ud, AGENTXX_OP_OK, payload);
+                notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, payload);
             }
         } catch (const std::exception& e) {
             if (notify && notify->done) {
-                notify->done(notify->host_ud, AGENTXX_OP_FAILED, shim->ctx->strdup(e.what()));
+                notify->done(
+                    notify->host_ud,
+                    AGENTXX_PLUGIN_OPERATOR_FAILED,
+                    shim->ctx->strdup(e.what())
+                );
             } else if (error_out) {
                 *error_out = shim->ctx->strdup(e.what());
             }
         } catch (...) {
             if (notify && notify->done) {
-                notify
-                    ->done(notify->host_ud, AGENTXX_OP_FAILED, shim->ctx->strdup("unknown error"));
+                notify->done(
+                    notify->host_ud,
+                    AGENTXX_PLUGIN_OPERATOR_FAILED,
+                    shim->ctx->strdup("unknown error")
+                );
             } else if (error_out) {
                 *error_out = shim->ctx->strdup("unknown error in fast_tool");
             }
@@ -1280,16 +1287,16 @@ inline void blocking_tool(
         = ctx.storeShim(std::make_unique<BlockShim>(BlockShim{&ctx, std::forward<BlockFn>(fn)}));
 
     struct Job {
-        BlockShim*      shim;
-        AgentxxOpNotify notify;
-        std::string     args;
-        std::string     tid;
-        std::string     tcid;
+        BlockShim*                  shim;
+        AgentxxPluginOperatorNotify notify;
+        std::string                 args;
+        std::string                 tid;
+        std::string                 tcid;
         std::string workDir; ///< 预取的会话工作目录（io 线程解析，避免 worker 跨线程 ioCallSync）
         volatile int cancelFlag = 0;
     };
 
-    AgentxxToolSpec spec{};
+    AgentxxPluginToolSpec spec{};
     spec.name = agentxx_plugin_sv(name.data(), name.size());
     spec.description
         = agentxx_plugin_sv(storage[storage.size() - 2].data(), storage[storage.size() - 2].size());
@@ -1298,12 +1305,12 @@ inline void blocking_tool(
     spec.default_timeout_ms = default_timeout_ms;
     spec.flags              = flags;
 
-    spec.execute_start = [](void*                   user_data,
-                            AgentxxPluginStringView args_json,
-                            AgentxxPluginStringView thread_id,
-                            AgentxxPluginStringView tool_call_id,
-                            const AgentxxOpNotify*  notify,
-                            char**                  error_out) -> void* {
+    spec.execute_start = [](void*                              user_data,
+                            AgentxxPluginStringView            args_json,
+                            AgentxxPluginStringView            thread_id,
+                            AgentxxPluginStringView            tool_call_id,
+                            const AgentxxPluginOperatorNotify* notify,
+                            char**                             error_out) -> void* {
         auto* shim = static_cast<BlockShim*>(user_data);
         (void)error_out;
         std::string tidStr(thread_id.data ? thread_id.data : "", thread_id.size);
@@ -1316,7 +1323,7 @@ inline void blocking_tool(
         }
         auto* job = new Job{
             shim,
-            notify ? *notify : AgentxxOpNotify{nullptr, nullptr},
+            notify ? *notify : AgentxxPluginOperatorNotify{nullptr, nullptr},
             std::string(args_json.data ? args_json.data : "{}", args_json.size),
             std::move(tidStr),
             std::string(tool_call_id.data ? tool_call_id.data : "", tool_call_id.size),
@@ -1394,14 +1401,14 @@ inline void blocking_tool(
                 },
                 [](void* ud, void* res, char* err) {
                     auto* j       = static_cast<Job*>(ud);
-                    int   st      = AGENTXX_OP_OK;
+                    int   st      = AGENTXX_PLUGIN_OPERATOR_OK;
                     char* payload = static_cast<char*>(res);
 
                     if (err) {
-                        st      = AGENTXX_OP_FAILED;
+                        st      = AGENTXX_PLUGIN_OPERATOR_FAILED;
                         payload = err;
                     } else if (!payload) {
-                        st = AGENTXX_OP_CANCELLED;
+                        st = AGENTXX_PLUGIN_OPERATOR_CANCELLED;
                     }
 
                     if (j->notify.done) {
@@ -1430,7 +1437,7 @@ inline void blocking_tool(
 }
 
 template<typename Ctx, typename HookFn>
-inline void hook(Ctx& ctx, AgentxxHookPoint point, HookFn&& fn) {
+inline void hook(Ctx& ctx, AgentxxPluginHookPoint point, HookFn&& fn) {
     struct HookShim {
         Ctx*                 ctx = nullptr;
         std::decay_t<HookFn> fn;
@@ -1438,15 +1445,15 @@ inline void hook(Ctx& ctx, AgentxxHookPoint point, HookFn&& fn) {
 
     auto shim = ctx.storeShim(std::make_unique<HookShim>(HookShim{&ctx, std::forward<HookFn>(fn)}));
 
-    AgentxxHookSpec spec{};
+    AgentxxPluginHookSpec spec{};
     spec.point     = point;
     spec.user_data = shim;
 
-    spec.hook_start = [](void*                   user_data,
-                         AgentxxHookPoint        pt,
-                         AgentxxPluginStringView node_input_json,
-                         const AgentxxOpNotify*  notify,
-                         char**                  error_out) -> void* {
+    spec.hook_start = [](void*                              user_data,
+                         AgentxxPluginHookPoint             pt,
+                         AgentxxPluginStringView            node_input_json,
+                         const AgentxxPluginOperatorNotify* notify,
+                         char**                             error_out) -> void* {
         auto* shim = static_cast<HookShim*>(user_data);
         (void)error_out;
         try {
@@ -1454,7 +1461,11 @@ inline void hook(Ctx& ctx, AgentxxHookPoint point, HookFn&& fn) {
                 node_input_json.data ? node_input_json.data : "{}",
                 node_input_json.size
             );
-            if constexpr (std::is_invocable_v<HookFn, Ctx&, AgentxxHookPoint, std::string_view>) {
+            if constexpr (std::is_invocable_v<
+                              HookFn,
+                              Ctx&,
+                              AgentxxPluginHookPoint,
+                              std::string_view>) {
                 shim->fn(*shim->ctx, pt, input);
             } else if constexpr (std::is_invocable_v<HookFn, Ctx&, std::string_view>) {
                 shim->fn(*shim->ctx, input);
@@ -1462,15 +1473,23 @@ inline void hook(Ctx& ctx, AgentxxHookPoint point, HookFn&& fn) {
                 shim->fn(input);
             }
             if (notify && notify->done) {
-                notify->done(notify->host_ud, AGENTXX_OP_OK, nullptr);
+                notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
             }
         } catch (const std::exception& e) {
             if (notify && notify->done) {
-                notify->done(notify->host_ud, AGENTXX_OP_FAILED, shim->ctx->strdup(e.what()));
+                notify->done(
+                    notify->host_ud,
+                    AGENTXX_PLUGIN_OPERATOR_FAILED,
+                    shim->ctx->strdup(e.what())
+                );
             }
         } catch (...) {
             if (notify && notify->done) {
-                notify->done(notify->host_ud, AGENTXX_OP_FAILED, shim->ctx->strdup("hook error"));
+                notify->done(
+                    notify->host_ud,
+                    AGENTXX_PLUGIN_OPERATOR_FAILED,
+                    shim->ctx->strdup("hook error")
+                );
             }
         }
         return nullptr;
@@ -1496,12 +1515,12 @@ inline void capability(Ctx& ctx, std::string_view capName, CapFn&& fn) {
         ctx.iface.capabilities->register_capability_ex(
             ctx.host,
             agentxx_plugin_sv(capName.data(), capName.size()),
-            [](void*                   user_data,
-               const AgentxxHost*      caller_host,
-               AgentxxPluginStringView method,
-               AgentxxPluginStringView args_json,
-               const AgentxxOpNotify*  notify,
-               char**                  error_out) -> void* {
+            [](void*                              user_data,
+               const AgentxxPluginHost*           caller_host,
+               AgentxxPluginStringView            method,
+               AgentxxPluginStringView            args_json,
+               const AgentxxPluginOperatorNotify* notify,
+               char**                             error_out) -> void* {
                 auto* shim = static_cast<CapShim*>(user_data);
                 (void)error_out;
                 try {
@@ -1511,7 +1530,7 @@ inline void capability(Ctx& ctx, std::string_view capName, CapFn&& fn) {
                     if constexpr (std::is_invocable_v<
                                       CapFn,
                                       Ctx&,
-                                      const AgentxxHost*,
+                                      const AgentxxPluginHost*,
                                       std::string_view,
                                       std::string_view>) {
                         res = shim->fn(*shim->ctx, caller_host, meth, args);
@@ -1526,18 +1545,21 @@ inline void capability(Ctx& ctx, std::string_view capName, CapFn&& fn) {
                     }
                     char* payload = shim->ctx->strdup(res.c_str());
                     if (notify && notify->done) {
-                        notify->done(notify->host_ud, AGENTXX_OP_OK, payload);
+                        notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, payload);
                     }
                 } catch (const std::exception& e) {
                     if (notify && notify->done) {
-                        notify
-                            ->done(notify->host_ud, AGENTXX_OP_FAILED, shim->ctx->strdup(e.what()));
+                        notify->done(
+                            notify->host_ud,
+                            AGENTXX_PLUGIN_OPERATOR_FAILED,
+                            shim->ctx->strdup(e.what())
+                        );
                     }
                 } catch (...) {
                     if (notify && notify->done) {
                         notify->done(
                             notify->host_ud,
-                            AGENTXX_OP_FAILED,
+                            AGENTXX_PLUGIN_OPERATOR_FAILED,
                             shim->ctx->strdup("capability error")
                         );
                     }
@@ -1553,13 +1575,13 @@ inline void capability(Ctx& ctx, std::string_view capName, CapFn&& fn) {
 /* ==================== 阻塞便捷函数 (基于 condvar) ==================== */
 
 inline char* call_tool_blocking(
-    const AgentxxHost*           host,
-    const AgentxxToolsIface*     tools,
-    const AgentxxSchedulerIface* sched,
-    std::string_view             name,
-    std::string_view             args_json,
-    std::string_view             thread_id,
-    char**                       error_out
+    const AgentxxPluginHost*           host,
+    const AgentxxPluginToolsIface*     tools,
+    const AgentxxPluginSchedulerIface* sched,
+    std::string_view                   name,
+    std::string_view                   args_json,
+    std::string_view                   thread_id,
+    char**                             error_out
 ) {
     if (!host || !tools || !tools->call_tool_async) {
         if (error_out && host && host->vtable && host->vtable->strdup) {
@@ -1580,11 +1602,11 @@ inline char* call_tool_blocking(
         std::mutex              mtx;
         std::condition_variable cv;
         bool                    done    = false;
-        int                     status  = AGENTXX_OP_OK;
+        int                     status  = AGENTXX_PLUGIN_OPERATOR_OK;
         char*                   payload = nullptr;
     } state;
 
-    AgentxxOpHandle* handle = tools->call_tool_async(
+    AgentxxPluginOperatorHandle* handle = tools->call_tool_async(
         host,
         agentxx_plugin_sv(name.data(), name.size()),
         agentxx_plugin_sv(args_json.data(), args_json.size()),
@@ -1612,7 +1634,7 @@ inline char* call_tool_blocking(
         });
     }
 
-    if (state.status != AGENTXX_OP_OK) {
+    if (state.status != AGENTXX_PLUGIN_OPERATOR_OK) {
         if (error_out && state.payload) {
             *error_out = state.payload;
         } else if (state.payload && host && host->vtable && host->vtable->free) {
@@ -1625,13 +1647,13 @@ inline char* call_tool_blocking(
 }
 
 inline char* invoke_capability_blocking(
-    const AgentxxHost*              host,
-    const AgentxxCapabilitiesIface* caps,
-    const AgentxxSchedulerIface*    sched,
-    std::string_view                capability,
-    std::string_view                method,
-    std::string_view                args_json,
-    char**                          error_out
+    const AgentxxPluginHost*              host,
+    const AgentxxPluginCapabilitiesIface* caps,
+    const AgentxxPluginSchedulerIface*    sched,
+    std::string_view                      capability,
+    std::string_view                      method,
+    std::string_view                      args_json,
+    char**                                error_out
 ) {
     if (!host || !caps || !caps->invoke_capability_async) {
         if (error_out && host && host->vtable && host->vtable->strdup) {
@@ -1652,11 +1674,11 @@ inline char* invoke_capability_blocking(
         std::mutex              mtx;
         std::condition_variable cv;
         bool                    done    = false;
-        int                     status  = AGENTXX_OP_OK;
+        int                     status  = AGENTXX_PLUGIN_OPERATOR_OK;
         char*                   payload = nullptr;
     } state;
 
-    AgentxxOpHandle* handle = caps->invoke_capability_async(
+    AgentxxPluginOperatorHandle* handle = caps->invoke_capability_async(
         host,
         agentxx_plugin_sv(capability.data(), capability.size()),
         agentxx_plugin_sv(method.data(), method.size()),
@@ -1684,7 +1706,7 @@ inline char* invoke_capability_blocking(
         });
     }
 
-    if (state.status != AGENTXX_OP_OK) {
+    if (state.status != AGENTXX_PLUGIN_OPERATOR_OK) {
         if (error_out && state.payload) {
             *error_out = state.payload;
         } else if (state.payload && host && host->vtable && host->vtable->free) {

@@ -14,11 +14,11 @@
 namespace agentxx {
 namespace plugin {
 
-static PluginInstance* instOf(const AgentxxHost* host) {
+static PluginInstance* instOf(const AgentxxPluginHost* host) {
     return (host && host->opaque) ? static_cast<PluginInstance*>(host->opaque) : nullptr;
 }
 
-static PluginManager* mgrOf(const AgentxxHost* host) {
+static PluginManager* mgrOf(const AgentxxPluginHost* host) {
     auto inst = instOf(host);
     return inst ? inst->manager.lock().get() : nullptr;
 }
@@ -43,23 +43,23 @@ static char* xx_strdup(const char* s) {
     return p;
 }
 
-static int xx_register_tool(const AgentxxHost* host, const AgentxxToolSpec* spec) {
+static int xx_register_tool(const AgentxxPluginHost* host, const AgentxxPluginToolSpec* spec) {
     XX_PLUGIN_CATCH_BEGIN
     auto mgr  = mgrOf(host);
     auto inst = instOf(host);
     if (!mgr || !inst || !spec || agentxx_plugin_sv_empty(spec->name)) {
         return -1;
     }
-    auto            mgrPtr   = mgr;
-    auto            instPtr  = inst;
-    AgentxxToolSpec specCopy = *spec;
+    auto                  mgrPtr   = mgr;
+    auto                  instPtr  = inst;
+    AgentxxPluginToolSpec specCopy = *spec;
     return ioCallSync<int>(mgrPtr, [mgrPtr, instPtr, specCopy]() {
         return mgrPtr->registerTool(instPtr, &specCopy);
     });
     XX_PLUGIN_CATCH_END(-1)
 }
 
-static int xx_unregister_tool(const AgentxxHost* host, AgentxxPluginStringView name) {
+static int xx_unregister_tool(const AgentxxPluginHost* host, AgentxxPluginStringView name) {
     XX_PLUGIN_CATCH_BEGIN
     auto mgr  = mgrOf(host);
     auto inst = instOf(host);
@@ -75,7 +75,7 @@ static int xx_unregister_tool(const AgentxxHost* host, AgentxxPluginStringView n
     XX_PLUGIN_CATCH_END(-1)
 }
 
-static void xx_op_cancel(::AgentxxOpHandle* op) {
+static void xx_op_cancel(::AgentxxPluginOperatorHandle* op) {
     if (!op) {
         return;
     }
@@ -90,14 +90,14 @@ static void xx_op_cancel(::AgentxxOpHandle* op) {
     }
 }
 
-static ::AgentxxOpHandle* xx_call_tool_async(
-    const AgentxxHost*      host,
-    AgentxxPluginStringView name,
-    AgentxxPluginStringView args_json,
-    AgentxxPluginStringView session_id,
-    AgentxxOpCb             cb,
-    void*                   ud,
-    char**                  error_out
+static ::AgentxxPluginOperatorHandle* xx_call_tool_async(
+    const AgentxxPluginHost*      host,
+    AgentxxPluginStringView       name,
+    AgentxxPluginStringView       args_json,
+    AgentxxPluginStringView       session_id,
+    AgentxxPluginOperatorCallback cb,
+    void*                         ud,
+    char**                        error_out
 ) {
     auto mgr  = mgrOf(host);
     auto inst = instOf(host);
@@ -110,28 +110,28 @@ static ::AgentxxOpHandle* xx_call_tool_async(
     return mgr->callToolAsync(inst, toolName.c_str(), args.c_str(), tid.c_str(), cb, ud, error_out);
 }
 
-static int xx_register_hook(const AgentxxHost* host, const AgentxxHookSpec* spec) {
+static int xx_register_hook(const AgentxxPluginHost* host, const AgentxxPluginHookSpec* spec) {
     XX_PLUGIN_CATCH_BEGIN
     auto mgr  = mgrOf(host);
     auto inst = instOf(host);
-    if (!mgr || !inst || !spec || spec->point < 0 || spec->point >= AGENTXX_HOOK_COUNT
+    if (!mgr || !inst || !spec || spec->point < 0 || spec->point >= AGENTXX_PLUGIN_HOOK_COUNT
         || !spec->hook_start) {
         return -1;
     }
-    auto            mgrPtr   = mgr;
-    auto            instPtr  = inst;
-    AgentxxHookSpec specCopy = *spec;
+    auto                  mgrPtr   = mgr;
+    auto                  instPtr  = inst;
+    AgentxxPluginHookSpec specCopy = *spec;
     return ioCallSync<int>(mgrPtr, [mgrPtr, instPtr, specCopy]() {
         return mgrPtr->registerHook(instPtr, &specCopy);
     });
     XX_PLUGIN_CATCH_END(-1)
 }
 
-static int xx_unregister_hook(const AgentxxHost* host, AgentxxHookPoint point) {
+static int xx_unregister_hook(const AgentxxPluginHost* host, AgentxxPluginHookPoint point) {
     XX_PLUGIN_CATCH_BEGIN
     auto mgr  = mgrOf(host);
     auto inst = instOf(host);
-    if (!mgr || !inst || point < 0 || point >= AGENTXX_HOOK_COUNT) {
+    if (!mgr || !inst || point < 0 || point >= AGENTXX_PLUGIN_HOOK_COUNT) {
         return -1;
     }
     auto mgrPtr  = mgr;
@@ -142,9 +142,9 @@ static int xx_unregister_hook(const AgentxxHost* host, AgentxxHookPoint point) {
     XX_PLUGIN_CATCH_END(-1)
 }
 
-static AgentxxSubscription* xx_subscribe(
-    const AgentxxHost*      host,
-    AgentxxPluginStringView topic,
+static AgentxxPluginSubscription* xx_subscribe(
+    const AgentxxPluginHost* host,
+    AgentxxPluginStringView  topic,
     void (*handler)(AgentxxPluginStringView event_json, void* ud),
     void* ud
 ) {
@@ -157,13 +157,16 @@ static AgentxxSubscription* xx_subscribe(
     auto        mgrPtr  = mgr;
     auto        instPtr = inst;
     std::string topicStr{topic.data ? topic.data : "", topic.size};
-    return ioCallSync<AgentxxSubscription*>(mgrPtr, [mgrPtr, instPtr, topicStr, handler, ud]() {
-        return mgrPtr->subscribe(instPtr, topicStr.c_str(), handler, ud);
-    });
+    return ioCallSync<AgentxxPluginSubscription*>(
+        mgrPtr,
+        [mgrPtr, instPtr, topicStr, handler, ud]() {
+            return mgrPtr->subscribe(instPtr, topicStr.c_str(), handler, ud);
+        }
+    );
     XX_PLUGIN_CATCH_END(nullptr)
 }
 
-static void xx_unsubscribe(AgentxxSubscription* sub) {
+static void xx_unsubscribe(AgentxxPluginSubscription* sub) {
     XX_PLUGIN_CATCH_BEGIN
     if (!sub) {
         return;
@@ -182,9 +185,9 @@ static void xx_unsubscribe(AgentxxSubscription* sub) {
 }
 
 static int xx_publish(
-    const AgentxxHost*      host,
-    AgentxxPluginStringView topic,
-    AgentxxPluginStringView event_json
+    const AgentxxPluginHost* host,
+    AgentxxPluginStringView  topic,
+    AgentxxPluginStringView  event_json
 ) {
     XX_PLUGIN_CATCH_BEGIN
     auto mgr  = mgrOf(host);
@@ -202,7 +205,8 @@ static int xx_publish(
     XX_PLUGIN_CATCH_END(-1)
 }
 
-static int xx_register_capability(const AgentxxHost* host, AgentxxPluginStringView capability) {
+static int
+    xx_register_capability(const AgentxxPluginHost* host, AgentxxPluginStringView capability) {
     XX_PLUGIN_CATCH_BEGIN
     auto mgr  = mgrOf(host);
     auto inst = instOf(host);
@@ -218,7 +222,8 @@ static int xx_register_capability(const AgentxxHost* host, AgentxxPluginStringVi
     XX_PLUGIN_CATCH_END(-1)
 }
 
-static int xx_unregister_capability(const AgentxxHost* host, AgentxxPluginStringView capability) {
+static int
+    xx_unregister_capability(const AgentxxPluginHost* host, AgentxxPluginStringView capability) {
     XX_PLUGIN_CATCH_BEGIN
     auto mgr  = mgrOf(host);
     auto inst = instOf(host);
@@ -234,7 +239,7 @@ static int xx_unregister_capability(const AgentxxHost* host, AgentxxPluginString
     XX_PLUGIN_CATCH_END(-1)
 }
 
-static int xx_has_capability(const AgentxxHost* host, AgentxxPluginStringView capability) {
+static int xx_has_capability(const AgentxxPluginHost* host, AgentxxPluginStringView capability) {
     XX_PLUGIN_CATCH_BEGIN
     auto mgr = mgrOf(host);
     if (!mgr || agentxx_plugin_sv_empty(capability)) {
@@ -249,11 +254,11 @@ static int xx_has_capability(const AgentxxHost* host, AgentxxPluginStringView ca
 }
 
 static int xx_register_capability_ex(
-    const AgentxxHost*      host,
-    AgentxxPluginStringView capability,
-    AgentxxCapStartFn       start,
-    AgentxxOpCancelFn       cancel,
-    void*                   ctx
+    const AgentxxPluginHost*             host,
+    AgentxxPluginStringView              capability,
+    AgentxxPluginCapabilityStartFunction start,
+    AgentxxPluginOperatorCancelFunction  cancel,
+    void*                                ctx
 ) {
     XX_PLUGIN_CATCH_BEGIN
     auto mgr  = mgrOf(host);
@@ -270,14 +275,14 @@ static int xx_register_capability_ex(
     XX_PLUGIN_CATCH_END(-1)
 }
 
-static ::AgentxxOpHandle* xx_invoke_capability_async(
-    const AgentxxHost*      host,
-    AgentxxPluginStringView capability,
-    AgentxxPluginStringView method,
-    AgentxxPluginStringView args_json,
-    AgentxxOpCb             cb,
-    void*                   ud,
-    char**                  error_out
+static ::AgentxxPluginOperatorHandle* xx_invoke_capability_async(
+    const AgentxxPluginHost*      host,
+    AgentxxPluginStringView       capability,
+    AgentxxPluginStringView       method,
+    AgentxxPluginStringView       args_json,
+    AgentxxPluginOperatorCallback cb,
+    void*                         ud,
+    char**                        error_out
 ) {
     XX_PLUGIN_CATCH_BEGIN
     auto mgr  = mgrOf(host);
@@ -296,7 +301,7 @@ static ::AgentxxOpHandle* xx_invoke_capability_async(
     XX_PLUGIN_CATCH_END(nullptr)
 }
 
-static char* xx_list_plugins(const AgentxxHost* host) {
+static char* xx_list_plugins(const AgentxxPluginHost* host) {
     XX_PLUGIN_CATCH_BEGIN
     auto mgr = mgrOf(host);
     if (!mgr) {
@@ -310,7 +315,7 @@ static char* xx_list_plugins(const AgentxxHost* host) {
     XX_PLUGIN_CATCH_END(nullptr)
 }
 
-static char* xx_get_plugin(const AgentxxHost* host, AgentxxPluginStringView name) {
+static char* xx_get_plugin(const AgentxxPluginHost* host, AgentxxPluginStringView name) {
     XX_PLUGIN_CATCH_BEGIN
     auto mgr = mgrOf(host);
     if (!mgr || agentxx_plugin_sv_empty(name)) {
@@ -328,7 +333,7 @@ static char* xx_get_plugin(const AgentxxHost* host, AgentxxPluginStringView name
     XX_PLUGIN_CATCH_END(nullptr)
 }
 
-static char* xx_get_own_info(const AgentxxHost* host) {
+static char* xx_get_own_info(const AgentxxPluginHost* host) {
     XX_PLUGIN_CATCH_BEGIN
     auto mgr  = mgrOf(host);
     auto inst = instOf(host);
@@ -347,8 +352,11 @@ static char* xx_get_own_info(const AgentxxHost* host) {
     XX_PLUGIN_CATCH_END(nullptr)
 }
 
-static char*
-    xx_get_share_store(const AgentxxHost* host, AgentxxPluginStringView session_id, long long id) {
+static char* xx_get_share_store(
+    const AgentxxPluginHost* host,
+    AgentxxPluginStringView  session_id,
+    long long                id
+) {
     XX_PLUGIN_CATCH_BEGIN
     auto mgr  = mgrOf(host);
     auto inst = instOf(host);
@@ -365,9 +373,9 @@ static char*
 }
 
 static long long xx_add_share_store(
-    const AgentxxHost*      host,
-    AgentxxPluginStringView session_id,
-    AgentxxPluginStringView content
+    const AgentxxPluginHost* host,
+    AgentxxPluginStringView  session_id,
+    AgentxxPluginStringView  content
 ) {
     XX_PLUGIN_CATCH_BEGIN
     auto mgr  = mgrOf(host);
@@ -386,10 +394,10 @@ static long long xx_add_share_store(
 }
 
 static void xx_emit_message_tip(
-    const AgentxxHost*      host,
-    AgentxxPluginStringView session_id,
-    AgentxxPluginStringView text,
-    int                     level
+    const AgentxxPluginHost* host,
+    AgentxxPluginStringView  session_id,
+    AgentxxPluginStringView  text,
+    int                      level
 ) {
     XX_PLUGIN_CATCH_BEGIN
     auto mgr  = mgrOf(host);
@@ -407,7 +415,7 @@ static void xx_emit_message_tip(
     XX_PLUGIN_CATCH_END_VOID()
 }
 
-static void* xx_sleep(const AgentxxHost* host, long ms, void (*cb)(void* ud), void* ud) {
+static void* xx_sleep(const AgentxxPluginHost* host, long ms, void (*cb)(void* ud), void* ud) {
     XX_PLUGIN_CATCH_BEGIN
     auto mgr  = mgrOf(host);
     auto inst = instOf(host);
@@ -422,7 +430,7 @@ static void* xx_sleep(const AgentxxHost* host, long ms, void (*cb)(void* ud), vo
     XX_PLUGIN_CATCH_END(nullptr)
 }
 
-static void xx_cancel_sleep(const AgentxxHost* host, void* timer) {
+static void xx_cancel_sleep(const AgentxxPluginHost* host, void* timer) {
     XX_PLUGIN_CATCH_BEGIN
     auto mgr  = mgrOf(host);
     auto inst = instOf(host);
@@ -438,8 +446,8 @@ static void xx_cancel_sleep(const AgentxxHost* host, void* timer) {
 }
 
 static void xx_offload(
-    const AgentxxHost* host,
-    volatile int*      cancel_flag,
+    const AgentxxPluginHost* host,
+    volatile int*            cancel_flag,
     void* (*work)(void* ud, volatile int* cancel_flag, char** error_out),
     void (*done)(void* ud, void* result, char* error),
     void* ud
@@ -454,12 +462,12 @@ static void xx_offload(
     XX_PLUGIN_CATCH_END_VOID()
 }
 
-static int xx_is_io_thread(const AgentxxHost* host) {
+static int xx_is_io_thread(const AgentxxPluginHost* host) {
     auto mgr = mgrOf(host);
     return (mgr && mgr->isIoThread()) ? 1 : 0;
 }
 
-static void xx_post_to_io(const AgentxxHost* host, void (*fn)(void* ud), void* ud) {
+static void xx_post_to_io(const AgentxxPluginHost* host, void (*fn)(void* ud), void* ud) {
     XX_PLUGIN_CATCH_BEGIN
     auto mgr = mgrOf(host);
     if (!mgr || !fn) {
@@ -471,7 +479,7 @@ static void xx_post_to_io(const AgentxxHost* host, void (*fn)(void* ud), void* u
     XX_PLUGIN_CATCH_END_VOID()
 }
 
-static void xx_pump_io(const AgentxxHost* host) {
+static void xx_pump_io(const AgentxxPluginHost* host) {
     XX_PLUGIN_CATCH_BEGIN
     auto mgr = mgrOf(host);
     if (mgr) {
@@ -480,7 +488,7 @@ static void xx_pump_io(const AgentxxHost* host) {
     XX_PLUGIN_CATCH_END_VOID()
 }
 
-static void xx_log(const AgentxxHost* host, int level, AgentxxPluginStringView msg) {
+static void xx_log(const AgentxxPluginHost* host, int level, AgentxxPluginStringView msg) {
     (void)host;
     using agentxx::util::LogLevel;
     LogLevel lv = LogLevel::Info;
@@ -507,9 +515,9 @@ static void xx_log(const AgentxxHost* host, int level, AgentxxPluginStringView m
 }
 
 static char* xx_json_get_string(
-    const AgentxxHost*      host,
-    AgentxxPluginStringView json,
-    AgentxxPluginStringView key
+    const AgentxxPluginHost* host,
+    AgentxxPluginStringView  json,
+    AgentxxPluginStringView  key
 ) {
     auto inst = instOf(host);
     if (!inst || agentxx_plugin_sv_empty(json) || agentxx_plugin_sv_empty(key)) {
@@ -527,7 +535,7 @@ static char* xx_json_get_string(
     return nullptr;
 }
 
-static char* xx_json_escape(const AgentxxHost* host, AgentxxPluginStringView s) {
+static char* xx_json_escape(const AgentxxPluginHost* host, AgentxxPluginStringView s) {
     auto inst = instOf(host);
     if (!inst || agentxx_plugin_sv_empty(s)) {
         return nullptr;
@@ -572,7 +580,7 @@ static char* xx_json_escape(const AgentxxHost* host, AgentxxPluginStringView s) 
     return inst->host.vtable->strdup(out.c_str());
 }
 
-static char* xx_get_config(const AgentxxHost* host) {
+static char* xx_get_config(const AgentxxPluginHost* host) {
     XX_PLUGIN_CATCH_BEGIN
     auto mgr = mgrOf(host);
     if (!mgr) {
@@ -589,7 +597,7 @@ static char* xx_get_config(const AgentxxHost* host) {
     XX_PLUGIN_CATCH_END(nullptr)
 }
 
-static char* xx_get_plugin_args(const AgentxxHost* host) {
+static char* xx_get_plugin_args(const AgentxxPluginHost* host) {
     XX_PLUGIN_CATCH_BEGIN
     auto mgr  = mgrOf(host);
     auto inst = instOf(host);
@@ -605,7 +613,7 @@ static char* xx_get_plugin_args(const AgentxxHost* host) {
     XX_PLUGIN_CATCH_END(nullptr)
 }
 
-static char* xx_get_tool_prompt(const AgentxxHost* host, AgentxxPluginStringView tool_name) {
+static char* xx_get_tool_prompt(const AgentxxPluginHost* host, AgentxxPluginStringView tool_name) {
     XX_PLUGIN_CATCH_BEGIN
     auto mgr = mgrOf(host);
     if (!mgr || agentxx_plugin_sv_empty(tool_name)) {
@@ -623,7 +631,7 @@ static char* xx_get_tool_prompt(const AgentxxHost* host, AgentxxPluginStringView
     XX_PLUGIN_CATCH_END(nullptr)
 }
 
-static char* xx_get_work_dir(const AgentxxHost* host) {
+static char* xx_get_work_dir(const AgentxxPluginHost* host) {
     XX_PLUGIN_CATCH_BEGIN
     auto mgr  = mgrOf(host);
     auto inst = instOf(host);
@@ -641,7 +649,8 @@ static char* xx_get_work_dir(const AgentxxHost* host) {
     XX_PLUGIN_CATCH_END(nullptr)
 }
 
-static char* xx_get_session_work_dir(const AgentxxHost* host, AgentxxPluginStringView thread_id) {
+static char*
+    xx_get_session_work_dir(const AgentxxPluginHost* host, AgentxxPluginStringView thread_id) {
     XX_PLUGIN_CATCH_BEGIN
     auto mgr  = mgrOf(host);
     auto inst = instOf(host);
@@ -660,7 +669,7 @@ static char* xx_get_session_work_dir(const AgentxxHost* host, AgentxxPluginStrin
     XX_PLUGIN_CATCH_END(nullptr)
 }
 
-static char* xx_get_prompt(const AgentxxHost* host) {
+static char* xx_get_prompt(const AgentxxPluginHost* host) {
     XX_PLUGIN_CATCH_BEGIN
     auto mgr = mgrOf(host);
     if (!mgr) {
@@ -677,7 +686,7 @@ static char* xx_get_prompt(const AgentxxHost* host) {
     XX_PLUGIN_CATCH_END(nullptr)
 }
 
-static int xx_set_prompt(const AgentxxHost* host, AgentxxPluginStringView prompt_json) {
+static int xx_set_prompt(const AgentxxPluginHost* host, AgentxxPluginStringView prompt_json) {
     XX_PLUGIN_CATCH_BEGIN
     auto mgr  = mgrOf(host);
     auto inst = instOf(host);
@@ -693,7 +702,7 @@ static int xx_set_prompt(const AgentxxHost* host, AgentxxPluginStringView prompt
     XX_PLUGIN_CATCH_END(-1)
 }
 
-static char* xx_model_get_config(const AgentxxHost* host) {
+static char* xx_model_get_config(const AgentxxPluginHost* host) {
     XX_PLUGIN_CATCH_BEGIN
     auto mgr = mgrOf(host);
     if (!mgr) {
@@ -710,7 +719,8 @@ static char* xx_model_get_config(const AgentxxHost* host) {
     XX_PLUGIN_CATCH_END(nullptr)
 }
 
-static int xx_cancel_is_cancelled(const AgentxxHost* host, AgentxxPluginStringView thread_id) {
+static int
+    xx_cancel_is_cancelled(const AgentxxPluginHost* host, AgentxxPluginStringView thread_id) {
     XX_PLUGIN_CATCH_BEGIN
     auto mgr = mgrOf(host);
     if (!mgr || agentxx_plugin_sv_empty(thread_id)) {
@@ -730,11 +740,11 @@ static int xx_cancel_is_cancelled(const AgentxxHost* host, AgentxxPluginStringVi
 }
 
 static int xx_planning_set_planning(
-    const AgentxxHost*      host,
-    AgentxxPluginStringView thread_id,
-    AgentxxPluginStringView roadmap,
-    AgentxxPluginStringView todos_json,
-    AgentxxPluginStringView notes
+    const AgentxxPluginHost* host,
+    AgentxxPluginStringView  thread_id,
+    AgentxxPluginStringView  roadmap,
+    AgentxxPluginStringView  todos_json,
+    AgentxxPluginStringView  notes
 ) {
     XX_PLUGIN_CATCH_BEGIN
     auto mgr = mgrOf(host);
@@ -753,7 +763,7 @@ static int xx_planning_set_planning(
     XX_PLUGIN_CATCH_END(-1)
 }
 
-static int xx_register_skill_dir(const AgentxxHost* host, AgentxxPluginStringView path) {
+static int xx_register_skill_dir(const AgentxxPluginHost* host, AgentxxPluginStringView path) {
     XX_PLUGIN_CATCH_BEGIN
     auto mgr  = mgrOf(host);
     auto inst = instOf(host);
@@ -769,7 +779,7 @@ static int xx_register_skill_dir(const AgentxxHost* host, AgentxxPluginStringVie
     XX_PLUGIN_CATCH_END(-1)
 }
 
-static int xx_unregister_skill_dir(const AgentxxHost* host, AgentxxPluginStringView path) {
+static int xx_unregister_skill_dir(const AgentxxPluginHost* host, AgentxxPluginStringView path) {
     XX_PLUGIN_CATCH_BEGIN
     auto mgr  = mgrOf(host);
     auto inst = instOf(host);
@@ -785,7 +795,7 @@ static int xx_unregister_skill_dir(const AgentxxHost* host, AgentxxPluginStringV
     XX_PLUGIN_CATCH_END(-1)
 }
 
-static int xx_register_memory_file(const AgentxxHost* host, AgentxxPluginStringView path) {
+static int xx_register_memory_file(const AgentxxPluginHost* host, AgentxxPluginStringView path) {
     XX_PLUGIN_CATCH_BEGIN
     auto mgr  = mgrOf(host);
     auto inst = instOf(host);
@@ -801,7 +811,7 @@ static int xx_register_memory_file(const AgentxxHost* host, AgentxxPluginStringV
     XX_PLUGIN_CATCH_END(-1)
 }
 
-static int xx_unregister_memory_file(const AgentxxHost* host, AgentxxPluginStringView path) {
+static int xx_unregister_memory_file(const AgentxxPluginHost* host, AgentxxPluginStringView path) {
     XX_PLUGIN_CATCH_BEGIN
     auto mgr  = mgrOf(host);
     auto inst = instOf(host);
@@ -817,7 +827,8 @@ static int xx_unregister_memory_file(const AgentxxHost* host, AgentxxPluginStrin
     XX_PLUGIN_CATCH_END(-1)
 }
 
-static int xx_register_mcp_server(const AgentxxHost* host, AgentxxPluginStringView spec_json) {
+static int
+    xx_register_mcp_server(const AgentxxPluginHost* host, AgentxxPluginStringView spec_json) {
     XX_PLUGIN_CATCH_BEGIN
     auto mgr  = mgrOf(host);
     auto inst = instOf(host);
@@ -833,7 +844,8 @@ static int xx_register_mcp_server(const AgentxxHost* host, AgentxxPluginStringVi
     XX_PLUGIN_CATCH_END(-1)
 }
 
-static int xx_unregister_mcp_server(const AgentxxHost* host, AgentxxPluginStringView name_space) {
+static int
+    xx_unregister_mcp_server(const AgentxxPluginHost* host, AgentxxPluginStringView name_space) {
     XX_PLUGIN_CATCH_BEGIN
     auto mgr  = mgrOf(host);
     auto inst = instOf(host);
@@ -849,7 +861,7 @@ static int xx_unregister_mcp_server(const AgentxxHost* host, AgentxxPluginString
     XX_PLUGIN_CATCH_END(-1)
 }
 
-static char* xx_get_own_resources(const AgentxxHost* host) {
+static char* xx_get_own_resources(const AgentxxPluginHost* host) {
     XX_PLUGIN_CATCH_BEGIN
     auto mgr  = mgrOf(host);
     auto inst = instOf(host);
@@ -868,29 +880,29 @@ static char* xx_get_own_resources(const AgentxxHost* host) {
     XX_PLUGIN_CATCH_END(nullptr)
 }
 
-static const AgentxxToolsIface g_ifaceTools = {
-    /* version */ AGENTXX_IFACE_AGENT_TOOLS_VERSION,
+static const AgentxxPluginToolsIface g_ifaceTools = {
+    /* version */ AGENTXX_PLUGIN_IFACE_AGENT_TOOLS_VERSION,
     /* register_tool */ xx_register_tool,
     /* unregister_tool */ xx_unregister_tool,
     /* call_tool_async */ xx_call_tool_async,
     /* op_cancel */ xx_op_cancel,
 };
 
-static const AgentxxHooksIface g_ifaceHooks = {
-    /* version */ AGENTXX_IFACE_AGENT_HOOKS_VERSION,
+static const AgentxxPluginHooksIface g_ifaceHooks = {
+    /* version */ AGENTXX_PLUGIN_IFACE_AGENT_HOOKS_VERSION,
     /* register_hook */ xx_register_hook,
     /* unregister_hook */ xx_unregister_hook,
 };
 
-static const AgentxxEventsIface g_ifaceEvents = {
-    /* version */ AGENTXX_IFACE_AGENT_EVENTS_VERSION,
+static const AgentxxPluginEventsIface g_ifaceEvents = {
+    /* version */ AGENTXX_PLUGIN_IFACE_AGENT_EVENTS_VERSION,
     /* subscribe */ xx_subscribe,
     /* unsubscribe */ xx_unsubscribe,
     /* publish */ xx_publish,
 };
 
-static const AgentxxCapabilitiesIface g_ifaceCapabilities = {
-    /* version */ AGENTXX_IFACE_AGENT_CAPABILITIES_VERSION,
+static const AgentxxPluginCapabilitiesIface g_ifaceCapabilities = {
+    /* version */ AGENTXX_PLUGIN_IFACE_AGENT_CAPABILITIES_VERSION,
     /* register_capability */ xx_register_capability,
     /* register_capability_ex */ xx_register_capability_ex,
     /* unregister_capability */ xx_unregister_capability,
@@ -899,8 +911,8 @@ static const AgentxxCapabilitiesIface g_ifaceCapabilities = {
     /* op_cancel */ xx_op_cancel,
 };
 
-static const AgentxxSchedulerIface g_ifaceScheduler = {
-    /* version */ AGENTXX_IFACE_AGENT_SCHEDULER_VERSION,
+static const AgentxxPluginSchedulerIface g_ifaceScheduler = {
+    /* version */ AGENTXX_PLUGIN_IFACE_AGENT_SCHEDULER_VERSION,
     /* is_io_thread */ xx_is_io_thread,
     /* post_to_io */ xx_post_to_io,
     /* pump_io */ xx_pump_io,
@@ -909,22 +921,22 @@ static const AgentxxSchedulerIface g_ifaceScheduler = {
     /* offload */ xx_offload,
 };
 
-static const AgentxxSessionIface g_ifaceSession = {
-    /* version */ AGENTXX_IFACE_AGENT_SESSION_VERSION,
+static const AgentxxPluginSessionIface g_ifaceSession = {
+    /* version */ AGENTXX_PLUGIN_IFACE_AGENT_SESSION_VERSION,
     /* get_share_store */ xx_get_share_store,
     /* emit_message_tip */ xx_emit_message_tip,
     /* add_share_store */ xx_add_share_store,
 };
 
 static const AgentxxPluginsIface g_ifacePlugins = {
-    /* version */ AGENTXX_IFACE_AGENT_PLUGINS_VERSION,
+    /* version */ AGENTXX_PLUGIN_IFACE_AGENT_PLUGINS_VERSION,
     /* list_plugins */ xx_list_plugins,
     /* get_plugin */ xx_get_plugin,
     /* get_own_info */ xx_get_own_info,
 };
 
-static const AgentxxConfigIface g_ifaceConfig = {
-    /* version */ AGENTXX_IFACE_AGENT_CONFIG_VERSION,
+static const AgentxxPluginConfigIface g_ifaceConfig = {
+    /* version */ AGENTXX_PLUGIN_IFACE_AGENT_CONFIG_VERSION,
     /* get_config */ xx_get_config,
     /* get_plugin_args */ xx_get_plugin_args,
     /* get_tool_prompt */ xx_get_tool_prompt,
@@ -932,25 +944,25 @@ static const AgentxxConfigIface g_ifaceConfig = {
     /* get_session_work_dir */ xx_get_session_work_dir,
 };
 
-static const AgentxxPromptIface g_ifacePrompt = {
-    /* version */ AGENTXX_IFACE_AGENT_PROMPT_VERSION,
+static const AgentxxPluginPromptIface g_ifacePrompt = {
+    /* version */ AGENTXX_PLUGIN_IFACE_AGENT_PROMPT_VERSION,
     /* get_prompt */ xx_get_prompt,
     /* set_prompt */ xx_set_prompt,
 };
 
-static const AgentxxJsonIface g_ifaceJson = {
-    /* version */ AGENTXX_IFACE_AGENT_JSON_VERSION,
+static const AgentxxPluginJsonIface g_ifaceJson = {
+    /* version */ AGENTXX_PLUGIN_IFACE_AGENT_JSON_VERSION,
     /* json_get_string */ xx_json_get_string,
     /* json_escape */ xx_json_escape,
 };
 
-static const AgentxxLogIface g_ifaceLog = {
-    /* version */ AGENTXX_IFACE_AGENT_LOG_VERSION,
+static const AgentxxPluginLogIface g_ifaceLog = {
+    /* version */ AGENTXX_PLUGIN_IFACE_AGENT_LOG_VERSION,
     /* log */ xx_log,
 };
 
-static const AgentxxResourcesIface g_ifaceResources = {
-    /* version */ AGENTXX_IFACE_AGENT_RESOURCES_VERSION,
+static const AgentxxPluginResourcesIface g_ifaceResources = {
+    /* version */ AGENTXX_PLUGIN_IFACE_AGENT_RESOURCES_VERSION,
     /* register_skill_dir */ xx_register_skill_dir,
     /* unregister_skill_dir */ xx_unregister_skill_dir,
     /* register_memory_file */ xx_register_memory_file,
@@ -960,22 +972,22 @@ static const AgentxxResourcesIface g_ifaceResources = {
     /* get_own_resources */ xx_get_own_resources,
 };
 
-static const AgentxxModelIface g_ifaceModel = {
-    /* version */ AGENTXX_IFACE_AGENT_MODEL_VERSION,
+static const AgentxxPluginModelIface g_ifaceModel = {
+    /* version */ AGENTXX_PLUGIN_IFACE_AGENT_MODEL_VERSION,
     /* get_config */ xx_model_get_config,
 };
 
-static const AgentxxCancelIface g_ifaceCancel = {
-    /* version */ AGENTXX_IFACE_AGENT_CANCEL_VERSION,
+static const AgentxxPluginCancelIface g_ifaceCancel = {
+    /* version */ AGENTXX_PLUGIN_IFACE_AGENT_CANCEL_VERSION,
     /* is_cancelled */ xx_cancel_is_cancelled,
 };
 
-static const AgentxxPlanningIface g_ifacePlanning = {
-    /* version */ AGENTXX_IFACE_AGENT_PLANNING_VERSION,
+static const AgentxxPluginPlanningIface g_ifacePlanning = {
+    /* version */ AGENTXX_PLUGIN_IFACE_AGENT_PLANNING_VERSION,
     /* set_planning */ xx_planning_set_planning,
 };
 
-const void* xx_query_interface(const AgentxxHost*, AgentxxPluginStringView iid);
+const void* xx_query_interface(const AgentxxPluginHost*, AgentxxPluginStringView iid);
 
 static const AgentxxHostVtable g_hostVtable = {
     /* alloc */ xx_alloc,
@@ -984,7 +996,7 @@ static const AgentxxHostVtable g_hostVtable = {
     /* query_interface */ xx_query_interface,
 };
 
-const void* xx_query_interface(const AgentxxHost*, AgentxxPluginStringView iid) {
+const void* xx_query_interface(const AgentxxPluginHost*, AgentxxPluginStringView iid) {
     if (!iid.data) {
         return nullptr;
     }
@@ -992,49 +1004,49 @@ const void* xx_query_interface(const AgentxxHost*, AgentxxPluginStringView iid) 
     if (n == "__vtable") {
         return &g_hostVtable;
     }
-    if (n == AGENTXX_IFACE_AGENT_TOOLS) {
+    if (n == AGENTXX_PLUGIN_IFACE_AGENT_TOOLS) {
         return &g_ifaceTools;
     }
-    if (n == AGENTXX_IFACE_AGENT_HOOKS) {
+    if (n == AGENTXX_PLUGIN_IFACE_AGENT_HOOKS) {
         return &g_ifaceHooks;
     }
-    if (n == AGENTXX_IFACE_AGENT_EVENTS) {
+    if (n == AGENTXX_PLUGIN_IFACE_AGENT_EVENTS) {
         return &g_ifaceEvents;
     }
-    if (n == AGENTXX_IFACE_AGENT_CAPABILITIES) {
+    if (n == AGENTXX_PLUGIN_IFACE_AGENT_CAPABILITIES) {
         return &g_ifaceCapabilities;
     }
-    if (n == AGENTXX_IFACE_AGENT_SCHEDULER) {
+    if (n == AGENTXX_PLUGIN_IFACE_AGENT_SCHEDULER) {
         return &g_ifaceScheduler;
     }
-    if (n == AGENTXX_IFACE_AGENT_SESSION) {
+    if (n == AGENTXX_PLUGIN_IFACE_AGENT_SESSION) {
         return &g_ifaceSession;
     }
-    if (n == AGENTXX_IFACE_AGENT_PLUGINS) {
+    if (n == AGENTXX_PLUGIN_IFACE_AGENT_PLUGINS) {
         return &g_ifacePlugins;
     }
-    if (n == AGENTXX_IFACE_AGENT_CONFIG) {
+    if (n == AGENTXX_PLUGIN_IFACE_AGENT_CONFIG) {
         return &g_ifaceConfig;
     }
-    if (n == AGENTXX_IFACE_AGENT_PROMPT) {
+    if (n == AGENTXX_PLUGIN_IFACE_AGENT_PROMPT) {
         return &g_ifacePrompt;
     }
-    if (n == AGENTXX_IFACE_AGENT_JSON) {
+    if (n == AGENTXX_PLUGIN_IFACE_AGENT_JSON) {
         return &g_ifaceJson;
     }
-    if (n == AGENTXX_IFACE_AGENT_LOG) {
+    if (n == AGENTXX_PLUGIN_IFACE_AGENT_LOG) {
         return &g_ifaceLog;
     }
-    if (n == AGENTXX_IFACE_AGENT_RESOURCES) {
+    if (n == AGENTXX_PLUGIN_IFACE_AGENT_RESOURCES) {
         return &g_ifaceResources;
     }
-    if (n == AGENTXX_IFACE_AGENT_MODEL) {
+    if (n == AGENTXX_PLUGIN_IFACE_AGENT_MODEL) {
         return &g_ifaceModel;
     }
-    if (n == AGENTXX_IFACE_AGENT_CANCEL) {
+    if (n == AGENTXX_PLUGIN_IFACE_AGENT_CANCEL) {
         return &g_ifaceCancel;
     }
-    if (n == AGENTXX_IFACE_AGENT_PLANNING) {
+    if (n == AGENTXX_PLUGIN_IFACE_AGENT_PLANNING) {
         return &g_ifacePlanning;
     }
     return nullptr;

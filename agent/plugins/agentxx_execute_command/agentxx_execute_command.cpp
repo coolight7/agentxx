@@ -85,9 +85,9 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_agent_g
         [&]() -> const AgentxxPluginInfo* {
             static const AgentxxPluginInfo info{
                 AGENTXX_PLUGIN_API_VERSION,
-                AGENTXX_SV("agentxx_execute_command"),
-                AGENTXX_SV("1.0.0"),
-                AGENTXX_SV(
+                AGENTXX_PLUGIN_SV("agentxx_execute_command"),
+                AGENTXX_PLUGIN_SV("1.0.0"),
+                AGENTXX_PLUGIN_SV(
                     "Execute system commands (bash/windows terminal) with timeout/cancellation"
                 ),
             };
@@ -97,7 +97,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_agent_g
 }
 
 extern "C" AGENTXX_PLUGIN_EXPORT int
-    agentxx_plugin_agent_create(const AgentxxHost* host, void** plugin_ctx) {
+    agentxx_plugin_agent_create(const AgentxxPluginHost* host, void** plugin_ctx) {
     PluginCtx* raw = nullptr;
     return agentxx::plugin_guard::guardCall(
         [&raw](const char* msg) noexcept {
@@ -174,7 +174,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                     return result;
                 },
                 0,
-                AGENTXX_TOOL_FLAG_NONE
+                AGENTXX_PLUGIN_TOOL_FLAG_NONE
             );
 #else
             agentxx::kit::blocking_tool(
@@ -207,7 +207,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                     return windowsExecute(arguments, std::string(workDir), isCancelled, storeFn);
                 },
                 0,
-                AGENTXX_TOOL_FLAG_NONE
+                AGENTXX_PLUGIN_TOOL_FLAG_NONE
             );
 #endif
 
@@ -268,7 +268,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                     return result;
                 },
                 0,
-                AGENTXX_TOOL_FLAG_NONE
+                AGENTXX_PLUGIN_TOOL_FLAG_NONE
             );
 #else
             agentxx::kit::blocking_tool(
@@ -301,7 +301,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                     return bashExecute(arguments, std::string(workDir), isCancelled, storeFn);
                 },
                 0,
-                AGENTXX_TOOL_FLAG_NONE
+                AGENTXX_PLUGIN_TOOL_FLAG_NONE
             );
 #endif
 
