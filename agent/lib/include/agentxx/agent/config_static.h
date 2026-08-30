@@ -90,7 +90,7 @@ public:
     }
 
     /// 会话数据目录: {dataDir}/sqlite/sessions/
-    /// - 每个会话数据: {sessions}/{sanitizedThreadId}/{session.db, share_store.db}
+    /// - 每个会话数据: {sessions}/{sanitizedThreadId}/session.db (单库, 含 item)
     inline static std::string getSessionsDir(std::string_view dataDir) noexcept {
         return (std::filesystem::path(getSqliteDir(dataDir)) / "sessions").string();
     }

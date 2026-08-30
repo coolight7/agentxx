@@ -79,7 +79,7 @@ static std::string sanitizeSegment(std::string_view seg) {
     return out;
 }
 
-/// 会话消息状态 SQL (session.db)
+/// 会话全量状态 SQL (session.db: view_message/llm_context/meta/store 单库)
 static constexpr const char* kSessionSchema = R"sql(
 CREATE TABLE IF NOT EXISTS view_message (
     seq  INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -93,11 +93,7 @@ CREATE TABLE IF NOT EXISTS meta (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
-)sql";
-
-/// share store SQL (share_store.db)
-static constexpr const char* kShareStoreSchema = R"sql(
-CREATE TABLE IF NOT EXISTS item (
+CREATE TABLE IF NOT EXISTS store (
     id    INTEGER PRIMARY KEY,
     value TEXT NOT NULL
 );
@@ -233,18 +229,13 @@ SessionStore::SessionDbs& SessionStore::dbs(std::string_view sessionId) {
     auto dbs = std::make_shared<SessionDbs>();
     // 打开失败 (权限/磁盘) 抛异常, 由上层 catchError 记录日志
     dbs->sessionDb.open((dir / "session.db").string());
-    dbs->shareStoreDb.open((dir / "share_store.db").string());
-    ensureSchema(dbs->sessionDb, dbs->shareStoreDb);
+    ensureSchema(dbs->sessionDb);
     auto [insertIt, _] = util::insertHeterogeneous(dbs_, std::string{sessionId}, std::move(dbs));
     return *insertIt->second;
 }
 
-void SessionStore::ensureSchema(
-    agentxx::util::SqliteDb& sessionDb,
-    agentxx::util::SqliteDb& shareStoreDb
-) {
+void SessionStore::ensureSchema(agentxx::util::SqliteDb& sessionDb) {
     sessionDb.exec(kSessionSchema);
-    shareStoreDb.exec(kShareStoreSchema);
 }
 
 bool SessionStore::sessionDataDirExists(std::string_view sessionId) const {
@@ -638,7 +629,7 @@ void SessionStore::saveLlmMessages(std::string_view sessionId, const neograph::j
 }
 
 // ---------------------------------------------------------------------------
-// share store
+// share store (session.db store 表)
 // ---------------------------------------------------------------------------
 
 SessionStore::LoadedShareStore SessionStore::loadShareStore(std::string_view sessionId) {
@@ -650,8 +641,8 @@ SessionStore::LoadedShareStore SessionStore::loadShareStore(std::string_view ses
     }
     agentxx::util::catchError<bool>(
         [&]() -> bool {
-            auto& db   = dbs(sessionId).shareStoreDb;
-            auto  stmt = db.prepare("SELECT id, value FROM item ORDER BY id");
+            auto& db   = dbs(sessionId).sessionDb;
+            auto  stmt = db.prepare("SELECT id, value FROM store ORDER BY id");
             while (stmt.step()) {
                 out.items[static_cast<size_t>(stmt.columnInt64(0))] = stmt.columnText(1);
             }
@@ -676,8 +667,8 @@ std::optional<std::string> SessionStore::getShareStoreItem(std::string_view sess
     }
     agentxx::util::catchError<bool>(
         [&]() -> bool {
-            auto& db   = dbs(sessionId).shareStoreDb;
-            auto  stmt = db.prepare("SELECT value FROM item WHERE id = ?");
+            auto& db   = dbs(sessionId).sessionDb;
+            auto  stmt = db.prepare("SELECT value FROM store WHERE id = ?");
             stmt.bindInt64(1, static_cast<int64_t>(id));
             if (stmt.step()) {
                 out = stmt.columnText(0);
@@ -700,8 +691,8 @@ void SessionStore::setShareStoreItem(
     std::lock_guard<std::mutex> lock(mutex_);
     agentxx::util::catchError<bool>(
         [&]() -> bool {
-            auto& db   = dbs(sessionId).shareStoreDb;
-            auto  stmt = db.prepare("INSERT INTO item(id, value) VALUES (?, ?) "
+            auto& db   = dbs(sessionId).sessionDb;
+            auto  stmt = db.prepare("INSERT INTO store(id, value) VALUES (?, ?) "
                                     "ON CONFLICT(id) DO UPDATE SET value = excluded.value");
             stmt.bindInt64(1, static_cast<int64_t>(id));
             stmt.bindText(2, value);
@@ -720,11 +711,11 @@ size_t SessionStore::addShareStoreItem(std::string_view sessionId, std::string_v
     size_t                      out = 0;
     agentxx::util::catchError<bool>(
         [&]() -> bool {
-            auto& db = dbs(sessionId).shareStoreDb;
+            auto& db = dbs(sessionId).sessionDb;
             // 自增 id: 取现有最大 id + 1, 重启后延续; 与内存版
             // (SessionShareStore::storeId 递增) 语义一致且更稳健
-            auto stmt = db.prepare("INSERT INTO item(id, value) "
-                                   "VALUES ((SELECT COALESCE(MAX(id), 0) + 1 FROM item), ?)");
+            auto stmt = db.prepare("INSERT INTO store(id, value) "
+                                   "VALUES ((SELECT COALESCE(MAX(id), 0) + 1 FROM store), ?)");
             stmt.bindText(1, value);
             stmt.step();
             out = static_cast<size_t>(db.lastInsertRowid());
@@ -742,8 +733,8 @@ void SessionStore::removeShareStoreItem(std::string_view sessionId, size_t id) {
     std::lock_guard<std::mutex> lock(mutex_);
     agentxx::util::catchError<bool>(
         [&]() -> bool {
-            auto& db   = dbs(sessionId).shareStoreDb;
-            auto  stmt = db.prepare("DELETE FROM item WHERE id = ?");
+            auto& db   = dbs(sessionId).sessionDb;
+            auto  stmt = db.prepare("DELETE FROM store WHERE id = ?");
             stmt.bindInt64(1, static_cast<int64_t>(id));
             stmt.step();
             return true;

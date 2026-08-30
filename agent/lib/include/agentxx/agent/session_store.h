@@ -16,25 +16,18 @@ namespace agent {
 /// 会话数据 SQLite 持久化 (按 sessionId 分目录)
 ///
 /// 目录结构: {root}/{sanitizedSessionId}/
-///   - session.db      会话消息状态:
-///                       view_message 表  展示历史 (append-only, 每消息一行 JSON)
-///                       llm_context 表  LLM 上下文消息 (单行整体替换, 每轮结束保存)
-///                       meta 表          msgIdCounter
-///   - share_store.db  agentxx_share_store KV 存储:
-///                       item 表  id(自增) -> value
+///   - session.db  会话全量状态 (单库):
+///                   view_message 表  展示历史 (append-only, 每消息一行 JSON)
+///                   llm_context 表  LLM 上下文消息 (单行整体替换, 每轮结束保存)
+///                   meta 表          msgIdCounter / session 元数据
+///                   store 表         agentxx_share_store KV 存储 id(自增) -> value
 ///
 /// 默认 root: {dataDir}/sqlite/sessions/ (dataDir 为空时 ~/.agentxx/,
 /// 取不到用户主目录时回退系统临时目录), 数据目录统一由 client 经
 /// AgentConfig::dataDir 重定向。
-/// 分库理由:
-///   - session.db: viewMessages/llmMessages 同属"会话消息状态", 生命周期一致
-///     (随 session 创建/删除), 在同一个 io 线程写入, 一轮对话结束时消息与
-///     计数可事务性一起提交; 数据量可控 (llmMessages 受上下文窗口约束,
-///     viewMessages 单行小)
-///   - share_store.db: KV 随机读改写, 与消息顺序追加模式完全不同; 本质是
-///     上下文卸载缓存, 内容可丢弃/可清理, 生命周期独立于消息历史; 可能存放
-///     大型文本 (工具结果/压缩内容), 独立文件避免其膨胀拖慢消息库的
-///     WAL checkpoint, 也便于未来独立裁剪/归档
+/// 单库: share_store 与消息历史生命周期一致 (随 session 创建/删除),
+///       且会话级 WAL 写入已由互斥锁串行, 合并后减少文件数、简化备份、
+///       便于事务性一致与目录枚举。
 ///
 /// 线程安全: 内部互斥锁保护所有 DB 访问; 常规使用下调用发生在 agent io 线程
 /// (Session 绑定线程 / 工具执行), 锁仅在多线程并发访问时生效, 开销可忽略
@@ -105,7 +98,7 @@ public:
     /// - 失败仅记录日志, 不影响内存状态
     void saveLlmMessages(std::string_view sessionId, const neograph::json& llmMessages);
 
-    // ---- share store (share_store.db) ----
+    // ---- share store (session.db store 表) ----
 
     struct LoadedShareStore {
         std::map<size_t, std::string> items; ///< id -> value
@@ -141,7 +134,6 @@ private:
 
     struct SessionDbs {
         agentxx::util::SqliteDb sessionDb;
-        agentxx::util::SqliteDb shareStoreDb;
     };
 
     /// 获取 (或懒创建) 指定 session 的数据库连接; 失败抛异常
@@ -152,9 +144,8 @@ private:
     /// 该 session 的数据目录是否存在 (未创建过 = 无数据, 读取直接返回空)
     bool sessionDataDirExists(std::string_view sessionId) const;
 
-    /// 建表 (幂等)
-    static void
-        ensureSchema(agentxx::util::SqliteDb& sessionDb, agentxx::util::SqliteDb& shareStoreDb);
+    /// 建表 (幂等, 单库包含 view_message/llm_context/meta/store)
+    static void ensureSchema(agentxx::util::SqliteDb& sessionDb);
 
     std::string rootDir_;
     std::mutex  mutex_;

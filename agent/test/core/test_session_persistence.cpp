@@ -159,10 +159,10 @@ static TestResult testViewMessagesRoundtrip() {
         // msgIdCounter 恢复
         XX_TEST_EXPECT_EQ(loaded.msgIdCounter, uint64_t{6});
 
-        // 目录布局: {root}/{sanitizedThreadId}/{session.db,share_store.db}
+        // 目录布局: {root}/{sanitizedThreadId}/session.db (单库, 含 item)
         auto dir = fs::path(root) / SessionStore::sanitizeSessionId("t1");
         XX_TEST_EXPECT_TRUE(fs::exists(dir / "session.db"));
-        XX_TEST_EXPECT_TRUE(fs::exists(dir / "share_store.db"));
+        XX_TEST_EXPECT_TRUE(!fs::exists(dir / "share_store.db"));
 
         // 模拟重启: 新实例读同一目录
         auto p2 = std::make_shared<SessionStore>(root);
@@ -845,11 +845,11 @@ static asio::awaitable<void> testSessionPersistenceE2E() {
             );
             XX_TEST_EXPECT_EQ(id, size_t{1});
 
-            // 落盘检查: 目录布局 {root}/{sessionId}/{session.db, share_store.db}
+            // 落盘检查: 目录布局 {root}/{sessionId}/session.db (单库)
             auto dir
                 = fs::path(root) / agentxx::agent::SessionStore::sanitizeSessionId("e2e-thread");
             XX_TEST_EXPECT_TRUE(fs::exists(dir / "session.db"));
-            XX_TEST_EXPECT_TRUE(fs::exists(dir / "share_store.db"));
+            XX_TEST_EXPECT_TRUE(!fs::exists(dir / "share_store.db"));
         }
 
         // ---- 模拟重启: 新 Agent 实例恢复会话 ----

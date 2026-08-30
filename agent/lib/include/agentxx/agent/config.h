@@ -279,8 +279,7 @@ public:
 
     /// 是否启用会话 SQLite 持久化 (消息上下文/展示历史/share store)
     /// - 数据目录: {dataDir}/sqlite/sessions/{sessionId}/
-    ///   - session.db      展示历史 + LLM 上下文 + 会话元数据
-    ///   - share_store.db  agentxx_share_store KV 条目
+    ///   - session.db  展示历史 + LLM 上下文 + 会话元数据 + share store KV (store 表)
     /// - 开启后会话在重启后可恢复历史消息/上下文/模型选择/share store
     /// - 默认关闭 (库使用方按需开启); agentxx_cli 在 buildDefaultConfig 中开启
     bool enableSessionStore = false;
@@ -288,7 +287,7 @@ public:
     /// 会话持久化根目录 (enableSessionStore 开启时生效)
     /// - 为空时使用 {dataDir}/sqlite/sessions/ (要求 dataDir 非空;
     ///   dataDir 为空且 root 未指定时, 会话持久化自动禁用, 不落盘)
-    /// - 数据目录结构: {root}/{sessionId}/{session.db, share_store.db}
+    /// - 数据目录结构: {root}/{sessionId}/session.db (单库, 含 store 表)
     std::string sessionStoreDirectory;
 
     /// LLM 节点最大重试次数
