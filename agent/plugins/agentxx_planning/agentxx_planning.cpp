@@ -87,8 +87,7 @@ stateDiagram-v2
 ```
 - todos (only current + next):
 [
-  {"state":"in_progress", "content":"Reproduce the crash with provided stack trace",
-   "summary":"Found that it crashes on null pointer at line 342"},
+  {"state":"in_progress", "content":"Reproduce the crash with provided stack trace"},
   {"state":"pending", "content":"Locate root cause by tracing the null pointer source"}
 ]
 - notes:
@@ -118,7 +117,7 @@ It helps break down large objectives into smaller, manageable steps.
 ### Finishing a Task
 
 When all work is done, write your final answer in the message AFTER your last `agentxx_planning` call — not in the same turn.
-Start the final message with the substantive content the user asked for (data, computation, summary, or analysis).
+Start the final message with the substantive content the user asked for (data, computation, or analysis).
 The user wants the result, not confirmation that the work is done.
 )_";
 
@@ -418,7 +417,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                           {"description",
                            agentxx::kit::toolPromptArgDesc(p,
                                    "todos",
-                                   "(write only) TACTICAL LAYER: Near-term task items (state/content/summary).")},
+                                   "(write only) TACTICAL LAYER: Near-term task items (state/content).")},
                       }},
                      {"notes",
                       {
@@ -548,7 +547,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_agent_destroy(void* plugin_
  * 消息列表特化 + Info 侧边栏段落全部拆分至本插件, TUI 无任何 plan 概念)
  *
  * - 工具消息装饰 (update_tool_decor): 订阅 EVT_DELTA, tool_start 时按
- *   arguments 构建装饰 (折叠头 displayName/summary + 展开体 items:
+ *   arguments 构建装饰 (折叠头 displayName + 展开体 items:
  *   状态图/todos/notes), tool_end 时以最终内容刷新
  * - Info 栏段落 "Plan" (懒注册): EVT_PLUGIN_DATA planning 事件驱动,
  *   展示最近一次规划概览; client_attached 重发快照自愈
@@ -674,9 +673,6 @@ static std::string buildDecorItems(const ClientCtx& ctx, const neograph::json& p
             clientJsonEscape(ctx, mermaid)
         ));
     };
-    auto separatorItem = [&]() {
-        items.push_back(R"({"kind":"separator"})");
-    };
 
     // ---- Graph: 状态图 (按钮，点击弹窗) ----
     const auto roadmap = plan.value("roadmap", std::string{});
@@ -694,23 +690,16 @@ static std::string buildDecorItems(const ClientCtx& ctx, const neograph::json& p
     const bool hasTodos
         = plan.contains("todos") && plan["todos"].is_array() && !plan["todos"].empty();
     if (hasTodos) {
-        if (!items.empty()) {
-            separatorItem();
-        }
         textItem("|- Todo", "title");
         for (const auto& td : plan["todos"]) {
             if (td.is_object()) {
                 const auto state   = td.value("state", std::string{});
                 const auto content = td.value("content", std::string{});
-                const auto summary = td.value("summary", std::string{});
                 if (!content.empty()) {
                     textItem(
                         fmt::format("{} {}", todoIcon(state), content),
                         std::string{todoRole(state)}
                     );
-                }
-                if (!summary.empty()) {
-                    textItem(fmt::format("  - {}", summary), "hint");
                 }
             } else if (td.is_string()) {
                 textItem(fmt::format("[ ] {}", td.get<std::string>()), "hint");
@@ -719,31 +708,11 @@ static std::string buildDecorItems(const ClientCtx& ctx, const neograph::json& p
     }
 
     // ---- Note: 备忘 (与 Todo 分区独立渲染, 避免交错) ----
-    bool hasNotes = false;
     if (plan.contains("notes")) {
-        const auto& nv = plan["notes"];
-        if (nv.is_string() && !nv.get<std::string>().empty()) {
-            hasNotes = true;
-        } else if (nv.is_array() && !nv.empty()) {
-            hasNotes = true;
-        }
-    }
-    if (hasNotes) {
-        if (!items.empty()) {
-            separatorItem();
-        }
         const auto& nv = plan["notes"];
         if (nv.is_string()) {
             textItem("|- Note", "title");
             textItem(nv.get<std::string>(), "hint");
-        } else if (nv.is_array()) {
-            textItem("|- Note", "title");
-            for (const auto& n : nv) {
-                const auto s = n.is_string() ? n.get<std::string>() : n.dump();
-                if (!s.empty()) {
-                    textItem(fmt::format("- {}", s), "hint");
-                }
-            }
         }
     }
 
@@ -804,7 +773,7 @@ static void clearSection(ClientCtx& ctx) {
 /// 三段式: Graph(按钮弹窗) / Todo / Note — 参考剥离前的 TUI renderPlanningInfo
 /// (Plan 标题 + Graph 按钮 + todos 列表 + notes 段)，经通用 items 表达:
 /// - Graph: title + button{label,mermaid} + steps hint
-/// - Todo: title + 各 todo 行 (icon+content, summary hint)
+/// - Todo: title + 各 todo 行 (icon+content)
 /// - Note: title + 内容
 static void refreshPlanSection(ClientCtx& ctx) {
     if (!ctx.host || !ctx.ui || !ctx.ui->update_info_section) {
@@ -839,9 +808,6 @@ static void refreshPlanSection(ClientCtx& ctx) {
             clientJsonEscape(ctx, mermaid)
         ));
     };
-    auto separatorItem = [&]() {
-        items.push_back(R"({"kind":"separator"})");
-    };
 
     // ---- Graph: 状态图按钮 + 概要 ----
     const auto roadmap = plan.value("roadmap", std::string{});
@@ -854,23 +820,16 @@ static void refreshPlanSection(ClientCtx& ctx) {
     const bool hasTodos
         = plan.contains("todos") && plan["todos"].is_array() && !plan["todos"].empty();
     if (hasTodos) {
-        if (!items.empty()) {
-            separatorItem();
-        }
         textItem("|- Todo", "title");
         for (const auto& td : plan["todos"]) {
             if (td.is_object()) {
                 const auto state   = td.value("state", std::string{});
                 const auto content = td.value("content", std::string{});
-                const auto summary = td.value("summary", std::string{});
                 if (!content.empty()) {
                     textItem(
                         fmt::format("{} {}", todoIcon(state), content),
                         std::string{todoRole(state)}
                     );
-                }
-                if (!summary.empty()) {
-                    textItem(fmt::format("  - {}", summary), "hint");
                 }
             } else if (td.is_string()) {
                 textItem(fmt::format("[ ] {}", td.get<std::string>()), "hint");
@@ -879,30 +838,11 @@ static void refreshPlanSection(ClientCtx& ctx) {
     }
 
     // ---- Note: 备忘 (独立分区, 与 Todo 分隔) ----
-    bool hasNote = false;
     if (plan.contains("notes")) {
         const auto& nv = plan["notes"];
-        if (nv.is_string() && !nv.get<std::string>().empty()) {
-            hasNote = true;
-        } else if (nv.is_array() && !nv.empty()) {
-            hasNote = true;
-        }
-    }
-    if (hasNote) {
-        if (!items.empty()) {
-            separatorItem();
-        }
-        const auto& nv = plan["notes"];
-        textItem("|- Note", "title");
         if (nv.is_string()) {
+            textItem("|- Note", "title");
             textItem(nv.get<std::string>(), "hint");
-        } else if (nv.is_array()) {
-            for (const auto& n : nv) {
-                const auto s = n.is_string() ? n.get<std::string>() : n.dump();
-                if (!s.empty()) {
-                    textItem(fmt::format("- {}", s), "hint");
-                }
-            }
         }
     }
 

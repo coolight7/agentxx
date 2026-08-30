@@ -10,6 +10,7 @@
 #include <cstring>
 #include <memory>
 #include <string>
+#include "fmt/format.h"
 
 namespace {
 
@@ -118,14 +119,14 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
             }
             ctx->dir = dirOf(libPath);
 
-            std::string scriptPath = ctx->dir + "/plugin.js";
+            std::string scriptPath = fmt::format("{}/plugin.js", ctx->dir);
             if (!fileExists(scriptPath)) {
                 auto pos = ctx->dir.find_last_of("/\\");
                 if (pos != std::string::npos) {
                     std::string parent = ctx->dir.substr(0, pos);
-                    if (fileExists(parent + "/plugin.js")) {
+                    if (fileExists(fmt::format("{}/plugin.js", parent))) {
                         ctx->dir   = parent;
-                        scriptPath = parent + "/plugin.js";
+                        scriptPath = fmt::format("{}/plugin.js", parent);
                     }
                 }
             }
@@ -138,11 +139,11 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                 host,
                 agentxx_plugin_sv(scriptPath.data(), scriptPath.size())
             );
-            std::string args  = "{\"name\":";
-            args             += escName ? escName : "\"\"";
-            args             += ",\"path\":";
-            args             += escPath ? escPath : "\"\"";
-            args             += "}";
+            std::string args = fmt::format(
+                "{{\"name\":{},\"path\":{}}}",
+                escName ? escName : "\"\"",
+                escPath ? escPath : "\"\""
+            );
             if (escName) {
                 host->vtable->free(escName);
             }
@@ -164,7 +165,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                 if (err) {
                     host->vtable->free(err);
                 }
-                logE(std::string("example_js: ") + errStr);
+                logE(fmt::format("example_js: {}", errStr));
                 return -1;
             }
             *plugin_ctx = ctx.release();
@@ -190,7 +191,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_agent_destroy(void* plugin_
                     host,
                     agentxx_plugin_sv(ctx->name.data(), ctx->name.size())
                 );
-                std::string args = std::string("{\"name\":") + (esc ? esc : "\"\"") + "}";
+                std::string args = fmt::format("{{\"name\":{}}}", esc ? esc : "\"\"");
                 if (esc) {
                     host->vtable->free(esc);
                 }

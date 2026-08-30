@@ -142,8 +142,11 @@ static std::string sanitizeSegment(std::string_view seg) {
     // 超长段截断: 保留前部可读信息 + 8 位 hex hash 尾缀防碰撞, 总长受控
     // - 避免单个目录名超过文件系统限制 (NAME_MAX=255) 及撑爆总路径长度
     if (out.size() > kCodeGraphMaxSegLen) {
-        out = out.substr(0, kCodeGraphMaxSegLen - 9)
-              + fmt::format("_{:08x}", static_cast<uint32_t>(fnv1a64(out) & 0xffffffffu));
+        out = fmt::format(
+            "{}_{:08x}",
+            out.substr(0, kCodeGraphMaxSegLen - 9),
+            static_cast<uint32_t>(fnv1a64(out) & 0xffffffffu)
+        );
     }
     return out;
 }
@@ -220,7 +223,7 @@ static std::vector<std::string> projectRootToSegments(std::string_view project_r
         }
 #if XX_IS_WIN_D
         if (isWindowsReservedName(seg)) {
-            seg = "_" + seg;
+            seg = fmt::format("_{}", seg);
         }
 #endif
         segs.push_back(std::move(seg));
@@ -469,7 +472,7 @@ public:
                 continue;
             }
             // 子模块目录整体忽略 (目录模式)
-            addPattern(val + "/", base);
+            addPattern(fmt::format("{}/", val), base);
         }
     }
 
@@ -530,7 +533,7 @@ private:
     static std::string escapeRegexChar(char c) {
         static const std::string special = R"(\.^$+()[]{}|)";
         if (special.find(c) != std::string::npos) {
-            return std::string("\\") + c;
+            return fmt::format("\\{}", c);
         }
         return std::string(1, c);
     }
@@ -607,10 +610,10 @@ private:
         auto body     = toGitIgnoreRegex(pattern);
         if (rule.anchored) {
             // 匹配 base 下的相对路径本身或子树
-            rule.regex = "^" + body + R"((?:/.*)?$)";
+            rule.regex = fmt::format("^{}(?:/.*)?$", body);
         } else {
             // 匹配任意层级的同名条目 (文件或目录) 及其子树
-            rule.regex = R"((?:^|/))" + body + R"((?:/.*)?$)";
+            rule.regex = fmt::format("(?:^|/){}(?:/.*)?$", body);
         }
         // 编译失败 (非法正则) 时丢弃该规则, 不中断解析
         bool compiled = catchError<bool>(
@@ -785,7 +788,7 @@ static void traverse_source_files(
             // ignorePaths 正则 + gitignore
             auto isDirIgnored = [&](const fs::path& dir) -> bool {
                 std::string s = dir.generic_string();
-                if (should_skip(s + "/")) {
+                if (should_skip(fmt::format("{}/", s))) {
                     return true;
                 }
                 for (const auto& re : ignore_path_regexes) {
@@ -938,7 +941,7 @@ public:
             }
             std::string re = glob::to_regex(p);
             if (p.find_first_of("*?[") == std::string::npos) {
-                re = re.substr(0, re.size() - 1) + R"((?:/.*)?$)";
+                re = fmt::format("{}(?:/.*)?$", re.substr(0, re.size() - 1));
             }
             catchError<bool>(
                 [&]() -> bool {
@@ -1508,7 +1511,7 @@ public:
 
     CodeGraphSearchResult searchSymbols(std::string_view query, int limit) {
         // 缓存命中 (TTL 内同参数重复查询): 直接返回, 避免重复 FTS/排序
-        std::string key = "search|" + std::string{query} + "|" + std::to_string(limit);
+        std::string key = fmt::format("search|{}|{}", query, limit);
         if (auto hit = search_cache_.get(key)) {
             return *hit;
         }
@@ -1543,8 +1546,7 @@ public:
 
     CodeGraphContextResult getSymbolContext(std::string_view symbol, int limit, int max_depth) {
         // 缓存命中 (TTL 内同参数重复查询): 直接返回, 避免重复图遍历
-        std::string key = "ctx|" + std::string{symbol} + "|" + std::to_string(limit) + "|"
-                          + std::to_string(max_depth);
+        std::string key = fmt::format("ctx|{}|{}|{}", symbol, limit, max_depth);
         if (auto hit = context_cache_.get(key)) {
             return *hit;
         }
@@ -1584,7 +1586,7 @@ public:
 
     CodeGraphImpactResult getCallers(std::string_view symbol, int max_depth) {
         // 缓存命中 (TTL 内同参数重复查询): 直接返回, 避免重复图遍历
-        std::string key = "callers|" + std::string{symbol} + "|" + std::to_string(max_depth);
+        std::string key = fmt::format("callers|{}|{}", symbol, max_depth);
         if (auto hit = callers_cache_.get(key)) {
             return *hit;
         }
@@ -1623,7 +1625,7 @@ public:
 
     CodeGraphImpactResult getCallees(std::string_view symbol, int max_depth) {
         // 缓存命中 (TTL 内同参数重复查询): 直接返回, 避免重复图遍历
-        std::string key = "callees|" + std::string{symbol} + "|" + std::to_string(max_depth);
+        std::string key = fmt::format("callees|{}|{}", symbol, max_depth);
         if (auto hit = callees_cache_.get(key)) {
             return *hit;
         }
@@ -1662,7 +1664,7 @@ public:
 
     CodeGraphImpactResult getImpact(std::string_view symbol, int max_depth) {
         // 缓存命中 (TTL 内同参数重复查询): 直接返回, 避免重复图遍历
-        std::string key = "impact|" + std::string{symbol} + "|" + std::to_string(max_depth);
+        std::string key = fmt::format("impact|{}|{}", symbol, max_depth);
         if (auto hit = impact_cache_.get(key)) {
             return *hit;
         }
@@ -1701,8 +1703,7 @@ public:
 
     CodeGraphPathResult findPath(std::string_view from, std::string_view to, int max_depth) {
         // 缓存命中 (TTL 内同参数重复查询): 直接返回, 避免重复图搜索
-        std::string key
-            = "path|" + std::string{from} + "|" + std::string{to} + "|" + std::to_string(max_depth);
+        std::string key = fmt::format("path|{}|{}|{}", from, to, max_depth);
         if (auto hit = path_cache_.get(key)) {
             return *hit;
         }
@@ -1779,7 +1780,7 @@ public:
                     return true;
                 },
                 [&](std::string errmsg) -> bool {
-                    result.error = std::string("count_nodes: ") + std::move(errmsg);
+                    result.error = fmt::format("count_nodes: {}", errmsg);
                     return false;
                 }
             );
@@ -1792,7 +1793,7 @@ public:
                     return true;
                 },
                 [&](std::string errmsg) -> bool {
-                    result.error = std::string("count_edges: ") + std::move(errmsg);
+                    result.error = fmt::format("count_edges: {}", errmsg);
                     return false;
                 }
             );
@@ -1805,7 +1806,7 @@ public:
                     return true;
                 },
                 [&](std::string errmsg) -> bool {
-                    result.error = std::string("get_all_files: ") + std::move(errmsg);
+                    result.error = fmt::format("get_all_files: {}", errmsg);
                     return false;
                 }
             );
@@ -1819,7 +1820,7 @@ public:
                     return true;
                 },
                 [&](std::string errmsg) -> bool {
-                    result.error = std::string("find_circular_dependencies: ") + std::move(errmsg);
+                    result.error = fmt::format("find_circular_dependencies: {}", errmsg);
                     return false;
                 }
             );

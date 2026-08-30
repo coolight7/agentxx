@@ -239,7 +239,7 @@ inline std::string fileListExecuteImpl(
                     std::error_code ec;
                     auto            target = std::filesystem::read_symlink(entity.path(), ec);
                     if (!ec) {
-                        pathStr += " -> " + detail::toUtf8(target);
+                        pathStr += fmt::format(" -> {}", detail::toUtf8(target));
                     }
                 }
 
@@ -518,8 +518,11 @@ inline std::string fileEditExecuteImpl(
     // 原子写: 先写同目录临时文件, 成功后 rename 覆盖原文件,
     // 避免直接 truncate 原文件后写入中途失败导致原内容永久丢失
     static std::atomic<uint64_t> s_editTmpSeq{0};
-    const auto                   tmpPath
-        = systemCharsetFilePath + fmt::format(".agentxx_edit_tmp_{}", s_editTmpSeq.fetch_add(1));
+    const auto                   tmpPath = fmt::format(
+        "{}.agentxx_edit_tmp_{}",
+        systemCharsetFilePath,
+        s_editTmpSeq.fetch_add(1)
+    );
 
     {
         std::ofstream stream(
@@ -1341,8 +1344,11 @@ inline asio::awaitable<std::string>
     // 避免直接 truncate 原文件后写入中途失败导致原内容永久丢失
     // (注: 计数器仅保证进程内唯一性, 多实例共享无害, 不属于实例状态)
     static std::atomic<uint64_t> s_editTmpSeq{0};
-    const auto                   tmpPath
-        = systemCharsetFilePath + fmt::format(".agentxx_edit_tmp_{}", s_editTmpSeq.fetch_add(1));
+    const auto                   tmpPath = fmt::format(
+        "{}.agentxx_edit_tmp_{}",
+        systemCharsetFilePath,
+        s_editTmpSeq.fetch_add(1)
+    );
 
     {
         asio::stream_file        stream{executor};

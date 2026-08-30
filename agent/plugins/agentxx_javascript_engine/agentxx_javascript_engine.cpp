@@ -24,6 +24,7 @@
 #include "agentxx/plugin/plugin_iface_helper.h"
 #include "agentxx/plugin/plugin_kit.h"
 #include "quickjs.h"
+#include "fmt/format.h"
 
 #include <atomic>
 #include <chrono>
@@ -238,8 +239,8 @@ public:
             if (!first) {
                 out += ",";
             }
-            first  = false;
-            out   += "\"" + k + "\"";
+            first = false;
+            out += fmt::format("\"{}\"", k);
         }
         out += "]";
         return out;
@@ -468,7 +469,7 @@ private:
         std::string&             err
     ) {
         if (plugins_.find(name) != plugins_.end()) {
-            err = "plugin already loaded: " + name;
+            err = fmt::format("plugin already loaded: {}", name);
             return -1;
         }
         auto pctx    = std::make_shared<JsPluginCtx>();
@@ -559,14 +560,14 @@ private:
 
         JSValue entry = JS_GetPropertyStr(pctx->ctx, pctx->tools, binding->name.c_str());
         if (!JS_IsObject(entry)) {
-            req.error = "tool not found in plugin: " + binding->name;
+            req.error = fmt::format("tool not found in plugin: {}", binding->name);
             JS_FreeValue(pctx->ctx, entry);
             return;
         }
         JSValue execFn = JS_GetPropertyStr(pctx->ctx, entry, "execute");
         JS_FreeValue(pctx->ctx, entry);
         if (!JS_IsFunction(pctx->ctx, execFn)) {
-            req.error = "tool execute not a function: " + binding->name;
+            req.error = fmt::format("tool execute not a function: {}", binding->name);
             JS_FreeValue(pctx->ctx, execFn);
             return;
         }
@@ -1144,7 +1145,7 @@ JSValue JsEngine::bridgeCall(
                 JS_FreeValue(ctx, execFn);
                 return throwJsError(
                     ctx,
-                    "registerTool: host registration failed (conflict?): " + name
+                    fmt::format("registerTool: host registration failed (conflict?): {}", name)
                 );
             }
 
@@ -1221,7 +1222,7 @@ JSValue JsEngine::bridgeCall(
                     return result;
                 }
                 JS_FreeValue(ctx, execFn);
-                return throwJsError(ctx, "callTool: execute not a function: " + name);
+                return throwJsError(ctx, fmt::format("callTool: execute not a function: {}", name));
             }
             JS_FreeValue(ctx, entry);
 
@@ -1367,7 +1368,7 @@ JSValue JsEngine::bridgeCall(
                 binding.get()
             );
             if (!sub) {
-                return throwJsError(ctx, "subscribe: host subscription failed: " + topic);
+                return throwJsError(ctx, fmt::format("subscribe: host subscription failed: {}", topic));
             }
             // token = agents 数组索引
             JSValue  lenVal = JS_GetPropertyStr(ctx, pctx->agents, "length");
@@ -1531,7 +1532,7 @@ JSValue JsEngine::bridgeCall(
                             agentxx_plugin_sv_cstr(p.c_str())
                         );
             if (rc != 0) {
-                return throwJsError(ctx, "register failed (conflict or unsupported): " + p);
+                return throwJsError(ctx, fmt::format("register failed (conflict or unsupported): {}", p));
             }
             return JS_TRUE;
         }
@@ -1587,15 +1588,21 @@ JSValue JsEngine::bridgeCall(
                 }
                 return JS_ThrowInternalError(ctx, "addMcpServer: escape failed");
             }
-            std::string spec = std::string("{\"namespace\":") + nsEsc + ",\"url\":" + urlEsc;
+            long long   t    = static_cast<long long>(timeoutSec < 0 ? 0 : timeoutSec);
+            std::string spec = fmt::format(
+                "{{\"namespace\":{},\"url\":{},\"timeout\":{}}}",
+                nsEsc,
+                urlEsc,
+                t
+            );
             vt.free(nsEsc);
             vt.free(urlEsc);
-            long long t  = static_cast<long long>(timeoutSec < 0 ? 0 : timeoutSec);
-            spec        += ",\"timeout\":" + std::to_string(t);
-            spec        += "}";
             if (iface.resources->register_mcp_server(host, agentxx_plugin_sv_cstr(spec.c_str()))
                 != 0) {
-                return throwJsError(ctx, "addMcpServer register failed (conflict?): " + ns);
+                return throwJsError(
+                    ctx,
+                    fmt::format("addMcpServer register failed (conflict?): {}", ns)
+                );
             }
             return JS_TRUE;
         }
@@ -1718,10 +1725,9 @@ static void* jsCapStart(
                         return;
                     }
                     std::string tools   = engine->loadedToolsJsonOnJsThread(name);
-                    char*       payload = eh ? eh->vtable->strdup(
-                                             ("{\"ok\": true, \"tools\": " + tools + "}").c_str()
-                                         )
-                                             : nullptr;
+                    std::string payloadStr
+                        = fmt::format(R"({{"ok": true, "tools": {}}})", tools);
+                    char* payload = eh ? eh->vtable->strdup(payloadStr.c_str()) : nullptr;
                     ntfCopy.done(ntfCopy.host_ud, AGENTXX_PLUGIN_OPERATOR_OK, payload);
                 })) {
                 return setErr("interpreter.js engine stopped");
@@ -1743,7 +1749,10 @@ static void* jsCapStart(
             return nullptr; ///< 内联完成
         }
 
-        setErr(("interpreter.js: unknown method `" + methodStr + "`").c_str());
+        {
+            std::string _msg = fmt::format("interpreter.js: unknown method `{}`", methodStr);
+            setErr(_msg.c_str());
+        }
         return nullptr;
     } catch (...) {
         // 异常分类上报 + 尽力设置 error_out (宿主按 OP_FAILED 处理)
