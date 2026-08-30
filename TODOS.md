@@ -15,7 +15,7 @@
 
 - 冻结 system prompt
 - share_store 替换 middleware.state
-- AgentxxConfigIface: get_work_dir/get_session_work_dir
+- AgentxxPluginConfigIface: get_work_dir/get_session_work_dir
 - OpWatchdog debug 时启用、配置启用
 
 ## 提示词优化
