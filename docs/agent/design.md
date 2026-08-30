@@ -80,8 +80,7 @@ tool_skill_search 与延迟加载装配：
 
 ### Git Worktree 模式 (yaml `worktree.enable`, 默认关闭)
 
-开启后注册 `agentxx_git_worktree` 工具 (`agentxx::tools::GitWorktreeTool`) 并由
-`WorktreeMiddlewareHandle` 每轮按会话绑定状态注入行为提示词。设计目标: 同一仓库
+开启后注册 `agentxx_git_worktree` 工具 (`agentxx::tools::GitWorktreeTool`) 。设计目标: 同一仓库
 目录启动的多个 agent 会话各自在独立 worktree 内开发, 代码修改互不影响
 (参考 Claude Code `--worktree` / `EnterWorktree` 的分层约束设计)。
 

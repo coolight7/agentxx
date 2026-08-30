@@ -226,13 +226,21 @@ asio::awaitable<void> CodeAgent::initMiddleware() {
         }
     }
     {
-        // worktree 模式提示词中间件 (yaml `worktree.enable`): 每轮按会话绑定
-        // 状态注入行为规范 (未绑定→提示创建 / 已绑定→提交与收尾规范 /
-        // 子代理继承→隔离提醒), 与 PlanningMiddleware 同一注入通道
+        // worktree 模式: 程序初始化时若启用则一次性追加系统提示词,
+        // 进入/退出 worktree 不再修改 system prompt
+        // - 初始化期静态注入，避免进入/退出 worktree 时 system prompt 变化
         if (config->enableWorktree) {
-            agentContext->middlewareHandleContext->handles.push_back(
-                std::make_shared<agentxx::middleware::WorktreeMiddlewareHandle>(agentContext)
-            );
+            static const std::string worktreeInitTip = R"(## Git Worktree Mode
+This session supports isolated git worktrees (`agentxx_git_worktree` tool).
+When the task modifies code, create an isolated worktree FIRST via opt=create, then do all edits/builds/tests inside it — this keeps parallel sessions from interfering with each other.
+Read-only tasks (analysis/questions) don't need a worktree.)";
+            if (config->prompt.systemPrompt.find("Git Worktree Mode") == std::string::npos) {
+                if (!config->prompt.systemPrompt.empty()
+                    && config->prompt.systemPrompt.back() != '\n') {
+                    config->prompt.systemPrompt += "\n\n";
+                }
+                config->prompt.systemPrompt += worktreeInitTip;
+            }
         }
     }
 

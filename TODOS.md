@@ -13,10 +13,7 @@
 - 插件 readHostConfig 改为直接传入 变量路径 取值，变量取值交由主程序解析
 - codegraph 疑似启动后没有更新索引
 
-- 合并 share_store.db 到 session.db
-- worktree 应当启用时增加 system prompt提示，但进入、退出不应更新 system prompt
 - 冻结 system prompt
-- modelcall 修复上下文合并连续 user 消息
 - share_store 替换 middleware.state
 - AgentxxConfigIface: get_work_dir/get_session_work_dir
 - OpWatchdog debug 时启用、配置启用
