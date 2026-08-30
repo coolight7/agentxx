@@ -184,9 +184,10 @@ public:
     bool enableSubagent = true;
 
     /// 是否启用 git worktree 模式 (yaml `worktree.enable`, 默认关闭)
-    /// - 开启后注册 `agentxx_git_worktree` 工具 + 每轮注入 worktree 行为提示词:
-    ///   提示模型在涉及代码修改的任务开始时创建独立 worktree 并绑定会话,
-    ///   实现同仓库多会话并行开发互不影响
+    /// - 开启后注册 `agentxx_git_worktree` 工具 + 程序初始化时一次性追加
+    ///   worktree 行为提示词到 system prompt (提示模型在涉及代码修改的任务
+    ///   开始时创建独立 worktree 并绑定会话，实现同仓库多会话并行开发互不影响)；
+    ///   进入/退出 worktree 不再修改 system prompt (避免上下文抖动)
     /// - 绑定语义: create 成功即把当前会话的相对路径解析基准切换到 worktree
     ///   (Session::WorktreeBinding), 权限层同步注册隔离边界
     ///   (主检出写 DENY / worktree 读写 ALLOW)

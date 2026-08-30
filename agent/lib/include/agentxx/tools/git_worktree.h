@@ -20,7 +20,6 @@ namespace tools {
 /// 平台约束联动:
 /// - 绑定时向 PermissionMiddleware 注册会话隔离边界: 主检出子树写 DENY,
 ///   worktree 子树放行 (读主检出不受限), 隔离优先于白名单/模式默认规则
-/// - 每轮提示词注入由 WorktreeMiddlewareHandle 负责 (状态感知的行为规范)
 class GitWorktreeTool : public XXToolBase {
 public:
 
