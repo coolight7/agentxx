@@ -88,8 +88,8 @@ typedef struct AgentxxPanel       AgentxxPanel;       ///< 侧边栏面板句柄
 typedef struct AgentxxInfoSection AgentxxInfoSection; ///< 侧边栏 Info 栏段落句柄
 
 /* ==================== 核心宿主函数表 (契约冻结) ==================== */
-/* 合并: client 侧复用 agent 侧核心 vtable 类型 (布局完全一致: alloc/free/strdup + query_interface)，
- * 统一经 AgentxxPluginHostVtable / AgentxxPluginHost 承载，避免双套类型冗余。
+/* 合并: client 侧复用 agent 侧核心 vtable 类型 (布局完全一致: alloc/free/strdup +
+ * query_interface)， 统一经 AgentxxPluginHostVtable / AgentxxPluginHost 承载，避免双套类型冗余。
  * 为兼容历史代码，保留 AgentxxClientHost / AgentxxClientHostVtable 别名。
  */
 typedef AgentxxPluginHost AgentxxClientHost;

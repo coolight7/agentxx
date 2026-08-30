@@ -356,55 +356,46 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
     // C ABI 边界异常守卫: create 内含 JSON schema 构建等可抛操作, 异常返回 -1;
     // 守卫日志闭包捕获局部裸指针 (ctx 装配前置空 → 异常路径静默丢弃)
     PluginCtx* raw = nullptr;
-    return agentxx::
-        plugin_guard::
-            guardCall(
-                [&raw](const char* msg) noexcept {
-                    pluginLog(raw, 4, msg ? msg : "");
-                },
-                -1,
-                [&]() -> int {
-                    if (!host || !host->vtable || !plugin_ctx) {
-                        return -1;
-                    }
-                    auto ctx   = std::make_unique<PluginCtx>();
-                    ctx->host  = host;
-                    ctx->iface = agentxx::plugin::AgentIfaces::query(host);
-                    raw        = ctx.get();
+    return agentxx::plugin_guard::guardCall(
+        [&raw](const char* msg) noexcept {
+            pluginLog(raw, 4, msg ? msg : "");
+        },
+        -1,
+        [&]() -> int {
+            if (!host || !host->vtable || !plugin_ctx) {
+                return -1;
+            }
+            auto ctx   = std::make_unique<PluginCtx>();
+            ctx->host  = host;
+            ctx->iface = agentxx::plugin::AgentIfaces::query(host);
+            raw        = ctx.get();
 
-                    // 注入 systemPlanningPrompt 至宿主提示词 (替代已移除的 PlanningMiddleware)
-                    if (ctx->iface.prompt && ctx->iface.prompt->set_prompt) {
-                        neograph::json j;
-                        j["systemPlanningPrompt"] = kSystemPlanningPrompt;
-                        std::string js = j.dump();
-                        if (ctx->iface.prompt->set_prompt(
-                                host,
-                                agentxx_plugin_sv(js.data(), js.size())
-                            )
-                            != 0) {
-                            pluginLog(
-                                ctx.get(),
-                                3,
-                                "agentxx_planning: set systemPlanningPrompt failed"
-                            );
-                        } else {
-                            pluginLog(
-                                ctx.get(),
-                                2,
-                                "agentxx_planning: systemPlanningPrompt injected via prompt iface"
-                            );
-                        }
-                    }
+            // 注入 systemPlanningPrompt 至宿主提示词 (替代已移除的 PlanningMiddleware)
+            if (ctx->iface.prompt && ctx->iface.prompt->set_prompt) {
+                neograph::json j;
+                j["systemPlanningPrompt"] = kSystemPlanningPrompt;
+                std::string js            = j.dump();
+                if (ctx->iface.prompt->set_prompt(host, agentxx_plugin_sv(js.data(), js.size()))
+                    != 0) {
+                    pluginLog(ctx.get(), 3, "agentxx_planning: set systemPlanningPrompt failed");
+                } else {
+                    pluginLog(
+                        ctx.get(),
+                        2,
+                        "agentxx_planning: systemPlanningPrompt injected via prompt iface"
+                    );
+                }
+            }
 
-                    // 规划持久化 + 事件发布为通用接口 (不再依赖专用 planning iface)
+            // 规划持久化 + 事件发布为通用接口 (不再依赖专用 planning iface)
 
-                    {
-                        agentxx::kit::ToolPromptText p      = ctx->toolPrompt(kNamePlanning);
-                        std::string                  depict = p.depict;
-                        if (depict.empty()) {
-                            depict = kDepictPlanning;
-                        }
-                        std::string schema = neograph::json{
+            {
+                agentxx::kit::ToolPromptText p      = ctx->toolPrompt(kNamePlanning);
+                std::string                  depict = p.depict;
+                if (depict.empty()) {
+                    depict = kDepictPlanning;
+                }
+                std::string schema = neograph::json{
                 {"type", "object"},
                 {"required", neograph::json::array({"mode"})},
                 {"properties",
@@ -449,227 +440,107 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
             }
                                   .dump();
 
-                        agentxx::
-                            kit::
-                                fast_tool(
-                                    *ctx,
-                                    kNamePlanning,
-                                    depict,
-                                    schema,
-                                    [](PluginCtx& c, std::string_view args_json, std::string_view thread_id) -> std::
-                                                                                                                 string {
-                                                                                                                     std::string argsStr(
-                                                                                                                         args_json
-                                                                                                                                 .data(
-                                                                                                                                 )
-                                                                                                                             ? args_json
-                                                                                                                                   .data(
-                                                                                                                                   )
-                                                                                                                             : "",
-                                                                                                                         args_json
-                                                                                                                             .size(
-                                                                                                                             )
-                                                                                                                     );
-                                                                                                                     auto
-                                                                                                                         arguments
-                                                                                                                         = argsStr.empty(
-                                                                                                                           )
-                                                                                                                               ? neograph::
-                                                                                                                                     json::object(
-                                                                                                                                     )
-                                                                                                                               : neograph::
-                                                                                                                                     json::parse(
-                                                                                                                                         argsStr
-                                                                                                                                     );
+                agentxx::kit::fast_tool(
+                    *ctx,
+                    kNamePlanning,
+                    depict,
+                    schema,
+                    [](PluginCtx& c, std::string_view args_json, std::string_view thread_id
+                    ) -> std::string {
+                        std::string argsStr(
+                            args_json.data() ? args_json.data() : "",
+                            args_json.size()
+                        );
+                        auto arguments = argsStr.empty() ? neograph::json::object()
+                                                         : neograph::json::parse(argsStr);
 
-                                                                                                                     const auto
-                                                                                                                         mode
-                                                                                                                         = arguments
-                                                                                                                               .value(
-                                                                                                                                   "mode",
-                                                                                                                                   std::string{
-                                                                                                                                   }
-                                                                                                                               );
-                                                                                                                     if (mode
-                                                                                                                             != "write"
-                                                                                                                         && mode
-                                                                                                                                != "read") {
-                                                                                                                         return R"({"error":"Arg `mode` must be \"write\" or \"read\""})";
-                                                                                                                     }
+                        const auto mode = arguments.value("mode", std::string{});
+                        if (mode != "write" && mode != "read") {
+                            return R"({"error":"Arg `mode` must be \"write\" or \"read\""})";
+                        }
 
-                                                                                                                     if (mode
-                                                                                                                         == "read") {
-                                                                                                                         const std::string tid{
-                                                                                                                             thread_id
-                                                                                                                                     .data(
-                                                                                                                                     )
-                                                                                                                                 ? thread_id
-                                                                                                                                       .data(
-                                                                                                                                       )
-                                                                                                                                 : "",
-                                                                                                                             thread_id
-                                                                                                                                 .size(
-                                                                                                                                 )
-                                                                                                                         };
-                                                                                                                         auto
-                                                                                                                             saved
-                                                                                                                             = loadPlanningFile(
-                                                                                                                                 c,
-                                                                                                                                 tid
-                                                                                                                             );
-                                                                                                                         if (saved
-                                                                                                                                 .empty(
-                                                                                                                                 )) {
-                                                                                                                             return R"({"error":"No saved planning in this session. Call with mode=\"write\" first."})";
-                                                                                                                         }
-                                                                                                                         try {
-                                                                                                                             auto v = neograph::
-                                                                                                                                 json::parse(
-                                                                                                                                     saved
-                                                                                                                                 );
-                                                                                                                             return v
-                                                                                                                                 .dump(
-                                                                                                                                     2
-                                                                                                                                 );
-                                                                                                                         } catch (
-                                                                                                                             ...
-                                                                                                                         ) {
-                                                                                                                             return R"({"error":"Saved planning is corrupted. Rewrite it with mode=\"write\"."})";
-                                                                                                                         }
-                                                                                                                     }
+                        if (mode == "read") {
+                            const std::string tid{
+                                thread_id.data() ? thread_id.data() : "",
+                                thread_id.size()
+                            };
+                            auto saved = loadPlanningFile(c, tid);
+                            if (saved.empty()) {
+                                return R"({"error":"No saved planning in this session. Call with mode=\"write\" first."})";
+                            }
+                            try {
+                                auto v = neograph::json::parse(saved);
+                                return v.dump(2);
+                            } catch (...) {
+                                return R"({"error":"Saved planning is corrupted. Rewrite it with mode=\"write\"."})";
+                            }
+                        }
 
-                                                                                                                     auto
-                                                                                                                         roadmap
-                                                                                                                         = arguments
-                                                                                                                               .value(
-                                                                                                                                   "roadmap",
-                                                                                                                                   std::string{
-                                                                                                                                   }
-                                                                                                                               );
-                                                                                                                     if (roadmap
-                                                                                                                             .empty(
-                                                                                                                             )) {
-                                                                                                                         return R"({"error":"Arg `roadmap` is empty, must provide a stateDiagram-v2 planning string in write mode"})";
-                                                                                                                     }
+                        auto roadmap = arguments.value("roadmap", std::string{});
+                        if (roadmap.empty()) {
+                            return R"({"error":"Arg `roadmap` is empty, must provide a stateDiagram-v2 planning string in write mode"})";
+                        }
 
-                                                                                                                     std::string
-                                                                                                                         todosJson;
-                                                                                                                     if (arguments
-                                                                                                                             .contains(
-                                                                                                                                 "todos"
-                                                                                                                             )
-                                                                                                                         && arguments["todos"]
-                                                                                                                                .is_array(
-                                                                                                                                )) {
-                                                                                                                         todosJson
-                                                                                                                             = arguments["todos"]
-                                                                                                                                   .dump(
-                                                                                                                                   );
-                                                                                                                     }
-                                                                                                                     std::string
-                                                                                                                         notes
-                                                                                                                         = arguments
-                                                                                                                               .value(
-                                                                                                                                   "notes",
-                                                                                                                                   std::string{
-                                                                                                                                   }
-                                                                                                                               );
+                        std::string todosJson;
+                        if (arguments.contains("todos") && arguments["todos"].is_array()) {
+                            todosJson = arguments["todos"].dump();
+                        }
+                        std::string notes = arguments.value("notes", std::string{});
 
-                                                                                                                     neograph::
-                                                                                                                         json
-                                                                                                                             planStore
-                                                                                                                         = neograph::
-                                                                                                                             json::object(
-                                                                                                                             );
-                                                                                                                     planStore
-                                                                                                                         ["roadmap"]
-                                                                                                                         = roadmap;
-                                                                                                                     if (!todosJson
-                                                                                                                              .empty(
-                                                                                                                              )) {
-                                                                                                                         try {
-                                                                                                                             planStore
-                                                                                                                                 ["todos"]
-                                                                                                                                 = neograph::
-                                                                                                                                     json::parse(
-                                                                                                                                         todosJson
-                                                                                                                                     );
-                                                                                                                         } catch (const std::
-                                                                                                                                      exception&) {
-                                                                                                                             return R"({"error":"Arg `todos` is not valid JSON"})";
-                                                                                                                         }
-                                                                                                                     }
-                                                                                                                     if (!notes
-                                                                                                                              .empty(
-                                                                                                                              )) {
-                                                                                                                         planStore
-                                                                                                                             ["notes"]
-                                                                                                                             = notes;
-                                                                                                                     }
-                                                                                                                     std::string
-                                                                                                                         planJson
-                                                                                                                         = planStore
-                                                                                                                               .dump(
-                                                                                                                               );
+                        neograph::json planStore = neograph::json::object();
+                        planStore["roadmap"]     = roadmap;
+                        if (!todosJson.empty()) {
+                            try {
+                                planStore["todos"] = neograph::json::parse(todosJson);
+                            } catch (const std::exception&) {
+                                return R"({"error":"Arg `todos` is not valid JSON"})";
+                            }
+                        }
+                        if (!notes.empty()) {
+                            planStore["notes"] = notes;
+                        }
+                        std::string planJson = planStore.dump();
 
-                                                                                                                     const std::string tid{
-                                                                                                                         thread_id
-                                                                                                                                 .data(
-                                                                                                                                 )
-                                                                                                                             ? thread_id
-                                                                                                                                   .data(
-                                                                                                                                   )
-                                                                                                                             : "",
-                                                                                                                         thread_id
-                                                                                                                             .size(
-                                                                                                                             )
-                                                                                                                     };
-                                                                                                                     if (!savePlanningFile(
-                                                                                                                             c,
-                                                                                                                             tid,
-                                                                                                                             planJson
-                                                                                                                         )) {
-                                                                                                                         pluginLog(
-                                                                                                                             &c,
-                                                                                                                             3,
-                                                                                                                             fmt::format(
-                                                                                                                                 "agentxx_planning: persist planning failed tid={}",
-                                                                                                                                 tid
-                                                                                                                             )
-                                                                                                                         );
-                                                                                                                     }
-
-                                                                                                                     // 通用接口: 持久化到 {dataDir}/plans + 事件发布 (宿主/客户端通用消费)
-                                                                                                                     publishPlanningEvent(
-                                                                                                                         c,
-                                                                                                                         planJson
-                                                                                                                     );
-
-                                                                                                                     return "success";
-                                                                                                                 }
-                                );
-                    }
-
-                    // 宿主约定事件 client_attached 订阅: 客户端接入/重连时重发当前会话快照
-                    if (ctx->iface.events && ctx->iface.events->subscribe) {
-                        if (!ctx->iface.events->subscribe(
-                                host,
-                                agentxx_plugin_sv_cstr("agentxx_host.client_attached"),
-                                on_client_attached,
-                                ctx.get()
-                            )) {
+                        const std::string tid{
+                            thread_id.data() ? thread_id.data() : "",
+                            thread_id.size()
+                        };
+                        if (!savePlanningFile(c, tid, planJson)) {
                             pluginLog(
-                                ctx.get(),
+                                &c,
                                 3,
-                                "agentxx_planning: subscribe client_attached failed (UI resnapshot disabled)"
+                                fmt::format("agentxx_planning: persist planning failed tid={}", tid)
                             );
                         }
-                    }
 
-                    *plugin_ctx = ctx.release(); ///< 所有权移交宿主 (destroy 时取回归还)
-                    return 0;
+                        // 通用接口: 持久化到 {dataDir}/plans + 事件发布 (宿主/客户端通用消费)
+                        publishPlanningEvent(c, planJson);
+
+                        return "success";
+                    }
+                );
+            }
+
+            // 宿主约定事件 client_attached 订阅: 客户端接入/重连时重发当前会话快照
+            if (ctx->iface.events && ctx->iface.events->subscribe) {
+                if (!ctx->iface.events->subscribe(
+                        host,
+                        agentxx_plugin_sv_cstr("agentxx_host.client_attached"),
+                        on_client_attached,
+                        ctx.get()
+                    )) {
+                    pluginLog(
+                        ctx.get(),
+                        3,
+                        "agentxx_planning: subscribe client_attached failed (UI resnapshot disabled)"
+                    );
                 }
-            );
+            }
+
+            *plugin_ctx = ctx.release(); ///< 所有权移交宿主 (destroy 时取回归还)
+            return 0;
+        }
+    );
 }
 
 extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_agent_destroy(void* plugin_ctx) {

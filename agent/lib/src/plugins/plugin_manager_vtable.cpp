@@ -44,33 +44,33 @@ static char* xx_strdup(const char* s) {
 
 static int xx_register_tool(const AgentxxPluginHost* host, const AgentxxPluginToolSpec* spec) {
     return agentxx::plugin::guardVtableCall(-1, [&]() -> int {
-    auto mgr  = mgrOf(host);
-    auto inst = instOf(host);
-    if (!mgr || !inst || !spec || agentxx_plugin_sv_empty(spec->name)) {
-        return -1;
-    }
-    auto                  mgrPtr   = mgr;
-    auto                  instPtr  = inst;
-    AgentxxPluginToolSpec specCopy = *spec;
-    return ioCallSync<int>(mgrPtr, [mgrPtr, instPtr, specCopy]() {
-        return mgrPtr->registerTool(instPtr, &specCopy);
-    });
+        auto mgr  = mgrOf(host);
+        auto inst = instOf(host);
+        if (!mgr || !inst || !spec || agentxx_plugin_sv_empty(spec->name)) {
+            return -1;
+        }
+        auto                  mgrPtr   = mgr;
+        auto                  instPtr  = inst;
+        AgentxxPluginToolSpec specCopy = *spec;
+        return ioCallSync<int>(mgrPtr, [mgrPtr, instPtr, specCopy]() {
+            return mgrPtr->registerTool(instPtr, &specCopy);
+        });
     });
 }
 
 static int xx_unregister_tool(const AgentxxPluginHost* host, AgentxxPluginStringView name) {
     return agentxx::plugin::guardVtableCall(-1, [&]() -> int {
-    auto mgr  = mgrOf(host);
-    auto inst = instOf(host);
-    if (!mgr || !inst || agentxx_plugin_sv_empty(name)) {
-        return -1;
-    }
-    auto        mgrPtr  = mgr;
-    auto        instPtr = inst;
-    std::string toolName{name.data, name.size};
-    return ioCallSync<int>(mgrPtr, [mgrPtr, instPtr, toolName]() {
-        return mgrPtr->unregisterTool(instPtr, toolName.c_str());
-    });
+        auto mgr  = mgrOf(host);
+        auto inst = instOf(host);
+        if (!mgr || !inst || agentxx_plugin_sv_empty(name)) {
+            return -1;
+        }
+        auto        mgrPtr  = mgr;
+        auto        instPtr = inst;
+        std::string toolName{name.data, name.size};
+        return ioCallSync<int>(mgrPtr, [mgrPtr, instPtr, toolName]() {
+            return mgrPtr->unregisterTool(instPtr, toolName.c_str());
+        });
     });
 }
 
@@ -111,33 +111,33 @@ static ::AgentxxPluginOperatorHandle* xx_call_tool_async(
 
 static int xx_register_hook(const AgentxxPluginHost* host, const AgentxxPluginHookSpec* spec) {
     return agentxx::plugin::guardVtableCall(-1, [&]() -> int {
-    auto mgr  = mgrOf(host);
-    auto inst = instOf(host);
-    if (!mgr || !inst || !spec || spec->point < 0 || spec->point >= AGENTXX_PLUGIN_HOOK_COUNT
-        || !spec->hook_start) {
-        return -1;
-    }
-    auto                  mgrPtr   = mgr;
-    auto                  instPtr  = inst;
-    AgentxxPluginHookSpec specCopy = *spec;
-    return ioCallSync<int>(mgrPtr, [mgrPtr, instPtr, specCopy]() {
-        return mgrPtr->registerHook(instPtr, &specCopy);
-    });
+        auto mgr  = mgrOf(host);
+        auto inst = instOf(host);
+        if (!mgr || !inst || !spec || spec->point < 0 || spec->point >= AGENTXX_PLUGIN_HOOK_COUNT
+            || !spec->hook_start) {
+            return -1;
+        }
+        auto                  mgrPtr   = mgr;
+        auto                  instPtr  = inst;
+        AgentxxPluginHookSpec specCopy = *spec;
+        return ioCallSync<int>(mgrPtr, [mgrPtr, instPtr, specCopy]() {
+            return mgrPtr->registerHook(instPtr, &specCopy);
+        });
     });
 }
 
 static int xx_unregister_hook(const AgentxxPluginHost* host, AgentxxPluginHookPoint point) {
     return agentxx::plugin::guardVtableCall(-1, [&]() -> int {
-    auto mgr  = mgrOf(host);
-    auto inst = instOf(host);
-    if (!mgr || !inst || point < 0 || point >= AGENTXX_PLUGIN_HOOK_COUNT) {
-        return -1;
-    }
-    auto mgrPtr  = mgr;
-    auto instPtr = inst;
-    return ioCallSync<int>(mgrPtr, [mgrPtr, instPtr, point]() {
-        return mgrPtr->unregisterHook(instPtr, point);
-    });
+        auto mgr  = mgrOf(host);
+        auto inst = instOf(host);
+        if (!mgr || !inst || point < 0 || point >= AGENTXX_PLUGIN_HOOK_COUNT) {
+            return -1;
+        }
+        auto mgrPtr  = mgr;
+        auto instPtr = inst;
+        return ioCallSync<int>(mgrPtr, [mgrPtr, instPtr, point]() {
+            return mgrPtr->unregisterHook(instPtr, point);
+        });
     });
 }
 
@@ -148,38 +148,38 @@ static AgentxxPluginSubscription* xx_subscribe(
     void* ud
 ) {
     return agentxx::plugin::guardVtableCall(nullptr, [&]() -> AgentxxPluginSubscription* {
-    auto mgr  = mgrOf(host);
-    auto inst = instOf(host);
-    if (!mgr || !inst) {
-        return static_cast<AgentxxPluginSubscription*>(nullptr);
-    }
-    auto        mgrPtr  = mgr;
-    auto        instPtr = inst;
-    std::string topicStr{topic.data ? topic.data : "", topic.size};
-    return ioCallSync<AgentxxPluginSubscription*>(
-        mgrPtr,
-        [mgrPtr, instPtr, topicStr, handler, ud]() {
-            return mgrPtr->subscribe(instPtr, topicStr.c_str(), handler, ud);
+        auto mgr  = mgrOf(host);
+        auto inst = instOf(host);
+        if (!mgr || !inst) {
+            return static_cast<AgentxxPluginSubscription*>(nullptr);
         }
-    );
+        auto        mgrPtr  = mgr;
+        auto        instPtr = inst;
+        std::string topicStr{topic.data ? topic.data : "", topic.size};
+        return ioCallSync<AgentxxPluginSubscription*>(
+            mgrPtr,
+            [mgrPtr, instPtr, topicStr, handler, ud]() {
+                return mgrPtr->subscribe(instPtr, topicStr.c_str(), handler, ud);
+            }
+        );
     });
 }
 
 static void xx_unsubscribe(AgentxxPluginSubscription* sub) {
     agentxx::plugin::guardVtableCallVoid([&]() {
-    if (!sub) {
-        return;
-    }
-    if (!sub->inst) {
-        return;
-    }
-    auto mgr = sub->inst->manager.lock().get();
-    if (mgr) {
-        ioCallSyncVoid(mgr, [mgr, sub]() {
-            mgr->unsubscribe(sub);
-        });
-    }
-    sub->inst = nullptr;
+        if (!sub) {
+            return;
+        }
+        if (!sub->inst) {
+            return;
+        }
+        auto mgr = sub->inst->manager.lock().get();
+        if (mgr) {
+            ioCallSyncVoid(mgr, [mgr, sub]() {
+                mgr->unsubscribe(sub);
+            });
+        }
+        sub->inst = nullptr;
     });
 }
 
@@ -189,66 +189,66 @@ static int xx_publish(
     AgentxxPluginStringView  event_json
 ) {
     return agentxx::plugin::guardVtableCall(-1, [&]() -> int {
-    auto mgr  = mgrOf(host);
-    auto inst = instOf(host);
-    if (!mgr || !inst) {
-        return -1;
-    }
-    if (!inst->enabled) {
-        XX_LOGW("Plugin `{}` publish ignored (disabled)", inst->name);
-        return -1;
-    }
-    std::string topicStr{topic.data ? topic.data : "", topic.size};
-    std::string payload{event_json.data ? event_json.data : "", event_json.size};
-    return mgr->publish(topicStr.c_str(), payload.c_str());
+        auto mgr  = mgrOf(host);
+        auto inst = instOf(host);
+        if (!mgr || !inst) {
+            return -1;
+        }
+        if (!inst->enabled) {
+            XX_LOGW("Plugin `{}` publish ignored (disabled)", inst->name);
+            return -1;
+        }
+        std::string topicStr{topic.data ? topic.data : "", topic.size};
+        std::string payload{event_json.data ? event_json.data : "", event_json.size};
+        return mgr->publish(topicStr.c_str(), payload.c_str());
     });
 }
 
 static int
     xx_register_capability(const AgentxxPluginHost* host, AgentxxPluginStringView capability) {
     return agentxx::plugin::guardVtableCall(-1, [&]() -> int {
-    auto mgr  = mgrOf(host);
-    auto inst = instOf(host);
-    if (!mgr || !inst || agentxx_plugin_sv_empty(capability)) {
-        return -1;
-    }
-    auto        mgrPtr  = mgr;
-    auto        instPtr = inst;
-    std::string cap{capability.data, capability.size};
-    return ioCallSync<int>(mgrPtr, [mgrPtr, instPtr, cap]() {
-        return mgrPtr->registerCapability(instPtr, cap.c_str());
-    });
+        auto mgr  = mgrOf(host);
+        auto inst = instOf(host);
+        if (!mgr || !inst || agentxx_plugin_sv_empty(capability)) {
+            return -1;
+        }
+        auto        mgrPtr  = mgr;
+        auto        instPtr = inst;
+        std::string cap{capability.data, capability.size};
+        return ioCallSync<int>(mgrPtr, [mgrPtr, instPtr, cap]() {
+            return mgrPtr->registerCapability(instPtr, cap.c_str());
+        });
     });
 }
 
 static int
     xx_unregister_capability(const AgentxxPluginHost* host, AgentxxPluginStringView capability) {
     return agentxx::plugin::guardVtableCall(-1, [&]() -> int {
-    auto mgr  = mgrOf(host);
-    auto inst = instOf(host);
-    if (!mgr || !inst || agentxx_plugin_sv_empty(capability)) {
-        return -1;
-    }
-    auto        mgrPtr  = mgr;
-    auto        instPtr = inst;
-    std::string cap{capability.data, capability.size};
-    return ioCallSync<int>(mgrPtr, [mgrPtr, instPtr, cap]() {
-        return mgrPtr->unregisterCapability(instPtr, cap.c_str());
-    });
+        auto mgr  = mgrOf(host);
+        auto inst = instOf(host);
+        if (!mgr || !inst || agentxx_plugin_sv_empty(capability)) {
+            return -1;
+        }
+        auto        mgrPtr  = mgr;
+        auto        instPtr = inst;
+        std::string cap{capability.data, capability.size};
+        return ioCallSync<int>(mgrPtr, [mgrPtr, instPtr, cap]() {
+            return mgrPtr->unregisterCapability(instPtr, cap.c_str());
+        });
     });
 }
 
 static int xx_has_capability(const AgentxxPluginHost* host, AgentxxPluginStringView capability) {
     return agentxx::plugin::guardVtableCall(0, [&]() -> int {
-    auto mgr = mgrOf(host);
-    if (!mgr || agentxx_plugin_sv_empty(capability)) {
-        return 0;
-    }
-    std::string cap{capability.data, capability.size};
-    auto        mgrPtr = mgr;
-    return ioCallSync<int>(mgrPtr, [mgrPtr, cap]() {
-        return mgrPtr->hasCapability(cap.c_str()) ? 1 : 0;
-    });
+        auto mgr = mgrOf(host);
+        if (!mgr || agentxx_plugin_sv_empty(capability)) {
+            return 0;
+        }
+        std::string cap{capability.data, capability.size};
+        auto        mgrPtr = mgr;
+        return ioCallSync<int>(mgrPtr, [mgrPtr, cap]() {
+            return mgrPtr->hasCapability(cap.c_str()) ? 1 : 0;
+        });
     });
 }
 
@@ -260,17 +260,17 @@ static int xx_register_capability_ex(
     void*                                ctx
 ) {
     return agentxx::plugin::guardVtableCall(-1, [&]() -> int {
-    auto mgr  = mgrOf(host);
-    auto inst = instOf(host);
-    if (!mgr || !inst || agentxx_plugin_sv_empty(capability) || !start) {
-        return -1;
-    }
-    auto        mgrPtr  = mgr;
-    auto        instPtr = inst;
-    std::string cap{capability.data, capability.size};
-    return ioCallSync<int>(mgrPtr, [mgrPtr, instPtr, cap, start, cancel, ctx]() {
-        return mgrPtr->registerCapabilityEx(instPtr, cap.c_str(), start, cancel, ctx);
-    });
+        auto mgr  = mgrOf(host);
+        auto inst = instOf(host);
+        if (!mgr || !inst || agentxx_plugin_sv_empty(capability) || !start) {
+            return -1;
+        }
+        auto        mgrPtr  = mgr;
+        auto        instPtr = inst;
+        std::string cap{capability.data, capability.size};
+        return ioCallSync<int>(mgrPtr, [mgrPtr, instPtr, cap, start, cancel, ctx]() {
+            return mgrPtr->registerCapabilityEx(instPtr, cap.c_str(), start, cancel, ctx);
+        });
     });
 }
 
@@ -284,70 +284,71 @@ static ::AgentxxPluginOperatorHandle* xx_invoke_capability_async(
     char**                        error_out
 ) {
     return agentxx::plugin::guardVtableCall(nullptr, [&]() -> ::AgentxxPluginOperatorHandle* {
-    auto mgr  = mgrOf(host);
-    auto inst = instOf(host);
-    if (!mgr || !inst || agentxx_plugin_sv_empty(capability) || agentxx_plugin_sv_empty(method)) {
-        return static_cast<::AgentxxPluginOperatorHandle*>(nullptr);
-    }
-    std::string cap{capability.data, capability.size};
-    std::string m{method.data, method.size};
-    std::string args{args_json.data ? args_json.data : "", args_json.size};
-    if (args.empty()) {
-        args = "{}";
-    }
-    return mgr
-        ->invokeCapabilityAsync(inst, cap.c_str(), m.c_str(), args.c_str(), cb, ud, error_out);
+        auto mgr  = mgrOf(host);
+        auto inst = instOf(host);
+        if (!mgr || !inst || agentxx_plugin_sv_empty(capability)
+            || agentxx_plugin_sv_empty(method)) {
+            return static_cast<::AgentxxPluginOperatorHandle*>(nullptr);
+        }
+        std::string cap{capability.data, capability.size};
+        std::string m{method.data, method.size};
+        std::string args{args_json.data ? args_json.data : "", args_json.size};
+        if (args.empty()) {
+            args = "{}";
+        }
+        return mgr
+            ->invokeCapabilityAsync(inst, cap.c_str(), m.c_str(), args.c_str(), cb, ud, error_out);
     });
 }
 
 static char* xx_list_plugins(const AgentxxPluginHost* host) {
     return agentxx::plugin::guardVtableCall(nullptr, [&]() -> char* {
-    auto mgr = mgrOf(host);
-    if (!mgr) {
-        return static_cast<char*>(nullptr);
-    }
-    auto mgrPtr = mgr;
-    auto json   = ioCallSync<std::string>(mgrPtr, [mgrPtr]() {
-        return mgrPtr->listPluginsJson();
-    });
-    return host->vtable->strdup(json.c_str());
+        auto mgr = mgrOf(host);
+        if (!mgr) {
+            return static_cast<char*>(nullptr);
+        }
+        auto mgrPtr = mgr;
+        auto json   = ioCallSync<std::string>(mgrPtr, [mgrPtr]() {
+            return mgrPtr->listPluginsJson();
+        });
+        return host->vtable->strdup(json.c_str());
     });
 }
 
 static char* xx_get_plugin(const AgentxxPluginHost* host, AgentxxPluginStringView name) {
     return agentxx::plugin::guardVtableCall(nullptr, [&]() -> char* {
-    auto mgr = mgrOf(host);
-    if (!mgr || agentxx_plugin_sv_empty(name)) {
-        return static_cast<char*>(nullptr);
-    }
-    auto        mgrPtr = mgr;
-    std::string pluginName{name.data, name.size};
-    auto        json = ioCallSync<std::string>(mgrPtr, [mgrPtr, pluginName]() {
-        return mgrPtr->getPluginJson(pluginName);
-    });
-    if (json.empty()) {
-        return static_cast<char*>(nullptr);
-    }
-    return host->vtable->strdup(json.c_str());
+        auto mgr = mgrOf(host);
+        if (!mgr || agentxx_plugin_sv_empty(name)) {
+            return static_cast<char*>(nullptr);
+        }
+        auto        mgrPtr = mgr;
+        std::string pluginName{name.data, name.size};
+        auto        json = ioCallSync<std::string>(mgrPtr, [mgrPtr, pluginName]() {
+            return mgrPtr->getPluginJson(pluginName);
+        });
+        if (json.empty()) {
+            return static_cast<char*>(nullptr);
+        }
+        return host->vtable->strdup(json.c_str());
     });
 }
 
 static char* xx_get_own_info(const AgentxxPluginHost* host) {
     return agentxx::plugin::guardVtableCall(nullptr, [&]() -> char* {
-    auto mgr  = mgrOf(host);
-    auto inst = instOf(host);
-    if (!mgr || !inst) {
-        return static_cast<char*>(nullptr);
-    }
-    auto        mgrPtr  = mgr;
-    std::string ownName = inst->name;
-    auto        json    = ioCallSync<std::string>(mgrPtr, [mgrPtr, ownName]() {
-        return mgrPtr->getPluginJson(ownName);
-    });
-    if (json.empty()) {
-        return static_cast<char*>(nullptr);
-    }
-    return host->vtable->strdup(json.c_str());
+        auto mgr  = mgrOf(host);
+        auto inst = instOf(host);
+        if (!mgr || !inst) {
+            return static_cast<char*>(nullptr);
+        }
+        auto        mgrPtr  = mgr;
+        std::string ownName = inst->name;
+        auto        json    = ioCallSync<std::string>(mgrPtr, [mgrPtr, ownName]() {
+            return mgrPtr->getPluginJson(ownName);
+        });
+        if (json.empty()) {
+            return static_cast<char*>(nullptr);
+        }
+        return host->vtable->strdup(json.c_str());
     });
 }
 
@@ -357,17 +358,17 @@ static char* xx_get_share_store(
     long long                id
 ) {
     return agentxx::plugin::guardVtableCall(nullptr, [&]() -> char* {
-    auto mgr  = mgrOf(host);
-    auto inst = instOf(host);
-    if (!mgr || !inst) {
-        return static_cast<char*>(nullptr);
-    }
-    auto        mgrPtr  = mgr;
-    auto        instPtr = inst;
-    std::string tid{session_id.data ? session_id.data : "", session_id.size};
-    return ioCallSync<char*>(mgrPtr, [mgrPtr, instPtr, tid, id]() {
-        return mgrPtr->getShareStore(instPtr, tid.c_str(), id);
-    });
+        auto mgr  = mgrOf(host);
+        auto inst = instOf(host);
+        if (!mgr || !inst) {
+            return static_cast<char*>(nullptr);
+        }
+        auto        mgrPtr  = mgr;
+        auto        instPtr = inst;
+        std::string tid{session_id.data ? session_id.data : "", session_id.size};
+        return ioCallSync<char*>(mgrPtr, [mgrPtr, instPtr, tid, id]() {
+            return mgrPtr->getShareStore(instPtr, tid.c_str(), id);
+        });
     });
 }
 
@@ -377,18 +378,18 @@ static long long xx_add_share_store(
     AgentxxPluginStringView  content
 ) {
     return agentxx::plugin::guardVtableCall(-1, [&]() -> long long {
-    auto mgr  = mgrOf(host);
-    auto inst = instOf(host);
-    if (!mgr || !inst) {
-        return -1;
-    }
-    auto        mgrPtr  = mgr;
-    auto        instPtr = inst;
-    std::string tid{session_id.data ? session_id.data : "", session_id.size};
-    std::string txt{content.data ? content.data : "", content.size};
-    return ioCallSync<long long>(mgrPtr, [mgrPtr, instPtr, tid, txt]() {
-        return mgrPtr->addShareStore(instPtr, tid.c_str(), txt.c_str());
-    });
+        auto mgr  = mgrOf(host);
+        auto inst = instOf(host);
+        if (!mgr || !inst) {
+            return -1;
+        }
+        auto        mgrPtr  = mgr;
+        auto        instPtr = inst;
+        std::string tid{session_id.data ? session_id.data : "", session_id.size};
+        std::string txt{content.data ? content.data : "", content.size};
+        return ioCallSync<long long>(mgrPtr, [mgrPtr, instPtr, tid, txt]() {
+            return mgrPtr->addShareStore(instPtr, tid.c_str(), txt.c_str());
+        });
     });
 }
 
@@ -399,48 +400,48 @@ static void xx_emit_message_tip(
     int                      level
 ) {
     agentxx::plugin::guardVtableCallVoid([&]() {
-    auto mgr  = mgrOf(host);
-    auto inst = instOf(host);
-    if (!mgr || !inst) {
-        return;
-    }
-    auto        mgrPtr  = mgr;
-    auto        instPtr = inst;
-    std::string tid{session_id.data ? session_id.data : "", session_id.size};
-    std::string msg{text.data ? text.data : "", text.size};
-    ioCallSyncVoid(mgrPtr, [mgrPtr, instPtr, tid, msg, level]() {
-        mgrPtr->emitMessageTip(instPtr, tid.c_str(), msg.c_str(), level);
-    });
+        auto mgr  = mgrOf(host);
+        auto inst = instOf(host);
+        if (!mgr || !inst) {
+            return;
+        }
+        auto        mgrPtr  = mgr;
+        auto        instPtr = inst;
+        std::string tid{session_id.data ? session_id.data : "", session_id.size};
+        std::string msg{text.data ? text.data : "", text.size};
+        ioCallSyncVoid(mgrPtr, [mgrPtr, instPtr, tid, msg, level]() {
+            mgrPtr->emitMessageTip(instPtr, tid.c_str(), msg.c_str(), level);
+        });
     });
 }
 
 static void* xx_sleep(const AgentxxPluginHost* host, long ms, void (*cb)(void* ud), void* ud) {
     return agentxx::plugin::guardVtableCall(nullptr, [&]() -> void* {
-    auto mgr  = mgrOf(host);
-    auto inst = instOf(host);
-    if (!mgr || !inst || !cb) {
-        return static_cast<void*>(nullptr);
-    }
-    auto mgrPtr  = mgr;
-    auto instPtr = inst;
-    return ioCallSync<void*>(mgrPtr, [mgrPtr, instPtr, ms, cb, ud]() {
-        return mgrPtr->sleep(instPtr, ms, cb, ud);
-    });
+        auto mgr  = mgrOf(host);
+        auto inst = instOf(host);
+        if (!mgr || !inst || !cb) {
+            return static_cast<void*>(nullptr);
+        }
+        auto mgrPtr  = mgr;
+        auto instPtr = inst;
+        return ioCallSync<void*>(mgrPtr, [mgrPtr, instPtr, ms, cb, ud]() {
+            return mgrPtr->sleep(instPtr, ms, cb, ud);
+        });
     });
 }
 
 static void xx_cancel_sleep(const AgentxxPluginHost* host, void* timer) {
     agentxx::plugin::guardVtableCallVoid([&]() {
-    auto mgr  = mgrOf(host);
-    auto inst = instOf(host);
-    if (!mgr || !inst || !timer) {
-        return;
-    }
-    auto mgrPtr  = mgr;
-    auto instPtr = inst;
-    ioCallSyncVoid(mgrPtr, [mgrPtr, instPtr, timer]() {
-        mgrPtr->cancelSleep(instPtr, timer);
-    });
+        auto mgr  = mgrOf(host);
+        auto inst = instOf(host);
+        if (!mgr || !inst || !timer) {
+            return;
+        }
+        auto mgrPtr  = mgr;
+        auto instPtr = inst;
+        ioCallSyncVoid(mgrPtr, [mgrPtr, instPtr, timer]() {
+            mgrPtr->cancelSleep(instPtr, timer);
+        });
     });
 }
 
@@ -452,12 +453,12 @@ static void xx_offload(
     void* ud
 ) {
     agentxx::plugin::guardVtableCallVoid([&]() {
-    auto mgr  = mgrOf(host);
-    auto inst = instOf(host);
-    if (!mgr || !inst || !work) {
-        return;
-    }
-    mgr->offload(inst, cancel_flag, work, done, ud);
+        auto mgr  = mgrOf(host);
+        auto inst = instOf(host);
+        if (!mgr || !inst || !work) {
+            return;
+        }
+        mgr->offload(inst, cancel_flag, work, done, ud);
     });
 }
 
@@ -468,22 +469,22 @@ static int xx_is_io_thread(const AgentxxPluginHost* host) {
 
 static void xx_post_to_io(const AgentxxPluginHost* host, void (*fn)(void* ud), void* ud) {
     agentxx::plugin::guardVtableCallVoid([&]() {
-    auto mgr = mgrOf(host);
-    if (!mgr || !fn) {
-        return;
-    }
-    mgr->postToIoAsync([fn, ud]() {
-        fn(ud);
-    });
+        auto mgr = mgrOf(host);
+        if (!mgr || !fn) {
+            return;
+        }
+        mgr->postToIoAsync([fn, ud]() {
+            fn(ud);
+        });
     });
 }
 
 static void xx_pump_io(const AgentxxPluginHost* host) {
     agentxx::plugin::guardVtableCallVoid([&]() {
-    auto mgr = mgrOf(host);
-    if (mgr) {
-        mgr->runPendingIoTasks();
-    }
+        auto mgr = mgrOf(host);
+        if (mgr) {
+            mgr->runPendingIoTasks();
+        }
     });
 }
 
@@ -581,277 +582,277 @@ static char* xx_json_escape(const AgentxxPluginHost* host, AgentxxPluginStringVi
 
 static char* xx_get_config(const AgentxxPluginHost* host) {
     return agentxx::plugin::guardVtableCall(nullptr, [&]() -> char* {
-    auto mgr = mgrOf(host);
-    if (!mgr) {
-        return static_cast<char*>(nullptr);
-    }
-    auto mgrPtr = mgr;
-    auto json   = ioCallSync<std::string>(mgrPtr, [mgrPtr]() {
-        return mgrPtr->getConfigJson();
-    });
-    if (json.empty()) {
-        return static_cast<char*>(nullptr);
-    }
-    return host->vtable->strdup(json.c_str());
+        auto mgr = mgrOf(host);
+        if (!mgr) {
+            return static_cast<char*>(nullptr);
+        }
+        auto mgrPtr = mgr;
+        auto json   = ioCallSync<std::string>(mgrPtr, [mgrPtr]() {
+            return mgrPtr->getConfigJson();
+        });
+        if (json.empty()) {
+            return static_cast<char*>(nullptr);
+        }
+        return host->vtable->strdup(json.c_str());
     });
 }
 
 static char* xx_get_plugin_args(const AgentxxPluginHost* host) {
     return agentxx::plugin::guardVtableCall(nullptr, [&]() -> char* {
-    auto mgr  = mgrOf(host);
-    auto inst = instOf(host);
-    if (!mgr || !inst) {
-        return static_cast<char*>(nullptr);
-    }
-    auto mgrPtr  = mgr;
-    auto instPtr = inst;
-    auto json    = ioCallSync<std::string>(mgrPtr, [mgrPtr, instPtr]() {
-        return mgrPtr->getPluginArgsJson(instPtr);
-    });
-    return host->vtable->strdup(json.c_str());
+        auto mgr  = mgrOf(host);
+        auto inst = instOf(host);
+        if (!mgr || !inst) {
+            return static_cast<char*>(nullptr);
+        }
+        auto mgrPtr  = mgr;
+        auto instPtr = inst;
+        auto json    = ioCallSync<std::string>(mgrPtr, [mgrPtr, instPtr]() {
+            return mgrPtr->getPluginArgsJson(instPtr);
+        });
+        return host->vtable->strdup(json.c_str());
     });
 }
 
 static char* xx_get_tool_prompt(const AgentxxPluginHost* host, AgentxxPluginStringView tool_name) {
     return agentxx::plugin::guardVtableCall(nullptr, [&]() -> char* {
-    auto mgr = mgrOf(host);
-    if (!mgr || agentxx_plugin_sv_empty(tool_name)) {
-        return static_cast<char*>(nullptr);
-    }
-    auto        mgrPtr = mgr;
-    std::string name{tool_name.data, tool_name.size};
-    auto        json = ioCallSync<std::string>(mgrPtr, [mgrPtr, name]() {
-        return mgrPtr->getToolPromptJson(name);
-    });
-    if (json.empty()) {
-        return static_cast<char*>(nullptr);
-    }
-    return host->vtable->strdup(json.c_str());
+        auto mgr = mgrOf(host);
+        if (!mgr || agentxx_plugin_sv_empty(tool_name)) {
+            return static_cast<char*>(nullptr);
+        }
+        auto        mgrPtr = mgr;
+        std::string name{tool_name.data, tool_name.size};
+        auto        json = ioCallSync<std::string>(mgrPtr, [mgrPtr, name]() {
+            return mgrPtr->getToolPromptJson(name);
+        });
+        if (json.empty()) {
+            return static_cast<char*>(nullptr);
+        }
+        return host->vtable->strdup(json.c_str());
     });
 }
 
 static char* xx_get_work_dir(const AgentxxPluginHost* host) {
     return agentxx::plugin::guardVtableCall(nullptr, [&]() -> char* {
-    auto mgr  = mgrOf(host);
-    auto inst = instOf(host);
-    if (!mgr || !inst) {
-        return static_cast<char*>(nullptr);
-    }
-    auto mgrPtr = mgr;
-    auto dir    = ioCallSync<std::string>(mgrPtr, [mgrPtr]() {
-        return mgrPtr->getSessionWorkDir();
-    });
-    if (dir.empty()) {
-        return static_cast<char*>(nullptr);
-    }
-    return host->vtable->strdup(dir.c_str());
+        auto mgr  = mgrOf(host);
+        auto inst = instOf(host);
+        if (!mgr || !inst) {
+            return static_cast<char*>(nullptr);
+        }
+        auto mgrPtr = mgr;
+        auto dir    = ioCallSync<std::string>(mgrPtr, [mgrPtr]() {
+            return mgrPtr->getSessionWorkDir();
+        });
+        if (dir.empty()) {
+            return static_cast<char*>(nullptr);
+        }
+        return host->vtable->strdup(dir.c_str());
     });
 }
 
 static char*
     xx_get_session_work_dir(const AgentxxPluginHost* host, AgentxxPluginStringView thread_id) {
     return agentxx::plugin::guardVtableCall(nullptr, [&]() -> char* {
-    auto mgr  = mgrOf(host);
-    auto inst = instOf(host);
-    if (!mgr || !inst) {
-        return static_cast<char*>(nullptr);
-    }
-    auto        mgrPtr = mgr;
-    std::string tid{thread_id.data ? thread_id.data : "", thread_id.size};
-    auto        dir = ioCallSync<std::string>(mgrPtr, [mgrPtr, tid]() {
-        return mgrPtr->getSessionWorkDir(tid);
-    });
-    if (dir.empty()) {
-        return static_cast<char*>(nullptr);
-    }
-    return host->vtable->strdup(dir.c_str());
+        auto mgr  = mgrOf(host);
+        auto inst = instOf(host);
+        if (!mgr || !inst) {
+            return static_cast<char*>(nullptr);
+        }
+        auto        mgrPtr = mgr;
+        std::string tid{thread_id.data ? thread_id.data : "", thread_id.size};
+        auto        dir = ioCallSync<std::string>(mgrPtr, [mgrPtr, tid]() {
+            return mgrPtr->getSessionWorkDir(tid);
+        });
+        if (dir.empty()) {
+            return static_cast<char*>(nullptr);
+        }
+        return host->vtable->strdup(dir.c_str());
     });
 }
 
 static char* xx_get_prompt(const AgentxxPluginHost* host) {
     return agentxx::plugin::guardVtableCall(nullptr, [&]() -> char* {
-    auto mgr = mgrOf(host);
-    if (!mgr) {
-        return static_cast<char*>(nullptr);
-    }
-    auto mgrPtr = mgr;
-    auto json   = ioCallSync<std::string>(mgrPtr, [mgrPtr]() {
-        return mgrPtr->getPromptJson();
-    });
-    if (json.empty()) {
-        return static_cast<char*>(nullptr);
-    }
-    return host->vtable->strdup(json.c_str());
+        auto mgr = mgrOf(host);
+        if (!mgr) {
+            return static_cast<char*>(nullptr);
+        }
+        auto mgrPtr = mgr;
+        auto json   = ioCallSync<std::string>(mgrPtr, [mgrPtr]() {
+            return mgrPtr->getPromptJson();
+        });
+        if (json.empty()) {
+            return static_cast<char*>(nullptr);
+        }
+        return host->vtable->strdup(json.c_str());
     });
 }
 
 static int xx_set_prompt(const AgentxxPluginHost* host, AgentxxPluginStringView prompt_json) {
     return agentxx::plugin::guardVtableCall(-1, [&]() -> int {
-    auto mgr  = mgrOf(host);
-    auto inst = instOf(host);
-    if (!mgr || !inst || agentxx_plugin_sv_empty(prompt_json)) {
-        return -1;
-    }
-    auto        mgrPtr  = mgr;
-    auto        instPtr = inst;
-    std::string jsonStr{prompt_json.data, prompt_json.size};
-    return ioCallSync<int>(mgrPtr, [mgrPtr, instPtr, jsonStr]() {
-        return mgrPtr->setPromptJson(instPtr, jsonStr.c_str());
-    });
+        auto mgr  = mgrOf(host);
+        auto inst = instOf(host);
+        if (!mgr || !inst || agentxx_plugin_sv_empty(prompt_json)) {
+            return -1;
+        }
+        auto        mgrPtr  = mgr;
+        auto        instPtr = inst;
+        std::string jsonStr{prompt_json.data, prompt_json.size};
+        return ioCallSync<int>(mgrPtr, [mgrPtr, instPtr, jsonStr]() {
+            return mgrPtr->setPromptJson(instPtr, jsonStr.c_str());
+        });
     });
 }
 
 static char* xx_model_get_config(const AgentxxPluginHost* host) {
     return agentxx::plugin::guardVtableCall(nullptr, [&]() -> char* {
-    auto mgr = mgrOf(host);
-    if (!mgr) {
-        return static_cast<char*>(nullptr);
-    }
-    auto mgrPtr = mgr;
-    auto json   = ioCallSync<std::string>(mgrPtr, [mgrPtr]() {
-        return mgrPtr->getModelConfigJson();
-    });
-    if (json.empty()) {
-        return static_cast<char*>(nullptr);
-    }
-    return host->vtable->strdup(json.c_str());
+        auto mgr = mgrOf(host);
+        if (!mgr) {
+            return static_cast<char*>(nullptr);
+        }
+        auto mgrPtr = mgr;
+        auto json   = ioCallSync<std::string>(mgrPtr, [mgrPtr]() {
+            return mgrPtr->getModelConfigJson();
+        });
+        if (json.empty()) {
+            return static_cast<char*>(nullptr);
+        }
+        return host->vtable->strdup(json.c_str());
     });
 }
 
 static int
     xx_cancel_is_cancelled(const AgentxxPluginHost* host, AgentxxPluginStringView thread_id) {
     return agentxx::plugin::guardVtableCall(0, [&]() -> int {
-    auto mgr = mgrOf(host);
-    if (!mgr || agentxx_plugin_sv_empty(thread_id)) {
-        return 0;
-    }
-    auto        mgrPtr = mgr;
-    std::string tid{thread_id.data, thread_id.size};
-    return ioCallSync<bool>(
-               mgrPtr,
-               [mgrPtr, tid]() {
-                   return mgrPtr->isSessionCancelled(tid);
-               }
-           )
-               ? 1
-               : 0;
+        auto mgr = mgrOf(host);
+        if (!mgr || agentxx_plugin_sv_empty(thread_id)) {
+            return 0;
+        }
+        auto        mgrPtr = mgr;
+        std::string tid{thread_id.data, thread_id.size};
+        return ioCallSync<bool>(
+                   mgrPtr,
+                   [mgrPtr, tid]() {
+                       return mgrPtr->isSessionCancelled(tid);
+                   }
+               )
+                   ? 1
+                   : 0;
     });
 }
 
 static int xx_register_skill_dir(const AgentxxPluginHost* host, AgentxxPluginStringView path) {
     return agentxx::plugin::guardVtableCall(-1, [&]() -> int {
-    auto mgr  = mgrOf(host);
-    auto inst = instOf(host);
-    if (!mgr || !inst || agentxx_plugin_sv_empty(path)) {
-        return -1;
-    }
-    auto        mgrPtr  = mgr;
-    auto        instPtr = inst;
-    std::string p{path.data, path.size};
-    return ioCallSync<int>(mgrPtr, [mgrPtr, instPtr, p]() {
-        return mgrPtr->registerSkillDir(instPtr, p.c_str());
-    });
+        auto mgr  = mgrOf(host);
+        auto inst = instOf(host);
+        if (!mgr || !inst || agentxx_plugin_sv_empty(path)) {
+            return -1;
+        }
+        auto        mgrPtr  = mgr;
+        auto        instPtr = inst;
+        std::string p{path.data, path.size};
+        return ioCallSync<int>(mgrPtr, [mgrPtr, instPtr, p]() {
+            return mgrPtr->registerSkillDir(instPtr, p.c_str());
+        });
     });
 }
 
 static int xx_unregister_skill_dir(const AgentxxPluginHost* host, AgentxxPluginStringView path) {
     return agentxx::plugin::guardVtableCall(-1, [&]() -> int {
-    auto mgr  = mgrOf(host);
-    auto inst = instOf(host);
-    if (!mgr || !inst || agentxx_plugin_sv_empty(path)) {
-        return -1;
-    }
-    auto        mgrPtr  = mgr;
-    auto        instPtr = inst;
-    std::string p{path.data, path.size};
-    return ioCallSync<int>(mgrPtr, [mgrPtr, instPtr, p]() {
-        return mgrPtr->unregisterSkillDir(instPtr, p.c_str());
-    });
+        auto mgr  = mgrOf(host);
+        auto inst = instOf(host);
+        if (!mgr || !inst || agentxx_plugin_sv_empty(path)) {
+            return -1;
+        }
+        auto        mgrPtr  = mgr;
+        auto        instPtr = inst;
+        std::string p{path.data, path.size};
+        return ioCallSync<int>(mgrPtr, [mgrPtr, instPtr, p]() {
+            return mgrPtr->unregisterSkillDir(instPtr, p.c_str());
+        });
     });
 }
 
 static int xx_register_memory_file(const AgentxxPluginHost* host, AgentxxPluginStringView path) {
     return agentxx::plugin::guardVtableCall(-1, [&]() -> int {
-    auto mgr  = mgrOf(host);
-    auto inst = instOf(host);
-    if (!mgr || !inst || agentxx_plugin_sv_empty(path)) {
-        return -1;
-    }
-    auto        mgrPtr  = mgr;
-    auto        instPtr = inst;
-    std::string p{path.data, path.size};
-    return ioCallSync<int>(mgrPtr, [mgrPtr, instPtr, p]() {
-        return mgrPtr->registerMemoryFile(instPtr, p.c_str());
-    });
+        auto mgr  = mgrOf(host);
+        auto inst = instOf(host);
+        if (!mgr || !inst || agentxx_plugin_sv_empty(path)) {
+            return -1;
+        }
+        auto        mgrPtr  = mgr;
+        auto        instPtr = inst;
+        std::string p{path.data, path.size};
+        return ioCallSync<int>(mgrPtr, [mgrPtr, instPtr, p]() {
+            return mgrPtr->registerMemoryFile(instPtr, p.c_str());
+        });
     });
 }
 
 static int xx_unregister_memory_file(const AgentxxPluginHost* host, AgentxxPluginStringView path) {
     return agentxx::plugin::guardVtableCall(-1, [&]() -> int {
-    auto mgr  = mgrOf(host);
-    auto inst = instOf(host);
-    if (!mgr || !inst || agentxx_plugin_sv_empty(path)) {
-        return -1;
-    }
-    auto        mgrPtr  = mgr;
-    auto        instPtr = inst;
-    std::string p{path.data, path.size};
-    return ioCallSync<int>(mgrPtr, [mgrPtr, instPtr, p]() {
-        return mgrPtr->unregisterMemoryFile(instPtr, p.c_str());
-    });
+        auto mgr  = mgrOf(host);
+        auto inst = instOf(host);
+        if (!mgr || !inst || agentxx_plugin_sv_empty(path)) {
+            return -1;
+        }
+        auto        mgrPtr  = mgr;
+        auto        instPtr = inst;
+        std::string p{path.data, path.size};
+        return ioCallSync<int>(mgrPtr, [mgrPtr, instPtr, p]() {
+            return mgrPtr->unregisterMemoryFile(instPtr, p.c_str());
+        });
     });
 }
 
 static int
     xx_register_mcp_server(const AgentxxPluginHost* host, AgentxxPluginStringView spec_json) {
     return agentxx::plugin::guardVtableCall(-1, [&]() -> int {
-    auto mgr  = mgrOf(host);
-    auto inst = instOf(host);
-    if (!mgr || !inst || agentxx_plugin_sv_empty(spec_json)) {
-        return -1;
-    }
-    auto        mgrPtr  = mgr;
-    auto        instPtr = inst;
-    std::string spec{spec_json.data, spec_json.size};
-    return ioCallSync<int>(mgrPtr, [mgrPtr, instPtr, spec]() {
-        return mgrPtr->registerMcpServer(instPtr, spec.c_str());
-    });
+        auto mgr  = mgrOf(host);
+        auto inst = instOf(host);
+        if (!mgr || !inst || agentxx_plugin_sv_empty(spec_json)) {
+            return -1;
+        }
+        auto        mgrPtr  = mgr;
+        auto        instPtr = inst;
+        std::string spec{spec_json.data, spec_json.size};
+        return ioCallSync<int>(mgrPtr, [mgrPtr, instPtr, spec]() {
+            return mgrPtr->registerMcpServer(instPtr, spec.c_str());
+        });
     });
 }
 
 static int
     xx_unregister_mcp_server(const AgentxxPluginHost* host, AgentxxPluginStringView name_space) {
     return agentxx::plugin::guardVtableCall(-1, [&]() -> int {
-    auto mgr  = mgrOf(host);
-    auto inst = instOf(host);
-    if (!mgr || !inst || agentxx_plugin_sv_empty(name_space)) {
-        return -1;
-    }
-    auto        mgrPtr  = mgr;
-    auto        instPtr = inst;
-    std::string ns{name_space.data, name_space.size};
-    return ioCallSync<int>(mgrPtr, [mgrPtr, instPtr, ns]() {
-        return mgrPtr->unregisterMcpServer(instPtr, ns.c_str());
-    });
+        auto mgr  = mgrOf(host);
+        auto inst = instOf(host);
+        if (!mgr || !inst || agentxx_plugin_sv_empty(name_space)) {
+            return -1;
+        }
+        auto        mgrPtr  = mgr;
+        auto        instPtr = inst;
+        std::string ns{name_space.data, name_space.size};
+        return ioCallSync<int>(mgrPtr, [mgrPtr, instPtr, ns]() {
+            return mgrPtr->unregisterMcpServer(instPtr, ns.c_str());
+        });
     });
 }
 
 static char* xx_get_own_resources(const AgentxxPluginHost* host) {
     return agentxx::plugin::guardVtableCall(nullptr, [&]() -> char* {
-    auto mgr  = mgrOf(host);
-    auto inst = instOf(host);
-    if (!mgr || !inst) {
-        return static_cast<char*>(nullptr);
-    }
-    auto mgrPtr  = mgr;
-    auto instPtr = inst;
-    auto json    = ioCallSync<std::string>(mgrPtr, [mgrPtr, instPtr]() {
-        return mgrPtr->ownResourcesJson(instPtr);
-    });
-    if (json.empty()) {
-        return static_cast<char*>(nullptr);
-    }
-    return host->vtable->strdup(json.c_str());
+        auto mgr  = mgrOf(host);
+        auto inst = instOf(host);
+        if (!mgr || !inst) {
+            return static_cast<char*>(nullptr);
+        }
+        auto mgrPtr  = mgr;
+        auto instPtr = inst;
+        auto json    = ioCallSync<std::string>(mgrPtr, [mgrPtr, instPtr]() {
+            return mgrPtr->ownResourcesJson(instPtr);
+        });
+        if (json.empty()) {
+            return static_cast<char*>(nullptr);
+        }
+        return host->vtable->strdup(json.c_str());
     });
 }
 
@@ -1044,7 +1045,10 @@ int PluginManager::registerSkillDir(PluginInstance* inst, const char* path) {
         return -1;
     }
     if (inst->resourcesFrozen) {
-        XX_LOGW("Plugin `{}` registerSkillDir rejected: resources frozen (immutable after init)", inst->name);
+        XX_LOGW(
+            "Plugin `{}` registerSkillDir rejected: resources frozen (immutable after init)",
+            inst->name
+        );
         return -1;
     }
     auto ap = getResourceApplier(agentContext_, "register_skill_dir");
@@ -1065,7 +1069,10 @@ int PluginManager::unregisterSkillDir(PluginInstance* inst, const char* path) {
         return -1;
     }
     if (inst->resourcesFrozen) {
-        XX_LOGW("Plugin `{}` unregisterSkillDir rejected: resources frozen (immutable after init)", inst->name);
+        XX_LOGW(
+            "Plugin `{}` unregisterSkillDir rejected: resources frozen (immutable after init)",
+            inst->name
+        );
         return -1;
     }
     auto ap = getResourceApplier(agentContext_, "unregister_skill_dir");
@@ -1084,7 +1091,10 @@ int PluginManager::registerMemoryFile(PluginInstance* inst, const char* path) {
         return -1;
     }
     if (inst->resourcesFrozen) {
-        XX_LOGW("Plugin `{}` registerMemoryFile rejected: resources frozen (immutable after init)", inst->name);
+        XX_LOGW(
+            "Plugin `{}` registerMemoryFile rejected: resources frozen (immutable after init)",
+            inst->name
+        );
         return -1;
     }
     auto ap = getResourceApplier(agentContext_, "register_memory_file");
@@ -1105,7 +1115,10 @@ int PluginManager::unregisterMemoryFile(PluginInstance* inst, const char* path) 
         return -1;
     }
     if (inst->resourcesFrozen) {
-        XX_LOGW("Plugin `{}` unregisterMemoryFile rejected: resources frozen (immutable after init)", inst->name);
+        XX_LOGW(
+            "Plugin `{}` unregisterMemoryFile rejected: resources frozen (immutable after init)",
+            inst->name
+        );
         return -1;
     }
     auto ap = getResourceApplier(agentContext_, "unregister_memory_file");
@@ -1124,7 +1137,10 @@ int PluginManager::registerMcpServer(PluginInstance* inst, const char* specJson)
         return -1;
     }
     if (inst->resourcesFrozen) {
-        XX_LOGW("Plugin `{}` registerMcpServer rejected: resources frozen (immutable after init)", inst->name);
+        XX_LOGW(
+            "Plugin `{}` registerMcpServer rejected: resources frozen (immutable after init)",
+            inst->name
+        );
         return -1;
     }
     auto ap = getResourceApplier(agentContext_, "register_mcp_server");
@@ -1164,7 +1180,10 @@ int PluginManager::unregisterMcpServer(PluginInstance* inst, const char* nameSpa
         return -1;
     }
     if (inst->resourcesFrozen) {
-        XX_LOGW("Plugin `{}` unregisterMcpServer rejected: resources frozen (immutable after init)", inst->name);
+        XX_LOGW(
+            "Plugin `{}` unregisterMcpServer rejected: resources frozen (immutable after init)",
+            inst->name
+        );
         return -1;
     }
     auto ap = getResourceApplier(agentContext_, "unregister_mcp_server");

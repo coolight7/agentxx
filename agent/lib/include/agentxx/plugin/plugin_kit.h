@@ -706,21 +706,38 @@ struct CallToolAwaiter {
                     if (needPost) {
                         auto ifs = agentxx::plugin::AgentIfaces::query(s->host);
                         if (ifs.scheduler && ifs.scheduler->post_to_io) {
-                            struct ResumeData { std::coroutine_handle<Promise> h; };
+                            struct ResumeData {
+                                std::coroutine_handle<Promise> h;
+                            };
                             auto* d = new ResumeData{handle};
                             ifs.scheduler->post_to_io(
                                 s->host,
                                 [](void* ud) {
                                     auto* d = static_cast<ResumeData*>(ud);
-                                    try { d->h.resume(); } catch (...) { d->h.promise().set_exception(std::current_exception()); }
-                                    detail::finishIfDone(d->h); delete d;
-                                }, d);
+                                    try {
+                                        d->h.resume();
+                                    } catch (...) {
+                                        d->h.promise().set_exception(std::current_exception());
+                                    }
+                                    detail::finishIfDone(d->h);
+                                    delete d;
+                                },
+                                d
+                            );
                         } else {
-                            try { handle.resume(); } catch (...) { prom.set_exception(std::current_exception()); }
+                            try {
+                                handle.resume();
+                            } catch (...) {
+                                prom.set_exception(std::current_exception());
+                            }
                             finishIfDone(handle);
                         }
                     } else {
-                        try { handle.resume(); } catch (...) { prom.set_exception(std::current_exception()); }
+                        try {
+                            handle.resume();
+                        } catch (...) {
+                            prom.set_exception(std::current_exception());
+                        }
                         finishIfDone(handle);
                     }
                 }
@@ -870,21 +887,38 @@ struct InvokeCapAwaiter {
                     if (needPost) {
                         auto ifs = agentxx::plugin::AgentIfaces::query(s->host);
                         if (ifs.scheduler && ifs.scheduler->post_to_io) {
-                            struct ResumeData { std::coroutine_handle<Promise> h; };
+                            struct ResumeData {
+                                std::coroutine_handle<Promise> h;
+                            };
                             auto* d = new ResumeData{handle};
                             ifs.scheduler->post_to_io(
                                 s->host,
                                 [](void* ud) {
                                     auto* d = static_cast<ResumeData*>(ud);
-                                    try { d->h.resume(); } catch (...) { d->h.promise().set_exception(std::current_exception()); }
-                                    detail::finishIfDone(d->h); delete d;
-                                }, d);
+                                    try {
+                                        d->h.resume();
+                                    } catch (...) {
+                                        d->h.promise().set_exception(std::current_exception());
+                                    }
+                                    detail::finishIfDone(d->h);
+                                    delete d;
+                                },
+                                d
+                            );
                         } else {
-                            try { handle.resume(); } catch (...) { prom.set_exception(std::current_exception()); }
+                            try {
+                                handle.resume();
+                            } catch (...) {
+                                prom.set_exception(std::current_exception());
+                            }
                             finishIfDone(handle);
                         }
                     } else {
-                        try { handle.resume(); } catch (...) { prom.set_exception(std::current_exception()); }
+                        try {
+                            handle.resume();
+                        } catch (...) {
+                            prom.set_exception(std::current_exception());
+                        }
                         finishIfDone(handle);
                     }
                 }

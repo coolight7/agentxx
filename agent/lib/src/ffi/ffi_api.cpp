@@ -51,9 +51,9 @@ int ffiFinish(int rc, const std::string& err, char** log) {
     }
     *log = rc == 0 ? nullptr
                    : agentxx_ffi_strdup_n(
-                       err.empty() ? "internal error (no detail)" : err.data(),
-                       err.empty() ? 0 : err.size()
-                   );
+                         err.empty() ? "internal error (no detail)" : err.data(),
+                         err.empty() ? 0 : err.size()
+                     );
     return rc;
 }
 

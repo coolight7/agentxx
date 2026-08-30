@@ -85,7 +85,7 @@ public:
     bool                     unloadRequested = false;
     /// 资源冻结标志: 插件初始化阶段 (create 内) 允许注册 skill/memory/mcp,
     /// 初始化完成后冻结，后续固定不可变以防上下文变化 (仅 yaml 声明与初始化追加生效)
-    bool                     resourcesFrozen = false;
+    bool resourcesFrozen = false;
 
     AgentxxPluginHost   host{};
     std::atomic<size_t> inflight{0};

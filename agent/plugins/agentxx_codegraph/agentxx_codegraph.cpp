@@ -1101,7 +1101,8 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
             }
 
             if (ctx->iface.log && ctx->iface.log->log) {
-                ctx->iface.log->log(host, 2, agentxx_plugin_sv_cstr("agentxx_codegraph client loaded"));
+                ctx->iface.log
+                    ->log(host, 2, agentxx_plugin_sv_cstr("agentxx_codegraph client loaded"));
             }
             *plugin_ctx = ctx.release();
             return 0;
@@ -1128,8 +1129,11 @@ extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_client_destroy(void* plugin
             }
             ctx->current_file.clear();
             if (ctx->iface.log && ctx->iface.log->log) {
-                ctx->iface.log
-                    ->log(ctx->host, 2, agentxx_plugin_sv_cstr("agentxx_codegraph client unloaded"));
+                ctx->iface.log->log(
+                    ctx->host,
+                    2,
+                    agentxx_plugin_sv_cstr("agentxx_codegraph client unloaded")
+                );
             }
             delete ctx;
         }

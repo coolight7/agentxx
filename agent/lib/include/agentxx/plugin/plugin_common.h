@@ -38,8 +38,8 @@
 
 /// C ABI 边界异常兜底 (函数式): vtable 函数内部不得让 C++ 异常逃逸 (跨边界 UB),
 /// 统一捕获转日志并按失败返回值返回。
-/// 历史宏 XX_PLUGIN_CATCH_BEGIN/END 已移除，统一使用 guardVtableCall / guardVtableCallVoid 函数式接口
-/// (见下方)，调用示例:
+/// 历史宏 XX_PLUGIN_CATCH_BEGIN/END 已移除，统一使用 guardVtableCall / guardVtableCallVoid
+/// 函数式接口 (见下方)，调用示例:
 ///   return guardVtableCall(-1, [&]() { ... });
 ///   guardVtableCallVoid([&]() { ... });
 
@@ -73,9 +73,15 @@ inline void guardVtableCallVoidImpl(Fn&& fn) noexcept {
 
 namespace agentxx {
 namespace plugin {
-template<typename Ret, typename Fn, typename = std::enable_if_t<!std::is_same_v<std::decay_t<Ret>, std::nullptr_t>>>
+template<
+    typename Ret,
+    typename Fn,
+    typename = std::enable_if_t<!std::is_same_v<std::decay_t<Ret>, std::nullptr_t>>>
 inline Ret guardVtableCall(Ret fallback, Fn&& fn) noexcept {
-    return ::agentxx::plugin_detail::guardVtableCallImpl<Fn, Ret>(std::move(fallback), std::forward<Fn>(fn));
+    return ::agentxx::plugin_detail::guardVtableCallImpl<Fn, Ret>(
+        std::move(fallback),
+        std::forward<Fn>(fn)
+    );
 }
 
 /// std::nullptr_t 重载: fallback 为 nullptr 时按 lambda 返回类型推导指针类型

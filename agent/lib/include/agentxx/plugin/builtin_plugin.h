@@ -33,7 +33,7 @@ extern "C" {
 typedef struct AgentxxBuiltinPluginInfo {
     const char* name; ///< 插件唯一名 (如 "example_plugin"); NULL = 空表占位
     AgentxxPluginGetInfoFn get_info; ///< 可空 (加载前元信息校验, 与 dlsym 可选符号同语义)
-    AgentxxPluginCreateFn  create;  ///< 必需 (实例创建, 与 agentxx_plugin_agent_create 同契约)
+    AgentxxPluginCreateFn create; ///< 必需 (实例创建, 与 agentxx_plugin_agent_create 同契约)
     AgentxxPluginDestroyFn destroy; ///< 可空 (实例销毁, 与 agentxx_plugin_agent_destroy 同契约)
 } AgentxxBuiltinPluginInfo;
 
