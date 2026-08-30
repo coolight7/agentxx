@@ -8,7 +8,7 @@
 //   - 规划写入成功后发布 "agentxx_planning.planning" 插件事件 (载荷为完整
 //     规划 JSON); 订阅宿主约定事件 agentxx_host.client_attached, 客户端接入/
 //     重连时重发当前会话已保存规划 (状态快照自愈, 见 docs/agent/plugins.md 7.3.1)
-//   - client 侧入口 (agentxx_client_create): Plan 渲染完全由插件驱动 ——
+//   - client 侧入口 (agentxx_plugin_client_create): Plan 渲染完全由插件驱动 ——
 //     ① 工具消息装饰: 订阅 EVT_DELTA 经 update_tool_decor 推送语义层装饰
 //     (折叠头显示名/摘要 + 展开体 items: 状态图/todos/notes), TUI 按通用
 //     渲染器展示, 无任何 plan 特化代码; ② Info 栏段落渲染最近一次规划概览
@@ -305,7 +305,7 @@ void on_client_attached(AgentxxPluginStringView event_json, void* ud) {
  * agent 侧入口
  * ===================================================================== */
 
-extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_get_info(void) {
+extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_agent_get_info(void) {
     // C ABI 边界异常守卫: 异常返回 NULL (宿主按"未导出"处理);
     // 本边界为纯静态元数据, 无实例上下文可捕获 → 空操作日志闭包
     return agentxx::plugin_guard::guardCall(
@@ -326,7 +326,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_get_inf
 }
 
 extern "C" AGENTXX_PLUGIN_EXPORT int
-    agentxx_plugin_create(const AgentxxHost* host, void** plugin_ctx) {
+    agentxx_plugin_agent_create(const AgentxxHost* host, void** plugin_ctx) {
     // C ABI 边界异常守卫: create 内含 JSON schema 构建等可抛操作, 异常返回 -1;
     // 守卫日志闭包捕获局部裸指针 (ctx 装配前置空 → 异常路径静默丢弃)
     PluginCtx* raw = nullptr;
@@ -691,7 +691,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
             );
 }
 
-extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_destroy(void* plugin_ctx) {
+extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_agent_destroy(void* plugin_ctx) {
     // C ABI 边界异常守卫: 销毁回调异常不得外泄
     auto* ctx = static_cast<PluginCtx*>(plugin_ctx);
     agentxx::plugin_guard::guardCallVoid(ctxGuardLogger(ctx), [&] {
@@ -700,7 +700,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_destroy(void* plugin_ctx) {
 }
 
 /* =====================================================================
- * client 侧入口 (agentxx_client_create) —— Plan 渲染 (原 TUI 硬编码的
+ * client 侧入口 (agentxx_plugin_client_create) —— Plan 渲染 (原 TUI 硬编码的
  * 消息列表特化 + Info 侧边栏段落全部拆分至本插件, TUI 无任何 plan 概念)
  *
  * - 工具消息装饰 (update_tool_decor): 订阅 EVT_DELTA, tool_start 时按
@@ -1216,7 +1216,7 @@ static void on_client_session_switch(AgentxxPluginStringView payload_json, void*
     });
 }
 
-extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxClientPluginInfo* agentxx_client_get_info(void) {
+extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxClientPluginInfo* agentxx_plugin_client_get_info(void) {
     // C ABI 边界异常守卫: 异常返回 NULL; 本边界为纯静态元数据 → 空操作日志
     return agentxx::plugin_guard::guardCall(
         [](const char*) noexcept {},
@@ -1236,7 +1236,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxClientPluginInfo* agentxx_client_g
 }
 
 extern "C" AGENTXX_PLUGIN_EXPORT int
-    agentxx_client_create(const AgentxxClientHost* host, void** plugin_ctx) {
+    agentxx_plugin_client_create(const AgentxxClientHost* host, void** plugin_ctx) {
     // C ABI 边界异常守卫: 异常返回 -1 (加载失败); 日志闭包捕获局部裸指针
     ClientCtx* raw = nullptr;
     return agentxx::plugin_guard::guardCall(
@@ -1294,7 +1294,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
     );
 }
 
-extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_client_destroy(void* plugin_ctx) {
+extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_client_destroy(void* plugin_ctx) {
     // C ABI 边界异常守卫: 销毁回调异常不得外泄
     auto* ctx = static_cast<ClientCtx*>(plugin_ctx);
     agentxx::plugin_guard::guardCallVoid(clientGuardLogger(ctx), [&] {

@@ -212,7 +212,7 @@ agentxx_event_queue_free(q);
 
 - **Channel 直连**：FFI 层复用 `ChannelAgentIOTransport::makePair` (零序列化 concurrent_channel), 非 WS；`SessionServerAgentIO` 视为服务端端点，`FfiClientAgentIO` 为 client 端点，二者完全同构于 TUI/CLI 的 transport 抽象
 - **工作目录回退**：`config_json.workDir` 支持 `~`/`\${VAR}` 展开与相对路径 (按进程 cwd 解析为绝对)；未配置时回退进程 `cwd`，与 `AgentConfig::resolvedWorkDir()` 语义一致；会话级 worktree 绑定 (`Session::WorktreeBinding`) 与 `AgentContext::getSessionWorkDir` 的多源回退对 FFI 句柄同样生效 (会话内所有相对路径自动切换)
-- **权限 sides**：`plugins[].sides` 取值 `auto` (默认, 按导出符号 `agentxx_client_create` 自动决定) / `agent` (仅 agent 侧加载) / `client` (仅 client 侧，FFI 场景通常为 agent)
+- **权限 sides**：`plugins[].sides` 取值 `auto` (默认, 按导出符号 `agentxx_plugin_client_create` 自动决定) / `agent` (仅 agent 侧加载) / `client` (仅 client 侧，FFI 场景通常为 agent)
 - **同步查询约束**：`get_model_info/get_context_messages/list_sessions` 同一句柄同一时刻仅允许一个在途 (服务端逐条协议)；超时 10s 返回 `AGENTXX_ERR_TIMEOUT`，payload 为 `{"code","message"}` 的 `EVT_ERROR` 也会并发上报
 - **HIL 输入描述**：`EVT_INTERRUPT_REQ` 的 `argJson` 为 `InterruptHandleArg` 序列化，`inputs[]` 含 `label/depict/type (bool/int/double/string/enum)/defaultValue/enumValues`；空 `type` 表示无需输入 (应答空数组 `[]` 即可)
 - **跨 CRT 堆**：所有 `char*` 返回值与 `char** log` 均经 `agentxx_malloc` 分配，宿主必须 `agentxx_free` 释放；`agentxx_strdup_n` 为统一拷贝入口

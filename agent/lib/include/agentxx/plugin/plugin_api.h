@@ -566,11 +566,9 @@ typedef const AgentxxPluginInfo* (*AgentxxPluginGetInfoFn)(void);
 typedef int (*AgentxxPluginCreateFn)(const AgentxxHost* host, void** plugin_ctx);
 typedef void (*AgentxxPluginDestroyFn)(void* plugin_ctx);
 
-#define AGENTXX_PLUGIN_SYMBOL_GET_INFO "agentxx_plugin_get_info"
-#define AGENTXX_PLUGIN_SYMBOL_CREATE   "agentxx_plugin_create"
-#define AGENTXX_PLUGIN_SYMBOL_DESTROY  "agentxx_plugin_destroy"
-
-/* ==================== 便捷宏 (插件侧使用) ==================== */
+#define AGENTXX_PLUGIN_AGENT_SYMBOL_GET_INFO "agentxx_plugin_agent_get_info"
+#define AGENTXX_PLUGIN_AGENT_SYMBOL_CREATE   "agentxx_plugin_agent_create"
+#define AGENTXX_PLUGIN_AGENT_SYMBOL_DESTROY  "agentxx_plugin_agent_destroy"
 
 #define AGENTXX_STRDUP(host, s) ((host)->vtable->strdup((s)))
 

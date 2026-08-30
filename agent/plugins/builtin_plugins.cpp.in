@@ -3,7 +3,7 @@
  * plugins/CMakeLists.txt 经 configure_file 生成, 编译进 libagentxx)
  *
  * - 每个内置插件的源文件在编译时经 CMake per-source 编译定义把入口符号
- *   改名 (agentxx_plugin_create → agentxx_plugin_builtin_create_<插件名> 等,
+ *   改名 (agentxx_plugin_agent_create → agentxx_plugin_agent_builtin_create_<插件名> 等,
  *   见各插件子目录 CMakeLists.txt 的 AGENTXX_ENABLE_PLUGIN_BUILTIN 分支),
  *   避免多插件合并编译时符号冲突
  * - 本清单汇总全部启用插件的改名入口符号, 经 agentxx_get_builtin_plugins()

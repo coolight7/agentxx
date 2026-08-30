@@ -645,7 +645,7 @@ YamlAppConfig loadYamlConfig(
                 pc.enabled = val == "true";
             }
             // sides: 插件运行侧 (auto/agent/client; 忽略大小写, 非法值警告回退 auto)
-            // - auto:   按导出符号自动决定 (client 侧: 有 agentxx_client_create 才加载)
+            // - auto:   按导出符号自动决定 (client 侧: 有 agentxx_plugin_client_create 才加载)
             // - agent:  仅 agent 侧加载 (client 侧跳过)
             // - client: 仅 client 侧加载 (agent 侧跳过)
             if (node["sides"]) {

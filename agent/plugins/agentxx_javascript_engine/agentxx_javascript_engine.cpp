@@ -1621,7 +1621,7 @@ JSValue JsEngine::bridgeCall(
 // 插件入口 (宿主 dlsym)
 // =====================================================================
 
-extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_get_info(void) {
+extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_agent_get_info(void) {
     static const AgentxxPluginInfo info{
         AGENTXX_PLUGIN_API_VERSION,
         AGENTXX_SV("agentxx_javascript_engine"),
@@ -1759,7 +1759,7 @@ static void* jsCapStart(
 }
 
 extern "C" AGENTXX_PLUGIN_EXPORT int
-    agentxx_plugin_create(const AgentxxHost* host, void** plugin_ctx) {
+    agentxx_plugin_agent_create(const AgentxxHost* host, void** plugin_ctx) {
     // C ABI 边界异常守卫: create 含引擎线程创建/能力注册等可抛操作,
     // 异常返回 -1 走宿主加载失败清理路径; 日志闭包捕获局部裸指针
     JsEngine* raw = nullptr;
@@ -1814,7 +1814,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
     );
 }
 
-extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_destroy(void* plugin_ctx) {
+extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_agent_destroy(void* plugin_ctx) {
     auto* engine = static_cast<JsEngine*>(plugin_ctx);
     // C ABI 边界异常守卫: 销毁回调 (delete 引擎 = 停线程 + 释放 runtime)
     // 异常不得外泄, 否则 JS 线程/runtime 泄漏且宿主卸载流程被打断;

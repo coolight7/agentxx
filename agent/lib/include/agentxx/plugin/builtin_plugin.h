@@ -7,7 +7,7 @@
  * - 内置模式 (AGENTXX_ENABLE_PLUGIN_BUILTIN=ON): 启用的插件源文件直接
  *   编译进 libagentxx, 运行期无需任何插件动态库文件 (适合嵌入式/单文件
  *   分发等不便 dlopen 的场景); 插件入口经编译期改名避免多插件符号冲突
- *   (agentxx_plugin_create → agentxx_plugin_builtin_create_<插件名>), 改名
+ *   (agentxx_plugin_agent_create → agentxx_plugin_agent_builtin_create_<插件名>), 改名
  *   后的符号由 CMake 生成的清单 (plugins/builtin_plugins.cpp.in) 汇总,
  *   经本头声明的 agentxx_get_builtin_plugins() 暴露给 PluginManager
  * - 本头为纯 C ABI: 清单实现仅依赖 plugin_api.h 的类型 (宿主与插件共用)
@@ -33,8 +33,8 @@ extern "C" {
 typedef struct AgentxxBuiltinPluginInfo {
     const char* name; ///< 插件唯一名 (如 "example_plugin"); NULL = 空表占位
     AgentxxPluginGetInfoFn get_info; ///< 可空 (加载前元信息校验, 与 dlsym 可选符号同语义)
-    AgentxxPluginCreateFn  create;  ///< 必需 (实例创建, 与 agentxx_plugin_create 同契约)
-    AgentxxPluginDestroyFn destroy; ///< 可空 (实例销毁, 与 agentxx_plugin_destroy 同契约)
+    AgentxxPluginCreateFn  create;  ///< 必需 (实例创建, 与 agentxx_plugin_agent_create 同契约)
+    AgentxxPluginDestroyFn destroy; ///< 可空 (实例销毁, 与 agentxx_plugin_agent_destroy 同契约)
 } AgentxxBuiltinPluginInfo;
 
 /// 查询全部内置插件 (libagentxx 实现; 返回静态数组, count 输出条目数)

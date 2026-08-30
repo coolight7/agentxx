@@ -20,9 +20,9 @@ if (_AGENTXX_ADD_AS_BUILTIN)
   )
   target_compile_definitions(${_target} PRIVATE
     "AGENTXX_PLUGIN_BUILTIN=1"
-    "agentxx_plugin_create=agentxx_plugin_builtin_create_${PLUGIN_NAME}"
-    "agentxx_plugin_get_info=agentxx_plugin_builtin_get_info_${PLUGIN_NAME}"
-    "agentxx_plugin_destroy=agentxx_plugin_builtin_destroy_${PLUGIN_NAME}"
+    "agentxx_plugin_agent_create=agentxx_plugin_agent_builtin_create_${PLUGIN_NAME}"
+    "agentxx_plugin_agent_get_info=agentxx_plugin_agent_builtin_get_info_${PLUGIN_NAME}"
+    "agentxx_plugin_agent_destroy=agentxx_plugin_agent_builtin_destroy_${PLUGIN_NAME}"
   )
   target_include_directories(${_target} PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}"          # agentxx_string_plugin.h / string_impl.h
@@ -44,12 +44,12 @@ if (_AGENTXX_ADD_AS_BUILTIN)
   )
   set(AGENTXX_BUILTIN_MANIFEST_DECLS
     "${AGENTXX_BUILTIN_MANIFEST_DECLS}
-extern \"C\" const AgentxxPluginInfo* agentxx_plugin_builtin_get_info_${PLUGIN_NAME}(void);
-extern \"C\" int agentxx_plugin_builtin_create_${PLUGIN_NAME}(const AgentxxHost* host, void** plugin_ctx);
-extern \"C\" void agentxx_plugin_builtin_destroy_${PLUGIN_NAME}(void* plugin_ctx);")
+extern \"C\" const AgentxxPluginInfo* agentxx_plugin_agent_builtin_get_info_${PLUGIN_NAME}(void);
+extern \"C\" int agentxx_plugin_agent_builtin_create_${PLUGIN_NAME}(const AgentxxHost* host, void** plugin_ctx);
+extern \"C\" void agentxx_plugin_agent_builtin_destroy_${PLUGIN_NAME}(void* plugin_ctx);")
   set(AGENTXX_BUILTIN_MANIFEST_ENTRIES
     "${AGENTXX_BUILTIN_MANIFEST_ENTRIES}
-    {\"${PLUGIN_NAME}\", agentxx_plugin_builtin_get_info_${PLUGIN_NAME}, agentxx_plugin_builtin_create_${PLUGIN_NAME}, agentxx_plugin_builtin_destroy_${PLUGIN_NAME}},")
+    {\"${PLUGIN_NAME}\", agentxx_plugin_agent_builtin_get_info_${PLUGIN_NAME}, agentxx_plugin_agent_builtin_create_${PLUGIN_NAME}, agentxx_plugin_agent_builtin_destroy_${PLUGIN_NAME}},")
   set(AGENTXX_BUILTIN_PLUGIN_OBJECT_TARGETS "${AGENTXX_BUILTIN_PLUGIN_OBJECT_TARGETS}" "${_target}" PARENT_SCOPE)
   # 登记进内置插件清单 (子目录自登记: 平台不支持时本文件开头已提前 return,
   # 不会误登记; 见 plugins/CMakeLists.txt 内置分支注释)

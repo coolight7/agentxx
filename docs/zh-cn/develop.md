@@ -37,7 +37,7 @@
 
 ## 3. 插件开发
 
-- 入口 `agentxx_plugin_create/destroy` (client 侧 `agentxx_client_create/destroy`)，`AGENTXX_PLUGIN_EXPORT` 标记
+- 入口 `agentxx_plugin_agent_create/destroy` (client 侧 `agentxx_plugin_client_create/destroy`)，`AGENTXX_PLUGIN_EXPORT` 标记
 - 遵守三铁律：无可变全局 static / 状态经 `user_data` 闭包恢复 / 接口表缓存入实例上下文
 - 复用 `agentxx_util` 时 `find_package(agentxx_util)` + `target_link_libraries(PRIVATE agentxx_util)` (内置插件便捷，第三方仅需纯 C 头)
 - 平台矩阵在各插件 `CMakeLists.txt` 开头经 `plugin_platform_support.cmake` 的 `gate` 判定

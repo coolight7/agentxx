@@ -10,7 +10,7 @@
  * 3. 事件: 订阅 plugin.demo.topic 与跨端事件
  * 4. 能力: 声明 capability "example.demo"
  * 5. 卸载: destroy 释放实例
- * 6. client 入口 (双端插件, agentxx_client_create)
+ * 6. client 入口 (双端插件, agentxx_plugin_client_create)
  */
 #include "agentxx/plugin/client_plugin_api.h"
 #include "agentxx/plugin/plugin_api.h"
@@ -56,7 +56,7 @@ static auto clientGuardLogger(ClientCtx* ctx) noexcept {
 
 /* ---------------- get_info ---------------- */
 
-extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_get_info(void) {
+extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_agent_get_info(void) {
     return agentxx::plugin_guard::guardCall(
         [](const char*) noexcept {},
         nullptr,
@@ -99,7 +99,7 @@ static void on_client_hello(AgentxxPluginStringView event_json, void* ud) {
 /* ---------------- entry / unload ---------------- */
 
 extern "C" AGENTXX_PLUGIN_EXPORT int
-    agentxx_plugin_create(const AgentxxHost* host, void** plugin_ctx) {
+    agentxx_plugin_agent_create(const AgentxxHost* host, void** plugin_ctx) {
     AgentCtx* raw = nullptr;
     return agentxx::plugin_guard::guardCall(
         [&raw](const char* msg) noexcept {
@@ -216,7 +216,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
     );
 }
 
-extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_destroy(void* plugin_ctx) {
+extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_agent_destroy(void* plugin_ctx) {
     auto* ctx = static_cast<AgentCtx*>(plugin_ctx);
     agentxx::plugin_guard::guardCallVoid(agentGuardLogger(ctx), [&] {
         if (!ctx) {
@@ -230,7 +230,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_destroy(void* plugin_ctx) {
  * client 侧入口 (agentxx_client_*)
  * ===================================================================== */
 
-extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxClientPluginInfo* agentxx_client_get_info(void) {
+extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxClientPluginInfo* agentxx_plugin_client_get_info(void) {
     return agentxx::plugin_guard::guardCall(
         [](const char*) noexcept {},
         nullptr,
@@ -394,7 +394,7 @@ static void on_client_plugin_data(AgentxxPluginStringView payload_json, void* ud
 }
 
 extern "C" AGENTXX_PLUGIN_EXPORT int
-    agentxx_client_create(const AgentxxClientHost* host, void** plugin_ctx) {
+    agentxx_plugin_client_create(const AgentxxClientHost* host, void** plugin_ctx) {
     ClientCtx* raw = nullptr;
     return agentxx::plugin_guard::guardCall(
         [&raw](const char* msg) noexcept {
@@ -494,7 +494,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
     );
 }
 
-extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_client_destroy(void* plugin_ctx) {
+extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_client_destroy(void* plugin_ctx) {
     auto* ctx = static_cast<ClientCtx*>(plugin_ctx);
     agentxx::plugin_guard::guardCallVoid(clientGuardLogger(ctx), [&] {
         if (!ctx || !ctx->host) {
