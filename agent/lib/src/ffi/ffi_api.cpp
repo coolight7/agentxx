@@ -6,6 +6,7 @@
 // 用后必须 agentxx_ffi_free 释放)。符号导出白名单见 lib/ffi_symbols.map。
 
 #include "agentxx/ffi_api.h"
+#include "agentxx/util/log.h"
 #include "ffi_runtime.h"
 
 #include <cstring>
@@ -70,6 +71,17 @@ extern "C" {
 // ---------------------------------------------------------------------------
 // 内存 / 版本
 // ---------------------------------------------------------------------------
+
+void* agentxx_ffi_malloc(size_t size) {
+    return malloc(size);
+}
+
+void agentxx_ffi_free(const void* ptr) {
+    XX_LOGD("agentxx_ffi_free : {}", ptr);
+    // 如果此处出错，也可能是在此之前 ptr 已经越界访问，释放时 debug
+    // 检查出存在越界写入
+    free(const_cast<void*>(ptr));
+}
 
 char* agentxx_ffi_strdup_n(const char* s, size_t size) {
     if (s == nullptr) {
