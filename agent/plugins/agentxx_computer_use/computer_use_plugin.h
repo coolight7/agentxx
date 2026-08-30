@@ -4,9 +4,10 @@
 #include "agentxx/plugin/plugin_api.h"
 #include "agentxx/plugin/plugin_guard.h"
 #include "agentxx/plugin/plugin_kit.h"
-#include "codegraph/core/json.hpp"
 #include "fmt/format.h"
+#include "simdjson.h"
 #include <cstring>
+#include <memory>
 #include <string>
 
 namespace agentxx_computer_use_plugin {

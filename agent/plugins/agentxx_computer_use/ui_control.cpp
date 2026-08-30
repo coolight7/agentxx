@@ -1,6 +1,6 @@
-#include "codegraph/core/json.hpp"
 #include "computer_use_plugin.h"
 #include "fmt/format.h"
+#include <neograph/json.h>
 #include <cctype>
 #include <chrono>
 #include <map>
@@ -1084,7 +1084,7 @@ std::string uiControlExecute(agentxx_computer_use_plugin::SimpleJson& arguments)
     int64_t interval_ms = 50;
     jsonGetInt(arguments.doc().at_pointer("/interval_ms"), interval_ms);
 
-    codegraph::Json results    = codegraph::Json::array();
+    neograph::json results    = neograph::json::array();
     int             ok_count   = 0;
     int             fail_count = 0;
     size_t          i          = 0;
@@ -1098,7 +1098,7 @@ std::string uiControlExecute(agentxx_computer_use_plugin::SimpleJson& arguments)
         UiCmdFields f;
         if (elem.error() || !uiControlParseCmd(elem.value(), f) || !f.hasAction
             || f.action.empty()) {
-            results.push_back(codegraph::Json{
+            results.push_back(neograph::json{
                 {"index",  i                       },
                 {"action", ""                      },
                 {"ok",     false                   },
@@ -1113,7 +1113,7 @@ std::string uiControlExecute(agentxx_computer_use_plugin::SimpleJson& arguments)
         } else {
             fail_count++;
         }
-        results.push_back(codegraph::Json{
+        results.push_back(neograph::json{
             {"index",  i       },
             {"action", f.action},
             {"ok",     r.ok    },

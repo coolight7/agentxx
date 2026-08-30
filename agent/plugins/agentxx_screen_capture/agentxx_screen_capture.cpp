@@ -1,8 +1,8 @@
 // agentxx_screen_capture —— 屏幕捕获插件 (Windows)
-#include "codegraph/core/json.hpp"
 #include "fmt/format.h"
 #include "screen_capture.h"
 #include "screen_capture_plugin.h"
+#include <neograph/json.h>
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -108,12 +108,12 @@ static std::string buildCapturePath(PluginCtx& ctx, int screenIndex) {
     );
 }
 
-static codegraph::Json frameToJson(
+static neograph::json frameToJson(
     PluginCtx&                                        ctx,
     const agentxx_screen_capture_plugin::ScreenFrame& f,
     bool                                              saveImages
 ) {
-    codegraph::Json j = codegraph::Json::object();
+    neograph::json j = neograph::json::object();
     j["width"]        = f.width;
     j["height"]       = f.height;
     j["offset_x"]     = f.offsetX;
@@ -142,11 +142,11 @@ static std::string framesResult(
     if (frames.empty()) {
         return R"({"ok":false,"error":"capture failed"})";
     }
-    codegraph::Json arr = codegraph::Json::array();
+    neograph::json arr = neograph::json::array();
     for (const auto& f : frames) {
         arr.push_back(frameToJson(ctx, f, saveImages));
     }
-    codegraph::Json j = codegraph::Json::object();
+    neograph::json j = neograph::json::object();
     j["ok"]           = true;
     j["frames"]       = arr;
     return j.dump();
@@ -160,33 +160,33 @@ static const char* kScreenCaptureDefaultDepict
       "pixel data never enters the conversation.";
 
 static void registerScreenCaptureTool(PluginCtx& ctx) {
-    codegraph::Json cmd = codegraph::Json::object();
+    neograph::json cmd = neograph::json::object();
     cmd["type"]         = "string";
     cmd["description"]
         = "Operation to perform: capture_all (default), capture_mouse, capture_screen, "
           "get_screen_count, start_streaming, stop_streaming.";
-    cmd["enum"] = codegraph::Json::array(
-        {codegraph::Json("capture_all"),
-         codegraph::Json("capture_mouse"),
-         codegraph::Json("capture_screen"),
-         codegraph::Json("get_screen_count"),
-         codegraph::Json("start_streaming"),
-         codegraph::Json("stop_streaming")}
+    cmd["enum"] = neograph::json::array(
+        {"capture_all",
+         "capture_mouse",
+         "capture_screen",
+         "get_screen_count",
+         "start_streaming",
+         "stop_streaming"}
     );
-    codegraph::Json schema               = codegraph::Json::object();
+    neograph::json schema               = neograph::json::object();
     schema["type"]                       = "object";
-    schema["properties"]                 = codegraph::Json::object();
+    schema["properties"]                 = neograph::json::object();
     schema["properties"]["command"]      = cmd;
-    schema["properties"]["screen_index"] = codegraph::Json({
+    schema["properties"]["screen_index"] = neograph::json({
         {"type",        "integer"                                                               },
         {"description",
          "Optional 0-based screen index for capture_screen (or default capture when specified)."}
     });
-    schema["properties"]["frame_rate"]   = codegraph::Json({
+    schema["properties"]["frame_rate"]   = neograph::json({
         {"type",        "integer"                                                  },
         {"description", "Target frame rate (1-30) for start_streaming. Default: 5."}
     });
-    schema["properties"]["save_images"]  = codegraph::Json({
+    schema["properties"]["save_images"]  = neograph::json({
         {"type",        "boolean"                  },
         {"description",
          "Save each captured frame as a PNG file under the host dataDir "
@@ -259,7 +259,7 @@ static void registerScreenCaptureTool(PluginCtx& ctx) {
                 return framesResult(c, frames, saveImages);
             }
             if (command == "get_screen_count") {
-                codegraph::Json j = codegraph::Json::object();
+                neograph::json j = neograph::json::object();
                 j["ok"]           = true;
                 j["count"]        = capture.capture_.getScreenCount();
                 return j.dump();
@@ -268,7 +268,7 @@ static void registerScreenCaptureTool(PluginCtx& ctx) {
                 int64_t rate = 5;
                 jsonGetInt(args.doc().at_pointer("/frame_rate"), rate);
                 bool            ok = capture.startStreaming(static_cast<int>(rate));
-                codegraph::Json j  = codegraph::Json::object();
+                neograph::json j  = neograph::json::object();
                 j["ok"]            = ok;
                 j["rate"]          = rate;
                 return j.dump();

@@ -483,7 +483,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                         if (!todosJson.empty()) {
                             try {
                                 planStore["todos"] = neograph::json::parse(todosJson);
-                            } catch (const std::exception&) {
+                            } catch (...) {
                                 return R"({"error":"Arg `todos` is not valid JSON"})";
                             }
                         }
