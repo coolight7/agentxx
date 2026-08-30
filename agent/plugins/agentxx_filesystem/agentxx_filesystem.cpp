@@ -282,9 +282,10 @@ std::string schemaGlob(PluginCtx* ctx) {
                          agentxx::kit::toolPromptArgDesc(
                              p,
                              "file_patterns",
-                             std::string(
-                                 "Path with glob patterns to match. Relative paths are resolved against the current working directory; `~` expands to the home directory.\n"
-                             ) + kGlobPatternHelp
+                             fmt::format(
+                                 "Path with glob patterns to match. Relative paths are resolved against the current working directory; `~` expands to the home directory.\n{}",
+                                 kGlobPatternHelp
+                             )
                          ),
                      },
                  },
@@ -393,9 +394,10 @@ std::string schemaGrep(PluginCtx* ctx) {
                          agentxx::kit::toolPromptArgDesc(
                              p,
                              "file_patterns",
-                             std::string(
-                                 "Path with glob patterns to select which files to search. Relative paths are resolved against the current working directory; `~` expands to the home directory.\n"
-                             ) + kGlobPatternHelp
+                             fmt::format(
+                                 "Path with glob patterns to select which files to search. Relative paths are resolved against the current working directory; `~` expands to the home directory.\n{}",
+                                 kGlobPatternHelp
+                             )
                          ),
                      },
                  },
