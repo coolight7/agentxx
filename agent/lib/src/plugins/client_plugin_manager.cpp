@@ -1311,71 +1311,71 @@ char* xx_cjson_get_string(
     AgentxxPluginStringView  json,
     AgentxxPluginStringView  key
 ) {
-    XX_PLUGIN_CATCH_BEGIN
-    auto inst = clientInstOf(host);
-    if (!inst || agentxx_plugin_sv_empty(json) || agentxx_plugin_sv_empty(key)) {
-        return nullptr;
-    }
-    try {
-        auto j = neograph::json::parse(std::string{json.data, json.size});
-        auto v = jsonStr(j, std::string_view{key.data, key.size});
-        if (v.empty() && !j.contains(std::string{key.data, key.size})) {
-            return nullptr;
+    return agentxx::plugin::guardVtableCall(nullptr, [&]() -> char* {
+        auto inst = clientInstOf(host);
+        if (!inst || agentxx_plugin_sv_empty(json) || agentxx_plugin_sv_empty(key)) {
+            return static_cast<char*>(nullptr);
         }
-        return xx_cstrdup(v.c_str());
-    } catch (...) {
-        return nullptr;
-    }
-    XX_PLUGIN_CATCH_END(nullptr)
+        try {
+            auto j = neograph::json::parse(std::string{json.data, json.size});
+            auto v = jsonStr(j, std::string_view{key.data, key.size});
+            if (v.empty() && !j.contains(std::string{key.data, key.size})) {
+                return static_cast<char*>(nullptr);
+            }
+            return xx_cstrdup(v.c_str());
+        } catch (...) {
+            return static_cast<char*>(nullptr);
+        }
+    });
 }
 
 /// JSON 辅助: 字符串 → JSON 字符串字面量 (含引号与转义; 线程安全纯函数)
 char* xx_cjson_escape(const AgentxxClientHost* host, AgentxxPluginStringView s) {
-    XX_PLUGIN_CATCH_BEGIN
-    auto inst = clientInstOf(host);
-    if (!inst || agentxx_plugin_sv_empty(s)) {
-        return nullptr;
-    }
-    try {
-        neograph::json j = std::string{s.data, s.size};
-        return xx_cstrdup(j.dump().c_str());
-    } catch (...) {
-        return nullptr;
-    }
-    XX_PLUGIN_CATCH_END(nullptr)
+    return agentxx::plugin::guardVtableCall(nullptr, [&]() -> char* {
+        auto inst = clientInstOf(host);
+        if (!inst || agentxx_plugin_sv_empty(s)) {
+            return static_cast<char*>(nullptr);
+        }
+        try {
+            neograph::json j = std::string{s.data, s.size};
+            return xx_cstrdup(j.dump().c_str());
+        } catch (...) {
+            return static_cast<char*>(nullptr);
+        }
+    });
 }
 
 // ---- COM 风格接口表查询 ----
 
 const void* xx_cquery_interface(const AgentxxClientHost* host, AgentxxPluginStringView iid) {
-    XX_PLUGIN_CATCH_BEGIN(void) host;
-    if (!iid.data) {
-        return nullptr;
-    }
-    std::string_view n{iid.data, iid.size};
-    if (n == AGENTXX_IFACE_CLIENT_UI) {
-        return clientUiIface();
-    }
-    if (n == AGENTXX_IFACE_CLIENT_EVENTS) {
-        return &g_clientIfaceEvents;
-    }
-    if (n == AGENTXX_IFACE_CLIENT_SESSION) {
-        return &g_clientIfaceSession;
-    }
-    if (n == AGENTXX_IFACE_CLIENT_WIRE) {
-        return &g_clientIfaceWire;
-    }
-    if (n == AGENTXX_IFACE_CLIENT_SELF) {
-        return &g_clientIfaceSelf;
-    }
-    if (n == AGENTXX_IFACE_CLIENT_JSON) {
-        return &g_clientIfaceJson;
-    }
-    if (n == AGENTXX_IFACE_CLIENT_LOG) {
-        return &g_clientIfaceLog;
-    }
-    return nullptr;
-    XX_PLUGIN_CATCH_END(nullptr)
+    return agentxx::plugin::guardVtableCall(nullptr, [&]() -> const void* {
+        if (!iid.data) {
+            return static_cast<const void*>(nullptr);
+        }
+        std::string_view n{iid.data, iid.size};
+        if (n == AGENTXX_IFACE_CLIENT_UI) {
+            return clientUiIface();
+        }
+        if (n == AGENTXX_IFACE_CLIENT_EVENTS) {
+            return &g_clientIfaceEvents;
+        }
+        if (n == AGENTXX_IFACE_CLIENT_SESSION) {
+            return &g_clientIfaceSession;
+        }
+        if (n == AGENTXX_IFACE_CLIENT_WIRE) {
+            return &g_clientIfaceWire;
+        }
+        if (n == AGENTXX_IFACE_CLIENT_SELF) {
+            return &g_clientIfaceSelf;
+        }
+        if (n == AGENTXX_IFACE_CLIENT_JSON) {
+            return &g_clientIfaceJson;
+        }
+        if (n == AGENTXX_IFACE_CLIENT_LOG) {
+            return &g_clientIfaceLog;
+        }
+        return static_cast<const void*>(nullptr);
+    });
 }
 
 // ---- 状态栏项 ----
@@ -1387,23 +1387,23 @@ AgentxxStatusItem* xx_cregister_status_item(
     int                      align,
     int                      order
 ) {
-    XX_PLUGIN_CATCH_BEGIN
-    auto mgr  = clientMgrOf(host);
-    auto inst = clientInstOf(host);
-    if (!mgr || !inst) {
-        return nullptr;
-    }
-    std::string idStr{id.data ? id.data : "", id.size};
-    std::string jsonStr{initial_json.data ? initial_json.data : "", initial_json.size};
-    if (idStr.empty()) {
-        return nullptr;
-    }
-    return ioCallSync<AgentxxStatusItem*>(mgr, [&]() -> AgentxxStatusItem* {
-        return static_cast<AgentxxStatusItem*>(
-            mgr->registerStatusItem(inst, idStr.c_str(), jsonStr.c_str(), align, order)
-        );
+    return agentxx::plugin::guardVtableCall(nullptr, [&]() -> AgentxxStatusItem* {
+        auto mgr  = clientMgrOf(host);
+        auto inst = clientInstOf(host);
+        if (!mgr || !inst) {
+            return static_cast<AgentxxStatusItem*>(nullptr);
+        }
+        std::string idStr{id.data ? id.data : "", id.size};
+        std::string jsonStr{initial_json.data ? initial_json.data : "", initial_json.size};
+        if (idStr.empty()) {
+            return static_cast<AgentxxStatusItem*>(nullptr);
+        }
+        return ioCallSync<AgentxxStatusItem*>(mgr, [&]() -> AgentxxStatusItem* {
+            return static_cast<AgentxxStatusItem*>(
+                mgr->registerStatusItem(inst, idStr.c_str(), jsonStr.c_str(), align, order)
+            );
+        });
     });
-    XX_PLUGIN_CATCH_END(nullptr)
 }
 
 int xx_cupdate_status_item(
@@ -1411,30 +1411,30 @@ int xx_cupdate_status_item(
     AgentxxStatusItem*       item,
     AgentxxPluginStringView  json
 ) {
-    XX_PLUGIN_CATCH_BEGIN
-    auto mgr  = clientMgrOf(host);
-    auto inst = clientInstOf(host);
-    if (!mgr || !inst || !item) {
-        return -1;
-    }
-    std::string jsonStr{json.data ? json.data : "", json.size};
-    return ioCallSync<int>(mgr, [&]() -> int {
-        return mgr->updateStatusItem(inst, item, jsonStr.c_str());
+    return agentxx::plugin::guardVtableCall(-1, [&]() -> int {
+        auto mgr  = clientMgrOf(host);
+        auto inst = clientInstOf(host);
+        if (!mgr || !inst || !item) {
+            return -1;
+        }
+        std::string jsonStr{json.data ? json.data : "", json.size};
+        return ioCallSync<int>(mgr, [&]() -> int {
+            return mgr->updateStatusItem(inst, item, jsonStr.c_str());
+        });
     });
-    XX_PLUGIN_CATCH_END(-1)
 }
 
 void xx_cunregister_status_item(const AgentxxClientHost* host, AgentxxStatusItem* item) {
-    XX_PLUGIN_CATCH_BEGIN
-    auto mgr  = clientMgrOf(host);
-    auto inst = clientInstOf(host);
-    if (!mgr || !inst || !item) {
-        return;
-    }
-    ioCallSyncVoid(mgr, [&]() {
-        mgr->unregisterStatusItem(inst, item);
+    agentxx::plugin::guardVtableCallVoid([&]() {
+        auto mgr  = clientMgrOf(host);
+        auto inst = clientInstOf(host);
+        if (!mgr || !inst || !item) {
+            return;
+        }
+        ioCallSyncVoid(mgr, [&]() {
+            mgr->unregisterStatusItem(inst, item);
+        });
     });
-    XX_PLUGIN_CATCH_END_VOID()
 }
 
 // ---- 面板 ----
@@ -1444,21 +1444,22 @@ AgentxxPanel* xx_cregister_panel(
     AgentxxPluginStringView  id,
     AgentxxPluginStringView  props_json
 ) {
-    XX_PLUGIN_CATCH_BEGIN
-    auto mgr  = clientMgrOf(host);
-    auto inst = clientInstOf(host);
-    if (!mgr || !inst) {
-        return nullptr;
-    }
-    std::string idStr{id.data ? id.data : "", id.size};
-    std::string props{props_json.data ? props_json.data : "", props_json.size};
-    if (idStr.empty()) {
-        return nullptr;
-    }
-    return ioCallSync<AgentxxPanel*>(mgr, [&]() -> AgentxxPanel* {
-        return static_cast<AgentxxPanel*>(mgr->registerPanel(inst, idStr.c_str(), props.c_str()));
+    return agentxx::plugin::guardVtableCall(nullptr, [&]() -> AgentxxPanel* {
+        auto mgr  = clientMgrOf(host);
+        auto inst = clientInstOf(host);
+        if (!mgr || !inst) {
+            return static_cast<AgentxxPanel*>(nullptr);
+        }
+        std::string idStr{id.data ? id.data : "", id.size};
+        std::string props{props_json.data ? props_json.data : "", props_json.size};
+        if (idStr.empty()) {
+            return static_cast<AgentxxPanel*>(nullptr);
+        }
+        return ioCallSync<AgentxxPanel*>(mgr, [&]() -> AgentxxPanel* {
+            return static_cast<AgentxxPanel*>(mgr->registerPanel(inst, idStr.c_str(), props.c_str())
+            );
+        });
     });
-    XX_PLUGIN_CATCH_END(nullptr)
 }
 
 int xx_cupdate_panel(
@@ -1466,30 +1467,30 @@ int xx_cupdate_panel(
     AgentxxPanel*            panel,
     AgentxxPluginStringView  items_json
 ) {
-    XX_PLUGIN_CATCH_BEGIN
-    auto mgr  = clientMgrOf(host);
-    auto inst = clientInstOf(host);
-    if (!mgr || !inst || !panel) {
-        return -1;
-    }
-    std::string items{items_json.data ? items_json.data : "", items_json.size};
-    return ioCallSync<int>(mgr, [&]() -> int {
-        return mgr->updatePanel(inst, panel, items.c_str());
+    return agentxx::plugin::guardVtableCall(-1, [&]() -> int {
+        auto mgr  = clientMgrOf(host);
+        auto inst = clientInstOf(host);
+        if (!mgr || !inst || !panel) {
+            return -1;
+        }
+        std::string items{items_json.data ? items_json.data : "", items_json.size};
+        return ioCallSync<int>(mgr, [&]() -> int {
+            return mgr->updatePanel(inst, panel, items.c_str());
+        });
     });
-    XX_PLUGIN_CATCH_END(-1)
 }
 
 void xx_cunregister_panel(const AgentxxClientHost* host, AgentxxPanel* panel) {
-    XX_PLUGIN_CATCH_BEGIN
-    auto mgr  = clientMgrOf(host);
-    auto inst = clientInstOf(host);
-    if (!mgr || !inst || !panel) {
-        return;
-    }
-    ioCallSyncVoid(mgr, [&]() {
-        mgr->unregisterPanel(inst, panel);
+    agentxx::plugin::guardVtableCallVoid([&]() {
+        auto mgr  = clientMgrOf(host);
+        auto inst = clientInstOf(host);
+        if (!mgr || !inst || !panel) {
+            return;
+        }
+        ioCallSyncVoid(mgr, [&]() {
+            mgr->unregisterPanel(inst, panel);
+        });
     });
-    XX_PLUGIN_CATCH_END_VOID()
 }
 
 // ---- Info 栏段落 ----
@@ -1499,23 +1500,23 @@ AgentxxInfoSection* xx_cregister_info_section(
     AgentxxPluginStringView  id,
     AgentxxPluginStringView  props_json
 ) {
-    XX_PLUGIN_CATCH_BEGIN
-    auto mgr  = clientMgrOf(host);
-    auto inst = clientInstOf(host);
-    if (!mgr || !inst) {
-        return nullptr;
-    }
-    std::string idStr{id.data ? id.data : "", id.size};
-    std::string props{props_json.data ? props_json.data : "", props_json.size};
-    if (idStr.empty()) {
-        return nullptr;
-    }
-    return ioCallSync<AgentxxInfoSection*>(mgr, [&]() -> AgentxxInfoSection* {
-        return static_cast<AgentxxInfoSection*>(
-            mgr->registerInfoSection(inst, idStr.c_str(), props.c_str())
-        );
+    return agentxx::plugin::guardVtableCall(nullptr, [&]() -> AgentxxInfoSection* {
+        auto mgr  = clientMgrOf(host);
+        auto inst = clientInstOf(host);
+        if (!mgr || !inst) {
+            return static_cast<AgentxxInfoSection*>(nullptr);
+        }
+        std::string idStr{id.data ? id.data : "", id.size};
+        std::string props{props_json.data ? props_json.data : "", props_json.size};
+        if (idStr.empty()) {
+            return static_cast<AgentxxInfoSection*>(nullptr);
+        }
+        return ioCallSync<AgentxxInfoSection*>(mgr, [&]() -> AgentxxInfoSection* {
+            return static_cast<AgentxxInfoSection*>(
+                mgr->registerInfoSection(inst, idStr.c_str(), props.c_str())
+            );
+        });
     });
-    XX_PLUGIN_CATCH_END(nullptr)
 }
 
 int xx_cupdate_info_section(
@@ -1523,30 +1524,30 @@ int xx_cupdate_info_section(
     AgentxxInfoSection*      section,
     AgentxxPluginStringView  items_json
 ) {
-    XX_PLUGIN_CATCH_BEGIN
-    auto mgr  = clientMgrOf(host);
-    auto inst = clientInstOf(host);
-    if (!mgr || !inst || !section) {
-        return -1;
-    }
-    std::string items{items_json.data ? items_json.data : "", items_json.size};
-    return ioCallSync<int>(mgr, [&]() -> int {
-        return mgr->updateInfoSection(inst, section, items.c_str());
+    return agentxx::plugin::guardVtableCall(-1, [&]() -> int {
+        auto mgr  = clientMgrOf(host);
+        auto inst = clientInstOf(host);
+        if (!mgr || !inst || !section) {
+            return -1;
+        }
+        std::string items{items_json.data ? items_json.data : "", items_json.size};
+        return ioCallSync<int>(mgr, [&]() -> int {
+            return mgr->updateInfoSection(inst, section, items.c_str());
+        });
     });
-    XX_PLUGIN_CATCH_END(-1)
 }
 
 void xx_cunregister_info_section(const AgentxxClientHost* host, AgentxxInfoSection* section) {
-    XX_PLUGIN_CATCH_BEGIN
-    auto mgr  = clientMgrOf(host);
-    auto inst = clientInstOf(host);
-    if (!mgr || !inst || !section) {
-        return;
-    }
-    ioCallSyncVoid(mgr, [&]() {
-        mgr->unregisterInfoSection(inst, section);
+    agentxx::plugin::guardVtableCallVoid([&]() {
+        auto mgr  = clientMgrOf(host);
+        auto inst = clientInstOf(host);
+        if (!mgr || !inst || !section) {
+            return;
+        }
+        ioCallSyncVoid(mgr, [&]() {
+            mgr->unregisterInfoSection(inst, section);
+        });
     });
-    XX_PLUGIN_CATCH_END_VOID()
 }
 
 int xx_cupdate_tool_decor(
@@ -1554,18 +1555,18 @@ int xx_cupdate_tool_decor(
     AgentxxPluginStringView  tool_call_id,
     AgentxxPluginStringView  decor_json
 ) {
-    XX_PLUGIN_CATCH_BEGIN
-    auto mgr  = clientMgrOf(host);
-    auto inst = clientInstOf(host);
-    if (!mgr || !inst) {
-        return -1;
-    }
-    std::string tid{tool_call_id.data ? tool_call_id.data : "", tool_call_id.size};
-    std::string json{decor_json.data ? decor_json.data : "", decor_json.size};
-    return ioCallSync<int>(mgr, [&]() -> int {
-        return mgr->updateToolDecor(inst, tid.c_str(), json.c_str());
+    return agentxx::plugin::guardVtableCall(-1, [&]() -> int {
+        auto mgr  = clientMgrOf(host);
+        auto inst = clientInstOf(host);
+        if (!mgr || !inst) {
+            return -1;
+        }
+        std::string tid{tool_call_id.data ? tool_call_id.data : "", tool_call_id.size};
+        std::string json{decor_json.data ? decor_json.data : "", decor_json.size};
+        return ioCallSync<int>(mgr, [&]() -> int {
+            return mgr->updateToolDecor(inst, tid.c_str(), json.c_str());
+        });
     });
-    XX_PLUGIN_CATCH_END(-1)
 }
 
 // ---- 命令 ----
@@ -1577,50 +1578,50 @@ int xx_cregister_command(
     char* (*execute)(void*, AgentxxPluginStringView, char**),
     void* ud
 ) {
-    XX_PLUGIN_CATCH_BEGIN
-    auto mgr  = clientMgrOf(host);
-    auto inst = clientInstOf(host);
-    if (!mgr || !inst || !execute) {
-        return -1;
-    }
-    std::string nameStr{name.data ? name.data : "", name.size};
-    std::string descStr{description.data ? description.data : "", description.size};
-    if (nameStr.empty()) {
-        return -1;
-    }
-    return ioCallSync<int>(mgr, [&]() -> int {
-        return mgr->registerCommand(inst, nameStr.c_str(), descStr.c_str(), execute, ud);
+    return agentxx::plugin::guardVtableCall(-1, [&]() -> int {
+        auto mgr  = clientMgrOf(host);
+        auto inst = clientInstOf(host);
+        if (!mgr || !inst || !execute) {
+            return -1;
+        }
+        std::string nameStr{name.data ? name.data : "", name.size};
+        std::string descStr{description.data ? description.data : "", description.size};
+        if (nameStr.empty()) {
+            return -1;
+        }
+        return ioCallSync<int>(mgr, [&]() -> int {
+            return mgr->registerCommand(inst, nameStr.c_str(), descStr.c_str(), execute, ud);
+        });
     });
-    XX_PLUGIN_CATCH_END(-1)
 }
 
 int xx_cunregister_command(const AgentxxClientHost* host, AgentxxPluginStringView name) {
-    XX_PLUGIN_CATCH_BEGIN
-    auto mgr  = clientMgrOf(host);
-    auto inst = clientInstOf(host);
-    if (!mgr || !inst) {
-        return -1;
-    }
-    std::string nameStr{name.data ? name.data : "", name.size};
-    return ioCallSync<int>(mgr, [&]() -> int {
-        return mgr->unregisterCommand(inst, nameStr.c_str());
+    return agentxx::plugin::guardVtableCall(-1, [&]() -> int {
+        auto mgr  = clientMgrOf(host);
+        auto inst = clientInstOf(host);
+        if (!mgr || !inst) {
+            return -1;
+        }
+        std::string nameStr{name.data ? name.data : "", name.size};
+        return ioCallSync<int>(mgr, [&]() -> int {
+            return mgr->unregisterCommand(inst, nameStr.c_str());
+        });
     });
-    XX_PLUGIN_CATCH_END(-1)
 }
 
 // ---- toast ----
 
 void xx_cshow_toast(const AgentxxClientHost* host, AgentxxPluginStringView text, int level) {
-    XX_PLUGIN_CATCH_BEGIN
-    auto mgr = clientMgrOf(host);
-    if (!mgr || !mgr->uiAdapter()) {
-        return;
-    }
-    std::string textStr{text.data ? text.data : "", text.size};
-    ioCallSyncVoid(mgr, [&]() {
-        mgr->uiAdapter()->onToast(textStr, level);
+    agentxx::plugin::guardVtableCallVoid([&]() {
+        auto mgr = clientMgrOf(host);
+        if (!mgr || !mgr->uiAdapter()) {
+            return;
+        }
+        std::string textStr{text.data ? text.data : "", text.size};
+        ioCallSyncVoid(mgr, [&]() {
+            mgr->uiAdapter()->onToast(textStr, level);
+        });
     });
-    XX_PLUGIN_CATCH_END_VOID()
 }
 
 // ---- 事件订阅 ----
@@ -1631,52 +1632,53 @@ AgentxxPluginSubscription* xx_csubscribe(
     void (*handler)(AgentxxPluginStringView, void*),
     void* ud
 ) {
-    XX_PLUGIN_CATCH_BEGIN
-    auto mgr  = clientMgrOf(host);
-    auto inst = clientInstOf(host);
-    if (!mgr || !inst || !handler) {
-        return nullptr;
-    }
-    if (event < 0 || event >= AGENTXX_CLIENT_EVT_COUNT) {
-        return nullptr;
-    }
-    return ioCallSync<AgentxxPluginSubscription*>(mgr, [&]() -> AgentxxPluginSubscription* {
-        return static_cast<AgentxxPluginSubscription*>(mgr->subscribe(inst, event, handler, ud));
+    return agentxx::plugin::guardVtableCall(nullptr, [&]() -> AgentxxPluginSubscription* {
+        auto mgr  = clientMgrOf(host);
+        auto inst = clientInstOf(host);
+        if (!mgr || !inst || !handler) {
+            return static_cast<AgentxxPluginSubscription*>(nullptr);
+        }
+        if (event < 0 || event >= AGENTXX_CLIENT_EVT_COUNT) {
+            return static_cast<AgentxxPluginSubscription*>(nullptr);
+        }
+        return ioCallSync<AgentxxPluginSubscription*>(mgr, [&]() -> AgentxxPluginSubscription* {
+            return static_cast<AgentxxPluginSubscription*>(mgr->subscribe(inst, event, handler, ud)
+            );
+        });
     });
-    XX_PLUGIN_CATCH_END(nullptr)
 }
 
 void xx_cunsubscribe(AgentxxPluginSubscription* sub) {
-    XX_PLUGIN_CATCH_BEGIN
-    if (!sub) {
-        return;
-    }
-    auto impl = reinterpret_cast<ClientSubscriptionImpl*>(sub);
-    // impl 由 subHandles 保活到实例析构; 实例已断链 (detachAll) 时跳过
-    auto mgr = impl->inst ? impl->inst->manager.lock().get() : nullptr;
-    if (mgr) {
-        ioCallSyncVoid(mgr, [&]() {
-            mgr->unsubscribe(reinterpret_cast<AgentxxPluginSubscription*>(impl));
-        });
-    }
-    impl->inst = nullptr;
-    impl->sub.reset();
-    XX_PLUGIN_CATCH_END_VOID()
+    agentxx::plugin::guardVtableCallVoid([&]() {
+        if (!sub) {
+            return;
+        }
+        auto impl = reinterpret_cast<ClientSubscriptionImpl*>(sub);
+        // impl 由 subHandles 保活到实例析构; 实例已断链 (detachAll) 时跳过
+        auto mgr = impl->inst ? impl->inst->manager.lock().get() : nullptr;
+        if (mgr) {
+            ioCallSyncVoid(mgr, [&]() {
+                mgr->unsubscribe(reinterpret_cast<AgentxxPluginSubscription*>(impl));
+            });
+        }
+        impl->inst = nullptr;
+        impl->sub.reset();
+    });
 }
 
 // ---- 会话上下文 ----
 
 char* xx_cget_client_state(const AgentxxClientHost* host) {
-    XX_PLUGIN_CATCH_BEGIN
-    auto mgr = clientMgrOf(host);
-    if (!mgr) {
-        return nullptr;
-    }
-    return ioCallSync<char*>(mgr, [&]() -> char* {
-        auto s = mgr->clientStateJson();
-        return xx_cstrdup(s.c_str());
+    return agentxx::plugin::guardVtableCall(nullptr, [&]() -> char* {
+        auto mgr = clientMgrOf(host);
+        if (!mgr) {
+            return static_cast<char*>(nullptr);
+        }
+        return ioCallSync<char*>(mgr, [&]() -> char* {
+            auto s = mgr->clientStateJson();
+            return xx_cstrdup(s.c_str());
+        });
     });
-    XX_PLUGIN_CATCH_END(nullptr)
 }
 
 // ---- 会话操作 ----
@@ -1686,33 +1688,33 @@ int xx_csend_user_input(
     AgentxxPluginStringView  thread_id,
     AgentxxPluginStringView  text
 ) {
-    XX_PLUGIN_CATCH_BEGIN
-    auto mgr  = clientMgrOf(host);
-    auto inst = clientInstOf(host);
-    if (!mgr || !inst || agentxx_plugin_sv_empty(text)) {
-        return -1;
-    }
-    std::string tid{thread_id.data ? thread_id.data : "", thread_id.size};
-    std::string txt{text.data ? text.data : "", text.size};
-    return ioCallSync<int>(mgr, [&]() -> int {
-        mgr->sendUserInputToPeer(inst, tid.c_str(), txt.c_str());
-        return 0;
+    return agentxx::plugin::guardVtableCall(-1, [&]() -> int {
+        auto mgr  = clientMgrOf(host);
+        auto inst = clientInstOf(host);
+        if (!mgr || !inst || agentxx_plugin_sv_empty(text)) {
+            return -1;
+        }
+        std::string tid{thread_id.data ? thread_id.data : "", thread_id.size};
+        std::string txt{text.data ? text.data : "", text.size};
+        return ioCallSync<int>(mgr, [&]() -> int {
+            mgr->sendUserInputToPeer(inst, tid.c_str(), txt.c_str());
+            return 0;
+        });
     });
-    XX_PLUGIN_CATCH_END(-1)
 }
 
 void xx_crequest_cancel(const AgentxxClientHost* host, AgentxxPluginStringView thread_id) {
-    XX_PLUGIN_CATCH_BEGIN
-    auto mgr  = clientMgrOf(host);
-    auto inst = clientInstOf(host);
-    if (!mgr || !inst) {
-        return;
-    }
-    std::string tid{thread_id.data ? thread_id.data : "", thread_id.size};
-    ioCallSyncVoid(mgr, [&]() {
-        mgr->requestCancelToPeer(inst, tid.c_str());
+    agentxx::plugin::guardVtableCallVoid([&]() {
+        auto mgr  = clientMgrOf(host);
+        auto inst = clientInstOf(host);
+        if (!mgr || !inst) {
+            return;
+        }
+        std::string tid{thread_id.data ? thread_id.data : "", thread_id.size};
+        ioCallSyncVoid(mgr, [&]() {
+            mgr->requestCancelToPeer(inst, tid.c_str());
+        });
     });
-    XX_PLUGIN_CATCH_END_VOID()
 }
 
 // ---- 跨端数据 ----
@@ -1722,48 +1724,48 @@ int xx_csend_plugin_data(
     AgentxxPluginStringView  event,
     AgentxxPluginStringView  json
 ) {
-    XX_PLUGIN_CATCH_BEGIN
-    auto mgr  = clientMgrOf(host);
-    auto inst = clientInstOf(host);
-    if (!mgr || !inst || agentxx_plugin_sv_empty(event)) {
-        return -1;
-    }
-    std::string ev{event.data ? event.data : "", event.size};
-    std::string data{json.data ? json.data : "", json.size};
-    return ioCallSync<int>(mgr, [&]() -> int {
-        return mgr->sendPluginDataToPeer(inst, ev.c_str(), data.c_str());
+    return agentxx::plugin::guardVtableCall(-1, [&]() -> int {
+        auto mgr  = clientMgrOf(host);
+        auto inst = clientInstOf(host);
+        if (!mgr || !inst || agentxx_plugin_sv_empty(event)) {
+            return -1;
+        }
+        std::string ev{event.data ? event.data : "", event.size};
+        std::string data{json.data ? json.data : "", json.size};
+        return ioCallSync<int>(mgr, [&]() -> int {
+            return mgr->sendPluginDataToPeer(inst, ev.c_str(), data.c_str());
+        });
     });
-    XX_PLUGIN_CATCH_END(-1)
 }
 
 // ---- 自描述 ----
 
 char* xx_cget_own_info(const AgentxxClientHost* host) {
-    XX_PLUGIN_CATCH_BEGIN
-    auto mgr  = clientMgrOf(host);
-    auto inst = clientInstOf(host);
-    if (!mgr || !inst) {
-        return nullptr;
-    }
-    return ioCallSync<char*>(mgr, [&]() -> char* {
-        auto s = mgr->getOwnInfoJson(inst);
-        return xx_cstrdup(s.c_str());
+    return agentxx::plugin::guardVtableCall(nullptr, [&]() -> char* {
+        auto mgr  = clientMgrOf(host);
+        auto inst = clientInstOf(host);
+        if (!mgr || !inst) {
+            return static_cast<char*>(nullptr);
+        }
+        return ioCallSync<char*>(mgr, [&]() -> char* {
+            auto s = mgr->getOwnInfoJson(inst);
+            return xx_cstrdup(s.c_str());
+        });
     });
-    XX_PLUGIN_CATCH_END(nullptr)
 }
 
 char* xx_cget_plugin_args(const AgentxxClientHost* host) {
-    XX_PLUGIN_CATCH_BEGIN
-    auto mgr  = clientMgrOf(host);
-    auto inst = clientInstOf(host);
-    if (!mgr || !inst) {
-        return nullptr;
-    }
-    return ioCallSync<char*>(mgr, [&]() -> char* {
-        auto s = mgr->getPluginArgsJson(inst);
-        return xx_cstrdup(s.c_str());
+    return agentxx::plugin::guardVtableCall(nullptr, [&]() -> char* {
+        auto mgr  = clientMgrOf(host);
+        auto inst = clientInstOf(host);
+        if (!mgr || !inst) {
+            return static_cast<char*>(nullptr);
+        }
+        return ioCallSync<char*>(mgr, [&]() -> char* {
+            auto s = mgr->getPluginArgsJson(inst);
+            return xx_cstrdup(s.c_str());
+        });
     });
-    XX_PLUGIN_CATCH_END(nullptr)
 }
 
 /// "agentxx.client.ui" 展示接口表访问器: 表内成员恒非空 (函数实现存在), 子能力是否
@@ -1786,7 +1788,7 @@ static const AgentxxClientUiIface* clientUiIface() {
         /* register_command */ xx_cregister_command,
         /* unregister_command */ xx_cunregister_command,
         /* show_toast */ xx_cshow_toast,
-        /* v2: update_tool_decor */ xx_cupdate_tool_decor,
+        /* update_tool_decor */ xx_cupdate_tool_decor,
     };
     return &table;
 }

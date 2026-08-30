@@ -36,33 +36,77 @@
 #include <string_view>
 #include <vector>
 
-/// C ABI 边界异常兜底宏: vtable 函数内部不得让 C++ 异常逃逸 (跨边界 UB),
-/// 统一捕获转日志并按失败返回值返回。用法:
-///   XX_PLUGIN_CATCH_BEGIN
-///   ... 函数体 ...
-///   XX_PLUGIN_CATCH_END(失败返回值)     // 有返回值函数
-///   XX_PLUGIN_CATCH_END_VOID()          // void 函数
-#define XX_PLUGIN_CATCH_BEGIN try {
-#define XX_PLUGIN_CATCH_END(ret)                          \
-    }                                                     \
-    catch (const std::exception& e) {                     \
-        XX_LOGE("plugin vtable exception: {}", e.what()); \
-        return (ret);                                     \
-    }                                                     \
-    catch (...) {                                         \
-        XX_LOGE("plugin vtable unknown exception");       \
-        return (ret);                                     \
+/// C ABI 边界异常兜底 (函数式): vtable 函数内部不得让 C++ 异常逃逸 (跨边界 UB),
+/// 统一捕获转日志并按失败返回值返回。
+/// 历史宏 XX_PLUGIN_CATCH_BEGIN/END 已移除，统一使用 guardVtableCall / guardVtableCallVoid 函数式接口
+/// (见下方)，调用示例:
+///   return guardVtableCall(-1, [&]() { ... });
+///   guardVtableCallVoid([&]() { ... });
+
+namespace agentxx {
+namespace plugin_detail {
+template<typename Fn, typename Ret>
+inline Ret guardVtableCallImpl(Ret fallback, Fn&& fn) noexcept {
+    try {
+        return fn();
+    } catch (const std::exception& e) {
+        XX_LOGE("plugin vtable exception: {}", e.what());
+        return fallback;
+    } catch (...) {
+        XX_LOGE("plugin vtable unknown exception");
+        return fallback;
     }
-#define XX_PLUGIN_CATCH_END_VOID()                        \
-    }                                                     \
-    catch (const std::exception& e) {                     \
-        XX_LOGE("plugin vtable exception: {}", e.what()); \
-        return;                                           \
-    }                                                     \
-    catch (...) {                                         \
-        XX_LOGE("plugin vtable unknown exception");       \
-        return;                                           \
+}
+
+template<typename Fn>
+inline void guardVtableCallVoidImpl(Fn&& fn) noexcept {
+    try {
+        fn();
+    } catch (const std::exception& e) {
+        XX_LOGE("plugin vtable exception: {}", e.what());
+    } catch (...) {
+        XX_LOGE("plugin vtable unknown exception");
     }
+}
+} // namespace plugin_detail
+} // namespace agentxx
+
+namespace agentxx {
+namespace plugin {
+template<typename Ret, typename Fn, typename = std::enable_if_t<!std::is_same_v<std::decay_t<Ret>, std::nullptr_t>>>
+inline Ret guardVtableCall(Ret fallback, Fn&& fn) noexcept {
+    return ::agentxx::plugin_detail::guardVtableCallImpl<Fn, Ret>(std::move(fallback), std::forward<Fn>(fn));
+}
+
+/// std::nullptr_t 重载: fallback 为 nullptr 时按 lambda 返回类型推导指针类型
+template<typename Fn>
+inline auto guardVtableCall(std::nullptr_t, Fn&& fn) noexcept -> std::invoke_result_t<Fn> {
+    using Ret = std::invoke_result_t<Fn>;
+    try {
+        return fn();
+    } catch (const std::exception& e) {
+        XX_LOGE("plugin vtable exception: {}", e.what());
+        if constexpr (std::is_pointer_v<Ret>) {
+            return Ret(nullptr);
+        } else {
+            return Ret{};
+        }
+    } catch (...) {
+        XX_LOGE("plugin vtable unknown exception");
+        if constexpr (std::is_pointer_v<Ret>) {
+            return Ret(nullptr);
+        } else {
+            return Ret{};
+        }
+    }
+}
+
+template<typename Fn>
+inline void guardVtableCallVoid(Fn&& fn) noexcept {
+    ::agentxx::plugin_detail::guardVtableCallVoidImpl(std::forward<Fn>(fn));
+}
+} // namespace plugin
+} // namespace agentxx
 
 namespace agentxx {
 namespace plugin {
@@ -171,7 +215,6 @@ inline constexpr std::string_view AgentLog          = AGENTXX_PLUGIN_IFACE_AGENT
 inline constexpr std::string_view AgentResources    = AGENTXX_PLUGIN_IFACE_AGENT_RESOURCES;
 inline constexpr std::string_view AgentModel        = AGENTXX_PLUGIN_IFACE_AGENT_MODEL;
 inline constexpr std::string_view AgentCancel       = AGENTXX_PLUGIN_IFACE_AGENT_CANCEL;
-inline constexpr std::string_view AgentPlanning     = AGENTXX_PLUGIN_IFACE_AGENT_PLANNING;
 
 /* ---- client 侧: 接口表名 + 细粒度能力名 (映射到 agentxx.client.ui 表的非空成员) ---- */
 inline constexpr std::string_view ClientUi = AGENTXX_IFACE_CLIENT_UI; ///< 展示扩展表整体
