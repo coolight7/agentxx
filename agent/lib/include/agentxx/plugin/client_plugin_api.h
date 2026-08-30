@@ -88,31 +88,12 @@ typedef struct AgentxxPanel       AgentxxPanel;       ///< 侧边栏面板句柄
 typedef struct AgentxxInfoSection AgentxxInfoSection; ///< 侧边栏 Info 栏段落句柄
 
 /* ==================== 核心宿主函数表 (契约冻结) ==================== */
-
-typedef struct AgentxxClientHost AgentxxClientHost;
-
-/// 核心 vtable: 仅内存三件套 + COM 风格接口表查询。
-/// 【契约冻结】本结构自 v1 起不再增删成员: 一切宿主能力经 query_interface
-/// 按稳定 IID 查询独立接口表获取。
-typedef struct AgentxxClientHostVtable {
-    /* ---- 内存 (跨 CRT 堆边界的唯一分配通道; 任意线程可调用) ---- */
-    void* (*alloc)(size_t size);
-    void (*free)(void* ptr);
-    char* (*strdup)(const char* s);
-
-    /* ---- COM 风格接口表查询 (QueryInterface; 任意线程可调用) ---- */
-    /// 按稳定 IID 字符串查询接口表; 未实现/未知名称返回 NULL (安全失败)
-    /// - 已知 IID 见下方各 AGENTXX_IFACE_CLIENT_* 宏与对应 *Iface 结构体
-    /// - 接口表为进程级静态数据: 返回指针长期有效, 可在 entry 时查询缓存;
-    ///   表内函数指针可能为 NULL (宿主未实现该子能力), 调用前必须判空 ——
-    ///   等价于该子能力不存在 (如 CLI 宿主的 register_panel 为 NULL)
-    const void* (*query_interface)(const AgentxxClientHost* host, AgentxxPluginStringView iid);
-} AgentxxClientHostVtable;
-
-struct AgentxxClientHost {
-    const AgentxxClientHostVtable* vtable; ///< 核心函数表 (宿主静态)
-    void* opaque; ///< 宿主内部 (指向插件实例状态, 插件不得使用)
-};
+/* 合并: client 侧复用 agent 侧核心 vtable 类型 (布局完全一致: alloc/free/strdup + query_interface)，
+ * 统一经 AgentxxPluginHostVtable / AgentxxPluginHost 承载，避免双套类型冗余。
+ * 为兼容历史代码，保留 AgentxxClientHost / AgentxxClientHostVtable 别名。
+ */
+typedef AgentxxPluginHost AgentxxClientHost;
+typedef AgentxxHostVtable AgentxxClientHostVtable;
 
 /* ==================== 接口表: 展示/命令/toast (agentxx.client.ui) ==================== */
 
