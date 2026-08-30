@@ -276,6 +276,7 @@ void ModelCallWrapNode::repairMessages(neograph::graph::NodeInput& in) {
     if (agentCtxPtr->agentConfig->repairMessages) {
         // - 最终兜底处理，一般生成 message 的代码应该自己处理异常、补充消息
         // - 这里作为最终的预防处理
+        // - TODO: 优化仅对末尾消息进行修正
         auto msgs = in.state.get_messages();
 
         bool haveChange = false;
@@ -401,6 +402,110 @@ void ModelCallWrapNode::repairMessages(neograph::graph::NodeInput& in) {
                     }
                 }
                 haveChange = true;
+            }
+        }
+
+        // 合并连续的 user 消息:
+        // - 部分 Provider (如 Anthropic/部分 OpenAI 兼容网关) 要求 user/assistant 交替,
+        //   连续 user 会导致 400 ("consecutive user messages" / "unexpected role").
+        //   如历史中因重试/中断/客户端竞态出现 user+user, 这里在发送前合并为一条.
+        // - 合并策略: content / reasoning_content 以 "\n\n" 拼接, 多模态附件数组直接追加,
+        //   history_contents/tool_calls 追加, flags 按位或, extra 对象字段合并(后者覆盖).
+        {
+            if (msgs.size() >= 2) {
+                std::vector<neograph::ChatMessage> merged;
+                merged.reserve(msgs.size());
+                size_t mergedCount = 0;
+                for (auto& m : msgs) {
+                    if (!merged.empty() && merged.back().role == "user" && m.role == "user") {
+                        auto& prev = merged.back();
+                        // content: "\n\n" 拼接, 避免空串产生多余分隔符
+                        if (!m.content.empty()) {
+                            if (!prev.content.empty()) {
+                                prev.content += "\n\n";
+                                prev.content += m.content;
+                            } else {
+                                prev.content = m.content;
+                            }
+                        }
+                        // reasoning_content 同理
+                        if (!m.reasoning_content.empty()) {
+                            if (!prev.reasoning_content.empty()) {
+                                prev.reasoning_content += "\n\n";
+                                prev.reasoning_content += m.reasoning_content;
+                            } else {
+                                prev.reasoning_content = m.reasoning_content;
+                            }
+                        }
+                        // 多模态附件
+                        if (!m.image_urls.empty()) {
+                            prev.image_urls.insert(
+                                prev.image_urls.end(),
+                                m.image_urls.begin(),
+                                m.image_urls.end()
+                            );
+                        }
+                        if (!m.audio_urls.empty()) {
+                            prev.audio_urls.insert(
+                                prev.audio_urls.end(),
+                                m.audio_urls.begin(),
+                                m.audio_urls.end()
+                            );
+                        }
+                        if (!m.video_urls.empty()) {
+                            prev.video_urls.insert(
+                                prev.video_urls.end(),
+                                m.video_urls.begin(),
+                                m.video_urls.end()
+                            );
+                        }
+                        if (!m.history_contents.empty()) {
+                            prev.history_contents.insert(
+                                prev.history_contents.end(),
+                                m.history_contents.begin(),
+                                m.history_contents.end()
+                            );
+                        }
+                        // user 正常不应带 tool_calls, 但若异常携带则追加保留
+                        if (!m.tool_calls.empty()) {
+                            prev.tool_calls.insert(
+                                prev.tool_calls.end(),
+                                m.tool_calls.begin(),
+                                m.tool_calls.end()
+                            );
+                        }
+                        // tool_call_id/tool_name 不处理 (user 角色无此字段)
+                        // flags 合并
+                        prev.flags = prev.flags | m.flags;
+                        // extra 合并: 对象则字段级合并, 否则有值时覆盖
+                        if (!m.extra.is_null() && !m.extra.empty()) {
+                            if (prev.extra.is_null() || prev.extra.empty()) {
+                                prev.extra = m.extra;
+                            } else if (prev.extra.is_object() && m.extra.is_object()) {
+                                for (auto kv : m.extra.items()) {
+                                    prev.extra[kv.first] = kv.second;
+                                }
+                            } else {
+                                // 非对象 extra 直接以新值覆盖旧值
+                                prev.extra = m.extra;
+                            }
+                        }
+                        ++mergedCount;
+                    } else {
+                        // 拷贝而非移动: 保持原 msgs 完整, 仅在真正合并时才替换
+                        merged.push_back(m);
+                    }
+                }
+                if (merged.size() != msgs.size()) {
+                    XX_LOGD(
+                        "RepairMessages: merged {} consecutive user message(s): {} -> {}",
+                        mergedCount,
+                        msgs.size(),
+                        merged.size()
+                    );
+                    msgs       = std::move(merged);
+                    haveChange = true;
+                }
             }
         }
 
