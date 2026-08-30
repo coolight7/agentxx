@@ -4,7 +4,6 @@
 #include "agentxx/agent/resource_applier.h"
 #include "agentxx/middlewares/memory_file.h"
 #include "agentxx/middlewares/permission.h"
-#include "agentxx/middlewares/planning.h"
 #include "agentxx/middlewares/skill.h"
 #include "agentxx/middlewares/summarization.h"
 #include "agentxx/middlewares/worktree.h"
@@ -225,15 +224,6 @@ asio::awaitable<void> CodeAgent::initMiddleware() {
             agentContext->summarizationMiddleware = summarizationMiddleware;
             agentContext->middlewareHandleContext->handles.push_back(summarizationMiddleware);
         }
-    }
-    {
-        auto planningMiddleware
-            = std::make_shared<agentxx::middleware::PlanningMiddlewareHandle>(agentContext);
-        // 规划写入工具 (agentxx_planning_write) 已迁移至 agentxx_planning 插件
-        // (经通用持久化+事件发布); 此处仅记录句柄到上下文,
-        // 供 system prompt 注入链路取用
-        agentContext->planningMiddleware = planningMiddleware;
-        agentContext->middlewareHandleContext->handles.push_back(planningMiddleware);
     }
     {
         // worktree 模式提示词中间件 (yaml `worktree.enable`): 每轮按会话绑定

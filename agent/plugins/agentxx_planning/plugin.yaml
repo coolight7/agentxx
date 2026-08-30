@@ -10,5 +10,6 @@ interfaces:
   require:
     - agentxx.agent.core
     - agentxx.agent.tools
+    - agentxx.agent.prompt
   optional:
     - agentxx.client.info_section

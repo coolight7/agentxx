@@ -14,15 +14,11 @@
 - codegraph 疑似启动后没有更新索引
 
 - 合并 share_store.db 到 session.db
-- 插件添加 mcp、skill、memory 仅支持初始化时追加，后续固定不可变，以防上下文变化
 - worktree 应当启用时增加 system prompt提示，但进入、退出不应更新 system prompt
 - 冻结 system prompt
 - modelcall 修复上下文合并连续 user 消息
 - share_store 替换 middleware.state
-- 移除专用的 AgentxxPlanningIface
-- 替换 XX_PLUGIN_CATCH_BEGIN 为函数
 - AgentxxConfigIface: get_work_dir/get_session_work_dir
-- 合并 AgentxxClientHostVtable 使用 AgentxxHostVtable
 - OpWatchdog debug 时启用、配置启用
 
 ## 提示词优化

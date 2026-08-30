@@ -417,12 +417,6 @@ public:
     std::shared_ptr<agentxx::middleware::PermissionMiddlewareHandle> permissionMiddleware = nullptr;
     agentxx::tools::SubAgentManagerTool* subagentManagerToolPtr                           = nullptr;
 
-    /// 任务规划 (planning) 中间件
-    /// - 由 CodeAgent::initMiddleware 创建注入 (BaseAgent 场景为 nullptr);
-    ///   供 system prompt 注入链路取用 (规划数据经通用持久化+事件由插件自行管理,
-    ///   不再经专用 planning 接口写入)
-    std::shared_ptr<agentxx::middleware::PlanningMiddlewareHandle> planningMiddleware = nullptr;
-
     /// 上下文压缩 (summarization) 中间件
     /// - 供 压缩 或 EventBridge 等复用其 token 估算口径 (countTokensForUtf8Str),
     ///   保证 tps/上下文统计与压缩判定使用一致的 token 计算

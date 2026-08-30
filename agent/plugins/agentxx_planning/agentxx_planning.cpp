@@ -96,6 +96,32 @@ stateDiagram-v2
     - Add unit tests after change.
 )";
 
+constexpr auto kSystemPlanningPrompt = R"_(
+## Planning
+
+You have access to the `agentxx_planning` tool to manage and plan complex objectives.
+Use this tool for multi-step tasks to ensure you track each necessary step.
+It helps break down large objectives into smaller, manageable steps.
+
+- Mark todos as completed as soon as you finish a step. Do NOT batch completions.
+- For simple objectives (few steps), skip planning and execute directly.
+- Planning costs tokens — use it only for complex, many-step problems.
+
+### Important Notes
+
+- Call with `mode="write"` to save/update the planning content (provide `roadmap`,
+  optional `todos`/`notes`); call with `mode="read"` to retrieve the planning
+  content previously saved in this session (e.g. after context compaction).
+- Never call `agentxx_planning` multiple times in parallel.
+- Revise the plan as new information emerges. Remove irrelevant tasks, add newly discovered ones.
+
+### Finishing a Task
+
+When all work is done, write your final answer in the message AFTER your last `agentxx_planning` call — not in the same turn.
+Start the final message with the substantive content the user asked for (data, computation, summary, or analysis).
+The user wants the result, not confirmation that the work is done.
+)_";
+
 std::string argDesc(const agentxx::kit::ToolPromptText& p, const char* key, const char* fallback) {
     auto it = p.args.find(key);
     if (it != p.args.end() && !it->second.empty()) {
@@ -345,6 +371,30 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                     ctx->host  = host;
                     ctx->iface = agentxx::plugin::AgentIfaces::query(host);
                     raw        = ctx.get();
+
+                    // 注入 systemPlanningPrompt 至宿主提示词 (替代已移除的 PlanningMiddleware)
+                    if (ctx->iface.prompt && ctx->iface.prompt->set_prompt) {
+                        neograph::json j;
+                        j["systemPlanningPrompt"] = kSystemPlanningPrompt;
+                        std::string js = j.dump();
+                        if (ctx->iface.prompt->set_prompt(
+                                host,
+                                agentxx_plugin_sv(js.data(), js.size())
+                            )
+                            != 0) {
+                            pluginLog(
+                                ctx.get(),
+                                3,
+                                "agentxx_planning: set systemPlanningPrompt failed"
+                            );
+                        } else {
+                            pluginLog(
+                                ctx.get(),
+                                2,
+                                "agentxx_planning: systemPlanningPrompt injected via prompt iface"
+                            );
+                        }
+                    }
 
                     // 规划持久化 + 事件发布为通用接口 (不再依赖专用 planning iface)
 
