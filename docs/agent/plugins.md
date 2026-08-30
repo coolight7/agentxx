@@ -173,11 +173,10 @@ extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_agent_destroy(void* plugin_
 | `agentxx.agent.config` | 1 | `get_config/get_plugin_args/get_tool_prompt/get_work_dir/get_session_work_dir` (后者 worktree 绑定优先) |
 | `agentxx.agent.model` | 1 | `get_config` (主模型及关联配置 JSON) |
 | `agentxx.agent.cancel` | 1 | `is_cancelled(threadId)` (advisory, 权威通知为 cancel 回调) |
-| `agentxx.agent.planning` | 1 | `set_planning(threadId, roadmap, todos_json, notes)` |
 | `agentxx.agent.prompt` | 1 | `get_prompt/set_prompt` (宿主提示词读写) |
 | `agentxx.agent.json` | 1 | `json_get_string/json_escape` |
 | `agentxx.agent.log` | 1 | `log(level, msg)` (0 trace .. 4 error) |
-| `agentxx.agent.resources` | 1 | `register/unregister_skill_dir/memory_file/mcp_server`, `get_own_resources` |
+| `agentxx.agent.resources` | 2 | `register_skill_dir/memory_file/mcp_server` (仅初始化阶段) + `get_own_resources` (冻结后不可变) |
 
 ---
 

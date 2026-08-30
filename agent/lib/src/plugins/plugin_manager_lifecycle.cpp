@@ -562,6 +562,7 @@ asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadNativeAsync(
     }
 
     applyDeclaredResources(*inst, resources);
+    inst->resourcesFrozen = true;
     XX_LOGI("Plugin `{}` loaded successfully", name);
     co_return inst;
 }
@@ -605,6 +606,7 @@ asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadBuiltinAsync
     }
 
     applyDeclaredResources(*inst, resources);
+    inst->resourcesFrozen = true;
     XX_LOGI("Builtin plugin `{}` loaded successfully", name);
     co_return inst;
 }
