@@ -16,7 +16,7 @@
 #include "agentxx/util/http_server.h"
 #include "neograph/json.h"
 
-#if defined(_WIN32)
+#if XX_IS_WIN_D
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
 #endif
@@ -38,7 +38,7 @@ static std::string findPluginDir(const char* pluginName) {
     namespace fs = std::filesystem;
     std::error_code       ec;
     std::vector<fs::path> candidates;
-#if defined(_WIN32)
+#if XX_IS_WIN_D
     wchar_t buf[MAX_PATH];
     if (::GetModuleFileNameW(nullptr, buf, MAX_PATH) > 0) {
         candidates.push_back(fs::path(buf).parent_path() / "plugins" / pluginName);

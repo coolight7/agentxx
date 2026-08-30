@@ -11,19 +11,11 @@ using namespace agentxx_rag_plugin;
 
 namespace {
 
-constexpr auto kNameSearch = "agentxx_rag_search";
+constexpr std::string_view kNameSearch = "agentxx_rag_search";
 
-constexpr auto kDepictSearch = R"(Search the knowledge base using semantic similarity.
+constexpr std::string_view kDepictSearch = R"(Search the knowledge base using semantic similarity.
 Use this to find relevant documents before answering questions.
 Returns the most relevant documents with content, source, and similarity score.)";
-
-std::string argDesc(const agentxx::kit::ToolPromptText& p, const char* key, const char* fallback) {
-    auto it = p.args.find(key);
-    if (it != p.args.end() && !it->second.empty()) {
-        return it->second;
-    }
-    return fallback;
-}
 
 } // namespace
 
@@ -147,24 +139,41 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
             }
 
             auto        p      = ctx->toolPrompt(kNameSearch);
-            std::string depict = p.depict.empty() ? kDepictSearch : p.depict;
+            std::string depict = p.depict.empty() ? std::string{kDepictSearch} : p.depict;
             std::string schema = neograph::json{
-                {"type",       "object"                        },
-                {"properties",
-                 {{"query",
-                   {{"type", "string"},
-                    {"description",
-                     argDesc(p, "query", "Search query text to find relevant documents.")}}},
-                  {"top_k",
-                   {{"type", "integer"},
-                    {"default", 3},
-                    {"description",
-                     argDesc(
-                         p,
+                {"type", "object"},
+                {
+                 "properties", {{
+                         "query",
+                         {
+                             {"type", "string"},
+                             {
+                                 "description",
+                                 agentxx::kit::toolPromptArgDesc(
+                                     p,
+                                     "query",
+                                     "Search query text to find relevant documents."
+                                 ),
+                             },
+                         },
+                     },
+                     {
                          "top_k",
-                         "Number of top relevant results to return (default 3, min 1, max 50)."
-                     )}}}}                                     },
-                {"required",   neograph::json::array({"query"})}
+                         {
+                             {"type", "integer"},
+                             {"default", 3},
+                             {
+                                 "description",
+                                 agentxx::kit::toolPromptArgDesc(
+                                     p,
+                                     "top_k",
+                                     "Number of top relevant results to return (default 3, min 1, max 50)."
+                                 ),
+                             },
+                         },
+                     }},
+                 },
+                {"required", neograph::json::array({"query"})}
             }.dump();
 
             agentxx::kit::blocking_tool(

@@ -1253,12 +1253,16 @@ std::string PluginManager::getConfigJson() {
     neograph::json out;
     out["dataDir"]     = c->agentConfig->dataDir;
     out["projectRoot"] = c->agentConfig->workDir;
-#if defined(_WIN32)
+#if XX_IS_WIN_D
     out["platform"] = "windows";
-#elif defined(__APPLE__)
+#elif XX_IS_MACOS_D
     out["platform"] = "macos";
-#else
+#elif XX_IS_LINUX_D
     out["platform"] = "linux";
+#elif XX_IS_IOS_D
+    out["platform"] = "ios";
+#elif XX_IS_ANDROID_D
+    out["platform"] = "android";
 #endif
     return out.dump();
 }

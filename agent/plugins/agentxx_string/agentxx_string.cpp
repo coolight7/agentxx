@@ -7,67 +7,99 @@ using namespace agentxx_string_plugin;
 
 namespace {
 
-constexpr auto kNameHtml2Md = "agentxx_string_html_to_markdown";
-constexpr auto kNameRegexp  = "agentxx_string_regexp";
+constexpr std::string_view kNameHtml2Md = "agentxx_string_html_to_markdown";
+constexpr std::string_view kNameRegexp  = "agentxx_string_regexp";
 
-constexpr auto kDepictHtml2Md = "Convert HTML content to Markdown format.";
-constexpr auto kDepictRegexp =
+constexpr std::string_view kDepictHtml2Md = "Convert HTML content to Markdown format.";
+constexpr std::string_view kDepictRegexp =
     R"(Search, replace, or remove text using regular expressions.
 Operates on in-memory text content (not files).)";
-
-std::string argDesc(const agentxx::kit::ToolPromptText& p, const char* key, const char* fallback) {
-    auto it = p.args.find(key);
-    if (it != p.args.end() && !it->second.empty()) {
-        return it->second;
-    }
-    return fallback;
-}
 
 std::string schemaHtml2Md(PluginCtx* ctx) {
     auto p = ctx->toolPrompt(kNameHtml2Md);
     return neograph::json{
-        {"type",       "object"                                                     },
-        {"properties",
-         {{"content",
-           {{"type", "string"},
-            {"description", argDesc(p, "content", "The HTML string to convert.")}}}}},
-        {"required",   neograph::json::array({"content"})                           }
-    }.dump();
+        {"type", "object"},
+        {
+         "properties", {{
+                "content",
+                {
+                    {"type", "string"},
+                    {
+                        "description",
+                        agentxx::kit::
+                            toolPromptArgDesc(p, "content", "The HTML string to convert."),
+                    },
+                },
+            }},
+         },
+        {"required", neograph::json::array({"content"})},
+    }
+        .dump();
 }
 
 std::string schemaRegexp(PluginCtx* ctx) {
     auto p = ctx->toolPrompt(kNameRegexp);
     return neograph::json{
-        {"type",       "object"                                         },
-        {"properties",
-         {{"content",
-           {{"type", "string"},
-            {"description", argDesc(p, "content", "The input text to operate on.")}}},
-          {"exps",
-           {{"type", "array"},
-            {"items", {{"type", "string"}}},
-            {"description",
-             argDesc(p, "exps", "Array of regex patterns. A match succeeds if ANY pattern matches.")
-            }}},
-          {"opt",
-           {{"type", "string"},
-            {"enum", neograph::json::array({"search", "replace", "remove"})},
-            {"description",
-             argDesc(
-                 p,
+        {"type", "object"},
+        {
+         "properties", {{
+                 "content",
+                 {
+                     {"type", "string"},
+                     {
+                         "description",
+                         agentxx::kit::
+                             toolPromptArgDesc(p, "content", "The input text to operate on."),
+                     },
+                 },
+             },
+             {
+                 "exps",
+                 {
+                     {"type", "array"},
+                     {"items", {{"type", "string"}}},
+                     {
+                         "description",
+                         agentxx::kit::toolPromptArgDesc(
+                             p,
+                             "exps",
+                             "Array of regex patterns. A match succeeds if ANY pattern matches."
+                         ),
+                     },
+                 },
+             },
+             {
                  "opt",
-                 "Operation mode:\n`search`: Return all match results.\n`replace`: Replace matches with `replace_str` and return the resulting text.\n`remove`: Remove all matches and return the resulting text.\n"
-             )}}},
-          {"replace_str",
-           {{"type", "string"},
-            {"default", ""},
-            {"description",
-             argDesc(
-                 p,
+                 {
+                     {"type", "string"},
+                     {"enum", neograph::json::array({"search", "replace", "remove"})},
+                     {
+                         "description",
+                         agentxx::kit::toolPromptArgDesc(
+                             p,
+                             "opt",
+                             "Operation mode:\n`search`: Return all match results.\n`replace`: Replace matches with `replace_str` and return the resulting text.\n`remove`: Remove all matches and return the resulting text.\n"
+                         ),
+                     },
+                 },
+             },
+             {
                  "replace_str",
-                 "Default: empty string. The replacement string used when `opt` is `replace`."
-             )}}}}                                                      },
-        {"required",   neograph::json::array({"content", "exps", "opt"})}
+                 {
+                     {"type", "string"},
+                     {"default", ""},
+                     {
+                         "description",
+                         agentxx::kit::toolPromptArgDesc(
+                             p,
+                             "replace_str",
+                             "Default: empty string. The replacement string used when `opt` is `replace`."
+                         ),
+                     },
+                 },
+             }},
+         },
+        {"required", neograph::json::array({"content", "exps", "opt"})}
     }.dump();
 }
 

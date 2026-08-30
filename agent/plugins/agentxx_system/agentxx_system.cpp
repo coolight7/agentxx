@@ -7,8 +7,8 @@ using namespace agentxx_system_plugin;
 
 namespace {
 
-constexpr auto kNameDatetime   = "agentxx_get_current_datetime";
-constexpr auto kDepictDatetime = "Get the current date, time, and Unix timestamp.";
+constexpr std::string_view kNameDatetime   = "agentxx_get_current_datetime";
+constexpr std::string_view kDepictDatetime = "Get the current date, time, and Unix timestamp.";
 
 } // namespace
 

@@ -48,7 +48,7 @@ static std::string findExamplePluginDir() {
     namespace fs = std::filesystem;
     std::error_code       ec;
     std::vector<fs::path> candidates;
-#if defined(_WIN32)
+#if XX_IS_WIN_D
     wchar_t buf[MAX_PATH];
     if (::GetModuleFileNameW(nullptr, buf, MAX_PATH) > 0) {
         candidates.push_back(fs::path(buf).parent_path() / "plugins" / "example_plugin");
@@ -107,7 +107,7 @@ static bool copyExampleLib(const std::filesystem::path& target) {
     }
     // 平台化目标扩展名 (manifest 按 Linux 书写, 见 resolvePluginEntryPath)
     auto dst = target.string();
-#if defined(_WIN32)
+#if XX_IS_WIN_D
     if (dst.ends_with(".so")) {
         dst.replace(dst.size() - 3, 3, ".dll");
     }

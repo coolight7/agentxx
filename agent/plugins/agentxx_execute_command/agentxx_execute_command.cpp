@@ -7,72 +7,109 @@ using namespace agentxx_execmd_plugin;
 
 namespace {
 
-constexpr auto kNameBash    = "agentxx_execute_bash_command";
-constexpr auto kNameWindows = "agentxx_execute_windows_command";
+constexpr std::string_view kNameBash    = "agentxx_execute_bash_command";
+constexpr std::string_view kNameWindows = "agentxx_execute_windows_command";
 
-constexpr auto kDepictBash = "Execute a shell/bash command and return its output.";
-constexpr auto kDepictWinPlaceholder =
+constexpr std::string_view kDepictBash = "Execute a shell/bash command and return its output.";
+constexpr std::string_view kDepictWinPlaceholder =
     R"(Execute a Windows command and return its output.
 The command is executed in the Windows terminal. Do NOT prepend any wrapper (`cmd.exe /c`, `powershell.exe -Command`, ...) — write the plain command; the executor is selected automatically.)";
 
-const char* kAllOutputDesc =
+std::string_view kAllOutputDesc =
     R"(Default `true`.
 `true`: Always return stdout and stderr output.
 `false`: Only return output when the command fails.)";
-const char* kTimeoutDesc
+std::string_view kTimeoutDesc
     = "Default `60` seconds. Execution timeout in seconds. Set `0` for no limit.";
-const char* kBashCommandDesc =
+std::string_view kBashCommandDesc =
     R"(The shell command to execute.
 The command string is passed as-is to `bash -c` (no extra escaping layer):
 - `$` starts variable expansion — wrap literal `$` in single quotes (`echo 'a$b'`) or escape it (`echo \$HOME`).
 - Prefer single quotes for text with spaces/special characters; use double quotes when `$` expansion is intended.
 - Chain commands with `&&` / `||` / `;`; redirect with `>` / `2>&1`.)";
 
-std::string
-    argDesc(const agentxx::kit::ToolPromptText& p, const char* key, const std::string& fallback) {
-    auto it = p.args.find(key);
-    if (it != p.args.end() && !it->second.empty()) {
-        return it->second;
-    }
-    return fallback;
-}
-
 std::string schemaBash(PluginCtx* ctx) {
     auto p = ctx->toolPrompt(kNameBash);
     return neograph::json{
-        {"type",       "object"                                         },
-        {"properties",
-         {{"command", {{"type", "string"}, {"description", argDesc(p, "command", kBashCommandDesc)}}
-          },
-          {"timeout",
-           {{"type", "integer"},
-            {"default", 60},
-            {"description", argDesc(p, "timeout", kTimeoutDesc)}}},
-          {"all_output",
-           {{"type", "boolean"},
-            {"default", true},
-            {"description", argDesc(p, "all_output", kAllOutputDesc)}}}}},
-        {"required",   neograph::json::array({"command"})               }
+        {"type", "object"},
+        {
+         "properties", {{
+                 "command",
+                 {
+                     {"type", "string"},
+                     {
+                         "description",
+                         agentxx::kit::toolPromptArgDesc(p, "command", kBashCommandDesc),
+                     },
+                 },
+             },
+             {
+                 "timeout",
+                 {
+                     {"type", "integer"},
+                     {"default", 60},
+                     {
+                         "description",
+                         agentxx::kit::toolPromptArgDesc(p, "timeout", kTimeoutDesc),
+                     },
+                 },
+             },
+             {
+                 "all_output",
+                 {
+                     {"type", "boolean"},
+                     {"default", true},
+                     {
+                         "description",
+                         agentxx::kit::toolPromptArgDesc(p, "all_output", kAllOutputDesc),
+                     },
+                 },
+             }},
+         },
+        {"required", neograph::json::array({"command"})}
     }.dump();
 }
 
 std::string schemaWindows(PluginCtx* ctx) {
     auto p = ctx->toolPrompt(kNameWindows);
     return neograph::json{
-        {"type",       "object"                                         },
-        {"properties",
-         {{"command",
-           {{"type", "string"},
-            {"description", argDesc(p, "command", "The Windows command to execute.")}}},
-          {"timeout",
-           {{"type", "integer"},
-            {"default", 60},
-            {"description", argDesc(p, "timeout", kTimeoutDesc)}}},
-          {"all_output",
-           {{"type", "boolean"},
-            {"default", true},
-            {"description", argDesc(p, "all_output", kAllOutputDesc)}}}}},
-        {"required",   neograph::json::array({"command"})               }
+        {"type", "object"},
+        {
+         "properties", {{
+                 "command",
+                 {
+                     {"type", "string"},
+                     {
+                         "description",
+                         agentxx::kit::
+                             toolPromptArgDesc(p, "command", "The Windows command to execute."),
+                     },
+                 },
+             },
+             {
+                 "timeout",
+                 {
+                     {"type", "integer"},
+                     {"default", 60},
+                     {
+                         "description",
+                         agentxx::kit::toolPromptArgDesc(p, "timeout", kTimeoutDesc),
+                     },
+                 },
+             },
+             {
+                 "all_output",
+                 {
+                     {"type", "boolean"},
+                     {"default", true},
+                     {
+                         "description",
+                         agentxx::kit::toolPromptArgDesc(p, "all_output", kAllOutputDesc),
+                     },
+                 },
+             }},
+         },
+        {"required", neograph::json::array({"command"})}
     }.dump();
 }
 
@@ -116,9 +153,10 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                 return -1;
             }
 
-#if defined(_WIN32)
-            auto        pWin      = ctx->toolPrompt(kNameWindows);
-            std::string depictWin = pWin.depict.empty() ? kDepictWinPlaceholder : pWin.depict;
+#if XX_IS_WIN_D
+            auto        pWin = ctx->toolPrompt(kNameWindows);
+            std::string depictWin
+                = pWin.depict.empty() ? std::string{kDepictWinPlaceholder} : pWin.depict;
 
 #if defined(BOOST_PROCESS_V2_PROCESS_HPP)
             // 异步管线改为 blocking_tool + 临时 io_context 同步驱动（无私有 Reactor 线程）
@@ -212,8 +250,8 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
 #endif
 
 #else // Linux / POSIX
-            auto        pBash      = ctx->toolPrompt(kNameBash);
-            std::string depictBash = pBash.depict.empty() ? kDepictBash : pBash.depict;
+            auto pBash      = ctx->toolPrompt(kNameBash);
+            auto depictBash = pBash.depict.empty() ? std::string{kDepictBash} : pBash.depict;
 
 #if defined(BOOST_PROCESS_V2_PROCESS_HPP)
             agentxx::kit::blocking_tool(

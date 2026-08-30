@@ -9,45 +9,36 @@ using namespace agentxx_fs_plugin;
 
 namespace {
 
-constexpr auto kNameList  = "agentxx_filesystem_list";
-constexpr auto kNameRead  = "agentxx_filesystem_read";
-constexpr auto kNameWrite = "agentxx_filesystem_write";
-constexpr auto kNameEdit  = "agentxx_filesystem_edit";
-constexpr auto kNameGlob  = "agentxx_filesystem_glob";
-constexpr auto kNameGrep  = "agentxx_filesystem_grep";
+constexpr std::string_view kNameList  = "agentxx_filesystem_list";
+constexpr std::string_view kNameRead  = "agentxx_filesystem_read";
+constexpr std::string_view kNameWrite = "agentxx_filesystem_write";
+constexpr std::string_view kNameEdit  = "agentxx_filesystem_edit";
+constexpr std::string_view kNameGlob  = "agentxx_filesystem_glob";
+constexpr std::string_view kNameGrep  = "agentxx_filesystem_grep";
 
-constexpr auto kDepictList
+constexpr std::string_view kDepictList
     = R"(List files and directories at a given path, output is multi-line text similar to `ls -l`, one entry per line: `type size last-modified-time path`.
 Directory paths end with `/`, symlinks show their target. Types: `d` directory, `-` file, `l` symlink.
 Can also be used to check whether a specific file or directory exists.)";
-constexpr auto kDepictRead
+constexpr std::string_view kDepictRead
     = R"(Read a text file (e.g. .txt, .md, .json, .log, source code) and return its contents with line numbers.
 Supports offset/limit for reading portions of large files.)";
-constexpr auto kDepictWrite
+constexpr std::string_view kDepictWrite
     = "Create a new file or overwrite an existing file with the given content.";
-constexpr auto kDepictEdit
+constexpr std::string_view kDepictEdit
     = R"(Perform exact string replacement in a text file (e.g. *.txt, *.md, *.cpp, *.h).
 Use this for surgical edits without rewriting the entire file.
 Note! This tool will replace all `\r\n` to `\n` when find `old_str` and replace.)";
-constexpr auto kDepictGlob = "Find files and directories matching glob patterns.";
-constexpr auto kDepictGrep
+constexpr std::string_view kDepictGlob = "Find files and directories matching glob patterns.";
+constexpr std::string_view kDepictGrep
     = R"(Search file contents using text or regular expressions. Supports glob-based file filtering.
 Use this to locate code, find references, or search logs across a project.)";
 
-std::string
-    argDesc(const agentxx::kit::ToolPromptText& p, const char* key, std::string_view fallback) {
-    auto it = p.args.find(key);
-    if (it != p.args.end() && !it->second.empty()) {
-        return it->second;
-    }
-    return std::string{fallback};
-}
-
-const char* kPathDesc
+std::string_view kPathDesc
     = R"(Path to a file or directory. Relative paths are resolved against the current working directory; `~` expands to the home directory.)";
-const char* kTimeoutDesc
+std::string_view kTimeoutDesc
     = R"(Default `60` seconds. Execution timeout in seconds. Set `0` for no limit.)";
-const char* kGlobPatternHelp =
+std::string_view kGlobPatternHelp =
     R"(
 | Wildcard | Matches | Example |
 |----------|---------|---------|
@@ -62,249 +53,440 @@ const char* kGlobPatternHelp =
 std::string schemaList(PluginCtx* ctx) {
     auto p = ctx->toolPrompt(kNameList);
     return neograph::json{
-        {"type",       "object"                                    },
-        {"properties",
-         {{"path", {{"type", "string"}, {"description", argDesc(p, "path", kPathDesc)}}},
-          {"recursive",
-           {{"type", "boolean"},
-            {"default", false},
-            {"description",
-             argDesc(p, "recursive", "Default `false`. If `true`, list subdirectories recursively.")
-            }}},
-          {"limit",
-           {{"type", "integer"},
-            {"default", 100},
-            {"description",
-             argDesc(
-                 p,
+        {"type", "object"},
+        {
+         "properties", {{
+                 "path",
+                 {
+                     {"type", "string"},
+                     {
+                         "description",
+                         agentxx::kit::toolPromptArgDesc(p, "path", kPathDesc),
+                     },
+                 },
+             },
+             {
+                 "recursive",
+                 {
+                     {"type", "boolean"},
+                     {"default", false},
+                     {
+                         "description",
+                         agentxx::kit::toolPromptArgDesc(
+                             p,
+                             "recursive",
+                             "Default `false`. If `true`, list subdirectories recursively."
+                         ),
+                     },
+                 },
+             },
+             {
                  "limit",
-                 "Default `100`. Maximum number of entries to return. Set `limit <= 0` for unlimited."
-             )}}},
-          {"timeout",
-           {{"type", "number"},
-            {"default", 60},
-            {"description", argDesc(p, "timeout", kTimeoutDesc)}}}}},
-        {"required",   neograph::json::array({"path"})             }
+                 {
+                     {"type", "integer"},
+                     {"default", 100},
+                     {
+                         "description",
+                         agentxx::kit::toolPromptArgDesc(
+                             p,
+                             "limit",
+                             "Default `100`. Maximum number of entries to return. Set `limit <= 0` for unlimited."
+                         ),
+                     },
+                 },
+             },
+             {
+                 "timeout",
+                 {
+                     {"type", "number"},
+                     {"default", 60},
+                     {
+                         "description",
+                         agentxx::kit::toolPromptArgDesc(p, "timeout", kTimeoutDesc),
+                     },
+                 },
+             }},
+         },
+        {"required", neograph::json::array({"path"})}
     }.dump();
 }
 
 std::string schemaRead(PluginCtx* ctx) {
     auto p = ctx->toolPrompt(kNameRead);
     return neograph::json{
-        {"type",       "object"                       },
-        {"properties",
-         {{"path", {{"type", "string"}, {"description", argDesc(p, "path", kPathDesc)}}},
-          {"line_offset",
-           {{"type", "integer"},
-            {"default", 0},
-            {"description",
-             argDesc(
-                 p,
+        {"type", "object"},
+        {
+         "properties", {{
+                 "path",
+                 {
+                     {"type", "string"},
+                     {
+                         "description",
+                         agentxx::kit::toolPromptArgDesc(p, "path", kPathDesc),
+                     },
+                 },
+             },
+             {
                  "line_offset",
-                 "Number of lines to skip from the beginning. Default `0` (no offset). Returns an error if offset exceeds the file's line count."
-             )}}},
-          {"line_limit",
-           {{"type", "integer"},
-            {"description",
-             argDesc(
-                 p,
+                 {
+                     {"type", "integer"},
+                     {"default", 0},
+                     {
+                         "description",
+                         agentxx::kit::toolPromptArgDesc(
+                             p,
+                             "line_offset",
+                             "Number of lines to skip from the beginning. Default `0` (no offset). Returns an error if offset exceeds the file's line count."
+                         ),
+                     },
+                 },
+             },
+             {
                  "line_limit",
-                 "Maximum number of lines to read. Range: [1, ∞]. Default `null` (read all). Values exceeding the file's line count are allowed without error."
-             )}}}}                                    },
-        {"required",   neograph::json::array({"path"})}
+                 {
+                     {"type", "integer"},
+                     {
+                         "description",
+                         agentxx::kit::toolPromptArgDesc(
+                             p,
+                             "line_limit",
+                             "Maximum number of lines to read. Range: [1, ∞]. Default `null` (read all). Values exceeding the file's line count are allowed without error."
+                         ),
+                     },
+                 },
+             }},
+         },
+        {"required", neograph::json::array({"path"})}
     }.dump();
 }
 
 std::string schemaWrite(PluginCtx* ctx) {
     auto p = ctx->toolPrompt(kNameWrite);
     return neograph::json{
-        {"type",       "object"                                  },
-        {"properties",
-         {{"path",
-           {{"type", "string"},
-            {"description",
-             argDesc(
-                 p,
+        {"type", "object"},
+        {
+         "properties", {{
                  "path",
-                 "Path to the target file. Relative paths are resolved against the current working directory; `~` expands to the home directory."
-             )}}},
-          {"content",
-           {{"type", "string"},
-            {"description", argDesc(p, "content", "Content to write into the file.")}}},
-          {"overwrite",
-           {{"type", "boolean"},
-            {"default", false},
-            {"description",
-             argDesc(
-                 p,
+                 {
+                     {"type", "string"},
+                     {
+                         "description",
+                         agentxx::kit::toolPromptArgDesc(
+                             p,
+                             "path",
+                             "Path to the target file. Relative paths are resolved against the current working directory; `~` expands to the home directory."
+                         ),
+                     },
+                 },
+             },
+             {
+                 "content",
+                 {
+                     {"type", "string"},
+                     {
+                         "description",
+                         agentxx::kit::
+                             toolPromptArgDesc(p, "content", "Content to write into the file."),
+                     },
+                 },
+             },
+             {
                  "overwrite",
-                 "Default `false`. Controls write behavior:\n`true`: Create the file if it doesn't exist; overwrite if it does.\n`false`: Create a new file only; returns an error if the file already exists."
-             )}}}}                                               },
-        {"required",   neograph::json::array({"path", "content"})}
+                 {
+                     {"type", "boolean"},
+                     {"default", false},
+                     {
+                         "description",
+                         agentxx::kit::toolPromptArgDesc(
+                             p,
+                             "overwrite",
+                             "Default `false`. Controls write behavior:\n`true`: Create the file if it doesn't exist; overwrite if it does.\n`false`: Create a new file only; returns an error if the file already exists."
+                         ),
+                     },
+                 },
+             }},
+         },
+        {"required", neograph::json::array({"path", "content"})}
     }.dump();
 }
 
 std::string schemaEdit(PluginCtx* ctx) {
     auto p = ctx->toolPrompt(kNameEdit);
     return neograph::json{
-        {"type",       "object"                                             },
-        {"properties",
-         {{"path", {{"type", "string"}, {"description", argDesc(p, "path", kPathDesc)}}},
-          {"old_str",
-           {{"type", "string"},
-            {"description",
-             argDesc(
-                 p,
+        {"type", "object"},
+        {
+         "properties", {{
+                 "path",
+                 {
+                     {"type", "string"},
+                     {
+                         "description",
+                         agentxx::kit::toolPromptArgDesc(p, "path", kPathDesc),
+                     },
+                 },
+             },
+             {
                  "old_str",
-                 "The exact string to find and replace. Must be non-empty and match precisely (including whitespace and indentation)."
-             )}}},
-          {"new_str",
-           {{"type", "string"}, {"description", argDesc(p, "new_str", "The replacement string.")}}},
-          {"multi_replace",
-           {{"type", "boolean"},
-            {"default", false},
-            {"description",
-             argDesc(
-                 p,
+                 {
+                     {"type", "string"},
+                     {
+                         "description",
+                         agentxx::kit::toolPromptArgDesc(
+                             p,
+                             "old_str",
+                             "The exact string to find and replace. Must be non-empty and match precisely (including whitespace and indentation)."
+                         ),
+                     },
+                 },
+             },
+             {
+                 "new_str",
+                 {{"type", "string"},
+                  {
+                      "description",
+                      agentxx::kit::toolPromptArgDesc(p, "new_str", "The replacement string."),
+                  }},
+             },
+             {
                  "multi_replace",
-                 "Default `false`. If `true`, replace ALL occurrences of `old_str`. If `false`, replace only the first occurrence."
-             )}}}}                                                          },
-        {"required",   neograph::json::array({"path", "old_str", "new_str"})}
+                 {
+                     {"type", "boolean"},
+                     {"default", false},
+                     {
+                         "description",
+                         agentxx::kit::toolPromptArgDesc(
+                             p,
+                             "multi_replace",
+                             "Default `false`. If `true`, replace ALL occurrences of `old_str`. If `false`, replace only the first occurrence."
+                         ),
+                     },
+                 },
+             }},
+         },
+        {"required", neograph::json::array({"path", "old_str", "new_str"})}
     }.dump();
 }
 
 std::string schemaGlob(PluginCtx* ctx) {
     auto p = ctx->toolPrompt(kNameGlob);
     return neograph::json{
-        {"type",       "object"                                    },
-        {"properties",
-         {{"file_patterns",
-           {{"type", "array"},
-            {"items", {{"type", "string"}}},
-            {"description",
-             argDesc(
-                 p,
+        {"type", "object"},
+        {
+         "properties", {{
                  "file_patterns",
-                 std::string(
-                     "Path with glob patterns to match. Relative paths are resolved against the current working directory; `~` expands to the home directory.\n"
-                 ) + kGlobPatternHelp
-             )}}},
-          {"exclude_patterns",
-           {{"type", "array"},
-            {"items", {{"type", "string"}}},
-            {"description",
-             argDesc(
-                 p,
+                 {
+                     {"type", "array"},
+                     {"items", {{"type", "string"}}},
+                     {
+                         "description",
+                         agentxx::kit::toolPromptArgDesc(
+                             p,
+                             "file_patterns",
+                             std::string(
+                                 "Path with glob patterns to match. Relative paths are resolved against the current working directory; `~` expands to the home directory.\n"
+                             ) + kGlobPatternHelp
+                         ),
+                     },
+                 },
+             },
+             {
                  "exclude_patterns",
-                 "Glob patterns to exclude from results. Matched paths are removed.\nExample: `[\"**/node_modules/**\", \"**/.git/**\", \"**/build/**\"]`."
-             )}}},
-          {"type",
-           {{"description",
-             argDesc(
-                 p,
+                 {
+                     {"type", "array"},
+                     {"items", {{"type", "string"}}},
+                     {
+                         "description",
+                         agentxx::kit::toolPromptArgDesc(
+                             p,
+                             "exclude_patterns",
+                             "Glob patterns to exclude from results. Matched paths are removed.\nExample: `[\"**/node_modules/**\", \"**/.git/**\", \"**/build/**\"]`."
+                         ),
+                     },
+                 },
+             },
+             {
                  "type",
-                 "Filter results by file type. Accepts a string or array of strings.\nValid values: `file`, `dir`, `symlink`, `other`, `any`.\nDefault: `any` (no filter).\nExample: `\"file\"` returns only regular files; `[\"file\",\"symlink\"]` returns files and symlinks."
-             )}}},
-          {"max_depth",
-           {{"type", "integer"},
-            {"default", -1},
-            {"description",
-             argDesc(
-                 p,
+                 {
+                     {
+                         "description",
+                         agentxx::kit::toolPromptArgDesc(
+                             p,
+                             "type",
+                             "Filter results by file type. Accepts a string or array of strings.\nValid values: `file`, `dir`, `symlink`, `other`, `any`.\nDefault: `any` (no filter).\nExample: `\"file\"` returns only regular files; `[\"file\",\"symlink\"]` returns files and symlinks."
+                         ),
+                     },
+                 },
+             },
+             {
                  "max_depth",
-                 "Maximum directory depth relative to the pattern's base directory.\nDefault `-1` (no limit). Example: `max_depth=1` matches only direct children.\nSimilar to `find -maxdepth`."
-             )}}},
-          {"sort",
-           {{"type", "boolean"},
-            {"default", false},
-            {"description",
-             argDesc(
-                 p,
+                 {
+                     {"type", "integer"},
+                     {"default", -1},
+                     {
+                         "description",
+                         agentxx::kit::toolPromptArgDesc(
+                             p,
+                             "max_depth",
+                             "Maximum directory depth relative to the pattern's base directory.\nDefault `-1` (no limit). Example: `max_depth=1` matches only direct children.\nSimilar to `find -maxdepth`."
+                         ),
+                     },
+                 },
+             },
+             {
                  "sort",
-                 "Default `false`. If `true`, sort results alphabetically.\nResults are always deduplicated regardless of this setting."
-             )}}},
-          {"timeout",
-           {{"type", "number"},
-            {"default", 60},
-            {"description", argDesc(p, "timeout", kTimeoutDesc)}}}}},
-        {"required",   neograph::json::array({"file_patterns"})    }
+                 {
+                     {"type", "boolean"},
+                     {"default", false},
+                     {
+                         "description",
+                         agentxx::kit::toolPromptArgDesc(
+                             p,
+                             "sort",
+                             "Default `false`. If `true`, sort results alphabetically.\nResults are always deduplicated regardless of this setting."
+                         ),
+                     },
+                 },
+             },
+             {
+                 "timeout",
+                 {
+                     {"type", "number"},
+                     {"default", 60},
+                     {
+                         "description",
+                         agentxx::kit::toolPromptArgDesc(p, "timeout", kTimeoutDesc),
+                     },
+                 },
+             }},
+         },
+        {"required", neograph::json::array({"file_patterns"})}
     }.dump();
 }
 
 std::string schemaGrep(PluginCtx* ctx) {
     auto p = ctx->toolPrompt(kNameGrep);
     return neograph::json{
-        {"type",       "object"                                                 },
-        {"properties",
-         {{"text_patterns",
-           {{"type", "array"},
-            {"items", {{"type", "string"}}},
-            {"description",
-             argDesc(
-                 p,
+        {"type", "object"},
+        {
+         "properties", {{
                  "text_patterns",
-                 "One or more search patterns (text or regex, depending on `text_patterns_is_regex`).\nA match is found if ANY pattern matches."
-             )}}},
-          {"file_patterns",
-           {{"type", "array"},
-            {"items", {{"type", "string"}}},
-            {"description",
-             argDesc(
-                 p,
+                 {
+                     {"type", "array"},
+                     {"items", {{"type", "string"}}},
+                     {
+                         "description",
+                         agentxx::kit::toolPromptArgDesc(
+                             p,
+                             "text_patterns",
+                             "One or more search patterns (text or regex, depending on `text_patterns_is_regex`).\nA match is found if ANY pattern matches."
+                         ),
+                     },
+                 },
+             },
+             {
                  "file_patterns",
-                 std::string(
-                     "Path with glob patterns to select which files to search. Relative paths are resolved against the current working directory; `~` expands to the home directory.\n"
-                 ) + kGlobPatternHelp
-             )}}},
-          {"case_sensitive",
-           {{"type", "boolean"},
-            {"default", true},
-            {"description",
-             argDesc(
-                 p,
+                 {
+                     {"type", "array"},
+                     {"items", {{"type", "string"}}},
+                     {
+                         "description",
+                         agentxx::kit::toolPromptArgDesc(
+                             p,
+                             "file_patterns",
+                             std::string(
+                                 "Path with glob patterns to select which files to search. Relative paths are resolved against the current working directory; `~` expands to the home directory.\n"
+                             ) + kGlobPatternHelp
+                         ),
+                     },
+                 },
+             },
+             {
                  "case_sensitive",
-                 "Default `true`. If `false`, matching is case-insensitive (like `grep -i`)."
-             )}}},
-          {"text_patterns_is_regex",
-           {{"type", "boolean"},
-            {"description",
-             argDesc(
-                 p,
+                 {
+                     {"type", "boolean"},
+                     {"default", true},
+                     {
+                         "description",
+                         agentxx::kit::toolPromptArgDesc(
+                             p,
+                             "case_sensitive",
+                             "Default `true`. If `false`, matching is case-insensitive (like `grep -i`)."
+                         ),
+                     },
+                 },
+             },
+             {
                  "text_patterns_is_regex",
-                 "Determines how `text_patterns` are interpreted.\n`true`: Patterns are regular expressions.\n`false`: Patterns are literal text strings."
-             )}}},
-          {"output_mode",
-           {{"type", "string"},
-            {"enum", neograph::json::array({"content", "files_with_matches"})},
-            {"description",
-             argDesc(
-                 p,
+                 {
+                     {"type", "boolean"},
+                     {
+                         "description",
+                         agentxx::kit::toolPromptArgDesc(
+                             p,
+                             "text_patterns_is_regex",
+                             "Determines how `text_patterns` are interpreted.\n`true`: Patterns are regular expressions.\n`false`: Patterns are literal text strings."
+                         ),
+                     },
+                 },
+             },
+             {
                  "output_mode",
-                 "Default: `files_with_matches`.\n`files_with_matches`: Return file paths with match counts (format: `file:count`).\n`content`: Return matching lines grouped by file to reduce path repetition. Each file\nstarts with a header line `{filepath}:`, followed by that file's lines (`{line}:{content}`). Example:\n/path/to/file1:\n12:int foo() {\n40:int bar() {\n/path/to/file2:\n7:return 0;"
-             )}}},
-          {"context_lines",
-           {{"type", "integer"},
-            {"default", 0},
-            {"description",
-             argDesc(
-                 p,
+                 {
+                     {"type", "string"},
+                     {"enum", neograph::json::array({"content", "files_with_matches"})},
+                     {
+                         "description",
+                         agentxx::kit::toolPromptArgDesc(
+                             p,
+                             "output_mode",
+                             "Default: `files_with_matches`.\n`files_with_matches`: Return file paths with match counts (format: `file:count`).\n`content`: Return matching lines grouped by file to reduce path repetition. Each file\nstarts with a header line `{filepath}:`, followed by that file's lines (`{line}:{content}`). Example:\n/path/to/file1:\n12:int foo() {\n40:int bar() {\n/path/to/file2:\n7:return 0;"
+                         ),
+                     },
+                 },
+             },
+             {
                  "context_lines",
-                 "Default `0`. Number of context lines before and after each match.\nOnly applies to `content` output mode. Similar to `grep -C N`.\nContext lines use `-` separator; match lines use `:` separator."
-             )}}},
-          {"max_count_per_file",
-           {{"type", "integer"},
-            {"default", 0},
-            {"description",
-             argDesc(
-                 p,
+                 {
+                     {"type", "integer"},
+                     {"default", 0},
+                     {
+                         "description",
+                         agentxx::kit::toolPromptArgDesc(
+                             p,
+                             "context_lines",
+                             "Default `0`. Number of context lines before and after each match.\nOnly applies to `content` output mode. Similar to `grep -C N`.\nContext lines use `-` separator; match lines use `:` separator."
+                         ),
+                     },
+                 },
+             },
+             {
                  "max_count_per_file",
-                 "Default `0` (no limit). Maximum matches to report per file.\nSimilar to `grep -m N`. Example: `max_count_per_file=3` stops after 3 matches per file."
-             )}}},
-          {"timeout",
-           {{"type", "number"},
-            {"default", 60},
-            {"description", argDesc(p, "timeout", kTimeoutDesc)}}}}             },
-        {"required",   neograph::json::array({"text_patterns", "file_patterns"})}
+                 {
+                     {"type", "integer"},
+                     {"default", 0},
+                     {
+                         "description",
+                         agentxx::kit::toolPromptArgDesc(
+                             p,
+                             "max_count_per_file",
+                             "Default `0` (no limit). Maximum matches to report per file.\nSimilar to `grep -m N`. Example: `max_count_per_file=3` stops after 3 matches per file."
+                         ),
+                     },
+                 },
+             },
+             {
+                 "timeout",
+                 {
+                     {"type", "number"},
+                     {"default", 60},
+                     {
+                         "description",
+                         agentxx::kit::toolPromptArgDesc(p, "timeout", kTimeoutDesc),
+                     },
+                 },
+             }},
+         },
+        {"required", neograph::json::array({"text_patterns", "file_patterns"})}
     }.dump();
 }
 

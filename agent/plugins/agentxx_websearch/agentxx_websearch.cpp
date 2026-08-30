@@ -10,26 +10,18 @@ using namespace agentxx_websearch_plugin;
 
 namespace {
 
-constexpr auto kNameSearch  = "agentxx_web_search";
-constexpr auto kNameFetch   = "agentxx_web_fetch";
-constexpr auto kNameFetchMd = "agentxx_web_fetch_markdown";
+constexpr std::string_view kNameSearch  = "agentxx_web_search";
+constexpr std::string_view kNameFetch   = "agentxx_web_fetch";
+constexpr std::string_view kNameFetchMd = "agentxx_web_fetch_markdown";
 
-constexpr auto kDepictSearch =
+constexpr std::string_view kDepictSearch =
     R"(Perform a web search. Returns a markdown-formatted list of results.
 Use `agentxx_web_fetch_markdown` afterwards to retrieve full page content from a result.)";
-constexpr auto kDepictFetch = "Perform an HTTP GET request and return the raw response body.";
-constexpr auto kDepictFetchMd =
+constexpr std::string_view kDepictFetch
+    = "Perform an HTTP GET request and return the raw response body.";
+constexpr std::string_view kDepictFetchMd =
     R"(Perform an HTTP GET request and return the page content converted to Markdown.
 Commonly used after `agentxx_web_search` to read a specific page.)";
-
-std::string
-    argDesc(const agentxx::kit::ToolPromptText& p, const char* key, std::string_view fallback) {
-    auto it = p.args.find(key);
-    if (it != p.args.end() && !it->second.empty()) {
-        return it->second;
-    }
-    return std::string{fallback};
-}
 
 const char* kHeaderArgDesc =
     R"(Custom HTTP request headers to send, as a JSON object of header name to value.
@@ -43,70 +35,135 @@ std::string timeoutDesc(int def) {
 std::string schemaFetch(PluginCtx* ctx) {
     auto p = ctx->toolPrompt(kNameFetch);
     return neograph::json{
-        {"type",       "object"                                                                   },
-        {"properties",
-         {{"url",
-           {{"type", "string"},
-            {"description", argDesc(p, "url", "Absolute HTTP/HTTPS URL to fetch.")}}},
-          {"timeout",
-           {{"type", "number"},
-            {"default", 30},
-            {"description", argDesc(p, "timeout", timeoutDesc(30))}}},
-          {"header", {{"type", "object"}, {"description", argDesc(p, "header", kHeaderArgDesc)}}}}},
-        {"required",   neograph::json::array({"url"})                                             }
+        {"type", "object"},
+        {
+         "properties", {{
+                 "url",
+                 {
+                     {"type", "string"},
+                     {
+                         "description",
+                         agentxx::kit::
+                             toolPromptArgDesc(p, "url", "Absolute HTTP/HTTPS URL to fetch."),
+                     },
+                 },
+             },
+             {
+                 "timeout",
+                 {
+                     {"type", "number"},
+                     {"default", 30},
+                     {
+                         "description",
+                         agentxx::kit::toolPromptArgDesc(p, "timeout", timeoutDesc(30)),
+                     },
+                 },
+             },
+             {
+                 "header",
+                 {
+                     {"type", "object"},
+                     {
+                         "description",
+                         agentxx::kit::toolPromptArgDesc(p, "header", kHeaderArgDesc),
+                     },
+                 },
+             }},
+         },
+        {"required", neograph::json::array({"url"})}
     }.dump();
 }
 
 std::string schemaFetchMd(PluginCtx* ctx) {
     auto p = ctx->toolPrompt(kNameFetchMd);
     return neograph::json{
-        {"type",       "object"                                                                   },
-        {"properties",
-         {{"url",
-           {{"type", "string"},
-            {"description",
-             argDesc(
-                 p,
+        {"type", "object"},
+        {
+         "properties", {{
                  "url",
-                 "Absolute HTTP/HTTPS URL to fetch.\n\n"
-                 "When resolving relative links found in the returned Markdown, combine them with this `url`:\n"
-                 "- Page `http://example.com/help/`:\n"
-                 "  - `model/delete/` (no leading /) → `http://example.com/help/model/delete/`\n"
-                 "  - `./model/create/` (leading .) → `http://example.com/help/model/create/`\n"
-                 "  - `../model/create/` (leading ..) → `http://example.com/model/create/`\n"
-                 "  - `/model/view/` (leading /) → `http://example.com/model/view/`\n"
-                 "- Page `http://example.com/help/what.html`:\n"
-                 "  - `model/delete/` (no leading /) → strip filename, append → `http://example.com/help/model/delete/`\n"
-             )}}},
-          {"timeout",
-           {{"type", "number"},
-            {"default", 15},
-            {"description", argDesc(p, "timeout", timeoutDesc(15))}}},
-          {"header", {{"type", "object"}, {"description", argDesc(p, "header", kHeaderArgDesc)}}}}},
-        {"required",   neograph::json::array({"url"})                                             }
+                 {
+                     {"type", "string"},
+                     {
+                         "description",
+                         agentxx::kit::toolPromptArgDesc(
+                             p,
+                             "url",
+                             "Absolute HTTP/HTTPS URL to fetch.\n\n"
+                             "When resolving relative links found in the returned Markdown, combine them with this `url`:\n"
+                             "- Page `http://example.com/help/`:\n"
+                             "  - `model/delete/` (no leading /) → `http://example.com/help/model/delete/`\n"
+                             "  - `./model/create/` (leading .) → `http://example.com/help/model/create/`\n"
+                             "  - `../model/create/` (leading ..) → `http://example.com/model/create/`\n"
+                             "  - `/model/view/` (leading /) → `http://example.com/model/view/`\n"
+                             "- Page `http://example.com/help/what.html`:\n"
+                             "  - `model/delete/` (no leading /) → strip filename, append → `http://example.com/help/model/delete/`\n"
+                         ),
+                     },
+                 },
+             },
+             {
+                 "timeout",
+                 {
+                     {"type", "number"},
+                     {"default", 15},
+                     {
+                         "description",
+                         agentxx::kit::toolPromptArgDesc(p, "timeout", timeoutDesc(15)),
+                     },
+                 },
+             },
+             {
+                 "header",
+                 {
+                     {"type", "object"},
+                     {
+                         "description",
+                         agentxx::kit::toolPromptArgDesc(p, "header", kHeaderArgDesc),
+                     },
+                 },
+             }},
+         },
+        {"required", neograph::json::array({"url"})}
     }.dump();
 }
 
 std::string schemaSearch(PluginCtx* ctx) {
     auto p = ctx->toolPrompt(kNameSearch);
     return neograph::json{
-        {"type",       "object"                                                              },
-        {"properties",
-         {{"query",
-           {{"type", "string"},
-            {"minLength", 1},
-            {"description",
-             argDesc(
-                 p,
+        {"type", "object"},
+        {
+         "properties", {{
                  "query",
-                 "Natural language search query. Should be a semantically rich description of the ideal page, not just keywords."
-             )}}},
-          {"numResults",
-           {{"type", "number"},
-            {"default", 5},
-            {"description",
-             argDesc(p, "numResults", "Number of search results to return (default: 5).")}}}}},
-        {"required",   neograph::json::array({"query"})                                      }
+                 {
+                     {"type", "string"},
+                     {"minLength", 1},
+                     {
+                         "description",
+                         agentxx::kit::toolPromptArgDesc(
+                             p,
+                             "query",
+                             "Natural language search query. Should be a semantically rich description of the ideal page, not just keywords."
+                         ),
+                     },
+                 },
+             },
+             {
+                 "numResults",
+                 {
+                     {"type", "number"},
+                     {"default", 5},
+                     {
+                         "description",
+                         agentxx::kit::toolPromptArgDesc(
+                             p,
+                             "numResults",
+                             "Number of search results to return (default: 5)."
+                         ),
+                     },
+                 },
+             }},
+         },
+        {"required", neograph::json::array({"query"})}
     }.dump();
 }
 

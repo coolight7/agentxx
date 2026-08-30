@@ -39,7 +39,7 @@ static std::string findPluginDir(const char* pluginName) {
     namespace fs = std::filesystem;
     std::error_code       ec;
     std::vector<fs::path> candidates;
-#if defined(_WIN32)
+#if XX_IS_WIN_D
     wchar_t buf[MAX_PATH];
     if (::GetModuleFileNameW(nullptr, buf, MAX_PATH) > 0) {
         candidates.push_back(fs::path(buf).parent_path() / "plugins" / pluginName);
@@ -147,7 +147,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
         auto execInst = co_await ctx->pluginManager->loadPluginAsync(execPath);
         XX_TEST_EXPECT_TRUE(execInst != nullptr);
         if (execInst) {
-#if defined(_WIN32)
+#if XX_IS_WIN_D
             const char* cmdToolName = "agentxx_execute_windows_command";
 #else
             const char* cmdToolName = "agentxx_execute_bash_command";
@@ -1105,7 +1105,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
         auto instExec = co_await ctx->pluginManager->loadPluginAsync(execDir);
         XX_TEST_EXPECT_TRUE(instExec != nullptr);
         if (instExec) {
-#if defined(_WIN32)
+#if XX_IS_WIN_D
             const char* cmdToolName = "agentxx_execute_windows_command";
 #else
             const char* cmdToolName = "agentxx_execute_bash_command";
@@ -1205,7 +1205,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
             {
                 char*    e = nullptr;
                 AsyncRes ares;
-#if defined(_WIN32)
+#if XX_IS_WIN_D
                 const char* timeoutCmd = R"({"command":"timeout /t 5 >nul","timeout":1})";
 #else
                 const char* timeoutCmd = R"({"command":"sleep 5","timeout":1})";

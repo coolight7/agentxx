@@ -40,7 +40,7 @@ static std::atomic<int> g_temp_project_counter{0};
 static std::string findCodegraphPluginPath() {
     std::error_code       ec;
     std::vector<fs::path> candidates;
-#if defined(_WIN32)
+#if XX_IS_WIN_D
     wchar_t buf[MAX_PATH];
     if (::GetModuleFileNameW(nullptr, buf, MAX_PATH) > 0) {
         candidates.push_back(fs::path(buf).parent_path() / "plugins" / "agentxx_codegraph");

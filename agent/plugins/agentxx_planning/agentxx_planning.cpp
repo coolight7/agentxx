@@ -34,9 +34,9 @@ using namespace agentxx_planning_plugin;
 
 namespace {
 
-constexpr auto kNamePlanning = "agentxx_planning";
+constexpr std::string_view kNamePlanning = "agentxx_planning";
 
-constexpr auto kDepictPlanning =
+constexpr std::string_view kDepictPlanning =
     R"(Two-level task planning tool for complex multi-step work sessions.
 
 === Modes (`mode`, required) ===
@@ -96,7 +96,7 @@ stateDiagram-v2
     - Add unit tests after change.
 )";
 
-constexpr auto kSystemPlanningPrompt = R"_(
+constexpr std::string_view kSystemPlanningPrompt = R"_(
 ## Planning
 
 You have access to the `agentxx_planning` tool to manage and plan complex objectives.
@@ -121,14 +121,6 @@ When all work is done, write your final answer in the message AFTER your last `a
 Start the final message with the substantive content the user asked for (data, computation, summary, or analysis).
 The user wants the result, not confirmation that the work is done.
 )_";
-
-std::string argDesc(const agentxx::kit::ToolPromptText& p, const char* key, const char* fallback) {
-    auto it = p.args.find(key);
-    if (it != p.args.end() && !it->second.empty()) {
-        return it->second;
-    }
-    return fallback;
-}
 
 /* ==================== 规划持久化 ({dataDir}/plans/) ====================
  * - 文件名: thread_id 经字符清洗 (非 [A-Za-z0-9._-] → '_') 截断后追加
@@ -405,7 +397,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                           {"type", "string"},
                           {"enum", neograph::json::array({"write", "read"})},
                           {"description",
-                           argDesc(p,
+                           agentxx::kit::toolPromptArgDesc(p,
                                    "mode",
                                    "Operation mode: `write` saves/updates the planning content "
                                    "(requires `roadmap`); `read` returns the previously saved "
@@ -415,7 +407,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                       {
                           {"type", "string"},
                           {"description",
-                           argDesc(p,
+                           agentxx::kit::toolPromptArgDesc(p,
                                    "roadmap",
                                    "(write only, required) STRATEGIC LAYER: Mermaid stateDiagram-v2 of the overall workflow.")},
                       }},
@@ -424,7 +416,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                           {"type", "array"},
                           {"items", neograph::json{{"type", "object"}}},
                           {"description",
-                           argDesc(p,
+                           agentxx::kit::toolPromptArgDesc(p,
                                    "todos",
                                    "(write only) TACTICAL LAYER: Near-term task items (state/content/summary).")},
                       }},
@@ -432,7 +424,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                       {
                           {"type", "string"},
                           {"description",
-                           argDesc(p,
+                           agentxx::kit::toolPromptArgDesc(p,
                                    "notes",
                                    "(write only) MEMO LAYER: Any additional notes, tips, reminders.")},
                       }},

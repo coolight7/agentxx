@@ -127,6 +127,18 @@ struct ToolPromptText {
     std::map<std::string, std::string, std::less<>> args;
 };
 
+inline std::string toolPromptArgDesc(
+    const agentxx::kit::ToolPromptText& p,
+    std::string_view                    key,
+    std::string_view                    fallback
+) {
+    auto it = p.args.find(key);
+    if (it != p.args.end() && !it->second.empty()) {
+        return it->second;
+    }
+    return std::string{fallback};
+}
+
 /* ==================== Task<T> 锚定协程与完成协议 ==================== */
 
 template<typename T = void>

@@ -18,7 +18,7 @@
 #include <chrono>
 #include <filesystem>
 
-#if defined(_WIN32)
+#if XX_IS_WIN_D
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
 #endif
@@ -37,7 +37,7 @@ const void* xx_query_interface(const AgentxxPluginHost*, AgentxxPluginStringView
 // =====================================================================
 
 void* NativeLoader::open(const std::string& path, std::string& err) {
-#if defined(_WIN32)
+#if XX_IS_WIN_D
     std::wstring wpath;
     {
         int len = ::MultiByteToWideChar(CP_UTF8, 0, path.c_str(), -1, nullptr, 0);
@@ -65,7 +65,7 @@ void* NativeLoader::open(const std::string& path, std::string& err) {
 }
 
 void* NativeLoader::sym(void* handle, const char* name, std::string& err) {
-#if defined(_WIN32)
+#if XX_IS_WIN_D
     FARPROC p = ::GetProcAddress(reinterpret_cast<HMODULE>(handle), name);
     if (!p) {
         err = fmt::format("GetProcAddress({}) failed: error {}", name, ::GetLastError());
@@ -88,7 +88,7 @@ void NativeLoader::close(void* handle) {
     if (!handle) {
         return;
     }
-#if defined(_WIN32)
+#if XX_IS_WIN_D
     ::FreeLibrary(reinterpret_cast<HMODULE>(handle));
 #else
     ::dlclose(handle);
@@ -673,7 +673,7 @@ asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadPluginAsync(
 
             std::string binPath = resolvePluginEntryPath(p, manifestEntry);
             if (!fs::exists(binPath)) {
-#if defined(_WIN32)
+#if XX_IS_WIN_D
                 binPath = (p / (manifestName + ".dll")).string();
                 if (!fs::exists(binPath)) {
                     binPath = (p / ("lib" + manifestName + ".dll")).string();

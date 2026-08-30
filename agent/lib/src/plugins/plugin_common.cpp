@@ -190,11 +190,11 @@ bool parsePluginManifest(
 std::string resolvePluginEntryPath(const std::filesystem::path& dir, const std::string& entry) {
     // 平台化: manifest 按 Linux 书写 (libfoo.so), Windows/macOS 下修正扩展名
     auto fixExt = [](std::string p) -> std::string {
-#if defined(_WIN32)
+#if XX_IS_WIN_D
         if (p.ends_with(".so")) {
             p.replace(p.size() - 3, 3, ".dll");
         }
-#elif defined(__APPLE__)
+#elif XX_IS_IOS_D || XX_IS_MACOS_D
         if (p.ends_with(".so")) {
             p.replace(p.size() - 3, 3, ".dylib");
         }
