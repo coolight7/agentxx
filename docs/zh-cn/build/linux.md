@@ -60,13 +60,15 @@ make install
 ### agentxx 编译
 - 启动编译 agentxx，会自动下载其他依赖库，编译成功后自动运行 命令行 client:
 ```sh
-cd {项目根目录}/agent
-./script/linux_client_run.sh
+cd {项目根目录}
+./agent/script/linux_debug_build.sh
+./agent/build/linux-debug/exec/agentxx_cli
 ```
 - - release 编译可以运行:
 ```sh
-cd {项目根目录}/agent
-./script/linux_release_build.sh
+cd {项目根目录}
+./agent/script/linux_release_build.sh
+./agent/build/linux-release/exec/agentxx_cli
 ```
 
 ## 产物布局

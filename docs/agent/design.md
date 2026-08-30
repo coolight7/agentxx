@@ -1478,10 +1478,8 @@ agent/
 └── script/                       # 编译/测试脚本
     ├── linux_debug_build.sh
     ├── linux_release_build.sh
-    ├── linux_test_run.sh
     ├── windows_debug_build.bat
     ├── windows_release_build.bat
-    ├── windows_test_run.bat
     ├── cross_windows_release_build.sh
     └── cross_android_release_build.sh
 ```

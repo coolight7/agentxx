@@ -98,7 +98,6 @@ public:
 
 asio::io_context ioCtx;
 
-/// 运行可执行 ../script/test_run.sh
 int main(int argn, char** argv) {
 #if XX_IS_WIN_D
     SetConsoleOutputCP(CP_UTF8);

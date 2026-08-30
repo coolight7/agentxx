@@ -130,10 +130,8 @@ path/to/agentxx_test string_util regex
 ## 编译
 - Linux:
     - 使用 shell 脚本编译: [linux_debug_build.sh](agent/script/linux_debug_build.sh) 或 [linux_release_build.sh](agent/script/linux_release_build.sh)
-    - 运行测试 [linux_test_run.sh](agent/script/linux_test_run.sh)
 - Windows:
     - 使用 bat 脚本编译: [windows_debug_build.bat](agent/script/windows_debug_build.bat) 或 [windows_release_build.bat](agent/script/windows_release_build.bat)
-    - 运行测试 [windows_test_run.bat](agent/script/windows_test_run.bat)
 - Android:
     - 在 Linux 上使用 shell 脚本交叉编译: [cross_android_release_build.sh](agent/script/cross_android_release_build.sh)
 - 编译脚本创建的 build 目录一般为:
