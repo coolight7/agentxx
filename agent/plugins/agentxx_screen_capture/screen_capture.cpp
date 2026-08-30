@@ -1,6 +1,3 @@
-// XX_IS_WIN_D 等平台宏由 screen_capture_plugin.h 推导, 须最先引入
-// (否则下方 #if XX_IS_WIN_D 分支在 windows.h 之前即判定失效)
-#include "screen_capture_plugin.h"
 
 #if XX_IS_WIN_D
 // 顺序是必要的，否则可能编译失败
@@ -14,8 +11,8 @@
 
 using Microsoft::WRL::ComPtr;
 #endif
-
 #include "screen_capture.h"
+#include "screen_capture_plugin.h"
 #include <atomic>
 #include <thread>
 

@@ -17,8 +17,6 @@
 #pragma comment(lib, "winhttp.lib")
 
 #endif
-
-// 平台宏须最先包含 (XX_IS_WIN_D 等由插件共享头本地推导)
 #include "text_selection_monitor_plugin.h"
 
 #include "asio/awaitable.hpp"

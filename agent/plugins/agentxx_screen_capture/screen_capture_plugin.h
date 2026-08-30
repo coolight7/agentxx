@@ -14,20 +14,6 @@
 #include <string>
 #include <vector>
 
-#if defined(_WIN32)
-#define XX_IS_WIN_D   1
-#define XX_IS_LINUX_D 0
-#define XX_IS_MACOS_D 0
-#elif defined(__APPLE__)
-#define XX_IS_WIN_D   0
-#define XX_IS_LINUX_D 0
-#define XX_IS_MACOS_D 1
-#else
-#define XX_IS_WIN_D   0
-#define XX_IS_LINUX_D 1
-#define XX_IS_MACOS_D 0
-#endif
-
 namespace agentxx_screen_capture_plugin {
 
 inline void pluginLog(

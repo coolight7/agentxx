@@ -9,11 +9,6 @@
 #include <format>
 #include <string>
 
-#if !defined(XX_IS_ANDROID_D) && !defined(XX_IS_WIN_D) && !defined(XX_IS_MACOS_D) \
-    && !defined(XX_IS_LINUX_D)
-#define XX_IS_LINUX_D 1
-#endif
-
 namespace agentxx_system_plugin {
 
 /// 获取当前时间描述文本 (原 GetCurrentDateTimeTool::execute_async)

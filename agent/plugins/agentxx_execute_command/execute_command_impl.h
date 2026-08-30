@@ -56,13 +56,6 @@
 #include <unordered_map>
 #include <vector>
 
-#if !defined(XX_IS_WIN_D)
-#define XX_IS_WIN_D 0
-#endif
-#if !defined(XX_IS_LINUX_D)
-#define XX_IS_LINUX_D 0
-#endif
-
 #if defined(AGENTXX_ENABLE_BOOST_PROCESS) && AGENTXX_ENABLE_BOOST_PROCESS
 #include "boost/process.hpp"
 #endif

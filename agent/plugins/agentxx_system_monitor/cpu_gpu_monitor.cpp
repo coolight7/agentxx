@@ -463,7 +463,7 @@ asio::awaitable<CpuGpuUsage> CpuGpuMonitor::query() {
 
 } // namespace agentxx_system_monitor_plugin
 
-#elif XX_IS_LINUX_D
+#elif XX_IS_LINUX_D || XX_IS_ANDROID_D
 
 #include "asio/random_access_file.hpp"
 #include "asio/read.hpp"
