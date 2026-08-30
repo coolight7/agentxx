@@ -778,7 +778,7 @@ static void on_client_attached(AgentxxPluginStringView, void* ud) {
 
 using namespace agentxx_codegraph_plugin;
 
-extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_get_info(void) {
+extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_agent_get_info(void) {
     static const AgentxxPluginInfo info{
         AGENTXX_PLUGIN_API_VERSION,
         AGENTXX_SV("agentxx_codegraph"),
@@ -789,7 +789,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_get_inf
 }
 
 extern "C" AGENTXX_PLUGIN_EXPORT int
-    agentxx_plugin_create(const AgentxxHost* host, void** plugin_ctx) {
+    agentxx_plugin_agent_create(const AgentxxHost* host, void** plugin_ctx) {
     PluginCtx* raw    = nullptr;
     auto       logger = [&raw](const char* m) noexcept {
         pluginLog(raw ? raw->host : nullptr, raw ? raw->iface.log : nullptr, 4, m ? m : "");
@@ -939,7 +939,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
     });
 }
 
-extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_destroy(void* plugin_ctx) {
+extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_agent_destroy(void* plugin_ctx) {
     auto* ctx = static_cast<PluginCtx*>(plugin_ctx);
     agentxx::plugin_guard::guardCallVoid(
         [ctx](const char* m) noexcept {
@@ -1090,7 +1090,7 @@ static void onClientPluginData(AgentxxPluginStringView payload_json, void* ud) {
     }
 }
 
-extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxClientPluginInfo* agentxx_client_get_info(void) {
+extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxClientPluginInfo* agentxx_plugin_client_get_info(void) {
     static const AgentxxClientPluginInfo info{
         AGENTXX_CLIENT_PLUGIN_API_VERSION,
         AGENTXX_SV("agentxx_codegraph"),
@@ -1101,7 +1101,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxClientPluginInfo* agentxx_client_g
 }
 
 extern "C" AGENTXX_PLUGIN_EXPORT int
-    agentxx_client_create(const AgentxxClientHost* host, void** plugin_ctx) {
+    agentxx_plugin_client_create(const AgentxxClientHost* host, void** plugin_ctx) {
     ClientCtx* raw = nullptr;
     return agentxx::plugin_guard::guardCall(
         [&raw](const char* m) noexcept {
@@ -1150,7 +1150,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
     );
 }
 
-extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_client_destroy(void* plugin_ctx) {
+extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_client_destroy(void* plugin_ctx) {
     auto* ctx = static_cast<ClientCtx*>(plugin_ctx);
     agentxx::plugin_guard::guardCallVoid(
         [ctx](const char* m) noexcept {

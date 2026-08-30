@@ -168,7 +168,7 @@ void PluginManager::shutdownPlugin(const std::shared_ptr<PluginInstance>& inst) 
     if (inst->dlHandle) {
         std::string err;
         auto        fn = reinterpret_cast<AgentxxPluginDestroyFn>(
-            NativeLoader::sym(inst->dlHandle, AGENTXX_PLUGIN_SYMBOL_DESTROY, err)
+            NativeLoader::sym(inst->dlHandle, AGENTXX_PLUGIN_AGENT_SYMBOL_DESTROY, err)
         );
         if (fn) {
             fn(inst->pluginCtx);
@@ -393,7 +393,7 @@ asio::awaitable<bool> PluginManager::unloadAsync(std::string_view name) {
     if (inst->dlHandle) {
         std::string err;
         auto        fn = reinterpret_cast<AgentxxPluginDestroyFn>(
-            NativeLoader::sym(inst->dlHandle, AGENTXX_PLUGIN_SYMBOL_DESTROY, err)
+            NativeLoader::sym(inst->dlHandle, AGENTXX_PLUGIN_AGENT_SYMBOL_DESTROY, err)
         );
         if (fn) {
             fn(inst->pluginCtx);
@@ -499,10 +499,10 @@ asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadNativeAsync(
     }
 
     auto getInfoFn = reinterpret_cast<AgentxxPluginGetInfoFn>(
-        NativeLoader::sym(dl, AGENTXX_PLUGIN_SYMBOL_GET_INFO, err)
+        NativeLoader::sym(dl, AGENTXX_PLUGIN_AGENT_SYMBOL_GET_INFO, err)
     );
     auto createFn = reinterpret_cast<AgentxxPluginCreateFn>(
-        NativeLoader::sym(dl, AGENTXX_PLUGIN_SYMBOL_CREATE, err)
+        NativeLoader::sym(dl, AGENTXX_PLUGIN_AGENT_SYMBOL_CREATE, err)
     );
 
     if (!createFn) {
@@ -511,7 +511,7 @@ asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadNativeAsync(
             XX_LOGW("Plugin `{}` skipped: no agent entry (client only)", path);
             co_return nullptr;
         }
-        XX_LOGE("Plugin `{}` missing agentxx_plugin_create", path);
+        XX_LOGE("Plugin `{}` missing {}", path, AGENTXX_PLUGIN_AGENT_SYMBOL_CREATE);
         co_return nullptr;
     }
 

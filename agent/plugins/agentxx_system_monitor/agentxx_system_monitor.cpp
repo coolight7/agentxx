@@ -119,7 +119,7 @@ static std::string formatUsageText(const agentxx_system_monitor_plugin::CpuGpuUs
     return ss.str();
 }
 
-extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_get_info(void) {
+extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_agent_get_info(void) {
     static const AgentxxPluginInfo info{
         AGENTXX_PLUGIN_API_VERSION,
         AGENTXX_SV("agentxx_system_monitor"),
@@ -131,7 +131,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_get_inf
 }
 
 extern "C" AGENTXX_PLUGIN_EXPORT int
-    agentxx_plugin_create(const AgentxxHost* host, void** plugin_ctx) {
+    agentxx_plugin_agent_create(const AgentxxHost* host, void** plugin_ctx) {
     PluginCtx* raw = nullptr;
     return agentxx::plugin_guard::guardCall(
         [&raw](const char* msg) noexcept {
@@ -284,7 +284,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
     );
 }
 
-extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_destroy(void* plugin_ctx) {
+extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_agent_destroy(void* plugin_ctx) {
     auto* ctx = static_cast<PluginCtx*>(plugin_ctx);
     agentxx::plugin_guard::guardCallVoid(ctxGuardLogger(ctx), [&] {
         if (ctx) {
@@ -511,7 +511,7 @@ static char* cmdSysinfoExecute(void* ud, AgentxxPluginStringView args_json, char
     );
 }
 
-extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxClientPluginInfo* agentxx_client_get_info(void) {
+extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxClientPluginInfo* agentxx_plugin_client_get_info(void) {
     static const AgentxxClientPluginInfo info{
         AGENTXX_CLIENT_PLUGIN_API_VERSION,
         AGENTXX_SV("agentxx_system_monitor"),
@@ -522,7 +522,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxClientPluginInfo* agentxx_client_g
 }
 
 extern "C" AGENTXX_PLUGIN_EXPORT int
-    agentxx_client_create(const AgentxxClientHost* host, void** plugin_ctx) {
+    agentxx_plugin_client_create(const AgentxxClientHost* host, void** plugin_ctx) {
     ClientCtx* raw = nullptr;
     return agentxx::plugin_guard::guardCall(
         [&raw](const char* m) noexcept {
@@ -582,7 +582,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
     );
 }
 
-extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_client_destroy(void* plugin_ctx) {
+extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_client_destroy(void* plugin_ctx) {
     auto* ctx = static_cast<ClientCtx*>(plugin_ctx);
     agentxx::plugin_guard::guardCallVoid(
         [ctx](const char* m) noexcept {

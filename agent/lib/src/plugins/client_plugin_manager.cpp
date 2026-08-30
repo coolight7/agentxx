@@ -236,7 +236,7 @@ asio::awaitable<std::shared_ptr<ClientPluginInstance>> ClientPluginManager::load
     std::string desc;
     std::string err;
     if (auto getInfo = reinterpret_cast<AgentxxClientPluginGetInfoFn>(
-            NativeLoader::sym(handle, AGENTXX_CLIENT_SYMBOL_GET_INFO, err)
+            NativeLoader::sym(handle, AGENTXX_PLUGIN_CLIENT_SYMBOL_GET_INFO, err)
         )) {
         // C ABI 回调异常兜底: 插件违约按"未导出"处理 (名字从库名推导)
         const AgentxxClientPluginInfo* info = nullptr;
@@ -311,7 +311,7 @@ asio::awaitable<std::shared_ptr<ClientPluginInstance>> ClientPluginManager::load
     // entry 入口 (必需): 探测与加载合并 (B3) —— 一次 dlopen 内查符号
     std::string entryErr;
     auto        entryFn = reinterpret_cast<AgentxxClientPluginCreateFn>(
-        NativeLoader::sym(handle, AGENTXX_CLIENT_SYMBOL_CREATE, entryErr)
+        NativeLoader::sym(handle, AGENTXX_PLUGIN_CLIENT_SYMBOL_CREATE, entryErr)
     );
     if (!entryFn) {
         // 接口声明意图预检: manifest 声明依赖 client 侧接口却未导出
@@ -320,7 +320,7 @@ asio::awaitable<std::shared_ptr<ClientPluginInstance>> ClientPluginManager::load
             XX_LOGE(
                 "[client_plugin] `{}` requires client-side interfaces but missing {}: {}",
                 path,
-                AGENTXX_CLIENT_SYMBOL_CREATE,
+                AGENTXX_PLUGIN_CLIENT_SYMBOL_CREATE,
                 entryErr
             );
         } else if (allowMissingEntry) {
@@ -330,7 +330,7 @@ asio::awaitable<std::shared_ptr<ClientPluginInstance>> ClientPluginManager::load
             XX_LOGE(
                 "[client_plugin] `{}` missing {}: {}",
                 path,
-                AGENTXX_CLIENT_SYMBOL_CREATE,
+                AGENTXX_PLUGIN_CLIENT_SYMBOL_CREATE,
                 entryErr
             );
         }
@@ -434,7 +434,7 @@ asio::awaitable<bool> ClientPluginManager::unloadAsync(std::string_view name) {
     if (inst->dlHandle) {
         std::string err;
         auto        fn = reinterpret_cast<AgentxxClientPluginDestroyFn>(
-            NativeLoader::sym(inst->dlHandle, AGENTXX_CLIENT_SYMBOL_DESTROY, err)
+            NativeLoader::sym(inst->dlHandle, AGENTXX_PLUGIN_CLIENT_SYMBOL_DESTROY, err)
         );
         if (fn) {
             try {
@@ -742,7 +742,7 @@ void ClientPluginManager::shutdownClientPlugin(const std::shared_ptr<ClientPlugi
     if (inst->dlHandle) {
         std::string err;
         auto        fn = reinterpret_cast<AgentxxClientPluginDestroyFn>(
-            NativeLoader::sym(inst->dlHandle, AGENTXX_CLIENT_SYMBOL_DESTROY, err)
+            NativeLoader::sym(inst->dlHandle, AGENTXX_PLUGIN_CLIENT_SYMBOL_DESTROY, err)
         );
         if (fn) {
             fn(inst->pluginCtx);

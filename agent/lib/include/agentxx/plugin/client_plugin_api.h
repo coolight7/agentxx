@@ -4,8 +4,8 @@
  * 背景: agent 侧插件 (plugin_api.h) 只扩展 agent 线程能力 (工具/钩子/事件/能力);
  * client (CLI/TUI/未来 GUI) 是另一类宿主, 有自己的生命周期、线程模型与 UI 形态。
  * 本头定义 client 侧插件的跨版本稳定接口, 与 agent 侧入口完全独立:
- *   - 同一动态库可同时导出 agent 入口 (agentxx_plugin_entry) 与 client 入口
- *     (agentxx_client_entry), 两个 PluginManager 各自 dlopen/装配, 实例状态独立
+ *   - 同一动态库可同时导出 agent 入口 (agentxx_plugin_agent_create) 与 client 入口
+ *     (agentxx_plugin_client_create), 两个 PluginManager 各自 dlopen/装配, 实例状态独立
  *   - 跨端通信统一走 wire 协议 (WirePluginData agent→client / WirePluginDataUp
  *     client→agent), 插件不感知本地 Channel / 远程 WS 部署形态
  *
@@ -348,7 +348,7 @@ typedef struct AgentxxClientLogIface {
 typedef const AgentxxClientPluginInfo* (*AgentxxClientPluginGetInfoFn)(void);
 
 /// 必需: client 侧插件实例创建 (宿主线程池调用; 内部注册动作宿主自动投递回
-/// client io 线程; 语义同 agent 侧 agentxx_plugin_create)
+/// client io 线程; 语义同 agent 侧 agentxx_plugin_agent_create)
 /// 【多实例契约】可重入, 每次调用产出独立存活实例 —— 一切实例状态只能
 /// 存于 *plugin_ctx 指向的堆块 (禁止可变全局/函数级 static 缓存); 一切注册
 /// 回调必须设置 user_data = 实例上下文。
@@ -362,9 +362,9 @@ typedef int (*AgentxxClientPluginCreateFn)(const AgentxxClientHost* host, void**
 /// 产出的实例上下文, 与其他并存实例无关。
 typedef void (*AgentxxClientPluginDestroyFn)(void* plugin_ctx);
 
-#define AGENTXX_CLIENT_SYMBOL_GET_INFO "agentxx_client_get_info"
-#define AGENTXX_CLIENT_SYMBOL_CREATE   "agentxx_client_create"
-#define AGENTXX_CLIENT_SYMBOL_DESTROY  "agentxx_client_destroy"
+#define AGENTXX_PLUGIN_CLIENT_SYMBOL_GET_INFO "agentxx_plugin_client_get_info"
+#define AGENTXX_PLUGIN_CLIENT_SYMBOL_CREATE   "agentxx_plugin_client_create"
+#define AGENTXX_PLUGIN_CLIENT_SYMBOL_DESTROY  "agentxx_plugin_client_destroy"
 
 #ifdef __cplusplus
 }

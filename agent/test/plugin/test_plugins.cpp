@@ -298,6 +298,10 @@ asio::awaitable<TestResult> run_plugin_tests() {
         XX_TEST_EXPECT_TRUE(hostInst != nullptr);
         auto jsInst = co_await ctx->pluginManager->loadPluginAsync(jsDir);
         XX_TEST_EXPECT_TRUE(jsInst != nullptr);
+        // Wait for async offloaded load (when create was on io thread) to register js tools
+        for (int i = 0; i < 20 && jsInst && !ctx->toolRegistry->contains("js_hello"); ++i) {
+            co_await sleepMs(50);
+        }
         if (!jsInst) {
             XX_TEST_EXPECT_TRUE(false);
             co_return TestResult{g_plugin_passed, g_plugin_failed};

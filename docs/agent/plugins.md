@@ -53,15 +53,15 @@ Agentxx 插件系统采用 **纯 C ABI + COM 风格接口表查询**：
 
 ```c
 #include "agentxx/plugin/plugin_api.h"
-extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_get_info(void);
-extern "C" AGENTXX_PLUGIN_EXPORT int agentxx_plugin_create(const AgentxxHost* host, void** plugin_ctx);
-extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_destroy(void* plugin_ctx);
+extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_agent_get_info(void);
+extern "C" AGENTXX_PLUGIN_EXPORT int agentxx_plugin_agent_create(const AgentxxHost* host, void** plugin_ctx);
+extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_agent_destroy(void* plugin_ctx);
 ```
 
 - **入口符号集**：
-  - Agent 侧：`agentxx_plugin_get_info` / `agentxx_plugin_create` / `agentxx_plugin_destroy`
-  - Client 侧 (双端/纯 UI)：`agentxx_client_get_info` / `agentxx_client_create` / `agentxx_client_destroy`
-- **构建侧自动化**：`plugins/CMakeLists.txt` 统一配置 ELF `-fvisibility=hidden` + version script 白名单 (通配符 `agentxx_plugin_*`/`agentxx_client_*`，兼容单端插件在 Android lld 下链接)，macOS `-exported_symbols_list`，MSVC `dllexport`；第三方静态库符号自动隐藏
+  - Agent 侧：`agentxx_plugin_agent_get_info` / `agentxx_plugin_agent_create` / `agentxx_plugin_agent_destroy`
+  - Client 侧 (双端/纯 UI)：`agentxx_plugin_client_get_info` / `agentxx_plugin_client_create` / `agentxx_plugin_client_destroy`
+- **构建侧自动化**：`plugins/CMakeLists.txt` 统一配置 ELF `-fvisibility=hidden` + version script 白名单 (通配符 `agentxx_plugin_agent_*`/`agentxx_plugin_client_*`，兼容单端插件在 Android lld 下链接)，macOS `-exported_symbols_list`，MSVC `dllexport`；第三方静态库符号自动隐藏
 
 ---
 
@@ -93,7 +93,7 @@ auto b64 = agentxx::util::base64Encode(data);
 #include "agentxx/plugin/plugin_kit.h"
 struct MyPluginCtx : public agentxx::kit::PluginBase {};
 
-extern "C" AGENTXX_PLUGIN_EXPORT int agentxx_plugin_create(const AgentxxHost* host, void** plugin_ctx) {
+extern "C" AGENTXX_PLUGIN_EXPORT int agentxx_plugin_agent_create(const AgentxxHost* host, void** plugin_ctx) {
     auto ctx = std::make_unique<MyPluginCtx>();
     ctx->init(host);
 
@@ -137,7 +137,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int agentxx_plugin_create(const AgentxxHost* ho
     *plugin_ctx = ctx.release();
     return 0;
 }
-extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_destroy(void* plugin_ctx) {
+extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_agent_destroy(void* plugin_ctx) {
     delete static_cast<MyPluginCtx*>(plugin_ctx);
 }
 ```

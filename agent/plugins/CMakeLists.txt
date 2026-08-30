@@ -100,7 +100,7 @@ endif()
 
 # ===== 插件动态库导出符号控制 =====
 # - 目标: 严格限制导出面, 仅宿主 dlsym/GetProcAddress 按名查找的入口符号
-#   (agentxx_plugin_get_info/entry/unload + agentxx_client_get_info/entry/unload,
+#   (agentxx_plugin_agent_get_info/create/destroy + agentxx_plugin_client_get_info/create/destroy,
 #   见 plugin_api.h AGENTXX_PLUGIN_EXPORT) 导出, 其余全部隐藏:
 #   - 插件自身 C++ 内部符号 (STL/异常/typeinfo 等)
 #   - 第三方静态库符号 (simdjson/tree_sitter/io_uring/uchardet 等), 避免
@@ -120,8 +120,8 @@ if (NOT WIN32)
     # macOS: -exported_symbols_list (符号表带 _ 前缀)
     set(_AGENTXX_EXPORT_SYMS_FILE "${CMAKE_CURRENT_BINARY_DIR}/plugin_exported_symbols.txt")
     file(WRITE "${_AGENTXX_EXPORT_SYMS_FILE}" "\n")
-    foreach(_sym agentxx_plugin_get_info agentxx_plugin_create agentxx_plugin_destroy
-                 agentxx_client_get_info agentxx_client_create agentxx_client_destroy)
+    foreach(_sym agentxx_plugin_agent_get_info agentxx_plugin_agent_create agentxx_plugin_agent_destroy
+                 agentxx_plugin_client_get_info agentxx_plugin_client_create agentxx_plugin_client_destroy)
       file(APPEND "${_AGENTXX_EXPORT_SYMS_FILE}" "_${_sym}\n")
     endforeach()
     add_link_options("-Wl,-exported_symbols_list,${_AGENTXX_EXPORT_SYMS_FILE}")
@@ -130,7 +130,7 @@ if (NOT WIN32)
     # - 使用通配符而非精确符号名: 单端插件仅定义 agent 入口 (或 client 入口)
     #   之一, 精确名白名单在 Android lld (-Wl,--fatal-warnings, NDK 默认) 下
     #   会因 "symbol not defined" 报错; GNU ld 静默忽略但 lld 不会。
-    #   通配符未匹配时不报错, 且仍保证非 agentxx_plugin_/agentxx_client_
+    #   通配符未匹配时不报错, 且仍保证非 agentxx_plugin_agent_/agentxx_plugin_client_
     #   前缀的符号全部隐藏
     set(_AGENTXX_EXPORT_SYMS_FILE "${CMAKE_CURRENT_BINARY_DIR}/plugin_symbols.map")
     file(WRITE "${_AGENTXX_EXPORT_SYMS_FILE}" "# agentxx 插件动态库导出符号白名单
@@ -139,8 +139,8 @@ if (NOT WIN32)
 # 通配符形式兼容单端插件 (仅定义 agent 或 client 之一) 在 lld 下的链接
 {
   global:
-    agentxx_plugin_*;
-    agentxx_client_*;
+    agentxx_plugin_agent_*;
+    agentxx_plugin_client_*;
   local: *;
 };
 ")
