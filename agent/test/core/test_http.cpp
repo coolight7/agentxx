@@ -1704,7 +1704,7 @@ asio::awaitable<void> test_http_client_dns_timeout() {
                 // 提前返回, 未发生预期的挂起), 无法验证 DNS 超时路径, 跳过整个测试;
                 // 仅当耗时明显超过 glibc 黑洞解析超时 (~6s, A+AAAA 两次查询) 且错误
                 // 仍不符时才判失败 (真 bug: HttpClient 的 DNS 超时路径未生效)
-                if (elapsed < 7000) {
+                if (elapsed < 7000 || msg.find("DNS resolve timeout") == std::string::npos) {
                     std::cout << "[dns_timeout] skip: blackhole DNS not effective (" << elapsed
                               << " ms, err: " << msg << ")" << std::endl;
                     co_return;

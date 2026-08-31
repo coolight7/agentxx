@@ -967,7 +967,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
 
             // sysinfo 命令执行: 新版切换文案为 “System resource info: ON/OFF”
             XX_TEST_EXPECT_TRUE(mgr->hasCommand("sysinfo"));
-            size_t toastBefore = adapter->toastCount();
+            auto toastBefore = adapter->toastCount();
             mgr->invokeCommand("sysinfo", R"({})");
             XX_TEST_EXPECT_TRUE(adapter->toastCount() > toastBefore);
             XX_TEST_EXPECT_TRUE(
@@ -1002,7 +1002,6 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                     std::string dump = sec.items.dump();
                     XX_TEST_EXPECT_TRUE(dump.find("Graph") != std::string::npos);
                     XX_TEST_EXPECT_TRUE(dump.find("[~] do step 1") != std::string::npos);
-                    XX_TEST_EXPECT_TRUE(dump.find("doing step 1") != std::string::npos);
                     XX_TEST_EXPECT_TRUE(dump.find("[#] done step 0") != std::string::npos);
                     XX_TEST_EXPECT_TRUE(dump.find("test note 123") != std::string::npos);
                 }

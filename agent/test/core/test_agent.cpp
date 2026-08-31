@@ -486,29 +486,28 @@ asio::awaitable<void> test_agent_permission_mode_rules() {
     const std::string outsidePath = "/data/outside.txt";
 
     // 工具 + 会话总线 + 权限应答 IO (每次构造新 CodeAgent 前重建, 保证计数独立)
-    TestTool         tool("agentxx_filesystem_write");
-    constexpr size_t kWriteIndex
-        = agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionWRITE;
+    TestTool tool("agentxx_filesystem_write");
 
     // 检查辅助: 走 EventBus 请求权限检查
-    auto check = [&](agentxx::agent::CodeAgent& agent,
-                     std::string_view          path,
-                     const std::string&        sessionId) -> asio::awaitable<bool> {
+    auto check
+        = [&](agentxx::agent::CodeAgent& agent, std::string_view path, const std::string& sessionId
+          ) -> asio::awaitable<bool> {
         auto args = neograph::json{
             {"path",      std::string{path}},
             {"sessionId", sessionId        }
         };
-        auto resp = co_await agent.agentContext->bus
-                        ->request<agentxx::events::ReqToolPermissionCheck, agentxx::events::RespToolPermissionCheck>(
-                            agentxx::events::Topic::ToolPermissionCheck,
-                            agentxx::events::ReqToolPermissionCheck{
-                                .agentName = agent.agentContext->agentConfig->agentName,
-                                .sessionId = sessionId,
-                                .toolName  = "agentxx_filesystem_write",
-                                .arguments = std::move(args),
-                            },
-                            std::chrono::milliseconds{0}
-                        );
+        auto resp = co_await agent.agentContext->bus->request<
+            agentxx::events::ReqToolPermissionCheck,
+            agentxx::events::RespToolPermissionCheck>(
+            agentxx::events::Topic::ToolPermissionCheck,
+            agentxx::events::ReqToolPermissionCheck{
+                .agentName = agent.agentContext->agentConfig->agentName,
+                .sessionId = sessionId,
+                .toolName  = "agentxx_filesystem_write",
+                .arguments = std::move(args),
+            },
+            std::chrono::milliseconds{0}
+        );
         if (!resp.has_value()) {
             co_return false;
         }

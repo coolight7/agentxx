@@ -707,9 +707,9 @@ asio::awaitable<void> test_host_spawn_nested_delegation() {
 
     g_da_sim_response_content = "nested leaf result";
     g_da_sim_requests.clear();
-    // 前 2 次请求 (根 + 子代理 A) 返回 subagent tool_calls, 第 3 次 (孙 B)
+    // 第 1 次请求 (子代理 A) 返回 subagent tool_calls 委派孙 B, 后续 (孙 B 与 A 归约)
     // 返回纯文本
-    g_da_sim_tool_calls_remaining = 2;
+    g_da_sim_tool_calls_remaining = 1;
     g_da_sim_tool_calls           = neograph::json::array({
         neograph::json{
                        {"index", 0},

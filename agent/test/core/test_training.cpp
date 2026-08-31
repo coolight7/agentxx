@@ -141,8 +141,10 @@ void testNormalizePromptPatch() {
     auto parsed = neograph::json::parse(
         R"({
             "systemPrompt": "",
-            "systemPlanningPrompt": "plan v2",
-            "systemSkillPrompt": "",
+            "appendSystemPrompts": {
+                "planning": "plan v2",
+                "skill": ""
+            },
             "analysis": "some analysis",
             "strategy": "reorganize",
             "toolPrompt": {
@@ -173,7 +175,7 @@ void testNormalizePromptPatch() {
 
     // 全部为空串时 patch 为空对象 (表示无修改)
     auto allEmpty = normalizePromptPatch(
-        neograph::json::parse(R"({"systemPrompt": "", "systemSkillPrompt": ""})")
+        neograph::json::parse(R"({"systemPrompt": "", "appendSystemPrompts": {"skill": ""}})")
     );
     XX_TEST_EXPECT_TRUE(allEmpty.is_object());
     XX_TEST_EXPECT_TRUE(allEmpty.empty());

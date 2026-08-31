@@ -106,10 +106,10 @@ struct SummarizationTestEnv {
         double in_extraTokensPerMessage = 3.0,
         double in_recentRatio           = 0.03
     ) {
-        ctx                          = std::make_shared<agentxx::agent::AgentContext>();
+        ctx = std::make_shared<agentxx::agent::AgentContext>();
         static asio::io_context s_ioCtx;
-        ctx->bus                     = std::make_shared<agentxx::event::EventBus>(s_ioCtx.get_executor());
-        ctx->agentConfig             = std::make_shared<agentxx::agent::AgentConfig>();
+        ctx->bus         = std::make_shared<agentxx::event::EventBus>(s_ioCtx.get_executor());
+        ctx->agentConfig = std::make_shared<agentxx::agent::AgentConfig>();
         ctx->middlewareHandleContext = std::make_shared<agentxx::middleware::MiddlewareContext>();
         ctx->modelRegistry           = std::make_shared<agentxx::agent::ModelProviderRegistry>();
 
@@ -1108,7 +1108,8 @@ asio::awaitable<TestResult> run_summarization_tests() {
         XX_TEST_EXPECT_EQ(maxContextTokensOf(env->ctx, env->sessionId), size_t{1000});
         XX_TEST_EXPECT_TRUE(env->session()->viewMessages.size() >= 1);
         XX_TEST_EXPECT_TRUE(
-            env->session()->viewMessages.back().text.find("压缩上下文") != std::string::npos
+            env->session()->viewMessages.back().text.find("Summarizied LLM Context")
+            != std::string::npos
         );
     }
 
@@ -1171,7 +1172,8 @@ asio::awaitable<TestResult> run_summarization_tests() {
         XX_TEST_EXPECT_EQ(contextTokensOf(env->ctx, env->sessionId), size_t{58});
         XX_TEST_EXPECT_TRUE(env->session()->viewMessages.size() >= 1);
         XX_TEST_EXPECT_TRUE(
-            env->session()->viewMessages.back().text.find("压缩上下文") != std::string::npos
+            env->session()->viewMessages.back().text.find("Summarizied LLM Context")
+            != std::string::npos
         );
     }
 
@@ -1622,10 +1624,10 @@ asio::awaitable<TestResult> run_summarization_tests() {
     //   父线程 sessionId / 仅 share_store 工具 / 禁二次压缩)
     // - 预置 interruptResult 后再次调用 → 返回摘要文本
     {
-        auto ctx                     = std::make_shared<agentxx::agent::AgentContext>();
+        auto                    ctx = std::make_shared<agentxx::agent::AgentContext>();
         static asio::io_context s_ioCtx;
-        ctx->bus                     = std::make_shared<agentxx::event::EventBus>(s_ioCtx.get_executor());
-        ctx->agentConfig             = std::make_shared<agentxx::agent::AgentConfig>();
+        ctx->bus         = std::make_shared<agentxx::event::EventBus>(s_ioCtx.get_executor());
+        ctx->agentConfig = std::make_shared<agentxx::agent::AgentConfig>();
         ctx->middlewareHandleContext = std::make_shared<agentxx::middleware::MiddlewareContext>();
         ctx->modelRegistry           = std::make_shared<agentxx::agent::ModelProviderRegistry>();
         agentxx::agent::ModelConfig mcfg;
@@ -1792,7 +1794,8 @@ asio::awaitable<TestResult> run_summarization_tests() {
         XX_TEST_EXPECT_TRUE(hasErrorSummary);
     }
 
-    // --- T20. 触发压缩时先发 viewMessage "正在压缩上下文", 压缩完成更新为 "压缩上下文 {old}->{new}/{max} · {耗时}" ---
+    // --- T20. 触发压缩时先发 viewMessage "正在压缩上下文", 压缩完成更新为 "压缩上下文
+    // {old}->{new}/{max} · {耗时}" ---
     {
         auto env = std::make_shared<SummarizationTestEnv>();
         env->session()->setModelName("small"); // max=1000
@@ -1817,7 +1820,7 @@ asio::awaitable<TestResult> run_summarization_tests() {
         const auto& vm = sess->viewMessages.back();
         XX_TEST_EXPECT_EQ(vm.role, agentxx::agent::ViewMessage::Role::Tip);
         // 验证格式: 包含 "压缩上下文 900->.../1000 · "
-        XX_TEST_EXPECT_TRUE(vm.text.starts_with("压缩上下文 900->"));
+        XX_TEST_EXPECT_TRUE(vm.text.starts_with("Summarizied LLM Context 900->"));
         XX_TEST_EXPECT_TRUE(vm.text.find("/1000 · ") != std::string::npos);
     }
 
@@ -1843,7 +1846,7 @@ asio::awaitable<TestResult> run_summarization_tests() {
         XX_TEST_EXPECT_TRUE(env->session()->llmMessages.is_array());
         XX_TEST_EXPECT_TRUE(env->session()->viewMessages.size() >= 1);
         const auto& vm = env->session()->viewMessages.back();
-        XX_TEST_EXPECT_TRUE(vm.text.starts_with("压缩上下文 "));
+        XX_TEST_EXPECT_TRUE(vm.text.starts_with("Summarizied LLM Context "));
     }
 
     co_return TestResult{g_sum_passed, g_sum_failed};
