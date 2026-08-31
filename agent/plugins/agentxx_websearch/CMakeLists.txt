@@ -8,7 +8,7 @@ set(PLUGIN_NAME agentxx_websearch)
 # ===== 平台支持判定 =====
 # 纯网络 IO (asio/beast 经 agentxx_util), 全平台可用
 include("${CMAKE_CURRENT_LIST_DIR}/../cmake/plugin_platform_support.cmake")
-agentxx_plugin_platform_gate(${PLUGIN_NAME} _AGENTXX_PLATFORM_OK windows linux android macos)
+agentxx_plugin_platform_gate(${PLUGIN_NAME} _AGENTXX_PLATFORM_OK windows linux macos android ios)
 if (NOT _AGENTXX_PLATFORM_OK)
   return()
 endif ()

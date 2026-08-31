@@ -1,0 +1,24 @@
+// agentxx_math 插件 —— 共享头
+#pragma once
+
+#include "agentxx/plugin/plugin_api.h"
+#include "agentxx/plugin/plugin_guard.h"
+#include "agentxx/plugin/plugin_kit.h"
+#include <fmt/format.h>
+#include <memory>
+#include <neograph/json.h>
+#include <string>
+
+namespace agentxx_math_plugin {
+
+struct PluginCtx : public agentxx::kit::PluginBase {};
+
+inline auto ctxGuardLogger(PluginCtx* ctx) noexcept {
+    return [ctx](const char* msg) noexcept {
+        if (ctx) {
+            ctx->log.error(msg ? msg : "");
+        }
+    };
+}
+
+} // namespace agentxx_math_plugin

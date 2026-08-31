@@ -21,6 +21,7 @@
 #include "test_cpu_gpu_use.h"
 #include "test_datetime_tool.h"
 #include "test_diff_util.h"
+#include "test_math_tools.h"
 #include "test_event_bridge.h"
 #include "test_event_stream.h"
 #include "test_events.h"
@@ -245,6 +246,7 @@ int main(int argn, char** argv) {
             co_await run("subagent_tool", agentxx::test::run_subagent_tool_tests);
             co_await run("agent_host", agentxx::test::run_agent_host_tests);
             co_await runCtx("string_tools", agentxx::test::run_string_tools_tests, agentContext);
+            co_await runCtx("math_tools", agentxx::test::run_math_tools_tests, agentContext);
             co_await run("share_store", agentxx::test::run_share_store_tests);
             co_await run("session_persistence", agentxx::test::run_session_persistence_tests);
             co_await runCtx("rag_search", agentxx::test::run_rag_search_tools_tests, agentContext);

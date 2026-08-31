@@ -72,6 +72,7 @@ target_include_directories(agentxx_test PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}/../plugins/agentxx_filesystem/"
   "${CMAKE_CURRENT_SOURCE_DIR}/../plugins/agentxx_execute_command/"
   "${CMAKE_CURRENT_SOURCE_DIR}/../plugins/agentxx_string/"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../plugins/agentxx_math/"
   "${CMAKE_CURRENT_SOURCE_DIR}/../plugins/agentxx_system/"
   "${CMAKE_CURRENT_SOURCE_DIR}/../plugins/agentxx_websearch/"
   "${CMAKE_CURRENT_SOURCE_DIR}/../plugins/agentxx_rag_search/"

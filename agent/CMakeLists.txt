@@ -46,6 +46,7 @@ option(AGENTXX_ENABLE_PLUGIN_PLANNING "Build agentxx_planning plugin (task plann
 option(AGENTXX_ENABLE_PLUGIN_FILESYSTEM "Build agentxx_filesystem plugin (list/read/write/edit/glob/grep)." ON)
 option(AGENTXX_ENABLE_PLUGIN_EXECUTE_COMMAND "Build agentxx_execute_command plugin (bash/windows command)." ON)
 option(AGENTXX_ENABLE_PLUGIN_STRING "Build agentxx_string plugin (html2markdown/regexp)." ON)
+option(AGENTXX_ENABLE_PLUGIN_MATH "Build agentxx_math plugin (math calculation)." ON)
 option(AGENTXX_ENABLE_PLUGIN_SYSTEM "Build agentxx_system plugin (current date/time)." ON)
 option(AGENTXX_ENABLE_PLUGIN_WEBSEARCH "Build agentxx_websearch plugin (search/fetch url)." ON)
 option(AGENTXX_ENABLE_PLUGIN_RAG_SEARCH "Build agentxx_rag_search plugin (embedding based docs search)." ON)
@@ -641,6 +642,7 @@ set(_AGENTXX_COMMON_CMAKE_ARGS
     -DAGENTXX_ENABLE_PLUGIN_FILESYSTEM=${AGENTXX_ENABLE_PLUGIN_FILESYSTEM}
     -DAGENTXX_ENABLE_PLUGIN_EXECUTE_COMMAND=${AGENTXX_ENABLE_PLUGIN_EXECUTE_COMMAND}
     -DAGENTXX_ENABLE_PLUGIN_STRING=${AGENTXX_ENABLE_PLUGIN_STRING}
+    -DAGENTXX_ENABLE_PLUGIN_MATH=${AGENTXX_ENABLE_PLUGIN_MATH}
     -DAGENTXX_ENABLE_PLUGIN_SYSTEM=${AGENTXX_ENABLE_PLUGIN_SYSTEM}
     -DAGENTXX_ENABLE_PLUGIN_WEBSEARCH=${AGENTXX_ENABLE_PLUGIN_WEBSEARCH}
     -DAGENTXX_ENABLE_PLUGIN_RAG_SEARCH=${AGENTXX_ENABLE_PLUGIN_RAG_SEARCH}
