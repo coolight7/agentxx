@@ -231,9 +231,16 @@ memory:
 #
 # - path: 插件动态库路径 或 插件目录 (目录含 plugin.yaml 时按清单分派, 推荐);
 #         必填; 相对路径按程序工作目录解析为绝对路径
+#         特殊前缀 `builtin://<name>` 表示内置编译插件 (无需外部文件,
+#         直接经内置注册表加载; 如 `builtin://agentxx_filesystem`);
+#         也可简写 `name: <name>` 等价于 `path: builtin://<name>` (仅内置)
 # - enabled: 是否启用 (默认 true; false 跳过加载)
 # - args:    插件参数 json (整体传递给插件, 宿主不解析其字段语义;
 #            参数含义由插件自行定义)
+# - config:  插件配置文件所在目录或文件路径 (可指向文件或目录;
+#            支持 `~`/`${VAR}`/相对路径, 归一化为绝对路径后透传给插件,
+#            插件经 `agentxx.agent.config` / `agentxx.client.self` 的
+#            `get_plugin_config_path` 查询; 为空表示未指定)
 # - 依赖排序: 加载时按 manifest depends 拓扑排序 (脚本插件须在引擎之后,
 #   配置顺序无关 —— 即使脚本插件写在引擎前面也会自动排到后面)
 #
@@ -260,20 +267,28 @@ plugins:
   # === 默认内置编译插件 ===
   # - 构建期也可经 AGENTXX_ENABLE_PLUGIN_BUILTIN=ON + AGENTXX_PLUGIN_BUILTIN_LIST
   #   把它们合并编译进 libagentxx (内置注册表), 运行期配置保持不变
-  - path: ${AGENTXX_EXEC_DIR}/plugins/agentxx_planning/
+  #   (内置简写: `path: builtin://<name>` 或 `name: <name>` 无需依赖外部目录)
+  # - config 可选，默认使用编译时内嵌的yaml
+  - name: lugins/agentxx_planning
     enabled: true
-  - path: ${AGENTXX_EXEC_DIR}/plugins/agentxx_filesystem/
+    # config: ${AGENTXX_WORK_DIR}/config/planning.yaml  # 可指向文件或目录
+  - name: agentxx_filesystem
     enabled: true
-  - path: ${AGENTXX_EXEC_DIR}/plugins/agentxx_execute_command/
+  - name: agentxx_execute_command
     enabled: true
-  - path: ${AGENTXX_EXEC_DIR}/plugins/agentxx_string/
+  - name: agentxx_system
     enabled: true
-  - path: ${AGENTXX_EXEC_DIR}/plugins/agentxx_system/
+  - name: agentxx_websearch
     enabled: true
-  - path: ${AGENTXX_EXEC_DIR}/plugins/agentxx_websearch/
-    enabled: true
-  - path: ${AGENTXX_EXEC_DIR}/plugins/agentxx_rag_search/
-    enabled: true
+  - name: agentxx_string
+    enabled: false
+  - name: agentxx_rag_search
+    enabled: false
+  # 内置简写示例 (等价于上方目录形态; 无需外部 plugin.yaml):
+  # - path: builtin://agentxx_filesystem
+  #   enabled: true
+  #   config: ./my_plugin_config/  # 目录或文件
+  # - name: agentxx_planning  # name 简写等价于 builtin://agentxx_planning
 
   # === CodeGraph 代码分析
   # - 参数:

@@ -24,4 +24,14 @@ const AgentxxBuiltinPluginInfo* agentxx_get_builtin_plugins(size_t* count) {
     return kEmpty;
 }
 
+const AgentxxBuiltinManifest* agentxx_get_builtin_manifests(size_t* count) {
+    static const AgentxxBuiltinManifest kEmptyM[] = {
+        {nullptr, nullptr},
+    };
+    if (count) {
+        *count = sizeof(kEmptyM) / sizeof(kEmptyM[0]);
+    }
+    return kEmptyM;
+}
+
 #endif /* AGENTXX_USE_BUILTIN_PLUGIN_MANIFEST */

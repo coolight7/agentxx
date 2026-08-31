@@ -669,6 +669,25 @@ static char*
     });
 }
 
+static char* xx_get_plugin_config_path(const AgentxxPluginHost* host) {
+    return agentxx::plugin::guardVtableCall(nullptr, [&]() -> char* {
+        auto mgr  = mgrOf(host);
+        auto inst = instOf(host);
+        if (!mgr || !inst) {
+            return static_cast<char*>(nullptr);
+        }
+        auto mgrPtr  = mgr;
+        auto instPtr = inst;
+        auto path    = ioCallSync<std::string>(mgrPtr, [mgrPtr, instPtr]() {
+            return mgrPtr->getPluginConfigPath(instPtr);
+        });
+        if (path.empty()) {
+            return static_cast<char*>(nullptr);
+        }
+        return host->vtable->strdup(path.c_str());
+    });
+}
+
 static char* xx_get_prompt(const AgentxxPluginHost* host) {
     return agentxx::plugin::guardVtableCall(nullptr, [&]() -> char* {
         auto mgr = mgrOf(host);
@@ -918,6 +937,7 @@ static const AgentxxPluginConfigIface g_ifaceConfig = {
     /* get_tool_prompt */ xx_get_tool_prompt,
     /* get_work_dir */ xx_get_work_dir,
     /* get_session_work_dir */ xx_get_session_work_dir,
+    /* get_plugin_config_path */ xx_get_plugin_config_path,
 };
 
 static const AgentxxPluginPromptIface g_ifacePrompt = {
@@ -1375,6 +1395,13 @@ std::string PluginManager::getPluginArgsJson(PluginInstance* inst) {
         return "{}";
     }
     return inst->args.is_object() ? inst->args.dump() : "{}";
+}
+
+std::string PluginManager::getPluginConfigPath(PluginInstance* inst) {
+    if (!inst) {
+        return {};
+    }
+    return inst->configPath;
 }
 
 std::string PluginManager::getSessionWorkDir() {

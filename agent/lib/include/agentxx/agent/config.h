@@ -138,6 +138,8 @@ struct PluginConfig {
     /// 插件动态库路径 或 插件目录 (目录含 plugin.yaml 时按清单解析)
     /// - 必填: 所有插件统一经 path 外置指定, 不再区分内置/外置插件
     ///   (相对路径按程序工作目录解析为绝对路径)
+    ///   特殊前缀 `builtin://<name>` 表示内置编译插件 (无需外部文件,
+    ///   直接经内置注册表加载; 如 `builtin://agentxx_filesystem`)
     std::string path;
 
     /// 是否启用 (默认 true)
@@ -149,6 +151,14 @@ struct PluginConfig {
     /// 插件参数 (yaml `args`; 宿主原样保存并整体传递给插件,
     /// 不解析具体字段 —— 参数语义由插件自行定义)
     neograph::json args;
+
+    /// 插件配置文件所在目录或文件路径 (yaml `config`)
+    /// - 可指向文件或目录; 支持 `~` 与 ${VAR} 展开, 相对路径按工作目录解析
+    /// - 宿主归一化为绝对路径后保存并透传给插件 (经
+    ///   `agentxx.agent.config` / `agentxx.client.self` 的
+    ///   `get_plugin_config_path` 查询)
+    /// - 为空表示未指定 (插件使用默认配置加载逻辑)
+    std::string configPath;
 };
 
 class AgentConfig {

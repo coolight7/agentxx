@@ -263,6 +263,25 @@ agentxx_load_plugin(agentxx_rag_search AGENTXX_ENABLE_PLUGIN_RAG_SEARCH)
 # ===== 内置清单生成 (存在任一实际内置的插件时) =====
 if (AGENTXX_ENABLE_PLUGIN_BUILTIN)
   list(LENGTH AGENTXX_BUILTIN_PLUGIN_NAMES AGENTXX_BUILTIN_PLUGIN_COUNT)
+  # —— 内嵌 plugin.yaml 原文 (与上表一一对应) ——
+  set(AGENTXX_BUILTIN_MANIFEST_YAML_ARRAY "")
+  foreach(_bp IN LISTS AGENTXX_BUILTIN_PLUGIN_NAMES)
+    set(_yaml_path "${CMAKE_CURRENT_SOURCE_DIR}/${_bp}/plugin.yaml")
+    if(EXISTS "${_yaml_path}")
+      file(READ "${_yaml_path}" _yaml_raw)
+      # 使用 raw string R"AGENTXX_YAML(... )AGENTXX_YAML" 包裹, 避免转义
+      # 若 yaml 自身包含 )AGENTXX_YAML" 则退化为空串 (极罕见, 视作无清单)
+      if(_yaml_raw MATCHES "\\)AGENTXX_YAML\"")
+        message(WARNING "[agentxx_plugins] ${_bp}/plugin.yaml contains raw delimiter, embedding as empty")
+        string(APPEND AGENTXX_BUILTIN_MANIFEST_YAML_ARRAY "    { \"${_bp}\", \"\" },\n")
+      else()
+        string(APPEND AGENTXX_BUILTIN_MANIFEST_YAML_ARRAY "    { \"${_bp}\", R\"AGENTXX_YAML(${_yaml_raw})AGENTXX_YAML\" },\n")
+      endif()
+    else()
+      message(WARNING "[agentxx_plugins] ${_bp}/plugin.yaml not found, embedding as empty")
+      string(APPEND AGENTXX_BUILTIN_MANIFEST_YAML_ARRAY "    { \"${_bp}\", \"\" },\n")
+    endif()
+  endforeach()
   configure_file(
     "${CMAKE_CURRENT_SOURCE_DIR}/builtin_plugins.cpp.in"
     "${CMAKE_CURRENT_BINARY_DIR}/builtin_plugins.cpp"

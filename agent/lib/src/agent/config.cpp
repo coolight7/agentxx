@@ -71,6 +71,17 @@ std::expected<void, std::string> AgentConfig::validate() const {
             workDir
         )};
     }
+    for (const auto& pc : plugins) {
+        // configPath 非空时必须为绝对路径 (装配侧已归一化)
+        if (!pc.configPath.empty() && !std::filesystem::path(pc.configPath).is_absolute()
+            && !pc.configPath.starts_with("builtin://")) {
+            return std::unexpected{fmt::format(
+                "AgentConfig: plugin '{}' config must be an absolute path (got '{}')",
+                pc.path,
+                pc.configPath
+            )};
+        }
+    }
     return {};
 }
 

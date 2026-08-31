@@ -187,12 +187,30 @@ static void applySharedRuntimeConfig(
     config->enableWorktree = yamlCfg.worktreeEnable;
     // 插件配置 (yaml `plugins` 段): 相对路径按程序工作目录解析为绝对路径
     // (与 skill/memory 一致; BaseAgent::init 按此加载, 拓扑排序见 PluginManager)
+    // - path 前缀 `builtin://` 为内置插件简写, 保留原样不做文件路径解析
+    // - config 支持 `~` 展开与相对路径解析 (可指向文件或目录), 归一化后透传
+    auto resolvePluginPath = [&](std::string_view p) -> std::string {
+        if (p.starts_with("builtin://")) {
+            return std::string{p};
+        }
+        return resolvePath(p);
+    };
     for (const auto& pc : yamlCfg.plugins) {
         agentxx::agent::PluginConfig pluginCfg;
-        pluginCfg.path    = resolvePath(pc.path);
+        pluginCfg.path    = resolvePluginPath(pc.path);
         pluginCfg.enabled = pc.enabled;
         pluginCfg.sides   = pc.sides;
         pluginCfg.args    = pc.args;
+        if (!pc.configPath.empty()) {
+            auto expanded = agentxx::util::expandUserHomePath(pc.configPath);
+            std::filesystem::path cp{expanded};
+            if (cp.is_absolute()) {
+                pluginCfg.configPath = cp.lexically_normal().generic_string();
+            } else {
+                pluginCfg.configPath
+                    = (std::filesystem::current_path() / cp).lexically_normal().generic_string();
+            }
+        }
         config->plugins.push_back(std::move(pluginCfg));
     }
     if (!config->plugins.empty()) {

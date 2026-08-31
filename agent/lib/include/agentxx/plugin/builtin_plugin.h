@@ -66,4 +66,37 @@ inline const AgentxxBuiltinPluginInfo* findBuiltinPlugin(std::string_view name) 
 } // namespace agentxx
 #endif
 
+// ── 内嵌清单 (plugin.yaml 原文) ──────────────────────────────
+// 与 BuiltinPluginInfo 同步生成于 plugins/builtin_plugins.cpp
+typedef struct AgentxxBuiltinManifest {
+    const char* name; ///< 插件名 (与 BuiltinPluginInfo.name 一致)
+    const char* yaml; ///< plugin.yaml 原文 (UTF-8, 静态只读)
+} AgentxxBuiltinManifest;
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+const AgentxxBuiltinManifest* agentxx_get_builtin_manifests(size_t* count);
+#ifdef __cplusplus
+}
+#include <string_view>
+namespace agentxx {
+namespace plugin {
+inline const AgentxxBuiltinManifest* findBuiltinManifest(std::string_view name) {
+    size_t      count = 0;
+    const auto* list  = agentxx_get_builtin_manifests(&count);
+    if (!list) {
+        return nullptr;
+    }
+    for (size_t i = 0; i < count; ++i) {
+        if (list[i].name && list[i].name == name) {
+            return &list[i];
+        }
+    }
+    return nullptr;
+}
+} // namespace plugin
+} // namespace agentxx
+#endif
+
 #endif /* AGENTXX_BUILTIN_PLUGIN_H */

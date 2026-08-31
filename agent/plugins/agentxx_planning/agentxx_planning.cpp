@@ -695,11 +695,15 @@ static std::string buildDecorItems(const ClientCtx& ctx, const neograph::json& p
             if (td.is_object()) {
                 const auto state   = td.value("state", std::string{});
                 const auto content = td.value("content", std::string{});
+                const auto summary = td.value("summary", std::string{});
                 if (!content.empty()) {
                     textItem(
                         fmt::format("{} {}", todoIcon(state), content),
                         std::string{todoRole(state)}
                     );
+                    if (!summary.empty()) {
+                        textItem(summary, "hint");
+                    }
                 }
             } else if (td.is_string()) {
                 textItem(fmt::format("[ ] {}", td.get<std::string>()), "hint");
@@ -825,11 +829,15 @@ static void refreshPlanSection(ClientCtx& ctx) {
             if (td.is_object()) {
                 const auto state   = td.value("state", std::string{});
                 const auto content = td.value("content", std::string{});
+                const auto summary = td.value("summary", std::string{});
                 if (!content.empty()) {
                     textItem(
                         fmt::format("{} {}", todoIcon(state), content),
                         std::string{todoRole(state)}
                     );
+                    if (!summary.empty()) {
+                        textItem(summary, "hint");
+                    }
                 }
             } else if (td.is_string()) {
                 textItem(fmt::format("[ ] {}", td.get<std::string>()), "hint");

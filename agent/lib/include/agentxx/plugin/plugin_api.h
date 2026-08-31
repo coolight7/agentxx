@@ -462,6 +462,11 @@ typedef struct AgentxxPluginConfigIface {
         const AgentxxPluginHost* host,
         AgentxxPluginStringView  session_id
     );
+    /// 本插件配置文件所在目录或文件路径 (yaml `plugins` 条目 config; io 线程;
+    /// host->alloc; 未指定返回 NULL, 空串表示未配置)
+    /// - 可指向文件或目录 (由插件自行判断类型并加载)
+    /// - 宿主已归一化为绝对路径 (正斜杠, lexically_normal)
+    char* (*get_plugin_config_path)(const AgentxxPluginHost* host);
 } AgentxxPluginConfigIface;
 
 /* ==================== 接口表: 主模型配置 (agentxx.agent.model) ==================== */

@@ -64,6 +64,13 @@ using agentxx::agent::PluginConfig;
 namespace {
 
 // ==================== 工具 ====================
+static inline bool isBuiltinScheme(std::string_view p) noexcept {
+    return p.size() > 10 && p.substr(0, 10) == "builtin://";
+}
+
+static inline std::string parseBuiltinName(std::string_view p) {
+    return std::string(p.substr(10));
+}
 
 /// 从 JSON 提取字符串字段 (缺失/非字符串返回空)
 std::string jsonStr(const neograph::json& j, std::string_view key) {
@@ -191,6 +198,21 @@ asio::awaitable<std::shared_ptr<ClientPluginInstance>> ClientPluginManager::load
     const agentxx::agent::PluginConfig* cfg,
     bool                                allowMissingEntry
 ) {
+    // 内置简写: builtin://<name> 在 client 侧暂无内置 registry, 按目录探测
+    // 回退 (若插件以目录形式存在于默认 plugins/<name> 则按目录加载,
+    // 否则视为仅 agent 侧内置, 静默跳过)
+    if (isBuiltinScheme(path)) {
+        auto btName = parseBuiltinName(path);
+        XX_LOGI("[client_plugin] builtin `{}` skipped on client side (no client builtin registry)", btName);
+        // 尝试目录回退: 若默认 plugins 目录下存在该插件则按目录加载
+        for (auto base : {std::filesystem::current_path()}) {
+            auto dir = base / "plugins" / btName;
+            if (std::filesystem::is_directory(dir)) {
+                co_return co_await loadNativeAsync(dir.string(), cfg, allowMissingEntry);
+            }
+        }
+        co_return nullptr;
+    }
     // ---- 目录插件: 解析 plugin.yaml 取 entry 库路径 (与 agent 侧一致) ----
     // - manifest: name/entry/depends/optional_depends/interfaces(接口声明)
     // - entry 平台化 + 配置子目录回退见公共 resolvePluginEntryPath
@@ -359,6 +381,7 @@ asio::awaitable<std::shared_ptr<ClientPluginInstance>> ClientPluginManager::load
     // 插件配置参数随加载直接传入 (C2, 与 agent 侧一致): 宿主不解析字段语义,
     // 插件经 vtable get_plugin_args 整体读取; 直连路径 cfg 为 nullptr → {}
     inst->args            = cfg ? cfg->args : neograph::json::object();
+    inst->configPath      = cfg ? cfg->configPath : std::string{};
     inst->dlHandle        = handle;
     inst->depends         = std::move(depends);
     inst->optionalDepends = std::move(optionalDepends);
@@ -644,7 +667,10 @@ asio::awaitable<void>
         it.path              = pc.path;
         it.cfg               = &pc;
         it.allowMissingEntry = (pc.sides != agentxx::agent::PluginSide::Client);
-        if (std::filesystem::is_directory(std::filesystem::path(pc.path))) {
+        if (isBuiltinScheme(pc.path)) {
+            it.name = parseBuiltinName(pc.path);
+            // client 侧内置无依赖清单, 保持空依赖
+        } else if (std::filesystem::is_directory(std::filesystem::path(pc.path))) {
             std::string              name, entry;
             std::vector<std::string> depends, optionalDepends;
             PluginManifestInterfaces ifaces;
@@ -763,6 +789,7 @@ std::vector<ClientPluginManager::PluginListView> ClientPluginManager::list() con
         v.version            = inst->version;
         v.description        = inst->description;
         v.path               = inst->path;
+        v.configPath         = inst->configPath;
         v.enabled            = inst->enabled;
         v.inflight           = inst->inflight.load(std::memory_order_relaxed);
         v.depends            = inst->depends;
@@ -1768,6 +1795,23 @@ char* xx_cget_plugin_args(const AgentxxClientHost* host) {
     });
 }
 
+char* xx_cget_plugin_config_path(const AgentxxClientHost* host) {
+    return agentxx::plugin::guardVtableCall(nullptr, [&]() -> char* {
+        auto mgr  = clientMgrOf(host);
+        auto inst = clientInstOf(host);
+        if (!mgr || !inst || inst->configPath.empty()) {
+            return static_cast<char*>(nullptr);
+        }
+        return ioCallSync<char*>(mgr, [&]() -> char* {
+            auto s = mgr->getPluginConfigPath(inst);
+            if (s.empty()) {
+                return static_cast<char*>(nullptr);
+            }
+            return xx_cstrdup(s.c_str());
+        });
+    });
+}
+
 /// "agentxx.client.ui" 展示接口表访问器: 表内成员恒非空 (函数实现存在), 子能力是否
 /// 可用由各 register 入口的 hostSupportedInterfaces 门禁决定 (拒绝时返回
 /// NULL/非 0) —— 与接口表 "NULL = 不支持" 契约的分工: 表级 NULL 用于宿主
@@ -1817,6 +1861,7 @@ const AgentxxClientSelfIface g_clientIfaceSelf = {
     /* version */ AGENTXX_IFACE_CLIENT_SELF_VERSION,
     /* get_own_info */ xx_cget_own_info,
     /* get_plugin_args */ xx_cget_plugin_args,
+    /* get_plugin_config_path */ xx_cget_plugin_config_path,
 };
 
 const AgentxxClientJsonIface g_clientIfaceJson = {
@@ -2488,6 +2533,7 @@ std::string ClientPluginManager::getOwnInfoJson(ClientPluginInstance* inst) {
     j["version"]     = inst->version;
     j["description"] = inst->description;
     j["path"]        = inst->path;
+    j["config"]      = inst->configPath;
     return j.dump();
 }
 
@@ -2496,6 +2542,13 @@ std::string ClientPluginManager::getPluginArgsJson(ClientPluginInstance* inst) {
         return "{}";
     }
     return inst->args.dump();
+}
+
+std::string ClientPluginManager::getPluginConfigPath(ClientPluginInstance* inst) {
+    if (!inst) {
+        return {};
+    }
+    return inst->configPath;
 }
 
 void ClientPluginManager::sendUserInputToPeer(

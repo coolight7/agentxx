@@ -74,6 +74,9 @@ public:
     std::string              description;
     std::string              path;
     neograph::json           args = neograph::json::object();
+    /// 插件配置文件所在目录或文件路径 (yaml `config`, 归一化为绝对路径)
+    /// - 可指向文件或目录; 为空表示未指定
+    std::string configPath;
     std::vector<std::string> depends;
     std::vector<std::string> optionalDepends;
     PluginManifestInterfaces interfaces;
@@ -244,6 +247,7 @@ public:
         std::string              version;
         std::string              description;
         std::string              path;
+        std::string              configPath;
         bool                     enabled  = true;
         size_t                   inflight = 0;
         std::vector<std::string> tools;
@@ -466,6 +470,7 @@ public:
                const plugin::PluginManifestResources& resources
            );
     std::string getPluginArgsJson(PluginInstance* inst);
+    std::string getPluginConfigPath(PluginInstance* inst);
 
     std::string getSessionWorkDir();
     std::string getSessionWorkDir(const std::string& threadId);

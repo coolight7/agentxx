@@ -162,6 +162,34 @@ bool parsePluginManifest(
     PluginManifestInterfaces*    interfaces = nullptr
 );
 
+/// 从 YAML 字符串解析插件清单 (内置内嵌 `plugin.yaml` 原文路径)
+/// - 语义与 parsePluginManifest 完全一致, 仅输入为内存 YAML 字符串而非目录文件
+/// - baseDir 为资源相对路径的解析基准 (为空则按当前工作目录/保持原样, 内置清单
+///   通常为空 —— 内置插件的 skill/memory 声明较少, 且多为绝对路径)
+bool parsePluginManifestFromString(
+    const std::string&           yamlStr,
+    const std::filesystem::path& baseDir,
+    std::string&                 name,
+    std::string&                 entry,
+    std::vector<std::string>&    depends,
+    std::vector<std::string>&    optionalDepends,
+    PluginManifestResources*     resources  = nullptr,
+    PluginManifestInterfaces*    interfaces = nullptr
+);
+
+/// 尝试从内置内嵌清单解析 (优先于文件系统)
+/// - 内置编译时 plugin.yaml 已随二进制内嵌, 无需外部文件即可取 depends/resources/interfaces
+/// - 返回 true 表示命中内置清单并解析成功; false 表示无内置清单 (回退文件系统)
+bool parseBuiltinManifest(
+    std::string_view          pluginName,
+    std::string&              name,
+    std::string&              entry,
+    std::vector<std::string>& depends,
+    std::vector<std::string>& optionalDepends,
+    PluginManifestResources*  resources  = nullptr,
+    PluginManifestInterfaces* interfaces = nullptr
+);
+
 /// 目录插件 entry 相对路径 → 平台化绝对库路径:
 /// - entry 按 Linux 书写 (libfoo.so), Windows/macOS 下修正扩展名 (.dll/.dylib)
 /// - 多配置生成器 (MSVC Debug/Release) 产物位于配置子目录: {dir}/{entry}
