@@ -35,6 +35,7 @@
 #endif
 #include <windows.h>
 #endif
+#include "agentxx/util/env.h"
 
 namespace agentxx {
 namespace util {
@@ -834,14 +835,14 @@ inline PinyinCallback s_pinyinCallback = nullptr;
         return std::string{path};
     }
 #if XX_IS_WIN_D
-    const char* home = std::getenv("USERPROFILE");
+    auto homeOpt = agentxx::util::ApplicationEnv::instance().get("USERPROFILE");
 #else
-    const char* home = std::getenv("HOME");
+    auto homeOpt = agentxx::util::ApplicationEnv::instance().get("HOME");
 #endif
-    if (!home || !*home) {
+    if (!homeOpt || homeOpt->empty()) {
         return std::string{path};
     }
-    auto homePath = agentxx::util::toCurrentSystemStandardPath(home);
+    auto homePath = agentxx::util::toCurrentSystemStandardPath(*homeOpt);
     if (path.size() == 1) {
         return homePath;
     }

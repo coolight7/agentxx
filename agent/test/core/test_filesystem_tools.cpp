@@ -1,5 +1,6 @@
 #include "test_filesystem_tools.h"
 #include "agentxx/agent/context.h"
+#include "agentxx/util/env.h"
 #include <neograph/types.h>
 // 原 lib 内置工具已迁移至 agentxx_filesystem 插件 (同名同行为); 测试直测
 // 插件同一实现 (filesystem_impl.h), 保证插件行为与测试覆盖一致
@@ -440,16 +441,16 @@ asio::awaitable<void>
 asio::awaitable<void>
     test_list_file_tilde_path(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
 #if XX_IS_WIN_D
-    const char* home = std::getenv("USERPROFILE");
+    auto homeOpt = agentxx::util::ApplicationEnv::instance().get("USERPROFILE");
 #else
-    const char* home = std::getenv("HOME");
+    auto homeOpt = agentxx::util::ApplicationEnv::instance().get("HOME");
 #endif
-    if (!home || !*home) {
+    if (!homeOpt || homeOpt->empty()) {
         g_fs_passed++;
         TEST_PASS << "skip tilde test: no home env" << std::endl;
         co_return;
     }
-    auto homeFile = std::filesystem::path{home} / "agentxx_list_tilde_probe.txt";
+    auto homeFile = std::filesystem::path{*homeOpt} / "agentxx_list_tilde_probe.txt";
     {
         std::ofstream f(homeFile);
         f << "tilde probe\n";

@@ -1,6 +1,7 @@
 #include "test_config_loader.h"
 
 #include "agentxx-client/config_loader.h"
+#include "agentxx/util/env.h"
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
@@ -92,9 +93,9 @@ public:
 
     SystemEnvGuard(const std::string& key, const std::string& value) :
         key_(key) {
-        const char* had = std::getenv(key_.c_str());
-        existed_        = had != nullptr;
-        saved_          = had ? std::string{had} : std::string{};
+        auto hadOpt = agentxx::util::ApplicationEnv::instance().getSystem(key_);
+        existed_    = hadOpt.has_value();
+        saved_      = hadOpt ? *hadOpt : std::string{};
         setSystemEnvVar(key_, value);
     }
 
@@ -817,7 +818,8 @@ void test_builtin_exec_dir_uninjected_kept() {
     agentxx::client::setBuiltinEnvVar(agentxx::client::kBuiltinExecDirEnv, "");
     clearSystemEnvVar("AGENTXX_EXEC_DIR");
     auto        cfg = loadYaml("data_dir: ${AGENTXX_EXEC_DIR}/data\n");
-    const char* cur = std::getenv("AGENTXX_EXEC_DIR");
+    auto curOpt = agentxx::util::ApplicationEnv::instance().getSystem("AGENTXX_EXEC_DIR");
+    const char* cur = curOpt ? curOpt->c_str() : nullptr;
     if (cur == nullptr) {
         // 变量被真正删除: 保留 ${VAR} 原样
         XX_TEST_EXPECT_TRUE(cfg.dataDir.find("${AGENTXX_EXEC_DIR}") != std::string::npos);
@@ -884,7 +886,8 @@ void test_env_order_unresolved_kept() {
     const char* key = "AGENTXX_TEST_ENV_MISSING_9F3K2Q";
     clearSystemEnvVar(key);
     auto        cfg = loadYaml("data_dir: ${AGENTXX_TEST_ENV_MISSING_9F3K2Q}/data\n");
-    const char* cur = std::getenv(key);
+    auto curOpt = agentxx::util::ApplicationEnv::instance().getSystem(key);
+    const char* cur = curOpt ? curOpt->c_str() : nullptr;
     if (cur == nullptr) {
         // 变量被真正删除: 保留 ${VAR} 原样
         XX_TEST_EXPECT_TRUE(

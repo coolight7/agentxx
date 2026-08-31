@@ -1,5 +1,6 @@
 #pragma once
 
+#include "agentxx/util/env.h"
 #include "agentxx/util/exception.h"
 #include "fmt/format.h"
 #include <cstdlib>
@@ -32,9 +33,9 @@ public:
     /// - 供 yaml data_dir: default 关键字使用 (tui/cli 模式)
     inline static std::string systemDataDir() noexcept {
 #if XX_IS_WIN_D
-        const char* appdata = std::getenv("APPDATA");
-        if (appdata && *appdata) {
-            return (std::filesystem::path(appdata) / "agentxx").string();
+        if (auto appdata = agentxx::util::ApplicationEnv::instance().get("APPDATA");
+            appdata && !appdata->empty()) {
+            return (std::filesystem::path(*appdata) / "agentxx").string();
         }
 #endif
         return defaultDataDir();
@@ -43,11 +44,11 @@ public:
     /// 获取用户主目录 (Unix: $HOME, Windows: %USERPROFILE%); 未设置返回空串
     inline static std::string getUserHomeDir() noexcept {
 #if XX_IS_WIN_D
-        const char* home = std::getenv("USERPROFILE");
+        auto home = agentxx::util::ApplicationEnv::instance().get("USERPROFILE");
 #else
-        const char* home = std::getenv("HOME");
+        auto home = agentxx::util::ApplicationEnv::instance().get("HOME");
 #endif
-        return home && *home ? std::string{home} : std::string{};
+        return (home && !home->empty()) ? *home : std::string{};
     }
 
     /// 默认数据根目录: ~/.agentxx/ (取不到用户主目录时回退系统临时目录)

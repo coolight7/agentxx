@@ -9,6 +9,7 @@
 #include "test_memgrowth.h"
 #include "agentxx/agent/code_agent.h"
 #include "agentxx/plugin/plugin_manager.h"
+#include "agentxx/util/env.h"
 #include "agentxx/util/log.h"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
@@ -187,7 +188,7 @@ asio::awaitable<int> runScenario(
     // 注意: 进程存活分配字节较多时 _CrtMemCheckpoint 遍历整个堆极慢,
     // 可设置环境变量 MEM_NO_CRT=1 跳过该指标以加速长时间跑测
     _CrtMemState crtA, crtB;
-    bool         useCrt = (getenv("MEM_NO_CRT") == nullptr);
+    bool         useCrt = !agentxx::util::ApplicationEnv::instance().has("MEM_NO_CRT");
     if (useCrt) {
         _CrtMemCheckpoint(&crtA);
     }
@@ -380,19 +381,19 @@ asio::awaitable<TestResult> run_memgrowth_tests() {
     size_t warmupSkip = 0;
     bool   hugeLimit  = false;
 
-    const char* arg;
-    for (int i = 1; (arg = std::getenv("MEM_TURNS")) == nullptr && i < 0; ++i) {
+    // 兼容原占位循环 (无实际效果, 保留以维持原代码结构; 改用安全封装避免 C4996)
+    for (int i = 1; !agentxx::util::ApplicationEnv::instance().has("MEM_TURNS") && i < 0; ++i) {
+        (void)i;
     }
-    (void)arg;
-    // 支持通过环境变量覆盖: MEM_TURNS / MEM_RESP_KB / MEM_HUGE_LIMIT
-    if (auto* v = std::getenv("MEM_TURNS")) {
-        turns = static_cast<size_t>(std::strtoull(v, nullptr, 10));
+    // 支持通过环境变量覆盖: MEM_TURNS / MEM_RESP_KB / MEM_HUGE_LIMIT (经全局单例统一封装, Windows 安全)
+    if (auto vOpt = agentxx::util::ApplicationEnv::instance().get("MEM_TURNS")) {
+        turns = static_cast<size_t>(std::strtoull(vOpt->c_str(), nullptr, 10));
     }
-    if (auto* v = std::getenv("MEM_RESP_KB")) {
-        responseKB = static_cast<size_t>(std::strtoull(v, nullptr, 10));
+    if (auto vOpt = agentxx::util::ApplicationEnv::instance().get("MEM_RESP_KB")) {
+        responseKB = static_cast<size_t>(std::strtoull(vOpt->c_str(), nullptr, 10));
     }
-    if (auto* v = std::getenv("MEM_HUGE_LIMIT")) {
-        hugeLimit = (std::strtoull(v, nullptr, 10) != 0);
+    if (auto vOpt = agentxx::util::ApplicationEnv::instance().get("MEM_HUGE_LIMIT")) {
+        hugeLimit = (std::strtoull(vOpt->c_str(), nullptr, 10) != 0);
     }
 
     std::printf(

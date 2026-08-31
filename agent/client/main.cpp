@@ -9,6 +9,7 @@
 #include "agentxx/agent/config_static.h"
 #include "agentxx/agent/io/agent_server.h"
 #include "agentxx/protocol/acp_server.h"
+#include "agentxx/util/env.h"
 #include "agentxx/util/exception.h"
 #include "agentxx/util/settings_db.h"
 #include "agentxx/util/string_util.h"
@@ -241,12 +242,13 @@ int main(int argn, char** argv) {
 #endif
 
     // 注入程序内置环境变量 (启动后立即捕获, 供 yaml 配置 ${VAR} 展开使用)
+    // - 预设环境变量经全局单例 ApplicationEnv 存储 (优先级高于系统环境变量),
+    //   Windows 侧经 _dupenv_s 安全读取以消除 C4996 警告
     // - AGENTXX_WORK_DIR: 程序启动后的工作目录 (当前目录)
     //   yaml 中可写 `data_dir: ${AGENTXX_WORK_DIR}/...` 等相对启动目录的路径
     // - 统一使用正斜杠 (generic_string): yaml 字符串中 `\` 需转义, 正斜杠无此问题
-    setBuiltinEnvVar(
-        kBuiltinWorkDirEnv,
-        agentxx::util::catchError<std::string>(
+    {
+        auto workDir = agentxx::util::catchError<std::string>(
             []() -> std::string {
                 return std::filesystem::current_path().generic_string();
             },
@@ -254,12 +256,27 @@ int main(int argn, char** argv) {
                 XX_LOGW("[Config] failed to capture AGENTXX_WORK_DIR: {}", errinfo);
                 return "";
             }
-        )
-    );
+        );
+        if (!workDir.empty()) {
+            agentxx::util::ApplicationEnv::instance().set(kBuiltinWorkDirEnv, workDir);
+        } else {
+            agentxx::util::ApplicationEnv::instance().remove(kBuiltinWorkDirEnv);
+        }
+        // 同步兼容层 (供旧代码/测试经 setBuiltinEnvVar 查询)
+        setBuiltinEnvVar(kBuiltinWorkDirEnv, workDir);
+    }
 
     // - AGENTXX_EXEC_DIR: agentxx_cli 可执行程序所在目录
     //   yaml 中可写模型/插件/数据等相对 exe 目录的路径 (如 `${AGENTXX_EXEC_DIR}/plugins`)
-    setBuiltinEnvVar(kBuiltinExecDirEnv, getExecutableDir());
+    {
+        auto execDir = getExecutableDir();
+        if (!execDir.empty()) {
+            agentxx::util::ApplicationEnv::instance().set(kBuiltinExecDirEnv, execDir);
+        } else {
+            agentxx::util::ApplicationEnv::instance().remove(kBuiltinExecDirEnv);
+        }
+        setBuiltinEnvVar(kBuiltinExecDirEnv, execDir);
+    }
 
     /// 默认启动 stdio 作为日志输出，对于 tui 等自己拦截日志的可以移除后添加自己的日志拦截器
     auto defaultLogSink = std::make_shared<StderrLogSink>();

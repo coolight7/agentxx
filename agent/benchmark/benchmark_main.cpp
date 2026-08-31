@@ -1,3 +1,4 @@
+#include "agentxx/util/env.h"
 #include "agentxx/util/log.h"
 #include "bench_aho_corasick.h"
 #include "bench_code_agent.h"
@@ -24,8 +25,8 @@ int main(int argn, char** argv) {
 
     auto&       reporter  = agentxx::bench::BenchReporter::instance();
     std::string outputDir = AGENTXX_BENCH_OUTPUT_DIR;
-    if (const char* envDir = std::getenv("AGENTXX_BENCH_OUTPUT_DIR")) {
-        outputDir = envDir;
+    if (auto envDir = agentxx::util::ApplicationEnv::instance().get("AGENTXX_BENCH_OUTPUT_DIR")) {
+        outputDir = *envDir;
     }
     if (!outputDir.empty()) {
         reporter.setOutputDir(outputDir);
@@ -43,21 +44,20 @@ int main(int argn, char** argv) {
 
     {
         agentxx::bench::CodeAgentBenchConfig config;
-        config.openAIBaseUrl   = std::getenv("AGENTXX_BENCH_LLM_BASE_URL")
-                                     ? std::getenv("AGENTXX_BENCH_LLM_BASE_URL")
-                                     : "";
-        config.openAIApiKey    = std::getenv("AGENTXX_BENCH_LLM_API_KEY")
-                                     ? std::getenv("AGENTXX_BENCH_LLM_API_KEY")
-                                     : "EMPTY";
-        config.openAIModelName = std::getenv("AGENTXX_BENCH_LLM_MODEL_NAME")
-                                     ? std::getenv("AGENTXX_BENCH_LLM_MODEL_NAME")
-                                     : "Agentxx";
-        config.systemPrompt    = std::getenv("AGENTXX_BENCH_LLM_SYSTEM_PROMPT")
-                                     ? std::getenv("AGENTXX_BENCH_LLM_SYSTEM_PROMPT")
-                                     : "You are a helpful assistant.";
-        config.userInput       = std::getenv("AGENTXX_BENCH_LLM_USER_INPUT")
-                                     ? std::getenv("AGENTXX_BENCH_LLM_USER_INPUT")
-                                     : "Hello, please respond briefly.";
+        config.openAIBaseUrl
+            = agentxx::util::ApplicationEnv::instance().getOr("AGENTXX_BENCH_LLM_BASE_URL", "");
+        config.openAIApiKey
+            = agentxx::util::ApplicationEnv::instance().getOr("AGENTXX_BENCH_LLM_API_KEY", "EMPTY");
+        config.openAIModelName
+            = agentxx::util::ApplicationEnv::instance().getOr("AGENTXX_BENCH_LLM_MODEL_NAME", "Agentxx");
+        config.systemPrompt = agentxx::util::ApplicationEnv::instance().getOr(
+            "AGENTXX_BENCH_LLM_SYSTEM_PROMPT",
+            "You are a helpful assistant."
+        );
+        config.userInput = agentxx::util::ApplicationEnv::instance().getOr(
+            "AGENTXX_BENCH_LLM_USER_INPUT",
+            "Hello, please respond briefly."
+        );
         // If no external LLM URL is configured, the individual benchmarks will
         // auto-start a local sim server.
         config.iterations = 5;

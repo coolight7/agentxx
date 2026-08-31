@@ -8,13 +8,12 @@
 - 整理文档
 - release 编译发布时携带 标准库
 - filesystem utf8 path
+- 编译警告
 
 - graph json 定义，支持插件生成 graph json、注册 node; (最多只能有一个插件生成 graph，都没有则默认生成 CodeAgent)
 - 插件 readHostConfig 改为直接传入 变量路径 取值，变量取值交由主程序解析
-- codegraph 疑似启动后没有更新索引
 
 - 冻结 system prompt
-- share_store 替换 middleware.state
 - AgentxxPluginConfigIface: get_work_dir/get_session_work_dir
 - OpWatchdog debug 时启用、配置启用
 

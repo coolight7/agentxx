@@ -1,6 +1,7 @@
 #pragma once
 
 #include "agentxx/agent/code_agent.h"
+#include "agentxx/util/env.h"
 #include "agentxx/util/http_server.h"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
@@ -403,15 +404,12 @@ inline void benchCodeAgentInit() {
     std::cout << "\n=== CodeAgent::init Benchmarks ===" << std::endl;
 
     CodeAgentBenchConfig config;
-    config.openAIBaseUrl   = std::getenv("AGENTXX_BENCH_LLM_BASE_URL")
-                                 ? std::getenv("AGENTXX_BENCH_LLM_BASE_URL")
-                                 : "";
-    config.openAIApiKey    = std::getenv("AGENTXX_BENCH_LLM_API_KEY")
-                                 ? std::getenv("AGENTXX_BENCH_LLM_API_KEY")
-                                 : "EMPTY";
-    config.openAIModelName = std::getenv("AGENTXX_BENCH_LLM_MODEL_NAME")
-                                 ? std::getenv("AGENTXX_BENCH_LLM_MODEL_NAME")
-                                 : "Agentxx";
+    config.openAIBaseUrl
+        = agentxx::util::ApplicationEnv::instance().getOr("AGENTXX_BENCH_LLM_BASE_URL", "");
+    config.openAIApiKey
+        = agentxx::util::ApplicationEnv::instance().getOr("AGENTXX_BENCH_LLM_API_KEY", "EMPTY");
+    config.openAIModelName
+        = agentxx::util::ApplicationEnv::instance().getOr("AGENTXX_BENCH_LLM_MODEL_NAME", "Agentxx");
 
     if (config.openAIBaseUrl.empty()) {
         // init() does not make HTTP calls, a dummy URL suffices
@@ -701,15 +699,12 @@ inline void benchCodeAgentInitWarm() {
     std::cout << "\n=== CodeAgent::init [warm — same config] ===" << std::endl;
 
     CodeAgentBenchConfig config;
-    config.openAIBaseUrl   = std::getenv("AGENTXX_BENCH_LLM_BASE_URL")
-                                 ? std::getenv("AGENTXX_BENCH_LLM_BASE_URL")
-                                 : "";
-    config.openAIApiKey    = std::getenv("AGENTXX_BENCH_LLM_API_KEY")
-                                 ? std::getenv("AGENTXX_BENCH_LLM_API_KEY")
-                                 : "EMPTY";
-    config.openAIModelName = std::getenv("AGENTXX_BENCH_LLM_MODEL_NAME")
-                                 ? std::getenv("AGENTXX_BENCH_LLM_MODEL_NAME")
-                                 : "Agentxx";
+    config.openAIBaseUrl
+        = agentxx::util::ApplicationEnv::instance().getOr("AGENTXX_BENCH_LLM_BASE_URL", "");
+    config.openAIApiKey
+        = agentxx::util::ApplicationEnv::instance().getOr("AGENTXX_BENCH_LLM_API_KEY", "EMPTY");
+    config.openAIModelName
+        = agentxx::util::ApplicationEnv::instance().getOr("AGENTXX_BENCH_LLM_MODEL_NAME", "Agentxx");
 
     if (config.openAIBaseUrl.empty()) {
         config.openAIBaseUrl   = "http://127.0.0.1:1";

@@ -1,6 +1,7 @@
 #include "agentxx-client/config_loader.h"
 
 #include "agentxx/util/container_util.h"
+#include "agentxx/util/env.h"
 #include "agentxx/util/string_util.h"
 #include "yaml-cpp/yaml.h"
 #include <algorithm>
@@ -99,16 +100,15 @@ std::map<std::string, std::string> loadDotEnv(const std::vector<std::string>& pa
 // ---------------------------------------------------------------------------
 // 程序内置环境变量 (main 启动时注入; yaml ${VAR} 展开时优先解析)
 // ---------------------------------------------------------------------------
-
-/// 内置环境变量存储 (值由 main 启动时经 setBuiltinEnvVar 注入)
-/// - 空值 = 未注入 (对应变量惰性解析, 如 AGENTXX_WORK_DIR 回退 current_path())
-static std::map<std::string, std::string, std::less<>> g_builtinEnvVars;
+// 内置变量存储已迁移至 agentxx::util::ApplicationEnv 单例 (全局预设变量, 优先级高于系统环境变量)
+// - main 启动时经 setBuiltinEnvVar (= ApplicationEnv::instance().set) 注入 AGENTXX_WORK_DIR / AGENTXX_EXEC_DIR
+// - 此处保留兼容层, 避免直接暴露 ApplicationEnv 细节给上层调用方
 
 void setBuiltinEnvVar(std::string_view name, std::string value) {
     if (value.empty()) {
-        util::eraseHeterogeneous(g_builtinEnvVars, name);
+        agentxx::util::ApplicationEnv::instance().remove(name);
     } else {
-        util::insertOrAssignHeterogeneous(g_builtinEnvVars, name, std::move(value));
+        agentxx::util::ApplicationEnv::instance().set(name, std::move(value));
     }
 }
 
@@ -118,10 +118,9 @@ void setBuiltinEnvVar(std::string_view name, std::string value) {
 /// - AGENTXX_EXEC_DIR: 可执行程序所在目录
 ///   (仅 main 入口注入; 未注入时无法惰性推导, 返回 nullopt 保留 ${VAR} 原样)
 static std::optional<std::string> resolveBuiltinEnvVar(std::string_view varName) {
-    // 已注入的内置变量: 直接取值
-    auto it = g_builtinEnvVars.find(varName);
-    if (it != g_builtinEnvVars.end()) {
-        return it->second;
+    // 已注入的内置变量: 直接取值 (经全局单例 ApplicationEnv 预设存储)
+    if (auto preset = agentxx::util::ApplicationEnv::instance().getPreset(varName)) {
+        return preset;
     }
     // 未注入 (测试/嵌入场景): 各内置变量按自身语义惰性解析
     if (varName == kBuiltinWorkDirEnv) {
@@ -186,10 +185,9 @@ std::string resolveEnvVars(
             result.append(dotIt->second);
             continue;
         }
-        // 系统环境变量
-        const char* envVal = std::getenv(varName.c_str());
-        if (envVal != nullptr) {
-            result.append(envVal);
+        // 系统环境变量 (经全局单例 ApplicationEnv 统一封装: 预设 -> 系统, Windows 使用 _dupenv_s 消除 C4996)
+        if (auto envVal = agentxx::util::ApplicationEnv::instance().get(varName)) {
+            result.append(*envVal);
             continue;
         }
         // 均未找到: 保留 ${VAR} 原样
