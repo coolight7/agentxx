@@ -62,6 +62,22 @@ struct Topic {
     /// - 任一 agent (含 subagent) 可向指定 agentName 发起查询
     /// - 目标 agent 的持有者 (AgentHost) 应答
     inline static constexpr std::string_view CrossAgent{"service.crossagent"};
+
+    /// 工具执行权限检查: ReqToolPermissionCheck / RespToolPermissionCheck
+    inline static constexpr std::string_view ToolPermissionCheck{"service.permission.check"};
+
+    /// 文件系统权限规则设置 (单向事件): EventSetPermissionRule
+    inline static constexpr std::string_view PermissionSetRule{"service.permission.set_rule"};
+
+    /// 每会话文件系统隔离边界设置/清除 (单向事件): EventSetSessionIsolation / EventClearSessionIsolation
+    inline static constexpr std::string_view PermissionSetIsolation{"service.permission.set_isolation"};
+    inline static constexpr std::string_view PermissionClearIsolation{"service.permission.clear_isolation"};
+
+    /// subagent 工具执行 (请求-响应): ReqSubagentExecute / RespSubagentExecute
+    inline static constexpr std::string_view SubagentExecute{"service.subagent.execute"};
+
+    /// 文本 Token 估算服务 (同步服务): service.token.count
+    inline static constexpr std::string_view TokenCount{"service.token.count"};
 };
 
 /// ===== agent 生命周期 =====
@@ -300,6 +316,53 @@ struct RespSubagentBatchItem {
 
 struct RespSubagentBatch {
     std::vector<RespSubagentBatchItem> results;
+};
+
+/// ===== 权限检查与规则设置 =====
+
+/// 工具执行权限检查 (service.permission.check)
+struct ReqToolPermissionCheck {
+    std::string    agentName;
+    std::string    sessionId;
+    std::string    toolName;
+    neograph::json arguments;
+};
+
+struct RespToolPermissionCheck {
+    bool        allow = true;
+    std::string reason;
+};
+
+/// 权限规则设置 (service.permission.set_rule)
+struct EventSetPermissionRule {
+    std::string path;
+    bool        allow = false;
+    size_t      index = 0; // 0 = read, 1 = write
+};
+
+/// 会话文件系统隔离设置 (service.permission.set_isolation)
+struct EventSetSessionIsolation {
+    std::string sessionId;
+    std::string allowPath;
+    std::string denyWritePath;
+};
+
+/// 会话文件系统隔离清除 (service.permission.clear_isolation)
+struct EventClearSessionIsolation {
+    std::string sessionId;
+};
+
+/// ===== subagent 工具执行 =====
+
+/// subagent 工具执行请求/响应 (service.subagent.execute)
+struct ReqSubagentExecute {
+    neograph::json arguments;
+};
+
+struct RespSubagentExecute {
+    std::string result;
+    bool        hasError = false;
+    std::string errorMessage;
 };
 
 } // namespace events

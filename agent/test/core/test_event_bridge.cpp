@@ -518,12 +518,14 @@ asio::awaitable<void> test_eventbridge_node_delta() {
 /// 验证 ModelCall 流式期间 tps 统计:
 /// - 从首个 token (节点开始后) 计时, 每 [tpsPushIntervalSec_] 秒推送一次平均速度
 /// - 间隔未到不推送; 新流 (NODE_START 后) 重新计时
-/// - token 估算复用 AgentContext::summarizationMiddleware 的 countTokensForUtf8Str 口径
+/// - token 估算复用 EventBus 上注册的 TokenCount 服务
 asio::awaitable<void> test_eventbridge_tps() {
     auto agentContext = std::make_shared<agentxx::agent::AgentContext>();
+    agentContext->bus = std::make_shared<agentxx::event::EventBus>(co_await asio::this_coro::executor);
     // 注入 summarization 中间件: countTokens 应复用其 token 计算口径
-    agentContext->summarizationMiddleware
+    auto summarizationMiddleware
         = std::make_shared<agentxx::middleware::SummarizationMiddlewareHandle>(agentContext);
+    summarizationMiddleware->registerOnBus(agentContext->bus);
     auto session = std::make_shared<agentxx::agent::Session>();
     auto io      = std::make_shared<TestEbIO>();
 
@@ -589,8 +591,10 @@ asio::awaitable<void> test_eventbridge_tps() {
 /// - 新轮次无 LLM 输出直接结束 → 0
 asio::awaitable<void> test_eventbridge_turn_tps() {
     auto agentContext = std::make_shared<agentxx::agent::AgentContext>();
-    agentContext->summarizationMiddleware
+    agentContext->bus = std::make_shared<agentxx::event::EventBus>(co_await asio::this_coro::executor);
+    auto summarizationMiddleware
         = std::make_shared<agentxx::middleware::SummarizationMiddlewareHandle>(agentContext);
+    summarizationMiddleware->registerOnBus(agentContext->bus);
     auto session = std::make_shared<agentxx::agent::Session>();
     auto io      = std::make_shared<TestEbIO>();
 

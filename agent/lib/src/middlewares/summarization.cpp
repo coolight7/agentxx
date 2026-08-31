@@ -1,6 +1,8 @@
 #include "agentxx/middlewares/summarization.h"
 
 #include "agentxx/agent/model_registry.h"
+#include "agentxx/event/event_stream.h"
+#include "agentxx/event/events.h"
 #include "agentxx/tools/subagent.h"
 #include "agentxx/util/exception.h"
 #include "fmt/format.h"
@@ -413,7 +415,7 @@ asio::awaitable<std::string> SummarizationMiddlewareHandle::doSummarizeWithLLM(
 ) {
     auto agentCtxPtr = agentContext.lock();
     if (nullptr == agentCtxPtr || nullptr == agentCtxPtr->agentConfig
-        || nullptr == agentCtxPtr->subagentManagerToolPtr) {
+        || nullptr == agentCtxPtr->bus) {
         co_return std::string{};
     }
     if (messages.empty()) {
@@ -497,7 +499,21 @@ asio::awaitable<std::string> SummarizationMiddlewareHandle::doSummarizeWithLLM(
         [&]() -> asio::awaitable<std::string> {
             // NodeInterrupt 会被 catchErrorAsync 放行 (中断/取消不捕获),
             // 传播到引擎后由 Session 派生 subagent, resume 后返回结果
-            co_return co_await agentCtxPtr->subagentManagerToolPtr->execute_async(args);
+            auto resp = co_await agentCtxPtr->bus
+                            ->request<events::ReqSubagentExecute, events::RespSubagentExecute>(
+                                events::Topic::SubagentExecute,
+                                events::ReqSubagentExecute{.arguments = std::move(args)},
+                                std::chrono::milliseconds{0}
+                            );
+            if (!resp.has_value()) {
+                XX_LOGE("SummarizationMiddlewareHandle 压缩 subagent 请求失败: {}", resp.error());
+                co_return "";
+            }
+            if (resp->hasError) {
+                XX_LOGE("SummarizationMiddlewareHandle 压缩 subagent 执行失败: {}", resp->errorMessage);
+                co_return "";
+            }
+            co_return resp->result;
         },
         [](std::string errmsg) -> asio::awaitable<std::string> {
             XX_LOGE("SummarizationMiddlewareHandle 压缩 subagent 调用失败: {}", errmsg);
@@ -741,6 +757,34 @@ asio::awaitable<void>
     }
 
     co_return;
+}
+
+SummarizationMiddlewareHandle::~SummarizationMiddlewareHandle() {
+    unregisterFromBus();
+}
+
+void SummarizationMiddlewareHandle::registerOnBus(
+    const std::shared_ptr<agentxx::event::EventBus>& bus
+) {
+    if (!bus) {
+        return;
+    }
+    unregisterFromBus();
+    registeredBus_ = bus;
+
+    bus->registerService<size_t(std::string_view)>(
+        events::Topic::TokenCount,
+        [this](std::string_view text) -> size_t {
+            return this->countTokensForUtf8Str(text);
+        }
+    );
+}
+
+void SummarizationMiddlewareHandle::unregisterFromBus() {
+    if (auto bus = registeredBus_.lock()) {
+        bus->unregisterService(events::Topic::TokenCount);
+    }
+    registeredBus_.reset();
 }
 
 } // namespace middleware

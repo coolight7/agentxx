@@ -2,6 +2,7 @@
 #include "agentxx/agent/model_registry.h"
 #include "agentxx/agent/session_store.h"
 #include "agentxx/plugin/plugin_manager.h"
+#include "agentxx/tools/subagent.h"
 #include "agentxx/util/container_util.h"
 #include "agentxx/util/log.h"
 #include <chrono>

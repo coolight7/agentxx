@@ -5,9 +5,10 @@
 #include "agentxx/agent/config_static.h"
 #include "agentxx/agent/io/session_server_agent_io.h"
 #include "agentxx/agent/session_store.h"
+#include "agentxx/middlewares/permission.h"
 #include "agentxx/middlewares/summarization.h"
 #include "agentxx/plugin/plugin_manager.h"
-#include "agentxx/tools/subagent_shared.h"
+#include "agentxx/tools/subagent.h"
 #include "agentxx/util/diff_util.h"
 #include "agentxx/util/exception.h"
 #include "agentxx/util/string_util.h"
@@ -118,8 +119,7 @@ static void checkToolSchemaValidity(
                 schema.contains("type") ? schema["type"].dump() : "<missing>"
             );
         }
-    } else if (schema.contains("type") && schema["type"].is_string()
-               && schema["type"].get<std::string>() == "array") {
+    } else if (schema.contains("type") && schema["type"].is_string() && schema["type"].get<std::string>() == "array") {
         // array 类型必须带 items (Gemini 缺 items 报 "missing field")
         XX_LOGE(
             "Tool `{}` schema `{}`: type \"array\" must have an \"items\" field; "
@@ -470,6 +470,125 @@ neograph::json BaseAgent::initGraphDefinition() {
 }
 
 asio::awaitable<void> BaseAgent::initMiddleware() {
+    auto config = agentContext->agentConfig;
+    {
+        agentContext->subagentManager = std::make_unique<agentxx::tools::SubAgentManagerTool>(
+            "subagent_manager",
+            agentContext
+        );
+        const auto nodeName = std::string{"subagent_task"};
+        agentContext->subagentManager->subAgentList.insert(std::make_pair(
+            nodeName,
+            std::make_shared<agentxx::tools::SubAgentNormalTask>(
+                nodeName,
+                R"(Create a isolation messages context sub agent to exec. (need system prompt))"
+            )
+        ));
+        agentContext->subagentManager->registerOnBus(agentContext->bus);
+    }
+
+    {
+        // 上下文压缩 (summarization) 中间件: 由 AgentConfig::enableSummarization 控制
+        // - 子代理默认继承父配置; summarization 发起的压缩子代理显式关闭,
+        //   避免对透传的上下文前缀二次压缩 (破坏 KV/prefix cache 一致性)
+        if (config->enableSummarization) {
+            auto summarizationMiddleware
+                = std::make_shared<agentxx::middleware::SummarizationMiddlewareHandle>(agentContext
+                );
+            summarizationMiddleware->registerOnBus(agentContext->bus);
+            agentContext->middlewareHandleContext->handles.push_back(summarizationMiddleware);
+        }
+    }
+
+    {
+        auto permission
+            = std::make_shared<agentxx::middleware::PermissionMiddlewareHandle>(agentContext);
+        // 权限规则注册 (按 yaml 配置 permission 块: mode / whitelist / blacklist,
+        // 读写均注册同一套规则):
+        // - 白名单: 始终放行 (最长前缀匹配, 支持 * 通配符)
+        // - 黑名单: 始终拒绝 (与白名单同路径时后注册覆盖白名单, 优先生效)
+        // - 模式默认规则经 noRuleOperator 生效 (未命中任何已注册规则时的
+        //   兜底处理, 见 PermissionMiddlewareHandle::noRuleOperator):
+        //   ask=工作目录内 ALLOW + 其余 INTERRUPT / all_ask=INTERRUPT /
+        //   pass=ALLOW / deny=DENY
+        // 注: 不依赖 "/*" 兜底规则 — 路由最长前缀回退到深层注册子树 (如白名单
+        // 目录) 时不会命中根节点 "/*" 规则, 必须由 noRuleOperator 保证语义
+        for (const auto& p : config->permissionAllowPaths) {
+            permission->setFilesystemPermission(
+                p,
+                agentxx::middleware::PermissionOperator::ALLOW,
+                agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionWRITE
+            );
+            permission->setFilesystemPermission(
+                p,
+                agentxx::middleware::PermissionOperator::ALLOW,
+                agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionREAD
+            );
+        }
+        for (const auto& p : config->permissionDenyPaths) {
+            permission->setFilesystemPermission(
+                p,
+                agentxx::middleware::PermissionOperator::DENY,
+                agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionWRITE
+            );
+            permission->setFilesystemPermission(
+                p,
+                agentxx::middleware::PermissionOperator::DENY,
+                agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionREAD
+            );
+        }
+        switch (config->permissionMode) {
+            case agentxx::agent::PermissionMode::Pass:
+                // 全部放行: 无规则即放行
+                permission->noRuleOperator = agentxx::middleware::PermissionOperator::ALLOW;
+                break;
+            case agentxx::agent::PermissionMode::Deny:
+                // 全部拒绝: 无规则即拒绝
+                permission->noRuleOperator = agentxx::middleware::PermissionOperator::DENY;
+                break;
+            case agentxx::agent::PermissionMode::AllAsk:
+                // 所有路径均询问: 无规则即询问
+                permission->noRuleOperator = agentxx::middleware::PermissionOperator::INTERRUPT;
+                break;
+            case agentxx::agent::PermissionMode::Ask:
+            default:
+                // 会话工作目录内允许, 其他路径询问
+                // - 工作目录取 AgentConfig::workDir (yaml work_dir; 未配置回退进程
+                //   cwd), 使嵌入多实例/远程 server 场景下权限边界跟随会话配置而非
+                //   进程启动目录
+                // - 工作目录获取失败 (返回空串) 时不注册默认放行规则, 所有路径
+                //   均询问 (安全兜底: 注册根目录 "/" 会退化为放行所有路径)
+                {
+                    const auto workPath = config->resolvedWorkDir();
+                    if (workPath.empty()) {
+                        XX_LOGW("PermissionMode::Ask: getCurrentWorkPath failed, "
+                                "no default allow rule registered, all paths will be asked");
+                    } else {
+                        // 注册工作目录本身: 权限路由最长前缀回退 (prefix_fallback)
+                        // 使其下任意子路径均命中此规则 (与 "{workPath}/*" 等价且
+                        // 额外覆盖对工作目录自身的访问, 如列出工作目录)
+                        permission->setFilesystemPermission(
+                            workPath,
+                            agentxx::middleware::PermissionOperator::ALLOW,
+                            agentxx::middleware::PermissionMiddlewareHandle::
+                                FilesystemPermissionWRITE
+                        );
+                        permission->setFilesystemPermission(
+                            workPath,
+                            agentxx::middleware::PermissionOperator::ALLOW,
+                            agentxx::middleware::PermissionMiddlewareHandle::
+                                FilesystemPermissionREAD
+                        );
+                    }
+                }
+                permission->noRuleOperator = agentxx::middleware::PermissionOperator::INTERRUPT;
+                break;
+        }
+        // 注册 tool 名 -> 权限处理函数; 未调用则 handles 为空, 权限拦截不会触发
+        permission->registerHandles();
+        permission->registerOnBus(agentContext->bus);
+        agentContext->middlewareHandleContext->handles.push_back(permission);
+    }
     co_return;
 }
 
@@ -478,6 +597,13 @@ asio::awaitable<std::vector<std::unique_ptr<agentxx::tools::XXToolBase>>> BaseAg
     tools.push_back(std::make_unique<agentxx::tools::SessionShareStoreTool>(agentContext));
     // agentxx_get_current_datetime 已迁移至 agentxx_system 插件 (同名同行为,
     // 经 PluginManager 注册)
+
+    {
+        // TODO: 启用 subagent toolcall
+        // if (config->enableSubagent) {
+        //     tools.push_back(std::move(subagentManagerTool_));
+        // }
+    }
     co_return tools;
 }
 

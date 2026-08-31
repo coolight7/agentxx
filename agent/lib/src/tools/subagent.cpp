@@ -1,6 +1,8 @@
 #include "agentxx/tools/subagent.h"
 
-#include "agentxx/tools/subagent_shared.h"
+#include "agentxx/event/event_stream.h"
+#include "agentxx/event/events.h"
+#include "agentxx/util/exception.h"
 #include "fmt/format.h"
 #include <map>
 #include <memory>
@@ -462,6 +464,54 @@ asio::awaitable<std::string> SubAgentManagerTool::execute_async(const neograph::
         co_return result.get<std::string>();
     }
     co_return result.dump();
+}
+
+SubAgentManagerTool::~SubAgentManagerTool() {
+    unregisterFromBus();
+}
+
+void SubAgentManagerTool::registerOnBus(const std::shared_ptr<agentxx::event::EventBus>& bus) {
+    if (!bus) {
+        return;
+    }
+    unregisterFromBus();
+    registeredBus_ = bus;
+
+    executeServerId_
+        = bus->getRR<events::ReqSubagentExecute, events::RespSubagentExecute>(
+                 events::Topic::SubagentExecute
+        )
+              .registerServer(
+                  [this](const events::ReqSubagentExecute& req, size_t)
+                      -> asio::awaitable<events::RespSubagentExecute> {
+                      co_return co_await agentxx::util::catchErrorAsync<
+                          events::RespSubagentExecute>(
+                          [&]() -> asio::awaitable<events::RespSubagentExecute> {
+                              auto res = co_await this->execute_async(req.arguments);
+                              co_return events::RespSubagentExecute{.result = std::move(res)};
+                          },
+                          [](std::string errmsg) -> asio::awaitable<events::RespSubagentExecute> {
+                              co_return events::RespSubagentExecute{
+                                  .hasError     = true,
+                                  .errorMessage = std::move(errmsg),
+                              };
+                          }
+                      );
+                  }
+              );
+}
+
+void SubAgentManagerTool::unregisterFromBus() {
+    if (auto bus = registeredBus_.lock()) {
+        if (executeServerId_ != 0) {
+            bus->getRR<events::ReqSubagentExecute, events::RespSubagentExecute>(
+                   events::Topic::SubagentExecute
+            )
+                .unregisterServer(executeServerId_);
+            executeServerId_ = 0;
+        }
+    }
+    registeredBus_.reset();
 }
 
 }; // namespace tools

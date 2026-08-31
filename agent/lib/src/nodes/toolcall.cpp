@@ -1,6 +1,7 @@
 #include "agentxx/nodes/toolcall.h"
 
-#include "agentxx/middlewares/permission.h"
+#include "agentxx/event/event_stream.h"
+#include "agentxx/event/events.h"
 #include "agentxx/plugin/tool_registry.h"
 #include "agentxx/tools/tool.h"
 #include "agentxx/util/log.h"
@@ -508,14 +509,23 @@ asio::awaitable<std::string> ToolcallWrapNode::execTool(
         }
     }
     {
-        // 权限检查 (permissionMiddleware 默认 nullptr, 未配置权限中间件时跳过)
-        if (agentCtxPtr && agentCtxPtr->permissionMiddleware) {
-            auto it = agentCtxPtr->permissionMiddleware->handles.find(tool->get_name());
-            if (it != agentCtxPtr->permissionMiddleware->handles.end()) {
-                auto allow = co_await it->second(*tool, args);
-                if (false == allow) {
-                    co_return "[Permission denied]";
-                }
+        // 权限检查 (经 EventBus 请求 service.permission.check, 未配置权限服务时默认放行)
+        if (agentCtxPtr && agentCtxPtr->bus) {
+            auto resp = co_await agentCtxPtr->bus
+                            ->request<events::ReqToolPermissionCheck, events::RespToolPermissionCheck>(
+                                events::Topic::ToolPermissionCheck,
+                                events::ReqToolPermissionCheck{
+                                    .agentName = agentCtxPtr->agentConfig
+                                                     ? agentCtxPtr->agentConfig->agentName
+                                                     : std::string{},
+                                    .sessionId = args.value("sessionId", std::string{}),
+                                    .toolName  = tool->get_name(),
+                                    .arguments = args,
+                                },
+                                std::chrono::milliseconds{0}
+                            );
+            if (resp.has_value() && !resp->allow) {
+                co_return "[Permission denied]";
             }
         }
     }

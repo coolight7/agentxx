@@ -490,15 +490,29 @@ asio::awaitable<void> test_agent_permission_mode_rules() {
     constexpr size_t kWriteIndex
         = agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionWRITE;
 
-    // 检查辅助: 走权限中间件判定指定路径的写权限
-    auto check = [&](std::shared_ptr<agentxx::middleware::PermissionMiddlewareHandle> perm,
-                     std::string_view                                                 path,
-                     const std::string& sessionId) -> asio::awaitable<bool> {
+    // 检查辅助: 走 EventBus 请求权限检查
+    auto check = [&](agentxx::agent::CodeAgent& agent,
+                     std::string_view          path,
+                     const std::string&        sessionId) -> asio::awaitable<bool> {
         auto args = neograph::json{
             {"path",      std::string{path}},
             {"sessionId", sessionId        }
         };
-        co_return co_await perm->defOnFilesystemHandle(tool, args, kWriteIndex);
+        auto resp = co_await agent.agentContext->bus
+                        ->request<agentxx::events::ReqToolPermissionCheck, agentxx::events::RespToolPermissionCheck>(
+                            agentxx::events::Topic::ToolPermissionCheck,
+                            agentxx::events::ReqToolPermissionCheck{
+                                .agentName = agent.agentContext->agentConfig->agentName,
+                                .sessionId = sessionId,
+                                .toolName  = "agentxx_filesystem_write",
+                                .arguments = std::move(args),
+                            },
+                            std::chrono::milliseconds{0}
+                        );
+        if (!resp.has_value()) {
+            co_return false;
+        }
+        co_return resp->allow;
     };
 
     // ---- 模式 ask: 工作目录内允许, 其他询问 ----
@@ -510,8 +524,6 @@ asio::awaitable<void> test_agent_permission_mode_rules() {
 
         agentxx::agent::CodeAgent agent(cfg);
         co_await agent.init();
-        auto perm = agent.agentContext->permissionMiddleware;
-        XX_TEST_EXPECT_TRUE(perm != nullptr);
 
         auto session = agent.agentContext->getSession("perm_ask");
         auto bus = std::make_shared<agentxx::event::EventBus>(co_await asio::this_coro::executor);
@@ -520,7 +532,7 @@ asio::awaitable<void> test_agent_permission_mode_rules() {
         session->bus = bus;
 
         // 工作目录内: 直接允许, 不询问
-        bool ok = co_await check(perm, insidePath, "perm_ask");
+        bool ok = co_await check(agent, insidePath, "perm_ask");
         XX_TEST_EXPECT_TRUE(ok);
         XX_TEST_EXPECT_EQ(io->permissionCalls.load(), 0);
 #if XX_IS_WIN_D
@@ -535,21 +547,21 @@ asio::awaitable<void> test_agent_permission_mode_rules() {
             }
         }
         if (mixedCasePath != insidePath) {
-            ok = co_await check(perm, mixedCasePath, "perm_ask");
+            ok = co_await check(agent, mixedCasePath, "perm_ask");
             XX_TEST_EXPECT_TRUE(ok);
             XX_TEST_EXPECT_EQ(io->permissionCalls.load(), 0);
         }
 #endif
         // 白名单 (工作目录内 trusted 子目录): 允许, 不询问
-        ok = co_await check(perm, trustedPath, "perm_ask");
+        ok = co_await check(agent, trustedPath, "perm_ask");
         XX_TEST_EXPECT_TRUE(ok);
         XX_TEST_EXPECT_EQ(io->permissionCalls.load(), 0);
         // 黑名单 (工作目录内 secret 子目录): 拒绝, 不询问 (黑名单优先于模式 ALLOW)
-        ok = co_await check(perm, secretPath, "perm_ask");
+        ok = co_await check(agent, secretPath, "perm_ask");
         XX_TEST_EXPECT_FALSE(ok);
         XX_TEST_EXPECT_EQ(io->permissionCalls.load(), 0);
         // 工作目录外: 询问 (prompter 允许 → 放行)
-        ok = co_await check(perm, outsidePath, "perm_ask");
+        ok = co_await check(agent, outsidePath, "perm_ask");
         XX_TEST_EXPECT_TRUE(ok);
         XX_TEST_EXPECT_EQ(io->permissionCalls.load(), 1);
     }
@@ -561,7 +573,6 @@ asio::awaitable<void> test_agent_permission_mode_rules() {
 
         agentxx::agent::CodeAgent agent(cfg);
         co_await agent.init();
-        auto perm = agent.agentContext->permissionMiddleware;
 
         auto session = agent.agentContext->getSession("perm_allask");
         auto bus = std::make_shared<agentxx::event::EventBus>(co_await asio::this_coro::executor);
@@ -570,9 +581,9 @@ asio::awaitable<void> test_agent_permission_mode_rules() {
         session->bus = bus;
 
         // 工作目录内/外均询问
-        bool ok = co_await check(perm, insidePath, "perm_allask");
+        bool ok = co_await check(agent, insidePath, "perm_allask");
         XX_TEST_EXPECT_TRUE(ok);
-        ok = co_await check(perm, outsidePath, "perm_allask");
+        ok = co_await check(agent, outsidePath, "perm_allask");
         XX_TEST_EXPECT_TRUE(ok);
         XX_TEST_EXPECT_EQ(io->permissionCalls.load(), 2);
     }
@@ -584,7 +595,6 @@ asio::awaitable<void> test_agent_permission_mode_rules() {
 
         agentxx::agent::CodeAgent agent(cfg);
         co_await agent.init();
-        auto perm = agent.agentContext->permissionMiddleware;
 
         auto session = agent.agentContext->getSession("perm_pass");
         auto bus = std::make_shared<agentxx::event::EventBus>(co_await asio::this_coro::executor);
@@ -592,9 +602,9 @@ asio::awaitable<void> test_agent_permission_mode_rules() {
         io->registerOnBus(bus);
         session->bus = bus;
 
-        bool ok = co_await check(perm, outsidePath, "perm_pass");
+        bool ok = co_await check(agent, outsidePath, "perm_pass");
         XX_TEST_EXPECT_TRUE(ok);
-        ok = co_await check(perm, secretPath, "perm_pass");
+        ok = co_await check(agent, secretPath, "perm_pass");
         XX_TEST_EXPECT_TRUE(ok);
         XX_TEST_EXPECT_EQ(io->permissionCalls.load(), 0);
     }
@@ -607,7 +617,6 @@ asio::awaitable<void> test_agent_permission_mode_rules() {
 
         agentxx::agent::CodeAgent agent(cfg);
         co_await agent.init();
-        auto perm = agent.agentContext->permissionMiddleware;
 
         auto session = agent.agentContext->getSession("perm_deny");
         auto bus = std::make_shared<agentxx::event::EventBus>(co_await asio::this_coro::executor);
@@ -616,13 +625,13 @@ asio::awaitable<void> test_agent_permission_mode_rules() {
         session->bus = bus;
 
         // 工作目录内/外均拒绝, 不询问
-        bool ok = co_await check(perm, insidePath, "perm_deny");
+        bool ok = co_await check(agent, insidePath, "perm_deny");
         XX_TEST_EXPECT_FALSE(ok);
-        ok = co_await check(perm, outsidePath, "perm_deny");
+        ok = co_await check(agent, outsidePath, "perm_deny");
         XX_TEST_EXPECT_FALSE(ok);
         XX_TEST_EXPECT_EQ(io->permissionCalls.load(), 0);
         // 白名单路径: deny 模式下仍放行 (白名单优先于模式默认规则)
-        ok = co_await check(perm, trustedPath, "perm_deny");
+        ok = co_await check(agent, trustedPath, "perm_deny");
         XX_TEST_EXPECT_TRUE(ok);
         XX_TEST_EXPECT_EQ(io->permissionCalls.load(), 0);
     }

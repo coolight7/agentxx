@@ -1,6 +1,7 @@
 #include "agentxx/tools/git_worktree.h"
 
-#include "agentxx/middlewares/permission.h"
+#include "agentxx/event/event_stream.h"
+#include "agentxx/event/events.h"
 #include "agentxx/util/async_offload.h"
 #include "agentxx/util/string_util.h"
 #include "agentxx/util/worktree.h"
@@ -62,12 +63,19 @@ void bindSession(
         .repoRoot = repoRootDir,
     });
     // 权限隔离: 主检出子树写 DENY / worktree 子树放行。
-    // 路径为绝对路径, normalizePermissionPath 单参版本即可 (基准仅影响相对路径)
-    if (ctx->permissionMiddleware) {
-        agentxx::middleware::SessionFsIsolation iso;
-        iso.allowPath     = ctx->permissionMiddleware->normalizePermissionPath(path);
-        iso.denyWritePath = ctx->permissionMiddleware->normalizePermissionPath(repoRootDir);
-        ctx->permissionMiddleware->setSessionIsolation(sessionId, std::move(iso));
+    if (ctx->bus) {
+        asio::co_spawn(
+            ctx->bus->executor(),
+            ctx->bus->publish<events::EventSetSessionIsolation>(
+                events::Topic::PermissionSetIsolation,
+                events::EventSetSessionIsolation{
+                    .sessionId     = sessionId,
+                    .allowPath     = path,
+                    .denyWritePath = repoRootDir,
+                }
+            ),
+            asio::detached
+        );
     }
 }
 
@@ -80,8 +88,17 @@ void unbindSession(
     if (session && !session->getWorktreeBinding().path.empty()) {
         session->clearWorktreeBinding();
     }
-    if (ctx->permissionMiddleware) {
-        ctx->permissionMiddleware->clearSessionIsolation(sessionId);
+    if (ctx->bus) {
+        asio::co_spawn(
+            ctx->bus->executor(),
+            ctx->bus->publish<events::EventClearSessionIsolation>(
+                events::Topic::PermissionClearIsolation,
+                events::EventClearSessionIsolation{
+                    .sessionId = sessionId,
+                }
+            ),
+            asio::detached
+        );
     }
 }
 

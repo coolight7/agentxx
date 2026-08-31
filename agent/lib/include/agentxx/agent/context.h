@@ -14,10 +14,6 @@
 #include <thread>
 #include <vector>
 
-namespace agentxx::middleware {
-class EventBus;
-} // namespace agentxx::middleware
-
 namespace agentxx::event {
 class EventBus;
 } // namespace agentxx::event
@@ -29,10 +25,6 @@ class CancelToken;
 namespace agentxx {
 namespace middleware {
 class MiddlewareContext;
-class PermissionMiddlewareHandle;
-class EventBus;
-class SummarizationMiddlewareHandle;
-class PlanningMiddlewareHandle;
 } // namespace middleware
 
 namespace plugin {
@@ -412,17 +404,7 @@ public:
 
     std::shared_ptr<agentxx::agent::AgentConfig>            agentConfig             = nullptr;
     std::shared_ptr<agentxx::middleware::MiddlewareContext> middlewareHandleContext = nullptr;
-
-    // TODO: 用 eventbus 隔离
-    std::shared_ptr<agentxx::middleware::PermissionMiddlewareHandle> permissionMiddleware = nullptr;
-    agentxx::tools::SubAgentManagerTool* subagentManagerToolPtr                           = nullptr;
-
-    /// 上下文压缩 (summarization) 中间件
-    /// - 供 压缩 或 EventBridge 等复用其 token 估算口径 (countTokensForUtf8Str),
-    ///   保证 tps/上下文统计与压缩判定使用一致的 token 计算
-    std::shared_ptr<agentxx::middleware::SummarizationMiddlewareHandle> summarizationMiddleware
-        = nullptr;
-
+    std::unique_ptr<agentxx::tools::SubAgentManagerTool>    subagentManager         = nullptr;
     /// 事件总线
     /// - 由 BaseAgent 在 init() 中创建并注入; 节点/middleware/tool 经
     ///   weak_ptr<AgentContext> 取用

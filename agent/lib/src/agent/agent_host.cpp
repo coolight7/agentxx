@@ -2,8 +2,9 @@
 
 #include "agentxx/agent/agent_runner.h"
 #include "agentxx/agent/code_agent.h"
+#include "agentxx/event/event_stream.h"
 #include "agentxx/protocol/a2a_client.h"
-#include "agentxx/tools/subagent_shared.h"
+#include "agentxx/tools/subagent.h"
 #include "agentxx/util/container_util.h"
 #include "agentxx/util/exception.h"
 #include "agentxx/util/log.h"
@@ -375,8 +376,7 @@ asio::awaitable<events::RespSubagentBatchItem> AgentHost::spawnOneTask(
             if (task.tools->empty()) {
                 // []: 无工具 (纯文本回答)
                 XX_LOGD("spawnOneTask `{}`: tool policy = none", subagentName);
-            } else if (task.tools->size() == 1 && (*task.tools)[0].is_string()
-                       && (*task.tools)[0].get<std::string>() == "*") {
+            } else if (task.tools->size() == 1 && (*task.tools)[0].is_string() && (*task.tools)[0].get<std::string>() == "*") {
                 // ["*"]: 全量继承父 agent 工具 (解析为父工具名白名单;
                 // 子代理未创建的父工具名自然跳过, 不报错)
                 if (rootAgent_ && rootAgent_->getContext()) {

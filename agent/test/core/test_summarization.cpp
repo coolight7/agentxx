@@ -20,6 +20,7 @@
 #include "test_summarization.h"
 
 #include "agentxx/agent/model_registry.h"
+#include "agentxx/event/event_stream.h"
 #include "agentxx/middlewares/middleware.h"
 #include "agentxx/middlewares/summarization.h"
 #include "agentxx/tools/subagent.h"
@@ -106,6 +107,8 @@ struct SummarizationTestEnv {
         double in_recentRatio           = 0.03
     ) {
         ctx                          = std::make_shared<agentxx::agent::AgentContext>();
+        static asio::io_context s_ioCtx;
+        ctx->bus                     = std::make_shared<agentxx::event::EventBus>(s_ioCtx.get_executor());
         ctx->agentConfig             = std::make_shared<agentxx::agent::AgentConfig>();
         ctx->middlewareHandleContext = std::make_shared<agentxx::middleware::MiddlewareContext>();
         ctx->modelRegistry           = std::make_shared<agentxx::agent::ModelProviderRegistry>();
@@ -140,7 +143,7 @@ struct SummarizationTestEnv {
 
         // 伪造 subagent 管理器 (压缩走 subagent 路径)
         subagent = std::make_shared<FakeSubAgentManagerTool>("fake_subagent", ctx);
-        ctx->subagentManagerToolPtr = subagent.get();
+        subagent->registerOnBus(ctx->bus);
 
         handle = std::make_shared<agentxx::middleware::SummarizationMiddlewareHandle>(
             ctx,
@@ -519,8 +522,8 @@ asio::awaitable<TestResult> run_summarization_tests() {
     {
         // --- A. 无 subagentManager → 返回空串 (降级为不压缩) ---
         {
-            auto env                         = std::make_shared<SummarizationTestEnv>();
-            env->ctx->subagentManagerToolPtr = nullptr;
+            auto env = std::make_shared<SummarizationTestEnv>();
+            env->subagent->unregisterFromBus();
             std::vector<neograph::ChatMessage> msgs{makeMsg("user", "hi")};
             auto r = co_await env->handle->doSummarizeWithLLM(env->sessionId, msgs);
             XX_TEST_EXPECT_EQ(r, std::string{""});
@@ -1598,6 +1601,8 @@ asio::awaitable<TestResult> run_summarization_tests() {
     // - 预置 interruptResult 后再次调用 → 返回摘要文本
     {
         auto ctx                     = std::make_shared<agentxx::agent::AgentContext>();
+        static asio::io_context s_ioCtx;
+        ctx->bus                     = std::make_shared<agentxx::event::EventBus>(s_ioCtx.get_executor());
         ctx->agentConfig             = std::make_shared<agentxx::agent::AgentConfig>();
         ctx->middlewareHandleContext = std::make_shared<agentxx::middleware::MiddlewareContext>();
         ctx->modelRegistry           = std::make_shared<agentxx::agent::ModelProviderRegistry>();
@@ -1611,11 +1616,11 @@ asio::awaitable<TestResult> run_summarization_tests() {
         // 真实 SubAgentManagerTool + 注册 CodeAgent 默认的 subagent_task
         auto realTool
             = std::make_shared<agentxx::tools::SubAgentManagerTool>("subagent_manager", ctx);
+        realTool->registerOnBus(ctx->bus);
         realTool->subAgentList.insert(std::make_pair(
             "subagent_task",
             std::make_shared<agentxx::tools::SubAgentNormalTask>("subagent_task", "isolation")
         ));
-        ctx->subagentManagerToolPtr = realTool.get();
 
         const std::string sid = "sum_real_tool_thread";
         ctx->sessions->getOrCreate(sid);

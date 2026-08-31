@@ -42,105 +42,27 @@ CodeAgent::CodeAgent(std::shared_ptr<agentxx::agent::AgentConfig> in_config) :
 CodeAgent::~CodeAgent() = default;
 
 asio::awaitable<void> CodeAgent::initMiddleware() {
+    co_await BaseAgent::initMiddleware();
+
     auto config = agentContext->agentConfig;
 
-    if (config->enableSubagent) {
-        subagentManagerTool_ = std::make_unique<agentxx::tools::SubAgentManagerTool>(
-            "subagent_manager",
-            agentContext
-        );
-        agentContext->subagentManagerToolPtr = subagentManagerTool_.get();
-    }
-
     {
-        auto permission
-            = std::make_shared<agentxx::middleware::PermissionMiddlewareHandle>(agentContext);
-        // 权限规则注册 (按 yaml 配置 permission 块: mode / whitelist / blacklist,
-        // 读写均注册同一套规则):
-        // - 白名单: 始终放行 (最长前缀匹配, 支持 * 通配符)
-        // - 黑名单: 始终拒绝 (与白名单同路径时后注册覆盖白名单, 优先生效)
-        // - 模式默认规则经 noRuleOperator 生效 (未命中任何已注册规则时的
-        //   兜底处理, 见 PermissionMiddlewareHandle::noRuleOperator):
-        //   ask=工作目录内 ALLOW + 其余 INTERRUPT / all_ask=INTERRUPT /
-        //   pass=ALLOW / deny=DENY
-        // 注: 不依赖 "/*" 兜底规则 — 路由最长前缀回退到深层注册子树 (如白名单
-        // 目录) 时不会命中根节点 "/*" 规则, 必须由 noRuleOperator 保证语义
-        for (const auto& p : config->permissionAllowPaths) {
-            permission->setFilesystemPermission(
-                p,
-                agentxx::middleware::PermissionOperator::ALLOW,
-                agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionWRITE
-            );
-            permission->setFilesystemPermission(
-                p,
-                agentxx::middleware::PermissionOperator::ALLOW,
-                agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionREAD
-            );
-        }
-        for (const auto& p : config->permissionDenyPaths) {
-            permission->setFilesystemPermission(
-                p,
-                agentxx::middleware::PermissionOperator::DENY,
-                agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionWRITE
-            );
-            permission->setFilesystemPermission(
-                p,
-                agentxx::middleware::PermissionOperator::DENY,
-                agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionREAD
-            );
-        }
-        switch (config->permissionMode) {
-            case agentxx::agent::PermissionMode::Pass:
-                // 全部放行: 无规则即放行
-                permission->noRuleOperator = agentxx::middleware::PermissionOperator::ALLOW;
-                break;
-            case agentxx::agent::PermissionMode::Deny:
-                // 全部拒绝: 无规则即拒绝
-                permission->noRuleOperator = agentxx::middleware::PermissionOperator::DENY;
-                break;
-            case agentxx::agent::PermissionMode::AllAsk:
-                // 所有路径均询问: 无规则即询问
-                permission->noRuleOperator = agentxx::middleware::PermissionOperator::INTERRUPT;
-                break;
-            case agentxx::agent::PermissionMode::Ask:
-            default:
-                // 会话工作目录内允许, 其他路径询问
-                // - 工作目录取 AgentConfig::workDir (yaml work_dir; 未配置回退进程
-                //   cwd), 使嵌入多实例/远程 server 场景下权限边界跟随会话配置而非
-                //   进程启动目录
-                // - 工作目录获取失败 (返回空串) 时不注册默认放行规则, 所有路径
-                //   均询问 (安全兜底: 注册根目录 "/" 会退化为放行所有路径)
-                {
-                    const auto workPath = config->resolvedWorkDir();
-                    if (workPath.empty()) {
-                        XX_LOGW("PermissionMode::Ask: getCurrentWorkPath failed, "
-                                "no default allow rule registered, all paths will be asked");
-                    } else {
-                        // 注册工作目录本身: 权限路由最长前缀回退 (prefix_fallback)
-                        // 使其下任意子路径均命中此规则 (与 "{workPath}/*" 等价且
-                        // 额外覆盖对工作目录自身的访问, 如列出工作目录)
-                        permission->setFilesystemPermission(
-                            workPath,
-                            agentxx::middleware::PermissionOperator::ALLOW,
-                            agentxx::middleware::PermissionMiddlewareHandle::
-                                FilesystemPermissionWRITE
-                        );
-                        permission->setFilesystemPermission(
-                            workPath,
-                            agentxx::middleware::PermissionOperator::ALLOW,
-                            agentxx::middleware::PermissionMiddlewareHandle::
-                                FilesystemPermissionREAD
-                        );
-                    }
+        // worktree 模式: 程序初始化时若启用则一次性追加系统提示词,
+        // 进入/退出 worktree 不再修改 system prompt
+        // - 初始化期静态注入，避免进入/退出 worktree 时 system prompt 变化
+        if (config->enableWorktree) {
+            static const std::string worktreeInitTip = R"(## Git Worktree Mode
+This session supports isolated git worktrees (`agentxx_git_worktree` tool).
+When the task modifies code, create an isolated worktree FIRST via opt=create, then do all edits/builds/tests inside it — this keeps parallel sessions from interfering with each other.
+Read-only tasks (analysis/questions) don't need a worktree.)";
+            if (config->prompt.systemPrompt.find("Git Worktree Mode") == std::string::npos) {
+                if (!config->prompt.systemPrompt.empty()
+                    && config->prompt.systemPrompt.back() != '\n') {
+                    config->prompt.systemPrompt += "\n\n";
                 }
-                permission->noRuleOperator = agentxx::middleware::PermissionOperator::INTERRUPT;
-                break;
+                config->prompt.systemPrompt += worktreeInitTip;
+            }
         }
-        // 注册 tool 名 -> 权限处理函数; 未调用则 handles 为空, 权限拦截不会触发
-        permission->registerHandles();
-        agentContext->permissionMiddleware = permission;
-        agentContext->middlewareHandleContext->handles.push_back(agentContext->permissionMiddleware
-        );
     }
     // 添加 Skill Middleware 并记录启动信息
     // - 目录不存在的配置项记为加载失败 (failedComponents), 供客户端 "Failed"
@@ -213,38 +135,8 @@ asio::awaitable<void> CodeAgent::initMiddleware() {
         std::move(skillMiddleware),
         std::move(memoryFileMiddleware)
     );
-    {
-        // 上下文压缩 (summarization) 中间件: 由 AgentConfig::enableSummarization 控制
-        // - 子代理默认继承父配置; summarization 发起的压缩子代理显式关闭,
-        //   避免对透传的上下文前缀二次压缩 (破坏 KV/prefix cache 一致性)
-        if (config->enableSummarization) {
-            auto summarizationMiddleware
-                = std::make_shared<agentxx::middleware::SummarizationMiddlewareHandle>(agentContext
-                );
-            agentContext->summarizationMiddleware = summarizationMiddleware;
-            agentContext->middlewareHandleContext->handles.push_back(summarizationMiddleware);
-        }
-    }
-    {
-        // worktree 模式: 程序初始化时若启用则一次性追加系统提示词,
-        // 进入/退出 worktree 不再修改 system prompt
-        // - 初始化期静态注入，避免进入/退出 worktree 时 system prompt 变化
-        if (config->enableWorktree) {
-            static const std::string worktreeInitTip = R"(## Git Worktree Mode
-This session supports isolated git worktrees (`agentxx_git_worktree` tool).
-When the task modifies code, create an isolated worktree FIRST via opt=create, then do all edits/builds/tests inside it — this keeps parallel sessions from interfering with each other.
-Read-only tasks (analysis/questions) don't need a worktree.)";
-            if (config->prompt.systemPrompt.find("Git Worktree Mode") == std::string::npos) {
-                if (!config->prompt.systemPrompt.empty()
-                    && config->prompt.systemPrompt.back() != '\n') {
-                    config->prompt.systemPrompt += "\n\n";
-                }
-                config->prompt.systemPrompt += worktreeInitTip;
-            }
-        }
-    }
 
-    /// Toolcall  应当作为最后一层，输出的日志才会是最终的样子
+    /// Toolcall 应当作为最后一层，输出的日志才会是最终的样子
     agentContext->middlewareHandleContext->handles.push_back(
         std::make_shared<
             agentxx::middleware::MiddlewareWrapHandle<agentxx::middleware::BaseMiddlewareState>>(
@@ -304,34 +196,6 @@ asio::awaitable<std::vector<std::unique_ptr<agentxx::tools::XXToolBase>>> CodeAg
 
     std::vector<std::unique_ptr<agentxx::tools::XXToolBase>> tools
         = co_await BaseAgent::initTools();
-
-    // 内置编程工具 (filesystem/string/web/rag/command/planning_write) 已全部
-    // 迁移为独立插件 (agent/plugins/agentxx_{filesystem,string,websearch,
-    // execute_command,rag_search,planning}), 运行期经 PluginManager 注册,
-    // 同名同行为; 本函数仅保留 subagent / MCP / 延迟加载等 lib 侧装配
-
-    /// Subagent (由 AgentConfig::enableSubagent 控制, yaml subagent.enable)
-    /// - 注册表仅承载名称/描述等静态元数据 (SubAgentTaskBase);
-    ///   实际执行由 AgentHost 派生独立 agent 完成 (中断委派, 不在此创建
-    ///   嵌套 subgraph / nodeContext)
-    if (config->enableSubagent) {
-        const auto nodeName = std::string{"subagent_task"};
-
-        subagentManagerTool_->subAgentList.insert(std::make_pair(
-            nodeName,
-            std::make_shared<agentxx::tools::SubAgentNormalTask>(
-                nodeName,
-                R"(Create a isolation messages context sub agent to exec. (need system prompt))"
-            )
-        ));
-
-        tools.push_back(std::move(subagentManagerTool_));
-    } else {
-        // 已构造的 subagent 管理器无需注册, 清理指针避免悬空
-        subagentManagerTool_.reset();
-        agentContext->subagentManagerToolPtr = nullptr;
-        XX_LOGD("CodeAgent: subagent disabled by config (subagent.enable=false)");
-    }
 
     /// Git worktree 管理 (由 AgentConfig::enableWorktree 控制, yaml worktree.enable)
     /// - 创建即绑定会话: 相对路径基准/权限隔离边界自动切换, 详见 tools/git_worktree.h

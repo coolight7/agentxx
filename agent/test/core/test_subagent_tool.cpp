@@ -1,6 +1,6 @@
 // SubAgentManagerTool (`agentxx_subagent` 工具) 单元测试
 //
-// 设计要点 (见 agent/lib/include/agentxx/tools/subagent.h 与 subagent_shared.h):
+// 设计要点 (见 agent/lib/include/agentxx/tools/subagent.h):
 // - 注册表仅承载静态元数据 (SubAgentTaskBase); 实际执行由 AgentHost 派生
 //   独立 agent 完成 (中断委派), 本模块聚焦工具层行为:
 //   1) 可用性: 工具名/定义 schema (enum 列表随注册表更新, required 字段,
@@ -23,7 +23,6 @@
 #include "agentxx/event/events.h"
 #include "agentxx/middlewares/middleware.h"
 #include "agentxx/tools/subagent.h"
-#include "agentxx/tools/subagent_shared.h"
 #include "agentxx/util/exception.h"
 #include <memory>
 #include <string>
@@ -473,7 +472,7 @@ asio::awaitable<TestResult> run_subagent_tool_tests() {
                      {"content", "compress me"},
                  }})                        },
                 {"sessionId", env->sessionId},
-                // 注意: 无 tool_call_id (压缩中间件直接调用)
+ // 注意: 无 tool_call_id (压缩中间件直接调用)
             };
             try {
                 (void)co_await env->tool->execute_async(args);
@@ -555,7 +554,7 @@ asio::awaitable<TestResult> run_subagent_tool_tests() {
                 {"subagent",  "worker"      },
                 {"message",   "m"           },
                 {"sessionId", env->sessionId},
-                // 无 tool_call_id
+ // 无 tool_call_id
             };
             try {
                 (void)co_await env->tool->execute_async(args);

@@ -162,18 +162,9 @@ public:
 
 private:
 
-    using RespChannel = asio::experimental::channel<void(neograph_asio_error_code, RespType)>;
-
-    struct PendingReq {
-        size_t                       correlationId = 0;
-        std::shared_ptr<RespChannel> channel;
-    };
-
-    std::atomic_size_t correlationSeq_{0};
-    std::atomic_size_t serverId_{0};
-
+    std::atomic_size_t              correlationSeq_{0};
+    std::atomic_size_t              serverId_{0};
     std::map<size_t, ServerHandler> servers_{}; // <serverId, handler>
-    std::map<size_t, PendingReq>    pending_{}; // <correlationId, slot>
 
 public:
 
@@ -204,8 +195,8 @@ public:
     }
 
     /// 发起请求并等待响应
-    /// - timeout 到期返回 nullopt, 并清理 pending 槽; timeout <= 0 表示不限制 (无限等待, 默认)
-    /// - 同一 io_context 单线程运行, pending_/servers_ 无需加锁
+    /// - timeout 到期返回 unexpected, timeout <= 0 表示不限制 (无限等待, 默认)
+    /// - 同一 io_context 单线程运行, servers_ 无需加锁
     /// - return (resp/error)
     asio::awaitable<std::expected<RespType, std::string>>
         request(ReqType req, std::chrono::milliseconds timeout = std::chrono::milliseconds{0}) {
@@ -216,68 +207,14 @@ public:
         }
 
         auto correlationId = ++correlationSeq_;
-        auto channel       = std::make_shared<RespChannel>(co_await asio::this_coro::executor, 1);
-        pending_[correlationId] = PendingReq{.correlationId = correlationId, .channel = channel};
-
-        // 派发到第一个 server (单 server 场景即该 server)
-        // 多 server 时可扩展为负载均衡, 这里取 begin
-        auto serverIt = servers_.begin();
-        auto handler  = serverIt->second;
-        auto ex       = co_await asio::this_coro::executor;
-        // server 协程捕获 channel (shared_ptr) 与 name (副本), 不捕获 this,
-        // 避免本流生命周期短于 server 协程时的 use-after-free
-        // - 成功/异常都直接 async_send 到 channel; 若请求已超时, 请求方会
-        //   channel->cancel() 关闭通道, server 的 async_send 回调收到 error,
-        //   server 协程自然结束, 无僵尸协程
-        asio::co_spawn(
-            ex,
-            [streamName = name,
-             handler    = std::move(handler),
-             req        = std::move(req),
-             correlationId,
-             channel]() -> asio::awaitable<void> {
-                co_await agentxx::util::catchErrorAsync<bool>(
-                    [&]() -> asio::awaitable<bool> {
-                        auto resp = co_await handler(req, correlationId);
-                        channel->async_send(
-                            neograph_asio_error_code{},
-                            std::move(resp),
-                            [](neograph_asio_error_code) {}
-                        );
-                        co_return true;
-                    },
-                    [&](std::string errinfo) -> asio::awaitable<bool> {
-                        XX_LOGE(
-                            "RequestResponseStream `{}` server exception: {}",
-                            streamName,
-                            errinfo
-                        );
-                        channel->async_send(
-                            asio::experimental::channel_errc::channel_cancelled,
-                            RespType{},
-                            [](neograph_asio_error_code) {}
-                        );
-                        co_return true;
-                    },
-                    [&](std::string& errmsg) -> std::optional<bool> {
-                        // 手动取消, 不必发错误到 channel (请求方已超时返回)
-                        return true;
-                    }
-                );
-            },
-            asio::detached
-        );
+        auto serverIt      = servers_.begin();
+        auto handler       = serverIt->second;
 
         auto out = co_await agentxx::util::catchErrorToUnexpectedAsync<RespType>(
             [&]() -> asio::awaitable<std::expected<RespType, std::string>> {
                 auto result = co_await agentxx::util::asyncWithTimeout<RespType>(
                     [&]() -> asio::awaitable<RespType> {
-                        auto [ec, resp]
-                            = co_await channel->async_receive(asio::as_tuple(asio::use_awaitable));
-                        if (ec && ec != asio::error::eof) {
-                            throw std::runtime_error("response channel closed");
-                        }
-                        co_return std::move(resp);
+                        co_return co_await handler(req, correlationId);
                     },
                     timeout
                 );
@@ -287,46 +224,7 @@ public:
         if (false == out.has_value()) {
             XX_LOGE("RequestResponseStream `{}` request await failed: {}", name, out.error());
         }
-
-        // 超时或异常时关闭 channel, 使 server 的 async_send 失败并自然结束协程,
-        // 避免僵尸协程长期占用
-        if (!out.has_value()) {
-            channel->cancel();
-        }
-        // 统一清理 pending 槽 (成功/超时/异常路径)
-        pending_.erase(correlationId);
         co_return out;
-    }
-
-    /// 外部异步回填响应 (供 server 在 handler 之外、稍后回调用)
-    /// - 内部 auto-respond 路径已直接通过 channel 回填, 不走这里
-    /// - 调用者须保证 stream 仍存活 (持有 bus 引用)
-    void respond(size_t correlationId, RespType resp) {
-        auto it = pending_.find(correlationId);
-        if (it == pending_.end()) {
-            return; // 已超时被清理
-        }
-        auto channel = it->second.channel;
-        pending_.erase(it);
-        channel->async_send(
-            neograph_asio_error_code{},
-            std::move(resp),
-            [](neograph_asio_error_code) {}
-        );
-    }
-
-    void failRequest(size_t correlationId) {
-        auto it = pending_.find(correlationId);
-        if (it == pending_.end()) {
-            return;
-        }
-        auto channel = it->second.channel;
-        pending_.erase(it);
-        channel->async_send(
-            asio::experimental::channel_errc::channel_cancelled,
-            RespType{},
-            [](neograph_asio_error_code) {}
-        );
     }
 };
 
@@ -570,6 +468,38 @@ public:
         return prefixListeners_.erase(id) > 0;
     }
 
+    /// 注册同线程同步服务函数 (如 token 计数)
+    template<typename _FUNC_TYPE>
+    void registerService(std::string_view topic, std::function<_FUNC_TYPE> func) {
+        syncServices_[std::string{topic}] = std::any(std::move(func));
+    }
+
+    /// 注销同步服务函数
+    bool unregisterService(std::string_view topic) {
+        return syncServices_.erase(std::string{topic}) > 0;
+    }
+
+    /// 检查是否有注册的同步服务函数
+    bool hasService(std::string_view topic) const {
+        return syncServices_.find(topic) != syncServices_.end();
+    }
+
+    /// 调用同步服务函数, 若未注册或类型不匹配则返回 std::nullopt
+    template<typename _FUNC_TYPE, typename... _ARGS>
+    auto callService(std::string_view topic, _ARGS&&... args) const
+        -> std::optional<typename std::invoke_result_t<std::function<_FUNC_TYPE>, _ARGS...>> {
+        auto it = syncServices_.find(topic);
+        if (it == syncServices_.end()) {
+            return std::nullopt;
+        }
+        using FuncType = std::function<_FUNC_TYPE>;
+        const auto* fn = std::any_cast<FuncType>(&it->second);
+        if (!fn || !(*fn)) {
+            return std::nullopt;
+        }
+        return (*fn)(std::forward<_ARGS>(args)...);
+    }
+
 private:
 
     /// 前缀订阅项 (仅 io 线程读写)
@@ -581,6 +511,7 @@ private:
     asio::any_io_executor                                                     executor_;
     std::map<std::string, std::shared_ptr<EventStreamInterface>, std::less<>> streams_{};
     std::map<size_t, PrefixSub>                                               prefixListeners_{};
+    std::map<std::string, std::any, std::less<>>                             syncServices_{};
     size_t nextPrefixListenerId_ = 0;
 };
 
@@ -655,9 +586,9 @@ private:
     void finalizeThinkSegment();
 
     /// 估算 UTF-8 字符串对应的 token 数
-    /// - 优先使用 AgentContext::summarizationMiddleware 的 countTokensForUtf8Str
-    ///   (上下文压缩/上下文统计共用同一口径)
-    /// - 无 summarization 时 (如测试/裸 EventBridge) 回退内置估算:
+    /// - 优先使用 EventBus 上注册的 TokenCount 服务 (由 SummarizationMiddleware 提供,
+    ///   上下文压缩/上下文统计共用同一口径)
+    /// - 无注册时 (如测试/裸 EventBridge) 回退内置估算:
     ///   ascii ≈ 4 字符/token, 非 ascii ≈ 1.1 字符/token
     double countTokens(std::string_view text);
 

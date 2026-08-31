@@ -34,11 +34,6 @@ protected:
     asio::awaitable<std::vector<std::unique_ptr<agentxx::tools::XXToolBase>>> initTools() override;
 
 private:
-
-    /// subagent 管理工具 (在 initMiddleware 中创建, initTools 中完成配置)
-    std::unique_ptr<agentxx::tools::SubAgentManagerTool> subagentManagerTool_;
-    // (summarization 中间件由 AgentContext::summarizationMiddleware 持有,
-    //  CodeAgent 不再单独保存)
 };
 
 } // namespace agent

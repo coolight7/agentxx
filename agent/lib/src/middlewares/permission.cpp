@@ -8,6 +8,34 @@
 namespace agentxx {
 namespace middleware {
 
+namespace {
+
+class DummyPermissionTool : public neograph::Tool {
+public:
+
+    explicit DummyPermissionTool(std::string name) : name_(std::move(name)) {}
+
+    neograph::ChatTool get_definition() const override {
+        return neograph::ChatTool{
+            .name        = name_,
+            .description = "",
+            .parameters  = neograph::json::object(),
+        };
+    }
+
+    std::string get_name() const override {
+        return name_;
+    }
+
+    std::string execute(const neograph::json&) override {
+        return {};
+    }
+
+private:
+
+    std::string name_;
+};
+
 /// 判断规范化路径 (尾斜杠目录前缀) 是否位于指定目录子树内
 inline bool isUnderDir(std::string_view dirWithTrailingSlash, std::string_view path) {
     if (dirWithTrailingSlash.empty() || path.empty()) {
@@ -23,6 +51,8 @@ inline bool isUnderDir(std::string_view dirWithTrailingSlash, std::string_view p
     return path.size() >= dirWithTrailingSlash.size()
            && path.compare(0, dirWithTrailingSlash.size(), dirWithTrailingSlash) == 0;
 }
+
+} // namespace
 
 /// 权限路径规范化: 绝对路径 + Unix 分隔符 + 目录尾斜杠
 /// - Windows 文件系统大小写不敏感, 统一转小写使注册规则 (来自配置/工作目录)
@@ -217,6 +247,88 @@ void PermissionMiddlewareHandle::registerFilesystemHandles() {
 
 void PermissionMiddlewareHandle::registerHandles() {
     registerFilesystemHandles();
+}
+
+PermissionMiddlewareHandle::~PermissionMiddlewareHandle() {
+    unregisterFromBus();
+}
+
+void PermissionMiddlewareHandle::registerOnBus(const std::shared_ptr<agentxx::event::EventBus>& bus) {
+    if (!bus) {
+        return;
+    }
+    unregisterFromBus();
+    registeredBus_ = bus;
+
+    // 1. 注册权限检查服务端 (ReqToolPermissionCheck -> RespToolPermissionCheck)
+    checkServerId_ = bus->getRR<events::ReqToolPermissionCheck, events::RespToolPermissionCheck>(
+        events::Topic::ToolPermissionCheck
+    ).registerServer([this](const events::ReqToolPermissionCheck& req, size_t) -> asio::awaitable<events::RespToolPermissionCheck> {
+        auto it = handles.find(req.toolName);
+        if (it != handles.end()) {
+            DummyPermissionTool dummyTool(req.toolName);
+            neograph::json argsCopy = req.arguments;
+            auto allow = co_await it->second(dummyTool, argsCopy);
+            co_return events::RespToolPermissionCheck{.allow = allow};
+        }
+        // 未注册权限拦截 handle 的普通工具直接放行
+        co_return events::RespToolPermissionCheck{.allow = true};
+    });
+
+    // 2. 订阅文件系统规则设置事件 (EventSetPermissionRule)
+    setRuleSubId_ = bus->get<events::EventSetPermissionRule>(events::Topic::PermissionSetRule)
+        .subscribe([this](const events::EventSetPermissionRule& evt) -> asio::awaitable<void> {
+            setFilesystemPermission(
+                evt.path,
+                evt.allow ? PermissionOperator::ALLOW : PermissionOperator::DENY,
+                evt.index
+            );
+            co_return;
+        });
+
+    // 3. 订阅会话隔离设置事件 (EventSetSessionIsolation)
+    setIsolationSubId_ = bus->get<events::EventSetSessionIsolation>(events::Topic::PermissionSetIsolation)
+        .subscribe([this](const events::EventSetSessionIsolation& evt) -> asio::awaitable<void> {
+            SessionFsIsolation iso;
+            iso.allowPath     = normalizePermissionPath(evt.allowPath);
+            iso.denyWritePath = normalizePermissionPath(evt.denyWritePath);
+            setSessionIsolation(evt.sessionId, std::move(iso));
+            co_return;
+        });
+
+    // 4. 订阅会话隔离清除事件 (EventClearSessionIsolation)
+    clearIsolationSubId_ = bus->get<events::EventClearSessionIsolation>(events::Topic::PermissionClearIsolation)
+        .subscribe([this](const events::EventClearSessionIsolation& evt) -> asio::awaitable<void> {
+            clearSessionIsolation(evt.sessionId);
+            co_return;
+        });
+}
+
+void PermissionMiddlewareHandle::unregisterFromBus() {
+    if (auto bus = registeredBus_.lock()) {
+        if (checkServerId_ != 0) {
+            bus->getRR<events::ReqToolPermissionCheck, events::RespToolPermissionCheck>(
+                events::Topic::ToolPermissionCheck
+            ).unregisterServer(checkServerId_);
+            checkServerId_ = 0;
+        }
+        if (setRuleSubId_ != 0) {
+            bus->get<events::EventSetPermissionRule>(events::Topic::PermissionSetRule)
+                .unsubscribe(setRuleSubId_);
+            setRuleSubId_ = 0;
+        }
+        if (setIsolationSubId_ != 0) {
+            bus->get<events::EventSetSessionIsolation>(events::Topic::PermissionSetIsolation)
+                .unsubscribe(setIsolationSubId_);
+            setIsolationSubId_ = 0;
+        }
+        if (clearIsolationSubId_ != 0) {
+            bus->get<events::EventClearSessionIsolation>(events::Topic::PermissionClearIsolation)
+                .unsubscribe(clearIsolationSubId_);
+            clearIsolationSubId_ = 0;
+        }
+    }
+    registeredBus_.reset();
 }
 
 } // namespace middleware

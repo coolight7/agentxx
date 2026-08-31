@@ -1270,7 +1270,6 @@ agent/
 │   │   │   ├── planning.h        # 规划工具 (planning_write)
 │   │   │   ├── subagent.h       # 子代理管理工具
 │   │   │   ├── tool_skill_search.h # 工具/技能延迟加载搜索 (子代理任务)
-│   │   │   ├── subagent_shared.h # 子代理批量委派共享实现 (中断 key/解析)
 │   │   │   ├── share_store.h     # 会话级文本寄存
 │   │   │   ├── string.h          # 字符串工具 (html2md / regexp)
 │   │   │   ├── system.h          # 系统工具 (datetime; cpu_gpu_info 已迁插件 agentxx_system_monitor)

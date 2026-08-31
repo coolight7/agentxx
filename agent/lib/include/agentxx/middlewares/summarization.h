@@ -137,6 +137,18 @@ public:
     ) const;
 
     asio::awaitable<void> onModelcallRunFunc(neograph::graph::NodeInput& in) override;
+
+    ~SummarizationMiddlewareHandle() override;
+
+    /// 在 EventBus 上注册 Token 计算等服务
+    void registerOnBus(const std::shared_ptr<agentxx::event::EventBus>& bus);
+
+    /// 从 EventBus 注销
+    void unregisterFromBus();
+
+private:
+
+    std::weak_ptr<agentxx::event::EventBus> registeredBus_;
 };
 
 } // namespace middleware

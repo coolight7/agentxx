@@ -395,18 +395,23 @@ void SessionServerAgentIO::onPeerMessage(WireMessage msg) {
                 // 客户端请求切换会话 (弹窗选择后); 运行态拦截由客户端前置完成
                 switchSession(std::move(m.sessionId));
             } else if constexpr (std::is_same_v<T, WireSetPermission>) {
-                // 客户端记住权限选择: 注册路径规则到权限中间件,
+                // 客户端记住权限选择: 经 EventBus 发布规则到权限中间件,
                 // 后续访问该路径或其子目录时按规则直接允许/拒绝, 不再询问
                 auto agent = agent_.lock();
-                if (!agent || !agent->agentContext || !agent->agentContext->permissionMiddleware) {
+                if (!agent || !agent->agentContext || !agent->agentContext->bus) {
                     return;
                 }
-                auto& perm = agent->agentContext->permissionMiddleware;
-                perm->setFilesystemPermission(
-                    m.path,
-                    m.allow ? agentxx::middleware::PermissionOperator::ALLOW
-                            : agentxx::middleware::PermissionOperator::DENY,
-                    m.index
+                asio::co_spawn(
+                    agent->agentContext->bus->executor(),
+                    agent->agentContext->bus->publish<events::EventSetPermissionRule>(
+                        events::Topic::PermissionSetRule,
+                        events::EventSetPermissionRule{
+                            .path  = m.path,
+                            .allow = m.allow,
+                            .index = m.index,
+                        }
+                    ),
+                    asio::detached
                 );
                 XX_LOGI(
                     "[session_ctrl] remembered permission rule: {} {} (index={})",

@@ -102,10 +102,24 @@ public:
 
     void registerHandles();
 
+    ~PermissionMiddlewareHandle() override;
+
+    /// 在 EventBus 上注册权限检查服务与规则订阅
+    void registerOnBus(const std::shared_ptr<agentxx::event::EventBus>& bus);
+
+    /// 从 EventBus 注销
+    void unregisterFromBus();
+
 private:
 
     /// <sessionId, 隔离边界> (仅 io 线程读写, 与中间件链同线程模型, 无需锁)
     std::map<std::string, SessionFsIsolation, std::less<>> sessionIsolations_;
+
+    std::weak_ptr<agentxx::event::EventBus> registeredBus_;
+    size_t                                  checkServerId_       = 0;
+    size_t                                  setRuleSubId_        = 0;
+    size_t                                  setIsolationSubId_   = 0;
+    size_t                                  clearIsolationSubId_ = 0;
 };
 
 } // namespace middleware

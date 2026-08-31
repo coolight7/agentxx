@@ -535,20 +535,20 @@ asio::awaitable<void> test_subagent_summarization_switch() {
     g_da_sim_response_content = "ok";
     g_da_sim_tool_calls       = neograph::json::array();
 
-    // ① enableSummarization = false → 无 summarization 中间件
+    // ① enableSummarization = false → 无 summarization 服务
     {
         auto cfg                 = makeSimConfig(baseUrl);
         cfg->enableSummarization = false;
         auto agent               = std::make_shared<agentxx::agent::CodeAgent>(cfg);
         co_await agent->init();
-        XX_TEST_EXPECT_TRUE(agent->getContext()->summarizationMiddleware == nullptr);
+        XX_TEST_EXPECT_FALSE(agent->getContext()->bus->hasService(agentxx::events::Topic::TokenCount));
     }
     // ② 缺省 (true) → 存在
     {
         auto cfg   = makeSimConfig(baseUrl);
         auto agent = std::make_shared<agentxx::agent::CodeAgent>(cfg);
         co_await agent->init();
-        XX_TEST_EXPECT_TRUE(agent->getContext()->summarizationMiddleware != nullptr);
+        XX_TEST_EXPECT_TRUE(agent->getContext()->bus->hasService(agentxx::events::Topic::TokenCount));
     }
     // ③ 显式 true → 存在
     {
@@ -556,7 +556,7 @@ asio::awaitable<void> test_subagent_summarization_switch() {
         cfg->enableSummarization = true;
         auto agent               = std::make_shared<agentxx::agent::CodeAgent>(cfg);
         co_await agent->init();
-        XX_TEST_EXPECT_TRUE(agent->getContext()->summarizationMiddleware != nullptr);
+        XX_TEST_EXPECT_TRUE(agent->getContext()->bus->hasService(agentxx::events::Topic::TokenCount));
     }
 
     co_return;
