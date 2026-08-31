@@ -269,7 +269,7 @@ plugins:
   #   把它们合并编译进 libagentxx (内置注册表), 运行期配置保持不变
   #   (内置简写: `path: builtin://<name>` 或 `name: <name>` 无需依赖外部目录)
   # - config 可选，默认使用编译时内嵌的yaml
-  - name: lugins/agentxx_planning
+  - name: agentxx_planning
     enabled: true
     # config: ${AGENTXX_WORK_DIR}/config/planning.yaml  # 可指向文件或目录
   - name: agentxx_filesystem
