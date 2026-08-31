@@ -813,50 +813,6 @@ inline PinyinCallback s_pinyinCallback = nullptr;
 #endif
 }
 
-/// 判断路径是否为绝对路径。
-/// 直接使用标准库 std::filesystem::path::is_absolute():
-///  - Unix: 以 `/` 开头
-///  - Windows: 盘符 + 分隔符 (如 `C:\`) 或 UNC (如 `\\server\share`);
-///    `C:foo` (盘符相对) 返回 false, 与手写判断语义一致
-///  - 空路径返回 false
-/// 注意: Windows 上 `\foo` (根相对) 无盘符, 按标准库语义返回 false
-[[nodiscard]] inline bool isAbsolutePath(std::string_view path) {
-    return std::filesystem::path{path}.is_absolute();
-}
-
-/// 展开路径开头的 `~` 为用户主目录 (Unix: $HOME, Windows: %USERPROFILE%)。
-/// 仅处理 `~` 或 `~/xxx` 形式; `~user` 等其它形式保持原样。
-[[nodiscard]] inline std::string expandUserHomePath(std::string_view path) {
-    if (path.empty() || path.front() != '~') {
-        return std::string{path};
-    }
-    // `~` 之后必须是路径分隔符或结束, 否则视为普通名称 (如 `~user`) 不展开
-    if (path.size() > 1 && path[1] != '/' && path[1] != '\\') {
-        return std::string{path};
-    }
-#if XX_IS_WIN_D
-    auto homeOpt = agentxx::util::ApplicationEnv::instance().get("USERPROFILE");
-#else
-    auto homeOpt = agentxx::util::ApplicationEnv::instance().get("HOME");
-#endif
-    if (!homeOpt || homeOpt->empty()) {
-        return std::string{path};
-    }
-    auto homePath = agentxx::util::toCurrentSystemStandardPath(*homeOpt);
-    if (path.size() == 1) {
-        return homePath;
-    }
-    // path[1] 为分隔符, 拼接剩余部分
-    auto rest = path.substr(2);
-    if (homePath.empty()) {
-        return std::string{rest};
-    }
-    if (homePath.back() == '/' || homePath.back() == '\\') {
-        return homePath + std::string{rest};
-    }
-    return homePath + "/" + std::string{rest};
-}
-
 /// UTF-8 字符串安全转换为 std::filesystem::path (Windows 下使用宽字符 API 避免 ANSI/GBK 乱码)
 [[nodiscard]] inline std::filesystem::path utf8ToPath(std::string_view utf8) {
 #if XX_IS_WIN_D
@@ -918,6 +874,50 @@ inline PinyinCallback s_pinyinCallback = nullptr;
 #else
     return p.generic_string();
 #endif
+}
+
+/// 判断路径是否为绝对路径。
+/// 直接使用标准库 std::filesystem::path::is_absolute():
+///  - Unix: 以 `/` 开头
+///  - Windows: 盘符 + 分隔符 (如 `C:\`) 或 UNC (如 `\\server\share`);
+///    `C:foo` (盘符相对) 返回 false, 与手写判断语义一致
+///  - 空路径返回 false
+/// 注意: Windows 上 `\foo` (根相对) 无盘符, 按标准库语义返回 false
+[[nodiscard]] inline bool isAbsolutePath(std::string_view path) {
+    return utf8ToPath(path).is_absolute();
+}
+
+/// 展开路径开头的 `~` 为用户主目录 (Unix: $HOME, Windows: %USERPROFILE%)。
+/// 仅处理 `~` 或 `~/xxx` 形式; `~user` 等其它形式保持原样。
+[[nodiscard]] inline std::string expandUserHomePath(std::string_view path) {
+    if (path.empty() || path.front() != '~') {
+        return std::string{path};
+    }
+    // `~` 之后必须是路径分隔符或结束, 否则视为普通名称 (如 `~user`) 不展开
+    if (path.size() > 1 && path[1] != '/' && path[1] != '\\') {
+        return std::string{path};
+    }
+#if XX_IS_WIN_D
+    auto homeOpt = agentxx::util::ApplicationEnv::instance().get("USERPROFILE");
+#else
+    auto homeOpt = agentxx::util::ApplicationEnv::instance().get("HOME");
+#endif
+    if (!homeOpt || homeOpt->empty()) {
+        return std::string{path};
+    }
+    auto homePath = agentxx::util::toCurrentSystemStandardPath(*homeOpt);
+    if (path.size() == 1) {
+        return homePath;
+    }
+    // path[1] 为分隔符, 拼接剩余部分
+    auto rest = path.substr(2);
+    if (homePath.empty()) {
+        return std::string{rest};
+    }
+    if (homePath.back() == '/' || homePath.back() == '\\') {
+        return homePath + std::string{rest};
+    }
+    return homePath + "/" + std::string{rest};
 }
 
 /// 将用户提供的路径统一转换为当前系统的绝对路径 (相对路径基于指定基准目录):

@@ -1733,6 +1733,348 @@ asio::awaitable<void>
     co_return;
 }
 
+/// 中文/UTF-8 路径测试: list 工具遍历含中文的目录与子目录
+asio::awaitable<void>
+    test_list_file_chinese_path(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+    namespace fs    = std::filesystem;
+    auto chineseDir = testDir + "/中文测试目录_列表";
+    auto subDir     = chineseDir + "/子目录_一级";
+    fs::create_directories(agentxx::util::utf8ToPath(subDir));
+    {
+        std::ofstream f1(agentxx::util::utf8ToPath(chineseDir + "/中文文件_一.txt"));
+        f1 << "文件1内容\n";
+    }
+    {
+        std::ofstream f2(agentxx::util::utf8ToPath(subDir + "/深层中文文件.txt"));
+        f2 << "深层内容\n";
+    }
+
+    auto tool = agentxx::tools::FileSystemListTool{agentContext};
+
+    // 1) 非递归列出
+    auto argsNonRec = neograph::json{
+        {"path",      chineseDir},
+        {"recursive", false     }
+    };
+    auto resNonRec   = co_await tool.execute_async(argsNonRec);
+    bool hasFile1    = resNonRec.find("中文文件_一.txt") != std::string::npos;
+    bool hasSubDir   = resNonRec.find("子目录_一级") != std::string::npos;
+    bool noSubFile   = resNonRec.find("深层中文文件.txt") == std::string::npos;
+
+    // 2) 递归列出
+    auto argsRec = neograph::json{
+        {"path",      chineseDir},
+        {"recursive", true      }
+    };
+    auto resRec     = co_await tool.execute_async(argsRec);
+    bool hasSubFile = resRec.find("深层中文文件.txt") != std::string::npos;
+
+    fs::remove_all(agentxx::util::utf8ToPath(chineseDir));
+
+    if (hasFile1 && hasSubDir && noSubFile && hasSubFile) {
+        g_fs_passed++;
+        TEST_PASS << "FileSystemListTool handles Chinese/UTF-8 path listing" << std::endl;
+    } else {
+        g_fs_failed++;
+        TEST_FAIL << "FileSystemListTool Chinese path listing failed, resNonRec: " << resNonRec
+                  << ", resRec: " << resRec << std::endl;
+    }
+    co_return;
+}
+
+/// 中文/UTF-8 路径测试: read 工具读取含中文路径的文本文件 (全量 + offset/limit)
+asio::awaitable<void>
+    test_read_text_file_chinese_path(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+    namespace fs    = std::filesystem;
+    auto chineseDir = testDir + "/中文测试目录_读取";
+    fs::create_directories(agentxx::util::utf8ToPath(chineseDir));
+    auto filePath = chineseDir + "/读取测试文件_中文.txt";
+    {
+        std::ofstream f(agentxx::util::utf8ToPath(filePath));
+        f << "第一行中文数据\n第二行关键内容\n第三行结束行\n";
+    }
+
+    auto tool = agentxx::tools::FilesystemReadTextFileTool{agentContext};
+
+    // 1) 全量读取 (异步/stream_file)
+    auto argsFull = neograph::json{
+        {"path", filePath}
+    };
+    auto resFull = co_await tool.execute_async(argsFull);
+    bool fullOk  = resFull.find("第一行中文数据") != std::string::npos
+                  && resFull.find("第三行结束行") != std::string::npos;
+
+    // 2) 分段读取 (offset + limit)
+    auto argsSlice = neograph::json{
+        {"path",        filePath},
+        {"line_offset", 1       },
+        {"line_limit",  1       }
+    };
+    auto resSlice = co_await tool.execute_async(argsSlice);
+    bool sliceOk  = resSlice.find("第二行关键内容") != std::string::npos
+                   && resSlice.find("第一行中文数据") == std::string::npos;
+
+    // 3) 同步执行体直测
+    auto resSyncFull  = agentxx_fs_plugin::fileReadExecute(argsFull, testDir);
+    auto resSyncSlice = agentxx_fs_plugin::fileReadExecute(argsSlice, testDir);
+    bool syncOk       = resSyncFull.find("第一行中文数据") != std::string::npos
+                  && resSyncSlice.find("第二行关键内容") != std::string::npos;
+
+    fs::remove_all(agentxx::util::utf8ToPath(chineseDir));
+
+    if (fullOk && sliceOk && syncOk) {
+        g_fs_passed++;
+        TEST_PASS << "FilesystemReadTextFileTool handles Chinese/UTF-8 path reading" << std::endl;
+    } else {
+        g_fs_failed++;
+        TEST_FAIL << "FilesystemReadTextFileTool Chinese path reading failed, resFull: " << resFull
+                  << ", resSlice: " << resSlice << std::endl;
+    }
+    co_return;
+}
+
+/// 中文/UTF-8 路径测试: write 工具在多层中文路径下创建与覆盖文件
+asio::awaitable<void>
+    test_write_file_chinese_path(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+    namespace fs    = std::filesystem;
+    auto chineseDir = testDir + "/中文测试目录_写入/多层子目录";
+    auto filePath   = chineseDir + "/新建中文文件.txt";
+
+    auto tool = agentxx::tools::FilesystemWriteFileTool{agentContext};
+
+    // 1) 首次创建: 自动创建多层中文父目录
+    auto argsCreate = neograph::json{
+        {"path",      filePath        },
+        {"content",   "中文内容第一版\n"},
+        {"overwrite", false           }
+    };
+    auto resCreate = co_await tool.execute_async(argsCreate);
+    bool createOk  = (resCreate == "success") && fs::exists(agentxx::util::utf8ToPath(filePath));
+
+    // 2) overwrite=false 再次写入应报错
+    bool noOverwriteThrew = false;
+    try {
+        auto out = co_await tool.execute_async(argsCreate);
+        if (agentxx::util::isIgnoreCaseContains(out, "error")
+            || agentxx::util::isIgnoreCaseContains(out, "already exist")) {
+            noOverwriteThrew = true;
+        }
+    } catch (...) {
+        noOverwriteThrew = true;
+    }
+
+    // 3) overwrite=true 成功覆盖
+    auto argsOverwrite = neograph::json{
+        {"path",      filePath        },
+        {"content",   "覆盖后的中文内容\n"},
+        {"overwrite", true            }
+    };
+    auto resOverwrite = co_await tool.execute_async(argsOverwrite);
+    bool overwriteOk  = (resOverwrite == "success");
+
+    // 验证文件内容
+    std::string readContent;
+    {
+        std::ifstream in(agentxx::util::utf8ToPath(filePath));
+        readContent = std::string(
+            (std::istreambuf_iterator<char>(in)),
+            std::istreambuf_iterator<char>()
+        );
+    }
+    bool contentOk = readContent.find("覆盖后的中文内容") != std::string::npos;
+
+    // 4) 同步版 write 直测
+    auto syncFilePath = chineseDir + "/同步写入文件.txt";
+    auto syncArgs     = neograph::json{
+            {"path",      syncFilePath },
+            {"content",   "同步中文写入\n"},
+            {"overwrite", true         }
+    };
+    auto syncRes = agentxx_fs_plugin::fileWriteExecute(syncArgs, testDir);
+    bool syncOk  = (syncRes == "success") && fs::exists(agentxx::util::utf8ToPath(syncFilePath));
+
+    fs::remove_all(agentxx::util::utf8ToPath(testDir + "/中文测试目录_写入"));
+
+    if (createOk && noOverwriteThrew && overwriteOk && contentOk && syncOk) {
+        g_fs_passed++;
+        TEST_PASS << "FilesystemWriteFileTool handles Chinese/UTF-8 path writing" << std::endl;
+    } else {
+        g_fs_failed++;
+        TEST_FAIL << "FilesystemWriteFileTool Chinese path write failed, createOk: " << createOk
+                  << ", noOverwriteThrew: " << noOverwriteThrew
+                  << ", overwriteOk: " << overwriteOk << ", contentOk: " << contentOk
+                  << ", syncOk: " << syncOk << std::endl;
+    }
+    co_return;
+}
+
+/// 中文/UTF-8 路径测试: edit 工具在中文路径下进行单处/多处替换
+asio::awaitable<void>
+    test_edit_text_file_chinese_path(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+    namespace fs    = std::filesystem;
+    auto chineseDir = testDir + "/中文测试目录_编辑";
+    fs::create_directories(agentxx::util::utf8ToPath(chineseDir));
+    auto filePath = chineseDir + "/编辑目标文件_中文.txt";
+    {
+        std::ofstream f(agentxx::util::utf8ToPath(filePath));
+        f << "前缀行\n目标旧字符串_AAA\n中间行\n目标旧字符串_AAA\n后缀行\n";
+    }
+
+    auto tool = agentxx::tools::FilesystemEditTextFileTool{agentContext};
+
+    // 1) 单处替换
+    auto argsSingle = neograph::json{
+        {"path",          filePath          },
+        {"old_str",       "目标旧字符串_AAA"     },
+        {"new_str",       "已替换新字符串_BBB"    },
+        {"multi_replace", false             }
+    };
+    auto resSingle = co_await tool.execute_async(argsSingle);
+    bool singleOk  = (resSingle == "success");
+
+    // 2) 多处替换 (剩余的一处替换)
+    auto argsMulti = neograph::json{
+        {"path",          filePath          },
+        {"old_str",       "目标旧字符串_AAA"     },
+        {"new_str",       "已替换新字符串_CCC"    },
+        {"multi_replace", true              }
+    };
+    auto resMulti = co_await tool.execute_async(argsMulti);
+    bool multiOk  = resMulti.find("Success") != std::string::npos
+                   || resMulti.find("success") != std::string::npos;
+
+    // 验证文件最终内容
+    std::string readContent;
+    {
+        std::ifstream in(agentxx::util::utf8ToPath(filePath));
+        readContent = std::string(
+            (std::istreambuf_iterator<char>(in)),
+            std::istreambuf_iterator<char>()
+        );
+    }
+    bool contentOk = readContent.find("已替换新字符串_BBB") != std::string::npos
+                  && readContent.find("已替换新字符串_CCC") != std::string::npos
+                  && readContent.find("目标旧字符串_AAA") == std::string::npos;
+
+    // 3) 同步版 edit 直测
+    auto syncArgs = neograph::json{
+        {"path",          filePath      },
+        {"old_str",       "已替换新字符串_BBB"},
+        {"new_str",       "同步替换新内容"   },
+        {"multi_replace", false         }
+    };
+    auto syncRes = agentxx_fs_plugin::fileEditExecute(syncArgs, testDir);
+    bool syncOk  = (syncRes == "success");
+
+    fs::remove_all(agentxx::util::utf8ToPath(chineseDir));
+
+    if (singleOk && multiOk && contentOk && syncOk) {
+        g_fs_passed++;
+        TEST_PASS << "FilesystemEditTextFileTool handles Chinese/UTF-8 path editing" << std::endl;
+    } else {
+        g_fs_failed++;
+        TEST_FAIL << "FilesystemEditTextFileTool Chinese path edit failed, resSingle: " << resSingle
+                  << ", resMulti: " << resMulti << ", contentOk: " << contentOk
+                  << ", syncOk: " << syncOk << std::endl;
+    }
+    co_return;
+}
+
+/// 中文/UTF-8 路径测试: glob 工具匹配中文目录和中文文件名
+asio::awaitable<void>
+    test_glob_chinese_paths(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+    namespace fs    = std::filesystem;
+    auto chineseDir = testDir + "/中文测试目录_通配符/子目录_中文";
+    fs::create_directories(agentxx::util::utf8ToPath(chineseDir));
+    {
+        std::ofstream f1(agentxx::util::utf8ToPath(chineseDir + "/文档_一.txt"));
+        f1 << "content1\n";
+        std::ofstream f2(agentxx::util::utf8ToPath(chineseDir + "/文档_二.log"));
+        f2 << "content2\n";
+    }
+
+    auto tool = agentxx::tools::FilesystemGlobTool{agentContext};
+
+    // 1) 递归 pattern 匹配中文目录下的 .txt
+    auto argsRec = neograph::json{
+        {"file_patterns", neograph::json::array({testDir + "/中文测试目录_通配符/**/*.txt"})},
+    };
+    auto resRec = co_await tool.execute_async(argsRec);
+    bool recOk  = resRec.find("文档_一.txt") != std::string::npos
+                 && resRec.find("文档_二.log") == std::string::npos;
+
+    // 2) 直接用含中文的 pattern 匹配
+    auto argsDirect = neograph::json{
+        {"file_patterns", neograph::json::array({chineseDir + "/*"})},
+    };
+    auto resDirect = co_await tool.execute_async(argsDirect);
+    bool directOk  = resDirect.find("文档_一.txt") != std::string::npos
+                    && resDirect.find("文档_二.log") != std::string::npos;
+
+    fs::remove_all(agentxx::util::utf8ToPath(testDir + "/中文测试目录_通配符"));
+
+    if (recOk && directOk) {
+        g_fs_passed++;
+        TEST_PASS << "FilesystemGlobTool handles Chinese/UTF-8 pattern and path matching"
+                  << std::endl;
+    } else {
+        g_fs_failed++;
+        TEST_FAIL << "FilesystemGlobTool Chinese path matching failed, resRec: " << resRec
+                  << ", resDirect: " << resDirect << std::endl;
+    }
+    co_return;
+}
+
+/// 中文/UTF-8 路径测试: grep 工具在中文路径与中文内容下搜索
+asio::awaitable<void>
+    test_grep_chinese_path_and_content(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+    namespace fs    = std::filesystem;
+    auto chineseDir = testDir + "/中文测试目录_检索";
+    fs::create_directories(agentxx::util::utf8ToPath(chineseDir));
+    auto filePath = chineseDir + "/检索目标_中文.txt";
+    {
+        std::ofstream f(agentxx::util::utf8ToPath(filePath));
+        f << "首行无用数据\n检索特征码_中文关键字_98765\n末行结束\n";
+    }
+
+    auto tool = agentxx::tools::FilesystemGrepTool{agentContext};
+
+    // 1) files_with_matches 文本搜索
+    auto argsFwm = neograph::json{
+        {"text_patterns_is_regex", false                                         },
+        {"text_patterns",          neograph::json::array({"检索特征码_中文关键字"})    },
+        {"file_patterns",          neograph::json::array({chineseDir + "/*.txt"})},
+        {"output_mode",            "files_with_matches"                          }
+    };
+    auto resFwm = co_await tool.execute_async(argsFwm);
+    bool fwmOk  = resFwm.find("检索目标_中文.txt") != std::string::npos
+                 && resFwm.find("[Error]") == std::string::npos;
+
+    // 2) content 模式正则搜索
+    auto argsContent = neograph::json{
+        {"text_patterns_is_regex", true                                           },
+        {"text_patterns",          neograph::json::array({R"(检索特征码_中文关键字_\d+)"})},
+        {"file_patterns",          neograph::json::array({testDir + "/**/*.txt"}) },
+        {"output_mode",            "content"                                     }
+    };
+    auto resContent = co_await tool.execute_async(argsContent);
+    bool contentOk  = resContent.find("检索目标_中文.txt") != std::string::npos
+                     && resContent.find("检索特征码_中文关键字_98765") != std::string::npos;
+
+    fs::remove_all(agentxx::util::utf8ToPath(chineseDir));
+
+    if (fwmOk && contentOk) {
+        g_fs_passed++;
+        TEST_PASS << "FilesystemGrepTool handles Chinese/UTF-8 path and content search"
+                  << std::endl;
+    } else {
+        g_fs_failed++;
+        TEST_FAIL << "FilesystemGrepTool Chinese path/content search failed, resFwm: " << resFwm
+                  << ", resContent: " << resContent << std::endl;
+    }
+    co_return;
+}
+
 /// 插件真实链路冒烟测试: dlopen agentxx_filesystem .so, 经宿主 PluginManager/
 /// op_driver 全链路执行 —— 覆盖单测直测 impl 纯函数覆盖不到的接线层:
 ///   - read/write/edit: poll 寄生驱动三件套 (PolledToolShim start→poll 步进
@@ -1895,6 +2237,60 @@ asio::awaitable<void> test_plugin_real_link() {
         XX_TEST_EXPECT_TRUE(out.find("link_smoke.txt") != std::string::npos);
     }
 
+    // 中文路径链路测试 (write -> read -> edit -> list -> grep)
+    {
+        auto outW = co_await callTool(
+            "agentxx_filesystem_write",
+            neograph::json{
+                {"path",    "中文目录_真实链路/中文文件.txt"},
+                {"content", "中文链路数据_初始版本\n"        }
+        }
+        );
+        XX_TEST_EXPECT_EQ(outW, std::string{"success"});
+        XX_TEST_EXPECT_TRUE(
+            fs::exists(agentxx::util::utf8ToPath(testDir + "/中文目录_真实链路/中文文件.txt"))
+        );
+
+        auto outR = co_await callTool(
+            "agentxx_filesystem_read",
+            neograph::json{
+                {"path", "中文目录_真实链路/中文文件.txt"}
+        }
+        );
+        XX_TEST_EXPECT_TRUE(outR.find("中文链路数据_初始版本") != std::string::npos);
+
+        auto outE = co_await callTool(
+            "agentxx_filesystem_edit",
+            neograph::json{
+                {"path",    "中文目录_真实链路/中文文件.txt"},
+                {"old_str", "初始版本"                  },
+                {"new_str", "更新版本"                  }
+        }
+        );
+        XX_TEST_EXPECT_EQ(outE, std::string{"success"});
+
+        auto outL = co_await callTool(
+            "agentxx_filesystem_list",
+            neograph::json{
+                {"path", "中文目录_真实链路"}
+        }
+        );
+        XX_TEST_EXPECT_TRUE(outL.find("中文文件.txt") != std::string::npos);
+
+        auto outG = co_await callTool(
+            "agentxx_filesystem_grep",
+            neograph::json{
+                {"text_patterns_is_regex", false                             },
+                {"text_patterns",          neograph::json::array({"更新版本"})    },
+                {"file_patterns",          neograph::json::array({"中文目录_真实链路/*.txt"})},
+                {"output_mode",            "files_with_matches"              }
+        }
+        );
+        XX_TEST_EXPECT_TRUE(outG.find("中文文件.txt") != std::string::npos);
+
+        fs::remove_all(agentxx::util::utf8ToPath(testDir + "/中文目录_真实链路"), ec);
+    }
+
     // 卸载 (寄生 loop / 垫片随实例析构安全)
     auto okUnload = co_await linkCtx->pluginManager->unloadAsync("agentxx_filesystem");
     XX_TEST_EXPECT_TRUE(okUnload);
@@ -1982,6 +2378,13 @@ asio::awaitable<TestResult>
     co_await run(test_glob_unicode_paths);
     co_await run(test_grep_unicode_path_and_content);
     co_await run(test_grep_multi_pattern_fault_tolerance);
+
+    co_await run(test_list_file_chinese_path);
+    co_await run(test_read_text_file_chinese_path);
+    co_await run(test_write_file_chinese_path);
+    co_await run(test_edit_text_file_chinese_path);
+    co_await run(test_glob_chinese_paths);
+    co_await run(test_grep_chinese_path_and_content);
 
     // 插件真实链路冒烟 (dlopen + 宿主 op_driver 全链路; 插件未构建时跳过)
     // - 无 agentContext 形参, 不经 run 适配器直调 (异常兜底语义一致)

@@ -272,13 +272,14 @@ inline std::string fileListExecuteImpl(
         return false;
     };
 
-    if (false == std::filesystem::exists(targetPath)) {
+    auto fsPath = agentxx::util::utf8ToPath(targetPath);
+    if (false == std::filesystem::exists(fsPath)) {
         lines.push_back("[Error] Path not exist");
-    } else if (std::filesystem::is_directory(targetPath)) {
+    } else if (std::filesystem::is_directory(fsPath)) {
         if (recursive) {
             // skip_permission_denied: 单个不可读目录被跳过而非中断整个列表
             for (const auto& entity : std::filesystem::recursive_directory_iterator(
-                     targetPath,
+                     fsPath,
                      std::filesystem::directory_options::skip_permission_denied
                  )) {
                 if (checkStop()) {
@@ -291,7 +292,7 @@ inline std::string fileListExecuteImpl(
             }
         } else {
             for (const auto& entity : std::filesystem::directory_iterator(
-                     targetPath,
+                     fsPath,
                      std::filesystem::directory_options::skip_permission_denied
                  )) {
                 if (checkStop()) {
@@ -303,8 +304,8 @@ inline std::string fileListExecuteImpl(
                 }
             }
         }
-    } else if (std::filesystem::is_regular_file(targetPath)) {
-        onAppendItem(std::filesystem::directory_entry(targetPath));
+    } else if (std::filesystem::is_regular_file(fsPath)) {
+        onAppendItem(std::filesystem::directory_entry(fsPath));
     } else {
         lines.push_back("[Error] Path exist, but is not a directory or file");
     }
@@ -337,14 +338,13 @@ inline std::string fileReadExecuteImpl(
     if (filepath.empty()) {
         return R"([Error] Arg `path` is empty)";
     }
-    auto systemCharsetFilePath = filepath;
-    agentxx::util::autoConvertToSystemPath(systemCharsetFilePath);
+    auto fsPath = agentxx::util::utf8ToPath(filepath);
     auto text_line_offset = arguments.value<int64_t>("line_offset", -1);
     auto text_line_limit  = arguments.value<int64_t>("line_limit", -1);
 
     /// 同步阻塞读取文件
     std::ifstream stream;
-    stream.open(systemCharsetFilePath, std::ios_base::binary);
+    stream.open(fsPath, std::ios_base::binary);
     if (!stream) {
         auto ec = std::error_code{errno, std::system_category()};
         throw std::runtime_error(fmt::format(R"(Can not open file. Error: {})", ec.message()));
@@ -424,7 +424,7 @@ inline std::string fileWriteExecuteImpl(
         throw std::runtime_error{"File already exist. Set `overwrite` = true if want to overwrite."
         };
     }
-    if (false == std::filesystem::exists(path.parent_path())
+    if (!path.parent_path().empty() && false == std::filesystem::exists(path.parent_path())
         && false == std::filesystem::create_directories(path.parent_path())) {
         // 创建父目录
         throw std::runtime_error{fmt::format(
@@ -468,8 +468,6 @@ inline std::string fileEditExecuteImpl(
     if (filepath.empty()) {
         return "[Error] Arg `path` is empty";
     }
-    auto systemCharsetFilePath = filepath;
-    agentxx::util::autoConvertToSystemPath(systemCharsetFilePath);
     auto old_str = arguments.value<std::string>("old_str", std::string{});
     if (old_str.empty()) {
         return "[Error] Arg `old_str` is empty";
@@ -487,7 +485,7 @@ inline std::string fileEditExecuteImpl(
     detail::normalizeCrlfToLf(old_str);
     detail::normalizeCrlfToLf(new_str);
 
-    auto path = std::filesystem::path(filepath);
+    auto path = agentxx::util::utf8ToPath(filepath);
     if (false == std::filesystem::exists(path)) {
         throw std::runtime_error{"File not exist"};
     }
@@ -518,15 +516,16 @@ inline std::string fileEditExecuteImpl(
     // 原子写: 先写同目录临时文件, 成功后 rename 覆盖原文件,
     // 避免直接 truncate 原文件后写入中途失败导致原内容永久丢失
     static std::atomic<uint64_t> s_editTmpSeq{0};
-    const auto                   tmpPath = fmt::format(
+    const auto                   tmpPathStr = fmt::format(
         "{}.agentxx_edit_tmp_{}",
-        systemCharsetFilePath,
+        filepath,
         s_editTmpSeq.fetch_add(1)
     );
+    const auto fsTmpPath = agentxx::util::utf8ToPath(tmpPathStr);
 
     {
         std::ofstream stream(
-            tmpPath,
+            fsTmpPath,
             std::ios_base::out | std::ios_base::trunc | std::ios_base::binary
         );
         if (!stream) {
@@ -539,17 +538,17 @@ inline std::string fileEditExecuteImpl(
         stream.close();
         if (!stream) {
             std::error_code rmEc;
-            std::filesystem::remove(tmpPath, rmEc);
+            std::filesystem::remove(fsTmpPath, rmEc);
             auto ec = std::error_code{errno, std::system_category()};
             throw std::runtime_error{fmt::format(R"(Write temp file failed: {})", ec.message())};
         }
     }
 
     std::error_code renameEc;
-    std::filesystem::rename(tmpPath, systemCharsetFilePath, renameEc);
+    std::filesystem::rename(fsTmpPath, path, renameEc);
     if (renameEc) {
         std::error_code rmEc;
-        std::filesystem::remove(tmpPath, rmEc);
+        std::filesystem::remove(fsTmpPath, rmEc);
         throw std::runtime_error{
             fmt::format(R"(Failed to replace original file: {})", renameEc.message())
         };
@@ -1109,11 +1108,11 @@ namespace detail {
 /// - 打开失败抛出异常; 读到 EOF 视为正常结束
 inline asio::awaitable<std::string> asyncReadWholeFile(
     const asio::any_io_executor& executor,
-    const std::string&           systemCharsetFilePath
+    const std::string&           utf8FilePath
 ) {
     asio::stream_file        stream{executor};
     neograph_asio_error_code errCode;
-    stream.open(systemCharsetFilePath, asio::stream_file::read_only, errCode);
+    stream.open(utf8FilePath, asio::stream_file::read_only, errCode);
     if (false == stream.is_open()) {
         throw std::runtime_error{fmt::format(R"(Can not open file: {})", errCode.message())};
     }
@@ -1145,8 +1144,6 @@ inline asio::awaitable<std::string>
     if (filepath.empty()) {
         co_return R"([Error] Arg `path` is empty)";
     }
-    auto systemCharsetFilePath = filepath;
-    agentxx::util::autoConvertToSystemPath(systemCharsetFilePath);
     auto text_line_offset = arguments.value<int64_t>("line_offset", -1);
     auto text_line_limit  = arguments.value<int64_t>("line_limit", -1);
 
@@ -1156,7 +1153,7 @@ inline asio::awaitable<std::string>
         // 读取部分文件: 逐行 async_read_until, 跳过偏移行后收集至结果
         asio::stream_file        stream{executor};
         neograph_asio_error_code errCode;
-        stream.open(systemCharsetFilePath, asio::stream_file::read_only, errCode);
+        stream.open(filepath, asio::stream_file::read_only, errCode);
         if (false == stream.is_open()) {
             throw std::runtime_error{fmt::format(R"(Can not open file: {})", errCode.message())};
         }
@@ -1221,7 +1218,7 @@ inline asio::awaitable<std::string>
     }
 
     // 读取完整文件
-    auto data = co_await detail::asyncReadWholeFile(executor, systemCharsetFilePath);
+    auto data = co_await detail::asyncReadWholeFile(executor, filepath);
     // 保留原始的 crlf 或 \n 换行符不转换
     agentxx::util::autoConvertToUtf8(data);
     co_return data;
@@ -1236,18 +1233,16 @@ inline asio::awaitable<std::string>
     if (filepath.empty()) {
         co_return R"([Error] Arg `path` is empty)";
     }
-    auto systemCharsetFilePath = filepath;
-    agentxx::util::autoConvertToSystemPath(systemCharsetFilePath);
     auto content   = arguments.value<std::string>("content", std::string{});
     auto overwrite = arguments.value<bool>("overwrite", false);
 
     // 存在性检查与父目录创建: 快速元数据操作, 与原实现一致内联执行
-    auto path = std::filesystem::path(filepath);
+    auto path = agentxx::util::utf8ToPath(filepath);
     if (false == overwrite && std::filesystem::exists(path)) {
         throw std::runtime_error{"File already exist. Set `overwrite` = true if want to overwrite."
         };
     }
-    if (false == std::filesystem::exists(path.parent_path())
+    if (!path.parent_path().empty() && false == std::filesystem::exists(path.parent_path())
         && false == std::filesystem::create_directories(path.parent_path())) {
         throw std::runtime_error{fmt::format(
             R"(Can not create `path`({})'s parent dirs.)",
@@ -1260,7 +1255,7 @@ inline asio::awaitable<std::string>
     asio::stream_file        stream{executor};
     neograph_asio_error_code errCode;
     stream.open(
-        systemCharsetFilePath,
+        filepath,
         asio::stream_file::write_only | asio::stream_file::create | asio::stream_file::truncate,
         errCode
     );
@@ -1293,8 +1288,6 @@ inline asio::awaitable<std::string>
     if (filepath.empty()) {
         co_return "[Error] Arg `path` is empty";
     }
-    auto systemCharsetFilePath = filepath;
-    agentxx::util::autoConvertToSystemPath(systemCharsetFilePath);
     auto old_str = arguments.value<std::string>("old_str", std::string{});
     if (old_str.empty()) {
         co_return "[Error] Arg `old_str` is empty";
@@ -1312,13 +1305,14 @@ inline asio::awaitable<std::string>
     detail::normalizeCrlfToLf(old_str);
     detail::normalizeCrlfToLf(new_str);
 
-    if (false == std::filesystem::exists(std::filesystem::path(filepath))) {
+    auto path = agentxx::util::utf8ToPath(filepath);
+    if (false == std::filesystem::exists(path)) {
         throw std::runtime_error{"File not exist"};
     }
 
     // 异步读取完整文件并预处理 (先转 UTF-8 使 GBK 等编码文件可正常匹配, 再统一换行符)
     auto        executor = co_await asio::this_coro::executor;
-    std::string content  = co_await detail::asyncReadWholeFile(executor, systemCharsetFilePath);
+    std::string content  = co_await detail::asyncReadWholeFile(executor, filepath);
     agentxx::util::autoConvertToUtf8(content);
     detail::normalizeCrlfToLf(content);
 
@@ -1344,17 +1338,18 @@ inline asio::awaitable<std::string>
     // 避免直接 truncate 原文件后写入中途失败导致原内容永久丢失
     // (注: 计数器仅保证进程内唯一性, 多实例共享无害, 不属于实例状态)
     static std::atomic<uint64_t> s_editTmpSeq{0};
-    const auto                   tmpPath = fmt::format(
+    const auto                   tmpPathStr = fmt::format(
         "{}.agentxx_edit_tmp_{}",
-        systemCharsetFilePath,
+        filepath,
         s_editTmpSeq.fetch_add(1)
     );
+    const auto fsTmpPath = agentxx::util::utf8ToPath(tmpPathStr);
 
     {
         asio::stream_file        stream{executor};
         neograph_asio_error_code errCode;
         stream.open(
-            tmpPath,
+            tmpPathStr,
             asio::stream_file::write_only | asio::stream_file::create | asio::stream_file::truncate,
             errCode
         );
@@ -1371,16 +1366,16 @@ inline asio::awaitable<std::string>
         stream.close();
         if (errCode) {
             std::error_code rmEc;
-            std::filesystem::remove(tmpPath, rmEc);
+            std::filesystem::remove(fsTmpPath, rmEc);
             throw std::system_error{errCode};
         }
     }
 
     std::error_code renameEc;
-    std::filesystem::rename(tmpPath, systemCharsetFilePath, renameEc);
+    std::filesystem::rename(fsTmpPath, path, renameEc);
     if (renameEc) {
         std::error_code rmEc;
-        std::filesystem::remove(tmpPath, rmEc);
+        std::filesystem::remove(fsTmpPath, rmEc);
         throw std::runtime_error{
             fmt::format(R"(Failed to replace original file: {})", renameEc.message())
         };
