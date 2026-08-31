@@ -615,12 +615,49 @@ asio::awaitable<void> ModelCallWrapNode::baseRun(
                           agentxx::middleware::MiddlewareContext::graphDataKey_appendSystemMessage
                       );
 
-            // 清空替换 content
-            newSystemMsg.content = fmt::format(
-                "{}\n{}",
-                agentCtxPtr->agentConfig->prompt.systemPrompt,
-                fmt::join(appendSystemMsgList, "\n")
-            );
+            // 组装最终 system prompt:
+            // systemPrompt + appendSystemPrompts(有序) + appendSystemMessage(动态 skill/memory)
+            // - appendSystemPrompts 为通用扩展点 (planning/skill/codegraph 等均经此注入，键字典序拼接)
+            // - 空段不占位，避免无对应工具时误导模型
+            std::string combined = agentCtxPtr->agentConfig->prompt.systemPrompt;
+            auto appendIfNonEmpty = [&](const std::string& seg) {
+                if (seg.empty()) {
+                    return;
+                }
+                if (!combined.empty() && combined.back() != '\n') {
+                    combined += "\n";
+                }
+                // 段间用一个空行分隔, 保持可读性
+                if (!combined.empty() && combined.size() >= 2
+                    && combined.compare(combined.size() - 2, 2, "\n\n") != 0) {
+                    combined += "\n";
+                }
+                combined += seg;
+            };
+            // 通用附加提示词按固定优先级拼接：planning -> skill -> codegraph -> 其他(字典序)
+            // summarization 为压缩模板，不参与 system 拼接
+            const auto& appendMap = agentCtxPtr->agentConfig->prompt.appendSystemPrompts;
+            auto appendByKey = [&](const std::string& key) {
+                auto it = appendMap.find(key);
+                if (it != appendMap.end()) {
+                    appendIfNonEmpty(it->second);
+                }
+            };
+            appendByKey("planning");
+            appendByKey("skill");
+            appendByKey("codegraph");
+            for (const auto& kv : appendMap) {
+                if (kv.first == "planning" || kv.first == "skill" || kv.first == "codegraph"
+                    || kv.first == "summarization") {
+                    continue;
+                }
+                appendIfNonEmpty(kv.second);
+            }
+            if (!appendSystemMsgList.empty()) {
+                std::string appendJoined = fmt::format("{}", fmt::join(appendSystemMsgList, "\n"));
+                appendIfNonEmpty(appendJoined);
+            }
+            newSystemMsg.content = std::move(combined);
         }
 
         neograph::json sysMsgJson;

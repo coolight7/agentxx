@@ -156,8 +156,8 @@ void testNormalizePromptPatch() {
     XX_TEST_EXPECT_TRUE(patch.is_object());
     // 空串字段被剔除 ("保持不变"约定), 非空字段保留
     XX_TEST_EXPECT_FALSE(patch.contains("systemPrompt"));
-    XX_TEST_EXPECT_FALSE(patch.contains("systemSkillPrompt"));
-    XX_TEST_EXPECT_EQ(patch.value("systemPlanningPrompt", ""), std::string("plan v2"));
+    XX_TEST_EXPECT_TRUE(patch.contains("appendSystemPrompts"));
+    XX_TEST_EXPECT_EQ(patch["appendSystemPrompts"].value("planning", ""), std::string("plan v2"));
     // 非 prompt 字段被剔除
     XX_TEST_EXPECT_FALSE(patch.contains("analysis"));
     XX_TEST_EXPECT_FALSE(patch.contains("strategy"));

@@ -109,8 +109,7 @@ public:
 
     struct PromptBackup {
         std::optional<std::string> systemPrompt;
-        std::optional<std::string> systemPlanningPrompt;
-        std::optional<std::string> systemSkillPrompt;
+        std::map<std::string, std::optional<std::string>, std::less<>> appendSystemPrompts;
         std::map<std::string, std::optional<agentxx::agent::ToolPrompt>, std::less<>> toolPrompt;
         std::vector<std::string>                                                      backedUpTools;
         bool backedUpSystem = false;

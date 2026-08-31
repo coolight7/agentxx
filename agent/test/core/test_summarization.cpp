@@ -140,6 +140,11 @@ struct SummarizationTestEnv {
 
         // 默认模型名 = 首个注册的 "fallback"
         ctx->agentConfig->model.modelName = "fallback";
+        // 测试环境剥离通用附加提示词 (planning/skill/codegraph) 的干扰，仅保留 summarization 模板
+        // 否则 system 消息会被模型侧通用拼接拉长，导致断言 `content=="sys"` 失败
+        ctx->agentConfig->prompt.appendSystemPrompts.erase("planning");
+        ctx->agentConfig->prompt.appendSystemPrompts.erase("skill");
+        ctx->agentConfig->prompt.appendSystemPrompts.erase("codegraph");
 
         // 伪造 subagent 管理器 (压缩走 subagent 路径)
         subagent = std::make_shared<FakeSubAgentManagerTool>("fake_subagent", ctx);
@@ -631,15 +636,18 @@ asio::awaitable<TestResult> run_summarization_tests() {
             auto env               = std::make_shared<SummarizationTestEnv>();
             env->subagent->summary = "S";
 
-            // 默认模板非空且含关键内容
+            // 默认模板非空且含关键内容 (经通用 appendSystemPrompts["summarization"])
             const auto& p = env->ctx->agentConfig->prompt;
-            XX_TEST_EXPECT_FALSE(p.summarizationPrompt.empty());
-            XX_TEST_EXPECT_TRUE(p.summarizationPrompt.find("Summarize") != std::string::npos);
-            XX_TEST_EXPECT_TRUE(p.summarizationPrompt.find("{omitted_note}") != std::string::npos);
-            XX_TEST_EXPECT_TRUE(p.summarizationPrompt.find("{max_words}") != std::string::npos);
+            {
+                auto it = p.appendSystemPrompts.find("summarization");
+                XX_TEST_EXPECT_TRUE(it != p.appendSystemPrompts.end() && !it->second.empty());
+                XX_TEST_EXPECT_TRUE(it->second.find("Summarize") != std::string::npos);
+                XX_TEST_EXPECT_TRUE(it->second.find("{omitted_note}") != std::string::npos);
+                XX_TEST_EXPECT_TRUE(it->second.find("{max_words}") != std::string::npos);
+            }
 
             // 定制模板
-            env->ctx->agentConfig->prompt.summarizationPrompt
+            env->ctx->agentConfig->prompt.appendSystemPrompts["summarization"]
                 = "CUSTOM SUMMARIZE PROMPT {omitted_note}max {max_words}";
             std::vector<neograph::ChatMessage> msgs{makeMsg("user", "u1")};
             auto r = co_await env->handle->doSummarizeWithLLM(env->sessionId, msgs);
@@ -656,7 +664,7 @@ asio::awaitable<TestResult> run_summarization_tests() {
         // --- G. 空压缩模板 → 降级为不压缩 (返回空串, 不发起 subagent) ---
         {
             auto env = std::make_shared<SummarizationTestEnv>();
-            env->ctx->agentConfig->prompt.summarizationPrompt = "";
+            env->ctx->agentConfig->prompt.appendSystemPrompts["summarization"] = "";
             std::vector<neograph::ChatMessage> msgs{makeMsg("user", "u1")};
             auto r = co_await env->handle->doSummarizeWithLLM(env->sessionId, msgs);
             XX_TEST_EXPECT_EQ(r, std::string{""});
@@ -668,24 +676,27 @@ asio::awaitable<TestResult> run_summarization_tests() {
         {
             agentxx::agent::AgentPrompt p;
             const auto&                 j = p.toJson();
-            XX_TEST_EXPECT_EQ(j["summarizationPrompt"].get<std::string>(), p.summarizationPrompt);
+            XX_TEST_EXPECT_EQ(
+                j["appendSystemPrompts"]["summarization"].get<std::string>(),
+                p.appendSystemPrompts.at("summarization")
+            );
             // 往返: 定制后序列化再合并, 字段一致
             agentxx::agent::AgentPrompt p2;
-            p2.summarizationPrompt = "CUSTOM";
+            p2.appendSystemPrompts["summarization"] = "CUSTOM";
             agentxx::agent::AgentPrompt p3;
             p3.mergeFromJson(p2.toJson());
-            XX_TEST_EXPECT_EQ(p3.summarizationPrompt, std::string{"CUSTOM"});
+            XX_TEST_EXPECT_EQ(p3.appendSystemPrompts.at("summarization"), std::string{"CUSTOM"});
             // 缺失字段合并: 保持原值
             neograph::json partial = neograph::json{
                 {"systemPrompt", "SYS"}
             };
             p3.mergeFromJson(partial);
-            XX_TEST_EXPECT_EQ(p3.summarizationPrompt, std::string{"CUSTOM"});
+            XX_TEST_EXPECT_EQ(p3.appendSystemPrompts.at("summarization"), std::string{"CUSTOM"});
             XX_TEST_EXPECT_EQ(p3.systemPrompt, std::string{"SYS"});
             // promptHash 覆盖新字段 (定制后哈希变化)
             agentxx::agent::AgentPrompt p4;
             agentxx::agent::AgentPrompt p5;
-            p5.summarizationPrompt = "CUSTOM";
+            p5.appendSystemPrompts["summarization"] = "CUSTOM";
             XX_TEST_EXPECT_FALSE(p4.promptHash() == p5.promptHash());
         }
     }
