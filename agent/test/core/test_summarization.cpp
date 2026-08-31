@@ -1047,11 +1047,10 @@ asio::awaitable<TestResult> run_summarization_tests() {
         XX_TEST_EXPECT_EQ(maxContextTokensOf(env->ctx, env->sessionId), size_t{2048});
     }
 
-    // --- T4. 65% ~ 85% 之间: 只做 toolcall 去重 + 噪音清理, 不做 LLM 总结;
-    //          长内容原样保留 (程序侧不做 offload) ---
+    // --- T4. < 85% 不压缩; >= 85% 时触发确定性去重 ---
     {
         auto env = std::make_shared<SummarizationTestEnv>();
-        env->session()->setModelName("small"); // max=1000, 阈值 650 / 850
+        env->session()->setModelName("small"); // max=1000, 阈值 850
         env->handle->summarizationToolHandles["read_file"] = makeReadFileHandle();
         auto                               longContent     = makeLongContent(3000);
         std::vector<neograph::ChatMessage> msgs{
@@ -1062,7 +1061,14 @@ asio::awaitable<TestResult> run_summarization_tests() {
             makeToolResult("c2", "read_file", "r2"),
             makeMsg("user", longContent),
         };
-        auto res = co_await runModelcall(env->handle, env->ctx, env->sessionId, msgs, 700);
+        // 700 < 850: 不触发压缩
+        auto resNo = co_await runModelcall(env->handle, env->ctx, env->sessionId, msgs, 700);
+        XX_TEST_EXPECT_EQ(resNo.size(), size_t{6});
+        XX_TEST_EXPECT_EQ(resNo[2].content, std::string{"r1"});
+        XX_TEST_EXPECT_EQ(resNo[4].content, std::string{"r2"});
+
+        // 900 >= 850: 触发压缩与去重
+        auto res = co_await runModelcall(env->handle, env->ctx, env->sessionId, msgs, 900);
         // 消息数量不变 (未做 LLM 总结)
         XX_TEST_EXPECT_EQ(res.size(), size_t{6});
         // toolcall 去重: 旧 response 截断, 新 response 保留
@@ -1084,11 +1090,12 @@ asio::awaitable<TestResult> run_summarization_tests() {
             }
         }
         XX_TEST_EXPECT_FALSE(hasSummary);
-        // 未发起压缩 subagent
-        XX_TEST_EXPECT_EQ(env->subagent->receivedArguments.size(), size_t{0});
-        // 统计发布
-        XX_TEST_EXPECT_EQ(contextTokensOf(env->ctx, env->sessionId), size_t{700});
+        // 统计发布与 viewMessage
         XX_TEST_EXPECT_EQ(maxContextTokensOf(env->ctx, env->sessionId), size_t{1000});
+        XX_TEST_EXPECT_TRUE(env->session()->viewMessages.size() >= 1);
+        XX_TEST_EXPECT_TRUE(
+            env->session()->viewMessages.back().text.find("压缩上下文") != std::string::npos
+        );
     }
 
     // --- T5. >= 85% 且 LLM 总结成功: system + 总结对 + 最近消息 (token 预算切分) ---
@@ -1147,7 +1154,11 @@ asio::awaitable<TestResult> run_summarization_tests() {
         XX_TEST_EXPECT_EQ(reqMsgs[1].value("content", std::string{}), std::string{"u1"});
         XX_TEST_EXPECT_EQ(reqMsgs[2].value("content", std::string{}), std::string{"a1"});
         XX_TEST_EXPECT_EQ(reqMsgs.size(), size_t{4}); // sys + u1 + a1 + 指令
-        XX_TEST_EXPECT_EQ(contextTokensOf(env->ctx, env->sessionId), size_t{900});
+        XX_TEST_EXPECT_EQ(contextTokensOf(env->ctx, env->sessionId), size_t{58});
+        XX_TEST_EXPECT_TRUE(env->session()->viewMessages.size() >= 1);
+        XX_TEST_EXPECT_TRUE(
+            env->session()->viewMessages.back().text.find("压缩上下文") != std::string::npos
+        );
     }
 
     // --- T6. >= 85% 但 LLM 总结失败 (空响应) → 保留原消息, 失败计数 +1 ---
@@ -1561,7 +1572,7 @@ asio::awaitable<TestResult> run_summarization_tests() {
         XX_TEST_EXPECT_FALSE(hasOld);
     }
 
-    // --- T16. 探索折叠在 onModelcallRunFunc 链路生效 (65% 分支) ---
+    // --- T16. 探索折叠在 onModelcallRunFunc 链路生效 (>= 85% 分支) ---
     {
         auto env = std::make_shared<SummarizationTestEnv>();
         env->session()->setModelName("small"); // max=1000
@@ -1578,7 +1589,7 @@ asio::awaitable<TestResult> run_summarization_tests() {
             makeMsg("user", "u2"),
             makeMsg("assistant", "a2"),
         };
-        auto res = co_await runModelcall(env->handle, env->ctx, env->sessionId, msgs, 700);
+        auto res = co_await runModelcall(env->handle, env->ctx, env->sessionId, msgs, 900);
         // 探索折叠: 3 组连续 read_file → 只保留最后一组 (C)
         XX_TEST_EXPECT_EQ(res.size(), size_t{6}); // sys,u1,tcC,tC,u2,a2
         XX_TEST_EXPECT_EQ(res[0].content, std::string{"sys"});
@@ -1763,6 +1774,60 @@ asio::awaitable<TestResult> run_summarization_tests() {
             }
         }
         XX_TEST_EXPECT_TRUE(hasErrorSummary);
+    }
+
+    // --- T20. 触发压缩时先发 viewMessage "正在压缩上下文", 压缩完成更新为 "压缩上下文 {old}->{new}/{max} · {耗时}" ---
+    {
+        auto env = std::make_shared<SummarizationTestEnv>();
+        env->session()->setModelName("small"); // max=1000
+        env->subagent->summary = "S_ViewMsg";
+
+        std::vector<neograph::ChatMessage> msgs{
+            makeMsg("system", "sys"),
+            makeMsg("user", "u1"),
+            makeMsg("assistant", "a1"),
+            makeMsg("user", "u2"),
+            makeMsg("assistant", "a2"),
+            makeMsg("user", "u3"),
+            makeMsg("assistant", "a3"),
+            makeMsg("user", "u4"),
+            makeMsg("assistant", "a4"),
+        };
+        auto res = co_await runModelcall(env->handle, env->ctx, env->sessionId, msgs, 900);
+        XX_TEST_EXPECT_EQ(res.size(), size_t{9});
+
+        auto sess = env->session();
+        XX_TEST_EXPECT_TRUE(sess->viewMessages.size() >= 1);
+        const auto& vm = sess->viewMessages.back();
+        XX_TEST_EXPECT_EQ(vm.role, agentxx::agent::ViewMessage::Role::Tip);
+        // 验证格式: 包含 "压缩上下文 900->.../1000 · "
+        XX_TEST_EXPECT_TRUE(vm.text.starts_with("压缩上下文 900->"));
+        XX_TEST_EXPECT_TRUE(vm.text.find("/1000 · ") != std::string::npos);
+    }
+
+    // --- T21. 手动触发 compactSessionContext 压缩 ---
+    {
+        auto env = std::make_shared<SummarizationTestEnv>();
+        env->session()->setModelName("small");
+        env->subagent->summary = "S_Manual";
+
+        std::vector<neograph::ChatMessage> msgs{
+            makeMsg("system", "sys"),
+            makeMsg("user", "u1"),
+            makeMsg("assistant", "a1"),
+            makeMsg("user", "u2"),
+            makeMsg("assistant", "a2"),
+        };
+        neograph::json msgsJson;
+        neograph::to_json(msgsJson, msgs);
+        env->session()->llmMessages = msgsJson;
+
+        bool ok = co_await env->handle->compactSessionContext(env->sessionId);
+        XX_TEST_EXPECT_TRUE(ok);
+        XX_TEST_EXPECT_TRUE(env->session()->llmMessages.is_array());
+        XX_TEST_EXPECT_TRUE(env->session()->viewMessages.size() >= 1);
+        const auto& vm = env->session()->viewMessages.back();
+        XX_TEST_EXPECT_TRUE(vm.text.starts_with("压缩上下文 "));
     }
 
     co_return TestResult{g_sum_passed, g_sum_failed};

@@ -1,10 +1,14 @@
 #include "agentxx/middlewares/summarization.h"
 
+#include "agentxx/agent/io/agent_io.h"
+#include "agentxx/agent/io/agent_io_transport.h"
 #include "agentxx/agent/model_registry.h"
 #include "agentxx/tools/subagent.h"
 #include "agentxx/util/exception.h"
+#include "agentxx/util/string_util.h"
 #include "fmt/format.h"
 #include <algorithm>
+#include <chrono>
 #include <limits>
 #include <set>
 #include <sstream>
@@ -574,34 +578,57 @@ asio::awaitable<void>
 
     const auto countTokenUsage = countTokens({}, messages, enableCountThinking);
     const auto tokenUsage      = (apiTokenUsage > 0) ? apiTokenUsage : countTokenUsage;
+    auto       session         = agentCtxPtr->sessions->get(sessionId);
     // 发布上下文统计到对应会话, 供 UI 显示上下文占用百分比
-    if (auto session = agentCtxPtr->sessions->get(sessionId)) {
-        if (session->contextStats) {
-            // UI显示优先使用 apiTokenUsage 即可
-            session->contextStats->contextTokens    = tokenUsage;
-            session->contextStats->maxContextTokens = modelContenxtMaxToken;
-        }
+    if (session && session->contextStats) {
+        // UI显示优先使用 apiTokenUsage 即可
+        session->contextStats->contextTokens    = tokenUsage;
+        session->contextStats->maxContextTokens = modelContenxtMaxToken;
     }
 
     neograph::json newMsgsJson;
 
-    // ---- L1+L2: 确定性压缩 (>= 65% 上限) ----
-    // - toolcall 去重/探索折叠 + 噪音清理
-    // - 不剥离 thinking (保留逻辑连贯性, 由 LLM 压缩时决定取舍)
-    // - 不做 offload (长内容由 LLM 压缩时经 agentxx_share_store 自主外置)
-    if (tokenUsage >= modelContenxtMaxToken * 0.65) {
+    // ---- 超过 85% 上限时自动压缩 ----
+    if (tokenUsage >= modelContenxtMaxToken * 0.85) {
+        const auto startTime = std::chrono::steady_clock::now();
+        const auto startTimeMs
+            = static_cast<int64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                       std::chrono::system_clock::now().time_since_epoch()
+            )
+                                       .count());
+        const auto oldTokens = tokenUsage;
+
+        // 1. 触发压缩时，先发送一条 viewMessage 提示 "正在压缩上下文"
+        agentxx::agent::ViewMessage vm = agentxx::agent::ViewMessage::makeText(
+            agentxx::agent::ViewMessage::Role::Tip,
+            "Summarizizing LLM Context...",
+            startTimeMs
+        );
+        vm.tip->tipLevel = agentxx::agent::ViewMessage::TipLevel::Info;
+        vm.collapsed     = true;
+        if (session) {
+            vm.id = session->appendViewMessage(vm);
+            if (session->io) {
+                session->io->sendToPeer(agentxx::agent::WireDelta{
+                    .type    = agentxx::agent::WireDelta::Type::InsertMessage,
+                    .seq     = ++session->deltaSeq,
+                    .message = std::make_shared<agentxx::agent::ViewMessage>(vm),
+                });
+            }
+        }
+
+        // 确定性压缩 (toolcall 去重/探索折叠 + 噪音清理)
         doSummarizeToolcall(messages);
         cleanNoiseMessages(messages);
-        neograph::to_json(newMsgsJson, messages);
-    }
 
-    // ---- L4: LLM 同上下文压缩 (>= 85% 上限) ----
-    if (tokenUsage >= modelContenxtMaxToken * 0.85) {
+        // LLM 同上下文压缩
         const size_t systemCount = (!messages.empty() && messages[0].role == "system") ? 1 : 0;
         const size_t recentBudget
             = static_cast<size_t>(modelContenxtMaxToken * recentTokenBudgetRatio);
         const size_t oldEnd   = splitRecentByTokenBudget(messages, systemCount, recentBudget);
         const size_t oldStart = systemCount;
+
+        std::vector<neograph::ChatMessage> compressedMessages;
         if (oldEnd > oldStart) {
             // 压缩段 (system 之后, recent 之前)
             auto oldMessages = std::vector<neograph::ChatMessage>{
@@ -665,37 +692,71 @@ asio::awaitable<void>
             }
 
             if (action == ReplaceAction::Compact) {
-                std::vector<neograph::ChatMessage> newMessages{};
                 if (systemCount > 0) {
                     // 系统消息
-                    newMessages.push_back(messages[0]);
+                    compressedMessages.push_back(messages[0]);
                 }
                 // 追加压缩后的信息
                 // system | user | assistant | [user/tool]recentMessages
-                newMessages.push_back(neograph::ChatMessage{
+                compressedMessages.push_back(neograph::ChatMessage{
                     .role    = "user",
                     .content = "[Please compact context to save space]",
                     .flags
                     = neograph::MessageFlag::AutoInserted | neograph::MessageFlag::Summarized,
                 });
-                newMessages.push_back(neograph::ChatMessage{
+                compressedMessages.push_back(neograph::ChatMessage{
                     .role    = "assistant",
                     .content = fmt::format("[Previous conversation summary]: \n{}", summary),
                     .flags
                     = neograph::MessageFlag::AutoInserted | neograph::MessageFlag::Summarized,
                 });
                 // 添加最近消息
-                newMessages.insert(
-                    newMessages.end(),
+                compressedMessages.insert(
+                    compressedMessages.end(),
                     std::move_iterator(recentMessages.begin()),
                     std::move_iterator(recentMessages.end())
                 );
-                neograph::to_json(newMsgsJson, newMessages);
             } else if (action == ReplaceAction::HardTruncate) {
-                auto newMessages = hardTruncate(messages, systemCount, modelContenxtMaxToken);
-                neograph::to_json(newMsgsJson, newMessages);
+                compressedMessages = hardTruncate(messages, systemCount, modelContenxtMaxToken);
+            } else {
+                compressedMessages = messages;
             }
-            // ReplaceAction::None: 不覆盖, 保留原消息 (期望重试后再次压缩)
+        } else {
+            compressedMessages = messages;
+        }
+
+        neograph::to_json(newMsgsJson, compressedMessages);
+        in.state.overwrite("messages", newMsgsJson);
+
+        // 计算新 token 量与耗时，更新刚刚的 viewMessage 为
+        //     "压缩上下文 {旧}->{新}/{最大} · {耗时}"
+        const auto newTokens = countTokens({}, compressedMessages, enableCountThinking);
+        const auto durationMs
+            = static_cast<int64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                       std::chrono::steady_clock::now() - startTime
+            )
+                                       .count());
+        vm.text = fmt::format(
+            "Summarizied LLM Context {}->{}/{} · {}",
+            oldTokens,
+            newTokens,
+            modelContenxtMaxToken,
+            agentxx::util::formatDurationMilliseconds(durationMs)
+        );
+        vm.durationMs = durationMs;
+        if (session) {
+            session->updateViewMessage(vm);
+            if (session->io) {
+                session->io->sendToPeer(agentxx::agent::WireDelta{
+                    .type    = agentxx::agent::WireDelta::Type::UpdateMessage,
+                    .seq     = ++session->deltaSeq,
+                    .message = std::make_shared<agentxx::agent::ViewMessage>(vm),
+                });
+            }
+            if (session->contextStats) {
+                session->contextStats->contextTokens    = newTokens;
+                session->contextStats->maxContextTokens = modelContenxtMaxToken;
+            }
         }
     }
 
@@ -741,6 +802,158 @@ asio::awaitable<void>
     }
 
     co_return;
+}
+
+asio::awaitable<bool>
+    SummarizationMiddlewareHandle::compactSessionContext(std::string_view sessionId) {
+    auto agentCtxPtr = agentContext.lock();
+    if (nullptr == agentCtxPtr) {
+        co_return false;
+    }
+    auto session = agentCtxPtr->sessions->get(sessionId);
+    if (!session) {
+        co_return false;
+    }
+
+    std::vector<neograph::ChatMessage> messages;
+    if (session->llmMessages.is_array()) {
+        messages.reserve(session->llmMessages.size());
+        for (const auto& item : session->llmMessages) {
+            neograph::ChatMessage msg;
+            neograph::from_json(item, msg);
+            messages.push_back(std::move(msg));
+        }
+    }
+    if (messages.empty()) {
+        co_return false;
+    }
+
+    size_t modelContenxtMaxToken = modelSupportMaxTokenDefault;
+    bool   enableCountThinking   = false;
+    {
+        const auto& currentModelConfig = agentCtxPtr->getSessionCurrentModelConfig(sessionId);
+        if (currentModelConfig.modelContenxtMaxToken > 0) {
+            modelContenxtMaxToken = currentModelConfig.modelContenxtMaxToken;
+        }
+        enableCountThinking = currentModelConfig.sendThinking;
+    }
+
+    const auto startTime = std::chrono::steady_clock::now();
+    const auto startTimeMs
+        = static_cast<int64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                   std::chrono::system_clock::now().time_since_epoch()
+        )
+                                   .count());
+    const auto oldTokens = countTokens({}, messages, enableCountThinking);
+
+    // 1. 触发压缩时，先发送一条 viewMessage 提示 "正在压缩上下文"
+    agentxx::agent::ViewMessage vm = agentxx::agent::ViewMessage::makeText(
+        agentxx::agent::ViewMessage::Role::Tip,
+        "Summarizizing LLM Context...",
+        startTimeMs
+    );
+    vm.tip->tipLevel = agentxx::agent::ViewMessage::TipLevel::Info;
+    vm.collapsed     = true;
+    vm.id            = session->appendViewMessage(vm);
+    if (session->io) {
+        session->io->sendToPeer(agentxx::agent::WireDelta{
+            .type    = agentxx::agent::WireDelta::Type::InsertMessage,
+            .seq     = ++session->deltaSeq,
+            .message = std::make_shared<agentxx::agent::ViewMessage>(vm),
+        });
+    }
+
+    // 2. 确定性压缩 (toolcall 去重/探索折叠 + 噪音清理)
+    doSummarizeToolcall(messages);
+    cleanNoiseMessages(messages);
+
+    // 3. LLM 同上下文总结压缩
+    const size_t systemCount  = (!messages.empty() && messages[0].role == "system") ? 1 : 0;
+    const size_t recentBudget = static_cast<size_t>(modelContenxtMaxToken * recentTokenBudgetRatio);
+    const size_t oldEnd       = splitRecentByTokenBudget(messages, systemCount, recentBudget);
+    const size_t oldStart     = systemCount;
+
+    std::vector<neograph::ChatMessage> compressedMessages;
+    if (oldEnd > oldStart) {
+        auto oldMessages = std::vector<neograph::ChatMessage>{
+            messages.begin() + oldStart,
+            messages.begin() + oldEnd
+        };
+        auto recentMessages
+            = std::vector<neograph::ChatMessage>{messages.begin() + oldEnd, messages.end()};
+
+        std::vector<neograph::ChatMessage> toSummarize;
+        if (systemCount > 0) {
+            toSummarize.push_back(messages[0]);
+        }
+        toSummarize.insert(
+            toSummarize.end(),
+            std::move_iterator(oldMessages.begin()),
+            std::move_iterator(oldMessages.end())
+        );
+
+        auto summary = co_await doSummarizeWithLLM(sessionId, toSummarize);
+        if (!summary.empty()) {
+            if (systemCount > 0) {
+                compressedMessages.push_back(messages[0]);
+            }
+            compressedMessages.push_back(neograph::ChatMessage{
+                .role    = "user",
+                .content = "[Please compact context to save space]",
+                .flags   = neograph::MessageFlag::AutoInserted | neograph::MessageFlag::Summarized,
+            });
+            compressedMessages.push_back(neograph::ChatMessage{
+                .role    = "assistant",
+                .content = fmt::format("[Previous conversation summary]: \n{}", summary),
+                .flags   = neograph::MessageFlag::AutoInserted | neograph::MessageFlag::Summarized,
+            });
+            compressedMessages.insert(
+                compressedMessages.end(),
+                std::move_iterator(recentMessages.begin()),
+                std::move_iterator(recentMessages.end())
+            );
+        } else {
+            compressedMessages = hardTruncate(messages, systemCount, modelContenxtMaxToken);
+        }
+    } else {
+        compressedMessages = messages;
+    }
+
+    neograph::json newMsgsJson;
+    neograph::to_json(newMsgsJson, compressedMessages);
+    session->llmMessages = newMsgsJson;
+    session->saveLlmMessages();
+
+    // 4. 更新统计与 viewMessage 为 "Summarizied LLM Context {旧}->{新}/{最大} · {耗时}"
+    const auto newTokens = countTokens({}, compressedMessages, enableCountThinking);
+    const auto durationMs
+        = static_cast<int64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                   std::chrono::steady_clock::now() - startTime
+        )
+                                   .count());
+    vm.text = fmt::format(
+        "Summarizied LLM Context {}->{}/{} · {}",
+        oldTokens,
+        newTokens,
+        modelContenxtMaxToken,
+        agentxx::util::formatDurationMilliseconds(durationMs)
+    );
+    vm.durationMs = durationMs;
+    session->updateViewMessage(vm);
+    if (session->io) {
+        session->io->sendToPeer(agentxx::agent::WireDelta{
+            .type    = agentxx::agent::WireDelta::Type::UpdateMessage,
+            .seq     = ++session->deltaSeq,
+            .message = std::make_shared<agentxx::agent::ViewMessage>(vm),
+        });
+        session->io->sendToPeer(agentxx::agent::WireContextStats{newTokens, modelContenxtMaxToken});
+    }
+    if (session->contextStats) {
+        session->contextStats->contextTokens    = newTokens;
+        session->contextStats->maxContextTokens = modelContenxtMaxToken;
+    }
+
+    co_return true;
 }
 
 } // namespace middleware
