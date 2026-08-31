@@ -399,13 +399,12 @@ struct AgentAppendComponentInfo {
 class AgentContext {
 public:
 
-    /// 构造/析构 (定义于 context.cpp: 需完整类型销毁 unique_ptr 成员)
     AgentContext();
     ~AgentContext();
 
     std::shared_ptr<agentxx::agent::AgentConfig>            agentConfig             = nullptr;
     std::shared_ptr<agentxx::middleware::MiddlewareContext> middlewareHandleContext = nullptr;
-    std::unique_ptr<agentxx::tools::SubAgentManagerTool>    subagentManager         = nullptr;
+    std::shared_ptr<agentxx::tools::SubAgentManagerTool>    subagentManager         = nullptr;
     /// 事件总线
     /// - 由 BaseAgent 在 init() 中创建并注入; 节点/middleware/tool 经
     ///   weak_ptr<AgentContext> 取用

@@ -119,7 +119,8 @@ static void checkToolSchemaValidity(
                 schema.contains("type") ? schema["type"].dump() : "<missing>"
             );
         }
-    } else if (schema.contains("type") && schema["type"].is_string() && schema["type"].get<std::string>() == "array") {
+    } else if (schema.contains("type") && schema["type"].is_string()
+               && schema["type"].get<std::string>() == "array") {
         // array 类型必须带 items (Gemini 缺 items 报 "missing field")
         XX_LOGE(
             "Tool `{}` schema `{}`: type \"array\" must have an \"items\" field; "
@@ -472,7 +473,7 @@ neograph::json BaseAgent::initGraphDefinition() {
 asio::awaitable<void> BaseAgent::initMiddleware() {
     auto config = agentContext->agentConfig;
     {
-        agentContext->subagentManager = std::make_unique<agentxx::tools::SubAgentManagerTool>(
+        agentContext->subagentManager = std::make_shared<agentxx::tools::SubAgentManagerTool>(
             "subagent_manager",
             agentContext
         );

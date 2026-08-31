@@ -189,7 +189,7 @@ asio::awaitable<T> offloadCancellableAsync(
                 asio::co_spawn(
                     ex,
                     [cancelFlag, cancelOp, watcherDone, watcherTimer]() -> asio::awaitable<void> {
-                        auto [ec] = co_await watcherTimer->async_wait(asio::bind_cancellation_slot(
+                        auto _ = co_await watcherTimer->async_wait(asio::bind_cancellation_slot(
                             cancelOp->slot(),
                             asio::as_tuple(asio::use_awaitable)
                         ));

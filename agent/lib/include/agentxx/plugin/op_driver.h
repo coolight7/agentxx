@@ -251,7 +251,7 @@ inline asio::awaitable<std::string> awaitPluginOp(PluginOpAwaitArgs args) {
             args.ex,
             [core, drive = args.drive, op, cancelOp, cancelWatcherDone, cancelWatcherTimer](
             ) -> asio::awaitable<void> {
-                auto [ec] = co_await cancelWatcherTimer->async_wait(asio::bind_cancellation_slot(
+                auto _ = co_await cancelWatcherTimer->async_wait(asio::bind_cancellation_slot(
                     cancelOp->slot(),
                     asio::as_tuple(asio::use_awaitable)
                 ));
