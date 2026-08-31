@@ -486,6 +486,8 @@ std::string WsAgentIOTransport::serialize(const WireMessage& msg) {
                 return io::makeAppendComponentInfo(m.notifications).dump();
             } else if constexpr (std::is_same_v<T, WireGetContext>) {
                 return io::makeGetContext(m.sessionId).dump();
+            } else if constexpr (std::is_same_v<T, WireCompactContext>) {
+                return io::makeCompactContext(m.sessionId).dump();
             } else if constexpr (std::is_same_v<T, WireContextMessages>) {
                 return io::makeContextMessages(m.messages).dump();
             } else if constexpr (std::is_same_v<T, WireListSessions>) {
@@ -673,6 +675,10 @@ std::optional<WireMessage> WsAgentIOTransport::deserialize(std::string_view json
         return WireMessage{std::move(info)};
     } else if (t == io::MsgType::GetContext) {
         WireGetContext req;
+        req.sessionId = j.value("sessionId", std::string{});
+        return WireMessage{std::move(req)};
+    } else if (t == io::MsgType::CompactContext) {
+        WireCompactContext req;
         req.sessionId = j.value("sessionId", std::string{});
         return WireMessage{std::move(req)};
     } else if (t == io::MsgType::ContextMessages) {

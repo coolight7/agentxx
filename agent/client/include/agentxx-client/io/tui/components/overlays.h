@@ -262,3 +262,50 @@ private:
     std::shared_ptr<Scrollable> scrollable_;
     std::function<void()>       onClose_;
 };
+
+/// Logs 侧边栏 Menu 菜单弹窗组件
+/// - 提供 LLM Context, Summy Context, Clear Logs 三个操作按钮
+/// - 支持键盘 Up/Down 选择, Enter 确认, Esc 关闭, 以及鼠标点击
+class LogMenuOverlay : public ftxui::ComponentBase {
+public:
+
+    explicit LogMenuOverlay(TUICtx& ctx) :
+        ctx_(ctx) {}
+
+    void onClose(std::function<void()> fn) {
+        onClose_ = std::move(fn);
+    }
+
+    void onLlmContext(std::function<void()> fn) {
+        onLlmContext_ = std::move(fn);
+    }
+
+    void onSummyContext(std::function<void()> fn) {
+        onSummyContext_ = std::move(fn);
+    }
+
+    void onClearLogs(std::function<void()> fn) {
+        onClearLogs_ = std::move(fn);
+    }
+
+    bool           OnEvent(ftxui::Event event) override;
+    ftxui::Element OnRender() override;
+
+private:
+
+    bool handleMouse(const ftxui::Mouse& mouse);
+    void confirmSelection();
+
+    TUICtx&               ctx_;
+    int                   selectedIndex_ = 0;
+    static constexpr int  kItemCount     = 3;
+
+    std::function<void()> onClose_;
+    std::function<void()> onLlmContext_;
+    std::function<void()> onSummyContext_;
+    std::function<void()> onClearLogs_;
+
+    ftxui::Box llmContextBox_;
+    ftxui::Box summyContextBox_;
+    ftxui::Box clearLogsBox_;
+};

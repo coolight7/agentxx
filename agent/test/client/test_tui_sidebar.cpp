@@ -8,6 +8,7 @@
 // - [动态 tab] addTab 的动态 tab 按钮显示于常驻按钮之后, 点击可切换激活
 #include "test_tui_sidebar.h"
 
+#include "agentxx-client/io/tui/components/overlays.h"
 #include "agentxx-client/io/tui/components/sidebar.h"
 #include "agentxx-client/io/tui/framework/tui_context.h"
 #include "agentxx-client/io/tui/framework/tui_state.h"
@@ -91,7 +92,7 @@ struct SidebarFixture {
         }
     }
 
-    /// 模拟 agent_tui::ensureLogSidebarTab (footer 含 "LLM Context" 按钮)
+    /// 模拟 agent_tui::ensureLogSidebarTab (footer 含 "Menu" 按钮)
     void ensureLogs() {
         if (!comp->hasTab(kLogTabId)) {
             comp->addTab(
@@ -106,7 +107,7 @@ struct SidebarFixture {
                     return ftxui::hbox({
                         ftxui::text("> node"),
                         ftxui::filler(),
-                        ftxui::text(" LLM Context ") | ftxui::bgcolor(ftxui::Color::Blue)
+                        ftxui::text(" Menu ") | ftxui::bgcolor(ftxui::Color::Blue)
                             | ftxui::color(ftxui::Color::White),
                     });
                 }
@@ -252,14 +253,14 @@ TestResult testTuiSidebar() {
         XX_TEST_EXPECT_TRUE(screen2.find("INFO_FOOTER_MARK") != std::string::npos);
     }
 
-    // ---- 场景 3: 点击 Logs 常驻按钮 -> footer "LLM Context" 按钮可见 ----
+    // ---- 场景 3: 点击 Logs 常驻按钮 -> footer "Menu" 按钮可见 ----
     {
         SidebarFixture fx;
         auto           screen = fx.render();
         XX_TEST_EXPECT_TRUE(fx.clickText(screen, " Logs "));
         XX_TEST_EXPECT_TRUE(fx.comp->isTabActive(SidebarFixture::kLogTabId));
         auto screen2 = fx.render();
-        XX_TEST_EXPECT_TRUE(screen2.find("LLM Context") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(screen2.find("Menu") != std::string::npos);
     }
 
     // ---- 场景 4: 已激活的常驻 tab 再点一次 -> 取消激活 ----
@@ -298,6 +299,57 @@ TestResult testTuiSidebar() {
         // 切回 logs
         XX_TEST_EXPECT_TRUE(fx.clickText(screen, " Logs "));
         XX_TEST_EXPECT_TRUE(fx.comp->isTabActive(SidebarFixture::kLogTabId));
+    }
+
+    // ---- 场景 6: LogMenuOverlay 弹窗交互 (LLM Context / Summy Context / Clear Logs) ----
+    {
+        SidebarFixture fx;
+        auto           overlay = std::make_shared<LogMenuOverlay>(fx.ctx);
+        bool           llmClicked   = false;
+        bool           summyClicked = false;
+        bool           clearClicked = false;
+        bool           closed       = false;
+
+        overlay->onLlmContext([&] {
+            llmClicked = true;
+        });
+        overlay->onSummyContext([&] {
+            summyClicked = true;
+        });
+        overlay->onClearLogs([&] {
+            clearClicked = true;
+        });
+        overlay->onClose([&] {
+            closed = true;
+        });
+
+        // 渲染测试
+        auto   el     = overlay->Render();
+        auto   screen = ftxui::Screen::Create(ftxui::Dimension::Fixed(40), ftxui::Dimension::Fixed(16));
+        ftxui::Render(screen, el);
+        auto out = screen.ToString();
+        XX_TEST_EXPECT_TRUE(out.find("Menu") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(out.find("LLM Context") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(out.find("Summy Context") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(out.find("Clear Logs") != std::string::npos);
+
+        // 键盘 Enter: 默认第 0 项 LLM Context
+        overlay->OnEvent(ftxui::Event::Return);
+        XX_TEST_EXPECT_TRUE(llmClicked);
+
+        // 键盘 Down + Enter: 第 1 项 Summy Context
+        overlay->OnEvent(ftxui::Event::ArrowDown);
+        overlay->OnEvent(ftxui::Event::Return);
+        XX_TEST_EXPECT_TRUE(summyClicked);
+
+        // 键盘 Down + Enter: 第 2 项 Clear Logs
+        overlay->OnEvent(ftxui::Event::ArrowDown);
+        overlay->OnEvent(ftxui::Event::Return);
+        XX_TEST_EXPECT_TRUE(clearClicked);
+
+        // 键盘 Escape: 关闭
+        overlay->OnEvent(ftxui::Event::Escape);
+        XX_TEST_EXPECT_TRUE(closed);
     }
 
     return TestResult{g_tui_sidebar_passed, g_tui_sidebar_failed};

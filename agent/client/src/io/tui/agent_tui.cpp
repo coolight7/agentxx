@@ -507,20 +507,41 @@ void TUIClientAgentIO::start() {
             ensureInfoSidebarTab();
         }
 
-        // 侧边栏 footer 点击: 处理 "上下文" 按钮
+        // 侧边栏 footer 点击: 处理 Logs 底部 "Menu" 按钮
         sidebar_->onFooterClick([this](const Mouse&) -> bool {
-            // LLM 上下文消息在 server-io 侧 (Session::llmMessages), TUI 不持有,
-            // 经 WireGetContext 由服务端回推 (WireContextMessages → onPeerMessage
-            // → sharedState_.contextMessages); 本地/远程模式均有 transport
-            if (transport_) {
-                sendToPeer(agentxx::agent::WireGetContext{currentSessionId()});
-            }
             if (modal_ && !modal_->hasModal()) {
-                auto overlay = std::make_shared<ContextOverlay>(ctx_);
-                overlay->onClose([this] {
+                auto menu = std::make_shared<LogMenuOverlay>(ctx_);
+                menu->onClose([this] {
                     modal_->popModal();
                 });
-                modal_->pushModal(overlay);
+                menu->onLlmContext([this] {
+                    modal_->popModal();
+                    if (transport_) {
+                        sendToPeer(agentxx::agent::WireGetContext{currentSessionId()});
+                    }
+                    if (modal_ && !modal_->hasModal()) {
+                        auto overlay = std::make_shared<ContextOverlay>(ctx_);
+                        overlay->onClose([this] {
+                            modal_->popModal();
+                        });
+                        modal_->pushModal(overlay);
+                    }
+                });
+                menu->onSummyContext([this] {
+                    modal_->popModal();
+                    if (transport_) {
+                        sendToPeer(agentxx::agent::WireCompactContext{currentSessionId()});
+                    }
+                });
+                menu->onClearLogs([this] {
+                    modal_->popModal();
+                    if (logSink_) {
+                        logSink_->clear();
+                    }
+                    logLineCache_.clear();
+                    postRedraw();
+                });
+                modal_->pushModal(menu);
             }
             return true;
         });
@@ -1831,6 +1852,19 @@ void TUIClientAgentIO::onDelta(const agentxx::agent::WireDelta& delta) {
                 resetTrailingRunningToolsLocked(st);
                 if (delta.message) {
                     st.messages.push_back(delta.message);
+                }
+            } break;
+            case Type::UpdateMessage: {
+                // 完整 ViewMessage 消息更新 (按 id 定位已插入的历史消息):
+                pushCurrentTokenLocked(st);
+                resetTrailingRunningToolsLocked(st);
+                if (delta.message && !delta.message->id.empty()) {
+                    for (size_t i = 0; i < st.messages.size(); ++i) {
+                        if (st.messages[i]->id == delta.message->id) {
+                            st.messages[i] = delta.message;
+                            break;
+                        }
+                    }
                 }
             } break;
             case Type::TurnStart: {

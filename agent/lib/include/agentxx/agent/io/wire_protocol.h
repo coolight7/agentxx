@@ -25,6 +25,8 @@ struct MsgType {
     inline static constexpr std::string_view GetModel               = "get_model";
     inline static constexpr std::string_view GetAppendComponentInfo = "get_append_component_info";
     inline static constexpr std::string_view Ping                   = "ping";
+    /// 客户端请求压缩当前会话上下文
+    inline static constexpr std::string_view CompactContext = "compact_context";
     /// 客户端记住权限选择: 注册路径规则到服务端权限中间件
     inline static constexpr std::string_view SetPermission = "set_permission";
     /// 客户端请求持久化会话列表 (会话选择弹窗数据源)
@@ -104,6 +106,8 @@ inline std::string_view deltaTypeToString(WireDelta::Type t) noexcept {
             return "message_tip";
         case T::InsertMessage:
             return "insert_message";
+        case T::UpdateMessage:
+            return "update_message";
     }
     return "text_token";
 }
@@ -139,6 +143,9 @@ inline std::optional<WireDelta::Type> deltaTypeFromString(std::string_view s) no
     }
     if (s == "insert_message") {
         return T::InsertMessage;
+    }
+    if (s == "update_message") {
+        return T::UpdateMessage;
     }
     return std::nullopt;
 }
@@ -627,6 +634,13 @@ inline neograph::json makeGetContext(std::string_view sessionId) {
     return neograph::json{
         {"type",      MsgType::GetContext},
         {"sessionId", sessionId          },
+    };
+}
+
+inline neograph::json makeCompactContext(std::string_view sessionId) {
+    return neograph::json{
+        {"type",      MsgType::CompactContext},
+        {"sessionId", sessionId              },
     };
 }
 

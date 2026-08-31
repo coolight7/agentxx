@@ -391,6 +391,128 @@ bool SettingsOverlay::OnEvent(Event event) {
     return true;
 }
 
+// ---------------------------------------------------------------------------
+// LogMenuOverlay
+// ---------------------------------------------------------------------------
+
+Element LogMenuOverlay::OnRender() {
+    const auto& theme = *ctx_.theme;
+
+    auto renderBtn = [&](int idx, std::string_view label, Box& box) {
+        const bool selected = (selectedIndex_ == idx);
+        auto       el       = text(fmt::format(" {} ", label));
+        if (selected) {
+            el = el | bgcolor(theme.buttonActiveBgColor) | color(theme.buttonActiveTextColor) | bold;
+        } else {
+            el = el | bgcolor(theme.buttonBgColor) | color(theme.buttonTextColor);
+        }
+        return hbox({
+                   text("  "),
+                   std::move(el) | reflect(box) | xflex,
+                   text("  "),
+               })
+               | xflex;
+    };
+
+    auto btn1 = renderBtn(0, "LLM Context", llmContextBox_);
+    auto btn2 = renderBtn(1, "Summy Context", summyContextBox_);
+    auto btn3 = renderBtn(2, "Clear Logs", clearLogsBox_);
+
+    auto header = hbox({
+        text(" Menu ") | bold | inverted,
+        filler(),
+    });
+
+    return vbox({
+               header,
+               separator(),
+               text(" "),
+               std::move(btn1),
+               text(" "),
+               std::move(btn2),
+               text(" "),
+               std::move(btn3),
+               text(" "),
+               separator(),
+               text(" [Up/Down] Select  [Enter] Confirm  [Esc] Close ") | center | dim,
+           })
+           | border | size(WIDTH, EQUAL, 32) | color(theme.accentColor);
+}
+
+bool LogMenuOverlay::OnEvent(Event event) {
+    if (event == Event::Escape) {
+        ctx_.postRedraw();
+        if (onClose_) {
+            onClose_();
+        }
+        return true;
+    }
+    if (event == Event::ArrowUp) {
+        selectedIndex_ = (selectedIndex_ - 1 + kItemCount) % kItemCount;
+        ctx_.postRedraw();
+        return true;
+    }
+    if (event == Event::ArrowDown) {
+        selectedIndex_ = (selectedIndex_ + 1) % kItemCount;
+        ctx_.postRedraw();
+        return true;
+    }
+    if (event == Event::Return) {
+        confirmSelection();
+        return true;
+    }
+    if (event.is_mouse() && handleMouse(event.mouse())) {
+        ctx_.postRedraw();
+        return true;
+    }
+    return true;
+}
+
+void LogMenuOverlay::confirmSelection() {
+    ctx_.postRedraw();
+    if (selectedIndex_ == 0) {
+        if (onLlmContext_) {
+            onLlmContext_();
+        }
+    } else if (selectedIndex_ == 1) {
+        if (onSummyContext_) {
+            onSummyContext_();
+        }
+    } else if (selectedIndex_ == 2) {
+        if (onClearLogs_) {
+            onClearLogs_();
+        }
+    }
+}
+
+bool LogMenuOverlay::handleMouse(const Mouse& mouse) {
+    if (mouse.button != Mouse::Left || mouse.motion != Mouse::Released) {
+        return false;
+    }
+    if (llmContextBox_.Contain(mouse.x, mouse.y)) {
+        selectedIndex_ = 0;
+        if (onLlmContext_) {
+            onLlmContext_();
+        }
+        return true;
+    }
+    if (summyContextBox_.Contain(mouse.x, mouse.y)) {
+        selectedIndex_ = 1;
+        if (onSummyContext_) {
+            onSummyContext_();
+        }
+        return true;
+    }
+    if (clearLogsBox_.Contain(mouse.x, mouse.y)) {
+        selectedIndex_ = 2;
+        if (onClearLogs_) {
+            onClearLogs_();
+        }
+        return true;
+    }
+    return false;
+}
+
 bool SettingsOverlay::handleMouse(const Mouse& mouse) {
     if (mouse.button != Mouse::Left || mouse.motion != Mouse::Released) {
         return false;

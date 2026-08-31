@@ -87,7 +87,8 @@ void StdIOClientAgentIO::onDelta(const agentxx::agent::WireDelta& delta) {
             std::cout << std::endl << prefix << delta.text << std::endl;
             break;
         }
-        case Type::InsertMessage: {
+        case Type::InsertMessage:
+        case Type::UpdateMessage: {
             if (delta.message) {
                 using namespace agentxx::agent;
                 const auto& msg = *delta.message;
