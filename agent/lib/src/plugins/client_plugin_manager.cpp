@@ -33,6 +33,43 @@
 #include <iostream>
 #include <thread>
 
+#if XX_IS_WIN_D
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#else
+#include <dlfcn.h>
+#endif
+
+// ---------------------------------------------------------------------------
+// 可执行目录 helper (跨平台, 与 plugin_manager_lifecycle 同构)
+// ---------------------------------------------------------------------------
+static inline std::filesystem::path clientGetExecutableDirPath() noexcept {
+#if XX_IS_WIN_D
+    std::wstring buf(MAX_PATH, L'\0');
+    for (;;) {
+        DWORD len = ::GetModuleFileNameW(nullptr, buf.data(), static_cast<DWORD>(buf.size()));
+        if (len == 0) {
+            return {};
+        }
+        if (len < buf.size()) {
+            buf.resize(len);
+            break;
+        }
+        buf.resize(buf.size() * 2);
+    }
+    return std::filesystem::path(buf).parent_path();
+#else
+    std::error_code ec;
+    auto            exe = std::filesystem::read_symlink("/proc/self/exe", ec);
+    if (ec) {
+        return {};
+    }
+    return exe.parent_path();
+#endif
+}
+
 /// 状态栏项宿主句柄实现 (全局作用域, 与 client_plugin_api.h 的 C 不透明类型
 /// 对应 —— vtable 函数签名中的 AgentxxStatusItem 即此类型, 不能在命名空间内
 /// 另行定义)
@@ -204,9 +241,18 @@ asio::awaitable<std::shared_ptr<ClientPluginInstance>> ClientPluginManager::load
     if (isBuiltinScheme(path)) {
         auto btName = parseBuiltinName(path);
         XX_LOGI("[client_plugin] builtin `{}` skipped on client side (no client builtin registry)", btName);
-        // 尝试目录回退: 若默认 plugins 目录下存在该插件则按目录加载
-        for (auto base : {std::filesystem::current_path()}) {
-            auto dir = base / "plugins" / btName;
+        // 尝试目录回退: 按 exe 目录优先 + cwd (与 agent 侧一致)
+        {
+            auto exeDir = clientGetExecutableDirPath();
+            if (!exeDir.empty()) {
+                auto dir = exeDir / "plugins" / btName;
+                if (std::filesystem::is_directory(dir)) {
+                    co_return co_await loadNativeAsync(dir.string(), cfg, allowMissingEntry);
+                }
+            }
+        }
+        {
+            auto dir = std::filesystem::current_path() / "plugins" / btName;
             if (std::filesystem::is_directory(dir)) {
                 co_return co_await loadNativeAsync(dir.string(), cfg, allowMissingEntry);
             }

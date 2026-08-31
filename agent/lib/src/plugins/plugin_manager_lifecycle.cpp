@@ -30,6 +30,39 @@
 namespace agentxx {
 namespace plugin {
 
+// ---------------------------------------------------------------------------
+// 可执行目录 helper (跨平台: Windows GetModuleFileNameW / Linux /proc/self/exe)
+// 与 client/main.cpp getExecutableDir() 同构, 供 builtin:// 回退探测使用
+// ---------------------------------------------------------------------------
+static inline std::filesystem::path getExecutableDirPath() noexcept {
+#if XX_IS_WIN_D
+    std::wstring buf(MAX_PATH, L'\0');
+    for (;;) {
+        DWORD len = ::GetModuleFileNameW(nullptr, buf.data(), static_cast<DWORD>(buf.size()));
+        if (len == 0) {
+            return {};
+        }
+        if (len < buf.size()) {
+            buf.resize(len);
+            break;
+        }
+        buf.resize(buf.size() * 2);
+    }
+    std::error_code ec;
+    auto p = std::filesystem::path(buf).parent_path();
+    // 规范化, 失败时回退空
+    (void)ec;
+    return p;
+#else
+    std::error_code ec;
+    auto            exe = std::filesystem::read_symlink("/proc/self/exe", ec);
+    if (ec) {
+        return {};
+    }
+    return exe.parent_path();
+#endif
+}
+
 const void* xx_query_interface(const AgentxxPluginHost*, AgentxxPluginStringView iid);
 
 // =====================================================================
@@ -651,7 +684,16 @@ asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadPluginAsync(
         if (parseBuiltinManifest(btName, dummyName, dummyEntry, depends, optionalDepends, &resources, &interfaces)) {
             manifestFound = true;
         } else {
-            for (auto base : {std::filesystem::current_path()}) {
+            // 跨平台探测: 优先 exe 目录 (安装布局) 其次 cwd (开发布局)
+            std::vector<std::filesystem::path> bases;
+            {
+                auto exeDir = getExecutableDirPath();
+                if (!exeDir.empty()) {
+                    bases.push_back(exeDir);
+                }
+            }
+            bases.push_back(std::filesystem::current_path());
+            for (auto& base : bases) {
                 auto probe = base / "plugins" / btName / "plugin.yaml";
                 if (std::filesystem::exists(probe)) {
                     if (parsePluginManifest(
@@ -668,62 +710,25 @@ asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadPluginAsync(
                     }
                 }
             }
-        }
-        if (!manifestFound) {
-            // 回退: 尝试可执行目录下的插件目录 (与内置合并模式资源拷贝布局一致)
-            // 无法直接得知 execDir 时, 尝试通过 /proc/self/exe 推导 (Linux)
-            // 以及当前工作目录的相对探测已在上方完成, 空依赖兜底
-            (void)resources;
-            (void)interfaces;
-#ifndef _WIN32
-            {
-                std::error_code ec2;
-                auto            exe = std::filesystem::read_symlink("/proc/self/exe", ec2);
-                if (!ec2) {
-                    auto probe2 = exe.parent_path() / "plugins" / btName / "plugin.yaml";
-                    if (std::filesystem::exists(probe2)) {
-                        std::string dummyEntry2, dummyName2;
-                        std::vector<std::string> depends2, optionalDepends2;
-                        PluginManifestResources  resources2;
-                        PluginManifestInterfaces interfaces2;
-                        if (parsePluginManifest(
-                                probe2.parent_path(),
-                                dummyName2,
-                                dummyEntry2,
-                                depends2,
-                                optionalDepends2,
-                                &resources2,
-                                &interfaces2
-                            )) {
-                            depends         = std::move(depends2);
-                            optionalDepends = std::move(optionalDepends2);
-                            resources       = std::move(resources2);
-                            interfaces      = std::move(interfaces2);
-                            manifestFound   = true;
-                        }
-                    }
-                }
+            if (!manifestFound) {
+                (void)resources;
+                (void)interfaces;
             }
-#endif
         }
         // 若内置注册表中不存在, 回退为普通目录插件加载 (非合并编译时
         // builtin:// 仍可指向外部目录插件, 保持兼容)
         if (!agentxx::plugin::findBuiltinPlugin(btName)) {
-            // 按目录插件路径重新进入常规加载分支
+            // 按目录插件路径重新进入常规加载分支 (跨平台: exe 目录优先)
             std::filesystem::path fallback;
-            // 优先可执行目录下的 plugins/<name>
-#ifndef _WIN32
             {
-                std::error_code ec2;
-                auto            exe = std::filesystem::read_symlink("/proc/self/exe", ec2);
-                if (!ec2) {
-                    auto cand = exe.parent_path() / "plugins" / btName;
+                auto exeDir = getExecutableDirPath();
+                if (!exeDir.empty()) {
+                    auto cand = exeDir / "plugins" / btName;
                     if (std::filesystem::is_directory(cand)) {
                         fallback = cand;
                     }
                 }
             }
-#endif
             if (fallback.empty()) {
                 auto cand = std::filesystem::current_path() / "plugins" / btName;
                 if (std::filesystem::is_directory(cand)) {
@@ -900,7 +905,16 @@ asio::awaitable<void>
                 )) {
                 // 内嵌清单命中, 依赖已填入 it.depends
             } else {
-                for (auto base : {std::filesystem::current_path()}) {
+                // 跨平台探测: exe 目录优先, 回退 cwd
+                std::vector<std::filesystem::path> bases;
+                {
+                    auto exeDir = getExecutableDirPath();
+                    if (!exeDir.empty()) {
+                        bases.push_back(exeDir);
+                    }
+                }
+                bases.push_back(std::filesystem::current_path());
+                for (auto& base : bases) {
                     auto probe = base / "plugins" / it.name / "plugin.yaml";
                     if (std::filesystem::exists(probe)) {
                         if (parsePluginManifest(

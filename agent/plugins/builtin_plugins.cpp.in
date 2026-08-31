@@ -6,7 +6,7 @@
  *   改名 (agentxx_plugin_agent_create → agentxx_plugin_agent_builtin_create_<插件名> 等,
  *   见各插件子目录 CMakeLists.txt 的 AGENTXX_ENABLE_PLUGIN_BUILTIN 分支),
  *   避免多插件合并编译时符号冲突
- * - 本清单汇总全部启用插件的改名入口符号, 经 agentxx_get_builtin_plugins()
+ * - 本清单汇总全部启用插件的改名入口符号, 经 agentxx_plugin_get_builtin_plugins()
  *   暴露给 PluginManager (loadBuiltinAsync / loadPluginAsync 回退路径)
  * - 本文件为纯 C ABI, 仅依赖 builtin_plugin.h 的类型
  */
@@ -17,18 +17,18 @@
 @AGENTXX_BUILTIN_MANIFEST_DECLS@
 
 #if @AGENTXX_BUILTIN_PLUGIN_COUNT@ > 0
-static const AgentxxBuiltinPluginInfo kAgentxxBuiltinPlugins[] = {
+static const AgentxxPluginBuiltinInfo kAgentxxBuiltinPlugins[] = {
 @AGENTXX_BUILTIN_MANIFEST_ENTRIES@
 };
 #else
 /* 无内置插件 (全部 AGENTXX_ENABLE_PLUGIN_*=OFF): 空表占位, 宿主按
  * name == NULL 跳过 (与 builtin_plugin.h 契约一致) */
-static const AgentxxBuiltinPluginInfo kAgentxxBuiltinPlugins[] = {
-    {nullptr, nullptr, nullptr, nullptr},
+static const AgentxxPluginBuiltinInfo kAgentxxBuiltinPlugins[] = {
+    {"", nullptr, nullptr, nullptr},
 };
 #endif
 
-const AgentxxBuiltinPluginInfo* agentxx_get_builtin_plugins(size_t* count) {
+const AgentxxPluginBuiltinInfo* agentxx_plugin_get_builtin_plugins(size_t* count) {
     if (count) {
         *count = sizeof(kAgentxxBuiltinPlugins) / sizeof(kAgentxxBuiltinPlugins[0]);
     }
@@ -36,9 +36,9 @@ const AgentxxBuiltinPluginInfo* agentxx_get_builtin_plugins(size_t* count) {
 }
 
 /* ── 内嵌 plugin.yaml 原文 (与上表一一对应) ── */
-const AgentxxBuiltinManifest* agentxx_get_builtin_manifests(size_t* count) {
+const AgentxxPluginBuiltinManifest* agentxx_plugin_get_builtin_manifests(size_t* count) {
 #if @AGENTXX_BUILTIN_PLUGIN_COUNT@ > 0
-    static const AgentxxBuiltinManifest kManifests[] = {
+    static const AgentxxPluginBuiltinManifest kManifests[] = {
 @AGENTXX_BUILTIN_MANIFEST_YAML_ARRAY@
     };
     if (count) {
@@ -46,8 +46,8 @@ const AgentxxBuiltinManifest* agentxx_get_builtin_manifests(size_t* count) {
     }
     return kManifests;
 #else
-    static const AgentxxBuiltinManifest kEmptyManifests[] = {
-        {nullptr, nullptr},
+    static const AgentxxPluginBuiltinManifest kEmptyManifests[] = {
+        {"", ""},
     };
     if (count) {
         *count = 1;

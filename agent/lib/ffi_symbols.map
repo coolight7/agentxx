@@ -4,7 +4,7 @@
 # 与既有 C 入口, 供其他语言 FFI 干净调用 (dlopen/dlsym 只按名查找白名单符号):
 #   - FFI C API (agentxx/ffi_api.h): agentxx_ffi_create/start/stop/... 等
 #   - 既有 C 入口 (agentxx.h): agentxx_ffi_malloc/agentxx_ffi_free/agentxx_ffi_strdup_n
-#   - 内置插件清单入口: agentxx_get_builtin_plugins (PluginManager 使用)
+#   - 内置插件清单入口: agentxx_plugin_get_builtin_plugins (PluginManager 使用)
 # local: * 隐藏其余全部符号 (libagentxx 内部 C++ 符号、静态链接的第三方库
 #         符号: fmt/asio/sqlite/hyperscan/neograph 等), 避免污染 FFI 命名空间
 #
@@ -39,6 +39,6 @@
     agentxx_ffi_event_queue_free;
     agentxx_ffi_event_queue_on_event;
     agentxx_ffi_event_queue_pop;
-    agentxx_get_builtin_plugins;
+    agentxx_plugin_get_builtin_plugins;
   local: *;
 };

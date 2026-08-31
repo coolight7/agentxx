@@ -136,7 +136,7 @@ agentxx_ffi_event_queue_free(q);
 | HIL 应答 | `agentxx_ffi_interrupt_respond` | 提交 EVT_INTERRUPT_REQ 的应答 (values_json 数组与 inputs 顺序一一对应) |
 | 日志 | `agentxx_ffi_drain_logs` | 取走积压日志 `[{"level","message"},...]` (异常后排障) |
 | 事件队列 | `agentxx_ffi_event_queue_create` / `agentxx_ffi_free`(队列) / `..._on_event` / `..._pop` | 见 4.2 |
-| 内置插件 | `agentxx_get_builtin_plugins` | 内置合并编译模式插件清单入口 (PluginManager 使用; 白名单第 25 个符号, 隐藏 17 万 C++ 符号) |
+| 内置插件 | `agentxx_plugin_get_builtin_plugins` | 内置合并编译模式插件清单入口 (PluginManager 使用; 白名单第 25 个符号, 隐藏 17 万 C++ 符号) |
 
 版本策略: 修改契约递增 `AGENTXX_FFI_API_VERSION` (当前为 1);
 新增符号/字段为非破坏性不递增, 删除/重命名或修改参数语义时递增。

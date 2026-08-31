@@ -98,12 +98,12 @@ set_target_properties(agentxx_util PROPERTIES
 # - add_subdirectory(../plugins) 以内置模式收集启用的插件源文件/依赖库/
 #   入口符号 (见 plugins/CMakeLists.txt 内置分支; 不创建任何插件动态库目标)
 # - 生成的清单 builtin_plugins.cpp (改名后的入口符号静态表) 一并编译进
-#   libagentxx, PluginManager 经 agentxx_get_builtin_plugins() 查询加载
+#   libagentxx, PluginManager 经 agentxx_plugin_get_builtin_plugins() 查询加载
 if (AGENTXX_ENABLE_PLUGIN_BUILTIN)
   set(AGENTXX_IS_LIB_BUILTIN_SUBDIR 1)
   add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../plugins" agentxx_plugins_builtin)
   list(APPEND agentxx_SOURCES ${AGENTXX_BUILTIN_MANIFEST_SOURCE})
-  # 生成的清单提供 agentxx_get_builtin_plugins 实现; 默认空注册表
+  # 生成的清单提供 agentxx_plugin_get_builtin_plugins 实现; 默认空注册表
   # (src/plugins/builtin_plugin_registry.cpp) 经宏排除, 避免重复定义
   set_source_files_properties(
     "${CMAKE_CURRENT_SOURCE_DIR}/src/plugins/builtin_plugin_registry.cpp"
@@ -351,7 +351,7 @@ if (NOT WIN32)
                  agentxx_ffi_list_sessions agentxx_ffi_interrupt_respond agentxx_ffi_drain_logs
                  agentxx_ffi_event_queue_create agentxx_ffi_event_queue_free
                  agentxx_ffi_event_queue_on_event agentxx_ffi_event_queue_pop
-                 agentxx_get_builtin_plugins)
+                 agentxx_plugin_get_builtin_plugins)
       file(APPEND "${_AGENTXX_FFI_EXPORT_SYMS}" "_${_sym}\n")
     endforeach()
     target_link_options(agentxx_shared PRIVATE "-Wl,-exported_symbols_list,${_AGENTXX_FFI_EXPORT_SYMS}")

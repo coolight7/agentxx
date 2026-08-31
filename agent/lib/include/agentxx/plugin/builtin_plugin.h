@@ -9,9 +9,9 @@
  *   分发等不便 dlopen 的场景); 插件入口经编译期改名避免多插件符号冲突
  *   (agentxx_plugin_agent_create → agentxx_plugin_agent_builtin_create_<插件名>), 改名
  *   后的符号由 CMake 生成的清单 (plugins/builtin_plugins.cpp.in) 汇总,
- *   经本头声明的 agentxx_get_builtin_plugins() 暴露给 PluginManager
+ *   经本头声明的 agentxx_plugin_get_builtin_plugins() 暴露给 PluginManager
  * - 本头为纯 C ABI: 清单实现仅依赖 plugin_api.h 的类型 (宿主与插件共用)
- * - 兼容性: 未启用内置模式时, agentxx_get_builtin_plugins() 返回空表,
+ * - 兼容性: 未启用内置模式时, agentxx_plugin_get_builtin_plugins() 返回空表,
  *   运行期行为与纯动态加载完全一致 (PluginManager 先查动态库, 缺失时
  *   回退内置注册表, 见 plugin_manager.cpp loadPluginAsync)
  *
@@ -22,41 +22,39 @@
 #define AGENTXX_BUILTIN_PLUGIN_H
 
 #include "agentxx/plugin/plugin_api.h"
-
 #include <stddef.h>
+#include <string_view>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 /// 内置插件描述 (编译进 libagentxx 的插件; 静态数组, 进程生命周期有效)
-typedef struct AgentxxBuiltinPluginInfo {
-    const char* name; ///< 插件唯一名 (如 "example_plugin"); NULL = 空表占位
+typedef struct AgentxxPluginBuiltinInfo {
+    std::string_view name; ///< 插件唯一名 (如 "example_plugin"); NULL = 空表占位
     AgentxxPluginGetInfoFn get_info; ///< 可空 (加载前元信息校验, 与 dlsym 可选符号同语义)
     AgentxxPluginCreateFn create; ///< 必需 (实例创建, 与 agentxx_plugin_agent_create 同契约)
     AgentxxPluginDestroyFn destroy; ///< 可空 (实例销毁, 与 agentxx_plugin_agent_destroy 同契约)
-} AgentxxBuiltinPluginInfo;
+} AgentxxPluginBuiltinInfo;
 
 /// 查询全部内置插件 (libagentxx 实现; 返回静态数组, count 输出条目数)
 /// - 调用方须跳过 name == NULL 的占位条目 (空表时 count 为 1)
 /// - 任意线程可调用 (静态只读数据)
-const AgentxxBuiltinPluginInfo* agentxx_get_builtin_plugins(size_t* count);
+const AgentxxPluginBuiltinInfo* agentxx_plugin_get_builtin_plugins(size_t* count);
 
 #ifdef __cplusplus
 }
 
-#include <string_view>
-
 namespace agentxx {
 namespace plugin {
-inline const AgentxxBuiltinPluginInfo* findBuiltinPlugin(std::string_view name) {
+inline const AgentxxPluginBuiltinInfo* findBuiltinPlugin(std::string_view name) {
     size_t      count = 0;
-    const auto* list  = agentxx_get_builtin_plugins(&count);
+    const auto* list  = agentxx_plugin_get_builtin_plugins(&count);
     if (!list) {
         return nullptr;
     }
     for (size_t i = 0; i < count; ++i) {
-        if (list[i].name && list[i].name == name) {
+        if (list[i].name == name) {
             return &list[i];
         }
     }
@@ -68,28 +66,28 @@ inline const AgentxxBuiltinPluginInfo* findBuiltinPlugin(std::string_view name) 
 
 // ── 内嵌清单 (plugin.yaml 原文) ──────────────────────────────
 // 与 BuiltinPluginInfo 同步生成于 plugins/builtin_plugins.cpp
-typedef struct AgentxxBuiltinManifest {
-    const char* name; ///< 插件名 (与 BuiltinPluginInfo.name 一致)
-    const char* yaml; ///< plugin.yaml 原文 (UTF-8, 静态只读)
-} AgentxxBuiltinManifest;
+typedef struct AgentxxPluginBuiltinManifest {
+    std::string_view name; ///< 插件名 (与 BuiltinPluginInfo.name 一致)
+    std::string_view yaml; ///< plugin.yaml 原文 (UTF-8, 静态只读)
+} AgentxxPluginBuiltinManifest;
 
 #ifdef __cplusplus
 extern "C" {
 #endif
-const AgentxxBuiltinManifest* agentxx_get_builtin_manifests(size_t* count);
+const AgentxxPluginBuiltinManifest* agentxx_plugin_get_builtin_manifests(size_t* count);
 #ifdef __cplusplus
 }
-#include <string_view>
+
 namespace agentxx {
 namespace plugin {
-inline const AgentxxBuiltinManifest* findBuiltinManifest(std::string_view name) {
+inline const AgentxxPluginBuiltinManifest* findBuiltinManifest(std::string_view name) {
     size_t      count = 0;
-    const auto* list  = agentxx_get_builtin_manifests(&count);
+    const auto* list  = agentxx_plugin_get_builtin_manifests(&count);
     if (!list) {
         return nullptr;
     }
     for (size_t i = 0; i < count; ++i) {
-        if (list[i].name && list[i].name == name) {
+        if (list[i].name == name) {
             return &list[i];
         }
     }

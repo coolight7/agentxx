@@ -238,10 +238,9 @@ bool parsePluginManifestFromString(
         return false;
     }
     try {
-        auto node = YAML::Load(yamlStr);
-        std::string hint
-            = baseDir.empty() ? std::string{"<builtin manifest>"}
-                              : (baseDir / "plugin.yaml").string();
+        auto        node = YAML::Load(yamlStr);
+        std::string hint = baseDir.empty() ? std::string{"<builtin manifest>"}
+                                           : (baseDir / "plugin.yaml").string();
         return parseManifestNode(
             node,
             baseDir,
@@ -269,7 +268,7 @@ bool parseBuiltinManifest(
     PluginManifestInterfaces* interfaces
 ) {
     auto* m = findBuiltinManifest(pluginName);
-    if (!m || !m->yaml || !*m->yaml) {
+    if (!m || m->yaml.empty()) {
         return false;
     }
     // 内嵌清单的资源相对路径无需按插件目录解析 (baseDir 为空)
