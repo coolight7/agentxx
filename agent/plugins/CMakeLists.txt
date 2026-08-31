@@ -19,8 +19,6 @@ option(AGENTXX_ENABLE_PLUGIN_SCREEN_CAPTURE "Build agentxx_screen_capture plugin
 option(AGENTXX_ENABLE_PLUGIN_SYSTEM_MONITOR "Build agentxx_system_monitor plugin (CPU/GPU usage)." ON)
 option(AGENTXX_ENABLE_PLUGIN_AUDIO_STREAM "Build agentxx_audio_stream plugin (audio capture)." ON)
 option(AGENTXX_ENABLE_PLUGIN_TEXT_SELECTION "Build agentxx_text_selection_monitor plugin (text selection)." ON)
-# ---- 从 lib 内置工具迁移的编程工具插件 (同名同行为; 默认启用编译,
-#      是否内置合并经 AGENTXX_PLUGIN_BUILTIN_LIST 门控) ----
 option(AGENTXX_ENABLE_PLUGIN_PLANNING "Build agentxx_planning plugin (task planning write tool)." ON)
 option(AGENTXX_ENABLE_PLUGIN_FILESYSTEM "Build agentxx_filesystem plugin (list/read/write/edit/glob/grep)." ON)
 option(AGENTXX_ENABLE_PLUGIN_EXECUTE_COMMAND "Build agentxx_execute_command plugin (bash/windows command)." ON)
@@ -32,13 +30,11 @@ option(AGENTXX_ENABLE_PLUGIN_RAG_SEARCH "Build agentxx_rag_search plugin (embedd
 option(AGENTXX_ENABLE_PLUGIN_EXECUTE_JAVASCRIPT "Build agentxx_execute_javascript plugin (JS execution via QuickJS, bash equivalent)." ON)
 # 内置合并编译模式: 启用的插件源文件直接编译进 libagentxx (运行期无需插件
 # 动态库, 无 dlopen); 仅经 libagentxx 构建生效 (见下方"内置合并编译模式")
-option(AGENTXX_ENABLE_PLUGIN_BUILTIN "Merge enabled plugins into libagentxx (built-in, no runtime plugin dlls)." OFF)
-# 内置合并名单门控 (仅 AGENTXX_ENABLE_PLUGIN_BUILTIN=ON 时生效):
 # - 未设置/空/"all": 全部启用插件内置合并进 libagentxx
 # - 分号(或逗号)分隔的插件名列表 (如 "agentxx_filesystem;agentxx_planning"):
 #   仅名单内插件内置合并, 名单外启用插件仍编译为独立动态库
 set(AGENTXX_PLUGIN_BUILTIN_LIST "" CACHE STRING
-  "Which enabled plugins to merge into libagentxx when AGENTXX_ENABLE_PLUGIN_BUILTIN=ON ('' or 'all' = all; semicolon list = only listed ones)")
+  "Which enabled plugins to merge into libagentxx ('' or 'all' = all; semicolon list = only listed ones)")
 
 # ===== 插件平台支持 =====
 # 各插件并非全平台适配: 源码无对应平台的真实实现时 (仅有 "not supported/
@@ -48,28 +44,10 @@ set(AGENTXX_PLUGIN_BUILTIN_LIST "" CACHE STRING
 #   agentxx_plugin_platform_gate() 判定, 不支持则提前 return() 跳过本目录全部
 #   目标; 内置合并模式下的清单登记 (AGENTXX_BUILTIN_PLUGIN_NAMES) 也由此天然
 #   保持正确 (提前 return 时不会误登记)
-# - 平台变量复用顶层传入的 XX_IS_*_D (独立构建时在共享辅助内按顶层规则推导)
 # - 平台矩阵说明与依据: docs/agent/plugins.md 9.3.1
 
-# 嵌套构建时由顶层传入 (见 agent/CMakeLists.txt)；独立构建时取默认值:
-# - AGENTXX_INSTALL_DIR:      依赖库 (如 quickjs 的 libqjs.a / quickjs.h) 的 install 目录
-# - AGENTXX_EXEC_INSTALL_PREFIX: 插件动态库输出目录 (与 agentxx_cli/agentxx_test 同目录,
-#   便于运行期加载)
-if (NOT DEFINED AGENTXX_INSTALL_DIR)
-  set(AGENTXX_INSTALL_DIR "${CMAKE_BINARY_DIR}/agentxx-project-install/")
-endif()
 # 依赖库查找路径 (独立构建本目录时生效; 嵌套构建时顶层已传 CMAKE_PREFIX_PATH)
 list(PREPEND CMAKE_PREFIX_PATH "${AGENTXX_INSTALL_DIR}")
-if (NOT DEFINED AGENTXX_EXEC_INSTALL_PREFIX)
-  set(AGENTXX_EXEC_INSTALL_PREFIX "${CMAKE_BINARY_DIR}/exec")
-endif()
-if (NOT DEFINED XX_IS_MSVC_D)
-  if (MSVC)
-    set(XX_IS_MSVC_D 1)
-  else ()
-    set(XX_IS_MSVC_D 0)
-  endif()
-endif()
 
 # 插件仅依赖纯 C ABI 头 (见 plugin_api.h)
 set(CMAKE_CXX_STANDARD 26)
@@ -114,40 +92,28 @@ endif()
 # - Windows/MSVC: 不自动导出 (CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS 默认 OFF),
 #   仅 AGENTXX_PLUGIN_EXPORT (__declspec(dllexport)) 标记的入口符号导出;
 #   静态库链接进 DLL 的符号默认不导出, 无需额外处理
-# - 内置合并编译模式 (AGENTXX_ENABLE_PLUGIN_BUILTIN) 下插件符号直接并入
-#   libagentxx, 本分支不生效 (见上)
-if (NOT WIN32)
+# - 内置合并编译模式下插件符号直接并入 libagentxx, 本分支不生效 (见上)
+if (XX_IS_ANDROID_D OR XX_IS_LINUX_D)
   add_compile_options(-fvisibility=hidden -fvisibility-inlines-hidden)
-  if (APPLE)
-    # macOS: -exported_symbols_list (符号表带 _ 前缀)
-    set(_AGENTXX_EXPORT_SYMS_FILE "${CMAKE_CURRENT_BINARY_DIR}/plugin_exported_symbols.txt")
-    file(WRITE "${_AGENTXX_EXPORT_SYMS_FILE}" "\n")
-    foreach(_sym agentxx_plugin_agent_get_info agentxx_plugin_agent_create agentxx_plugin_agent_destroy
-                 agentxx_plugin_client_get_info agentxx_plugin_client_create agentxx_plugin_client_destroy)
-      file(APPEND "${_AGENTXX_EXPORT_SYMS_FILE}" "_${_sym}\n")
-    endforeach()
-    add_link_options("-Wl,-exported_symbols_list,${_AGENTXX_EXPORT_SYMS_FILE}")
-  else()
-    # ELF (Linux/Android): version script 白名单, local: * 隐藏其余全部符号
-    # - 使用通配符而非精确符号名: 单端插件仅定义 agent 入口 (或 client 入口)
-    #   之一, 精确名白名单在 Android lld (-Wl,--fatal-warnings, NDK 默认) 下
-    #   会因 "symbol not defined" 报错; GNU ld 静默忽略但 lld 不会。
-    #   通配符未匹配时不报错, 且仍保证非 agentxx_plugin_agent_/agentxx_plugin_client_
-    #   前缀的符号全部隐藏
-    set(_AGENTXX_EXPORT_SYMS_FILE "${CMAKE_CURRENT_BINARY_DIR}/plugin_symbols.map")
-    file(WRITE "${_AGENTXX_EXPORT_SYMS_FILE}" "# agentxx 插件动态库导出符号白名单
+  # ELF (Linux/Android): version script 白名单, local: * 隐藏其余全部符号
+  # - 使用通配符而非精确符号名: 单端插件仅定义 agent 入口 (或 client 入口)
+  #   之一, 精确名白名单在 Android lld (-Wl,--fatal-warnings, NDK 默认) 下
+  #   会因 "symbol not defined" 报错; GNU ld 静默忽略但 lld 不会。
+  #   通配符未匹配时不报错, 且仍保证非 agentxx_plugin_agent_/agentxx_plugin_client_
+  #   前缀的符号全部隐藏
+  set(_AGENTXX_EXPORT_SYMS_FILE "${CMAKE_CURRENT_BINARY_DIR}/plugin_symbols.map")
+  file(WRITE "${_AGENTXX_EXPORT_SYMS_FILE}" "# agentxx 插件动态库导出符号白名单
 # 宿主仅经 dlsym/GetProcAddress 按名查找以下入口符号 (见 plugin_api.h
 # AGENTXX_PLUGIN_EXPORT); local: * 隐藏其余全部符号 (含第三方静态库符号);
 # 通配符形式兼容单端插件 (仅定义 agent 或 client 之一) 在 lld 下的链接
 {
-  global:
-    agentxx_plugin_agent_*;
-    agentxx_plugin_client_*;
-  local: *;
+global:
+  agentxx_plugin_agent_*;
+  agentxx_plugin_client_*;
+local: *;
 };
 ")
-    add_link_options("-Wl,--version-script=${_AGENTXX_EXPORT_SYMS_FILE}")
-  endif()
+  add_link_options("-Wl,--version-script=${_AGENTXX_EXPORT_SYMS_FILE}")
   unset(_AGENTXX_EXPORT_SYMS_FILE)
 endif()
 
@@ -163,25 +129,39 @@ if (NOT EXISTS "${AGENTXX_LIB_INCLUDE_DIR}")
   message(FATAL_ERROR "[agentxx_plugins] libagentxx include dir not found: ${AGENTXX_LIB_INCLUDE_DIR}")
 endif()
 
+if (NOT DEFINED neograph_SOURCE_DIR)
+  set(neograph_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/neograph")
+endif()
+
+add_compile_definitions(
+  __STDC_CONSTANT_MACROS
+  XX_IS_DEBUG_D=${XX_IS_DEBUG_D}
+  XX_IS_RELEASE_D=${XX_IS_RELEASE_D}
+  XX_IS_LINUX_D=${XX_IS_LINUX_D}
+  XX_IS_WIN_D=${XX_IS_WIN_D}
+  XX_IS_MACOS_D=${XX_IS_MACOS_D}
+  XX_IS_ANDROID_D=${XX_IS_ANDROID_D}
+  XX_IS_IOS_D=${XX_IS_IOS_D}
+  NEOGRAPH_STATIC_BUILD
+  NEOGRAPH_USE_BOOST_ASIO
+  CPPHTTPLIB_OPENSSL_SUPPORT
+)
+
+include_directories(
+  "${AGENTXX_LIB_INCLUDE_DIR}"
+  "${AGENTXX_INSTALL_DIR}/include"
+  "${neograph_SOURCE_DIR}/deps/yyjson"
+)
 
 # --- 名单解析: AGENTXX_PLUGIN_BUILTIN_LIST → ALL 标志 / 具名名单 ---
 set(_AGENTXX_BUILTIN_ALL OFF)
 set(_AGENTXX_BUILTIN_NAMED "")
-if (AGENTXX_ENABLE_PLUGIN_BUILTIN)
-  # 内置合并须由 libagentxx 构建引入 (存在可合并的库目标); 本目录独立构建
-  # 时无 libagentxx 可合并, 直接报错 (与既有行为一致)
-  if (NOT AGENTXX_IS_LIB_BUILTIN_SUBDIR)
-    message(FATAL_ERROR
-      "[agentxx_plugins] AGENTXX_ENABLE_PLUGIN_BUILTIN=ON 须经 libagentxx 构建 "
-      "(在顶层 agent/CMakeLists.txt 配置时开启; 本目录独立构建时请关闭该选项)")
-  endif()
-  if ("${AGENTXX_PLUGIN_BUILTIN_LIST}" STREQUAL "" OR "${AGENTXX_PLUGIN_BUILTIN_LIST}" STREQUAL "all")
-    set(_AGENTXX_BUILTIN_ALL ON)
-  else()
-    # 宽容处理: 逗号分隔同样接受 (命令行 -D 传分号列表需转义, 逗号更顺手)
-    string(REPLACE "," ";" _AGENTXX_BUILTIN_NAMED "${AGENTXX_PLUGIN_BUILTIN_LIST}")
-    list(REMOVE_ITEM _AGENTXX_BUILTIN_NAMED "")
-  endif()
+if ("${AGENTXX_PLUGIN_BUILTIN_LIST}" STREQUAL "" OR "${AGENTXX_PLUGIN_BUILTIN_LIST}" STREQUAL "all")
+  set(_AGENTXX_BUILTIN_ALL ON)
+else()
+  # 宽容处理: 逗号分隔同样接受 (命令行 -D 传分号列表需转义, 逗号更顺手)
+  string(REPLACE "," ";" _AGENTXX_BUILTIN_NAMED "${AGENTXX_PLUGIN_BUILTIN_LIST}")
+  list(REMOVE_ITEM _AGENTXX_BUILTIN_NAMED "")
 endif()
 
 # --- 每插件内置判定 + 统一装载 ---
@@ -192,8 +172,7 @@ endif()
 macro(agentxx_load_plugin _dir_name _enable_var)
   if (${_enable_var})
     set(_AGENTXX_ADD_AS_BUILTIN OFF)
-    if (AGENTXX_ENABLE_PLUGIN_BUILTIN
-        AND (_AGENTXX_BUILTIN_ALL OR "${_dir_name}" IN_LIST _AGENTXX_BUILTIN_NAMED))
+    if ((_AGENTXX_BUILTIN_ALL OR "${_dir_name}" IN_LIST _AGENTXX_BUILTIN_NAMED))
       set(_AGENTXX_ADD_AS_BUILTIN ON)
     endif()
     add_subdirectory(${_dir_name})
@@ -202,56 +181,38 @@ endmacro()
 
 # 内置收集变量初始化 (各插件内置分支追加, 经 PARENT_SCOPE/目录作用域传播
 # 回本目录; 汇总后整体传回 libagentxx 合并进共享/静态库)
-if (AGENTXX_ENABLE_PLUGIN_BUILTIN)
-  # MSVC: 插件 OBJECT 库多目标并行编译时 PDB 写 (MSPDBSRV) 偶发 C1041
-  # 竞态; 调试信息直接嵌入 .obj (/Z7, 不生成目标 PDB), 从根上消除
-  if (MSVC)
-    add_compile_options(/Z7)
-  endif()
-
-  set(AGENTXX_BUILTIN_PLUGIN_OBJECT_TARGETS "")
-  set(AGENTXX_BUILTIN_PLUGIN_LINK_LIBS "")
-  set(AGENTXX_BUILTIN_PLUGIN_NAMES "")
-  set(AGENTXX_BUILTIN_MANIFEST_DECLS "")
-  set(AGENTXX_BUILTIN_MANIFEST_ENTRIES "")
+# MSVC: 插件 OBJECT 库多目标并行编译时 PDB 写 (MSPDBSRV) 偶发 C1041
+# 竞态; 调试信息直接嵌入 .obj (/Z7, 不生成目标 PDB), 从根上消除
+if (MSVC)
+  add_compile_options(/Z7)
 endif()
+
+set(AGENTXX_BUILTIN_PLUGIN_OBJECT_TARGETS "")
+set(AGENTXX_BUILTIN_PLUGIN_LINK_LIBS "")
+set(AGENTXX_BUILTIN_PLUGIN_NAMES "")
+set(AGENTXX_BUILTIN_PLUGIN_MANIFEST_DECLS "")
+set(AGENTXX_BUILTIN_PLUGIN_MANIFEST_ENTRIES "")
 
 # ===== 各插件装载 (启用开关判定 + 内置/动态库双模式) =====
 # - 平台不支持时由各插件自身 CMakeLists 开头的判定提前 return() 跳过
 #   (见 cmake/plugin_platform_support.cmake 与各插件声明处); 内置清单登记
 #   由各插件 builtin 分支自行追加, 提前 return 时天然不会误登记
-
 agentxx_load_plugin(example_plugin AGENTXX_ENABLE_PLUGIN_EXAMPLE)
 agentxx_load_plugin(example_resources AGENTXX_ENABLE_PLUGIN_EXAMPLE)
-
-# JS 相关 (example_js 依赖 quickjs 引擎目标, 须随引擎同批装载)
+# JS 相关 (example_js 依赖 quickjs 引擎目标)
 agentxx_load_plugin(agentxx_javascript_engine AGENTXX_ENABLE_PLUGIN_JS)
 agentxx_load_plugin(example_js AGENTXX_ENABLE_PLUGIN_EXAMPLE)
 
-# agentxx_codegraph (需 codegraph-cpp 库; 顶层 AGENTXX_ENABLE_PLUGIN_CODEGRAPH 时构建)
-agentxx_load_plugin(agentxx_codegraph AGENTXX_ENABLE_PLUGIN_CODEGRAPH)
-
-# agentxx_screen_capture (屏幕捕获; 独立插件, agentxx_computer_use depends 依赖它;
-# 与 computer_use 同为仅 Windows 实现, 平台支持须保持一致)
+# agentxx_computer_use (运行时依赖 agentxx_screen_capture)
 agentxx_load_plugin(agentxx_screen_capture AGENTXX_ENABLE_PLUGIN_SCREEN_CAPTURE)
-
-# agentxx_computer_use (ui_control; 运行时依赖 agentxx_screen_capture, 配置时须同时加载)
 agentxx_load_plugin(agentxx_computer_use AGENTXX_ENABLE_PLUGIN_COMPUTER_USE)
 
-# agentxx_system_monitor (系统资源监控: CPU/内存/GPU; 从 lib expand 拆分;
-# Windows/Linux 有真实实现, Android 复用 Linux 分支, macOS 为桩跳过)
+agentxx_load_plugin(agentxx_codegraph AGENTXX_ENABLE_PLUGIN_CODEGRAPH)
 agentxx_load_plugin(agentxx_system_monitor AGENTXX_ENABLE_PLUGIN_SYSTEM_MONITOR)
-
-# agentxx_audio_stream (音频流捕获: 系统输出/程序输出/麦克风; 从 lib expand 拆分;
-# 当前所有平台实现均未完成 —— Windows WASAPI 被源码 `&& false` 停用, 全平台跳过)
 agentxx_load_plugin(agentxx_audio_stream AGENTXX_ENABLE_PLUGIN_AUDIO_STREAM)
-
-# agentxx_text_selection_monitor (系统级文本选择事件流; 从 lib expand 拆分;
-# 仅 Windows 有真实实现)
 agentxx_load_plugin(agentxx_text_selection_monitor AGENTXX_ENABLE_PLUGIN_TEXT_SELECTION)
 
-# ---- 从 lib 内置工具迁移的编程工具插件 (同名同行为; 默认全部内置编译,
-#      经 AGENTXX_PLUGIN_BUILTIN_LIST 门控, 见文件头说明) ----
+# ---- 默认全部内置编译, 经 AGENTXX_PLUGIN_BUILTIN_LIST 门控) ----
 agentxx_load_plugin(agentxx_planning AGENTXX_ENABLE_PLUGIN_PLANNING)
 agentxx_load_plugin(agentxx_filesystem AGENTXX_ENABLE_PLUGIN_FILESYSTEM)
 agentxx_load_plugin(agentxx_execute_command AGENTXX_ENABLE_PLUGIN_EXECUTE_COMMAND)
@@ -263,38 +224,45 @@ agentxx_load_plugin(agentxx_rag_search AGENTXX_ENABLE_PLUGIN_RAG_SEARCH)
 agentxx_load_plugin(agentxx_execute_javascript AGENTXX_ENABLE_PLUGIN_EXECUTE_JAVASCRIPT)
 
 # ===== 内置清单生成 (存在任一实际内置的插件时) =====
-if (AGENTXX_ENABLE_PLUGIN_BUILTIN)
-  list(LENGTH AGENTXX_BUILTIN_PLUGIN_NAMES AGENTXX_BUILTIN_PLUGIN_COUNT)
-  # —— 内嵌 plugin.yaml 原文 (与上表一一对应) ——
-  set(AGENTXX_BUILTIN_MANIFEST_YAML_ARRAY "")
-  foreach(_bp IN LISTS AGENTXX_BUILTIN_PLUGIN_NAMES)
-    set(_yaml_path "${CMAKE_CURRENT_SOURCE_DIR}/${_bp}/plugin.yaml")
-    if(EXISTS "${_yaml_path}")
-      file(READ "${_yaml_path}" _yaml_raw)
-      # 使用 raw string R"AGENTXX_YAML(... )AGENTXX_YAML" 包裹, 避免转义
-      # 若 yaml 自身包含 )AGENTXX_YAML" 则退化为空串 (极罕见, 视作无清单)
-      if(_yaml_raw MATCHES "\\)AGENTXX_YAML\"")
-        message(WARNING "[agentxx_plugins] ${_bp}/plugin.yaml contains raw delimiter, embedding as empty")
-        string(APPEND AGENTXX_BUILTIN_MANIFEST_YAML_ARRAY "    { \"${_bp}\", \"\" },\n")
-      else()
-        string(APPEND AGENTXX_BUILTIN_MANIFEST_YAML_ARRAY "    { \"${_bp}\", R\"AGENTXX_YAML(${_yaml_raw})AGENTXX_YAML\" },\n")
-      endif()
+list(LENGTH AGENTXX_BUILTIN_PLUGIN_NAMES AGENTXX_BUILTIN_PLUGIN_COUNT)
+set(AGENTXX_BUILTIN_PLUGIN_MANIFEST_DECLS "")
+set(AGENTXX_BUILTIN_PLUGIN_MANIFEST_ENTRIES "")
+set(AGENTXX_BUILTIN_PLUGIN_MANIFEST_YAML_ARRAY "")
+foreach(_bp IN LISTS AGENTXX_BUILTIN_PLUGIN_NAMES)
+  set(AGENTXX_BUILTIN_PLUGIN_MANIFEST_DECLS
+    "${AGENTXX_BUILTIN_PLUGIN_MANIFEST_DECLS}
+extern \"C\" const AgentxxPluginInfo* agentxx_plugin_agent_builtin_get_info_${_bp}(void);
+extern \"C\" int agentxx_plugin_agent_builtin_create_${_bp}(const AgentxxPluginHost* host, void** plugin_ctx);
+extern \"C\" void agentxx_plugin_agent_builtin_destroy_${_bp}(void* plugin_ctx);")
+  set(AGENTXX_BUILTIN_PLUGIN_MANIFEST_ENTRIES
+    "${AGENTXX_BUILTIN_PLUGIN_MANIFEST_ENTRIES}
+    { { \"${_bp}\", sizeof(\"${_bp}\") - 1 }, agentxx_plugin_agent_builtin_get_info_${_bp}, agentxx_plugin_agent_builtin_create_${_bp}, agentxx_plugin_agent_builtin_destroy_${_bp} },")
+
+  set(_yaml_path "${CMAKE_CURRENT_SOURCE_DIR}/${_bp}/plugin.yaml")
+  if(EXISTS "${_yaml_path}")
+    file(READ "${_yaml_path}" _yaml_raw)
+    # 使用 raw string R"AGENTXX_YAML(... )AGENTXX_YAML" 包裹, 避免转义
+    # 若 yaml 自身包含 )AGENTXX_YAML" 则退化为空串 (极罕见, 视作无清单)
+    if(_yaml_raw MATCHES "\\)AGENTXX_YAML\"")
+      message(WARNING "[agentxx_plugins] ${_bp}/plugin.yaml contains raw delimiter, embedding as empty")
+      string(APPEND AGENTXX_BUILTIN_PLUGIN_MANIFEST_YAML_ARRAY "    { { \"${_bp}\", sizeof(\"${_bp}\") - 1 }, { \"\", 0 } },\n")
     else()
-      message(WARNING "[agentxx_plugins] ${_bp}/plugin.yaml not found, embedding as empty")
-      string(APPEND AGENTXX_BUILTIN_MANIFEST_YAML_ARRAY "    { \"${_bp}\", \"\" },\n")
+      string(APPEND AGENTXX_BUILTIN_PLUGIN_MANIFEST_YAML_ARRAY "    { { \"${_bp}\", sizeof(\"${_bp}\") - 1 }, { R\"AGENTXX_YAML(${_yaml_raw})AGENTXX_YAML\", sizeof(R\"AGENTXX_YAML(${_yaml_raw})AGENTXX_YAML\") - 1 } },\n")
     endif()
-  endforeach()
-  configure_file(
-    "${CMAKE_CURRENT_SOURCE_DIR}/builtin_plugins.cpp.in"
-    "${CMAKE_CURRENT_BINARY_DIR}/builtin_plugins.cpp"
-    @ONLY
-  )
+  else()
+    message(WARNING "[agentxx_plugins] ${_bp}/plugin.yaml not found, embedding as empty")
+    string(APPEND AGENTXX_BUILTIN_PLUGIN_MANIFEST_YAML_ARRAY "    { { \"${_bp}\", sizeof(\"${_bp}\") - 1 }, { \"\", 0 } },\n")
+  endif()
+endforeach()
+configure_file(
+  "${CMAKE_CURRENT_SOURCE_DIR}/builtin_plugins.cpp.in"
+  "${CMAKE_CURRENT_BINARY_DIR}/builtin_plugins.cpp"
+  @ONLY
+)
 
+message("[agentxx_plugins] Builtin plugins (merged into libagentxx): ${AGENTXX_BUILTIN_PLUGIN_NAMES}")
 
-  message("[agentxx_plugins] Builtin plugins (merged into libagentxx): ${AGENTXX_BUILTIN_PLUGIN_NAMES}")
-
-  # 收集结果传回 libagentxx (add_subdirectory 的父作用域)
-  set(AGENTXX_BUILTIN_PLUGIN_OBJECT_TARGETS "${AGENTXX_BUILTIN_PLUGIN_OBJECT_TARGETS}" PARENT_SCOPE)
-  set(AGENTXX_BUILTIN_PLUGIN_LINK_LIBS "${AGENTXX_BUILTIN_PLUGIN_LINK_LIBS}" PARENT_SCOPE)
-  set(AGENTXX_BUILTIN_MANIFEST_SOURCE "${CMAKE_CURRENT_BINARY_DIR}/builtin_plugins.cpp" PARENT_SCOPE)
-endif()
+# 收集结果传回 libagentxx (add_subdirectory 的父作用域)
+set(AGENTXX_BUILTIN_PLUGIN_OBJECT_TARGETS "${AGENTXX_BUILTIN_PLUGIN_OBJECT_TARGETS}" PARENT_SCOPE)
+set(AGENTXX_BUILTIN_PLUGIN_LINK_LIBS "${AGENTXX_BUILTIN_PLUGIN_LINK_LIBS}" PARENT_SCOPE)
+set(AGENTXX_BUILTIN_PLUGIN_MANIFEST_SOURCE "${CMAKE_CURRENT_BINARY_DIR}/builtin_plugins.cpp" PARENT_SCOPE)

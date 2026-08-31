@@ -1,6 +1,6 @@
-# agentxx_execute_javascript —— JS 代码执行工具插件 (execute_bash_command 的 JS 等价)
+# agentxx_execute_javascript —— JS 版 `execute_bash_command`，用于测试 JS 插件开发
 # - 默认: libagentxx_execute_javascript.so: C++ 壳 (MODULE, 经 interpreter.js 能力委派 plugin.js 给引擎)
-# - 内置模式 (AGENTXX_ENABLE_PLUGIN_BUILTIN=ON): 壳编译为 OBJECT 库合并进 libagentxx,
+# - 内置模式: 壳编译为 OBJECT 库合并进 libagentxx,
 #   plugin.yaml + plugin.js 仍拷贝到运行期插件目录 (壳经 get_own_info 的 path 推导同目录 plugin.js)
 set(PLUGIN_NAME agentxx_execute_javascript)
 
@@ -36,19 +36,19 @@ if (_AGENTXX_ADD_AS_BUILTIN)
     CXX_STANDARD 26
     CXX_STANDARD_REQUIRED OFF
   )
-  set(AGENTXX_BUILTIN_MANIFEST_DECLS
-    "${AGENTXX_BUILTIN_MANIFEST_DECLS}
+  set(AGENTXX_BUILTIN_PLUGIN_MANIFEST_DECLS
+    "${AGENTXX_BUILTIN_PLUGIN_MANIFEST_DECLS}
 extern \"C\" const AgentxxPluginInfo* agentxx_plugin_agent_builtin_get_info_${PLUGIN_NAME}(void);
 extern \"C\" int agentxx_plugin_agent_builtin_create_${PLUGIN_NAME}(const AgentxxHost* host, void** plugin_ctx);
 extern \"C\" void agentxx_plugin_agent_builtin_destroy_${PLUGIN_NAME}(void* plugin_ctx);")
-  set(AGENTXX_BUILTIN_MANIFEST_ENTRIES
-    "${AGENTXX_BUILTIN_MANIFEST_ENTRIES}
+  set(AGENTXX_BUILTIN_PLUGIN_MANIFEST_ENTRIES
+    "${AGENTXX_BUILTIN_PLUGIN_MANIFEST_ENTRIES}
     {\"${PLUGIN_NAME}\", agentxx_plugin_agent_builtin_get_info_${PLUGIN_NAME}, agentxx_plugin_agent_builtin_create_${PLUGIN_NAME}, agentxx_plugin_agent_builtin_destroy_${PLUGIN_NAME}},")
   set(AGENTXX_BUILTIN_PLUGIN_OBJECT_TARGETS "${AGENTXX_BUILTIN_PLUGIN_OBJECT_TARGETS}" "${_target}" PARENT_SCOPE)
   list(APPEND AGENTXX_BUILTIN_PLUGIN_NAMES ${PLUGIN_NAME})
   set(AGENTXX_BUILTIN_PLUGIN_NAMES "${AGENTXX_BUILTIN_PLUGIN_NAMES}" PARENT_SCOPE)
-  set(AGENTXX_BUILTIN_MANIFEST_DECLS "${AGENTXX_BUILTIN_MANIFEST_DECLS}" PARENT_SCOPE)
-  set(AGENTXX_BUILTIN_MANIFEST_ENTRIES "${AGENTXX_BUILTIN_MANIFEST_ENTRIES}" PARENT_SCOPE)
+  set(AGENTXX_BUILTIN_PLUGIN_MANIFEST_DECLS "${AGENTXX_BUILTIN_PLUGIN_MANIFEST_DECLS}" PARENT_SCOPE)
+  set(AGENTXX_BUILTIN_PLUGIN_MANIFEST_ENTRIES "${AGENTXX_BUILTIN_PLUGIN_MANIFEST_ENTRIES}" PARENT_SCOPE)
   # 资源: plugin.yaml + plugin.js
   set(_res "${AGENTXX_EXEC_INSTALL_PREFIX}/plugins/${PLUGIN_NAME}/plugin.yaml")
   add_custom_target(${PLUGIN_NAME}_builtin_resources ALL

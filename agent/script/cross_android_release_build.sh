@@ -57,7 +57,6 @@ for abi in ${abi_list[@]}; do
         -DXX_IS_RELEASE_D=1 \
         -DAGENTXX_BUILD_CLIENT=OFF \
         -DAGENTXX_BUILD_TEST=OFF \
-        -DAGENTXX_BUILD_PLUGINS=ON \
         -DAGENTXX_ENABLE_HYPERSCAN=OFF \
         -DAGENTXX_ENABLE_BOOST_PROCESS=ON \
         -G Ninja

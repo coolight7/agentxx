@@ -1,6 +1,6 @@
 # agentxx_system —— 系统信息工具插件 (当前日期时间)
 # - 默认: 独立动态库 (MODULE), 仅依赖纯 C ABI 头 + fmt + neograph(json)
-# - 内置模式 (AGENTXX_ENABLE_PLUGIN_BUILTIN=ON 且本插件在 AGENTXX_PLUGIN_BUILTIN_LIST):
+# - 内置模式:
 #   源文件编译为 OBJECT 库合并进 libagentxx
 set(PLUGIN_NAME agentxx_system)
 
@@ -35,19 +35,19 @@ if (_AGENTXX_ADD_AS_BUILTIN)
     CXX_STANDARD 26
     CXX_STANDARD_REQUIRED OFF
   )
-  set(AGENTXX_BUILTIN_MANIFEST_DECLS
-    "${AGENTXX_BUILTIN_MANIFEST_DECLS}
+  set(AGENTXX_BUILTIN_PLUGIN_MANIFEST_DECLS
+    "${AGENTXX_BUILTIN_PLUGIN_MANIFEST_DECLS}
 extern \"C\" const AgentxxPluginInfo* agentxx_plugin_agent_builtin_get_info_${PLUGIN_NAME}(void);
 extern \"C\" int agentxx_plugin_agent_builtin_create_${PLUGIN_NAME}(const AgentxxHost* host, void** plugin_ctx);
 extern \"C\" void agentxx_plugin_agent_builtin_destroy_${PLUGIN_NAME}(void* plugin_ctx);")
-  set(AGENTXX_BUILTIN_MANIFEST_ENTRIES
-    "${AGENTXX_BUILTIN_MANIFEST_ENTRIES}
+  set(AGENTXX_BUILTIN_PLUGIN_MANIFEST_ENTRIES
+    "${AGENTXX_BUILTIN_PLUGIN_MANIFEST_ENTRIES}
     {\"${PLUGIN_NAME}\", agentxx_plugin_agent_builtin_get_info_${PLUGIN_NAME}, agentxx_plugin_agent_builtin_create_${PLUGIN_NAME}, agentxx_plugin_agent_builtin_destroy_${PLUGIN_NAME}},")
   set(AGENTXX_BUILTIN_PLUGIN_OBJECT_TARGETS "${AGENTXX_BUILTIN_PLUGIN_OBJECT_TARGETS}" "${_target}" PARENT_SCOPE)
   list(APPEND AGENTXX_BUILTIN_PLUGIN_NAMES ${PLUGIN_NAME})
   set(AGENTXX_BUILTIN_PLUGIN_NAMES "${AGENTXX_BUILTIN_PLUGIN_NAMES}" PARENT_SCOPE)
-  set(AGENTXX_BUILTIN_MANIFEST_DECLS "${AGENTXX_BUILTIN_MANIFEST_DECLS}" PARENT_SCOPE)
-  set(AGENTXX_BUILTIN_MANIFEST_ENTRIES "${AGENTXX_BUILTIN_MANIFEST_ENTRIES}" PARENT_SCOPE)
+  set(AGENTXX_BUILTIN_PLUGIN_MANIFEST_DECLS "${AGENTXX_BUILTIN_PLUGIN_MANIFEST_DECLS}" PARENT_SCOPE)
+  set(AGENTXX_BUILTIN_PLUGIN_MANIFEST_ENTRIES "${AGENTXX_BUILTIN_PLUGIN_MANIFEST_ENTRIES}" PARENT_SCOPE)
   set(_res "${AGENTXX_EXEC_INSTALL_PREFIX}/plugins/${PLUGIN_NAME}/plugin.yaml")
   # 资源拷贝 (自包含 ALL 目标: 跨目录 OUTPUT 不进构建图, 见 plugins.md;
   # ALL 保证随 libagentxx 构建执行; 仅内置合并分支存在本目标)
@@ -120,7 +120,7 @@ if (AGENTXX_LINUX_IO_URING_SUPPORTED)
   # 下引用其符号)
   target_link_libraries(${PLUGIN_NAME} PRIVATE PkgConfig::uring)
 endif()
-if (NOT WIN32)
+if (NOT XX_IS_WIN_D)
   # ELF (GNU ld/lld) 单遍扫描无法自解析相互引用的静态归档成员 (libhs↔
   # libcrypto、util↔html2md/neograph); 尾部以裸库名重复提供打破循环
   # (裸名字符串不被 CMake 去重, 等价于原先的绝对路径补链; MSVC 多遍解析

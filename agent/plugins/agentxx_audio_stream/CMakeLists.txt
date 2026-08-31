@@ -1,6 +1,6 @@
 # agentxx_audio_stream —— 音频流捕获插件 (Windows WASAPI)
-# - 默认: 独立动态库 (MODULE), 仅依赖纯 C ABI 头 + fmt + simdjson
-# - 内置模式 (AGENTXX_ENABLE_PLUGIN_BUILTIN=ON): 源文件编译为 OBJECT 库合并进
+# - 默认: 独立动态库 (MODULE)
+# - 内置模式: 源文件编译为 OBJECT 库合并进
 #   libagentxx; fmt/simdjson 为 libagentxx 既有依赖; WASAPI/COM 等平台库
 #   经 AGENTXX_BUILTIN_PLUGIN_LINK_LIBS 补链接
 # - 从 libagentxx src/expand/audio_stream 拆分独立:
@@ -9,10 +9,6 @@
 set(PLUGIN_NAME agentxx_audio_stream)
 
 # ===== 平台支持判定 =====
-# 当前所有平台均无可用实现: Windows WASAPI 实现被源码 `#if XX_IS_WIN_D && false`
-# 停用 (初始拆分提交即如此), 其余平台为 "not implemented" 空桩 → 一律跳过编译;
-# 任一平台实现就绪后 (移除源码 `&& false` 等) 在下方声明中加回对应平台即可
-# (平台矩阵说明见 docs/agent/plugins.md 9.3.1)
 include("${CMAKE_CURRENT_LIST_DIR}/../cmake/plugin_platform_support.cmake")
 agentxx_plugin_platform_gate(${PLUGIN_NAME} _AGENTXX_PLATFORM_OK windows)
 if (NOT _AGENTXX_PLATFORM_OK)
@@ -45,15 +41,15 @@ set_target_properties(${_target} PROPERTIES
     CXX_STANDARD 26
     CXX_STANDARD_REQUIRED OFF
   )
-  set(AGENTXX_BUILTIN_MANIFEST_DECLS
-    "${AGENTXX_BUILTIN_MANIFEST_DECLS}
+  set(AGENTXX_BUILTIN_PLUGIN_MANIFEST_DECLS
+    "${AGENTXX_BUILTIN_PLUGIN_MANIFEST_DECLS}
 extern \"C\" const AgentxxPluginInfo* agentxx_plugin_agent_builtin_get_info_${PLUGIN_NAME}(void);
 extern \"C\" int agentxx_plugin_agent_builtin_create_${PLUGIN_NAME}(const AgentxxHost* host, void** plugin_ctx);
 extern \"C\" void agentxx_plugin_agent_builtin_destroy_${PLUGIN_NAME}(void* plugin_ctx);")
-  set(AGENTXX_BUILTIN_MANIFEST_ENTRIES
-    "${AGENTXX_BUILTIN_MANIFEST_ENTRIES}
+  set(AGENTXX_BUILTIN_PLUGIN_MANIFEST_ENTRIES
+    "${AGENTXX_BUILTIN_PLUGIN_MANIFEST_ENTRIES}
     {\"${PLUGIN_NAME}\", agentxx_plugin_agent_builtin_get_info_${PLUGIN_NAME}, agentxx_plugin_agent_builtin_create_${PLUGIN_NAME}, agentxx_plugin_agent_builtin_destroy_${PLUGIN_NAME}},")
-  if (WIN32)
+  if (XX_IS_WIN_D)
     # audio_stream: WASAPI (mmdevapi) / COM (ole32) / 进程名查询 (psapi)
     # - 独立模式经下方独立分支 PRIVATE 链接; 内置模式经本收集通道并入 libagentxx
     set(AGENTXX_BUILTIN_PLUGIN_LINK_LIBS
@@ -64,8 +60,8 @@ extern \"C\" void agentxx_plugin_agent_builtin_destroy_${PLUGIN_NAME}(void* plug
   # 不会误登记; 原由父目录 plugins/CMakeLists.txt 无条件追加, 现统一走此通道)
   list(APPEND AGENTXX_BUILTIN_PLUGIN_NAMES ${PLUGIN_NAME})
   set(AGENTXX_BUILTIN_PLUGIN_NAMES "${AGENTXX_BUILTIN_PLUGIN_NAMES}" PARENT_SCOPE)
-  set(AGENTXX_BUILTIN_MANIFEST_DECLS "${AGENTXX_BUILTIN_MANIFEST_DECLS}" PARENT_SCOPE)
-  set(AGENTXX_BUILTIN_MANIFEST_ENTRIES "${AGENTXX_BUILTIN_MANIFEST_ENTRIES}" PARENT_SCOPE)
+  set(AGENTXX_BUILTIN_PLUGIN_MANIFEST_DECLS "${AGENTXX_BUILTIN_PLUGIN_MANIFEST_DECLS}" PARENT_SCOPE)
+  set(AGENTXX_BUILTIN_PLUGIN_MANIFEST_ENTRIES "${AGENTXX_BUILTIN_PLUGIN_MANIFEST_ENTRIES}" PARENT_SCOPE)
   # 资源: plugin.yaml (运行期目录配置推导 depends/入口)
   set(_res "${AGENTXX_EXEC_INSTALL_PREFIX}/plugins/${PLUGIN_NAME}/plugin.yaml")
   # 资源拷贝 (自包含 ALL 目标: 跨目录 OUTPUT 不进构建图, 见 plugins.md;
@@ -105,7 +101,7 @@ target_link_libraries(${PLUGIN_NAME} PRIVATE
 target_link_directories(${PLUGIN_NAME} PRIVATE
   "${AGENTXX_INSTALL_DIR}/lib"
 )
-if (WIN32)
+if (XX_IS_WIN_D)
   # audio_stream: WASAPI (mmdevapi) / COM (ole32) / 进程名查询 (psapi)
   target_link_libraries(${PLUGIN_NAME} PRIVATE
     mmdevapi

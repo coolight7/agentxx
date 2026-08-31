@@ -1,6 +1,6 @@
 # agentxx_filesystem —— 文件系统工具插件 (list / read / write / edit / glob / grep)
 # - 默认: 独立动态库 (MODULE), 仅依赖纯 C ABI 头 + agentxx_util + Glob
-# - 内置模式 (AGENTXX_ENABLE_PLUGIN_BUILTIN=ON 且本插件在 AGENTXX_PLUGIN_BUILTIN_LIST):
+# - 内置模式:
 #   源文件编译为 OBJECT 库合并进 libagentxx; Glob 为 libagentxx 既有链接
 set(PLUGIN_NAME agentxx_filesystem)
 
@@ -12,26 +12,6 @@ if (NOT _AGENTXX_PLATFORM_OK)
   return() # 跳过本插件全部目标 (内置合并/独立动态库两模式均在此拦截)
 endif ()
 
-# asio 头文件路径 (read/write/edit 协程执行体使用 stream_file 异步文件 I/O;
-# BOOST_ROOT 由顶层 superbuild 传入; 独立构建时按构建脚本约定推断默认路径,
-# 与 agentxx_execute_command 同模式)
-if (NOT DEFINED BOOST_ROOT)
-  set(_BOOST_CANDIDATES
-    "${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/boost-linux-build-debug"
-    "${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/boost-linux-build-release"
-    "${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/boost-windows-build-debug"
-    "${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/boost-windows-build-release"
-  )
-  foreach (_bc ${_BOOST_CANDIDATES})
-    if (EXISTS "${_bc}/include/boost/asio/awaitable.hpp")
-      set(BOOST_ROOT "${_bc}")
-      break()
-    endif()
-  endforeach()
-endif()
-if (NOT DEFINED BOOST_ROOT OR NOT EXISTS "${BOOST_ROOT}/include/boost/asio/awaitable.hpp")
-  message(FATAL_ERROR "[${PLUGIN_NAME}] BOOST_ROOT not found (asio headers required)")
-endif()
 # boost 分发布局: ${BOOST_ROOT}/include/boost/...; 源码用 asio/... 前缀
 # (映射 include/boost/), 而 asio 头内部用 <boost/asio/...> 形式 (映射 include/)
 set(_BOOST_INCLUDES "${BOOST_ROOT}/include/" "${BOOST_ROOT}/include/boost/")
@@ -63,21 +43,21 @@ if (_AGENTXX_ADD_AS_BUILTIN)
     CXX_STANDARD 26
     CXX_STANDARD_REQUIRED OFF
   )
-  set(AGENTXX_BUILTIN_MANIFEST_DECLS
-    "${AGENTXX_BUILTIN_MANIFEST_DECLS}
+  set(AGENTXX_BUILTIN_PLUGIN_MANIFEST_DECLS
+    "${AGENTXX_BUILTIN_PLUGIN_MANIFEST_DECLS}
 extern \"C\" const AgentxxPluginInfo* agentxx_plugin_agent_builtin_get_info_${PLUGIN_NAME}(void);
 extern \"C\" int agentxx_plugin_agent_builtin_create_${PLUGIN_NAME}(const AgentxxHost* host, void** plugin_ctx);
 extern \"C\" void agentxx_plugin_agent_builtin_destroy_${PLUGIN_NAME}(void* plugin_ctx);")
-  set(AGENTXX_BUILTIN_MANIFEST_ENTRIES
-    "${AGENTXX_BUILTIN_MANIFEST_ENTRIES}
+  set(AGENTXX_BUILTIN_PLUGIN_MANIFEST_ENTRIES
+    "${AGENTXX_BUILTIN_PLUGIN_MANIFEST_ENTRIES}
     {\"${PLUGIN_NAME}\", agentxx_plugin_agent_builtin_get_info_${PLUGIN_NAME}, agentxx_plugin_agent_builtin_create_${PLUGIN_NAME}, agentxx_plugin_agent_builtin_destroy_${PLUGIN_NAME}},")
   set(AGENTXX_BUILTIN_PLUGIN_OBJECT_TARGETS "${AGENTXX_BUILTIN_PLUGIN_OBJECT_TARGETS}" "${_target}" PARENT_SCOPE)
   # 登记进内置插件清单 (子目录自登记: 平台不支持时本文件开头已提前 return,
   # 不会误登记; 见 plugins/CMakeLists.txt 内置分支注释)
   list(APPEND AGENTXX_BUILTIN_PLUGIN_NAMES ${PLUGIN_NAME})
   set(AGENTXX_BUILTIN_PLUGIN_NAMES "${AGENTXX_BUILTIN_PLUGIN_NAMES}" PARENT_SCOPE)
-  set(AGENTXX_BUILTIN_MANIFEST_DECLS "${AGENTXX_BUILTIN_MANIFEST_DECLS}" PARENT_SCOPE)
-  set(AGENTXX_BUILTIN_MANIFEST_ENTRIES "${AGENTXX_BUILTIN_MANIFEST_ENTRIES}" PARENT_SCOPE)
+  set(AGENTXX_BUILTIN_PLUGIN_MANIFEST_DECLS "${AGENTXX_BUILTIN_PLUGIN_MANIFEST_DECLS}" PARENT_SCOPE)
+  set(AGENTXX_BUILTIN_PLUGIN_MANIFEST_ENTRIES "${AGENTXX_BUILTIN_PLUGIN_MANIFEST_ENTRIES}" PARENT_SCOPE)
   # 资源: plugin.yaml (运行期目录配置推导 depends/入口)
   set(_res "${AGENTXX_EXEC_INSTALL_PREFIX}/plugins/${PLUGIN_NAME}/plugin.yaml")
   # 资源拷贝 (自包含 ALL 目标: 跨目录 OUTPUT 不进构建图, 见 plugins.md;
@@ -161,7 +141,7 @@ if (AGENTXX_LINUX_IO_URING_SUPPORTED)
   # 下引用其符号)
   target_link_libraries(${PLUGIN_NAME} PRIVATE PkgConfig::uring)
 endif()
-if (NOT WIN32)
+if (NOT XX_IS_WIN_D)
   # ELF (GNU ld/lld) 单遍扫描无法自解析相互引用的静态归档成员 (libhs↔
   # libcrypto、util↔html2md/neograph); 尾部以裸库名重复提供打破循环
   # (裸名字符串不被 CMake 去重, 等价于原先的绝对路径补链; MSVC 多遍解析

@@ -31,7 +31,6 @@ option(AGENTXX_BUILD_TEST "Generate the test target." OFF)
 option(AGENTXX_BUILD_BENCHMARK "Generate the benchmark target." OFF)
 option(AGENTXX_ENABLE_HYPERSCAN "Add HyperScan for regex support. Use std::regex if disable." OFF)
 option(AGENTXX_ENABLE_BOOST_PROCESS "Use Boost.process for execute command toolcall." ON)
-option(AGENTXX_BUILD_PLUGINS "Generate the plugins target." ON)
 option(AGENTXX_ENABLE_PLUGIN_CODEGRAPH "Add CodeGraph-CPP for code analysis." ON)
 option(AGENTXX_ENABLE_PLUGIN_JS "Build QuickJS JS plugin engine (agentxx_javascript_engine)." ON)
 option(AGENTXX_ENABLE_PLUGIN_SYSTEM_MONITOR "Build agentxx_system_monitor plugin (CPU/GPU usage)." ON)
@@ -51,16 +50,14 @@ option(AGENTXX_ENABLE_PLUGIN_SYSTEM "Build agentxx_system plugin (current date/t
 option(AGENTXX_ENABLE_PLUGIN_WEBSEARCH "Build agentxx_websearch plugin (search/fetch url)." ON)
 option(AGENTXX_ENABLE_PLUGIN_RAG_SEARCH "Build agentxx_rag_search plugin (embedding based docs search)." ON)
 # 可选内置合并编译: 启用的插件源文件直接编译进 libagentxx, 运行期无需插件
-# 动态库 (无 dlopen; 适合嵌入式/单文件分发)。开启后跳过独立插件动态库构建
-# (agentxx_plugins_repo), 插件配置沿用插件目录路径 (plugin.yaml 资源仍拷贝,
-# 入口文件缺失时 PluginManager 自动回退内置注册表, 见 plugins.md)
-option(AGENTXX_ENABLE_PLUGIN_BUILTIN "Merge enabled plugins into libagentxx (built-in, no runtime plugin dlls)." OFF)
-# 内置合并名单门控 (仅 AGENTXX_ENABLE_PLUGIN_BUILTIN=ON 时生效):
+# 动态库 (无 dlopen; 适合嵌入式/单文件分发)。
+# 
+# 内置合并名单:
 # - 未设置/空/"all": 全部启用插件内置合并进 libagentxx (默认)
 # - 分号(或逗号)分隔的插件名列表: 仅名单内插件内置合并, 名单外启用插件仍
 #   编译为独立动态库 (混合模式; 例: -DAGENTXX_PLUGIN_BUILTIN_LIST="agentxx_filesystem,agentxx_planning")
 set(AGENTXX_PLUGIN_BUILTIN_LIST "" CACHE STRING
-  "Which enabled plugins to merge into libagentxx when AGENTXX_ENABLE_PLUGIN_BUILTIN=ON ('' or 'all' = all; semicolon/comma list = only listed ones)")
+  "Which enabled plugins to merge into libagentxx ('' or 'all' = all; semicolon/comma list = only listed ones)")
 # ===== Debug 构建加速选项 / Sanitizers =====
 # - GCC/Clang: 在 Debug 配置注入 -fsanitize=* (见下方非 MSVC 分支)
 # - MSVC: 仅支持 AddressSanitizer (/fsanitize=address, Debug 配置);
@@ -83,10 +80,6 @@ option(AGENTXX_ENABLE_UBSAN "Enable UndefinedBehaviorSanitizer for Debug builds 
 #   不可见, 可能产生误报/漏报; dlopen 的外置插件同理 (内置合并编译模式无此问题);
 # - 性能开销大 (5-15x), 仅建议定向排查并发问题时临时开启
 option(AGENTXX_ENABLE_TSAN "Enable ThreadSanitizer for Debug builds (GCC/Clang; mutually exclusive with ASAN)." OFF)
-# TSAN 与 ASAN 运行时互斥的 guard 在编译器确定后执行 (见下方 XX_IS_MSVC_D 分支):
-# MSVC 下 TSAN 本身无实现会被忽略, 不构成运行时互斥, 不能在此直接 FATAL_ERROR
-# - 关闭后 Debug 构建不带调试符号 (-g)，进一步加快编译/链接
-option(AGENTXX_ENABLE_DEBUG_INFO "Enable debug info (-g) for Debug builds." ON)
 # - 预编译稳定的第三方头文件 (fmt/asio/boost.exception 等) 加速 lib/client/test 编译;
 #   项目自身头文件不参与 PCH，改动时不会触发全量重编。仅 GCC/Clang 生效
 option(AGENTXX_ENABLE_PCH "Enable precompiled headers (GCC/Clang)." ON)
@@ -381,12 +374,7 @@ else ()
   # - 关闭 DEBUG_INFO 时: 需同时剔除 CMake 为 GCC/Clang 默认追加的 -g
   #   (CMAKE_CXX_FLAGS_DEBUG 默认值即 "-g")，否则产物依旧膨胀
   set(_AGENTXX_DEBUG_EXTRA_FLAGS "")
-  if (AGENTXX_ENABLE_DEBUG_INFO)
-    string(APPEND _AGENTXX_DEBUG_EXTRA_FLAGS " -g")
-  else()
-    string(REGEX REPLACE "(^| )-g([0-9])?( |$)" " " CMAKE_C_FLAGS_DEBUG   "${CMAKE_C_FLAGS_DEBUG}")
-    string(REGEX REPLACE "(^| )-g([0-9])?( |$)" " " CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG}")
-  endif()
+  string(APPEND _AGENTXX_DEBUG_EXTRA_FLAGS " -g")
   if (AGENTXX_ENABLE_TSAN)
     string(APPEND _AGENTXX_DEBUG_EXTRA_FLAGS " -fsanitize=thread")
   elseif (AGENTXX_ENABLE_ASAN)
@@ -611,7 +599,6 @@ set(_AGENTXX_COMMON_CMAKE_ARGS
     -DAGENTXX_ENABLE_ASAN=${AGENTXX_ENABLE_ASAN}
     -DAGENTXX_ENABLE_UBSAN=${AGENTXX_ENABLE_UBSAN}
     -DAGENTXX_ENABLE_TSAN=${AGENTXX_ENABLE_TSAN}
-    -DAGENTXX_ENABLE_DEBUG_INFO=${AGENTXX_ENABLE_DEBUG_INFO}
     -DAGENTXX_ENABLE_PCH=${AGENTXX_ENABLE_PCH}
     
     -DXX_IS_DEBUG_D=${XX_IS_DEBUG_D}
@@ -646,7 +633,6 @@ set(_AGENTXX_COMMON_CMAKE_ARGS
     -DAGENTXX_ENABLE_PLUGIN_SYSTEM=${AGENTXX_ENABLE_PLUGIN_SYSTEM}
     -DAGENTXX_ENABLE_PLUGIN_WEBSEARCH=${AGENTXX_ENABLE_PLUGIN_WEBSEARCH}
     -DAGENTXX_ENABLE_PLUGIN_RAG_SEARCH=${AGENTXX_ENABLE_PLUGIN_RAG_SEARCH}
-    -DAGENTXX_ENABLE_PLUGIN_BUILTIN=${AGENTXX_ENABLE_PLUGIN_BUILTIN}
     "-DAGENTXX_PLUGIN_BUILTIN_LIST=${AGENTXX_PLUGIN_BUILTIN_LIST}"
 
     "-DAGENTXX_EXEC_INSTALL_PREFIX=${AGENTXX_EXEC_INSTALL_PREFIX}"
@@ -1070,6 +1056,27 @@ if (AGENTXX_BUILD_CLIENT)
   )
 endif()
 
+# QuickJS (JS 插件引擎 agentxx_javascript_engine 的运行时)
+# - 静态库 libqjs.a + 头文件 install 到 AGENTXX_INSTALL_DIR
+# - 关闭 CLI/示例/测试, 仅编译核心库
+if (AGENTXX_ENABLE_PLUGIN_JS)
+  ExternalProject_Add(
+    quickjs_repo
+    SOURCE_DIR "${AGENTXX_THIRD_PARTY_DIR}/quickjs/"
+    INSTALL_DIR "${AGENTXX_INSTALL_DIR}"
+    CMAKE_ARGS
+      ${_AGENTXX_COMMON_CMAKE_ARGS}
+      -DBUILD_SHARED_LIBS=OFF
+      -DQJS_BUILD_CLI_STATIC=OFF
+      -DQJS_BUILD_EXAMPLES=OFF
+      -DQJS_BUILD_WERROR=OFF
+    CMAKE_CACHE_ARGS
+      ${_AGENTXX_COMMON_CMAKE_CACHE_ARGS}
+    TEST_COMMAND ""
+  )
+endif()
+
+# 插件编译由 [agentxx_lib_repo] 处理，因为部分插件需要内嵌编译进 lib
 ExternalProject_Add(
   agentxx_lib_repo
   DEPENDS 
@@ -1095,25 +1102,6 @@ ExternalProject_Add(
   TEST_COMMAND ""
 )
 
-# QuickJS (JS 插件引擎 agentxx_javascript_engine 的运行时)
-# - 静态库 libqjs.a + 头文件 install 到 AGENTXX_INSTALL_DIR
-# - 关闭 CLI/示例/测试, 仅编译核心库
-if (AGENTXX_ENABLE_PLUGIN_JS)
-  ExternalProject_Add(
-    quickjs_repo
-    SOURCE_DIR "${AGENTXX_THIRD_PARTY_DIR}/quickjs/"
-    INSTALL_DIR "${AGENTXX_INSTALL_DIR}"
-    CMAKE_ARGS
-      ${_AGENTXX_COMMON_CMAKE_ARGS}
-      -DBUILD_SHARED_LIBS=OFF
-      -DQJS_BUILD_CLI_STATIC=OFF
-      -DQJS_BUILD_EXAMPLES=OFF
-      -DQJS_BUILD_WERROR=OFF
-    CMAKE_CACHE_ARGS
-      ${_AGENTXX_COMMON_CMAKE_CACHE_ARGS}
-    TEST_COMMAND ""
-  )
-endif()
 if (AGENTXX_LINUX_IO_URING_SUPPORTED)
   add_dependencies(agentxx_lib_repo liburing_repo)
 endif()
@@ -1122,43 +1110,6 @@ if (AGENTXX_ENABLE_HYPERSCAN)
 endif()
 if (AGENTXX_ENABLE_PLUGIN_CODEGRAPH)
   add_dependencies(agentxx_lib_repo codegraph_repo)
-endif()
-# 内置合并编译模式: libagentxx 需先构建插件依赖库 (quickjs/codegraph),
-# 供 lib/CMakeLists.txt 内置分支 find_library + 链接
-if (AGENTXX_ENABLE_PLUGIN_BUILTIN AND AGENTXX_ENABLE_PLUGIN_JS)
-  add_dependencies(agentxx_lib_repo quickjs_repo)
-endif()
-
-# 插件 (独立编译, 见 plugins/CMakeLists.txt)
-# - 各插件子目录 (example_plugin/javascript_engine/example_js) 自带 CMakeLists.txt,
-#   经 plugins/CMakeLists.txt add_subdirectory 汇总; 也可独立构建:
-#   cmake -B build -S agent/plugins -DAGENTXX_INSTALL_DIR=<agentxx-project-install>
-# - 插件不链接 libagentxx, 仅依赖纯 C ABI 头; JS 插件 (javascript_engine/example_js)
-#   需 quickjs 库
-# - 内置合并编译模式 (AGENTXX_ENABLE_PLUGIN_BUILTIN=ON) 下跳过本目标: 插件
-#   源文件由 agentxx_lib_repo (libagentxx) 直接合并编译, 无需插件动态库
-if (AGENTXX_BUILD_PLUGINS AND NOT AGENTXX_ENABLE_PLUGIN_BUILTIN)
-  ExternalProject_Add(
-    agentxx_plugins_repo
-    DEPENDS 
-      agentxx_lib_repo
-    SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/plugins/"
-    INSTALL_DIR "${AGENTXX_INSTALL_DIR}"
-    BUILD_ALWAYS TRUE
-    INSTALL_ALWAYS TRUE
-    CMAKE_ARGS
-      ${_AGENTXX_COMMON_CMAKE_ARGS}
-    CMAKE_CACHE_ARGS
-      ${_AGENTXX_COMMON_CMAKE_CACHE_ARGS}
-    TEST_COMMAND ""
-    # 插件动态库直接输出到 ${AGENTXX_EXEC_INSTALL_PREFIX} (见各插件 CMakeLists.txt),
-    # 无需 install 步骤
-    INSTALL_COMMAND ""
-  )
-  if (AGENTXX_ENABLE_PLUGIN_JS)
-    # 编译 agentxx_javascript_engine / example_js 需 quickjs 库
-    add_dependencies(agentxx_plugins_repo quickjs_repo)
-  endif()
 endif()
 
 if (AGENTXX_BUILD_CLIENT)
@@ -1180,6 +1131,7 @@ if (AGENTXX_BUILD_CLIENT)
     TEST_COMMAND ""
   )
 endif()
+
 if (AGENTXX_BUILD_TEST)
   ExternalProject_Add(
     agentxx_test_repo
@@ -1198,12 +1150,8 @@ if (AGENTXX_BUILD_TEST)
   if (AGENTXX_BUILD_CLIENT)
     add_dependencies(agentxx_test_repo agentxx_client_repo)
   endif()
-  if (AGENTXX_BUILD_PLUGINS AND NOT AGENTXX_ENABLE_PLUGIN_BUILTIN)
-    # 测试运行时加载插件 (与测试可执行同目录输出), 需先于测试编译;
-    # 内置合并编译模式下插件随 libagentxx 构建 (资源目录由 lib 构建产出)
-    add_dependencies(agentxx_test_repo agentxx_plugins_repo)
-  endif()
 endif()
+
 if (AGENTXX_BUILD_BENCHMARK)
   ExternalProject_Add(
     agentxx_benchmark_repo
@@ -1237,7 +1185,7 @@ if (XX_IS_WIN_D AND XX_IS_MSVC_D AND NOT XX_IS_RELEASE_D AND AGENTXX_ENABLE_ASAN
       DEPENDS "${_AGENTXX_ASAN_DLL}"
       COMMENT "[agentxx] Deploy MSVC ASan runtime -> ${AGENTXX_EXEC_INSTALL_PREFIX}"
       VERBATIM)
-    foreach (_dep agentxx_lib_repo agentxx_plugins_repo agentxx_client_repo agentxx_test_repo agentxx_benchmark_repo)
+    foreach (_dep agentxx_lib_repo agentxx_client_repo agentxx_test_repo agentxx_benchmark_repo)
       if (TARGET ${_dep})
         add_dependencies(agentxx_asan_runtime ${_dep})
       endif ()

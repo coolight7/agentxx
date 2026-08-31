@@ -564,6 +564,28 @@ typedef void (*AgentxxPluginDestroyFn)(void* plugin_ctx);
 #define AGENTXX_PLUGIN_AGENT_SYMBOL_CREATE   "agentxx_plugin_agent_create"
 #define AGENTXX_PLUGIN_AGENT_SYMBOL_DESTROY  "agentxx_plugin_agent_destroy"
 
+/// 内置插件描述 (编译进 libagentxx 的插件; 静态数组, 进程生命周期有效)
+typedef struct AgentxxPluginBuiltinInfo {
+    AgentxxPluginStringView name; ///< 插件唯一名 (如 "example_plugin"); NULL = 空表占位
+    AgentxxPluginGetInfoFn get_info; ///< 可空 (加载前元信息校验, 与 dlsym 可选符号同语义)
+    AgentxxPluginCreateFn create; ///< 必需 (实例创建, 与 agentxx_plugin_agent_create 同契约)
+    AgentxxPluginDestroyFn destroy; ///< 可空 (实例销毁, 与 agentxx_plugin_agent_destroy 同契约)
+} AgentxxPluginBuiltinInfo;
+
+// ==================== 内嵌编译清单 ====================
+// 与 BuiltinPluginInfo 同步生成于 plugins/builtin_plugins.cpp
+typedef struct AgentxxPluginBuiltinManifest {
+    AgentxxPluginStringView name; ///< 插件名 (与 BuiltinPluginInfo.name 一致)
+    AgentxxPluginStringView yaml; ///< plugin.yaml 原文 (UTF-8, 静态只读)
+} AgentxxPluginBuiltinManifest;
+
+/// 查询全部内置插件 (libagentxx 实现; 返回静态数组, count 输出条目数)
+/// - 调用方须跳过 name == NULL 的占位条目 (空表时 count 为 1)
+/// - 任意线程可调用 (静态只读数据)
+const AgentxxPluginBuiltinInfo* agentxx_plugin_get_builtin_plugins(size_t* count);
+
+const AgentxxPluginBuiltinManifest* agentxx_plugin_get_builtin_manifests(size_t* count);
+
 #define AGENTXX_PLUGIN_STRDUP(host, s) ((host)->vtable->strdup((s)))
 
 #ifdef __cplusplus

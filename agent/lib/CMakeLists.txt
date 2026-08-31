@@ -10,23 +10,15 @@ cmake_policy(SET CMP0167 OLD)
 project(agentxx VERSION 0.1.0 LANGUAGES C CXX)
 include(GNUInstallDirs) # CMAKE_INSTALL_*DIR
 
-# 由顶层 superbuild 传入 (见 agent/CMakeLists.txt)，独立构建本目录时取默认值
-option(AGENTXX_ENABLE_ASAN "Enable AddressSanitizer for Debug builds." ON)
-option(AGENTXX_ENABLE_DEBUG_INFO "Enable debug info (-g) for Debug builds." ON)
-option(AGENTXX_ENABLE_PCH "Enable precompiled headers (GCC/Clang)." ON)
-# 可选内置合并编译: 启用的插件源文件直接编译进 libagentxx (运行期无需插件
-# 动态库, 无 dlopen); 源文件/依赖库经 plugins/CMakeLists.txt 内置分支收集
-# (add_subdirectory ../plugins), 入口清单 builtin_plugins.cpp 由 libagentxx 编译
-option(AGENTXX_ENABLE_PLUGIN_BUILTIN "Merge enabled plugins into libagentxx (built-in, no runtime plugin dlls)." OFF)
-# 内置合并名单门控: 空/"all" = 全部启用插件内置; 分号列表 = 仅名单内插件内置,
+# - 内置合并编译: 启用的插件源文件直接编译进 libagentxx (运行期无需插件动态库, 无 dlopen); 
+# 源文件/依赖库经 plugins/CMakeLists.txt 收集 (add_subdirectory ../plugins), 
+# 入口清单 builtin_plugins.cpp 由 libagentxx 编译
+# - 内置合并名单门控: 空/"all" = 全部启用插件内置; 分号列表 = 仅名单内插件内置,
 # 名单外插件仍编译为独立动态库 (混合模式)。由顶层 superbuild 统一传入。
 if (NOT DEFINED AGENTXX_PLUGIN_BUILTIN_LIST)
   set(AGENTXX_PLUGIN_BUILTIN_LIST "" CACHE STRING
     "Which enabled plugins to merge into libagentxx ('' or 'all' = all; list = only listed ones)")
 endif()
-# 内置合并模式下各插件的启用开关 (与 plugins/CMakeLists.txt 同名同默认值;
-# 由顶层 superbuild 统一传入; 仅 AGENTXX_ENABLE_PLUGIN_BUILTIN=ON 时生效)
-option(AGENTXX_ENABLE_PLUGIN_EXAMPLE "Merge example plugin into libagentxx (built-in)." ON)
 # 嵌套构建时由顶层传入；独立构建时自动查找
 find_program(CCACHE_PROGRAM ccache)
 
@@ -94,22 +86,13 @@ set_target_properties(agentxx_util PROPERTIES
   OUTPUT_NAME "agentxx_util"
 )
 
-# ===== 可选: 内置插件合并编译 (AGENTXX_ENABLE_PLUGIN_BUILTIN=ON) =====
+# ===== 内置插件合并编译 =====
 # - add_subdirectory(../plugins) 以内置模式收集启用的插件源文件/依赖库/
 #   入口符号 (见 plugins/CMakeLists.txt 内置分支; 不创建任何插件动态库目标)
 # - 生成的清单 builtin_plugins.cpp (改名后的入口符号静态表) 一并编译进
 #   libagentxx, PluginManager 经 agentxx_plugin_get_builtin_plugins() 查询加载
-if (AGENTXX_ENABLE_PLUGIN_BUILTIN)
-  set(AGENTXX_IS_LIB_BUILTIN_SUBDIR 1)
-  add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../plugins" agentxx_plugins_builtin)
-  list(APPEND agentxx_SOURCES ${AGENTXX_BUILTIN_MANIFEST_SOURCE})
-  # 生成的清单提供 agentxx_plugin_get_builtin_plugins 实现; 默认空注册表
-  # (src/plugins/builtin_plugin_registry.cpp) 经宏排除, 避免重复定义
-  set_source_files_properties(
-    "${CMAKE_CURRENT_SOURCE_DIR}/src/plugins/builtin_plugin_registry.cpp"
-    PROPERTIES COMPILE_DEFINITIONS AGENTXX_USE_BUILTIN_PLUGIN_MANIFEST=1
-  )
-endif()
+add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../plugins" agentxx_plugins_builtin)
+list(APPEND agentxx_SOURCES ${AGENTXX_BUILTIN_PLUGIN_MANIFEST_SOURCE})
 
 # ===== 目标创建 =====
 # - GCC/Clang: 通过 OBJECT 库把 62 个源文件只编译一次，共享/静态库复用同一批 .o，
@@ -235,7 +218,6 @@ foreach(_agentxx_target ${_AGENTXX_USAGE_TARGETS})
     # 标记为 SYSTEM 防止 include 影响 warning 转 error 判断
     "${AGENTXX_INSTALL_DIR}/include/"
     "${neograph_SOURCE_DIR}/deps/yyjson/"
-    "${neograph_SOURCE_DIR}/deps/"
   )
   if(Boost_FOUND)
     target_include_directories(${_agentxx_target} SYSTEM PUBLIC 
@@ -339,26 +321,9 @@ endif()
 # - Windows/MSVC: 默认不自动导出, 仅 AGENTXX_FFI_EXPORT/FFI_PLUGIN_EXPORT
 #   (__declspec(dllexport)) 标记的符号导出, 无需额外处理
 # - agentxx_static 不受影响 (cli/test/benchmark 及 C++ 嵌入方继续用静态库)
-if (NOT WIN32)
-  if (APPLE)
-    set(_AGENTXX_FFI_EXPORT_SYMS "${CMAKE_CURRENT_SOURCE_DIR}/ffi_exported_symbols_darwin.txt")
-    file(WRITE "${_AGENTXX_FFI_EXPORT_SYMS}" "\n")
-    foreach(_sym agentxx_ffi_malloc agentxx_ffi_free agentxx_ffi_strdup_n
-                 agentxx_ffi_api_version agentxx_ffi_library_version agentxx_ffi_strerror
-                 agentxx_ffi_create agentxx_ffi_start agentxx_ffi_stop agentxx_ffi_destroy
-                 agentxx_ffi_send_input agentxx_ffi_cancel agentxx_ffi_select_model agentxx_ffi_set_permission
-                 agentxx_ffi_switch_session agentxx_ffi_get_model_info agentxx_ffi_get_context_messages
-                 agentxx_ffi_list_sessions agentxx_ffi_interrupt_respond agentxx_ffi_drain_logs
-                 agentxx_ffi_event_queue_create agentxx_ffi_event_queue_free
-                 agentxx_ffi_event_queue_on_event agentxx_ffi_event_queue_pop
-                 agentxx_plugin_get_builtin_plugins)
-      file(APPEND "${_AGENTXX_FFI_EXPORT_SYMS}" "_${_sym}\n")
-    endforeach()
-    target_link_options(agentxx_shared PRIVATE "-Wl,-exported_symbols_list,${_AGENTXX_FFI_EXPORT_SYMS}")
-  else()
+if (NOT XX_IS_WIN_D)
     target_link_options(agentxx_shared PRIVATE
       "-Wl,--version-script=${CMAKE_CURRENT_SOURCE_DIR}/ffi_symbols.map")
-  endif()
   unset(_AGENTXX_FFI_EXPORT_SYMS)
 endif()
 target_link_directories(agentxx_shared PUBLIC "${AGENTXX_INSTALL_DIR}/lib/")
@@ -448,35 +413,35 @@ if (AGENTXX_ENABLE_BOOST_PROCESS)
   target_link_libraries(agentxx_shared PUBLIC Boost::process)
   target_link_libraries(agentxx_static PUBLIC Boost::process)
 endif()
+
 # 内置插件合并编译: 依赖库 (quickjs/codegraph 系/平台库) 与 include 路径
 # - 收集自 plugins/CMakeLists.txt 内置分支 (各插件子目录追加 PARENT_SCOPE)
 # - 链接策略与 _AGENTXX_LINK_LIBS 一致 (obj PRIVATE 供编译; 共享/静态库
 #   PUBLIC 保证静态库消费者连带链接)
-if (AGENTXX_ENABLE_PLUGIN_BUILTIN)
-  # 内置插件 OBJECT 库目标文件合并进共享/静态库 (各插件 OBJECT 库自带
-  # per-plugin 编译定义/包含路径, 与 lib 自身源码互不影响)
-  foreach(_plugin_target ${AGENTXX_BUILTIN_PLUGIN_OBJECT_TARGETS})
-    target_sources(agentxx_shared PRIVATE $<TARGET_OBJECTS:${_plugin_target}>)
-    target_sources(agentxx_static PRIVATE $<TARGET_OBJECTS:${_plugin_target}>)
-  endforeach()
-  # 内置插件依赖库 (quickjs/codegraph 系/平台库; 收集自 plugins 内置分支,
-  # 与 _AGENTXX_LINK_LIBS 相同链接策略: obj PRIVATE 供编译; 共享/静态库
-  # PUBLIC 保证静态库消费者连带链接)
-  foreach(_agentxx_target ${_AGENTXX_OBJ_LINK_TARGETS})
-    target_link_libraries(${_agentxx_target} PRIVATE ${AGENTXX_BUILTIN_PLUGIN_LINK_LIBS})
-  endforeach()
-  target_link_libraries(agentxx_shared PUBLIC ${AGENTXX_BUILTIN_PLUGIN_LINK_LIBS})
-  target_link_libraries(agentxx_static PUBLIC ${AGENTXX_BUILTIN_PLUGIN_LINK_LIBS})
-  # 插件资源 (plugin.yaml 等) 先于 lib 目标产出 (运行期目录配置依赖)
-  if (TARGET agentxx_builtin_plugin_resources)
-    add_dependencies(agentxx_shared agentxx_builtin_plugin_resources)
-    add_dependencies(agentxx_static agentxx_builtin_plugin_resources)
-    if (TARGET agentxx_obj)
-      add_dependencies(agentxx_obj agentxx_builtin_plugin_resources)
-    endif()
+# 内置插件 OBJECT 库目标文件合并进共享/静态库 (各插件 OBJECT 库自带
+# per-plugin 编译定义/包含路径, 与 lib 自身源码互不影响)
+foreach(_plugin_target ${AGENTXX_BUILTIN_PLUGIN_OBJECT_TARGETS})
+  target_sources(agentxx_shared PRIVATE $<TARGET_OBJECTS:${_plugin_target}>)
+  target_sources(agentxx_static PRIVATE $<TARGET_OBJECTS:${_plugin_target}>)
+endforeach()
+# 内置插件依赖库 (quickjs/codegraph 系/平台库; 收集自 plugins 内置分支,
+# 与 _AGENTXX_LINK_LIBS 相同链接策略: obj PRIVATE 供编译; 共享/静态库
+# PUBLIC 保证静态库消费者连带链接)
+foreach(_agentxx_target ${_AGENTXX_OBJ_LINK_TARGETS})
+  target_link_libraries(${_agentxx_target} PRIVATE ${AGENTXX_BUILTIN_PLUGIN_LINK_LIBS})
+endforeach()
+target_link_libraries(agentxx_shared PUBLIC ${AGENTXX_BUILTIN_PLUGIN_LINK_LIBS})
+target_link_libraries(agentxx_static PUBLIC ${AGENTXX_BUILTIN_PLUGIN_LINK_LIBS})
+# 插件资源 (plugin.yaml 等) 先于 lib 目标产出 (运行期目录配置依赖)
+if (TARGET agentxx_builtin_plugin_resources)
+  add_dependencies(agentxx_shared agentxx_builtin_plugin_resources)
+  add_dependencies(agentxx_static agentxx_builtin_plugin_resources)
+  if (TARGET agentxx_obj)
+    add_dependencies(agentxx_obj agentxx_builtin_plugin_resources)
   endif()
 endif()
 unset(_AGENTXX_OBJ_LINK_TARGETS)
+
 if (XX_IS_WIN_D)
   # 仅链接 agentxx 自身需要的 Windows 系统库:
   # - ws2_32: asio 网络栈 (http_client/ws_client/http_server/ws_server) 必需

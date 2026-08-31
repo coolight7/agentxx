@@ -6,7 +6,6 @@
 #include "agentxx/middlewares/permission.h"
 #include "agentxx/middlewares/skill.h"
 #include "agentxx/middlewares/summarization.h"
-#include "agentxx/middlewares/worktree.h"
 #include "agentxx/plugin/plugin_manager.h"
 #include "agentxx/protocol/mcp_client.h"
 #include "agentxx/protocol/openai_provider.h"

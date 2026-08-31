@@ -21,7 +21,6 @@
 #include "test_cpu_gpu_use.h"
 #include "test_datetime_tool.h"
 #include "test_diff_util.h"
-#include "test_math_tools.h"
 #include "test_event_bridge.h"
 #include "test_event_stream.h"
 #include "test_events.h"
@@ -29,6 +28,7 @@
 #include "test_filesystem_tools.h"
 #include "test_http.h"
 #include "test_interrupt_bus.h"
+#include "test_math_tools.h"
 #include "test_mcp.h"
 #include "test_memgrowth.h"
 #include "test_message_supplement.h"
@@ -279,15 +279,7 @@ int main(int argn, char** argv) {
             co_await run("plugins", agentxx::test::run_plugin_tests);
             co_await run("plugin_resources", agentxx::test::run_plugin_resource_tests);
             co_await run("plugin_multi_instance", agentxx::test::run_plugin_multi_instance_tests);
-#ifdef AGENTXX_ENABLE_PLUGIN_BUILTIN
-            // 内置合并编译模式不产出 client 侧插件动态库 (client 插件仍走独立
-            // 构建, 见 plugins.md 11.7.5), client_plugins 测试跳过
-            TEST_INFO
-                << "client_plugins: skipped (AGENTXX_ENABLE_PLUGIN_BUILTIN, no client plugin dlls)"
-                << std::endl;
-#else
             co_await run("client_plugins", agentxx::test::run_client_plugin_tests);
-#endif
             co_await run("cancel", agentxx::test::run_cancel_tests);
             co_await run("message_supplement", agentxx::test::run_message_supplement_tests);
             co_await run("summarization", agentxx::test::run_summarization_tests);

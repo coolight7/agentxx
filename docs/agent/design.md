@@ -39,7 +39,7 @@ Agentxx 是一个使用 C++23 实现的 AI Agent 框架，编译器启用 C++26/
 丰富的工具集，按功能分类。编程基础类工具 (文件系统 / 命令执行 / 网络 /
 知识检索 / 字符串 / 系统时间 / 规划写入) 已从 lib 内置实现拆分为**独立插件**
 (同名同行为, 见 `agent/plugins/agentxx_*`)，经 yaml `plugins` 段配置加载，
-或构建期经 `AGENTXX_ENABLE_PLUGIN_BUILTIN=ON` + `AGENTXX_PLUGIN_BUILTIN_LIST`
+或构建期经 `AGENTXX_PLUGIN_BUILTIN_LIST`
 合并编译进 libagentxx (默认全量内置)；lib 内仅保留 share_store / subagent /
 tool_skill_search 与延迟加载装配：
 
@@ -454,7 +454,7 @@ path/to/agentxx_test string_util regex agent
 
 可用测试模块 (与 `agent/test/test.cpp` 注册列表一致):
 - 同步模块: `string_util` `regex` `diff_util` `events` `concurrency` `misc_fixes` `aho_corasick` `util_misc` `training` `settings_db` `toolcall_args` `ffi_c_api` (及 client 侧: `config_loader` `tui_settings` `tui_input` `tui_interrupt` `tui_scroll` `tui_stream` `tui_tool_header` `sessionId` `mermaid_state`)
-- 异步模块: `event_stream` `event_bridge` `interrupt_bus` `subagent_bus` `agent_host` `string_tools` `share_store` `session_persistence` `rag_search` `datetime` `filesystem` `command` `web_search` `codegraph` `cpu_gpu` `http` `network_timeout` `websocket` `remote_agent` `mcp` `acp` `a2a` `openai_provider` `anthropic_provider` `plugins` `client_plugins` (内置合并编译 AGENTXX_ENABLE_PLUGIN_BUILTIN 时自动跳过) `cancel` `message_supplement` `summarization` `checkpoint_store` `agent` `memgrowth`
+- 异步模块: `event_stream` `event_bridge` `interrupt_bus` `subagent_bus` `agent_host` `string_tools` `share_store` `session_persistence` `rag_search` `datetime` `filesystem` `command` `web_search` `codegraph` `cpu_gpu` `http` `network_timeout` `websocket` `remote_agent` `mcp` `acp` `a2a` `openai_provider` `anthropic_provider` `plugins` `client_plugins` `cancel` `message_supplement` `summarization` `checkpoint_store` `agent` `memgrowth`
 - 平台模块: `screen_capture` `text_selection`
 
 测试源目录划分: 根目录 (入口+框架) / `core/` (lib 核心) / `plugin/` (插件系统与具体插件集成) / `client/` (TUI/CLI, 仅 `AGENTXX_BUILD_CLIENT` 编译)。
@@ -1249,7 +1249,6 @@ agent/
 │   │   │   │                     #   PluginMiddlewareHandle (7 钩子→C 回调) /
 │   │   │   │                     #   CapabilityRegistry / NativeLoader (dlopen↔LoadLibraryW)
 │   │   │   ├── plugin_common.h   # 插件宿主侧通用工具
-│   │   │   ├── builtin_plugin.h  # 内置合并编译模式入口 (AGENTXX_ENABLE_PLUGIN_BUILTIN)
 │   │   │   ├── client_plugin_api.h     # client 侧插件纯 C ABI 契约 (UI 无关语义层)
 │   │   │   ├── client_plugin_manager.h # ClientPluginManager (client 侧加载/UI 注册表/命令管线)
 │   │   │   └── tool_registry.h   # 动态插件工具查表 (shared_ptr 保活, 静态工具名冲突检测)

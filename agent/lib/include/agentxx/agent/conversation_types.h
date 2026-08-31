@@ -193,7 +193,8 @@ struct WireDelta {
         TurnEnd,
         NodeStart,
         NodeEnd,
-        MessageUITip, ///< 通用瞬态提示消息 (info/warning/error, 仅 UI 瞬态展示, 不入会话历史)
+        /// 通用瞬态提示消息 (info/warning/error, 仅 UI 展示, 不入会话历史)
+        MessageUITip,
         /// 完整 ViewMessage 消息插入 (原子消息载荷, 如 Tip 提示、完整卡片等)
         InsertMessage,
         /// 完整 ViewMessage 消息更新 (按 msgId 定位更新已插入的消息)

@@ -11,8 +11,6 @@ cmake_policy(SET CMP0167 OLD)
 project(agentxx_test VERSION 0.1.0 LANGUAGES C CXX)
 include(GNUInstallDirs)
 
-# 由顶层 superbuild 传入 (见 agent/CMakeLists.txt)
-option(AGENTXX_ENABLE_PCH "Enable precompiled headers (GCC/Clang)." ON)
 # 嵌套构建时由顶层传入；独立构建时自动查找
 find_program(CCACHE_PROGRAM ccache)
 
@@ -31,7 +29,7 @@ add_executable(agentxx_test)
 # 注: 示例插件 (example_plugin/javascript_engine/example_js) 已独立到 agent/plugins/
 # 独立编译 (每个插件子目录自带 CMakeLists.txt), 见 plugins/CMakeLists.txt;
 # 插件动态库输出到 ${AGENTXX_EXEC_INSTALL_PREFIX} (与测试可执行同目录),
-# 供 test_plugins 加载, 由顶层 agentxx_plugins_repo ExternalProject 构建。
+# 供 test_plugins 加载, 由顶层 ExternalProject 构建。
 
 # 测试源按目录划分:
 # - 根目录: 入口 test.cpp (模块注册)
@@ -80,14 +78,6 @@ target_include_directories(agentxx_test PRIVATE
 
 # 注意: 不要添加 /FS /MP 编译选项 —— 顶层已统一管理; 命令行出现重复 /FS 时
 # VS18 FileTracker 失效，每次构建都会全量重编 (勿删此注释)
-
-# 内置合并编译模式 (顶层 AGENTXX_ENABLE_PLUGIN_BUILTIN=ON, 由 superbuild 传入):
-# - 测试经插件目录路径加载内置插件 (入口文件缺失时 PluginManager 回退内置注册表),
-#   与动态模式配置完全一致
-# - 暴露编译期宏供测试区分断言 (如 dlHandle 为空/非空)
-if (AGENTXX_ENABLE_PLUGIN_BUILTIN)
-  target_compile_definitions(agentxx_test PRIVATE AGENTXX_ENABLE_PLUGIN_BUILTIN=1)
-endif()
 
 if (AGENTXX_BUILD_CLIENT)
   # build client test

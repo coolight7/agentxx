@@ -1,25 +1,11 @@
 # 原生示例插件 (插件系统测试/演示用, 见 test/plugin/test_plugins.cpp)
 # - 默认: 编译为 MODULE 动态库 (不链接 libagentxx, 仅依赖纯 C ABI 头)
-# - 内置模式 (AGENTXX_ENABLE_PLUGIN_BUILTIN=ON, 由 libagentxx 合并编译):
+# - 内置模式:
 #   源文件编译为独立 OBJECT 库 (per-plugin 编译定义/包含路径互不影响),
 #   目标文件由 libagentxx 合并进共享/静态库; 入口符号经编译定义改名避免
 #   多插件合并时符号冲突 (纯编译期 -D, 不改插件源码)
 set(PLUGIN_NAME example_plugin)
 
-if (NOT DEFINED BOOST_ROOT)
-  set(_BOOST_CANDIDATES
-    "${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/boost-windows-build-debug"
-    "${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/boost-windows-build-release"
-    "${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/boost-linux-build-debug"
-    "${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/boost-linux-build-release"
-  )
-  foreach(_bc ${_BOOST_CANDIDATES})
-    if (EXISTS "${_bc}/include/boost/asio/awaitable.hpp")
-      set(BOOST_ROOT "${_bc}")
-      break()
-    endif()
-  endforeach()
-endif()
 set(_BOOST_INCLUDES "${BOOST_ROOT}/include/" "${BOOST_ROOT}/include/boost/")
 
 if (_AGENTXX_ADD_AS_BUILTIN)
@@ -51,21 +37,21 @@ set_target_properties(${_target} PROPERTIES
     CXX_STANDARD_REQUIRED OFF
   )
   # 内置清单片段: 入口符号声明 + 表项 (由 plugins/CMakeLists.txt 汇总生成)
-  set(AGENTXX_BUILTIN_MANIFEST_DECLS
-    "${AGENTXX_BUILTIN_MANIFEST_DECLS}
+  set(AGENTXX_BUILTIN_PLUGIN_MANIFEST_DECLS
+    "${AGENTXX_BUILTIN_PLUGIN_MANIFEST_DECLS}
 extern \"C\" const AgentxxPluginInfo* agentxx_plugin_agent_builtin_get_info_${PLUGIN_NAME}(void);
 extern \"C\" int agentxx_plugin_agent_builtin_create_${PLUGIN_NAME}(const AgentxxHost* host, void** plugin_ctx);
 extern \"C\" void agentxx_plugin_agent_builtin_destroy_${PLUGIN_NAME}(void* plugin_ctx);")
-  set(AGENTXX_BUILTIN_MANIFEST_ENTRIES
-    "${AGENTXX_BUILTIN_MANIFEST_ENTRIES}
+  set(AGENTXX_BUILTIN_PLUGIN_MANIFEST_ENTRIES
+    "${AGENTXX_BUILTIN_PLUGIN_MANIFEST_ENTRIES}
     {\"${PLUGIN_NAME}\", agentxx_plugin_agent_builtin_get_info_${PLUGIN_NAME}, agentxx_plugin_agent_builtin_create_${PLUGIN_NAME}, agentxx_plugin_agent_builtin_destroy_${PLUGIN_NAME}},")
   set(AGENTXX_BUILTIN_PLUGIN_OBJECT_TARGETS "${AGENTXX_BUILTIN_PLUGIN_OBJECT_TARGETS}" "${_target}" PARENT_SCOPE)
   # 登记进内置插件清单 (子目录自登记: 平台不支持时本文件开头已提前 return,
   # 不会误登记; 原由父目录 plugins/CMakeLists.txt 无条件追加, 现统一走此通道)
   list(APPEND AGENTXX_BUILTIN_PLUGIN_NAMES ${PLUGIN_NAME})
   set(AGENTXX_BUILTIN_PLUGIN_NAMES "${AGENTXX_BUILTIN_PLUGIN_NAMES}" PARENT_SCOPE)
-  set(AGENTXX_BUILTIN_MANIFEST_DECLS "${AGENTXX_BUILTIN_MANIFEST_DECLS}" PARENT_SCOPE)
-  set(AGENTXX_BUILTIN_MANIFEST_ENTRIES "${AGENTXX_BUILTIN_MANIFEST_ENTRIES}" PARENT_SCOPE)
+  set(AGENTXX_BUILTIN_PLUGIN_MANIFEST_DECLS "${AGENTXX_BUILTIN_PLUGIN_MANIFEST_DECLS}" PARENT_SCOPE)
+  set(AGENTXX_BUILTIN_PLUGIN_MANIFEST_ENTRIES "${AGENTXX_BUILTIN_PLUGIN_MANIFEST_ENTRIES}" PARENT_SCOPE)
   # 资源: plugin.yaml (运行期目录配置推导 depends/入口; 入口缺失时回退内置)
   set(_res "${AGENTXX_EXEC_INSTALL_PREFIX}/plugins/${PLUGIN_NAME}/plugin.yaml")
   # 资源拷贝 (自包含 ALL 目标: 跨目录 OUTPUT 不进构建图, 见 plugins.md;

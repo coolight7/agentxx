@@ -1,7 +1,6 @@
 #pragma once
 
 #include "agentxx/middlewares/middleware.h"
-#include "agentxx/plugin/builtin_plugin.h"
 #include "agentxx/plugin/plugin_api.h"
 #include "agentxx/plugin/plugin_common.h"
 #include "agentxx/plugin/tool_registry.h"
@@ -69,14 +68,14 @@ namespace plugin {
 class PluginInstance {
 public:
 
-    std::string              name;
-    std::string              version;
-    std::string              description;
-    std::string              path;
-    neograph::json           args = neograph::json::object();
+    std::string    name;
+    std::string    version;
+    std::string    description;
+    std::string    path;
+    neograph::json args = neograph::json::object();
     /// 插件配置文件所在目录或文件路径 (yaml `config`, 归一化为绝对路径)
     /// - 可指向文件或目录; 为空表示未指定
-    std::string configPath;
+    std::string              configPath;
     std::vector<std::string> depends;
     std::vector<std::string> optionalDepends;
     PluginManifestInterfaces interfaces;
@@ -108,7 +107,7 @@ public:
     };
 
     struct PromptBackup {
-        std::optional<std::string> systemPrompt;
+        std::optional<std::string>                                     systemPrompt;
         std::map<std::string, std::optional<std::string>, std::less<>> appendSystemPrompts;
         std::map<std::string, std::optional<agentxx::agent::ToolPrompt>, std::less<>> toolPrompt;
         std::vector<std::string>                                                      backedUpTools;

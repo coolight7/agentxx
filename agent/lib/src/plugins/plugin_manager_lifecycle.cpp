@@ -4,7 +4,6 @@
 #include "agentxx/agent/context.h"
 #include "agentxx/agent/resource_applier.h"
 #include "agentxx/event/event_stream.h"
-#include "agentxx/plugin/builtin_plugin.h"
 #include "agentxx/plugin/plugin_common.h"
 #include "agentxx/util/exception.h"
 #include "agentxx/util/log.h"
@@ -49,7 +48,7 @@ static inline std::filesystem::path getExecutableDirPath() noexcept {
         buf.resize(buf.size() * 2);
     }
     std::error_code ec;
-    auto p = std::filesystem::path(buf).parent_path();
+    auto            p = std::filesystem::path(buf).parent_path();
     // 规范化, 失败时回退空
     (void)ec;
     return p;
@@ -630,7 +629,23 @@ asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadBuiltinAsync
         co_return nullptr;
     }
 
+    const AgentxxPluginInfo* info = entry->get_info ? entry->get_info() : nullptr;
+    if (info && info->api_version != AGENTXX_PLUGIN_API_VERSION) {
+        XX_LOGE(
+            "Builtin plugin `{}` API version mismatch (got {}, host requires {})",
+            name,
+            info->api_version,
+            AGENTXX_PLUGIN_API_VERSION
+        );
+        co_return nullptr;
+    }
+
     auto inst             = std::make_shared<PluginInstance>(name);
+    inst->version         = info && info->version.data ? std::string(info->version.data, info->version.size)
+                                                       : "1.0.0";
+    inst->description     = info && info->description.data
+                                ? std::string(info->description.data, info->description.size)
+                                : "";
     inst->path            = path;
     inst->depends         = std::move(depends);
     inst->optionalDepends = std::move(optionalDepends);
@@ -674,14 +689,22 @@ asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadPluginAsync(
         }
         // 尝试从默认插件目录解析 manifest 以获取 depends/interfaces/resources
         // (可选: 失败则按无依赖/无资源处理, 不影响内置核心加载)
-        std::vector<std::string>        depends, optionalDepends;
-        PluginManifestResources           resources;
-        PluginManifestInterfaces          interfaces;
+        std::vector<std::string> depends, optionalDepends;
+        PluginManifestResources  resources;
+        PluginManifestInterfaces interfaces;
         // 按可执行目录与当前工作目录探测 manifest (与内置合并模式资源拷贝布局一致)
         bool        manifestFound = false;
         std::string dummyName, dummyEntry;
         // 优先内嵌清单 (单文件分发, 无需外部 plugin.yaml)
-        if (parseBuiltinManifest(btName, dummyName, dummyEntry, depends, optionalDepends, &resources, &interfaces)) {
+        if (parseBuiltinManifest(
+                btName,
+                dummyName,
+                dummyEntry,
+                depends,
+                optionalDepends,
+                &resources,
+                &interfaces
+            )) {
             manifestFound = true;
         } else {
             // 跨平台探测: 优先 exe 目录 (安装布局) 其次 cwd (开发布局)

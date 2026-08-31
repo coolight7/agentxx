@@ -593,17 +593,56 @@ asio::awaitable<void> BaseAgent::initMiddleware() {
     co_return;
 }
 
+namespace {
+
+class SubAgentDelegatingTool : public agentxx::tools::XXToolBase {
+public:
+
+    explicit SubAgentDelegatingTool(std::weak_ptr<agentxx::agent::AgentContext> in_agentContext) :
+        agentxx::tools::XXToolBase("subagent_manager", in_agentContext),
+        ctx_(std::move(in_agentContext)) {}
+
+    std::string get_name() const override {
+        auto c = ctx_.lock();
+        if (c && c->subagentManager) {
+            return c->subagentManager->get_name();
+        }
+        return "agentxx_subagent";
+    }
+
+    neograph::ChatTool get_definition() const override {
+        auto c = ctx_.lock();
+        if (c && c->subagentManager) {
+            return c->subagentManager->get_definition();
+        }
+        return neograph::ChatTool{};
+    }
+
+    asio::awaitable<std::string> execute_async(const neograph::json& arguments) override {
+        auto c = ctx_.lock();
+        if (c && c->subagentManager) {
+            co_return co_await c->subagentManager->execute_async(arguments);
+        }
+        co_return R"({"error":"AgentContext or subagentManager not available"})";
+    }
+
+private:
+
+    std::weak_ptr<agentxx::agent::AgentContext> ctx_;
+};
+
+} // namespace
+
 asio::awaitable<std::vector<std::unique_ptr<agentxx::tools::XXToolBase>>> BaseAgent::initTools() {
     std::vector<std::unique_ptr<agentxx::tools::XXToolBase>> tools{};
     tools.push_back(std::make_unique<agentxx::tools::SessionShareStoreTool>(agentContext));
     // agentxx_get_current_datetime 已迁移至 agentxx_system 插件 (同名同行为,
     // 经 PluginManager 注册)
 
-    {
-        // TODO: 启用 subagent toolcall
-        // if (config->enableSubagent) {
-        //     tools.push_back(std::move(subagentManagerTool_));
-        // }
+    if (agentContext && agentContext->agentConfig && agentContext->agentConfig->enableSubagent
+        && agentContext->subagentManager) {
+        // TODO: 完善后启用 subagent toolcall
+        // tools.push_back(std::make_unique<SubAgentDelegatingTool>(agentContext));
     }
     co_return tools;
 }

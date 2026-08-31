@@ -96,12 +96,10 @@ Debug 构建脚本 (`script/linux_debug_build.sh`) 默认已启用以下加速�
 ```sh
 cmake -B build/linux-debug -S agent \
     -DAGENTXX_ENABLE_ASAN=OFF \        # 关闭 AddressSanitizer
-    -DAGENTXX_ENABLE_DEBUG_INFO=OFF \  # 关闭调试符号 (-g)
     ...其余参数与 linux_debug_build.sh 一致
 ```
 
 - `AGENTXX_ENABLE_ASAN=OFF`: 去掉 `-fsanitize=address`，编译与链接均显著加快 (仍保留 `-fno-omit-frame-pointer` 便于调试/性能分析)
-- `AGENTXX_ENABLE_DEBUG_INFO=OFF`: 去掉 `-g`，.o/.a/.so/可执行文件体积缩小约 3 倍，ar 打包与 install 拷贝大幅提速。注意关闭后 crash 日志的 addr2line 无法解析文件名/行号
 - 建议日常开发全开 OFF，提交前/定位疑难问题时再开回 ON 全量构建验证一次
 
 ## 常见错误

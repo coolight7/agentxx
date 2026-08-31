@@ -10,8 +10,6 @@ cmake_policy(SET CMP0167 OLD)
 project(agentxx_cli VERSION 0.1.0 LANGUAGES C CXX)
 include(GNUInstallDirs)
 
-# 由顶层 superbuild 传入 (见 agent/CMakeLists.txt)
-option(AGENTXX_ENABLE_PCH "Enable precompiled headers (GCC/Clang)." ON)
 # 嵌套构建时由顶层传入；独立构建时自动查找
 find_program(CCACHE_PROGRAM ccache)
 

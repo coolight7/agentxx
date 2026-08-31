@@ -5,7 +5,6 @@
  */
 #include "agentxx/plugin/plugin_common.h"
 
-#include "agentxx/plugin/builtin_plugin.h"
 #include "agentxx/plugin/client_plugin_api.h"
 #include "agentxx/util/log.h"
 #include "yaml-cpp/yaml.h"
@@ -14,6 +13,38 @@
 
 namespace agentxx {
 namespace plugin {
+
+std::string_view pluginStringView2std(AgentxxPluginStringView str) {
+    return std::string_view{str.data, str.size};
+}
+
+const AgentxxPluginBuiltinInfo* findBuiltinPlugin(std::string_view name) {
+    size_t      count = 0;
+    const auto* list  = agentxx_plugin_get_builtin_plugins(&count);
+    if (!list) {
+        return nullptr;
+    }
+    for (size_t i = 0; i < count; ++i) {
+        if (agentxx::plugin::pluginStringView2std(list[i].name) == name) {
+            return &list[i];
+        }
+    }
+    return nullptr;
+}
+
+const AgentxxPluginBuiltinManifest* findBuiltinManifest(std::string_view name) {
+    size_t      count = 0;
+    const auto* list  = agentxx_plugin_get_builtin_manifests(&count);
+    if (!list) {
+        return nullptr;
+    }
+    for (size_t i = 0; i < count; ++i) {
+        if (agentxx::plugin::pluginStringView2std(list[i].name) == name) {
+            return &list[i];
+        }
+    }
+    return nullptr;
+}
 
 std::string pluginNameFromPath(const std::string& path) {
     auto base = std::filesystem::path(path).filename().string();
@@ -268,12 +299,12 @@ bool parseBuiltinManifest(
     PluginManifestInterfaces* interfaces
 ) {
     auto* m = findBuiltinManifest(pluginName);
-    if (!m || m->yaml.empty()) {
+    if (!m || agentxx::plugin::pluginStringView2std(m->yaml).empty()) {
         return false;
     }
     // 内嵌清单的资源相对路径无需按插件目录解析 (baseDir 为空)
     return parsePluginManifestFromString(
-        std::string{m->yaml},
+        std::string{agentxx::plugin::pluginStringView2std(m->yaml)},
         std::filesystem::path{},
         name,
         entry,

@@ -22,7 +22,8 @@
  */
 #pragma once
 
-#include "agentxx/plugin/client_plugin_api.h" /* 含 plugin_api.h */
+#include "agentxx/plugin/client_plugin_api.h"
+#include "agentxx/plugin/plugin_api.h"
 #include "agentxx/util/log.h"
 
 #include <algorithm>
@@ -116,6 +117,12 @@ inline void guardVtableCallVoid(Fn&& fn) noexcept {
 
 namespace agentxx {
 namespace plugin {
+
+std::string_view pluginStringView2std(AgentxxPluginStringView str);
+
+const AgentxxPluginBuiltinInfo* findBuiltinPlugin(std::string_view name);
+
+const AgentxxPluginBuiltinManifest* findBuiltinManifest(std::string_view name);
 
 /// 从库文件名推断插件名 (libfoo.so → foo; foo.dll → foo; libfoo.so.1.2 → foo;
 /// my.plugin.so → my.plugin)
