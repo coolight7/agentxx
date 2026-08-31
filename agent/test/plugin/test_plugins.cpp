@@ -178,7 +178,8 @@ asio::awaitable<TestResult> run_plugin_tests() {
         auto jsExecInst = co_await ctx->pluginManager->loadPluginAsync(jsExecPath);
         XX_TEST_EXPECT_TRUE(jsExecInst != nullptr);
         if (jsExecInst) {
-            for (int i = 0; i < 30 && !ctx->toolRegistry->contains("agentxx_execute_javascript"); ++i) {
+            for (int i = 0; i < 30 && !ctx->toolRegistry->contains("agentxx_execute_javascript");
+                 ++i) {
                 co_await sleepMs(50);
             }
             XX_TEST_EXPECT_TRUE(ctx->toolRegistry->contains("agentxx_execute_javascript"));
@@ -206,29 +207,31 @@ asio::awaitable<TestResult> run_plugin_tests() {
 
                 // 3. 异步 Promise 等待与对象 JSON 返回
                 auto out3 = co_await tool->execute_async(neograph::json{
-                    {"code", "await new Promise(r=>setTimeout(r,10)); return { status: 'async_ok', val: 42 };"},
+                    {"code",
+                     "await new Promise(r=>setTimeout(r,10)); return { status: 'async_ok', val: 42 };"
+                    },
                 });
                 XX_TEST_EXPECT_TRUE(out3.find("async_ok") != std::string::npos);
                 XX_TEST_EXPECT_TRUE(out3.find("42") != std::string::npos);
 
                 // 4. 超时场景处理 (1秒超时)
                 auto out4 = co_await tool->execute_async(neograph::json{
-                    {"code", "await new Promise(r=>setTimeout(r,2000)); return 99"},
-                    {"timeout", 1},
+                    {"code",    "await new Promise(r=>setTimeout(r,2000)); return 99"},
+                    {"timeout", 1                                                    },
                 });
                 XX_TEST_EXPECT_TRUE(out4.find("Command timed out") != std::string::npos);
 
                 // 5. all_output=false 策略 (成功不输出，失败输出)
                 auto out5 = co_await tool->execute_async(neograph::json{
-                    {"code", "console.log('secret_log'); return 'hide_log';"},
-                    {"all_output", false},
+                    {"code",       "console.log('secret_log'); return 'hide_log';"},
+                    {"all_output", false                                          },
                 });
                 XX_TEST_EXPECT_TRUE(out5.find("secret_log") == std::string::npos);
                 XX_TEST_EXPECT_TRUE(out5.find("[ExitCode]\n0") != std::string::npos);
 
                 auto out5_err = co_await tool->execute_async(neograph::json{
-                    {"code", "console.log('err_log'); throw new Error('visible_on_fail');"},
-                    {"all_output", false},
+                    {"code",       "console.log('err_log'); throw new Error('visible_on_fail');"},
+                    {"all_output", false                                                        },
                 });
                 XX_TEST_EXPECT_TRUE(out5_err.find("visible_on_fail") != std::string::npos);
 
@@ -403,7 +406,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
         // 统一模型: 所有插件都是 C++ 插件, 无 type 概念; 脚本能力由壳经
         // 能力调用委派给引擎 (宿主不参与)。内置合并编译模式下, 插件是否无
         // 动态库句柄 (dlHandle 为空) 取决于其是否在 AGENTXX_PLUGIN_BUILTIN_LIST:
-        // - 全量内置 ("all"/空): 无句柄; 名单外插件仍为动态库 (混合模式)
+        // - 全量内置 ("all"): 无句柄; 名单外插件仍为动态库 (混合模式)
         // - 全动态 (BUILTIN=OFF): 有句柄
         // 两种形态均为正确行为, 此处仅记录不强制断言
         TEST_INFO << "example_js dlHandle present = " << (jsInst->dlHandle != nullptr) << std::endl;
@@ -887,20 +890,20 @@ asio::awaitable<TestResult> run_plugin_tests() {
             XX_TEST_EXPECT_TRUE(ev30 != nullptr && ev30->publish != nullptr);
             XX_TEST_EXPECT_EQ(
                 ev30 ? ev30->publish(
-                           &inst30->host,
-                           agentxx_plugin_sv_cstr("demo.topic"),
-                           agentxx_plugin_sv_cstr(R"({"k":"v"})")
-                       )
+                    &inst30->host,
+                    agentxx_plugin_sv_cstr("demo.topic"),
+                    agentxx_plugin_sv_cstr(R"({"k":"v"})")
+                )
                      : -1,
                 0
             );
             ctx->pluginManager->disable("example_plugin");
             // 禁用状态: 接口表 publish 拒绝 (返回非 0)
             int rc = ev30 ? ev30->publish(
-                                &inst30->host,
-                                agentxx_plugin_sv_cstr("demo.topic"),
-                                agentxx_plugin_sv_cstr(R"({"k":"v"})")
-                            )
+                         &inst30->host,
+                         agentxx_plugin_sv_cstr("demo.topic"),
+                         agentxx_plugin_sv_cstr(R"({"k":"v"})")
+                     )
                           : -1;
             XX_TEST_EXPECT_TRUE(rc != 0);
             co_await ctx->pluginManager->unloadAsync("example_plugin");

@@ -193,8 +193,8 @@ models:
 # 指定各模式下使用的模型名称（对应上面 models 中的 name）
 use_model:
   # default: local
-  # default: opencode-ds-v4-flash
-  default: opencode-muse-spark-1.2-contributor
+  default: gemini-3.7-flash-high-responses
+  # default: opencode-muse-spark-1.2-contributor
   subagent: local
   acp: local
   train: local
@@ -269,26 +269,25 @@ plugins:
   #   把它们合并编译进 libagentxx (内置注册表), 运行期配置保持不变
   #   (内置简写: `path: builtin://<name>` 或 `name: <name>` 无需依赖外部目录)
   # - config 可选，默认使用编译时内嵌的yaml
-  - name: agentxx_planning
-    enabled: true
-    # config: ${AGENTXX_WORK_DIR}/config/planning.yaml  # 可指向文件或目录
   - name: agentxx_filesystem
     enabled: true
+    # config: ${AGENTXX_EXEC_DIR}/plugins/agentxx_filesystem/planning.yaml  # 可指向文件或目录
   - name: agentxx_execute_command
     enabled: true
   - name: agentxx_system
     enabled: true
   - name: agentxx_websearch
     enabled: true
-  - name: agentxx_string
-    enabled: false
-  - name: agentxx_rag_search
-    enabled: false
+  - name: ${AGENTXX_EXEC_DIR}/plugins/agentxx_planning
+    enabled: true
+
   # 内置简写示例 (等价于上方目录形态; 无需外部 plugin.yaml):
   # - path: builtin://agentxx_filesystem
   #   enabled: true
   #   config: ./my_plugin_config/  # 目录或文件
+  #
   # - name: agentxx_planning  # name 简写等价于 builtin://agentxx_planning
+  #   enabled: true
 
   # === CodeGraph 代码分析
   # - 参数:
@@ -317,8 +316,16 @@ plugins:
   - path: ${AGENTXX_EXEC_DIR}/plugins/agentxx_math/
     enabled: false
 
+  # - name: ${AGENTXX_EXEC_DIR}/plugins/agentxx_rag_search
+  #   enabled: false
+
+  # - name: ${AGENTXX_EXEC_DIR}/plugins/agentxx_string
+  #   enabled: false
+
   # === JS 插件 (引擎 + 脚本插件; 顺序无关, 拓扑排序自动处理) ===
   # - path: "${AGENTXX_EXEC_DIR}/plugins/agentxx_javascript_engine"
+  #   enabled: true
+  # - path: "${AGENTXX_EXEC_DIR}/plugins/agentxx_execute_javascript"
   #   enabled: true
   # - path: "${AGENTXX_EXEC_DIR}/plugins/example_js"
   #   enabled: true

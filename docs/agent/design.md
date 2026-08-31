@@ -40,7 +40,7 @@ Agentxx 是一个使用 C++23 实现的 AI Agent 框架，编译器启用 C++26/
 知识检索 / 字符串 / 系统时间 / 规划写入) 已从 lib 内置实现拆分为**独立插件**
 (同名同行为, 见 `agent/plugins/agentxx_*`)，经 yaml `plugins` 段配置加载，
 或构建期经 `AGENTXX_PLUGIN_BUILTIN_LIST`
-合并编译进 libagentxx (默认全量内置)；lib 内仅保留 share_store / subagent /
+合并编译进 libagentxx (默认不内置)；lib 内仅保留 share_store / subagent /
 tool_skill_search 与延迟加载装配：
 
 | 分类 | 工具 | 说明 |
@@ -53,6 +53,8 @@ tool_skill_search 与延迟加载装配：
 | | `agentxx_filesystem_grep` | 按正则/文本搜索文件内容 |
 | **命令执行** | `agentxx_execute_bash_command` | 执行 Linux shell 命令，支持超时控制 (Linux/macOS) |
 | | `agentxx_execute_windows_command` | 执行 Windows 命令，默认 PowerShell (自动探测 pwsh/powershell 并注入版本号到提示词)，未找到时回退 cmd.exe (Windows / WSL 下调用) |
+| | `agentxx_execute_javascript` | 通过 QuickJS 解释器执行 JavaScript 代码 (execute_bash_command 的 JS 等价物, 依赖插件 `agentxx_javascript_engine`) |
+| **数学计算** | `agentxx_math_calculate` | 数学表达式解析与计算 (四则运算、幂、阶乘、位运算、比较逻辑、常量、三角/双曲/对数/组合排列等函数、隐式乘法) |
 | **网络** | `agentxx_web_search` | 网络搜索 (DuckDuckGo / 模型搜索) |
 | | `agentxx_web_fetch` | HTTP GET 获取网页原文 |
 | | `agentxx_web_fetch_markdown` | 获取网页并转为 Markdown |
@@ -453,8 +455,8 @@ path/to/agentxx_test string_util regex agent
 ```
 
 可用测试模块 (与 `agent/test/test.cpp` 注册列表一致):
-- 同步模块: `string_util` `regex` `diff_util` `events` `concurrency` `misc_fixes` `aho_corasick` `util_misc` `training` `settings_db` `toolcall_args` `ffi_c_api` (及 client 侧: `config_loader` `tui_settings` `tui_input` `tui_interrupt` `tui_scroll` `tui_stream` `tui_tool_header` `sessionId` `mermaid_state`)
-- 异步模块: `event_stream` `event_bridge` `interrupt_bus` `subagent_bus` `agent_host` `string_tools` `share_store` `session_persistence` `rag_search` `datetime` `filesystem` `command` `web_search` `codegraph` `cpu_gpu` `http` `network_timeout` `websocket` `remote_agent` `mcp` `acp` `a2a` `openai_provider` `anthropic_provider` `plugins` `client_plugins` `cancel` `message_supplement` `summarization` `checkpoint_store` `agent` `memgrowth`
+- 同步模块: `string_util` `regex` `diff_util` `events` `concurrency` `misc_fixes` `aho_corasick` `util_misc` `training` `settings_db` `toolcall_args` `ffi_c_api` (及 client 侧: `config_loader` `tui_settings` `tui_input` `tui_interrupt` `tui_scroll` `tui_sidebar` `tui_stream` `tui_tool_header` `sessionId` `mermaid_state`)
+- 异步模块: `event_stream` `event_bridge` `interrupt_bus` `subagent_bus` `subagent_tool` `agent_host` `string_tools` `math_tools` `share_store` `session_persistence` `rag_search` `datetime` `filesystem` `command` `worktree` `web_search` `codegraph` `screen_capture` `cpu_gpu` `text_selection` `http` `network_timeout` `websocket` `remote_agent` `mcp` `acp` `a2a` `openai_provider` `anthropic_provider` `plugins` `plugin_resources` `plugin_multi_instance` `client_plugins` `cancel` `message_supplement` `summarization` `checkpoint_store` `agent` `memgrowth`
 - 平台模块: `screen_capture` `text_selection`
 
 测试源目录划分: 根目录 (入口+框架) / `core/` (lib 核心) / `plugin/` (插件系统与具体插件集成) / `client/` (TUI/CLI, 仅 `AGENTXX_BUILD_CLIENT` 编译)。
@@ -1394,8 +1396,11 @@ agent/
 │   │   ├── test_settings_db.*    # 全局设置 SQLite 测试
 │   │   ├── test_misc_fixes.*     # 杂项修复测试
 │   │   ├── test_share_store.*    # ShareStore 测试
+│   │   ├── test_subagent_tool.*  # 子代理工具参数校验与恢复测试
+│   │   ├── test_worktree.*       # Git worktree 封装与隔离测试
 │   │   ├── test_filesystem_tools.* # 文件系统工具测试 (直测插件同一 *_impl.h 实现)
 │   │   ├── test_command_tools.*  # 命令执行工具测试 (直测插件同一实现)
+│   │   ├── test_math_tools.*     # 数学计算工具测试 (直测插件同一实现)
 │   │   ├── test_web_search_tools.* # 网络搜索测试 (直测插件同一实现)
 │   │   ├── test_rag_search_tools.* # RAG 搜索测试 (直测插件同一实现)
 │   │   ├── test_string_tools.*   # 字符串工具测试 (html2md/regexp, 直测插件同一实现)
@@ -1417,6 +1422,7 @@ agent/
 │       ├── test_tui_interrupt.*  # TUI 中断交互测试
 │       ├── test_tui_scroll.*     # TUI 滚动测试
 │       ├── test_tui_settings.*   # TUI 设置持久化测试
+│       ├── test_tui_sidebar.*    # TUI 侧边栏内容与段落测试
 │       ├── test_tui_stream.*     # TUI 流式渲染测试
 │       └── test_tui_tool_header.* # TUI 工具消息头部渲染测试
 │
@@ -1458,9 +1464,11 @@ agent/
 │   ├── example_js/               # JS 示例插件 (C++ 壳 + plugin.js; depends: javascript_engine)
 │   ├── example_resources/        # 会话资源贡献示例 (声明式与编程式 MCP/Skill/规则)
 │   ├── agentxx_javascript_engine/ # QuickJS 引擎插件 (能力 interpreter.js; 专用 JS 线程+沙箱)
+│   ├── agentxx_execute_javascript/ # JS 代码执行工具插件 (agentxx_execute_javascript; depends: javascript_engine)
 │   ├── agentxx_codegraph/        # CodeGraph 代码分析插件 (8 工具 + client Info 栏段落)
 │   ├── agentxx_filesystem/       # 文件系统 6 工具 (list/read/write/edit/glob/grep)
 │   ├── agentxx_execute_command/  # 命令执行 2 工具 (bash/windows)
+│   ├── agentxx_math/             # 数学计算工具 (agentxx_math_calculate)
 │   ├── agentxx_websearch/        # 网络搜索 3 工具 (search/fetch/fetch_markdown)
 │   ├── agentxx_rag_search/       # 向量语义搜索
 │   ├── agentxx_string/           # 字符串 2 工具 (html_to_markdown/regexp)

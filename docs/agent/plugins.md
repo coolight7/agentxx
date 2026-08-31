@@ -243,12 +243,14 @@ Agentxx 仅维护单一 C++ 插件基础设施；JS 脚本插件经内置 `agent
 | `agentxx_system` | 系统时间 (`get_current_datetime`) |
 | `agentxx_system_monitor` | 系统资源监控 (工具 + 周期采集 + client 侧 Info/状态栏渲染) |
 | `agentxx_planning` | 规划工具 + client 侧 Plan 装饰 |
+| `agentxx_math` | 数学计算工具 (`agentxx_math_calculate`, 支持四则/幂/阶乘/位运算/逻辑/三角/双曲/对数/组合排列等函数与隐式乘法) |
 | `agentxx_codegraph` | 代码索引 8 工具 + client Info 栏 |
 | `agentxx_screen_capture` | 屏幕捕获 (仅 Windows) |
 | `agentxx_computer_use` | 键鼠控制 (仅 Windows, depends: screen_capture) |
 | `agentxx_audio_stream` | 音频流捕获 (仅 Windows WASAPI) |
 | `agentxx_text_selection_monitor` | 文本选择监听 (仅 Windows UIAutomation) |
 | `agentxx_javascript_engine` | QuickJS 引擎 (能力 `interpreter.js`) |
+| `agentxx_execute_javascript` | JS 代码执行工具 (`agentxx_execute_javascript`, 依赖 `agentxx_javascript_engine`) |
 
 ---
 

@@ -30,11 +30,12 @@ option(AGENTXX_ENABLE_PLUGIN_RAG_SEARCH "Build agentxx_rag_search plugin (embedd
 option(AGENTXX_ENABLE_PLUGIN_EXECUTE_JAVASCRIPT "Build agentxx_execute_javascript plugin (JS execution via QuickJS, bash equivalent)." ON)
 # 内置合并编译模式: 启用的插件源文件直接编译进 libagentxx (运行期无需插件
 # 动态库, 无 dlopen); 仅经 libagentxx 构建生效 (见下方"内置合并编译模式")
-# - 未设置/空/"all": 全部启用插件内置合并进 libagentxx
+# - "all": 全部启用插件内置合并进 libagentxx
+# - 未设置/空: 全部不内嵌编译
 # - 分号(或逗号)分隔的插件名列表 (如 "agentxx_filesystem;agentxx_planning"):
 #   仅名单内插件内置合并, 名单外启用插件仍编译为独立动态库
 set(AGENTXX_PLUGIN_BUILTIN_LIST "" CACHE STRING
-  "Which enabled plugins to merge into libagentxx ('' or 'all' = all; semicolon list = only listed ones)")
+  "Which enabled plugins to merge into libagentxx ('all' = all; semicolon list = only listed ones)")
 
 # ===== 插件平台支持 =====
 # 各插件并非全平台适配: 源码无对应平台的真实实现时 (仅有 "not supported/
@@ -156,7 +157,7 @@ include_directories(
 # --- 名单解析: AGENTXX_PLUGIN_BUILTIN_LIST → ALL 标志 / 具名名单 ---
 set(_AGENTXX_BUILTIN_ALL OFF)
 set(_AGENTXX_BUILTIN_NAMED "")
-if ("${AGENTXX_PLUGIN_BUILTIN_LIST}" STREQUAL "" OR "${AGENTXX_PLUGIN_BUILTIN_LIST}" STREQUAL "all")
+if ("${AGENTXX_PLUGIN_BUILTIN_LIST}" STREQUAL "all")
   set(_AGENTXX_BUILTIN_ALL ON)
 else()
   # 宽容处理: 逗号分隔同样接受 (命令行 -D 传分号列表需转义, 逗号更顺手)
@@ -197,6 +198,7 @@ set(AGENTXX_BUILTIN_PLUGIN_MANIFEST_ENTRIES "")
 # - 平台不支持时由各插件自身 CMakeLists 开头的判定提前 return() 跳过
 #   (见 cmake/plugin_platform_support.cmake 与各插件声明处); 内置清单登记
 #   由各插件 builtin 分支自行追加, 提前 return 时天然不会误登记
+# - [AGENTXX_PLUGIN_BUILTIN_LIST] 控制内嵌编译插件列表
 agentxx_load_plugin(example_plugin AGENTXX_ENABLE_PLUGIN_EXAMPLE)
 agentxx_load_plugin(example_resources AGENTXX_ENABLE_PLUGIN_EXAMPLE)
 # JS 相关 (example_js 依赖 quickjs 引擎目标)
@@ -211,19 +213,18 @@ agentxx_load_plugin(agentxx_codegraph AGENTXX_ENABLE_PLUGIN_CODEGRAPH)
 agentxx_load_plugin(agentxx_system_monitor AGENTXX_ENABLE_PLUGIN_SYSTEM_MONITOR)
 agentxx_load_plugin(agentxx_audio_stream AGENTXX_ENABLE_PLUGIN_AUDIO_STREAM)
 agentxx_load_plugin(agentxx_text_selection_monitor AGENTXX_ENABLE_PLUGIN_TEXT_SELECTION)
+agentxx_load_plugin(agentxx_execute_javascript AGENTXX_ENABLE_PLUGIN_EXECUTE_JAVASCRIPT)
+agentxx_load_plugin(agentxx_string AGENTXX_ENABLE_PLUGIN_STRING)
+agentxx_load_plugin(agentxx_math AGENTXX_ENABLE_PLUGIN_MATH)
 
-# ---- 默认全部内置编译, 经 AGENTXX_PLUGIN_BUILTIN_LIST 门控) ----
 agentxx_load_plugin(agentxx_planning AGENTXX_ENABLE_PLUGIN_PLANNING)
 agentxx_load_plugin(agentxx_filesystem AGENTXX_ENABLE_PLUGIN_FILESYSTEM)
 agentxx_load_plugin(agentxx_execute_command AGENTXX_ENABLE_PLUGIN_EXECUTE_COMMAND)
-agentxx_load_plugin(agentxx_string AGENTXX_ENABLE_PLUGIN_STRING)
-agentxx_load_plugin(agentxx_math AGENTXX_ENABLE_PLUGIN_MATH)
 agentxx_load_plugin(agentxx_system AGENTXX_ENABLE_PLUGIN_SYSTEM)
 agentxx_load_plugin(agentxx_websearch AGENTXX_ENABLE_PLUGIN_WEBSEARCH)
 agentxx_load_plugin(agentxx_rag_search AGENTXX_ENABLE_PLUGIN_RAG_SEARCH)
-agentxx_load_plugin(agentxx_execute_javascript AGENTXX_ENABLE_PLUGIN_EXECUTE_JAVASCRIPT)
 
-# ===== 内置清单生成 (存在任一实际内置的插件时) =====
+# ===== 内置清单生成 =====
 list(LENGTH AGENTXX_BUILTIN_PLUGIN_NAMES AGENTXX_BUILTIN_PLUGIN_COUNT)
 set(AGENTXX_BUILTIN_PLUGIN_MANIFEST_DECLS "")
 set(AGENTXX_BUILTIN_PLUGIN_MANIFEST_ENTRIES "")

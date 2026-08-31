@@ -39,8 +39,6 @@ option(AGENTXX_ENABLE_PLUGIN_TEXT_SELECTION "Build agentxx_text_selection_monito
 option(AGENTXX_ENABLE_PLUGIN_EXAMPLE "Build example plugin." ON)
 option(AGENTXX_ENABLE_PLUGIN_COMPUTER_USE "Build agentxx_computer_use plugin (ui_control)." ON)
 option(AGENTXX_ENABLE_PLUGIN_SCREEN_CAPTURE "Build agentxx_screen_capture plugin (screen capture)." ON)
-# ---- 从 lib 内置工具迁移的编程工具插件 (默认启用编译; 是否内置合并经
-#      AGENTXX_PLUGIN_BUILTIN_LIST 门控, 见下方说明) ----
 option(AGENTXX_ENABLE_PLUGIN_PLANNING "Build agentxx_planning plugin (task planning write tool)." ON)
 option(AGENTXX_ENABLE_PLUGIN_FILESYSTEM "Build agentxx_filesystem plugin (list/read/write/edit/glob/grep)." ON)
 option(AGENTXX_ENABLE_PLUGIN_EXECUTE_COMMAND "Build agentxx_execute_command plugin (bash/windows command)." ON)
@@ -49,6 +47,7 @@ option(AGENTXX_ENABLE_PLUGIN_MATH "Build agentxx_math plugin (math calculation).
 option(AGENTXX_ENABLE_PLUGIN_SYSTEM "Build agentxx_system plugin (current date/time)." ON)
 option(AGENTXX_ENABLE_PLUGIN_WEBSEARCH "Build agentxx_websearch plugin (search/fetch url)." ON)
 option(AGENTXX_ENABLE_PLUGIN_RAG_SEARCH "Build agentxx_rag_search plugin (embedding based docs search)." ON)
+option(AGENTXX_ENABLE_PLUGIN_EXECUTE_JAVASCRIPT "Build agentxx_execute_javascript plugin (JS execution via QuickJS, bash equivalent)." ON)
 # 可选内置合并编译: 启用的插件源文件直接编译进 libagentxx, 运行期无需插件
 # 动态库 (无 dlopen; 适合嵌入式/单文件分发)。
 # 
@@ -56,8 +55,11 @@ option(AGENTXX_ENABLE_PLUGIN_RAG_SEARCH "Build agentxx_rag_search plugin (embedd
 # - 未设置/空/"all": 全部启用插件内置合并进 libagentxx (默认)
 # - 分号(或逗号)分隔的插件名列表: 仅名单内插件内置合并, 名单外启用插件仍
 #   编译为独立动态库 (混合模式; 例: -DAGENTXX_PLUGIN_BUILTIN_LIST="agentxx_filesystem,agentxx_planning")
-set(AGENTXX_PLUGIN_BUILTIN_LIST "" CACHE STRING
-  "Which enabled plugins to merge into libagentxx ('' or 'all' = all; semicolon/comma list = only listed ones)")
+set(AGENTXX_PLUGIN_BUILTIN_LIST 
+  "agentxx_filesystem,agentxx_execute_command,agentxx_system,agentxx_websearch,agentxx_planning"
+  CACHE STRING
+  "Which enabled plugins to merge into libagentxx ('' or 'all' = all; semicolon/comma list = only listed ones)"
+)
 # ===== Debug 构建加速选项 / Sanitizers =====
 # - GCC/Clang: 在 Debug 配置注入 -fsanitize=* (见下方非 MSVC 分支)
 # - MSVC: 仅支持 AddressSanitizer (/fsanitize=address, Debug 配置);
@@ -633,6 +635,7 @@ set(_AGENTXX_COMMON_CMAKE_ARGS
     -DAGENTXX_ENABLE_PLUGIN_SYSTEM=${AGENTXX_ENABLE_PLUGIN_SYSTEM}
     -DAGENTXX_ENABLE_PLUGIN_WEBSEARCH=${AGENTXX_ENABLE_PLUGIN_WEBSEARCH}
     -DAGENTXX_ENABLE_PLUGIN_RAG_SEARCH=${AGENTXX_ENABLE_PLUGIN_RAG_SEARCH}
+    -DAGENTXX_ENABLE_PLUGIN_EXECUTE_JAVASCRIPT=${AGENTXX_ENABLE_PLUGIN_EXECUTE_JAVASCRIPT}
     "-DAGENTXX_PLUGIN_BUILTIN_LIST=${AGENTXX_PLUGIN_BUILTIN_LIST}"
 
     "-DAGENTXX_EXEC_INSTALL_PREFIX=${AGENTXX_EXEC_INSTALL_PREFIX}"

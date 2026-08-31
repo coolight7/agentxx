@@ -13,11 +13,11 @@ include(GNUInstallDirs) # CMAKE_INSTALL_*DIR
 # - 内置合并编译: 启用的插件源文件直接编译进 libagentxx (运行期无需插件动态库, 无 dlopen); 
 # 源文件/依赖库经 plugins/CMakeLists.txt 收集 (add_subdirectory ../plugins), 
 # 入口清单 builtin_plugins.cpp 由 libagentxx 编译
-# - 内置合并名单门控: 空/"all" = 全部启用插件内置; 分号列表 = 仅名单内插件内置,
+# - 内置合并名单门控: 空=全部不内嵌，"all" = 全部启用插件内置; 分号列表 = 仅名单内插件内置,
 # 名单外插件仍编译为独立动态库 (混合模式)。由顶层 superbuild 统一传入。
 if (NOT DEFINED AGENTXX_PLUGIN_BUILTIN_LIST)
   set(AGENTXX_PLUGIN_BUILTIN_LIST "" CACHE STRING
-    "Which enabled plugins to merge into libagentxx ('' or 'all' = all; list = only listed ones)")
+    "Which enabled plugins to merge into libagentxx ('all' = all; list = only listed ones)")
 endif()
 # 嵌套构建时由顶层传入；独立构建时自动查找
 find_program(CCACHE_PROGRAM ccache)
