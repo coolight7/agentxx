@@ -44,9 +44,7 @@ inline size_t utf8CharLen(unsigned char lead) {
 /// 完整比较两个 AgentPrompt 是否逐字段相等
 /// 用于去重时对 hash 碰撞做二次确认, 避免 64 位哈希误删不同 prompt
 bool agentPromptEquals(const AgentPrompt& a, const AgentPrompt& b) {
-    if (a.systemPrompt != b.systemPrompt || a.systemPlanningPrompt != b.systemPlanningPrompt
-        || a.systemSkillPrompt != b.systemSkillPrompt
-        || a.summarizationPrompt != b.summarizationPrompt
+    if (a.systemPrompt != b.systemPrompt || a.appendSystemPrompts != b.appendSystemPrompts
         || a.toolPrompt.size() != b.toolPrompt.size()) {
         return false;
     }
@@ -232,8 +230,21 @@ neograph::json normalizePromptPatch(const neograph::json& parsed) {
         }
     };
     addStringIfNonEmpty("systemPrompt");
-    addStringIfNonEmpty("systemPlanningPrompt");
-    addStringIfNonEmpty("systemSkillPrompt");
+    // 通用附加系统提示词：按 key 逐项处理，空串视为保持不变
+    if (parsed.contains("appendSystemPrompts") && parsed["appendSystemPrompts"].is_object()) {
+        neograph::json append = neograph::json::object();
+        for (const auto& item : parsed["appendSystemPrompts"].items()) {
+            if (item.second.is_string()) {
+                auto s = item.second.get<std::string>();
+                if (!s.empty()) {
+                    append[item.first] = std::move(s);
+                }
+            }
+        }
+        if (!append.empty()) {
+            patch["appendSystemPrompts"] = std::move(append);
+        }
+    }
 
     // toolPrompt: 同样剔除空 depict / 空 args 值; 整个工具无有效内容时不加入 patch
     if (parsed.contains("toolPrompt") && parsed["toolPrompt"].is_object()) {
@@ -336,8 +347,9 @@ Write IMPROVED prompts that will help the agent perform better on similar tasks.
 Output ONLY a JSON object (no markdown fences):
 {
   "systemPrompt": "<improved main system prompt, or empty to keep current>",
-  "systemPlanningPrompt": "<improved planning prompt, or empty to keep current>",
-  "systemSkillPrompt": "<improved skill prompt, or empty to keep current>",
+  "appendSystemPrompts": {
+    "<key>": "<improved prompt for this key, or empty to keep current>"
+  },
   "toolPrompt": {
     "<tool_name>": {
       "depict": "<improved tool description, or empty to keep>",
@@ -348,9 +360,8 @@ Output ONLY a JSON object (no markdown fences):
   },
   "analysis": "<what was wrong and how you fixed it>"
 }
-
-Leave any field empty ("") to keep it unchanged. Only modify prompts that need improvement.
-Include the "toolPrompt" object only if you want to modify tool prompts.
+Keys for appendSystemPrompts include "planning", "skill", "codegraph", etc. Leave any field empty ("") to keep it unchanged. Only modify prompts that need improvement.
+Include the "appendSystemPrompts" / "toolPrompt" objects only if you want to modify them.
 )";
 }
 
@@ -376,8 +387,9 @@ Generate a meaningfully different version to explore the prompt space. The varia
 Output ONLY a JSON object (no markdown fences):
 {
   "systemPrompt": "<varied main system prompt, or empty to keep current>",
-  "systemPlanningPrompt": "<varied planning prompt, or empty to keep current>",
-  "systemSkillPrompt": "<varied skill prompt, or empty to keep current>",
+  "appendSystemPrompts": {
+    "<key>": "<varied prompt for this key, or empty to keep current>"
+  },
   "toolPrompt": {
     "<tool_name>": {
       "depict": "<varied tool description, or empty to keep>",
@@ -722,12 +734,10 @@ asio::awaitable<TrainingScore> EvolutionTrainingAgent::defaultScoringWithSubAgen
 std::string EvolutionTrainingAgent::buildPromptContextMessage(const PromptVariant& variant) const {
     std::ostringstream msg;
     msg << "Current System Prompt:\n```\n" << variant.prompt.systemPrompt << "\n```\n\n";
-    if (!variant.prompt.systemPlanningPrompt.empty()) {
-        msg << "Current Planning Prompt:\n```\n"
-            << variant.prompt.systemPlanningPrompt << "\n```\n\n";
-    }
-    if (!variant.prompt.systemSkillPrompt.empty()) {
-        msg << "Current Skill Prompt:\n```\n" << variant.prompt.systemSkillPrompt << "\n```\n\n";
+    for (const auto& kv : variant.prompt.appendSystemPrompts) {
+        if (!kv.second.empty()) {
+            msg << "Current Prompt [" << kv.first << "]:\n```\n" << kv.second << "\n```\n\n";
+        }
     }
     if (!variant.prompt.toolPrompt.empty()) {
         msg << "Current Tool Prompts:\n";
@@ -870,15 +880,15 @@ PromptVariant EvolutionTrainingAgent::createChildVariantCharMut(
     PromptVariant child;
     child.id     = generateId();
     child.prompt = parent.prompt;
-    // 字符级变异仅作用于 3 个 system prompt，toolPrompt 保持不变
+    // 字符级变异作用于主 systemPrompt 及全部 appendSystemPrompts，toolPrompt 保持不变
     // （字符级变异会破坏语义，仅作为 LLM 变异不可用时的降级手段；
     //   变异按 UTF-8 码点进行, 中文等多字节字符不会被拆坏）
     child.prompt.systemPrompt = mutateString(parent.prompt.systemPrompt, mutationRate);
-    child.prompt.systemPlanningPrompt
-        = mutateString(parent.prompt.systemPlanningPrompt, mutationRate);
-    child.prompt.systemSkillPrompt = mutateString(parent.prompt.systemSkillPrompt, mutationRate);
-    child.generation               = generationCounter;
-    child.parentId                 = parent.id;
+    for (auto& kv : child.prompt.appendSystemPrompts) {
+        kv.second = mutateString(kv.second, mutationRate);
+    }
+    child.generation = generationCounter;
+    child.parentId   = parent.id;
     return child;
 }
 

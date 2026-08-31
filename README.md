@@ -68,12 +68,13 @@
 
 | Plugin | Windows/.dll | Linux/.so | Androi/.so | TIP |
 |---|---|---|---|---|
-| agentxx_codegraph | 36.9M | 38.2M | 37.6M | - |
-| agentxx_computer_use | 379K | - | - | - |
-| agentxx_javascript_engine | 1.1M | 1.2M | 1.1M | - |
-| agentxx_screen_capture | 383K | - | - | - |
-| agentxx_system_monitor | 428K | 629K | - | - |
-| agentxx_text_selection_monitor | 399K | - | - | - |
+| agentxx_codegraph | 36.9M | 38.2M | 37.6M | 代码分析定位，方便LLM快速查找代码中的函数、变量等符号的定义和引用 |
+| agentxx_computer_use | 379K | - | - | 提供 tool 支持控制鼠标、键盘 |
+| agentxx_javascript_engine | 1.1M | 1.2M | 1.1M | Javascript代码执行引擎，可以依赖该插件实现JS插件 |
+| agentxx_screen_capture | 383K | - | - | 获取屏幕图像帧 |
+| agentxx_system_monitor | 428K | 629K | - | 读取系统CPU、内存、GPU占用 |
+| agentxx_text_selection_monitor | 399K | - | - | 接收系统的文本选择事件流 |
+| agentxx_math | - | - | - | 数学计算工具 |
 
 - 默认的编译优化倾向于追求性能，如果需要裁剪体积，可以移除 Hyperscan/Boost.process 等可选库、采用 -Os/-Oz 体积编译优化
 

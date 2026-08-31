@@ -169,6 +169,40 @@ static ToolPrompt defaultToolPrompt(std::string_view name) {
     return p;
 }
 
+/// 启用时注入的 system prompt 附加提示词 —— 强调符号定义/引用查找优先使用 CodeGraph
+constexpr std::string_view kSystemCodegraphPrompt = R"_(
+## CodeGraph
+
+You have access to CodeGraph code analysis tools for precise, index-based code navigation. **When you need to locate symbol definitions or find references / call relationships, prefer CodeGraph tools over text search (`agentxx_filesystem_grep`/`glob`)**:
+
+- `agentxx_codegraph_search` — search symbols by name (partial match) to locate definitions quickly
+- `agentxx_codegraph_context` — rich context for a symbol: definition, callers, callees, methods and edges
+- `agentxx_codegraph_callers` — reverse call-graph: find all functions that call a given symbol
+- `agentxx_codegraph_callees` — forward call-graph: find all functions that a given symbol calls
+- `agentxx_codegraph_path` — call-chain path between two symbols
+
+Workflow: use `search` to resolve the exact symbol name, then `context`/`callers`/`callees`/`path` as needed. Use these for tasks like "where is X defined", "who calls X", "what does X call", "what depends on X", "is it safe to modify X" before falling back to grep/glob. Results may be incomplete while indexing is in progress (tool output will warn).
+)_";
+
+static void injectCodegraphSystemPrompt(
+    const AgentxxPluginHost*            host,
+    const agentxx::plugin::AgentIfaces& iface
+) {
+    if (!host || !iface.prompt || !iface.prompt->set_prompt) {
+        return;
+    }
+    codegraph::Json j = codegraph::Json::object();
+    codegraph::Json append = codegraph::Json::object();
+    append["codegraph"] = std::string(kSystemCodegraphPrompt);
+    j["appendSystemPrompts"] = append;
+    std::string payload = j.dump();
+    if (iface.prompt->set_prompt(host, agentxx_plugin_sv(payload.data(), payload.size())) != 0) {
+        pluginLog(host, iface.log, 3, "agentxx_codegraph: set appendSystemPrompts[codegraph] failed");
+    } else {
+        pluginLog(host, iface.log, 2, "agentxx_codegraph: appendSystemPrompts[codegraph] injected via prompt iface");
+    }
+}
+
 static void ensureToolPromptsInHost(
     const AgentxxPluginHost*            host,
     const agentxx::plugin::AgentIfaces& iface
@@ -839,6 +873,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
         ctx->projectRoot = projectRoot;
 
         ensureToolPromptsInHost(ctx->host, ctx->iface);
+        injectCodegraphSystemPrompt(ctx->host, ctx->iface);
         registerAllTools(*ctx);
 
         ctx->stop.store(false);

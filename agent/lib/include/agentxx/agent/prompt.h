@@ -250,7 +250,15 @@ Your (LLM/Agent) name is Agentxx. There is no need to mention your name in every
 - When modifying code, show only the relevant changed sections unless full context is needed
 )_";
 
-    std::string systemPlanningPrompt = R"_(
+    /// 附加系统提示词表 (通用扩展点)
+    /// - 键为插件或功能标识 (如 "planning"、"skill"、"codegraph")，值为主 prompt 之外的补充段
+    /// - 插件通过 prompt iface 的 `appendSystemPrompts` 对象以键值形式注入/更新，卸载时按备份恢复
+    /// - 最终 system 消息由 `systemPrompt` + 按键字典序拼接的附加段 + `appendSystemMessage` (skill/memory 动态) 组成
+    /// - 为空时不占位，避免无对应工具时误导模型
+    std::map<std::string, std::string, std::less<>> appendSystemPrompts{
+        {
+            "planning",
+            R"_(
 ## Planning
 
 You have access to the `agentxx_planning` tool to manage and plan complex objectives.
@@ -274,9 +282,11 @@ It helps break down large objectives into smaller, manageable steps.
 When all work is done, write your final answer in the message AFTER your last `agentxx_planning` call — not in the same turn.
 Start the final message with the substantive content the user asked for (data, computation, summary, or analysis).
 The user wants the result, not confirmation that the work is done.
-)_";
-
-    std::string systemSkillPrompt = R"_(
+)_",
+        },
+        {
+            "skill",
+            R"_(
 ## How to Use Skills (Progressive Disclosure)
 
 Skills follow a progressive disclosure pattern — you see their name and description,
@@ -304,17 +314,11 @@ User: "Can you analyse the latest developments in quantum computing?"
 4. Use any helper scripts with absolute paths
 
 When in doubt, check if a skill exists for the task.
-)_";
-
-    /// LLM 上下文压缩指令模板 (由 SummarizationMiddlewareHandle 在压缩时
-    /// 追加为最后一条 user 消息, 保持同一上下文直接压缩)
-    /// - 占位符 (fmt 命名参数): `{omitted_note}` (请求载荷裁剪时提示丢弃了
-    ///   最旧消息数, 否则为空串), `{max_words}` (摘要字数上限, 由
-    ///   summaryMaxTokens 换算)
-    /// - MUST keep / MAY discard 显式编码"信息价值分级"; OFFLOAD 段提示模型将
-    ///   较长、有用但当前不太重要的内容写入 agentxx_share_store, 替换为 id +
-    ///   极简摘要; MERGE 段支撑增量多轮压缩 (旧压缩对位于压缩段内时自然合并)
-    std::string summarizationPrompt = R"_(
+)_",
+        },
+        {
+            "summarization",
+            R"_(
 The conversation above will be compacted to free context space.
 
 Summarize the ENTIRE conversation into ONE self-contained summary that preserves everything needed to continue the current work.
@@ -338,7 +342,9 @@ OFFLOAD long content with the `agentxx_share_store` tool (opt=insert, text=<the 
 - The full content stays retrievable later via the tool while context space is saved.
 
 {omitted_note}Output ONLY the summary text in the user's language, no meta commentary, under about {max_words} words.
-)_";
+)_",
+        },
+    };
 
     /// toolcall
     std::map<std::string, ToolPrompt, std::less<>> toolPrompt{

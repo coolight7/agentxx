@@ -9,5 +9,6 @@ depends:
 interfaces:
   require:
     - agentxx.agent.core
+    - agentxx.agent.prompt
   optional:
     - agentxx.client.info_section

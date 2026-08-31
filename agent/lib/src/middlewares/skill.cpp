@@ -204,7 +204,8 @@ asio::awaitable<void> SkillMiddlewareHandle::onAgentcallStartFunc(neograph::grap
         // 缓存失效: 首次生成 / 资源纪元变更 (插件增删 skill 目录) 时重建
         if (skillState->cacheFormatSkillPrompt.empty()
             || skillState->cachedResourceEpoch != resourceEpoch) {
-            // 生成 skill 系统提示词
+            // 生成 skill 系统提示词 — 仅动态技能清单，静态使用说明已移至
+            // `appendSystemPrompts["skill"]` 通用扩展点，模型侧经 `systemPrompt + appendSystemPrompts` 统一拼接
             skillState->cacheFormatSkillPrompt = fmt::format(
                 R"_(## Skills System
 
@@ -213,11 +214,8 @@ You have access to a skills library that provides specialized capabilities and d
 **Available Skills:**
 
 {}
-
-{}
 )_",
-                formatSkillsMetadataList(),
-                agentCtxPtr->agentConfig->prompt.systemSkillPrompt
+                formatSkillsMetadataList()
             );
             skillState->cachedResourceEpoch = resourceEpoch;
         }

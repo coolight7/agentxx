@@ -1330,10 +1330,28 @@ int PluginManager::setPromptJson(PluginInstance* inst, const char* prompt_json) 
         }
 
         if (!inst->promptBackup.backedUpSystem) {
-            inst->promptBackup.backedUpSystem       = true;
-            inst->promptBackup.systemPrompt         = c->agentConfig->prompt.systemPrompt;
-            inst->promptBackup.systemPlanningPrompt = c->agentConfig->prompt.systemPlanningPrompt;
-            inst->promptBackup.systemSkillPrompt    = c->agentConfig->prompt.systemSkillPrompt;
+            inst->promptBackup.backedUpSystem = true;
+            inst->promptBackup.systemPrompt   = c->agentConfig->prompt.systemPrompt;
+        }
+
+        // 通用附加系统提示词：按 key 备份原值 (不存在记 nullopt)，支持多插件并发各管各 key
+        auto backupAppendKey = [&](const std::string& key) {
+            if (inst->promptBackup.appendSystemPrompts.find(key)
+                != inst->promptBackup.appendSystemPrompts.end()) {
+                return;
+            }
+            auto it = c->agentConfig->prompt.appendSystemPrompts.find(key);
+            if (it != c->agentConfig->prompt.appendSystemPrompts.end()) {
+                inst->promptBackup.appendSystemPrompts[key] = it->second;
+            } else {
+                inst->promptBackup.appendSystemPrompts[key] = std::nullopt;
+            }
+        };
+
+        if (j.contains("appendSystemPrompts") && j["appendSystemPrompts"].is_object()) {
+            for (const auto& [key, _] : j["appendSystemPrompts"].items()) {
+                backupAppendKey(key);
+            }
         }
 
         if (j.contains("toolPrompt") && j["toolPrompt"].is_object()) {
@@ -1373,11 +1391,17 @@ void PluginManager::restorePromptBackup(PluginInstance* inst) {
     auto& pb = inst->promptBackup;
 
     if (pb.backedUpSystem) {
-        pb.backedUpSystem                           = false;
-        c->agentConfig->prompt.systemPrompt         = pb.systemPrompt.value_or("");
-        c->agentConfig->prompt.systemPlanningPrompt = pb.systemPlanningPrompt.value_or("");
-        c->agentConfig->prompt.systemSkillPrompt    = pb.systemSkillPrompt.value_or("");
+        pb.backedUpSystem                   = false;
+        c->agentConfig->prompt.systemPrompt = pb.systemPrompt.value_or("");
     }
+    for (const auto& [key, orig] : pb.appendSystemPrompts) {
+        if (orig.has_value()) {
+            c->agentConfig->prompt.appendSystemPrompts[key] = *orig;
+        } else {
+            c->agentConfig->prompt.appendSystemPrompts.erase(key);
+        }
+    }
+    pb.appendSystemPrompts.clear();
 
     for (const auto& [toolName, origPrompt] : pb.toolPrompt) {
         if (origPrompt.has_value()) {
