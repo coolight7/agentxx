@@ -167,6 +167,96 @@ asio::awaitable<TestResult> run_plugin_tests() {
         }
     }
 
+    // ---- 4.6 agentxx_execute_javascript 插件端到端 (仿 execute_command 的 JS 实现) ----
+    {
+        auto jsEnginePath = findPluginDir("agentxx_javascript_engine");
+        if (!ctx->pluginManager->hasCapability("interpreter.js")) {
+            auto eInst = co_await ctx->pluginManager->loadPluginAsync(jsEnginePath);
+            XX_TEST_EXPECT_TRUE(eInst != nullptr);
+        }
+        auto jsExecPath = findPluginDir("agentxx_execute_javascript");
+        auto jsExecInst = co_await ctx->pluginManager->loadPluginAsync(jsExecPath);
+        XX_TEST_EXPECT_TRUE(jsExecInst != nullptr);
+        if (jsExecInst) {
+            for (int i = 0; i < 30 && !ctx->toolRegistry->contains("agentxx_execute_javascript"); ++i) {
+                co_await sleepMs(50);
+            }
+            XX_TEST_EXPECT_TRUE(ctx->toolRegistry->contains("agentxx_execute_javascript"));
+            // 别名工具 agentxx_execute_js
+            XX_TEST_EXPECT_TRUE(ctx->toolRegistry->contains("agentxx_execute_js"));
+
+            auto tool = ctx->toolRegistry->find("agentxx_execute_javascript");
+            XX_TEST_EXPECT_TRUE(tool != nullptr);
+            if (tool) {
+                // 1. 同步计算与返回值
+                auto out1 = co_await tool->execute_async(neograph::json{
+                    {"code", "return 2+3"},
+                });
+                XX_TEST_EXPECT_TRUE(out1.find("5") != std::string::npos);
+                XX_TEST_EXPECT_TRUE(out1.find("[ExitCode]\n0") != std::string::npos);
+
+                // 2. 控制台输出与异常捕获
+                auto out2 = co_await tool->execute_async(neograph::json{
+                    {"code", "console.log('hi_js'); throw new Error('oops_js')"},
+                });
+                XX_TEST_EXPECT_TRUE(out2.find("hi_js") != std::string::npos);
+                XX_TEST_EXPECT_TRUE(out2.find("oops_js") != std::string::npos);
+                XX_TEST_EXPECT_TRUE(out2.find("[StdErr]") != std::string::npos);
+                XX_TEST_EXPECT_TRUE(out2.find("[ExitCode]\n1") != std::string::npos);
+
+                // 3. 异步 Promise 等待与对象 JSON 返回
+                auto out3 = co_await tool->execute_async(neograph::json{
+                    {"code", "await new Promise(r=>setTimeout(r,10)); return { status: 'async_ok', val: 42 };"},
+                });
+                XX_TEST_EXPECT_TRUE(out3.find("async_ok") != std::string::npos);
+                XX_TEST_EXPECT_TRUE(out3.find("42") != std::string::npos);
+
+                // 4. 超时场景处理 (1秒超时)
+                auto out4 = co_await tool->execute_async(neograph::json{
+                    {"code", "await new Promise(r=>setTimeout(r,2000)); return 99"},
+                    {"timeout", 1},
+                });
+                XX_TEST_EXPECT_TRUE(out4.find("Command timed out") != std::string::npos);
+
+                // 5. all_output=false 策略 (成功不输出，失败输出)
+                auto out5 = co_await tool->execute_async(neograph::json{
+                    {"code", "console.log('secret_log'); return 'hide_log';"},
+                    {"all_output", false},
+                });
+                XX_TEST_EXPECT_TRUE(out5.find("secret_log") == std::string::npos);
+                XX_TEST_EXPECT_TRUE(out5.find("[ExitCode]\n0") != std::string::npos);
+
+                auto out5_err = co_await tool->execute_async(neograph::json{
+                    {"code", "console.log('err_log'); throw new Error('visible_on_fail');"},
+                    {"all_output", false},
+                });
+                XX_TEST_EXPECT_TRUE(out5_err.find("visible_on_fail") != std::string::npos);
+
+                // 6. 大文本截断
+                auto out6 = co_await tool->execute_async(neograph::json{
+                    {"code", "let s = 'x'.repeat(35000); console.log(s); return s.length;"},
+                });
+                XX_TEST_EXPECT_TRUE(out6.find("[Content offloaded") != std::string::npos);
+            }
+
+            // 7. 别名工具调用验证
+            auto aliasTool = ctx->toolRegistry->find("agentxx_execute_js");
+            XX_TEST_EXPECT_TRUE(aliasTool != nullptr);
+            if (aliasTool) {
+                auto outAlias = co_await aliasTool->execute_async(neograph::json{
+                    {"code", "return 'alias_ok';"},
+                });
+                XX_TEST_EXPECT_TRUE(outAlias.find("alias_ok") != std::string::npos);
+            }
+
+            // 8. 卸载与清理
+            co_await ctx->pluginManager->unloadAsync("agentxx_execute_javascript");
+            XX_TEST_EXPECT_FALSE(ctx->toolRegistry->contains("agentxx_execute_javascript"));
+            XX_TEST_EXPECT_FALSE(ctx->toolRegistry->contains("agentxx_execute_js"));
+        }
+        // 保持引擎加载，供后续 JS 用例复用
+    }
+
     // ---- 5. 钩子注册: 中间件句柄入栈 + 钩子点记录 ----
     {
         const auto& handles = ctx->middlewareHandleContext->handles;
@@ -284,7 +374,10 @@ asio::awaitable<TestResult> run_plugin_tests() {
 
     // ---- 12. JS 引擎插件加载 (二期) ----
     {
-        auto engineInst = co_await ctx->pluginManager->loadPluginAsync(jsLib);
+        auto engineInst = ctx->pluginManager->find("agentxx_javascript_engine");
+        if (!engineInst) {
+            engineInst = co_await ctx->pluginManager->loadPluginAsync(jsLib);
+        }
         XX_TEST_EXPECT_TRUE(engineInst != nullptr);
         if (!engineInst) {
             XX_TEST_EXPECT_TRUE(false);

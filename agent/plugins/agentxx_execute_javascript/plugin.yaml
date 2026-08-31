@@ -1,0 +1,12 @@
+# agentxx_execute_javascript —— JS 代码执行工具插件 (execute_bash_command 的 JS 等价)
+# 仿 execute_bash_command 设计: 依赖 QuickJS 引擎 (interpreter.js 能力)
+# 提供 agentxx_execute_javascript 工具，执行任意 JS 代码并返回格式化输出
+name: agentxx_execute_javascript
+version: 1.0.0
+description: "Execute JavaScript code (JS equivalent of bash command): agentxx_execute_javascript via QuickJS interpreter"
+entry: libagentxx_execute_javascript.so
+depends:
+  - agentxx_javascript_engine
+interfaces:
+  require:
+    - agentxx.agent.core

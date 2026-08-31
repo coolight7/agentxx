@@ -29,6 +29,7 @@ option(AGENTXX_ENABLE_PLUGIN_MATH "Build agentxx_math plugin (math calculation).
 option(AGENTXX_ENABLE_PLUGIN_SYSTEM "Build agentxx_system plugin (current date/time)." ON)
 option(AGENTXX_ENABLE_PLUGIN_WEBSEARCH "Build agentxx_websearch plugin (search/fetch url)." ON)
 option(AGENTXX_ENABLE_PLUGIN_RAG_SEARCH "Build agentxx_rag_search plugin (embedding based docs search)." ON)
+option(AGENTXX_ENABLE_PLUGIN_EXECUTE_JAVASCRIPT "Build agentxx_execute_javascript plugin (JS execution via QuickJS, bash equivalent)." ON)
 # 内置合并编译模式: 启用的插件源文件直接编译进 libagentxx (运行期无需插件
 # 动态库, 无 dlopen); 仅经 libagentxx 构建生效 (见下方"内置合并编译模式")
 option(AGENTXX_ENABLE_PLUGIN_BUILTIN "Merge enabled plugins into libagentxx (built-in, no runtime plugin dlls)." OFF)
@@ -259,6 +260,7 @@ agentxx_load_plugin(agentxx_math AGENTXX_ENABLE_PLUGIN_MATH)
 agentxx_load_plugin(agentxx_system AGENTXX_ENABLE_PLUGIN_SYSTEM)
 agentxx_load_plugin(agentxx_websearch AGENTXX_ENABLE_PLUGIN_WEBSEARCH)
 agentxx_load_plugin(agentxx_rag_search AGENTXX_ENABLE_PLUGIN_RAG_SEARCH)
+agentxx_load_plugin(agentxx_execute_javascript AGENTXX_ENABLE_PLUGIN_EXECUTE_JAVASCRIPT)
 
 # ===== 内置清单生成 (存在任一实际内置的插件时) =====
 if (AGENTXX_ENABLE_PLUGIN_BUILTIN)
