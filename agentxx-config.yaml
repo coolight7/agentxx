@@ -59,7 +59,7 @@ permission:
   #   - "/home/user/.ssh"
 
 subagent:
-  enable: true # 未完善
+  enable: false # 未完善
 
 # === 模型列表
 models:
@@ -299,8 +299,8 @@ plugins:
     enabled: true
 
   # === 数学计算工具 ===
-  # - path: ${AGENTXX_EXEC_DIR}/plugins/agentxx_math/
-  #   enabled: true
+  - path: ${AGENTXX_EXEC_DIR}/plugins/agentxx_math/
+    enabled: true
 
   # === JS 插件 (引擎 + 脚本插件; 顺序无关, 拓扑排序自动处理) ===
   # - path: "${AGENTXX_EXEC_DIR}/plugins/agentxx_javascript_engine"
@@ -315,14 +315,9 @@ plugins:
   #   enabled: true
 
   # === 音频流捕获
-  # - 工具: agentxx_audio_stream (start/stop/status; 仅 Windows 支持捕获,
-  #   其他平台 start 返回失败)
-  # - 捕获帧经事件推送 (topic agentxx_audio_stream.audio)
   # - path: ${AGENTXX_EXEC_DIR}/plugins/agentxx_audio_stream/
   #   enabled: true
 
   # === 系统文本选择事件流
-  # - 工具: agentxx_text_selection_monitor (start/stop/status)
-  # - 选中文本经事件推送 (topic agentxx_text_selection_monitor.selection)
   # - path: ${AGENTXX_EXEC_DIR}/plugins/agentxx_text_selection_monitor/
   #   enabled: true
