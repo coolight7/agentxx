@@ -105,8 +105,6 @@ bool AudioStreamHolder::start(
     if (stream_.isRunning()) {
         return false;
     }
-    stream_.setTargetProcessId(targetProcessId);
-    stream_.setDataSource(source);
     stream_.addListener([ctx = this->ctx](const agentxx_audio_stream_plugin::AudioData& data) {
         try {
             if (!ctx || !ctx->host || !ctx->iface.events || !ctx->iface.events->publish) {
@@ -117,14 +115,15 @@ bool AudioStreamHolder::start(
             )
                             .count();
             std::string payload = fmt::format(
-                R"({{"source":{},"channels":{},"sample_rate":{},"bits_per_sample":{},"samples":{},"data_base64":{},"timestamp_ms":{}}})",
+                R"({{"sample_rate":{},"channels":{},"bits_per_sample":{},"source":{},"process_id":{},"process_name":{},"timestamp_ms":{},"data_base64":{}}})",
+                data.sampleRate,
+                data.channels,
+                data.bitsPerSample,
                 jsonEscape(ctx, sourceName(data.source)),
-                data.format.channels,
-                data.format.sampleRate,
-                data.format.bitsPerSample,
-                data.samples,
-                jsonEscape(ctx, toBase64(data.pcmData)),
-                tsMs
+                data.processId,
+                jsonEscape(ctx, data.processName),
+                tsMs,
+                jsonEscape(ctx, toBase64(data.data))
             );
             ctx->iface.events->publish(
                 ctx->host,
@@ -137,7 +136,7 @@ bool AudioStreamHolder::start(
             }
         }
     });
-    return stream_.start();
+    return stream_.start(source, targetProcessId);
 }
 
 void AudioStreamHolder::stop() {

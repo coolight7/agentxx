@@ -1,3 +1,4 @@
+#include "agentxx/util/log.h"
 #include "audio_stream_plugin.h"
 
 #if XX_IS_WIN_D

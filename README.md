@@ -210,6 +210,8 @@
 ### UI
 - ✅Cli: `agentxx_cli cli`
 - ✅TUI: `agentxx_cli tui`
+    - 消息列表/会话列表局部分页加载
+    - 可选动画等级
 - ⬜GUI
 
 ### Server

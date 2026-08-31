@@ -266,14 +266,14 @@ plugins:
     enabled: true
   - path: ${AGENTXX_EXEC_DIR}/plugins/agentxx_execute_command/
     enabled: true
-  - path: ${AGENTXX_EXEC_DIR}/plugins/agentxx_string/
-    enabled: true
   - path: ${AGENTXX_EXEC_DIR}/plugins/agentxx_system/
     enabled: true
   - path: ${AGENTXX_EXEC_DIR}/plugins/agentxx_websearch/
     enabled: true
   - path: ${AGENTXX_EXEC_DIR}/plugins/agentxx_rag_search/
-    enabled: true
+    enabled: false
+  - path: ${AGENTXX_EXEC_DIR}/plugins/agentxx_string/
+    enabled: false
 
   # === CodeGraph 代码分析
   # - 参数:
@@ -300,7 +300,7 @@ plugins:
 
   # === 数学计算工具 ===
   - path: ${AGENTXX_EXEC_DIR}/plugins/agentxx_math/
-    enabled: true
+    enabled: false
 
   # === JS 插件 (引擎 + 脚本插件; 顺序无关, 拓扑排序自动处理) ===
   # - path: "${AGENTXX_EXEC_DIR}/plugins/agentxx_javascript_engine"
