@@ -159,6 +159,16 @@ models:
     extra_api_config:
       reasoning:
         effort: max
+  - name: claude-opus-4-6-thinking-responses
+    type: "openai-responses"
+    base_url: "http://172.29.48.1:8317/v1"
+    api_key: "${GEMINI_API_KEY}"
+    model_name: "claude-opus-4-6-thinking"
+    model_context_max_token: 1000000
+    send_thinking: true
+    extra_api_config:
+      reasoning:
+        effort: max
   - name: opencode-glm-5.3
     type: "openai"
     base_url: "https://opencode.ai/zen/go/v1"

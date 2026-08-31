@@ -528,6 +528,19 @@ void TUIClientAgentIO::start() {
                     }
                 });
                 menu->onSummyContext([this] {
+                    if (ctx_.frameState && ctx_.frameState->connState != ConnState::Connected) {
+                        showToast("server-io 尚未就绪, 请稍后再试");
+                        postRedraw();
+                        return;
+                    }
+                    const bool busy = (ctx_.frameState && ctx_.frameState->isStreaming)
+                                      || awaitingInterruptInput_.load(std::memory_order_acquire);
+                    if (busy) {
+                        showToast("请先停止当前会话");
+                        postRedraw();
+                        return;
+                    }
+
                     modal_->popModal();
                     if (transport_) {
                         sendToPeer(agentxx::agent::WireCompactContext{currentSessionId()});
