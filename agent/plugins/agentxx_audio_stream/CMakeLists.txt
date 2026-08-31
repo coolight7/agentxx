@@ -14,7 +14,7 @@ set(PLUGIN_NAME agentxx_audio_stream)
 # 任一平台实现就绪后 (移除源码 `&& false` 等) 在下方声明中加回对应平台即可
 # (平台矩阵说明见 docs/agent/plugins.md 9.3.1)
 include("${CMAKE_CURRENT_LIST_DIR}/../cmake/plugin_platform_support.cmake")
-agentxx_plugin_platform_gate(${PLUGIN_NAME} _AGENTXX_PLATFORM_OK)
+agentxx_plugin_platform_gate(${PLUGIN_NAME} _AGENTXX_PLATFORM_OK windows)
 if (NOT _AGENTXX_PLATFORM_OK)
   return() # 跳过本插件全部目标 (内置合并/独立动态库两模式均在此拦截)
 endif ()

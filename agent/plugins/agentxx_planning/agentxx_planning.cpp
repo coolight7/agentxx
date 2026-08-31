@@ -690,7 +690,7 @@ static std::string buildDecorItems(const ClientCtx& ctx, const neograph::json& p
     const bool hasTodos
         = plan.contains("todos") && plan["todos"].is_array() && !plan["todos"].empty();
     if (hasTodos) {
-        textItem("|- Todo", "title");
+        textItem("|- Todo", "normal");
         for (const auto& td : plan["todos"]) {
             if (td.is_object()) {
                 const auto state   = td.value("state", std::string{});
@@ -711,7 +711,7 @@ static std::string buildDecorItems(const ClientCtx& ctx, const neograph::json& p
     if (plan.contains("notes")) {
         const auto& nv = plan["notes"];
         if (nv.is_string()) {
-            textItem("|- Note", "title");
+            textItem("|- Note", "normal");
             textItem(nv.get<std::string>(), "hint");
         }
     }
@@ -812,7 +812,7 @@ static void refreshPlanSection(ClientCtx& ctx) {
     // ---- Graph: 状态图按钮 + 概要 ----
     const auto roadmap = plan.value("roadmap", std::string{});
     if (!roadmap.empty()) {
-        textItem("|- Graph", "title");
+        textItem("|- Graph", "normal");
         buttonItem(" Graph ", roadmap);
     }
 
@@ -820,7 +820,7 @@ static void refreshPlanSection(ClientCtx& ctx) {
     const bool hasTodos
         = plan.contains("todos") && plan["todos"].is_array() && !plan["todos"].empty();
     if (hasTodos) {
-        textItem("|- Todo", "title");
+        textItem("|- Todo", "normal");
         for (const auto& td : plan["todos"]) {
             if (td.is_object()) {
                 const auto state   = td.value("state", std::string{});
@@ -841,7 +841,7 @@ static void refreshPlanSection(ClientCtx& ctx) {
     if (plan.contains("notes")) {
         const auto& nv = plan["notes"];
         if (nv.is_string()) {
-            textItem("|- Note", "title");
+            textItem("|- Note", "normal");
             textItem(nv.get<std::string>(), "hint");
         }
     }

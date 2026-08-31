@@ -2,9 +2,9 @@
 # 使用方式: agentxx_cli --config agentxx-config.yaml [train|acp]
 #
 # key 字段支持 ${VAR} 环境变量占位符，会在运行时被真实环境变量替换。
-# 查找顺序: 程序内置变量 > --env 覆盖文件变量 > .env 文件变量 > 系统环境变量 > 保留 ${VAR} 原样
+# 查找顺序: 内置变量 > --env 覆盖文件变量 > .env 文件变量 > 系统环境变量 > 保留 ${VAR} 原样
 #
-# 程序内置变量:
+# 内置变量:
 #   - AGENTXX_WORK_DIR: 程序启动后的工作目录 (启动时所在目录, 正斜杠格式)
 #     例如: data_dir: ${AGENTXX_WORK_DIR}/.agentxx-data
 #   - AGENTXX_EXEC_DIR: agentxx_cli 可执行程序所在目录 (正斜杠格式)
@@ -15,12 +15,13 @@
 #
 # 加载实现源码见 [agent/client/src/config_loader.cpp]
 
-# === 统一数据根目录 (留空/不配置 = 不持久化数据: 设置/会话/codegraph 仅存内存,
-# 重启后无法恢复; 支持 `~` 与 ${VAR} 展开, 相对路径按工作目录解析)
-# 特殊关键字 `default` (仅 tui/cli 模式): 使用当前系统数据目录
+# === 统一数据根目录
+# - 留空/不配置 = 不持久化数据: 数据仅存内存, 重启后无法恢复
+# - 支持 `~` 与 ${VAR} 展开, 相对路径按工作目录解析
+# - 特殊关键字 `default` (仅 tui/cli 模式): 使用当前系统数据目录
 #   - Linux/macOS: ~/.agentxx/
 #   - Windows: %APPDATA%/agentxx/
-# 配置后数据子路径:
+# - 配置后数据子路径:
 #   - {data_dir}/sqlite/global.db                     全局设置 (TUI 动画等级/日志等级等)
 #   - {data_dir}/sqlite/sessions/{threadId}/          会话数据 (session.db / share_store.db)
 #   - {data_dir}/sqlite/codegraph/<折叠路径>/index.db CodeGraph 索引
@@ -36,7 +37,7 @@ data_dir: default
 #   - 插件宿主信息 projectRoot (如 codegraph 未配置 paths 时默认索引该目录)
 # work_dir: ${AGENTXX_WORK_DIR}
 
-# === 权限配置 (该配置项已从 TUI 设置弹窗移除, 启动时提示一次)
+# === 权限配置
 # - mode: 询问处理模式
 #   - ask:     当前工作目录内允许读写, 其他路径询问用户 (默认)
 #   - all_ask: 所有路径读写均询问用户
@@ -159,6 +160,16 @@ models:
     extra_api_config:
       reasoning:
         effort: max
+  - name: claude-opus-4-6-thinking-responses
+    type: "openai-responses"
+    base_url: "http://172.29.48.1:8317/v1"
+    api_key: "${GEMINI_API_KEY}"
+    model_name: "claude-opus-4-6-thinking"
+    model_context_max_token: 1000000
+    send_thinking: true
+    extra_api_config:
+      reasoning:
+        effort: max
   - name: opencode-glm-5.3
     type: "openai"
     base_url: "https://opencode.ai/zen/go/v1"
@@ -237,59 +248,16 @@ memory:
 #   (plugin.yaml 资源照常拷贝), 入口文件缺失时自动回退内置注册表加载;
 #   也可显式写 builtin://插件名 (无资源需求的插件/测试直连用)
 plugins:
-  # --- 示例: 原生 C++ 插件 (直接库路径) ---
+  # === 示例: 原生 C++ 插件 (直接库路径) ===
   # - path: "${AGENTXX_EXEC_DIR}/plugins/example_plugin"
   #   enabled: true
   #   args: { foo: bar }
 
-  # --- 示例: 禁用 (加载时跳过) ---
+  # === 示例: 禁用 (加载时跳过) ===
   # - path: "${AGENTXX_EXEC_DIR}/plugins/example_plugin"
   #   enabled: false
 
-  # --- 示例: JS 插件 (引擎 + 脚本插件; 顺序无关, 拓扑排序自动处理) ---
-  # - path: "${AGENTXX_EXEC_DIR}/plugins/agentxx_javascript_engine"
-  #   enabled: true
-  # - path: "${AGENTXX_EXEC_DIR}/plugins/example_js"
-  #   enabled: true
-
-  # --- 示例: Windows 桌面控制 (screen_capture 捕获 + computer_use 控制;
-  #   须同时配置, computer_use 的 plugin.yaml depends 声明依赖 screen_capture) ---
-  # - path: "${AGENTXX_EXEC_DIR}/plugins/agentxx_screen_capture"
-  #   enabled: true
-  # - path: "${AGENTXX_EXEC_DIR}/plugins/agentxx_computer_use"
-  #   enabled: true
-
-  # === CodeGraph 代码分析 (插件 agentxx_codegraph; 默认关闭)
-  # - 参数经 yaml `plugins` 段 path 条目携带 (宿主只整体传递 args json,
-  #   不解析其字段语义):
-  #     paths:          加载(索引)路径列表 (可选; 相对路径按程序工作目录解析)
-  #     ignore_paths:   忽略路径列表 (支持 * 通配符; 命中即跳过)
-  #     load_cwd:       未配置 paths 时是否默认加载当前工作目录 (默认 true)
-  #     use_gitignore:  是否默认忽略 .gitignore 规则与 .gitmodules 子模块目录 (默认 true)
-  # - 索引数据库: {data_dir}/sqlite/codegraph/<折叠路径>/index.db
-  - path: ${AGENTXX_EXEC_DIR}/plugins/agentxx_codegraph/
-    enabled: true
-    args:
-      # paths:
-      #   - "/path/to/project_a"
-      #   - "relative/path/to/project_b"
-      ignore_paths:
-        - "**/build/**"
-        - "**/node_modules/**"
-      load_cwd: true
-      use_gitignore: true
-
-  # === 系统资源监控 (插件 agentxx_system_monitor; 从 lib expand 拆分, 默认开启)
-  # - 工具: agentxx_get_system_core_info (原内置工具迁移, 同名同行为;
-  #   lib 不再内置, 未配置本插件时该工具不可用)
-  # - 能力: agentxx.system_usage (方法 query) —— TUI 侧边栏 System 段
-  #   (WireGetSystemUsage 周期请求) 经服务端调用本能力采集 CPU/内存/GPU;
-  #   载荷 schema 由本插件定义, 宿主只透传 (lib wire 层无系统资源 DTO)
-  - path: ${AGENTXX_EXEC_DIR}/plugins/agentxx_system_monitor/
-    enabled: true
-
-  # === 编程工具插件 (从 lib 内置工具迁移, 同名同行为; 默认全部开启) ===
-  # - lib 内置实现已移除, 未配置对应插件时该工具不可用
+  # === 默认内置编译插件 ===
   # - 构建期也可经 AGENTXX_ENABLE_PLUGIN_BUILTIN=ON + AGENTXX_PLUGIN_BUILTIN_LIST
   #   把它们合并编译进 libagentxx (内置注册表), 运行期配置保持不变
   - path: ${AGENTXX_EXEC_DIR}/plugins/agentxx_planning/
@@ -307,15 +275,53 @@ plugins:
   - path: ${AGENTXX_EXEC_DIR}/plugins/agentxx_rag_search/
     enabled: true
 
-  # === 音频流捕获 (插件 agentxx_audio_stream; 从 lib expand 拆分, 默认关闭)
+  # === CodeGraph 代码分析
+  # - 参数:
+  #     paths:          加载(索引)路径列表 (可选; 相对路径按程序工作目录解析)
+  #     ignore_paths:   忽略路径列表 (支持 * 通配符; 命中即跳过)
+  #     load_cwd:       未配置 paths 时是否默认加载当前工作目录 (默认 true)
+  #     use_gitignore:  是否默认忽略 .gitignore 规则与 .gitmodules 子模块目录 (默认 true)
+  # - 索引数据库: {data_dir}/sqlite/codegraph/<折叠路径>/index.db
+  - path: ${AGENTXX_EXEC_DIR}/plugins/agentxx_codegraph/
+    enabled: true
+    args:
+      # paths:
+      #   - "/path/to/project_a"
+      #   - "relative/path/to/project_b"
+      ignore_paths:
+        - "**/build/**"
+        - "**/node_modules/**"
+      load_cwd: true
+      use_gitignore: true
+
+  # === 系统资源监控
+  - path: ${AGENTXX_EXEC_DIR}/plugins/agentxx_system_monitor/
+    enabled: true
+
+  # === 数学计算工具 ===
+  # - path: ${AGENTXX_EXEC_DIR}/plugins/agentxx_math/
+  #   enabled: true
+
+  # === JS 插件 (引擎 + 脚本插件; 顺序无关, 拓扑排序自动处理) ===
+  # - path: "${AGENTXX_EXEC_DIR}/plugins/agentxx_javascript_engine"
+  #   enabled: true
+  # - path: "${AGENTXX_EXEC_DIR}/plugins/example_js"
+  #   enabled: true
+
+  # === Windows 桌面控制 (computer_use 依赖 screen_capture) ===
+  # - path: "${AGENTXX_EXEC_DIR}/plugins/agentxx_screen_capture"
+  #   enabled: true
+  # - path: "${AGENTXX_EXEC_DIR}/plugins/agentxx_computer_use"
+  #   enabled: true
+
+  # === 音频流捕获
   # - 工具: agentxx_audio_stream (start/stop/status; 仅 Windows 支持捕获,
   #   其他平台 start 返回失败)
   # - 捕获帧经事件推送 (topic agentxx_audio_stream.audio)
   # - path: ${AGENTXX_EXEC_DIR}/plugins/agentxx_audio_stream/
   #   enabled: true
 
-  # === 系统级文本选择事件流 (插件 agentxx_text_selection_monitor;
-  #   从 lib expand 拆分, 默认关闭; 仅 Windows 支持)
+  # === 系统文本选择事件流
   # - 工具: agentxx_text_selection_monitor (start/stop/status)
   # - 选中文本经事件推送 (topic agentxx_text_selection_monitor.selection)
   # - path: ${AGENTXX_EXEC_DIR}/plugins/agentxx_text_selection_monitor/

@@ -1,0 +1,9 @@
+name: agentxx_math
+version: 1.0.0
+description: "Mathematical expression evaluator: parse and calculate math expressions (agentxx_math_calculate)"
+entry: libagentxx_math.so
+depends:
+interfaces:
+  require:
+    - agentxx.agent.core
+    - agentxx.agent.tools
