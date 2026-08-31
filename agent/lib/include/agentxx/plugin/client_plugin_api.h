@@ -282,7 +282,7 @@ typedef struct AgentxxClientWireIface {
 #define AGENTXX_IFACE_CLIENT_SELF_VERSION 1
 
 typedef struct AgentxxClientSelfIface {
-    int version; ///< 必须 == AGENTXX_IFACE_CLIENT_SELF_VERSION
+    int version; ///< 必须 >= AGENTXX_IFACE_CLIENT_SELF_VERSION
 
     /// 本插件信息 JSON {"name","version","description","path"}
     /// (加载时常用: 从 path 推导资源目录; host->alloc)
@@ -290,6 +290,11 @@ typedef struct AgentxxClientSelfIface {
     /// 本插件配置参数 JSON (yaml `plugins` 条目 args; io 线程; host->alloc):
     /// 宿主不解析 args 字段语义, 整体原样传递; 未配置时返回 "{}"
     char* (*get_plugin_args)(const AgentxxClientHost* host);
+    /// 本插件配置文件所在目录或文件路径 (yaml `plugins` 条目 config; io 线程;
+    /// host->alloc; 未指定返回 NULL)
+    /// - 可指向文件或目录 (由插件自行判断类型并加载)
+    /// - 宿主已归一化为绝对路径 (正斜杠, lexically_normal)
+    char* (*get_plugin_config_path)(const AgentxxClientHost* host);
 } AgentxxClientSelfIface;
 
 /* ==================== 接口表: JSON 辅助 (agentxx.client.json) ==================== */

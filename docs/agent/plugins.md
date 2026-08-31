@@ -155,7 +155,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_agent_destroy(void* plugin_
 
 2. **编译与分发模式**：
    - **独立动态库 (默认)**：编译为独立动态库，经 `agentxx-config.yaml` 的 `plugins` 字段按 `path` 动态加载 (支持插件目录含 `plugin.yaml` 清单分派)
-   - **内置合并编译**：`AGENTXX_ENABLE_PLUGIN_BUILTIN=ON` + `AGENTXX_PLUGIN_BUILTIN_LIST` 指定插件源码直接编译进 `libagentxx`，运行期无需外部动态库零开销调用；此时 `plugins` 段仍可配置参数，但无需 `path`
+   - **内置合并编译**：`AGENTXX_ENABLE_PLUGIN_BUILTIN=ON` + `AGENTXX_PLUGIN_BUILTIN_LIST` 指定插件源码直接编译进 `libagentxx`，运行期无需外部动态库零开销调用；此时 `plugins` 段仍可配置参数，`path` 可简写为 `builtin://<name>` 或 `name: <name>` (无需外部目录)，并可通过 `config` 指定插件配置文件所在目录/文件路径
 
 ---
 
@@ -170,7 +170,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_agent_destroy(void* plugin_
 | `agentxx.agent.scheduler` | 1 | `is_io_thread/post_to_io/pump_io`, `sleep/cancel_sleep`, `offload` (阻塞池委托, 需 cancel_flag) |
 | `agentxx.agent.session` | 1 | `get_share_store/add_share_store/emit_message_tip` (IO 线程) |
 | `agentxx.agent.plugins` | 1 | `list_plugins/get_plugin/get_own_info` (JSON) |
-| `agentxx.agent.config` | 1 | `get_config/get_plugin_args/get_tool_prompt/get_work_dir/get_session_work_dir` (后者 worktree 绑定优先) |
+| `agentxx.agent.config` | 2 | `get_config/get_plugin_args/get_tool_prompt/get_work_dir/get_session_work_dir/get_plugin_config_path` (后者 worktree 绑定优先；`get_plugin_config_path` 返回 yaml `config` 归一化绝对路径，可指向文件/目录) |
 | `agentxx.agent.model` | 1 | `get_config` (主模型及关联配置 JSON) |
 | `agentxx.agent.cancel` | 1 | `is_cancelled(threadId)` (advisory, 权威通知为 cancel 回调) |
 | `agentxx.agent.prompt` | 1 | `get_prompt/set_prompt` (宿主提示词读写) |
@@ -188,7 +188,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_agent_destroy(void* plugin_
 | `agentxx.client.events` | 1 | `subscribe/unsubscribe` (事件见 `AgentxxClientEvent`: READY/CONN_STATE/USER_INPUT/DELTA/TURN_END/SESSION_SWITCH/PLUGIN_DATA) |
 | `agentxx.client.session` | 1 | `get_client_state` (快照 JSON), `send_user_input`, `request_cancel` |
 | `agentxx.client.wire` | 1 | `send_plugin_data(event, json)` → 服务端 `client.{插件}.{event}` |
-| `agentxx.client.self` | 1 | `get_own_info/get_plugin_args` |
+| `agentxx.client.self` | 2 | `get_own_info/get_plugin_args/get_plugin_config_path` (后者返回 yaml `config` 归一化绝对路径) |
 | `agentxx.client.json` | 1 | `json_get_string/json_escape` |
 | `agentxx.client.log` | 1 | `log(level, msg)` |
 
@@ -201,6 +201,12 @@ extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_agent_destroy(void* plugin_
 - **声明式**：插件目录随 `plugin.yaml` 声明资源 (框架在 entry 成功后经 `AgentResourceApplier` 统一 `applyDecls` 应用，卸载/禁用时摘除)
 - **编程式**：运行时经 `agentxx.agent.resources` 接口表动态注册/注销 (如 `agentxx_codegraph` 按 args 动态注册索引路径)
 - 宿主对声明式+编程式资源做去重与生命周期管理 (所有权语义见 `resource_applier.h`)；失败项经 `AppendComponentNotification` 单独统计 (供客户端 Failed 组展示)
+
+### 插件配置文件 (`config` 字段)
+
+- `agentxx-config.yaml` 中每个 `plugins` 条目可通过 `config` 指定插件的配置文件所在目录或文件路径 (可指向文件或目录；支持 `~`/`${VAR}`/相对路径，宿主归一化为绝对路径后透传)
+- 插件经 `agentxx.agent.config` (agent 侧) / `agentxx.client.self` (client 侧) 的 `get_plugin_config_path` 查询该路径 (返回 `NULL` 表示未配置)，自行判断类型并加载 (如目录下扫描 `*.yaml`、读取单个文件等)
+- 典型用法：`config: ${AGENTXX_WORK_DIR}/config/my_plugin.yaml` 或 `config: ./my_plugin_config/` (相对工作目录)；SDK 中 `PluginBase::configPath()` 提供便捷封装
 
 ---
 

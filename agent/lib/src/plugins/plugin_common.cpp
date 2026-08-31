@@ -5,6 +5,7 @@
  */
 #include "agentxx/plugin/plugin_common.h"
 
+#include "agentxx/plugin/builtin_plugin.h"
 #include "agentxx/plugin/client_plugin_api.h"
 #include "agentxx/util/log.h"
 #include "yaml-cpp/yaml.h"
@@ -34,8 +35,12 @@ std::string pluginNameFromPath(const std::string& path) {
     return base;
 }
 
-bool parsePluginManifest(
-    const std::filesystem::path& dir,
+namespace {
+/// 共享的 Node 解析逻辑 (文件与字符串共用)
+bool parseManifestNode(
+    const YAML::Node&            node,
+    const std::filesystem::path& baseDir,
+    const std::string&           logHint,
     std::string&                 name,
     std::string&                 entry,
     std::vector<std::string>&    depends,
@@ -43,15 +48,9 @@ bool parsePluginManifest(
     PluginManifestResources*     resources,
     PluginManifestInterfaces*    interfaces
 ) {
-    auto            yamlPath = dir / "plugin.yaml";
-    std::error_code ec;
-    if (!std::filesystem::exists(yamlPath, ec)) {
-        return false;
-    }
     try {
-        auto node = YAML::LoadFile(yamlPath.string());
-        name      = node["name"] ? node["name"].as<std::string>() : std::string{};
-        entry     = node["entry"] ? node["entry"].as<std::string>() : std::string{};
+        name  = node["name"] ? node["name"].as<std::string>() : std::string{};
+        entry = node["entry"] ? node["entry"].as<std::string>() : std::string{};
         if (node["depends"] && node["depends"].IsSequence()) {
             for (const auto& d : node["depends"]) {
                 if (d.IsScalar()) {
@@ -72,7 +71,8 @@ bool parsePluginManifest(
         if (resources) {
             *resources = PluginManifestResources{};
             // 绝对路径原样保留; 相对路径按插件目录拼接并规范化
-            auto resolveRel = [&dir](const std::string& p) -> std::string {
+            // baseDir 为空时 (内置内嵌清单) 保持原样
+            auto resolveRel = [&baseDir](const std::string& p) -> std::string {
                 if (p.empty()) {
                     return {};
                 }
@@ -80,7 +80,10 @@ bool parsePluginManifest(
                 if (fp.is_absolute()) {
                     return p;
                 }
-                return (dir / fp).lexically_normal().string();
+                if (baseDir.empty()) {
+                    return p;
+                }
+                return (baseDir / fp).lexically_normal().string();
             };
             if (node["skill"] && node["skill"].IsSequence()) {
                 for (const auto& s : node["skill"]) {
@@ -114,7 +117,7 @@ bool parsePluginManifest(
                     if (ns.empty() || url.empty()) {
                         XX_LOGW(
                             "Plugin manifest `{}` mcp entry missing `namespace`/`url`, skipped",
-                            yamlPath.string()
+                            logHint
                         );
                         continue;
                     }
@@ -125,7 +128,7 @@ bool parsePluginManifest(
                         } catch (const std::exception&) {
                             XX_LOGW(
                                 "Plugin manifest `{}` mcp `{}` invalid timeout, using default",
-                                yamlPath.string(),
+                                logHint,
                                 ns
                             );
                         }
@@ -147,7 +150,7 @@ bool parsePluginManifest(
         // checkInterfacesForSide 处理 —— 解析与协商解耦, 第三方前缀天然合法
         if (interfaces) {
             *interfaces   = PluginManifestInterfaces{};
-            auto readList = [&yamlPath](
+            auto readList = [&logHint](
                                 const YAML::Node&         section,
                                 std::vector<std::string>& out,
                                 std::string_view          what
@@ -163,7 +166,7 @@ bool parsePluginManifest(
                     if (n.empty()) {
                         XX_LOGW(
                             "Plugin manifest `{}` interfaces.{} has empty name, skipped",
-                            yamlPath.string(),
+                            logHint,
                             what
                         );
                         continue;
@@ -177,14 +180,109 @@ bool parsePluginManifest(
             }
         }
     } catch (const std::exception& e) {
-        XX_LOGE("Parse plugin manifest `{}` failed: {}", yamlPath.string(), e.what());
+        XX_LOGE("Parse plugin manifest `{}` failed: {}", logHint, e.what());
         return false;
     }
     if (name.empty() || entry.empty()) {
-        XX_LOGE("Plugin manifest `{}` invalid: name/entry required", yamlPath.string());
+        XX_LOGE("Plugin manifest `{}` invalid: name/entry required", logHint);
         return false;
     }
     return true;
+}
+} // namespace
+
+bool parsePluginManifest(
+    const std::filesystem::path& dir,
+    std::string&                 name,
+    std::string&                 entry,
+    std::vector<std::string>&    depends,
+    std::vector<std::string>&    optionalDepends,
+    PluginManifestResources*     resources,
+    PluginManifestInterfaces*    interfaces
+) {
+    auto            yamlPath = dir / "plugin.yaml";
+    std::error_code ec;
+    if (!std::filesystem::exists(yamlPath, ec)) {
+        return false;
+    }
+    try {
+        auto node = YAML::LoadFile(yamlPath.string());
+        return parseManifestNode(
+            node,
+            dir,
+            yamlPath.string(),
+            name,
+            entry,
+            depends,
+            optionalDepends,
+            resources,
+            interfaces
+        );
+    } catch (const std::exception& e) {
+        XX_LOGE("Parse plugin manifest `{}` failed: {}", yamlPath.string(), e.what());
+        return false;
+    }
+}
+
+bool parsePluginManifestFromString(
+    const std::string&           yamlStr,
+    const std::filesystem::path& baseDir,
+    std::string&                 name,
+    std::string&                 entry,
+    std::vector<std::string>&    depends,
+    std::vector<std::string>&    optionalDepends,
+    PluginManifestResources*     resources,
+    PluginManifestInterfaces*    interfaces
+) {
+    if (yamlStr.empty()) {
+        return false;
+    }
+    try {
+        auto node = YAML::Load(yamlStr);
+        std::string hint
+            = baseDir.empty() ? std::string{"<builtin manifest>"}
+                              : (baseDir / "plugin.yaml").string();
+        return parseManifestNode(
+            node,
+            baseDir,
+            hint,
+            name,
+            entry,
+            depends,
+            optionalDepends,
+            resources,
+            interfaces
+        );
+    } catch (const std::exception& e) {
+        XX_LOGE("Parse builtin manifest failed: {}", e.what());
+        return false;
+    }
+}
+
+bool parseBuiltinManifest(
+    std::string_view          pluginName,
+    std::string&              name,
+    std::string&              entry,
+    std::vector<std::string>& depends,
+    std::vector<std::string>& optionalDepends,
+    PluginManifestResources*  resources,
+    PluginManifestInterfaces* interfaces
+) {
+    auto* m = findBuiltinManifest(pluginName);
+    if (!m || !m->yaml || !*m->yaml) {
+        return false;
+    }
+    // 内嵌清单的资源相对路径无需按插件目录解析 (baseDir 为空)
+    return parsePluginManifestFromString(
+        std::string{m->yaml},
+        std::filesystem::path{},
+        name,
+        entry,
+        depends,
+        optionalDepends,
+        resources,
+        interfaces
+    );
 }
 
 std::string resolvePluginEntryPath(const std::filesystem::path& dir, const std::string& entry) {

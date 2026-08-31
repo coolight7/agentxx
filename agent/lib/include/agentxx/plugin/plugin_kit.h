@@ -416,6 +416,21 @@ struct PluginBase {
         return res;
     }
 
+    /// 插件配置文件所在目录或文件路径 (yaml `config`, 归一化绝对路径)
+    /// - 为空表示未指定; 可指向文件或目录 (由插件自行判断)
+    std::string configPath() const {
+        if (!host || !iface.config || !iface.config->get_plugin_config_path) {
+            return "";
+        }
+        char* p = iface.config->get_plugin_config_path(host);
+        if (!p) {
+            return "";
+        }
+        std::string res(p);
+        host->vtable->free(p);
+        return res;
+    }
+
     bool sessionCancelled(AgentxxPluginStringView tid) const {
         if (!host || !iface.cancel || !iface.cancel->is_cancelled) {
             return false;

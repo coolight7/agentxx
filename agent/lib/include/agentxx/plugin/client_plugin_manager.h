@@ -100,6 +100,8 @@ public:
     /// 插件配置参数 (yaml `plugins` 条目 args; 宿主原样保存, 经 vtable
     /// get_plugin_args 整体返回给插件, 不解析其字段语义)
     neograph::json args = neograph::json::object();
+    /// 插件配置文件所在目录或文件路径 (yaml `config`, 归一化为绝对路径)
+    std::string configPath;
     /// 必选依赖 (插件名): 未安装则加载失败; 卸载/禁用时级联
     std::vector<std::string> depends;
     /// 可选依赖 (插件名): 未安装仅警告, 不影响加载
@@ -203,6 +205,7 @@ public:
         std::string              version;
         std::string              description;
         std::string              path;
+        std::string              configPath;
         bool                     enabled  = true;
         size_t                   inflight = 0;
         std::vector<std::string> statusItems;
@@ -387,6 +390,7 @@ public:
     /// 自描述
     std::string getOwnInfoJson(ClientPluginInstance* inst);
     std::string getPluginArgsJson(ClientPluginInstance* inst);
+    std::string getPluginConfigPath(ClientPluginInstance* inst);
     /// 会话操作 (代理到端点)
     void sendUserInputToPeer(ClientPluginInstance* inst, const char* sessionId, const char* text);
     void requestCancelToPeer(ClientPluginInstance* inst, const char* sessionId);

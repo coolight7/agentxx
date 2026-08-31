@@ -549,8 +549,8 @@ void test_plugins_empty_by_default() {
 }
 
 void test_plugin_name_form_removed() {
-    // name 形式已移除: 所有插件统一经 path 外置指定;
-    // 仅配置 name (无 path) 的条目被跳过 (记警告)
+    // name 简写已恢复为内置插件快捷方式: 仅配置 name (无 path) 时自动补为
+    // builtin://<name> (与 path: builtin://agentxx_codegraph 等价)
     auto cfg = loadYaml(R"(plugins:
   - name: agentxx_codegraph
     enabled: true
@@ -558,7 +558,12 @@ void test_plugin_name_form_removed() {
       load_cwd: true
       use_gitignore: false
 )");
-    XX_TEST_EXPECT_TRUE(cfg.plugins.empty());
+    XX_TEST_EXPECT_EQ(cfg.plugins.size(), size_t{1});
+    if (cfg.plugins.size() == 1) {
+        XX_TEST_EXPECT_EQ(cfg.plugins[0].path, std::string("builtin://agentxx_codegraph"));
+        XX_TEST_EXPECT_TRUE(cfg.plugins[0].enabled);
+        XX_TEST_EXPECT_TRUE(cfg.plugins[0].args.is_object());
+    }
     // 同时提供 name + path: 正常加载 (name 字段被忽略, 仅 path 生效)
     cfg = loadYaml(R"(plugins:
   - name: agentxx_codegraph
@@ -569,6 +574,15 @@ void test_plugin_name_form_removed() {
     if (cfg.plugins.size() == 1) {
         XX_TEST_EXPECT_EQ(cfg.plugins[0].path, std::string("/opt/plugins/agentxx_codegraph"));
         XX_TEST_EXPECT_TRUE(cfg.plugins[0].enabled);
+    }
+    // builtin:// 显式前缀等价于 name 简写
+    cfg = loadYaml(R"(plugins:
+  - path: builtin://agentxx_codegraph
+    enabled: true
+)");
+    XX_TEST_EXPECT_EQ(cfg.plugins.size(), size_t{1});
+    if (cfg.plugins.size() == 1) {
+        XX_TEST_EXPECT_EQ(cfg.plugins[0].path, std::string("builtin://agentxx_codegraph"));
     }
 }
 
@@ -678,6 +692,59 @@ void test_plugin_args_env_expand() {
         }
     } else {
         XX_TEST_EXPECT_TRUE(false);
+    }
+}
+
+void test_plugins_config_path_parse() {
+    // config: 可指向文件或目录, 支持 ${VAR} 展开, 宿主原样保存 (归一化由装配侧完成)
+    auto cfg = loadYaml(R"(plugins:
+  - path: "/opt/plugins/my_plugin.so"
+    config: "/etc/my_plugin/config.yaml"
+  - path: builtin://agentxx_filesystem
+    config: "./relative/config_dir"
+  - path: "/opt/plugins/no_config.so"
+)");
+    XX_TEST_EXPECT_EQ(cfg.plugins.size(), size_t{3});
+    if (cfg.plugins.size() == 3) {
+        XX_TEST_EXPECT_EQ(cfg.plugins[0].configPath, std::string("/etc/my_plugin/config.yaml"));
+        XX_TEST_EXPECT_EQ(cfg.plugins[1].configPath, std::string("./relative/config_dir"));
+        XX_TEST_EXPECT_TRUE(cfg.plugins[2].configPath.empty());
+    }
+    // config 支持 ${VAR} 展开
+    auto path = fs::temp_directory_path()
+                / fmt::format(
+                    "agentxx_config_loader_test_{}.yaml",
+                    std::chrono::steady_clock::now().time_since_epoch().count()
+                );
+    {
+        std::ofstream ofs(path);
+        ofs << R"(plugins:
+  - path: "/opt/plugins/my_plugin.so"
+    config: "${AGENTXX_TEST_PLUGIN_CONFIG}/conf"
+)";
+    }
+    auto cfg2 = agentxx::client::loadYamlConfig(
+        path.string(),
+        {
+            {"AGENTXX_TEST_PLUGIN_CONFIG", "/data/plugin_cfg"}
+    },
+        {}
+    );
+    std::error_code ec;
+    fs::remove(path, ec);
+    XX_TEST_EXPECT_EQ(cfg2.plugins.size(), size_t{1});
+    if (cfg2.plugins.size() == 1) {
+        XX_TEST_EXPECT_EQ(cfg2.plugins[0].configPath, std::string("/data/plugin_cfg/conf"));
+    }
+    // name 简写 + config 组合
+    cfg = loadYaml(R"(plugins:
+  - name: agentxx_planning
+    config: "/tmp/planning_config"
+)");
+    XX_TEST_EXPECT_EQ(cfg.plugins.size(), size_t{1});
+    if (cfg.plugins.size() == 1) {
+        XX_TEST_EXPECT_EQ(cfg.plugins[0].path, std::string("builtin://agentxx_planning"));
+        XX_TEST_EXPECT_EQ(cfg.plugins[0].configPath, std::string("/tmp/planning_config"));
     }
 }
 
@@ -859,6 +926,7 @@ void test_subagent_enable_false();
 void test_subagent_enable_true_variants();
 void test_subagent_enable_invalid_fallback();
 void test_subagent_enable_env_expand();
+void test_plugins_config_path_parse();
 
 void test_subagent_enable_default_true() {
     auto cfg = loadYaml("data_dir: default\n");
@@ -955,6 +1023,7 @@ TestResult testConfigLoader() {
     test_plugin_args_paths_parse();
     test_plugin_missing_path_skipped();
     test_plugin_args_env_expand();
+    test_plugins_config_path_parse();
     test_subagent_enable_default_true();
     test_subagent_enable_false();
     test_subagent_enable_true_variants();

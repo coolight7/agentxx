@@ -86,10 +86,12 @@ struct YamlAppConfig {
     /// 权限黑名单: 始终拒绝的路径列表 (yaml `permission.blacklist`)
     /// - 与白名单同路径时黑名单优先 (后注册覆盖)
     std::vector<std::string> permissionDenyPaths;
-    /// 插件配置 (yaml `plugins` 列表项: path / enabled / sides / args)
+    /// 插件配置 (yaml `plugins` 列表项: path / enabled / sides / args / config)
     /// - path: 插件动态库路径 或 插件目录 (含 plugin.yaml 时按清单分派)
+    ///   特殊前缀 `builtin://<name>` 表示内置编译插件 (无需外部文件)
     /// - enabled: 默认 true; sides: 运行侧 (auto/agent/client, 默认 auto);
-    ///   args: 自定义参数 (预留, 存留供查询)
+    ///   args: 自定义参数 (预留, 存留供查询);
+    ///   config: 插件配置文件所在目录或文件路径 (可指向文件/目录)
     std::vector<agent::PluginConfig> plugins;
     /// subagent 总开关 (yaml `subagent.enable`, 默认 true)
     bool enableSubagent = true;

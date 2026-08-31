@@ -416,6 +416,7 @@ std::vector<PluginManager::PluginListView> PluginManager::list() const {
         view.version            = inst->version;
         view.description        = inst->description;
         view.path               = inst->path;
+        view.configPath         = inst->configPath;
         view.enabled            = inst->enabled;
         view.inflight           = inst->inflight.load(std::memory_order_acquire);
         view.tools              = inst->toolNames;
@@ -445,6 +446,7 @@ std::string PluginManager::listPluginsJson() {
         item["version"]             = v.version;
         item["description"]         = v.description;
         item["path"]                = v.path;
+        item["config"]              = v.configPath;
         item["enabled"]             = v.enabled;
         item["tools"]               = v.tools;
         item["capabilities"]        = v.capabilities;
@@ -467,6 +469,7 @@ std::string PluginManager::getPluginJson(const std::string& name) {
     item["version"]             = inst->version;
     item["description"]         = inst->description;
     item["path"]                = inst->path;
+    item["config"]              = inst->configPath;
     item["enabled"]             = inst->enabled;
     item["tools"]               = inst->toolNames;
     item["depends"]             = inst->depends;
@@ -482,6 +485,17 @@ std::string PluginManager::getPluginJson(const std::string& name) {
 }
 
 // ==================== 加载分支 (Native / Builtin / Configured) ====================
+
+// ---------------------------------------------------------------------------
+// 内置插件路径 helper (yaml `builtin://<name>` 简写)
+// ---------------------------------------------------------------------------
+static inline bool isBuiltinScheme(std::string_view p) noexcept {
+    return p.size() > 10 && p.substr(0, 10) == "builtin://";
+}
+
+static inline std::string parseBuiltinName(std::string_view p) {
+    return std::string(p.substr(10));
+}
 
 asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadNativeAsync(
     std::string                             path,
@@ -548,7 +562,8 @@ asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadNativeAsync(
         = (const AgentxxHostVtable*)xx_query_interface(nullptr, agentxx_plugin_sv_cstr("__vtable"));
     inst->host.opaque = inst.get();
     if (cfg) {
-        inst->args = cfg->args;
+        inst->args       = cfg->args;
+        inst->configPath = cfg->configPath;
     }
 
     plugins_[name] = inst;
@@ -594,7 +609,8 @@ asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadBuiltinAsync
     inst->host.opaque   = inst.get();
     inst->builtinUnload = entry->destroy;
     if (cfg) {
-        inst->args = cfg->args;
+        inst->args       = cfg->args;
+        inst->configPath = cfg->configPath;
     }
 
     plugins_[name] = inst;
@@ -616,6 +632,138 @@ asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadPluginAsync(
     const agentxx::agent::PluginConfig* cfg,
     bool                                allowClientOnlySkip
 ) {
+    // 内置简写: builtin://<name> 直接经内置注册表加载 (无需外部目录/文件)
+    if (isBuiltinScheme(path)) {
+        auto btName = parseBuiltinName(path);
+        if (btName.empty()) {
+            XX_LOGE("Plugin load failed: invalid builtin path `{}`", path);
+            co_return nullptr;
+        }
+        // 尝试从默认插件目录解析 manifest 以获取 depends/interfaces/resources
+        // (可选: 失败则按无依赖/无资源处理, 不影响内置核心加载)
+        std::vector<std::string>        depends, optionalDepends;
+        PluginManifestResources           resources;
+        PluginManifestInterfaces          interfaces;
+        // 按可执行目录与当前工作目录探测 manifest (与内置合并模式资源拷贝布局一致)
+        bool        manifestFound = false;
+        std::string dummyName, dummyEntry;
+        // 优先内嵌清单 (单文件分发, 无需外部 plugin.yaml)
+        if (parseBuiltinManifest(btName, dummyName, dummyEntry, depends, optionalDepends, &resources, &interfaces)) {
+            manifestFound = true;
+        } else {
+            for (auto base : {std::filesystem::current_path()}) {
+                auto probe = base / "plugins" / btName / "plugin.yaml";
+                if (std::filesystem::exists(probe)) {
+                    if (parsePluginManifest(
+                            probe.parent_path(),
+                            dummyName,
+                            dummyEntry,
+                            depends,
+                            optionalDepends,
+                            &resources,
+                            &interfaces
+                        )) {
+                        manifestFound = true;
+                        break;
+                    }
+                }
+            }
+        }
+        if (!manifestFound) {
+            // 回退: 尝试可执行目录下的插件目录 (与内置合并模式资源拷贝布局一致)
+            // 无法直接得知 execDir 时, 尝试通过 /proc/self/exe 推导 (Linux)
+            // 以及当前工作目录的相对探测已在上方完成, 空依赖兜底
+            (void)resources;
+            (void)interfaces;
+#ifndef _WIN32
+            {
+                std::error_code ec2;
+                auto            exe = std::filesystem::read_symlink("/proc/self/exe", ec2);
+                if (!ec2) {
+                    auto probe2 = exe.parent_path() / "plugins" / btName / "plugin.yaml";
+                    if (std::filesystem::exists(probe2)) {
+                        std::string dummyEntry2, dummyName2;
+                        std::vector<std::string> depends2, optionalDepends2;
+                        PluginManifestResources  resources2;
+                        PluginManifestInterfaces interfaces2;
+                        if (parsePluginManifest(
+                                probe2.parent_path(),
+                                dummyName2,
+                                dummyEntry2,
+                                depends2,
+                                optionalDepends2,
+                                &resources2,
+                                &interfaces2
+                            )) {
+                            depends         = std::move(depends2);
+                            optionalDepends = std::move(optionalDepends2);
+                            resources       = std::move(resources2);
+                            interfaces      = std::move(interfaces2);
+                            manifestFound   = true;
+                        }
+                    }
+                }
+            }
+#endif
+        }
+        // 若内置注册表中不存在, 回退为普通目录插件加载 (非合并编译时
+        // builtin:// 仍可指向外部目录插件, 保持兼容)
+        if (!agentxx::plugin::findBuiltinPlugin(btName)) {
+            // 按目录插件路径重新进入常规加载分支
+            std::filesystem::path fallback;
+            // 优先可执行目录下的 plugins/<name>
+#ifndef _WIN32
+            {
+                std::error_code ec2;
+                auto            exe = std::filesystem::read_symlink("/proc/self/exe", ec2);
+                if (!ec2) {
+                    auto cand = exe.parent_path() / "plugins" / btName;
+                    if (std::filesystem::is_directory(cand)) {
+                        fallback = cand;
+                    }
+                }
+            }
+#endif
+            if (fallback.empty()) {
+                auto cand = std::filesystem::current_path() / "plugins" / btName;
+                if (std::filesystem::is_directory(cand)) {
+                    fallback = cand;
+                }
+            }
+            if (!fallback.empty()) {
+                XX_LOGI(
+                    "Builtin plugin `{}` not in registry, fallback to directory `{}`",
+                    btName,
+                    fallback.string()
+                );
+                co_return co_await loadPluginAsync(fallback.string(), cfg, allowClientOnlySkip);
+            }
+        }
+        for (const auto& dep : depends) {
+            if (!find(dep)) {
+                XX_LOGE(
+                    "Builtin plugin `{}` load failed: required dependency `{}` not installed",
+                    btName,
+                    dep
+                );
+                co_return nullptr;
+            }
+        }
+        for (const auto& dep : optionalDepends) {
+            if (!find(dep)) {
+                XX_LOGW("Builtin plugin `{}` optional dependency `{}` not installed", btName, dep);
+            }
+        }
+        co_return co_await loadBuiltinAsync(
+            btName,
+            path,
+            depends,
+            optionalDepends,
+            cfg,
+            resources,
+            interfaces
+        );
+    }
     namespace fs = std::filesystem;
     fs::path p(path);
     if (fs::is_directory(p)) {
@@ -733,28 +881,66 @@ asio::awaitable<void>
         SortItem it;
         it.path = pc.path;
         it.cfg  = &pc;
-        fs::path        p(pc.path);
-        std::error_code ec;
-        if (fs::is_directory(p, ec)) {
-            std::string              manifestName, manifestEntry;
+        // 内置简写: builtin://<name> 直接以 name 作为标识
+        // 优先内嵌清单取 depends, 回退文件系统
+        if (isBuiltinScheme(pc.path)) {
+            it.name = parseBuiltinName(pc.path);
+            std::string              dummyName, dummyEntry;
             std::vector<std::string> optionalDepends;
             PluginManifestResources  resources;
             PluginManifestInterfaces interfaces;
-            if (parsePluginManifest(
-                    p,
-                    manifestName,
-                    manifestEntry,
+            if (parseBuiltinManifest(
+                    it.name,
+                    dummyName,
+                    dummyEntry,
                     it.depends,
                     optionalDepends,
                     &resources,
                     &interfaces
                 )) {
-                it.name = manifestName;
+                // 内嵌清单命中, 依赖已填入 it.depends
+            } else {
+                for (auto base : {std::filesystem::current_path()}) {
+                    auto probe = base / "plugins" / it.name / "plugin.yaml";
+                    if (std::filesystem::exists(probe)) {
+                        if (parsePluginManifest(
+                                probe.parent_path(),
+                                dummyName,
+                                dummyEntry,
+                                it.depends,
+                                optionalDepends,
+                                &resources,
+                                &interfaces
+                            )) {
+                            break;
+                        }
+                    }
+                }
+            }
+        } else {
+            fs::path        p(pc.path);
+            std::error_code ec;
+            if (fs::is_directory(p, ec)) {
+                std::string              manifestName, manifestEntry;
+                std::vector<std::string> optionalDepends;
+                PluginManifestResources  resources;
+                PluginManifestInterfaces interfaces;
+                if (parsePluginManifest(
+                        p,
+                        manifestName,
+                        manifestEntry,
+                        it.depends,
+                        optionalDepends,
+                        &resources,
+                        &interfaces
+                    )) {
+                    it.name = manifestName;
+                } else {
+                    it.name = pluginNameFromPath(pc.path);
+                }
             } else {
                 it.name = pluginNameFromPath(pc.path);
             }
-        } else {
-            it.name = pluginNameFromPath(pc.path);
         }
         items.push_back(std::move(it));
     }

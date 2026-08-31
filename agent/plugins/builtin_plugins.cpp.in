@@ -34,3 +34,24 @@ const AgentxxBuiltinPluginInfo* agentxx_get_builtin_plugins(size_t* count) {
     }
     return kAgentxxBuiltinPlugins;
 }
+
+/* ── 内嵌 plugin.yaml 原文 (与上表一一对应) ── */
+const AgentxxBuiltinManifest* agentxx_get_builtin_manifests(size_t* count) {
+#if @AGENTXX_BUILTIN_PLUGIN_COUNT@ > 0
+    static const AgentxxBuiltinManifest kManifests[] = {
+@AGENTXX_BUILTIN_MANIFEST_YAML_ARRAY@
+    };
+    if (count) {
+        *count = sizeof(kManifests) / sizeof(kManifests[0]);
+    }
+    return kManifests;
+#else
+    static const AgentxxBuiltinManifest kEmptyManifests[] = {
+        {nullptr, nullptr},
+    };
+    if (count) {
+        *count = 1;
+    }
+    return kEmptyManifests;
+#endif
+}

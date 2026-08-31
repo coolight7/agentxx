@@ -619,10 +619,17 @@ YamlAppConfig loadYamlConfig(
         }
     }
 
-    // 插件配置 (yaml `plugins` 列表项: path / enabled / args)
+    // 插件配置 (yaml `plugins` 列表项: path / enabled / sides / args / config)
     // - path: 插件动态库路径 或 插件目录 (含 plugin.yaml 时按清单分派加载);
     //   必填 (所有插件统一经 path 外置指定, 不区分内置/外置)
-    // - enabled: 默认 true; args: 插件参数 (整体传递给插件, 宿主不解析)
+    //   特殊前缀 `builtin://<name>` 表示内置编译插件 (无需外部文件,
+    //   直接经内置注册表加载; 如 `builtin://agentxx_filesystem`);
+    //   兼容 `name` 字段简写: `{name: foo}` 等价于 `{path:
+    //   "builtin://foo"}` (仅当 path 缺省且 name 对应内置插件时)
+    // - enabled: 默认 true; sides: 运行侧 (auto/agent/client, 默认 auto)
+    // - args: 插件参数 (整体传递给插件, 宿主不解析)
+    // - config: 插件配置文件所在目录或文件路径 (可指向文件/目录;
+    //   支持 `~`/`${VAR}`/相对路径, 由装配侧解析为绝对路径后透传给插件)
     if (root["plugins"] && root["plugins"].IsSequence()) {
         for (const auto& node : root["plugins"]) {
             if (!node.IsMap()) {
@@ -630,10 +637,16 @@ YamlAppConfig loadYamlConfig(
                 continue;
             }
             auto p = resolveEnvVars(node["path"].as<std::string>(""), dotEnvVars, overrideEnvVars);
+            auto n = resolveEnvVars(node["name"].as<std::string>(""), dotEnvVars, overrideEnvVars);
+            // 内置简写兼容: 仅 name 无 path 时, 若 name 对应内置插件则自动补为
+            // builtin://<name> (与 path: builtin://<name> 等价)
+            if (p.empty() && !n.empty()) {
+                p = std::string("builtin://") + n;
+            }
             agent::PluginConfig pc;
             pc.path = std::move(p);
             if (pc.path.empty()) {
-                XX_LOGW(R"([Config] Warning: plugin entry missing required `path`, skipped)");
+                XX_LOGW(R"([Config] Warning: plugin entry missing required `path` (or `name` for builtin), skipped)");
                 continue;
             }
             if (node["enabled"]) {
@@ -670,6 +683,12 @@ YamlAppConfig loadYamlConfig(
             if (node["args"]) {
                 // 插件参数整体传递 (宿主不解析字段语义); 标量递归展开 ${VAR}
                 pc.args = yamlToJsonResolveEnv(node["args"], dotEnvVars, overrideEnvVars);
+            }
+            if (node["config"]) {
+                // 插件配置文件所在目录或文件路径 (可指向文件/目录);
+                // 支持 ${VAR} 展开 (路径归一化与绝对化由装配侧完成)
+                auto c = resolveEnvVars(node["config"].as<std::string>(""), dotEnvVars, overrideEnvVars);
+                pc.configPath = std::move(c);
             }
             cfg.plugins.push_back(std::move(pc));
         }
