@@ -19,9 +19,11 @@
 #include <filesystem>
 #include <functional>
 #include <iostream>
+#include <stdlib.h>
 #include <string>
 
 #if XX_IS_WIN_D
+#include <crtdbg.h>
 #include <windows.h> // GetModuleFileNameW / MAX_PATH
 #endif
 
@@ -201,7 +203,21 @@ static void applySharedRuntimeConfig(
 int main(int argn, char** argv) {
 #if XX_IS_WIN_D
     SetConsoleOutputCP(CP_UTF8);
+    // === 将部分错误弹窗改为 输出/ExitCode
+    // 将断言错误报告重定向到标准错误输出(stderr)
+    _CrtSetReportMode(_CRT_ASSERT, _CRTDBG_MODE_FILE);
+    _CrtSetReportFile(_CRT_ASSERT, _CRTDBG_FILE_STDERR);
+#if XX_IS_DEBUG_D
+    // SEM_FAILCRITICALERRORS: 禁止严重错误对话框 (如DLL加载失败)
+    // SEM_NOGPFAULTERRORBOX: 禁止Windows错误报告对话框[reference:8]
+    // SEM_NOOPENFILEERRORBOX: 禁止OpenFile失败时的对话框
+    SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX);
+    // _WRITE_ABORT_MSG: 控制是否打印错误消息[reference:14]
+    // _CALL_REPORTFAULT: 控制是否调用Windows错误报告[reference:15]
+    _set_abort_behavior(0, _WRITE_ABORT_MSG | _CALL_REPORTFAULT);
 #endif
+#endif
+
 #if XX_IS_DEBUG_D && (XX_IS_LINUX_D || XX_IS_WIN_D)
     agentxx::util::signalError(argv[0]);
 #endif
@@ -292,8 +308,7 @@ Options:
                 XX_LOGE("Invalid --port value: `{}`", portArg);
                 return 1;
             }
-        } else if (arg == "tui" || arg == "cli" || arg == "server" || arg == "acp"
-                   || arg == "train") {
+        } else if (arg == "tui" || arg == "cli" || arg == "server" || arg == "acp" || arg == "train") {
             mode = arg;
         } else {
             XX_LOGE("Unknown arg: `{}`", arg);
