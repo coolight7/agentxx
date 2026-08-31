@@ -3,8 +3,9 @@
 #include "agentxx/agent/base_agent.h"
 #include "agentxx/agent/context.h"
 #include "agentxx/agent/session_store.h"
+#include "agentxx/event/event_stream.h"
+#include "agentxx/event/events.h"
 #include "agentxx/middlewares/permission.h"
-#include "agentxx/middlewares/summarization.h"
 #include "agentxx/plugin/plugin_manager.h"
 #include "agentxx/util/async_offload.h"
 #include "agentxx/util/exception.h"
@@ -334,17 +335,21 @@ void SessionServerAgentIO::onPeerMessage(WireMessage msg) {
                 sendToPeer(WireContextMessages{sess->llmMessages});
             } else if constexpr (std::is_same_v<T, WireCompactContext>) {
                 auto agent = agent_.lock();
-                if (agent && agent->agentContext
-                    && agent->agentContext->summarizationMiddleware) {
-                    auto summy = agent->agentContext->summarizationMiddleware;
-                    asio::co_spawn(
-                        ex_,
-                        [summy, sid = m.sessionId]() -> asio::awaitable<void> {
-                            co_await summy->compactSessionContext(sid);
-                        },
-                        asio::detached
-                    );
+                if (!agent || !agent->agentContext || !agent->agentContext->bus) {
+                    return;
                 }
+                auto bus = agent->agentContext->bus;
+                auto sid = std::string{m.sessionId};
+                asio::co_spawn(
+                    bus->executor(),
+                    [bus, sid = std::move(sid)]() -> asio::awaitable<void> {
+                        co_await bus->publish<events::EventCompactContext>(
+                            events::Topic::SummarizationCompact,
+                            events::EventCompactContext{.sessionId = sid}
+                        );
+                    },
+                    asio::detached
+                );
             } else if constexpr (std::is_same_v<T, WireListSessions>) {
                 // 客户端请求持久化会话列表 (会话选择弹窗数据源):
                 // 目录扫描 + SQLite 读取属阻塞 I/O, 卸载到 threadPool 执行,

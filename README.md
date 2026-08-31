@@ -25,39 +25,37 @@
 - [运行&配置文件](#配置文件和运行)
 
 ## 特点
-- **C++协程异步实现**; 程序体积和内存占用少且性能高，可选添加 硬件加速Hyperscan 等扩展库
+- **C++协程异步实现**; 程序体积和内存占用少且性能高，协程网络/文件读写支持不阻塞，可选添加 硬件加速Hyperscan 等扩展库
 - **数据安全**; Agentxx 不会上传你的数据，如果使用局域网内的 LLM Api Server，完全可以实现全程断网运行; Agentxx 无法确认 LLM Api、MCP、Skill 的数据安全，如果导入需要自行确认
 - **跨系统支持**; 优化 windows 兼容，可在 WSL 中直接执行 windows 命令、打开 windows 程序、自动转换文件路径
 - **丰富的 tool**; 内置 文件读写、命令行执行、任务规划 等，编译时可选自由组合，支持自动纠正 LLM 的参数类型、字符编码
-- **C++插件/js插件支持**; 已实现 codegraph、系统CPU/GPU/RAM等信息、屏幕截取、鼠标选择文本事件流 等效果显著的功能，通过 C++ Quickjs 插件可以加载实现 js 插件
+- **C++插件/JS插件/FFI支持**; 已实现 codegraph、系统CPU/GPU/RAM等信息、屏幕截取、鼠标选择文本事件流 等效果显著的功能，通过 C++ Quickjs 插件可以加载实现 js 插件
 - **UI与Agent可分离**; 内置支持 TUI、cli、接入GUI、Websocket API、FFI调用、动态库/静态库嵌入App; 支持单进程、多进程分别启动 UI 和 Agent Websocket Server服务
 - **中断、错误自动处理**; 长时间稳定运行、网络重试、动态超时限制、消息上下文角色顺序检查和修正、自动检查和修正字符编码、空响应自动重试、Tool连续重复调用检查
 
 ## 兼容性
 ### 跨系统支持
-- ✅可编译为独立可执行程序/动态库，摆脱额外的动态库依赖，仅依赖基本的系统库
+- 可编译为独立可执行程序/动态库，摆脱额外的动态库依赖，仅依赖基本的系统库
 - 系统支持:
 
 | Status | System | TIP |
 |---|---|---|
-| ✅ | Windows 10+ | Win编译/Linux 交叉编译 |
+| ✅ | Windows 10+ | Win MSVC编译/Linux 交叉编译 |
 | ✅ | Linux | 在WSL运行时额外支持直接执行 windows 程序和命令 |
 | ✅ | Android 5.0+ | Linux 交叉编译 |
 | ⬜ | Macos | 待测试兼容 |
 | ⬜ | IOS | 待测试兼容 |
 
-- `libagentxx` Lang Binding:
-    - ✅C++ (自身开发语言)
-    - ✅[FFI/C-Api动态库符号导出](#FFI动态库接口) 以便支持 flutter/dart/Javascript 等语言调用动态库
-- 生成库链接方式:
-    - ✅动态链接库`libagentxx`; Debug编译时末尾添加d`libagentxxd`，统一多平台名称，仅后缀区别`.so/.dll/.dylib`.
-    - ✅静态链接库`libagentxx_static`; Debug编译时末尾添加d`libagentxx_staticd`，统一多平台名称，仅后缀区别`.a/.lib`. 支持静态链接所有依赖库，合并生成独立可运行的 `agentxx_cli`, 已在 linux/win 验证. 同理可静态链接`libagentxx_static`及其静态依赖库，即可得到让自己的程序也摆脱动态库依赖
-    - 可修改[CMakeLists.txt](/agent/CMakeLists.txt)实现静态链接 `C++标准库 libstdc++`和`编译器运行时库 msvcrt/libgcc`, 但静态链接标准库和编译器运行时库有很大风险，谨慎考虑!
-    - 默认编译提供 动态库`libagentxx`、静态库`libagentxx_static`, 且统一动态链接 libstdc++/libgcc/msvcrt(/MD|/MDd)
-
 ### 编译后的体积和依赖库
 - Agentxx 编译后输出的 可执行程序`agentxx_cli`、动态库`libagentxx` 都会尽量静态链接依赖库，保持编译结果对动态库的依赖尽量少；编译优化 控制导出符号，裁剪无用符号
 - 以下是`仅编译agentxx，移除大部分不必要的依赖库`时的体积和运行时内存占用, 测试于 `时间: 2026/08/22, commit: b35b226399062dc1196bced06d2c4f209de9e0fa`
+- 内存占用:
+
+| agentxx_cli Target | 初始化 RAM | 100K 上下文 | 200K上下文 | TIP |
+|---|---|---|---|---|
+| **Win/TUI** | 3.1M | 12.2M | 19.6M | 任务管理器查看内存占用 |
+| **Linux/TUI** | 1.9M | 8.9M | 14.1M | top命令查看RES-SHR, agentxx_cli 仅依赖系统库，不需要其他动态库，因此仅计算独占内存大小 |
+
 - 可执行文件/动态库文件体积:
 
 | System | agentxx_cli | libagentxx | compiler | TIP |
@@ -76,13 +74,6 @@
 | agentxx_screen_capture | 383K | - | - | - |
 | agentxx_system_monitor | 428K | 629K | - | - |
 | agentxx_text_selection_monitor | 399K | - | - | - |
-
-- 内存占用:
-
-| agentxx_cli Target | 初始化 RAM | 100K 上下文 | 200K上下文 | TIP |
-|---|---|---|---|---|
-| **Win/TUI** | 3.1M | 12.2M | 19.6M | 任务管理器查看内存占用 |
-| **Linux/TUI** | 1.9M | 8.9M | 14.1M | top命令查看RES-SHR, agentxx_cli 仅依赖系统库，不需要其他动态库，因此仅计算独占内存大小 |
 
 - 默认的编译优化倾向于追求性能，如果需要裁剪体积，可以移除 Hyperscan/Boost.process 等可选库、采用 -Os/-Oz 体积编译优化
 
@@ -235,7 +226,9 @@
 
 ### 插件化支持
 - ✅c/c++插件支持，可对 agent、client-ui 插件化修改；详见[插件开发文档](docs/agent/plugins.md); [内置插件代码实现](/agent/plugins/); [插件示例](/agent/plugins/example_plugin/)
-- ✅可选外置编译插件为动态库，或是内嵌编译进 libagentxx
+    - 可选外置编译插件为动态库，或是内嵌编译进 libagentxx
+    - 通过 C-Api/COM Api查询 提高兼容性，使主程序与插件允许使用不同编译器、不同依赖库版本、不同标准库时仍可以兼容运行
+    - 原生异步接口支持，兼容主程序和插件之间异步调用、协程异步互相切换执行互不阻塞、运行在同一线程无锁
 - 其他编程语言插件: 
     - 仿照`agentxx_javascript_engine`实现编程语言的执行引擎, 然后新建插件项目, 指定依赖它, 运行时把代码片段发给执行引擎执行即可; 实际上不一定需要由 执行引擎插件 本身来执行代码, 也可以接收代码片段后调用系统安装的 `nodejs、python3` 等直接执行也是可以的
     - ✅`agentxx_javascript_engine`由 c++插件实现 js 扩展插件开发支持; [JS插件示例](/agent/plugins/example_js/)
@@ -292,7 +285,7 @@
 - 详细代码结构和功能见[design.md](docs/zh-cn/design.md)
 - `agent`:
     - C++ 实现 Agent
-    - 大部分手写实现实现基础框架后，由AI模块化添加功能和检查、补充测试
+    - 手写实现基础框架后，AI模块化扩展功能和检查、补充测试
 - `agent/script`:
     - 编译脚本，存放已经验证支持的系统上的编译脚本，使用前可以先参考 [对应的编译文档](/docs/zh-cn/build/)
 - `agent/lib`: libagentxx
@@ -302,7 +295,11 @@
     - `agent/client/include/agentxx-client/io` 实现了 stdio、TUI 方式的 Agent 调用
     - `agent/client/include/agentxx-client/train` 提示词训练
 - `agent/plugins`: 
-    - 插件
+    - 内置实现的插件
+- `agent/ffi`: 
+    - FFI/libagentxx动态库导出符号，以便其他程序加载动态库调用/不同编程语言调用
+- `agent/example`: 
+    - 示例
 - `agent/test`: agentxx_test
     - 测试
 - `agent/third_party`:
@@ -349,6 +346,10 @@ npm install --legacy-peer-deps
     - [Linux/WSL 可执行程序 / 动态库编译 .so / 静态库 .a](/docs/zh-cn/build/linux.md)
     - [Android 动态库编译 .so / 静态库 .a](/docs/zh-cn/build/android.md)
     - [Windows 可执行程序 .exe / 动态库编译 .dll / 静态库 .lib](/docs/zh-cn/build/windows.md)
+- 生成库链接方式:
+    - 动态链接库`libagentxx`; Debug编译时末尾添加d`libagentxxd`，统一多平台名称，仅后缀区别`.so/.dll/.dylib`.
+    - 静态链接库`libagentxx_static`; Debug编译时末尾添加d`libagentxx_staticd`，统一多平台名称，仅后缀区别`.a/.lib`. 支持静态链接所有依赖库，合并生成独立可运行的 `agentxx_cli`, 已在 linux/win 验证. 同理可静态链接`libagentxx_static`及其静态依赖库，即可得到让自己的程序也摆脱动态库依赖
+    - 默认编译提供 动态库`libagentxx`、静态库`libagentxx_static`, 且统一动态链接 libstdc++/libgcc/msvcrt(/MD|/MDd)
 
 ## 配置文件和运行
 - 参考 `{项目根目录}` 下的 `agentxx-config.yaml`，修改它在里面配置你的模型 llm api，然后 cd 到 `agentxx-config.yaml` 所在目录，运行 agentxx_cli 即可

@@ -994,11 +994,22 @@ void SummarizationMiddlewareHandle::registerOnBus(
             return this->countTokensForUtf8Str(text);
         }
     );
+    // 手动压缩事件: 供 SessionServerAgentIO 经 EventBus 触发, 解耦对 handle 具体类型的依赖
+    compactSubId_
+        = bus->get<events::EventCompactContext>(events::Topic::SummarizationCompact)
+              .subscribe([this](const events::EventCompactContext& evt) -> asio::awaitable<void> {
+                  co_await this->compactSessionContext(evt.sessionId);
+              });
 }
 
 void SummarizationMiddlewareHandle::unregisterFromBus() {
     if (auto bus = registeredBus_.lock()) {
         bus->unregisterService(events::Topic::TokenCount);
+        if (compactSubId_ != 0) {
+            bus->get<events::EventCompactContext>(events::Topic::SummarizationCompact)
+                .unsubscribe(compactSubId_);
+            compactSubId_ = 0;
+        }
     }
     registeredBus_.reset();
 }

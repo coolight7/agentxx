@@ -399,7 +399,8 @@ struct AgentAppendComponentInfo {
 class AgentContext {
 public:
 
-    /// 析构 (定义于 context.cpp: 需完整类型销毁 plugin 成员)
+    /// 构造/析构 (定义于 context.cpp: 需完整类型销毁 unique_ptr 成员)
+    AgentContext();
     ~AgentContext();
 
     std::shared_ptr<agentxx::agent::AgentConfig>            agentConfig             = nullptr;

@@ -78,6 +78,9 @@ struct Topic {
 
     /// 文本 Token 估算服务 (同步服务): service.token.count
     inline static constexpr std::string_view TokenCount{"service.token.count"};
+
+    /// 上下文手动压缩 (单向事件): EventCompactContext
+    inline static constexpr std::string_view SummarizationCompact{"service.summarization.compact"};
 };
 
 /// ===== agent 生命周期 =====
@@ -363,6 +366,11 @@ struct RespSubagentExecute {
     std::string result;
     bool        hasError = false;
     std::string errorMessage;
+};
+
+/// 上下文手动压缩 (service.summarization.compact)
+struct EventCompactContext {
+    std::string sessionId;
 };
 
 } // namespace events
