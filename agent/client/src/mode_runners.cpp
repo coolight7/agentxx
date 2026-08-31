@@ -5,6 +5,7 @@
 #include "agentxx-client/io/tui/agent_tui.h"
 #include "agentxx-client/io/tui/tui_plugin_adapter.h"
 #include "agentxx/agent/agent_host.h"
+#include "agentxx/agent/config_static.h"
 #include "agentxx/agent/io/agent_server.h"
 #include "agentxx/agent/io/channel_io_transport.h"
 #include "agentxx/agent/io/session_server_agent_io.h"
@@ -328,6 +329,12 @@ static asio::awaitable<void> runLocalTuiUnifiedAsync(
         resolveTuiTheme(),
         permissionMode
     );
+    if (agent && agent->agentContext && agent->agentContext->agentConfig) {
+        tui->setDataDir(agentxx::agent::AgentConfigStatic::getDataDir(
+            agent->agentContext->agentConfig->dataDir
+        ));
+        tui->setWorkDir(agent->agentContext->agentConfig->resolvedWorkDir());
+    }
     // client 插件系统: 装配须在 start() 之前 (ctx_.pluginManager 在 UI 线程
     // 构建组件时读取); 加载 (协程) 在 start() 之后进行, 期间注册的面板经
     // postToUi 排队, UI 线程启动后正常挂载

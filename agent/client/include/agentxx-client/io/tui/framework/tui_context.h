@@ -48,6 +48,12 @@ struct TUICtx {
     /// 远程地址 (空 = 内置)
     std::string remoteUrl;
 
+    /// 数据文件夹绝对路径 (对应 yaml 配置 data_dir; 空 = 未配置/远程未知)
+    std::string dataDir;
+
+    /// 当前会话工作目录绝对路径 (空 = 未配置, 回退进程 CWD)
+    std::string workDir;
+
     /// client 插件管理器 (mode_runners 装配后注入; 状态栏/侧边栏渲染与
     /// 命令管线经此读取 UI 注册表快照; 线程安全: uiRegistrySnapshot/hasCommand
     /// 短锁, 渲染可无锁读取返回的 snapshot)

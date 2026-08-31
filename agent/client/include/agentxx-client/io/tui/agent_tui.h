@@ -195,6 +195,8 @@ public:
     using PendingInput = TUIPendingInput;
     using RenderState  = TUIRenderState;
 
+    static constexpr const char* kAgentxxVersion = "0.1.0";
+
     /// 复制鼠标选中的文本到系统剪贴板 (鼠标左键拖选后松开时调用, UI 线程):
     /// - 从 FTXUI Screen 的当前 selection 提取文本 (GetSelection, 取上一绘制帧
     ///   累积的选中文本, 与屏幕显示一致, 已含本次拖动终点)
@@ -222,6 +224,14 @@ public:
 
     void setRemoteUrl(std::string url) {
         remoteUrl_ = std::move(url);
+    }
+
+    void setDataDir(std::string dir) {
+        dataDir_ = std::move(dir);
+    }
+
+    void setWorkDir(std::string dir) {
+        workDir_ = std::move(dir);
     }
 
     /// 装配 client 插件管理器 (mode_runners 在 start() 后调用):
@@ -386,6 +396,8 @@ private:
     void openModelSelector();
     /// 打开设置模态
     void openSettings();
+    /// 打开关于模态
+    void openAbout();
     /// 打开会话选择模态 (F4 / 状态栏 [F4] Sessions 按钮):
     /// - 仅当前会话非运行状态时可打开 (否则提示先停止当前会话)
     /// - 请求服务端会话列表并展示; 确认后经 WireSwitchSession 切换
@@ -459,6 +471,8 @@ private:
     std::shared_ptr<LineChannel> inputChannel_;
     std::shared_ptr<TUILogSink>  logSink_;
     std::string                  remoteUrl_;
+    std::string                  dataDir_;
+    std::string                  workDir_;
 
     /// UI 线程组件 (start() 中创建, UI 线程独占)
     TUICtx                                ctx_;
@@ -535,5 +549,4 @@ private:
     static constexpr const char* kLogTabId            = "xx_logs";
     static constexpr const char* kInfoTabId           = "xx_info";
     static constexpr int         kInfoSidebarMinWidth = 120;
-    static constexpr const char* kAgentxxVersion      = "0.1.0";
 };

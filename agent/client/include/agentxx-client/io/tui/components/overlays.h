@@ -89,6 +89,8 @@ private:
 /// - 主题切换 (Dark/Light, 单行显示当前值, 点击/Enter 循环切换)
 /// - 动画等级 (Disabled/Low/Medium/High/Ultra; 见 TUISettings)
 /// - 日志等级 (Trace/Debug/Info/Warn/Error/Out; 见 TUISettings)
+/// - 末尾思考展示模式 (Auto Expand/Single Line)
+/// - About (打开关于弹窗; 显示版本/路径/插件等信息)
 ///
 /// 交互: Up/Down 选择条目, Enter 应用/切换 (循环切换); 也支持鼠标点击。
 /// 所有条目切换后均保持弹窗打开, 便于连续调整; 由 [Esc] 关闭。
@@ -112,6 +114,11 @@ public:
         onLogLevelChange_ = std::move(fn);
     }
 
+    /// 关于弹窗回调 (供外部打开 AboutOverlay)
+    void onAbout(std::function<void()> fn) {
+        onAbout_ = std::move(fn);
+    }
+
     bool           OnEvent(ftxui::Event event) override;
     ftxui::Element OnRender() override;
 
@@ -130,18 +137,51 @@ private:
     static void cycleTailThinkingMode();
 
     TUICtx& ctx_;
-    /// 条目索引: 0 = 主题, 1 = 动画等级, 2 = 日志等级, 3 = 末尾思考模式
-    /// Enter/鼠标点击索引时循环切换对应设置
-    static constexpr int  kItemCount     = 4;
+    /// 条目索引: 0 = 主题, 1 = 动画等级, 2 = 日志等级, 3 = 末尾思考模式, 4 = About
+    /// Enter/鼠标点击索引时循环切换对应设置 (About 打开弹窗)
+    static constexpr int  kItemCount     = 5;
     int                   selectedIndex_ = 0;
     std::function<void()> onClose_;
     std::function<void()> onThemeChange_;
     std::function<void()> onLogLevelChange_;
+    std::function<void()> onAbout_;
 
     ftxui::Box themeBox_;        // 主题点击区域
     ftxui::Box animLevelBox_;    // 动画等级点击区域
     ftxui::Box logLevelBox_;     // 日志等级点击区域
     ftxui::Box tailThinkingBox_; // 末尾思考展示模式点击区域
+    ftxui::Box aboutBox_;        // About 点击区域
+};
+
+/// 关于弹窗组件 (About)
+///
+/// 显示程序基本信息 (Scrollable 内容, Esc 关闭):
+/// - 程序名称 + 版本号
+/// - 当前可执行程序文件路径
+/// - Server-IO 类型 (Inner Server / 远程 URL)
+/// - 内嵌编译的插件列表 (builtin plugins)
+/// - 当前加载的插件列表 (agent 侧 + client 侧)
+/// - 数据文件夹绝对路径 (yaml data_dir)
+/// - 当前会话工作目录绝对路径
+class AboutOverlay : public ftxui::ComponentBase {
+public:
+
+    explicit AboutOverlay(TUICtx& ctx);
+
+    void onClose(std::function<void()> fn) {
+        onClose_ = std::move(fn);
+    }
+
+    bool           OnEvent(ftxui::Event event) override;
+    ftxui::Element OnRender() override;
+
+private:
+
+    std::vector<ScrollItem> buildItems();
+
+    TUICtx&                     ctx_;
+    std::shared_ptr<Scrollable> scrollable_;
+    std::function<void()>       onClose_;
 };
 
 /// 待发送消息队列弹窗组件

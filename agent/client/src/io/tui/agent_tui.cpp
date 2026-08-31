@@ -423,6 +423,8 @@ void TUIClientAgentIO::start() {
         ctx_.theme         = &theme_;
         ctx_.sessionId     = currentSessionId();
         ctx_.remoteUrl     = remoteUrl_;
+        ctx_.dataDir       = dataDir_;
+        ctx_.workDir       = workDir_;
         ctx_.pluginManager = pluginManager_;
         // 注意: 不设置 ctx_.session —— TUI 不持有 Session (属于 server-io 线程),
         // 上下文统计经 WireContextStats → onContextStats → sharedState_ 更新,
@@ -1063,6 +1065,18 @@ void TUIClientAgentIO::openSettings() {
         if (logSink_) {
             logSink_->clear();
         }
+    });
+    overlay->onAbout([this] {
+        openAbout();
+    });
+    modal_->pushModal(overlay);
+    postRedraw();
+}
+
+void TUIClientAgentIO::openAbout() {
+    auto overlay = std::make_shared<AboutOverlay>(ctx_);
+    overlay->onClose([this] {
+        modal_->popModal();
     });
     modal_->pushModal(overlay);
     postRedraw();

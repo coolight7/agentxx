@@ -1,12 +1,22 @@
 #include "agentxx-client/io/tui/components/overlays.h"
 #include "agentxx-client/io/tui/agent_tui.h"
 #include "agentxx-client/io/tui/framework/tui_settings.h"
+#include "agentxx/agent/config_static.h"
+#include "agentxx/plugin/plugin_api.h"
 #include "agentxx/util/exception.h"
 #include "ftxui/component/component.hpp"
 #include "ftxui/dom/elements.hpp"
 #include "ftxui/screen/terminal.hpp"
 #include <algorithm>
+#include <filesystem>
 #include <markdown/state_diagram.hpp>
+
+#if XX_IS_WIN_D
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#endif
 
 using namespace ftxui;
 
@@ -331,6 +341,18 @@ Element SettingsOverlay::OnRender() {
     }
     items.push_back(thinkEntry | reflect(tailThinkingBox_));
 
+    // About (点击/Enter 打开关于弹窗)
+    items.push_back(text(" "));
+    items.push_back(text(" Info ") | color(theme.hintColor));
+    auto aboutEntry = text(" About ");
+    if (selectedIndex_ == 4) {
+        aboutEntry = aboutEntry | bgcolor(theme.buttonActiveBgColor)
+                     | color(theme.buttonActiveTextColor) | bold | focus;
+    } else {
+        aboutEntry = aboutEntry | bgcolor(theme.buttonBgColor) | color(theme.buttonTextColor);
+    }
+    items.push_back(aboutEntry | reflect(aboutBox_));
+
     return vbox({
                text(" Settings ") | bold | inverted,
                separator(),
@@ -374,6 +396,11 @@ bool SettingsOverlay::OnEvent(Event event) {
             // 末尾思考模式循环切换; 切换后保持弹窗打开, 便于继续调整
             cycleTailThinkingMode();
             ctx_.postRedraw();
+        } else if (selectedIndex_ == 4) {
+            // About: 打开关于弹窗 (经回调通知外部)
+            if (onAbout_) {
+                onAbout_();
+            }
         }
         return true;
     }
@@ -402,7 +429,8 @@ Element LogMenuOverlay::OnRender() {
         const bool selected = (selectedIndex_ == idx);
         auto       el       = text(fmt::format(" {} ", label));
         if (selected) {
-            el = el | bgcolor(theme.buttonActiveBgColor) | color(theme.buttonActiveTextColor) | bold;
+            el = el | bgcolor(theme.buttonActiveBgColor) | color(theme.buttonActiveTextColor)
+                 | bold;
         } else {
             el = el | bgcolor(theme.buttonBgColor) | color(theme.buttonTextColor);
         }
@@ -534,6 +562,12 @@ bool SettingsOverlay::handleMouse(const Mouse& mouse) {
         cycleTailThinkingMode();
         return true;
     }
+    if (aboutBox_.Contain(mouse.x, mouse.y)) {
+        if (onAbout_) {
+            onAbout_();
+        }
+        return true;
+    }
     return false;
 }
 
@@ -569,6 +603,225 @@ void SettingsOverlay::cycleTailThinkingMode() {
     const int next     = (static_cast<int>(settings.tailThinkingMode()) + 1)
                      % static_cast<int>(TUISettings::kTailThinkingModeNames.size());
     settings.setTailThinkingMode(static_cast<TailThinkingMode>(next));
+}
+
+// ---------------------------------------------------------------------------
+// AboutOverlay
+// ---------------------------------------------------------------------------
+
+namespace {
+
+std::string getExecutablePath() noexcept {
+#if XX_IS_WIN_D
+    std::wstring buf(MAX_PATH, L'\0');
+    for (;;) {
+        DWORD len = ::GetModuleFileNameW(nullptr, buf.data(), static_cast<DWORD>(buf.size()));
+        if (len == 0) {
+            return "[Unknown]";
+        }
+        if (len < buf.size()) {
+            buf.resize(len);
+            break;
+        }
+        buf.resize(buf.size() * 2);
+    }
+    return std::filesystem::path(buf).generic_string();
+#else
+    std::error_code ec;
+    auto            exe = std::filesystem::read_symlink("/proc/self/exe", ec);
+    if (ec) {
+        return "[Unknown]";
+    }
+    return exe.generic_string();
+#endif
+}
+
+} // namespace
+
+AboutOverlay::AboutOverlay(TUICtx& ctx) :
+    ctx_(ctx) {
+    scrollable_ = std::make_shared<Scrollable>([this]() -> std::vector<ScrollItem> {
+        return buildItems();
+    });
+    scrollable_->setStickToBottom(false);
+    Add(scrollable_);
+}
+
+std::vector<ScrollItem> AboutOverlay::buildItems() {
+    const auto& st    = *ctx_.frameState;
+    const auto& theme = *ctx_.theme;
+
+    // 1. 内嵌编译的插件列表
+    std::vector<std::string> builtinPlugins;
+    size_t                   builtinCount = 0;
+    const auto*              builtinList  = agentxx_plugin_get_builtin_plugins(&builtinCount);
+    if (builtinList && builtinCount > 0) {
+        for (size_t i = 0; i < builtinCount; ++i) {
+            if (builtinList[i].name.data != nullptr && builtinList[i].name.size > 0) {
+                builtinPlugins.emplace_back(builtinList[i].name.data, builtinList[i].name.size);
+            }
+        }
+    }
+    std::sort(builtinPlugins.begin(), builtinPlugins.end());
+    builtinPlugins.erase(
+        std::unique(builtinPlugins.begin(), builtinPlugins.end()),
+        builtinPlugins.end()
+    );
+
+    // 2. 当前加载的插件列表 (Agent 侧已加载 + Client 侧已加载)
+    std::vector<std::string> loadedPlugins;
+    for (const auto& notif : st.appendComponents) {
+        if (notif.type == agentxx::agent::AppendComponentNotification::Type::Plugin
+            && notif.success) {
+            loadedPlugins.push_back(notif.name);
+        }
+    }
+    if (auto mgr = ctx_.pluginManager) {
+        auto list = mgr->list();
+        for (const auto& p : list) {
+            if (p.enabled) {
+                loadedPlugins.push_back(p.name);
+            }
+        }
+    }
+    std::sort(loadedPlugins.begin(), loadedPlugins.end());
+    loadedPlugins.erase(
+        std::unique(loadedPlugins.begin(), loadedPlugins.end()),
+        loadedPlugins.end()
+    );
+
+    // 3. 各字段信息
+    static const std::string kExePath = getExecutablePath();
+
+    std::string serverIoStr = ctx_.remoteUrl.empty() ? "Inner Server (In-process)"
+                                                     : fmt::format("Remote ({})", ctx_.remoteUrl);
+
+    std::string dataDirStr = ctx_.dataDir;
+    if (dataDirStr.empty()) {
+        dataDirStr = ctx_.remoteUrl.empty() ? agentxx::agent::AgentConfigStatic::getDataDir("")
+                                            : "(remote / not configured)";
+    }
+
+    std::string workDirStr = ctx_.workDir;
+    if (workDirStr.empty()) {
+        workDirStr = agentxx::agent::AgentConfigStatic::getCurrentWorkPath();
+    }
+    if (workDirStr.empty()) {
+        workDirStr = "[Unknown]";
+    }
+
+    auto formatList = [](const std::vector<std::string>& list) -> std::string {
+        if (list.empty()) {
+            return "(none)";
+        }
+        std::string res;
+        for (size_t i = 0; i < list.size(); ++i) {
+            if (i > 0) {
+                res += ", ";
+            }
+            res += list[i];
+        }
+        return res;
+    };
+
+    std::string builtinStr = formatList(builtinPlugins);
+    std::string loadedStr  = formatList(loadedPlugins);
+
+    std::vector<ScrollItem> items;
+
+    auto addSection = [&](std::string_view title, const std::string& content) {
+        items.push_back(
+            ScrollItem{text(fmt::format("• {}", title)) | color(theme.hintColor) | bold, false}
+        );
+        items.push_back(
+            ScrollItem{paragraph(fmt::format("  {}", content)) | color(theme.normalColor), false}
+        );
+        items.push_back(ScrollItem{text(""), false});
+    };
+
+    // Header: Agentxx & Version
+    items.push_back(ScrollItem{
+        hbox({
+            text("Agentxx ") | bold | color(theme.accentColor),
+            text(fmt::format("v{}", TUIClientAgentIO::kAgentxxVersion)) | bold
+                | color(theme.normalColor),
+        }),
+        false
+    });
+    items.push_back(ScrollItem{text(""), false});
+
+    addSection("GitHub · MIT", "https://github.com/coolight7/agentxx");
+    addSection("Develop", "coolight · 郑泳坤 · 2465045051@qq.com");
+    addSection("Executable Path", kExePath);
+    addSection("Server-IO Type", serverIoStr);
+    addSection("Data Directory (data_dir)", dataDirStr);
+    addSection("Session Working Directory", workDirStr);
+    addSection(fmt::format("Builtin Plugins ({})", builtinPlugins.size()), builtinStr);
+    addSection(fmt::format("Loaded Plugins ({})", loadedPlugins.size()), loadedStr);
+
+    return items;
+}
+
+Element AboutOverlay::OnRender() {
+    const auto& theme  = *ctx_.theme;
+    auto        header = hbox({
+        text(" About ") | bold | inverted,
+        filler(),
+        text(" "),
+    });
+
+    const int margin = 2;
+    const int termW  = Terminal::Size().dimx;
+    const int termH  = Terminal::Size().dimy;
+    const int wantW  = std::max(50, std::min(76, termW * 4 / 5));
+    const int wantH  = std::max(12, std::min(24, termH * 4 / 5));
+    const int availW = std::max(1, termW - margin * 2);
+    const int availH = std::max(1, termH - margin * 2);
+    const int popupW = std::min(wantW, availW);
+    const int popupH = std::min(wantH, availH);
+    return vbox({
+               header,
+               separator(),
+               hbox({text(" "), scrollable_->Render() | flex, text(" ")}) | flex,
+               separator(),
+               text(" [Wheel/Up/Down] Scroll  [Esc/Enter] Close ") | center | dim,
+           })
+           | border | size(WIDTH, GREATER_THAN, popupW) | size(WIDTH, LESS_THAN, popupW)
+           | size(HEIGHT, GREATER_THAN, popupH) | size(HEIGHT, LESS_THAN, popupH)
+           | color(theme.accentColor);
+}
+
+bool AboutOverlay::OnEvent(Event event) {
+    if (event == Event::Escape || event == Event::Return) {
+        ctx_.postRedraw();
+        if (onClose_) {
+            onClose_();
+        }
+        return true;
+    }
+    if (event.is_mouse()) {
+        if (scrollable_->OnEvent(event)) {
+            ctx_.postRedraw();
+            return true;
+        }
+        return true;
+    }
+    if (event == Event::ArrowUp) {
+        scrollable_->setScrollOffset(scrollable_->scrollOffset() - 1);
+        scrollable_->setStickToBottom(false);
+        ctx_.postRedraw();
+        return true;
+    }
+    if (event == Event::ArrowDown) {
+        scrollable_->setScrollOffset(scrollable_->scrollOffset() + 1);
+        if (scrollable_->totalHeight() - scrollable_->viewportHeight()
+            <= scrollable_->scrollOffset()) {
+            scrollable_->setStickToBottom(true);
+        }
+        ctx_.postRedraw();
+        return true;
+    }
+    return true;
 }
 
 // ---------------------------------------------------------------------------
