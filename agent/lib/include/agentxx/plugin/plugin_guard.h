@@ -111,17 +111,6 @@ inline void logTo(
     logIf->log(host, level, agentxx_plugin_sv_cstr(buf));
 }
 
-/// 兼容别名 (早期调用方使用)
-inline void defaultLogTo(
-    const AgentxxPluginHost*     host,
-    const AgentxxPluginLogIface* logIf,
-    int                          level,
-    const char*                  pluginName,
-    const char*                  msg
-) noexcept {
-    logTo(host, logIf, level, pluginName, msg);
-}
-
 /// 重抛检查当前异常并分类上报 (noexcept):
 /// - std::exception 族上报 e.what() (含 bad_alloc/filesystem_error/runtime_error...)
 /// - 其余 (非标准异常/纯 C 场景不可达) 上报 unknown

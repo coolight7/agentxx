@@ -20,14 +20,12 @@ public:
 
 /// 上下文压缩
 /// - `system prompt`、最近的消息 不压缩
-/// - 两级触发:
-///   - >= 65% 上限: 确定性压缩 (toolcall 去重/探索折叠 + 噪音清理),
-///     不剥离 thinking (保留逻辑连贯性, 由 LLM 决定取舍), 不做 offload
-///   - >= 85% 上限: LLM 同上下文总结压缩
-/// - LLM 压缩保持同一上下文: 原始消息 + 末尾追加一条 user 压缩指令, 直接调用
-///   当前会话模型 (不经过 subagent 隔离上下文); 压缩调用仅提供
-///   `agentxx_share_store` 工具, 由模型自主将较长、有用但当前不太重要的内容
-///   写入 share store, 替换为 id + 极简摘要 (程序侧不做强制 offload)
+/// - 超过 85% 上限时自动压缩:
+///   - 触发压缩时先发送一条 viewMessage 提示 "正在压缩上下文"
+///   - 确定性压缩 (toolcall 去重/探索折叠 + 噪音清理)
+///   - LLM 同上下文总结压缩 (保持同一上下文, 仅提供 agentxx_share_store 工具)
+///   - 压缩完成时更新 viewMessage 为 "压缩上下文
+///   {旧上下文token量}->{新上下文token量}/{最大上下文限制} · {耗时}"
 /// - 压缩结果覆盖回: [system] | [user 压缩指令] | [assistant 摘要] | 最近消息
 /// - 压缩失败 >= 2 次 (同一轮内) 或 token >= 95% 上限: 硬截断兜底, 保证请求能发出
 class SummarizationMiddlewareHandle : public BaseMiddlewareHandle<_SummarizationMiddlewareState> {
@@ -135,6 +133,9 @@ public:
         size_t                                    systemCount,
         size_t                                    maxToken
     ) const;
+
+    /// 手动压缩指定会话的上下文 (供客户端 Summy Context 按钮直接触发)
+    asio::awaitable<bool> compactSessionContext(std::string_view sessionId);
 
     asio::awaitable<void> onModelcallRunFunc(neograph::graph::NodeInput& in) override;
 

@@ -143,6 +143,11 @@ struct WireContextMessages {
     neograph::json messages;
 };
 
+/// 客户端请求压缩当前会话上下文 (Client -> Server)
+struct WireCompactContext {
+    std::string sessionId;
+};
+
 /// 客户端请求持久化会话列表 (Client -> Server): 会话选择弹窗数据源
 /// - 不携带 sessionId: 列举全部持久化会话, 与当前连接会话无关
 /// - 支持分页 (keyset 游标): 客户端先请求最新一页, 浏览到末尾时按游标续取,
@@ -287,6 +292,7 @@ using WireMessage = std::variant<
     WireGetAppendComponentInfo,
     WireAppendComponentInfo,
     WireGetContext,
+    WireCompactContext,
     WireContextMessages,
     WireListSessions,
     WireSessionList,

@@ -352,9 +352,9 @@ ftxui::Element TUIClientAgentIO::renderLogSidebarFooter() {
     }
     row.push_back(filler());
 
-    auto ctxBtn = text(" LLM Context ") | bgcolor(theme_.buttonBgColor)
-                  | color(theme_.buttonTextColor) | reflect(contextButtonBox_);
-    row.push_back(ctxBtn);
+    auto menuBtn = text(" Menu ") | bgcolor(theme_.buttonBgColor) | color(theme_.buttonTextColor)
+                   | reflect(contextButtonBox_);
+    row.push_back(menuBtn);
 
     return hbox(std::move(row));
 }
