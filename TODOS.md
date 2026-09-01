@@ -7,7 +7,6 @@
 - 文档翻译
 - release 编译发布时携带 标准库
 - 拆分 plugin 为 api、impl
-- 整理 test
 - 增加一个用 eventbus 事件驱动 agent 回复的插件
 
 - graph json 定义，支持插件生成 graph json、注册 node; (最多只能有一个插件生成 graph，都没有则默认生成 CodeAgent)

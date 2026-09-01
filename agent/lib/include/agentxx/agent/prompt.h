@@ -335,10 +335,6 @@ MAY discard:
 - Retry noise, verbose or superseded tool outputs
 - Details of reasoning/thinking content
 
-OFFLOAD long content with the `agentxx_share_store` tool (opt=insert, text=<the long text>):
-- For long text (logs, file contents, search results) that is useful but not critical right now, store it and replace it in your summary with its numeric id plus a one-line description of the content.
-- The full content stays retrievable later via the tool while context space is saved.
-
 {omitted_note}Output ONLY the summary text in the user's language, no meta commentary, under about {max_words} words.
 )_",
          },

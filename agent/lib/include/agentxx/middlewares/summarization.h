@@ -20,10 +20,11 @@ public:
 
 /// 上下文压缩
 /// - `system prompt`、最近的消息 不压缩
-/// - 超过 85% 上限时自动压缩:
+/// - 超过 75% 上限时自动压缩:
 ///   - 触发压缩时先发送一条 viewMessage 提示 "正在压缩上下文"
 ///   - 确定性压缩 (toolcall 去重/探索折叠 + 噪音清理)
-///   - LLM 同上下文总结压缩 (保持同一上下文, 仅提供 agentxx_share_store 工具)
+///   - LLM 同上下文总结压缩 (保持同一上下文, 不传入任何工具,
+///     由 subagent 对当前上下文原样总结压缩)
 ///   - 压缩完成时更新 viewMessage 为 "压缩上下文
 ///   {旧上下文token量}->{新上下文token量}/{最大上下文限制} · {耗时}"
 /// - 压缩结果覆盖回: [system] | [user 压缩指令] | [assistant 摘要] | 最近消息
@@ -116,9 +117,9 @@ public:
     /// - 请求参数: subagent="subagent_task", messages=压缩段原消息(含 system)
     ///   + 末尾追加 user 压缩指令 (结构化透传, 无文本转录),
     ///   sessionId=父线程 (与父会话相同 threadid + 相同模型 → 命中 KV cache),
-    ///   tools=["agentxx_share_store"] (模型可自主外置长内容为 id+极简摘要,
-    ///   写入父会话 store), enable_summarization=false (禁止二次压缩)
-    /// - subagent 内部完成"外置长内容 → 输出摘要"的完整 agent 循环,
+    ///   tools 不传入 (子代理无任何工具, 仅对当前上下文原样做压缩, 不经过
+    ///   share_store 外置), enable_summarization=false (禁止二次压缩)
+    /// - subagent 内部完成"阅读上下文 → 输出摘要"的完整 agent 循环,
     ///   最终纯文本输出即为摘要
     /// - 通过 NodeInterrupt 中断父轮次派生 subagent, resume 后返回结果;
     ///   无 subagentManager / 消息为空 / 压缩失败时返回空串 (调用方保留原消息)
