@@ -54,9 +54,9 @@ option(AGENTXX_ENABLE_PLUGIN_EXECUTE_JAVASCRIPT "Build agentxx_execute_javascrip
 # 内置合并名单:
 # - 未设置/空/"all": 全部启用插件内置合并进 libagentxx (默认)
 # - 分号(或逗号)分隔的插件名列表: 仅名单内插件内置合并, 名单外启用插件仍
-#   编译为独立动态库 (混合模式; 例: -DAGENTXX_PLUGIN_BUILTIN_LIST="agentxx_filesystem,agentxx_planning")
+#   编译为独立动态库 (混合模式; 例: -DAGENTXX_PLUGIN_BUILTIN_LIST="agentxx_filesystem,agentxx_execute_command,agentxx_system,agentxx_websearch,agentxx_planning")
 set(AGENTXX_PLUGIN_BUILTIN_LIST 
-  "agentxx_filesystem,agentxx_execute_command,agentxx_system,agentxx_websearch,agentxx_planning"
+  ""
   CACHE STRING
   "Which enabled plugins to merge into libagentxx ('' or 'all' = all; semicolon/comma list = only listed ones)"
 )

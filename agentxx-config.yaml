@@ -265,19 +265,13 @@ plugins:
   # - path: "${AGENTXX_EXEC_DIR}/plugins/example_plugin"
   #   enabled: false
 
-  # === 默认内置编译插件 ===
-  # - 构建期也可经 AGENTXX_PLUGIN_BUILTIN_LIST
-  #   把它们合并编译进 libagentxx (内置注册表), 运行期配置保持不变
-  #   (内置简写: `path: builtin://<name>` 或 `name: <name>` 无需依赖外部目录)
-  # - config 可选，默认使用编译时内嵌的yaml
-  - name: agentxx_filesystem
+  - name: ${AGENTXX_EXEC_DIR}/plugins/agentxx_filesystem
     enabled: true
-    # config: ${AGENTXX_EXEC_DIR}/plugins/agentxx_filesystem/planning.yaml  # 可指向文件或目录
-  - name: agentxx_execute_command
+  - name: ${AGENTXX_EXEC_DIR}/plugins/agentxx_execute_command
     enabled: true
-  - name: agentxx_system
+  - name: ${AGENTXX_EXEC_DIR}/plugins/agentxx_system
     enabled: true
-  - name: agentxx_websearch
+  - name: ${AGENTXX_EXEC_DIR}/plugins/agentxx_websearch
     enabled: true
   - name: ${AGENTXX_EXEC_DIR}/plugins/agentxx_planning
     enabled: true
@@ -285,7 +279,7 @@ plugins:
   # 内置简写示例 (等价于上方目录形态; 无需外部 plugin.yaml):
   # - path: builtin://agentxx_filesystem
   #   enabled: true
-  #   config: ./my_plugin_config/  # 目录或文件
+  #   config: ./my_plugin_config/  # 目录或文件, 可选, 默认使用 [path] 同目录下的 [plugin.yaml], 如果内置编译则默认使用内嵌的yaml
   #
   # - name: agentxx_planning  # name 简写等价于 builtin://agentxx_planning
   #   enabled: true

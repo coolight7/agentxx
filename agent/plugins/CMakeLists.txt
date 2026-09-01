@@ -28,14 +28,6 @@ option(AGENTXX_ENABLE_PLUGIN_SYSTEM "Build agentxx_system plugin (current date/t
 option(AGENTXX_ENABLE_PLUGIN_WEBSEARCH "Build agentxx_websearch plugin (search/fetch url)." ON)
 option(AGENTXX_ENABLE_PLUGIN_RAG_SEARCH "Build agentxx_rag_search plugin (embedding based docs search)." ON)
 option(AGENTXX_ENABLE_PLUGIN_EXECUTE_JAVASCRIPT "Build agentxx_execute_javascript plugin (JS execution via QuickJS, bash equivalent)." ON)
-# 内置合并编译模式: 启用的插件源文件直接编译进 libagentxx (运行期无需插件
-# 动态库, 无 dlopen); 仅经 libagentxx 构建生效 (见下方"内置合并编译模式")
-# - "all": 全部启用插件内置合并进 libagentxx
-# - 未设置/空: 全部不内嵌编译
-# - 分号(或逗号)分隔的插件名列表 (如 "agentxx_filesystem;agentxx_planning"):
-#   仅名单内插件内置合并, 名单外启用插件仍编译为独立动态库
-set(AGENTXX_PLUGIN_BUILTIN_LIST "" CACHE STRING
-  "Which enabled plugins to merge into libagentxx ('all' = all; semicolon list = only listed ones)")
 
 # ===== 插件平台支持 =====
 # 各插件并非全平台适配: 源码无对应平台的真实实现时 (仅有 "not supported/
