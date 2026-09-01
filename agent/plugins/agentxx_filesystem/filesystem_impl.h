@@ -75,9 +75,6 @@ inline std::string toUtf8(const std::filesystem::path& p) {
 /// - workDir 非空时以其为相对路径基准 (会话工作目录与进程 cwd 解耦);
 ///   为空时回退进程 cwd (resolvedWorkDir 兜底, 与单参 toCurrentSystemAbsolutePath 一致)
 inline std::string wsAbs(const std::string& workDir, const std::string& path) {
-    if (workDir.empty()) {
-        return agentxx::util::toCurrentSystemAbsolutePath(path);
-    }
     return agentxx::util::toCurrentSystemAbsolutePath(path, workDir);
 }
 
@@ -338,7 +335,7 @@ inline std::string fileReadExecuteImpl(
     if (filepath.empty()) {
         return R"([Error] Arg `path` is empty)";
     }
-    auto fsPath = agentxx::util::utf8ToPath(filepath);
+    auto fsPath           = agentxx::util::utf8ToPath(filepath);
     auto text_line_offset = arguments.value<int64_t>("line_offset", -1);
     auto text_line_limit  = arguments.value<int64_t>("line_limit", -1);
 
@@ -516,11 +513,8 @@ inline std::string fileEditExecuteImpl(
     // 原子写: 先写同目录临时文件, 成功后 rename 覆盖原文件,
     // 避免直接 truncate 原文件后写入中途失败导致原内容永久丢失
     static std::atomic<uint64_t> s_editTmpSeq{0};
-    const auto                   tmpPathStr = fmt::format(
-        "{}.agentxx_edit_tmp_{}",
-        filepath,
-        s_editTmpSeq.fetch_add(1)
-    );
+    const auto                   tmpPathStr
+        = fmt::format("{}.agentxx_edit_tmp_{}", filepath, s_editTmpSeq.fetch_add(1));
     const auto fsTmpPath = agentxx::util::utf8ToPath(tmpPathStr);
 
     {
@@ -1106,10 +1100,8 @@ namespace detail {
 
 /// stream_file 异步读取完整文件内容 (原始字节; 不做编码转换)
 /// - 打开失败抛出异常; 读到 EOF 视为正常结束
-inline asio::awaitable<std::string> asyncReadWholeFile(
-    const asio::any_io_executor& executor,
-    const std::string&           utf8FilePath
-) {
+inline asio::awaitable<std::string>
+    asyncReadWholeFile(const asio::any_io_executor& executor, const std::string& utf8FilePath) {
     asio::stream_file        stream{executor};
     neograph_asio_error_code errCode;
     stream.open(utf8FilePath, asio::stream_file::read_only, errCode);
@@ -1338,11 +1330,8 @@ inline asio::awaitable<std::string>
     // 避免直接 truncate 原文件后写入中途失败导致原内容永久丢失
     // (注: 计数器仅保证进程内唯一性, 多实例共享无害, 不属于实例状态)
     static std::atomic<uint64_t> s_editTmpSeq{0};
-    const auto                   tmpPathStr = fmt::format(
-        "{}.agentxx_edit_tmp_{}",
-        filepath,
-        s_editTmpSeq.fetch_add(1)
-    );
+    const auto                   tmpPathStr
+        = fmt::format("{}.agentxx_edit_tmp_{}", filepath, s_editTmpSeq.fetch_add(1));
     const auto fsTmpPath = agentxx::util::utf8ToPath(tmpPathStr);
 
     {

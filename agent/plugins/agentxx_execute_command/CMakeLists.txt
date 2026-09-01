@@ -28,6 +28,13 @@ if (_AGENTXX_ADD_AS_BUILTIN)
     "agentxx_plugin_agent_create=agentxx_plugin_agent_builtin_create_${PLUGIN_NAME}"
     "agentxx_plugin_agent_get_info=agentxx_plugin_agent_builtin_get_info_${PLUGIN_NAME}"
     "agentxx_plugin_agent_destroy=agentxx_plugin_agent_builtin_destroy_${PLUGIN_NAME}"
+    # 禁用 MSVC boost auto-link (与独立分支 Boost::process imported target
+    # 携带的 BOOST_ALL_NO_LIB 一致): 内置合并模式仅以裸名 boost_process 追加
+    # 链接, 不会传播 NO_LIB 宏; 缺失时编译单元会嵌入
+    # #pragma comment(lib, "libboost_process-vc145-mt-x64-1_92.lib") (带工具集
+    # 版本后缀), 而预编译 boost 库命名为 libboost_process.lib, release 配置
+    # 下链接报 LNK1104 无法打开文件 (debug 未启用内置插件所以未暴露)
+    "BOOST_ALL_NO_LIB"
   )
   target_include_directories(${_target} PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}"          # agentxx_execmd_plugin.h / execute_command_impl.h

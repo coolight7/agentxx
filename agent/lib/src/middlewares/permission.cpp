@@ -13,7 +13,8 @@ namespace {
 class DummyPermissionTool : public neograph::Tool {
 public:
 
-    explicit DummyPermissionTool(std::string name) : name_(std::move(name)) {}
+    explicit DummyPermissionTool(std::string name) :
+        name_(std::move(name)) {}
 
     neograph::ChatTool get_definition() const override {
         return neograph::ChatTool{
@@ -75,8 +76,7 @@ std::string PermissionMiddlewareHandle::normalizePermissionPath(
         baseDir = ctx->getSessionWorkDir(sessionId);
     }
     std::string s = agentxx::util::toUnixStandardDirPath(
-        baseDir.empty() ? agentxx::util::toCurrentSystemAbsolutePath(path)
-                        : agentxx::util::toCurrentSystemAbsolutePath(path, baseDir)
+        agentxx::util::toCurrentSystemAbsolutePath(path, baseDir)
     );
 #if XX_IS_WIN_D
     agentxx::util::toLowerSelf(s);
@@ -253,7 +253,8 @@ PermissionMiddlewareHandle::~PermissionMiddlewareHandle() {
     unregisterFromBus();
 }
 
-void PermissionMiddlewareHandle::registerOnBus(const std::shared_ptr<agentxx::event::EventBus>& bus) {
+void PermissionMiddlewareHandle::registerOnBus(const std::shared_ptr<agentxx::event::EventBus>& bus
+) {
     if (!bus) {
         return;
     }
@@ -262,54 +263,68 @@ void PermissionMiddlewareHandle::registerOnBus(const std::shared_ptr<agentxx::ev
 
     // 1. 注册权限检查服务端 (ReqToolPermissionCheck -> RespToolPermissionCheck)
     checkServerId_ = bus->getRR<events::ReqToolPermissionCheck, events::RespToolPermissionCheck>(
-        events::Topic::ToolPermissionCheck
-    ).registerServer([this](const events::ReqToolPermissionCheck& req, size_t) -> asio::awaitable<events::RespToolPermissionCheck> {
-        auto it = handles.find(req.toolName);
-        if (it != handles.end()) {
-            DummyPermissionTool dummyTool(req.toolName);
-            neograph::json argsCopy = req.arguments;
-            auto allow = co_await it->second(dummyTool, argsCopy);
-            co_return events::RespToolPermissionCheck{.allow = allow};
-        }
-        // 未注册权限拦截 handle 的普通工具直接放行
-        co_return events::RespToolPermissionCheck{.allow = true};
-    });
+                            events::Topic::ToolPermissionCheck
+    )
+                         .registerServer(
+                             [this](const events::ReqToolPermissionCheck& req, size_t)
+                                 -> asio::awaitable<events::RespToolPermissionCheck> {
+                                 auto it = handles.find(req.toolName);
+                                 if (it != handles.end()) {
+                                     DummyPermissionTool dummyTool(req.toolName);
+                                     neograph::json      argsCopy = req.arguments;
+                                     auto allow = co_await it->second(dummyTool, argsCopy);
+                                     co_return events::RespToolPermissionCheck{.allow = allow};
+                                 }
+                                 // 未注册权限拦截 handle 的普通工具直接放行
+                                 co_return events::RespToolPermissionCheck{.allow = true};
+                             }
+                         );
 
     // 2. 订阅文件系统规则设置事件 (EventSetPermissionRule)
-    setRuleSubId_ = bus->get<events::EventSetPermissionRule>(events::Topic::PermissionSetRule)
-        .subscribe([this](const events::EventSetPermissionRule& evt) -> asio::awaitable<void> {
-            setFilesystemPermission(
-                evt.path,
-                evt.allow ? PermissionOperator::ALLOW : PermissionOperator::DENY,
-                evt.index
-            );
-            co_return;
-        });
+    setRuleSubId_
+        = bus->get<events::EventSetPermissionRule>(events::Topic::PermissionSetRule)
+              .subscribe(
+                  [this](const events::EventSetPermissionRule& evt) -> asio::awaitable<void> {
+                      setFilesystemPermission(
+                          evt.path,
+                          evt.allow ? PermissionOperator::ALLOW : PermissionOperator::DENY,
+                          evt.index
+                      );
+                      co_return;
+                  }
+              );
 
     // 3. 订阅会话隔离设置事件 (EventSetSessionIsolation)
-    setIsolationSubId_ = bus->get<events::EventSetSessionIsolation>(events::Topic::PermissionSetIsolation)
-        .subscribe([this](const events::EventSetSessionIsolation& evt) -> asio::awaitable<void> {
-            SessionFsIsolation iso;
-            iso.allowPath     = normalizePermissionPath(evt.allowPath);
-            iso.denyWritePath = normalizePermissionPath(evt.denyWritePath);
-            setSessionIsolation(evt.sessionId, std::move(iso));
-            co_return;
-        });
+    setIsolationSubId_
+        = bus->get<events::EventSetSessionIsolation>(events::Topic::PermissionSetIsolation)
+              .subscribe(
+                  [this](const events::EventSetSessionIsolation& evt) -> asio::awaitable<void> {
+                      SessionFsIsolation iso;
+                      iso.allowPath     = normalizePermissionPath(evt.allowPath);
+                      iso.denyWritePath = normalizePermissionPath(evt.denyWritePath);
+                      setSessionIsolation(evt.sessionId, std::move(iso));
+                      co_return;
+                  }
+              );
 
     // 4. 订阅会话隔离清除事件 (EventClearSessionIsolation)
-    clearIsolationSubId_ = bus->get<events::EventClearSessionIsolation>(events::Topic::PermissionClearIsolation)
-        .subscribe([this](const events::EventClearSessionIsolation& evt) -> asio::awaitable<void> {
-            clearSessionIsolation(evt.sessionId);
-            co_return;
-        });
+    clearIsolationSubId_
+        = bus->get<events::EventClearSessionIsolation>(events::Topic::PermissionClearIsolation)
+              .subscribe(
+                  [this](const events::EventClearSessionIsolation& evt) -> asio::awaitable<void> {
+                      clearSessionIsolation(evt.sessionId);
+                      co_return;
+                  }
+              );
 }
 
 void PermissionMiddlewareHandle::unregisterFromBus() {
     if (auto bus = registeredBus_.lock()) {
         if (checkServerId_ != 0) {
             bus->getRR<events::ReqToolPermissionCheck, events::RespToolPermissionCheck>(
-                events::Topic::ToolPermissionCheck
-            ).unregisterServer(checkServerId_);
+                   events::Topic::ToolPermissionCheck
+            )
+                .unregisterServer(checkServerId_);
             checkServerId_ = 0;
         }
         if (setRuleSubId_ != 0) {

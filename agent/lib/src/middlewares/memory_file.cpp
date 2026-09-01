@@ -34,11 +34,12 @@ asio::awaitable<void>
         fileContents.clear();
         std::string logContent;
         for (const auto& filepath : memoryFilePaths) {
-            auto systemCharsetFilePath = filepath;
-            agentxx::util::autoConvertToSystemPath(systemCharsetFilePath);
+            auto systemCharsetFilePath = agentxx::util::toCurrentSystemAbsolutePath(
+                filepath,
+                agentContext.lock()->getSessionWorkDir(in.ctx.thread_id)
+            );
             co_await agentxx::util::catchErrorAsync<bool>(
                 [&]() -> asio::awaitable<bool> {
-
 #if ASIO_HAS_FILE || BOOST_ASIO_HAS_FILE
                     /// 异步加载文件, 避免同步读盘阻塞 io_context 事件循环
                     asio::stream_file        stream{currentIoCtx};

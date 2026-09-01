@@ -271,21 +271,6 @@ std::string agentxx::util::autoTryConvertToUtf8(std::string_view str) {
     return std::string{str};
 }
 
-bool agentxx::util::autoConvertToSystemPath(std::string& str) {
-    // TODO: 适配windows转换字符编码
-    return true;
-#if XX_IS_WIN_D
-    std::string encoding;
-    auto [isSuccess, result] = autoConvertCharset(str, encoding, "GBK");
-    if (isSuccess && result.has_value()) {
-        str = std::move(result.value());
-    }
-    return isSuccess;
-#else
-    return autoConvertToUtf8(str);
-#endif
-}
-
 std::string agentxx::util::base64Encode(std::string_view data) {
     if (data.empty()) {
         // 空输入合法, 解码为空结果

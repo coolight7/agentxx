@@ -7,7 +7,6 @@ namespace tools {
 
 /// - 寄存信息，节省模型上下文、为 llm、node、skill、tool
 /// 之间方便传递数据
-/// TODO: 支持重启恢复
 class SessionShareStoreTool : public XXToolBase {
 public:
 

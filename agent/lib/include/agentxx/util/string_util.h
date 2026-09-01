@@ -546,11 +546,6 @@ bool autoConvertToUtf8(std::string& str);
 
 [[nodiscard]] std::string autoTryConvertToUtf8(std::string_view str);
 
-/// 自动转换为系统路径编码
-/// - [windows] UTF-16LE
-/// - [其他系统] UTF-8
-bool autoConvertToSystemPath(std::string& str);
-
 template<typename T>
 inline std::from_chars_result parseNumberFromString(std::string_view str, T& num) {
 #if defined(_LIBCPP_VERSION) && __has_include(<cstdlib>)
@@ -930,7 +925,7 @@ inline PinyinCallback s_pinyinCallback = nullptr;
 /// - baseDir 用于会话工作目录与进程 cwd 解耦 (AgentConfig::workDir,
 ///   嵌入场景单进程多 agent 实例各自独立项目目录); 调用方应传入绝对路径
 [[nodiscard]] inline std::string
-    toCurrentSystemAbsolutePath(std::string_view path, std::string_view baseDir) {
+    toCurrentSystemAbsolutePath(std::string_view path, std::string_view baseDir = "") {
     if (path.empty()) {
         return std::string{path};
     }
@@ -951,12 +946,6 @@ inline PinyinCallback s_pinyinCallback = nullptr;
         return pathToUtf8Generic(utf8ToPath(normalized).lexically_normal());
     }
     return pathToUtf8Generic(abs.lexically_normal());
-}
-
-/// 将用户提供的路径统一转换为当前系统的绝对路径 (相对路径基于进程当前工作目录):
-/// - 兼容旧接口, 等价于 baseDir 为空的两参版本
-[[nodiscard]] inline std::string toCurrentSystemAbsolutePath(std::string_view path) {
-    return toCurrentSystemAbsolutePath(path, std::string_view{});
 }
 
 [[nodiscard]] inline constexpr std::string_view
