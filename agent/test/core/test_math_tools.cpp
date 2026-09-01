@@ -2,7 +2,7 @@
 #include "agentxx/agent/context.h"
 #include "agentxx/plugin/plugin_manager.h"
 #include "agentxx/plugin/tool_registry.h"
-#include "math_impl.h"
+#include "agentxx_math/math_impl.h"
 #include <asio/awaitable.hpp>
 #include <cmath>
 #include <filesystem>

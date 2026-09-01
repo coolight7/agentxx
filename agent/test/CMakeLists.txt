@@ -65,15 +65,10 @@ target_include_directories(agentxx_test PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}/plugin/"
   "${CMAKE_CURRENT_SOURCE_DIR}/client/"
   # 迁移至插件的内置工具实现 (filesystem/string/system/websearch/rag_search/
-  # execute_command 的 *_impl.h): 测试直测插件同一实现, 保证行为一致
-  "${CMAKE_CURRENT_SOURCE_DIR}/../plugins/agentxx_planning/"
-  "${CMAKE_CURRENT_SOURCE_DIR}/../plugins/agentxx_filesystem/"
-  "${CMAKE_CURRENT_SOURCE_DIR}/../plugins/agentxx_execute_command/"
-  "${CMAKE_CURRENT_SOURCE_DIR}/../plugins/agentxx_string/"
-  "${CMAKE_CURRENT_SOURCE_DIR}/../plugins/agentxx_math/"
-  "${CMAKE_CURRENT_SOURCE_DIR}/../plugins/agentxx_system/"
-  "${CMAKE_CURRENT_SOURCE_DIR}/../plugins/agentxx_websearch/"
-  "${CMAKE_CURRENT_SOURCE_DIR}/../plugins/agentxx_rag_search/"
+  # execute_command 的 *_impl.h): 测试直测插件同一实现, 保证行为一致;
+  # 以 plugins/ 为单一 include 根, 源码用 "agentxx_xxx/xxx_impl.h" 完整路径,
+  # 避免逐插件添加过深的 ../plugins/agentxx_xxx/ 目录
+  "${CMAKE_CURRENT_SOURCE_DIR}/../plugins/"
 )
 
 # 注意: 不要添加 /FS /MP 编译选项 —— 顶层已统一管理; 命令行出现重复 /FS 时

@@ -4,7 +4,7 @@
 // 原 lib 内置工具已迁移至 agentxx_websearch 插件 (同名同行为); 测试直测
 // 插件同一实现 (websearch_impl.h), 保证插件行为与测试覆盖一致
 #include "agentxx/util/http_server.h"
-#include "websearch_impl.h"
+#include "agentxx_websearch/websearch_impl.h"
 #include <asio/awaitable.hpp>
 #include <asio/redirect_error.hpp>
 #include <asio/use_awaitable.hpp>
