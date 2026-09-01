@@ -29,7 +29,18 @@ cd %crude_dir%
 
 rem MSVC output english
 set VSLANG=1033
+rem Disable vcpkg entirely: this project builds all deps from third_party
+rem sources, no vcpkg is needed.
+rem 1) VCPKG_ROOT= disables vcpkg CMake toolchain integration.
+rem 2) VCPkgLocalAppDataDisabled=1 (non-empty) disables the USER-LEVEL MSBuild
+rem    integration installed by `vcpkg integrate install` (files
+rem    %LOCALAPPDATA%\vcpkg\vcpkg.user.props / vcpkg.user.targets import
+rem    vcpkg.props/targets only when '$(VCPkgLocalAppDataDisabled)' == '').
+rem    Without it MSBuild auto-imports vcpkg.targets for every project, which
+rem    runs the applocal.ps1 DLL-gathering step and emits the
+rem    "Failed to gather app local DLL dependencies" warning.
 set VCPKG_ROOT=
+set VCPkgLocalAppDataDisabled=1
 
 rem find Ragel
 set "PATH=%PATH%;%localappdata%\Microsoft\WinGet\Links\"

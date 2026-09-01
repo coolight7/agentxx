@@ -23,6 +23,7 @@ namespace util {
 /// - 单例经 ApplicationEnv::instance() 访问, 进程生命周期内唯一
 class ApplicationEnv {
 public:
+
     /// 获取全局单例
     static ApplicationEnv& instance();
 
@@ -74,15 +75,17 @@ public:
     [[nodiscard]] std::optional<std::string> get(std::string_view name);
 
     /// 查询环境变量, 带默认值
+    /// - 仅提供 string_view 重载: 传 const char* 字面量时若再提供
+    /// const std::string& 重载会构成等价用户定义转换, MSVC 报 C2668 歧义
+    /// (GCC/Clang 选 string_view, 行为不一致); string_view 版本对 std::string
+    /// 实参同样兼容 (隐式转换), 且无临时 string 构造开销
     [[nodiscard]] std::string getOr(std::string_view name, std::string_view defaultValue);
-
-    /// 查询环境变量, 带默认值 (string 重载)
-    [[nodiscard]] std::string getOr(std::string_view name, const std::string& defaultValue);
 
     /// 是否存在环境变量 (预设或系统任一存在即 true)
     [[nodiscard]] bool has(std::string_view name);
 
 private:
+
     ApplicationEnv()  = default;
     ~ApplicationEnv() = default;
 
@@ -97,9 +100,11 @@ private:
 [[nodiscard]] inline std::optional<std::string> getEnv(std::string_view name) {
     return ApplicationEnv::instance().get(name);
 }
+
 [[nodiscard]] inline std::string getEnvOr(std::string_view name, std::string_view defaultValue) {
     return ApplicationEnv::instance().getOr(name, defaultValue);
 }
+
 [[nodiscard]] inline std::optional<std::string> getSystemEnv(std::string_view name) {
     return ApplicationEnv::instance().getSystem(name);
 }

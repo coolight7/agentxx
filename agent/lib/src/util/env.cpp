@@ -121,13 +121,6 @@ std::string ApplicationEnv::getOr(std::string_view name, std::string_view defaul
     return std::string{defaultValue};
 }
 
-std::string ApplicationEnv::getOr(std::string_view name, const std::string& defaultValue) {
-    if (auto v = get(name)) {
-        return *v;
-    }
-    return defaultValue;
-}
-
 bool ApplicationEnv::has(std::string_view name) {
     if (hasPreset(name)) {
         return true;
