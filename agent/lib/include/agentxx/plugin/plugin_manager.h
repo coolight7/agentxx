@@ -1,7 +1,7 @@
 #pragma once
 
 #include "agentxx/middlewares/middleware.h"
-#include "agentxx/plugin/plugin_api.h"
+#include "agentxx/plugin/api/plugin_api.h"
 #include "agentxx/plugin/plugin_common.h"
 #include "agentxx/plugin/plugin_manager_base.h"
 #include "agentxx/plugin/tool_registry.h"

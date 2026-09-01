@@ -20,9 +20,9 @@
  * 禁用时摘除、启用时恢复 (与工具行为一致), 插件无需手动清理;
  * unload 回调中的显式反注册仅为 SDK 惯例示范。
  */
-#include "agentxx/plugin/plugin_api.h"
-#include "agentxx/plugin/plugin_guard.h"
-#include "agentxx/plugin/plugin_iface_helper.h"
+#include "agentxx/plugin/api/plugin_api.h"
+#include "agentxx/plugin/api/plugin_guard.h"
+#include "agentxx/plugin/api/plugin_iface_helper.h"
 
 #include "fmt/format.h"
 #include <memory>
@@ -87,7 +87,7 @@ static std::string dirOf(const std::string& path) {
 
 extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_agent_get_info(void) {
     // C ABI 边界异常守卫: 异常返回 NULL; 本边界为纯静态元数据 → 空操作日志
-    return agentxx::plugin_guard::guardCall(
+    return agentxx::plugin::guardCall(
         [](const char*) noexcept {},
         nullptr,
         [&]() -> const AgentxxPluginInfo* {
@@ -110,7 +110,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
     // C ABI 边界异常守卫: 异常返回 -1 (创建失败); 日志闭包捕获局部裸指针
     auto    ctx = std::make_unique<ResCtx>();
     ResCtx* raw = nullptr;
-    return agentxx::plugin_guard::guardCall(
+    return agentxx::plugin::guardCall(
         [&raw](const char* m) noexcept {
             if (raw) {
                 raw->logErr(m);
@@ -171,7 +171,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
 extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_agent_destroy(void* plugin_ctx) {
     // C ABI 边界异常守卫: 销毁回调异常不得外泄
     auto* ctx = static_cast<ResCtx*>(plugin_ctx);
-    agentxx::plugin_guard::guardCallVoid(
+    agentxx::plugin::guardCallVoid(
         [ctx](const char* m) noexcept {
             if (ctx) {
                 ctx->logErr(m);

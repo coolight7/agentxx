@@ -2,7 +2,7 @@
 
 #include "agentxx/agent/config.h"
 #include "agentxx/agent/io/client_event_sink.h"
-#include "agentxx/plugin/client_plugin_api.h"
+#include "agentxx/plugin/api/client_plugin_api.h"
 #include "agentxx/plugin/plugin_common.h"
 #include "agentxx/plugin/plugin_manager_base.h"
 #include "asio/any_io_executor.hpp"

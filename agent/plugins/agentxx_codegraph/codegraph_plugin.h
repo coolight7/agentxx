@@ -1,9 +1,9 @@
 // agentxx_codegraph 插件 —— 共享头
 #pragma once
 
-#include "agentxx/plugin/plugin_api.h"
-#include "agentxx/plugin/plugin_guard.h"
-#include "agentxx/plugin/plugin_kit.h"
+#include "agentxx/plugin/api/plugin_api.h"
+#include "agentxx/plugin/api/plugin_guard.h"
+#include "agentxx/plugin/api/plugin_kit.h"
 #include "codegraph/core/json.hpp"
 #include "fmt/format.h"
 #include <cstring>

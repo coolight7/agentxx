@@ -29,7 +29,7 @@ struct ScreenCaptureHolder {
     PluginCtx*                                   ctx = nullptr;
 };
 
-struct PluginCtx : public agentxx::kit::PluginBase {
+struct PluginCtx : public agentxx::plugin::PluginBase {
     std::string                          captures_dir;
     PluginLogSink                        log_sink;
     std::unique_ptr<ScreenCaptureHolder> holder;
@@ -197,7 +197,7 @@ static void registerScreenCaptureTool(PluginCtx& ctx) {
     auto        p      = ctx.toolPrompt("agentxx_screen_capture");
     std::string depict = p.depict.empty() ? kScreenCaptureDefaultDepict : p.depict;
 
-    agentxx::kit::blocking_tool(
+    agentxx::plugin::blocking_tool(
         ctx,
         "agentxx_screen_capture",
         depict,
@@ -301,7 +301,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_agent_g
 extern "C" AGENTXX_PLUGIN_EXPORT int
     agentxx_plugin_agent_create(const AgentxxPluginHost* host, void** plugin_ctx) {
     PluginCtx* raw = nullptr;
-    return agentxx::plugin_guard::guardCall(
+    return agentxx::plugin::guardCall(
         [&raw](const char* msg) noexcept {
             ctxGuardLogger(raw)(msg);
         },
@@ -362,7 +362,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
 
 extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_agent_destroy(void* plugin_ctx) {
     auto* ctx = static_cast<PluginCtx*>(plugin_ctx);
-    agentxx::plugin_guard::guardCallVoid(ctxGuardLogger(ctx), [&] {
+    agentxx::plugin::guardCallVoid(ctxGuardLogger(ctx), [&] {
         if (!ctx) {
             return;
         }

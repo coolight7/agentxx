@@ -1,5 +1,8 @@
 /*
- * agentxx/plugin/plugin_kit.h —— 插件开发 SDK (C++ header-only)
+ * agentxx/plugin/api/plugin_kit.h —— 插件开发 SDK (C++ header-only)
+ *
+ * 命名空间: 全部位于 agentxx::plugin (与宿主侧 plugin 命名空间统一;
+ * 历史命名空间 agentxx::kit 已并入, 见 git 历史)
  *
  * 锚定协程模型 SDK:
  * - PluginBase: 实例上下文基类, 集中常用宿主操作 (workDir / toolPrompt / log 等)
@@ -13,9 +16,9 @@
  */
 #pragma once
 
-#include "agentxx/plugin/plugin_api.h"
-#include "agentxx/plugin/plugin_guard.h"
-#include "agentxx/plugin/plugin_iface_helper.h"
+#include "agentxx/plugin/api/plugin_api.h"
+#include "agentxx/plugin/api/plugin_guard.h"
+#include "agentxx/plugin/api/plugin_iface_helper.h"
 #include "fmt/format.h"
 #include "neograph/json.h"
 
@@ -41,7 +44,7 @@
 #include <vector>
 
 namespace agentxx {
-namespace kit {
+namespace plugin {
 
 /* ==================== 取消异常 ==================== */
 
@@ -127,11 +130,8 @@ struct ToolPromptText {
     std::map<std::string, std::string, std::less<>> args;
 };
 
-inline std::string toolPromptArgDesc(
-    const agentxx::kit::ToolPromptText& p,
-    std::string_view                    key,
-    std::string_view                    fallback
-) {
+inline std::string
+    toolPromptArgDesc(const ToolPromptText& p, std::string_view key, std::string_view fallback) {
     auto it = p.args.find(key);
     if (it != p.args.end() && !it->second.empty()) {
         return it->second;
@@ -1817,5 +1817,5 @@ inline char* invoke_capability_blocking(
     return state.payload;
 }
 
-} // namespace kit
+} // namespace plugin
 } // namespace agentxx

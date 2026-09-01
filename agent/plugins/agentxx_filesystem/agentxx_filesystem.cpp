@@ -61,7 +61,7 @@ std::string schemaList(PluginCtx* ctx) {
                      {"type", "string"},
                      {
                          "description",
-                         agentxx::kit::toolPromptArgDesc(p, "path", kPathDesc),
+                         agentxx::plugin::toolPromptArgDesc(p, "path", kPathDesc),
                      },
                  },
              },
@@ -72,7 +72,7 @@ std::string schemaList(PluginCtx* ctx) {
                      {"default", false},
                      {
                          "description",
-                         agentxx::kit::toolPromptArgDesc(
+                         agentxx::plugin::toolPromptArgDesc(
                              p,
                              "recursive",
                              "Default `false`. If `true`, list subdirectories recursively."
@@ -87,7 +87,7 @@ std::string schemaList(PluginCtx* ctx) {
                      {"default", 100},
                      {
                          "description",
-                         agentxx::kit::toolPromptArgDesc(
+                         agentxx::plugin::toolPromptArgDesc(
                              p,
                              "limit",
                              "Default `100`. Maximum number of entries to return. Set `limit <= 0` for unlimited."
@@ -102,7 +102,7 @@ std::string schemaList(PluginCtx* ctx) {
                      {"default", 60},
                      {
                          "description",
-                         agentxx::kit::toolPromptArgDesc(p, "timeout", kTimeoutDesc),
+                         agentxx::plugin::toolPromptArgDesc(p, "timeout", kTimeoutDesc),
                      },
                  },
              }},
@@ -122,7 +122,7 @@ std::string schemaRead(PluginCtx* ctx) {
                      {"type", "string"},
                      {
                          "description",
-                         agentxx::kit::toolPromptArgDesc(p, "path", kPathDesc),
+                         agentxx::plugin::toolPromptArgDesc(p, "path", kPathDesc),
                      },
                  },
              },
@@ -133,7 +133,7 @@ std::string schemaRead(PluginCtx* ctx) {
                      {"default", 0},
                      {
                          "description",
-                         agentxx::kit::toolPromptArgDesc(
+                         agentxx::plugin::toolPromptArgDesc(
                              p,
                              "line_offset",
                              "Number of lines to skip from the beginning. Default `0` (no offset). Returns an error if offset exceeds the file's line count."
@@ -147,7 +147,7 @@ std::string schemaRead(PluginCtx* ctx) {
                      {"type", "integer"},
                      {
                          "description",
-                         agentxx::kit::toolPromptArgDesc(
+                         agentxx::plugin::toolPromptArgDesc(
                              p,
                              "line_limit",
                              "Maximum number of lines to read. Range: [1, ∞]. Default `null` (read all). Values exceeding the file's line count are allowed without error."
@@ -171,7 +171,7 @@ std::string schemaWrite(PluginCtx* ctx) {
                      {"type", "string"},
                      {
                          "description",
-                         agentxx::kit::toolPromptArgDesc(
+                         agentxx::plugin::toolPromptArgDesc(
                              p,
                              "path",
                              "Path to the target file. Relative paths are resolved against the current working directory; `~` expands to the home directory."
@@ -185,7 +185,7 @@ std::string schemaWrite(PluginCtx* ctx) {
                      {"type", "string"},
                      {
                          "description",
-                         agentxx::kit::
+                         agentxx::plugin::
                              toolPromptArgDesc(p, "content", "Content to write into the file."),
                      },
                  },
@@ -197,7 +197,7 @@ std::string schemaWrite(PluginCtx* ctx) {
                      {"default", false},
                      {
                          "description",
-                         agentxx::kit::toolPromptArgDesc(
+                         agentxx::plugin::toolPromptArgDesc(
                              p,
                              "overwrite",
                              "Default `false`. Controls write behavior:\n`true`: Create the file if it doesn't exist; overwrite if it does.\n`false`: Create a new file only; returns an error if the file already exists."
@@ -221,7 +221,7 @@ std::string schemaEdit(PluginCtx* ctx) {
                      {"type", "string"},
                      {
                          "description",
-                         agentxx::kit::toolPromptArgDesc(p, "path", kPathDesc),
+                         agentxx::plugin::toolPromptArgDesc(p, "path", kPathDesc),
                      },
                  },
              },
@@ -231,7 +231,7 @@ std::string schemaEdit(PluginCtx* ctx) {
                      {"type", "string"},
                      {
                          "description",
-                         agentxx::kit::toolPromptArgDesc(
+                         agentxx::plugin::toolPromptArgDesc(
                              p,
                              "old_str",
                              "The exact string to find and replace. Must be non-empty and match precisely (including whitespace and indentation)."
@@ -244,7 +244,7 @@ std::string schemaEdit(PluginCtx* ctx) {
                  {{"type", "string"},
                   {
                       "description",
-                      agentxx::kit::toolPromptArgDesc(p, "new_str", "The replacement string."),
+                      agentxx::plugin::toolPromptArgDesc(p, "new_str", "The replacement string."),
                   }},
              },
              {
@@ -254,7 +254,7 @@ std::string schemaEdit(PluginCtx* ctx) {
                      {"default", false},
                      {
                          "description",
-                         agentxx::kit::toolPromptArgDesc(
+                         agentxx::plugin::toolPromptArgDesc(
                              p,
                              "multi_replace",
                              "Default `false`. If `true`, replace ALL occurrences of `old_str`. If `false`, replace only the first occurrence."
@@ -279,7 +279,7 @@ std::string schemaGlob(PluginCtx* ctx) {
                      {"items", {{"type", "string"}}},
                      {
                          "description",
-                         agentxx::kit::toolPromptArgDesc(
+                         agentxx::plugin::toolPromptArgDesc(
                              p,
                              "file_patterns",
                              fmt::format(
@@ -297,7 +297,7 @@ std::string schemaGlob(PluginCtx* ctx) {
                      {"items", {{"type", "string"}}},
                      {
                          "description",
-                         agentxx::kit::toolPromptArgDesc(
+                         agentxx::plugin::toolPromptArgDesc(
                              p,
                              "exclude_patterns",
                              "Glob patterns to exclude from results. Matched paths are removed.\nExample: `[\"**/node_modules/**\", \"**/.git/**\", \"**/build/**\"]`."
@@ -310,7 +310,7 @@ std::string schemaGlob(PluginCtx* ctx) {
                  {
                      {
                          "description",
-                         agentxx::kit::toolPromptArgDesc(
+                         agentxx::plugin::toolPromptArgDesc(
                              p,
                              "type",
                              "Filter results by file type. Accepts a string or array of strings.\nValid values: `file`, `dir`, `symlink`, `other`, `any`.\nDefault: `any` (no filter).\nExample: `\"file\"` returns only regular files; `[\"file\",\"symlink\"]` returns files and symlinks."
@@ -325,7 +325,7 @@ std::string schemaGlob(PluginCtx* ctx) {
                      {"default", -1},
                      {
                          "description",
-                         agentxx::kit::toolPromptArgDesc(
+                         agentxx::plugin::toolPromptArgDesc(
                              p,
                              "max_depth",
                              "Maximum directory depth relative to the pattern's base directory.\nDefault `-1` (no limit). Example: `max_depth=1` matches only direct children.\nSimilar to `find -maxdepth`."
@@ -340,7 +340,7 @@ std::string schemaGlob(PluginCtx* ctx) {
                      {"default", false},
                      {
                          "description",
-                         agentxx::kit::toolPromptArgDesc(
+                         agentxx::plugin::toolPromptArgDesc(
                              p,
                              "sort",
                              "Default `false`. If `true`, sort results alphabetically.\nResults are always deduplicated regardless of this setting."
@@ -355,7 +355,7 @@ std::string schemaGlob(PluginCtx* ctx) {
                      {"default", 60},
                      {
                          "description",
-                         agentxx::kit::toolPromptArgDesc(p, "timeout", kTimeoutDesc),
+                         agentxx::plugin::toolPromptArgDesc(p, "timeout", kTimeoutDesc),
                      },
                  },
              }},
@@ -376,7 +376,7 @@ std::string schemaGrep(PluginCtx* ctx) {
                      {"items", {{"type", "string"}}},
                      {
                          "description",
-                         agentxx::kit::toolPromptArgDesc(
+                         agentxx::plugin::toolPromptArgDesc(
                              p,
                              "text_patterns",
                              "One or more search patterns (text or regex, depending on `text_patterns_is_regex`).\nA match is found if ANY pattern matches."
@@ -391,7 +391,7 @@ std::string schemaGrep(PluginCtx* ctx) {
                      {"items", {{"type", "string"}}},
                      {
                          "description",
-                         agentxx::kit::toolPromptArgDesc(
+                         agentxx::plugin::toolPromptArgDesc(
                              p,
                              "file_patterns",
                              fmt::format(
@@ -409,7 +409,7 @@ std::string schemaGrep(PluginCtx* ctx) {
                      {"default", true},
                      {
                          "description",
-                         agentxx::kit::toolPromptArgDesc(
+                         agentxx::plugin::toolPromptArgDesc(
                              p,
                              "case_sensitive",
                              "Default `true`. If `false`, matching is case-insensitive (like `grep -i`)."
@@ -423,7 +423,7 @@ std::string schemaGrep(PluginCtx* ctx) {
                      {"type", "boolean"},
                      {
                          "description",
-                         agentxx::kit::toolPromptArgDesc(
+                         agentxx::plugin::toolPromptArgDesc(
                              p,
                              "text_patterns_is_regex",
                              "Determines how `text_patterns` are interpreted.\n`true`: Patterns are regular expressions.\n`false`: Patterns are literal text strings."
@@ -438,7 +438,7 @@ std::string schemaGrep(PluginCtx* ctx) {
                      {"enum", neograph::json::array({"content", "files_with_matches"})},
                      {
                          "description",
-                         agentxx::kit::toolPromptArgDesc(
+                         agentxx::plugin::toolPromptArgDesc(
                              p,
                              "output_mode",
                              "Default: `files_with_matches`.\n`files_with_matches`: Return file paths with match counts (format: `file:count`).\n`content`: Return matching lines grouped by file to reduce path repetition. Each file\nstarts with a header line `{filepath}:`, followed by that file's lines (`{line}:{content}`). Example:\n/path/to/file1:\n12:int foo() {\n40:int bar() {\n/path/to/file2:\n7:return 0;"
@@ -453,7 +453,7 @@ std::string schemaGrep(PluginCtx* ctx) {
                      {"default", 0},
                      {
                          "description",
-                         agentxx::kit::toolPromptArgDesc(
+                         agentxx::plugin::toolPromptArgDesc(
                              p,
                              "context_lines",
                              "Default `0`. Number of context lines before and after each match.\nOnly applies to `content` output mode. Similar to `grep -C N`.\nContext lines use `-` separator; match lines use `:` separator."
@@ -468,7 +468,7 @@ std::string schemaGrep(PluginCtx* ctx) {
                      {"default", 0},
                      {
                          "description",
-                         agentxx::kit::toolPromptArgDesc(
+                         agentxx::plugin::toolPromptArgDesc(
                              p,
                              "max_count_per_file",
                              "Default `0` (no limit). Maximum matches to report per file.\nSimilar to `grep -m N`. Example: `max_count_per_file=3` stops after 3 matches per file."
@@ -483,7 +483,7 @@ std::string schemaGrep(PluginCtx* ctx) {
                      {"default", 60},
                      {
                          "description",
-                         agentxx::kit::toolPromptArgDesc(p, "timeout", kTimeoutDesc),
+                         agentxx::plugin::toolPromptArgDesc(p, "timeout", kTimeoutDesc),
                      },
                  },
              }},
@@ -495,7 +495,7 @@ std::string schemaGrep(PluginCtx* ctx) {
 } // namespace
 
 extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_agent_get_info(void) {
-    return agentxx::plugin_guard::guardCall(
+    return agentxx::plugin::guardCall(
         [](const char*) noexcept {},
         nullptr,
         [&]() -> const AgentxxPluginInfo* {
@@ -513,7 +513,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_agent_g
 extern "C" AGENTXX_PLUGIN_EXPORT int
     agentxx_plugin_agent_create(const AgentxxPluginHost* host, void** plugin_ctx) {
     PluginCtx* raw = nullptr;
-    return agentxx::plugin_guard::guardCall(
+    return agentxx::plugin::guardCall(
         [&raw](const char* msg) noexcept {
             ctxGuardLogger(raw)(msg);
         },
@@ -531,7 +531,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
             }
 
             // list (workDir 预取在 io 线程，避免 worker 跨线程 ioCallSync)
-            agentxx::kit::blocking_tool(
+            agentxx::plugin::blocking_tool(
                 *ctx,
                 kNameList,
                 kDepictList,
@@ -554,7 +554,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
             );
 
             // glob
-            agentxx::kit::blocking_tool(
+            agentxx::plugin::blocking_tool(
                 *ctx,
                 kNameGlob,
                 kDepictGlob,
@@ -577,7 +577,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
             );
 
             // grep
-            agentxx::kit::blocking_tool(
+            agentxx::plugin::blocking_tool(
                 *ctx,
                 kNameGrep,
                 kDepictGrep,
@@ -600,7 +600,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
             );
 
             // read (workDir 预取)
-            agentxx::kit::blocking_tool(
+            agentxx::plugin::blocking_tool(
                 *ctx,
                 kNameRead,
                 kDepictRead,
@@ -618,7 +618,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
             );
 
             // write
-            agentxx::kit::blocking_tool(
+            agentxx::plugin::blocking_tool(
                 *ctx,
                 kNameWrite,
                 kDepictWrite,
@@ -636,7 +636,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
             );
 
             // edit
-            agentxx::kit::blocking_tool(
+            agentxx::plugin::blocking_tool(
                 *ctx,
                 kNameEdit,
                 kDepictEdit,
@@ -661,7 +661,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
 
 extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_agent_destroy(void* plugin_ctx) {
     auto* ctx = static_cast<PluginCtx*>(plugin_ctx);
-    agentxx::plugin_guard::guardCallVoid(ctxGuardLogger(ctx), [&] {
+    agentxx::plugin::guardCallVoid(ctxGuardLogger(ctx), [&] {
         if (ctx) {
             delete ctx;
         }

@@ -11,8 +11,8 @@
  */
 #include "test_client_plugins.h"
 
+#include "agentxx/plugin/api/plugin_iface_helper.h"
 #include "agentxx/plugin/client_plugin_manager.h"
-#include "agentxx/plugin/plugin_iface_helper.h"
 #include "agentxx/util/log.h"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"

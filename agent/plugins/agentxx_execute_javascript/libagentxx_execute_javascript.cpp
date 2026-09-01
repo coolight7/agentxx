@@ -6,10 +6,10 @@
  * - plugin.js 内注册 agentxx_execute_javascript 工具（对标 bash 版）
  */
 
-#include "agentxx/plugin/plugin_api.h"
-#include "agentxx/plugin/plugin_guard.h"
-#include "agentxx/plugin/plugin_iface_helper.h"
-#include "agentxx/plugin/plugin_kit.h"
+#include "agentxx/plugin/api/plugin_api.h"
+#include "agentxx/plugin/api/plugin_guard.h"
+#include "agentxx/plugin/api/plugin_iface_helper.h"
+#include "agentxx/plugin/api/plugin_kit.h"
 
 #include "fmt/format.h"
 #include <cstdio>
@@ -49,7 +49,7 @@ bool fileExists(const std::string& p) {
 } // namespace
 
 extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_agent_get_info(void) {
-    return agentxx::plugin_guard::guardCall(
+    return agentxx::plugin::guardCall(
         [](const char*) noexcept {},
         nullptr,
         [&]() -> const AgentxxPluginInfo* {
@@ -69,7 +69,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_agent_g
 extern "C" AGENTXX_PLUGIN_EXPORT int
     agentxx_plugin_agent_create(const AgentxxPluginHost* host, void** plugin_ctx) {
     ShellCtx* raw = nullptr;
-    return agentxx::plugin_guard::guardCall(
+    return agentxx::plugin::guardCall(
         [&raw](const char* msg) noexcept {
             shellLog(raw, 4, msg ? msg : "");
         },
@@ -233,7 +233,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
 
 extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_agent_destroy(void* plugin_ctx) {
     auto* ctx = static_cast<ShellCtx*>(plugin_ctx);
-    agentxx::plugin_guard::guardCallVoid(
+    agentxx::plugin::guardCallVoid(
         [ctx](const char* msg) noexcept {
             shellLog(ctx, 4, msg ? msg : "");
         },

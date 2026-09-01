@@ -22,8 +22,8 @@
  */
 #pragma once
 
-#include "agentxx/plugin/client_plugin_api.h"
-#include "agentxx/plugin/plugin_api.h"
+#include "agentxx/plugin/api/client_plugin_api.h"
+#include "agentxx/plugin/api/plugin_api.h"
 #include "agentxx/util/log.h"
 
 #include <algorithm>
@@ -45,7 +45,8 @@
 ///   guardVtableCallVoid([&]() { ... });
 
 namespace agentxx {
-namespace plugin_detail {
+namespace plugin {
+namespace detail {
 template<typename Fn, typename Ret>
 inline Ret guardVtableCallImpl(Ret fallback, Fn&& fn) noexcept {
     try {
@@ -69,7 +70,8 @@ inline void guardVtableCallVoidImpl(Fn&& fn) noexcept {
         XX_LOGE("plugin vtable unknown exception");
     }
 }
-} // namespace plugin_detail
+} // namespace detail
+} // namespace plugin
 } // namespace agentxx
 
 namespace agentxx {
@@ -79,7 +81,7 @@ template<
     typename Fn,
     typename = std::enable_if_t<!std::is_same_v<std::decay_t<Ret>, std::nullptr_t>>>
 inline Ret guardVtableCall(Ret fallback, Fn&& fn) noexcept {
-    return ::agentxx::plugin_detail::guardVtableCallImpl<Fn, Ret>(
+    return ::agentxx::plugin::detail::guardVtableCallImpl<Fn, Ret>(
         std::move(fallback),
         std::forward<Fn>(fn)
     );
@@ -110,7 +112,7 @@ inline auto guardVtableCall(std::nullptr_t, Fn&& fn) noexcept -> std::invoke_res
 
 template<typename Fn>
 inline void guardVtableCallVoid(Fn&& fn) noexcept {
-    ::agentxx::plugin_detail::guardVtableCallVoidImpl(std::forward<Fn>(fn));
+    ::agentxx::plugin::detail::guardVtableCallVoidImpl(std::forward<Fn>(fn));
 }
 } // namespace plugin
 } // namespace agentxx

@@ -8,7 +8,7 @@
  * - 本清单汇总全部启用插件的改名入口符号, 经 agentxx_plugin_get_builtin_plugins()
  *   暴露给 PluginManager (loadBuiltinAsync / loadPluginAsync 回退路径)
  */
-#include "agentxx/plugin/plugin_api.h"
+#include "agentxx/plugin/api/plugin_api.h"
 
 /* 内置插件入口符号声明 (各插件子目录内置分支生成; 符号为编译期改名后的
  * agentxx_plugin_builtin_*_<插件名>) */

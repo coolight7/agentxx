@@ -1,9 +1,9 @@
 // agentxx_websearch 插件 —— 共享头
 #pragma once
 
-#include "agentxx/plugin/plugin_api.h"
-#include "agentxx/plugin/plugin_guard.h"
-#include "agentxx/plugin/plugin_kit.h"
+#include "agentxx/plugin/api/plugin_api.h"
+#include "agentxx/plugin/api/plugin_guard.h"
+#include "agentxx/plugin/api/plugin_kit.h"
 #include <fmt/format.h>
 #include <memory>
 #include <neograph/json.h>
@@ -18,7 +18,7 @@ struct WebSearchConfig {
     int         readChunkTimeoutSeconds = 100;
 };
 
-struct PluginCtx : public agentxx::kit::PluginBase {
+struct PluginCtx : public agentxx::plugin::PluginBase {
     bool            use_model_search      = false;
     bool            convert_html2markdown = true;
     std::string     search_api_url;

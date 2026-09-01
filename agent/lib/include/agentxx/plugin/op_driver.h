@@ -3,7 +3,7 @@
  */
 #pragma once
 
-#include "agentxx/plugin/plugin_api.h"
+#include "agentxx/plugin/api/plugin_api.h"
 #include "agentxx/plugin/plugin_manager.h"
 #include "agentxx/util/log.h"
 #include "asio/as_tuple.hpp"

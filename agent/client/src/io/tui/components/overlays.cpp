@@ -2,7 +2,7 @@
 #include "agentxx-client/io/tui/agent_tui.h"
 #include "agentxx-client/io/tui/framework/tui_settings.h"
 #include "agentxx/agent/config_static.h"
-#include "agentxx/plugin/plugin_api.h"
+#include "agentxx/plugin/api/plugin_api.h"
 #include "agentxx/util/exception.h"
 #include "ftxui/component/component.hpp"
 #include "ftxui/dom/elements.hpp"

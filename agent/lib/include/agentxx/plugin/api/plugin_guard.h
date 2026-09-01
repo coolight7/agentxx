@@ -1,5 +1,7 @@
 /*
- * agentxx/plugin/plugin_guard.h —— 插件侧 C ABI 边界异常守卫 (header-only)
+ * agentxx/plugin/api/plugin_guard.h —— 插件侧 C ABI 边界异常守卫 (header-only)
+ *
+ * 命名空间: agentxx::plugin (历史命名空间 agentxx::plugin_guard 已并入)
  *
  * 定位: 与 plugin_iface_helper.h / plugin_tool_sync.h 同类 —— 纯头文件内联
  * 设施, 编译进插件本体; 【非跨边界 ABI】, 第三方插件可不用本头而自行 try/catch。
@@ -20,7 +22,7 @@
  *      【多实例推荐形态】捕获本实例上下文的闭包 (日志归属精确到实例,
  *      零进程级全局 —— 同库可被多个宿主各自加载为独立实例):
  *        auto logFn = [ctx](const char* msg) noexcept { ctxLog(*ctx, msg); };
- *        return plugin_guard::guardCall(logFn, -1, [&]() -> int { ... });
+ *        return agentxx::plugin::guardCall(logFn, -1, [&]() -> int { ... });
  *      无实例边界的入口 (如 get_info, 纯静态元数据) 可传不捕获的静态
  *      函数或空操作闭包。
  *      旧式固定签名函数指针 void(*)(const char*) 仍可传入, 但其实现只能
@@ -28,12 +30,12 @@
  *   2. 在每个 C ABI 边界函数体内用守卫函数包裹原函数体 (lambda 捕获引用,
  *      体内提前 return 的值即边界返回值):
  *        // 有返回值: 异常时记日志并返回 fallback
- *        return agentxx::plugin_guard::guardCall(pluginCatchLog, nullptr,
+ *        return agentxx::plugin::guardCall(pluginCatchLog, nullptr,
  *            [&]() -> const AgentxxPluginInfo* {
  *                ... 原函数体 ...
  *            });
  *        // 无返回值: 异常时仅记日志返回
- *        agentxx::plugin_guard::guardCallVoid(pluginCatchLog, [&] {
+ *        agentxx::plugin::guardCallVoid(pluginCatchLog, [&] {
  *            ... 原函数体 ...
  *        });
  *
@@ -54,7 +56,7 @@
 #ifndef AGENTXX_PLUGIN_GUARD_H
 #define AGENTXX_PLUGIN_GUARD_H
 
-#include "agentxx/plugin/client_plugin_api.h" /* 含 plugin_api.h (双端类型齐备) */
+#include "agentxx/plugin/api/client_plugin_api.h" /* 含 plugin_api.h (双端类型齐备) */
 
 #include <cstdio>
 #include <exception> /* std::exception */
@@ -64,7 +66,9 @@
 #ifdef __cplusplus
 
 namespace agentxx {
-namespace plugin_guard {
+namespace plugin {
+/* 注意: 历史命名空间 agentxx::plugin_guard 已并入 agentxx::plugin,
+ * 与宿主侧 plugin 命名空间统一 (见 git 历史) */
 
 /// 栈缓冲日志 (noexcept): "[插件名] exception: msg" 经宿主 log 接口表输出;
 /// host/logIf 缺失时静默丢弃 (catch 路径不得再失败)
@@ -131,14 +135,14 @@ inline void reportCurrentException(LogFn&& logFn) noexcept {
 /// logFn 并返回 fallback。整体 noexcept, 异常绝不外泄。
 ///
 /// 用法 (fallback 类型须可转换为 fn 的返回类型; lambda 返回类型建议显式标注):
-///   return plugin_guard::guardCall(pluginCatchLog, nullptr,
+///   return agentxx::plugin::guardCall(pluginCatchLog, nullptr,
 ///       [&]() -> const AgentxxPluginInfo* { ... });
 template<typename LogFn, typename Fn>
 [[nodiscard]] inline auto
     guardCall(LogFn&& logFn, std::invoke_result_t<Fn&> fallback, Fn&& fn) noexcept
     -> std::invoke_result_t<Fn&> {
     using Ret = std::invoke_result_t<Fn&>;
-    static_assert(!std::is_void_v<Ret>, "void callable: use plugin_guard::guardCallVoid");
+    static_assert(!std::is_void_v<Ret>, "void callable: use agentxx::plugin::guardCallVoid");
     try {
         return fn();
     } catch (...) {
@@ -152,7 +156,7 @@ template<typename LogFn, typename Fn>
 /// 返回 (吞掉)。整体 noexcept, 异常绝不外泄。
 ///
 /// 用法:
-///   plugin_guard::guardCallVoid(pluginCatchLog, [&] { ... });
+///   agentxx::plugin::guardCallVoid(pluginCatchLog, [&] { ... });
 template<typename LogFn, typename Fn>
 inline void guardCallVoid(LogFn&& logFn, Fn&& fn) noexcept {
     try {
@@ -162,7 +166,7 @@ inline void guardCallVoid(LogFn&& logFn, Fn&& fn) noexcept {
     }
 }
 
-} // namespace plugin_guard
+} // namespace plugin
 } // namespace agentxx
 
 #endif /* __cplusplus */

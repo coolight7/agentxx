@@ -12,10 +12,10 @@
  * 5. 卸载: destroy 释放实例
  * 6. client 入口 (双端插件, agentxx_plugin_client_create)
  */
-#include "agentxx/plugin/client_plugin_api.h"
-#include "agentxx/plugin/plugin_api.h"
-#include "agentxx/plugin/plugin_guard.h"
-#include "agentxx/plugin/plugin_kit.h"
+#include "agentxx/plugin/api/client_plugin_api.h"
+#include "agentxx/plugin/api/plugin_api.h"
+#include "agentxx/plugin/api/plugin_guard.h"
+#include "agentxx/plugin/api/plugin_kit.h"
 #include "fmt/format.h"
 
 #include <memory>
@@ -26,7 +26,7 @@
  * 每实例上下文
  * ===================================================================== */
 
-struct AgentCtx : public agentxx::kit::PluginBase {};
+struct AgentCtx : public agentxx::plugin::PluginBase {};
 
 struct ClientCtx {
     const AgentxxClientHost*      host = nullptr;
@@ -41,7 +41,7 @@ struct ClientCtx {
 static auto agentGuardLogger(AgentCtx* ctx) noexcept {
     return [ctx](const char* msg) noexcept {
         if (ctx && ctx->host && ctx->iface.log && ctx->iface.log->log) {
-            agentxx::plugin_guard::logTo(ctx->host, ctx->iface.log, 4, "example_plugin", msg);
+            agentxx::plugin::logTo(ctx->host, ctx->iface.log, 4, "example_plugin", msg);
         }
     };
 }
@@ -49,7 +49,7 @@ static auto agentGuardLogger(AgentCtx* ctx) noexcept {
 static auto clientGuardLogger(ClientCtx* ctx) noexcept {
     return [ctx](const char* msg) noexcept {
         if (ctx && ctx->host && ctx->iface.log && ctx->iface.log->log) {
-            agentxx::plugin_guard::logTo(ctx->host, ctx->iface.log, 4, "example_plugin", msg);
+            agentxx::plugin::logTo(ctx->host, ctx->iface.log, 4, "example_plugin", msg);
         }
     };
 }
@@ -57,7 +57,7 @@ static auto clientGuardLogger(ClientCtx* ctx) noexcept {
 /* ---------------- get_info ---------------- */
 
 extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_agent_get_info(void) {
-    return agentxx::plugin_guard::guardCall(
+    return agentxx::plugin::guardCall(
         [](const char*) noexcept {},
         nullptr,
         [&]() -> const AgentxxPluginInfo* {
@@ -77,7 +77,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_agent_g
 static void on_demo_event(AgentxxPluginStringView event_json, void* ud) {
     (void)event_json;
     auto* ctxRaw = static_cast<AgentCtx*>(ud);
-    agentxx::plugin_guard::guardCallVoid(agentGuardLogger(ctxRaw), [&] {
+    agentxx::plugin::guardCallVoid(agentGuardLogger(ctxRaw), [&] {
         auto* ctx = static_cast<AgentCtx*>(ud);
         if (ctx) {
             ctx->log.info("example event received");
@@ -88,7 +88,7 @@ static void on_demo_event(AgentxxPluginStringView event_json, void* ud) {
 static void on_client_hello(AgentxxPluginStringView event_json, void* ud) {
     (void)event_json;
     auto* ctxRaw = static_cast<AgentCtx*>(ud);
-    agentxx::plugin_guard::guardCallVoid(agentGuardLogger(ctxRaw), [&] {
+    agentxx::plugin::guardCallVoid(agentGuardLogger(ctxRaw), [&] {
         auto* ctx = static_cast<AgentCtx*>(ud);
         if (ctx) {
             ctx->log.info("example received client hello event");
@@ -101,7 +101,7 @@ static void on_client_hello(AgentxxPluginStringView event_json, void* ud) {
 extern "C" AGENTXX_PLUGIN_EXPORT int
     agentxx_plugin_agent_create(const AgentxxPluginHost* host, void** plugin_ctx) {
     AgentCtx* raw = nullptr;
-    return agentxx::plugin_guard::guardCall(
+    return agentxx::plugin::guardCall(
         [&raw](const char* msg) noexcept {
             agentGuardLogger(raw)(msg);
         },
@@ -119,7 +119,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
             }
 
             // 1.1 echo: 快同步内联工具 (fast_tool)
-            agentxx::kit::fast_tool(
+            agentxx::plugin::fast_tool(
                 *ctx,
                 "example_echo",
                 "Echo the input arguments back as JSON (example plugin tool).",
@@ -134,27 +134,31 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
             );
 
             // 1.2 caller: 锚定 Task 协程互调工具 (tool + call_tool)
-            agentxx::kit::tool(
+            agentxx::plugin::tool(
                 *ctx,
                 "example_caller",
                 "Call example_echo via call_tool to demonstrate plugin interop.",
                 R"({"type":"object","properties":{},"additionalProperties":true})",
-                [](AgentCtx& c, std::string_view args, agentxx::kit::OpCtl ctl
-                ) -> agentxx::kit::Task<std::string> {
-                    std::string resp
-                        = co_await agentxx::kit::call_tool(c, "example_echo", args, ctl.threadId);
+                [](AgentCtx& c, std::string_view args, agentxx::plugin::OpCtl ctl
+                ) -> agentxx::plugin::Task<std::string> {
+                    std::string resp = co_await agentxx::plugin::call_tool(
+                        c,
+                        "example_echo",
+                        args,
+                        ctl.threadId
+                    );
                     co_return fmt::format(R"({{"via_call_tool": {}}})", resp);
                 }
             );
 
             // 1.3 sleeper: 锚定 Task 协程 sleep 工具 (tool + sleep)
-            agentxx::kit::tool(
+            agentxx::plugin::tool(
                 *ctx,
                 "example_sleep",
                 "Sleep duration_ms milliseconds then return (slow plugin tool).",
                 R"({"type":"object","properties":{"durationMs":{"type":"integer"}}})",
-                [](AgentCtx& c, std::string_view args, agentxx::kit::OpCtl ctl
-                ) -> agentxx::kit::Task<std::string> {
+                [](AgentCtx& c, std::string_view args, agentxx::plugin::OpCtl ctl
+                ) -> agentxx::plugin::Task<std::string> {
                     int ms = 200;
                     try {
                         auto j = neograph::json::parse(args);
@@ -163,7 +167,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                         }
                     } catch (...) {
                     }
-                    co_await agentxx::kit::sleep(c, ms > 0 ? ms : 0);
+                    co_await agentxx::plugin::sleep(c, ms > 0 ? ms : 0);
                     ctl.throw_if_cancelled();
                     co_return fmt::format(R"({{"slept_ms": {}}})", ms);
                 }
@@ -171,7 +175,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
 
             // 2. 钩子 (agent_start)
             if (ctx->iface.hooks && ctx->iface.hooks->register_hook) {
-                agentxx::kit::hook(
+                agentxx::plugin::hook(
                     *ctx,
                     AGENTXX_PLUGIN_HOOK_AGENT_START,
                     [](AgentCtx& c, AgentxxPluginHookPoint, std::string_view) {
@@ -222,7 +226,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
 
 extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_agent_destroy(void* plugin_ctx) {
     auto* ctx = static_cast<AgentCtx*>(plugin_ctx);
-    agentxx::plugin_guard::guardCallVoid(agentGuardLogger(ctx), [&] {
+    agentxx::plugin::guardCallVoid(agentGuardLogger(ctx), [&] {
         if (!ctx) {
             return;
         }
@@ -236,7 +240,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_agent_destroy(void* plugin_
 
 extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxClientPluginInfo* agentxx_plugin_client_get_info(void
 ) {
-    return agentxx::plugin_guard::guardCall(
+    return agentxx::plugin::guardCall(
         [](const char*) noexcept {},
         nullptr,
         [&]() -> const AgentxxClientPluginInfo* {
@@ -268,7 +272,7 @@ static std::string clientJsonEscape(const ClientCtx& ctx, std::string_view text)
 
 static char* example_cmd_execute(void* ud, AgentxxPluginStringView args_json, char** error_out) {
     auto* ctxRaw = static_cast<ClientCtx*>(ud);
-    return agentxx::plugin_guard::guardCall(clientGuardLogger(ctxRaw), nullptr, [&]() -> char* {
+    return agentxx::plugin::guardCall(clientGuardLogger(ctxRaw), nullptr, [&]() -> char* {
         auto* ctx = static_cast<ClientCtx*>(ud);
         if (!ctx || !ctx->host) {
             return nullptr;
@@ -297,7 +301,7 @@ static char* example_cmd_execute(void* ud, AgentxxPluginStringView args_json, ch
 
 static char* example_toast_execute(void* ud, AgentxxPluginStringView args_json, char** error_out) {
     auto* ctxRaw = static_cast<ClientCtx*>(ud);
-    return agentxx::plugin_guard::guardCall(clientGuardLogger(ctxRaw), nullptr, [&]() -> char* {
+    return agentxx::plugin::guardCall(clientGuardLogger(ctxRaw), nullptr, [&]() -> char* {
         auto* ctx = static_cast<ClientCtx*>(ud);
         if (!ctx || !ctx->host) {
             return nullptr;
@@ -323,7 +327,7 @@ static char* example_toast_execute(void* ud, AgentxxPluginStringView args_json, 
 static void on_client_ready(AgentxxPluginStringView payload_json, void* ud) {
     (void)payload_json;
     auto* ctxRaw = static_cast<ClientCtx*>(ud);
-    agentxx::plugin_guard::guardCallVoid(clientGuardLogger(ctxRaw), [&] {
+    agentxx::plugin::guardCallVoid(clientGuardLogger(ctxRaw), [&] {
         auto* ctx = ctxRaw;
         if (!ctx || !ctx->host) {
             return;
@@ -344,7 +348,7 @@ static void on_client_ready(AgentxxPluginStringView payload_json, void* ud) {
 static void on_client_turn_end(AgentxxPluginStringView payload_json, void* ud) {
     (void)payload_json;
     auto* ctxRaw = static_cast<ClientCtx*>(ud);
-    agentxx::plugin_guard::guardCallVoid(clientGuardLogger(ctxRaw), [&] {
+    agentxx::plugin::guardCallVoid(clientGuardLogger(ctxRaw), [&] {
         auto* ctx = ctxRaw;
         if (!ctx || !ctx->host) {
             return;
@@ -389,7 +393,7 @@ static void on_client_plugin_data(AgentxxPluginStringView payload_json, void* ud
                       ->json_get_string(ctx->host, payload_json, agentxx_plugin_sv_cstr("event"));
     char* data
         = ctx->iface.json->json_get_string(ctx->host, payload_json, agentxx_plugin_sv_cstr("data"));
-    agentxx::plugin_guard::guardCallVoid(clientGuardLogger(ctx), [&] {
+    agentxx::plugin::guardCallVoid(clientGuardLogger(ctx), [&] {
         std::string line = fmt::format("{}.{}", plugin ? plugin : "?", event ? event : "?");
         if (data && *data) {
             line = fmt::format("{}: {}", line, data);
@@ -416,7 +420,7 @@ static void on_client_plugin_data(AgentxxPluginStringView payload_json, void* ud
 extern "C" AGENTXX_PLUGIN_EXPORT int
     agentxx_plugin_client_create(const AgentxxClientHost* host, void** plugin_ctx) {
     ClientCtx* raw = nullptr;
-    return agentxx::plugin_guard::guardCall(
+    return agentxx::plugin::guardCall(
         [&raw](const char* msg) noexcept {
             clientGuardLogger(raw)(msg);
         },
@@ -517,7 +521,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
 
 extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_client_destroy(void* plugin_ctx) {
     auto* ctx = static_cast<ClientCtx*>(plugin_ctx);
-    agentxx::plugin_guard::guardCallVoid(clientGuardLogger(ctx), [&] {
+    agentxx::plugin::guardCallVoid(clientGuardLogger(ctx), [&] {
         if (!ctx || !ctx->host) {
             delete ctx;
             return;

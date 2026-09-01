@@ -1,6 +1,6 @@
 # 插件系统开发指南
 
-> 关联: [design.md](design.md) (主程序架构) · [ffi.md](ffi.md) (FFI) · 源码: [agent/plugins/](../../agent/plugins/) · C ABI 契约: [plugin_api.h](../../agent/lib/include/agentxx/plugin/plugin_api.h) / [client_plugin_api.h](../../agent/lib/include/agentxx/plugin/client_plugin_api.h) / SDK: [plugin_kit.h](../../agent/lib/include/agentxx/plugin/plugin_kit.h)
+> 关联: [design.md](design.md) (主程序架构) · [ffi.md](ffi.md) (FFI) · 源码: [agent/plugins/](../../agent/plugins/) · C ABI 契约: [plugin_api.h](../../agent/lib/include/agentxx/plugin/api/plugin_api.h) / [client_plugin_api.h](../../agent/lib/include/agentxx/plugin/api/client_plugin_api.h) / SDK: [plugin_kit.h](../../agent/lib/include/agentxx/plugin/api/plugin_kit.h)
 
 ---
 
@@ -52,7 +52,7 @@ Agentxx 插件系统采用 **纯 C ABI + COM 风格接口表查询**：
 插件动态库默认隐藏全部符号，仅导出宿主按名查找的入口符号。入口函数必须以 `AGENTXX_PLUGIN_EXPORT` 标记 (位于 `extern "C"` 内)：
 
 ```c
-#include "agentxx/plugin/plugin_api.h"
+#include "agentxx/plugin/api/plugin_api.h"
 extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_agent_get_info(void);
 extern "C" AGENTXX_PLUGIN_EXPORT int agentxx_plugin_agent_create(const AgentxxHost* host, void** plugin_ctx);
 extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_agent_destroy(void* plugin_ctx);
@@ -90,49 +90,49 @@ auto b64 = agentxx::util::base64Encode(data);
 推荐使用官方 header-only SDK `plugin_kit.h` (仅依赖 `plugin_api.h`)：
 
 ```cpp
-#include "agentxx/plugin/plugin_kit.h"
-struct MyPluginCtx : public agentxx::kit::PluginBase {};
+#include "agentxx/plugin/api/plugin_kit.h"
+struct MyPluginCtx : public agentxx::plugin::PluginBase {};
 
 extern "C" AGENTXX_PLUGIN_EXPORT int agentxx_plugin_agent_create(const AgentxxHost* host, void** plugin_ctx) {
     auto ctx = std::make_unique<MyPluginCtx>();
     ctx->init(host);
 
     // Task 锚定协程工具 (可精确 sleep / yield / call_tool / offload)
-    agentxx::kit::tool(*ctx, "my_async_tool", "desc", R"({"type":"object","properties":{}})",
-        [](MyPluginCtx& c, std::string_view args_json, agentxx::kit::OpCtl ctl) -> agentxx::kit::Task<std::string> {
-            co_await agentxx::kit::sleep(c, 100);
+    agentxx::plugin::tool(*ctx, "my_async_tool", "desc", R"({"type":"object","properties":{}})",
+        [](MyPluginCtx& c, std::string_view args_json, agentxx::plugin::OpCtl ctl) -> agentxx::plugin::Task<std::string> {
+            co_await agentxx::plugin::sleep(c, 100);
             ctl.throw_if_cancelled();
-            // 跨插件互调: co_await agentxx::kit::call_tool(c, "other_tool", "{}", threadId);
+            // 跨插件互调: co_await agentxx::plugin::call_tool(c, "other_tool", "{}", threadId);
             co_return R"({"status":"ok"})";
         });
 
     // 快同步内联 (<~1ms, IO 线程直接计算返回)
-    agentxx::kit::fast_tool(*ctx, "my_fast_tool", "desc", R"({"type":"object","properties":{}})",
+    agentxx::plugin::fast_tool(*ctx, "my_fast_tool", "desc", R"({"type":"object","properties":{}})",
         [](MyPluginCtx& c, std::string_view args_json, std::string_view tid) -> std::string {
             return R"({"result":42})";
         });
 
     // 阻塞工具 (自动卸载到宿主 blockingPool, 不占 IO 线程)
-    agentxx::kit::blocking_tool(*ctx, "my_blocking_tool", "desc", R"({"type":"object","properties":{}})",
+    agentxx::plugin::blocking_tool(*ctx, "my_blocking_tool", "desc", R"({"type":"object","properties":{}})",
         [](MyPluginCtx& c, std::string_view args_json) -> std::string {
             // 重型计算/同步文件/网络操作
             return R"({"done":true})";
         });
 
     // 后台协作任务 (替代周期定时器, 随实例销毁自动取消)
-    agentxx::kit::spawn(*ctx, [](MyPluginCtx& c, agentxx::kit::OpCtl ctl) -> agentxx::kit::Task<void> {
+    agentxx::plugin::spawn(*ctx, [](MyPluginCtx& c, agentxx::plugin::OpCtl ctl) -> agentxx::plugin::Task<void> {
         while (!ctl.cancelled()) {
-            co_await agentxx::kit::sleep(c, 5000);
+            co_await agentxx::plugin::sleep(c, 5000);
             if (ctl.cancelled()) break;
             // 采集并 publish 事件
         }
     });
 
     // 钩子 (7 钩子点: agent_start/end, model_start/run/end, tool_start/end)
-    agentxx::kit::hook(*ctx, AGENTXX_HOOK_MODEL_START, [](MyPluginCtx& c, std::string_view in){ /*...*/ });
+    agentxx::plugin::hook(*ctx, AGENTXX_HOOK_MODEL_START, [](MyPluginCtx& c, std::string_view in){ /*...*/ });
 
     // 能力 (跨插件通用 RPC 通道)
-    agentxx::kit::capability(*ctx, "my.cap", [](MyPluginCtx& c, const AgentxxHost* caller, std::string_view method, std::string_view args){ return "{}"; });
+    agentxx::plugin::capability(*ctx, "my.cap", [](MyPluginCtx& c, const AgentxxHost* caller, std::string_view method, std::string_view args){ return "{}"; });
 
     *plugin_ctx = ctx.release();
     return 0;

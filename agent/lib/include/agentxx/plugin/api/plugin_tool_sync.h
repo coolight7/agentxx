@@ -4,7 +4,7 @@
 #ifndef AGENTXX_PLUGIN_TOOL_SYNC_H
 #define AGENTXX_PLUGIN_TOOL_SYNC_H
 
-#include "agentxx/plugin/plugin_api.h"
+#include "agentxx/plugin/api/plugin_api.h"
 
 #include <stdlib.h>
 #include <string.h>

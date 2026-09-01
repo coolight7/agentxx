@@ -11,8 +11,8 @@
  */
 #pragma once
 
-#include "agentxx/plugin/client_plugin_api.h"
-#include "agentxx/plugin/plugin_api.h"
+#include "agentxx/plugin/api/client_plugin_api.h"
+#include "agentxx/plugin/api/plugin_api.h"
 
 namespace agentxx {
 namespace plugin {

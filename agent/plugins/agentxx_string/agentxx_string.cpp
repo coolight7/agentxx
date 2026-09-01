@@ -26,7 +26,7 @@ std::string schemaHtml2Md(PluginCtx* ctx) {
                     {"type", "string"},
                     {
                         "description",
-                        agentxx::kit::
+                        agentxx::plugin::
                             toolPromptArgDesc(p, "content", "The HTML string to convert."),
                     },
                 },
@@ -48,7 +48,7 @@ std::string schemaRegexp(PluginCtx* ctx) {
                      {"type", "string"},
                      {
                          "description",
-                         agentxx::kit::
+                         agentxx::plugin::
                              toolPromptArgDesc(p, "content", "The input text to operate on."),
                      },
                  },
@@ -60,7 +60,7 @@ std::string schemaRegexp(PluginCtx* ctx) {
                      {"items", {{"type", "string"}}},
                      {
                          "description",
-                         agentxx::kit::toolPromptArgDesc(
+                         agentxx::plugin::toolPromptArgDesc(
                              p,
                              "exps",
                              "Array of regex patterns. A match succeeds if ANY pattern matches."
@@ -75,7 +75,7 @@ std::string schemaRegexp(PluginCtx* ctx) {
                      {"enum", neograph::json::array({"search", "replace", "remove"})},
                      {
                          "description",
-                         agentxx::kit::toolPromptArgDesc(
+                         agentxx::plugin::toolPromptArgDesc(
                              p,
                              "opt",
                              "Operation mode:\n`search`: Return all match results.\n`replace`: Replace matches with `replace_str` and return the resulting text.\n`remove`: Remove all matches and return the resulting text.\n"
@@ -90,7 +90,7 @@ std::string schemaRegexp(PluginCtx* ctx) {
                      {"default", ""},
                      {
                          "description",
-                         agentxx::kit::toolPromptArgDesc(
+                         agentxx::plugin::toolPromptArgDesc(
                              p,
                              "replace_str",
                              "Default: empty string. The replacement string used when `opt` is `replace`."
@@ -108,7 +108,7 @@ std::string schemaRegexp(PluginCtx* ctx) {
 /* ---------------- 插件入口 / 销毁 ---------------- */
 
 extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_agent_get_info(void) {
-    return agentxx::plugin_guard::guardCall(
+    return agentxx::plugin::guardCall(
         [](const char*) noexcept {},
         nullptr,
         [&]() -> const AgentxxPluginInfo* {
@@ -128,7 +128,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_agent_g
 extern "C" AGENTXX_PLUGIN_EXPORT int
     agentxx_plugin_agent_create(const AgentxxPluginHost* host, void** plugin_ctx) {
     PluginCtx* raw = nullptr;
-    return agentxx::plugin_guard::guardCall(
+    return agentxx::plugin::guardCall(
         [&raw](const char* msg) noexcept {
             ctxGuardLogger(raw)(msg);
         },
@@ -146,7 +146,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
             }
 
             // 1. agentxx_string_html_to_markdown (blocking_tool)
-            agentxx::kit::blocking_tool(
+            agentxx::plugin::blocking_tool(
                 *ctx,
                 kNameHtml2Md,
                 kDepictHtml2Md,
@@ -159,7 +159,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
             );
 
             // 2. agentxx_string_regexp (blocking_tool)
-            agentxx::kit::blocking_tool(
+            agentxx::plugin::blocking_tool(
                 *ctx,
                 kNameRegexp,
                 kDepictRegexp,
@@ -179,7 +179,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
 
 extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_agent_destroy(void* plugin_ctx) {
     auto* ctx = static_cast<PluginCtx*>(plugin_ctx);
-    agentxx::plugin_guard::guardCallVoid(ctxGuardLogger(ctx), [&] {
+    agentxx::plugin::guardCallVoid(ctxGuardLogger(ctx), [&] {
         if (ctx) {
             delete ctx;
         }

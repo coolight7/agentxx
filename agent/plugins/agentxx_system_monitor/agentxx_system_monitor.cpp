@@ -1,7 +1,7 @@
 // agentxx_system_monitor —— 系统资源监控插件 (CPU/内存/GPU)
-#include "agentxx/plugin/client_plugin_api.h"
-#include "agentxx/plugin/plugin_guard.h"
-#include "agentxx/plugin/plugin_kit.h"
+#include "agentxx/plugin/api/client_plugin_api.h"
+#include "agentxx/plugin/api/plugin_guard.h"
+#include "agentxx/plugin/api/plugin_kit.h"
 #include "agentxx/util/string_util.h"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
@@ -36,7 +36,7 @@ static agentxx_system_monitor_plugin::CpuGpuUsage querySync() {
 
 static constexpr int kUsageIntervalSec = 5;
 
-struct PluginCtx : public agentxx::kit::PluginBase {
+struct PluginCtx : public agentxx::plugin::PluginBase {
     std::atomic<bool>                            usageEnabled{true};
     agentxx_system_monitor_plugin::PluginLogSink log_sink;
 };
@@ -133,7 +133,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_agent_g
 extern "C" AGENTXX_PLUGIN_EXPORT int
     agentxx_plugin_agent_create(const AgentxxPluginHost* host, void** plugin_ctx) {
     PluginCtx* raw = nullptr;
-    return agentxx::plugin_guard::guardCall(
+    return agentxx::plugin::guardCall(
         [&raw](const char* msg) noexcept {
             ctxGuardLogger(raw)(msg);
         },
@@ -161,7 +161,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
             }
 
             // 1. 工具: agentxx_get_system_core_info (blocking_tool)
-            agentxx::kit::blocking_tool(
+            agentxx::plugin::blocking_tool(
                 *ctx,
                 "agentxx_get_system_core_info",
                 "Get system resource usage: CPU utilization, memory usage, GPU utilization, and GPU memory usage.",
@@ -173,7 +173,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
             );
 
             // 2. 能力: agentxx.system_usage (方法 query)
-            agentxx::kit::capability(
+            agentxx::plugin::capability(
                 *ctx,
                 "agentxx.system_usage",
                 [](PluginCtx&, const AgentxxPluginHost*, std::string_view, std::string_view
@@ -253,12 +253,12 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
             }
 
             // 4. 周期采集后台任务 (spawn + sleep + offload)
-            agentxx::kit::spawn(
+            agentxx::plugin::spawn(
                 *ctx,
-                [](PluginCtx& c, agentxx::kit::OpCtl ctl) -> agentxx::kit::Task<void> {
+                [](PluginCtx& c, agentxx::plugin::OpCtl ctl) -> agentxx::plugin::Task<void> {
                     while (!ctl.cancelled()) {
                         if (c.usageEnabled.load(std::memory_order_relaxed)) {
-                            auto usage = co_await agentxx::kit::offload(c, [](volatile int*) {
+                            auto usage = co_await agentxx::plugin::offload(c, [](volatile int*) {
                                 return querySync();
                             });
                             if (ctl.cancelled()) {
@@ -273,7 +273,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                                 );
                             }
                         }
-                        co_await agentxx::kit::sleep(c, kUsageIntervalSec * 1000);
+                        co_await agentxx::plugin::sleep(c, kUsageIntervalSec * 1000);
                     }
                 }
             );
@@ -286,7 +286,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
 
 extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_agent_destroy(void* plugin_ctx) {
     auto* ctx = static_cast<PluginCtx*>(plugin_ctx);
-    agentxx::plugin_guard::guardCallVoid(ctxGuardLogger(ctx), [&] {
+    agentxx::plugin::guardCallVoid(ctxGuardLogger(ctx), [&] {
         if (ctx) {
             const auto* exp = &ctx->log_sink;
             agentxx_system_monitor_plugin::g_log_sink.compare_exchange_strong(exp, nullptr);
@@ -307,7 +307,7 @@ struct ClientCtx {
     std::string                   last_usage_json;
 
     void logErr(const char* m) const noexcept {
-        agentxx::plugin_guard::logTo(host, iface.log, 4, "agentxx_system_monitor", m ? m : "");
+        agentxx::plugin::logTo(host, iface.log, 4, "agentxx_system_monitor", m ? m : "");
     }
 };
 
@@ -451,7 +451,7 @@ static char* cmdSysinfoExecute(void* ud, AgentxxPluginStringView args_json, char
     if (!ctx || !ctx->host) {
         return nullptr;
     }
-    return agentxx::plugin_guard::guardCall(
+    return agentxx::plugin::guardCall(
         [ctx](const char* m) noexcept {
             ctx->logErr(m);
         },
@@ -526,7 +526,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxClientPluginInfo* agentxx_plugin_c
 extern "C" AGENTXX_PLUGIN_EXPORT int
     agentxx_plugin_client_create(const AgentxxClientHost* host, void** plugin_ctx) {
     ClientCtx* raw = nullptr;
-    return agentxx::plugin_guard::guardCall(
+    return agentxx::plugin::guardCall(
         [&raw](const char* m) noexcept {
             if (raw) {
                 raw->logErr(m);
@@ -589,7 +589,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
 
 extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_client_destroy(void* plugin_ctx) {
     auto* ctx = static_cast<ClientCtx*>(plugin_ctx);
-    agentxx::plugin_guard::guardCallVoid(
+    agentxx::plugin::guardCallVoid(
         [ctx](const char* m) noexcept {
             if (ctx) {
                 ctx->logErr(m);

@@ -292,7 +292,7 @@ void publishPlanningEvent(PluginCtx& ctx, const std::string& planJson) {
 void on_client_attached(AgentxxPluginStringView event_json, void* ud) {
     auto* ctxRaw = static_cast<PluginCtx*>(ud);
     // C ABI 回调异常守卫 (agent io 线程派发直调)
-    agentxx::plugin_guard::guardCallVoid(
+    agentxx::plugin::guardCallVoid(
         [ctxRaw](const char* msg) noexcept {
             pluginLog(ctxRaw, 4, msg ? msg : "");
         },
@@ -325,7 +325,7 @@ void on_client_attached(AgentxxPluginStringView event_json, void* ud) {
 extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_agent_get_info(void) {
     // C ABI 边界异常守卫: 异常返回 NULL (宿主按"未导出"处理);
     // 本边界为纯静态元数据, 无实例上下文可捕获 → 空操作日志闭包
-    return agentxx::plugin_guard::guardCall(
+    return agentxx::plugin::guardCall(
         [](const char*) noexcept {},
         nullptr,
         [&]() -> const AgentxxPluginInfo* {
@@ -347,7 +347,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
     // C ABI 边界异常守卫: create 内含 JSON schema 构建等可抛操作, 异常返回 -1;
     // 守卫日志闭包捕获局部裸指针 (ctx 装配前置空 → 异常路径静默丢弃)
     PluginCtx* raw = nullptr;
-    return agentxx::plugin_guard::guardCall(
+    return agentxx::plugin::guardCall(
         [&raw](const char* msg) noexcept {
             pluginLog(raw, 4, msg ? msg : "");
         },
@@ -386,8 +386,8 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
             // 规划持久化 + 事件发布为通用接口 (不再依赖专用 planning iface)
 
             {
-                agentxx::kit::ToolPromptText p      = ctx->toolPrompt(kNamePlanning);
-                std::string                  depict = p.depict;
+                agentxx::plugin::ToolPromptText p      = ctx->toolPrompt(kNamePlanning);
+                std::string                     depict = p.depict;
                 if (depict.empty()) {
                     depict = kDepictPlanning;
                 }
@@ -401,7 +401,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                           {"type", "string"},
                           {"enum", neograph::json::array({"write", "read"})},
                           {"description",
-                           agentxx::kit::toolPromptArgDesc(p,
+                           agentxx::plugin::toolPromptArgDesc(p,
                                    "mode",
                                    "Operation mode: `write` saves/updates the planning content "
                                    "(requires `roadmap`); `read` returns the previously saved "
@@ -411,7 +411,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                       {
                           {"type", "string"},
                           {"description",
-                           agentxx::kit::toolPromptArgDesc(p,
+                           agentxx::plugin::toolPromptArgDesc(p,
                                    "roadmap",
                                    "(write only, required) STRATEGIC LAYER: Mermaid stateDiagram-v2 of the overall workflow.")},
                       }},
@@ -420,7 +420,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                           {"type", "array"},
                           {"items", neograph::json{{"type", "object"}}},
                           {"description",
-                           agentxx::kit::toolPromptArgDesc(p,
+                           agentxx::plugin::toolPromptArgDesc(p,
                                    "todos",
                                    "(write only) TACTICAL LAYER: Near-term task items (state/content).")},
                       }},
@@ -428,7 +428,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                       {
                           {"type", "string"},
                           {"description",
-                           agentxx::kit::toolPromptArgDesc(p,
+                           agentxx::plugin::toolPromptArgDesc(p,
                                    "notes",
                                    "(write only) MEMO LAYER: Any additional notes, tips, reminders.")},
                       }},
@@ -436,7 +436,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
             }
                                   .dump();
 
-                agentxx::kit::fast_tool(
+                agentxx::plugin::fast_tool(
                     *ctx,
                     kNamePlanning,
                     depict,
@@ -542,7 +542,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
 extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_agent_destroy(void* plugin_ctx) {
     // C ABI 边界异常守卫: 销毁回调异常不得外泄
     auto* ctx = static_cast<PluginCtx*>(plugin_ctx);
-    agentxx::plugin_guard::guardCallVoid(ctxGuardLogger(ctx), [&] {
+    agentxx::plugin::guardCallVoid(ctxGuardLogger(ctx), [&] {
         delete ctx;
     });
 }
@@ -863,7 +863,7 @@ static void refreshPlanSection(ClientCtx& ctx) {
 static void on_client_plugin_data(AgentxxPluginStringView payload_json, void* ud) {
     auto* ctxRaw = static_cast<ClientCtx*>(ud);
     // C ABI 回调异常守卫 (client io 线程派发直调)
-    agentxx::plugin_guard::guardCallVoid(clientGuardLogger(ctxRaw), [&] {
+    agentxx::plugin::guardCallVoid(clientGuardLogger(ctxRaw), [&] {
         auto* ctx = static_cast<ClientCtx*>(ud);
         if (!ctx || !ctx->host) {
             return;
@@ -914,7 +914,7 @@ static void on_client_plugin_data(AgentxxPluginStringView payload_json, void* ud
 ///   read 模式此时展示结果摘要
 static void on_client_delta(AgentxxPluginStringView payload_json, void* ud) {
     auto* ctxRaw = static_cast<ClientCtx*>(ud);
-    agentxx::plugin_guard::guardCallVoid(clientGuardLogger(ctxRaw), [&] {
+    agentxx::plugin::guardCallVoid(clientGuardLogger(ctxRaw), [&] {
         auto* ctx = static_cast<ClientCtx*>(ud);
         if (!ctx || !ctx->host || !ctx->ui || !ctx->ui->update_tool_decor) {
             return;
@@ -1004,7 +1004,7 @@ static void on_client_delta(AgentxxPluginStringView payload_json, void* ud) {
 static void on_client_session_switch(AgentxxPluginStringView payload_json, void* ud) {
     (void)payload_json;
     auto* ctxRaw = static_cast<ClientCtx*>(ud);
-    agentxx::plugin_guard::guardCallVoid(clientGuardLogger(ctxRaw), [&] {
+    agentxx::plugin::guardCallVoid(clientGuardLogger(ctxRaw), [&] {
         auto* ctx = static_cast<ClientCtx*>(ud);
         if (!ctx) {
             return;
@@ -1017,7 +1017,7 @@ static void on_client_session_switch(AgentxxPluginStringView payload_json, void*
 extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxClientPluginInfo* agentxx_plugin_client_get_info(void
 ) {
     // C ABI 边界异常守卫: 异常返回 NULL; 本边界为纯静态元数据 → 空操作日志
-    return agentxx::plugin_guard::guardCall(
+    return agentxx::plugin::guardCall(
         [](const char*) noexcept {},
         nullptr,
         [&]() -> const AgentxxClientPluginInfo* {
@@ -1038,7 +1038,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
     agentxx_plugin_client_create(const AgentxxClientHost* host, void** plugin_ctx) {
     // C ABI 边界异常守卫: 异常返回 -1 (加载失败); 日志闭包捕获局部裸指针
     ClientCtx* raw = nullptr;
-    return agentxx::plugin_guard::guardCall(
+    return agentxx::plugin::guardCall(
         [&raw](const char* msg) noexcept {
             clientGuardLogger(raw)(msg);
         },
@@ -1097,7 +1097,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
 extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_client_destroy(void* plugin_ctx) {
     // C ABI 边界异常守卫: 销毁回调异常不得外泄
     auto* ctx = static_cast<ClientCtx*>(plugin_ctx);
-    agentxx::plugin_guard::guardCallVoid(clientGuardLogger(ctx), [&] {
+    agentxx::plugin::guardCallVoid(clientGuardLogger(ctx), [&] {
         if (!ctx || !ctx->host) {
             delete ctx;
             return;

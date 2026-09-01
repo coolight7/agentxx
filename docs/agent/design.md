@@ -1240,18 +1240,20 @@ agent/
 │   │   │   ├── toolcall.h        # ToolcallWrapNode (工具分发, 自动压缩)
 │   │   │   └── agentcall.h       # AgentStart/EndCallWrapNode (会话生命周期)
 │   │   ├── plugin/               # 插件系统 (热插拔原生 C++ 插件, 纯 C ABI, API v1 —— 冻结核心 vtable + 13 张接口表)
-│   │   │   ├── plugin_api.h      # 纯 C ABI 契约 (唯一跨版本稳定接口, 见 docs/agent/plugins.md) — 核心 vtable 冻结 + COM QueryInterface
-│   │   │   ├── plugin_kit.h      # C++ SDK header-only (PluginBase/Task/awaiters/tool/hook/capability/spawn)
+│   │   │   ├── api/              # 插件 API 头 (插件/宿主共用 C ABI 契约 + 插件 SDK; 宿主侧引用也走 api/ 前缀)
+│   │   │   │   ├── plugin_api.h      # 纯 C ABI 契约 (唯一跨版本稳定接口, 见 docs/agent/plugins.md) — 核心 vtable 冻结 + COM QueryInterface
+│   │   │   │   ├── client_plugin_api.h # client 侧插件纯 C ABI 契约 (UI 无关语义层)
+│   │   │   │   ├── plugin_kit.h      # C++ SDK header-only (PluginBase/Task/awaiters/tool/hook/capability/spawn, 命名空间 agentxx::plugin)
+│   │   │   │   ├── plugin_guard.h    # 插件 C ABI 边界异常守卫 header-only (命名空间 agentxx::plugin)
+│   │   │   │   ├── plugin_iface_helper.h # 接口表查询缓存 (AgentIfaces/ClientIfaces)
+│   │   │   │   └── plugin_tool_sync.h    # 同步垫片适配器 (调用方内嵌存储)
 │   │   │   ├── op_driver.h       # 异步操作驱动 (AgentxxOpNotify Done 协议)
-│   │   │   ├── plugin_guard.h    # 插件调用 RAII 守卫
-│   │   │   ├── plugin_iface_helper.h # 接口表查询缓存 (AgentIfaces)
-│   │   │   ├── plugin_tool_sync.h    # 同步垫片适配器 (调用方内嵌存储)
 │   │   │   ├── plugin_manager.h  # PluginManager 生命周期 (load/enable/disable/unload) /
 │   │   │   │                     #   PluginTool (C 回调→线程池卸载执行) /
 │   │   │   │                     #   PluginMiddlewareHandle (7 钩子→C 回调) /
 │   │   │   │                     #   CapabilityRegistry / NativeLoader (dlopen↔LoadLibraryW)
+│   │   │   ├── plugin_manager_base.h # 插件管理器公共基类 (agent/client 共用: 实例基类/io 投递/等待/内存三件套)
 │   │   │   ├── plugin_common.h   # 插件宿主侧通用工具
-│   │   │   ├── client_plugin_api.h     # client 侧插件纯 C ABI 契约 (UI 无关语义层)
 │   │   │   ├── client_plugin_manager.h # ClientPluginManager (client 侧加载/UI 注册表/命令管线)
 │   │   │   └── tool_registry.h   # 动态插件工具查表 (shared_ptr 保活, 静态工具名冲突检测)
 │   │   ├── middlewares/          # 中间件

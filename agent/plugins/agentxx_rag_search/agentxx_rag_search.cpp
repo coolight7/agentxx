@@ -20,7 +20,7 @@ Returns the most relevant documents with content, source, and similarity score.)
 } // namespace
 
 extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_agent_get_info(void) {
-    return agentxx::plugin_guard::guardCall(
+    return agentxx::plugin::guardCall(
         [](const char*) noexcept {},
         nullptr,
         [&]() -> const AgentxxPluginInfo* {
@@ -40,7 +40,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_agent_g
 extern "C" AGENTXX_PLUGIN_EXPORT int
     agentxx_plugin_agent_create(const AgentxxPluginHost* host, void** plugin_ctx) {
     PluginCtx* raw = nullptr;
-    return agentxx::plugin_guard::guardCall(
+    return agentxx::plugin::guardCall(
         [&raw](const char* msg) noexcept {
             pluginLog(raw, 4, msg ? msg : "");
         },
@@ -149,7 +149,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                              {"type", "string"},
                              {
                                  "description",
-                                 agentxx::kit::toolPromptArgDesc(
+                                 agentxx::plugin::toolPromptArgDesc(
                                      p,
                                      "query",
                                      "Search query text to find relevant documents."
@@ -164,7 +164,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                              {"default", 3},
                              {
                                  "description",
-                                 agentxx::kit::toolPromptArgDesc(
+                                 agentxx::plugin::toolPromptArgDesc(
                                      p,
                                      "top_k",
                                      "Number of top relevant results to return (default 3, min 1, max 50)."
@@ -176,7 +176,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                 {"required", neograph::json::array({"query"})}
             }.dump();
 
-            agentxx::kit::blocking_tool(
+            agentxx::plugin::blocking_tool(
                 *ctx,
                 kNameSearch,
                 depict,
@@ -227,7 +227,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
 
 extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_agent_destroy(void* plugin_ctx) {
     auto* ctx = static_cast<PluginCtx*>(plugin_ctx);
-    agentxx::plugin_guard::guardCallVoid(
+    agentxx::plugin::guardCallVoid(
         [ctx](const char* msg) noexcept {
             pluginLog(ctx, 4, msg ? msg : "");
         },

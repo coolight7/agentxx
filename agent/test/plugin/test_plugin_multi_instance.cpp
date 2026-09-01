@@ -10,7 +10,7 @@
 #include "agentxx/agent/context.h"
 #include "agentxx/event/event_stream.h"
 #include "agentxx/middlewares/middleware.h"
-#include "agentxx/plugin/plugin_iface_helper.h"
+#include "agentxx/plugin/api/plugin_iface_helper.h"
 #include "agentxx/plugin/plugin_manager.h"
 #include "asio/co_spawn.hpp"
 #include <filesystem>

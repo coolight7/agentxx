@@ -46,7 +46,7 @@
 #include <stdint.h>
 #include <string.h>
 
-#include "agentxx/plugin/plugin_api.h" /* AgentxxPluginStringView / AgentxxPluginSubscription /
+#include "agentxx/plugin/api/plugin_api.h" /* AgentxxPluginStringView / AgentxxPluginSubscription /
                                           AGENTXX_PLUGIN_QUERY_IFACE / 核心契约共享类型 */
 
 #ifdef __cplusplus

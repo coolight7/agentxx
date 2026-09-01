@@ -8,7 +8,7 @@
 namespace agentxx_computer_use_plugin {
 std::string uiControlExecute(agentxx_computer_use_plugin::SimpleJson& arguments);
 
-struct PluginCtx : public agentxx::kit::PluginBase {};
+struct PluginCtx : public agentxx::plugin::PluginBase {};
 
 static auto ctxGuardLogger(PluginCtx* ctx) noexcept {
     return [ctx](const char* msg) noexcept {
@@ -117,7 +117,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_agent_g
 extern "C" AGENTXX_PLUGIN_EXPORT int
     agentxx_plugin_agent_create(const AgentxxPluginHost* host, void** plugin_ctx) {
     PluginCtx* raw = nullptr;
-    return agentxx::plugin_guard::guardCall(
+    return agentxx::plugin::guardCall(
         [&raw](const char* msg) noexcept {
             ctxGuardLogger(raw)(msg);
         },
@@ -137,7 +137,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
             auto        p      = ctx->toolPrompt("agentxx_ui_control_keyboard_mouse");
             std::string depict = p.depict.empty() ? kUiControlDefaultDepict : p.depict;
 
-            agentxx::kit::blocking_tool(
+            agentxx::plugin::blocking_tool(
                 *ctx,
                 "agentxx_ui_control_keyboard_mouse",
                 depict,
@@ -163,7 +163,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
 
 extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_agent_destroy(void* plugin_ctx) {
     auto* ctx = static_cast<PluginCtx*>(plugin_ctx);
-    agentxx::plugin_guard::guardCallVoid(ctxGuardLogger(ctx), [&] {
+    agentxx::plugin::guardCallVoid(ctxGuardLogger(ctx), [&] {
         if (ctx) {
             delete ctx;
         }

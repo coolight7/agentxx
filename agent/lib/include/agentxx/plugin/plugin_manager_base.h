@@ -25,8 +25,8 @@
  */
 #pragma once
 
-#include "agentxx/plugin/plugin_api.h"    /* AgentxxPluginHost 等 C ABI 类型 */
-#include "agentxx/plugin/plugin_common.h" /* collectReverseRequiredDeps (模板) */
+#include "agentxx/plugin/api/plugin_api.h" /* AgentxxPluginHost 等 C ABI 类型 */
+#include "agentxx/plugin/plugin_common.h"  /* collectReverseRequiredDeps (模板) */
 #include "agentxx/util/log.h"
 #include "asio/any_io_executor.hpp"
 #include "asio/awaitable.hpp"

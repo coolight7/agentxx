@@ -1,9 +1,9 @@
 // agentxx_execute_command 插件 —— 共享头
 #pragma once
 
-#include "agentxx/plugin/plugin_api.h"
-#include "agentxx/plugin/plugin_guard.h"
-#include "agentxx/plugin/plugin_kit.h"
+#include "agentxx/plugin/api/plugin_api.h"
+#include "agentxx/plugin/api/plugin_guard.h"
+#include "agentxx/plugin/api/plugin_kit.h"
 #include <fmt/format.h>
 #include <memory>
 #include <neograph/json.h>
@@ -11,7 +11,7 @@
 
 namespace agentxx_execmd_plugin {
 
-struct PluginCtx : public agentxx::kit::PluginBase {};
+struct PluginCtx : public agentxx::plugin::PluginBase {};
 
 inline void pluginLog(const PluginCtx* ctx, int level, const std::string& msg) {
     if (ctx) {

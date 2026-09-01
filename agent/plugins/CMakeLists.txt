@@ -142,10 +142,6 @@ add_compile_definitions(
 
 include_directories(
   "${AGENTXX_LIB_INCLUDE_DIR}"
-  # 插件专用 SDK 头 (plugin_kit/plugin_guard/plugin_iface_helper/plugin_tool_sync):
-  # 仅供插件/测试引用, 存放于 lib/src/plugins/api (宿主 libagentxx 不引用),
-  # 目录结构与 include/agentxx/plugin 一致, include 语句无需改动
-  "${AGENTXX_LIB_INCLUDE_DIR}/../src/plugins/api"
   "${AGENTXX_INSTALL_DIR}/include"
   "${neograph_SOURCE_DIR}/deps/yyjson"
 )

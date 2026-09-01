@@ -47,7 +47,7 @@ struct TextSelectionHolder {
     PluginCtx*                                                  ctx = nullptr;
 };
 
-struct PluginCtx : public agentxx::kit::PluginBase {
+struct PluginCtx : public agentxx::plugin::PluginBase {
     TextSelectionHolder                                  holder;
     agentxx_text_selection_monitor_plugin::PluginLogSink log_sink;
 };
@@ -131,7 +131,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_agent_g
 extern "C" AGENTXX_PLUGIN_EXPORT int
     agentxx_plugin_agent_create(const AgentxxPluginHost* host, void** plugin_ctx) {
     PluginCtx* raw = nullptr;
-    return agentxx::plugin_guard::guardCall(
+    return agentxx::plugin::guardCall(
         [&raw](const char* msg) noexcept {
             ctxGuardLogger(raw)(msg);
         },
@@ -159,7 +159,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                 return -1;
             }
 
-            agentxx::kit::blocking_tool(
+            agentxx::plugin::blocking_tool(
                 *ctx,
                 "agentxx_text_selection_monitor",
                 "Monitor system-wide text selection events. Supports start, stop, and status query.",
@@ -225,7 +225,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
 
 extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_agent_destroy(void* plugin_ctx) {
     auto* ctx = static_cast<PluginCtx*>(plugin_ctx);
-    agentxx::plugin_guard::guardCallVoid(ctxGuardLogger(ctx), [&] {
+    agentxx::plugin::guardCallVoid(ctxGuardLogger(ctx), [&] {
         if (ctx) {
             ctx->holder.stop();
             const auto* exp = &ctx->log_sink;

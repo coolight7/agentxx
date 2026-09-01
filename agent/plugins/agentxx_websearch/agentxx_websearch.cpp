@@ -43,7 +43,7 @@ std::string schemaFetch(PluginCtx* ctx) {
                      {"type", "string"},
                      {
                          "description",
-                         agentxx::kit::
+                         agentxx::plugin::
                              toolPromptArgDesc(p, "url", "Absolute HTTP/HTTPS URL to fetch."),
                      },
                  },
@@ -55,7 +55,7 @@ std::string schemaFetch(PluginCtx* ctx) {
                      {"default", 30},
                      {
                          "description",
-                         agentxx::kit::toolPromptArgDesc(p, "timeout", timeoutDesc(30)),
+                         agentxx::plugin::toolPromptArgDesc(p, "timeout", timeoutDesc(30)),
                      },
                  },
              },
@@ -65,7 +65,7 @@ std::string schemaFetch(PluginCtx* ctx) {
                      {"type", "object"},
                      {
                          "description",
-                         agentxx::kit::toolPromptArgDesc(p, "header", kHeaderArgDesc),
+                         agentxx::plugin::toolPromptArgDesc(p, "header", kHeaderArgDesc),
                      },
                  },
              }},
@@ -85,7 +85,7 @@ std::string schemaFetchMd(PluginCtx* ctx) {
                      {"type", "string"},
                      {
                          "description",
-                         agentxx::kit::toolPromptArgDesc(
+                         agentxx::plugin::toolPromptArgDesc(
                              p,
                              "url",
                              "Absolute HTTP/HTTPS URL to fetch.\n\n"
@@ -108,7 +108,7 @@ std::string schemaFetchMd(PluginCtx* ctx) {
                      {"default", 15},
                      {
                          "description",
-                         agentxx::kit::toolPromptArgDesc(p, "timeout", timeoutDesc(15)),
+                         agentxx::plugin::toolPromptArgDesc(p, "timeout", timeoutDesc(15)),
                      },
                  },
              },
@@ -118,7 +118,7 @@ std::string schemaFetchMd(PluginCtx* ctx) {
                      {"type", "object"},
                      {
                          "description",
-                         agentxx::kit::toolPromptArgDesc(p, "header", kHeaderArgDesc),
+                         agentxx::plugin::toolPromptArgDesc(p, "header", kHeaderArgDesc),
                      },
                  },
              }},
@@ -139,7 +139,7 @@ std::string schemaSearch(PluginCtx* ctx) {
                      {"minLength", 1},
                      {
                          "description",
-                         agentxx::kit::toolPromptArgDesc(
+                         agentxx::plugin::toolPromptArgDesc(
                              p,
                              "query",
                              "Natural language search query. Should be a semantically rich description of the ideal page, not just keywords."
@@ -154,7 +154,7 @@ std::string schemaSearch(PluginCtx* ctx) {
                      {"default", 5},
                      {
                          "description",
-                         agentxx::kit::toolPromptArgDesc(
+                         agentxx::plugin::toolPromptArgDesc(
                              p,
                              "numResults",
                              "Number of search results to return (default: 5)."
@@ -170,7 +170,7 @@ std::string schemaSearch(PluginCtx* ctx) {
 } // namespace
 
 extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_agent_get_info(void) {
-    return agentxx::plugin_guard::guardCall(
+    return agentxx::plugin::guardCall(
         [](const char*) noexcept {},
         nullptr,
         [&]() -> const AgentxxPluginInfo* {
@@ -190,7 +190,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_agent_g
 extern "C" AGENTXX_PLUGIN_EXPORT int
     agentxx_plugin_agent_create(const AgentxxPluginHost* host, void** plugin_ctx) {
     PluginCtx* raw = nullptr;
-    return agentxx::plugin_guard::guardCall(
+    return agentxx::plugin::guardCall(
         [&raw](const char* msg) noexcept {
             ctxGuardLogger(raw)(msg);
         },
@@ -234,7 +234,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
             }
 
             // 1. agentxx_web_fetch（阻塞池 + 临时 io_context 同步驱动异步 HttpClient）
-            agentxx::kit::blocking_tool(
+            agentxx::plugin::blocking_tool(
                 *ctx,
                 kNameFetch,
                 kDepictFetch,
@@ -265,7 +265,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
             );
 
             // 2. agentxx_web_fetch_markdown
-            agentxx::kit::blocking_tool(
+            agentxx::plugin::blocking_tool(
                 *ctx,
                 kNameFetchMd,
                 kDepictFetchMd,
@@ -297,7 +297,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
 
             // 3. agentxx_web_search（同上，模型/ API 搜索）
             if (ctx->use_model_search || !ctx->search_api_url.empty()) {
-                agentxx::kit::blocking_tool(
+                agentxx::plugin::blocking_tool(
                     *ctx,
                     kNameSearch,
                     kDepictSearch,
@@ -351,7 +351,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
 
 extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_agent_destroy(void* plugin_ctx) {
     auto* ctx = static_cast<PluginCtx*>(plugin_ctx);
-    agentxx::plugin_guard::guardCallVoid(ctxGuardLogger(ctx), [&] {
+    agentxx::plugin::guardCallVoid(ctxGuardLogger(ctx), [&] {
         delete ctx;
     });
 }

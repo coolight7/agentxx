@@ -17,8 +17,8 @@
 #include "agentxx/middlewares/memory_file.h"
 #include "agentxx/middlewares/middleware.h"
 #include "agentxx/middlewares/skill.h"
+#include "agentxx/plugin/api/plugin_iface_helper.h"
 #include "agentxx/plugin/plugin_common.h"
-#include "agentxx/plugin/plugin_iface_helper.h"
 #include "agentxx/plugin/plugin_manager.h"
 #include "agentxx/util/log.h"
 #include <algorithm>

@@ -39,7 +39,7 @@ std::string schemaBash(PluginCtx* ctx) {
                      {"type", "string"},
                      {
                          "description",
-                         agentxx::kit::toolPromptArgDesc(p, "command", kBashCommandDesc),
+                         agentxx::plugin::toolPromptArgDesc(p, "command", kBashCommandDesc),
                      },
                  },
              },
@@ -50,7 +50,7 @@ std::string schemaBash(PluginCtx* ctx) {
                      {"default", 60},
                      {
                          "description",
-                         agentxx::kit::toolPromptArgDesc(p, "timeout", kTimeoutDesc),
+                         agentxx::plugin::toolPromptArgDesc(p, "timeout", kTimeoutDesc),
                      },
                  },
              },
@@ -61,7 +61,7 @@ std::string schemaBash(PluginCtx* ctx) {
                      {"default", true},
                      {
                          "description",
-                         agentxx::kit::toolPromptArgDesc(p, "all_output", kAllOutputDesc),
+                         agentxx::plugin::toolPromptArgDesc(p, "all_output", kAllOutputDesc),
                      },
                  },
              }},
@@ -81,7 +81,7 @@ std::string schemaWindows(PluginCtx* ctx) {
                      {"type", "string"},
                      {
                          "description",
-                         agentxx::kit::
+                         agentxx::plugin::
                              toolPromptArgDesc(p, "command", "The Windows command to execute."),
                      },
                  },
@@ -93,7 +93,7 @@ std::string schemaWindows(PluginCtx* ctx) {
                      {"default", 60},
                      {
                          "description",
-                         agentxx::kit::toolPromptArgDesc(p, "timeout", kTimeoutDesc),
+                         agentxx::plugin::toolPromptArgDesc(p, "timeout", kTimeoutDesc),
                      },
                  },
              },
@@ -104,7 +104,7 @@ std::string schemaWindows(PluginCtx* ctx) {
                      {"default", true},
                      {
                          "description",
-                         agentxx::kit::toolPromptArgDesc(p, "all_output", kAllOutputDesc),
+                         agentxx::plugin::toolPromptArgDesc(p, "all_output", kAllOutputDesc),
                      },
                  },
              }},
@@ -116,7 +116,7 @@ std::string schemaWindows(PluginCtx* ctx) {
 } // namespace
 
 extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_agent_get_info(void) {
-    return agentxx::plugin_guard::guardCall(
+    return agentxx::plugin::guardCall(
         [](const char*) noexcept {},
         nullptr,
         [&]() -> const AgentxxPluginInfo* {
@@ -136,7 +136,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_agent_g
 extern "C" AGENTXX_PLUGIN_EXPORT int
     agentxx_plugin_agent_create(const AgentxxPluginHost* host, void** plugin_ctx) {
     PluginCtx* raw = nullptr;
-    return agentxx::plugin_guard::guardCall(
+    return agentxx::plugin::guardCall(
         [&raw](const char* msg) noexcept {
             ctxGuardLogger(raw)(msg);
         },
@@ -160,7 +160,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
 
 #if defined(BOOST_PROCESS_V2_PROCESS_HPP)
             // 异步管线改为 blocking_tool + 临时 io_context 同步驱动（无私有 Reactor 线程）
-            agentxx::kit::blocking_tool(
+            agentxx::plugin::blocking_tool(
                 *ctx,
                 kNameWindows,
                 depictWin,
@@ -215,7 +215,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                 AGENTXX_PLUGIN_TOOL_FLAG_NONE
             );
 #else
-            agentxx::kit::blocking_tool(
+            agentxx::plugin::blocking_tool(
                 *ctx,
                 kNameWindows,
                 depictWin,
@@ -254,7 +254,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
             auto depictBash = pBash.depict.empty() ? std::string{kDepictBash} : pBash.depict;
 
 #if defined(BOOST_PROCESS_V2_PROCESS_HPP)
-            agentxx::kit::blocking_tool(
+            agentxx::plugin::blocking_tool(
                 *ctx,
                 kNameBash,
                 depictBash,
@@ -309,7 +309,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                 AGENTXX_PLUGIN_TOOL_FLAG_NONE
             );
 #else
-            agentxx::kit::blocking_tool(
+            agentxx::plugin::blocking_tool(
                 *ctx,
                 kNameBash,
                 depictBash,
@@ -353,7 +353,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
 
 extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_agent_destroy(void* plugin_ctx) {
     auto* ctx = static_cast<PluginCtx*>(plugin_ctx);
-    agentxx::plugin_guard::guardCallVoid(ctxGuardLogger(ctx), [&] {
+    agentxx::plugin::guardCallVoid(ctxGuardLogger(ctx), [&] {
         delete ctx;
     });
 }

@@ -1,5 +1,5 @@
 // agentxx_codegraph —— CodeGraph 代码分析插件
-#include "agentxx/plugin/client_plugin_api.h"
+#include "agentxx/plugin/api/client_plugin_api.h"
 #include "codegraph_manager.h"
 #include "codegraph_plugin.h"
 #include "fmt/format.h"
@@ -28,7 +28,7 @@ struct HostConfig {
     bool                     loadCwd      = true;
 };
 
-struct PluginCtx : public agentxx::kit::PluginBase {
+struct PluginCtx : public agentxx::plugin::PluginBase {
     std::shared_ptr<agentxx_codegraph_plugin::CodeGraphManager> mgr;
     std::thread                                                 warmup;
     std::atomic<bool>                                           stop{false};
@@ -446,7 +446,7 @@ static void registerAllTools(PluginCtx& ctx) {
             p.args.contains("limit") ? p.args["limit"]
                                      : "Maximum number of results to return. Default: 20."
         );
-        agentxx::kit::blocking_tool(
+        agentxx::plugin::blocking_tool(
             ctx,
             "agentxx_codegraph_search",
             depict,
@@ -512,7 +512,7 @@ static void registerAllTools(PluginCtx& ctx) {
             p.args.contains("max_depth") ? p.args["max_depth"]
                                          : "Maximum traversal depth. Default: 3."
         );
-        agentxx::kit::blocking_tool(
+        agentxx::plugin::blocking_tool(
             ctx,
             "agentxx_codegraph_context",
             depict,
@@ -555,7 +555,7 @@ static void registerAllTools(PluginCtx& ctx) {
             p.args.contains("max_depth") ? p.args["max_depth"]
                                          : "Maximum traversal depth. Default: 3."
         );
-        agentxx::kit::blocking_tool(
+        agentxx::plugin::blocking_tool(
             ctx,
             "agentxx_codegraph_callers",
             depict,
@@ -593,7 +593,7 @@ static void registerAllTools(PluginCtx& ctx) {
             p.args.contains("max_depth") ? p.args["max_depth"]
                                          : "Maximum traversal depth. Default: 3."
         );
-        agentxx::kit::blocking_tool(
+        agentxx::plugin::blocking_tool(
             ctx,
             "agentxx_codegraph_callees",
             depict,
@@ -632,7 +632,7 @@ static void registerAllTools(PluginCtx& ctx) {
             p.args.contains("max_depth") ? p.args["max_depth"]
                                          : "Maximum search depth. Default: 10."
         );
-        agentxx::kit::blocking_tool(
+        agentxx::plugin::blocking_tool(
             ctx,
             "agentxx_codegraph_path",
             depict,
@@ -686,7 +686,7 @@ static void registerAllTools(PluginCtx& ctx) {
 static void snapshotQueryDone(void* ud, void* result, char* error) {
     auto* ctx   = static_cast<PluginCtx*>(ud);
     auto* files = static_cast<int64_t*>(result);
-    agentxx::plugin_guard::guardCallVoid(
+    agentxx::plugin::guardCallVoid(
         [ctx](const char* m) noexcept {
             pluginLog(ctx ? ctx->host : nullptr, ctx ? ctx->iface.log : nullptr, 4, m ? m : "");
         },
@@ -730,7 +730,7 @@ static void snapshotQueryDone(void* ud, void* result, char* error) {
 
 static void* snapshotQueryWork(void* ud, volatile int*, char**) {
     auto* ctx = static_cast<PluginCtx*>(ud);
-    return agentxx::plugin_guard::guardCall(
+    return agentxx::plugin::guardCall(
         [ctx](const char* m) noexcept {
             pluginLog(ctx ? ctx->host : nullptr, ctx ? ctx->iface.log : nullptr, 4, m ? m : "");
         },
@@ -754,7 +754,7 @@ static void* snapshotQueryWork(void* ud, volatile int*, char**) {
 
 static void on_client_attached(AgentxxPluginStringView, void* ud) {
     auto* ctx = static_cast<PluginCtx*>(ud);
-    agentxx::plugin_guard::guardCallVoid(
+    agentxx::plugin::guardCallVoid(
         [ctx](const char* m) noexcept {
             pluginLog(ctx ? ctx->host : nullptr, ctx ? ctx->iface.log : nullptr, 4, m ? m : "");
         },
@@ -795,7 +795,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
     auto       logger = [&raw](const char* m) noexcept {
         pluginLog(raw ? raw->host : nullptr, raw ? raw->iface.log : nullptr, 4, m ? m : "");
     };
-    return agentxx::plugin_guard::guardCall(std::move(logger), -1, [&]() -> int {
+    return agentxx::plugin::guardCall(std::move(logger), -1, [&]() -> int {
         if (!host || !host->vtable || !plugin_ctx) {
             return -1;
         }
@@ -943,7 +943,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
 
 extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_agent_destroy(void* plugin_ctx) {
     auto* ctx = static_cast<PluginCtx*>(plugin_ctx);
-    agentxx::plugin_guard::guardCallVoid(
+    agentxx::plugin::guardCallVoid(
         [ctx](const char* m) noexcept {
             pluginLog(ctx ? ctx->host : nullptr, ctx ? ctx->iface.log : nullptr, 4, m ? m : "");
         },
@@ -973,7 +973,7 @@ struct ClientCtx {
     std::string                   current_file;
 
     void logErr(const char* m) const noexcept {
-        agentxx::plugin_guard::logTo(host, iface.log, 4, "agentxx_codegraph", m ? m : "");
+        agentxx::plugin::logTo(host, iface.log, 4, "agentxx_codegraph", m ? m : "");
     }
 };
 
@@ -1106,7 +1106,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxClientPluginInfo* agentxx_plugin_c
 extern "C" AGENTXX_PLUGIN_EXPORT int
     agentxx_plugin_client_create(const AgentxxClientHost* host, void** plugin_ctx) {
     ClientCtx* raw = nullptr;
-    return agentxx::plugin_guard::guardCall(
+    return agentxx::plugin::guardCall(
         [&raw](const char* m) noexcept {
             if (raw) {
                 raw->logErr(m);
@@ -1157,7 +1157,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
 
 extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_client_destroy(void* plugin_ctx) {
     auto* ctx = static_cast<ClientCtx*>(plugin_ctx);
-    agentxx::plugin_guard::guardCallVoid(
+    agentxx::plugin::guardCallVoid(
         [ctx](const char* m) noexcept {
             if (ctx) {
                 ctx->logErr(m);

@@ -64,9 +64,6 @@ target_include_directories(agentxx_test PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}/core/"
   "${CMAKE_CURRENT_SOURCE_DIR}/plugin/"
   "${CMAKE_CURRENT_SOURCE_DIR}/client/"
-  # 插件专用 SDK 头 (plugin_kit/plugin_guard/plugin_iface_helper/plugin_tool_sync)
-  # 存放于 lib/src/plugins/api (与 include/agentxx/plugin 同构, include 语句不变)
-  "${CMAKE_CURRENT_SOURCE_DIR}/../lib/src/plugins/api/"
   # 迁移至插件的内置工具实现 (filesystem/string/system/websearch/rag_search/
   # execute_command 的 *_impl.h): 测试直测插件同一实现, 保证行为一致
   "${CMAKE_CURRENT_SOURCE_DIR}/../plugins/agentxx_planning/"

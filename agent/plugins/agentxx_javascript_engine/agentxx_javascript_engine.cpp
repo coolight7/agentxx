@@ -19,10 +19,10 @@
  * 沙箱: 内存限制 (JS_SetMemoryLimit) + 栈限制 + 指令中断超时; 不引入
  * quickjs-libc (无 os/std 模块); 全局仅注入标准 ECMA 内置 + agentxx 桥
  */
-#include "agentxx/plugin/plugin_api.h"
-#include "agentxx/plugin/plugin_guard.h"
-#include "agentxx/plugin/plugin_iface_helper.h"
-#include "agentxx/plugin/plugin_kit.h"
+#include "agentxx/plugin/api/plugin_api.h"
+#include "agentxx/plugin/api/plugin_guard.h"
+#include "agentxx/plugin/api/plugin_iface_helper.h"
+#include "agentxx/plugin/api/plugin_kit.h"
 #include "fmt/format.h"
 #include "quickjs.h"
 
@@ -175,7 +175,7 @@ public:
     /// 守卫异常日志 (noexcept; 经本实例宿主接口表输出 —— 多实例契约:
     /// 不读任何全局, 日志归属精确到本引擎实例)
     void guardLog(const char* msg) const noexcept {
-        agentxx::plugin_guard::logTo(
+        agentxx::plugin::logTo(
             engineHost_,
             logIface_,
             4,
@@ -974,7 +974,7 @@ void* JsEngine::toolExecuteStart(
         return op;
     } catch (...) {
         // 异常分类上报 + 经通知器上报失败 (宿主 io 线程等通知, 必须终结)
-        ::agentxx::plugin_guard::reportCurrentException([engine](const char* m) noexcept {
+        ::agentxx::plugin::reportCurrentException([engine](const char* m) noexcept {
             engine->guardLog(m);
         });
         if (error_out) {
@@ -1011,7 +1011,7 @@ void* JsEngine::hookStart(
         notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
         return nullptr;
     } catch (...) {
-        ::agentxx::plugin_guard::reportCurrentException([engine](const char* m) noexcept {
+        ::agentxx::plugin::reportCurrentException([engine](const char* m) noexcept {
             if (engine) {
                 engine->guardLog(m);
             }
@@ -1027,7 +1027,7 @@ void JsEngine::eventFire(AgentxxPluginStringView event_json, void* ud) {
     auto* binding = static_cast<JsHookBinding*>(ud);
     auto* engine  = binding ? binding->engine : nullptr;
     // C ABI 回调异常守卫: 事件分发由宿主 io 线程调用, 异常不外泄
-    agentxx::plugin_guard::guardCallVoid(
+    agentxx::plugin::guardCallVoid(
         [engine](const char* m) noexcept {
             if (engine) {
                 engine->guardLog(m);
@@ -1228,7 +1228,7 @@ JSValue JsEngine::bridgeCall(
 
             // 2) 宿主插件工具 (同步互调; vtable 内部保证线程安全)
             char* err  = nullptr;
-            char* resp = agentxx::kit::call_tool_blocking(
+            char* resp = agentxx::plugin::call_tool_blocking(
                 host,
                 iface.tools,
                 iface.scheduler,
@@ -1757,7 +1757,7 @@ static void* jsCapStart(
         return nullptr;
     } catch (...) {
         // 异常分类上报 + 尽力设置 error_out (宿主按 OP_FAILED 处理)
-        ::agentxx::plugin_guard::reportCurrentException([engine](const char* m) noexcept {
+        ::agentxx::plugin::reportCurrentException([engine](const char* m) noexcept {
             if (engine) {
                 engine->guardLog(m);
             }
@@ -1774,7 +1774,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
     // C ABI 边界异常守卫: create 含引擎线程创建/能力注册等可抛操作,
     // 异常返回 -1 走宿主加载失败清理路径; 日志闭包捕获局部裸指针
     JsEngine* raw = nullptr;
-    return agentxx::plugin_guard::guardCall(
+    return agentxx::plugin::guardCall(
         [&raw](const char* m) noexcept {
             if (raw) {
                 raw->guardLog(m);
@@ -1838,9 +1838,9 @@ extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_agent_destroy(void* plugin_
             agentxx_plugin_sv_cstr(AGENTXX_PLUGIN_IFACE_AGENT_LOG)
         ));
     }
-    agentxx::plugin_guard::guardCallVoid(
+    agentxx::plugin::guardCallVoid(
         [ownHost, ownLog](const char* m) noexcept {
-            agentxx::plugin_guard::logTo(ownHost, ownLog, 4, "agentxx_javascript_engine", m);
+            agentxx::plugin::logTo(ownHost, ownLog, 4, "agentxx_javascript_engine", m);
         },
         [engine]() noexcept {
             delete engine;
