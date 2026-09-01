@@ -6,9 +6,9 @@
 #include "agentxx/agent/io/session_server_agent_io.h"
 #include "agentxx/agent/session_store.h"
 #include "agentxx/middlewares/permission.h"
+#include "agentxx/middlewares/subagent_manager.h"
 #include "agentxx/middlewares/summarization.h"
 #include "agentxx/plugin/plugin_manager.h"
-#include "agentxx/tools/subagent.h"
 #include "agentxx/util/diff_util.h"
 #include "agentxx/util/exception.h"
 #include "agentxx/util/string_util.h"
@@ -473,19 +473,12 @@ neograph::json BaseAgent::initGraphDefinition() {
 asio::awaitable<void> BaseAgent::initMiddleware() {
     auto config = agentContext->agentConfig;
     {
-        agentContext->subagentManager = std::make_shared<agentxx::tools::SubAgentManagerTool>(
-            "subagent_manager",
-            agentContext
-        );
-        const auto nodeName = std::string{"subagent_task"};
-        agentContext->subagentManager->subAgentList.insert(std::make_pair(
-            nodeName,
-            std::make_shared<agentxx::tools::SubAgentNormalTask>(
-                nodeName,
-                R"(Create a isolation messages context sub agent to exec. (need system prompt))"
-            )
-        ));
-        agentContext->subagentManager->registerOnBus(agentContext->bus);
+        // subagent 委派管理中间件: 独立中间件持有 SubAgentManagerTool,
+        // 注册事件总线服务 (service.subagent.execute), 并按配置决定是否
+        // 把 `agentxx_subagent` 工具注入给模型
+        auto subagentMiddleware
+            = std::make_shared<agentxx::middleware::SubagentManagerMiddlewareHandle>(agentContext);
+        agentContext->middlewareHandleContext->handles.push_back(subagentMiddleware);
     }
 
     {
@@ -593,57 +586,14 @@ asio::awaitable<void> BaseAgent::initMiddleware() {
     co_return;
 }
 
-namespace {
-
-class SubAgentDelegatingTool : public agentxx::tools::XXToolBase {
-public:
-
-    explicit SubAgentDelegatingTool(std::weak_ptr<agentxx::agent::AgentContext> in_agentContext) :
-        agentxx::tools::XXToolBase("subagent_manager", in_agentContext),
-        ctx_(std::move(in_agentContext)) {}
-
-    std::string get_name() const override {
-        auto c = ctx_.lock();
-        if (c && c->subagentManager) {
-            return c->subagentManager->get_name();
-        }
-        return "agentxx_subagent";
-    }
-
-    neograph::ChatTool get_definition() const override {
-        auto c = ctx_.lock();
-        if (c && c->subagentManager) {
-            return c->subagentManager->get_definition();
-        }
-        return neograph::ChatTool{};
-    }
-
-    asio::awaitable<std::string> execute_async(const neograph::json& arguments) override {
-        auto c = ctx_.lock();
-        if (c && c->subagentManager) {
-            co_return co_await c->subagentManager->execute_async(arguments);
-        }
-        co_return R"({"error":"AgentContext or subagentManager not available"})";
-    }
-
-private:
-
-    std::weak_ptr<agentxx::agent::AgentContext> ctx_;
-};
-
-} // namespace
-
 asio::awaitable<std::vector<std::unique_ptr<agentxx::tools::XXToolBase>>> BaseAgent::initTools() {
     std::vector<std::unique_ptr<agentxx::tools::XXToolBase>> tools{};
     tools.push_back(std::make_unique<agentxx::tools::SessionShareStoreTool>(agentContext));
     // agentxx_get_current_datetime 已迁移至 agentxx_system 插件 (同名同行为,
     // 经 PluginManager 注册)
-
-    if (agentContext && agentContext->agentConfig && agentContext->agentConfig->enableSubagent
-        && agentContext->subagentManager) {
-        // TODO: 完善后启用 subagent toolcall
-        // tools.push_back(std::make_unique<SubAgentDelegatingTool>(agentContext));
-    }
+    // subagent tool (`agentxx_subagent`) 由 SubagentManagerMiddlewareHandle
+    // 注入 (initMiddlewareTools 自动收集), 按 AgentConfig::enableSubagent
+    // 决定是否注入; 不再在此处添加
     co_return tools;
 }
 

@@ -225,10 +225,13 @@ TUI [F4] 打开会话选择弹窗 → WireListSessions (服务端阻塞 I/O 卸�
 
 ```
 父 agent LLM 发起 agentxx_subagent (单任务 = tasks 数组含 1 项, 批量 = 多任务)
-  → SubAgentManagerTool::execute_async
-      → 校验任务参数 (subagent 名合法 + message/messages 至少其一)
-      → MiddlewareContext::requestInterrupt: 首次存储中断参数 ({tasks: [...]})
-        到 graphData, 抛出 NodeInterrupt → engine checkpoint 暂停父图
+  → SubagentManagerMiddlewareHandle (独立中间件, 持有 SubAgentManagerTool
+    单实例; 按 AgentConfig::enableSubagent 决定是否把 agentxx_subagent
+    注入 toolcalls, 事件总线服务始终注册)
+      → SubAgentManagerTool::execute_async
+          → 校验任务参数 (subagent 名合法 + message/messages 至少其一)
+          → MiddlewareContext::requestInterrupt: 首次存储中断参数 ({tasks: [...]})
+            到 graphData, 抛出 NodeInterrupt → engine checkpoint 暂停父图
   → AgentRunner (统一中断循环, 主 agent 与子代理共用同一实现):
       → 逐个解析 graphData 中的 interrupt args, 按 handle name 分派:
         - "subagent" 中断 (统一批量语义): 解析 ReqSubagentBatch (共享实现
@@ -271,6 +274,10 @@ TUI [F4] 打开会话选择弹窗 → WireListSessions (服务端阻塞 I/O 卸�
   共享实现 (makeSubagentResumeKey / buildSubagentResumeValues), 写入侧
   (AgentRunner) 与读取侧 (SubAgentManagerTool) 同一函数, 前缀避免同一轮
   多个中断的序号 key 互相覆盖, 支持同轮多任务并发
+- subagent 工具注入与事件总线注册由独立中间件
+  (SubagentManagerMiddlewareHandle) 管理: 按配置 (subagent.enable) 决定
+  工具是否注入给模型, 与上下文压缩 (summarization 经 service.subagent.execute
+  直接调用) 解耦
 - 中断处理完成后清理 graphData 中的 interrupt args (避免同轮再次中断时
   重复处理已完成的任务)
 - 跨 agent 消息 (agent.message): 本地 mailbox 路由 (持久会话 agent 扩展点),
@@ -538,8 +545,9 @@ skill:
 memory:
   - "./AGENT.md"
 
-# 子代理委派开关 (默认 true; false 时 SubAgentManagerTool 不注册,
-# 模型无法发起子代理委派)
+# 子代理委派开关 (默认 true; false 时 subagent 管理中间件不注入
+# `agentxx_subagent` 工具, 模型无法发起子代理委派; 事件总线服务
+# service.subagent.execute 仍注册, 程序内部路径如上下文压缩不受影响)
 subagent:
   enable: true
 

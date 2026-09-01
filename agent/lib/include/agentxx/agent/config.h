@@ -188,7 +188,9 @@ public:
     bool enableSummarization = true;
 
     /// 是否启用 subagent 委派 (默认 true)
-    /// - false 时 SubAgentManagerTool 不注册, 模型无法发起子代理委派,
+    /// - false 时 SubagentManagerMiddlewareHandle 不把 `agentxx_subagent`
+    ///   工具注入给模型 (模型无法发起子代理委派), 事件总线服务
+    ///   service.subagent.execute 仍注册 (程序内部路径如上下文压缩不受影响);
     ///   中断路径 `subagent` 直接返回错误
     /// - 由 yaml `subagent.enable` 配置
     bool enableSubagent = true;
