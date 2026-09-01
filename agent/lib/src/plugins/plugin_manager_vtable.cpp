@@ -22,24 +22,18 @@ static PluginManager* mgrOf(const AgentxxPluginHost* host) {
     return inst ? inst->manager.lock().get() : nullptr;
 }
 
+// C ABI 内存三件套
+
 static void* xx_alloc(size_t size) {
-    return ::malloc(size);
+    return agentxx::plugin::hostMemoryAlloc(size);
 }
 
 static void xx_free(void* ptr) {
-    ::free(ptr);
+    agentxx::plugin::hostMemoryFree(ptr);
 }
 
 static char* xx_strdup(const char* s) {
-    if (!s) {
-        return nullptr;
-    }
-    size_t n = std::strlen(s) + 1;
-    char*  p = static_cast<char*>(::malloc(n));
-    if (p) {
-        std::memcpy(p, s, n);
-    }
-    return p;
+    return agentxx::plugin::hostMemoryStrdup(s);
 }
 
 static int xx_register_tool(const AgentxxPluginHost* host, const AgentxxPluginToolSpec* spec) {

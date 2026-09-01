@@ -3,7 +3,8 @@
 #include "agentxx/agent/config.h"
 #include "agentxx/agent/io/client_event_sink.h"
 #include "agentxx/plugin/client_plugin_api.h"
-#include "agentxx/plugin/plugin_common.h" /* PluginManifestInterfaces / InterfaceSet */
+#include "agentxx/plugin/plugin_common.h"
+#include "agentxx/plugin/plugin_manager_base.h"
 #include "asio/any_io_executor.hpp"
 #include "asio/awaitable.hpp"
 #include "asio/thread_pool.hpp"
@@ -90,36 +91,17 @@ struct ClientUiRegistry {
 ///   管理器各自 dlopen (引用计数), 实例状态彼此独立, 互通一律走 wire
 /// - 所有注册残留 (status item/panel/command/订阅) 记录于此, 卸载时统一清理
 /// - 仅 client io 线程读写 (inflight 为原子, 跨线程递增/递减)
-class ClientPluginInstance {
+class ClientPluginInstance : public PluginInstanceBase {
 public:
 
-    std::string name;
-    std::string version;
-    std::string description;
-    std::string path; ///< 加载的库路径
-    /// 插件配置参数 (yaml `plugins` 条目 args; 宿主原样保存, 经 vtable
-    /// get_plugin_args 整体返回给插件, 不解析其字段语义)
-    neograph::json args = neograph::json::object();
-    /// 插件配置文件所在目录或文件路径 (yaml `config`, 归一化为绝对路径)
-    std::string configPath;
-    /// 必选依赖 (插件名): 未安装则加载失败; 卸载/禁用时级联
-    std::vector<std::string> depends;
-    /// 可选依赖 (插件名): 未安装仅警告, 不影响加载
-    std::vector<std::string> optionalDepends;
+    /// 继承 PluginInstanceBase 的公共字段 (name/version/path/configPath/args/depends/
+    /// dlHandle/pluginCtx/enabled/inflight 等), 见 plugin_manager_base.h
     /// 接口声明 (plugin.yaml `interfaces`; 加载时随 manifest 解析传入,
     /// 直连库路径为空) —— 宿主门禁依据, 经 list() 暴露供展示/排查
     PluginManifestInterfaces interfaces;
-    void*                    dlHandle  = nullptr; ///< dlopen/LoadLibrary 句柄
-    void*                    pluginCtx = nullptr; ///< entry 输出的插件私有上下文
-    bool                     enabled   = true; ///< 是否启用 (禁用: UI 项摘除/命令停用)
-    bool userDisabled    = false; ///< 是否被用户显式禁用 (区别于级联禁用)
-    bool unloadRequested = false; ///< 已请求卸载 (防重复)
 
     /// 本插件专属宿主句柄 (vtable 为宿主静态函数表, opaque 指向本实例)
     AgentxxClientHost host{};
-
-    /// 在途回调计数 (原子, 跨线程: 事件 handler/命令 execute)
-    std::atomic<size_t> inflight{0};
 
     /// 事件订阅记录 (卸载自动退订; 仅 io 线程)
     /// - shared_ptr 存储: 订阅节点地址稳定 (vector 扩容/erase 不悬垂);
@@ -152,29 +134,11 @@ public:
     std::weak_ptr<ClientPluginManager> manager{};
 
     explicit ClientPluginInstance(std::string in_name) :
-        name(std::move(in_name)) {}
+        PluginInstanceBase(std::move(in_name)) {}
 
     /// 析构时 dlclose (与 agent 侧 PluginInstance 一致; 调用方保证无在途回调:
     /// unloadAsync 等 inflight 归零后移除, shutdownAll 进程退出路径约定无在途)
     ~ClientPluginInstance();
-
-    /// 在途计数 RAII (事件 handler / 命令 execute 入口调用)
-    struct InflightGuard {
-        ClientPluginInstance* inst;
-
-        explicit InflightGuard(ClientPluginInstance* i) :
-            inst(i) {
-            if (inst) {
-                inst->inflight.fetch_add(1, std::memory_order_acq_rel);
-            }
-        }
-
-        ~InflightGuard() {
-            if (inst) {
-                inst->inflight.fetch_sub(1, std::memory_order_acq_rel);
-            }
-        }
-    };
 };
 
 /// 事件订阅宿主句柄实现 (仅宿主内部; 与 plugin_api.h 的 C 不透明类型对应,
@@ -197,6 +161,7 @@ struct ClientSubscriptionImpl {
 /// - 命令执行: 任意线程可 hasCommand/postCommandInvocation; execute 回调在
 ///   client io 线程同步调用, 返回值动作 JSON 由宿主解析并分发到 UI 适配器
 class ClientPluginManager : public agentxx::agent::ClientEventSink,
+                            public PluginManagerBase<ClientPluginInstance>,
                             public std::enable_shared_from_this<ClientPluginManager> {
 public:
 
@@ -278,8 +243,7 @@ public:
 
     // ==================== 查询 ====================
 
-    std::vector<PluginListView>           list() const;
-    std::shared_ptr<ClientPluginInstance> find(std::string_view name) const;
+    std::vector<PluginListView> list() const;
 
     /// 因接口要求未满足而被跳过的插件 (name → 缺失接口描述; io 线程;
     /// 加载阶段写入, 供展示层/排查 "为什么没加载" —— 跳过的插件不会出现在
@@ -320,12 +284,6 @@ public:
     ///   事件 server_plugins / WireHelloAck.plugins); 空数组 = 未知 (服务端
     ///   未提供), 插件不得据此断言"对端未加载"
     std::string clientStateJson() const;
-
-    // ==================== io 线程投递 ====================
-
-    bool isIoThread() const;
-    void postToIo(std::function<void()> fn) const;
-    void postToIoAsync(std::function<void()> fn) const;
 
     // ==================== ClientEventSink 实现 (io 线程) ====================
     // 端点事件 → JSON payload → 分发到订阅了对应事件的插件回调
@@ -404,12 +362,6 @@ private:
 
     friend class ClientPluginInstance;
 
-    /// 等待插件在途计数归零 (io 线程协程轮询); 超时返回 false
-    asio::awaitable<bool> waitInflightZero(
-        const std::shared_ptr<ClientPluginInstance>& inst,
-        std::chrono::milliseconds                    timeout
-    );
-
     /// 插件卸载清理: 摘除注册/退订/adapter 通知 (io 线程)
     /// - keepInfo=true: disable 路径, 注册信息保留 (enable 可恢复)
     /// - keepInfo=false: unload/shutdown 路径, 彻底清理
@@ -423,9 +375,6 @@ private:
     /// - 依赖图级联 (先子后父): 脚本类插件 (depends 引擎) 先卸载, 引擎最后
     ///   dlclose, 与 agent 侧 shutdownPlugin 语义一致
     void shutdownClientPlugin(const std::shared_ptr<ClientPluginInstance>& inst);
-
-    /// 收集反向必选依赖 (depends 含 target 的插件名; io 线程)
-    std::vector<std::string> reverseRequiredDeps(const std::string& target, bool onlyEnabled) const;
 
     /// 事件分发: 遍历全部插件订阅, 匹配 event → InflightGuard → handler
     /// (io 线程; payload 为宿主构造的 JSON 字符串)
@@ -441,9 +390,6 @@ private:
     std::unique_ptr<asio::thread_pool> pool_;
 
     std::shared_ptr<PluginUiAdapter> uiAdapter_; ///< 注入后不可变 (io 线程读写)
-
-    /// 插件表 <name, instance>
-    std::map<std::string, std::shared_ptr<ClientPluginInstance>, std::less<>> plugins_{};
 
     /// 工具消息装饰版本号序列 (io 线程递增; 计入 ClientToolDecor.version,
     /// 供 TUI 块缓存 key 感知装饰更新)
@@ -478,9 +424,6 @@ private:
 
     /// 因接口要求未满足被跳过的插件 (io 线程; 见 skippedPlugins())
     std::map<std::string, std::string> skippedPlugins_{};
-
-    asio::any_io_executor                ioExecutor_{};
-    mutable std::atomic<std::thread::id> ioThreadId_{};
 };
 
 /// UI 适配器抽象接口 (UI 无关语义层 → 具体 UI 实现)

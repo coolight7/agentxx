@@ -42,33 +42,8 @@
 #include <dlfcn.h>
 #endif
 
-// ---------------------------------------------------------------------------
-// 可执行目录 helper (跨平台, 与 plugin_manager_lifecycle 同构)
-// ---------------------------------------------------------------------------
-static inline std::filesystem::path clientGetExecutableDirPath() noexcept {
-#if XX_IS_WIN_D
-    std::wstring buf(MAX_PATH, L'\0');
-    for (;;) {
-        DWORD len = ::GetModuleFileNameW(nullptr, buf.data(), static_cast<DWORD>(buf.size()));
-        if (len == 0) {
-            return {};
-        }
-        if (len < buf.size()) {
-            buf.resize(len);
-            break;
-        }
-        buf.resize(buf.size() * 2);
-    }
-    return std::filesystem::path(buf).parent_path();
-#else
-    std::error_code ec;
-    auto            exe = std::filesystem::read_symlink("/proc/self/exe", ec);
-    if (ec) {
-        return {};
-    }
-    return exe.parent_path();
-#endif
-}
+/// 可执行目录 helper
+using agentxx::plugin::getExecutableDirPath;
 
 /// 状态栏项宿主句柄实现 (全局作用域, 与 client_plugin_api.h 的 C 不透明类型
 /// 对应 —— vtable 函数签名中的 AgentxxStatusItem 即此类型, 不能在命名空间内
@@ -199,10 +174,9 @@ ClientPluginInstance::~ClientPluginInstance() {
 // =====================================================================
 
 ClientPluginManager::ClientPluginManager(asio::any_io_executor ex) :
+    PluginManagerBase<ClientPluginInstance>(std::move(ex)),
     pool_(std::make_unique<asio::thread_pool>(1)),
-    uiRegistry_(std::make_shared<const ClientUiRegistry>()),
-    ioExecutor_(std::move(ex)),
-    ioThreadId_(std::this_thread::get_id()) {}
+    uiRegistry_(std::make_shared<const ClientUiRegistry>()) {}
 
 ClientPluginManager::~ClientPluginManager() {
     shutdownAll();
@@ -240,10 +214,13 @@ asio::awaitable<std::shared_ptr<ClientPluginInstance>> ClientPluginManager::load
     // 否则视为仅 agent 侧内置, 静默跳过)
     if (isBuiltinScheme(path)) {
         auto btName = parseBuiltinName(path);
-        XX_LOGI("[client_plugin] builtin `{}` skipped on client side (no client builtin registry)", btName);
+        XX_LOGI(
+            "[client_plugin] builtin `{}` skipped on client side (no client builtin registry)",
+            btName
+        );
         // 尝试目录回退: 按 exe 目录优先 + cwd (与 agent 侧一致)
         {
-            auto exeDir = clientGetExecutableDirPath();
+            auto exeDir = getExecutableDirPath();
             if (!exeDir.empty()) {
                 auto dir = exeDir / "plugins" / btName;
                 if (std::filesystem::is_directory(dir)) {
@@ -859,11 +836,6 @@ std::vector<ClientPluginManager::PluginListView> ClientPluginManager::list() con
     return out;
 }
 
-std::shared_ptr<ClientPluginInstance> ClientPluginManager::find(std::string_view name) const {
-    auto it = plugins_.find(name);
-    return it == plugins_.end() ? nullptr : it->second;
-}
-
 // ==================== UI 注册表 ====================
 
 std::shared_ptr<const ClientUiRegistry> ClientPluginManager::uiRegistrySnapshot() const {
@@ -907,8 +879,8 @@ void ClientPluginManager::invokeCommand(const std::string& name, const std::stri
         return;
     }
 
-    ClientPluginInstance::InflightGuard guard(inst.get());
-    char*                               err = nullptr;
+    PluginInstanceBase::InflightGuard guard(inst.get());
+    char*                             err = nullptr;
     // C ABI 回调异常兜底: 插件违约不得打断 client 输入管线 (命令拦截在
     // io 线程执行, 异常外泄会终止输入循环)
     char* out = nullptr;
@@ -995,31 +967,6 @@ std::string ClientPluginManager::clientStateJson() const {
         return arr;
     }();
     return j.dump();
-}
-
-// ==================== io 线程投递 ====================
-
-bool ClientPluginManager::isIoThread() const {
-    const auto tid = ioThreadId_.load(std::memory_order_acquire);
-    return tid != std::thread::id{} && tid == std::this_thread::get_id();
-}
-
-void ClientPluginManager::postToIo(std::function<void()> fn) const {
-    if (isIoThread()) {
-        fn();
-    } else {
-        asio::post(ioExecutor_, [this, fn = std::move(fn)]() {
-            ioThreadId_.store(std::this_thread::get_id(), std::memory_order_release);
-            fn();
-        });
-    }
-}
-
-void ClientPluginManager::postToIoAsync(std::function<void()> fn) const {
-    asio::post(ioExecutor_, [this, fn = std::move(fn)]() {
-        ioThreadId_.store(std::this_thread::get_id(), std::memory_order_release);
-        fn();
-    });
 }
 
 // ==================== ClientEventSink 实现 ====================
@@ -1158,25 +1105,6 @@ void ClientPluginManager::onPluginData(const agentxx::agent::WirePluginData& dat
 
 // ==================== 内部 ====================
 
-asio::awaitable<bool> ClientPluginManager::waitInflightZero(
-    const std::shared_ptr<ClientPluginInstance>& inst,
-    std::chrono::milliseconds                    timeout
-) {
-    auto deadline = std::chrono::steady_clock::now() + timeout;
-    // 指数退避轮询 (20ms → 1s 上限): 慢回调等待期间减少 io 线程定时器唤醒
-    auto backoff = std::chrono::milliseconds{20};
-    while (inst->inflight.load(std::memory_order_acquire) > 0) {
-        if (std::chrono::steady_clock::now() >= deadline) {
-            co_return false;
-        }
-        auto timer = asio::steady_timer(co_await asio::this_coro::executor);
-        timer.expires_after(backoff);
-        co_await timer.async_wait(asio::use_awaitable);
-        backoff = std::min(backoff * 2, std::chrono::milliseconds{1000});
-    }
-    co_return true;
-}
-
 void ClientPluginManager::detachAll(ClientPluginInstance* inst, bool keepInfo) {
     if (!inst) {
         return;
@@ -1288,7 +1216,7 @@ void ClientPluginManager::dispatchEvent(int event, const std::string& payloadJso
         }
     }
     for (const auto& ref : refs) {
-        ClientPluginInstance::InflightGuard guard(ref.inst);
+        PluginInstanceBase::InflightGuard guard(ref.inst);
         // C ABI 回调异常兜底: 单个插件 handler 违约不得打断整轮派发
         // (影响其他订阅者与 client io 事件循环)
         try {
@@ -1334,23 +1262,15 @@ ClientPluginManager* clientMgrOf(const AgentxxClientHost* host) {
 // ---- 内存 ----
 
 void* xx_calloc(size_t size) {
-    return ::malloc(size);
+    return agentxx::plugin::hostMemoryAlloc(size);
 }
 
 void xx_cfree(void* ptr) {
-    ::free(ptr);
+    agentxx::plugin::hostMemoryFree(ptr);
 }
 
 char* xx_cstrdup(const char* s) {
-    if (!s) {
-        return nullptr;
-    }
-    size_t n = std::strlen(s) + 1;
-    char*  p = static_cast<char*>(::malloc(n));
-    if (p) {
-        std::memcpy(p, s, n);
-    }
-    return p;
+    return agentxx::plugin::hostMemoryStrdup(s);
 }
 
 // ---- 日志 / JSON ----

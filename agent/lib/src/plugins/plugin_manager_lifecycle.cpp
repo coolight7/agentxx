@@ -29,39 +29,6 @@
 namespace agentxx {
 namespace plugin {
 
-// ---------------------------------------------------------------------------
-// 可执行目录 helper (跨平台: Windows GetModuleFileNameW / Linux /proc/self/exe)
-// 与 client/main.cpp getExecutableDir() 同构, 供 builtin:// 回退探测使用
-// ---------------------------------------------------------------------------
-static inline std::filesystem::path getExecutableDirPath() noexcept {
-#if XX_IS_WIN_D
-    std::wstring buf(MAX_PATH, L'\0');
-    for (;;) {
-        DWORD len = ::GetModuleFileNameW(nullptr, buf.data(), static_cast<DWORD>(buf.size()));
-        if (len == 0) {
-            return {};
-        }
-        if (len < buf.size()) {
-            buf.resize(len);
-            break;
-        }
-        buf.resize(buf.size() * 2);
-    }
-    std::error_code ec;
-    auto            p = std::filesystem::path(buf).parent_path();
-    // 规范化, 失败时回退空
-    (void)ec;
-    return p;
-#else
-    std::error_code ec;
-    auto            exe = std::filesystem::read_symlink("/proc/self/exe", ec);
-    if (ec) {
-        return {};
-    }
-    return exe.parent_path();
-#endif
-}
-
 const void* xx_query_interface(const AgentxxPluginHost*, AgentxxPluginStringView iid);
 
 // =====================================================================
@@ -362,31 +329,6 @@ void PluginManager::flushPendingCleanup() {
     pendingCleanups_.clear();
 }
 
-asio::awaitable<bool> PluginManager::waitInflightZero(
-    const std::shared_ptr<PluginInstance>& inst,
-    std::chrono::milliseconds              timeout
-) {
-    if (!inst) {
-        co_return true;
-    }
-    auto               start = std::chrono::steady_clock::now();
-    asio::steady_timer timer(co_await asio::this_coro::executor);
-    while (inst->inflight.load(std::memory_order_acquire) > 0) {
-        if (std::chrono::steady_clock::now() - start > timeout) {
-            XX_LOGW(
-                "Plugin `{}` waitInflightZero timed out (inflight={})",
-                inst->name,
-                inst->inflight.load(std::memory_order_acquire)
-            );
-            co_return false;
-        }
-        timer.expires_after(std::chrono::milliseconds(10));
-        auto [ec] = co_await timer.async_wait(asio::as_tuple(asio::use_awaitable));
-        (void)ec;
-    }
-    co_return true;
-}
-
 asio::awaitable<bool> PluginManager::unloadAsync(std::string_view name) {
     auto inst = find(name);
     if (!inst) {
@@ -462,11 +404,6 @@ std::vector<PluginManager::PluginListView> PluginManager::list() const {
         out.push_back(std::move(view));
     }
     return out;
-}
-
-std::shared_ptr<PluginInstance> PluginManager::find(std::string_view name) const {
-    auto it = plugins_.find(name);
-    return it != plugins_.end() ? it->second : nullptr;
 }
 
 std::string PluginManager::listPluginsJson() {

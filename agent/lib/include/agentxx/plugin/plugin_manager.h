@@ -3,6 +3,7 @@
 #include "agentxx/middlewares/middleware.h"
 #include "agentxx/plugin/plugin_api.h"
 #include "agentxx/plugin/plugin_common.h"
+#include "agentxx/plugin/plugin_manager_base.h"
 #include "agentxx/plugin/tool_registry.h"
 #include "agentxx/tools/tool.h"
 #include "asio/awaitable.hpp"
@@ -65,32 +66,20 @@ struct AgentxxPluginSubscription {
 namespace agentxx {
 namespace plugin {
 
-class PluginInstance {
+class PluginInstance : public PluginInstanceBase {
 public:
 
-    std::string    name;
-    std::string    version;
-    std::string    description;
-    std::string    path;
-    neograph::json args = neograph::json::object();
-    /// 插件配置文件所在目录或文件路径 (yaml `config`, 归一化为绝对路径)
-    /// - 可指向文件或目录; 为空表示未指定
-    std::string              configPath;
-    std::vector<std::string> depends;
-    std::vector<std::string> optionalDepends;
+    /// 继承 PluginInstanceBase 的公共字段 (name/version/path/configPath/args/depends/
+    /// dlHandle/pluginCtx/enabled/inflight 等), 见 plugin_manager_base.h
+    /// 接口声明 (plugin.yaml `interfaces`; 加载时随 manifest 解析传入,
+    /// 直连库路径为空) —— 经 list() 暴露供展示/排查
     PluginManifestInterfaces interfaces;
-    void*                    dlHandle        = nullptr;
-    AgentxxPluginDestroyFn   builtinUnload   = nullptr;
-    void*                    pluginCtx       = nullptr;
-    bool                     enabled         = true;
-    bool                     userDisabled    = false;
-    bool                     unloadRequested = false;
+    AgentxxPluginDestroyFn   builtinUnload = nullptr;
     /// 资源冻结标志: 插件初始化阶段 (create 内) 允许注册 skill/memory/mcp,
     /// 初始化完成后冻结，后续固定不可变以防上下文变化 (仅 yaml 声明与初始化追加生效)
     bool resourcesFrozen = false;
 
-    AgentxxPluginHost   host{};
-    std::atomic<size_t> inflight{0};
+    AgentxxPluginHost host{};
 
     struct HookRegistration {
         AgentxxPluginHookPoint point;
@@ -130,7 +119,7 @@ public:
     std::weak_ptr<PluginManager>  manager{};
 
     explicit PluginInstance(std::string in_name) :
-        name(std::move(in_name)) {}
+        PluginInstanceBase(std::move(in_name)) {}
 
     ~PluginInstance();
 
@@ -237,7 +226,8 @@ private:
     std::array<HookEntry, AGENTXX_PLUGIN_HOOK_COUNT> hooks_{};
 };
 
-class PluginManager : public std::enable_shared_from_this<PluginManager> {
+class PluginManager : public PluginManagerBase<PluginInstance>,
+                      public std::enable_shared_from_this<PluginManager> {
 public:
 
     struct PluginListView {
@@ -296,8 +286,7 @@ public:
 
     void shutdownAll();
 
-    std::vector<PluginListView>     list() const;
-    std::shared_ptr<PluginInstance> find(std::string_view name) const;
+    std::vector<PluginListView> list() const;
 
     bool hasRunningTurn() const {
         return runningTurns_ > 0;
@@ -376,74 +365,6 @@ public:
         return capabilities_;
     }
 
-    void setIoExecutor(asio::any_io_executor ex) {
-        ioExecutor_ = std::move(ex);
-        if (ioExecutor_) {
-            ioThreadId_.store(std::this_thread::get_id(), std::memory_order_release);
-        }
-    }
-
-    bool isIoThread() const {
-        const auto tid = ioThreadId_.load(std::memory_order_acquire);
-        return !ioExecutor_ || (tid != std::thread::id{} && tid == std::this_thread::get_id());
-    }
-
-    mutable std::mutex                        ioTasksMtx_;
-    mutable std::deque<std::function<void()>> ioTasks_;
-
-    void postToIo(std::function<void()> fn) const {
-        if (isIoThread()) {
-            fn();
-        } else if (ioExecutor_) {
-            {
-                std::lock_guard lk(ioTasksMtx_);
-                ioTasks_.push_back(std::move(fn));
-            }
-            asio::post(ioExecutor_, [this]() {
-                ioThreadId_.store(std::this_thread::get_id(), std::memory_order_release);
-                runPendingIoTasks();
-            });
-        } else {
-            XX_LOGW("PluginManager::postToIo: no io executor, executing on caller thread");
-            fn();
-        }
-    }
-
-    /// 异步投递到 io 线程（恒经 asio::post 入队，禁止同步重入）：
-    /// 供 SchedulerIface::post_to_io / YieldAwaiter 等锚定协程恢复路径使用，
-    /// 即使调用方已在 io 线程也一律异步，避免 await_suspend 内的重入 UB
-    void postToIoAsync(std::function<void()> fn) const {
-        if (ioExecutor_) {
-            {
-                std::lock_guard lk(ioTasksMtx_);
-                ioTasks_.push_back(std::move(fn));
-            }
-            asio::post(ioExecutor_, [this]() {
-                ioThreadId_.store(std::this_thread::get_id(), std::memory_order_release);
-                runPendingIoTasks();
-            });
-        } else {
-            XX_LOGW("PluginManager::postToIoAsync: no io executor, executing on caller thread");
-            fn();
-        }
-    }
-
-    void runPendingIoTasks() const {
-        std::deque<std::function<void()>> tasks;
-        {
-            std::lock_guard lk(ioTasksMtx_);
-            tasks.swap(ioTasks_);
-        }
-        for (auto& t : tasks) {
-            if (t) {
-                try {
-                    t();
-                } catch (...) {
-                }
-            }
-        }
-    }
-
     int registerCapability(PluginInstance* inst, const char* capability);
     int registerCapabilityEx(
         PluginInstance*                      inst,
@@ -479,11 +400,6 @@ private:
 
     friend class PluginInstance;
 
-    asio::awaitable<bool> waitInflightZero(
-        const std::shared_ptr<PluginInstance>& inst,
-        std::chrono::milliseconds              timeout
-    );
-
     void detachAll(PluginInstance* inst);
     void eraseMiddleware(PluginMiddlewareHandle* mw);
 
@@ -496,13 +412,10 @@ private:
 
     void shutdownPlugin(const std::shared_ptr<PluginInstance>& inst);
 
-    std::weak_ptr<agentxx::agent::AgentContext>                         agentContext_;
-    std::shared_ptr<ToolRegistry>                                       registry_;
-    std::shared_ptr<CapabilityRegistry>                                 capabilities_;
-    std::map<std::string, std::shared_ptr<PluginInstance>, std::less<>> plugins_;
-    size_t                                                              runningTurns_ = 0;
-    asio::any_io_executor                                               ioExecutor_{};
-    mutable std::atomic<std::thread::id>                                ioThreadId_{};
+    std::weak_ptr<agentxx::agent::AgentContext> agentContext_;
+    std::shared_ptr<ToolRegistry>               registry_;
+    std::shared_ptr<CapabilityRegistry>         capabilities_;
+    size_t                                      runningTurns_ = 0;
 };
 
 struct NativeLoader {
