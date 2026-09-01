@@ -716,6 +716,190 @@ asio::awaitable<void> test_repair_all_replied_no_cleanup() {
     co_return;
 }
 
+/// 测试 5: 多组 assistant toolcall 均完整 → 全部保留
+/// [system, user,
+///  assistant(tool_calls=[call_a]), tool(call_a=result),
+///  assistant(tool_calls=[call_b]), tool(call_b=result)]
+/// - 两组都 allReplied → 不悬挂 → 全部保留
+asio::awaitable<void> test_repair_multiple_complete_groups_kept() {
+    // ---- 构造 AgentContext / Node ----
+    auto ctx          = std::make_shared<agentxx::agent::AgentContext>();
+    ctx->agentConfig  = std::make_shared<agentxx::agent::AgentConfig>();
+    ctx->agentConfig->repairMessages = true;
+    ctx->middlewareHandleContext = std::make_shared<agentxx::middleware::MiddlewareContext>();
+
+    neograph::graph::NodeContext nodeCtx;
+    nodeCtx.model = "test-model";
+    agentxx::nodes::ModelCallWrapNode node("test_llm", nodeCtx, ctx);
+
+    // ---- 构造 state ----
+    neograph::json msgs = neograph::json::array();
+    msgs.push_back(neograph::json{{"role", "system"}, {"content", "sys"}});
+    msgs.push_back(neograph::json{{"role", "user"}, {"content", "hello"}});
+    msgs.push_back(neograph::json{
+        {"role", "assistant"},
+        {"content", "group 1"},
+        {"tool_calls", neograph::json::array({
+            neograph::json{
+                {"id", "call_a"},
+                {"type", "function"},
+                {"function", neograph::json{{"name", "tool_a"}, {"arguments", "{}"}}},
+            },
+        })},
+    });
+    msgs.push_back(neograph::json{
+        {"role", "tool"},
+        {"content", "result"},
+        {"tool_call_id", "call_a"},
+        {"tool_name", "tool_a"},
+    });
+    msgs.push_back(neograph::json{
+        {"role", "assistant"},
+        {"content", "group 2"},
+        {"tool_calls", neograph::json::array({
+            neograph::json{
+                {"id", "call_b"},
+                {"type", "function"},
+                {"function", neograph::json{{"name", "tool_b"}, {"arguments", "{}"}}},
+            },
+        })},
+    });
+    msgs.push_back(neograph::json{
+        {"role", "tool"},
+        {"content", "result"},
+        {"tool_call_id", "call_b"},
+        {"tool_name", "tool_b"},
+    });
+
+    neograph::graph::GraphState state;
+    state.init_channel(
+        "messages",
+        neograph::graph::ReducerType::APPEND,
+        neograph::graph::ReducerRegistry::instance().get("append"),
+        msgs
+    );
+    neograph::graph::RunContext runCtx;
+    runCtx.thread_id = "repair_dangling_test";
+    neograph::graph::NodeInput in{state, runCtx, nullptr};
+
+    node.repairMessages(in);
+
+    // ---- 断言: 全部保留 ----
+    const auto resultMsgs = in.state.get_messages();
+    XX_TEST_EXPECT_EQ(resultMsgs.size(), size_t{6});
+    if (resultMsgs.size() == 6) {
+        // [system, user, assistant(call_a), tool(call_a), assistant(call_b), tool(call_b)]
+        XX_TEST_EXPECT_EQ(resultMsgs[0].role, std::string{"system"});
+        XX_TEST_EXPECT_EQ(resultMsgs[1].role, std::string{"user"});
+        XX_TEST_EXPECT_EQ(resultMsgs[2].role, std::string{"assistant"});
+        XX_TEST_EXPECT_TRUE(resultMsgs[2].tool_calls.size() == 1);
+        XX_TEST_EXPECT_EQ(resultMsgs[2].tool_calls[0].id, std::string{"call_a"});
+        XX_TEST_EXPECT_EQ(resultMsgs[3].role, std::string{"tool"});
+        XX_TEST_EXPECT_EQ(resultMsgs[3].tool_call_id, std::string{"call_a"});
+        XX_TEST_EXPECT_EQ(resultMsgs[4].role, std::string{"assistant"});
+        XX_TEST_EXPECT_TRUE(resultMsgs[4].tool_calls.size() == 1);
+        XX_TEST_EXPECT_EQ(resultMsgs[4].tool_calls[0].id, std::string{"call_b"});
+        XX_TEST_EXPECT_EQ(resultMsgs[5].role, std::string{"tool"});
+        XX_TEST_EXPECT_EQ(resultMsgs[5].tool_call_id, std::string{"call_b"});
+    }
+    co_return;
+}
+
+/// 测试 6: 中间位置的悬挂组也被修正 (不只最后一条)
+/// [system, user,
+///  assistant(tool_calls=[call_a, call_b]), tool(call_a=result),   // call_b 悬挂
+///  assistant(tool_calls=[call_c]), tool(call_c=result)]           // 完整组
+/// - 最后一条含 tool_calls 的 assistant (call_c) 完整 → 旧逻辑不修
+/// - 新逻辑: 中间组 call_b 悬挂 → 清空 call_a/call_b 声明 + 删除孤儿 tool(call_a)
+/// - 后面的完整组 (call_c) 保留
+asio::awaitable<void> test_repair_middle_dangling_group_fixed() {
+    auto ctx          = std::make_shared<agentxx::agent::AgentContext>();
+    ctx->agentConfig  = std::make_shared<agentxx::agent::AgentConfig>();
+    ctx->agentConfig->repairMessages = true;
+    ctx->middlewareHandleContext = std::make_shared<agentxx::middleware::MiddlewareContext>();
+
+    neograph::graph::NodeContext nodeCtx;
+    nodeCtx.model = "test-model";
+    agentxx::nodes::ModelCallWrapNode node("test_llm", nodeCtx, ctx);
+
+    neograph::json msgs = neograph::json::array();
+    msgs.push_back(neograph::json{{"role", "system"}, {"content", "sys"}});
+    msgs.push_back(neograph::json{{"role", "user"}, {"content", "hello"}});
+    // 中间悬挂组: call_a 有结果, call_b 无结果
+    msgs.push_back(neograph::json{
+        {"role", "assistant"},
+        {"content", "group 1"},
+        {"tool_calls", neograph::json::array({
+            neograph::json{
+                {"id", "call_a"},
+                {"type", "function"},
+                {"function", neograph::json{{"name", "tool_a"}, {"arguments", "{}"}}},
+            },
+            neograph::json{
+                {"id", "call_b"},
+                {"type", "function"},
+                {"function", neograph::json{{"name", "tool_b"}, {"arguments", "{}"}}},
+            },
+        })},
+    });
+    msgs.push_back(neograph::json{
+        {"role", "tool"},
+        {"content", "result"},
+        {"tool_call_id", "call_a"},
+        {"tool_name", "tool_a"},
+    });
+    // 后面的完整组
+    msgs.push_back(neograph::json{
+        {"role", "assistant"},
+        {"content", "group 2"},
+        {"tool_calls", neograph::json::array({
+            neograph::json{
+                {"id", "call_c"},
+                {"type", "function"},
+                {"function", neograph::json{{"name", "tool_c"}, {"arguments", "{}"}}},
+            },
+        })},
+    });
+    msgs.push_back(neograph::json{
+        {"role", "tool"},
+        {"content", "result"},
+        {"tool_call_id", "call_c"},
+        {"tool_name", "tool_c"},
+    });
+
+    neograph::graph::GraphState state;
+    state.init_channel(
+        "messages",
+        neograph::graph::ReducerType::APPEND,
+        neograph::graph::ReducerRegistry::instance().get("append"),
+        msgs
+    );
+    neograph::graph::RunContext runCtx;
+    runCtx.thread_id = "repair_dangling_test";
+    neograph::graph::NodeInput in{state, runCtx, nullptr};
+
+    node.repairMessages(in);
+
+    // ---- 断言 ----
+    // 期望: [system, user, assistant(无 tool_calls), assistant(call_c), tool(call_c)]
+    const auto resultMsgs = in.state.get_messages();
+    XX_TEST_EXPECT_EQ(resultMsgs.size(), size_t{5});
+    if (resultMsgs.size() == 5) {
+        XX_TEST_EXPECT_EQ(resultMsgs[0].role, std::string{"system"});
+        XX_TEST_EXPECT_EQ(resultMsgs[1].role, std::string{"user"});
+        // 中间悬挂组: tool_calls 已清空, 孤儿 tool(call_a) 已删除
+        XX_TEST_EXPECT_EQ(resultMsgs[2].role, std::string{"assistant"});
+        XX_TEST_EXPECT_TRUE(resultMsgs[2].tool_calls.empty());
+        // 后面的完整组保留
+        XX_TEST_EXPECT_EQ(resultMsgs[3].role, std::string{"assistant"});
+        XX_TEST_EXPECT_TRUE(resultMsgs[3].tool_calls.size() == 1);
+        XX_TEST_EXPECT_EQ(resultMsgs[3].tool_calls[0].id, std::string{"call_c"});
+        XX_TEST_EXPECT_EQ(resultMsgs[4].role, std::string{"tool"});
+        XX_TEST_EXPECT_EQ(resultMsgs[4].tool_call_id, std::string{"call_c"});
+    }
+    co_return;
+}
+
 asio::awaitable<TestResult> run_message_supplement_tests() {
     g_ms_passed = 0;
     g_ms_failed = 0;
@@ -727,6 +911,8 @@ asio::awaitable<TestResult> run_message_supplement_tests() {
         co_await test_repair_dangling_multiple_orphans_keep_next_agent_msg();
         co_await test_repair_dangling_keep_next_assistant_msg();
         co_await test_repair_all_replied_no_cleanup();
+        co_await test_repair_multiple_complete_groups_kept();
+        co_await test_repair_middle_dangling_group_fixed();
     } catch (const std::exception& e) {
         TEST_FAIL << "message_supplement suite exception: " << e.what() << std::endl;
         g_ms_failed++;

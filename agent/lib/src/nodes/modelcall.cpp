@@ -286,38 +286,80 @@ void ModelCallWrapNode::repairMessages(neograph::graph::NodeInput& in) {
         //   取消), 悬挂的 tool_calls 会让 LLM 误以为工具已被调用, 这里清空其 tool_calls
         // - 若所有声明的 tool_call_id 都已有 tool 结果消息 (如 toolcall 内取消时已由
         //   ToolcallWrapNode 补齐 [User canceled]), 则不清空
+        // - 对全部 assistant 消息逐一检查 (不只最后一条): 历史中任意位置的悬挂组
+        //   (中断/取消残留在中间轮次) 都会污染上下文, 一并修正
         {
-            // 找最后一条含 tool_calls 的 assistant 消息
-            int64_t assistantIndex = -1;
+            // 待删除的孤儿 tool 结果标记 (按原始索引)
+            std::vector<bool> removeOrphan(msgs.size(), false);
+            bool              haveDangling = false;
+
+            // 从后往前遍历: 清空/删除只影响当前组之后的消息, 前面的组索引不受影响
             for (int64_t i = static_cast<int64_t>(msgs.size()) - 1; i >= 0; --i) {
-                if ("assistant" == msgs[i].role && !msgs[i].tool_calls.empty()) {
-                    assistantIndex = i;
-                    break;
+                if ("assistant" != msgs[i].role || msgs[i].tool_calls.empty()) {
+                    continue;
                 }
-            }
-            if (assistantIndex >= 0) {
+                // 收集本组声明的 tool_call ids
                 std::set<std::string> ids;
-                for (const auto& tc : msgs[assistantIndex].tool_calls) {
+                for (const auto& tc : msgs[i].tool_calls) {
                     if (!tc.id.empty()) {
                         ids.insert(tc.id);
                     }
                 }
+                if (ids.empty()) {
+                    continue;
+                }
+                // 在本组之后 (直到下一条 agent 消息) 的 tool 结果中查找回复:
+                // - 下一条 agent 消息 = 下一条非 tool 消息 (user/system 或 任意
+                //   assistant); 若是带 tool_calls 的 assistant 则为另一组, 其
+                //   tool 结果属于该组, 不能纳入本组的回复/删除范围
                 std::set<std::string> replied;
-                for (size_t i = static_cast<size_t>(assistantIndex) + 1; i < msgs.size(); ++i) {
-                    if ("tool" == msgs[i].role && !msgs[i].tool_call_id.empty()) {
-                        replied.insert(msgs[i].tool_call_id);
+                size_t                nextAgentMsg = msgs.size();
+                for (size_t j = static_cast<size_t>(i) + 1; j < msgs.size(); ++j) {
+                    if ("tool" == msgs[j].role) {
+                        if (!msgs[j].tool_call_id.empty()) {
+                            replied.insert(msgs[j].tool_call_id);
+                        }
+                        continue;
                     }
+                    nextAgentMsg = j;
+                    break;
                 }
                 const bool allReplied
                     = std::all_of(ids.begin(), ids.end(), [&](const std::string& id) {
                           return replied.count(id) > 0;
                       });
-                if (!ids.empty() && !allReplied) {
-                    // 存在悬挂的 tool_calls, 清空, 保证上下文角色顺序和内容完整
-                    msgs[assistantIndex].tool_calls.clear();
-                    XX_LOGD("RepairMessages: clear dangling toolcalls before LLM call");
-                    haveChange = true;
+                if (allReplied) {
+                    continue;
                 }
+                // 悬挂: 清空本组 tool_calls, 并标记其后的孤儿 tool 结果删除
+                // - 悬挂声明清空后, 这些结果成为孤儿 (无对应声明), 会让 LLM API
+                //   校验失败 (如 OpenAI 的 invalid tool_call_id / Anthropic 的
+                //   orphan tool result 400), 也破坏角色顺序
+                // - 正常路径 toolcall 节点会补齐 tool 结果, 走到这里说明该组确实
+                //   未完成, 这些结果要么是异常占位 ([Exception aborted]/
+                //   [User canceled]) 要么是过期残留, 全部删除是安全的
+                msgs[i].tool_calls.clear();
+                for (size_t j = static_cast<size_t>(i) + 1; j < nextAgentMsg; ++j) {
+                    removeOrphan[j] = true;
+                }
+                haveDangling = true;
+                XX_LOGD("RepairMessages: clear dangling toolcalls (msg {})", i);
+            }
+
+            if (haveDangling) {
+                // 从后往前删除标记的孤儿 tool 结果, 避免索引位移
+                size_t removedCount = 0;
+                for (size_t j = msgs.size(); j > 0; --j) {
+                    if (removeOrphan[j - 1]) {
+                        msgs.erase(msgs.begin() + (j - 1));
+                        ++removedCount;
+                    }
+                }
+                if (removedCount > 0) {
+                    XX_LOGD("RepairMessages: clear {} orphan tool result(s)", removedCount);
+                }
+                XX_LOGD("RepairMessages: clear dangling toolcalls before LLM call");
+                haveChange = true;
             }
         }
 
