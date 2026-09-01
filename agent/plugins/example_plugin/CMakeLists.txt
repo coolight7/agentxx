@@ -73,9 +73,7 @@ add_library(${PLUGIN_NAME} SHARED
   example_plugin.cpp
 )
 
-if (NOT TARGET agentxx_util)
-  find_package(agentxx_util REQUIRED)
-endif()
+find_package(agentxx_util REQUIRED)
 
 target_include_directories(${PLUGIN_NAME} PRIVATE
   "${AGENTXX_LIB_INCLUDE_DIR}"           # agentxx/plugin/plugin_api.h

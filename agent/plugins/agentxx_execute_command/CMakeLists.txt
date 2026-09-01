@@ -13,39 +13,29 @@ if (NOT _AGENTXX_PLATFORM_OK)
   return()
 endif ()
 
-# boost 分发布局: ${BOOST_ROOT}/include/boost/...; 源码用 asio/... 前缀
-# (映射 include/boost/), 而 asio 头内部用 <boost/asio/...> 形式 (映射 include/)
-set(_BOOST_INCLUDES "${BOOST_ROOT}/include/" "${BOOST_ROOT}/include/boost/")
-
 if (_AGENTXX_ADD_AS_BUILTIN)
   # ===== 内置合并编译分支 =====
   set(_target abp_${PLUGIN_NAME})
   add_library(${_target} OBJECT
     ${CMAKE_CURRENT_SOURCE_DIR}/agentxx_execute_command.cpp
   )
+  find_package(Boost CONFIG REQUIRED COMPONENTS process)
   target_compile_definitions(${_target} PRIVATE
     "AGENTXX_PLUGIN_BUILTIN=1"
     "agentxx_plugin_agent_create=agentxx_plugin_agent_builtin_create_${PLUGIN_NAME}"
     "agentxx_plugin_agent_get_info=agentxx_plugin_agent_builtin_get_info_${PLUGIN_NAME}"
     "agentxx_plugin_agent_destroy=agentxx_plugin_agent_builtin_destroy_${PLUGIN_NAME}"
-    # 禁用 MSVC boost auto-link (与独立分支 Boost::process imported target
-    # 携带的 BOOST_ALL_NO_LIB 一致): 内置合并模式仅以裸名 boost_process 追加
-    # 链接, 不会传播 NO_LIB 宏; 缺失时编译单元会嵌入
-    # #pragma comment(lib, "libboost_process-vc145-mt-x64-1_92.lib") (带工具集
-    # 版本后缀), 而预编译 boost 库命名为 libboost_process.lib, release 配置
-    # 下链接报 LNK1104 无法打开文件 (debug 未启用内置插件所以未暴露)
-    "BOOST_ALL_NO_LIB"
   )
   target_include_directories(${_target} PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}"          # agentxx_execmd_plugin.h / execute_command_impl.h
     "${AGENTXX_LIB_INCLUDE_DIR}"           # agentxx/plugin/plugin_api.h
     "${AGENTXX_INSTALL_DIR}/include"       # fmt neograph
-    ${_BOOST_INCLUDES}
   )
-  target_link_libraries(${_target} PRIVATE agentxx_util)
-  # boost.process v2 编译库 + Windows 系统库 (经 libagentxx 收集通道;
-  # Boost::process imported target 由顶层 find_package 提供, 此处以裸名
-  # 追加, 经 lib 自身 link_directories 解析, 与 _AGENTXX_LINK_LIBS 一致)
+  target_include_directories(${_target} SYSTEM PRIVATE
+    "${Boost_INCLUDE_DIRS}"
+    "${Boost_INCLUDE_DIRS}/boost/"
+  )
+  target_link_libraries(${_target} PRIVATE agentxx_util Boost::process)
   set(AGENTXX_BUILTIN_PLUGIN_LINK_LIBS
     "${AGENTXX_BUILTIN_PLUGIN_LINK_LIBS}" boost_process PARENT_SCOPE)
   if (XX_IS_WIN_D)
@@ -87,14 +77,7 @@ add_library(${PLUGIN_NAME} SHARED
 )
 
 # ===== 依赖统一查找与链接 =====
-# 仿 agent/lib/CMakeLists.txt 四件套模式: find_package 导入依赖 target /
-# target_include_directories 声明头路径 / target_link_directories 提供裸库名
-# 解析目录 / target_link_libraries 以 imported target + 裸库名链接
-if (NOT TARGET agentxx_util)
-  # 独立构建本插件时经安装 config 导入; 内置合并模式 (经 libagentxx 构建)
-  # 下 util 目标已存在于宿主工程, 跳过导入 (此时 install 目录尚未生成 config)
-  find_package(agentxx_util REQUIRED)
-endif()
+find_package(agentxx_util REQUIRED)
 find_package(html2md REQUIRED)
 # OpenSSL 保持模块模式 (FindOpenSSL, 与 lib 一致): 本项目 OpenSSL 为预构建
 # 目录 (无 config), OPENSSL_ROOT_DIR 由顶层 superbuild 传入精确指向预构建
@@ -107,10 +90,6 @@ target_include_directories(${PLUGIN_NAME} PRIVATE
   "${AGENTXX_INSTALL_DIR}/include/"      # fmt neograph
 )
 
-# boost 分发布局: ${BOOST_ROOT}/include/boost/...; 源码用 asio/... 前缀
-# (映射 include/boost/), 而 asio 头内部用 <boost/asio/...> 形式 (映射 include/)。
-# 与 lib 同款经 find_package(Boost CONFIG) 取头路径, SYSTEM 置后声明,
-# 不遮蔽前方项目头路径 (避免干扰 neograph/yyjson 头解析)
 find_package(Boost CONFIG REQUIRED COMPONENTS process)
 target_include_directories(${PLUGIN_NAME} SYSTEM PRIVATE
   "${Boost_INCLUDE_DIRS}"
@@ -142,8 +121,6 @@ target_link_libraries(${PLUGIN_NAME} PRIVATE
   # === neograph ^^^
   yyjson
 )
-# boost.process v2 为编译库 (非 header-only): get_utf8_category 等
-# BOOST_PROCESS_V2_DECL 符号实现于 boost_process 编译库。与 lib 同款链接
 # Boost::process imported target —— 自动携带传递系统库 (ws2_32/bcrypt/
 # advapi32/ntdll/shell32/user32/synchronization) 与 BOOST_ALL_NO_LIB 宏
 # (禁用 MSVC 自动链接), 无需再手动补链

@@ -80,15 +80,7 @@ add_library(${PLUGIN_NAME} SHARED
 )
 
 # ===== 依赖统一查找与链接 =====
-# 仿 agent/lib/CMakeLists.txt 四件套模式: find_package 导入依赖 target /
-# target_include_directories 声明头路径 / target_link_directories 提供裸库名
-# 解析目录 / target_link_libraries 以 imported target + 裸库名链接。
-# 本插件仅用 asio 头 (${_BOOST_INCLUDES}, 无 boost 编译库) + util 的 HttpClient
-if (NOT TARGET agentxx_util)
-  # 独立构建本插件时经安装 config 导入; 内置合并模式 (经 libagentxx 构建)
-  # 下 util 目标已存在于宿主工程, 跳过导入 (此时 install 目录尚未生成 config)
-  find_package(agentxx_util REQUIRED)
-endif()
+find_package(agentxx_util REQUIRED)
 find_package(html2md REQUIRED)
 # OpenSSL 保持模块模式 (FindOpenSSL, 与 lib 一致): 本项目 OpenSSL 为预构建
 # 目录 (无 config), OPENSSL_ROOT_DIR 由顶层 superbuild 传入精确指向预构建

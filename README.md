@@ -74,7 +74,9 @@
 | agentxx_screen_capture | 383K | - | - | 获取屏幕图像帧 |
 | agentxx_system_monitor | 428K | 629K | - | 读取系统CPU、内存、GPU占用 |
 | agentxx_text_selection_monitor | 399K | - | - | 接收系统的文本选择事件流 |
-| agentxx_math | - | - | - | 数学计算工具 |
+| agentxx_string | 8.9M | - | - | 字符串处理、HTML-Markdown转换 |
+| agentxx_rag_search | 6.7M | - | - | RAG 检索 |
+| agentxx_math | 346K | - | - | 数学计算工具 |
 
 - 默认的编译优化倾向于追求性能，如果需要裁剪体积，可以移除 Hyperscan/Boost.process 等可选库、采用 -Os/-Oz 体积编译优化
 

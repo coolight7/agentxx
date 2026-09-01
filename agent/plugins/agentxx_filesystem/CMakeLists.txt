@@ -76,16 +76,7 @@ add_library(${PLUGIN_NAME} SHARED
 )
 
 # ===== 依赖统一查找与链接 =====
-# 仿 agent/lib/CMakeLists.txt 四件套模式: find_package 导入依赖 target /
-# target_include_directories 声明头路径 / target_link_directories 提供裸库名
-# 解析目录 / target_link_libraries 以 imported target + 裸库名链接。
-# 复用 agentxx_util 工具库 (插件静态链接, 与宿主副本符号互不冲突;
-# XXRegex/aho_corasick/string_util 实现经静态裁剪自动收录)
-if (NOT TARGET agentxx_util)
-  # 独立构建本插件时经安装 config 导入; 内置合并模式 (经 libagentxx 构建)
-  # 下 util 目标已存在于宿主工程, 跳过导入 (此时 install 目录尚未生成 config)
-  find_package(agentxx_util REQUIRED)
-endif()
+find_package(agentxx_util REQUIRED)
 find_package(Glob REQUIRED)
 find_package(html2md REQUIRED)
 # OpenSSL 保持模块模式 (FindOpenSSL, 与 lib 一致): 本项目 OpenSSL 为预构建
@@ -99,8 +90,6 @@ target_include_directories(${PLUGIN_NAME} PRIVATE
   "${AGENTXX_INSTALL_DIR}/include/"          # fmt neograph
   "${AGENTXX_INSTALL_DIR}/include/Glob-1.0"  # glob/glob.h (filesystem_impl.h)
 )
-# asio 头路径 (read/write/edit 协程执行体 stream_file): SYSTEM 置后声明,
-# 不遮蔽前方项目头路径 (避免干扰 neograph/yyjson 头解析), 与 execute_command 同款
 target_include_directories(${PLUGIN_NAME} SYSTEM PRIVATE
   ${_BOOST_INCLUDES}
 )
