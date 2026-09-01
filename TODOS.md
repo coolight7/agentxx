@@ -6,7 +6,6 @@
 - CI/CD
 - 文档翻译
 - release 编译发布时携带 标准库
-- 拆分 plugin 为 api、impl
 - 整理 test
 - 增加一个用 eventbus 事件驱动 agent 回复的插件
 

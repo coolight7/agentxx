@@ -66,7 +66,7 @@ inline neograph::ChatTool execmdDefinitionOf(
     return {name, depict, std::move(params)};
 }
 
-/// 会话工作目录解析 (原工具经 AgentContext; 与插件 get_work_dir 同源):
+/// 会话工作目录解析 (原工具经 AgentContext; 与插件 get_session_work_dir 同源):
 /// ctx 未装配时回退进程 cwd, 相对路径用例语义不变
 inline std::string testResolvedWorkDir(const std::weak_ptr<agentxx::agent::AgentContext>& ctx) {
     if (auto p = ctx.lock()) {

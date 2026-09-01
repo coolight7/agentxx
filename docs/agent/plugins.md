@@ -170,7 +170,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_agent_destroy(void* plugin_
 | `agentxx.agent.scheduler` | 1 | `is_io_thread/post_to_io/pump_io`, `sleep/cancel_sleep`, `offload` (阻塞池委托, 需 cancel_flag) |
 | `agentxx.agent.session` | 1 | `get_share_store/add_share_store/emit_message_tip` (IO 线程) |
 | `agentxx.agent.plugins` | 1 | `list_plugins/get_plugin/get_own_info` (JSON) |
-| `agentxx.agent.config` | 2 | `get_config/get_plugin_args/get_tool_prompt/get_work_dir/get_session_work_dir/get_plugin_config_path` (后者 worktree 绑定优先；`get_plugin_config_path` 返回 yaml `config` 归一化绝对路径，可指向文件/目录) |
+| `agentxx.agent.config` | 2 | `get_config/get_plugin_args/get_tool_prompt/get_session_work_dir/get_plugin_config_path` (后者 session_id 为空时返回默认会话工作目录；`get_plugin_config_path` 返回 yaml `config` 归一化绝对路径，可指向文件/目录) |
 | `agentxx.agent.model` | 1 | `get_config` (主模型及关联配置 JSON) |
 | `agentxx.agent.cancel` | 1 | `is_cancelled(threadId)` (advisory, 权威通知为 cancel 回调) |
 | `agentxx.agent.prompt` | 1 | `get_prompt/set_prompt` (宿主提示词读写) |
@@ -212,7 +212,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_agent_destroy(void* plugin_
 
 ## 11. Worktree 与会话工作目录
 
-- 插件经 `AgentxxConfigIface::get_session_work_dir(host, thread_id)` 取当前会话生效工作目录 (worktree 绑定优先，回退 `get_work_dir`)
+- 插件经 `AgentxxConfigIface::get_session_work_dir(host, thread_id)` 取当前会话生效工作目录 (worktree 绑定优先；thread_id 为空时返回默认会话工作目录)
 - `blocking_tool` 的 `workDir` 参数由 SDK 在 IO 线程预取并注入，避免 worker 线程跨线程 `ioCallSync`
 - 文件系统 / 命令执行插件每次 `execute` 按注入 `sessionId` 动态解析路径，会话绑定后基准即时切换
 

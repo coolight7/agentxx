@@ -635,24 +635,6 @@ static char* xx_get_tool_prompt(const AgentxxPluginHost* host, AgentxxPluginStri
     });
 }
 
-static char* xx_get_work_dir(const AgentxxPluginHost* host) {
-    return agentxx::plugin::guardVtableCall(nullptr, [&]() -> char* {
-        auto mgr  = mgrOf(host);
-        auto inst = instOf(host);
-        if (!mgr || !inst) {
-            return static_cast<char*>(nullptr);
-        }
-        auto mgrPtr = mgr;
-        auto dir    = ioCallSync<std::string>(mgrPtr, [mgrPtr]() {
-            return mgrPtr->getSessionWorkDir();
-        });
-        if (dir.empty()) {
-            return static_cast<char*>(nullptr);
-        }
-        return host->vtable->strdup(dir.c_str());
-    });
-}
-
 static char*
     xx_get_session_work_dir(const AgentxxPluginHost* host, AgentxxPluginStringView thread_id) {
     return agentxx::plugin::guardVtableCall(nullptr, [&]() -> char* {
@@ -939,7 +921,6 @@ static const AgentxxPluginConfigIface g_ifaceConfig = {
     /* get_config */ xx_get_config,
     /* get_plugin_args */ xx_get_plugin_args,
     /* get_tool_prompt */ xx_get_tool_prompt,
-    /* get_work_dir */ xx_get_work_dir,
     /* get_session_work_dir */ xx_get_session_work_dir,
     /* get_plugin_config_path */ xx_get_plugin_config_path,
 };

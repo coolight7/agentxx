@@ -4,7 +4,7 @@
 // - 头文件-only: 插件入口与测试共同包含, 保证插件行为与测试覆盖一致
 // - 与原实现的差异点:
 //   - 会话工作目录/取消令牌经参数注入 (workDir / isCancelled 回调),
-//     由插件入口从宿主接口表取值 (agentxx.agent.config.get_work_dir /
+//     由插件入口从宿主接口表取值 (agentxx.agent.config.get_session_work_dir /
 //     agentxx.agent.cancel.is_cancelled), 便于测试直测纯逻辑
 //   - 统一异步操作模型 (poll 寄生驱动): 协程版执行体 *ExecuteAsync 在插件
 //     实例的 PollLoop (agentxx.plugin.PollLoop, 无线程寄生事件循环) 上运行,

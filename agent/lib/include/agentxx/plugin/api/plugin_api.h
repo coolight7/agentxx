@@ -455,9 +455,9 @@ typedef struct AgentxxPluginConfigIface {
     /// 宿主 toolPrompt 配置 (io 线程; host->alloc):
     /// {"depict": "...", "args": {"参数名": "参数说明", ...}}
     char* (*get_tool_prompt)(const AgentxxPluginHost* host, AgentxxPluginStringView tool_name);
-    /// 解析后的会话工作目录 (io 线程; host->alloc; 失败/未装配返回 NULL)
-    char* (*get_work_dir)(const AgentxxPluginHost* host);
-    /// 指定会话生效的工作目录 (worktree 绑定优先, 回退 get_work_dir; io 线程; host->alloc)
+    /// 指定会话生效的工作目录 (io 线程; host->alloc; 失败/未装配返回 NULL):
+    /// - session_id 非空: worktree 绑定优先, 依次回退会话覆写 / AgentConfig
+    /// - session_id 为空: 返回解析后的默认会话工作目录
     char* (*get_session_work_dir)(
         const AgentxxPluginHost* host,
         AgentxxPluginStringView  session_id

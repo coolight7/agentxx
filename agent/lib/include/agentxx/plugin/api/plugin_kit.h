@@ -350,27 +350,18 @@ struct PluginBase {
         }
     }
 
+    /// 会话工作目录 (io 线程): tid 非空时返回该会话生效目录
+    /// (worktree 绑定优先, 依次回退会话覆写 / AgentConfig); tid 为空时
+    /// 返回默认会话工作目录 (等价旧 get_work_dir 语义)
     std::string workDir(AgentxxPluginStringView tid = {}) const {
-        if (!host || !iface.config) {
+        if (!host || !iface.config || !iface.config->get_session_work_dir) {
             return "";
         }
-        if (iface.config->get_session_work_dir && !agentxx_plugin_sv_empty(tid)) {
-            char* p = iface.config->get_session_work_dir(host, tid);
-            if (p) {
-                std::string res(p);
-                host->vtable->free(p);
-                if (!res.empty()) {
-                    return res;
-                }
-            }
-        }
-        if (iface.config->get_work_dir) {
-            char* p = iface.config->get_work_dir(host);
-            if (p) {
-                std::string res(p);
-                host->vtable->free(p);
-                return res;
-            }
+        char* p = iface.config->get_session_work_dir(host, tid);
+        if (p) {
+            std::string res(p);
+            host->vtable->free(p);
+            return res;
         }
         return "";
     }
@@ -1413,12 +1404,11 @@ inline void blocking_tool(
         auto* shim = static_cast<BlockShim*>(user_data);
         (void)error_out;
         std::string tidStr(thread_id.data ? thread_id.data : "", thread_id.size);
-        // B3: 预取 workDir（io 线程），避免阻塞池线程跨线程 ioCallSync
+        // 预取 workDir（io 线程），避免阻塞池线程跨线程 ioCallSync;
+        // 空 tid 时 get_session_work_dir 返回默认会话工作目录
         std::string workDirCache;
-        if (!tidStr.empty() && shim->ctx) {
+        if (shim->ctx) {
             workDirCache = shim->ctx->workDir(agentxx_plugin_sv(tidStr.data(), tidStr.size()));
-        } else if (shim->ctx) {
-            workDirCache = shim->ctx->workDir();
         }
         auto* job = new Job{
             shim,
