@@ -488,10 +488,11 @@ asio::awaitable<std::string> SummarizationMiddlewareHandle::doSummarizeWithLLM(
     // - messages: 结构化透传 (system + 压缩段 + 压缩指令), 无文本转录
     // - sessionId: 父线程 → 子代理与父会话相同 session_id + 相同模型,
     //   命中 provider KV/prefix cache
-    // - tools: ["agentxx_share_store"] → 模型可自主把长内容写入父会话
-    //   store (id 空间一致, 摘要中的 id 父会话可直接读取)
+    // - tools: 不传入 → 子代理无任何工具, 仅对当前上下文原样做压缩
+    //   (不再提供 agentxx_share_store, 长内容由模型直接写进摘要;
+    //   避免 subagent 侧工具执行成本与父会话 store 的跨会话耦合)
     // - enable_summarization: false → 禁止对透传前缀二次压缩
-    // - subagent 内部完成"外置长内容 → 输出摘要"的完整 agent 循环,
+    // - subagent 内部完成"阅读上下文 → 输出摘要"的完整 agent 循环,
     //   最终纯文本输出即为摘要
     // - 首次调用抛 NodeInterrupt 暂停父轮次, Session 派生 subagent,
     //   resume 后此调用返回 subagent 输出 (摘要)
@@ -499,11 +500,10 @@ asio::awaitable<std::string> SummarizationMiddlewareHandle::doSummarizeWithLLM(
     neograph::to_json(reqMsgsJson, reqMsgs);
 
     auto args = neograph::json{
-        {"subagent",             "subagent_task"                               },
-        {"messages",             std::move(reqMsgsJson)                        },
-        {"sessionId",            std::string{sessionId}                        },
-        {"tools",                neograph::json::array({"agentxx_share_store"})},
-        {"enable_summarization", false                                         },
+        {"subagent",             "subagent_task"},
+        {"messages",             std::move(reqMsgsJson)},
+        {"sessionId",            std::string{sessionId}},
+        {"enable_summarization", false},
     };
 
     co_return co_await agentxx::util::catchErrorAsync<std::string>(
@@ -549,8 +549,7 @@ std::vector<neograph::ChatMessage> SummarizationMiddlewareHandle::hardTruncate(
     neograph::ChatMessage note;
     note.role    = "user";
     note.content = "[Earlier conversation was truncated due to context limit. Ask the user for "
-                   "details if needed; content stored via `agentxx_share_store` remains "
-                   "retrievable by id.]";
+                   "details if needed.]";
     note.flags   = neograph::MessageFlag::AutoInserted | neograph::MessageFlag::Summarized;
     out.push_back(std::move(note));
 
@@ -559,6 +558,44 @@ std::vector<neograph::ChatMessage> SummarizationMiddlewareHandle::hardTruncate(
     const size_t end          = splitRecentByTokenBudget(messages, systemCount, recentBudget);
     for (size_t i = end; i < messages.size(); ++i) {
         out.push_back(messages[i]);
+    }
+
+    // ---- 兜底: 仍超限时保证请求能发出 ----
+    // 场景: recent 中存在单条超大消息 (如超大附件/长日志), 即使切分已收至最少
+    // 1 条, 或 system 本身很大, 结果仍可能 >= 95% 上限。
+    // 1) 优先从最旧 recent 开始丢弃, 至少保留最后 1 条消息 (会话不能为空)
+    // 2) 只剩最后 1 条仍超限 → 二分截断该条文本内容 (保留开头语义), 消息结构与
+    //    角色不变, 让请求载荷能发出 (模型可据此继续)
+    const size_t maxAllowed  = static_cast<size_t>(maxToken * 0.95);
+    const size_t recentStart = (systemCount > 0) ? 2 : 1; // out 中 recent 段起点
+    while (out.size() > recentStart + 1 && countTokens({}, out, false) > maxAllowed) {
+        out.erase(out.begin() + static_cast<int64_t>(recentStart));
+    }
+    if (out.size() > recentStart && countTokens({}, out, false) > maxAllowed) {
+        auto&       last         = out.back();
+        const size_t prefixTokens = countTokens(
+            {},
+            std::vector<neograph::ChatMessage>(out.begin(), out.end() - 1),
+            false
+        );
+        if (prefixTokens < maxAllowed) {
+            const size_t budget = maxAllowed - prefixTokens;
+            const auto countWith = [&](std::string_view content) -> size_t {
+                auto copy = last;
+                copy.content = std::string{content};
+                return countTokens({}, {copy}, false);
+            };
+            size_t lo = 0, hi = last.content.size();
+            while (lo < hi) {
+                const size_t mid = (lo + hi + 1) / 2;
+                if (countWith(std::string_view{last.content}.substr(0, mid)) <= budget) {
+                    lo = mid;
+                } else {
+                    hi = mid - 1;
+                }
+            }
+            last.content = last.content.substr(0, lo);
+        }
     }
     return out;
 }
@@ -614,8 +651,8 @@ asio::awaitable<void>
 
     neograph::json newMsgsJson;
 
-    // ---- 超过 85% 上限时自动压缩 ----
-    if (tokenUsage >= modelContenxtMaxToken * 0.85) {
+    // ---- 超过 75% 上限时自动压缩 ----
+    if (tokenUsage >= modelContenxtMaxToken * 0.75) {
         const auto startTime = std::chrono::steady_clock::now();
         const auto startTimeMs
             = static_cast<int64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -749,6 +786,20 @@ asio::awaitable<void>
             }
         } else {
             compressedMessages = messages;
+        }
+
+        // ---- 兜底: 压缩后仍超限 → 降级硬截断, 保证请求能发出 ----
+        // 场景: LLM 摘要本身超长 / recent 段单条消息超大 (如超大附件、长日志),
+        // 即使按预算切分 (recent 至少 1 条) 仍 >= 95% 上限;
+        // 硬截断 (30% 预算 + 单条二分截断) 是最终兜底
+        if (countTokens({}, compressedMessages, enableCountThinking)
+            >= modelContenxtMaxToken * 0.95) {
+            XX_LOGW(
+                "SummarizationMiddlewareHandle: 压缩后仍超限 ({}/{}), 降级硬截断兜底",
+                countTokens({}, compressedMessages, enableCountThinking),
+                modelContenxtMaxToken
+            );
+            compressedMessages = hardTruncate(messages, systemCount, modelContenxtMaxToken);
         }
 
         neograph::to_json(newMsgsJson, compressedMessages);
@@ -943,6 +994,18 @@ asio::awaitable<bool>
         }
     } else {
         compressedMessages = messages;
+    }
+
+    // ---- 兜底: 压缩后仍超限 → 降级硬截断, 保证请求能发出 ----
+    // (与 onModelcallRunFunc 相同语义; 手动压缩也保证结果不超限)
+    if (countTokens({}, compressedMessages, enableCountThinking)
+        >= modelContenxtMaxToken * 0.95) {
+        XX_LOGW(
+            "SummarizationMiddlewareHandle: 手动压缩后仍超限 ({}/{}), 降级硬截断兜底",
+            countTokens({}, compressedMessages, enableCountThinking),
+            modelContenxtMaxToken
+        );
+        compressedMessages = hardTruncate(messages, systemCount, modelContenxtMaxToken);
     }
 
     neograph::json newMsgsJson;

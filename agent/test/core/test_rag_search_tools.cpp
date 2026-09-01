@@ -2,7 +2,7 @@
 // 原 lib 内置工具已迁移至 agentxx_rag_search 插件 (同名同行为); 测试直测
 // 插件同一实现 (rag_search_impl.h), 保证插件行为与测试覆盖一致
 #include "agentxx/util/string_util.h"
-#include "rag_search_impl.h"
+#include "agentxx_rag_search/rag_search_impl.h"
 #include <asio/awaitable.hpp>
 #include <asio/redirect_error.hpp>
 #include <asio/use_awaitable.hpp>

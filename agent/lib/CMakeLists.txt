@@ -210,15 +210,13 @@ foreach(_agentxx_target ${_AGENTXX_USAGE_TARGETS})
     "${AGENTXX_INSTALL_DIR}/include/"
     "${neograph_SOURCE_DIR}/deps/yyjson/"
   )
-  if(Boost_FOUND)
-    target_include_directories(${_agentxx_target} SYSTEM PUBLIC 
-      "${Boost_INCLUDE_DIRS}"
-      "${Boost_INCLUDE_DIRS}/boost/"
-    )
-    target_link_directories(${_agentxx_target} PUBLIC 
-      "${BOOST_LIBRARY_DIRS}"
-    )
-  endif()
+  target_include_directories(${_agentxx_target} SYSTEM PUBLIC 
+    "${Boost_INCLUDE_DIRS}"
+    "${Boost_INCLUDE_DIRS}/boost/"
+  )
+  target_link_directories(${_agentxx_target} PUBLIC 
+    "${BOOST_LIBRARY_DIRS}"
+  )
 endforeach()
 unset(_agentxx_target)
 
@@ -315,7 +313,6 @@ endif()
 if (NOT XX_IS_WIN_D)
     target_link_options(agentxx_shared PRIVATE
       "-Wl,--version-script=${CMAKE_CURRENT_SOURCE_DIR}/ffi_symbols.map")
-  unset(_AGENTXX_FFI_EXPORT_SYMS)
 endif()
 target_link_directories(agentxx_shared PUBLIC "${AGENTXX_INSTALL_DIR}/lib/")
 target_link_directories(agentxx_static PUBLIC "${AGENTXX_INSTALL_DIR}/lib/")
