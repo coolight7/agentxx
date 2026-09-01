@@ -617,10 +617,11 @@ asio::awaitable<void> ModelCallWrapNode::baseRun(
 
             // 组装最终 system prompt:
             // systemPrompt + appendSystemPrompts(有序) + appendSystemMessage(动态 skill/memory)
-            // - appendSystemPrompts 为通用扩展点 (planning/skill/codegraph 等均经此注入，键字典序拼接)
+            // - appendSystemPrompts 为通用扩展点 (planning/skill/codegraph
+            // 等均经此注入，键字典序拼接)
             // - 空段不占位，避免无对应工具时误导模型
-            std::string combined = agentCtxPtr->agentConfig->prompt.systemPrompt;
-            auto appendIfNonEmpty = [&](const std::string& seg) {
+            std::string combined         = agentCtxPtr->agentConfig->prompt.systemPrompt;
+            auto        appendIfNonEmpty = [&](const std::string& seg) {
                 if (seg.empty()) {
                     return;
                 }
@@ -636,8 +637,8 @@ asio::awaitable<void> ModelCallWrapNode::baseRun(
             };
             // 通用附加提示词按固定优先级拼接：planning -> skill -> codegraph -> 其他(字典序)
             // summarization 为压缩模板，不参与 system 拼接
-            const auto& appendMap = agentCtxPtr->agentConfig->prompt.appendSystemPrompts;
-            auto appendByKey = [&](const std::string& key) {
+            const auto& appendMap   = agentCtxPtr->agentConfig->prompt.appendSystemPrompts;
+            auto        appendByKey = [&](const std::string& key) {
                 auto it = appendMap.find(key);
                 if (it != appendMap.end()) {
                     appendIfNonEmpty(it->second);

@@ -191,15 +191,25 @@ static void injectCodegraphSystemPrompt(
     if (!host || !iface.prompt || !iface.prompt->set_prompt) {
         return;
     }
-    codegraph::Json j = codegraph::Json::object();
-    codegraph::Json append = codegraph::Json::object();
-    append["codegraph"] = std::string(kSystemCodegraphPrompt);
+    codegraph::Json j        = codegraph::Json::object();
+    codegraph::Json append   = codegraph::Json::object();
+    append["codegraph"]      = std::string(kSystemCodegraphPrompt);
     j["appendSystemPrompts"] = append;
-    std::string payload = j.dump();
+    std::string payload      = j.dump();
     if (iface.prompt->set_prompt(host, agentxx_plugin_sv(payload.data(), payload.size())) != 0) {
-        pluginLog(host, iface.log, 3, "agentxx_codegraph: set appendSystemPrompts[codegraph] failed");
+        pluginLog(
+            host,
+            iface.log,
+            3,
+            "agentxx_codegraph: set appendSystemPrompts[codegraph] failed"
+        );
     } else {
-        pluginLog(host, iface.log, 2, "agentxx_codegraph: appendSystemPrompts[codegraph] injected via prompt iface");
+        pluginLog(
+            host,
+            iface.log,
+            2,
+            "agentxx_codegraph: appendSystemPrompts[codegraph] injected via prompt iface"
+        );
     }
 }
 

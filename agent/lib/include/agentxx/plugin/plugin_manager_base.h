@@ -25,7 +25,7 @@
  */
 #pragma once
 
-#include "agentxx/plugin/plugin_api.h" /* AgentxxPluginHost 等 C ABI 类型 */
+#include "agentxx/plugin/plugin_api.h"    /* AgentxxPluginHost 等 C ABI 类型 */
 #include "agentxx/plugin/plugin_common.h" /* collectReverseRequiredDeps (模板) */
 #include "agentxx/util/log.h"
 #include "asio/any_io_executor.hpp"
@@ -81,8 +81,8 @@ struct PluginInstanceBase {
     neograph::json args = neograph::json::object();
     /// 插件配置文件所在目录或文件路径 (yaml `config`, 归一化为绝对路径)
     std::string              configPath;
-    std::vector<std::string> depends;        ///< 必选依赖 (未安装加载失败; 卸载/禁用级联)
-    std::vector<std::string> optionalDepends; ///< 可选依赖 (未安装仅警告)
+    std::vector<std::string> depends; ///< 必选依赖 (未安装加载失败; 卸载/禁用级联)
+    std::vector<std::string> optionalDepends;     ///< 可选依赖 (未安装仅警告)
     void*                    dlHandle  = nullptr; ///< dlopen/LoadLibrary 句柄
     void*                    pluginCtx = nullptr; ///< entry 输出的插件私有上下文
     bool                     enabled   = true; ///< 是否启用 (禁用: 注册摘除/命令停用)
@@ -230,17 +230,16 @@ public:
     /// 收集反向必选依赖 (depends 含 target 的插件名; io 线程)
     /// - onlyEnabled=true: 仅统计 enabled 的插件 (卸载/禁用级联)
     /// - onlyEnabled=false: 全部统计 (启用级联: 需恢复被级联禁用的插件)
-    std::vector<std::string> reverseRequiredDeps(const std::string& target, bool onlyEnabled) const {
+    std::vector<std::string>
+        reverseRequiredDeps(const std::string& target, bool onlyEnabled) const {
         return agentxx::plugin::collectReverseRequiredDeps(plugins_, target, onlyEnabled);
     }
 
     /// 等待插件在途计数归零 (io 线程协程轮询, 指数退避); 超时返回 false
     /// 两侧共享实现 (原 agent 侧固定 10ms 轮询, client 侧指数退避 —— 统一
     /// 采用指数退避 20ms→1s, 减少慢回调等待期间 io 线程定时器唤醒)
-    asio::awaitable<bool> waitInflightZero(
-        const InstancePtr& inst,
-        std::chrono::milliseconds timeout
-    ) {
+    asio::awaitable<bool>
+        waitInflightZero(const InstancePtr& inst, std::chrono::milliseconds timeout) {
         if (!inst) {
             co_return true;
         }

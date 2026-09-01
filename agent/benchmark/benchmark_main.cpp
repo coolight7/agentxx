@@ -48,8 +48,10 @@ int main(int argn, char** argv) {
             = agentxx::util::ApplicationEnv::instance().getOr("AGENTXX_BENCH_LLM_BASE_URL", "");
         config.openAIApiKey
             = agentxx::util::ApplicationEnv::instance().getOr("AGENTXX_BENCH_LLM_API_KEY", "EMPTY");
-        config.openAIModelName
-            = agentxx::util::ApplicationEnv::instance().getOr("AGENTXX_BENCH_LLM_MODEL_NAME", "Agentxx");
+        config.openAIModelName = agentxx::util::ApplicationEnv::instance().getOr(
+            "AGENTXX_BENCH_LLM_MODEL_NAME",
+            "Agentxx"
+        );
         config.systemPrompt = agentxx::util::ApplicationEnv::instance().getOr(
             "AGENTXX_BENCH_LLM_SYSTEM_PROMPT",
             "You are a helpful assistant."

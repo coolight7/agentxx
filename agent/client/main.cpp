@@ -203,7 +203,7 @@ static void applySharedRuntimeConfig(
         pluginCfg.sides   = pc.sides;
         pluginCfg.args    = pc.args;
         if (!pc.configPath.empty()) {
-            auto expanded = agentxx::util::expandUserHomePath(pc.configPath);
+            auto                  expanded = agentxx::util::expandUserHomePath(pc.configPath);
             std::filesystem::path cp{expanded};
             if (cp.is_absolute()) {
                 pluginCfg.configPath = cp.lexically_normal().generic_string();
@@ -343,7 +343,8 @@ Options:
                 XX_LOGE("Invalid --port value: `{}`", portArg);
                 return 1;
             }
-        } else if (arg == "tui" || arg == "cli" || arg == "server" || arg == "acp" || arg == "train") {
+        } else if (arg == "tui" || arg == "cli" || arg == "server" || arg == "acp"
+                   || arg == "train") {
             mode = arg;
         } else {
             XX_LOGE("Unknown arg: `{}`", arg);

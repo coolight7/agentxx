@@ -336,9 +336,9 @@ private:
     bool handleMouse(const ftxui::Mouse& mouse);
     void confirmSelection();
 
-    TUICtx&               ctx_;
-    int                   selectedIndex_ = 0;
-    static constexpr int  kItemCount     = 3;
+    TUICtx&              ctx_;
+    int                  selectedIndex_ = 0;
+    static constexpr int kItemCount     = 3;
 
     std::function<void()> onClose_;
     std::function<void()> onLlmContext_;

@@ -205,7 +205,8 @@ asio::awaitable<void> SkillMiddlewareHandle::onAgentcallStartFunc(neograph::grap
         if (skillState->cacheFormatSkillPrompt.empty()
             || skillState->cachedResourceEpoch != resourceEpoch) {
             // 生成 skill 系统提示词 — 仅动态技能清单，静态使用说明已移至
-            // `appendSystemPrompts["skill"]` 通用扩展点，模型侧经 `systemPrompt + appendSystemPrompts` 统一拼接
+            // `appendSystemPrompts["skill"]` 通用扩展点，模型侧经 `systemPrompt +
+            // appendSystemPrompts` 统一拼接
             skillState->cacheFormatSkillPrompt = fmt::format(
                 R"_(## Skills System
 

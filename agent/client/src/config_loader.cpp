@@ -101,7 +101,8 @@ std::map<std::string, std::string> loadDotEnv(const std::vector<std::string>& pa
 // 程序内置环境变量 (main 启动时注入; yaml ${VAR} 展开时优先解析)
 // ---------------------------------------------------------------------------
 // 内置变量存储已迁移至 agentxx::util::ApplicationEnv 单例 (全局预设变量, 优先级高于系统环境变量)
-// - main 启动时经 setBuiltinEnvVar (= ApplicationEnv::instance().set) 注入 AGENTXX_WORK_DIR / AGENTXX_EXEC_DIR
+// - main 启动时经 setBuiltinEnvVar (= ApplicationEnv::instance().set) 注入 AGENTXX_WORK_DIR /
+// AGENTXX_EXEC_DIR
 // - 此处保留兼容层, 避免直接暴露 ApplicationEnv 细节给上层调用方
 
 void setBuiltinEnvVar(std::string_view name, std::string value) {
@@ -185,7 +186,8 @@ std::string resolveEnvVars(
             result.append(dotIt->second);
             continue;
         }
-        // 系统环境变量 (经全局单例 ApplicationEnv 统一封装: 预设 -> 系统, Windows 使用 _dupenv_s 消除 C4996)
+        // 系统环境变量 (经全局单例 ApplicationEnv 统一封装: 预设 -> 系统, Windows 使用 _dupenv_s
+        // 消除 C4996)
         if (auto envVal = agentxx::util::ApplicationEnv::instance().get(varName)) {
             result.append(*envVal);
             continue;
@@ -644,7 +646,9 @@ YamlAppConfig loadYamlConfig(
             agent::PluginConfig pc;
             pc.path = std::move(p);
             if (pc.path.empty()) {
-                XX_LOGW(R"([Config] Warning: plugin entry missing required `path` (or `name` for builtin), skipped)");
+                XX_LOGW(
+                    R"([Config] Warning: plugin entry missing required `path` (or `name` for builtin), skipped)"
+                );
                 continue;
             }
             if (node["enabled"]) {
@@ -685,7 +689,11 @@ YamlAppConfig loadYamlConfig(
             if (node["config"]) {
                 // 插件配置文件所在目录或文件路径 (可指向文件/目录);
                 // 支持 ${VAR} 展开 (路径归一化与绝对化由装配侧完成)
-                auto c = resolveEnvVars(node["config"].as<std::string>(""), dotEnvVars, overrideEnvVars);
+                auto c = resolveEnvVars(
+                    node["config"].as<std::string>(""),
+                    dotEnvVars,
+                    overrideEnvVars
+                );
                 pc.configPath = std::move(c);
             }
             cfg.plugins.push_back(std::move(pc));

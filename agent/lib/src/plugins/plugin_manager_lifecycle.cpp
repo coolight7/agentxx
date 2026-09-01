@@ -577,9 +577,9 @@ asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadBuiltinAsync
         co_return nullptr;
     }
 
-    auto inst             = std::make_shared<PluginInstance>(name);
-    inst->version         = info && info->version.data ? std::string(info->version.data, info->version.size)
-                                                       : "1.0.0";
+    auto inst     = std::make_shared<PluginInstance>(name);
+    inst->version = info && info->version.data ? std::string(info->version.data, info->version.size)
+                                               : "1.0.0";
     inst->description     = info && info->description.data
                                 ? std::string(info->description.data, info->description.size)
                                 : "";

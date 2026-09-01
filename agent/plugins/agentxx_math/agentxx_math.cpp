@@ -7,7 +7,7 @@ using namespace agentxx_math_plugin;
 
 namespace {
 
-constexpr std::string_view kNameCalculate   = "agentxx_math_calculate";
+constexpr std::string_view kNameCalculate = "agentxx_math_calculate";
 constexpr std::string_view kDepictCalculate =
     R"(Evaluate a mathematical expression and return the computed result.
 Supports:
@@ -25,8 +25,7 @@ std::string schemaCalculate(PluginCtx* ctx) {
     return neograph::json{
         {"type", "object"},
         {
-            "properties",
-            {
+         "properties", {
                 {
                     "expression",
                     {
@@ -71,10 +70,10 @@ std::string schemaCalculate(PluginCtx* ctx) {
                         },
                     },
                 },
-            },
-        },
+            }, },
         {"required", neograph::json::array({"expression"})},
-    }.dump();
+    }
+        .dump();
 }
 
 } // namespace

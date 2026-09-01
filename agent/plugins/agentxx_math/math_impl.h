@@ -32,18 +32,20 @@ enum class AngleUnit {
 /// 表达式计算异常类
 class MathEvalException : public std::runtime_error {
 public:
-    explicit MathEvalException(const std::string& msg, size_t pos = 0)
-        : std::runtime_error(
+
+    explicit MathEvalException(const std::string& msg, size_t pos = 0) :
+        std::runtime_error(
             pos > 0 ? fmt::format("[Error] {} (at position {})", msg, pos)
                     : fmt::format("[Error] {}", msg)
         ),
-          pos_(pos) {}
+        pos_(pos) {}
 
     size_t position() const noexcept {
         return pos_;
     }
 
 private:
+
     size_t pos_ = 0;
 };
 
@@ -87,7 +89,7 @@ enum class TokenType {
 
 /// Token 结构
 struct Token {
-    TokenType   type = TokenType::EndOfInput;
+    TokenType   type         = TokenType::EndOfInput;
     double      number_value = 0.0;
     std::string text;
     size_t      pos = 0;
@@ -189,7 +191,10 @@ inline int64_t lcm(int64_t a, int64_t b) {
 /// 词法分析器 (Lexer)
 class Lexer {
 public:
-    explicit Lexer(std::string_view input) : input_(input), pos_(0) {}
+
+    explicit Lexer(std::string_view input) :
+        input_(input),
+        pos_(0) {}
 
     std::vector<Token> tokenize() {
         std::vector<Token> raw_tokens;
@@ -204,7 +209,9 @@ public:
             }
 
             // 处理数字
-            if (std::isdigit(static_cast<unsigned char>(c)) || (c == '.' && pos_ + 1 < input_.size() && std::isdigit(static_cast<unsigned char>(input_[pos_ + 1])))) {
+            if (std::isdigit(static_cast<unsigned char>(c))
+                || (c == '.' && pos_ + 1 < input_.size()
+                    && std::isdigit(static_cast<unsigned char>(input_[pos_ + 1])))) {
                 raw_tokens.push_back(readNumber());
                 continue;
             }
@@ -217,7 +224,7 @@ public:
 
             // 处理双字符或单字符运算符
             size_t cur_pos = pos_;
-            if (c == '+' ) {
+            if (c == '+') {
                 raw_tokens.push_back(Token{TokenType::Plus, 0.0, "+", cur_pos});
                 ++pos_;
             } else if (c == '-') {
@@ -344,28 +351,32 @@ public:
                 bool cur_is_factorial = false;
                 if (cur.type == TokenType::Exclamation && i > 0) {
                     const auto& prev = raw_tokens[i - 1];
-                    if (prev.type == TokenType::Number || prev.type == TokenType::RParen ||
-                        prev.type == TokenType::RBracket || prev.type == TokenType::Identifier) {
+                    if (prev.type == TokenType::Number || prev.type == TokenType::RParen
+                        || prev.type == TokenType::RBracket || prev.type == TokenType::Identifier) {
                         cur_is_factorial = true;
                     }
                 }
 
-                bool cur_is_num_or_bracket = (cur.type == TokenType::Number ||
-                                             cur.type == TokenType::RParen ||
-                                             cur.type == TokenType::RBracket ||
-                                             cur_is_factorial);
+                bool cur_is_num_or_bracket
+                    = (cur.type == TokenType::Number || cur.type == TokenType::RParen
+                       || cur.type == TokenType::RBracket || cur_is_factorial);
 
-                bool cur_is_ident = (cur.type == TokenType::Identifier && !isKeywordOperator(cur.text));
+                bool cur_is_ident
+                    = (cur.type == TokenType::Identifier && !isKeywordOperator(cur.text));
 
-                bool next_is_bracket = (next.type == TokenType::LParen || next.type == TokenType::LBracket);
-                bool next_is_num_or_ident = (next.type == TokenType::Number ||
-                                             (next.type == TokenType::Identifier && !isKeywordOperator(next.text)));
+                bool next_is_bracket
+                    = (next.type == TokenType::LParen || next.type == TokenType::LBracket);
+                bool next_is_num_or_ident
+                    = (next.type == TokenType::Number
+                       || (next.type == TokenType::Identifier && !isKeywordOperator(next.text)));
 
-                // 规则 1: 数字/右括号/阶乘 紧跟 括号/数字/标识符 (例如 2(3), (1+2)(3), 2pi, 3sqrt(4))
+                // 规则 1: 数字/右括号/阶乘 紧跟 括号/数字/标识符 (例如 2(3), (1+2)(3), 2pi,
+                // 3sqrt(4))
                 if (cur_is_num_or_bracket && (next_is_bracket || next_is_num_or_ident)) {
                     tokens.push_back(Token{TokenType::Star, 0.0, "*", next.pos});
                 }
-                // 规则 2: 常量标识符 紧跟 数字/非括号标识符 (例如 pi 2 -> pi * 2, 注意排除 func(...) 调用)
+                // 规则 2: 常量标识符 紧跟 数字/非括号标识符 (例如 pi 2 -> pi * 2, 注意排除
+                // func(...) 调用)
                 else if (cur_is_ident && next_is_num_or_ident) {
                     tokens.push_back(Token{TokenType::Star, 0.0, "*", next.pos});
                 }
@@ -377,6 +388,7 @@ public:
     }
 
 private:
+
     static bool isKeywordOperator(std::string_view name) {
         std::string lower = toLower(name);
         return lower == "and" || lower == "or" || lower == "not";
@@ -388,24 +400,31 @@ private:
         if (pos_ + 2 < input_.size() && input_[pos_] == '0') {
             char prefix = input_[pos_ + 1];
             if (prefix == 'x' || prefix == 'X') {
-                pos_ += 2;
-                size_t num_start = pos_;
-                while (pos_ < input_.size() && std::isxdigit(static_cast<unsigned char>(input_[pos_]))) {
+                pos_             += 2;
+                size_t num_start  = pos_;
+                while (pos_ < input_.size()
+                       && std::isxdigit(static_cast<unsigned char>(input_[pos_]))) {
                     ++pos_;
                 }
                 if (pos_ == num_start) {
                     throw MathEvalException("Invalid hex number literal", start + 1);
                 }
                 std::string num_str(input_.substr(num_start, pos_ - num_start));
-                uint64_t val = 0;
-                auto [ptr, ec] = std::from_chars(num_str.data(), num_str.data() + num_str.size(), val, 16);
+                uint64_t    val = 0;
+                auto [ptr, ec]
+                    = std::from_chars(num_str.data(), num_str.data() + num_str.size(), val, 16);
                 if (ec != std::errc()) {
                     throw MathEvalException("Hex number parsing failed or overflow", start + 1);
                 }
-                return Token{TokenType::Number, static_cast<double>(val), std::string(input_.substr(start, pos_ - start)), start};
+                return Token{
+                    TokenType::Number,
+                    static_cast<double>(val),
+                    std::string(input_.substr(start, pos_ - start)),
+                    start
+                };
             } else if (prefix == 'b' || prefix == 'B') {
-                pos_ += 2;
-                size_t num_start = pos_;
+                pos_             += 2;
+                size_t num_start  = pos_;
                 while (pos_ < input_.size() && (input_[pos_] == '0' || input_[pos_] == '1')) {
                     ++pos_;
                 }
@@ -413,15 +432,21 @@ private:
                     throw MathEvalException("Invalid binary number literal", start + 1);
                 }
                 std::string num_str(input_.substr(num_start, pos_ - num_start));
-                uint64_t val = 0;
-                auto [ptr, ec] = std::from_chars(num_str.data(), num_str.data() + num_str.size(), val, 2);
+                uint64_t    val = 0;
+                auto [ptr, ec]
+                    = std::from_chars(num_str.data(), num_str.data() + num_str.size(), val, 2);
                 if (ec != std::errc()) {
                     throw MathEvalException("Binary number parsing failed or overflow", start + 1);
                 }
-                return Token{TokenType::Number, static_cast<double>(val), std::string(input_.substr(start, pos_ - start)), start};
+                return Token{
+                    TokenType::Number,
+                    static_cast<double>(val),
+                    std::string(input_.substr(start, pos_ - start)),
+                    start
+                };
             } else if (prefix == 'o' || prefix == 'O') {
-                pos_ += 2;
-                size_t num_start = pos_;
+                pos_             += 2;
+                size_t num_start  = pos_;
                 while (pos_ < input_.size() && (input_[pos_] >= '0' && input_[pos_] <= '7')) {
                     ++pos_;
                 }
@@ -429,12 +454,18 @@ private:
                     throw MathEvalException("Invalid octal number literal", start + 1);
                 }
                 std::string num_str(input_.substr(num_start, pos_ - num_start));
-                uint64_t val = 0;
-                auto [ptr, ec] = std::from_chars(num_str.data(), num_str.data() + num_str.size(), val, 8);
+                uint64_t    val = 0;
+                auto [ptr, ec]
+                    = std::from_chars(num_str.data(), num_str.data() + num_str.size(), val, 8);
                 if (ec != std::errc()) {
                     throw MathEvalException("Octal number parsing failed or overflow", start + 1);
                 }
-                return Token{TokenType::Number, static_cast<double>(val), std::string(input_.substr(start, pos_ - start)), start};
+                return Token{
+                    TokenType::Number,
+                    static_cast<double>(val),
+                    std::string(input_.substr(start, pos_ - start)),
+                    start
+                };
             }
         }
 
@@ -455,7 +486,8 @@ private:
                 if (pos_ < input_.size() && (input_[pos_] == '+' || input_[pos_] == '-')) {
                     ++pos_;
                 }
-                if (pos_ >= input_.size() || !std::isdigit(static_cast<unsigned char>(input_[pos_]))) {
+                if (pos_ >= input_.size()
+                    || !std::isdigit(static_cast<unsigned char>(input_[pos_]))) {
                     throw MathEvalException("Invalid floating point exponent", start + 1);
                 }
             } else {
@@ -464,8 +496,8 @@ private:
         }
 
         std::string num_str(input_.substr(start, pos_ - start));
-        char* end_ptr = nullptr;
-        double val = std::strtod(num_str.c_str(), &end_ptr);
+        char*       end_ptr = nullptr;
+        double      val     = std::strtod(num_str.c_str(), &end_ptr);
         if (end_ptr != num_str.c_str() + num_str.size()) {
             throw MathEvalException("Invalid number format", start + 1);
         }
@@ -493,8 +525,11 @@ private:
 /// 语法解析与求值器 (Parser & Evaluator)
 class Parser {
 public:
-    Parser(std::vector<Token> tokens, AngleUnit angle_unit)
-        : tokens_(std::move(tokens)), angle_unit_(angle_unit), index_(0) {}
+
+    Parser(std::vector<Token> tokens, AngleUnit angle_unit) :
+        tokens_(std::move(tokens)),
+        angle_unit_(angle_unit),
+        index_(0) {}
 
     double evaluate() {
         if (tokens_.empty() || (tokens_.size() == 1 && tokens_[0].type == TokenType::EndOfInput)) {
@@ -511,6 +546,7 @@ public:
     }
 
 private:
+
     const Token& current() const {
         if (index_ < tokens_.size()) {
             return tokens_[index_];
@@ -537,7 +573,7 @@ private:
     double parseTernary() {
         double val = parseLogicalOr();
         if (match(TokenType::Question)) {
-            size_t q_pos = tokens_[index_ - 1].pos;
+            size_t q_pos    = tokens_[index_ - 1].pos;
             double true_val = parseTernary();
             if (!match(TokenType::Colon)) {
                 throw MathEvalException("Missing ':' in ternary operator", q_pos + 1);
@@ -551,13 +587,13 @@ private:
     // 2. 逻辑或 ||, or
     double parseLogicalOr() {
         double left = parseLogicalAnd();
-        while (current().type == TokenType::DoublePipe ||
-               (current().type == TokenType::Identifier && toLower(current().text) == "or")) {
+        while (current().type == TokenType::DoublePipe
+               || (current().type == TokenType::Identifier && toLower(current().text) == "or")) {
             advance();
             double right = parseLogicalAnd();
-            bool l = (left != 0.0 && !std::isnan(left));
-            bool r = (right != 0.0 && !std::isnan(right));
-            left = (l || r) ? 1.0 : 0.0;
+            bool   l     = (left != 0.0 && !std::isnan(left));
+            bool   r     = (right != 0.0 && !std::isnan(right));
+            left         = (l || r) ? 1.0 : 0.0;
         }
         return left;
     }
@@ -565,13 +601,13 @@ private:
     // 3. 逻辑与 &&, and
     double parseLogicalAnd() {
         double left = parseBitwiseOr();
-        while (current().type == TokenType::DoubleAmpersand ||
-               (current().type == TokenType::Identifier && toLower(current().text) == "and")) {
+        while (current().type == TokenType::DoubleAmpersand
+               || (current().type == TokenType::Identifier && toLower(current().text) == "and")) {
             advance();
             double right = parseBitwiseOr();
-            bool l = (left != 0.0 && !std::isnan(left));
-            bool r = (right != 0.0 && !std::isnan(right));
-            left = (l && r) ? 1.0 : 0.0;
+            bool   l     = (left != 0.0 && !std::isnan(left));
+            bool   r     = (right != 0.0 && !std::isnan(right));
+            left         = (l && r) ? 1.0 : 0.0;
         }
         return left;
     }
@@ -581,10 +617,10 @@ private:
         double left = parseBitwiseAnd();
         while (current().type == TokenType::Pipe) {
             advance();
-            double right = parseBitwiseAnd();
-            int64_t a = toInt64(left, "bitwise OR operand");
-            int64_t b = toInt64(right, "bitwise OR operand");
-            left = static_cast<double>(a | b);
+            double  right = parseBitwiseAnd();
+            int64_t a     = toInt64(left, "bitwise OR operand");
+            int64_t b     = toInt64(right, "bitwise OR operand");
+            left          = static_cast<double>(a | b);
         }
         return left;
     }
@@ -594,10 +630,10 @@ private:
         double left = parseEquality();
         while (current().type == TokenType::Ampersand) {
             advance();
-            double right = parseEquality();
-            int64_t a = toInt64(left, "bitwise AND operand");
-            int64_t b = toInt64(right, "bitwise AND operand");
-            left = static_cast<double>(a & b);
+            double  right = parseEquality();
+            int64_t a     = toInt64(left, "bitwise AND operand");
+            int64_t b     = toInt64(right, "bitwise AND operand");
+            left          = static_cast<double>(a & b);
         }
         return left;
     }
@@ -621,8 +657,8 @@ private:
     // 7. 关系比较 <, <=, >, >=
     double parseRelational() {
         double left = parseShift();
-        while (current().type == TokenType::Lt || current().type == TokenType::Le ||
-               current().type == TokenType::Gt || current().type == TokenType::Ge) {
+        while (current().type == TokenType::Lt || current().type == TokenType::Le
+               || current().type == TokenType::Gt || current().type == TokenType::Ge) {
             TokenType op = current().type;
             advance();
             double right = parseShift();
@@ -643,14 +679,17 @@ private:
     double parseShift() {
         double left = parseAdditive();
         while (current().type == TokenType::Shl || current().type == TokenType::Shr) {
-            TokenType op = current().type;
-            size_t op_pos = current().pos;
+            TokenType op     = current().type;
+            size_t    op_pos = current().pos;
             advance();
-            double right = parseAdditive();
-            int64_t a = toInt64(left, "shift operand", op_pos);
-            int64_t b = toInt64(right, "shift amount", op_pos);
+            double  right = parseAdditive();
+            int64_t a     = toInt64(left, "shift operand", op_pos);
+            int64_t b     = toInt64(right, "shift amount", op_pos);
             if (b < 0 || b > 63) {
-                throw MathEvalException(fmt::format("Shift amount {} out of range [0, 63]", b), op_pos + 1);
+                throw MathEvalException(
+                    fmt::format("Shift amount {} out of range [0, 63]", b),
+                    op_pos + 1
+                );
             }
             if (op == TokenType::Shl) {
                 left = static_cast<double>(static_cast<uint64_t>(a) << b);
@@ -680,10 +719,11 @@ private:
     // 10. 乘除模 *, /, //, %
     double parseMultiplicative() {
         double left = parseUnaryPrefix();
-        while (current().type == TokenType::Star || current().type == TokenType::Slash ||
-               current().type == TokenType::DoubleSlash || current().type == TokenType::Percent) {
-            TokenType op = current().type;
-            size_t op_pos = current().pos;
+        while (current().type == TokenType::Star || current().type == TokenType::Slash
+               || current().type == TokenType::DoubleSlash
+               || current().type == TokenType::Percent) {
+            TokenType op     = current().type;
+            size_t    op_pos = current().pos;
             advance();
             double right = parseUnaryPrefix();
             if (op == TokenType::Star) {
@@ -721,15 +761,15 @@ private:
         if (current().type == TokenType::Tilde) {
             size_t op_pos = current().pos;
             advance();
-            double val = parseUnaryPrefix();
+            double  val     = parseUnaryPrefix();
             int64_t int_val = toInt64(val, "bitwise NOT operand", op_pos);
             return static_cast<double>(~int_val);
         }
-        if (current().type == TokenType::Exclamation ||
-            (current().type == TokenType::Identifier && toLower(current().text) == "not")) {
+        if (current().type == TokenType::Exclamation
+            || (current().type == TokenType::Identifier && toLower(current().text) == "not")) {
             advance();
             double val = parseUnaryPrefix();
-            bool b = (val != 0.0 && !std::isnan(val));
+            bool   b   = (val != 0.0 && !std::isnan(val));
             return b ? 0.0 : 1.0;
         }
         return parsePower();
@@ -743,10 +783,16 @@ private:
             advance();
             double right = parseUnaryPrefix(); // 右结合
             if (left < 0.0 && std::abs(right - std::round(right)) > 1e-9) {
-                throw MathEvalException("Domain error: negative base with fractional exponent", op_pos + 1);
+                throw MathEvalException(
+                    "Domain error: negative base with fractional exponent",
+                    op_pos + 1
+                );
             }
             if (left == 0.0 && right < 0.0) {
-                throw MathEvalException("Division by zero in power (0 raised to negative exponent)", op_pos + 1);
+                throw MathEvalException(
+                    "Division by zero in power (0 raised to negative exponent)",
+                    op_pos + 1
+                );
             }
             return std::pow(left, right);
         }
@@ -771,7 +817,7 @@ private:
         // 括号表达式 (...)
         if (match(TokenType::LParen)) {
             size_t open_pos = tokens_[index_ - 1].pos;
-            double val = parseTernary();
+            double val      = parseTernary();
             if (!match(TokenType::RParen)) {
                 throw MathEvalException("Unclosed parenthesis '('", open_pos + 1);
             }
@@ -781,7 +827,7 @@ private:
         // 方括号表达式 [...]
         if (match(TokenType::LBracket)) {
             size_t open_pos = tokens_[index_ - 1].pos;
-            double val = parseTernary();
+            double val      = parseTernary();
             if (!match(TokenType::RBracket)) {
                 throw MathEvalException("Unclosed bracket '['", open_pos + 1);
             }
@@ -796,14 +842,15 @@ private:
 
         // 标识符 (常量或函数调用)
         if (tok.type == TokenType::Identifier) {
-            std::string name = tok.text;
-            size_t name_pos = tok.pos;
+            std::string name     = tok.text;
+            size_t      name_pos = tok.pos;
             advance();
 
             // 如果紧随括号，则为函数调用
             if (current().type == TokenType::LParen || current().type == TokenType::LBracket) {
-                TokenType close_type = (current().type == TokenType::LParen) ? TokenType::RParen : TokenType::RBracket;
-                size_t open_pos = current().pos;
+                TokenType close_type = (current().type == TokenType::LParen) ? TokenType::RParen
+                                                                             : TokenType::RBracket;
+                size_t    open_pos   = current().pos;
                 advance();
 
                 std::vector<double> args;
@@ -835,7 +882,10 @@ private:
 
     int64_t toInt64(double val, std::string_view desc, size_t pos = 0) {
         if (std::isnan(val) || std::isinf(val)) {
-            throw MathEvalException(fmt::format("Invalid value for {}: non-finite number", desc), pos + 1);
+            throw MathEvalException(
+                fmt::format("Invalid value for {}: non-finite number", desc),
+                pos + 1
+            );
         }
         return static_cast<int64_t>(std::round(val));
     }
@@ -875,7 +925,12 @@ private:
         auto checkArgs = [&](size_t expected) {
             if (args.size() != expected) {
                 throw MathEvalException(
-                    fmt::format("Function '{}' expects {} arguments, but got {}", name, expected, args.size()),
+                    fmt::format(
+                        "Function '{}' expects {} arguments, but got {}",
+                        name,
+                        expected,
+                        args.size()
+                    ),
                     pos + 1
                 );
             }
@@ -884,7 +939,13 @@ private:
         auto checkArgsRange = [&](size_t min_count, size_t max_count) {
             if (args.size() < min_count || args.size() > max_count) {
                 throw MathEvalException(
-                    fmt::format("Function '{}' expects between {} and {} arguments, but got {}", name, min_count, max_count, args.size()),
+                    fmt::format(
+                        "Function '{}' expects between {} and {} arguments, but got {}",
+                        name,
+                        min_count,
+                        max_count,
+                        args.size()
+                    ),
                     pos + 1
                 );
             }
@@ -909,7 +970,7 @@ private:
                 return std::round(args[0]);
             }
             int64_t decimals = toInt64(args[1], "round decimal places", pos);
-            double factor = std::pow(10.0, static_cast<double>(decimals));
+            double  factor   = std::pow(10.0, static_cast<double>(decimals));
             return std::round(args[0] * factor) / factor;
         }
         if (lower == "trunc") {
@@ -918,8 +979,12 @@ private:
         }
         if (lower == "sign" || lower == "sgn") {
             checkArgs(1);
-            if (args[0] > 0.0) return 1.0;
-            if (args[0] < 0.0) return -1.0;
+            if (args[0] > 0.0) {
+                return 1.0;
+            }
+            if (args[0] < 0.0) {
+                return -1.0;
+            }
             return 0.0;
         }
 
@@ -927,7 +992,10 @@ private:
         if (lower == "sqrt") {
             checkArgs(1);
             if (args[0] < 0.0) {
-                throw MathEvalException(fmt::format("Domain error: sqrt of negative value ({})", args[0]), pos + 1);
+                throw MathEvalException(
+                    fmt::format("Domain error: sqrt of negative value ({})", args[0]),
+                    pos + 1
+                );
             }
             return std::sqrt(args[0]);
         }
@@ -943,7 +1011,10 @@ private:
                 throw MathEvalException("0th root is undefined", pos + 1);
             }
             if (x < 0.0 && std::fmod(n, 2.0) == 0.0) {
-                throw MathEvalException(fmt::format("Domain error: even root of negative value ({})", x), pos + 1);
+                throw MathEvalException(
+                    fmt::format("Domain error: even root of negative value ({})", x),
+                    pos + 1
+                );
             }
             if (x < 0.0) {
                 return -std::pow(-x, 1.0 / n);
@@ -953,7 +1024,10 @@ private:
         if (lower == "pow") {
             checkArgs(2);
             if (args[0] < 0.0 && std::abs(args[1] - std::round(args[1])) > 1e-9) {
-                throw MathEvalException("Domain error: pow with negative base and fractional exponent", pos + 1);
+                throw MathEvalException(
+                    "Domain error: pow with negative base and fractional exponent",
+                    pos + 1
+                );
             }
             return std::pow(args[0], args[1]);
         }
@@ -974,27 +1048,36 @@ private:
         if (lower == "ln" || lower == "log") {
             checkArgs(1);
             if (args[0] <= 0.0) {
-                throw MathEvalException(fmt::format("Domain error: ln of non-positive value ({})", args[0]), pos + 1);
+                throw MathEvalException(
+                    fmt::format("Domain error: ln of non-positive value ({})", args[0]),
+                    pos + 1
+                );
             }
             return std::log(args[0]);
         }
         if (lower == "log10") {
             checkArgs(1);
             if (args[0] <= 0.0) {
-                throw MathEvalException(fmt::format("Domain error: log10 of non-positive value ({})", args[0]), pos + 1);
+                throw MathEvalException(
+                    fmt::format("Domain error: log10 of non-positive value ({})", args[0]),
+                    pos + 1
+                );
             }
             return std::log10(args[0]);
         }
         if (lower == "log2") {
             checkArgs(1);
             if (args[0] <= 0.0) {
-                throw MathEvalException(fmt::format("Domain error: log2 of non-positive value ({})", args[0]), pos + 1);
+                throw MathEvalException(
+                    fmt::format("Domain error: log2 of non-positive value ({})", args[0]),
+                    pos + 1
+                );
             }
             return std::log2(args[0]);
         }
         if (lower == "logb" || lower == "logn") {
             checkArgs(2);
-            double x = args[0];
+            double x    = args[0];
             double base = args[1];
             if (x <= 0.0 || base <= 0.0 || std::abs(base - 1.0) < 1e-12) {
                 throw MathEvalException("Domain error: invalid base or argument for log", pos + 1);
@@ -1022,44 +1105,60 @@ private:
         // 三角函数 (受 angle_unit_ 控制)
         if (lower == "sin") {
             checkArgs(1);
-            double x = (angle_unit_ == AngleUnit::Degrees) ? (args[0] * std::numbers::pi_v<double> / 180.0) : args[0];
+            double x = (angle_unit_ == AngleUnit::Degrees)
+                           ? (args[0] * std::numbers::pi_v<double> / 180.0)
+                           : args[0];
             return std::sin(x);
         }
         if (lower == "cos") {
             checkArgs(1);
-            double x = (angle_unit_ == AngleUnit::Degrees) ? (args[0] * std::numbers::pi_v<double> / 180.0) : args[0];
+            double x = (angle_unit_ == AngleUnit::Degrees)
+                           ? (args[0] * std::numbers::pi_v<double> / 180.0)
+                           : args[0];
             return std::cos(x);
         }
         if (lower == "tan") {
             checkArgs(1);
-            double x = (angle_unit_ == AngleUnit::Degrees) ? (args[0] * std::numbers::pi_v<double> / 180.0) : args[0];
+            double x = (angle_unit_ == AngleUnit::Degrees)
+                           ? (args[0] * std::numbers::pi_v<double> / 180.0)
+                           : args[0];
             return std::tan(x);
         }
         if (lower == "asin" || lower == "arcsin") {
             checkArgs(1);
             if (args[0] < -1.0 || args[0] > 1.0) {
-                throw MathEvalException(fmt::format("Domain error: asin argument {} out of range [-1, 1]", args[0]), pos + 1);
+                throw MathEvalException(
+                    fmt::format("Domain error: asin argument {} out of range [-1, 1]", args[0]),
+                    pos + 1
+                );
             }
             double res = std::asin(args[0]);
-            return (angle_unit_ == AngleUnit::Degrees) ? (res * 180.0 / std::numbers::pi_v<double>) : res;
+            return (angle_unit_ == AngleUnit::Degrees) ? (res * 180.0 / std::numbers::pi_v<double>)
+                                                       : res;
         }
         if (lower == "acos" || lower == "arccos") {
             checkArgs(1);
             if (args[0] < -1.0 || args[0] > 1.0) {
-                throw MathEvalException(fmt::format("Domain error: acos argument {} out of range [-1, 1]", args[0]), pos + 1);
+                throw MathEvalException(
+                    fmt::format("Domain error: acos argument {} out of range [-1, 1]", args[0]),
+                    pos + 1
+                );
             }
             double res = std::acos(args[0]);
-            return (angle_unit_ == AngleUnit::Degrees) ? (res * 180.0 / std::numbers::pi_v<double>) : res;
+            return (angle_unit_ == AngleUnit::Degrees) ? (res * 180.0 / std::numbers::pi_v<double>)
+                                                       : res;
         }
         if (lower == "atan" || lower == "arctan") {
             checkArgs(1);
             double res = std::atan(args[0]);
-            return (angle_unit_ == AngleUnit::Degrees) ? (res * 180.0 / std::numbers::pi_v<double>) : res;
+            return (angle_unit_ == AngleUnit::Degrees) ? (res * 180.0 / std::numbers::pi_v<double>)
+                                                       : res;
         }
         if (lower == "atan2") {
             checkArgs(2);
             double res = std::atan2(args[0], args[1]);
-            return (angle_unit_ == AngleUnit::Degrees) ? (res * 180.0 / std::numbers::pi_v<double>) : res;
+            return (angle_unit_ == AngleUnit::Degrees) ? (res * 180.0 / std::numbers::pi_v<double>)
+                                                       : res;
         }
 
         // 显式角度三角函数 (sind, cosd, tand, asind, acosd, atand)
@@ -1078,14 +1177,20 @@ private:
         if (lower == "asind") {
             checkArgs(1);
             if (args[0] < -1.0 || args[0] > 1.0) {
-                throw MathEvalException(fmt::format("Domain error: asind argument {} out of range [-1, 1]", args[0]), pos + 1);
+                throw MathEvalException(
+                    fmt::format("Domain error: asind argument {} out of range [-1, 1]", args[0]),
+                    pos + 1
+                );
             }
             return std::asin(args[0]) * 180.0 / std::numbers::pi_v<double>;
         }
         if (lower == "acosd") {
             checkArgs(1);
             if (args[0] < -1.0 || args[0] > 1.0) {
-                throw MathEvalException(fmt::format("Domain error: acosd argument {} out of range [-1, 1]", args[0]), pos + 1);
+                throw MathEvalException(
+                    fmt::format("Domain error: acosd argument {} out of range [-1, 1]", args[0]),
+                    pos + 1
+                );
             }
             return std::acos(args[0]) * 180.0 / std::numbers::pi_v<double>;
         }
@@ -1114,14 +1219,20 @@ private:
         if (lower == "acosh") {
             checkArgs(1);
             if (args[0] < 1.0) {
-                throw MathEvalException(fmt::format("Domain error: acosh argument {} < 1", args[0]), pos + 1);
+                throw MathEvalException(
+                    fmt::format("Domain error: acosh argument {} < 1", args[0]),
+                    pos + 1
+                );
             }
             return std::acosh(args[0]);
         }
         if (lower == "atanh") {
             checkArgs(1);
             if (args[0] <= -1.0 || args[0] >= 1.0) {
-                throw MathEvalException(fmt::format("Domain error: atanh argument {} out of range (-1, 1)", args[0]), pos + 1);
+                throw MathEvalException(
+                    fmt::format("Domain error: atanh argument {} out of range (-1, 1)", args[0]),
+                    pos + 1
+                );
             }
             return std::atanh(args[0]);
         }
@@ -1201,7 +1312,8 @@ private:
             if (args.empty()) {
                 throw MathEvalException("Function 'avg' expects at least 1 argument", pos + 1);
             }
-            return std::accumulate(args.begin(), args.end(), 0.0) / static_cast<double>(args.size());
+            return std::accumulate(args.begin(), args.end(), 0.0)
+                   / static_cast<double>(args.size());
         }
         if (lower == "hypot") {
             if (args.empty()) {
@@ -1215,7 +1327,7 @@ private:
         }
         if (lower == "clamp") {
             checkArgs(3);
-            double val = args[0];
+            double val     = args[0];
             double min_val = args[1];
             double max_val = args[2];
             if (min_val > max_val) {
@@ -1333,8 +1445,8 @@ inline std::string formatResult(double val, std::optional<int> precision) {
 
 /// 解析并计算表达式字符串
 inline double evaluateExpression(std::string_view expr, AngleUnit angle_unit = AngleUnit::Radians) {
-    detail::Lexer lexer(expr);
-    auto tokens = lexer.tokenize();
+    detail::Lexer  lexer(expr);
+    auto           tokens = lexer.tokenize();
     detail::Parser parser(std::move(tokens), angle_unit);
     return parser.evaluate();
 }

@@ -511,7 +511,7 @@ private:
     asio::any_io_executor                                                     executor_;
     std::map<std::string, std::shared_ptr<EventStreamInterface>, std::less<>> streams_{};
     std::map<size_t, PrefixSub>                                               prefixListeners_{};
-    std::map<std::string, std::any, std::less<>>                             syncServices_{};
+    std::map<std::string, std::any, std::less<>>                              syncServices_{};
     size_t nextPrefixListenerId_ = 0;
 };
 

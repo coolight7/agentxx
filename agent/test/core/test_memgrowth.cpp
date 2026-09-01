@@ -385,7 +385,8 @@ asio::awaitable<TestResult> run_memgrowth_tests() {
     for (int i = 1; !agentxx::util::ApplicationEnv::instance().has("MEM_TURNS") && i < 0; ++i) {
         (void)i;
     }
-    // 支持通过环境变量覆盖: MEM_TURNS / MEM_RESP_KB / MEM_HUGE_LIMIT (经全局单例统一封装, Windows 安全)
+    // 支持通过环境变量覆盖: MEM_TURNS / MEM_RESP_KB / MEM_HUGE_LIMIT (经全局单例统一封装, Windows
+    // 安全)
     if (auto vOpt = agentxx::util::ApplicationEnv::instance().get("MEM_TURNS")) {
         turns = static_cast<size_t>(std::strtoull(vOpt->c_str(), nullptr, 10));
     }

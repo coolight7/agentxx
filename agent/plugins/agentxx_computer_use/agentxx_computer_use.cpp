@@ -1,8 +1,8 @@
 // agentxx_computer_use —— 计算机控制插件 (Windows)
 #include "computer_use_plugin.h"
 #include "fmt/format.h"
-#include <neograph/json.h>
 #include <cstring>
+#include <neograph/json.h>
 #include <string>
 
 namespace agentxx_computer_use_plugin {
@@ -27,73 +27,69 @@ static const char* kUiControlDefaultDepict
       "Shortcut execution automatically presses modifier keys, presses target key, and releases in reverse order.";
 
 static std::string makeUiControlSchema() {
-    neograph::json schema                   = neograph::json::object();
-    schema["type"]                           = "object";
-    schema["required"]                       = neograph::json::array({"actions"});
-    schema["properties"]                     = neograph::json::object();
-    schema["properties"]["actions"]          = neograph::json::object();
-    schema["properties"]["actions"]["type"]  = "array";
-    schema["properties"]["actions"]["items"] = neograph::json::object();
-    schema["properties"]["actions"]["items"]["type"] = "object";
-    schema["properties"]["actions"]["items"]["required"]
-        = neograph::json::array({"action"});
-    schema["properties"]["actions"]["items"]["properties"]              = neograph::json::object();
-    schema["properties"]["actions"]["items"]["properties"]["action"]    = neograph::json({
+    neograph::json schema                                  = neograph::json::object();
+    schema["type"]                                         = "object";
+    schema["required"]                                     = neograph::json::array({"actions"});
+    schema["properties"]                                   = neograph::json::object();
+    schema["properties"]["actions"]                        = neograph::json::object();
+    schema["properties"]["actions"]["type"]                = "array";
+    schema["properties"]["actions"]["items"]               = neograph::json::object();
+    schema["properties"]["actions"]["items"]["type"]       = "object";
+    schema["properties"]["actions"]["items"]["required"]   = neograph::json::array({"action"});
+    schema["properties"]["actions"]["items"]["properties"] = neograph::json::object();
+    schema["properties"]["actions"]["items"]["properties"]["action"]      = neograph::json({
         {"type", "string"},
         {"enum",
          neograph::json::array(
              {"move_cursor",
-                 "mouse_down",
-                 "mouse_up",
-                 "click",
-                 "double_click",
-                 "triple_click",
-                 "middle_click",
-                 "right_click",
-                 "drag_and_drop",
-                 "mouse_scroll",
-                 "type_text",
-                 "key_down",
-                 "key_up",
-                 "press_key",
-                 "shortcut",
-                 "wait"}
+                   "mouse_down",
+                   "mouse_up",
+                   "click",
+                   "double_click",
+                   "triple_click",
+                   "middle_click",
+                   "right_click",
+                   "drag_and_drop",
+                   "mouse_scroll",
+                   "type_text",
+                   "key_down",
+                   "key_up",
+                   "press_key",
+                   "shortcut",
+                   "wait"}
          )               }
     });
-    schema["properties"]["actions"]["items"]["properties"]["x"]         = neograph::json({
+    schema["properties"]["actions"]["items"]["properties"]["x"]           = neograph::json({
         {"type", "integer"}
     });
-    schema["properties"]["actions"]["items"]["properties"]["y"]         = neograph::json({
+    schema["properties"]["actions"]["items"]["properties"]["y"]           = neograph::json({
         {"type", "integer"}
     });
-    schema["properties"]["actions"]["items"]["properties"]["button"]    = neograph::json({
-        {"type", "string"},
-        {"enum",
-         neograph::json::array(
-             {"left", "right", "middle"}
-         )               }
+    schema["properties"]["actions"]["items"]["properties"]["button"]      = neograph::json({
+        {"type", "string"                                          },
+        {"enum", neograph::json::array({"left", "right", "middle"})}
     });
-    schema["properties"]["actions"]["items"]["properties"]["clicks"]    = neograph::json({
+    schema["properties"]["actions"]["items"]["properties"]["clicks"]      = neograph::json({
         {"type", "integer"}
     });
-    schema["properties"]["actions"]["items"]["properties"]["amount"]    = neograph::json({
+    schema["properties"]["actions"]["items"]["properties"]["amount"]      = neograph::json({
         {"type", "integer"}
     });
-    schema["properties"]["actions"]["items"]["properties"]["direction"] = neograph::json({
-        {"type", "string"                                                                },
+    schema["properties"]["actions"]["items"]["properties"]["direction"]   = neograph::json({
+        {"type", "string"                             },
         {"enum", neograph::json::array({"up", "down"})}
     });
-    schema["properties"]["actions"]["items"]["properties"]["text"]      = neograph::json({
+    schema["properties"]["actions"]["items"]["properties"]["text"]        = neograph::json({
         {"type", "string"}
     });
-    schema["properties"]["actions"]["items"]["properties"]["key"]       = neograph::json({
+    schema["properties"]["actions"]["items"]["properties"]["key"]         = neograph::json({
         {"type", "string"}
     });
-    schema["properties"]["actions"]["items"]["properties"]["keys"]      = neograph::json({
-        {"type",  "array"                              },
+    schema["properties"]["actions"]["items"]["properties"]["keys"]        = neograph::json({
+        {"type",  "array"                             },
         {"items", neograph::json({{"type", "string"}})}
     });
-    schema["properties"]["actions"]["items"]["properties"]["delay_ms"]  = neograph::json({
+    schema["properties"]["actions"]["items"]["properties"]["delay_ms"]    = neograph::json({
         {"type", "integer"}
     });
     schema["properties"]["actions"]["items"]["properties"]["duration_ms"] = neograph::json({

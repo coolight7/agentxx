@@ -330,9 +330,9 @@ static asio::awaitable<void> runLocalTuiUnifiedAsync(
         permissionMode
     );
     if (agent && agent->agentContext && agent->agentContext->agentConfig) {
-        tui->setDataDir(agentxx::agent::AgentConfigStatic::getDataDir(
-            agent->agentContext->agentConfig->dataDir
-        ));
+        tui->setDataDir(
+            agentxx::agent::AgentConfigStatic::getDataDir(agent->agentContext->agentConfig->dataDir)
+        );
         tui->setWorkDir(agent->agentContext->agentConfig->resolvedWorkDir());
     }
     // client 插件系统: 装配须在 start() 之前 (ctx_.pluginManager 在 UI 线程

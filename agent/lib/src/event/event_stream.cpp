@@ -536,13 +536,15 @@ void EventBridge::handleError(const neograph::graph::GraphEvent& event) {
 double EventBridge::countTokens(std::string_view text) {
     // 优先使用 EventBus 上注册的 token 计算服务 (与上下文压缩/上下文统计同口径)
     if (auto ctxPtr = ctx_.lock(); ctxPtr && ctxPtr->bus) {
-        auto count = ctxPtr->bus->callService<size_t(std::string_view)>(events::Topic::TokenCount, text);
+        auto count
+            = ctxPtr->bus->callService<size_t(std::string_view)>(events::Topic::TokenCount, text);
         if (count.has_value()) {
             return static_cast<double>(*count);
         }
     }
     if (session_ && session_->bus) {
-        auto count = session_->bus->callService<size_t(std::string_view)>(events::Topic::TokenCount, text);
+        auto count
+            = session_->bus->callService<size_t(std::string_view)>(events::Topic::TokenCount, text);
         if (count.has_value()) {
             return static_cast<double>(*count);
         }

@@ -304,7 +304,7 @@ TestResult testTuiSidebar() {
     // ---- 场景 6: LogMenuOverlay 弹窗交互 (LLM Context / Summy Context / Clear Logs) ----
     {
         SidebarFixture fx;
-        auto           overlay = std::make_shared<LogMenuOverlay>(fx.ctx);
+        auto           overlay      = std::make_shared<LogMenuOverlay>(fx.ctx);
         bool           llmClicked   = false;
         bool           summyClicked = false;
         bool           clearClicked = false;
@@ -324,8 +324,9 @@ TestResult testTuiSidebar() {
         });
 
         // 渲染测试
-        auto   el     = overlay->Render();
-        auto   screen = ftxui::Screen::Create(ftxui::Dimension::Fixed(40), ftxui::Dimension::Fixed(16));
+        auto el = overlay->Render();
+        auto screen
+            = ftxui::Screen::Create(ftxui::Dimension::Fixed(40), ftxui::Dimension::Fixed(16));
         ftxui::Render(screen, el);
         auto out = screen.ToString();
         XX_TEST_EXPECT_TRUE(out.find("Menu") != std::string::npos);

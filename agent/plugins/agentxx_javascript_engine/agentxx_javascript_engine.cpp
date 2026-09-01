@@ -23,8 +23,8 @@
 #include "agentxx/plugin/plugin_guard.h"
 #include "agentxx/plugin/plugin_iface_helper.h"
 #include "agentxx/plugin/plugin_kit.h"
-#include "quickjs.h"
 #include "fmt/format.h"
+#include "quickjs.h"
 
 #include <atomic>
 #include <chrono>
@@ -239,8 +239,8 @@ public:
             if (!first) {
                 out += ",";
             }
-            first = false;
-            out += fmt::format("\"{}\"", k);
+            first  = false;
+            out   += fmt::format("\"{}\"", k);
         }
         out += "]";
         return out;
@@ -1368,7 +1368,10 @@ JSValue JsEngine::bridgeCall(
                 binding.get()
             );
             if (!sub) {
-                return throwJsError(ctx, fmt::format("subscribe: host subscription failed: {}", topic));
+                return throwJsError(
+                    ctx,
+                    fmt::format("subscribe: host subscription failed: {}", topic)
+                );
             }
             // token = agents 数组索引
             JSValue  lenVal = JS_GetPropertyStr(ctx, pctx->agents, "length");
@@ -1532,7 +1535,10 @@ JSValue JsEngine::bridgeCall(
                             agentxx_plugin_sv_cstr(p.c_str())
                         );
             if (rc != 0) {
-                return throwJsError(ctx, fmt::format("register failed (conflict or unsupported): {}", p));
+                return throwJsError(
+                    ctx,
+                    fmt::format("register failed (conflict or unsupported): {}", p)
+                );
             }
             return JS_TRUE;
         }
@@ -1588,13 +1594,9 @@ JSValue JsEngine::bridgeCall(
                 }
                 return JS_ThrowInternalError(ctx, "addMcpServer: escape failed");
             }
-            long long   t    = static_cast<long long>(timeoutSec < 0 ? 0 : timeoutSec);
-            std::string spec = fmt::format(
-                "{{\"namespace\":{},\"url\":{},\"timeout\":{}}}",
-                nsEsc,
-                urlEsc,
-                t
-            );
+            long long   t = static_cast<long long>(timeoutSec < 0 ? 0 : timeoutSec);
+            std::string spec
+                = fmt::format("{{\"namespace\":{},\"url\":{},\"timeout\":{}}}", nsEsc, urlEsc, t);
             vt.free(nsEsc);
             vt.free(urlEsc);
             if (iface.resources->register_mcp_server(host, agentxx_plugin_sv_cstr(spec.c_str()))
@@ -1724,10 +1726,9 @@ static void* jsCapStart(
                         ntfCopy.done(ntfCopy.host_ud, AGENTXX_PLUGIN_OPERATOR_FAILED, payload);
                         return;
                     }
-                    std::string tools   = engine->loadedToolsJsonOnJsThread(name);
-                    std::string payloadStr
-                        = fmt::format(R"({{"ok": true, "tools": {}}})", tools);
-                    char* payload = eh ? eh->vtable->strdup(payloadStr.c_str()) : nullptr;
+                    std::string tools      = engine->loadedToolsJsonOnJsThread(name);
+                    std::string payloadStr = fmt::format(R"({{"ok": true, "tools": {}}})", tools);
+                    char*       payload    = eh ? eh->vtable->strdup(payloadStr.c_str()) : nullptr;
                     ntfCopy.done(ntfCopy.host_ud, AGENTXX_PLUGIN_OPERATOR_OK, payload);
                 })) {
                 return setErr("interpreter.js engine stopped");

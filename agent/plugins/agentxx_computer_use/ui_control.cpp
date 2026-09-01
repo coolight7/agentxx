@@ -1,9 +1,9 @@
 #include "computer_use_plugin.h"
 #include "fmt/format.h"
-#include <neograph/json.h>
 #include <cctype>
 #include <chrono>
 #include <map>
+#include <neograph/json.h>
 #include <string>
 #include <thread>
 #include <vector>
@@ -1085,10 +1085,10 @@ std::string uiControlExecute(agentxx_computer_use_plugin::SimpleJson& arguments)
     jsonGetInt(arguments.doc().at_pointer("/interval_ms"), interval_ms);
 
     neograph::json results    = neograph::json::array();
-    int             ok_count   = 0;
-    int             fail_count = 0;
-    size_t          i          = 0;
-    bool            first      = true;
+    int            ok_count   = 0;
+    int            fail_count = 0;
+    size_t         i          = 0;
+    bool           first      = true;
     for (auto elem : arr) {
         if (!first && interval_ms > 0) {
             std::this_thread::sleep_for(std::chrono::milliseconds(interval_ms));

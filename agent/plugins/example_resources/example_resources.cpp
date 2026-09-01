@@ -24,9 +24,9 @@
 #include "agentxx/plugin/plugin_guard.h"
 #include "agentxx/plugin/plugin_iface_helper.h"
 
+#include "fmt/format.h"
 #include <memory>
 #include <string>
-#include "fmt/format.h"
 
 // 多实例约定 (2026-08 API v1): 零可变全局; 实例状态 (host/iface) 存于
 // ResCtx, create 经 *plugin_ctx 交付宿主 / destroy 释放

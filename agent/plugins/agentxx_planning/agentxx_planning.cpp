@@ -364,12 +364,16 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
             // 注入 planning 附加提示词至宿主 (经通用 appendSystemPrompts)
             if (ctx->iface.prompt && ctx->iface.prompt->set_prompt) {
                 neograph::json j;
-                j["appendSystemPrompts"]            = neograph::json::object();
+                j["appendSystemPrompts"]             = neograph::json::object();
                 j["appendSystemPrompts"]["planning"] = std::string{kSystemPlanningPrompt};
                 std::string js                       = j.dump();
                 if (ctx->iface.prompt->set_prompt(host, agentxx_plugin_sv(js.data(), js.size()))
                     != 0) {
-                    pluginLog(ctx.get(), 3, "agentxx_planning: set appendSystemPrompts[planning] failed");
+                    pluginLog(
+                        ctx.get(),
+                        3,
+                        "agentxx_planning: set appendSystemPrompts[planning] failed"
+                    );
                 } else {
                     pluginLog(
                         ctx.get(),

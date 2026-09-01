@@ -69,9 +69,14 @@ struct Topic {
     /// 文件系统权限规则设置 (单向事件): EventSetPermissionRule
     inline static constexpr std::string_view PermissionSetRule{"service.permission.set_rule"};
 
-    /// 每会话文件系统隔离边界设置/清除 (单向事件): EventSetSessionIsolation / EventClearSessionIsolation
-    inline static constexpr std::string_view PermissionSetIsolation{"service.permission.set_isolation"};
-    inline static constexpr std::string_view PermissionClearIsolation{"service.permission.clear_isolation"};
+    /// 每会话文件系统隔离边界设置/清除 (单向事件): EventSetSessionIsolation /
+    /// EventClearSessionIsolation
+    inline static constexpr std::string_view PermissionSetIsolation{
+        "service.permission.set_isolation"
+    };
+    inline static constexpr std::string_view PermissionClearIsolation{
+        "service.permission.clear_isolation"
+    };
 
     /// subagent 工具执行 (请求-响应): ReqSubagentExecute / RespSubagentExecute
     inline static constexpr std::string_view SubagentExecute{"service.subagent.execute"};

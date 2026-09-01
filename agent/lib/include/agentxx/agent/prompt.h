@@ -253,12 +253,12 @@ Your (LLM/Agent) name is Agentxx. There is no need to mention your name in every
     /// 附加系统提示词表 (通用扩展点)
     /// - 键为插件或功能标识 (如 "planning"、"skill"、"codegraph")，值为主 prompt 之外的补充段
     /// - 插件通过 prompt iface 的 `appendSystemPrompts` 对象以键值形式注入/更新，卸载时按备份恢复
-    /// - 最终 system 消息由 `systemPrompt` + 按键字典序拼接的附加段 + `appendSystemMessage` (skill/memory 动态) 组成
+    /// - 最终 system 消息由 `systemPrompt` + 按键字典序拼接的附加段 + `appendSystemMessage`
+    /// (skill/memory 动态) 组成
     /// - 为空时不占位，避免无对应工具时误导模型
     std::map<std::string, std::string, std::less<>> appendSystemPrompts{
         {
-            "planning",
-            R"_(
+         "planning", R"_(
 ## Planning
 
 You have access to the `agentxx_planning` tool to manage and plan complex objectives.
@@ -283,10 +283,9 @@ When all work is done, write your final answer in the message AFTER your last `a
 Start the final message with the substantive content the user asked for (data, computation, summary, or analysis).
 The user wants the result, not confirmation that the work is done.
 )_",
-        },
+         },
         {
-            "skill",
-            R"_(
+         "skill",          R"_(
 ## How to Use Skills (Progressive Disclosure)
 
 Skills follow a progressive disclosure pattern — you see their name and description,
@@ -315,10 +314,9 @@ User: "Can you analyse the latest developments in quantum computing?"
 
 When in doubt, check if a skill exists for the task.
 )_",
-        },
+         },
         {
-            "summarization",
-            R"_(
+         "summarization",    R"_(
 The conversation above will be compacted to free context space.
 
 Summarize the ENTIRE conversation into ONE self-contained summary that preserves everything needed to continue the current work.
@@ -343,7 +341,7 @@ OFFLOAD long content with the `agentxx_share_store` tool (opt=insert, text=<the 
 
 {omitted_note}Output ONLY the summary text in the user's language, no meta commentary, under about {max_words} words.
 )_",
-        },
+         },
     };
 
     /// toolcall

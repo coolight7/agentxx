@@ -890,20 +890,20 @@ asio::awaitable<TestResult> run_plugin_tests() {
             XX_TEST_EXPECT_TRUE(ev30 != nullptr && ev30->publish != nullptr);
             XX_TEST_EXPECT_EQ(
                 ev30 ? ev30->publish(
-                    &inst30->host,
-                    agentxx_plugin_sv_cstr("demo.topic"),
-                    agentxx_plugin_sv_cstr(R"({"k":"v"})")
-                )
+                           &inst30->host,
+                           agentxx_plugin_sv_cstr("demo.topic"),
+                           agentxx_plugin_sv_cstr(R"({"k":"v"})")
+                       )
                      : -1,
                 0
             );
             ctx->pluginManager->disable("example_plugin");
             // 禁用状态: 接口表 publish 拒绝 (返回非 0)
             int rc = ev30 ? ev30->publish(
-                         &inst30->host,
-                         agentxx_plugin_sv_cstr("demo.topic"),
-                         agentxx_plugin_sv_cstr(R"({"k":"v"})")
-                     )
+                                &inst30->host,
+                                agentxx_plugin_sv_cstr("demo.topic"),
+                                agentxx_plugin_sv_cstr(R"({"k":"v"})")
+                            )
                           : -1;
             XX_TEST_EXPECT_TRUE(rc != 0);
             co_await ctx->pluginManager->unloadAsync("example_plugin");

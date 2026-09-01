@@ -6,11 +6,11 @@
 #include "agentxx/plugin/plugin_iface_helper.h"
 #include "agentxx/plugin/plugin_kit.h"
 
+#include "fmt/format.h"
 #include <cstdio>
 #include <cstring>
 #include <memory>
 #include <string>
-#include "fmt/format.h"
 
 namespace {
 

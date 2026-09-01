@@ -464,7 +464,8 @@ asio::awaitable<void>
     };
     auto result = co_await tool.execute_async(args);
 
-    bool parsed = (result.find("[Error]") != std::string::npos || result.find("## Error") != std::string::npos)
+    bool parsed = (result.find("[Error]") != std::string::npos
+                   || result.find("## Error") != std::string::npos)
                   && result.find("timed out") != std::string::npos;
     if (parsed) {
         XX_TEST_EXPECT_TRUE(result.find("\"quotes\"") != std::string::npos);

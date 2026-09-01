@@ -541,14 +541,16 @@ asio::awaitable<void> test_subagent_summarization_switch() {
         cfg->enableSummarization = false;
         auto agent               = std::make_shared<agentxx::agent::CodeAgent>(cfg);
         co_await agent->init();
-        XX_TEST_EXPECT_FALSE(agent->getContext()->bus->hasService(agentxx::events::Topic::TokenCount));
+        XX_TEST_EXPECT_FALSE(agent->getContext()->bus->hasService(agentxx::events::Topic::TokenCount
+        ));
     }
     // ② 缺省 (true) → 存在
     {
         auto cfg   = makeSimConfig(baseUrl);
         auto agent = std::make_shared<agentxx::agent::CodeAgent>(cfg);
         co_await agent->init();
-        XX_TEST_EXPECT_TRUE(agent->getContext()->bus->hasService(agentxx::events::Topic::TokenCount));
+        XX_TEST_EXPECT_TRUE(agent->getContext()->bus->hasService(agentxx::events::Topic::TokenCount)
+        );
     }
     // ③ 显式 true → 存在
     {
@@ -556,7 +558,8 @@ asio::awaitable<void> test_subagent_summarization_switch() {
         cfg->enableSummarization = true;
         auto agent               = std::make_shared<agentxx::agent::CodeAgent>(cfg);
         co_await agent->init();
-        XX_TEST_EXPECT_TRUE(agent->getContext()->bus->hasService(agentxx::events::Topic::TokenCount));
+        XX_TEST_EXPECT_TRUE(agent->getContext()->bus->hasService(agentxx::events::Topic::TokenCount)
+        );
     }
 
     co_return;

@@ -11,11 +11,11 @@
 #include "agentxx/plugin/plugin_iface_helper.h"
 #include "agentxx/plugin/plugin_kit.h"
 
+#include "fmt/format.h"
 #include <cstdio>
 #include <cstring>
 #include <memory>
 #include <string>
-#include "fmt/format.h"
 
 namespace {
 
@@ -93,7 +93,9 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
 
             if (!s_if.capabilities
                      ->has_capability(host, agentxx_plugin_sv_cstr("interpreter.js"))) {
-                logE("agentxx_execute_javascript: interpreter.js capability not available (need agentxx_javascript_engine)");
+                logE(
+                    "agentxx_execute_javascript: interpreter.js capability not available (need agentxx_javascript_engine)"
+                );
                 return -1;
             }
 
@@ -167,7 +169,10 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
             s_if.log->log(
                 host,
                 2,
-                agentxx_plugin_sv_cstr(fmt::format("agentxx_execute_javascript: load scriptPath={}", scriptPath).c_str())
+                agentxx_plugin_sv_cstr(
+                    fmt::format("agentxx_execute_javascript: load scriptPath={}", scriptPath)
+                        .c_str()
+                )
             );
 
             char* err = nullptr;
@@ -179,9 +184,23 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                 [](void* ud, int status, char* payload) {
                     auto* c = static_cast<ShellCtx*>(ud);
                     if (status != AGENTXX_PLUGIN_OPERATOR_OK) {
-                        shellLog(c, 4, fmt::format("agentxx_execute_javascript: interpreter load failed: {}", payload ? payload : "unknown"));
+                        shellLog(
+                            c,
+                            4,
+                            fmt::format(
+                                "agentxx_execute_javascript: interpreter load failed: {}",
+                                payload ? payload : "unknown"
+                            )
+                        );
                     } else {
-                        shellLog(c, 2, fmt::format("agentxx_execute_javascript: interpreter load ok: {}", payload ? payload : ""));
+                        shellLog(
+                            c,
+                            2,
+                            fmt::format(
+                                "agentxx_execute_javascript: interpreter load ok: {}",
+                                payload ? payload : ""
+                            )
+                        );
                     }
                     if (payload && c && c->host && c->host->vtable && c->host->vtable->free) {
                         c->host->vtable->free(payload);
@@ -202,7 +221,9 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
             s_if.log->log(
                 host,
                 2,
-                agentxx_plugin_sv_cstr("agentxx_execute_javascript: load plugin.js dispatched to interpreter.js")
+                agentxx_plugin_sv_cstr(
+                    "agentxx_execute_javascript: load plugin.js dispatched to interpreter.js"
+                )
             );
             *plugin_ctx = ctx.release();
             return 0;

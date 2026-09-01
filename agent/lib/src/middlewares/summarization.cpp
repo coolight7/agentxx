@@ -426,7 +426,8 @@ asio::awaitable<std::string> SummarizationMiddlewareHandle::doSummarizeWithLLM(
         co_return std::string{};
     }
 
-    // 压缩指令模板 (可经 AgentPrompt 定制/训练序列化，经通用 appendSystemPrompts["summarization"] 管理)
+    // 压缩指令模板 (可经 AgentPrompt 定制/训练序列化，经通用 appendSystemPrompts["summarization"]
+    // 管理)
     std::string summarizePrompt;
     {
         auto itSumm = agentCtxPtr->agentConfig->prompt.appendSystemPrompts.find("summarization");

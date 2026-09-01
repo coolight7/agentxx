@@ -2,7 +2,6 @@
 #include "fmt/format.h"
 #include "screen_capture.h"
 #include "screen_capture_plugin.h"
-#include <neograph/json.h>
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -12,6 +11,7 @@
 #include <filesystem>
 #include <functional>
 #include <memory>
+#include <neograph/json.h>
 #include <string>
 #include <vector>
 
@@ -113,7 +113,7 @@ static neograph::json frameToJson(
     const agentxx_screen_capture_plugin::ScreenFrame& f,
     bool                                              saveImages
 ) {
-    neograph::json j = neograph::json::object();
+    neograph::json j  = neograph::json::object();
     j["width"]        = f.width;
     j["height"]       = f.height;
     j["offset_x"]     = f.offsetX;
@@ -147,8 +147,8 @@ static std::string framesResult(
         arr.push_back(frameToJson(ctx, f, saveImages));
     }
     neograph::json j = neograph::json::object();
-    j["ok"]           = true;
-    j["frames"]       = arr;
+    j["ok"]          = true;
+    j["frames"]      = arr;
     return j.dump();
 }
 
@@ -161,7 +161,7 @@ static const char* kScreenCaptureDefaultDepict
 
 static void registerScreenCaptureTool(PluginCtx& ctx) {
     neograph::json cmd = neograph::json::object();
-    cmd["type"]         = "string";
+    cmd["type"]        = "string";
     cmd["description"]
         = "Operation to perform: capture_all (default), capture_mouse, capture_screen, "
           "get_screen_count, start_streaming, stop_streaming.";
@@ -173,7 +173,7 @@ static void registerScreenCaptureTool(PluginCtx& ctx) {
          "start_streaming",
          "stop_streaming"}
     );
-    neograph::json schema               = neograph::json::object();
+    neograph::json schema                = neograph::json::object();
     schema["type"]                       = "object";
     schema["properties"]                 = neograph::json::object();
     schema["properties"]["command"]      = cmd;
@@ -260,17 +260,17 @@ static void registerScreenCaptureTool(PluginCtx& ctx) {
             }
             if (command == "get_screen_count") {
                 neograph::json j = neograph::json::object();
-                j["ok"]           = true;
-                j["count"]        = capture.capture_.getScreenCount();
+                j["ok"]          = true;
+                j["count"]       = capture.capture_.getScreenCount();
                 return j.dump();
             }
             if (command == "start_streaming") {
                 int64_t rate = 5;
                 jsonGetInt(args.doc().at_pointer("/frame_rate"), rate);
-                bool            ok = capture.startStreaming(static_cast<int>(rate));
+                bool           ok = capture.startStreaming(static_cast<int>(rate));
                 neograph::json j  = neograph::json::object();
-                j["ok"]            = ok;
-                j["rate"]          = rate;
+                j["ok"]           = ok;
+                j["rate"]         = rate;
                 return j.dump();
             }
             if (command == "stop_streaming") {

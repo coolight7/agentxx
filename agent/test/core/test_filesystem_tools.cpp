@@ -1756,10 +1756,10 @@ asio::awaitable<void>
         {"path",      chineseDir},
         {"recursive", false     }
     };
-    auto resNonRec   = co_await tool.execute_async(argsNonRec);
-    bool hasFile1    = resNonRec.find("中文文件_一.txt") != std::string::npos;
-    bool hasSubDir   = resNonRec.find("子目录_一级") != std::string::npos;
-    bool noSubFile   = resNonRec.find("深层中文文件.txt") == std::string::npos;
+    auto resNonRec = co_await tool.execute_async(argsNonRec);
+    bool hasFile1  = resNonRec.find("中文文件_一.txt") != std::string::npos;
+    bool hasSubDir = resNonRec.find("子目录_一级") != std::string::npos;
+    bool noSubFile = resNonRec.find("深层中文文件.txt") == std::string::npos;
 
     // 2) 递归列出
     auto argsRec = neograph::json{
@@ -1844,9 +1844,9 @@ asio::awaitable<void>
 
     // 1) 首次创建: 自动创建多层中文父目录
     auto argsCreate = neograph::json{
-        {"path",      filePath        },
+        {"path",      filePath                 },
         {"content",   "中文内容第一版\n"},
-        {"overwrite", false           }
+        {"overwrite", false                    }
     };
     auto resCreate = co_await tool.execute_async(argsCreate);
     bool createOk  = (resCreate == "success") && fs::exists(agentxx::util::utf8ToPath(filePath));
@@ -1865,9 +1865,9 @@ asio::awaitable<void>
 
     // 3) overwrite=true 成功覆盖
     auto argsOverwrite = neograph::json{
-        {"path",      filePath        },
+        {"path",      filePath                    },
         {"content",   "覆盖后的中文内容\n"},
-        {"overwrite", true            }
+        {"overwrite", true                        }
     };
     auto resOverwrite = co_await tool.execute_async(argsOverwrite);
     bool overwriteOk  = (resOverwrite == "success");
@@ -1876,19 +1876,17 @@ asio::awaitable<void>
     std::string readContent;
     {
         std::ifstream in(agentxx::util::utf8ToPath(filePath));
-        readContent = std::string(
-            (std::istreambuf_iterator<char>(in)),
-            std::istreambuf_iterator<char>()
-        );
+        readContent
+            = std::string((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
     }
     bool contentOk = readContent.find("覆盖后的中文内容") != std::string::npos;
 
     // 4) 同步版 write 直测
     auto syncFilePath = chineseDir + "/同步写入文件.txt";
     auto syncArgs     = neograph::json{
-            {"path",      syncFilePath },
+            {"path",      syncFilePath          },
             {"content",   "同步中文写入\n"},
-            {"overwrite", true         }
+            {"overwrite", true                  }
     };
     auto syncRes = agentxx_fs_plugin::fileWriteExecute(syncArgs, testDir);
     bool syncOk  = (syncRes == "success") && fs::exists(agentxx::util::utf8ToPath(syncFilePath));
@@ -1901,9 +1899,8 @@ asio::awaitable<void>
     } else {
         g_fs_failed++;
         TEST_FAIL << "FilesystemWriteFileTool Chinese path write failed, createOk: " << createOk
-                  << ", noOverwriteThrew: " << noOverwriteThrew
-                  << ", overwriteOk: " << overwriteOk << ", contentOk: " << contentOk
-                  << ", syncOk: " << syncOk << std::endl;
+                  << ", noOverwriteThrew: " << noOverwriteThrew << ", overwriteOk: " << overwriteOk
+                  << ", contentOk: " << contentOk << ", syncOk: " << syncOk << std::endl;
     }
     co_return;
 }
@@ -1924,20 +1921,20 @@ asio::awaitable<void>
 
     // 1) 单处替换
     auto argsSingle = neograph::json{
-        {"path",          filePath          },
-        {"old_str",       "目标旧字符串_AAA"     },
-        {"new_str",       "已替换新字符串_BBB"    },
-        {"multi_replace", false             }
+        {"path",          filePath                   },
+        {"old_str",       "目标旧字符串_AAA"   },
+        {"new_str",       "已替换新字符串_BBB"},
+        {"multi_replace", false                      }
     };
     auto resSingle = co_await tool.execute_async(argsSingle);
     bool singleOk  = (resSingle == "success");
 
     // 2) 多处替换 (剩余的一处替换)
     auto argsMulti = neograph::json{
-        {"path",          filePath          },
-        {"old_str",       "目标旧字符串_AAA"     },
-        {"new_str",       "已替换新字符串_CCC"    },
-        {"multi_replace", true              }
+        {"path",          filePath                   },
+        {"old_str",       "目标旧字符串_AAA"   },
+        {"new_str",       "已替换新字符串_CCC"},
+        {"multi_replace", true                       }
     };
     auto resMulti = co_await tool.execute_async(argsMulti);
     bool multiOk  = resMulti.find("Success") != std::string::npos
@@ -1947,21 +1944,19 @@ asio::awaitable<void>
     std::string readContent;
     {
         std::ifstream in(agentxx::util::utf8ToPath(filePath));
-        readContent = std::string(
-            (std::istreambuf_iterator<char>(in)),
-            std::istreambuf_iterator<char>()
-        );
+        readContent
+            = std::string((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
     }
     bool contentOk = readContent.find("已替换新字符串_BBB") != std::string::npos
-                  && readContent.find("已替换新字符串_CCC") != std::string::npos
-                  && readContent.find("目标旧字符串_AAA") == std::string::npos;
+                     && readContent.find("已替换新字符串_CCC") != std::string::npos
+                     && readContent.find("目标旧字符串_AAA") == std::string::npos;
 
     // 3) 同步版 edit 直测
     auto syncArgs = neograph::json{
-        {"path",          filePath      },
+        {"path",          filePath                   },
         {"old_str",       "已替换新字符串_BBB"},
-        {"new_str",       "同步替换新内容"   },
-        {"multi_replace", false         }
+        {"new_str",       "同步替换新内容"    },
+        {"multi_replace", false                      }
     };
     auto syncRes = agentxx_fs_plugin::fileEditExecute(syncArgs, testDir);
     bool syncOk  = (syncRes == "success");
@@ -2041,10 +2036,10 @@ asio::awaitable<void>
 
     // 1) files_with_matches 文本搜索
     auto argsFwm = neograph::json{
-        {"text_patterns_is_regex", false                                         },
-        {"text_patterns",          neograph::json::array({"检索特征码_中文关键字"})    },
-        {"file_patterns",          neograph::json::array({chineseDir + "/*.txt"})},
-        {"output_mode",            "files_with_matches"                          }
+        {"text_patterns_is_regex", false                                                     },
+        {"text_patterns",          neograph::json::array({"检索特征码_中文关键字"})},
+        {"file_patterns",          neograph::json::array({chineseDir + "/*.txt"})            },
+        {"output_mode",            "files_with_matches"                                      }
     };
     auto resFwm = co_await tool.execute_async(argsFwm);
     bool fwmOk  = resFwm.find("检索目标_中文.txt") != std::string::npos
@@ -2052,10 +2047,10 @@ asio::awaitable<void>
 
     // 2) content 模式正则搜索
     auto argsContent = neograph::json{
-        {"text_patterns_is_regex", true                                           },
+        {"text_patterns_is_regex", true                                                             },
         {"text_patterns",          neograph::json::array({R"(检索特征码_中文关键字_\d+)"})},
-        {"file_patterns",          neograph::json::array({testDir + "/**/*.txt"}) },
-        {"output_mode",            "content"                                     }
+        {"file_patterns",          neograph::json::array({testDir + "/**/*.txt"})                   },
+        {"output_mode",            "content"                                                        }
     };
     auto resContent = co_await tool.execute_async(argsContent);
     bool contentOk  = resContent.find("检索目标_中文.txt") != std::string::npos
@@ -2243,7 +2238,7 @@ asio::awaitable<void> test_plugin_real_link() {
             "agentxx_filesystem_write",
             neograph::json{
                 {"path",    "中文目录_真实链路/中文文件.txt"},
-                {"content", "中文链路数据_初始版本\n"        }
+                {"content", "中文链路数据_初始版本\n"         }
         }
         );
         XX_TEST_EXPECT_EQ(outW, std::string{"success"});
@@ -2263,8 +2258,8 @@ asio::awaitable<void> test_plugin_real_link() {
             "agentxx_filesystem_edit",
             neograph::json{
                 {"path",    "中文目录_真实链路/中文文件.txt"},
-                {"old_str", "初始版本"                  },
-                {"new_str", "更新版本"                  }
+                {"old_str", "初始版本"                              },
+                {"new_str", "更新版本"                              }
         }
         );
         XX_TEST_EXPECT_EQ(outE, std::string{"success"});
@@ -2280,10 +2275,10 @@ asio::awaitable<void> test_plugin_real_link() {
         auto outG = co_await callTool(
             "agentxx_filesystem_grep",
             neograph::json{
-                {"text_patterns_is_regex", false                             },
-                {"text_patterns",          neograph::json::array({"更新版本"})    },
+                {"text_patterns_is_regex", false                                                     },
+                {"text_patterns",          neograph::json::array({"更新版本"})                   },
                 {"file_patterns",          neograph::json::array({"中文目录_真实链路/*.txt"})},
-                {"output_mode",            "files_with_matches"              }
+                {"output_mode",            "files_with_matches"                                      }
         }
         );
         XX_TEST_EXPECT_TRUE(outG.find("中文文件.txt") != std::string::npos);

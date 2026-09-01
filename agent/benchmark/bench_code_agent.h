@@ -408,8 +408,10 @@ inline void benchCodeAgentInit() {
         = agentxx::util::ApplicationEnv::instance().getOr("AGENTXX_BENCH_LLM_BASE_URL", "");
     config.openAIApiKey
         = agentxx::util::ApplicationEnv::instance().getOr("AGENTXX_BENCH_LLM_API_KEY", "EMPTY");
-    config.openAIModelName
-        = agentxx::util::ApplicationEnv::instance().getOr("AGENTXX_BENCH_LLM_MODEL_NAME", "Agentxx");
+    config.openAIModelName = agentxx::util::ApplicationEnv::instance().getOr(
+        "AGENTXX_BENCH_LLM_MODEL_NAME",
+        "Agentxx"
+    );
 
     if (config.openAIBaseUrl.empty()) {
         // init() does not make HTTP calls, a dummy URL suffices
@@ -703,8 +705,10 @@ inline void benchCodeAgentInitWarm() {
         = agentxx::util::ApplicationEnv::instance().getOr("AGENTXX_BENCH_LLM_BASE_URL", "");
     config.openAIApiKey
         = agentxx::util::ApplicationEnv::instance().getOr("AGENTXX_BENCH_LLM_API_KEY", "EMPTY");
-    config.openAIModelName
-        = agentxx::util::ApplicationEnv::instance().getOr("AGENTXX_BENCH_LLM_MODEL_NAME", "Agentxx");
+    config.openAIModelName = agentxx::util::ApplicationEnv::instance().getOr(
+        "AGENTXX_BENCH_LLM_MODEL_NAME",
+        "Agentxx"
+    );
 
     if (config.openAIBaseUrl.empty()) {
         config.openAIBaseUrl   = "http://127.0.0.1:1";

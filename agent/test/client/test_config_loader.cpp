@@ -817,9 +817,9 @@ void test_builtin_exec_dir_uninjected_kept() {
     // 未注入且无系统/.env 变量: 保留 ${AGENTXX_EXEC_DIR} 原样 (可执行目录无法惰性推导)
     agentxx::client::setBuiltinEnvVar(agentxx::client::kBuiltinExecDirEnv, "");
     clearSystemEnvVar("AGENTXX_EXEC_DIR");
-    auto        cfg = loadYaml("data_dir: ${AGENTXX_EXEC_DIR}/data\n");
-    auto curOpt = agentxx::util::ApplicationEnv::instance().getSystem("AGENTXX_EXEC_DIR");
-    const char* cur = curOpt ? curOpt->c_str() : nullptr;
+    auto        cfg    = loadYaml("data_dir: ${AGENTXX_EXEC_DIR}/data\n");
+    auto        curOpt = agentxx::util::ApplicationEnv::instance().getSystem("AGENTXX_EXEC_DIR");
+    const char* cur    = curOpt ? curOpt->c_str() : nullptr;
     if (cur == nullptr) {
         // 变量被真正删除: 保留 ${VAR} 原样
         XX_TEST_EXPECT_TRUE(cfg.dataDir.find("${AGENTXX_EXEC_DIR}") != std::string::npos);
@@ -885,9 +885,9 @@ void test_env_order_unresolved_kept() {
     // 空串同样视为"未定义"(展开为空串); 两种情况分别断言
     const char* key = "AGENTXX_TEST_ENV_MISSING_9F3K2Q";
     clearSystemEnvVar(key);
-    auto        cfg = loadYaml("data_dir: ${AGENTXX_TEST_ENV_MISSING_9F3K2Q}/data\n");
-    auto curOpt = agentxx::util::ApplicationEnv::instance().getSystem(key);
-    const char* cur = curOpt ? curOpt->c_str() : nullptr;
+    auto        cfg    = loadYaml("data_dir: ${AGENTXX_TEST_ENV_MISSING_9F3K2Q}/data\n");
+    auto        curOpt = agentxx::util::ApplicationEnv::instance().getSystem(key);
+    const char* cur    = curOpt ? curOpt->c_str() : nullptr;
     if (cur == nullptr) {
         // 变量被真正删除: 保留 ${VAR} 原样
         XX_TEST_EXPECT_TRUE(

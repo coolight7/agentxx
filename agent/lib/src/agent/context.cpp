@@ -23,7 +23,8 @@ int64_t steadyNowMs() {
 
 } // namespace
 
-AgentContext::AgentContext()  = default;
+AgentContext::AgentContext() = default;
+
 AgentContext::~AgentContext() {
     // 插件系统先卸载全部插件, 断开中间件↔实例循环引用
     // (handles 由 middlewareHandleContext 持有, 其析构晚于 pluginManager)
