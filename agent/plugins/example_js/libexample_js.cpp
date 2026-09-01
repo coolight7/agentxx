@@ -7,8 +7,7 @@
 #include "agentxx/plugin/api/plugin_kit.h"
 
 #include "fmt/format.h"
-#include <cstdio>
-#include <cstring>
+#include <filesystem>
 #include <memory>
 #include <string>
 
@@ -33,12 +32,8 @@ std::string dirOf(const std::string& path) {
 }
 
 bool fileExists(const std::string& p) {
-    FILE* f = std::fopen(p.c_str(), "rb");
-    if (f) {
-        std::fclose(f);
-        return true;
-    }
-    return false;
+    std::error_code ec;
+    return std::filesystem::exists(p, ec);
 }
 
 } // namespace

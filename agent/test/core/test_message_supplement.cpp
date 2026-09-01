@@ -3,8 +3,10 @@
 #include "test_message_supplement.h"
 
 #include "agentxx/agent/code_agent.h"
+#include "agentxx/agent/context.h"
 #include "agentxx/agent/io/agent_io.h"
 #include "agentxx/middlewares/middleware.h"
+#include "agentxx/nodes/modelcall.h"
 #include "agentxx/tools/tool.h"
 #include "asio/as_tuple.hpp"
 #include "asio/co_spawn.hpp"
@@ -14,11 +16,14 @@
 #include "asio/this_coro.hpp"
 #include "asio/use_awaitable.hpp"
 #include "neograph/graph/cancel.h"
+#include "neograph/graph/loader.h"
 #include <atomic>
 #include <chrono>
 #include <memory>
 #include <string>
 #include <vector>
+
+#include "fmt/format.h"
 
 namespace {
 // 本模块测试计数器 (仅本编译单元可见; 不经头文件 extern 导出)
@@ -540,6 +545,177 @@ asio::awaitable<void> test_cancel_auto_supplement() {
     co_return;
 }
 
+// ===========================================================================
+// repairMessages 悬挂 toolcall 清理 (实现位于 agent/lib/src/nodes/modelcall.cpp)
+//
+// 背景: 取消/异常后重新从图开始节点执行时, 上下文可能以
+//   "assistant(tool_calls) 但无对应 tool 结果" 结尾 (悬挂 tool_calls)。
+//   repairMessages 会清空该 assistant 的 tool_calls 声明; 但清空后,
+//   assistant 之后引用这些 id 的 tool 结果消息成为孤儿 (无对应声明),
+//   会让 LLM API 校验失败 (OpenAI invalid tool_call_id / Anthropic orphan
+//   tool result 400), 也应一并删除, 删除范围直到下一条 agent 消息
+//   (user/system 或 无 tool_calls 的 assistant) 为止。
+// ===========================================================================
+
+/// 构造悬挂上下文, 直接调用 ModelCallWrapNode::repairMessages 验证清理结果
+/// - assistant 声明 [danglingCount] 个 tool_call (id: call_a, call_b, ...),
+///   其中仅 [repliedCount] 个有对应 tool 结果
+/// - [followUpRole] 悬挂结果之后的下一条 agent 消息 role
+///   ("" 表示没有后续消息)
+/// - [expectDanglingCleared] 期望悬挂 tool_calls 被清空
+/// - [expectOrphanRemoved] 期望已回复的 tool 结果被删除
+///   (悬挂清空后它们成为孤儿, 一并清理)
+/// - [expectFollowUpKept] 期望下一条 agent 消息被保留
+static void runRepairDanglingScenario(
+    size_t      danglingCount,
+    size_t      repliedCount,
+    std::string followUpRole,
+    bool        expectDanglingCleared,
+    bool        expectOrphanRemoved,
+    bool        expectFollowUpKept
+) {
+    // ---- 构造 AgentContext ----
+    auto ctx          = std::make_shared<agentxx::agent::AgentContext>();
+    ctx->agentConfig  = std::make_shared<agentxx::agent::AgentConfig>();
+    ctx->agentConfig->repairMessages = true;
+    ctx->middlewareHandleContext = std::make_shared<agentxx::middleware::MiddlewareContext>();
+
+    // ---- 构造 ModelCallWrapNode ----
+    neograph::graph::NodeContext nodeCtx;
+    nodeCtx.model = "test-model";
+    agentxx::nodes::ModelCallWrapNode node("test_llm", nodeCtx, ctx);
+
+    // ---- 构造 state: 悬挂上下文 ----
+    // [system, user, assistant(tool_calls=[call_a..]), tool(已回复)xN, <followUp>]
+    neograph::json msgs = neograph::json::array();
+    msgs.push_back(neograph::json{{"role", "system"}, {"content", "sys"}});
+    msgs.push_back(neograph::json{{"role", "user"}, {"content", "hello"}});
+
+    auto toolCalls = neograph::json::array();
+    for (size_t i = 0; i < danglingCount; ++i) {
+        toolCalls.push_back(neograph::json{
+            {"id", fmt::format("call_{}", char('a' + i))},
+            {"type", "function"},
+            {"function", neograph::json{{"name", "tool_a"}, {"arguments", "{}"}}},
+        });
+    }
+    msgs.push_back(neograph::json{
+        {"role", "assistant"},
+        {"content", "calling tools"},
+        {"tool_calls", std::move(toolCalls)},
+    });
+    for (size_t i = 0; i < repliedCount; ++i) {
+        msgs.push_back(neograph::json{
+            {"role", "tool"},
+            {"content", "result"},
+            {"tool_call_id", fmt::format("call_{}", char('a' + i))},
+            {"tool_name", "tool_a"},
+        });
+    }
+    if (!followUpRole.empty()) {
+        msgs.push_back(neograph::json{{"role", followUpRole}, {"content", "next"}});
+    }
+
+    neograph::graph::GraphState state;
+    state.init_channel(
+        "messages",
+        neograph::graph::ReducerType::APPEND,
+        neograph::graph::ReducerRegistry::instance().get("append"),
+        msgs
+    );
+
+    neograph::graph::RunContext runCtx;
+    runCtx.thread_id = "repair_dangling_test";
+    neograph::graph::NodeInput in{state, runCtx, nullptr};
+
+    // ---- 调用 repairMessages ----
+    node.repairMessages(in);
+
+    // ---- 断言清理结果 ----
+    const auto resultMsgs = in.state.get_messages();
+    size_t     idx        = 0;
+    // system + user 保留
+    XX_TEST_EXPECT_TRUE(resultMsgs.size() >= 2);
+    XX_TEST_EXPECT_EQ(resultMsgs[0].role, std::string{"system"});
+    XX_TEST_EXPECT_EQ(resultMsgs[1].role, std::string{"user"});
+    idx = 2;
+
+    // 悬挂 assistant 消息
+    XX_TEST_EXPECT_TRUE(idx < resultMsgs.size());
+    if (idx < resultMsgs.size()) {
+        XX_TEST_EXPECT_EQ(resultMsgs[idx].role, std::string{"assistant"});
+        if (expectDanglingCleared) {
+            XX_TEST_EXPECT_TRUE(resultMsgs[idx].tool_calls.empty());
+        } else {
+            XX_TEST_EXPECT_TRUE(!resultMsgs[idx].tool_calls.empty());
+        }
+        ++idx;
+    }
+
+    // 孤儿 tool 结果: 应被删除 (除非未清理)
+    if (expectOrphanRemoved) {
+        XX_TEST_EXPECT_TRUE(idx >= resultMsgs.size() || resultMsgs[idx].role != std::string{"tool"});
+    } else {
+        // 未清理时孤儿结果仍在 (正常路径: 全部 tool_call 都有回复, 不悬挂)
+        XX_TEST_EXPECT_TRUE(idx < resultMsgs.size());
+        if (idx < resultMsgs.size()) {
+            XX_TEST_EXPECT_EQ(resultMsgs[idx].role, std::string{"tool"});
+        }
+    }
+
+    // 下一条 agent 消息: 应保留 (如果存在)
+    if (expectFollowUpKept) {
+        bool foundFollowUp = false;
+        for (size_t i = idx; i < resultMsgs.size(); ++i) {
+            if (resultMsgs[i].role == followUpRole) {
+                foundFollowUp = true;
+                break;
+            }
+        }
+        XX_TEST_EXPECT_TRUE(foundFollowUp);
+    }
+}
+
+/// 测试 1: 悬挂 tool_calls (call_b 无结果) + 已回复的 tool(call_a) 成为孤儿
+/// [system, user, assistant(tool_calls=[call_a, call_b]), tool(call_a=result)]
+/// - call_b 无 tool 结果 → 悬挂 → 清空 tool_calls
+/// - tool(call_a=result) 随声明清空成为孤儿 → 删除
+/// - 末尾孤儿删除后末尾为 assistant(无 tool_calls)
+asio::awaitable<void> test_repair_dangling_orphan_tool_result() {
+    runRepairDanglingScenario(2, 1, "", true, true, false);
+    co_return;
+}
+
+/// 测试 2: 悬挂 + 孤儿 tool 结果 + 下一条 agent 消息 (user)
+/// [system, user, assistant(tool_calls=[call_a, call_b]), tool(call_a=result),
+///  user("next")]
+/// - 悬挂 → 清空 tool_calls, 删除孤儿 tool 结果
+/// - 下一条 user 消息保留
+asio::awaitable<void> test_repair_dangling_multiple_orphans_keep_next_agent_msg() {
+    runRepairDanglingScenario(2, 1, "user", true, true, true);
+    co_return;
+}
+
+/// 测试 3: 悬挂 + 孤儿 tool 结果 + 下一条 agent 消息 (assistant 无 tool_calls)
+/// [system, user, assistant(tool_calls=[call_a, call_b]), tool(call_a=result),
+///  assistant("prev answer")]
+/// - 悬挂 → 清空 tool_calls, 删除孤儿 tool 结果
+/// - 下一条 assistant 消息 (无 tool_calls, 是 agent 消息边界) 保留
+asio::awaitable<void> test_repair_dangling_keep_next_assistant_msg() {
+    runRepairDanglingScenario(2, 1, "assistant", true, true, true);
+    co_return;
+}
+
+/// 测试 4 (对照): 全部 tool_call 都有回复 → 不悬挂, 不清理
+/// [system, user, assistant(tool_calls=[call_a, call_b]),
+///  tool(call_a=result), tool(call_b=result), user("next")]
+/// - call_a/call_b 都有 tool 结果 → 不悬挂 → tool_calls 保留, tool 结果保留
+/// - 后续 user 消息保留
+asio::awaitable<void> test_repair_all_replied_no_cleanup() {
+    runRepairDanglingScenario(2, 2, "user", false, false, true);
+    co_return;
+}
+
 asio::awaitable<TestResult> run_message_supplement_tests() {
     g_ms_passed = 0;
     g_ms_failed = 0;
@@ -547,6 +723,10 @@ asio::awaitable<TestResult> run_message_supplement_tests() {
     try {
         co_await test_interrupt_auto_supplement();
         co_await test_cancel_auto_supplement();
+        co_await test_repair_dangling_orphan_tool_result();
+        co_await test_repair_dangling_multiple_orphans_keep_next_agent_msg();
+        co_await test_repair_dangling_keep_next_assistant_msg();
+        co_await test_repair_all_replied_no_cleanup();
     } catch (const std::exception& e) {
         TEST_FAIL << "message_supplement suite exception: " << e.what() << std::endl;
         g_ms_failed++;

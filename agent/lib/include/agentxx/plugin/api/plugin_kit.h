@@ -146,6 +146,22 @@ struct Task;
 
 namespace detail {
 
+/// strdup 的跨平台 C++ 通用替代 (malloc + memcpy, 与宿主 hostMemoryStrdup 同构):
+/// - 规避 MSVC C4996 (POSIX strdup 弃用警告), GCC/Clang 行为不变
+/// - 仅作宿主 vtable 不可用时的兜底分配; malloc 分配与宿主 ::free 释放配对,
+///   正常路径 host->vtable->strdup 分配同样兼容宿主 ::free
+inline char* strdupFallback(const char* s) {
+    if (!s) {
+        return nullptr;
+    }
+    size_t n = std::strlen(s) + 1;
+    char*  p = static_cast<char*>(std::malloc(n));
+    if (p) {
+        std::memcpy(p, s, n);
+    }
+    return p;
+}
+
 template<typename Promise>
 void finishIfDone(std::coroutine_handle<Promise> h) {
     if (!h || !h.done()) {
@@ -166,18 +182,18 @@ void finishIfDone(std::coroutine_handle<Promise> h) {
         } catch (const std::exception& e) {
             payload_out = host && host->vtable && host->vtable->strdup
                               ? host->vtable->strdup(e.what())
-                              : ::strdup(e.what());
+                              : strdupFallback(e.what());
         } catch (...) {
             payload_out = host && host->vtable && host->vtable->strdup
                               ? host->vtable->strdup("unknown task error")
-                              : ::strdup("unknown task error");
+                              : strdupFallback("unknown task error");
         }
     } else {
         if constexpr (!std::is_void_v<typename Promise::value_type>) {
             std::string res = p.result_string();
             payload_out     = host && host->vtable && host->vtable->strdup
                                   ? host->vtable->strdup(res.c_str())
-                                  : ::strdup(res.c_str());
+                                  : strdupFallback(res.c_str());
         }
     }
 
