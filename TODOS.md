@@ -13,7 +13,6 @@
 - 插件 readHostConfig 改为直接传入 变量路径 取值，变量取值交由主程序解析
 
 - 冻结 system prompt
-- AgentxxPluginConfigIface: get_work_dir/get_session_work_dir
 - OpWatchdog debug 时启用、配置启用
 
 ## 提示词优化
