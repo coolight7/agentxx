@@ -58,6 +58,7 @@
 #include "test_config_loader.h"
 #include "test_mermaid_state.h"
 #include "test_thread_id.h"
+#include "test_tui_context_overlay.h"
 #include "test_tui_input.h"
 #include "test_tui_interrupt.h"
 #include "test_tui_scroll.h"
@@ -174,6 +175,7 @@ int main(int argn, char** argv) {
     runSync("tui_interrupt", agentxx::test::testTuiInterrupt);
     runSync("tui_scroll", agentxx::test::testTuiScroll);
     runSync("tui_sidebar", agentxx::test::testTuiSidebar);
+    runSync("tui_context_overlay", agentxx::test::testTuiContextOverlay);
     runSync("tui_stream", agentxx::test::testTuiStream);
     runSync("tui_tool_header", agentxx::test::testTuiToolHeader);
     runSync("sessionId", agentxx::test::testSessionId);

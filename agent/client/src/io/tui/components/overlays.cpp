@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <filesystem>
 #include <markdown/state_diagram.hpp>
+#include <markdown/text_utils.hpp>
 
 #if XX_IS_WIN_D
 #ifndef WIN32_LEAN_AND_MEAN
@@ -19,6 +20,22 @@
 #endif
 
 using namespace ftxui;
+
+// ---------------------------------------------------------------------------
+// 工具函数
+// ---------------------------------------------------------------------------
+
+/// 折叠消息头部单行预览的可用列数预算 (与 message_list.cpp 同款自适应宽度):
+/// 内容区总列数 - 头部前缀显示列数 - 安全余量。
+/// maxWidth 为 scrollable_->contentWidth() (已扣除滚动条 gutter);
+/// 余量 1 列防边界取整溢出 (超宽仍由 xflex_shrink 在右缘兜底裁剪)。
+/// 极窄终端下保底 8 列, 避免预览被完全挤没。
+inline int collapsedPreviewBudget(int maxWidth, int prefixCols) {
+    constexpr int kSlack     = 1;
+    constexpr int kMinBudget = 8;
+    const int     avail      = maxWidth - prefixCols - kSlack;
+    return (avail >= kMinBudget) ? avail : kMinBudget;
+}
 
 // ---------------------------------------------------------------------------
 // ModelSelectorOverlay
@@ -941,71 +958,215 @@ bool PendingInputsOverlay::handleMouse(const Mouse& mouse) {
 // ContextOverlay
 // ---------------------------------------------------------------------------
 
-Element ContextOverlay::OnRender() {
-    const auto& st      = *ctx_.frameState;
+namespace {
+
+/// 从消息 JSON 提取 role 字符串 (缺失时返回空串)
+std::string ctxMsgRole(const neograph::json& m) {
+    return m.value("role", std::string{});
+}
+
+/// 从消息 JSON 提取 tool_calls 名称列表 (缺失/非数组返回空)
+/// 用于折叠头预览与展开体摘要行
+std::vector<std::string> ctxMsgToolNames(const neograph::json& m) {
+    std::vector<std::string> names;
+    if (!m.contains("tool_calls")) {
+        return names;
+    }
+    const auto& tcs = m["tool_calls"];
+    if (!tcs.is_array()) {
+        return names;
+    }
+    names.reserve(tcs.size());
+    for (const auto& tc : tcs) {
+        if (tc.is_object() && tc.contains("name")) {
+            names.push_back(tc.value("name", std::string{}));
+        }
+    }
+    return names;
+}
+
+/// 消息角色 → 主题颜色 (与消息列表一致)
+ftxui::Color ctxRoleColor(const TUITheme& theme, std::string_view role) {
+    if (role == "user") {
+        return theme.userColor;
+    }
+    if (role == "system") {
+        return theme.systemColor;
+    }
+    if (role == "tool") {
+        return theme.toolColor;
+    }
+    return theme.assistantColor;
+}
+
+} // namespace
+
+std::vector<ScrollItem> ContextOverlay::buildItems() {
     const auto& theme   = *ctx_.theme;
-    const auto& msgsPtr = st.contextMessages;
+    const auto& msgsPtr = ctx_.frameState->contextMessages;
 
-    const int maxVisible = std::max(8, Terminal::Size().dimy - 10);
-
-    Elements items;
+    std::vector<ScrollItem> items;
     if (!msgsPtr || !msgsPtr->is_array() || msgsPtr->empty()) {
-        items.push_back(text(" (empty) ") | dim);
+        items.push_back(ScrollItem{text(" (empty) ") | dim, true});
+        return items;
+    }
+
+    const auto& msgs = *msgsPtr;
+    items.reserve(msgs.size() * 2 + 1);
+    headerItemIndex_.assign(msgs.size(), 0);
+    for (size_t i = 0; i < msgs.size(); ++i) {
+        const auto& m         = msgs[i];
+        const auto  role      = ctxMsgRole(m);
+        const Color roleColor = ctxRoleColor(theme, role);
+        const bool  expanded  = expandedSet_.contains(i);
+
+        // 记录折叠头在 items 中的子项索引 (消息可能展开插入 body, 头索引不固定)
+        headerItemIndex_[i] = items.size();
+        items.push_back(ScrollItem{buildMessageHeader(m, expanded, roleColor), false});
+
+        if (expanded) {
+            items.push_back(ScrollItem{buildMessageBody(m), false});
+        }
+    }
+    return items;
+}
+
+std::vector<ftxui::Box> ContextOverlay::headerBoxes() const {
+    // 从 Scrollable 最近一次渲染的可见区域反推各消息折叠头命中区域:
+    // visibleBoxes 与 buildItems 返回的 items 一一对应, 消息 i 的折叠头
+    // 子项索引由 headerItemIndex_ 记录 (展开体插入会使索引不固定)。
+    // 已按视口裁剪 —— 视口外子项为空 Box, 不含测量盒, 点击不会误命中。
+    const auto&             msgsPtr = ctx_.frameState->contextMessages;
+    const size_t            nMsgs   = (msgsPtr && msgsPtr->is_array()) ? msgsPtr->size() : 0;
+    std::vector<ftxui::Box> boxes(nMsgs, ftxui::Box{0, -1, 0, -1});
+    const auto&             vis = scrollable_->visibleBoxes();
+    for (size_t i = 0; i < nMsgs && i < headerItemIndex_.size(); ++i) {
+        const size_t itemIdx = headerItemIndex_[i];
+        if (itemIdx < vis.size()) {
+            boxes[i] = vis[itemIdx];
+        }
+    }
+    return boxes;
+}
+
+ftxui::Element ContextOverlay::buildMessageHeader(
+    const neograph::json& m,
+    bool                  expanded,
+    const ftxui::Color&   roleColor
+) {
+    const auto& theme     = *ctx_.theme;
+    const auto  role      = ctxMsgRole(m);
+    const int   maxW      = std::max(1, scrollable_->contentWidth());
+    const auto  toolNames = ctxMsgToolNames(m);
+
+    // 前缀列数: "+ " + "[role] " + 可选 "tool_calls: N " 标记 (窄屏时
+    // 预览预算保底, 超出部分由 xflex_shrink 右缘裁剪兜底)
+    int prefixCols = 3 + static_cast<int>(markdown::utf8_display_width(role));
+    if (!toolNames.empty()) {
+        prefixCols += 12; // "tool_calls: N " 粗估列数
+    }
+    const int budget = collapsedPreviewBudget(maxW, prefixCols);
+
+    std::string preview;
+    if (!toolNames.empty()) {
+        // tool_calls 消息: 预览工具名列表 (折叠/展开头均显示, 便于快速定位)
+        std::string names;
+        for (size_t k = 0; k < toolNames.size(); ++k) {
+            if (k > 0) {
+                names += ", ";
+            }
+            names += toolNames[k];
+        }
+        preview = fmt::format("tool_calls: {}", names);
     } else {
-        const auto& msgs       = *msgsPtr;
-        const int   totalItems = static_cast<int>(msgs.size());
-        const int   maxScroll  = std::max(0, totalItems - maxVisible);
-        scrollOffset_          = std::clamp(scrollOffset_, 0, maxScroll);
+        preview = oneLinePreview(m.value("content", std::string{}), static_cast<size_t>(budget));
+    }
 
-        const int end = std::min(totalItems, scrollOffset_ + maxVisible);
-        for (int i = scrollOffset_; i < end; ++i) {
-            const auto& m       = msgs[static_cast<size_t>(i)];
-            auto        role    = m.value("role", std::string{});
-            auto        content = m.value("content", std::string{});
+    Element head = hbox({
+        text(expanded ? "- " : "+ ") | color(theme.hintColor),
+        text(fmt::format("[{}] ", role)) | color(roleColor) | bold,
+        text(preview) | color(theme.normalColor) | xflex_shrink,
+    });
+    return head;
+}
 
-            Color roleColor = theme.assistantColor;
-            if (role == "user") {
-                roleColor = theme.userColor;
-            } else if (role == "system") {
-                roleColor = theme.systemColor;
-            } else if (role == "tool") {
-                roleColor = theme.toolColor;
+ftxui::Element ContextOverlay::buildMessageBody(const neograph::json& m) {
+    const auto& theme = *ctx_.theme;
+
+    // 摘要行: 完整字段清单 (role + content 长度 + tool_calls 数 + 其余字段),
+    // 便于不展开也能了解该消息的结构
+    std::string summary = " ";
+    {
+        const auto toolNames = ctxMsgToolNames(m);
+        const auto content   = m.value("content", std::string{});
+        summary += fmt::format("content[{}] tool_calls[{}]", content.size(), toolNames.size());
+        std::vector<std::string> extra;
+        for (const auto& kv : m.items()) {
+            const auto& k = kv.first;
+            if (k == "role" || k == "content" || k == "tool_calls") {
+                continue;
             }
-
-            std::string preview = oneLinePreview(content, 60);
-            if (m.contains("tool_calls")) {
-                auto toolCalls = m["tool_calls"];
-                if (toolCalls.is_array() && !toolCalls.empty()) {
-                    std::string names;
-                    for (const auto& tc : toolCalls) {
-                        if (!names.empty()) {
-                            names += ", ";
-                        }
-                        names += tc.value("name", std::string{});
-                    }
-                    preview = fmt::format("[tool_calls: {}]", names);
+            extra.push_back(k);
+        }
+        if (!extra.empty()) {
+            std::string joined;
+            for (size_t k = 0; k < extra.size(); ++k) {
+                if (k > 0) {
+                    joined += ',';
                 }
+                joined += extra[k];
             }
-
-            items.push_back(hbox({
-                text(fmt::format("{:>3} ", i)) | color(theme.hintColor),
-                text(fmt::format("[{}] ", role)) | color(roleColor) | bold,
-                text(preview) | color(theme.normalColor) | flex,
-            }));
+            summary += " +" + joined;
         }
     }
 
+    // 完整、原始的 JSON 展示 (美化 2 空格缩进; dump 失败时降级为原始文本)
+    std::string jsonText;
+    try {
+        jsonText = m.dump(2);
+    } catch (...) {
+        jsonText = m.value("content", std::string{});
+    }
+
+    return vbox({
+        text(summary) | color(theme.hintColor),
+        paragraph(jsonText) | color(theme.normalColor),
+    });
+}
+
+Element ContextOverlay::OnRender() {
+    const auto& theme   = *ctx_.theme;
+    const auto& msgsPtr = ctx_.frameState->contextMessages;
+
+    const int margin = 2;
+    const int termW  = Terminal::Size().dimx;
+    const int termH  = Terminal::Size().dimy;
+    const int wantW  = std::max(60, termW * 4 / 5);
+    const int wantH  = std::max(14, termH * 4 / 5);
+    const int availW = std::max(1, termW - margin * 2);
+    const int availH = std::max(1, termH - margin * 2);
+    const int popupW = std::min(wantW, availW);
+    const int popupH = std::min(wantH, availH);
+
     auto title
-        = fmt::format(" LLM Context ({}) ", (msgsPtr && msgsPtr->is_array()) ? msgsPtr->size() : 0);
+        = fmt::format(" LLM Context · {}", (msgsPtr && msgsPtr->is_array()) ? msgsPtr->size() : 0);
+
+    // 先渲染滚动区, 再返回整体布局; 折叠头命中区域由事件处理时
+    // 从 scrollable_->visibleBoxes() 实时反推 (见 headerBoxes/handleHeaderClick)
+    Element body = scrollable_->Render() | flex;
 
     return vbox({
                text(title) | bold | inverted,
                separator(),
-               vbox(std::move(items)) | size(HEIGHT, LESS_THAN, maxVisible),
+               hbox({text(" "), body, text(" ")}) | flex,
                separator(),
-               text(" [Up/Down] Scroll  [PgUp/PgDn] Page  [Esc] Close ") | center | dim,
+               text(
+                   " [Click/Enter/Space] Toggle  [Wheel/Up/Down] Scroll  [PgUp/PgDn] Page  [Esc] Close "
+               ) | center
+                   | dim,
            })
-           | border | size(WIDTH, LESS_THAN, 100) | size(WIDTH, GREATER_THAN, 50)
+           | border | size(WIDTH, GREATER_THAN, popupW) | size(WIDTH, LESS_THAN, popupW)
+           | size(HEIGHT, GREATER_THAN, popupH) | size(HEIGHT, LESS_THAN, popupH)
            | color(theme.accentColor);
 }
 
@@ -1020,47 +1181,103 @@ bool ContextOverlay::OnEvent(Event event) {
         }
         return true;
     }
-    auto      snap       = ctx_.state->readSnapshot();
-    const int total      = (snap->contextMessages && snap->contextMessages->is_array())
-                               ? static_cast<int>(snap->contextMessages->size())
-                               : 0;
-    const int maxVisible = std::max(8, Terminal::Size().dimy - 10);
-    const int maxScroll  = std::max(0, total - maxVisible);
-
+    if (event.is_mouse()) {
+        if (handleHeaderClick(event.mouse())) {
+            ctx_.postRedraw();
+            return true;
+        }
+        // 滚轮滚动 (Scrollable 内部处理)
+        if (scrollable_->OnEvent(event)) {
+            ctx_.postRedraw();
+            return true;
+        }
+        return true;
+    }
+    // 键盘滚动 / 折叠切换 (与 MermaidDiagramOverlay 等弹窗交互一致)
     if (event == Event::ArrowUp) {
-        scrollOffset_ = std::max(0, scrollOffset_ - 1);
+        scrollable_->setScrollOffset(scrollable_->scrollOffset() - 1);
+        scrollable_->setStickToBottom(false);
         ctx_.postRedraw();
         return true;
     }
     if (event == Event::ArrowDown) {
-        scrollOffset_ = std::min(maxScroll, scrollOffset_ + 1);
+        scrollable_->setScrollOffset(scrollable_->scrollOffset() + 1);
+        if (scrollable_->totalHeight() - scrollable_->viewportHeight()
+            <= scrollable_->scrollOffset()) {
+            scrollable_->setStickToBottom(true);
+        }
         ctx_.postRedraw();
         return true;
     }
     if (event == Event::PageUp) {
-        scrollOffset_ = std::max(0, scrollOffset_ - maxVisible);
+        scrollable_->setScrollOffset(scrollable_->scrollOffset() - scrollable_->viewportHeight());
+        scrollable_->setStickToBottom(false);
         ctx_.postRedraw();
         return true;
     }
     if (event == Event::PageDown) {
-        scrollOffset_ = std::min(maxScroll, scrollOffset_ + maxVisible);
+        scrollable_->setScrollOffset(scrollable_->scrollOffset() + scrollable_->viewportHeight());
+        if (scrollable_->totalHeight() - scrollable_->viewportHeight()
+            <= scrollable_->scrollOffset()) {
+            scrollable_->setStickToBottom(true);
+        }
         ctx_.postRedraw();
         return true;
     }
-    if (event.is_mouse()) {
-        const auto& mouse = event.mouse();
-        if (mouse.button == Mouse::WheelUp) {
-            scrollOffset_ = std::max(0, scrollOffset_ - 3);
-            ctx_.postRedraw();
-            return true;
-        }
-        if (mouse.button == Mouse::WheelDown) {
-            scrollOffset_ = std::min(maxScroll, scrollOffset_ + 3);
+    // Enter / Space: 切换最近可见 (首个可见) 消息的折叠状态
+    if (event == Event::Return || event == Event::Character(" ")) {
+        const auto&  msgsPtr = ctx_.frameState->contextMessages;
+        const size_t nMsgs   = (msgsPtr && msgsPtr->is_array()) ? msgsPtr->size() : 0;
+        const auto&  vis     = scrollable_->visibleBoxes();
+        for (size_t i = 0; i < nMsgs && i < headerItemIndex_.size(); ++i) {
+            const size_t itemIdx = headerItemIndex_[i];
+            if (itemIdx >= vis.size() || vis[itemIdx].IsEmpty()) {
+                continue;
+            }
+            toggleExpanded(i);
             ctx_.postRedraw();
             return true;
         }
     }
     return true;
+}
+
+bool ContextOverlay::handleHeaderClick(const Mouse& mouse) {
+    if (mouse.button != Mouse::Left || mouse.motion != Mouse::Released) {
+        return false;
+    }
+    // 命中区域基于最近一次渲染的可见子项 (与 msgs 索引对应: 消息 i 的
+    // 折叠头子项索引由 headerItemIndex_ 记录); 视口外子项为空 Box, 自然跳过
+    const auto&  msgsPtr = ctx_.frameState->contextMessages;
+    const size_t nMsgs   = (msgsPtr && msgsPtr->is_array()) ? msgsPtr->size() : 0;
+    const auto&  vis     = scrollable_->visibleBoxes();
+    for (size_t i = 0; i < nMsgs && i < headerItemIndex_.size(); ++i) {
+        const size_t itemIdx = headerItemIndex_[i];
+        if (itemIdx >= vis.size()) {
+            continue;
+        }
+        const auto& box = vis[itemIdx];
+        if (box.IsEmpty()) {
+            continue;
+        }
+        if (mouse.y < box.y_min || mouse.y > box.y_max) {
+            continue;
+        }
+        if (mouse.x < box.x_min || mouse.x > box.x_max) {
+            continue;
+        }
+        toggleExpanded(i);
+        return true;
+    }
+    return false;
+}
+
+void ContextOverlay::toggleExpanded(size_t index) {
+    if (expandedSet_.contains(index)) {
+        expandedSet_.erase(index);
+    } else {
+        expandedSet_.insert(index);
+    }
 }
 
 // ---------------------------------------------------------------------------

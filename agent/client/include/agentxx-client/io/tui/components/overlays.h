@@ -8,6 +8,7 @@
 #include "ftxui/screen/box.hpp"
 #include <functional>
 #include <markdown/state_diagram.hpp>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -221,11 +222,24 @@ private:
 };
 
 /// 上下文弹窗组件 (显示 llm messages)
+///
+/// 仿消息列表的可折叠展示 (默认折叠, 点击/Enter/Space 展开):
+/// - 每条消息一个折叠单元: 折叠头 "+ [role] 预览", 展开后显示完整原始 JSON
+///   (dump(2) 美化多行, 含 tool_calls/工具结果等全部字段, 便于调试查看)
+/// - 展开内容可变高度, 经 Scrollable 惰性布局/绘制, 不裁剪截断
+/// - 交互: 点击消息头行 / Enter / Space 切换折叠; 滚轮 / Up/Down / PgUp/PgDn 滚动
 class ContextOverlay : public ftxui::ComponentBase {
 public:
 
     explicit ContextOverlay(TUICtx& ctx) :
-        ctx_(ctx) {}
+        ctx_(ctx) {
+        scrollable_ = std::make_shared<Scrollable>([this]() -> std::vector<ScrollItem> {
+            return buildItems();
+        });
+        // 上下文为静态快照: 打开时从顶部开始显示, 而非吸附到底部
+        scrollable_->setStickToBottom(false);
+        Add(scrollable_);
+    }
 
     void onClose(std::function<void()> fn) {
         onClose_ = std::move(fn);
@@ -234,11 +248,38 @@ public:
     bool           OnEvent(ftxui::Event event) override;
     ftxui::Element OnRender() override;
 
+    /// 测试辅助: 最近一次渲染各消息折叠头的可见命中区域
+    /// (与 msgs 索引对应; 视口外为空 Box; 供测试模拟点击折叠/展开)
+    std::vector<ftxui::Box> headerBoxes() const;
+
 private:
 
-    TUICtx&               ctx_;
-    int                   scrollOffset_ = 0;
-    std::function<void()> onClose_;
+    /// 弹窗内容项构建 (Scrollable 渲染回调; 每帧从本帧快照构建)
+    std::vector<ScrollItem> buildItems();
+
+    /// 构建单条消息的折叠头 (含 +/- 标记与单行预览)
+    ftxui::Element
+        buildMessageHeader(const neograph::json& m, bool expanded, const ftxui::Color& roleColor);
+
+    /// 构建单条消息的展开体: 完整原始 JSON (dump(2) 美化多行)
+    ftxui::Element buildMessageBody(const neograph::json& m);
+
+    /// 鼠标左键释放时切换命中的消息行折叠状态
+    bool handleHeaderClick(const ftxui::Mouse& mouse);
+
+    /// 切换指定消息的折叠状态 (UI 线程独占; 索引按当前快照消息数组)
+    void toggleExpanded(size_t index);
+
+    TUICtx&                     ctx_;
+    std::shared_ptr<Scrollable> scrollable_;
+    std::function<void()>       onClose_;
+
+    /// 已展开的消息索引集合 (UI 线程独占; 默认全部折叠)
+    std::set<size_t> expandedSet_;
+
+    /// 消息 i 的折叠头在 items 中的子项索引 (由 buildItems 每帧重建;
+    /// 与 visibleBoxes 对应, 供鼠标命中检测)
+    std::vector<size_t> headerItemIndex_;
 };
 
 /// Mermaid 状态图弹窗 (Plan Graph 按钮触发)
