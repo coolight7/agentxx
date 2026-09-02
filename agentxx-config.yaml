@@ -149,11 +149,11 @@ models:
     extra_api_config:
       reasoning:
         effort: max
-  - name: gemini-3.7-flash-high-responses
+  - name: gemini-3.8-flash-high-responses
     type: "openai-responses"
     base_url: "http://172.29.48.1:8317/v1"
     api_key: "${GEMINI_API_KEY}"
-    model_name: "gemini-3.7-flash-high"
+    model_name: "gemini-3.8-flash-high"
     model_context_max_token: 1000000
     send_thinking: true
     extra_api_config:

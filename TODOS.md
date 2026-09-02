@@ -6,8 +6,6 @@
 - CI/CD
 - 文档翻译
 - release 编译发布时携带 标准库
-- 增加一个用 eventbus 事件驱动 agent 回复的插件
-- 优化tui llm context 展示
 
 - 插件 readHostConfig 改为直接传入 变量路径 取值，变量取值交由主程序解析
 
