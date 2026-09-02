@@ -507,26 +507,36 @@ struct PluginBase {
         return raw;
     }
 
-    // 后台任务记录
-    // 堆稳定地址：spawn 时以 shared_ptr 存于 vector，post_to_io 传递堆地址
-    // 避免 vector 扩容导致 &spawns_.back() 悬垂（A）
+    // 后台任务记录 (spawn 宿主托管: 见 agentxx.agent.tasks 接口表)
+    // 堆稳定地址: spawn 时以 shared_ptr 存于 vector, post_to_io 传递堆地址
+    // 避免 vector 扩容导致 &spawns_.back() 悬垂
+    //
+    // 生命周期与并发 (对应 docs/agent/plugins.md spawn 节; 实现约束见
+    // 自由函数 spawnTaskImpl):
+    // - spawns_ 持 rec: 保证 starter post 任务期间 (注册 → 首挂起) rec 存活;
+    //   宿主 register_task 后协程由宿主清理协程托底 (句柄 shared_ptr),
+    //   spawns_ 里的 rec 在协程完成/实例析构时被清除 (rec->starter 置空)
+    // - rec->coroAddr: 仅在 io 线程读写 (cancel_fn 与 finishIfDone 完成路径
+    //   都在 io 线程访问它; 见 opCleanup_ 清空注释)
+    // - cancel_fn (宿主卸载取消时回调, io 线程): 置 cancelFlag + 经 coroAddr
+    //   访问 promise 的 outstandingCancel_ 唤醒挂起的 sleep/offload; 若
+    //   coroAddr 已清空 (协程已完成/帧已销毁) 则只置 flag 不碰帧 —— 无 UAF
     struct SpawnRecord {
         std::function<void()>              starter;
         std::shared_ptr<std::atomic<bool>> cancelFlag;
-        /// 协程挂起后的句柄地址 (由 starter 在协程首次挂起时记录; 协程完成后
-        /// 置空)。stopSpawns 经它访问 promise 的 outstandingCancel_ 唤醒挂起
-        /// 的 sleep/offload, 让协程在下次恢复时感知 cancelFlag 退出
+        /// 协程挂起后的句柄地址 (由 starter 在协程首次挂起时记录; 协程完成
+        /// 路径 (finishIfDone 的 opCleanup_) 清空)。宿主 cancel_fn 经它访问
+        /// promise 的 outstandingCancel_ 唤醒挂起操作
         void* coroAddr = nullptr;
     };
 
     std::vector<std::shared_ptr<SpawnRecord>> spawns_;
 
-    /// 停止全部后台 spawn 协程 (实例卸载准备):
-    /// - 置位每个 spawn 的 cancelFlag → 协程恢复后 while (!cancelled()) 退出
-    /// - 触发挂起操作 (sleep/offload) 的取消 (cancel_outstanding) → 宿主 io
-    ///   唤醒协程, 无需等待自然周期 (如 5s 采集间隔) 结束
-    /// - 宿主在调用 destroy 前调用 (可选符号 agentxx_plugin_agent_prepare_unload),
-    ///   随后泵一轮 io 让协程完成退出, 避免协程帧悬挂泄漏
+    /// 【已废弃】停止全部后台 spawn 协程 —— 不再需要: spawn 自 API v1 起注册
+    /// 到宿主 agentxx.agent.tasks 接口表 (outstandingOps), 插件卸载时宿主
+    /// detachAll 统一 cancel (置 cancelFlag + 唤醒挂起操作) + waitInflightZero
+    /// 精确等待协程退出, 无协程帧悬挂。保留方法仅为旧第三方插件手写后台任务
+    /// 的兼容参考 (宿主无 tasks 表时 spawn 不注册, 见 spawnTaskImpl)。
     void stopSpawns() {
         for (auto& rec : spawns_) {
             if (!rec || !rec->cancelFlag) {
@@ -1128,69 +1138,91 @@ inline detail::InvokeCapAwaiter invoke_cap(
 }
 
 /* ==================== 后台协作任务 spawn 实现 ==================== */
+/* spawn 自 API v1 起注册到宿主 agentxx.agent.tasks 接口表 (宿主托管):
+ * - 注册: register_task (io 线程) → 宿主句柄入实例 outstandingOps + inflight+1
+ * - 运行: 协程照常 (sleep/offload 挂起于宿主); 宿主无感, 句柄静默
+ * - 取消/回收: 插件卸载时宿主 detachAll 统一 cancel (→ 本表 cancel_fn:
+ *   置 cancelFlag + 唤醒挂起协程) → 协程 while(!cancelled()) 退出 →
+ *   finishIfDone (帧销毁后经 notify.done 上报) → 宿主 guard.reset
+ *   (inflight-1) + 回收句柄 → waitInflightZero 精确等待归零 → dlclose 安全
+ * - 与工具 op 完全同构的完成协议: 复用 PromiseBase::notify_ (finishIfDone
+ *   内置上报逻辑) + opCleanup_ (清 coroAddr, 防 cancel_fn 悬空)
+ *
+ * 线程约束 (实现时须遵守, 对应 docs/agent/plugins.md spawn 节):
+ * ① kit 协程完成路径 (finishIfDone 调用点: 各 awaiter 完成闭包/start 尾部)
+ *    恒在 io 线程; ② notify.done 宿主侧按任意线程实现 (OpCore::onDone 原子
+ *    CAS); ③ rec->coroAddr 仅在 io 线程读写 (cancel_fn 与完成路径都在 io 线程)
+ */
 
-template<typename Fn>
-void PluginBase::spawn(Fn&& fn) {
+namespace detail {
+
+/// spawn 公共实现 (PluginBase::spawn 成员模板与自由函数 spawn 共用, 避免
+/// 双份实现漂移)。模板参数:
+/// - Ctx: 插件实例上下文 (须含 host/iface/spawns_ 成员)
+/// - Fn:  任务协程函数, 签名 (Ctx&, OpCtl) -> Task<void>
+template<typename Ctx, typename Fn>
+inline void spawnTaskImpl(Ctx& ctx, Fn&& fn) {
     auto cancelFlag = std::make_shared<std::atomic<bool>>(false);
-    // rec 先于 starter 创建: starter 在协程挂起后向 rec 记录句柄 (卸载时
-    // stopSpawns 经它唤醒协程); spawns_ 持 rec 保证 starter post 任务期间存活。
+    // rec 先于 starter 创建: starter 在协程挂起后向 rec 记录句柄 (宿主
+    // cancel_fn 经它唤醒协程); spawns_ 持 rec 保证 starter post 任务期间存活。
     // 注意: starter 捕获 rec 的 weak_ptr (rec->starter 持有 starter, 若捕获
     // shared_ptr 构成 rec → starter → rec 循环引用, rec 永不释放)
-    auto rec = std::make_shared<SpawnRecord>();
-    rec->cancelFlag = cancelFlag;
-    std::weak_ptr<SpawnRecord> recWeak = rec;
-    auto starter    = [this, fn, cancelFlag, recWeak]() {
-        OpCtl ctl{cancelFlag, this->host, this->iface.cancel, ""};
-        auto  task = fn(*this, ctl);
-        if (task.handle_) {
-            auto h        = task.handle_;
-            task.handle_  = nullptr;
-            auto& p       = h.promise();
-            p.host_       = this->host;
-            p.cancelFlag_ = cancelFlag;
-            try {
-                h.resume();
-            } catch (...) {
-                p.set_exception(std::current_exception());
-            }
-            if (!h.done()) {
-                // 协程挂起 (等待 sleep/offload 等): 记录句柄供 stopSpawns 唤醒;
-                // 此后协程生命周期由各 awaiter 完成闭包接管 (resume + finishIfDone),
-                // 实例卸载时协程必处于挂起, coroAddr 有效
-                if (auto recSp = recWeak.lock()) {
-                    recSp->coroAddr = h.address();
-                }
-            }
-            detail::finishIfDone(h);
-        }
-    };
-    rec->starter = starter;
-    spawns_.push_back(rec);
-    if (iface.scheduler && iface.scheduler->post_to_io) {
-        SpawnRecord* raw = rec.get();
-        iface.scheduler->post_to_io(
-            host,
-            [](void* ud) {
-                auto* rec = static_cast<SpawnRecord*>(ud);
-                if (rec && rec->starter) {
-                    rec->starter();
-                }
-            },
-            raw
-        );
-    }
-}
-
-template<typename Ctx, typename Fn>
-inline void spawn(Ctx& ctx, Fn&& fn) {
-    auto cancelFlag = std::make_shared<std::atomic<bool>>(false);
-    // rec 先于 starter 创建 (与 PluginBase::spawn 同理): starter 在协程挂起后
-    // 向 rec 记录句柄供 stopSpawns 唤醒; starter 捕获 rec 的 weak_ptr 避免
-    // rec → starter → rec 循环引用
     auto rec = std::make_shared<PluginBase::SpawnRecord>();
     rec->cancelFlag = cancelFlag;
     std::weak_ptr<PluginBase::SpawnRecord> recWeak = rec;
-    auto starter    = [&ctx, fn, cancelFlag, recWeak]() {
+
+    // 宿主侧任务注册 (io 线程; tasks 接口表缺失/注册失败 → 降级):
+    // - 表存在且注册成功: hostNotify 非空, 协程完成 (finishIfDone) 时上报 →
+    //   宿主回收句柄 + inflight-1 (卸载闭环)
+    // - 表缺失/注册失败: spawn 退化为纯自管协程 (宿主无句柄, 无法被回收)
+    //   —— 跨版本固有限制: 插件只能靠自身在 destroy 前停协程 (或进程收尾
+    //   OS 回收)。记录 WARN 提示 (不阻塞任务运行)
+    AgentxxPluginOperatorNotify hostNotify{nullptr, nullptr};
+    if (ctx.iface.tasks && ctx.iface.tasks->register_task) {
+        AgentxxPluginOperatorNotify notify;
+        char*                       err = nullptr;
+        AgentxxPluginOperatorHandle* h   = ctx.iface.tasks->register_task(
+            ctx.host,
+            [](void* ud, void*) { // cancel_fn: 置 cancelFlag + 唤醒挂起协程
+                auto* r = static_cast<PluginBase::SpawnRecord*>(ud);
+                if (!r || !r->cancelFlag) {
+                    return;
+                }
+                r->cancelFlag->store(true, std::memory_order_release);
+                // coroAddr 仅在 io 线程读写: 完成路径 (opCleanup_) 先 destroy
+                // 帧后清空它; 若非空则协程帧必存活 (完成路径尚未 destroy),
+                // 唤醒安全 —— 见竞态注 (原子双保险)
+                if (r->coroAddr) {
+                    auto handle = std::coroutine_handle<detail::PromiseBase<void>>::from_address(
+                        r->coroAddr
+                    );
+                    handle.promise().cancel_outstanding();
+                }
+            },
+            rec.get(),
+            &notify,
+            &err
+        );
+        if (h) {
+            hostNotify = notify;
+        } else {
+            if (err) {
+                ctx.log.warn(fmt::format(
+                    "spawn: register_task failed (task runs unmanaged): {}",
+                    err ? err : "?"
+                ));
+                if (ctx.host && ctx.host->vtable && ctx.host->vtable->free) {
+                    ctx.host->vtable->free(err);
+                }
+            } else {
+                ctx.log.warn("spawn: register_task failed (task runs unmanaged)");
+            }
+        }
+    } else {
+        ctx.log.warn("spawn: host has no agentxx.agent.tasks iface (task runs unmanaged)");
+    }
+
+    auto starter = [&ctx, fn, cancelFlag, recWeak, hostNotify]() {
         OpCtl ctl{cancelFlag, ctx.host, ctx.iface.cancel, ""};
         auto  task = fn(ctx, ctl);
         if (task.handle_) {
@@ -1199,25 +1231,35 @@ inline void spawn(Ctx& ctx, Fn&& fn) {
             auto& p       = h.promise();
             p.host_       = ctx.host;
             p.cancelFlag_ = cancelFlag;
+            p.notify_     = hostNotify; // 完成上报 (仅宿主托管时非空)
             try {
                 h.resume();
             } catch (...) {
                 p.set_exception(std::current_exception());
             }
             if (!h.done()) {
-                // 协程挂起 (等待 sleep/offload 等): 记录句柄供 stopSpawns 唤醒;
-                // 实例卸载时协程必处于挂起, coroAddr 有效
+                // 协程挂起 (等待 sleep/offload 等): 记录句柄供宿主 cancel_fn
+                // 唤醒; 此后协程生命周期由各 awaiter 完成闭包接管 (resume +
+                // finishIfDone), 实例卸载 (detachAll cancel) 后协程被唤醒 →
+                // 感知 cancelFlag 退出, coroAddr 在完成路径清空
                 if (auto recSp = recWeak.lock()) {
                     recSp->coroAddr = h.address();
                 }
             }
-            detail::finishIfDone(h);
+            // 协程完成 (帧将销毁) 时清 coroAddr, 防宿主 cancel_fn 访问已销毁
+            // 帧 (cancel_fn 与完成路径同在 io 线程, 无并发; 双保险见竞态注)
+            p.opCleanup_ = [recWeak]() {
+                if (auto recSp = recWeak.lock()) {
+                    recSp->coroAddr = nullptr;
+                }
+            };
+            detail::finishIfDone(h); // 结束时: 帧销毁 → notify.done → 宿主回收
         }
     };
     rec->starter = starter;
     ctx.spawns_.push_back(rec);
     if (ctx.iface.scheduler && ctx.iface.scheduler->post_to_io) {
-        PluginBase::SpawnRecord* raw = rec.get();
+        auto* raw = rec.get();
         ctx.iface.scheduler->post_to_io(
             ctx.host,
             [](void* ud) {
@@ -1229,6 +1271,18 @@ inline void spawn(Ctx& ctx, Fn&& fn) {
             raw
         );
     }
+}
+
+} // namespace detail
+
+template<typename Fn>
+void PluginBase::spawn(Fn&& fn) {
+    detail::spawnTaskImpl(*this, std::forward<Fn>(fn));
+}
+
+template<typename Ctx, typename Fn>
+inline void spawn(Ctx& ctx, Fn&& fn) {
+    detail::spawnTaskImpl(ctx, std::forward<Fn>(fn));
 }
 
 /// ==================== (kit::tool / fast_tool / blocking_tool / hook / capability)

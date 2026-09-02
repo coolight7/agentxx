@@ -397,44 +397,13 @@ AgentxxPluginOperatorHandle* PluginManager::callToolAsync(
         );
     }
     // 自动回收 outstandingOps：操作终态后从调用方列表移除，避免悬垂 handle 在后续 unload 时触发 UAF
-    // 零轮询：等待 doneSignal 事件（避免与上方的 sentinel 协程竞争同一 chan 消消息）
-    {
-        std::weak_ptr<PluginInstance> weakCaller
-            = caller ? caller->self : std::weak_ptr<PluginInstance>{};
-        std::weak_ptr<AgentxxPluginOperatorHandle> weakHandle = handle;
-        auto                                       ex         = ioExecutor_;
-        asio::co_spawn(
-            ex,
-            [core, weakCaller, weakHandle]() -> asio::awaitable<void> {
-                if (!core->notified.load(std::memory_order_acquire)) {
-                    asio::steady_timer t(co_await asio::this_coro::executor);
-                    t.expires_at(std::chrono::steady_clock::time_point::max());
-                    co_await t.async_wait(asio::bind_cancellation_slot(
-                        core->doneSignal.slot(),
-                        asio::as_tuple(asio::use_awaitable)
-                    ));
-                }
-                // 确保在 io 线程执行移除（caller 的 vector 非线程安全）
-                auto callerSp = weakCaller.lock();
-                auto handleSp = weakHandle.lock();
-                if (!callerSp || !handleSp) {
-                    co_return;
-                }
-                auto& vec = callerSp->outstandingOps;
-                vec.erase(
-                    std::remove_if(
-                        vec.begin(),
-                        vec.end(),
-                        [&handleSp](const std::shared_ptr<AgentxxPluginOperatorHandle>& h) {
-                            return h == handleSp;
-                        }
-                    ),
-                    vec.end()
-                );
-            },
-            asio::detached
-        );
-    }
+    // 零轮询：等待 doneSignal 事件（避免与上方的 sentinel 协程竞争同一 chan 消息）
+    detail::spawnHandleReaper(
+        ioExecutor_,
+        core,
+        caller ? caller->self : std::weak_ptr<PluginInstance>{},
+        handle
+    );
 
     return handle.get();
 }
@@ -523,42 +492,14 @@ AgentxxPluginOperatorHandle* PluginManager::invokeCapabilityAsync(
             asio::detached
         );
     }
-    {
-        std::weak_ptr<PluginInstance> weakCaller
-            = caller ? caller->self : std::weak_ptr<PluginInstance>{};
-        std::weak_ptr<AgentxxPluginOperatorHandle> weakHandle = handle;
-        auto                                       ex         = ioExecutor_;
-        asio::co_spawn(
-            ex,
-            [core, weakCaller, weakHandle]() -> asio::awaitable<void> {
-                if (!core->notified.load(std::memory_order_acquire)) {
-                    asio::steady_timer t(co_await asio::this_coro::executor);
-                    t.expires_at(std::chrono::steady_clock::time_point::max());
-                    co_await t.async_wait(asio::bind_cancellation_slot(
-                        core->doneSignal.slot(),
-                        asio::as_tuple(asio::use_awaitable)
-                    ));
-                }
-                auto callerSp = weakCaller.lock();
-                auto handleSp = weakHandle.lock();
-                if (!callerSp || !handleSp) {
-                    co_return;
-                }
-                auto& vec = callerSp->outstandingOps;
-                vec.erase(
-                    std::remove_if(
-                        vec.begin(),
-                        vec.end(),
-                        [&handleSp](const std::shared_ptr<AgentxxPluginOperatorHandle>& h) {
-                            return h == handleSp;
-                        }
-                    ),
-                    vec.end()
-                );
-            },
-            asio::detached
-        );
-    }
+    // 自动回收 outstandingOps：操作终态后从调用方列表移除，避免悬垂 handle 在后续 unload 时触发 UAF
+    // 零轮询：等待 doneSignal 事件（避免与上方的 sentinel 协程竞争同一 chan 消息）
+    detail::spawnHandleReaper(
+        ioExecutor_,
+        core,
+        caller ? caller->self : std::weak_ptr<PluginInstance>{},
+        handle
+    );
 
     return handle.get();
 }

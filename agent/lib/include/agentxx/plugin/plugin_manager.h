@@ -36,6 +36,7 @@ class CapabilityRegistry;
 class PluginMiddlewareHandle;
 class PluginTool;
 class PluginInstance;
+struct OpCore;
 
 struct PluginSleepTimer {
     std::weak_ptr<PluginInstance>       inst;
@@ -373,6 +374,20 @@ public:
         AgentxxPluginOperatorCallback cb,
         void*                         ud,
         char**                        error_out
+    );
+
+    /// 注册后台任务 (spawn 宿主托管; agentxx.agent.tasks 接口表)
+    /// - cancel_fn/cancel_ud: 卸载取消时宿主回调 (io 线程, 协作式)
+    /// - notify: 【出参】插件协程结束 (帧销毁后) 经 notify.done 恰好一次上报
+    /// - 返回宿主托管句柄 (失败 NULL + error_out); 句柄仅用于 cancel_task,
+    ///   宿主在任务 done 后自动回收 (与 callToolAsync/invokeCapabilityAsync
+    ///   的同款清理协程模式一致)
+    AgentxxPluginOperatorHandle* registerTask(
+        PluginInstance*                     inst,
+        AgentxxPluginOperatorCancelFunction cancel_fn,
+        void*                               cancel_ud,
+        AgentxxPluginOperatorNotify*        notify,
+        char**                              error_out
     );
 
     std::shared_ptr<ToolRegistry> registry() const {

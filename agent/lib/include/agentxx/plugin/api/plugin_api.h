@@ -618,6 +618,50 @@ typedef struct AgentxxPluginGraphIface {
     int (*set_graph_json)(const AgentxxPluginHost* host, AgentxxPluginStringView graph_json);
 } AgentxxPluginGraphIface;
 
+/* ==================== 接口表: 后台任务 (agentxx.agent.tasks) ==================== */
+/* 背景: kit (plugin_kit.h) 的 spawn 让插件启动后台协作任务 (如周期采集:
+ * while(!cancelled()) { offload; sleep; })。本表把 spawn 纳入宿主统一任务
+ * 管理 —— 与工具/能力 op 同构: 宿主登记句柄 (outstandingOps, detachAll 统一
+ * 取消) + 持 inflight (waitInflightZero 精确等待) + notify.done 完成通知
+ * (宿主回收句柄)。插件卸载时 detachAll cancel → 协程退出 → notify → inflight
+ * 归零 → dlclose 安全, 无协程帧悬挂/UAF。
+ */
+
+#define AGENTXX_PLUGIN_IFACE_AGENT_TASKS         "agentxx.agent.tasks"
+#define AGENTXX_PLUGIN_IFACE_AGENT_TASKS_VERSION 1
+
+typedef struct AgentxxPluginTasksIface {
+    int version; ///< 必须 == AGENTXX_PLUGIN_IFACE_AGENT_TASKS_VERSION
+
+    /// 注册后台任务 (io 线程约束, 非 io 线程由宿主投递同步等待)。宿主记录
+    /// 句柄 (可取消/跟踪完成/持 inflight), 插件协程最终结束时经 *notify
+    /// 上报 (恰好一次) → 宿主回收句柄。
+    /// - cancel_fn/cancel_ud: 宿主卸载取消时回调 (宿主 io 线程, 协作式):
+    ///   置 cancelFlag + 唤醒挂起的 sleep/offload; 不可取消可传 NULL
+    /// - notify: 【出参】宿主填写的完成通知器 (AgentxxPluginOperatorNotify 值
+    ///   拷贝); 插件协程结束 (帧销毁后) 经 notify.done 恰好一次上报 → 宿主
+    ///   guard.reset + 回收句柄。以 const 指针形式入参无法回填 —— 宿主只能
+    ///   自建一个无法告知插件的 notify, 与本表"插件上报完成"语义矛盾, 必须
+    ///   为出参
+    /// - notify.done 线程属性与既有 ABI 契约一致: 可从【任意线程】回调
+    ///   (宿主 OpCore::onDone 内部原子 CAS + 投递回 io, 线程安全) —— spawn
+    ///   协程内若直接调用宿主回调形接口 (invoke_capability_async 等) 或经
+    ///   自管线程收尾, 上报可能非 io 线程, 宿主必须按任意线程实现
+    /// - 返回宿主托管句柄 (失败返回 NULL 并 *error_out 输出错误, host->alloc)
+    AgentxxPluginOperatorHandle* (*register_task)(
+        const AgentxxPluginHost*            host,
+        AgentxxPluginOperatorCancelFunction cancel_fn,
+        void*                               cancel_ud,
+        AgentxxPluginOperatorNotify*        notify,   ///< [out] 见上
+        char**                              error_out
+    );
+    /// 取消任务 (幂等; 仅限 io 线程调用, 或宿主内部经 ioCallSync 投递后调用)
+    /// - 与宿主 detachAll 内部路径一致; 句柄由宿主托管, 跨线程主动取消需经
+    ///   scheduler.post_to_io / ioCallSync 回到 io 线程 (与注册类接口线程
+    ///   约束一致), 避免 handle->caller 裸指针跨线程反查实例
+    void (*cancel_task)(AgentxxPluginOperatorHandle* h);
+} AgentxxPluginTasksIface;
+
 /* ==================== 插件入口符号 (dlsym) ==================== */
 
 typedef const AgentxxPluginInfo* (*AgentxxPluginGetInfoFn)(void);

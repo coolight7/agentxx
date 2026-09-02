@@ -34,6 +34,7 @@ struct AgentIfaces {
     const AgentxxPluginModelIface*        model        = nullptr; ///< "agentxx.agent.model"
     const AgentxxPluginCancelIface*       cancel       = nullptr; ///< "agentxx.agent.cancel"
     const AgentxxPluginGraphIface*        graph        = nullptr; ///< "agentxx.agent.graph"
+    const AgentxxPluginTasksIface*        tasks        = nullptr; ///< "agentxx.agent.tasks"
 
     /// 从宿主查询全部已知 agent 侧接口表 (host 为空时返回全 NULL 聚合)
     static AgentIfaces query(const AgentxxPluginHost* host) {
@@ -115,6 +116,11 @@ struct AgentIfaces {
             host,
             AgentxxPluginGraphIface,
             AGENTXX_PLUGIN_IFACE_AGENT_GRAPH
+        );
+        f.tasks = AGENTXX_PLUGIN_QUERY_IFACE(
+            host,
+            AgentxxPluginTasksIface,
+            AGENTXX_PLUGIN_IFACE_AGENT_TASKS
         );
         return f;
     }

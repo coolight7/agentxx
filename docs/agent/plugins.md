@@ -8,11 +8,11 @@
 
 Agentxx 插件系统采用 **纯 C ABI + COM 风格接口表查询**：
 
-- **跨编译器/标准库/语言兼容**：主程序与插件可由不同编译器、不同 STL (libstdc++/libc++/MSVC STL) 或不同语言独立编译，运行时稳定兼容
 - **纯 C 边界**：跨边界仅传递纯 C 基本类型、函数指针、不透明句柄与 `AgentxxPluginStringView` (data+size 只读借用，不要求 NUL 结尾)，严禁直接传递 `std::string/vector/function` 或 C++ 异常
+- **跨编译器/标准库/语言兼容**：主程序与插件可由不同编译器、不同 STL (libstdc++/libc++/MSVC STL) 或不同语言独立编译，运行时稳定兼容
 - **内存所有权**：所有跨边界堆内存统一经 `host->alloc/free/strdup` (核心 vtable) 管理，接收方用后 `host->free`
-- **单线程会话契约**：宿主会话可变状态仅在主 IO 线程串行访问；插件注册/状态访问由宿主内部按需 `post` 回 IO 线程，插件无感
-- **锚定协程模型**：经 `plugin_kit.h` 的 `Task<T>`，插件协程物理执行于宿主 IO 线程，挂起让出、完成经 IO 线程回调唤醒，零轮询、零私有事件循环
+- **原生协程异步支持**：经 `plugin_kit.h` 的 `Task<T>`，插件协程执行于宿主 IO 线程，挂起让出、完成经 IO 线程回调唤醒，宿主与插件的协程执行可互相交错切换，且运行于同一线程无锁，无轮询、无私有事件循环
+- **单线程会话**：宿主会话可变状态仅在主 IO 线程串行访问；插件注册/状态访问由宿主内部按需 `post` 回 IO 线程，插件无感
 
 ---
 
@@ -119,7 +119,8 @@ extern "C" AGENTXX_PLUGIN_EXPORT int agentxx_plugin_agent_create(const AgentxxHo
             return R"({"done":true})";
         });
 
-    // 后台协作任务 (替代周期定时器, 随实例销毁自动取消)
+    // 后台协作任务 (宿主托管: 自动注册 agentxx.agent.tasks, 卸载时宿主统一
+    // 取消并精确等待退出, 无协程帧悬挂)
     agentxx::plugin::spawn(*ctx, [](MyPluginCtx& c, agentxx::plugin::OpCtl ctl) -> agentxx::plugin::Task<void> {
         while (!ctl.cancelled()) {
             co_await agentxx::plugin::sleep(c, 5000);
@@ -143,6 +144,15 @@ extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_agent_destroy(void* plugin_
 ```
 
 **统一异步操作模型 (两件套 start/cancel)**：工具/钩子/能力均为 `start` (IO 线程非阻塞启动) + `cancel` (协作式) 两件套，终结经 `AgentxxOpNotify.done(status,payload)` 恰好一次上报；`Task` 协程帧先销毁后 `done` 上报，支持 `offload` 阻塞池委托与 `call_tool`/`invoke_cap` 锚定互调。
+
+**后台任务 spawn (宿主托管)**：`spawn` 启动的后台协作任务 (如周期采集 `while(!cancelled()) { offload; sleep; }`) 自 API v1 起注册到宿主 `agentxx.agent.tasks` 接口表，与工具/能力 op 同构管理：
+
+- **注册**：`spawn()` 内部自动调 `register_task` (io 线程) → 宿主把句柄推入实例 `outstandingOps` (与工具 op 同列表) 并持 `inflight` (存活标记)
+- **运行**：协程照常经 `sleep`/`offload` 挂起于宿主；宿主无感，句柄静默
+- **卸载闭环**：插件卸载时宿主 `detachAll` 统一取消 (调插件 cancel_fn: 置 cancelFlag + 唤醒挂起的 sleep/offload) → 协程 `while(!cancelled())` 退出 → `finishIfDone` (帧销毁后经 `notify.done` 恰好一次上报) → 宿主 `guard.reset` (inflight-1) + 回收句柄 → `waitInflightZero` 精确等待归零 → `dlclose` 安全，无协程帧悬挂/UAF
+- **降级**：宿主无 `agentxx.agent.tasks` 表或注册失败时 spawn 退化为纯自管协程 (无法被宿主回收，仅 WARN 日志) —— 跨版本固有限制
+- **线程约束**：`cancel_fn` 由宿主在 io 线程回调 (协作式)；`notify.done` 可从插件任意线程上报 (宿主 `OpCore::onDone` 原子 CAS + 投递回 io)；kit 协程完成路径恒在 io 线程
+
 
 ---
 
@@ -178,6 +188,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_agent_destroy(void* plugin_
 | `agentxx.agent.log` | 1 | `log(level, msg)` (0 trace .. 4 error) |
 | `agentxx.agent.resources` | 2 | `register_skill_dir/memory_file/mcp_server` (仅初始化阶段) + `get_own_resources` (冻结后不可变) |
 | `agentxx.agent.graph` | 1 | 执行图扩展: `register_node_type/unregister_node_type` (插件自定义节点类型, 注入 per-agent GraphRegistry) + `get_graph_json/get_graph_name/set_graph_json` (查看/修改宿主执行图, 默认名 `agentxx.default`; 插件加载阶段生效, 宿主构建 engine 前消费) |
+| `agentxx.agent.tasks` | 1 | 后台任务宿主托管: `register_task/cancel_task` (kit `spawn` 自动注册; 宿主登记句柄 + 持 inflight + `notify.done` 完成通知 —— 卸载时 detachAll 统一取消 + `waitInflightZero` 精确等待, 无协程帧悬挂; `notify` 为出参, `notify.done` 可从插件任意线程回调) |
 
 ---
 

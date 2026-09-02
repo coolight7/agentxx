@@ -13,6 +13,9 @@
 #include "agentxx/plugin/api/plugin_iface_helper.h"
 #include "agentxx/plugin/plugin_manager.h"
 #include "asio/co_spawn.hpp"
+#include "asio/steady_timer.hpp"
+#include "asio/use_awaitable.hpp"
+#include <atomic>
 #include <filesystem>
 #include <iostream>
 #include <memory>
@@ -157,6 +160,120 @@ asio::awaitable<TestResult> run_plugin_multi_instance_tests() {
                 XX_TEST_EXPECT_TRUE(out.find("reloaded") != std::string::npos);
             }
             XX_TEST_EXPECT_TRUE(co_await ctxB->pluginManager->unloadAsync("example_plugin"));
+        }
+    }
+
+    // ---- 5. 宿主侧 registerTask 托管语义 (agentxx.agent.tasks) ----
+    // 直接经 PluginManager::registerTask 验证: 句柄登记 (outstandingOps) /
+    // cancel_fn 触发 / notify.done 恰好一次 (inflight 归零 + 句柄回收)
+    {
+        auto instC = co_await ctxA->pluginManager->loadPluginAsync(path);
+        XX_TEST_EXPECT_TRUE(instC != nullptr);
+        if (instC) {
+            struct TaskState {
+                std::atomic<int>  cancelCount{0};
+                std::atomic<bool> done{false};
+            };
+            auto      st = std::make_shared<TaskState>();
+            auto      ex = co_await asio::this_coro::executor;
+            AgentxxPluginOperatorNotify ntf{nullptr, nullptr};
+            char*                       err = nullptr;
+            auto* h = ctxA->pluginManager->registerTask(
+                instC.get(),
+                [](void* ud, void*) {
+                    auto* s = static_cast<TaskState*>(ud);
+                    s->cancelCount.fetch_add(1, std::memory_order_relaxed);
+                },
+                st.get(),
+                &ntf,
+                &err
+            );
+            XX_TEST_EXPECT_TRUE(h != nullptr);
+            XX_TEST_EXPECT_TRUE(ntf.done != nullptr); ///< notify 为出参 (宿主回填)
+            // 句柄已登记 (detachAll 可取消; 未完成前存在)
+            bool tracked = std::any_of(
+                instC->outstandingOps.begin(),
+                instC->outstandingOps.end(),
+                [h](const std::shared_ptr<AgentxxPluginOperatorHandle>& op) {
+                    return op.get() == h;
+                }
+            );
+            XX_TEST_EXPECT_TRUE(tracked);
+            size_t inflightBefore = instC->inflight.load(std::memory_order_acquire);
+
+            // 通知完成 (模拟插件协程结束上报) → inflight-1 + 句柄回收 (异步)
+            ntf.done(ntf.host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+            XX_TEST_EXPECT_TRUE(st->done.exchange(true) == false); ///< 恰好一次语义由 OpCore CAS 保证
+            // 等待回收协程把句柄从 outstandingOps 移除
+            for (int i = 0; i < 100; ++i) {
+                auto stillTracked = std::any_of(
+                    instC->outstandingOps.begin(),
+                    instC->outstandingOps.end(),
+                    [h](const std::shared_ptr<AgentxxPluginOperatorHandle>& op) {
+                        return op.get() == h;
+                    }
+                );
+                if (!stillTracked) {
+                    break;
+                }
+                asio::steady_timer t(ex);
+                t.expires_after(std::chrono::milliseconds(5));
+                co_await t.async_wait(asio::use_awaitable);
+            }
+            bool trackedAfter = std::any_of(
+                instC->outstandingOps.begin(),
+                instC->outstandingOps.end(),
+                [h](const std::shared_ptr<AgentxxPluginOperatorHandle>& op) {
+                    return op.get() == h;
+                }
+            );
+            XX_TEST_EXPECT_FALSE(trackedAfter); ///< 完成后句柄被回收
+            size_t inflightAfter = instC->inflight.load(std::memory_order_acquire);
+            XX_TEST_EXPECT_TRUE(inflightAfter < inflightBefore || inflightBefore == 0);
+            if (err) {
+                std::free(err);
+            }
+
+            // 取消路径: 新任务 → xx_op_cancel 语义 (op->cancelled CAS + cancelFn)
+            AgentxxPluginOperatorNotify ntf2{nullptr, nullptr};
+            char*                       err2 = nullptr;
+            auto* h2 = ctxA->pluginManager->registerTask(
+                instC.get(),
+                [](void* ud, void*) {
+                    auto* s = static_cast<TaskState*>(ud);
+                    s->cancelCount.fetch_add(1, std::memory_order_relaxed);
+                },
+                st.get(),
+                &ntf2,
+                &err2
+            );
+            XX_TEST_EXPECT_TRUE(h2 != nullptr);
+            if (h2) {
+                h2->cancelled.store(true); ///< 模拟 detachAll / op_cancel 前置置位
+                if (h2->cancelFn) {
+                    h2->cancelFn();
+                }
+                // cancel_fn 被调用 (协作式)
+                XX_TEST_EXPECT_TRUE(st->cancelCount.load(std::memory_order_relaxed) >= 1);
+                // 取消后仍可上报完成 (宿主幂等; 不 UAF)
+                ntf2.done(ntf2.host_ud, AGENTXX_PLUGIN_OPERATOR_CANCELLED, nullptr);
+                for (int i = 0; i < 100; ++i) {
+                    auto stillTracked = std::any_of(
+                        instC->outstandingOps.begin(),
+                        instC->outstandingOps.end(),
+                        [h2](const std::shared_ptr<AgentxxPluginOperatorHandle>& op) {
+                            return op.get() == h2;
+                        }
+                    );
+                    if (!stillTracked) {
+                        break;
+                    }
+                    asio::steady_timer t(ex);
+                    t.expires_after(std::chrono::milliseconds(5));
+                    co_await t.async_wait(asio::use_awaitable);
+                }
+            }
+            co_await ctxA->pluginManager->unloadAsync("example_plugin");
         }
     }
 

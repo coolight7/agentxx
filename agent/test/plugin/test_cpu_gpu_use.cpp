@@ -5,6 +5,8 @@
 #include "agentxx/plugin/tool_registry.h"
 #include "asio/this_coro.hpp"
 #include "asio/use_awaitable.hpp"
+#include <atomic>
+#include <chrono>
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
@@ -189,10 +191,97 @@ asio::awaitable<TestResult>
         }
     }
 
-    // ---- 5. 卸载插件 (工具/能力摘除) ----
-    co_await ctx->pluginManager->unloadAsync("agentxx_system_monitor");
+    // ---- 5. spawn 宿主托管: 周期采集任务注册到宿主 + 卸载闭环 ----
+    // (agentxx_system_monitor 在 create 内 spawn 周期采集任务; 重构后 spawn
+    // 经 agentxx.agent.tasks 接口表注册到宿主: 句柄在 outstandingOps +
+    // inflight+1。卸载时 detachAll cancel → 协程退出 → notify → inflight 归零
+    // → waitInflightZero 精确等待 → dlclose 安全, 无协程帧悬挂)
+    {
+        // spawn 协程在 io 线程 post 启动, 轮询等待注册完成 (句柄进入列表)
+        bool spawned = false;
+        for (int i = 0; i < 100 && !spawned; ++i) {
+            auto n = inst->outstandingOps.size();
+            // 采集 spawn 注册后宿主列表至少 1 项 (可能还有 client_attached 事件
+            // 触发的 offload 等, 此处只要求非空)
+            if (n > 0) {
+                spawned = true;
+            } else {
+                asio::steady_timer t(co_await asio::this_coro::executor);
+                t.expires_after(std::chrono::milliseconds(10));
+                co_await t.async_wait(asio::use_awaitable);
+            }
+        }
+        XX_TEST_EXPECT_TRUE(spawned);
+        if (spawned) {
+            // spawn 协程持 inflight (waitInflightZero 的计数来源)
+            size_t inflightBefore
+                = inst->inflight.load(std::memory_order_acquire);
+            XX_TEST_EXPECT_TRUE(inflightBefore > 0);
+
+            // 卸载: detachAll cancel spawn → 协程退出 → notify → inflight 归零;
+            // 若 spawn 未被宿主托管 (游离), 卸载仍会返回但 inflight 无法等待到
+            // spawn 的退出, 这里用耗时粗略区分 (托管: 立即归零, 卸载快)
+            auto t0      = std::chrono::steady_clock::now();
+            bool unloaded = co_await ctx->pluginManager->unloadAsync("agentxx_system_monitor");
+            auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                               std::chrono::steady_clock::now() - t0
+            )
+                               .count();
+            XX_TEST_EXPECT_TRUE(unloaded);
+            XX_TEST_EXPECT_TRUE(elapsed < 5000); ///< 不依赖 30s 超时 (waitInflightZero 精确等待)
+            // 卸载完成 → 实例已移除; spawn 句柄已随实例清理
+            XX_TEST_EXPECT_TRUE(ctx->pluginManager->find("agentxx_system_monitor") == nullptr);
+        } else {
+            // 注册未观察到 (异常场景): 仍执行卸载保证后续清理
+            co_await ctx->pluginManager->unloadAsync("agentxx_system_monitor");
+        }
+    }
+
     XX_TEST_EXPECT_FALSE(ctx->toolRegistry->contains("agentxx_get_system_core_info"));
     XX_TEST_EXPECT_TRUE(ctx->pluginManager->find("agentxx_system_monitor") == nullptr);
+
+    // ---- 6. spawn 卸载回收循环: 反复 load/unload 无协程帧悬挂 ----
+    // 每次加载都会 spawn 周期采集任务; 若卸载未回收 spawn (旧缺陷: 协程帧 +
+    // 内部对象泄漏 504B/次), 循环多次会累积。此处显式断言每次卸载后:
+    // - 卸载快速返回 (waitInflightZero 等到 spawn 退出, 非 30s 超时)
+    // - 实例彻底移除 (句柄/协程随 destroy 释放)
+    {
+        bool loopOk = true;
+        for (int i = 0; i < 3 && loopOk; ++i) {
+            auto instL = co_await ctx->pluginManager->loadPluginAsync(path);
+            if (!instL) {
+                loopOk = false;
+                break;
+            }
+            // 等待 spawn 注册完成 (协程挂起于 sleep, inflight 持住)
+            bool spawned = false;
+            for (int j = 0; j < 100 && !spawned; ++j) {
+                if (!instL->outstandingOps.empty()) {
+                    spawned = true;
+                } else {
+                    asio::steady_timer t(co_await asio::this_coro::executor);
+                    t.expires_after(std::chrono::milliseconds(10));
+                    co_await t.async_wait(asio::use_awaitable);
+                }
+            }
+            if (!spawned) {
+                loopOk = false;
+                break;
+            }
+            auto t0 = std::chrono::steady_clock::now();
+            auto ok = co_await ctx->pluginManager->unloadAsync("agentxx_system_monitor");
+            auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                               std::chrono::steady_clock::now() - t0
+            )
+                               .count();
+            if (!ok || elapsed >= 5000) {
+                loopOk = false;
+                break;
+            }
+            XX_TEST_EXPECT_TRUE(ctx->pluginManager->find("agentxx_system_monitor") == nullptr);
+        }
+        XX_TEST_EXPECT_TRUE(loopOk);
+    }
 #else
     TEST_SKIP << "agentxx_system_monitor (system monitor) 仅支持 Windows/Linux 平台" << std::endl;
 #endif

@@ -305,6 +305,39 @@ static ::AgentxxPluginOperatorHandle* xx_invoke_capability_async(
     );
 }
 
+static ::AgentxxPluginOperatorHandle* xx_register_task(
+    const AgentxxPluginHost*            host,
+    AgentxxPluginOperatorCancelFunction cancel_fn,
+    void*                               cancel_ud,
+    AgentxxPluginOperatorNotify*        notify,
+    char**                              error_out
+) {
+    return agentxx::plugin::guardVtableCall<::AgentxxPluginOperatorHandle*>(
+        nullptr,
+        [&]() -> ::AgentxxPluginOperatorHandle* {
+            auto mgr  = mgrOf(host);
+            auto inst = instOf(host);
+            if (!mgr || !inst || !notify) {
+                return static_cast<::AgentxxPluginOperatorHandle*>(nullptr);
+            }
+            auto mgrPtr  = mgr;
+            auto instPtr = inst;
+            return ioCallSync<::AgentxxPluginOperatorHandle*>(
+                mgrPtr,
+                [mgrPtr, instPtr, cancel_fn, cancel_ud, notify, error_out]() {
+                    return mgrPtr->registerTask(
+                        instPtr,
+                        cancel_fn,
+                        cancel_ud,
+                        notify,
+                        error_out
+                    );
+                }
+            );
+        }
+    );
+}
+
 static char* xx_list_plugins(const AgentxxPluginHost* host) {
     return agentxx::plugin::guardVtableCall(nullptr, [&]() -> char* {
         auto mgr = mgrOf(host);
@@ -1071,6 +1104,12 @@ static const AgentxxPluginGraphIface g_ifaceGraph = {
     /* set_graph_json */ xx_set_graph_json,
 };
 
+static const AgentxxPluginTasksIface g_ifaceTasks = {
+    /* version */ AGENTXX_PLUGIN_IFACE_AGENT_TASKS_VERSION,
+    /* register_task */ xx_register_task,
+    /* cancel_task */ xx_op_cancel,
+};
+
 const void* xx_query_interface(const AgentxxPluginHost*, AgentxxPluginStringView iid);
 
 static const AgentxxHostVtable g_hostVtable = {
@@ -1132,6 +1171,9 @@ const void* xx_query_interface(const AgentxxPluginHost*, AgentxxPluginStringView
     }
     if (n == AGENTXX_PLUGIN_IFACE_AGENT_GRAPH) {
         return &g_ifaceGraph;
+    }
+    if (n == AGENTXX_PLUGIN_IFACE_AGENT_TASKS) {
+        return &g_ifaceTasks;
     }
     return nullptr;
 }

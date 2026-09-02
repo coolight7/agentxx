@@ -168,6 +168,56 @@ inline void safeCancelOnce(OpCore& core, const OpDrive& d, void* op) {
     }
 }
 
+/// 自动回收调用方 outstandingOps 里的宿主托管句柄 (io 线程):
+/// 操作终态后 (doneSignal) 把句柄从列表移除, 避免悬垂 handle 在后续 unload
+/// 时触发 UAF。零轮询: 等待 doneSignal 事件 (与 awaitPluginOp 的 sentinel
+/// 协程不竞争 chan —— 各自独立通知通道)。
+/// - 被 callToolAsync / invokeCapabilityAsync / registerTask 三处共用
+/// - core 持 shared_ptr 直到 notify 到达 (onDone 内 guard.reset +
+///   doneSignal.emit), 故 handle 在列表中存留期间即使 detachAll 并发 cancel
+///   也安全 (cancelFn 转发给已完成的 op 无副作用; erase 与 detachAll 的
+///   clear 同在 io 线程串行)
+/// - 与 waitInflightZero 无因果: 计数归零由 OpCore::onDone 的 guard.reset
+///   原子完成 (通知即归零), 本协程只负责"收尾整洁"
+inline void spawnHandleReaper(
+    const asio::any_io_executor&                      ex,
+    const std::shared_ptr<OpCore>&                    core,
+    const std::weak_ptr<PluginInstance>&              weakCaller,
+    const std::weak_ptr<AgentxxPluginOperatorHandle>& weakHandle
+) {
+    asio::co_spawn(
+        ex,
+        [core, weakCaller, weakHandle]() -> asio::awaitable<void> {
+            if (!core->notified.load(std::memory_order_acquire)) {
+                asio::steady_timer t(co_await asio::this_coro::executor);
+                t.expires_at(std::chrono::steady_clock::time_point::max());
+                co_await t.async_wait(asio::bind_cancellation_slot(
+                    core->doneSignal.slot(),
+                    asio::as_tuple(asio::use_awaitable)
+                ));
+            }
+            // 确保在 io 线程执行移除 (caller 的 vector 非线程安全)
+            auto callerSp = weakCaller.lock();
+            auto handleSp = weakHandle.lock();
+            if (!callerSp || !handleSp) {
+                co_return;
+            }
+            auto& vec = callerSp->outstandingOps;
+            vec.erase(
+                std::remove_if(
+                    vec.begin(),
+                    vec.end(),
+                    [&handleSp](const std::shared_ptr<AgentxxPluginOperatorHandle>& h) {
+                        return h == handleSp;
+                    }
+                ),
+                vec.end()
+            );
+        },
+        asio::detached
+    );
+}
+
 inline asio::awaitable<void> sentinelReap(
     std::shared_ptr<OpCore> core,
     OpDrive                 drive,

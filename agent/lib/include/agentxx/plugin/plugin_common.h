@@ -258,6 +258,7 @@ inline constexpr std::string_view AgentLog          = AGENTXX_PLUGIN_IFACE_AGENT
 inline constexpr std::string_view AgentResources    = AGENTXX_PLUGIN_IFACE_AGENT_RESOURCES;
 inline constexpr std::string_view AgentModel        = AGENTXX_PLUGIN_IFACE_AGENT_MODEL;
 inline constexpr std::string_view AgentCancel       = AGENTXX_PLUGIN_IFACE_AGENT_CANCEL;
+inline constexpr std::string_view AgentTasks        = AGENTXX_PLUGIN_IFACE_AGENT_TASKS;
 
 /* ---- client 侧: 接口表名 + 细粒度能力名 (映射到 agentxx.client.ui 表的非空成员) ---- */
 inline constexpr std::string_view ClientUi = AGENTXX_IFACE_CLIENT_UI; ///< 展示扩展表整体
