@@ -77,7 +77,7 @@ static std::string formatUsageText(const agentxx_system_monitor_plugin::CpuGpuUs
         return mb * 1024 * 1024;
     };
     ss << fmt::format(
-        "Memory: {:.1f}% (Used: {} / Total: {})\n",
+        "Memory: {:.1f}% · Used: {} / Total: {}\n",
         usage.memory.usagePercent,
         agentxx::util::formatSize(mbToBytes(usage.memory.usedPhysicalMB)),
         agentxx::util::formatSize(mbToBytes(usage.memory.totalPhysicalMB))
@@ -362,7 +362,7 @@ static std::string buildUsageInfoItemsJson(const ClientCtx& ctx, const UsageStat
             return static_cast<uint64_t>(mb) * 1024 * 1024;
         };
         ram = fmt::format(
-            "{} ({}/{})",
+            "{} · {}/{}",
             ram,
             agentxx::util::formatSize(mbToBytes(st.memUsedMb), 1024, false),
             agentxx::util::formatSize(mbToBytes(st.memTotalMb), 1024, false)
@@ -372,7 +372,7 @@ static std::string buildUsageInfoItemsJson(const ClientCtx& ctx, const UsageStat
     if (st.gpuCount == 1) {
         pushText(fmt::format("|- GPU {:.0f}%", st.gpuPeakPct), "normal");
     } else if (st.gpuCount > 1) {
-        pushText(fmt::format("|- GPU {}x \u00b7 {:.0f}%", st.gpuCount, st.gpuPeakPct), "normal");
+        pushText(fmt::format("|- GPU {}x · {:.0f}%", st.gpuCount, st.gpuPeakPct), "normal");
     }
     neograph::json out;
     out["items"] = std::move(items);
