@@ -1238,7 +1238,7 @@ void ClientPluginManager::dispatchEvent(int event, const std::string& payloadJso
 
 namespace {
 
-ClientPluginInstance* clientInstOf(const AgentxxClientHost* host) {
+ClientPluginInstance* clientInstOf(const AgentxxPluginHost* host) {
     return (host && host->opaque) ? static_cast<ClientPluginInstance*>(host->opaque) : nullptr;
 }
 
@@ -1254,7 +1254,7 @@ extern const AgentxxClientSelfIface    g_clientIfaceSelf;
 extern const AgentxxClientJsonIface    g_clientIfaceJson;
 extern const AgentxxClientLogIface     g_clientIfaceLog;
 
-ClientPluginManager* clientMgrOf(const AgentxxClientHost* host) {
+ClientPluginManager* clientMgrOf(const AgentxxPluginHost* host) {
     auto inst = clientInstOf(host);
     return inst ? inst->manager.lock().get() : nullptr;
 }
@@ -1275,7 +1275,7 @@ char* xx_cstrdup(const char* s) {
 
 // ---- 日志 / JSON ----
 
-void xx_clog(const AgentxxClientHost* host, int level, AgentxxPluginStringView msg) {
+void xx_clog(const AgentxxPluginHost* host, int level, AgentxxPluginStringView msg) {
     (void)host;
     std::string_view s{msg.data ? msg.data : "", msg.size};
     switch (level) {
@@ -1300,7 +1300,7 @@ void xx_clog(const AgentxxClientHost* host, int level, AgentxxPluginStringView m
 /// JSON 辅助: 提取字符串字段 (线程安全, 纯函数; 供插件替代手写 JSON 解析)
 /// - 与 agent 侧 xx_json_get_string 一致, 无需绕道 io 线程
 char* xx_cjson_get_string(
-    const AgentxxClientHost* host,
+    const AgentxxPluginHost* host,
     AgentxxPluginStringView  json,
     AgentxxPluginStringView  key
 ) {
@@ -1323,7 +1323,7 @@ char* xx_cjson_get_string(
 }
 
 /// JSON 辅助: 字符串 → JSON 字符串字面量 (含引号与转义; 线程安全纯函数)
-char* xx_cjson_escape(const AgentxxClientHost* host, AgentxxPluginStringView s) {
+char* xx_cjson_escape(const AgentxxPluginHost* host, AgentxxPluginStringView s) {
     return agentxx::plugin::guardVtableCall(nullptr, [&]() -> char* {
         auto inst = clientInstOf(host);
         if (!inst || agentxx_plugin_sv_empty(s)) {
@@ -1340,7 +1340,7 @@ char* xx_cjson_escape(const AgentxxClientHost* host, AgentxxPluginStringView s) 
 
 // ---- COM 风格接口表查询 ----
 
-const void* xx_cquery_interface(const AgentxxClientHost* host, AgentxxPluginStringView iid) {
+const void* xx_cquery_interface(const AgentxxPluginHost* host, AgentxxPluginStringView iid) {
     return agentxx::plugin::guardVtableCall(nullptr, [&]() -> const void* {
         if (!iid.data) {
             return static_cast<const void*>(nullptr);
@@ -1374,7 +1374,7 @@ const void* xx_cquery_interface(const AgentxxClientHost* host, AgentxxPluginStri
 // ---- 状态栏项 ----
 
 AgentxxStatusItem* xx_cregister_status_item(
-    const AgentxxClientHost* host,
+    const AgentxxPluginHost* host,
     AgentxxPluginStringView  id,
     AgentxxPluginStringView  initial_json,
     int                      align,
@@ -1400,7 +1400,7 @@ AgentxxStatusItem* xx_cregister_status_item(
 }
 
 int xx_cupdate_status_item(
-    const AgentxxClientHost* host,
+    const AgentxxPluginHost* host,
     AgentxxStatusItem*       item,
     AgentxxPluginStringView  json
 ) {
@@ -1417,7 +1417,7 @@ int xx_cupdate_status_item(
     });
 }
 
-void xx_cunregister_status_item(const AgentxxClientHost* host, AgentxxStatusItem* item) {
+void xx_cunregister_status_item(const AgentxxPluginHost* host, AgentxxStatusItem* item) {
     agentxx::plugin::guardVtableCallVoid([&]() {
         auto mgr  = clientMgrOf(host);
         auto inst = clientInstOf(host);
@@ -1433,7 +1433,7 @@ void xx_cunregister_status_item(const AgentxxClientHost* host, AgentxxStatusItem
 // ---- 面板 ----
 
 AgentxxPanel* xx_cregister_panel(
-    const AgentxxClientHost* host,
+    const AgentxxPluginHost* host,
     AgentxxPluginStringView  id,
     AgentxxPluginStringView  props_json
 ) {
@@ -1456,7 +1456,7 @@ AgentxxPanel* xx_cregister_panel(
 }
 
 int xx_cupdate_panel(
-    const AgentxxClientHost* host,
+    const AgentxxPluginHost* host,
     AgentxxPanel*            panel,
     AgentxxPluginStringView  items_json
 ) {
@@ -1473,7 +1473,7 @@ int xx_cupdate_panel(
     });
 }
 
-void xx_cunregister_panel(const AgentxxClientHost* host, AgentxxPanel* panel) {
+void xx_cunregister_panel(const AgentxxPluginHost* host, AgentxxPanel* panel) {
     agentxx::plugin::guardVtableCallVoid([&]() {
         auto mgr  = clientMgrOf(host);
         auto inst = clientInstOf(host);
@@ -1489,7 +1489,7 @@ void xx_cunregister_panel(const AgentxxClientHost* host, AgentxxPanel* panel) {
 // ---- Info 栏段落 ----
 
 AgentxxInfoSection* xx_cregister_info_section(
-    const AgentxxClientHost* host,
+    const AgentxxPluginHost* host,
     AgentxxPluginStringView  id,
     AgentxxPluginStringView  props_json
 ) {
@@ -1513,7 +1513,7 @@ AgentxxInfoSection* xx_cregister_info_section(
 }
 
 int xx_cupdate_info_section(
-    const AgentxxClientHost* host,
+    const AgentxxPluginHost* host,
     AgentxxInfoSection*      section,
     AgentxxPluginStringView  items_json
 ) {
@@ -1530,7 +1530,7 @@ int xx_cupdate_info_section(
     });
 }
 
-void xx_cunregister_info_section(const AgentxxClientHost* host, AgentxxInfoSection* section) {
+void xx_cunregister_info_section(const AgentxxPluginHost* host, AgentxxInfoSection* section) {
     agentxx::plugin::guardVtableCallVoid([&]() {
         auto mgr  = clientMgrOf(host);
         auto inst = clientInstOf(host);
@@ -1544,7 +1544,7 @@ void xx_cunregister_info_section(const AgentxxClientHost* host, AgentxxInfoSecti
 }
 
 int xx_cupdate_tool_decor(
-    const AgentxxClientHost* host,
+    const AgentxxPluginHost* host,
     AgentxxPluginStringView  tool_call_id,
     AgentxxPluginStringView  decor_json
 ) {
@@ -1565,7 +1565,7 @@ int xx_cupdate_tool_decor(
 // ---- 命令 ----
 
 int xx_cregister_command(
-    const AgentxxClientHost* host,
+    const AgentxxPluginHost* host,
     AgentxxPluginStringView  name,
     AgentxxPluginStringView  description,
     char* (*execute)(void*, AgentxxPluginStringView, char**),
@@ -1588,7 +1588,7 @@ int xx_cregister_command(
     });
 }
 
-int xx_cunregister_command(const AgentxxClientHost* host, AgentxxPluginStringView name) {
+int xx_cunregister_command(const AgentxxPluginHost* host, AgentxxPluginStringView name) {
     return agentxx::plugin::guardVtableCall(-1, [&]() -> int {
         auto mgr  = clientMgrOf(host);
         auto inst = clientInstOf(host);
@@ -1604,7 +1604,7 @@ int xx_cunregister_command(const AgentxxClientHost* host, AgentxxPluginStringVie
 
 // ---- toast ----
 
-void xx_cshow_toast(const AgentxxClientHost* host, AgentxxPluginStringView text, int level) {
+void xx_cshow_toast(const AgentxxPluginHost* host, AgentxxPluginStringView text, int level) {
     agentxx::plugin::guardVtableCallVoid([&]() {
         auto mgr = clientMgrOf(host);
         if (!mgr || !mgr->uiAdapter()) {
@@ -1620,7 +1620,7 @@ void xx_cshow_toast(const AgentxxClientHost* host, AgentxxPluginStringView text,
 // ---- 事件订阅 ----
 
 AgentxxPluginSubscription* xx_csubscribe(
-    const AgentxxClientHost* host,
+    const AgentxxPluginHost* host,
     int                      event,
     void (*handler)(AgentxxPluginStringView, void*),
     void* ud
@@ -1661,7 +1661,7 @@ void xx_cunsubscribe(AgentxxPluginSubscription* sub) {
 
 // ---- 会话上下文 ----
 
-char* xx_cget_client_state(const AgentxxClientHost* host) {
+char* xx_cget_client_state(const AgentxxPluginHost* host) {
     return agentxx::plugin::guardVtableCall(nullptr, [&]() -> char* {
         auto mgr = clientMgrOf(host);
         if (!mgr) {
@@ -1677,7 +1677,7 @@ char* xx_cget_client_state(const AgentxxClientHost* host) {
 // ---- 会话操作 ----
 
 int xx_csend_user_input(
-    const AgentxxClientHost* host,
+    const AgentxxPluginHost* host,
     AgentxxPluginStringView  thread_id,
     AgentxxPluginStringView  text
 ) {
@@ -1696,7 +1696,7 @@ int xx_csend_user_input(
     });
 }
 
-void xx_crequest_cancel(const AgentxxClientHost* host, AgentxxPluginStringView thread_id) {
+void xx_crequest_cancel(const AgentxxPluginHost* host, AgentxxPluginStringView thread_id) {
     agentxx::plugin::guardVtableCallVoid([&]() {
         auto mgr  = clientMgrOf(host);
         auto inst = clientInstOf(host);
@@ -1713,7 +1713,7 @@ void xx_crequest_cancel(const AgentxxClientHost* host, AgentxxPluginStringView t
 // ---- 跨端数据 ----
 
 int xx_csend_plugin_data(
-    const AgentxxClientHost* host,
+    const AgentxxPluginHost* host,
     AgentxxPluginStringView  event,
     AgentxxPluginStringView  json
 ) {
@@ -1733,7 +1733,7 @@ int xx_csend_plugin_data(
 
 // ---- 自描述 ----
 
-char* xx_cget_own_info(const AgentxxClientHost* host) {
+char* xx_cget_own_info(const AgentxxPluginHost* host) {
     return agentxx::plugin::guardVtableCall(nullptr, [&]() -> char* {
         auto mgr  = clientMgrOf(host);
         auto inst = clientInstOf(host);
@@ -1747,7 +1747,7 @@ char* xx_cget_own_info(const AgentxxClientHost* host) {
     });
 }
 
-char* xx_cget_plugin_args(const AgentxxClientHost* host) {
+char* xx_cget_plugin_args(const AgentxxPluginHost* host) {
     return agentxx::plugin::guardVtableCall(nullptr, [&]() -> char* {
         auto mgr  = clientMgrOf(host);
         auto inst = clientInstOf(host);
@@ -1761,7 +1761,7 @@ char* xx_cget_plugin_args(const AgentxxClientHost* host) {
     });
 }
 
-char* xx_cget_plugin_config_path(const AgentxxClientHost* host) {
+char* xx_cget_plugin_config_path(const AgentxxPluginHost* host) {
     return agentxx::plugin::guardVtableCall(nullptr, [&]() -> char* {
         auto mgr  = clientMgrOf(host);
         auto inst = clientInstOf(host);
@@ -1842,7 +1842,7 @@ const AgentxxClientLogIface g_clientIfaceLog = {
 };
 
 /// 核心 vtable (契约冻结: 仅内存三件套 + query_interface)
-const AgentxxClientHostVtable g_clientHostVtable = {
+const AgentxxHostVtable g_clientHostVtable = {
     /* alloc */ xx_calloc,
     /* free */ xx_cfree,
     /* strdup */ xx_cstrdup,
@@ -1851,7 +1851,7 @@ const AgentxxClientHostVtable g_clientHostVtable = {
 
 } // namespace
 
-const AgentxxClientHostVtable* ClientPluginManager::hostVtable() {
+const AgentxxHostVtable* ClientPluginManager::hostVtable() {
     return &g_clientHostVtable;
 }
 

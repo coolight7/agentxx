@@ -93,9 +93,9 @@ inline void logTo(
     logIf->log(host, level, agentxx_plugin_sv_cstr(buf));
 }
 
-/// client 侧宿主重载 (AgentxxClientHost/AgentxxClientLogIface 为独立类型)
+/// client 侧宿主重载 (AgentxxPluginHost/AgentxxClientLogIface 为独立类型)
 inline void logTo(
-    const AgentxxClientHost*     host,
+    const AgentxxPluginHost*     host,
     const AgentxxClientLogIface* logIf,
     int                          level,
     const char*                  pluginName,

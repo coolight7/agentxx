@@ -190,11 +190,6 @@ public:
     using LineChannel
         = asio::experimental::concurrent_channel<void(neograph_asio_error_code, std::string)>;
 
-    /// 兼容旧代码的类型别名
-    using Message      = TUIMessage;
-    using PendingInput = TUIPendingInput;
-    using RenderState  = TUIRenderState;
-
     static constexpr const char* kAgentxxVersion = "0.1.0";
 
     /// 复制鼠标选中的文本到系统剪贴板 (鼠标左键拖选后松开时调用, UI 线程):

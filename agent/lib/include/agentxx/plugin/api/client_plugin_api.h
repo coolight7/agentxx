@@ -24,7 +24,7 @@
  * - 纯 C 头: 插件可用任意编译器/任意语言实现, 与宿主 STL/异常/RTTI ABI 解耦
  * - 跨 CRT 堆边界: 宿主分配的内存经核心 vtable alloc/free/strdup;
  *   字符串参数一律 AgentxxPluginStringView (data+size 只读借用, 仅本次调用有效)
- * - 每插件一个 AgentxxClientHost (opaque 指向宿主侧插件实例); 卸载时宿主自动
+ * - 每插件一个 AgentxxPluginHost (opaque 指向宿主侧插件实例); 卸载时宿主自动
  *   清理其全部注册残留 (status item/panel/command/订阅)
  * - 线程约定:
  *   - entry 运行在宿主线程池, 注册动作由接口表实现内部 post 回 client io 线程执行
@@ -90,10 +90,7 @@ typedef struct AgentxxInfoSection AgentxxInfoSection; ///< 侧边栏 Info 栏段
 /* ==================== 核心宿主函数表 (契约冻结) ==================== */
 /* 合并: client 侧复用 agent 侧核心 vtable 类型 (布局完全一致: alloc/free/strdup +
  * query_interface)， 统一经 AgentxxPluginHostVtable / AgentxxPluginHost 承载，避免双套类型冗余。
- * 为兼容历史代码，保留 AgentxxClientHost / AgentxxClientHostVtable 别名。
  */
-typedef AgentxxPluginHost AgentxxClientHost;
-typedef AgentxxHostVtable AgentxxClientHostVtable;
 
 /* ==================== 接口表: 展示/命令/toast (agentxx.client.ui) ==================== */
 
@@ -110,7 +107,7 @@ typedef struct AgentxxClientUiIface {
     /// - align: 0=左侧 1=右侧; order: 组内排序 (小在前)
     /// - 宿主不支持该子能力 (函数指针 NULL) 或 id 冲突时返回 NULL
     AgentxxStatusItem* (*register_status_item)(
-        const AgentxxClientHost* host,
+        const AgentxxPluginHost* host,
         AgentxxPluginStringView  id,
         AgentxxPluginStringView  initialJson,
         int                      align,
@@ -118,19 +115,19 @@ typedef struct AgentxxClientUiIface {
     );
     /// 更新状态栏项文本 ({"text": "..."}); 句柄无效返回非 0
     int (*update_status_item)(
-        const AgentxxClientHost* host,
+        const AgentxxPluginHost* host,
         AgentxxStatusItem*       item,
         AgentxxPluginStringView  json
     );
     /// 注销状态栏项 (句柄随后失效)
-    void (*unregister_status_item)(const AgentxxClientHost* host, AgentxxStatusItem* item);
+    void (*unregister_status_item)(const AgentxxPluginHost* host, AgentxxStatusItem* item);
 
     /* ---- 侧边栏面板 ---- */
     /// 注册侧边栏面板; 返回句柄 (宿主持有; 卸载自动清理)
     /// - id: 全局唯一, 建议 "{插件名}.{面板名}"
     /// - propsJson: {"title": "..."} (title 必填; 显示在 tab 栏)
     AgentxxPanel* (*register_panel)(
-        const AgentxxClientHost* host,
+        const AgentxxPluginHost* host,
         AgentxxPluginStringView  id,
         AgentxxPluginStringView  propsJson
     );
@@ -142,19 +139,19 @@ typedef struct AgentxxClientUiIface {
     /// - action 项被用户点击时: 宿主 post 到 client io 线程回调面板注册时经
     ///   register_panel 关联的 on_action (见 entry 注册流程; 经回调参数注入)
     int (*update_panel)(
-        const AgentxxClientHost* host,
+        const AgentxxPluginHost* host,
         AgentxxPanel*            panel,
         AgentxxPluginStringView  itemsJson
     );
     /// 注销面板 (句柄随后失效)
-    void (*unregister_panel)(const AgentxxClientHost* host, AgentxxPanel* panel);
+    void (*unregister_panel)(const AgentxxPluginHost* host, AgentxxPanel* panel);
 
     /* ---- 侧边栏 Info 栏段落 ---- */
     /// 注册 Info 栏段落; 返回句柄 (宿主持有; 卸载自动清理)
     /// - id: 全局唯一, 建议 "{插件名}.{段名}"
     /// - propsJson: {"title": "..."} (title 可选; 空则无段落标题)
     AgentxxInfoSection* (*register_info_section)(
-        const AgentxxClientHost* host,
+        const AgentxxPluginHost* host,
         AgentxxPluginStringView  id,
         AgentxxPluginStringView  propsJson
     );
@@ -162,12 +159,12 @@ typedef struct AgentxxClientUiIface {
     ///   ({"items":[{"kind":"text","role":"title|normal|hint","text":"..."}, ...]});
     ///   列表项由宿主按侧边栏 Append 段样式以 "|  xxx" 前缀展示
     int (*update_info_section)(
-        const AgentxxClientHost* host,
+        const AgentxxPluginHost* host,
         AgentxxInfoSection*      section,
         AgentxxPluginStringView  itemsJson
     );
     /// 注销 Info 栏段落 (句柄随后失效)
-    void (*unregister_info_section)(const AgentxxClientHost* host, AgentxxInfoSection* section);
+    void (*unregister_info_section)(const AgentxxPluginHost* host, AgentxxInfoSection* section);
 
     /* ---- 斜杠命令 ---- */
     /// 注册斜杠命令: 用户输入 "/{name}" 触发 (name 不含 '/' 与空格)
@@ -176,18 +173,18 @@ typedef struct AgentxxClientUiIface {
     ///   NULL 并经 errorOut 输出错误 (host->alloc); 宿主解释动作 (见文件头)
     /// - 返回 0 成功; 名字冲突或参数非法返回非 0
     int (*register_command)(
-        const AgentxxClientHost* host,
+        const AgentxxPluginHost* host,
         AgentxxPluginStringView  name,
         AgentxxPluginStringView  description,
         char* (*execute)(void* ud, AgentxxPluginStringView argsJson, char** errorOut),
         void* ud
     );
     /// 注销斜杠命令 (按名称); 不存在返回非 0
-    int (*unregister_command)(const AgentxxClientHost* host, AgentxxPluginStringView name);
+    int (*unregister_command)(const AgentxxPluginHost* host, AgentxxPluginStringView name);
 
     /* ---- toast 提示 ---- */
     /// 显示 toast 提示 (level: 0=info 1=warning 2=error; 实现可忽略级别差异)
-    void (*show_toast)(const AgentxxClientHost* host, AgentxxPluginStringView text, int level);
+    void (*show_toast)(const AgentxxPluginHost* host, AgentxxPluginStringView text, int level);
 
     /* ---- v2 追加: 工具消息装饰 (UI 无关语义层) ---- */
     /// 更新/删除本插件对某次工具调用的消息装饰 (io 线程约束):
@@ -207,7 +204,7 @@ typedef struct AgentxxClientUiIface {
     ///   参考实现: agentxx_planning (Plan 渲染完全由插件驱动, TUI 无特化代码)
     /// 返回 0 成功; 非 0 失败 (宿主不支持/JSON 非法)
     int (*update_tool_decor)(
-        const AgentxxClientHost* host,
+        const AgentxxPluginHost* host,
         AgentxxPluginStringView  tool_call_id,
         AgentxxPluginStringView  decor_json
     );
@@ -224,7 +221,7 @@ typedef struct AgentxxClientEventsIface {
     /// 订阅 client 事件 (payload JSON 字符串; 卸载自动退订); event 为
     /// AgentxxClientEvent 枚举值; 失败返回 NULL
     AgentxxPluginSubscription* (*subscribe)(
-        const AgentxxClientHost* host,
+        const AgentxxPluginHost* host,
         int                      event, /* AgentxxClientEvent */
         void (*handler)(AgentxxPluginStringView payloadJson, void* ud),
         void* ud
@@ -245,17 +242,17 @@ typedef struct AgentxxClientSessionIface {
     ///  "interfaces":["agentxx.client.panel",...],
     ///  "agentPlugins":[{"name","version","interfaces":[...]},...]}
     /// (model/models/agentPlugins 依赖服务端推送; 未收到时为空)
-    char* (*get_client_state)(const AgentxxClientHost* host);
+    char* (*get_client_state)(const AgentxxPluginHost* host);
     /// 代发一条用户消息 (sessionId 与当前会话不符时仍按当前会话发送并记日志)
     /// - 与用户输入同排队语义 (流式中进 pendingInputs), 不绕过 UI 状态机
     /// - 返回 0 成功; 非 0 表示宿主不可用 (未连接等)
     int (*send_user_input)(
-        const AgentxxClientHost* host,
+        const AgentxxPluginHost* host,
         AgentxxPluginStringView  sessionId,
         AgentxxPluginStringView  text
     );
     /// 请求取消当前会话轮次 (与用户按 Esc 等价)
-    void (*request_cancel)(const AgentxxClientHost* host, AgentxxPluginStringView sessionId);
+    void (*request_cancel)(const AgentxxPluginHost* host, AgentxxPluginStringView sessionId);
 } AgentxxClientSessionIface;
 
 /* ==================== 接口表: 跨端数据通道 (agentxx.client.wire) ==================== */
@@ -270,7 +267,7 @@ typedef struct AgentxxClientWireIface {
     /// (agent 侧同名插件可订阅; 载荷 JSON 原样透传, 语义由插件定义)
     /// - 返回 0 成功; 非 0 表示未连接或载荷非法
     int (*send_plugin_data)(
-        const AgentxxClientHost* host,
+        const AgentxxPluginHost* host,
         AgentxxPluginStringView  event,
         AgentxxPluginStringView  json
     );
@@ -286,15 +283,15 @@ typedef struct AgentxxClientSelfIface {
 
     /// 本插件信息 JSON {"name","version","description","path"}
     /// (加载时常用: 从 path 推导资源目录; host->alloc)
-    char* (*get_own_info)(const AgentxxClientHost* host);
+    char* (*get_own_info)(const AgentxxPluginHost* host);
     /// 本插件配置参数 JSON (yaml `plugins` 条目 args; io 线程; host->alloc):
     /// 宿主不解析 args 字段语义, 整体原样传递; 未配置时返回 "{}"
-    char* (*get_plugin_args)(const AgentxxClientHost* host);
+    char* (*get_plugin_args)(const AgentxxPluginHost* host);
     /// 本插件配置文件所在目录或文件路径 (yaml `plugins` 条目 config; io 线程;
     /// host->alloc; 未指定返回 NULL)
     /// - 可指向文件或目录 (由插件自行判断类型并加载)
     /// - 宿主已归一化为绝对路径 (正斜杠, lexically_normal)
-    char* (*get_plugin_config_path)(const AgentxxClientHost* host);
+    char* (*get_plugin_config_path)(const AgentxxPluginHost* host);
 } AgentxxClientSelfIface;
 
 /* ==================== 接口表: JSON 辅助 (agentxx.client.json) ==================== */
@@ -307,12 +304,12 @@ typedef struct AgentxxClientJsonIface {
 
     /// 从 JSON 字符串提取指定 key 的字符串值 (宿主解析; 结果 host->alloc)
     char* (*json_get_string)(
-        const AgentxxClientHost* host,
+        const AgentxxPluginHost* host,
         AgentxxPluginStringView  json,
         AgentxxPluginStringView  key
     );
     /// 字符串 → JSON 字符串字面量 (含引号包裹与转义; 结果 host->alloc)
-    char* (*json_escape)(const AgentxxClientHost* host, AgentxxPluginStringView s);
+    char* (*json_escape)(const AgentxxPluginHost* host, AgentxxPluginStringView s);
 } AgentxxClientJsonIface;
 
 /* ==================== 接口表: 日志 (agentxx.client.log) ==================== */
@@ -324,7 +321,7 @@ typedef struct AgentxxClientLogIface {
     int version; ///< 必须 == AGENTXX_IFACE_CLIENT_LOG_VERSION
 
     /// 日志 (线程安全; 0=trace 1=debug 2=info 3=warn 4=error)
-    void (*log)(const AgentxxClientHost* host, int level, AgentxxPluginStringView msg);
+    void (*log)(const AgentxxPluginHost* host, int level, AgentxxPluginStringView msg);
 } AgentxxClientLogIface;
 
 /* ==================== 插件入口符号 (dlsym) ==================== */
@@ -341,7 +338,7 @@ typedef const AgentxxClientPluginInfo* (*AgentxxClientPluginGetInfoFn)(void);
 /// - host: 本实例专属宿主句柄 (opaque 已关联本实例)
 /// - plugin_ctx: 输出本实例私有上下文 (透传给 destroy)
 /// - 返回 0 成功; 非 0 创建失败 (宿主走失败清理路径并报告错误)
-typedef int (*AgentxxClientPluginCreateFn)(const AgentxxClientHost* host, void** plugin_ctx);
+typedef int (*AgentxxClientPluginCreateFn)(const AgentxxPluginHost* host, void** plugin_ctx);
 
 /// 可选: 插件实例销毁 (宿主等全部在途回调完成后调用; 宿主会在此之前自动
 /// 反注册该实例的一切 status item/panel/command/订阅)。只销毁对应 create

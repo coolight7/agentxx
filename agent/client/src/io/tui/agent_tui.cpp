@@ -1595,7 +1595,7 @@ void TUIClientAgentIO::onSessionListPage(const agentxx::agent::WireSessionList& 
         auto&                       st = sharedState_.mutableState();
         // 在途标志复位 (无论本页是否可用, 请求生命周期已结束)
         st.sessionListLoadingMore = false;
-        // 旧版服务端兼容: 响应无分页元数据 (totalCount==0 && !hasMore) 时视为
+        // 兼容: 响应无分页元数据 (totalCount==0 && !hasMore) 时视为
         // 全量列表, 直接替换本地列表
         const bool legacyFullList = (resp.totalCount == 0 && !resp.hasMore);
         if (!st.sessionListLoaded || legacyFullList || st.sessionList.empty()) {
@@ -1776,11 +1776,11 @@ void TUIClientAgentIO::onDelta(const agentxx::agent::WireDelta& delta) {
                 m->startTimeMs        = delta.startTimeMs > 0
                                             ? delta.startTimeMs
                                             : static_cast<int64_t>(
-                                           std::chrono::duration_cast<std::chrono::milliseconds>(
-                                               std::chrono::system_clock::now().time_since_epoch()
-                                           )
-                                               .count()
-                                       );
+                                         std::chrono::duration_cast<std::chrono::milliseconds>(
+                                             std::chrono::system_clock::now().time_since_epoch()
+                                         )
+                                             .count()
+                                     );
                 st.messages.push_back(std::move(m));
                 st.isStreaming = true;
             } break;
@@ -1841,8 +1841,7 @@ void TUIClientAgentIO::onDelta(const agentxx::agent::WireDelta& delta) {
                         st.pendingTokenStartTimeMs = delta.startTimeMs;
                         st.pendingTokenDurationMs  = delta.durationMs;
                     }
-                } else if (!st.messages.empty()
-                           && st.messages.back()->role != TUIMessage::Role::Think) {
+                } else if (!st.messages.empty() && st.messages.back()->role != TUIMessage::Role::Think) {
                     auto& m       = sharedState_.mutableMessage(st, st.messages.size() - 1);
                     m.startTimeMs = delta.startTimeMs;
                     m.durationMs  = delta.durationMs;

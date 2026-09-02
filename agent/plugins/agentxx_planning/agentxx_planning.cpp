@@ -561,7 +561,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_agent_destroy(void* plugin_
 
 /// client 侧每实例上下文 (多实例契约: 状态挂本实例, 回调经 ud 恢复)
 struct ClientCtx {
-    const AgentxxClientHost*      host = nullptr;
+    const AgentxxPluginHost*      host = nullptr;
     agentxx::plugin::ClientIfaces iface{};
     /// "agentxx.client.ui" 展示接口表 (Info 段落/工具装饰; CLI 等不支持时成员 NULL 降级)
     const AgentxxClientUiIface* ui      = nullptr;
@@ -870,24 +870,24 @@ static void on_client_plugin_data(AgentxxPluginStringView payload_json, void* ud
         }
         char*      plugin = ctx->iface.json && ctx->iface.json->json_get_string
                                 ? ctx->iface.json->json_get_string(
-                                 ctx->host,
-                                 payload_json,
-                                 agentxx_plugin_sv_cstr("plugin")
-                             )
+                               ctx->host,
+                               payload_json,
+                               agentxx_plugin_sv_cstr("plugin")
+                           )
                                 : nullptr;
         char*      event  = ctx->iface.json && ctx->iface.json->json_get_string
                                 ? ctx->iface.json->json_get_string(
-                                ctx->host,
-                                payload_json,
-                                agentxx_plugin_sv_cstr("event")
-                            )
+                              ctx->host,
+                              payload_json,
+                              agentxx_plugin_sv_cstr("event")
+                          )
                                 : nullptr;
         char*      data   = ctx->iface.json && ctx->iface.json->json_get_string
                                 ? ctx->iface.json->json_get_string(
-                               ctx->host,
-                               payload_json,
-                               agentxx_plugin_sv_cstr("data")
-                           )
+                             ctx->host,
+                             payload_json,
+                             agentxx_plugin_sv_cstr("data")
+                         )
                                 : nullptr;
         const bool mine   = plugin && event && data && std::strcmp(plugin, "agentxx_planning") == 0
                           && std::strcmp(event, "planning") == 0;
@@ -1035,7 +1035,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxClientPluginInfo* agentxx_plugin_c
 }
 
 extern "C" AGENTXX_PLUGIN_EXPORT int
-    agentxx_plugin_client_create(const AgentxxClientHost* host, void** plugin_ctx) {
+    agentxx_plugin_client_create(const AgentxxPluginHost* host, void** plugin_ctx) {
     // C ABI 边界异常守卫: 异常返回 -1 (加载失败); 日志闭包捕获局部裸指针
     ClientCtx* raw = nullptr;
     return agentxx::plugin::guardCall(

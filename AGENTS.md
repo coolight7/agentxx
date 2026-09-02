@@ -88,12 +88,12 @@ path/to/agentxx_test string_util regex
     - [zlib] | [zlib-ng](agent/third_party/zlib-ng/)
 
 ## C++插件开发
-- 插件接口为 **API v1 (2026-08 重构, 不兼容历史)**: 入口为 `agentxx_plugin_agent_create` /
+- 插件接口为 **API v1**: 入口为 `agentxx_plugin_agent_create` /
   `agentxx_plugin_agent_destroy` 实例对 (client 侧 `agentxx_plugin_client_create` / `_destroy`)。
   【多实例契约】同一动态库可被同进程内不同 agent 宿主各自创建多个并存实例:
   ① 禁止可变全局/函数级 static 缓存; ② 实例状态只能放 `*plugin_ctx` 堆块,
   回调经 `spec.user_data` 恢复; ③ 接口表查询结果存实例上下文。
-  同步垫片 (`plugin_tool_sync.h`) 适配器为调用方内嵌存储 (PluginCtx 成员),
+  offload线程池适配异步接口 (`plugin_tool_sync.h`) 适配器为调用方内嵌存储 (PluginCtx 成员),
   随实例销毁释放。详见 docs/agent/plugins.md 4.2 节"多实例三铁律"
 - 为了尽量保持兼容性，主程序和插件之间的接口只能使用 C Api，不能使用 c++，插件将编译成动态库，然后按接口要求导出接口符号，由主程序运行时加载插件动态库后查找符号调用
 - 主程序和插件编译时默认动态链接 c++ 标准库，减少体积；插件也可以自己静态链接c++标准库、libgcc_s

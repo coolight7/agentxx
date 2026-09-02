@@ -247,7 +247,7 @@ struct MessageQueueItem {
 
 struct WireSyncPayload {
     /// 本批 messages 首条在服务端完整 viewMessages 中的绝对下标
-    /// - 全量同步: 0 (兼容旧语义)
+    /// - 全量同步: 0
     /// - 尾窗同步 (历史分页, initialSyncTailCount>0): 窗口起始下标 (>0 表示
     ///   上方还有更早消息未同步), 客户端据此支持"向上滚动加载更早历史"
     uint64_t                 fromIndex = 0;

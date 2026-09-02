@@ -1,5 +1,6 @@
 /*
- * agentxx/plugin/plugin_tool_sync.h —— 纯 C 同步垫片 (两件套模型)
+ * agentxx/plugin/plugin_tool_sync.h —— 线程池执行辅助
+ * - 提供辅助函数方便实现 将同步函数委托到线程池执行、对接插件框架的异步接口风格
  */
 #ifndef AGENTXX_PLUGIN_TOOL_SYNC_H
 #define AGENTXX_PLUGIN_TOOL_SYNC_H

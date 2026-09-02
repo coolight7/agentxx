@@ -54,7 +54,7 @@ events::ReqSubagentBatch parseSubagentBatchFromInterrupt(
             });
         }
     } else {
-        // 旧单发参数格式兼容: 直接含 subagent 字段时包装为 1 个 task
+        // 单发参数格式兼容: 直接含 subagent 字段时包装为 1 个 task
         batchReq.tasks.push_back(events::SubagentBatchItem{
             .subagentName = arg.value("subagent", std::string{}),
             .systemPrompt = arg.value("system_prompt", std::string{}),

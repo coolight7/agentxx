@@ -1254,7 +1254,7 @@ agent/
 │   │   │   │   ├── plugin_kit.h      # C++ SDK header-only (PluginBase/Task/awaiters/tool/hook/capability/spawn, 命名空间 agentxx::plugin)
 │   │   │   │   ├── plugin_guard.h    # 插件 C ABI 边界异常守卫 header-only (命名空间 agentxx::plugin)
 │   │   │   │   ├── plugin_iface_helper.h # 接口表查询缓存 (AgentIfaces/ClientIfaces)
-│   │   │   │   └── plugin_tool_sync.h    # 同步垫片适配器 (调用方内嵌存储)
+│   │   │   │   └── plugin_tool_sync.h    # offload线程池适配异步接口 (调用方内嵌存储)
 │   │   │   ├── op_driver.h       # 异步操作驱动 (AgentxxOpNotify Done 协议)
 │   │   │   ├── plugin_manager.h  # PluginManager 生命周期 (load/enable/disable/unload) /
 │   │   │   │                     #   PluginTool (C 回调→线程池卸载执行) /

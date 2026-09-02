@@ -299,7 +299,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_agent_destroy(void* plugin_
  * ==================== */
 
 struct ClientCtx {
-    const AgentxxClientHost*      host = nullptr;
+    const AgentxxPluginHost*      host = nullptr;
     agentxx::plugin::ClientIfaces iface{};
     const AgentxxClientUiIface*   ui      = nullptr;
     AgentxxInfoSection*           section = nullptr;
@@ -524,7 +524,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxClientPluginInfo* agentxx_plugin_c
 }
 
 extern "C" AGENTXX_PLUGIN_EXPORT int
-    agentxx_plugin_client_create(const AgentxxClientHost* host, void** plugin_ctx) {
+    agentxx_plugin_client_create(const AgentxxPluginHost* host, void** plugin_ctx) {
     ClientCtx* raw = nullptr;
     return agentxx::plugin::guardCall(
         [&raw](const char* m) noexcept {

@@ -101,7 +101,7 @@ public:
     PluginManifestInterfaces interfaces;
 
     /// 本插件专属宿主句柄 (vtable 为宿主静态函数表, opaque 指向本实例)
-    AgentxxClientHost host{};
+    AgentxxPluginHost host{};
 
     /// 事件订阅记录 (卸载自动退订; 仅 io 线程)
     /// - shared_ptr 存储: 订阅节点地址稳定 (vector 扩容/erase 不悬垂);
@@ -356,7 +356,7 @@ public:
     int sendPluginDataToPeer(ClientPluginInstance* inst, const char* event, const char* json);
 
     /// 宿主 vtable (静态函数表; 供 ClientPluginInstance::host 使用)
-    static const AgentxxClientHostVtable* hostVtable();
+    static const AgentxxHostVtable* hostVtable();
 
 private:
 

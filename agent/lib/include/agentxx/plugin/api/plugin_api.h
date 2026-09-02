@@ -13,7 +13,7 @@
 /// - 版本策略 (双层):
 ///   1) 全局 AGENTXX_PLUGIN_API_VERSION 只覆盖核心契约 (核心 vtable 形状 +
 ///      Info 结构 + 入口符号 + 本头共享类型); 宿主精确匹配门禁: api_version
-///      不匹配直接拒绝加载 (无历史兼容路径)
+///      不匹配直接拒绝加载
 ///   2) 接口表各自携带 version 独立演进: 新增能力 = 定义新接口表或表内
 ///      追加成员并递增该表版本, 全局版本号不动、其他插件不受影响
 ///
@@ -558,7 +558,8 @@ typedef struct AgentxxPluginResourcesIface {
 
 /// 插件节点执行函数 (两件套契约; 【宿主 io 线程调用】, 非阻塞):
 /// - node_name/config_json/state_json/thread_id: 只读借用, 仅本次调用有效
-/// - state_json 为 GraphState::serialize() 的结果: {"channels": {<ch名>: {"value": ..., "version": N}}, "global_version": N}
+/// - state_json 为 GraphState::serialize() 的结果: {"channels": {<ch名>: {"value": ..., "version":
+/// N}}, "global_version": N}
 ///   (插件只读; 修改须经返回的 writes)
 /// - 完成时 notify->done(OK, payload): payload 为节点输出 JSON (host->alloc):
 ///   {"writes": [{"channel": "...", "value": ..., "mode": "reduce"|"overwrite"}],
@@ -580,10 +581,10 @@ typedef void (*AgentxxPluginGraphNodeRunCancelFn)(void* user_data, void* op);
 
 /// 插件节点类型注册规格
 typedef struct AgentxxPluginGraphNodeTypeSpec {
-    AgentxxPluginStringView type;               ///< 节点类型名 (须全局唯一)
-    AgentxxPluginGraphNodeRunStartFn run_start; ///< 节点执行 (两件套契约)
+    AgentxxPluginStringView           type;       ///< 节点类型名 (须全局唯一)
+    AgentxxPluginGraphNodeRunStartFn  run_start;  ///< 节点执行 (两件套契约)
     AgentxxPluginGraphNodeRunCancelFn run_cancel; ///< 可空
-    void* user_data;                            ///< 透传给 run_start/run_cancel
+    void*                             user_data;  ///< 透传给 run_start/run_cancel
     /// 可选节点 config JSON Schema (Draft 2020-12 片段; 仅供导出/文档, 引擎不校验)
     AgentxxPluginStringView config_schema_json;
 } AgentxxPluginGraphNodeTypeSpec;
@@ -603,7 +604,7 @@ typedef struct AgentxxPluginGraphIface {
     /// 注册节点类型 (io 线程约束, 非 io 线程由宿主投递同步等待)
     /// `return`: 类型名冲突返回非 0
     int (*register_node_type)(
-        const AgentxxPluginHost*           host,
+        const AgentxxPluginHost*              host,
         const AgentxxPluginGraphNodeTypeSpec* spec
     );
     /// 注销节点类型 (按类型名; 卸载时宿主自动清理)
@@ -652,7 +653,7 @@ typedef struct AgentxxPluginTasksIface {
         const AgentxxPluginHost*            host,
         AgentxxPluginOperatorCancelFunction cancel_fn,
         void*                               cancel_ud,
-        AgentxxPluginOperatorNotify*        notify,   ///< [out] 见上
+        AgentxxPluginOperatorNotify*        notify, ///< [out] 见上
         char**                              error_out
     );
     /// 取消任务 (幂等; 仅限 io 线程调用, 或宿主内部经 ioCallSync 投递后调用)

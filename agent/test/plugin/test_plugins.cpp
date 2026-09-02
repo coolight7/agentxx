@@ -601,7 +601,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
         XX_TEST_EXPECT_TRUE(inst23 != nullptr);
         if (inst23) {
             // 注册带超时的慢工具: 超时 100ms, 阻塞操作 600ms 后才完成
-            // (阻塞委托型同步垫片: execute 经 scheduler.offload 在宿主阻塞池
+            // (阻塞委托型 offload线程池: execute 经 scheduler.offload 在宿主阻塞池
             // 线程执行, 与插件作者使用 agentxx_register_sync_tool 的真实路径一致)
             static AgentxxSyncToolSpec slowSpec;
             slowSpec.name            = agentxx_plugin_sv_cstr("slow_timeout_tool");
@@ -624,8 +624,8 @@ asio::awaitable<TestResult> run_plugin_tests() {
             };
             slowSpec.user_data          = nullptr;
             slowSpec.default_timeout_ms = 100;
-            // API v1: 垫片适配器为调用方内嵌存储 (随插件实例 ctx 生死; 此处测试
-            // 直接持有 —— 与插件作者真实用法一致)
+            // API v1: offload线程池适配异步接口 为调用方内嵌存储 (随插件实例 ctx 生死; 此处测试
+            // 直接持有)
             static AgentxxSyncToolShim slowSpecShim;
             XX_TEST_EXPECT_EQ(
                 agentxx_register_sync_tool(&inst23->host, &slowSpec, &slowSpecShim),
@@ -895,20 +895,20 @@ asio::awaitable<TestResult> run_plugin_tests() {
             XX_TEST_EXPECT_TRUE(ev30 != nullptr && ev30->publish != nullptr);
             XX_TEST_EXPECT_EQ(
                 ev30 ? ev30->publish(
-                           &inst30->host,
-                           agentxx_plugin_sv_cstr("demo.topic"),
-                           agentxx_plugin_sv_cstr(R"({"k":"v"})")
-                       )
+                    &inst30->host,
+                    agentxx_plugin_sv_cstr("demo.topic"),
+                    agentxx_plugin_sv_cstr(R"({"k":"v"})")
+                )
                      : -1,
                 0
             );
             ctx->pluginManager->disable("example_plugin");
             // 禁用状态: 接口表 publish 拒绝 (返回非 0)
             int rc = ev30 ? ev30->publish(
-                                &inst30->host,
-                                agentxx_plugin_sv_cstr("demo.topic"),
-                                agentxx_plugin_sv_cstr(R"({"k":"v"})")
-                            )
+                         &inst30->host,
+                         agentxx_plugin_sv_cstr("demo.topic"),
+                         agentxx_plugin_sv_cstr(R"({"k":"v"})")
+                     )
                           : -1;
             XX_TEST_EXPECT_TRUE(rc != 0);
             co_await ctx->pluginManager->unloadAsync("example_plugin");
@@ -1144,8 +1144,8 @@ asio::awaitable<TestResult> run_plugin_tests() {
             ctx->pluginManager->unregisterTool(inst31.get(), "null_start_tool");
         }
 
-        // 31.6 异常守卫: 同步垫片 work 函数兜底 —— 用户 execute 抛异常时
-        //      垫片转 error_out + NULL, 异常不穿越 C ABI (host 为空也不崩)
+        // 31.6 异常守卫: offload线程池适配异步接口 work 函数兜底 —— 用户 execute 抛异常时
+        //      适配层 转 error_out + NULL, 异常不穿越 C ABI (host 为空也不崩)
         {
             static AgentxxSyncJob shimJob{};
             shimJob.shim.fn = +[](void*,
@@ -1432,20 +1432,18 @@ asio::awaitable<TestResult> run_plugin_tests() {
         gctx->graphDefinitionJson = neograph::json{
             {"name", "agentxx.default"},
             {
-                "channels", {
+             "channels", {
                     {"messages", {{"reducer", "append"}}},
-                },
-            },
+                }, },
             {
-                "nodes", {
+             "nodes", {
                     {"agent_start", {{"type", "xx_MiddlewareWrapAgentStartCall"}}},
-                    {"agent_end",   {{"type", "xx_MiddlewareWrapAgentEndCall"}}},
-                    {"tools",       {{"type", "xx_Toolcall"}}},
-                    {"llm",         {{"type", "xx_ModelCallWrap"}}},
-                },
-            },
+                    {"agent_end", {{"type", "xx_MiddlewareWrapAgentEndCall"}}},
+                    {"tools", {{"type", "xx_Toolcall"}}},
+                    {"llm", {{"type", "xx_ModelCallWrap"}}},
+                }, },
             {
-                "edges", neograph::json::array({
+             "edges", neograph::json::array({
                     {{"from", "__start__"}, {"to", "agent_start"}},
                     {{"from", "agent_start"}, {"to", "llm"}},
                     {
@@ -1457,7 +1455,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
                     {{"from", "tools"}, {"to", "llm"}},
                     {{"from", "agent_end"}, {"to", "__end__"}},
                 }),
-            },
+             },
         };
 
         auto ginst = co_await gctx->pluginManager->loadPluginAsync(graphPath);
@@ -1477,12 +1475,8 @@ asio::awaitable<TestResult> run_plugin_tests() {
             }
             XX_TEST_EXPECT_TRUE(gctx->graphDefinitionJson.contains("nodes"));
             if (gctx->graphDefinitionJson.contains("nodes")) {
-                XX_TEST_EXPECT_TRUE(
-                    gctx->graphDefinitionJson["nodes"].contains("intent_router")
-                );
-                XX_TEST_EXPECT_TRUE(
-                    gctx->graphDefinitionJson["nodes"].contains("datetime_node")
-                );
+                XX_TEST_EXPECT_TRUE(gctx->graphDefinitionJson["nodes"].contains("intent_router"));
+                XX_TEST_EXPECT_TRUE(gctx->graphDefinitionJson["nodes"].contains("datetime_node"));
                 XX_TEST_EXPECT_EQ(
                     gctx->graphDefinitionJson["nodes"]["intent_router"]["type"].get<std::string>(),
                     "example_intent_router"
@@ -1497,47 +1491,64 @@ asio::awaitable<TestResult> run_plugin_tests() {
                 gctx->graphRegistry->register_type(
                     std::string{"xx_MiddlewareWrapAgentStartCall"},
                     [agCtx](const std::string&, const neograph::json&, const neograph::graph::NodeContext&) {
-                        return std::make_unique<agentxx::nodes::AgentStartCallWrapNode>("agent_start", agCtx);
+                        return std::make_unique<agentxx::nodes::AgentStartCallWrapNode>(
+                            "agent_start",
+                            agCtx
+                        );
                     }
                 );
                 gctx->graphRegistry->register_type(
                     std::string{"xx_MiddlewareWrapAgentEndCall"},
                     [agCtx](const std::string&, const neograph::json&, const neograph::graph::NodeContext&) {
-                        return std::make_unique<agentxx::nodes::AgentEndCallWrapNode>("agent_end", agCtx);
+                        return std::make_unique<agentxx::nodes::AgentEndCallWrapNode>(
+                            "agent_end",
+                            agCtx
+                        );
                     }
                 );
                 gctx->graphRegistry->register_type(
                     std::string{"xx_ModelCallWrap"},
-                    [agCtx](const std::string& name, const neograph::json&, const neograph::graph::NodeContext& nc) {
+                    [agCtx](
+                        const std::string& name,
+                        const neograph::json&,
+                        const neograph::graph::NodeContext& nc
+                    ) {
                         return std::make_unique<agentxx::nodes::ModelCallWrapNode>(name, nc, agCtx);
                     }
                 );
                 gctx->graphRegistry->register_type(
                     std::string{"xx_Toolcall"},
-                    [agCtx](const std::string& name, const neograph::json&, const neograph::graph::NodeContext& nc) {
+                    [agCtx](
+                        const std::string& name,
+                        const neograph::json&,
+                        const neograph::graph::NodeContext& nc
+                    ) {
                         return std::make_unique<agentxx::nodes::ToolcallWrapNode>(name, nc, agCtx);
                     }
                 );
 
                 // 构造完整 AgentConfig (llm 节点需要)
-                auto cfg = gctx->agentConfig;
-                cfg->model.modelName = "test-model";
-                cfg->agentName       = "test-agent";
+                auto cfg                 = gctx->agentConfig;
+                cfg->model.modelName     = "test-model";
+                cfg->agentName           = "test-agent";
                 cfg->prompt.systemPrompt = "You are a test agent.";
+
                 // ModelProviderRegistry 创建 provider: 使用 mock
                 // (OpenAIProvider 需网络; 用一个固定返回 provider)
                 // 注意: BaseAgent 构造要求 config->model.isValid(), 测试直接
                 // 构造 engine 而非 BaseAgent, 用 mock provider
                 class MockProvider : public neograph::Provider {
                 public:
+
                     std::string get_name() const override {
                         return "mock";
                     }
+
                     // 覆写 invoke_format_data: ModelCallWrapNode 经此调用;
                     // 默认实现会经 chunk 回调转发, stream_cb 为空时触发
                     // bad_function_call, 故直接在此返回
                     asio::awaitable<neograph::ChatCompletion> invoke_format_data(
-                        const neograph::CompletionParams& params,
+                        const neograph::CompletionParams&  params,
                         neograph::FormatDataStreamCallback on_chunk = nullptr
                     ) override {
                         (void)on_chunk;
@@ -1545,7 +1556,8 @@ asio::awaitable<TestResult> run_plugin_tests() {
                         completion.message.role = "assistant";
                         // 意图识别: 检查最后一条 user 消息是否含 "时间"
                         std::string lastUser;
-                        for (auto it = params.messages.rbegin(); it != params.messages.rend(); ++it) {
+                        for (auto it = params.messages.rbegin(); it != params.messages.rend();
+                             ++it) {
                             if (it->role == "user") {
                                 lastUser = it->content;
                                 break;
@@ -1560,10 +1572,11 @@ asio::awaitable<TestResult> run_plugin_tests() {
                         co_return completion;
                     }
                 };
+
                 auto provider = std::make_shared<MockProvider>();
 
                 neograph::graph::NodeContext nodeCtx;
-                nodeCtx.provider = provider;
+                nodeCtx.provider     = provider;
                 nodeCtx.instructions = cfg->prompt.systemPrompt;
                 nodeCtx.extra_config = neograph::json{
                     {agentxx::nodes::ModelCallWrapNode::defUseModelRegistryKey, true},
@@ -1582,7 +1595,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
                 engineConfig.node_context = nodeCtx;
                 neograph::graph::EngineResources resources;
                 resources.registry = gctx->graphRegistry;
-                auto engine = neograph::graph::GraphEngine::link(
+                auto engine        = neograph::graph::GraphEngine::link(
                     std::move(validated),
                     std::move(engineConfig),
                     std::move(resources)
@@ -1592,9 +1605,9 @@ asio::awaitable<TestResult> run_plugin_tests() {
                     // 运行 datetime 意图: 应走到 datetime_node 输出时间并结束
                     neograph::graph::RunConfig runCfg;
                     runCfg.thread_id = "graph-test-datetime";
-                    runCfg.input = neograph::json{
-                        {"messages",
-                         neograph::json::array({
+                    runCfg.input     = neograph::json{
+                            {"messages",
+                             neograph::json::array({
                              neograph::json{{"role", "user"}, {"content", "现在几点"}},
                          })},
                     };
@@ -1606,7 +1619,8 @@ asio::awaitable<TestResult> run_plugin_tests() {
                         auto msgs = result.channel_raw("messages");
                         if (msgs.is_array()) {
                             for (const auto& m : msgs) {
-                                if (m.is_object() && m.contains("content") && m["content"].is_string()) {
+                                if (m.is_object() && m.contains("content")
+                                    && m["content"].is_string()) {
                                     if (m["content"].get<std::string>().find("当前系统日期时间")
                                         != std::string::npos) {
                                         hasTime = true;
@@ -1622,9 +1636,9 @@ asio::awaitable<TestResult> run_plugin_tests() {
                     // intent_router 移除意图消息 → llm 重答 → 无 tool_calls → end)
                     neograph::graph::RunConfig runCfg2;
                     runCfg2.thread_id = "graph-test-normal";
-                    runCfg2.input = neograph::json{
-                        {"messages",
-                         neograph::json::array({
+                    runCfg2.input     = neograph::json{
+                            {"messages",
+                             neograph::json::array({
                              neograph::json{{"role", "user"}, {"content", "你好"}},
                          })},
                     };
@@ -1637,10 +1651,16 @@ asio::awaitable<TestResult> run_plugin_tests() {
                         if (msgs2.is_array()) {
                             bool hasUser = false, hasAssistant = false;
                             for (const auto& m : msgs2) {
-                                if (!m.is_object()) continue;
+                                if (!m.is_object()) {
+                                    continue;
+                                }
                                 auto role = m.value("role", std::string{});
-                                if (role == "user") hasUser = true;
-                                if (role == "assistant") hasAssistant = true;
+                                if (role == "user") {
+                                    hasUser = true;
+                                }
+                                if (role == "assistant") {
+                                    hasAssistant = true;
+                                }
                             }
                             XX_TEST_EXPECT_TRUE(hasUser);
                             XX_TEST_EXPECT_TRUE(hasAssistant);

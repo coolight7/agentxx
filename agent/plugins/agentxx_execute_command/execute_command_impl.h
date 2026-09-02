@@ -12,7 +12,7 @@
 //     并发多条命令共享一个寄生 loop 等就绪事件, 不再每命令占死一个阻塞池
 //     线程至超时 (原局部 io_context + io.run() 同步驱动模式已移除)
 //   - AGENTXX_ENABLE_BOOST_PROCESS 关闭时的 popen 回退为阻塞实现 (*Execute
-//     同步函数), 由入口经 plugin_tool_sync.h 的 sync 垫片注册 (offload 池)
+//     同步函数), 由入口经 plugin_tool_sync.h 的 offload线程池适配异步接口 注册
 
 // ## 输出结果压缩
 // - 禁用 ToolcallNode 的自动压缩，改由自己实现压缩, 分别独立对 stdout、stderr 压缩
@@ -501,10 +501,10 @@ inline asio::awaitable<std::string> bashExecuteAsync(
         procExe,
         procArgs,
         boost::process::process_environment(procEnv),
-        // 子进程初始工作目录: 会话工作目录 (未配置时显式取进程 cwd, 行为等价继承)
+ // 子进程初始工作目录: 会话工作目录 (未配置时显式取进程 cwd, 行为等价继承)
         boost::process::process_start_dir{detail::subprocessWorkDir(workDir)},
-        // stdin 重定向到 null 设备 (Windows: NUL / POSIX: /dev/null),
-        // 避免子进程 (如交互式命令) 抢读 agent 进程的终端输入
+ // stdin 重定向到 null 设备 (Windows: NUL / POSIX: /dev/null),
+  // 避免子进程 (如交互式命令) 抢读 agent 进程的终端输入
         boost::process::process_stdio{.in = nullptr, .out = outpip, .err = errpip},
     };
 
@@ -563,9 +563,9 @@ inline asio::awaitable<std::string> windowsExecuteAsync(
         procExe,
         launch.args,
         boost::process::process_environment(procEnv),
-        // 子进程初始工作目录: 会话工作目录 (未配置时显式取进程 cwd, 行为等价继承)
+ // 子进程初始工作目录: 会话工作目录 (未配置时显式取进程 cwd, 行为等价继承)
         boost::process::process_start_dir{detail::subprocessWorkDir(workDir)},
-        // stdin 重定向到 null 设备, 避免子进程抢读 agent 进程的终端输入
+ // stdin 重定向到 null 设备, 避免子进程抢读 agent 进程的终端输入
         boost::process::process_stdio{.in = nullptr, .out = outpip, .err = errpip}
     };
 
@@ -584,8 +584,8 @@ inline asio::awaitable<std::string> windowsExecuteAsync(
 #else
 // =====================================================================
 // 执行体 —— popen 回退版 (仅 AGENTXX_ENABLE_BOOST_PROCESS 关闭时编译/注册)
-// - 阻塞实现: 只允许经 plugin_tool_sync.h sync 垫片注册 (offload 池线程
-//   执行), 禁止在宿主 io 线程/poll 寄生 loop 上直接调用
+// - 阻塞实现: 只允许经 plugin_tool_sync.h offload线程池适配异步接口 注册,
+// 禁止在宿主 io 线程/poll 寄生 loop 上直接调用
 // - 无法指定子进程工作目录 (继承 agent 进程 cwd), 无会话取消支持
 // =====================================================================
 

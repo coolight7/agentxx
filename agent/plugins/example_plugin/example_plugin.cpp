@@ -29,7 +29,7 @@
 struct AgentCtx : public agentxx::plugin::PluginBase {};
 
 struct ClientCtx {
-    const AgentxxClientHost*      host = nullptr;
+    const AgentxxPluginHost*      host = nullptr;
     agentxx::plugin::ClientIfaces iface{};
     const AgentxxClientUiIface*   ui           = nullptr;
     AgentxxStatusItem*            status_item  = nullptr;
@@ -307,10 +307,10 @@ static char* example_toast_execute(void* ud, AgentxxPluginStringView args_json, 
             return nullptr;
         }
         char*       argText = ctx->iface.json ? ctx->iface.json->json_get_string(
-                                              ctx->host,
-                                              args_json,
-                                              agentxx_plugin_sv_cstr("text")
-                                          )
+                            ctx->host,
+                            args_json,
+                            agentxx_plugin_sv_cstr("text")
+                        )
                                               : nullptr;
         std::string text    = argText && *argText ? argText : "toast from example plugin";
         if (argText) {
@@ -418,7 +418,7 @@ static void on_client_plugin_data(AgentxxPluginStringView payload_json, void* ud
 }
 
 extern "C" AGENTXX_PLUGIN_EXPORT int
-    agentxx_plugin_client_create(const AgentxxClientHost* host, void** plugin_ctx) {
+    agentxx_plugin_client_create(const AgentxxPluginHost* host, void** plugin_ctx) {
     ClientCtx* raw = nullptr;
     return agentxx::plugin::guardCall(
         [&raw](const char* msg) noexcept {
@@ -437,28 +437,27 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
 
             ctx->status_item = ctx->ui && ctx->ui->register_status_item
                                    ? ctx->ui->register_status_item(
-                                         host,
-                                         agentxx_plugin_sv_cstr("example_plugin.turns"),
-                                         agentxx_plugin_sv_cstr(R"({"text":"turns: 0"})"),
-                                         0,
-                                         10
-                                     )
+                                       host,
+                                       agentxx_plugin_sv_cstr("example_plugin.turns"),
+                                       agentxx_plugin_sv_cstr(R"({"text":"turns: 0"})"),
+                                       0,
+                                       10
+                                   )
                                    : nullptr;
 
-            ctx->panel = ctx->ui && ctx->ui->register_panel
-                             ? ctx->ui->register_panel(
-                                   host,
-                                   agentxx_plugin_sv_cstr("example_plugin.panel"),
-                                   agentxx_plugin_sv_cstr(R"({"title":"Example"})")
-                               )
-                             : nullptr;
+            ctx->panel = ctx->ui && ctx->ui->register_panel ? ctx->ui->register_panel(
+                             host,
+                             agentxx_plugin_sv_cstr("example_plugin.panel"),
+                             agentxx_plugin_sv_cstr(R"({"title":"Example"})")
+                         )
+                                                            : nullptr;
 
             ctx->info_section = ctx->ui && ctx->ui->register_info_section
                                     ? ctx->ui->register_info_section(
-                                          host,
-                                          agentxx_plugin_sv_cstr("example_plugin.info"),
-                                          agentxx_plugin_sv_cstr(R"({"title":"Example Info"})")
-                                      )
+                                        host,
+                                        agentxx_plugin_sv_cstr("example_plugin.info"),
+                                        agentxx_plugin_sv_cstr(R"({"title":"Example Info"})")
+                                    )
                                     : nullptr;
 
             if (!ctx->ui || !ctx->ui->register_command) {

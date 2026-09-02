@@ -355,7 +355,7 @@ void SessionServerAgentIO::onPeerMessage(WireMessage msg) {
                 // 目录扫描 + SQLite 读取属阻塞 I/O, 卸载到 threadPool 执行,
                 // 避免阻塞 agent io 线程; 完成后经 shared_from_this 回填响应。
                 // 分页: limit > 0 时走 keyset 游标分页查询 (仅返回一页),
-                // limit == 0 为旧行为 (全量列举, 兼容旧客户端)
+                // limit == 0 为全量列举
                 auto agent = agent_.lock();
                 if (!agent || !agent->agentContext
                     || !agent->agentContext->sessions->sessionStore) {

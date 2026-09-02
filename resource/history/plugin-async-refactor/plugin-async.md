@@ -438,18 +438,18 @@ awaitPluginOp(args):
 
 | 插件 | 旧姿势 | 新姿势 | 备注 |
 |------|--------|--------|------|
-| string / system / planning / rag_search | sync 垫片 | `blocking_tool` | 语义不变，样板消失 |
-| **filesystem** glob/grep/list 等 CPU 型 | sync 垫片 | `blocking_tool` | 不变 |
+| string / system / planning / rag_search | offload线程池适配异步接口 | `blocking_tool` | 语义不变，样板消失 |
+| **filesystem** glob/grep/list 等 CPU 型 | offload | `blocking_tool` | 不变 |
 | **filesystem** read/write/edit（真异步 stream_file） | polled (asio stream_file 私有 loop) | **默认** `blocking_tool`(offload 阻塞 IO) | impl 已是 asio 协程 → 升级路径几乎零改动（仅换 loop 宿主为专用线程）。触发升级条件：大文件高并发吞吐导致池线程饥饿。默认取简单优先 |
-| example_plugin echo 等 | inline 垫片 | `fast_tool` | |
+| example_plugin echo 等 | inline | `fast_tool` | |
 | example_plugin sleeper（手写三件套 sleep_poll） | 手写三件套 | `tool` + `co_await c.sleep()` | 成为锚定模型教学样本 |
 | **websearch** | polled (asio http 私有 loop) | `blocking_tool`+curl easy 为将来可选简化 | 与 filesystem 同理：impl 已是 asio 协程，reactor 迁移几乎零改动；curl 重写自带编码/压缩/代理行为差异风险（§10），不应作为默认；reactor 形态天然支持高并发，无需预留升级触发条件 |
 | **execute_command** | polled (bp::v2) + popen 双路径 | popen 回退并入 `blocking_tool` | 保留精确唤醒/超时击杀语义；双路径样板消失 |
 | **system_monitor** 能力采样 | polled (100ms 定时等待) | `tool` + `c.sleep(100)` | 教科书式受益者 |
 | system_monitor 周期采集 | add_timer + offload | `spawn` + sleep 循环 + offload | add_timer 消费者清零 |
-| text_selection_monitor delayMs | sync 垫片（delayMs 在执行函数内） | `blocking_tool` | 机械替换 |
-| audio_stream / screen_capture / computer_use | sync 垫片 | `blocking_tool` | 机械替换 |
-| codegraph | sync 垫片 + 全局日志 sink | `blocking_tool` + Logger 成员化 | 多实例日志串扰修复 |
+| text_selection_monitor delayMs | offload（delayMs 在执行函数内） | `blocking_tool` | 机械替换 |
+| audio_stream / screen_capture / computer_use | offload | `blocking_tool` | 机械替换 |
+| codegraph | offload + 全局日志 sink | `blocking_tool` + Logger 成员化 | 多实例日志串扰修复 |
 | javascript_engine | 自有线程 + 手写两件套 | 不动（仅删 poll 字段置 NULL 处） | 已是新模型的自管线程形态；其 JS 线程内 `iface.tools->call_tool` 改用 kit condvar 助手 |
 | example_js / example_plugin 互调 | 阻塞 call_tool / invoke_capability | kit condvar 助手（签名同形） | offload 工作线程场景专用 |
 | planning client 段 / 双端 UI | 同步回调 | 不动 | client 侧模型不变 |
@@ -463,7 +463,7 @@ awaitPluginOp(args):
 | `add_timer` / `cancel_timer` | 仅 system_monitor | spawn+sleep 循环重写采集器 |
 | `execute_poll` / `hook_poll` 字段 | javascript_engine（置 NULL 处）、example_plugin sleeper、test_plugins.cpp 3 个 poll 用例 | 字段删除 + 用例按两件套协议重写（取消语义测试目标不变） |
 | `plugin_poll_loop.h` | execute_command / websearch / filesystem(read/write/edit) / system_monitor 能力 | 随迁移删除 |
-| `register_sync_tool` 等旧垫片 API | 10 个插件 | 并入 kit 注册族后原头文件退役 |
+| `register_sync_tool` 等旧offload线程池适配异步接口 API | 10 个插件 | 并入 kit 注册族后原头文件退役 |
 
 ---
 

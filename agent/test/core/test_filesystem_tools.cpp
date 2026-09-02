@@ -2074,7 +2074,7 @@ asio::awaitable<void>
 /// op_driver 全链路执行 —— 覆盖单测直测 impl 纯函数覆盖不到的接线层:
 ///   - read/write/edit: poll 寄生驱动三件套 (PolledToolShim start→poll 步进
 ///     →done 上报; asio stream_file 异步文件 I/O 在寄生 loop 上推进)
-///   - list/grep: sync 垫片 (offload 池委托)
+///   - list/grep: offload线程池适配异步接口
 /// 会话工作目录经宿主 get_session_work_dir 接口注入 (绑定 testDir), 同时覆盖
 /// work_dir 接口表装配; 插件未构建 (无 .so 产物) 时优雅跳过
 asio::awaitable<void> test_plugin_real_link() {
@@ -2207,7 +2207,7 @@ asio::awaitable<void> test_plugin_real_link() {
         XX_TEST_EXPECT_EQ(content, std::string{"alpha\ngamma\n"});
     }
 
-    // list (sync 垫片/offload): 列出目录内容
+    // list offload线程池适配异步接口: 列出目录内容
     {
         auto out = co_await callTool(
             "agentxx_filesystem_list",
@@ -2218,7 +2218,7 @@ asio::awaitable<void> test_plugin_real_link() {
         XX_TEST_EXPECT_TRUE(out.find("link_smoke.txt") != std::string::npos);
     }
 
-    // grep (sync 垫片/offload): 文本搜索命中
+    // grep offload线程池适配异步接口: 文本搜索命中
     {
         auto out = co_await callTool(
             "agentxx_filesystem_grep",
@@ -2286,7 +2286,7 @@ asio::awaitable<void> test_plugin_real_link() {
         fs::remove_all(agentxx::util::utf8ToPath(testDir + "/中文目录_真实链路"), ec);
     }
 
-    // 卸载 (寄生 loop / 垫片随实例析构安全)
+    // 卸载 (寄生 loop)
     auto okUnload = co_await linkCtx->pluginManager->unloadAsync("agentxx_filesystem");
     XX_TEST_EXPECT_TRUE(okUnload);
 

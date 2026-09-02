@@ -72,7 +72,7 @@ private:
 /// - 消除 BaseAgent / AgentHost / SubAgentManagerTool 三处重复的 key 规则
 ///   与参数组装, 防止规则漂移
 /// - 中断参数格式: {tasks: [...]} 数组 (SubAgentManagerTool 构造);
-///   兼容旧单发格式 (直接含 subagent 字段时包装为 1 个 task)
+///   兼容单发格式 (直接含 subagent 字段时包装为 1 个 task)
 
 /// 从中断参数构建批量委派请求 (统一批量语义)
 /// - agentName: 发起方 agent 名 (ReqSubagentBatch.parentAgentName)

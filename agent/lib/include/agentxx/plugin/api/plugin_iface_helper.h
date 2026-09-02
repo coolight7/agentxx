@@ -137,7 +137,7 @@ struct ClientIfaces {
     const AgentxxClientLogIface*     log     = nullptr; ///< "agentxx.client.log"
 
     /// 从宿主查询全部已知 client 侧接口表 (host 为空时返回全 NULL 聚合)
-    static ClientIfaces query(const AgentxxClientHost* host) {
+    static ClientIfaces query(const AgentxxPluginHost* host) {
         ClientIfaces f;
         if (!host || !host->vtable || !host->vtable->query_interface) {
             return f;

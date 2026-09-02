@@ -1379,7 +1379,7 @@ inline asio::awaitable<std::string>
 #else // !BOOST_ASIO_HAS_FILE
 
 /// 文件异步 I/O 不可用平台 (无 io_uring/iocp 文件支持): 回退同步实现。
-/// 注册侧检测同一宏, 会改走 sync 垫片 (offload 池线程) 注册, 本回退仅供
+/// 注册侧检测同一宏, 会改走 offload线程池适配异步接口 注册, 本回退仅供
 /// 测试等直调场景保持单一入口
 inline asio::awaitable<std::string>
     fileReadExecuteAsyncImpl(const neograph::json& arguments, const std::string& workDir) {
