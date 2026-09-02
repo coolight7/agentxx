@@ -193,6 +193,7 @@ set(AGENTXX_BUILTIN_PLUGIN_MANIFEST_ENTRIES "")
 # - [AGENTXX_PLUGIN_BUILTIN_LIST] 控制内嵌编译插件列表
 agentxx_load_plugin(example_plugin AGENTXX_ENABLE_PLUGIN_EXAMPLE)
 agentxx_load_plugin(example_resources AGENTXX_ENABLE_PLUGIN_EXAMPLE)
+agentxx_load_plugin(example_graph_node AGENTXX_ENABLE_PLUGIN_EXAMPLE)
 # JS 相关 (example_js 依赖 quickjs 引擎目标)
 agentxx_load_plugin(agentxx_javascript_engine AGENTXX_ENABLE_PLUGIN_JS)
 agentxx_load_plugin(example_js AGENTXX_ENABLE_PLUGIN_EXAMPLE)
