@@ -3,6 +3,9 @@
 #include "agentxx/agent/context.h"
 #include "agentxx/event/event_stream.h"
 #include "agentxx/middlewares/middleware.h"
+#include "agentxx/nodes/agentcall.h"
+#include "agentxx/nodes/modelcall.h"
+#include "agentxx/nodes/toolcall.h"
 #include "agentxx/plugin/api/plugin_iface_helper.h"
 #include "agentxx/plugin/api/plugin_tool_sync.h"
 #include "agentxx/plugin/plugin_manager.h"
@@ -12,6 +15,8 @@
 #include "asio/detached.hpp"
 #include "asio/steady_timer.hpp"
 #include "asio/use_awaitable.hpp"
+#include "neograph/graph/compiler.h"
+#include "neograph/graph/validator.h"
 #include <algorithm>
 #include <chrono>
 #include <cstdlib>
@@ -1405,6 +1410,248 @@ asio::awaitable<TestResult> run_plugin_tests() {
             if (cres.payload) {
                 std::free(cres.payload);
             }
+        }
+    }
+
+    // ---- 35. example_graph_node 插件: 节点注册 + 执行图修改 ----
+    {
+        auto graphPath = findPluginDir("example_graph_node");
+        XX_TEST_EXPECT_TRUE(graphPath.find("example_graph_node") != std::string::npos);
+
+        // 35.1 构造带 graphRegistry 的上下文 (插件注册节点类型需要)
+        auto gctx                     = std::make_shared<agentxx::agent::AgentContext>();
+        gctx->agentConfig             = std::make_shared<agentxx::agent::AgentConfig>();
+        gctx->middlewareHandleContext = std::make_shared<agentxx::middleware::MiddlewareContext>();
+        gctx->bus = std::make_shared<agentxx::event::EventBus>(co_await asio::this_coro::executor);
+        gctx->toolRegistry  = std::make_shared<agentxx::plugin::ToolRegistry>();
+        gctx->pluginManager = std::make_shared<agentxx::plugin::PluginManager>(gctx);
+        gctx->pluginManager->setIoExecutor(co_await asio::this_coro::executor);
+        gctx->graphRegistry = std::make_shared<neograph::graph::GraphRegistry>();
+
+        // 默认图 (与 BaseAgent::initGraphDefinition 同构): 名称 agentxx.default
+        gctx->graphDefinitionJson = neograph::json{
+            {"name", "agentxx.default"},
+            {
+                "channels", {
+                    {"messages", {{"reducer", "append"}}},
+                },
+            },
+            {
+                "nodes", {
+                    {"agent_start", {{"type", "xx_MiddlewareWrapAgentStartCall"}}},
+                    {"agent_end",   {{"type", "xx_MiddlewareWrapAgentEndCall"}}},
+                    {"tools",       {{"type", "xx_Toolcall"}}},
+                    {"llm",         {{"type", "xx_ModelCallWrap"}}},
+                },
+            },
+            {
+                "edges", neograph::json::array({
+                    {{"from", "__start__"}, {"to", "agent_start"}},
+                    {{"from", "agent_start"}, {"to", "llm"}},
+                    {
+                        {"from", "llm"},
+                        {"type", "conditional"},
+                        {"condition", "has_tool_calls"},
+                        {"routes", {{"true", "tools"}, {"false", "agent_end"}}},
+                    },
+                    {{"from", "tools"}, {"to", "llm"}},
+                    {{"from", "agent_end"}, {"to", "__end__"}},
+                }),
+            },
+        };
+
+        auto ginst = co_await gctx->pluginManager->loadPluginAsync(graphPath);
+        XX_TEST_EXPECT_TRUE(ginst != nullptr);
+        if (ginst) {
+            XX_TEST_EXPECT_EQ(ginst->name, "example_graph_node");
+            // 节点类型已注册到 per-agent GraphRegistry
+            XX_TEST_EXPECT_TRUE(gctx->graphRegistry->contains_type("example_intent_router"));
+            XX_TEST_EXPECT_TRUE(gctx->graphRegistry->contains_type("example_datetime"));
+            // 执行图已被插件修改
+            XX_TEST_EXPECT_TRUE(gctx->graphDefinitionJson.contains("name"));
+            if (gctx->graphDefinitionJson.contains("name")) {
+                XX_TEST_EXPECT_EQ(
+                    gctx->graphDefinitionJson["name"].get<std::string>(),
+                    "example_graph_node.intent"
+                );
+            }
+            XX_TEST_EXPECT_TRUE(gctx->graphDefinitionJson.contains("nodes"));
+            if (gctx->graphDefinitionJson.contains("nodes")) {
+                XX_TEST_EXPECT_TRUE(
+                    gctx->graphDefinitionJson["nodes"].contains("intent_router")
+                );
+                XX_TEST_EXPECT_TRUE(
+                    gctx->graphDefinitionJson["nodes"].contains("datetime_node")
+                );
+                XX_TEST_EXPECT_EQ(
+                    gctx->graphDefinitionJson["nodes"]["intent_router"]["type"].get<std::string>(),
+                    "example_intent_router"
+                );
+            }
+
+            // 35.2 用修改后的图构建 engine 并执行: 走 datetime 流程 (需要
+            // mock provider 供 llm 节点输出意图)
+            {
+                // 注册 4 个基础节点类型 (对齐 BaseAgent::initRegisterNodes)
+                auto agCtx = gctx;
+                gctx->graphRegistry->register_type(
+                    std::string{"xx_MiddlewareWrapAgentStartCall"},
+                    [agCtx](const std::string&, const neograph::json&, const neograph::graph::NodeContext&) {
+                        return std::make_unique<agentxx::nodes::AgentStartCallWrapNode>("agent_start", agCtx);
+                    }
+                );
+                gctx->graphRegistry->register_type(
+                    std::string{"xx_MiddlewareWrapAgentEndCall"},
+                    [agCtx](const std::string&, const neograph::json&, const neograph::graph::NodeContext&) {
+                        return std::make_unique<agentxx::nodes::AgentEndCallWrapNode>("agent_end", agCtx);
+                    }
+                );
+                gctx->graphRegistry->register_type(
+                    std::string{"xx_ModelCallWrap"},
+                    [agCtx](const std::string& name, const neograph::json&, const neograph::graph::NodeContext& nc) {
+                        return std::make_unique<agentxx::nodes::ModelCallWrapNode>(name, nc, agCtx);
+                    }
+                );
+                gctx->graphRegistry->register_type(
+                    std::string{"xx_Toolcall"},
+                    [agCtx](const std::string& name, const neograph::json&, const neograph::graph::NodeContext& nc) {
+                        return std::make_unique<agentxx::nodes::ToolcallWrapNode>(name, nc, agCtx);
+                    }
+                );
+
+                // 构造完整 AgentConfig (llm 节点需要)
+                auto cfg = gctx->agentConfig;
+                cfg->model.modelName = "test-model";
+                cfg->agentName       = "test-agent";
+                cfg->prompt.systemPrompt = "You are a test agent.";
+                // ModelProviderRegistry 创建 provider: 使用 mock
+                // (OpenAIProvider 需网络; 用一个固定返回 provider)
+                // 注意: BaseAgent 构造要求 config->model.isValid(), 测试直接
+                // 构造 engine 而非 BaseAgent, 用 mock provider
+                class MockProvider : public neograph::Provider {
+                public:
+                    std::string get_name() const override {
+                        return "mock";
+                    }
+                    // 覆写 invoke_format_data: ModelCallWrapNode 经此调用;
+                    // 默认实现会经 chunk 回调转发, stream_cb 为空时触发
+                    // bad_function_call, 故直接在此返回
+                    asio::awaitable<neograph::ChatCompletion> invoke_format_data(
+                        const neograph::CompletionParams& params,
+                        neograph::FormatDataStreamCallback on_chunk = nullptr
+                    ) override {
+                        (void)on_chunk;
+                        neograph::ChatCompletion completion;
+                        completion.message.role = "assistant";
+                        // 意图识别: 检查最后一条 user 消息是否含 "时间"
+                        std::string lastUser;
+                        for (auto it = params.messages.rbegin(); it != params.messages.rend(); ++it) {
+                            if (it->role == "user") {
+                                lastUser = it->content;
+                                break;
+                            }
+                        }
+                        if (lastUser.find("时间") != std::string::npos
+                            || lastUser.find("现在几点") != std::string::npos) {
+                            completion.message.content = "datetime";
+                        } else {
+                            completion.message.content = "normal";
+                        }
+                        co_return completion;
+                    }
+                };
+                auto provider = std::make_shared<MockProvider>();
+
+                neograph::graph::NodeContext nodeCtx;
+                nodeCtx.provider = provider;
+                nodeCtx.instructions = cfg->prompt.systemPrompt;
+                nodeCtx.extra_config = neograph::json{
+                    {agentxx::nodes::ModelCallWrapNode::defUseModelRegistryKey, true},
+                };
+
+                // 编译插件修改后的图
+                auto topology = neograph::graph::GraphCompiler::parse(
+                    gctx->graphDefinitionJson,
+                    *gctx->graphRegistry
+                );
+                auto validated = neograph::graph::GraphValidator::require_valid(
+                    std::move(topology),
+                    *gctx->graphRegistry
+                );
+                neograph::graph::EngineConfig engineConfig;
+                engineConfig.node_context = nodeCtx;
+                neograph::graph::EngineResources resources;
+                resources.registry = gctx->graphRegistry;
+                auto engine = neograph::graph::GraphEngine::link(
+                    std::move(validated),
+                    std::move(engineConfig),
+                    std::move(resources)
+                );
+                XX_TEST_EXPECT_TRUE(engine != nullptr);
+                if (engine) {
+                    // 运行 datetime 意图: 应走到 datetime_node 输出时间并结束
+                    neograph::graph::RunConfig runCfg;
+                    runCfg.thread_id = "graph-test-datetime";
+                    runCfg.input = neograph::json{
+                        {"messages",
+                         neograph::json::array({
+                             neograph::json{{"role", "user"}, {"content", "现在几点"}},
+                         })},
+                    };
+                    auto result = engine->run(runCfg);
+                    XX_TEST_EXPECT_TRUE(false == result.interrupted);
+                    // 输出 messages 含时间
+                    bool hasTime = false;
+                    try {
+                        auto msgs = result.channel_raw("messages");
+                        if (msgs.is_array()) {
+                            for (const auto& m : msgs) {
+                                if (m.is_object() && m.contains("content") && m["content"].is_string()) {
+                                    if (m["content"].get<std::string>().find("当前系统日期时间")
+                                        != std::string::npos) {
+                                        hasTime = true;
+                                    }
+                                }
+                            }
+                        }
+                    } catch (...) {
+                    }
+                    XX_TEST_EXPECT_TRUE(hasTime);
+
+                    // 运行 normal 意图: 应进入 agent loop (llm 输出 normal 后
+                    // intent_router 移除意图消息 → llm 重答 → 无 tool_calls → end)
+                    neograph::graph::RunConfig runCfg2;
+                    runCfg2.thread_id = "graph-test-normal";
+                    runCfg2.input = neograph::json{
+                        {"messages",
+                         neograph::json::array({
+                             neograph::json{{"role", "user"}, {"content", "你好"}},
+                         })},
+                    };
+                    auto result2 = engine->run(runCfg2);
+                    XX_TEST_EXPECT_TRUE(false == result2.interrupted);
+                    try {
+                        auto msgs2 = result2.channel_raw("messages");
+                        // 应包含用户消息与 llm 最终回答
+                        XX_TEST_EXPECT_TRUE(msgs2.is_array());
+                        if (msgs2.is_array()) {
+                            bool hasUser = false, hasAssistant = false;
+                            for (const auto& m : msgs2) {
+                                if (!m.is_object()) continue;
+                                auto role = m.value("role", std::string{});
+                                if (role == "user") hasUser = true;
+                                if (role == "assistant") hasAssistant = true;
+                            }
+                            XX_TEST_EXPECT_TRUE(hasUser);
+                            XX_TEST_EXPECT_TRUE(hasAssistant);
+                        }
+                    } catch (...) {
+                        XX_TEST_EXPECT_TRUE(false);
+                    }
+                }
+            }
+
+            co_await gctx->pluginManager->unloadAsync("example_graph_node");
         }
     }
 

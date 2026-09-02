@@ -95,6 +95,14 @@ public:
         void*                                ctx    = nullptr;
     };
 
+    struct GraphNodeTypeRegistration {
+        std::string                      type;
+        AgentxxPluginGraphNodeRunStartFn run_start  = nullptr;
+        AgentxxPluginGraphNodeRunCancelFn run_cancel = nullptr;
+        void*                            user_data = nullptr;
+        std::string                      config_schema_json;
+    };
+
     struct PromptBackup {
         std::optional<std::string>                                     systemPrompt;
         std::map<std::string, std::optional<std::string>, std::less<>> appendSystemPrompts;
@@ -107,6 +115,7 @@ public:
     std::vector<HookRegistration>                           hookRegistrations;
     std::vector<std::shared_ptr<AgentxxPluginSubscription>> subscriptions;
     std::vector<CapabilityRegistration>                     capabilityRegistrations;
+    std::vector<GraphNodeTypeRegistration>                  graphNodeTypes;
     // B6: sleep 定时器改为哈希表 O(1) 取消，避免 vector 线性查找 O(n) 与卸载时 O(n²)
     std::unordered_map<void*, std::shared_ptr<PluginSleepTimer>> sleepTimers;
     std::vector<std::shared_ptr<AgentxxPluginOperatorHandle>>    outstandingOps;
@@ -315,6 +324,15 @@ public:
 
     int registerHook(PluginInstance* inst, const AgentxxPluginHookSpec* spec);
     int unregisterHook(PluginInstance* inst, AgentxxPluginHookPoint point);
+
+    /// 注册插件节点类型到 per-agent GraphRegistry (插件 graph 接口表)
+    int registerGraphNodeType(PluginInstance* inst, const AgentxxPluginGraphNodeTypeSpec* spec);
+    /// 注销插件节点类型 (按类型名; 卸载时宿主自动清理)
+    int unregisterGraphNodeType(PluginInstance* inst, const char* type);
+    /// 获取当前执行图 JSON 定义 (host->alloc 语义由 vtable 层处理)
+    std::string getGraphJson();
+    /// 设置执行图 JSON 定义 (覆盖; 非法 JSON 返回非 0)
+    int setGraphJson(PluginInstance* inst, const char* graph_json);
     AgentxxPluginSubscription* subscribe(
         PluginInstance* inst,
         const char*     topic,

@@ -554,6 +554,70 @@ typedef struct AgentxxPluginResourcesIface {
     char* (*get_own_resources)(const AgentxxPluginHost* host);
 } AgentxxPluginResourcesIface;
 
+/* ==================== 接口表: 执行图 (agentxx.agent.graph) ==================== */
+
+/// 插件节点执行函数 (两件套契约; 【宿主 io 线程调用】, 非阻塞):
+/// - node_name/config_json/state_json/thread_id: 只读借用, 仅本次调用有效
+/// - state_json 为 GraphState::serialize() 的结果: {"channels": {<ch名>: {"value": ..., "version": N}}, "global_version": N}
+///   (插件只读; 修改须经返回的 writes)
+/// - 完成时 notify->done(OK, payload): payload 为节点输出 JSON (host->alloc):
+///   {"writes": [{"channel": "...", "value": ..., "mode": "reduce"|"overwrite"}],
+///    "command": {"goto_node": "...", "updates": [...]} | null,
+///    "sends": [{"target_node": "...", "input": {...}}]}
+/// - 快同步节点: 算完 → done → 返回 NULL; 锚定协程/自管异步: 返回 op 句柄
+/// - 失败: 返回 NULL 且 *error_out 输出错误 (host->alloc 分配)
+typedef void* (*AgentxxPluginGraphNodeRunStartFn)(
+    void*                              user_data,
+    AgentxxPluginStringView            node_name,
+    AgentxxPluginStringView            config_json,
+    AgentxxPluginStringView            state_json,
+    AgentxxPluginStringView            thread_id,
+    const AgentxxPluginOperatorNotify* notify,
+    char**                             error_out
+);
+/// 协作式取消请求 (io 线程, 非阻塞; 不可取消可留 NULL)
+typedef void (*AgentxxPluginGraphNodeRunCancelFn)(void* user_data, void* op);
+
+/// 插件节点类型注册规格
+typedef struct AgentxxPluginGraphNodeTypeSpec {
+    AgentxxPluginStringView type;               ///< 节点类型名 (须全局唯一)
+    AgentxxPluginGraphNodeRunStartFn run_start; ///< 节点执行 (两件套契约)
+    AgentxxPluginGraphNodeRunCancelFn run_cancel; ///< 可空
+    void* user_data;                            ///< 透传给 run_start/run_cancel
+    /// 可选节点 config JSON Schema (Draft 2020-12 片段; 仅供导出/文档, 引擎不校验)
+    AgentxxPluginStringView config_schema_json;
+} AgentxxPluginGraphNodeTypeSpec;
+
+/// 执行图接口表: 插件注册自定义节点类型 + 读写宿主执行图 JSON 定义
+/// - 节点类型注册进 per-agent GraphRegistry (多实例隔离), 图编译时按类型名
+///   实例化; 卸载插件后不再编译新图 (engine 已构建), 注册残留无害
+/// - get/set graph JSON 用于插件查看/修改宿主执行图 (默认名 "agentxx.default");
+///   修改后的 JSON 在宿主构建 engine 前生效 (插件须保证图合法性, 非法时宿主
+///   回退默认图并记日志)
+#define AGENTXX_PLUGIN_IFACE_AGENT_GRAPH         "agentxx.agent.graph"
+#define AGENTXX_PLUGIN_IFACE_AGENT_GRAPH_VERSION 1
+
+typedef struct AgentxxPluginGraphIface {
+    int version; ///< 必须 == AGENTXX_PLUGIN_IFACE_AGENT_GRAPH_VERSION
+
+    /// 注册节点类型 (io 线程约束, 非 io 线程由宿主投递同步等待)
+    /// `return`: 类型名冲突返回非 0
+    int (*register_node_type)(
+        const AgentxxPluginHost*           host,
+        const AgentxxPluginGraphNodeTypeSpec* spec
+    );
+    /// 注销节点类型 (按类型名; 卸载时宿主自动清理)
+    /// `return`: 不存在返回非 0
+    int (*unregister_node_type)(const AgentxxPluginHost* host, AgentxxPluginStringView type);
+    /// 获取当前执行图 JSON 定义 (host->alloc; 插件可基于此判断后 set 修改)
+    char* (*get_graph_json)(const AgentxxPluginHost* host);
+    /// 获取当前执行图名称 (host->alloc; 默认 "agentxx.default")
+    char* (*get_graph_name)(const AgentxxPluginHost* host);
+    /// 设置执行图 JSON 定义 (覆盖; 宿主构建 engine 前生效)
+    /// `return`: JSON 非法返回非 0 (host 侧解析失败)
+    int (*set_graph_json)(const AgentxxPluginHost* host, AgentxxPluginStringView graph_json);
+} AgentxxPluginGraphIface;
+
 /* ==================== 插件入口符号 (dlsym) ==================== */
 
 typedef const AgentxxPluginInfo* (*AgentxxPluginGetInfoFn)(void);

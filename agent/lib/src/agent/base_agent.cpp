@@ -184,6 +184,8 @@ asio::awaitable<void> BaseAgent::init() {
         auto registry = std::make_shared<neograph::graph::GraphRegistry>();
         initRegisterNodes(*registry);
         graphRegistry = std::move(registry);
+        // 注入 AgentContext: 插件 graph 接口表经此注册节点类型/读写图定义
+        agentContext->graphRegistry = graphRegistry;
     }
 
     notifyInitProgress("注册中间件 (权限 / Skill / Memory / 规划) ...");
@@ -246,8 +248,29 @@ asio::awaitable<void> BaseAgent::init() {
         checkToolSchemaValidity(def.parameters, name, "parameters");
     }
 
+    // 先计算默认执行图定义 (名称 "agentxx.default"), 供插件经 graph 接口表
+    // 查看/修改; 插件加载(下方)完成后, 以最终值构建 engine
+    agentContext->graphDefinitionJson = initGraphDefinition();
+
+    // 加载配置启用的插件 (yaml `plugins` 段; 加载失败仅记日志不影响主流程)
+    // - 提前到 engine 构建之前: 插件可在 create 阶段注册自定义节点类型
+    //   (graph 接口表 register_node_type, 注入 per-agent GraphRegistry) 并
+    //   修改执行图 JSON (set_graph_json, 覆盖默认图); 加载完成后下方以
+    //   最终图定义构建 engine
+    notifyInitProgress("加载插件 ...");
+    if (agentContext->pluginManager && !agentContext->agentConfig->plugins.empty()) {
+        co_await agentContext->pluginManager->loadConfiguredPlugins(
+            agentContext->agentConfig->plugins
+        );
+    }
+
+    // 构建执行图: 使用插件可能修改后的最终图定义; 插件修改非法时回退默认图
     notifyInitProgress("构建执行图 ...");
-    auto graphDef = initGraphDefinition();
+    auto graphDef = agentContext->graphDefinitionJson;
+    if (false == graphDef.is_object()) {
+        XX_LOGE("Graph definition is not an object, falling back to default graph");
+        graphDef = initGraphDefinition();
+    }
 
     auto config = agentContext->agentConfig;
 
@@ -281,11 +304,37 @@ asio::awaitable<void> BaseAgent::init() {
     neograph::graph::EngineResources resources;
     resources.registry = graphRegistry;
 
-    engine = neograph::graph::GraphEngine::link(
-        std::move(validated),
-        std::move(engineConfig),
-        std::move(resources)
-    );
+    try {
+        engine = neograph::graph::GraphEngine::link(
+            std::move(validated),
+            std::move(engineConfig),
+            std::move(resources)
+        );
+    } catch (const std::exception& e) {
+        // 插件修改的图定义非法 (未通过编译/校验): 回退默认图, 保证 agent 可启动
+        // - 注意: validated/engineConfig/resources 已被 move, 需重建
+        XX_LOGE(
+            "Graph build failed (plugin-modified graph likely invalid): {}\n"
+            "Falling back to default graph",
+            e.what()
+        );
+        agentContext->graphDefinitionJson = initGraphDefinition();
+        graphDef                          = agentContext->graphDefinitionJson;
+        auto topology2 = neograph::graph::GraphCompiler::parse(graphDef, *graphRegistry);
+        auto validated2
+            = neograph::graph::GraphValidator::require_valid(std::move(topology2), *graphRegistry);
+        neograph::graph::EngineConfig engineConfig2;
+        engineConfig2.node_context = nodeContext;
+        engineConfig2.checkpoint_store
+            = std::make_shared<agentxx::agent::InMemorySingleCheckpointStore>();
+        neograph::graph::EngineResources resources2;
+        resources2.registry = graphRegistry;
+        engine = neograph::graph::GraphEngine::link(
+            std::move(validated2),
+            std::move(engineConfig2),
+            std::move(resources2)
+        );
+    }
     assert(nullptr != engine);
     {
         // 装配静态工具名集合 (插件工具注册冲突检测用; 覆盖内置/中间件/MCP 工具)
@@ -311,14 +360,6 @@ asio::awaitable<void> BaseAgent::init() {
             crudeTools.push_back(std::move(tool));
         }
         engine->own_tools(std::move(crudeTools));
-    }
-
-    // 加载配置启用的插件 (yaml `plugins` 段; 加载失败仅记日志不影响主流程)
-    notifyInitProgress("加载插件 ...");
-    if (agentContext->pluginManager && !agentContext->agentConfig->plugins.empty()) {
-        co_await agentContext->pluginManager->loadConfiguredPlugins(
-            agentContext->agentConfig->plugins
-        );
     }
 
     co_return;
@@ -358,18 +399,23 @@ void BaseAgent::initEventBus() {
 }
 
 void BaseAgent::initRegisterNodes(neograph::graph::GraphRegistry& registry) {
-    // TODO: 改为用 agentID 从 AgentHost 查找
-    auto ctx = agentContext;
+    // 注意: 必须以 weak_ptr 捕获 agentContext, 防止循环引用
+    // (AgentContext → graphRegistry → 节点工厂 lambda → AgentContext):
+    // - 自插件 graph 接口表支持后, graphRegistry 同时被 AgentContext 持有
+    //   (agentContext->graphRegistry), 若此处强引用捕获, AgentContext 永不释放
+    //   (权限中间件/会话等全部泄漏)
+    // - 节点构造时 lock 保证 agentContext 存活期内创建安全; 节点自身持 weak_ptr
+    std::weak_ptr<AgentContext> ctx = agentContext;
     registry.register_type(
         std::string{agentxx::nodes::AgentStartCallWrapNode::defNodeType},
         [ctx](const std::string& name, const neograph::json&, const neograph::graph::NodeContext&) {
-            return std::make_unique<agentxx::nodes::AgentStartCallWrapNode>(name, ctx);
+            return std::make_unique<agentxx::nodes::AgentStartCallWrapNode>(name, ctx.lock());
         }
     );
     registry.register_type(
         std::string{agentxx::nodes::AgentEndCallWrapNode::defNodeType},
         [ctx](const std::string& name, const neograph::json&, const neograph::graph::NodeContext&) {
-            return std::make_unique<agentxx::nodes::AgentEndCallWrapNode>(name, ctx);
+            return std::make_unique<agentxx::nodes::AgentEndCallWrapNode>(name, ctx.lock());
         }
     );
     registry.register_type(
@@ -379,7 +425,7 @@ void BaseAgent::initRegisterNodes(neograph::graph::GraphRegistry& registry) {
             const neograph::json&,
             const neograph::graph::NodeContext& nodeCtx
         ) {
-            return std::make_unique<agentxx::nodes::ModelCallWrapNode>(name, nodeCtx, ctx);
+            return std::make_unique<agentxx::nodes::ModelCallWrapNode>(name, nodeCtx, ctx.lock());
         }
     );
     registry.register_type(
@@ -389,14 +435,12 @@ void BaseAgent::initRegisterNodes(neograph::graph::GraphRegistry& registry) {
             const neograph::json&,
             const neograph::graph::NodeContext& nodeCtx
         ) {
-            return std::make_unique<agentxx::nodes::ToolcallWrapNode>(name, nodeCtx, ctx);
+            return std::make_unique<agentxx::nodes::ToolcallWrapNode>(name, nodeCtx, ctx.lock());
         }
     );
 }
 
 neograph::json BaseAgent::initGraphDefinition() {
-    auto config = agentContext->agentConfig;
-
     // JSON definition equivalent to the Agent::run() ReAct loop:
     //                 ------- sub_agent_task <--- toolcall/sub_agent_task
     //                 |                            |
@@ -410,7 +454,7 @@ neograph::json BaseAgent::initGraphDefinition() {
 
     // clang-format off
     return neograph::json{
-        {"name", config->agentName},
+        {"name", std::string{kDefaultGraphName}},
         {
             "channels", {
                 {"messages", {{"reducer", "append"}}},

@@ -2,10 +2,12 @@
 
 #include "agentxx/event/event_stream.h"
 #include "agentxx/plugin/op_driver.h"
+#include "agentxx/plugin/plugin_graph_node.h"
 #include "agentxx/util/async_offload.h"
 #include "agentxx/util/log.h"
 #include "asio/this_coro.hpp"
 #include "fmt/format.h"
+#include "neograph/graph/registry.h"
 
 #include <algorithm>
 
@@ -373,6 +375,159 @@ int PluginManager::unregisterHook(PluginInstance* inst, AgentxxPluginHookPoint p
         inst->middleware->clearHook(point);
     }
     return 0;
+}
+
+// =====================================================================
+// 执行图节点类型注册 + 图定义读写 (插件 graph 接口表)
+// =====================================================================
+
+int PluginManager::registerGraphNodeType(
+    PluginInstance*                       inst,
+    const AgentxxPluginGraphNodeTypeSpec* spec
+) {
+    if (!inst || !spec || agentxx_plugin_sv_empty(spec->type) || !spec->run_start) {
+        return -1;
+    }
+    auto ctx = agentContext_.lock();
+    if (!ctx || !ctx->graphRegistry) {
+        XX_LOGW("Plugin `{}` register graph node type: graphRegistry not ready", inst->name);
+        return -1;
+    }
+    std::string type{spec->type.data, spec->type.size};
+    if (ctx->graphRegistry->contains_type(type)) {
+        XX_LOGW(
+            "Plugin `{}` graph node type `{}` conflicts with existing type",
+            inst->name,
+            type
+        );
+        return -1;
+    }
+    auto shared = inst->self.lock();
+    if (!shared) {
+        return -1;
+    }
+    // 记录注册 (卸载/禁用时清理; 注册表本身无法删除类型, 清理仅移出实例表,
+    // 已编译 engine 不受影响 —— 节点工厂持有 weak_ptr, 实例释放后创建即失败)
+    inst->graphNodeTypes.erase(
+        std::remove_if(
+            inst->graphNodeTypes.begin(),
+            inst->graphNodeTypes.end(),
+            [&type](const PluginInstance::GraphNodeTypeRegistration& r) {
+                return r.type == type;
+            }
+        ),
+        inst->graphNodeTypes.end()
+    );
+    inst->graphNodeTypes.push_back(PluginInstance::GraphNodeTypeRegistration{
+        type,
+        spec->run_start,
+        spec->run_cancel,
+        spec->user_data,
+        spec->config_schema_json.data
+            ? std::string{spec->config_schema_json.data, spec->config_schema_json.size}
+            : std::string{},
+    });
+
+    // 注册到 per-agent GraphRegistry: 工厂经 weak_ptr 保活, 实例释放后
+    // create 抛错 (引擎不会在卸载后重新编译图, 防御性处理)
+    std::weak_ptr<PluginInstance> weakInst = shared;
+    ctx->graphRegistry->register_type(
+        type,
+        [weakInst, type](const std::string& name, const neograph::json& config, const neograph::graph::NodeContext&) {
+            auto instPtr = weakInst.lock();
+            if (!instPtr || !instPtr->enabled) {
+                throw std::runtime_error(
+                    fmt::format("graph node type `{}`: plugin instance released or disabled", type)
+                );
+            }
+            // 找到对应注册 (按类型名; 若已被替换则用最新)
+            const PluginInstance::GraphNodeTypeRegistration* reg = nullptr;
+            for (const auto& r : instPtr->graphNodeTypes) {
+                if (r.type == type) {
+                    reg = &r;
+                    break;
+                }
+            }
+            if (!reg || !reg->run_start) {
+                throw std::runtime_error(
+                    fmt::format("graph node type `{}`: registration not found", type)
+                );
+            }
+            AgentxxPluginGraphNodeTypeSpec spec{};
+            spec.type              = agentxx_plugin_sv(type.data(), type.size());
+            spec.run_start         = reg->run_start;
+            spec.run_cancel        = reg->run_cancel;
+            spec.user_data         = reg->user_data;
+            spec.config_schema_json
+                = agentxx_plugin_sv(reg->config_schema_json.data(), reg->config_schema_json.size());
+            return std::make_unique<PluginGraphNode>(
+                name,
+                config.dump(),
+                instPtr,
+                spec
+            );
+        }
+    );
+    XX_LOGI("Plugin `{}` registered graph node type `{}`", inst->name, type);
+    return 0;
+}
+
+int PluginManager::unregisterGraphNodeType(PluginInstance* inst, const char* type) {
+    if (!inst || !type) {
+        return -1;
+    }
+    std::string typeStr = type;
+    auto        it      = std::find_if(
+        inst->graphNodeTypes.begin(),
+        inst->graphNodeTypes.end(),
+        [&typeStr](const PluginInstance::GraphNodeTypeRegistration& r) {
+            return r.type == typeStr;
+        }
+    );
+    if (it == inst->graphNodeTypes.end()) {
+        XX_LOGW(
+            "Plugin `{}` unregister graph node type `{}` not owned by this plugin",
+            inst->name,
+            typeStr
+        );
+        return -1;
+    }
+    inst->graphNodeTypes.erase(it);
+    // GraphRegistry 无删除 API: 仅移出实例注册表; 若引擎尚未编译 (插件加载
+    // 阶段) 而类型已被替换/删除, 图编译引用该类型将失败 → 宿主回退默认图
+    XX_LOGI("Plugin `{}` unregistered graph node type `{}`", inst->name, typeStr);
+    return 0;
+}
+
+std::string PluginManager::getGraphJson() {
+    auto ctx = agentContext_.lock();
+    if (!ctx) {
+        return {};
+    }
+    return ctx->graphDefinitionJson.dump();
+}
+
+int PluginManager::setGraphJson(PluginInstance* inst, const char* graph_json) {
+    if (!inst || !graph_json) {
+        return -1;
+    }
+    auto ctx = agentContext_.lock();
+    if (!ctx) {
+        return -1;
+    }
+    try {
+        auto j = neograph::json::parse(graph_json);
+        if (!j.is_object()) {
+            XX_LOGW("Plugin `{}` set_graph_json: not a JSON object", inst->name);
+            return -1;
+        }
+        ctx->graphDefinitionJson = std::move(j);
+        XX_LOGI("Plugin `{}` modified graph definition", inst->name);
+        return 0;
+    } catch (const std::exception& e) {
+        XX_LOGW("Plugin `{}` set_graph_json parse failed: {}", inst->name, e.what());
+        return -1;
+    }
 }
 
 AgentxxPluginSubscription* PluginManager::subscribe(

@@ -20,7 +20,8 @@ class EventBus;
 
 namespace neograph::graph {
 class CancelToken;
-}
+class GraphRegistry;
+} // namespace neograph::graph
 
 namespace agentxx {
 namespace middleware {
@@ -436,6 +437,17 @@ public:
     /// 插件管理器 (生命周期/热插拔; 全局唯一)
     /// - 由 BaseAgent::init 创建并注入
     std::shared_ptr<plugin::PluginManager> pluginManager = nullptr;
+
+    /// per-agent 节点注册表 (支持多 Agent 实例, 不依赖全局 NodeFactory)
+    /// - 由 BaseAgent::init 创建并注入; 插件经 graph 接口表注册自定义节点类型
+    /// - 非 const: 插件注册需修改; 图编译后引擎持有内部快照, 运行期不再读取
+    std::shared_ptr<neograph::graph::GraphRegistry> graphRegistry = nullptr;
+
+    /// 当前执行图 JSON 定义 (插件可经 graph 接口表查看/修改)
+    /// - 初始为 BaseAgent::initGraphDefinition() 的默认图 (名称 "agentxx.default");
+    ///   插件加载后可 set_graph_json 覆盖; BaseAgent 在构建 engine 前消费此值,
+    ///   插件修改非法时回退默认图并记日志
+    neograph::json graphDefinitionJson = neograph::json::object();
 
     /// 会话资源应用器 (插件向宿主贡献 Skill/Memory/MCP 的落地接口)
     /// - 由 CodeAgent::initMiddleware 构造注入 (单一具体实现,

@@ -5,6 +5,7 @@
 #include "agentxx/tools/subagent.h"
 #include "agentxx/util/container_util.h"
 #include "agentxx/util/log.h"
+#include "neograph/graph/registry.h"
 #include <chrono>
 #include <fmt/format.h>
 

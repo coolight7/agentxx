@@ -419,6 +419,105 @@ static void xx_emit_message_tip(
     });
 }
 
+// =====================================================================
+// graph 接口表 (agentxx.agent.graph)
+// =====================================================================
+
+static int xx_register_node_type(
+    const AgentxxPluginHost*             host,
+    const AgentxxPluginGraphNodeTypeSpec* spec
+) {
+    return agentxx::plugin::guardVtableCall(-1, [&]() -> int {
+        auto mgr  = mgrOf(host);
+        auto inst = instOf(host);
+        if (!mgr || !inst || !spec || agentxx_plugin_sv_empty(spec->type) || !spec->run_start) {
+            return -1;
+        }
+        auto                        mgrPtr   = mgr;
+        auto                        instPtr  = inst;
+        AgentxxPluginGraphNodeTypeSpec specCopy = *spec;
+        return ioCallSync<int>(mgrPtr, [mgrPtr, instPtr, specCopy]() {
+            return mgrPtr->registerGraphNodeType(instPtr, &specCopy);
+        });
+    });
+}
+
+static int xx_unregister_node_type(const AgentxxPluginHost* host, AgentxxPluginStringView type) {
+    return agentxx::plugin::guardVtableCall(-1, [&]() -> int {
+        auto mgr  = mgrOf(host);
+        auto inst = instOf(host);
+        if (!mgr || !inst || agentxx_plugin_sv_empty(type)) {
+            return -1;
+        }
+        auto        mgrPtr  = mgr;
+        auto        instPtr = inst;
+        std::string typeStr{type.data, type.size};
+        return ioCallSync<int>(mgrPtr, [mgrPtr, instPtr, typeStr]() {
+            return mgrPtr->unregisterGraphNodeType(instPtr, typeStr.c_str());
+        });
+    });
+}
+
+static char* xx_get_graph_json(const AgentxxPluginHost* host) {
+    return agentxx::plugin::guardVtableCall<char*>(nullptr, [&]() -> char* {
+        auto mgr  = mgrOf(host);
+        auto inst = instOf(host);
+        if (!mgr || !inst) {
+            return nullptr;
+        }
+        auto mgrPtr = mgr;
+        return ioCallSync<char*>(mgrPtr, [mgrPtr]() -> char* {
+            auto json = mgrPtr->getGraphJson();
+            if (json.empty()) {
+                return nullptr;
+            }
+            return agentxx::plugin::hostMemoryStrdup(json.c_str());
+        });
+    });
+}
+
+static char* xx_get_graph_name(const AgentxxPluginHost* host) {
+    return agentxx::plugin::guardVtableCall<char*>(nullptr, [&]() -> char* {
+        auto mgr  = mgrOf(host);
+        auto inst = instOf(host);
+        if (!mgr || !inst) {
+            return nullptr;
+        }
+        auto        mgrPtr = mgr;
+        std::string name   = "agentxx.default";
+        return ioCallSync<char*>(mgrPtr, [mgrPtr, name]() -> char* {
+            auto json = mgrPtr->getGraphJson();
+            std::string result = name;
+            if (!json.empty()) {
+                try {
+                    auto j = neograph::json::parse(json);
+                    if (j.is_object() && j.contains("name") && j["name"].is_string()) {
+                        result = j["name"].get<std::string>();
+                    }
+                } catch (...) {
+                }
+            }
+            return agentxx::plugin::hostMemoryStrdup(result.c_str());
+        });
+    });
+}
+
+static int xx_set_graph_json(const AgentxxPluginHost* host, AgentxxPluginStringView graph_json) {
+    return agentxx::plugin::guardVtableCall(-1, [&]() -> int {
+        auto mgr  = mgrOf(host);
+        auto inst = instOf(host);
+        if (!mgr || !inst || agentxx_plugin_sv_empty(graph_json)) {
+            return -1;
+        }
+        auto        mgrPtr  = mgr;
+        auto        instPtr = inst;
+        std::string json{graph_json.data, graph_json.size};
+        return ioCallSync<int>(mgrPtr, [mgrPtr, instPtr, json]() {
+            return mgrPtr->setGraphJson(instPtr, json.c_str());
+        });
+    });
+}
+
 static void* xx_sleep(const AgentxxPluginHost* host, long ms, void (*cb)(void* ud), void* ud) {
     return agentxx::plugin::guardVtableCall<void*>(nullptr, [&]() -> void* {
         auto mgr  = mgrOf(host);
@@ -963,6 +1062,15 @@ static const AgentxxPluginCancelIface g_ifaceCancel = {
     /* is_cancelled */ xx_cancel_is_cancelled,
 };
 
+static const AgentxxPluginGraphIface g_ifaceGraph = {
+    /* version */ AGENTXX_PLUGIN_IFACE_AGENT_GRAPH_VERSION,
+    /* register_node_type */ xx_register_node_type,
+    /* unregister_node_type */ xx_unregister_node_type,
+    /* get_graph_json */ xx_get_graph_json,
+    /* get_graph_name */ xx_get_graph_name,
+    /* set_graph_json */ xx_set_graph_json,
+};
+
 const void* xx_query_interface(const AgentxxPluginHost*, AgentxxPluginStringView iid);
 
 static const AgentxxHostVtable g_hostVtable = {
@@ -1021,6 +1129,9 @@ const void* xx_query_interface(const AgentxxPluginHost*, AgentxxPluginStringView
     }
     if (n == AGENTXX_PLUGIN_IFACE_AGENT_CANCEL) {
         return &g_ifaceCancel;
+    }
+    if (n == AGENTXX_PLUGIN_IFACE_AGENT_GRAPH) {
+        return &g_ifaceGraph;
     }
     return nullptr;
 }

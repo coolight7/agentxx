@@ -41,7 +41,8 @@ public:
     std::shared_ptr<neograph::graph::GraphEngine> engine       = nullptr;
     std::shared_ptr<AgentContext>                 agentContext = nullptr;
     /// per-agent 节点注册表 (支持多 Agent 实例, 不依赖全局 NodeFactory)
-    std::shared_ptr<const neograph::graph::GraphRegistry> graphRegistry = nullptr;
+    /// - 非 const 引用 (插件可注册节点类型; 与 AgentContext::graphRegistry 同对象)
+    std::shared_ptr<neograph::graph::GraphRegistry> graphRegistry = nullptr;
 
     BaseAgent(std::shared_ptr<agentxx::agent::AgentConfig> in_config);
 
@@ -137,7 +138,25 @@ protected:
     /// 构建图定义 JSON
     /// - 默认实现返回标准 ReAct 循环:
     ///   __start__ → agent_start → llm → [has_tool_calls?] → tools/agent_end → __end__
+    /// - 图名称固定为 "agentxx.default" (插件可经 graph 接口表查看/修改)
     virtual neograph::json initGraphDefinition();
+
+    /// 获取当前执行图 JSON 定义 (构建 engine 前生效的最终值, 含插件修改)
+    const neograph::json& getGraphDefinitionJson() const {
+        return agentContext ? agentContext->graphDefinitionJson : graphDefinitionJson_;
+    }
+
+    /// 获取当前执行图名称 (默认 "agentxx.default")
+    std::string getGraphName() const {
+        const auto& def = getGraphDefinitionJson();
+        if (def.is_object() && def.contains("name") && def["name"].is_string()) {
+            return def["name"].get<std::string>();
+        }
+        return std::string{kDefaultGraphName};
+    }
+
+    /// 默认执行图名称 (插件可经 graph 接口表查询/修改)
+    inline static constexpr std::string_view kDefaultGraphName{"agentxx.default"};
 
     /// 向 per-agent GraphRegistry 注册节点类型
     /// - 默认注册 4 个核心节点: AgentStart / AgentEnd / ModelCall / Toolcall
@@ -167,6 +186,12 @@ protected:
     ///   未注册回调时 no-op
     /// - 必须由 agent 线程 (init 协程上下文) 调用
     void notifyInitProgress(std::string_view step);
+
+private:
+
+    /// 执行图定义兜底存储 (agentContext 为空时使用; 正常情况下
+    /// graphDefinitionJson 存于 AgentContext 供插件读写)
+    neograph::json graphDefinitionJson_ = neograph::json::object();
 };
 
 } // namespace agent
