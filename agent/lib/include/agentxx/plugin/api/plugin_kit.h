@@ -197,10 +197,21 @@ void finishIfDone(std::coroutine_handle<Promise> h) {
         }
     }
 
+    // 协程完成 (帧将销毁) 时挂接的资源清理 (如锚定协程工具的 op 句柄 Job):
+    // - 必须在 h.destroy() 之前取出 (destroy 后 promise 内存已失效)
+    // - 执行时机: destroy + done 通知【之后】—— 宿主收到 done 后不再访问 op
+    //   句柄 (取消仅在 notified 置位前发生), 此时删除 Job 无竞态
+    auto cleanup = std::move(p.opCleanup_);
+    p.opCleanup_ = nullptr;
+
     h.destroy();
 
     if (notify.done) {
         notify.done(notify.host_ud, status, payload_out);
+    }
+
+    if (cleanup) {
+        cleanup();
     }
 }
 
@@ -213,6 +224,10 @@ struct PromiseBase {
     std::shared_ptr<std::atomic<bool>> cancelFlag_{nullptr};
     std::function<void()>              outstandingCancel_{nullptr};
     std::exception_ptr                 exception_{nullptr};
+    /// 协程帧完成销毁后的资源清理 (见 finishIfDone): 锚定协程工具的 op 句柄
+    /// (Job) 释放挂接于此 —— Job 仅在协程挂起期间被宿主 execute_cancel 访问,
+    /// 完成通知发出后宿主不再触碰 op, 此时删除安全
+    std::function<void()> opCleanup_{nullptr};
 
     std::suspend_always initial_suspend() noexcept {
         return {};
@@ -498,9 +513,35 @@ struct PluginBase {
     struct SpawnRecord {
         std::function<void()>              starter;
         std::shared_ptr<std::atomic<bool>> cancelFlag;
+        /// 协程挂起后的句柄地址 (由 starter 在协程首次挂起时记录; 协程完成后
+        /// 置空)。stopSpawns 经它访问 promise 的 outstandingCancel_ 唤醒挂起
+        /// 的 sleep/offload, 让协程在下次恢复时感知 cancelFlag 退出
+        void* coroAddr = nullptr;
     };
 
     std::vector<std::shared_ptr<SpawnRecord>> spawns_;
+
+    /// 停止全部后台 spawn 协程 (实例卸载准备):
+    /// - 置位每个 spawn 的 cancelFlag → 协程恢复后 while (!cancelled()) 退出
+    /// - 触发挂起操作 (sleep/offload) 的取消 (cancel_outstanding) → 宿主 io
+    ///   唤醒协程, 无需等待自然周期 (如 5s 采集间隔) 结束
+    /// - 宿主在调用 destroy 前调用 (可选符号 agentxx_plugin_agent_prepare_unload),
+    ///   随后泵一轮 io 让协程完成退出, 避免协程帧悬挂泄漏
+    void stopSpawns() {
+        for (auto& rec : spawns_) {
+            if (!rec || !rec->cancelFlag) {
+                continue;
+            }
+            rec->cancelFlag->store(true, std::memory_order_release);
+            if (rec->coroAddr) {
+                auto handle
+                    = std::coroutine_handle<detail::PromiseBase<void>>::from_address(
+                        rec->coroAddr
+                    );
+                handle.promise().cancel_outstanding();
+            }
+        }
+    }
 
     template<typename Fn>
     void spawn(Fn&& fn);
@@ -1091,7 +1132,14 @@ inline detail::InvokeCapAwaiter invoke_cap(
 template<typename Fn>
 void PluginBase::spawn(Fn&& fn) {
     auto cancelFlag = std::make_shared<std::atomic<bool>>(false);
-    auto starter    = [this, fn, cancelFlag]() {
+    // rec 先于 starter 创建: starter 在协程挂起后向 rec 记录句柄 (卸载时
+    // stopSpawns 经它唤醒协程); spawns_ 持 rec 保证 starter post 任务期间存活。
+    // 注意: starter 捕获 rec 的 weak_ptr (rec->starter 持有 starter, 若捕获
+    // shared_ptr 构成 rec → starter → rec 循环引用, rec 永不释放)
+    auto rec = std::make_shared<SpawnRecord>();
+    rec->cancelFlag = cancelFlag;
+    std::weak_ptr<SpawnRecord> recWeak = rec;
+    auto starter    = [this, fn, cancelFlag, recWeak]() {
         OpCtl ctl{cancelFlag, this->host, this->iface.cancel, ""};
         auto  task = fn(*this, ctl);
         if (task.handle_) {
@@ -1105,11 +1153,18 @@ void PluginBase::spawn(Fn&& fn) {
             } catch (...) {
                 p.set_exception(std::current_exception());
             }
+            if (!h.done()) {
+                // 协程挂起 (等待 sleep/offload 等): 记录句柄供 stopSpawns 唤醒;
+                // 此后协程生命周期由各 awaiter 完成闭包接管 (resume + finishIfDone),
+                // 实例卸载时协程必处于挂起, coroAddr 有效
+                if (auto recSp = recWeak.lock()) {
+                    recSp->coroAddr = h.address();
+                }
+            }
             detail::finishIfDone(h);
         }
     };
-
-    auto rec = std::make_shared<SpawnRecord>(SpawnRecord{starter, cancelFlag});
+    rec->starter = starter;
     spawns_.push_back(rec);
     if (iface.scheduler && iface.scheduler->post_to_io) {
         SpawnRecord* raw = rec.get();
@@ -1129,7 +1184,13 @@ void PluginBase::spawn(Fn&& fn) {
 template<typename Ctx, typename Fn>
 inline void spawn(Ctx& ctx, Fn&& fn) {
     auto cancelFlag = std::make_shared<std::atomic<bool>>(false);
-    auto starter    = [&ctx, fn, cancelFlag]() {
+    // rec 先于 starter 创建 (与 PluginBase::spawn 同理): starter 在协程挂起后
+    // 向 rec 记录句柄供 stopSpawns 唤醒; starter 捕获 rec 的 weak_ptr 避免
+    // rec → starter → rec 循环引用
+    auto rec = std::make_shared<PluginBase::SpawnRecord>();
+    rec->cancelFlag = cancelFlag;
+    std::weak_ptr<PluginBase::SpawnRecord> recWeak = rec;
+    auto starter    = [&ctx, fn, cancelFlag, recWeak]() {
         OpCtl ctl{cancelFlag, ctx.host, ctx.iface.cancel, ""};
         auto  task = fn(ctx, ctl);
         if (task.handle_) {
@@ -1143,12 +1204,17 @@ inline void spawn(Ctx& ctx, Fn&& fn) {
             } catch (...) {
                 p.set_exception(std::current_exception());
             }
+            if (!h.done()) {
+                // 协程挂起 (等待 sleep/offload 等): 记录句柄供 stopSpawns 唤醒;
+                // 实例卸载时协程必处于挂起, coroAddr 有效
+                if (auto recSp = recWeak.lock()) {
+                    recSp->coroAddr = h.address();
+                }
+            }
             detail::finishIfDone(h);
         }
     };
-
-    auto rec
-        = std::make_shared<PluginBase::SpawnRecord>(PluginBase::SpawnRecord{starter, cancelFlag});
+    rec->starter = starter;
     ctx.spawns_.push_back(rec);
     if (ctx.iface.scheduler && ctx.iface.scheduler->post_to_io) {
         PluginBase::SpawnRecord* raw = rec.get();
@@ -1253,6 +1319,12 @@ inline void tool(
         }
 
         auto* job = new Job{shim, cancelFlag, h.address()};
+        // op 句柄 (Job) 生命周期绑定到协程: 协程完成 (finishIfDone 销毁帧并
+        // 上报 done) 后宿主不再访问 op, 由 opCleanup_ 释放 —— 挂起期间
+        // (协程未完成) 宿主 execute_cancel 仍经 op 指针访问 Job, 必须存活
+        p.opCleanup_ = [job]() {
+            delete job;
+        };
         return job;
     };
 

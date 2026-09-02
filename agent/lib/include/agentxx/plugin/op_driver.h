@@ -95,8 +95,25 @@ struct OpCore : std::enable_shared_from_this<OpCore> {
         guard(std::move(g)) {}
 
     static void onDone(void* ud, int st, char* payload_cstr) {
-        auto* self   = static_cast<OpCore*>(ud);
-        bool  expect = false;
+        auto* self = static_cast<OpCore*>(ud);
+        // 生命周期守卫: 插件的 done 可能来自任意线程 (阻塞池/自管线程), 调用方
+        // 仅持裸指针。通知到达时宿主侧至少有一个等待协程 (chan/doneSignal 等待
+        // 或 sentinelReap) 仍持有 shared_ptr, 故此处 shared_from_this 必然成功;
+        // 自持引用保证本函数执行期间 (含 guard.reset / 回调派发) 对象存活 ——
+        // 否则 io 线程等待协程收到通知后会退出并释放最后一个引用, 与 onDone
+        // 剩余代码并发访问 self 构成 use-after-free
+        std::shared_ptr<OpCore> selfKeep;
+        try {
+            selfKeep = self->shared_from_this();
+        } catch (const std::bad_weak_ptr&) {
+            // 极端: 不在 shared_ptr 管理下 (不应发生), 无法安全延长生命周期,
+            // 放弃上报, 仅释放 payload
+            if (payload_cstr) {
+                ::free(payload_cstr);
+            }
+            return;
+        }
+        bool expect = false;
         if (!self->notified.compare_exchange_strong(expect, true, std::memory_order_acq_rel)) {
             if (payload_cstr) {
                 ::free(payload_cstr);
@@ -118,23 +135,14 @@ struct OpCore : std::enable_shared_from_this<OpCore> {
             std::string payloadCopy = self->payload;
             // 宿主约定：完成回调在 io 线程派发且经 post 入队，禁止同步重入；
             // 插件的 done 可能来自任意线程（阻塞池/自管线程），此处恒异步投递回 io
-            try {
-                auto selfKeep = self->shared_from_this();
-                asio::post(self->chan.get_executor(), [selfKeep, cb, cbUd, st, payloadCopy]() {
-                    char* pl = payloadCopy.empty() ? nullptr : ::strdup(payloadCopy.c_str());
-                    try {
-                        cb(cbUd, st, pl);
-                    } catch (...) {
-                    }
-                });
-            } catch (const std::bad_weak_ptr&) {
-                // 极端：不在 shared_ptr 管理下（不应发生），回退为直接调用
+            // (selfKeep 已自持, post 回调也捕获它, 派发期间对象必然存活)
+            asio::post(self->chan.get_executor(), [selfKeep, cb, cbUd, st, payloadCopy]() {
                 char* pl = payloadCopy.empty() ? nullptr : ::strdup(payloadCopy.c_str());
                 try {
                     cb(cbUd, st, pl);
                 } catch (...) {
                 }
-            }
+            });
         }
     }
 
