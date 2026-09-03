@@ -1252,7 +1252,7 @@ agent/
 │   │   │   │   ├── plugin_api.h      # 纯 C ABI 契约 (唯一跨版本稳定接口, 见 docs/agent/plugins.md) — 核心 vtable 冻结 + COM QueryInterface
 │   │   │   │   ├── client_plugin_api.h # client 侧插件纯 C ABI 契约 (UI 无关语义层)
 │   │   │   │   ├── plugin_kit.h      # C++ SDK header-only (PluginBase/Task/awaiters/tool/hook/capability/spawn, 命名空间 agentxx::plugin)
-│   │   │   │   ├── plugin_guard.h    # 插件 C ABI 边界异常守卫 header-only (命名空间 agentxx::plugin)
+│   │   │   │   ├── plugin_guard.h    # 插件 C ABI 边界异常处理 header-only (命名空间 agentxx::plugin)
 │   │   │   │   ├── plugin_iface_helper.h # 接口表查询缓存 (AgentIfaces/ClientIfaces)
 │   │   │   │   └── plugin_tool_sync.h    # offload线程池适配异步接口 (调用方内嵌存储)
 │   │   │   ├── op_driver.h       # 异步操作驱动 (AgentxxOpNotify Done 协议)

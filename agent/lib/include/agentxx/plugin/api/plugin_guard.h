@@ -1,10 +1,11 @@
 /*
- * agentxx/plugin/api/plugin_guard.h —— 插件侧 C ABI 边界异常守卫 (header-only)
+ * agentxx/plugin/api/plugin_guard.h —— 插件侧 C ABI 边界异常处理 (header-only)
  *
  * 命名空间: agentxx::plugin
  *
- * 定位: 与 plugin_iface_helper.h / plugin_tool_sync.h 同类 —— 纯头文件内联设施,
- * 编译进插件本体; 【非跨边界 ABI】, 第三方插件可不用本头而自行 try/catch。
+ * 定位: 纯头文件内联设施, 编译进插件本体;
+ * 【非跨边界 ABI】, 第三方插件可不用本头而自行 try/catch。
+ * (接口表聚合 AgentIfaces/ClientIfaces 与同步工具适配器均已并入 plugin_kit.h)
  */
 #ifndef AGENTXX_PLUGIN_GUARD_H
 #define AGENTXX_PLUGIN_GUARD_H
@@ -114,7 +115,7 @@ inline void reportCurrentException(LogFn&& logFn) noexcept {
     }
 }
 
-/// 有返回值的 C ABI 边界异常守卫 (取代旧 XX_PGUARD_BEGIN + XX_PGUARD_END_RET):
+/// 有返回值的 C ABI 边界异常处理:
 /// 正常执行返回 fn() 的结果; fn 抛异常时经 reportCurrentException 分类上报
 /// logFn 并返回 fallback
 ///
@@ -135,7 +136,7 @@ template<typename LogFn, typename Fn>
     }
 }
 
-/// 无返回值的 C ABI 边界异常守卫 (取代旧 XX_PGUARD_BEGIN + XX_PGUARD_END_VOID):
+/// 无返回值的 C ABI 边界异常处理:
 /// 正常执行调用 fn(); fn 抛异常时经 reportCurrentException 分类上报 logFn 后
 /// 返回 (吞掉)
 ///

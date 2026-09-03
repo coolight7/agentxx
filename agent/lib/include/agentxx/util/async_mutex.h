@@ -17,7 +17,7 @@ namespace util {
 ///   持锁协程的完成回调永远无法运行; 本锁以 co_await 等待令牌, 不阻塞线程
 /// - 线程安全: 基于 asio concurrent_channel, 亦可用于跨线程 acquire/release
 /// - 用法:
-///     auto guard = co_await mtx.lock();   // 获得锁 (RAII 守卫)
+///     auto guard = co_await mtx.lock();   // 获得锁
 ///     co_await do_async_work();           // 持锁跨越 co_await 也安全
 ///     // guard 离开作用域自动释放
 class AsyncMutex {
@@ -36,7 +36,7 @@ public:
     AsyncMutex(const AsyncMutex&)            = delete;
     AsyncMutex& operator=(const AsyncMutex&) = delete;
 
-    /// RAII 守卫: 析构时归还令牌 (释放锁)
+    /// RAII : 析构时归还令牌 (释放锁)
     class Guard {
     public:
 
@@ -70,7 +70,7 @@ public:
         std::shared_ptr<Channel> ch_;
     };
 
-    /// 获取锁: 无令牌时 co_await 挂起 (不阻塞线程), 获得后返回 RAII 守卫
+    /// 获取锁: 无令牌时 co_await 挂起 (不阻塞线程), 获得后返回 RAII
     asio::awaitable<Guard> lock() {
         co_await chan_->async_receive(asio::use_awaitable);
         co_return Guard{chan_};

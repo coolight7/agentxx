@@ -7,7 +7,6 @@
 #include "agentxx/nodes/modelcall.h"
 #include "agentxx/nodes/toolcall.h"
 #include "agentxx/plugin/api/plugin_kit.h"
-#include "agentxx/plugin/api/plugin_tool_sync.h"
 #include "agentxx/plugin/plugin_manager.h"
 #include "agentxx/util/async_offload.h"
 #include "agentxx/util/log.h"
@@ -602,8 +601,8 @@ asio::awaitable<TestResult> run_plugin_tests() {
         if (inst23) {
             // 注册带超时的慢工具: 超时 100ms, 阻塞操作 600ms 后才完成
             // (阻塞委托型 offload线程池: execute 经 scheduler.offload 在宿主阻塞池
-            // 线程执行, 与插件作者使用 agentxx_register_sync_tool 的真实路径一致)
-            static AgentxxSyncToolSpec slowSpec;
+            // 线程执行, 与插件作者使用 agentxx::plugin::registerSyncTool 的真实路径一致)
+            static agentxx::plugin::SyncToolSpec slowSpec;
             slowSpec.name = agentxx::plugin::PluginStringView::fromCstr("slow_timeout_tool");
             slowSpec.description
                 = agentxx::plugin::PluginStringView::fromCstr("slow tool for unload race test");
@@ -627,9 +626,9 @@ asio::awaitable<TestResult> run_plugin_tests() {
             slowSpec.default_timeout_ms = 100;
             // API v1: offload线程池适配异步接口 为调用方内嵌存储 (随插件实例 ctx 生死; 此处测试
             // 直接持有)
-            static AgentxxSyncToolShim slowSpecShim;
+            static agentxx::plugin::SyncToolShim slowSpecShim;
             XX_TEST_EXPECT_EQ(
-                agentxx_register_sync_tool(&inst23->host, &slowSpec, &slowSpecShim),
+                agentxx::plugin::registerSyncTool(&inst23->host, &slowSpec, &slowSpecShim),
                 0
             );
 
@@ -1153,7 +1152,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
         // 31.6 异常守卫: offload线程池适配异步接口 work 函数兜底 —— 用户 execute 抛异常时
         //      适配层 转 error_out + NULL, 异常不穿越 C ABI (host 为空也不崩)
         {
-            static AgentxxSyncJob shimJob{};
+            static agentxx::plugin::SyncJob shimJob{};
             shimJob.shim.fn = +[](void*,
                                   const AgentxxPluginStringView*,
                                   const AgentxxPluginStringView*,
@@ -1164,7 +1163,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
             };
             shimJob.shim.host              = nullptr; ///< host 缺失时 err_dup 安全放弃
             AgentxxPluginString shimErr    = {nullptr, 0};
-            void*               shimResult = agentxx_sync_job_work(&shimJob, nullptr, &shimErr);
+            void* shimResult = agentxx::plugin::syncJobWork(&shimJob, nullptr, &shimErr);
             XX_TEST_EXPECT_TRUE(shimResult == nullptr);
             XX_TEST_EXPECT_TRUE(shimErr.data == nullptr); ///< 无宿主无法分配错误串, 安全放弃
         }

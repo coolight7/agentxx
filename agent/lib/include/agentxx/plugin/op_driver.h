@@ -36,7 +36,7 @@ namespace plugin {
 
 struct OpDrive {
     std::function<void*(const AgentxxPluginOperatorNotify* notify, AgentxxPluginString* err)> start;
-    std::function<void(void* op)>                                                             cancel;
+    std::function<void(void* op)> cancel;
 };
 
 using OpErrorCode = neograph_asio_error_code;
@@ -94,9 +94,10 @@ struct OpCore : std::enable_shared_from_this<OpCore> {
         chan(ex, 4),
         guard(std::move(g)) {}
 
-    static void AGENTXX_PLUGIN_CALL onDone(void* ud, int32_t st, const AgentxxPluginStringView* payload_sv) {
+    static void AGENTXX_PLUGIN_CALL
+        onDone(void* ud, int32_t st, const AgentxxPluginStringView* payload_sv) {
         auto* self = static_cast<OpCore*>(ud);
-        // 生命周期守卫: 插件的 done 可能来自任意线程 (阻塞池/自管线程), 调用方
+        // 生命周期处理: 插件的 done 可能来自任意线程 (阻塞池/自管线程), 调用方
         // 仅持裸指针。通知到达时宿主侧至少有一个等待协程 (chan/doneSignal 等待
         // 或 sentinelReap) 仍持有 shared_ptr, 故此处 shared_from_this 必然成功;
         // 自持引用保证本函数执行期间 (含 guard.reset / 回调派发) 对象存活 ——
@@ -131,7 +132,10 @@ struct OpCore : std::enable_shared_from_this<OpCore> {
             // (selfKeep 已自持, post 回调也捕获它, 派发期间对象必然存活)
             asio::post(self->chan.get_executor(), [selfKeep, cb, cbUd, st, payloadCopy]() {
                 try {
-                    auto payloadSv = agentxx::plugin::PluginStringView::from(payloadCopy.data(), payloadCopy.size());
+                    auto payloadSv = agentxx::plugin::PluginStringView::from(
+                        payloadCopy.data(),
+                        payloadCopy.size()
+                    );
                     cb(cbUd, st, &payloadSv);
                 } catch (...) {
                 }

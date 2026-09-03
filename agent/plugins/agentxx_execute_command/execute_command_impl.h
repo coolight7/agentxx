@@ -12,7 +12,7 @@
 //     并发多条命令共享一个寄生 loop 等就绪事件, 不再每命令占死一个阻塞池
 //     线程至超时 (原局部 io_context + io.run() 同步驱动模式已移除)
 //   - AGENTXX_ENABLE_BOOST_PROCESS 关闭时的 popen 回退为阻塞实现 (*Execute
-//     同步函数), 由入口经 plugin_tool_sync.h 的 offload线程池适配异步接口 注册
+//     同步函数), 由入口经 plugin_kit.h 的 SyncToolSpec/registerSyncTool 适配注册
 
 // ## 输出结果压缩
 // - 禁用 ToolcallNode 的自动压缩，改由自己实现压缩, 分别独立对 stdout、stderr 压缩
@@ -584,7 +584,7 @@ inline asio::awaitable<std::string> windowsExecuteAsync(
 #else
 // =====================================================================
 // 执行体 —— popen 回退版 (仅 AGENTXX_ENABLE_BOOST_PROCESS 关闭时编译/注册)
-// - 阻塞实现: 只允许经 plugin_tool_sync.h offload线程池适配异步接口 注册,
+// - 阻塞实现: 只允许经 plugin_kit.h 的 SyncToolSpec/registerSyncTool 适配注册,
 // 禁止在宿主 io 线程/poll 寄生 loop 上直接调用
 // - 无法指定子进程工作目录 (继承 agent 进程 cwd), 无会话取消支持
 // =====================================================================

@@ -285,7 +285,7 @@ header-only（`agent/lib/include/agentxx/plugin/plugin_kit.h`），编译进插�
 文件处置：**plugin_poll_loop.h 删除**；plugin_tool_sync.h 的 inline/sync 包装并入注册族
 （保留薄层供纯 C 作者直用两件套）；plugin_iface_helper.h 的 `AgentIfaces/ClientIfaces`
 成为 `PluginBase::iface` 成员类型（头保留，被 kit 包含）；plugin_guard.h 保留
-（entry 边界守卫仍需要）。
+（entry 边界处理仍需要）。
 
 ### 5.1 PluginBase —— 每实例上下文基类
 

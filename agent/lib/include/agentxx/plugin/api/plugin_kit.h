@@ -2265,5 +2265,475 @@ inline AgentxxPluginString invoke_capability_blocking(
     return PluginString::from(host, &paySv);
 }
 
+/* ==================== 同步/内联工具适配器 (原 plugin_tool_sync.h, 并入 kit) ====================
+ *
+ * 把插件本地同步函数 / 内联快函数适配成宿主异步工具/钩子契约 (execute_start 两件套)
+ * 并注册。本区全部为插件侧 C++ 适配设施:
+ * - 类型仅供插件侧使用, 宿主不解析 → 无需 ABI pack(8); 结构体默认对齐即可
+ * - 函数指针 typedef (AgentxxSyncToolFn 等) 是插件本地同步函数形状, 不跨 DLL
+ *   被宿主直接调用 → 不加 AGENTXX_PLUGIN_CALL (本地默认调用约定)
+ * - 适配器函数 (agentxx_sync_tool_start / agentxx_sync_job_work / agentxx_sync_job_done /
+ *   agentxx_sync_tool_cancel / agentxx_inline_tool_start / agentxx_sync_hook_start) 会被填入
+ *   ABI spec (AgentxxPluginToolSpec.execute_start 等) 或传给 scheduler->offload 由宿主跨 DLL
+ *   调用 → 必须保留 AGENTXX_PLUGIN_CALL
+ */
+
+/// 插件本地同步工具函数形状 (offload 线程池执行体; 宿主不直接调用)
+using SyncToolFn = char*(
+    void*                          user_data,
+    const AgentxxPluginStringView* args_json,
+    const AgentxxPluginStringView* session_id,
+    const AgentxxPluginStringView* tool_call_id,
+    volatile int32_t*              cancel_flag,
+    AgentxxPluginString*           error_out
+);
+
+/// 同步工具注册规格 (插件侧)
+struct SyncToolSpec {
+    AgentxxPluginStringView name;
+    AgentxxPluginStringView description;
+    AgentxxPluginStringView parameters_json;
+    SyncToolFn*             execute;
+    void*                   user_data;
+    int64_t                 default_timeout_ms;
+    int32_t                 flags;
+    uint32_t                _reserved;
+};
+
+/// 同步工具适配状态 (作为 user_data 传给宿主 execute_start/cancel)
+struct SyncToolShim {
+    const AgentxxPluginHost*         host;
+    const AgentxxPluginSchedulerIface* sched;
+    SyncToolFn*                      fn;
+    void*                            ud;
+};
+
+/// 同步工具 offload 任务 (堆分配; 生命周期: start → offload work/done → done 内释放)
+struct SyncJob {
+    SyncToolShim            shim;
+    AgentxxPluginOperatorNotify notify;
+    AgentxxPluginStringView args;
+    AgentxxPluginStringView tid;
+    AgentxxPluginStringView tcid;
+    volatile int32_t        cancelFlag;
+    uint32_t                _reserved;
+};
+
+inline AgentxxPluginString
+    shimErrDup(const AgentxxPluginHost* host, const char* msg) {
+    if (!host || !host->vtable || !msg) {
+        return AgentxxPluginString{nullptr, 0};
+    }
+    return PluginString::fromCstr(host, msg);
+}
+
+/// offload work 执行体 (跨 DLL: 由宿主 scheduler->offload 在 io 线程外调用)
+inline void* AGENTXX_PLUGIN_CALL
+    syncJobWork(void* ud, volatile int32_t* cancel_flag, AgentxxPluginString* error_out) {
+    SyncJob* job = static_cast<SyncJob*>(ud);
+    try {
+        return static_cast<void*>(job->shim.fn(
+            job->shim.ud,
+            &job->args,
+            &job->tid,
+            &job->tcid,
+            cancel_flag,
+            error_out
+        ));
+    } catch (const std::exception& e) {
+        if (error_out && !error_out->data) {
+            *error_out = shimErrDup(job->shim.host, e.what());
+        }
+        return nullptr;
+    } catch (...) {
+        if (error_out && !error_out->data) {
+            *error_out = shimErrDup(job->shim.host, "sync tool threw unknown exception");
+        }
+        return nullptr;
+    }
+}
+
+/// offload done 回调 (跨 DLL: 由宿主 scheduler 在 io 线程调用; 释放 job)
+inline void AGENTXX_PLUGIN_CALL
+    syncJobDone(void* ud, void* result, const AgentxxPluginStringView* error) {
+    SyncJob*                 job     = static_cast<SyncJob*>(ud);
+    int32_t                  st      = AGENTXX_PLUGIN_OPERATOR_OK;
+    AgentxxPluginStringView  payload = PluginStringView::from(nullptr, 0);
+
+    if (!PluginStringView::empty(error)) {
+        st      = AGENTXX_PLUGIN_OPERATOR_FAILED;
+        payload = *error;
+    } else if (result) {
+        payload = PluginStringView::fromCstr(static_cast<const char*>(result));
+    } else {
+        st = AGENTXX_PLUGIN_OPERATOR_CANCELLED;
+    }
+
+    if (job->notify.done) {
+        job->notify.done(job->notify.host_ud, st, &payload);
+    }
+
+    if (result && job->shim.host && job->shim.host->vtable && job->shim.host->vtable->free) {
+        job->shim.host->vtable->free(result);
+    }
+
+    if (job->args.data) {
+        std::free(static_cast<void*>(const_cast<char*>(job->args.data)));
+    }
+    if (job->tid.data) {
+        std::free(static_cast<void*>(const_cast<char*>(job->tid.data)));
+    }
+    if (job->tcid.data) {
+        std::free(static_cast<void*>(const_cast<char*>(job->tcid.data)));
+    }
+    std::free(job);
+}
+
+/// 同步工具 execute_start 适配器 (跨 DLL: 填入 AgentxxPluginToolSpec.execute_start)
+inline void* AGENTXX_PLUGIN_CALL syncToolStart(
+    void*                              user_data,
+    const AgentxxPluginStringView*     args_json,
+    const AgentxxPluginStringView*     session_id,
+    const AgentxxPluginStringView*     tool_call_id,
+    const AgentxxPluginOperatorNotify* notify,
+    AgentxxPluginString*               error_out
+) {
+    SyncToolShim* shim = static_cast<SyncToolShim*>(user_data);
+    if (!shim || !shim->sched || !shim->sched->offload) {
+        if (error_out) {
+            *error_out = shimErrDup(shim ? shim->host : nullptr, "scheduler iface not available");
+        }
+        return nullptr;
+    }
+
+    SyncJob* job = static_cast<SyncJob*>(std::malloc(sizeof(SyncJob)));
+    if (!job) {
+        if (error_out) {
+            *error_out = shimErrDup(shim->host, "out of memory allocating job");
+        }
+        return nullptr;
+    }
+    job->shim       = *shim;
+    job->notify     = *notify;
+    job->cancelFlag = 0;
+    job->args       = PluginStringView::from(nullptr, 0);
+    job->tid        = PluginStringView::from(nullptr, 0);
+    job->tcid       = PluginStringView::from(nullptr, 0);
+
+    if (args_json && args_json->size) {
+        char* buf = static_cast<char*>(std::malloc(static_cast<size_t>(args_json->size)));
+        if (!buf) {
+            std::free(job);
+            if (error_out) {
+                *error_out = shimErrDup(shim->host, "out of memory allocating args");
+            }
+            return nullptr;
+        }
+        std::memcpy(buf, args_json->data, static_cast<size_t>(args_json->size));
+        job->args = PluginStringView::from(buf, args_json->size);
+    }
+
+    if (session_id && session_id->size) {
+        char* buf = static_cast<char*>(std::malloc(static_cast<size_t>(session_id->size)));
+        if (!buf) {
+            if (job->args.data) {
+                std::free(const_cast<char*>(job->args.data));
+            }
+            std::free(job);
+            if (error_out) {
+                *error_out = shimErrDup(shim->host, "out of memory allocating session_id");
+            }
+            return nullptr;
+        }
+        std::memcpy(buf, session_id->data, static_cast<size_t>(session_id->size));
+        job->tid = PluginStringView::from(buf, session_id->size);
+    }
+
+    if (tool_call_id && tool_call_id->size) {
+        char* buf = static_cast<char*>(std::malloc(static_cast<size_t>(tool_call_id->size)));
+        if (!buf) {
+            if (job->args.data) {
+                std::free(const_cast<char*>(job->args.data));
+            }
+            if (job->tid.data) {
+                std::free(const_cast<char*>(job->tid.data));
+            }
+            std::free(job);
+            if (error_out) {
+                *error_out = shimErrDup(shim->host, "out of memory allocating tool_call_id");
+            }
+            return nullptr;
+        }
+        std::memcpy(buf, tool_call_id->data, static_cast<size_t>(tool_call_id->size));
+        job->tcid = PluginStringView::from(buf, tool_call_id->size);
+    }
+
+    shim->sched->offload(
+        shim->host,
+        &job->cancelFlag,
+        &syncJobWork,
+        &syncJobDone,
+        job
+    );
+    return job;
+}
+
+/// execute_cancel 适配器 (跨 DLL: 填入 AgentxxPluginToolSpec.execute_cancel)
+inline void AGENTXX_PLUGIN_CALL syncToolCancel(void* user_data, void* op) {
+    (void)user_data;
+    if (!op) {
+        return;
+    }
+    SyncJob* job   = static_cast<SyncJob*>(op);
+    job->cancelFlag = 1;
+}
+
+/// 注册同步工具 (内部: 查询接口表 + 填充 ABI spec; 返回 register_tool 状态)
+inline int32_t registerSyncTool(
+    const AgentxxPluginHost* host,
+    const SyncToolSpec*      sync_spec,
+    SyncToolShim*            out_shim
+) {
+    if (!host || !host->vtable || !sync_spec || !out_shim || !sync_spec->execute) {
+        return -1;
+    }
+    const AgentxxPluginToolsIface* tools
+        = queryInterface<AgentxxPluginToolsIface>(host, AGENTXX_PLUGIN_IFACE_AGENT_TOOLS);
+    const AgentxxPluginSchedulerIface* sched
+        = queryInterface<AgentxxPluginSchedulerIface>(host, AGENTXX_PLUGIN_IFACE_AGENT_SCHEDULER);
+    if (!tools || !tools->register_tool || !sched) {
+        return -1;
+    }
+
+    out_shim->host  = host;
+    out_shim->sched = sched;
+    out_shim->fn    = sync_spec->execute;
+    out_shim->ud    = sync_spec->user_data;
+
+    AgentxxPluginToolSpec spec;
+    spec.name               = sync_spec->name;
+    spec.description        = sync_spec->description;
+    spec.parameters_json    = sync_spec->parameters_json;
+    spec.execute_start      = &syncToolStart;
+    spec.execute_cancel     = &syncToolCancel;
+    spec.user_data          = out_shim;
+    spec.default_timeout_ms = sync_spec->default_timeout_ms;
+    spec.flags              = sync_spec->flags;
+    spec._reserved          = 0;
+
+    return tools->register_tool(host, &spec);
+}
+
+/// 插件本地内联工具函数形状 (宿主 io 线程直接调用; 不跨 DLL)
+using InlineToolFn = char*(
+    void*                          user_data,
+    const AgentxxPluginStringView* args_json,
+    const AgentxxPluginStringView* session_id,
+    const AgentxxPluginStringView* tool_call_id,
+    AgentxxPluginString*           error_out
+);
+
+/// 内联工具注册规格 (插件侧)
+struct InlineToolSpec {
+    AgentxxPluginStringView name;
+    AgentxxPluginStringView description;
+    AgentxxPluginStringView parameters_json;
+    InlineToolFn*           execute;
+    void*                   user_data;
+    int64_t                 default_timeout_ms;
+    int32_t                 flags;
+    uint32_t                _reserved;
+};
+
+/// 内联工具适配状态 (作为 user_data 传给宿主 execute_start)
+struct InlineToolShim {
+    const AgentxxPluginHost* host;
+    InlineToolFn*            fn;
+    void*                    ud;
+};
+
+/// 内联工具 execute_start 适配器 (跨 DLL: 填入 AgentxxPluginToolSpec.execute_start;
+/// io 线程同步执行后立即 done)
+inline void* AGENTXX_PLUGIN_CALL inlineToolStart(
+    void*                              user_data,
+    const AgentxxPluginStringView*     args_json,
+    const AgentxxPluginStringView*     session_id,
+    const AgentxxPluginStringView*     tool_call_id,
+    const AgentxxPluginOperatorNotify* notify,
+    AgentxxPluginString*               error_out
+) {
+    InlineToolShim* shim = static_cast<InlineToolShim*>(user_data);
+    if (!shim || !shim->fn) {
+        if (error_out) {
+            *error_out = shimErrDup(shim ? shim->host : nullptr, "invalid inline tool shim");
+        }
+        return nullptr;
+    }
+
+    char* result = nullptr;
+    try {
+        result = shim->fn(shim->ud, args_json, session_id, tool_call_id, error_out);
+    } catch (const std::exception& e) {
+        if (error_out && !error_out->data) {
+            *error_out = shimErrDup(shim->host, e.what());
+        }
+        result = nullptr;
+    } catch (...) {
+        if (error_out && !error_out->data) {
+            *error_out = shimErrDup(shim->host, "inline tool threw unknown exception");
+        }
+        result = nullptr;
+    }
+
+    if (error_out && error_out->data) {
+        if (notify && notify->done) {
+            AgentxxPluginString errPayload = *error_out;
+            error_out->data                = nullptr;
+            error_out->size                = 0;
+            AgentxxPluginStringView errSv  = PluginStringView::toSv(errPayload);
+            notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_FAILED, &errSv);
+            if (shim->host) {
+                PluginString::free(shim->host, &errPayload);
+            }
+        }
+    } else {
+        if (notify && notify->done) {
+            AgentxxPluginStringView resSv = PluginStringView::fromCstr(result);
+            notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, &resSv);
+            if (result && shim->host && shim->host->vtable && shim->host->vtable->free) {
+                shim->host->vtable->free(result);
+            }
+        }
+    }
+    return nullptr;
+}
+
+/// 注册内联工具
+inline int32_t registerInlineTool(
+    const AgentxxPluginHost* host,
+    const InlineToolSpec*    inline_spec,
+    InlineToolShim*          out_shim
+) {
+    if (!host || !host->vtable || !inline_spec || !out_shim || !inline_spec->execute) {
+        return -1;
+    }
+    const AgentxxPluginToolsIface* tools
+        = queryInterface<AgentxxPluginToolsIface>(host, AGENTXX_PLUGIN_IFACE_AGENT_TOOLS);
+    if (!tools || !tools->register_tool) {
+        return -1;
+    }
+
+    out_shim->host = host;
+    out_shim->fn   = inline_spec->execute;
+    out_shim->ud   = inline_spec->user_data;
+
+    AgentxxPluginToolSpec spec;
+    spec.name               = inline_spec->name;
+    spec.description        = inline_spec->description;
+    spec.parameters_json    = inline_spec->parameters_json;
+    spec.execute_start      = &inlineToolStart;
+    spec.execute_cancel     = nullptr;
+    spec.user_data          = out_shim;
+    spec.default_timeout_ms = inline_spec->default_timeout_ms;
+    spec.flags              = inline_spec->flags;
+    spec._reserved          = 0;
+
+    return tools->register_tool(host, &spec);
+}
+
+/// 插件本地同步钩子函数形状 (offload 线程池执行体; 宿主不直接调用)
+using SyncHookFn = int32_t(
+    void*                          user_data,
+    int32_t                        point,
+    const AgentxxPluginStringView* node_input_json,
+    AgentxxPluginString*           error_out
+);
+
+/// 同步钩子适配状态 (作为 user_data 传给宿主 hook_start)
+struct SyncHookShim {
+    const AgentxxPluginHost* host;
+    SyncHookFn*              fn;
+    void*                    ud;
+};
+
+/// 同步钩子 hook_start 适配器 (跨 DLL: 填入 AgentxxPluginHookSpec.hook_start)
+inline void* AGENTXX_PLUGIN_CALL syncHookStart(
+    void*                              user_data,
+    int32_t                            point,
+    const AgentxxPluginStringView*     node_input_json,
+    const AgentxxPluginOperatorNotify* notify,
+    AgentxxPluginString*               error_out
+) {
+    SyncHookShim* shim = static_cast<SyncHookShim*>(user_data);
+    if (!shim || !shim->fn) {
+        if (error_out) {
+            *error_out = shimErrDup(shim ? shim->host : nullptr, "invalid hook shim");
+        }
+        return nullptr;
+    }
+    int32_t rc = 0;
+    try {
+        rc = shim->fn(shim->ud, point, node_input_json, error_out);
+    } catch (const std::exception& e) {
+        if (error_out && !error_out->data) {
+            *error_out = shimErrDup(shim->host, e.what());
+        }
+        rc = -1;
+    } catch (...) {
+        if (error_out && !error_out->data) {
+            *error_out = shimErrDup(shim->host, "hook threw unknown exception");
+        }
+        rc = -1;
+    }
+
+    if (notify && notify->done) {
+        AgentxxPluginStringView errSv = PluginStringView::from(nullptr, 0);
+        if (error_out && error_out->data) {
+            errSv = PluginStringView::toSv(error_out);
+        }
+        notify->done(
+            notify->host_ud,
+            rc == 0 ? AGENTXX_PLUGIN_OPERATOR_OK : AGENTXX_PLUGIN_OPERATOR_FAILED,
+            &errSv
+        );
+        if (error_out && error_out->data && shim->host) {
+            PluginString::free(shim->host, error_out);
+        }
+    }
+    return nullptr;
+}
+
+/// 注册同步钩子
+inline int32_t registerSyncHook(
+    const AgentxxPluginHost* host,
+    int32_t                  point,
+    SyncHookFn*              fn,
+    void*                    user_data,
+    SyncHookShim*            out_shim
+) {
+    if (!host || !host->vtable || !fn || !out_shim || point < 0
+        || point >= AGENTXX_PLUGIN_HOOK_COUNT) {
+        return -1;
+    }
+    const AgentxxPluginHooksIface* hooks
+        = queryInterface<AgentxxPluginHooksIface>(host, AGENTXX_PLUGIN_IFACE_AGENT_HOOKS);
+    if (!hooks || !hooks->register_hook) {
+        return -1;
+    }
+
+    out_shim->host = host;
+    out_shim->fn   = fn;
+    out_shim->ud   = user_data;
+
+    AgentxxPluginHookSpec spec;
+    spec.point       = point;
+    spec._reserved   = 0;
+    spec.hook_start  = &syncHookStart;
+    spec.hook_cancel = nullptr;
+    spec.user_data   = out_shim;
+
+    return hooks->register_hook(host, &spec);
+}
+
 } // namespace plugin
 } // namespace agentxx
