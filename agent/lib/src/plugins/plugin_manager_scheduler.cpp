@@ -117,9 +117,9 @@ void PluginManager::offload(
         try {
             task->result = task->work(task->ud, task->cancel_flag, &task->error);
         } catch (const std::exception& e) {
-            task->error = agentxx_plugin_string_from_cstr(instPtr ? &instPtr->host : nullptr, e.what());
+            task->error = agentxx::plugin::PluginString::fromCstr(instPtr ? &instPtr->host : nullptr, e.what());
         } catch (...) {
-            task->error = agentxx_plugin_string_from_cstr(
+            task->error = agentxx::plugin::PluginString::fromCstr(
                 instPtr ? &instPtr->host : nullptr,
                 "unknown error in plugin offload"
             );
@@ -130,8 +130,8 @@ void PluginManager::offload(
                 auto* instPtr2 = task->instKeep.get();
                 if (task->done) {
                     try {
-                        auto errSv = task->error.data ? agentxx_plugin_string_to_sv(&task->error)
-                                                     : agentxx_plugin_sv(nullptr, 0);
+                        auto errSv = task->error.data ? agentxx::plugin::PluginStringView::toSv(&task->error)
+                                                     : agentxx::plugin::PluginStringView::from(nullptr, 0);
                         task->done(
                             task->ud,
                             task->result,
@@ -151,7 +151,7 @@ void PluginManager::offload(
                     }
                 }
                 if (task->error.data) {
-                    agentxx_plugin_string_free(instPtr2 ? &instPtr2->host : nullptr, &task->error);
+                    agentxx::plugin::PluginString::free(instPtr2 ? &instPtr2->host : nullptr, &task->error);
                 }
                 if (instPtr2) {
                     instPtr2->inflight.fetch_sub(1, std::memory_order_acq_rel);
@@ -159,7 +159,7 @@ void PluginManager::offload(
             });
         } else {
             if (task->error.data) {
-                agentxx_plugin_string_free(instPtr ? &instPtr->host : nullptr, &task->error);
+                agentxx::plugin::PluginString::free(instPtr ? &instPtr->host : nullptr, &task->error);
             }
             if (instPtr) {
                 instPtr->inflight.fetch_sub(1, std::memory_order_acq_rel);

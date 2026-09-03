@@ -65,13 +65,13 @@ std::string jsonEscape(const PluginCtx& ctx, const std::string& s) {
         return "\"\"";
     }
     AgentxxPluginString esc{nullptr, 0};
-    auto sSv = agentxx_plugin_sv(s.data(), s.size());
+    auto sSv = agentxx::plugin::PluginStringView::from(s.data(), s.size());
     ctx.iface.json->json_escape(ctx.host, &sSv, &esc);
     if (!esc.data) {
         return "\"\"";
     }
     std::string out(esc.data, static_cast<size_t>(esc.size));
-    agentxx_plugin_string_free(ctx.host, &esc);
+    agentxx::plugin::PluginString::free(ctx.host, &esc);
     return out;
 }
 
@@ -100,8 +100,8 @@ bool TextSelectionHolder::start(int debounceMs) {
                 );
                 ctx->iface.events->publish(
                     ctx->host,
-                    agentxx_plugin_sv_cstr("agentxx_text_selection_monitor.selection"),
-                    agentxx_plugin_sv(payload.data(), payload.size())
+                    agentxx::plugin::PluginStringView::fromCstr("agentxx_text_selection_monitor.selection"),
+                    agentxx::plugin::PluginStringView::from(payload.data(), payload.size())
                 );
             } catch (...) {
                 if (ctx) {
@@ -123,9 +123,9 @@ void TextSelectionHolder::stop() {
 extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_agent_get_info(void) {
     static const AgentxxPluginInfo info{
         AGENTXX_PLUGIN_API_VERSION, 0,
-        agentxx_plugin_sv_cstr("agentxx_text_selection_monitor"),
-        agentxx_plugin_sv_cstr("1.0.0"),
-        agentxx_plugin_sv_cstr("System-wide text selection monitor event stream"),
+        agentxx::plugin::PluginStringView::fromCstr("agentxx_text_selection_monitor"),
+        agentxx::plugin::PluginStringView::fromCstr("1.0.0"),
+        agentxx::plugin::PluginStringView::fromCstr("System-wide text selection monitor event stream"),
     };
     return &info;
 }

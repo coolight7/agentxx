@@ -25,7 +25,7 @@
  */
 #pragma once
 
-#include "agentxx/plugin/api/plugin_api.h" /* AgentxxPluginHost 等 C ABI 类型 */
+#include "agentxx/plugin/api/plugin_kit.h" /* AgentxxPluginHost 等 C ABI 类型 */
 #include "agentxx/plugin/plugin_common.h"  /* collectReverseRequiredDeps (模板) */
 #include "agentxx/util/log.h"
 #include "asio/any_io_executor.hpp"
@@ -309,7 +309,7 @@ inline char* hostMemoryStrdup(const char* s) {
     if (!s) {
         return nullptr;
     }
-    auto sv = agentxx_plugin_sv(s, std::strlen(s));
+    auto sv = agentxx::plugin::PluginStringView::from(s, std::strlen(s));
     return hostMemoryStrdup(&sv);
 }
 
@@ -331,7 +331,7 @@ inline AgentxxPluginString hostMemoryCreateString(AgentxxPluginStringView s) {
 }
 
 inline AgentxxPluginString hostMemoryCreateString(std::string_view sv) {
-    return hostMemoryCreateString(agentxx_plugin_sv(sv.data(), sv.size()));
+    return hostMemoryCreateString(agentxx::plugin::PluginStringView::from(sv.data(), sv.size()));
 }
 
 inline void hostMemorySetString(AgentxxPluginString* out, std::string_view sv) {
@@ -345,7 +345,7 @@ inline AgentxxPluginString hostMemoryCreateString(const char* s) {
     if (!s) {
         return AgentxxPluginString{nullptr, 0};
     }
-    return hostMemoryCreateString(agentxx_plugin_sv(s, std::strlen(s)));
+    return hostMemoryCreateString(agentxx::plugin::PluginStringView::from(s, std::strlen(s)));
 }
 
 // =====================================================================

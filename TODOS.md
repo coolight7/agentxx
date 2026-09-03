@@ -7,14 +7,6 @@
 - 文档翻译
 - release 编译发布时携带 标准库
 
-- 插件abi、ffi:
-    - 明确字节对齐为8字节
-    - 使用 int32、int64 等明确大小基本类型替换 int、long、long long 等
-    - 明确函数调用约定 stdcall
-    - 替换结构体传递必须使用指针，结构体返回值 struct 改为函数参数出参 struct*
-
-- 插件 readHostConfig 改为直接传入 变量路径 取值，变量取值交由主程序解析
-
 - 冻结 system prompt
 - OpWatchdog debug 时启用、配置启用
 

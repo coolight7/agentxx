@@ -23,7 +23,7 @@ inline void pluginLog(
     const std::string&           msg
 ) {
     if (host && logIf && logIf->log) {
-        auto sv = agentxx_plugin_sv(msg.data(), msg.size());
+        auto sv = agentxx::plugin::PluginStringView::from(msg.data(), msg.size());
         logIf->log(host, level, &sv);
     }
 }
@@ -41,8 +41,8 @@ inline char* pluginStrdup(const AgentxxPluginHost* host, const char* s) {
     if (!host || !s) {
         return nullptr;
     }
-    auto sv = agentxx_plugin_sv_cstr(s);
-    return agentxx_plugin_strdup(host, &sv);
+    auto sv = agentxx::plugin::PluginStringView::fromCstr(s);
+    return agentxx::plugin::PluginString::strdup(host, &sv);
 }
 
 class SimpleJson {

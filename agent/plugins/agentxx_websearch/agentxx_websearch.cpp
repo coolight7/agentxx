@@ -176,9 +176,9 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_agent_g
         [&]() -> const AgentxxPluginInfo* {
             static const AgentxxPluginInfo info{
                 AGENTXX_PLUGIN_API_VERSION, 0,
-                agentxx_plugin_sv_cstr("agentxx_websearch"),
-                agentxx_plugin_sv_cstr("1.0.0"),
-                agentxx_plugin_sv_cstr(
+                agentxx::plugin::PluginStringView::fromCstr("agentxx_websearch"),
+                agentxx::plugin::PluginStringView::fromCstr("1.0.0"),
+                agentxx::plugin::PluginStringView::fromCstr(
                     "Web search & fetch tools: web_search, web_fetch, web_fetch_markdown"
                 ),
             };
@@ -208,7 +208,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                 ctx->iface.model->get_config(ctx->host, &json);
                 if (json.data) {
                     std::string cfgJson(json.data, static_cast<size_t>(json.size));
-                    agentxx_plugin_string_free(ctx->host, &json);
+                    agentxx::plugin::PluginString::free(ctx->host, &json);
                     try {
                         auto cfg = neograph::json::parse(cfgJson);
                         ctx->convert_html2markdown

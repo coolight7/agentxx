@@ -9,14 +9,12 @@
 #ifndef AGENTXX_PLUGIN_GUARD_H
 #define AGENTXX_PLUGIN_GUARD_H
 
-#include "agentxx/plugin/api/client_plugin_api.h"
+#include "agentxx/plugin/api/plugin_kit.h"
 
 #include <cstdio>
 #include <exception>
 #include <type_traits>
 #include <utility>
-
-#ifdef __cplusplus
 
 namespace agentxx {
 namespace plugin {
@@ -43,7 +41,7 @@ inline void logTo(
         static_cast<int>(msg.size > 460 ? 460 : msg.size),
         msg.data
     );
-    AgentxxPluginStringView sv = agentxx_plugin_sv_cstr(buf);
+    AgentxxPluginStringView sv = PluginStringView::fromCstr(buf);
     logIf->log(host, level, &sv);
 }
 
@@ -54,7 +52,13 @@ inline void logTo(
     const char*                  pluginName,
     const char*                  msg
 ) noexcept {
-    logTo(host, logIf, level, agentxx_plugin_sv_cstr(pluginName), agentxx_plugin_sv_cstr(msg));
+    logTo(
+        host,
+        logIf,
+        level,
+        PluginStringView::fromCstr(pluginName),
+        PluginStringView::fromCstr(msg)
+    );
 }
 
 /// client 侧宿主重载 (AgentxxPluginHost/AgentxxClientLogIface 为独立类型)
@@ -78,7 +82,7 @@ inline void logTo(
         static_cast<int>(msg.size > 460 ? 460 : msg.size),
         msg.data
     );
-    AgentxxPluginStringView sv = agentxx_plugin_sv_cstr(buf);
+    AgentxxPluginStringView sv = PluginStringView::fromCstr(buf);
     logIf->log(host, level, &sv);
 }
 
@@ -89,7 +93,13 @@ inline void logTo(
     const char*                  pluginName,
     const char*                  msg
 ) noexcept {
-    logTo(host, logIf, level, agentxx_plugin_sv_cstr(pluginName), agentxx_plugin_sv_cstr(msg));
+    logTo(
+        host,
+        logIf,
+        level,
+        PluginStringView::fromCstr(pluginName),
+        PluginStringView::fromCstr(msg)
+    );
 }
 
 /// 重抛检查当前异常并分类上报 (noexcept):
@@ -142,7 +152,5 @@ inline void guardCallVoid(LogFn&& logFn, Fn&& fn) noexcept {
 
 } // namespace plugin
 } // namespace agentxx
-
-#endif /* __cplusplus */
 
 #endif /* AGENTXX_PLUGIN_GUARD_H */

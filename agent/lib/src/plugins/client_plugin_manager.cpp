@@ -883,7 +883,7 @@ void ClientPluginManager::invokeCommand(const std::string& name, const std::stri
     AgentxxPluginString               err{nullptr, 0};
     AgentxxPluginString               out{nullptr, 0};
     try {
-        auto argsSv = agentxx_plugin_sv(argsJson.data(), argsJson.size());
+        auto argsSv = agentxx::plugin::PluginStringView::from(argsJson.data(), argsJson.size());
         cmd->execute(cmd->ud, &argsSv, &out, &err);
     } catch (const std::exception& e) {
         XX_LOGW("[client_plugin] command `{}` execute threw: {}", name, e.what());
@@ -897,10 +897,10 @@ void ClientPluginManager::invokeCommand(const std::string& name, const std::stri
         actionJson.assign(out.data, out.size);
     }
     if (err.data) {
-        agentxx_plugin_string_free(&inst->host, &err);
+        agentxx::plugin::PluginString::free(&inst->host, &err);
     }
     if (out.data) {
-        agentxx_plugin_string_free(&inst->host, &out);
+        agentxx::plugin::PluginString::free(&inst->host, &out);
     }
     dispatchCommandAction(actionJson);
 }
@@ -1219,7 +1219,7 @@ void ClientPluginManager::dispatchEvent(int event, const std::string& payloadJso
         // C ABI 回调异常兜底: 单个插件 handler 违约不得打断整轮派发
         // (影响其他订阅者与 client io 事件循环)
         try {
-            auto payloadSv = agentxx_plugin_sv(payloadJson.data(), payloadJson.size());
+            auto payloadSv = agentxx::plugin::PluginStringView::from(payloadJson.data(), payloadJson.size());
             ref.sub->handler(&payloadSv, ref.sub->ud);
         } catch (const std::exception& e) {
             XX_LOGW("[client_plugin] `{}` event handler threw: {}", ref.inst->name, e.what());
@@ -1301,7 +1301,7 @@ int32_t AGENTXX_PLUGIN_CALL xx_cjson_get_string(
         return -1;
     }
     auto inst = clientInstOf(host);
-    if (!inst || agentxx_plugin_sv_empty(json) || agentxx_plugin_sv_empty(key)) {
+    if (!inst || agentxx::plugin::PluginStringView::empty(json) || agentxx::plugin::PluginStringView::empty(key)) {
         return -1;
     }
     try {
@@ -1327,7 +1327,7 @@ int32_t AGENTXX_PLUGIN_CALL xx_cjson_escape(
         return -1;
     }
     auto inst = clientInstOf(host);
-    if (!inst || agentxx_plugin_sv_empty(s)) {
+    if (!inst || agentxx::plugin::PluginStringView::empty(s)) {
         return -1;
     }
     try {
@@ -1383,11 +1383,11 @@ AgentxxStatusItem* AGENTXX_PLUGIN_CALL xx_cregister_status_item(
     return agentxx::plugin::guardVtableCall(nullptr, [&]() -> AgentxxStatusItem* {
         auto mgr  = clientMgrOf(host);
         auto inst = clientInstOf(host);
-        if (!mgr || !inst || agentxx_plugin_sv_empty(id)) {
+        if (!mgr || !inst || agentxx::plugin::PluginStringView::empty(id)) {
             return static_cast<AgentxxStatusItem*>(nullptr);
         }
         auto idVal   = *id;
-        auto jsonVal = initial_json ? *initial_json : agentxx_plugin_sv("{}", 2);
+        auto jsonVal = initial_json ? *initial_json : agentxx::plugin::PluginStringView::from("{}", 2);
         return ioCallSync<AgentxxStatusItem*>(mgr, [&]() -> AgentxxStatusItem* {
             return static_cast<AgentxxStatusItem*>(
                 mgr->registerStatusItem(inst, idVal, jsonVal, align, order)
@@ -1437,11 +1437,11 @@ AgentxxPanel* AGENTXX_PLUGIN_CALL xx_cregister_panel(
     return agentxx::plugin::guardVtableCall(nullptr, [&]() -> AgentxxPanel* {
         auto mgr  = clientMgrOf(host);
         auto inst = clientInstOf(host);
-        if (!mgr || !inst || agentxx_plugin_sv_empty(id)) {
+        if (!mgr || !inst || agentxx::plugin::PluginStringView::empty(id)) {
             return static_cast<AgentxxPanel*>(nullptr);
         }
         auto idVal    = *id;
-        auto propsVal = props_json ? *props_json : agentxx_plugin_sv("{}", 2);
+        auto propsVal = props_json ? *props_json : agentxx::plugin::PluginStringView::from("{}", 2);
         return ioCallSync<AgentxxPanel*>(mgr, [&]() -> AgentxxPanel* {
             return static_cast<AgentxxPanel*>(mgr->registerPanel(inst, idVal, propsVal));
         });
@@ -1489,11 +1489,11 @@ AgentxxInfoSection* AGENTXX_PLUGIN_CALL xx_cregister_info_section(
     return agentxx::plugin::guardVtableCall(nullptr, [&]() -> AgentxxInfoSection* {
         auto mgr  = clientMgrOf(host);
         auto inst = clientInstOf(host);
-        if (!mgr || !inst || agentxx_plugin_sv_empty(id)) {
+        if (!mgr || !inst || agentxx::plugin::PluginStringView::empty(id)) {
             return static_cast<AgentxxInfoSection*>(nullptr);
         }
         auto idVal    = *id;
-        auto propsVal = props_json ? *props_json : agentxx_plugin_sv("{}", 2);
+        auto propsVal = props_json ? *props_json : agentxx::plugin::PluginStringView::from("{}", 2);
         return ioCallSync<AgentxxInfoSection*>(mgr, [&]() -> AgentxxInfoSection* {
             return static_cast<AgentxxInfoSection*>(
                 mgr->registerInfoSection(inst, idVal, propsVal)
@@ -1544,8 +1544,8 @@ int32_t AGENTXX_PLUGIN_CALL xx_cupdate_tool_decor(
         if (!mgr || !inst) {
             return -1;
         }
-        auto tcidVal  = tool_call_id ? *tool_call_id : agentxx_plugin_sv("", 0);
-        auto decorVal = decor_json ? *decor_json : agentxx_plugin_sv("", 0);
+        auto tcidVal  = tool_call_id ? *tool_call_id : agentxx::plugin::PluginStringView::from("", 0);
+        auto decorVal = decor_json ? *decor_json : agentxx::plugin::PluginStringView::from("", 0);
         return ioCallSync<int32_t>(mgr, [&]() -> int32_t {
             return mgr->updateToolDecor(inst, tcidVal, decorVal);
         });
@@ -1564,11 +1564,11 @@ int32_t AGENTXX_PLUGIN_CALL xx_cregister_command(
     return agentxx::plugin::guardVtableCall(-1, [&]() -> int32_t {
         auto mgr  = clientMgrOf(host);
         auto inst = clientInstOf(host);
-        if (!mgr || !inst || !execute || agentxx_plugin_sv_empty(name)) {
+        if (!mgr || !inst || !execute || agentxx::plugin::PluginStringView::empty(name)) {
             return -1;
         }
         auto nameVal = *name;
-        auto descVal = description ? *description : agentxx_plugin_sv("", 0);
+        auto descVal = description ? *description : agentxx::plugin::PluginStringView::from("", 0);
         return ioCallSync<int32_t>(mgr, [&]() -> int32_t {
             return mgr->registerCommand(inst, nameVal, descVal, execute, ud);
         });
@@ -1579,7 +1579,7 @@ int32_t AGENTXX_PLUGIN_CALL xx_cunregister_command(const AgentxxPluginHost* host
     return agentxx::plugin::guardVtableCall(-1, [&]() -> int32_t {
         auto mgr  = clientMgrOf(host);
         auto inst = clientInstOf(host);
-        if (!mgr || !inst || agentxx_plugin_sv_empty(name)) {
+        if (!mgr || !inst || agentxx::plugin::PluginStringView::empty(name)) {
             return -1;
         }
         auto nameVal = *name;
@@ -1673,10 +1673,10 @@ int32_t AGENTXX_PLUGIN_CALL xx_csend_user_input(
     return agentxx::plugin::guardVtableCall(-1, [&]() -> int32_t {
         auto mgr  = clientMgrOf(host);
         auto inst = clientInstOf(host);
-        if (!mgr || !inst || agentxx_plugin_sv_empty(text)) {
+        if (!mgr || !inst || agentxx::plugin::PluginStringView::empty(text)) {
             return -1;
         }
-        auto tidVal  = thread_id ? *thread_id : agentxx_plugin_sv("", 0);
+        auto tidVal  = thread_id ? *thread_id : agentxx::plugin::PluginStringView::from("", 0);
         auto textVal = *text;
         return ioCallSync<int32_t>(mgr, [&]() -> int32_t {
             mgr->sendUserInputToPeer(inst, tidVal, textVal);
@@ -1692,7 +1692,7 @@ void AGENTXX_PLUGIN_CALL xx_crequest_cancel(const AgentxxPluginHost* host, const
         if (!mgr || !inst) {
             return;
         }
-        auto tidVal = thread_id ? *thread_id : agentxx_plugin_sv("", 0);
+        auto tidVal = thread_id ? *thread_id : agentxx::plugin::PluginStringView::from("", 0);
         ioCallSyncVoid(mgr, [&]() {
             mgr->requestCancelToPeer(inst, tidVal);
         });
@@ -1709,11 +1709,11 @@ int32_t AGENTXX_PLUGIN_CALL xx_csend_plugin_data(
     return agentxx::plugin::guardVtableCall(-1, [&]() -> int32_t {
         auto mgr  = clientMgrOf(host);
         auto inst = clientInstOf(host);
-        if (!mgr || !inst || agentxx_plugin_sv_empty(event)) {
+        if (!mgr || !inst || agentxx::plugin::PluginStringView::empty(event)) {
             return -1;
         }
         auto evtVal  = *event;
-        auto jsonVal = json ? *json : agentxx_plugin_sv("{}", 2);
+        auto jsonVal = json ? *json : agentxx::plugin::PluginStringView::from("{}", 2);
         return ioCallSync<int32_t>(mgr, [&]() -> int32_t {
             return mgr->sendPluginDataToPeer(inst, evtVal, jsonVal);
         });
@@ -1873,7 +1873,7 @@ void* ClientPluginManager::registerStatusItem(
     int                     align,
     int                     order
 ) {
-    if (!inst || agentxx_plugin_sv_empty(id)) {
+    if (!inst || agentxx::plugin::PluginStringView::empty(id)) {
         return nullptr;
     }
     std::string idStr = svToStr(id);
@@ -1898,7 +1898,7 @@ void* ClientPluginManager::registerStatusItem(
     std::string    text;
     neograph::json props;
     try {
-        props = neograph::json::parse(agentxx_plugin_sv_empty(json) ? "{}" : svToSv(json));
+        props = neograph::json::parse(agentxx::plugin::PluginStringView::empty(json) ? "{}" : svToSv(json));
         text  = jsonStr(props, "text");
     } catch (...) {
         text.clear();
@@ -1944,7 +1944,7 @@ int ClientPluginManager::updateStatusItem(
     neograph::json props;
     std::string    text;
     try {
-        props = neograph::json::parse(agentxx_plugin_sv_empty(json) ? "{}" : svToSv(json));
+        props = neograph::json::parse(agentxx::plugin::PluginStringView::empty(json) ? "{}" : svToSv(json));
         text  = jsonStr(props, "text");
     } catch (...) {
         text.clear();
@@ -2014,7 +2014,7 @@ void* ClientPluginManager::registerPanel(
     AgentxxPluginStringView id,
     AgentxxPluginStringView props_json
 ) {
-    if (!inst || agentxx_plugin_sv_empty(id)) {
+    if (!inst || agentxx::plugin::PluginStringView::empty(id)) {
         return nullptr;
     }
     std::string idStr = svToStr(id);
@@ -2037,7 +2037,7 @@ void* ClientPluginManager::registerPanel(
     neograph::json props;
     std::string    title;
     try {
-        props = neograph::json::parse(agentxx_plugin_sv_empty(props_json) ? "{}" : svToSv(props_json));
+        props = neograph::json::parse(agentxx::plugin::PluginStringView::empty(props_json) ? "{}" : svToSv(props_json));
         title = jsonStr(props, "title");
     } catch (...) {
         title.clear();
@@ -2080,7 +2080,7 @@ int ClientPluginManager::updatePanel(
     }
     neograph::json items = neograph::json::array();
     try {
-        auto j = neograph::json::parse(agentxx_plugin_sv_empty(items_json) ? "{}" : svToSv(items_json));
+        auto j = neograph::json::parse(agentxx::plugin::PluginStringView::empty(items_json) ? "{}" : svToSv(items_json));
         if (j.contains("items") && j["items"].is_array()) {
             items = j["items"];
         }
@@ -2151,7 +2151,7 @@ void* ClientPluginManager::registerInfoSection(
     AgentxxPluginStringView id,
     AgentxxPluginStringView props_json
 ) {
-    if (!inst || agentxx_plugin_sv_empty(id)) {
+    if (!inst || agentxx::plugin::PluginStringView::empty(id)) {
         return nullptr;
     }
     std::string idStr = svToStr(id);
@@ -2174,7 +2174,7 @@ void* ClientPluginManager::registerInfoSection(
     neograph::json props;
     std::string    title;
     try {
-        props = neograph::json::parse(agentxx_plugin_sv_empty(props_json) ? "{}" : svToSv(props_json));
+        props = neograph::json::parse(agentxx::plugin::PluginStringView::empty(props_json) ? "{}" : svToSv(props_json));
         title = jsonStr(props, "title");
     } catch (...) {
         title.clear();
@@ -2214,7 +2214,7 @@ int ClientPluginManager::updateInfoSection(
     }
     neograph::json items = neograph::json::array();
     try {
-        auto j = neograph::json::parse(agentxx_plugin_sv_empty(items_json) ? "{}" : svToSv(items_json));
+        auto j = neograph::json::parse(agentxx::plugin::PluginStringView::empty(items_json) ? "{}" : svToSv(items_json));
         if (j.contains("items") && j["items"].is_array()) {
             items = j["items"];
         }
@@ -2390,7 +2390,7 @@ int ClientPluginManager::registerCommand(
     int32_t (AGENTXX_PLUGIN_CALL *exec)(void*, const AgentxxPluginStringView*, AgentxxPluginString*, AgentxxPluginString*),
     void* ud
 ) {
-    if (!inst || !exec || agentxx_plugin_sv_empty(name)) {
+    if (!inst || !exec || agentxx::plugin::PluginStringView::empty(name)) {
         return -1;
     }
     std::string nameStr = svToStr(name);
@@ -2430,7 +2430,7 @@ int ClientPluginManager::registerCommand(
 }
 
 int ClientPluginManager::unregisterCommand(ClientPluginInstance* inst, AgentxxPluginStringView name) {
-    if (!inst || agentxx_plugin_sv_empty(name)) {
+    if (!inst || agentxx::plugin::PluginStringView::empty(name)) {
         return -1;
     }
     std::string nameStr = svToStr(name);
@@ -2562,7 +2562,7 @@ int ClientPluginManager::sendPluginDataToPeer(
         return -1;
     }
     std::string ev = svToStr(event);
-    std::string j  = agentxx_plugin_sv_empty(json) ? "{}" : svToStr(json);
+    std::string j  = agentxx::plugin::PluginStringView::empty(json) ? "{}" : svToStr(json);
     return uiAdapter_->sendPluginData(inst->name, ev, j) ? 0 : -1;
 }
 

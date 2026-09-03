@@ -10,7 +10,7 @@
 #include "agentxx/agent/context.h"
 #include "agentxx/event/event_stream.h"
 #include "agentxx/middlewares/middleware.h"
-#include "agentxx/plugin/api/plugin_iface_helper.h"
+#include "agentxx/plugin/api/plugin_kit.h"
 #include "agentxx/plugin/plugin_manager.h"
 #include "asio/co_spawn.hpp"
 #include "asio/steady_timer.hpp"
@@ -174,11 +174,12 @@ asio::awaitable<TestResult> run_plugin_multi_instance_tests() {
                 std::atomic<int>  cancelCount{0};
                 std::atomic<bool> done{false};
             };
-            auto      st = std::make_shared<TaskState>();
-            auto      ex = co_await asio::this_coro::executor;
+
+            auto                        st = std::make_shared<TaskState>();
+            auto                        ex = co_await asio::this_coro::executor;
             AgentxxPluginOperatorNotify ntf{nullptr, nullptr};
             AgentxxPluginString         err{nullptr, 0};
-            auto* h = ctxA->pluginManager->registerTask(
+            auto*                       h = ctxA->pluginManager->registerTask(
                 instC.get(),
                 [](void* ud, void*) {
                     auto* s = static_cast<TaskState*>(ud);
@@ -202,8 +203,14 @@ asio::awaitable<TestResult> run_plugin_multi_instance_tests() {
             size_t inflightBefore = instC->inflight.load(std::memory_order_acquire);
 
             // 通知完成 (模拟插件协程结束上报) → inflight-1 + 句柄回收 (异步)
-            ntf.done(ntf.host_ud, AGENTXX_PLUGIN_OPERATOR_OK, agentxx_plugin_sv(nullptr, 0));
-            XX_TEST_EXPECT_TRUE(st->done.exchange(true) == false); ///< 恰好一次语义由 OpCore CAS 保证
+            ntf.done(
+                ntf.host_ud,
+                AGENTXX_PLUGIN_OPERATOR_OK,
+                agentxx::plugin::PluginStringView::from(nullptr, 0)
+            );
+            XX_TEST_EXPECT_TRUE(
+                st->done.exchange(true) == false
+            ); ///< 恰好一次语义由 OpCore CAS 保证
             // 等待回收协程把句柄从 outstandingOps 移除
             for (int i = 0; i < 100; ++i) {
                 auto stillTracked = std::any_of(
@@ -231,13 +238,13 @@ asio::awaitable<TestResult> run_plugin_multi_instance_tests() {
             size_t inflightAfter = instC->inflight.load(std::memory_order_acquire);
             XX_TEST_EXPECT_TRUE(inflightAfter < inflightBefore || inflightBefore == 0);
             if (err.data) {
-                agentxx_plugin_string_free(&instC->host, &err);
+                agentxx::plugin::PluginString::free(&instC->host, &err);
             }
 
             // 取消路径: 新任务 → xx_op_cancel 语义 (op->cancelled CAS + cancelFn)
             AgentxxPluginOperatorNotify ntf2{nullptr, nullptr};
             AgentxxPluginString         err2{nullptr, 0};
-            auto* h2 = ctxA->pluginManager->registerTask(
+            auto*                       h2 = ctxA->pluginManager->registerTask(
                 instC.get(),
                 [](void* ud, void*) {
                     auto* s = static_cast<TaskState*>(ud);
@@ -248,7 +255,7 @@ asio::awaitable<TestResult> run_plugin_multi_instance_tests() {
                 &err2
             );
             if (err2.data) {
-                agentxx_plugin_string_free(&instC->host, &err2);
+                agentxx::plugin::PluginString::free(&instC->host, &err2);
             }
             XX_TEST_EXPECT_TRUE(h2 != nullptr);
             if (h2) {
@@ -259,7 +266,11 @@ asio::awaitable<TestResult> run_plugin_multi_instance_tests() {
                 // cancel_fn 被调用 (协作式)
                 XX_TEST_EXPECT_TRUE(st->cancelCount.load(std::memory_order_relaxed) >= 1);
                 // 取消后仍可上报完成 (宿主幂等; 不 UAF)
-                ntf2.done(ntf2.host_ud, AGENTXX_PLUGIN_OPERATOR_CANCELLED, agentxx_plugin_sv(nullptr, 0));
+                ntf2.done(
+                    ntf2.host_ud,
+                    AGENTXX_PLUGIN_OPERATOR_CANCELLED,
+                    agentxx::plugin::PluginStringView::from(nullptr, 0)
+                );
                 for (int i = 0; i < 100; ++i) {
                     auto stillTracked = std::any_of(
                         instC->outstandingOps.begin(),

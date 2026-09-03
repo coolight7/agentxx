@@ -13,10 +13,9 @@
  * - 阻塞便捷助手: 供 JS 引擎及非 io 线程使用 (基于 condvar)
  */
 #pragma once
+#include "agentxx/plugin/api/client_plugin_api.h"
 
 #include "agentxx/plugin/api/plugin_api.h"
-#include "agentxx/plugin/api/plugin_guard.h"
-#include "agentxx/plugin/api/plugin_iface_helper.h"
 #include "fmt/format.h"
 #include "neograph/json.h"
 
@@ -36,13 +35,331 @@
 #include <string>
 #include <string_view>
 #include <thread>
-#include <type_traits>
-#include <utility>
-#include <variant>
-#include <vector>
 
 namespace agentxx {
 namespace plugin {
+
+/* ==================== C++ 字符串/接口便捷工具 (非 ABI) ====================
+ *
+ * plugin_api.h 为纯 C ABI (跨边界契约), 其结构体在 C++ 下仅带最小便捷成员
+ * (构造/empty, 不改变布局)。面向宿主/插件 C++ 源码的字符串与接口操作集中
+ * 在本命名空间:
+ * - PluginStringView: 字符串视图便捷工具 (纯静态函数集合, 不持有状态;
+ *   操作/返回跨边界 ABI 类型 AgentxxPluginStringView/AgentxxPluginString)
+ * - PluginString: 宿主堆字符串 RAII (接管 AgentxxPluginString 生命周期;
+ *   析构自动经 host->vtable->free 释放)
+ * - queryInterface<Iface>: 接口表查询模板 (替代旧 AGENTXX_PLUGIN_QUERY_IFACE 宏)
+ *
+ * 历史: 这些能力曾以全局函数/宏形式内联于纯 C ABI 头 plugin_api.h, 因按值
+ * 返回含 C++ 成员函数的 struct 触发 MSVC C4190; API v1 重构后统一迁移至此。
+ */
+
+/// 字符串视图便捷工具 (纯静态函数; 不构造对象)
+struct PluginStringView {
+    /// 从 (指针, 长度) 构造 ABI 视图 (原 agentxx_plugin_sv)
+    static AgentxxPluginStringView from(const char* s, uint64_t n) noexcept {
+        return AgentxxPluginStringView{s, n};
+    }
+
+    /// 从 NUL 结尾 C 串构造 ABI 视图 (自动 strlen; 原 agentxx_plugin_sv_cstr)
+    static AgentxxPluginStringView fromCstr(const char* s) noexcept {
+        return AgentxxPluginStringView{
+            s,
+            s ? static_cast<uint64_t>(std::strlen(s)) : 0
+        };
+    }
+
+    /// 从 std::string_view 构造 ABI 视图
+    static AgentxxPluginStringView from(std::string_view s) noexcept {
+        return AgentxxPluginStringView{s.data(), static_cast<uint64_t>(s.size())};
+    }
+
+    /// ABI 视图是否为空 (原 agentxx_plugin_sv_empty)
+    static bool empty(const AgentxxPluginStringView& sv) noexcept {
+        return sv.data == nullptr || sv.size == 0;
+    }
+
+    /// 指针重载 (兼容旧调用形态; NULL 视为空)
+    static bool empty(const AgentxxPluginStringView* sv) noexcept {
+        return sv == nullptr || sv->data == nullptr || sv->size == 0;
+    }
+
+    /// 宿主堆字符串是否为空 (原 agentxx_plugin_string_empty)
+    static bool empty(const AgentxxPluginString& s) noexcept {
+        return s.data == nullptr || s.size == 0;
+    }
+
+    /// 指针重载 (NULL 视为空)
+    static bool empty(const AgentxxPluginString* s) noexcept {
+        return s == nullptr || s->data == nullptr || s->size == 0;
+    }
+
+    /// ABI 视图 → std::string_view (零拷贝; NULL data 视为空串)
+    static std::string_view str(const AgentxxPluginStringView& sv) noexcept {
+        return sv.data
+            ? std::string_view{sv.data, static_cast<size_t>(sv.size)}
+            : std::string_view{};
+    }
+
+    /// 宿主堆字符串 → ABI 视图 (原 agentxx_plugin_string_to_sv)
+    static AgentxxPluginStringView toSv(const AgentxxPluginString& s) noexcept {
+        return AgentxxPluginStringView{s.data, s.size};
+    }
+
+    /// 指针重载 (NULL 视为空视图)
+    static AgentxxPluginStringView toSv(const AgentxxPluginString* s) noexcept {
+        return s ? AgentxxPluginStringView{s->data, s->size} : AgentxxPluginStringView{};
+    }
+};
+
+/// 宿主堆字符串 RAII (原 OwnedString; 析构自动释放; move-only)
+class PluginString {
+    const AgentxxPluginHost* host_ = nullptr;
+    AgentxxPluginString      str_{nullptr, 0};
+
+public:
+    PluginString() = default;
+    PluginString(const AgentxxPluginHost* h, AgentxxPluginString s) noexcept :
+        host_(h),
+        str_(s) {}
+    ~PluginString() {
+        reset();
+    }
+
+    PluginString(const PluginString&) = delete;
+    PluginString& operator=(const PluginString&) = delete;
+
+    PluginString(PluginString&& o) noexcept :
+        host_(o.host_),
+        str_(o.str_) {
+        o.host_ = nullptr;
+        o.str_  = {nullptr, 0};
+    }
+
+    PluginString& operator=(PluginString&& o) noexcept {
+        if (this != &o) {
+            reset();
+            host_   = o.host_;
+            str_    = o.str_;
+            o.host_ = nullptr;
+            o.str_  = {nullptr, 0};
+        }
+        return *this;
+    }
+
+    /// 接管宿主出参 (fn 以 AgentxxPluginString* 出参填充后接管所有权)
+    template<typename Fn>
+    static PluginString acquire(const AgentxxPluginHost* h, Fn&& fn) {
+        AgentxxPluginString s{nullptr, 0};
+        fn(&s);
+        return PluginString(h, s);
+    }
+
+    /// 经宿主 alloc 拷贝视图 → ABI 宿主串 (原 agentxx_plugin_string_from_sv;
+    /// 返回裸 ABI 串, 调用方负责释放 (PluginString::free / 移入 PluginString RAII))
+    static AgentxxPluginString from(const AgentxxPluginHost* h, const AgentxxPluginStringView* sv) {
+        AgentxxPluginString res{nullptr, 0};
+        if (!h || !h->vtable || !h->vtable->alloc || !sv || (!sv->data && sv->size == 0)) {
+            return res;
+        }
+        char* p = static_cast<char*>(h->vtable->alloc(sv->size + 1));
+        if (p) {
+            if (sv->size > 0 && sv->data) {
+                std::memcpy(p, sv->data, static_cast<size_t>(sv->size));
+            }
+            p[sv->size] = '\0';
+            res.data    = p;
+            res.size    = sv->size;
+        }
+        return res;
+    }
+
+    /// 引用重载
+    static AgentxxPluginString from(const AgentxxPluginHost* h, const AgentxxPluginStringView& sv) {
+        return from(h, &sv);
+    }
+
+    /// 经宿主 alloc 拷贝 C 串 → ABI 宿主串 (原 agentxx_plugin_string_from_cstr)
+    static AgentxxPluginString fromCstr(const AgentxxPluginHost* h, const char* s) {
+        if (!h || !s) {
+            return AgentxxPluginString{nullptr, 0};
+        }
+        return from(h, PluginStringView::fromCstr(s));
+    }
+
+    /// 经宿主 alloc 拷贝视图为裸 char* (原 agentxx_plugin_strdup; 调用方负责 free)
+    static char* strdup(const AgentxxPluginHost* h, const AgentxxPluginStringView* sv) {
+        if (!h || !h->vtable || !h->vtable->alloc || !sv || (!sv->data && sv->size == 0)) {
+            return nullptr;
+        }
+        char* p = static_cast<char*>(h->vtable->alloc(sv->size + 1));
+        if (p) {
+            if (sv->size > 0 && sv->data) {
+                std::memcpy(p, sv->data, static_cast<size_t>(sv->size));
+            }
+            p[sv->size] = '\0';
+        }
+        return p;
+    }
+
+    /// 引用重载
+    static char* strdup(const AgentxxPluginHost* h, const AgentxxPluginStringView& sv) {
+        return strdup(h, &sv);
+    }
+
+    /// C 串重载 (原宏 AGENTXX_PLUGIN_STRDUP)
+    static char* strdup(const AgentxxPluginHost* h, const char* s) {
+        if (!h || !s) {
+            return nullptr;
+        }
+        return strdup(h, PluginStringView::fromCstr(s));
+    }
+
+    /// 释放宿主堆串 (原 agentxx_plugin_string_free; 幂等并清空)
+    static void free(const AgentxxPluginHost* h, AgentxxPluginString* s) noexcept {
+        if (s && s->data) {
+            if (h && h->vtable && h->vtable->free) {
+                h->vtable->free(s->data);
+            }
+            s->data = nullptr;
+            s->size = 0;
+        }
+    }
+
+    /// 释放本对象持有的串并复位
+    void reset() noexcept {
+        if (host_ && str_.data) {
+            PluginString::free(host_, &str_);
+        }
+        host_ = nullptr;
+        str_  = {nullptr, 0};
+    }
+
+    const char* c_str() const noexcept {
+        return str_.data ? str_.data : "";
+    }
+    const char* data() const noexcept {
+        return str_.data;
+    }
+    size_t size() const noexcept {
+        return static_cast<size_t>(str_.size);
+    }
+    bool empty() const noexcept {
+        return PluginStringView::empty(str_);
+    }
+    std::string_view view() const noexcept {
+        return PluginStringView::str(PluginStringView::toSv(str_));
+    }
+    std::string str() const {
+        return std::string(view());
+    }
+    AgentxxPluginStringView to_sv() const noexcept {
+        return PluginStringView::toSv(str_);
+    }
+    AgentxxPluginString release() noexcept {
+        AgentxxPluginString tmp = str_;
+        str_                    = {nullptr, 0};
+        host_                   = nullptr;
+        return tmp;
+    }
+    const AgentxxPluginString& raw() const noexcept {
+        return str_;
+    }
+};
+
+/// 查询宿主接口表并转型 (原 AGENTXX_PLUGIN_QUERY_IFACE 宏)
+template<typename Iface>
+const Iface* queryInterface(const AgentxxPluginHost* host, const char* iid) noexcept {
+    if (!host || !host->vtable || !host->vtable->query_interface || !iid) {
+        return nullptr;
+    }
+    AgentxxPluginStringView sv = PluginStringView::fromCstr(iid);
+    return static_cast<const Iface*>(host->vtable->query_interface(host, &sv));
+}
+
+
+/* ==================== 接口表聚合 (原 plugin_iface_helper.h 实体, 并入 kit) ==================== */
+
+/// agent 侧接口表聚合 (一次查询; 成员为 NULL 表示宿主未实现该接口)
+struct AgentIfaces {
+    const AgentxxPluginToolsIface*        tools        = nullptr; ///< "agentxx.agent.tools"
+    const AgentxxPluginHooksIface*        hooks        = nullptr; ///< "agentxx.agent.hooks"
+    const AgentxxPluginEventsIface*       events       = nullptr; ///< "agentxx.agent.events"
+    const AgentxxPluginCapabilitiesIface* capabilities = nullptr; ///< "agentxx.agent.capabilities"
+    const AgentxxPluginSchedulerIface*    scheduler    = nullptr; ///< "agentxx.agent.scheduler"
+    const AgentxxPluginSessionIface*      session      = nullptr; ///< "agentxx.agent.session"
+    const AgentxxPluginsIface*            plugins      = nullptr; ///< "agentxx.agent.plugins"
+    const AgentxxPluginConfigIface*       config       = nullptr; ///< "agentxx.agent.config"
+    const AgentxxPluginPromptIface*       prompt       = nullptr; ///< "agentxx.agent.prompt"
+    const AgentxxPluginJsonIface*         json         = nullptr; ///< "agentxx.agent.json"
+    const AgentxxPluginLogIface*          log          = nullptr; ///< "agentxx.agent.log"
+    const AgentxxPluginResourcesIface*    resources    = nullptr; ///< "agentxx.agent.resources"
+    const AgentxxPluginModelIface*        model        = nullptr; ///< "agentxx.agent.model"
+    const AgentxxPluginCancelIface*       cancel       = nullptr; ///< "agentxx.agent.cancel"
+    const AgentxxPluginGraphIface*        graph        = nullptr; ///< "agentxx.agent.graph"
+    const AgentxxPluginTasksIface*        tasks        = nullptr; ///< "agentxx.agent.tasks"
+
+    /// 从宿主查询全部已知 agent 侧接口表 (host 为空时返回全 NULL 聚合)
+    static AgentIfaces query(const AgentxxPluginHost* host) {
+        AgentIfaces f;
+        if (!host || !host->vtable || !host->vtable->query_interface) {
+            return f;
+        }
+        f.tools = queryInterface<AgentxxPluginToolsIface>(host, AGENTXX_PLUGIN_IFACE_AGENT_TOOLS);
+        f.hooks = queryInterface<AgentxxPluginHooksIface>(host, AGENTXX_PLUGIN_IFACE_AGENT_HOOKS);
+        f.events
+            = queryInterface<AgentxxPluginEventsIface>(host, AGENTXX_PLUGIN_IFACE_AGENT_EVENTS);
+        f.capabilities = queryInterface<AgentxxPluginCapabilitiesIface>(
+            host,
+            AGENTXX_PLUGIN_IFACE_AGENT_CAPABILITIES
+        );
+        f.scheduler
+            = queryInterface<AgentxxPluginSchedulerIface>(host, AGENTXX_PLUGIN_IFACE_AGENT_SCHEDULER);
+        f.session
+            = queryInterface<AgentxxPluginSessionIface>(host, AGENTXX_PLUGIN_IFACE_AGENT_SESSION);
+        f.plugins
+            = queryInterface<AgentxxPluginsIface>(host, AGENTXX_PLUGIN_IFACE_AGENT_PLUGINS);
+        f.config = queryInterface<AgentxxPluginConfigIface>(host, AGENTXX_PLUGIN_IFACE_AGENT_CONFIG);
+        f.prompt = queryInterface<AgentxxPluginPromptIface>(host, AGENTXX_PLUGIN_IFACE_AGENT_PROMPT);
+        f.json = queryInterface<AgentxxPluginJsonIface>(host, AGENTXX_PLUGIN_IFACE_AGENT_JSON);
+        f.log = queryInterface<AgentxxPluginLogIface>(host, AGENTXX_PLUGIN_IFACE_AGENT_LOG);
+        f.resources
+            = queryInterface<AgentxxPluginResourcesIface>(host, AGENTXX_PLUGIN_IFACE_AGENT_RESOURCES);
+        f.model = queryInterface<AgentxxPluginModelIface>(host, AGENTXX_PLUGIN_IFACE_AGENT_MODEL);
+        f.cancel = queryInterface<AgentxxPluginCancelIface>(host, AGENTXX_PLUGIN_IFACE_AGENT_CANCEL);
+        f.graph = queryInterface<AgentxxPluginGraphIface>(host, AGENTXX_PLUGIN_IFACE_AGENT_GRAPH);
+        f.tasks = queryInterface<AgentxxPluginTasksIface>(host, AGENTXX_PLUGIN_IFACE_AGENT_TASKS);
+        return f;
+    }
+};
+
+/// client 侧接口表聚合 (一次查询; 成员为 NULL 表示宿主未实现该接口)
+struct ClientIfaces {
+    const AgentxxClientUiIface*      ui      = nullptr; ///< "agentxx.client.ui"
+    const AgentxxClientEventsIface*  events  = nullptr; ///< "agentxx.client.events"
+    const AgentxxClientSessionIface* session = nullptr; ///< "agentxx.client.session"
+    const AgentxxClientWireIface*    wire    = nullptr; ///< "agentxx.client.wire"
+    const AgentxxClientSelfIface*    self    = nullptr; ///< "agentxx.client.self"
+    const AgentxxClientJsonIface*    json    = nullptr; ///< "agentxx.client.json"
+    const AgentxxClientLogIface*     log     = nullptr; ///< "agentxx.client.log"
+
+    /// 从宿主查询全部已知 client 侧接口表 (host 为空时返回全 NULL 聚合)
+    static ClientIfaces query(const AgentxxPluginHost* host) {
+        ClientIfaces f;
+        if (!host || !host->vtable || !host->vtable->query_interface) {
+            return f;
+        }
+        f.ui = queryInterface<AgentxxClientUiIface>(host, AGENTXX_IFACE_CLIENT_UI);
+        f.events = queryInterface<AgentxxClientEventsIface>(host, AGENTXX_IFACE_CLIENT_EVENTS);
+        f.session
+            = queryInterface<AgentxxClientSessionIface>(host, AGENTXX_IFACE_CLIENT_SESSION);
+        f.wire = queryInterface<AgentxxClientWireIface>(host, AGENTXX_IFACE_CLIENT_WIRE);
+        f.self = queryInterface<AgentxxClientSelfIface>(host, AGENTXX_IFACE_CLIENT_SELF);
+        f.json = queryInterface<AgentxxClientJsonIface>(host, AGENTXX_IFACE_CLIENT_JSON);
+        f.log = queryInterface<AgentxxClientLogIface>(host, AGENTXX_IFACE_CLIENT_LOG);
+        return f;
+    }
+};
 
 /* ==================== 取消异常 ==================== */
 
@@ -67,7 +384,7 @@ struct Logger {
 
     void log(int32_t level, std::string_view msg) const noexcept {
         if (host && logIface && logIface->log) {
-            auto sv = agentxx_plugin_sv(msg.data(), msg.size());
+            auto sv = PluginStringView::from(msg.data(), msg.size());
             logIface->log(host, level, &sv);
         }
     }
@@ -106,7 +423,7 @@ struct OpCtl {
             return true;
         }
         if (host && cancelIface && cancelIface->is_cancelled && !threadId.empty()) {
-            auto sv = agentxx_plugin_sv(threadId.data(), threadId.size());
+            auto sv = PluginStringView::from(threadId.data(), threadId.size());
             return cancelIface->is_cancelled(host, &sv) != 0;
         }
         return false;
@@ -134,69 +451,6 @@ inline std::string
     }
     return std::string{fallback};
 }
-
-/* ==================== OwnedString RAII 包装 ==================== */
-
-class OwnedString {
-    const AgentxxPluginHost* host_ = nullptr;
-    AgentxxPluginString      str_{nullptr, 0};
-
-public:
-    OwnedString() = default;
-    OwnedString(const AgentxxPluginHost* h, AgentxxPluginString s) : host_(h), str_(s) {}
-    ~OwnedString() {
-        reset();
-    }
-
-    template<typename Fn>
-    static OwnedString acquire(const AgentxxPluginHost* h, Fn&& fn) {
-        AgentxxPluginString s{nullptr, 0};
-        fn(&s);
-        return OwnedString(h, s);
-    }
-
-    OwnedString(const OwnedString&) = delete;
-    OwnedString& operator=(const OwnedString&) = delete;
-
-    OwnedString(OwnedString&& o) noexcept : host_(o.host_), str_(o.str_) {
-        o.host_ = nullptr;
-        o.str_  = {nullptr, 0};
-    }
-
-    OwnedString& operator=(OwnedString&& o) noexcept {
-        if (this != &o) {
-            reset();
-            host_   = o.host_;
-            str_    = o.str_;
-            o.host_ = nullptr;
-            o.str_  = {nullptr, 0};
-        }
-        return *this;
-    }
-
-    void reset() noexcept {
-        if (host_ && str_.data) {
-            agentxx_plugin_string_free(host_, &str_);
-        }
-        host_ = nullptr;
-        str_  = {nullptr, 0};
-    }
-
-    const char* c_str() const noexcept { return str_.data ? str_.data : ""; }
-    const char* data() const noexcept { return str_.data; }
-    size_t size() const noexcept { return static_cast<size_t>(str_.size); }
-    bool empty() const noexcept { return str_.data == nullptr || str_.size == 0; }
-    std::string_view view() const noexcept { return {str_.data ? str_.data : "", static_cast<size_t>(str_.size)}; }
-    std::string str() const { return std::string(view()); }
-    AgentxxPluginStringView to_sv() const noexcept { return agentxx_plugin_string_to_sv(&str_); }
-    AgentxxPluginString release() noexcept {
-        AgentxxPluginString tmp = str_;
-        str_ = {nullptr, 0};
-        host_ = nullptr;
-        return tmp;
-    }
-    const AgentxxPluginString& raw() const noexcept { return str_; }
-};
 
 /* ==================== Task<T> 锚定协程与完成协议 ==================== */
 
@@ -260,11 +514,11 @@ inline void finishIfDone(std::coroutine_handle<Promise> h) {
     h.destroy();
 
     if (notify.done) {
-        AgentxxPluginStringView sv = agentxx_plugin_sv(nullptr, 0);
+        AgentxxPluginStringView sv = PluginStringView::from(nullptr, 0);
         if (status == AGENTXX_PLUGIN_OPERATOR_FAILED) {
-            sv = agentxx_plugin_sv(errPayload.data(), errPayload.size());
+            sv = PluginStringView::from(errPayload.data(), errPayload.size());
         } else if (status == AGENTXX_PLUGIN_OPERATOR_OK) {
-            sv = agentxx_plugin_sv(resPayload.data(), resPayload.size());
+            sv = PluginStringView::from(resPayload.data(), resPayload.size());
         }
         notify.done(notify.host_ud, status, &sv);
     }
@@ -444,7 +698,7 @@ public:
             return "{}";
         }
         std::string res(s.data, static_cast<size_t>(s.size));
-        agentxx_plugin_string_free(host, &s);
+        PluginString::free(host, &s);
         return res;
     }
 
@@ -456,7 +710,7 @@ public:
         iface.config->get_session_work_dir(host, &tid, &s);
         if (s.data) {
             std::string res(s.data, static_cast<size_t>(s.size));
-            agentxx_plugin_string_free(host, &s);
+            PluginString::free(host, &s);
             return res;
         }
         return "";
@@ -467,14 +721,14 @@ public:
         if (!host || !iface.config || !iface.config->get_tool_prompt) {
             return res;
         }
-        auto toolSv = agentxx_plugin_sv(tool.data(), tool.size());
+        auto toolSv = PluginStringView::from(tool.data(), tool.size());
         AgentxxPluginString s{nullptr, 0};
         iface.config->get_tool_prompt(host, &toolSv, &s);
         if (!s.data) {
             return res;
         }
         std::string jsonStr(s.data, static_cast<size_t>(s.size));
-        agentxx_plugin_string_free(host, &s);
+        PluginString::free(host, &s);
         try {
             auto j = neograph::json::parse(jsonStr);
             if (j.contains("depict") && j["depict"].is_string()) {
@@ -502,7 +756,7 @@ public:
             return "{}";
         }
         std::string res(s.data, static_cast<size_t>(s.size));
-        agentxx_plugin_string_free(host, &s);
+        PluginString::free(host, &s);
         return res;
     }
 
@@ -516,7 +770,7 @@ public:
             return "";
         }
         std::string res(s.data, static_cast<size_t>(s.size));
-        agentxx_plugin_string_free(host, &s);
+        PluginString::free(host, &s);
         return res;
     }
 
@@ -531,24 +785,24 @@ public:
         if (!host || !iface.session || !iface.session->add_share_store) {
             return -1;
         }
-        auto contentSv = agentxx_plugin_sv(content.data(), content.size());
+        auto contentSv = PluginStringView::from(content.data(), content.size());
         return iface.session->add_share_store(host, &tid, &contentSv);
     }
 
     char* strdup(AgentxxPluginStringView sv) const {
-        return agentxx_plugin_strdup(host, &sv);
+        return PluginString::strdup(host, &sv);
     }
 
     char* strdup(const char* s) const {
         if (!s) {
             return nullptr;
         }
-        auto sv = agentxx_plugin_sv_cstr(s);
-        return agentxx_plugin_strdup(host, &sv);
+        auto sv = PluginStringView::fromCstr(s);
+        return PluginString::strdup(host, &sv);
     }
 
     AgentxxPluginString createString(AgentxxPluginStringView sv) const {
-        return agentxx_plugin_string_from_sv(host, &sv);
+        return PluginString::from(host, &sv);
     }
 
     /// 字符串 → JSON 字符串字面量 (经宿主 agentxx.agent.json 接口表; 含引号包裹与转义)
@@ -557,18 +811,18 @@ public:
             return "\"\"";
         }
         AgentxxPluginString esc{nullptr, 0};
-        auto sSv = agentxx_plugin_sv(s.data, s.size);
+        auto sSv = PluginStringView::from(s.data, s.size);
         iface.json->json_escape(host, &sSv, &esc);
         if (!esc.data) {
             return "\"\"";
         }
         std::string out(esc.data, static_cast<size_t>(esc.size));
-        agentxx_plugin_string_free(host, &esc);
+        PluginString::free(host, &esc);
         return out;
     }
 
     std::string jsonEscape(std::string_view s) const {
-        return jsonEscape(agentxx_plugin_sv(s.data(), s.size()));
+        return jsonEscape(PluginStringView::from(s.data(), s.size()));
     }
 
     std::string jsonEscape(const char* s) const {
@@ -583,15 +837,15 @@ public:
         if (!host || !iface.json || !iface.json->json_get_string) {
             return {};
         }
-        auto jsonSv = agentxx_plugin_sv(json.data(), json.size());
-        auto keySv  = agentxx_plugin_sv(key.data(), key.size());
+        auto jsonSv = PluginStringView::from(json.data(), json.size());
+        auto keySv  = PluginStringView::from(key.data(), key.size());
         AgentxxPluginString out{nullptr, 0};
         iface.json->json_get_string(host, &jsonSv, &keySv, &out);
         if (!out.data) {
             return {};
         }
         std::string res(out.data, static_cast<size_t>(out.size));
-        agentxx_plugin_string_free(host, &out);
+        PluginString::free(host, &out);
         return res;
     }
 
@@ -832,9 +1086,9 @@ struct CallToolAwaiter {
         st->destroyed.store(false, std::memory_order_release);
         auto* holder = new std::shared_ptr<CallToolState>(st);
         AgentxxPluginString err{nullptr, 0};
-        auto nameSv = agentxx_plugin_sv(st->name.data(), st->name.size());
-        auto argsSv = agentxx_plugin_sv(st->argsJson.data(), st->argsJson.size());
-        auto tidSv  = agentxx_plugin_sv(st->threadId.data(), st->threadId.size());
+        auto nameSv = PluginStringView::from(st->name.data(), st->name.size());
+        auto argsSv = PluginStringView::from(st->argsJson.data(), st->argsJson.size());
+        auto tidSv  = PluginStringView::from(st->threadId.data(), st->threadId.size());
         st->opHandle = st->tools->call_tool_async(
             st->host,
             &nameSv,
@@ -913,7 +1167,7 @@ struct CallToolAwaiter {
             delete holder;
             if (err.data) {
                 st->startError.assign(err.data, static_cast<size_t>(err.size));
-                agentxx_plugin_string_free(st->host, &err);
+                PluginString::free(st->host, &err);
             }
             return false;
         }
@@ -1002,9 +1256,9 @@ struct InvokeCapAwaiter {
         st->destroyed.store(false, std::memory_order_release);
         auto* holder = new std::shared_ptr<InvokeCapState>(st);
         AgentxxPluginString err{nullptr, 0};
-        auto capSv  = agentxx_plugin_sv(st->capability.data(), st->capability.size());
-        auto methSv = agentxx_plugin_sv(st->method.data(), st->method.size());
-        auto argsSv = agentxx_plugin_sv(st->argsJson.data(), st->argsJson.size());
+        auto capSv  = PluginStringView::from(st->capability.data(), st->capability.size());
+        auto methSv = PluginStringView::from(st->method.data(), st->method.size());
+        auto argsSv = PluginStringView::from(st->argsJson.data(), st->argsJson.size());
         st->opHandle = st->caps->invoke_capability_async(
             st->host,
             &capSv,
@@ -1083,7 +1337,7 @@ struct InvokeCapAwaiter {
             delete holder;
             if (err.data) {
                 st->startError.assign(err.data, static_cast<size_t>(err.size));
-                agentxx_plugin_string_free(st->host, &err);
+                PluginString::free(st->host, &err);
             }
             return false;
         }
@@ -1237,7 +1491,7 @@ inline void spawnTaskImpl(Ctx& ctx, Fn&& fn) {
                     std::string_view{err.data, static_cast<size_t>(err.size)}
                 ));
                 if (ctx.host) {
-                    agentxx_plugin_string_free(ctx.host, &err);
+                    PluginString::free(ctx.host, &err);
                 }
             } else {
                 ctx.log.warn("spawn: register_task failed (task runs unmanaged)");
@@ -1341,10 +1595,10 @@ inline void tool(
     };
 
     AgentxxPluginToolSpec spec{};
-    spec.name = agentxx_plugin_sv(name.data(), name.size());
+    spec.name = PluginStringView::from(name.data(), name.size());
     spec.description
-        = agentxx_plugin_sv(storage[storage.size() - 2].data(), storage[storage.size() - 2].size());
-    spec.parameters_json    = agentxx_plugin_sv(storage.back().data(), storage.back().size());
+        = PluginStringView::from(storage[storage.size() - 2].data(), storage[storage.size() - 2].size());
+    spec.parameters_json    = PluginStringView::from(storage.back().data(), storage.back().size());
     spec.user_data          = shim;
     spec.default_timeout_ms = default_timeout_ms;
     spec.flags              = flags;
@@ -1445,10 +1699,10 @@ inline void fast_tool(
     auto shim = ctx.storeShim(std::make_unique<FastShim>(FastShim{&ctx, std::forward<SyncFn>(fn)}));
 
     AgentxxPluginToolSpec spec{};
-    spec.name = agentxx_plugin_sv(name.data(), name.size());
+    spec.name = PluginStringView::from(name.data(), name.size());
     spec.description
-        = agentxx_plugin_sv(storage[storage.size() - 2].data(), storage[storage.size() - 2].size());
-    spec.parameters_json    = agentxx_plugin_sv(storage.back().data(), storage.back().size());
+        = PluginStringView::from(storage[storage.size() - 2].data(), storage[storage.size() - 2].size());
+    spec.parameters_json    = PluginStringView::from(storage.back().data(), storage.back().size());
     spec.user_data          = shim;
     spec.default_timeout_ms = default_timeout_ms;
     spec.flags              = flags;
@@ -1475,7 +1729,7 @@ inline void fast_tool(
             }
 
             if (notify && notify->done) {
-                auto resSv = agentxx_plugin_sv(res.data(), res.size());
+                auto resSv = PluginStringView::from(res.data(), res.size());
                 notify->done(
                     notify->host_ud,
                     AGENTXX_PLUGIN_OPERATOR_OK,
@@ -1485,25 +1739,25 @@ inline void fast_tool(
         } catch (const std::exception& e) {
             if (notify && notify->done) {
                 std::string what = e.what();
-                auto errSv = agentxx_plugin_sv(what.data(), what.size());
+                auto errSv = PluginStringView::from(what.data(), what.size());
                 notify->done(
                     notify->host_ud,
                     AGENTXX_PLUGIN_OPERATOR_FAILED,
                     &errSv
                 );
             } else if (error_out) {
-                *error_out = agentxx_plugin_string_from_cstr(shim->ctx->host, e.what());
+                *error_out = PluginString::fromCstr(shim->ctx->host, e.what());
             }
         } catch (...) {
             if (notify && notify->done) {
-                auto errSv = agentxx_plugin_sv_cstr("unknown error");
+                auto errSv = PluginStringView::fromCstr("unknown error");
                 notify->done(
                     notify->host_ud,
                     AGENTXX_PLUGIN_OPERATOR_FAILED,
                     &errSv
                 );
             } else if (error_out) {
-                *error_out = agentxx_plugin_string_from_cstr(shim->ctx->host, "unknown error in fast_tool");
+                *error_out = PluginString::fromCstr(shim->ctx->host, "unknown error in fast_tool");
             }
         }
         return nullptr;
@@ -1553,10 +1807,10 @@ inline void blocking_tool(
     };
 
     AgentxxPluginToolSpec spec{};
-    spec.name = agentxx_plugin_sv(name.data(), name.size());
+    spec.name = PluginStringView::from(name.data(), name.size());
     spec.description
-        = agentxx_plugin_sv(storage[storage.size() - 2].data(), storage[storage.size() - 2].size());
-    spec.parameters_json    = agentxx_plugin_sv(storage.back().data(), storage.back().size());
+        = PluginStringView::from(storage[storage.size() - 2].data(), storage[storage.size() - 2].size());
+    spec.parameters_json    = PluginStringView::from(storage.back().data(), storage.back().size());
     spec.user_data          = shim;
     spec.default_timeout_ms = default_timeout_ms;
     spec.flags              = flags;
@@ -1573,7 +1827,7 @@ inline void blocking_tool(
         std::string tidStr(thread_id && thread_id->data ? thread_id->data : "", thread_id ? static_cast<size_t>(thread_id->size) : 0);
         std::string workDirCache;
         if (shim->ctx) {
-            auto tidSv = agentxx_plugin_sv(tidStr.data(), tidStr.size());
+            auto tidSv = PluginStringView::from(tidStr.data(), tidStr.size());
             workDirCache = shim->ctx->workDir(tidSv);
         }
         auto* job = new Job{
@@ -1643,12 +1897,12 @@ inline void blocking_tool(
                         return nullptr;
                     } catch (const std::exception& e) {
                         if (err_out) {
-                            *err_out = agentxx_plugin_string_from_cstr(j->shim->ctx->host, e.what());
+                            *err_out = PluginString::fromCstr(j->shim->ctx->host, e.what());
                         }
                         return nullptr;
                     } catch (...) {
                         if (err_out) {
-                            *err_out = agentxx_plugin_string_from_cstr(j->shim->ctx->host, "unknown blocking tool error");
+                            *err_out = PluginString::fromCstr(j->shim->ctx->host, "unknown blocking tool error");
                         }
                         return nullptr;
                     }
@@ -1656,13 +1910,13 @@ inline void blocking_tool(
                 [](void* ud, void* res, const AgentxxPluginStringView* err) {
                     auto* j       = static_cast<Job*>(ud);
                     int32_t st    = AGENTXX_PLUGIN_OPERATOR_OK;
-                    AgentxxPluginStringView payload = agentxx_plugin_sv(nullptr, 0);
+                    AgentxxPluginStringView payload = PluginStringView::from(nullptr, 0);
 
-                    if (!agentxx_plugin_sv_empty(err)) {
+                    if (!PluginStringView::empty(err)) {
                         st      = AGENTXX_PLUGIN_OPERATOR_FAILED;
                         payload = *err;
                     } else if (res) {
-                        payload = agentxx_plugin_sv_cstr(static_cast<const char*>(res));
+                        payload = PluginStringView::fromCstr(static_cast<const char*>(res));
                     } else {
                         st      = AGENTXX_PLUGIN_OPERATOR_CANCELLED;
                     }
@@ -1736,7 +1990,7 @@ inline void hook(Ctx& ctx, AgentxxPluginHookPoint point, HookFn&& fn) {
                 shim->fn(input);
             }
             if (notify && notify->done) {
-                auto okSv = agentxx_plugin_sv(nullptr, 0);
+                auto okSv = PluginStringView::from(nullptr, 0);
                 notify->done(
                     notify->host_ud,
                     AGENTXX_PLUGIN_OPERATOR_OK,
@@ -1746,7 +2000,7 @@ inline void hook(Ctx& ctx, AgentxxPluginHookPoint point, HookFn&& fn) {
         } catch (const std::exception& e) {
             if (notify && notify->done) {
                 std::string what = e.what();
-                auto errSv = agentxx_plugin_sv(what.data(), what.size());
+                auto errSv = PluginStringView::from(what.data(), what.size());
                 notify->done(
                     notify->host_ud,
                     AGENTXX_PLUGIN_OPERATOR_FAILED,
@@ -1755,7 +2009,7 @@ inline void hook(Ctx& ctx, AgentxxPluginHookPoint point, HookFn&& fn) {
             }
         } catch (...) {
             if (notify && notify->done) {
-                auto errSv = agentxx_plugin_sv_cstr("hook error");
+                auto errSv = PluginStringView::fromCstr("hook error");
                 notify->done(
                     notify->host_ud,
                     AGENTXX_PLUGIN_OPERATOR_FAILED,
@@ -1783,7 +2037,7 @@ inline void capability(Ctx& ctx, std::string_view capName, CapFn&& fn) {
     auto shim = ctx.storeShim(std::make_unique<CapShim>(CapShim{&ctx, std::forward<CapFn>(fn)}));
 
     if (ctx.iface.capabilities && ctx.iface.capabilities->register_capability_ex) {
-        auto capSv = agentxx_plugin_sv(capName.data(), capName.size());
+        auto capSv = PluginStringView::from(capName.data(), capName.size());
         ctx.iface.capabilities->register_capability_ex(
             ctx.host,
             &capSv,
@@ -1816,7 +2070,7 @@ inline void capability(Ctx& ctx, std::string_view capName, CapFn&& fn) {
                         res = shim->fn(meth, args);
                     }
                     if (notify && notify->done) {
-                        auto resSv = agentxx_plugin_sv(res.data(), res.size());
+                        auto resSv = PluginStringView::from(res.data(), res.size());
                         notify->done(
                             notify->host_ud,
                             AGENTXX_PLUGIN_OPERATOR_OK,
@@ -1826,7 +2080,7 @@ inline void capability(Ctx& ctx, std::string_view capName, CapFn&& fn) {
                 } catch (const std::exception& e) {
                     if (notify && notify->done) {
                         std::string what = e.what();
-                        auto errSv = agentxx_plugin_sv(what.data(), what.size());
+                        auto errSv = PluginStringView::from(what.data(), what.size());
                         notify->done(
                             notify->host_ud,
                             AGENTXX_PLUGIN_OPERATOR_FAILED,
@@ -1835,7 +2089,7 @@ inline void capability(Ctx& ctx, std::string_view capName, CapFn&& fn) {
                     }
                 } catch (...) {
                     if (notify && notify->done) {
-                        auto errSv = agentxx_plugin_sv_cstr("capability error");
+                        auto errSv = PluginStringView::fromCstr("capability error");
                         notify->done(
                             notify->host_ud,
                             AGENTXX_PLUGIN_OPERATOR_FAILED,
@@ -1864,13 +2118,13 @@ inline AgentxxPluginString call_tool_blocking(
 ) {
     if (!host || !tools || !tools->call_tool_async) {
         if (error_out) {
-            *error_out = agentxx_plugin_string_from_cstr(host, "tools iface not available");
+            *error_out = PluginString::fromCstr(host, "tools iface not available");
         }
         return AgentxxPluginString{nullptr, 0};
     }
     if (sched && sched->is_io_thread && sched->is_io_thread(host)) {
         if (error_out) {
-            *error_out = agentxx_plugin_string_from_cstr(
+            *error_out = PluginString::fromCstr(
                 host,
                 "call_tool_blocking cannot be called on io thread; use co_await call_tool instead"
             );
@@ -1886,9 +2140,9 @@ inline AgentxxPluginString call_tool_blocking(
         std::string             payload;
     } state;
 
-    auto nameSv = agentxx_plugin_sv(name.data(), name.size());
-    auto argsSv = agentxx_plugin_sv(args_json.data(), args_json.size());
-    auto tidSv  = agentxx_plugin_sv(thread_id.data(), thread_id.size());
+    auto nameSv = PluginStringView::from(name.data(), name.size());
+    auto argsSv = PluginStringView::from(args_json.data(), args_json.size());
+    auto tidSv  = PluginStringView::from(thread_id.data(), thread_id.size());
 
     AgentxxPluginOperatorHandle* handle = tools->call_tool_async(
         host,
@@ -1922,14 +2176,14 @@ inline AgentxxPluginString call_tool_blocking(
 
     if (state.status != AGENTXX_PLUGIN_OPERATOR_OK) {
         if (error_out) {
-            auto paySv = agentxx_plugin_sv(state.payload.data(), state.payload.size());
-            *error_out = agentxx_plugin_string_from_sv(host, &paySv);
+            auto paySv = PluginStringView::from(state.payload.data(), state.payload.size());
+            *error_out = PluginString::from(host, &paySv);
         }
         return AgentxxPluginString{nullptr, 0};
     }
 
-    auto paySv = agentxx_plugin_sv(state.payload.data(), state.payload.size());
-    return agentxx_plugin_string_from_sv(host, &paySv);
+    auto paySv = PluginStringView::from(state.payload.data(), state.payload.size());
+    return PluginString::from(host, &paySv);
 }
 
 inline AgentxxPluginString invoke_capability_blocking(
@@ -1943,13 +2197,13 @@ inline AgentxxPluginString invoke_capability_blocking(
 ) {
     if (!host || !caps || !caps->invoke_capability_async) {
         if (error_out) {
-            *error_out = agentxx_plugin_string_from_cstr(host, "capabilities iface not available");
+            *error_out = PluginString::fromCstr(host, "capabilities iface not available");
         }
         return AgentxxPluginString{nullptr, 0};
     }
     if (sched && sched->is_io_thread && sched->is_io_thread(host)) {
         if (error_out) {
-            *error_out = agentxx_plugin_string_from_cstr(
+            *error_out = PluginString::fromCstr(
                 host,
                 "invoke_capability_blocking cannot be called on io thread; use co_await invoke_cap instead"
             );
@@ -1965,9 +2219,9 @@ inline AgentxxPluginString invoke_capability_blocking(
         std::string             payload;
     } state;
 
-    auto capSv  = agentxx_plugin_sv(capability.data(), capability.size());
-    auto methSv = agentxx_plugin_sv(method.data(), method.size());
-    auto argsSv = agentxx_plugin_sv(args_json.data(), args_json.size());
+    auto capSv  = PluginStringView::from(capability.data(), capability.size());
+    auto methSv = PluginStringView::from(method.data(), method.size());
+    auto argsSv = PluginStringView::from(args_json.data(), args_json.size());
 
     AgentxxPluginOperatorHandle* handle = caps->invoke_capability_async(
         host,
@@ -2001,14 +2255,14 @@ inline AgentxxPluginString invoke_capability_blocking(
 
     if (state.status != AGENTXX_PLUGIN_OPERATOR_OK) {
         if (error_out) {
-            auto paySv = agentxx_plugin_sv(state.payload.data(), state.payload.size());
-            *error_out = agentxx_plugin_string_from_sv(host, &paySv);
+            auto paySv = PluginStringView::from(state.payload.data(), state.payload.size());
+            *error_out = PluginString::from(host, &paySv);
         }
         return AgentxxPluginString{nullptr, 0};
     }
 
-    auto paySv = agentxx_plugin_sv(state.payload.data(), state.payload.size());
-    return agentxx_plugin_string_from_sv(host, &paySv);
+    auto paySv = PluginStringView::from(state.payload.data(), state.payload.size());
+    return PluginString::from(host, &paySv);
 }
 
 } // namespace plugin

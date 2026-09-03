@@ -19,7 +19,7 @@ inline void pluginLog(
     const std::string&           msg
 ) {
     if (host && logIf && logIf->log) {
-        auto sv = agentxx_plugin_sv(msg.data(), msg.size());
+        auto sv = agentxx::plugin::PluginStringView::from(msg.data(), msg.size());
         logIf->log(host, level, &sv);
     }
 }

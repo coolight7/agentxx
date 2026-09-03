@@ -122,9 +122,9 @@ static std::string formatUsageText(const agentxx_system_monitor_plugin::CpuGpuUs
 extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_agent_get_info(void) {
     static const AgentxxPluginInfo info{
         AGENTXX_PLUGIN_API_VERSION, 0,
-        agentxx_plugin_sv_cstr("agentxx_system_monitor"),
-        agentxx_plugin_sv_cstr("1.0.0"),
-        agentxx_plugin_sv_cstr("System resource monitor: CPU/memory/GPU usage tool and "
+        agentxx::plugin::PluginStringView::fromCstr("agentxx_system_monitor"),
+        agentxx::plugin::PluginStringView::fromCstr("1.0.0"),
+        agentxx::plugin::PluginStringView::fromCstr("System resource monitor: CPU/memory/GPU usage tool and "
                                "agentxx.system_usage capability"),
     };
     return &info;
@@ -185,7 +185,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
 
             // 3. 跨端控制事件与宿主约定事件订阅
             if (ctx->iface.events && ctx->iface.events->subscribe) {
-                auto t1 = agentxx_plugin_sv_cstr("client.agentxx_system_monitor.usage_enabled");
+                auto t1 = agentxx::plugin::PluginStringView::fromCstr("client.agentxx_system_monitor.usage_enabled");
                 ctx->iface.events->subscribe(
                     host,
                     &t1,
@@ -211,7 +211,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                 );
 
                 // 客户端接入/重连时立即发布一次状态快照 (修复初始状态滞留为空)
-                auto t2 = agentxx_plugin_sv_cstr("agentxx_host.client_attached");
+                auto t2 = agentxx::plugin::PluginStringView::fromCstr("agentxx_host.client_attached");
                 ctx->iface.events->subscribe(
                     host,
                     &t2,
@@ -236,8 +236,8 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                                     = static_cast<agentxx_system_monitor_plugin::CpuGpuUsage*>(res);
                                 if (c && u && c->iface.events && c->iface.events->publish) {
                                     std::string json = usageToJson(*u);
-                                    auto topicSv = agentxx_plugin_sv_cstr("agentxx_system_monitor.usage");
-                                    auto jsonSv  = agentxx_plugin_sv(json.data(), json.size());
+                                    auto topicSv = agentxx::plugin::PluginStringView::fromCstr("agentxx_system_monitor.usage");
+                                    auto jsonSv  = agentxx::plugin::PluginStringView::from(json.data(), json.size());
                                     c->iface.events->publish(c->host, &topicSv, &jsonSv);
                                 }
                                 delete u;
@@ -263,8 +263,8 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                             }
                             std::string json = usageToJson(usage);
                             if (c.iface.events && c.iface.events->publish) {
-                                auto topicSv = agentxx_plugin_sv_cstr("agentxx_system_monitor.usage");
-                                auto jsonSv  = agentxx_plugin_sv(json.data(), json.size());
+                                auto topicSv = agentxx::plugin::PluginStringView::fromCstr("agentxx_system_monitor.usage");
+                                auto jsonSv  = agentxx::plugin::PluginStringView::from(json.data(), json.size());
                                 c.iface.events->publish(c.host, &topicSv, &jsonSv);
                             }
                         }
@@ -379,8 +379,8 @@ static void refreshUsageDisplay(ClientCtx& ctx) {
         return;
     }
     if (!ctx.section && ctx.ui && ctx.ui->register_info_section) {
-        auto idSv    = agentxx_plugin_sv_cstr("agentxx_system_monitor.usage");
-        auto propsSv = agentxx_plugin_sv_cstr(R"({"title":"System"})");
+        auto idSv    = agentxx::plugin::PluginStringView::fromCstr("agentxx_system_monitor.usage");
+        auto propsSv = agentxx::plugin::PluginStringView::fromCstr(R"({"title":"System"})");
         ctx.section = ctx.ui->register_info_section(ctx.host, &idSv, &propsSv);
     }
     if (!ctx.section || !ctx.ui || !ctx.ui->update_info_section || ctx.last_usage_json.empty()) {
@@ -399,7 +399,7 @@ static void refreshUsageDisplay(ClientCtx& ctx) {
         off["items"].push_back(std::move(it));
         json = off.dump();
     }
-    auto jsonSv = agentxx_plugin_sv(json.data(), json.size());
+    auto jsonSv = agentxx::plugin::PluginStringView::from(json.data(), json.size());
     ctx.ui->update_info_section(ctx.host, ctx.section, &jsonSv);
 }
 
@@ -461,8 +461,8 @@ static int32_t AGENTXX_PLUGIN_CALL cmdSysinfoExecute(
             refreshUsageDisplay(*ctx);
             if (ctx->iface.wire && ctx->iface.wire->send_plugin_data) {
                 std::string payload = next ? R"({"enabled":true})" : R"({"enabled":false})";
-                auto evtSv = agentxx_plugin_sv_cstr("usage_enabled");
-                auto paySv = agentxx_plugin_sv(payload.data(), payload.size());
+                auto evtSv = agentxx::plugin::PluginStringView::fromCstr("usage_enabled");
+                auto paySv = agentxx::plugin::PluginStringView::from(payload.data(), payload.size());
                 ctx->iface.wire->send_plugin_data(ctx->host, &evtSv, &paySv);
             }
             std::string text = next ? "System resource info: ON" : "System resource info: OFF";
@@ -489,7 +489,7 @@ static int32_t AGENTXX_PLUGIN_CALL cmdSysinfoExecute(
                         }
                     } catch (...) {
                     }
-                    agentxx_plugin_string_free(ctx->host, &stateJson);
+                    agentxx::plugin::PluginString::free(ctx->host, &stateJson);
                 }
                 if (agentMissing) {
                     text += " (warn: plugin missing on server side; toggle is local only)";
@@ -502,9 +502,9 @@ static int32_t AGENTXX_PLUGIN_CALL cmdSysinfoExecute(
             out["text"]        = text;
             out["level"]       = 0;
             std::string dumped = out.dump();
-            auto paySv = agentxx_plugin_sv(dumped.data(), dumped.size());
+            auto paySv = agentxx::plugin::PluginStringView::from(dumped.data(), dumped.size());
             if (actionOut) {
-                *actionOut = agentxx_plugin_string_from_sv(ctx->host, &paySv);
+                *actionOut = agentxx::plugin::PluginString::from(ctx->host, &paySv);
             }
             return 0;
         }
@@ -515,9 +515,9 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxClientPluginInfo* agentxx_plugin_c
 ) {
     static const AgentxxClientPluginInfo info{
         AGENTXX_CLIENT_PLUGIN_API_VERSION, 0,
-        agentxx_plugin_sv_cstr("agentxx_system_monitor"),
-        agentxx_plugin_sv_cstr("1.0.0"),
-        agentxx_plugin_sv_cstr("System resource usage: Info section (CPU/RAM/GPU), /sysinfo toggle"
+        agentxx::plugin::PluginStringView::fromCstr("agentxx_system_monitor"),
+        agentxx::plugin::PluginStringView::fromCstr("1.0.0"),
+        agentxx::plugin::PluginStringView::fromCstr("System resource usage: Info section (CPU/RAM/GPU), /sysinfo toggle"
         ),
     };
     return &info;
@@ -541,12 +541,12 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
             ctx->host  = host;
             ctx->iface = agentxx::plugin::ClientIfaces::query(host);
             ctx->ui
-                = AGENTXX_PLUGIN_QUERY_IFACE(host, AgentxxClientUiIface, AGENTXX_IFACE_CLIENT_UI);
+                = agentxx::plugin::queryInterface<AgentxxClientUiIface>(host, AGENTXX_IFACE_CLIENT_UI);
             raw = ctx.get();
 
             if (ctx->ui && ctx->ui->register_info_section) {
-                auto idSv    = agentxx_plugin_sv_cstr("agentxx_system_monitor.usage");
-                auto propsSv = agentxx_plugin_sv_cstr(R"({"title":"System"})");
+                auto idSv    = agentxx::plugin::PluginStringView::fromCstr("agentxx_system_monitor.usage");
+                auto propsSv = agentxx::plugin::PluginStringView::fromCstr(R"({"title":"System"})");
                 ctx->section = ctx->ui->register_info_section(host, &idSv, &propsSv);
             }
 
@@ -561,8 +561,8 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
             }
 
             if (ctx->ui && ctx->ui->register_command) {
-                auto nameSv = agentxx_plugin_sv_cstr("sysinfo");
-                auto descSv = agentxx_plugin_sv_cstr(
+                auto nameSv = agentxx::plugin::PluginStringView::fromCstr("sysinfo");
+                auto descSv = agentxx::plugin::PluginStringView::fromCstr(
                     "Toggle system resource info display (CPU/RAM/GPU Info section)"
                 );
                 if (ctx->ui->register_command(host, &nameSv, &descSv, cmdSysinfoExecute, ctx.get())
@@ -573,7 +573,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
 
             if (ctx->iface.log && ctx->iface.log->log) {
                 ctx->iface.log
-                    ->log(host, 2, agentxx_plugin_sv_cstr("agentxx_system_monitor client loaded"));
+                    ->log(host, 2, agentxx::plugin::PluginStringView::fromCstr("agentxx_system_monitor client loaded"));
             }
             *plugin_ctx = ctx.release();
             return 0;
@@ -599,14 +599,14 @@ extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_client_destroy(void* plugin
                 ctx->section = nullptr;
             }
             if (ctx->ui && ctx->ui->unregister_command) {
-                ctx->ui->unregister_command(ctx->host, agentxx_plugin_sv_cstr("sysinfo"));
+                ctx->ui->unregister_command(ctx->host, agentxx::plugin::PluginStringView::fromCstr("sysinfo"));
             }
             ctx->last_usage_json.clear();
             if (ctx->iface.log && ctx->iface.log->log) {
                 ctx->iface.log->log(
                     ctx->host,
                     2,
-                    agentxx_plugin_sv_cstr("agentxx_system_monitor client unloaded")
+                    agentxx::plugin::PluginStringView::fromCstr("agentxx_system_monitor client unloaded")
                 );
             }
             delete ctx;

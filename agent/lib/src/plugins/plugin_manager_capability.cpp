@@ -26,7 +26,7 @@ static void setErrOut(PluginInstance* caller, AgentxxPluginString* error_out, co
         return;
     }
     const AgentxxPluginHost* host = caller ? &caller->host : nullptr;
-    *error_out = agentxx_plugin_string_from_sv(host, strToSv(msg));
+    *error_out = agentxx::plugin::PluginString::from(host, strToSv(msg));
     if (!error_out->data) {
         auto* p = static_cast<char*>(hostMemoryAlloc(msg.size() + 1));
         if (p) {
@@ -122,7 +122,7 @@ std::vector<std::string> CapabilityRegistry::names() const {
 // =====================================================================
 
 int PluginManager::registerCapability(PluginInstance* inst, AgentxxPluginStringView capability) {
-    if (!inst || agentxx_plugin_sv_empty(capability)) {
+    if (!inst || agentxx::plugin::PluginStringView::empty(capability)) {
         return -1;
     }
     std::string capStr{capability.data, capability.size};
@@ -146,7 +146,7 @@ int PluginManager::registerCapability(PluginInstance* inst, AgentxxPluginStringV
 }
 
 int PluginManager::unregisterCapability(PluginInstance* inst, AgentxxPluginStringView capability) {
-    if (!inst || agentxx_plugin_sv_empty(capability)) {
+    if (!inst || agentxx::plugin::PluginStringView::empty(capability)) {
         return -1;
     }
     std::string capStr{capability.data, capability.size};
@@ -166,7 +166,7 @@ int PluginManager::unregisterCapability(PluginInstance* inst, AgentxxPluginStrin
 }
 
 int PluginManager::hasCapability(AgentxxPluginStringView capability) const {
-    if (agentxx_plugin_sv_empty(capability)) {
+    if (agentxx::plugin::PluginStringView::empty(capability)) {
         return 0;
     }
     return capabilities_->has(std::string_view{capability.data, capability.size}) ? 1 : 0;
@@ -179,7 +179,7 @@ int PluginManager::registerCapabilityEx(
     AgentxxPluginOperatorCancelFunction  cancel,
     void*                                ctx
 ) {
-    if (!inst || agentxx_plugin_sv_empty(capability) || !start) {
+    if (!inst || agentxx::plugin::PluginStringView::empty(capability) || !start) {
         return -1;
     }
     std::string capStr{capability.data, capability.size};
@@ -254,8 +254,8 @@ static bool buildCapabilityDrive(
         if (auto c = weakCaller.lock()) {
             callerHost = &c->host;
         }
-        auto methSv = agentxx_plugin_sv(methStr.data(), methStr.size());
-        auto argSv  = agentxx_plugin_sv(argStr.data(), argStr.size());
+        auto methSv = agentxx::plugin::PluginStringView::from(methStr.data(), methStr.size());
+        auto argSv  = agentxx::plugin::PluginStringView::from(argStr.data(), argStr.size());
         return entry.start(
             entry.ctx,
             callerHost,
@@ -319,7 +319,7 @@ AgentxxPluginOperatorHandle* PluginManager::callToolAsync(
 
     const auto&    spec   = pluginTool->spec();
     neograph::json parsed = neograph::json::object();
-    if (!agentxx_plugin_sv_empty(args_json)) {
+    if (!agentxx::plugin::PluginStringView::empty(args_json)) {
         try {
             auto j = neograph::json::parse(std::string_view{args_json.data, args_json.size});
             if (j.is_object()) {
@@ -349,9 +349,9 @@ AgentxxPluginOperatorHandle* PluginManager::callToolAsync(
     plugin::OpDrive drive;
     drive.start =
         [spec, argsStr, sessionId](const AgentxxPluginOperatorNotify* notify, AgentxxPluginString* err) -> void* {
-        auto argsSv = agentxx_plugin_sv(argsStr.data(), argsStr.size());
-        auto sidSv  = agentxx_plugin_sv(sessionId.data(), sessionId.size());
-        auto tcidSv = agentxx_plugin_sv("", 0);
+        auto argsSv = agentxx::plugin::PluginStringView::from(argsStr.data(), argsStr.size());
+        auto sidSv  = agentxx::plugin::PluginStringView::from(sessionId.data(), sessionId.size());
+        auto tcidSv = agentxx::plugin::PluginStringView::from("", 0);
         return spec.execute_start(
             spec.user_data,
             &argsSv,
@@ -373,18 +373,18 @@ AgentxxPluginOperatorHandle* PluginManager::callToolAsync(
     try {
         op = drive.start(&ntf, &startErr);
     } catch (...) {
-        startErr = agentxx_plugin_string_from_cstr(caller ? &caller->host : nullptr, "start threw");
+        startErr = agentxx::plugin::PluginString::fromCstr(caller ? &caller->host : nullptr, "start threw");
     }
 
     if (startErr.data || (!op && !core->notified.load(std::memory_order_acquire))) {
         guard.reset();
         std::string errMsg = startErr.data ? std::string(startErr.data, startErr.size) : "protocol violation";
         if (startErr.data && caller) {
-            agentxx_plugin_string_free(&caller->host, &startErr);
+            agentxx::plugin::PluginString::free(&caller->host, &startErr);
         }
         setErr(errMsg);
         if (cb) {
-            cb(ud, AGENTXX_PLUGIN_OPERATOR_FAILED, agentxx_plugin_sv(errMsg.data(), errMsg.size()));
+            cb(ud, AGENTXX_PLUGIN_OPERATOR_FAILED, agentxx::plugin::PluginStringView::from(errMsg.data(), errMsg.size()));
         }
         return nullptr;
     }
@@ -470,18 +470,18 @@ AgentxxPluginOperatorHandle* PluginManager::invokeCapabilityAsync(
     try {
         op = drive.start(&ntf, &startErr);
     } catch (...) {
-        startErr = agentxx_plugin_string_from_cstr(caller ? &caller->host : nullptr, "start threw");
+        startErr = agentxx::plugin::PluginString::fromCstr(caller ? &caller->host : nullptr, "start threw");
     }
 
     if (startErr.data || (!op && !core->notified.load(std::memory_order_acquire))) {
         guard.reset();
         std::string errMsg = startErr.data ? std::string(startErr.data, startErr.size) : "protocol violation";
         if (startErr.data && caller) {
-            agentxx_plugin_string_free(&caller->host, &startErr);
+            agentxx::plugin::PluginString::free(&caller->host, &startErr);
         }
         setErr(errMsg);
         if (cb) {
-            cb(ud, AGENTXX_PLUGIN_OPERATOR_FAILED, agentxx_plugin_sv(errMsg.data(), errMsg.size()));
+            cb(ud, AGENTXX_PLUGIN_OPERATOR_FAILED, agentxx::plugin::PluginStringView::from(errMsg.data(), errMsg.size()));
         }
         return nullptr;
     }

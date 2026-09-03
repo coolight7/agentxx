@@ -39,7 +39,7 @@ static void setTaskErrOut(PluginInstance* inst, AgentxxPluginString* error_out, 
         return;
     }
     const AgentxxPluginHost* host = inst ? &inst->host : nullptr;
-    *error_out = agentxx_plugin_string_from_sv(host, strToSv(msg));
+    *error_out = agentxx::plugin::PluginString::from(host, strToSv(msg));
     if (!error_out->data) {
         auto* p = static_cast<char*>(hostMemoryAlloc(msg.size() + 1));
         if (p) {

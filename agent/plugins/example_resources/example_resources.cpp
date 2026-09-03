@@ -22,7 +22,7 @@
  */
 #include "agentxx/plugin/api/plugin_api.h"
 #include "agentxx/plugin/api/plugin_guard.h"
-#include "agentxx/plugin/api/plugin_iface_helper.h"
+#include "agentxx/plugin/api/plugin_kit.h"
 
 #include "fmt/format.h"
 #include <memory>
@@ -42,7 +42,8 @@ struct ResCtx {
 
     void logErr(const std::string& msg) const {
         if (host && iface.log && iface.log->log) {
-            iface.log->log(host, 4, agentxx_plugin_sv(msg.data(), msg.size()));
+            iface.log
+                ->log(host, 4, agentxx::plugin::PluginStringView::from(msg.data(), msg.size()));
         }
     }
 };
@@ -62,16 +63,16 @@ static std::string ownInfoString(
     if (!info.data) {
         return {};
     }
-    std::string out;
+    std::string         out;
     AgentxxPluginString val{nullptr, 0};
-    auto infoSv = agentxx_plugin_string_to_sv(&info);
-    auto keySv  = agentxx_plugin_sv_cstr(key);
+    auto                infoSv = agentxx::plugin::PluginStringView::toSv(&info);
+    auto                keySv  = agentxx::plugin::PluginStringView::fromCstr(key);
     iface.json->json_get_string(host, &infoSv, &keySv, &val);
     if (val.data) {
         out.assign(val.data, static_cast<size_t>(val.size));
-        agentxx_plugin_string_free(host, &val);
+        agentxx::plugin::PluginString::free(host, &val);
     }
-    agentxx_plugin_string_free(host, &info);
+    agentxx::plugin::PluginString::free(host, &info);
     return out;
 }
 
@@ -92,10 +93,11 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_agent_g
         nullptr,
         [&]() -> const AgentxxPluginInfo* {
             static const AgentxxPluginInfo info{
-                AGENTXX_PLUGIN_API_VERSION, 0,
-                agentxx_plugin_sv_cstr("example_resources"),
-                agentxx_plugin_sv_cstr("1.0.0"),
-                agentxx_plugin_sv_cstr(
+                AGENTXX_PLUGIN_API_VERSION,
+                0,
+                agentxx::plugin::PluginStringView::fromCstr("example_resources"),
+                agentxx::plugin::PluginStringView::fromCstr("1.0.0"),
+                agentxx::plugin::PluginStringView::fromCstr(
                     "Example plugin contributing skill/memory/mcp resources "
                     "(declarative manifest + runtime agentxx.agent.resources interface)"
                 ),
@@ -136,13 +138,16 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                 std::string runtimeSkillDir = fmt::format("{}/skills_runtime", base);
                 if (ctx->iface.resources->register_skill_dir(
                         host,
-                        agentxx_plugin_sv(runtimeSkillDir.data(), runtimeSkillDir.size())
+                        agentxx::plugin::PluginStringView::from(
+                            runtimeSkillDir.data(),
+                            runtimeSkillDir.size()
+                        )
                     )
                     != 0) {
                     ctx->iface.log->log(
                         host,
                         3,
-                        agentxx_plugin_sv_cstr(
+                        agentxx::plugin::PluginStringView::fromCstr(
                             "[example_resources] register runtime skill dir failed"
                         )
                     );
@@ -150,7 +155,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                     ctx->iface.log->log(
                         host,
                         2,
-                        agentxx_plugin_sv_cstr(
+                        agentxx::plugin::PluginStringView::fromCstr(
                             "[example_resources] runtime skill dir registered: skills_runtime/"
                         )
                     );
@@ -160,8 +165,8 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
             // ---- 运行时注册 MCP server 示例 (注释状态; 声明式段已示范配置格式) ----
             // std::string spec = std::string("{\"namespace\":\"example_calc\",\"url\":\"")
             //     + "https://mcp.example.com/calc\",\"timeout\":30}";
-            // g_if.resources->register_mcp_server(host, agentxx_plugin_sv(spec.data(),
-            // spec.size()));
+            // g_if.resources->register_mcp_server(host,
+            // agentxx::plugin::PluginStringView::from(spec.data(), spec.size()));
 
             return 0;
         }
@@ -191,21 +196,21 @@ extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_agent_destroy(void* plugin_
             iface.plugins->get_own_info(host, &info);
             if (info.data) {
                 AgentxxPluginString p{nullptr, 0};
-                auto infoSv = agentxx_plugin_string_to_sv(&info);
-                auto pathSv = agentxx_plugin_sv_cstr("path");
+                auto                infoSv = agentxx::plugin::PluginStringView::toSv(&info);
+                auto                pathSv = agentxx::plugin::PluginStringView::fromCstr("path");
                 iface.json->json_get_string(host, &infoSv, &pathSv, &p);
                 if (p.data) {
                     std::string libPath(p.data, static_cast<size_t>(p.size));
-                    agentxx_plugin_string_free(host, &p);
+                    agentxx::plugin::PluginString::free(host, &p);
                     auto        pos  = libPath.find_last_of("/\\");
                     std::string base = pos == std::string::npos ? "." : libPath.substr(0, pos);
                     std::string d    = fmt::format("{}/skills_runtime", base);
                     iface.resources->unregister_skill_dir(
                         host,
-                        agentxx_plugin_sv(d.data(), d.size())
+                        agentxx::plugin::PluginStringView::from(d.data(), d.size())
                     );
                 }
-                agentxx_plugin_string_free(host, &info);
+                agentxx::plugin::PluginString::free(host, &info);
             }
             delete ctx;
         }

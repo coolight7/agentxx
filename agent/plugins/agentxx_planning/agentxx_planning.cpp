@@ -169,7 +169,7 @@ std::string hostDataDir(const PluginCtx& ctx) {
         return {};
     }
     std::string s(j.data, static_cast<size_t>(j.size));
-    agentxx_plugin_string_free(ctx.host, &j);
+    agentxx::plugin::PluginString::free(ctx.host, &j);
     try {
         auto o = neograph::json::parse(s);
         return o.value("dataDir", std::string{});
@@ -281,8 +281,8 @@ void publishPlanningEvent(PluginCtx& ctx, const std::string& planJson) {
     if (!ctx.iface.events || !ctx.iface.events->publish || planJson.empty()) {
         return;
     }
-    auto topicSv = agentxx_plugin_sv_cstr("agentxx_planning.planning");
-    auto planSv  = agentxx_plugin_sv(planJson.data(), planJson.size());
+    auto topicSv = agentxx::plugin::PluginStringView::fromCstr("agentxx_planning.planning");
+    auto planSv  = agentxx::plugin::PluginStringView::from(planJson.data(), planJson.size());
     ctx.iface.events->publish(
         ctx.host,
         &topicSv,
@@ -301,7 +301,7 @@ void AGENTXX_PLUGIN_CALL on_client_attached(const AgentxxPluginStringView* event
         },
         [&] {
             auto* ctx = static_cast<PluginCtx*>(ud);
-            if (!ctx || !ctx->host || agentxx_plugin_sv_empty(event_json)) {
+            if (!ctx || !ctx->host || agentxx::plugin::PluginStringView::empty(event_json)) {
                 return;
             }
             std::string sessionId;
@@ -334,9 +334,9 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* AGENTXX_PLUGIN_CALL ag
         [&]() -> const AgentxxPluginInfo* {
             static const AgentxxPluginInfo info{
                 AGENTXX_PLUGIN_API_VERSION, 0,
-                agentxx_plugin_sv_cstr("agentxx_planning"),
-                agentxx_plugin_sv_cstr("1.1.0"),
-                agentxx_plugin_sv_cstr(
+                agentxx::plugin::PluginStringView::fromCstr("agentxx_planning"),
+                agentxx::plugin::PluginStringView::fromCstr("1.1.0"),
+                agentxx::plugin::PluginStringView::fromCstr(
                     "Two-level task planning tool (write/read modes) + client-side Plan rendering"
                 ),
             };
@@ -370,7 +370,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int32_t AGENTXX_PLUGIN_CALL
                 j["appendSystemPrompts"]             = neograph::json::object();
                 j["appendSystemPrompts"]["planning"] = std::string{kSystemPlanningPrompt};
                 std::string js                       = j.dump();
-                auto promptSv                        = agentxx_plugin_sv(js.data(), js.size());
+                auto promptSv                        = agentxx::plugin::PluginStringView::from(js.data(), js.size());
                 if (ctx->iface.prompt->set_prompt(host, &promptSv)
                     != 0) {
                     pluginLog(
@@ -523,7 +523,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int32_t AGENTXX_PLUGIN_CALL
 
             // 宿主约定事件 client_attached 订阅: 客户端接入/重连时重发当前会话快照
             if (ctx->iface.events && ctx->iface.events->subscribe) {
-                auto topicSv = agentxx_plugin_sv_cstr("agentxx_host.client_attached");
+                auto topicSv = agentxx::plugin::PluginStringView::fromCstr("agentxx_host.client_attached");
                 if (!ctx->iface.events->subscribe(
                         host,
                         &topicSv,
@@ -581,7 +581,7 @@ struct ClientCtx {
 static auto clientGuardLogger(ClientCtx* ctx) noexcept {
     return [ctx](const char* msg) noexcept {
         if (ctx && ctx->host && ctx->iface.log && ctx->iface.log->log) {
-            auto sv = agentxx_plugin_sv(msg, std::strlen(msg));
+            auto sv = agentxx::plugin::PluginStringView::from(msg, std::strlen(msg));
             ctx->iface.log->log(ctx->host, 4, &sv);
         }
     };
@@ -593,13 +593,13 @@ static std::string clientJsonEscape(const ClientCtx& ctx, const std::string& s) 
         return "\"\"";
     }
     AgentxxPluginString esc{nullptr, 0};
-    auto sSv = agentxx_plugin_sv(s.data(), s.size());
+    auto sSv = agentxx::plugin::PluginStringView::from(s.data(), s.size());
     ctx.iface.json->json_escape(ctx.host, &sSv, &esc);
     if (!esc.data) {
         return "\"\"";
     }
     std::string out(esc.data, static_cast<size_t>(esc.size));
-    agentxx_plugin_string_free(ctx.host, &esc);
+    agentxx::plugin::PluginString::free(ctx.host, &esc);
     return out;
 }
 
@@ -744,8 +744,8 @@ static void
         clientJsonEscape(ctx, buildTodosSummary(plan)),
         buildDecorItems(ctx, plan)
     );
-    auto tcidSv  = agentxx_plugin_sv(toolCallId.data(), toolCallId.size());
-    auto decorSv = agentxx_plugin_sv(decorJson.data(), decorJson.size());
+    auto tcidSv  = agentxx::plugin::PluginStringView::from(toolCallId.data(), toolCallId.size());
+    auto decorSv = agentxx::plugin::PluginStringView::from(decorJson.data(), decorJson.size());
     ctx.ui->update_tool_decor(
         ctx.host,
         &tcidSv,
@@ -769,8 +769,8 @@ static void ensureSection(ClientCtx& ctx) {
     if (ctx.section || !ctx.ui || !ctx.ui->register_info_section || !ctx.host) {
         return;
     }
-    auto idSv    = agentxx_plugin_sv_cstr(kSectionId);
-    auto propsSv = agentxx_plugin_sv_cstr(R"({"title":"Plan"})");
+    auto idSv    = agentxx::plugin::PluginStringView::fromCstr(kSectionId);
+    auto propsSv = agentxx::plugin::PluginStringView::fromCstr(R"({"title":"Plan"})");
     ctx.section = ctx.ui->register_info_section(
         ctx.host,
         &idSv,
@@ -869,7 +869,7 @@ static void refreshPlanSection(ClientCtx& ctx) {
         return; // 内容为空不推送, 避免出现只有标题的空段落
     }
     const std::string json = fmt::format(R"({{"items":[{}]}})", fmt::join(items, ","));
-    auto jsonSv = agentxx_plugin_sv(json.data(), json.size());
+    auto jsonSv = agentxx::plugin::PluginStringView::from(json.data(), json.size());
     ctx.ui->update_info_section(ctx.host, ctx.section, &jsonSv);
 }
 
@@ -886,9 +886,9 @@ static void AGENTXX_PLUGIN_CALL on_client_plugin_data(const AgentxxPluginStringV
         AgentxxPluginString plugin{nullptr, 0};
         AgentxxPluginString event{nullptr, 0};
         AgentxxPluginString data{nullptr, 0};
-        auto kPlugin = agentxx_plugin_sv_cstr("plugin");
-        auto kEvent  = agentxx_plugin_sv_cstr("event");
-        auto kData   = agentxx_plugin_sv_cstr("data");
+        auto kPlugin = agentxx::plugin::PluginStringView::fromCstr("plugin");
+        auto kEvent  = agentxx::plugin::PluginStringView::fromCstr("event");
+        auto kData   = agentxx::plugin::PluginStringView::fromCstr("data");
         if (ctx->iface.json && ctx->iface.json->json_get_string && payload_json) {
             ctx->iface.json->json_get_string(ctx->host, payload_json, &kPlugin, &plugin);
             ctx->iface.json->json_get_string(ctx->host, payload_json, &kEvent, &event);
@@ -901,13 +901,13 @@ static void AGENTXX_PLUGIN_CALL on_client_plugin_data(const AgentxxPluginStringV
             refreshPlanSection(*ctx);
         }
         if (plugin.data) {
-            agentxx_plugin_string_free(ctx->host, &plugin);
+            agentxx::plugin::PluginString::free(ctx->host, &plugin);
         }
         if (event.data) {
-            agentxx_plugin_string_free(ctx->host, &event);
+            agentxx::plugin::PluginString::free(ctx->host, &event);
         }
         if (data.data) {
-            agentxx_plugin_string_free(ctx->host, &data);
+            agentxx::plugin::PluginString::free(ctx->host, &data);
         }
     });
 }
@@ -924,7 +924,7 @@ static void AGENTXX_PLUGIN_CALL on_client_delta(const AgentxxPluginStringView* p
         if (!ctx || !ctx->host || !ctx->ui || !ctx->ui->update_tool_decor) {
             return;
         }
-        if (agentxx_plugin_sv_empty(payload_json)) {
+        if (agentxx::plugin::PluginStringView::empty(payload_json)) {
             return;
         }
         const std::string_view raw{payload_json->data, static_cast<size_t>(payload_json->size)};
@@ -1027,9 +1027,9 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxClientPluginInfo* AGENTXX_PLUGIN_C
         [&]() -> const AgentxxClientPluginInfo* {
             static const AgentxxClientPluginInfo info{
                 AGENTXX_CLIENT_PLUGIN_API_VERSION, 0,
-                agentxx_plugin_sv_cstr("agentxx_planning"),
-                agentxx_plugin_sv_cstr("1.1.0"),
-                agentxx_plugin_sv_cstr(
+                agentxx::plugin::PluginStringView::fromCstr("agentxx_planning"),
+                agentxx::plugin::PluginStringView::fromCstr("1.1.0"),
+                agentxx::plugin::PluginStringView::fromCstr(
                     "Plan rendering driven entirely by plugin: message decor + sidebar overview"
                 ),
             };
@@ -1061,7 +1061,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int32_t AGENTXX_PLUGIN_CALL
             // 不阻塞加载 (CLI 等精简宿主场景)
             auto subWarn = [ctxPtr = ctx.get()](const char* what) {
                 if (ctxPtr && ctxPtr->host && ctxPtr->iface.log && ctxPtr->iface.log->log) {
-                    auto sv = agentxx_plugin_sv(what, std::strlen(what));
+                    auto sv = agentxx::plugin::PluginStringView::from(what, std::strlen(what));
                     ctxPtr->iface.log->log(ctxPtr->host, 3, &sv);
                 }
             };
@@ -1089,7 +1089,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int32_t AGENTXX_PLUGIN_CALL
             }
 
             if (ctx->iface.log && ctx->iface.log->log) {
-                auto loadedSv = agentxx_plugin_sv_cstr("agentxx_planning client plugin loaded");
+                auto loadedSv = agentxx::plugin::PluginStringView::fromCstr("agentxx_planning client plugin loaded");
                 ctx->iface.log->log(host, 2, &loadedSv);
             }
             *plugin_ctx = ctx.release(); ///< 所有权移交宿主 (destroy 时取回归还)
@@ -1109,7 +1109,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT void AGENTXX_PLUGIN_CALL agentxx_plugin_client_
         // 主动反注册段落 (装饰由宿主卸载路径自动摘除; 成员判空遵循扩展表契约)
         clearSection(*ctx);
         if (ctx->iface.log && ctx->iface.log->log) {
-            auto unloadedSv = agentxx_plugin_sv_cstr("agentxx_planning client plugin unloaded");
+            auto unloadedSv = agentxx::plugin::PluginStringView::fromCstr("agentxx_planning client plugin unloaded");
             ctx->iface.log->log(
                 ctx->host,
                 2,

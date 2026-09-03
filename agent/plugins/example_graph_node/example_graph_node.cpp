@@ -53,9 +53,9 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_agent_g
         [&]() -> const AgentxxPluginInfo* {
             static const AgentxxPluginInfo info{
                 AGENTXX_PLUGIN_API_VERSION, 0,
-                agentxx_plugin_sv_cstr("example_graph_node"),
-                agentxx_plugin_sv_cstr("1.0.0"),
-                agentxx_plugin_sv_cstr(
+                agentxx::plugin::PluginStringView::fromCstr("example_graph_node"),
+                agentxx::plugin::PluginStringView::fromCstr("1.0.0"),
+                agentxx::plugin::PluginStringView::fromCstr(
                     "Example graph node plugin: intent router + datetime node, modifies agent graph"
                 ),
             };
@@ -156,7 +156,7 @@ void* AGENTXX_PLUGIN_CALL intentRouterRunStart(
 
     auto done = [&](const std::string& payload) {
         if (notify && notify->done) {
-            auto payloadSv = agentxx_plugin_sv(payload.data(), payload.size());
+            auto payloadSv = agentxx::plugin::PluginStringView::from(payload.data(), payload.size());
             notify->done(
                 notify->host_ud,
                 AGENTXX_PLUGIN_OPERATOR_OK,
@@ -259,7 +259,7 @@ void* AGENTXX_PLUGIN_CALL intentRouterRunStart(
     } catch (const std::exception& e) {
         if (notify && notify->done) {
             std::string what = e.what();
-            auto errSv = agentxx_plugin_sv(what.data(), what.size());
+            auto errSv = agentxx::plugin::PluginStringView::from(what.data(), what.size());
             notify->done(
                 notify->host_ud,
                 AGENTXX_PLUGIN_OPERATOR_FAILED,
@@ -269,7 +269,7 @@ void* AGENTXX_PLUGIN_CALL intentRouterRunStart(
         return nullptr;
     } catch (...) {
         if (notify && notify->done) {
-            auto errSv = agentxx_plugin_sv_cstr("unknown intent_router error");
+            auto errSv = agentxx::plugin::PluginStringView::fromCstr("unknown intent_router error");
             notify->done(
                 notify->host_ud,
                 AGENTXX_PLUGIN_OPERATOR_FAILED,
@@ -332,7 +332,7 @@ void* AGENTXX_PLUGIN_CALL datetimeNodeRunStart(
             msgs.dump()
         );
         if (notify && notify->done) {
-            auto payloadSv = agentxx_plugin_sv(payload.data(), payload.size());
+            auto payloadSv = agentxx::plugin::PluginStringView::from(payload.data(), payload.size());
             notify->done(
                 notify->host_ud,
                 AGENTXX_PLUGIN_OPERATOR_OK,
@@ -343,7 +343,7 @@ void* AGENTXX_PLUGIN_CALL datetimeNodeRunStart(
     } catch (const std::exception& e) {
         if (notify && notify->done) {
             std::string what = e.what();
-            auto errSv = agentxx_plugin_sv(what.data(), what.size());
+            auto errSv = agentxx::plugin::PluginStringView::from(what.data(), what.size());
             notify->done(
                 notify->host_ud,
                 AGENTXX_PLUGIN_OPERATOR_FAILED,
@@ -353,7 +353,7 @@ void* AGENTXX_PLUGIN_CALL datetimeNodeRunStart(
         return nullptr;
     } catch (...) {
         if (notify && notify->done) {
-            auto errSv = agentxx_plugin_sv_cstr("unknown datetime_node error");
+            auto errSv = agentxx::plugin::PluginStringView::fromCstr("unknown datetime_node error");
             notify->done(
                 notify->host_ud,
                 AGENTXX_PLUGIN_OPERATOR_FAILED,
@@ -389,7 +389,7 @@ static int modifyGraphToIntentFlow(AgentCtx& ctx, std::string& errOut) {
         return -1;
     }
     std::string jsonStr(graphJson.data, static_cast<size_t>(graphJson.size));
-    agentxx_plugin_string_free(ctx.host, &graphJson);
+    agentxx::plugin::PluginString::free(ctx.host, &graphJson);
 
     neograph::json def;
     try {
@@ -468,7 +468,7 @@ static int modifyGraphToIntentFlow(AgentCtx& ctx, std::string& errOut) {
     graph["edges"] = std::move(edges);
 
     const std::string newJson = graph.dump();
-    auto newJsonSv = agentxx_plugin_sv(newJson.data(), newJson.size());
+    auto newJsonSv = agentxx::plugin::PluginStringView::from(newJson.data(), newJson.size());
     if (ctx.iface.graph->set_graph_json(ctx.host, &newJsonSv) != 0) {
         errOut = "set_graph_json failed";
         return -1;
@@ -501,11 +501,11 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
             // 1. 注册意图识别节点类型
             {
                 AgentxxPluginGraphNodeTypeSpec spec{};
-                spec.type              = agentxx_plugin_sv_cstr("example_intent_router");
+                spec.type              = agentxx::plugin::PluginStringView::fromCstr("example_intent_router");
                 spec.run_start         = intentRouterRunStart;
                 spec.run_cancel        = nullptr;
                 spec.user_data         = ctx.get();
-                spec.config_schema_json = agentxx_plugin_sv_cstr(
+                spec.config_schema_json = agentxx::plugin::PluginStringView::fromCstr(
                     R"({"type":"object","properties":{"intents":{"type":"array","items":{"type":"string"}},"fallback":{"type":"string"}}})"
                 );
                 if (ctx->iface.graph->register_node_type(host, &spec) != 0) {
@@ -515,11 +515,11 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
             // 2. 注册时间输出节点类型
             {
                 AgentxxPluginGraphNodeTypeSpec spec{};
-                spec.type               = agentxx_plugin_sv_cstr("example_datetime");
+                spec.type               = agentxx::plugin::PluginStringView::fromCstr("example_datetime");
                 spec.run_start          = datetimeNodeRunStart;
                 spec.run_cancel         = nullptr;
                 spec.user_data          = ctx.get();
-                spec.config_schema_json = agentxx_plugin_sv_cstr(R"({"type":"object"})");
+                spec.config_schema_json = agentxx::plugin::PluginStringView::fromCstr(R"({"type":"object"})");
                 if (ctx->iface.graph->register_node_type(host, &spec) != 0) {
                     return -1;
                 }

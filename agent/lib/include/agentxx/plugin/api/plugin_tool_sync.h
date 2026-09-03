@@ -5,19 +5,18 @@
 #ifndef AGENTXX_PLUGIN_TOOL_SYNC_H
 #define AGENTXX_PLUGIN_TOOL_SYNC_H
 
-#include "agentxx/plugin/api/plugin_api.h"
+/* C++ only: 便捷辅助自 plugin_kit.h 获得; typedef 与
+ * static inline 辅助均编译进插件本体, 无跨 TU 导出符号。kit 与 tool_sync
+ * 经 include guard 防环 (单独 include 本头时先完整展开 kit 含辅助) */
+#include "agentxx/plugin/api/plugin_kit.h"
 
+#include <exception>
 #include <stdlib.h>
 #include <string.h>
 
-#ifdef __cplusplus
-#include <exception>
-extern "C" {
-#endif
-
 #pragma pack(push, 8)
 
-typedef char* (AGENTXX_PLUGIN_CALL *AgentxxSyncToolFn)(
+typedef char*(AGENTXX_PLUGIN_CALL* AgentxxSyncToolFn)(
     void*                          user_data,
     const AgentxxPluginStringView* args_json,
     const AgentxxPluginStringView* session_id,
@@ -56,28 +55,23 @@ typedef struct AgentxxSyncJob {
 
 #pragma pack(pop)
 
-static inline AgentxxPluginString agentxx_shim_err_dup(const AgentxxPluginHost* host, const char* msg) {
+static inline AgentxxPluginString
+    agentxx_shim_err_dup(const AgentxxPluginHost* host, const char* msg) {
     if (!host || !host->vtable || !msg) {
         AgentxxPluginString s;
         s.data = NULL;
         s.size = 0;
         return s;
     }
-    return agentxx_plugin_string_from_cstr(host, msg);
+    return agentxx::plugin::PluginString::fromCstr(host, msg);
 }
 
-static inline void* AGENTXX_PLUGIN_CALL agentxx_sync_job_work(void* ud, volatile int32_t* cancel_flag, AgentxxPluginString* error_out) {
+static inline void* AGENTXX_PLUGIN_CALL
+    agentxx_sync_job_work(void* ud, volatile int32_t* cancel_flag, AgentxxPluginString* error_out) {
     AgentxxSyncJob* job = (AgentxxSyncJob*)ud;
-#ifdef __cplusplus
     try {
-        return (void*)job->shim.fn(
-            job->shim.ud,
-            &job->args,
-            &job->tid,
-            &job->tcid,
-            cancel_flag,
-            error_out
-        );
+        return (void*)
+            job->shim.fn(job->shim.ud, &job->args, &job->tid, &job->tcid, cancel_flag, error_out);
     } catch (const std::exception& e) {
         if (error_out && !error_out->data) {
             *error_out = agentxx_shim_err_dup(job->shim.host, e.what());
@@ -89,28 +83,19 @@ static inline void* AGENTXX_PLUGIN_CALL agentxx_sync_job_work(void* ud, volatile
         }
         return NULL;
     }
-#else
-    return (void*)job->shim.fn(
-        job->shim.ud,
-        &job->args,
-        &job->tid,
-        &job->tcid,
-        cancel_flag,
-        error_out
-    );
-#endif
 }
 
-static inline void AGENTXX_PLUGIN_CALL agentxx_sync_job_done(void* ud, void* result, const AgentxxPluginStringView* error) {
-    AgentxxSyncJob* job = (AgentxxSyncJob*)ud;
-    int32_t st = AGENTXX_PLUGIN_OPERATOR_OK;
-    AgentxxPluginStringView payload = agentxx_plugin_sv(NULL, 0);
+static inline void AGENTXX_PLUGIN_CALL
+    agentxx_sync_job_done(void* ud, void* result, const AgentxxPluginStringView* error) {
+    AgentxxSyncJob*         job     = (AgentxxSyncJob*)ud;
+    int32_t                 st      = AGENTXX_PLUGIN_OPERATOR_OK;
+    AgentxxPluginStringView payload = agentxx::plugin::PluginStringView::from(NULL, 0);
 
-    if (!agentxx_plugin_sv_empty(error)) {
-        st = AGENTXX_PLUGIN_OPERATOR_FAILED;
+    if (!agentxx::plugin::PluginStringView::empty(error)) {
+        st      = AGENTXX_PLUGIN_OPERATOR_FAILED;
         payload = *error;
     } else if (result) {
-        payload = agentxx_plugin_sv_cstr((const char*)result);
+        payload = agentxx::plugin::PluginStringView::fromCstr((const char*)result);
     } else {
         st = AGENTXX_PLUGIN_OPERATOR_CANCELLED;
     }
@@ -162,9 +147,9 @@ static inline void* AGENTXX_PLUGIN_CALL agentxx_sync_tool_start(
     job->shim       = *shim;
     job->notify     = *notify;
     job->cancelFlag = 0;
-    job->args       = agentxx_plugin_sv(NULL, 0);
-    job->tid        = agentxx_plugin_sv(NULL, 0);
-    job->tcid       = agentxx_plugin_sv(NULL, 0);
+    job->args       = agentxx::plugin::PluginStringView::from(NULL, 0);
+    job->tid        = agentxx::plugin::PluginStringView::from(NULL, 0);
+    job->tcid       = agentxx::plugin::PluginStringView::from(NULL, 0);
 
     if (args_json && args_json->size) {
         char* buf = (char*)malloc((size_t)args_json->size);
@@ -176,7 +161,7 @@ static inline void* AGENTXX_PLUGIN_CALL agentxx_sync_tool_start(
             return NULL;
         }
         memcpy(buf, args_json->data, (size_t)args_json->size);
-        job->args = agentxx_plugin_sv(buf, args_json->size);
+        job->args = agentxx::plugin::PluginStringView::from(buf, args_json->size);
     }
 
     if (session_id && session_id->size) {
@@ -193,7 +178,7 @@ static inline void* AGENTXX_PLUGIN_CALL agentxx_sync_tool_start(
             return NULL;
         }
         memcpy(buf, session_id->data, (size_t)session_id->size);
-        job->tid = agentxx_plugin_sv(buf, session_id->size);
+        job->tid = agentxx::plugin::PluginStringView::from(buf, session_id->size);
     }
 
     if (tool_call_id && tool_call_id->size) {
@@ -213,7 +198,7 @@ static inline void* AGENTXX_PLUGIN_CALL agentxx_sync_tool_start(
             return NULL;
         }
         memcpy(buf, tool_call_id->data, (size_t)tool_call_id->size);
-        job->tcid = agentxx_plugin_sv(buf, tool_call_id->size);
+        job->tcid = agentxx::plugin::PluginStringView::from(buf, tool_call_id->size);
     }
 
     shim->sched->offload(
@@ -243,16 +228,15 @@ static inline int32_t agentxx_register_sync_tool(
     if (!host || !host->vtable || !sync_spec || !out_shim || !sync_spec->execute) {
         return -1;
     }
-    const AgentxxPluginToolsIface* tools = AGENTXX_PLUGIN_QUERY_IFACE(
+    const AgentxxPluginToolsIface* tools = agentxx::plugin::queryInterface<AgentxxPluginToolsIface>(
         host,
-        AgentxxPluginToolsIface,
         AGENTXX_PLUGIN_IFACE_AGENT_TOOLS
     );
-    const AgentxxPluginSchedulerIface* sched = AGENTXX_PLUGIN_QUERY_IFACE(
-        host,
-        AgentxxPluginSchedulerIface,
-        AGENTXX_PLUGIN_IFACE_AGENT_SCHEDULER
-    );
+    const AgentxxPluginSchedulerIface* sched
+        = agentxx::plugin::queryInterface<AgentxxPluginSchedulerIface>(
+            host,
+            AGENTXX_PLUGIN_IFACE_AGENT_SCHEDULER
+        );
     if (!tools || !tools->register_tool || !sched) {
         return -1;
     }
@@ -278,7 +262,7 @@ static inline int32_t agentxx_register_sync_tool(
 
 #pragma pack(push, 8)
 
-typedef char* (AGENTXX_PLUGIN_CALL *AgentxxInlineToolFn)(
+typedef char*(AGENTXX_PLUGIN_CALL* AgentxxInlineToolFn)(
     void*                          user_data,
     const AgentxxPluginStringView* args_json,
     const AgentxxPluginStringView* session_id,
@@ -322,7 +306,6 @@ static inline void* AGENTXX_PLUGIN_CALL agentxx_inline_tool_start(
     }
 
     char* result = NULL;
-#ifdef __cplusplus
     try {
         result = shim->fn(shim->ud, args_json, session_id, tool_call_id, error_out);
     } catch (const std::exception& e) {
@@ -336,33 +319,22 @@ static inline void* AGENTXX_PLUGIN_CALL agentxx_inline_tool_start(
         }
         result = NULL;
     }
-#else
-    result = shim->fn(shim->ud, args_json, session_id, tool_call_id, error_out);
-#endif
 
     if (error_out && error_out->data) {
         if (notify && notify->done) {
             AgentxxPluginString errPayload = *error_out;
             error_out->data                = NULL;
             error_out->size                = 0;
-            AgentxxPluginStringView errSv  = agentxx_plugin_string_to_sv(&errPayload);
-            notify->done(
-                notify->host_ud,
-                AGENTXX_PLUGIN_OPERATOR_FAILED,
-                &errSv
-            );
+            AgentxxPluginStringView errSv  = agentxx::plugin::PluginStringView::toSv(errPayload);
+            notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_FAILED, &errSv);
             if (shim->host) {
-                agentxx_plugin_string_free(shim->host, &errPayload);
+                agentxx::plugin::PluginString::free(shim->host, &errPayload);
             }
         }
     } else {
         if (notify && notify->done) {
-            AgentxxPluginStringView resSv = agentxx_plugin_sv_cstr(result);
-            notify->done(
-                notify->host_ud,
-                AGENTXX_PLUGIN_OPERATOR_OK,
-                &resSv
-            );
+            AgentxxPluginStringView resSv = agentxx::plugin::PluginStringView::fromCstr(result);
+            notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, &resSv);
             if (result && shim->host && shim->host->vtable && shim->host->vtable->free) {
                 shim->host->vtable->free(result);
             }
@@ -379,9 +351,8 @@ static inline int32_t agentxx_register_inline_tool(
     if (!host || !host->vtable || !inline_spec || !out_shim || !inline_spec->execute) {
         return -1;
     }
-    const AgentxxPluginToolsIface* tools = AGENTXX_PLUGIN_QUERY_IFACE(
+    const AgentxxPluginToolsIface* tools = agentxx::plugin::queryInterface<AgentxxPluginToolsIface>(
         host,
-        AgentxxPluginToolsIface,
         AGENTXX_PLUGIN_IFACE_AGENT_TOOLS
     );
     if (!tools || !tools->register_tool) {
@@ -408,7 +379,7 @@ static inline int32_t agentxx_register_inline_tool(
 
 #pragma pack(push, 8)
 
-typedef int32_t (AGENTXX_PLUGIN_CALL *AgentxxSyncHookFn)(
+typedef int32_t(AGENTXX_PLUGIN_CALL* AgentxxSyncHookFn)(
     void*                          user_data,
     int32_t                        point,
     const AgentxxPluginStringView* node_input_json,
@@ -438,7 +409,6 @@ static inline void* AGENTXX_PLUGIN_CALL agentxx_sync_hook_start(
         return NULL;
     }
     int32_t rc = 0;
-#ifdef __cplusplus
     try {
         rc = shim->fn(shim->ud, point, node_input_json, error_out);
     } catch (const std::exception& e) {
@@ -452,14 +422,11 @@ static inline void* AGENTXX_PLUGIN_CALL agentxx_sync_hook_start(
         }
         rc = -1;
     }
-#else
-    rc = shim->fn(shim->ud, point, node_input_json, error_out);
-#endif
 
     if (notify && notify->done) {
-        AgentxxPluginStringView errSv = agentxx_plugin_sv(NULL, 0);
+        AgentxxPluginStringView errSv = agentxx::plugin::PluginStringView::from(NULL, 0);
         if (error_out && error_out->data) {
-            errSv = agentxx_plugin_string_to_sv(error_out);
+            errSv = agentxx::plugin::PluginStringView::toSv(error_out);
         }
         notify->done(
             notify->host_ud,
@@ -467,7 +434,7 @@ static inline void* AGENTXX_PLUGIN_CALL agentxx_sync_hook_start(
             &errSv
         );
         if (error_out && error_out->data && shim->host) {
-            agentxx_plugin_string_free(shim->host, error_out);
+            agentxx::plugin::PluginString::free(shim->host, error_out);
         }
     }
     return NULL;
@@ -484,9 +451,8 @@ static inline int32_t agentxx_register_sync_hook(
         || point >= AGENTXX_PLUGIN_HOOK_COUNT) {
         return -1;
     }
-    const AgentxxPluginHooksIface* hooks = AGENTXX_PLUGIN_QUERY_IFACE(
+    const AgentxxPluginHooksIface* hooks = agentxx::plugin::queryInterface<AgentxxPluginHooksIface>(
         host,
-        AgentxxPluginHooksIface,
         AGENTXX_PLUGIN_IFACE_AGENT_HOOKS
     );
     if (!hooks || !hooks->register_hook) {
@@ -506,9 +472,5 @@ static inline int32_t agentxx_register_sync_hook(
 
     return hooks->register_hook(host, &spec);
 }
-
-#ifdef __cplusplus
-}
-#endif
 
 #endif /* AGENTXX_PLUGIN_TOOL_SYNC_H */

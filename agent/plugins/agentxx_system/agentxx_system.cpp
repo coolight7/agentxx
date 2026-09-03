@@ -19,9 +19,9 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_agent_g
         [&]() -> const AgentxxPluginInfo* {
             static const AgentxxPluginInfo info{
                 AGENTXX_PLUGIN_API_VERSION, 0,
-                agentxx_plugin_sv_cstr("agentxx_system"),
-                agentxx_plugin_sv_cstr("1.0.0"),
-                agentxx_plugin_sv_cstr("System info tools: current date/time with Unix timestamp"),
+                agentxx::plugin::PluginStringView::fromCstr("agentxx_system"),
+                agentxx::plugin::PluginStringView::fromCstr("1.0.0"),
+                agentxx::plugin::PluginStringView::fromCstr("System info tools: current date/time with Unix timestamp"),
             };
             return &info;
         }

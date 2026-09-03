@@ -333,7 +333,19 @@ AGENTXX_FFI_EXPORT int32_t AGENTXX_FFI_CALL agentxx_ffi_event_queue_pop(
 
 #pragma pack(pop)
 
-/* ==================== C/C++ 便捷内联函数 ==================== */
+#ifdef __cplusplus
+}
+#endif
+
+/* ==================== C/C++ 便捷内联函数 ====================
+ *
+ * 语言链接说明: 本区位于 extern "C" 之外。原因 —— C++ 下含成员函数的
+ * struct (AgentxxStringView/AgentxxString) 是与 C 不兼容的类型, 带 C 链接
+ * 的函数按值返回它们会触发 MSVC C4190 (warning C4190)。这些 static
+ * inline 便捷工具仅供调用方源码内部使用, 不参与跨边界 ABI (无跨 TU
+ * 符号); 纯 C 编译下本区等价普通 C 顶层函数 (类型为纯 POD), 语义与
+ * 可用性不受影响。
+ */
 
 static inline AgentxxStringView agentxx_string_view(const char* s, uint64_t size) {
     AgentxxStringView sv;
@@ -360,10 +372,6 @@ static inline AgentxxString agentxx_string_empty(void) {
     s.size = 0;
     return s;
 }
-
-#ifdef __cplusplus
-}
-#endif
 
 #ifdef __cplusplus
 static inline void agentxx_ffi_string_free(AgentxxString& str) {

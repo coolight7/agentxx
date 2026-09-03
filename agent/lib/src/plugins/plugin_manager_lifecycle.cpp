@@ -527,7 +527,7 @@ asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadNativeAsync(
     inst->interfaces  = interfaces;
     inst->self        = inst;
     inst->manager     = shared_from_this();
-    auto vtableSv = agentxx_plugin_sv_cstr("__vtable");
+    auto vtableSv = agentxx::plugin::PluginStringView::fromCstr("__vtable");
     inst->host.vtable
         = (const AgentxxHostVtable*)xx_query_interface(nullptr, &vtableSv);
     inst->host.opaque = inst.get();
@@ -590,7 +590,7 @@ asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadBuiltinAsync
     inst->interfaces      = interfaces;
     inst->self            = inst;
     inst->manager         = shared_from_this();
-    auto vtableSv2 = agentxx_plugin_sv_cstr("__vtable");
+    auto vtableSv2 = agentxx::plugin::PluginStringView::fromCstr("__vtable");
     inst->host.vtable
         = (const AgentxxHostVtable*)xx_query_interface(nullptr, &vtableSv2);
     inst->host.opaque   = inst.get();

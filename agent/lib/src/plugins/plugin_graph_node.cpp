@@ -55,10 +55,10 @@ asio::awaitable<neograph::graph::NodeOutput> PluginGraphNode::run(neograph::grap
                       const AgentxxPluginOperatorNotify* notify,
                       AgentxxPluginString*               err
                   ) -> void* {
-        auto nodeNameSv   = agentxx_plugin_sv(nodeName.data(), nodeName.size());
-        auto configJsonSv = agentxx_plugin_sv(configJson.data(), configJson.size());
-        auto stateJsonSv  = agentxx_plugin_sv(stateJson.data(), stateJson.size());
-        auto threadIdSv   = agentxx_plugin_sv(threadId.data(), threadId.size());
+        auto nodeNameSv   = agentxx::plugin::PluginStringView::from(nodeName.data(), nodeName.size());
+        auto configJsonSv = agentxx::plugin::PluginStringView::from(configJson.data(), configJson.size());
+        auto stateJsonSv  = agentxx::plugin::PluginStringView::from(stateJson.data(), stateJson.size());
+        auto threadIdSv   = agentxx::plugin::PluginStringView::from(threadId.data(), threadId.size());
         return spec.run_start(
             spec.user_data,
             &nodeNameSv,

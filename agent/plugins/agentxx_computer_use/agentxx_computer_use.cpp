@@ -105,9 +105,9 @@ using namespace agentxx_computer_use_plugin;
 extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_agent_get_info(void) {
     static const AgentxxPluginInfo info{
         AGENTXX_PLUGIN_API_VERSION, 0,
-        agentxx_plugin_sv_cstr("agentxx_computer_use"),
-        agentxx_plugin_sv_cstr("1.0.0"),
-        agentxx_plugin_sv_cstr(
+        agentxx::plugin::PluginStringView::fromCstr("agentxx_computer_use"),
+        agentxx::plugin::PluginStringView::fromCstr("1.0.0"),
+        agentxx::plugin::PluginStringView::fromCstr(
             "Computer control on Windows: mouse, keyboard, and scroll input (SendInput based)"
         ),
     };

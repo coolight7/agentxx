@@ -23,7 +23,7 @@
 #pragma once
 
 #include "agentxx/plugin/api/client_plugin_api.h"
-#include "agentxx/plugin/api/plugin_api.h"
+#include "agentxx/plugin/api/plugin_kit.h"
 #include "agentxx/util/log.h"
 
 #include <algorithm>
@@ -66,7 +66,7 @@ inline std::string svToStr(const AgentxxPluginStringView* sv) {
 }
 
 inline AgentxxPluginStringView strToSv(std::string_view sv) noexcept {
-    return agentxx_plugin_sv(sv.data(), static_cast<uint64_t>(sv.size()));
+    return agentxx::plugin::PluginStringView::from(sv.data(), static_cast<uint64_t>(sv.size()));
 }
 
 namespace detail {

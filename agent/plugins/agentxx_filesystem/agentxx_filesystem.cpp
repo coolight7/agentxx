@@ -501,9 +501,9 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_agent_g
         [&]() -> const AgentxxPluginInfo* {
             static const AgentxxPluginInfo info{
                 AGENTXX_PLUGIN_API_VERSION, 0,
-                agentxx_plugin_sv_cstr("agentxx_filesystem"),
-                agentxx_plugin_sv_cstr("1.0.0"),
-                agentxx_plugin_sv_cstr("File system tools: list, read, write, edit, glob, grep"),
+                agentxx::plugin::PluginStringView::fromCstr("agentxx_filesystem"),
+                agentxx::plugin::PluginStringView::fromCstr("1.0.0"),
+                agentxx::plugin::PluginStringView::fromCstr("File system tools: list, read, write, edit, glob, grep"),
             };
             return &info;
         }
@@ -547,7 +547,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                         if (cancel_flag && *cancel_flag != 0) {
                             return true;
                         }
-                        return c.sessionCancelled(agentxx_plugin_sv(tid.data(), tid.size()));
+                        return c.sessionCancelled(agentxx::plugin::PluginStringView::from(tid.data(), tid.size()));
                     };
                     return fileListExecute(arguments, std::string(workDir), isCancelled);
                 }
@@ -570,7 +570,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                         if (cancel_flag && *cancel_flag != 0) {
                             return true;
                         }
-                        return c.sessionCancelled(agentxx_plugin_sv(tid.data(), tid.size()));
+                        return c.sessionCancelled(agentxx::plugin::PluginStringView::from(tid.data(), tid.size()));
                     };
                     return fileGlobExecute(arguments, std::string(workDir), isCancelled);
                 }
@@ -593,7 +593,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                         if (cancel_flag && *cancel_flag != 0) {
                             return true;
                         }
-                        return c.sessionCancelled(agentxx_plugin_sv(tid.data(), tid.size()));
+                        return c.sessionCancelled(agentxx::plugin::PluginStringView::from(tid.data(), tid.size()));
                     };
                     return fileGrepExecute(arguments, std::string(workDir), isCancelled);
                 }

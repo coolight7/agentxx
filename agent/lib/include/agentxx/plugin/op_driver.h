@@ -3,7 +3,7 @@
  */
 #pragma once
 
-#include "agentxx/plugin/api/plugin_api.h"
+#include "agentxx/plugin/api/plugin_kit.h"
 #include "agentxx/plugin/plugin_manager.h"
 #include "agentxx/util/log.h"
 #include "asio/as_tuple.hpp"
@@ -131,7 +131,7 @@ struct OpCore : std::enable_shared_from_this<OpCore> {
             // (selfKeep 已自持, post 回调也捕获它, 派发期间对象必然存活)
             asio::post(self->chan.get_executor(), [selfKeep, cb, cbUd, st, payloadCopy]() {
                 try {
-                    auto payloadSv = agentxx_plugin_sv(payloadCopy.data(), payloadCopy.size());
+                    auto payloadSv = agentxx::plugin::PluginStringView::from(payloadCopy.data(), payloadCopy.size());
                     cb(cbUd, st, &payloadSv);
                 } catch (...) {
                 }
@@ -275,7 +275,7 @@ inline asio::awaitable<std::string> awaitPluginOp(PluginOpAwaitArgs args) {
         if (err.data != nullptr) {
             msg.assign(err.data, err.size);
             if (args.inst) {
-                agentxx_plugin_string_free(&args.inst->host, &err);
+                agentxx::plugin::PluginString::free(&args.inst->host, &err);
             } else {
                 ::free(err.data);
                 err.data = nullptr;

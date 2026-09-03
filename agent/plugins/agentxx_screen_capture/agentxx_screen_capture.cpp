@@ -60,8 +60,8 @@ inline bool ScreenCaptureHolder::startStreaming(int frameRate) {
                     );
                     ctx->iface.events->publish(
                         ctx->host,
-                        agentxx_plugin_sv_cstr("agentxx_screen_capture.frame"),
-                        agentxx_plugin_sv(payload.data(), payload.size())
+                        agentxx::plugin::PluginStringView::fromCstr("agentxx_screen_capture.frame"),
+                        agentxx::plugin::PluginStringView::from(payload.data(), payload.size())
                     );
                 }
             } catch (...) {
@@ -289,9 +289,9 @@ static void registerScreenCaptureTool(PluginCtx& ctx) {
 extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_agent_get_info(void) {
     static const AgentxxPluginInfo info{
         AGENTXX_PLUGIN_API_VERSION, 0,
-        agentxx_plugin_sv_cstr("agentxx_screen_capture"),
-        agentxx_plugin_sv_cstr("1.0.0"),
-        agentxx_plugin_sv_cstr(
+        agentxx::plugin::PluginStringView::fromCstr("agentxx_screen_capture"),
+        agentxx::plugin::PluginStringView::fromCstr("1.0.0"),
+        agentxx::plugin::PluginStringView::fromCstr(
             "Screen capture and streaming on Windows (DXGI Desktop Duplication with GDI fallback)"
         ),
     };
@@ -331,7 +331,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                 ctx->iface.config->get_config(ctx->host, &json);
                 if (json.data) {
                     std::string s(json.data, static_cast<size_t>(json.size));
-                    agentxx_plugin_string_free(ctx->host, &json);
+                    agentxx::plugin::PluginString::free(ctx->host, &json);
                     SimpleJson j(s);
                     if (j.ok()) {
                         std::string dataDir;

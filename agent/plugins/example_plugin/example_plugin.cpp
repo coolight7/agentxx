@@ -63,9 +63,9 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_agent_g
         [&]() -> const AgentxxPluginInfo* {
             static const AgentxxPluginInfo info{
                 AGENTXX_PLUGIN_API_VERSION, 0,
-                agentxx_plugin_sv_cstr("example_plugin"),
-                agentxx_plugin_sv_cstr("1.0.0"),
-                agentxx_plugin_sv_cstr("Example native plugin: echo tool, hook, event, capability"),
+                agentxx::plugin::PluginStringView::fromCstr("example_plugin"),
+                agentxx::plugin::PluginStringView::fromCstr("1.0.0"),
+                agentxx::plugin::PluginStringView::fromCstr("Example native plugin: echo tool, hook, event, capability"),
             };
             return &info;
         }
@@ -183,14 +183,14 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
             }
 
             // 3. 事件订阅
-            auto topic1 = agentxx_plugin_sv_cstr("demo.topic");
+            auto topic1 = agentxx::plugin::PluginStringView::fromCstr("demo.topic");
             ctx->iface.events->subscribe(host, &topic1, on_demo_event, ctx.get());
-            auto topic2 = agentxx_plugin_sv_cstr("client.example_plugin.hello");
+            auto topic2 = agentxx::plugin::PluginStringView::fromCstr("client.example_plugin.hello");
             ctx->iface.events->subscribe(host, &topic2, on_client_hello, ctx.get());
 
             // 4. 能力
             if (ctx->iface.capabilities && ctx->iface.capabilities->register_capability) {
-                auto capSv = agentxx_plugin_sv_cstr("example.demo");
+                auto capSv = agentxx::plugin::PluginStringView::fromCstr("example.demo");
                 ctx->iface.capabilities->register_capability(host, &capSv);
             }
 
@@ -201,11 +201,11 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                 ctx->iface.prompt->get_prompt(host, &full);
                 if (full.data) {
                     std::string prompt(full.data, static_cast<size_t>(full.size));
-                    agentxx_plugin_string_free(host, &full);
+                    agentxx::plugin::PluginString::free(host, &full);
                     if (prompt.find("\"example_echo\"") == std::string::npos) {
                         const char* promptJson
                             = R"({"toolPrompt":{"example_echo":{"depict":"Echo the input arguments back as JSON (example plugin tool).","args":{}}}})";
-                        auto promptSv = agentxx_plugin_sv_cstr(promptJson);
+                        auto promptSv = agentxx::plugin::PluginStringView::fromCstr(promptJson);
                         ctx->iface.prompt->set_prompt(host, &promptSv);
                     }
                 }
@@ -240,9 +240,9 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxClientPluginInfo* agentxx_plugin_c
         [&]() -> const AgentxxClientPluginInfo* {
             static const AgentxxClientPluginInfo info{
                 AGENTXX_CLIENT_PLUGIN_API_VERSION, 0,
-                agentxx_plugin_sv_cstr("example_plugin"),
-                agentxx_plugin_sv_cstr("1.0.0"),
-                agentxx_plugin_sv_cstr(
+                agentxx::plugin::PluginStringView::fromCstr("example_plugin"),
+                agentxx::plugin::PluginStringView::fromCstr("1.0.0"),
+                agentxx::plugin::PluginStringView::fromCstr(
                     "Example client plugin: status item, panel, commands, event bridge"
                 ),
             };
@@ -254,11 +254,11 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxClientPluginInfo* agentxx_plugin_c
 static std::string clientJsonEscape(const ClientCtx& ctx, std::string_view text) {
     if (ctx.iface.json && ctx.iface.json->json_escape) {
         AgentxxPluginString esc{nullptr, 0};
-        auto textSv = agentxx_plugin_sv(text.data(), text.size());
+        auto textSv = agentxx::plugin::PluginStringView::from(text.data(), text.size());
         ctx.iface.json->json_escape(ctx.host, &textSv, &esc);
         if (esc.data) {
             std::string s(esc.data, static_cast<size_t>(esc.size));
-            agentxx_plugin_string_free(ctx.host, &esc);
+            agentxx::plugin::PluginString::free(ctx.host, &esc);
             return s;
         }
     }
@@ -283,13 +283,13 @@ static int32_t AGENTXX_PLUGIN_CALL example_cmd_execute(
             }
             std::string suffix;
             if (ctx->iface.json && ctx->iface.json->json_get_string && args_json) {
-                auto argsSv = agentxx_plugin_sv(args_json->data ? args_json->data : "{}", args_json->size);
-                auto keySv  = agentxx_plugin_sv_cstr("text");
+                auto argsSv = agentxx::plugin::PluginStringView::from(args_json->data ? args_json->data : "{}", args_json->size);
+                auto keySv  = agentxx::plugin::PluginStringView::fromCstr("text");
                 AgentxxPluginString text{nullptr, 0};
                 ctx->iface.json->json_get_string(ctx->host, &argsSv, &keySv, &text);
                 if (text.data) {
                     suffix.assign(text.data, static_cast<size_t>(text.size));
-                    agentxx_plugin_string_free(ctx->host, &text);
+                    agentxx::plugin::PluginString::free(ctx->host, &text);
                 }
             }
             std::string text = "Hello from example plugin";
@@ -298,9 +298,9 @@ static int32_t AGENTXX_PLUGIN_CALL example_cmd_execute(
             }
             const std::string out
                 = fmt::format(R"({{"action":"send","text":{}}})", clientJsonEscape(*ctx, text));
-            auto outSv = agentxx_plugin_sv(out.data(), out.size());
+            auto outSv = agentxx::plugin::PluginStringView::from(out.data(), out.size());
             if (actionOut) {
-                *actionOut = agentxx_plugin_string_from_sv(ctx->host, &outSv);
+                *actionOut = agentxx::plugin::PluginString::from(ctx->host, &outSv);
             }
             return 0;
         }
@@ -325,23 +325,23 @@ static int32_t AGENTXX_PLUGIN_CALL example_toast_execute(
             }
             AgentxxPluginString argText{nullptr, 0};
             if (ctx->iface.json && ctx->iface.json->json_get_string && args_json) {
-                auto argsSv = agentxx_plugin_sv(args_json->data ? args_json->data : "{}", args_json->size);
-                auto keySv  = agentxx_plugin_sv_cstr("text");
+                auto argsSv = agentxx::plugin::PluginStringView::from(args_json->data ? args_json->data : "{}", args_json->size);
+                auto keySv  = agentxx::plugin::PluginStringView::fromCstr("text");
                 ctx->iface.json->json_get_string(ctx->host, &argsSv, &keySv, &argText);
             }
             std::string text = argText.data && argText.size > 0
                                    ? std::string(argText.data, static_cast<size_t>(argText.size))
                                    : "toast from example plugin";
             if (argText.data) {
-                agentxx_plugin_string_free(ctx->host, &argText);
+                agentxx::plugin::PluginString::free(ctx->host, &argText);
             }
             const std::string out = fmt::format(
                 R"({{"action":"toast","text":{},"level":1}})",
                 clientJsonEscape(*ctx, text)
             );
-            auto outSv = agentxx_plugin_sv(out.data(), out.size());
+            auto outSv = agentxx::plugin::PluginStringView::from(out.data(), out.size());
             if (actionOut) {
-                *actionOut = agentxx_plugin_string_from_sv(ctx->host, &outSv);
+                *actionOut = agentxx::plugin::PluginString::from(ctx->host, &outSv);
             }
             return 0;
         }
@@ -357,12 +357,12 @@ static void AGENTXX_PLUGIN_CALL on_client_ready(const AgentxxPluginStringView* p
             return;
         }
         if (ctx->iface.log && ctx->iface.log->log) {
-            auto msgSv = agentxx_plugin_sv_cstr("client example: ready");
+            auto msgSv = agentxx::plugin::PluginStringView::fromCstr("client example: ready");
             ctx->iface.log->log(ctx->host, 2, &msgSv);
         }
         if (ctx->iface.wire && ctx->iface.wire->send_plugin_data) {
-            auto evtSv = agentxx_plugin_sv_cstr("hello");
-            auto paySv = agentxx_plugin_sv_cstr(R"({"from":"client-example"})");
+            auto evtSv = agentxx::plugin::PluginStringView::fromCstr("hello");
+            auto paySv = agentxx::plugin::PluginStringView::fromCstr(R"({"from":"client-example"})");
             ctx->iface.wire->send_plugin_data(ctx->host, &evtSv, &paySv);
         }
     });
@@ -382,7 +382,7 @@ static void AGENTXX_PLUGIN_CALL on_client_turn_end(const AgentxxPluginStringView
                 R"({{"text":{}}})",
                 clientJsonEscape(*ctx, fmt::format("turns: {}", ctx->turn_count))
             );
-            auto jsonSv = agentxx_plugin_sv(json.data(), json.size());
+            auto jsonSv = agentxx::plugin::PluginStringView::from(json.data(), json.size());
             ctx->ui->update_status_item(ctx->host, ctx->status_item, &jsonSv);
         }
         if (ctx->info_section && ctx->ui && ctx->ui->update_info_section) {
@@ -390,7 +390,7 @@ static void AGENTXX_PLUGIN_CALL on_client_turn_end(const AgentxxPluginStringView
                 R"({{"items":[{{"kind":"text","text":{}}},{{"kind":"text","role":"hint","text":"Example Info section is live"}}]}})",
                 clientJsonEscape(*ctx, fmt::format("Turns: {}", ctx->turn_count))
             );
-            auto jsonSv = agentxx_plugin_sv_cstr(json.c_str());
+            auto jsonSv = agentxx::plugin::PluginStringView::fromCstr(json.c_str());
             ctx->ui->update_info_section(ctx->host, ctx->info_section, &jsonSv);
         }
     });
@@ -407,9 +407,9 @@ static void AGENTXX_PLUGIN_CALL on_client_plugin_data(const AgentxxPluginStringV
     AgentxxPluginString plugin{nullptr, 0};
     AgentxxPluginString event{nullptr, 0};
     AgentxxPluginString data{nullptr, 0};
-    auto kPlugin = agentxx_plugin_sv_cstr("plugin");
-    auto kEvent  = agentxx_plugin_sv_cstr("event");
-    auto kData   = agentxx_plugin_sv_cstr("data");
+    auto kPlugin = agentxx::plugin::PluginStringView::fromCstr("plugin");
+    auto kEvent  = agentxx::plugin::PluginStringView::fromCstr("event");
+    auto kData   = agentxx::plugin::PluginStringView::fromCstr("data");
     if (payload_json) {
         ctx->iface.json->json_get_string(ctx->host, payload_json, &kPlugin, &plugin);
         ctx->iface.json->json_get_string(ctx->host, payload_json, &kEvent, &event);
@@ -425,18 +425,18 @@ static void AGENTXX_PLUGIN_CALL on_client_plugin_data(const AgentxxPluginStringV
             clientJsonEscape(*ctx, line)
         );
         if (ctx->ui && ctx->ui->update_panel) {
-            auto jsonSv = agentxx_plugin_sv_cstr(json.c_str());
+            auto jsonSv = agentxx::plugin::PluginStringView::fromCstr(json.c_str());
             ctx->ui->update_panel(ctx->host, ctx->panel, &jsonSv);
         }
     });
     if (plugin.data) {
-        agentxx_plugin_string_free(ctx->host, &plugin);
+        agentxx::plugin::PluginString::free(ctx->host, &plugin);
     }
     if (event.data) {
-        agentxx_plugin_string_free(ctx->host, &event);
+        agentxx::plugin::PluginString::free(ctx->host, &event);
     }
     if (data.data) {
-        agentxx_plugin_string_free(ctx->host, &data);
+        agentxx::plugin::PluginString::free(ctx->host, &data);
     }
 }
 
@@ -458,20 +458,20 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
             ctx->ui    = ctx->iface.ui;
             raw        = ctx.get();
 
-            auto sidSv = agentxx_plugin_sv_cstr("example_plugin.turns");
-            auto initSv = agentxx_plugin_sv_cstr(R"({"text":"turns: 0"})");
+            auto sidSv = agentxx::plugin::PluginStringView::fromCstr("example_plugin.turns");
+            auto initSv = agentxx::plugin::PluginStringView::fromCstr(R"({"text":"turns: 0"})");
             ctx->status_item = ctx->ui && ctx->ui->register_status_item
                                    ? ctx->ui->register_status_item(host, &sidSv, &initSv, 0, 10)
                                    : nullptr;
 
-            auto pidSv = agentxx_plugin_sv_cstr("example_plugin.panel");
-            auto ppropSv = agentxx_plugin_sv_cstr(R"({"title":"Example"})");
+            auto pidSv = agentxx::plugin::PluginStringView::fromCstr("example_plugin.panel");
+            auto ppropSv = agentxx::plugin::PluginStringView::fromCstr(R"({"title":"Example"})");
             ctx->panel = ctx->ui && ctx->ui->register_panel
                              ? ctx->ui->register_panel(host, &pidSv, &ppropSv)
                              : nullptr;
 
-            auto iidSv = agentxx_plugin_sv_cstr("example_plugin.info");
-            auto ipropSv = agentxx_plugin_sv_cstr(R"({"title":"Example Info"})");
+            auto iidSv = agentxx::plugin::PluginStringView::fromCstr("example_plugin.info");
+            auto ipropSv = agentxx::plugin::PluginStringView::fromCstr(R"({"title":"Example Info"})");
             ctx->info_section = ctx->ui && ctx->ui->register_info_section
                                     ? ctx->ui->register_info_section(host, &iidSv, &ipropSv)
                                     : nullptr;
@@ -479,14 +479,14 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
             if (!ctx->ui || !ctx->ui->register_command) {
                 return -1;
             }
-            auto cmd1NameSv = agentxx_plugin_sv_cstr("example");
-            auto cmd1DescSv = agentxx_plugin_sv_cstr("Send a message from the example plugin");
+            auto cmd1NameSv = agentxx::plugin::PluginStringView::fromCstr("example");
+            auto cmd1DescSv = agentxx::plugin::PluginStringView::fromCstr("Send a message from the example plugin");
             if (ctx->ui->register_command(host, &cmd1NameSv, &cmd1DescSv, example_cmd_execute, ctx.get())
                 != 0) {
                 return -1;
             }
-            auto cmd2NameSv = agentxx_plugin_sv_cstr("example_toast");
-            auto cmd2DescSv = agentxx_plugin_sv_cstr("Show a toast from the example plugin");
+            auto cmd2NameSv = agentxx::plugin::PluginStringView::fromCstr("example_toast");
+            auto cmd2DescSv = agentxx::plugin::PluginStringView::fromCstr("Show a toast from the example plugin");
             if (ctx->ui->register_command(
                     host,
                     &cmd2NameSv,
@@ -523,7 +523,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
             }
 
             if (ctx->iface.log && ctx->iface.log->log) {
-                auto msgSv = agentxx_plugin_sv_cstr("example client plugin loaded");
+                auto msgSv = agentxx::plugin::PluginStringView::fromCstr("example client plugin loaded");
                 ctx->iface.log->log(host, 2, &msgSv);
             }
             *plugin_ctx = ctx.release();
@@ -540,9 +540,9 @@ extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_client_destroy(void* plugin
             return;
         }
         if (ctx->ui && ctx->ui->unregister_command) {
-            auto n1 = agentxx_plugin_sv_cstr("example");
+            auto n1 = agentxx::plugin::PluginStringView::fromCstr("example");
             ctx->ui->unregister_command(ctx->host, &n1);
-            auto n2 = agentxx_plugin_sv_cstr("example_toast");
+            auto n2 = agentxx::plugin::PluginStringView::fromCstr("example_toast");
             ctx->ui->unregister_command(ctx->host, &n2);
         }
         if (ctx->status_item && ctx->ui && ctx->ui->unregister_status_item) {
@@ -558,7 +558,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_client_destroy(void* plugin
             ctx->info_section = nullptr;
         }
         if (ctx->iface.log && ctx->iface.log->log) {
-            auto msgSv = agentxx_plugin_sv_cstr("example client plugin unloaded");
+            auto msgSv = agentxx::plugin::PluginStringView::fromCstr("example client plugin unloaded");
             ctx->iface.log->log(ctx->host, 2, &msgSv);
         }
         delete ctx;

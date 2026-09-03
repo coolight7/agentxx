@@ -11,7 +11,7 @@
  */
 #include "test_client_plugins.h"
 
-#include "agentxx/plugin/api/plugin_iface_helper.h"
+#include "agentxx/plugin/api/plugin_kit.h"
 #include "agentxx/plugin/client_plugin_manager.h"
 #include "agentxx/util/log.h"
 #include "asio/co_spawn.hpp"
@@ -435,10 +435,10 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         const auto wire = agentxx::plugin::ClientIfaces::query(&inst->host).wire;
         XX_TEST_EXPECT_TRUE(wire != nullptr && wire->send_plugin_data != nullptr);
         int rc = wire ? wire->send_plugin_data(
-                            &inst->host,
-                            agentxx_plugin_sv_cstr("rebuild"),
-                            agentxx_plugin_sv_cstr(R"({"x":1})")
-                        )
+                     &inst->host,
+                     agentxx::plugin::PluginStringView::fromCstr("rebuild"),
+                     agentxx::plugin::PluginStringView::fromCstr(R"({"x":1})")
+                 )
                       : -1;
         XX_TEST_EXPECT_EQ(rc, 0);
     }
@@ -584,7 +584,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             agentxx::plugin::ClientPluginInstance* inst   = nullptr;
             const AgentxxClientEventsIface*        events = nullptr;
             std::atomic<int>                       hits{0};
-            AgentxxPluginSubscription*             dynSub = nullptr;
+            AgentxxPluginSubscription*             dynSub        = nullptr;
             void (*incFn)(const AgentxxPluginStringView*, void*) = nullptr;
         };
 
@@ -660,7 +660,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         if (instCfg) {
             XX_TEST_EXPECT_EQ(instCfg->args.value("client_key", std::string{}), "client_val");
             // agentxx.client.self 接口表 get_plugin_args 返回实例 args
-            const auto self9 = agentxx::plugin::ClientIfaces::query(&instCfg->host).self;
+            const auto          self9 = agentxx::plugin::ClientIfaces::query(&instCfg->host).self;
             AgentxxPluginString json{nullptr, 0};
             if (self9 && self9->get_plugin_args) {
                 self9->get_plugin_args(&instCfg->host, &json);
@@ -674,7 +674,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                     XX_TEST_EXPECT_TRUE(false);
                     XX_LOGE("[client_plugin] 9.2 args json parse failed: {}", e.what());
                 }
-                agentxx_plugin_string_free(&instCfg->host, &json);
+                agentxx::plugin::PluginString::free(&instCfg->host, &json);
             }
             bool unloadedCfg = co_await mgr->unloadAsync("example_plugin");
             XX_TEST_EXPECT_TRUE(unloadedCfg);
@@ -825,11 +825,11 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 };
                 const auto events11 = agentxx::plugin::ClientIfaces::query(&okInst->host).events;
                 auto       sub      = events11 ? events11->subscribe(
-                                          &okInst->host,
-                                          AGENTXX_CLIENT_EVT_READY,
-                                          readyFn,
-                                          &readyPayload
-                                      )
+                               &okInst->host,
+                               AGENTXX_CLIENT_EVT_READY,
+                               readyFn,
+                               &readyPayload
+                           )
                                                : nullptr;
                 XX_TEST_EXPECT_TRUE(sub != nullptr);
                 mgr->onReady();
