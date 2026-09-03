@@ -14,6 +14,7 @@
 
 #include <cstdio>
 #include <exception>
+#include <string_view>
 #include <type_traits>
 #include <utility>
 
@@ -44,6 +45,22 @@ inline void logTo(
     );
     AgentxxPluginStringView sv = PluginStringView::fromCstr(buf);
     logIf->log(host, level, &sv);
+}
+
+inline void logTo(
+    const AgentxxPluginHost*     host,
+    const AgentxxPluginLogIface* logIf,
+    int32_t                      level,
+    std::string_view             pluginName,
+    std::string_view             msg
+) noexcept {
+    logTo(
+        host,
+        logIf,
+        level,
+        PluginStringView::from(pluginName),
+        PluginStringView::from(msg)
+    );
 }
 
 inline void logTo(
@@ -85,6 +102,22 @@ inline void logTo(
     );
     AgentxxPluginStringView sv = PluginStringView::fromCstr(buf);
     logIf->log(host, level, &sv);
+}
+
+inline void logTo(
+    const AgentxxPluginHost*     host,
+    const AgentxxClientLogIface* logIf,
+    int32_t                      level,
+    std::string_view             pluginName,
+    std::string_view             msg
+) noexcept {
+    logTo(
+        host,
+        logIf,
+        level,
+        PluginStringView::from(pluginName),
+        PluginStringView::from(msg)
+    );
 }
 
 inline void logTo(

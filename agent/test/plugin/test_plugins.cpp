@@ -609,20 +609,17 @@ asio::awaitable<TestResult> run_plugin_tests() {
             slowSpec.parameters_json = agentxx::plugin::PluginStringView::fromCstr("{}");
             // 阻塞委托型 execute: 在宿主阻塞池线程睡 600ms 后返回结果
             // (模拟不可中断的慢任务, 忽略 cancel_flag)
-            slowSpec.execute = +[](void*,
+            slowSpec.execute = +[](void* ud,
                                    const AgentxxPluginStringView*,
                                    const AgentxxPluginStringView*,
                                    const AgentxxPluginStringView*,
                                    volatile int32_t*,
-                                   AgentxxPluginString*) -> char* {
+                                   AgentxxPluginString*) -> AgentxxPluginString {
                 std::this_thread::sleep_for(std::chrono::milliseconds(600));
-                char* p = static_cast<char*>(::malloc(3));
-                p[0]    = '{';
-                p[1]    = '}';
-                p[2]    = '\0';
-                return p;
+                const auto* host = static_cast<const AgentxxPluginHost*>(ud);
+                return agentxx::plugin::PluginString::fromCstr(host, "{}");
             };
-            slowSpec.user_data          = nullptr;
+            slowSpec.user_data          = &inst23->host;
             slowSpec.default_timeout_ms = 100;
             // API v1: offload线程池适配异步接口 为调用方内嵌存储 (随插件实例 ctx 生死; 此处测试
             // 直接持有)
@@ -1158,7 +1155,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
                                   const AgentxxPluginStringView*,
                                   const AgentxxPluginStringView*,
                                   volatile int32_t*,
-                                  AgentxxPluginString*) -> char* {
+                                  AgentxxPluginString*) -> AgentxxPluginString {
                 throw std::runtime_error("shim boom");
             };
             shimJob.shim.host              = nullptr; ///< host 缺失时 err_dup 安全放弃
