@@ -165,10 +165,10 @@ public:
     void setEngineHost(const AgentxxPluginHost* host) {
         engineHost_ = host;
         if (host && host->vtable && host->vtable->query_interface) {
-            logIface_ = static_cast<const AgentxxPluginLogIface*>(host->vtable->query_interface(
-                host,
-                agentxx_plugin_sv_cstr(AGENTXX_PLUGIN_IFACE_AGENT_LOG)
-            ));
+            auto iidSv = agentxx_plugin_sv_cstr(AGENTXX_PLUGIN_IFACE_AGENT_LOG);
+            logIface_  = static_cast<const AgentxxPluginLogIface*>(
+                host->vtable->query_interface(host, &iidSv)
+            );
         }
     }
 
@@ -260,11 +260,11 @@ public:
     /// 工具 execute 桥 —— 异步启动 (统一异步操作模型):
     /// 【宿主 io 线程】调用; 任务入队 JS 线程后立即返回句柄,
     /// 完成结果由 JS 线程经 notifier 上报 (线程安全), io 线程零阻塞
-    static void* toolExecuteStart(
+    static void* AGENTXX_PLUGIN_CALL toolExecuteStart(
         void*                              ud,
-        AgentxxPluginStringView            args_json,
-        AgentxxPluginStringView            thread_id,
-        AgentxxPluginStringView            tool_call_id,
+        const AgentxxPluginStringView*     args_json,
+        const AgentxxPluginStringView*     thread_id,
+        const AgentxxPluginStringView*     tool_call_id,
         const AgentxxPluginOperatorNotify* notify,
         AgentxxPluginString*               error_out
     );
@@ -272,16 +272,16 @@ public:
     /// 钩子回调桥 —— 异步启动 (统一异步操作模型):
     /// 【宿主 io 线程】调用; post 到 JS 线程 (fire-and-forget, 与旧语义一致)
     /// 后立即内联完成通知
-    static void* hookStart(
+    static void* AGENTXX_PLUGIN_CALL hookStart(
         void*                              ud,
-        AgentxxPluginHookPoint             point,
-        AgentxxPluginStringView            node_input_json,
+        int32_t                            point,
+        const AgentxxPluginStringView*     node_input_json,
         const AgentxxPluginOperatorNotify* notify,
         AgentxxPluginString*               error_out
     );
 
     /// 事件回调桥: io 线程调用; post 到 JS 线程 (fire-and-forget) (类外定义)
-    static void eventFire(AgentxxPluginStringView event_json, void* ud);
+    static void AGENTXX_PLUGIN_CALL eventFire(const AgentxxPluginStringView* event_json, void* ud);
 
     // ==================== 任务队列 ====================
 
@@ -343,8 +343,9 @@ private:
     friend struct JsPluginCtx;
 
     static void setErr(char** err_out, const AgentxxPluginHost* host, const char* msg) {
-        if (err_out && host && host->vtable && host->vtable->strdup) {
-            *err_out = host->vtable->strdup(agentxx_plugin_sv_cstr(msg));
+        if (err_out && host && msg) {
+            auto sv = agentxx_plugin_sv_cstr(msg);
+            *err_out = agentxx_plugin_strdup(host, &sv);
         }
     }
 
@@ -922,9 +923,9 @@ private:
 /// - JS 线程执行完毕后经 notifier 上报结果 (线程安全; payload host->alloc)
 void* JsEngine::toolExecuteStart(
     void*                              ud,
-    AgentxxPluginStringView            args_json,
-    AgentxxPluginStringView            thread_id,
-    AgentxxPluginStringView            tool_call_id,
+    const AgentxxPluginStringView*     args_json,
+    const AgentxxPluginStringView*     thread_id,
+    const AgentxxPluginStringView*     tool_call_id,
     const AgentxxPluginOperatorNotify* notify,
     AgentxxPluginString*               error_out
 ) {
@@ -937,9 +938,9 @@ void* JsEngine::toolExecuteStart(
             return nullptr;
         }
         auto req  = std::make_shared<ToolExecReq>();
-        req->args = std::string{args_json.data ? args_json.data : "{}", args_json.size};
-        req->tid  = std::string{thread_id.data ? thread_id.data : "", thread_id.size};
-        req->tcid = std::string{tool_call_id.data ? tool_call_id.data : "", tool_call_id.size};
+        req->args = std::string{args_json && args_json->data ? args_json->data : "{}", args_json ? static_cast<size_t>(args_json->size) : 0};
+        req->tid  = std::string{thread_id && thread_id->data ? thread_id->data : "", thread_id ? static_cast<size_t>(thread_id->size) : 0};
+        req->tcid = std::string{tool_call_id && tool_call_id->data ? tool_call_id->data : "", tool_call_id ? static_cast<size_t>(tool_call_id->size) : 0};
 
         // op 句柄仅作占位标识 (宿主不解释其内容): 所有权随任务闭包移交 JS 线程,
         // 通知完成后由闭包自身释放 —— 支持同一引擎插件被多实例加载/反复加载
@@ -956,17 +957,11 @@ void* JsEngine::toolExecuteStart(
                 } releaser{op};
                 engine->doToolExecute(binding, *req);
                 if (!req->error.empty()) {
-                    ntfCopy.done(
-                        ntfCopy.host_ud,
-                        AGENTXX_PLUGIN_OPERATOR_FAILED,
-                        agentxx_plugin_sv(req->error.data(), req->error.size())
-                    );
+                    auto errSv = agentxx_plugin_sv(req->error.data(), req->error.size());
+                    ntfCopy.done(ntfCopy.host_ud, AGENTXX_PLUGIN_OPERATOR_FAILED, &errSv);
                 } else {
-                    ntfCopy.done(
-                        ntfCopy.host_ud,
-                        AGENTXX_PLUGIN_OPERATOR_OK,
-                        agentxx_plugin_sv(req->result.data(), req->result.size())
-                    );
+                    auto resSv = agentxx_plugin_sv(req->result.data(), req->result.size());
+                    ntfCopy.done(ntfCopy.host_ud, AGENTXX_PLUGIN_OPERATOR_OK, &resSv);
                 }
             })) {
             // 引擎已停止: 启动失败 (未入队 → 句柄由本函数直接释放)
@@ -990,11 +985,8 @@ void* JsEngine::toolExecuteStart(
             error_out->size = 0;
         }
         if (notify && notify->done) {
-            notify->done(
-                notify->host_ud,
-                AGENTXX_PLUGIN_OPERATOR_FAILED,
-                agentxx_plugin_sv(nullptr, 0)
-            );
+            auto errSv = agentxx_plugin_sv(nullptr, 0);
+            notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_FAILED, &errSv);
         }
         return nullptr;
     }
@@ -1002,8 +994,8 @@ void* JsEngine::toolExecuteStart(
 
 void* JsEngine::hookStart(
     void*                              ud,
-    AgentxxPluginHookPoint             point,
-    AgentxxPluginStringView            node_input_json,
+    int32_t                            point,
+    const AgentxxPluginStringView*     node_input_json,
     const AgentxxPluginOperatorNotify* notify,
     AgentxxPluginString*               error_out
 ) {
@@ -1015,13 +1007,14 @@ void* JsEngine::hookStart(
         if (!engine || !notify) {
             return nullptr;
         }
-        std::string payload{node_input_json.data ? node_input_json.data : "", node_input_json.size};
+        std::string payload{node_input_json && node_input_json->data ? node_input_json->data : "", node_input_json ? static_cast<size_t>(node_input_json->size) : 0};
         int         pt = static_cast<int>(point);
         engine->post([engine, binding, payload, pt]() {
             engine->doHookFire(binding, pt, payload);
         });
         // fire-and-forget: 投递成功即内联完成 (JS 执行结果不回传)
-        notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, agentxx_plugin_sv(nullptr, 0));
+        auto okSv = agentxx_plugin_sv(nullptr, 0);
+        notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, &okSv);
         return nullptr;
     } catch (...) {
         ::agentxx::plugin::reportCurrentException([engine](const char* m) noexcept {
@@ -1030,13 +1023,14 @@ void* JsEngine::hookStart(
             }
         });
         if (notify && notify->done) {
-            notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_FAILED, agentxx_plugin_sv(nullptr, 0));
+            auto errSv = agentxx_plugin_sv(nullptr, 0);
+            notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_FAILED, &errSv);
         }
         return nullptr;
     }
 }
 
-void JsEngine::eventFire(AgentxxPluginStringView event_json, void* ud) {
+void JsEngine::eventFire(const AgentxxPluginStringView* event_json, void* ud) {
     auto* binding = static_cast<JsHookBinding*>(ud);
     auto* engine  = binding ? binding->engine : nullptr;
     // C ABI 回调异常守卫: 事件分发由宿主 io 线程调用, 异常不外泄
@@ -1050,7 +1044,7 @@ void JsEngine::eventFire(AgentxxPluginStringView event_json, void* ud) {
             if (!engine) {
                 return;
             }
-            std::string payload{event_json.data ? event_json.data : "", event_json.size};
+            std::string payload{event_json && event_json->data ? event_json->data : "", event_json ? static_cast<size_t>(event_json->size) : 0};
             engine->post([engine, binding, payload]() {
                 engine->doEventFire(binding, payload);
             });
@@ -1272,15 +1266,13 @@ JSValue JsEngine::bridgeCall(
             if (argc >= 2) {
                 JS_ToInt64(ctx, &id, argv[1]);
             }
-            AgentxxPluginString resp = iface.session->get_share_store(
-                host,
-                agentxx_plugin_sv(sessionId.data(), sessionId.size()),
-                id
-            );
+            AgentxxPluginString resp{nullptr, 0};
+            auto sidSv = agentxx_plugin_sv(sessionId.data(), sessionId.size());
+            iface.session->get_share_store(host, &sidSv, id, &resp);
             if (!resp.data) {
                 return JS_NULL;
             }
-            JSValue out = JS_NewStringLen(ctx, resp.data, resp.size);
+            JSValue out = JS_NewStringLen(ctx, resp.data, static_cast<size_t>(resp.size));
             agentxx_plugin_string_free(host, &resp);
             return out;
         }
@@ -1294,12 +1286,9 @@ JSValue JsEngine::bridgeCall(
                 JS_ToInt32(ctx, &lv, argv[2]);
                 level = lv;
             }
-            iface.session->emit_message_tip(
-                host,
-                agentxx_plugin_sv(sessionId.data(), sessionId.size()),
-                agentxx_plugin_sv(text.data(), text.size()),
-                level
-            );
+            auto sidSv = agentxx_plugin_sv(sessionId.data(), sessionId.size());
+            auto txtSv = agentxx_plugin_sv(text.data(), text.size());
+            iface.session->emit_message_tip(host, &sidSv, &txtSv, level);
             return JS_UNDEFINED;
         }
 
@@ -1311,7 +1300,8 @@ JSValue JsEngine::bridgeCall(
                 level = lv;
             }
             std::string msg = argc >= 2 ? jsToCppString(ctx, argv[1]) : "";
-            iface.log->log(host, level, agentxx_plugin_sv(msg.data(), msg.size()));
+            auto msgSv = agentxx_plugin_sv(msg.data(), msg.size());
+            iface.log->log(host, level, &msgSv);
             return JS_UNDEFINED;
         }
 
@@ -1374,9 +1364,10 @@ JSValue JsEngine::bridgeCall(
             binding->engine     = engine;
             binding->plugin     = pctx->name;
             binding->point      = -1;
-            auto* sub           = iface.events->subscribe(
+            auto topicSv  = agentxx_plugin_sv(topic.data(), topic.size());
+            auto* sub     = iface.events->subscribe(
                 host,
-                agentxx_plugin_sv(topic.data(), topic.size()),
+                &topicSv,
                 &JsEngine::eventFire,
                 binding.get()
             );
@@ -1459,11 +1450,9 @@ JSValue JsEngine::bridgeCall(
                     }
                 }
             }
-            iface.events->publish(
-                host,
-                agentxx_plugin_sv(topic.data(), topic.size()),
-                agentxx_plugin_sv(payload.data(), payload.size())
-            );
+            auto topicSv  = agentxx_plugin_sv(topic.data(), topic.size());
+            auto paySv    = agentxx_plugin_sv(payload.data(), payload.size());
+            iface.events->publish(host, &topicSv, &paySv);
             return JS_UNDEFINED;
         }
 
@@ -1499,14 +1488,15 @@ JSValue JsEngine::bridgeCall(
         }
 
         case B_LIST_PLUGINS: {
-            AgentxxPluginString json = iface.plugins->list_plugins(host);
+            AgentxxPluginString json{nullptr, 0};
+            iface.plugins->list_plugins(host, &json);
             if (!json.data) {
                 return JS_NewArray(ctx);
             }
-            JSValue out = JS_ParseJSON(ctx, json.data, json.size, "<plugins>");
+            JSValue out = JS_ParseJSON(ctx, json.data, static_cast<size_t>(json.size), "<plugins>");
             if (JS_IsException(out)) {
                 JS_FreeValue(ctx, out);
-                out = JS_NewStringLen(ctx, json.data, json.size);
+                out = JS_NewStringLen(ctx, json.data, static_cast<size_t>(json.size));
             }
             agentxx_plugin_string_free(host, &json);
             return out;
@@ -1517,15 +1507,16 @@ JSValue JsEngine::bridgeCall(
                 return JS_ThrowTypeError(ctx, "getPlugin: name required");
             }
             std::string name = jsToCppString(ctx, argv[0]);
-            AgentxxPluginString json
-                = iface.plugins->get_plugin(host, agentxx_plugin_sv(name.data(), name.size()));
+            AgentxxPluginString json{nullptr, 0};
+            auto nameSv = agentxx_plugin_sv(name.data(), name.size());
+            iface.plugins->get_plugin(host, &nameSv, &json);
             if (!json.data) {
                 return JS_NULL; // 未安装
             }
-            JSValue out = JS_ParseJSON(ctx, json.data, json.size, "<plugin>");
+            JSValue out = JS_ParseJSON(ctx, json.data, static_cast<size_t>(json.size), "<plugin>");
             if (JS_IsException(out)) {
                 JS_FreeValue(ctx, out);
-                out = JS_NewStringLen(ctx, json.data, json.size);
+                out = JS_NewStringLen(ctx, json.data, static_cast<size_t>(json.size));
             }
             agentxx_plugin_string_free(host, &json);
             return out;
@@ -1596,9 +1587,13 @@ JSValue JsEngine::bridgeCall(
                 JS_FreeValue(ctx, tv);
             }
             // spec JSON 拼装经宿主 json_escape (防注入/转义错误)
-            AgentxxPluginString nsEsc  = iface.json->json_escape(host, agentxx_plugin_sv(ns.data(), ns.size()));
-            AgentxxPluginString urlEsc = iface.json->json_escape(host, agentxx_plugin_sv(url.data(), url.size()));
-            if (!nsEsc.data || !urlEsc.data) {
+            AgentxxPluginString nsEsc{nullptr, 0};
+            AgentxxPluginString urlEsc{nullptr, 0};
+            auto nsSv  = agentxx_plugin_sv(ns.data(), ns.size());
+            auto urlSv = agentxx_plugin_sv(url.data(), url.size());
+            int32_t rc1 = iface.json->json_escape(host, &nsSv, &nsEsc);
+            int32_t rc2 = iface.json->json_escape(host, &urlSv, &urlEsc);
+            if (rc1 != 0 || rc2 != 0 || !nsEsc.data || !urlEsc.data) {
                 if (nsEsc.data) {
                     agentxx_plugin_string_free(host, &nsEsc);
                 }
@@ -1646,7 +1641,7 @@ JSValue JsEngine::bridgeCall(
 
 extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_agent_get_info(void) {
     static const AgentxxPluginInfo info{
-        AGENTXX_PLUGIN_API_VERSION,
+        AGENTXX_PLUGIN_API_VERSION, 0,
         agentxx_plugin_sv_cstr("agentxx_javascript_engine"),
         agentxx_plugin_sv_cstr("1.0.0"),
         agentxx_plugin_sv_cstr("JS interpreter plugin (QuickJS): hosts type:js plugins"),
@@ -1663,11 +1658,11 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_agent_g
 /// - "load" args: {"name": 脚本插件名, "path": 脚本文件路径}; 完成 payload:
 ///   {"ok": true, "tools": [...]} (JSON, host->alloc)
 /// - "unload" args: {"name": 脚本插件名}; 投递式, 内联完成 {"ok": true}
-static void* jsCapStart(
+static void* AGENTXX_PLUGIN_CALL jsCapStart(
     void*                              ctx,
     const AgentxxPluginHost*           caller_host,
-    AgentxxPluginStringView            method,
-    AgentxxPluginStringView            args_json,
+    const AgentxxPluginStringView*     method,
+    const AgentxxPluginStringView*     args_json,
     const AgentxxPluginOperatorNotify* notify,
     AgentxxPluginString*               error_out
 ) {
@@ -1684,8 +1679,8 @@ static void* jsCapStart(
         if (!engine || !notify || agentxx_plugin_sv_empty(method)) {
             return setErr("interpreter.js: invalid invoke");
         }
-        std::string methodStr{method.data, method.size};
-        std::string argsStr{args_json.data ? args_json.data : "{}", args_json.size};
+        std::string methodStr{method && method->data ? method->data : "", method ? static_cast<size_t>(method->size) : 0};
+        std::string argsStr{args_json && args_json->data ? args_json->data : "{}", args_json ? static_cast<size_t>(args_json->size) : 0};
         // 参数解析经宿主 client 无关的 agentxx.agent.json 接口表 (对转义/嵌套结构可靠;
         // caller_host 与本插件同进程, 接口表为同一批静态数据)
         const agentxx::plugin::AgentIfaces callerIf
@@ -1694,15 +1689,14 @@ static void* jsCapStart(
             return setErr("interpreter.js: host lacks agentxx.agent.json interface");
         }
         auto argStr = [&](const char* key, std::string& out) -> bool {
-            AgentxxPluginString v = callerIf.json->json_get_string(
-                caller_host,
-                agentxx_plugin_sv(argsStr.data(), argsStr.size()),
-                agentxx_plugin_sv(key, std::strlen(key))
-            );
+            AgentxxPluginString v{nullptr, 0};
+            auto argsSv = agentxx_plugin_sv(argsStr.data(), argsStr.size());
+            auto keySv  = agentxx_plugin_sv(key, std::strlen(key));
+            callerIf.json->json_get_string(caller_host, &argsSv, &keySv, &v);
             if (!v.data) {
                 return false;
             }
-            out.assign(v.data, v.size);
+            out.assign(v.data, static_cast<size_t>(v.size));
             agentxx_plugin_string_free(caller_host, &v);
             return true;
         };
@@ -1735,20 +1729,14 @@ static void* jsCapStart(
                         = engine->loadScriptOnJsThread(caller_host, name, path, code, err2);
                     const AgentxxPluginHost* eh = engine->host();
                     if (rc2 != 0) {
-                        ntfCopy.done(
-                            ntfCopy.host_ud,
-                            AGENTXX_PLUGIN_OPERATOR_FAILED,
-                            agentxx_plugin_sv(err2.data(), err2.size())
-                        );
+                        auto errSv2 = agentxx_plugin_sv(err2.data(), err2.size());
+                        ntfCopy.done(ntfCopy.host_ud, AGENTXX_PLUGIN_OPERATOR_FAILED, &errSv2);
                         return;
                     }
                     std::string tools      = engine->loadedToolsJsonOnJsThread(name);
                     std::string payloadStr = fmt::format(R"({{"ok": true, "tools": {}}})", tools);
-                    ntfCopy.done(
-                        ntfCopy.host_ud,
-                        AGENTXX_PLUGIN_OPERATOR_OK,
-                        agentxx_plugin_sv(payloadStr.data(), payloadStr.size())
-                    );
+                    auto resSv = agentxx_plugin_sv(payloadStr.data(), payloadStr.size());
+                    ntfCopy.done(ntfCopy.host_ud, AGENTXX_PLUGIN_OPERATOR_OK, &resSv);
                 })) {
                 return setErr("interpreter.js engine stopped");
             }
@@ -1763,11 +1751,8 @@ static void* jsCapStart(
                 return setErr("interpreter.js unload: name (string) required");
             }
             engine->unloadScript(name.c_str()); // 投递式
-            notify->done(
-                notify->host_ud,
-                AGENTXX_PLUGIN_OPERATOR_OK,
-                agentxx_plugin_sv_cstr("{\"ok\": true}")
-            );
+            auto okSv = agentxx_plugin_sv_cstr("{\"ok\": true}");
+            notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, &okSv);
             return nullptr; ///< 内联完成
         }
 
@@ -1822,9 +1807,10 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
             // 处理器三件套): 脚本插件 (C++ 壳) 经 invoke_capability(_async) 把脚本代码
             // 交给本引擎执行 —— 插件间通信, 宿主不参与; load 为异步完成 (JS 线程执行),
             // unload 内联完成 (fire-and-forget)
-            int rc = s_if.capabilities->register_capability_ex(
+            auto capSv = agentxx_plugin_sv_cstr("interpreter.js");
+            int  rc    = s_if.capabilities->register_capability_ex(
                 host,
-                agentxx_plugin_sv_cstr("interpreter.js"),
+                &capSv,
                 &jsCapStart,
                 nullptr,
                 engine
@@ -1835,11 +1821,10 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
             }
             // 先日志后交付: 若日志抛异常走 -1 失败路径时引擎仍由本函数 delete
             // (避免 ctx 已交付但 rc=-1 的所有权歧义)
-            s_if.log->log(
-                host,
-                2,
-                agentxx_plugin_sv_cstr("agentxx_javascript_engine loaded (QuickJS interpreter.js)")
+            auto loadedSv = agentxx_plugin_sv_cstr(
+                "agentxx_javascript_engine loaded (QuickJS interpreter.js)"
             );
+            s_if.log->log(host, 2, &loadedSv);
             *plugin_ctx = engine; ///< 所有权移交宿主 (destroy 时取回归还)
             return 0;
         }
@@ -1854,10 +1839,10 @@ extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_agent_destroy(void* plugin_
     const AgentxxPluginHost*     ownHost = engine ? engine->host() : nullptr;
     const AgentxxPluginLogIface* ownLog  = nullptr;
     if (ownHost && ownHost->vtable && ownHost->vtable->query_interface) {
-        ownLog = static_cast<const AgentxxPluginLogIface*>(ownHost->vtable->query_interface(
-            ownHost,
-            agentxx_plugin_sv_cstr(AGENTXX_PLUGIN_IFACE_AGENT_LOG)
-        ));
+        auto iidSv = agentxx_plugin_sv_cstr(AGENTXX_PLUGIN_IFACE_AGENT_LOG);
+        ownLog     = static_cast<const AgentxxPluginLogIface*>(
+            ownHost->vtable->query_interface(ownHost, &iidSv)
+        );
     }
     agentxx::plugin::guardCallVoid(
         [ownHost, ownLog](const char* m) noexcept {

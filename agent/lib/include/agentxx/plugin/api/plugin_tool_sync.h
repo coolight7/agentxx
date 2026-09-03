@@ -1,6 +1,6 @@
 /*
- * agentxx/plugin/plugin_tool_sync.h —— 线程池执行辅助
- * - 提供辅助函数方便实现 将同步函数委托到线程池执行、对接插件框架的异步接口风格
+ * agentxx/plugin/plugin_tool_sync.h —— 线程池执行辅助 (API v1 重构版)
+ * - 提供辅助函数方便实现将同步函数委托到线程池执行、对接插件框架的异步接口风格
  */
 #ifndef AGENTXX_PLUGIN_TOOL_SYNC_H
 #define AGENTXX_PLUGIN_TOOL_SYNC_H
@@ -15,13 +15,15 @@
 extern "C" {
 #endif
 
-typedef char* (*AgentxxSyncToolFn)(
-    void*                   user_data,
-    AgentxxPluginStringView args_json,
-    AgentxxPluginStringView session_id,
-    AgentxxPluginStringView tool_call_id,
-    volatile int*           cancel_flag,
-    AgentxxPluginString*    error_out
+#pragma pack(push, 8)
+
+typedef char* (AGENTXX_PLUGIN_CALL *AgentxxSyncToolFn)(
+    void*                          user_data,
+    const AgentxxPluginStringView* args_json,
+    const AgentxxPluginStringView* session_id,
+    const AgentxxPluginStringView* tool_call_id,
+    volatile int32_t*              cancel_flag,
+    AgentxxPluginString*           error_out
 );
 
 typedef struct AgentxxSyncToolSpec {
@@ -30,8 +32,9 @@ typedef struct AgentxxSyncToolSpec {
     AgentxxPluginStringView parameters_json;
     AgentxxSyncToolFn       execute;
     void*                   user_data;
-    long                    default_timeout_ms;
-    int                     flags;
+    int64_t                 default_timeout_ms;
+    int32_t                 flags;
+    uint32_t                _reserved;
 } AgentxxSyncToolSpec;
 
 typedef struct AgentxxSyncToolShim {
@@ -47,8 +50,11 @@ typedef struct AgentxxSyncJob {
     AgentxxPluginStringView     args;
     AgentxxPluginStringView     tid;
     AgentxxPluginStringView     tcid;
-    volatile int                cancelFlag;
+    volatile int32_t            cancelFlag;
+    uint32_t                    _reserved;
 } AgentxxSyncJob;
+
+#pragma pack(pop)
 
 static inline AgentxxPluginString agentxx_shim_err_dup(const AgentxxPluginHost* host, const char* msg) {
     if (!host || !host->vtable || !msg) {
@@ -60,15 +66,15 @@ static inline AgentxxPluginString agentxx_shim_err_dup(const AgentxxPluginHost* 
     return agentxx_plugin_string_from_cstr(host, msg);
 }
 
-static inline void* agentxx_sync_job_work(void* ud, volatile int* cancel_flag, AgentxxPluginString* error_out) {
+static inline void* AGENTXX_PLUGIN_CALL agentxx_sync_job_work(void* ud, volatile int32_t* cancel_flag, AgentxxPluginString* error_out) {
     AgentxxSyncJob* job = (AgentxxSyncJob*)ud;
 #ifdef __cplusplus
     try {
         return (void*)job->shim.fn(
             job->shim.ud,
-            job->args,
-            job->tid,
-            job->tcid,
+            &job->args,
+            &job->tid,
+            &job->tcid,
             cancel_flag,
             error_out
         );
@@ -86,23 +92,23 @@ static inline void* agentxx_sync_job_work(void* ud, volatile int* cancel_flag, A
 #else
     return (void*)job->shim.fn(
         job->shim.ud,
-        job->args,
-        job->tid,
-        job->tcid,
+        &job->args,
+        &job->tid,
+        &job->tcid,
         cancel_flag,
         error_out
     );
 #endif
 }
 
-static inline void agentxx_sync_job_done(void* ud, void* result, AgentxxPluginStringView error) {
+static inline void AGENTXX_PLUGIN_CALL agentxx_sync_job_done(void* ud, void* result, const AgentxxPluginStringView* error) {
     AgentxxSyncJob* job = (AgentxxSyncJob*)ud;
-    int st = AGENTXX_PLUGIN_OPERATOR_OK;
+    int32_t st = AGENTXX_PLUGIN_OPERATOR_OK;
     AgentxxPluginStringView payload = agentxx_plugin_sv(NULL, 0);
 
     if (!agentxx_plugin_sv_empty(error)) {
         st = AGENTXX_PLUGIN_OPERATOR_FAILED;
-        payload = error;
+        payload = *error;
     } else if (result) {
         payload = agentxx_plugin_sv_cstr((const char*)result);
     } else {
@@ -110,7 +116,7 @@ static inline void agentxx_sync_job_done(void* ud, void* result, AgentxxPluginSt
     }
 
     if (job->notify.done) {
-        job->notify.done(job->notify.host_ud, st, payload);
+        job->notify.done(job->notify.host_ud, st, &payload);
     }
 
     if (result && job->shim.host && job->shim.host->vtable && job->shim.host->vtable->free) {
@@ -129,11 +135,11 @@ static inline void agentxx_sync_job_done(void* ud, void* result, AgentxxPluginSt
     free(job);
 }
 
-static inline void* agentxx_sync_tool_start(
+static inline void* AGENTXX_PLUGIN_CALL agentxx_sync_tool_start(
     void*                              user_data,
-    AgentxxPluginStringView            args_json,
-    AgentxxPluginStringView            session_id,
-    AgentxxPluginStringView            tool_call_id,
+    const AgentxxPluginStringView*     args_json,
+    const AgentxxPluginStringView*     session_id,
+    const AgentxxPluginStringView*     tool_call_id,
     const AgentxxPluginOperatorNotify* notify,
     AgentxxPluginString*               error_out
 ) {
@@ -160,8 +166,8 @@ static inline void* agentxx_sync_tool_start(
     job->tid        = agentxx_plugin_sv(NULL, 0);
     job->tcid       = agentxx_plugin_sv(NULL, 0);
 
-    if (args_json.size) {
-        char* buf = (char*)malloc(args_json.size);
+    if (args_json && args_json->size) {
+        char* buf = (char*)malloc((size_t)args_json->size);
         if (!buf) {
             free(job);
             if (error_out) {
@@ -169,12 +175,12 @@ static inline void* agentxx_sync_tool_start(
             }
             return NULL;
         }
-        memcpy(buf, args_json.data, args_json.size);
-        job->args = agentxx_plugin_sv(buf, args_json.size);
+        memcpy(buf, args_json->data, (size_t)args_json->size);
+        job->args = agentxx_plugin_sv(buf, args_json->size);
     }
 
-    if (session_id.size) {
-        char* buf = (char*)malloc(session_id.size);
+    if (session_id && session_id->size) {
+        char* buf = (char*)malloc((size_t)session_id->size);
         if (!buf) {
             if (job->args.data) {
                 free((void*)job->args.data);
@@ -186,12 +192,12 @@ static inline void* agentxx_sync_tool_start(
             }
             return NULL;
         }
-        memcpy(buf, session_id.data, session_id.size);
-        job->tid = agentxx_plugin_sv(buf, session_id.size);
+        memcpy(buf, session_id->data, (size_t)session_id->size);
+        job->tid = agentxx_plugin_sv(buf, session_id->size);
     }
 
-    if (tool_call_id.size) {
-        char* buf = (char*)malloc(tool_call_id.size);
+    if (tool_call_id && tool_call_id->size) {
+        char* buf = (char*)malloc((size_t)tool_call_id->size);
         if (!buf) {
             if (job->args.data) {
                 free((void*)job->args.data);
@@ -206,8 +212,8 @@ static inline void* agentxx_sync_tool_start(
             }
             return NULL;
         }
-        memcpy(buf, tool_call_id.data, tool_call_id.size);
-        job->tcid = agentxx_plugin_sv(buf, tool_call_id.size);
+        memcpy(buf, tool_call_id->data, (size_t)tool_call_id->size);
+        job->tcid = agentxx_plugin_sv(buf, tool_call_id->size);
     }
 
     shim->sched->offload(
@@ -220,7 +226,7 @@ static inline void* agentxx_sync_tool_start(
     return job;
 }
 
-static inline void agentxx_sync_tool_cancel(void* user_data, void* op) {
+static inline void AGENTXX_PLUGIN_CALL agentxx_sync_tool_cancel(void* user_data, void* op) {
     (void)user_data;
     if (!op) {
         return;
@@ -229,7 +235,7 @@ static inline void agentxx_sync_tool_cancel(void* user_data, void* op) {
     job->cancelFlag     = 1;
 }
 
-static inline int agentxx_register_sync_tool(
+static inline int32_t agentxx_register_sync_tool(
     const AgentxxPluginHost*   host,
     const AgentxxSyncToolSpec* sync_spec,
     AgentxxSyncToolShim*       out_shim
@@ -265,16 +271,19 @@ static inline int agentxx_register_sync_tool(
     spec.user_data          = out_shim;
     spec.default_timeout_ms = sync_spec->default_timeout_ms;
     spec.flags              = sync_spec->flags;
+    spec._reserved          = 0;
 
     return tools->register_tool(host, &spec);
 }
 
-typedef char* (*AgentxxInlineToolFn)(
-    void*                   user_data,
-    AgentxxPluginStringView args_json,
-    AgentxxPluginStringView session_id,
-    AgentxxPluginStringView tool_call_id,
-    AgentxxPluginString*    error_out
+#pragma pack(push, 8)
+
+typedef char* (AGENTXX_PLUGIN_CALL *AgentxxInlineToolFn)(
+    void*                          user_data,
+    const AgentxxPluginStringView* args_json,
+    const AgentxxPluginStringView* session_id,
+    const AgentxxPluginStringView* tool_call_id,
+    AgentxxPluginString*           error_out
 );
 
 typedef struct AgentxxInlineToolSpec {
@@ -283,8 +292,9 @@ typedef struct AgentxxInlineToolSpec {
     AgentxxPluginStringView parameters_json;
     AgentxxInlineToolFn     execute;
     void*                   user_data;
-    long                    default_timeout_ms;
-    int                     flags;
+    int64_t                 default_timeout_ms;
+    int32_t                 flags;
+    uint32_t                _reserved;
 } AgentxxInlineToolSpec;
 
 typedef struct AgentxxInlineToolShim {
@@ -293,11 +303,13 @@ typedef struct AgentxxInlineToolShim {
     void*                    ud;
 } AgentxxInlineToolShim;
 
-static inline void* agentxx_inline_tool_start(
+#pragma pack(pop)
+
+static inline void* AGENTXX_PLUGIN_CALL agentxx_inline_tool_start(
     void*                              user_data,
-    AgentxxPluginStringView            args_json,
-    AgentxxPluginStringView            session_id,
-    AgentxxPluginStringView            tool_call_id,
+    const AgentxxPluginStringView*     args_json,
+    const AgentxxPluginStringView*     session_id,
+    const AgentxxPluginStringView*     tool_call_id,
     const AgentxxPluginOperatorNotify* notify,
     AgentxxPluginString*               error_out
 ) {
@@ -330,14 +342,14 @@ static inline void* agentxx_inline_tool_start(
 
     if (error_out && error_out->data) {
         if (notify && notify->done) {
-            // 执行期失败：经 notify 上报，error_out 释放并清零避免宿主 double-free / 误判为 start 失败
             AgentxxPluginString errPayload = *error_out;
             error_out->data                = NULL;
             error_out->size                = 0;
+            AgentxxPluginStringView errSv  = agentxx_plugin_string_to_sv(&errPayload);
             notify->done(
                 notify->host_ud,
                 AGENTXX_PLUGIN_OPERATOR_FAILED,
-                agentxx_plugin_string_to_sv(errPayload)
+                &errSv
             );
             if (shim->host) {
                 agentxx_plugin_string_free(shim->host, &errPayload);
@@ -345,10 +357,11 @@ static inline void* agentxx_inline_tool_start(
         }
     } else {
         if (notify && notify->done) {
+            AgentxxPluginStringView resSv = agentxx_plugin_sv_cstr(result);
             notify->done(
                 notify->host_ud,
                 AGENTXX_PLUGIN_OPERATOR_OK,
-                agentxx_plugin_sv_cstr(result)
+                &resSv
             );
             if (result && shim->host && shim->host->vtable && shim->host->vtable->free) {
                 shim->host->vtable->free(result);
@@ -358,7 +371,7 @@ static inline void* agentxx_inline_tool_start(
     return NULL;
 }
 
-static inline int agentxx_register_inline_tool(
+static inline int32_t agentxx_register_inline_tool(
     const AgentxxPluginHost*     host,
     const AgentxxInlineToolSpec* inline_spec,
     AgentxxInlineToolShim*       out_shim
@@ -388,15 +401,18 @@ static inline int agentxx_register_inline_tool(
     spec.user_data          = out_shim;
     spec.default_timeout_ms = inline_spec->default_timeout_ms;
     spec.flags              = inline_spec->flags;
+    spec._reserved          = 0;
 
     return tools->register_tool(host, &spec);
 }
 
-typedef int (*AgentxxSyncHookFn)(
-    void*                   user_data,
-    AgentxxPluginHookPoint  point,
-    AgentxxPluginStringView node_input_json,
-    AgentxxPluginString*    error_out
+#pragma pack(push, 8)
+
+typedef int32_t (AGENTXX_PLUGIN_CALL *AgentxxSyncHookFn)(
+    void*                          user_data,
+    int32_t                        point,
+    const AgentxxPluginStringView* node_input_json,
+    AgentxxPluginString*           error_out
 );
 
 typedef struct AgentxxSyncHookShim {
@@ -405,10 +421,12 @@ typedef struct AgentxxSyncHookShim {
     void*                    ud;
 } AgentxxSyncHookShim;
 
-static inline void* agentxx_sync_hook_start(
+#pragma pack(pop)
+
+static inline void* AGENTXX_PLUGIN_CALL agentxx_sync_hook_start(
     void*                              user_data,
-    AgentxxPluginHookPoint             point,
-    AgentxxPluginStringView            node_input_json,
+    int32_t                            point,
+    const AgentxxPluginStringView*     node_input_json,
     const AgentxxPluginOperatorNotify* notify,
     AgentxxPluginString*               error_out
 ) {
@@ -419,7 +437,7 @@ static inline void* agentxx_sync_hook_start(
         }
         return NULL;
     }
-    int rc = 0;
+    int32_t rc = 0;
 #ifdef __cplusplus
     try {
         rc = shim->fn(shim->ud, point, node_input_json, error_out);
@@ -441,12 +459,12 @@ static inline void* agentxx_sync_hook_start(
     if (notify && notify->done) {
         AgentxxPluginStringView errSv = agentxx_plugin_sv(NULL, 0);
         if (error_out && error_out->data) {
-            errSv = agentxx_plugin_string_to_sv(*error_out);
+            errSv = agentxx_plugin_string_to_sv(error_out);
         }
         notify->done(
             notify->host_ud,
             rc == 0 ? AGENTXX_PLUGIN_OPERATOR_OK : AGENTXX_PLUGIN_OPERATOR_FAILED,
-            errSv
+            &errSv
         );
         if (error_out && error_out->data && shim->host) {
             agentxx_plugin_string_free(shim->host, error_out);
@@ -455,9 +473,9 @@ static inline void* agentxx_sync_hook_start(
     return NULL;
 }
 
-static inline int agentxx_register_sync_hook(
+static inline int32_t agentxx_register_sync_hook(
     const AgentxxPluginHost* host,
-    AgentxxPluginHookPoint   point,
+    int32_t                  point,
     AgentxxSyncHookFn        fn,
     void*                    user_data,
     AgentxxSyncHookShim*     out_shim
@@ -481,6 +499,7 @@ static inline int agentxx_register_sync_hook(
 
     AgentxxPluginHookSpec spec;
     spec.point       = point;
+    spec._reserved   = 0;
     spec.hook_start  = &agentxx_sync_hook_start;
     spec.hook_cancel = NULL;
     spec.user_data   = out_shim;

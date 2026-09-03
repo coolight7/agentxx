@@ -254,11 +254,13 @@ static bool buildCapabilityDrive(
         if (auto c = weakCaller.lock()) {
             callerHost = &c->host;
         }
+        auto methSv = agentxx_plugin_sv(methStr.data(), methStr.size());
+        auto argSv  = agentxx_plugin_sv(argStr.data(), argStr.size());
         return entry.start(
             entry.ctx,
             callerHost,
-            agentxx_plugin_sv(methStr.data(), methStr.size()),
-            agentxx_plugin_sv(argStr.data(), argStr.size()),
+            &methSv,
+            &argSv,
             notify,
             e
         );
@@ -347,11 +349,14 @@ AgentxxPluginOperatorHandle* PluginManager::callToolAsync(
     plugin::OpDrive drive;
     drive.start =
         [spec, argsStr, sessionId](const AgentxxPluginOperatorNotify* notify, AgentxxPluginString* err) -> void* {
+        auto argsSv = agentxx_plugin_sv(argsStr.data(), argsStr.size());
+        auto sidSv  = agentxx_plugin_sv(sessionId.data(), sessionId.size());
+        auto tcidSv = agentxx_plugin_sv("", 0);
         return spec.execute_start(
             spec.user_data,
-            agentxx_plugin_sv(argsStr.data(), argsStr.size()),
-            agentxx_plugin_sv(sessionId.data(), sessionId.size()),
-            agentxx_plugin_sv("", 0),
+            &argsSv,
+            &sidSv,
+            &tcidSv,
             notify,
             err
         );

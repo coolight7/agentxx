@@ -10,7 +10,7 @@
 namespace agentxx {
 namespace plugin {
 
-void* PluginManager::sleep(PluginInstance* inst, long ms, void (*cb)(void* ud), void* ud) {
+void* PluginManager::sleep(PluginInstance* inst, int64_t ms, void (AGENTXX_PLUGIN_CALL *cb)(void* ud), void* ud) {
     if (!inst || !cb || ms < 0 || !ioExecutor_) {
         return nullptr;
     }
@@ -76,10 +76,10 @@ void PluginManager::cancelSleep(PluginInstance* inst, void* timerPtr) {
 }
 
 void PluginManager::offload(
-    PluginInstance* inst,
-    volatile int*   cancel_flag,
-    void* (*work)(void* ud, volatile int* cancel_flag, AgentxxPluginString* error_out),
-    void (*done)(void* ud, void* result, AgentxxPluginStringView error),
+    PluginInstance*   inst,
+    volatile int32_t* cancel_flag,
+    void* (AGENTXX_PLUGIN_CALL *work)(void* ud, volatile int32_t* cancel_flag, AgentxxPluginString* error_out),
+    void (AGENTXX_PLUGIN_CALL *done)(void* ud, void* result, const AgentxxPluginStringView* error),
     void* ud
 ) {
     if (!inst || !work) {
@@ -93,9 +93,9 @@ void PluginManager::offload(
 
     struct OffloadTask {
         std::shared_ptr<PluginInstance> instKeep;
-        volatile int*                   cancel_flag;
-        void* (*work)(void* ud, volatile int* cancel_flag, AgentxxPluginString* error_out);
-        void (*done)(void* ud, void* result, AgentxxPluginStringView error);
+        volatile int32_t*               cancel_flag;
+        void* (AGENTXX_PLUGIN_CALL *work)(void* ud, volatile int32_t* cancel_flag, AgentxxPluginString* error_out);
+        void (AGENTXX_PLUGIN_CALL *done)(void* ud, void* result, const AgentxxPluginStringView* error);
         void*                 ud;
         void*                 result = nullptr;
         AgentxxPluginString   error{nullptr, 0};
@@ -130,11 +130,12 @@ void PluginManager::offload(
                 auto* instPtr2 = task->instKeep.get();
                 if (task->done) {
                     try {
+                        auto errSv = task->error.data ? agentxx_plugin_string_to_sv(&task->error)
+                                                     : agentxx_plugin_sv(nullptr, 0);
                         task->done(
                             task->ud,
                             task->result,
-                            task->error.data ? agentxx_plugin_string_to_sv(task->error)
-                                             : agentxx_plugin_sv(nullptr, 0)
+                            &errSv
                         );
                     } catch (const std::exception& e) {
                         if (instPtr2) {
@@ -150,18 +151,16 @@ void PluginManager::offload(
                     }
                 }
                 if (task->error.data) {
-                    if (instPtr2) {
-                        agentxx_plugin_string_free(&instPtr2->host, &task->error);
-                    } else {
-                        ::free(task->error.data);
-                        task->error = {nullptr, 0};
-                    }
+                    agentxx_plugin_string_free(instPtr2 ? &instPtr2->host : nullptr, &task->error);
                 }
                 if (instPtr2) {
                     instPtr2->inflight.fetch_sub(1, std::memory_order_acq_rel);
                 }
             });
         } else {
+            if (task->error.data) {
+                agentxx_plugin_string_free(instPtr ? &instPtr->host : nullptr, &task->error);
+            }
             if (instPtr) {
                 instPtr->inflight.fetch_sub(1, std::memory_order_acq_rel);
             }

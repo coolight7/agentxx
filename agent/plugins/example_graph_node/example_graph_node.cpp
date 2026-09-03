@@ -52,7 +52,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_agent_g
         nullptr,
         [&]() -> const AgentxxPluginInfo* {
             static const AgentxxPluginInfo info{
-                AGENTXX_PLUGIN_API_VERSION,
+                AGENTXX_PLUGIN_API_VERSION, 0,
                 agentxx_plugin_sv_cstr("example_graph_node"),
                 agentxx_plugin_sv_cstr("1.0.0"),
                 agentxx_plugin_sv_cstr(
@@ -140,12 +140,12 @@ bool lastAssistantHasToolCalls(const neograph::json& messages) {
 /// - 后续轮次: 按 has_tool_calls 语义写 __route__ (tools/end), 保持原
 ///   agent loop 行为
 /// - config: {"intents": ["datetime", "normal"], "fallback": "normal"}
-void* intentRouterRunStart(
+void* AGENTXX_PLUGIN_CALL intentRouterRunStart(
     void*                              user_data,
-    AgentxxPluginStringView            node_name,
-    AgentxxPluginStringView            config_json,
-    AgentxxPluginStringView            state_json,
-    AgentxxPluginStringView            thread_id,
+    const AgentxxPluginStringView*     node_name,
+    const AgentxxPluginStringView*     config_json,
+    const AgentxxPluginStringView*     state_json,
+    const AgentxxPluginStringView*     thread_id,
     const AgentxxPluginOperatorNotify* notify,
     AgentxxPluginString*               error_out
 ) {
@@ -156,26 +156,27 @@ void* intentRouterRunStart(
 
     auto done = [&](const std::string& payload) {
         if (notify && notify->done) {
+            auto payloadSv = agentxx_plugin_sv(payload.data(), payload.size());
             notify->done(
                 notify->host_ud,
                 AGENTXX_PLUGIN_OPERATOR_OK,
-                agentxx_plugin_sv(payload.data(), payload.size())
+                &payloadSv
             );
         }
     };
 
     try {
         auto state = neograph::json::parse(
-            std::string_view(state_json.data ? state_json.data : "{}", state_json.size)
+            std::string_view(state_json && state_json->data ? state_json->data : "{}", state_json ? static_cast<size_t>(state_json->size) : 0)
         );
         auto messages = stateMessages(state);
 
         // 解析 config: intents 枚举 + fallback
         std::vector<std::string> intents;
         std::string              fallback = "normal";
-        if (config_json.data && config_json.size) {
+        if (config_json && config_json->data && config_json->size) {
             auto cfg = neograph::json::parse(
-                std::string_view(config_json.data, config_json.size)
+                std::string_view(config_json->data, static_cast<size_t>(config_json->size))
             );
             if (cfg.is_object()) {
                 if (cfg.contains("intents") && cfg["intents"].is_array()) {
@@ -258,19 +259,21 @@ void* intentRouterRunStart(
     } catch (const std::exception& e) {
         if (notify && notify->done) {
             std::string what = e.what();
+            auto errSv = agentxx_plugin_sv(what.data(), what.size());
             notify->done(
                 notify->host_ud,
                 AGENTXX_PLUGIN_OPERATOR_FAILED,
-                agentxx_plugin_sv(what.data(), what.size())
+                &errSv
             );
         }
         return nullptr;
     } catch (...) {
         if (notify && notify->done) {
+            auto errSv = agentxx_plugin_sv_cstr("unknown intent_router error");
             notify->done(
                 notify->host_ud,
                 AGENTXX_PLUGIN_OPERATOR_FAILED,
-                agentxx_plugin_sv_cstr("unknown intent_router error")
+                &errSv
             );
         }
         return nullptr;
@@ -281,12 +284,12 @@ void* intentRouterRunStart(
 /// - EventBridge 收到 messages CHANNEL_WRITE 后同步 viewMessages (assistant
 ///   角色消息) 与 llmMessages, 满足"添加到 viewMessages、llmMessages"
 /// - 图配置为执行后直接路由 __end__ 结束轮次
-void* datetimeNodeRunStart(
+void* AGENTXX_PLUGIN_CALL datetimeNodeRunStart(
     void*                              user_data,
-    AgentxxPluginStringView            node_name,
-    AgentxxPluginStringView            config_json,
-    AgentxxPluginStringView            state_json,
-    AgentxxPluginStringView            thread_id,
+    const AgentxxPluginStringView*     node_name,
+    const AgentxxPluginStringView*     config_json,
+    const AgentxxPluginStringView*     state_json,
+    const AgentxxPluginStringView*     thread_id,
     const AgentxxPluginOperatorNotify* notify,
     AgentxxPluginString*               error_out
 ) {
@@ -329,29 +332,32 @@ void* datetimeNodeRunStart(
             msgs.dump()
         );
         if (notify && notify->done) {
+            auto payloadSv = agentxx_plugin_sv(payload.data(), payload.size());
             notify->done(
                 notify->host_ud,
                 AGENTXX_PLUGIN_OPERATOR_OK,
-                agentxx_plugin_sv(payload.data(), payload.size())
+                &payloadSv
             );
         }
         return nullptr;
     } catch (const std::exception& e) {
         if (notify && notify->done) {
             std::string what = e.what();
+            auto errSv = agentxx_plugin_sv(what.data(), what.size());
             notify->done(
                 notify->host_ud,
                 AGENTXX_PLUGIN_OPERATOR_FAILED,
-                agentxx_plugin_sv(what.data(), what.size())
+                &errSv
             );
         }
         return nullptr;
     } catch (...) {
         if (notify && notify->done) {
+            auto errSv = agentxx_plugin_sv_cstr("unknown datetime_node error");
             notify->done(
                 notify->host_ud,
                 AGENTXX_PLUGIN_OPERATOR_FAILED,
-                agentxx_plugin_sv_cstr("unknown datetime_node error")
+                &errSv
             );
         }
         return nullptr;
@@ -376,12 +382,13 @@ static int modifyGraphToIntentFlow(AgentCtx& ctx, std::string& errOut) {
         errOut = "graph iface not available";
         return -1;
     }
-    AgentxxPluginString graphJson = ctx.iface.graph->get_graph_json(ctx.host);
+    AgentxxPluginString graphJson{nullptr, 0};
+    ctx.iface.graph->get_graph_json(ctx.host, &graphJson);
     if (!graphJson.data) {
         errOut = "get_graph_json returned null";
         return -1;
     }
-    std::string jsonStr(graphJson.data, graphJson.size);
+    std::string jsonStr(graphJson.data, static_cast<size_t>(graphJson.size));
     agentxx_plugin_string_free(ctx.host, &graphJson);
 
     neograph::json def;
@@ -461,8 +468,8 @@ static int modifyGraphToIntentFlow(AgentCtx& ctx, std::string& errOut) {
     graph["edges"] = std::move(edges);
 
     const std::string newJson = graph.dump();
-    if (ctx.iface.graph->set_graph_json(ctx.host, agentxx_plugin_sv(newJson.data(), newJson.size()))
-        != 0) {
+    auto newJsonSv = agentxx_plugin_sv(newJson.data(), newJson.size());
+    if (ctx.iface.graph->set_graph_json(ctx.host, &newJsonSv) != 0) {
         errOut = "set_graph_json failed";
         return -1;
     }

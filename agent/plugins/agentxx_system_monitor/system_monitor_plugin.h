@@ -19,11 +19,12 @@ namespace agentxx_system_monitor_plugin {
 inline void pluginLog(
     const AgentxxPluginHost*     host,
     const AgentxxPluginLogIface* logIf,
-    int                          level,
+    int32_t                      level,
     const std::string&           msg
 ) {
     if (host && logIf && logIf->log) {
-        logIf->log(host, level, agentxx_plugin_sv(msg.data(), msg.size()));
+        auto sv = agentxx_plugin_sv(msg.data(), msg.size());
+        logIf->log(host, level, &sv);
     }
 }
 
@@ -40,7 +41,8 @@ inline char* pluginStrdup(const AgentxxPluginHost* host, const char* s) {
     if (!host || !s) {
         return nullptr;
     }
-    return host->vtable->strdup(agentxx_plugin_sv_cstr(s));
+    auto sv = agentxx_plugin_sv_cstr(s);
+    return agentxx_plugin_strdup(host, &sv);
 }
 
 class SimpleJson {

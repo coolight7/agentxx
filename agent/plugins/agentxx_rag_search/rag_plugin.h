@@ -25,7 +25,8 @@ inline char* pluginStrdup(const AgentxxPluginHost* host, const char* s) {
     if (!host || !s) {
         return nullptr;
     }
-    return host->vtable->strdup(agentxx_plugin_sv_cstr(s));
+    auto sv = agentxx_plugin_sv_cstr(s);
+    return agentxx_plugin_strdup(host, &sv);
 }
 
 inline auto ctxGuardLogger(PluginCtx* ctx) noexcept {

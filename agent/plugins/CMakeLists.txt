@@ -225,9 +225,9 @@ set(AGENTXX_BUILTIN_PLUGIN_MANIFEST_YAML_ARRAY "")
 foreach(_bp IN LISTS AGENTXX_BUILTIN_PLUGIN_NAMES)
   set(AGENTXX_BUILTIN_PLUGIN_MANIFEST_DECLS
     "${AGENTXX_BUILTIN_PLUGIN_MANIFEST_DECLS}
-extern \"C\" const AgentxxPluginInfo* agentxx_plugin_agent_builtin_get_info_${_bp}(void);
-extern \"C\" int agentxx_plugin_agent_builtin_create_${_bp}(const AgentxxPluginHost* host, void** plugin_ctx);
-extern \"C\" void agentxx_plugin_agent_builtin_destroy_${_bp}(void* plugin_ctx);")
+extern \"C\" const AgentxxPluginInfo* AGENTXX_PLUGIN_CALL agentxx_plugin_agent_builtin_get_info_${_bp}(void);
+extern \"C\" int32_t AGENTXX_PLUGIN_CALL agentxx_plugin_agent_builtin_create_${_bp}(const AgentxxPluginHost* host, void** plugin_ctx);
+extern \"C\" void AGENTXX_PLUGIN_CALL agentxx_plugin_agent_builtin_destroy_${_bp}(void* plugin_ctx);")
   set(AGENTXX_BUILTIN_PLUGIN_MANIFEST_ENTRIES
     "${AGENTXX_BUILTIN_PLUGIN_MANIFEST_ENTRIES}
     { { \"${_bp}\", sizeof(\"${_bp}\") - 1 }, agentxx_plugin_agent_builtin_get_info_${_bp}, agentxx_plugin_agent_builtin_create_${_bp}, agentxx_plugin_agent_builtin_destroy_${_bp} },")

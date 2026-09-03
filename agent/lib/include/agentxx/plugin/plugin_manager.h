@@ -41,7 +41,7 @@ struct OpCore;
 struct PluginSleepTimer {
     std::weak_ptr<PluginInstance>       inst;
     std::shared_ptr<asio::steady_timer> timer;
-    void (*cb)(void* ud) = nullptr;
+    void (AGENTXX_PLUGIN_CALL *cb)(void* ud) = nullptr;
     void*             ud = nullptr;
     std::atomic<bool> triggered{false};
 };
@@ -58,10 +58,10 @@ struct AgentxxPluginOperatorHandle {
 struct AgentxxPluginSubscription {
     std::shared_ptr<agentxx::event::EventBus> bus;
     std::string                               topic;
-    size_t                                    subscriptionId      = 0;
-    agentxx::plugin::PluginInstance*          inst                = nullptr;
-    void (*handler)(AgentxxPluginStringView event_json, void* ud) = nullptr;
-    void* ud                                                      = nullptr;
+    size_t                                    subscriptionId                                                  = 0;
+    agentxx::plugin::PluginInstance*          inst                                                            = nullptr;
+    void (AGENTXX_PLUGIN_CALL *handler)(const AgentxxPluginStringView* event_json, void* ud)                  = nullptr;
+    void* ud                                                                                                  = nullptr;
 };
 
 namespace agentxx {
@@ -83,9 +83,9 @@ public:
     AgentxxPluginHost host{};
 
     struct HookRegistration {
-        AgentxxPluginHookPoint point;
-        void* (*start)(void*, AgentxxPluginHookPoint, AgentxxPluginStringView, const AgentxxPluginOperatorNotify*, AgentxxPluginString*);
-        void (*cancel)(void*, void*);
+        int32_t point;
+        void* (AGENTXX_PLUGIN_CALL *start)(void*, int32_t, const AgentxxPluginStringView*, const AgentxxPluginOperatorNotify*, AgentxxPluginString*);
+        void (AGENTXX_PLUGIN_CALL *cancel)(void*, void*);
         void* ud;
     };
 
@@ -222,9 +222,9 @@ public:
 private:
 
     struct HookEntry {
-        void* (*start)(void*, AgentxxPluginHookPoint, AgentxxPluginStringView, const AgentxxPluginOperatorNotify*, AgentxxPluginString*)
+        void* (AGENTXX_PLUGIN_CALL *start)(void*, int32_t, const AgentxxPluginStringView*, const AgentxxPluginOperatorNotify*, AgentxxPluginString*)
             = nullptr;
-        void (*cancel)(void*, void*) = nullptr;
+        void (AGENTXX_PLUGIN_CALL *cancel)(void*, void*) = nullptr;
         void* ud                     = nullptr;
         bool  set                    = false;
     };
@@ -366,13 +366,13 @@ public:
     AgentxxPluginSubscription* subscribe(
         PluginInstance* inst,
         AgentxxPluginStringView topic,
-        void (*handler)(AgentxxPluginStringView event_json, void* ud),
+        void (AGENTXX_PLUGIN_CALL *handler)(const AgentxxPluginStringView* event_json, void* ud),
         void* ud
     );
     AgentxxPluginSubscription* subscribe(
         PluginInstance* inst,
         std::string_view topic,
-        void (*handler)(AgentxxPluginStringView event_json, void* ud),
+        void (AGENTXX_PLUGIN_CALL *handler)(const AgentxxPluginStringView* event_json, void* ud),
         void* ud
     ) {
         return subscribe(inst, strToSv(topic), handler, ud);
@@ -382,26 +382,26 @@ public:
     int       publish(std::string_view topic, std::string_view event_json) {
         return publish(strToSv(topic), strToSv(event_json));
     }
-    AgentxxPluginString getShareStore(PluginInstance* inst, AgentxxPluginStringView session_id, long long id);
-    AgentxxPluginString getShareStore(PluginInstance* inst, std::string_view session_id, long long id) {
+    AgentxxPluginString getShareStore(PluginInstance* inst, AgentxxPluginStringView session_id, int64_t id);
+    AgentxxPluginString getShareStore(PluginInstance* inst, std::string_view session_id, int64_t id) {
         return getShareStore(inst, strToSv(session_id), id);
     }
-    long long addShareStore(PluginInstance* inst, AgentxxPluginStringView session_id, AgentxxPluginStringView content);
-    long long addShareStore(PluginInstance* inst, std::string_view session_id, std::string_view content) {
+    int64_t   addShareStore(PluginInstance* inst, AgentxxPluginStringView session_id, AgentxxPluginStringView content);
+    int64_t   addShareStore(PluginInstance* inst, std::string_view session_id, std::string_view content) {
         return addShareStore(inst, strToSv(session_id), strToSv(content));
     }
-    void emitMessageTip(PluginInstance* inst, AgentxxPluginStringView session_id, AgentxxPluginStringView text, int level);
-    void emitMessageTip(PluginInstance* inst, std::string_view session_id, std::string_view text, int level) {
+    void emitMessageTip(PluginInstance* inst, AgentxxPluginStringView session_id, AgentxxPluginStringView text, int32_t level);
+    void emitMessageTip(PluginInstance* inst, std::string_view session_id, std::string_view text, int32_t level) {
         emitMessageTip(inst, strToSv(session_id), strToSv(text), level);
     }
 
-    void* sleep(PluginInstance* inst, long ms, void (*cb)(void* ud), void* ud);
+    void* sleep(PluginInstance* inst, int64_t ms, void (AGENTXX_PLUGIN_CALL *cb)(void* ud), void* ud);
     void  cancelSleep(PluginInstance* inst, void* timer);
     void  offload(
          PluginInstance* inst,
-         volatile int*   cancel_flag,
-         void* (*work)(void* ud, volatile int* cancel_flag, AgentxxPluginString* error_out),
-         void (*done)(void* ud, void* result, AgentxxPluginStringView error),
+         volatile int32_t* cancel_flag,
+         void* (AGENTXX_PLUGIN_CALL *work)(void* ud, volatile int32_t* cancel_flag, AgentxxPluginString* error_out),
+         void (AGENTXX_PLUGIN_CALL *done)(void* ud, void* result, const AgentxxPluginStringView* error),
          void* ud
      );
 

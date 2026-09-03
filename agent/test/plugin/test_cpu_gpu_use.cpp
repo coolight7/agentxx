@@ -149,11 +149,11 @@ asio::awaitable<TestResult>
             "agentxx.system_usage",
             "query",
             "{}",
-            [](void* ud, int st, AgentxxPluginStringView pl) {
+            [](void* ud, int32_t st, const AgentxxPluginStringView* pl) {
                 auto* s          = static_cast<StateTuple*>(ud);
                 *std::get<0>(*s) = st;
-                if (pl.data && pl.size > 0) {
-                    std::get<1>(*s)->assign(pl.data, pl.size);
+                if (pl && pl->data && pl->size > 0) {
+                    std::get<1>(*s)->assign(pl->data, pl->size);
                 }
                 *std::get<2>(*s) = true;
             },

@@ -25,7 +25,7 @@ static const AgentxxPluginBuiltinInfo kAgentxxBuiltinPlugins[] = {
 };
 #endif
 
-const AgentxxPluginBuiltinInfo* agentxx_plugin_get_builtin_plugins(size_t* count) {
+const AgentxxPluginBuiltinInfo* agentxx_plugin_get_builtin_plugins(uint64_t* count) {
     if (count) {
         *count = sizeof(kAgentxxBuiltinPlugins) / sizeof(kAgentxxBuiltinPlugins[0]);
     }
@@ -33,7 +33,7 @@ const AgentxxPluginBuiltinInfo* agentxx_plugin_get_builtin_plugins(size_t* count
 }
 
 /* ── 内嵌 plugin.yaml 原文 (与上表一一对应) ── */
-const AgentxxPluginBuiltinManifest* agentxx_plugin_get_builtin_manifests(size_t* count) {
+const AgentxxPluginBuiltinManifest* agentxx_plugin_get_builtin_manifests(uint64_t* count) {
 #if @AGENTXX_BUILTIN_PLUGIN_COUNT@ > 0
     static const AgentxxPluginBuiltinManifest kManifests[] = {
 @AGENTXX_BUILTIN_PLUGIN_MANIFEST_YAML_ARRAY@

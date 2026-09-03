@@ -1,80 +1,35 @@
 ///
-/// agentxx/plugin/api/plugin_api.h —— 插件系统纯 C ABI 契约 (agent 侧; 唯一跨版本稳定接口)
+/// agentxx/plugin/api/plugin_api.h —— 插件系统纯 C ABI 契约 (agent 侧; 跨语言跨编译器稳定接口)
 ///
 /// ════════════════════════════════════════════════════════════════════
-/// 架构: COM 风格接口表查询
+/// 架构: COM 风格接口表查询 (API v1 重构版)
 /// ════════════════════════════════════════════════════════════════════
-/// - 核心 vtable [冻结]: 仅 内存三件套 (alloc/free/strdup) +
-///   query_interface —— 一切宿主能力都按稳定 IID 字符串查询独立接口表获取
-///   (COM QueryInterface 风格), 核心永不再增删成员
-/// - 每个接口表为纯 C 结构体, 首字段恒为 int version (该接口自身版本,
-///   独立演进, 与全局 api_version 解耦); 表内函数指针可能为 NULL
-///   (宿主未实现该子能力), 调用前必须判空; 查询未知名称返回 NULL (安全失败)
-/// - 版本策略 (双层):
-///   1) 全局 AGENTXX_PLUGIN_API_VERSION 只覆盖核心契约 (核心 vtable 形状 +
-///      Info 结构 + 入口符号 + 本头共享类型); 宿主精确匹配门禁: api_version
-///      不匹配直接拒绝加载
-///   2) 接口表各自携带 version 独立演进: 新增能力 = 定义新接口表或表内
-///      追加成员并递增该表版本, 全局版本号不动、其他插件不受影响
-///
-/// 设计要点:
-/// - 纯 C 头: 插件可用任意编译器/任意语言 (C/C++/Rust...) 实现, 与宿主
-///   STL/异常/RTTI ABI 完全解耦; 插件编译无需链接 libagentxx
-/// - 跨 CRT 堆边界: 所有"宿主分配"的跨边界内存统一由宿主 alloc/free 管理
-///   (核心 vtable); 而"字符串参数/字段/回调载荷"一律以 AgentxxPluginStringView (data + size)
-///   传入, 是只读借用 (不要求 NUL 结尾, 不要求宿主分配)
-///
-/// ════════════════════════════════════════════════════════════════════
-/// 统一异步操作模型 (两件套 start/cancel + 锚定协程)
-/// ════════════════════════════════════════════════════════════════════
-/// - 工具执行 / 中间件钩子 / 能力方法 等"可能耗时的被调方操作"一律为
-///   两件套 start/cancel —— 宿主在 io 线程启动操作, 终结由 AgentxxPluginOperatorNotify.done
-///   恰好一次上报; 配合 SDK (plugin_kit.h) 的 Task 协程, 挂起与恢复均经
-///   宿主在 io 线程派发的回调完成, 协程段物理执行于宿主 io 线程, 原生交错
-/// - 被调方不需要任何复杂事件循环:
-///   * 内联完成型 (快同步, <~1ms): 在 start 内直接算完并 done(OK) 上报, 返回 NULL;
-///   * 锚定协程型 (推荐): 创建 Task 帧并 resume 到首挂起点, 返回 job 句柄;
-///   * 阻塞委托型: 经 scheduler.offload 委托宿主阻塞池;
-///   * 自管线程型: 登记工作到专用线程, 完成时任意线程调用 notify.done
-/// - 反向调用 (插件调用宿主工具 call_tool_async / 其他插件能力 invoke_capability_async)
-///   提供完成回调形接口与 AgentxxPluginOperatorHandle 句柄 (仅用于 cancel, 宿主托管生命周期)
-///
-/// - 每插件一个 AgentxxPluginHost (opaque 指向宿主侧插件实例): 注册/订阅自动关联
-///   到调用它的插件, 插件卸载时宿主自动清理其全部注册残留
-/// - 接口表是进程级静态只读数据: entry 时查询一次缓存指针即可长期使用;
-///   同一进程内任意 host 句柄查到的同一 IID 表指针相同
-/// - 线程约定:
-///   - query_interface 与 alloc/free/strdup 任意线程可调用;
-///   - 注册类 (tools/hooks/events/capabilities/resources) 与 session/plugins/
-///     config/prompt/scheduler 的 io 线程约束操作在非 io 线程调用时由宿主
-///     内部投递同步等待 (插件无感); 各接口表函数注释标注线程属性
-///   - 异步两件套 start/cancel 由宿主在【io 线程】驱动 (非阻塞快速
-///     返回约定: 单次调用不得超过 ~1ms);
-///   - AgentxxPluginOperatorNotify.done 可从被调方任意线程回调 (线程安全)
-///   - 宿主派发给插件的完成回调 (AgentxxPluginOperatorCallback / sleep cb / offload done)
-///     保证在【宿主 io 线程】派发, 且一律经 asio::post 入队, 禁止同步重入
-/// - 回调快速返回约定: 事件订阅回调在 io 线程同步调用, 必须快速返回
-/// - 异常不外泄: 宿主接口表所有函数内部捕获全部异常 (C ABI 边界无异常);
-///   插件侧 start/cancel/event 回调同样不得让异常逃逸
-/// - 字符串约定:
-///   - 所有跨边界"只读字符串参数/字段/回调载荷"类型为 AgentxxPluginStringView (data+size,
-///     不要求 NUL 结尾, 生命周期仅覆盖本次调用); 便捷构造见
-///     agentxx_plugin_sv / agentxx_plugin_sv_cstr
-///   - 所有跨边界"由宿主分配且所有权转移给调用方"的字符串返回值及错误出参
-///     统一采用 AgentxxPluginString (data+size, NUL 结尾, host->alloc 分配),
-///     调用方用完后调用 agentxx_plugin_string_free 释放
+/// - 明确字节对齐: 全部跨边界 ABI 结构体严格遵循 8 字节对齐 (#pragma pack(push, 8))
+/// - 明确基本类型: 统一使用定长基本类型 (int32_t, int64_t, uint64_t)，杜绝 int/long
+///   跨平台字节宽度差异 (LLP64 vs LP64)
+/// - 明确函数调用约定: 接口表函数指针、入口符号与回调全部显式标注 AGENTXX_PLUGIN_CALL (__stdcall)
+/// - 结构体传递与返回值规范:
+///   * 结构体入参统一采用指针传递 (const Struct*)，杜绝结构体按值传参
+///   * 结构体返回值统一改为函数出参 (Struct* out) 并返回 int32_t 状态码 (0=成功)
+/// - 核心 vtable 极简与最小正交基:
+///   * 跨堆内存两件套: alloc(uint64_t) / free(void*)
+///   * COM 风格能力查询: query_interface (strdup 移出 vtable 改由内联函数基于 alloc 实现)
+/// - 版本策略:
+///   * 全局 AGENTXX_PLUGIN_API_VERSION 严格匹配门禁 (当前为 1)
+///   * 接口表首字段为 int32_t version (全部重置为 1)
 ///
 #ifndef AGENTXX_PLUGIN_API_H
 #define AGENTXX_PLUGIN_API_H
 
 #include <stddef.h>
+#include <stdint.h>
 #include <string.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-/* ==================== 插件导出符号控制 ==================== */
+/* ==================== 插件导出符号控制与调用约定 ==================== */
 
 #if defined(AGENTXX_PLUGIN_BUILTIN)
 #define AGENTXX_PLUGIN_EXPORT
@@ -86,34 +41,50 @@ extern "C" {
 #define AGENTXX_PLUGIN_EXPORT
 #endif
 
-/// 全局 API 版本
+#if defined(_WIN32)
+#define AGENTXX_PLUGIN_CALL __stdcall
+#elif defined(__GNUC__) || defined(__clang__)
+#if defined(__i386__)
+#define AGENTXX_PLUGIN_CALL __attribute__((stdcall))
+#else
+#define AGENTXX_PLUGIN_CALL
+#endif
+#else
+#define AGENTXX_PLUGIN_CALL
+#endif
+
+/// 全局 API 版本 (agent 侧)
 #define AGENTXX_PLUGIN_API_VERSION 1
+
+#pragma pack(push, 8)
 
 /* ==================== 字符串视图 (跨边界只读参数统一形态) ==================== */
 
 /// 只读字符串视图: 指向调用方内存 (UTF-8), 不要求 NUL 结尾
+/// - C ABI: data(8) + size(8) 纯 POD, 恒按指针/出参传递 (不按值跨边界)
+/// - C++ 便捷: 提供值→指针转换成员与 empty() 查询 (布局不变, 便于值语义调用)
 typedef struct AgentxxPluginStringView {
     const char* data; ///< 指向 UTF-8 字节序列 (可含任意字节, 不必 NUL 结尾)
-    size_t      size; ///< 字节数
+    uint64_t    size; ///< 字节数 (明确定长 64 位)
+
+#ifdef __cplusplus
+    AgentxxPluginStringView() :
+        data(nullptr),
+        size(0) {}
+
+    AgentxxPluginStringView(const char* d, uint64_t n) :
+        data(d),
+        size(n) {}
+
+    operator const AgentxxPluginStringView*() const {
+        return this;
+    }
+
+    bool empty() const {
+        return data == nullptr || size == 0;
+    }
+#endif
 } AgentxxPluginStringView;
-
-static inline AgentxxPluginStringView agentxx_plugin_sv(const char* data, size_t size) {
-    AgentxxPluginStringView sv;
-    sv.data = data;
-    sv.size = size;
-    return sv;
-}
-
-static inline AgentxxPluginStringView agentxx_plugin_sv_cstr(const char* s) {
-    AgentxxPluginStringView sv;
-    sv.data = s;
-    sv.size = s ? strlen(s) : 0;
-    return sv;
-}
-
-static inline int agentxx_plugin_sv_empty(AgentxxPluginStringView sv) {
-    return sv.data == NULL || sv.size == 0;
-}
 
 typedef struct AgentxxPluginHost AgentxxPluginHost;
 
@@ -121,32 +92,29 @@ typedef struct AgentxxPluginHost AgentxxPluginHost;
 
 /// 跨 CRT 堆分配的 UTF-8 字符串 (显式所有权: 由宿主分配, 调用方接管并负责释放)
 typedef struct AgentxxPluginString {
-    char*  data; ///< 指向宿主堆分配的 UTF-8 字节序列 (以 \0 结尾, 便于兼容 C 库; 空串或 NULL 时可为 NULL)
-    size_t size; ///< 字节数 (不含结尾 \0; O(1) 访问)
+    char* data; ///< 指向宿主堆分配的 UTF-8 字节序列 (以 \0 结尾; 空串或 NULL 时可为 NULL)
+    uint64_t size; ///< 字节数 (不含结尾 \0; O(1) 访问)
+
+#ifdef __cplusplus
+    AgentxxPluginString() :
+        data(nullptr),
+        size(0) {}
+
+    AgentxxPluginString(char* d, uint64_t n) :
+        data(d),
+        size(n) {}
+
+    operator const AgentxxPluginString*() const {
+        return this;
+    }
+#endif
 } AgentxxPluginString;
-
-static inline AgentxxPluginString agentxx_plugin_str_empty(void) {
-    AgentxxPluginString s;
-    s.data = NULL;
-    s.size = 0;
-    return s;
-}
-
-static inline int agentxx_plugin_string_empty(AgentxxPluginString str) {
-    return str.data == NULL || str.size == 0;
-}
-
-static inline AgentxxPluginStringView agentxx_plugin_string_to_sv(AgentxxPluginString str) {
-    AgentxxPluginStringView sv;
-    sv.data = str.data;
-    sv.size = str.size;
-    return sv;
-}
 
 /// ==================== 插件元信息 ====================
 
 typedef struct AgentxxPluginInfo {
-    int                     api_version; ///< 必须 == AGENTXX_PLUGIN_API_VERSION
+    int32_t                 api_version; ///< 必须 == AGENTXX_PLUGIN_API_VERSION
+    uint32_t                _reserved;   ///< 8 字节补齐
     AgentxxPluginStringView name;        ///< 唯一标识 (只读借用)
     AgentxxPluginStringView version;
     AgentxxPluginStringView description;
@@ -160,28 +128,27 @@ typedef struct AgentxxPluginInfo {
 #define AGENTXX_PLUGIN_OPERATOR_FAILED    2 ///< 失败 (payload = 错误信息)
 
 /// 完成通知器 (宿主实现并随 start 下发; 操作终结时被调方须【恰好回调一次】)
-/// - payload: 只读借用字符串视图 (可为 NULL/空)
+/// - payload: 只读借用字符串视图指针 (可为 NULL/空)
 /// - 线程安全: 可从被调方的任意线程回调, 宿主内部投递回 io 线程唤醒等待协程
 typedef struct AgentxxPluginOperatorNotify {
-    void (*done)(void* host_ud, int status, AgentxxPluginStringView payload);
+    void(AGENTXX_PLUGIN_CALL*
+             done)(void* host_ud, int32_t status, const AgentxxPluginStringView* payload);
     void* host_ud;
 } AgentxxPluginOperatorNotify;
 
 /// 完成回调 (统一形态; 宿主保证在宿主 io 线程派发)
-/// payload 只读借用, 生命周期仅覆盖本次回调
-typedef void (*AgentxxPluginOperatorCallback)(
-    void*                   ud,
-    int                     status,
-    AgentxxPluginStringView payload
+/// payload 只读借用指针, 生命周期仅覆盖本次回调
+typedef void(AGENTXX_PLUGIN_CALL* AgentxxPluginOperatorCallback)(
+    void*                          ud,
+    int32_t                        status,
+    const AgentxxPluginStringView* payload
 );
 
 /// 异步调用句柄 (仅用于取消; 不可轮询/收尸; 宿主托管生命周期)
 typedef struct AgentxxPluginOperatorHandle AgentxxPluginOperatorHandle;
 
 /// 协作式取消请求函数 (【宿主 io 线程调用】, 非阻塞):
-/// - 被调方应尽快收尾并经 notifier 上报 CANCELLED; 也允许继续完成并上报 OK/FAILED
-/// - 不可取消的操作可留 NULL
-typedef void (*AgentxxPluginOperatorCancelFunction)(void* user_data, void* op);
+typedef void(AGENTXX_PLUGIN_CALL* AgentxxPluginOperatorCancelFunction)(void* user_data, void* op);
 
 /* ==================== 工具定义 ==================== */
 
@@ -194,29 +161,29 @@ typedef struct AgentxxPluginToolSpec {
     AgentxxPluginStringView parameters_json; ///< JSON Schema 字符串 (json object)
 
     /// 启动执行 (【宿主 io 线程调用】, 非阻塞; 两件套契约):
-    /// - args_json/session_id/tool_call_id: 只读借用, 仅本次调用有效
-    /// - 快同步工具: 算完 → notify->done(AGENTXX_PLUGIN_OPERATOR_OK, 结果 json) → 返回 NULL
+    /// - 入参均为指针传递 (只读借用, 仅本次调用有效)
+    /// - 快同步工具: 算完 → notify->done(AGENTXX_PLUGIN_OPERATOR_OK, &res_sv) → 返回 NULL
     /// - 锚定协程/自管异步: 创建/挂起任务 → 返回 op 句柄
     /// - 失败: 返回 NULL 且 *error_out 输出错误 (跨边界堆分配字符串, host->alloc 分配)
-    void* (*execute_start)(
+    void*(AGENTXX_PLUGIN_CALL* execute_start)(
         void*                              user_data,
-        AgentxxPluginStringView            args_json,
-        AgentxxPluginStringView            session_id,
-        AgentxxPluginStringView            tool_call_id,
+        const AgentxxPluginStringView*     args_json,
+        const AgentxxPluginStringView*     session_id,
+        const AgentxxPluginStringView*     tool_call_id,
         const AgentxxPluginOperatorNotify* notify,
         AgentxxPluginString*               error_out
     );
     /// 协作式取消请求 (io 线程, 非阻塞; 不可取消可留 NULL)
-    void (*execute_cancel)(void* user_data, void* op);
+    void(AGENTXX_PLUGIN_CALL* execute_cancel)(void* user_data, void* op);
 
-    void* user_data;
-    long  default_timeout_ms; ///< 0 = 不限制 (宿主按调用方取消语义执行)
-    int   flags;              ///< AGENTXX_TOOL_FLAG_*
+    void*    user_data;
+    int64_t  default_timeout_ms; ///< 0 = 不限制 (定长 64 位整型)
+    int32_t  flags;              ///< AGENTXX_PLUGIN_TOOL_FLAG_*
+    uint32_t _reserved;          ///< 8 字节补齐
 } AgentxxPluginToolSpec;
 
 /* ==================== 中间件钩子 ==================== */
 
-/// 钩子点 (与宿主 7 个中间件钩子一一对应)
 typedef enum AgentxxPluginHookPoint {
     AGENTXX_PLUGIN_HOOK_AGENT_START = 0, ///< 会话轮次开始
     AGENTXX_PLUGIN_HOOK_AGENT_END,       ///< 会话轮次结束
@@ -230,15 +197,16 @@ typedef enum AgentxxPluginHookPoint {
 
 /// 钩子规格: 两件套形态
 typedef struct AgentxxPluginHookSpec {
-    AgentxxPluginHookPoint point;
-    void* (*hook_start)(
+    int32_t  point;     ///< AgentxxPluginHookPoint (明确 32 位整型)
+    uint32_t _reserved; ///< 8 字节补齐
+    void*(AGENTXX_PLUGIN_CALL* hook_start)(
         void*                              user_data,
-        AgentxxPluginHookPoint             point,
-        AgentxxPluginStringView            node_input_json,
+        int32_t                            point,
+        const AgentxxPluginStringView*     node_input_json,
         const AgentxxPluginOperatorNotify* notify,
         AgentxxPluginString*               error_out
     );
-    void (*hook_cancel)(void* user_data, void* op); ///< 可为 NULL
+    void(AGENTXX_PLUGIN_CALL* hook_cancel)(void* user_data, void* op); ///< 可为 NULL
     void* user_data;
 } AgentxxPluginHookSpec;
 
@@ -247,29 +215,28 @@ typedef struct AgentxxPluginHookSpec {
 typedef struct AgentxxPluginSubscription AgentxxPluginSubscription;
 
 /// 能力方法处理器启动函数 (两件套契约):
-typedef void* (*AgentxxPluginCapabilityStartFunction)(
+typedef void*(AGENTXX_PLUGIN_CALL* AgentxxPluginCapabilityStartFunction)(
     void*                              ctx,
     const AgentxxPluginHost*           caller_host,
-    AgentxxPluginStringView            method,
-    AgentxxPluginStringView            args_json,
+    const AgentxxPluginStringView*     method,
+    const AgentxxPluginStringView*     args_json,
     const AgentxxPluginOperatorNotify* notify,
     AgentxxPluginString*               error_out
 );
 
 /* ==================== 核心宿主函数表 ==================== */
 
-/// 核心 vtable: 仅内存三件套 + COM 风格接口表查询
-/// - 不建议更改该结构体，应当冻结
-/// - 后续若实在需要破坏性更改，可通过声明不同版本的 [AgentxxHostVtable]，然后运行时框架根据插件版本
-/// 自动兼容创建不同版本的 [AgentxxHostVtable] 适配
+/// 核心 vtable: 极简正交基 (内存两件套 + COM 风格接口表查询)
 typedef struct AgentxxHostVtable {
     /* ---- 内存 (跨 CRT 堆边界的唯一分配通道; 任意线程可调用) ---- */
-    void* (*alloc)(size_t size);
-    void (*free)(void* ptr);
-    char* (*strdup)(AgentxxPluginStringView s);
+    void*(AGENTXX_PLUGIN_CALL* alloc)(uint64_t size);
+    void(AGENTXX_PLUGIN_CALL* free)(void* ptr);
 
     /* ---- COM 风格接口表查询 (QueryInterface; 任意线程可调用) ---- */
-    const void* (*query_interface)(const AgentxxPluginHost* host, AgentxxPluginStringView iid);
+    const void*(AGENTXX_PLUGIN_CALL* query_interface)(
+        const AgentxxPluginHost*       host,
+        const AgentxxPluginStringView* iid
+    );
 } AgentxxHostVtable;
 
 struct AgentxxPluginHost {
@@ -277,78 +244,39 @@ struct AgentxxPluginHost {
     void* opaque; ///< 宿主内部 (指向插件实例状态, 插件不得使用)
 };
 
-/// 释放 AgentxxPluginString 底层堆内存并清空结构体
-static inline void agentxx_plugin_string_free(const AgentxxPluginHost* host, AgentxxPluginString* str) {
-    if (str && str->data) {
-        if (host && host->vtable && host->vtable->free) {
-            host->vtable->free(str->data);
-        }
-        str->data = NULL;
-        str->size = 0;
-    }
-}
-
-/// 经宿主分配器从 StringView 构造一个拥有独立堆内存的 AgentxxPluginString
-static inline AgentxxPluginString agentxx_plugin_string_from_sv(const AgentxxPluginHost* host, AgentxxPluginStringView sv) {
-    AgentxxPluginString res;
-    res.data = NULL;
-    res.size = 0;
-    if (!host || !host->vtable || !host->vtable->alloc) {
-        return res;
-    }
-    if (sv.data == NULL && sv.size == 0) {
-        return res;
-    }
-    char* p = (char*)host->vtable->alloc(sv.size + 1);
-    if (p) {
-        if (sv.size > 0 && sv.data) {
-            memcpy(p, sv.data, sv.size);
-        }
-        p[sv.size] = '\0';
-        res.data   = p;
-        res.size   = sv.size;
-    }
-    return res;
-}
-
-/// 经宿主分配器从 C 字符串构造 AgentxxPluginString
-static inline AgentxxPluginString agentxx_plugin_string_from_cstr(const AgentxxPluginHost* host, const char* s) {
-    return agentxx_plugin_string_from_sv(host, agentxx_plugin_sv_cstr(s));
-}
-
-#define AGENTXX_PLUGIN_QUERY_IFACE(host, IfaceType, iid_name) \
-    ((const IfaceType*)(host)->vtable->query_interface((host), agentxx_plugin_sv_cstr(iid_name)))
-
 /* ==================== 接口表: 工具 (agentxx.agent.tools) ==================== */
 
 #define AGENTXX_PLUGIN_IFACE_AGENT_TOOLS         "agentxx.agent.tools"
 #define AGENTXX_PLUGIN_IFACE_AGENT_TOOLS_VERSION 1
 
 typedef struct AgentxxPluginToolsIface {
-    int version; ///< 必须 == AGENTXX_PLUGIN_IFACE_AGENT_TOOLS_VERSION
+    int32_t  version; ///< 必须 == AGENTXX_PLUGIN_IFACE_AGENT_TOOLS_VERSION
+    uint32_t _reserved;
 
     /// 注册工具 (io 线程约束, 非 io 线程由宿主投递同步等待)
-    /// `return`: 名称冲突返回非 0
-    int (*register_tool)(const AgentxxPluginHost* host, const AgentxxPluginToolSpec* spec);
-    /// 注销工具 (按名称)
-    /// `return`: 不存在返回非 0
-    int (*unregister_tool)(const AgentxxPluginHost* host, AgentxxPluginStringView name);
-
-    /* ---- 插件互调: 完成回调形 (推荐) ---- */
-    /// 异步调用插件工具 (宿主保证 cb 在宿主 io 线程派发, 一律 post 入队):
-    /// - 返回的 AgentxxPluginOperatorHandle 仅用于 op_cancel; 宿主自动管理句柄生命周期
-    /// - 查表/装配失败返回 NULL 并 error_out
-    AgentxxPluginOperatorHandle* (*call_tool_async)(
-        const AgentxxPluginHost*      host,
-        AgentxxPluginStringView       name,
-        AgentxxPluginStringView       args_json,
-        AgentxxPluginStringView       session_id,
-        AgentxxPluginOperatorCallback cb,
-        void*                         ud,
-        AgentxxPluginString*          error_out
+    /// `return`: 0 成功, 非 0 冲突或失败
+    int32_t(AGENTXX_PLUGIN_CALL* register_tool)(
+        const AgentxxPluginHost*     host,
+        const AgentxxPluginToolSpec* spec
     );
-    /// 取消异步操作 (幂等, 任意线程可调; 完成/退休后调用无害)
-    void (*op_cancel)(AgentxxPluginOperatorHandle* op);
+    /// 注销工具 (按名称)
+    /// `return`: 0 成功, 非 0 不存在
+    int32_t(AGENTXX_PLUGIN_CALL* unregister_tool)(
+        const AgentxxPluginHost*       host,
+        const AgentxxPluginStringView* name
+    );
+
+    /* ---- 插件互调: 完成回调形 ---- */
+    AgentxxPluginOperatorHandle*(AGENTXX_PLUGIN_CALL* call_tool_async)(
+        const AgentxxPluginHost*       host,
+        const AgentxxPluginStringView* name,
+        const AgentxxPluginStringView* args_json,
+        const AgentxxPluginStringView* session_id,
+        AgentxxPluginOperatorCallback  cb,
+        void*                          ud,
+        AgentxxPluginString*           error_out
+    );
+    void(AGENTXX_PLUGIN_CALL* op_cancel)(AgentxxPluginOperatorHandle* op);
 } AgentxxPluginToolsIface;
 
 /* ==================== 接口表: 中间件钩子 (agentxx.agent.hooks) ==================== */
@@ -357,12 +285,14 @@ typedef struct AgentxxPluginToolsIface {
 #define AGENTXX_PLUGIN_IFACE_AGENT_HOOKS_VERSION 1
 
 typedef struct AgentxxPluginHooksIface {
-    int version; ///< 必须 == AGENTXX_PLUGIN_IFACE_AGENT_HOOKS_VERSION
+    int32_t  version; ///< 必须 == AGENTXX_PLUGIN_IFACE_AGENT_HOOKS_VERSION
+    uint32_t _reserved;
 
-    /// 注册钩子 (两件套规格; 热插拔, 轮次边界生效; io 线程约束)
-    int (*register_hook)(const AgentxxPluginHost* host, const AgentxxPluginHookSpec* spec);
-    /// 注销钩子 (按 point 匹配); 不存在返回非 0
-    int (*unregister_hook)(const AgentxxPluginHost* host, AgentxxPluginHookPoint point);
+    int32_t(AGENTXX_PLUGIN_CALL* register_hook)(
+        const AgentxxPluginHost*     host,
+        const AgentxxPluginHookSpec* spec
+    );
+    int32_t(AGENTXX_PLUGIN_CALL* unregister_hook)(const AgentxxPluginHost* host, int32_t point);
 } AgentxxPluginHooksIface;
 
 /* ==================== 接口表: 事件 (agentxx.agent.events) ==================== */
@@ -371,21 +301,20 @@ typedef struct AgentxxPluginHooksIface {
 #define AGENTXX_PLUGIN_IFACE_AGENT_EVENTS_VERSION 1
 
 typedef struct AgentxxPluginEventsIface {
-    int version; ///< 必须 == AGENTXX_PLUGIN_IFACE_AGENT_EVENTS_VERSION
+    int32_t  version; ///< 必须 == AGENTXX_PLUGIN_IFACE_AGENT_EVENTS_VERSION
+    uint32_t _reserved;
 
-    /// 订阅 (topic 自动加 "plugin." 前缀, 载荷为 JSON 字符串); 返回句柄
-    AgentxxPluginSubscription* (*subscribe)(
-        const AgentxxPluginHost* host,
-        AgentxxPluginStringView  topic,
-        void (*handler)(AgentxxPluginStringView event_json, void* ud),
+    AgentxxPluginSubscription*(AGENTXX_PLUGIN_CALL* subscribe)(
+        const AgentxxPluginHost*       host,
+        const AgentxxPluginStringView* topic,
+        void(AGENTXX_PLUGIN_CALL* handler)(const AgentxxPluginStringView* event_json, void* ud),
         void* ud
     );
-    void (*unsubscribe)(AgentxxPluginSubscription* sub);
-    /// 发布 (异步投递, 立即返回; 禁用状态的插件被拒绝)
-    int (*publish)(
-        const AgentxxPluginHost* host,
-        AgentxxPluginStringView  topic,
-        AgentxxPluginStringView  event_json
+    void(AGENTXX_PLUGIN_CALL* unsubscribe)(AgentxxPluginSubscription* sub);
+    int32_t(AGENTXX_PLUGIN_CALL* publish)(
+        const AgentxxPluginHost*       host,
+        const AgentxxPluginStringView* topic,
+        const AgentxxPluginStringView* event_json
     );
 } AgentxxPluginEventsIface;
 
@@ -395,35 +324,39 @@ typedef struct AgentxxPluginEventsIface {
 #define AGENTXX_PLUGIN_IFACE_AGENT_CAPABILITIES_VERSION 1
 
 typedef struct AgentxxPluginCapabilitiesIface {
-    int version; ///< 必须 == AGENTXX_PLUGIN_IFACE_AGENT_CAPABILITIES_VERSION
+    int32_t  version; ///< 必须 == AGENTXX_PLUGIN_IFACE_AGENT_CAPABILITIES_VERSION
+    uint32_t _reserved;
 
-    /// 声明能力 (无方法处理器; 仅标记/互查; io 线程约束)
-    int (*register_capability)(const AgentxxPluginHost* host, AgentxxPluginStringView capability);
-    /// 注册能力并附带两件套方法处理器 (通用插件间通信通道):
-    int (*register_capability_ex)(
+    int32_t(AGENTXX_PLUGIN_CALL* register_capability)(
+        const AgentxxPluginHost*       host,
+        const AgentxxPluginStringView* capability
+    );
+    int32_t(AGENTXX_PLUGIN_CALL* register_capability_ex)(
         const AgentxxPluginHost*             host,
-        AgentxxPluginStringView              capability,
+        const AgentxxPluginStringView*       capability,
         AgentxxPluginCapabilityStartFunction start,
         AgentxxPluginOperatorCancelFunction  cancel,
         void*                                ctx
     );
-    int (*unregister_capability)(const AgentxxPluginHost* host, AgentxxPluginStringView capability);
-    /// 是否存在指定能力 (io 线程查表)
-    int (*has_capability)(const AgentxxPluginHost* host, AgentxxPluginStringView capability);
-
-    /* ---- 能力调用: 完成回调形 ---- */
-    /// 异步调用能力提供者的方法: 宿主保证 cb 在 io 线程派发
-    AgentxxPluginOperatorHandle* (*invoke_capability_async)(
-        const AgentxxPluginHost*      host,
-        AgentxxPluginStringView       capability,
-        AgentxxPluginStringView       method,
-        AgentxxPluginStringView       args_json,
-        AgentxxPluginOperatorCallback cb,
-        void*                         ud,
-        AgentxxPluginString*          error_out
+    int32_t(AGENTXX_PLUGIN_CALL* unregister_capability)(
+        const AgentxxPluginHost*       host,
+        const AgentxxPluginStringView* capability
     );
-    /// 取消异步操作 (幂等, 任意线程可调)
-    void (*op_cancel)(AgentxxPluginOperatorHandle* op);
+    int32_t(AGENTXX_PLUGIN_CALL* has_capability)(
+        const AgentxxPluginHost*       host,
+        const AgentxxPluginStringView* capability
+    );
+
+    AgentxxPluginOperatorHandle*(AGENTXX_PLUGIN_CALL* invoke_capability_async)(
+        const AgentxxPluginHost*       host,
+        const AgentxxPluginStringView* capability,
+        const AgentxxPluginStringView* method,
+        const AgentxxPluginStringView* args_json,
+        AgentxxPluginOperatorCallback  cb,
+        void*                          ud,
+        AgentxxPluginString*           error_out
+    );
+    void(AGENTXX_PLUGIN_CALL* op_cancel)(AgentxxPluginOperatorHandle* op);
 } AgentxxPluginCapabilitiesIface;
 
 /* ==================== 接口表: 任务调度 (agentxx.agent.scheduler) ==================== */
@@ -432,30 +365,31 @@ typedef struct AgentxxPluginCapabilitiesIface {
 #define AGENTXX_PLUGIN_IFACE_AGENT_SCHEDULER_VERSION 1
 
 typedef struct AgentxxPluginSchedulerIface {
-    int version; ///< 必须 == AGENTXX_PLUGIN_IFACE_AGENT_SCHEDULER_VERSION
+    int32_t  version; ///< 必须 == AGENTXX_PLUGIN_IFACE_AGENT_SCHEDULER_VERSION
+    uint32_t _reserved;
 
-    /// 当前线程是否为宿主 io 线程 (任意线程可调用)
-    int (*is_io_thread)(const AgentxxPluginHost* host);
-    /// 投递任务到宿主 io 线程异步执行 (不等待, 线程安全)
-    void (*post_to_io)(const AgentxxPluginHost* host, void (*fn)(void* ud), void* ud);
-    /// 推进并执行当前待处理的 io 任务 (仅 io 线程调用; 阻塞等待场景避免死锁)
-    void (*pump_io)(const AgentxxPluginHost* host);
-    /// 一次性定时器 (宿主保证在 io 线程派发, 经 asio::post 入队)
-    /// 返回 timer 句柄 (宿主所有); 插件卸载时自动取消
-    void* (*sleep)(const AgentxxPluginHost* host, long ms, void (*cb)(void* ud), void* ud);
-    /// 取消定时器 (触发提前唤醒回调或取消)
-    void (*cancel_sleep)(const AgentxxPluginHost* host, void* timer);
-
-    /* ---- 阻塞池委托 ---- */
-    /// 在宿主阻塞线程池执行同步回调 (阻塞操作专用: 文件遍历/HTTP/子进程等)
-    /// - cancel_flag: 调用方持有的取消标志 (volatile int; 0=未取消 1=已取消)
-    /// - work: 在阻塞池线程执行; 返回结果与 error_out 须 host->alloc 分配
-    /// - done: 宿主保证在 io 线程派发 (经 asio::post 入队)
-    void (*offload)(
+    int32_t(AGENTXX_PLUGIN_CALL* is_io_thread)(const AgentxxPluginHost* host);
+    void(AGENTXX_PLUGIN_CALL* post_to_io)(
         const AgentxxPluginHost* host,
-        volatile int*            cancel_flag,
-        void* (*work)(void* ud, volatile int* cancel_flag, AgentxxPluginString* error_out),
-        void (*done)(void* ud, void* result, AgentxxPluginStringView error),
+        void(AGENTXX_PLUGIN_CALL* fn)(void* ud),
+        void* ud
+    );
+    void(AGENTXX_PLUGIN_CALL* pump_io)(const AgentxxPluginHost* host);
+    void*(AGENTXX_PLUGIN_CALL* sleep)(
+        const AgentxxPluginHost* host,
+        int64_t                  ms,
+        void(AGENTXX_PLUGIN_CALL* cb)(void* ud),
+        void* ud
+    );
+    void(AGENTXX_PLUGIN_CALL* cancel_sleep)(const AgentxxPluginHost* host, void* timer);
+
+    void(AGENTXX_PLUGIN_CALL* offload)(
+        const AgentxxPluginHost* host,
+        volatile int32_t*        cancel_flag,
+        void*(AGENTXX_PLUGIN_CALL*
+                  work)(void* ud, volatile int32_t* cancel_flag, AgentxxPluginString* error_out),
+        void(AGENTXX_PLUGIN_CALL*
+                 done)(void* ud, void* result, const AgentxxPluginStringView* error),
         void* ud
     );
 } AgentxxPluginSchedulerIface;
@@ -466,27 +400,26 @@ typedef struct AgentxxPluginSchedulerIface {
 #define AGENTXX_PLUGIN_IFACE_AGENT_SESSION_VERSION 1
 
 typedef struct AgentxxPluginSessionIface {
-    int version; ///< 必须 == AGENTXX_PLUGIN_IFACE_AGENT_SESSION_VERSION
+    int32_t  version; ///< 必须 == AGENTXX_PLUGIN_IFACE_AGENT_SESSION_VERSION
+    uint32_t _reserved;
 
-    /// 读取会话级 share_store 条目 (仅 io 线程); 不存在返回空串 (host->alloc)
-    AgentxxPluginString (*get_share_store)(
-        const AgentxxPluginHost* host,
-        AgentxxPluginStringView  session_id,
-        long long                id
+    /// 读取会话级 share_store 条目 (仅 io 线程); 返回 0 成功, out 接收数据 (host->alloc)
+    int32_t(AGENTXX_PLUGIN_CALL* get_share_store)(
+        const AgentxxPluginHost*       host,
+        const AgentxxPluginStringView* session_id,
+        int64_t                        id,
+        AgentxxPluginString*           out
     );
-    /// 向会话 UI 推送提示消息 (仅 io 线程); level: 0=info 1=warning 2=error
-    void (*emit_message_tip)(
-        const AgentxxPluginHost* host,
-        AgentxxPluginStringView  session_id,
-        AgentxxPluginStringView  text,
-        int                      level
+    void(AGENTXX_PLUGIN_CALL* emit_message_tip)(
+        const AgentxxPluginHost*       host,
+        const AgentxxPluginStringView* session_id,
+        const AgentxxPluginStringView* text,
+        int32_t                        level
     );
-    /// 写入会话级 share_store 条目并返回 ID (仅 io 线程); 失败返回 -1
-    /// - content 为待存储的完整文本 (host 侧按行切片等处理与工具侧一致)
-    long long (*add_share_store)(
-        const AgentxxPluginHost* host,
-        AgentxxPluginStringView  session_id,
-        AgentxxPluginStringView  content
+    int64_t(AGENTXX_PLUGIN_CALL* add_share_store)(
+        const AgentxxPluginHost*       host,
+        const AgentxxPluginStringView* session_id,
+        const AgentxxPluginStringView* content
     );
 } AgentxxPluginSessionIface;
 
@@ -496,14 +429,22 @@ typedef struct AgentxxPluginSessionIface {
 #define AGENTXX_PLUGIN_IFACE_AGENT_PLUGINS_VERSION 1
 
 typedef struct AgentxxPluginsIface {
-    int version; ///< 必须 == AGENTXX_PLUGIN_IFACE_AGENT_PLUGINS_VERSION
+    int32_t  version; ///< 必须 == AGENTXX_PLUGIN_IFACE_AGENT_PLUGINS_VERSION
+    uint32_t _reserved;
 
-    /// 全部已安装插件信息 JSON 数组 (host->alloc 分配)
-    AgentxxPluginString (*list_plugins)(const AgentxxPluginHost* host);
-    /// 单个插件信息 JSON (未安装返回空串, host->alloc)
-    AgentxxPluginString (*get_plugin)(const AgentxxPluginHost* host, AgentxxPluginStringView name);
-    /// 调用方插件自身信息 JSON {"name","version","description","path",...} (host->alloc)
-    AgentxxPluginString (*get_own_info)(const AgentxxPluginHost* host);
+    int32_t(AGENTXX_PLUGIN_CALL* list_plugins)(
+        const AgentxxPluginHost* host,
+        AgentxxPluginString*     out
+    );
+    int32_t(AGENTXX_PLUGIN_CALL* get_plugin)(
+        const AgentxxPluginHost*       host,
+        const AgentxxPluginStringView* name,
+        AgentxxPluginString*           out
+    );
+    int32_t(AGENTXX_PLUGIN_CALL* get_own_info)(
+        const AgentxxPluginHost* host,
+        AgentxxPluginString*     out
+    );
 } AgentxxPluginsIface;
 
 /* ==================== 接口表: 宿主配置 (agentxx.agent.config) ==================== */
@@ -512,28 +453,44 @@ typedef struct AgentxxPluginsIface {
 #define AGENTXX_PLUGIN_IFACE_AGENT_CONFIG_VERSION 1
 
 typedef struct AgentxxPluginConfigIface {
-    int version; ///< 必须 == AGENTXX_PLUGIN_IFACE_AGENT_CONFIG_VERSION
+    int32_t  version; ///< 必须 == AGENTXX_PLUGIN_IFACE_AGENT_CONFIG_VERSION
+    uint32_t _reserved;
 
     /// 宿主 AgentConfig 关键字段 JSON (io 线程; host->alloc):
-    /// {"dataDir": "...", "projectRoot": "..."(可为空), "platform": "windows"|"linux"|"macos"}
-    AgentxxPluginString (*get_config)(const AgentxxPluginHost* host);
+    /// {"dataDir": "...", "projectRoot": "..."(可为空), "platform":
+    /// "windows"|"linux"|"macos"|"android"|"ios"}
+    int32_t(AGENTXX_PLUGIN_CALL* get_config)(
+        const AgentxxPluginHost* host,
+        AgentxxPluginString*     out
+    );
     /// 本插件配置参数 JSON (yaml `plugins` 条目 args; io 线程; host->alloc):
-    AgentxxPluginString (*get_plugin_args)(const AgentxxPluginHost* host);
+    int32_t(AGENTXX_PLUGIN_CALL* get_plugin_args)(
+        const AgentxxPluginHost* host,
+        AgentxxPluginString*     out
+    );
     /// 宿主 toolPrompt 配置 (io 线程; host->alloc):
     /// {"depict": "...", "args": {"参数名": "参数说明", ...}}
-    AgentxxPluginString (*get_tool_prompt)(const AgentxxPluginHost* host, AgentxxPluginStringView tool_name);
+    int32_t(AGENTXX_PLUGIN_CALL* get_tool_prompt)(
+        const AgentxxPluginHost*       host,
+        const AgentxxPluginStringView* tool_name,
+        AgentxxPluginString*           out
+    );
     /// 指定会话生效的工作目录 (io 线程; host->alloc; 失败/未装配返回空串):
     /// - session_id 非空: worktree 绑定优先, 依次回退会话覆写 / AgentConfig
     /// - session_id 为空: 返回解析后的默认会话工作目录
-    AgentxxPluginString (*get_session_work_dir)(
-        const AgentxxPluginHost* host,
-        AgentxxPluginStringView  session_id
+    int32_t(AGENTXX_PLUGIN_CALL* get_session_work_dir)(
+        const AgentxxPluginHost*       host,
+        const AgentxxPluginStringView* session_id,
+        AgentxxPluginString*           out
     );
     /// 本插件配置文件所在目录或文件路径 (yaml `plugins` 条目 config; io 线程;
     /// host->alloc; 未指定返回空串, 空串表示未配置)
     /// - 可指向文件或目录 (由插件自行判断类型并加载)
     /// - 宿主已归一化为绝对路径 (正斜杠, lexically_normal)
-    AgentxxPluginString (*get_plugin_config_path)(const AgentxxPluginHost* host);
+    int32_t(AGENTXX_PLUGIN_CALL* get_plugin_config_path)(
+        const AgentxxPluginHost* host,
+        AgentxxPluginString*     out
+    );
 } AgentxxPluginConfigIface;
 
 /* ==================== 接口表: 主模型配置 (agentxx.agent.model) ==================== */
@@ -542,10 +499,13 @@ typedef struct AgentxxPluginConfigIface {
 #define AGENTXX_PLUGIN_IFACE_AGENT_MODEL_VERSION 1
 
 typedef struct AgentxxPluginModelIface {
-    int version; ///< 必须 == AGENTXX_PLUGIN_IFACE_AGENT_MODEL_VERSION
-
+    int32_t  version; ///< 必须 == AGENTXX_PLUGIN_IFACE_AGENT_MODEL_VERSION
+    uint32_t _reserved;
     /// 宿主主模型及关联配置 JSON (io 线程; host->alloc; 未装配返回空串):
-    AgentxxPluginString (*get_config)(const AgentxxPluginHost* host);
+    int32_t(AGENTXX_PLUGIN_CALL* get_config)(
+        const AgentxxPluginHost* host,
+        AgentxxPluginString*     out
+    );
 } AgentxxPluginModelIface;
 
 /* ==================== 接口表: 会话取消状态 (agentxx.agent.cancel) ==================== */
@@ -554,10 +514,14 @@ typedef struct AgentxxPluginModelIface {
 #define AGENTXX_PLUGIN_IFACE_AGENT_CANCEL_VERSION 1
 
 typedef struct AgentxxPluginCancelIface {
-    int version; ///< 必须 == AGENTXX_PLUGIN_IFACE_AGENT_CANCEL_VERSION
-
+    int32_t  version; ///< 必须 == AGENTXX_PLUGIN_IFACE_AGENT_CANCEL_VERSION
+    uint32_t _reserved;
     /// 查询会话当前轮次是否已取消 (advisory 定位; 权威通知始终是 cancel 回调)
-    int (*is_cancelled)(const AgentxxPluginHost* host, AgentxxPluginStringView session_id);
+
+    int32_t(AGENTXX_PLUGIN_CALL* is_cancelled)(
+        const AgentxxPluginHost*       host,
+        const AgentxxPluginStringView* session_id
+    );
 } AgentxxPluginCancelIface;
 
 /* ==================== 接口表: 宿主提示词读写 (agentxx.agent.prompt) ==================== */
@@ -566,10 +530,17 @@ typedef struct AgentxxPluginCancelIface {
 #define AGENTXX_PLUGIN_IFACE_AGENT_PROMPT_VERSION 1
 
 typedef struct AgentxxPluginPromptIface {
-    int version; ///< 必须 == AGENTXX_PLUGIN_IFACE_AGENT_PROMPT_VERSION
+    int32_t  version; ///< 必须 == AGENTXX_PLUGIN_IFACE_AGENT_PROMPT_VERSION
+    uint32_t _reserved;
 
-    AgentxxPluginString (*get_prompt)(const AgentxxPluginHost* host);
-    int (*set_prompt)(const AgentxxPluginHost* host, AgentxxPluginStringView prompt_json);
+    int32_t(AGENTXX_PLUGIN_CALL* get_prompt)(
+        const AgentxxPluginHost* host,
+        AgentxxPluginString*     out
+    );
+    int32_t(AGENTXX_PLUGIN_CALL* set_prompt)(
+        const AgentxxPluginHost*       host,
+        const AgentxxPluginStringView* prompt_json
+    );
 } AgentxxPluginPromptIface;
 
 /* ==================== 接口表: JSON 辅助 (agentxx.agent.json) ==================== */
@@ -578,14 +549,20 @@ typedef struct AgentxxPluginPromptIface {
 #define AGENTXX_PLUGIN_IFACE_AGENT_JSON_VERSION 1
 
 typedef struct AgentxxPluginJsonIface {
-    int version; ///< 必须 == AGENTXX_PLUGIN_IFACE_AGENT_JSON_VERSION
+    int32_t  version; ///< 必须 == AGENTXX_PLUGIN_IFACE_AGENT_JSON_VERSION
+    uint32_t _reserved;
 
-    AgentxxPluginString (*json_get_string)(
-        const AgentxxPluginHost* host,
-        AgentxxPluginStringView  json,
-        AgentxxPluginStringView  key
+    int32_t(AGENTXX_PLUGIN_CALL* json_get_string)(
+        const AgentxxPluginHost*       host,
+        const AgentxxPluginStringView* json,
+        const AgentxxPluginStringView* key,
+        AgentxxPluginString*           out
     );
-    AgentxxPluginString (*json_escape)(const AgentxxPluginHost* host, AgentxxPluginStringView s);
+    int32_t(AGENTXX_PLUGIN_CALL* json_escape)(
+        const AgentxxPluginHost*       host,
+        const AgentxxPluginStringView* s,
+        AgentxxPluginString*           out
+    );
 } AgentxxPluginJsonIface;
 
 /* ==================== 接口表: 日志 (agentxx.agent.log) ==================== */
@@ -594,36 +571,55 @@ typedef struct AgentxxPluginJsonIface {
 #define AGENTXX_PLUGIN_IFACE_AGENT_LOG_VERSION 1
 
 typedef struct AgentxxPluginLogIface {
-    int version; ///< 必须 == AGENTXX_PLUGIN_IFACE_AGENT_LOG_VERSION
+    int32_t  version; ///< 必须 == AGENTXX_PLUGIN_IFACE_AGENT_LOG_VERSION
+    uint32_t _reserved;
 
-    void (*log)(const AgentxxPluginHost* host, int level, AgentxxPluginStringView msg);
+    void(AGENTXX_PLUGIN_CALL*
+             log)(const AgentxxPluginHost* host, int32_t level, const AgentxxPluginStringView* msg);
 } AgentxxPluginLogIface;
 
 /* ==================== 接口表: 会话资源贡献 (agentxx.agent.resources) ==================== */
-/* 注: 仅支持两类来源 —— 1) plugin.yaml 声明式段 (skill/memory/mcp, 见
- * PluginManifestResources) 2) 插件初始化时 (agentxx_plugin_agent_create 内)
- * 追加注册。初始化完成后资源冻结，后续固定不可变以防上下文变化；
- * 运行时 register/unregister 在冻结后返回非 0 失败 (宿主日志 WARN)。
- */
 
 #define AGENTXX_PLUGIN_IFACE_AGENT_RESOURCES         "agentxx.agent.resources"
 #define AGENTXX_PLUGIN_IFACE_AGENT_RESOURCES_VERSION 1
 
 typedef struct AgentxxPluginResourcesIface {
-    int version; ///< 必须 == AGENTXX_PLUGIN_IFACE_AGENT_RESOURCES_VERSION
+    int32_t  version; ///< 必须 == AGENTXX_PLUGIN_IFACE_AGENT_RESOURCES_VERSION
+    uint32_t _reserved;
 
-    int (*register_skill_dir)(const AgentxxPluginHost* host, AgentxxPluginStringView path);
-    int (*unregister_skill_dir)(const AgentxxPluginHost* host, AgentxxPluginStringView path);
-    int (*register_memory_file)(const AgentxxPluginHost* host, AgentxxPluginStringView path);
-    int (*unregister_memory_file)(const AgentxxPluginHost* host, AgentxxPluginStringView path);
-    int (*register_mcp_server)(const AgentxxPluginHost* host, AgentxxPluginStringView spec_json);
-    int (*unregister_mcp_server)(const AgentxxPluginHost* host, AgentxxPluginStringView name_space);
-    AgentxxPluginString (*get_own_resources)(const AgentxxPluginHost* host);
+    int32_t(AGENTXX_PLUGIN_CALL* register_skill_dir)(
+        const AgentxxPluginHost*       host,
+        const AgentxxPluginStringView* path
+    );
+    int32_t(AGENTXX_PLUGIN_CALL* unregister_skill_dir)(
+        const AgentxxPluginHost*       host,
+        const AgentxxPluginStringView* path
+    );
+    int32_t(AGENTXX_PLUGIN_CALL* register_memory_file)(
+        const AgentxxPluginHost*       host,
+        const AgentxxPluginStringView* path
+    );
+    int32_t(AGENTXX_PLUGIN_CALL* unregister_memory_file)(
+        const AgentxxPluginHost*       host,
+        const AgentxxPluginStringView* path
+    );
+    int32_t(AGENTXX_PLUGIN_CALL* register_mcp_server)(
+        const AgentxxPluginHost*       host,
+        const AgentxxPluginStringView* spec_json
+    );
+    int32_t(AGENTXX_PLUGIN_CALL* unregister_mcp_server)(
+        const AgentxxPluginHost*       host,
+        const AgentxxPluginStringView* name_space
+    );
+    int32_t(AGENTXX_PLUGIN_CALL* get_own_resources)(
+        const AgentxxPluginHost* host,
+        AgentxxPluginString*     out
+    );
 } AgentxxPluginResourcesIface;
 
 /* ==================== 接口表: 执行图 (agentxx.agent.graph) ==================== */
 
-/// 插件节点执行函数 (两件套契约; 【宿主 io 线程调用】, 非阻塞):
+/// 插件节点执行函数 (【宿主 io 线程调用】, 非阻塞):
 /// - node_name/config_json/state_json/thread_id: 只读借用, 仅本次调用有效
 /// - state_json 为 GraphState::serialize() 的结果: {"channels": {<ch名>: {"value": ..., "version":
 /// N}}, "global_version": N}
@@ -634,17 +630,18 @@ typedef struct AgentxxPluginResourcesIface {
 ///    "sends": [{"target_node": "...", "input": {...}}]}
 /// - 快同步节点: 算完 → done → 返回 NULL; 锚定协程/自管异步: 返回 op 句柄
 /// - 失败: 返回 NULL 且 *error_out 输出错误 (host->alloc 分配)
-typedef void* (*AgentxxPluginGraphNodeRunStartFn)(
+typedef void*(AGENTXX_PLUGIN_CALL* AgentxxPluginGraphNodeRunStartFn)(
     void*                              user_data,
-    AgentxxPluginStringView            node_name,
-    AgentxxPluginStringView            config_json,
-    AgentxxPluginStringView            state_json,
-    AgentxxPluginStringView            thread_id,
+    const AgentxxPluginStringView*     node_name,
+    const AgentxxPluginStringView*     config_json,
+    const AgentxxPluginStringView*     state_json,
+    const AgentxxPluginStringView*     thread_id,
     const AgentxxPluginOperatorNotify* notify,
     AgentxxPluginString*               error_out
 );
+
 /// 协作式取消请求 (io 线程, 非阻塞; 不可取消可留 NULL)
-typedef void (*AgentxxPluginGraphNodeRunCancelFn)(void* user_data, void* op);
+typedef void(AGENTXX_PLUGIN_CALL* AgentxxPluginGraphNodeRunCancelFn)(void* user_data, void* op);
 
 /// 插件节点类型注册规格
 typedef struct AgentxxPluginGraphNodeTypeSpec {
@@ -666,40 +663,47 @@ typedef struct AgentxxPluginGraphNodeTypeSpec {
 #define AGENTXX_PLUGIN_IFACE_AGENT_GRAPH_VERSION 1
 
 typedef struct AgentxxPluginGraphIface {
-    int version; ///< 必须 == AGENTXX_PLUGIN_IFACE_AGENT_GRAPH_VERSION
+    int32_t  version; ///< 必须 == AGENTXX_PLUGIN_IFACE_AGENT_GRAPH_VERSION
+    uint32_t _reserved;
 
     /// 注册节点类型 (io 线程约束, 非 io 线程由宿主投递同步等待)
     /// `return`: 类型名冲突返回非 0
-    int (*register_node_type)(
+    int32_t(AGENTXX_PLUGIN_CALL* register_node_type)(
         const AgentxxPluginHost*              host,
         const AgentxxPluginGraphNodeTypeSpec* spec
     );
     /// 注销节点类型 (按类型名; 卸载时宿主自动清理)
     /// `return`: 不存在返回非 0
-    int (*unregister_node_type)(const AgentxxPluginHost* host, AgentxxPluginStringView type);
+    int32_t(AGENTXX_PLUGIN_CALL* unregister_node_type)(
+        const AgentxxPluginHost*       host,
+        const AgentxxPluginStringView* type
+    );
     /// 获取当前执行图 JSON 定义 (host->alloc; 插件可基于此判断后 set 修改)
-    AgentxxPluginString (*get_graph_json)(const AgentxxPluginHost* host);
+    int32_t(AGENTXX_PLUGIN_CALL* get_graph_json)(
+        const AgentxxPluginHost* host,
+        AgentxxPluginString*     out
+    );
     /// 获取当前执行图名称 (host->alloc; 默认 "agentxx.default")
-    AgentxxPluginString (*get_graph_name)(const AgentxxPluginHost* host);
+    int32_t(AGENTXX_PLUGIN_CALL* get_graph_name)(
+        const AgentxxPluginHost* host,
+        AgentxxPluginString*     out
+    );
     /// 设置执行图 JSON 定义 (覆盖; 宿主构建 engine 前生效)
     /// `return`: JSON 非法返回非 0 (host 侧解析失败)
-    int (*set_graph_json)(const AgentxxPluginHost* host, AgentxxPluginStringView graph_json);
+    int32_t(AGENTXX_PLUGIN_CALL* set_graph_json)(
+        const AgentxxPluginHost*       host,
+        const AgentxxPluginStringView* graph_json
+    );
 } AgentxxPluginGraphIface;
 
 /* ==================== 接口表: 后台任务 (agentxx.agent.tasks) ==================== */
-/* 背景: kit (plugin_kit.h) 的 spawn 让插件启动后台协作任务 (如周期采集:
- * while(!cancelled()) { offload; sleep; })。本表把 spawn 纳入宿主统一任务
- * 管理 —— 与工具/能力 op 同构: 宿主登记句柄 (outstandingOps, detachAll 统一
- * 取消) + 持 inflight (waitInflightZero 精确等待) + notify.done 完成通知
- * (宿主回收句柄)。插件卸载时 detachAll cancel → 协程退出 → notify → inflight
- * 归零 → dlclose 安全, 无协程帧悬挂/UAF。
- */
 
 #define AGENTXX_PLUGIN_IFACE_AGENT_TASKS         "agentxx.agent.tasks"
 #define AGENTXX_PLUGIN_IFACE_AGENT_TASKS_VERSION 1
 
 typedef struct AgentxxPluginTasksIface {
-    int version; ///< 必须 == AGENTXX_PLUGIN_IFACE_AGENT_TASKS_VERSION
+    int32_t  version; ///< 必须 == AGENTXX_PLUGIN_IFACE_AGENT_TASKS_VERSION
+    uint32_t _reserved;
 
     /// 注册后台任务 (io 线程约束, 非 io 线程由宿主投递同步等待)。宿主记录
     /// 句柄 (可取消/跟踪完成/持 inflight), 插件协程最终结束时经 *notify
@@ -716,25 +720,28 @@ typedef struct AgentxxPluginTasksIface {
     ///   协程内若直接调用宿主回调形接口 (invoke_capability_async 等) 或经
     ///   自管线程收尾, 上报可能非 io 线程, 宿主必须按任意线程实现
     /// - 返回宿主托管句柄 (失败返回 NULL 并 *error_out 输出错误, host->alloc)
-    AgentxxPluginOperatorHandle* (*register_task)(
+    AgentxxPluginOperatorHandle*(AGENTXX_PLUGIN_CALL* register_task)(
         const AgentxxPluginHost*            host,
         AgentxxPluginOperatorCancelFunction cancel_fn,
         void*                               cancel_ud,
-        AgentxxPluginOperatorNotify*        notify, ///< [out] 见上
+        AgentxxPluginOperatorNotify*        notify,
         AgentxxPluginString*                error_out
     );
     /// 取消任务 (幂等; 仅限 io 线程调用, 或宿主内部经 ioCallSync 投递后调用)
     /// - 与宿主 detachAll 内部路径一致; 句柄由宿主托管, 跨线程主动取消需经
     ///   scheduler.post_to_io / ioCallSync 回到 io 线程 (与注册类接口线程
     ///   约束一致), 避免 handle->caller 裸指针跨线程反查实例
-    void (*cancel_task)(AgentxxPluginOperatorHandle* h);
+    void(AGENTXX_PLUGIN_CALL* cancel_task)(AgentxxPluginOperatorHandle* h);
 } AgentxxPluginTasksIface;
 
 /* ==================== 插件入口符号 (dlsym) ==================== */
 
-typedef const AgentxxPluginInfo* (*AgentxxPluginGetInfoFn)(void);
-typedef int (*AgentxxPluginCreateFn)(const AgentxxPluginHost* host, void** plugin_ctx);
-typedef void (*AgentxxPluginDestroyFn)(void* plugin_ctx);
+typedef const AgentxxPluginInfo*(AGENTXX_PLUGIN_CALL* AgentxxPluginGetInfoFn)(void);
+typedef int32_t(AGENTXX_PLUGIN_CALL* AgentxxPluginCreateFn)(
+    const AgentxxPluginHost* host,
+    void**                   plugin_ctx
+);
+typedef void(AGENTXX_PLUGIN_CALL* AgentxxPluginDestroyFn)(void* plugin_ctx);
 
 #define AGENTXX_PLUGIN_AGENT_SYMBOL_GET_INFO "agentxx_plugin_agent_get_info"
 #define AGENTXX_PLUGIN_AGENT_SYMBOL_CREATE   "agentxx_plugin_agent_create"
@@ -748,24 +755,177 @@ typedef struct AgentxxPluginBuiltinInfo {
     AgentxxPluginDestroyFn destroy; ///< 可空 (实例销毁, 与 agentxx_plugin_agent_destroy 同契约)
 } AgentxxPluginBuiltinInfo;
 
-// ==================== 内嵌编译清单 ====================
 // 与 BuiltinPluginInfo 同步生成于 plugins/builtin_plugins.cpp
 typedef struct AgentxxPluginBuiltinManifest {
-    AgentxxPluginStringView name; ///< 插件名 (与 BuiltinPluginInfo.name 一致)
+    AgentxxPluginStringView name; ///< 插件名
     AgentxxPluginStringView yaml; ///< plugin.yaml 原文 (UTF-8, 静态只读)
 } AgentxxPluginBuiltinManifest;
 
-/// 查询全部内置插件 (libagentxx 实现; 返回静态数组, count 输出条目数)
-/// - 调用方须跳过 name == NULL 的占位条目 (空表时 count 为 1)
-/// - 任意线程可调用 (静态只读数据)
-const AgentxxPluginBuiltinInfo* agentxx_plugin_get_builtin_plugins(size_t* count);
+#pragma pack(pop)
 
-const AgentxxPluginBuiltinManifest* agentxx_plugin_get_builtin_manifests(size_t* count);
+/* ==================== 辅助内联函数 ==================== */
 
-#define AGENTXX_PLUGIN_STRDUP(host, s)     ((host)->vtable->strdup(agentxx_plugin_sv_cstr(s)))
-#define AGENTXX_PLUGIN_STRDUP_SV(host, sv) ((host)->vtable->strdup((sv)))
+static inline AgentxxPluginStringView agentxx_plugin_sv(const char* data, uint64_t size) {
+    AgentxxPluginStringView sv;
+    sv.data = data;
+    sv.size = size;
+    return sv;
+}
+
+static inline AgentxxPluginStringView agentxx_plugin_sv_cstr(const char* s) {
+    AgentxxPluginStringView sv;
+    sv.data = s;
+    sv.size = s ? (uint64_t)strlen(s) : 0;
+    return sv;
+}
+
+static inline int32_t agentxx_plugin_sv_empty(const AgentxxPluginStringView* sv) {
+    return sv == NULL || sv->data == NULL || sv->size == 0;
+}
+
+static inline AgentxxPluginString agentxx_plugin_str_empty(void) {
+    AgentxxPluginString s;
+    s.data = NULL;
+    s.size = 0;
+    return s;
+}
+
+static inline int32_t agentxx_plugin_string_empty(const AgentxxPluginString* str) {
+    return str == NULL || str->data == NULL || str->size == 0;
+}
+
+static inline AgentxxPluginStringView agentxx_plugin_string_to_sv(const AgentxxPluginString* str) {
+    AgentxxPluginStringView sv;
+    if (str) {
+        sv.data = str->data;
+        sv.size = str->size;
+    } else {
+        sv.data = NULL;
+        sv.size = 0;
+    }
+    return sv;
+}
+
+static inline void
+    agentxx_plugin_string_free(const AgentxxPluginHost* host, AgentxxPluginString* str) {
+    if (str && str->data) {
+        if (host && host->vtable && host->vtable->free) {
+            host->vtable->free(str->data);
+        }
+        str->data = NULL;
+        str->size = 0;
+    }
+}
+
+static inline AgentxxPluginString agentxx_plugin_string_from_sv(
+    const AgentxxPluginHost*       host,
+    const AgentxxPluginStringView* sv
+) {
+    AgentxxPluginString res;
+    res.data = NULL;
+    res.size = 0;
+    if (!host || !host->vtable || !host->vtable->alloc || !sv) {
+        return res;
+    }
+    if (sv->data == NULL && sv->size == 0) {
+        return res;
+    }
+    char* p = (char*)host->vtable->alloc(sv->size + 1);
+    if (p) {
+        if (sv->size > 0 && sv->data) {
+            memcpy(p, sv->data, (size_t)sv->size);
+        }
+        p[sv->size] = '\0';
+        res.data    = p;
+        res.size    = sv->size;
+    }
+    return res;
+}
+
+static inline AgentxxPluginString
+    agentxx_plugin_string_from_cstr(const AgentxxPluginHost* host, const char* s) {
+    AgentxxPluginStringView sv = agentxx_plugin_sv_cstr(s);
+    return agentxx_plugin_string_from_sv(host, &sv);
+}
+
+static inline char*
+    agentxx_plugin_strdup(const AgentxxPluginHost* host, const AgentxxPluginStringView* sv) {
+    if (!host || !host->vtable || !host->vtable->alloc || !sv) {
+        return NULL;
+    }
+    char* p = (char*)host->vtable->alloc(sv->size + 1);
+    if (p) {
+        if (sv->size > 0 && sv->data) {
+            memcpy(p, sv->data, (size_t)sv->size);
+        }
+        p[sv->size] = '\0';
+    }
+    return p;
+}
+
+static inline const void*
+    agentxx_plugin_query_interface(const AgentxxPluginHost* host, const char* iid) {
+    if (!host || !host->vtable || !host->vtable->query_interface || !iid) {
+        return NULL;
+    }
+    AgentxxPluginStringView sv = agentxx_plugin_sv_cstr(iid);
+    return host->vtable->query_interface(host, &sv);
+}
+
+#define AGENTXX_PLUGIN_QUERY_IFACE(host, IfaceType, iid_name) \
+    ((const IfaceType*)agentxx_plugin_query_interface((host), (iid_name)))
+
+const AgentxxPluginBuiltinInfo* agentxx_plugin_get_builtin_plugins(uint64_t* count);
+
+const AgentxxPluginBuiltinManifest* agentxx_plugin_get_builtin_manifests(uint64_t* count);
+
+#define AGENTXX_PLUGIN_STRDUP(host, s)     (agentxx_plugin_strdup((host), &agentxx_plugin_sv_cstr(s)))
+#define AGENTXX_PLUGIN_STRDUP_SV(host, sv) (agentxx_plugin_strdup((host), (sv)))
 
 #ifdef __cplusplus
+}
+#endif
+
+/* ==================== C++ 便捷重载 (非 ABI; 仅 C++ 侧免 & 取址样板) ==================== */
+
+#ifdef __cplusplus
+static inline int32_t agentxx_plugin_sv_empty(const AgentxxPluginStringView& sv) {
+    return agentxx_plugin_sv_empty(&sv);
+}
+
+static inline int32_t agentxx_plugin_string_empty(const AgentxxPluginString& str) {
+    return agentxx_plugin_string_empty(&str);
+}
+
+static inline AgentxxPluginStringView agentxx_plugin_string_to_sv(const AgentxxPluginString& str) {
+    return agentxx_plugin_string_to_sv(&str);
+}
+
+static inline AgentxxPluginString agentxx_plugin_string_from_sv(
+    const AgentxxPluginHost*       host,
+    const AgentxxPluginStringView& sv
+) {
+    return agentxx_plugin_string_from_sv(host, &sv);
+}
+
+static inline AgentxxPluginString
+    agentxx_plugin_string_from_sv(const AgentxxPluginHost* host, const char* s) {
+    return agentxx_plugin_string_from_cstr(host, s);
+}
+
+static inline char*
+    agentxx_plugin_strdup(const AgentxxPluginHost* host, const AgentxxPluginStringView& sv) {
+    return agentxx_plugin_strdup(host, &sv);
+}
+
+static inline char* agentxx_plugin_strdup(const AgentxxPluginHost* host, const char* s) {
+    auto sv = agentxx_plugin_sv_cstr(s);
+    return agentxx_plugin_strdup(host, &sv);
+}
+
+static inline void
+    agentxx_plugin_string_free(const AgentxxPluginHost* host, AgentxxPluginString& str) {
+    agentxx_plugin_string_free(host, &str);
 }
 #endif
 

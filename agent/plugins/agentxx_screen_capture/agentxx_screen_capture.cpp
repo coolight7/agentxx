@@ -288,7 +288,7 @@ static void registerScreenCaptureTool(PluginCtx& ctx) {
 
 extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_agent_get_info(void) {
     static const AgentxxPluginInfo info{
-        AGENTXX_PLUGIN_API_VERSION,
+        AGENTXX_PLUGIN_API_VERSION, 0,
         agentxx_plugin_sv_cstr("agentxx_screen_capture"),
         agentxx_plugin_sv_cstr("1.0.0"),
         agentxx_plugin_sv_cstr(
@@ -327,9 +327,10 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
             );
 
             if (ctx->iface.config && ctx->iface.config->get_config) {
-                AgentxxPluginString json = ctx->iface.config->get_config(ctx->host);
+                AgentxxPluginString json{nullptr, 0};
+                ctx->iface.config->get_config(ctx->host, &json);
                 if (json.data) {
-                    std::string s(json.data, json.size);
+                    std::string s(json.data, static_cast<size_t>(json.size));
                     agentxx_plugin_string_free(ctx->host, &json);
                     SimpleJson j(s);
                     if (j.ok()) {

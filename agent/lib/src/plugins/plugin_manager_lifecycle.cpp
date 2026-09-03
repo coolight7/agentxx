@@ -29,7 +29,7 @@
 namespace agentxx {
 namespace plugin {
 
-const void* xx_query_interface(const AgentxxPluginHost*, AgentxxPluginStringView iid);
+const void* AGENTXX_PLUGIN_CALL xx_query_interface(const AgentxxPluginHost*, const AgentxxPluginStringView* iid);
 
 // =====================================================================
 // NativeLoader
@@ -527,8 +527,9 @@ asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadNativeAsync(
     inst->interfaces  = interfaces;
     inst->self        = inst;
     inst->manager     = shared_from_this();
+    auto vtableSv = agentxx_plugin_sv_cstr("__vtable");
     inst->host.vtable
-        = (const AgentxxHostVtable*)xx_query_interface(nullptr, agentxx_plugin_sv_cstr("__vtable"));
+        = (const AgentxxHostVtable*)xx_query_interface(nullptr, &vtableSv);
     inst->host.opaque = inst.get();
     if (cfg) {
         inst->args       = cfg->args;
@@ -589,8 +590,9 @@ asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadBuiltinAsync
     inst->interfaces      = interfaces;
     inst->self            = inst;
     inst->manager         = shared_from_this();
+    auto vtableSv2 = agentxx_plugin_sv_cstr("__vtable");
     inst->host.vtable
-        = (const AgentxxHostVtable*)xx_query_interface(nullptr, agentxx_plugin_sv_cstr("__vtable"));
+        = (const AgentxxHostVtable*)xx_query_interface(nullptr, &vtableSv2);
     inst->host.opaque   = inst.get();
     inst->builtinUnload = entry->destroy;
     if (cfg) {

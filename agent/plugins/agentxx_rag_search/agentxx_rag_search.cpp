@@ -25,7 +25,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_agent_g
         nullptr,
         [&]() -> const AgentxxPluginInfo* {
             static const AgentxxPluginInfo info{
-                AGENTXX_PLUGIN_API_VERSION,
+                AGENTXX_PLUGIN_API_VERSION, 0,
                 agentxx_plugin_sv_cstr("agentxx_rag_search"),
                 agentxx_plugin_sv_cstr("1.0.0"),
                 agentxx_plugin_sv_cstr(
@@ -64,11 +64,12 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                 );
                 return 0;
             }
-            AgentxxPluginString json = ctx->iface.model->get_config(ctx->host);
+            AgentxxPluginString json{nullptr, 0};
+            ctx->iface.model->get_config(ctx->host, &json);
             neograph::json cfg;
             bool           hasCfg = false;
             if (json.data) {
-                std::string cfgJson(json.data, json.size);
+                std::string cfgJson(json.data, static_cast<size_t>(json.size));
                 agentxx_plugin_string_free(ctx->host, &json);
                 try {
                     cfg    = neograph::json::parse(cfgJson);

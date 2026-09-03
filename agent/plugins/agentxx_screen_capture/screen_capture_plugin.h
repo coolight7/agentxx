@@ -19,11 +19,12 @@ namespace agentxx_screen_capture_plugin {
 inline void pluginLog(
     const AgentxxPluginHost*     host,
     const AgentxxPluginLogIface* logIf,
-    int                          level,
+    int32_t                      level,
     const std::string&           msg
 ) {
     if (host && logIf && logIf->log) {
-        logIf->log(host, level, agentxx_plugin_sv(msg.data(), msg.size()));
+        auto sv = agentxx_plugin_sv(msg.data(), msg.size());
+        logIf->log(host, level, &sv);
     }
 }
 

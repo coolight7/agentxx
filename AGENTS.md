@@ -90,6 +90,7 @@ path/to/agentxx_test string_util regex
 ## C++插件开发
 - 插件接口为 **API v1**: 入口为 `agentxx_plugin_agent_create` /
   `agentxx_plugin_agent_destroy` 实例对 (client 侧 `agentxx_plugin_client_create` / `_destroy`)。
+  【API v1 规范】全局 API 版本及全部接口表版本均重置为 1；明确 8 字节结构体对齐与定长基础类型 (`int32_t/int64_t/uint64_t`)；跨边界函数统一 `AGENTXX_PLUGIN_CALL` 调用约定；结构体参数一律传递指针 (`const Struct*`)，结构体返回值一律改为指针出参 (`Struct* out`) 并返回 `int32_t` 状态码；核心 vtable 精简为 `alloc/free` 两件套 (去除了 `strdup`，采用头文件内联 `agentxx_plugin_strdup`)。
   【多实例契约】同一动态库可被同进程内不同 agent 宿主各自创建多个并存实例:
   ① 禁止可变全局/函数级 static 缓存; ② 实例状态只能放 `*plugin_ctx` 堆块,
   回调经 `spec.user_data` 恢复; ③ 接口表查询结果存实例上下文。
@@ -102,7 +103,7 @@ path/to/agentxx_test string_util regex
 
 已实现的插件设计约束 (2026-08)：
 - 导出符号控制: 插件动态库仅导出宿主按名查找的入口符号
-  (`agentxx_plugin_agent_get_info/entry/unload` + client 侧 `agentxx_plugin_client_*`),
+  (`agentxx_plugin_agent_get_info/create/destroy` + client 侧 `agentxx_plugin_client_*`),
   由 `AGENTXX_PLUGIN_EXPORT` 宏标记入口函数 (见 `plugin_api.h`);
   构建侧统一配置: ELF `-fvisibility=hidden` + version script 白名单
   (隐藏第三方静态库符号; 白名单用通配符 `agentxx_plugin_agent_*`/`agentxx_plugin_client_*`,

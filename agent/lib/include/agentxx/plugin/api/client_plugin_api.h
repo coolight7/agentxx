@@ -1,43 +1,18 @@
 /*
- * agentxx/plugin/client_plugin_api.h —— client 侧插件系统纯 C ABI 契约
- *
- * 背景: agent 侧插件 (plugin_api.h) 只扩展 agent 线程能力 (工具/钩子/事件/能力);
- * client (CLI/TUI/未来 GUI) 是另一类宿主, 有自己的生命周期、线程模型与 UI 形态。
- * 本头定义 client 侧插件的跨版本稳定接口, 与 agent 侧入口完全独立:
- *   - 同一动态库可同时导出 agent 入口 (agentxx_plugin_agent_create) 与 client 入口
- *     (agentxx_plugin_client_create), 两个 PluginManager 各自 dlopen/装配, 实例状态独立
- *   - 跨端通信统一走 wire 协议 (WirePluginData agent→client / WirePluginDataUp
- *     client→agent), 插件不感知本地 Channel / 远程 WS 部署形态
+ * agentxx/plugin/client_plugin_api.h —— client 侧插件系统纯 C ABI 契约 (API v1 重构版)
  *
  * ════════════════════════════════════════════════════════════════════
  * 架构: COM 风格接口表查询
  * ════════════════════════════════════════════════════════════════════
- * - 核心 vtable 极简且【契约冻结】: alloc/free/strdup + query_interface;
- *   一切宿主能力按稳定 IID 字符串查询独立接口表获取
- * - 每个接口表首字段恒为 int version (独立演进, 与全局 api_version 解耦);
- *   表内函数指针可能为 NULL (宿主未实现该子能力), 调用前必须判空;
- *   查询未知名称返回 NULL (安全失败)
- * - 版本策略: 全局 AGENTXX_CLIENT_PLUGIN_API_VERSION 只覆盖核心契约;
- *   宿主精确匹配门禁, 无历史兼容路径; 接口表各自带 version 独立演进
- *
- * 设计要点 (与 plugin_api.h 一致):
- * - 纯 C 头: 插件可用任意编译器/任意语言实现, 与宿主 STL/异常/RTTI ABI 解耦
- * - 跨 CRT 堆边界: 宿主分配的内存经核心 vtable alloc/free/strdup;
- *   字符串参数一律 AgentxxPluginStringView (data+size 只读借用, 仅本次调用有效)
- * - 每插件一个 AgentxxPluginHost (opaque 指向宿主侧插件实例); 卸载时宿主自动
- *   清理其全部注册残留 (status item/panel/command/订阅)
- * - 线程约定:
- *   - entry 运行在宿主线程池, 注册动作由接口表实现内部 post 回 client io 线程执行
- *   - 事件 handler / 命令 execute / panel action 回调均在 client io 线程同步调用,
- *     必须快速返回 (长时间任务请自行投递线程, 结果经 post 回 io 线程再更新 UI)
- *   - UI 线程 (TUI 渲染/事件) 从不直接调用插件代码; 交互经宿主投递回 io 线程
- * - 回调异常不外泄: 宿主接口表全部函数内部捕获异常; 插件侧回调同样不得让
- *   异常逃逸 (宿主调用处已兜底)
- * - 命令 execute 返回值: 动作 JSON 字符串 (host->alloc):
- *     {"action":"none"}                      已处理完毕
- *     {"action":"send","text":"..."}         代为发送一条用户消息 (经 UI 排队语义)
- *     {"action":"toast","text":"...","level":0|1|2}
- *   宿主解释执行动作; 非法/未知 action 仅记日志, 不影响会话
+ * - 明确字节对齐: 全部跨边界 ABI 结构体严格遵循 8 字节对齐 (#pragma pack(push, 8))
+ * - 明确基本类型: 统一使用定长基本类型 (int32_t, int64_t, uint64_t)，杜绝跨平台整型宽度差异
+ * - 明确函数调用约定: 接口表函数指针、入口符号与回调全部显式标注 AGENTXX_PLUGIN_CALL (__stdcall)
+ * - 结构体传递与返回值规范:
+ *   * 结构体入参统一采用指针传递 (const Struct*)
+ *   * 结构体返回值统一改为函数出参 (Struct* out) 并返回 int32_t 状态码
+ * - 版本策略:
+ *   * 全局 AGENTXX_CLIENT_PLUGIN_API_VERSION 严格匹配门禁 (当前为 1)
+ *   * 全部接口表版本统一重置为 1
  */
 #ifndef AGENTXX_CLIENT_PLUGIN_API_H
 #define AGENTXX_CLIENT_PLUGIN_API_H
@@ -46,32 +21,32 @@
 #include <stdint.h>
 #include <string.h>
 
-#include "agentxx/plugin/api/plugin_api.h" /* AgentxxPluginStringView / AgentxxPluginSubscription /
-                                          AGENTXX_PLUGIN_QUERY_IFACE / 核心契约共享类型 */
+#include "agentxx/plugin/api/plugin_api.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-/// 全局 API 版本 (client 侧): 只覆盖核心契约 (核心 vtable 形状 + Info 结构 +
-/// 入口符号)。接口表各自带 version 独立演进, 不影响本版本号。
-/// 宿主精确匹配门禁: info.api_version != 本值 → 拒绝加载
+/// 全局 API 版本 (client 侧)
 #define AGENTXX_CLIENT_PLUGIN_API_VERSION 1
+
+#pragma pack(push, 8)
 
 /* ==================== 插件元信息 ==================== */
 
 typedef struct AgentxxClientPluginInfo {
-    int                     api_version; ///< 必须 == AGENTXX_CLIENT_PLUGIN_API_VERSION
+    int32_t                 api_version; ///< 必须 == AGENTXX_CLIENT_PLUGIN_API_VERSION
+    uint32_t                _reserved;   ///< 8 字节补齐
     AgentxxPluginStringView name;        ///< 唯一标识 (与 agent 侧插件共用命名空间)
     AgentxxPluginStringView version;
     AgentxxPluginStringView description;
 } AgentxxClientPluginInfo;
 
-/* ==================== client 事件类型枚举 (载荷 JSON 字符串) ==================== */
+/* ==================== client 事件类型枚举 ==================== */
 
-/// 事件类型 (payload 均为 JSON 字符串, 宿主构造; 语义见注释)
+/// 事件类型 (payload 均为 JSON 字符串, 宿主构造)
 typedef enum AgentxxClientEvent {
-    AGENTXX_CLIENT_EVT_READY = 0, ///< 服务端就绪 {"interfaces":[...],"sessionId"} (启动后最早事件)
+    AGENTXX_CLIENT_EVT_READY = 0,      ///< 服务端就绪 {"interfaces":[...],"sessionId"}
     AGENTXX_CLIENT_EVT_CONN_STATE,     ///< 连接状态变化 {"connState","startupProgress"}
     AGENTXX_CLIENT_EVT_USER_INPUT,     ///< 用户输入已发出 {"sessionId","text"}
     AGENTXX_CLIENT_EVT_DELTA,          ///< 增量事件 (同 wire delta JSON 字段)
@@ -87,18 +62,14 @@ typedef struct AgentxxStatusItem  AgentxxStatusItem;  ///< 状态栏项句柄
 typedef struct AgentxxPanel       AgentxxPanel;       ///< 侧边栏面板句柄
 typedef struct AgentxxInfoSection AgentxxInfoSection; ///< 侧边栏 Info 栏段落句柄
 
-/* ==================== 核心宿主函数表 (契约冻结) ==================== */
-/* 合并: client 侧复用 agent 侧核心 vtable 类型 (布局完全一致: alloc/free/strdup +
- * query_interface)， 统一经 AgentxxPluginHostVtable / AgentxxPluginHost 承载，避免双套类型冗余。
- */
-
 /* ==================== 接口表: 展示/命令/toast (agentxx.client.ui) ==================== */
 
 #define AGENTXX_IFACE_CLIENT_UI         "agentxx.client.ui"
 #define AGENTXX_IFACE_CLIENT_UI_VERSION 1
 
 typedef struct AgentxxClientUiIface {
-    int version; ///< 必须 >= AGENTXX_IFACE_CLIENT_UI_VERSION
+    int32_t  version; ///< 必须 == AGENTXX_IFACE_CLIENT_UI_VERSION
+    uint32_t _reserved;
 
     /* ---- 状态栏项 ---- */
     /// 注册状态栏项; 返回句柄 (宿主持有; 卸载自动清理)
@@ -106,30 +77,33 @@ typedef struct AgentxxClientUiIface {
     /// - initialJson: {"text": "...", "tooltip": "..."} (text 必填)
     /// - align: 0=左侧 1=右侧; order: 组内排序 (小在前)
     /// - 宿主不支持该子能力 (函数指针 NULL) 或 id 冲突时返回 NULL
-    AgentxxStatusItem* (*register_status_item)(
-        const AgentxxPluginHost* host,
-        AgentxxPluginStringView  id,
-        AgentxxPluginStringView  initialJson,
-        int                      align,
-        int                      order
+    AgentxxStatusItem*(AGENTXX_PLUGIN_CALL* register_status_item)(
+        const AgentxxPluginHost*       host,
+        const AgentxxPluginStringView* id,
+        const AgentxxPluginStringView* initialJson,
+        int32_t                        align,
+        int32_t                        order
     );
     /// 更新状态栏项文本 ({"text": "..."}); 句柄无效返回非 0
-    int (*update_status_item)(
-        const AgentxxPluginHost* host,
-        AgentxxStatusItem*       item,
-        AgentxxPluginStringView  json
+    int32_t(AGENTXX_PLUGIN_CALL* update_status_item)(
+        const AgentxxPluginHost*       host,
+        AgentxxStatusItem*             item,
+        const AgentxxPluginStringView* json
     );
     /// 注销状态栏项 (句柄随后失效)
-    void (*unregister_status_item)(const AgentxxPluginHost* host, AgentxxStatusItem* item);
+    void(AGENTXX_PLUGIN_CALL* unregister_status_item)(
+        const AgentxxPluginHost* host,
+        AgentxxStatusItem*       item
+    );
 
     /* ---- 侧边栏面板 ---- */
     /// 注册侧边栏面板; 返回句柄 (宿主持有; 卸载自动清理)
     /// - id: 全局唯一, 建议 "{插件名}.{面板名}"
     /// - propsJson: {"title": "..."} (title 必填; 显示在 tab 栏)
-    AgentxxPanel* (*register_panel)(
-        const AgentxxPluginHost* host,
-        AgentxxPluginStringView  id,
-        AgentxxPluginStringView  propsJson
+    AgentxxPanel*(AGENTXX_PLUGIN_CALL* register_panel)(
+        const AgentxxPluginHost*       host,
+        const AgentxxPluginStringView* id,
+        const AgentxxPluginStringView* propsJson
     );
     /// 更新面板内容: itemsJson = {"items":[{"kind":"text","role":"normal","text":"..."},
     ///   {"kind":"progress","label":"...","value":0.5},
@@ -138,33 +112,35 @@ typedef struct AgentxxClientUiIface {
     ///   "hint"=减淡提示 (缺省按 normal 渲染; 其余 role 值等同 normal)
     /// - action 项被用户点击时: 宿主 post 到 client io 线程回调面板注册时经
     ///   register_panel 关联的 on_action (见 entry 注册流程; 经回调参数注入)
-    int (*update_panel)(
-        const AgentxxPluginHost* host,
-        AgentxxPanel*            panel,
-        AgentxxPluginStringView  itemsJson
+    int32_t(AGENTXX_PLUGIN_CALL* update_panel)(
+        const AgentxxPluginHost*       host,
+        AgentxxPanel*                  panel,
+        const AgentxxPluginStringView* itemsJson
     );
-    /// 注销面板 (句柄随后失效)
-    void (*unregister_panel)(const AgentxxPluginHost* host, AgentxxPanel* panel);
+    void(AGENTXX_PLUGIN_CALL* unregister_panel)(const AgentxxPluginHost* host, AgentxxPanel* panel);
 
     /* ---- 侧边栏 Info 栏段落 ---- */
     /// 注册 Info 栏段落; 返回句柄 (宿主持有; 卸载自动清理)
     /// - id: 全局唯一, 建议 "{插件名}.{段名}"
     /// - propsJson: {"title": "..."} (title 可选; 空则无段落标题)
-    AgentxxInfoSection* (*register_info_section)(
-        const AgentxxPluginHost* host,
-        AgentxxPluginStringView  id,
-        AgentxxPluginStringView  propsJson
+    AgentxxInfoSection*(AGENTXX_PLUGIN_CALL* register_info_section)(
+        const AgentxxPluginHost*       host,
+        const AgentxxPluginStringView* id,
+        const AgentxxPluginStringView* propsJson
     );
     /// 更新 Info 栏段落内容: itemsJson 同 update_panel 的 items schema
     ///   ({"items":[{"kind":"text","role":"title|normal|hint","text":"..."}, ...]});
     ///   列表项由宿主按侧边栏 Append 段样式以 "|  xxx" 前缀展示
-    int (*update_info_section)(
-        const AgentxxPluginHost* host,
-        AgentxxInfoSection*      section,
-        AgentxxPluginStringView  itemsJson
+    int32_t(AGENTXX_PLUGIN_CALL* update_info_section)(
+        const AgentxxPluginHost*       host,
+        AgentxxInfoSection*            section,
+        const AgentxxPluginStringView* itemsJson
     );
     /// 注销 Info 栏段落 (句柄随后失效)
-    void (*unregister_info_section)(const AgentxxPluginHost* host, AgentxxInfoSection* section);
+    void(AGENTXX_PLUGIN_CALL* unregister_info_section)(
+        const AgentxxPluginHost* host,
+        AgentxxInfoSection*      section
+    );
 
     /* ---- 斜杠命令 ---- */
     /// 注册斜杠命令: 用户输入 "/{name}" 触发 (name 不含 '/' 与空格)
@@ -172,21 +148,32 @@ typedef struct AgentxxClientUiIface {
     /// - execute: client io 线程同步调用; 返回动作 JSON (host->alloc), 失败返回
     ///   空串并经 errorOut 输出错误 (host->alloc); 宿主解释动作 (见文件头)
     /// - 返回 0 成功; 名字冲突或参数非法返回非 0
-    int (*register_command)(
-        const AgentxxPluginHost* host,
-        AgentxxPluginStringView  name,
-        AgentxxPluginStringView  description,
-        AgentxxPluginString (*execute)(void* ud, AgentxxPluginStringView argsJson, AgentxxPluginString* errorOut),
+    int32_t(AGENTXX_PLUGIN_CALL* register_command)(
+        const AgentxxPluginHost*       host,
+        const AgentxxPluginStringView* name,
+        const AgentxxPluginStringView* description,
+        int32_t(AGENTXX_PLUGIN_CALL* execute)(
+            void*                          ud,
+            const AgentxxPluginStringView* argsJson,
+            AgentxxPluginString*           actionOut,
+            AgentxxPluginString*           errorOut
+        ),
         void* ud
     );
-    /// 注销斜杠命令 (按名称); 不存在返回非 0
-    int (*unregister_command)(const AgentxxPluginHost* host, AgentxxPluginStringView name);
+    int32_t(AGENTXX_PLUGIN_CALL* unregister_command)(
+        const AgentxxPluginHost*       host,
+        const AgentxxPluginStringView* name
+    );
 
     /* ---- toast 提示 ---- */
     /// 显示 toast 提示 (level: 0=info 1=warning 2=error; 实现可忽略级别差异)
-    void (*show_toast)(const AgentxxPluginHost* host, AgentxxPluginStringView text, int level);
+    void(AGENTXX_PLUGIN_CALL* show_toast)(
+        const AgentxxPluginHost*       host,
+        const AgentxxPluginStringView* text,
+        int32_t                        level
+    );
 
-    /* ---- v2 追加: 工具消息装饰 (UI 无关语义层) ---- */
+    /* ---- 工具消息装饰 ---- */
     /// 更新/删除本插件对某次工具调用的消息装饰 (io 线程约束):
     /// - 装饰内容为宿主定义 schema 的语义 JSON (非组件), UI 按通用渲染器
     ///   展示: 折叠头 displayName/summary + 展开体 items
@@ -203,10 +190,10 @@ typedef struct AgentxxClientUiIface {
     /// - 典型数据源: 订阅 EVT_DELTA (tool_start 携带完整 arguments) 推送;
     ///   参考实现: agentxx_planning (Plan 渲染完全由插件驱动, TUI 无特化代码)
     /// 返回 0 成功; 非 0 失败 (宿主不支持/JSON 非法)
-    int (*update_tool_decor)(
-        const AgentxxPluginHost* host,
-        AgentxxPluginStringView  tool_call_id,
-        AgentxxPluginStringView  decor_json
+    int32_t(AGENTXX_PLUGIN_CALL* update_tool_decor)(
+        const AgentxxPluginHost*       host,
+        const AgentxxPluginStringView* tool_call_id,
+        const AgentxxPluginStringView* decor_json
     );
 } AgentxxClientUiIface;
 
@@ -216,17 +203,18 @@ typedef struct AgentxxClientUiIface {
 #define AGENTXX_IFACE_CLIENT_EVENTS_VERSION 1
 
 typedef struct AgentxxClientEventsIface {
-    int version; ///< 必须 == AGENTXX_IFACE_CLIENT_EVENTS_VERSION
+    int32_t  version; ///< 必须 == AGENTXX_IFACE_CLIENT_EVENTS_VERSION
+    uint32_t _reserved;
 
     /// 订阅 client 事件 (payload JSON 字符串; 卸载自动退订); event 为
     /// AgentxxClientEvent 枚举值; 失败返回 NULL
-    AgentxxPluginSubscription* (*subscribe)(
+    AgentxxPluginSubscription*(AGENTXX_PLUGIN_CALL* subscribe)(
         const AgentxxPluginHost* host,
-        int                      event, /* AgentxxClientEvent */
-        void (*handler)(AgentxxPluginStringView payloadJson, void* ud),
+        int32_t                  event, /* AgentxxClientEvent */
+        void(AGENTXX_PLUGIN_CALL* handler)(const AgentxxPluginStringView* payloadJson, void* ud),
         void* ud
     );
-    void (*unsubscribe)(AgentxxPluginSubscription* sub);
+    void(AGENTXX_PLUGIN_CALL* unsubscribe)(AgentxxPluginSubscription* sub);
 } AgentxxClientEventsIface;
 
 /* ==================== 接口表: 会话上下文与操作 (agentxx.client.session) ==================== */
@@ -235,24 +223,31 @@ typedef struct AgentxxClientEventsIface {
 #define AGENTXX_IFACE_CLIENT_SESSION_VERSION 1
 
 typedef struct AgentxxClientSessionIface {
-    int version; ///< 必须 == AGENTXX_IFACE_CLIENT_SESSION_VERSION
+    int32_t  version; ///< 必须 == AGENTXX_IFACE_CLIENT_SESSION_VERSION
+    uint32_t _reserved;
 
     /// 当前 client 状态 JSON 快照 (host->alloc):
     /// {"sessionId","connState","model","models":[],"isStreaming",
     ///  "interfaces":["agentxx.client.panel",...],
     ///  "agentPlugins":[{"name","version","interfaces":[...]},...]}
     /// (model/models/agentPlugins 依赖服务端推送; 未收到时为空)
-    AgentxxPluginString (*get_client_state)(const AgentxxPluginHost* host);
+    int32_t(AGENTXX_PLUGIN_CALL* get_client_state)(
+        const AgentxxPluginHost* host,
+        AgentxxPluginString*     out
+    );
     /// 代发一条用户消息 (sessionId 与当前会话不符时仍按当前会话发送并记日志)
     /// - 与用户输入同排队语义 (流式中进 pendingInputs), 不绕过 UI 状态机
     /// - 返回 0 成功; 非 0 表示宿主不可用 (未连接等)
-    int (*send_user_input)(
-        const AgentxxPluginHost* host,
-        AgentxxPluginStringView  sessionId,
-        AgentxxPluginStringView  text
+    int32_t(AGENTXX_PLUGIN_CALL* send_user_input)(
+        const AgentxxPluginHost*       host,
+        const AgentxxPluginStringView* sessionId,
+        const AgentxxPluginStringView* text
     );
     /// 请求取消当前会话轮次 (与用户按 Esc 等价)
-    void (*request_cancel)(const AgentxxPluginHost* host, AgentxxPluginStringView sessionId);
+    void(AGENTXX_PLUGIN_CALL* request_cancel)(
+        const AgentxxPluginHost*       host,
+        const AgentxxPluginStringView* sessionId
+    );
 } AgentxxClientSessionIface;
 
 /* ==================== 接口表: 跨端数据通道 (agentxx.client.wire) ==================== */
@@ -261,15 +256,16 @@ typedef struct AgentxxClientSessionIface {
 #define AGENTXX_IFACE_CLIENT_WIRE_VERSION 1
 
 typedef struct AgentxxClientWireIface {
-    int version; ///< 必须 >= AGENTXX_IFACE_CLIENT_WIRE_VERSION
+    int32_t  version; ///< 必须 == AGENTXX_IFACE_CLIENT_WIRE_VERSION
+    uint32_t _reserved;
 
     /// 发送事件到 agent 侧: 服务端发布到事件总线 topic `client.{插件名}.{event}`
     /// (agent 侧同名插件可订阅; 载荷 JSON 原样透传, 语义由插件定义)
     /// - 返回 0 成功; 非 0 表示未连接或载荷非法
-    int (*send_plugin_data)(
-        const AgentxxPluginHost* host,
-        AgentxxPluginStringView  event,
-        AgentxxPluginStringView  json
+    int32_t(AGENTXX_PLUGIN_CALL* send_plugin_data)(
+        const AgentxxPluginHost*       host,
+        const AgentxxPluginStringView* event,
+        const AgentxxPluginStringView* json
     );
 } AgentxxClientWireIface;
 
@@ -279,19 +275,29 @@ typedef struct AgentxxClientWireIface {
 #define AGENTXX_IFACE_CLIENT_SELF_VERSION 1
 
 typedef struct AgentxxClientSelfIface {
-    int version; ///< 必须 >= AGENTXX_IFACE_CLIENT_SELF_VERSION
+    int32_t  version; ///< 必须 == AGENTXX_IFACE_CLIENT_SELF_VERSION
+    uint32_t _reserved;
 
     /// 本插件信息 JSON {"name","version","description","path"}
     /// (加载时常用: 从 path 推导资源目录; host->alloc)
-    AgentxxPluginString (*get_own_info)(const AgentxxPluginHost* host);
+    int32_t(AGENTXX_PLUGIN_CALL* get_own_info)(
+        const AgentxxPluginHost* host,
+        AgentxxPluginString*     out
+    );
     /// 本插件配置参数 JSON (yaml `plugins` 条目 args; io 线程; host->alloc):
     /// 宿主不解析 args 字段语义, 整体原样传递; 未配置时返回 "{}"
-    AgentxxPluginString (*get_plugin_args)(const AgentxxPluginHost* host);
+    int32_t(AGENTXX_PLUGIN_CALL* get_plugin_args)(
+        const AgentxxPluginHost* host,
+        AgentxxPluginString*     out
+    );
     /// 本插件配置文件所在目录或文件路径 (yaml `plugins` 条目 config; io 线程;
     /// host->alloc; 未指定返回空串)
     /// - 可指向文件或目录 (由插件自行判断类型并加载)
     /// - 宿主已归一化为绝对路径 (正斜杠, lexically_normal)
-    AgentxxPluginString (*get_plugin_config_path)(const AgentxxPluginHost* host);
+    int32_t(AGENTXX_PLUGIN_CALL* get_plugin_config_path)(
+        const AgentxxPluginHost* host,
+        AgentxxPluginString*     out
+    );
 } AgentxxClientSelfIface;
 
 /* ==================== 接口表: JSON 辅助 (agentxx.client.json) ==================== */
@@ -300,16 +306,22 @@ typedef struct AgentxxClientSelfIface {
 #define AGENTXX_IFACE_CLIENT_JSON_VERSION 1
 
 typedef struct AgentxxClientJsonIface {
-    int version; ///< 必须 == AGENTXX_IFACE_CLIENT_JSON_VERSION
+    int32_t  version; ///< 必须 == AGENTXX_IFACE_CLIENT_JSON_VERSION
+    uint32_t _reserved;
 
     /// 从 JSON 字符串提取指定 key 的字符串值 (宿主解析; 结果 host->alloc)
-    AgentxxPluginString (*json_get_string)(
-        const AgentxxPluginHost* host,
-        AgentxxPluginStringView  json,
-        AgentxxPluginStringView  key
+    int32_t(AGENTXX_PLUGIN_CALL* json_get_string)(
+        const AgentxxPluginHost*       host,
+        const AgentxxPluginStringView* json,
+        const AgentxxPluginStringView* key,
+        AgentxxPluginString*           out
     );
     /// 字符串 → JSON 字符串字面量 (含引号包裹与转义; 结果 host->alloc)
-    AgentxxPluginString (*json_escape)(const AgentxxPluginHost* host, AgentxxPluginStringView s);
+    int32_t(AGENTXX_PLUGIN_CALL* json_escape)(
+        const AgentxxPluginHost*       host,
+        const AgentxxPluginStringView* s,
+        AgentxxPluginString*           out
+    );
 } AgentxxClientJsonIface;
 
 /* ==================== 接口表: 日志 (agentxx.client.log) ==================== */
@@ -318,18 +330,19 @@ typedef struct AgentxxClientJsonIface {
 #define AGENTXX_IFACE_CLIENT_LOG_VERSION 1
 
 typedef struct AgentxxClientLogIface {
-    int version; ///< 必须 == AGENTXX_IFACE_CLIENT_LOG_VERSION
+    int32_t  version; ///< 必须 == AGENTXX_IFACE_CLIENT_LOG_VERSION
+    uint32_t _reserved;
 
     /// 日志 (线程安全; 0=trace 1=debug 2=info 3=warn 4=error)
-    void (*log)(const AgentxxPluginHost* host, int level, AgentxxPluginStringView msg);
+    void(AGENTXX_PLUGIN_CALL*
+             log)(const AgentxxPluginHost* host, int32_t level, const AgentxxPluginStringView* msg);
 } AgentxxClientLogIface;
 
 /* ==================== 插件入口符号 (dlsym) ==================== */
 
 /// 可选: 查询插件元信息 (加载前调用, 用于版本/信息校验; 未导出则跳过;
 /// 纯静态元数据, 不得读取/依赖任何实例状态)
-typedef const AgentxxClientPluginInfo* (*AgentxxClientPluginGetInfoFn)(void);
-
+typedef const AgentxxClientPluginInfo*(AGENTXX_PLUGIN_CALL* AgentxxClientPluginGetInfoFn)(void);
 /// 必需: client 侧插件实例创建 (宿主线程池调用; 内部注册动作宿主自动投递回
 /// client io 线程; 语义同 agent 侧 agentxx_plugin_agent_create)
 /// 【多实例契约】可重入, 每次调用产出独立存活实例 —— 一切实例状态只能
@@ -338,16 +351,20 @@ typedef const AgentxxClientPluginInfo* (*AgentxxClientPluginGetInfoFn)(void);
 /// - host: 本实例专属宿主句柄 (opaque 已关联本实例)
 /// - plugin_ctx: 输出本实例私有上下文 (透传给 destroy)
 /// - 返回 0 成功; 非 0 创建失败 (宿主走失败清理路径并报告错误)
-typedef int (*AgentxxClientPluginCreateFn)(const AgentxxPluginHost* host, void** plugin_ctx);
-
+typedef int32_t(AGENTXX_PLUGIN_CALL* AgentxxClientPluginCreateFn)(
+    const AgentxxPluginHost* host,
+    void**                   plugin_ctx
+);
 /// 可选: 插件实例销毁 (宿主等全部在途回调完成后调用; 宿主会在此之前自动
 /// 反注册该实例的一切 status item/panel/command/订阅)。只销毁对应 create
 /// 产出的实例上下文, 与其他并存实例无关。
-typedef void (*AgentxxClientPluginDestroyFn)(void* plugin_ctx);
+typedef void(AGENTXX_PLUGIN_CALL* AgentxxClientPluginDestroyFn)(void* plugin_ctx);
 
 #define AGENTXX_PLUGIN_CLIENT_SYMBOL_GET_INFO "agentxx_plugin_client_get_info"
 #define AGENTXX_PLUGIN_CLIENT_SYMBOL_CREATE   "agentxx_plugin_client_create"
 #define AGENTXX_PLUGIN_CLIENT_SYMBOL_DESTROY  "agentxx_plugin_client_destroy"
+
+#pragma pack(pop)
 
 #ifdef __cplusplus
 }

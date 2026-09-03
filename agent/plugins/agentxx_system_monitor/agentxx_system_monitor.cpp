@@ -121,7 +121,7 @@ static std::string formatUsageText(const agentxx_system_monitor_plugin::CpuGpuUs
 
 extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_agent_get_info(void) {
     static const AgentxxPluginInfo info{
-        AGENTXX_PLUGIN_API_VERSION,
+        AGENTXX_PLUGIN_API_VERSION, 0,
         agentxx_plugin_sv_cstr("agentxx_system_monitor"),
         agentxx_plugin_sv_cstr("1.0.0"),
         agentxx_plugin_sv_cstr("System resource monitor: CPU/memory/GPU usage tool and "
@@ -185,18 +185,19 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
 
             // 3. 跨端控制事件与宿主约定事件订阅
             if (ctx->iface.events && ctx->iface.events->subscribe) {
+                auto t1 = agentxx_plugin_sv_cstr("client.agentxx_system_monitor.usage_enabled");
                 ctx->iface.events->subscribe(
                     host,
-                    agentxx_plugin_sv_cstr("client.agentxx_system_monitor.usage_enabled"),
-                    [](AgentxxPluginStringView event_json, void* ud) {
+                    &t1,
+                    [](const AgentxxPluginStringView* event_json, void* ud) {
                         auto* c = static_cast<PluginCtx*>(ud);
                         if (!c) {
                             return;
                         }
                         try {
                             std::string s(
-                                event_json.data ? event_json.data : "{}",
-                                event_json.size
+                                event_json && event_json->data ? event_json->data : "{}",
+                                event_json ? static_cast<size_t>(event_json->size) : 0
                             );
                             auto j = neograph::json::parse(s);
                             c->usageEnabled.store(
@@ -210,10 +211,11 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                 );
 
                 // 客户端接入/重连时立即发布一次状态快照 (修复初始状态滞留为空)
+                auto t2 = agentxx_plugin_sv_cstr("agentxx_host.client_attached");
                 ctx->iface.events->subscribe(
                     host,
-                    agentxx_plugin_sv_cstr("agentxx_host.client_attached"),
-                    [](AgentxxPluginStringView, void* ud) {
+                    &t2,
+                    [](const AgentxxPluginStringView*, void* ud) {
                         auto* c = static_cast<PluginCtx*>(ud);
                         if (!c || !c->usageEnabled.load(std::memory_order_relaxed)) {
                             return;
@@ -224,21 +226,19 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                         c->iface.scheduler->offload(
                             c->host,
                             nullptr,
-                            [](void*, volatile int*, AgentxxPluginString*) -> void* {
+                            [](void*, volatile int32_t*, AgentxxPluginString*) -> void* {
                                 return new agentxx_system_monitor_plugin::CpuGpuUsage(querySync());
                             },
-                            [](void* ud, void* res, AgentxxPluginStringView err) {
+                            [](void* ud, void* res, const AgentxxPluginStringView* err) {
                                 (void)err;
                                 auto* c = static_cast<PluginCtx*>(ud);
                                 auto* u
                                     = static_cast<agentxx_system_monitor_plugin::CpuGpuUsage*>(res);
                                 if (c && u && c->iface.events && c->iface.events->publish) {
                                     std::string json = usageToJson(*u);
-                                    c->iface.events->publish(
-                                        c->host,
-                                        agentxx_plugin_sv_cstr("agentxx_system_monitor.usage"),
-                                        agentxx_plugin_sv(json.data(), json.size())
-                                    );
+                                    auto topicSv = agentxx_plugin_sv_cstr("agentxx_system_monitor.usage");
+                                    auto jsonSv  = agentxx_plugin_sv(json.data(), json.size());
+                                    c->iface.events->publish(c->host, &topicSv, &jsonSv);
                                 }
                                 delete u;
                             },
@@ -263,11 +263,9 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                             }
                             std::string json = usageToJson(usage);
                             if (c.iface.events && c.iface.events->publish) {
-                                c.iface.events->publish(
-                                    c.host,
-                                    agentxx_plugin_sv_cstr("agentxx_system_monitor.usage"),
-                                    agentxx_plugin_sv(json.data(), json.size())
-                                );
+                                auto topicSv = agentxx_plugin_sv_cstr("agentxx_system_monitor.usage");
+                                auto jsonSv  = agentxx_plugin_sv(json.data(), json.size());
+                                c.iface.events->publish(c.host, &topicSv, &jsonSv);
                             }
                         }
                         co_await agentxx::plugin::sleep(c, kUsageIntervalSec * 1000);
@@ -381,11 +379,9 @@ static void refreshUsageDisplay(ClientCtx& ctx) {
         return;
     }
     if (!ctx.section && ctx.ui && ctx.ui->register_info_section) {
-        ctx.section = ctx.ui->register_info_section(
-            ctx.host,
-            agentxx_plugin_sv_cstr("agentxx_system_monitor.usage"),
-            agentxx_plugin_sv_cstr(R"({"title":"System"})")
-        );
+        auto idSv    = agentxx_plugin_sv_cstr("agentxx_system_monitor.usage");
+        auto propsSv = agentxx_plugin_sv_cstr(R"({"title":"System"})");
+        ctx.section = ctx.ui->register_info_section(ctx.host, &idSv, &propsSv);
     }
     if (!ctx.section || !ctx.ui || !ctx.ui->update_info_section || ctx.last_usage_json.empty()) {
         return;
@@ -403,15 +399,16 @@ static void refreshUsageDisplay(ClientCtx& ctx) {
         off["items"].push_back(std::move(it));
         json = off.dump();
     }
-    ctx.ui->update_info_section(ctx.host, ctx.section, agentxx_plugin_sv(json.data(), json.size()));
+    auto jsonSv = agentxx_plugin_sv(json.data(), json.size());
+    ctx.ui->update_info_section(ctx.host, ctx.section, &jsonSv);
 }
 
-static void onClientPluginData(AgentxxPluginStringView payload_json, void* ud) {
+static void AGENTXX_PLUGIN_CALL onClientPluginData(const AgentxxPluginStringView* payload_json, void* ud) {
     auto* ctx = static_cast<ClientCtx*>(ud);
     if (!ctx || !ctx->host) {
         return;
     }
-    std::string raw(payload_json.data ? payload_json.data : "{}", payload_json.size);
+    std::string raw(payload_json && payload_json->data ? payload_json->data : "{}", payload_json ? static_cast<size_t>(payload_json->size) : 0);
     try {
         auto j = neograph::json::parse(raw);
         if (j.value("plugin", std::string{}) != "agentxx_system_monitor"
@@ -441,39 +438,43 @@ static void onClientPluginData(AgentxxPluginStringView payload_json, void* ud) {
     }
 }
 
-static AgentxxPluginString cmdSysinfoExecute(void* ud, AgentxxPluginStringView args_json, AgentxxPluginString* errorOut) {
+static int32_t AGENTXX_PLUGIN_CALL cmdSysinfoExecute(
+    void*                          ud,
+    const AgentxxPluginStringView* args_json,
+    AgentxxPluginString*           actionOut,
+    AgentxxPluginString*           errorOut
+) {
     (void)args_json;
     (void)errorOut;
     auto* ctx = static_cast<ClientCtx*>(ud);
     if (!ctx || !ctx->host) {
-        return AgentxxPluginString{nullptr, 0};
+        return -1;
     }
     return agentxx::plugin::guardCall(
         [ctx](const char* m) noexcept {
             ctx->logErr(m);
         },
-        AgentxxPluginString{nullptr, 0},
-        [&]() -> AgentxxPluginString {
+        -1,
+        [&]() -> int {
             const bool next = !ctx->usage_enabled.load(std::memory_order_relaxed);
             ctx->usage_enabled.store(next, std::memory_order_relaxed);
             refreshUsageDisplay(*ctx);
             if (ctx->iface.wire && ctx->iface.wire->send_plugin_data) {
                 std::string payload = next ? R"({"enabled":true})" : R"({"enabled":false})";
-                ctx->iface.wire->send_plugin_data(
-                    ctx->host,
-                    agentxx_plugin_sv_cstr("usage_enabled"),
-                    agentxx_plugin_sv(payload.data(), payload.size())
-                );
+                auto evtSv = agentxx_plugin_sv_cstr("usage_enabled");
+                auto paySv = agentxx_plugin_sv(payload.data(), payload.size());
+                ctx->iface.wire->send_plugin_data(ctx->host, &evtSv, &paySv);
             }
             std::string text = next ? "System resource info: ON" : "System resource info: OFF";
             {
-                AgentxxPluginString stateJson = ctx->iface.session && ctx->iface.session->get_client_state
-                                         ? ctx->iface.session->get_client_state(ctx->host)
-                                         : AgentxxPluginString{nullptr, 0};
+                AgentxxPluginString stateJson{nullptr, 0};
+                if (ctx->iface.session && ctx->iface.session->get_client_state) {
+                    ctx->iface.session->get_client_state(ctx->host, &stateJson);
+                }
                 bool  agentMissing = false;
                 if (stateJson.data) {
                     try {
-                        auto st = neograph::json::parse(std::string(stateJson.data, stateJson.size));
+                        auto st = neograph::json::parse(std::string(stateJson.data, static_cast<size_t>(stateJson.size)));
                         if (st.contains("agentPlugins") && st["agentPlugins"].is_array()) {
                             size_t n     = 0;
                             bool   found = false;
@@ -496,14 +497,16 @@ static AgentxxPluginString cmdSysinfoExecute(void* ud, AgentxxPluginStringView a
             }
             neograph::json esc;
             esc["text"] = text;
-            // use simple json escape via neograph dump then extract? easier use clientJson logic
-            // via neograph 但 toast 的 text 需要 json 转义，neograph 会自动处理，直接构造
             neograph::json out;
             out["action"]      = "toast";
             out["text"]        = text;
             out["level"]       = 0;
             std::string dumped = out.dump();
-            return agentxx_plugin_string_from_sv(ctx->host, agentxx_plugin_sv(dumped.data(), dumped.size()));
+            auto paySv = agentxx_plugin_sv(dumped.data(), dumped.size());
+            if (actionOut) {
+                *actionOut = agentxx_plugin_string_from_sv(ctx->host, &paySv);
+            }
+            return 0;
         }
     );
 }
@@ -511,7 +514,7 @@ static AgentxxPluginString cmdSysinfoExecute(void* ud, AgentxxPluginStringView a
 extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxClientPluginInfo* agentxx_plugin_client_get_info(void
 ) {
     static const AgentxxClientPluginInfo info{
-        AGENTXX_CLIENT_PLUGIN_API_VERSION,
+        AGENTXX_CLIENT_PLUGIN_API_VERSION, 0,
         agentxx_plugin_sv_cstr("agentxx_system_monitor"),
         agentxx_plugin_sv_cstr("1.0.0"),
         agentxx_plugin_sv_cstr("System resource usage: Info section (CPU/RAM/GPU), /sysinfo toggle"
@@ -542,11 +545,9 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
             raw = ctx.get();
 
             if (ctx->ui && ctx->ui->register_info_section) {
-                ctx->section = ctx->ui->register_info_section(
-                    host,
-                    agentxx_plugin_sv_cstr("agentxx_system_monitor.usage"),
-                    agentxx_plugin_sv_cstr(R"({"title":"System"})")
-                );
+                auto idSv    = agentxx_plugin_sv_cstr("agentxx_system_monitor.usage");
+                auto propsSv = agentxx_plugin_sv_cstr(R"({"title":"System"})");
+                ctx->section = ctx->ui->register_info_section(host, &idSv, &propsSv);
             }
 
             if (!ctx->iface.events || !ctx->iface.events->subscribe
@@ -560,15 +561,11 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
             }
 
             if (ctx->ui && ctx->ui->register_command) {
-                if (ctx->ui->register_command(
-                        host,
-                        agentxx_plugin_sv_cstr("sysinfo"),
-                        agentxx_plugin_sv_cstr(
-                            "Toggle system resource info display (CPU/RAM/GPU Info section)"
-                        ),
-                        cmdSysinfoExecute,
-                        ctx.get()
-                    )
+                auto nameSv = agentxx_plugin_sv_cstr("sysinfo");
+                auto descSv = agentxx_plugin_sv_cstr(
+                    "Toggle system resource info display (CPU/RAM/GPU Info section)"
+                );
+                if (ctx->ui->register_command(host, &nameSv, &descSv, cmdSysinfoExecute, ctx.get())
                     != 0) {
                     return -1;
                 }

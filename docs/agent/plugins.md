@@ -10,7 +10,7 @@ Agentxx 插件系统采用 **纯 C ABI + COM 风格接口表查询**：
 
 - **纯 C 边界**：跨边界仅传递纯 C 基本类型、函数指针、不透明句柄与 `AgentxxPluginStringView` (data+size 只读借用，不要求 NUL 结尾)，严禁直接传递 `std::string/vector/function` 或 C++ 异常
 - **跨编译器/标准库/语言兼容**：主程序与插件可由不同编译器、不同 STL (libstdc++/libc++/MSVC STL) 或不同语言独立编译，运行时稳定兼容
-- **内存所有权**：所有跨边界堆内存统一经 `host->alloc/free/strdup` (核心 vtable) 管理，接收方用后 `host->free`
+- **内存所有权**：所有跨边界堆内存统一经 `host->alloc/free` (核心 vtable 内存管理两件套) 管理，接收方用后 `host->free`；字符串复制采用头文件内联助手 `agentxx_plugin_strdup(host, ...)`
 - **原生协程异步支持**：经 `plugin_kit.h` 的 `Task<T>`，插件协程执行于宿主 IO 线程，挂起让出、完成经 IO 线程回调唤醒，宿主与插件的协程执行可互相交错切换，且运行于同一线程无锁，无轮询、无私有事件循环
 - **单线程会话**：宿主会话可变状态仅在主 IO 线程串行访问；插件注册/状态访问由宿主内部按需 `post` 回 IO 线程，插件无感
 
@@ -20,19 +20,26 @@ Agentxx 插件系统采用 **纯 C ABI + COM 风格接口表查询**：
 
 ```
 宿主 (libagentxx / agentxx_cli)
-  核心 vtable (冻结) ── alloc / free / strdup / query_interface (IID → 接口表)
+  核心 vtable (冻结) ── alloc / free / query_interface (IID → 接口表)
                        │
          ┌─────────────┼─────────────┬──────────────┬─────────────┐
-         │ tools       │ hooks       │ events       │ scheduler   │  ...13 张
+         │ tools       │ hooks       │ events       │ scheduler   │  ...14 张
          │ register/   │ 7 钩子点     │ publish/     │ sleep/      │  capabilities/
          │ call_tool   │             │ subscribe    │ offload     │  session/plugins/
          └─────────────┘             └──────────────┘             │  config/model/cancel/...
 插件动态库 (任意编译器) ── AGENTXX_PLUGIN_EXPORT 入口 ── PluginBase 上下文堆 ── SDK 注册族
 ```
 
-- **核心 vtable 冻结**：仅 `alloc/free/strdup + query_interface`，永不增删；一切宿主能力按稳定 `IID` 字符串查询独立接口表获取 (`AGENTXX_PLUGIN_QUERY_IFACE` 宏)
-- **接口表独立演进**：每张表首字段 `int version` 独立版本号；表内函数指针可能为 `NULL` (宿主未实现该子能力，调用前判空)
-- **版本门禁**：全局 `AGENTXX_PLUGIN_API_VERSION` / `AGENTXX_CLIENT_PLUGIN_API_VERSION` 精确匹配，否则拒绝加载；新增能力 = 新增接口表或表内追加成员并递增该表版本，全局版本号不动
+- **核心 vtable 冻结**：仅 `alloc/free + query_interface`，永不增删；一切宿主能力按稳定 `IID` 字符串查询独立接口表获取 (`AGENTXX_PLUGIN_QUERY_IFACE` 宏)
+- **严格 ABI 规约**：
+  - 8 字节结构体对齐：头文件统一包含 `#pragma pack(push, 8)` / `#pragma pack(pop)`
+  - 定长基础数据类型：禁止无修饰 `int/long/size_t`，跨边界统一采用 `int32_t`、`int64_t`、`uint64_t` 等定长类型
+  - 明确调用约定：跨边界导出符号与函数指针一律携带宏 `AGENTXX_PLUGIN_CALL` (Windows 平台定义为 `__stdcall`，x64 Unix 平台为空)
+  - 结构体传参与返回值：跨边界禁止值传递聚合结构体，入参一律为指针 (`const Struct*`)；结构体返回值一律改为指针出参 (`Struct* out`) 并返回 `int32_t` 状态码 (0 表示成功)
+  - 核心 vtable 精简：移除原 `strdup` 槽位，改为基于 `alloc` 的头文件内联实现 `agentxx_plugin_strdup`
+  - C++ 辅助便捷层：`AgentxxPluginStringView` 与 `AgentxxPluginString` 内置 `operator const T*()` 隐式取址转换与 `empty()` 方法，文件尾部提供值传兼容重载与 `agentxx_plugin_string_free` 重载
+- **接口表独立演进**：每张表首字段 `int32_t version` 独立版本号；表内函数指针可能为 `NULL` (宿主未实现该子能力，调用前判空)
+- **版本门禁**：全局 `AGENTXX_PLUGIN_API_VERSION` / `AGENTXX_CLIENT_PLUGIN_API_VERSION` 均重置为 1，加载时精确匹配否则拒绝；新增能力 = 新增接口表或表内追加成员并递增该表版本，全局版本号不动
 - **线程约定**：`query_interface/alloc` 任意线程；注册类与 session/config/prompt 等 IO 约束操作由宿主内部投递同步等待；两件套 `start/cancel` 由宿主在 IO 线程驱动 (单次 <~1ms)；`AgentxxPluginOperatorNotify.done` 可任意线程回调；宿主派发给插件的完成回调 (`AgentxxOpCb`/sleep/offload done) 保证在 IO 线程 `post` 入队
 
 ---
@@ -54,7 +61,7 @@ Agentxx 插件系统采用 **纯 C ABI + COM 风格接口表查询**：
 ```c
 #include "agentxx/plugin/api/plugin_api.h"
 extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_agent_get_info(void);
-extern "C" AGENTXX_PLUGIN_EXPORT int agentxx_plugin_agent_create(const AgentxxHost* host, void** plugin_ctx);
+extern "C" AGENTXX_PLUGIN_EXPORT int32_t agentxx_plugin_agent_create(const AgentxxPluginHost* host, void** plugin_ctx);
 extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_agent_destroy(void* plugin_ctx);
 ```
 
@@ -93,7 +100,7 @@ auto b64 = agentxx::util::base64Encode(data);
 #include "agentxx/plugin/api/plugin_kit.h"
 struct MyPluginCtx : public agentxx::plugin::PluginBase {};
 
-extern "C" AGENTXX_PLUGIN_EXPORT int agentxx_plugin_agent_create(const AgentxxHost* host, void** plugin_ctx) {
+extern "C" AGENTXX_PLUGIN_EXPORT int32_t agentxx_plugin_agent_create(const AgentxxPluginHost* host, void** plugin_ctx) {
     auto ctx = std::make_unique<MyPluginCtx>();
     ctx->init(host);
 
@@ -133,7 +140,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int agentxx_plugin_agent_create(const AgentxxHo
     agentxx::plugin::hook(*ctx, AGENTXX_HOOK_MODEL_START, [](MyPluginCtx& c, std::string_view in){ /*...*/ });
 
     // 能力 (跨插件通用 RPC 通道)
-    agentxx::plugin::capability(*ctx, "my.cap", [](MyPluginCtx& c, const AgentxxHost* caller, std::string_view method, std::string_view args){ return "{}"; });
+    agentxx::plugin::capability(*ctx, "my.cap", [](MyPluginCtx& c, const AgentxxPluginHost* caller, std::string_view method, std::string_view args){ return "{}"; });
 
     *plugin_ctx = ctx.release();
     return 0;
@@ -180,13 +187,13 @@ extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_agent_destroy(void* plugin_
 | `agentxx.agent.scheduler` | 1 | `is_io_thread/post_to_io/pump_io`, `sleep/cancel_sleep`, `offload` (阻塞池委托, 需 cancel_flag) |
 | `agentxx.agent.session` | 1 | `get_share_store/add_share_store/emit_message_tip` (IO 线程) |
 | `agentxx.agent.plugins` | 1 | `list_plugins/get_plugin/get_own_info` (JSON) |
-| `agentxx.agent.config` | 2 | `get_config/get_plugin_args/get_tool_prompt/get_session_work_dir/get_plugin_config_path` (后者 session_id 为空时返回默认会话工作目录；`get_plugin_config_path` 返回 yaml `config` 归一化绝对路径，可指向文件/目录) |
+| `agentxx.agent.config` | 1 | `get_config/get_plugin_args/get_tool_prompt/get_session_work_dir/get_plugin_config_path` (后者 session_id 为空时返回默认会话工作目录；`get_plugin_config_path` 返回 yaml `config` 归一化绝对路径，可指向文件/目录) |
 | `agentxx.agent.model` | 1 | `get_config` (主模型及关联配置 JSON) |
 | `agentxx.agent.cancel` | 1 | `is_cancelled(threadId)` (advisory, 权威通知为 cancel 回调) |
 | `agentxx.agent.prompt` | 1 | `get_prompt/set_prompt` (宿主提示词读写) |
 | `agentxx.agent.json` | 1 | `json_get_string/json_escape` |
 | `agentxx.agent.log` | 1 | `log(level, msg)` (0 trace .. 4 error) |
-| `agentxx.agent.resources` | 2 | `register_skill_dir/memory_file/mcp_server` (仅初始化阶段) + `get_own_resources` (冻结后不可变) |
+| `agentxx.agent.resources` | 1 | `register_skill_dir/memory_file/mcp_server` (仅初始化阶段) + `get_own_resources` (冻结后不可变) |
 | `agentxx.agent.graph` | 1 | 执行图扩展: `register_node_type/unregister_node_type` (插件自定义节点类型, 注入 per-agent GraphRegistry) + `get_graph_json/get_graph_name/set_graph_json` (查看/修改宿主执行图, 默认名 `agentxx.default`; 插件加载阶段生效, 宿主构建 engine 前消费) |
 | `agentxx.agent.tasks` | 1 | 后台任务宿主托管: `register_task/cancel_task` (kit `spawn` 自动注册; 宿主登记句柄 + 持 inflight + `notify.done` 完成通知 —— 卸载时 detachAll 统一取消 + `waitInflightZero` 精确等待, 无协程帧悬挂; `notify` 为出参, `notify.done` 可从插件任意线程回调) |
 
@@ -196,15 +203,15 @@ extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_agent_destroy(void* plugin_
 
 | IID | 版本 | 能力 |
 |-----|------|------|
-| `agentxx.client.ui` | 1 (+v2 `update_tool_decor`) | `register_status_item/update/unregister`, `register_panel/update/unregister`, `register_info_section/update/unregister`, `register_command/unregister`, `show_toast`, `update_tool_decor(tool_call_id, decor_json)` |
+| `agentxx.client.ui` | 1 | `register_status_item/update/unregister`, `register_panel/update/unregister`, `register_info_section/update/unregister`, `register_command/unregister`, `show_toast`, `update_tool_decor(tool_call_id, decor_json)` |
 | `agentxx.client.events` | 1 | `subscribe/unsubscribe` (事件见 `AgentxxClientEvent`: READY/CONN_STATE/USER_INPUT/DELTA/TURN_END/SESSION_SWITCH/PLUGIN_DATA) |
 | `agentxx.client.session` | 1 | `get_client_state` (快照 JSON), `send_user_input`, `request_cancel` |
 | `agentxx.client.wire` | 1 | `send_plugin_data(event, json)` → 服务端 `client.{插件}.{event}` |
-| `agentxx.client.self` | 2 | `get_own_info/get_plugin_args/get_plugin_config_path` (后者返回 yaml `config` 归一化绝对路径) |
+| `agentxx.client.self` | 1 | `get_own_info/get_plugin_args/get_plugin_config_path` (后者返回 yaml `config` 归一化绝对路径) |
 | `agentxx.client.json` | 1 | `json_get_string/json_escape` |
 | `agentxx.client.log` | 1 | `log(level, msg)` |
 
-`update_tool_decor` (v2) 用于插件驱动工具消息装饰：订阅 `EVT_DELTA` 的 `tool_start` (含完整 `arguments`) 后，按 `tool_call_id` 推送 `{displayName, summary, items[]}` 语义 JSON (items schema 同 panel，另含 `diagram` kind)，宿主自动管理卸载/禁用时的摘除与恢复；典型实现见 `agentxx_planning` (Plan 渲染完全由插件驱动)。
+`update_tool_decor` 用于插件驱动工具消息装饰：订阅 `EVT_DELTA` 的 `tool_start` (含完整 `arguments`) 后，按 `tool_call_id` 推送 `{displayName, summary, items[]}` 语义 JSON (items schema 同 panel，另含 `diagram` kind)，宿主自动管理卸载/禁用时的摘除与恢复；典型实现见 `agentxx_planning` (Plan 渲染完全由插件驱动)。
 
 ---
 

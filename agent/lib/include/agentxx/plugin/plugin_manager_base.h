@@ -279,33 +279,38 @@ protected:
 // C ABI 内存三件套 (跨 CRT 堆边界; 两侧 vtable 共用)
 // =====================================================================
 
-inline void* hostMemoryAlloc(size_t size) {
-    return ::malloc(size);
+inline void* hostMemoryAlloc(uint64_t size) {
+    return ::malloc(static_cast<size_t>(size));
 }
 
 inline void hostMemoryFree(void* ptr) {
     ::free(ptr);
 }
 
-inline char* hostMemoryStrdup(AgentxxPluginStringView s) {
-    if (!s.data && s.size == 0) {
+inline char* hostMemoryStrdup(const AgentxxPluginStringView* s) {
+    if (!s || (!s->data && s->size == 0)) {
         return nullptr;
     }
-    char* p = static_cast<char*>(hostMemoryAlloc(s.size + 1));
+    char* p = static_cast<char*>(hostMemoryAlloc(s->size + 1));
     if (p) {
-        if (s.size > 0 && s.data) {
-            std::memcpy(p, s.data, s.size);
+        if (s->size > 0 && s->data) {
+            std::memcpy(p, s->data, static_cast<size_t>(s->size));
         }
-        p[s.size] = '\0';
+        p[s->size] = '\0';
     }
     return p;
+}
+
+inline char* hostMemoryStrdup(AgentxxPluginStringView s) {
+    return hostMemoryStrdup(&s);
 }
 
 inline char* hostMemoryStrdup(const char* s) {
     if (!s) {
         return nullptr;
     }
-    return hostMemoryStrdup(agentxx_plugin_sv(s, std::strlen(s)));
+    auto sv = agentxx_plugin_sv(s, std::strlen(s));
+    return hostMemoryStrdup(&sv);
 }
 
 inline AgentxxPluginString hostMemoryCreateString(AgentxxPluginStringView s) {
@@ -316,7 +321,7 @@ inline AgentxxPluginString hostMemoryCreateString(AgentxxPluginStringView s) {
     char* p = static_cast<char*>(hostMemoryAlloc(s.size + 1));
     if (p) {
         if (s.size > 0 && s.data) {
-            std::memcpy(p, s.data, s.size);
+            std::memcpy(p, s.data, static_cast<size_t>(s.size));
         }
         p[s.size] = '\0';
         res.data = p;
@@ -327,6 +332,13 @@ inline AgentxxPluginString hostMemoryCreateString(AgentxxPluginStringView s) {
 
 inline AgentxxPluginString hostMemoryCreateString(std::string_view sv) {
     return hostMemoryCreateString(agentxx_plugin_sv(sv.data(), sv.size()));
+}
+
+inline void hostMemorySetString(AgentxxPluginString* out, std::string_view sv) {
+    if (!out) {
+        return;
+    }
+    *out = hostMemoryCreateString(sv);
 }
 
 inline AgentxxPluginString hostMemoryCreateString(const char* s) {

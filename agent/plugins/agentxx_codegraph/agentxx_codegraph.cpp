@@ -58,9 +58,10 @@ static HostConfig
         return cfg;
     }
     if (iface.config->get_config) {
-        AgentxxPluginString json = iface.config->get_config(host);
+        AgentxxPluginString json{nullptr, 0};
+        iface.config->get_config(host, &json);
         if (json.data) {
-            std::string s{json.data, json.size};
+            std::string s{json.data, static_cast<size_t>(json.size)};
             agentxx_plugin_string_free(host, &json);
             SimpleJson j(s);
             if (j.ok()) {
@@ -70,9 +71,10 @@ static HostConfig
         }
     }
     if (iface.config->get_plugin_args) {
-        AgentxxPluginString json = iface.config->get_plugin_args(host);
+        AgentxxPluginString json{nullptr, 0};
+        iface.config->get_plugin_args(host, &json);
         if (json.data) {
-            std::string s{json.data, json.size};
+            std::string s{json.data, static_cast<size_t>(json.size)};
             agentxx_plugin_string_free(host, &json);
             SimpleJson j(s);
             if (j.ok()) {
@@ -220,11 +222,12 @@ static void ensureToolPromptsInHost(
     if (!host || !iface.prompt || !iface.prompt->get_prompt || !iface.prompt->set_prompt) {
         return;
     }
-    AgentxxPluginString json = iface.prompt->get_prompt(host);
+    AgentxxPluginString json{nullptr, 0};
+    iface.prompt->get_prompt(host, &json);
     if (!json.data) {
         return;
     }
-    std::string s{json.data, json.size};
+    std::string s{json.data, static_cast<size_t>(json.size)};
     agentxx_plugin_string_free(host, &json);
     SimpleJson j(s);
     if (!j.ok()) {
@@ -683,7 +686,7 @@ static void registerAllTools(PluginCtx& ctx) {
     }
 }
 
-static void snapshotQueryDone(void* ud, void* result, AgentxxPluginStringView error) {
+static void snapshotQueryDone(void* ud, void* result, const AgentxxPluginStringView* error) {
     (void)error;
     auto* ctx   = static_cast<PluginCtx*>(ud);
     auto* files = static_cast<int64_t*>(result);
@@ -750,7 +753,7 @@ static void* snapshotQueryWork(void* ud, volatile int*, AgentxxPluginString*) {
     );
 }
 
-static void on_client_attached(AgentxxPluginStringView, void* ud) {
+static void AGENTXX_PLUGIN_CALL on_client_attached(const AgentxxPluginStringView*, void* ud) {
     auto* ctx = static_cast<PluginCtx*>(ud);
     agentxx::plugin::guardCallVoid(
         [ctx](const char* m) noexcept {
@@ -777,7 +780,7 @@ using namespace agentxx_codegraph_plugin;
 
 extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_agent_get_info(void) {
     static const AgentxxPluginInfo info{
-        AGENTXX_PLUGIN_API_VERSION,
+        AGENTXX_PLUGIN_API_VERSION, 0,
         agentxx_plugin_sv_cstr("agentxx_codegraph"),
         agentxx_plugin_sv_cstr("1.0.0"),
         agentxx_plugin_sv_cstr(
@@ -1039,12 +1042,12 @@ static void refreshSection(ClientCtx& c) {
     c.ui->update_info_section(c.host, c.section, agentxx_plugin_sv(json.data(), json.size()));
 }
 
-static void onClientPluginData(AgentxxPluginStringView payload_json, void* ud) {
+static void AGENTXX_PLUGIN_CALL onClientPluginData(const AgentxxPluginStringView* payload_json, void* ud) {
     auto* ctx = static_cast<ClientCtx*>(ud);
     if (!ctx || !ctx->host) {
         return;
     }
-    std::string raw(payload_json.data ? payload_json.data : "{}", payload_json.size);
+    std::string raw(payload_json && payload_json->data ? payload_json->data : "{}", payload_json ? static_cast<size_t>(payload_json->size) : 0);
     try {
         auto j      = neograph::json::parse(raw);
         auto plugin = j.value("plugin", std::string{});
@@ -1093,7 +1096,7 @@ static void onClientPluginData(AgentxxPluginStringView payload_json, void* ud) {
 extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxClientPluginInfo* agentxx_plugin_client_get_info(void
 ) {
     static const AgentxxClientPluginInfo info{
-        AGENTXX_CLIENT_PLUGIN_API_VERSION,
+        AGENTXX_CLIENT_PLUGIN_API_VERSION, 0,
         agentxx_plugin_sv_cstr("agentxx_codegraph"),
         agentxx_plugin_sv_cstr("1.0.0"),
         agentxx_plugin_sv_cstr("CodeGraph index status (sidebar Info section)"),

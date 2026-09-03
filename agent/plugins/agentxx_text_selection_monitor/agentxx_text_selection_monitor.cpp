@@ -64,11 +64,13 @@ std::string jsonEscape(const PluginCtx& ctx, const std::string& s) {
     if (!ctx.host || !ctx.iface.json || !ctx.iface.json->json_escape || s.empty()) {
         return "\"\"";
     }
-    AgentxxPluginString esc = ctx.iface.json->json_escape(ctx.host, agentxx_plugin_sv(s.data(), s.size()));
+    AgentxxPluginString esc{nullptr, 0};
+    auto sSv = agentxx_plugin_sv(s.data(), s.size());
+    ctx.iface.json->json_escape(ctx.host, &sSv, &esc);
     if (!esc.data) {
         return "\"\"";
     }
-    std::string out(esc.data, esc.size);
+    std::string out(esc.data, static_cast<size_t>(esc.size));
     agentxx_plugin_string_free(ctx.host, &esc);
     return out;
 }
@@ -120,7 +122,7 @@ void TextSelectionHolder::stop() {
 
 extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_agent_get_info(void) {
     static const AgentxxPluginInfo info{
-        AGENTXX_PLUGIN_API_VERSION,
+        AGENTXX_PLUGIN_API_VERSION, 0,
         agentxx_plugin_sv_cstr("agentxx_text_selection_monitor"),
         agentxx_plugin_sv_cstr("1.0.0"),
         agentxx_plugin_sv_cstr("System-wide text selection monitor event stream"),

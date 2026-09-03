@@ -6,13 +6,12 @@
 - CI/CD
 - 文档翻译
 - release 编译发布时携带 标准库
-- [x] 重构插件框架中的大部分堆分配 char* 及 char** 出参为 AgentxxPluginString（只读借用统一为 AgentxxPluginStringView）
 
 - 插件abi、ffi:
-    - 强制字节对齐
-    - 替换使用 int32、int64 等明确大小基本类型
+    - 明确字节对齐为8字节
+    - 使用 int32、int64 等明确大小基本类型替换 int、long、long long 等
     - 明确函数调用约定 stdcall
-    - 替换结构体传递必须使用指针
+    - 替换结构体传递必须使用指针，结构体返回值 struct 改为函数参数出参 struct*
 
 - 插件 readHostConfig 改为直接传入 变量路径 取值，变量取值交由主程序解析
 

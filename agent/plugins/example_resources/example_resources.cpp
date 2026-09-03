@@ -57,18 +57,18 @@ static std::string ownInfoString(
         || !iface.json->json_get_string) {
         return {};
     }
-    AgentxxPluginString info = iface.plugins->get_own_info(host);
+    AgentxxPluginString info{nullptr, 0};
+    iface.plugins->get_own_info(host, &info);
     if (!info.data) {
         return {};
     }
     std::string out;
-    AgentxxPluginString val = iface.json->json_get_string(
-        host,
-        agentxx_plugin_string_to_sv(info),
-        agentxx_plugin_sv_cstr(key)
-    );
+    AgentxxPluginString val{nullptr, 0};
+    auto infoSv = agentxx_plugin_string_to_sv(&info);
+    auto keySv  = agentxx_plugin_sv_cstr(key);
+    iface.json->json_get_string(host, &infoSv, &keySv, &val);
     if (val.data) {
-        out.assign(val.data, val.size);
+        out.assign(val.data, static_cast<size_t>(val.size));
         agentxx_plugin_string_free(host, &val);
     }
     agentxx_plugin_string_free(host, &info);
@@ -92,7 +92,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_agent_g
         nullptr,
         [&]() -> const AgentxxPluginInfo* {
             static const AgentxxPluginInfo info{
-                AGENTXX_PLUGIN_API_VERSION,
+                AGENTXX_PLUGIN_API_VERSION, 0,
                 agentxx_plugin_sv_cstr("example_resources"),
                 agentxx_plugin_sv_cstr("1.0.0"),
                 agentxx_plugin_sv_cstr(
@@ -187,15 +187,15 @@ extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_agent_destroy(void* plugin_
             const auto&              iface = ctx->iface;
             // 宿主 detachAll 已自动摘除本插件的全部资源 (skill/memory/mcp),
             // 此处显式反注册仅为 SDK 惯例示范 (幂等, 失败无副作用)
-            AgentxxPluginString info = iface.plugins->get_own_info(host);
+            AgentxxPluginString info{nullptr, 0};
+            iface.plugins->get_own_info(host, &info);
             if (info.data) {
-                AgentxxPluginString p = iface.json->json_get_string(
-                    host,
-                    agentxx_plugin_string_to_sv(info),
-                    agentxx_plugin_sv_cstr("path")
-                );
+                AgentxxPluginString p{nullptr, 0};
+                auto infoSv = agentxx_plugin_string_to_sv(&info);
+                auto pathSv = agentxx_plugin_sv_cstr("path");
+                iface.json->json_get_string(host, &infoSv, &pathSv, &p);
                 if (p.data) {
-                    std::string libPath(p.data, p.size);
+                    std::string libPath(p.data, static_cast<size_t>(p.size));
                     agentxx_plugin_string_free(host, &p);
                     auto        pos  = libPath.find_last_of("/\\");
                     std::string base = pos == std::string::npos ? "." : libPath.substr(0, pos);

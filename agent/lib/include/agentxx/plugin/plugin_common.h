@@ -48,15 +48,25 @@ namespace agentxx {
 namespace plugin {
 
 inline std::string_view svToSv(AgentxxPluginStringView sv) noexcept {
-    return sv.data ? std::string_view{sv.data, sv.size} : std::string_view{};
+    return sv.data ? std::string_view{sv.data, static_cast<size_t>(sv.size)} : std::string_view{};
+}
+
+inline std::string_view svToSv(const AgentxxPluginStringView* sv) noexcept {
+    return (sv && sv->data) ? std::string_view{sv->data, static_cast<size_t>(sv->size)}
+                            : std::string_view{};
 }
 
 inline std::string svToStr(AgentxxPluginStringView sv) {
-    return sv.data ? std::string{sv.data, sv.size} : std::string{};
+    return sv.data ? std::string{sv.data, static_cast<size_t>(sv.size)} : std::string{};
+}
+
+inline std::string svToStr(const AgentxxPluginStringView* sv) {
+    return (sv && sv->data) ? std::string{sv->data, static_cast<size_t>(sv->size)}
+                            : std::string{};
 }
 
 inline AgentxxPluginStringView strToSv(std::string_view sv) noexcept {
-    return agentxx_plugin_sv(sv.data(), sv.size());
+    return agentxx_plugin_sv(sv.data(), static_cast<uint64_t>(sv.size()));
 }
 
 namespace detail {

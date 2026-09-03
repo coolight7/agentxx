@@ -73,8 +73,8 @@ struct ClientCommand {
     std::string plugin; ///< 所属插件名
     std::string name;   ///< 命令名 (用户输入 "/{name}" 触发)
     std::string description;
-    AgentxxPluginString (*execute)(void* ud, AgentxxPluginStringView args_json, AgentxxPluginString* error_out) = nullptr;
-    void* ud                                                                                                    = nullptr;
+    int32_t (AGENTXX_PLUGIN_CALL *execute)(void* ud, const AgentxxPluginStringView* args_json, AgentxxPluginString* action_out, AgentxxPluginString* error_out) = nullptr;
+    void* ud                                                                                                                                                    = nullptr;
 };
 
 /// UI 注册表快照 (UI 线程渲染读取; COW shared_ptr 语义)
@@ -107,9 +107,9 @@ public:
     /// - shared_ptr 存储: 订阅节点地址稳定 (vector 扩容/erase 不悬垂);
     ///   dispatch 时拷贝 shared_ptr 保活, 派发中退订/卸载不 UAF
     struct Subscription {
-        int event                                                       = 0;
-        void (*handler)(AgentxxPluginStringView payload_json, void* ud) = nullptr;
-        void* ud                                                        = nullptr;
+        int32_t event                                                                               = 0;
+        void (AGENTXX_PLUGIN_CALL *handler)(const AgentxxPluginStringView* payload_json, void* ud) = nullptr;
+        void* ud                                                                                    = nullptr;
         bool  alive = true; ///< 已退订标记 (unsubscribe 置 false, 卸载清理用)
     };
 
@@ -364,14 +364,14 @@ public:
         ClientPluginInstance* inst,
         AgentxxPluginStringView name,
         AgentxxPluginStringView description,
-        AgentxxPluginString (*exec)(void*, AgentxxPluginStringView, AgentxxPluginString*),
+        int32_t (AGENTXX_PLUGIN_CALL *exec)(void*, const AgentxxPluginStringView*, AgentxxPluginString*, AgentxxPluginString*),
         void* ud
     );
     int registerCommand(
         ClientPluginInstance* inst,
         std::string_view      name,
         std::string_view      description,
-        AgentxxPluginString (*exec)(void*, AgentxxPluginStringView, AgentxxPluginString*),
+        int32_t (AGENTXX_PLUGIN_CALL *exec)(void*, const AgentxxPluginStringView*, AgentxxPluginString*, AgentxxPluginString*),
         void* ud
     ) {
         return registerCommand(inst, strToSv(name), strToSv(description), exec, ud);
@@ -383,8 +383,8 @@ public:
     /// 事件订阅; 返回句柄 (宿主持有; 卸载自动退订)
     AgentxxPluginSubscription* subscribe(
         ClientPluginInstance* inst,
-        int                   event,
-        void (*handler)(AgentxxPluginStringView, void*),
+        int32_t               event,
+        void (AGENTXX_PLUGIN_CALL *handler)(const AgentxxPluginStringView*, void*),
         void* ud
     );
     void unsubscribe(AgentxxPluginSubscription* sub);

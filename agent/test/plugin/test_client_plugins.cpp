@@ -557,7 +557,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         // 8.1 多次订阅 (1→2→4 扩容) + 逐个退订
         std::atomic<int>           hits{0};
         AgentxxPluginSubscription* subs[4] = {};
-        auto                       subFn   = +[](AgentxxPluginStringView, void* ud) {
+        auto                       subFn   = +[](const AgentxxPluginStringView*, void* ud) {
             ++(*static_cast<std::atomic<int>*>(ud));
         };
         const auto events8 = agentxx::plugin::ClientIfaces::query(&inst2->host).events;
@@ -585,16 +585,16 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             const AgentxxClientEventsIface*        events = nullptr;
             std::atomic<int>                       hits{0};
             AgentxxPluginSubscription*             dynSub = nullptr;
-            void (*incFn)(AgentxxPluginStringView, void*) = nullptr;
+            void (*incFn)(const AgentxxPluginStringView*, void*) = nullptr;
         };
 
         auto st    = std::make_shared<DynSubState>();
         st->inst   = inst2.get();
         st->events = agentxx::plugin::ClientIfaces::query(&inst2->host).events;
-        st->incFn  = +[](AgentxxPluginStringView, void* ud) {
+        st->incFn  = +[](const AgentxxPluginStringView*, void* ud) {
             ++(*static_cast<std::atomic<int>*>(ud));
         };
-        auto aFn = +[](AgentxxPluginStringView, void* ud) {
+        auto aFn = +[](const AgentxxPluginStringView*, void* ud) {
             auto* s = static_cast<DynSubState*>(ud);
             ++s->hits;
             if (!s->dynSub) {
@@ -661,7 +661,10 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             XX_TEST_EXPECT_EQ(instCfg->args.value("client_key", std::string{}), "client_val");
             // agentxx.client.self 接口表 get_plugin_args 返回实例 args
             const auto self9 = agentxx::plugin::ClientIfaces::query(&instCfg->host).self;
-            AgentxxPluginString json = self9 ? self9->get_plugin_args(&instCfg->host) : AgentxxPluginString{nullptr, 0};
+            AgentxxPluginString json{nullptr, 0};
+            if (self9 && self9->get_plugin_args) {
+                self9->get_plugin_args(&instCfg->host, &json);
+            }
             XX_TEST_EXPECT_TRUE(json.data != nullptr);
             if (json.data) {
                 try {
@@ -815,8 +818,10 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 // READY payload 含 interfaces 数组 (经 agentxx.client.events 接口表订阅;
                 // onReady 同步分发到当前 io 线程)
                 std::string readyPayload;
-                auto        readyFn = +[](AgentxxPluginStringView payload, void* ud) {
-                    static_cast<std::string*>(ud)->assign(payload.data, payload.size);
+                auto        readyFn = +[](const AgentxxPluginStringView* payload, void* ud) {
+                    if (payload && payload->data) {
+                        static_cast<std::string*>(ud)->assign(payload->data, payload->size);
+                    }
                 };
                 const auto events11 = agentxx::plugin::ClientIfaces::query(&okInst->host).events;
                 auto       sub      = events11 ? events11->subscribe(

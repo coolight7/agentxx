@@ -1,16 +1,14 @@
 /*
- * agentxx/plugin/api/plugin_kit.h —— 插件开发 SDK (C++ header-only)
+ * agentxx/plugin/api/plugin_kit.h —— 插件开发 SDK (C++ header-only, API v1 重构版)
  *
- * 命名空间: 全部位于 agentxx::plugin (与宿主侧 plugin 命名空间统一;
- * 历史命名空间 agentxx::kit 已并入, 见 git 历史)
+ * 命名空间: 全部位于 agentxx::plugin
  *
  * 锚定协程模型 SDK:
  * - PluginBase: 实例上下文基类, 集中常用宿主操作 (workDir / toolPrompt / log 等)
  * - Logger: 实例级日志闭包, 消除进程级全局
  * - Task<T>: 极简锚定协程类型 (无外部执行器依赖, 帧先销毁后 done 上报)
  * - 锚定原语 awaiter 族: sleep / yield / offload / call_tool / invoke_cap
- * - 注册族: tool (Task协程) / fast_tool (快同步内联) / blocking_tool (阻塞池委托) / hook /
- * capability
+ * - 注册族: tool (Task协程) / fast_tool (快同步内联) / blocking_tool (阻塞池委托) / hook / capability
  * - spawn: 后台协作任务 (sleep 循环, 卸载取消)
  * - 阻塞便捷助手: 供 JS 引擎及非 io 线程使用 (基于 condvar)
  */
@@ -67,9 +65,10 @@ struct Logger {
     const AgentxxPluginHost*     host     = nullptr;
     const AgentxxPluginLogIface* logIface = nullptr;
 
-    void log(int level, std::string_view msg) const noexcept {
+    void log(int32_t level, std::string_view msg) const noexcept {
         if (host && logIface && logIface->log) {
-            logIface->log(host, level, agentxx_plugin_sv(msg.data(), msg.size()));
+            auto sv = agentxx_plugin_sv(msg.data(), msg.size());
+            logIface->log(host, level, &sv);
         }
     }
 
@@ -107,11 +106,8 @@ struct OpCtl {
             return true;
         }
         if (host && cancelIface && cancelIface->is_cancelled && !threadId.empty()) {
-            return cancelIface->is_cancelled(
-                       host,
-                       agentxx_plugin_sv(threadId.data(), threadId.size())
-                   )
-                   != 0;
+            auto sv = agentxx_plugin_sv(threadId.data(), threadId.size());
+            return cancelIface->is_cancelled(host, &sv) != 0;
         }
         return false;
     }
@@ -152,6 +148,13 @@ public:
         reset();
     }
 
+    template<typename Fn>
+    static OwnedString acquire(const AgentxxPluginHost* h, Fn&& fn) {
+        AgentxxPluginString s{nullptr, 0};
+        fn(&s);
+        return OwnedString(h, s);
+    }
+
     OwnedString(const OwnedString&) = delete;
     OwnedString& operator=(const OwnedString&) = delete;
 
@@ -181,11 +184,11 @@ public:
 
     const char* c_str() const noexcept { return str_.data ? str_.data : ""; }
     const char* data() const noexcept { return str_.data; }
-    size_t size() const noexcept { return str_.size; }
+    size_t size() const noexcept { return static_cast<size_t>(str_.size); }
     bool empty() const noexcept { return str_.data == nullptr || str_.size == 0; }
-    std::string_view view() const noexcept { return {str_.data ? str_.data : "", str_.size}; }
+    std::string_view view() const noexcept { return {str_.data ? str_.data : "", static_cast<size_t>(str_.size)}; }
     std::string str() const { return std::string(view()); }
-    AgentxxPluginStringView to_sv() const noexcept { return agentxx_plugin_string_to_sv(str_); }
+    AgentxxPluginStringView to_sv() const noexcept { return agentxx_plugin_string_to_sv(&str_); }
     AgentxxPluginString release() noexcept {
         AgentxxPluginString tmp = str_;
         str_ = {nullptr, 0};
@@ -202,63 +205,55 @@ struct Task;
 
 namespace detail {
 
-/// strdup 的跨平台 C++ 通用替代 (malloc + memcpy, 与宿主 hostMemoryStrdup 同构):
-/// - 规避 MSVC C4996 (POSIX strdup 弃用警告), GCC/Clang 行为不变
-/// - 仅作宿主 vtable 不可用时的兜底分配; malloc 分配与宿主 ::free 释放配对,
-///   正常路径 host->vtable->strdup 分配同样兼容宿主 ::free
-inline char* strdupFallback(AgentxxPluginStringView s) {
-    if (!s.data && s.size == 0) {
+inline char* strdupFallback(const AgentxxPluginStringView* s) {
+    if (!s || (!s->data && s->size == 0)) {
         return nullptr;
     }
-    char* p = static_cast<char*>(std::malloc(s.size + 1));
+    char* p = static_cast<char*>(std::malloc(static_cast<size_t>(s->size + 1)));
     if (p) {
-        if (s.size > 0 && s.data) {
-            std::memcpy(p, s.data, s.size);
+        if (s->size > 0 && s->data) {
+            std::memcpy(p, s->data, static_cast<size_t>(s->size));
         }
-        p[s.size] = '\0';
+        p[s->size] = '\0';
     }
     return p;
 }
 
-inline char* strdupFallback(const char* s) {
-    if (!s) {
-        return nullptr;
-    }
-    return strdupFallback(agentxx_plugin_sv_cstr(s));
-}
-
 template<typename Promise>
-void finishIfDone(std::coroutine_handle<Promise> h) {
-    if (!h || !h.done()) {
+inline void finishIfDone(std::coroutine_handle<Promise> h) {
+    if (!h.done()) {
         return;
     }
-    auto&                       p      = h.promise();
-    AgentxxPluginOperatorNotify notify = p.notify_;
-    int                         status = AGENTXX_PLUGIN_OPERATOR_OK;
-    std::string                 errPayload;
-    std::string                 resPayload;
+    auto& p = h.promise();
 
+    int32_t     status = AGENTXX_PLUGIN_OPERATOR_OK;
+    std::string errPayload;
+    std::string resPayload;
     if (p.has_exception()) {
         status = AGENTXX_PLUGIN_OPERATOR_FAILED;
         try {
             std::rethrow_exception(p.exception());
-        } catch (const CancelledException&) {
-            status = AGENTXX_PLUGIN_OPERATOR_CANCELLED;
+        } catch (const CancelledException& e) {
+            status     = AGENTXX_PLUGIN_OPERATOR_CANCELLED;
+            errPayload = e.what();
         } catch (const std::exception& e) {
             errPayload = e.what();
         } catch (...) {
-            errPayload = "unknown task error";
+            errPayload = "unknown exception in coroutine";
         }
+    } else if (p.cancelFlag_ && p.cancelFlag_->load(std::memory_order_acquire)) {
+        status = AGENTXX_PLUGIN_OPERATOR_CANCELLED;
     } else {
         if constexpr (!std::is_void_v<typename Promise::value_type>) {
-            resPayload = p.result_string();
+            if constexpr (std::is_same_v<typename Promise::value_type, std::string>) {
+                resPayload = p.result();
+            } else {
+                resPayload = fmt::format("{}", p.result());
+            }
         }
     }
 
-    // 协程完成 (帧将销毁) 时挂接的资源清理 (如锚定协程工具的 op 句柄 Job):
-    // - 必须在 h.destroy() 之前取出 (destroy 后 promise 内存已失效)
-    // - 执行时机: destroy + done 通知【之后】—— 宿主收到 done 后不再访问 op
-    //   句柄 (取消仅在 notified 置位前发生), 此时删除 Job 无竞态
+    AgentxxPluginOperatorNotify notify  = p.notify_;
     auto cleanup = std::move(p.opCleanup_);
     p.opCleanup_ = nullptr;
 
@@ -271,7 +266,7 @@ void finishIfDone(std::coroutine_handle<Promise> h) {
         } else if (status == AGENTXX_PLUGIN_OPERATOR_OK) {
             sv = agentxx_plugin_sv(resPayload.data(), resPayload.size());
         }
-        notify.done(notify.host_ud, status, sv);
+        notify.done(notify.host_ud, status, &sv);
     }
 
     if (cleanup) {
@@ -288,10 +283,7 @@ struct PromiseBase {
     std::shared_ptr<std::atomic<bool>> cancelFlag_{nullptr};
     std::function<void()>              outstandingCancel_{nullptr};
     std::exception_ptr                 exception_{nullptr};
-    /// 协程帧完成销毁后的资源清理 (见 finishIfDone): 锚定协程工具的 op 句柄
-    /// (Job) 释放挂接于此 —— Job 仅在协程挂起期间被宿主 execute_cancel 访问,
-    /// 完成通知发出后宿主不再触碰 op, 此时删除安全
-    std::function<void()> opCleanup_{nullptr};
+    std::function<void()>              opCleanup_{nullptr};
 
     std::suspend_always initial_suspend() noexcept {
         return {};
@@ -342,40 +334,36 @@ struct PromiseBase {
 template<typename T>
 struct Task {
     struct promise_type : detail::PromiseBase<T> {
-        std::optional<T> result_;
+        std::optional<T> res_;
 
-        Task get_return_object() noexcept {
+        Task get_return_object() {
             return Task{std::coroutine_handle<promise_type>::from_promise(*this)};
         }
 
         template<typename U>
-        void return_value(U&& val) {
-            result_.emplace(std::forward<U>(val));
+        void return_value(U&& v) {
+            res_.emplace(std::forward<U>(v));
         }
 
-        std::string result_string() const {
-            if constexpr (std::is_same_v<std::decay_t<T>, std::string>) {
-                return result_.value_or("");
-            } else {
-                return neograph::json(result_.value_or(T{})).dump();
-            }
+        T& result() {
+            return *res_;
         }
     };
 
     std::coroutine_handle<promise_type> handle_;
 
-    explicit Task(std::coroutine_handle<promise_type> h) noexcept :
+    explicit Task(std::coroutine_handle<promise_type> h) :
         handle_(h) {}
 
     Task(Task&& o) noexcept :
-        handle_(std::exchange(o.handle_, nullptr)) {}
+        handle_(std::exchange(o.handle_, {})) {}
 
     Task& operator=(Task&& o) noexcept {
         if (this != &o) {
             if (handle_) {
                 handle_.destroy();
             }
-            handle_ = std::exchange(o.handle_, nullptr);
+            handle_ = std::exchange(o.handle_, {});
         }
         return *this;
     }
@@ -386,14 +374,14 @@ struct Task {
         }
     }
 
-    Task(const Task&)            = delete;
+    Task(const Task&) = delete;
     Task& operator=(const Task&) = delete;
 };
 
 template<>
 struct Task<void> {
     struct promise_type : detail::PromiseBase<void> {
-        Task get_return_object() noexcept {
+        Task get_return_object() {
             return Task{std::coroutine_handle<promise_type>::from_promise(*this)};
         }
 
@@ -402,18 +390,18 @@ struct Task<void> {
 
     std::coroutine_handle<promise_type> handle_;
 
-    explicit Task(std::coroutine_handle<promise_type> h) noexcept :
+    explicit Task(std::coroutine_handle<promise_type> h) :
         handle_(h) {}
 
     Task(Task&& o) noexcept :
-        handle_(std::exchange(o.handle_, nullptr)) {}
+        handle_(std::exchange(o.handle_, {})) {}
 
     Task& operator=(Task&& o) noexcept {
         if (this != &o) {
             if (handle_) {
                 handle_.destroy();
             }
-            handle_ = std::exchange(o.handle_, nullptr);
+            handle_ = std::exchange(o.handle_, {});
         }
         return *this;
     }
@@ -424,37 +412,50 @@ struct Task<void> {
         }
     }
 
-    Task(const Task&)            = delete;
+    Task(const Task&) = delete;
     Task& operator=(const Task&) = delete;
 };
 
-/* ==================== PluginBase 实例上下文基类 ==================== */
+/* ==================== 插件实例上下文基类 ==================== */
 
-struct PluginBase {
-    const AgentxxPluginHost*     host = nullptr;
-    agentxx::plugin::AgentIfaces iface{};
-    Logger                       log{};
+class PluginBase {
+public:
+
+    const AgentxxPluginHost* host = nullptr;
+    AgentIfaces              iface;
+    Logger                   log;
 
     virtual ~PluginBase() = default;
 
-    void init(const AgentxxPluginHost* in_host) {
-        host = in_host;
-        if (host) {
-            iface = agentxx::plugin::AgentIfaces::query(host);
-            log   = Logger{host, iface.log};
-        }
+    void init(const AgentxxPluginHost* h) {
+        host       = h;
+        iface      = AgentIfaces::query(h);
+        log.host   = h;
+        log.logIface = iface.log;
     }
 
-    /// 会话工作目录 (io 线程): tid 非空时返回该会话生效目录
-    /// (worktree 绑定优先, 依次回退会话覆写 / AgentConfig); tid 为空时
-    /// 返回默认会话工作目录 (等价旧 get_work_dir 语义)
+    std::string config() const {
+        if (!host || !iface.config || !iface.config->get_config) {
+            return "{}";
+        }
+        AgentxxPluginString s{nullptr, 0};
+        iface.config->get_config(host, &s);
+        if (!s.data) {
+            return "{}";
+        }
+        std::string res(s.data, static_cast<size_t>(s.size));
+        agentxx_plugin_string_free(host, &s);
+        return res;
+    }
+
     std::string workDir(AgentxxPluginStringView tid = {}) const {
         if (!host || !iface.config || !iface.config->get_session_work_dir) {
             return "";
         }
-        AgentxxPluginString s = iface.config->get_session_work_dir(host, tid);
+        AgentxxPluginString s{nullptr, 0};
+        iface.config->get_session_work_dir(host, &tid, &s);
         if (s.data) {
-            std::string res(s.data, s.size);
+            std::string res(s.data, static_cast<size_t>(s.size));
             agentxx_plugin_string_free(host, &s);
             return res;
         }
@@ -466,11 +467,13 @@ struct PluginBase {
         if (!host || !iface.config || !iface.config->get_tool_prompt) {
             return res;
         }
-        AgentxxPluginString s = iface.config->get_tool_prompt(host, agentxx_plugin_sv(tool.data(), tool.size()));
+        auto toolSv = agentxx_plugin_sv(tool.data(), tool.size());
+        AgentxxPluginString s{nullptr, 0};
+        iface.config->get_tool_prompt(host, &toolSv, &s);
         if (!s.data) {
             return res;
         }
-        std::string jsonStr(s.data, s.size);
+        std::string jsonStr(s.data, static_cast<size_t>(s.size));
         agentxx_plugin_string_free(host, &s);
         try {
             auto j = neograph::json::parse(jsonStr);
@@ -493,26 +496,26 @@ struct PluginBase {
         if (!host || !iface.config || !iface.config->get_plugin_args) {
             return "{}";
         }
-        AgentxxPluginString s = iface.config->get_plugin_args(host);
+        AgentxxPluginString s{nullptr, 0};
+        iface.config->get_plugin_args(host, &s);
         if (!s.data) {
             return "{}";
         }
-        std::string res(s.data, s.size);
+        std::string res(s.data, static_cast<size_t>(s.size));
         agentxx_plugin_string_free(host, &s);
         return res;
     }
 
-    /// 插件配置文件所在目录或文件路径 (yaml `config`, 归一化绝对路径)
-    /// - 为空表示未指定; 可指向文件或目录 (由插件自行判断)
     std::string configPath() const {
         if (!host || !iface.config || !iface.config->get_plugin_config_path) {
             return "";
         }
-        AgentxxPluginString s = iface.config->get_plugin_config_path(host);
+        AgentxxPluginString s{nullptr, 0};
+        iface.config->get_plugin_config_path(host, &s);
         if (!s.data) {
             return "";
         }
-        std::string res(s.data, s.size);
+        std::string res(s.data, static_cast<size_t>(s.size));
         agentxx_plugin_string_free(host, &s);
         return res;
     }
@@ -521,118 +524,98 @@ struct PluginBase {
         if (!host || !iface.cancel || !iface.cancel->is_cancelled) {
             return false;
         }
-        return iface.cancel->is_cancelled(host, tid) != 0;
+        return iface.cancel->is_cancelled(host, &tid) != 0;
     }
 
-    long long addShareStore(AgentxxPluginStringView tid, std::string_view content) const {
+    int64_t addShareStore(AgentxxPluginStringView tid, std::string_view content) const {
         if (!host || !iface.session || !iface.session->add_share_store) {
             return -1;
         }
-        return iface.session
-            ->add_share_store(host, tid, agentxx_plugin_sv(content.data(), content.size()));
+        auto contentSv = agentxx_plugin_sv(content.data(), content.size());
+        return iface.session->add_share_store(host, &tid, &contentSv);
     }
 
     char* strdup(AgentxxPluginStringView sv) const {
-        if (!host || !host->vtable || !host->vtable->strdup) {
-            return nullptr;
-        }
-        return host->vtable->strdup(sv);
+        return agentxx_plugin_strdup(host, &sv);
     }
 
     char* strdup(const char* s) const {
         if (!s) {
             return nullptr;
         }
-        return strdup(agentxx_plugin_sv_cstr(s));
+        auto sv = agentxx_plugin_sv_cstr(s);
+        return agentxx_plugin_strdup(host, &sv);
     }
 
     AgentxxPluginString createString(AgentxxPluginStringView sv) const {
-        return agentxx_plugin_string_from_sv(host, sv);
+        return agentxx_plugin_string_from_sv(host, &sv);
     }
 
-    AgentxxPluginString createString(const char* s) const {
-        return agentxx_plugin_string_from_cstr(host, s);
-    }
-
-    void freeString(AgentxxPluginString* str) const {
-        agentxx_plugin_string_free(host, str);
-    }
-
-    void free(char* p) const {
-        if (host && host->vtable && host->vtable->free && p) {
-            host->vtable->free(p);
-        }
-    }
-
-    std::string jsonEscape(AgentxxPluginStringView sv) const {
-        if (!host || !iface.json || !iface.json->json_escape || agentxx_plugin_sv_empty(sv)) {
+    /// 字符串 → JSON 字符串字面量 (经宿主 agentxx.agent.json 接口表; 含引号包裹与转义)
+    std::string jsonEscape(AgentxxPluginStringView s) const {
+        if (!host || !iface.json || !iface.json->json_escape || (!s.data && s.size == 0)) {
             return "\"\"";
         }
-        AgentxxPluginString esc = iface.json->json_escape(host, sv);
+        AgentxxPluginString esc{nullptr, 0};
+        auto sSv = agentxx_plugin_sv(s.data, s.size);
+        iface.json->json_escape(host, &sSv, &esc);
         if (!esc.data) {
             return "\"\"";
         }
-        std::string res(esc.data, esc.size);
+        std::string out(esc.data, static_cast<size_t>(esc.size));
         agentxx_plugin_string_free(host, &esc);
-        return res;
+        return out;
     }
 
-    std::string jsonGetString(AgentxxPluginStringView json, AgentxxPluginStringView key) const {
+    std::string jsonEscape(std::string_view s) const {
+        return jsonEscape(agentxx_plugin_sv(s.data(), s.size()));
+    }
+
+    std::string jsonEscape(const char* s) const {
+        if (!s) {
+            return "\"\"";
+        }
+        return jsonEscape(std::string_view{s});
+    }
+
+    /// 从 JSON 中提取 key 的字符串值 (经宿主 json 接口表; 不存在返回空)
+    std::string jsonGetString(std::string_view json, std::string_view key) const {
         if (!host || !iface.json || !iface.json->json_get_string) {
-            return "";
+            return {};
         }
-        AgentxxPluginString v = iface.json->json_get_string(host, json, key);
-        if (!v.data) {
-            return "";
+        auto jsonSv = agentxx_plugin_sv(json.data(), json.size());
+        auto keySv  = agentxx_plugin_sv(key.data(), key.size());
+        AgentxxPluginString out{nullptr, 0};
+        iface.json->json_get_string(host, &jsonSv, &keySv, &out);
+        if (!out.data) {
+            return {};
         }
-        std::string res(v.data, v.size);
-        agentxx_plugin_string_free(host, &v);
+        std::string res(out.data, static_cast<size_t>(out.size));
+        agentxx_plugin_string_free(host, &out);
         return res;
     }
 
-    // ---- 注册 RAII 存储 ----
-    std::vector<std::string>                            storage_;
+    std::vector<std::string> storage_;
+
     std::vector<std::unique_ptr<void, void (*)(void*)>> shims_;
 
     template<typename T>
-    T* storeShim(std::unique_ptr<T> p) {
-        T* raw = p.get();
-        shims_.emplace_back(p.release(), [](void* ptr) {
+    T* storeShim(std::unique_ptr<T> shim) {
+        T* raw = shim.get();
+        shims_.emplace_back(shim.release(), [](void* ptr) {
             delete static_cast<T*>(ptr);
         });
         return raw;
     }
 
-    // 后台任务记录 (spawn 宿主托管: 见 agentxx.agent.tasks 接口表)
-    // 堆稳定地址: spawn 时以 shared_ptr 存于 vector, post_to_io 传递堆地址
-    // 避免 vector 扩容导致 &spawns_.back() 悬垂
-    //
-    // 生命周期与并发 (对应 docs/agent/plugins.md spawn 节; 实现约束见
-    // 自由函数 spawnTaskImpl):
-    // - spawns_ 持 rec: 保证 starter post 任务期间 (注册 → 首挂起) rec 存活;
-    //   宿主 register_task 后协程由宿主清理协程托底 (句柄 shared_ptr),
-    //   spawns_ 里的 rec 在协程完成/实例析构时被清除 (rec->starter 置空)
-    // - rec->coroAddr: 仅在 io 线程读写 (cancel_fn 与 finishIfDone 完成路径
-    //   都在 io 线程访问它; 见 opCleanup_ 清空注释)
-    // - cancel_fn (宿主卸载取消时回调, io 线程): 置 cancelFlag + 经 coroAddr
-    //   访问 promise 的 outstandingCancel_ 唤醒挂起的 sleep/offload; 若
-    //   coroAddr 已清空 (协程已完成/帧已销毁) 则只置 flag 不碰帧 —— 无 UAF
     struct SpawnRecord {
         std::function<void()>              starter;
         std::shared_ptr<std::atomic<bool>> cancelFlag;
-        /// 协程挂起后的句柄地址 (由 starter 在协程首次挂起时记录; 协程完成
-        /// 路径 (finishIfDone 的 opCleanup_) 清空)。宿主 cancel_fn 经它访问
-        /// promise 的 outstandingCancel_ 唤醒挂起操作
         void* coroAddr = nullptr;
     };
 
     std::vector<std::shared_ptr<SpawnRecord>> spawns_;
 
-    /// 【已废弃】停止全部后台 spawn 协程 —— 不再需要: spawn 自 API v1 起注册
-    /// 到宿主 agentxx.agent.tasks 接口表 (outstandingOps), 插件卸载时宿主
-    /// detachAll 统一 cancel (置 cancelFlag + 唤醒挂起操作) + waitInflightZero
-    /// 精确等待协程退出, 无协程帧悬挂。保留方法仅为旧第三方插件手写后台任务
-    /// 的兼容参考 (宿主无 tasks 表时 spawn 不注册, 见 spawnTaskImpl)。
     void stopSpawns() {
         for (auto& rec : spawns_) {
             if (!rec || !rec->cancelFlag) {
@@ -660,7 +643,7 @@ namespace detail {
 struct SleepAwaiter {
     const AgentxxPluginHost*           host;
     const AgentxxPluginSchedulerIface* sched;
-    long                               ms;
+    int64_t                            ms;
     void*                              timer = nullptr;
 
     bool await_ready() const noexcept {
@@ -709,12 +692,11 @@ struct YieldAwaiter {
         sched->post_to_io(
             host,
             [](void* ud) {
-                auto  handle = std::coroutine_handle<Promise>::from_address(ud);
-                auto& prom   = handle.promise();
+                auto handle = std::coroutine_handle<Promise>::from_address(ud);
                 try {
                     handle.resume();
                 } catch (...) {
-                    prom.set_exception(std::current_exception());
+                    handle.promise().set_exception(std::current_exception());
                 }
                 finishIfDone(handle);
             },
@@ -727,12 +709,12 @@ struct YieldAwaiter {
 
 template<typename WorkFn>
 struct OffloadAwaiter {
-    using ResultType = std::decay_t<std::invoke_result_t<WorkFn, volatile int*>>;
+    using ResultType = std::decay_t<std::invoke_result_t<WorkFn, volatile int32_t*>>;
 
     const AgentxxPluginHost*           host;
     const AgentxxPluginSchedulerIface* sched;
     WorkFn                             work;
-    volatile int                       cancelFlag = 0;
+    volatile int32_t                   cancelFlag = 0;
     std::exception_ptr                 exPtr      = nullptr;
     std::optional<ResultType>          result;
 
@@ -751,7 +733,7 @@ struct OffloadAwaiter {
         sched->offload(
             host,
             &cancelFlag,
-            [](void* ud, volatile int* cflag, AgentxxPluginString* error_out) -> void* {
+            [](void* ud, volatile int32_t* cflag, AgentxxPluginString* error_out) -> void* {
                 auto* self = static_cast<OffloadAwaiter*>(ud);
                 try {
                     if constexpr (std::is_void_v<ResultType>) {
@@ -765,7 +747,7 @@ struct OffloadAwaiter {
                 (void)error_out;
                 return nullptr;
             },
-            [](void* ud, void* res, AgentxxPluginStringView err) {
+            [](void* ud, void* res, const AgentxxPluginStringView* err) {
                 (void)res;
                 (void)err;
                 auto* self   = static_cast<OffloadAwaiter*>(ud);
@@ -802,7 +784,7 @@ struct CallToolState {
     std::string                    argsJson;
     std::string                    threadId;
     AgentxxPluginOperatorHandle*   opHandle = nullptr;
-    int                            status   = AGENTXX_PLUGIN_OPERATOR_OK;
+    int32_t                        status   = AGENTXX_PLUGIN_OPERATOR_OK;
     std::string                    payload;
     std::string                    startError;
     std::atomic<bool>              suspended{false};
@@ -850,18 +832,21 @@ struct CallToolAwaiter {
         st->destroyed.store(false, std::memory_order_release);
         auto* holder = new std::shared_ptr<CallToolState>(st);
         AgentxxPluginString err{nullptr, 0};
+        auto nameSv = agentxx_plugin_sv(st->name.data(), st->name.size());
+        auto argsSv = agentxx_plugin_sv(st->argsJson.data(), st->argsJson.size());
+        auto tidSv  = agentxx_plugin_sv(st->threadId.data(), st->threadId.size());
         st->opHandle = st->tools->call_tool_async(
             st->host,
-            agentxx_plugin_sv(st->name.data(), st->name.size()),
-            agentxx_plugin_sv(st->argsJson.data(), st->argsJson.size()),
-            agentxx_plugin_sv(st->threadId.data(), st->threadId.size()),
-            [](void* ud, int cbSt, AgentxxPluginStringView pl) {
+            &nameSv,
+            &argsSv,
+            &tidSv,
+            [](void* ud, int32_t cbSt, const AgentxxPluginStringView* pl) {
                 auto* hp = static_cast<std::shared_ptr<CallToolState>*>(ud);
                 auto  s  = *hp;
                 delete hp;
                 s->status = cbSt;
-                if (pl.data && pl.size > 0) {
-                    s->payload.assign(pl.data, pl.size);
+                if (pl && pl->data && pl->size > 0) {
+                    s->payload.assign(pl->data, static_cast<size_t>(pl->size));
                 }
                 if (!s->suspended.load(std::memory_order_acquire)) {
                     s->callbackFired.store(true, std::memory_order_release);
@@ -924,50 +909,39 @@ struct CallToolAwaiter {
             &err
         );
 
-        if (st->callbackFired.load(std::memory_order_acquire)) {
-            return false;
-        }
-
-        if (!st->opHandle && err.data) {
-            st->startError.assign(err.data, err.size);
-            if (st->host) {
+        if (!st->opHandle) {
+            delete holder;
+            if (err.data) {
+                st->startError.assign(err.data, static_cast<size_t>(err.size));
                 agentxx_plugin_string_free(st->host, &err);
             }
-            delete holder;
             return false;
         }
 
-        if (st->opHandle) {
-            h.promise().set_outstanding([st = this->st]() {
-                if (st->tools && st->tools->op_cancel && st->opHandle) {
-                    st->tools->op_cancel(st->opHandle);
-                }
-            });
+        if (st->callbackFired.load(std::memory_order_acquire)) {
+            return false;
         }
 
         st->suspended.store(true, std::memory_order_release);
-        // 竞态窗口：回调可能在上一次 callbackFired 检查之后、suspended 置 true 之前触发，
-        // 此时回调已将 callbackFired 置 true 但未恢复协程（因 suspended 当时为 false）。
-        // 再次检查，若已触发则不应挂起，由本线程直接返回 false 让 await_resume 处理结果，
-        // 并清理 outstanding（回调未清理）。
-        if (st->callbackFired.load(std::memory_order_acquire)) {
-            h.promise().clear_outstanding();
-            return false;
-        }
+        h.promise().set_outstanding([st = this->st]() {
+            if (st->tools && st->tools->op_cancel && st->opHandle) {
+                st->tools->op_cancel(st->opHandle);
+            }
+        });
         return true;
     }
 
     std::string await_resume() {
         if (!st->startError.empty()) {
-            throw std::runtime_error(st->startError);
+            throw std::runtime_error("call_tool start failed: " + st->startError);
         }
         if (st->status == AGENTXX_PLUGIN_OPERATOR_CANCELLED) {
-            throw CancelledException(fmt::format("tool `{}` cancelled", st->name));
+            throw CancelledException(
+                st->payload.empty() ? "call_tool cancelled" : st->payload
+            );
         }
         if (st->status != AGENTXX_PLUGIN_OPERATOR_OK) {
-            throw std::runtime_error(
-                st->payload.empty() ? fmt::format("tool `{}` failed", st->name) : st->payload
-            );
+            throw std::runtime_error(st->payload.empty() ? "call_tool failed" : st->payload);
         }
         return std::move(st->payload);
     }
@@ -980,13 +954,13 @@ struct InvokeCapState {
     std::string                           method;
     std::string                           argsJson;
     AgentxxPluginOperatorHandle*          opHandle = nullptr;
-    int                                   status   = AGENTXX_PLUGIN_OPERATOR_OK;
+    int32_t                               status   = AGENTXX_PLUGIN_OPERATOR_OK;
     std::string                           payload;
     std::string                           startError;
     std::atomic<bool>                     suspended{false};
     std::atomic<bool>                     callbackFired{false};
-    void*                                 coroAddr     = nullptr;
-    void (*schedPost)(const AgentxxPluginHost*, void*) = nullptr;
+    void*                                 coroAddr            = nullptr;
+    void (*schedPost)(const AgentxxPluginHost*, void*)        = nullptr;
     std::atomic<bool> destroyed{false};
 };
 
@@ -1028,18 +1002,21 @@ struct InvokeCapAwaiter {
         st->destroyed.store(false, std::memory_order_release);
         auto* holder = new std::shared_ptr<InvokeCapState>(st);
         AgentxxPluginString err{nullptr, 0};
+        auto capSv  = agentxx_plugin_sv(st->capability.data(), st->capability.size());
+        auto methSv = agentxx_plugin_sv(st->method.data(), st->method.size());
+        auto argsSv = agentxx_plugin_sv(st->argsJson.data(), st->argsJson.size());
         st->opHandle = st->caps->invoke_capability_async(
             st->host,
-            agentxx_plugin_sv(st->capability.data(), st->capability.size()),
-            agentxx_plugin_sv(st->method.data(), st->method.size()),
-            agentxx_plugin_sv(st->argsJson.data(), st->argsJson.size()),
-            [](void* ud, int cbSt, AgentxxPluginStringView pl) {
+            &capSv,
+            &methSv,
+            &argsSv,
+            [](void* ud, int32_t cbSt, const AgentxxPluginStringView* pl) {
                 auto* hp = static_cast<std::shared_ptr<InvokeCapState>*>(ud);
                 auto  s  = *hp;
                 delete hp;
                 s->status = cbSt;
-                if (pl.data && pl.size > 0) {
-                    s->payload.assign(pl.data, pl.size);
+                if (pl && pl->data && pl->size > 0) {
+                    s->payload.assign(pl->data, static_cast<size_t>(pl->size));
                 }
                 if (!s->suspended.load(std::memory_order_acquire)) {
                     s->callbackFired.store(true, std::memory_order_release);
@@ -1102,45 +1079,40 @@ struct InvokeCapAwaiter {
             &err
         );
 
-        if (st->callbackFired.load(std::memory_order_acquire)) {
-            return false;
-        }
-
-        if (!st->opHandle && err.data) {
-            st->startError.assign(err.data, err.size);
-            if (st->host) {
+        if (!st->opHandle) {
+            delete holder;
+            if (err.data) {
+                st->startError.assign(err.data, static_cast<size_t>(err.size));
                 agentxx_plugin_string_free(st->host, &err);
             }
-            delete holder;
             return false;
         }
 
-        if (st->opHandle) {
-            h.promise().set_outstanding([st = this->st]() {
-                if (st->caps && st->caps->op_cancel && st->opHandle) {
-                    st->caps->op_cancel(st->opHandle);
-                }
-            });
+        if (st->callbackFired.load(std::memory_order_acquire)) {
+            return false;
         }
 
         st->suspended.store(true, std::memory_order_release);
-        if (st->callbackFired.load(std::memory_order_acquire)) {
-            h.promise().clear_outstanding();
-            return false;
-        }
+        h.promise().set_outstanding([st = this->st]() {
+            if (st->caps && st->caps->op_cancel && st->opHandle) {
+                st->caps->op_cancel(st->opHandle);
+            }
+        });
         return true;
     }
 
     std::string await_resume() {
         if (!st->startError.empty()) {
-            throw std::runtime_error(st->startError);
+            throw std::runtime_error("invoke_capability start failed: " + st->startError);
         }
         if (st->status == AGENTXX_PLUGIN_OPERATOR_CANCELLED) {
-            throw CancelledException(fmt::format("cap `{}` cancelled", st->capability));
+            throw CancelledException(
+                st->payload.empty() ? "invoke_capability cancelled" : st->payload
+            );
         }
         if (st->status != AGENTXX_PLUGIN_OPERATOR_OK) {
             throw std::runtime_error(
-                st->payload.empty() ? fmt::format("cap `{}` failed", st->capability) : st->payload
+                st->payload.empty() ? "invoke_capability failed" : st->payload
             );
         }
         return std::move(st->payload);
@@ -1149,143 +1121,106 @@ struct InvokeCapAwaiter {
 
 } // namespace detail
 
-/* ==================== 锚定原语快捷调用 ==================== */
-
-inline detail::SleepAwaiter sleep(const PluginBase& base, long ms) {
-    return detail::SleepAwaiter{base.host, base.iface.scheduler, ms};
+inline detail::SleepAwaiter sleep(const PluginBase& ctx, int64_t ms) noexcept {
+    return detail::SleepAwaiter{ctx.host, ctx.iface.scheduler, ms};
 }
 
-inline detail::YieldAwaiter yield(const PluginBase& base) {
-    return detail::YieldAwaiter{base.host, base.iface.scheduler};
+inline detail::YieldAwaiter yield(const PluginBase& ctx) noexcept {
+    return detail::YieldAwaiter{ctx.host, ctx.iface.scheduler};
 }
 
-template<typename Fn>
-inline auto offload(const PluginBase& base, Fn&& fn) {
-    detail::OffloadAwaiter<std::decay_t<Fn>> awaiter{
-        base.host,
-        base.iface.scheduler,
-        std::forward<Fn>(fn)
+template<typename WorkFn>
+inline auto offload(const PluginBase& ctx, WorkFn&& work) {
+    return detail::OffloadAwaiter<std::decay_t<WorkFn>>{
+        ctx.host,
+        ctx.iface.scheduler,
+        std::forward<WorkFn>(work)
     };
-    return awaiter;
 }
 
 inline detail::CallToolAwaiter call_tool(
-    const PluginBase& base,
+    const PluginBase& ctx,
     std::string_view  name,
     std::string_view  argsJson,
     std::string_view  threadId = {}
 ) {
-    return detail::CallToolAwaiter(
-        base.host,
-        base.iface.tools,
+    return detail::CallToolAwaiter{
+        ctx.host,
+        ctx.iface.tools,
         name,
         argsJson,
         threadId,
         [](const AgentxxPluginHost* h, void* addr) {
-            auto ifaces = agentxx::plugin::AgentIfaces::query(h);
-            if (ifaces.scheduler && ifaces.scheduler->post_to_io) {
-                ifaces.scheduler->post_to_io(
+            auto ifs = agentxx::plugin::AgentIfaces::query(h);
+            if (ifs.scheduler && ifs.scheduler->post_to_io) {
+                ifs.scheduler->post_to_io(
                     h,
                     [](void* ud) {
-                        auto handle
-                            = std::coroutine_handle<detail::PromiseBase<void>>::from_address(ud);
+                        auto handle = std::coroutine_handle<
+                            detail::PromiseBase<std::string>>::from_address(ud);
                         handle.resume();
                     },
                     addr
                 );
             }
         }
-    );
+    };
 }
 
 inline detail::InvokeCapAwaiter invoke_cap(
-    const PluginBase& base,
-    std::string_view  cap,
+    const PluginBase& ctx,
+    std::string_view  capability,
     std::string_view  method,
-    std::string_view  argsJson
+    std::string_view  argsJson = "{}"
 ) {
-    return detail::InvokeCapAwaiter(
-        base.host,
-        base.iface.capabilities,
-        cap,
+    return detail::InvokeCapAwaiter{
+        ctx.host,
+        ctx.iface.capabilities,
+        capability,
         method,
         argsJson,
         [](const AgentxxPluginHost* h, void* addr) {
-            auto ifaces = agentxx::plugin::AgentIfaces::query(h);
-            if (ifaces.scheduler && ifaces.scheduler->post_to_io) {
-                ifaces.scheduler->post_to_io(
+            auto ifs = agentxx::plugin::AgentIfaces::query(h);
+            if (ifs.scheduler && ifs.scheduler->post_to_io) {
+                ifs.scheduler->post_to_io(
                     h,
                     [](void* ud) {
-                        auto handle
-                            = std::coroutine_handle<detail::PromiseBase<void>>::from_address(ud);
+                        auto handle = std::coroutine_handle<
+                            detail::PromiseBase<std::string>>::from_address(ud);
                         handle.resume();
                     },
                     addr
                 );
             }
         }
-    );
+    };
 }
 
 /* ==================== 后台协作任务 spawn 实现 ==================== */
-/* spawn 自 API v1 起注册到宿主 agentxx.agent.tasks 接口表 (宿主托管):
- * - 注册: register_task (io 线程) → 宿主句柄入实例 outstandingOps + inflight+1
- * - 运行: 协程照常 (sleep/offload 挂起于宿主); 宿主无感, 句柄静默
- * - 取消/回收: 插件卸载时宿主 detachAll 统一 cancel (→ 本表 cancel_fn:
- *   置 cancelFlag + 唤醒挂起协程) → 协程 while(!cancelled()) 退出 →
- *   finishIfDone (帧销毁后经 notify.done 上报) → 宿主 guard.reset
- *   (inflight-1) + 回收句柄 → waitInflightZero 精确等待归零 → dlclose 安全
- * - 与工具 op 完全同构的完成协议: 复用 PromiseBase::notify_ (finishIfDone
- *   内置上报逻辑) + opCleanup_ (清 coroAddr, 防 cancel_fn 悬空)
- *
- * 线程约束 (实现时须遵守, 对应 docs/agent/plugins.md spawn 节):
- * ① kit 协程完成路径 (finishIfDone 调用点: 各 awaiter 完成闭包/start 尾部)
- *    恒在 io 线程; ② notify.done 宿主侧按任意线程实现 (OpCore::onDone 原子
- *    CAS); ③ rec->coroAddr 仅在 io 线程读写 (cancel_fn 与完成路径都在 io 线程)
- */
 
 namespace detail {
 
-/// spawn 公共实现 (PluginBase::spawn 成员模板与自由函数 spawn 共用, 避免
-/// 双份实现漂移)。模板参数:
-/// - Ctx: 插件实例上下文 (须含 host/iface/spawns_ 成员)
-/// - Fn:  任务协程函数, 签名 (Ctx&, OpCtl) -> Task<void>
 template<typename Ctx, typename Fn>
 inline void spawnTaskImpl(Ctx& ctx, Fn&& fn) {
     auto cancelFlag = std::make_shared<std::atomic<bool>>(false);
-    // rec 先于 starter 创建: starter 在协程挂起后向 rec 记录句柄 (宿主
-    // cancel_fn 经它唤醒协程); spawns_ 持 rec 保证 starter post 任务期间存活。
-    // 注意: starter 捕获 rec 的 weak_ptr (rec->starter 持有 starter, 若捕获
-    // shared_ptr 构成 rec → starter → rec 循环引用, rec 永不释放)
     auto rec = std::make_shared<PluginBase::SpawnRecord>();
     rec->cancelFlag = cancelFlag;
     std::weak_ptr<PluginBase::SpawnRecord> recWeak = rec;
 
-    // 宿主侧任务注册 (io 线程; tasks 接口表缺失/注册失败 → 降级):
-    // - 表存在且注册成功: hostNotify 非空, 协程完成 (finishIfDone) 时上报 →
-    //   宿主回收句柄 + inflight-1 (卸载闭环)
-    // - 表缺失/注册失败: spawn 退化为纯自管协程 (宿主无句柄, 无法被回收)
-    //   —— 跨版本固有限制: 插件只能靠自身在 destroy 前停协程 (或进程收尾
-    //   OS 回收)。记录 WARN 提示 (不阻塞任务运行)
     AgentxxPluginOperatorNotify hostNotify{nullptr, nullptr};
     if (ctx.iface.tasks && ctx.iface.tasks->register_task) {
-        AgentxxPluginOperatorNotify  notify;
+        AgentxxPluginOperatorNotify  notify{nullptr, nullptr};
         AgentxxPluginString          err{nullptr, 0};
         AgentxxPluginOperatorHandle* h = ctx.iface.tasks->register_task(
             ctx.host,
-            [](void* ud, void*) { // cancel_fn: 置 cancelFlag + 唤醒挂起协程
+            [](void* ud, void*) {
                 auto* r = static_cast<PluginBase::SpawnRecord*>(ud);
                 if (!r || !r->cancelFlag) {
                     return;
                 }
                 r->cancelFlag->store(true, std::memory_order_release);
-                // coroAddr 仅在 io 线程读写: 完成路径 (opCleanup_) 先 destroy
-                // 帧后清空它; 若非空则协程帧必存活 (完成路径尚未 destroy),
-                // 唤醒安全 —— 见竞态注 (原子双保险)
                 if (r->coroAddr) {
-                    auto handle = std::coroutine_handle<detail::PromiseBase<void>>::from_address(
-                        r->coroAddr
-                    );
+                    auto handle = std::coroutine_handle<PromiseBase<void>>::from_address(r->coroAddr);
                     handle.promise().cancel_outstanding();
                 }
             },
@@ -1299,7 +1234,7 @@ inline void spawnTaskImpl(Ctx& ctx, Fn&& fn) {
             if (err.data) {
                 ctx.log.warn(fmt::format(
                     "spawn: register_task failed (task runs unmanaged): {}",
-                    std::string_view{err.data, err.size}
+                    std::string_view{err.data, static_cast<size_t>(err.size)}
                 ));
                 if (ctx.host) {
                     agentxx_plugin_string_free(ctx.host, &err);
@@ -1321,29 +1256,23 @@ inline void spawnTaskImpl(Ctx& ctx, Fn&& fn) {
             auto& p       = h.promise();
             p.host_       = ctx.host;
             p.cancelFlag_ = cancelFlag;
-            p.notify_     = hostNotify; // 完成上报 (仅宿主托管时非空)
+            p.notify_     = hostNotify;
             try {
                 h.resume();
             } catch (...) {
                 p.set_exception(std::current_exception());
             }
             if (!h.done()) {
-                // 协程挂起 (等待 sleep/offload 等): 记录句柄供宿主 cancel_fn
-                // 唤醒; 此后协程生命周期由各 awaiter 完成闭包接管 (resume +
-                // finishIfDone), 实例卸载 (detachAll cancel) 后协程被唤醒 →
-                // 感知 cancelFlag 退出, coroAddr 在完成路径清空
                 if (auto recSp = recWeak.lock()) {
                     recSp->coroAddr = h.address();
                 }
             }
-            // 协程完成 (帧将销毁) 时清 coroAddr, 防宿主 cancel_fn 访问已销毁
-            // 帧 (cancel_fn 与完成路径同在 io 线程, 无并发; 双保险见竞态注)
             p.opCleanup_ = [recWeak]() {
                 if (auto recSp = recWeak.lock()) {
                     recSp->coroAddr = nullptr;
                 }
             };
-            detail::finishIfDone(h); // 结束时: 帧销毁 → notify.done → 宿主回收
+            detail::finishIfDone(h);
         }
     };
     rec->starter = starter;
@@ -1375,8 +1304,7 @@ inline void spawn(Ctx& ctx, Fn&& fn) {
     detail::spawnTaskImpl(ctx, std::forward<Fn>(fn));
 }
 
-/// ==================== (kit::tool / fast_tool / blocking_tool / hook / capability)
-/// ====================
+/// ==================== (kit::tool / fast_tool / blocking_tool / hook / capability) ====================
 
 template<typename Ctx, typename TaskFn>
 inline void tool(
@@ -1385,8 +1313,8 @@ inline void tool(
     std::string_view depict,
     std::string_view schema,
     TaskFn&&         fn,
-    long             default_timeout_ms = 0,
-    int              flags              = 0
+    int64_t          default_timeout_ms = 0,
+    int32_t          flags              = 0
 ) {
     auto&       storage     = ctx.storage_;
     std::string finalDepict = ctx.toolPrompt(name).depict;
@@ -1420,11 +1348,12 @@ inline void tool(
     spec.user_data          = shim;
     spec.default_timeout_ms = default_timeout_ms;
     spec.flags              = flags;
+    spec._reserved          = 0;
 
     spec.execute_start = [](void*                              user_data,
-                            AgentxxPluginStringView            args_json,
-                            AgentxxPluginStringView            thread_id,
-                            AgentxxPluginStringView            tool_call_id,
+                            const AgentxxPluginStringView*     args_json,
+                            const AgentxxPluginStringView*     thread_id,
+                            const AgentxxPluginStringView*     tool_call_id,
                             const AgentxxPluginOperatorNotify* notify,
                             AgentxxPluginString*               error_out) -> void* {
         auto* shim = static_cast<ToolShim*>(user_data);
@@ -1435,10 +1364,10 @@ inline void tool(
             cancelFlag,
             shim->ctx->host,
             shim->ctx->iface.cancel,
-            std::string(thread_id.data ? thread_id.data : "", thread_id.size)
+            std::string(thread_id && thread_id->data ? thread_id->data : "", thread_id ? static_cast<size_t>(thread_id->size) : 0)
         };
 
-        std::string_view args(args_json.data ? args_json.data : "{}", args_json.size);
+        std::string_view args(args_json && args_json->data ? args_json->data : "{}", args_json ? static_cast<size_t>(args_json->size) : 0);
         auto             task = shim->fn(*shim->ctx, args, ctl);
         if (!task.handle_) {
             return nullptr;
@@ -1463,9 +1392,6 @@ inline void tool(
         }
 
         auto* job = new Job{shim, cancelFlag, h.address()};
-        // op 句柄 (Job) 生命周期绑定到协程: 协程完成 (finishIfDone 销毁帧并
-        // 上报 done) 后宿主不再访问 op, 由 opCleanup_ 释放 —— 挂起期间
-        // (协程未完成) 宿主 execute_cancel 仍经 op 指针访问 Job, 必须存活
         p.opCleanup_ = [job]() {
             delete job;
         };
@@ -1500,8 +1426,8 @@ inline void fast_tool(
     std::string_view depict,
     std::string_view schema,
     SyncFn&&         fn,
-    long             default_timeout_ms = 0,
-    int              flags              = 0
+    int64_t          default_timeout_ms = 0,
+    int32_t          flags              = 0
 ) {
     auto&       storage     = ctx.storage_;
     std::string finalDepict = ctx.toolPrompt(name).depict;
@@ -1526,18 +1452,19 @@ inline void fast_tool(
     spec.user_data          = shim;
     spec.default_timeout_ms = default_timeout_ms;
     spec.flags              = flags;
+    spec._reserved          = 0;
 
     spec.execute_start = [](void*                              user_data,
-                            AgentxxPluginStringView            args_json,
-                            AgentxxPluginStringView            thread_id,
-                            AgentxxPluginStringView            tool_call_id,
+                            const AgentxxPluginStringView*     args_json,
+                            const AgentxxPluginStringView*     thread_id,
+                            const AgentxxPluginStringView*     tool_call_id,
                             const AgentxxPluginOperatorNotify* notify,
                             AgentxxPluginString*               error_out) -> void* {
         auto* shim = static_cast<FastShim*>(user_data);
         (void)tool_call_id;
         try {
-            std::string_view args(args_json.data ? args_json.data : "{}", args_json.size);
-            std::string_view tid(thread_id.data ? thread_id.data : "", thread_id.size);
+            std::string_view args(args_json && args_json->data ? args_json->data : "{}", args_json ? static_cast<size_t>(args_json->size) : 0);
+            std::string_view tid(thread_id && thread_id->data ? thread_id->data : "", thread_id ? static_cast<size_t>(thread_id->size) : 0);
             std::string      res;
             if constexpr (std::is_invocable_v<SyncFn, Ctx&, std::string_view, std::string_view>) {
                 res = shim->fn(*shim->ctx, args, tid);
@@ -1548,29 +1475,32 @@ inline void fast_tool(
             }
 
             if (notify && notify->done) {
+                auto resSv = agentxx_plugin_sv(res.data(), res.size());
                 notify->done(
                     notify->host_ud,
                     AGENTXX_PLUGIN_OPERATOR_OK,
-                    agentxx_plugin_sv(res.data(), res.size())
+                    &resSv
                 );
             }
         } catch (const std::exception& e) {
             if (notify && notify->done) {
                 std::string what = e.what();
+                auto errSv = agentxx_plugin_sv(what.data(), what.size());
                 notify->done(
                     notify->host_ud,
                     AGENTXX_PLUGIN_OPERATOR_FAILED,
-                    agentxx_plugin_sv(what.data(), what.size())
+                    &errSv
                 );
             } else if (error_out) {
                 *error_out = agentxx_plugin_string_from_cstr(shim->ctx->host, e.what());
             }
         } catch (...) {
             if (notify && notify->done) {
+                auto errSv = agentxx_plugin_sv_cstr("unknown error");
                 notify->done(
                     notify->host_ud,
                     AGENTXX_PLUGIN_OPERATOR_FAILED,
-                    agentxx_plugin_sv_cstr("unknown error")
+                    &errSv
                 );
             } else if (error_out) {
                 *error_out = agentxx_plugin_string_from_cstr(shim->ctx->host, "unknown error in fast_tool");
@@ -1593,8 +1523,8 @@ inline void blocking_tool(
     std::string_view depict,
     std::string_view schema,
     BlockFn&&        fn,
-    long             default_timeout_ms = 0,
-    int              flags              = 0
+    int64_t          default_timeout_ms = 0,
+    int32_t          flags              = 0
 ) {
     auto&       storage     = ctx.storage_;
     std::string finalDepict = ctx.toolPrompt(name).depict;
@@ -1618,8 +1548,8 @@ inline void blocking_tool(
         std::string                 args;
         std::string                 tid;
         std::string                 tcid;
-        std::string workDir; ///< 预取的会话工作目录（io 线程解析，避免 worker 跨线程 ioCallSync）
-        volatile int cancelFlag = 0;
+        std::string                 workDir;
+        volatile int32_t            cancelFlag = 0;
     };
 
     AgentxxPluginToolSpec spec{};
@@ -1630,28 +1560,28 @@ inline void blocking_tool(
     spec.user_data          = shim;
     spec.default_timeout_ms = default_timeout_ms;
     spec.flags              = flags;
+    spec._reserved          = 0;
 
     spec.execute_start = [](void*                              user_data,
-                            AgentxxPluginStringView            args_json,
-                            AgentxxPluginStringView            thread_id,
-                            AgentxxPluginStringView            tool_call_id,
+                            const AgentxxPluginStringView*     args_json,
+                            const AgentxxPluginStringView*     thread_id,
+                            const AgentxxPluginStringView*     tool_call_id,
                             const AgentxxPluginOperatorNotify* notify,
                             AgentxxPluginString*               error_out) -> void* {
         auto* shim = static_cast<BlockShim*>(user_data);
         (void)error_out;
-        std::string tidStr(thread_id.data ? thread_id.data : "", thread_id.size);
-        // 预取 workDir（io 线程），避免阻塞池线程跨线程 ioCallSync;
-        // 空 tid 时 get_session_work_dir 返回默认会话工作目录
+        std::string tidStr(thread_id && thread_id->data ? thread_id->data : "", thread_id ? static_cast<size_t>(thread_id->size) : 0);
         std::string workDirCache;
         if (shim->ctx) {
-            workDirCache = shim->ctx->workDir(agentxx_plugin_sv(tidStr.data(), tidStr.size()));
+            auto tidSv = agentxx_plugin_sv(tidStr.data(), tidStr.size());
+            workDirCache = shim->ctx->workDir(tidSv);
         }
         auto* job = new Job{
             shim,
             notify ? *notify : AgentxxPluginOperatorNotify{nullptr, nullptr},
-            std::string(args_json.data ? args_json.data : "{}", args_json.size),
+            std::string(args_json && args_json->data ? args_json->data : "{}", args_json ? static_cast<size_t>(args_json->size) : 0),
             std::move(tidStr),
-            std::string(tool_call_id.data ? tool_call_id.data : "", tool_call_id.size),
+            std::string(tool_call_id && tool_call_id->data ? tool_call_id->data : "", tool_call_id ? static_cast<size_t>(tool_call_id->size) : 0),
             std::move(workDirCache),
             0
         };
@@ -1660,25 +1590,24 @@ inline void blocking_tool(
             shim->ctx->iface.scheduler->offload(
                 shim->ctx->host,
                 &job->cancelFlag,
-                [](void* ud, volatile int* cflag, AgentxxPluginString* err_out) -> void* {
+                [](void* ud, volatile int32_t* cflag, AgentxxPluginString* err_out) -> void* {
                     auto* j = static_cast<Job*>(ud);
                     try {
                         std::string res;
-                        // 优先匹配含 workDir 的新签名，避免 worker 再次 ioCallSync
                         if constexpr (std::is_invocable_v<
                                           BlockFn,
                                           Ctx&,
                                           std::string_view,
                                           std::string_view,
                                           std::string_view,
-                                          volatile int*>) {
+                                          volatile int32_t*>) {
                             res = j->shim->fn(*j->shim->ctx, j->args, j->tid, j->workDir, cflag);
                         } else if constexpr (std::is_invocable_v<
                                                  BlockFn,
                                                  Ctx&,
                                                  std::string_view,
                                                  std::string_view,
-                                                 volatile int*>) {
+                                                 volatile int32_t*>) {
                             res = j->shim->fn(*j->shim->ctx, j->args, j->tid, cflag);
                         } else if constexpr (std::is_invocable_v<
                                                  BlockFn,
@@ -1691,12 +1620,12 @@ inline void blocking_tool(
                                                  BlockFn,
                                                  Ctx&,
                                                  std::string_view,
-                                                 volatile int*>) {
+                                                 volatile int32_t*>) {
                             res = j->shim->fn(*j->shim->ctx, j->args, cflag);
                         } else if constexpr (std::is_invocable_v<
                                                  BlockFn,
                                                  std::string_view,
-                                                 volatile int*>) {
+                                                 volatile int32_t*>) {
                             res = j->shim->fn(j->args, cflag);
                         } else if constexpr (std::is_invocable_v<
                                                  BlockFn,
@@ -1724,27 +1653,29 @@ inline void blocking_tool(
                         return nullptr;
                     }
                 },
-                [](void* ud, void* res, AgentxxPluginStringView err) {
+                [](void* ud, void* res, const AgentxxPluginStringView* err) {
                     auto* j       = static_cast<Job*>(ud);
-                    int   st      = AGENTXX_PLUGIN_OPERATOR_OK;
+                    int32_t st    = AGENTXX_PLUGIN_OPERATOR_OK;
                     AgentxxPluginStringView payload = agentxx_plugin_sv(nullptr, 0);
 
                     if (!agentxx_plugin_sv_empty(err)) {
                         st      = AGENTXX_PLUGIN_OPERATOR_FAILED;
-                        payload = err;
+                        payload = *err;
                     } else if (res) {
-                        char* resCstr = static_cast<char*>(res);
-                        payload = agentxx_plugin_sv_cstr(resCstr);
+                        payload = agentxx_plugin_sv_cstr(static_cast<const char*>(res));
                     } else {
-                        st = AGENTXX_PLUGIN_OPERATOR_CANCELLED;
+                        st      = AGENTXX_PLUGIN_OPERATOR_CANCELLED;
                     }
 
                     if (j->notify.done) {
-                        j->notify.done(j->notify.host_ud, st, payload);
+                        j->notify.done(j->notify.host_ud, st, &payload);
                     }
-                    if (res && j->shim && j->shim->ctx) {
-                        j->shim->ctx->free(static_cast<char*>(res));
+
+                    if (res && j->shim->ctx->host && j->shim->ctx->host->vtable
+                        && j->shim->ctx->host->vtable->free) {
+                        j->shim->ctx->host->vtable->free(res);
                     }
+
                     delete j;
                 },
                 job
@@ -1778,53 +1709,57 @@ inline void hook(Ctx& ctx, AgentxxPluginHookPoint point, HookFn&& fn) {
 
     AgentxxPluginHookSpec spec{};
     spec.point     = point;
+    spec._reserved = 0;
     spec.user_data = shim;
 
     spec.hook_start = [](void*                              user_data,
-                         AgentxxPluginHookPoint             pt,
-                         AgentxxPluginStringView            node_input_json,
+                         int32_t                            pt,
+                         const AgentxxPluginStringView*     node_input_json,
                          const AgentxxPluginOperatorNotify* notify,
                          AgentxxPluginString*               error_out) -> void* {
         auto* shim = static_cast<HookShim*>(user_data);
         (void)error_out;
         try {
             std::string_view input(
-                node_input_json.data ? node_input_json.data : "{}",
-                node_input_json.size
+                node_input_json && node_input_json->data ? node_input_json->data : "{}",
+                node_input_json ? static_cast<size_t>(node_input_json->size) : 0
             );
             if constexpr (std::is_invocable_v<
                               HookFn,
                               Ctx&,
                               AgentxxPluginHookPoint,
                               std::string_view>) {
-                shim->fn(*shim->ctx, pt, input);
+                shim->fn(*shim->ctx, static_cast<AgentxxPluginHookPoint>(pt), input);
             } else if constexpr (std::is_invocable_v<HookFn, Ctx&, std::string_view>) {
                 shim->fn(*shim->ctx, input);
             } else {
                 shim->fn(input);
             }
             if (notify && notify->done) {
+                auto okSv = agentxx_plugin_sv(nullptr, 0);
                 notify->done(
                     notify->host_ud,
                     AGENTXX_PLUGIN_OPERATOR_OK,
-                    agentxx_plugin_sv(nullptr, 0)
+                    &okSv
                 );
             }
         } catch (const std::exception& e) {
             if (notify && notify->done) {
                 std::string what = e.what();
+                auto errSv = agentxx_plugin_sv(what.data(), what.size());
                 notify->done(
                     notify->host_ud,
                     AGENTXX_PLUGIN_OPERATOR_FAILED,
-                    agentxx_plugin_sv(what.data(), what.size())
+                    &errSv
                 );
             }
         } catch (...) {
             if (notify && notify->done) {
+                auto errSv = agentxx_plugin_sv_cstr("hook error");
                 notify->done(
                     notify->host_ud,
                     AGENTXX_PLUGIN_OPERATOR_FAILED,
-                    agentxx_plugin_sv_cstr("hook error")
+                    &errSv
                 );
             }
         }
@@ -1848,20 +1783,21 @@ inline void capability(Ctx& ctx, std::string_view capName, CapFn&& fn) {
     auto shim = ctx.storeShim(std::make_unique<CapShim>(CapShim{&ctx, std::forward<CapFn>(fn)}));
 
     if (ctx.iface.capabilities && ctx.iface.capabilities->register_capability_ex) {
+        auto capSv = agentxx_plugin_sv(capName.data(), capName.size());
         ctx.iface.capabilities->register_capability_ex(
             ctx.host,
-            agentxx_plugin_sv(capName.data(), capName.size()),
+            &capSv,
             [](void*                              user_data,
                const AgentxxPluginHost*           caller_host,
-               AgentxxPluginStringView            method,
-               AgentxxPluginStringView            args_json,
+               const AgentxxPluginStringView*     method,
+               const AgentxxPluginStringView*     args_json,
                const AgentxxPluginOperatorNotify* notify,
                AgentxxPluginString*               error_out) -> void* {
                 auto* shim = static_cast<CapShim*>(user_data);
                 (void)error_out;
                 try {
-                    std::string_view meth(method.data ? method.data : "", method.size);
-                    std::string_view args(args_json.data ? args_json.data : "{}", args_json.size);
+                    std::string_view meth(method && method->data ? method->data : "", method ? static_cast<size_t>(method->size) : 0);
+                    std::string_view args(args_json && args_json->data ? args_json->data : "{}", args_json ? static_cast<size_t>(args_json->size) : 0);
                     std::string      res;
                     if constexpr (std::is_invocable_v<
                                       CapFn,
@@ -1880,27 +1816,30 @@ inline void capability(Ctx& ctx, std::string_view capName, CapFn&& fn) {
                         res = shim->fn(meth, args);
                     }
                     if (notify && notify->done) {
+                        auto resSv = agentxx_plugin_sv(res.data(), res.size());
                         notify->done(
                             notify->host_ud,
                             AGENTXX_PLUGIN_OPERATOR_OK,
-                            agentxx_plugin_sv(res.data(), res.size())
+                            &resSv
                         );
                     }
                 } catch (const std::exception& e) {
                     if (notify && notify->done) {
                         std::string what = e.what();
+                        auto errSv = agentxx_plugin_sv(what.data(), what.size());
                         notify->done(
                             notify->host_ud,
                             AGENTXX_PLUGIN_OPERATOR_FAILED,
-                            agentxx_plugin_sv(what.data(), what.size())
+                            &errSv
                         );
                     }
                 } catch (...) {
                     if (notify && notify->done) {
+                        auto errSv = agentxx_plugin_sv_cstr("capability error");
                         notify->done(
                             notify->host_ud,
                             AGENTXX_PLUGIN_OPERATOR_FAILED,
-                            agentxx_plugin_sv_cstr("capability error")
+                            &errSv
                         );
                     }
                 }
@@ -1943,22 +1882,26 @@ inline AgentxxPluginString call_tool_blocking(
         std::mutex              mtx;
         std::condition_variable cv;
         bool                    done   = false;
-        int                     status = AGENTXX_PLUGIN_OPERATOR_OK;
+        int32_t                 status = AGENTXX_PLUGIN_OPERATOR_OK;
         std::string             payload;
     } state;
 
+    auto nameSv = agentxx_plugin_sv(name.data(), name.size());
+    auto argsSv = agentxx_plugin_sv(args_json.data(), args_json.size());
+    auto tidSv  = agentxx_plugin_sv(thread_id.data(), thread_id.size());
+
     AgentxxPluginOperatorHandle* handle = tools->call_tool_async(
         host,
-        agentxx_plugin_sv(name.data(), name.size()),
-        agentxx_plugin_sv(args_json.data(), args_json.size()),
-        agentxx_plugin_sv(thread_id.data(), thread_id.size()),
-        [](void* ud, int st, AgentxxPluginStringView pl) {
+        &nameSv,
+        &argsSv,
+        &tidSv,
+        [](void* ud, int32_t st, const AgentxxPluginStringView* pl) {
             auto*           s = static_cast<SyncState*>(ud);
             std::lock_guard lk(s->mtx);
             s->done   = true;
             s->status = st;
-            if (pl.data && pl.size > 0) {
-                s->payload.assign(pl.data, pl.size);
+            if (pl && pl->data && pl->size > 0) {
+                s->payload.assign(pl->data, static_cast<size_t>(pl->size));
             }
             s->cv.notify_one();
         },
@@ -1979,15 +1922,14 @@ inline AgentxxPluginString call_tool_blocking(
 
     if (state.status != AGENTXX_PLUGIN_OPERATOR_OK) {
         if (error_out) {
-            *error_out = agentxx_plugin_string_from_sv(
-                host,
-                agentxx_plugin_sv(state.payload.data(), state.payload.size())
-            );
+            auto paySv = agentxx_plugin_sv(state.payload.data(), state.payload.size());
+            *error_out = agentxx_plugin_string_from_sv(host, &paySv);
         }
         return AgentxxPluginString{nullptr, 0};
     }
 
-    return agentxx_plugin_string_from_sv(host, agentxx_plugin_sv(state.payload.data(), state.payload.size()));
+    auto paySv = agentxx_plugin_sv(state.payload.data(), state.payload.size());
+    return agentxx_plugin_string_from_sv(host, &paySv);
 }
 
 inline AgentxxPluginString invoke_capability_blocking(
@@ -2019,22 +1961,26 @@ inline AgentxxPluginString invoke_capability_blocking(
         std::mutex              mtx;
         std::condition_variable cv;
         bool                    done   = false;
-        int                     status = AGENTXX_PLUGIN_OPERATOR_OK;
+        int32_t                 status = AGENTXX_PLUGIN_OPERATOR_OK;
         std::string             payload;
     } state;
 
+    auto capSv  = agentxx_plugin_sv(capability.data(), capability.size());
+    auto methSv = agentxx_plugin_sv(method.data(), method.size());
+    auto argsSv = agentxx_plugin_sv(args_json.data(), args_json.size());
+
     AgentxxPluginOperatorHandle* handle = caps->invoke_capability_async(
         host,
-        agentxx_plugin_sv(capability.data(), capability.size()),
-        agentxx_plugin_sv(method.data(), method.size()),
-        agentxx_plugin_sv(args_json.data(), args_json.size()),
-        [](void* ud, int st, AgentxxPluginStringView pl) {
+        &capSv,
+        &methSv,
+        &argsSv,
+        [](void* ud, int32_t st, const AgentxxPluginStringView* pl) {
             auto*           s = static_cast<SyncState*>(ud);
             std::lock_guard lk(s->mtx);
             s->done   = true;
             s->status = st;
-            if (pl.data && pl.size > 0) {
-                s->payload.assign(pl.data, pl.size);
+            if (pl && pl->data && pl->size > 0) {
+                s->payload.assign(pl->data, static_cast<size_t>(pl->size));
             }
             s->cv.notify_one();
         },
@@ -2055,15 +2001,14 @@ inline AgentxxPluginString invoke_capability_blocking(
 
     if (state.status != AGENTXX_PLUGIN_OPERATOR_OK) {
         if (error_out) {
-            *error_out = agentxx_plugin_string_from_sv(
-                host,
-                agentxx_plugin_sv(state.payload.data(), state.payload.size())
-            );
+            auto paySv = agentxx_plugin_sv(state.payload.data(), state.payload.size());
+            *error_out = agentxx_plugin_string_from_sv(host, &paySv);
         }
         return AgentxxPluginString{nullptr, 0};
     }
 
-    return agentxx_plugin_string_from_sv(host, agentxx_plugin_sv(state.payload.data(), state.payload.size()));
+    auto paySv = agentxx_plugin_sv(state.payload.data(), state.payload.size());
+    return agentxx_plugin_string_from_sv(host, &paySv);
 }
 
 } // namespace plugin

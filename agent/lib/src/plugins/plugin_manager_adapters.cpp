@@ -95,11 +95,14 @@ asio::awaitable<std::string> PluginTool::execute_async(const neograph::json& arg
                       const AgentxxPluginOperatorNotify* notify,
                       AgentxxPluginString*               err
                   ) -> void* {
+        auto argsSv = agentxx_plugin_sv(argsJson.data(), argsJson.size());
+        auto sidSv  = agentxx_plugin_sv(sessionId.data(), sessionId.size());
+        auto tcidSv = agentxx_plugin_sv(toolCallId.data(), toolCallId.size());
         return spec.execute_start(
             spec.user_data,
-            agentxx_plugin_sv(argsJson.data(), argsJson.size()),
-            agentxx_plugin_sv(sessionId.data(), sessionId.size()),
-            agentxx_plugin_sv(toolCallId.data(), toolCallId.size()),
+            &argsSv,
+            &sidSv,
+            &tcidSv,
             notify,
             err
         );
@@ -196,10 +199,11 @@ asio::awaitable<void> PluginMiddlewareHandle::dispatch(
                    instKeep,
                    inputJson,
                    point](const AgentxxPluginOperatorNotify* notify, AgentxxPluginString* err) -> void* {
+        auto inSv = agentxx_plugin_sv(inputJson.data(), inputJson.size());
         return hook.start(
             hook.ud,
             point,
-            agentxx_plugin_sv(inputJson.data(), inputJson.size()),
+            &inSv,
             notify,
             err
         );
@@ -533,10 +537,10 @@ int PluginManager::setGraphJson(PluginInstance* inst, AgentxxPluginStringView gr
 AgentxxPluginSubscription* PluginManager::subscribe(
     PluginInstance*         inst,
     AgentxxPluginStringView topic,
-    void (*handler)(AgentxxPluginStringView event_json, void* ud),
+    void (AGENTXX_PLUGIN_CALL *handler)(const AgentxxPluginStringView* event_json, void* ud),
     void* ud
 ) {
-    if (!inst || agentxx_plugin_sv_empty(topic) || !handler) {
+    if (!inst || agentxx_plugin_sv_empty(&topic) || !handler) {
         return nullptr;
     }
     auto ctx = agentContext_.lock();
@@ -561,7 +565,8 @@ AgentxxPluginSubscription* PluginManager::subscribe(
             }
             PluginInstance::InflightGuard guard(sub->inst);
             try {
-                sub->handler(agentxx_plugin_sv(data.data(), data.size()), sub->ud);
+                auto dataSv = agentxx_plugin_sv(data.data(), data.size());
+                sub->handler(&dataSv, sub->ud);
             } catch (const std::exception& e) {
                 XX_LOGW(
                     "Plugin `{}` event handler threw: {}",

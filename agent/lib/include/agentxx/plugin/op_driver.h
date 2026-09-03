@@ -94,7 +94,7 @@ struct OpCore : std::enable_shared_from_this<OpCore> {
         chan(ex, 4),
         guard(std::move(g)) {}
 
-    static void onDone(void* ud, int st, AgentxxPluginStringView payload_sv) {
+    static void AGENTXX_PLUGIN_CALL onDone(void* ud, int32_t st, const AgentxxPluginStringView* payload_sv) {
         auto* self = static_cast<OpCore*>(ud);
         // 生命周期守卫: 插件的 done 可能来自任意线程 (阻塞池/自管线程), 调用方
         // 仅持裸指针。通知到达时宿主侧至少有一个等待协程 (chan/doneSignal 等待
@@ -113,8 +113,8 @@ struct OpCore : std::enable_shared_from_this<OpCore> {
             return;
         }
         self->status.store(st, std::memory_order_release);
-        if (payload_sv.data && payload_sv.size > 0) {
-            self->payload.assign(payload_sv.data, payload_sv.size);
+        if (payload_sv && payload_sv->data && payload_sv->size > 0) {
+            self->payload.assign(payload_sv->data, static_cast<size_t>(payload_sv->size));
         } else {
             self->payload.clear();
         }
@@ -131,7 +131,8 @@ struct OpCore : std::enable_shared_from_this<OpCore> {
             // (selfKeep 已自持, post 回调也捕获它, 派发期间对象必然存活)
             asio::post(self->chan.get_executor(), [selfKeep, cb, cbUd, st, payloadCopy]() {
                 try {
-                    cb(cbUd, st, agentxx_plugin_sv(payloadCopy.data(), payloadCopy.size()));
+                    auto payloadSv = agentxx_plugin_sv(payloadCopy.data(), payloadCopy.size());
+                    cb(cbUd, st, &payloadSv);
                 } catch (...) {
                 }
             });
