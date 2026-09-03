@@ -177,7 +177,7 @@ asio::awaitable<TestResult> run_plugin_multi_instance_tests() {
             auto      st = std::make_shared<TaskState>();
             auto      ex = co_await asio::this_coro::executor;
             AgentxxPluginOperatorNotify ntf{nullptr, nullptr};
-            char*                       err = nullptr;
+            AgentxxPluginString         err{nullptr, 0};
             auto* h = ctxA->pluginManager->registerTask(
                 instC.get(),
                 [](void* ud, void*) {
@@ -230,13 +230,13 @@ asio::awaitable<TestResult> run_plugin_multi_instance_tests() {
             XX_TEST_EXPECT_FALSE(trackedAfter); ///< 完成后句柄被回收
             size_t inflightAfter = instC->inflight.load(std::memory_order_acquire);
             XX_TEST_EXPECT_TRUE(inflightAfter < inflightBefore || inflightBefore == 0);
-            if (err) {
-                std::free(err);
+            if (err.data) {
+                agentxx_plugin_string_free(&instC->host, &err);
             }
 
             // 取消路径: 新任务 → xx_op_cancel 语义 (op->cancelled CAS + cancelFn)
             AgentxxPluginOperatorNotify ntf2{nullptr, nullptr};
-            char*                       err2 = nullptr;
+            AgentxxPluginString         err2{nullptr, 0};
             auto* h2 = ctxA->pluginManager->registerTask(
                 instC.get(),
                 [](void* ud, void*) {
@@ -247,6 +247,9 @@ asio::awaitable<TestResult> run_plugin_multi_instance_tests() {
                 &ntf2,
                 &err2
             );
+            if (err2.data) {
+                agentxx_plugin_string_free(&instC->host, &err2);
+            }
             XX_TEST_EXPECT_TRUE(h2 != nullptr);
             if (h2) {
                 h2->cancelled.store(true); ///< 模拟 detachAll / op_cancel 前置置位

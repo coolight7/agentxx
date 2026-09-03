@@ -880,10 +880,10 @@ void ClientPluginManager::invokeCommand(const std::string& name, const std::stri
     }
 
     PluginInstanceBase::InflightGuard guard(inst.get());
-    char*                             err = nullptr;
+    AgentxxPluginString               err{nullptr, 0};
     // C ABI 回调异常兜底: 插件违约不得打断 client 输入管线 (命令拦截在
     // io 线程执行, 异常外泄会终止输入循环)
-    char* out = nullptr;
+    AgentxxPluginString out{nullptr, 0};
     try {
         out = cmd->execute(cmd->ud, agentxx_plugin_sv(argsJson.data(), argsJson.size()), &err);
     } catch (const std::exception& e) {
@@ -892,16 +892,16 @@ void ClientPluginManager::invokeCommand(const std::string& name, const std::stri
         XX_LOGW("[client_plugin] command `{}` execute threw unknown exception", name);
     }
     std::string actionJson;
-    if (!out) {
-        XX_LOGW("[client_plugin] command `{}` failed: {}", name, err ? err : "(no error message)");
+    if (!out.data) {
+        XX_LOGW("[client_plugin] command `{}` failed: {}", name, err.data ? std::string(err.data, err.size) : "(no error message)");
     } else {
-        actionJson.assign(out);
+        actionJson.assign(out.data, out.size);
     }
-    if (err) {
-        inst->host.vtable->free(err);
+    if (err.data) {
+        agentxx_plugin_string_free(&inst->host, &err);
     }
-    if (out) {
-        inst->host.vtable->free(out);
+    if (out.data) {
+        agentxx_plugin_string_free(&inst->host, &out);
     }
     dispatchCommandAction(actionJson);
 }
@@ -1299,42 +1299,42 @@ void xx_clog(const AgentxxPluginHost* host, int level, AgentxxPluginStringView m
 
 /// JSON 辅助: 提取字符串字段 (线程安全, 纯函数; 供插件替代手写 JSON 解析)
 /// - 与 agent 侧 xx_json_get_string 一致, 无需绕道 io 线程
-char* xx_cjson_get_string(
+AgentxxPluginString xx_cjson_get_string(
     const AgentxxPluginHost* host,
     AgentxxPluginStringView  json,
     AgentxxPluginStringView  key
 ) {
-    return agentxx::plugin::guardVtableCall(nullptr, [&]() -> char* {
+    return agentxx::plugin::guardVtableCall<AgentxxPluginString>(AgentxxPluginString{nullptr, 0}, [&]() -> AgentxxPluginString {
         auto inst = clientInstOf(host);
         if (!inst || agentxx_plugin_sv_empty(json) || agentxx_plugin_sv_empty(key)) {
-            return static_cast<char*>(nullptr);
+            return AgentxxPluginString{nullptr, 0};
         }
         try {
             auto j = neograph::json::parse(std::string{json.data, json.size});
             auto v = jsonStr(j, std::string_view{key.data, key.size});
             if (v.empty() && !j.contains(std::string{key.data, key.size})) {
-                return static_cast<char*>(nullptr);
+                return AgentxxPluginString{nullptr, 0};
             }
-            return xx_cstrdup(agentxx_plugin_sv(v.data(), v.size()));
+            return agentxx::plugin::hostMemoryCreateString(v);
         } catch (...) {
-            return static_cast<char*>(nullptr);
+            return AgentxxPluginString{nullptr, 0};
         }
     });
 }
 
 /// JSON 辅助: 字符串 → JSON 字符串字面量 (含引号与转义; 线程安全纯函数)
-char* xx_cjson_escape(const AgentxxPluginHost* host, AgentxxPluginStringView s) {
-    return agentxx::plugin::guardVtableCall(nullptr, [&]() -> char* {
+AgentxxPluginString xx_cjson_escape(const AgentxxPluginHost* host, AgentxxPluginStringView s) {
+    return agentxx::plugin::guardVtableCall<AgentxxPluginString>(AgentxxPluginString{nullptr, 0}, [&]() -> AgentxxPluginString {
         auto inst = clientInstOf(host);
         if (!inst || agentxx_plugin_sv_empty(s)) {
-            return static_cast<char*>(nullptr);
+            return AgentxxPluginString{nullptr, 0};
         }
         try {
             neograph::json j = std::string{s.data, s.size};
             auto dumpStr = j.dump();
-            return xx_cstrdup(agentxx_plugin_sv(dumpStr.data(), dumpStr.size()));
+            return agentxx::plugin::hostMemoryCreateString(dumpStr);
         } catch (...) {
-            return static_cast<char*>(nullptr);
+            return AgentxxPluginString{nullptr, 0};
         }
     });
 }
@@ -1548,7 +1548,7 @@ int xx_cregister_command(
     const AgentxxPluginHost* host,
     AgentxxPluginStringView  name,
     AgentxxPluginStringView  description,
-    char* (*execute)(void*, AgentxxPluginStringView, char**),
+    AgentxxPluginString (*execute)(void*, AgentxxPluginStringView, AgentxxPluginString*),
     void* ud
 ) {
     return agentxx::plugin::guardVtableCall(-1, [&]() -> int {
@@ -1635,15 +1635,15 @@ void xx_cunsubscribe(AgentxxPluginSubscription* sub) {
 
 // ---- 会话上下文 ----
 
-char* xx_cget_client_state(const AgentxxPluginHost* host) {
-    return agentxx::plugin::guardVtableCall(nullptr, [&]() -> char* {
+AgentxxPluginString xx_cget_client_state(const AgentxxPluginHost* host) {
+    return agentxx::plugin::guardVtableCall<AgentxxPluginString>(AgentxxPluginString{nullptr, 0}, [&]() -> AgentxxPluginString {
         auto mgr = clientMgrOf(host);
         if (!mgr) {
-            return static_cast<char*>(nullptr);
+            return AgentxxPluginString{nullptr, 0};
         }
-        return ioCallSync<char*>(mgr, [&]() -> char* {
+        return ioCallSync<AgentxxPluginString>(mgr, [&]() -> AgentxxPluginString {
             auto s = mgr->clientStateJson();
-            return xx_cstrdup(strToSv(s));
+            return agentxx::plugin::hostMemoryCreateString(s);
         });
     });
 }
@@ -1702,47 +1702,47 @@ int xx_csend_plugin_data(
 
 // ---- 自描述 ----
 
-char* xx_cget_own_info(const AgentxxPluginHost* host) {
-    return agentxx::plugin::guardVtableCall(nullptr, [&]() -> char* {
+AgentxxPluginString xx_cget_own_info(const AgentxxPluginHost* host) {
+    return agentxx::plugin::guardVtableCall<AgentxxPluginString>(AgentxxPluginString{nullptr, 0}, [&]() -> AgentxxPluginString {
         auto mgr  = clientMgrOf(host);
         auto inst = clientInstOf(host);
         if (!mgr || !inst) {
-            return static_cast<char*>(nullptr);
+            return AgentxxPluginString{nullptr, 0};
         }
-        return ioCallSync<char*>(mgr, [&]() -> char* {
+        return ioCallSync<AgentxxPluginString>(mgr, [&]() -> AgentxxPluginString {
             auto s = mgr->getOwnInfoJson(inst);
-            return xx_cstrdup(strToSv(s));
+            return agentxx::plugin::hostMemoryCreateString(s);
         });
     });
 }
 
-char* xx_cget_plugin_args(const AgentxxPluginHost* host) {
-    return agentxx::plugin::guardVtableCall(nullptr, [&]() -> char* {
+AgentxxPluginString xx_cget_plugin_args(const AgentxxPluginHost* host) {
+    return agentxx::plugin::guardVtableCall<AgentxxPluginString>(AgentxxPluginString{nullptr, 0}, [&]() -> AgentxxPluginString {
         auto mgr  = clientMgrOf(host);
         auto inst = clientInstOf(host);
         if (!mgr || !inst) {
-            return static_cast<char*>(nullptr);
+            return AgentxxPluginString{nullptr, 0};
         }
-        return ioCallSync<char*>(mgr, [&]() -> char* {
+        return ioCallSync<AgentxxPluginString>(mgr, [&]() -> AgentxxPluginString {
             auto s = mgr->getPluginArgsJson(inst);
-            return xx_cstrdup(strToSv(s));
+            return agentxx::plugin::hostMemoryCreateString(s);
         });
     });
 }
 
-char* xx_cget_plugin_config_path(const AgentxxPluginHost* host) {
-    return agentxx::plugin::guardVtableCall(nullptr, [&]() -> char* {
+AgentxxPluginString xx_cget_plugin_config_path(const AgentxxPluginHost* host) {
+    return agentxx::plugin::guardVtableCall<AgentxxPluginString>(AgentxxPluginString{nullptr, 0}, [&]() -> AgentxxPluginString {
         auto mgr  = clientMgrOf(host);
         auto inst = clientInstOf(host);
         if (!mgr || !inst || inst->configPath.empty()) {
-            return static_cast<char*>(nullptr);
+            return AgentxxPluginString{nullptr, 0};
         }
-        return ioCallSync<char*>(mgr, [&]() -> char* {
+        return ioCallSync<AgentxxPluginString>(mgr, [&]() -> AgentxxPluginString {
             auto s = mgr->getPluginConfigPath(inst);
             if (s.empty()) {
-                return static_cast<char*>(nullptr);
+                return AgentxxPluginString{nullptr, 0};
             }
-            return xx_cstrdup(strToSv(s));
+            return agentxx::plugin::hostMemoryCreateString(s);
         });
     });
 }
@@ -2349,7 +2349,7 @@ int ClientPluginManager::registerCommand(
     ClientPluginInstance*   inst,
     AgentxxPluginStringView name,
     AgentxxPluginStringView description,
-    char* (*exec)(void*, AgentxxPluginStringView, char**),
+    AgentxxPluginString (*exec)(void*, AgentxxPluginStringView, AgentxxPluginString*),
     void* ud
 ) {
     if (!inst || !exec || agentxx_plugin_sv_empty(name)) {

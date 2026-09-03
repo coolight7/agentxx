@@ -89,7 +89,7 @@ static ::AgentxxPluginOperatorHandle* xx_call_tool_async(
     AgentxxPluginStringView       session_id,
     AgentxxPluginOperatorCallback cb,
     void*                         ud,
-    char**                        error_out
+    AgentxxPluginString*          error_out
 ) {
     auto mgr  = mgrOf(host);
     auto inst = instOf(host);
@@ -264,7 +264,7 @@ static ::AgentxxPluginOperatorHandle* xx_invoke_capability_async(
     AgentxxPluginStringView       args_json,
     AgentxxPluginOperatorCallback cb,
     void*                         ud,
-    char**                        error_out
+    AgentxxPluginString*          error_out
 ) {
     return agentxx::plugin::guardVtableCall<::AgentxxPluginOperatorHandle*>(
         nullptr,
@@ -293,7 +293,7 @@ static ::AgentxxPluginOperatorHandle* xx_register_task(
     AgentxxPluginOperatorCancelFunction cancel_fn,
     void*                               cancel_ud,
     AgentxxPluginOperatorNotify*        notify,
-    char**                              error_out
+    AgentxxPluginString*                error_out
 ) {
     return agentxx::plugin::guardVtableCall<::AgentxxPluginOperatorHandle*>(
         nullptr,
@@ -321,25 +321,25 @@ static ::AgentxxPluginOperatorHandle* xx_register_task(
     );
 }
 
-static char* xx_list_plugins(const AgentxxPluginHost* host) {
-    return agentxx::plugin::guardVtableCall(nullptr, [&]() -> char* {
+static AgentxxPluginString xx_list_plugins(const AgentxxPluginHost* host) {
+    return agentxx::plugin::guardVtableCall<AgentxxPluginString>(AgentxxPluginString{nullptr, 0}, [&]() -> AgentxxPluginString {
         auto mgr = mgrOf(host);
         if (!mgr) {
-            return static_cast<char*>(nullptr);
+            return AgentxxPluginString{nullptr, 0};
         }
         auto mgrPtr = mgr;
         auto json   = ioCallSync<std::string>(mgrPtr, [mgrPtr]() {
             return mgrPtr->listPluginsJson();
         });
-        return host->vtable->strdup(agentxx_plugin_sv(json.data(), json.size()));
+        return agentxx::plugin::hostMemoryCreateString(json);
     });
 }
 
-static char* xx_get_plugin(const AgentxxPluginHost* host, AgentxxPluginStringView name) {
-    return agentxx::plugin::guardVtableCall(nullptr, [&]() -> char* {
+static AgentxxPluginString xx_get_plugin(const AgentxxPluginHost* host, AgentxxPluginStringView name) {
+    return agentxx::plugin::guardVtableCall<AgentxxPluginString>(AgentxxPluginString{nullptr, 0}, [&]() -> AgentxxPluginString {
         auto mgr = mgrOf(host);
         if (!mgr || agentxx_plugin_sv_empty(name)) {
-            return static_cast<char*>(nullptr);
+            return AgentxxPluginString{nullptr, 0};
         }
         auto        mgrPtr = mgr;
         std::string pluginName{name.data, name.size};
@@ -347,18 +347,18 @@ static char* xx_get_plugin(const AgentxxPluginHost* host, AgentxxPluginStringVie
             return mgrPtr->getPluginJson(pluginName);
         });
         if (json.empty()) {
-            return static_cast<char*>(nullptr);
+            return AgentxxPluginString{nullptr, 0};
         }
-        return host->vtable->strdup(agentxx_plugin_sv(json.data(), json.size()));
+        return agentxx::plugin::hostMemoryCreateString(json);
     });
 }
 
-static char* xx_get_own_info(const AgentxxPluginHost* host) {
-    return agentxx::plugin::guardVtableCall<char*>(nullptr, [&]() -> char* {
+static AgentxxPluginString xx_get_own_info(const AgentxxPluginHost* host) {
+    return agentxx::plugin::guardVtableCall<AgentxxPluginString>(AgentxxPluginString{nullptr, 0}, [&]() -> AgentxxPluginString {
         auto mgr  = mgrOf(host);
         auto inst = instOf(host);
         if (!mgr || !inst) {
-            return static_cast<char*>(nullptr);
+            return AgentxxPluginString{nullptr, 0};
         }
         auto        mgrPtr  = mgr;
         std::string ownName = inst->name;
@@ -366,26 +366,26 @@ static char* xx_get_own_info(const AgentxxPluginHost* host) {
             return mgrPtr->getPluginJson(ownName);
         });
         if (json.empty()) {
-            return static_cast<char*>(nullptr);
+            return AgentxxPluginString{nullptr, 0};
         }
-        return host->vtable->strdup(agentxx_plugin_sv(json.data(), json.size()));
+        return agentxx::plugin::hostMemoryCreateString(json);
     });
 }
 
-static char* xx_get_share_store(
+static AgentxxPluginString xx_get_share_store(
     const AgentxxPluginHost* host,
     AgentxxPluginStringView  session_id,
     long long                id
 ) {
-    return agentxx::plugin::guardVtableCall<char*>(nullptr, [&]() -> char* {
+    return agentxx::plugin::guardVtableCall<AgentxxPluginString>(AgentxxPluginString{nullptr, 0}, [&]() -> AgentxxPluginString {
         auto mgr  = mgrOf(host);
         auto inst = instOf(host);
         if (!mgr || !inst) {
-            return static_cast<char*>(nullptr);
+            return AgentxxPluginString{nullptr, 0};
         }
         auto mgrPtr  = mgr;
         auto instPtr = inst;
-        return ioCallSync<char*>(mgrPtr, [mgrPtr, instPtr, session_id, id]() -> char* {
+        return ioCallSync<AgentxxPluginString>(mgrPtr, [mgrPtr, instPtr, session_id, id]() -> AgentxxPluginString {
             return mgrPtr->getShareStore(instPtr, session_id, id);
         });
     });
@@ -468,34 +468,34 @@ static int xx_unregister_node_type(const AgentxxPluginHost* host, AgentxxPluginS
     });
 }
 
-static char* xx_get_graph_json(const AgentxxPluginHost* host) {
-    return agentxx::plugin::guardVtableCall<char*>(nullptr, [&]() -> char* {
+static AgentxxPluginString xx_get_graph_json(const AgentxxPluginHost* host) {
+    return agentxx::plugin::guardVtableCall<AgentxxPluginString>(AgentxxPluginString{nullptr, 0}, [&]() -> AgentxxPluginString {
         auto mgr  = mgrOf(host);
         auto inst = instOf(host);
         if (!mgr || !inst) {
-            return nullptr;
+            return AgentxxPluginString{nullptr, 0};
         }
         auto mgrPtr = mgr;
-        return ioCallSync<char*>(mgrPtr, [mgrPtr]() -> char* {
+        return ioCallSync<AgentxxPluginString>(mgrPtr, [mgrPtr]() -> AgentxxPluginString {
             auto json = mgrPtr->getGraphJson();
             if (json.empty()) {
-                return nullptr;
+                return AgentxxPluginString{nullptr, 0};
             }
-            return agentxx::plugin::hostMemoryStrdup(json.c_str());
+            return agentxx::plugin::hostMemoryCreateString(json);
         });
     });
 }
 
-static char* xx_get_graph_name(const AgentxxPluginHost* host) {
-    return agentxx::plugin::guardVtableCall<char*>(nullptr, [&]() -> char* {
+static AgentxxPluginString xx_get_graph_name(const AgentxxPluginHost* host) {
+    return agentxx::plugin::guardVtableCall<AgentxxPluginString>(AgentxxPluginString{nullptr, 0}, [&]() -> AgentxxPluginString {
         auto mgr  = mgrOf(host);
         auto inst = instOf(host);
         if (!mgr || !inst) {
-            return nullptr;
+            return AgentxxPluginString{nullptr, 0};
         }
         auto        mgrPtr = mgr;
         std::string name   = "agentxx.default";
-        return ioCallSync<char*>(mgrPtr, [mgrPtr, name]() -> char* {
+        return ioCallSync<AgentxxPluginString>(mgrPtr, [mgrPtr, name]() -> AgentxxPluginString {
             auto json = mgrPtr->getGraphJson();
             std::string result = name;
             if (!json.empty()) {
@@ -507,7 +507,7 @@ static char* xx_get_graph_name(const AgentxxPluginHost* host) {
                 } catch (...) {
                 }
             }
-            return agentxx::plugin::hostMemoryStrdup(result.c_str());
+            return agentxx::plugin::hostMemoryCreateString(result);
         });
     });
 }
@@ -560,7 +560,7 @@ static void xx_cancel_sleep(const AgentxxPluginHost* host, void* timer) {
 static void xx_offload(
     const AgentxxPluginHost* host,
     volatile int*            cancel_flag,
-    void* (*work)(void* ud, volatile int* cancel_flag, char** error_out),
+    void* (*work)(void* ud, volatile int* cancel_flag, AgentxxPluginString* error_out),
     void (*done)(void* ud, void* result, AgentxxPluginStringView error),
     void* ud
 ) {
@@ -626,14 +626,14 @@ static void xx_log(const AgentxxPluginHost* host, int level, AgentxxPluginString
     agentxx::util::xxLogPrint(lv, std::string{msg.data ? msg.data : "", msg.size});
 }
 
-static char* xx_json_get_string(
+static AgentxxPluginString xx_json_get_string(
     const AgentxxPluginHost* host,
     AgentxxPluginStringView  json,
     AgentxxPluginStringView  key
 ) {
     auto inst = instOf(host);
     if (!inst || agentxx_plugin_sv_empty(json) || agentxx_plugin_sv_empty(key)) {
-        return nullptr;
+        return AgentxxPluginString{nullptr, 0};
     }
     try {
         std::string jsonStr{json.data, json.size};
@@ -641,17 +641,17 @@ static char* xx_json_get_string(
         auto        j = neograph::json::parse(jsonStr);
         if (j.is_object() && j.contains(keyStr) && j[keyStr].is_string()) {
             std::string val = j[keyStr].get<std::string>();
-            return inst->host.vtable->strdup(agentxx_plugin_sv(val.data(), val.size()));
+            return agentxx::plugin::hostMemoryCreateString(val);
         }
     } catch (...) {
     }
-    return nullptr;
+    return AgentxxPluginString{nullptr, 0};
 }
 
-static char* xx_json_escape(const AgentxxPluginHost* host, AgentxxPluginStringView s) {
+static AgentxxPluginString xx_json_escape(const AgentxxPluginHost* host, AgentxxPluginStringView s) {
     auto inst = instOf(host);
     if (!inst || agentxx_plugin_sv_empty(s)) {
-        return nullptr;
+        return AgentxxPluginString{nullptr, 0};
     }
     std::string out;
     out.reserve(s.size + 2);
@@ -690,47 +690,47 @@ static char* xx_json_escape(const AgentxxPluginHost* host, AgentxxPluginStringVi
         }
     }
     out += '"';
-    return inst->host.vtable->strdup(agentxx_plugin_sv(out.data(), out.size()));
+    return agentxx::plugin::hostMemoryCreateString(out);
 }
 
-static char* xx_get_config(const AgentxxPluginHost* host) {
-    return agentxx::plugin::guardVtableCall(nullptr, [&]() -> char* {
+static AgentxxPluginString xx_get_config(const AgentxxPluginHost* host) {
+    return agentxx::plugin::guardVtableCall<AgentxxPluginString>(AgentxxPluginString{nullptr, 0}, [&]() -> AgentxxPluginString {
         auto mgr = mgrOf(host);
         if (!mgr) {
-            return static_cast<char*>(nullptr);
+            return AgentxxPluginString{nullptr, 0};
         }
         auto mgrPtr = mgr;
         auto json   = ioCallSync<std::string>(mgrPtr, [mgrPtr]() {
             return mgrPtr->getConfigJson();
         });
         if (json.empty()) {
-            return static_cast<char*>(nullptr);
+            return AgentxxPluginString{nullptr, 0};
         }
-        return host->vtable->strdup(agentxx_plugin_sv(json.data(), json.size()));
+        return agentxx::plugin::hostMemoryCreateString(json);
     });
 }
 
-static char* xx_get_plugin_args(const AgentxxPluginHost* host) {
-    return agentxx::plugin::guardVtableCall(nullptr, [&]() -> char* {
+static AgentxxPluginString xx_get_plugin_args(const AgentxxPluginHost* host) {
+    return agentxx::plugin::guardVtableCall<AgentxxPluginString>(AgentxxPluginString{nullptr, 0}, [&]() -> AgentxxPluginString {
         auto mgr  = mgrOf(host);
         auto inst = instOf(host);
         if (!mgr || !inst) {
-            return static_cast<char*>(nullptr);
+            return AgentxxPluginString{nullptr, 0};
         }
         auto mgrPtr  = mgr;
         auto instPtr = inst;
         auto json    = ioCallSync<std::string>(mgrPtr, [mgrPtr, instPtr]() {
             return mgrPtr->getPluginArgsJson(instPtr);
         });
-        return host->vtable->strdup(agentxx_plugin_sv(json.data(), json.size()));
+        return agentxx::plugin::hostMemoryCreateString(json);
     });
 }
 
-static char* xx_get_tool_prompt(const AgentxxPluginHost* host, AgentxxPluginStringView tool_name) {
-    return agentxx::plugin::guardVtableCall(nullptr, [&]() -> char* {
+static AgentxxPluginString xx_get_tool_prompt(const AgentxxPluginHost* host, AgentxxPluginStringView tool_name) {
+    return agentxx::plugin::guardVtableCall<AgentxxPluginString>(AgentxxPluginString{nullptr, 0}, [&]() -> AgentxxPluginString {
         auto mgr = mgrOf(host);
         if (!mgr || agentxx_plugin_sv_empty(tool_name)) {
-            return static_cast<char*>(nullptr);
+            return AgentxxPluginString{nullptr, 0};
         }
         auto        mgrPtr = mgr;
         std::string name{tool_name.data, tool_name.size};
@@ -738,19 +738,19 @@ static char* xx_get_tool_prompt(const AgentxxPluginHost* host, AgentxxPluginStri
             return mgrPtr->getToolPromptJson(name);
         });
         if (json.empty()) {
-            return static_cast<char*>(nullptr);
+            return AgentxxPluginString{nullptr, 0};
         }
-        return host->vtable->strdup(agentxx_plugin_sv(json.data(), json.size()));
+        return agentxx::plugin::hostMemoryCreateString(json);
     });
 }
 
-static char*
+static AgentxxPluginString
     xx_get_session_work_dir(const AgentxxPluginHost* host, AgentxxPluginStringView thread_id) {
-    return agentxx::plugin::guardVtableCall(nullptr, [&]() -> char* {
+    return agentxx::plugin::guardVtableCall<AgentxxPluginString>(AgentxxPluginString{nullptr, 0}, [&]() -> AgentxxPluginString {
         auto mgr  = mgrOf(host);
         auto inst = instOf(host);
         if (!mgr || !inst) {
-            return static_cast<char*>(nullptr);
+            return AgentxxPluginString{nullptr, 0};
         }
         auto        mgrPtr = mgr;
         std::string tid{thread_id.data ? thread_id.data : "", thread_id.size};
@@ -758,18 +758,18 @@ static char*
             return mgrPtr->getSessionWorkDir(tid);
         });
         if (dir.empty()) {
-            return static_cast<char*>(nullptr);
+            return AgentxxPluginString{nullptr, 0};
         }
-        return host->vtable->strdup(agentxx_plugin_sv(dir.data(), dir.size()));
+        return agentxx::plugin::hostMemoryCreateString(dir);
     });
 }
 
-static char* xx_get_plugin_config_path(const AgentxxPluginHost* host) {
-    return agentxx::plugin::guardVtableCall(nullptr, [&]() -> char* {
+static AgentxxPluginString xx_get_plugin_config_path(const AgentxxPluginHost* host) {
+    return agentxx::plugin::guardVtableCall<AgentxxPluginString>(AgentxxPluginString{nullptr, 0}, [&]() -> AgentxxPluginString {
         auto mgr  = mgrOf(host);
         auto inst = instOf(host);
         if (!mgr || !inst) {
-            return static_cast<char*>(nullptr);
+            return AgentxxPluginString{nullptr, 0};
         }
         auto mgrPtr  = mgr;
         auto instPtr = inst;
@@ -777,26 +777,26 @@ static char* xx_get_plugin_config_path(const AgentxxPluginHost* host) {
             return mgrPtr->getPluginConfigPath(instPtr);
         });
         if (path.empty()) {
-            return static_cast<char*>(nullptr);
+            return AgentxxPluginString{nullptr, 0};
         }
-        return host->vtable->strdup(agentxx_plugin_sv(path.data(), path.size()));
+        return agentxx::plugin::hostMemoryCreateString(path);
     });
 }
 
-static char* xx_get_prompt(const AgentxxPluginHost* host) {
-    return agentxx::plugin::guardVtableCall(nullptr, [&]() -> char* {
+static AgentxxPluginString xx_get_prompt(const AgentxxPluginHost* host) {
+    return agentxx::plugin::guardVtableCall<AgentxxPluginString>(AgentxxPluginString{nullptr, 0}, [&]() -> AgentxxPluginString {
         auto mgr = mgrOf(host);
         if (!mgr) {
-            return static_cast<char*>(nullptr);
+            return AgentxxPluginString{nullptr, 0};
         }
         auto mgrPtr = mgr;
         auto json   = ioCallSync<std::string>(mgrPtr, [mgrPtr]() {
             return mgrPtr->getPromptJson();
         });
         if (json.empty()) {
-            return static_cast<char*>(nullptr);
+            return AgentxxPluginString{nullptr, 0};
         }
-        return host->vtable->strdup(agentxx_plugin_sv(json.data(), json.size()));
+        return agentxx::plugin::hostMemoryCreateString(json);
     });
 }
 
@@ -815,20 +815,20 @@ static int xx_set_prompt(const AgentxxPluginHost* host, AgentxxPluginStringView 
     });
 }
 
-static char* xx_model_get_config(const AgentxxPluginHost* host) {
-    return agentxx::plugin::guardVtableCall(nullptr, [&]() -> char* {
+static AgentxxPluginString xx_model_get_config(const AgentxxPluginHost* host) {
+    return agentxx::plugin::guardVtableCall<AgentxxPluginString>(AgentxxPluginString{nullptr, 0}, [&]() -> AgentxxPluginString {
         auto mgr = mgrOf(host);
         if (!mgr) {
-            return static_cast<char*>(nullptr);
+            return AgentxxPluginString{nullptr, 0};
         }
         auto mgrPtr = mgr;
         auto json   = ioCallSync<std::string>(mgrPtr, [mgrPtr]() {
             return mgrPtr->getModelConfigJson();
         });
         if (json.empty()) {
-            return static_cast<char*>(nullptr);
+            return AgentxxPluginString{nullptr, 0};
         }
-        return host->vtable->strdup(agentxx_plugin_sv(json.data(), json.size()));
+        return agentxx::plugin::hostMemoryCreateString(json);
     });
 }
 
@@ -944,12 +944,12 @@ static int
     });
 }
 
-static char* xx_get_own_resources(const AgentxxPluginHost* host) {
-    return agentxx::plugin::guardVtableCall(nullptr, [&]() -> char* {
+static AgentxxPluginString xx_get_own_resources(const AgentxxPluginHost* host) {
+    return agentxx::plugin::guardVtableCall<AgentxxPluginString>(AgentxxPluginString{nullptr, 0}, [&]() -> AgentxxPluginString {
         auto mgr  = mgrOf(host);
         auto inst = instOf(host);
         if (!mgr || !inst) {
-            return static_cast<char*>(nullptr);
+            return AgentxxPluginString{nullptr, 0};
         }
         auto mgrPtr  = mgr;
         auto instPtr = inst;
@@ -957,9 +957,9 @@ static char* xx_get_own_resources(const AgentxxPluginHost* host) {
             return mgrPtr->ownResourcesJson(instPtr);
         });
         if (json.empty()) {
-            return static_cast<char*>(nullptr);
+            return AgentxxPluginString{nullptr, 0};
         }
-        return host->vtable->strdup(agentxx_plugin_sv(json.data(), json.size()));
+        return agentxx::plugin::hostMemoryCreateString(json);
     });
 }
 
@@ -1599,24 +1599,24 @@ bool PluginManager::isSessionCancelled(const std::string& threadId) {
     return session->getCancelToken()->is_cancelled();
 }
 
-char* PluginManager::getShareStore(PluginInstance* inst, AgentxxPluginStringView session_id, long long id) {
+AgentxxPluginString PluginManager::getShareStore(PluginInstance* inst, AgentxxPluginStringView session_id, long long id) {
     if (!inst || agentxx_plugin_sv_empty(session_id)) {
-        return nullptr;
+        return AgentxxPluginString{nullptr, 0};
     }
     auto ctx = agentContext_.lock();
     if (!ctx || !ctx->middlewareHandleContext) {
-        return nullptr;
+        return AgentxxPluginString{nullptr, 0};
     }
     std::string sid = svToStr(session_id);
     auto it = ctx->middlewareHandleContext->shareStore.find(sid);
     if (it == ctx->middlewareHandleContext->shareStore.end()) {
-        return nullptr;
+        return AgentxxPluginString{nullptr, 0};
     }
     auto itemIt = it->second.store.find(static_cast<size_t>(id));
     if (itemIt == it->second.store.end()) {
-        return nullptr;
+        return AgentxxPluginString{nullptr, 0};
     }
-    return inst->host.vtable->strdup(agentxx_plugin_sv_cstr(itemIt->second.c_str()));
+    return agentxx::plugin::hostMemoryCreateString(itemIt->second);
 }
 
 long long PluginManager::addShareStore(

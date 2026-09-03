@@ -21,19 +21,20 @@ namespace plugin {
 
 static std::atomic<size_t> g_pluginCallSeq{0};
 
-static void setErrOut(PluginInstance* caller, char** error_out, const std::string& msg) {
-    if (!error_out || *error_out) {
+static void setErrOut(PluginInstance* caller, AgentxxPluginString* error_out, const std::string& msg) {
+    if (!error_out || error_out->data) {
         return;
     }
-    if (caller && caller->host.vtable && caller->host.vtable->strdup) {
-        *error_out = caller->host.vtable->strdup(strToSv(msg));
-        return;
+    const AgentxxPluginHost* host = caller ? &caller->host : nullptr;
+    *error_out = agentxx_plugin_string_from_sv(host, strToSv(msg));
+    if (!error_out->data) {
+        auto* p = static_cast<char*>(hostMemoryAlloc(msg.size() + 1));
+        if (p) {
+            std::memcpy(p, msg.c_str(), msg.size() + 1);
+            error_out->data = p;
+            error_out->size = msg.size();
+        }
     }
-    auto* p = static_cast<char*>(::malloc(msg.size() + 1));
-    if (p) {
-        std::memcpy(p, msg.c_str(), msg.size() + 1);
-    }
-    *error_out = p;
 }
 
 // =====================================================================
@@ -248,7 +249,7 @@ static bool buildCapabilityDrive(
     drive.start     = [entry,
                    methStr,
                    argStr,
-                   weakCaller](const AgentxxPluginOperatorNotify* notify, char** e) -> void* {
+                   weakCaller](const AgentxxPluginOperatorNotify* notify, AgentxxPluginString* e) -> void* {
         const AgentxxPluginHost* callerHost = nullptr;
         if (auto c = weakCaller.lock()) {
             callerHost = &c->host;
@@ -277,7 +278,7 @@ AgentxxPluginOperatorHandle* PluginManager::callToolAsync(
     AgentxxPluginStringView       thread_id,
     AgentxxPluginOperatorCallback cb,
     void*                         ud,
-    char**                        error_out
+    AgentxxPluginString*          error_out
 ) {
     auto setErr = [&](const std::string& msg) {
         setErrOut(caller, error_out, msg);
@@ -345,7 +346,7 @@ AgentxxPluginOperatorHandle* PluginManager::callToolAsync(
 
     plugin::OpDrive drive;
     drive.start =
-        [spec, argsStr, sessionId](const AgentxxPluginOperatorNotify* notify, char** err) -> void* {
+        [spec, argsStr, sessionId](const AgentxxPluginOperatorNotify* notify, AgentxxPluginString* err) -> void* {
         return spec.execute_start(
             spec.user_data,
             agentxx_plugin_sv(argsStr.data(), argsStr.size()),
@@ -361,23 +362,25 @@ AgentxxPluginOperatorHandle* PluginManager::callToolAsync(
         }
     };
 
-    char* startErr = nullptr;
-    void* op       = nullptr;
-    auto  ntf      = core->notify();
+    AgentxxPluginString startErr{nullptr, 0};
+    void*               op       = nullptr;
+    auto                ntf      = core->notify();
     try {
         op = drive.start(&ntf, &startErr);
     } catch (...) {
-        startErr = ::strdup("start threw");
+        startErr = agentxx_plugin_string_from_cstr(caller ? &caller->host : nullptr, "start threw");
     }
 
-    if (startErr || (!op && !core->notified.load(std::memory_order_acquire))) {
+    if (startErr.data || (!op && !core->notified.load(std::memory_order_acquire))) {
         guard.reset();
-        char* errMsg = startErr ? startErr : ::strdup("protocol violation");
+        std::string errMsg = startErr.data ? std::string(startErr.data, startErr.size) : "protocol violation";
+        if (startErr.data && caller) {
+            agentxx_plugin_string_free(&caller->host, &startErr);
+        }
         setErr(errMsg);
         if (cb) {
-            cb(ud, AGENTXX_PLUGIN_OPERATOR_FAILED, agentxx_plugin_sv_cstr(errMsg));
+            cb(ud, AGENTXX_PLUGIN_OPERATOR_FAILED, agentxx_plugin_sv(errMsg.data(), errMsg.size()));
         }
-        ::free(errMsg);
         return nullptr;
     }
 
@@ -425,7 +428,7 @@ AgentxxPluginOperatorHandle* PluginManager::invokeCapabilityAsync(
     AgentxxPluginStringView       args_json,
     AgentxxPluginOperatorCallback cb,
     void*                         ud,
-    char**                        error_out
+    AgentxxPluginString*          error_out
 ) {
     auto setErr = [&](const std::string& msg) {
         setErrOut(caller, error_out, msg);
@@ -456,23 +459,25 @@ AgentxxPluginOperatorHandle* PluginManager::invokeCapabilityAsync(
     core->cb   = cb;
     core->cbUd = ud;
 
-    char* startErr = nullptr;
-    void* op       = nullptr;
-    auto  ntf      = core->notify();
+    AgentxxPluginString startErr{nullptr, 0};
+    void*               op       = nullptr;
+    auto                ntf      = core->notify();
     try {
         op = drive.start(&ntf, &startErr);
     } catch (...) {
-        startErr = ::strdup("start threw");
+        startErr = agentxx_plugin_string_from_cstr(caller ? &caller->host : nullptr, "start threw");
     }
 
-    if (startErr || (!op && !core->notified.load(std::memory_order_acquire))) {
+    if (startErr.data || (!op && !core->notified.load(std::memory_order_acquire))) {
         guard.reset();
-        char* errMsg = startErr ? startErr : ::strdup("protocol violation");
+        std::string errMsg = startErr.data ? std::string(startErr.data, startErr.size) : "protocol violation";
+        if (startErr.data && caller) {
+            agentxx_plugin_string_free(&caller->host, &startErr);
+        }
         setErr(errMsg);
         if (cb) {
-            cb(ud, AGENTXX_PLUGIN_OPERATOR_FAILED, agentxx_plugin_sv_cstr(errMsg));
+            cb(ud, AGENTXX_PLUGIN_OPERATOR_FAILED, agentxx_plugin_sv(errMsg.data(), errMsg.size()));
         }
-        ::free(errMsg);
         return nullptr;
     }
 

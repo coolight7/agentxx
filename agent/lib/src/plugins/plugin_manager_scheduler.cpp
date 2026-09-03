@@ -78,7 +78,7 @@ void PluginManager::cancelSleep(PluginInstance* inst, void* timerPtr) {
 void PluginManager::offload(
     PluginInstance* inst,
     volatile int*   cancel_flag,
-    void* (*work)(void* ud, volatile int* cancel_flag, char** error_out),
+    void* (*work)(void* ud, volatile int* cancel_flag, AgentxxPluginString* error_out),
     void (*done)(void* ud, void* result, AgentxxPluginStringView error),
     void* ud
 ) {
@@ -94,11 +94,11 @@ void PluginManager::offload(
     struct OffloadTask {
         std::shared_ptr<PluginInstance> instKeep;
         volatile int*                   cancel_flag;
-        void* (*work)(void* ud, volatile int* cancel_flag, char** error_out);
+        void* (*work)(void* ud, volatile int* cancel_flag, AgentxxPluginString* error_out);
         void (*done)(void* ud, void* result, AgentxxPluginStringView error);
         void*                 ud;
         void*                 result = nullptr;
-        char*                 error  = nullptr;
+        AgentxxPluginString   error{nullptr, 0};
         asio::any_io_executor ex;
     };
 
@@ -107,7 +107,7 @@ void PluginManager::offload(
         return;
     }
     auto task = std::make_shared<OffloadTask>(
-        OffloadTask{instKeep, cancel_flag, work, done, ud, nullptr, nullptr, ioExecutor_}
+        OffloadTask{instKeep, cancel_flag, work, done, ud, nullptr, {nullptr, 0}, ioExecutor_}
     );
 
     inst->inflight.fetch_add(1, std::memory_order_acq_rel);
@@ -117,19 +117,12 @@ void PluginManager::offload(
         try {
             task->result = task->work(task->ud, task->cancel_flag, &task->error);
         } catch (const std::exception& e) {
-            if (instPtr && instPtr->host.vtable && instPtr->host.vtable->strdup) {
-                task->error = instPtr->host.vtable->strdup(agentxx_plugin_sv_cstr(e.what()));
-            } else {
-                task->error = ::strdup(e.what());
-            }
+            task->error = agentxx_plugin_string_from_cstr(instPtr ? &instPtr->host : nullptr, e.what());
         } catch (...) {
-            if (instPtr && instPtr->host.vtable && instPtr->host.vtable->strdup) {
-                task->error = instPtr->host.vtable->strdup(
-                    agentxx_plugin_sv_cstr("unknown error in plugin offload")
-                );
-            } else {
-                task->error = ::strdup("unknown error in plugin offload");
-            }
+            task->error = agentxx_plugin_string_from_cstr(
+                instPtr ? &instPtr->host : nullptr,
+                "unknown error in plugin offload"
+            );
         }
 
         if (task->ex) {
@@ -140,8 +133,8 @@ void PluginManager::offload(
                         task->done(
                             task->ud,
                             task->result,
-                            task->error ? agentxx_plugin_sv_cstr(task->error)
-                                        : agentxx_plugin_sv(nullptr, 0)
+                            task->error.data ? agentxx_plugin_string_to_sv(task->error)
+                                             : agentxx_plugin_sv(nullptr, 0)
                         );
                     } catch (const std::exception& e) {
                         if (instPtr2) {
@@ -156,13 +149,13 @@ void PluginManager::offload(
                         }
                     }
                 }
-                if (task->error) {
-                    if (instPtr2 && instPtr2->host.vtable && instPtr2->host.vtable->free) {
-                        instPtr2->host.vtable->free(task->error);
+                if (task->error.data) {
+                    if (instPtr2) {
+                        agentxx_plugin_string_free(&instPtr2->host, &task->error);
                     } else {
-                        ::free(task->error);
+                        ::free(task->error.data);
+                        task->error = {nullptr, 0};
                     }
-                    task->error = nullptr;
                 }
                 if (instPtr2) {
                     instPtr2->inflight.fetch_sub(1, std::memory_order_acq_rel);

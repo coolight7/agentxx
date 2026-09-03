@@ -34,19 +34,20 @@ namespace plugin {
 
 // 本地错误串写入助手 (与 plugin_manager_capability.cpp 的 setErrOut 同构;
 // 跨 TU 静态函数不可见, 故各自持一份)
-static void setTaskErrOut(PluginInstance* inst, char** error_out, const std::string& msg) {
-    if (!error_out || *error_out) {
+static void setTaskErrOut(PluginInstance* inst, AgentxxPluginString* error_out, const std::string& msg) {
+    if (!error_out || error_out->data) {
         return;
     }
-    if (inst && inst->host.vtable && inst->host.vtable->strdup) {
-        *error_out = inst->host.vtable->strdup(strToSv(msg));
-        return;
+    const AgentxxPluginHost* host = inst ? &inst->host : nullptr;
+    *error_out = agentxx_plugin_string_from_sv(host, strToSv(msg));
+    if (!error_out->data) {
+        auto* p = static_cast<char*>(hostMemoryAlloc(msg.size() + 1));
+        if (p) {
+            std::memcpy(p, msg.c_str(), msg.size() + 1);
+            error_out->data = p;
+            error_out->size = msg.size();
+        }
     }
-    auto* p = static_cast<char*>(::malloc(msg.size() + 1));
-    if (p) {
-        std::memcpy(p, msg.c_str(), msg.size() + 1);
-    }
-    *error_out = p;
 }
 
 AgentxxPluginOperatorHandle* PluginManager::registerTask(
@@ -54,7 +55,7 @@ AgentxxPluginOperatorHandle* PluginManager::registerTask(
     AgentxxPluginOperatorCancelFunction cancel_fn,
     void*                               cancel_ud,
     AgentxxPluginOperatorNotify*        notify,
-    char**                              error_out
+    AgentxxPluginString*                error_out
 ) {
     auto setErr = [&](const std::string& msg) {
         setTaskErrOut(inst, error_out, msg);

@@ -661,17 +661,17 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             XX_TEST_EXPECT_EQ(instCfg->args.value("client_key", std::string{}), "client_val");
             // agentxx.client.self 接口表 get_plugin_args 返回实例 args
             const auto self9 = agentxx::plugin::ClientIfaces::query(&instCfg->host).self;
-            char*      json  = self9 ? self9->get_plugin_args(&instCfg->host) : nullptr;
-            XX_TEST_EXPECT_TRUE(json != nullptr);
-            if (json) {
+            AgentxxPluginString json = self9 ? self9->get_plugin_args(&instCfg->host) : AgentxxPluginString{nullptr, 0};
+            XX_TEST_EXPECT_TRUE(json.data != nullptr);
+            if (json.data) {
                 try {
-                    auto j = neograph::json::parse(std::string{json});
+                    auto j = neograph::json::parse(std::string{json.data, json.size});
                     XX_TEST_EXPECT_EQ(j["client_key"].get<std::string>(), "client_val");
                 } catch (const std::exception& e) {
                     XX_TEST_EXPECT_TRUE(false);
                     XX_LOGE("[client_plugin] 9.2 args json parse failed: {}", e.what());
                 }
-                instCfg->host.vtable->free(json);
+                agentxx_plugin_string_free(&instCfg->host, &json);
             }
             bool unloadedCfg = co_await mgr->unloadAsync("example_plugin");
             XX_TEST_EXPECT_TRUE(unloadedCfg);

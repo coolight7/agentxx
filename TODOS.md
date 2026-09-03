@@ -6,7 +6,13 @@
 - CI/CD
 - 文档翻译
 - release 编译发布时携带 标准库
-- 重构插件框架中的大部分 char* 为 AgentxxPluginStringView
+- [x] 重构插件框架中的大部分堆分配 char* 及 char** 出参为 AgentxxPluginString（只读借用统一为 AgentxxPluginStringView）
+
+- 插件abi、ffi:
+    - 强制字节对齐
+    - 替换使用 int32、int64 等明确大小基本类型
+    - 明确函数调用约定 stdcall
+    - 替换结构体传递必须使用指针
 
 - 插件 readHostConfig 改为直接传入 变量路径 取值，变量取值交由主程序解析
 

@@ -94,27 +94,27 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                 return -1;
             }
 
-            char* info = s_if.plugins->get_own_info(host);
-            if (!info) {
+            AgentxxPluginString info = s_if.plugins->get_own_info(host);
+            if (!info.data) {
                 logE("agentxx_execute_javascript: get_own_info failed");
                 return -1;
             }
             auto field = [&](const char* key) -> std::string {
-                char* v = s_if.json->json_get_string(
+                AgentxxPluginString v = s_if.json->json_get_string(
                     host,
-                    agentxx_plugin_sv_cstr(info),
+                    agentxx_plugin_string_to_sv(info),
                     agentxx_plugin_sv_cstr(key)
                 );
-                if (!v) {
+                if (!v.data) {
                     return {};
                 }
-                std::string s = v;
-                host->vtable->free(v);
+                std::string s(v.data, v.size);
+                agentxx_plugin_string_free(host, &v);
                 return s;
             };
             std::string libPath = field("path");
             ctx->name           = field("name");
-            host->vtable->free(info);
+            agentxx_plugin_string_free(host, &info);
             if (ctx->name.empty() || libPath.empty()) {
                 logE("agentxx_execute_javascript: own info invalid");
                 return -1;
@@ -142,24 +142,24 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                 }
             }
 
-            char* escName = s_if.json->json_escape(
+            AgentxxPluginString escName = s_if.json->json_escape(
                 host,
                 agentxx_plugin_sv(ctx->name.data(), ctx->name.size())
             );
-            char* escPath = s_if.json->json_escape(
+            AgentxxPluginString escPath = s_if.json->json_escape(
                 host,
                 agentxx_plugin_sv(scriptPath.data(), scriptPath.size())
             );
             std::string args = fmt::format(
                 "{{\"name\":{},\"path\":{}}}",
-                escName ? escName : "\"\"",
-                escPath ? escPath : "\"\""
+                escName.data ? escName.data : "\"\"",
+                escPath.data ? escPath.data : "\"\""
             );
-            if (escName) {
-                host->vtable->free(escName);
+            if (escName.data) {
+                agentxx_plugin_string_free(host, &escName);
             }
-            if (escPath) {
-                host->vtable->free(escPath);
+            if (escPath.data) {
+                agentxx_plugin_string_free(host, &escPath);
             }
             s_if.log->log(
                 host,
@@ -170,7 +170,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                 )
             );
 
-            char* err = nullptr;
+            AgentxxPluginString err{nullptr, 0};
             auto* h   = s_if.capabilities->invoke_capability_async(
                 host,
                 agentxx_plugin_sv_cstr("interpreter.js"),
@@ -203,9 +203,9 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                 &err
             );
             if (!h) {
-                std::string errStr = err ? err : "load script async dispatch failed";
-                if (err) {
-                    host->vtable->free(err);
+                std::string errStr = err.data ? std::string(err.data, err.size) : "load script async dispatch failed";
+                if (err.data) {
+                    agentxx_plugin_string_free(host, &err);
                 }
                 logE(fmt::format("agentxx_execute_javascript: {}", errStr));
                 return -1;
@@ -237,15 +237,15 @@ extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_agent_destroy(void* plugin_
             }
             const AgentxxPluginHost* host = ctx->host;
             if (ctx->iface.capabilities && !ctx->name.empty() && ctx->iface.json) {
-                char* esc = ctx->iface.json->json_escape(
+                AgentxxPluginString esc = ctx->iface.json->json_escape(
                     host,
                     agentxx_plugin_sv(ctx->name.data(), ctx->name.size())
                 );
-                std::string args = fmt::format("{{\"name\":{}}}", esc ? esc : "\"\"");
-                if (esc) {
-                    host->vtable->free(esc);
+                std::string args = fmt::format("{{\"name\":{}}}", esc.data ? esc.data : "\"\"");
+                if (esc.data) {
+                    agentxx_plugin_string_free(host, &esc);
                 }
-                char* err = nullptr;
+                AgentxxPluginString err{nullptr, 0};
                 auto* h   = ctx->iface.capabilities->invoke_capability_async(
                     host,
                     agentxx_plugin_sv_cstr("interpreter.js"),
@@ -256,11 +256,11 @@ extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_agent_destroy(void* plugin_
                     &err
                 );
                 if (!h) {
-                    if (err) {
-                        host->vtable->free(err);
+                    if (err.data) {
+                        agentxx_plugin_string_free(host, &err);
                     }
-                } else if (err) {
-                    host->vtable->free(err);
+                } else if (err.data) {
+                    agentxx_plugin_string_free(host, &err);
                 }
             }
             delete ctx;

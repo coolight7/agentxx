@@ -360,14 +360,14 @@ interfaces:
         XX_TEST_EXPECT_FALSE(contains(skillMw->skillDirPathList(), runtimeSkill.string()));
 
         // ---- 快照 JSON (get_own_resources) - 运行时 skill 未注册故不含 ----
-        char* json
-            = res3 && res3->get_own_resources ? res3->get_own_resources(&inst->host) : nullptr;
-        XX_TEST_EXPECT_TRUE(json != nullptr);
-        if (json) {
+        AgentxxPluginString json
+            = res3 && res3->get_own_resources ? res3->get_own_resources(&inst->host) : AgentxxPluginString{nullptr, 0};
+        XX_TEST_EXPECT_TRUE(json.data != nullptr);
+        if (json.data) {
             XX_TEST_EXPECT_TRUE(
-                std::string_view(json).find("runtime_skills") == std::string_view::npos
+                std::string_view(json.data, json.size).find("runtime_skills") == std::string_view::npos
             );
-            inst->host.vtable->free(json);
+            agentxx_plugin_string_free(&inst->host, &json);
         }
 
         // ---- 重复注册亦拒绝 (冻结) ----
@@ -400,12 +400,12 @@ interfaces:
         XX_TEST_EXPECT_TRUE(rc != 0);
         co_await sleepMs(150);
         {
-            char* j2
-                = res3 && res3->get_own_resources ? res3->get_own_resources(&inst->host) : nullptr;
-            XX_TEST_EXPECT_TRUE(j2 != nullptr);
-            if (j2) {
-                XX_TEST_EXPECT_TRUE(std::string_view(j2).find("t_mcp") == std::string_view::npos);
-                inst->host.vtable->free(j2);
+            AgentxxPluginString j2
+                = res3 && res3->get_own_resources ? res3->get_own_resources(&inst->host) : AgentxxPluginString{nullptr, 0};
+            XX_TEST_EXPECT_TRUE(j2.data != nullptr);
+            if (j2.data) {
+                XX_TEST_EXPECT_TRUE(std::string_view(j2.data, j2.size).find("t_mcp") == std::string_view::npos);
+                agentxx_plugin_string_free(&inst->host, &j2);
             }
         }
 

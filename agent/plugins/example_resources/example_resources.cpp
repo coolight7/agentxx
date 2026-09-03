@@ -57,21 +57,21 @@ static std::string ownInfoString(
         || !iface.json->json_get_string) {
         return {};
     }
-    char* info = iface.plugins->get_own_info(host);
-    if (!info) {
+    AgentxxPluginString info = iface.plugins->get_own_info(host);
+    if (!info.data) {
         return {};
     }
     std::string out;
-    char*       val = iface.json->json_get_string(
+    AgentxxPluginString val = iface.json->json_get_string(
         host,
-        agentxx_plugin_sv_cstr(info),
+        agentxx_plugin_string_to_sv(info),
         agentxx_plugin_sv_cstr(key)
     );
-    if (val) {
-        out = val;
-        host->vtable->free(val);
+    if (val.data) {
+        out.assign(val.data, val.size);
+        agentxx_plugin_string_free(host, &val);
     }
-    host->vtable->free(info);
+    agentxx_plugin_string_free(host, &info);
     return out;
 }
 
@@ -187,16 +187,16 @@ extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_agent_destroy(void* plugin_
             const auto&              iface = ctx->iface;
             // 宿主 detachAll 已自动摘除本插件的全部资源 (skill/memory/mcp),
             // 此处显式反注册仅为 SDK 惯例示范 (幂等, 失败无副作用)
-            char* info = iface.plugins->get_own_info(host);
-            if (info) {
-                char* p = iface.json->json_get_string(
+            AgentxxPluginString info = iface.plugins->get_own_info(host);
+            if (info.data) {
+                AgentxxPluginString p = iface.json->json_get_string(
                     host,
-                    agentxx_plugin_sv_cstr(info),
+                    agentxx_plugin_string_to_sv(info),
                     agentxx_plugin_sv_cstr("path")
                 );
-                if (p) {
-                    std::string libPath = p;
-                    host->vtable->free(p);
+                if (p.data) {
+                    std::string libPath(p.data, p.size);
+                    agentxx_plugin_string_free(host, &p);
                     auto        pos  = libPath.find_last_of("/\\");
                     std::string base = pos == std::string::npos ? "." : libPath.substr(0, pos);
                     std::string d    = fmt::format("{}/skills_runtime", base);
@@ -205,7 +205,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_agent_destroy(void* plugin_
                         agentxx_plugin_sv(d.data(), d.size())
                     );
                 }
-                host->vtable->free(info);
+                agentxx_plugin_string_free(host, &info);
             }
             delete ctx;
         }

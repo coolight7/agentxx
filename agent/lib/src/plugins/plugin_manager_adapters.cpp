@@ -93,7 +93,7 @@ asio::awaitable<std::string> PluginTool::execute_async(const neograph::json& arg
     plugin::OpDrive drive;
     drive.start = [spec, instKeep, argsJson, sessionId, toolCallId](
                       const AgentxxPluginOperatorNotify* notify,
-                      char**                             err
+                      AgentxxPluginString*               err
                   ) -> void* {
         return spec.execute_start(
             spec.user_data,
@@ -195,7 +195,7 @@ asio::awaitable<void> PluginMiddlewareHandle::dispatch(
     drive.start = [hook,
                    instKeep,
                    inputJson,
-                   point](const AgentxxPluginOperatorNotify* notify, char** err) -> void* {
+                   point](const AgentxxPluginOperatorNotify* notify, AgentxxPluginString* err) -> void* {
         return hook.start(
             hook.ud,
             point,

@@ -137,10 +137,10 @@ asio::awaitable<TestResult>
     // ---- 4. 能力 agentxx.system_usage (agent 侧周期采集 publish 的数据源) ----
     {
         XX_TEST_EXPECT_TRUE(ctx->pluginManager->hasCapability("agentxx.system_usage"));
-        char*       err      = nullptr;
-        int         opStatus = -1;
-        std::string payload;
-        bool        done = false;
+        AgentxxPluginString err{nullptr, 0};
+        int                 opStatus = -1;
+        std::string         payload;
+        bool                done = false;
         using StateTuple = std::tuple<int*, std::string*, bool*>;
         StateTuple state{&opStatus, &payload, &done};
 
@@ -180,9 +180,9 @@ asio::awaitable<TestResult>
                 TEST_FAIL << "system_usage capability returned non-object json" << std::endl;
             }
         } else {
-            if (err) {
-                TEST_FAIL << "system_usage capability failed: " << err << std::endl;
-                std::free(err);
+            if (err.data) {
+                TEST_FAIL << "system_usage capability failed: " << err.data << std::endl;
+                std::free(err.data);
             } else {
                 g_cpu_failed++;
                 TEST_FAIL << "system_usage capability failed (no error)" << std::endl;

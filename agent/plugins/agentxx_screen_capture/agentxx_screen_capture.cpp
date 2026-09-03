@@ -327,10 +327,10 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
             );
 
             if (ctx->iface.config && ctx->iface.config->get_config) {
-                char* json = ctx->iface.config->get_config(ctx->host);
-                if (json) {
-                    std::string s{json};
-                    ctx->host->vtable->free(json);
+                AgentxxPluginString json = ctx->iface.config->get_config(ctx->host);
+                if (json.data) {
+                    std::string s(json.data, json.size);
+                    agentxx_plugin_string_free(ctx->host, &json);
                     SimpleJson j(s);
                     if (j.ok()) {
                         std::string dataDir;

@@ -205,10 +205,10 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
             // 5. 提示词读写
             if (ctx->iface.prompt && ctx->iface.prompt->get_prompt
                 && ctx->iface.prompt->set_prompt) {
-                char* full = ctx->iface.prompt->get_prompt(host);
-                if (full) {
-                    std::string prompt{full};
-                    host->vtable->free(full);
+                AgentxxPluginString full = ctx->iface.prompt->get_prompt(host);
+                if (full.data) {
+                    std::string prompt(full.data, full.size);
+                    agentxx_plugin_string_free(host, &full);
                     if (prompt.find("\"example_echo\"") == std::string::npos) {
                         const char* promptJson
                             = R"({"toolPrompt":{"example_echo":{"depict":"Echo the input arguments back as JSON (example plugin tool).","args":{}}}})";
@@ -259,34 +259,34 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxClientPluginInfo* agentxx_plugin_c
 
 static std::string clientJsonEscape(const ClientCtx& ctx, std::string_view text) {
     if (ctx.iface.json && ctx.iface.json->json_escape) {
-        char* esc
+        AgentxxPluginString esc
             = ctx.iface.json->json_escape(ctx.host, agentxx_plugin_sv(text.data(), text.size()));
-        if (esc) {
-            std::string s{esc};
-            ctx.host->vtable->free(esc);
+        if (esc.data) {
+            std::string s(esc.data, esc.size);
+            agentxx_plugin_string_free(ctx.host, &esc);
             return s;
         }
     }
     return fmt::format("\"{}\"", text);
 }
 
-static char* example_cmd_execute(void* ud, AgentxxPluginStringView args_json, char** error_out) {
+static AgentxxPluginString example_cmd_execute(void* ud, AgentxxPluginStringView args_json, AgentxxPluginString* error_out) {
     auto* ctxRaw = static_cast<ClientCtx*>(ud);
-    return agentxx::plugin::guardCall(clientGuardLogger(ctxRaw), nullptr, [&]() -> char* {
+    return agentxx::plugin::guardCall(clientGuardLogger(ctxRaw), AgentxxPluginString{nullptr, 0}, [&]() -> AgentxxPluginString {
         auto* ctx = static_cast<ClientCtx*>(ud);
         if (!ctx || !ctx->host) {
-            return nullptr;
+            return AgentxxPluginString{nullptr, 0};
         }
         std::string suffix;
         if (ctx->iface.json && ctx->iface.json->json_get_string) {
-            char* text = ctx->iface.json->json_get_string(
+            AgentxxPluginString text = ctx->iface.json->json_get_string(
                 ctx->host,
                 args_json,
                 agentxx_plugin_sv_cstr("text")
             );
-            if (text) {
-                suffix = text;
-                ctx->host->vtable->free(text);
+            if (text.data) {
+                suffix.assign(text.data, text.size);
+                agentxx_plugin_string_free(ctx->host, &text);
             }
         }
         std::string text = "Hello from example plugin";
@@ -295,32 +295,32 @@ static char* example_cmd_execute(void* ud, AgentxxPluginStringView args_json, ch
         }
         const std::string out
             = fmt::format(R"({{"action":"send","text":{}}})", clientJsonEscape(*ctx, text));
-        return ctx->host->vtable->strdup(agentxx_plugin_sv(out.data(), out.size()));
+        return agentxx_plugin_string_from_sv(ctx->host, agentxx_plugin_sv(out.data(), out.size()));
     });
 }
 
-static char* example_toast_execute(void* ud, AgentxxPluginStringView args_json, char** error_out) {
+static AgentxxPluginString example_toast_execute(void* ud, AgentxxPluginStringView args_json, AgentxxPluginString* error_out) {
     auto* ctxRaw = static_cast<ClientCtx*>(ud);
-    return agentxx::plugin::guardCall(clientGuardLogger(ctxRaw), nullptr, [&]() -> char* {
+    return agentxx::plugin::guardCall(clientGuardLogger(ctxRaw), AgentxxPluginString{nullptr, 0}, [&]() -> AgentxxPluginString {
         auto* ctx = static_cast<ClientCtx*>(ud);
         if (!ctx || !ctx->host) {
-            return nullptr;
+            return AgentxxPluginString{nullptr, 0};
         }
-        char*       argText = ctx->iface.json ? ctx->iface.json->json_get_string(
+        AgentxxPluginString argText = ctx->iface.json ? ctx->iface.json->json_get_string(
                             ctx->host,
                             args_json,
                             agentxx_plugin_sv_cstr("text")
                         )
-                                              : nullptr;
-        std::string text    = argText && *argText ? argText : "toast from example plugin";
-        if (argText) {
-            ctx->host->vtable->free(argText);
+                                              : AgentxxPluginString{nullptr, 0};
+        std::string text = argText.data && argText.size > 0 ? std::string(argText.data, argText.size) : "toast from example plugin";
+        if (argText.data) {
+            agentxx_plugin_string_free(ctx->host, &argText);
         }
         const std::string out = fmt::format(
             R"({{"action":"toast","text":{},"level":1}})",
             clientJsonEscape(*ctx, text)
         );
-        return ctx->host->vtable->strdup(agentxx_plugin_sv(out.data(), out.size()));
+        return agentxx_plugin_string_from_sv(ctx->host, agentxx_plugin_sv(out.data(), out.size()));
     });
 }
 
@@ -387,16 +387,16 @@ static void on_client_plugin_data(AgentxxPluginStringView payload_json, void* ud
     if (!ctx->iface.json || !ctx->iface.json->json_get_string) {
         return;
     }
-    char* plugin = ctx->iface.json
+    AgentxxPluginString plugin = ctx->iface.json
                        ->json_get_string(ctx->host, payload_json, agentxx_plugin_sv_cstr("plugin"));
-    char* event = ctx->iface.json
+    AgentxxPluginString event = ctx->iface.json
                       ->json_get_string(ctx->host, payload_json, agentxx_plugin_sv_cstr("event"));
-    char* data
+    AgentxxPluginString data
         = ctx->iface.json->json_get_string(ctx->host, payload_json, agentxx_plugin_sv_cstr("data"));
     agentxx::plugin::guardCallVoid(clientGuardLogger(ctx), [&] {
-        std::string line = fmt::format("{}.{}", plugin ? plugin : "?", event ? event : "?");
-        if (data && *data) {
-            line = fmt::format("{}: {}", line, data);
+        std::string line = fmt::format("{}.{}", plugin.data ? plugin.data : "?", event.data ? event.data : "?");
+        if (data.data && data.size > 0) {
+            line = fmt::format("{}: {}", line, data.data);
         }
         const std::string json = fmt::format(
             R"({{"items":[{{"kind":"text","text":{}}},{{"kind":"badge","text":"updated"}}]}})",
@@ -406,14 +406,14 @@ static void on_client_plugin_data(AgentxxPluginStringView payload_json, void* ud
             ctx->ui->update_panel(ctx->host, ctx->panel, agentxx_plugin_sv_cstr(json.c_str()));
         }
     });
-    if (plugin) {
-        ctx->host->vtable->free(plugin);
+    if (plugin.data) {
+        agentxx_plugin_string_free(ctx->host, &plugin);
     }
-    if (event) {
-        ctx->host->vtable->free(event);
+    if (event.data) {
+        agentxx_plugin_string_free(ctx->host, &event);
     }
-    if (data) {
-        ctx->host->vtable->free(data);
+    if (data.data) {
+        agentxx_plugin_string_free(ctx->host, &data);
     }
 }
 

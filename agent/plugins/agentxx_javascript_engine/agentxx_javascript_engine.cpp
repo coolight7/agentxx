@@ -266,7 +266,7 @@ public:
         AgentxxPluginStringView            thread_id,
         AgentxxPluginStringView            tool_call_id,
         const AgentxxPluginOperatorNotify* notify,
-        char**                             error_out
+        AgentxxPluginString*               error_out
     );
 
     /// 钩子回调桥 —— 异步启动 (统一异步操作模型):
@@ -277,7 +277,7 @@ public:
         AgentxxPluginHookPoint             point,
         AgentxxPluginStringView            node_input_json,
         const AgentxxPluginOperatorNotify* notify,
-        char**                             error_out
+        AgentxxPluginString*               error_out
     );
 
     /// 事件回调桥: io 线程调用; post 到 JS 线程 (fire-and-forget) (类外定义)
@@ -926,7 +926,7 @@ void* JsEngine::toolExecuteStart(
     AgentxxPluginStringView            thread_id,
     AgentxxPluginStringView            tool_call_id,
     const AgentxxPluginOperatorNotify* notify,
-    char**                             error_out
+    AgentxxPluginString*               error_out
 ) {
     // C ABI 回调异常守卫: start 由宿主 io 线程调用 (请求打包/入队含分配),
     // 异常经通知器上报 OP_FAILED, 不外泄
@@ -972,8 +972,9 @@ void* JsEngine::toolExecuteStart(
             // 引擎已停止: 启动失败 (未入队 → 句柄由本函数直接释放)
             delete op;
             if (error_out && engine->engineHost_) {
-                *error_out = engine->engineHost_->vtable->strdup(
-                    agentxx_plugin_sv_cstr("interpreter.js engine stopped")
+                *error_out = agentxx_plugin_string_from_cstr(
+                    engine->engineHost_,
+                    "interpreter.js engine stopped"
                 );
             }
             return nullptr;
@@ -985,7 +986,8 @@ void* JsEngine::toolExecuteStart(
             engine->guardLog(m);
         });
         if (error_out) {
-            *error_out = nullptr;
+            error_out->data = nullptr;
+            error_out->size = 0;
         }
         if (notify && notify->done) {
             notify->done(
@@ -1003,7 +1005,7 @@ void* JsEngine::hookStart(
     AgentxxPluginHookPoint             point,
     AgentxxPluginStringView            node_input_json,
     const AgentxxPluginOperatorNotify* notify,
-    char**                             error_out
+    AgentxxPluginString*               error_out
 ) {
     (void)error_out;
     // C ABI 回调异常守卫: start 由宿主 io 线程调用, 异常经通知器上报
@@ -1238,8 +1240,8 @@ JSValue JsEngine::bridgeCall(
             JS_FreeValue(ctx, entry);
 
             // 2) 宿主插件工具 (同步互调; vtable 内部保证线程安全)
-            char* err  = nullptr;
-            char* resp = agentxx::plugin::call_tool_blocking(
+            AgentxxPluginString err{nullptr, 0};
+            AgentxxPluginString resp = agentxx::plugin::call_tool_blocking(
                 host,
                 iface.tools,
                 iface.scheduler,
@@ -1248,19 +1250,19 @@ JSValue JsEngine::bridgeCall(
                 std::string_view(sessionId.data(), sessionId.size()),
                 &err
             );
-            if (!resp) {
-                std::string errStr = err ? err : "call_tool failed";
-                if (err) {
-                    vt.free(err);
+            if (!resp.data) {
+                std::string errStr = err.data ? std::string(err.data, err.size) : "call_tool failed";
+                if (err.data) {
+                    agentxx_plugin_string_free(host, &err);
                 }
                 return throwJsError(ctx, errStr);
             }
-            JSValue out = JS_ParseJSON(ctx, resp, std::strlen(resp), "<resp>");
+            JSValue out = JS_ParseJSON(ctx, resp.data, resp.size, "<resp>");
             if (JS_IsException(out)) {
                 JS_FreeValue(ctx, out);
-                out = JS_NewString(ctx, resp);
+                out = JS_NewStringLen(ctx, resp.data, resp.size);
             }
-            vt.free(resp);
+            agentxx_plugin_string_free(host, &resp);
             return out;
         }
 
@@ -1270,16 +1272,16 @@ JSValue JsEngine::bridgeCall(
             if (argc >= 2) {
                 JS_ToInt64(ctx, &id, argv[1]);
             }
-            char* resp = iface.session->get_share_store(
+            AgentxxPluginString resp = iface.session->get_share_store(
                 host,
                 agentxx_plugin_sv(sessionId.data(), sessionId.size()),
                 id
             );
-            if (!resp) {
+            if (!resp.data) {
                 return JS_NULL;
             }
-            JSValue out = JS_NewString(ctx, resp);
-            vt.free(resp);
+            JSValue out = JS_NewStringLen(ctx, resp.data, resp.size);
+            agentxx_plugin_string_free(host, &resp);
             return out;
         }
 
@@ -1497,16 +1499,16 @@ JSValue JsEngine::bridgeCall(
         }
 
         case B_LIST_PLUGINS: {
-            char* json = iface.plugins->list_plugins(host);
-            if (!json) {
+            AgentxxPluginString json = iface.plugins->list_plugins(host);
+            if (!json.data) {
                 return JS_NewArray(ctx);
             }
-            JSValue out = JS_ParseJSON(ctx, json, std::strlen(json), "<plugins>");
+            JSValue out = JS_ParseJSON(ctx, json.data, json.size, "<plugins>");
             if (JS_IsException(out)) {
                 JS_FreeValue(ctx, out);
-                out = JS_NewString(ctx, json);
+                out = JS_NewStringLen(ctx, json.data, json.size);
             }
-            vt.free(json);
+            agentxx_plugin_string_free(host, &json);
             return out;
         }
 
@@ -1515,17 +1517,17 @@ JSValue JsEngine::bridgeCall(
                 return JS_ThrowTypeError(ctx, "getPlugin: name required");
             }
             std::string name = jsToCppString(ctx, argv[0]);
-            char*       json
+            AgentxxPluginString json
                 = iface.plugins->get_plugin(host, agentxx_plugin_sv(name.data(), name.size()));
-            if (!json) {
+            if (!json.data) {
                 return JS_NULL; // 未安装
             }
-            JSValue out = JS_ParseJSON(ctx, json, std::strlen(json), "<plugin>");
+            JSValue out = JS_ParseJSON(ctx, json.data, json.size, "<plugin>");
             if (JS_IsException(out)) {
                 JS_FreeValue(ctx, out);
-                out = JS_NewString(ctx, json);
+                out = JS_NewStringLen(ctx, json.data, json.size);
             }
-            vt.free(json);
+            agentxx_plugin_string_free(host, &json);
             return out;
         }
 
@@ -1594,22 +1596,22 @@ JSValue JsEngine::bridgeCall(
                 JS_FreeValue(ctx, tv);
             }
             // spec JSON 拼装经宿主 json_escape (防注入/转义错误)
-            char* nsEsc  = iface.json->json_escape(host, agentxx_plugin_sv(ns.data(), ns.size()));
-            char* urlEsc = iface.json->json_escape(host, agentxx_plugin_sv(url.data(), url.size()));
-            if (!nsEsc || !urlEsc) {
-                if (nsEsc) {
-                    vt.free(nsEsc);
+            AgentxxPluginString nsEsc  = iface.json->json_escape(host, agentxx_plugin_sv(ns.data(), ns.size()));
+            AgentxxPluginString urlEsc = iface.json->json_escape(host, agentxx_plugin_sv(url.data(), url.size()));
+            if (!nsEsc.data || !urlEsc.data) {
+                if (nsEsc.data) {
+                    agentxx_plugin_string_free(host, &nsEsc);
                 }
-                if (urlEsc) {
-                    vt.free(urlEsc);
+                if (urlEsc.data) {
+                    agentxx_plugin_string_free(host, &urlEsc);
                 }
                 return JS_ThrowInternalError(ctx, "addMcpServer: escape failed");
             }
             long long   t = static_cast<long long>(timeoutSec < 0 ? 0 : timeoutSec);
             std::string spec
-                = fmt::format("{{\"namespace\":{},\"url\":{},\"timeout\":{}}}", nsEsc, urlEsc, t);
-            vt.free(nsEsc);
-            vt.free(urlEsc);
+                = fmt::format("{{\"namespace\":{},\"url\":{},\"timeout\":{}}}", nsEsc.data, urlEsc.data, t);
+            agentxx_plugin_string_free(host, &nsEsc);
+            agentxx_plugin_string_free(host, &urlEsc);
             if (iface.resources->register_mcp_server(host, agentxx_plugin_sv_cstr(spec.c_str()))
                 != 0) {
                 return throwJsError(
@@ -1667,15 +1669,15 @@ static void* jsCapStart(
     AgentxxPluginStringView            method,
     AgentxxPluginStringView            args_json,
     const AgentxxPluginOperatorNotify* notify,
-    char**                             error_out
+    AgentxxPluginString*               error_out
 ) {
     // C ABI 回调异常守卫: 能力方法 start 由宿主 op 驱动器在 io 线程调用,
     // 内含接口查询/文件读取/字符串操作等可抛路径, 异常转 error_out 失败
     auto* engine = static_cast<JsEngine*>(ctx); ///< 提升至 try 外 (catch 日志闭包使用)
     try {
         auto setErr = [&](const char* msg) {
-            if (error_out && caller_host && caller_host->vtable && caller_host->vtable->strdup) {
-                *error_out = caller_host->vtable->strdup(agentxx_plugin_sv_cstr(msg));
+            if (error_out && caller_host) {
+                *error_out = agentxx_plugin_string_from_cstr(caller_host, msg);
             }
             return nullptr;
         };
@@ -1692,16 +1694,16 @@ static void* jsCapStart(
             return setErr("interpreter.js: host lacks agentxx.agent.json interface");
         }
         auto argStr = [&](const char* key, std::string& out) -> bool {
-            char* v = callerIf.json->json_get_string(
+            AgentxxPluginString v = callerIf.json->json_get_string(
                 caller_host,
                 agentxx_plugin_sv(argsStr.data(), argsStr.size()),
                 agentxx_plugin_sv(key, std::strlen(key))
             );
-            if (!v) {
+            if (!v.data) {
                 return false;
             }
-            out = v;
-            caller_host->vtable->free(v);
+            out.assign(v.data, v.size);
+            agentxx_plugin_string_free(caller_host, &v);
             return true;
         };
 
@@ -1781,8 +1783,8 @@ static void* jsCapStart(
                 engine->guardLog(m);
             }
         });
-        if (error_out && caller_host && caller_host->vtable && caller_host->vtable->strdup) {
-            *error_out = caller_host->vtable->strdup(agentxx_plugin_sv_cstr("interpreter.js: internal exception"));
+        if (error_out && caller_host) {
+            *error_out = agentxx_plugin_string_from_cstr(caller_host, "interpreter.js: internal exception");
         }
         return nullptr;
     }

@@ -163,12 +163,12 @@ std::string hostDataDir(const PluginCtx& ctx) {
     if (!ctx.host || !ctx.iface.config || !ctx.iface.config->get_config) {
         return {};
     }
-    char* j = ctx.iface.config->get_config(ctx.host);
-    if (!j) {
+    AgentxxPluginString j = ctx.iface.config->get_config(ctx.host);
+    if (!j.data) {
         return {};
     }
-    std::string s{j};
-    ctx.host->vtable->free(j);
+    std::string s(j.data, j.size);
+    agentxx_plugin_string_free(ctx.host, &j);
     try {
         auto o = neograph::json::parse(s);
         return o.value("dataDir", std::string{});
@@ -586,12 +586,12 @@ static std::string clientJsonEscape(const ClientCtx& ctx, const std::string& s) 
     if (!ctx.host || !ctx.iface.json || !ctx.iface.json->json_escape || s.empty()) {
         return "\"\"";
     }
-    char* esc = ctx.iface.json->json_escape(ctx.host, agentxx_plugin_sv(s.data(), s.size()));
-    if (!esc) {
+    AgentxxPluginString esc = ctx.iface.json->json_escape(ctx.host, agentxx_plugin_sv(s.data(), s.size()));
+    if (!esc.data) {
         return "\"\"";
     }
-    std::string out{esc};
-    ctx.host->vtable->free(esc);
+    std::string out(esc.data, esc.size);
+    agentxx_plugin_string_free(ctx.host, &esc);
     return out;
 }
 
@@ -868,41 +868,41 @@ static void on_client_plugin_data(AgentxxPluginStringView payload_json, void* ud
         if (!ctx || !ctx->host) {
             return;
         }
-        char*      plugin = ctx->iface.json && ctx->iface.json->json_get_string
+        AgentxxPluginString plugin = ctx->iface.json && ctx->iface.json->json_get_string
                                 ? ctx->iface.json->json_get_string(
                                ctx->host,
                                payload_json,
                                agentxx_plugin_sv_cstr("plugin")
                            )
-                                : nullptr;
-        char*      event  = ctx->iface.json && ctx->iface.json->json_get_string
+                                : AgentxxPluginString{nullptr, 0};
+        AgentxxPluginString event  = ctx->iface.json && ctx->iface.json->json_get_string
                                 ? ctx->iface.json->json_get_string(
                               ctx->host,
                               payload_json,
                               agentxx_plugin_sv_cstr("event")
                           )
-                                : nullptr;
-        char*      data   = ctx->iface.json && ctx->iface.json->json_get_string
+                                : AgentxxPluginString{nullptr, 0};
+        AgentxxPluginString data   = ctx->iface.json && ctx->iface.json->json_get_string
                                 ? ctx->iface.json->json_get_string(
                              ctx->host,
                              payload_json,
                              agentxx_plugin_sv_cstr("data")
                          )
-                                : nullptr;
-        const bool mine   = plugin && event && data && std::strcmp(plugin, "agentxx_planning") == 0
-                          && std::strcmp(event, "planning") == 0;
+                                : AgentxxPluginString{nullptr, 0};
+        const bool mine   = plugin.data && event.data && data.data && std::strcmp(plugin.data, "agentxx_planning") == 0
+                          && std::strcmp(event.data, "planning") == 0;
         if (mine) {
-            ctx->last_plan_json = data;
+            ctx->last_plan_json.assign(data.data, data.size);
             refreshPlanSection(*ctx);
         }
-        if (plugin) {
-            ctx->host->vtable->free(plugin);
+        if (plugin.data) {
+            agentxx_plugin_string_free(ctx->host, &plugin);
         }
-        if (event) {
-            ctx->host->vtable->free(event);
+        if (event.data) {
+            agentxx_plugin_string_free(ctx->host, &event);
         }
-        if (data) {
-            ctx->host->vtable->free(data);
+        if (data.data) {
+            agentxx_plugin_string_free(ctx->host, &data);
         }
     });
 }

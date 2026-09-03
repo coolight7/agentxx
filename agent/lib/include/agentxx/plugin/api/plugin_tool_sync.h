@@ -21,7 +21,7 @@ typedef char* (*AgentxxSyncToolFn)(
     AgentxxPluginStringView session_id,
     AgentxxPluginStringView tool_call_id,
     volatile int*           cancel_flag,
-    char**                  error_out
+    AgentxxPluginString*    error_out
 );
 
 typedef struct AgentxxSyncToolSpec {
@@ -50,14 +50,17 @@ typedef struct AgentxxSyncJob {
     volatile int                cancelFlag;
 } AgentxxSyncJob;
 
-static inline char* agentxx_shim_err_dup(const AgentxxPluginHost* host, const char* msg) {
-    if (!host || !host->vtable || !host->vtable->strdup || !msg) {
-        return NULL;
+static inline AgentxxPluginString agentxx_shim_err_dup(const AgentxxPluginHost* host, const char* msg) {
+    if (!host || !host->vtable || !msg) {
+        AgentxxPluginString s;
+        s.data = NULL;
+        s.size = 0;
+        return s;
     }
-    return host->vtable->strdup(agentxx_plugin_sv_cstr(msg));
+    return agentxx_plugin_string_from_cstr(host, msg);
 }
 
-static inline void* agentxx_sync_job_work(void* ud, volatile int* cancel_flag, char** error_out) {
+static inline void* agentxx_sync_job_work(void* ud, volatile int* cancel_flag, AgentxxPluginString* error_out) {
     AgentxxSyncJob* job = (AgentxxSyncJob*)ud;
 #ifdef __cplusplus
     try {
@@ -70,12 +73,12 @@ static inline void* agentxx_sync_job_work(void* ud, volatile int* cancel_flag, c
             error_out
         );
     } catch (const std::exception& e) {
-        if (error_out && !*error_out) {
+        if (error_out && !error_out->data) {
             *error_out = agentxx_shim_err_dup(job->shim.host, e.what());
         }
         return NULL;
     } catch (...) {
-        if (error_out && !*error_out) {
+        if (error_out && !error_out->data) {
             *error_out = agentxx_shim_err_dup(job->shim.host, "sync tool threw unknown exception");
         }
         return NULL;
@@ -110,6 +113,10 @@ static inline void agentxx_sync_job_done(void* ud, void* result, AgentxxPluginSt
         job->notify.done(job->notify.host_ud, st, payload);
     }
 
+    if (result && job->shim.host && job->shim.host->vtable && job->shim.host->vtable->free) {
+        job->shim.host->vtable->free(result);
+    }
+
     if (job->args.data) {
         free((void*)job->args.data);
     }
@@ -128,7 +135,7 @@ static inline void* agentxx_sync_tool_start(
     AgentxxPluginStringView            session_id,
     AgentxxPluginStringView            tool_call_id,
     const AgentxxPluginOperatorNotify* notify,
-    char**                             error_out
+    AgentxxPluginString*               error_out
 ) {
     AgentxxSyncToolShim* shim = (AgentxxSyncToolShim*)user_data;
     if (!shim || !shim->sched || !shim->sched->offload) {
@@ -267,7 +274,7 @@ typedef char* (*AgentxxInlineToolFn)(
     AgentxxPluginStringView args_json,
     AgentxxPluginStringView session_id,
     AgentxxPluginStringView tool_call_id,
-    char**                  error_out
+    AgentxxPluginString*    error_out
 );
 
 typedef struct AgentxxInlineToolSpec {
@@ -292,7 +299,7 @@ static inline void* agentxx_inline_tool_start(
     AgentxxPluginStringView            session_id,
     AgentxxPluginStringView            tool_call_id,
     const AgentxxPluginOperatorNotify* notify,
-    char**                             error_out
+    AgentxxPluginString*               error_out
 ) {
     AgentxxInlineToolShim* shim = (AgentxxInlineToolShim*)user_data;
     if (!shim || !shim->fn) {
@@ -307,12 +314,12 @@ static inline void* agentxx_inline_tool_start(
     try {
         result = shim->fn(shim->ud, args_json, session_id, tool_call_id, error_out);
     } catch (const std::exception& e) {
-        if (error_out && !*error_out) {
+        if (error_out && !error_out->data) {
             *error_out = agentxx_shim_err_dup(shim->host, e.what());
         }
         result = NULL;
     } catch (...) {
-        if (error_out && !*error_out) {
+        if (error_out && !error_out->data) {
             *error_out = agentxx_shim_err_dup(shim->host, "inline tool threw unknown exception");
         }
         result = NULL;
@@ -321,18 +328,19 @@ static inline void* agentxx_inline_tool_start(
     result = shim->fn(shim->ud, args_json, session_id, tool_call_id, error_out);
 #endif
 
-    if (error_out && *error_out) {
+    if (error_out && error_out->data) {
         if (notify && notify->done) {
-            // 执行期失败：经 notify 上报，error_out 清零避免宿主 double-free / 误判为 start 失败
-            char* errPayload = *error_out;
-            *error_out       = NULL;
+            // 执行期失败：经 notify 上报，error_out 释放并清零避免宿主 double-free / 误判为 start 失败
+            AgentxxPluginString errPayload = *error_out;
+            error_out->data                = NULL;
+            error_out->size                = 0;
             notify->done(
                 notify->host_ud,
                 AGENTXX_PLUGIN_OPERATOR_FAILED,
-                agentxx_plugin_sv_cstr(errPayload)
+                agentxx_plugin_string_to_sv(errPayload)
             );
-            if (errPayload && shim->host && shim->host->vtable && shim->host->vtable->free) {
-                shim->host->vtable->free(errPayload);
+            if (shim->host) {
+                agentxx_plugin_string_free(shim->host, &errPayload);
             }
         }
     } else {
@@ -388,7 +396,7 @@ typedef int (*AgentxxSyncHookFn)(
     void*                   user_data,
     AgentxxPluginHookPoint  point,
     AgentxxPluginStringView node_input_json,
-    char**                  error_out
+    AgentxxPluginString*    error_out
 );
 
 typedef struct AgentxxSyncHookShim {
@@ -402,7 +410,7 @@ static inline void* agentxx_sync_hook_start(
     AgentxxPluginHookPoint             point,
     AgentxxPluginStringView            node_input_json,
     const AgentxxPluginOperatorNotify* notify,
-    char**                             error_out
+    AgentxxPluginString*               error_out
 ) {
     AgentxxSyncHookShim* shim = (AgentxxSyncHookShim*)user_data;
     if (!shim || !shim->fn) {
@@ -416,12 +424,12 @@ static inline void* agentxx_sync_hook_start(
     try {
         rc = shim->fn(shim->ud, point, node_input_json, error_out);
     } catch (const std::exception& e) {
-        if (error_out && !*error_out) {
+        if (error_out && !error_out->data) {
             *error_out = agentxx_shim_err_dup(shim->host, e.what());
         }
         rc = -1;
     } catch (...) {
-        if (error_out && !*error_out) {
+        if (error_out && !error_out->data) {
             *error_out = agentxx_shim_err_dup(shim->host, "hook threw unknown exception");
         }
         rc = -1;
@@ -431,11 +439,18 @@ static inline void* agentxx_sync_hook_start(
 #endif
 
     if (notify && notify->done) {
+        AgentxxPluginStringView errSv = agentxx_plugin_sv(NULL, 0);
+        if (error_out && error_out->data) {
+            errSv = agentxx_plugin_string_to_sv(*error_out);
+        }
         notify->done(
             notify->host_ud,
             rc == 0 ? AGENTXX_PLUGIN_OPERATOR_OK : AGENTXX_PLUGIN_OPERATOR_FAILED,
-            agentxx_plugin_sv(NULL, 0)
+            errSv
         );
+        if (error_out && error_out->data && shim->host) {
+            agentxx_plugin_string_free(shim->host, error_out);
+        }
     }
     return NULL;
 }

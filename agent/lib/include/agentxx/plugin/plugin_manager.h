@@ -84,7 +84,7 @@ public:
 
     struct HookRegistration {
         AgentxxPluginHookPoint point;
-        void* (*start)(void*, AgentxxPluginHookPoint, AgentxxPluginStringView, const AgentxxPluginOperatorNotify*, char**);
+        void* (*start)(void*, AgentxxPluginHookPoint, AgentxxPluginStringView, const AgentxxPluginOperatorNotify*, AgentxxPluginString*);
         void (*cancel)(void*, void*);
         void* ud;
     };
@@ -222,7 +222,7 @@ public:
 private:
 
     struct HookEntry {
-        void* (*start)(void*, AgentxxPluginHookPoint, AgentxxPluginStringView, const AgentxxPluginOperatorNotify*, char**)
+        void* (*start)(void*, AgentxxPluginHookPoint, AgentxxPluginStringView, const AgentxxPluginOperatorNotify*, AgentxxPluginString*)
             = nullptr;
         void (*cancel)(void*, void*) = nullptr;
         void* ud                     = nullptr;
@@ -382,8 +382,8 @@ public:
     int       publish(std::string_view topic, std::string_view event_json) {
         return publish(strToSv(topic), strToSv(event_json));
     }
-    char*     getShareStore(PluginInstance* inst, AgentxxPluginStringView session_id, long long id);
-    char*     getShareStore(PluginInstance* inst, std::string_view session_id, long long id) {
+    AgentxxPluginString getShareStore(PluginInstance* inst, AgentxxPluginStringView session_id, long long id);
+    AgentxxPluginString getShareStore(PluginInstance* inst, std::string_view session_id, long long id) {
         return getShareStore(inst, strToSv(session_id), id);
     }
     long long addShareStore(PluginInstance* inst, AgentxxPluginStringView session_id, AgentxxPluginStringView content);
@@ -400,7 +400,7 @@ public:
     void  offload(
          PluginInstance* inst,
          volatile int*   cancel_flag,
-         void* (*work)(void* ud, volatile int* cancel_flag, char** error_out),
+         void* (*work)(void* ud, volatile int* cancel_flag, AgentxxPluginString* error_out),
          void (*done)(void* ud, void* result, AgentxxPluginStringView error),
          void* ud
      );
@@ -412,7 +412,7 @@ public:
         AgentxxPluginStringView       session_id,
         AgentxxPluginOperatorCallback cb,
         void*                         ud,
-        char**                        error_out
+        AgentxxPluginString*          error_out
     );
     AgentxxPluginOperatorHandle* callToolAsync(
         PluginInstance*               caller,
@@ -421,7 +421,7 @@ public:
         std::string_view              session_id,
         AgentxxPluginOperatorCallback cb,
         void*                         ud,
-        char**                        error_out
+        AgentxxPluginString*          error_out
     ) {
         return callToolAsync(caller, strToSv(name), strToSv(args_json), strToSv(session_id), cb, ud, error_out);
     }
@@ -433,7 +433,7 @@ public:
         AgentxxPluginStringView       args_json,
         AgentxxPluginOperatorCallback cb,
         void*                         ud,
-        char**                        error_out
+        AgentxxPluginString*          error_out
     );
     AgentxxPluginOperatorHandle* invokeCapabilityAsync(
         PluginInstance*               caller,
@@ -442,7 +442,7 @@ public:
         std::string_view              args_json,
         AgentxxPluginOperatorCallback cb,
         void*                         ud,
-        char**                        error_out
+        AgentxxPluginString*          error_out
     ) {
         return invokeCapabilityAsync(caller, strToSv(capability), strToSv(method), strToSv(args_json), cb, ud, error_out);
     }
@@ -458,7 +458,7 @@ public:
         AgentxxPluginOperatorCancelFunction cancel_fn,
         void*                               cancel_ud,
         AgentxxPluginOperatorNotify*        notify,
-        char**                              error_out
+        AgentxxPluginString*                error_out
     );
 
     std::shared_ptr<ToolRegistry> registry() const {

@@ -139,6 +139,62 @@ inline std::string
     return std::string{fallback};
 }
 
+/* ==================== OwnedString RAII 包装 ==================== */
+
+class OwnedString {
+    const AgentxxPluginHost* host_ = nullptr;
+    AgentxxPluginString      str_{nullptr, 0};
+
+public:
+    OwnedString() = default;
+    OwnedString(const AgentxxPluginHost* h, AgentxxPluginString s) : host_(h), str_(s) {}
+    ~OwnedString() {
+        reset();
+    }
+
+    OwnedString(const OwnedString&) = delete;
+    OwnedString& operator=(const OwnedString&) = delete;
+
+    OwnedString(OwnedString&& o) noexcept : host_(o.host_), str_(o.str_) {
+        o.host_ = nullptr;
+        o.str_  = {nullptr, 0};
+    }
+
+    OwnedString& operator=(OwnedString&& o) noexcept {
+        if (this != &o) {
+            reset();
+            host_   = o.host_;
+            str_    = o.str_;
+            o.host_ = nullptr;
+            o.str_  = {nullptr, 0};
+        }
+        return *this;
+    }
+
+    void reset() noexcept {
+        if (host_ && str_.data) {
+            agentxx_plugin_string_free(host_, &str_);
+        }
+        host_ = nullptr;
+        str_  = {nullptr, 0};
+    }
+
+    const char* c_str() const noexcept { return str_.data ? str_.data : ""; }
+    const char* data() const noexcept { return str_.data; }
+    size_t size() const noexcept { return str_.size; }
+    bool empty() const noexcept { return str_.data == nullptr || str_.size == 0; }
+    std::string_view view() const noexcept { return {str_.data ? str_.data : "", str_.size}; }
+    std::string str() const { return std::string(view()); }
+    AgentxxPluginStringView to_sv() const noexcept { return agentxx_plugin_string_to_sv(str_); }
+    AgentxxPluginString release() noexcept {
+        AgentxxPluginString tmp = str_;
+        str_ = {nullptr, 0};
+        host_ = nullptr;
+        return tmp;
+    }
+    const AgentxxPluginString& raw() const noexcept { return str_; }
+};
+
 /* ==================== Task<T> 锚定协程与完成协议 ==================== */
 
 template<typename T = void>
@@ -396,10 +452,10 @@ struct PluginBase {
         if (!host || !iface.config || !iface.config->get_session_work_dir) {
             return "";
         }
-        char* p = iface.config->get_session_work_dir(host, tid);
-        if (p) {
-            std::string res(p);
-            host->vtable->free(p);
+        AgentxxPluginString s = iface.config->get_session_work_dir(host, tid);
+        if (s.data) {
+            std::string res(s.data, s.size);
+            agentxx_plugin_string_free(host, &s);
             return res;
         }
         return "";
@@ -410,12 +466,12 @@ struct PluginBase {
         if (!host || !iface.config || !iface.config->get_tool_prompt) {
             return res;
         }
-        char* p = iface.config->get_tool_prompt(host, agentxx_plugin_sv(tool.data(), tool.size()));
-        if (!p) {
+        AgentxxPluginString s = iface.config->get_tool_prompt(host, agentxx_plugin_sv(tool.data(), tool.size()));
+        if (!s.data) {
             return res;
         }
-        std::string jsonStr(p);
-        host->vtable->free(p);
+        std::string jsonStr(s.data, s.size);
+        agentxx_plugin_string_free(host, &s);
         try {
             auto j = neograph::json::parse(jsonStr);
             if (j.contains("depict") && j["depict"].is_string()) {
@@ -437,12 +493,12 @@ struct PluginBase {
         if (!host || !iface.config || !iface.config->get_plugin_args) {
             return "{}";
         }
-        char* p = iface.config->get_plugin_args(host);
-        if (!p) {
+        AgentxxPluginString s = iface.config->get_plugin_args(host);
+        if (!s.data) {
             return "{}";
         }
-        std::string res(p);
-        host->vtable->free(p);
+        std::string res(s.data, s.size);
+        agentxx_plugin_string_free(host, &s);
         return res;
     }
 
@@ -452,12 +508,12 @@ struct PluginBase {
         if (!host || !iface.config || !iface.config->get_plugin_config_path) {
             return "";
         }
-        char* p = iface.config->get_plugin_config_path(host);
-        if (!p) {
+        AgentxxPluginString s = iface.config->get_plugin_config_path(host);
+        if (!s.data) {
             return "";
         }
-        std::string res(p);
-        host->vtable->free(p);
+        std::string res(s.data, s.size);
+        agentxx_plugin_string_free(host, &s);
         return res;
     }
 
@@ -490,6 +546,18 @@ struct PluginBase {
         return strdup(agentxx_plugin_sv_cstr(s));
     }
 
+    AgentxxPluginString createString(AgentxxPluginStringView sv) const {
+        return agentxx_plugin_string_from_sv(host, sv);
+    }
+
+    AgentxxPluginString createString(const char* s) const {
+        return agentxx_plugin_string_from_cstr(host, s);
+    }
+
+    void freeString(AgentxxPluginString* str) const {
+        agentxx_plugin_string_free(host, str);
+    }
+
     void free(char* p) const {
         if (host && host->vtable && host->vtable->free && p) {
             host->vtable->free(p);
@@ -500,12 +568,25 @@ struct PluginBase {
         if (!host || !iface.json || !iface.json->json_escape || agentxx_plugin_sv_empty(sv)) {
             return "\"\"";
         }
-        char* esc = iface.json->json_escape(host, sv);
-        if (!esc) {
+        AgentxxPluginString esc = iface.json->json_escape(host, sv);
+        if (!esc.data) {
             return "\"\"";
         }
-        std::string res(esc);
-        host->vtable->free(esc);
+        std::string res(esc.data, esc.size);
+        agentxx_plugin_string_free(host, &esc);
+        return res;
+    }
+
+    std::string jsonGetString(AgentxxPluginStringView json, AgentxxPluginStringView key) const {
+        if (!host || !iface.json || !iface.json->json_get_string) {
+            return "";
+        }
+        AgentxxPluginString v = iface.json->json_get_string(host, json, key);
+        if (!v.data) {
+            return "";
+        }
+        std::string res(v.data, v.size);
+        agentxx_plugin_string_free(host, &v);
         return res;
     }
 
@@ -670,7 +751,7 @@ struct OffloadAwaiter {
         sched->offload(
             host,
             &cancelFlag,
-            [](void* ud, volatile int* cflag, char** error_out) -> void* {
+            [](void* ud, volatile int* cflag, AgentxxPluginString* error_out) -> void* {
                 auto* self = static_cast<OffloadAwaiter*>(ud);
                 try {
                     if constexpr (std::is_void_v<ResultType>) {
@@ -768,7 +849,7 @@ struct CallToolAwaiter {
         st->callbackFired.store(false, std::memory_order_release);
         st->destroyed.store(false, std::memory_order_release);
         auto* holder = new std::shared_ptr<CallToolState>(st);
-        char* err    = nullptr;
+        AgentxxPluginString err{nullptr, 0};
         st->opHandle = st->tools->call_tool_async(
             st->host,
             agentxx_plugin_sv(st->name.data(), st->name.size()),
@@ -847,10 +928,10 @@ struct CallToolAwaiter {
             return false;
         }
 
-        if (!st->opHandle && err) {
-            st->startError.assign(err);
-            if (st->host && st->host->vtable && st->host->vtable->free) {
-                st->host->vtable->free(err);
+        if (!st->opHandle && err.data) {
+            st->startError.assign(err.data, err.size);
+            if (st->host) {
+                agentxx_plugin_string_free(st->host, &err);
             }
             delete holder;
             return false;
@@ -946,7 +1027,7 @@ struct InvokeCapAwaiter {
         st->callbackFired.store(false, std::memory_order_release);
         st->destroyed.store(false, std::memory_order_release);
         auto* holder = new std::shared_ptr<InvokeCapState>(st);
-        char* err    = nullptr;
+        AgentxxPluginString err{nullptr, 0};
         st->opHandle = st->caps->invoke_capability_async(
             st->host,
             agentxx_plugin_sv(st->capability.data(), st->capability.size()),
@@ -1025,10 +1106,10 @@ struct InvokeCapAwaiter {
             return false;
         }
 
-        if (!st->opHandle && err) {
-            st->startError.assign(err);
-            if (st->host && st->host->vtable && st->host->vtable->free) {
-                st->host->vtable->free(err);
+        if (!st->opHandle && err.data) {
+            st->startError.assign(err.data, err.size);
+            if (st->host) {
+                agentxx_plugin_string_free(st->host, &err);
             }
             delete holder;
             return false;
@@ -1188,9 +1269,9 @@ inline void spawnTaskImpl(Ctx& ctx, Fn&& fn) {
     //   OS 回收)。记录 WARN 提示 (不阻塞任务运行)
     AgentxxPluginOperatorNotify hostNotify{nullptr, nullptr};
     if (ctx.iface.tasks && ctx.iface.tasks->register_task) {
-        AgentxxPluginOperatorNotify notify;
-        char*                       err = nullptr;
-        AgentxxPluginOperatorHandle* h   = ctx.iface.tasks->register_task(
+        AgentxxPluginOperatorNotify  notify;
+        AgentxxPluginString          err{nullptr, 0};
+        AgentxxPluginOperatorHandle* h = ctx.iface.tasks->register_task(
             ctx.host,
             [](void* ud, void*) { // cancel_fn: 置 cancelFlag + 唤醒挂起协程
                 auto* r = static_cast<PluginBase::SpawnRecord*>(ud);
@@ -1215,13 +1296,13 @@ inline void spawnTaskImpl(Ctx& ctx, Fn&& fn) {
         if (h) {
             hostNotify = notify;
         } else {
-            if (err) {
+            if (err.data) {
                 ctx.log.warn(fmt::format(
                     "spawn: register_task failed (task runs unmanaged): {}",
-                    err ? err : "?"
+                    std::string_view{err.data, err.size}
                 ));
-                if (ctx.host && ctx.host->vtable && ctx.host->vtable->free) {
-                    ctx.host->vtable->free(err);
+                if (ctx.host) {
+                    agentxx_plugin_string_free(ctx.host, &err);
                 }
             } else {
                 ctx.log.warn("spawn: register_task failed (task runs unmanaged)");
@@ -1345,7 +1426,7 @@ inline void tool(
                             AgentxxPluginStringView            thread_id,
                             AgentxxPluginStringView            tool_call_id,
                             const AgentxxPluginOperatorNotify* notify,
-                            char**                             error_out) -> void* {
+                            AgentxxPluginString*               error_out) -> void* {
         auto* shim = static_cast<ToolShim*>(user_data);
         (void)tool_call_id;
         (void)error_out;
@@ -1451,7 +1532,7 @@ inline void fast_tool(
                             AgentxxPluginStringView            thread_id,
                             AgentxxPluginStringView            tool_call_id,
                             const AgentxxPluginOperatorNotify* notify,
-                            char**                             error_out) -> void* {
+                            AgentxxPluginString*               error_out) -> void* {
         auto* shim = static_cast<FastShim*>(user_data);
         (void)tool_call_id;
         try {
@@ -1482,7 +1563,7 @@ inline void fast_tool(
                     agentxx_plugin_sv(what.data(), what.size())
                 );
             } else if (error_out) {
-                *error_out = shim->ctx->strdup(e.what());
+                *error_out = agentxx_plugin_string_from_cstr(shim->ctx->host, e.what());
             }
         } catch (...) {
             if (notify && notify->done) {
@@ -1492,7 +1573,7 @@ inline void fast_tool(
                     agentxx_plugin_sv_cstr("unknown error")
                 );
             } else if (error_out) {
-                *error_out = shim->ctx->strdup("unknown error in fast_tool");
+                *error_out = agentxx_plugin_string_from_cstr(shim->ctx->host, "unknown error in fast_tool");
             }
         }
         return nullptr;
@@ -1555,7 +1636,7 @@ inline void blocking_tool(
                             AgentxxPluginStringView            thread_id,
                             AgentxxPluginStringView            tool_call_id,
                             const AgentxxPluginOperatorNotify* notify,
-                            char**                             error_out) -> void* {
+                            AgentxxPluginString*               error_out) -> void* {
         auto* shim = static_cast<BlockShim*>(user_data);
         (void)error_out;
         std::string tidStr(thread_id.data ? thread_id.data : "", thread_id.size);
@@ -1579,7 +1660,7 @@ inline void blocking_tool(
             shim->ctx->iface.scheduler->offload(
                 shim->ctx->host,
                 &job->cancelFlag,
-                [](void* ud, volatile int* cflag, char** err_out) -> void* {
+                [](void* ud, volatile int* cflag, AgentxxPluginString* err_out) -> void* {
                     auto* j = static_cast<Job*>(ud);
                     try {
                         std::string res;
@@ -1633,12 +1714,12 @@ inline void blocking_tool(
                         return nullptr;
                     } catch (const std::exception& e) {
                         if (err_out) {
-                            *err_out = j->shim->ctx->strdup(e.what());
+                            *err_out = agentxx_plugin_string_from_cstr(j->shim->ctx->host, e.what());
                         }
                         return nullptr;
                     } catch (...) {
                         if (err_out) {
-                            *err_out = j->shim->ctx->strdup("unknown blocking tool error");
+                            *err_out = agentxx_plugin_string_from_cstr(j->shim->ctx->host, "unknown blocking tool error");
                         }
                         return nullptr;
                     }
@@ -1703,7 +1784,7 @@ inline void hook(Ctx& ctx, AgentxxPluginHookPoint point, HookFn&& fn) {
                          AgentxxPluginHookPoint             pt,
                          AgentxxPluginStringView            node_input_json,
                          const AgentxxPluginOperatorNotify* notify,
-                         char**                             error_out) -> void* {
+                         AgentxxPluginString*               error_out) -> void* {
         auto* shim = static_cast<HookShim*>(user_data);
         (void)error_out;
         try {
@@ -1775,7 +1856,7 @@ inline void capability(Ctx& ctx, std::string_view capName, CapFn&& fn) {
                AgentxxPluginStringView            method,
                AgentxxPluginStringView            args_json,
                const AgentxxPluginOperatorNotify* notify,
-               char**                             error_out) -> void* {
+               AgentxxPluginString*               error_out) -> void* {
                 auto* shim = static_cast<CapShim*>(user_data);
                 (void)error_out;
                 try {
@@ -1833,28 +1914,29 @@ inline void capability(Ctx& ctx, std::string_view capName, CapFn&& fn) {
 
 /* ==================== 阻塞便捷函数 (基于 condvar) ==================== */
 
-inline char* call_tool_blocking(
+inline AgentxxPluginString call_tool_blocking(
     const AgentxxPluginHost*           host,
     const AgentxxPluginToolsIface*     tools,
     const AgentxxPluginSchedulerIface* sched,
     std::string_view                   name,
     std::string_view                   args_json,
     std::string_view                   thread_id,
-    char**                             error_out
+    AgentxxPluginString*               error_out
 ) {
     if (!host || !tools || !tools->call_tool_async) {
-        if (error_out && host && host->vtable && host->vtable->strdup) {
-            *error_out = host->vtable->strdup(agentxx_plugin_sv_cstr("tools iface not available"));
+        if (error_out) {
+            *error_out = agentxx_plugin_string_from_cstr(host, "tools iface not available");
         }
-        return nullptr;
+        return AgentxxPluginString{nullptr, 0};
     }
     if (sched && sched->is_io_thread && sched->is_io_thread(host)) {
-        if (error_out && host->vtable && host->vtable->strdup) {
-            *error_out = host->vtable->strdup(agentxx_plugin_sv_cstr(
+        if (error_out) {
+            *error_out = agentxx_plugin_string_from_cstr(
+                host,
                 "call_tool_blocking cannot be called on io thread; use co_await call_tool instead"
-            ));
+            );
         }
-        return nullptr;
+        return AgentxxPluginString{nullptr, 0};
     }
 
     struct SyncState {
@@ -1885,7 +1967,7 @@ inline char* call_tool_blocking(
     );
 
     if (!handle) {
-        return nullptr;
+        return AgentxxPluginString{nullptr, 0};
     }
 
     {
@@ -1896,41 +1978,41 @@ inline char* call_tool_blocking(
     }
 
     if (state.status != AGENTXX_PLUGIN_OPERATOR_OK) {
-        if (error_out && host && host->vtable && host->vtable->strdup) {
-            *error_out = host->vtable->strdup(
+        if (error_out) {
+            *error_out = agentxx_plugin_string_from_sv(
+                host,
                 agentxx_plugin_sv(state.payload.data(), state.payload.size())
             );
         }
-        return nullptr;
+        return AgentxxPluginString{nullptr, 0};
     }
 
-    return host && host->vtable && host->vtable->strdup
-               ? host->vtable->strdup(agentxx_plugin_sv(state.payload.data(), state.payload.size()))
-               : detail::strdupFallback(agentxx_plugin_sv(state.payload.data(), state.payload.size()));
+    return agentxx_plugin_string_from_sv(host, agentxx_plugin_sv(state.payload.data(), state.payload.size()));
 }
 
-inline char* invoke_capability_blocking(
+inline AgentxxPluginString invoke_capability_blocking(
     const AgentxxPluginHost*              host,
     const AgentxxPluginCapabilitiesIface* caps,
     const AgentxxPluginSchedulerIface*    sched,
     std::string_view                      capability,
     std::string_view                      method,
     std::string_view                      args_json,
-    char**                                error_out
+    AgentxxPluginString*                  error_out
 ) {
     if (!host || !caps || !caps->invoke_capability_async) {
-        if (error_out && host && host->vtable && host->vtable->strdup) {
-            *error_out = host->vtable->strdup(agentxx_plugin_sv_cstr("capabilities iface not available"));
+        if (error_out) {
+            *error_out = agentxx_plugin_string_from_cstr(host, "capabilities iface not available");
         }
-        return nullptr;
+        return AgentxxPluginString{nullptr, 0};
     }
     if (sched && sched->is_io_thread && sched->is_io_thread(host)) {
-        if (error_out && host->vtable && host->vtable->strdup) {
-            *error_out = host->vtable->strdup(agentxx_plugin_sv_cstr(
+        if (error_out) {
+            *error_out = agentxx_plugin_string_from_cstr(
+                host,
                 "invoke_capability_blocking cannot be called on io thread; use co_await invoke_cap instead"
-            ));
+            );
         }
-        return nullptr;
+        return AgentxxPluginString{nullptr, 0};
     }
 
     struct SyncState {
@@ -1961,7 +2043,7 @@ inline char* invoke_capability_blocking(
     );
 
     if (!handle) {
-        return nullptr;
+        return AgentxxPluginString{nullptr, 0};
     }
 
     {
@@ -1972,17 +2054,16 @@ inline char* invoke_capability_blocking(
     }
 
     if (state.status != AGENTXX_PLUGIN_OPERATOR_OK) {
-        if (error_out && host && host->vtable && host->vtable->strdup) {
-            *error_out = host->vtable->strdup(
+        if (error_out) {
+            *error_out = agentxx_plugin_string_from_sv(
+                host,
                 agentxx_plugin_sv(state.payload.data(), state.payload.size())
             );
         }
-        return nullptr;
+        return AgentxxPluginString{nullptr, 0};
     }
 
-    return host && host->vtable && host->vtable->strdup
-               ? host->vtable->strdup(agentxx_plugin_sv(state.payload.data(), state.payload.size()))
-               : detail::strdupFallback(agentxx_plugin_sv(state.payload.data(), state.payload.size()));
+    return agentxx_plugin_string_from_sv(host, agentxx_plugin_sv(state.payload.data(), state.payload.size()));
 }
 
 } // namespace plugin

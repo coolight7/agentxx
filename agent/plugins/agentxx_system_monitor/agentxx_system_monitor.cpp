@@ -224,7 +224,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                         c->iface.scheduler->offload(
                             c->host,
                             nullptr,
-                            [](void*, volatile int*, char**) -> void* {
+                            [](void*, volatile int*, AgentxxPluginString*) -> void* {
                                 return new agentxx_system_monitor_plugin::CpuGpuUsage(querySync());
                             },
                             [](void* ud, void* res, AgentxxPluginStringView err) {
@@ -441,19 +441,19 @@ static void onClientPluginData(AgentxxPluginStringView payload_json, void* ud) {
     }
 }
 
-static char* cmdSysinfoExecute(void* ud, AgentxxPluginStringView args_json, char** errorOut) {
+static AgentxxPluginString cmdSysinfoExecute(void* ud, AgentxxPluginStringView args_json, AgentxxPluginString* errorOut) {
     (void)args_json;
     (void)errorOut;
     auto* ctx = static_cast<ClientCtx*>(ud);
     if (!ctx || !ctx->host) {
-        return nullptr;
+        return AgentxxPluginString{nullptr, 0};
     }
     return agentxx::plugin::guardCall(
         [ctx](const char* m) noexcept {
             ctx->logErr(m);
         },
-        nullptr,
-        [&]() -> char* {
+        AgentxxPluginString{nullptr, 0},
+        [&]() -> AgentxxPluginString {
             const bool next = !ctx->usage_enabled.load(std::memory_order_relaxed);
             ctx->usage_enabled.store(next, std::memory_order_relaxed);
             refreshUsageDisplay(*ctx);
@@ -467,13 +467,13 @@ static char* cmdSysinfoExecute(void* ud, AgentxxPluginStringView args_json, char
             }
             std::string text = next ? "System resource info: ON" : "System resource info: OFF";
             {
-                char* stateJson    = ctx->iface.session && ctx->iface.session->get_client_state
+                AgentxxPluginString stateJson = ctx->iface.session && ctx->iface.session->get_client_state
                                          ? ctx->iface.session->get_client_state(ctx->host)
-                                         : nullptr;
+                                         : AgentxxPluginString{nullptr, 0};
                 bool  agentMissing = false;
-                if (stateJson) {
+                if (stateJson.data) {
                     try {
-                        auto st = neograph::json::parse(std::string(stateJson));
+                        auto st = neograph::json::parse(std::string(stateJson.data, stateJson.size));
                         if (st.contains("agentPlugins") && st["agentPlugins"].is_array()) {
                             size_t n     = 0;
                             bool   found = false;
@@ -488,7 +488,7 @@ static char* cmdSysinfoExecute(void* ud, AgentxxPluginStringView args_json, char
                         }
                     } catch (...) {
                     }
-                    ctx->host->vtable->free(stateJson);
+                    agentxx_plugin_string_free(ctx->host, &stateJson);
                 }
                 if (agentMissing) {
                     text += " (warn: plugin missing on server side; toggle is local only)";
@@ -503,7 +503,7 @@ static char* cmdSysinfoExecute(void* ud, AgentxxPluginStringView args_json, char
             out["text"]        = text;
             out["level"]       = 0;
             std::string dumped = out.dump();
-            return ctx->host->vtable->strdup(agentxx_plugin_sv(dumped.data(), dumped.size()));
+            return agentxx_plugin_string_from_sv(ctx->host, agentxx_plugin_sv(dumped.data(), dumped.size()));
         }
     );
 }

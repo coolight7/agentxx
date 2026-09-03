@@ -170,13 +170,13 @@ typedef struct AgentxxClientUiIface {
     /// 注册斜杠命令: 用户输入 "/{name}" 触发 (name 不含 '/' 与空格)
     /// - name: 全局唯一; description: 帮助/自动补全用
     /// - execute: client io 线程同步调用; 返回动作 JSON (host->alloc), 失败返回
-    ///   NULL 并经 errorOut 输出错误 (host->alloc); 宿主解释动作 (见文件头)
+    ///   空串并经 errorOut 输出错误 (host->alloc); 宿主解释动作 (见文件头)
     /// - 返回 0 成功; 名字冲突或参数非法返回非 0
     int (*register_command)(
         const AgentxxPluginHost* host,
         AgentxxPluginStringView  name,
         AgentxxPluginStringView  description,
-        char* (*execute)(void* ud, AgentxxPluginStringView argsJson, char** errorOut),
+        AgentxxPluginString (*execute)(void* ud, AgentxxPluginStringView argsJson, AgentxxPluginString* errorOut),
         void* ud
     );
     /// 注销斜杠命令 (按名称); 不存在返回非 0
@@ -242,7 +242,7 @@ typedef struct AgentxxClientSessionIface {
     ///  "interfaces":["agentxx.client.panel",...],
     ///  "agentPlugins":[{"name","version","interfaces":[...]},...]}
     /// (model/models/agentPlugins 依赖服务端推送; 未收到时为空)
-    char* (*get_client_state)(const AgentxxPluginHost* host);
+    AgentxxPluginString (*get_client_state)(const AgentxxPluginHost* host);
     /// 代发一条用户消息 (sessionId 与当前会话不符时仍按当前会话发送并记日志)
     /// - 与用户输入同排队语义 (流式中进 pendingInputs), 不绕过 UI 状态机
     /// - 返回 0 成功; 非 0 表示宿主不可用 (未连接等)
@@ -283,15 +283,15 @@ typedef struct AgentxxClientSelfIface {
 
     /// 本插件信息 JSON {"name","version","description","path"}
     /// (加载时常用: 从 path 推导资源目录; host->alloc)
-    char* (*get_own_info)(const AgentxxPluginHost* host);
+    AgentxxPluginString (*get_own_info)(const AgentxxPluginHost* host);
     /// 本插件配置参数 JSON (yaml `plugins` 条目 args; io 线程; host->alloc):
     /// 宿主不解析 args 字段语义, 整体原样传递; 未配置时返回 "{}"
-    char* (*get_plugin_args)(const AgentxxPluginHost* host);
+    AgentxxPluginString (*get_plugin_args)(const AgentxxPluginHost* host);
     /// 本插件配置文件所在目录或文件路径 (yaml `plugins` 条目 config; io 线程;
-    /// host->alloc; 未指定返回 NULL)
+    /// host->alloc; 未指定返回空串)
     /// - 可指向文件或目录 (由插件自行判断类型并加载)
     /// - 宿主已归一化为绝对路径 (正斜杠, lexically_normal)
-    char* (*get_plugin_config_path)(const AgentxxPluginHost* host);
+    AgentxxPluginString (*get_plugin_config_path)(const AgentxxPluginHost* host);
 } AgentxxClientSelfIface;
 
 /* ==================== 接口表: JSON 辅助 (agentxx.client.json) ==================== */
@@ -303,13 +303,13 @@ typedef struct AgentxxClientJsonIface {
     int version; ///< 必须 == AGENTXX_IFACE_CLIENT_JSON_VERSION
 
     /// 从 JSON 字符串提取指定 key 的字符串值 (宿主解析; 结果 host->alloc)
-    char* (*json_get_string)(
+    AgentxxPluginString (*json_get_string)(
         const AgentxxPluginHost* host,
         AgentxxPluginStringView  json,
         AgentxxPluginStringView  key
     );
     /// 字符串 → JSON 字符串字面量 (含引号包裹与转义; 结果 host->alloc)
-    char* (*json_escape)(const AgentxxPluginHost* host, AgentxxPluginStringView s);
+    AgentxxPluginString (*json_escape)(const AgentxxPluginHost* host, AgentxxPluginStringView s);
 } AgentxxClientJsonIface;
 
 /* ==================== 接口表: 日志 (agentxx.client.log) ==================== */

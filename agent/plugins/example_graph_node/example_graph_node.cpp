@@ -147,7 +147,7 @@ void* intentRouterRunStart(
     AgentxxPluginStringView            state_json,
     AgentxxPluginStringView            thread_id,
     const AgentxxPluginOperatorNotify* notify,
-    char**                             error_out
+    AgentxxPluginString*               error_out
 ) {
     auto* ctx = static_cast<AgentCtx*>(user_data);
     (void)node_name;
@@ -288,7 +288,7 @@ void* datetimeNodeRunStart(
     AgentxxPluginStringView            state_json,
     AgentxxPluginStringView            thread_id,
     const AgentxxPluginOperatorNotify* notify,
-    char**                             error_out
+    AgentxxPluginString*               error_out
 ) {
     auto* ctx = static_cast<AgentCtx*>(user_data);
     (void)node_name;
@@ -376,13 +376,13 @@ static int modifyGraphToIntentFlow(AgentCtx& ctx, std::string& errOut) {
         errOut = "graph iface not available";
         return -1;
     }
-    char* graphJson = ctx.iface.graph->get_graph_json(ctx.host);
-    if (!graphJson) {
+    AgentxxPluginString graphJson = ctx.iface.graph->get_graph_json(ctx.host);
+    if (!graphJson.data) {
         errOut = "get_graph_json returned null";
         return -1;
     }
-    std::string jsonStr(graphJson);
-    ctx.free(graphJson);
+    std::string jsonStr(graphJson.data, graphJson.size);
+    agentxx_plugin_string_free(ctx.host, &graphJson);
 
     neograph::json def;
     try {

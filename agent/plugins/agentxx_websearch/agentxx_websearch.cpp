@@ -204,10 +204,10 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
             raw = ctx.get();
 
             if (ctx->iface.model && ctx->iface.model->get_config) {
-                char* json = ctx->iface.model->get_config(ctx->host);
-                if (json) {
-                    std::string cfgJson = json;
-                    ctx->host->vtable->free(json);
+                AgentxxPluginString json = ctx->iface.model->get_config(ctx->host);
+                if (json.data) {
+                    std::string cfgJson(json.data, json.size);
+                    agentxx_plugin_string_free(ctx->host, &json);
                     try {
                         auto cfg = neograph::json::parse(cfgJson);
                         ctx->convert_html2markdown

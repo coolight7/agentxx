@@ -35,8 +35,8 @@ namespace agentxx {
 namespace plugin {
 
 struct OpDrive {
-    std::function<void*(const AgentxxPluginOperatorNotify* notify, char** err)> start;
-    std::function<void(void* op)>                                               cancel;
+    std::function<void*(const AgentxxPluginOperatorNotify* notify, AgentxxPluginString* err)> start;
+    std::function<void(void* op)>                                                             cancel;
 };
 
 using OpErrorCode = neograph_asio_error_code;
@@ -255,7 +255,7 @@ inline asio::awaitable<std::string> awaitPluginOp(PluginOpAwaitArgs args) {
         }
     }
 
-    char*                       err        = nullptr;
+    AgentxxPluginString         err{nullptr, 0};
     void*                       op         = nullptr;
     bool                        startThrew = false;
     AgentxxPluginOperatorNotify ntf        = core->notify();
@@ -267,13 +267,19 @@ inline asio::awaitable<std::string> awaitPluginOp(PluginOpAwaitArgs args) {
     }
     wd.exit(name, label);
 
-    if (startThrew || err != nullptr
+    if (startThrew || err.data != nullptr
         || (op == nullptr && !core->notified.load(std::memory_order_acquire))) {
         guard.reset();
         std::string msg;
-        if (err != nullptr) {
-            msg = err;
-            ::free(err);
+        if (err.data != nullptr) {
+            msg.assign(err.data, err.size);
+            if (args.inst) {
+                agentxx_plugin_string_free(&args.inst->host, &err);
+            } else {
+                ::free(err.data);
+                err.data = nullptr;
+                err.size = 0;
+            }
         } else if (startThrew) {
             msg = "plugin start() threw";
         } else {

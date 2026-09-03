@@ -73,8 +73,8 @@ struct ClientCommand {
     std::string plugin; ///< 所属插件名
     std::string name;   ///< 命令名 (用户输入 "/{name}" 触发)
     std::string description;
-    char* (*execute)(void* ud, AgentxxPluginStringView args_json, char** error_out) = nullptr;
-    void* ud                                                                        = nullptr;
+    AgentxxPluginString (*execute)(void* ud, AgentxxPluginStringView args_json, AgentxxPluginString* error_out) = nullptr;
+    void* ud                                                                                                    = nullptr;
 };
 
 /// UI 注册表快照 (UI 线程渲染读取; COW shared_ptr 语义)
@@ -364,14 +364,14 @@ public:
         ClientPluginInstance* inst,
         AgentxxPluginStringView name,
         AgentxxPluginStringView description,
-        char* (*exec)(void*, AgentxxPluginStringView, char**),
+        AgentxxPluginString (*exec)(void*, AgentxxPluginStringView, AgentxxPluginString*),
         void* ud
     );
     int registerCommand(
         ClientPluginInstance* inst,
         std::string_view      name,
         std::string_view      description,
-        char* (*exec)(void*, AgentxxPluginStringView, char**),
+        AgentxxPluginString (*exec)(void*, AgentxxPluginStringView, AgentxxPluginString*),
         void* ud
     ) {
         return registerCommand(inst, strToSv(name), strToSv(description), exec, ud);

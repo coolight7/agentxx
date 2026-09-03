@@ -308,6 +308,34 @@ inline char* hostMemoryStrdup(const char* s) {
     return hostMemoryStrdup(agentxx_plugin_sv(s, std::strlen(s)));
 }
 
+inline AgentxxPluginString hostMemoryCreateString(AgentxxPluginStringView s) {
+    AgentxxPluginString res{nullptr, 0};
+    if (!s.data && s.size == 0) {
+        return res;
+    }
+    char* p = static_cast<char*>(hostMemoryAlloc(s.size + 1));
+    if (p) {
+        if (s.size > 0 && s.data) {
+            std::memcpy(p, s.data, s.size);
+        }
+        p[s.size] = '\0';
+        res.data = p;
+        res.size = s.size;
+    }
+    return res;
+}
+
+inline AgentxxPluginString hostMemoryCreateString(std::string_view sv) {
+    return hostMemoryCreateString(agentxx_plugin_sv(sv.data(), sv.size()));
+}
+
+inline AgentxxPluginString hostMemoryCreateString(const char* s) {
+    if (!s) {
+        return AgentxxPluginString{nullptr, 0};
+    }
+    return hostMemoryCreateString(agentxx_plugin_sv(s, std::strlen(s)));
+}
+
 // =====================================================================
 // 可执行目录 helper (跨平台: Windows GetModuleFileNameW / Linux /proc/self/exe)
 // 供 builtin:// 回退探测使用 (agent/client 两侧共用, 原两份实现合并)

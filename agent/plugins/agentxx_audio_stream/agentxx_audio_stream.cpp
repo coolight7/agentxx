@@ -89,12 +89,12 @@ std::string jsonEscape(const PluginCtx* ctx, const std::string& s) {
     if (!ctx || !ctx->host || !ctx->iface.json || !ctx->iface.json->json_escape || s.empty()) {
         return "\"\"";
     }
-    char* esc = ctx->iface.json->json_escape(ctx->host, agentxx_plugin_sv(s.data(), s.size()));
-    if (!esc) {
+    AgentxxPluginString esc = ctx->iface.json->json_escape(ctx->host, agentxx_plugin_sv(s.data(), s.size()));
+    if (!esc.data) {
         return "\"\"";
     }
-    std::string out{esc};
-    ctx->host->vtable->free(esc);
+    std::string out{esc.data, esc.size};
+    agentxx_plugin_string_free(ctx->host, &esc);
     return out;
 }
 

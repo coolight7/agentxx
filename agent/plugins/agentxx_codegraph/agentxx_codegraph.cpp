@@ -58,10 +58,10 @@ static HostConfig
         return cfg;
     }
     if (iface.config->get_config) {
-        char* json = iface.config->get_config(host);
-        if (json) {
-            std::string s{json};
-            host->vtable->free(json);
+        AgentxxPluginString json = iface.config->get_config(host);
+        if (json.data) {
+            std::string s{json.data, json.size};
+            agentxx_plugin_string_free(host, &json);
             SimpleJson j(s);
             if (j.ok()) {
                 jsonGetString(j.doc().at_pointer("/dataDir"), cfg.dataDir);
@@ -70,10 +70,10 @@ static HostConfig
         }
     }
     if (iface.config->get_plugin_args) {
-        char* json = iface.config->get_plugin_args(host);
-        if (json) {
-            std::string s{json};
-            host->vtable->free(json);
+        AgentxxPluginString json = iface.config->get_plugin_args(host);
+        if (json.data) {
+            std::string s{json.data, json.size};
+            agentxx_plugin_string_free(host, &json);
             SimpleJson j(s);
             if (j.ok()) {
                 auto& doc  = j.doc();
@@ -220,12 +220,12 @@ static void ensureToolPromptsInHost(
     if (!host || !iface.prompt || !iface.prompt->get_prompt || !iface.prompt->set_prompt) {
         return;
     }
-    char* json = iface.prompt->get_prompt(host);
-    if (!json) {
+    AgentxxPluginString json = iface.prompt->get_prompt(host);
+    if (!json.data) {
         return;
     }
-    std::string s{json};
-    host->vtable->free(json);
+    std::string s{json.data, json.size};
+    agentxx_plugin_string_free(host, &json);
     SimpleJson j(s);
     if (!j.ok()) {
         return;
@@ -726,7 +726,7 @@ static void snapshotQueryDone(void* ud, void* result, AgentxxPluginStringView er
     }
 }
 
-static void* snapshotQueryWork(void* ud, volatile int*, char**) {
+static void* snapshotQueryWork(void* ud, volatile int*, AgentxxPluginString*) {
     auto* ctx = static_cast<PluginCtx*>(ud);
     return agentxx::plugin::guardCall(
         [ctx](const char* m) noexcept {

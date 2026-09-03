@@ -64,12 +64,12 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                 );
                 return 0;
             }
-            char*          json = ctx->iface.model->get_config(ctx->host);
+            AgentxxPluginString json = ctx->iface.model->get_config(ctx->host);
             neograph::json cfg;
             bool           hasCfg = false;
-            if (json) {
-                std::string cfgJson = json;
-                ctx->host->vtable->free(json);
+            if (json.data) {
+                std::string cfgJson(json.data, json.size);
+                agentxx_plugin_string_free(ctx->host, &json);
                 try {
                     cfg    = neograph::json::parse(cfgJson);
                     hasCfg = true;
