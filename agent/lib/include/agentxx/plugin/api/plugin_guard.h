@@ -76,21 +76,33 @@ inline void logTo(
     const AgentxxPluginHost*     host,
     const AgentxxPluginLogIface* logIf,
     int                          level,
-    const char*                  pluginName,
-    const char*                  msg
+    AgentxxPluginStringView      pluginName,
+    AgentxxPluginStringView      msg
 ) noexcept {
-    if (!host || !logIf || !logIf->log || !msg) {
+    if (!host || !logIf || !logIf->log || !msg.data) {
         return;
     }
     char buf[512];
     std::snprintf(
         buf,
         sizeof(buf),
-        "[%s] exception: %.460s",
-        pluginName ? pluginName : "plugin",
-        msg
+        "[%.*s] exception: %.*s",
+        static_cast<int>(pluginName.size),
+        pluginName.data ? pluginName.data : "plugin",
+        static_cast<int>(msg.size > 460 ? 460 : msg.size),
+        msg.data
     );
     logIf->log(host, level, agentxx_plugin_sv_cstr(buf));
+}
+
+inline void logTo(
+    const AgentxxPluginHost*     host,
+    const AgentxxPluginLogIface* logIf,
+    int                          level,
+    const char*                  pluginName,
+    const char*                  msg
+) noexcept {
+    logTo(host, logIf, level, agentxx_plugin_sv_cstr(pluginName), agentxx_plugin_sv_cstr(msg));
 }
 
 /// client 侧宿主重载 (AgentxxPluginHost/AgentxxClientLogIface 为独立类型)
@@ -98,21 +110,33 @@ inline void logTo(
     const AgentxxPluginHost*     host,
     const AgentxxClientLogIface* logIf,
     int                          level,
-    const char*                  pluginName,
-    const char*                  msg
+    AgentxxPluginStringView      pluginName,
+    AgentxxPluginStringView      msg
 ) noexcept {
-    if (!host || !logIf || !logIf->log || !msg) {
+    if (!host || !logIf || !logIf->log || !msg.data) {
         return;
     }
     char buf[512];
     std::snprintf(
         buf,
         sizeof(buf),
-        "[%s] exception: %.460s",
-        pluginName ? pluginName : "plugin",
-        msg
+        "[%.*s] exception: %.*s",
+        static_cast<int>(pluginName.size),
+        pluginName.data ? pluginName.data : "plugin",
+        static_cast<int>(msg.size > 460 ? 460 : msg.size),
+        msg.data
     );
     logIf->log(host, level, agentxx_plugin_sv_cstr(buf));
+}
+
+inline void logTo(
+    const AgentxxPluginHost*     host,
+    const AgentxxClientLogIface* logIf,
+    int                          level,
+    const char*                  pluginName,
+    const char*                  msg
+) noexcept {
+    logTo(host, logIf, level, agentxx_plugin_sv_cstr(pluginName), agentxx_plugin_sv_cstr(msg));
 }
 
 /// 重抛检查当前异常并分类上报 (noexcept):

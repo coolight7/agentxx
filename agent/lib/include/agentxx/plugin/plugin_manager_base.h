@@ -287,16 +287,25 @@ inline void hostMemoryFree(void* ptr) {
     ::free(ptr);
 }
 
+inline char* hostMemoryStrdup(AgentxxPluginStringView s) {
+    if (!s.data && s.size == 0) {
+        return nullptr;
+    }
+    char* p = static_cast<char*>(hostMemoryAlloc(s.size + 1));
+    if (p) {
+        if (s.size > 0 && s.data) {
+            std::memcpy(p, s.data, s.size);
+        }
+        p[s.size] = '\0';
+    }
+    return p;
+}
+
 inline char* hostMemoryStrdup(const char* s) {
     if (!s) {
         return nullptr;
     }
-    size_t n = std::strlen(s) + 1;
-    char*  p = static_cast<char*>(::malloc(n));
-    if (p) {
-        std::memcpy(p, s, n);
-    }
-    return p;
+    return hostMemoryStrdup(agentxx_plugin_sv(s, std::strlen(s)));
 }
 
 // =====================================================================

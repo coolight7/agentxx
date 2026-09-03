@@ -46,6 +46,19 @@
 
 namespace agentxx {
 namespace plugin {
+
+inline std::string_view svToSv(AgentxxPluginStringView sv) noexcept {
+    return sv.data ? std::string_view{sv.data, sv.size} : std::string_view{};
+}
+
+inline std::string svToStr(AgentxxPluginStringView sv) {
+    return sv.data ? std::string{sv.data, sv.size} : std::string{};
+}
+
+inline AgentxxPluginStringView strToSv(std::string_view sv) noexcept {
+    return agentxx_plugin_sv(sv.data(), sv.size());
+}
+
 namespace detail {
 template<typename Fn, typename Ret>
 inline Ret guardVtableCallImpl(Ret fallback, Fn&& fn) noexcept {

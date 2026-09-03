@@ -934,12 +934,11 @@ asio::awaitable<TestResult> run_plugin_tests() {
                 "example_echo",
                 R"({"k":"v"})",
                 "t31",
-                [](void* ud, int st, char* pl) {
+                [](void* ud, int st, AgentxxPluginStringView pl) {
                     auto* s          = static_cast<StateTuple*>(ud);
                     *std::get<0>(*s) = st;
-                    if (pl) {
-                        *std::get<1>(*s) = pl;
-                        std::free(pl);
+                    if (pl.data && pl.size > 0) {
+                        std::get<1>(*s)->assign(pl.data, pl.size);
                     }
                     *std::get<2>(*s) = true;
                 },
@@ -960,7 +959,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
                 "not_registered_tool",
                 "{}",
                 "t31",
-                [](void*, int, char*) {},
+                [](void*, int, AgentxxPluginStringView) {},
                 nullptr,
                 &e2
             );
@@ -983,11 +982,11 @@ asio::awaitable<TestResult> run_plugin_tests() {
                                           AgentxxPluginStringView,
                                           const AgentxxPluginOperatorNotify* notify,
                                           char**) -> void* {
-                char* p = static_cast<char*>(::malloc(3));
-                p[0]    = '{';
-                p[1]    = '}';
-                p[2]    = '\0';
-                notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, p);
+                notify->done(
+                    notify->host_ud,
+                    AGENTXX_PLUGIN_OPERATOR_OK,
+                    agentxx_plugin_sv_cstr("{}")
+                );
                 return nullptr;
             };
             XX_TEST_EXPECT_EQ(ctx->pluginManager->registerTool(inst31.get(), &asyncSpec), 0);
@@ -1029,7 +1028,11 @@ asio::awaitable<TestResult> run_plugin_tests() {
                 s_cancelCalled = true;
                 auto* o        = static_cast<CancelOp*>(op);
                 if (o && o->notify.done) {
-                    o->notify.done(o->notify.host_ud, AGENTXX_PLUGIN_OPERATOR_CANCELLED, nullptr);
+                    o->notify.done(
+                        o->notify.host_ud,
+                        AGENTXX_PLUGIN_OPERATOR_CANCELLED,
+                        agentxx_plugin_sv(nullptr, 0)
+                    );
                 }
                 delete o;
                 s_activeOp = nullptr;
@@ -1215,9 +1218,9 @@ asio::awaitable<TestResult> run_plugin_tests() {
             auto ex = co_await asio::this_coro::executor;
 
             struct AsyncRes {
-                int               status  = -1;
-                char*             payload = nullptr;
-                std::atomic<bool> done    = false;
+                int               status = -1;
+                std::string       payload;
+                std::atomic<bool> done = false;
             };
 
             // ---- 32.1 命令真实链路 (无会话令牌): 快速完成且输出正确 ----
@@ -1230,11 +1233,13 @@ asio::awaitable<TestResult> run_plugin_tests() {
                     cmdToolName,
                     R"({"command":"echo repro_check"})",
                     "t_exec_no_token",
-                    [](void* ud, int st, char* pl) {
-                        auto* r    = static_cast<AsyncRes*>(ud);
-                        r->status  = st;
-                        r->payload = pl;
-                        r->done    = true;
+                    [](void* ud, int st, AgentxxPluginStringView pl) {
+                        auto* r   = static_cast<AsyncRes*>(ud);
+                        r->status = st;
+                        if (pl.data && pl.size > 0) {
+                            r->payload.assign(pl.data, pl.size);
+                        }
+                        r->done   = true;
                     },
                     &ares,
                     &e
@@ -1250,13 +1255,9 @@ asio::awaitable<TestResult> run_plugin_tests() {
                 )
                               .count();
                 XX_TEST_EXPECT_EQ(ares.status, AGENTXX_PLUGIN_OPERATOR_OK);
-                XX_TEST_EXPECT_TRUE(ares.payload != nullptr);
-                if (ares.payload) {
-                    XX_TEST_EXPECT_TRUE(
-                        std::string(ares.payload).find("repro_check") != std::string::npos
-                    );
-                    std::free(ares.payload);
-                }
+                XX_TEST_EXPECT_TRUE(
+                    ares.payload.find("repro_check") != std::string::npos
+                );
                 XX_TEST_EXPECT_TRUE(ms < 10000);
             }
 
@@ -1272,11 +1273,13 @@ asio::awaitable<TestResult> run_plugin_tests() {
                     cmdToolName,
                     R"({"command":"echo token_case"})",
                     "t_exec_with_token",
-                    [](void* ud, int st, char* pl) {
-                        auto* r    = static_cast<AsyncRes*>(ud);
-                        r->status  = st;
-                        r->payload = pl;
-                        r->done    = true;
+                    [](void* ud, int st, AgentxxPluginStringView pl) {
+                        auto* r   = static_cast<AsyncRes*>(ud);
+                        r->status = st;
+                        if (pl.data && pl.size > 0) {
+                            r->payload.assign(pl.data, pl.size);
+                        }
+                        r->done   = true;
                     },
                     &ares,
                     &e
@@ -1292,13 +1295,9 @@ asio::awaitable<TestResult> run_plugin_tests() {
                 )
                               .count();
                 XX_TEST_EXPECT_EQ(ares.status, AGENTXX_PLUGIN_OPERATOR_OK);
-                XX_TEST_EXPECT_TRUE(ares.payload != nullptr);
-                if (ares.payload) {
-                    XX_TEST_EXPECT_TRUE(
-                        std::string(ares.payload).find("token_case") != std::string::npos
-                    );
-                    std::free(ares.payload);
-                }
+                XX_TEST_EXPECT_TRUE(
+                    ares.payload.find("token_case") != std::string::npos
+                );
                 XX_TEST_EXPECT_TRUE(ms < 10000);
             }
 
@@ -1316,11 +1315,13 @@ asio::awaitable<TestResult> run_plugin_tests() {
                     cmdToolName,
                     timeoutCmd,
                     "t_exec_no_token",
-                    [](void* ud, int st, char* pl) {
-                        auto* r    = static_cast<AsyncRes*>(ud);
-                        r->status  = st;
-                        r->payload = pl;
-                        r->done    = true;
+                    [](void* ud, int st, AgentxxPluginStringView pl) {
+                        auto* r   = static_cast<AsyncRes*>(ud);
+                        r->status = st;
+                        if (pl.data && pl.size > 0) {
+                            r->payload.assign(pl.data, pl.size);
+                        }
+                        r->done   = true;
                     },
                     &ares,
                     &e
@@ -1332,14 +1333,10 @@ asio::awaitable<TestResult> run_plugin_tests() {
                     co_await t.async_wait(asio::use_awaitable);
                 }
                 XX_TEST_EXPECT_EQ(ares.status, AGENTXX_PLUGIN_OPERATOR_OK);
-                XX_TEST_EXPECT_TRUE(ares.payload != nullptr);
-                if (ares.payload) {
-                    XX_TEST_EXPECT_TRUE(
-                        std::string(ares.payload).find("timed out") != std::string::npos
-                        || std::string(ares.payload).find("ExitCode") != std::string::npos
-                    );
-                    std::free(ares.payload);
-                }
+                XX_TEST_EXPECT_TRUE(
+                    ares.payload.find("timed out") != std::string::npos
+                    || ares.payload.find("ExitCode") != std::string::npos
+                );
             }
 
             co_await ctx->pluginManager->unloadAsync("agentxx_execute_command");
@@ -1378,9 +1375,9 @@ asio::awaitable<TestResult> run_plugin_tests() {
             char* e  = nullptr;
 
             struct CancelRes {
-                int               status  = -1;
-                char*             payload = nullptr;
-                std::atomic<bool> done    = false;
+                int               status = -1;
+                std::string       payload;
+                std::atomic<bool> done   = false;
             } cres;
 
             auto* op = ctx->pluginManager->callToolAsync(
@@ -1388,11 +1385,13 @@ asio::awaitable<TestResult> run_plugin_tests() {
                 "example_sleep",
                 R"({"durationMs":60000})",
                 "t_unload_cancel",
-                [](void* ud, int st, char* pl) {
-                    auto* r    = static_cast<CancelRes*>(ud);
-                    r->status  = st;
-                    r->payload = pl;
-                    r->done    = true;
+                [](void* ud, int st, AgentxxPluginStringView pl) {
+                    auto* r   = static_cast<CancelRes*>(ud);
+                    r->status = st;
+                    if (pl.data && pl.size > 0) {
+                        r->payload.assign(pl.data, pl.size);
+                    }
+                    r->done   = true;
                 },
                 &cres,
                 &e
@@ -1407,9 +1406,6 @@ asio::awaitable<TestResult> run_plugin_tests() {
                           .count();
             XX_TEST_EXPECT_TRUE(ok);
             XX_TEST_EXPECT_TRUE(ms < 1000); // 卸载立即返回，无需等 30s 超时
-            if (cres.payload) {
-                std::free(cres.payload);
-            }
         }
     }
 

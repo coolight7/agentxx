@@ -313,14 +313,37 @@ public:
     }
 
     int registerTool(PluginInstance* inst, const AgentxxPluginToolSpec* spec);
-    int unregisterTool(PluginInstance* inst, const char* name);
+    int unregisterTool(PluginInstance* inst, AgentxxPluginStringView name);
+    int unregisterTool(PluginInstance* inst, std::string_view name) {
+        return unregisterTool(inst, strToSv(name));
+    }
 
-    int         registerSkillDir(PluginInstance* inst, const char* path);
-    int         unregisterSkillDir(PluginInstance* inst, const char* path);
-    int         registerMemoryFile(PluginInstance* inst, const char* path);
-    int         unregisterMemoryFile(PluginInstance* inst, const char* path);
-    int         registerMcpServer(PluginInstance* inst, const char* specJson);
-    int         unregisterMcpServer(PluginInstance* inst, const char* nameSpace);
+    int registerSkillDir(PluginInstance* inst, AgentxxPluginStringView path);
+    int registerSkillDir(PluginInstance* inst, std::string_view path) {
+        return registerSkillDir(inst, strToSv(path));
+    }
+    int unregisterSkillDir(PluginInstance* inst, AgentxxPluginStringView path);
+    int unregisterSkillDir(PluginInstance* inst, std::string_view path) {
+        return unregisterSkillDir(inst, strToSv(path));
+    }
+
+    int registerMemoryFile(PluginInstance* inst, AgentxxPluginStringView path);
+    int registerMemoryFile(PluginInstance* inst, std::string_view path) {
+        return registerMemoryFile(inst, strToSv(path));
+    }
+    int unregisterMemoryFile(PluginInstance* inst, AgentxxPluginStringView path);
+    int unregisterMemoryFile(PluginInstance* inst, std::string_view path) {
+        return unregisterMemoryFile(inst, strToSv(path));
+    }
+
+    int registerMcpServer(PluginInstance* inst, AgentxxPluginStringView specJson);
+    int registerMcpServer(PluginInstance* inst, std::string_view specJson) {
+        return registerMcpServer(inst, strToSv(specJson));
+    }
+    int unregisterMcpServer(PluginInstance* inst, AgentxxPluginStringView nameSpace);
+    int unregisterMcpServer(PluginInstance* inst, std::string_view nameSpace) {
+        return unregisterMcpServer(inst, strToSv(nameSpace));
+    }
     std::string ownResourcesJson(const PluginInstance* inst);
 
     int registerHook(PluginInstance* inst, const AgentxxPluginHookSpec* spec);
@@ -329,22 +352,48 @@ public:
     /// 注册插件节点类型到 per-agent GraphRegistry (插件 graph 接口表)
     int registerGraphNodeType(PluginInstance* inst, const AgentxxPluginGraphNodeTypeSpec* spec);
     /// 注销插件节点类型 (按类型名; 卸载时宿主自动清理)
-    int unregisterGraphNodeType(PluginInstance* inst, const char* type);
+    int unregisterGraphNodeType(PluginInstance* inst, AgentxxPluginStringView type);
+    int unregisterGraphNodeType(PluginInstance* inst, std::string_view type) {
+        return unregisterGraphNodeType(inst, strToSv(type));
+    }
     /// 获取当前执行图 JSON 定义 (host->alloc 语义由 vtable 层处理)
     std::string getGraphJson();
     /// 设置执行图 JSON 定义 (覆盖; 非法 JSON 返回非 0)
-    int setGraphJson(PluginInstance* inst, const char* graph_json);
+    int setGraphJson(PluginInstance* inst, AgentxxPluginStringView graph_json);
+    int setGraphJson(PluginInstance* inst, std::string_view graph_json) {
+        return setGraphJson(inst, strToSv(graph_json));
+    }
     AgentxxPluginSubscription* subscribe(
         PluginInstance* inst,
-        const char*     topic,
+        AgentxxPluginStringView topic,
         void (*handler)(AgentxxPluginStringView event_json, void* ud),
         void* ud
     );
+    AgentxxPluginSubscription* subscribe(
+        PluginInstance* inst,
+        std::string_view topic,
+        void (*handler)(AgentxxPluginStringView event_json, void* ud),
+        void* ud
+    ) {
+        return subscribe(inst, strToSv(topic), handler, ud);
+    }
     void      unsubscribe(AgentxxPluginSubscription* sub);
-    int       publish(const char* topic, const char* event_json);
-    char*     getShareStore(PluginInstance* inst, const char* session_id, long long id);
-    long long addShareStore(PluginInstance* inst, const char* session_id, const char* content);
-    void emitMessageTip(PluginInstance* inst, const char* session_id, const char* text, int level);
+    int       publish(AgentxxPluginStringView topic, AgentxxPluginStringView event_json);
+    int       publish(std::string_view topic, std::string_view event_json) {
+        return publish(strToSv(topic), strToSv(event_json));
+    }
+    char*     getShareStore(PluginInstance* inst, AgentxxPluginStringView session_id, long long id);
+    char*     getShareStore(PluginInstance* inst, std::string_view session_id, long long id) {
+        return getShareStore(inst, strToSv(session_id), id);
+    }
+    long long addShareStore(PluginInstance* inst, AgentxxPluginStringView session_id, AgentxxPluginStringView content);
+    long long addShareStore(PluginInstance* inst, std::string_view session_id, std::string_view content) {
+        return addShareStore(inst, strToSv(session_id), strToSv(content));
+    }
+    void emitMessageTip(PluginInstance* inst, AgentxxPluginStringView session_id, AgentxxPluginStringView text, int level);
+    void emitMessageTip(PluginInstance* inst, std::string_view session_id, std::string_view text, int level) {
+        emitMessageTip(inst, strToSv(session_id), strToSv(text), level);
+    }
 
     void* sleep(PluginInstance* inst, long ms, void (*cb)(void* ud), void* ud);
     void  cancelSleep(PluginInstance* inst, void* timer);
@@ -352,29 +401,51 @@ public:
          PluginInstance* inst,
          volatile int*   cancel_flag,
          void* (*work)(void* ud, volatile int* cancel_flag, char** error_out),
-         void (*done)(void* ud, void* result, char* error),
+         void (*done)(void* ud, void* result, AgentxxPluginStringView error),
          void* ud
      );
 
     AgentxxPluginOperatorHandle* callToolAsync(
         PluginInstance*               caller,
-        const char*                   name,
-        const char*                   args_json,
-        const char*                   session_id,
+        AgentxxPluginStringView       name,
+        AgentxxPluginStringView       args_json,
+        AgentxxPluginStringView       session_id,
         AgentxxPluginOperatorCallback cb,
         void*                         ud,
         char**                        error_out
     );
+    AgentxxPluginOperatorHandle* callToolAsync(
+        PluginInstance*               caller,
+        std::string_view              name,
+        std::string_view              args_json,
+        std::string_view              session_id,
+        AgentxxPluginOperatorCallback cb,
+        void*                         ud,
+        char**                        error_out
+    ) {
+        return callToolAsync(caller, strToSv(name), strToSv(args_json), strToSv(session_id), cb, ud, error_out);
+    }
 
     AgentxxPluginOperatorHandle* invokeCapabilityAsync(
         PluginInstance*               caller,
-        const char*                   capability,
-        const char*                   method,
-        const char*                   args_json,
+        AgentxxPluginStringView       capability,
+        AgentxxPluginStringView       method,
+        AgentxxPluginStringView       args_json,
         AgentxxPluginOperatorCallback cb,
         void*                         ud,
         char**                        error_out
     );
+    AgentxxPluginOperatorHandle* invokeCapabilityAsync(
+        PluginInstance*               caller,
+        std::string_view              capability,
+        std::string_view              method,
+        std::string_view              args_json,
+        AgentxxPluginOperatorCallback cb,
+        void*                         ud,
+        char**                        error_out
+    ) {
+        return invokeCapabilityAsync(caller, strToSv(capability), strToSv(method), strToSv(args_json), cb, ud, error_out);
+    }
 
     /// 注册后台任务 (spawn 宿主托管; agentxx.agent.tasks 接口表)
     /// - cancel_fn/cancel_ud: 卸载取消时宿主回调 (io 线程, 协作式)
@@ -398,16 +469,34 @@ public:
         return capabilities_;
     }
 
-    int registerCapability(PluginInstance* inst, const char* capability);
+    int registerCapability(PluginInstance* inst, AgentxxPluginStringView capability);
+    int registerCapability(PluginInstance* inst, std::string_view capability) {
+        return registerCapability(inst, strToSv(capability));
+    }
     int registerCapabilityEx(
         PluginInstance*                      inst,
-        const char*                          capability,
+        AgentxxPluginStringView              capability,
         AgentxxPluginCapabilityStartFunction start,
         AgentxxPluginOperatorCancelFunction  cancel,
         void*                                ctx
     );
-    int unregisterCapability(PluginInstance* inst, const char* capability);
-    int hasCapability(const char* capability) const;
+    int registerCapabilityEx(
+        PluginInstance*                      inst,
+        std::string_view                     capability,
+        AgentxxPluginCapabilityStartFunction start,
+        AgentxxPluginOperatorCancelFunction  cancel,
+        void*                                ctx
+    ) {
+        return registerCapabilityEx(inst, strToSv(capability), start, cancel, ctx);
+    }
+    int unregisterCapability(PluginInstance* inst, AgentxxPluginStringView capability);
+    int unregisterCapability(PluginInstance* inst, std::string_view capability) {
+        return unregisterCapability(inst, strToSv(capability));
+    }
+    int hasCapability(AgentxxPluginStringView capability) const;
+    int hasCapability(std::string_view capability) const {
+        return hasCapability(strToSv(capability));
+    }
 
     std::string listPluginsJson();
     std::string getPluginJson(const std::string& name);
@@ -415,7 +504,10 @@ public:
     std::string getConfigJson();
     std::string getToolPromptJson(const std::string& toolName);
     std::string getPromptJson();
-    int         setPromptJson(PluginInstance* inst, const char* prompt_json);
+    int         setPromptJson(PluginInstance* inst, AgentxxPluginStringView prompt_json);
+    int         setPromptJson(PluginInstance* inst, std::string_view prompt_json) {
+        return setPromptJson(inst, strToSv(prompt_json));
+    }
     void        restorePromptBackup(PluginInstance* inst);
     void        applyDeclaredResources(
                PluginInstance&                        inst,

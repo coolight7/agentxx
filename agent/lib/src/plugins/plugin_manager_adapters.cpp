@@ -288,11 +288,11 @@ int PluginManager::registerTool(PluginInstance* inst, const AgentxxPluginToolSpe
     return 0;
 }
 
-int PluginManager::unregisterTool(PluginInstance* inst, const char* name) {
-    if (!inst || !name) {
+int PluginManager::unregisterTool(PluginInstance* inst, AgentxxPluginStringView name) {
+    if (!inst || agentxx_plugin_sv_empty(name)) {
         return -1;
     }
-    std::string toolName = name;
+    std::string toolName = svToStr(name);
     auto        it       = std::find(inst->toolNames.begin(), inst->toolNames.end(), toolName);
     if (it == inst->toolNames.end()) {
         XX_LOGW("Plugin `{}` unregister tool `{}` not owned by this plugin", inst->name, toolName);
@@ -472,11 +472,11 @@ int PluginManager::registerGraphNodeType(
     return 0;
 }
 
-int PluginManager::unregisterGraphNodeType(PluginInstance* inst, const char* type) {
-    if (!inst || !type) {
+int PluginManager::unregisterGraphNodeType(PluginInstance* inst, AgentxxPluginStringView type) {
+    if (!inst || agentxx_plugin_sv_empty(type)) {
         return -1;
     }
-    std::string typeStr = type;
+    std::string typeStr = svToStr(type);
     auto        it      = std::find_if(
         inst->graphNodeTypes.begin(),
         inst->graphNodeTypes.end(),
@@ -507,8 +507,8 @@ std::string PluginManager::getGraphJson() {
     return ctx->graphDefinitionJson.dump();
 }
 
-int PluginManager::setGraphJson(PluginInstance* inst, const char* graph_json) {
-    if (!inst || !graph_json) {
+int PluginManager::setGraphJson(PluginInstance* inst, AgentxxPluginStringView graph_json) {
+    if (!inst || agentxx_plugin_sv_empty(graph_json)) {
         return -1;
     }
     auto ctx = agentContext_.lock();
@@ -516,7 +516,7 @@ int PluginManager::setGraphJson(PluginInstance* inst, const char* graph_json) {
         return -1;
     }
     try {
-        auto j = neograph::json::parse(graph_json);
+        auto j = neograph::json::parse(std::string_view{graph_json.data, graph_json.size});
         if (!j.is_object()) {
             XX_LOGW("Plugin `{}` set_graph_json: not a JSON object", inst->name);
             return -1;
@@ -531,19 +531,19 @@ int PluginManager::setGraphJson(PluginInstance* inst, const char* graph_json) {
 }
 
 AgentxxPluginSubscription* PluginManager::subscribe(
-    PluginInstance* inst,
-    const char*     topic,
+    PluginInstance*         inst,
+    AgentxxPluginStringView topic,
     void (*handler)(AgentxxPluginStringView event_json, void* ud),
     void* ud
 ) {
-    if (!inst || !topic || !*topic || !handler) {
+    if (!inst || agentxx_plugin_sv_empty(topic) || !handler) {
         return nullptr;
     }
     auto ctx = agentContext_.lock();
     if (!ctx || !ctx->bus) {
         return nullptr;
     }
-    std::string fullTopic = std::string(topic);
+    std::string fullTopic = svToStr(topic);
     if (!fullTopic.starts_with("plugin.") && !fullTopic.starts_with("client.")) {
         fullTopic = "plugin." + fullTopic;
     }
@@ -602,19 +602,19 @@ void PluginManager::unsubscribe(AgentxxPluginSubscription* sub) {
     }
 }
 
-int PluginManager::publish(const char* topic, const char* event_json) {
-    if (!topic || !*topic) {
+int PluginManager::publish(AgentxxPluginStringView topic, AgentxxPluginStringView event_json) {
+    if (agentxx_plugin_sv_empty(topic)) {
         return -1;
     }
     auto ctx = agentContext_.lock();
     if (!ctx || !ctx->bus) {
         return -1;
     }
-    std::string fullTopic = std::string(topic);
+    std::string fullTopic = svToStr(topic);
     if (!fullTopic.starts_with("plugin.") && !fullTopic.starts_with("client.")) {
         fullTopic = "plugin." + fullTopic;
     }
-    std::string payload = event_json ? std::string(event_json) : std::string("{}");
+    std::string payload = agentxx_plugin_sv_empty(event_json) ? std::string("{}") : svToStr(event_json);
     if (ioExecutor_) {
         asio::co_spawn(
             ioExecutor_,

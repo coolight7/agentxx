@@ -98,7 +98,7 @@ typedef struct AgentxxInfoSection AgentxxInfoSection; ///< 侧边栏 Info 栏段
 #define AGENTXX_IFACE_CLIENT_UI_VERSION 1
 
 typedef struct AgentxxClientUiIface {
-    int version; ///< 必须 >= AGENTXX_IFACE_CLIENT_UI_VERSION (v2 追加 update_tool_decor)
+    int version; ///< 必须 >= AGENTXX_IFACE_CLIENT_UI_VERSION
 
     /* ---- 状态栏项 ---- */
     /// 注册状态栏项; 返回句柄 (宿主持有; 卸载自动清理)
@@ -261,7 +261,7 @@ typedef struct AgentxxClientSessionIface {
 #define AGENTXX_IFACE_CLIENT_WIRE_VERSION 1
 
 typedef struct AgentxxClientWireIface {
-    int version; ///< 必须 == AGENTXX_IFACE_CLIENT_WIRE_VERSION
+    int version; ///< 必须 >= AGENTXX_IFACE_CLIENT_WIRE_VERSION
 
     /// 发送事件到 agent 侧: 服务端发布到事件总线 topic `client.{插件名}.{event}`
     /// (agent 侧同名插件可订阅; 载荷 JSON 原样透传, 语义由插件定义)

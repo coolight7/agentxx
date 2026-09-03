@@ -26,7 +26,7 @@ static void setErrOut(PluginInstance* caller, char** error_out, const std::strin
         return;
     }
     if (caller && caller->host.vtable && caller->host.vtable->strdup) {
-        *error_out = caller->host.vtable->strdup(msg.c_str());
+        *error_out = caller->host.vtable->strdup(strToSv(msg));
         return;
     }
     auto* p = static_cast<char*>(::malloc(msg.size() + 1));
@@ -120,101 +120,114 @@ std::vector<std::string> CapabilityRegistry::names() const {
 // Capability 注册与调用
 // =====================================================================
 
-int PluginManager::registerCapability(PluginInstance* inst, const char* capability) {
-    if (!inst || !capability || !*capability) {
+int PluginManager::registerCapability(PluginInstance* inst, AgentxxPluginStringView capability) {
+    if (!inst || agentxx_plugin_sv_empty(capability)) {
         return -1;
     }
-    if (!capabilities_->registerCapability(capability, inst->name)) {
+    std::string capStr{capability.data, capability.size};
+    if (!capabilities_->registerCapability(capStr, inst->name)) {
         return -1;
     }
     inst->capabilityRegistrations.erase(
         std::remove_if(
             inst->capabilityRegistrations.begin(),
             inst->capabilityRegistrations.end(),
-            [capability](const PluginInstance::CapabilityRegistration& c) {
-                return c.name == capability;
+            [&capStr](const PluginInstance::CapabilityRegistration& c) {
+                return c.name == capStr;
             }
         ),
         inst->capabilityRegistrations.end()
     );
     inst->capabilityRegistrations.push_back(
-        PluginInstance::CapabilityRegistration{capability, nullptr, nullptr, nullptr}
+        PluginInstance::CapabilityRegistration{capStr, nullptr, nullptr, nullptr}
     );
     return 0;
 }
 
-int PluginManager::unregisterCapability(PluginInstance* inst, const char* capability) {
-    if (!inst || !capability) {
+int PluginManager::unregisterCapability(PluginInstance* inst, AgentxxPluginStringView capability) {
+    if (!inst || agentxx_plugin_sv_empty(capability)) {
         return -1;
     }
+    std::string capStr{capability.data, capability.size};
     auto it = std::find_if(
         inst->capabilityRegistrations.begin(),
         inst->capabilityRegistrations.end(),
-        [capability](const PluginInstance::CapabilityRegistration& c) {
-            return c.name == capability;
+        [&capStr](const PluginInstance::CapabilityRegistration& c) {
+            return c.name == capStr;
         }
     );
     if (it == inst->capabilityRegistrations.end()) {
         return -1;
     }
     inst->capabilityRegistrations.erase(it);
-    capabilities_->unregisterCapability(capability, inst->name);
+    capabilities_->unregisterCapability(capStr, inst->name);
     return 0;
 }
 
-int PluginManager::hasCapability(const char* capability) const {
-    return capability && capabilities_->has(capability) ? 1 : 0;
+int PluginManager::hasCapability(AgentxxPluginStringView capability) const {
+    if (agentxx_plugin_sv_empty(capability)) {
+        return 0;
+    }
+    return capabilities_->has(std::string_view{capability.data, capability.size}) ? 1 : 0;
 }
 
 int PluginManager::registerCapabilityEx(
     PluginInstance*                      inst,
-    const char*                          capability,
+    AgentxxPluginStringView              capability,
     AgentxxPluginCapabilityStartFunction start,
     AgentxxPluginOperatorCancelFunction  cancel,
     void*                                ctx
 ) {
-    if (!inst || !capability || !*capability || !start) {
+    if (!inst || agentxx_plugin_sv_empty(capability) || !start) {
         return -1;
     }
-    if (!capabilities_->registerCapability(capability, inst->name, start, cancel, ctx)) {
+    std::string capStr{capability.data, capability.size};
+    if (!capabilities_->registerCapability(capStr, inst->name, start, cancel, ctx)) {
         return -1;
     }
     inst->capabilityRegistrations.erase(
         std::remove_if(
             inst->capabilityRegistrations.begin(),
             inst->capabilityRegistrations.end(),
-            [capability](const PluginInstance::CapabilityRegistration& c) {
-                return c.name == capability;
+            [&capStr](const PluginInstance::CapabilityRegistration& c) {
+                return c.name == capStr;
             }
         ),
         inst->capabilityRegistrations.end()
     );
     inst->capabilityRegistrations.push_back(
-        PluginInstance::CapabilityRegistration{capability, start, cancel, ctx}
+        PluginInstance::CapabilityRegistration{capStr, start, cancel, ctx}
     );
     return 0;
 }
 
 static bool buildCapabilityDrive(
-    PluginManager&   mgr,
-    PluginInstance*  caller,
-    const char*      capability,
-    const char*      method,
-    const char*      args_json,
-    std::string&     providerName,
-    plugin::OpDrive& drive,
-    std::string&     err
+    PluginManager&          mgr,
+    PluginInstance*         caller,
+    AgentxxPluginStringView capability,
+    AgentxxPluginStringView method,
+    AgentxxPluginStringView args_json,
+    std::string&            providerName,
+    plugin::OpDrive&        drive,
+    std::string&            err
 ) {
+    std::string capName = svToStr(capability);
+    std::string methStr = svToStr(method);
+    std::string argStr  = svToStr(args_json);
+    if (argStr.empty()) {
+        argStr = "{}";
+    }
+
     CapabilityRegistry::Entry entry;
     bool                      found = false;
     if (mgr.isIoThread()) {
-        if (const auto* e = mgr.capabilities()->get(capability)) {
+        if (const auto* e = mgr.capabilities()->get(capName)) {
             entry = *e;
             found = true;
         }
     } else {
-        found = ioCallSync<bool>(&mgr, [&mgr, capability, &entry]() {
-            const auto* e = mgr.capabilities()->get(capability);
+        found = ioCallSync<bool>(&mgr, [&mgr, &capName, &entry]() {
+            const auto* e = mgr.capabilities()->get(capName);
             if (!e) {
                 return false;
             }
@@ -223,19 +236,17 @@ static bool buildCapabilityDrive(
         });
     }
     if (!found) {
-        err = fmt::format("invoke_capability: capability `{}` not registered", capability);
+        err = fmt::format("invoke_capability: capability `{}` not registered", capName);
         return false;
     }
     if (!entry.start) {
-        err = fmt::format("invoke_capability: capability `{}` has no method handler", capability);
+        err = fmt::format("invoke_capability: capability `{}` has no method handler", capName);
         return false;
     }
     providerName    = entry.provider;
-    auto capStr     = std::string{method};
-    auto argStr     = (args_json && *args_json) ? std::string{args_json} : std::string{"{}"};
     auto weakCaller = caller ? caller->self : std::weak_ptr<PluginInstance>{};
     drive.start     = [entry,
-                   capStr,
+                   methStr,
                    argStr,
                    weakCaller](const AgentxxPluginOperatorNotify* notify, char** e) -> void* {
         const AgentxxPluginHost* callerHost = nullptr;
@@ -245,8 +256,8 @@ static bool buildCapabilityDrive(
         return entry.start(
             entry.ctx,
             callerHost,
-            agentxx_plugin_sv_cstr(capStr.c_str()),
-            agentxx_plugin_sv_cstr(argStr.c_str()),
+            agentxx_plugin_sv(methStr.data(), methStr.size()),
+            agentxx_plugin_sv(argStr.data(), argStr.size()),
             notify,
             e
         );
@@ -261,9 +272,9 @@ static bool buildCapabilityDrive(
 
 AgentxxPluginOperatorHandle* PluginManager::callToolAsync(
     PluginInstance*               caller,
-    const char*                   name,
-    const char*                   args_json,
-    const char*                   thread_id,
+    AgentxxPluginStringView       name,
+    AgentxxPluginStringView       args_json,
+    AgentxxPluginStringView       thread_id,
     AgentxxPluginOperatorCallback cb,
     void*                         ud,
     char**                        error_out
@@ -276,7 +287,7 @@ AgentxxPluginOperatorHandle* PluginManager::callToolAsync(
         return nullptr;
     }
 
-    std::string                                 toolName = name ? name : "";
+    std::string toolName = svToStr(name);
     std::shared_ptr<agentxx::tools::XXToolBase> tool;
     bool                                        found = false;
     if (isIoThread()) {
@@ -305,9 +316,9 @@ AgentxxPluginOperatorHandle* PluginManager::callToolAsync(
 
     const auto&    spec   = pluginTool->spec();
     neograph::json parsed = neograph::json::object();
-    if (args_json && *args_json) {
+    if (!agentxx_plugin_sv_empty(args_json)) {
         try {
-            auto j = neograph::json::parse(args_json);
+            auto j = neograph::json::parse(std::string_view{args_json.data, args_json.size});
             if (j.is_object()) {
                 parsed = std::move(j);
             }
@@ -316,10 +327,10 @@ AgentxxPluginOperatorHandle* PluginManager::callToolAsync(
             return nullptr;
         }
     }
-    parsed["sessionId"]    = thread_id ? thread_id : "";
+    std::string sessionId = svToStr(thread_id);
+    parsed["sessionId"]    = sessionId;
     parsed["tool_call_id"] = fmt::format("plugin_call_{}", ++g_pluginCallSeq);
-    auto        argsStr    = parsed.dump();
-    std::string sessionId  = thread_id ? thread_id : "";
+    auto argsStr           = parsed.dump();
 
     auto handle    = std::make_shared<AgentxxPluginOperatorHandle>();
     handle->caller = caller;
@@ -364,10 +375,9 @@ AgentxxPluginOperatorHandle* PluginManager::callToolAsync(
         char* errMsg = startErr ? startErr : ::strdup("protocol violation");
         setErr(errMsg);
         if (cb) {
-            cb(ud, AGENTXX_PLUGIN_OPERATOR_FAILED, errMsg);
-        } else if (startErr) {
-            ::free(startErr);
+            cb(ud, AGENTXX_PLUGIN_OPERATOR_FAILED, agentxx_plugin_sv_cstr(errMsg));
         }
+        ::free(errMsg);
         return nullptr;
     }
 
@@ -410,9 +420,9 @@ AgentxxPluginOperatorHandle* PluginManager::callToolAsync(
 
 AgentxxPluginOperatorHandle* PluginManager::invokeCapabilityAsync(
     PluginInstance*               caller,
-    const char*                   capability,
-    const char*                   method,
-    const char*                   args_json,
+    AgentxxPluginStringView       capability,
+    AgentxxPluginStringView       method,
+    AgentxxPluginStringView       args_json,
     AgentxxPluginOperatorCallback cb,
     void*                         ud,
     char**                        error_out
@@ -460,10 +470,9 @@ AgentxxPluginOperatorHandle* PluginManager::invokeCapabilityAsync(
         char* errMsg = startErr ? startErr : ::strdup("protocol violation");
         setErr(errMsg);
         if (cb) {
-            cb(ud, AGENTXX_PLUGIN_OPERATOR_FAILED, errMsg);
-        } else if (startErr) {
-            ::free(startErr);
+            cb(ud, AGENTXX_PLUGIN_OPERATOR_FAILED, agentxx_plugin_sv_cstr(errMsg));
         }
+        ::free(errMsg);
         return nullptr;
     }
 

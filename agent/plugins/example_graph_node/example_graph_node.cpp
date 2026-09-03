@@ -155,11 +155,12 @@ void* intentRouterRunStart(
     (void)error_out;
 
     auto done = [&](const std::string& payload) {
-        char* p = ctx->strdup(payload.c_str());
         if (notify && notify->done) {
-            notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, p);
-        } else if (p) {
-            ctx->free(p);
+            notify->done(
+                notify->host_ud,
+                AGENTXX_PLUGIN_OPERATOR_OK,
+                agentxx_plugin_sv(payload.data(), payload.size())
+            );
         }
     };
 
@@ -256,10 +257,11 @@ void* intentRouterRunStart(
         return nullptr;
     } catch (const std::exception& e) {
         if (notify && notify->done) {
+            std::string what = e.what();
             notify->done(
                 notify->host_ud,
                 AGENTXX_PLUGIN_OPERATOR_FAILED,
-                ctx->strdup(e.what())
+                agentxx_plugin_sv(what.data(), what.size())
             );
         }
         return nullptr;
@@ -268,7 +270,7 @@ void* intentRouterRunStart(
             notify->done(
                 notify->host_ud,
                 AGENTXX_PLUGIN_OPERATOR_FAILED,
-                ctx->strdup("unknown intent_router error")
+                agentxx_plugin_sv_cstr("unknown intent_router error")
             );
         }
         return nullptr;
@@ -326,19 +328,21 @@ void* datetimeNodeRunStart(
             R"({{"writes":[{{"channel":"messages","value":{}}}]}})",
             msgs.dump()
         );
-        char* p = ctx->strdup(payload.c_str());
         if (notify && notify->done) {
-            notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, p);
-        } else if (p) {
-            ctx->free(p);
+            notify->done(
+                notify->host_ud,
+                AGENTXX_PLUGIN_OPERATOR_OK,
+                agentxx_plugin_sv(payload.data(), payload.size())
+            );
         }
         return nullptr;
     } catch (const std::exception& e) {
         if (notify && notify->done) {
+            std::string what = e.what();
             notify->done(
                 notify->host_ud,
                 AGENTXX_PLUGIN_OPERATOR_FAILED,
-                ctx->strdup(e.what())
+                agentxx_plugin_sv(what.data(), what.size())
             );
         }
         return nullptr;
@@ -347,7 +351,7 @@ void* datetimeNodeRunStart(
             notify->done(
                 notify->host_ud,
                 AGENTXX_PLUGIN_OPERATOR_FAILED,
-                ctx->strdup("unknown datetime_node error")
+                agentxx_plugin_sv_cstr("unknown datetime_node error")
             );
         }
         return nullptr;

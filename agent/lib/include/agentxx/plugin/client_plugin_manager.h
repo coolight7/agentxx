@@ -303,40 +303,83 @@ public:
     /// 注册状态栏项; 返回宿主句柄 (nullptr = 宿主不支持或 id 冲突)
     void* registerStatusItem(
         ClientPluginInstance* inst,
-        const char*           id,
-        const char*           json,
+        AgentxxPluginStringView id,
+        AgentxxPluginStringView json,
         int                   align,
         int                   order
     );
+    void* registerStatusItem(
+        ClientPluginInstance* inst,
+        std::string_view      id,
+        std::string_view      json,
+        int                   align,
+        int                   order
+    ) {
+        return registerStatusItem(inst, strToSv(id), strToSv(json), align, order);
+    }
     /// 更新状态栏项; 返回 0 成功
-    int  updateStatusItem(ClientPluginInstance* inst, void* item, const char* json);
+    int  updateStatusItem(ClientPluginInstance* inst, void* item, AgentxxPluginStringView json);
+    int  updateStatusItem(ClientPluginInstance* inst, void* item, std::string_view json) {
+        return updateStatusItem(inst, item, strToSv(json));
+    }
     void unregisterStatusItem(ClientPluginInstance* inst, void* item);
     /// 注册面板; 返回宿主句柄 (nullptr = 宿主不支持或 id 冲突)
-    void* registerPanel(ClientPluginInstance* inst, const char* id, const char* props_json);
+    void* registerPanel(ClientPluginInstance* inst, AgentxxPluginStringView id, AgentxxPluginStringView props_json);
+    void* registerPanel(ClientPluginInstance* inst, std::string_view id, std::string_view props_json) {
+        return registerPanel(inst, strToSv(id), strToSv(props_json));
+    }
     /// 更新面板内容; 返回 0 成功
-    int  updatePanel(ClientPluginInstance* inst, void* panel, const char* items_json);
+    int  updatePanel(ClientPluginInstance* inst, void* panel, AgentxxPluginStringView items_json);
+    int  updatePanel(ClientPluginInstance* inst, void* panel, std::string_view items_json) {
+        return updatePanel(inst, panel, strToSv(items_json));
+    }
     void unregisterPanel(ClientPluginInstance* inst, void* panel);
     /// 注册 Info 栏段落; 返回宿主句柄 (nullptr = 宿主不支持或 id 冲突)
-    void* registerInfoSection(ClientPluginInstance* inst, const char* id, const char* props_json);
+    void* registerInfoSection(ClientPluginInstance* inst, AgentxxPluginStringView id, AgentxxPluginStringView props_json);
+    void* registerInfoSection(ClientPluginInstance* inst, std::string_view id, std::string_view props_json) {
+        return registerInfoSection(inst, strToSv(id), strToSv(props_json));
+    }
     /// 更新 Info 栏段落内容; 返回 0 成功
-    int  updateInfoSection(ClientPluginInstance* inst, void* section, const char* items_json);
+    int  updateInfoSection(ClientPluginInstance* inst, void* section, AgentxxPluginStringView items_json);
+    int  updateInfoSection(ClientPluginInstance* inst, void* section, std::string_view items_json) {
+        return updateInfoSection(inst, section, strToSv(items_json));
+    }
     void unregisterInfoSection(ClientPluginInstance* inst, void* section);
     /// 更新/删除工具消息装饰 (io 线程); 返回 0 成功
     /// - tool_call_id 空 = 操作本插件全部; decor_json 空串 = 删除
     int updateToolDecor(
         ClientPluginInstance* inst,
-        const char*           tool_call_id,
-        const char*           decor_json
+        AgentxxPluginStringView tool_call_id,
+        AgentxxPluginStringView decor_json
     );
+    int updateToolDecor(
+        ClientPluginInstance* inst,
+        std::string_view      tool_call_id,
+        std::string_view      decor_json
+    ) {
+        return updateToolDecor(inst, strToSv(tool_call_id), strToSv(decor_json));
+    }
     /// 注册命令; 返回 0 成功 (名字冲突返回非 0)
     int registerCommand(
         ClientPluginInstance* inst,
-        const char*           name,
-        const char*           description,
+        AgentxxPluginStringView name,
+        AgentxxPluginStringView description,
         char* (*exec)(void*, AgentxxPluginStringView, char**),
         void* ud
     );
-    int unregisterCommand(ClientPluginInstance* inst, const char* name);
+    int registerCommand(
+        ClientPluginInstance* inst,
+        std::string_view      name,
+        std::string_view      description,
+        char* (*exec)(void*, AgentxxPluginStringView, char**),
+        void* ud
+    ) {
+        return registerCommand(inst, strToSv(name), strToSv(description), exec, ud);
+    }
+    int unregisterCommand(ClientPluginInstance* inst, AgentxxPluginStringView name);
+    int unregisterCommand(ClientPluginInstance* inst, std::string_view name) {
+        return unregisterCommand(inst, strToSv(name));
+    }
     /// 事件订阅; 返回句柄 (宿主持有; 卸载自动退订)
     AgentxxPluginSubscription* subscribe(
         ClientPluginInstance* inst,
@@ -350,10 +393,19 @@ public:
     std::string getPluginArgsJson(ClientPluginInstance* inst);
     std::string getPluginConfigPath(ClientPluginInstance* inst);
     /// 会话操作 (代理到端点)
-    void sendUserInputToPeer(ClientPluginInstance* inst, const char* sessionId, const char* text);
-    void requestCancelToPeer(ClientPluginInstance* inst, const char* sessionId);
+    void sendUserInputToPeer(ClientPluginInstance* inst, AgentxxPluginStringView sessionId, AgentxxPluginStringView text);
+    void sendUserInputToPeer(ClientPluginInstance* inst, std::string_view sessionId, std::string_view text) {
+        sendUserInputToPeer(inst, strToSv(sessionId), strToSv(text));
+    }
+    void requestCancelToPeer(ClientPluginInstance* inst, AgentxxPluginStringView sessionId);
+    void requestCancelToPeer(ClientPluginInstance* inst, std::string_view sessionId) {
+        requestCancelToPeer(inst, strToSv(sessionId));
+    }
     /// 跨端数据 (client → agent): 经端点 WirePluginDataUp 发送
-    int sendPluginDataToPeer(ClientPluginInstance* inst, const char* event, const char* json);
+    int sendPluginDataToPeer(ClientPluginInstance* inst, AgentxxPluginStringView event, AgentxxPluginStringView json);
+    int sendPluginDataToPeer(ClientPluginInstance* inst, std::string_view event, std::string_view json) {
+        return sendPluginDataToPeer(inst, strToSv(event), strToSv(json));
+    }
 
     /// 宿主 vtable (静态函数表; 供 ClientPluginInstance::host 使用)
     static const AgentxxHostVtable* hostVtable();

@@ -343,8 +343,8 @@ private:
     friend struct JsPluginCtx;
 
     static void setErr(char** err_out, const AgentxxPluginHost* host, const char* msg) {
-        if (err_out && host) {
-            *err_out = host->vtable->strdup(msg);
+        if (err_out && host && host->vtable && host->vtable->strdup) {
+            *err_out = host->vtable->strdup(agentxx_plugin_sv_cstr(msg));
         }
     }
 
@@ -955,19 +955,26 @@ void* JsEngine::toolExecuteStart(
                     }
                 } releaser{op};
                 engine->doToolExecute(binding, *req);
-                const AgentxxPluginHost* host = engine->engineHost_;
                 if (!req->error.empty()) {
-                    char* payload = host ? host->vtable->strdup(req->error.c_str()) : nullptr;
-                    ntfCopy.done(ntfCopy.host_ud, AGENTXX_PLUGIN_OPERATOR_FAILED, payload);
+                    ntfCopy.done(
+                        ntfCopy.host_ud,
+                        AGENTXX_PLUGIN_OPERATOR_FAILED,
+                        agentxx_plugin_sv(req->error.data(), req->error.size())
+                    );
                 } else {
-                    char* payload = host ? host->vtable->strdup(req->result.c_str()) : nullptr;
-                    ntfCopy.done(ntfCopy.host_ud, AGENTXX_PLUGIN_OPERATOR_OK, payload);
+                    ntfCopy.done(
+                        ntfCopy.host_ud,
+                        AGENTXX_PLUGIN_OPERATOR_OK,
+                        agentxx_plugin_sv(req->result.data(), req->result.size())
+                    );
                 }
             })) {
             // 引擎已停止: 启动失败 (未入队 → 句柄由本函数直接释放)
             delete op;
             if (error_out && engine->engineHost_) {
-                *error_out = engine->engineHost_->vtable->strdup("interpreter.js engine stopped");
+                *error_out = engine->engineHost_->vtable->strdup(
+                    agentxx_plugin_sv_cstr("interpreter.js engine stopped")
+                );
             }
             return nullptr;
         }
@@ -981,7 +988,11 @@ void* JsEngine::toolExecuteStart(
             *error_out = nullptr;
         }
         if (notify && notify->done) {
-            notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_FAILED, nullptr);
+            notify->done(
+                notify->host_ud,
+                AGENTXX_PLUGIN_OPERATOR_FAILED,
+                agentxx_plugin_sv(nullptr, 0)
+            );
         }
         return nullptr;
     }
@@ -1008,7 +1019,7 @@ void* JsEngine::hookStart(
             engine->doHookFire(binding, pt, payload);
         });
         // fire-and-forget: 投递成功即内联完成 (JS 执行结果不回传)
-        notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+        notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, agentxx_plugin_sv(nullptr, 0));
         return nullptr;
     } catch (...) {
         ::agentxx::plugin::reportCurrentException([engine](const char* m) noexcept {
@@ -1017,7 +1028,7 @@ void* JsEngine::hookStart(
             }
         });
         if (notify && notify->done) {
-            notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_FAILED, nullptr);
+            notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_FAILED, agentxx_plugin_sv(nullptr, 0));
         }
         return nullptr;
     }
@@ -1663,8 +1674,8 @@ static void* jsCapStart(
     auto* engine = static_cast<JsEngine*>(ctx); ///< 提升至 try 外 (catch 日志闭包使用)
     try {
         auto setErr = [&](const char* msg) {
-            if (error_out && caller_host) {
-                *error_out = caller_host->vtable->strdup(msg);
+            if (error_out && caller_host && caller_host->vtable && caller_host->vtable->strdup) {
+                *error_out = caller_host->vtable->strdup(agentxx_plugin_sv_cstr(msg));
             }
             return nullptr;
         };
@@ -1722,14 +1733,20 @@ static void* jsCapStart(
                         = engine->loadScriptOnJsThread(caller_host, name, path, code, err2);
                     const AgentxxPluginHost* eh = engine->host();
                     if (rc2 != 0) {
-                        char* payload = eh ? eh->vtable->strdup(err2.c_str()) : nullptr;
-                        ntfCopy.done(ntfCopy.host_ud, AGENTXX_PLUGIN_OPERATOR_FAILED, payload);
+                        ntfCopy.done(
+                            ntfCopy.host_ud,
+                            AGENTXX_PLUGIN_OPERATOR_FAILED,
+                            agentxx_plugin_sv(err2.data(), err2.size())
+                        );
                         return;
                     }
                     std::string tools      = engine->loadedToolsJsonOnJsThread(name);
                     std::string payloadStr = fmt::format(R"({{"ok": true, "tools": {}}})", tools);
-                    char*       payload    = eh ? eh->vtable->strdup(payloadStr.c_str()) : nullptr;
-                    ntfCopy.done(ntfCopy.host_ud, AGENTXX_PLUGIN_OPERATOR_OK, payload);
+                    ntfCopy.done(
+                        ntfCopy.host_ud,
+                        AGENTXX_PLUGIN_OPERATOR_OK,
+                        agentxx_plugin_sv(payloadStr.data(), payloadStr.size())
+                    );
                 })) {
                 return setErr("interpreter.js engine stopped");
             }
@@ -1744,9 +1761,11 @@ static void* jsCapStart(
                 return setErr("interpreter.js unload: name (string) required");
             }
             engine->unloadScript(name.c_str()); // 投递式
-            char* payload
-                = engine->host() ? engine->host()->vtable->strdup("{\"ok\": true}") : nullptr;
-            notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, payload);
+            notify->done(
+                notify->host_ud,
+                AGENTXX_PLUGIN_OPERATOR_OK,
+                agentxx_plugin_sv_cstr("{\"ok\": true}")
+            );
             return nullptr; ///< 内联完成
         }
 
@@ -1763,7 +1782,7 @@ static void* jsCapStart(
             }
         });
         if (error_out && caller_host && caller_host->vtable && caller_host->vtable->strdup) {
-            *error_out = caller_host->vtable->strdup("interpreter.js: internal exception");
+            *error_out = caller_host->vtable->strdup(agentxx_plugin_sv_cstr("interpreter.js: internal exception"));
         }
         return nullptr;
     }

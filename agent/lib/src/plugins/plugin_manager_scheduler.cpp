@@ -79,7 +79,7 @@ void PluginManager::offload(
     PluginInstance* inst,
     volatile int*   cancel_flag,
     void* (*work)(void* ud, volatile int* cancel_flag, char** error_out),
-    void (*done)(void* ud, void* result, char* error),
+    void (*done)(void* ud, void* result, AgentxxPluginStringView error),
     void* ud
 ) {
     if (!inst || !work) {
@@ -95,7 +95,7 @@ void PluginManager::offload(
         std::shared_ptr<PluginInstance> instKeep;
         volatile int*                   cancel_flag;
         void* (*work)(void* ud, volatile int* cancel_flag, char** error_out);
-        void (*done)(void* ud, void* result, char* error);
+        void (*done)(void* ud, void* result, AgentxxPluginStringView error);
         void*                 ud;
         void*                 result = nullptr;
         char*                 error  = nullptr;
@@ -118,13 +118,15 @@ void PluginManager::offload(
             task->result = task->work(task->ud, task->cancel_flag, &task->error);
         } catch (const std::exception& e) {
             if (instPtr && instPtr->host.vtable && instPtr->host.vtable->strdup) {
-                task->error = instPtr->host.vtable->strdup(e.what());
+                task->error = instPtr->host.vtable->strdup(agentxx_plugin_sv_cstr(e.what()));
             } else {
                 task->error = ::strdup(e.what());
             }
         } catch (...) {
             if (instPtr && instPtr->host.vtable && instPtr->host.vtable->strdup) {
-                task->error = instPtr->host.vtable->strdup("unknown error in plugin offload");
+                task->error = instPtr->host.vtable->strdup(
+                    agentxx_plugin_sv_cstr("unknown error in plugin offload")
+                );
             } else {
                 task->error = ::strdup("unknown error in plugin offload");
             }
@@ -135,7 +137,12 @@ void PluginManager::offload(
                 auto* instPtr2 = task->instKeep.get();
                 if (task->done) {
                     try {
-                        task->done(task->ud, task->result, task->error);
+                        task->done(
+                            task->ud,
+                            task->result,
+                            task->error ? agentxx_plugin_sv_cstr(task->error)
+                                        : agentxx_plugin_sv(nullptr, 0)
+                        );
                     } catch (const std::exception& e) {
                         if (instPtr2) {
                             XX_LOGW("Plugin `{}` offload done threw: {}", instPtr2->name, e.what());
@@ -148,6 +155,14 @@ void PluginManager::offload(
                             );
                         }
                     }
+                }
+                if (task->error) {
+                    if (instPtr2 && instPtr2->host.vtable && instPtr2->host.vtable->free) {
+                        instPtr2->host.vtable->free(task->error);
+                    } else {
+                        ::free(task->error);
+                    }
+                    task->error = nullptr;
                 }
                 if (instPtr2) {
                     instPtr2->inflight.fetch_sub(1, std::memory_order_acq_rel);

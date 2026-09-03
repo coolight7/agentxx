@@ -6,6 +6,7 @@
 - CI/CD
 - 文档翻译
 - release 编译发布时携带 标准库
+- 重构插件框架中的大部分 char* 为 AgentxxPluginStringView
 
 - 插件 readHostConfig 改为直接传入 变量路径 取值，变量取值交由主程序解析
 

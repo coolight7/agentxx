@@ -176,15 +176,16 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                 agentxx_plugin_sv_cstr("interpreter.js"),
                 agentxx_plugin_sv_cstr("load"),
                 agentxx_plugin_sv(args.data(), args.size()),
-                [](void* ud, int status, char* payload) {
+                [](void* ud, int status, AgentxxPluginStringView payload) {
                     auto* c = static_cast<ShellCtx*>(ud);
+                    std::string_view pl = payload.data ? std::string_view(payload.data, payload.size) : "";
                     if (status != AGENTXX_PLUGIN_OPERATOR_OK) {
                         shellLog(
                             c,
                             4,
                             fmt::format(
                                 "agentxx_execute_javascript: interpreter load failed: {}",
-                                payload ? payload : "unknown"
+                                pl.empty() ? "unknown" : pl
                             )
                         );
                     } else {
@@ -193,12 +194,9 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                             2,
                             fmt::format(
                                 "agentxx_execute_javascript: interpreter load ok: {}",
-                                payload ? payload : ""
+                                pl
                             )
                         );
-                    }
-                    if (payload && c && c->host && c->host->vtable && c->host->vtable->free) {
-                        c->host->vtable->free(payload);
                     }
                 },
                 ctx.get(),

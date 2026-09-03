@@ -21,9 +21,8 @@
 /// - 纯 C 头: 插件可用任意编译器/任意语言 (C/C++/Rust...) 实现, 与宿主
 ///   STL/异常/RTTI ABI 完全解耦; 插件编译无需链接 libagentxx
 /// - 跨 CRT 堆边界: 所有"宿主分配"的跨边界内存统一由宿主 alloc/free 管理
-///   (核心 vtable), 插件返回的字符串必须经 host->alloc 分配; 而"字符串参数/
-///   字段"一律以 AgentxxPluginStringView (data + size) 传入, 是只读借用
-///   (不要求 NUL 结尾, 不要求宿主分配)
+///   (核心 vtable); 而"字符串参数/字段/回调载荷"一律以 AgentxxPluginStringView (data + size)
+///   传入, 是只读借用 (不要求 NUL 结尾, 不要求宿主分配)
 ///
 /// ════════════════════════════════════════════════════════════════════
 /// 统一异步操作模型 (两件套 start/cancel + 锚定协程)
@@ -58,12 +57,11 @@
 /// - 异常不外泄: 宿主接口表所有函数内部捕获全部异常 (C ABI 边界无异常);
 ///   插件侧 start/cancel/event 回调同样不得让异常逃逸
 /// - 字符串约定:
-///   - 所有跨边界"字符串参数/字段"类型为 AgentxxPluginStringView (data+size,
+///   - 所有跨边界"字符串参数/字段/回调载荷"类型为 AgentxxPluginStringView (data+size,
 ///     不要求 NUL 结尾, 生命周期仅覆盖本次调用); 便捷构造见
-///     agentxx_plugin_sv / agentxx_plugin_sv_cstr / agentxx_plugin_sv_cstr
-///   - 所有"宿主分配"的字符串返回值 (工具结果 / error_out / payload /
-///     strdup/list_plugins/get_plugin/... ) 仍为 char* (NUL 结尾, host->alloc),
-///     调用方用完必须 host->free
+///     agentxx_plugin_sv / agentxx_plugin_sv_cstr
+///   - 所有"宿主分配"的字符串返回值 (strdup/list_plugins/get_plugin/... ) 仍为 char*
+///     (NUL 结尾, host->alloc), 调用方用完必须 host->free
 ///
 #ifndef AGENTXX_PLUGIN_API_H
 #define AGENTXX_PLUGIN_API_H
@@ -128,21 +126,25 @@ typedef struct AgentxxPluginInfo {
 /// ==================== 统一异步操作原语 ====================
 
 /// 操作终结状态 (AgentxxPluginOperatorNotify.done 的 status 参数)
-#define AGENTXX_PLUGIN_OPERATOR_OK        0 ///< 成功 (payload = 结果数据, host->alloc)
-#define AGENTXX_PLUGIN_OPERATOR_CANCELLED 1 ///< 已取消 (payload 可为 NULL)
-#define AGENTXX_PLUGIN_OPERATOR_FAILED    2 ///< 失败 (payload = 错误信息, host->alloc)
+#define AGENTXX_PLUGIN_OPERATOR_OK        0 ///< 成功 (payload = 结果数据)
+#define AGENTXX_PLUGIN_OPERATOR_CANCELLED 1 ///< 已取消 (payload 可为 NULL/空)
+#define AGENTXX_PLUGIN_OPERATOR_FAILED    2 ///< 失败 (payload = 错误信息)
 
 /// 完成通知器 (宿主实现并随 start 下发; 操作终结时被调方须【恰好回调一次】)
-/// - payload: host->alloc 分配的字符串, 所有权移交宿主 (可为 NULL)
+/// - payload: 只读借用字符串视图 (可为 NULL/空)
 /// - 线程安全: 可从被调方的任意线程回调, 宿主内部投递回 io 线程唤醒等待协程
 typedef struct AgentxxPluginOperatorNotify {
-    void (*done)(void* host_ud, int status, char* payload);
+    void (*done)(void* host_ud, int status, AgentxxPluginStringView payload);
     void* host_ud;
 } AgentxxPluginOperatorNotify;
 
 /// 完成回调 (统一形态; 宿主保证在宿主 io 线程派发)
-/// payload host->alloc 分配, 所有权归回调接收方 (须 host->free)
-typedef void (*AgentxxPluginOperatorCallback)(void* ud, int status, char* payload);
+/// payload 只读借用, 生命周期仅覆盖本次回调
+typedef void (*AgentxxPluginOperatorCallback)(
+    void*                   ud,
+    int                     status,
+    AgentxxPluginStringView payload
+);
 
 /// 异步调用句柄 (仅用于取消; 不可轮询/收尸; 宿主托管生命周期)
 typedef struct AgentxxPluginOperatorHandle AgentxxPluginOperatorHandle;
@@ -238,7 +240,7 @@ typedef struct AgentxxHostVtable {
     /* ---- 内存 (跨 CRT 堆边界的唯一分配通道; 任意线程可调用) ---- */
     void* (*alloc)(size_t size);
     void (*free)(void* ptr);
-    char* (*strdup)(const char* s);
+    char* (*strdup)(AgentxxPluginStringView s);
 
     /* ---- COM 风格接口表查询 (QueryInterface; 任意线程可调用) ---- */
     const void* (*query_interface)(const AgentxxPluginHost* host, AgentxxPluginStringView iid);
@@ -388,7 +390,7 @@ typedef struct AgentxxPluginSchedulerIface {
         const AgentxxPluginHost* host,
         volatile int*            cancel_flag,
         void* (*work)(void* ud, volatile int* cancel_flag, char** error_out),
-        void (*done)(void* ud, void* result, char* error),
+        void (*done)(void* ud, void* result, AgentxxPluginStringView error),
         void* ud
     );
 } AgentxxPluginSchedulerIface;
@@ -445,7 +447,7 @@ typedef struct AgentxxPluginsIface {
 #define AGENTXX_PLUGIN_IFACE_AGENT_CONFIG_VERSION 1
 
 typedef struct AgentxxPluginConfigIface {
-    int version; ///< 必须 >= AGENTXX_PLUGIN_IFACE_AGENT_CONFIG_VERSION
+    int version; ///< 必须 == AGENTXX_PLUGIN_IFACE_AGENT_CONFIG_VERSION
 
     /// 宿主 AgentConfig 关键字段 JSON (io 线程; host->alloc):
     /// {"dataDir": "...", "projectRoot": "..."(可为空), "platform": "windows"|"linux"|"macos"}
@@ -540,7 +542,7 @@ typedef struct AgentxxPluginLogIface {
  */
 
 #define AGENTXX_PLUGIN_IFACE_AGENT_RESOURCES         "agentxx.agent.resources"
-#define AGENTXX_PLUGIN_IFACE_AGENT_RESOURCES_VERSION 2
+#define AGENTXX_PLUGIN_IFACE_AGENT_RESOURCES_VERSION 1
 
 typedef struct AgentxxPluginResourcesIface {
     int version; ///< 必须 == AGENTXX_PLUGIN_IFACE_AGENT_RESOURCES_VERSION
@@ -695,7 +697,8 @@ const AgentxxPluginBuiltinInfo* agentxx_plugin_get_builtin_plugins(size_t* count
 
 const AgentxxPluginBuiltinManifest* agentxx_plugin_get_builtin_manifests(size_t* count);
 
-#define AGENTXX_PLUGIN_STRDUP(host, s) ((host)->vtable->strdup((s)))
+#define AGENTXX_PLUGIN_STRDUP(host, s)     ((host)->vtable->strdup(agentxx_plugin_sv_cstr(s)))
+#define AGENTXX_PLUGIN_STRDUP_SV(host, sv) ((host)->vtable->strdup((sv)))
 
 #ifdef __cplusplus
 }

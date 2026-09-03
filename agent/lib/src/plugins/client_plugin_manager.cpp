@@ -1269,7 +1269,7 @@ void xx_cfree(void* ptr) {
     agentxx::plugin::hostMemoryFree(ptr);
 }
 
-char* xx_cstrdup(const char* s) {
+char* xx_cstrdup(AgentxxPluginStringView s) {
     return agentxx::plugin::hostMemoryStrdup(s);
 }
 
@@ -1315,7 +1315,7 @@ char* xx_cjson_get_string(
             if (v.empty() && !j.contains(std::string{key.data, key.size})) {
                 return static_cast<char*>(nullptr);
             }
-            return xx_cstrdup(v.c_str());
+            return xx_cstrdup(agentxx_plugin_sv(v.data(), v.size()));
         } catch (...) {
             return static_cast<char*>(nullptr);
         }
@@ -1331,7 +1331,8 @@ char* xx_cjson_escape(const AgentxxPluginHost* host, AgentxxPluginStringView s) 
         }
         try {
             neograph::json j = std::string{s.data, s.size};
-            return xx_cstrdup(j.dump().c_str());
+            auto dumpStr = j.dump();
+            return xx_cstrdup(agentxx_plugin_sv(dumpStr.data(), dumpStr.size()));
         } catch (...) {
             return static_cast<char*>(nullptr);
         }
@@ -1383,17 +1384,12 @@ AgentxxStatusItem* xx_cregister_status_item(
     return agentxx::plugin::guardVtableCall(nullptr, [&]() -> AgentxxStatusItem* {
         auto mgr  = clientMgrOf(host);
         auto inst = clientInstOf(host);
-        if (!mgr || !inst) {
-            return static_cast<AgentxxStatusItem*>(nullptr);
-        }
-        std::string idStr{id.data ? id.data : "", id.size};
-        std::string jsonStr{initial_json.data ? initial_json.data : "", initial_json.size};
-        if (idStr.empty()) {
+        if (!mgr || !inst || agentxx_plugin_sv_empty(id)) {
             return static_cast<AgentxxStatusItem*>(nullptr);
         }
         return ioCallSync<AgentxxStatusItem*>(mgr, [&]() -> AgentxxStatusItem* {
             return static_cast<AgentxxStatusItem*>(
-                mgr->registerStatusItem(inst, idStr.c_str(), jsonStr.c_str(), align, order)
+                mgr->registerStatusItem(inst, id, initial_json, align, order)
             );
         });
     });
@@ -1410,9 +1406,8 @@ int xx_cupdate_status_item(
         if (!mgr || !inst || !item) {
             return -1;
         }
-        std::string jsonStr{json.data ? json.data : "", json.size};
         return ioCallSync<int>(mgr, [&]() -> int {
-            return mgr->updateStatusItem(inst, item, jsonStr.c_str());
+            return mgr->updateStatusItem(inst, item, json);
         });
     });
 }
@@ -1440,17 +1435,11 @@ AgentxxPanel* xx_cregister_panel(
     return agentxx::plugin::guardVtableCall(nullptr, [&]() -> AgentxxPanel* {
         auto mgr  = clientMgrOf(host);
         auto inst = clientInstOf(host);
-        if (!mgr || !inst) {
-            return static_cast<AgentxxPanel*>(nullptr);
-        }
-        std::string idStr{id.data ? id.data : "", id.size};
-        std::string props{props_json.data ? props_json.data : "", props_json.size};
-        if (idStr.empty()) {
+        if (!mgr || !inst || agentxx_plugin_sv_empty(id)) {
             return static_cast<AgentxxPanel*>(nullptr);
         }
         return ioCallSync<AgentxxPanel*>(mgr, [&]() -> AgentxxPanel* {
-            return static_cast<AgentxxPanel*>(mgr->registerPanel(inst, idStr.c_str(), props.c_str())
-            );
+            return static_cast<AgentxxPanel*>(mgr->registerPanel(inst, id, props_json));
         });
     });
 }
@@ -1466,9 +1455,8 @@ int xx_cupdate_panel(
         if (!mgr || !inst || !panel) {
             return -1;
         }
-        std::string items{items_json.data ? items_json.data : "", items_json.size};
         return ioCallSync<int>(mgr, [&]() -> int {
-            return mgr->updatePanel(inst, panel, items.c_str());
+            return mgr->updatePanel(inst, panel, items_json);
         });
     });
 }
@@ -1496,17 +1484,12 @@ AgentxxInfoSection* xx_cregister_info_section(
     return agentxx::plugin::guardVtableCall(nullptr, [&]() -> AgentxxInfoSection* {
         auto mgr  = clientMgrOf(host);
         auto inst = clientInstOf(host);
-        if (!mgr || !inst) {
-            return static_cast<AgentxxInfoSection*>(nullptr);
-        }
-        std::string idStr{id.data ? id.data : "", id.size};
-        std::string props{props_json.data ? props_json.data : "", props_json.size};
-        if (idStr.empty()) {
+        if (!mgr || !inst || agentxx_plugin_sv_empty(id)) {
             return static_cast<AgentxxInfoSection*>(nullptr);
         }
         return ioCallSync<AgentxxInfoSection*>(mgr, [&]() -> AgentxxInfoSection* {
             return static_cast<AgentxxInfoSection*>(
-                mgr->registerInfoSection(inst, idStr.c_str(), props.c_str())
+                mgr->registerInfoSection(inst, id, props_json)
             );
         });
     });
@@ -1523,9 +1506,8 @@ int xx_cupdate_info_section(
         if (!mgr || !inst || !section) {
             return -1;
         }
-        std::string items{items_json.data ? items_json.data : "", items_json.size};
         return ioCallSync<int>(mgr, [&]() -> int {
-            return mgr->updateInfoSection(inst, section, items.c_str());
+            return mgr->updateInfoSection(inst, section, items_json);
         });
     });
 }
@@ -1554,10 +1536,8 @@ int xx_cupdate_tool_decor(
         if (!mgr || !inst) {
             return -1;
         }
-        std::string tid{tool_call_id.data ? tool_call_id.data : "", tool_call_id.size};
-        std::string json{decor_json.data ? decor_json.data : "", decor_json.size};
         return ioCallSync<int>(mgr, [&]() -> int {
-            return mgr->updateToolDecor(inst, tid.c_str(), json.c_str());
+            return mgr->updateToolDecor(inst, tool_call_id, decor_json);
         });
     });
 }
@@ -1574,16 +1554,11 @@ int xx_cregister_command(
     return agentxx::plugin::guardVtableCall(-1, [&]() -> int {
         auto mgr  = clientMgrOf(host);
         auto inst = clientInstOf(host);
-        if (!mgr || !inst || !execute) {
-            return -1;
-        }
-        std::string nameStr{name.data ? name.data : "", name.size};
-        std::string descStr{description.data ? description.data : "", description.size};
-        if (nameStr.empty()) {
+        if (!mgr || !inst || !execute || agentxx_plugin_sv_empty(name)) {
             return -1;
         }
         return ioCallSync<int>(mgr, [&]() -> int {
-            return mgr->registerCommand(inst, nameStr.c_str(), descStr.c_str(), execute, ud);
+            return mgr->registerCommand(inst, name, description, execute, ud);
         });
     });
 }
@@ -1592,12 +1567,11 @@ int xx_cunregister_command(const AgentxxPluginHost* host, AgentxxPluginStringVie
     return agentxx::plugin::guardVtableCall(-1, [&]() -> int {
         auto mgr  = clientMgrOf(host);
         auto inst = clientInstOf(host);
-        if (!mgr || !inst) {
+        if (!mgr || !inst || agentxx_plugin_sv_empty(name)) {
             return -1;
         }
-        std::string nameStr{name.data ? name.data : "", name.size};
         return ioCallSync<int>(mgr, [&]() -> int {
-            return mgr->unregisterCommand(inst, nameStr.c_str());
+            return mgr->unregisterCommand(inst, name);
         });
     });
 }
@@ -1669,7 +1643,7 @@ char* xx_cget_client_state(const AgentxxPluginHost* host) {
         }
         return ioCallSync<char*>(mgr, [&]() -> char* {
             auto s = mgr->clientStateJson();
-            return xx_cstrdup(s.c_str());
+            return xx_cstrdup(strToSv(s));
         });
     });
 }
@@ -1687,10 +1661,8 @@ int xx_csend_user_input(
         if (!mgr || !inst || agentxx_plugin_sv_empty(text)) {
             return -1;
         }
-        std::string tid{thread_id.data ? thread_id.data : "", thread_id.size};
-        std::string txt{text.data ? text.data : "", text.size};
         return ioCallSync<int>(mgr, [&]() -> int {
-            mgr->sendUserInputToPeer(inst, tid.c_str(), txt.c_str());
+            mgr->sendUserInputToPeer(inst, thread_id, text);
             return 0;
         });
     });
@@ -1703,9 +1675,8 @@ void xx_crequest_cancel(const AgentxxPluginHost* host, AgentxxPluginStringView t
         if (!mgr || !inst) {
             return;
         }
-        std::string tid{thread_id.data ? thread_id.data : "", thread_id.size};
         ioCallSyncVoid(mgr, [&]() {
-            mgr->requestCancelToPeer(inst, tid.c_str());
+            mgr->requestCancelToPeer(inst, thread_id);
         });
     });
 }
@@ -1723,10 +1694,8 @@ int xx_csend_plugin_data(
         if (!mgr || !inst || agentxx_plugin_sv_empty(event)) {
             return -1;
         }
-        std::string ev{event.data ? event.data : "", event.size};
-        std::string data{json.data ? json.data : "", json.size};
         return ioCallSync<int>(mgr, [&]() -> int {
-            return mgr->sendPluginDataToPeer(inst, ev.c_str(), data.c_str());
+            return mgr->sendPluginDataToPeer(inst, event, json);
         });
     });
 }
@@ -1742,7 +1711,7 @@ char* xx_cget_own_info(const AgentxxPluginHost* host) {
         }
         return ioCallSync<char*>(mgr, [&]() -> char* {
             auto s = mgr->getOwnInfoJson(inst);
-            return xx_cstrdup(s.c_str());
+            return xx_cstrdup(strToSv(s));
         });
     });
 }
@@ -1756,7 +1725,7 @@ char* xx_cget_plugin_args(const AgentxxPluginHost* host) {
         }
         return ioCallSync<char*>(mgr, [&]() -> char* {
             auto s = mgr->getPluginArgsJson(inst);
-            return xx_cstrdup(s.c_str());
+            return xx_cstrdup(strToSv(s));
         });
     });
 }
@@ -1773,7 +1742,7 @@ char* xx_cget_plugin_config_path(const AgentxxPluginHost* host) {
             if (s.empty()) {
                 return static_cast<char*>(nullptr);
             }
-            return xx_cstrdup(s.c_str());
+            return xx_cstrdup(strToSv(s));
         });
     });
 }
@@ -1860,19 +1829,20 @@ const AgentxxHostVtable* ClientPluginManager::hostVtable() {
 // =====================================================================
 
 void* ClientPluginManager::registerStatusItem(
-    ClientPluginInstance* inst,
-    const char*           id,
-    const char*           json,
-    int                   align,
-    int                   order
+    ClientPluginInstance*   inst,
+    AgentxxPluginStringView id,
+    AgentxxPluginStringView json,
+    int                     align,
+    int                     order
 ) {
-    if (!inst) {
+    if (!inst || agentxx_plugin_sv_empty(id)) {
         return nullptr;
     }
+    std::string idStr = svToStr(id);
     if (!hostSupportedInterfaces().contains(std::string{plugin_interfaces::ClientStatusItem})) {
         XX_LOGW(
             "[client_plugin] status item `{}` rejected: interface agentxx.client.status_item unsupported",
-            id
+            idStr
         );
         return nullptr;
     }
@@ -1880,8 +1850,8 @@ void* ClientPluginManager::registerStatusItem(
     {
         std::lock_guard<std::mutex> lock(uiMutex_);
         for (const auto& s : uiRegistry_->statusItems) {
-            if (s.id == id) {
-                XX_LOGW("[client_plugin] status item id `{}` already registered", id);
+            if (s.id == idStr) {
+                XX_LOGW("[client_plugin] status item id `{}` already registered", idStr);
                 return nullptr;
             }
         }
@@ -1890,18 +1860,18 @@ void* ClientPluginManager::registerStatusItem(
     std::string    text;
     neograph::json props;
     try {
-        props = neograph::json::parse(json ? json : "{}");
+        props = neograph::json::parse(agentxx_plugin_sv_empty(json) ? "{}" : svToSv(json));
         text  = jsonStr(props, "text");
     } catch (...) {
         text.clear();
     }
     if (text.empty()) {
-        text = id;
+        text = idStr;
     }
 
     auto handle    = std::make_shared<AgentxxStatusItem>();
     handle->inst   = inst;
-    handle->id     = id;
+    handle->id     = idStr;
     handle->plugin = inst->name;
 
     ClientStatusItem reg;
@@ -1925,9 +1895,9 @@ void* ClientPluginManager::registerStatusItem(
 }
 
 int ClientPluginManager::updateStatusItem(
-    ClientPluginInstance* inst,
-    void*                 item,
-    const char*           json
+    ClientPluginInstance*   inst,
+    void*                   item,
+    AgentxxPluginStringView json
 ) {
     auto h = static_cast<AgentxxStatusItem*>(item);
     if (!inst || !h) {
@@ -1936,7 +1906,7 @@ int ClientPluginManager::updateStatusItem(
     neograph::json props;
     std::string    text;
     try {
-        props = neograph::json::parse(json ? json : "{}");
+        props = neograph::json::parse(agentxx_plugin_sv_empty(json) ? "{}" : svToSv(json));
         text  = jsonStr(props, "text");
     } catch (...) {
         text.clear();
@@ -2002,25 +1972,26 @@ void ClientPluginManager::unregisterStatusItem(ClientPluginInstance* inst, void*
 }
 
 void* ClientPluginManager::registerPanel(
-    ClientPluginInstance* inst,
-    const char*           id,
-    const char*           props_json
+    ClientPluginInstance*   inst,
+    AgentxxPluginStringView id,
+    AgentxxPluginStringView props_json
 ) {
-    if (!inst) {
+    if (!inst || agentxx_plugin_sv_empty(id)) {
         return nullptr;
     }
+    std::string idStr = svToStr(id);
     if (!hostSupportedInterfaces().contains(std::string{plugin_interfaces::ClientPanel})) {
         XX_LOGW(
             "[client_plugin] panel `{}` rejected: interface agentxx.client.panel unsupported",
-            id
+            idStr
         );
         return nullptr;
     }
     {
         std::lock_guard<std::mutex> lock(uiMutex_);
         for (const auto& p : uiRegistry_->panels) {
-            if (p.id == id) {
-                XX_LOGW("[client_plugin] panel id `{}` already registered", id);
+            if (p.id == idStr) {
+                XX_LOGW("[client_plugin] panel id `{}` already registered", idStr);
                 return nullptr;
             }
         }
@@ -2028,18 +1999,18 @@ void* ClientPluginManager::registerPanel(
     neograph::json props;
     std::string    title;
     try {
-        props = neograph::json::parse(props_json ? props_json : "{}");
+        props = neograph::json::parse(agentxx_plugin_sv_empty(props_json) ? "{}" : svToSv(props_json));
         title = jsonStr(props, "title");
     } catch (...) {
         title.clear();
     }
     if (title.empty()) {
-        title = id;
+        title = idStr;
     }
 
     auto handle    = std::make_shared<AgentxxPanel>();
     handle->inst   = inst;
-    handle->id     = id;
+    handle->id     = idStr;
     handle->plugin = inst->name;
 
     ClientPanel reg;
@@ -2061,9 +2032,9 @@ void* ClientPluginManager::registerPanel(
 }
 
 int ClientPluginManager::updatePanel(
-    ClientPluginInstance* inst,
-    void*                 panel,
-    const char*           items_json
+    ClientPluginInstance*   inst,
+    void*                   panel,
+    AgentxxPluginStringView items_json
 ) {
     auto h = static_cast<AgentxxPanel*>(panel);
     if (!inst || !h) {
@@ -2071,7 +2042,7 @@ int ClientPluginManager::updatePanel(
     }
     neograph::json items = neograph::json::array();
     try {
-        auto j = neograph::json::parse(items_json ? items_json : "{}");
+        auto j = neograph::json::parse(agentxx_plugin_sv_empty(items_json) ? "{}" : svToSv(items_json));
         if (j.contains("items") && j["items"].is_array()) {
             items = j["items"];
         }
@@ -2138,25 +2109,26 @@ void ClientPluginManager::unregisterPanel(ClientPluginInstance* inst, void* pane
 }
 
 void* ClientPluginManager::registerInfoSection(
-    ClientPluginInstance* inst,
-    const char*           id,
-    const char*           props_json
+    ClientPluginInstance*   inst,
+    AgentxxPluginStringView id,
+    AgentxxPluginStringView props_json
 ) {
-    if (!inst) {
+    if (!inst || agentxx_plugin_sv_empty(id)) {
         return nullptr;
     }
+    std::string idStr = svToStr(id);
     if (!hostSupportedInterfaces().contains(std::string{plugin_interfaces::ClientInfoSection})) {
         XX_LOGW(
             "[client_plugin] info section `{}` rejected: interface agentxx.client.info_section unsupported",
-            id
+            idStr
         );
         return nullptr;
     }
     {
         std::lock_guard<std::mutex> lock(uiMutex_);
         for (const auto& s : uiRegistry_->infoSections) {
-            if (s.id == id) {
-                XX_LOGW("[client_plugin] info section id `{}` already registered", id);
+            if (s.id == idStr) {
+                XX_LOGW("[client_plugin] info section id `{}` already registered", idStr);
                 return nullptr;
             }
         }
@@ -2164,7 +2136,7 @@ void* ClientPluginManager::registerInfoSection(
     neograph::json props;
     std::string    title;
     try {
-        props = neograph::json::parse(props_json ? props_json : "{}");
+        props = neograph::json::parse(agentxx_plugin_sv_empty(props_json) ? "{}" : svToSv(props_json));
         title = jsonStr(props, "title");
     } catch (...) {
         title.clear();
@@ -2172,7 +2144,7 @@ void* ClientPluginManager::registerInfoSection(
 
     auto handle    = std::make_shared<AgentxxInfoSection>();
     handle->inst   = inst;
-    handle->id     = id;
+    handle->id     = idStr;
     handle->plugin = inst->name;
 
     ClientInfoSection reg;
@@ -2194,9 +2166,9 @@ void* ClientPluginManager::registerInfoSection(
 }
 
 int ClientPluginManager::updateInfoSection(
-    ClientPluginInstance* inst,
-    void*                 section,
-    const char*           items_json
+    ClientPluginInstance*   inst,
+    void*                   section,
+    AgentxxPluginStringView items_json
 ) {
     auto h = static_cast<AgentxxInfoSection*>(section);
     if (!inst || !h) {
@@ -2204,7 +2176,7 @@ int ClientPluginManager::updateInfoSection(
     }
     neograph::json items = neograph::json::array();
     try {
-        auto j = neograph::json::parse(items_json ? items_json : "{}");
+        auto j = neograph::json::parse(agentxx_plugin_sv_empty(items_json) ? "{}" : svToSv(items_json));
         if (j.contains("items") && j["items"].is_array()) {
             items = j["items"];
         }
@@ -2271,15 +2243,15 @@ void ClientPluginManager::unregisterInfoSection(ClientPluginInstance* inst, void
 }
 
 int ClientPluginManager::updateToolDecor(
-    ClientPluginInstance* inst,
-    const char*           tool_call_id,
-    const char*           decor_json
+    ClientPluginInstance*   inst,
+    AgentxxPluginStringView tool_call_id,
+    AgentxxPluginStringView decor_json
 ) {
     if (!inst) {
         return -1;
     }
-    const std::string tid{tool_call_id ? tool_call_id : ""};
-    const std::string json{decor_json ? decor_json : ""};
+    const std::string tid = svToStr(tool_call_id);
+    const std::string json = svToStr(decor_json);
 
     // 删除语义: decor_json 空串 (tid 空 = 本插件全部)
     if (json.empty()) {
@@ -2374,37 +2346,39 @@ int ClientPluginManager::updateToolDecor(
 }
 
 int ClientPluginManager::registerCommand(
-    ClientPluginInstance* inst,
-    const char*           name,
-    const char*           description,
+    ClientPluginInstance*   inst,
+    AgentxxPluginStringView name,
+    AgentxxPluginStringView description,
     char* (*exec)(void*, AgentxxPluginStringView, char**),
     void* ud
 ) {
-    if (!inst || !exec) {
+    if (!inst || !exec || agentxx_plugin_sv_empty(name)) {
         return -1;
     }
+    std::string nameStr = svToStr(name);
+    std::string descStr = svToStr(description);
     // 命令输入管线接口 (agentxx.client.command): 无命令输入面的宿主拒绝注册 ——
     // 与其他 register_* 的接口门禁行为一致
     if (!hostSupportedInterfaces().contains(std::string{plugin_interfaces::ClientCommand})) {
         XX_LOGW(
             "[client_plugin] command `{}` rejected: interface agentxx.client.command unsupported",
-            name
+            nameStr
         );
         return -1;
     }
     {
         std::lock_guard<std::mutex> lock(uiMutex_);
         for (const auto& c : uiRegistry_->commands) {
-            if (c.name == name) {
-                XX_LOGW("[client_plugin] command `{}` already registered", name);
+            if (c.name == nameStr) {
+                XX_LOGW("[client_plugin] command `{}` already registered", nameStr);
                 return -1;
             }
         }
     }
     ClientCommand reg;
     reg.plugin      = inst->name;
-    reg.name        = name;
-    reg.description = description ? description : "";
+    reg.name        = nameStr;
+    reg.description = descStr;
     reg.execute     = exec;
     reg.ud          = ud;
     {
@@ -2417,16 +2391,17 @@ int ClientPluginManager::registerCommand(
     return 0;
 }
 
-int ClientPluginManager::unregisterCommand(ClientPluginInstance* inst, const char* name) {
-    if (!inst) {
+int ClientPluginManager::unregisterCommand(ClientPluginInstance* inst, AgentxxPluginStringView name) {
+    if (!inst || agentxx_plugin_sv_empty(name)) {
         return -1;
     }
+    std::string nameStr = svToStr(name);
     {
         std::lock_guard<std::mutex> lock(uiMutex_);
         auto                        cur = std::make_shared<ClientUiRegistry>(*uiRegistry_);
         auto&                       vec = cur->commands;
         for (auto it = vec.begin(); it != vec.end(); ++it) {
-            if (it->name == name && it->plugin == inst->name) {
+            if (it->name == nameStr && it->plugin == inst->name) {
                 vec.erase(it);
                 break;
             }
@@ -2439,7 +2414,7 @@ int ClientPluginManager::unregisterCommand(ClientPluginInstance* inst, const cha
             regs.begin(),
             regs.end(),
             [&](const auto& c) {
-                return c.name == name && c.plugin == inst->name;
+                return c.name == nameStr && c.plugin == inst->name;
             }
         ),
         regs.end()
@@ -2518,34 +2493,39 @@ std::string ClientPluginManager::getPluginConfigPath(ClientPluginInstance* inst)
 }
 
 void ClientPluginManager::sendUserInputToPeer(
-    ClientPluginInstance* inst,
-    const char*           sessionId,
-    const char*           text
+    ClientPluginInstance*   inst,
+    AgentxxPluginStringView sessionId,
+    AgentxxPluginStringView text
 ) {
     (void)sessionId; // 会话以当前绑定为准 (sessionId 不符时由端点兜底)
     if (!inst || !uiAdapter_) {
         return;
     }
     // 实际发送由 UI 适配器完成 (与用户输入同排队语义)
-    uiAdapter_->sendPluginMessage(text ? text : "");
+    uiAdapter_->sendPluginMessage(svToStr(text));
 }
 
-void ClientPluginManager::requestCancelToPeer(ClientPluginInstance* inst, const char* sessionId) {
+void ClientPluginManager::requestCancelToPeer(
+    ClientPluginInstance*   inst,
+    AgentxxPluginStringView sessionId
+) {
     if (!inst || !uiAdapter_) {
         return;
     }
-    uiAdapter_->requestCancel(sessionId ? sessionId : "");
+    uiAdapter_->requestCancel(svToStr(sessionId));
 }
 
 int ClientPluginManager::sendPluginDataToPeer(
-    ClientPluginInstance* inst,
-    const char*           event,
-    const char*           json
+    ClientPluginInstance*   inst,
+    AgentxxPluginStringView event,
+    AgentxxPluginStringView json
 ) {
     if (!inst || !uiAdapter_) {
         return -1;
     }
-    return uiAdapter_->sendPluginData(inst->name, event ? event : "", json ? json : "{}") ? 0 : -1;
+    std::string ev = svToStr(event);
+    std::string j  = agentxx_plugin_sv_empty(json) ? "{}" : svToStr(json);
+    return uiAdapter_->sendPluginData(inst->name, ev, j) ? 0 : -1;
 }
 
 } // namespace plugin

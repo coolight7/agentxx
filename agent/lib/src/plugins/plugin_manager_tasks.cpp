@@ -39,7 +39,7 @@ static void setTaskErrOut(PluginInstance* inst, char** error_out, const std::str
         return;
     }
     if (inst && inst->host.vtable && inst->host.vtable->strdup) {
-        *error_out = inst->host.vtable->strdup(msg.c_str());
+        *error_out = inst->host.vtable->strdup(strToSv(msg));
         return;
     }
     auto* p = static_cast<char*>(::malloc(msg.size() + 1));

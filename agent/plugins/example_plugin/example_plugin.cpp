@@ -295,7 +295,7 @@ static char* example_cmd_execute(void* ud, AgentxxPluginStringView args_json, ch
         }
         const std::string out
             = fmt::format(R"({{"action":"send","text":{}}})", clientJsonEscape(*ctx, text));
-        return ctx->host->vtable->strdup(out.c_str());
+        return ctx->host->vtable->strdup(agentxx_plugin_sv(out.data(), out.size()));
     });
 }
 
@@ -320,7 +320,7 @@ static char* example_toast_execute(void* ud, AgentxxPluginStringView args_json, 
             R"({{"action":"toast","text":{},"level":1}})",
             clientJsonEscape(*ctx, text)
         );
-        return ctx->host->vtable->strdup(out.c_str());
+        return ctx->host->vtable->strdup(agentxx_plugin_sv(out.data(), out.size()));
     });
 }
 

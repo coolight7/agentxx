@@ -94,7 +94,7 @@ struct OpCore : std::enable_shared_from_this<OpCore> {
         chan(ex, 4),
         guard(std::move(g)) {}
 
-    static void onDone(void* ud, int st, char* payload_cstr) {
+    static void onDone(void* ud, int st, AgentxxPluginStringView payload_sv) {
         auto* self = static_cast<OpCore*>(ud);
         // 生命周期守卫: 插件的 done 可能来自任意线程 (阻塞池/自管线程), 调用方
         // 仅持裸指针。通知到达时宿主侧至少有一个等待协程 (chan/doneSignal 等待
@@ -106,24 +106,17 @@ struct OpCore : std::enable_shared_from_this<OpCore> {
         try {
             selfKeep = self->shared_from_this();
         } catch (const std::bad_weak_ptr&) {
-            // 极端: 不在 shared_ptr 管理下 (不应发生), 无法安全延长生命周期,
-            // 放弃上报, 仅释放 payload
-            if (payload_cstr) {
-                ::free(payload_cstr);
-            }
             return;
         }
         bool expect = false;
         if (!self->notified.compare_exchange_strong(expect, true, std::memory_order_acq_rel)) {
-            if (payload_cstr) {
-                ::free(payload_cstr);
-            }
             return;
         }
         self->status.store(st, std::memory_order_release);
-        if (payload_cstr) {
-            self->payload.assign(payload_cstr);
-            ::free(payload_cstr);
+        if (payload_sv.data && payload_sv.size > 0) {
+            self->payload.assign(payload_sv.data, payload_sv.size);
+        } else {
+            self->payload.clear();
         }
         self->chan.try_send(OpErrorCode());
         self->doneSignal.emit(asio::cancellation_type::all);
@@ -137,9 +130,8 @@ struct OpCore : std::enable_shared_from_this<OpCore> {
             // 插件的 done 可能来自任意线程（阻塞池/自管线程），此处恒异步投递回 io
             // (selfKeep 已自持, post 回调也捕获它, 派发期间对象必然存活)
             asio::post(self->chan.get_executor(), [selfKeep, cb, cbUd, st, payloadCopy]() {
-                char* pl = payloadCopy.empty() ? nullptr : ::strdup(payloadCopy.c_str());
                 try {
-                    cb(cbUd, st, pl);
+                    cb(cbUd, st, agentxx_plugin_sv(payloadCopy.data(), payloadCopy.size()));
                 } catch (...) {
                 }
             });

@@ -227,7 +227,8 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                             [](void*, volatile int*, char**) -> void* {
                                 return new agentxx_system_monitor_plugin::CpuGpuUsage(querySync());
                             },
-                            [](void* ud, void* res, char* err) {
+                            [](void* ud, void* res, AgentxxPluginStringView err) {
+                                (void)err;
                                 auto* c = static_cast<PluginCtx*>(ud);
                                 auto* u
                                     = static_cast<agentxx_system_monitor_plugin::CpuGpuUsage*>(res);
@@ -240,10 +241,6 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                                     );
                                 }
                                 delete u;
-                                if (err && c && c->host && c->host->vtable
-                                    && c->host->vtable->free) {
-                                    c->host->vtable->free(err);
-                                }
                             },
                             c
                         );
@@ -506,7 +503,7 @@ static char* cmdSysinfoExecute(void* ud, AgentxxPluginStringView args_json, char
             out["text"]        = text;
             out["level"]       = 0;
             std::string dumped = out.dump();
-            return ctx->host->vtable->strdup(dumped.c_str());
+            return ctx->host->vtable->strdup(agentxx_plugin_sv(dumped.data(), dumped.size()));
         }
     );
 }

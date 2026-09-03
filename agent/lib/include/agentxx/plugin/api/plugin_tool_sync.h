@@ -44,12 +44,9 @@ typedef struct AgentxxSyncToolShim {
 typedef struct AgentxxSyncJob {
     AgentxxSyncToolShim         shim;
     AgentxxPluginOperatorNotify notify;
-    char*                       args;
-    size_t                      argsSize;
-    char*                       tid;
-    size_t                      tidSize;
-    char*                       tcid;
-    size_t                      tcidSize;
+    AgentxxPluginStringView     args;
+    AgentxxPluginStringView     tid;
+    AgentxxPluginStringView     tcid;
     volatile int                cancelFlag;
 } AgentxxSyncJob;
 
@@ -57,7 +54,7 @@ static inline char* agentxx_shim_err_dup(const AgentxxPluginHost* host, const ch
     if (!host || !host->vtable || !host->vtable->strdup || !msg) {
         return NULL;
     }
-    return host->vtable->strdup(msg);
+    return host->vtable->strdup(agentxx_plugin_sv_cstr(msg));
 }
 
 static inline void* agentxx_sync_job_work(void* ud, volatile int* cancel_flag, char** error_out) {
@@ -66,9 +63,9 @@ static inline void* agentxx_sync_job_work(void* ud, volatile int* cancel_flag, c
     try {
         return (void*)job->shim.fn(
             job->shim.ud,
-            agentxx_plugin_sv(job->args, job->argsSize),
-            agentxx_plugin_sv(job->tid, job->tidSize),
-            agentxx_plugin_sv(job->tcid, job->tcidSize),
+            job->args,
+            job->tid,
+            job->tcid,
             cancel_flag,
             error_out
         );
@@ -86,24 +83,26 @@ static inline void* agentxx_sync_job_work(void* ud, volatile int* cancel_flag, c
 #else
     return (void*)job->shim.fn(
         job->shim.ud,
-        agentxx_plugin_sv(job->args, job->argsSize),
-        agentxx_plugin_sv(job->tid, job->tidSize),
-        agentxx_plugin_sv(job->tcid, job->tcidSize),
+        job->args,
+        job->tid,
+        job->tcid,
         cancel_flag,
         error_out
     );
 #endif
 }
 
-static inline void agentxx_sync_job_done(void* ud, void* result, char* error) {
-    AgentxxSyncJob* job     = (AgentxxSyncJob*)ud;
-    int             st      = AGENTXX_PLUGIN_OPERATOR_OK;
-    char*           payload = (char*)result;
+static inline void agentxx_sync_job_done(void* ud, void* result, AgentxxPluginStringView error) {
+    AgentxxSyncJob* job = (AgentxxSyncJob*)ud;
+    int st = AGENTXX_PLUGIN_OPERATOR_OK;
+    AgentxxPluginStringView payload = agentxx_plugin_sv(NULL, 0);
 
-    if (error) {
-        st      = AGENTXX_PLUGIN_OPERATOR_FAILED;
+    if (!agentxx_plugin_sv_empty(error)) {
+        st = AGENTXX_PLUGIN_OPERATOR_FAILED;
         payload = error;
-    } else if (!payload) {
+    } else if (result) {
+        payload = agentxx_plugin_sv_cstr((const char*)result);
+    } else {
         st = AGENTXX_PLUGIN_OPERATOR_CANCELLED;
     }
 
@@ -111,14 +110,14 @@ static inline void agentxx_sync_job_done(void* ud, void* result, char* error) {
         job->notify.done(job->notify.host_ud, st, payload);
     }
 
-    if (job->args) {
-        free(job->args);
+    if (job->args.data) {
+        free((void*)job->args.data);
     }
-    if (job->tid) {
-        free(job->tid);
+    if (job->tid.data) {
+        free((void*)job->tid.data);
     }
-    if (job->tcid) {
-        free(job->tcid);
+    if (job->tcid.data) {
+        free((void*)job->tcid.data);
     }
     free(job);
 }
@@ -150,28 +149,28 @@ static inline void* agentxx_sync_tool_start(
     job->shim       = *shim;
     job->notify     = *notify;
     job->cancelFlag = 0;
-    job->args       = NULL;
-    job->tid        = NULL;
-    job->tcid       = NULL;
+    job->args       = agentxx_plugin_sv(NULL, 0);
+    job->tid        = agentxx_plugin_sv(NULL, 0);
+    job->tcid       = agentxx_plugin_sv(NULL, 0);
 
     if (args_json.size) {
-        job->args = (char*)malloc(args_json.size);
-        if (!job->args) {
+        char* buf = (char*)malloc(args_json.size);
+        if (!buf) {
             free(job);
             if (error_out) {
                 *error_out = agentxx_shim_err_dup(shim->host, "out of memory allocating args");
             }
             return NULL;
         }
-        memcpy(job->args, args_json.data, args_json.size);
+        memcpy(buf, args_json.data, args_json.size);
+        job->args = agentxx_plugin_sv(buf, args_json.size);
     }
-    job->argsSize = args_json.size;
 
     if (session_id.size) {
-        job->tid = (char*)malloc(session_id.size);
-        if (!job->tid) {
-            if (job->args) {
-                free(job->args);
+        char* buf = (char*)malloc(session_id.size);
+        if (!buf) {
+            if (job->args.data) {
+                free((void*)job->args.data);
             }
             free(job);
             if (error_out) {
@@ -180,18 +179,18 @@ static inline void* agentxx_sync_tool_start(
             }
             return NULL;
         }
-        memcpy(job->tid, session_id.data, session_id.size);
+        memcpy(buf, session_id.data, session_id.size);
+        job->tid = agentxx_plugin_sv(buf, session_id.size);
     }
-    job->tidSize = session_id.size;
 
     if (tool_call_id.size) {
-        job->tcid = (char*)malloc(tool_call_id.size);
-        if (!job->tcid) {
-            if (job->args) {
-                free(job->args);
+        char* buf = (char*)malloc(tool_call_id.size);
+        if (!buf) {
+            if (job->args.data) {
+                free((void*)job->args.data);
             }
-            if (job->tid) {
-                free(job->tid);
+            if (job->tid.data) {
+                free((void*)job->tid.data);
             }
             free(job);
             if (error_out) {
@@ -200,9 +199,9 @@ static inline void* agentxx_sync_tool_start(
             }
             return NULL;
         }
-        memcpy(job->tcid, tool_call_id.data, tool_call_id.size);
+        memcpy(buf, tool_call_id.data, tool_call_id.size);
+        job->tcid = agentxx_plugin_sv(buf, tool_call_id.size);
     }
-    job->tcidSize = tool_call_id.size;
 
     shim->sched->offload(
         shim->host,
@@ -327,11 +326,25 @@ static inline void* agentxx_inline_tool_start(
             // 执行期失败：经 notify 上报，error_out 清零避免宿主 double-free / 误判为 start 失败
             char* errPayload = *error_out;
             *error_out       = NULL;
-            notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_FAILED, errPayload);
+            notify->done(
+                notify->host_ud,
+                AGENTXX_PLUGIN_OPERATOR_FAILED,
+                agentxx_plugin_sv_cstr(errPayload)
+            );
+            if (errPayload && shim->host && shim->host->vtable && shim->host->vtable->free) {
+                shim->host->vtable->free(errPayload);
+            }
         }
     } else {
         if (notify && notify->done) {
-            notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, result);
+            notify->done(
+                notify->host_ud,
+                AGENTXX_PLUGIN_OPERATOR_OK,
+                agentxx_plugin_sv_cstr(result)
+            );
+            if (result && shim->host && shim->host->vtable && shim->host->vtable->free) {
+                shim->host->vtable->free(result);
+            }
         }
     }
     return NULL;
@@ -421,7 +434,7 @@ static inline void* agentxx_sync_hook_start(
         notify->done(
             notify->host_ud,
             rc == 0 ? AGENTXX_PLUGIN_OPERATOR_OK : AGENTXX_PLUGIN_OPERATOR_FAILED,
-            NULL
+            agentxx_plugin_sv(NULL, 0)
         );
     }
     return NULL;

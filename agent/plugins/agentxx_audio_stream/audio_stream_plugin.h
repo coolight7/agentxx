@@ -28,7 +28,7 @@ inline char* pluginStrdup(const AgentxxPluginHost* host, const char* s) {
     if (!host || !s) {
         return nullptr;
     }
-    return host->vtable->strdup(s);
+    return host->vtable->strdup(agentxx_plugin_sv_cstr(s));
 }
 
 class SimpleJson {

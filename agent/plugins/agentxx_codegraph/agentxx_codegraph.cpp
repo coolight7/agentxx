@@ -683,7 +683,8 @@ static void registerAllTools(PluginCtx& ctx) {
     }
 }
 
-static void snapshotQueryDone(void* ud, void* result, char* error) {
+static void snapshotQueryDone(void* ud, void* result, AgentxxPluginStringView error) {
+    (void)error;
     auto* ctx   = static_cast<PluginCtx*>(ud);
     auto* files = static_cast<int64_t*>(result);
     agentxx::plugin::guardCallVoid(
@@ -721,9 +722,6 @@ static void snapshotQueryDone(void* ud, void* result, char* error) {
     if (ctx && ctx->host && ctx->host->vtable && ctx->host->vtable->free) {
         if (files) {
             ctx->host->vtable->free(files);
-        }
-        if (error) {
-            ctx->host->vtable->free(error);
         }
     }
 }
