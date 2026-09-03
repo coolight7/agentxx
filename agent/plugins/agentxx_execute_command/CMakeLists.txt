@@ -6,7 +6,7 @@ set(PLUGIN_NAME agentxx_execute_command)
 
 # ===== 平台支持判定 =====
 # Linux/Windows/macOS 有真实实现 (macOS 仅 bash); Android 复用 Linux 分支
-# (bash 可用); 平台矩阵说明见 docs/agent/plugins.md 9.3.1
+# (bash 可用); 平台矩阵说明见 docs/zh-cn/plugins.md 9.3.1
 include("${CMAKE_CURRENT_LIST_DIR}/../cmake/plugin_platform_support.cmake")
 agentxx_plugin_platform_gate(${PLUGIN_NAME} _AGENTXX_PLATFORM_OK windows linux android macos)
 if (NOT _AGENTXX_PLATFORM_OK)

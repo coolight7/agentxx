@@ -7,7 +7,7 @@
 //     mode=read 返回本会话此前保存的规划内容
 //   - 规划写入成功后发布 "agentxx_planning.planning" 插件事件 (载荷为完整
 //     规划 JSON); 订阅宿主约定事件 agentxx_host.client_attached, 客户端接入/
-//     重连时重发当前会话已保存规划 (状态快照自愈, 见 docs/agent/plugins.md 7.3.1)
+//     重连时重发当前会话已保存规划 (状态快照自愈, 见 docs/zh-cn/plugins.md 7.3.1)
 //   - client 侧入口 (agentxx_plugin_client_create): Plan 渲染完全由插件驱动 ——
 //     ① 工具消息装饰: 订阅 EVT_DELTA 经 update_tool_decor 推送语义层装饰
 //     (折叠头显示名/摘要 + 展开体 items: 状态图/todos/notes), TUI 按通用
@@ -283,11 +283,7 @@ void publishPlanningEvent(PluginCtx& ctx, const std::string& planJson) {
     }
     auto topicSv = agentxx::plugin::PluginStringView::fromCstr("agentxx_planning.planning");
     auto planSv  = agentxx::plugin::PluginStringView::from(planJson.data(), planJson.size());
-    ctx.iface.events->publish(
-        ctx.host,
-        &topicSv,
-        &planSv
-    );
+    ctx.iface.events->publish(ctx.host, &topicSv, &planSv);
 }
 
 /// 宿主约定事件 client_attached: 客户端接入/重连 → 重发当前会话已保存规划
@@ -306,7 +302,9 @@ void AGENTXX_PLUGIN_CALL on_client_attached(const AgentxxPluginStringView* event
             }
             std::string sessionId;
             try {
-                sessionId = neograph::json::parse(std::string{event_json->data, static_cast<size_t>(event_json->size)})
+                sessionId = neograph::json::parse(
+                                std::string{event_json->data, static_cast<size_t>(event_json->size)}
+                )
                                 .value("sessionId", std::string{});
             } catch (...) {
                 return;
@@ -325,7 +323,8 @@ void AGENTXX_PLUGIN_CALL on_client_attached(const AgentxxPluginStringView* event
  * agent 侧入口
  * ===================================================================== */
 
-extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* AGENTXX_PLUGIN_CALL agentxx_plugin_agent_get_info(void) {
+extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* AGENTXX_PLUGIN_CALL
+    agentxx_plugin_agent_get_info(void) {
     // C ABI 边界异常守卫: 异常返回 NULL (宿主按"未导出"处理);
     // 本边界为纯静态元数据, 无实例上下文可捕获 → 空操作日志闭包
     return agentxx::plugin::guardCall(
@@ -333,7 +332,8 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* AGENTXX_PLUGIN_CALL ag
         nullptr,
         [&]() -> const AgentxxPluginInfo* {
             static const AgentxxPluginInfo info{
-                AGENTXX_PLUGIN_API_VERSION, 0,
+                AGENTXX_PLUGIN_API_VERSION,
+                0,
                 agentxx::plugin::PluginStringView::fromCstr("agentxx_planning"),
                 agentxx::plugin::PluginStringView::fromCstr("1.1.0"),
                 agentxx::plugin::PluginStringView::fromCstr(
@@ -370,9 +370,8 @@ extern "C" AGENTXX_PLUGIN_EXPORT int32_t AGENTXX_PLUGIN_CALL
                 j["appendSystemPrompts"]             = neograph::json::object();
                 j["appendSystemPrompts"]["planning"] = std::string{kSystemPlanningPrompt};
                 std::string js                       = j.dump();
-                auto promptSv                        = agentxx::plugin::PluginStringView::from(js.data(), js.size());
-                if (ctx->iface.prompt->set_prompt(host, &promptSv)
-                    != 0) {
+                auto promptSv = agentxx::plugin::PluginStringView::from(js.data(), js.size());
+                if (ctx->iface.prompt->set_prompt(host, &promptSv) != 0) {
                     pluginLog(
                         ctx.get(),
                         3,
@@ -523,13 +522,9 @@ extern "C" AGENTXX_PLUGIN_EXPORT int32_t AGENTXX_PLUGIN_CALL
 
             // 宿主约定事件 client_attached 订阅: 客户端接入/重连时重发当前会话快照
             if (ctx->iface.events && ctx->iface.events->subscribe) {
-                auto topicSv = agentxx::plugin::PluginStringView::fromCstr("agentxx_host.client_attached");
-                if (!ctx->iface.events->subscribe(
-                        host,
-                        &topicSv,
-                        on_client_attached,
-                        ctx.get()
-                    )) {
+                auto topicSv
+                    = agentxx::plugin::PluginStringView::fromCstr("agentxx_host.client_attached");
+                if (!ctx->iface.events->subscribe(host, &topicSv, on_client_attached, ctx.get())) {
                     pluginLog(
                         ctx.get(),
                         3,
@@ -544,7 +539,8 @@ extern "C" AGENTXX_PLUGIN_EXPORT int32_t AGENTXX_PLUGIN_CALL
     );
 }
 
-extern "C" AGENTXX_PLUGIN_EXPORT void AGENTXX_PLUGIN_CALL agentxx_plugin_agent_destroy(void* plugin_ctx) {
+extern "C" AGENTXX_PLUGIN_EXPORT void AGENTXX_PLUGIN_CALL
+    agentxx_plugin_agent_destroy(void* plugin_ctx) {
     // C ABI 边界异常守卫: 销毁回调异常不得外泄
     auto* ctx = static_cast<PluginCtx*>(plugin_ctx);
     agentxx::plugin::guardCallVoid(ctxGuardLogger(ctx), [&] {
@@ -593,7 +589,7 @@ static std::string clientJsonEscape(const ClientCtx& ctx, const std::string& s) 
         return "\"\"";
     }
     AgentxxPluginString esc{nullptr, 0};
-    auto sSv = agentxx::plugin::PluginStringView::from(s.data(), s.size());
+    auto                sSv = agentxx::plugin::PluginStringView::from(s.data(), s.size());
     ctx.iface.json->json_escape(ctx.host, &sSv, &esc);
     if (!esc.data) {
         return "\"\"";
@@ -746,11 +742,7 @@ static void
     );
     auto tcidSv  = agentxx::plugin::PluginStringView::from(toolCallId.data(), toolCallId.size());
     auto decorSv = agentxx::plugin::PluginStringView::from(decorJson.data(), decorJson.size());
-    ctx.ui->update_tool_decor(
-        ctx.host,
-        &tcidSv,
-        &decorSv
-    );
+    ctx.ui->update_tool_decor(ctx.host, &tcidSv, &decorSv);
 }
 
 /// 清理本插件全部装饰 (会话切换时调用)
@@ -771,11 +763,7 @@ static void ensureSection(ClientCtx& ctx) {
     }
     auto idSv    = agentxx::plugin::PluginStringView::fromCstr(kSectionId);
     auto propsSv = agentxx::plugin::PluginStringView::fromCstr(R"({"title":"Plan"})");
-    ctx.section = ctx.ui->register_info_section(
-        ctx.host,
-        &idSv,
-        &propsSv
-    );
+    ctx.section  = ctx.ui->register_info_section(ctx.host, &idSv, &propsSv);
 }
 
 /// 注销 Info 段落并清空缓存 (回到 "无规划" 态: 无 plan 时侧栏不显示空段落)
@@ -868,14 +856,15 @@ static void refreshPlanSection(ClientCtx& ctx) {
     if (items.empty()) {
         return; // 内容为空不推送, 避免出现只有标题的空段落
     }
-    const std::string json = fmt::format(R"({{"items":[{}]}})", fmt::join(items, ","));
-    auto jsonSv = agentxx::plugin::PluginStringView::from(json.data(), json.size());
+    const std::string json   = fmt::format(R"({{"items":[{}]}})", fmt::join(items, ","));
+    auto              jsonSv = agentxx::plugin::PluginStringView::from(json.data(), json.size());
     ctx.ui->update_info_section(ctx.host, ctx.section, &jsonSv);
 }
 
 /// EVT_PLUGIN_DATA: 过滤本插件规划事件 {plugin:"agentxx_planning", event:"planning"}
 /// → 更新 Info 栏段落 (最近一次规划概览)
-static void AGENTXX_PLUGIN_CALL on_client_plugin_data(const AgentxxPluginStringView* payload_json, void* ud) {
+static void AGENTXX_PLUGIN_CALL
+    on_client_plugin_data(const AgentxxPluginStringView* payload_json, void* ud) {
     auto* ctxRaw = static_cast<ClientCtx*>(ud);
     // C ABI 回调异常守卫 (client io 线程派发直调)
     agentxx::plugin::guardCallVoid(clientGuardLogger(ctxRaw), [&] {
@@ -886,15 +875,16 @@ static void AGENTXX_PLUGIN_CALL on_client_plugin_data(const AgentxxPluginStringV
         AgentxxPluginString plugin{nullptr, 0};
         AgentxxPluginString event{nullptr, 0};
         AgentxxPluginString data{nullptr, 0};
-        auto kPlugin = agentxx::plugin::PluginStringView::fromCstr("plugin");
-        auto kEvent  = agentxx::plugin::PluginStringView::fromCstr("event");
-        auto kData   = agentxx::plugin::PluginStringView::fromCstr("data");
+        auto                kPlugin = agentxx::plugin::PluginStringView::fromCstr("plugin");
+        auto                kEvent  = agentxx::plugin::PluginStringView::fromCstr("event");
+        auto                kData   = agentxx::plugin::PluginStringView::fromCstr("data");
         if (ctx->iface.json && ctx->iface.json->json_get_string && payload_json) {
             ctx->iface.json->json_get_string(ctx->host, payload_json, &kPlugin, &plugin);
             ctx->iface.json->json_get_string(ctx->host, payload_json, &kEvent, &event);
             ctx->iface.json->json_get_string(ctx->host, payload_json, &kData, &data);
         }
-        const bool mine   = plugin.data && event.data && data.data && std::strcmp(plugin.data, "agentxx_planning") == 0
+        const bool mine = plugin.data && event.data && data.data
+                          && std::strcmp(plugin.data, "agentxx_planning") == 0
                           && std::strcmp(event.data, "planning") == 0;
         if (mine) {
             ctx->last_plan_json.assign(data.data, static_cast<size_t>(data.size));
@@ -917,7 +907,8 @@ static void AGENTXX_PLUGIN_CALL on_client_plugin_data(const AgentxxPluginStringV
 ///   展开体 状态图/todos/notes); read 推送占位 (结果未返回)
 /// - tool_end: 以缓存的最终参数重建装饰 (覆盖流式期间的不完整内容);
 ///   read 模式此时展示结果摘要
-static void AGENTXX_PLUGIN_CALL on_client_delta(const AgentxxPluginStringView* payload_json, void* ud) {
+static void AGENTXX_PLUGIN_CALL
+    on_client_delta(const AgentxxPluginStringView* payload_json, void* ud) {
     auto* ctxRaw = static_cast<ClientCtx*>(ud);
     agentxx::plugin::guardCallVoid(clientGuardLogger(ctxRaw), [&] {
         auto* ctx = static_cast<ClientCtx*>(ud);
@@ -1006,7 +997,8 @@ static void AGENTXX_PLUGIN_CALL on_client_delta(const AgentxxPluginStringView* p
 }
 
 /// EVT_SESSION_SWITCH: 会话切换 → 清理装饰与段落 (新会话尚未有规划)
-static void AGENTXX_PLUGIN_CALL on_client_session_switch(const AgentxxPluginStringView* payload_json, void* ud) {
+static void AGENTXX_PLUGIN_CALL
+    on_client_session_switch(const AgentxxPluginStringView* payload_json, void* ud) {
     (void)payload_json;
     auto* ctxRaw = static_cast<ClientCtx*>(ud);
     agentxx::plugin::guardCallVoid(clientGuardLogger(ctxRaw), [&] {
@@ -1019,14 +1011,16 @@ static void AGENTXX_PLUGIN_CALL on_client_session_switch(const AgentxxPluginStri
     });
 }
 
-extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxClientPluginInfo* AGENTXX_PLUGIN_CALL agentxx_plugin_client_get_info(void) {
+extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxClientPluginInfo* AGENTXX_PLUGIN_CALL
+    agentxx_plugin_client_get_info(void) {
     // C ABI 边界异常守卫: 异常返回 NULL; 本边界为纯静态元数据 → 空操作日志
     return agentxx::plugin::guardCall(
         [](const char*) noexcept {},
         nullptr,
         [&]() -> const AgentxxClientPluginInfo* {
             static const AgentxxClientPluginInfo info{
-                AGENTXX_CLIENT_PLUGIN_API_VERSION, 0,
+                AGENTXX_CLIENT_PLUGIN_API_VERSION,
+                0,
                 agentxx::plugin::PluginStringView::fromCstr("agentxx_planning"),
                 agentxx::plugin::PluginStringView::fromCstr("1.1.0"),
                 agentxx::plugin::PluginStringView::fromCstr(
@@ -1089,7 +1083,9 @@ extern "C" AGENTXX_PLUGIN_EXPORT int32_t AGENTXX_PLUGIN_CALL
             }
 
             if (ctx->iface.log && ctx->iface.log->log) {
-                auto loadedSv = agentxx::plugin::PluginStringView::fromCstr("agentxx_planning client plugin loaded");
+                auto loadedSv = agentxx::plugin::PluginStringView::fromCstr(
+                    "agentxx_planning client plugin loaded"
+                );
                 ctx->iface.log->log(host, 2, &loadedSv);
             }
             *plugin_ctx = ctx.release(); ///< 所有权移交宿主 (destroy 时取回归还)
@@ -1098,7 +1094,8 @@ extern "C" AGENTXX_PLUGIN_EXPORT int32_t AGENTXX_PLUGIN_CALL
     );
 }
 
-extern "C" AGENTXX_PLUGIN_EXPORT void AGENTXX_PLUGIN_CALL agentxx_plugin_client_destroy(void* plugin_ctx) {
+extern "C" AGENTXX_PLUGIN_EXPORT void AGENTXX_PLUGIN_CALL
+    agentxx_plugin_client_destroy(void* plugin_ctx) {
     // C ABI 边界异常守卫: 销毁回调异常不得外泄
     auto* ctx = static_cast<ClientCtx*>(plugin_ctx);
     agentxx::plugin::guardCallVoid(clientGuardLogger(ctx), [&] {
@@ -1109,12 +1106,10 @@ extern "C" AGENTXX_PLUGIN_EXPORT void AGENTXX_PLUGIN_CALL agentxx_plugin_client_
         // 主动反注册段落 (装饰由宿主卸载路径自动摘除; 成员判空遵循扩展表契约)
         clearSection(*ctx);
         if (ctx->iface.log && ctx->iface.log->log) {
-            auto unloadedSv = agentxx::plugin::PluginStringView::fromCstr("agentxx_planning client plugin unloaded");
-            ctx->iface.log->log(
-                ctx->host,
-                2,
-                &unloadedSv
+            auto unloadedSv = agentxx::plugin::PluginStringView::fromCstr(
+                "agentxx_planning client plugin unloaded"
             );
+            ctx->iface.log->log(ctx->host, 2, &unloadedSv);
         }
         delete ctx;
     });

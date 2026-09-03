@@ -11,7 +11,7 @@ set(PLUGIN_NAME agentxx_computer_use)
 # 仅 Windows 有真实实现 (user32 鼠标/键盘注入与光标查询); 其余平台
 # uiControlExecute 返回 "not available on current system" 错误桩, 跳过编译;
 # 运行时依赖 agentxx_screen_capture (同样仅 Windows), 平台支持须保持一致
-# (平台矩阵说明见 docs/agent/plugins.md 9.3.1)
+# (平台矩阵说明见 docs/zh-cn/plugins.md 9.3.1)
 include("${CMAKE_CURRENT_LIST_DIR}/../cmake/plugin_platform_support.cmake")
 agentxx_plugin_platform_gate(${PLUGIN_NAME} _AGENTXX_PLATFORM_OK windows)
 if (NOT _AGENTXX_PLATFORM_OK)

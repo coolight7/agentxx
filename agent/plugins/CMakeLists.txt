@@ -37,7 +37,7 @@ option(AGENTXX_ENABLE_PLUGIN_EXECUTE_JAVASCRIPT "Build agentxx_execute_javascrip
 #   agentxx_plugin_platform_gate() 判定, 不支持则提前 return() 跳过本目录全部
 #   目标; 内置合并模式下的清单登记 (AGENTXX_BUILTIN_PLUGIN_NAMES) 也由此天然
 #   保持正确 (提前 return 时不会误登记)
-# - 平台矩阵说明与依据: docs/agent/plugins.md 9.3.1
+# - 平台矩阵说明与依据: docs/zh-cn/plugins.md 9.3.1
 
 # 依赖库查找路径 (独立构建本目录时生效; 嵌套构建时顶层已传 CMAKE_PREFIX_PATH)
 list(PREPEND CMAKE_PREFIX_PATH "${AGENTXX_INSTALL_DIR}")

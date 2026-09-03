@@ -61,8 +61,7 @@ inline std::string svToStr(AgentxxPluginStringView sv) {
 }
 
 inline std::string svToStr(const AgentxxPluginStringView* sv) {
-    return (sv && sv->data) ? std::string{sv->data, static_cast<size_t>(sv->size)}
-                            : std::string{};
+    return (sv && sv->data) ? std::string{sv->data, static_cast<size_t>(sv->size)} : std::string{};
 }
 
 inline AgentxxPluginStringView strToSv(std::string_view sv) noexcept {
@@ -236,7 +235,7 @@ std::string resolvePluginEntryPath(const std::filesystem::path& dir, const std::
  * 契约 + 全部标准接口表 (版本匹配即全集)。协商机制因此是不对称的:
  * 机制通用, 实际起作用的门禁集中在 client 侧。
  *
- * 三层设计 (详见 docs/agent/plugins.md 4.7):
+ * 三层设计 (详见 docs/zh-cn/plugins.md 4.7):
  * 1. 声明层: 插件 plugin.yaml `interfaces.require/optional` 列出依赖的接口
  *    名 (稳定字符串: 本项目内置为 "agentxx.agent.*" / "agentxx.client.*",
  *    第三方私有接口用 "<vendor>.*"; agent 侧可用接口表 IID 精确声明,

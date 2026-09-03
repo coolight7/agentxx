@@ -13,7 +13,7 @@ set(PLUGIN_NAME agentxx_system_monitor)
 # 真实实现; Android 复用 Linux 分支 (插件共享头将非 _WIN32/非 __APPLE__ 推导为
 # XX_IS_LINUX_D=1, /proc/stat、/proc/meminfo 在 Android 可读, GPU 经 sysfs/drm
 # 枚举缺失时 readFileContent 返回空串优雅降级); macOS/iOS 为空桩, 跳过编译
-# (平台矩阵说明见 docs/agent/plugins.md 9.3.1)
+# (平台矩阵说明见 docs/zh-cn/plugins.md 9.3.1)
 include("${CMAKE_CURRENT_LIST_DIR}/../cmake/plugin_platform_support.cmake")
 agentxx_plugin_platform_gate(${PLUGIN_NAME} _AGENTXX_PLATFORM_OK windows linux android)
 if (NOT _AGENTXX_PLATFORM_OK)

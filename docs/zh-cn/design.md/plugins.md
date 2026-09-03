@@ -1,6 +1,6 @@
 # 插件系统开发指南
 
-> 关联: [design.md](design.md) (主程序架构) · [ffi.md](ffi.md) (FFI) · 源码: [agent/plugins/](../../agent/plugins/) · C ABI 契约: [plugin_api.h](../../agent/lib/include/agentxx/plugin/api/plugin_api.h) / [client_plugin_api.h](../../agent/lib/include/agentxx/plugin/api/client_plugin_api.h) / SDK: [plugin_kit.h](../../agent/lib/include/agentxx/plugin/api/plugin_kit.h)
+> 关联: [design.md](design.md) (主程序架构) · [ffi.md](ffi.md) (FFI) · 源码: [agent/plugins/](/agent/plugins/) · C ABI 契约: [plugin_api.h](/agent/lib/include/agentxx/plugin/api/plugin_api.h) / [client_plugin_api.h](/agent/lib/include/agentxx/plugin/api/client_plugin_api.h) / SDK: [plugin_kit.h](/agent/lib/include/agentxx/plugin/api/plugin_kit.h)
 
 ---
 

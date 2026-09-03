@@ -1,7 +1,7 @@
 # 插件框架 v1 重构设计（锚定协程模型）
 
 > 状态: 设计定稿，待实施（2026-08 评审修订：线程契约勘误 / 完成协议钉死 / 句柄生命周期 / 卸载取消闭环 / 实施顺序重排 / websearch 默认姿势反转）
-> 关联: [plugins.md](../../../docs/agent/plugins.md)（旧设计存档）、[design.md](../../../docs/agent/design.md)
+> 关联: [plugins.md](../../../docs/zh-cn/plugins.md)（旧设计存档）、[design.md](../../../docs/zh-cn/design.md)
 > 本文是插件系统的**最终重构蓝图**。不保留任何历史版本兼容；`AGENTXX_PLUGIN_API_VERSION = 1` 重新定义。
 
 ---

@@ -2,7 +2,7 @@
 # 各插件在自身 CMakeLists.txt 开头声明支持的平台并调用
 # agentxx_plugin_platform_gate() 判定; 无实现的平台直接 return() 跳过编译
 # (内置合并/独立动态库两模式均在子目录入口处拦截), 判定依据与平台矩阵说明
-# 见 docs/agent/plugins.md 9.3.1
+# 见 docs/zh-cn/plugins.md 9.3.1
 
 # XX_IS_WIN_D/LINUX_D/MACOS_D/ANDROID_D/IOS_D 平台变量:
 # - 嵌套构建由顶层 agent/CMakeLists.txt 统一推导并经 _AGENTXX_COMMON_CMAKE_ARGS

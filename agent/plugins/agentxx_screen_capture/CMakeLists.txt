@@ -12,7 +12,7 @@ set(PLUGIN_NAME agentxx_screen_capture)
 # ===== 平台支持判定 =====
 # 仅 Windows 有真实实现 (DXGI/D3D11 桌面复制 + GDI 回退 + WIC PNG 编码);
 # 其余平台源码为 "not supported on this platform" 空桩, 跳过编译避免产出
-# 无功能意义的动态库 (平台矩阵说明见 docs/agent/plugins.md 9.3.1)
+# 无功能意义的动态库 (平台矩阵说明见 docs/zh-cn/plugins.md 9.3.1)
 include("${CMAKE_CURRENT_LIST_DIR}/../cmake/plugin_platform_support.cmake")
 agentxx_plugin_platform_gate(${PLUGIN_NAME} _AGENTXX_PLATFORM_OK windows)
 if (NOT _AGENTXX_PLATFORM_OK)

@@ -48,7 +48,7 @@ dart run bin/agentxx_cli.dart --model-json model.json --config-json config.json
 指针所指内存可能已释放 —— 直接使用存在悬垂风险。
 
 因此 C++ FFI 层提供了异步安全桥接 (`agentxx_event_queue_*` 系列,
-见 `docs/agent/ffi.md` 4.2 节): 原生侧在回调内同步拷贝 payload 入队,
+见 `docs/zh-cn/ffi.md` 4.2 节): 原生侧在回调内同步拷贝 payload 入队,
 Dart 侧轮询取出。`AgentClient` 已完整封装该流程。
 
 ### 同步查询约束

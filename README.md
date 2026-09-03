@@ -244,7 +244,7 @@
 - ⬜根据 ModelName 动态加载，没有匹配的则取用默认提示词
 
 ### 插件化支持
-- ✅c/c++插件支持，可对 agent、client-ui 插件化修改；详见[插件开发文档](docs/agent/plugins.md); [内置插件代码实现](/agent/plugins/); [插件示例](/agent/plugins/example_plugin/)
+- ✅c/c++插件支持，可对 agent、client-ui 插件化修改；详见[插件开发文档](docs/zh-cn/plugins.md); [内置插件代码实现](/agent/plugins/); [插件示例](/agent/plugins/example_plugin/)
     - 可选外置编译插件为动态库，或是内嵌编译进 libagentxx
     - 通过 C-Api、COM Api查询、明确字节对齐、明确基本类型大小（int32、int64）、函数调用约定、结构体指针传递代替值传递 提高兼容性，使主程序与插件允许使用不同编译器、不同依赖库版本、不同标准库时仍可以兼容运行; 可通过混用 Debug/Release 编译的`agentxx_cli`和插件动态库测试，实测可兼容正常运行
     - 原生异步接口支持，兼容主程序和插件之间异步调用、协程异步互相切换执行互不阻塞、运行在同一线程无锁
@@ -269,7 +269,7 @@
 - ⬜Qwen3-TTS 文本转语音
 
 ### FFI动态库接口
-- ✅[FFI动态库C-Api符号导出](/agent/ffi/); [设计文档](/docs/agent/ffi.md); [示例](/agent/example/ffi/)
+- ✅[FFI动态库C-Api符号导出](/agent/ffi/); [设计文档](/docs/zh-cn/ffi.md); [示例](/agent/example/ffi/)
 - 通过SDK, 其他编程语言可以便捷地调用libagentxx动态库创建 agent、执行会话等, 本质上SDK就是将动态库符号套一层, 方便其他编程语言调用, 在其他编程语言里直接加载动态库, 然后搜索函数符号调用也是一样的
 - 编程语言SDK:
     - ✅Flutter/Dart; [SDK](/agent/ffi/dart/); [示例](/agent/example/ffi/dart/)

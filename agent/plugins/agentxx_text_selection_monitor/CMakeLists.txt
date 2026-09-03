@@ -11,7 +11,7 @@ set(PLUGIN_NAME agentxx_text_selection_monitor)
 # ===== 平台支持判定 =====
 # 仅 Windows 有真实实现 (UIAutomation/IAccessible 文本选择 + CDP WebSocket);
 # 其余平台源码为 "not supported on this platform" 空桩, 跳过编译
-# (平台矩阵说明见 docs/agent/plugins.md 9.3.1)
+# (平台矩阵说明见 docs/zh-cn/plugins.md 9.3.1)
 include("${CMAKE_CURRENT_LIST_DIR}/../cmake/plugin_platform_support.cmake")
 agentxx_plugin_platform_gate(${PLUGIN_NAME} _AGENTXX_PLATFORM_OK windows)
 if (NOT _AGENTXX_PLATFORM_OK)

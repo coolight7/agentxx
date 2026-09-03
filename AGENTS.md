@@ -9,7 +9,7 @@
     - Android 5.0+
 
 ## 设计 & 建议
-- 详细主程序架构设计见[design.md](docs/agent/design.md)，插件设计文档见[plugins.md](docs/agent/plugins.md)，当大幅修改代码时，请参考并更新
+- 详细主程序架构设计见[design.md](docs/zh-cn/design.md)，插件设计文档见[plugins.md](docs/zh-cn/plugins.md)，当大幅修改代码时，请参考并更新
 - Agent 的设计支持:
     - 并发多会话，单线程/多协程交错执行会话，不需要线程锁
     - client (tui/cli) 主要负责UI渲染展示、用户交互；agent (BaseAgent/CodeAgent) 负责运行会话、调用 llm api、运行 toolcall 等
@@ -95,7 +95,7 @@ path/to/agentxx_test string_util regex
   ① 禁止可变全局/函数级 static 缓存; ② 实例状态只能放 `*plugin_ctx` 堆块,
   回调经 `spec.user_data` 恢复; ③ 接口表查询结果存实例上下文。
   offload线程池适配异步接口 (`plugin_tool_sync.h`) 适配器为调用方内嵌存储 (PluginCtx 成员),
-  随实例销毁释放。详见 docs/agent/plugins.md 4.2 节"多实例三铁律"
+  随实例销毁释放。详见 docs/zh-cn/plugins.md 4.2 节"多实例三铁律"
 - 为了尽量保持兼容性，主程序和插件之间的接口只能使用 C Api，不能使用 c++，插件将编译成动态库，然后按接口要求导出接口符号，由主程序运行时加载插件动态库后查找符号调用
 - 主程序和插件编译时默认动态链接 c++ 标准库，减少体积；插件也可以自己静态链接c++标准库、libgcc_s
 - 主程序和插件可以复用一些代码，比如一些工具函数，这部分复用代码需要静态链接进主程序和各自插件内，确保兼容不同版本的复用代码编译的主程序和插件可以加载运行
@@ -115,7 +115,7 @@ path/to/agentxx_test string_util regex
   `agent/plugins/cmake/plugin_platform_support.cmake` 的 gate 函数判定,
   复用顶层传入的 XX_IS_*_D 变量), screen_capture/computer_use/
   text_selection_monitor 仅 Windows, audio_stream 全平台未实现,
-  system_monitor 无 macOS; 跨平台插件默认放行; 见 docs/agent/plugins.md 9.3.1
+  system_monitor 无 macOS; 跨平台插件默认放行; 见 docs/zh-cn/plugins.md 9.3.1
 - 工具函数复用: 插件复用 `agent/lib/include/agentxx/util` 的全部工具函数经独立
   静态库 `agentxx_util` (src/util/ 全部源文件: http_client/http_server/ws_client/
   string_util/util/sqlite/settings_db/log/regex/http_header),
@@ -126,7 +126,7 @@ path/to/agentxx_test string_util regex
   定位为内置插件便捷库 (与主程序同一 superbuild 构建、依赖齐全),
   第三方插件不需要它 (纯 C ABI 头即可, 甚至不用 C++);
   未引用模块按目标文件提取自动裁剪 (9 插件 DT_NEEDED 仅系统库);
-  详见 `docs/agent/plugins.md` 4.5/4.6 节
+  详见 `docs/zh-cn/plugins.md` 4.5/4.6 节
 
 ## 编译
 - Linux:

@@ -1249,7 +1249,7 @@ agent/
 │   │   │   └── agentcall.h       # AgentStart/EndCallWrapNode (会话生命周期)
 │   │   ├── plugin/               # 插件系统 (热插拔原生 C++ 插件, 纯 C ABI, API v1 —— 冻结核心 vtable + 13 张接口表)
 │   │   │   ├── api/              # 插件 API 头 (插件/宿主共用 C ABI 契约 + 插件 SDK; 宿主侧引用也走 api/ 前缀)
-│   │   │   │   ├── plugin_api.h      # 纯 C ABI 契约 (唯一跨版本稳定接口, 见 docs/agent/plugins.md) — 核心 vtable 冻结 + COM QueryInterface
+│   │   │   │   ├── plugin_api.h      # 纯 C ABI 契约 (唯一跨版本稳定接口, 见 docs/zh-cn/plugins.md) — 核心 vtable 冻结 + COM QueryInterface
 │   │   │   │   ├── client_plugin_api.h # client 侧插件纯 C ABI 契约 (UI 无关语义层)
 │   │   │   │   ├── plugin_kit.h      # C++ SDK header-only (PluginBase/Task/awaiters/tool/hook/capability/spawn, 命名空间 agentxx::plugin)
 │   │   │   │   ├── plugin_guard.h    # 插件 C ABI 边界异常处理 header-only (命名空间 agentxx::plugin)
