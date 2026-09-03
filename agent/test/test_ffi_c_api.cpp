@@ -1,15 +1,15 @@
-// test_ffi_c_api.cpp —— libagentxx FFI C API 集成测试
 //
 // 测试方式: 直接链接 libagentxx (静态副本也含 ffi_api 实现, 符号一致) 并以
 // 纯 C 方式调用 agentxx_* 导出接口; mock OpenAI 兼容 HTTP 服务器模拟 LLM。
 // 覆盖:
 //  1. 版本/内存/错误串
-//  2. create 错误路径 (非法 JSON/缺模型) → NULL + char** log 详情
+//  2. create 错误路径 (非法 JSON/缺模型) → NULL + AgentxxString log 详情
 //  3. 生命周期 + 会话对话: create→start→EVT_READY→send_input→流式 DELTA→TURN_END
 //  4. 同步查询: get_model_info / get_context_messages / list_sessions
 //  5. HIL 权限中断: mock 返回工具调用 → EVT_INTERRUPT_REQ → 后台线程应答 → 轮次恢复
 //  6. 取消: 慢 LLM 响应中 agentxx_ffi_cancel → TURN_END interrupted
 //  7. 状态错误: stop 后 send_input → AGENTXX_FFI_ERR_STATE; drain_logs
+//  8. 事件队列: agentxx_ffi_event_queue_* 往返测试
 #include "test_ffi_c_api.h"
 
 #include "agentxx/ffi_api.h"
@@ -85,13 +85,18 @@ struct FfiEventRecorder {
     mutable std::mutex                                       m;
     std::vector<std::pair<AgentxxFFIEventType, std::string>> events;
 
-    static void onEvent(AgentxxFFIEventType type, const char* payload, void* ud) {
+    static void AGENTXX_FFI_CALL
+        onEvent(int32_t type, const AgentxxStringView* payload, void* ud) {
         auto* self = static_cast<FfiEventRecorder*>(ud);
         if (self == nullptr) {
             return;
         }
+        std::string s;
+        if (payload != nullptr && payload->data != nullptr && payload->size > 0) {
+            s.assign(payload->data, static_cast<size_t>(payload->size));
+        }
         std::lock_guard<std::mutex> lock(self->m);
-        self->events.emplace_back(type, payload == nullptr ? "" : std::string(payload));
+        self->events.emplace_back(static_cast<AgentxxFFIEventType>(type), std::move(s));
     }
 
     bool has(AgentxxFFIEventType t) const {
@@ -204,22 +209,17 @@ struct FfiMockLLM {
             {"choices", neograph::json::array({
                 neograph::json{
                     {"index", 0},
-                    {"delta", {{"role", "assistant"}, {"tool_calls", neograph::json::array({
-                        neograph::json{{"index", 0}, {"id", "call_ffi_1"}, {"type", "function"}, {"function", {{"name", toolName}, {"arguments", ""}}}},
-                    })}}},
-                },
-            })},
-        }.dump() + "\n\n"
-        + "data: " + neograph::json{
-            {"id", id},
-            {"object", "chat.completion.chunk"},
-            {"model", "ffi-mock"},
-            {"choices", neograph::json::array({
-                neograph::json{
-                    {"index", 0},
-                    {"delta", {{"tool_calls", neograph::json::array({
-                        neograph::json{{"index", 0}, {"function", {{"arguments", argsJson}}}},
-                    })}}},
+                    {"delta", {
+                        {"role", "assistant"},
+                        {"tool_calls", neograph::json::array({
+                            neograph::json{
+                                {"index", 0},
+                                {"id", "call-ffi-1"},
+                                {"type", "function"},
+                                {"function", {{"name", toolName}, {"arguments", argsJson}}},
+                            },
+                        })},
+                    }},
                 },
             })},
         }.dump() + "\n\n"
@@ -235,36 +235,30 @@ struct FfiMockLLM {
     }
 
     bool start(uint16_t& outPort) {
-        server    = std::make_unique<agentxx::util::HttpServer>(agentxx::util::HttpServer::Config{
-               .address   = "127.0.0.1",
-               .port      = 0,
-               .ioThreads = 1,
-        });
-        auto mock = this;
-        auto handler = std::make_shared<agentxx::util::HttpServer::Handler>(
-            [mock](
-                agentxx::util::HttpServer::Request& /*req*/,
-                agentxx::util::HttpServer::Response& resp,
-                std::string_view /*matched*/
-            ) -> asio::awaitable<void> {
-                const int n = mock->requestCount.fetch_add(1);
-                if (mock->slowMs > 0) {
-                    std::this_thread::sleep_for(std::chrono::milliseconds(mock->slowMs));
-                }
-                resp.result(boost::beast::http::status::ok);
-                resp.set(boost::beast::http::field::content_type, "text/event-stream");
-                resp.set(boost::beast::http::field::cache_control, "no-cache");
-                resp.keep_alive(false);
-                if (n == 0 && mock->firstIsToolCall) {
-                    resp.body()
-                        = toolCallSse("agentxx_filesystem_read", R"({"path": "/etc/hostname"})");
-                } else {
-                    resp.body() = textSse("hello from ffi mock");
-                }
-                resp.prepare_payload();
-                co_return;
-            }
+        server = std::make_unique<agentxx::util::HttpServer>(
+            agentxx::util::HttpServer::Config{.address = "127.0.0.1", .port = 0, .ioThreads = 1}
         );
+        auto handler = std::make_shared<agentxx::util::HttpServer::Handler>(
+            [this](agentxx::util::HttpServer::Request&,
+                   agentxx::util::HttpServer::Response& resp,
+                   std::string_view)
+            -> asio::awaitable<void> {
+            const int n = requestCount.fetch_add(1);
+            if (slowMs > 0) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(slowMs));
+            }
+            resp.result(boost::beast::http::status::ok);
+            resp.set(boost::beast::http::field::content_type, "text/event-stream");
+            resp.set(boost::beast::http::field::cache_control, "no-cache");
+            resp.keep_alive(false);
+            if (n == 0 && firstIsToolCall) {
+                resp.body() = toolCallSse("agentxx_filesystem_read", R"({"path": "/etc/hostname"})");
+            } else {
+                resp.body() = textSse("hello from ffi mock");
+            }
+            resp.prepare_payload();
+            co_return;
+        });
         server->router().add("/chat/completions", 2, handler);
         server->router().add("/v1/chat/completions", 2, handler);
         thread = std::thread([s = server.get()]() {
@@ -312,56 +306,65 @@ struct FfiMockLLM {
 /// 1) 版本 / 内存 / 错误串
 void testVersionAndMemory() {
     XX_TEST_EXPECT_EQ(agentxx_ffi_api_version(), AGENTXX_FFI_API_VERSION);
-    XX_TEST_EXPECT_TRUE(agentxx_ffi_library_version() != nullptr);
-    XX_TEST_EXPECT_TRUE(std::string(agentxx_ffi_strerror(AGENTXX_FFI_OK)) == "success");
-    XX_TEST_EXPECT_TRUE(
-        std::string(agentxx_ffi_strerror(AGENTXX_FFI_ERR_INVALID)) == "invalid argument"
-    );
+    AgentxxStringView libVer{};
+    XX_TEST_EXPECT_EQ(agentxx_ffi_library_version(&libVer), AGENTXX_FFI_OK);
+    XX_TEST_EXPECT_TRUE(libVer.data != nullptr && libVer.size > 0);
+
+    AgentxxStringView errOk{};
+    XX_TEST_EXPECT_EQ(agentxx_ffi_strerror(AGENTXX_FFI_OK, &errOk), AGENTXX_FFI_OK);
+    XX_TEST_EXPECT_TRUE(std::string_view(errOk.data, errOk.size) == "success");
+
+    AgentxxStringView errInv{};
+    XX_TEST_EXPECT_EQ(agentxx_ffi_strerror(AGENTXX_FFI_ERR_INVALID, &errInv), AGENTXX_FFI_OK);
+    XX_TEST_EXPECT_TRUE(std::string_view(errInv.data, errInv.size) == "invalid argument");
 
     // strdup_n / free 往返
-    const char* text = "hello ffi";
-    char*       dup  = agentxx_ffi_strdup_n(text, std::strlen(text));
-    XX_TEST_EXPECT_TRUE(dup != nullptr);
-    XX_TEST_EXPECT_TRUE(std::strcmp(dup, text) == 0);
-    agentxx_ffi_free(dup);
+    const char*   text   = "hello ffi";
+    auto          textSv = agentxx_string_view_cstr(text);
+    AgentxxString dup{};
+    XX_TEST_EXPECT_EQ(agentxx_ffi_strdup_n(&textSv, &dup), AGENTXX_FFI_OK);
+    XX_TEST_EXPECT_TRUE(dup.data != nullptr && dup.size == std::strlen(text));
+    XX_TEST_EXPECT_TRUE(std::strcmp(dup.data, text) == 0);
+    agentxx_ffi_string_free(&dup);
 
     // 带 NUL 的任意字节段
-    const char bytes[] = {'a', 'b', '\0', 'c', 'd'};
-    char*      p       = agentxx_ffi_strdup_n(bytes, sizeof(bytes));
-    XX_TEST_EXPECT_TRUE(p != nullptr);
-    XX_TEST_EXPECT_TRUE(std::memcmp(p, bytes, sizeof(bytes)) == 0);
-    agentxx_ffi_free(p);
+    const char    bytes[] = {'a', 'b', '\0', 'c', 'd'};
+    auto          bytesSv = agentxx_string_view(bytes, sizeof(bytes));
+    AgentxxString p{};
+    XX_TEST_EXPECT_EQ(agentxx_ffi_strdup_n(&bytesSv, &p), AGENTXX_FFI_OK);
+    XX_TEST_EXPECT_TRUE(p.data != nullptr && p.size == sizeof(bytes));
+    XX_TEST_EXPECT_TRUE(std::memcmp(p.data, bytes, sizeof(bytes)) == 0);
+    agentxx_ffi_string_free(&p);
 }
 
-/// 2) create 错误路径 → NULL + log
+/// 2) create 错误路径 → NULL + AgentxxString log
 void testCreateInvalid() {
-    char* log = nullptr;
+    AgentxxString log{};
 
     // 无模型配置
     AgentxxFFIAgent* a = agentxx_ffi_create(nullptr, nullptr, nullptr, &log);
     XX_TEST_EXPECT_TRUE(a == nullptr);
-    XX_TEST_EXPECT_TRUE(log != nullptr && std::strstr(log, "模型配置") != nullptr);
-    agentxx_ffi_free(log);
-    log = nullptr;
+    XX_TEST_EXPECT_TRUE(log.data != nullptr && std::strstr(log.data, "模型配置") != nullptr);
+    agentxx_ffi_string_free(&log);
 
     // config_json 非法 JSON
-    a = agentxx_ffi_create("{not json", "{}", nullptr, &log);
+    auto badConfigSv  = agentxx_string_view_cstr("{not json");
+    auto emptyModelSv = agentxx_string_view_cstr("{}");
+    a                 = agentxx_ffi_create(&badConfigSv, &emptyModelSv, nullptr, &log);
     XX_TEST_EXPECT_TRUE(a == nullptr);
-    XX_TEST_EXPECT_TRUE(log != nullptr && std::strstr(log, "非法 JSON") != nullptr);
-    agentxx_ffi_free(log);
-    log = nullptr;
+    XX_TEST_EXPECT_TRUE(log.data != nullptr && std::strstr(log.data, "非法 JSON") != nullptr);
+    agentxx_ffi_string_free(&log);
 
     // model_json 非法 (无 baseUrl/apiKey → isValid() 失败)
-    a = agentxx_ffi_create(nullptr, "{\"name\":\"x\"}", nullptr, &log);
+    auto badModelSv = agentxx_string_view_cstr("{\"name\":\"x\"}");
+    a               = agentxx_ffi_create(nullptr, &badModelSv, nullptr, &log);
     XX_TEST_EXPECT_TRUE(a == nullptr);
-    XX_TEST_EXPECT_TRUE(log != nullptr && std::strstr(log, "模型配置非法") != nullptr);
-    agentxx_ffi_free(log);
-    log = nullptr;
+    XX_TEST_EXPECT_TRUE(log.data != nullptr && std::strstr(log.data, "模型配置非法") != nullptr);
+    agentxx_ffi_string_free(&log);
 
     // NULL 句柄校验
     XX_TEST_EXPECT_EQ(agentxx_ffi_destroy(nullptr, &log), AGENTXX_FFI_ERR_INVALID);
-    agentxx_ffi_free(log);
-    log = nullptr;
+    agentxx_ffi_string_free(&log);
 }
 
 /// 3) 生命周期 + 会话对话 + 同步查询 (mock LLM)
@@ -380,11 +383,13 @@ void testLifecycleAndConversation() {
     cb.on_event  = FfiEventRecorder::onEvent;
     cb.user_data = &rec;
 
-    char*            log = nullptr;
-    AgentxxFFIAgent* a   = agentxx_ffi_create(nullptr, mock.modelJson().c_str(), &cb, &log);
+    AgentxxString    log{};
+    auto             modelJsonStr = mock.modelJson();
+    auto             modelJsonSv  = agentxx_string_view(modelJsonStr.data(), modelJsonStr.size());
+    AgentxxFFIAgent* a            = agentxx_ffi_create(nullptr, &modelJsonSv, &cb, &log);
     if (a == nullptr) {
-        TEST_FAIL << "create failed: " << (log ? log : "?") << std::endl;
-        agentxx_ffi_free(log);
+        TEST_FAIL << "create failed: " << (log.data ? log.data : "?") << std::endl;
+        agentxx_ffi_string_free(&log);
         g_ffi_failed++;
         mock.stop();
         return;
@@ -400,12 +405,14 @@ void testLifecycleAndConversation() {
     }
 
     // 同步查询: 模型信息
-    char* mi = agentxx_ffi_get_model_info(a, &log);
-    XX_TEST_EXPECT_TRUE(mi != nullptr && std::strstr(mi, "currentModel") != nullptr);
-    agentxx_ffi_free(mi);
+    AgentxxString mi{};
+    XX_TEST_EXPECT_EQ(agentxx_ffi_get_model_info(a, &mi, &log), AGENTXX_FFI_OK);
+    XX_TEST_EXPECT_TRUE(mi.data != nullptr && std::strstr(mi.data, "currentModel") != nullptr);
+    agentxx_ffi_string_free(&mi);
 
     // 发送输入 → 流式 delta → 轮次结束
-    XX_TEST_EXPECT_EQ(agentxx_ffi_send_input(a, "hello", &log), AGENTXX_FFI_OK);
+    auto inputSv = agentxx_string_view_cstr("hello");
+    XX_TEST_EXPECT_EQ(agentxx_ffi_send_input(a, &inputSv, &log), AGENTXX_FFI_OK);
     XX_TEST_EXPECT_TRUE(rec.wait(AGENTXX_FFI_EVT_TURN_END, 30000));
     XX_TEST_EXPECT_TRUE(rec.hasDeltaKind("text_token"));
     // TURN_END 无错误
@@ -423,46 +430,49 @@ void testLifecycleAndConversation() {
     XX_TEST_EXPECT_TRUE(rec.has(AGENTXX_FFI_EVT_MODEL_INFO));
 
     // 同步查询: LLM 上下文 (一轮后应有 user/assistant 消息)
-    char* ctx = agentxx_ffi_get_context_messages(a, &log);
-    XX_TEST_EXPECT_TRUE(ctx != nullptr);
-    if (ctx != nullptr) {
+    AgentxxString ctx{};
+    XX_TEST_EXPECT_EQ(agentxx_ffi_get_context_messages(a, &ctx, &log), AGENTXX_FFI_OK);
+    XX_TEST_EXPECT_TRUE(ctx.data != nullptr);
+    if (ctx.data != nullptr) {
         try {
-            auto j = neograph::json::parse(ctx);
+            auto j = neograph::json::parse(std::string_view(ctx.data, ctx.size));
             XX_TEST_EXPECT_TRUE(j.contains("messages") && j["messages"].is_array());
             XX_TEST_EXPECT_TRUE(j["messages"].size() > 0);
         } catch (...) {
             g_ffi_failed++;
-            TEST_FAIL << "context payload not JSON: " << ctx << std::endl;
+            TEST_FAIL << "context payload not JSON: " << ctx.data << std::endl;
         }
-        agentxx_ffi_free(ctx);
+        agentxx_ffi_string_free(&ctx);
     }
 
     // 同步查询: 持久化会话列表 (未开启持久化 → 空数组)
-    char* sess = agentxx_ffi_list_sessions(a, &log);
-    XX_TEST_EXPECT_TRUE(sess != nullptr);
-    if (sess != nullptr) {
+    AgentxxString sess{};
+    XX_TEST_EXPECT_EQ(agentxx_ffi_list_sessions(a, &sess, &log), AGENTXX_FFI_OK);
+    XX_TEST_EXPECT_TRUE(sess.data != nullptr);
+    if (sess.data != nullptr) {
         try {
-            auto j = neograph::json::parse(sess);
+            auto j = neograph::json::parse(std::string_view(sess.data, sess.size));
             XX_TEST_EXPECT_TRUE(j.contains("sessions") && j["sessions"].is_array());
         } catch (...) {
             g_ffi_failed++;
-            TEST_FAIL << "sessions payload not JSON: " << sess << std::endl;
+            TEST_FAIL << "sessions payload not JSON: " << sess.data << std::endl;
         }
-        agentxx_ffi_free(sess);
+        agentxx_ffi_string_free(&sess);
     }
 
     // 日志 drain (至少返回合法 JSON 数组)
-    char* logs = agentxx_ffi_drain_logs(a, &log);
-    XX_TEST_EXPECT_TRUE(logs != nullptr);
-    if (logs != nullptr) {
+    AgentxxString logs{};
+    XX_TEST_EXPECT_EQ(agentxx_ffi_drain_logs(a, &logs, &log), AGENTXX_FFI_OK);
+    XX_TEST_EXPECT_TRUE(logs.data != nullptr);
+    if (logs.data != nullptr) {
         try {
-            auto j = neograph::json::parse(logs);
+            auto j = neograph::json::parse(std::string_view(logs.data, logs.size));
             XX_TEST_EXPECT_TRUE(j.is_array());
         } catch (...) {
             g_ffi_failed++;
-            TEST_FAIL << "drain_logs not JSON array: " << logs << std::endl;
+            TEST_FAIL << "drain_logs not JSON array: " << logs.data << std::endl;
         }
-        agentxx_ffi_free(logs);
+        agentxx_ffi_string_free(&logs);
     }
 
     // 停止 → 销毁 (幂等 stop)
@@ -471,9 +481,9 @@ void testLifecycleAndConversation() {
     XX_TEST_EXPECT_EQ(agentxx_ffi_destroy(a, &log), AGENTXX_FFI_OK);
 
     // 停止后: 状态错误
-    XX_TEST_EXPECT_EQ(agentxx_ffi_send_input(nullptr, "x", &log), AGENTXX_FFI_ERR_INVALID);
-    agentxx_ffi_free(log);
-    log = nullptr;
+    auto xSv = agentxx_string_view_cstr("x");
+    XX_TEST_EXPECT_EQ(agentxx_ffi_send_input(nullptr, &xSv, &log), AGENTXX_FFI_ERR_INVALID);
+    agentxx_ffi_string_free(&log);
     mock.stop();
 }
 
@@ -494,14 +504,9 @@ void testHilInterrupt() {
     cb.on_event  = FfiEventRecorder::onEvent;
     cb.user_data = &rec;
 
-    // 权限模式 all_ask: 全部路径读写均询问 (确保 /etc/hostname 触发权限中断)
-    // 插件装配: mock 调用的 agentxx_filesystem_read 已从 lib 内置工具迁移为
-    // filesystem 插件 (2026-08 内置插件化), FFI agent 不会自动加载插件,
-    // 须显式配置; 路径按测试可执行同目录 plugins/ 推导
     std::string pluginDir  = findPluginDir("agentxx_filesystem");
     std::string configJson = R"({"permissionMode": "all_ask"})";
     if (!pluginDir.empty()) {
-        // 经 json 库注入 plugins 段 (手拼 raw string 会踩 ")" 定界提前终止坑)
         try {
             auto cfg       = neograph::json::parse(configJson);
             cfg["plugins"] = neograph::json::array({neograph::json{{"path", pluginDir}}});
@@ -514,12 +519,14 @@ void testHilInterrupt() {
         }
     }
 
-    char*            log = nullptr;
-    AgentxxFFIAgent* a
-        = agentxx_ffi_create(configJson.c_str(), mock.modelJson().c_str(), &cb, &log);
+    AgentxxString log{};
+    auto          cfgSv   = agentxx_string_view(configJson.data(), configJson.size());
+    auto          mjson   = mock.modelJson();
+    auto          mjsonSv = agentxx_string_view(mjson.data(), mjson.size());
+    AgentxxFFIAgent* a    = agentxx_ffi_create(&cfgSv, &mjsonSv, &cb, &log);
     if (a == nullptr) {
-        TEST_FAIL << "create failed: " << (log ? log : "?") << std::endl;
-        agentxx_ffi_free(log);
+        TEST_FAIL << "create failed: " << (log.data ? log.data : "?") << std::endl;
+        agentxx_ffi_string_free(&log);
         mock.stop();
         g_ffi_failed++;
         return;
@@ -527,7 +534,8 @@ void testHilInterrupt() {
     XX_TEST_EXPECT_EQ(agentxx_ffi_start(a, &log), AGENTXX_FFI_OK);
     XX_TEST_EXPECT_TRUE(rec.wait(AGENTXX_FFI_EVT_READY, 20000));
 
-    XX_TEST_EXPECT_EQ(agentxx_ffi_send_input(a, "read /etc/hostname", &log), AGENTXX_FFI_OK);
+    auto cmdSv = agentxx_string_view_cstr("read /etc/hostname");
+    XX_TEST_EXPECT_EQ(agentxx_ffi_send_input(a, &cmdSv, &log), AGENTXX_FFI_OK);
 
     // 等待权限中断请求
     XX_TEST_EXPECT_TRUE(rec.wait(AGENTXX_FFI_EVT_INTERRUPT_REQ, 30000));
@@ -541,7 +549,6 @@ void testHilInterrupt() {
             auto j      = neograph::json::parse(payload);
             interruptId = j.value("interruptId", int64_t{-1});
             XX_TEST_EXPECT_TRUE(interruptId > 0);
-            // argJson 应含 permission 上下文
             std::string argJson = j.value("argJson", std::string{});
             XX_TEST_EXPECT_TRUE(argJson.find("permission") != std::string::npos);
         } catch (...) {
@@ -551,16 +558,16 @@ void testHilInterrupt() {
     }
 
     // 在独立线程延迟应答 allow (模拟宿主 UI 异步操作)
-    int         respondRc = -999;
+    int32_t     respondRc = -999;
     std::thread responder([a, interruptId, &respondRc]() {
         std::this_thread::sleep_for(std::chrono::milliseconds(200));
-        char* lg = nullptr;
-        // bool 类型输入: "true" = 允许
-        respondRc = agentxx_ffi_interrupt_respond(a, interruptId, R"(["true"])", &lg);
-        agentxx_ffi_free(lg);
+        AgentxxString lg{};
+        auto          valSv = agentxx_string_view_cstr(R"(["true"])");
+        respondRc = agentxx_ffi_interrupt_respond(a, interruptId, &valSv, &lg);
+        agentxx_ffi_string_free(&lg);
     });
 
-    // 轮次应恢复并结束 (工具执行 → 第二次 LLM → 文本)
+    // 轮次应恢复并结束
     XX_TEST_EXPECT_TRUE(rec.wait(AGENTXX_FFI_EVT_TURN_END, 30000));
     XX_TEST_EXPECT_TRUE(respondRc == 0);
     responder.join();
@@ -576,12 +583,13 @@ void testHilInterrupt() {
     }
 
     // 已应答后, 再次应答同一 id 应报无效
-    char* lg = nullptr;
+    AgentxxString lg{};
+    auto          valSv = agentxx_string_view_cstr(R"(["true"])");
     XX_TEST_EXPECT_EQ(
-        agentxx_ffi_interrupt_respond(a, interruptId, R"(["true"])", &lg),
+        agentxx_ffi_interrupt_respond(a, interruptId, &valSv, &lg),
         AGENTXX_FFI_ERR_INTERRUPT
     );
-    agentxx_ffi_free(lg);
+    agentxx_ffi_string_free(&lg);
 
     XX_TEST_EXPECT_EQ(agentxx_ffi_stop(a, &log), AGENTXX_FFI_OK);
     XX_TEST_EXPECT_EQ(agentxx_ffi_destroy(a, &log), AGENTXX_FFI_OK);
@@ -605,11 +613,13 @@ void testCancel() {
     cb.on_event  = FfiEventRecorder::onEvent;
     cb.user_data = &rec;
 
-    char*            log = nullptr;
-    AgentxxFFIAgent* a   = agentxx_ffi_create(nullptr, mock.modelJson().c_str(), &cb, &log);
+    AgentxxString    log{};
+    auto             mjson   = mock.modelJson();
+    auto             mjsonSv = agentxx_string_view(mjson.data(), mjson.size());
+    AgentxxFFIAgent* a       = agentxx_ffi_create(nullptr, &mjsonSv, &cb, &log);
     if (a == nullptr) {
         TEST_FAIL << "create failed" << std::endl;
-        agentxx_ffi_free(log);
+        agentxx_ffi_string_free(&log);
         mock.stop();
         g_ffi_failed++;
         return;
@@ -617,7 +627,8 @@ void testCancel() {
     XX_TEST_EXPECT_EQ(agentxx_ffi_start(a, &log), AGENTXX_FFI_OK);
     XX_TEST_EXPECT_TRUE(rec.wait(AGENTXX_FFI_EVT_READY, 20000));
 
-    XX_TEST_EXPECT_EQ(agentxx_ffi_send_input(a, "run slow", &log), AGENTXX_FFI_OK);
+    auto runSv = agentxx_string_view_cstr("run slow");
+    XX_TEST_EXPECT_EQ(agentxx_ffi_send_input(a, &runSv, &log), AGENTXX_FFI_OK);
     // 模拟用户提前取消
     std::this_thread::sleep_for(std::chrono::milliseconds(300));
     XX_TEST_EXPECT_EQ(agentxx_ffi_cancel(a, &log), AGENTXX_FFI_OK);
@@ -627,8 +638,6 @@ void testCancel() {
         auto turn = rec.first(AGENTXX_FFI_EVT_TURN_END);
         try {
             auto j = neograph::json::parse(turn);
-            // 用户取消语义: has_error=true + errorMessage="Cancelled by user"
-            // (见 BaseAgent::runTurnAsync 取消分支)
             XX_TEST_EXPECT_TRUE(j.value("hasError", false) == true);
             XX_TEST_EXPECT_TRUE(
                 j.value("errorMessage", std::string{}).find("Cancelled") != std::string::npos
@@ -644,7 +653,7 @@ void testCancel() {
     mock.stop();
 }
 
-/// 6) 多 Runtime 并发独立运行测试 (方案 A 独立线程模型)
+/// 6) 多 Runtime 并发独立运行测试 (独立线程模型)
 void testMultipleRuntimesConcurrent() {
     FfiMockLLM mock;
     uint16_t   port = 0;
@@ -655,33 +664,25 @@ void testMultipleRuntimesConcurrent() {
     }
 
     constexpr size_t kRuntimeCount = 3;
-
     struct RuntimeSlot {
-        FfiEventRecorder    rec;
-        AgentxxFFICallbacks cb{};
-        AgentxxFFIAgent*    agent = nullptr;
+        AgentxxFFIAgent* agent = nullptr;
+        FfiEventRecorder rec;
     };
-
     std::vector<RuntimeSlot> slots(kRuntimeCount);
 
     for (size_t i = 0; i < kRuntimeCount; ++i) {
-        slots[i].cb.on_event  = FfiEventRecorder::onEvent;
-        slots[i].cb.user_data = &slots[i].rec;
-        char* log             = nullptr;
-        slots[i].agent = agentxx_ffi_create(nullptr, mock.modelJson().c_str(), &slots[i].cb, &log);
-        XX_TEST_EXPECT_TRUE(slots[i].agent != nullptr);
-        if (log != nullptr) {
-            agentxx_ffi_free(log);
-        }
-    }
+        AgentxxFFICallbacks cb;
+        std::memset(&cb, 0, sizeof(cb));
+        cb.on_event  = FfiEventRecorder::onEvent;
+        cb.user_data = &slots[i].rec;
 
-    // 并发启动
-    for (size_t i = 0; i < kRuntimeCount; ++i) {
-        char* log = nullptr;
+        AgentxxString log{};
+        auto          mjson   = mock.modelJson();
+        auto          mjsonSv = agentxx_string_view(mjson.data(), mjson.size());
+        slots[i].agent        = agentxx_ffi_create(nullptr, &mjsonSv, &cb, &log);
+        XX_TEST_EXPECT_TRUE(slots[i].agent != nullptr);
         XX_TEST_EXPECT_EQ(agentxx_ffi_start(slots[i].agent, &log), AGENTXX_FFI_OK);
-        if (log != nullptr) {
-            agentxx_ffi_free(log);
-        }
+        agentxx_ffi_string_free(&log);
     }
 
     // 等待所有 runtime 就绪
@@ -691,14 +692,13 @@ void testMultipleRuntimesConcurrent() {
 
     // 并发发送输入
     for (size_t i = 0; i < kRuntimeCount; ++i) {
-        char* log = nullptr;
+        AgentxxString log{};
+        auto          slotSv = agentxx_string_view_cstr("Hello from slot");
         XX_TEST_EXPECT_EQ(
-            agentxx_ffi_send_input(slots[i].agent, "Hello from slot", &log),
+            agentxx_ffi_send_input(slots[i].agent, &slotSv, &log),
             AGENTXX_FFI_OK
         );
-        if (log != nullptr) {
-            agentxx_ffi_free(log);
-        }
+        agentxx_ffi_string_free(&log);
     }
 
     // 等待各 slot 独立收到 TURN_END
@@ -708,19 +708,46 @@ void testMultipleRuntimesConcurrent() {
 
     // 并发停止与销毁
     for (size_t i = 0; i < kRuntimeCount; ++i) {
-        char* log = nullptr;
+        AgentxxString log{};
         XX_TEST_EXPECT_EQ(agentxx_ffi_stop(slots[i].agent, &log), AGENTXX_FFI_OK);
-        if (log != nullptr) {
-            agentxx_ffi_free(log);
-            log = nullptr;
-        }
+        agentxx_ffi_string_free(&log);
         XX_TEST_EXPECT_EQ(agentxx_ffi_destroy(slots[i].agent, &log), AGENTXX_FFI_OK);
-        if (log != nullptr) {
-            agentxx_ffi_free(log);
-        }
+        agentxx_ffi_string_free(&log);
     }
 
     mock.stop();
+}
+
+/// 7) 事件队列往返测试
+void testEventQueue() {
+    auto* q = agentxx_ffi_event_queue_create();
+    XX_TEST_EXPECT_TRUE(q != nullptr);
+
+    // 探测空队列超时
+    int32_t       type = -1;
+    AgentxxString jsonOut{};
+    XX_TEST_EXPECT_EQ(
+        agentxx_ffi_event_queue_pop(q, &type, &jsonOut, 50),
+        AGENTXX_FFI_ERR_TIMEOUT
+    );
+
+    // 模拟投递事件
+    auto evtJson = agentxx_string_view_cstr(R"({"sessionId":"test_sess_123"})");
+    agentxx_ffi_event_queue_on_event(AGENTXX_FFI_EVT_READY, &evtJson, q);
+
+    // 出队成功
+    XX_TEST_EXPECT_EQ(
+        agentxx_ffi_event_queue_pop(q, &type, &jsonOut, 100),
+        AGENTXX_FFI_OK
+    );
+    XX_TEST_EXPECT_EQ(type, AGENTXX_FFI_EVT_READY);
+    XX_TEST_EXPECT_TRUE(jsonOut.data != nullptr);
+    if (jsonOut.data != nullptr) {
+        XX_TEST_EXPECT_TRUE(std::strstr(jsonOut.data, "test_sess_123") != nullptr);
+        agentxx_ffi_string_free(&jsonOut);
+    }
+
+    agentxx_ffi_event_queue_free(q);
 }
 
 } // namespace
@@ -735,6 +762,7 @@ agentxx::test::TestResult testFfiCApi() {
     testHilInterrupt();
     testCancel();
     testMultipleRuntimesConcurrent();
+    testEventQueue();
     return TestResult(g_ffi_passed, g_ffi_failed);
 }
 

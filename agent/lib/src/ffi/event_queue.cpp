@@ -38,7 +38,7 @@ struct AgentxxFFIEventQueue {
 
 extern "C" {
 
-AgentxxFFIEventQueue* agentxx_ffi_event_queue_create(void) {
+AgentxxFFIEventQueue* AGENTXX_FFI_CALL agentxx_ffi_event_queue_create(void) {
     try {
         return new AgentxxFFIEventQueue{};
     } catch (...) {
@@ -46,7 +46,7 @@ AgentxxFFIEventQueue* agentxx_ffi_event_queue_create(void) {
     }
 }
 
-void agentxx_ffi_event_queue_free(AgentxxFFIEventQueue* q) {
+void AGENTXX_FFI_CALL agentxx_ffi_event_queue_free(AgentxxFFIEventQueue* q) {
     if (q == nullptr) {
         return;
     }
@@ -71,10 +71,10 @@ void agentxx_ffi_event_queue_free(AgentxxFFIEventQueue* q) {
     delete q;
 }
 
-void agentxx_ffi_event_queue_on_event(
-    AgentxxFFIEventType type,
-    const char*         payload_json,
-    void*               user_data
+void AGENTXX_FFI_CALL agentxx_ffi_event_queue_on_event(
+    int32_t                  type,
+    const AgentxxStringView* payload_json,
+    void*                    user_data
 ) {
     auto* q = static_cast<AgentxxFFIEventQueue*>(user_data);
     if (q == nullptr) {
@@ -97,8 +97,10 @@ void agentxx_ffi_event_queue_on_event(
         }
         try {
             q->items.emplace_back(
-                static_cast<int32_t>(type),
-                payload_json == nullptr ? std::string{} : std::string(payload_json)
+                type,
+                (payload_json == nullptr || payload_json->data == nullptr)
+                    ? std::string{}
+                    : std::string(payload_json->data, static_cast<size_t>(payload_json->size))
             );
         } catch (...) {
             return; // OOM 等异常: 丢弃本条, 保证 io 线程不受影响
@@ -109,14 +111,15 @@ void agentxx_ffi_event_queue_on_event(
     }
 }
 
-int agentxx_ffi_event_queue_pop(
+int32_t AGENTXX_FFI_CALL agentxx_ffi_event_queue_pop(
     AgentxxFFIEventQueue* q,
     int32_t*              type_out,
-    char**                json_out,
+    AgentxxString*        json_out,
     uint32_t              timeout_ms
 ) {
     if (json_out != nullptr) {
-        *json_out = nullptr;
+        json_out->data = nullptr;
+        json_out->size = 0;
     }
     if (q == nullptr || json_out == nullptr || type_out == nullptr) {
         return AGENTXX_FFI_ERR_INVALID;
@@ -151,7 +154,7 @@ int agentxx_ffi_event_queue_pop(
     *type_out = item.first;
 
     // payload 拷出为独立分配的 NUL 结尾 UTF-8 字符串 (统一经 agentxx_ffi_malloc
-    // 分配通道, 宿主用后 agentxx_ffi_free 释放)
+    // 分配通道, 宿主用后 agentxx_ffi_string_free 释放)
     char* out = nullptr;
     try {
         const size_t n = item.second.size();
@@ -163,10 +166,11 @@ int agentxx_ffi_event_queue_pop(
             std::memcpy(out, item.second.data(), n);
         }
         out[n] = '\0';
+        json_out->data = out;
+        json_out->size = static_cast<uint64_t>(n);
     } catch (...) {
         return AGENTXX_FFI_ERR_INTERNAL;
     }
-    *json_out = out;
     return AGENTXX_FFI_OK;
 }
 

@@ -94,6 +94,13 @@ agentxx::agent::PluginSide pluginSideFromString(const std::string& s) {
     return agentxx::agent::PluginSide::Auto;
 }
 
+std::string_view toSv(const AgentxxStringView* sv) {
+    if (sv == nullptr || sv->data == nullptr || sv->size == 0) {
+        return {};
+    }
+    return std::string_view{sv->data, static_cast<size_t>(sv->size)};
+}
+
 } // namespace
 
 // ---------------------------------------------------------------------------
@@ -158,8 +165,8 @@ std::string FfiAgentRuntime::generateSessionId() {
 }
 
 std::shared_ptr<FfiAgentRuntime> FfiAgentRuntime::create(
-    const char*                config_json,
-    const char*                model_json,
+    const AgentxxStringView*   config_json,
+    const AgentxxStringView*   model_json,
     const AgentxxFFICallbacks* cb,
     std::string&               err
 ) {
@@ -175,17 +182,18 @@ std::shared_ptr<FfiAgentRuntime> FfiAgentRuntime::create(
 }
 
 bool FfiAgentRuntime::buildConfigs(
-    const char*  config_json,
-    const char*  model_json,
-    std::string& err
+    const AgentxxStringView* config_json,
+    const AgentxxStringView* model_json,
+    std::string&             err
 ) {
     auto config = std::make_shared<AgentConfig>();
 
     // ---- 顶层配置 (config_json) ----
     neograph::json cfgJ;
-    if (config_json != nullptr && *config_json != '\0') {
+    auto cfgSv = toSv(config_json);
+    if (!cfgSv.empty()) {
         try {
-            cfgJ = neograph::json::parse(config_json);
+            cfgJ = neograph::json::parse(cfgSv);
         } catch (const std::exception& e) {
             err = fmt::format("config_json 非法 JSON: {}", e.what());
             return false;
@@ -254,9 +262,10 @@ bool FfiAgentRuntime::buildConfigs(
 
     // ---- 模型配置 (model_json 优先, 其次 config_json.model) ----
     neograph::json mj;
-    if (model_json != nullptr && *model_json != '\0') {
+    auto modelSv = toSv(model_json);
+    if (!modelSv.empty()) {
         try {
-            mj = neograph::json::parse(model_json);
+            mj = neograph::json::parse(modelSv);
         } catch (const std::exception& e) {
             err = fmt::format("model_json 非法 JSON: {}", e.what());
             return false;
@@ -776,9 +785,9 @@ bool FfiAgentRuntime::hasPendingInterrupt(int64_t interruptId) const {
 }
 
 int FfiAgentRuntime::interruptRespond(
-    int64_t      interruptId,
-    const char*  valuesJson,
-    std::string& err
+    int64_t                  interruptId,
+    const AgentxxStringView* valuesJson,
+    std::string&             err
 ) {
     if (!stateUsable(state())) {
         err = "状态错误: 未启动或已停止";
@@ -789,9 +798,10 @@ int FfiAgentRuntime::interruptRespond(
         return AGENTXX_FFI_ERR_INTERRUPT;
     }
     neograph::json val = neograph::json::array();
-    if (valuesJson != nullptr && *valuesJson != '\0') {
+    auto valSv = toSv(valuesJson);
+    if (!valSv.empty()) {
         try {
-            val = neograph::json::parse(valuesJson);
+            val = neograph::json::parse(valSv);
         } catch (const std::exception& e) {
             err = fmt::format("valuesJson 非法 JSON: {}", e.what());
             return AGENTXX_FFI_ERR_JSON;

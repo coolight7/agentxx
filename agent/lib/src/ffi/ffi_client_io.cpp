@@ -268,8 +268,9 @@ void FfiClientAgentIO::emitEvent(AgentxxFFIEventType type, std::string json) {
     if (callbacks_.on_event == nullptr) {
         return; // headless
     }
+    AgentxxStringView sv{json.data(), static_cast<uint64_t>(json.size())};
     try {
-        callbacks_.on_event(type, json.c_str(), callbacks_.user_data);
+        callbacks_.on_event(static_cast<int32_t>(type), &sv, callbacks_.user_data);
     } catch (const std::exception& e) {
         XX_LOGE("[ffi] on_event callback threw: {}", e.what());
     } catch (...) {

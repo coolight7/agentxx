@@ -1,27 +1,33 @@
 # libagentxx FFI C API 导出层
 
-> 已实现并测试通过 (`agentxx_test ffi_c_api`: 78/78)
+> 已实现并测试通过 (`agentxx_test ffi_c_api`)
 > 相关文档: [design.md](design.md) (主程序架构) · [plugins.md](plugins.md) (纯 C ABI 插件范式)
 - 修改了 ffi 源码、设计后，应当更新当前文档，如果ffi接口变动，应当同步更新 [其他编程语言导出接口](/agent/ffi/) 和 [示例](/agent/example/ffi/)
 
 ## 1. 概述与目标
 
-为 `libagentxx_shared.so` 提供**受控的 C ABI 导出面**, 供其他编程语言
+为 `libagentxx_shared.so` 提供**受控且规范的 C ABI 导出面**, 供其他编程语言
 (Python/Rust/Go/C#/Java/Node 等) 经 FFI (ctypes / JNA / jextract / wasm-abi
 等) 在**宿主进程内嵌入 agent 会话运行**, 复用 agentxx 全部能力 (ReAct 循环、
 工具、MCP、插件、子代理委派、会话持久化、HIL 权限/中断)。
 
-三个核心目标:
+核心规范与目标:
 
 1. **导出符号收敛**: 共享库导出面从 ~17 万 C++ 符号 (默认全导出) 收敛为
-   仅 25 个顶层 C 符号, 满足 "导出符号必须是 C Api" 的硬约束 (libstdc++
+   仅 26 个顶层 C 符号, 满足 "导出符号必须是 C Api" 的硬约束 (libstdc++
    等运行库依赖仍为 DT_NEEDED, 属正常动态依赖)。
-2. **交互参考 client**: FFI 层实现一个自定义 `AgentIOBase` client 端点
+2. **严格 C ABI 规约**:
+   - 8 字节结构体对齐: 全局 `#pragma pack(push, 8)`
+   - 定长基础数据类型: 统一使用 `int32_t` / `int64_t` / `uint32_t` / `uint64_t`
+   - 明确调用约定: 跨边界导出符号统一使用 `AGENTXX_FFI_CALL` (Windows 下为 `__stdcall`, x64 Unix 为空)
+   - 结构体传参强制指针 (`const Struct*`), 结构体返回值一律改为指针出参 (`Struct* out`) 并返回 `int32_t` 状态码
+   - 字符串边界统一: 使用只读视图 `AgentxxStringView` 与跨堆分配字符串 `AgentxxString` 全面替换原 `const char*` 与 `char*`
+3. **交互参考 client**: FFI 层实现一个自定义 `AgentIOBase` client 端点
    (`FfiClientAgentIO`), 经进程内 `ChannelAgentIOTransport` 与
    `SessionServerAgentIO` (由 BaseAgent 驱动) 通信——与 TUI/CLI client
    **完全同构**, agent 核心零改动。
-3. **错误处理双通道**: 同步错误 = 返回值错误码 + 可选的 `char** log` 参数
-   (内部填充执行过程日志/错误详情, 宿主 `agentxx_ffi_free` 释放); 异步错误 =
+4. **错误处理双通道**: 同步错误 = 返回值 `int32_t` 错误码 + 可选的 `AgentxxString* log` 出参
+   (内部填充执行过程日志/错误详情, 宿主 `agentxx_ffi_string_free` 释放); 异步错误 =
    `EVT_ERROR` / `EVT_TURN_END {has_error}` 事件。
 
 ## 2. 总体架构与线程拓扑 (方案 A: 独立双线程模型)
@@ -84,9 +90,24 @@
 
 ## 4. C API 契约 (`agent/lib/include/agentxx/ffi_api.h`)
 
-### 4.1 错误码与 `char** log`
+### 4.1 核心数据结构与调用约定
 
 ```c
+#pragma pack(push, 8)
+
+// 基础字符串视图 (借用所有权, 8 字节对齐)
+typedef struct AgentxxStringView {
+    const char* data;
+    uint64_t    size;
+} AgentxxStringView;
+
+// 跨 CRT 堆分配字符串 (显式所有权, 用后 agentxx_ffi_string_free 释放)
+typedef struct AgentxxString {
+    char*    data;
+    uint64_t size;
+} AgentxxString;
+
+// 错误码 (int32_t)
 #define AGENTXX_FFI_OK              0
 #define AGENTXX_FFI_ERR_INVALID    -1   /* 参数非法 (NULL 句柄/空串等) */
 #define AGENTXX_FFI_ERR_STATE      -2   /* 状态错误 (未 start / 已 stop / io 线程内 stop) */
@@ -111,9 +132,10 @@ AgentxxFFICallbacks cb;
 cb.on_event  = agentxx_ffi_event_queue_on_event; /* 内置桥接: 同步拷贝入队 */
 cb.user_data = q;
 /* ... agentxx_ffi_create/start 后, 宿主线程序列化取事件: */
-int32_t type; char* json;
+int32_t type; AgentxxString json;
 while ((rc = agentxx_ffi_event_queue_pop(q, &type, &json, 50)) == AGENTXX_FFI_OK) {
-    /* 消费 type/json; 用后 agentxx_ffi_free(json) */
+    /* 消费 type / json.data (大小为 json.size); 用后释放: */
+    agentxx_ffi_string_free(&json);
 }
 agentxx_ffi_event_queue_free(q);
 ```
@@ -123,25 +145,25 @@ agentxx_ffi_event_queue_free(q);
 - 队列有界 (16384): 宿主停轮询时丢最旧并补发一条 EVT_ERROR 提示
 - 实现: `agent/lib/src/ffi/event_queue.cpp`
 
-### 4.3 导出符号清单 (25 个, 白名单见 `agent/lib/ffi_symbols.map`)
+### 4.3 导出符号清单 (26 个, 白名单见 `agent/lib/ffi_symbols.map`)
 
 | 分组 | 符号 | 说明 |
 |------|------|------|
-| 内存 | `agentxx_ffi_malloc` / `agentxx_ffi_free` / `agentxx_ffi_strdup_n` | 跨 CRT 堆边界唯一分配通道 |
-| 版本 | `agentxx_ffi_api_version` / `agentxx_ffi_library_version` | API 版本校验 / 库版本字符串 |
-| 错误 | `agentxx_ffi_strerror` | 错误码 → 静态字符串 |
+| 内存 | `agentxx_ffi_malloc` / `agentxx_ffi_free` / `agentxx_ffi_string_free` / `agentxx_ffi_strdup_n` | 跨 CRT 堆边界唯一分配与释放通道 |
+| 版本 | `agentxx_ffi_api_version` / `agentxx_ffi_library_version` | API 版本校验 / 库版本字符串视图出参 |
+| 错误 | `agentxx_ffi_strerror` | 错误码 → 静态字符串视图出参 |
 | 生命周期 | `agentxx_ffi_create` / `agentxx_ffi_start` / `agentxx_ffi_stop` / `agentxx_ffi_destroy` | 创建(不启动线程)/异步启动(EVT_READY)/同步停止(幂等)/销毁(未 stop 自动 stop) |
 | 会话交互 (异步) | `agentxx_ffi_send_input` / `agentxx_ffi_cancel` / `agentxx_ffi_select_model` / `agentxx_ffi_set_permission` / `agentxx_ffi_switch_session` | 投递 io 线程串行执行; READY 前发送的输入自动缓存 |
-| 同步查询 | `agentxx_ffi_get_model_info` / `agentxx_ffi_get_context_messages` / `agentxx_ffi_list_sessions` | 阻塞等待服务端响应 (最长 10s), 返回 JSON (`agentxx_ffi_free`); 同一句柄同一时刻仅允许一个在途 |
+| 同步查询 | `agentxx_ffi_get_model_info` / `agentxx_ffi_get_context_messages` / `agentxx_ffi_list_sessions` | 阻塞等待服务端响应 (最长 10s), 结果写入 `AgentxxString* out` 出参 (`agentxx_ffi_string_free` 释放); 同一句柄同一时刻仅允许一个在途 |
 | HIL 应答 | `agentxx_ffi_interrupt_respond` | 提交 EVT_INTERRUPT_REQ 的应答 (values_json 数组与 inputs 顺序一一对应) |
-| 日志 | `agentxx_ffi_drain_logs` | 取走积压日志 `[{"level","message"},...]` (异常后排障) |
-| 事件队列 | `agentxx_ffi_event_queue_create` / `agentxx_ffi_free`(队列) / `..._on_event` / `..._pop` | 见 4.2 |
-| 内置插件 | `agentxx_plugin_get_builtin_plugins` | 内置合并编译模式插件清单入口 (PluginManager 使用; 白名单第 25 个符号, 隐藏 17 万 C++ 符号) |
+| 日志 | `agentxx_ffi_drain_logs` | 取走积压日志 `[{"level","message"},...]` 写入 `AgentxxString* out` (异常后排障) |
+| 事件队列 | `agentxx_ffi_event_queue_create` / `agentxx_ffi_event_queue_free` / `..._on_event` / `..._pop` | 见 4.2 |
+| 内置插件 | `agentxx_plugin_get_builtin_plugins` | 内置合并编译模式插件清单入口 (PluginManager 使用; 白名单第 26 个符号, 隐藏 17 万 C++ 符号) |
 
-版本策略: 修改契约递增 `AGENTXX_FFI_API_VERSION` (当前为 1);
+版本策略: 全局 `AGENTXX_FFI_API_VERSION` 重置为 1;
 新增符号/字段为非破坏性不递增, 删除/重命名或修改参数语义时递增。
 
-### 4.4 事件类型 (`AgentxxFFIEventType`, payload 均为 NUL 结尾 UTF-8 JSON)
+### 4.4 事件类型 (`AgentxxFFIEventType`, payload 均为 `const AgentxxStringView*` JSON)
 
 | 事件 | payload | 说明 |
 |------|---------|------|

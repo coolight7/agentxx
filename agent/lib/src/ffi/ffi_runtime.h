@@ -56,8 +56,8 @@ public:
     /// 创建运行时 (构造 agent 对象与配置; 不启动线程)
     /// @param err 非 NULL 时失败填入详情
     static std::shared_ptr<FfiAgentRuntime> create(
-        const char*                config_json,
-        const char*                model_json,
+        const AgentxxStringView*   config_json,
+        const AgentxxStringView*   model_json,
         const AgentxxFFICallbacks* cb,
         std::string&               err
     );
@@ -126,7 +126,11 @@ public:
     bool hasPendingInterrupt(int64_t interruptId) const;
 
     /// 应答中断 (任意线程; 内部投递 client io 线程)
-    int interruptRespond(int64_t interruptId, const char* valuesJson, std::string& err);
+    int interruptRespond(
+        int64_t                  interruptId,
+        const AgentxxStringView* valuesJson,
+        std::string&             err
+    );
 
     // -------------------------------------------------------------------
     // 日志
@@ -175,7 +179,11 @@ private:
 
     // 单例构造 (经 create 工厂; 保证 enable_shared_from_this 可用)
     explicit FfiAgentRuntime();
-    bool buildConfigs(const char* config_json, const char* model_json, std::string& err);
+    bool buildConfigs(
+        const AgentxxStringView* config_json,
+        const AgentxxStringView* model_json,
+        std::string&             err
+    );
 
     /// agent io 线程: 主协程 (init → host → ready → serverIO->run())
     asio::awaitable<void> runAgentMain();

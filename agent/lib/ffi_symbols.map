@@ -17,6 +17,7 @@
   global:
     agentxx_ffi_malloc;
     agentxx_ffi_free;
+    agentxx_ffi_string_free;
     agentxx_ffi_strdup_n;
     agentxx_ffi_api_version;
     agentxx_ffi_library_version;
