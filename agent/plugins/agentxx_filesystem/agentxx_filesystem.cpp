@@ -31,7 +31,7 @@ Use this for surgical edits without rewriting the entire file.
 Note! This tool will replace all `\r\n` to `\n` when find `old_str` and replace.)";
 constexpr std::string_view kDepictGlob = "Find files and directories matching glob patterns.";
 constexpr std::string_view kDepictGrep
-    = R"(Search file contents using text or regular expressions. Supports glob-based file filtering.
+    = R"(Search file contents using literal text and/or regular expression patterns (when both are given, the result is the union). Supports glob-based file filtering.
 Use this to locate code, find references, or search logs across a project.)";
 
 std::string_view kPathDesc
@@ -379,7 +379,22 @@ std::string schemaGrep(PluginCtx* ctx) {
                          agentxx::plugin::toolPromptArgDesc(
                              p,
                              "text_patterns",
-                             "One or more search patterns (text or regex, depending on `text_patterns_is_regex`).\nA match is found if ANY pattern matches."
+                             "One or more literal text patterns (NOT regular expressions). A match is found if ANY pattern occurs.\nOptional if `regex_patterns` is given; `text_patterns` and `regex_patterns` can be specified together, and the result is the union of both matches."
+                         ),
+                     },
+                 },
+             },
+             {
+                 "regex_patterns",
+                 {
+                     {"type", "array"},
+                     {"items", {{"type", "string"}}},
+                     {
+                         "description",
+                         agentxx::plugin::toolPromptArgDesc(
+                             p,
+                             "regex_patterns",
+                             "One or more regular expression patterns (like `grep -E`). A match is found if ANY pattern matches.\nOptional if `text_patterns` is given; `text_patterns` and `regex_patterns` can be specified together, and the result is the union of both matches.\nUse this for pattern-based matching (e.g. `line[0-9]+`, `throw|co_return`); use `text_patterns` for literal search."
                          ),
                      },
                  },
@@ -413,20 +428,6 @@ std::string schemaGrep(PluginCtx* ctx) {
                              p,
                              "case_sensitive",
                              "Default `true`. If `false`, matching is case-insensitive (like `grep -i`)."
-                         ),
-                     },
-                 },
-             },
-             {
-                 "text_patterns_is_regex",
-                 {
-                     {"type", "boolean"},
-                     {
-                         "description",
-                         agentxx::plugin::toolPromptArgDesc(
-                             p,
-                             "text_patterns_is_regex",
-                             "Determines how `text_patterns` are interpreted.\n`true`: Patterns are regular expressions.\n`false`: Patterns are literal text strings."
                          ),
                      },
                  },
@@ -488,7 +489,9 @@ std::string schemaGrep(PluginCtx* ctx) {
                  },
              }},
          },
-        {"required", neograph::json::array({"text_patterns", "file_patterns"})}
+        // JSON Schema 无法表达 "至少指定其一"; 实现在参数缺失时报错,
+        // 并在两个数组参数的描述中说明至少其一 (可同时指定取并集)
+        {"required", neograph::json::array({"file_patterns"})}
     }.dump();
 }
 
@@ -500,10 +503,13 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_agent_g
         nullptr,
         [&]() -> const AgentxxPluginInfo* {
             static const AgentxxPluginInfo info{
-                AGENTXX_PLUGIN_API_VERSION, 0,
+                AGENTXX_PLUGIN_API_VERSION,
+                0,
                 agentxx::plugin::PluginStringView::fromCstr("agentxx_filesystem"),
                 agentxx::plugin::PluginStringView::fromCstr("1.0.0"),
-                agentxx::plugin::PluginStringView::fromCstr("File system tools: list, read, write, edit, glob, grep"),
+                agentxx::plugin::PluginStringView::fromCstr(
+                    "File system tools: list, read, write, edit, glob, grep"
+                ),
             };
             return &info;
         }
@@ -547,7 +553,9 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                         if (cancel_flag && *cancel_flag != 0) {
                             return true;
                         }
-                        return c.sessionCancelled(agentxx::plugin::PluginStringView::from(tid.data(), tid.size()));
+                        return c.sessionCancelled(
+                            agentxx::plugin::PluginStringView::from(tid.data(), tid.size())
+                        );
                     };
                     return fileListExecute(arguments, std::string(workDir), isCancelled);
                 }
@@ -570,7 +578,9 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                         if (cancel_flag && *cancel_flag != 0) {
                             return true;
                         }
-                        return c.sessionCancelled(agentxx::plugin::PluginStringView::from(tid.data(), tid.size()));
+                        return c.sessionCancelled(
+                            agentxx::plugin::PluginStringView::from(tid.data(), tid.size())
+                        );
                     };
                     return fileGlobExecute(arguments, std::string(workDir), isCancelled);
                 }
@@ -593,7 +603,9 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                         if (cancel_flag && *cancel_flag != 0) {
                             return true;
                         }
-                        return c.sessionCancelled(agentxx::plugin::PluginStringView::from(tid.data(), tid.size()));
+                        return c.sessionCancelled(
+                            agentxx::plugin::PluginStringView::from(tid.data(), tid.size())
+                        );
                     };
                     return fileGrepExecute(arguments, std::string(workDir), isCancelled);
                 }

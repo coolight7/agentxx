@@ -523,17 +523,17 @@ Results are always deduplicated regardless of this setting.)"},
           "agentxx_filesystem_grep",
           ToolPrompt{
               .depict =
-                  R"(Search file contents using text or regular expressions. Supports glob-based file filtering.
+                  R"(Search file contents using literal text and/or regular expression patterns (when both are given, the result is the union). Supports glob-based file filtering.
 Use this to locate code, find references, or search logs across a project.)",
               .args =
                   {
-                      {"text_patterns_is_regex",
-                       R"(Determines how `text_patterns` are interpreted.
-`true`: Patterns are regular expressions.
-`false`: Patterns are literal text strings.)"},
                       {"text_patterns",
-                       R"(One or more search patterns (text or regex, depending on `text_patterns_is_regex`).
-A match is found if ANY pattern matches.)"},
+                       R"(One or more literal text patterns (NOT regular expressions). A match is found if ANY pattern occurs.
+Optional if `regex_patterns` is given; `text_patterns` and `regex_patterns` can be specified together, and the result is the union of both matches.)"},
+                      {"regex_patterns",
+                       R"(One or more regular expression patterns (like `grep -E`). A match is found if ANY pattern matches.
+Optional if `text_patterns` is given; `text_patterns` and `regex_patterns` can be specified together, and the result is the union of both matches.
+Use this for pattern-based matching (e.g. `line[0-9]+`, `throw|co_return`); use `text_patterns` for literal search.)"},
                       {"file_patterns",
                        R"(Path with glob patterns to select which files to search. Relative paths are resolved against the current working directory; `~` expands to the home directory.
 

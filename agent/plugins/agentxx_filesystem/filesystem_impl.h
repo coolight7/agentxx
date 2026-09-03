@@ -29,6 +29,7 @@
 #include <fstream>
 #include <functional>
 #include <limits>
+#include <memory>
 #include <neograph/json.h>
 #include <regex>
 #include <set>
@@ -707,10 +708,13 @@ inline std::string fileGrepExecuteImpl(
     const std::string&    workDir,
     const IsCancelledFn&  isCancelled = nullptr
 ) {
-    auto text_patterns_is_regex = arguments.value("text_patterns_is_regex", true);
-    auto text_patterns          = arguments.value("text_patterns", std::vector<std::string>{});
-    if (text_patterns.empty()) {
-        return R"([Error] Arg `text_patterns` is empty)";
+    // 搜索模式参数 (两者均可省略, 但至少指定其一; 同时指定时结果为两者并集):
+    // - text_patterns  : 纯文本字面量匹配 (对齐 grep -F, 不经正则解释)
+    // - regex_patterns : 正则表达式匹配 (对齐 grep -E)
+    auto text_patterns  = arguments.value("text_patterns", std::vector<std::string>{});
+    auto regex_patterns = arguments.value("regex_patterns", std::vector<std::string>{});
+    if (text_patterns.empty() && regex_patterns.empty()) {
+        return R"([Error] Arg `text_patterns` and `regex_patterns` are both empty (specify at least one of them))";
     }
     auto file_patterns = arguments.value("file_patterns", std::vector<std::string>{});
     if (file_patterns.empty()) {
@@ -923,8 +927,9 @@ inline std::string fileGrepExecuteImpl(
     };
 
     // 应用 max_count_per_file 限制 (对齐 grep -m) 并按 output_mode 输出。
-    // MatchT 为 XXRegexMatchResult / AhoCorasick 匹配结构 (均有 start 成员);
-    // 以模板 lambda 实现 (块作用域内不允许 template 函数声明)
+    // MatchT 需提供 start 成员 (MatchRange / XXRegexMatchResult /
+    // AhoCorasick 匹配结构); 以模板 lambda 实现 (块作用域内不允许
+    // template 函数声明)。调用前区间已并集去重, 单文件只会输出一次
     auto emitMatches = [&]<typename MatchT>(
                            const std::string&         filepath,
                            const std::string&         filetext,
@@ -951,61 +956,105 @@ inline std::string fileGrepExecuteImpl(
         }
     };
 
-    if (text_patterns_is_regex) {
-        // 正则匹配: 大小写不敏感直接由 XXRegex 后端实现
-        // (Hyperscan 用 HS_FLAG_CASELESS, std::regex fallback 用 icase)
-        auto regex = agentxx::util::XXRegex::createRegex(
-            text_patterns,
-            agentxx::util::XXRegex::defHSFlags_normal,
-            !caseSensitive
+    // ---- 双模式匹配 (text_patterns 纯文本 ∪ regex_patterns 正则) ----
+    // 模式参数允许同时指定, 结果为两者命中区间的并集 (按文件合并后统一输出,
+    // 保证单文件仅输出一次: files_with_matches 单行、content 模式单组头,
+    // max_count_per_file 对并集生效); 两者都为空已在入口拒绝
+
+    /// 文件内两种模式命中区间的统一表示 (对齐 XXRegexMatchResult 语义)
+    struct MatchRange {
+        size_t start;
+        size_t end;
+    };
+
+    // 文本轮: 纯文本精确匹配 (对齐 grep -F, AhoCorasick 多模式同时扫描)
+    auto textSearch
+        = text_patterns.empty()
+              ? nullptr
+              : std::make_unique<agentxx::util::AhoCorasick<char>>(text_patterns, !caseSensitive);
+
+    // 正则轮: 大小写不敏感直接由 XXRegex 后端实现
+    // (Hyperscan 用 HS_FLAG_CASELESS, std::regex fallback 用 icase)
+    auto regex = regex_patterns.empty() ? nullptr
+                                        : agentxx::util::XXRegex::createRegex(
+                                              regex_patterns,
+                                              agentxx::util::XXRegex::defHSFlags_normal,
+                                              !caseSensitive
+                                          );
+    if (false == regex_patterns.empty() && !regex) {
+        return fmt::format(
+            R"_([Error] Regex compilation failed (regex_patterns are parsed as regular expressions). If you intended literal text search, put the patterns in `text_patterns` instead.)_"
         );
-        if (!regex) {
-            return "[Error] Regex compilation failed";
-        }
+    }
 
-        for (const auto& item : refilelist) {
-            if (checkStop()) {
-                return "[Error] Cancelled or timed out";
+    bool anyHit = false;
+    for (const auto& item : refilelist) {
+        if (checkStop()) {
+            return "[Error] Cancelled or timed out";
+        }
+        auto filepath = detail::toUtf8(item);
+        // 读取并预处理: 跳过二进制/非文本文件 (glob 阶段已过滤目录)
+        auto filetextOpt = loadSearchableText(filepath);
+        if (false == filetextOpt.has_value()) {
+            continue;
+        }
+        auto& filetext = filetextOpt.value();
+
+        // 收集该文件全部命中区间 (文本 + 正则, 并集去重)
+        std::vector<MatchRange> ranges;
+        if (textSearch) {
+            auto matchs = textSearch->search(filetext);
+            ranges.reserve(ranges.size() + matchs.size());
+            for (const auto& m : matchs) {
+                ranges.push_back({m.start, m.end});
             }
-            auto filepath = detail::toUtf8(item);
-            // 读取并预处理: 跳过二进制/非文本文件 (glob 阶段已过滤目录)
-            auto filetextOpt = loadSearchableText(filepath);
-            if (false == filetextOpt.has_value()) {
-                continue;
-            }
-            auto& filetext = filetextOpt.value();
-            auto  matchs   = std::vector<agentxx::util::XXRegexMatchResult>{};
+        }
+        if (regex) {
+            auto matchs = std::vector<agentxx::util::XXRegexMatchResult>{};
             if (regex->match(filetext, matchs)) {
-                emitMatches(filepath, filetext, matchs);
+                ranges.reserve(ranges.size() + matchs.size());
+                for (const auto& m : matchs) {
+                    ranges.push_back({m.start, m.end});
+                }
             }
         }
-    } else {
-        // 文本精确匹配 (对齐 grep -F)
-        auto search = agentxx::util::AhoCorasick<char>{text_patterns, !caseSensitive};
-        for (const auto& item : refilelist) {
-            if (checkStop()) {
-                return "[Error] Cancelled or timed out";
-            }
-            auto filepath    = detail::toUtf8(item);
-            auto filetextOpt = loadSearchableText(filepath);
-            if (false == filetextOpt.has_value()) {
-                continue;
-            }
-            auto& filetext = filetextOpt.value();
-            auto  matchs   = search.search(filetext);
-            if (false == matchs.empty()) {
-                emitMatches(filepath, filetext, matchs);
+        if (ranges.empty()) {
+            continue;
+        }
+
+        // 合并重叠区间 (对齐 XXRegex match 语义: 仅真正重叠的合并, 相邻不合并),
+        // 使并集区间互不重叠、计数/行输出不重复
+        std::sort(ranges.begin(), ranges.end(), [](const MatchRange& a, const MatchRange& b) {
+            return a.start != b.start ? a.start < b.start : a.end < b.end;
+        });
+        std::vector<MatchRange> merged;
+        merged.reserve(ranges.size());
+        for (const auto& r : ranges) {
+            if (merged.empty() || r.start >= merged.back().end) {
+                // 与上一区间不重叠 (含相邻), 新增一段
+                merged.push_back(r);
+            } else if (r.end > merged.back().end) {
+                // 与上一区间重叠, 扩展上一区间右端
+                merged.back().end = r.end;
             }
         }
+
+        emitMatches(filepath, filetext, merged);
+        anyHit = true;
     }
 
-    auto str = resultStr.str();
-    if (false == str.empty()) {
-        return str;
+    if (anyHit) {
+        return resultStr.str();
     }
+    // 无匹配错误附带当前匹配模式说明, 便于调用方排查:
+    // 正则元字符 (如 `(` `[` `*`) 未转义/未成对时会匹配不到, 此时可改用
+    // text_patterns 纯文本匹配 (text_patterns 不经正则解释) 或转义后重试
     throw std::runtime_error{fmt::format(
-        R"_(Found {} files match `file_patterns`, but no match `text_patterns` file found.)_",
-        refilelist.size()
+        R"_(Found {} files match `file_patterns`, but no match `text_patterns`/`regex_patterns` file found. Active modes: {}.)_",
+        refilelist.size(),
+        (!text_patterns.empty() && !regex_patterns.empty())
+            ? "literal text + regular expression (union)"
+            : (text_patterns.empty() ? "regular expression" : "literal text")
     )};
 }
 

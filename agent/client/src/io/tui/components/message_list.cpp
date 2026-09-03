@@ -1426,19 +1426,35 @@ static ToolHeaderSummary buildToolHeaderSummary(
         return make("Glob", {}, joinList(getStrList("file_patterns")));
     }
     if (toolName == "agentxx_filesystem_grep") {
-        // 匹配模式 (引号包裹) 作为参数区, 文件模式作为主参数
-        const auto  patterns = getStrList("text_patterns");
-        const auto  files    = getStrList("file_patterns");
-        std::string quoted;
-        for (size_t i = 0; i < patterns.size() && i < 2; ++i) {
+        // 匹配模式 (引号包裹) 作为参数区, 文件模式作为主参数;
+        // text_patterns 与 regex_patterns 可同时指定, 摘要合并展示
+        // (文本在前, 最多共展示 2 项, 超出以 ", ..." 收尾)
+        const auto               textPatterns  = getStrList("text_patterns");
+        const auto               regexPatterns = getStrList("regex_patterns");
+        const auto               files         = getStrList("file_patterns");
+        std::vector<std::string> shown;
+        shown.reserve(2);
+        auto collect = [&](const std::vector<std::string>& patterns) {
+            for (const auto& pat : patterns) {
+                if (shown.size() >= 2) {
+                    return;
+                }
+                shown.push_back(pat);
+            }
+        };
+        collect(textPatterns);
+        collect(regexPatterns);
+        const size_t totalPatterns = textPatterns.size() + regexPatterns.size();
+        std::string  quoted;
+        for (size_t i = 0; i < shown.size(); ++i) {
             if (i > 0) {
                 quoted += ", ";
             }
             quoted += '"';
-            quoted += oneLinePreview(patterns[i], limit(50));
+            quoted += oneLinePreview(shown[i], limit(50));
             quoted += '"';
         }
-        if (patterns.size() > 2) {
+        if (totalPatterns > shown.size()) {
             quoted += ", ...";
         }
         return make("Grep", quoted, joinList(files));

@@ -217,6 +217,21 @@ void testTuiToolHeaderFilesystem() {
     XX_TEST_EXPECT_TRUE(
         f.render().find(R"(Grep · ["a", "b", ...] agent/**/*.cpp)") != std::string::npos
     );
+    // grep: regex_patterns 单独 / 与 text_patterns 并用 (摘要合并展示)
+    f.pushTool(
+        "agentxx_filesystem_grep",
+        R"({"regex_patterns":["line[0-9]+"],"file_patterns":["src/**/*.cpp"]})"
+    );
+    XX_TEST_EXPECT_TRUE(
+        f.render().find(R"(Grep · ["line[0-9]+"] src/**/*.cpp)") != std::string::npos
+    );
+    f.pushTool(
+        "agentxx_filesystem_grep",
+        R"({"text_patterns":["hello"],"regex_patterns":["world"],"file_patterns":["src/**/*.txt"]})"
+    );
+    XX_TEST_EXPECT_TRUE(
+        f.render().find(R"(Grep · ["hello", "world"] src/**/*.txt)") != std::string::npos
+    );
 }
 
 // web_search 系列

@@ -50,7 +50,7 @@ tool_skill_search 与延迟加载装配：
 | | `agentxx_filesystem_write` | 创建/覆盖文本文件 |
 | | `agentxx_filesystem_edit` | 精确字符串替换编辑文本文件 |
 | | `agentxx_filesystem_glob` | 按 glob 模式搜索文件 |
-| | `agentxx_filesystem_grep` | 按正则/文本搜索文件内容 |
+| | `agentxx_filesystem_grep` | 按纯文本 (text_patterns) / 正则 (regex_patterns) 搜索文件内容 (可同时指定取并集) |
 | **命令执行** | `agentxx_execute_bash_command` | 执行 Linux shell 命令，支持超时控制 (Linux/macOS) |
 | | `agentxx_execute_windows_command` | 执行 Windows 命令，默认 PowerShell (自动探测 pwsh/powershell 并注入版本号到提示词)，未找到时回退 cmd.exe (Windows / WSL 下调用) |
 | | `agentxx_execute_javascript` | 通过 QuickJS 解释器执行 JavaScript 代码 (execute_bash_command 的 JS 等价物, 依赖插件 `agentxx_javascript_engine`) |
