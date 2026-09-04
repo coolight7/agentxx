@@ -105,24 +105,6 @@ endif()
 if (AGENTXX_LINUX_IO_URING_SUPPORTED)
   target_link_libraries(${PLUGIN_NAME} PRIVATE PkgConfig::uring)
 endif()
-if (NOT XX_IS_WIN_D)
-  set(_tail_libs crypto ssl)
-  if (AGENTXX_ENABLE_HYPERSCAN)
-    list(APPEND _tail_libs hs hs_runtime)
-  endif()
-  if (AGENTXX_LINUX_IO_URING_SUPPORTED)
-    list(APPEND _tail_libs uring)
-  endif()
-  list(APPEND _tail_libs
-    neograph_sqlite neograph_acp neograph_mcp neograph_mcp_types neograph_async neograph_llm neograph_core yyjson)
-  target_link_libraries(${PLUGIN_NAME} PRIVATE
-    "-Wl,--start-group"
-    ${_tail_libs}
-    "-Wl,--end-group"
-  )
-  unset(_tail_libs)
-endif()
-
 set_target_properties(${PLUGIN_NAME} PROPERTIES
   PREFIX "lib"
   CXX_STANDARD 26
