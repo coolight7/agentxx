@@ -1097,6 +1097,129 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         }
     }
 
+    // ---- 15. agentxx_filesystem client 插件: 工具特化渲染 (template + func + diff) ----
+    {
+        auto fsPath = findPluginPath("agentxx_filesystem");
+        auto fsInst = co_await mgr->loadNativeAsync(fsPath);
+        XX_TEST_EXPECT_TRUE(fsInst != nullptr);
+        if (fsInst) {
+            auto reg = mgr->uiRegistrySnapshot();
+            XX_TEST_EXPECT_TRUE(reg != nullptr);
+
+            // 15.1 list (预设模版)
+            auto listRes = agentxx::plugin::renderClientTool(
+                reg.get(),
+                "call_list_1",
+                "agentxx_filesystem_list",
+                R"({"path":"/home/user"})",
+                "",
+                true,
+                false,
+                100
+            );
+            XX_TEST_EXPECT_TRUE(listRes.matched);
+            XX_TEST_EXPECT_EQ(listRes.displayName, "List");
+            XX_TEST_EXPECT_EQ(listRes.summary, "/home/user");
+
+            // 15.2 read (回调函数: [offset, limit] 区间参数)
+            auto readRes = agentxx::plugin::renderClientTool(
+                reg.get(),
+                "call_read_1",
+                "agentxx_filesystem_read",
+                R"({"path":"/home/user/a.cpp","line_offset":10,"line_limit":50})",
+                "",
+                true,
+                false,
+                100
+            );
+            XX_TEST_EXPECT_TRUE(readRes.matched);
+            XX_TEST_EXPECT_EQ(readRes.displayName, "Read");
+            XX_TEST_EXPECT_TRUE(readRes.summary.find("[10, 50]") != std::string::npos);
+            XX_TEST_EXPECT_TRUE(readRes.summary.find("/home/user/a.cpp") != std::string::npos);
+
+            // 15.3 edit (回调函数: path 摘要 + diff items)
+            auto editRes = agentxx::plugin::renderClientTool(
+                reg.get(),
+                "call_edit_1",
+                "agentxx_filesystem_edit",
+                R"({"path":"/home/user/b.cpp","old_str":"foo","new_str":"bar"})",
+                "success",
+                true,
+                false,
+                100
+            );
+            XX_TEST_EXPECT_TRUE(editRes.matched);
+            XX_TEST_EXPECT_EQ(editRes.displayName, "Edit");
+            XX_TEST_EXPECT_TRUE(editRes.summary.find("/home/user/b.cpp") != std::string::npos);
+            XX_TEST_EXPECT_EQ(editRes.items.size(), 1U);
+            if (!editRes.items.empty()) {
+                XX_TEST_EXPECT_EQ(editRes.items[0].value("kind", std::string{}), "diff");
+                XX_TEST_EXPECT_EQ(editRes.items[0].value("path", std::string{}), "/home/user/b.cpp");
+                XX_TEST_EXPECT_EQ(editRes.items[0].value("old_str", std::string{}), "foo");
+                XX_TEST_EXPECT_EQ(editRes.items[0].value("new_str", std::string{}), "bar");
+            }
+
+            co_await mgr->unloadAsync("agentxx_filesystem");
+            XX_TEST_EXPECT_TRUE(mgr->find("agentxx_filesystem") == nullptr);
+        }
+    }
+
+    // ---- 16. agentxx_websearch client 插件: 工具特化渲染 (模版) ----
+    {
+        auto wsPath = findPluginPath("agentxx_websearch");
+        auto wsInst = co_await mgr->loadNativeAsync(wsPath);
+        XX_TEST_EXPECT_TRUE(wsInst != nullptr);
+        if (wsInst) {
+            auto reg = mgr->uiRegistrySnapshot();
+            XX_TEST_EXPECT_TRUE(reg != nullptr);
+
+            auto searchRes = agentxx::plugin::renderClientTool(
+                reg.get(),
+                "call_search_1",
+                "agentxx_web_search",
+                R"({"query":"c++26 features"})",
+                "",
+                true,
+                false,
+                100
+            );
+            XX_TEST_EXPECT_TRUE(searchRes.matched);
+            XX_TEST_EXPECT_EQ(searchRes.displayName, "Search");
+            XX_TEST_EXPECT_EQ(searchRes.summary, "c++26 features");
+
+            co_await mgr->unloadAsync("agentxx_websearch");
+            XX_TEST_EXPECT_TRUE(mgr->find("agentxx_websearch") == nullptr);
+        }
+    }
+
+    // ---- 17. agentxx_execute_command client 插件: 工具特化渲染 (模版) ----
+    {
+        auto cmdPath = findPluginPath("agentxx_execute_command");
+        auto cmdInst = co_await mgr->loadNativeAsync(cmdPath);
+        XX_TEST_EXPECT_TRUE(cmdInst != nullptr);
+        if (cmdInst) {
+            auto reg = mgr->uiRegistrySnapshot();
+            XX_TEST_EXPECT_TRUE(reg != nullptr);
+
+            auto bashRes = agentxx::plugin::renderClientTool(
+                reg.get(),
+                "call_bash_1",
+                "agentxx_execute_bash_command",
+                R"({"command":"uname -a"})",
+                "",
+                true,
+                false,
+                100
+            );
+            XX_TEST_EXPECT_TRUE(bashRes.matched);
+            XX_TEST_EXPECT_EQ(bashRes.displayName, "Bash");
+            XX_TEST_EXPECT_EQ(bashRes.summary, "uname -a");
+
+            co_await mgr->unloadAsync("agentxx_execute_command");
+            XX_TEST_EXPECT_TRUE(mgr->find("agentxx_execute_command") == nullptr);
+        }
+    }
+
     co_return TestResult{g_client_plugin_passed, g_client_plugin_failed};
 }
 

@@ -2826,5 +2826,115 @@ inline int32_t registerSyncHook(
     return hooks->register_hook(host, &spec);
 }
 
+/* ==================== Client 侧工具特化渲染适配器 ==================== */
+
+struct ToolRenderInput {
+    std::string_view toolCallId;
+    std::string_view toolName;
+    std::string_view argsJson;
+    std::string_view resultText;
+    bool             isFinished = false;
+    bool             isError    = false;
+    int              maxWidth   = 0;
+};
+
+struct ToolRenderOutput {
+    std::string    displayName;
+    std::string    summary;
+    neograph::json items = neograph::json::array();
+};
+
+/// 注册基于回调函数的工具特化渲染器 (<key, 渲染func>)
+template<typename Fn>
+inline int32_t registerToolRenderer(
+    const AgentxxPluginHost*                           host,
+    const AgentxxClientUiIface*                        ui,
+    std::string_view                                   toolName,
+    Fn&&                                               fn,
+    std::vector<std::unique_ptr<void, void (*)(void*)>>& shimStorage
+) {
+    if (!host || !ui || !ui->register_tool_renderer) {
+        return -1;
+    }
+    using DecayedFn = std::decay_t<Fn>;
+    struct RenderShim {
+        const AgentxxPluginHost* host = nullptr;
+        DecayedFn                fn;
+    };
+    auto* shim = new RenderShim{host, std::forward<Fn>(fn)};
+    shimStorage.emplace_back(shim, [](void* p) { delete static_cast<RenderShim*>(p); });
+
+    auto renderCb = [](
+        void*                         user_data,
+        const AgentxxToolRenderInput* input,
+        AgentxxToolRenderOutput*      output
+    ) -> int32_t {
+        if (!user_data || !input || !output) {
+            return -1;
+        }
+        auto* shim = static_cast<RenderShim*>(user_data);
+        ToolRenderInput in{
+            .toolCallId = PluginStringView::str(input->tool_call_id),
+            .toolName   = PluginStringView::str(input->tool_name),
+            .argsJson   = PluginStringView::str(input->args_json),
+            .resultText = PluginStringView::str(input->result_text),
+            .isFinished = input->is_finished != 0,
+            .isError    = input->is_error != 0,
+            .maxWidth   = input->max_width,
+        };
+        ToolRenderOutput out;
+        try {
+            shim->fn(in, out);
+        } catch (...) {
+            return -1;
+        }
+        if (!out.displayName.empty()) {
+            output->displayName = PluginString::from(shim->host, out.displayName);
+        }
+        if (!out.summary.empty()) {
+            output->summary = PluginString::from(shim->host, out.summary);
+        }
+        if (!out.items.empty()) {
+            output->items_json = PluginString::from(shim->host, out.items.dump());
+        }
+        return 0;
+    };
+
+    AgentxxToolRenderSpec spec{};
+    spec.version       = 1;
+    spec.tool_name     = PluginStringView::from(toolName.data(), toolName.size());
+    spec.render_fn     = renderCb;
+    spec.user_data     = shim;
+    spec.template_json = PluginStringView::from(nullptr, 0);
+
+    return ui->register_tool_renderer(host, &spec);
+}
+
+/// 注册基于预设模版的工具特化渲染器
+inline int32_t registerToolTemplate(
+    const AgentxxPluginHost*    host,
+    const AgentxxClientUiIface* ui,
+    std::string_view            toolName,
+    std::string_view            displayName,
+    std::string_view            summaryKey
+) {
+    if (!host || !ui || !ui->register_tool_renderer) {
+        return -1;
+    }
+    neograph::json j;
+    j["displayName"]    = std::string(displayName);
+    j["summaryKey"]     = std::string(summaryKey);
+    std::string jsonStr = j.dump();
+
+    AgentxxToolRenderSpec spec{};
+    spec.version       = 1;
+    spec.tool_name     = PluginStringView::from(toolName.data(), toolName.size());
+    spec.render_fn     = nullptr;
+    spec.user_data     = nullptr;
+    spec.template_json = PluginStringView::from(jsonStr.data(), jsonStr.size());
+
+    return ui->register_tool_renderer(host, &spec);
+}
+
 } // namespace plugin
 } // namespace agentxx

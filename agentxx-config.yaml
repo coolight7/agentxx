@@ -116,6 +116,16 @@ models:
     model_context_max_token: 1000000
     extra_api_config:
       reasoning_effort: "max"
+  - name: command-code-muse-spark-1.3-contributor
+    type: "openai"
+    base_url: "https://api.commandcode.ai/provider/v1"
+    api_key: "${COMMANDCODE_API_KEY}"
+    model_name: "meta/muse-spark-1.3-contributor"
+    send_thinking: true
+    request_reasoning_summary: false
+    model_context_max_token: 1000000
+    extra_api_config:
+      reasoning_effort: xhigh
   - name: opencode-ds-v4-flash
     type: "openai-responses"
     base_url: "https://opencode.ai/zen/go/v1"
@@ -126,11 +136,11 @@ models:
     extra_api_config:
       reasoning:
         effort: max
-  - name: opencode-muse-spark-1.2-contributor
+  - name: opencode-muse-spark-1.3-contributor
     type: "openai-responses"
     base_url: "https://opencode.ai/zen/go/v1"
     api_key: "${OPENCODE_API_KEY}"
-    model_name: "muse-spark-1.2-contributor"
+    model_name: "muse-spark-1.3-contributor"
     send_thinking: true
     request_reasoning_summary: false
     model_context_max_token: 1000000

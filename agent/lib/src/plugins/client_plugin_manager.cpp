@@ -655,6 +655,22 @@ void ClientPluginManager::enableImpl(std::string_view name, bool userInitiated) 
         }
         uiRegistry_ = std::move(cur);
     }
+    // 工具特化渲染器恢复 (直接写回注册表)
+    for (const auto& reg : inst->toolRenderRegs) {
+        std::lock_guard<std::mutex> lock(uiMutex_);
+        auto                        cur = std::make_shared<ClientUiRegistry>(*uiRegistry_);
+        bool                        dup = false;
+        for (const auto& r : cur->toolRenderers) {
+            if (r.plugin == inst->name && r.toolName == reg.toolName) {
+                dup = true;
+                break;
+            }
+        }
+        if (!dup) {
+            cur->toolRenderers.push_back(reg);
+        }
+        uiRegistry_ = std::move(cur);
+    }
     XX_LOGI("[client_plugin] enabled: {}", inst->name);
 }
 
@@ -1144,6 +1160,14 @@ void ClientPluginManager::detachAll(ClientPluginInstance* inst, bool keepInfo) {
                 ++it;
             }
         }
+        auto& tr = reg->toolRenderers;
+        for (auto it = tr.begin(); it != tr.end();) {
+            if (it->plugin == inst->name) {
+                it = tr.erase(it);
+            } else {
+                ++it;
+            }
+        }
         auto& cm = reg->commands;
         for (auto it = cm.begin(); it != cm.end();) {
             if (it->plugin == inst->name) {
@@ -1186,6 +1210,7 @@ void ClientPluginManager::detachAll(ClientPluginInstance* inst, bool keepInfo) {
         inst->infoSectionRegs.clear();
         inst->commandRegs.clear();
         inst->toolDecorRegs.clear();
+        inst->toolRenderRegs.clear();
         inst->subscriptions.clear();
     }
 }
@@ -1552,6 +1577,39 @@ int32_t AGENTXX_PLUGIN_CALL xx_cupdate_tool_decor(
     });
 }
 
+int32_t AGENTXX_PLUGIN_CALL xx_cregister_tool_renderer(
+    const AgentxxPluginHost*     host,
+    const AgentxxToolRenderSpec* spec
+) {
+    return agentxx::plugin::guardVtableCall(-1, [&]() -> int32_t {
+        auto mgr  = clientMgrOf(host);
+        auto inst = clientInstOf(host);
+        if (!mgr || !inst || !spec) {
+            return -1;
+        }
+        return ioCallSync<int32_t>(mgr, [&]() -> int32_t {
+            return mgr->registerToolRenderer(inst, spec);
+        });
+    });
+}
+
+int32_t AGENTXX_PLUGIN_CALL xx_cunregister_tool_renderer(
+    const AgentxxPluginHost*       host,
+    const AgentxxPluginStringView* tool_name
+) {
+    return agentxx::plugin::guardVtableCall(-1, [&]() -> int32_t {
+        auto mgr  = clientMgrOf(host);
+        auto inst = clientInstOf(host);
+        if (!mgr || !inst || !tool_name) {
+            return -1;
+        }
+        auto tnameVal = *tool_name;
+        return ioCallSync<int32_t>(mgr, [&]() -> int32_t {
+            return mgr->unregisterToolRenderer(inst, tnameVal);
+        });
+    });
+}
+
 // ---- 命令 ----
 
 int32_t AGENTXX_PLUGIN_CALL xx_cregister_command(
@@ -1801,6 +1859,8 @@ static const AgentxxClientUiIface* clientUiIface() {
         /* unregister_command */ xx_cunregister_command,
         /* show_toast */ xx_cshow_toast,
         /* update_tool_decor */ xx_cupdate_tool_decor,
+        /* register_tool_renderer */ xx_cregister_tool_renderer,
+        /* unregister_tool_renderer */ xx_cunregister_tool_renderer,
     };
     return &table;
 }
@@ -2564,6 +2624,260 @@ int ClientPluginManager::sendPluginDataToPeer(
     std::string ev = svToStr(event);
     std::string j  = agentxx::plugin::PluginStringView::empty(json) ? "{}" : svToStr(json);
     return uiAdapter_->sendPluginData(inst->name, ev, j) ? 0 : -1;
+}
+
+namespace {
+
+std::string truncateToolSummary(std::string_view s, size_t maxCols = 80) {
+    const auto  nl = s.find('\n');
+    std::string line{(nl == std::string_view::npos) ? s : s.substr(0, nl)};
+    if (maxCols == 0 || line.empty()) {
+        return {};
+    }
+    const auto idx = agentxx::util::findIndexByUtf8Length(line, maxCols);
+    if (idx > 0 && idx < line.size()) {
+        line.resize(idx);
+        line += "...";
+    }
+    return line;
+}
+
+} // namespace
+
+int ClientPluginManager::registerToolRenderer(
+    ClientPluginInstance*        inst,
+    const AgentxxToolRenderSpec* spec
+) {
+    if (!inst || !spec || spec->version != 1
+        || agentxx::plugin::PluginStringView::empty(&spec->tool_name)) {
+        return -1;
+    }
+    const std::string   tname = svToStr(spec->tool_name);
+    ClientToolRenderReg reg;
+    reg.plugin   = inst->name;
+    reg.toolName = tname;
+    reg.renderFn = spec->render_fn;
+    reg.userData = spec->user_data;
+
+    if (!spec->render_fn && !agentxx::plugin::PluginStringView::empty(&spec->template_json)) {
+        reg.templateJson = svToStr(spec->template_json);
+        try {
+            auto j = neograph::json::parse(reg.templateJson);
+            if (j.is_object()) {
+                reg.templateDisplayName     = j.value("displayName", std::string{});
+                reg.templateSummaryKey      = j.value("summaryKey", std::string{});
+                reg.templateSummaryTemplate = j.value("summaryTemplate", std::string{});
+            }
+        } catch (...) {
+            return -1;
+        }
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(uiMutex_);
+        auto                        cur      = std::make_shared<ClientUiRegistry>(*uiRegistry_);
+        bool                        replaced = false;
+        for (auto& r : cur->toolRenderers) {
+            if (r.plugin == inst->name && r.toolName == tname) {
+                r        = reg;
+                replaced = true;
+                break;
+            }
+        }
+        if (!replaced) {
+            cur->toolRenderers.push_back(reg);
+        }
+        uiRegistry_ = std::move(cur);
+    }
+
+    bool replacedInst = false;
+    for (auto& r : inst->toolRenderRegs) {
+        if (r.toolName == tname) {
+            r            = reg;
+            replacedInst = true;
+            break;
+        }
+    }
+    if (!replacedInst) {
+        inst->toolRenderRegs.push_back(reg);
+    }
+    return 0;
+}
+
+int ClientPluginManager::unregisterToolRenderer(
+    ClientPluginInstance*   inst,
+    AgentxxPluginStringView tool_name
+) {
+    if (!inst || agentxx::plugin::PluginStringView::empty(&tool_name)) {
+        return -1;
+    }
+    const std::string tname = svToStr(tool_name);
+    {
+        std::lock_guard<std::mutex> lock(uiMutex_);
+        auto                        cur = std::make_shared<ClientUiRegistry>(*uiRegistry_);
+        cur->toolRenderers.erase(
+            std::remove_if(
+                cur->toolRenderers.begin(),
+                cur->toolRenderers.end(),
+                [&](const auto& r) {
+                    return r.plugin == inst->name && r.toolName == tname;
+                }
+            ),
+            cur->toolRenderers.end()
+        );
+        uiRegistry_ = std::move(cur);
+    }
+    inst->toolRenderRegs.erase(
+        std::remove_if(
+            inst->toolRenderRegs.begin(),
+            inst->toolRenderRegs.end(),
+            [&](const auto& r) {
+                return r.toolName == tname;
+            }
+        ),
+        inst->toolRenderRegs.end()
+    );
+    return 0;
+}
+
+ClientToolRenderResult renderClientTool(
+    const ClientUiRegistry* reg,
+    std::string_view        toolCallId,
+    std::string_view        toolName,
+    std::string_view        argsJson,
+    std::string_view        resultText,
+    bool                    isFinished,
+    bool                    isError,
+    int                     maxWidth
+) {
+    ClientToolRenderResult res;
+    if (!reg) {
+        return res;
+    }
+
+    // 1. 优先匹配动态 per-call decor (由 update_tool_decor 针对 toolCallId 注册)
+    if (!toolCallId.empty()) {
+        for (const auto& d : reg->toolDecors) {
+            if (d.toolCallId == toolCallId) {
+                res.displayName = d.displayName;
+                res.summary     = d.summary;
+                res.items       = d.items;
+                res.matched     = true;
+                res.isDecor     = true;
+                return res;
+            }
+        }
+    }
+
+    // 2. 匹配按 toolName 注册的工具特化渲染器 (render_fn 或 预设模版)
+    if (!toolName.empty()) {
+        for (const auto& r : reg->toolRenderers) {
+            if (r.toolName == toolName) {
+                if (r.renderFn) {
+                    AgentxxToolRenderInput input{};
+                    input.version      = 1;
+                    input.tool_call_id = agentxx::plugin::PluginStringView::from(
+                        toolCallId.data(),
+                        toolCallId.size()
+                    );
+                    input.tool_name
+                        = agentxx::plugin::PluginStringView::from(toolName.data(), toolName.size());
+                    input.args_json
+                        = agentxx::plugin::PluginStringView::from(argsJson.data(), argsJson.size());
+                    input.result_text = agentxx::plugin::PluginStringView::from(
+                        resultText.data(),
+                        resultText.size()
+                    );
+                    input.is_finished = isFinished ? 1 : 0;
+                    input.is_error    = isError ? 1 : 0;
+                    input.max_width   = maxWidth;
+
+                    AgentxxToolRenderOutput output{};
+                    int32_t                 rc = -1;
+                    try {
+                        rc = r.renderFn(r.userData, &input, &output);
+                    } catch (...) {
+                        rc = -1;
+                    }
+                    if (rc == 0) {
+                        res.matched = true;
+                        if (output.displayName.data) {
+                            res.displayName.assign(
+                                output.displayName.data,
+                                static_cast<size_t>(output.displayName.size)
+                            );
+                            agentxx::plugin::hostMemoryFree(output.displayName.data);
+                        }
+                        if (output.summary.data) {
+                            res.summary.assign(
+                                output.summary.data,
+                                static_cast<size_t>(output.summary.size)
+                            );
+                            agentxx::plugin::hostMemoryFree(output.summary.data);
+                        }
+                        if (output.items_json.data) {
+                            try {
+                                res.items = neograph::json::parse(std::string_view{
+                                    output.items_json.data,
+                                    static_cast<size_t>(output.items_json.size)
+                                });
+                            } catch (...) {
+                            }
+                            agentxx::plugin::hostMemoryFree(output.items_json.data);
+                        }
+                        return res;
+                    }
+                } else if (!r.templateDisplayName.empty() || !r.templateSummaryKey.empty()) {
+                    res.displayName = r.templateDisplayName;
+                    res.matched     = true;
+
+                    if (!r.templateSummaryKey.empty() && !argsJson.empty()) {
+                        try {
+                            auto j = neograph::json::parse(argsJson);
+                            if (j.is_object() && j.contains(r.templateSummaryKey)) {
+                                const auto& val = j[r.templateSummaryKey];
+                                std::string rawVal;
+                                if (val.is_string()) {
+                                    rawVal = val.get<std::string>();
+                                } else if (val.is_array()) {
+                                    std::string joined;
+                                    size_t      count = 0;
+                                    for (const auto& item : val) {
+                                        if (count > 0) {
+                                            joined += ", ";
+                                        }
+                                        if (item.is_string()) {
+                                            joined += item.get<std::string>();
+                                        } else {
+                                            joined += item.dump();
+                                        }
+                                        if (++count >= 2 && val.size() > 2) {
+                                            joined += ", ...";
+                                            break;
+                                        }
+                                    }
+                                    rawVal = std::move(joined);
+                                } else {
+                                    rawVal = val.dump();
+                                }
+                                const size_t limit = (maxWidth > 20)
+                                                         ? static_cast<size_t>(maxWidth - 15)
+                                                         : 80;
+                                res.summary        = truncateToolSummary(rawVal, limit);
+                            }
+                        } catch (...) {
+                            res.matched = false;
+                            res.displayName.clear();
+                            return res;
+                        }
+                    }
+                    return res;
+                }
+            }
+        }
+    }
+
+    return res;
 }
 
 } // namespace plugin

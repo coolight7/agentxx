@@ -36,6 +36,220 @@ namespace test {
 
 namespace {
 
+static AgentxxPluginString makeTestString(std::string_view s) {
+    if (s.empty()) {
+        return AgentxxPluginString{nullptr, 0};
+    }
+    char* buf = static_cast<char*>(std::malloc(s.size() + 1));
+    std::memcpy(buf, s.data(), s.size());
+    buf[s.size()] = '\0';
+    return AgentxxPluginString{buf, static_cast<uint64_t>(s.size())};
+}
+
+} // namespace
+
+std::shared_ptr<agentxx::plugin::ClientUiRegistry> makeTestToolRegistry() {
+    auto reg = std::make_shared<agentxx::plugin::ClientUiRegistry>();
+
+    // List (模板)
+    reg->toolRenderers.push_back({
+        .plugin              = "agentxx_filesystem",
+        .toolName            = "agentxx_filesystem_list",
+        .renderFn            = nullptr,
+        .userData            = nullptr,
+        .templateDisplayName = "List",
+        .templateSummaryKey  = "path",
+    });
+
+    // Write (模板)
+    reg->toolRenderers.push_back({
+        .plugin              = "agentxx_filesystem",
+        .toolName            = "agentxx_filesystem_write",
+        .renderFn            = nullptr,
+        .userData            = nullptr,
+        .templateDisplayName = "Write",
+        .templateSummaryKey  = "path",
+    });
+
+    // Read (回调)
+    static auto readFn = [](void*, const AgentxxToolRenderInput* in, AgentxxToolRenderOutput* out) -> int32_t {
+        std::string_view args(in->args_json.data ? in->args_json.data : "", in->args_json.size);
+        neograph::json j;
+        try { j = neograph::json::parse(args); } catch (...) { return -1; }
+        if (!j.is_object()) return -1;
+        std::string path = j.value("path", std::string{});
+        int64_t off = j.value("line_offset", int64_t{-1});
+        int64_t lim = j.value("line_limit", int64_t{-1});
+        std::string range;
+        if (off <= 0 && lim <= 0) {
+            // empty
+        } else if (off <= 0) {
+            range = fmt::format("0, {}", lim);
+        } else if (lim <= 0) {
+            range = fmt::format("{}", off);
+        } else {
+            range = fmt::format("{}, {}", off, lim);
+        }
+        std::string summary = " ·";
+        if (!range.empty()) summary += " [" + range + "]";
+        if (!path.empty()) summary += " " + path;
+        out->displayName = makeTestString("Read");
+        out->summary     = makeTestString(summary);
+        return 0;
+    };
+    reg->toolRenderers.push_back({
+        .plugin   = "agentxx_filesystem",
+        .toolName = "agentxx_filesystem_read",
+        .renderFn = readFn,
+    });
+
+    // Glob (回调)
+    static auto globFn = [](void*, const AgentxxToolRenderInput* in, AgentxxToolRenderOutput* out) -> int32_t {
+        std::string_view args(in->args_json.data ? in->args_json.data : "", in->args_json.size);
+        neograph::json j;
+        try { j = neograph::json::parse(args); } catch (...) { return -1; }
+        if (!j.is_object()) return -1;
+        auto files = j.value("file_patterns", std::vector<std::string>{});
+        std::string joined;
+        const size_t n = std::min<size_t>(files.size(), 2);
+        for (size_t i = 0; i < n; ++i) {
+            if (i > 0) joined += ", ";
+            joined += files[i];
+        }
+        if (files.size() > 2) joined += (n > 0 ? ", ..." : "...");
+        out->displayName = makeTestString("Glob");
+        out->summary     = makeTestString(" · " + joined);
+        return 0;
+    };
+    reg->toolRenderers.push_back({
+        .plugin   = "agentxx_filesystem",
+        .toolName = "agentxx_filesystem_glob",
+        .renderFn = globFn,
+    });
+
+    // Grep (回调)
+    static auto grepFn = [](void*, const AgentxxToolRenderInput* in, AgentxxToolRenderOutput* out) -> int32_t {
+        std::string_view args(in->args_json.data ? in->args_json.data : "", in->args_json.size);
+        neograph::json j;
+        try { j = neograph::json::parse(args); } catch (...) { return -1; }
+        if (!j.is_object()) return -1;
+        auto textPats  = j.value("text_patterns", std::vector<std::string>{});
+        auto regexPats = j.value("regex_patterns", std::vector<std::string>{});
+        auto files     = j.value("file_patterns", std::vector<std::string>{});
+        std::vector<std::string> shown;
+        for (const auto& p : textPats) { if (shown.size() >= 2) break; shown.push_back(p); }
+        for (const auto& p : regexPats) { if (shown.size() >= 2) break; shown.push_back(p); }
+        const size_t total = textPats.size() + regexPats.size();
+        std::string quoted;
+        for (size_t i = 0; i < shown.size(); ++i) {
+            if (i > 0) quoted += ", ";
+            quoted += '"' + shown[i] + '"';
+        }
+        if (total > shown.size()) quoted += ", ...";
+        std::string joinedFiles;
+        const size_t n = std::min<size_t>(files.size(), 2);
+        for (size_t i = 0; i < n; ++i) {
+            if (i > 0) joinedFiles += ", ";
+            joinedFiles += files[i];
+        }
+        if (files.size() > 2) joinedFiles += (n > 0 ? ", ..." : "...");
+        std::string summary = " ·";
+        if (!quoted.empty()) summary += " [" + quoted + "]";
+        if (!joinedFiles.empty()) summary += " " + joinedFiles;
+        out->displayName = makeTestString("Grep");
+        out->summary     = makeTestString(summary);
+        return 0;
+    };
+    reg->toolRenderers.push_back({
+        .plugin   = "agentxx_filesystem",
+        .toolName = "agentxx_filesystem_grep",
+        .renderFn = grepFn,
+    });
+
+    // Edit (回调)
+    static auto editFn = [](void*, const AgentxxToolRenderInput* in, AgentxxToolRenderOutput* out) -> int32_t {
+        std::string_view args(in->args_json.data ? in->args_json.data : "", in->args_json.size);
+        neograph::json j;
+        try { j = neograph::json::parse(args); } catch (...) { return -1; }
+        if (!j.is_object()) return -1;
+        std::string path   = j.value("path", std::string{});
+        std::string oldStr = j.value("old_str", std::string{});
+        std::string newStr = j.value("new_str", std::string{});
+        out->displayName = makeTestString("Edit");
+        out->summary     = makeTestString(" · " + path);
+        if (!in->is_error) {
+            neograph::json diffItem;
+            diffItem["kind"]    = "diff";
+            diffItem["path"]    = std::move(path);
+            diffItem["old_str"] = std::move(oldStr);
+            diffItem["new_str"] = std::move(newStr);
+            neograph::json arr  = neograph::json::array();
+            arr.push_back(std::move(diffItem));
+            out->items_json = makeTestString(arr.dump());
+        }
+        return 0;
+    };
+    reg->toolRenderers.push_back({
+        .plugin   = "agentxx_filesystem",
+        .toolName = "agentxx_filesystem_edit",
+        .renderFn = editFn,
+    });
+
+    // Search (模板)
+    reg->toolRenderers.push_back({
+        .plugin              = "agentxx_websearch",
+        .toolName            = "agentxx_web_search",
+        .renderFn            = nullptr,
+        .userData            = nullptr,
+        .templateDisplayName = "Search",
+        .templateSummaryKey  = "query",
+    });
+
+    // Fetch (模板)
+    reg->toolRenderers.push_back({
+        .plugin              = "agentxx_websearch",
+        .toolName            = "agentxx_web_fetch",
+        .renderFn            = nullptr,
+        .userData            = nullptr,
+        .templateDisplayName = "Fetch",
+        .templateSummaryKey  = "url",
+    });
+
+    // FetchMD (模板)
+    reg->toolRenderers.push_back({
+        .plugin              = "agentxx_websearch",
+        .toolName            = "agentxx_web_fetch_markdown",
+        .renderFn            = nullptr,
+        .userData            = nullptr,
+        .templateDisplayName = "FetchMD",
+        .templateSummaryKey  = "url",
+    });
+
+    // Bash (模板)
+    reg->toolRenderers.push_back({
+        .plugin              = "agentxx_execute_command",
+        .toolName            = "agentxx_execute_bash_command",
+        .renderFn            = nullptr,
+        .userData            = nullptr,
+        .templateDisplayName = "Bash",
+        .templateSummaryKey  = "command",
+    });
+
+    // Windows (模板)
+    reg->toolRenderers.push_back({
+        .plugin              = "agentxx_execute_command",
+        .toolName            = "agentxx_execute_windows_command",
+        .renderFn            = nullptr,
+        .userData            = nullptr,
+        .templateDisplayName = "Bash",
+        .templateSummaryKey  = "command",
+    });
+
+    return reg;
+}
+
+namespace {
+
 /// 测试夹具: 固定视口的消息列表 (单条 Tool 消息即可完整展示头部)
 struct ToolHeaderFixture {
     asio::io_context io;
@@ -55,6 +269,9 @@ struct ToolHeaderFixture {
         // 环境检测色彩能力, 无 COLORTERM=truecolor 时降级 256 色 (38;5;N)
         // 导致断言随环境漂移 —— 测试内强制声明 TrueColor 支持
         ftxui::Terminal::SetColorSupport(ftxui::Terminal::Color::TrueColor);
+        sharedState.mutate([&](TUIRenderState& st) {
+            st.pluginRegistry = makeTestToolRegistry();
+        });
         ctx.state      = &sharedState;
         ctx.frameState = sharedState.readSnapshot();
         ctx.postRedraw = [] {};
@@ -106,7 +323,8 @@ struct ToolHeaderFixture {
     /// 语义层装饰; toolCallId 与 pushTool 的 "call_1" 对应)
     void pushDecor() {
         sharedState.mutate([&](TUIRenderState& st) {
-            auto  reg         = std::make_shared<agentxx::plugin::ClientUiRegistry>();
+            auto  reg         = st.pluginRegistry ? std::make_shared<agentxx::plugin::ClientUiRegistry>(*st.pluginRegistry)
+                                                  : std::make_shared<agentxx::plugin::ClientUiRegistry>();
             auto& d           = reg->toolDecors.emplace_back();
             d.plugin          = "agentxx_planning";
             d.toolCallId      = "call_1";

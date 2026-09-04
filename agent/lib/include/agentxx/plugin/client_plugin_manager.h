@@ -77,14 +77,52 @@ struct ClientCommand {
     void* ud                                                                                                                                                    = nullptr;
 };
 
+/// 工具特化渲染器注册记录 (UI 注册表快照条目)
+struct ClientToolRenderReg {
+    std::string         plugin;
+    std::string         toolName;
+    AgentxxToolRenderFn renderFn = nullptr;
+    void*               userData = nullptr;
+    std::string         templateJson;
+    std::string         templateDisplayName;
+    std::string         templateSummaryKey;
+    std::string         templateSummaryTemplate;
+};
+
 /// UI 注册表快照 (UI 线程渲染读取; COW shared_ptr 语义)
 struct ClientUiRegistry {
-    std::vector<ClientStatusItem>  statusItems;
-    std::vector<ClientPanel>       panels;
-    std::vector<ClientInfoSection> infoSections;
-    std::vector<ClientCommand>     commands;
-    std::vector<ClientToolDecor>   toolDecors;
+    std::vector<ClientStatusItem>    statusItems;
+    std::vector<ClientPanel>         panels;
+    std::vector<ClientInfoSection>   infoSections;
+    std::vector<ClientCommand>       commands;
+    std::vector<ClientToolDecor>     toolDecors;
+    std::vector<ClientToolRenderReg> toolRenderers;
 };
+
+/// 工具特化渲染统一结果
+struct ClientToolRenderResult {
+    std::string    displayName;
+    std::string    summary;
+    neograph::json items   = neograph::json::array();
+    bool           matched = false;
+    bool           isDecor = false; ///< 是否来自动态 toolDecors (update_tool_decor)
+};
+
+/// 渲染客户端工具特化内容 (折叠头/展开体)
+/// 查询顺序:
+/// 1. toolDecors (按 toolCallId 匹配动态实例级装饰, 如 planning 推送)
+/// 2. toolRenderers (按 toolName 匹配注册的渲染回调或预设模版)
+/// 3. 若均未命中, 返回 matched = false
+ClientToolRenderResult renderClientTool(
+    const ClientUiRegistry* reg,
+    std::string_view        toolCallId,
+    std::string_view        toolName,
+    std::string_view        argsJson,
+    std::string_view        resultText,
+    bool                    isFinished,
+    bool                    isError,
+    int                     maxWidth
+);
 
 /// client 插件实例 (宿主侧状态)
 /// - 与 agent 侧 PluginInstance 对称: 同一动态库可被 agent 与 client 两个
@@ -124,6 +162,8 @@ public:
     std::vector<ClientCommand>     commandRegs;     ///< 命令注册信息 (disable 保留)
     /// 工具消息装饰 (disable 保留, enable 恢复; 无句柄 —— 以 plugin+toolCallId 键控)
     std::vector<ClientToolDecor>               toolDecorRegs;
+    /// 工具特化渲染器 (disable 保留, enable 恢复; 以 plugin+toolName 键控)
+    std::vector<ClientToolRenderReg>           toolRenderRegs;
     std::vector<std::shared_ptr<Subscription>> subscriptions; ///< 已订阅事件 (disable 保留)
     std::vector<std::shared_ptr<void>> statusItemHandles; ///< 状态栏项宿主句柄 (enable 期)
     std::vector<std::shared_ptr<void>> panelHandles;      ///< 面板宿主句柄 (enable 期)
@@ -358,6 +398,13 @@ public:
         std::string_view      decor_json
     ) {
         return updateToolDecor(inst, strToSv(tool_call_id), strToSv(decor_json));
+    }
+    /// 注册工具特化渲染器 (io 线程); 返回 0 成功
+    int registerToolRenderer(ClientPluginInstance* inst, const AgentxxToolRenderSpec* spec);
+    /// 注销工具特化渲染器 (io 线程); 返回 0 成功
+    int unregisterToolRenderer(ClientPluginInstance* inst, AgentxxPluginStringView tool_name);
+    int unregisterToolRenderer(ClientPluginInstance* inst, std::string_view tool_name) {
+        return unregisterToolRenderer(inst, strToSv(tool_name));
     }
     /// 注册命令; 返回 0 成功 (名字冲突返回非 0)
     int registerCommand(

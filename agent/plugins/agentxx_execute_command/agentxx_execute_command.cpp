@@ -357,3 +357,93 @@ extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_agent_destroy(void* plugin_
         delete ctx;
     });
 }
+
+/* ==================== Client 侧入口 ==================== */
+
+namespace {
+
+struct ClientCtx {
+    const AgentxxPluginHost*      host = nullptr;
+    agentxx::plugin::ClientIfaces iface{};
+
+    void logErr(const char* m) const noexcept {
+        agentxx::plugin::logTo(host, iface.log, 4, "agentxx_execute_command", m ? m : "");
+    }
+};
+
+} // namespace
+
+extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxClientPluginInfo* agentxx_plugin_client_get_info(void
+) {
+    static const AgentxxClientPluginInfo info{
+        AGENTXX_CLIENT_PLUGIN_API_VERSION,
+        0,
+        agentxx::plugin::PluginStringView::fromCstr("agentxx_execute_command"),
+        agentxx::plugin::PluginStringView::fromCstr("1.0.0"),
+        agentxx::plugin::PluginStringView::fromCstr("Command execution tools specialized UI renderer"),
+    };
+    return &info;
+}
+
+extern "C" AGENTXX_PLUGIN_EXPORT int32_t AGENTXX_PLUGIN_CALL
+    agentxx_plugin_client_create(const AgentxxPluginHost* host, void** plugin_ctx) {
+    ClientCtx* raw = nullptr;
+    return agentxx::plugin::guardCall(
+        [&raw](const char* m) noexcept {
+            if (raw) {
+                raw->logErr(m);
+            }
+        },
+        -1,
+        [&]() -> int32_t {
+            if (!host || !host->vtable || !plugin_ctx) {
+                return -1;
+            }
+            auto ctx   = std::make_unique<ClientCtx>();
+            ctx->host  = host;
+            ctx->iface = agentxx::plugin::ClientIfaces::query(host);
+            raw        = ctx.get();
+
+            if (!ctx->iface.ui) {
+                *plugin_ctx = ctx.release();
+                return 0;
+            }
+
+            // 1. Bash (预设模版)
+            agentxx::plugin::registerToolTemplate(
+                host,
+                ctx->iface.ui,
+                kNameBash,
+                "Bash",
+                "command"
+            );
+
+            // 2. Windows (预设模版)
+            agentxx::plugin::registerToolTemplate(
+                host,
+                ctx->iface.ui,
+                kNameWindows,
+                "Bash",
+                "command"
+            );
+
+            *plugin_ctx = ctx.release();
+            return 0;
+        }
+    );
+}
+
+extern "C" AGENTXX_PLUGIN_EXPORT void AGENTXX_PLUGIN_CALL
+    agentxx_plugin_client_destroy(void* plugin_ctx) {
+    auto* ctx = static_cast<ClientCtx*>(plugin_ctx);
+    agentxx::plugin::guardCallVoid(
+        [ctx](const char* m) noexcept {
+            if (ctx) {
+                ctx->logErr(m);
+            }
+        },
+        [&] {
+            delete ctx;
+        }
+    );
+}

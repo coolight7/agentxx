@@ -8,6 +8,7 @@
 // - [吸附跟随] stickToBottom 下内容增长自动跟随到底 (流式追加/消息入列)
 // - [滚轮滚动] 滚轮上滚解除吸附并保持视图不动, 滚回底部恢复吸附
 #include "test_tui_scroll.h"
+#include "test_tui_tool_header.h"
 
 #include "agentxx-client/io/tui/components/message_list.h"
 #include "agentxx-client/io/tui/framework/tui_context.h"
@@ -56,6 +57,9 @@ struct ScrollFixture {
     int height = kHeight;
 
     ScrollFixture() {
+        sharedState.mutate([&](TUIRenderState& st) {
+            st.pluginRegistry = makeTestToolRegistry();
+        });
         ctx.state      = &sharedState;
         ctx.frameState = sharedState.readSnapshot();
         ctx.postRedraw = [] {};

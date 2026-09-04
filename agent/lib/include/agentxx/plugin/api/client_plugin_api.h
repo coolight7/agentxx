@@ -62,10 +62,46 @@ typedef struct AgentxxStatusItem  AgentxxStatusItem;  ///< 状态栏项句柄
 typedef struct AgentxxPanel       AgentxxPanel;       ///< 侧边栏面板句柄
 typedef struct AgentxxInfoSection AgentxxInfoSection; ///< 侧边栏 Info 栏段落句柄
 
+/* ==================== 工具特化渲染器 (Tool Renderer / Template) ==================== */
+
+typedef struct AgentxxToolRenderInput {
+    int32_t                 version;      ///< 结构体版本 (必须 == 1)
+    uint32_t                _reserved;    ///< 8 字节对齐
+    AgentxxPluginStringView tool_call_id; ///< 工具调用 ID
+    AgentxxPluginStringView tool_name;    ///< 工具名
+    AgentxxPluginStringView args_json;    ///< 参数 JSON 字符串
+    AgentxxPluginStringView result_text;  ///< 执行结果文本 (未完成时为空)
+    int32_t                 is_finished;  ///< 0=运行中, 1=已完成
+    int32_t                 is_error;     ///< 0=正常, 1=错误
+    int32_t                 max_width;    ///< 渲染内容区可用列宽预算 (<=0 表示不限)
+    uint32_t                _pad;         ///< 8 字节对齐
+} AgentxxToolRenderInput;
+
+typedef struct AgentxxToolRenderOutput {
+    AgentxxPluginString displayName; ///< 显示名 (如 "Read", "Edit", "Bash", 空则回退原始 toolName)
+    AgentxxPluginString summary;     ///< 一行摘要 (如 " · [0, 100] /path/file", 可带或不带前导 " · ")
+    AgentxxPluginString items_json;  ///< 展开体 items JSON 数组 (可选, 空则走默认 args/result 展示; 支持 text/button/diagram/separator/diff)
+} AgentxxToolRenderOutput;
+
+typedef int32_t(AGENTXX_PLUGIN_CALL* AgentxxToolRenderFn)(
+    void*                         user_data,
+    const AgentxxToolRenderInput* input,
+    AgentxxToolRenderOutput*      output
+);
+
+typedef struct AgentxxToolRenderSpec {
+    int32_t                 version;       ///< 结构体版本 (必须 == 1)
+    uint32_t                _reserved;     ///< 8 字节对齐
+    AgentxxPluginStringView tool_name;     ///< 目标工具名 (必填, 如 "agentxx_filesystem_read")
+    AgentxxToolRenderFn     render_fn;     ///< 渲染回调 (可为 NULL; 非空时优先调用)
+    void*                   user_data;     ///< 回调上下文 (render_fn 非空时有效)
+    AgentxxPluginStringView template_json; ///< 预设模版 JSON (render_fn 为 NULL 时由宿主解析执行)
+} AgentxxToolRenderSpec;
+
 /* ==================== 接口表: 展示/命令/toast (agentxx.client.ui) ==================== */
 
 #define AGENTXX_IFACE_CLIENT_UI         "agentxx.client.ui"
-#define AGENTXX_IFACE_CLIENT_UI_VERSION 1
+#define AGENTXX_IFACE_CLIENT_UI_VERSION 2
 
 typedef struct AgentxxClientUiIface {
     int32_t  version; ///< 必须 == AGENTXX_IFACE_CLIENT_UI_VERSION
@@ -194,6 +230,25 @@ typedef struct AgentxxClientUiIface {
         const AgentxxPluginHost*       host,
         const AgentxxPluginStringView* tool_call_id,
         const AgentxxPluginStringView* decor_json
+    );
+
+    /* ---- 工具特化渲染器 (按 tool_name 注册) ---- */
+    /// 注册工具特化渲染器 (按 tool_name 键控):
+    /// - 宿主在渲染该工具消息 (折叠头/展开体) 时调用, 无论实时流式还是历史消息
+    /// - 支持两种模式:
+    ///   1. <key, render_fn>: spec->render_fn != NULL, 宿主回调该函数输出 displayName/summary/items_json
+    ///   2. 预设模版: spec->render_fn == NULL 且 template_json 非空,
+    ///      宿主按模版自动提取参数字段并格式化 (如 {"displayName":"Search","summaryKey":"query"})
+    /// - 展开体 items_json 支持新增的 {"kind":"diff","path":"...","old_str":"...","new_str":"..."}
+    /// - 插件卸载/禁用时宿主自动注销
+    /// 返回 0 成功, 非 0 失败
+    int32_t(AGENTXX_PLUGIN_CALL* register_tool_renderer)(
+        const AgentxxPluginHost*     host,
+        const AgentxxToolRenderSpec* spec
+    );
+    int32_t(AGENTXX_PLUGIN_CALL* unregister_tool_renderer)(
+        const AgentxxPluginHost*       host,
+        const AgentxxPluginStringView* tool_name
     );
 } AgentxxClientUiIface;
 

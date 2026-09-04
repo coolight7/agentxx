@@ -679,3 +679,260 @@ extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_agent_destroy(void* plugin_
         }
     });
 }
+
+/* ==================== Client 侧入口 ==================== */
+
+namespace {
+
+struct ClientCtx {
+    const AgentxxPluginHost*                            host = nullptr;
+    agentxx::plugin::ClientIfaces                       iface{};
+    std::vector<std::unique_ptr<void, void (*)(void*)>> shims;
+
+    void logErr(const char* m) const noexcept {
+        agentxx::plugin::logTo(host, iface.log, 4, "agentxx_filesystem", m ? m : "");
+    }
+};
+
+} // namespace
+
+extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxClientPluginInfo* agentxx_plugin_client_get_info(void
+) {
+    static const AgentxxClientPluginInfo info{
+        AGENTXX_CLIENT_PLUGIN_API_VERSION,
+        0,
+        agentxx::plugin::PluginStringView::fromCstr("agentxx_filesystem"),
+        agentxx::plugin::PluginStringView::fromCstr("1.0.0"),
+        agentxx::plugin::PluginStringView::fromCstr("Filesystem tools specialized UI renderer"),
+    };
+    return &info;
+}
+
+extern "C" AGENTXX_PLUGIN_EXPORT int32_t AGENTXX_PLUGIN_CALL
+    agentxx_plugin_client_create(const AgentxxPluginHost* host, void** plugin_ctx) {
+    ClientCtx* raw = nullptr;
+    return agentxx::plugin::guardCall(
+        [&raw](const char* m) noexcept {
+            if (raw) {
+                raw->logErr(m);
+            }
+        },
+        -1,
+        [&]() -> int32_t {
+            if (!host || !host->vtable || !plugin_ctx) {
+                return -1;
+            }
+            auto ctx   = std::make_unique<ClientCtx>();
+            ctx->host  = host;
+            ctx->iface = agentxx::plugin::ClientIfaces::query(host);
+            raw        = ctx.get();
+
+            if (!ctx->iface.ui) {
+                *plugin_ctx = ctx.release();
+                return 0;
+            }
+
+            // 1. List (预设模版)
+            agentxx::plugin::registerToolTemplate(host, ctx->iface.ui, kNameList, "List", "path");
+
+            // 2. Write (预设模版)
+            agentxx::plugin::registerToolTemplate(host, ctx->iface.ui, kNameWrite, "Write", "path");
+
+            // 3. Read (回调函数: [offset, limit] 区间参数)
+            agentxx::plugin::registerToolRenderer(
+                host,
+                ctx->iface.ui,
+                kNameRead,
+                [](const agentxx::plugin::ToolRenderInput& in,
+                   agentxx::plugin::ToolRenderOutput&      out) {
+                    neograph::json args;
+                    try {
+                        args = neograph::json::parse(in.argsJson);
+                    } catch (...) {
+                        return;
+                    }
+                    if (!args.is_object()) {
+                        return;
+                    }
+                    std::string path     = args.value("path", std::string{});
+                    int64_t     off      = args.value("line_offset", int64_t{-1});
+                    int64_t     lim      = args.value("line_limit", int64_t{-1});
+                    std::string rangeStr;
+                    if (off <= 0 && lim <= 0) {
+                        // empty
+                    } else if (off <= 0) {
+                        rangeStr = fmt::format("0, {}", lim);
+                    } else if (lim <= 0) {
+                        rangeStr = fmt::format("{}", off);
+                    } else {
+                        rangeStr = fmt::format("{}, {}", off, lim);
+                    }
+                    std::string summary = " ·";
+                    if (!rangeStr.empty()) {
+                        summary += " [" + rangeStr + "]";
+                    }
+                    if (!path.empty()) {
+                        summary += " " + path;
+                    }
+                    out.displayName = "Read";
+                    out.summary     = std::move(summary);
+                },
+                ctx->shims
+            );
+
+            // 4. Glob (回调函数: 数组折叠)
+            agentxx::plugin::registerToolRenderer(
+                host,
+                ctx->iface.ui,
+                kNameGlob,
+                [](const agentxx::plugin::ToolRenderInput& in,
+                   agentxx::plugin::ToolRenderOutput&      out) {
+                    neograph::json args;
+                    try {
+                        args = neograph::json::parse(in.argsJson);
+                    } catch (...) {
+                        return;
+                    }
+                    if (!args.is_object()) {
+                        return;
+                    }
+                    auto         files = args.value("file_patterns", std::vector<std::string>{});
+                    std::string  joined;
+                    const size_t n = std::min<size_t>(files.size(), 2);
+                    for (size_t i = 0; i < n; ++i) {
+                        if (i > 0) {
+                            joined += ", ";
+                        }
+                        joined += files[i];
+                    }
+                    if (files.size() > 2) {
+                        joined += (n > 0 ? ", ..." : "...");
+                    }
+                    out.displayName = "Glob";
+                    out.summary     = " · " + joined;
+                },
+                ctx->shims
+            );
+
+            // 5. Grep (回调函数: 引号包裹匹配模式 + 文件列表)
+            agentxx::plugin::registerToolRenderer(
+                host,
+                ctx->iface.ui,
+                kNameGrep,
+                [](const agentxx::plugin::ToolRenderInput& in,
+                   agentxx::plugin::ToolRenderOutput&      out) {
+                    neograph::json args;
+                    try {
+                        args = neograph::json::parse(in.argsJson);
+                    } catch (...) {
+                        return;
+                    }
+                    if (!args.is_object()) {
+                        return;
+                    }
+                    auto textPats  = args.value("text_patterns", std::vector<std::string>{});
+                    auto regexPats = args.value("regex_patterns", std::vector<std::string>{});
+                    auto files     = args.value("file_patterns", std::vector<std::string>{});
+                    std::vector<std::string> shown;
+                    for (const auto& p : textPats) {
+                        if (shown.size() >= 2) {
+                            break;
+                        }
+                        shown.push_back(p);
+                    }
+                    for (const auto& p : regexPats) {
+                        if (shown.size() >= 2) {
+                            break;
+                        }
+                        shown.push_back(p);
+                    }
+                    const size_t totalPatterns = textPats.size() + regexPats.size();
+                    std::string  quoted;
+                    for (size_t i = 0; i < shown.size(); ++i) {
+                        if (i > 0) {
+                            quoted += ", ";
+                        }
+                        quoted += '"' + shown[i] + '"';
+                    }
+                    if (totalPatterns > shown.size()) {
+                        quoted += ", ...";
+                    }
+                    std::string  joinedFiles;
+                    const size_t n = std::min<size_t>(files.size(), 2);
+                    for (size_t i = 0; i < n; ++i) {
+                        if (i > 0) {
+                            joinedFiles += ", ";
+                        }
+                        joinedFiles += files[i];
+                    }
+                    if (files.size() > 2) {
+                        joinedFiles += (n > 0 ? ", ..." : "...");
+                    }
+                    std::string summary = " ·";
+                    if (!quoted.empty()) {
+                        summary += " [" + quoted + "]";
+                    }
+                    if (!joinedFiles.empty()) {
+                        summary += " " + joinedFiles;
+                    }
+                    out.displayName = "Grep";
+                    out.summary     = std::move(summary);
+                },
+                ctx->shims
+            );
+
+            // 6. Edit (回调函数: path 摘要 + diff items)
+            agentxx::plugin::registerToolRenderer(
+                host,
+                ctx->iface.ui,
+                kNameEdit,
+                [](const agentxx::plugin::ToolRenderInput& in,
+                   agentxx::plugin::ToolRenderOutput&      out) {
+                    neograph::json args;
+                    try {
+                        args = neograph::json::parse(in.argsJson);
+                    } catch (...) {
+                        return;
+                    }
+                    if (!args.is_object()) {
+                        return;
+                    }
+                    std::string path   = args.value("path", std::string{});
+                    std::string oldStr = args.value("old_str", std::string{});
+                    std::string newStr = args.value("new_str", std::string{});
+
+                    out.displayName = "Edit";
+                    out.summary     = " · " + path;
+
+                    if (!in.isError) {
+                        neograph::json diffItem;
+                        diffItem["kind"]    = "diff";
+                        diffItem["path"]    = std::move(path);
+                        diffItem["old_str"] = std::move(oldStr);
+                        diffItem["new_str"] = std::move(newStr);
+                        out.items.push_back(std::move(diffItem));
+                    }
+                },
+                ctx->shims
+            );
+
+            *plugin_ctx = ctx.release();
+            return 0;
+        }
+    );
+}
+
+extern "C" AGENTXX_PLUGIN_EXPORT void AGENTXX_PLUGIN_CALL
+    agentxx_plugin_client_destroy(void* plugin_ctx) {
+    auto* ctx = static_cast<ClientCtx*>(plugin_ctx);
+    agentxx::plugin::guardCallVoid(
+        [ctx](const char* m) noexcept {
+            if (ctx) {
+                ctx->logErr(m);
+            }
+        },
+        [&] {
+            delete ctx;
+        }
+    );
+}

@@ -9,3 +9,4 @@ interfaces:
     - agentxx.agent.tools
   optional:
     - agentxx.agent.model
+    - agentxx.client.ui

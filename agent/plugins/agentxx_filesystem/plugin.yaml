@@ -10,3 +10,4 @@ interfaces:
   optional:
     - agentxx.agent.config
     - agentxx.agent.cancel
+    - agentxx.client.ui

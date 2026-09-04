@@ -745,47 +745,24 @@ size_t MessageListComponent::estimateHeight(size_t index, int width) {
                 if (msg.collapsed) {
                     return 1 + 1; // header 行 + 空行
                 }
-                // 注意: 渲染 (buildMessageBlock) 对 filesystem_edit 工具特化为
-                // diff 展示 (appendEditToolBody -> renderEditToolDiff), 行数 =
-                // old_str/new_str 差异行数, 与 args JSON 行数/toolResult 行数无关。
-                // 若按 args/result 估算, 大 diff 时严重低估 -> edit 消息被 continue
-                // 跳过 (视口区域空白), 且总高度偏低 -> stickToBottom 底部内容被推出
-                // 视口 (用户报告"某些消息显示为空白")。故对 edit 工具解析参数,
-                // 用 computeLineDiff 精确估算 diff 行数 (仅 key 变化/宽度变化时调用,
-                // 成本可接受)。
-                const bool isEditTool = msg.tool && msg.tool->toolName == "agentxx_filesystem_edit";
-                const bool finished   = msg.tool && msg.tool->toolFinished;
-                if (isEditTool && finished && !isToolResultError(msg.tool->toolResult)) {
-                    size_t diffLines = 0;
-                    bool   hasPath   = false;
-                    agentxx::util::catchError<bool>(
-                        [&]() -> bool {
-                            auto args = neograph::json::parse(msg.text);
-                            hasPath   = !args.value("path", std::string{}).empty();
-                            diffLines = agentxx::util::computeLineDiff(
-                                            args.value("old_str", std::string{}),
-                                            args.value("new_str", std::string{})
-                            )
-                                            .size();
-                            return true;
-                        },
-                        [](std::string) -> bool {
-                            return false;
-                        }
-                    );
-                    // header + (file 行) + diff 行 + 尾部空行
-                    return static_cast<int>(1 + (hasPath ? 1 : 0) + diffLines) + 1;
-                }
-                // 插件装饰工具体: 按装饰 items 通用估算 (与 appendToolDecorBody
-                // 的渲染结构对应; TUI 不感知具体工具语义)
-                if (const auto* decor
-                    = findToolDecor(st, msg.tool ? msg.tool->toolCallId : std::string{})) {
+                const bool finished = msg.tool && msg.tool->toolFinished;
+                const bool isError  = finished && isToolResultError(msg.tool->toolResult);
+                auto       renderRes = agentxx::plugin::renderClientTool(
+                    st.pluginRegistry.get(),
+                    msg.tool ? msg.tool->toolCallId : "",
+                    msg.tool ? msg.tool->toolName : "",
+                    msg.text,
+                    msg.tool ? msg.tool->toolResult : "",
+                    finished,
+                    isError,
+                    width
+                );
+                if (renderRes.matched) {
                     size_t decorLines = 1; // header 行
-                    if (finished && isToolResultError(msg.tool->toolResult)) {
-                        // 失败: 渲染为 result 错误行 (与 appendToolDecorBody 一致)
+                    if (finished && isError) {
                         decorLines += estimateLines(msg.tool->toolResult, width);
-                    } else {
-                        for (const auto& it : decor->items) {
+                    } else if (!renderRes.items.empty()) {
+                        for (const auto& it : renderRes.items) {
                             if (!it.is_object()) {
                                 continue;
                             }
@@ -797,8 +774,6 @@ size_t MessageListComponent::estimateHeight(size_t index, int width) {
                             } else if (kind == "separator") {
                                 decorLines += 1;
                             } else if (kind == "diagram") {
-                                // 状态图渲染密度: 每层 ~3 行 (节点/边/间距) + 边界余量,
-                                // 与 renderMermaidStateDiagram 分层布局一致
                                 const auto mermaid = it.value("mermaid", std::string{});
                                 size_t     rmLines = 1;
                                 for (char ch : mermaid) {
@@ -807,7 +782,22 @@ size_t MessageListComponent::estimateHeight(size_t index, int width) {
                                     }
                                 }
                                 decorLines += rmLines * 3 + 3;
+                            } else if (kind == "diff") {
+                                const auto path   = it.value("path", std::string{});
+                                const auto oldStr = it.value("old_str", std::string{});
+                                const auto newStr = it.value("new_str", std::string{});
+                                const auto diff   = agentxx::util::computeLineDiff(oldStr, newStr);
+                                const bool sideBySide  = ftxui::Terminal::Size().dimx >= 100;
+                                const size_t diffLines = sideBySide ? (diff.size() / 2 + 1) : diff.size();
+                                decorLines += (!path.empty() ? 1 : 0) + diffLines;
                             }
+                        }
+                    } else {
+                        if (!msg.text.empty()) {
+                            decorLines += estimateLines(formatToolArgs(msg.text), width);
+                        }
+                        if (finished) {
+                            decorLines += estimateLines(msg.tool->toolResult, width);
                         }
                     }
                     return static_cast<int>(decorLines) + 1; // +1: 尾部空行
@@ -1265,220 +1255,6 @@ void MessageListComponent::syncStream(const TUIRenderState& st) {
 }
 
 // ---------------------------------------------------------------------------
-// 工具调用头部摘要 (TUI 特化渲染)
-// ---------------------------------------------------------------------------
-
-struct ToolHeaderSummary {
-    std::string toolName;
-    std::string argsSummary;
-};
-
-/// 获取已知工具特化动作名称 (如 "Read", "Write", "List" 等), 未知工具返回空
-static std::string_view getSpecializedToolActionName(std::string_view toolName) {
-    if (toolName == "agentxx_filesystem_list") {
-        return "List";
-    }
-    if (toolName == "agentxx_filesystem_read") {
-        return "Read";
-    }
-    if (toolName == "agentxx_filesystem_write") {
-        return "Write";
-    }
-    if (toolName == "agentxx_filesystem_edit") {
-        return "Edit";
-    }
-    if (toolName == "agentxx_filesystem_glob") {
-        return "Glob";
-    }
-    if (toolName == "agentxx_filesystem_grep") {
-        return "Grep";
-    }
-    if (toolName == "agentxx_web_search") {
-        return "Search";
-    }
-    if (toolName == "agentxx_web_fetch") {
-        return "Fetch";
-    }
-    if (toolName == "agentxx_web_fetch_markdown") {
-        return "FetchMD";
-    }
-    if (toolName == "agentxx_execute_bash_command"
-        || toolName == "agentxx_execute_windows_command") {
-        return "Bash";
-    }
-    return {};
-}
-
-/// 将工具调用的参数 JSON 摘要为单行头部, 例如:
-/// - agentxx_filesystem_read  -> "Read", " · [0, 100] /path/file"
-/// - agentxx_filesystem_write -> "Write", " · /path/file"
-/// - agentxx_web_search       -> "Search", " · <query>"
-/// 未知工具 / 参数解析失败返回空 toolName, 调用方回退显示原始 toolName
-///
-/// availWidth: 消息列表内容区总列数 (scrollable_->contentWidth()), 用于
-/// 预览自适应截断; <=0 时各预览回退到原固定列数 (供非 TUI 布局路径复用)
-static ToolHeaderSummary buildToolHeaderSummary(
-    std::string_view toolName,
-    std::string_view argsText,
-    int              availWidth = 0
-) {
-    // 折叠头部固定开销估算: 折叠标记+角色标签 "+/- [Tool] "(9) + 动作名(≤8)
-    // + 参数分隔 " · []"(≤6) + 安全余量 1 列
-    constexpr int kHeaderOverhead = 9 + 8 + 6 + 1;
-    /// 自适应预览限宽: 内容区总列数扣除固定开销; 空间不足时回退 fallback 固定值
-    auto limit = [&](size_t fallback) -> size_t {
-        if (availWidth <= kHeaderOverhead + 16) {
-            return fallback;
-        }
-        return static_cast<size_t>(availWidth - kHeaderOverhead);
-    };
-
-    // 参数 JSON 解析失败 (截断/异常) 或解析结果非对象时回退显示原始 toolName
-    bool           parseOk = true;
-    neograph::json args    = agentxx::util::catchError<neograph::json>(
-        [&]() -> neograph::json {
-            auto j = neograph::json::parse(argsText);
-            if (!j.is_object()) {
-                parseOk = false;
-            }
-            return j;
-        },
-        [&](std::string) -> neograph::json {
-            parseOk = false;
-            return {};
-        }
-    );
-    if (!parseOk || !args.is_object()) {
-        return {};
-    }
-
-    auto getStr = [&args](std::string_view key) -> std::string {
-        return args.value(std::string(key), std::string{});
-    };
-    auto getStrList = [&args](std::string_view key) -> std::vector<std::string> {
-        return args.value(std::string(key), std::vector<std::string>{});
-    };
-
-    /// 拼接 "{action}" 与 " · [{params}] {target}" (params 可空)
-    auto make = [&](std::string_view action, std::string_view params, std::string_view target
-                ) -> ToolHeaderSummary {
-        std::string argsSummary = " ·";
-        if (!params.empty()) {
-            argsSummary += " [";
-            argsSummary += params;
-            argsSummary += "]";
-        }
-        if (!target.empty()) {
-            argsSummary += " ";
-            argsSummary += target;
-        }
-        return ToolHeaderSummary{
-            .toolName    = std::string(action),
-            .argsSummary = std::move(argsSummary),
-        };
-    };
-
-    /// "[offset, limit]" 区间参数摘要 (默认 -1/缺省表示不过滤, 不显示)
-    auto range = [&args](const char* offKey, const char* limKey) -> std::string {
-        const int64_t off = args.value(offKey, int64_t{-1});
-        const int64_t lim = args.value(limKey, int64_t{-1});
-        if (off <= 0 && lim <= 0) {
-            return {};
-        }
-        if (off <= 0) {
-            return fmt::format("0, {}", lim);
-        }
-        if (lim <= 0) {
-            return fmt::format("{}", off);
-        }
-        return fmt::format("{}, {}", off, lim);
-    };
-
-    /// 字符串列表摘要: 最多展示 maxShow 项, 超出以 ", ..." 收尾
-    auto joinList = [](const std::vector<std::string>& items, size_t maxShow = 2) -> std::string {
-        std::string  out;
-        const size_t n = (items.size() < maxShow) ? items.size() : maxShow;
-        for (size_t i = 0; i < n; ++i) {
-            if (i > 0) {
-                out += ", ";
-            }
-            out += items[i];
-        }
-        if (items.size() > maxShow) {
-            out += (n > 0 ? ", ..." : "...");
-        }
-        return out;
-    };
-
-    if (toolName == "agentxx_filesystem_list") {
-        return make("List", {}, getStr("path"));
-    }
-    if (toolName == "agentxx_filesystem_read") {
-        return make("Read", range("line_offset", "line_limit"), getStr("path"));
-    }
-    if (toolName == "agentxx_filesystem_write") {
-        return make("Write", {}, getStr("path"));
-    }
-    if (toolName == "agentxx_filesystem_edit") {
-        return make("Edit", {}, getStr("path"));
-    }
-    if (toolName == "agentxx_filesystem_glob") {
-        return make("Glob", {}, joinList(getStrList("file_patterns")));
-    }
-    if (toolName == "agentxx_filesystem_grep") {
-        // 匹配模式 (引号包裹) 作为参数区, 文件模式作为主参数;
-        // text_patterns 与 regex_patterns 可同时指定, 摘要合并展示
-        // (文本在前, 最多共展示 2 项, 超出以 ", ..." 收尾)
-        const auto               textPatterns  = getStrList("text_patterns");
-        const auto               regexPatterns = getStrList("regex_patterns");
-        const auto               files         = getStrList("file_patterns");
-        std::vector<std::string> shown;
-        shown.reserve(2);
-        auto collect = [&](const std::vector<std::string>& patterns) {
-            for (const auto& pat : patterns) {
-                if (shown.size() >= 2) {
-                    return;
-                }
-                shown.push_back(pat);
-            }
-        };
-        collect(textPatterns);
-        collect(regexPatterns);
-        const size_t totalPatterns = textPatterns.size() + regexPatterns.size();
-        std::string  quoted;
-        for (size_t i = 0; i < shown.size(); ++i) {
-            if (i > 0) {
-                quoted += ", ";
-            }
-            quoted += '"';
-            quoted += oneLinePreview(shown[i], limit(50));
-            quoted += '"';
-        }
-        if (totalPatterns > shown.size()) {
-            quoted += ", ...";
-        }
-        return make("Grep", quoted, joinList(files));
-    }
-    if (toolName == "agentxx_web_search") {
-        return make("Search", {}, oneLinePreview(getStr("query"), limit(100)));
-    }
-    if (toolName == "agentxx_web_fetch") {
-        return make("Fetch", {}, oneLinePreview(getStr("url"), limit(100)));
-    }
-    if (toolName == "agentxx_web_fetch_markdown") {
-        return make("FetchMD", {}, oneLinePreview(getStr("url"), limit(100)));
-    }
-    // execute 系列 (bash/windows/python/javascript): 统一缩略名 Bash, 内容为命令
-    if (toolName == "agentxx_execute_bash_command"
-        || toolName == "agentxx_execute_windows_command") {
-        return make("Bash", {}, oneLinePreview(getStr("command"), limit(100)));
-    }
-    // 其余工具 (含插件装饰工具) 返回空: 折叠头由调用方回退 —— 有装饰时用
-    // 装饰的 displayName/summary (见 buildMessageBlock), 否则显示原始参数
-    return {};
-}
-
-// ---------------------------------------------------------------------------
 // 消息块构建 (与旧实现一致的视觉呈现)
 // ---------------------------------------------------------------------------
 
@@ -1653,15 +1429,22 @@ Element MessageListComponent::buildMessageBlock(
             if (!msg.tool) {
                 return text("");
             }
-            const bool expanded   = !msg.collapsed;
-            const bool isEditTool = msg.tool && msg.tool->toolName == "agentxx_filesystem_edit";
-            const bool finished   = msg.tool && msg.tool->toolFinished;
-            const bool isError    = finished && isToolResultError(msg.tool->toolResult);
-            // 插件工具消息装饰 (语义层; TUI 无任何具体工具特化):
-            // 有装饰时折叠头/展开头/展开体全部按装饰内容渲染, 无装饰走通用回退
-            const auto* decor = findToolDecor(*ctx_.frameState, msg.tool->toolCallId);
-            // TUI 特化: 已知工具头部渲染为 "动词 · 参数摘要"
-            // (如 "Read · [0, 100] /path" / "Write · /path"), 未知工具回退原始 toolName
+            const bool expanded = !msg.collapsed;
+            const bool finished = msg.tool && msg.tool->toolFinished;
+            const bool isError  = finished && isToolResultError(msg.tool->toolResult);
+
+            // 统一工具特化渲染查询 (包含动态 per-call decor 与按 tool_name 注册的渲染器/模版)
+            auto renderRes = agentxx::plugin::renderClientTool(
+                ctx_.frameState->pluginRegistry.get(),
+                msg.tool->toolCallId,
+                msg.tool->toolName,
+                msg.text,
+                msg.tool->toolResult,
+                finished,
+                isError,
+                maxWidth
+            );
+
             Elements lines;
             Elements header;
             {
@@ -1675,24 +1458,16 @@ Element MessageListComponent::buildMessageBlock(
                 }
                 header.push_back(text(" [Tool] ") | color(theme.toolColor));
             }
+
+            // 显示名: renderRes 提供的 displayName 优先, 回退原始 toolName
+            std::string displayName = (renderRes.matched && !renderRes.displayName.empty())
+                                          ? renderRes.displayName
+                                          : msg.tool->toolName;
+
             if (!expanded) {
                 // 折叠状态, 特化渲染 (摘要内部预览按内容区剩余列宽自适应截断)
-                auto summary = buildToolHeaderSummary(msg.tool->toolName, msg.text, maxWidth);
-                std::string displayName;
+                const int   nameCols = static_cast<int>(markdown::utf8_display_width(displayName));
                 std::string resOrArgsSummary;
-                if (decor && !decor->displayName.empty()) {
-                    // 插件装饰显示名优先 (如 agentxx_planning → "Plan")
-                    displayName = decor->displayName;
-                } else if (!summary.toolName.empty()) {
-                    displayName = std::move(summary.toolName);
-                } else if (isError) {
-                    auto action = getSpecializedToolActionName(msg.tool->toolName);
-                    displayName = !action.empty() ? std::string(action) : msg.tool->toolName;
-                } else {
-                    displayName = msg.tool->toolName;
-                }
-
-                const int nameCols = static_cast<int>(markdown::utf8_display_width(displayName));
 
                 if (isError) {
                     // 执行失败: 保持特化 toolName, 后续内容显示为异常结果 (红色)
@@ -1702,35 +1477,29 @@ Element MessageListComponent::buildMessageBlock(
                     if (!resPreview.empty()) {
                         resOrArgsSummary = " · " + std::move(resPreview);
                     }
-                } else if (decor && !decor->summary.empty()) {
-                    // 插件装饰摘要优先 (插件已按自身语义格式化为一行)
-                    resOrArgsSummary = " · " + decor->summary;
-                } else if (!finished) {
-                    if (!summary.argsSummary.empty()) {
-                        resOrArgsSummary = std::move(summary.argsSummary);
+                } else if (renderRes.matched && !renderRes.summary.empty()) {
+                    if (renderRes.summary.starts_with(" ·")) {
+                        resOrArgsSummary = renderRes.summary;
                     } else {
-                        // 未知工具或参数解析失败回退
-                        resOrArgsSummary = " ·";
-                        if (!msg.text.empty()) {
-                            const int budget
-                                = collapsedPreviewBudget(maxWidth, 9 + nameCols + 3); // " · "
-                            resOrArgsSummary
-                                += " " + oneLinePreview(msg.text, static_cast<size_t>(budget));
-                        }
+                        resOrArgsSummary = " · " + renderRes.summary;
+                    }
+                } else if (!finished) {
+                    // 运行中无特化摘要回退
+                    resOrArgsSummary = " ·";
+                    if (!msg.text.empty()) {
+                        const int budget
+                            = collapsedPreviewBudget(maxWidth, 9 + nameCols + 3); // " · "
+                        resOrArgsSummary
+                            += " " + oneLinePreview(msg.text, static_cast<size_t>(budget));
                     }
                 } else {
-                    // 执行成功完成
-                    if (!summary.argsSummary.empty()) {
-                        resOrArgsSummary = std::move(summary.argsSummary);
-                    } else {
-                        // 未知工具回退: 展示结果预览
-                        const int budget
-                            = collapsedPreviewBudget(maxWidth, 9 + nameCols + 1); // " "
-                        auto resPreview
-                            = oneLinePreview(msg.tool->toolResult, static_cast<size_t>(budget));
-                        if (!resPreview.empty()) {
-                            resOrArgsSummary = " " + std::move(resPreview);
-                        }
+                    // 已完成无特化摘要回退: 展示结果预览
+                    const int budget
+                        = collapsedPreviewBudget(maxWidth, 9 + nameCols + 1); // " "
+                    auto resPreview
+                        = oneLinePreview(msg.tool->toolResult, static_cast<size_t>(budget));
+                    if (!resPreview.empty()) {
+                        resOrArgsSummary = " " + std::move(resPreview);
                     }
                 }
 
@@ -1757,9 +1526,10 @@ Element MessageListComponent::buildMessageBlock(
                     }
                 }
             } else {
-                // 展开头: 插件装饰显示名优先, 回退原始 toolName
-                const auto& shownName = (decor && !decor->displayName.empty()) ? decor->displayName
-                                                                               : msg.tool->toolName;
+                // 展开头: 动态装饰显示名优先, 否则回退原始 toolName
+                const auto& shownName = (renderRes.matched && renderRes.isDecor && !renderRes.displayName.empty())
+                                            ? renderRes.displayName
+                                            : msg.tool->toolName;
                 if (!finished) {
                     header.push_back(text(shownName) | color(theme.accentColor) | bold);
                 } else {
@@ -1776,11 +1546,9 @@ Element MessageListComponent::buildMessageBlock(
 
             lines.push_back(hbox(std::move(header)));
             if (expanded) {
-                if (isEditTool) {
-                    appendEditToolBody(msg, lines);
-                } else if (decor && !(finished && isError)) {
-                    // 插件装饰工具体 (items 渲染; 失败时回退通用错误展示)
-                    appendDecorToolBody(*decor, lines, maxWidth);
+                if (renderRes.matched && !renderRes.items.empty() && !(finished && isError)) {
+                    // 插件装饰/特化工具体 (items 渲染; 失败时回退通用错误展示)
+                    appendDecorItems(renderRes.items, lines, maxWidth);
                 } else {
                     if (!msg.text.empty()) {
                         // 参数 JSON 缩进格式化 (2 空格) 便于阅读; 解析失败回退原文
@@ -1897,7 +1665,7 @@ Element MessageListComponent::buildMessageBlock(
 }
 
 // ---------------------------------------------------------------------------
-// agentxx_filesystem_edit 特化渲染
+// 差异对比渲染 (diff)
 // ---------------------------------------------------------------------------
 
 void MessageListComponent::appendEditToolBody(const TUIMessage& msg, Elements& lines) {
@@ -2042,11 +1810,19 @@ void MessageListComponent::appendDecorToolBody(
     Elements&                               lines,
     int                                     maxWidth
 ) {
+    appendDecorItems(decor.items, lines, maxWidth);
+}
+
+void MessageListComponent::appendDecorItems(
+    const neograph::json& items,
+    Elements&             lines,
+    int                   maxWidth
+) {
     const auto& theme = *ctx_.theme;
     // 状态图渲染宽度预算: 内容缩进 (4) + 边界余量 (2); 下限保底可读
     const int diagW = (maxWidth > 0) ? std::max(20, maxWidth - 6) : 0;
 
-    for (const auto& it : decor.items) {
+    for (const auto& it : items) {
         if (!it.is_object()) {
             continue;
         }
@@ -2108,6 +1884,18 @@ void MessageListComponent::appendDecorToolBody(
                 text("    "),
                 text("─") | color(theme.hintColor) | dim | xflex_shrink,
             }));
+        } else if (kind == "diff") {
+            // 差异对比渲染 (旧 appendEditToolBody 通用化): 支持 side-by-side 与统一 diff
+            const auto path   = it.value("path", std::string{});
+            const auto oldStr = it.value("old_str", std::string{});
+            const auto newStr = it.value("new_str", std::string{});
+            if (!path.empty()) {
+                lines.push_back(hbox({
+                    text("  file: ") | color(theme.hintColor),
+                    text(path) | color(theme.toolColor) | xflex_shrink,
+                }));
+            }
+            lines.push_back(renderEditToolDiff(oldStr, newStr));
         }
         // 其余 kind 忽略 (未知项向前兼容)
     }
