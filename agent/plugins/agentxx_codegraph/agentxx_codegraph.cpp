@@ -198,7 +198,11 @@ static void injectCodegraphSystemPrompt(
     append["codegraph"]      = std::string(kSystemCodegraphPrompt);
     j["appendSystemPrompts"] = append;
     std::string payload      = j.dump();
-    if (iface.prompt->set_prompt(host, agentxx::plugin::PluginStringView::from(payload.data(), payload.size())) != 0) {
+    if (iface.prompt->set_prompt(
+            host,
+            agentxx::plugin::PluginStringView::from(payload.data(), payload.size())
+        )
+        != 0) {
         pluginLog(
             host,
             iface.log,
@@ -288,7 +292,11 @@ static void ensureToolPromptsInHost(
     }
     patch["toolPrompt"] = tools;
     std::string payload = patch.dump();
-    if (iface.prompt->set_prompt(host, agentxx::plugin::PluginStringView::from(payload.data(), payload.size())) != 0) {
+    if (iface.prompt->set_prompt(
+            host,
+            agentxx::plugin::PluginStringView::from(payload.data(), payload.size())
+        )
+        != 0) {
         pluginLog(host, iface.log, 3, "agentxx_codegraph: set_prompt failed");
     }
 }
@@ -780,7 +788,8 @@ using namespace agentxx_codegraph_plugin;
 
 extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_agent_get_info(void) {
     static const AgentxxPluginInfo info{
-        AGENTXX_PLUGIN_API_VERSION, 0,
+        AGENTXX_PLUGIN_API_VERSION,
+        0,
         agentxx::plugin::PluginStringView::fromCstr("agentxx_codegraph"),
         agentxx::plugin::PluginStringView::fromCstr("1.0.0"),
         agentxx::plugin::PluginStringView::fromCstr(
@@ -1039,15 +1048,23 @@ static void refreshSection(ClientCtx& c) {
         return;
     }
     const std::string json = buildInfoItemsJson(c);
-    c.ui->update_info_section(c.host, c.section, agentxx::plugin::PluginStringView::from(json.data(), json.size()));
+    c.ui->update_info_section(
+        c.host,
+        c.section,
+        agentxx::plugin::PluginStringView::from(json.data(), json.size())
+    );
 }
 
-static void AGENTXX_PLUGIN_CALL onClientPluginData(const AgentxxPluginStringView* payload_json, void* ud) {
+static void AGENTXX_PLUGIN_CALL
+    onClientPluginData(const AgentxxPluginStringView* payload_json, void* ud) {
     auto* ctx = static_cast<ClientCtx*>(ud);
     if (!ctx || !ctx->host) {
         return;
     }
-    std::string raw(payload_json && payload_json->data ? payload_json->data : "{}", payload_json ? static_cast<size_t>(payload_json->size) : 0);
+    std::string raw(
+        payload_json && payload_json->data ? payload_json->data : "{}",
+        payload_json ? static_cast<size_t>(payload_json->size) : 0
+    );
     try {
         auto j      = neograph::json::parse(raw);
         auto plugin = j.value("plugin", std::string{});
@@ -1096,10 +1113,12 @@ static void AGENTXX_PLUGIN_CALL onClientPluginData(const AgentxxPluginStringView
 extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxClientPluginInfo* agentxx_plugin_client_get_info(void
 ) {
     static const AgentxxClientPluginInfo info{
-        AGENTXX_CLIENT_PLUGIN_API_VERSION, 0,
+        AGENTXX_CLIENT_PLUGIN_API_VERSION,
+        0,
         agentxx::plugin::PluginStringView::fromCstr("agentxx_codegraph"),
         agentxx::plugin::PluginStringView::fromCstr("1.0.0"),
-        agentxx::plugin::PluginStringView::fromCstr("CodeGraph index status (sidebar Info section)"),
+        agentxx::plugin::PluginStringView::fromCstr("CodeGraph index status (sidebar Info section)"
+        ),
     };
     return &info;
 }
@@ -1121,8 +1140,10 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
             auto ctx   = std::make_unique<ClientCtx>();
             ctx->host  = host;
             ctx->iface = agentxx::plugin::ClientIfaces::query(host);
-            ctx->ui
-                = agentxx::plugin::queryInterface<AgentxxClientUiIface>(host, AGENTXX_IFACE_CLIENT_UI);
+            ctx->ui    = agentxx::plugin::queryInterface<AgentxxClientUiIface>(
+                host,
+                AGENTXX_IFACE_CLIENT_UI
+            );
             raw = ctx.get();
 
             if (ctx->ui && ctx->ui->register_info_section) {
@@ -1147,8 +1168,11 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
             }
 
             if (ctx->iface.log && ctx->iface.log->log) {
-                ctx->iface.log
-                    ->log(host, 2, agentxx::plugin::PluginStringView::fromCstr("agentxx_codegraph client loaded"));
+                ctx->iface.log->log(
+                    host,
+                    2,
+                    agentxx::plugin::PluginStringView::fromCstr("agentxx_codegraph client loaded")
+                );
             }
             *plugin_ctx = ctx.release();
             return 0;

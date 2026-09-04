@@ -288,7 +288,8 @@ static void registerScreenCaptureTool(PluginCtx& ctx) {
 
 extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_agent_get_info(void) {
     static const AgentxxPluginInfo info{
-        AGENTXX_PLUGIN_API_VERSION, 0,
+        AGENTXX_PLUGIN_API_VERSION,
+        0,
         agentxx::plugin::PluginStringView::fromCstr("agentxx_screen_capture"),
         agentxx::plugin::PluginStringView::fromCstr("1.0.0"),
         agentxx::plugin::PluginStringView::fromCstr(

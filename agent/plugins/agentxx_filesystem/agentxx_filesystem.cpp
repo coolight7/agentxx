@@ -754,9 +754,9 @@ extern "C" AGENTXX_PLUGIN_EXPORT int32_t AGENTXX_PLUGIN_CALL
                     if (!args.is_object()) {
                         return;
                     }
-                    std::string path     = args.value("path", std::string{});
-                    int64_t     off      = args.value("line_offset", int64_t{-1});
-                    int64_t     lim      = args.value("line_limit", int64_t{-1});
+                    std::string path = args.value("path", std::string{});
+                    int64_t     off  = args.value("line_offset", int64_t{-1});
+                    int64_t     lim  = args.value("line_limit", int64_t{-1});
                     std::string rangeStr;
                     if (off <= 0 && lim <= 0) {
                         // empty

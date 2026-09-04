@@ -165,7 +165,7 @@ int32_t AGENTXX_FFI_CALL agentxx_ffi_event_queue_pop(
         if (n > 0) {
             std::memcpy(out, item.second.data(), n);
         }
-        out[n] = '\0';
+        out[n]         = '\0';
         json_out->data = out;
         json_out->size = static_cast<uint64_t>(n);
     } catch (...) {

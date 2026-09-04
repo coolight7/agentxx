@@ -32,7 +32,8 @@ static void AGENTXX_PLUGIN_CALL xx_free(void* ptr) {
     agentxx::plugin::hostMemoryFree(ptr);
 }
 
-static int32_t AGENTXX_PLUGIN_CALL xx_register_tool(const AgentxxPluginHost* host, const AgentxxPluginToolSpec* spec) {
+static int32_t AGENTXX_PLUGIN_CALL
+    xx_register_tool(const AgentxxPluginHost* host, const AgentxxPluginToolSpec* spec) {
     return agentxx::plugin::guardVtableCall(-1, [&]() -> int32_t {
         auto mgr  = mgrOf(host);
         auto inst = instOf(host);
@@ -48,7 +49,8 @@ static int32_t AGENTXX_PLUGIN_CALL xx_register_tool(const AgentxxPluginHost* hos
     });
 }
 
-static int32_t AGENTXX_PLUGIN_CALL xx_unregister_tool(const AgentxxPluginHost* host, const AgentxxPluginStringView* name) {
+static int32_t AGENTXX_PLUGIN_CALL
+    xx_unregister_tool(const AgentxxPluginHost* host, const AgentxxPluginStringView* name) {
     return agentxx::plugin::guardVtableCall(-1, [&]() -> int32_t {
         auto mgr  = mgrOf(host);
         auto inst = instOf(host);
@@ -93,12 +95,15 @@ static ::AgentxxPluginOperatorHandle* AGENTXX_PLUGIN_CALL xx_call_tool_async(
     if (!mgr || !inst || !name) {
         return nullptr;
     }
-    AgentxxPluginStringView args = args_json ? *args_json : agentxx::plugin::PluginStringView::from("{}", 2);
-    AgentxxPluginStringView sid  = session_id ? *session_id : agentxx::plugin::PluginStringView::from("", 0);
+    AgentxxPluginStringView args
+        = args_json ? *args_json : agentxx::plugin::PluginStringView::from("{}", 2);
+    AgentxxPluginStringView sid
+        = session_id ? *session_id : agentxx::plugin::PluginStringView::from("", 0);
     return mgr->callToolAsync(inst, *name, args, sid, cb, ud, error_out);
 }
 
-static int32_t AGENTXX_PLUGIN_CALL xx_register_hook(const AgentxxPluginHost* host, const AgentxxPluginHookSpec* spec) {
+static int32_t AGENTXX_PLUGIN_CALL
+    xx_register_hook(const AgentxxPluginHost* host, const AgentxxPluginHookSpec* spec) {
     return agentxx::plugin::guardVtableCall(-1, [&]() -> int32_t {
         auto mgr  = mgrOf(host);
         auto inst = instOf(host);
@@ -115,7 +120,8 @@ static int32_t AGENTXX_PLUGIN_CALL xx_register_hook(const AgentxxPluginHost* hos
     });
 }
 
-static int32_t AGENTXX_PLUGIN_CALL xx_unregister_hook(const AgentxxPluginHost* host, int32_t point) {
+static int32_t AGENTXX_PLUGIN_CALL
+    xx_unregister_hook(const AgentxxPluginHost* host, int32_t point) {
     return agentxx::plugin::guardVtableCall(-1, [&]() -> int32_t {
         auto mgr  = mgrOf(host);
         auto inst = instOf(host);
@@ -134,7 +140,7 @@ static int32_t AGENTXX_PLUGIN_CALL xx_unregister_hook(const AgentxxPluginHost* h
 static AgentxxPluginSubscription* AGENTXX_PLUGIN_CALL xx_subscribe(
     const AgentxxPluginHost*       host,
     const AgentxxPluginStringView* topic,
-    void (AGENTXX_PLUGIN_CALL *handler)(const AgentxxPluginStringView* event_json, void* ud),
+    void(AGENTXX_PLUGIN_CALL* handler)(const AgentxxPluginStringView* event_json, void* ud),
     void* ud
 ) {
     return agentxx::plugin::guardVtableCall(nullptr, [&]() -> AgentxxPluginSubscription* {
@@ -230,10 +236,8 @@ static int32_t AGENTXX_PLUGIN_CALL xx_unregister_capability(
     });
 }
 
-static int32_t AGENTXX_PLUGIN_CALL xx_has_capability(
-    const AgentxxPluginHost*       host,
-    const AgentxxPluginStringView* capability
-) {
+static int32_t AGENTXX_PLUGIN_CALL
+    xx_has_capability(const AgentxxPluginHost* host, const AgentxxPluginStringView* capability) {
     return agentxx::plugin::guardVtableCall(0, [&]() -> int32_t {
         auto mgr = mgrOf(host);
         if (!mgr || agentxx::plugin::PluginStringView::empty(capability)) {
@@ -287,16 +291,9 @@ static ::AgentxxPluginOperatorHandle* AGENTXX_PLUGIN_CALL xx_invoke_capability_a
                 || agentxx::plugin::PluginStringView::empty(method)) {
                 return static_cast<::AgentxxPluginOperatorHandle*>(nullptr);
             }
-            AgentxxPluginStringView args = args_json ? *args_json : agentxx::plugin::PluginStringView::from("{}", 2);
-            return mgr->invokeCapabilityAsync(
-                inst,
-                *capability,
-                *method,
-                args,
-                cb,
-                ud,
-                error_out
-            );
+            AgentxxPluginStringView args
+                = args_json ? *args_json : agentxx::plugin::PluginStringView::from("{}", 2);
+            return mgr->invokeCapabilityAsync(inst, *capability, *method, args, cb, ud, error_out);
         }
     );
 }
@@ -321,20 +318,15 @@ static ::AgentxxPluginOperatorHandle* AGENTXX_PLUGIN_CALL xx_register_task(
             return ioCallSync<::AgentxxPluginOperatorHandle*>(
                 mgrPtr,
                 [mgrPtr, instPtr, cancel_fn, cancel_ud, notify, error_out]() {
-                    return mgrPtr->registerTask(
-                        instPtr,
-                        cancel_fn,
-                        cancel_ud,
-                        notify,
-                        error_out
-                    );
+                    return mgrPtr->registerTask(instPtr, cancel_fn, cancel_ud, notify, error_out);
                 }
             );
         }
     );
 }
 
-static int32_t AGENTXX_PLUGIN_CALL xx_list_plugins(const AgentxxPluginHost* host, AgentxxPluginString* out) {
+static int32_t AGENTXX_PLUGIN_CALL
+    xx_list_plugins(const AgentxxPluginHost* host, AgentxxPluginString* out) {
     return agentxx::plugin::guardVtableCall(-1, [&]() -> int32_t {
         if (!out) {
             return -1;
@@ -378,7 +370,8 @@ static int32_t AGENTXX_PLUGIN_CALL xx_get_plugin(
     });
 }
 
-static int32_t AGENTXX_PLUGIN_CALL xx_get_own_info(const AgentxxPluginHost* host, AgentxxPluginString* out) {
+static int32_t AGENTXX_PLUGIN_CALL
+    xx_get_own_info(const AgentxxPluginHost* host, AgentxxPluginString* out) {
     return agentxx::plugin::guardVtableCall(-1, [&]() -> int32_t {
         if (!out) {
             return -1;
@@ -419,9 +412,12 @@ static int32_t AGENTXX_PLUGIN_CALL xx_get_share_store(
         auto mgrPtr  = mgr;
         auto instPtr = inst;
         auto sid     = *session_id;
-        *out = ioCallSync<AgentxxPluginString>(mgrPtr, [mgrPtr, instPtr, sid, id]() -> AgentxxPluginString {
-            return mgrPtr->getShareStore(instPtr, sid, id);
-        });
+        *out         = ioCallSync<AgentxxPluginString>(
+            mgrPtr,
+            [mgrPtr, instPtr, sid, id]() -> AgentxxPluginString {
+                return mgrPtr->getShareStore(instPtr, sid, id);
+            }
+        );
         return (out->data != nullptr) ? 0 : -1;
     });
 }
@@ -480,7 +476,8 @@ static int32_t AGENTXX_PLUGIN_CALL xx_register_node_type(
     return agentxx::plugin::guardVtableCall(-1, [&]() -> int32_t {
         auto mgr  = mgrOf(host);
         auto inst = instOf(host);
-        if (!mgr || !inst || !spec || agentxx::plugin::PluginStringView::empty(&spec->type) || !spec->run_start) {
+        if (!mgr || !inst || !spec || agentxx::plugin::PluginStringView::empty(&spec->type)
+            || !spec->run_start) {
             return -1;
         }
         auto                           mgrPtr   = mgr;
@@ -492,10 +489,8 @@ static int32_t AGENTXX_PLUGIN_CALL xx_register_node_type(
     });
 }
 
-static int32_t AGENTXX_PLUGIN_CALL xx_unregister_node_type(
-    const AgentxxPluginHost*       host,
-    const AgentxxPluginStringView* type
-) {
+static int32_t AGENTXX_PLUGIN_CALL
+    xx_unregister_node_type(const AgentxxPluginHost* host, const AgentxxPluginStringView* type) {
     return agentxx::plugin::guardVtableCall(-1, [&]() -> int32_t {
         auto mgr  = mgrOf(host);
         auto inst = instOf(host);
@@ -511,7 +506,8 @@ static int32_t AGENTXX_PLUGIN_CALL xx_unregister_node_type(
     });
 }
 
-static int32_t AGENTXX_PLUGIN_CALL xx_get_graph_json(const AgentxxPluginHost* host, AgentxxPluginString* out) {
+static int32_t AGENTXX_PLUGIN_CALL
+    xx_get_graph_json(const AgentxxPluginHost* host, AgentxxPluginString* out) {
     return agentxx::plugin::guardVtableCall(-1, [&]() -> int32_t {
         if (!out) {
             return -1;
@@ -533,7 +529,8 @@ static int32_t AGENTXX_PLUGIN_CALL xx_get_graph_json(const AgentxxPluginHost* ho
     });
 }
 
-static int32_t AGENTXX_PLUGIN_CALL xx_get_graph_name(const AgentxxPluginHost* host, AgentxxPluginString* out) {
+static int32_t AGENTXX_PLUGIN_CALL
+    xx_get_graph_name(const AgentxxPluginHost* host, AgentxxPluginString* out) {
     return agentxx::plugin::guardVtableCall(-1, [&]() -> int32_t {
         if (!out) {
             return -1;
@@ -545,7 +542,7 @@ static int32_t AGENTXX_PLUGIN_CALL xx_get_graph_name(const AgentxxPluginHost* ho
         }
         auto mgrPtr = mgr;
         auto name   = ioCallSync<std::string>(mgrPtr, [mgrPtr]() -> std::string {
-            auto json   = mgrPtr->getGraphJson();
+            auto        json   = mgrPtr->getGraphJson();
             std::string result = "agentxx.default";
             if (!json.empty()) {
                 try {
@@ -563,19 +560,17 @@ static int32_t AGENTXX_PLUGIN_CALL xx_get_graph_name(const AgentxxPluginHost* ho
     });
 }
 
-static int32_t AGENTXX_PLUGIN_CALL xx_set_graph_json(
-    const AgentxxPluginHost*       host,
-    const AgentxxPluginStringView* graph_json
-) {
+static int32_t AGENTXX_PLUGIN_CALL
+    xx_set_graph_json(const AgentxxPluginHost* host, const AgentxxPluginStringView* graph_json) {
     return agentxx::plugin::guardVtableCall(-1, [&]() -> int32_t {
         auto mgr  = mgrOf(host);
         auto inst = instOf(host);
         if (!mgr || !inst || agentxx::plugin::PluginStringView::empty(graph_json)) {
             return -1;
         }
-        auto mgrPtr   = mgr;
-        auto instPtr  = inst;
-        auto jsonVal  = *graph_json;
+        auto mgrPtr  = mgr;
+        auto instPtr = inst;
+        auto jsonVal = *graph_json;
         return ioCallSync<int32_t>(mgrPtr, [mgrPtr, instPtr, jsonVal]() {
             return mgrPtr->setGraphJson(instPtr, jsonVal);
         });
@@ -585,7 +580,7 @@ static int32_t AGENTXX_PLUGIN_CALL xx_set_graph_json(
 static void* AGENTXX_PLUGIN_CALL xx_sleep(
     const AgentxxPluginHost* host,
     int64_t                  ms,
-    void (AGENTXX_PLUGIN_CALL *cb)(void* ud),
+    void(AGENTXX_PLUGIN_CALL* cb)(void* ud),
     void* ud
 ) {
     return agentxx::plugin::guardVtableCall<void*>(nullptr, [&]() -> void* {
@@ -620,8 +615,9 @@ static void AGENTXX_PLUGIN_CALL xx_cancel_sleep(const AgentxxPluginHost* host, v
 static void AGENTXX_PLUGIN_CALL xx_offload(
     const AgentxxPluginHost* host,
     volatile int32_t*        cancel_flag,
-    void* (AGENTXX_PLUGIN_CALL *work)(void* ud, volatile int32_t* cancel_flag, AgentxxPluginString* error_out),
-    void (AGENTXX_PLUGIN_CALL *done)(void* ud, void* result, const AgentxxPluginStringView* error),
+    void*(AGENTXX_PLUGIN_CALL*
+              work)(void* ud, volatile int32_t* cancel_flag, AgentxxPluginString* error_out),
+    void(AGENTXX_PLUGIN_CALL* done)(void* ud, void* result, const AgentxxPluginStringView* error),
     void* ud
 ) {
     agentxx::plugin::guardVtableCallVoid([&]() {
@@ -641,7 +637,7 @@ static int32_t AGENTXX_PLUGIN_CALL xx_is_io_thread(const AgentxxPluginHost* host
 
 static void AGENTXX_PLUGIN_CALL xx_post_to_io(
     const AgentxxPluginHost* host,
-    void (AGENTXX_PLUGIN_CALL *fn)(void* ud),
+    void(AGENTXX_PLUGIN_CALL* fn)(void* ud),
     void* ud
 ) {
     agentxx::plugin::guardVtableCallVoid([&]() {
@@ -664,11 +660,8 @@ static void AGENTXX_PLUGIN_CALL xx_pump_io(const AgentxxPluginHost* host) {
     });
 }
 
-static void AGENTXX_PLUGIN_CALL xx_log(
-    const AgentxxPluginHost*       host,
-    int32_t                        level,
-    const AgentxxPluginStringView* msg
-) {
+static void AGENTXX_PLUGIN_CALL
+    xx_log(const AgentxxPluginHost* host, int32_t level, const AgentxxPluginStringView* msg) {
     (void)host;
     using agentxx::util::LogLevel;
     LogLevel lv = LogLevel::Info;
@@ -691,7 +684,8 @@ static void AGENTXX_PLUGIN_CALL xx_log(
         default:
             break;
     }
-    std::string text = (msg && msg->data) ? std::string(msg->data, static_cast<size_t>(msg->size)) : std::string{};
+    std::string text = (msg && msg->data) ? std::string(msg->data, static_cast<size_t>(msg->size))
+                                          : std::string{};
     agentxx::util::xxLogPrint(lv, text);
 }
 
@@ -705,7 +699,8 @@ static int32_t AGENTXX_PLUGIN_CALL xx_json_get_string(
         return -1;
     }
     auto inst = instOf(host);
-    if (!inst || agentxx::plugin::PluginStringView::empty(json) || agentxx::plugin::PluginStringView::empty(key)) {
+    if (!inst || agentxx::plugin::PluginStringView::empty(json)
+        || agentxx::plugin::PluginStringView::empty(key)) {
         return -1;
     }
     try {
@@ -775,7 +770,8 @@ static int32_t AGENTXX_PLUGIN_CALL xx_json_escape(
     return 0;
 }
 
-static int32_t AGENTXX_PLUGIN_CALL xx_get_config(const AgentxxPluginHost* host, AgentxxPluginString* out) {
+static int32_t AGENTXX_PLUGIN_CALL
+    xx_get_config(const AgentxxPluginHost* host, AgentxxPluginString* out) {
     return agentxx::plugin::guardVtableCall(-1, [&]() -> int32_t {
         if (!out) {
             return -1;
@@ -796,7 +792,8 @@ static int32_t AGENTXX_PLUGIN_CALL xx_get_config(const AgentxxPluginHost* host, 
     });
 }
 
-static int32_t AGENTXX_PLUGIN_CALL xx_get_plugin_args(const AgentxxPluginHost* host, AgentxxPluginString* out) {
+static int32_t AGENTXX_PLUGIN_CALL
+    xx_get_plugin_args(const AgentxxPluginHost* host, AgentxxPluginString* out) {
     return agentxx::plugin::guardVtableCall(-1, [&]() -> int32_t {
         if (!out) {
             return -1;
@@ -857,8 +854,10 @@ static int32_t AGENTXX_PLUGIN_CALL xx_get_session_work_dir(
             return -1;
         }
         auto        mgrPtr = mgr;
-        std::string tid = (thread_id && thread_id->data) ? std::string(thread_id->data, static_cast<size_t>(thread_id->size)) : std::string{};
-        auto        dir = ioCallSync<std::string>(mgrPtr, [mgrPtr, tid]() {
+        std::string tid    = (thread_id && thread_id->data)
+                                 ? std::string(thread_id->data, static_cast<size_t>(thread_id->size))
+                                 : std::string{};
+        auto        dir    = ioCallSync<std::string>(mgrPtr, [mgrPtr, tid]() {
             return mgrPtr->getSessionWorkDir(tid);
         });
         if (dir.empty()) {
@@ -869,7 +868,8 @@ static int32_t AGENTXX_PLUGIN_CALL xx_get_session_work_dir(
     });
 }
 
-static int32_t AGENTXX_PLUGIN_CALL xx_get_plugin_config_path(const AgentxxPluginHost* host, AgentxxPluginString* out) {
+static int32_t AGENTXX_PLUGIN_CALL
+    xx_get_plugin_config_path(const AgentxxPluginHost* host, AgentxxPluginString* out) {
     return agentxx::plugin::guardVtableCall(-1, [&]() -> int32_t {
         if (!out) {
             return -1;
@@ -892,7 +892,8 @@ static int32_t AGENTXX_PLUGIN_CALL xx_get_plugin_config_path(const AgentxxPlugin
     });
 }
 
-static int32_t AGENTXX_PLUGIN_CALL xx_get_prompt(const AgentxxPluginHost* host, AgentxxPluginString* out) {
+static int32_t AGENTXX_PLUGIN_CALL
+    xx_get_prompt(const AgentxxPluginHost* host, AgentxxPluginString* out) {
     return agentxx::plugin::guardVtableCall(-1, [&]() -> int32_t {
         if (!out) {
             return -1;
@@ -913,10 +914,8 @@ static int32_t AGENTXX_PLUGIN_CALL xx_get_prompt(const AgentxxPluginHost* host, 
     });
 }
 
-static int32_t AGENTXX_PLUGIN_CALL xx_set_prompt(
-    const AgentxxPluginHost*       host,
-    const AgentxxPluginStringView* prompt_json
-) {
+static int32_t AGENTXX_PLUGIN_CALL
+    xx_set_prompt(const AgentxxPluginHost* host, const AgentxxPluginStringView* prompt_json) {
     return agentxx::plugin::guardVtableCall(-1, [&]() -> int32_t {
         auto mgr  = mgrOf(host);
         auto inst = instOf(host);
@@ -932,7 +931,8 @@ static int32_t AGENTXX_PLUGIN_CALL xx_set_prompt(
     });
 }
 
-static int32_t AGENTXX_PLUGIN_CALL xx_model_get_config(const AgentxxPluginHost* host, AgentxxPluginString* out) {
+static int32_t AGENTXX_PLUGIN_CALL
+    xx_model_get_config(const AgentxxPluginHost* host, AgentxxPluginString* out) {
     return agentxx::plugin::guardVtableCall(-1, [&]() -> int32_t {
         if (!out) {
             return -1;
@@ -975,10 +975,8 @@ static int32_t AGENTXX_PLUGIN_CALL xx_cancel_is_cancelled(
     });
 }
 
-static int32_t AGENTXX_PLUGIN_CALL xx_register_skill_dir(
-    const AgentxxPluginHost*       host,
-    const AgentxxPluginStringView* path
-) {
+static int32_t AGENTXX_PLUGIN_CALL
+    xx_register_skill_dir(const AgentxxPluginHost* host, const AgentxxPluginStringView* path) {
     return agentxx::plugin::guardVtableCall(-1, [&]() -> int32_t {
         auto mgr  = mgrOf(host);
         auto inst = instOf(host);
@@ -994,10 +992,8 @@ static int32_t AGENTXX_PLUGIN_CALL xx_register_skill_dir(
     });
 }
 
-static int32_t AGENTXX_PLUGIN_CALL xx_unregister_skill_dir(
-    const AgentxxPluginHost*       host,
-    const AgentxxPluginStringView* path
-) {
+static int32_t AGENTXX_PLUGIN_CALL
+    xx_unregister_skill_dir(const AgentxxPluginHost* host, const AgentxxPluginStringView* path) {
     return agentxx::plugin::guardVtableCall(-1, [&]() -> int32_t {
         auto mgr  = mgrOf(host);
         auto inst = instOf(host);
@@ -1013,10 +1009,8 @@ static int32_t AGENTXX_PLUGIN_CALL xx_unregister_skill_dir(
     });
 }
 
-static int32_t AGENTXX_PLUGIN_CALL xx_register_memory_file(
-    const AgentxxPluginHost*       host,
-    const AgentxxPluginStringView* path
-) {
+static int32_t AGENTXX_PLUGIN_CALL
+    xx_register_memory_file(const AgentxxPluginHost* host, const AgentxxPluginStringView* path) {
     return agentxx::plugin::guardVtableCall(-1, [&]() -> int32_t {
         auto mgr  = mgrOf(host);
         auto inst = instOf(host);
@@ -1032,10 +1026,8 @@ static int32_t AGENTXX_PLUGIN_CALL xx_register_memory_file(
     });
 }
 
-static int32_t AGENTXX_PLUGIN_CALL xx_unregister_memory_file(
-    const AgentxxPluginHost*       host,
-    const AgentxxPluginStringView* path
-) {
+static int32_t AGENTXX_PLUGIN_CALL
+    xx_unregister_memory_file(const AgentxxPluginHost* host, const AgentxxPluginStringView* path) {
     return agentxx::plugin::guardVtableCall(-1, [&]() -> int32_t {
         auto mgr  = mgrOf(host);
         auto inst = instOf(host);
@@ -1089,7 +1081,8 @@ static int32_t AGENTXX_PLUGIN_CALL xx_unregister_mcp_server(
     });
 }
 
-static int32_t AGENTXX_PLUGIN_CALL xx_get_own_resources(const AgentxxPluginHost* host, AgentxxPluginString* out) {
+static int32_t AGENTXX_PLUGIN_CALL
+    xx_get_own_resources(const AgentxxPluginHost* host, AgentxxPluginString* out) {
     return agentxx::plugin::guardVtableCall(-1, [&]() -> int32_t {
         if (!out) {
             return -1;
@@ -1245,7 +1238,8 @@ static const AgentxxPluginTasksIface g_ifaceTasks = {
     /* cancel_task */ xx_op_cancel,
 };
 
-const void* AGENTXX_PLUGIN_CALL xx_query_interface(const AgentxxPluginHost*, const AgentxxPluginStringView* iid);
+const void* AGENTXX_PLUGIN_CALL
+    xx_query_interface(const AgentxxPluginHost*, const AgentxxPluginStringView* iid);
 
 static const AgentxxHostVtable g_hostVtable = {
     /* alloc */ xx_alloc,
@@ -1253,7 +1247,8 @@ static const AgentxxHostVtable g_hostVtable = {
     /* query_interface */ xx_query_interface,
 };
 
-const void* AGENTXX_PLUGIN_CALL xx_query_interface(const AgentxxPluginHost*, const AgentxxPluginStringView* iid) {
+const void* AGENTXX_PLUGIN_CALL
+    xx_query_interface(const AgentxxPluginHost*, const AgentxxPluginStringView* iid) {
     if (!iid || !iid->data) {
         return nullptr;
     }
@@ -1444,7 +1439,9 @@ int PluginManager::registerMcpServer(PluginInstance* inst, AgentxxPluginStringVi
         return -1;
     }
     try {
-        auto j          = neograph::json::parse(std::string_view{specJson.data, static_cast<size_t>(specJson.size)});
+        auto j = neograph::json::parse(
+            std::string_view{specJson.data, static_cast<size_t>(specJson.size)}
+        );
         auto ns         = j.value("namespace", std::string{});
         auto url        = j.value("url", std::string{});
         int  timeoutSec = 120;
@@ -1601,7 +1598,9 @@ int PluginManager::setPromptJson(PluginInstance* inst, AgentxxPluginStringView p
         return -1;
     }
     try {
-        auto j = neograph::json::parse(std::string_view{prompt_json.data, static_cast<size_t>(prompt_json.size)});
+        auto j = neograph::json::parse(
+            std::string_view{prompt_json.data, static_cast<size_t>(prompt_json.size)}
+        );
         if (!j.is_object()) {
             return -1;
         }
@@ -1762,7 +1761,11 @@ bool PluginManager::isSessionCancelled(const std::string& threadId) {
     return session->getCancelToken()->is_cancelled();
 }
 
-AgentxxPluginString PluginManager::getShareStore(PluginInstance* inst, AgentxxPluginStringView session_id, int64_t id) {
+AgentxxPluginString PluginManager::getShareStore(
+    PluginInstance*         inst,
+    AgentxxPluginStringView session_id,
+    int64_t                 id
+) {
     if (!inst || agentxx::plugin::PluginStringView::empty(&session_id) || id < 0) {
         return AgentxxPluginString{nullptr, 0};
     }
@@ -1771,7 +1774,7 @@ AgentxxPluginString PluginManager::getShareStore(PluginInstance* inst, AgentxxPl
         return AgentxxPluginString{nullptr, 0};
     }
     std::string sid = svToStr(session_id);
-    auto        val = ctx->middlewareHandleContext->getShareStoreItemValue(sid, static_cast<size_t>(id));
+    auto val = ctx->middlewareHandleContext->getShareStoreItemValue(sid, static_cast<size_t>(id));
     if (!val.has_value()) {
         return AgentxxPluginString{nullptr, 0};
     }
@@ -1792,9 +1795,7 @@ int64_t PluginManager::addShareStore(
     }
     std::string sid  = svToStr(session_id);
     std::string text = svToStr(content);
-    return static_cast<int64_t>(
-        ctx->middlewareHandleContext->addShareStoreItemValue(sid, text)
-    );
+    return static_cast<int64_t>(ctx->middlewareHandleContext->addShareStoreItemValue(sid, text));
 }
 
 void PluginManager::emitMessageTip(
@@ -1803,14 +1804,15 @@ void PluginManager::emitMessageTip(
     AgentxxPluginStringView text,
     int32_t                 level
 ) {
-    if (!inst || agentxx::plugin::PluginStringView::empty(&session_id) || agentxx::plugin::PluginStringView::empty(&text)) {
+    if (!inst || agentxx::plugin::PluginStringView::empty(&session_id)
+        || agentxx::plugin::PluginStringView::empty(&text)) {
         return;
     }
     auto ctx = agentContext_.lock();
     if (!ctx) {
         return;
     }
-    std::string sid = svToStr(session_id);
+    std::string sid     = svToStr(session_id);
     auto        session = ctx->getSession(sid);
     if (!session || !session->io) {
         return;

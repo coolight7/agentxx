@@ -315,11 +315,7 @@ private:
     void           appendEditToolBody(const TUIMessage& msg, ftxui::Elements& lines);
     ftxui::Element renderEditToolDiff(std::string_view oldStr, std::string_view newStr);
     /// 插件装饰工具体通用渲染 (items: text/button/diagram/separator/diff; 内容由插件定义)
-    void appendDecorItems(
-        const neograph::json& items,
-        ftxui::Elements&      lines,
-        int                   maxWidth
-    );
+    void appendDecorItems(const neograph::json& items, ftxui::Elements& lines, int maxWidth);
     void appendDecorToolBody(
         const agentxx::plugin::ClientToolDecor& decor,
         ftxui::Elements&                        lines,

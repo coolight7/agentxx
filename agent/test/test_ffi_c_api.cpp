@@ -85,8 +85,7 @@ struct FfiEventRecorder {
     mutable std::mutex                                       m;
     std::vector<std::pair<AgentxxFFIEventType, std::string>> events;
 
-    static void AGENTXX_FFI_CALL
-        onEvent(int32_t type, const AgentxxStringView* payload, void* ud) {
+    static void AGENTXX_FFI_CALL onEvent(int32_t type, const AgentxxStringView* payload, void* ud) {
         auto* self = static_cast<FfiEventRecorder*>(ud);
         if (self == nullptr) {
             return;
@@ -239,26 +238,29 @@ struct FfiMockLLM {
             agentxx::util::HttpServer::Config{.address = "127.0.0.1", .port = 0, .ioThreads = 1}
         );
         auto handler = std::make_shared<agentxx::util::HttpServer::Handler>(
-            [this](agentxx::util::HttpServer::Request&,
-                   agentxx::util::HttpServer::Response& resp,
-                   std::string_view)
-            -> asio::awaitable<void> {
-            const int n = requestCount.fetch_add(1);
-            if (slowMs > 0) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(slowMs));
+            [this](
+                agentxx::util::HttpServer::Request&,
+                agentxx::util::HttpServer::Response& resp,
+                std::string_view
+            ) -> asio::awaitable<void> {
+                const int n = requestCount.fetch_add(1);
+                if (slowMs > 0) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(slowMs));
+                }
+                resp.result(boost::beast::http::status::ok);
+                resp.set(boost::beast::http::field::content_type, "text/event-stream");
+                resp.set(boost::beast::http::field::cache_control, "no-cache");
+                resp.keep_alive(false);
+                if (n == 0 && firstIsToolCall) {
+                    resp.body()
+                        = toolCallSse("agentxx_filesystem_read", R"({"path": "/etc/hostname"})");
+                } else {
+                    resp.body() = textSse("hello from ffi mock");
+                }
+                resp.prepare_payload();
+                co_return;
             }
-            resp.result(boost::beast::http::status::ok);
-            resp.set(boost::beast::http::field::content_type, "text/event-stream");
-            resp.set(boost::beast::http::field::cache_control, "no-cache");
-            resp.keep_alive(false);
-            if (n == 0 && firstIsToolCall) {
-                resp.body() = toolCallSse("agentxx_filesystem_read", R"({"path": "/etc/hostname"})");
-            } else {
-                resp.body() = textSse("hello from ffi mock");
-            }
-            resp.prepare_payload();
-            co_return;
-        });
+        );
         server->router().add("/chat/completions", 2, handler);
         server->router().add("/v1/chat/completions", 2, handler);
         thread = std::thread([s = server.get()]() {
@@ -519,11 +521,11 @@ void testHilInterrupt() {
         }
     }
 
-    AgentxxString log{};
-    auto          cfgSv   = agentxx_string_view(configJson.data(), configJson.size());
-    auto          mjson   = mock.modelJson();
-    auto          mjsonSv = agentxx_string_view(mjson.data(), mjson.size());
-    AgentxxFFIAgent* a    = agentxx_ffi_create(&cfgSv, &mjsonSv, &cb, &log);
+    AgentxxString    log{};
+    auto             cfgSv   = agentxx_string_view(configJson.data(), configJson.size());
+    auto             mjson   = mock.modelJson();
+    auto             mjsonSv = agentxx_string_view(mjson.data(), mjson.size());
+    AgentxxFFIAgent* a       = agentxx_ffi_create(&cfgSv, &mjsonSv, &cb, &log);
     if (a == nullptr) {
         TEST_FAIL << "create failed: " << (log.data ? log.data : "?") << std::endl;
         agentxx_ffi_string_free(&log);
@@ -563,7 +565,7 @@ void testHilInterrupt() {
         std::this_thread::sleep_for(std::chrono::milliseconds(200));
         AgentxxString lg{};
         auto          valSv = agentxx_string_view_cstr(R"(["true"])");
-        respondRc = agentxx_ffi_interrupt_respond(a, interruptId, &valSv, &lg);
+        respondRc           = agentxx_ffi_interrupt_respond(a, interruptId, &valSv, &lg);
         agentxx_ffi_string_free(&lg);
     });
 
@@ -664,10 +666,12 @@ void testMultipleRuntimesConcurrent() {
     }
 
     constexpr size_t kRuntimeCount = 3;
+
     struct RuntimeSlot {
         AgentxxFFIAgent* agent = nullptr;
         FfiEventRecorder rec;
     };
+
     std::vector<RuntimeSlot> slots(kRuntimeCount);
 
     for (size_t i = 0; i < kRuntimeCount; ++i) {
@@ -694,10 +698,7 @@ void testMultipleRuntimesConcurrent() {
     for (size_t i = 0; i < kRuntimeCount; ++i) {
         AgentxxString log{};
         auto          slotSv = agentxx_string_view_cstr("Hello from slot");
-        XX_TEST_EXPECT_EQ(
-            agentxx_ffi_send_input(slots[i].agent, &slotSv, &log),
-            AGENTXX_FFI_OK
-        );
+        XX_TEST_EXPECT_EQ(agentxx_ffi_send_input(slots[i].agent, &slotSv, &log), AGENTXX_FFI_OK);
         agentxx_ffi_string_free(&log);
     }
 
@@ -726,20 +727,14 @@ void testEventQueue() {
     // 探测空队列超时
     int32_t       type = -1;
     AgentxxString jsonOut{};
-    XX_TEST_EXPECT_EQ(
-        agentxx_ffi_event_queue_pop(q, &type, &jsonOut, 50),
-        AGENTXX_FFI_ERR_TIMEOUT
-    );
+    XX_TEST_EXPECT_EQ(agentxx_ffi_event_queue_pop(q, &type, &jsonOut, 50), AGENTXX_FFI_ERR_TIMEOUT);
 
     // 模拟投递事件
     auto evtJson = agentxx_string_view_cstr(R"({"sessionId":"test_sess_123"})");
     agentxx_ffi_event_queue_on_event(AGENTXX_FFI_EVT_READY, &evtJson, q);
 
     // 出队成功
-    XX_TEST_EXPECT_EQ(
-        agentxx_ffi_event_queue_pop(q, &type, &jsonOut, 100),
-        AGENTXX_FFI_OK
-    );
+    XX_TEST_EXPECT_EQ(agentxx_ffi_event_queue_pop(q, &type, &jsonOut, 100), AGENTXX_FFI_OK);
     XX_TEST_EXPECT_EQ(type, AGENTXX_FFI_EVT_READY);
     XX_TEST_EXPECT_TRUE(jsonOut.data != nullptr);
     if (jsonOut.data != nullptr) {

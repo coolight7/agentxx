@@ -351,11 +351,12 @@ interfaces:
         // ---- 运行时注册 skill 目录 (冻结后应拒绝: 仅 yaml 与初始化时追加生效) ----
         auto runtimeSkill = tmpRoot / "runtime_skills";
         fs::create_directories(runtimeSkill, ec);
-        int rc = res3 ? res3->register_skill_dir(
-                     &inst->host,
-                     agentxx::plugin::PluginStringView::fromCstr(runtimeSkill.string().c_str())
-                 )
-                      : -1;
+        int rc
+            = res3 ? res3->register_skill_dir(
+                         &inst->host,
+                         agentxx::plugin::PluginStringView::fromCstr(runtimeSkill.string().c_str())
+                     )
+                   : -1;
         XX_TEST_EXPECT_TRUE(rc != 0); // frozen after init
         XX_TEST_EXPECT_FALSE(contains(skillMw->skillDirPathList(), runtimeSkill.string()));
 
@@ -375,24 +376,24 @@ interfaces:
 
         // ---- 重复注册亦拒绝 (冻结) ----
         rc = res3 ? res3->register_skill_dir(
-                 &inst->host,
-                 agentxx::plugin::PluginStringView::fromCstr(runtimeSkill.string().c_str())
-             )
+                        &inst->host,
+                        agentxx::plugin::PluginStringView::fromCstr(runtimeSkill.string().c_str())
+                    )
                   : -1;
         XX_TEST_EXPECT_TRUE(rc != 0);
 
         // ---- 注销亦拒绝 (冻结) ----
         rc = res3 ? res3->unregister_skill_dir(
-                 &inst->host,
-                 agentxx::plugin::PluginStringView::fromCstr(runtimeSkill.string().c_str())
-             )
+                        &inst->host,
+                        agentxx::plugin::PluginStringView::fromCstr(runtimeSkill.string().c_str())
+                    )
                   : -1;
         XX_TEST_EXPECT_TRUE(rc != 0);
         XX_TEST_EXPECT_FALSE(contains(skillMw->skillDirPathList(), runtimeSkill.string()));
         rc = res3 ? res3->unregister_skill_dir(
-                 &inst->host,
-                 agentxx::plugin::PluginStringView::fromCstr(runtimeSkill.string().c_str())
-             )
+                        &inst->host,
+                        agentxx::plugin::PluginStringView::fromCstr(runtimeSkill.string().c_str())
+                    )
                   : 0;
         XX_TEST_EXPECT_TRUE(rc != 0);
 
@@ -400,9 +401,9 @@ interfaces:
         const char* mcpSpec
             = R"({"namespace":"t_mcp","url":"https://127.0.0.1:9/sse","timeout":3})";
         rc = res3 ? res3->register_mcp_server(
-                 &inst->host,
-                 agentxx::plugin::PluginStringView::fromCstr(mcpSpec)
-             )
+                        &inst->host,
+                        agentxx::plugin::PluginStringView::fromCstr(mcpSpec)
+                    )
                   : -1;
         XX_TEST_EXPECT_TRUE(rc != 0);
         co_await sleepMs(150);
@@ -426,9 +427,9 @@ interfaces:
         ctx->agentConfig->mcpServerUrls["yaml_ns2"] = ycfg;
         const char* specConflict = R"({"namespace":"yaml_ns2","url":"https://z"})";
         rc                       = res3 ? res3->register_mcp_server(
-                 &inst->host,
-                 agentxx::plugin::PluginStringView::fromCstr(specConflict)
-             )
+                        &inst->host,
+                        agentxx::plugin::PluginStringView::fromCstr(specConflict)
+                    )
                                         : 0;
         XX_TEST_EXPECT_TRUE(rc != 0);
 
@@ -442,9 +443,9 @@ interfaces:
 
         // ---- 注销亦拒绝 (未注册且冻结) ----
         rc = res3 ? res3->unregister_mcp_server(
-                 &inst->host,
-                 agentxx::plugin::PluginStringView::fromCstr("t_mcp")
-             )
+                        &inst->host,
+                        agentxx::plugin::PluginStringView::fromCstr("t_mcp")
+                    )
                   : -1;
         XX_TEST_EXPECT_TRUE(rc != 0);
         auto snapAfter = applier->ownedBy(ownerName);

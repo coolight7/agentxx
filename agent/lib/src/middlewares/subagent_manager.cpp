@@ -55,10 +55,7 @@ SubagentManagerMiddlewareHandle::SubagentManagerMiddlewareHandle(
     // 先创建实际 subagent 管理工具 (单实例; 事件总线服务与 toolcall 执行共用),
     // 再 applyConfig: applyConfig 按配置决定是否把委托工具注入 toolcalls,
     // 依赖 tool 已存在 (注入的委托工具转发到同一实例)
-    tool = std::make_shared<agentxx::tools::SubAgentManagerTool>(
-        "subagent_manager",
-        agentContext
-    );
+    tool = std::make_shared<agentxx::tools::SubAgentManagerTool>("subagent_manager", agentContext);
     // 注册默认 subagent 任务 (历史逻辑从 BaseAgent::initMiddleware 迁移)
     const auto nodeName = std::string{"subagent_task"};
     tool->subAgentList.insert(std::make_pair(

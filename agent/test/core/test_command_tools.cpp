@@ -4,12 +4,12 @@
 // 原 lib 内置工具已迁移至 agentxx_execute_command 插件 (同名同行为); 测试
 // 直测插件同一实现 (execute_command_impl.h), 保证插件行为与测试覆盖一致
 #include "agentxx/util/util.h"
+#include "agentxx_execute_command/execute_command_impl.h"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
 #include "asio/dispatch.hpp"
 #include "asio/steady_timer.hpp"
 #include "asio/use_awaitable.hpp"
-#include "agentxx_execute_command/execute_command_impl.h"
 #include <chrono>
 #include <filesystem>
 #include <fstream>

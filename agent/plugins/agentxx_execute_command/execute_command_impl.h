@@ -501,10 +501,10 @@ inline asio::awaitable<std::string> bashExecuteAsync(
         procExe,
         procArgs,
         boost::process::process_environment(procEnv),
- // 子进程初始工作目录: 会话工作目录 (未配置时显式取进程 cwd, 行为等价继承)
+        // 子进程初始工作目录: 会话工作目录 (未配置时显式取进程 cwd, 行为等价继承)
         boost::process::process_start_dir{detail::subprocessWorkDir(workDir)},
- // stdin 重定向到 null 设备 (Windows: NUL / POSIX: /dev/null),
-  // 避免子进程 (如交互式命令) 抢读 agent 进程的终端输入
+        // stdin 重定向到 null 设备 (Windows: NUL / POSIX: /dev/null),
+        // 避免子进程 (如交互式命令) 抢读 agent 进程的终端输入
         boost::process::process_stdio{.in = nullptr, .out = outpip, .err = errpip},
     };
 
@@ -563,9 +563,9 @@ inline asio::awaitable<std::string> windowsExecuteAsync(
         procExe,
         launch.args,
         boost::process::process_environment(procEnv),
- // 子进程初始工作目录: 会话工作目录 (未配置时显式取进程 cwd, 行为等价继承)
+        // 子进程初始工作目录: 会话工作目录 (未配置时显式取进程 cwd, 行为等价继承)
         boost::process::process_start_dir{detail::subprocessWorkDir(workDir)},
- // stdin 重定向到 null 设备, 避免子进程抢读 agent 进程的终端输入
+        // stdin 重定向到 null 设备, 避免子进程抢读 agent 进程的终端输入
         boost::process::process_stdio{.in = nullptr, .out = outpip, .err = errpip}
     };
 

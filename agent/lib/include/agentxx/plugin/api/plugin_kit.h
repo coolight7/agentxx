@@ -8,7 +8,8 @@
  * - Logger: 实例级日志闭包, 消除进程级全局
  * - Task<T>: 极简锚定协程类型 (无外部执行器依赖, 帧先销毁后 done 上报)
  * - 锚定原语 awaiter 族: sleep / yield / offload / call_tool / invoke_cap
- * - 注册族: tool (Task协程) / fast_tool (快同步内联) / blocking_tool (阻塞池委托) / hook / capability
+ * - 注册族: tool (Task协程) / fast_tool (快同步内联) / blocking_tool (阻塞池委托) / hook /
+ * capability
  * - spawn: 后台协作任务 (sleep 循环, 卸载取消)
  * - 阻塞便捷助手: 供 JS 引擎及非 io 线程使用 (基于 condvar)
  */
@@ -63,10 +64,7 @@ struct PluginStringView {
 
     /// 从 NUL 结尾 C 串构造 ABI 视图 (自动 strlen; 原 agentxx_plugin_sv_cstr)
     static AgentxxPluginStringView fromCstr(const char* s) noexcept {
-        return AgentxxPluginStringView{
-            s,
-            s ? static_cast<uint64_t>(std::strlen(s)) : 0
-        };
+        return AgentxxPluginStringView{s, s ? static_cast<uint64_t>(std::strlen(s)) : 0};
     }
 
     /// 从 std::string_view 构造 ABI 视图
@@ -96,9 +94,8 @@ struct PluginStringView {
 
     /// ABI 视图 → std::string_view (零拷贝; NULL data 视为空串)
     static std::string_view str(const AgentxxPluginStringView& sv) noexcept {
-        return sv.data
-            ? std::string_view{sv.data, static_cast<size_t>(sv.size)}
-            : std::string_view{};
+        return sv.data ? std::string_view{sv.data, static_cast<size_t>(sv.size)}
+                       : std::string_view{};
     }
 
     /// 宿主堆字符串 → ABI 视图 (原 agentxx_plugin_string_to_sv)
@@ -118,15 +115,18 @@ class PluginString {
     AgentxxPluginString      str_{nullptr, 0};
 
 public:
+
     PluginString() = default;
+
     PluginString(const AgentxxPluginHost* h, AgentxxPluginString s) noexcept :
         host_(h),
         str_(s) {}
+
     ~PluginString() {
         reset();
     }
 
-    PluginString(const PluginString&) = delete;
+    PluginString(const PluginString&)            = delete;
     PluginString& operator=(const PluginString&) = delete;
 
     PluginString(PluginString&& o) noexcept :
@@ -265,30 +265,38 @@ public:
     const char* c_str() const noexcept {
         return str_.data ? str_.data : "";
     }
+
     const char* data() const noexcept {
         return str_.data;
     }
+
     size_t size() const noexcept {
         return static_cast<size_t>(str_.size);
     }
+
     bool empty() const noexcept {
         return PluginStringView::empty(str_);
     }
+
     std::string_view view() const noexcept {
         return PluginStringView::str(PluginStringView::toSv(str_));
     }
+
     std::string str() const {
         return std::string(view());
     }
+
     AgentxxPluginStringView to_sv() const noexcept {
         return PluginStringView::toSv(str_);
     }
+
     AgentxxPluginString release() noexcept {
         AgentxxPluginString tmp = str_;
         str_                    = {nullptr, 0};
         host_                   = nullptr;
         return tmp;
     }
+
     const AgentxxPluginString& raw() const noexcept {
         return str_;
     }
@@ -305,7 +313,8 @@ const Iface* queryInterface(const AgentxxPluginHost* host, std::string_view iid)
 }
 
 template<typename Iface>
-const Iface* queryInterface(const AgentxxPluginHost* host, const AgentxxPluginStringView& iid) noexcept {
+const Iface*
+    queryInterface(const AgentxxPluginHost* host, const AgentxxPluginStringView& iid) noexcept {
     if (!host || !host->vtable || !host->vtable->query_interface || iid.empty()) {
         return nullptr;
     }
@@ -320,7 +329,6 @@ const Iface* queryInterface(const AgentxxPluginHost* host, const char* iid) noex
     AgentxxPluginStringView sv = PluginStringView::fromCstr(iid);
     return static_cast<const Iface*>(host->vtable->query_interface(host, &sv));
 }
-
 
 /* ==================== 接口表聚合 (原 plugin_iface_helper.h 实体, 并入 kit) ==================== */
 
@@ -357,20 +365,26 @@ struct AgentIfaces {
             host,
             AGENTXX_PLUGIN_IFACE_AGENT_CAPABILITIES
         );
-        f.scheduler
-            = queryInterface<AgentxxPluginSchedulerIface>(host, AGENTXX_PLUGIN_IFACE_AGENT_SCHEDULER);
+        f.scheduler = queryInterface<AgentxxPluginSchedulerIface>(
+            host,
+            AGENTXX_PLUGIN_IFACE_AGENT_SCHEDULER
+        );
         f.session
             = queryInterface<AgentxxPluginSessionIface>(host, AGENTXX_PLUGIN_IFACE_AGENT_SESSION);
-        f.plugins
-            = queryInterface<AgentxxPluginsIface>(host, AGENTXX_PLUGIN_IFACE_AGENT_PLUGINS);
-        f.config = queryInterface<AgentxxPluginConfigIface>(host, AGENTXX_PLUGIN_IFACE_AGENT_CONFIG);
-        f.prompt = queryInterface<AgentxxPluginPromptIface>(host, AGENTXX_PLUGIN_IFACE_AGENT_PROMPT);
-        f.json = queryInterface<AgentxxPluginJsonIface>(host, AGENTXX_PLUGIN_IFACE_AGENT_JSON);
-        f.log = queryInterface<AgentxxPluginLogIface>(host, AGENTXX_PLUGIN_IFACE_AGENT_LOG);
-        f.resources
-            = queryInterface<AgentxxPluginResourcesIface>(host, AGENTXX_PLUGIN_IFACE_AGENT_RESOURCES);
+        f.plugins = queryInterface<AgentxxPluginsIface>(host, AGENTXX_PLUGIN_IFACE_AGENT_PLUGINS);
+        f.config
+            = queryInterface<AgentxxPluginConfigIface>(host, AGENTXX_PLUGIN_IFACE_AGENT_CONFIG);
+        f.prompt
+            = queryInterface<AgentxxPluginPromptIface>(host, AGENTXX_PLUGIN_IFACE_AGENT_PROMPT);
+        f.json      = queryInterface<AgentxxPluginJsonIface>(host, AGENTXX_PLUGIN_IFACE_AGENT_JSON);
+        f.log       = queryInterface<AgentxxPluginLogIface>(host, AGENTXX_PLUGIN_IFACE_AGENT_LOG);
+        f.resources = queryInterface<AgentxxPluginResourcesIface>(
+            host,
+            AGENTXX_PLUGIN_IFACE_AGENT_RESOURCES
+        );
         f.model = queryInterface<AgentxxPluginModelIface>(host, AGENTXX_PLUGIN_IFACE_AGENT_MODEL);
-        f.cancel = queryInterface<AgentxxPluginCancelIface>(host, AGENTXX_PLUGIN_IFACE_AGENT_CANCEL);
+        f.cancel
+            = queryInterface<AgentxxPluginCancelIface>(host, AGENTXX_PLUGIN_IFACE_AGENT_CANCEL);
         f.graph = queryInterface<AgentxxPluginGraphIface>(host, AGENTXX_PLUGIN_IFACE_AGENT_GRAPH);
         f.tasks = queryInterface<AgentxxPluginTasksIface>(host, AGENTXX_PLUGIN_IFACE_AGENT_TASKS);
         return f;
@@ -393,14 +407,13 @@ struct ClientIfaces {
         if (!host || !host->vtable || !host->vtable->query_interface) {
             return f;
         }
-        f.ui = queryInterface<AgentxxClientUiIface>(host, AGENTXX_IFACE_CLIENT_UI);
-        f.events = queryInterface<AgentxxClientEventsIface>(host, AGENTXX_IFACE_CLIENT_EVENTS);
-        f.session
-            = queryInterface<AgentxxClientSessionIface>(host, AGENTXX_IFACE_CLIENT_SESSION);
-        f.wire = queryInterface<AgentxxClientWireIface>(host, AGENTXX_IFACE_CLIENT_WIRE);
-        f.self = queryInterface<AgentxxClientSelfIface>(host, AGENTXX_IFACE_CLIENT_SELF);
-        f.json = queryInterface<AgentxxClientJsonIface>(host, AGENTXX_IFACE_CLIENT_JSON);
-        f.log = queryInterface<AgentxxClientLogIface>(host, AGENTXX_IFACE_CLIENT_LOG);
+        f.ui      = queryInterface<AgentxxClientUiIface>(host, AGENTXX_IFACE_CLIENT_UI);
+        f.events  = queryInterface<AgentxxClientEventsIface>(host, AGENTXX_IFACE_CLIENT_EVENTS);
+        f.session = queryInterface<AgentxxClientSessionIface>(host, AGENTXX_IFACE_CLIENT_SESSION);
+        f.wire    = queryInterface<AgentxxClientWireIface>(host, AGENTXX_IFACE_CLIENT_WIRE);
+        f.self    = queryInterface<AgentxxClientSelfIface>(host, AGENTXX_IFACE_CLIENT_SELF);
+        f.json    = queryInterface<AgentxxClientJsonIface>(host, AGENTXX_IFACE_CLIENT_JSON);
+        f.log     = queryInterface<AgentxxClientLogIface>(host, AGENTXX_IFACE_CLIENT_LOG);
         return f;
     }
 };
@@ -552,8 +565,8 @@ inline void finishIfDone(std::coroutine_handle<Promise> h) {
     }
 
     AgentxxPluginOperatorNotify notify  = p.notify_;
-    auto cleanup = std::move(p.opCleanup_);
-    p.opCleanup_ = nullptr;
+    auto                        cleanup = std::move(p.opCleanup_);
+    p.opCleanup_                        = nullptr;
 
     h.destroy();
 
@@ -672,7 +685,7 @@ struct Task {
         }
     }
 
-    Task(const Task&) = delete;
+    Task(const Task&)            = delete;
     Task& operator=(const Task&) = delete;
 };
 
@@ -710,7 +723,7 @@ struct Task<void> {
         }
     }
 
-    Task(const Task&) = delete;
+    Task(const Task&)            = delete;
     Task& operator=(const Task&) = delete;
 };
 
@@ -726,9 +739,9 @@ public:
     virtual ~PluginBase() = default;
 
     void init(const AgentxxPluginHost* h) {
-        host       = h;
-        iface      = AgentIfaces::query(h);
-        log.host   = h;
+        host         = h;
+        iface        = AgentIfaces::query(h);
+        log.host     = h;
         log.logIface = iface.log;
     }
 
@@ -769,7 +782,7 @@ public:
         if (!host || !iface.config || !iface.config->get_tool_prompt) {
             return res;
         }
-        auto toolSv = PluginStringView::from(tool.data(), tool.size());
+        auto                toolSv = PluginStringView::from(tool.data(), tool.size());
         AgentxxPluginString s{nullptr, 0};
         iface.config->get_tool_prompt(host, &toolSv, &s);
         if (!s.data) {
@@ -883,7 +896,7 @@ public:
             return "\"\"";
         }
         AgentxxPluginString esc{nullptr, 0};
-        auto sSv = PluginStringView::from(s.data, s.size);
+        auto                sSv = PluginStringView::from(s.data, s.size);
         iface.json->json_escape(host, &sSv, &esc);
         if (!esc.data) {
             return "\"\"";
@@ -909,8 +922,8 @@ public:
         if (!host || !iface.json || !iface.json->json_get_string) {
             return {};
         }
-        auto jsonSv = PluginStringView::from(json.data(), json.size());
-        auto keySv  = PluginStringView::from(key.data(), key.size());
+        auto                jsonSv = PluginStringView::from(json.data(), json.size());
+        auto                keySv  = PluginStringView::from(key.data(), key.size());
         AgentxxPluginString out{nullptr, 0};
         iface.json->json_get_string(host, &jsonSv, &keySv, &out);
         if (!out.data) {
@@ -937,7 +950,7 @@ public:
     struct SpawnRecord {
         std::function<void()>              starter;
         std::shared_ptr<std::atomic<bool>> cancelFlag;
-        void* coroAddr = nullptr;
+        void*                              coroAddr = nullptr;
     };
 
     std::vector<std::shared_ptr<SpawnRecord>> spawns_;
@@ -950,9 +963,7 @@ public:
             rec->cancelFlag->store(true, std::memory_order_release);
             if (rec->coroAddr) {
                 auto handle
-                    = std::coroutine_handle<detail::PromiseBase<void>>::from_address(
-                        rec->coroAddr
-                    );
+                    = std::coroutine_handle<detail::PromiseBase<void>>::from_address(rec->coroAddr);
                 handle.promise().cancel_outstanding();
             }
         }
@@ -1156,11 +1167,11 @@ struct CallToolAwaiter {
         st->suspended.store(false, std::memory_order_release);
         st->callbackFired.store(false, std::memory_order_release);
         st->destroyed.store(false, std::memory_order_release);
-        auto* holder = new std::shared_ptr<CallToolState>(st);
+        auto*               holder = new std::shared_ptr<CallToolState>(st);
         AgentxxPluginString err{nullptr, 0};
-        auto nameSv = PluginStringView::from(st->name.data(), st->name.size());
-        auto argsSv = PluginStringView::from(st->argsJson.data(), st->argsJson.size());
-        auto tidSv  = PluginStringView::from(st->threadId.data(), st->threadId.size());
+        auto                nameSv = PluginStringView::from(st->name.data(), st->name.size());
+        auto argsSv  = PluginStringView::from(st->argsJson.data(), st->argsJson.size());
+        auto tidSv   = PluginStringView::from(st->threadId.data(), st->threadId.size());
         st->opHandle = st->tools->call_tool_async(
             st->host,
             &nameSv,
@@ -1262,9 +1273,7 @@ struct CallToolAwaiter {
             throw std::runtime_error("call_tool start failed: " + st->startError);
         }
         if (st->status == AGENTXX_PLUGIN_OPERATOR_CANCELLED) {
-            throw CancelledException(
-                st->payload.empty() ? "call_tool cancelled" : st->payload
-            );
+            throw CancelledException(st->payload.empty() ? "call_tool cancelled" : st->payload);
         }
         if (st->status != AGENTXX_PLUGIN_OPERATOR_OK) {
             throw std::runtime_error(st->payload.empty() ? "call_tool failed" : st->payload);
@@ -1285,8 +1294,8 @@ struct InvokeCapState {
     std::string                           startError;
     std::atomic<bool>                     suspended{false};
     std::atomic<bool>                     callbackFired{false};
-    void*                                 coroAddr            = nullptr;
-    void (*schedPost)(const AgentxxPluginHost*, void*)        = nullptr;
+    void*                                 coroAddr     = nullptr;
+    void (*schedPost)(const AgentxxPluginHost*, void*) = nullptr;
     std::atomic<bool> destroyed{false};
 };
 
@@ -1326,11 +1335,11 @@ struct InvokeCapAwaiter {
         st->suspended.store(false, std::memory_order_release);
         st->callbackFired.store(false, std::memory_order_release);
         st->destroyed.store(false, std::memory_order_release);
-        auto* holder = new std::shared_ptr<InvokeCapState>(st);
+        auto*               holder = new std::shared_ptr<InvokeCapState>(st);
         AgentxxPluginString err{nullptr, 0};
-        auto capSv  = PluginStringView::from(st->capability.data(), st->capability.size());
-        auto methSv = PluginStringView::from(st->method.data(), st->method.size());
-        auto argsSv = PluginStringView::from(st->argsJson.data(), st->argsJson.size());
+        auto capSv   = PluginStringView::from(st->capability.data(), st->capability.size());
+        auto methSv  = PluginStringView::from(st->method.data(), st->method.size());
+        auto argsSv  = PluginStringView::from(st->argsJson.data(), st->argsJson.size());
         st->opHandle = st->caps->invoke_capability_async(
             st->host,
             &capSv,
@@ -1482,8 +1491,10 @@ inline detail::CallToolAwaiter call_tool(
                 ifs.scheduler->post_to_io(
                     h,
                     [](void* ud) {
-                        auto handle = std::coroutine_handle<
-                            detail::PromiseBase<std::string>>::from_address(ud);
+                        auto handle
+                            = std::coroutine_handle<detail::PromiseBase<std::string>>::from_address(
+                                ud
+                            );
                         handle.resume();
                     },
                     addr
@@ -1511,8 +1522,10 @@ inline detail::InvokeCapAwaiter invoke_cap(
                 ifs.scheduler->post_to_io(
                     h,
                     [](void* ud) {
-                        auto handle = std::coroutine_handle<
-                            detail::PromiseBase<std::string>>::from_address(ud);
+                        auto handle
+                            = std::coroutine_handle<detail::PromiseBase<std::string>>::from_address(
+                                ud
+                            );
                         handle.resume();
                     },
                     addr
@@ -1528,9 +1541,9 @@ namespace detail {
 
 template<typename Ctx, typename Fn>
 inline void spawnTaskImpl(Ctx& ctx, Fn&& fn) {
-    auto cancelFlag = std::make_shared<std::atomic<bool>>(false);
-    auto rec = std::make_shared<PluginBase::SpawnRecord>();
-    rec->cancelFlag = cancelFlag;
+    auto cancelFlag                                = std::make_shared<std::atomic<bool>>(false);
+    auto rec                                       = std::make_shared<PluginBase::SpawnRecord>();
+    rec->cancelFlag                                = cancelFlag;
     std::weak_ptr<PluginBase::SpawnRecord> recWeak = rec;
 
     AgentxxPluginOperatorNotify hostNotify{nullptr, nullptr};
@@ -1546,7 +1559,8 @@ inline void spawnTaskImpl(Ctx& ctx, Fn&& fn) {
                 }
                 r->cancelFlag->store(true, std::memory_order_release);
                 if (r->coroAddr) {
-                    auto handle = std::coroutine_handle<PromiseBase<void>>::from_address(r->coroAddr);
+                    auto handle
+                        = std::coroutine_handle<PromiseBase<void>>::from_address(r->coroAddr);
                     handle.promise().cancel_outstanding();
                 }
             },
@@ -1630,7 +1644,8 @@ inline void spawn(Ctx& ctx, Fn&& fn) {
     detail::spawnTaskImpl(ctx, std::forward<Fn>(fn));
 }
 
-/// ==================== (kit::tool / fast_tool / blocking_tool / hook / capability) ====================
+/// ==================== (kit::tool / fast_tool / blocking_tool / hook / capability)
+/// ====================
 
 template<typename Ctx, typename TaskFn>
 inline void tool(
@@ -1667,9 +1682,11 @@ inline void tool(
     };
 
     AgentxxPluginToolSpec spec{};
-    spec.name = PluginStringView::from(name.data(), name.size());
-    spec.description
-        = PluginStringView::from(storage[storage.size() - 2].data(), storage[storage.size() - 2].size());
+    spec.name        = PluginStringView::from(name.data(), name.size());
+    spec.description = PluginStringView::from(
+        storage[storage.size() - 2].data(),
+        storage[storage.size() - 2].size()
+    );
     spec.parameters_json    = PluginStringView::from(storage.back().data(), storage.back().size());
     spec.user_data          = shim;
     spec.default_timeout_ms = default_timeout_ms;
@@ -1690,11 +1707,17 @@ inline void tool(
             cancelFlag,
             shim->ctx->host,
             shim->ctx->iface.cancel,
-            std::string(thread_id && thread_id->data ? thread_id->data : "", thread_id ? static_cast<size_t>(thread_id->size) : 0)
+            std::string(
+                thread_id && thread_id->data ? thread_id->data : "",
+                thread_id ? static_cast<size_t>(thread_id->size) : 0
+            )
         };
 
-        std::string_view args(args_json && args_json->data ? args_json->data : "{}", args_json ? static_cast<size_t>(args_json->size) : 0);
-        auto             task = shim->fn(*shim->ctx, args, ctl);
+        std::string_view args(
+            args_json && args_json->data ? args_json->data : "{}",
+            args_json ? static_cast<size_t>(args_json->size) : 0
+        );
+        auto task = shim->fn(*shim->ctx, args, ctl);
         if (!task.handle_) {
             return nullptr;
         }
@@ -1717,7 +1740,7 @@ inline void tool(
             return nullptr;
         }
 
-        auto* job = new Job{shim, cancelFlag, h.address()};
+        auto* job    = new Job{shim, cancelFlag, h.address()};
         p.opCleanup_ = [job]() {
             delete job;
         };
@@ -1771,9 +1794,11 @@ inline void fast_tool(
     auto shim = ctx.storeShim(std::make_unique<FastShim>(FastShim{&ctx, std::forward<SyncFn>(fn)}));
 
     AgentxxPluginToolSpec spec{};
-    spec.name = PluginStringView::from(name.data(), name.size());
-    spec.description
-        = PluginStringView::from(storage[storage.size() - 2].data(), storage[storage.size() - 2].size());
+    spec.name        = PluginStringView::from(name.data(), name.size());
+    spec.description = PluginStringView::from(
+        storage[storage.size() - 2].data(),
+        storage[storage.size() - 2].size()
+    );
     spec.parameters_json    = PluginStringView::from(storage.back().data(), storage.back().size());
     spec.user_data          = shim;
     spec.default_timeout_ms = default_timeout_ms;
@@ -1789,9 +1814,15 @@ inline void fast_tool(
         auto* shim = static_cast<FastShim*>(user_data);
         (void)tool_call_id;
         try {
-            std::string_view args(args_json && args_json->data ? args_json->data : "{}", args_json ? static_cast<size_t>(args_json->size) : 0);
-            std::string_view tid(thread_id && thread_id->data ? thread_id->data : "", thread_id ? static_cast<size_t>(thread_id->size) : 0);
-            std::string      res;
+            std::string_view args(
+                args_json && args_json->data ? args_json->data : "{}",
+                args_json ? static_cast<size_t>(args_json->size) : 0
+            );
+            std::string_view tid(
+                thread_id && thread_id->data ? thread_id->data : "",
+                thread_id ? static_cast<size_t>(thread_id->size) : 0
+            );
+            std::string res;
             if constexpr (std::is_invocable_v<SyncFn, Ctx&, std::string_view, std::string_view>) {
                 res = shim->fn(*shim->ctx, args, tid);
             } else if constexpr (std::is_invocable_v<SyncFn, Ctx&, std::string_view>) {
@@ -1802,32 +1833,20 @@ inline void fast_tool(
 
             if (notify && notify->done) {
                 auto resSv = PluginStringView::from(res.data(), res.size());
-                notify->done(
-                    notify->host_ud,
-                    AGENTXX_PLUGIN_OPERATOR_OK,
-                    &resSv
-                );
+                notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, &resSv);
             }
         } catch (const std::exception& e) {
             if (notify && notify->done) {
-                std::string what = e.what();
-                auto errSv = PluginStringView::from(what.data(), what.size());
-                notify->done(
-                    notify->host_ud,
-                    AGENTXX_PLUGIN_OPERATOR_FAILED,
-                    &errSv
-                );
+                std::string what  = e.what();
+                auto        errSv = PluginStringView::from(what.data(), what.size());
+                notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_FAILED, &errSv);
             } else if (error_out) {
                 *error_out = PluginString::fromCstr(shim->ctx->host, e.what());
             }
         } catch (...) {
             if (notify && notify->done) {
                 auto errSv = PluginStringView::fromCstr("unknown error");
-                notify->done(
-                    notify->host_ud,
-                    AGENTXX_PLUGIN_OPERATOR_FAILED,
-                    &errSv
-                );
+                notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_FAILED, &errSv);
             } else if (error_out) {
                 *error_out = PluginString::fromCstr(shim->ctx->host, "unknown error in fast_tool");
             }
@@ -1880,9 +1899,11 @@ inline void blocking_tool(
     };
 
     AgentxxPluginToolSpec spec{};
-    spec.name = PluginStringView::from(name.data(), name.size());
-    spec.description
-        = PluginStringView::from(storage[storage.size() - 2].data(), storage[storage.size() - 2].size());
+    spec.name        = PluginStringView::from(name.data(), name.size());
+    spec.description = PluginStringView::from(
+        storage[storage.size() - 2].data(),
+        storage[storage.size() - 2].size()
+    );
     spec.parameters_json    = PluginStringView::from(storage.back().data(), storage.back().size());
     spec.user_data          = shim;
     spec.default_timeout_ms = default_timeout_ms;
@@ -1897,18 +1918,27 @@ inline void blocking_tool(
                             AgentxxPluginString*               error_out) -> void* {
         auto* shim = static_cast<BlockShim*>(user_data);
         (void)error_out;
-        std::string tidStr(thread_id && thread_id->data ? thread_id->data : "", thread_id ? static_cast<size_t>(thread_id->size) : 0);
+        std::string tidStr(
+            thread_id && thread_id->data ? thread_id->data : "",
+            thread_id ? static_cast<size_t>(thread_id->size) : 0
+        );
         std::string workDirCache;
         if (shim->ctx) {
-            auto tidSv = PluginStringView::from(tidStr.data(), tidStr.size());
+            auto tidSv   = PluginStringView::from(tidStr.data(), tidStr.size());
             workDirCache = shim->ctx->workDir(tidSv);
         }
         auto* job = new Job{
             shim,
             notify ? *notify : AgentxxPluginOperatorNotify{nullptr, nullptr},
-            std::string(args_json && args_json->data ? args_json->data : "{}", args_json ? static_cast<size_t>(args_json->size) : 0),
+            std::string(
+                args_json && args_json->data ? args_json->data : "{}",
+                args_json ? static_cast<size_t>(args_json->size) : 0
+            ),
             std::move(tidStr),
-            std::string(tool_call_id && tool_call_id->data ? tool_call_id->data : "", tool_call_id ? static_cast<size_t>(tool_call_id->size) : 0),
+            std::string(
+                tool_call_id && tool_call_id->data ? tool_call_id->data : "",
+                tool_call_id ? static_cast<size_t>(tool_call_id->size) : 0
+            ),
             std::move(workDirCache),
             0
         };
@@ -1979,15 +2009,18 @@ inline void blocking_tool(
                         return nullptr;
                     } catch (...) {
                         if (err_out) {
-                            *err_out = PluginString::fromCstr(j->shim->ctx->host, "unknown blocking tool error");
+                            *err_out = PluginString::fromCstr(
+                                j->shim->ctx->host,
+                                "unknown blocking tool error"
+                            );
                         }
                         return nullptr;
                     }
                 },
                 [](void* ud, void* res, const AgentxxPluginStringView* err) {
-                    auto* j       = static_cast<Job*>(ud);
+                    auto* j = static_cast<Job*>(ud);
                     (void)res;
-                    int32_t st    = AGENTXX_PLUGIN_OPERATOR_OK;
+                    int32_t                 st      = AGENTXX_PLUGIN_OPERATOR_OK;
                     AgentxxPluginStringView payload = PluginStringView::from(nullptr, 0);
 
                     if (!PluginStringView::empty(err)) {
@@ -1996,7 +2029,7 @@ inline void blocking_tool(
                     } else if (j->resultStr.data) {
                         payload = PluginStringView::toSv(j->resultStr);
                     } else {
-                        st      = AGENTXX_PLUGIN_OPERATOR_CANCELLED;
+                        st = AGENTXX_PLUGIN_OPERATOR_CANCELLED;
                     }
 
                     if (j->notify.done) {
@@ -2068,30 +2101,18 @@ inline void hook(Ctx& ctx, AgentxxPluginHookPoint point, HookFn&& fn) {
             }
             if (notify && notify->done) {
                 auto okSv = PluginStringView::from(nullptr, 0);
-                notify->done(
-                    notify->host_ud,
-                    AGENTXX_PLUGIN_OPERATOR_OK,
-                    &okSv
-                );
+                notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, &okSv);
             }
         } catch (const std::exception& e) {
             if (notify && notify->done) {
-                std::string what = e.what();
-                auto errSv = PluginStringView::from(what.data(), what.size());
-                notify->done(
-                    notify->host_ud,
-                    AGENTXX_PLUGIN_OPERATOR_FAILED,
-                    &errSv
-                );
+                std::string what  = e.what();
+                auto        errSv = PluginStringView::from(what.data(), what.size());
+                notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_FAILED, &errSv);
             }
         } catch (...) {
             if (notify && notify->done) {
                 auto errSv = PluginStringView::fromCstr("hook error");
-                notify->done(
-                    notify->host_ud,
-                    AGENTXX_PLUGIN_OPERATOR_FAILED,
-                    &errSv
-                );
+                notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_FAILED, &errSv);
             }
         }
         return nullptr;
@@ -2127,9 +2148,15 @@ inline void capability(Ctx& ctx, std::string_view capName, CapFn&& fn) {
                 auto* shim = static_cast<CapShim*>(user_data);
                 (void)error_out;
                 try {
-                    std::string_view meth(method && method->data ? method->data : "", method ? static_cast<size_t>(method->size) : 0);
-                    std::string_view args(args_json && args_json->data ? args_json->data : "{}", args_json ? static_cast<size_t>(args_json->size) : 0);
-                    std::string      res;
+                    std::string_view meth(
+                        method && method->data ? method->data : "",
+                        method ? static_cast<size_t>(method->size) : 0
+                    );
+                    std::string_view args(
+                        args_json && args_json->data ? args_json->data : "{}",
+                        args_json ? static_cast<size_t>(args_json->size) : 0
+                    );
+                    std::string res;
                     if constexpr (std::is_invocable_v<
                                       CapFn,
                                       Ctx&,
@@ -2148,30 +2175,18 @@ inline void capability(Ctx& ctx, std::string_view capName, CapFn&& fn) {
                     }
                     if (notify && notify->done) {
                         auto resSv = PluginStringView::from(res.data(), res.size());
-                        notify->done(
-                            notify->host_ud,
-                            AGENTXX_PLUGIN_OPERATOR_OK,
-                            &resSv
-                        );
+                        notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, &resSv);
                     }
                 } catch (const std::exception& e) {
                     if (notify && notify->done) {
-                        std::string what = e.what();
-                        auto errSv = PluginStringView::from(what.data(), what.size());
-                        notify->done(
-                            notify->host_ud,
-                            AGENTXX_PLUGIN_OPERATOR_FAILED,
-                            &errSv
-                        );
+                        std::string what  = e.what();
+                        auto        errSv = PluginStringView::from(what.data(), what.size());
+                        notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_FAILED, &errSv);
                     }
                 } catch (...) {
                     if (notify && notify->done) {
                         auto errSv = PluginStringView::fromCstr("capability error");
-                        notify->done(
-                            notify->host_ud,
-                            AGENTXX_PLUGIN_OPERATOR_FAILED,
-                            &errSv
-                        );
+                        notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_FAILED, &errSv);
                     }
                 }
                 return nullptr;
@@ -2379,34 +2394,32 @@ struct SyncToolSpec {
 
 /// 同步工具适配状态 (作为 user_data 传给宿主 execute_start/cancel)
 struct SyncToolShim {
-    const AgentxxPluginHost*         host;
+    const AgentxxPluginHost*           host;
     const AgentxxPluginSchedulerIface* sched;
-    SyncToolFn*                      fn;
-    void*                            ud;
+    SyncToolFn*                        fn;
+    void*                              ud;
 };
 
 /// 同步工具 offload 任务 (堆分配; 生命周期: start → offload work/done → done 内释放)
 struct SyncJob {
-    SyncToolShim            shim;
+    SyncToolShim                shim;
     AgentxxPluginOperatorNotify notify;
-    AgentxxPluginStringView args;
-    AgentxxPluginStringView tid;
-    AgentxxPluginStringView tcid;
-    volatile int32_t        cancelFlag;
-    uint32_t                _reserved;
-    AgentxxPluginString     resultStr{nullptr, 0};
+    AgentxxPluginStringView     args;
+    AgentxxPluginStringView     tid;
+    AgentxxPluginStringView     tcid;
+    volatile int32_t            cancelFlag;
+    uint32_t                    _reserved;
+    AgentxxPluginString         resultStr{nullptr, 0};
 };
 
-inline AgentxxPluginString
-    shimErrDup(const AgentxxPluginHost* host, std::string_view msg) {
+inline AgentxxPluginString shimErrDup(const AgentxxPluginHost* host, std::string_view msg) {
     if (!host || !host->vtable || msg.empty()) {
         return AgentxxPluginString{nullptr, 0};
     }
     return PluginString::from(host, msg);
 }
 
-inline AgentxxPluginString
-    shimErrDup(const AgentxxPluginHost* host, const char* msg) {
+inline AgentxxPluginString shimErrDup(const AgentxxPluginHost* host, const char* msg) {
     if (!host || !host->vtable || !msg) {
         return AgentxxPluginString{nullptr, 0};
     }
@@ -2418,14 +2431,8 @@ inline void* AGENTXX_PLUGIN_CALL
     syncJobWork(void* ud, volatile int32_t* cancel_flag, AgentxxPluginString* error_out) {
     SyncJob* job = static_cast<SyncJob*>(ud);
     try {
-        job->resultStr = job->shim.fn(
-            job->shim.ud,
-            &job->args,
-            &job->tid,
-            &job->tcid,
-            cancel_flag,
-            error_out
-        );
+        job->resultStr
+            = job->shim.fn(job->shim.ud, &job->args, &job->tid, &job->tcid, cancel_flag, error_out);
         return &job->resultStr;
     } catch (const std::exception& e) {
         if (error_out && !error_out->data) {
@@ -2444,9 +2451,9 @@ inline void* AGENTXX_PLUGIN_CALL
 inline void AGENTXX_PLUGIN_CALL
     syncJobDone(void* ud, void* result, const AgentxxPluginStringView* error) {
     (void)result;
-    SyncJob*                 job     = static_cast<SyncJob*>(ud);
-    int32_t                  st      = AGENTXX_PLUGIN_OPERATOR_OK;
-    AgentxxPluginStringView  payload = PluginStringView::from(nullptr, 0);
+    SyncJob*                job     = static_cast<SyncJob*>(ud);
+    int32_t                 st      = AGENTXX_PLUGIN_OPERATOR_OK;
+    AgentxxPluginStringView payload = PluginStringView::from(nullptr, 0);
 
     if (!PluginStringView::empty(error)) {
         st      = AGENTXX_PLUGIN_OPERATOR_FAILED;
@@ -2556,13 +2563,7 @@ inline void* AGENTXX_PLUGIN_CALL syncToolStart(
         job->tcid = PluginStringView::from(buf, tool_call_id->size);
     }
 
-    shim->sched->offload(
-        shim->host,
-        &job->cancelFlag,
-        &syncJobWork,
-        &syncJobDone,
-        job
-    );
+    shim->sched->offload(shim->host, &job->cancelFlag, &syncJobWork, &syncJobDone, job);
     return job;
 }
 
@@ -2572,7 +2573,7 @@ inline void AGENTXX_PLUGIN_CALL syncToolCancel(void* user_data, void* op) {
     if (!op) {
         return;
     }
-    SyncJob* job   = static_cast<SyncJob*>(op);
+    SyncJob* job    = static_cast<SyncJob*>(op);
     job->cancelFlag = 1;
 }
 
@@ -2847,32 +2848,34 @@ struct ToolRenderOutput {
 /// 注册基于回调函数的工具特化渲染器 (<key, 渲染func>)
 template<typename Fn>
 inline int32_t registerToolRenderer(
-    const AgentxxPluginHost*                           host,
-    const AgentxxClientUiIface*                        ui,
-    std::string_view                                   toolName,
-    Fn&&                                               fn,
+    const AgentxxPluginHost*                             host,
+    const AgentxxClientUiIface*                          ui,
+    std::string_view                                     toolName,
+    Fn&&                                                 fn,
     std::vector<std::unique_ptr<void, void (*)(void*)>>& shimStorage
 ) {
     if (!host || !ui || !ui->register_tool_renderer) {
         return -1;
     }
     using DecayedFn = std::decay_t<Fn>;
+
     struct RenderShim {
         const AgentxxPluginHost* host = nullptr;
         DecayedFn                fn;
     };
-    auto* shim = new RenderShim{host, std::forward<Fn>(fn)};
-    shimStorage.emplace_back(shim, [](void* p) { delete static_cast<RenderShim*>(p); });
 
-    auto renderCb = [](
-        void*                         user_data,
-        const AgentxxToolRenderInput* input,
-        AgentxxToolRenderOutput*      output
-    ) -> int32_t {
+    auto* shim = new RenderShim{host, std::forward<Fn>(fn)};
+    shimStorage.emplace_back(shim, [](void* p) {
+        delete static_cast<RenderShim*>(p);
+    });
+
+    auto renderCb
+        = [](void* user_data, const AgentxxToolRenderInput* input, AgentxxToolRenderOutput* output
+          ) -> int32_t {
         if (!user_data || !input || !output) {
             return -1;
         }
-        auto* shim = static_cast<RenderShim*>(user_data);
+        auto*           shim = static_cast<RenderShim*>(user_data);
         ToolRenderInput in{
             .toolCallId = PluginStringView::str(input->tool_call_id),
             .toolName   = PluginStringView::str(input->tool_name),

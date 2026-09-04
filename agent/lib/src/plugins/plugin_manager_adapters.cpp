@@ -39,10 +39,12 @@ PluginTool::PluginTool(
     },
     parameters_(neograph::json::object()),
     instance_(instance) {
-    spec_                 = spec;
-    spec_.name            = agentxx::plugin::PluginStringView::from(name_.data(), name_.size());
-    spec_.description     = agentxx::plugin::PluginStringView::from(description_.data(), description_.size());
-    spec_.parameters_json = agentxx::plugin::PluginStringView::from(parametersJson_.data(), parametersJson_.size());
+    spec_      = spec;
+    spec_.name = agentxx::plugin::PluginStringView::from(name_.data(), name_.size());
+    spec_.description
+        = agentxx::plugin::PluginStringView::from(description_.data(), description_.size());
+    spec_.parameters_json
+        = agentxx::plugin::PluginStringView::from(parametersJson_.data(), parametersJson_.size());
 
     if (!parametersJson_.empty()) {
         try {
@@ -98,14 +100,7 @@ asio::awaitable<std::string> PluginTool::execute_async(const neograph::json& arg
         auto argsSv = agentxx::plugin::PluginStringView::from(argsJson.data(), argsJson.size());
         auto sidSv  = agentxx::plugin::PluginStringView::from(sessionId.data(), sessionId.size());
         auto tcidSv = agentxx::plugin::PluginStringView::from(toolCallId.data(), toolCallId.size());
-        return spec.execute_start(
-            spec.user_data,
-            &argsSv,
-            &sidSv,
-            &tcidSv,
-            notify,
-            err
-        );
+        return spec.execute_start(spec.user_data, &argsSv, &sidSv, &tcidSv, notify, err);
     };
     drive.cancel = [spec, instKeep](void* op) {
         if (spec.execute_cancel) {
@@ -195,18 +190,12 @@ asio::awaitable<void> PluginMiddlewareHandle::dispatch(
     auto instKeep  = inst;
 
     plugin::OpDrive drive;
-    drive.start = [hook,
-                   instKeep,
-                   inputJson,
-                   point](const AgentxxPluginOperatorNotify* notify, AgentxxPluginString* err) -> void* {
+    drive.start = [hook, instKeep, inputJson, point](
+                      const AgentxxPluginOperatorNotify* notify,
+                      AgentxxPluginString*               err
+                  ) -> void* {
         auto inSv = agentxx::plugin::PluginStringView::from(inputJson.data(), inputJson.size());
-        return hook.start(
-            hook.ud,
-            point,
-            &inSv,
-            notify,
-            err
-        );
+        return hook.start(hook.ud, point, &inSv, notify, err);
     };
     drive.cancel = [hook](void* op) {
         if (hook.cancel) {
@@ -389,7 +378,8 @@ int PluginManager::registerGraphNodeType(
     PluginInstance*                       inst,
     const AgentxxPluginGraphNodeTypeSpec* spec
 ) {
-    if (!inst || !spec || agentxx::plugin::PluginStringView::empty(spec->type) || !spec->run_start) {
+    if (!inst || !spec || agentxx::plugin::PluginStringView::empty(spec->type)
+        || !spec->run_start) {
         return -1;
     }
     auto ctx = agentContext_.lock();
@@ -399,11 +389,7 @@ int PluginManager::registerGraphNodeType(
     }
     std::string type{spec->type.data, spec->type.size};
     if (ctx->graphRegistry->contains_type(type)) {
-        XX_LOGW(
-            "Plugin `{}` graph node type `{}` conflicts with existing type",
-            inst->name,
-            type
-        );
+        XX_LOGW("Plugin `{}` graph node type `{}` conflicts with existing type", inst->name, type);
         return -1;
     }
     auto shared = inst->self.lock();
@@ -437,7 +423,8 @@ int PluginManager::registerGraphNodeType(
     std::weak_ptr<PluginInstance> weakInst = shared;
     ctx->graphRegistry->register_type(
         type,
-        [weakInst, type](const std::string& name, const neograph::json& config, const neograph::graph::NodeContext&) {
+        [weakInst,
+         type](const std::string& name, const neograph::json& config, const neograph::graph::NodeContext&) {
             auto instPtr = weakInst.lock();
             if (!instPtr || !instPtr->enabled) {
                 throw std::runtime_error(
@@ -458,18 +445,15 @@ int PluginManager::registerGraphNodeType(
                 );
             }
             AgentxxPluginGraphNodeTypeSpec spec{};
-            spec.type              = agentxx::plugin::PluginStringView::from(type.data(), type.size());
-            spec.run_start         = reg->run_start;
-            spec.run_cancel        = reg->run_cancel;
-            spec.user_data         = reg->user_data;
-            spec.config_schema_json
-                = agentxx::plugin::PluginStringView::from(reg->config_schema_json.data(), reg->config_schema_json.size());
-            return std::make_unique<PluginGraphNode>(
-                name,
-                config.dump(),
-                instPtr,
-                spec
+            spec.type       = agentxx::plugin::PluginStringView::from(type.data(), type.size());
+            spec.run_start  = reg->run_start;
+            spec.run_cancel = reg->run_cancel;
+            spec.user_data  = reg->user_data;
+            spec.config_schema_json = agentxx::plugin::PluginStringView::from(
+                reg->config_schema_json.data(),
+                reg->config_schema_json.size()
             );
+            return std::make_unique<PluginGraphNode>(name, config.dump(), instPtr, spec);
         }
     );
     XX_LOGI("Plugin `{}` registered graph node type `{}`", inst->name, type);
@@ -537,7 +521,7 @@ int PluginManager::setGraphJson(PluginInstance* inst, AgentxxPluginStringView gr
 AgentxxPluginSubscription* PluginManager::subscribe(
     PluginInstance*         inst,
     AgentxxPluginStringView topic,
-    void (AGENTXX_PLUGIN_CALL *handler)(const AgentxxPluginStringView* event_json, void* ud),
+    void(AGENTXX_PLUGIN_CALL* handler)(const AgentxxPluginStringView* event_json, void* ud),
     void* ud
 ) {
     if (!inst || agentxx::plugin::PluginStringView::empty(&topic) || !handler) {
@@ -619,7 +603,9 @@ int PluginManager::publish(AgentxxPluginStringView topic, AgentxxPluginStringVie
     if (!fullTopic.starts_with("plugin.") && !fullTopic.starts_with("client.")) {
         fullTopic = "plugin." + fullTopic;
     }
-    std::string payload = agentxx::plugin::PluginStringView::empty(event_json) ? std::string("{}") : svToStr(event_json);
+    std::string payload = agentxx::plugin::PluginStringView::empty(event_json)
+                              ? std::string("{}")
+                              : svToStr(event_json);
     if (ioExecutor_) {
         asio::co_spawn(
             ioExecutor_,

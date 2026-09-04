@@ -24,10 +24,10 @@ class PluginGraphNode : public neograph::graph::GraphNode {
 public:
 
     PluginGraphNode(
-        std::string_view                           name,
-        std::string_view                           configJson,
-        std::shared_ptr<PluginInstance>            instance,
-        AgentxxPluginGraphNodeTypeSpec             spec
+        std::string_view                name,
+        std::string_view                configJson,
+        std::shared_ptr<PluginInstance> instance,
+        AgentxxPluginGraphNodeTypeSpec  spec
     );
 
     ~PluginGraphNode() override;
@@ -38,11 +38,11 @@ public:
 
 private:
 
-    std::string                       name_;
-    std::string                       configJson_;
-    std::string                       type_;
-    std::shared_ptr<PluginInstance>   instance_;
-    AgentxxPluginGraphNodeTypeSpec    spec_;
+    std::string                     name_;
+    std::string                     configJson_;
+    std::string                     type_;
+    std::shared_ptr<PluginInstance> instance_;
+    AgentxxPluginGraphNodeTypeSpec  spec_;
 };
 
 } // namespace plugin

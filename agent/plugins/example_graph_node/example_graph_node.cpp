@@ -52,7 +52,8 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_agent_g
         nullptr,
         [&]() -> const AgentxxPluginInfo* {
             static const AgentxxPluginInfo info{
-                AGENTXX_PLUGIN_API_VERSION, 0,
+                AGENTXX_PLUGIN_API_VERSION,
+                0,
                 agentxx::plugin::PluginStringView::fromCstr("example_graph_node"),
                 agentxx::plugin::PluginStringView::fromCstr("1.0.0"),
                 agentxx::plugin::PluginStringView::fromCstr(
@@ -156,19 +157,17 @@ void* AGENTXX_PLUGIN_CALL intentRouterRunStart(
 
     auto done = [&](const std::string& payload) {
         if (notify && notify->done) {
-            auto payloadSv = agentxx::plugin::PluginStringView::from(payload.data(), payload.size());
-            notify->done(
-                notify->host_ud,
-                AGENTXX_PLUGIN_OPERATOR_OK,
-                &payloadSv
-            );
+            auto payloadSv
+                = agentxx::plugin::PluginStringView::from(payload.data(), payload.size());
+            notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, &payloadSv);
         }
     };
 
     try {
-        auto state = neograph::json::parse(
-            std::string_view(state_json && state_json->data ? state_json->data : "{}", state_json ? static_cast<size_t>(state_json->size) : 0)
-        );
+        auto state    = neograph::json::parse(std::string_view(
+            state_json && state_json->data ? state_json->data : "{}",
+            state_json ? static_cast<size_t>(state_json->size) : 0
+        ));
         auto messages = stateMessages(state);
 
         // 解析 config: intents 枚举 + fallback
@@ -204,7 +203,7 @@ void* AGENTXX_PLUGIN_CALL intentRouterRunStart(
         std::string route;
         if (!intentChecked) {
             // 第一次: 识别意图
-            intentChecked = true;
+            intentChecked      = true;
             const auto content = normalizeIntent(lastAssistantContent(messages));
             route              = fallback;
             for (const auto& i : intents) {
@@ -215,10 +214,10 @@ void* AGENTXX_PLUGIN_CALL intentRouterRunStart(
             }
             // 命中意图时移除该纯意图消息 (避免污染后续 agent loop 上下文)
             if (route != fallback && messages.is_array() && !messages.empty()) {
-                auto origin = stateMessages(state);
-                messages = neograph::json::array();
-                const size_t n = origin.size();
-                bool removed = false;
+                auto origin          = stateMessages(state);
+                messages             = neograph::json::array();
+                const size_t n       = origin.size();
+                bool         removed = false;
                 for (size_t i = 0; i < n; ++i) {
                     const auto m = origin[static_cast<int>(i)];
                     if (!removed && m.is_object() && m.contains("role") && m["role"].is_string()
@@ -249,7 +248,7 @@ void* AGENTXX_PLUGIN_CALL intentRouterRunStart(
         }
 
         // 后续轮次: 等价 has_tool_calls 条件
-        route = lastAssistantHasToolCalls(messages) ? "tools" : "end";
+        route                     = lastAssistantHasToolCalls(messages) ? "tools" : "end";
         const std::string payload = fmt::format(
             R"({{"writes":[{{"channel":"__route__","value":{}}}]}})",
             neograph::json(route).dump()
@@ -258,23 +257,15 @@ void* AGENTXX_PLUGIN_CALL intentRouterRunStart(
         return nullptr;
     } catch (const std::exception& e) {
         if (notify && notify->done) {
-            std::string what = e.what();
-            auto errSv = agentxx::plugin::PluginStringView::from(what.data(), what.size());
-            notify->done(
-                notify->host_ud,
-                AGENTXX_PLUGIN_OPERATOR_FAILED,
-                &errSv
-            );
+            std::string what  = e.what();
+            auto        errSv = agentxx::plugin::PluginStringView::from(what.data(), what.size());
+            notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_FAILED, &errSv);
         }
         return nullptr;
     } catch (...) {
         if (notify && notify->done) {
             auto errSv = agentxx::plugin::PluginStringView::fromCstr("unknown intent_router error");
-            notify->done(
-                notify->host_ud,
-                AGENTXX_PLUGIN_OPERATOR_FAILED,
-                &errSv
-            );
+            notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_FAILED, &errSv);
         }
         return nullptr;
     }
@@ -301,12 +292,10 @@ void* AGENTXX_PLUGIN_CALL datetimeNodeRunStart(
     (void)error_out;
 
     try {
-        const auto now      = std::chrono::system_clock::now();
-        const auto nowT     = std::chrono::system_clock::to_time_t(now);
-        const auto nowMs    = std::chrono::duration_cast<std::chrono::milliseconds>(
-                                  now.time_since_epoch()
-        )
-                                  .count();
+        const auto now  = std::chrono::system_clock::now();
+        const auto nowT = std::chrono::system_clock::to_time_t(now);
+        const auto nowMs
+            = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
         std::tm tm{};
 #if XX_IS_WIN_D
         localtime_s(&tm, &nowT);
@@ -327,38 +316,25 @@ void* AGENTXX_PLUGIN_CALL datetimeNodeRunStart(
         neograph::json msgs = neograph::json::array();
         msgs.push_back(std::move(msg));
 
-        const std::string payload = fmt::format(
-            R"({{"writes":[{{"channel":"messages","value":{}}}]}})",
-            msgs.dump()
-        );
+        const std::string payload
+            = fmt::format(R"({{"writes":[{{"channel":"messages","value":{}}}]}})", msgs.dump());
         if (notify && notify->done) {
-            auto payloadSv = agentxx::plugin::PluginStringView::from(payload.data(), payload.size());
-            notify->done(
-                notify->host_ud,
-                AGENTXX_PLUGIN_OPERATOR_OK,
-                &payloadSv
-            );
+            auto payloadSv
+                = agentxx::plugin::PluginStringView::from(payload.data(), payload.size());
+            notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, &payloadSv);
         }
         return nullptr;
     } catch (const std::exception& e) {
         if (notify && notify->done) {
-            std::string what = e.what();
-            auto errSv = agentxx::plugin::PluginStringView::from(what.data(), what.size());
-            notify->done(
-                notify->host_ud,
-                AGENTXX_PLUGIN_OPERATOR_FAILED,
-                &errSv
-            );
+            std::string what  = e.what();
+            auto        errSv = agentxx::plugin::PluginStringView::from(what.data(), what.size());
+            notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_FAILED, &errSv);
         }
         return nullptr;
     } catch (...) {
         if (notify && notify->done) {
             auto errSv = agentxx::plugin::PluginStringView::fromCstr("unknown datetime_node error");
-            notify->done(
-                notify->host_ud,
-                AGENTXX_PLUGIN_OPERATOR_FAILED,
-                &errSv
-            );
+            notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_FAILED, &errSv);
         }
         return nullptr;
     }
@@ -422,10 +398,14 @@ static int modifyGraphToIntentFlow(AgentCtx& ctx, std::string& errOut) {
         channels = def["channels"];
     }
     if (!channels.contains("__route__")) {
-        channels["__route__"] = neograph::json{{"reducer", "overwrite"}};
+        channels["__route__"] = neograph::json{
+            {"reducer", "overwrite"}
+        };
     }
     if (!channels.contains("__intent_checked")) {
-        channels["__intent_checked"] = neograph::json{{"reducer", "overwrite"}};
+        channels["__intent_checked"] = neograph::json{
+            {"reducer", "overwrite"}
+        };
     }
     graph["channels"] = std::move(channels);
 
@@ -435,9 +415,9 @@ static int modifyGraphToIntentFlow(AgentCtx& ctx, std::string& errOut) {
         nodes = def["nodes"];
     }
     nodes["intent_router"] = neograph::json{
-        {"type",   "example_intent_router"},
-        {"intents", neograph::json::array({neograph::json("datetime"), neograph::json("normal")})},
-        {"fallback", "normal"},
+        {"type",     "example_intent_router"                                                      },
+        {"intents",  neograph::json::array({neograph::json("datetime"), neograph::json("normal")})},
+        {"fallback", "normal"                                                                     },
     };
     nodes["datetime_node"] = neograph::json{
         {"type", "example_datetime"},
@@ -446,25 +426,43 @@ static int modifyGraphToIntentFlow(AgentCtx& ctx, std::string& errOut) {
 
     // edges: 意图路由流程
     neograph::json edges = neograph::json::array();
-    edges.push_back(neograph::json{{"from", "__start__"}, {"to", "agent_start"}});
-    edges.push_back(neograph::json{{"from", "agent_start"}, {"to", "llm"}});
-    edges.push_back(neograph::json{{"from", "llm"}, {"to", "intent_router"}});
+    edges.push_back(neograph::json{
+        {"from", "__start__"  },
+        {"to",   "agent_start"}
+    });
+    edges.push_back(neograph::json{
+        {"from", "agent_start"},
+        {"to",   "llm"        }
+    });
+    edges.push_back(neograph::json{
+        {"from", "llm"          },
+        {"to",   "intent_router"}
+    });
     edges.push_back(neograph::json{
         {"from",      "intent_router"},
-        {"type",      "conditional"},
+        {"type",      "conditional"  },
         {"condition", "route_channel"},
         {"routes",
          neograph::json{
              {"datetime", "datetime_node"},
-             {"normal",   "llm"        },
-             {"tools",    "tools"      },
-             {"end",      "agent_end"  },
-             {"default",  "agent_end"  },
-         }},
+             {"normal", "llm"},
+             {"tools", "tools"},
+             {"end", "agent_end"},
+             {"default", "agent_end"},
+         }                           },
     });
-    edges.push_back(neograph::json{{"from", "tools"}, {"to", "llm"}});
-    edges.push_back(neograph::json{{"from", "datetime_node"}, {"to", "__end__"}});
-    edges.push_back(neograph::json{{"from", "agent_end"}, {"to", "__end__"}});
+    edges.push_back(neograph::json{
+        {"from", "tools"},
+        {"to",   "llm"  }
+    });
+    edges.push_back(neograph::json{
+        {"from", "datetime_node"},
+        {"to",   "__end__"      }
+    });
+    edges.push_back(neograph::json{
+        {"from", "agent_end"},
+        {"to",   "__end__"  }
+    });
     graph["edges"] = std::move(edges);
 
     const std::string newJson = graph.dump();
@@ -501,10 +499,10 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
             // 1. 注册意图识别节点类型
             {
                 AgentxxPluginGraphNodeTypeSpec spec{};
-                spec.type              = agentxx::plugin::PluginStringView::fromCstr("example_intent_router");
-                spec.run_start         = intentRouterRunStart;
-                spec.run_cancel        = nullptr;
-                spec.user_data         = ctx.get();
+                spec.type = agentxx::plugin::PluginStringView::fromCstr("example_intent_router");
+                spec.run_start          = intentRouterRunStart;
+                spec.run_cancel         = nullptr;
+                spec.user_data          = ctx.get();
                 spec.config_schema_json = agentxx::plugin::PluginStringView::fromCstr(
                     R"({"type":"object","properties":{"intents":{"type":"array","items":{"type":"string"}},"fallback":{"type":"string"}}})"
                 );
@@ -515,11 +513,12 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
             // 2. 注册时间输出节点类型
             {
                 AgentxxPluginGraphNodeTypeSpec spec{};
-                spec.type               = agentxx::plugin::PluginStringView::fromCstr("example_datetime");
-                spec.run_start          = datetimeNodeRunStart;
-                spec.run_cancel         = nullptr;
-                spec.user_data          = ctx.get();
-                spec.config_schema_json = agentxx::plugin::PluginStringView::fromCstr(R"({"type":"object"})");
+                spec.type       = agentxx::plugin::PluginStringView::fromCstr("example_datetime");
+                spec.run_start  = datetimeNodeRunStart;
+                spec.run_cancel = nullptr;
+                spec.user_data  = ctx.get();
+                spec.config_schema_json
+                    = agentxx::plugin::PluginStringView::fromCstr(R"({"type":"object"})");
                 if (ctx->iface.graph->register_node_type(host, &spec) != 0) {
                     return -1;
                 }

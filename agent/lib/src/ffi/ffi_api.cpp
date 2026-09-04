@@ -112,8 +112,7 @@ void AGENTXX_FFI_CALL agentxx_ffi_string_free(AgentxxString* str) {
     }
 }
 
-int32_t AGENTXX_FFI_CALL
-    agentxx_ffi_strdup_n(const AgentxxStringView* s, AgentxxString* out) {
+int32_t AGENTXX_FFI_CALL agentxx_ffi_strdup_n(const AgentxxStringView* s, AgentxxString* out) {
     if (out == nullptr) {
         return AGENTXX_FFI_ERR_INVALID;
     }
@@ -123,7 +122,7 @@ int32_t AGENTXX_FFI_CALL
         return AGENTXX_FFI_OK;
     }
     const uint64_t size = s->size;
-    auto* p = static_cast<char*>(agentxx_ffi_malloc(size + 1));
+    auto*          p    = static_cast<char*>(agentxx_ffi_malloc(size + 1));
     if (p == nullptr) {
         return AGENTXX_FFI_ERR_OOM;
     }
@@ -275,11 +274,8 @@ int32_t AGENTXX_FFI_CALL agentxx_ffi_destroy(AgentxxFFIAgent* a, AgentxxString* 
 // 会话交互 (异步)
 // ---------------------------------------------------------------------------
 
-int32_t AGENTXX_FFI_CALL agentxx_ffi_send_input(
-    AgentxxFFIAgent*         a,
-    const AgentxxStringView* text,
-    AgentxxString*           log
-) {
+int32_t AGENTXX_FFI_CALL
+    agentxx_ffi_send_input(AgentxxFFIAgent* a, const AgentxxStringView* text, AgentxxString* log) {
     if (a == nullptr || !a->impl) {
         return ffiFail(AGENTXX_FFI_ERR_INVALID, "null handle", log);
     }
@@ -374,11 +370,8 @@ int32_t AGENTXX_FFI_CALL agentxx_ffi_switch_session(
 // 同步查询
 // ---------------------------------------------------------------------------
 
-int32_t AGENTXX_FFI_CALL agentxx_ffi_get_model_info(
-    AgentxxFFIAgent* a,
-    AgentxxString*   out,
-    AgentxxString*   log
-) {
+int32_t AGENTXX_FFI_CALL
+    agentxx_ffi_get_model_info(AgentxxFFIAgent* a, AgentxxString* out, AgentxxString* log) {
     if (out == nullptr) {
         return ffiFail(AGENTXX_FFI_ERR_INVALID, "null out pointer", log);
     }
@@ -401,11 +394,8 @@ int32_t AGENTXX_FFI_CALL agentxx_ffi_get_model_info(
     return AGENTXX_FFI_OK;
 }
 
-int32_t AGENTXX_FFI_CALL agentxx_ffi_get_context_messages(
-    AgentxxFFIAgent* a,
-    AgentxxString*   out,
-    AgentxxString*   log
-) {
+int32_t AGENTXX_FFI_CALL
+    agentxx_ffi_get_context_messages(AgentxxFFIAgent* a, AgentxxString* out, AgentxxString* log) {
     if (out == nullptr) {
         return ffiFail(AGENTXX_FFI_ERR_INVALID, "null out pointer", log);
     }
@@ -428,11 +418,8 @@ int32_t AGENTXX_FFI_CALL agentxx_ffi_get_context_messages(
     return AGENTXX_FFI_OK;
 }
 
-int32_t AGENTXX_FFI_CALL agentxx_ffi_list_sessions(
-    AgentxxFFIAgent* a,
-    AgentxxString*   out,
-    AgentxxString*   log
-) {
+int32_t AGENTXX_FFI_CALL
+    agentxx_ffi_list_sessions(AgentxxFFIAgent* a, AgentxxString* out, AgentxxString* log) {
     if (out == nullptr) {
         return ffiFail(AGENTXX_FFI_ERR_INVALID, "null out pointer", log);
     }
@@ -481,11 +468,8 @@ int32_t AGENTXX_FFI_CALL agentxx_ffi_interrupt_respond(
 // 日志
 // ---------------------------------------------------------------------------
 
-int32_t AGENTXX_FFI_CALL agentxx_ffi_drain_logs(
-    AgentxxFFIAgent* a,
-    AgentxxString*   out,
-    AgentxxString*   log
-) {
+int32_t AGENTXX_FFI_CALL
+    agentxx_ffi_drain_logs(AgentxxFFIAgent* a, AgentxxString* out, AgentxxString* log) {
     if (out == nullptr) {
         return ffiFail(AGENTXX_FFI_ERR_INVALID, "null out pointer", log);
     }

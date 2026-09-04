@@ -121,7 +121,8 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_agent_g
         nullptr,
         [&]() -> const AgentxxPluginInfo* {
             static const AgentxxPluginInfo info{
-                AGENTXX_PLUGIN_API_VERSION, 0,
+                AGENTXX_PLUGIN_API_VERSION,
+                0,
                 agentxx::plugin::PluginStringView::fromCstr("agentxx_execute_command"),
                 agentxx::plugin::PluginStringView::fromCstr("1.0.0"),
                 agentxx::plugin::PluginStringView::fromCstr(
@@ -175,14 +176,19 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                     auto isCancelled = [&c, tid, cancel_flag]() -> bool {
                         if (cancel_flag && *cancel_flag != 0)
                             return true;
-                        return c.sessionCancelled(agentxx::plugin::PluginStringView::from(tid.data(), tid.size()));
+                        return c.sessionCancelled(
+                            agentxx::plugin::PluginStringView::from(tid.data(), tid.size())
+                        );
                     };
                     StoreFn storeFn = nullptr;
                     if (!tid.empty() && c.iface.session && c.iface.session->add_share_store) {
                         std::string tidCopy(tid);
                         storeFn = [&c, tidCopy](std::string_view content) -> long long {
                             return c.addShareStore(
-                                agentxx::plugin::PluginStringView::from(tidCopy.data(), tidCopy.size()),
+                                agentxx::plugin::PluginStringView::from(
+                                    tidCopy.data(),
+                                    tidCopy.size()
+                                ),
                                 content
                             );
                         };
@@ -230,14 +236,19 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                     auto isCancelled = [&c, tid, cancel_flag]() -> bool {
                         if (cancel_flag && *cancel_flag != 0)
                             return true;
-                        return c.sessionCancelled(agentxx::plugin::PluginStringView::from(tid.data(), tid.size()));
+                        return c.sessionCancelled(
+                            agentxx::plugin::PluginStringView::from(tid.data(), tid.size())
+                        );
                     };
                     StoreFn storeFn = nullptr;
                     if (!tid.empty() && c.iface.session && c.iface.session->add_share_store) {
                         std::string tidCopy(tid);
                         storeFn = [&c, tidCopy](std::string_view content) -> long long {
                             return c.addShareStore(
-                                agentxx::plugin::PluginStringView::from(tidCopy.data(), tidCopy.size()),
+                                agentxx::plugin::PluginStringView::from(
+                                    tidCopy.data(),
+                                    tidCopy.size()
+                                ),
                                 content
                             );
                         };
@@ -269,14 +280,19 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                     auto isCancelled = [&c, tid, cancel_flag]() -> bool {
                         if (cancel_flag && *cancel_flag != 0)
                             return true;
-                        return c.sessionCancelled(agentxx::plugin::PluginStringView::from(tid.data(), tid.size()));
+                        return c.sessionCancelled(
+                            agentxx::plugin::PluginStringView::from(tid.data(), tid.size())
+                        );
                     };
                     StoreFn storeFn = nullptr;
                     if (!tid.empty() && c.iface.session && c.iface.session->add_share_store) {
                         std::string tidCopy(tid);
                         storeFn = [&c, tidCopy](std::string_view content) -> long long {
                             return c.addShareStore(
-                                agentxx::plugin::PluginStringView::from(tidCopy.data(), tidCopy.size()),
+                                agentxx::plugin::PluginStringView::from(
+                                    tidCopy.data(),
+                                    tidCopy.size()
+                                ),
                                 content
                             );
                         };
@@ -324,14 +340,19 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                     auto isCancelled = [&c, tid, cancel_flag]() -> bool {
                         if (cancel_flag && *cancel_flag != 0)
                             return true;
-                        return c.sessionCancelled(agentxx::plugin::PluginStringView::from(tid.data(), tid.size()));
+                        return c.sessionCancelled(
+                            agentxx::plugin::PluginStringView::from(tid.data(), tid.size())
+                        );
                     };
                     StoreFn storeFn = nullptr;
                     if (!tid.empty() && c.iface.session && c.iface.session->add_share_store) {
                         std::string tidCopy(tid);
                         storeFn = [&c, tidCopy](std::string_view content) -> long long {
                             return c.addShareStore(
-                                agentxx::plugin::PluginStringView::from(tidCopy.data(), tidCopy.size()),
+                                agentxx::plugin::PluginStringView::from(
+                                    tidCopy.data(),
+                                    tidCopy.size()
+                                ),
                                 content
                             );
                         };
@@ -380,7 +401,9 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxClientPluginInfo* agentxx_plugin_c
         0,
         agentxx::plugin::PluginStringView::fromCstr("agentxx_execute_command"),
         agentxx::plugin::PluginStringView::fromCstr("1.0.0"),
-        agentxx::plugin::PluginStringView::fromCstr("Command execution tools specialized UI renderer"),
+        agentxx::plugin::PluginStringView::fromCstr(
+            "Command execution tools specialized UI renderer"
+        ),
     };
     return &info;
 }

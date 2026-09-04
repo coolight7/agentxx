@@ -190,7 +190,7 @@ bool FfiAgentRuntime::buildConfigs(
 
     // ---- 顶层配置 (config_json) ----
     neograph::json cfgJ;
-    auto cfgSv = toSv(config_json);
+    auto           cfgSv = toSv(config_json);
     if (!cfgSv.empty()) {
         try {
             cfgJ = neograph::json::parse(cfgSv);
@@ -262,7 +262,7 @@ bool FfiAgentRuntime::buildConfigs(
 
     // ---- 模型配置 (model_json 优先, 其次 config_json.model) ----
     neograph::json mj;
-    auto modelSv = toSv(model_json);
+    auto           modelSv = toSv(model_json);
     if (!modelSv.empty()) {
         try {
             mj = neograph::json::parse(modelSv);
@@ -797,8 +797,8 @@ int FfiAgentRuntime::interruptRespond(
         err = fmt::format("中断 #{} 不存在、已应答或已过期", interruptId);
         return AGENTXX_FFI_ERR_INTERRUPT;
     }
-    neograph::json val = neograph::json::array();
-    auto valSv = toSv(valuesJson);
+    neograph::json val   = neograph::json::array();
+    auto           valSv = toSv(valuesJson);
     if (!valSv.empty()) {
         try {
             val = neograph::json::parse(valSv);

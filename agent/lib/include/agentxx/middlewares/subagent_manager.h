@@ -32,9 +32,7 @@ class SubagentManagerMiddlewareHandle
     : public BaseMiddlewareHandle<_SubagentManagerMiddlewareState> {
 public:
 
-    SubagentManagerMiddlewareHandle(
-        std::weak_ptr<agentxx::agent::AgentContext> in_agentContext
-    );
+    SubagentManagerMiddlewareHandle(std::weak_ptr<agentxx::agent::AgentContext> in_agentContext);
 
     ~SubagentManagerMiddlewareHandle() override;
 

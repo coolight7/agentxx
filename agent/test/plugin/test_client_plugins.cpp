@@ -435,10 +435,10 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         const auto wire = agentxx::plugin::ClientIfaces::query(&inst->host).wire;
         XX_TEST_EXPECT_TRUE(wire != nullptr && wire->send_plugin_data != nullptr);
         int rc = wire ? wire->send_plugin_data(
-                     &inst->host,
-                     agentxx::plugin::PluginStringView::fromCstr("rebuild"),
-                     agentxx::plugin::PluginStringView::fromCstr(R"({"x":1})")
-                 )
+                            &inst->host,
+                            agentxx::plugin::PluginStringView::fromCstr("rebuild"),
+                            agentxx::plugin::PluginStringView::fromCstr(R"({"x":1})")
+                        )
                       : -1;
         XX_TEST_EXPECT_EQ(rc, 0);
     }
@@ -825,11 +825,11 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 };
                 const auto events11 = agentxx::plugin::ClientIfaces::query(&okInst->host).events;
                 auto       sub      = events11 ? events11->subscribe(
-                               &okInst->host,
-                               AGENTXX_CLIENT_EVT_READY,
-                               readyFn,
-                               &readyPayload
-                           )
+                                          &okInst->host,
+                                          AGENTXX_CLIENT_EVT_READY,
+                                          readyFn,
+                                          &readyPayload
+                                      )
                                                : nullptr;
                 XX_TEST_EXPECT_TRUE(sub != nullptr);
                 mgr->onReady();
@@ -1154,7 +1154,10 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             XX_TEST_EXPECT_EQ(editRes.items.size(), 1U);
             if (!editRes.items.empty()) {
                 XX_TEST_EXPECT_EQ(editRes.items[0].value("kind", std::string{}), "diff");
-                XX_TEST_EXPECT_EQ(editRes.items[0].value("path", std::string{}), "/home/user/b.cpp");
+                XX_TEST_EXPECT_EQ(
+                    editRes.items[0].value("path", std::string{}),
+                    "/home/user/b.cpp"
+                );
                 XX_TEST_EXPECT_EQ(editRes.items[0].value("old_str", std::string{}), "foo");
                 XX_TEST_EXPECT_EQ(editRes.items[0].value("new_str", std::string{}), "bar");
             }

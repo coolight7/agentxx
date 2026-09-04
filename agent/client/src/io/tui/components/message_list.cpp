@@ -745,8 +745,8 @@ size_t MessageListComponent::estimateHeight(size_t index, int width) {
                 if (msg.collapsed) {
                     return 1 + 1; // header 行 + 空行
                 }
-                const bool finished = msg.tool && msg.tool->toolFinished;
-                const bool isError  = finished && isToolResultError(msg.tool->toolResult);
+                const bool finished  = msg.tool && msg.tool->toolFinished;
+                const bool isError   = finished && isToolResultError(msg.tool->toolResult);
                 auto       renderRes = agentxx::plugin::renderClientTool(
                     st.pluginRegistry.get(),
                     msg.tool ? msg.tool->toolCallId : "",
@@ -783,12 +783,13 @@ size_t MessageListComponent::estimateHeight(size_t index, int width) {
                                 }
                                 decorLines += rmLines * 3 + 3;
                             } else if (kind == "diff") {
-                                const auto path   = it.value("path", std::string{});
-                                const auto oldStr = it.value("old_str", std::string{});
-                                const auto newStr = it.value("new_str", std::string{});
-                                const auto diff   = agentxx::util::computeLineDiff(oldStr, newStr);
-                                const bool sideBySide  = ftxui::Terminal::Size().dimx >= 100;
-                                const size_t diffLines = sideBySide ? (diff.size() / 2 + 1) : diff.size();
+                                const auto   path   = it.value("path", std::string{});
+                                const auto   oldStr = it.value("old_str", std::string{});
+                                const auto   newStr = it.value("new_str", std::string{});
+                                const auto   diff = agentxx::util::computeLineDiff(oldStr, newStr);
+                                const bool   sideBySide = ftxui::Terminal::Size().dimx >= 100;
+                                const size_t diffLines
+                                    = sideBySide ? (diff.size() / 2 + 1) : diff.size();
                                 decorLines += (!path.empty() ? 1 : 0) + diffLines;
                             }
                         }
@@ -1494,9 +1495,8 @@ Element MessageListComponent::buildMessageBlock(
                     }
                 } else {
                     // 已完成无特化摘要回退: 展示结果预览
-                    const int budget
-                        = collapsedPreviewBudget(maxWidth, 9 + nameCols + 1); // " "
-                    auto resPreview
+                    const int budget = collapsedPreviewBudget(maxWidth, 9 + nameCols + 1); // " "
+                    auto      resPreview
                         = oneLinePreview(msg.tool->toolResult, static_cast<size_t>(budget));
                     if (!resPreview.empty()) {
                         resOrArgsSummary = " " + std::move(resPreview);
@@ -1527,9 +1527,10 @@ Element MessageListComponent::buildMessageBlock(
                 }
             } else {
                 // 展开头: 动态装饰显示名优先, 否则回退原始 toolName
-                const auto& shownName = (renderRes.matched && renderRes.isDecor && !renderRes.displayName.empty())
-                                            ? renderRes.displayName
-                                            : msg.tool->toolName;
+                const auto& shownName
+                    = (renderRes.matched && renderRes.isDecor && !renderRes.displayName.empty())
+                          ? renderRes.displayName
+                          : msg.tool->toolName;
                 if (!finished) {
                     header.push_back(text(shownName) | color(theme.accentColor) | bold);
                 } else {

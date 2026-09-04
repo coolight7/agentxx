@@ -54,13 +54,7 @@ inline void logTo(
     std::string_view             pluginName,
     std::string_view             msg
 ) noexcept {
-    logTo(
-        host,
-        logIf,
-        level,
-        PluginStringView::from(pluginName),
-        PluginStringView::from(msg)
-    );
+    logTo(host, logIf, level, PluginStringView::from(pluginName), PluginStringView::from(msg));
 }
 
 inline void logTo(
@@ -111,13 +105,7 @@ inline void logTo(
     std::string_view             pluginName,
     std::string_view             msg
 ) noexcept {
-    logTo(
-        host,
-        logIf,
-        level,
-        PluginStringView::from(pluginName),
-        PluginStringView::from(msg)
-    );
+    logTo(host, logIf, level, PluginStringView::from(pluginName), PluginStringView::from(msg));
 }
 
 inline void logTo(

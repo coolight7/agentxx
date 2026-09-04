@@ -79,8 +79,9 @@ typedef struct AgentxxToolRenderInput {
 
 typedef struct AgentxxToolRenderOutput {
     AgentxxPluginString displayName; ///< 显示名 (如 "Read", "Edit", "Bash", 空则回退原始 toolName)
-    AgentxxPluginString summary;     ///< 一行摘要 (如 " · [0, 100] /path/file", 可带或不带前导 " · ")
-    AgentxxPluginString items_json;  ///< 展开体 items JSON 数组 (可选, 空则走默认 args/result 展示; 支持 text/button/diagram/separator/diff)
+    AgentxxPluginString summary; ///< 一行摘要 (如 " · [0, 100] /path/file", 可带或不带前导 " · ")
+    AgentxxPluginString items_json; ///< 展开体 items JSON 数组 (可选, 空则走默认 args/result 展示;
+                                    ///< 支持 text/button/diagram/separator/diff)
 } AgentxxToolRenderOutput;
 
 typedef int32_t(AGENTXX_PLUGIN_CALL* AgentxxToolRenderFn)(
@@ -90,11 +91,11 @@ typedef int32_t(AGENTXX_PLUGIN_CALL* AgentxxToolRenderFn)(
 );
 
 typedef struct AgentxxToolRenderSpec {
-    int32_t                 version;       ///< 结构体版本 (必须 == 1)
-    uint32_t                _reserved;     ///< 8 字节对齐
-    AgentxxPluginStringView tool_name;     ///< 目标工具名 (必填, 如 "agentxx_filesystem_read")
-    AgentxxToolRenderFn     render_fn;     ///< 渲染回调 (可为 NULL; 非空时优先调用)
-    void*                   user_data;     ///< 回调上下文 (render_fn 非空时有效)
+    int32_t                 version;   ///< 结构体版本 (必须 == 1)
+    uint32_t                _reserved; ///< 8 字节对齐
+    AgentxxPluginStringView tool_name; ///< 目标工具名 (必填, 如 "agentxx_filesystem_read")
+    AgentxxToolRenderFn     render_fn; ///< 渲染回调 (可为 NULL; 非空时优先调用)
+    void*                   user_data; ///< 回调上下文 (render_fn 非空时有效)
     AgentxxPluginStringView template_json; ///< 预设模版 JSON (render_fn 为 NULL 时由宿主解析执行)
 } AgentxxToolRenderSpec;
 
@@ -236,7 +237,8 @@ typedef struct AgentxxClientUiIface {
     /// 注册工具特化渲染器 (按 tool_name 键控):
     /// - 宿主在渲染该工具消息 (折叠头/展开体) 时调用, 无论实时流式还是历史消息
     /// - 支持两种模式:
-    ///   1. <key, render_fn>: spec->render_fn != NULL, 宿主回调该函数输出 displayName/summary/items_json
+    ///   1. <key, render_fn>: spec->render_fn != NULL, 宿主回调该函数输出
+    ///   displayName/summary/items_json
     ///   2. 预设模版: spec->render_fn == NULL 且 template_json 非空,
     ///      宿主按模版自动提取参数字段并格式化 (如 {"displayName":"Search","summaryKey":"query"})
     /// - 展开体 items_json 支持新增的 {"kind":"diff","path":"...","old_str":"...","new_str":"..."}

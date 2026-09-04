@@ -34,12 +34,13 @@ namespace plugin {
 
 // 本地错误串写入助手 (与 plugin_manager_capability.cpp 的 setErrOut 同构;
 // 跨 TU 静态函数不可见, 故各自持一份)
-static void setTaskErrOut(PluginInstance* inst, AgentxxPluginString* error_out, const std::string& msg) {
+static void
+    setTaskErrOut(PluginInstance* inst, AgentxxPluginString* error_out, const std::string& msg) {
     if (!error_out || error_out->data) {
         return;
     }
     const AgentxxPluginHost* host = inst ? &inst->host : nullptr;
-    *error_out = agentxx::plugin::PluginString::from(host, strToSv(msg));
+    *error_out                    = agentxx::plugin::PluginString::from(host, strToSv(msg));
     if (!error_out->data) {
         auto* p = static_cast<char*>(hostMemoryAlloc(msg.size() + 1));
         if (p) {
@@ -80,7 +81,7 @@ AgentxxPluginOperatorHandle* PluginManager::registerTask(
 
     // 1. 句柄登记 (与工具 op 同列表, detachAll 统一取消; 生命周期由清理协程
     //    托管 —— 清理协程持 handle shared_ptr, detachAll 只丢列表不销毁)
-    auto handle = std::make_shared<AgentxxPluginOperatorHandle>();
+    auto handle    = std::make_shared<AgentxxPluginOperatorHandle>();
     handle->caller = inst;
     inst->outstandingOps.push_back(handle);
 

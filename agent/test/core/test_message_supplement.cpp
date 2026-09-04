@@ -575,10 +575,10 @@ static void runRepairDanglingScenario(
     bool        expectFollowUpKept
 ) {
     // ---- 构造 AgentContext ----
-    auto ctx          = std::make_shared<agentxx::agent::AgentContext>();
-    ctx->agentConfig  = std::make_shared<agentxx::agent::AgentConfig>();
+    auto ctx                         = std::make_shared<agentxx::agent::AgentContext>();
+    ctx->agentConfig                 = std::make_shared<agentxx::agent::AgentConfig>();
     ctx->agentConfig->repairMessages = true;
-    ctx->middlewareHandleContext = std::make_shared<agentxx::middleware::MiddlewareContext>();
+    ctx->middlewareHandleContext     = std::make_shared<agentxx::middleware::MiddlewareContext>();
 
     // ---- 构造 ModelCallWrapNode ----
     neograph::graph::NodeContext nodeCtx;
@@ -588,8 +588,14 @@ static void runRepairDanglingScenario(
     // ---- 构造 state: 悬挂上下文 ----
     // [system, user, assistant(tool_calls=[call_a..]), tool(已回复)xN, <followUp>]
     neograph::json msgs = neograph::json::array();
-    msgs.push_back(neograph::json{{"role", "system"}, {"content", "sys"}});
-    msgs.push_back(neograph::json{{"role", "user"}, {"content", "hello"}});
+    msgs.push_back(neograph::json{
+        {"role",    "system"},
+        {"content", "sys"   }
+    });
+    msgs.push_back(neograph::json{
+        {"role",    "user" },
+        {"content", "hello"}
+    });
 
     auto toolCalls = neograph::json::array();
     for (size_t i = 0; i < danglingCount; ++i) {
@@ -600,8 +606,8 @@ static void runRepairDanglingScenario(
         });
     }
     msgs.push_back(neograph::json{
-        {"role", "assistant"},
-        {"content", "calling tools"},
+        {"role",       "assistant"         },
+        {"content",    "calling tools"     },
         {"tool_calls", std::move(toolCalls)},
     });
     for (size_t i = 0; i < repliedCount; ++i) {
@@ -613,7 +619,10 @@ static void runRepairDanglingScenario(
         });
     }
     if (!followUpRole.empty()) {
-        msgs.push_back(neograph::json{{"role", followUpRole}, {"content", "next"}});
+        msgs.push_back(neograph::json{
+            {"role",    followUpRole},
+            {"content", "next"      }
+        });
     }
 
     neograph::graph::GraphState state;
@@ -654,7 +663,9 @@ static void runRepairDanglingScenario(
 
     // 孤儿 tool 结果: 应被删除 (除非未清理)
     if (expectOrphanRemoved) {
-        XX_TEST_EXPECT_TRUE(idx >= resultMsgs.size() || resultMsgs[idx].role != std::string{"tool"});
+        XX_TEST_EXPECT_TRUE(
+            idx >= resultMsgs.size() || resultMsgs[idx].role != std::string{"tool"}
+        );
     } else {
         // 未清理时孤儿结果仍在 (正常路径: 全部 tool_call 都有回复, 不悬挂)
         XX_TEST_EXPECT_TRUE(idx < resultMsgs.size());
@@ -723,10 +734,10 @@ asio::awaitable<void> test_repair_all_replied_no_cleanup() {
 /// - 两组都 allReplied → 不悬挂 → 全部保留
 asio::awaitable<void> test_repair_multiple_complete_groups_kept() {
     // ---- 构造 AgentContext / Node ----
-    auto ctx          = std::make_shared<agentxx::agent::AgentContext>();
-    ctx->agentConfig  = std::make_shared<agentxx::agent::AgentConfig>();
+    auto ctx                         = std::make_shared<agentxx::agent::AgentContext>();
+    ctx->agentConfig                 = std::make_shared<agentxx::agent::AgentConfig>();
     ctx->agentConfig->repairMessages = true;
-    ctx->middlewareHandleContext = std::make_shared<agentxx::middleware::MiddlewareContext>();
+    ctx->middlewareHandleContext     = std::make_shared<agentxx::middleware::MiddlewareContext>();
 
     neograph::graph::NodeContext nodeCtx;
     nodeCtx.model = "test-model";
@@ -734,41 +745,49 @@ asio::awaitable<void> test_repair_multiple_complete_groups_kept() {
 
     // ---- 构造 state ----
     neograph::json msgs = neograph::json::array();
-    msgs.push_back(neograph::json{{"role", "system"}, {"content", "sys"}});
-    msgs.push_back(neograph::json{{"role", "user"}, {"content", "hello"}});
     msgs.push_back(neograph::json{
-        {"role", "assistant"},
-        {"content", "group 1"},
-        {"tool_calls", neograph::json::array({
-            neograph::json{
-                {"id", "call_a"},
-                {"type", "function"},
-                {"function", neograph::json{{"name", "tool_a"}, {"arguments", "{}"}}},
-            },
-        })},
+        {"role",    "system"},
+        {"content", "sys"   }
     });
     msgs.push_back(neograph::json{
-        {"role", "tool"},
-        {"content", "result"},
+        {"role",    "user" },
+        {"content", "hello"}
+    });
+    msgs.push_back(neograph::json{
+        {"role",       "assistant"},
+        {"content",    "group 1"  },
+        {"tool_calls",
+         neograph::json::array({
+             neograph::json{
+                 {"id", "call_a"},
+                 {"type", "function"},
+                 {"function", neograph::json{{"name", "tool_a"}, {"arguments", "{}"}}},
+             },
+         })                       },
+    });
+    msgs.push_back(neograph::json{
+        {"role",         "tool"  },
+        {"content",      "result"},
         {"tool_call_id", "call_a"},
-        {"tool_name", "tool_a"},
+        {"tool_name",    "tool_a"},
     });
     msgs.push_back(neograph::json{
-        {"role", "assistant"},
-        {"content", "group 2"},
-        {"tool_calls", neograph::json::array({
-            neograph::json{
-                {"id", "call_b"},
-                {"type", "function"},
-                {"function", neograph::json{{"name", "tool_b"}, {"arguments", "{}"}}},
-            },
-        })},
+        {"role",       "assistant"},
+        {"content",    "group 2"  },
+        {"tool_calls",
+         neograph::json::array({
+             neograph::json{
+                 {"id", "call_b"},
+                 {"type", "function"},
+                 {"function", neograph::json{{"name", "tool_b"}, {"arguments", "{}"}}},
+             },
+         })                       },
     });
     msgs.push_back(neograph::json{
-        {"role", "tool"},
-        {"content", "result"},
+        {"role",         "tool"  },
+        {"content",      "result"},
         {"tool_call_id", "call_b"},
-        {"tool_name", "tool_b"},
+        {"tool_name",    "tool_b"},
     });
 
     neograph::graph::GraphState state;
@@ -813,58 +832,66 @@ asio::awaitable<void> test_repair_multiple_complete_groups_kept() {
 /// - 新逻辑: 中间组 call_b 悬挂 → 清空 call_a/call_b 声明 + 删除孤儿 tool(call_a)
 /// - 后面的完整组 (call_c) 保留
 asio::awaitable<void> test_repair_middle_dangling_group_fixed() {
-    auto ctx          = std::make_shared<agentxx::agent::AgentContext>();
-    ctx->agentConfig  = std::make_shared<agentxx::agent::AgentConfig>();
+    auto ctx                         = std::make_shared<agentxx::agent::AgentContext>();
+    ctx->agentConfig                 = std::make_shared<agentxx::agent::AgentConfig>();
     ctx->agentConfig->repairMessages = true;
-    ctx->middlewareHandleContext = std::make_shared<agentxx::middleware::MiddlewareContext>();
+    ctx->middlewareHandleContext     = std::make_shared<agentxx::middleware::MiddlewareContext>();
 
     neograph::graph::NodeContext nodeCtx;
     nodeCtx.model = "test-model";
     agentxx::nodes::ModelCallWrapNode node("test_llm", nodeCtx, ctx);
 
     neograph::json msgs = neograph::json::array();
-    msgs.push_back(neograph::json{{"role", "system"}, {"content", "sys"}});
-    msgs.push_back(neograph::json{{"role", "user"}, {"content", "hello"}});
-    // 中间悬挂组: call_a 有结果, call_b 无结果
     msgs.push_back(neograph::json{
-        {"role", "assistant"},
-        {"content", "group 1"},
-        {"tool_calls", neograph::json::array({
-            neograph::json{
-                {"id", "call_a"},
-                {"type", "function"},
-                {"function", neograph::json{{"name", "tool_a"}, {"arguments", "{}"}}},
-            },
-            neograph::json{
-                {"id", "call_b"},
-                {"type", "function"},
-                {"function", neograph::json{{"name", "tool_b"}, {"arguments", "{}"}}},
-            },
-        })},
+        {"role",    "system"},
+        {"content", "sys"   }
     });
     msgs.push_back(neograph::json{
-        {"role", "tool"},
-        {"content", "result"},
+        {"role",    "user" },
+        {"content", "hello"}
+    });
+    // 中间悬挂组: call_a 有结果, call_b 无结果
+    msgs.push_back(neograph::json{
+        {"role",       "assistant"},
+        {"content",    "group 1"  },
+        {"tool_calls",
+         neograph::json::array({
+             neograph::json{
+                 {"id", "call_a"},
+                 {"type", "function"},
+                 {"function", neograph::json{{"name", "tool_a"}, {"arguments", "{}"}}},
+             },
+             neograph::json{
+                 {"id", "call_b"},
+                 {"type", "function"},
+                 {"function", neograph::json{{"name", "tool_b"}, {"arguments", "{}"}}},
+             },
+         })                       },
+    });
+    msgs.push_back(neograph::json{
+        {"role",         "tool"  },
+        {"content",      "result"},
         {"tool_call_id", "call_a"},
-        {"tool_name", "tool_a"},
+        {"tool_name",    "tool_a"},
     });
     // 后面的完整组
     msgs.push_back(neograph::json{
-        {"role", "assistant"},
-        {"content", "group 2"},
-        {"tool_calls", neograph::json::array({
-            neograph::json{
-                {"id", "call_c"},
-                {"type", "function"},
-                {"function", neograph::json{{"name", "tool_c"}, {"arguments", "{}"}}},
-            },
-        })},
+        {"role",       "assistant"},
+        {"content",    "group 2"  },
+        {"tool_calls",
+         neograph::json::array({
+             neograph::json{
+                 {"id", "call_c"},
+                 {"type", "function"},
+                 {"function", neograph::json{{"name", "tool_c"}, {"arguments", "{}"}}},
+             },
+         })                       },
     });
     msgs.push_back(neograph::json{
-        {"role", "tool"},
-        {"content", "result"},
+        {"role",         "tool"  },
+        {"content",      "result"},
         {"tool_call_id", "call_c"},
-        {"tool_name", "tool_c"},
+        {"tool_name",    "tool_c"},
     });
 
     neograph::graph::GraphState state;

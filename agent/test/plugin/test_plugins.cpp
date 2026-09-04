@@ -892,20 +892,20 @@ asio::awaitable<TestResult> run_plugin_tests() {
             XX_TEST_EXPECT_TRUE(ev30 != nullptr && ev30->publish != nullptr);
             XX_TEST_EXPECT_EQ(
                 ev30 ? ev30->publish(
-                    &inst30->host,
-                    agentxx::plugin::PluginStringView::fromCstr("demo.topic"),
-                    agentxx::plugin::PluginStringView::fromCstr(R"({"k":"v"})")
-                )
+                           &inst30->host,
+                           agentxx::plugin::PluginStringView::fromCstr("demo.topic"),
+                           agentxx::plugin::PluginStringView::fromCstr(R"({"k":"v"})")
+                       )
                      : -1,
                 0
             );
             ctx->pluginManager->disable("example_plugin");
             // 禁用状态: 接口表 publish 拒绝 (返回非 0)
             int rc = ev30 ? ev30->publish(
-                         &inst30->host,
-                         agentxx::plugin::PluginStringView::fromCstr("demo.topic"),
-                         agentxx::plugin::PluginStringView::fromCstr(R"({"k":"v"})")
-                     )
+                                &inst30->host,
+                                agentxx::plugin::PluginStringView::fromCstr("demo.topic"),
+                                agentxx::plugin::PluginStringView::fromCstr(R"({"k":"v"})")
+                            )
                           : -1;
             XX_TEST_EXPECT_TRUE(rc != 0);
             co_await ctx->pluginManager->unloadAsync("example_plugin");
@@ -1158,9 +1158,9 @@ asio::awaitable<TestResult> run_plugin_tests() {
                                   AgentxxPluginString*) -> AgentxxPluginString {
                 throw std::runtime_error("shim boom");
             };
-            shimJob.shim.host              = nullptr; ///< host 缺失时 err_dup 安全放弃
-            AgentxxPluginString shimErr    = {nullptr, 0};
-            void* shimResult = agentxx::plugin::syncJobWork(&shimJob, nullptr, &shimErr);
+            shimJob.shim.host           = nullptr; ///< host 缺失时 err_dup 安全放弃
+            AgentxxPluginString shimErr = {nullptr, 0};
+            void* shimResult            = agentxx::plugin::syncJobWork(&shimJob, nullptr, &shimErr);
             XX_TEST_EXPECT_TRUE(shimResult == nullptr);
             XX_TEST_EXPECT_TRUE(shimErr.data == nullptr); ///< 无宿主无法分配错误串, 安全放弃
         }

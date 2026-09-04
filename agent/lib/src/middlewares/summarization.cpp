@@ -500,10 +500,10 @@ asio::awaitable<std::string> SummarizationMiddlewareHandle::doSummarizeWithLLM(
     neograph::to_json(reqMsgsJson, reqMsgs);
 
     auto args = neograph::json{
-        {"subagent",             "subagent_task"},
+        {"subagent",             "subagent_task"       },
         {"messages",             std::move(reqMsgsJson)},
         {"sessionId",            std::string{sessionId}},
-        {"enable_summarization", false},
+        {"enable_summarization", false                 },
     };
 
     co_return co_await agentxx::util::catchErrorAsync<std::string>(
@@ -572,16 +572,16 @@ std::vector<neograph::ChatMessage> SummarizationMiddlewareHandle::hardTruncate(
         out.erase(out.begin() + static_cast<int64_t>(recentStart));
     }
     if (out.size() > recentStart && countTokens({}, out, false) > maxAllowed) {
-        auto&       last         = out.back();
+        auto&        last         = out.back();
         const size_t prefixTokens = countTokens(
             {},
             std::vector<neograph::ChatMessage>(out.begin(), out.end() - 1),
             false
         );
         if (prefixTokens < maxAllowed) {
-            const size_t budget = maxAllowed - prefixTokens;
-            const auto countWith = [&](std::string_view content) -> size_t {
-                auto copy = last;
+            const size_t budget    = maxAllowed - prefixTokens;
+            const auto   countWith = [&](std::string_view content) -> size_t {
+                auto copy    = last;
                 copy.content = std::string{content};
                 return countTokens({}, {copy}, false);
             };
@@ -998,8 +998,7 @@ asio::awaitable<bool>
 
     // ---- 兜底: 压缩后仍超限 → 降级硬截断, 保证请求能发出 ----
     // (与 onModelcallRunFunc 相同语义; 手动压缩也保证结果不超限)
-    if (countTokens({}, compressedMessages, enableCountThinking)
-        >= modelContenxtMaxToken * 0.95) {
+    if (countTokens({}, compressedMessages, enableCountThinking) >= modelContenxtMaxToken * 0.95) {
         XX_LOGW(
             "SummarizationMiddlewareHandle: 手动压缩后仍超限 ({}/{}), 降级硬截断兜底",
             countTokens({}, compressedMessages, enableCountThinking),

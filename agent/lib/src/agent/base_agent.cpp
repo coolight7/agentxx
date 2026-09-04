@@ -329,7 +329,7 @@ asio::awaitable<void> BaseAgent::init() {
             = std::make_shared<agentxx::agent::InMemorySingleCheckpointStore>();
         neograph::graph::EngineResources resources2;
         resources2.registry = graphRegistry;
-        engine = neograph::graph::GraphEngine::link(
+        engine              = neograph::graph::GraphEngine::link(
             std::move(validated2),
             std::move(engineConfig2),
             std::move(resources2)

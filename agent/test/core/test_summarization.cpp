@@ -1927,9 +1927,7 @@ asio::awaitable<TestResult> run_summarization_tests() {
         XX_TEST_EXPECT_EQ(res[2].content, std::string{"u1"});
         XX_TEST_EXPECT_EQ(res[9].content, std::string{"a4"});
         // 兜底后不超 95% 上限
-        XX_TEST_EXPECT_TRUE(
-            env->handle->countTokens({}, res, false) < size_t{950}
-        );
+        XX_TEST_EXPECT_TRUE(env->handle->countTokens({}, res, false) < size_t{950});
     }
 
     // --- T24. hardTruncate 兜底: 大 system + 多条 recent 仍超限 → 从最旧 recent

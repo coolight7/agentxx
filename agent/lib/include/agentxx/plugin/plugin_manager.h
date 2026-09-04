@@ -41,8 +41,8 @@ struct OpCore;
 struct PluginSleepTimer {
     std::weak_ptr<PluginInstance>       inst;
     std::shared_ptr<asio::steady_timer> timer;
-    void (AGENTXX_PLUGIN_CALL *cb)(void* ud) = nullptr;
-    void*             ud = nullptr;
+    void(AGENTXX_PLUGIN_CALL* cb)(void* ud) = nullptr;
+    void*             ud                    = nullptr;
     std::atomic<bool> triggered{false};
 };
 
@@ -58,10 +58,11 @@ struct AgentxxPluginOperatorHandle {
 struct AgentxxPluginSubscription {
     std::shared_ptr<agentxx::event::EventBus> bus;
     std::string                               topic;
-    size_t                                    subscriptionId                                                  = 0;
-    agentxx::plugin::PluginInstance*          inst                                                            = nullptr;
-    void (AGENTXX_PLUGIN_CALL *handler)(const AgentxxPluginStringView* event_json, void* ud)                  = nullptr;
-    void* ud                                                                                                  = nullptr;
+    size_t                                    subscriptionId = 0;
+    agentxx::plugin::PluginInstance*          inst           = nullptr;
+    void(AGENTXX_PLUGIN_CALL* handler)(const AgentxxPluginStringView* event_json, void* ud)
+        = nullptr;
+    void* ud = nullptr;
 };
 
 namespace agentxx {
@@ -84,8 +85,9 @@ public:
 
     struct HookRegistration {
         int32_t point;
-        void* (AGENTXX_PLUGIN_CALL *start)(void*, int32_t, const AgentxxPluginStringView*, const AgentxxPluginOperatorNotify*, AgentxxPluginString*);
-        void (AGENTXX_PLUGIN_CALL *cancel)(void*, void*);
+        void*(AGENTXX_PLUGIN_CALL*
+                  start)(void*, int32_t, const AgentxxPluginStringView*, const AgentxxPluginOperatorNotify*, AgentxxPluginString*);
+        void(AGENTXX_PLUGIN_CALL* cancel)(void*, void*);
         void* ud;
     };
 
@@ -97,11 +99,11 @@ public:
     };
 
     struct GraphNodeTypeRegistration {
-        std::string                      type;
-        AgentxxPluginGraphNodeRunStartFn run_start  = nullptr;
+        std::string                       type;
+        AgentxxPluginGraphNodeRunStartFn  run_start  = nullptr;
         AgentxxPluginGraphNodeRunCancelFn run_cancel = nullptr;
-        void*                            user_data = nullptr;
-        std::string                      config_schema_json;
+        void*                             user_data  = nullptr;
+        std::string                       config_schema_json;
     };
 
     struct PromptBackup {
@@ -222,11 +224,12 @@ public:
 private:
 
     struct HookEntry {
-        void* (AGENTXX_PLUGIN_CALL *start)(void*, int32_t, const AgentxxPluginStringView*, const AgentxxPluginOperatorNotify*, AgentxxPluginString*)
+        void*(AGENTXX_PLUGIN_CALL*
+                  start)(void*, int32_t, const AgentxxPluginStringView*, const AgentxxPluginOperatorNotify*, AgentxxPluginString*)
             = nullptr;
-        void (AGENTXX_PLUGIN_CALL *cancel)(void*, void*) = nullptr;
-        void* ud                     = nullptr;
-        bool  set                    = false;
+        void(AGENTXX_PLUGIN_CALL* cancel)(void*, void*) = nullptr;
+        void* ud                                        = nullptr;
+        bool  set                                       = false;
     };
 
     asio::awaitable<void>
@@ -314,36 +317,47 @@ public:
 
     int registerTool(PluginInstance* inst, const AgentxxPluginToolSpec* spec);
     int unregisterTool(PluginInstance* inst, AgentxxPluginStringView name);
+
     int unregisterTool(PluginInstance* inst, std::string_view name) {
         return unregisterTool(inst, strToSv(name));
     }
 
     int registerSkillDir(PluginInstance* inst, AgentxxPluginStringView path);
+
     int registerSkillDir(PluginInstance* inst, std::string_view path) {
         return registerSkillDir(inst, strToSv(path));
     }
+
     int unregisterSkillDir(PluginInstance* inst, AgentxxPluginStringView path);
+
     int unregisterSkillDir(PluginInstance* inst, std::string_view path) {
         return unregisterSkillDir(inst, strToSv(path));
     }
 
     int registerMemoryFile(PluginInstance* inst, AgentxxPluginStringView path);
+
     int registerMemoryFile(PluginInstance* inst, std::string_view path) {
         return registerMemoryFile(inst, strToSv(path));
     }
+
     int unregisterMemoryFile(PluginInstance* inst, AgentxxPluginStringView path);
+
     int unregisterMemoryFile(PluginInstance* inst, std::string_view path) {
         return unregisterMemoryFile(inst, strToSv(path));
     }
 
     int registerMcpServer(PluginInstance* inst, AgentxxPluginStringView specJson);
+
     int registerMcpServer(PluginInstance* inst, std::string_view specJson) {
         return registerMcpServer(inst, strToSv(specJson));
     }
+
     int unregisterMcpServer(PluginInstance* inst, AgentxxPluginStringView nameSpace);
+
     int unregisterMcpServer(PluginInstance* inst, std::string_view nameSpace) {
         return unregisterMcpServer(inst, strToSv(nameSpace));
     }
+
     std::string ownResourcesJson(const PluginInstance* inst);
 
     int registerHook(PluginInstance* inst, const AgentxxPluginHookSpec* spec);
@@ -353,57 +367,90 @@ public:
     int registerGraphNodeType(PluginInstance* inst, const AgentxxPluginGraphNodeTypeSpec* spec);
     /// 注销插件节点类型 (按类型名; 卸载时宿主自动清理)
     int unregisterGraphNodeType(PluginInstance* inst, AgentxxPluginStringView type);
+
     int unregisterGraphNodeType(PluginInstance* inst, std::string_view type) {
         return unregisterGraphNodeType(inst, strToSv(type));
     }
+
     /// 获取当前执行图 JSON 定义 (host->alloc 语义由 vtable 层处理)
     std::string getGraphJson();
     /// 设置执行图 JSON 定义 (覆盖; 非法 JSON 返回非 0)
     int setGraphJson(PluginInstance* inst, AgentxxPluginStringView graph_json);
+
     int setGraphJson(PluginInstance* inst, std::string_view graph_json) {
         return setGraphJson(inst, strToSv(graph_json));
     }
+
     AgentxxPluginSubscription* subscribe(
-        PluginInstance* inst,
+        PluginInstance*         inst,
         AgentxxPluginStringView topic,
-        void (AGENTXX_PLUGIN_CALL *handler)(const AgentxxPluginStringView* event_json, void* ud),
+        void(AGENTXX_PLUGIN_CALL* handler)(const AgentxxPluginStringView* event_json, void* ud),
         void* ud
     );
+
     AgentxxPluginSubscription* subscribe(
-        PluginInstance* inst,
+        PluginInstance*  inst,
         std::string_view topic,
-        void (AGENTXX_PLUGIN_CALL *handler)(const AgentxxPluginStringView* event_json, void* ud),
+        void(AGENTXX_PLUGIN_CALL* handler)(const AgentxxPluginStringView* event_json, void* ud),
         void* ud
     ) {
         return subscribe(inst, strToSv(topic), handler, ud);
     }
-    void      unsubscribe(AgentxxPluginSubscription* sub);
-    int       publish(AgentxxPluginStringView topic, AgentxxPluginStringView event_json);
-    int       publish(std::string_view topic, std::string_view event_json) {
+
+    void unsubscribe(AgentxxPluginSubscription* sub);
+    int  publish(AgentxxPluginStringView topic, AgentxxPluginStringView event_json);
+
+    int publish(std::string_view topic, std::string_view event_json) {
         return publish(strToSv(topic), strToSv(event_json));
     }
-    AgentxxPluginString getShareStore(PluginInstance* inst, AgentxxPluginStringView session_id, int64_t id);
-    AgentxxPluginString getShareStore(PluginInstance* inst, std::string_view session_id, int64_t id) {
+
+    AgentxxPluginString
+        getShareStore(PluginInstance* inst, AgentxxPluginStringView session_id, int64_t id);
+
+    AgentxxPluginString
+        getShareStore(PluginInstance* inst, std::string_view session_id, int64_t id) {
         return getShareStore(inst, strToSv(session_id), id);
     }
-    int64_t   addShareStore(PluginInstance* inst, AgentxxPluginStringView session_id, AgentxxPluginStringView content);
-    int64_t   addShareStore(PluginInstance* inst, std::string_view session_id, std::string_view content) {
+
+    int64_t addShareStore(
+        PluginInstance*         inst,
+        AgentxxPluginStringView session_id,
+        AgentxxPluginStringView content
+    );
+
+    int64_t
+        addShareStore(PluginInstance* inst, std::string_view session_id, std::string_view content) {
         return addShareStore(inst, strToSv(session_id), strToSv(content));
     }
-    void emitMessageTip(PluginInstance* inst, AgentxxPluginStringView session_id, AgentxxPluginStringView text, int32_t level);
-    void emitMessageTip(PluginInstance* inst, std::string_view session_id, std::string_view text, int32_t level) {
+
+    void emitMessageTip(
+        PluginInstance*         inst,
+        AgentxxPluginStringView session_id,
+        AgentxxPluginStringView text,
+        int32_t                 level
+    );
+
+    void emitMessageTip(
+        PluginInstance*  inst,
+        std::string_view session_id,
+        std::string_view text,
+        int32_t          level
+    ) {
         emitMessageTip(inst, strToSv(session_id), strToSv(text), level);
     }
 
-    void* sleep(PluginInstance* inst, int64_t ms, void (AGENTXX_PLUGIN_CALL *cb)(void* ud), void* ud);
-    void  cancelSleep(PluginInstance* inst, void* timer);
-    void  offload(
-         PluginInstance* inst,
-         volatile int32_t* cancel_flag,
-         void* (AGENTXX_PLUGIN_CALL *work)(void* ud, volatile int32_t* cancel_flag, AgentxxPluginString* error_out),
-         void (AGENTXX_PLUGIN_CALL *done)(void* ud, void* result, const AgentxxPluginStringView* error),
-         void* ud
-     );
+    void*
+         sleep(PluginInstance* inst, int64_t ms, void(AGENTXX_PLUGIN_CALL* cb)(void* ud), void* ud);
+    void cancelSleep(PluginInstance* inst, void* timer);
+    void offload(
+        PluginInstance*   inst,
+        volatile int32_t* cancel_flag,
+        void*(AGENTXX_PLUGIN_CALL*
+                  work)(void* ud, volatile int32_t* cancel_flag, AgentxxPluginString* error_out),
+        void(AGENTXX_PLUGIN_CALL*
+                 done)(void* ud, void* result, const AgentxxPluginStringView* error),
+        void* ud
+    );
 
     AgentxxPluginOperatorHandle* callToolAsync(
         PluginInstance*               caller,
@@ -414,6 +461,7 @@ public:
         void*                         ud,
         AgentxxPluginString*          error_out
     );
+
     AgentxxPluginOperatorHandle* callToolAsync(
         PluginInstance*               caller,
         std::string_view              name,
@@ -423,7 +471,15 @@ public:
         void*                         ud,
         AgentxxPluginString*          error_out
     ) {
-        return callToolAsync(caller, strToSv(name), strToSv(args_json), strToSv(session_id), cb, ud, error_out);
+        return callToolAsync(
+            caller,
+            strToSv(name),
+            strToSv(args_json),
+            strToSv(session_id),
+            cb,
+            ud,
+            error_out
+        );
     }
 
     AgentxxPluginOperatorHandle* invokeCapabilityAsync(
@@ -435,6 +491,7 @@ public:
         void*                         ud,
         AgentxxPluginString*          error_out
     );
+
     AgentxxPluginOperatorHandle* invokeCapabilityAsync(
         PluginInstance*               caller,
         std::string_view              capability,
@@ -444,7 +501,15 @@ public:
         void*                         ud,
         AgentxxPluginString*          error_out
     ) {
-        return invokeCapabilityAsync(caller, strToSv(capability), strToSv(method), strToSv(args_json), cb, ud, error_out);
+        return invokeCapabilityAsync(
+            caller,
+            strToSv(capability),
+            strToSv(method),
+            strToSv(args_json),
+            cb,
+            ud,
+            error_out
+        );
     }
 
     /// 注册后台任务 (spawn 宿主托管; agentxx.agent.tasks 接口表)
@@ -470,9 +535,11 @@ public:
     }
 
     int registerCapability(PluginInstance* inst, AgentxxPluginStringView capability);
+
     int registerCapability(PluginInstance* inst, std::string_view capability) {
         return registerCapability(inst, strToSv(capability));
     }
+
     int registerCapabilityEx(
         PluginInstance*                      inst,
         AgentxxPluginStringView              capability,
@@ -480,6 +547,7 @@ public:
         AgentxxPluginOperatorCancelFunction  cancel,
         void*                                ctx
     );
+
     int registerCapabilityEx(
         PluginInstance*                      inst,
         std::string_view                     capability,
@@ -489,11 +557,15 @@ public:
     ) {
         return registerCapabilityEx(inst, strToSv(capability), start, cancel, ctx);
     }
+
     int unregisterCapability(PluginInstance* inst, AgentxxPluginStringView capability);
+
     int unregisterCapability(PluginInstance* inst, std::string_view capability) {
         return unregisterCapability(inst, strToSv(capability));
     }
+
     int hasCapability(AgentxxPluginStringView capability) const;
+
     int hasCapability(std::string_view capability) const {
         return hasCapability(strToSv(capability));
     }
@@ -505,14 +577,16 @@ public:
     std::string getToolPromptJson(const std::string& toolName);
     std::string getPromptJson();
     int         setPromptJson(PluginInstance* inst, AgentxxPluginStringView prompt_json);
-    int         setPromptJson(PluginInstance* inst, std::string_view prompt_json) {
+
+    int setPromptJson(PluginInstance* inst, std::string_view prompt_json) {
         return setPromptJson(inst, strToSv(prompt_json));
     }
-    void        restorePromptBackup(PluginInstance* inst);
-    void        applyDeclaredResources(
-               PluginInstance&                        inst,
-               const plugin::PluginManifestResources& resources
-           );
+
+    void restorePromptBackup(PluginInstance* inst);
+    void applyDeclaredResources(
+        PluginInstance&                        inst,
+        const plugin::PluginManifestResources& resources
+    );
     std::string getPluginArgsJson(PluginInstance* inst);
     std::string getPluginConfigPath(PluginInstance* inst);
 

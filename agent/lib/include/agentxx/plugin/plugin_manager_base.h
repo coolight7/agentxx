@@ -324,8 +324,8 @@ inline AgentxxPluginString hostMemoryCreateString(AgentxxPluginStringView s) {
             std::memcpy(p, s.data, static_cast<size_t>(s.size));
         }
         p[s.size] = '\0';
-        res.data = p;
-        res.size = s.size;
+        res.data  = p;
+        res.size  = s.size;
     }
     return res;
 }

@@ -90,7 +90,7 @@ std::string jsonEscape(const PluginCtx* ctx, const std::string& s) {
         return "\"\"";
     }
     AgentxxPluginString esc{nullptr, 0};
-    auto sSv = agentxx::plugin::PluginStringView::from(s.data(), s.size());
+    auto                sSv = agentxx::plugin::PluginStringView::from(s.data(), s.size());
     ctx->iface.json->json_escape(ctx->host, &sSv, &esc);
     if (!esc.data) {
         return "\"\"";
@@ -150,7 +150,8 @@ void AudioStreamHolder::stop() {
 
 extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_agent_get_info(void) {
     static const AgentxxPluginInfo info{
-        AGENTXX_PLUGIN_API_VERSION, 0,
+        AGENTXX_PLUGIN_API_VERSION,
+        0,
         agentxx::plugin::PluginStringView::fromCstr("agentxx_audio_stream"),
         agentxx::plugin::PluginStringView::fromCstr("1.0.0"),
         agentxx::plugin::PluginStringView::fromCstr(

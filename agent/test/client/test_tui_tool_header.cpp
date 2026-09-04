@@ -72,14 +72,21 @@ std::shared_ptr<agentxx::plugin::ClientUiRegistry> makeTestToolRegistry() {
     });
 
     // Read (回调)
-    static auto readFn = [](void*, const AgentxxToolRenderInput* in, AgentxxToolRenderOutput* out) -> int32_t {
+    static auto readFn
+        = [](void*, const AgentxxToolRenderInput* in, AgentxxToolRenderOutput* out) -> int32_t {
         std::string_view args(in->args_json.data ? in->args_json.data : "", in->args_json.size);
-        neograph::json j;
-        try { j = neograph::json::parse(args); } catch (...) { return -1; }
-        if (!j.is_object()) return -1;
+        neograph::json   j;
+        try {
+            j = neograph::json::parse(args);
+        } catch (...) {
+            return -1;
+        }
+        if (!j.is_object()) {
+            return -1;
+        }
         std::string path = j.value("path", std::string{});
-        int64_t off = j.value("line_offset", int64_t{-1});
-        int64_t lim = j.value("line_limit", int64_t{-1});
+        int64_t     off  = j.value("line_offset", int64_t{-1});
+        int64_t     lim  = j.value("line_limit", int64_t{-1});
         std::string range;
         if (off <= 0 && lim <= 0) {
             // empty
@@ -91,8 +98,12 @@ std::shared_ptr<agentxx::plugin::ClientUiRegistry> makeTestToolRegistry() {
             range = fmt::format("{}, {}", off, lim);
         }
         std::string summary = " ·";
-        if (!range.empty()) summary += " [" + range + "]";
-        if (!path.empty()) summary += " " + path;
+        if (!range.empty()) {
+            summary += " [" + range + "]";
+        }
+        if (!path.empty()) {
+            summary += " " + path;
+        }
         out->displayName = makeTestString("Read");
         out->summary     = makeTestString(summary);
         return 0;
@@ -104,19 +115,30 @@ std::shared_ptr<agentxx::plugin::ClientUiRegistry> makeTestToolRegistry() {
     });
 
     // Glob (回调)
-    static auto globFn = [](void*, const AgentxxToolRenderInput* in, AgentxxToolRenderOutput* out) -> int32_t {
+    static auto globFn
+        = [](void*, const AgentxxToolRenderInput* in, AgentxxToolRenderOutput* out) -> int32_t {
         std::string_view args(in->args_json.data ? in->args_json.data : "", in->args_json.size);
-        neograph::json j;
-        try { j = neograph::json::parse(args); } catch (...) { return -1; }
-        if (!j.is_object()) return -1;
-        auto files = j.value("file_patterns", std::vector<std::string>{});
-        std::string joined;
+        neograph::json   j;
+        try {
+            j = neograph::json::parse(args);
+        } catch (...) {
+            return -1;
+        }
+        if (!j.is_object()) {
+            return -1;
+        }
+        auto         files = j.value("file_patterns", std::vector<std::string>{});
+        std::string  joined;
         const size_t n = std::min<size_t>(files.size(), 2);
         for (size_t i = 0; i < n; ++i) {
-            if (i > 0) joined += ", ";
+            if (i > 0) {
+                joined += ", ";
+            }
             joined += files[i];
         }
-        if (files.size() > 2) joined += (n > 0 ? ", ..." : "...");
+        if (files.size() > 2) {
+            joined += (n > 0 ? ", ..." : "...");
+        }
         out->displayName = makeTestString("Glob");
         out->summary     = makeTestString(" · " + joined);
         return 0;
@@ -128,34 +150,63 @@ std::shared_ptr<agentxx::plugin::ClientUiRegistry> makeTestToolRegistry() {
     });
 
     // Grep (回调)
-    static auto grepFn = [](void*, const AgentxxToolRenderInput* in, AgentxxToolRenderOutput* out) -> int32_t {
+    static auto grepFn
+        = [](void*, const AgentxxToolRenderInput* in, AgentxxToolRenderOutput* out) -> int32_t {
         std::string_view args(in->args_json.data ? in->args_json.data : "", in->args_json.size);
-        neograph::json j;
-        try { j = neograph::json::parse(args); } catch (...) { return -1; }
-        if (!j.is_object()) return -1;
-        auto textPats  = j.value("text_patterns", std::vector<std::string>{});
-        auto regexPats = j.value("regex_patterns", std::vector<std::string>{});
-        auto files     = j.value("file_patterns", std::vector<std::string>{});
+        neograph::json   j;
+        try {
+            j = neograph::json::parse(args);
+        } catch (...) {
+            return -1;
+        }
+        if (!j.is_object()) {
+            return -1;
+        }
+        auto                     textPats  = j.value("text_patterns", std::vector<std::string>{});
+        auto                     regexPats = j.value("regex_patterns", std::vector<std::string>{});
+        auto                     files     = j.value("file_patterns", std::vector<std::string>{});
         std::vector<std::string> shown;
-        for (const auto& p : textPats) { if (shown.size() >= 2) break; shown.push_back(p); }
-        for (const auto& p : regexPats) { if (shown.size() >= 2) break; shown.push_back(p); }
+        for (const auto& p : textPats) {
+            if (shown.size() >= 2) {
+                break;
+            }
+            shown.push_back(p);
+        }
+        for (const auto& p : regexPats) {
+            if (shown.size() >= 2) {
+                break;
+            }
+            shown.push_back(p);
+        }
         const size_t total = textPats.size() + regexPats.size();
-        std::string quoted;
+        std::string  quoted;
         for (size_t i = 0; i < shown.size(); ++i) {
-            if (i > 0) quoted += ", ";
+            if (i > 0) {
+                quoted += ", ";
+            }
             quoted += '"' + shown[i] + '"';
         }
-        if (total > shown.size()) quoted += ", ...";
-        std::string joinedFiles;
+        if (total > shown.size()) {
+            quoted += ", ...";
+        }
+        std::string  joinedFiles;
         const size_t n = std::min<size_t>(files.size(), 2);
         for (size_t i = 0; i < n; ++i) {
-            if (i > 0) joinedFiles += ", ";
+            if (i > 0) {
+                joinedFiles += ", ";
+            }
             joinedFiles += files[i];
         }
-        if (files.size() > 2) joinedFiles += (n > 0 ? ", ..." : "...");
+        if (files.size() > 2) {
+            joinedFiles += (n > 0 ? ", ..." : "...");
+        }
         std::string summary = " ·";
-        if (!quoted.empty()) summary += " [" + quoted + "]";
-        if (!joinedFiles.empty()) summary += " " + joinedFiles;
+        if (!quoted.empty()) {
+            summary += " [" + quoted + "]";
+        }
+        if (!joinedFiles.empty()) {
+            summary += " " + joinedFiles;
+        }
         out->displayName = makeTestString("Grep");
         out->summary     = makeTestString(summary);
         return 0;
@@ -167,16 +218,23 @@ std::shared_ptr<agentxx::plugin::ClientUiRegistry> makeTestToolRegistry() {
     });
 
     // Edit (回调)
-    static auto editFn = [](void*, const AgentxxToolRenderInput* in, AgentxxToolRenderOutput* out) -> int32_t {
+    static auto editFn
+        = [](void*, const AgentxxToolRenderInput* in, AgentxxToolRenderOutput* out) -> int32_t {
         std::string_view args(in->args_json.data ? in->args_json.data : "", in->args_json.size);
-        neograph::json j;
-        try { j = neograph::json::parse(args); } catch (...) { return -1; }
-        if (!j.is_object()) return -1;
+        neograph::json   j;
+        try {
+            j = neograph::json::parse(args);
+        } catch (...) {
+            return -1;
+        }
+        if (!j.is_object()) {
+            return -1;
+        }
         std::string path   = j.value("path", std::string{});
         std::string oldStr = j.value("old_str", std::string{});
         std::string newStr = j.value("new_str", std::string{});
-        out->displayName = makeTestString("Edit");
-        out->summary     = makeTestString(" · " + path);
+        out->displayName   = makeTestString("Edit");
+        out->summary       = makeTestString(" · " + path);
         if (!in->is_error) {
             neograph::json diffItem;
             diffItem["kind"]    = "diff";
@@ -323,8 +381,9 @@ struct ToolHeaderFixture {
     /// 语义层装饰; toolCallId 与 pushTool 的 "call_1" 对应)
     void pushDecor() {
         sharedState.mutate([&](TUIRenderState& st) {
-            auto  reg         = st.pluginRegistry ? std::make_shared<agentxx::plugin::ClientUiRegistry>(*st.pluginRegistry)
-                                                  : std::make_shared<agentxx::plugin::ClientUiRegistry>();
+            auto  reg         = st.pluginRegistry
+                                    ? std::make_shared<agentxx::plugin::ClientUiRegistry>(*st.pluginRegistry)
+                                    : std::make_shared<agentxx::plugin::ClientUiRegistry>();
             auto& d           = reg->toolDecors.emplace_back();
             d.plugin          = "agentxx_planning";
             d.toolCallId      = "call_1";

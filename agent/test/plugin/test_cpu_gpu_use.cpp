@@ -141,7 +141,7 @@ asio::awaitable<TestResult>
         int                 opStatus = -1;
         std::string         payload;
         bool                done = false;
-        using StateTuple = std::tuple<int*, std::string*, bool*>;
+        using StateTuple         = std::tuple<int*, std::string*, bool*>;
         StateTuple state{&opStatus, &payload, &done};
 
         auto* op = ctx->pluginManager->invokeCapabilityAsync(
@@ -213,16 +213,15 @@ asio::awaitable<TestResult>
         XX_TEST_EXPECT_TRUE(spawned);
         if (spawned) {
             // spawn 协程持 inflight (waitInflightZero 的计数来源)
-            size_t inflightBefore
-                = inst->inflight.load(std::memory_order_acquire);
+            size_t inflightBefore = inst->inflight.load(std::memory_order_acquire);
             XX_TEST_EXPECT_TRUE(inflightBefore > 0);
 
             // 卸载: detachAll cancel spawn → 协程退出 → notify → inflight 归零;
             // 若 spawn 未被宿主托管 (游离), 卸载仍会返回但 inflight 无法等待到
             // spawn 的退出, 这里用耗时粗略区分 (托管: 立即归零, 卸载快)
-            auto t0      = std::chrono::steady_clock::now();
+            auto t0       = std::chrono::steady_clock::now();
             bool unloaded = co_await ctx->pluginManager->unloadAsync("agentxx_system_monitor");
-            auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+            auto elapsed  = std::chrono::duration_cast<std::chrono::milliseconds>(
                                std::chrono::steady_clock::now() - t0
             )
                                .count();
@@ -267,8 +266,8 @@ asio::awaitable<TestResult>
                 loopOk = false;
                 break;
             }
-            auto t0 = std::chrono::steady_clock::now();
-            auto ok = co_await ctx->pluginManager->unloadAsync("agentxx_system_monitor");
+            auto t0      = std::chrono::steady_clock::now();
+            auto ok      = co_await ctx->pluginManager->unloadAsync("agentxx_system_monitor");
             auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
                                std::chrono::steady_clock::now() - t0
             )

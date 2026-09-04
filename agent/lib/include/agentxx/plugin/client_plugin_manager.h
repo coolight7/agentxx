@@ -73,8 +73,13 @@ struct ClientCommand {
     std::string plugin; ///< 所属插件名
     std::string name;   ///< 命令名 (用户输入 "/{name}" 触发)
     std::string description;
-    int32_t (AGENTXX_PLUGIN_CALL *execute)(void* ud, const AgentxxPluginStringView* args_json, AgentxxPluginString* action_out, AgentxxPluginString* error_out) = nullptr;
-    void* ud                                                                                                                                                    = nullptr;
+    int32_t(AGENTXX_PLUGIN_CALL* execute)(
+        void*                          ud,
+        const AgentxxPluginStringView* args_json,
+        AgentxxPluginString*           action_out,
+        AgentxxPluginString*           error_out
+    )        = nullptr;
+    void* ud = nullptr;
 };
 
 /// 工具特化渲染器注册记录 (UI 注册表快照条目)
@@ -145,9 +150,10 @@ public:
     /// - shared_ptr 存储: 订阅节点地址稳定 (vector 扩容/erase 不悬垂);
     ///   dispatch 时拷贝 shared_ptr 保活, 派发中退订/卸载不 UAF
     struct Subscription {
-        int32_t event                                                                               = 0;
-        void (AGENTXX_PLUGIN_CALL *handler)(const AgentxxPluginStringView* payload_json, void* ud) = nullptr;
-        void* ud                                                                                    = nullptr;
+        int32_t event = 0;
+        void(AGENTXX_PLUGIN_CALL* handler)(const AgentxxPluginStringView* payload_json, void* ud)
+            = nullptr;
+        void* ud    = nullptr;
         bool  alive = true; ///< 已退订标记 (unsubscribe 置 false, 卸载清理用)
     };
 
@@ -161,7 +167,7 @@ public:
     std::vector<ClientInfoSection> infoSectionRegs; ///< Info 段落注册信息 (disable 保留)
     std::vector<ClientCommand>     commandRegs;     ///< 命令注册信息 (disable 保留)
     /// 工具消息装饰 (disable 保留, enable 恢复; 无句柄 —— 以 plugin+toolCallId 键控)
-    std::vector<ClientToolDecor>               toolDecorRegs;
+    std::vector<ClientToolDecor> toolDecorRegs;
     /// 工具特化渲染器 (disable 保留, enable 恢复; 以 plugin+toolName 键控)
     std::vector<ClientToolRenderReg>           toolRenderRegs;
     std::vector<std::shared_ptr<Subscription>> subscriptions; ///< 已订阅事件 (disable 保留)
@@ -342,12 +348,13 @@ public:
 
     /// 注册状态栏项; 返回宿主句柄 (nullptr = 宿主不支持或 id 冲突)
     void* registerStatusItem(
-        ClientPluginInstance* inst,
+        ClientPluginInstance*   inst,
         AgentxxPluginStringView id,
         AgentxxPluginStringView json,
-        int                   align,
-        int                   order
+        int                     align,
+        int                     order
     );
+
     void* registerStatusItem(
         ClientPluginInstance* inst,
         std::string_view      id,
@@ -357,41 +364,73 @@ public:
     ) {
         return registerStatusItem(inst, strToSv(id), strToSv(json), align, order);
     }
+
     /// 更新状态栏项; 返回 0 成功
-    int  updateStatusItem(ClientPluginInstance* inst, void* item, AgentxxPluginStringView json);
-    int  updateStatusItem(ClientPluginInstance* inst, void* item, std::string_view json) {
+    int updateStatusItem(ClientPluginInstance* inst, void* item, AgentxxPluginStringView json);
+
+    int updateStatusItem(ClientPluginInstance* inst, void* item, std::string_view json) {
         return updateStatusItem(inst, item, strToSv(json));
     }
+
     void unregisterStatusItem(ClientPluginInstance* inst, void* item);
     /// 注册面板; 返回宿主句柄 (nullptr = 宿主不支持或 id 冲突)
-    void* registerPanel(ClientPluginInstance* inst, AgentxxPluginStringView id, AgentxxPluginStringView props_json);
-    void* registerPanel(ClientPluginInstance* inst, std::string_view id, std::string_view props_json) {
+    void* registerPanel(
+        ClientPluginInstance*   inst,
+        AgentxxPluginStringView id,
+        AgentxxPluginStringView props_json
+    );
+
+    void* registerPanel(
+        ClientPluginInstance* inst,
+        std::string_view      id,
+        std::string_view      props_json
+    ) {
         return registerPanel(inst, strToSv(id), strToSv(props_json));
     }
+
     /// 更新面板内容; 返回 0 成功
-    int  updatePanel(ClientPluginInstance* inst, void* panel, AgentxxPluginStringView items_json);
-    int  updatePanel(ClientPluginInstance* inst, void* panel, std::string_view items_json) {
+    int updatePanel(ClientPluginInstance* inst, void* panel, AgentxxPluginStringView items_json);
+
+    int updatePanel(ClientPluginInstance* inst, void* panel, std::string_view items_json) {
         return updatePanel(inst, panel, strToSv(items_json));
     }
+
     void unregisterPanel(ClientPluginInstance* inst, void* panel);
     /// 注册 Info 栏段落; 返回宿主句柄 (nullptr = 宿主不支持或 id 冲突)
-    void* registerInfoSection(ClientPluginInstance* inst, AgentxxPluginStringView id, AgentxxPluginStringView props_json);
-    void* registerInfoSection(ClientPluginInstance* inst, std::string_view id, std::string_view props_json) {
+    void* registerInfoSection(
+        ClientPluginInstance*   inst,
+        AgentxxPluginStringView id,
+        AgentxxPluginStringView props_json
+    );
+
+    void* registerInfoSection(
+        ClientPluginInstance* inst,
+        std::string_view      id,
+        std::string_view      props_json
+    ) {
         return registerInfoSection(inst, strToSv(id), strToSv(props_json));
     }
+
     /// 更新 Info 栏段落内容; 返回 0 成功
-    int  updateInfoSection(ClientPluginInstance* inst, void* section, AgentxxPluginStringView items_json);
-    int  updateInfoSection(ClientPluginInstance* inst, void* section, std::string_view items_json) {
+    int updateInfoSection(
+        ClientPluginInstance*   inst,
+        void*                   section,
+        AgentxxPluginStringView items_json
+    );
+
+    int updateInfoSection(ClientPluginInstance* inst, void* section, std::string_view items_json) {
         return updateInfoSection(inst, section, strToSv(items_json));
     }
+
     void unregisterInfoSection(ClientPluginInstance* inst, void* section);
     /// 更新/删除工具消息装饰 (io 线程); 返回 0 成功
     /// - tool_call_id 空 = 操作本插件全部; decor_json 空串 = 删除
     int updateToolDecor(
-        ClientPluginInstance* inst,
+        ClientPluginInstance*   inst,
         AgentxxPluginStringView tool_call_id,
         AgentxxPluginStringView decor_json
     );
+
     int updateToolDecor(
         ClientPluginInstance* inst,
         std::string_view      tool_call_id,
@@ -399,39 +438,48 @@ public:
     ) {
         return updateToolDecor(inst, strToSv(tool_call_id), strToSv(decor_json));
     }
+
     /// 注册工具特化渲染器 (io 线程); 返回 0 成功
     int registerToolRenderer(ClientPluginInstance* inst, const AgentxxToolRenderSpec* spec);
     /// 注销工具特化渲染器 (io 线程); 返回 0 成功
     int unregisterToolRenderer(ClientPluginInstance* inst, AgentxxPluginStringView tool_name);
+
     int unregisterToolRenderer(ClientPluginInstance* inst, std::string_view tool_name) {
         return unregisterToolRenderer(inst, strToSv(tool_name));
     }
+
     /// 注册命令; 返回 0 成功 (名字冲突返回非 0)
     int registerCommand(
-        ClientPluginInstance* inst,
+        ClientPluginInstance*   inst,
         AgentxxPluginStringView name,
         AgentxxPluginStringView description,
-        int32_t (AGENTXX_PLUGIN_CALL *exec)(void*, const AgentxxPluginStringView*, AgentxxPluginString*, AgentxxPluginString*),
+        int32_t(AGENTXX_PLUGIN_CALL*
+                    exec)(void*, const AgentxxPluginStringView*, AgentxxPluginString*, AgentxxPluginString*),
         void* ud
     );
+
     int registerCommand(
         ClientPluginInstance* inst,
         std::string_view      name,
         std::string_view      description,
-        int32_t (AGENTXX_PLUGIN_CALL *exec)(void*, const AgentxxPluginStringView*, AgentxxPluginString*, AgentxxPluginString*),
+        int32_t(AGENTXX_PLUGIN_CALL*
+                    exec)(void*, const AgentxxPluginStringView*, AgentxxPluginString*, AgentxxPluginString*),
         void* ud
     ) {
         return registerCommand(inst, strToSv(name), strToSv(description), exec, ud);
     }
+
     int unregisterCommand(ClientPluginInstance* inst, AgentxxPluginStringView name);
+
     int unregisterCommand(ClientPluginInstance* inst, std::string_view name) {
         return unregisterCommand(inst, strToSv(name));
     }
+
     /// 事件订阅; 返回句柄 (宿主持有; 卸载自动退订)
     AgentxxPluginSubscription* subscribe(
         ClientPluginInstance* inst,
         int32_t               event,
-        void (AGENTXX_PLUGIN_CALL *handler)(const AgentxxPluginStringView*, void*),
+        void(AGENTXX_PLUGIN_CALL* handler)(const AgentxxPluginStringView*, void*),
         void* ud
     );
     void unsubscribe(AgentxxPluginSubscription* sub);
@@ -440,17 +488,38 @@ public:
     std::string getPluginArgsJson(ClientPluginInstance* inst);
     std::string getPluginConfigPath(ClientPluginInstance* inst);
     /// 会话操作 (代理到端点)
-    void sendUserInputToPeer(ClientPluginInstance* inst, AgentxxPluginStringView sessionId, AgentxxPluginStringView text);
-    void sendUserInputToPeer(ClientPluginInstance* inst, std::string_view sessionId, std::string_view text) {
+    void sendUserInputToPeer(
+        ClientPluginInstance*   inst,
+        AgentxxPluginStringView sessionId,
+        AgentxxPluginStringView text
+    );
+
+    void sendUserInputToPeer(
+        ClientPluginInstance* inst,
+        std::string_view      sessionId,
+        std::string_view      text
+    ) {
         sendUserInputToPeer(inst, strToSv(sessionId), strToSv(text));
     }
+
     void requestCancelToPeer(ClientPluginInstance* inst, AgentxxPluginStringView sessionId);
+
     void requestCancelToPeer(ClientPluginInstance* inst, std::string_view sessionId) {
         requestCancelToPeer(inst, strToSv(sessionId));
     }
+
     /// 跨端数据 (client → agent): 经端点 WirePluginDataUp 发送
-    int sendPluginDataToPeer(ClientPluginInstance* inst, AgentxxPluginStringView event, AgentxxPluginStringView json);
-    int sendPluginDataToPeer(ClientPluginInstance* inst, std::string_view event, std::string_view json) {
+    int sendPluginDataToPeer(
+        ClientPluginInstance*   inst,
+        AgentxxPluginStringView event,
+        AgentxxPluginStringView json
+    );
+
+    int sendPluginDataToPeer(
+        ClientPluginInstance* inst,
+        std::string_view      event,
+        std::string_view      json
+    ) {
         return sendPluginDataToPeer(inst, strToSv(event), strToSv(json));
     }
 

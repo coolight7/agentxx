@@ -86,7 +86,8 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_agent_g
         nullptr,
         [&]() -> const AgentxxPluginInfo* {
             static const AgentxxPluginInfo info{
-                AGENTXX_PLUGIN_API_VERSION, 0,
+                AGENTXX_PLUGIN_API_VERSION,
+                0,
                 agentxx::plugin::PluginStringView::fromCstr("agentxx_math"),
                 agentxx::plugin::PluginStringView::fromCstr("1.0.0"),
                 agentxx::plugin::PluginStringView::fromCstr(

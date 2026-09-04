@@ -121,11 +121,14 @@ static std::string formatUsageText(const agentxx_system_monitor_plugin::CpuGpuUs
 
 extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_agent_get_info(void) {
     static const AgentxxPluginInfo info{
-        AGENTXX_PLUGIN_API_VERSION, 0,
+        AGENTXX_PLUGIN_API_VERSION,
+        0,
         agentxx::plugin::PluginStringView::fromCstr("agentxx_system_monitor"),
         agentxx::plugin::PluginStringView::fromCstr("1.0.0"),
-        agentxx::plugin::PluginStringView::fromCstr("System resource monitor: CPU/memory/GPU usage tool and "
-                               "agentxx.system_usage capability"),
+        agentxx::plugin::PluginStringView::fromCstr(
+            "System resource monitor: CPU/memory/GPU usage tool and "
+            "agentxx.system_usage capability"
+        ),
     };
     return &info;
 }
@@ -185,7 +188,9 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
 
             // 3. 跨端控制事件与宿主约定事件订阅
             if (ctx->iface.events && ctx->iface.events->subscribe) {
-                auto t1 = agentxx::plugin::PluginStringView::fromCstr("client.agentxx_system_monitor.usage_enabled");
+                auto t1 = agentxx::plugin::PluginStringView::fromCstr(
+                    "client.agentxx_system_monitor.usage_enabled"
+                );
                 ctx->iface.events->subscribe(
                     host,
                     &t1,
@@ -211,7 +216,8 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                 );
 
                 // 客户端接入/重连时立即发布一次状态快照 (修复初始状态滞留为空)
-                auto t2 = agentxx::plugin::PluginStringView::fromCstr("agentxx_host.client_attached");
+                auto t2
+                    = agentxx::plugin::PluginStringView::fromCstr("agentxx_host.client_attached");
                 ctx->iface.events->subscribe(
                     host,
                     &t2,
@@ -236,8 +242,13 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                                     = static_cast<agentxx_system_monitor_plugin::CpuGpuUsage*>(res);
                                 if (c && u && c->iface.events && c->iface.events->publish) {
                                     std::string json = usageToJson(*u);
-                                    auto topicSv = agentxx::plugin::PluginStringView::fromCstr("agentxx_system_monitor.usage");
-                                    auto jsonSv  = agentxx::plugin::PluginStringView::from(json.data(), json.size());
+                                    auto topicSv     = agentxx::plugin::PluginStringView::fromCstr(
+                                        "agentxx_system_monitor.usage"
+                                    );
+                                    auto jsonSv = agentxx::plugin::PluginStringView::from(
+                                        json.data(),
+                                        json.size()
+                                    );
                                     c->iface.events->publish(c->host, &topicSv, &jsonSv);
                                 }
                                 delete u;
@@ -263,8 +274,13 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                             }
                             std::string json = usageToJson(usage);
                             if (c.iface.events && c.iface.events->publish) {
-                                auto topicSv = agentxx::plugin::PluginStringView::fromCstr("agentxx_system_monitor.usage");
-                                auto jsonSv  = agentxx::plugin::PluginStringView::from(json.data(), json.size());
+                                auto topicSv = agentxx::plugin::PluginStringView::fromCstr(
+                                    "agentxx_system_monitor.usage"
+                                );
+                                auto jsonSv = agentxx::plugin::PluginStringView::from(
+                                    json.data(),
+                                    json.size()
+                                );
                                 c.iface.events->publish(c.host, &topicSv, &jsonSv);
                             }
                         }
@@ -381,7 +397,7 @@ static void refreshUsageDisplay(ClientCtx& ctx) {
     if (!ctx.section && ctx.ui && ctx.ui->register_info_section) {
         auto idSv    = agentxx::plugin::PluginStringView::fromCstr("agentxx_system_monitor.usage");
         auto propsSv = agentxx::plugin::PluginStringView::fromCstr(R"({"title":"System"})");
-        ctx.section = ctx.ui->register_info_section(ctx.host, &idSv, &propsSv);
+        ctx.section  = ctx.ui->register_info_section(ctx.host, &idSv, &propsSv);
     }
     if (!ctx.section || !ctx.ui || !ctx.ui->update_info_section || ctx.last_usage_json.empty()) {
         return;
@@ -403,12 +419,16 @@ static void refreshUsageDisplay(ClientCtx& ctx) {
     ctx.ui->update_info_section(ctx.host, ctx.section, &jsonSv);
 }
 
-static void AGENTXX_PLUGIN_CALL onClientPluginData(const AgentxxPluginStringView* payload_json, void* ud) {
+static void AGENTXX_PLUGIN_CALL
+    onClientPluginData(const AgentxxPluginStringView* payload_json, void* ud) {
     auto* ctx = static_cast<ClientCtx*>(ud);
     if (!ctx || !ctx->host) {
         return;
     }
-    std::string raw(payload_json && payload_json->data ? payload_json->data : "{}", payload_json ? static_cast<size_t>(payload_json->size) : 0);
+    std::string raw(
+        payload_json && payload_json->data ? payload_json->data : "{}",
+        payload_json ? static_cast<size_t>(payload_json->size) : 0
+    );
     try {
         auto j = neograph::json::parse(raw);
         if (j.value("plugin", std::string{}) != "agentxx_system_monitor"
@@ -461,8 +481,9 @@ static int32_t AGENTXX_PLUGIN_CALL cmdSysinfoExecute(
             refreshUsageDisplay(*ctx);
             if (ctx->iface.wire && ctx->iface.wire->send_plugin_data) {
                 std::string payload = next ? R"({"enabled":true})" : R"({"enabled":false})";
-                auto evtSv = agentxx::plugin::PluginStringView::fromCstr("usage_enabled");
-                auto paySv = agentxx::plugin::PluginStringView::from(payload.data(), payload.size());
+                auto        evtSv   = agentxx::plugin::PluginStringView::fromCstr("usage_enabled");
+                auto        paySv
+                    = agentxx::plugin::PluginStringView::from(payload.data(), payload.size());
                 ctx->iface.wire->send_plugin_data(ctx->host, &evtSv, &paySv);
             }
             std::string text = next ? "System resource info: ON" : "System resource info: OFF";
@@ -471,10 +492,12 @@ static int32_t AGENTXX_PLUGIN_CALL cmdSysinfoExecute(
                 if (ctx->iface.session && ctx->iface.session->get_client_state) {
                     ctx->iface.session->get_client_state(ctx->host, &stateJson);
                 }
-                bool  agentMissing = false;
+                bool agentMissing = false;
                 if (stateJson.data) {
                     try {
-                        auto st = neograph::json::parse(std::string(stateJson.data, static_cast<size_t>(stateJson.size)));
+                        auto st = neograph::json::parse(
+                            std::string(stateJson.data, static_cast<size_t>(stateJson.size))
+                        );
                         if (st.contains("agentPlugins") && st["agentPlugins"].is_array()) {
                             size_t n     = 0;
                             bool   found = false;
@@ -514,10 +537,12 @@ static int32_t AGENTXX_PLUGIN_CALL cmdSysinfoExecute(
 extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxClientPluginInfo* agentxx_plugin_client_get_info(void
 ) {
     static const AgentxxClientPluginInfo info{
-        AGENTXX_CLIENT_PLUGIN_API_VERSION, 0,
+        AGENTXX_CLIENT_PLUGIN_API_VERSION,
+        0,
         agentxx::plugin::PluginStringView::fromCstr("agentxx_system_monitor"),
         agentxx::plugin::PluginStringView::fromCstr("1.0.0"),
-        agentxx::plugin::PluginStringView::fromCstr("System resource usage: Info section (CPU/RAM/GPU), /sysinfo toggle"
+        agentxx::plugin::PluginStringView::fromCstr(
+            "System resource usage: Info section (CPU/RAM/GPU), /sysinfo toggle"
         ),
     };
     return &info;
@@ -540,12 +565,15 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
             auto ctx   = std::make_unique<ClientCtx>();
             ctx->host  = host;
             ctx->iface = agentxx::plugin::ClientIfaces::query(host);
-            ctx->ui
-                = agentxx::plugin::queryInterface<AgentxxClientUiIface>(host, AGENTXX_IFACE_CLIENT_UI);
+            ctx->ui    = agentxx::plugin::queryInterface<AgentxxClientUiIface>(
+                host,
+                AGENTXX_IFACE_CLIENT_UI
+            );
             raw = ctx.get();
 
             if (ctx->ui && ctx->ui->register_info_section) {
-                auto idSv    = agentxx::plugin::PluginStringView::fromCstr("agentxx_system_monitor.usage");
+                auto idSv
+                    = agentxx::plugin::PluginStringView::fromCstr("agentxx_system_monitor.usage");
                 auto propsSv = agentxx::plugin::PluginStringView::fromCstr(R"({"title":"System"})");
                 ctx->section = ctx->ui->register_info_section(host, &idSv, &propsSv);
             }
@@ -572,8 +600,13 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
             }
 
             if (ctx->iface.log && ctx->iface.log->log) {
-                ctx->iface.log
-                    ->log(host, 2, agentxx::plugin::PluginStringView::fromCstr("agentxx_system_monitor client loaded"));
+                ctx->iface.log->log(
+                    host,
+                    2,
+                    agentxx::plugin::PluginStringView::fromCstr(
+                        "agentxx_system_monitor client loaded"
+                    )
+                );
             }
             *plugin_ctx = ctx.release();
             return 0;
@@ -599,14 +632,19 @@ extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_client_destroy(void* plugin
                 ctx->section = nullptr;
             }
             if (ctx->ui && ctx->ui->unregister_command) {
-                ctx->ui->unregister_command(ctx->host, agentxx::plugin::PluginStringView::fromCstr("sysinfo"));
+                ctx->ui->unregister_command(
+                    ctx->host,
+                    agentxx::plugin::PluginStringView::fromCstr("sysinfo")
+                );
             }
             ctx->last_usage_json.clear();
             if (ctx->iface.log && ctx->iface.log->log) {
                 ctx->iface.log->log(
                     ctx->host,
                     2,
-                    agentxx::plugin::PluginStringView::fromCstr("agentxx_system_monitor client unloaded")
+                    agentxx::plugin::PluginStringView::fromCstr(
+                        "agentxx_system_monitor client unloaded"
+                    )
                 );
             }
             delete ctx;
