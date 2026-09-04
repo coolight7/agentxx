@@ -19,7 +19,7 @@
 ./agent/build/linux-debug/exec/agentxx_test string_util regex agent plugins
 ```
 
-Test module names are listed in the registry table at the top of `agent/test/test.cpp`. Under `AGENTXX_BUILD_CLIENT`, 10 additional client-side modules such as `config_loader/tui_*` are also compiled.
+Test module names are listed in the registry table at the top of `agent/test/test.cpp`. Under `AGENTXX_BUILD_CLIENT`, 11 additional client-side modules are also compiled: `config_loader/tui_settings/tui_input/tui_interrupt/tui_scroll/tui_sidebar/tui_context_overlay/tui_stream/tui_tool_header/sessionId/mermaid_state`.
 
 ### Conventions for Adding New Test Modules
 

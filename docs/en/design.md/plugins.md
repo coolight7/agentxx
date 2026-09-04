@@ -25,7 +25,7 @@ Host (libagentxx / agentxx_cli)
   Core vtable (Frozen) ── alloc / free / query_interface (IID → interface table)
                           │
          ┌────────────────┼────────────────┬─────────────────┐
-         │ tools          │ hooks          │ events          │ scheduler   ...14 tables
+         │ tools          │ hooks          │ events          │ scheduler   ...16 agent + 7 client tables
          │ register/      │ 7 hook points  │ publish/        │ sleep/      capabilities/
          │ call_tool      │                │ subscribe       │ offload     session/plugins/
          └────────────────┘                └─────────────────┘             config/model/cancel/...
@@ -52,7 +52,7 @@ A single plugin shared library may be loaded simultaneously by multiple independ
 
 1. **No Mutable Global / Function-Static State**: All mutable state must be encapsulated within a heap context object allocated per instance (`*plugin_ctx`, typically inheriting from `kit::PluginBase`).
 2. **State Recovered via Context Closures**: All tools, hooks, and event callbacks must recover their instance context via `spec.user_data`.
-3. **Cache Interface Tables in Instance Context**: Results of `AgentIfaces` queries must be stored as instance members, preventing interference across instances. Adapters for offload thread pool asynchronous interfaces (`plugin_tool_sync.h`) must be embedded within the caller's instance context and destroyed alongside the instance.
+3. **Cache Interface Tables in Instance Context**: Results of `AgentIfaces` queries must be stored as instance members, preventing interference across instances. Adapters for offload thread pool asynchronous interfaces (`plugin_kit.h`) must be embedded within the caller's instance context and destroyed alongside the instance.
 
 ---
 
@@ -253,6 +253,7 @@ Agentxx maintains a single unified C++ plugin infrastructure. JavaScript script 
 | Plugin | Description |
 |---|---|
 | `example_plugin` | Comprehensive native C++ example (fast_tool, Task coroutines, call_tool, sleep, hooks, events, capabilities, client entry). |
+| `example_graph_node` | Graph extension sample (custom node types + set_graph_json; requires `agentxx.agent.graph`). |
 | `example_js` | JavaScript script plugin example (C++ shell wrapper + `plugin.js`). |
 | `example_resources` | Session resource contribution example (declarative & programmatic MCP, Skills, rules, session environments). |
 | `agentxx_filesystem` | Filesystem tools (list, read, write, edit, glob, grep; includes unit-tested `*_impl.h`). |
@@ -264,7 +265,7 @@ Agentxx maintains a single unified C++ plugin infrastructure. JavaScript script 
 | `agentxx_system_monitor` | System resource monitor (tool + background periodic sampling + client Info/Status bar rendering). |
 | `agentxx_planning` | Task planning tool + client-side Plan visualization decor. |
 | `agentxx_math` | Math computation tool (`agentxx_math_calculate`; supports arithmetic, powers, factorials, bitwise, logic, trig, hyperbolic, log, combinations/permutations, implicit multiplication). |
-| `agentxx_codegraph` | Code index & navigation (8 tools + client Info panel). |
+| `agentxx_codegraph` | Code index & navigation (5 tools: search/context/callers/callees/path + client Info panel). |
 | `agentxx_screen_capture` | Screen capture (Windows only). |
 | `agentxx_computer_use` | Mouse and keyboard control (Windows only; depends on `screen_capture`). |
 | `agentxx_audio_stream` | Audio stream capture (Windows WASAPI only). |

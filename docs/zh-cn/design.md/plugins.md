@@ -23,7 +23,7 @@ Agentxx 插件系统采用 **纯 C ABI + COM 风格接口表查询**：
   核心 vtable (冻结) ── alloc / free / query_interface (IID → 接口表)
                        │
          ┌─────────────┼─────────────┬──────────────┬─────────────┐
-         │ tools       │ hooks       │ events       │ scheduler   │  ...14 张
+         │ tools       │ hooks       │ events       │ scheduler   │  ...16 张 agent + 7 张 client
          │ register/   │ 7 钩子点     │ publish/     │ sleep/      │  capabilities/
          │ call_tool   │             │ subscribe    │ offload     │  session/plugins/
          └─────────────┘             └──────────────┘             │  config/model/cancel/...
@@ -50,7 +50,7 @@ Agentxx 插件系统采用 **纯 C ABI + COM 风格接口表查询**：
 
 1. **禁止可变全局/函数级 static**：所有可变状态必须封装在随实例创建的上下文堆对象 (`*plugin_ctx`，通常继承 `kit::PluginBase`)
 2. **状态经上下文闭包恢复**：所有工具/钩子/事件回调必须通过 `spec.user_data` 恢复当前实例上下文
-3. **接口表缓存存入实例上下文**：`AgentIfaces` 查询结果存实例成员，各实例互不干扰；offload线程池异步接口 (`plugin_tool_sync.h`) 适配器为调用方内嵌存储，随实例销毁释放
+3. **接口表缓存存入实例上下文**：`AgentIfaces` 查询结果存实例成员，各实例互不干扰；offload线程池异步接口 (`plugin_kit.h`) 适配器为调用方内嵌存储，随实例销毁释放
 
 ---
 
@@ -266,6 +266,7 @@ Agentxx 仅维护单一 C++ 插件基础设施；JS 脚本插件经内置 `agent
 | 插件 | 说明 |
 |------|------|
 | `example_plugin` | 原生 C++ 综合示例 (fast_tool/Task 协程/call_tool/sleep/钩子/事件/能力/client 入口) |
+| `example_graph_node` | Graph 扩展示例 (自定义节点类型 + set_graph_json 改图, 需 `agentxx.agent.graph` 接口) |
 | `example_js` | JS 脚本插件示例 (C++ 壳 + `plugin.js`) |
 | `example_resources` | 会话资源贡献示例 (声明式与编程式 MCP/Skill/规则/会话环境) |
 | `agentxx_filesystem` | 文件系统 6 工具 (list/read/write/edit/glob/grep, 含 `*_impl.h` 直测实现) |
@@ -277,7 +278,7 @@ Agentxx 仅维护单一 C++ 插件基础设施；JS 脚本插件经内置 `agent
 | `agentxx_system_monitor` | 系统资源监控 (工具 + 周期采集 + client 侧 Info/状态栏渲染) |
 | `agentxx_planning` | 规划工具 + client 侧 Plan 装饰 |
 | `agentxx_math` | 数学计算工具 (`agentxx_math_calculate`, 支持四则/幂/阶乘/位运算/逻辑/三角/双曲/对数/组合排列等函数与隐式乘法) |
-| `agentxx_codegraph` | 代码索引 8 工具 + client Info 栏 |
+| `agentxx_codegraph` | 代码索引 5 工具 (search/context/callers/callees/path) + client Info 栏 |
 | `agentxx_screen_capture` | 屏幕捕获 (仅 Windows) |
 | `agentxx_computer_use` | 键鼠控制 (仅 Windows, depends: screen_capture) |
 | `agentxx_audio_stream` | 音频流捕获 (仅 Windows WASAPI) |

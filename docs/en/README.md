@@ -129,8 +129,8 @@
             - Character-based chunking
             - Structural chunking (recursive splitting for oversized chunks)
             - ⬜ Semantic chunking
-    - ✅ Sub-Agent (supports concurrent coroutine execution while preserving return order)
-    - ⬜ tool_skill_search (lazy loading of tools/skills)
+    - ✅ Sub-Agent (supports concurrent coroutine execution while preserving return order; default `subagent_task` with batched `tasks` parallelism)
+    - `tool_skill_search` logic inlined as a lazy-retrieval template (not a standalone tool)
     - ✅ get_current_datetime (retrieves system timestamp, local time, and UTC time)
 - ✅ **Tree-Messages**
     - agentxx_share_store (allows storing and retrieving variables across LLM messages, skills, and tools)
@@ -167,14 +167,15 @@
     - Implemented as a `Toolcall`, allowing the LLM or code to launch SubAgents asynchronously.
     - Concurrent toolcalls enable parallel execution of multiple SubAgents.
     - Built-in implementations:
-        - subagent_task (isolated context execution)
-        - tool_skill_search
+        - subagent_task (isolated context execution, default registered name; supports batched parallel delegation via `tasks`).
 - ✅ **Middleware**
     - Hierarchical stack interception: Executes `start` in order, pushes corresponding `end` onto stack, and unwinds stack upon completion: `agentCallStart`, `agentCallEnd`, `modelCallStart`, `modelCallEnd`, `toolCallStart`, `toolCallEnd`.
-- ✅ **PlanningMiddleware**
+    - Actual stack: SubagentManager → Summarization → Permission → Skill → MemoryFile → LogPrint.
+- ✅ **Task Planning** (`agentxx_planning` dual-sided plugin)
     - Two-layer planning.
     - Mermaid stateDiagram-v2 state machine diagrams representing overall milestones.
     - todo_list tracking immediate tactical execution items.
+    - Plans persist under `{dataDir}/plans/`; client renders via tool decor + Info section.
 - ✅ **Context Compaction** (`SummarizationMiddleware`)
     - Token usage tracking / heuristic estimation; initiates automatic compaction at configured thresholds.
     - Tool-specific compaction handlers:

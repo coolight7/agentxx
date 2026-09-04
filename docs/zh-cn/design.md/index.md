@@ -41,7 +41,7 @@ Agentxx 是一个使用 C++23 实现的 AI Agent 框架，编译器启用 C++26/
 (同名同行为, 见 `agent/plugins/agentxx_*`)，经 yaml `plugins` 段配置加载，
 或构建期经 `AGENTXX_PLUGIN_BUILTIN_LIST`
 合并编译进 libagentxx (默认不内置)；lib 内仅保留 share_store / subagent /
-tool_skill_search 与延迟加载装配：
+git_worktree 及延迟加载装配 (`ToolSkillSearchSubAgentTask` 模板类, 当前未独立注册为 tool)：
 
 | 分类 | 工具 | 说明 |
 |------|------|------|
@@ -63,22 +63,28 @@ tool_skill_search 与延迟加载装配：
 | | `agentxx_codegraph_context` | 获取符号的定义、调用者、被调用者 |
 | | `agentxx_codegraph_callers` / `agentxx_codegraph_callees` | 调用图正向/反向追踪 |
 | | `agentxx_codegraph_path` | 查找两符号间的调用链路径 |
-| | | `agentxx_codegraph_*` 系列 tool 由插件 `agentxx_codegraph` 提供: 仅当该插件经 yaml `plugins` 段配置加载且编译启用 `AGENTXX_ENABLE_PLUGIN_CODEGRAPH` 时注册 |
-| **规划** | `agentxx_planning` | 两层任务规划 (Mermaid 状态图 + Todo List + 备忘录) |
-| **子代理** | `agentxx_subagent` | 创建和管理子代理执行委派任务 |
-| | `tool_skill_search` | 延迟加载工具/技能的搜索与发现 |
+| | 实际注册 5 工具 (search/context/callers/callees/path; 日志 `loaded (6 tools)` 中的第 6 个为计数口径含 client 侧 Info 段, 非 agent 工具); 仅当该插件经 yaml `plugins` 段配置加载且编译启用 `AGENTXX_ENABLE_PLUGIN_CODEGRAPH` 时注册 |
+| **规划** | `agentxx_planning` | 两层任务规划 (Mermaid 状态图 + Todo List + 备忘录; 双端插件: 规划持久化到 `{dataDir}/plans/{thread}.json`, 发布 `agentxx_planning.planning` 事件, client 侧经工具装饰+Info 段落渲染, 订阅 `agentxx_host.client_attached` 做接入重发自愈) |
+| **子代理** | `agentxx_subagent` | 创建和管理子代理执行委派任务 (单任务字段 subagent/message, 或批量 tasks 数组并行; 由 SubagentManager 中间件持有单实例注入, 默认注册 `subagent_task`) |
+| | `tool_skill_search` 逻辑 | 延迟加载工具/技能的搜索: `ToolSkillSearchSubAgentTask` 仅为 system prompt 模板 (当前未独立注册为 tool, 由 subagent 按需内联检索逻辑) |
 | **数据** | `agentxx_share_store` | 会话级文本寄存，节省上下文 |
 | | `agentxx_string_html_to_markdown` | HTML 转 Markdown |
 | | `agentxx_string_regexp` | 正则搜索/替换/移除 |
 | **系统** | `agentxx_get_current_datetime` | 获取当前日期时间 |
 | | `agentxx_get_system_core_info` | 获取 CPU/内存/GPU 使用率 |
-| **UI 控制** | `agentxx_ui_control_keyboard_mouse` | Windows 键鼠控制 (仅 Windows) |
+| **UI 控制** | `agentxx_ui_control_keyboard_mouse` | Windows 键鼠控制 (仅 Windows, 由 `agentxx_computer_use` 插件提供, depends: screen_capture) |
+| **屏幕捕获** | `agentxx_screen_capture` | 屏幕截图/流式捕获 (仅 Windows) |
+| **音频流** | `agentxx_audio_stream` | 系统/程序/麦克风音频流捕获 (仅 Windows WASAPI; 当前桩实现阶段, 平台矩阵见 plugins.md) |
+| **文本选择监听** | `agentxx_text_selection_monitor` | 系统级文本选择事件流 (仅 Windows UIAutomation) |
+| **JS 执行** | `agentxx_execute_javascript` | QuickJS 执行 JS 代码 (depends: `agentxx_javascript_engine` 的 `interpreter.js` 能力) |
 
 工具特性：
-- **自动压缩**: 工具输出超过阈值时自动调用 LLM 压缩摘要
-- **延迟加载**: 工具初始仅注册名称，经 `tool_skill_search` 检索后才加载全量定义
+- **自动压缩**: 工具输出超过阈值 (`toolcallSummaryLimitOutputLength`, 默认 2K) 且该 tool 启用 `autoSummaryOutput` 时压缩摘要 (经 share_store 卸载原文)
+- **延迟加载**: 插件工具按需注册；`XXToolBase::canDelayLoad` 标记可延迟工具 (默认 true), 初始仅名称注入 system prompt
+- **参数自愈**: `ToolcallWrapNode::autoFixArgsType` 按 JSON Schema 自动修正参数类型 (string↔数组/数值/布尔互转), 提高模型兼容性
+- **重复调用检查**: 启用 `repeatCallCheck` 的 tool 在同一 llm↔tool 链内连续同参调用达阈值 (`toolcallRepeatCheckThreshold`, 默认 5, 0=禁用) 时经 permission 总线询问用户
 - **去重机制**: 文件读写等工具支持 SummarizationToolHandle，重复调用时截断旧结果
-- **MCP 扩展**: 通过 MCP Client 连接外部 MCP Server，动态注册远程工具 (支持 HTTP SSE 和 stdio 传输)
+- **MCP 扩展**: 通过 MCP Client 连接外部 MCP Server，动态注册远程工具 (支持 HTTP SSE 和 stdio 传输, 命名空间前缀隔离, 默认 120s 调用超时)
 
 ### Git Worktree 模式 (yaml `worktree.enable`, 默认关闭)
 
@@ -97,8 +103,8 @@ tool_skill_search 与延迟加载装配：
   (`SessionFsIsolation`): 主检出子树写操作 DENY (读不受限), 隔离优先于白名单/
   模式默认规则; filesystem 工具的相对路径经 `normalizePermissionPath(path,
   sessionId)` 按 worktree 解析, 权限规则与实际访问路径稳定匹配
-- **插件链路跟随**: 插件接口 `AgentxxConfigIface` 升 v3 新增
-  `get_session_work_dir(host, session_id)` (worktree 绑定优先); filesystem 插件
+- **插件链路跟随**: 插件接口表 `agentxx.agent.config` 的
+  `get_session_work_dir(host, session_id)` (worktree 绑定优先, 为空回退默认会话工作目录); filesystem 插件
   改为每次 execute 按注入的 sessionId 动态解析 (原 entry 时静态缓存),
   execute_command 插件同语义 —— 会话绑定后两个插件的路径基准即时切换
 - **子代理继承**: AgentHost 派生子代理时继承父会话绑定 (子代理 config.workDir
@@ -120,8 +126,7 @@ tool_skill_search 与延迟加载装配：
 | **SkillMiddleware** | 技能文件 (SKILL.md) 的渐进式发现与加载 |
 | **MemoryFileMiddleware** | 上下文文件 (Memory) 读取与缓存，每次模型调用时注入系统提示词 |
 | **SummarizationMiddleware** | 上下文 token 统计与自动压缩，防止超出模型上下文窗口 |
-| **PlanningMiddleware** | 任务规划状态管理，将 planning 数据注入 system prompt |
-| **WorktreeMiddleware** | git worktree 模式提示词注入 (yaml `worktree.enable`): 每轮按会话绑定状态追加行为规范 (未绑定→提示创建 / 已绑定→提交与收尾规范 / 子代理继承→隔离提醒), 经 `graphDataKey_appendSystemMessage` 通道与 Planning 同模式 |
+| **SubagentManagerMiddleware** | 子代理委派管理: 持有 `SubAgentManagerTool` 单实例 (`agentxx_subagent`), 按 yaml `subagent.enable` 决定是否注入给模型; 事件总线服务 `service.subagent.execute` 始终注册 (供上下文压缩等内部路径调用) |
 | **AgentHost** | 进程级 agent 宿主: 主 agent 与子代理平等注册 (AgentNode), 派生独立 agent 运行子代理, 在根与每个子代理的全局总线上 serve service.subagent (委派扁平化: 嵌套委派与根委派同路径), 强制深度/并发预算, HostBus 跨 agent 消息路由, 生命周期回收 |
 | **EventBridge** | 将 GraphEngine 事件翻译为 EventBus 强类型事件 |
 | **LogPrint** | 调试日志输出中间件 (条件编译，按配置控制日志级别) |
@@ -163,15 +168,13 @@ tool_skill_search 与延迟加载装配：
   非法字符替换/超长截断/Windows 保留名规避, 发生改写时附加 FNV hash 尾缀防碰撞;
   dataDir 由 yaml `data_dir` 指定, **未配置 dataDir 且未指定 sessionStoreDirectory 时不持久化**:
   设置/会话/codegraph 数据仅存内存, BaseAgent 初始化时输出警告)
-- 分库设计 (两个 DB 文件, 均启用 WAL + busy_timeout):
-  - `session.db`: viewMessages (append-only, 每消息一行 JSON) + llmMessages
-    (单行整体替换) + meta (msgIdCounter/title/lastActiveMs)
-    —— 同属"会话消息状态", 同一生命周期 (随 session 创建/删除), 同一 io 线程写入,
-    落库可事务性一起提交
-  - `share_store.db`: agentxx_share_store KV 条目 (id 自增 = 现有最大 id + 1,
-    重启后延续) —— KV 随机读改写与消息追加模式不同, 本质是上下文卸载缓存,
-    内容可丢弃/可清理, 生命周期独立于消息历史; 可能存放大型文本, 独立文件
-    避免其膨胀拖慢消息库 WAL checkpoint, 也便于未来独立裁剪/归档
+- 分库设计 (单库 `session.db`, 四表, 启用 WAL + busy_timeout):
+  - `view_message` 表: viewMessages (append-only, 每消息一行 JSON)
+  - `llm_context` 表: llmMessages (单行整体替换)
+  - `meta` 表: msgIdCounter/title/lastActiveMs
+  - `store` 表: agentxx_share_store KV 条目 (id 自增 = 现有最大 id + 1,
+    重启后延续) —— 与消息历史同一生命周期 (随 session 创建/删除),
+    同一 io 线程写入, 互斥锁串行保护
 - 接入点:
   - `SessionsManager::getOrCreate`: 创建 Session 时从 SQLite 恢复 viewMessages/llmMessages,
     重建链式哈希 (对不含 id 的消息内容, 与 appendViewMessage 语义一致),
@@ -462,9 +465,9 @@ path/to/agentxx_test string_util regex agent
 ```
 
 可用测试模块 (与 `agent/test/test.cpp` 注册列表一致):
-- 同步模块: `string_util` `regex` `diff_util` `events` `concurrency` `misc_fixes` `aho_corasick` `util_misc` `training` `settings_db` `toolcall_args` `ffi_c_api` (及 client 侧: `config_loader` `tui_settings` `tui_input` `tui_interrupt` `tui_scroll` `tui_sidebar` `tui_stream` `tui_tool_header` `sessionId` `mermaid_state`)
+- 同步模块: `string_util` `regex` `diff_util` `events` `concurrency` `misc_fixes` `aho_corasick` `util_misc` `training` `settings_db` `toolcall_args` `ffi_c_api` (及 client 侧 `AGENTXX_BUILD_CLIENT`: `config_loader` `tui_settings` `tui_input` `tui_interrupt` `tui_scroll` `tui_sidebar` `tui_context_overlay` `tui_stream` `tui_tool_header` `sessionId` `mermaid_state`)
 - 异步模块: `event_stream` `event_bridge` `interrupt_bus` `subagent_bus` `subagent_tool` `agent_host` `string_tools` `math_tools` `share_store` `session_persistence` `rag_search` `datetime` `filesystem` `command` `worktree` `web_search` `codegraph` `screen_capture` `cpu_gpu` `text_selection` `http` `network_timeout` `websocket` `remote_agent` `mcp` `acp` `a2a` `openai_provider` `anthropic_provider` `plugins` `plugin_resources` `plugin_multi_instance` `client_plugins` `cancel` `message_supplement` `summarization` `checkpoint_store` `agent` `memgrowth`
-- 平台模块: `screen_capture` `text_selection`
+- 平台限定: `screen_capture` / `text_selection` 仅 Windows 有真实实现 (其余平台跳过); 测试入口另有 Warn/Error 透出 sink (`TestWarnErrorLogSink`), 插件加载失败等库内错误不再静默丢失
 
 测试源目录划分: 根目录 (入口+框架) / `core/` (lib 核心) / `plugin/` (插件系统与具体插件集成) / `client/` (TUI/CLI, 仅 `AGENTXX_BUILD_CLIENT` 编译)。
 新增测试模块约定: 头文件仅保留函数声明; 断言计数器定义在模块 cpp 的匿名命名空间内,
@@ -524,7 +527,7 @@ mcp:
 #   - Windows: %APPDATA%/agentxx/
 # 配置后数据子路径:
 #   - {data_dir}/sqlite/global.db                     全局设置 (TUI 设置等)
-#   - {data_dir}/sqlite/sessions/{sessionId}/          会话数据 (session.db/share_store.db)
+#   - {data_dir}/sqlite/sessions/{sessionId}/          会话数据 (session.db, 含 store 表)
 #   - {data_dir}/sqlite/codegraph/<折叠路径>/index.db CodeGraph 索引
 # data_dir: ~/.agentxx
 
@@ -748,8 +751,9 @@ agent.ioCtx->run();
 │  │        │              │                  │               │    │
 │  │  ┌─────▼──────────────▼──────────────────▼───────────┐   │    │
 │  │  │           Middleware Stack (栈式中间件)             │   │    │
-│  │  │  Permission → Skill → MemoryFile → Summarization  │   │    │
-│  │  │  → Planning → LogPrint                            │   │    │
+│  │  │  SubagentManager → Summarization → Permission      │   │    │
+│  │  │  → Skill → MemoryFile → LogPrint                   │   │    │
+│  │  │  (planning/worktree 为插件+工具形态, 非中间件)       │   │    │
 │  │  └───────────────────────────────────────────────────┘   │    │
 │  │                                                          │    │
 │  │  ┌───────────────────────────────────────────────────┐   │    │
@@ -863,7 +867,12 @@ end1  ←   end2  ←   end3
 - start 阶段异常时跳过 baseRun，直接执行对应的 end
 - 支持 CancelledException / NodeInterrupt 的重新抛出
 - 中间件按会话 (sessionId) 维护独立 State
-- CodeAgent 注册的中间件栈: Permission → Skill → MemoryFile → Summarization → Planning → LogPrint
+- 实际注册栈 (按 `handles` 压入顺序; BaseAgent 先压 SubagentManager/Summarization/Permission,
+  CodeAgent 再压 Skill/MemoryFile/LogPrint): SubagentManager → Summarization → Permission
+  → Skill → MemoryFile → LogPrint。planning (`agentxx_planning` 插件, 经 prompt 接口表
+  注入 `appendSystemPrompts[planning]`) 与 worktree (CodeAgent 初始化期静态追加 system
+  prompt + `agentxx_git_worktree` 工具) 均为插件/工具形态, 不再是独立中间件
+  (历史 `PlanningMiddleware` / `WorktreeMiddleware` 已移除)
 
 #### 取消设计 (CancelToken 双通道)
 
@@ -1221,9 +1230,9 @@ agent/
 │   │   │   │                     #   ViewMessage (UI 展示消息, role 拆分子结构) /
 │   │   │   │                     #   ChainHash / AppendComponentNotification
 │   │   │   ├── model_registry.h  # ModelProviderRegistry (运行时模型切换)
-│   │   │   ├── session_store.h   # 会话 SQLite 持久化: 按 sessionId 分目录,
-│   │   │   │                     #   session.db (viewMessages+llmMessages+meta) 与
-│   │   │   │                     #   share_store.db 分库, 读取路径不创建目录
+│   │   │   ├── session_store.h   # 会话 SQLite 持久化: 单库 session.db
+│   │   │   │                     #   (view_message/llm_context/meta/store 四表, 含 share store KV),
+│   │   │   │                     #   按 sessionId 分目录, 读取路径不创建目录
 │   │   │   ├── prompt.h          # AgentPrompt / ToolPrompt 提示词管理
 │   │   │   ├── training.h        # EvolutionTrainingAgent 进化训练 (变异/评估/优化/收敛检测)
 │   │   │   └── io/               # 远程通信
@@ -1247,14 +1256,12 @@ agent/
 │   │   │   ├── modelcall.h       # ModelCallWrapNode (LLM 调用, 动态模型切换)
 │   │   │   ├── toolcall.h        # ToolcallWrapNode (工具分发, 自动压缩)
 │   │   │   └── agentcall.h       # AgentStart/EndCallWrapNode (会话生命周期)
-│   │   ├── plugin/               # 插件系统 (热插拔原生 C++ 插件, 纯 C ABI, API v1 —— 冻结核心 vtable + 13 张接口表)
+│   │   ├── plugin/               # 插件系统 (热插拔原生 C++ 插件, 纯 C ABI, API v1 —— 冻结核心 vtable + 16 张 agent 接口表 + 7 张 client 接口表)
 │   │   │   ├── api/              # 插件 API 头 (插件/宿主共用 C ABI 契约 + 插件 SDK; 宿主侧引用也走 api/ 前缀)
 │   │   │   │   ├── plugin_api.h      # 纯 C ABI 契约 (唯一跨版本稳定接口, 见 docs/zh-cn/plugins.md) — 核心 vtable 冻结 + COM QueryInterface
 │   │   │   │   ├── client_plugin_api.h # client 侧插件纯 C ABI 契约 (UI 无关语义层)
-│   │   │   │   ├── plugin_kit.h      # C++ SDK header-only (PluginBase/Task/awaiters/tool/hook/capability/spawn, 命名空间 agentxx::plugin)
-│   │   │   │   ├── plugin_guard.h    # 插件 C ABI 边界异常处理 header-only (命名空间 agentxx::plugin)
-│   │   │   │   ├── plugin_iface_helper.h # 接口表查询缓存 (AgentIfaces/ClientIfaces)
-│   │   │   │   └── plugin_tool_sync.h    # offload线程池适配异步接口 (调用方内嵌存储)
+│   │   │   │   ├── plugin_kit.h      # C++ SDK header-only (PluginBase/Task/awaiters/tool/hook/capability/spawn, 命名空间 agentxx::plugin; 含原 plugin_iface_helper.h 接口表聚合与同步工具适配器)
+│   │   │   │   └── plugin_guard.h    # 插件 C ABI 边界异常处理 header-only (命名空间 agentxx::plugin)
 │   │   │   ├── op_driver.h       # 异步操作驱动 (AgentxxOpNotify Done 协议)
 │   │   │   ├── plugin_manager.h  # PluginManager 生命周期 (load/enable/disable/unload) /
 │   │   │   │                     #   PluginTool (C 回调→线程池卸载执行) /
@@ -1269,22 +1276,15 @@ agent/
 │   │   │   ├── permission.h      # PermissionMiddleware (工具权限 HIL)
 │   │   │   ├── skill.h           # SkillMiddleware (技能发现与加载)
 │   │   │   ├── memory_file.h     # MemoryFileMiddleware (上下文文件注入)
-│   │   │   ├── summarization.h   # SummarizationMiddleware (上下文压缩)
-│   │   │   ├── planning.h        # PlanningMiddleware (任务规划状态)
-│   │   │   └── worktree.h        # WorktreeMiddleware (git worktree 行为提示词注入)
-│   │   ├── tools/                # 工具
+│   │   │   ├── subagent_manager.h # SubagentManagerMiddleware (子代理委派管理, 持有 agentxx_subagent)
+│   │   │   └── summarization.h   # SummarizationMiddleware (上下文压缩)
+│   │   ├── tools/                # 工具 (lib 内仅保留 share_store / subagent / tool_skill_search 模板 / git_worktree;
+│   │   │                         #   文件系统/命令/网络/知识检索/字符串/系统时间/规划等已拆分为 agent/plugins 下独立插件)
 │   │   │   ├── tool.h            # XXToolBase / XXToolWrap 工具基类
-│   │   │   ├── filesystem.h      # 文件系统工具 (list/read/write/edit/glob/grep)
-│   │   │   ├── execute_command.h # 命令执行工具 (linux/windows/python/javascript)
-│   │   │   ├── web_search.h      # 网络搜索工具 (search/fetch/fetch_markdown/model_search)
-│   │   │   ├── rag_search.h      # RAG 语义搜索 (EmbeddingClient / VectorStore)
-│   │   │   ├── planning.h        # 规划工具 (planning_write)
-│   │   │   ├── subagent.h       # 子代理管理工具
-│   │   │   ├── tool_skill_search.h # 工具/技能延迟加载搜索 (子代理任务)
-│   │   │   ├── share_store.h     # 会话级文本寄存
-│   │   │   ├── string.h          # 字符串工具 (html2md / regexp)
-│   │   │   ├── system.h          # 系统工具 (datetime; cpu_gpu_info 已迁插件 agentxx_system_monitor)
-│   │   │   └── git_worktree.h    # Git Worktree 工具 (create/info/status/remove)
+│   │   │   ├── share_store.h     # 会话级文本寄存 (agentxx_share_store)
+│   │   │   ├── subagent.h        # 子代理管理工具 (agentxx_subagent)
+│   │   │   ├── tool_skill_search.h # 工具/技能延迟加载搜索子代理任务 (逻辑已内联, 当前未独立注册为 tool)
+│   │   │   └── git_worktree.h    # Git Worktree 工具 (create/info/status/remove, yaml worktree.enable 开启)
 │   │   ├── protocol/             # 协议实现
 │   │   │   ├── openai_provider.h  # OpenAI Chat Completions API (流式/非流式/SSE)
 │   │   │   ├── anthropic_provider.h # Anthropic Messages API (thinking/tool_use)
@@ -1328,9 +1328,11 @@ agent/
 │   │   ├── io/
 │   │   │   ├── stdio/
 │   │   │   │   ├── agent_stdio.h # StdIOClientAgentIO (stdin/stdout 交互)
+│   │   │   │   ├── cli_plugin_adapter.h # CLI 插件适配器 (命令管线/client 事件转发)
 │   │   │   │   └── stdin_reader.h # 异步 stdin 读取器
 │   │   │   └── tui/
 │   │   │       ├── agent_tui.h   # TUIClientAgentIO (FTXUI 终端 UI, 接收/显示/排队/权限/日志)
+│   │   │       ├── tui_plugin_adapter.h # TUI 插件适配器 (UI 注册表/命令管线/client 事件转发)
 │   │   │       ├── scrollable.h  # Scrollable (全量构建的可滚动容器, 侧边栏等短列表用)
 │   │   │       ├── lazy_scrollable.h # LazyScrollable (懒构建+LRU有界缓存+视口局部渲染)
 │   │   │       ├── tui_theme.h   # TUI 主题配色
@@ -1344,9 +1346,10 @@ agent/
 │   │   │           ├── sidebar.h      # 右侧边栏 (日志/信息/Planning)
 │   │   │           ├── overlays.h     # 浮层 (权限/中断/模型选择)
 │   │   │           ├── input_bar.h    # 输入栏
-│   │   │           └── status_bar.h   # 状态栏 (上下文占用/活动状态)
-│   │   ├── train/                # 训练模式
-│   │   └── util/                 # 客户端工具
+│   │   │           ├── status_bar.h   # 状态栏 (上下文占用/活动状态)
+│   │   │           └── spinner.h      # 加载动画
+│   │   ├── train/                # 训练模式 (train.h: EvolutionTrainingAgent 装配/用例加载/进化循环入口)
+│   │   └── util/                 # 客户端工具 (util.h: 通用小工具)
 │   └── src/                      # 实现文件
 │       ├── main.cpp
 │       ├── config_loader.cpp
@@ -1362,7 +1365,7 @@ agent/
 │       │       ├── tui_log_sink.cpp        # TUI 日志接收器
 │       │       ├── framework/              # TUI 框架层实现 (tui_state/modal_container/...)
 │       │       └── components/             # 渲染组件实现: message_list / sidebar /
-│       │                                   #   overlays / input_bar / status_bar
+│       │                                   #   overlays / input_bar / status_bar / spinner
 │       ├── train/train.cpp        # 训练实现
 │       └── util/util.cpp          # 客户端工具实现
 │
@@ -1420,7 +1423,7 @@ agent/
 │   │   ├── test_plugin_resources.* # 插件会话资源扩展测试 (Skill/Memory/MCP 声明式+运行时)
 │   │   ├── test_plugin_multi_instance.* # 插件多实例隔离测试 (三铁律)
 │   │   ├── test_client_plugins.* # client 侧插件测试 (内置合并编译时跳过)
-│   │   ├── test_codegraph_tools.* # CodeGraph 插件集成测试 (索引/搜索/上下文/路径等 8 工具)
+│   │   ├── test_codegraph_tools.* # CodeGraph 插件集成测试 (search/context/callers/callees/path 共 5 工具)
 │   │   ├── test_cpu_gpu_use.*    # system_monitor 插件集成测试 (系统资源监控)
 │   │   ├── test_screen_capture.* # screen_capture 插件集成测试 (仅 Windows)
 │   │   └── test_text_selection_monitor.* # text_selection_monitor 插件集成测试 (仅 Windows)
@@ -1471,11 +1474,12 @@ agent/
 ├── plugins/                      # 插件 (独立动态库/目录, 仅依赖 plugin_api.h;
 │                                 #   编译产物统一输出到 exec/plugins/<插件名>/)
 │   ├── example_plugin/           # 示例 C++ 插件 (双端): 工具/钩子/事件/能力/client 入口
+│   ├── example_graph_node/       # Graph 扩展示例插件 (自定义节点类型 + set_graph_json 改图, 依赖 agent.graph 接口)
 │   ├── example_js/               # JS 示例插件 (C++ 壳 + plugin.js; depends: javascript_engine)
 │   ├── example_resources/        # 会话资源贡献示例 (声明式与编程式 MCP/Skill/规则)
 │   ├── agentxx_javascript_engine/ # QuickJS 引擎插件 (能力 interpreter.js; 专用 JS 线程+沙箱)
 │   ├── agentxx_execute_javascript/ # JS 代码执行工具插件 (agentxx_execute_javascript; depends: javascript_engine)
-│   ├── agentxx_codegraph/        # CodeGraph 代码分析插件 (8 工具 + client Info 栏段落)
+│   ├── agentxx_codegraph/        # CodeGraph 代码分析插件 (search/context/callers/callees/path 共 5 工具 + client Info 栏段落)
 │   ├── agentxx_filesystem/       # 文件系统 6 工具 (list/read/write/edit/glob/grep)
 │   ├── agentxx_execute_command/  # 命令执行 2 工具 (bash/windows)
 │   ├── agentxx_math/             # 数学计算工具 (agentxx_math_calculate)
@@ -1523,8 +1527,10 @@ BaseAgent (基类)
   └── AgentConfig → ModelConfig / AgentPrompt
 
 CodeAgent (继承 BaseAgent)
-  ├── 工具: Filesystem | Command | Web | RAG | SubAgent | MCP | ... (CodeGraph 等经插件注入)
-  └── 中间件: Permission → Skill → MemoryFile → Summarization → Planning → LogPrint
+  ├── 工具: lib 内仅 share_store/subagent/git_worktree (+延迟加载装配); 文件系统/命令/网络/
+  │   RAG/字符串/系统时间/规划/CodeGraph 等全部经插件注入 (yaml plugins 段)
+  └── 中间件: SubagentManager → Summarization → Permission → Skill → MemoryFile → LogPrint
+      (planning/worktree 为插件+工具形态, 非中间件)
 
 SessionServerAgentIO (远程会话驱动)
   ├── AgentIOBase (服务端端点)
@@ -1559,9 +1565,9 @@ EventBus (事件总线)
 - 序列化: toJson/fromJson 供 Wire Sync 与链式哈希共用; 对应 role 下保证子结构非空
 
 ### Delta (流式增量事件, 统一 seq)
-- Type: TextToken / ThinkToken / ToolStart / ToolEnd / TurnStart / TurnEnd / NodeStart / NodeEnd / MessageUITip / InsertMessage
-- 公共字段: seq (会话级单调递增, EventBridge 与 SessionServerAgentIO 共用 Session::nextDeltaSeq 分配), text, msgId, toolName/toolCallId/arguments/result/hasError, nodeName, think (ThinkData), tipType (MessageUITip 时), message (InsertMessage 时携带完整 ViewMessage 指针), historyCount/tailHash, startTimeMs/durationMs, tps (TurnEnd 轮级平均速度)
-- MessageUITip: 瞬态提示, 仅 UI 展示不入 viewMessages; InsertMessage: 原子插入完整 ViewMessage (如 Tip/统计), 入历史并同步
+- Type: TextToken / ThinkToken / ToolStart / ToolEnd / TurnStart / TurnEnd / NodeStart / NodeEnd / MessageUITip / InsertMessage / UpdateMessage
+- 公共字段: seq (会话级单调递增, EventBridge 与 SessionServerAgentIO 共用 Session::nextDeltaSeq 分配), text, msgId, toolName/toolCallId/arguments/result/hasError, nodeName, think (ThinkData), tipType (MessageUITip 时), message (InsertMessage/UpdateMessage 时携带完整 ViewMessage 指针), historyCount/tailHash, startTimeMs/durationMs, tps (TurnEnd 轮级平均速度)
+- MessageUITip: 瞬态提示, 仅 UI 展示不入 viewMessages; InsertMessage: 原子插入完整 ViewMessage (如 Tip/统计), 入历史并同步; UpdateMessage: 按 msgId 原地更新已插入消息 (如 tool 结果回填)
 
 ### SyncPayload / MessageQueueItem
 - SyncPayload {fromIndex (窗口首条绝对下标), messages[], tailHash, totalMessages, messageQueue[]}
@@ -1579,10 +1585,10 @@ EventBus (事件总线)
 
 ## 附录 B: 插件系统 v1 要点 (详见 plugins.md)
 
-- COM 风格接口表查询: 核心 vtable 冻结 (alloc/free/strdup + query_interface), 能力按 IID 字符串查询独立接口表 (首字段 version 独立演进)
-- Agent 侧 13 张接口表: tools / hooks / events / capabilities / scheduler / session / plugins / config / model / cancel / planning / prompt / json / log / resources
-- Client 侧 7 张接口表: ui / events / session / wire / self / json / log (详见 client_plugin_api.h)
-- SDK (plugin_kit.h): PluginBase 状态基类 + Task<T> 锚定协程 + sleep/yield/offload/call_tool/invoke_cap awaiter + tool/fast_tool/blocking_tool/hook/capability/spawn 注册族; 后台任务 spawn 以 post_to_io 锚定宿主 io 线程
+- COM 风格接口表查询: 核心 vtable 冻结 (alloc/free + query_interface; 原 strdup 槽位已移出 vtable, 改为基于 alloc 的头文件内联 `agentxx_plugin_strdup`), 能力按 IID 字符串查询独立接口表 (首字段 version 独立演进, 当前全为 1)
+- Agent 侧 16 张接口表: tools / hooks / events / capabilities / scheduler / session / plugins / config / model / cancel / prompt / json / log / resources / graph / tasks (tasks 表 `notify` 为出参, 供宿主托管后台任务)
+- Client 侧 7 张接口表: ui (v2, 含工具特化渲染器与实例装饰) / events / session / wire / self / json / log (详见 client_plugin_api.h)
+- SDK (plugin_kit.h): PluginBase 状态基类 + Task<T> 锚定协程 + sleep/yield/offload/call_tool/invoke_cap awaiter + tool/fast_tool/blocking_tool/hook/capability/spawn 注册族 (含原 plugin_iface_helper.h 接口表聚合与同步适配器, 已并入 kit); 后台任务 spawn 以 post_to_io 锚定宿主 io 线程
 - 多实例三铁律: 禁止可变全局 static / 状态经 user_data 闭包恢复 / 接口表缓存入实例上下文
 - 导出控制: -fvisibility=hidden + version script 白名单 (AGENTXX_PLUGIN_EXPORT), 单端插件兼容 Android lld
 - 平台矩阵: 各插件 CMakeLists 开头经 plugin_platform_support.cmake 判定 (screen_capture/computer_use/text_selection_monitor 仅 Windows 等)

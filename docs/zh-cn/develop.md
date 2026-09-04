@@ -17,7 +17,7 @@
 ./agent/build/linux-debug/exec/agentxx_test string_util regex agent plugins
 ```
 
-测试模块名见 `agent/test/test.cpp` 顶部注册表；`AGENTXX_BUILD_CLIENT` 条件下额外编译 `config_loader/tui_*` 等 10 个 client 侧模块。
+测试模块名见 `agent/test/test.cpp` 顶部注册表；`AGENTXX_BUILD_CLIENT` 条件下额外编译 `config_loader/tui_settings/tui_input/tui_interrupt/tui_scroll/tui_sidebar/tui_context_overlay/tui_stream/tui_tool_header/sessionId/mermaid_state` 共 11 个 client 侧模块。
 
 ### 新增测试模块约定
 

@@ -77,7 +77,7 @@ cd {PROJECT_ROOT}
 
 - Executables: `agent/build/{platform}-{mode}/exec/agentxx_cli` / `agentxx_test` / `agentxx_benchmark`
 - Plugin Shared Libraries (Standalone Dynamic Library Mode): `agent/build/{platform}-{mode}/exec/plugins/<plugin_name>/` (dispatched by directory when containing a `plugin.yaml` manifest)
-- Shared Library (FFI): `agent/build/{platform}-{mode}/lib/libagentxx_shared.so` (only exports 25 C symbols; see `agent/lib/ffi_symbols.map`)
+- Shared Library (FFI): `agent/build/{platform}-{mode}/lib/libagentxx_shared.so` (Exports C symbols see `agent/lib/ffi_symbols.map`)
 
 ## Debug Build Acceleration
 
