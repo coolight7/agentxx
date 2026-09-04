@@ -41,11 +41,71 @@ rem    "Failed to gather app local DLL dependencies" warning.
 set VCPKG_ROOT=
 set VCPkgLocalAppDataDisabled=1
 
-rem find Ragel
+rem find Ragel (winget links dir kept for fallback)
 set "PATH=%PATH%;%localappdata%\Microsoft\WinGet\Links\"
 
-set BOOST_ROOT="%src_dir%/third_party/boost-windows-build-release/"
-set OPENSSL_ROOT_DIR="%src_dir%/third_party/OpenSSL-windows-build/"
+rem ===== Hermetic deps: self-build Boost/OpenSSL/ragel (not system installs) =====
+rem - SKIP: set AGENTXX_SKIP_AUTO_DEPS=1 to disable auto-build (then the dirs
+rem   below must already exist, else cmake fails with a clear message)
+rem - Prebuilt dirs under third_party are reused automatically when present.
+rem - The ps1 is pure ASCII; output goes through powershell stdout.
+if "%AGENTXX_SKIP_AUTO_DEPS%"=="1" goto deps_skip_all
+rem ===== compile environment pre-check (fail fast with clear message) =====
+rem check: cmake, perl (OpenSSL Configure needs), git (boost source fetch),
+rem        Visual Studio (vswhere or known install paths)
+where cmake >nul 2>&1
+if errorlevel 1 (
+    echo [env] cmake not found, install from https://cmake.org/download/
+    exit /b 1
+)
+where perl >nul 2>&1
+if errorlevel 1 (
+    echo [env] perl not found ^(OpenSSL Configure needs it^), install Strawberry Perl and add to PATH
+    exit /b 1
+)
+where git >nul 2>&1
+if errorlevel 1 (
+    echo [env] git not found ^(needed to fetch boost/openssl sources if missing^)
+    exit /b 1
+)
+set "AGENTXX_VS_FOUND="
+if exist "%ProgramFiles%\Microsoft Visual Studio\Installer\vswhere.exe" set "AGENTXX_VS_FOUND=1"
+if exist "C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\Tools\VsDevCmd.bat" set "AGENTXX_VS_FOUND=1"
+if exist "C:\Program Files\Microsoft Visual Studio\2022\Professional\Common7\Tools\VsDevCmd.bat" set "AGENTXX_VS_FOUND=1"
+if exist "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\Common7\Tools\VsDevCmd.bat" set "AGENTXX_VS_FOUND=1"
+if not defined AGENTXX_VS_FOUND (
+    echo [env] Visual Studio with MSVC not found ^(need VsDevCmd.bat, VS2022+ recommended^)
+    exit /b 1
+)
+set "AGENTXX_VS_FOUND="
+set "AGENTXX_DEPS_NEEDED="
+if not exist "%src_dir%\third_party\boost-windows-build-release\include\boost\version.hpp" set "AGENTXX_DEPS_NEEDED=1"
+if not exist "%src_dir%\third_party\OpenSSL-windows-build\include\openssl\opensslv.h" set "AGENTXX_DEPS_NEEDED=1"
+rem hyperscan needs ragel; if missing let ps1 fetch/build it
+if "%AGENTXX_ENABLE_HYPERSCAN%"=="OFF" goto deps_skip_ragel
+where ragel >nul 2>&1
+if errorlevel 1 set "AGENTXX_DEPS_NEEDED=1"
+:deps_skip_ragel
+if not defined AGENTXX_DEPS_NEEDED goto deps_done
+echo [deps] Boost/OpenSSL/ragel windows artifacts missing, self-building/fetching ...
+powershell -NoProfile -ExecutionPolicy Bypass -File "%script_dir%deps\prepare_windows_deps.ps1" -Mode Release -SrcDir "%src_dir%third_party"
+if %ERRORLEVEL% neq 0 (
+    echo [deps] self-build deps failed ^(AGENTXX_SKIP_AUTO_DEPS=1 to skip^)
+    exit /b 1
+)
+:deps_done
+:deps_skip_all
+
+if not defined BOOST_ROOT (
+    if exist "%src_dir%\third_party\boost-windows-build-release\" (
+        set "BOOST_ROOT=%src_dir%\third_party\boost-windows-build-release\"
+    )
+)
+if not defined OPENSSL_ROOT_DIR (
+    if exist "%src_dir%\third_party\OpenSSL-windows-build\" (
+        set "OPENSSL_ROOT_DIR=%src_dir%\third_party\OpenSSL-windows-build\"
+    )
+)
 
 cmake -DAGENTXX_BUILD_CLIENT=ON ^
     -DAGENTXX_BUILD_TEST=ON ^

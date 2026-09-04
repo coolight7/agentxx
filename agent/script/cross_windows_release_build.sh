@@ -7,7 +7,7 @@
 #   不依赖系统 apt 安装的 mingw (如 g++-mingw-w64 / mingw-w64-x86-64-dev)
 # - 产物: {build}/exec/agentxx_cli.exe + libagentxx.dll + plugins/*.dll
 #
-# 设计目标 (Heretic / 可复现):
+# 设计目标:
 #   - 所有交叉所需文件均落在 agent/third_party/cross-windows/ 内:
 #     cross-windows/
 #       toolchain/                  # llvm-mingw 解压后 (bin/x86_64-w64-mingw32-clang 等)
@@ -829,10 +829,10 @@ fi
 # - Clang/llvm-mingw: libc++.dll / libunwind.dll
 # - GCC/MinGW: libstdc++-6.dll / libgcc_s_seh-1.dll (+ sjlj/dw2 变体兼容)
 # - 两者共有: libwinpthread-1.dll
-# - UCRT (ucrtbase/api-ms-win-*) 为 Win10+ 系统自带，不捆绑。
+# - UCRT (ucrtbase/api-ms-win-*) 为 Win10+ 系统自带，不复制。
 # - 跳过: AGENTXX_SKIP_BUNDLE_RUNTIME=1 ./cross_windows_release_build.sh
 if [[ "${AGENTXX_SKIP_BUNDLE_RUNTIME:-0}" != "1" && -n "${toolchain_dir:-}" ]]; then
-    echo "[runtime] 捆绑 MinGW 运行时 DLL -> $build_dir/exec/"
+    echo "[runtime] 复制 MinGW 运行时 DLL -> $build_dir/exec/"
     _rt_candidates=(libc++.dll libunwind.dll libstdc++-6.dll libgcc_s_seh-1.dll libgcc_s_sjlj-1.dll libgcc_s_dw2-1.dll libwinpthread-1.dll)
     _rt_search_dirs=()
     [[ -d "$toolchain_dir/x86_64-w64-mingw32/bin" ]] && _rt_search_dirs+=("$toolchain_dir/x86_64-w64-mingw32/bin")

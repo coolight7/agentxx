@@ -4,8 +4,48 @@
 - C++ 标准: Requires C++26+.
 - 编译器推荐: Linux/gcc 16.1. 此前使用 gcc 13.2 编译时，部分协程函数会导致编译器自身崩溃
 
-## 开始
-- 安装或编译 Boost 1.92
+---
+- 有两种方式开始编译 
+  - [自动编译脚本](#自动编译脚本); 自动处理了大部分操作
+  - [手动编译](#手动编译); 手动控制 Boost、OpenSSL 等库的编译、版本、参数
+---
+
+## 自动编译脚本
+
+- 执行构建脚本即可 (`agent/script/linux_debug_build.sh` / `linux_release_build.sh`)
+- 脚本会自动准备全部编译环境与依赖库, 无需手动安装 apt 库，自动处理:
+>
+> 1. **环境前置检查**: `cmake` / `ninja` / `make` / `curl|wget` / `tar` / `python3`
+>    与 C++26 编译器 (`g++>=14` 或 `clang++>=18`), 缺失时直接报错并给出安装命令。
+> 2. **依赖自构建** (全部使用自己编译的库, 不用系统或 apt 安装库):
+>    `Boost 1.92` (debug/release 两版) 与 `OpenSSL 4.0.1` 由源码自动编译到
+>    `agent/third_party/boost-linux-build-{debug,release}/` 与
+>    `agent/third_party/OpenSSL-linux-build/`; 已有产物自动复用。
+>    `ragel` (hyperscan 代码生成器) 优先用系统已装版本, 缺失时下载源码自建。
+>
+- 相关环境变量 (可选):
+
+| 变量 | 说明 |
+| --- | --- |
+| `AGENTXX_SKIP_AUTO_DEPS=1` | 跳过自动构建 (依赖目录缺失时直接报错) |
+| `AGENTXX_DEPS_FORCE=1` | 忽略复用, 强制重建依赖 (ragel 除外, 它优先复用系统版) |
+| `BOOST_ROOT` / `OPENSSL_ROOT_DIR` | 手动指定已安装路径, 优先于自动构建 |
+| `AGENTXX_ENABLE_HYPERSCAN=OFF` | 关闭 hyperscan, 则不需要 ragel |
+| `AGENTXX_BUILD_PARALLEL=N` | 并行任务数 (debug 默认 4, release 默认 CPU 核数) |
+
+## 手动编译
+
+- 准备编译环境，使用 apt 等工具安装: `cmake`、`ninja-build`、`make`、`curl|wget`、
+  `tar`、`python3`、可选 `ccache` / `patchelf` /
+  `ragel` (hyperscan 需要), 例如:
+```sh
+sudo apt-get install -y cmake ninja-build patchelf ccache zip ragel \
+    libtool autoconf automake make bzip2 xz-utils unzip curl wget
+```
+- `g++>=14` (或 `clang++>=18`) 建议安装 GCC 16.1
+
+### 编译 Boost 1.92
+
 - 安装可以通过系统包管理器直接安装，但需要注意版本，推荐和我们的开发版本一致 `1.92`
 - 自行编译:
 ```sh
@@ -71,7 +111,7 @@ cd {项目根目录}
 ./agent/build/linux-release/exec/agentxx_cli
 ```
 
-## 产物布局
+## 编译结果
 
 - 可执行文件: `agent/build/{platform}-{mode}/exec/agentxx_cli` / `agentxx_test` / `agentxx_benchmark`
 - 插件动态库 (独立动态库模式): `agent/build/{platform}-{mode}/exec/plugins/<插件名>/` (含 `plugin.yaml` 清单时按目录分派)
