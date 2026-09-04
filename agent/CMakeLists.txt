@@ -58,7 +58,7 @@ option(AGENTXX_ENABLE_PLUGIN_EXECUTE_JAVASCRIPT "Build agentxx_execute_javascrip
 set(AGENTXX_PLUGIN_BUILTIN_LIST 
   ""
   CACHE STRING
-  "Which enabled plugins to merge into libagentxx ('' or 'all' = all; semicolon/comma list = only listed ones)"
+  "Which enabled plugins to merge into libagentxx ('all' = all; semicolon/comma list = only listed ones)"
 )
 # ===== Debug 构建加速选项 / Sanitizers =====
 # - GCC/Clang: 在 Debug 配置注入 -fsanitize=* (见下方非 MSVC 分支)

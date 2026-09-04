@@ -64,8 +64,8 @@ if [[ "${AGENTXX_SKIP_BUNDLE_RUNTIME:-0}" != "1" ]]; then
     EXEC_DIR="$build_dir/exec"
     CXX_BIN="${CXX:-c++}"
     echo "[runtime] bundle C++ runtime libs -> $EXEC_DIR (CXX_BIN=$CXX_BIN)"
-    # 1) 经编译器自报路径拷贝 (最可靠，不依赖 ldd 输出格式)
-    for _lib in libstdc++.so.6 libgcc_s.so.1 libatomic.so.1 libgomp.so.1; do
+    # 1) 主产物 libstdc++/libgcc_s (经编译器自报路径拷贝, 不依赖 ldd 输出格式)
+    for _lib in libstdc++.so.6 libgcc_s.so.1; do
         _p=""
         if command -v "$CXX_BIN" >/dev/null 2>&1; then
             _p=$("$CXX_BIN" -print-file-name="$_lib" 2>/dev/null)
@@ -76,22 +76,38 @@ if [[ "${AGENTXX_SKIP_BUNDLE_RUNTIME:-0}" != "1" ]]; then
         unset _p
     done
     unset _lib
-    # 2) 兜底: 经 ldd 解析 agentxx_cli 的实际动态依赖，补拷上述四类库
-    #    (处理 CXX_BIN 未指向实际编译器 / 多 libstdc++ 并存的场景)
-    if command -v ldd >/dev/null 2>&1 && [[ -f "$EXEC_DIR/agentxx_cli" ]]; then
-        while read -r _line; do
-            # ldd 行示例: libstdc++.so.6 => /lib/x86_64-linux-gnu/libstdc++.so.6 (0x...)
-            case "$_line" in
-                *libstdc++.so*|*libgcc_s.so*|*libatomic.so*|*libgomp.so*)
-                    _src=$(echo "$_line" | sed -n 's/.*=> \([^ ]*\).*/\1/p')
+    # 2) 反查 exec 下全部产物的真实动态依赖 (ldd), 将解析到绝对路径的
+    #    非系统库按需补拷 (不预设列表: 避免拷贝 libatomic/libgomp 等
+    #    x86_64 上根本用不到的库)。agentxx_cli/agentxx_test 等 ldd 可见,
+    #    运行期 dlopen 的 plugins/*.so 则逐个单独扫描。
+    if command -v ldd >/dev/null 2>&1; then
+        while IFS= read -r _f; do
+            [[ -f "$_f" ]] || continue
+            echo "[runtime] scan deps of: $_f"
+            while IFS= read -r _line; do
+                case "$_line" in
+                    *' => '/*) ;;
+                    *) continue ;;
+                esac
+                _src=$(echo "$_line" | sed -n 's/.*=> \([^ ]*\) .*/\1/p')
+                _name=$(basename "$_src")
+                # 跳过: 标准库/系统自带的 (libc/libm/libdl/ld-linux/libpthread/librt/libmvec...)
+                case "$_name" in
+                    libstdc++.so*|libgcc_s.so*|libc.so*|libm.so*|libdl.so*|ld-linux*|libpthread.so*|librt.so*|libmvec.so*|libresolv.so*|libutil.so*|libcrypt.so*) continue ;;
+                esac
+                if [[ ! -f "$EXEC_DIR/$_name" ]]; then
                     if [[ "$_src" == /* && -f "$_src" ]]; then
+                        echo "[runtime] extra dep: $_name <- $_src"
                         cp -L -v "$_src" "$EXEC_DIR/" || true
+                    else
+                        echo "WARNING: no absolute path for dep $_name of $_f (may need manual copy)"
                     fi
-                    unset _src
-                    ;;
-            esac
-        done < <(ldd "$EXEC_DIR/agentxx_cli" 2>/dev/null)
-        unset _line
+                fi
+                unset _src _name
+            done < <(ldd "$_f" 2>/dev/null)
+            unset _line
+        done < <(find "$EXEC_DIR" -type f \( -name "agentxx_*" -o -name "lib*.so*" \) ! -name "*.a" 2>/dev/null | sort -u)
+        unset _f
     fi
     # 3) RPATH 指向 $ORIGIN，使 exe/.so 优先从同目录加载捆绑的运行时
     #    - exe/libagentxx.so: $ORIGIN

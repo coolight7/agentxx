@@ -4,7 +4,6 @@
 - 支持修改上下文
 - 验证subagent、summarization
 - CI/CD
-- release 编译发布时携带 标准库
 
 - 冻结 system prompt
 - OpWatchdog debug 时启用、配置启用
