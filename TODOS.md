@@ -3,7 +3,6 @@
 - eventBus 改为tree，命名空间使用 axx/bxx/cc
 - 支持修改上下文
 - 验证subagent、summarization
-- CI/CD
 
 - 冻结 system prompt
 - OpWatchdog debug 时启用、配置启用

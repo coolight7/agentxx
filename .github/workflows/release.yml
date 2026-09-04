@@ -1,0 +1,217 @@
+name: Release CI/CD
+
+on:
+  push:
+    tags:
+      - '*' # 匹配所有 git tag 提交，例如 v1.0.0, v0.1.0, 1.0.0 等
+  workflow_dispatch: # 支持手动触发测试
+    inputs:
+      tag_name:
+        description: 'Release 标签名称 (手动触发时若指定，例如 v0.1.0; 留空则使用默认)'
+        required: false
+        default: ''
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build-release:
+    name: Build (${{ matrix.platform }})
+    runs-on: ${{ matrix.os }}
+    continue-on-error: ${{ matrix.allow_failure }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-x86_64
+            os: ubuntu-latest # 若使用自建 runner，可配置为 [self-hosted, linux]
+            build_script: ./agent/script/linux_release_build.sh
+            exec_dir: agent/build/linux-release/exec
+            zip_prefix: agentxx
+            allow_failure: false
+          - platform: windows-x86_64
+            os: windows-latest # 若使用自建 runner，可配置为 [self-hosted, windows]
+            build_script: agent\script\windows_release_build.bat
+            exec_dir: agent\build\windows-release\exec
+            zip_prefix: agentxx
+            allow_failure: false # 依赖已全部本地自构建, Windows 应与 Linux 同等可靠
+
+    steps:
+      - name: Determine Release Tag
+        id: vars
+        shell: bash
+        run: |
+          TAG="${{ github.ref_name }}"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ inputs.tag_name }}" ]; then
+            TAG="${{ inputs.tag_name }}"
+          fi
+          if [ -z "$TAG" ] || [ "$TAG" = "master" ] || [ "$TAG" = "main" ]; then
+            TAG="dev-$(git rev-parse --short HEAD 2>/dev/null || echo ${{ github.sha }} | cut -c1-7)"
+          fi
+          echo "tag=${TAG}" >> $GITHUB_OUTPUT
+          echo "zip_name=${{ matrix.zip_prefix }}-${TAG}-${{ matrix.platform }}.zip" >> $GITHUB_OUTPUT
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      # ===== Linux 环境依赖准备 =====
+      # - 本项目依赖库 (Boost/OpenSSL) 由构建脚本自行从源码构建, 不再依赖
+      #   apt 安装的库 (libssl-dev 等); 仅保留编译链路本身需要的工具。
+      # - ragel 是 hyperscan 代码生成器 (构建期工具), apt 提供则用之;
+      #   若镜像缺失, 构建脚本会下载源码自建。
+      # - 高版本 GCC: 项目要求 C++26 (推荐 gcc >= 14; gcc 13 对部分协程有
+      #   ICE)。ubuntu 24.04 提供 gcc-14, 装好后切为默认。
+      - name: Install Dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-14 g++-14 cmake ninja-build patchelf ccache zip ragel \
+              libtool autoconf automake make bzip2 xz-utils unzip curl wget || \
+            sudo apt-get install -y gcc g++ cmake ninja-build patchelf ccache zip ragel \
+              libtool autoconf automake make bzip2 xz-utils unzip curl wget
+          if command -v gcc-14 >/dev/null 2>&1; then
+            sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-14 100
+            sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-14 100
+          fi
+          gcc --version | head -1
+
+      # ===== 执行 Linux Release 编译脚本 =====
+      - name: Run Linux Release Build Script
+        if: runner.os == 'Linux'
+        run: |
+          chmod +x ./agent/script/*.sh
+          echo "[build] Running Linux release build script..."
+          ./agent/script/linux_release_build.sh
+
+      # ===== Windows 环境依赖准备 =====
+      # - Boost/OpenSSL 由 windows_release_build.bat 内部用 MSVC 自源码构建,
+      #   不依赖任何预编译/系统安装包。
+      # - perl: OpenSSL Configure 必需, 用 windows-latest 自带 git-perl。
+      # - ragel: hyperscan 代码生成器。无官方 Windows 二进制, 用 winget 装
+      #   (非库依赖, 只是构建工具), 脚本找不到时会自行下载替代。
+      - name: Install Dependencies (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $perlDir = "C:\Program Files\Git\usr\bin"
+          if (Test-Path "$perlDir\perl.exe") {
+            echo "GIT_PERL_DIR=$perlDir" | Out-File -FilePath $env:GITHUB_ENV -Encoding ascii -Append
+          } else {
+            Write-Host "git-perl not found; OpenSSL self-build may fail"
+          }
+          # ragel via winget (best effort; prepare_windows_deps.ps1 会兜底下载)
+          try {
+            winget install --id=PolarGoose.Ragel -e --accept-source-agreements --accept-package-agreements --silent | Out-Host
+          } catch {
+            Write-Host "winget ragel install failed (ignored): $($_.Exception.Message)"
+          }
+
+      - name: Run Windows Release Build Script
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: |
+          rem append git perl and winget links to PATH
+          if defined GIT_PERL_DIR set "PATH=%GIT_PERL_DIR%;%PATH%"
+          set "PATH=%PATH%;%localappdata%\Microsoft\WinGet\Links\"
+          echo [build] Running Windows release build script...
+          call ${{ matrix.build_script }}
+
+      # ===== 打包 Linux 产物 {build}/exec 文件夹为 ZIP =====
+      - name: Package {build}/exec to ZIP (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          EXEC_PATH="${{ matrix.exec_dir }}"
+          if [ ! -d "$EXEC_PATH" ]; then
+            echo "ERROR: Output directory $EXEC_PATH does not exist!"
+            exit 1
+          fi
+          ZIP_NAME="${{ steps.vars.outputs.zip_name }}"
+          echo "[package] Packaging $EXEC_PATH into $ZIP_NAME ..."
+          
+          # 进入 build 输出目录并压缩 exec 文件夹
+          BUILD_PARENT=$(dirname "$EXEC_PATH")
+          EXEC_NAME=$(basename "$EXEC_PATH")
+          (cd "$BUILD_PARENT" && zip -r "${GITHUB_WORKSPACE}/${ZIP_NAME}" "$EXEC_NAME")
+          
+          ls -lh "${GITHUB_WORKSPACE}/${ZIP_NAME}"
+
+      # ===== 打包 Windows 产物 {build}/exec 文件夹为 ZIP =====
+      - name: Package {build}/exec to ZIP (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ExecPath = "${{ matrix.exec_dir }}"
+          if (-not (Test-Path $ExecPath)) {
+            Write-Error "ERROR: Output directory $ExecPath does not exist!"
+            exit 1
+          }
+          $ZipName = "${{ steps.vars.outputs.zip_name }}"
+          Write-Host "[package] Packaging $ExecPath into $ZipName ..."
+          
+          $BuildParent = Split-Path -Parent $ExecPath
+          $ExecName = Split-Path -Leaf $ExecPath
+          Compress-Archive -Path "$BuildParent\$ExecName" -DestinationPath "$env:GITHUB_WORKSPACE\$ZipName" -Force
+          
+          Get-Item "$env:GITHUB_WORKSPACE\$ZipName" | Format-List Length, Name
+
+      # ===== 上传构建产物到 GitHub Actions Artifacts =====
+      - name: Upload Build Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.vars.outputs.zip_name }}
+          path: ${{ steps.vars.outputs.zip_name }}
+          if-no-files-found: error
+
+  # ===== 汇总所有产物并推送到 GitHub Release =====
+  publish-release:
+    name: Publish GitHub Release
+    needs: build-release
+    runs-on: ubuntu-latest
+    if: always() && !cancelled() && needs.build-release.result != 'cancelled'
+    steps:
+      - name: Determine Release Tag
+        id: vars
+        shell: bash
+        run: |
+          TAG="${{ github.ref_name }}"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ inputs.tag_name }}" ]; then
+            TAG="${{ inputs.tag_name }}"
+          fi
+          if [ -z "$TAG" ] || [ "$TAG" = "master" ] || [ "$TAG" = "main" ]; then
+            TAG="dev-$(echo ${{ github.sha }} | cut -c1-7)"
+          fi
+          echo "tag=${TAG}" >> $GITHUB_OUTPUT
+
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist/
+          merge-multiple: true
+
+      - name: Check and List Assets
+        id: check_assets
+        shell: bash
+        run: |
+          echo "=== Release Assets to publish ==="
+          ls -lh dist/ || true
+          count=$(find dist/ -type f -name "*.zip" 2>/dev/null | wc -l)
+          echo "found_count=$count" >> $GITHUB_OUTPUT
+          if [ "$count" -eq 0 ]; then
+            echo "No zip assets were found to publish."
+            exit 1
+          fi
+
+      - name: Create or Update GitHub Release
+        if: steps.check_assets.outputs.found_count != '0'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.vars.outputs.tag }}
+          name: Release ${{ steps.vars.outputs.tag }}
+          files: dist/*.zip
+          generate_release_notes: true
+          draft: false
+          prerelease: false
