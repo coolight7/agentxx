@@ -129,8 +129,8 @@
             - 字符分割
             - 结构分割 (较长的再进行 字符分割/定长分割)
             - ⬜语义分割
-    - ✅Sub-Agent (支持协程并发执行，并保证返回顺序正确)
-    - ⬜tool_skill_search (延迟加载 tool/skill)
+    - ✅Sub-Agent (支持协程并发执行，并保证返回顺序正确; 默认 `subagent_task`, 支持批量 tasks 并行)
+    - `tool_skill_search` 逻辑已内联为延迟检索模板 (未独立注册为 tool)
     - ✅get_current_datetime 获取系统时间戳、本地时间、UTC时间
 - ✅**Tree-Messages**
     - agentxx_share_store (允许存取变量，在 llm-messages、skill、tool 之间传递数据)
@@ -167,14 +167,10 @@
     - 依托 `Toolcall` 实现, 允许 llm/代码 异步启动 SubAgent
     - Toolcall 支持并发，因此支持同时启动运行多个 Subagent
     - 内置实现:
-        - subagent_task (仅隔离上下文)
-        - tool_skill_search
+        - subagent_task (仅隔离上下文, 默认注册名; 支持批量 tasks 并行委派)
 - ✅**Middleware**
     - 支持层次化栈式拦截 (层层执行 start，压栈对应的 end，再逐层向外退栈执行 end) `agentCallStart`、`agentCallEnd`、`modelCallStart`、`modelCallEnd`、`toolCallStart`、`toolCallEnd`
-- ✅**PlanningMiddleware**
-    - 分为两层规划
-    - mermaid/stateDiagram-v2 状态图描述大方向的任务规划
-    - todo_list 描述近期需要实现的任务细节步骤
+    - 实际栈: SubagentManager → Summarization → Permission → Skill → MemoryFile → LogPrint
 - ✅**压缩上下文** `SummarizationMiddleware`
     - Api TokenUsage / 自动估算 tokens，达到阈值时自动启动压缩
     - toolcall 各自实现压缩处理
