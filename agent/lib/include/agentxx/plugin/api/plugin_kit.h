@@ -1,5 +1,5 @@
 /*
- * agentxx/plugin/api/plugin_kit.h —— 插件开发 SDK (C++ header-only, API v1 重构版)
+ * agentxx/plugin/api/plugin_kit.h —— 插件开发 SDK (C++ header-only)
  *
  * 命名空间: 全部位于 agentxx::plugin
  *
@@ -52,7 +52,7 @@ namespace plugin {
  * - queryInterface<Iface>: 接口表查询模板 (替代旧 AGENTXX_PLUGIN_QUERY_IFACE 宏)
  *
  * 历史: 这些能力曾以全局函数/宏形式内联于纯 C ABI 头 plugin_api.h, 因按值
- * 返回含 C++ 成员函数的 struct 触发 MSVC C4190; API v1 重构后统一迁移至此。
+ * 返回含 C++ 成员函数的 struct 触发 MSVC C4190;
  */
 
 /// 字符串视图便捷工具 (纯静态函数; 不构造对象)

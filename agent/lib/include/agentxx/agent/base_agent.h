@@ -110,7 +110,7 @@ public:
         std::string_view                          modelName = ""
     );
 
-    /// 合并的 run helper: 构造 RunConfig + 执行并收集 content (重构1 收敛三 run* 重复)
+    /// 合并的 run helper: 构造 RunConfig + 执行并收集 content
     asio::awaitable<SimpleRunResult> runInternalAsync(
         std::string_view                     sessionId,
         std::vector<neograph::ChatMessage>   messages,

@@ -1225,7 +1225,7 @@ asio::awaitable<void> test_agent_toolcall_intercept_exception() {
 }
 
 asio::awaitable<TestResult> run_agent_tests() {
-    // 注: 计数器重构后 g_da_* 为本编译单元匿名命名空间私有变量,
+    // 注: g_da_* 为本编译单元匿名命名空间私有变量,
     // 其他模块 (test_agent_host/session_persistence/remote_agent 等) 的断言
     // 不再可能经头文件宏泄漏计入此处, 无需在此清零防御
 

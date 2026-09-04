@@ -1,4 +1,4 @@
-// test_plugin_multi_instance —— 多实例回归测试 (2026-08 API v1 重构核心验证)
+// test_plugin_multi_instance —— 多实例回归测试
 //
 // 验证同一动态库插件可被同进程内不同 agent 宿主各自创建为并存实例:
 // - 两个 AgentContext 各持独立 PluginManager, 加载同一 example_plugin

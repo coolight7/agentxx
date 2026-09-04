@@ -166,7 +166,7 @@ class SidebarComponent;
 class StatusBarComponent;
 class InputComponent;
 
-/// TUI 主类 (重构后为轻量编排器)
+/// TUI 主类
 ///
 /// 职责:
 /// - 线程管理 (UI 线程 + client 线程)

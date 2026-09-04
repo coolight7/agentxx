@@ -1,5 +1,5 @@
 /*
- * agentxx/plugin/client_plugin_api.h —— client 侧插件系统纯 C ABI 契约 (API v1 重构版)
+ * agentxx/plugin/client_plugin_api.h —— client 侧插件系统纯 C ABI 契约
  *
  * ════════════════════════════════════════════════════════════════════
  * 架构: COM 风格接口表查询

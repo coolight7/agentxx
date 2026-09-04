@@ -3,7 +3,7 @@
 # Agentxx
 [Github agentxx](https://github.com/coolight7/agentxx)
 
-- **README.md 文档/翻译**: [中文 zh-cn](/README.md) | [English en](/docs/en/README.md)
+- **README.md**: [中文 zh-cn](/README.md) | [English en](/docs/en/README.md)
 
 ```text
  █████╗  ██████╗ ███████╗███╗   ██╗████████╗      ╔══╗     ╔══╗
