@@ -870,29 +870,53 @@ if (AGENTXX_ENABLE_PLUGIN_CODEGRAPH)
   )
 endif()
 if (AGENTXX_ENABLE_HYPERSCAN)
+  # hyperscan fat runtime 经 cmake/build_wrapper.sh 对各微架构 variant 的 .o
+  # 执行 objcopy --redefine-syms 做符号重命名, 与 GCC -flto 互斥
+  # (LTO object 无符号表可重命名: "objcopy: redefining symbols does not work
+  # on LTO-compiled object files")。顶层 Release 默认带 -flto 并经
+  # _AGENTXX_COMMON_CMAKE_ARGS/_AGENTXX_COMMON_CMAKE_CACHE_ARGS 透传给嵌套构建,
+  # 会导致 Release 下 hyperscan (FAT_RUNTIME=ON, 仅 Release) 必现构建失败,
+  # 而 Debug (FAT_RUNTIME=OFF) 不受影响。故 hyperscan 嵌套构建单独剥离 LTO
+  # 旗标 (仅损失 hyperscan 自身的 LTO 优化, 不影响主工程)。
+  # 注意: -flto 内嵌在 CMAKE_C/CXX_FLAGS_RELEASE 等字符串中间, 且同时存在于
+  # CMAKE_ARGS 与 CMAKE_CACHE_ARGS 两处, 需逐项过滤而非追加覆盖
+  # (ExternalProject 对重复 -D 的覆盖语义不可靠, 且 CACHE 变量后值不一定覆盖先值)。
+  set(_AGENTXX_HS_CMAKE_ARGS "")
+  foreach(_hs_arg IN LISTS _AGENTXX_COMMON_CMAKE_ARGS)
+    string(REGEX REPLACE "-f[^ ;]*lto[^ ;]*" "" _hs_arg "${_hs_arg}")
+    list(APPEND _AGENTXX_HS_CMAKE_ARGS "${_hs_arg}")
+  endforeach()
+  set(_AGENTXX_HS_CMAKE_CACHE_ARGS "")
+  foreach(_hs_arg IN LISTS _AGENTXX_COMMON_CMAKE_CACHE_ARGS)
+    string(REGEX REPLACE "-f[^ ;]*lto[^ ;]*" "" _hs_arg "${_hs_arg}")
+    list(APPEND _AGENTXX_HS_CMAKE_CACHE_ARGS "${_hs_arg}")
+  endforeach()
   ExternalProject_Add(
     hyperscan_repo
     SOURCE_DIR "${AGENTXX_THIRD_PARTY_DIR}/hyperscan/"
     INSTALL_DIR "${AGENTXX_INSTALL_DIR}"
     CMAKE_ARGS
-      ${_AGENTXX_COMMON_CMAKE_ARGS}
+      ${_AGENTXX_HS_CMAKE_ARGS}
       -DBUILD_STATIC_AND_SHARED=OFF
       -DBUILD_EXAMPLES=OFF
       -DBUILD_TOOLS=OFF
       -DBUILD_UNIT=OFF
       -DDEBUG_OUTPUT=OFF
-      # -DFAT_RUNTIME=OFF # auto
+      # -DFAT_RUNTIME=OFF # auto (Release 下为 ON, 需配合上方去 LTO 才能构建)
       -DBUILD_SHARED_LIBS=OFF
       -DBUILD_STATIC_LIBS=ON
       "-DCMAKE_POLICY_VERSION_MINIMUM:STRING=3.15"
       -DCMAKE_C_STANDARD=11
       -DCMAKE_CXX_STANDARD=11
     CMAKE_CACHE_ARGS
-      ${_AGENTXX_COMMON_CMAKE_CACHE_ARGS}
+      ${_AGENTXX_HS_CMAKE_CACHE_ARGS}
       "-DBOOST_ROOT:PATH=${BOOST_ROOT}"
       "-DOPENSSL_ROOT_DIR:PATH=${OPENSSL_ROOT_DIR}"
     TEST_COMMAND ""
   )
+  unset(_AGENTXX_HS_CMAKE_ARGS)
+  unset(_AGENTXX_HS_CMAKE_CACHE_ARGS)
+  unset(_hs_arg)
 else()
   message("[agentxx] Disable HyperScan")
 endif()

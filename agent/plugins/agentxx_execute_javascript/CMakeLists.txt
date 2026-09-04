@@ -72,7 +72,12 @@ add_library(${PLUGIN_NAME} SHARED
   libagentxx_execute_javascript.cpp
 )
 
-find_package(agentxx_util REQUIRED)
+if (NOT TARGET agentxx_util)
+  # 经 libagentxx 嵌套构建 (add_subdirectory ../plugins) 时 util 目标已存在,
+  # 此时 install 目录尚未生成 config, 跳过导入直接复用构建树目标;
+  # 独立构建本插件时再经安装 config 导入
+  find_package(agentxx_util REQUIRED)
+endif()
 
 target_include_directories(${PLUGIN_NAME} PRIVATE
   "${AGENTXX_LIB_INCLUDE_DIR}"

@@ -79,7 +79,12 @@ add_library(${PLUGIN_NAME} SHARED
 )
 
 # ===== 依赖统一查找与链接 =====
-find_package(agentxx_util REQUIRED)
+if (NOT TARGET agentxx_util)
+  # 经 libagentxx 嵌套构建 (add_subdirectory ../plugins) 时 util 目标已存在,
+  # 此时 install 目录尚未生成 config, 跳过导入直接复用构建树目标;
+  # 独立构建本插件时再经安装 config 导入
+  find_package(agentxx_util REQUIRED)
+endif()
 find_package(Glob REQUIRED)
 find_package(html2md REQUIRED)
 # OpenSSL 保持模块模式 (FindOpenSSL, 与 lib 一致): 本项目 OpenSSL 为预构建
