@@ -318,8 +318,8 @@ plugins:
     enabled: true
 
   # === 数学计算工具 ===
-  - path: ${AGENTXX_EXEC_DIR}/plugins/agentxx_math/
-    enabled: false
+  # - path: ${AGENTXX_EXEC_DIR}/plugins/agentxx_math/
+  #   enabled: false
 
   # - name: ${AGENTXX_EXEC_DIR}/plugins/agentxx_rag_search
   #   enabled: false
