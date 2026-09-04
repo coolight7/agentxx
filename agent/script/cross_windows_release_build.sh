@@ -823,30 +823,74 @@ if [[ -d "$build_dir/exec" ]]; then
 fi
 
 # ===== 复制 MinGW 运行时 DLL (Windows 上直接运行所需) =====
-# llvm-mingw 构建的 PE 可执行文件动态链接到 libc++.dll/libunwind.dll，
-# 需与 exe 同目录分发，否则在纯净 Windows 上启动时报
-# "找不到 libc++.dll / libunwind.dll"。
-# 仅当使用本地 hermetic 工具链时复制；FORCE_SYSTEM_MINGW 场景跳过。
-if [[ -n "${toolchain_dir:-}" && -d "${toolchain_dir}/x86_64-w64-mingw32/bin" ]]; then
-    echo "[runtime] 复制 MinGW 运行时 DLL -> $build_dir/exec/"
-    for dll in libc++.dll libunwind.dll libwinpthread-1.dll; do
-        src="$toolchain_dir/x86_64-w64-mingw32/bin/$dll"
-        if [[ -f "$src" ]]; then
-            cp -v "$src" "$build_dir/exec/" || true
-        fi
+# - client CMakeLists install TARGETS agentxx_cli DESTINATION
+#   AGENTXX_EXEC_INSTALL_PREFIX (exec/); 交叉产物与 exe 同目录分发，
+#   否则在纯净 Windows 上启动时报 "找不到 xxx.dll"。
+# - Clang/llvm-mingw: libc++.dll / libunwind.dll
+# - GCC/MinGW: libstdc++-6.dll / libgcc_s_seh-1.dll (+ sjlj/dw2 变体兼容)
+# - 两者共有: libwinpthread-1.dll
+# - UCRT (ucrtbase/api-ms-win-*) 为 Win10+ 系统自带，不捆绑。
+# - 跳过: AGENTXX_SKIP_BUNDLE_RUNTIME=1 ./cross_windows_release_build.sh
+if [[ "${AGENTXX_SKIP_BUNDLE_RUNTIME:-0}" != "1" && -n "${toolchain_dir:-}" ]]; then
+    echo "[runtime] 捆绑 MinGW 运行时 DLL -> $build_dir/exec/"
+    _rt_candidates=(libc++.dll libunwind.dll libstdc++-6.dll libgcc_s_seh-1.dll libgcc_s_sjlj-1.dll libgcc_s_dw2-1.dll libwinpthread-1.dll)
+    _rt_search_dirs=()
+    [[ -d "$toolchain_dir/x86_64-w64-mingw32/bin" ]] && _rt_search_dirs+=("$toolchain_dir/x86_64-w64-mingw32/bin")
+    [[ -d "$toolchain_dir/bin" ]] && _rt_search_dirs+=("$toolchain_dir/bin")
+    [[ -d "$toolchain_dir/x86_64-w64-mingw32/lib" ]] && _rt_search_dirs+=("$toolchain_dir/x86_64-w64-mingw32/lib")
+    [[ -d "/usr/x86_64-w64-mingw32/lib" ]] && _rt_search_dirs+=("/usr/x86_64-w64-mingw32/lib")
+    [[ -d "/usr/lib/gcc/x86_64-w64-mingw32" ]] && _rt_search_dirs+=($(find /usr/lib/gcc/x86_64-w64-mingw32 -maxdepth 2 -type d 2>/dev/null))
+    for _dll in "${_rt_candidates[@]}"; do
+        [[ -f "$build_dir/exec/$_dll" ]] && continue
+        for _d in "${_rt_search_dirs[@]}"; do
+            if [[ -f "$_d/$_dll" ]]; then
+                cp -v "$_d/$_dll" "$build_dir/exec/" || true
+                break
+            fi
+        done
     done
-    # 兼容：某些版本将 DLL 放在 toolchain/bin
-    for dll in libc++.dll libunwind.dll libwinpthread-1.dll; do
-        if [[ ! -f "$build_dir/exec/$dll" && -f "$toolchain_dir/bin/$dll" ]]; then
-            cp -v "$toolchain_dir/bin/$dll" "$build_dir/exec/" || true
-        fi
-    done
-    # 校验
-    for dll in libc++.dll libunwind.dll; do
-        if [[ ! -f "$build_dir/exec/$dll" ]]; then
-            echo "WARNING: 运行时 $dll 未找到 ( $toolchain_dir/x86_64-w64-mingw32/bin/$dll )"
-        fi
-    done
+    unset _dll _d
+    # 兜底: 解析产物实际依赖的 DLL 名 (objdump)，缺啥补啥
+    _objdump=""
+    if [[ -x "$toolchain_dir/bin/x86_64-w64-mingw32-objdump" ]]; then
+        _objdump="$toolchain_dir/bin/x86_64-w64-mingw32-objdump"
+    elif [[ -x "$toolchain_dir/bin/llvm-objdump" ]]; then
+        _objdump="$toolchain_dir/bin/llvm-objdump"
+    elif command -v x86_64-w64-mingw32-objdump >/dev/null 2>&1; then
+        _objdump="x86_64-w64-mingw32-objdump"
+    fi
+    if [[ -n "$_objdump" && -f "$build_dir/exec/agentxx_cli.exe" ]]; then
+        _need_dlls=$("$_objdump" -p "$build_dir/exec/agentxx_cli.exe" 2>/dev/null | grep -i "DLL Name" | awk '{print $NF}')
+        for _dll in $_need_dlls; do
+            case "$_dll" in
+                KERNEL32.dll|USER32.dll|ADVAPI32.dll|SHELL32.dll|WS2_32.dll|MSWSOCK.dll|WINMM.dll|OLE32.dll|OLEAUT32.dll|GDI32.dll|CRYPT32.dll|BCRYPT.dll|NCRYPT.dll|SCHANNEL.dll|SECUR32.dll|IPHLPAPI.dll|DNSAPI.dll|WINHTTP.dll|WTSAPI32.dll|USERENV.dll|VERSION.dll|SHLWAPI.dll|COMDLG32.dll|COMCTL32.dll|IMM32.dll|SETUPAPI.dll|CFGMGR32.dll|POWRPROF.dll|NTDLL.dll|MSVCRT.dll|UCRTBASE.dll|API-MS-Win-*.dll|api-ms-win-*.dll) continue ;;
+            esac
+            if [[ ! -f "$build_dir/exec/$_dll" ]]; then
+                for _d in "${_rt_search_dirs[@]}"; do
+                    if [[ -f "$_d/$_dll" ]]; then
+                        echo "[runtime] 按需补拷: $_dll"
+                        cp -v "$_d/$_dll" "$build_dir/exec/" || true
+                        break
+                    fi
+                done
+            fi
+        done
+        unset _need_dlls _dll _d
+    fi
+    unset _objdump
+    unset _rt_candidates _rt_search_dirs
+    # 校验 (按实际工具链只要求对应的一组存在)
+    if [[ "$USE_CLANG_MINGW" == "1" ]]; then
+        for dll in libc++.dll libunwind.dll; do
+            [[ -f "$build_dir/exec/$dll" ]] || echo "WARNING: 运行时 $dll 未找到 ($toolchain_dir/x86_64-w64-mingw32/bin/$dll)"
+        done
+    else
+        for dll in libstdc++-6.dll libgcc_s_seh-1.dll; do
+            [[ -f "$build_dir/exec/$dll" ]] || echo "WARNING: 运行时 $dll 未找到 (GCC MinGW sysroot)"
+        done
+    fi
+    echo "[runtime] exec/*.dll:"
+    ls -lh "$build_dir/exec/"*.dll 2>/dev/null || true
 fi
 
 echo ""

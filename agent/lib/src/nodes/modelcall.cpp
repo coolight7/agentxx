@@ -559,7 +559,7 @@ void ModelCallWrapNode::repairMessages(neograph::graph::NodeInput& in) {
 
         if (checkInfo.contains("message_length") && checkInfo["message_length"].is_number_integer()
             && checkInfo.value<size_t>("message_length", 0) > msgs.size()) {
-            XX_LOGE(
+            XX_LOGW(
                 "LLM Messages length reduce: old({}) -> current({})",
                 checkInfo.value<size_t>("message_length", 0),
                 msgs.size()

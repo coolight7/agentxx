@@ -54,3 +54,66 @@ strip --strip-all "$build_dir/exec/agentxx_cli"
 strip --strip-all "$build_dir/exec/agentxx_benchmark"
 strip --strip-unneeded "$build_dir/exec/libagentxx.so"
 find "$build_dir/exec/plugins/" -type f -name "*.so" -exec strip --strip-unneeded {} \;
+
+# ===== 捆绑 C++/系统运行时到 exec (release 发布分发) =====
+# - 目标: {build}/exec 与 agentxx_cli 同目录携带 libstdc++/libgcc_s 等，
+#   参考 client/CMakeLists.txt `install(... DESTINATION "${AGENTXX_EXEC_INSTALL_PREFIX}")`
+#   的 exec 目录布局，解压即运行，无需目标机安装同版本 GCC。
+# - 跳过: AGENTXX_SKIP_BUNDLE_RUNTIME=1 ./linux_release_build.sh
+if [[ "${AGENTXX_SKIP_BUNDLE_RUNTIME:-0}" != "1" ]]; then
+    EXEC_DIR="$build_dir/exec"
+    CXX_BIN="${CXX:-c++}"
+    echo "[runtime] bundle C++ runtime libs -> $EXEC_DIR (CXX_BIN=$CXX_BIN)"
+    # 1) 经编译器自报路径拷贝 (最可靠，不依赖 ldd 输出格式)
+    for _lib in libstdc++.so.6 libgcc_s.so.1 libatomic.so.1 libgomp.so.1; do
+        _p=""
+        if command -v "$CXX_BIN" >/dev/null 2>&1; then
+            _p=$("$CXX_BIN" -print-file-name="$_lib" 2>/dev/null)
+        fi
+        if [[ "$_p" == /* && -f "$_p" ]]; then
+            cp -L -v "$_p" "$EXEC_DIR/" || true
+        fi
+        unset _p
+    done
+    unset _lib
+    # 2) 兜底: 经 ldd 解析 agentxx_cli 的实际动态依赖，补拷上述四类库
+    #    (处理 CXX_BIN 未指向实际编译器 / 多 libstdc++ 并存的场景)
+    if command -v ldd >/dev/null 2>&1 && [[ -f "$EXEC_DIR/agentxx_cli" ]]; then
+        while read -r _line; do
+            # ldd 行示例: libstdc++.so.6 => /lib/x86_64-linux-gnu/libstdc++.so.6 (0x...)
+            case "$_line" in
+                *libstdc++.so*|*libgcc_s.so*|*libatomic.so*|*libgomp.so*)
+                    _src=$(echo "$_line" | sed -n 's/.*=> \([^ ]*\).*/\1/p')
+                    if [[ "$_src" == /* && -f "$_src" ]]; then
+                        cp -L -v "$_src" "$EXEC_DIR/" || true
+                    fi
+                    unset _src
+                    ;;
+            esac
+        done < <(ldd "$EXEC_DIR/agentxx_cli" 2>/dev/null)
+        unset _line
+    fi
+    # 3) RPATH 指向 $ORIGIN，使 exe/.so 优先从同目录加载捆绑的运行时
+    #    - exe/libagentxx.so: $ORIGIN
+    #    - exec/plugins/<name>/*.so: $ORIGIN:$ORIGIN/../.. (dlopen 插件需回查 exec/)
+    if command -v patchelf >/dev/null 2>&1; then
+        for _f in "$EXEC_DIR/agentxx_cli" "$EXEC_DIR/agentxx_benchmark" "$EXEC_DIR/agentxx_test"; do
+            if [[ -f "$_f" ]]; then
+                patchelf --set-rpath '$ORIGIN' "$_f" || echo "WARNING: patchelf failed: $_f"
+            fi
+        done
+        unset _f
+        if [[ -f "$EXEC_DIR/libagentxx.so" ]]; then
+            patchelf --set-rpath '$ORIGIN' "$EXEC_DIR/libagentxx.so" || true
+        fi
+        if [[ -d "$EXEC_DIR/plugins" ]]; then
+            find "$EXEC_DIR/plugins" -type f -name "*.so" -exec patchelf --set-rpath '$ORIGIN:$ORIGIN/../..' {} \; 2>/dev/null || true
+        fi
+        echo "[runtime] RPATH patched to \$ORIGIN"
+    else
+        echo "WARNING: patchelf not found, skip RPATH patch (sudo apt-get install patchelf)"
+        echo "  bundled libs still copied, but loader will prefer system libstdc++ unless LD_LIBRARY_PATH=. "
+    fi
+    echo "[runtime] exec libs:"
+    ls -lh "$EXEC_DIR/"*.so* 2>/dev/null || true
+fi

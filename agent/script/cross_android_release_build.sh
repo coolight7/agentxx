@@ -83,6 +83,43 @@ for abi in ${abi_list[@]}; do
     "$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip" --strip-unneeded "$abi_build_dir/exec/libagentxx.so"
     find "$abi_build_dir/exec/plugins/" -type f -name "*.so" -exec "$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip" --strip-unneeded {} \;
 
+    # ===== 捆绑 NDK C++ 运行时到 exec (release 发布分发) =====
+    # - 本工程 -DANDROID_STL=c++_shared，libagentxx.so 动态依赖 libc++_shared.so，
+    #   参考 client/CMakeLists.txt `install(... DESTINATION "${AGENTXX_EXEC_INSTALL_PREFIX}")`
+    #   的 exec 目录布局：两者同目录分发，APK/JNI 加载时无需系统提供匹配版本。
+    # - 跳过: AGENTXX_SKIP_BUNDLE_RUNTIME=1 ./cross_android_release_build.sh
+    if [[ "${AGENTXX_SKIP_BUNDLE_RUNTIME:-0}" != "1" ]]; then
+        # ANDROID_ABI(cmake 官方名) 与 NDK sysroot 目录名(llvm 三元组) 的映射
+        case "$ANDROID_ABI" in
+            arm64-v8a)   _ndk_triple="aarch64-linux-android" ;;
+            armeabi-v7a) _ndk_triple="arm-linux-androideabi" ;;
+            x86_64)      _ndk_triple="x86_64-linux-android" ;;
+            x86)         _ndk_triple="i686-linux-android" ;;
+            *)           _ndk_triple="" ;;
+        esac
+        _ndk_api="${ANDROID_PLATFORM##android-}"
+        _cxx_shared=""
+        if [[ -n "$_ndk_triple" && -n "$_ndk_api" ]]; then
+            # libc++_shared.so 按 API 分级存放，优先精确 API，回退任意同 triple 版本
+            _cand="$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/$_ndk_triple/$_ndk_api/libc++_shared.so"
+            if [[ -f "$_cand" ]]; then
+                _cxx_shared="$_cand"
+            else
+                _cxx_shared=$(find "$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/$_ndk_triple" -maxdepth 2 -name "libc++_shared.so" 2>/dev/null | sort -V | tail -n1)
+            fi
+        fi
+        if [[ -n "$_cxx_shared" && -f "$_cxx_shared" ]]; then
+            echo "[runtime] bundle libc++_shared.so -> $abi_build_dir/exec/ ($_cxx_shared)"
+            cp -v "$_cxx_shared" "$abi_build_dir/exec/" || true
+            "$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip" --strip-unneeded "$abi_build_dir/exec/libc++_shared.so" 2>/dev/null || true
+        else
+            echo "WARNING: libc++_shared.so not found for $ANDROID_ABI (triple=$_ndk_triple api=$_ndk_api)"
+        fi
+        unset _ndk_triple _ndk_api _cxx_shared _cand
+        echo "[runtime] exec libs:"
+        ls -lh "$abi_build_dir/exec/"*.so* 2>/dev/null || true
+    fi
+
     echo ""
     echo "============================================"
     echo "  编译完成!"

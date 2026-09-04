@@ -4,13 +4,10 @@
 - 支持修改上下文
 - 验证subagent、summarization
 - CI/CD
-- 文档翻译
 - release 编译发布时携带 标准库
 
 - 冻结 system prompt
 - OpWatchdog debug 时启用、配置启用
-
-- 迁移tui中的tool特化渲染到插件中
 
 ## 提示词优化
 - 如果编译需要配置特定参数，写成脚本或者写入到AGENTS.md

@@ -77,3 +77,62 @@ if %ERRORLEVEL% neq 0 (
     echo cmake install failed!
     exit /b 1
 )
+
+rem ===== Bundle MSVC runtime DLLs to exec (release redist) =====
+rem - client CMakeLists install TARGETS agentxx_cli DESTINATION
+rem   AGENTXX_EXEC_INSTALL_PREFIX (exec/); exe uses /MD dynamic CRT,
+rem   needs VC Redist alongside for clean Win10+ machines without VS.
+rem - UCRT (ucrtbase/api-ms-win-*) is inbox on Win10+, do NOT bundle.
+rem - Skip when AGENTXX_SKIP_BUNDLE_RUNTIME=1
+if "%AGENTXX_SKIP_BUNDLE_RUNTIME%"=="1" goto bundle_runtime_done
+set "AGENTXX_CRT_SRC="
+rem 1) VCToolsRedistDir (set when building inside VsDevCmd)
+if defined VCToolsRedistDir (
+  for /D %%D in ("%VCToolsRedistDir%x64\Microsoft.VC*.CRT") do set "AGENTXX_CRT_SRC=%%D"
+)
+rem 2) Scan known VS install locations, last match wins (versions sort ascending)
+rem NOTE: "C:\Program Files (x86)" literal contains parens which would break
+rem cmd.exe block parsing (the ) in (x86) closes the if/for block early),
+rem so it is kept in AGENTXX_PF86 set BEFORE the block and referenced as
+rem "%AGENTXX_PF86%\..." (source line has no literal parens).
+set "AGENTXX_PF86=%ProgramFiles(x86)%"
+if not defined AGENTXX_CRT_SRC (
+  for %%V in (Community Professional Enterprise BuildTools) do (
+    for %%E in (18 17 14) do (
+      for /D %%R in ("C:\Program Files\Microsoft Visual Studio\%%E\%%V\VC\Redist\MSVC\*") do (
+        for /D %%C in ("%%R\x64\Microsoft.VC*.CRT") do set "AGENTXX_CRT_SRC=%%C"
+      )
+      for /D %%R in ("%AGENTXX_PF86%\Microsoft Visual Studio\%%E\%%V\VC\Redist\MSVC\*") do (
+        for /D %%C in ("%%R\x64\Microsoft.VC*.CRT") do set "AGENTXX_CRT_SRC=%%C"
+      )
+    )
+  )
+)
+rem 3) vswhere fallback (covers custom install paths)
+rem NOTE: AGENTXX_VSWHERE is set BEFORE the block: %ProgramFiles(x86)%
+rem contains parens which would break parsing inside (...) blocks, and a
+rem variable set+used inside the same block would expand to empty.
+set "AGENTXX_VSWHERE=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe"
+if not defined AGENTXX_CRT_SRC (
+  if exist "%AGENTXX_VSWHERE%" (
+    for /F "usebackq delims=" %%I in (`"%AGENTXX_VSWHERE%" -latest -property installationPath 2^>NUL`) do (
+      for /D %%R in ("%%I\VC\Redist\MSVC\*") do (
+        for /D %%C in ("%%R\x64\Microsoft.VC*.CRT") do set "AGENTXX_CRT_SRC=%%C"
+      )
+    )
+  )
+)
+if not defined AGENTXX_CRT_SRC (
+  echo WARNING: MSVC CRT dir not found, skip bundling runtime DLLs
+  goto bundle_runtime_done
+)
+echo [runtime] bundle MSVC CRT from "%AGENTXX_CRT_SRC%" to "%build_dir%\exec\"
+copy /Y "%AGENTXX_CRT_SRC%\msvcp140*.dll" "%build_dir%\exec\" >NUL 2>&1
+copy /Y "%AGENTXX_CRT_SRC%\vcruntime140*.dll" "%build_dir%\exec\" >NUL 2>&1
+copy /Y "%AGENTXX_CRT_SRC%\concrt140.dll" "%build_dir%\exec\" >NUL 2>&1
+if not exist "%build_dir%\exec\vcruntime140.dll" echo WARNING: vcruntime140.dll not bundled (ignored)
+if not exist "%build_dir%\exec\msvcp140.dll" echo WARNING: msvcp140.dll not bundled (ignored)
+set "AGENTXX_CRT_SRC="
+set "AGENTXX_PF86="
+set "AGENTXX_VSWHERE="
+:bundle_runtime_done
