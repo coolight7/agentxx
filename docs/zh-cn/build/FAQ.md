@@ -23,3 +23,7 @@ rm -rf bin.v2
 ## 新增依赖库时 cmake 使用 ExternalProject 还是 FetchContent
 - 建议统一`ExternalProject`, 尽管`FetchContent`也可以用，但他们的执行时机不一样，会导致被`FetchContent`(configure时执行)导入的库内用`find_package`找不到`ExternalProject`(build时执行)导入的库
 - 统一使用`FetchContent`我们尝试过，最开始由于`FetchContent`可以自动继承主项目的变量，觉得对跨平台和交叉编译方便，所以统一用它，但是它不支持非cmake项目，控制 install、build 细节也不足，因此最终统一使用 `ExternalProject`
+
+## 正在运行 agentxx_cli 和动态库占用
+- 此时编译脚本在 windows 端是不能覆盖的，因为程序正在占用
+- 而 linux 上虽然可以覆盖，但有可能会导致当前程序崩溃（段错误）等问题
