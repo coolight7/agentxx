@@ -137,11 +137,6 @@ if [[ $? -ne 0 ]]; then
     exit 1
 fi
 
-strip --strip-all "$build_dir/exec/agentxx_cli"
-strip --strip-all "$build_dir/exec/agentxx_benchmark"
-strip --strip-unneeded "$build_dir/exec/libagentxx.so"
-find "$build_dir/exec/plugins/" -type f -name "*.so" -exec strip --strip-unneeded {} \;
-
 # ===== 复制 C++/系统运行时到 exec (release 发布分发) =====
 # - 目标: {build}/exec 与 agentxx_cli 同目录携带 libstdc++/libgcc_s 等，
 #   参考 client/CMakeLists.txt `install(... DESTINATION "${AGENTXX_EXEC_INSTALL_PREFIX}")`
@@ -220,3 +215,9 @@ if [[ "${AGENTXX_SKIP_BUNDLE_RUNTIME:-0}" != "1" ]]; then
     echo "[runtime] exec libs:"
     ls -lh "$EXEC_DIR/"*.so* 2>/dev/null || true
 fi
+
+strip --strip-all "$build_dir/exec/agentxx_cli"
+strip --strip-all "$build_dir/exec/agentxx_benchmark"
+strip --strip-unneeded "$build_dir/exec/libagentxx.so"
+strip --strip-unneeded "$build_dir/exec/*.so*"
+find "$build_dir/exec/plugins/" -type f -name "*.so*" -exec strip --strip-unneeded {} \;
