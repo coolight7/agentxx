@@ -210,32 +210,21 @@ ResourceLlmSimServer startResourceLlmSimServer() {
                       std::string_view) -> asio::awaitable<void> {
             namespace http = boost::beast::http;
 
-            neograph::json j;
-            try {
-                j = neograph::json::parse(req.body());
-            } catch (...) {
-                resp.result(http::status::bad_request);
-                resp.prepare_payload();
-                co_return;
-            }
-
-            bool stream = j.value("stream", false);
-
-            // 检查 messages
-            std::string lastRole;
-            std::string lastContent;
-            if (j.contains("messages") && j["messages"].is_array() && !j["messages"].empty()) {
-                const auto& last = j["messages"].back();
-                if (last.contains("role") && last["role"].is_string()) {
-                    lastRole = last["role"].get<std::string>();
-                }
-                if (last.contains("content") && last["content"].is_string()) {
-                    lastContent = last["content"].get<std::string>();
-                }
-            }
+            std::string_view body = req.body();
+            bool stream = (body.find("\"stream\":true") != std::string_view::npos
+                        || body.find("\"stream\": true") != std::string_view::npos);
 
             // 判断是否为预热轮次
-            bool isWarmup = (j["messages"].size() <= 1 && lastContent.find("RES-BENCH") == std::string::npos);
+            bool isWarmup = (body.find("RES-BENCH") == std::string_view::npos);
+
+            bool lastIsTool = false;
+            auto lastRolePos = body.rfind("\"role\"");
+            if (lastRolePos != std::string_view::npos) {
+                auto roleSub = body.substr(lastRolePos, std::min<size_t>(body.size() - lastRolePos, 40));
+                if (roleSub.find("\"tool\"") != std::string_view::npos) {
+                    lastIsTool = true;
+                }
+            }
 
             neograph::json toolCalls = neograph::json::array();
             std::string    replyContent;
@@ -243,7 +232,7 @@ ResourceLlmSimServer startResourceLlmSimServer() {
             if (isWarmup) {
                 replyContent = "Hello! Ready for benchmarking.";
                 turnCounter->fetch_add(1);
-            } else if (lastRole == "tool") {
+            } else if (lastIsTool) {
                 // tool 结果回来, assistant 返回摘要 (本轮正式结束)
                 replyContent = "RES-BENCH assist summary | 已成功读取 README.md 前 40 行内容，并完成分析任务。";
                 turnCounter->fetch_add(1);
