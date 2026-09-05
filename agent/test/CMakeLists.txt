@@ -8,8 +8,31 @@ cmake_policy(SET CMP0144 NEW)
 # 移除 cmake 内置的 FindBoost 模块
 cmake_policy(SET CMP0167 OLD)
 
-project(agentxx_test VERSION 0.1.0 LANGUAGES C CXX)
+# ===== 版本号管理 (从上级或 VERSION 文件继承) =====
+if (NOT DEFINED AGENTXX_VERSION)
+  set(_AGENTXX_VERSION_FILE "${CMAKE_CURRENT_SOURCE_DIR}/../VERSION")
+  if (EXISTS "${_AGENTXX_VERSION_FILE}")
+    file(STRINGS "${_AGENTXX_VERSION_FILE}" _AGENTXX_RAW_VERSION LIMIT_COUNT 1)
+    string(STRIP "${_AGENTXX_RAW_VERSION}" AGENTXX_VERSION)
+  else()
+    set(AGENTXX_VERSION "0.1.0")
+  endif()
+endif()
+string(REGEX MATCH "^([0-9]+(\\.[0-9]+)*)" AGENTXX_CMAKE_VERSION "${AGENTXX_VERSION}")
+if (NOT AGENTXX_CMAKE_VERSION)
+  set(AGENTXX_CMAKE_VERSION "0.1.0")
+endif()
+
+project(agentxx_test VERSION ${AGENTXX_CMAKE_VERSION} LANGUAGES C CXX)
 include(GNUInstallDirs)
+
+# 全局版本宏注入
+add_compile_definitions(
+  AGENTXX_VERSION_STRING="${AGENTXX_VERSION}"
+  AGENTXX_VERSION_MAJOR=${PROJECT_VERSION_MAJOR}
+  AGENTXX_VERSION_MINOR=${PROJECT_VERSION_MINOR}
+  AGENTXX_VERSION_PATCH=${PROJECT_VERSION_PATCH}
+)
 
 # 嵌套构建时由顶层传入；独立构建时自动查找
 find_program(CCACHE_PROGRAM ccache)

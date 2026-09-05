@@ -1,4 +1,5 @@
 #include "agentxx/protocol/acp_server.h"
+#include "agentxx/version.h"
 
 #include "agentxx/util/container_util.h"
 #include "agentxx/util/exception.h"
@@ -833,7 +834,7 @@ StdioAcpServer::StdioAcpServer(
     handler_(
         agent_,
         std::move(agentInfo),
-        {.serverName = "agentxx-acp-stdio", .serverVersion = "0.1.0"}
+        {.serverName = "agentxx-acp-stdio", .serverVersion = std::string{agentxx::kVersion}}
     ) {}
 
 StdioAcpServer::~StdioAcpServer() {

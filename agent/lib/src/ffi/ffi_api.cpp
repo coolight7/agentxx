@@ -5,6 +5,7 @@
 
 #include "agentxx/ffi_api.h"
 #include "agentxx/util/log.h"
+#include "agentxx/version.h"
 #include "ffi_runtime.h"
 
 #include <cstring>
@@ -142,9 +143,8 @@ int32_t AGENTXX_FFI_CALL agentxx_ffi_library_version(AgentxxStringView* out) {
     if (out == nullptr) {
         return AGENTXX_FFI_ERR_INVALID;
     }
-    static const char kVersion[] = "0.1.0";
-    out->data                    = kVersion;
-    out->size                    = sizeof(kVersion) - 1;
+    out->data = agentxx::kVersion.data();
+    out->size = static_cast<uint64_t>(agentxx::kVersion.size());
     return AGENTXX_FFI_OK;
 }
 

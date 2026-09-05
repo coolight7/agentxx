@@ -10,8 +10,30 @@ cmake_policy(SET CMP0091 NEW)
 cmake_policy(SET CMP0144 NEW)
 cmake_policy(SET CMP0167 OLD)
 
+# ===== 版本号管理 (单一权威源: agent/VERSION) =====
+if (NOT DEFINED AGENTXX_VERSION)
+  set(_AGENTXX_VERSION_FILE "${CMAKE_CURRENT_SOURCE_DIR}/VERSION")
+  if (NOT EXISTS "${_AGENTXX_VERSION_FILE}")
+    set(_AGENTXX_VERSION_FILE "${CMAKE_CURRENT_SOURCE_DIR}/../VERSION")
+  endif()
+  if (EXISTS "${_AGENTXX_VERSION_FILE}")
+    file(STRINGS "${_AGENTXX_VERSION_FILE}" _AGENTXX_RAW_VERSION LIMIT_COUNT 1)
+    string(STRIP "${_AGENTXX_RAW_VERSION}" AGENTXX_VERSION)
+  else()
+    set(AGENTXX_VERSION "0.1.0")
+  endif()
+endif()
+
+# 提取纯数字版本供 project(VERSION) 使用 (兼容 SemVer 如 0.1.0-rc1)
+string(REGEX MATCH "^([0-9]+(\\.[0-9]+)*)" AGENTXX_CMAKE_VERSION "${AGENTXX_VERSION}")
+if (NOT AGENTXX_CMAKE_VERSION)
+  set(AGENTXX_CMAKE_VERSION "0.1.0")
+endif()
+
+message("[agentxx] Release Version: ${AGENTXX_VERSION} (CMake project: ${AGENTXX_CMAKE_VERSION})")
+
 project(agentxx_project 
-  VERSION 0.1.0 
+  VERSION ${AGENTXX_CMAKE_VERSION} 
   LANGUAGES C CXX
 )
 
@@ -386,6 +408,10 @@ else ()
   if (AGENTXX_ENABLE_UBSAN)
     string(APPEND _AGENTXX_DEBUG_EXTRA_FLAGS " -fsanitize=undefined -fno-sanitize-recover=undefined")
   endif()
+  if (XX_IS_GCC_D)
+    # GCC 16+ 编译 C++26 模板/协程时默认 gc 阈值过小易触发编译器 ICE (gt_ggc_mx_lang_tree_node), 放宽 gc 阈值
+    string(APPEND _AGENTXX_DEBUG_EXTRA_FLAGS " --param ggc-min-expand=100 --param ggc-min-heapsize=1048576")
+  endif()
   set(CMAKE_C_FLAGS_DEBUG            "${_AGENTXX_C_FLAGS}   ${_AGENTXX_DEBUG_EXTRA_FLAGS} ${CMAKE_C_FLAGS_DEBUG}")
   set(CMAKE_CXX_FLAGS_DEBUG          "${_AGENTXX_CXX_FLAGS} ${_AGENTXX_DEBUG_EXTRA_FLAGS} ${CMAKE_CXX_FLAGS_DEBUG}")
   unset(_AGENTXX_DEBUG_EXTRA_FLAGS)
@@ -534,9 +560,11 @@ set(_AGENTXX_COMMON_CMAKE_CACHE_ARGS
     "-DBOOST_ROOT:PATH=${BOOST_ROOT}"
     "-DBoost_ROOT:PATH=${BOOST_ROOT}"
     "-DOPENSSL_ROOT_DIR:PATH=${OPENSSL_ROOT_DIR}"
+    "-DAGENTXX_VERSION:STRING=${AGENTXX_VERSION}"
     "-DLDFLAGS:STRING=${_AGENTXX_LDFLAGS}"
 )
 set(_AGENTXX_COMMON_CMAKE_ARGS
+    "-DAGENTXX_VERSION=${AGENTXX_VERSION}"
     # "-DCMAKE_SYSTEM_NAME=${CMAKE_SYSTEM_NAME}" # 传递后会导致 sqlite 编译检查出错
     "-DCMAKE_CROSSCOMPILING=${CMAKE_CROSSCOMPILING}"
     "-DCMAKE_SYSTEM_PROCESSOR=${CMAKE_SYSTEM_PROCESSOR}"

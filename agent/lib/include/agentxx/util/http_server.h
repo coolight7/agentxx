@@ -4,6 +4,7 @@
 #include "agentxx/util/log.h"
 #include "agentxx/util/router.h"
 #include "agentxx/util/string_util.h"
+#include "agentxx/version.h"
 #include "asio/awaitable.hpp"
 #include "asio/cancel_after.hpp"
 #include "asio/co_spawn.hpp"
@@ -429,7 +430,8 @@ private:
             // 构造响应
             Response resp;
             resp.version(req.version());
-            resp.set(http::field::server, "agentxx/1.0");
+            static const std::string kServerBanner = "agentxx/" + std::string{agentxx::kVersion};
+            resp.set(http::field::server, kServerBanner);
             // RFC 7231: 服务器应包含 Date 头
             resp.set(http::field::date, formatHttpDate(std::time(nullptr)));
 

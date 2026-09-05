@@ -108,11 +108,22 @@ for abi in "${abi_list[@]}"; do
     echo "  OPENSSL_ROOT_DIR:  $target_openssl_root_dir"
     echo "============================================"
 
+    # ===== 读取统一版本号 (agent/VERSION) =====
+    _ver_file="$src_dir/VERSION"
+    if [[ ! -f "$_ver_file" ]]; then
+        _ver_file="$src_dir/../VERSION"
+    fi
+    if [[ -f "$_ver_file" ]]; then
+        AGENTXX_VERSION="${AGENTXX_VERSION:-$(head -n 1 "$_ver_file" | tr -d '[:space:]')}"
+    fi
+    echo "[version] Agentxx version: ${AGENTXX_VERSION:-0.1.0}"
+
     # 启用插件编译: 插件动态库输出到 {build}/exec/plugins/
     # - AGENTXX_ENABLE_HYPERSCAN 在安卓未配置交叉编译依赖, 保持关闭 (插件会自动跳过对应条件链接)
     # - AGENTXX_ENABLE_PLUGIN_CODEGRAPH 开启 codegraph 插件 (顶层自动构建其依赖 codegraph-cpp/sqlite3)
     # 注意: 下方 cmake 参数使用续行符, 注释不能插入续行中间
     cmake -B "$abi_build_dir" -S "$src_dir" \
+        -DAGENTXX_VERSION="${AGENTXX_VERSION}" \
         -DCMAKE_SYSTEM_NAME="Android" \
         -DCMAKE_TOOLCHAIN_FILE="$TOOLCHAIN_FILE" \
         -DANDROID_ABI="$ANDROID_ABI" \

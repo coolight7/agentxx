@@ -13,6 +13,7 @@
 #include "agentxx/util/exception.h"
 #include "agentxx/util/settings_db.h"
 #include "agentxx/util/string_util.h"
+#include "agentxx/version.h"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
 #include "asio/signal_set.hpp"
@@ -293,7 +294,10 @@ int main(int argn, char** argv) {
     uint16_t    srvPort = 7007;
     for (int i = 1; i < argn; ++i) {
         auto arg = std::string_view{argv[i]};
-        if (arg == "--help" || arg == "-h") {
+        if (arg == "--version" || arg == "-v") {
+            XX_OUT("Agentxx v{}\n", agentxx::kVersion);
+            return 0;
+        } else if (arg == "--help" || arg == "-h") {
             XX_OUT(R"_(
 Usage: agentxx_cli [mode] [options]
 
@@ -306,6 +310,7 @@ Modes:
 
 Options:
     -h, --help           显示帮助信息
+    -v, --version        显示版本信息
     --config <path>      配置文件路径 (默认: agentxx-config.yaml)
     --env <path>         覆盖式环境变量文件路径
     --agent <url>        远程 agent server 地址 (ws://host:port/agent)

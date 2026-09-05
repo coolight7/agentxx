@@ -15,6 +15,7 @@
 
 #include "agentxx/agent/base_agent.h"
 #include "agentxx/util/http_server.h"
+#include "agentxx/version.h"
 
 namespace agentxx {
 namespace server {
@@ -36,7 +37,7 @@ public:
 
     struct Config {
         std::string serverName         = "agentxx-acp";
-        std::string serverVersion      = "0.1.0";
+        std::string serverVersion      = std::string{agentxx::kVersion};
         int         maxInflightPrompts = 32;
     };
 
@@ -173,7 +174,7 @@ public:
         std::string              acpEndpoint   = "/acp";
         std::string              sseEndpoint   = "/acp/sse";
         std::string              serverName    = "agentxx-acp";
-        std::string              serverVersion = "0.1.0";
+        std::string              serverVersion = std::string{agentxx::kVersion};
         std::chrono::seconds     asyncTimeout{120};
     };
 

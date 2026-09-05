@@ -3,6 +3,7 @@
 #include "agentxx/protocol/mcp_server.h"
 #include "agentxx/tools/tool.h"
 #include "agentxx/util/http_client.h"
+#include "agentxx/version.h"
 #include "asio/awaitable.hpp"
 #include <atomic>
 #include <chrono>
@@ -54,7 +55,7 @@ public:
         std::string              serverUrl;
         std::vector<std::string> serverCommand;
         std::string              clientName    = "agentxx-mcp-client";
-        std::string              clientVersion = "0.1.0";
+        std::string              clientVersion = std::string{agentxx::kVersion};
         std::string              protocolVersion{kProtocol2026_07_28};
         /// MCP tool 命名空间
         /// - 非空时作为该 client 所有 tool 对外名称的前缀 (格式: "namespace_toolName")

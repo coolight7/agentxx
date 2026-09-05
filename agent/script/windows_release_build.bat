@@ -115,7 +115,19 @@ if not defined OPENSSL_ROOT_DIR (
     )
 )
 
-cmake -DAGENTXX_BUILD_CLIENT=ON ^
+rem ===== 读取统一版本号 (agent/VERSION) =====
+if not defined AGENTXX_VERSION (
+    if exist "%src_dir%\VERSION" (
+        set /p AGENTXX_VERSION=<"%src_dir%\VERSION"
+    ) else if exist "%src_dir%\..\VERSION" (
+        set /p AGENTXX_VERSION=<"%src_dir%\..\VERSION"
+    )
+)
+if not defined AGENTXX_VERSION set "AGENTXX_VERSION=0.1.0"
+echo [version] Agentxx version: %AGENTXX_VERSION%
+
+cmake -DAGENTXX_VERSION="%AGENTXX_VERSION%" ^
+    -DAGENTXX_BUILD_CLIENT=ON ^
     -DAGENTXX_BUILD_TEST=ON ^
     -DAGENTXX_BUILD_BENCHMARK=ON ^
     -DAGENTXX_ENABLE_HYPERSCAN=ON ^
@@ -217,3 +229,11 @@ set "AGENTXX_PF86="
 set "AGENTXX_VSWHERE1="
 set "AGENTXX_VSWHERE2="
 :bundle_runtime_done
+
+rem ===== 归档发布包 (AGENTXX_PACKAGE_RELEASE=1 时自动执行) =====
+if "%AGENTXX_PACKAGE_RELEASE%"=="1" (
+    if not exist "%src_dir%\build\dist\" mkdir "%src_dir%\build\dist\"
+    echo [package] Packing release archive -> "%src_dir%\build\dist\agentxx-v%AGENTXX_VERSION%-windows-x86_64.zip"
+    powershell -NoProfile -ExecutionPolicy Bypass -Command "Compress-Archive -Path '%build_dir%\exec\*' -DestinationPath '%src_dir%\build\dist\agentxx-v%AGENTXX_VERSION%-windows-x86_64.zip' -Force"
+    echo [package] Done!
+)

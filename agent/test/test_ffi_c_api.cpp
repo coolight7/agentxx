@@ -14,6 +14,7 @@
 
 #include "agentxx/ffi_api.h"
 #include "agentxx/util/http_server.h"
+#include "agentxx/version.h"
 #include "neograph/json.h"
 
 #if XX_IS_WIN_D
@@ -311,6 +312,7 @@ void testVersionAndMemory() {
     AgentxxStringView libVer{};
     XX_TEST_EXPECT_EQ(agentxx_ffi_library_version(&libVer), AGENTXX_FFI_OK);
     XX_TEST_EXPECT_TRUE(libVer.data != nullptr && libVer.size > 0);
+    XX_TEST_EXPECT_EQ(std::string_view(libVer.data, libVer.size), agentxx::kVersion);
 
     AgentxxStringView errOk{};
     XX_TEST_EXPECT_EQ(agentxx_ffi_strerror(AGENTXX_FFI_OK, &errOk), AGENTXX_FFI_OK);

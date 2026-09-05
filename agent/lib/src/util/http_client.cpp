@@ -11,6 +11,7 @@
 
 #include "agentxx/util/exception.h"
 #include "agentxx/util/http_client.h"
+#include "agentxx/version.h"
 #include "html2md/html2md.h"
 #include <asio/co_spawn.hpp>
 #include <asio/detached.hpp>
@@ -866,7 +867,7 @@ const HeaderMap& HttpClient::defaultHeaders() {
         HeaderMap h;
         // User-Agent 遵循 RFC 9110: product = token ["/" product-version],
         // 用 Agentxx/<版本号> 标识本客户端身份, 便于服务端识别与统计
-        h.set("User-Agent", "agentxx/1.0.0");
+        h.set("User-Agent", "Agentxx/" + std::string{agentxx::kVersion});
         h.set("Accept", "*/*");
         h.set("Accept-Language", "zh-CN,zh;q=0.9");
         return h;

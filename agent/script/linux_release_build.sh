@@ -104,7 +104,18 @@ if [[ -n "$_mem_gb" && "$_mem_gb" -gt 0 && "${AGENTXX_BUILD_PARALLEL}" -gt "$_me
 fi
 unset _need_tools _t _cxx_ok _gcc_ver _clang_ver _mem_gb
 
+# ===== 读取统一版本号 (agent/VERSION) =====
+_ver_file="$src_dir/VERSION"
+if [[ ! -f "$_ver_file" ]]; then
+    _ver_file="$src_dir/../VERSION"
+fi
+if [[ -f "$_ver_file" ]]; then
+    AGENTXX_VERSION="${AGENTXX_VERSION:-$(head -n 1 "$_ver_file" | tr -d '[:space:]')}"
+fi
+echo "[version] Agentxx version: ${AGENTXX_VERSION:-0.1.0}"
+
 cmake -B "$build_dir" -S "$src_dir" \
+    -DAGENTXX_VERSION="${AGENTXX_VERSION}" \
     -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
     -DBOOST_ROOT="${BOOST_ROOT}" \
     -DOPENSSL_ROOT_DIR="${OPENSSL_ROOT_DIR}" \
@@ -221,3 +232,13 @@ strip --strip-all "$build_dir/exec/agentxx_benchmark"
 strip --strip-unneeded "$build_dir/exec/libagentxx.so"
 strip --strip-unneeded "$build_dir/exec/*.so*"
 find "$build_dir/exec/plugins/" -type f -name "*.so*" -exec strip --strip-unneeded {} \;
+
+# ===== 归档发布包 (AGENTXX_PACKAGE_RELEASE=1 时自动执行) =====
+if [[ "${AGENTXX_PACKAGE_RELEASE:-0}" == "1" && -n "$AGENTXX_VERSION" ]]; then
+    dist_dir="$src_dir/build/dist"
+    mkdir -p "$dist_dir"
+    pkg_file="$dist_dir/agentxx-v${AGENTXX_VERSION}-linux-x86_64.tar.gz"
+    echo "[package] Packing release archive -> $pkg_file"
+    tar -czf "$pkg_file" -C "$build_dir/exec" .
+    echo "[package] Done: $pkg_file"
+fi

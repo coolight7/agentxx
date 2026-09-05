@@ -124,7 +124,18 @@ if [[ -z "${OPENSSL_ROOT_DIR}" && -d "$src_dir/third_party/OpenSSL-linux-build/"
     OPENSSL_ROOT_DIR=$(cd "$src_dir/third_party/OpenSSL-linux-build/" && pwd)
 fi
 
+# ===== 读取统一版本号 (agent/VERSION) =====
+_ver_file="$src_dir/VERSION"
+if [[ ! -f "$_ver_file" ]]; then
+    _ver_file="$src_dir/../VERSION"
+fi
+if [[ -f "$_ver_file" ]]; then
+    AGENTXX_VERSION="${AGENTXX_VERSION:-$(head -n 1 "$_ver_file" | tr -d '[:space:]')}"
+fi
+echo "[version] Agentxx version: ${AGENTXX_VERSION:-0.1.0}"
+
 cmake -B "$build_dir" -S "$src_dir" \
+    -DAGENTXX_VERSION="${AGENTXX_VERSION}" \
     -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
     -DBOOST_ROOT="${BOOST_ROOT}" \
     -DOPENSSL_ROOT_DIR="${OPENSSL_ROOT_DIR}" \

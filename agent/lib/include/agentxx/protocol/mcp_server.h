@@ -17,6 +17,7 @@
 #include <neograph/json.h>
 
 #include "agentxx/util/http_server.h"
+#include "agentxx/version.h"
 
 namespace agentxx {
 namespace server {
@@ -162,7 +163,7 @@ public:
         std::string              mcpEndpoint   = "/mcp";
         std::string              sseEndpoint   = "/mcp/sse";
         std::string              serverName    = "agentxx-mcp";
-        std::string              serverVersion = "0.1.0";
+        std::string              serverVersion = std::string{agentxx::kVersion};
         std::chrono::seconds     toolTimeout{60};
         size_t                   maxMessageSize = 4 * 1024 * 1024; // 4 MB
 

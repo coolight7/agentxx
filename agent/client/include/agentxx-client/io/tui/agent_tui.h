@@ -12,6 +12,7 @@
 #include "agentxx/plugin/client_plugin_manager.h"
 #include "agentxx/util/log.h"
 #include "agentxx/util/string_util.h"
+#include "agentxx/version.h"
 #include "asio/awaitable.hpp"
 #include "asio/experimental/concurrent_channel.hpp"
 #include "asio/io_context.hpp"
@@ -191,7 +192,7 @@ public:
     using LineChannel
         = asio::experimental::concurrent_channel<void(neograph_asio_error_code, std::string)>;
 
-    static constexpr const char* kAgentxxVersion = "0.1.0";
+    static constexpr std::string_view kAgentxxVersion = agentxx::kVersion;
 
     /// 复制鼠标选中的文本到系统剪贴板 (鼠标左键拖选后松开时调用, UI 线程):
     /// - 从 FTXUI Screen 的当前 selection 提取文本 (GetSelection, 取上一绘制帧

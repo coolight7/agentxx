@@ -761,8 +761,19 @@ fi
 echo "[toolchain] $TOOLCHAIN_FILE"
 cat "$TOOLCHAIN_FILE"
 
+# ===== 读取统一版本号 (agent/VERSION) =====
+_ver_file="$src_dir/VERSION"
+if [[ ! -f "$_ver_file" ]]; then
+    _ver_file="$src_dir/../VERSION"
+fi
+if [[ -f "$_ver_file" ]]; then
+    AGENTXX_VERSION="${AGENTXX_VERSION:-$(head -n 1 "$_ver_file" | tr -d '[:space:]')}"
+fi
+echo "[version] Agentxx version: ${AGENTXX_VERSION:-0.1.0}"
+
 # ===== CMake 配置 =====
 cmake -B "$build_dir" -S "$src_dir" \
+    -DAGENTXX_VERSION="${AGENTXX_VERSION}" \
     -DCMAKE_TOOLCHAIN_FILE="$TOOLCHAIN_FILE" \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
@@ -907,5 +918,19 @@ echo "============================================"
 echo "  在 Windows 上运行:"
 echo "    agentxx_cli.exe"
 echo "  或将 exec 目录整体拷贝到 Windows 主机后双击运行"
+
+# ===== 归档发布包 (AGENTXX_PACKAGE_RELEASE=1 时自动执行) =====
+if [[ "${AGENTXX_PACKAGE_RELEASE:-0}" == "1" && -n "$AGENTXX_VERSION" ]]; then
+    dist_dir="$src_dir/build/dist"
+    mkdir -p "$dist_dir"
+    pkg_file="$dist_dir/agentxx-v${AGENTXX_VERSION}-windows-x86_64.zip"
+    echo "[package] Packing release archive -> $pkg_file"
+    if command -v zip >/dev/null 2>&1; then
+        (cd "$build_dir/exec" && zip -r "$pkg_file" .)
+        echo "[package] Done: $pkg_file"
+    else
+        echo "WARNING: zip command not found, skip zip packaging"
+    fi
+fi
 echo "============================================"
 
