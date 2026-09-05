@@ -1,6 +1,7 @@
 #include "test_tui_settings.h"
 
 #include "agentxx-client/io/tui/agent_tui.h"
+#include "agentxx-client/io/tui/framework/tui_i18n.h"
 #include "agentxx-client/io/tui/framework/tui_settings.h"
 #include "agentxx/util/settings_db.h"
 #include <chrono>
@@ -145,6 +146,49 @@ void test_log_level_names_table() {
     XX_TEST_EXPECT_EQ(TUISettings::kLogLevelNames[3], std::string_view("Warn"));
     XX_TEST_EXPECT_EQ(TUISettings::kLogLevelNames[4], std::string_view("Error"));
     XX_TEST_EXPECT_EQ(TUISettings::kLogLevelNames[5], std::string_view("Out"));
+}
+
+void test_language_set_get() {
+    auto& settings = TUISettings::instance();
+
+    // 默认简体中文
+    XX_TEST_EXPECT_TRUE(settings.language() == TuiLanguage::ZhCn);
+    XX_TEST_EXPECT_EQ(settings.languageName(), std::string_view("简体中文 (zh-cn)"));
+
+    // 切换英文 → 读回
+    settings.setLanguage(TuiLanguage::EnUs);
+    XX_TEST_EXPECT_TRUE(settings.language() == TuiLanguage::EnUs);
+    XX_TEST_EXPECT_EQ(settings.languageName(), std::string_view("English (en-us)"));
+
+    // 切回简体中文
+    settings.setLanguage(TuiLanguage::ZhCn);
+    XX_TEST_EXPECT_TRUE(settings.language() == TuiLanguage::ZhCn);
+
+    // 恢复默认 (简体中文)
+    settings.setLanguage(TUISettings::kDefaultLanguage);
+}
+
+void test_i18n_lookup_switches_with_language() {
+    auto& settings = TUISettings::instance();
+    auto& i18n     = TuiI18n::instance();
+
+    // 默认简体中文
+    settings.setLanguage(TuiLanguage::ZhCn);
+    XX_TEST_EXPECT_EQ(i18n.t("settings.title"), std::string_view(" 设置 "));
+    XX_TEST_EXPECT_EQ(i18n.t("session.new"), std::string_view("+ 新会话"));
+    // 带格式参数的查询
+    XX_TEST_EXPECT_EQ(i18n.t("settings.themeValue", "Dark"), std::string(" 主题: Dark "));
+    // 未配置 key: 原样返回 key 本身
+    XX_TEST_EXPECT_EQ(i18n.t("no.such.key"), std::string_view("no.such.key"));
+
+    // 切换到 English
+    settings.setLanguage(TuiLanguage::EnUs);
+    XX_TEST_EXPECT_EQ(i18n.t("settings.title"), std::string_view(" Settings "));
+    XX_TEST_EXPECT_EQ(i18n.t("session.new"), std::string_view("+ New Session"));
+    XX_TEST_EXPECT_EQ(i18n.t("settings.themeValue", "Dark"), std::string(" Theme: Dark "));
+
+    // 恢复默认 (简体中文)
+    settings.setLanguage(TUISettings::kDefaultLanguage);
 }
 
 void test_tail_thinking_mode_set_get() {
@@ -336,12 +380,14 @@ void test_persist_to_db() {
     settings.setAnimationLevel(AnimationLevel::Low);
     settings.setLogLevel(agentxx::util::LogLevel::Warn);
     settings.setTailThinkingMode(TailThinkingMode::SingleLine);
+    settings.setLanguage(TuiLanguage::EnUs);
     {
         auto fresh = agentxx::util::SettingsDb(dbPath);
         XX_TEST_EXPECT_EQ(fresh.getInt64("tui.theme", -1), int64_t{TUISettings::kThemeLight});
         XX_TEST_EXPECT_EQ(fresh.getInt64("tui.animationLevel", -1), int64_t{1}); // Low
         XX_TEST_EXPECT_EQ(fresh.getInt64("tui.logLevel", -1), int64_t{3});       // Warn
         XX_TEST_EXPECT_EQ(fresh.getInt64("tui.tailThinking", -1), int64_t{1});   // SingleLine
+        XX_TEST_EXPECT_EQ(fresh.getInt64("tui.lang", -1), int64_t{static_cast<int>(TuiLanguage::EnUs)}); // English
         // 注: tui.tailThinkingPreviewLen 设置项已移除 (预览长度改为按终端宽度自适应),
         // 不再有对应持久化键
     }
@@ -351,18 +397,21 @@ void test_persist_to_db() {
     settings.setAnimationLevel(AnimationLevel::Ultra);
     settings.setLogLevel(agentxx::util::LogLevel::Debug);
     settings.setTailThinkingMode(TailThinkingMode::AutoExpand);
+    settings.setLanguage(TuiLanguage::ZhCn);
     {
         auto fresh = agentxx::util::SettingsDb(dbPath);
         XX_TEST_EXPECT_EQ(fresh.getInt64("tui.theme", -1), int64_t{TUISettings::kThemeDark});
         XX_TEST_EXPECT_EQ(fresh.getInt64("tui.animationLevel", -1), int64_t{4}); // Ultra
         XX_TEST_EXPECT_EQ(fresh.getInt64("tui.logLevel", -1), int64_t{1});       // Debug
         XX_TEST_EXPECT_EQ(fresh.getInt64("tui.tailThinking", -1), int64_t{0});   // AutoExpand
+        XX_TEST_EXPECT_EQ(fresh.getInt64("tui.lang", -1), int64_t{static_cast<int>(TuiLanguage::ZhCn)});
     }
 
     // 恢复默认, 避免影响其他用例
     settings.setAnimationLevel(TUISettings::kDefaultAnimationLevel);
     settings.setLogLevel(TUISettings::kDefaultLogLevel);
     settings.setTailThinkingMode(TUISettings::kDefaultTailThinkingMode);
+    settings.setLanguage(TUISettings::kDefaultLanguage);
 
     // 注意: TUISettings 单例持有 db 连接 (进程生命周期), Windows 上无法删除
     // 被占用文件, 故清理失败时忽略 (仅临时目录残留, 不影响测试结果)
@@ -380,6 +429,8 @@ TestResult testTuiSettings() {
     test_level_names_table();
     test_log_level_set_get();
     test_log_level_names_table();
+    test_language_set_get();
+    test_i18n_lookup_switches_with_language();
     test_tail_thinking_mode_set_get();
     test_tail_thinking_names_table();
     test_tail_line_preview();

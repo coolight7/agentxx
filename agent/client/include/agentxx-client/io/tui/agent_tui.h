@@ -312,6 +312,13 @@ public:
     /// 用户点击 banner 上的"重试"按钮 (UI 线程调用): 置 Connecting 并唤醒 waitRetry
     void requestRetry();
 
+    /// 界面语言切换后的即时刷新 (UI 线程, 由设置弹窗语言变化回调调用):
+    /// - 消息列表缓存失效 (banner 等静态文本按语言缓存)
+    /// - 日志行缓存清空 (重新按当前语言重建 "[空]" 等标签)
+    /// - 侧边栏 Info/Logs 常驻标签标题与已建 tab 标题按新语言更新
+    /// - 输入框占位符即时刷新 (placeholder 以引用绑定, 见 InputComponent)
+    void refreshLanguage();
+
     asio::awaitable<std::optional<std::string>> getInput() override;
     asio::awaitable<neograph::json>             handleInterrupt(
                     std::string_view sessionId,
@@ -441,6 +448,9 @@ private:
     void openFailedAppendComponents();
     /// 打开 Graph 状态图弹窗 (Info 侧边栏 Plan Graph 按钮 / 工具消息 Graph 按钮触发)
     void openMermaidDiagram(const std::string& mermaid);
+
+    /// 刷新界面语言后更新侧边栏常驻/已建 tab 标题 (UI 线程)
+    void refreshSidebarTabTitles();
 
     /// 侧边栏渲染辅助
     std::vector<ScrollItem> renderLogWindow();

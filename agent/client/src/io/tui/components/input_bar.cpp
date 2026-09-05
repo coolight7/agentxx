@@ -1,4 +1,5 @@
 #include "agentxx-client/io/tui/components/input_bar.h"
+#include "agentxx-client/io/tui/framework/tui_i18n.h"
 #include "agentxx-client/io/tui/framework/tui_settings.h"
 #include "ftxui/component/event.hpp"
 #include "ftxui/screen/terminal.hpp"
@@ -12,7 +13,10 @@ InputComponent::InputComponent(TUICtx& ctx, Config config) :
     option.multiline       = true;
     option.insert          = true;
     option.cursor_position = 0;
-    option.placeholder     = "Type a message... (ESC:Interrupt, Enter:Send, Alt+Enter:Newline)";
+    // 占位符绑定到成员字符串的引用: FTXUI Input 渲染时实时读取该引用,
+    // 语言切换后仅需刷新成员 (见 refreshLanguage), 无需重建组件
+    placeholderText_       = std::string(TuiI18n::instance().t("input.placeholder"));
+    option.placeholder     = StringRef(&placeholderText_);
     option.on_enter        = nullptr;
     option.transform       = [this](InputState state) {
         if (state.is_placeholder) {

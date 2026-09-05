@@ -4,6 +4,7 @@
 #include "agentxx-client/io/tui/components/overlays.h"
 #include "agentxx-client/io/tui/components/sidebar.h"
 #include "agentxx-client/io/tui/components/status_bar.h"
+#include "agentxx-client/io/tui/framework/tui_i18n.h"
 #include "agentxx-client/mode_runners.h"
 #include "agentxx/agent/model_registry.h"
 #include "agentxx/middlewares/middleware.h"
@@ -378,9 +379,9 @@ bool TUIClientAgentIO::copySelectionToClipboard() {
     }
     const bool ok = copyTextToSystemClipboard(text);
     if (ok) {
-        showToast(fmt::format("已复制 ({})", text.size()));
+        showToast(trf("toast.copied", text.size()));
     } else {
-        showToast("复制失败 (剪贴板不可用)");
+        showToast(std::string(tr("toast.copyFailed")));
     }
     postRedraw();
     return true;
@@ -438,13 +439,14 @@ void TUIClientAgentIO::start() {
 
         // tabs 竖向列表的常驻标签: Info/Logs 始终显示 (对应 tab 未创建时点击经
         // ensure 回调创建并激活; 已激活再点一次取消激活隐藏内容区)
+        // 标题随界面语言变化 (语言切换时经 refreshLanguage 重新设置)
         sidebar_->setPinnedTabs({
             {std::string(kInfoTabId),
-             "Info", [this]() {
+             std::string(tr("sidebar.info")), [this]() {
                  ensureInfoSidebarTab();
              }},
             {std::string(kLogTabId),
-             "Logs", [this]() {
+             std::string(tr("sidebar.logs")), [this]() {
                  ensureLogSidebarTab();
              }},
         });
@@ -488,7 +490,7 @@ void TUIClientAgentIO::start() {
                 return true;
             } else if (st.connState != ConnState::Connected) {
                 // server-io 未初始化完成前不允许发送消息, 且不清空输入框
-                showToast("server-io 尚未就绪, 请稍后再试");
+                showToast(std::string(tr("toast.notReady")));
                 postRedraw();
                 return false;
             } else {
@@ -532,14 +534,14 @@ void TUIClientAgentIO::start() {
                 });
                 menu->onSummyContext([this] {
                     if (ctx_.frameState && ctx_.frameState->connState != ConnState::Connected) {
-                        showToast("server-io 尚未就绪, 请稍后再试");
+                        showToast(std::string(tr("toast.notReady")));
                         postRedraw();
                         return;
                     }
                     const bool busy = (ctx_.frameState && ctx_.frameState->isStreaming)
                                       || awaitingInterruptInput_.load(std::memory_order_acquire);
                     if (busy) {
-                        showToast("请先停止当前会话");
+                        showToast(std::string(tr("toast.stopCurrent")));
                         postRedraw();
                         return;
                     }
@@ -575,10 +577,10 @@ void TUIClientAgentIO::start() {
             if (!st.pendingInputs.empty()) {
                 pendingBar = hbox({
                     text(" "),
-                    text(fmt::format("  · Message Queue: {}", st.pendingInputs.size()))
+                    text(trf("queue.barTitle", st.pendingInputs.size()))
                         | color(theme_.accentColor) | bold | reflect(pendingCounterBox_),
                     text(" "),
-                    text(" [insert] ") | bgcolor(theme_.buttonBgColor)
+                    text(tr("queue.insert")) | bgcolor(theme_.buttonBgColor)
                         | color(theme_.buttonTextColor) | bold | reflect(pendingInsertButtonBox_),
                     filler(),
                 });
@@ -1006,7 +1008,7 @@ void TUIClientAgentIO::openModelSelector() {
     // server-io 未就绪时请求会被 transport 丢弃 (远程模式写队列未创建/
     // 本地模式服务尚未启动), 弹窗将永远显示 loading; 提示用户等待连接完成
     if (ctx_.frameState && ctx_.frameState->connState != ConnState::Connected) {
-        showToast("server-io 尚未就绪, 请稍后再试");
+        showToast(std::string(tr("toast.notReady")));
         postRedraw();
         return;
     }
@@ -1067,6 +1069,11 @@ void TUIClientAgentIO::openSettings() {
             logSink_->clear();
         }
     });
+    // 界面语言变化: 刷新随语言缓存的静态文本/缓存 (消息列表 banner 缓存、
+    // 日志缓存、侧边栏标签、输入框占位符), 语言立即生效
+    overlay->onLanguageChange([this] {
+        refreshLanguage();
+    });
     overlay->onAbout([this] {
         openAbout();
     });
@@ -1087,7 +1094,7 @@ void TUIClientAgentIO::ensureInfoSidebarTab() {
     if (!sidebar_->hasTab(kInfoTabId)) {
         sidebar_->addTab(
             kInfoTabId,
-            "Info",
+            tr("sidebar.info"),
             [this]() {
                 return renderInfoSidebar();
             },
@@ -1102,7 +1109,7 @@ void TUIClientAgentIO::ensureLogSidebarTab() {
     if (!sidebar_->hasTab(kLogTabId)) {
         sidebar_->addTab(
             kLogTabId,
-            "Logs",
+            tr("sidebar.logs"),
             [this]() {
                 return renderLogWindow();
             },
@@ -1120,6 +1127,51 @@ void TUIClientAgentIO::toggleLogWindow() {
         ensureLogSidebarTab();
     }
     postRedraw();
+}
+
+void TUIClientAgentIO::refreshLanguage() {
+    // 界面语言切换: 静态文本按语言缓存的位置逐项刷新 (语言切换频率极低,
+    // 全量清理成本可忽略; 其余组件文本在渲染时实时查翻译表, 无需处理)
+    if (messageList_) {
+        // banner (空状态) 文本随语言缓存: 失效后下次渲染按新语言重建
+        messageList_->invalidateCache();
+    }
+    // 日志行缓存: 与语言无关 (行内容为日志原文), 但 [Empty] 等空状态标签
+    // 随语言变化; 行数未变时缓存不会自动重建, 故整体清空
+    logLineCache_.clear();
+    logCacheLineCount_   = 0;
+    logCachePoppedCount_ = 0;
+    // 侧边栏常驻标签 (Info/Logs) 与已建 tab 标题
+    refreshSidebarTabTitles();
+    // 输入框占位符 (绑定引用, 内部即时刷新)
+    if (inputBar_) {
+        inputBar_->refreshLanguage();
+    }
+    postRedraw();
+}
+
+void TUIClientAgentIO::refreshSidebarTabTitles() {
+    if (!sidebar_) {
+        return;
+    }
+    // 常驻标签标题 (tabs 竖向列表顶部固定按钮): 语言切换后重新设置
+    sidebar_->setPinnedTabs({
+        {std::string(kInfoTabId),
+         std::string(tr("sidebar.info")), [this]() {
+             ensureInfoSidebarTab();
+         }},
+        {std::string(kLogTabId),
+         std::string(tr("sidebar.logs")), [this]() {
+             ensureLogSidebarTab();
+         }},
+    });
+    // 已创建 tab 的标题同步更新 (未创建时由 ensure 回调按新语言创建)
+    if (sidebar_->hasTab(kInfoTabId)) {
+        sidebar_->setTabTitle(kInfoTabId, tr("sidebar.info"));
+    }
+    if (sidebar_->hasTab(kLogTabId)) {
+        sidebar_->setTabTitle(kLogTabId, tr("sidebar.logs"));
+    }
 }
 
 void TUIClientAgentIO::openFailedAppendComponents() {
@@ -1151,7 +1203,7 @@ void TUIClientAgentIO::openSessionSelector() {
     // server-io 未就绪时 WireListSessions/WireSwitchSession 无法送达,
     // 会话列表将永远显示 loading; 提示用户等待连接完成
     if (ctx_.frameState && ctx_.frameState->connState != ConnState::Connected) {
-        showToast("server-io 尚未就绪, 请稍后再试");
+        showToast(std::string(tr("toast.notReady")));
         postRedraw();
         return;
     }
@@ -1161,7 +1213,7 @@ void TUIClientAgentIO::openSessionSelector() {
     const bool busy = (ctx_.frameState && ctx_.frameState->isStreaming)
                       || awaitingInterruptInput_.load(std::memory_order_acquire);
     if (busy) {
-        showToast("请先停止当前会话, 再进行会话切换");
+        showToast(std::string(tr("toast.stopToSwitch")));
         postRedraw();
         return;
     }

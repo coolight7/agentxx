@@ -1,4 +1,5 @@
 #include "agentxx-client/io/tui/components/status_bar.h"
+#include "agentxx-client/io/tui/framework/tui_i18n.h"
 #include "ftxui/dom/elements.hpp"
 #include <algorithm>
 #include <vector>
@@ -11,7 +12,7 @@ Element StatusBarComponent::OnRender() {
 
     std::string modelName = st.cachedModelName;
     if (modelName.empty()) {
-        modelName = "<none>";
+        modelName = std::string(tr("status.modelNone"));
     }
 
     size_t  ctx    = st.contextTokens;
@@ -90,10 +91,11 @@ Element StatusBarComponent::OnRender() {
     }
 
     // Sessions 按钮: 可点击打开会话选择弹窗 (F4), 位于 Settings 左侧
-    auto sessionsText = text("[F4] Sessions") | color(theme.hintColor) | reflect(sessionBox_);
+    auto sessionsText = text(tr("status.sessions")) | color(theme.hintColor) | reflect(sessionBox_);
 
     // Settings 按钮: 可点击打开设置弹窗, 鼠标悬浮时高亮背景
-    auto settingsText = text("[F3] Settings") | color(theme.hintColor) | reflect(settingsBox_);
+    auto settingsText
+        = text(tr("status.settings")) | color(theme.hintColor) | reflect(settingsBox_);
 
     // 组装: 左段 = 模型信息 + 插件左项; 右段 = 插件右项 + Sessions + Settings
     std::vector<Element> leftChildren = {

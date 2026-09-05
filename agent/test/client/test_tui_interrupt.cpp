@@ -452,7 +452,7 @@ void test_int_invalid_rejected_and_recover() {
             static_cast<int>(TUIMessage::InterruptStatus::Waiting)
         );
     }
-    XX_TEST_EXPECT_TRUE(f.comp->interruptUiState(mi).tip.find("Invalid") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(f.comp->interruptUiState(mi).tip.find("无效") != std::string::npos);
     // ↑ 步进无效 (编辑值非法)
     f.comp->OnEvent(ftxui::Event::ArrowUp);
     f.comp->OnEvent(ftxui::Event::Return);
@@ -527,7 +527,7 @@ void test_double_invalid_rejected() {
             static_cast<int>(TUIMessage::InterruptStatus::Waiting)
         );
     }
-    XX_TEST_EXPECT_TRUE(f.comp->interruptUiState(mi).tip.find("Invalid") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(f.comp->interruptUiState(mi).tip.find("无效") != std::string::npos);
 }
 
 // ---------------------------------------------------------------------------

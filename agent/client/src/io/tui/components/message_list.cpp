@@ -1,5 +1,6 @@
 #include "agentxx-client/io/tui/components/message_list.h"
 #include "agentxx-client/io/tui/agent_tui.h" // formatDurationMilliseconds / oneLinePreview
+#include "agentxx-client/io/tui/framework/tui_i18n.h"
 #include "agentxx-client/io/tui/framework/tui_settings.h"
 #include "agentxx/plugin/client_plugin_manager.h" // ClientToolDecor 完整定义 (头文件中仅前置声明)
 #include "agentxx/util/diff_util.h"
@@ -941,7 +942,7 @@ Element MessageListComponent::buildBanner() {
     switch (st.connState) {
         case ConnState::Connecting: {
             Elements els;
-            els.push_back(text("server-io 正在启动中...") | color(theme.hintColor) | center);
+            els.push_back(text(tr("banner.connecting")) | color(theme.hintColor) | center);
             if (!st.startupProgress.empty()) {
                 // 当前正在执行的启动步骤 (agent 线程逐步上报):
                 // 动画等级 >= High 时行首 "~" 替换为 braille 旋转加载动画,
@@ -969,17 +970,16 @@ Element MessageListComponent::buildBanner() {
             retryButtonBox_ = ftxui::Box{};
             statusLine      = hbox({
                 filler(),
-                text("  server-io 连接失败  ") | color(theme.errorColor),
-                text("  [ 重试 ]  ") | bgcolor(theme.buttonBgColor) | color(theme.buttonTextColor)
-                    | bold | reflect(retryButtonBox_),
+                text(tr("banner.failed")) | color(theme.errorColor),
+                text(tr("banner.retry")) | bgcolor(theme.buttonBgColor)
+                    | color(theme.buttonTextColor) | bold | reflect(retryButtonBox_),
                 filler(),
             });
             break;
         }
         default: // Connected: 启动完成提示 + 按键提示
             statusLine = vbox({
-                text(R"(Type a message to start. [Esc] cancel, [Ctrl+C] quit.)")
-                    | color(theme.hintColor) | center,
+                text(tr("banner.connected")) | color(theme.hintColor) | center,
             });
             break;
     }
@@ -1079,12 +1079,13 @@ LazyBuiltItem MessageListComponent::buildStreamingItem(const TUIRenderState& st)
                 );
             } else if (st.pendingTokenThink && st.pendingTokenThink->reasoningTokens > 0) {
                 header.push_back(
-                    text(fmt::format("加密思考 {} tokens", st.pendingTokenThink->reasoningTokens))
+                    text(trf("think.encryptedTokens", st.pendingTokenThink->reasoningTokens))
                     | color(theme.thinkingColor) | dim | xflex_shrink
                 );
             } else if (st.pendingTokenThink && st.pendingTokenThink->isEncrypted) {
                 header.push_back(
-                    text("思考内容被加密") | color(theme.thinkingColor) | dim | xflex_shrink
+                    text(tr("think.encrypted")) | color(theme.thinkingColor) | dim
+                    | xflex_shrink
                 );
             }
             block = hbox(std::move(header));
@@ -1287,6 +1288,7 @@ Element MessageListComponent::buildMessageBlock(
             ftxui::Color tipColor = theme.systemColor;
             // 可折叠: header 行带 +/- 折叠标记与单行预览 (折叠态), 展开态显示全文
             // (与 Think 消息同一折叠模式; 默认折叠见创建处 makeText / onDelta)
+            // 角色标签 "[System] " 属技术标记, 不随语言切换
             const bool expanded = !msg.collapsed;
             Elements   lines;
             Elements   header;
@@ -1385,9 +1387,9 @@ Element MessageListComponent::buildMessageBlock(
                         previewText = oneLinePreview(msg.text, static_cast<size_t>(budget));
                     }
                 } else if (msg.think && msg.think->reasoningTokens > 0) {
-                    previewText = fmt::format("加密思考 {} tokens", msg.think->reasoningTokens);
+                    previewText = trf("think.encryptedTokens", msg.think->reasoningTokens);
                 } else if (msg.think && msg.think->isEncrypted) {
-                    previewText = "思考内容被加密";
+                    previewText = std::string(tr("think.encrypted"));
                 }
                 if (!previewText.empty()) {
                     header.push_back(
@@ -1412,9 +1414,9 @@ Element MessageListComponent::buildMessageBlock(
                 } else {
                     std::string infoText;
                     if (msg.think && msg.think->reasoningTokens > 0) {
-                        infoText = fmt::format("加密思考 {} tokens", msg.think->reasoningTokens);
+                        infoText = trf("think.encryptedTokens", msg.think->reasoningTokens);
                     } else if (msg.think && msg.think->isEncrypted) {
-                        infoText = "思考内容被加密";
+                        infoText = std::string(tr("think.encrypted"));
                     }
                     if (!infoText.empty()) {
                         lines.push_back(
@@ -1554,7 +1556,7 @@ Element MessageListComponent::buildMessageBlock(
                     if (!msg.text.empty()) {
                         // 参数 JSON 缩进格式化 (2 空格) 便于阅读; 解析失败回退原文
                         lines.push_back(hbox({
-                            text("  args: ") | color(theme.toolColor),
+                            text(tr("tool.args")) | color(theme.toolColor),
                             paragraph(formatToolArgs(msg.text)) | color(theme.toolColor)
                                 | xflex_shrink,
                         }));
@@ -1562,12 +1564,12 @@ Element MessageListComponent::buildMessageBlock(
                     if (finished) {
                         const bool isErr = isToolResultError(msg.tool->toolResult);
                         lines.push_back(hbox({
-                            text("  result: ") | color(theme.toolColor),
+                            text(tr("tool.result")) | color(theme.toolColor),
                             paragraph(msg.tool->toolResult)
                                 | color(isErr ? theme.errorColor : theme.toolColor) | xflex_shrink,
                         }));
                     } else {
-                        lines.push_back(text("  running...") | color(theme.toolColor));
+                        lines.push_back(text(tr("tool.running")) | color(theme.toolColor));
                     }
                 }
             }
@@ -1620,12 +1622,11 @@ Element MessageListComponent::buildMessageBlock(
                     // 头行: 类型 + 进度
                     Elements header;
                     header.push_back(
-                        text(fmt::format(
-                            "! [Interrupt] Input {}/{}: ",
+                        text(trf(
+                            "interrupt.header",
                             msg.interrupt->inputIndex,
                             msg.interrupt->inputTotal
-                        ))
-                        | color(theme.accentColor) | bold
+                        )) | color(theme.accentColor) | bold
                     );
                     header.push_back(
                         text(msg.interrupt->inputLabel) | color(theme.accentColor) | xflex_shrink
@@ -1674,7 +1675,7 @@ void MessageListComponent::appendEditToolBody(const TUIMessage& msg, Elements& l
     // 操作失败: 渲染错误信息, 不渲染基于请求参数的 diff (避免误导: 文件实际未被修改)
     if (msg.tool && msg.tool->toolFinished && isToolResultError(msg.tool->toolResult)) {
         lines.push_back(hbox({
-            text("  result: ") | color(theme.toolColor),
+            text(tr("tool.result")) | color(theme.toolColor),
             paragraph(msg.tool->toolResult) | color(theme.errorColor) | xflex_shrink,
         }));
         return;
@@ -1694,7 +1695,7 @@ void MessageListComponent::appendEditToolBody(const TUIMessage& msg, Elements& l
     );
     if (!path.empty()) {
         lines.push_back(hbox({
-            text("  file: ") | color(theme.hintColor),
+            text(tr("tool.file")) | color(theme.hintColor),
             text(path) | color(theme.toolColor) | xflex_shrink,
         }));
     }
@@ -1706,7 +1707,7 @@ Element MessageListComponent::renderEditToolDiff(std::string_view oldStr, std::s
     const auto& theme = *ctx_.theme;
     auto        diff  = agentxx::util::computeLineDiff(oldStr, newStr);
     if (diff.empty()) {
-        return text("  (no changes)") | color(theme.hintColor);
+        return text(tr("tool.noChanges")) | color(theme.hintColor);
     }
 
     const int  screenW    = Terminal::Size().dimx;
@@ -1894,7 +1895,7 @@ void MessageListComponent::appendDecorItems(
             const auto newStr = it.value("new_str", std::string{});
             if (!path.empty()) {
                 lines.push_back(hbox({
-                    text("  file: ") | color(theme.hintColor),
+                    text(tr("tool.file")) | color(theme.hintColor),
                     text(path) | color(theme.toolColor) | xflex_shrink,
                 }));
             }
@@ -1929,23 +1930,23 @@ Element MessageListComponent::buildInterruptStatusLine(const TUIMessage& msg) {
     switch (it.interruptStatus) {
         case TUIMessage::InterruptStatus::Confirmed:
             return hbox({
-                text(fmt::format("! [Interrupt] Input {}/{}: ", it.inputIndex, it.inputTotal))
+                text(trf("interrupt.header", it.inputIndex, it.inputTotal))
                     | color(theme.hintColor),
-                text(fmt::format("已确认 {}: {}", it.inputLabel, it.interruptResult))
+                text(trf("interrupt.confirmed", it.inputLabel, it.interruptResult))
                     | color(theme.accentColor) | dim | xflex_shrink,
             });
         case TUIMessage::InterruptStatus::Cancelled:
             return hbox({
-                text(fmt::format("! [Interrupt] Input {}/{}: ", it.inputIndex, it.inputTotal))
+                text(trf("interrupt.header", it.inputIndex, it.inputTotal))
                     | color(theme.hintColor),
-                text(fmt::format("{}: 已取消", it.inputLabel)) | color(theme.errorColor) | dim
+                text(trf("interrupt.cancelled", it.inputLabel)) | color(theme.errorColor) | dim
                     | xflex_shrink,
             });
         case TUIMessage::InterruptStatus::Expired:
             return hbox({
-                text(fmt::format("! [Interrupt] Input {}/{}: ", it.inputIndex, it.inputTotal))
+                text(trf("interrupt.header", it.inputIndex, it.inputTotal))
                     | color(theme.hintColor),
-                text(fmt::format("{}: 已过期", it.inputLabel)) | color(theme.errorColor) | dim
+                text(trf("interrupt.expired", it.inputLabel)) | color(theme.errorColor) | dim
                     | xflex_shrink,
             });
         default:
@@ -1976,8 +1977,8 @@ Element MessageListComponent::buildInterruptControl(const TUIMessage& msg, size_
         return std::make_shared<Box>();
     };
 
-    // 按钮样式
-    auto btn = [&theme](std::string label, bool active) {
+    // 按钮样式 (label 为翻译文本, 取 string_view 直接构造 text)
+    auto btn = [&theme](std::string_view label, bool active) {
         if (active) {
             return text(label) | bgcolor(theme.buttonActiveBgColor)
                    | color(theme.buttonActiveTextColor) | bold;
@@ -1994,9 +1995,9 @@ Element MessageListComponent::buildInterruptControl(const TUIMessage& msg, size_
         hit(kHitConfirm, 0, confirmBox);
         hit(kHitCancel, 0, cancelBox);
         return hbox({
-            btn(" [确认] ", false) | reflect(*confirmBox),
+            btn(tr("interrupt.confirm"), false) | reflect(*confirmBox),
             text("  "),
-            text(" ✕ ") | color(theme.errorColor) | reflect(*cancelBox),
+            text(tr("interrupt.cancel")) | color(theme.errorColor) | reflect(*cancelBox),
         });
     };
 
@@ -2027,7 +2028,7 @@ Element MessageListComponent::buildInterruptControl(const TUIMessage& msg, size_
                 // reflect 于整行 → 点击行内任意位置均可切换
                 auto row = hbox({
                                std::move(indicator),
-                               text("记住此选择") | color(theme.buttonTextColor),
+                               text(tr("interrupt.remember")) | color(theme.buttonTextColor),
                            })
                            | reflect(*remBox);
                 hit(kHitRemember, 0, remBox);
@@ -2041,16 +2042,16 @@ Element MessageListComponent::buildInterruptControl(const TUIMessage& msg, size_
             hit(kHitBoolNo, 0, denyBox);
             rows.push_back(text(" "));
             rows.push_back(hbox({
-                btn("[ 允许 ]", ui.selected == 0) | reflect(*allowBox),
+                btn(tr("interrupt.allow"), ui.selected == 0) | reflect(*allowBox),
                 text("  "),
-                btn("[ 拒绝 ]", ui.selected == 1) | reflect(*denyBox),
+                btn(tr("interrupt.deny"), ui.selected == 1) | reflect(*denyBox),
             }));
             control = vbox(std::move(rows));
         } else {
             auto yesBox = mkBox();
             auto noBox  = mkBox();
-            auto yes    = btn(" 是 ", ui.selected == 0) | reflect(*yesBox);
-            auto no     = btn(" 否 ", ui.selected == 1) | reflect(*noBox);
+            auto yes    = btn(tr("interrupt.yes"), ui.selected == 0) | reflect(*yesBox);
+            auto no     = btn(tr("interrupt.no"), ui.selected == 1) | reflect(*noBox);
             hit(kHitBoolYes, 0, yesBox);
             hit(kHitBoolNo, 0, noBox);
             control = hbox({
@@ -2464,13 +2465,13 @@ void MessageListComponent::confirmInterrupt(size_t mi) {
                 int64_t num = 0;
                 auto    r   = agentxx::util::parseNumberFromString(ui.editText, num);
                 if (r.ec != std::errc{}) {
-                    errTip = "Invalid integer, please input again.";
+                    errTip = std::string(tr("interrupt.tipInt"));
                 }
             } else {
                 double num = 0.0;
                 auto   r   = agentxx::util::parseNumberFromString(ui.editText, num);
                 if (r.ec != std::errc{}) {
-                    errTip = "Invalid number, please input again.";
+                    errTip = std::string(tr("interrupt.tipNum"));
                 }
             }
             if (!errTip.empty()) {

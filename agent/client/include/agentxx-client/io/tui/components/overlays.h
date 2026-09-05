@@ -91,6 +91,7 @@ private:
 /// - 动画等级 (Disabled/Low/Medium/High/Ultra; 见 TUISettings)
 /// - 日志等级 (Trace/Debug/Info/Warn/Error/Out; 见 TUISettings)
 /// - 末尾思考展示模式 (Auto Expand/Single Line)
+/// - 界面语言 (简体中文 zh-cn / English en-us; 见 TuiI18n 翻译表)
 /// - About (打开关于弹窗; 显示版本/路径/插件等信息)
 ///
 /// 交互: Up/Down 选择条目, Enter 应用/切换 (循环切换); 也支持鼠标点击。
@@ -115,6 +116,12 @@ public:
         onLogLevelChange_ = std::move(fn);
     }
 
+    /// 界面语言变化回调 (供外部刷新静态文本/缓存: 侧边栏标签、输入框
+    /// 占位符、消息列表缓存等; 语言立即生效并持久化)
+    void onLanguageChange(std::function<void()> fn) {
+        onLanguageChange_ = std::move(fn);
+    }
+
     /// 关于弹窗回调 (供外部打开 AboutOverlay)
     void onAbout(std::function<void()> fn) {
         onAbout_ = std::move(fn);
@@ -136,21 +143,26 @@ private:
     void cycleLogLevel();
     /// 循环切换末尾思考展示模式: Auto Expand -> Single Line -> Auto Expand
     static void cycleTailThinkingMode();
+    /// 循环切换界面语言: 简体中文 <-> English (需要访问 onLanguageChange_, 非静态)
+    void cycleLanguage();
 
     TUICtx& ctx_;
-    /// 条目索引: 0 = 主题, 1 = 动画等级, 2 = 日志等级, 3 = 末尾思考模式, 4 = About
+    /// 条目索引: 0 = 主题, 1 = 动画等级, 2 = 日志等级, 3 = 末尾思考模式,
+    ///         4 = 界面语言, 5 = About
     /// Enter/鼠标点击索引时循环切换对应设置 (About 打开弹窗)
-    static constexpr int  kItemCount     = 5;
+    static constexpr int  kItemCount     = 6;
     int                   selectedIndex_ = 0;
     std::function<void()> onClose_;
     std::function<void()> onThemeChange_;
     std::function<void()> onLogLevelChange_;
+    std::function<void()> onLanguageChange_;
     std::function<void()> onAbout_;
 
     ftxui::Box themeBox_;        // 主题点击区域
     ftxui::Box animLevelBox_;    // 动画等级点击区域
     ftxui::Box logLevelBox_;     // 日志等级点击区域
     ftxui::Box tailThinkingBox_; // 末尾思考展示模式点击区域
+    ftxui::Box langBox_;         // 界面语言点击区域
     ftxui::Box aboutBox_;        // About 点击区域
 };
 

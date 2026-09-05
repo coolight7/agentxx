@@ -1,6 +1,7 @@
 #include "agentxx-client/io/tui/agent_tui.h"
 #include "agentxx-client/io/tui/components/message_list.h"
 #include "agentxx-client/io/tui/components/sidebar.h"
+#include "agentxx-client/io/tui/framework/tui_i18n.h"
 #include "agentxx/util/exception.h"
 #include "agentxx/util/log.h"
 #include "agentxx/util/string_util.h"
@@ -108,7 +109,7 @@ static void
 std::vector<ScrollItem> TUIClientAgentIO::renderLogWindow() {
     if (!logSink_) {
         return {
-            ScrollItem{text("[Empty]") | dim, false}
+            ScrollItem{text(tr("info.empty")) | dim, false}
         };
     }
     // 仅当日志内容有变化时才重新 snapshot + 重建缓存:
@@ -130,7 +131,7 @@ std::vector<ScrollItem> TUIClientAgentIO::renderLogWindow() {
     }
     if (logLineCache_.empty()) {
         return {
-            ScrollItem{text("[Empty]") | dim, false}
+            ScrollItem{text(tr("info.empty")) | dim, false}
         };
     }
     std::vector<ScrollItem> items;
@@ -179,7 +180,7 @@ std::vector<ScrollItem> TUIClientAgentIO::renderInfoSidebar() {
                         if (!graphMermaid.empty()) {
                             titleRow.push_back(text(" "));
                             titleRow.push_back(
-                                text(" Graph ") | bgcolor(theme_.buttonBgColor)
+                                text(tr("info.graphButton")) | bgcolor(theme_.buttonBgColor)
                                 | color(theme_.buttonTextColor) | reflect(planGraphButtonBox_)
                             );
                             planGraphMermaid_ = graphMermaid;
@@ -244,7 +245,7 @@ std::vector<ScrollItem> TUIClientAgentIO::renderInfoSidebar() {
     failedViewButtonBox_ = ftxui::Box{0, -1, 0, -1};
     if (!st.appendComponents.empty()) {
         Elements appendEls;
-        appendEls.push_back(text("Append") | color(theme_.accentColor));
+        appendEls.push_back(text(tr("info.append")) | color(theme_.accentColor));
 
         auto appendGroup = [&](std::string_view                                  label,
                                agentxx::agent::AppendComponentNotification::Type type,
@@ -290,13 +291,13 @@ std::vector<ScrollItem> TUIClientAgentIO::renderInfoSidebar() {
         }
         if (failedCount > 0) {
             appendEls.push_back(
-                hbox({text("|- "), text(fmt::format("Failed: {}", failedCount))})
+                hbox({text("|- "), text(trf("info.appendFailed", failedCount))})
                 | color(theme_.errorColor)
             );
             appendEls.push_back(hbox({
                 text("|  ") | color(theme_.hintColor),
-                text(" [view] ") | bgcolor(theme_.buttonBgColor) | color(theme_.buttonTextColor)
-                    | reflect(failedViewButtonBox_),
+                text(tr("info.viewFailed")) | bgcolor(theme_.buttonBgColor)
+                    | color(theme_.buttonTextColor) | reflect(failedViewButtonBox_),
             }));
         }
 
@@ -304,7 +305,7 @@ std::vector<ScrollItem> TUIClientAgentIO::renderInfoSidebar() {
     }
 
     if (elements.empty()) {
-        elements.push_back(text("[Empty]") | color(theme_.hintColor));
+        elements.push_back(text(tr("info.empty")) | color(theme_.hintColor));
     }
 
     std::vector<ScrollItem> items;
@@ -325,7 +326,7 @@ ftxui::Element TUIClientAgentIO::renderInfoSidebarFooter() {
             return std::filesystem::current_path().string();
         },
         [](std::string) -> std::string {
-            return "[Unknown Work Dir]";
+            return std::string(tr("info.workDirUnknown"));
         }
     );
     elements.push_back(text(kCwd) | color(theme_.hintColor));
@@ -348,14 +349,14 @@ ftxui::Element TUIClientAgentIO::renderLogSidebarFooter() {
 
     Elements row;
     if (st.currentNodeName.empty()) {
-        row.push_back(text("idle") | color(theme_.hintColor));
+        row.push_back(text(tr("info.idle")) | color(theme_.hintColor));
     } else {
         row.push_back(text(fmt::format("> {}", st.currentNodeName)) | color(theme_.accentColor));
     }
     row.push_back(filler());
 
-    auto menuBtn = text(" Menu ") | bgcolor(theme_.buttonBgColor) | color(theme_.buttonTextColor)
-                   | reflect(contextButtonBox_);
+    auto menuBtn = text(tr("footer.menu")) | bgcolor(theme_.buttonBgColor)
+                   | color(theme_.buttonTextColor) | reflect(contextButtonBox_);
     row.push_back(menuBtn);
 
     return hbox(std::move(row));

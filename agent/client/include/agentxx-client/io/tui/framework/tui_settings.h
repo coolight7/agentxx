@@ -35,6 +35,17 @@ enum class TailThinkingMode : int {
     SingleLine = 1, ///< 保持单行折叠截取末尾字符显示
 };
 
+/// 界面语言 (简体中文 / English)
+///
+/// 语言取值供界面翻译表 [TuiI18n](/agent/client/include/agentxx-client/io/tui/framework/tui_i18n.h)
+/// 查询使用: 界面代码只写翻译 key, 展示文本由当前语言决定。
+/// - 默认简体中文 (既有界面语言; 英文用户可在设置弹窗切换, 选择持久化)
+/// - 持久化键: tui.lang (global.db), 值为 0/1
+enum class TuiLanguage : int {
+    ZhCn = 0, ///< 简体中文 (默认)
+    EnUs = 1, ///< English
+};
+
 /// 权限询问处理模式已移除: 改为由 yaml 配置文件 `permission.mode` 指定
 /// (ask/all_ask/pass/deny, 见
 /// [config.h](/agent/lib/include/agentxx/agent/config.h) 的
@@ -49,6 +60,7 @@ enum class TailThinkingMode : int {
 /// - 动画等级 (AnimationLevel)
 /// - 日志等级 (LogLevel: Trace/Debug/Info/Warn/Error/Out, TUI 日志侧边栏过滤)
 /// - 末尾思考展示模式 (TailThinkingMode: AutoExpand/SingleLine)
+/// - 界面语言 (TuiLanguage: ZhCn/EnUs, 见 tui_i18n.h 翻译表)
 ///
 /// 线程安全: 所有设置项均为 std::atomic, 读写无锁,
 /// 可从 UI 线程 (渲染/事件) 与后台线程并发访问。
@@ -88,6 +100,13 @@ public:
     inline static constexpr TailThinkingMode kDefaultTailThinkingMode
         = TailThinkingMode::AutoExpand;
 
+    /// 语言显示名称 (供设置弹窗展示; 与 TuiLanguage 枚举值一一对应)
+    inline static constexpr std::array<const char*, 2> kLanguageNames
+        = {"简体中文 (zh-cn)", "English (en-us)"};
+
+    /// 默认界面语言: 简体中文 (既有界面语言; 可在设置弹窗切换, 选择持久化)
+    inline static constexpr TuiLanguage kDefaultLanguage = TuiLanguage::ZhCn;
+
     /// 主题枚举 (与 tui.theme 库中存储的整数值对应)
     enum ThemeKind : int {
         kThemeDark  = 0, ///< Dark (默认)
@@ -121,6 +140,11 @@ public:
         auto tailThink = db_->getInt64("tui.tailThinking", -1);
         if (tailThink >= 0 && tailThink < static_cast<int64_t>(kTailThinkingModeNames.size())) {
             tailThinkingMode_.store(static_cast<int>(tailThink), std::memory_order_release);
+        }
+        auto lang = db_->getInt64("tui.lang", -1);
+        if (lang == static_cast<int64_t>(TuiLanguage::ZhCn)
+            || lang == static_cast<int64_t>(TuiLanguage::EnUs)) {
+            language_.store(static_cast<int>(lang), std::memory_order_release);
         }
     }
 
@@ -225,6 +249,35 @@ public:
         return tailThinkingModeName(tailThinkingMode());
     }
 
+    /// 获取当前界面语言 (0=简体中文, 1=English; 越界值按简体中文处理)
+    TuiLanguage language() const noexcept {
+        const int v = language_.load(std::memory_order_acquire);
+        return (v == static_cast<int>(TuiLanguage::EnUs)) ? TuiLanguage::EnUs
+                                                          : TuiLanguage::ZhCn;
+    }
+
+    /// 设置界面语言 (非法值按简体中文处理)
+    /// - 变更同步持久化到全局设置数据库 (失败仅记日志, 不影响本次设置)
+    inline void setLanguage(TuiLanguage lang) noexcept {
+        language_.store(
+            lang == TuiLanguage::EnUs ? static_cast<int>(TuiLanguage::EnUs)
+                                      : static_cast<int>(TuiLanguage::ZhCn),
+            std::memory_order_release
+        );
+        if (db_) {
+            db_->setInt64("tui.lang", language_.load(std::memory_order_relaxed));
+        }
+    }
+
+    /// 语言显示名称 (当前设置值)
+    std::string_view languageName() const noexcept {
+        const int idx = static_cast<int>(language());
+        if (idx >= 0 && idx < static_cast<int>(kLanguageNames.size())) {
+            return kLanguageNames[static_cast<size_t>(idx)];
+        }
+        return "Unknown";
+    }
+
 private:
 
     TUISettings() :
@@ -265,6 +318,8 @@ private:
     std::atomic<int> logLevel_{static_cast<int>(kDefaultLogLevel)};
     /// 末尾思考展示模式 (存储为 int 以便原子读写; 0=AutoExpand, 1=SingleLine)
     std::atomic<int> tailThinkingMode_{static_cast<int>(kDefaultTailThinkingMode)};
+    /// 界面语言 (存储为 int 以便原子读写; 0=简体中文, 1=English)
+    std::atomic<int> language_{static_cast<int>(kDefaultLanguage)};
     /// 全局设置数据库 (空 = 未持久化, 设置仅存内存)
     std::shared_ptr<agentxx::util::SettingsDb> db_;
 };

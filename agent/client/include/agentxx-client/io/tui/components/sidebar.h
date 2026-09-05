@@ -41,7 +41,8 @@ public:
 
     explicit SidebarComponent(TUICtx& ctx);
 
-    /// 注册常驻标签 (如 Info/Logs); 列表中固定显示于动态 tab 之前
+    /// 注册常驻标签 (如 Info/Logs); 列表中固定显示于动态 tab 之前。
+    /// 界面语言切换时外部会以新语言标题重新调用 (标题随语言刷新)
     void setPinnedTabs(std::vector<PinnedTab> pins) {
         pinned_ = std::move(pins);
     }
@@ -54,6 +55,17 @@ public:
     );
     void removeTab(std::string_view id);
     bool hasTab(std::string_view id) const;
+
+    /// 更新已存在 tab 的标题 (界面语言切换后由外部调用刷新标签按钮文本;
+    /// 不存在时忽略)
+    void setTabTitle(std::string_view id, std::string_view title) {
+        for (auto& tab : tabs_) {
+            if (tab.id == id) {
+                tab.title = std::string{title};
+                return;
+            }
+        }
+    }
 
     bool empty() const {
         return tabs_.empty();

@@ -2,6 +2,7 @@
 
 #include "agentxx-client/io/tui/components/spinner.h"
 #include "agentxx-client/io/tui/framework/tui_context.h"
+#include "agentxx-client/io/tui/framework/tui_i18n.h"
 #include "ftxui/component/component.hpp"
 #include "ftxui/component/component_base.hpp"
 #include "ftxui/dom/elements.hpp"
@@ -41,6 +42,12 @@ public:
     bool           OnEvent(ftxui::Event event) override;
     ftxui::Element OnRender() override;
 
+    /// 刷新界面语言文本 (输入框占位符; 语言切换后由外部调用, 立即生效)
+    void refreshLanguage() {
+        placeholderText_ = std::string(TuiI18n::instance().t("input.placeholder"));
+        ctx_.postRedraw();
+    }
+
     /// 清空输入框
     void clear() {
         inputText_.clear();
@@ -66,6 +73,10 @@ private:
     Config           config_;
     std::string      inputText_;
     ftxui::Component input_;
+
+    /// 输入框占位符 (绑定到 Input 的 placeholder 引用: Input 渲染时实时读取,
+    /// 语言切换后刷新本成员即生效, 无需重建组件)
+    std::string placeholderText_;
 
     /// 会话运行加载动画 (流式输出指示, 替代原先静态 "~" 标记; 可复用组件)
     /// - 注意必须经 Add() 注册为本组件子项: FTXUI 的 OnAnimation 由根组件
