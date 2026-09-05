@@ -2,8 +2,13 @@ name: Release CI/CD
 
 on:
   push:
+    # 触发规则: 仅在手动执行 `git push origin <tag>` 推送标签时触发自动编译
+    # (例如 v1.0.0, v0.1.0, 1.0.0 等)。
+    # 在 GitHub Releases 页面创建 release/标签时, GitHub 只产生 create/release
+    # 事件、不会产生 push 事件, 因此网页上创建的标签不会触发本工作流编译
+    # (编译只服务于手动 git push 的标签)。
     tags:
-      - '*' # 匹配所有 git tag 提交，例如 v1.0.0, v0.1.0, 1.0.0 等
+      - '*'
   workflow_dispatch: # 支持手动触发测试
     inputs:
       tag_name:
@@ -25,7 +30,9 @@ jobs:
       matrix:
         include:
           - platform: linux-x86_64
-            os: ubuntu-latest # 若使用自建 runner，可配置为 [self-hosted, linux]
+            # ubuntu-20.04 (glibc 2.31, 兼容最广泛的 Linux 用户), 用于生成
+            # 尽可能低依赖版本的发布产物
+            os: ubuntu-20.04
             build_script: ./agent/script/linux_release_build.sh
             exec_dir: agent/build/linux-release/exec
             zip_prefix: agentxx
@@ -63,21 +70,37 @@ jobs:
       #   apt 安装的库 (libssl-dev 等); 仅保留编译链路本身需要的工具。
       # - ragel 是 hyperscan 代码生成器 (构建期工具), apt 提供则用之;
       #   若镜像缺失, 构建脚本会下载源码自建。
-      # - 高版本 GCC: 项目要求 C++26 (推荐 gcc >= 14; gcc 13 对部分协程有
-      #   ICE)。ubuntu 24.04 提供 gcc-14, 装好后切为默认。
+      # - 高版本 GCC: 项目要求 C++26 (推荐 gcc >= 14)。GitHub 托管 runner
+      #   的 ubuntu-20.04 官方镜像不带 gcc-14, 从 ubuntu-toolchain-r/test PPA
+      #   安装 (gcc 14.3.0-12ubuntu1~20~ppa1), 装好后切为默认。
+      # - 新版 CMake: ubuntu 20.04 自带 cmake 3.16, 低于 third_party 部分
+      #   依赖所需版本 (如 codegraph-cpp 需 >= 3.20、markdown_ftxui 需 >= 3.25),
+      #   需要从官方二进制包安装新版 (kitware cmake-3.31.x-linux-x86_64.sh)。
       - name: Install Dependencies (Linux)
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y gcc-14 g++-14 cmake ninja-build patchelf ccache zip ragel \
-              libtool autoconf automake make bzip2 xz-utils unzip curl wget || \
-            sudo apt-get install -y gcc g++ cmake ninja-build patchelf ccache zip ragel \
-              libtool autoconf automake make bzip2 xz-utils unzip curl wget
-          if command -v gcc-14 >/dev/null 2>&1; then
-            sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-14 100
-            sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-14 100
+          # 1) 基础编译工具 (ragel 缺失时由构建脚本自建)
+          sudo apt-get install -y ninja-build patchelf ccache zip \
+              libtool autoconf automake make bzip2 xz-utils unzip curl wget || exit 1
+          # 2) 新 GCC (ubuntu-toolchain-r/test PPA, 提供 gcc-14 等; 系统自带 gcc-9)
+          if ! command -v add-apt-repository >/dev/null 2>&1; then
+            sudo apt-get install -y software-properties-common
           fi
+          sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test
+          sudo apt-get update
+          sudo apt-get install -y gcc-14 g++-14 || exit 1
+          sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-14 100
+          sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-14 100
           gcc --version | head -1
+          # 3) 新版 CMake (20.04 自带的 3.16 不满足 third_party 依赖要求;
+          #    用 kitware 官方 Linux 二进制包安装到 /usr/local, 覆盖系统旧版)
+          CMAKE_VER="3.31.4"
+          wget -q "https://github.com/Kitware/CMake/releases/download/v${CMAKE_VER}/cmake-${CMAKE_VER}-linux-x86_64.sh" \
+            -O /tmp/cmake-install.sh
+          chmod +x /tmp/cmake-install.sh
+          sudo /tmp/cmake-install.sh --skip-license --prefix=/usr/local
+          cmake --version | head -1
 
       # ===== 执行 Linux Release 编译脚本 =====
       - name: Run Linux Release Build Script
@@ -160,10 +183,12 @@ jobs:
           if-no-files-found: error
 
   # ===== 汇总所有产物并推送到 GitHub Release =====
+  # 发布 job 永远跟随 push 标签触发; 网页创建的 release/标签不会触发本
+  # 工作流, 因此这里只会处理 git push 的标签或手动 dispatch 的资产。
   publish-release:
     name: Publish GitHub Release
     needs: build-release
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     if: always() && !cancelled() && needs.build-release.result != 'cancelled'
     steps:
       - name: Determine Release Tag
