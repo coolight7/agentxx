@@ -1,6 +1,6 @@
-// agentxx_system 插件 —— 工具实现 (纯函数, 不含 C ABI 胶水)
-// - 从 libagentxx src/tools/system 拆分: agentxx_get_current_datetime 同名同行为
-// - 头文件-only: 插件入口与测试共同包含, 保证插件行为与测试覆盖一致
+/// agentxx_system 插件 —— 工具实现 (纯函数, 不含 C ABI 胶水)
+/// - 从 libagentxx src/tools/system 拆分: agentxx_get_current_datetime 同名同行为
+/// - 头文件-only: 插件入口与测试共同包含, 保证插件行为与测试覆盖一致
 #pragma once
 
 #include <chrono>

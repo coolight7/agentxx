@@ -1,19 +1,19 @@
-// agentxx_websearch 插件 —— 工具实现 (纯函数, 不含 C ABI 胶水)
-// - 从 libagentxx src/tools/web_search 拆分: 同名工具同行为
-//     agentxx_web_search / agentxx_web_fetch / agentxx_web_fetch_markdown
-// - 头文件-only: 插件入口与测试共同包含, 保证插件行为与测试覆盖一致
-// - 依赖: agentxx_util (HttpClient / 字符串编码转换)
-// - 统一异步操作模型 (poll 寄生驱动): 执行体为协程 (*ExecuteAsync), 在插件
-//   实例的 PollLoop (无线程寄生事件循环) 上 spawn, 由宿主 io 线程经 pollOnce
-//   非阻塞步进 —— 与内置工具同线程交错执行; HttpClient 为协程接口直接
-//   co_await, 不再经局部 io_context 同步驱动 (原 runSync 模式已移除)
-// - 取消语义: 协程内阶段边界轮询 cancel_flag (多请求路径的请求间生效);
-//   单请求中断依赖 chunk 超时 (HttpClient 暂未暴露外部 cancellation slot)
-// - html→markdown 转换 (cmark-gfm) 为同步 CPU 段, 典型页面 <10ms; 超大页面
-//   可能触发宿主看门狗告警 (>100ms WARN), 属可接受范围 (与原内置工具一致)
-// - 模型搜索经 OpenAI 兼容 chat/completions 非流式请求实现 (原 lib 版本走
-//   OpenAIProvider, 行为一致: system+user 两条消息, temperature=0,
-//   取回 choices[0].message.content 文本)
+/// agentxx_websearch 插件 —— 工具实现 (纯函数, 不含 C ABI 胶水)
+/// - 从 libagentxx src/tools/web_search 拆分: 同名工具同行为
+///     agentxx_web_search / agentxx_web_fetch / agentxx_web_fetch_markdown
+/// - 头文件-only: 插件入口与测试共同包含, 保证插件行为与测试覆盖一致
+/// - 依赖: agentxx_util (HttpClient / 字符串编码转换)
+/// - 统一异步操作模型 (poll 寄生驱动): 执行体为协程 (*ExecuteAsync), 在插件
+///   实例的 PollLoop (无线程寄生事件循环) 上 spawn, 由宿主 io 线程经 pollOnce
+///   非阻塞步进 —— 与内置工具同线程交错执行; HttpClient 为协程接口直接
+///   co_await, 不再经局部 io_context 同步驱动 (原 runSync 模式已移除)
+/// - 取消语义: 协程内阶段边界轮询 cancel_flag (多请求路径的请求间生效);
+///   单请求中断依赖 chunk 超时 (HttpClient 暂未暴露外部 cancellation slot)
+/// - html→markdown 转换 (cmark-gfm) 为同步 CPU 段, 典型页面 <10ms; 超大页面
+///   可能触发宿主看门狗告警 (>100ms WARN), 属可接受范围 (与原内置工具一致)
+/// - 模型搜索经 OpenAI 兼容 chat/completions 非流式请求实现 (原 lib 版本走
+///   OpenAIProvider, 行为一致: system+user 两条消息, temperature=0,
+///   取回 choices[0].message.content 文本)
 #pragma once
 
 #include "agentxx/util/http_client.h"

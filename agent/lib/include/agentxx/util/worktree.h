@@ -1,7 +1,6 @@
 #pragma once
 
-/// @file worktree.h
-/// @brief Git worktree 管理工具函数 (worktree 模式底层支撑)
+/// Git worktree 管理工具函数 (worktree 模式底层支撑)
 ///
 /// 为 `agentxx_git_worktree` 工具与会话绑定机制提供纯同步的 git 操作封装:
 /// - 创建/列举/删除 worktree (`git worktree add/list/remove`)

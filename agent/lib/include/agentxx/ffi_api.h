@@ -1,54 +1,54 @@
-/**
- * agentxx/ffi_api.h —— libagentxx 对外 FFI C API (唯一跨版本稳定接口)
- *
- * 用途: 供其他编程语言 (Python/Rust/Go/C#/Java/Node...) 经 FFI (ctypes/
- *       JNA/wasm-abi 等) 链接 libagentxx_shared 动态库, 在宿主进程内嵌入
- *       agent 会话运行。导出符号全部为纯 C (extern "C" + 无 STL/异常外泄),
- *       动态库经 version script / 导出列表严格控制导出面 (见 lib/ffi_symbols.map)。
- *
- * ABI 规范:
- *   - 明确 8 字节结构体对齐: #pragma pack(push, 8) / #pragma pack(pop)
- *   - 定长基础类型: int32_t / int64_t / uint32_t / uint64_t
- *   - 明确函数调用约定: AGENTXX_FFI_CALL (Windows 下为 __stdcall, x64 Unix 下为空)
- *   - 统一字符串结构体:
- *       AgentxxStringView: 只读借用视图 (const char* data + uint64_t size)
- *       AgentxxString: 跨 CRT 堆分配字符串 (char* data + uint64_t size), 由 agentxx_ffi_string_free
- * 释放
- *   - 结构体传参与返回值:
- *       所有结构体入参均通过指针传递 (const Struct*)
- *       结构体返回值均改为指针出参 (Struct* out), 函数返回 int32_t 状态码 (0 成功)
- *
- * 架构: 本 API 是 "client 端点" 的 C 抽象 —— 内部实现一个自定义 AgentIOBase
- *       端点 (FfiClientAgentIO), 经进程内 ChannelAgentIOTransport 与
- *       SessionServerAgentIO (由 BaseAgent 驱动) 通信, 与 TUI/CLI client
- *       完全同构 (参考 agent/client/src/mode_runners.cpp setupLocalUnifiedDirect)。
- *
- * 事件模型 (异步, client io 线程回调):
- *   - 所有事件经 AgentxxFFICallbacks::on_event 回调, payload 为 JSON 字符串视图
- *     (与服务端 wire 协议 JSON 字段一致, 见 agentxx/agent/io/wire_protocol.h)
- *   - 回调在 client io 线程同步调用, 必须快速返回 (不得阻塞; 长时间任务请
- *     投递到宿主自己的线程池)
- *   - payload 字符串视图仅回调期间有效, 需保存必须自行拷贝
- *   - 回调内可调用本 API (自动投递回 io 线程, 不死锁); 但不得调用
- *     agentxx_ffi_stop/agentxx_ffi_destroy
- *
- * 错误处理约定:
- *   - 同步错误: 返回值 = 错误码 (AGENTXX_FFI_OK=0 成功, 见 AGENTXX_FFI_ERR_*);
- *     可选的 AgentxxString* log 参数非 NULL 时, 函数在出错时填入详情字符串,
- *     宿主用后必须以 agentxx_ffi_string_free 释放; 成功/无日志时 log->data 为 NULL
- *   - 异步错误: 经 EVT_ERROR / EVT_TURN_END(hasError) 事件上报
- *
- * 生命周期与线程:
- *   - agentxx_ffi_create 在宿主任意线程调用; 成功后:
- *       agentxx_ffi_start 启动内置 agent io 线程, 异步就绪 (EVT_READY)
- *       agentxx_ffi_stop 同步停止并等待 io 线程退出 (幂等)
- *       agentxx_ffi_destroy 销毁句柄 (未 stop 时自动 stop)
- *   - stop/destroy 必须在回调线程以外调用 (内部 io 线程内调用返回
- *     AGENTXX_FFI_ERR_STATE); 其余 API 任意线程可调用
- *   - 同一句柄的所有非同步 API 可并发调用 (内部投递 io 线程串行执行);
- *     同步查询类 API (get_model_info/get_context_messages/list_sessions)
- *     同一时刻同一句柄仅允许一个调用尚未返回
- */
+/// agentxx/ffi_api.h —— libagentxx 对外 FFI C API (唯一跨版本稳定接口)
+///
+/// 用途: 供其他编程语言 (Python/Rust/Go/C#/Java/Node...) 经 FFI (ctypes/
+///       JNA/wasm-abi 等) 链接 libagentxx_shared 动态库, 在宿主进程内嵌入
+///       agent 会话运行。导出符号全部为纯 C (extern "C" + 无 STL/异常外泄),
+///       动态库经 version script / 导出列表严格控制导出面 (见 lib/ffi_symbols.map)。
+///
+/// ABI 规范:
+///   - 明确 8 字节结构体对齐: #pragma pack(push, 8) / #pragma pack(pop)
+///   - 定长基础类型: int32_t / int64_t / uint32_t / uint64_t
+///   - 明确函数调用约定: AGENTXX_FFI_CALL (Windows 下为 __stdcall, x64 Unix 下为空)
+///   - 统一字符串结构体:
+///       AgentxxStringView: 只读借用视图 (const char* data + uint64_t size)
+///       AgentxxString: 跨 CRT 堆分配字符串 (char* data + uint64_t size),
+///       由 agentxx_ffi_string_free 释放
+///   - 结构体传参与返回值:
+///       所有结构体入参均通过指针传递 (const Struct*)
+///       结构体返回值均改为指针出参 (Struct* out), 函数返回 int32_t 状态码 (0 成功)
+///
+/// 架构: 本 API 是 "client 端点" 的 C 抽象 —— 内部实现一个自定义 AgentIOBase
+///       端点 (FfiClientAgentIO), 经进程内 ChannelAgentIOTransport 与
+///       SessionServerAgentIO (由 BaseAgent 驱动) 通信, 与 TUI/CLI client
+///       完全同构 (参考
+///       [mode_runners.cpp](/agent/client/src/mode_runners.cpp) setupLocalUnifiedDirect)。
+///
+/// 事件模型 (异步, client io 线程回调):
+///   - 所有事件经 AgentxxFFICallbacks::on_event 回调, payload 为 JSON 字符串视图
+///     (与服务端 wire 协议 JSON 字段一致, 见
+///     [wire_protocol.h](/agent/lib/include/agentxx/agent/io/wire_protocol.h))
+///   - 回调在 client io 线程同步调用, 必须快速返回 (不得阻塞; 长时间任务请
+///     投递到宿主自己的线程池)
+///   - payload 字符串视图仅回调期间有效, 需保存必须自行拷贝
+///   - 回调内可调用本 API (自动投递回 io 线程, 不死锁); 但不得调用
+///     agentxx_ffi_stop/agentxx_ffi_destroy
+///
+/// 错误处理约定:
+///   - 同步错误: 返回值 = 错误码 (AGENTXX_FFI_OK=0 成功, 见 AGENTXX_FFI_ERR_*);
+///     可选的 AgentxxString* log 参数非 NULL 时, 函数在出错时填入详情字符串,
+///     宿主用后必须以 agentxx_ffi_string_free 释放; 成功/无日志时 log->data 为 NULL
+///   - 异步错误: 经 EVT_ERROR / EVT_TURN_END(hasError) 事件上报
+///
+/// 生命周期与线程:
+///   - agentxx_ffi_create 在宿主任意线程调用; 成功后:
+///       agentxx_ffi_start 启动内置 agent io 线程, 异步就绪 (EVT_READY)
+///       agentxx_ffi_stop 同步停止并等待 io 线程退出 (幂等)
+///       agentxx_ffi_destroy 销毁句柄 (未 stop 时自动 stop)
+///   - stop/destroy 必须在回调线程以外调用 (内部 io 线程内调用返回
+///     AGENTXX_FFI_ERR_STATE); 其余 API 任意线程可调用
+///   - 同一句柄的所有非同步 API 可并发调用 (内部投递 io 线程串行执行);
+///     同步查询类 API (get_model_info/get_context_messages/list_sessions)
+///     同一时刻同一句柄仅允许一个调用尚未返回
 #ifndef AGENTXX_FFI_API_H
 #define AGENTXX_FFI_API_H
 
@@ -204,14 +204,13 @@ typedef struct AgentxxFFICallbacks {
 
 /* ==================== 生命周期 ==================== */
 
-/**
- * 创建 agent 运行时句柄 (未启动; 构造对象, 不启动线程)
- * @param config_json NULL 或 AgentConfig 覆盖 JSON
- * @param model_json 主模型 ModelConfig JSON (建议必填)
- * @param cb 事件回调 (可 NULL = 纯 headless; 内部值拷贝, 回调期间必有效)
- * @param log 非 NULL 时失败填入错误详情 (用后 agentxx_ffi_string_free 释放)
- * @return 句柄; 失败返回 NULL
- */
+/// 创建 agent 运行时句柄 (未启动; 构造对象, 不启动线程)
+/// - `args`:
+///   - [config_json] NULL 或 AgentConfig 覆盖 JSON
+///   - [model_json] 主模型 ModelConfig JSON (建议必填)
+///   - [cb] 事件回调 (可 NULL = 纯 headless; 内部值拷贝, 回调期间必有效)
+///   - [log] 非 NULL 时失败填入错误详情 (用后 agentxx_ffi_string_free 释放)
+/// - `return` 句柄; 失败返回 NULL
 AGENTXX_FFI_EXPORT AgentxxFFIAgent* AGENTXX_FFI_CALL agentxx_ffi_create(
     const AgentxxStringView*   config_json,
     const AgentxxStringView*   model_json,
@@ -317,13 +316,11 @@ AGENTXX_FFI_EXPORT void AGENTXX_FFI_CALL agentxx_ffi_event_queue_on_event(
     void*                    user_data
 );
 
-/**
- * 取出一条事件 (阻塞至多 timeout_ms; 0 = 非阻塞仅探测):
- * - 成功: 返回 AGENTXX_FFI_OK, *type_out 填事件种类, *json_out 填入 payload
- * (agentxx_ffi_string_free 释放)
- * - 队列为空且等待超时: 返回 AGENTXX_FFI_ERR_TIMEOUT
- * - 参数非法/队列已销毁: 返回 AGENTXX_FFI_ERR_INVALID / AGENTXX_FFI_ERR_STATE
- */
+/// 取出一条事件 (阻塞至多 timeout_ms; 0 = 非阻塞仅探测):
+/// - 成功: 返回 AGENTXX_FFI_OK, *type_out 填事件种类, *json_out 填入 payload
+///   (agentxx_ffi_string_free 释放)
+/// - 队列为空且等待超时: 返回 AGENTXX_FFI_ERR_TIMEOUT
+/// - 参数非法/队列已销毁: 返回 AGENTXX_FFI_ERR_INVALID / AGENTXX_FFI_ERR_STATE
 AGENTXX_FFI_EXPORT int32_t AGENTXX_FFI_CALL agentxx_ffi_event_queue_pop(
     AgentxxFFIEventQueue* q,
     int32_t*              type_out,

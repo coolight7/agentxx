@@ -1,28 +1,30 @@
-/*
- * agentxx/plugin/plugin_manager_base.h —— 插件管理器公共基类 (宿主侧, agent/client 共用)
- *
- * 背景: agent 侧 PluginManager (plugin_manager_lifecycle.cpp 等) 与 client 侧
- * ClientPluginManager (client_plugin_manager.cpp) 存在大量重复基建:
- * - 实例公共字段 (元信息/依赖/启用标志/inflight/host 句柄)
- * - io 线程投递 (isIoThread/postToIo/postToIoAsync + ioThreadId_)
- * - 级联卸载/禁用骨架 (collectReverseRequiredDeps + waitInflightZero)
- * - 可执行目录 helper (跨平台 GetModuleFileNameW /proc/self/exe)
- * - C ABI 内存三件套 (alloc/free/strdup)
- * 提取到本基类避免两侧行为漂移 (历史上 client 侧多次"漏掉 agent 侧已修
- * 的问题", 见 plugins.md 13.x 记录), 公共化后修复只做一次。
- *
- * 结构:
- * - PluginInstanceBase: 实例公共基类 (两侧 PluginInstance/ClientPluginInstance
- *   继承; 持有元信息/标志/inflight/宿主句柄/InflightGuard)
- * - PluginManagerBase<InstanceT>: 管理器公共基类 (CRTP/模板注入实例类型;
- *   持有 io executor/ioThreadId_/插件表, 提供 io 投递/查找/等待/级联收集)
- * - hostMemoryAlloc/hostMemoryFree/hostMemoryStrdup: C ABI 跨 CRT 堆三件套
- *   (两侧 vtable 共用同一实现)
- * - getExecutableDirPath: 跨平台可执行目录 helper (builtin:// 回退探测用)
- *
- * 线程约定: 与两侧一致 —— 注册表/插件表仅 io 线程读写; 本类不引入锁
- * (ioThreadId_ 为原子, inflight 为原子, 跨线程递增/递减)。
- */
+/// 插件管理器公共基类 (宿主侧, agent/client 共用)
+///
+/// 背景: agent 侧 PluginManager
+/// ([plugin_manager_lifecycle.cpp](/agent/lib/src/plugins/plugin_manager_lifecycle.cpp) 等)
+/// 与 client 侧
+/// [ClientPluginManager](/agent/lib/src/plugins/client_plugin_manager.cpp)
+/// 存在大量重复基建:
+/// - 实例公共字段 (元信息/依赖/启用标志/inflight/host 句柄)
+/// - io 线程投递 (isIoThread/postToIo/postToIoAsync + ioThreadId_)
+/// - 级联卸载/禁用骨架 (collectReverseRequiredDeps + waitInflightZero)
+/// - 可执行目录 helper (跨平台 GetModuleFileNameW /proc/self/exe)
+/// - C ABI 内存三件套 (alloc/free/strdup)
+/// 提取到本基类避免两侧行为漂移 (历史上 client 侧多次"漏掉 agent 侧已修
+/// 的问题", 见 [plugins.md](/docs/zh-cn/design.md/plugins.md) 13.x 记录),
+/// 公共化后修复只做一次。
+///
+/// 结构:
+/// - PluginInstanceBase: 实例公共基类 (两侧 PluginInstance/ClientPluginInstance
+///   继承; 持有元信息/标志/inflight/宿主句柄/InflightGuard)
+/// - PluginManagerBase<InstanceT>: 管理器公共基类 (CRTP/模板注入实例类型;
+///   持有 io executor/ioThreadId_/插件表, 提供 io 投递/查找/等待/级联收集)
+/// - hostMemoryAlloc/hostMemoryFree/hostMemoryStrdup: C ABI 跨 CRT 堆三件套
+///   (两侧 vtable 共用同一实现)
+/// - getExecutableDirPath: 跨平台可执行目录 helper (builtin:// 回退探测用)
+///
+/// 线程约定: 与两侧一致 —— 注册表/插件表仅 io 线程读写; 本类不引入锁
+/// (ioThreadId_ 为原子, inflight 为原子, 跨线程递增/递减)。
 #pragma once
 
 #include "agentxx/plugin/api/plugin_kit.h" /* AgentxxPluginHost 等 C ABI 类型 */

@@ -160,14 +160,23 @@ struct AppendComponentNotification {
     std::string errorMessage; // 失败时的错误信息
 };
 
+/// 链式哈希 (FNV-1a 逐段追加): 将消息序列逐个 append 形成一条哈希链,
+/// 供会话消息集合做内容指纹 (wire 同步/轮询时比对 tailHash 是否一致)
+/// - 每个消息需序列化为字符串后 append, 顺序敏感 (追加顺序影响最终哈希)
+/// - `return` 见 [tail] / [tailHex]
 class ChainHash {
 public:
 
+    /// 追加一段数据到链尾 (内部自动以其当前哈希作为下一段的种子)
     void append(std::string_view serialized);
+    /// 清空链 (哈希与计数归零)
     void reset();
 
+    /// 当前链尾哈希值 (uint64; 未追加任何数据时为 0)
     uint64_t    tail() const;
+    /// 已追加的段数 (供调用方判断是否首次追加)
     uint64_t    count() const;
+    /// 链尾哈希的十六进制字符串 (固定 16 位, 如 "9c3f..." 小写)
     std::string tailHex() const;
 
 private:

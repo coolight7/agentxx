@@ -1803,7 +1803,9 @@ Element MessageListComponent::renderEditToolDiff(std::string_view oldStr, std::s
 // ---------------------------------------------------------------------------
 // 插件工具消息装饰渲染 (通用机制, 无任何具体工具特化):
 // 装饰内容 (displayName/summary/items) 由插件经 update_tool_decor 推送,
-// items schema 见 client_plugin_api.h (text/diagram kind)
+// items schema 见
+// [client_plugin_api.h](/agent/lib/include/agentxx/plugin/api/client_plugin_api.h)
+// (text/diagram kind)
 // ---------------------------------------------------------------------------
 
 void MessageListComponent::appendDecorToolBody(

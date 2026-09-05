@@ -1,23 +1,21 @@
-/*
- * example_graph_node —— 执行图插件示例
- *
- * 演示能力 (经 graph 接口表 agentxx.agent.graph):
- * 1. 注册自定义节点类型:
- *    - example_intent_router (意图识别): 读取上一个 llm 节点输出的意图,
- *      按 config 中定义的意图枚举 (intents) 匹配, 写 __route__ channel,
- *      由图的 conditional edge (route_channel) 决定路由; 非枚举值取
- *      fallback (默认 "normal"); 已检查过的轮次退化为 has_tool_calls 路由
- *    - example_datetime (时间输出): 将当前系统日期时间作为 assistant
- *      消息写入 messages channel (EventBridge 同步到 viewMessages/
- *      llmMessages)
- * 2. 修改执行图 JSON: 将默认图 (agentxx.default) 改为
- *    用户输入 → llm (识别意图) → intent_router (路由) → datetime 直接结束
- *    轮次 / normal 进入原 agent loop (llm→tool→llm→...→end)
- *
- * 节点实现遵循"统一异步操作模型" (两件套 run_start/run_cancel):
- * - run_start 在宿主 io 线程同步调用 (快同步节点: 直接算完 done 返回 NULL)
- * - state_json 为 GraphState::serialize() 结果, 只读; 修改经返回 writes
- */
+/// example_graph_node —— 执行图插件示例
+///
+/// 演示能力 (经 graph 接口表 agentxx.agent.graph):
+/// 1. 注册自定义节点类型:
+///    - example_intent_router (意图识别): 读取上一个 llm 节点输出的意图,
+///      按 config 中定义的意图枚举 (intents) 匹配, 写 __route__ channel,
+///      由图的 conditional edge (route_channel) 决定路由; 非枚举值取
+///      fallback (默认 "normal"); 已检查过的轮次退化为 has_tool_calls 路由
+///    - example_datetime (时间输出): 将当前系统日期时间作为 assistant
+///      消息写入 messages channel (EventBridge 同步到 viewMessages/
+///      llmMessages)
+/// 2. 修改执行图 JSON: 将默认图 (agentxx.default) 改为
+///    用户输入 → llm (识别意图) → intent_router (路由) → datetime 直接结束
+///    轮次 / normal 进入原 agent loop (llm→tool→llm→...→end)
+///
+/// 节点实现遵循"统一异步操作模型" (两件套 run_start/run_cancel):
+/// - run_start 在宿主 io 线程同步调用 (快同步节点: 直接算完 done 返回 NULL)
+/// - state_json 为 GraphState::serialize() 结果, 只读; 修改经返回 writes
 #include "agentxx/plugin/api/plugin_api.h"
 #include "agentxx/plugin/api/plugin_guard.h"
 #include "agentxx/plugin/api/plugin_kit.h"
@@ -30,9 +28,9 @@
 #include <string_view>
 #include <vector>
 
-/* =====================================================================
- * 每实例上下文
- * ===================================================================== */
+/// =====================================================================
+/// 每实例上下文
+/// =====================================================================
 
 struct AgentCtx : public agentxx::plugin::PluginBase {};
 
@@ -44,7 +42,7 @@ static auto agentGuardLogger(AgentCtx* ctx) noexcept {
     };
 }
 
-/* ---------------- get_info ---------------- */
+/// ---------------- get_info ----------------
 
 extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_agent_get_info(void) {
     return agentxx::plugin::guardCall(
@@ -65,9 +63,10 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_agent_g
     );
 }
 
-/* =====================================================================
- * 节点实现
- * ===================================================================== */
+/// =====================================================================
+///  节点实现
+
+/// =====================================================================
 
 namespace {
 
@@ -340,19 +339,18 @@ void* AGENTXX_PLUGIN_CALL datetimeNodeRunStart(
     }
 }
 
-/* =====================================================================
- * 修改执行图: 默认 agentxx.default → 意图路由流程
- *
- * 新图 (名称 example_graph_node.intent):
- *   __start__ → agent_start → llm → intent_router → [conditional route_channel]
- *     datetime  → datetime_node → __end__          (时间节点执行后直接结束轮次)
- *     normal    → llm                               (回到 agent loop)
- *     tools     → tools → llm                        (原 loop: 工具分发后回 llm)
- *     end       → agent_end → __end__
- *     default   → agent_end                          (兜底结束)
- *
- * channels: messages / savedGraphData / __route__ / __intent_checked
- */
+/// =====================================================================
+/// 修改执行图: 默认 agentxx.default → 意图路由流程
+///
+/// 新图 (名称 example_graph_node.intent):
+///   __start__ → agent_start → llm → intent_router → [conditional route_channel]
+///     datetime  → datetime_node → __end__          (时间节点执行后直接结束轮次)
+///     normal    → llm                               (回到 agent loop)
+///     tools     → tools → llm                        (原 loop: 工具分发后回 llm)
+///     end       → agent_end → __end__
+///     default   → agent_end                          (兜底结束)
+///
+/// channels: messages / savedGraphData / __route__ / __intent_checked
 static int modifyGraphToIntentFlow(AgentCtx& ctx, std::string& errOut) {
     if (!ctx.iface.graph || !ctx.iface.graph->get_graph_json || !ctx.iface.graph->set_graph_json) {
         errOut = "graph iface not available";
@@ -474,7 +472,7 @@ static int modifyGraphToIntentFlow(AgentCtx& ctx, std::string& errOut) {
     return 0;
 }
 
-/* ---------------- entry / unload ---------------- */
+/// ---------------- entry / unload ----------------
 
 extern "C" AGENTXX_PLUGIN_EXPORT int
     agentxx_plugin_agent_create(const AgentxxPluginHost* host, void** plugin_ctx) {

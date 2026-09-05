@@ -55,26 +55,23 @@ struct HttpResponse {
     std::optional<std::string> bodyText() const;
 };
 
-/// Default max response body size (10 MB) to prevent memory exhaustion
+/// 默认最大响应体大小 (10 MB), 防止内存耗尽
 inline constexpr uint64_t kDefaultMaxResponseBody = 10 * 1024 * 1024;
 
-/// Per-request configuration for the less frequently customized options.
-/// - connectTimeout: total deadline for DNS resolve + TCP connect + TLS handshake
-///   combined. The three phases share a single deadline so the worst-case total
-///   is exactly connectTimeout (not 3x as with per-phase limits). Note: DNS
-///   resolution (getaddrinfo) cannot be interrupted once started, so it is run
-///   in a background coroutine and the request gives up waiting at this
-///   deadline (see startDnsResolve/waitDnsResolve in http_client.cpp).
-/// - sslVerify: enables TLS certificate verification for this request; nullopt
-///   falls back to the global default (see HttpClient::setSslVerify).
-/// - sendTimeout: bounds writing the request; nullopt auto-derives it from the
-///   request body size (see HttpClient::calcTimeoutBySize).
-/// - readChunkTimeout: bounds the gap between successive incoming data chunks; if no
-///   new data arrives within readChunkTimeout the request is treated as timed out
-///   (the timer resets every time new data is received). This is a per-chunk
-///   timeout, NOT a total response timeout — as long as data keeps flowing the
-///   connection stays alive.
-/// - keepAlive: enable HTTP keep-alive + 连接池复用 (见 maxConcurrentConnections)。
+/// 单次请求配置 (低频定制项)
+/// - connectTimeout: DNS 解析 + TCP 连接 + TLS 握手 的总期限。三个阶段共享
+///   同一期限, 最坏总耗时恰为 connectTimeout (而不是分段限制的 3 倍)。
+///   注意: DNS 解析 (getaddrinfo) 一旦开始无法中断, 因此放到后台协程执行,
+///   请求方在此期限到达时放弃等待 (见
+///   [http_client.cpp](/agent/lib/src/util/http_client.cpp) startDnsResolve/waitDnsResolve)
+/// - sslVerify: 本次请求是否校验 TLS 证书; nullopt 时回退全局默认
+///   (见 HttpClient::setSslVerify)
+/// - sendTimeout: 写请求体的期限; nullopt 时按请求体大小自动推导
+///   (见 HttpClient::calcTimeoutBySize)
+/// - readChunkTimeout: 相邻数据块到达间隔的期限; readChunkTimeout 内没有新数据
+///   到达视为超时 (每收到新数据计时器重置)。这是"块间"超时, 不是整个响应的
+///   总超时 —— 只要数据持续到达, 连接就一直保持
+/// - keepAlive: 启用 HTTP keep-alive + 连接池复用 (见 maxConcurrentConnections)。
 ///   false (默认) 时请求头带 Connection: close, 每次新建连接、响应后立即关闭。
 /// - maxConcurrentConnections: keepAlive=true 时生效, 每个端点
 ///   (scheme://host:port + sslVerify) 的最大并发连接数; 默认 5, 0 = 不限制
@@ -115,9 +112,9 @@ public:
     static const HeaderMap& defaultHeaders();
 
     // -----------------------------------------------------------------------
-    // Shared SSL context pool — avoids per-request OpenSSL context creation
-    // (SSL_CTX_new is expensive). Two lazily-initialized contexts: one with
-    // certificate verification enabled (production default), one without.
+    // 共享 SSL context 池 —— 避免每个请求都创建 OpenSSL context
+    // (SSL_CTX_new 开销大)。两个惰性初始化的 context: 一个开启证书校验
+    // (生产默认), 一个关闭。
     // -----------------------------------------------------------------------
     static asio::ssl::context& sharedSslCtx(bool verify);
 
@@ -272,8 +269,8 @@ public:
         std::chrono::milliseconds             connectTimeout
     );
 
-    /// Enable/disable SSL certificate verification (default: enabled).
-    /// Disable only for testing with self-signed certificates.
+    /// 启用/禁用 SSL 证书校验 (默认启用)
+    /// - 仅建议在自签名证书的测试场景中关闭
     static void setSslVerify(bool enable) noexcept;
 
     static bool getSslVerify() noexcept;

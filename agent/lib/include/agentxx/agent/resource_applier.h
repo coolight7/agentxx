@@ -21,7 +21,8 @@ class McpClient;
 
 namespace agent {
 
-/// 完整定义见 context.h (此处前向声明, 成员仅持弱引用)
+/// 完整定义见 [context.h](/agent/lib/include/agentxx/agent/context.h)
+/// (此处前向声明, 成员仅持弱引用)
 class AgentContext;
 
 /// 插件资源声明 (plugin.yaml 声明式段; 相对插件目录的路径已解析为绝对路径)

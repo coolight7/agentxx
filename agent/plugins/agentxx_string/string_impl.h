@@ -1,8 +1,9 @@
-// agentxx_string 插件 —— 工具实现 (纯函数, 不含 C ABI 胶水)
-// - 从 libagentxx src/tools/string 拆分: 同名工具同行为
-// - 头文件-only: 插件入口与测试 (agent/test/core/test_string_tools.cpp)
-//   共同包含, 保证插件行为与测试覆盖一致
-// - 依赖: html2md (第三方, AGENTXX_INSTALL_DIR 安装) + agentxx_util (XXRegex)
+/// agentxx_string 插件 —— 工具实现 (纯函数, 不含 C ABI 胶水)
+/// - 从 libagentxx src/tools/string 拆分: 同名工具同行为
+/// - 头文件-only: 插件入口与测试
+///   ([test_string_tools.cpp](/agent/test/core/test_string_tools.cpp))
+///   共同包含, 保证插件行为与测试覆盖一致
+/// - 依赖: html2md (第三方, AGENTXX_INSTALL_DIR 安装) + agentxx_util (XXRegex)
 #pragma once
 
 #include "agentxx/util/log.h"

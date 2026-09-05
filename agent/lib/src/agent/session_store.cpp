@@ -313,8 +313,9 @@ static int64_t fileTimeToUnixMs(fs::file_time_type tp) {
 }
 
 /// 目录最近写入时刻启发式 (unix 毫秒): max(session.db, session.db-wal) 的修改时间。
-/// SQLite 为 WAL 模式 (见 util/sqlite.h), 最近提交可能仍在 -wal 文件中未合并回
-/// 主库, 仅 stat 主库会低估活动时间; 取两者最大值近似最近写入时刻。
+/// SQLite 为 WAL 模式 (见 [sqlite.h](/agent/lib/include/agentxx/util/sqlite.h)),
+/// 最近提交可能仍在 -wal 文件中未合并回主库, 仅 stat 主库会低估活动时间;
+/// 取两者最大值近似最近写入时刻。
 /// - 两个文件都不存在/不可读时返回 0 (排序时自然落在最后)
 static int64_t sessionDirActivityHintMs(const fs::path& dir) {
     int64_t best = 0;

@@ -1,18 +1,16 @@
-/*
- * agentxx/plugin/api/plugin_kit.h —— 插件开发 SDK (C++ header-only)
- *
- * 命名空间: 全部位于 agentxx::plugin
- *
- * 锚定协程模型 SDK:
- * - PluginBase: 实例上下文基类, 集中常用宿主操作 (workDir / toolPrompt / log 等)
- * - Logger: 实例级日志闭包, 消除进程级全局
- * - Task<T>: 极简锚定协程类型 (无外部执行器依赖, 帧先销毁后 done 上报)
- * - 锚定原语 awaiter 族: sleep / yield / offload / call_tool / invoke_cap
- * - 注册族: tool (Task协程) / fast_tool (快同步内联) / blocking_tool (阻塞池委托) / hook /
- * capability
- * - spawn: 后台协作任务 (sleep 循环, 卸载取消)
- * - 阻塞便捷助手: 供 JS 引擎及非 io 线程使用 (基于 condvar)
- */
+/// 插件开发 SDK (C++ header-only)
+///
+/// 命名空间: 全部位于 agentxx::plugin
+///
+/// 锚定协程模型 SDK:
+/// - PluginBase: 实例上下文基类, 集中常用宿主操作 (workDir / toolPrompt / log 等)
+/// - Logger: 实例级日志闭包, 消除进程级全局
+/// - Task<T>: 极简锚定协程类型 (无外部执行器依赖, 帧先销毁后 done 上报)
+/// - 锚定原语 awaiter 族: sleep / yield / offload / call_tool / invoke_cap
+/// - 注册族: tool (Task协程) / fast_tool (快同步内联) / blocking_tool (阻塞池委托) / hook /
+/// capability
+/// - spawn: 后台协作任务 (sleep 循环, 卸载取消)
+/// - 阻塞便捷助手: 供 JS 引擎及非 io 线程使用 (基于 condvar)
 #pragma once
 #include "agentxx/plugin/api/client_plugin_api.h"
 
@@ -42,7 +40,8 @@ namespace plugin {
 
 /* ==================== C++ 字符串/接口便捷工具 (非 ABI) ====================
  *
- * plugin_api.h 为纯 C ABI (跨边界契约), 其结构体在 C++ 下仅带最小便捷成员
+ * [plugin_api.h](/agent/lib/include/agentxx/plugin/api/plugin_api.h) 为纯 C ABI
+ * (跨边界契约), 其结构体在 C++ 下仅带最小便捷成员
  * (构造/empty, 不改变布局)。面向宿主/插件 C++ 源码的字符串与接口操作集中
  * 在本命名空间:
  * - PluginStringView: 字符串视图便捷工具 (纯静态函数集合, 不持有状态;

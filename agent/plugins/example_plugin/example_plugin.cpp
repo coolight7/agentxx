@@ -1,17 +1,15 @@
-/*
- * example_plugin —— 一期示例插件 (C++ 实现, 基于 plugin_kit.h)
- *
- * 演示能力:
- * 1. 工具注册:
- *    - example_echo (快同步 fast_tool, io 线程直跑)
- *    - example_caller (锚定 Task 协程, 经 call_tool 异步互调)
- *    - example_sleep (锚定 Task 协程, 经 co_await sleep 精确唤醒)
- * 2. 钩子: agent_start 钩子
- * 3. 事件: 订阅 plugin.demo.topic 与跨端事件
- * 4. 能力: 声明 capability "example.demo"
- * 5. 卸载: destroy 释放实例
- * 6. client 入口 (双端插件, agentxx_plugin_client_create)
- */
+/// example_plugin —— 一期示例插件 (C++ 实现, 基于 plugin_kit.h)
+///
+/// 演示能力:
+/// 1. 工具注册:
+///    - example_echo (快同步 fast_tool, io 线程直跑)
+///    - example_caller (锚定 Task 协程, 经 call_tool 异步互调)
+///    - example_sleep (锚定 Task 协程, 经 co_await sleep 精确唤醒)
+/// 2. 钩子: agent_start 钩子
+/// 3. 事件: 订阅 plugin.demo.topic 与跨端事件
+/// 4. 能力: 声明 capability "example.demo"
+/// 5. 卸载: destroy 释放实例
+/// 6. client 入口 (双端插件, agentxx_plugin_client_create)
 #include "agentxx/plugin/api/client_plugin_api.h"
 #include "agentxx/plugin/api/plugin_api.h"
 #include "agentxx/plugin/api/plugin_guard.h"
@@ -22,9 +20,9 @@
 #include <string>
 #include <string_view>
 
-/* =====================================================================
- * 每实例上下文
- * ===================================================================== */
+/// =====================================================================
+/// 每实例上下文
+/// =====================================================================
 
 struct AgentCtx : public agentxx::plugin::PluginBase {};
 
@@ -54,7 +52,7 @@ static auto clientGuardLogger(ClientCtx* ctx) noexcept {
     };
 }
 
-/* ---------------- get_info ---------------- */
+/// ---------------- get_info ----------------
 
 extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_agent_get_info(void) {
     return agentxx::plugin::guardCall(
@@ -75,7 +73,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_agent_g
     );
 }
 
-/* ---------------- event handlers ---------------- */
+/// ---------------- event handlers ----------------
 
 static void AGENTXX_PLUGIN_CALL on_demo_event(const AgentxxPluginStringView*, void* ud) {
     auto* ctxRaw = static_cast<AgentCtx*>(ud);
@@ -97,7 +95,7 @@ static void AGENTXX_PLUGIN_CALL on_client_hello(const AgentxxPluginStringView*, 
     });
 }
 
-/* ---------------- entry / unload ---------------- */
+/// ---------------- entry / unload ----------------
 
 extern "C" AGENTXX_PLUGIN_EXPORT int
     agentxx_plugin_agent_create(const AgentxxPluginHost* host, void** plugin_ctx) {
@@ -232,9 +230,9 @@ extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_agent_destroy(void* plugin_
     });
 }
 
-/* =====================================================================
- * client 侧入口 (agentxx_client_*)
- * ===================================================================== */
+/// =====================================================================
+/// client 侧入口 (agentxx_client_*)
+/// =====================================================================
 
 extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxClientPluginInfo* agentxx_plugin_client_get_info(void
 ) {

@@ -1,7 +1,7 @@
-// agentxx_filesystem 插件 —— 工具实现 (纯函数, 不含 C ABI 胶水)
-// - 从 libagentxx src/tools/filesystem 拆分: 同名工具同行为
-//     list / read / write / edit / glob / grep
-// - 头文件-only: 插件入口与测试共同包含, 保证插件行为与测试覆盖一致
+/// agentxx_filesystem 插件 —— 工具实现 (纯函数, 不含 C ABI 胶水)
+/// - 从 libagentxx src/tools/filesystem 拆分: 同名工具同行为
+///     list / read / write / edit / glob / grep
+/// - 头文件-only: 插件入口与测试共同包含, 保证插件行为与测试覆盖一致
 #pragma once
 
 #include "agentxx/util/aho_corasick.h"

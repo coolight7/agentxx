@@ -143,7 +143,8 @@ Element SidebarComponent::OnRender() {
     const int listW = measureNode->requirement().min_x + 1;
 
     // tabList_ (Scrollable/ListView) 按设计 requirement min_y=0, 依赖父级以
-    // flex 分配空间 (见 scrollable.h) —— 此处必须加 |flex 占据 vbox 剩余高度,
+    // flex 分配空间 (见 [scrollable.h](/agent/client/include/agentxx-client/io/tui/scrollable.h))
+    // —— 此处必须加 |flex 占据 vbox 剩余高度,
     // 否则列表被分配 0 行, 常驻标签 (Info/Logs) 与 tab 按钮全部不可见
     auto tabBar = vbox({
                       text(" "),

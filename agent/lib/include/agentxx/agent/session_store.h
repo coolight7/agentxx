@@ -34,8 +34,8 @@ namespace agent {
 class SessionStore {
 public:
 
-    /// @param rootDir 数据根目录; 为空使用默认 {dataDir}/sqlite/sessions/
-    ///        (dataDir 为空时 ~/.agentxx/, 取不到用户主目录时回退系统临时目录)
+    /// - [rootDir] 数据根目录; 为空使用默认 {dataDir}/sqlite/sessions/
+    ///   (dataDir 为空时 ~/.agentxx/, 取不到用户主目录时回退系统临时目录)
     explicit SessionStore(std::string rootDir = "");
 
     // ---- 会话消息状态 (session.db) ----

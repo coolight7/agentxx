@@ -1,14 +1,15 @@
-// event_queue.cpp —— FFI 异步安全事件队列实现
-//
-// 背景见 ffi_api.h "异步安全事件队列" 注释: on_event 在内部 client-io 线程
-// 同步回调且 payload 仅回调期间有效, 无法同步拷贝 payload 的宿主语言运行时
-// (Dart NativeCallable.listener 等) 经本桥接安全接收事件。
-//
-// 线程模型:
-// - 入队 (agentxx_ffi_event_queue_on_event): 任意线程 (实际为 client-io 线程),
-//   仅做字符串拷贝 + mutex/deque 操作, 不阻塞 io 调度
-// - 出队 (agentxx_ffi_event_queue_pop): 宿主线程, condition_variable 有界等待
-// - free: 唤醒全部等待者并置 closed, 等待者以 AGENTXX_FFI_ERR_STATE 返回
+/// event_queue.cpp —— FFI 异步安全事件队列实现
+///
+/// 背景见 [ffi_api.h](/agent/lib/include/agentxx/ffi_api.h) "异步安全事件队列"
+/// 注释: on_event 在内部 client-io 线程
+/// 同步回调且 payload 仅回调期间有效, 无法同步拷贝 payload 的宿主语言运行时
+/// (Dart NativeCallable.listener 等) 经本桥接安全接收事件。
+///
+/// 线程模型:
+/// - 入队 (agentxx_ffi_event_queue_on_event): 任意线程 (实际为 client-io 线程),
+///   仅做字符串拷贝 + mutex/deque 操作, 不阻塞 io 调度
+/// - 出队 (agentxx_ffi_event_queue_pop): 宿主线程, condition_variable 有界等待
+/// - free: 唤醒全部等待者并置 closed, 等待者以 AGENTXX_FFI_ERR_STATE 返回
 
 #include "agentxx/ffi_api.h"
 

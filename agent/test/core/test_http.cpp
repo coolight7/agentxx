@@ -1620,8 +1620,9 @@ asio::awaitable<void> test_http_client_sse_interruption() {
 
 /// DNS 黑洞下 requestSseAsync / requestAsync 不应无限挂起:
 /// - connectTimeout 到期应立即报 "DNS resolve timeout" (getaddrinfo 阻塞无法被
-///   取消/超时中断, 见 http_client.cpp startDnsResolve 注释, 故解析放后台协程,
-///   请求协程超时即放弃等待)
+///   取消/超时中断, 见
+///   [http_client.cpp](/agent/lib/src/util/http_client.cpp) startDnsResolve 注释,
+///   故解析放后台协程, 请求协程超时即放弃等待)
 /// - 外部取消应立即中止
 ///
 /// 需要 root 权限临时替换 /etc/resolv.conf 指向黑洞 DNS, 否则跳过 (不影响其它测试)

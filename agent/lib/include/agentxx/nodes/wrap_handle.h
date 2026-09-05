@@ -25,6 +25,9 @@ template<typename T>
 concept BaseGraphNodeType = std::same_as<T, neograph::graph::GraphNode>
                             || std::derived_from<T, neograph::graph::GraphNode>;
 
+/// 节点包装基类: 提供默认 run 透传 (不包装时直接调用 T::run)
+/// - 内部实现 start -> baseRun -> end 的栈式调用与异常分发框架
+/// - 各 virtual 钩子由子类覆写以插入中间件行为
 class WrapBaseNodeInterface : public neograph::graph::GraphNode {
 protected:
 
@@ -39,6 +42,8 @@ public:
     std::string get_name() const override;
 };
 
+/// 节点包装模板: 继承具体节点类型 T, 在 T::run 外围注入中间件
+/// handle 的 start/end 钩子与异常处理框架 (见 [WrapBaseNodeInterface])
 template<BaseGraphNodeType T>
 class NEOGRAPH_API WrapHandleBaseNode : public T {
 protected:
@@ -70,25 +75,30 @@ public:
         co_return;
     }
 
-    // 取消/中断/异常重抛时 (onHandle*Error 路径) 不执行;
-    // 正常完成 或 普通异常被节点拦截 (视为正常完成) 时执行
+    /// 节点结束回调 (start/baseRun 正常完成后调用)
+    /// - 取消/中断/异常重抛时 (onHandle*Error 路径) 不执行;
+    /// - 正常完成 或 普通异常被节点拦截 (视为正常完成) 时执行
     virtual asio::awaitable<void>
         onNodeEnd(const neograph::graph::NodeInput& in, neograph::graph::NodeOutput& result) {
         co_return;
     }
 
+    /// 单个中间件 handle 的 start 阶段钩子 (按 handles 顺序调用)
     virtual asio::awaitable<void> onHandleStart(
         agentxx::middleware::BaseMiddlewareHandleInterface& item,
         neograph::graph::NodeInput&                         in
     ) = 0;
 
+    /// 单个中间件 handle 的 end 阶段钩子 (与 start 反向回放)
     virtual asio::awaitable<void> onHandleEnd(
         agentxx::middleware::BaseMiddlewareHandleInterface& item,
         const neograph::graph::NodeInput&                   in,
         neograph::graph::NodeOutput&                        result
     ) = 0;
 
-    // 如果是消息节点，应当添加消息，后续不执行 BaseRun
+    /// start 阶段抛错时的错误回调
+    /// - 如果是消息节点，应当在此添加错误消息; 之后不再执行该 handle 的
+    ///   baseRun (错误替代后续正常流程)
     virtual void onHandleStartError(
         bool                                                errorRethrow,
         bool                                                isCurrentError,
@@ -98,6 +108,7 @@ public:
         neograph::graph::NodeOutput&                        result
     ) noexcept {}
 
+    /// 节点自身 baseRun 抛错时的错误回调
     virtual void onHandleBaseRunError(
         bool                         errorRethrow,
         bool                         isCurrentError,
@@ -106,7 +117,8 @@ public:
         neograph::graph::NodeOutput& result
     ) noexcept {}
 
-    // 一般不修改 [result]，消息已经由前面的 start/baseRun 添加
+    /// end 阶段抛错时的错误回调
+    /// - 一般不修改 [result]，错误消息已由前面的 start/baseRun 添加
     virtual void onHandleEndError(
         bool                                                errorRethrow,
         bool                                                isCurrentError,

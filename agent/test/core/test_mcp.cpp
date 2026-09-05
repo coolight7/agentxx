@@ -3651,7 +3651,8 @@ asio::awaitable<void> test_mcp_client_truncated_retry() {
             if (acceptor) {
                 neograph_asio_error_code ec;
                 // 先连接一次唤醒阻塞中的同步 accept: 跨线程 close 无法可靠
-                // 中断 asio 同步 accept (见 test_http.cpp 同模式), 先送一个
+                // 中断 asio 同步 accept (见
+                // [test_http.cpp](/agent/test/core/test_http.cpp) 同模式), 先送一个
                 // 连接让 accept 返回, 再 close 使后续 accept 返回错误退出循环
                 asio::ip::tcp::socket dummy(*ioCtx);
                 dummy.connect(

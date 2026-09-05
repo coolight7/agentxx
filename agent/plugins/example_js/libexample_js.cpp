@@ -1,6 +1,4 @@
-/*
- * libexample_js.so —— example_js 插件的 C++ 壳 (统一插件模型示例)
- */
+/// libexample_js.so —— example_js 插件的 C++ 壳 (统一插件模型示例)
 #include "agentxx/plugin/api/plugin_api.h"
 #include "agentxx/plugin/api/plugin_guard.h"
 #include "agentxx/plugin/api/plugin_kit.h"

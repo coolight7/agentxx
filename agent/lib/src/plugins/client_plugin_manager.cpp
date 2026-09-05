@@ -1,14 +1,12 @@
-/*
- * client_plugin_manager.cpp —— client 侧插件管理器实现
- *
- * 线程模型 (与 agent 侧 PluginManager 一致的无锁单线程模型):
- * - 所有注册表/插件表/会话上下文状态仅 client io 线程读写
- * - UI 注册表 (uiRegistry_) 例外: io 线程写, UI 线程经快照读 (mutex + COW shared_ptr)
- * - dlopen/entry 卸载到内部 thread_pool; entry 的注册动作经 vtable ioCallSync
- *   投递回 io 线程串行执行 (插件无感)
- * - 插件回调 (事件 handler / 命令 execute) 在 io 线程同步调用, 快速返回约定
- * - UI 线程从不直接调用插件代码: 命令触发经 postCommandInvocation 投递
- */
+/// client_plugin_manager.cpp —— client 侧插件管理器实现
+///
+/// 线程模型 (与 agent 侧 PluginManager 一致的无锁单线程模型):
+/// - 所有注册表/插件表/会话上下文状态仅 client io 线程读写
+/// - UI 注册表 (uiRegistry_) 例外: io 线程写, UI 线程经快照读 (mutex + COW shared_ptr)
+/// - dlopen/entry 卸载到内部 thread_pool; entry 的注册动作经 vtable ioCallSync
+///   投递回 io 线程串行执行 (插件无感)
+/// - 插件回调 (事件 handler / 命令 execute) 在 io 线程同步调用, 快速返回约定
+/// - UI 线程从不直接调用插件代码: 命令触发经 postCommandInvocation 投递
 #include "agentxx/plugin/client_plugin_manager.h"
 #include "agentxx/plugin/plugin_common.h"
 #include "agentxx/plugin/plugin_manager.h" /* NativeLoader (平台 dlopen 封装) */
@@ -45,9 +43,10 @@
 /// 可执行目录 helper
 using agentxx::plugin::getExecutableDirPath;
 
-/// 状态栏项宿主句柄实现 (全局作用域, 与 client_plugin_api.h 的 C 不透明类型
-/// 对应 —— vtable 函数签名中的 AgentxxStatusItem 即此类型, 不能在命名空间内
-/// 另行定义)
+/// 状态栏项宿主句柄实现 (全局作用域, 与
+/// [client_plugin_api.h](/agent/lib/include/agentxx/plugin/api/client_plugin_api.h)
+/// 的 C 不透明类型对应 —— vtable 函数签名中的 AgentxxStatusItem 即此类型,
+/// 不能在命名空间内另行定义)
 struct AgentxxStatusItem {
     agentxx::plugin::ClientPluginInstance* inst = nullptr;
     std::string                            id;
@@ -197,7 +196,8 @@ void ClientPluginManager::setSessionId(std::string sessionId) {
 }
 
 InterfaceSet ClientPluginManager::hostSupportedInterfaces() const {
-    // 接口集唯一来源: UI 适配器声明 (位图方案已移除, 见 client_plugin_api.h
+    // 接口集唯一来源: UI 适配器声明 (位图方案已移除, 见
+    // [client_plugin_api.h](/agent/lib/include/agentxx/plugin/api/client_plugin_api.h)
     // "接口协商" 节)。无适配器 (纯测试/直连) 时空集 —— 仅命令输入管线等
     // 宿主固有能力也由适配器显式声明, 保持单一事实来源
     return uiAdapter_ ? uiAdapter_->supportedInterfaces() : InterfaceSet{};
@@ -323,7 +323,8 @@ asio::awaitable<std::shared_ptr<ClientPluginInstance>> ClientPluginManager::load
         co_return nullptr;
     }
 
-    // ---- 接口协商门禁 (三层协商第 2 层; 见 plugin_common.h 接口协商节) ----
+    // ---- 接口协商门禁 (三层协商第 2 层; 见
+    //      [plugin_common.h](/agent/lib/include/agentxx/plugin/plugin_common.h) 接口协商节) ----
     // require 中本侧相关项未满足 → 跳过加载 (INFO + 记录原因, 非错误:
     // 同一插件目录服务 cli/tui/gui 多宿主, 本宿主缺某接口是预期情况);
     // optional 缺失仅警告 (插件 entry 内应按 ui_caps()/interfaces 自降级)
@@ -415,7 +416,8 @@ asio::awaitable<std::shared_ptr<ClientPluginInstance>> ClientPluginManager::load
     inst->host.vtable     = hostVtable();
 
     // (v4) min_ui_caps 位图门禁已移除: 接口要求统一由上方清单 interfaces
-    // require 门禁承担 (字符串集, 见 plugin_common.h 接口协商节)
+    // require 门禁承担 (字符串集, 见
+    // [plugin_common.h](/agent/lib/include/agentxx/plugin/plugin_common.h) 接口协商节)
 
     // entry 卸载到内部线程池执行 (A2): 与 agent 侧一致 —— entry 内 vtable
     // 注册动作经 ioCallSync 回 io 线程同步执行; entry 在 io 线程执行会阻塞
@@ -965,7 +967,8 @@ std::string ClientPluginManager::clientStateJson() const {
     j["connState"]       = connState_;
     j["startupProgress"] = startupProgress_;
     // 宿主支持的接口名清单 (三层协商第 3 层 —— 插件据此自行决定启用哪些
-    // 功能; 见 plugin_common.h 接口协商节)。位图 uiCaps 字段已移除 (v4)
+    // 功能; 见 [plugin_common.h](/agent/lib/include/agentxx/plugin/plugin_common.h)
+    // 接口协商节)。位图 uiCaps 字段已移除 (v4)
     j["interfaces"] = [&] {
         auto arr = neograph::json::array();
         for (const auto& n : hostSupportedInterfaces()) {
@@ -994,7 +997,8 @@ std::string ClientPluginManager::clientStateJson() const {
 void ClientPluginManager::onReady() {
     neograph::json j = neograph::json::object();
     // 宿主支持的接口名清单 (启动后最早可得的协商结果, 插件在 READY 回调内
-    // 即可完成功能启用决策; 位图 uiCaps 字段已移除, 见 client_plugin_api.h v4)
+    // 即可完成功能启用决策; 位图 uiCaps 字段已移除, 见
+    // [client_plugin_api.h](/agent/lib/include/agentxx/plugin/api/client_plugin_api.h) v4)
     j["interfaces"] = [&] {
         auto arr = neograph::json::array();
         for (const auto& n : hostSupportedInterfaces()) {
@@ -1220,7 +1224,8 @@ void ClientPluginManager::detachAll(ClientPluginInstance* inst, bool keepInfo) {
     }
 }
 
-/// 反向必选依赖收集 → 公共 collectReverseRequiredDeps (plugin_common.h)
+/// 反向必选依赖收集 → 公共 collectReverseRequiredDeps
+/// (见 [plugin_common.h](/agent/lib/include/agentxx/plugin/plugin_common.h))
 
 void ClientPluginManager::dispatchEvent(int event, const std::string& payloadJson) {
     ioThreadId_.store(std::this_thread::get_id(), std::memory_order_release);

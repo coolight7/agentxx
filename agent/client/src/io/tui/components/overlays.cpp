@@ -25,7 +25,8 @@ using namespace ftxui;
 // 工具函数
 // ---------------------------------------------------------------------------
 
-/// 折叠消息头部单行预览的可用列数预算 (与 message_list.cpp 同款自适应宽度):
+/// 折叠消息头部单行预览的可用列数预算 (与
+/// [message_list.cpp](/agent/client/src/io/tui/components/message_list.cpp) 同款自适应宽度):
 /// 内容区总列数 - 头部前缀显示列数 - 安全余量。
 /// maxWidth 为 scrollable_->contentWidth() (已扣除滚动条 gutter);
 /// 余量 1 列防边界取整溢出 (超宽仍由 xflex_shrink 在右缘兜底裁剪)。

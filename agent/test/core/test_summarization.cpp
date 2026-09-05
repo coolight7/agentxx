@@ -1,6 +1,6 @@
 // SummarizationMiddlewareHandle (上下文压缩中间件) 单元测试
 //
-// 设计要点 (见 agent/lib/include/agentxx/middlewares/summarization.h):
+// 设计要点 (见 [summarization.h](/agent/lib/include/agentxx/middlewares/summarization.h)):
 // - system prompt、最近的消息 不压缩
 // - 超过 75% 上限 时自动压缩: 确定性压缩先行 (toolcall 去重/探索折叠 + 噪音清理,
 //   不剥离 thinking, 不做 offload), 再由 LLM 同上下文总结压缩
@@ -98,8 +98,8 @@ struct SummarizationTestEnv {
     std::shared_ptr<agentxx::middleware::SummarizationMiddlewareHandle> handle   = nullptr;
     std::string sessionId = "sum_test_thread";
 
-    /// @param in_defaultMaxToken 中间件默认模型上限 (模型配置未指定时使用)
-    /// @param in_recentRatio     最近消息 token 预算比例 (测试用小值使切分点可控)
+    /// 构造测试环境, 参数与 SummarizationMiddlewareHandle 构造参数一一对应
+    /// (默认值与中间件默认值一致, 测试可覆盖以控制切分行为)
     SummarizationTestEnv(
         size_t in_defaultMaxToken       = 2048,
         double in_asciiCharsPerToken    = 4.0,

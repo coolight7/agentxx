@@ -24,7 +24,7 @@ namespace server {
 using json = neograph::json;
 
 // ---------------------------------------------------------------------------
-// JSON-RPC helpers
+// JSON-RPC 工具函数
 // ---------------------------------------------------------------------------
 
 inline json jsonRpcError(int code, std::string_view message, std::optional<json> data = {}) {
@@ -53,14 +53,14 @@ inline json jsonRpcErrorResponse(json id, json error) {
     return resp;
 }
 
-// Standard JSON-RPC error codes
+// 标准 JSON-RPC 错误码
 inline constexpr int kJsonRpcParseError     = -32700;
 inline constexpr int kJsonRpcInvalidRequest = -32600;
 inline constexpr int kJsonRpcMethodNotFound = -32601;
 inline constexpr int kJsonRpcInvalidParams  = -32602;
 inline constexpr int kJsonRpcInternalError  = -32603;
 
-// MCP-specific error codes
+// MCP 自定义错误码
 // -32000..-32019: 实现自定义 (legacy, 兼容既有 SDK 用法)
 // -32020..-32099: MCP 规范保留 (2026-07-28 起)
 inline constexpr int kMcpToolNotFound       = -32000;
@@ -73,7 +73,7 @@ inline constexpr int kMcpMissingRequiredClientCapability = -32021;
 inline constexpr int kMcpUnsupportedProtocolVersion      = -32022;
 
 // ---------------------------------------------------------------------------
-// Data types
+// 数据类型 (与 MCP 规范字段一一对应)
 // ---------------------------------------------------------------------------
 
 struct McpToolDefinition {
@@ -121,7 +121,7 @@ struct McpPromptResult {
     std::vector<McpPromptMessage> messages;
 };
 
-// Supported MCP protocol versions (newest first for negotiation)
+// 支持的 MCP 协议版本 (协商时最新优先)
 inline constexpr std::string_view kMcpProtocol2024_11_05   = "2024-11-05";
 inline constexpr std::string_view kMcpProtocol2025_03_26   = "2025-03-26";
 inline constexpr std::string_view kMcpProtocol2025_06_18   = "2025-06-18";
@@ -145,8 +145,8 @@ inline constexpr std::string_view kMetaSubscriptionId = "io.modelcontextprotocol
 inline constexpr std::string_view kMetaLogLevel       = "io.modelcontextprotocol/logLevel";
 
 // ---------------------------------------------------------------------------
-// McpServer
-// https://modelcontextprotocol.io/docs/2026-07-28/getting-started/intro
+// McpServer —— MCP 服务器 (HTTP + SSE 传输)
+// 规范: https://modelcontextprotocol.io/docs/2026-07-28/getting-started/intro
 // ---------------------------------------------------------------------------
 
 class McpServer {
@@ -192,14 +192,13 @@ public:
     ~McpServer();
 
     // -----------------------------------------------------------------------
-    // Lifecycle
+    // 生命周期
     // -----------------------------------------------------------------------
 
     void start();
     void stop();
 
-    /// Run the server over stdin/stdout using newline-delimited JSON.
-    /// Blocks until stdin is closed (EOF / Ctrl-D).
+    /// 以 stdin/stdout 运行 (换行分隔 JSON); 阻塞到 stdin 关闭 (EOF / Ctrl-D)
     void runStdio();
 
     uint16_t port() const;
@@ -207,7 +206,7 @@ public:
     bool     isStopped() const;
 
     // -----------------------------------------------------------------------
-    // Tool registration
+    // 工具注册
     // -----------------------------------------------------------------------
 
     void                           addTool(McpToolDefinition def, ToolHandler handler);
@@ -222,7 +221,7 @@ public:
     void notifyResourceUpdated(std::string_view uri);
 
     // -----------------------------------------------------------------------
-    // Prompt registration
+    // 提示词 (Prompt) 注册
     // -----------------------------------------------------------------------
 
     void                             addPrompt(McpPromptDefinition def, PromptHandler handler);
@@ -230,7 +229,7 @@ public:
     std::vector<McpPromptDefinition> listPrompts() const;
 
     // -----------------------------------------------------------------------
-    // Capabilities
+    // 能力 (Capabilities) 声明
     // -----------------------------------------------------------------------
 
     struct Capabilities {
@@ -294,7 +293,7 @@ private:
     };
 
     // -----------------------------------------------------------------------
-    // Accept header validation helpers
+    // Accept 头校验辅助
     // -----------------------------------------------------------------------
 
     static bool isAcceptValid(std::string_view accept);
@@ -315,13 +314,13 @@ private:
     json buildCapabilities() const;
 
     // -----------------------------------------------------------------------
-    // Route setup
+    // 路由设置
     // -----------------------------------------------------------------------
 
     void setupRoutes();
 
     // -----------------------------------------------------------------------
-    // JSON-RPC request processing (transport-agnostic)
+    // JSON-RPC 请求处理 (传输无关)
     // -----------------------------------------------------------------------
 
     json processJsonRpc(const json& requestJson, const RequestContext& ctx);
@@ -342,7 +341,7 @@ private:
     json decorateModernResult(json result, std::string_view method, const json& requestMeta) const;
 
     // -----------------------------------------------------------------------
-    // Main MCP request handler (HTTP)
+    // 主 MCP 请求处理 (HTTP)
     // -----------------------------------------------------------------------
 
     asio::awaitable<void>
@@ -362,7 +361,7 @@ private:
     );
 
     // -----------------------------------------------------------------------
-    // Method handlers
+    // JSON-RPC 方法处理器
     // -----------------------------------------------------------------------
 
     json handleInitialize(const json& id, const json& params);
@@ -399,7 +398,7 @@ private:
     void endSubscription(SubscriptionEntry& sub);
 
     // -----------------------------------------------------------------------
-    // SSE streaming handler (legacy HTTP+SSE transport, 2024-11-05)
+    // SSE 流处理 (旧版 HTTP+SSE 传输, 2024-11-05)
     // -----------------------------------------------------------------------
 
     asio::awaitable<void> handleSseStream(
@@ -408,14 +407,14 @@ private:
     );
 
     // -----------------------------------------------------------------------
-    // SSE notification broadcast
+    // SSE 通知广播
     // -----------------------------------------------------------------------
 
     void broadcastSSE(std::string_view event, std::string_view data);
     void stopSSE();
 
     // -----------------------------------------------------------------------
-    // Notification events
+    // 变更通知事件
     // -----------------------------------------------------------------------
 
     void notifyToolsChanged();
@@ -427,7 +426,7 @@ private:
     void waitSubscriptionsDrained(const std::vector<std::shared_ptr<SubscriptionEntry>>& subs);
 
     // -----------------------------------------------------------------------
-    // Response helper
+    // 响应输出辅助
     // -----------------------------------------------------------------------
 
     void writeJsonResponse(
@@ -437,7 +436,7 @@ private:
     );
 
     // -----------------------------------------------------------------------
-    // Members
+    // 成员
     // -----------------------------------------------------------------------
 
     Config                            config_;

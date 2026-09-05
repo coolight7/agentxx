@@ -1,6 +1,4 @@
-/*
- * agentxx/plugin/op_driver.h —— 插件异步操作宿主侧驱动器 (lib 内部实现, 非 ABI)
- */
+/// 插件异步操作宿主侧驱动器 (lib 内部实现, 非 ABI)
 #pragma once
 
 #include "agentxx/plugin/api/plugin_kit.h"

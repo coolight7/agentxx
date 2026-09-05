@@ -1,4 +1,4 @@
-// agentxx_websearch —— 网络访问工具插件
+/// agentxx_websearch —— 网络访问工具插件
 #include "agentxx_websearch_plugin.h"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
@@ -358,7 +358,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_agent_destroy(void* plugin_
     });
 }
 
-/* ==================== Client 侧入口 ==================== */
+/// ==================== Client 侧入口 ====================
 
 namespace {
 

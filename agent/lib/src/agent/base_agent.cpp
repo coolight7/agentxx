@@ -64,7 +64,8 @@ BaseAgent::BaseAgent(std::shared_ptr<agentxx::agent::AgentConfig> in_config) {
 ///   * enum 必须是数组, 且元素必须是标量 (string/number/boolean/null),
 ///     不能是数组/对象 —— 嵌套容器属于非法 enum schema;
 ///     (曾出现 neograph::json{vector} 列表初始化误选 initializer_list
-///     构造函数产生 [["x"]] 嵌套数组的案例, 见 tools/sub_agent.cpp)
+///     构造函数产生 [["x"]] 嵌套数组的案例, 见
+///     [subagent.cpp](/agent/lib/src/tools/subagent.cpp))
 ///   * array 类型必须带 items 字段 (Gemini 缺 items 报 "missing field")
 ///   * 带 items 时 type 必须为单一字符串 "array":
 ///     - 联合类型数组 ["string","array"] 不被 Gemini protobuf Schema 支持,

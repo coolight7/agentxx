@@ -1,43 +1,40 @@
 #pragma once
 
-/**
- * @file util/async_offload.h
- * @brief 将阻塞操作卸载到线程池执行的协程工具函数
- *
- * 提供 offloadAsync / offloadCancellableAsync 两个工具函数:
- * - offloadAsync: 将同步阻塞 lambda 卸载到线程池, 主协程挂起等待, 不阻塞 io_context
- * - offloadCancellableAsync: 同上, 但支持取消传播 —— 当父协程被 CancelToken 取消时,
- *   设置 cancel_flag 通知工作线程提前退出, 释放线程执行下一个任务
- *
- * 取消传播链:
- *   CancelToken::cancel()
- *     → asio::cancellation_signal::emit(all)
- *     → 父协程 co_await 点收到 operation_aborted
- *     → catch 设置 atomic cancel_flag = true
- *     → 工作线程轮询 is_cancelled() 提前退出
- *     → 线程释放, 可执行下一个任务
- *
- * 注意: 线程池中的工作协程同步执行 (不挂起), asio 取消信号无法抢占, 且等待方
- * co_await 不会提前返回 —— 因此带 CancelToken 的重载额外启动 watcher 协程
- * 轮询令牌, 取消时直接置位 cancel_flag 打通通知链。
- *
- * 用法示例:
- * @code
- *   auto& pool = agentCtx->threadPool;
- *   auto result = co_await agentxx::util::offloadCancellableAsync<neograph::json>(
- *       *pool,
- *       [](std::atomic<bool>& cancel_flag) -> neograph::json {
- *           for (auto& entry : std::filesystem::directory_iterator(path)) {
- *               if (cancel_flag.load(std::memory_order_acquire)) {
- *                   throw neograph::graph::CancelledException("listing cancelled");
- *               }
- *               // ... process entry
- *           }
- *           return result;
- *       }
- *   );
- * @endcode
- */
+/// 将阻塞操作卸载到线程池执行的协程工具函数
+///
+/// 提供 offloadAsync / offloadCancellableAsync 两个工具函数:
+/// - offloadAsync: 将同步阻塞 lambda 卸载到线程池, 主协程挂起等待, 不阻塞 io_context
+/// - offloadCancellableAsync: 同上, 但支持取消传播 —— 当父协程被 CancelToken 取消时,
+///   设置 cancel_flag 通知工作线程提前退出, 释放线程执行下一个任务
+///
+/// 取消传播链:
+///   CancelToken::cancel()
+///     → asio::cancellation_signal::emit(all)
+///     → 父协程 co_await 点收到 operation_aborted
+///     → catch 设置 atomic cancel_flag = true
+///     → 工作线程轮询 is_cancelled() 提前退出
+///     → 线程释放, 可执行下一个任务
+///
+/// 注意: 线程池中的工作协程同步执行 (不挂起), asio 取消信号无法抢占, 且等待方
+/// co_await 不会提前返回 —— 因此带 CancelToken 的重载额外启动 watcher 协程
+/// 轮询令牌, 取消时直接置位 cancel_flag, 使取消信号能够传递给工作线程。
+///
+/// 用法示例:
+/// ```c++
+///   auto& pool = agentCtx->threadPool;
+///   auto result = co_await agentxx::util::offloadCancellableAsync<neograph::json>(
+///       *pool,
+///       [](std::atomic<bool>& cancel_flag) -> neograph::json {
+///           for (auto& entry : std::filesystem::directory_iterator(path)) {
+///               if (cancel_flag.load(std::memory_order_acquire)) {
+///                   throw neograph::graph::CancelledException("listing cancelled");
+///               }
+///               // ... process entry
+///           }
+///           return result;
+///       }
+///   );
+/// ```
 
 #include "asio/as_tuple.hpp"
 #include "asio/bind_cancellation_slot.hpp"
@@ -91,8 +88,7 @@ asio::awaitable<T> offloadAsync(asio::thread_pool& pool, std::function<asio::awa
 ///
 /// 注意: fn 按值传入 (理由同 offloadAsync, 避免惰性协程引用已析构的临时对象)。
 ///
-/// @tparam T 返回值类型
-/// @tparam F 可调用类型, 签名: T(std::atomic<bool>&)
+/// - T 返回值类型
 template<typename T>
 asio::awaitable<T> offloadCancellableAsync(
     asio::thread_pool&                                    pool,
@@ -129,7 +125,7 @@ asio::awaitable<T> offloadCancellableAsync(
 /// - [cancelFlag] 外部提供的共享取消标志
 /// - fn 可调用对象, 签名: awaitable<T>(std::atomic<bool>&)
 ///
-/// return T 返回值类型
+/// - `return` T 返回值类型
 template<typename T>
 asio::awaitable<T> offloadCancellableAsync(
     asio::thread_pool&                                    pool,
@@ -155,7 +151,7 @@ asio::awaitable<T> offloadCancellableAsync(
 /// - 在线程池工作线程中同步执行的代码不会挂起, asio 取消信号无法抢占它,
 ///   且等待方 co_await 也不会因取消提前返回 —— 工作线程提前退出的唯一途径是
 ///   轮询 cancelFlag。本重载补充监听 CancelToken: 令牌取消时由 watcher 协程
-///   设置 cancelFlag, 打通 "会话取消 -> 线程池工作线程" 的通知链
+///   设置 cancelFlag, 使"会话取消"能通知到线程池工作线程
 /// - watcher 在工作线程结束 (done) 后自行退出, 不会成为常驻协程
 ///
 /// - pool 线程池

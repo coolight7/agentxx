@@ -28,8 +28,8 @@ class AsyncMutex;
 namespace server {
 
 // ---------------------------------------------------------------------------
-// McpClient — async MCP client with HTTP + stdio transports
-// https://modelcontextprotocol.io/docs/2026-07-28/getting-started/intro
+// McpClient —— 异步 MCP 客户端 (HTTP + stdio 传输)
+// 规范: https://modelcontextprotocol.io/docs/2026-07-28/getting-started/intro
 // ---------------------------------------------------------------------------
 
 class McpClientTool;
@@ -119,7 +119,7 @@ public:
     McpClient& operator=(const McpClient&) = delete;
 
     // -----------------------------------------------------------------------
-    // Lifecycle
+    // 生命周期
     // -----------------------------------------------------------------------
 
     /// 初始化连接。2026-07-28 (默认) 时先以 server/discover 探测服务端时代:
@@ -139,7 +139,7 @@ public:
     asio::awaitable<std::expected<DiscoverResult, std::string>> discover();
 
     // -----------------------------------------------------------------------
-    // MCP methods
+    // MCP 方法 (工具/资源/提示词)
     // -----------------------------------------------------------------------
 
     asio::awaitable<std::expected<bool, std::string>> ping();
@@ -160,7 +160,7 @@ public:
         getPrompt(std::string_view name, const json& arguments = json::object());
 
     // -----------------------------------------------------------------------
-    // 2026-07-28 subscriptions/listen
+    // 2026-07-28 协议: subscriptions/listen (变更订阅)
     // -----------------------------------------------------------------------
 
     /// 打开长连接变更通知流 (仅现代协议)。通知回调:
@@ -175,18 +175,18 @@ public:
     );
 
     // -----------------------------------------------------------------------
-    // Tool adapter factory
+    // 工具适配器工厂
     // -----------------------------------------------------------------------
 
     std::vector<std::unique_ptr<agentxx::tools::XXToolBase>>
         createTools(std::weak_ptr<agentxx::agent::AgentContext> ctx);
 
-    /// Create a single tool adapter from a tool definition
+    /// 由单个工具定义创建工具适配器
     std::unique_ptr<McpClientTool>
         createTool(McpToolDefinition def, std::weak_ptr<agentxx::agent::AgentContext> ctx);
 
     // -----------------------------------------------------------------------
-    // Internal: JSON-RPC request/response
+    // 内部: JSON-RPC 请求/响应
     // -----------------------------------------------------------------------
 
 private:
@@ -208,7 +208,7 @@ private:
         sendRequest(std::string_view method, const json& params);
 
     // -----------------------------------------------------------------------
-    // 2026-07-28 modern protocol helpers
+    // 2026-07-28 现代协议辅助 (server/discover + 请求头编码)
     // -----------------------------------------------------------------------
 
     /// 当前生效的协议版本 (初始化后为协商结果, 否则为配置值)
@@ -254,10 +254,10 @@ private:
     std::optional<McpToolDefinition> cachedTool(std::string_view name) const;
 
     // -----------------------------------------------------------------------
-    // SSE endpoint discovery & event parsing
+    // SSE 端点发现与事件解析 (旧版 HTTP+SSE 传输)
     // -----------------------------------------------------------------------
 
-    /// Build the SSE endpoint URL from the server URL (append /sse)
+    /// 由服务器 URL 构造 SSE 端点 URL (末尾追加 /sse)
     static std::string buildSseUrl(std::string_view serverUrl);
 
     struct SseEvent {
@@ -265,16 +265,16 @@ private:
         std::string data;
     };
 
-    /// Parse SSE text into a list of (event-type, data) pairs.
+    /// 将 SSE 文本解析为 (事件类型, 数据) 列表
     static std::vector<SseEvent> parseSseEvents(std::string_view body);
 
-    /// Extract a value from a URL query string by key.
+    /// 从 URL query 中按 key 取值
     static std::string getQueryParam(std::string_view query, std::string_view key);
 
-    /// Discover the message endpoint by connecting to the SSE URL (legacy HTTP+SSE).
+    /// 连接 SSE URL 发现消息端点 (旧版 HTTP+SSE)
     asio::awaitable<void> discoverSseEndpoint();
 
-    /// Build common headers for MCP HTTP requests (legacy).
+    /// 构造 MCP HTTP 请求公共头 (旧版)
     util::HeaderMap buildHttpHeaders() const;
 
     asio::awaitable<std::expected<json, std::string>>
@@ -298,7 +298,7 @@ private:
     asio::awaitable<bool> writeStdioLine(const std::string& line);
 
     // -----------------------------------------------------------------------
-    // Stdio subprocess management
+    // stdio 子进程管理
     // -----------------------------------------------------------------------
 
     bool startStdioSubprocess(asio::any_io_executor executor);
@@ -308,7 +308,7 @@ private:
     void deliverResponse(const json& response);
 
     // -----------------------------------------------------------------------
-    // Members
+    // 成员
     // -----------------------------------------------------------------------
 
     Config               config_;
@@ -321,12 +321,12 @@ private:
     ProtocolEra era_{ProtocolEra::Unknown};
     std::string negotiatedVersion_;
 
-    // HTTP SSE transport state (legacy HTTP+SSE)
+    // HTTP SSE 传输状态 (旧版 HTTP+SSE)
     std::atomic<bool> sseDiscovered_{false};
     std::string       httpMessageUrl_;
     std::string       mcpSessionId_;
 
-    // Stdio transport state (platform-specific details hidden in .cpp)
+    // stdio 传输状态 (平台差异细节隐藏在 .cpp)
     struct StdioTransport;
     std::unique_ptr<StdioTransport> stdio_;
     /// stdio 写序列化: 协程感知锁, 持锁跨越 co_await async_write 也不死锁 (见 AsyncMutex)
@@ -347,7 +347,7 @@ private:
 };
 
 // ---------------------------------------------------------------------------
-// McpClientTool — wraps a remote MCP tool as an XXToolBase
+// McpClientTool —— 将远端 MCP 工具包装为 XXToolBase (供 agent 工具链调用)
 // ---------------------------------------------------------------------------
 
 class McpClientTool : public agentxx::tools::XXToolBase {

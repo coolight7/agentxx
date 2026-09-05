@@ -1,14 +1,14 @@
-// agentxx_rag_search 插件 —— 工具实现 (纯函数, 不含 C ABI 胶水)
-// - 从 libagentxx src/tools/rag_search 拆分: 同名工具同行为 (agentxx_rag_search)
-// - 头文件-only: 插件入口与测试共同包含, 保证插件行为与测试覆盖一致
-// - 依赖: agentxx_util (HttpClient / 字符串工具 / 异常捕获) + fmt + neograph(json)
-// - 与原实现的差异点:
-//   - 原版 asio 协程接口改为同步实现 (插件 execute 回调已运行在宿主线程池,
-//     阻塞安全); embedding 网络调用经局部 io_context 驱动至完成 (与
-//     agentxx_websearch 的 runSync 同模式)
-//   - embedding 客户端经 EmbedFn 函数对象注入: 插件入口装配真实 HTTP 版本,
-//     测试可注入假实现 (不依赖网络), 与 filesystem_impl.h 的 IsCancelledFn
-//     注入同思路; 分块/相似度/检索逻辑为纯函数, 行为与原版一致
+/// agentxx_rag_search 插件 —— 工具实现 (纯函数, 不含 C ABI 胶水)
+/// - 从 libagentxx src/tools/rag_search 拆分: 同名工具同行为 (agentxx_rag_search)
+/// - 头文件-only: 插件入口与测试共同包含, 保证插件行为与测试覆盖一致
+/// - 依赖: agentxx_util (HttpClient / 字符串工具 / 异常捕获) + fmt + neograph(json)
+/// - 与原实现的差异点:
+///   - 原版 asio 协程接口改为同步实现 (插件 execute 回调已运行在宿主线程池,
+///     阻塞安全); embedding 网络调用经局部 io_context 驱动至完成 (与
+///     agentxx_websearch 的 runSync 同模式)
+///   - embedding 客户端经 EmbedFn 函数对象注入: 插件入口装配真实 HTTP 版本,
+///     测试可注入假实现 (不依赖网络), 与 filesystem_impl.h 的 IsCancelledFn
+///     注入同思路; 分块/相似度/检索逻辑为纯函数, 行为与原版一致
 #pragma once
 
 #include "agentxx/util/exception.h"

@@ -1,4 +1,4 @@
-// agentxx_text_selection_monitor 插件 —— 共享头
+/// agentxx_text_selection_monitor 插件 —— 共享头
 #pragma once
 
 #include "agentxx/plugin/api/plugin_api.h"

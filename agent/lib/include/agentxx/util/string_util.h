@@ -196,11 +196,14 @@ using IgnoreCaseMap = std::unordered_map<std::string, V, IgnoreCaseHash, IgnoreC
 
 using IgnoreCaseSet = std::unordered_set<std::string, IgnoreCaseHash, IgnoreCaseEqual>;
 
+/// 计算 UTF-8 字符串的字符数 (按前导字节推断后续字节数并跳步计数)
+/// - 不校验编码合法性: 非法序列也按前导字节规则跳步 (想校验请用 utf8GetLengthCheckAvail)
+/// - 相关: [utf8GetLengthCheckAvail] / [utf8IsContinuationChar]
 [[nodiscard]] inline constexpr size_t utf8GetLength(std::string_view in_str) {
     size_t length = 0;
     for (size_t i = 0, step = 0; i < in_str.size(); i += step) {
         unsigned char byte = in_str[i];
-        // lenght 6
+        // 按首字节的高位模式确定整个序列的字节数 step (UTF-8 前导字节规则)
         if (byte >= 0xFC) {
             step = 6;
         } else if (byte >= 0xF8) {
@@ -219,13 +222,16 @@ using IgnoreCaseSet = std::unordered_set<std::string, IgnoreCaseHash, IgnoreCase
     return length;
 }
 
+/// 按 UTF-8 字符数定位字节下标: 从 start 字节处开始扫描, 跳过 targetLen 个
+/// UTF-8 字符后返回对应字节偏移 (如按可见字符数截断文本)
+/// - `return` 定位到的字节下标; 不足 targetLen 个字符时返回 0
 [[nodiscard]] inline constexpr size_t
     findIndexByUtf8Length(std::string_view in_str, size_t targetLen, size_t start = 0) {
     size_t count = 0;
     size_t i = start, step = 0;
     for (; i < in_str.size();) {
         unsigned char byte = in_str[i];
-        // lenght 6
+        // 按首字节的高位模式确定整个序列的字节数 step (UTF-8 前导字节规则)
         if (byte >= 0xFC) {
             step = 6;
         } else if (byte >= 0xF8) {
@@ -246,11 +252,13 @@ using IgnoreCaseSet = std::unordered_set<std::string, IgnoreCaseHash, IgnoreCase
             return i;
         }
     }
-    // length not found
     return 0;
 }
 
-/// return <index, lineCount, lastLineIndex>
+/// 同 findIndexByUtf8Length, 并附带统计已扫描行数 (换行符数) 与最后一个
+/// 换行符的字节下标 (供 UI 按字符数滚动/截断且需保留行信息时使用)
+/// - `return` tuple<目标字节下标, 行数, 最后一个换行符字节下标>;
+///   文本不足 targetLen 个字符时返回 {0, 0, 0}
 [[nodiscard]] inline constexpr std::tuple<size_t, size_t, size_t>
     findIndexAndLastLineIndexByUtf8Length(std::string_view in_str, size_t targetLen) {
     if (in_str.size() >= targetLen) {
@@ -258,7 +266,7 @@ using IgnoreCaseSet = std::unordered_set<std::string, IgnoreCaseHash, IgnoreCase
         size_t i = 0, step = 0;
         for (; i < in_str.size();) {
             const unsigned char byte = in_str[i];
-            // lenght 6
+            // 按首字节的高位模式确定整个序列的字节数 step (UTF-8 前导字节规则)
             if (byte >= 0xFC) {
                 step = 6;
             } else if (byte >= 0xF8) {
@@ -284,7 +292,7 @@ using IgnoreCaseSet = std::unordered_set<std::string, IgnoreCaseHash, IgnoreCase
             }
         }
     }
-    // length not found
+    // 文本不足 targetLen 个字符
     return std::tuple<size_t, size_t, size_t>{0, 0, 0};
 }
 
@@ -307,10 +315,16 @@ using IgnoreCaseSet = std::unordered_set<std::string, IgnoreCaseHash, IgnoreCase
     return lineCount;
 }
 
+/// 判断字节是否为 UTF-8 延续字节 (10xxxxxx): 多字节序列中除首字节外的后续字节
 [[nodiscard]] inline constexpr bool utf8IsContinuationChar(unsigned char ch) {
-    return (ch & 0xC0) == 0x80; // 10xxxxxx 的二进制特征：前两位是 10
+    return (ch & 0xC0) == 0x80;
 }
 
+/// 校验 UTF-8 编码合法性并返回字符数; 非法时返回 0
+/// - 非法情况: 5/6 字节头 (0xF8~0xFF)、过短编码头 (0xC0/0xC1)、非最短编码
+///   (0xE0 0x80~0x9F、0xF0 0x80~0x8F)、序列中途出现非延续字节、序列被截断、
+///   孤立延续字节、串内 '\0'
+/// - `return` 合法时返回字符数 (空串为 0), 非法返回 0
 [[nodiscard]] inline constexpr size_t utf8GetLengthCheckAvail(std::string_view str) {
     size_t     length = 0;
     const auto strLen = str.length();
@@ -319,8 +333,7 @@ using IgnoreCaseSet = std::unordered_set<std::string, IgnoreCaseHash, IgnoreCase
         if (ch == '\0') {
             break;
         } else if (ch >= 0xF8) {
-            // (ch >= 0xFC || ch >= 0xF8)
-            // lenght 6、5 无效
+            // 5/6 字节头 (0xF8~0xFF) 不是合法 UTF-8 (最多 4 字节)
             return 0;
         } else if (ch >= 0xF0) {
             if (ch == 0xF0 && i + 1 < strLen
@@ -385,7 +398,7 @@ using IgnoreCaseSet = std::unordered_set<std::string, IgnoreCaseHash, IgnoreCase
 ///   序列中途出现非延续字节、末尾被截断的多字节序列
 /// - 合法的多字节序列与 ASCII 原样保留; 非法序列只替换为一个 U+FFFD,
 ///   且其后紧跟的合法字符 (如 ASCII) 不会被吞掉
-/// @return true 表示输入含非法序列且已被修复, false 表示输入本就合法未做修改
+/// - `return` true 表示输入含非法序列且已被修复, false 表示输入本就合法未做修改
 [[nodiscard]] inline constexpr bool utf8Repair(std::string& str) {
     constexpr char kReplacement[] = {'\xEF', '\xBF', '\xBD'}; // U+FFFD 的 UTF-8 编码
     const size_t   size           = str.size();

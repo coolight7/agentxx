@@ -848,7 +848,7 @@ asio::awaitable<TestResult>
     co_await run(test_windows_command_empty_command);
 #elif XX_IS_LINUX_D
     // WSL: ExecuteWindowsCommandTool 同样注册 (经 interop 调 Windows 侧),
-    // 与 code_agent.cpp 的注册条件保持一致
+    // 与 [code_agent.cpp](/agent/lib/src/agent/code_agent.cpp) 的注册条件保持一致
     if (agentxx::util::isRunningInWSL()) {
         co_await run(test_windows_command_get_definition);
         co_await run(test_windows_get_definition_properties);

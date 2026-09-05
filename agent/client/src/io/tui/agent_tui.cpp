@@ -428,7 +428,8 @@ void TUIClientAgentIO::start() {
         ctx_.pluginManager = pluginManager_;
         // 注意: 不设置 ctx_.session —— TUI 不持有 Session (属于 server-io 线程),
         // 上下文统计经 WireContextStats → onContextStats → sharedState_ 更新,
-        // 状态栏等组件从 frameState 读取 (见 status_bar.cpp)
+        // 状态栏等组件从 frameState 读取 (见
+        // [status_bar.cpp](/agent/client/src/io/tui/components/status_bar.cpp))
 
         // 创建组件
         messageList_ = std::make_shared<MessageListComponent>(ctx_);

@@ -1,15 +1,13 @@
-/*
- * test_plugin_resources —— 插件会话资源扩展测试 (plugin_api v8)
- *
- * 覆盖:
- * - T1 清单资源段解析 (plugin.yaml skill/memory/mcp; 相对路径解析)
- * - T2 主配置 yaml 优先 (skill/memory/mcp 冲突拒绝)
- * - T3 运行时注册 (vtable register/unregister_skill_dir + get_own_resources
- *   快照) 与 MCP 注册/冲突/幂等注销
- * - T4 声明式资源: entry 成功后应用 → 中间件列表/componentInfo/所有权快照;
- *   disable 摘生效留记录 → enable 恢复; 卸载全部清除
- * - T5 加载失败 → 声明资源不生效 ("失败不生效"语义)
- */
+/// test_plugin_resources —— 插件会话资源扩展测试 (plugin_api v8)
+///
+/// 覆盖:
+/// - T1 清单资源段解析 (plugin.yaml skill/memory/mcp; 相对路径解析)
+/// - T2 主配置 yaml 优先 (skill/memory/mcp 冲突拒绝)
+/// - T3 运行时注册 (vtable register/unregister_skill_dir + get_own_resources
+///   快照) 与 MCP 注册/冲突/幂等注销
+/// - T4 声明式资源: entry 成功后应用 → 中间件列表/componentInfo/所有权快照;
+///   disable 摘生效留记录 → enable 恢复; 卸载全部清除
+/// - T5 加载失败 → 声明资源不生效 ("失败不生效"语义)
 #include "test_plugin_resources.h"
 
 #include "agentxx/agent/resource_applier.h"
@@ -227,7 +225,8 @@ interfaces:
             XX_TEST_EXPECT_EQ(res.mcpServers["mt"].url, std::string{"https://a.example.com/sse"});
             XX_TEST_EXPECT_TRUE(res.mcpServers["mt"].timeoutMs == 7000);
         }
-        // ---- 接口声明段解析 (接口协商; 见 plugin_common.h) ----
+        // ---- 接口声明段解析 (接口协商; 见
+        //      [plugin_common.h](/agent/lib/include/agentxx/plugin/plugin_common.h)) ----
         XX_TEST_EXPECT_TRUE(ifaces.require.size() == 2);
         XX_TEST_EXPECT_TRUE(contains(ifaces.require, "agentxx.agent.core"));
         XX_TEST_EXPECT_TRUE(contains(ifaces.require, "agentxx.client.panel"));

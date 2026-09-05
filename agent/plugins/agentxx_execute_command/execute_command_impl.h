@@ -1,30 +1,30 @@
-// agentxx_execute_command 插件 —— 工具实现 (纯函数, 不含 C ABI 胶水)
-// - 从 libagentxx src/tools/execute_command 拆分: 同名工具同行为
-//     agentxx_execute_bash_command / agentxx_execute_windows_command
-// - 头文件-only: 插件入口与测试共同包含, 保证插件行为与测试覆盖一致
-// - 与原实现的差异点:
-//   - 会话工作目录/取消令牌经参数注入 (workDir / isCancelled 回调),
-//     由插件入口从宿主接口表取值 (agentxx.agent.config.get_session_work_dir /
-//     agentxx.agent.cancel.is_cancelled), 便于测试直测纯逻辑
-//   - 统一异步操作模型 (poll 寄生驱动): 协程版执行体 *ExecuteAsync 在插件
-//     实例的 PollLoop (agentxx.plugin.PollLoop, 无线程寄生事件循环) 上运行,
-//     经三件套嫁接到宿主 io 线程协作式交错执行 —— 与内置工具完全同线程,
-//     并发多条命令共享一个寄生 loop 等就绪事件, 不再每命令占死一个阻塞池
-//     线程至超时 (原局部 io_context + io.run() 同步驱动模式已移除)
-//   - AGENTXX_ENABLE_BOOST_PROCESS 关闭时的 popen 回退为阻塞实现 (*Execute
-//     同步函数), 由入口经 plugin_kit.h 的 SyncToolSpec/registerSyncTool 适配注册
+/// agentxx_execute_command 插件 —— 工具实现 (纯函数, 不含 C ABI 胶水)
+/// - 从 libagentxx src/tools/execute_command 拆分: 同名工具同行为
+///     agentxx_execute_bash_command / agentxx_execute_windows_command
+/// - 头文件-only: 插件入口与测试共同包含, 保证插件行为与测试覆盖一致
+/// - 与原实现的差异点:
+///   - 会话工作目录/取消令牌经参数注入 (workDir / isCancelled 回调),
+///     由插件入口从宿主接口表取值 (agentxx.agent.config.get_session_work_dir /
+///     agentxx.agent.cancel.is_cancelled), 便于测试直测纯逻辑
+///   - 统一异步操作模型 (poll 寄生驱动): 协程版执行体 *ExecuteAsync 在插件
+///     实例的 PollLoop (agentxx.plugin.PollLoop, 无线程寄生事件循环) 上运行,
+///     经三件套嫁接到宿主 io 线程协作式交错执行 —— 与内置工具完全同线程,
+///     并发多条命令共享一个寄生 loop 等就绪事件, 不再每命令占死一个阻塞池
+///     线程至超时 (原局部 io_context + io.run() 同步驱动模式已移除)
+///   - AGENTXX_ENABLE_BOOST_PROCESS 关闭时的 popen 回退为阻塞实现 (*Execute
+///     同步函数), 由入口经 plugin_kit.h 的 SyncToolSpec/registerSyncTool 适配注册
 
-// ## 输出结果压缩
-// - 禁用 ToolcallNode 的自动压缩，改由自己实现压缩, 分别独立对 stdout、stderr 压缩
-// - 格式:
-// [ExitCode]0
-// [StdOut][Content offloaded. xxx]
-// xxx
-// [StdErr][Content offloaded. xxx]
-// xxx
-//
-// - 这是为了方便 LLM 判断是否存在 [StdErr] 内容，由 ToolcallNode 压缩时如果 [StdOut] 过长，
-// 可能导致 [StdErr] 全部被裁剪隐藏，LLM 需要额外读取全量才能判断是否存在 [StdErr] 内容
+/// ## 输出结果压缩
+/// - 禁用 ToolcallNode 的自动压缩，改由自己实现压缩, 分别独立对 stdout、stderr 压缩
+/// - 格式:
+/// [ExitCode]0
+/// [StdOut][Content offloaded. xxx]
+/// xxx
+/// [StdErr][Content offloaded. xxx]
+/// xxx
+///
+/// - 这是为了方便 LLM 判断是否存在 [StdErr] 内容，由 ToolcallNode 压缩时如果 [StdOut] 过长，
+/// 可能导致 [StdErr] 全部被裁剪隐藏，LLM 需要额外读取全量才能判断是否存在 [StdErr] 内容
 #pragma once
 
 #include "agentxx/util/log.h"

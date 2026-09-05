@@ -1,4 +1,4 @@
-// agentxx_system —— 系统信息工具插件
+/// agentxx_system —— 系统信息工具插件
 #include "agentxx_system_plugin.h"
 #include "system_impl.h"
 #include <string>

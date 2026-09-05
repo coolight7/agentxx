@@ -1,4 +1,4 @@
-// agentxx_math —— 数学计算工具插件
+/// agentxx_math —— 数学计算工具插件
 #include "agentxx_math_plugin.h"
 #include "math_impl.h"
 #include <string>
@@ -78,7 +78,7 @@ std::string schemaCalculate(PluginCtx* ctx) {
 
 } // namespace
 
-/* ---------------- 插件入口 / 销毁 ---------------- */
+/// ---------------- 插件入口 / 销毁 ----------------
 
 extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_agent_get_info(void) {
     return agentxx::plugin::guardCall(

@@ -32,18 +32,19 @@ struct TrainingTestCase {
 ///   保证 perTestCaseScores 的键唯一不互相覆盖
 std::vector<TrainingTestCase> testCasesFromJson(const neograph::json& j);
 
-/// 从 JSON 文件中加载测试用例 (实现见 training.cpp)
+/// 从 JSON 文件中加载测试用例 (实现见 [training.cpp](/agent/lib/src/agent/training.cpp))
 std::vector<TrainingTestCase> loadTestCasesFromFile(std::string_view filePath);
 
 /// 从目录中加载所有 JSON 测试用例文件 (recursive=true 时递归子目录)
 std::vector<TrainingTestCase>
     loadTestCasesFromDirectory(std::string_view dirPath, bool recursive = false);
 
-/// 剥离 LLM 响应中可能存在的 Markdown 代码块标记 (实现见 training.cpp)
+/// 剥离 LLM 响应中可能存在的 Markdown 代码块标记 (实现见
+/// [training.cpp](/agent/lib/src/agent/training.cpp))
 std::string stripMarkdownCodeBlock(std::string_view content);
 
 /// 从 LLM 响应中解析 JSON：先剥离 markdown 代码块，失败则尝试提取首个 {...}
-/// 子串 (实现见 training.cpp)
+/// 子串 (实现见 [training.cpp](/agent/lib/src/agent/training.cpp))
 neograph::json parseJsonFromResponse(std::string_view content);
 
 /// 规范化优化器/变异器输出的 prompt patch：
@@ -112,7 +113,8 @@ using TrainingIterationCallback
 // ======================== 进化训练配置 ========================
 
 struct EvolutionTrainingConfig {
-    /// 默认评分器 system prompt（大段文本实现于 training.cpp，
+    /// 默认评分器 system prompt（大段文本实现于
+    /// [training.cpp](/agent/lib/src/agent/training.cpp)，
     /// 避免内联进所有包含本头的编译单元）
     static std::string defaultScoringPrompt();
 

@@ -97,7 +97,8 @@ struct YamlAppConfig {
     bool enableSubagent = true;
     /// git worktree 模式开关 (yaml `worktree.enable`, 默认 false)
     /// - 开启后注册 agentxx_git_worktree 工具 + 注入行为提示词, 模型在代码
-    ///   修改任务开始时创建独立 worktree 并绑定会话 (详见 tools/git_worktree.h)
+    ///   修改任务开始时创建独立 worktree 并绑定会话 (详见
+    ///   [git_worktree.h](/agent/lib/include/agentxx/tools/git_worktree.h))
     bool worktreeEnable = false;
 };
 

@@ -1,10 +1,8 @@
-/*
- * libagentxx_execute_javascript.so —— JS 执行工具插件的 C++ 壳
- * 仿 example_js / agentxx_execute_command 结构：
- * - 本体为 C++ 插件，entry 指向 libagentxx_execute_javascript.so
- * - create 阶段经 interpreter.js 能力把同目录 plugin.js 交给 QuickJS 引擎执行
- * - plugin.js 内注册 agentxx_execute_javascript 工具（仿照 agentxx_execute_command）
- */
+/// libagentxx_execute_javascript.so —— JS 执行工具插件的 C++ 壳
+/// 仿 example_js / agentxx_execute_command 结构：
+/// - 本体为 C++ 插件，entry 指向 libagentxx_execute_javascript.so
+/// - create 阶段经 interpreter.js 能力把同目录 plugin.js 交给 QuickJS 引擎执行
+/// - plugin.js 内注册 agentxx_execute_javascript 工具（仿照 agentxx_execute_command）
 
 #include "agentxx/plugin/api/plugin_api.h"
 #include "agentxx/plugin/api/plugin_guard.h"

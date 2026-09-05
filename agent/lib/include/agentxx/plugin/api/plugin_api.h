@@ -755,7 +755,8 @@ typedef struct AgentxxPluginBuiltinInfo {
     AgentxxPluginDestroyFn destroy; ///< 可空 (实例销毁, 与 agentxx_plugin_agent_destroy 同契约)
 } AgentxxPluginBuiltinInfo;
 
-// 与 BuiltinPluginInfo 同步生成于 plugins/builtin_plugins.cpp
+// 与 BuiltinPluginInfo 同步生成于
+// [builtin_plugins.cpp.in](/agent/plugins/builtin_plugins.cpp.in)
 typedef struct AgentxxPluginBuiltinManifest {
     AgentxxPluginStringView name; ///< 插件名
     AgentxxPluginStringView yaml; ///< plugin.yaml 原文 (UTF-8, 静态只读)

@@ -1,4 +1,4 @@
-// agentxx_codegraph —— CodeGraph 代码分析插件
+/// agentxx_codegraph —— CodeGraph 代码分析插件
 #include "agentxx/plugin/api/client_plugin_api.h"
 #include "codegraph_manager.h"
 #include "codegraph_plugin.h"
@@ -967,8 +967,8 @@ extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_agent_destroy(void* plugin_
     );
 }
 
-/* ==================== client 侧入口 —— CodeGraph 索引状态渲染 (Append 段风格, 恢复 1e524e62)
- * ==================== */
+/// ==================== client 侧入口 —— CodeGraph 索引状态渲染 (Append 段风格, 恢复 1e524e62)
+/// ====================
 
 /// client 侧每实例上下文 (多实例契约: 原进程级 static 状态全部移入)
 struct ClientCtx {

@@ -1,25 +1,23 @@
-/*
- * example_resources —— 会话资源示例插件 (plugin_api v1 COM 风格接口表)
- *
- * 演示插件向宿主贡献 Skill / Memory / MCP 组件的两种通道:
- *
- * 1) 声明式: plugin.yaml 的 skill/memory/mcp 段 —— 宿主在本插件 entry 成功后
- *    自动应用 (加载失败则声明资源不生效); 相对路径按插件目录解析。
- *    本插件声明:
- *      - skill: skills/            (含 hello_skill/SKILL.md)
- *      - memory: assets/NOTES.md   (内容注入系统提示词)
- *      - mcp: example_time         (示例 URL, 连接失败仅记日志可观察)
- *
- * 2) 运行时: entry 内经 agentxx.agent.resources 接口表 register_skill_dir /
- *    register_memory_file / register_mcp_server 实时注册。本插件注册:
- *      - skill: skills_runtime/    (含 extra_skill/SKILL.md)
- *    MCP 运行时注册格式 (默认注释, 避免真实网络请求):
- *      spec_json = {"namespace":"...","url":"https://...","timeout":60}
- *
- * 所有权语义: 经本插件注册/声明的资源在卸载时由宿主自动摘除,
- * 禁用时摘除、启用时恢复 (与工具行为一致), 插件无需手动清理;
- * unload 回调中的显式反注册仅为 SDK 惯例示范。
- */
+/// example_resources —— 会话资源示例插件 (plugin_api v1 COM 风格接口表)
+///
+/// 演示插件向宿主贡献 Skill / Memory / MCP 组件的两种通道:
+///
+/// 1) 声明式: plugin.yaml 的 skill/memory/mcp 段 —— 宿主在本插件 entry 成功后
+///    自动应用 (加载失败则声明资源不生效); 相对路径按插件目录解析。
+///    本插件声明:
+///      - skill: skills/            (含 hello_skill/SKILL.md)
+///      - memory: assets/NOTES.md   (内容注入系统提示词)
+///      - mcp: example_time         (示例 URL, 连接失败仅记日志可观察)
+///
+/// 2) 运行时: entry 内经 agentxx.agent.resources 接口表 register_skill_dir /
+///    register_memory_file / register_mcp_server 实时注册。本插件注册:
+///      - skill: skills_runtime/    (含 extra_skill/SKILL.md)
+///    MCP 运行时注册格式 (默认注释, 避免真实网络请求):
+///      spec_json = {"namespace":"...","url":"https://...","timeout":60}
+///
+/// 所有权语义: 经本插件注册/声明的资源在卸载时由宿主自动摘除,
+/// 禁用时摘除、启用时恢复 (与工具行为一致), 插件无需手动清理;
+/// unload 回调中的显式反注册仅为 SDK 惯例示范。
 #include "agentxx/plugin/api/plugin_api.h"
 #include "agentxx/plugin/api/plugin_guard.h"
 #include "agentxx/plugin/api/plugin_kit.h"

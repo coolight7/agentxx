@@ -1,8 +1,7 @@
-/*
- * plugin_common.cpp —— 插件系统公共设施实现 (见 plugin_common.h)
- * - 原实现分别位于 plugin_manager.cpp / client_plugin_manager.cpp,
- *   提取后两侧共用, 避免行为漂移
- */
+/// plugin_common.cpp —— 插件系统公共设施实现 (见 plugin_common.h)
+/// - 原实现分别位于 [plugin_manager.cpp](/agent/lib/src/plugins/plugin_manager.cpp) /
+///   [client_plugin_manager.cpp](/agent/lib/src/plugins/client_plugin_manager.cpp),
+///   提取后两侧共用, 避免行为漂移
 #include "agentxx/plugin/plugin_common.h"
 
 #include "agentxx/plugin/api/client_plugin_api.h"

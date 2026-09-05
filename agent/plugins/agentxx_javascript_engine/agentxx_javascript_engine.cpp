@@ -1,24 +1,22 @@
-/*
- * agentxx_javascript_engine —— JS 解释器插件 (二期)
- *
- * 功能: 注册 "interpreter.js" 脚本引擎, 承载加载/卸载 type: js 的脚本插件
- *
- * 线程模型 (关键设计, 统一异步操作模型):
- * - 专用 JS 线程: 所有 QuickJS 操作集中于该线程 (QuickJS 非线程安全)
- * - 任务队列 (互斥锁 + 条件变量): post 非阻塞投递
- * - 工具 execute / 能力 load: 宿主 io 线程 start 入队 JS 线程后立即返回,
- *   JS 线程执行完毕经 AgentxxPluginOperatorNotify 上报完成 (线程安全) —— 全程无阻塞
- *   等待, 宿主 io 协程与 JS 任务交错执行; 旧版 postSync 阻塞桥已移除
- * - JS 线程 → io 线程: host vtable 内部经 post_to_io + 同步等待 (宿主实现)
- * - 钩子/事件回调: io 线程 → post 到 JS 线程 (fire-and-forget, 不等待)
- * - JS 内 callTool 命中本引擎工具: 同线程内联执行 (防自锁)
- * - 卸载安全: JsPluginCtx 由 shared_ptr 管理; 跨线程经 mirror 表 (互斥锁) 查
- *   强引用; 插件卸载 (deleted) 后已入队任务检查标志跳过; JSContext 释放由
- *   JsPluginCtx 析构完成 (全部进行中的任务结束后)
- *
- * 沙箱: 内存限制 (JS_SetMemoryLimit) + 栈限制 + 指令中断超时; 不引入
- * quickjs-libc (无 os/std 模块); 全局仅注入标准 ECMA 内置 + agentxx 桥
- */
+/// agentxx_javascript_engine —— JS 解释器插件 (二期)
+///
+/// 功能: 注册 "interpreter.js" 脚本引擎, 承载加载/卸载 type: js 的脚本插件
+///
+/// 线程模型 (关键设计, 统一异步操作模型):
+/// - 专用 JS 线程: 所有 QuickJS 操作集中于该线程 (QuickJS 非线程安全)
+/// - 任务队列 (互斥锁 + 条件变量): post 非阻塞投递
+/// - 工具 execute / 能力 load: 宿主 io 线程 start 入队 JS 线程后立即返回,
+///   JS 线程执行完毕经 AgentxxPluginOperatorNotify 上报完成 (线程安全) —— 全程无阻塞
+///   等待, 宿主 io 协程与 JS 任务交错执行; 旧版 postSync 阻塞桥已移除
+/// - JS 线程 → io 线程: host vtable 内部经 post_to_io + 同步等待 (宿主实现)
+/// - 钩子/事件回调: io 线程 → post 到 JS 线程 (fire-and-forget, 不等待)
+/// - JS 内 callTool 命中本引擎工具: 同线程内联执行 (防自锁)
+/// - 卸载安全: JsPluginCtx 由 shared_ptr 管理; 跨线程经 mirror 表 (互斥锁) 查
+///   强引用; 插件卸载 (deleted) 后已入队任务检查标志跳过; JSContext 释放由
+///   JsPluginCtx 析构完成 (全部进行中的任务结束后)
+///
+/// 沙箱: 内存限制 (JS_SetMemoryLimit) + 栈限制 + 指令中断超时; 不引入
+/// quickjs-libc (无 os/std 模块); 全局仅注入标准 ECMA 内置 + agentxx 桥
 #include "agentxx/plugin/api/plugin_api.h"
 #include "agentxx/plugin/api/plugin_guard.h"
 #include "agentxx/plugin/api/plugin_kit.h"

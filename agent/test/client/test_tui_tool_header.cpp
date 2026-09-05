@@ -357,7 +357,8 @@ struct ToolHeaderFixture {
             m->tool->toolFinished = finished;
             m->tool->toolResult   = std::move(result);
             m->durationMs         = durationMs;
-            // Tool 消息默认折叠展示 (与真实 TUI 流一致, 见 agent_tui.cpp);
+            // Tool 消息默认折叠展示 (与真实 TUI 流一致, 见
+            // [agent_tui.cpp](/agent/client/src/io/tui/agent_tui.cpp));
             // 折叠态头部才显示 "动词 · 参数摘要" 特化渲染
             m->collapsed = collapsed;
             m->text      = std::move(args);

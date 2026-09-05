@@ -1,4 +1,4 @@
-// agentxx_rag_search —— RAG 语义检索工具插件 (agentxx_rag_search)
+/// agentxx_rag_search —— RAG 语义检索工具插件 (agentxx_rag_search)
 #include "rag_plugin.h"
 #include "rag_search_impl.h"
 #include <algorithm>

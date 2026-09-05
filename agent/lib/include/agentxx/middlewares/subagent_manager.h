@@ -27,7 +27,8 @@ public:
 ///   - true  (默认): tool 注入, 模型可发起子代理委派
 ///   - false: tool 不注入 (模型不可见), 但事件总线服务仍注册,
 ///     程序内部路径 (如上下文压缩) 不受影响; AgentRunner 中断路径
-///     `subagent` 在禁用时直接返回错误 (见 agent_runner.cpp)
+///     `subagent` 在禁用时直接返回错误 (见
+///     [agent_runner.cpp](/agent/lib/src/agent/agent_runner.cpp))
 class SubagentManagerMiddlewareHandle
     : public BaseMiddlewareHandle<_SubagentManagerMiddlewareState> {
 public:

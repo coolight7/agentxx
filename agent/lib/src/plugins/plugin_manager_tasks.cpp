@@ -1,26 +1,27 @@
-// plugin_manager_tasks.cpp —— 插件后台任务 (agentxx.agent.tasks 接口表) 宿主侧实现
-//
-// 背景: kit (plugin_kit.h) 的 spawn 让插件启动后台协作任务 (如周期采集:
-// while(!cancelled()) { offload; sleep; })。旧设计中 spawn 游离在宿主管理
-// 之外 (状态全在 DSO 内 spawns_/cancelFlag, 宿主只有不透明 plugin_ctx) ——
-// 卸载时无人取消 → 协程帧悬挂泄漏; 若协程挂起时直接 delete ctx/dlclose,
-// 恢复执行还会访问已销毁上下文 → UAF。
-//
-// 本文件把 spawn 纳入与工具/能力 op 同构的宿主任务管理:
-// - 宿主登记: registerTask 把句柄推入实例 outstandingOps (与工具 op 同列表,
-//   detachAll 统一取消)
-// - 存活标记: InflightGuard 挂在 OpCore 上 (notify 到达才 reset) ——
-//   waitInflightZero 会精确等到 spawn 协程退出, 不再需要猜测式 drain
-// - 完成通知: 插件协程结束 (帧销毁后) 经 notify.done 恰好一次上报 →
-//   OpCore::onDone: 原子 CAS + guard.reset + doneSignal.emit → 回收协程
-//   (spawnHandleReaper) 把句柄从 outstandingOps 移除
-//
-// 线程约束 (与既有 ABI 契约一致):
-// - register_task / cancel_task 仅 io 线程调用 (vtable 适配层对非 io 线程经
-//   ioCallSync 投递, 插件无感)
-// - notify.done 可从插件任意线程回调 (OpCore::onDone 无锁 CAS + chan +
-//   post 回 io 派发, 为任意线程而设计); kit 协程完成路径 (finishIfDone 调用
-//   点) 恒在 io 线程 —— 两者是不同路径, 不构成竞态前提
+/// plugin_manager_tasks.cpp —— 插件后台任务 (agentxx.agent.tasks 接口表) 宿主侧实现
+///
+/// 背景: kit ([plugin_kit.h](/agent/lib/include/agentxx/plugin/api/plugin_kit.h))
+/// 的 spawn 让插件启动后台协作任务 (如周期采集:
+/// while(!cancelled()) { offload; sleep; })。旧设计中 spawn 游离在宿主管理
+/// 之外 (状态全在 DSO 内 spawns_/cancelFlag, 宿主只有不透明 plugin_ctx) ——
+/// 卸载时无人取消 → 协程帧悬挂泄漏; 若协程挂起时直接 delete ctx/dlclose,
+/// 恢复执行还会访问已销毁上下文 → UAF。
+///
+/// 本文件把 spawn 纳入与工具/能力 op 同构的宿主任务管理:
+/// - 宿主登记: registerTask 把句柄推入实例 outstandingOps (与工具 op 同列表,
+///   detachAll 统一取消)
+/// - 存活标记: InflightGuard 挂在 OpCore 上 (notify 到达才 reset) ——
+///   waitInflightZero 会精确等到 spawn 协程退出, 不再需要猜测式 drain
+/// - 完成通知: 插件协程结束 (帧销毁后) 经 notify.done 恰好一次上报 →
+///   OpCore::onDone: 原子 CAS + guard.reset + doneSignal.emit → 回收协程
+///   (spawnHandleReaper) 把句柄从 outstandingOps 移除
+///
+/// 线程约束 (与既有 ABI 契约一致):
+/// - register_task / cancel_task 仅 io 线程调用 (vtable 适配层对非 io 线程经
+///   ioCallSync 投递, 插件无感)
+/// - notify.done 可从插件任意线程回调 (OpCore::onDone 无锁 CAS + chan +
+///   post 回 io 派发, 为任意线程而设计); kit 协程完成路径 (finishIfDone 调用
+///   点) 恒在 io 线程 —— 两者是不同路径, 不构成竞态前提
 #include "agentxx/plugin/plugin_manager.h"
 
 #include "agentxx/plugin/op_driver.h" // spawnHandleReaper / OpCore (op_driver.h 自带所需 asio 头)
@@ -32,8 +33,9 @@
 namespace agentxx {
 namespace plugin {
 
-// 本地错误串写入助手 (与 plugin_manager_capability.cpp 的 setErrOut 同构;
-// 跨 TU 静态函数不可见, 故各自持一份)
+// 本地错误串写入助手 (与
+// [plugin_manager_capability.cpp](/agent/lib/src/plugins/plugin_manager_capability.cpp)
+// 的 setErrOut 同构; 跨 TU 静态函数不可见, 故各自持一份)
 static void
     setTaskErrOut(PluginInstance* inst, AgentxxPluginString* error_out, const std::string& msg) {
     if (!error_out || error_out->data) {

@@ -98,7 +98,7 @@ public:
     /// - bool -> string / string("true"/"false") -> boolean: 布尔与字符串互相转换
     /// - [单字符串数组] -> string: 参数声明为字符串而传入单元素字符串数组时, 解包为字符串
     /// - 仅当目标类型不包含 arg 当前类型时转换; 无法解析或类型不明确时保持原样
-    /// @return 是否发生了参数转换
+    /// - `return` 是否发生了参数转换
     static bool autoFixArgsType(const neograph::ChatTool& def, neograph::json& args);
 
     asio::awaitable<void> baseRun(

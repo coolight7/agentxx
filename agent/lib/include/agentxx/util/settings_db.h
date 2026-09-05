@@ -21,7 +21,7 @@ namespace util {
 class SettingsDb {
 public:
 
-    /// @param dbPath 数据库文件路径; 为空使用默认 {dataDir}/sqlite/global.db
+    /// - [dbPath] 数据库文件路径; 为空使用默认 {dataDir}/sqlite/global.db
     explicit SettingsDb(std::string dbPath = "");
 
     SettingsDb(const SettingsDb&)            = delete;

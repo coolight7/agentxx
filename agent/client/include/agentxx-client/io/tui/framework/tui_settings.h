@@ -36,7 +36,9 @@ enum class TailThinkingMode : int {
 };
 
 /// 权限询问处理模式已移除: 改为由 yaml 配置文件 `permission.mode` 指定
-/// (ask/all_ask/pass/deny, 见 agentxx/agent/config.h 的 agentxx::agent::PermissionMode),
+/// (ask/all_ask/pass/deny, 见
+/// [config.h](/agent/lib/include/agentxx/agent/config.h) 的
+/// agentxx::agent::PermissionMode),
 /// 服务端 CodeAgent 按模式注册规则, 客户端仅兜底处理到达的询问;
 /// 启动时经 TUIClientAgentIO 构造参数注入, 不再作为 TUI 全局设置项。
 

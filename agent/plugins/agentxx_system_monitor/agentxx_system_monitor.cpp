@@ -1,4 +1,4 @@
-// agentxx_system_monitor —— 系统资源监控插件 (CPU/内存/GPU)
+/// agentxx_system_monitor —— 系统资源监控插件 (CPU/内存/GPU)
 #include "agentxx/plugin/api/client_plugin_api.h"
 #include "agentxx/plugin/api/plugin_guard.h"
 #include "agentxx/plugin/api/plugin_kit.h"
@@ -306,8 +306,8 @@ extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_agent_destroy(void* plugin_
     });
 }
 
-/* ==================== client 侧入口 —— 系统资源占用渲染 (Append 段风格, 恢复 1e524e62)
- * ==================== */
+/// ==================== client 侧入口 —— 系统资源占用渲染 (Append 段风格, 恢复 1e524e62)
+/// ====================
 
 struct ClientCtx {
     const AgentxxPluginHost*      host = nullptr;

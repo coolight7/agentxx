@@ -1,25 +1,24 @@
-/*
- * agentxx/plugin/plugin_common.h —— 插件系统公共设施 (agent/client 两侧共享)
- *
- * 背景: plugin_manager.cpp (agent 侧) 与 client_plugin_manager.cpp (client 侧)
- * 存在大量重复基建 (插件名推导 / manifest 解析 / entry 路径解析 / 拓扑排序 /
- * 反向依赖收集 / io 线程同步等待 / C ABI 异常兜底宏)。提取到本头避免两侧
- * 行为漂移 —— 历史上 client 侧多次"漏掉 agent 侧已修的问题" (见
- * plugins.md 13.x 记录), 公共化后修复只做一次。
- *
- * 内容:
- * - XX_PLUGIN_CATCH_*: C ABI 边界异常兜底宏 (宏定义, 无 ODR 问题)
- * - pluginNameFromPath / parsePluginManifest / resolvePluginEntryPath:
- *   插件名推导与目录 manifest 解析 (平台扩展名修正 + 配置子目录回退)
- * - topoSortPlugins<T>: Kahn 拓扑排序 (依赖者排在被依赖者之后)
- * - ioCallSync / ioCallSyncVoid: 跨线程投递到 io 线程同步等待 (duck typing,
- *   Mgr 须提供 isIoThread()/postToIo())
- * - collectReverseRequiredDeps: 反向必选依赖收集 (模板, Plugin 须含
- *   depends/enabled 成员)
- *
- * 线程约定: 本头内非模板函数均可在任意线程调用 (纯函数); 模板函数按
- * 各 manager 的线程模型工作。
- */
+/// 插件系统公共设施 (agent/client 两侧共享)
+///
+/// 背景: [plugin_manager.cpp](/agent/lib/src/plugins/plugin_manager.cpp) (agent 侧)
+/// 与 [client_plugin_manager.cpp](/agent/lib/src/plugins/client_plugin_manager.cpp)
+/// (client 侧) 存在大量重复基建 (插件名推导 / manifest 解析 / entry 路径解析 /
+/// 拓扑排序 / 反向依赖收集 / io 线程同步等待 / C ABI 异常兜底宏)。提取到本头
+/// 避免两侧行为漂移 —— 历史上 client 侧多次"漏掉 agent 侧已修的问题" (见
+/// [plugins.md](/docs/zh-cn/design.md/plugins.md) 13.x 记录), 公共化后修复只做一次。
+///
+/// 内容:
+/// - XX_PLUGIN_CATCH_*: C ABI 边界异常兜底宏 (宏定义, 无 ODR 问题)
+/// - pluginNameFromPath / parsePluginManifest / resolvePluginEntryPath:
+///   插件名推导与目录 manifest 解析 (平台扩展名修正 + 配置子目录回退)
+/// - topoSortPlugins<T>: Kahn 拓扑排序 (依赖者排在被依赖者之后)
+/// - ioCallSync / ioCallSyncVoid: 跨线程投递到 io 线程同步等待 (duck typing,
+///   Mgr 须提供 isIoThread()/postToIo())
+/// - collectReverseRequiredDeps: 反向必选依赖收集 (模板, Plugin 须含
+///   depends/enabled 成员)
+///
+/// 线程约定: 本头内非模板函数均可在任意线程调用 (纯函数); 模板函数按
+/// 各 manager 的线程模型工作。
 #pragma once
 
 #include "agentxx/plugin/api/client_plugin_api.h"
@@ -228,41 +227,42 @@ bool parseBuiltinManifest(
 /// - 返回绝对路径 (可能不存在, 由调用方处理)
 std::string resolvePluginEntryPath(const std::filesystem::path& dir, const std::string& entry);
 
-/* ==================== 接口协商 (三层协商的声明/校验基础设施) ====================
- *
- * 背景: client 宿主形态多样 (cli/tui/gui/第三方 app), 各自支持的插件接口
- * 不同; server (server-io) 仅有 libagentxx 一个实现, agent 侧接口集 ≡ 核心
- * 契约 + 全部标准接口表 (版本匹配即全集)。协商机制因此是不对称的:
- * 机制通用, 实际起作用的门禁集中在 client 侧。
- *
- * 三层设计 (详见 docs/zh-cn/plugins.md 4.7):
- * 1. 声明层: 插件 plugin.yaml `interfaces.require/optional` 列出依赖的接口
- *    名 (稳定字符串: 本项目内置为 "agentxx.agent.*" / "agentxx.client.*",
- *    第三方私有接口用 "<vendor>.*"; agent 侧可用接口表 IID 精确声明,
- *    如 "agentxx.agent.tools"/"agentxx.agent.prompt");
- * 2. 校验层: 宿主加载前按前缀过滤出本侧声明, 与宿主支持集比对 ——
- *    require 未满足 → 跳过加载 (INFO + 原因记录, 非错误: 同一插件目录
- *    服务多种宿主是预期情况); 声明了本侧接口却缺对应入口符号 → 明确报错;
- * 3. 决策层: 插件 entry 内经 query_interface 判空 / EVT_READY 与
- *    get_client_state 的 "interfaces" 字符串数组自行决定启用哪些功能;
- *    展示类子能力经 "agentxx.client.ui" 接口表访问 (表内不支持项为 NULL
- *    函数指针)
- *
- * 命名规范: "agentxx." 为本项目内置接口的保留命名空间, 第三方插件不得使用
- * (第三方私有接口用 "<vendor>.<name>", 宿主不认识的名称一律视为不支持);
- * 前缀过滤规则见 sideCaresAboutInterface。
- *
- * api_version 精确匹配门禁保留且不被本机制替代: 核心结构体是 C 结构,
- * 老宿主+新插件按新偏移读字段是 UB —— 接口协商只解决"功能子集"维度。
- * COM 风格接口表机制使未来新增能力不再动全局版本号: 每个接口表自带
- * version 字段独立演进。
- */
+/// ==================== 接口协商 (三层协商的声明/校验基础设施) ====================
+///
+/// 背景: client 宿主形态多样 (cli/tui/gui/第三方 app), 各自支持的插件接口
+/// 不同; server (server-io) 仅有 libagentxx 一个实现, agent 侧接口集 ≡ 核心
+/// 契约 + 全部标准接口表 (版本匹配即全集)。协商机制因此是不对称的:
+/// 机制通用, 实际起作用的门禁集中在 client 侧。
+///
+/// 三层设计 (详见 [plugins.md](/docs/zh-cn/design.md/plugins.md) 4.7):
+/// 1. 声明层: 插件 plugin.yaml `interfaces.require/optional` 列出依赖的接口
+///    名 (稳定字符串: 本项目内置为 "agentxx.agent.*" / "agentxx.client.*",
+///    第三方私有接口用 "<vendor>.*"; agent 侧可用接口表 IID 精确声明,
+///    如 "agentxx.agent.tools"/"agentxx.agent.prompt");
+/// 2. 校验层: 宿主加载前按前缀过滤出本侧声明, 与宿主支持集比对 ——
+///    require 未满足 → 跳过加载 (INFO + 原因记录, 非错误: 同一插件目录
+///    服务多种宿主是预期情况); 声明了本侧接口却缺对应入口符号 → 明确报错;
+/// 3. 决策层: 插件 entry 内经 query_interface 判空 / EVT_READY 与
+///    get_client_state 的 "interfaces" 字符串数组自行决定启用哪些功能;
+///    展示类子能力经 "agentxx.client.ui" 接口表访问 (表内不支持项为 NULL
+///    函数指针)
+///
+/// 命名规范: "agentxx." 为本项目内置接口的保留命名空间, 第三方插件不得使用
+/// (第三方私有接口用 "<vendor>.<name>", 宿主不认识的名称一律视为不支持);
+/// 前缀过滤规则见 sideCaresAboutInterface。
+///
+/// api_version 精确匹配门禁保留且不被本机制替代: 核心结构体是 C 结构,
+/// 老宿主+新插件按新偏移读字段是 UB —— 接口协商只解决"功能子集"维度。
+/// COM 风格接口表机制使未来新增能力不再动全局版本号: 每个接口表自带
+/// version 字段独立演进。
 
 /// 已知接口名常量 (稳定契约; 第三方私有接口用 "<vendor>.<name>" 自定义,
 /// 宿主不认识的名称一律视为不支持 —— 安全失败)
 namespace plugin_interfaces {
-/// 元接口: 宿主实现完整核心契约 (plugin_api.h v1 核心 vtable) + 标准接口表
-/// 全集 (libagentxx 即此类宿主); 精简第三方宿主可仅声明实际实现的下述子集
+/// 元接口: 宿主实现完整核心契约
+/// ([plugin_api.h](/agent/lib/include/agentxx/plugin/api/plugin_api.h) v1
+/// 核心 vtable) + 标准接口表全集 (libagentxx 即此类宿主); 精简第三方宿主
+/// 可仅声明实际实现的下述子集
 inline constexpr std::string_view AgentCore = "agentxx.agent.core";
 /// COM 风格接口表 IID (与 plugin_api.h 的 AGENTXX_IFACE_AGENT_* 宏一一对应;
 /// 清单 interfaces.require 可按插件实际查询的表精确声明)
@@ -282,7 +282,7 @@ inline constexpr std::string_view AgentModel        = AGENTXX_PLUGIN_IFACE_AGENT
 inline constexpr std::string_view AgentCancel       = AGENTXX_PLUGIN_IFACE_AGENT_CANCEL;
 inline constexpr std::string_view AgentTasks        = AGENTXX_PLUGIN_IFACE_AGENT_TASKS;
 
-/* ---- client 侧: 接口表名 + 细粒度能力名 (映射到 agentxx.client.ui 表的非空成员) ---- */
+/// ---- client 侧: 接口表名 + 细粒度能力名 (映射到 agentxx.client.ui 表的非空成员) ----
 inline constexpr std::string_view ClientUi = AGENTXX_IFACE_CLIENT_UI; ///< 展示扩展表整体
 inline constexpr std::string_view ClientStatusItem  = "agentxx.client.status_item";
 inline constexpr std::string_view ClientPanel       = "agentxx.client.panel";

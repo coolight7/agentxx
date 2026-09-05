@@ -44,12 +44,14 @@ class AgentIOBase;
 class ModelProviderRegistry;
 class SessionStore;
 class AgentHost;
-/// 会话资源应用器 (Skill/Memory/MCP 扩展; 完整定义见 resource_applier.h)
+/// 会话资源应用器 (Skill/Memory/MCP 扩展; 完整定义见
+/// [resource_applier.h](/agent/lib/include/agentxx/agent/resource_applier.h))
 class AgentResourceApplier;
 
 /// 会话绑定的 git worktree (worktree 模式; 由 agentxx_git_worktree 工具维护)
 /// - 绑定后该会话的相对路径基准、权限隔离边界均切换到 worktree
-/// - 详见 tools/git_worktree.h 与 middlewares/worktree.h
+/// - 底层 git 操作封装见 [worktree.h](/agent/lib/include/agentxx/util/worktree.h),
+///   工具实现见 [git_worktree.h](/agent/lib/include/agentxx/tools/git_worktree.h)
 struct WorktreeBinding {
     /// worktree 名称 (目录名与自动分支名来源)
     std::string name;
@@ -410,7 +412,7 @@ public:
     /// 事件总线
     /// - 由 BaseAgent 在 init() 中创建并注入; 节点/middleware/tool 经
     ///   weak_ptr<AgentContext> 取用
-    /// - 完整定义在使用点 (base_agent.h) 引入
+    /// - 完整定义在使用点 ([base_agent.h](/agent/lib/include/agentxx/agent/base_agent.h)) 引入
     std::shared_ptr<agentxx::event::EventBus> bus = nullptr;
 
     /// 模型 Provider 注册表 (共享)
@@ -451,10 +453,12 @@ public:
 
     /// 会话资源应用器 (插件向宿主贡献 Skill/Memory/MCP 的落地接口)
     /// - 由 CodeAgent::initMiddleware 构造注入 (单一具体实现,
-    ///   见 resource_applier.h); BaseAgent 场景无中间件 → 保持 nullptr,
+    ///   见 [resource_applier.h](/agent/lib/include/agentxx/agent/resource_applier.h));
+    ///   BaseAgent 场景无中间件 → 保持 nullptr,
     ///   此时插件的资源注册 vtable API 返回非 0 (不支持)
     /// - 插件声明式资源在 entry 成功后经 PluginManager 调 applyDecls 应用,
-    ///   卸载/禁用时摘除 (所有权语义见 resource_applier.h)
+    ///   卸载/禁用时摘除 (所有权语义见
+    ///   [resource_applier.h](/agent/lib/include/agentxx/agent/resource_applier.h))
     std::shared_ptr<AgentResourceApplier> resourceApplier = nullptr;
 
     /// 宿主引用 (由 AgentHost attachRoot/派生时注入; 无宿主时为空)

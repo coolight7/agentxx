@@ -31,21 +31,21 @@
 namespace agentxx {
 namespace util {
 
-/// HTTP method index for the router (0-8 maps to standard methods)
+/// 由 HTTP method 枚举取路由索引 (0-8 对应标准方法)
 int httpMethodIndex(boost::beast::http::verb v) noexcept;
 
-/// HTTP method name by router index (0-8); returns "UNKNOWN" for invalid index
+/// 由路由索引取 HTTP method 名称 (0-8); 非法索引返回 "UNKNOWN"
 std::string_view httpMethodName(int methodIdx) noexcept;
 
-/// Strip query string from a request target, returning just the path portion
+/// 去掉请求目标中的 query 部分, 仅返回路径
 std::string_view requestPath(std::string_view target) noexcept;
 
-/// Format a time_point as an RFC 7231 IMF-fixdate string
-/// (e.g. "Sun, 06 Nov 1994 08:49:37 GMT")
+/// 将 time_point 格式化为 RFC 7231 IMF-fixdate 字符串
+/// (如 "Sun, 06 Nov 1994 08:49:37 GMT")
 std::string formatHttpDate(std::time_t t) noexcept;
 
 // ---------------------------------------------------------------------------
-// HttpServer
+// HttpServer —— 异步 HTTP/WebSocket/SSE 服务器
 // ---------------------------------------------------------------------------
 
 class HttpServer {
@@ -60,26 +60,23 @@ public:
     using WsStream  = boost::beast::websocket::stream<boost::beast::tcp_stream>;
     using WsHandler = std::function<asio::awaitable<void>(WsStream&)>;
 
-    /// Streaming SSE connection — the handler can hold onto this to push
-    /// events after the initial response header has been sent.
+    /// 流式 SSE 连接 — 初始响应头发送后, handler 可持有本对象持续推送事件
     class SseWriter {
     public:
 
         virtual ~SseWriter() = default;
-        /// Write an SSE event (formatted as "event: ...\ndata: ...\n\n").
+        /// 写一条 SSE 事件 (格式化为 "event: ...\ndata: ...\n\n")
         virtual asio::awaitable<bool> writeEvent(std::string_view event, std::string_view data) = 0;
-        /// Write a raw chunk (must be valid SSE framing).
+        /// 写原始数据块 (必须是合法 SSE 帧格式)
         virtual asio::awaitable<bool> writeChunk(std::string_view chunk) = 0;
-        /// Write a complete (non-SSE) HTTP response — used to return a plain
-        /// JSON-RPC error/result from a streaming route (e.g. invalid
-        /// subscriptions/listen params). After this the writer must not be
-        /// used again.
+        /// 写一个完整 (非 SSE) HTTP 响应 —— 用于从流式路由返回普通 JSON-RPC
+        /// 错误/结果 (如非法的 subscriptions/listen 参数)。调用后不得再使用该 writer。
         virtual asio::awaitable<bool> writeResponse(
             boost::beast::http::status status,
             std::string_view           contentType,
             std::string_view           body
         ) = 0;
-        /// Close the SSE stream gracefully.
+        /// 优雅关闭 SSE 流
         virtual asio::awaitable<void> close() = 0;
     };
 
@@ -97,11 +94,11 @@ public:
         /// 单个 keep-alive 连接的最大请求数 (0 = 无限制); 防止恶意客户端永久占用连接
         size_t maxRequestsPerConnection = 1024;
 
-        // DoS protection: reject requests with oversized headers or bodies
-        uint32_t maxHeaderSize  = 8192;            // default 8 KB header limit
-        uint64_t maxRequestBody = 8 * 1024 * 1024; // default 8 MB body limit
+        // DoS 防护: 拒绝超大请求头/请求体的请求
+        uint32_t maxHeaderSize  = 8192;            // 默认请求头上限 8 KB
+        uint64_t maxRequestBody = 8 * 1024 * 1024; // 默认请求体上限 8 MB
 
-        // Per-request access log (false = silent in release for performance)
+        // 逐请求访问日志 (release 下关闭可静默提升性能)
         bool accessLogEnabled = true;
     };
 
@@ -127,49 +124,45 @@ public:
     }
 
     // -----------------------------------------------------------------------
-    // Start / Stop
+    // 启动 / 停止
     // -----------------------------------------------------------------------
 
-    /// Block the calling thread until the server stops.
+    /// 阻塞调用线程直到服务停止
     void start();
 
-    /// Signal the server to stop. Safe to call from any thread.
+    /// 通知服务停止; 任意线程可调用
     void stop();
 
     bool isStopped() const noexcept {
         return stopped_;
     }
 
-    /// Register a streaming SSE handler. Unlike normal handlers, the SSE
-    /// handler receives an SseWriter to push events incrementally.
+    /// 注册流式 SSE 处理器 (GET)。与普通处理器不同, SSE 处理器收到
+    /// SseWriter, 可增量推送事件。
     void addSseRoute(
         std::string_view                                                           path,
         std::function<asio::awaitable<void>(Request&, std::shared_ptr<SseWriter>)> handler
     );
 
-    /// Register a streaming SSE handler for POST requests (e.g. MCP
-    /// `subscriptions/listen`). The response is a long-lived SSE stream
-    /// scoped to that request. Takes precedence over the normal router
-    /// handler registered on the same path.
+    /// 注册 POST 流式 SSE 处理器 (如 MCP `subscriptions/listen`)。
+    /// 响应是一个绑定到该请求的长连接 SSE 流, 优先于同路径的普通 router 处理器。
     void addSsePostRoute(
         std::string_view                                                           path,
         std::function<asio::awaitable<void>(Request&, std::shared_ptr<SseWriter>)> handler
     );
 
-    /// Register a WebSocket endpoint. When a client sends an HTTP GET with
-    /// Upgrade: websocket to the given path, the connection is upgraded and
-    /// the handler is invoked with the websocket stream.
+    /// 注册 WebSocket 端点。客户端向该路径发送带 Upgrade: websocket 的 GET
+    /// 请求时连接被升级, 随后以 websocket 流调用该 handler。
     void enableWebSocket(std::string_view path, WsHandler handler);
 
-    /// Start the accept loop on the given executor without creating threads.
-    /// The caller is responsible for running the io_context.
-    /// Suitable for single-threaded server mode (e.g. agent service).
+    /// 在指定 executor 上启动 accept 循环而不创建线程。
+    /// 调用方负责运行 io_context。适用于单线程服务模式 (如 agent 服务)。
     void startAsync(asio::any_io_executor executor);
 
 private:
 
     // -----------------------------------------------------------------------
-    // SseWriter implementation backed by a TCP stream
+    // SseWriter 实现 (基于 TCP stream)
     // -----------------------------------------------------------------------
     template<typename Stream>
     class SseWriterImpl : public SseWriter {
@@ -311,8 +304,7 @@ private:
     };
 
     // -----------------------------------------------------------------------
-    // RAII guard for active connection counting — ensures decrement even
-    // if the session coroutine throws or is cancelled.
+    // 活跃连接计数 RAII 守卫 — 即使会话协程抛异常/被取消也保证递减
     // -----------------------------------------------------------------------
     struct ConnectionGuard {
         std::atomic<size_t>& counter;
@@ -329,19 +321,19 @@ private:
     };
 
     // -----------------------------------------------------------------------
-    // Accept loop
+    // Accept 循环
     // -----------------------------------------------------------------------
 
     asio::awaitable<void> acceptLoop();
 
-    /// Accept loop for startAsync mode — all connections served on the same executor
+    /// startAsync 模式的 accept 循环 — 所有连接在同一 executor 上服务
     asio::awaitable<void> acceptLoopAsync();
 
-    /// Serve a TCP connection (member coroutine — avoids dangling lambda captures)
+    /// 服务一条 TCP 连接 (成员协程 — 避免悬挂的 lambda 捕获)
     asio::awaitable<void> serveTcp(std::shared_ptr<boost::beast::tcp_stream> stream);
 
     // -----------------------------------------------------------------------
-    // Session handler (template – works with tcp_stream)
+    // 会话处理器 (模板 — 兼容 tcp_stream)
     // -----------------------------------------------------------------------
 
     template<typename Stream>
@@ -366,7 +358,7 @@ private:
             }
             ++requestCount;
 
-            // Read one request with body/header size limits for DoS protection
+            // 带请求头/请求体大小限制地读取一个请求 (DoS 防护)
             readError = false;
             Request req;
             try {
@@ -434,20 +426,20 @@ private:
                 break;
             }
 
-            // Prepare response
+            // 构造响应
             Response resp;
             resp.version(req.version());
             resp.set(http::field::server, "agentxx/1.0");
-            // RFC 7231: servers SHOULD include a Date header
+            // RFC 7231: 服务器应包含 Date 头
             resp.set(http::field::date, formatHttpDate(std::time(nullptr)));
 
-            // Extract path (strip query string) and dispatch
+            // 提取路径 (去掉 query) 并分发
             std::string path(requestPath(req.target()));
             int         methodIdx = httpMethodIndex(req.method());
             std::string matchedPath;
             bool        handled = false;
 
-            // Check for SSE streaming route first (GET only)
+            // 先检查 SSE 流式路由 (仅 GET)
             if (methodIdx == 0) { // GET
                 auto sseIt = sseRoutes_.find(path);
                 if (sseIt != sseRoutes_.end()) {
@@ -480,16 +472,15 @@ private:
                     );
                     if (sseOk) {
                         handled = true;
-                        // SSE streaming handled, skip normal response write
-                        // The connection is kept alive by the SseWriter
-                        // But we still need to let serve() know not to continue
-                        // We'll set a flag and break out
+                        // SSE 流式请求已处理, 跳过普通响应写入:
+                        // 连接由 SseWriter 保持, 但需让 serve() 知道不再继续,
+                        // 置标志后跳出循环
                         break;
                     }
                 }
             }
 
-            // POST SSE streaming route (e.g. MCP subscriptions/listen) —
+            // POST SSE 流式路由 (如 MCP subscriptions/listen) —
             // 长连接响应流, 优先于普通 router handler
             if (methodIdx == 2) { // POST
                 auto sseIt = ssePostRoutes_.find(path);
@@ -525,7 +516,7 @@ private:
                 }
             }
 
-            // Check for WebSocket upgrade (GET + Upgrade: websocket)
+            // 检查 WebSocket 升级 (GET + Upgrade: websocket)
             if (methodIdx == 0 && !handled && !wsRoutes_.empty()) {
                 auto upgradeIt = req.find(http::field::upgrade);
                 if (upgradeIt != req.end()
@@ -634,13 +625,12 @@ private:
                 }
             }
 
-            // Ensure Content-Length is set. Always call prepare_payload() —
-            // payload_size() returns body_.size() for string_body (0 for empty),
-            // so the conditional check would skip it and leave no Content-Length.
+            // 确保设置了 Content-Length: 必须调用 prepare_payload() —
+            // payload_size() 对 string_body 返回 body_.size() (空 body 为 0),
+            // 若按条件判断跳过会遗漏 Content-Length 头
             resp.prepare_payload();
 
-            // Respect the client's Connection header: if client sent "close",
-            // don't keep the connection alive.
+            // 尊重客户端的 Connection 头: 客户端发了 "close" 则不保持连接
             bool clientClose = req.find(http::field::connection) != req.end()
                                && boost::beast::iequals(req[http::field::connection], "close");
             keepAlive = resp.keep_alive();
@@ -649,7 +639,7 @@ private:
             }
             resp.set(http::field::connection, keepAlive ? "keep-alive" : "close");
 
-            // Send response
+            // 发送响应
             if (req.method() == http::verb::head) {
                 // HEAD 响应只发送头部 (含 Content-Length), 不发送 body (RFC 7231 §4.3.2);
                 // 发送 body 会使 keep-alive 连接上的后续请求解析错位
@@ -672,7 +662,7 @@ private:
                 );
             }
 
-            // Per-request access log (compiled out in release via XX_LOGI)
+            // 逐请求访问日志 (release 下经 XX_LOGI 编译裁剪)
             if (config_.accessLogEnabled) {
                 XX_LOGI(
                     "{} {} -> {} ({})",
@@ -685,7 +675,7 @@ private:
 
         } while (keepAlive && !stopped_);
 
-        // Graceful close: shutdown send side, ignore errors
+        // 优雅关闭: 关闭发送侧, 忽略错误
         // (WebSocket 升级后 stream 已被移走, 由 ws stream 负责关闭)
         if (!streamMoved) {
             ec = {};
@@ -697,7 +687,7 @@ private:
     }
 
     // -----------------------------------------------------------------------
-    // Helpers
+    // 工具函数
     // -----------------------------------------------------------------------
 
     static void fillError(
@@ -708,7 +698,7 @@ private:
     );
 
     // -----------------------------------------------------------------------
-    // Per-thread worker: each owns a private io_context — zero-lock isolation
+    // 每线程 worker: 各持有私有 io_context — 零锁隔离
     // -----------------------------------------------------------------------
     struct Worker {
         asio::io_context                                                          ioCtx;
@@ -717,7 +707,7 @@ private:
     };
 
     // -----------------------------------------------------------------------
-    // Members
+    // 成员
     // -----------------------------------------------------------------------
 
     Config                                   config_;
@@ -728,22 +718,22 @@ private:
     std::atomic<size_t>                      activeConnections_{0};
     std::atomic<size_t>                      nextWorker_{0};
 
-    /// SSE streaming routes (GET only) — keyed by path
+    /// SSE 流式路由 (仅 GET) — 按路径索引
     std::unordered_map<
         std::string,
         std::function<asio::awaitable<void>(Request&, std::shared_ptr<SseWriter>)>>
         sseRoutes_;
 
-    /// SSE streaming routes (POST only) — 长连接响应流 (如 MCP subscriptions/listen)
+    /// SSE 流式路由 (仅 POST) — 长连接响应流 (如 MCP subscriptions/listen)
     std::unordered_map<
         std::string,
         std::function<asio::awaitable<void>(Request&, std::shared_ptr<SseWriter>)>>
         ssePostRoutes_;
 
-    /// WebSocket routes (GET + Upgrade) — keyed by path
+    /// WebSocket 路由 (GET + Upgrade) — 按路径索引
     std::unordered_map<std::string, WsHandler> wsRoutes_;
 
-    /// Whether startAsync mode is active (single executor, no worker threads)
+    /// 是否 startAsync 模式 (单 executor, 无 worker 线程)
     bool asyncMode_ = false;
 };
 

@@ -1,17 +1,18 @@
-// agentxx_planning —— 两层任务规划工具插件 (双端: agent 工具 + client 渲染)
-// - 从 libagentxx src/tools/planning 拆分独立:
-//   - agent 侧工具 agentxx_planning (原 agentxx_planning_write 改名):
-//     mode=write 写入会话规划 state (经通用接口: 持久化到
-//     {dataDir}/plans + 发布 planning 事件, 不再依赖专用 planning 接口表) 并持久化到
-//     {dataDir}/plans/{thread_id}.json (供 read 模式跨轮次读取);
-//     mode=read 返回本会话此前保存的规划内容
-//   - 规划写入成功后发布 "agentxx_planning.planning" 插件事件 (载荷为完整
-//     规划 JSON); 订阅宿主约定事件 agentxx_host.client_attached, 客户端接入/
-//     重连时重发当前会话已保存规划 (状态快照自愈, 见 docs/zh-cn/plugins.md 7.3.1)
-//   - client 侧入口 (agentxx_plugin_client_create): Plan 渲染完全由插件驱动 ——
-//     ① 工具消息装饰: 订阅 EVT_DELTA 经 update_tool_decor 推送语义层装饰
-//     (折叠头显示名/摘要 + 展开体 items: 状态图/todos/notes), TUI 按通用
-//     渲染器展示, 无任何 plan 特化代码; ② Info 栏段落渲染最近一次规划概览
+/// agentxx_planning —— 两层任务规划工具插件 (双端: agent 工具 + client 渲染)
+/// - 从 libagentxx src/tools/planning 拆分独立:
+///   - agent 侧工具 agentxx_planning (原 agentxx_planning_write 改名):
+///     mode=write 写入会话规划 state (经通用接口: 持久化到
+///     {dataDir}/plans + 发布 planning 事件, 不再依赖专用 planning 接口表) 并持久化到
+///     {dataDir}/plans/{thread_id}.json (供 read 模式跨轮次读取);
+///     mode=read 返回本会话此前保存的规划内容
+///   - 规划写入成功后发布 "agentxx_planning.planning" 插件事件 (载荷为完整
+///     规划 JSON); 订阅宿主约定事件 agentxx_host.client_attached, 客户端接入/
+///     重连时重发当前会话已保存规划 (状态快照自愈, 见
+///     [plugins.md](/docs/zh-cn/design.md/plugins.md) 7.3.1)
+///   - client 侧入口 (agentxx_plugin_client_create): Plan 渲染完全由插件驱动 ——
+///     ① 工具消息装饰: 订阅 EVT_DELTA 经 update_tool_decor 推送语义层装饰
+///     (折叠头显示名/摘要 + 展开体 items: 状态图/todos/notes), TUI 按通用
+///     渲染器展示, 无任何 plan 特化代码; ② Info 栏段落渲染最近一次规划概览
 #include "agentxx_planning_plugin.h"
 #include <cstdio>
 #include <cstring>
@@ -121,12 +122,11 @@ Start the final message with the substantive content the user asked for (data, c
 The user wants the result, not confirmation that the work is done.
 )_";
 
-/* ==================== 规划持久化 ({dataDir}/plans/) ====================
- * - 文件名: thread_id 经字符清洗 (非 [A-Za-z0-9._-] → '_') 截断后追加
- *   FNV1a-32 哈希后缀, 确定且无碰撞歧义 (同 thread_id 恒定同名)
- * - 写入原子化: 先写 .tmp 再 rename (Windows 下 rename 不覆盖已有目标,
- *   先 remove 旧文件; 极端崩溃窗口最多丢失一次更新, 可接受)
- */
+/// ==================== 规划持久化 ({dataDir}/plans/) ====================
+/// - 文件名: thread_id 经字符清洗 (非 [A-Za-z0-9._-] → '_') 截断后追加
+///   FNV1a-32 哈希后缀, 确定且无碰撞歧义 (同 thread_id 恒定同名)
+/// - 写入原子化: 先写 .tmp 再 rename (Windows 下 rename 不覆盖已有目标,
+///   先 remove 旧文件; 极端崩溃窗口最多丢失一次更新, 可接受)
 
 /// FNV1a-32 哈希 (thread_id 全原文; 与清洗后的 base 无关, 防截断碰撞)
 constexpr uint32_t fnv1a32(const char* s, size_t n) {
@@ -272,11 +272,10 @@ std::string loadPlanningFile(const PluginCtx& ctx, const std::string& tid) {
 
 namespace {
 
-/* ==================== 插件事件发布 ====================
- * 规划内容变化 → 发布 "agentxx_planning.planning" (载荷为完整规划 JSON)。
- * server 侧经事件总线转发为 WirePluginData{plugin, event, data}, client 侧
- * 插件订阅 EVT_PLUGIN_DATA 处理并渲染 Info 栏段落 (见下方 client 入口)。
- */
+/// ==================== 插件事件发布 ====================
+/// 规划内容变化 → 发布 "agentxx_planning.planning" (载荷为完整规划 JSON)。
+/// server 侧经事件总线转发为 WirePluginData{plugin, event, data}, client 侧
+/// 插件订阅 EVT_PLUGIN_DATA 处理并渲染 Info 栏段落 (见下方 client 入口)。
 void publishPlanningEvent(PluginCtx& ctx, const std::string& planJson) {
     if (!ctx.iface.events || !ctx.iface.events->publish || planJson.empty()) {
         return;
@@ -287,7 +286,8 @@ void publishPlanningEvent(PluginCtx& ctx, const std::string& planJson) {
 }
 
 /// 宿主约定事件 client_attached: 客户端接入/重连 → 重发当前会话已保存规划
-/// (修复 "事件先于客户端订阅而丢失 → UI 永久空白", 见 plugins.md 7.3.1)
+/// (修复 "事件先于客户端订阅而丢失 → UI 永久空白", 见
+/// [plugins.md](/docs/zh-cn/design.md/plugins.md) 7.3.1)
 void AGENTXX_PLUGIN_CALL on_client_attached(const AgentxxPluginStringView* event_json, void* ud) {
     auto* ctxRaw = static_cast<PluginCtx*>(ud);
     // C ABI 回调异常守卫 (agent io 线程派发直调)
@@ -319,9 +319,10 @@ void AGENTXX_PLUGIN_CALL on_client_attached(const AgentxxPluginStringView* event
 
 } // namespace
 
-/* =====================================================================
- * agent 侧入口
- * ===================================================================== */
+/// =====================================================================
+///  agent 侧入口
+
+/// =====================================================================
 
 extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* AGENTXX_PLUGIN_CALL
     agentxx_plugin_agent_get_info(void) {
@@ -548,17 +549,17 @@ extern "C" AGENTXX_PLUGIN_EXPORT void AGENTXX_PLUGIN_CALL
     });
 }
 
-/* =====================================================================
- * client 侧入口 (agentxx_plugin_client_create) —— Plan 渲染 (原 TUI 硬编码的
- * 消息列表特化 + Info 侧边栏段落全部拆分至本插件, TUI 无任何 plan 概念)
- *
- * - 工具消息装饰 (update_tool_decor): 订阅 EVT_DELTA, tool_start 时按
- *   arguments 构建装饰 (折叠头 displayName + 展开体 items:
- *   状态图/todos/notes), tool_end 时以最终内容刷新
- * - Info 栏段落 "Plan" (懒注册): EVT_PLUGIN_DATA planning 事件驱动,
- *   展示最近一次规划概览; client_attached 重发快照自愈
- * - EVT_SESSION_SWITCH → 清理装饰缓存与段落
- * ===================================================================== */
+/// =====================================================================
+/// client 侧入口 (agentxx_plugin_client_create) —— Plan 渲染 (原 TUI 硬编码的
+/// 消息列表特化 + Info 侧边栏段落全部拆分至本插件, TUI 无任何 plan 概念)
+///
+/// - 工具消息装饰 (update_tool_decor): 订阅 EVT_DELTA, tool_start 时按
+///   arguments 构建装饰 (折叠头 displayName + 展开体 items:
+///   状态图/todos/notes), tool_end 时以最终内容刷新
+/// - Info 栏段落 "Plan" (懒注册): EVT_PLUGIN_DATA planning 事件驱动,
+///   展示最近一次规划概览; client_attached 重发快照自愈
+/// - EVT_SESSION_SWITCH → 清理装饰缓存与段落
+/// =====================================================================
 
 /// client 侧每实例上下文 (多实例契约: 状态挂本实例, 回调经 ud 恢复)
 struct ClientCtx {

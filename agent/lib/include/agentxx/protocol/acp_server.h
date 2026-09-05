@@ -22,13 +22,13 @@ namespace server {
 using json = neograph::json;
 
 // ---------------------------------------------------------------------------
-// Internal ACP protocol handler (shared by HTTP and stdio transports)
+// ACP 协议处理器 (HTTP 与 stdio 传输共用)
 //
-// Implements JSON-RPC 2.0 for the Agent Client Protocol:
-//   - initialize        – handshake, returns capabilities + agent info
-//   - session/new       – create a conversation session
-//   - session/prompt    – submit a prompt (async, result via notification)
-//   - session/cancel    – cancel an in-flight prompt
+// 实现 Agent Client Protocol 的 JSON-RPC 2.0 子集:
+//   - initialize        – 握手, 返回 capabilities 与 agent 信息
+//   - session/new       – 创建会话
+//   - session/prompt    – 提交提示 (异步, 结果经 notification 返回)
+//   - session/cancel    – 取消进行中的 prompt
 // ---------------------------------------------------------------------------
 
 class AcpProtocolHandler {
@@ -53,45 +53,45 @@ public:
 
     ~AcpProtocolHandler();
 
+    /// 是否已收到 initialize 握手
     bool initialized() const;
 
+    /// 本 server 上报的 agent 信息 JSON (能力声明等)
     const json& agentInfo() const;
 
-    /// Set the notification sink used to deliver async responses and
-    /// streaming updates. Must be set before processing messages.
+    /// 设置通知接收器 (用于异步结果与流式更新); 处理消息前必须先设置
     void setNotificationSink(NotificationSink sink);
 
-    /// Stop all in-flight prompts, cancel pending requests.
-    /// Check whether stop has been requested.
+    /// 是否已请求停止 (stop 后为 true)
     bool stopRequested() const;
 
+    /// 停止所有进行中的 prompt 并取消挂起请求
     void stop();
 
-    /// Process one JSON-RPC envelope. Returns the response envelope for
-    /// synchronous methods, or null json for notifications / async dispatch.
-    /// Async responses are delivered via the notification sink.
+    /// 处理一条 JSON-RPC 信封。同步方法返回响应信封;
+    /// 通知/异步派发返回空 json。异步响应经 notification sink 投递。
     json handleMessage(const json& env);
 
-    /// Emit an outbound request (agent→client) and wait for the response.
-    /// The notification sink must be set before calling this.
+    /// 发出一个出站请求 (agent→client) 并等待响应。
+    /// 调用前必须先设置 notification sink。
     json callClient(
         std::string_view          method,
         json                      params,
         std::chrono::milliseconds timeout = std::chrono::seconds{30}
     );
 
-    // -- Session queries (for tests / introspection) -----------------------
+    // -- 会话查询 (供测试/内省) ---------------------------------------------
 
     bool        hasSession(std::string_view sessionId) const;
     std::string sessionCwd(std::string_view sessionId) const;
     bool        isInFlight(std::string_view sessionId) const;
     int         inflightCount() const;
 
-    /// Drain in-flight workers (used by transports before shutdown).
+    /// 等待进行中的 worker 排空 (传输层关闭前使用)
     void drainWorkers();
 
     // -----------------------------------------------------------------------
-    // JSON-RPC helpers
+    // JSON-RPC 工具
     // -----------------------------------------------------------------------
 
     static json        jsonRpcResult(const json& id, json result);
@@ -102,7 +102,7 @@ public:
     static std::string generateSessionId();
 
     // -----------------------------------------------------------------------
-    // Method handlers
+    // 各 JSON-RPC 方法处理器
     // -----------------------------------------------------------------------
 
     json handleInitialize(const json& params, const json& id);
@@ -118,7 +118,7 @@ public:
     void handleSessionCancel(const json& params);
 
     // -----------------------------------------------------------------------
-    // Notification / streaming helpers
+    // 通知 / 流式输出工具
     // -----------------------------------------------------------------------
 
     void emit(const json& env);
@@ -128,7 +128,7 @@ public:
 private:
 
     // -----------------------------------------------------------------------
-    // Members
+    // 成员
     // -----------------------------------------------------------------------
 
     Config                                     config_;
@@ -138,12 +138,12 @@ private:
     std::atomic<bool>                          stopFlag_{false};
     NotificationSink                           sink_;
 
-    // -- Sessions --
+    // -- 会话表 --
     mutable std::mutex                              sessionsMu_;
-    std::map<std::string, std::string, std::less<>> sessions_; // sessionId → cwd
+    std::map<std::string, std::string, std::less<>> sessions_; // sessionId → 工作目录
     std::map<std::string, std::shared_ptr<std::atomic<bool>>, std::less<>> cancelFlags_;
 
-    // -- In-flight prompt tracking --
+    // -- 进行中 prompt 追踪 --
     mutable std::mutex                 inflightMu_;
     std::set<std::string, std::less<>> inflightSessions_;
     std::atomic<int>                   inflightCount_{0};
@@ -151,7 +151,7 @@ private:
     std::mutex              workersMu_;
     std::condition_variable workersCv_;
 
-    // -- Outbound request tracking (agent→client) --
+    // -- 出站请求追踪 (agent→client) --
     mutable std::mutex                                               pendingMu_;
     std::map<int64_t, std::shared_ptr<std::promise<neograph::json>>> pending_;
     std::atomic<int64_t>                                             nextOutboundId_{1};
@@ -160,9 +160,9 @@ private:
 // ===========================================================================
 // HTTP ACP Server
 //
-// Wraps AcpProtocolHandler behind an HTTP transport.
-//   POST /acp    – main JSON-RPC endpoint
-//   GET /acp/sse – SSE endpoint for streaming notifications
+// 以 HTTP 传输包装 AcpProtocolHandler。
+//   POST /acp    – 主 JSON-RPC 端点
+//   GET /acp/sse – SSE 端点 (流式通知)
 // ===========================================================================
 
 class HttpAcpServer {
@@ -188,37 +188,42 @@ public:
 
     ~HttpAcpServer();
 
+    /// 启动 HTTP 监听 (阻塞到 startAsync 模式调度)
     void start();
+    /// 停止服务并回收
     void stop();
 
+    /// 实际监听端口 (自动分配端口时用)
     uint16_t port() const;
+    /// 是否已停止
     bool     isStopped() const;
 
+    /// 底层协议处理器引用
     AcpProtocolHandler& handler();
 
 private:
 
     // -----------------------------------------------------------------------
-    // Wire up the handler's notification sink → SSE + pending resolver
+    // 将 handler 的 notification sink 接到 SSE 广播与 pending resolver
     // -----------------------------------------------------------------------
 
     void setupHandlerSink();
 
     // -----------------------------------------------------------------------
-    // Route setup
+    // 路由注册
     // -----------------------------------------------------------------------
 
     void setupRoutes();
 
     // -----------------------------------------------------------------------
-    // ACP request handler (HTTP JSON-RPC)
+    // ACP 请求处理 (HTTP JSON-RPC)
     // -----------------------------------------------------------------------
 
     asio::awaitable<void>
         handleAcpRequest(util::HttpServer::Request& req, util::HttpServer::Response& resp);
 
     // -----------------------------------------------------------------------
-    // SSE endpoint
+    // SSE 端点
     // -----------------------------------------------------------------------
 
     asio::awaitable<void>
@@ -228,7 +233,7 @@ private:
     void stopSSE();
 
     // -----------------------------------------------------------------------
-    // HTTP response helpers
+    // HTTP 响应工具
     // -----------------------------------------------------------------------
 
     void writeJsonResponse(
@@ -240,7 +245,7 @@ private:
     neograph::json jsonRpcError(const neograph::json& id, int code, std::string_view message) const;
 
     // -----------------------------------------------------------------------
-    // Members
+    // 成员
     // -----------------------------------------------------------------------
 
     Config                                     config_;
@@ -248,7 +253,7 @@ private:
     AcpProtocolHandler                         handler_;
     std::unique_ptr<util::HttpServer>          httpServer_;
 
-    // Pending async response tracking (for HTTP transport)
+    // 挂起的异步响应追踪 (HTTP 传输用)
     std::mutex                                                       pendingMutex_;
     std::map<int64_t, std::shared_ptr<std::promise<neograph::json>>> pendingResponses_;
 };
@@ -256,8 +261,7 @@ private:
 // ===========================================================================
 // Stdio ACP Server
 //
-// Reads newline-delimited JSON-RPC from an input stream and writes
-// responses to an output stream (default: std::cin / std::cout).
+// 从输入流读取换行分隔的 JSON-RPC 并写入输出流 (默认 std::cin / std::cout)。
 // ===========================================================================
 
 class StdioAcpServer {

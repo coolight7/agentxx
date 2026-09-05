@@ -23,7 +23,7 @@ namespace server {
 using json = neograph::json;
 
 // ---------------------------------------------------------------------------
-// A2A Protocol Data Model (v1.0)
+// A2A 协议数据模型 (v1.0)
 // ---------------------------------------------------------------------------
 
 inline constexpr const char* kA2aVersion = "1.0";
@@ -96,7 +96,7 @@ inline bool isTerminalState(A2aTaskState s) {
            || s == A2aTaskState::Rejected;
 }
 
-// A2A-specific JSON-RPC error codes
+// A2A 专用 JSON-RPC 错误码
 inline constexpr int kA2aTaskNotFound                 = -32001;
 inline constexpr int kA2aTaskNotCancelable            = -32002;
 inline constexpr int kA2aPushNotificationNotSupported = -32003;
@@ -108,12 +108,12 @@ inline constexpr int kA2aVersionNotSupported          = -32009;
 // ---------------------------------------------------------------------------
 // A2A Server
 //
-// Implements the A2A protocol (v1.0) JSON-RPC binding over HTTP:
-//   GET  /.well-known/agent-card.json  – Agent Card discovery
-//   POST /a2a                          – JSON-RPC endpoint
-//   GET  /a2a/sse                      – SSE streaming endpoint
+// 实现 A2A 协议 (v1.0) 基于 HTTP 的 JSON-RPC 绑定:
+//   GET  /.well-known/agent-card.json  – Agent Card 发现
+//   POST /a2a                          – JSON-RPC 端点
+//   GET  /a2a/sse                      – SSE 流式端点
 //
-// Core methods:
+// 核心方法:
 //   SendMessage, SendStreamingMessage, GetTask, ListTasks, CancelTask
 // ---------------------------------------------------------------------------
 
@@ -160,7 +160,7 @@ public:
     json agentCard() const;
 
     // -----------------------------------------------------------------------
-    // JSON-RPC helpers (public for testing)
+    // JSON-RPC 工具函数 (公开供测试)
     // -----------------------------------------------------------------------
 
     static json jsonRpcResult(const json& id, json result);
@@ -198,13 +198,13 @@ private:
     };
 
     // -----------------------------------------------------------------------
-    // Route setup
+    // 路由设置
     // -----------------------------------------------------------------------
 
     void setupRoutes();
 
     // -----------------------------------------------------------------------
-    // HTTP handlers
+    // HTTP 处理器
     // -----------------------------------------------------------------------
 
     asio::awaitable<void>
@@ -219,7 +219,7 @@ private:
     );
 
     // -----------------------------------------------------------------------
-    // JSON-RPC dispatch
+    // JSON-RPC 分发
     // -----------------------------------------------------------------------
 
     json processJsonRpc(const json& request);
@@ -230,20 +230,20 @@ private:
     json handleCancelTask(const json& id, const json& params);
 
     // -----------------------------------------------------------------------
-    // Task execution (async worker)
+    // 任务执行 (异步 worker)
     // -----------------------------------------------------------------------
 
     void executeTask(std::string_view taskId, std::string_view userInput);
 
     // -----------------------------------------------------------------------
-    // SSE broadcast
+    // SSE 广播
     // -----------------------------------------------------------------------
 
     asio::awaitable<void> broadcastSSE(std::string data);
     asio::awaitable<void> stopSSE();
 
     // -----------------------------------------------------------------------
-    // Task store helpers
+    // 任务存储辅助
     // -----------------------------------------------------------------------
 
     std::shared_ptr<TaskRecord> findTask(std::string_view taskId);
@@ -255,7 +255,7 @@ private:
     void pruneOldTasks();
 
     // -----------------------------------------------------------------------
-    // Response helpers
+    // 响应输出辅助
     // -----------------------------------------------------------------------
 
     void writeJsonResponse(
@@ -265,7 +265,7 @@ private:
     );
 
     // -----------------------------------------------------------------------
-    // Members
+    // 成员
     // -----------------------------------------------------------------------
 
     Config                                     config_;

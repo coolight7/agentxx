@@ -1,4 +1,4 @@
-// agentxx_screen_capture —— 屏幕捕获插件 (Windows)
+/// agentxx_screen_capture —— 屏幕捕获插件 (Windows)
 #include "fmt/format.h"
 #include "screen_capture.h"
 #include "screen_capture_plugin.h"

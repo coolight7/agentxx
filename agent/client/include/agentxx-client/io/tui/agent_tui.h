@@ -37,7 +37,8 @@
 
 // ---------------------------------------------------------------------------
 // TUI 共享工具函数
-// (时长/时间戳格式化已迁移到 agentxx/util/string_util.h, 供 agent 端构造
+// (时长/时间戳格式化已迁移到
+// [string_util.h](/agent/lib/include/agentxx/util/string_util.h), 供 agent 端构造
 //  系统提示文本复用, 此处仅保留 UI 专用函数)
 // ---------------------------------------------------------------------------
 
@@ -205,7 +206,8 @@ public:
         asio::any_io_executor ex,
         std::string           sessionId = "session",
         TUITheme              theme     = TUITheme::darkTheme(),
-        /// 权限询问处理模式 (来自 yaml 配置 `permission.mode`, 见 config.h)
+        /// 权限询问处理模式 (来自 yaml 配置 `permission.mode`, 见
+        /// [config.h](/agent/lib/include/agentxx/agent/config.h))
         agentxx::agent::PermissionMode permissionMode = agentxx::agent::PermissionMode::Ask
     );
     ~TUIClientAgentIO() override;
@@ -289,7 +291,9 @@ public:
     );
 
     /// 设置连接状态 (跨线程安全: 更新 sharedState 并触发重绘)
-    /// 状态枚举 ConnState 定义于 tui_state.h (TUIRenderState::connState)
+    /// 状态枚举 ConnState 定义于
+    /// [tui_state.h](/agent/client/include/agentxx-client/io/tui/framework/tui_state.h)
+    /// (TUIRenderState::connState)
     void setConnState(ConnState state);
 
     /// AgentIOBase::onServerReady 覆写: 置 Connected 并刷新待发送队列

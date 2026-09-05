@@ -1,7 +1,6 @@
 #pragma once
 
-/// @file agentxx/util/env.h
-/// @brief 统一的环境变量访问封装 (预设变量 -> 系统环境变量)
+/// 统一的环境变量访问封装 (预设变量 -> 系统环境变量)
 /// - 预设变量: 进程内全局存储 (启动时由 main 注入 AGENTXX_WORK_DIR / AGENTXX_EXEC_DIR 等),
 ///   优先级高于系统环境变量, 用于消除对 ::getenv 的直接调用 (MSVC C4996)
 /// - 系统环境变量: Windows 使用 _dupenv_s (安全), POSIX 使用 ::getenv
@@ -37,8 +36,8 @@ public:
     // -----------------------------------------------------------------------
 
     /// 设置预设环境变量 (覆盖已存在的值, 值可为空串)
-    /// @param name  变量名 (不能为空)
-    /// @param value 变量值
+    /// - [name] 变量名 (不能为空)
+    /// - [value] 变量值
     void set(std::string_view name, std::string_view value);
     void set(std::string_view name, std::string&& value);
     void set(std::string_view name, const std::string& value);
@@ -71,7 +70,7 @@ public:
     // -----------------------------------------------------------------------
 
     /// 查询环境变量 (优先级: 预设 -> 系统)
-    /// @return 有值时返回 string, 无值时 nullopt
+    /// - `return` 有值时返回 string, 无值时 nullopt
     [[nodiscard]] std::optional<std::string> get(std::string_view name);
 
     /// 查询环境变量, 带默认值

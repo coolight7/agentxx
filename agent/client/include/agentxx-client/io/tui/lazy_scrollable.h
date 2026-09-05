@@ -137,7 +137,8 @@ public:
     /// (Text 节点只在 ComputeRequirement 里复位 has_selection_), 因此拖动选中
     /// 的文本在选择被清空后高亮不消失。调用本方法对当前可见子项执行一次
     /// ComputeRequirement, 使其选择状态随内容重算归零 (幂等, 不影响布局).
-    /// 用于"拖选松开自动复制"完成后清除高亮 (见 agent_tui.cpp 拖选跟踪)
+    /// 用于"拖选松开自动复制"完成后清除高亮 (见
+    /// [agent_tui.cpp](/agent/client/src/io/tui/agent_tui.cpp) 拖选跟踪)
     void resetSelectionHighlight();
 
     // === ComponentBase 接口 ===

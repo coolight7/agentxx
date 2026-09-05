@@ -1,4 +1,4 @@
-// agentxx_audio_stream —— 音频流捕获插件
+/// agentxx_audio_stream —— 音频流捕获插件
 #include "audio_stream.h"
 #include "audio_stream_plugin.h"
 #include "fmt/format.h"

@@ -19,9 +19,8 @@
 namespace agentxx {
 namespace server {
 
-/// Anthropic Messages API provider.
-/// 文档 https://vercel.com/docs/ai-gateway/sdks-and-apis/anthropic-messages-api
-/// Supports non-streaming, streaming, tool_use, and extended thinking.
+/// Anthropic Messages API provider (非流式/流式/tool_use/扩展思考)
+/// 文档: https://vercel.com/docs/ai-gateway/sdks-and-apis/anthropic-messages-api
 class AnthropicProvider : public neograph::Provider {
 public:
 
@@ -49,20 +48,20 @@ public:
         neograph::FormatDataStreamCallback on_chunk = nullptr
     ) override;
 
-    // --- Public static helpers (exposed for unit testing) ---
+    // --- 公开静态工具函数 (暴露供单元测试) ---
 
-    /// Convert neograph messages to Anthropic format.
-    /// Returns {system_string, messages_json_array}.
-    /// @param sendThinking 是否携带 thinking 内容块
+    /// 将 neograph 消息转换为 Anthropic 格式
+    /// - `return` {system_string, messages_json_array}
+    /// - [sendThinking] 是否携带 thinking 内容块
     static std::pair<std::string, neograph::json> convertMessages(
         const std::vector<neograph::ChatMessage>& messages,
         bool                                      sendThinking = false
     );
 
-    /// Convert neograph tools to Anthropic format.
+    /// 将 neograph 工具定义转换为 Anthropic 格式
     static neograph::json convertTools(const std::vector<neograph::ChatTool>& tools);
 
-    /// Parse a non-streaming Anthropic response.
+    /// 解析非流式 Anthropic 响应
     static neograph::ChatCompletion parseResponse(const neograph::json& resp);
 
     /// 向 completion.message.extra[kThinkingBlocksKey] 追加一个 thinking 相关块
@@ -74,7 +73,7 @@ public:
         completion.message.extra[kThinkingBlocksKey].push_back(std::move(block));
     }
 
-    /// Process Anthropic SSE buffer.
+    /// 解析 Anthropic SSE 响应缓冲
     /// - 事件分隔符同时支持 "\n\n" 与 "\r\n\r\n" (SSE 规范允许 \r\n 行结尾)
     /// - thinkingTexts/blockSignatures: 按 block index 累积 thinking 文本与 signature,
     ///   content_block_stop 时组装为带 signature 的 thinking 块存入 completion.message.extra

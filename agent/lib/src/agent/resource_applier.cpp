@@ -1,7 +1,5 @@
-/*
- * resource_applier.cpp —— 宿主会话组件资源应用器实现
- * 见 resource_applier.h (单一具体实现, 无接口/实现分层)
- */
+/// resource_applier.cpp —— 宿主会话组件资源应用器实现
+/// 见 resource_applier.h (单一具体实现, 无接口/实现分层)
 #include "agentxx/agent/resource_applier.h"
 
 #include "agentxx/agent/context.h"

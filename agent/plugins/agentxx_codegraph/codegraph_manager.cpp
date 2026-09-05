@@ -1,7 +1,8 @@
-// agentxx_codegraph 插件 —— CodeGraphManager 实现 (从 lib 迁移)
-// - 插件不链接 libagentxx: 日志经宿主 vtable log; 数据目录由宿主接口表提供
-//   (agentxx.agent.config get_config dataDir, 插件不直接读环境变量推导)
-// - 工具 (codegraph_tools.cpp) 与入口 (agentxx_codegraph.cpp) 同目录
+/// agentxx_codegraph 插件 —— CodeGraphManager 实现 (从 lib 迁移)
+/// - 插件不链接 libagentxx: 日志经宿主 vtable log; 数据目录由宿主接口表提供
+///   (agentxx.agent.config get_config dataDir, 插件不直接读环境变量推导)
+/// - 本文件为索引管理核心实现 (单 TU); 插件入口在
+///   [agentxx_codegraph.cpp](/agent/plugins/agentxx_codegraph/agentxx_codegraph.cpp)
 #include "codegraph_manager.h"
 #include "codegraph_plugin.h"
 
@@ -90,10 +91,12 @@ static T catchError(std::function<T()> func, std::function<T(std::string)> onErr
 
 // ---------------------------------------------------------------------------
 // sqlite 数据目录约定 (插件不直接读环境变量):
-// - 数据目录由宿主提供: 入口 (agentxx_codegraph.cpp) 经 agentxx.agent.config
-//   接口表 get_config 读取 dataDir 后拼接 "{dataDir}/sqlite" 传入构造函数;
+// - 数据目录由宿主提供: 入口
+//   ([agentxx_codegraph.cpp](/agent/plugins/agentxx_codegraph/agentxx_codegraph.cpp))
+//   经 agentxx.agent.config 接口表 get_config 读取 dataDir 后拼接
+//   "{dataDir}/sqlite" 传入构造函数;
 //   环境变量派生配置 (yaml ${VAR}) 由宿主配置加载器统一展开 (.env/内置/系统
-//   变量优先级见 docs/zh-cn/design.md), 插件侧只处理最终值
+//   变量优先级见 [design.md](/docs/zh-cn/design.md)), 插件侧只处理最终值
 // - sqliteDir 为空视为配置缺失: initialize 失败并记日志
 //   (不再从 HOME/TMPDIR 等环境变量自行推导默认目录)
 // ---------------------------------------------------------------------------
@@ -756,10 +759,10 @@ static bool isGitRuleFile(std::string_view path) {
 }
 
 /// 广度优先遍历根目录, 边遍历边回调每个待索引的源文件 (应用全部过滤规则)
-/// @param ignore_path_regexes 配置 ignorePaths 编译后的正则列表
-/// @param use_gitignore      是否启用 .gitignore/.gitmodules 忽略
-/// @param on_file            每发现一个应索引的源文件调用一次 (调用方即时索引);
-///                           返回 false 时停止遍历 (调用方主动中断, 不视为错误)
+/// - [ignore_path_regexes] 配置 ignorePaths 编译后的正则列表
+/// - [use_gitignore] 是否启用 .gitignore/.gitmodules 忽略
+/// - [on_file] 每发现一个应索引的源文件调用一次 (调用方即时索引);
+///   返回 false 时停止遍历 (调用方主动中断, 不视为错误)
 /// - 不再预先收集完整文件列表: 大目录 (数万文件) 下避免一次性列出全部路径
 ///   才返回 (阻塞索引与 UI 进度通知), 改为边遍历边回调, 索引进度/文件数
 ///   可随遍历逐渐增长
@@ -923,8 +926,8 @@ static int score_target(const codegraph::Node& source, const codegraph::Node& ca
 class CodeGraphManager::Impl {
 public:
 
-    /// @param sqliteDir sqlite 数据目录 (为空使用默认 {dataDir}/sqlite/)
-    /// @param config    索引过滤配置 (加载路径/忽略路径/gitignore 开关)
+    /// - [sqliteDir] sqlite 数据目录 (为空使用默认 {dataDir}/sqlite/)
+    /// - [config] 索引过滤配置 (加载路径/忽略路径/gitignore 开关)
     explicit Impl(std::string sqliteDir = "", CodeGraphIndexConfig config = {}) :
         running_(false),
         needs_initialize_(true),
@@ -2204,10 +2207,10 @@ private:
     IndexProgressCallback progress_callback_;
 };
 
-/// @param sqliteDir sqlite 数据目录 ({dataDir}/sqlite; 由插件入口经宿主
-///        agentxx.agent.config get_config 的 dataDir 拼接提供; 插件不读
-///        环境变量推导默认目录, 为空时 initialize 失败)
-/// @param config 索引过滤配置 (加载路径/忽略路径/gitignore 开关)
+/// - [sqliteDir] sqlite 数据目录 ({dataDir}/sqlite; 由插件入口经宿主
+///   agentxx.agent.config get_config 的 dataDir 拼接提供; 插件不读
+///   环境变量推导默认目录, 为空时 initialize 失败)
+/// - [config] 索引过滤配置 (加载路径/忽略路径/gitignore 开关)
 CodeGraphManager::CodeGraphManager(std::string sqliteDir, CodeGraphIndexConfig config) :
     impl_(std::make_unique<Impl>(std::move(sqliteDir), std::move(config))) {}
 

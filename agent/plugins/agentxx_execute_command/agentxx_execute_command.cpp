@@ -1,4 +1,4 @@
-// agentxx_execute_command —— 命令执行工具插件
+/// agentxx_execute_command —— 命令执行工具插件
 #include "agentxx_execmd_plugin.h"
 #include "execute_command_impl.h"
 #include <string>
@@ -379,7 +379,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_agent_destroy(void* plugin_
     });
 }
 
-/* ==================== Client 侧入口 ==================== */
+/// ==================== Client 侧入口 ====================
 
 namespace {
 

@@ -1,4 +1,4 @@
-// agentxx_string —— 字符串处理工具插件
+/// agentxx_string —— 字符串处理工具插件
 #include "agentxx_string_plugin.h"
 #include "string_impl.h"
 #include <string>
@@ -105,7 +105,7 @@ std::string schemaRegexp(PluginCtx* ctx) {
 
 } // namespace
 
-/* ---------------- 插件入口 / 销毁 ---------------- */
+/// ---------------- 插件入口 / 销毁 ----------------
 
 extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_agent_get_info(void) {
     return agentxx::plugin::guardCall(

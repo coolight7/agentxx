@@ -1,6 +1,6 @@
 // SubAgentManagerTool (`agentxx_subagent` 工具) 单元测试
 //
-// 设计要点 (见 agent/lib/include/agentxx/tools/subagent.h):
+// 设计要点 (见 [subagent.h](/agent/lib/include/agentxx/tools/subagent.h)):
 // - 注册表仅承载静态元数据 (SubAgentTaskBase); 实际执行由 AgentHost 派生
 //   独立 agent 完成 (中断委派), 本模块聚焦工具层行为:
 //   1) 可用性: 工具名/定义 schema (enum 列表随注册表更新, required 字段,

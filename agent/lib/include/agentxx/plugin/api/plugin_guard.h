@@ -1,12 +1,11 @@
-/*
- * agentxx/plugin/api/plugin_guard.h —— 插件侧 C ABI 边界异常处理 (header-only)
- *
- * 命名空间: agentxx::plugin
- *
- * 定位: 纯头文件内联设施, 编译进插件本体;
- * 【非跨边界 ABI】, 第三方插件可不用本头而自行 try/catch。
- * (接口表聚合 AgentIfaces/ClientIfaces 与同步工具适配器均已并入 plugin_kit.h)
- */
+/// 插件侧 C ABI 边界异常处理 (header-only)
+///
+/// 命名空间: agentxx::plugin
+///
+/// 定位: 纯头文件内联设施, 编译进插件本体;
+/// 【非跨边界 ABI】, 第三方插件可不用本头而自行 try/catch。
+/// (接口表聚合 AgentIfaces/ClientIfaces 与同步工具适配器均已并入
+/// [plugin_kit.h](/agent/lib/include/agentxx/plugin/api/plugin_kit.h))
 #ifndef AGENTXX_PLUGIN_GUARD_H
 #define AGENTXX_PLUGIN_GUARD_H
 

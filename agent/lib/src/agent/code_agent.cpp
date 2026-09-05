@@ -124,7 +124,8 @@ Read-only tasks (analysis/questions) don't need a worktree.)";
         );
         agentContext->middlewareHandleContext->handles.push_back(memoryFileMiddleware);
     }
-    // 会话资源应用器装配 (插件 Skill/Memory/MCP 扩展; 见 resource_applier.h):
+    // 会话资源应用器装配 (插件 Skill/Memory/MCP 扩展; 见
+    // [resource_applier.h](/agent/lib/include/agentxx/agent/resource_applier.h)):
     // - 声明式资源由 PluginManager 在插件 entry 成功后经此应用 (失败不生效)
     // - 运行时注册经 vtable register_skill_dir 等转发到本应用器
     // - io executor 记录于本协程 (init 运行在 io 线程), 供 MCP 异步连接派发
@@ -197,7 +198,8 @@ asio::awaitable<std::vector<std::unique_ptr<agentxx::tools::XXToolBase>>> CodeAg
         = co_await BaseAgent::initTools();
 
     /// Git worktree 管理 (由 AgentConfig::enableWorktree 控制, yaml worktree.enable)
-    /// - 创建即绑定会话: 相对路径基准/权限隔离边界自动切换, 详见 tools/git_worktree.h
+    /// - 创建即绑定会话: 相对路径基准/权限隔离边界自动切换, 详见
+    ///   [git_worktree.h](/agent/lib/include/agentxx/tools/git_worktree.h)
     if (config->enableWorktree) {
         tools.push_back(std::make_unique<agentxx::tools::GitWorktreeTool>(agentContext));
     }

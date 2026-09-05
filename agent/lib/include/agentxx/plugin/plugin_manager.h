@@ -72,7 +72,8 @@ class PluginInstance : public PluginInstanceBase {
 public:
 
     /// 继承 PluginInstanceBase 的公共字段 (name/version/path/configPath/args/depends/
-    /// dlHandle/pluginCtx/enabled/inflight 等), 见 plugin_manager_base.h
+    /// dlHandle/pluginCtx/enabled/inflight 等), 见
+    /// [plugin_manager_base.h](/agent/lib/include/agentxx/plugin/plugin_manager_base.h)
     /// 接口声明 (plugin.yaml `interfaces`; 加载时随 manifest 解析传入,
     /// 直连库路径为空) —— 经 list() 暴露供展示/排查
     PluginManifestInterfaces interfaces;

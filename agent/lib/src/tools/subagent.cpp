@@ -377,7 +377,8 @@ asio::awaitable<std::string> SubAgentManagerTool::execute_async(const neograph::
     if (!agentCtxPtr || !agentCtxPtr->middlewareHandleContext) {
         co_return R"({"error":"AgentContext not available"})";
     }
-    // sessionId 由 toolcall 节点在执行前注入 arguments (见 toolcall.cpp)
+    // sessionId 由 toolcall 节点在执行前注入 arguments (见
+    // [toolcall.cpp](/agent/lib/src/nodes/toolcall.cpp))
     auto sessionId = arguments.value("sessionId", std::string{});
     auto resultId  = arguments.value("tool_call_id", std::string{});
 

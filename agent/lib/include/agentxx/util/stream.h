@@ -1,27 +1,24 @@
 #pragma once
 
-/**
- * @file util/stream.h
- * @brief 事件流控制通用工具: 节流 (Throttle) / 防抖 (Debounce)
- *
- * 高频事件源 (状态更新、日志、指标采集) 直接处理会造成负载放大或 UI 过度
- * 刷新。本文件提供两种最常用的节流语义, 均线程安全, 可从任意线程调用:
- *
- * - Throttle (节流): 限制单位时间内的事件放行次数 —— 两次放行之间至少间隔
- *   minInterval。典型场景: server-io 向 UI 推送 codegraph 索引进度时,
- *   要求"最短 3 秒推送一次", 高频回调经节流合并, 放行后才发送。
- *   尾事件 (限流窗内最后一条) 可选由调用方配合定时器 + force() 补推, 避免丢失。
- *
- * - Debounce (防抖): 事件触发后推迟 wait 时长执行, 期间再次触发重置计时,
- *   用于"连续事件停止后执行一次" (如输入停顿后搜索/保存、滚动停滞后刷新)。
- *   调用方持定时器周期检查 ready(), 就绪后执行回调并 reset()。
- *
- * 两者差异:
- *   Throttle 保证"至少间隔" (leading edge, 立即放行但限频);
- *   Debounce 保证"静默期后执行" (trailing edge, 合并突发事件为一次)。
- *   需要 "立即放行 + 限频 + 尾事件必达" 时可组合: try_acquire() 放行立即处理,
- *   未放行的事件挂起, 由调用方定时器在 time_until_acquire() 后经 force() 补推。
- */
+/// 事件流控制通用工具: 节流 (Throttle) / 防抖 (Debounce)
+///
+/// 高频事件源 (状态更新、日志、指标采集) 直接处理会造成负载放大或 UI 过度
+/// 刷新。本文件提供两种最常用的节流语义, 均线程安全, 可从任意线程调用:
+///
+/// - Throttle (节流): 限制单位时间内的事件放行次数 —— 两次放行之间至少间隔
+///   minInterval。典型场景: server-io 向 UI 推送 codegraph 索引进度时,
+///   要求"最短 3 秒推送一次", 高频回调经节流合并, 放行后才发送。
+///   尾事件 (限流窗内最后一条) 可选由调用方配合定时器 + force() 补推, 避免丢失。
+///
+/// - Debounce (防抖): 事件触发后推迟 wait 时长执行, 期间再次触发重置计时,
+///   用于"连续事件停止后执行一次" (如输入停顿后搜索/保存、滚动停滞后刷新)。
+///   调用方持定时器周期检查 ready(), 就绪后执行回调并 reset()。
+///
+/// 两者差异:
+///   Throttle 保证"至少间隔" (leading edge, 立即放行但限频);
+///   Debounce 保证"静默期后执行" (trailing edge, 合并突发事件为一次)。
+///   需要 "立即放行 + 限频 + 尾事件必达" 时可组合: try_acquire() 放行立即处理,
+///   未放行的事件挂起, 由调用方定时器在 time_until_acquire() 后经 force() 补推。
 
 #include <chrono>
 #include <mutex>
@@ -34,7 +31,7 @@ namespace util {
 /// 线程安全: 内部互斥保护, 可从任意线程调用。
 ///
 /// 用法:
-/// @code
+/// ```c++
 ///   agentxx::util::Throttle throttle(std::chrono::seconds{3});
 ///   // 高频事件循环中:
 ///   if (throttle.try_acquire()) {
@@ -43,7 +40,7 @@ namespace util {
 ///       pending = latest;         // 限流窗内: 挂起后由尾推补发
 ///       scheduleTail(throttle.time_until_acquire()); // 窗末 force() + 补推
 ///   }
-/// @endcode
+/// ```
 class Throttle {
 public:
 
@@ -106,7 +103,7 @@ private:
 /// 通用计时状态类, 不持有执行上下文 (定时器/回调由调用方注入):
 ///
 /// 用法:
-/// @code
+/// ```c++
 ///   agentxx::util::Debounce debounce(std::chrono::milliseconds{200});
 ///   // 每次事件到达 (可为任意线程):
 ///   debounce.trigger();
@@ -115,7 +112,7 @@ private:
 ///       doOnceAfterQuiet();   // 事件停止 wait 后执行一次
 ///       debounce.reset();
 ///   }
-/// @endcode
+/// ```
 class Debounce {
 public:
 

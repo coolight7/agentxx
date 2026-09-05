@@ -15,9 +15,9 @@ namespace agent {
 class ToolPrompt {
 public:
 
-    /// Tool description. Non-const to allow modification during training.
+    /// 工具描述 (非 const: 训练过程中允许修改)
     std::string depict;
-    /// Tool parameter descriptions. Non-const to allow modification during training.
+    /// 工具参数描述 (非 const: 训练过程中允许修改)
     std::map<std::string, std::string, std::less<>> args;
 
     const std::string& getArg(std::string_view name) const;
@@ -217,9 +217,8 @@ inline std::string winCommandPopenPlaceholder() {
 The command is executed in the Windows terminal. Do NOT prepend any wrapper — write the plain command; the executor is selected automatically.)";
 }
 
-/// Prompt registry.
-/// - Aggregates system prompts and tool prompts for easy customization,
-///   self-updating, and training serialization.
+/// 提示词注册表
+/// - 聚合系统提示词与各工具提示词, 便于定制、自更新与训练序列化
 class AgentPrompt {
 public:
 
@@ -340,7 +339,7 @@ MAY discard:
          },
     };
 
-    /// toolcall
+    /// 工具提示词表: key 为工具名, 值为该工具的 depict/args 提示词覆写
     std::map<std::string, ToolPrompt, std::less<>> toolPrompt{
       {
           "agentxx_execute_bash_command",
@@ -863,8 +862,8 @@ Absent (default): the sub-agent's default full tool set.)"},
       },
   };
 
-    // ----- Training serialization helpers -----
-    // Serialize the entire AgentPrompt (including toolPrompt) to JSON for training save/load.
+    // ----- 训练序列化辅助 -----
+    // 将整个 AgentPrompt (含 toolPrompt) 序列化为 JSON, 供训练保存/加载。
 
     /// 执行环境探测 (PowerShell 等) 并刷新依赖探测结果的提示词条目。
     /// - AgentPrompt 构造时对探测相关条目使用非阻塞占位文本; 本函数由
@@ -875,16 +874,15 @@ Absent (default): the sub-agent's default full tool set.)"},
 
     neograph::json toJson() const;
 
-    /// Overwrite the current prompt entirely from JSON (missing fields remain unchanged).
+    /// 用 JSON 整体覆写当前提示词 (JSON 中缺失的字段保持不变)
     void fromJson(const neograph::json& j);
 
-    /// Merge via patch: only overwrite fields present in the JSON; absent fields stay as-is.
-    /// - For an existing tool in toolPrompt, only the depict/args sub-fields present in JSON are
-    /// overwritten.
-    /// - For a tool not yet in toolPrompt, a new entry is inserted.
+    /// 按补丁合并: 仅覆写 JSON 中出现的字段, 未出现的字段保持原样
+    /// - toolPrompt 中已有工具: 仅覆写 JSON 中出现的 depict/args 子字段
+    /// - toolPrompt 中尚无的工具: 插入新条目
     void mergeFromJson(const neograph::json& j);
 
-    /// Compute a hash of the entire prompt, used for training population deduplication.
+    /// 计算整个提示词的哈希, 用于训练种群去重
     size_t promptHash() const;
 };
 

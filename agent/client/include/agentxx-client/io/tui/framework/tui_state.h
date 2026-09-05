@@ -28,7 +28,8 @@ using InterruptResultChannel = asio::experimental::concurrent_channel<
     void(neograph_asio_error_code, int, std::optional<std::string>, bool)>;
 
 /// TUI 消息模型: 统一使用 agentxx::agent::ViewMessage
-/// (与 server Session::viewMessages / wire Sync 同型, 见 conversation_types.h)
+/// (与 server Session::viewMessages / wire Sync 同型, 见
+/// [conversation_types.h](/agent/lib/include/agentxx/agent/conversation_types.h))
 ///
 /// 设计说明:
 /// - 通用字段 (role/text/startTimeMs/durationMs/collapsed) 平铺,

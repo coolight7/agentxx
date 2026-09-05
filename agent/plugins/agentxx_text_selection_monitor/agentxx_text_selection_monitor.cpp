@@ -1,4 +1,4 @@
-// agentxx_text_selection_monitor —— 系统级文本选择事件流插件
+/// agentxx_text_selection_monitor —— 系统级文本选择事件流插件
 #include "fmt/format.h"
 #include "text_selection_monitor.h"
 #include "text_selection_monitor_plugin.h"

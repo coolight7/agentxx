@@ -32,11 +32,11 @@ class BaseAgent {
 public:
 
     /// 主协程调度器
-    /// - 不要在同线程中传递到 [runCliAsync]
-    /// 内使用，因为[engine->run_stream_async]会启动其他 io_context， 交替 ioCtx
-    /// 的话会导致互相等待，进而卡住
-    /// - 某个异步函数需要 io_context 时，可以通过 `co_await
-    /// asio::this_coro::executor` 获取当前异步函数运行时绑定的 io_context
+    /// - 不要在同线程中传递到 [runCliAsync] 内使用, 因为
+    ///   [engine->run_stream_async] 会启动其他 io_context, 交替 ioCtx 的话
+    ///   会导致互相等待, 进而卡住
+    /// - 某个异步函数需要 io_context 时, 可以通过 `co_await
+    ///   asio::this_coro::executor` 获取当前异步函数运行时绑定的 io_context
     std::shared_ptr<asio::io_context>             ioCtx        = nullptr;
     std::shared_ptr<neograph::graph::GraphEngine> engine       = nullptr;
     std::shared_ptr<AgentContext>                 agentContext = nullptr;
@@ -79,12 +79,16 @@ public:
 
     virtual ~BaseAgent();
 
+    /// 获取底层图引擎 (注意生命周期: 与 BaseAgent 共享所有权)
     neograph::graph::GraphEngine* getEngine();
 
+    /// 获取 agent 上下文 (ioCtx / middleware / 会话存储等)
     std::shared_ptr<AgentContext> getContext();
 
-    /// Run agent with custom system prompt and user input, collect full output as
-    /// string
+    /// 以指定消息列表运行一轮 agent (可自定义 system prompt 等效消息),
+    /// 收集完整输出为字符串
+    /// - [messages] 直接作为本轮输入消息 (含 system 角色即自定义系统提示)
+    /// - [callback] 可选: 每次图事件回调 (用于流式展示)
     asio::awaitable<std::string> runOverMsgsTurnAsync(
         std::string_view                                        sessionId,
         const std::vector<neograph::ChatMessage>&               messages,
@@ -92,7 +96,7 @@ public:
         std::string_view                                        modelName = ""
     );
 
-    /// Run agent with a single user input and optional custom system prompt
+    /// 以单条用户输入运行一轮 agent, 可附加自定义 system prompt
     asio::awaitable<std::string> runSingleInputAsync(
         std::string_view sessionId,
         std::string_view userInput,
@@ -105,6 +109,7 @@ public:
         neograph::graph::RunResult fullResult;
     };
 
+    /// 流式运行一轮 (输入固定为 [messages], 收集最终输出与完整 RunResult)
     asio::awaitable<SimpleRunResult> runStreamTurnAsync(
         const std::vector<neograph::ChatMessage>& messages,
         std::string_view                          modelName = ""

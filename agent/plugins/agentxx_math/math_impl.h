@@ -1,7 +1,8 @@
-// agentxx_math 插件 —— 数学表达式解析与计算引擎 (纯函数, 不含 C ABI 胶水)
-// - 头文件-only: 插件入口与测试 (agent/test/core/test_math_tools.cpp)
-//   共同包含, 保证插件行为与测试覆盖一致
-// - 依赖: neograph (json) + fmt + C++ 标准数学库
+/// agentxx_math 插件 —— 数学表达式解析与计算引擎 (纯函数, 不含 C ABI 胶水)
+/// - 头文件-only: 插件入口与测试
+///   ([test_math_tools.cpp](/agent/test/core/test_math_tools.cpp))
+///   共同包含, 保证插件行为与测试覆盖一致
+/// - 依赖: neograph (json) + fmt + C++ 标准数学库
 #pragma once
 
 #include <algorithm>

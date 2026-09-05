@@ -9,8 +9,9 @@ namespace agent {
 /// 客户端事件接收器: client 端点 (TUI/CLI) 关键路径上的被动回调接口
 ///
 /// 用途: 向 client 侧插件系统 (ClientPluginManager) 转发端点事件, 使插件可
-/// 订阅 会话/连接/消息 等 client 生命周期事件 (见 client_plugin_api.h 的
-/// AgentxxClientEvent 枚举)。
+/// 订阅 会话/连接/消息 等 client 生命周期事件 (见
+/// [client_plugin_api.h](/agent/lib/include/agentxx/plugin/api/client_plugin_api.h)
+/// 的 AgentxxClientEvent 枚举)。
 ///
 /// 线程约定:
 /// - 所有回调在 client io 线程同步调用 (端点 onPeerMessage / sendUserInput /

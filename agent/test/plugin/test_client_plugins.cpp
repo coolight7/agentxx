@@ -1,14 +1,12 @@
-/*
- * test_client_plugins.cpp —— client 侧插件系统测试 (模块名 `client_plugins`)
- *
- * 覆盖:
- * 1. 加载 example_plugin 的 client 入口 (agentxx_plugin_client_create)
- * 2. UI 注册表: 状态栏项 / 面板 / Info 栏段落 / 命令 (含快照读取)
- * 3. 事件分发: READY / TURN_END / PLUGIN_DATA / USER_INPUT → 插件回调
- * 4. 命令执行: /example (send 动作) / example_toast (toast 动作)
- * 5. 跨端数据: send_plugin_data → adapter sendPluginData (WirePluginDataUp 路径)
- * 6. disable/enable 恢复与 unload 清理 (含 Info 栏段落注册/摘除信号)
- */
+/// test_client_plugins.cpp —— client 侧插件系统测试 (模块名 `client_plugins`)
+///
+/// 覆盖:
+/// 1. 加载 example_plugin 的 client 入口 (agentxx_plugin_client_create)
+/// 2. UI 注册表: 状态栏项 / 面板 / Info 栏段落 / 命令 (含快照读取)
+/// 3. 事件分发: READY / TURN_END / PLUGIN_DATA / USER_INPUT → 插件回调
+/// 4. 命令执行: /example (send 动作) / example_toast (toast 动作)
+/// 5. 跨端数据: send_plugin_data → adapter sendPluginData (WirePluginDataUp 路径)
+/// 6. disable/enable 恢复与 unload 清理 (含 Info 栏段落注册/摘除信号)
 #include "test_client_plugins.h"
 
 #include "agentxx/plugin/api/plugin_kit.h"

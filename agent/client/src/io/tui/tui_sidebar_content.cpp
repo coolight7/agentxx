@@ -46,7 +46,9 @@ ftxui::Element buildLogLine(const TUILogSink::Line& line, const TUITheme& theme)
 }
 
 /// 渲染插件段落/面板 items JSON 元素 (kind: text/progress/badge/separator;
-/// schema 见 client_plugin_api.h register_panel/register_info_section)
+/// schema 见
+/// [client_plugin_api.h](/agent/lib/include/agentxx/plugin/api/client_plugin_api.h)
+/// register_panel/register_info_section)
 /// - text 项支持 role 指定样式: "title"=高亮强调 / "normal"=普通文本(默认) /
 ///   "hint"=减淡提示
 static void

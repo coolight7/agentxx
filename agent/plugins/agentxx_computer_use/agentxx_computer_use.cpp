@@ -1,4 +1,4 @@
-// agentxx_computer_use —— 计算机控制插件 (Windows)
+/// agentxx_computer_use —— 计算机控制插件 (Windows)
 #include "computer_use_plugin.h"
 #include "fmt/format.h"
 #include <cstring>

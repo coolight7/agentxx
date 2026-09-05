@@ -1,4 +1,4 @@
-// agentxx_filesystem 插件 —— 共享头
+/// agentxx_filesystem 插件 —— 共享头
 #pragma once
 
 #include "agentxx/plugin/api/plugin_api.h"

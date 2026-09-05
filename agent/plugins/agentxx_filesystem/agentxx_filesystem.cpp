@@ -1,4 +1,4 @@
-// agentxx_filesystem —— 文件系统工具插件 (list / read / write / edit / glob / grep)
+/// agentxx_filesystem —— 文件系统工具插件 (list / read / write / edit / glob / grep)
 #include "agentxx_fs_plugin.h"
 #include "filesystem_impl.h"
 #include <cstring>
@@ -680,7 +680,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_agent_destroy(void* plugin_
     });
 }
 
-/* ==================== Client 侧入口 ==================== */
+/// ==================== Client 侧入口 ====================
 
 namespace {
 

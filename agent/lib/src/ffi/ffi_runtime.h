@@ -38,7 +38,8 @@ namespace ffi {
 ///   C 回调 (on_event)、挂起的中断等待与超时。与 Server-IO 线程完全解耦，宿主
 ///   在回调中的耗时不会阻塞 Agent 核心调度。
 /// - 两端点通过进程内 ChannelAgentIOTransport::makePair(clientEx, agentEx) 直连。
-/// - 对外 C API (ffi_api.cpp) 可在宿主任意线程调用; 会话交互类经 asio::post
+/// - 对外 C API ([ffi_api.cpp](/agent/lib/src/ffi/ffi_api.cpp)) 可在宿主任意
+///   线程调用; 会话交互类经 asio::post
 ///   投递到 clientIoCtx_ 执行; 同步查询类经 promise/future 等待应答。
 /// - stop/destroy 不得在内部 io 线程 (即 client/agent 回调内) 调用 (返回 AGENTXX_FFI_ERR_STATE)。
 class FfiAgentRuntime : public std::enable_shared_from_this<FfiAgentRuntime> {
@@ -54,7 +55,7 @@ public:
     };
 
     /// 创建运行时 (构造 agent 对象与配置; 不启动线程)
-    /// @param err 非 NULL 时失败填入详情
+    /// - [err] 非 NULL 时失败填入详情
     static std::shared_ptr<FfiAgentRuntime> create(
         const AgentxxStringView*   config_json,
         const AgentxxStringView*   model_json,

@@ -19,8 +19,9 @@ namespace agent {
 
 /// 权限询问处理模式 (yaml `permission.mode` 指定; 默认 Ask)
 ///
-/// 服务端 CodeAgent 按模式注册文件系统读写默认规则 (见 code_agent.cpp
-/// initMiddleware), 白名单/黑名单路径始终优先于模式默认规则;
+/// 服务端 CodeAgent 按模式注册文件系统读写默认规则 (见
+/// [code_agent.cpp](/agent/lib/src/agent/code_agent.cpp) initMiddleware),
+/// 白名单/黑名单路径始终优先于模式默认规则;
 /// 客户端 (TUI/CLI) 仅对仍到达的权限 INTERRUPT 询问作兜底处理。
 ///
 /// - Ask:    当前工作目录内允许读写, 其他路径询问用户
@@ -269,12 +270,6 @@ public:
     ///   独立项目目录; 也使 server 部署不再要求以项目目录作为启动目录
     std::string workDir;
 
-    /// CodeGraph 代码分析由插件 agentxx_codegraph 提供 (yaml `plugins` 段配置):
-    /// - 插件参数整体存放于 PluginConfig::args (宿主不解析字段语义,
-    ///   由插件自行读取: loadPaths/ignorePaths/loadCwd/useGitignore 等)
-    /// - CodeAgent 按 plugins 段 path 统一加载插件; dataDir 未配置时
-    ///   插件自动跳过
-
     /// 权限询问处理模式 (yaml `permission.mode`; 见 PermissionMode)
     /// - CodeAgent 启动时按模式注册文件系统读写默认规则:
     ///   Ask=工作目录内允许+其他询问 / AllAsk=全部询问 / Pass=全部放行 / Deny=全部拒绝
@@ -338,6 +333,10 @@ public:
     bool logPrintSummarizationResultTokenCount  = false;
 
     /// 插件配置 (yaml `plugins` 列表; 启动时由 PluginManager 加载)
+    /// - 插件参数整体存放于 PluginConfig::args (宿主不解析字段语义,
+    ///   由插件自行读取, 如 codegraph 插件的 loadPaths/ignorePaths/loadCwd/useGitignore)
+    /// - CodeAgent 按 plugins 段 path 统一加载插件; dataDir 未配置时
+    ///   codegraph 等依赖数据目录的插件自动跳过
     std::vector<PluginConfig> plugins{};
 
     /// 配置校验 (client 启动时调用, 聚合全部字段合法性)

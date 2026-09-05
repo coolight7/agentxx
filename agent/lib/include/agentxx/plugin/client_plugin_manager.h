@@ -138,7 +138,8 @@ class ClientPluginInstance : public PluginInstanceBase {
 public:
 
     /// 继承 PluginInstanceBase 的公共字段 (name/version/path/configPath/args/depends/
-    /// dlHandle/pluginCtx/enabled/inflight 等), 见 plugin_manager_base.h
+    /// dlHandle/pluginCtx/enabled/inflight 等), 见
+    /// [plugin_manager_base.h](/agent/lib/include/agentxx/plugin/plugin_manager_base.h)
     /// 接口声明 (plugin.yaml `interfaces`; 加载时随 manifest 解析传入,
     /// 直连库路径为空) —— 宿主门禁依据, 经 list() 暴露供展示/排查
     PluginManifestInterfaces interfaces;
@@ -187,8 +188,9 @@ public:
     ~ClientPluginInstance();
 };
 
-/// 事件订阅宿主句柄实现 (仅宿主内部; 与 plugin_api.h 的 C 不透明类型对应,
-/// 命名避免与 agent 侧 PluginManager 的全局定义 ODR 冲突)
+/// 事件订阅宿主句柄实现 (仅宿主内部; 与
+/// [plugin_api.h](/agent/lib/include/agentxx/plugin/api/plugin_api.h) 的
+/// C 不透明类型对应, 命名避免与 agent 侧 PluginManager 的全局定义 ODR 冲突)
 /// - sub 为强引用: 订阅对象从 subscriptions 摘除后仍被本句柄保活,
 ///   unload 回调内退订不会解引用已释放内存
 struct ClientSubscriptionImpl {
@@ -598,7 +600,8 @@ private:
 ///
 /// 实现方 (TUI/CLI/未来 GUI) 职责:
 /// - supportedInterfaces(): 声明支持的接口名集合 ("client.panel" 等, 常量见
-///   plugin_common.h plugin_interfaces; 宿主据此装配 "client.ui" 接口表、
+///   [plugin_common.h](/agent/lib/include/agentxx/plugin/plugin_common.h)
+///   plugin_interfaces; 宿主据此装配 "client.ui" 接口表、
 ///   子能力门禁判定与插件加载门禁)
 /// - 各回调在 client io 线程调用, 实现必须快速返回; 涉及 UI 线程独占操作
 ///   (组件树修改/重绘) 须自行跨线程投递 (如 TUI 的 enqueueUiAction)
@@ -613,7 +616,7 @@ public:
     /// 内哪些成员非 NULL 与加载门禁判定)
     virtual InterfaceSet supportedInterfaces() const = 0;
 
-    /* ---- 信号回调 (client io 线程; 快速返回) ---- */
+    /// ---- 信号回调 (client io 线程; 快速返回) ----
 
     /// 状态栏项注册/更新/移除 (props: {"text","tooltip"})
     virtual void onStatusItemRegistered(

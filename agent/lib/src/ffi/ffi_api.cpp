@@ -1,8 +1,7 @@
-//
-// 本文件是唯一允许跨语言 (FFI) 调用的导出面: 全部函数为 extern "C" + 纯 C
-// 参数/返回 (无 STL/异常出界), 内部统一 catchError 兜底并转错误码; 每个
-// 函数可选的 AgentxxString* log 参数用于向调用方回传执行过程中的错误/日志详情 (宿主
-// 用后必须 agentxx_ffi_string_free 释放)。符号导出白名单见 lib/ffi_symbols.map。
+/// 本文件是唯一允许跨语言 (FFI) 调用的导出面: 全部函数为 extern "C" + 纯 C
+/// 参数/返回 (无 STL/异常出界), 内部统一 catchError 兜底并转错误码; 每个
+/// 函数可选的 AgentxxString* log 参数用于向调用方回传执行过程中的错误/日志详情 (宿主
+/// 用后必须 agentxx_ffi_string_free 释放)。符号导出白名单见 lib/ffi_symbols.map。
 
 #include "agentxx/ffi_api.h"
 #include "agentxx/util/log.h"
