@@ -4,22 +4,7 @@ cmake_policy(SET CMP0091 NEW)
 cmake_policy(SET CMP0144 NEW)
 cmake_policy(SET CMP0167 OLD)
 
-# ===== 版本号管理 (从上级或 VERSION 文件继承) =====
-if (NOT DEFINED AGENTXX_VERSION)
-  set(_AGENTXX_VERSION_FILE "${CMAKE_CURRENT_SOURCE_DIR}/../VERSION")
-  if (EXISTS "${_AGENTXX_VERSION_FILE}")
-    file(STRINGS "${_AGENTXX_VERSION_FILE}" _AGENTXX_RAW_VERSION LIMIT_COUNT 1)
-    string(STRIP "${_AGENTXX_RAW_VERSION}" AGENTXX_VERSION)
-  else()
-    set(AGENTXX_VERSION "0.1.0")
-  endif()
-endif()
-string(REGEX MATCH "^([0-9]+(\\.[0-9]+)*)" AGENTXX_CMAKE_VERSION "${AGENTXX_VERSION}")
-if (NOT AGENTXX_CMAKE_VERSION)
-  set(AGENTXX_CMAKE_VERSION "0.1.0")
-endif()
-
-project(agentxx_benchmark VERSION ${AGENTXX_CMAKE_VERSION} LANGUAGES C CXX)
+project(agentxx_benchmark VERSION ${AGENTXX_VERSION} LANGUAGES C CXX)
 include(GNUInstallDirs)
 
 # 全局版本宏注入
@@ -139,9 +124,6 @@ endif()
 
 if (NOT XX_IS_WIN_D)
   target_link_libraries(agentxx_benchmark PRIVATE ${CMAKE_DL_LIBS})
-  if (XX_IS_GCC_D)
-    target_link_options(agentxx_benchmark PRIVATE "-flto=auto")
-  endif()
 endif()
 
 if (XX_IS_MSVC_D)
