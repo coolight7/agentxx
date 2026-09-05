@@ -115,7 +115,7 @@ if not defined OPENSSL_ROOT_DIR (
     )
 )
 
-rem ===== 读取统一版本号 (agent/VERSION) =====
+rem ===== Read unified version (agent/VERSION) =====
 if not defined AGENTXX_VERSION (
     if exist "%src_dir%\VERSION" (
         set /p AGENTXX_VERSION=<"%src_dir%\VERSION"
@@ -230,7 +230,7 @@ set "AGENTXX_VSWHERE1="
 set "AGENTXX_VSWHERE2="
 :bundle_runtime_done
 
-rem ===== 归档发布包 (AGENTXX_PACKAGE_RELEASE=1 时自动执行) =====
+rem ===== Archive release package (AGENTXX_PACKAGE_RELEASE=1 auto pack) =====
 if "%AGENTXX_PACKAGE_RELEASE%"=="1" (
     if not exist "%src_dir%\build\dist\" mkdir "%src_dir%\build\dist\"
     echo [package] Packing release archive -> "%src_dir%\build\dist\agentxx-v%AGENTXX_VERSION%-windows-x86_64.zip"
