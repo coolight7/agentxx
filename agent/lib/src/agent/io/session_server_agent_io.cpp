@@ -10,6 +10,7 @@
 #include "agentxx/util/async_offload.h"
 #include "agentxx/util/exception.h"
 #include "agentxx/util/log.h"
+#include "asio/bind_cancellation_slot.hpp"
 #include "asio/cancel_after.hpp"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
@@ -158,25 +159,70 @@ asio::awaitable<neograph::json> SessionServerAgentIO::handleInterrupt(
 
     neograph::json result      = neograph::json::array();
     bool           gotResponse = false;
-    co_await agentxx::util::catchErrorAsync<bool>(
-        [&]() -> asio::awaitable<bool> {
-            // timeout <= 0 表示不限制: 不启用 cancel_after, 无限等待客户端响应
-            // (由 resolveInterrupt / failAllPending 正常结束等待)
-            if (timeout.count() > 0) {
-                result
-                    = co_await ch->async_receive(asio::cancel_after(timeout, asio::use_awaitable));
-            } else {
-                result = co_await ch->async_receive(asio::use_awaitable);
+    bool           cancelled   = false;
+    // HIL 等待必须可取消: 取当前会话 token 的 fork 子并绑定 slot,
+    // WireCancel 到达 (onCancel 置旗级联) 时打断 async_receive,
+    // 返回 {"__cancelled__":true} 使 AgentRunner 不 resume 而抛取消
+    // (fork 子随本协程帧持有, 生命周期安全; 父 S 由 Session 持有)
+    auto sessForCancel = session();
+    std::shared_ptr<neograph::graph::CancelToken> waitOp;
+    if (sessForCancel) {
+        if (auto sessToken = sessForCancel->getCancelToken()) {
+            waitOp = sessToken->fork();
+            waitOp->bind_executor(ex_);
+            if (waitOp->is_cancelled()) {
+                cancelled = true;
             }
-            gotResponse = true;
-            co_return true;
-        },
-        [&](std::string errmsg) -> asio::awaitable<bool> {
-            XX_LOGW("[session_ctrl] interrupt #{} ended early: {}", id, errmsg);
-            co_return false;
         }
-    );
+    }
+    if (!cancelled) {
+        co_await agentxx::util::catchErrorAsync<bool>(
+            [&]() -> asio::awaitable<bool> {
+                // timeout <= 0 表示不限制: 不启用 cancel_after, 无限等待客户端响应
+                // (由 resolveInterrupt / failAllPending 正常结束等待)
+                if (timeout.count() > 0) {
+                    if (waitOp) {
+                        result = co_await ch->async_receive(asio::bind_cancellation_slot(
+                            waitOp->slot(),
+                            asio::cancel_after(timeout, asio::use_awaitable)
+                        ));
+                    } else {
+                        result = co_await ch->async_receive(
+                            asio::cancel_after(timeout, asio::use_awaitable)
+                        );
+                    }
+                } else {
+                    if (waitOp) {
+                        result = co_await ch->async_receive(asio::bind_cancellation_slot(
+                            waitOp->slot(),
+                            asio::use_awaitable
+                        ));
+                    } else {
+                        result = co_await ch->async_receive(asio::use_awaitable);
+                    }
+                }
+                gotResponse = true;
+                co_return true;
+            },
+            [&](std::string errmsg) -> asio::awaitable<bool> {
+                // 取消信号打断的等待按取消处理, 不按超时/过期处理
+                if (waitOp && waitOp->is_cancelled()) {
+                    cancelled = true;
+                    co_return false;
+                }
+                XX_LOGW("[session_ctrl] interrupt #{} ended early: {}", id, errmsg);
+                co_return false;
+            },
+            nullptr,
+            waitOp
+        );
+    }
     pending_.erase(id);
+    if (cancelled) {
+        // 被取消: 不发过期通知 (客户端的取消已由 WireCancel 驱动本地收尾),
+        // 返回取消标记, 调用方不 resume
+        co_return neograph::json{{"__cancelled__", true}};
+    }
     if (!gotResponse) {
         // 超时/异常结束 (用户未响应): 通知客户端该中断已过期,
         // 使客户端将对应未操作的中断消息标记为过期并结束等待

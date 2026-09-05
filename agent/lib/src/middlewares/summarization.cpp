@@ -1,11 +1,13 @@
 #include "agentxx/middlewares/summarization.h"
 
+#include "agentxx/agent/agent_host.h"
 #include "agentxx/agent/io/agent_io.h"
 #include "agentxx/agent/io/agent_io_transport.h"
 #include "agentxx/agent/model_registry.h"
 #include "agentxx/event/event_stream.h"
 #include "agentxx/event/events.h"
 #include "agentxx/tools/subagent.h"
+#include "agentxx/util/async_offload.h"
 #include "agentxx/util/exception.h"
 #include "agentxx/util/string_util.h"
 #include "fmt/format.h"
@@ -415,7 +417,8 @@ size_t SummarizationMiddlewareHandle::splitRecentByTokenBudget(
 
 asio::awaitable<std::string> SummarizationMiddlewareHandle::doSummarizeWithLLM(
     std::string_view                          sessionId,
-    const std::vector<neograph::ChatMessage>& messages
+    const std::vector<neograph::ChatMessage>& messages,
+    bool                                      direct
 ) {
     auto agentCtxPtr = agentContext.lock();
     if (nullptr == agentCtxPtr || nullptr == agentCtxPtr->agentConfig
@@ -499,6 +502,76 @@ asio::awaitable<std::string> SummarizationMiddlewareHandle::doSummarizeWithLLM(
     neograph::json reqMsgsJson;
     neograph::to_json(reqMsgsJson, reqMsgs);
 
+    if (direct) {
+        // 手动压缩直派模式 (agent 空闲触发, 无 AgentRunner 中断循环):
+        // 不再走 SubagentExecute RR → requestInterrupt 抛 NodeInterrupt 的
+        // 中断委派路径 —— 该路径的中断只能由 AgentRunner 消费, 空闲时
+        // 会穿透所有 catchErrorAsync 逃逸到 EventBus publish 的 detached
+        // 协程被 asio 静默丢弃, 表现为压缩永久卡在 "Summarizizing..."。
+        // 改为直接经宿主 AgentHost::spawnBatch 派生压缩子代理并等待完成,
+        // 与中断路径复用同一 spawnOneTask (同上下文模式语义一致: 相同
+        // sessionId + 父会话模型 → KV cache 命中), 不抛中断。
+        auto host = agentCtxPtr->host.lock();
+        if (nullptr == host) {
+            XX_LOGE(
+                "SummarizationMiddlewareHandle 手动压缩失败: AgentHost 不可用 "
+                "(AgentContext::host 为空), 无法派生压缩子代理"
+            );
+            co_return "";
+        }
+
+        // 单任务批量请求; tools=[] 显式无工具 (与压缩注释意图一致, 避免
+        // 子代理默认全量工具的执行成本与副作用), enable_summarization=false
+        // 禁止二次压缩, sessionId=父线程 (同上下文模式)
+        events::ReqSubagentBatch batchReq;
+        batchReq.parentAgentName
+            = agentCtxPtr->agentConfig ? agentCtxPtr->agentConfig->agentName : std::string{};
+        batchReq.parentSessionId = std::string{sessionId};
+        batchReq.tasks.push_back(events::SubagentBatchItem{
+            .subagentName        = "subagent_task",
+            .messages            = reqMsgsJson, // 结构化透传 (含压缩指令), 无文本转录
+            .sessionId           = std::string{sessionId},
+            .tools               = neograph::json::array(), // []: 无工具
+            .enableSummarization = false,
+        });
+
+        // 超时保护: 手动压缩无父轮次取消令牌可级联, 子代理 LLM 卡住时不能
+        // 无限等待 (占用 io 线程); 超时放弃等待 (子代理后台完成自回收),
+        // 返回空串由调用方走 hardTruncate 兜底
+        constexpr std::chrono::milliseconds kManualCompactTimeout{std::chrono::minutes{2}};
+        auto batchResp = co_await agentxx::util::asyncWithTimeout<events::RespSubagentBatch>(
+            [&]() -> asio::awaitable<events::RespSubagentBatch> {
+                co_return co_await host->spawnBatch(batchReq, agentCtxPtr);
+            },
+            kManualCompactTimeout,
+            []() -> events::RespSubagentBatch {
+                return events::RespSubagentBatch{};
+            }
+        );
+        if (batchResp.results.empty()) {
+            XX_LOGW("SummarizationMiddlewareHandle 手动压缩: 子代理无结果 (超时或失败)");
+            co_return "";
+        }
+        const auto& item = batchResp.results[0];
+        if (item.hasError) {
+            XX_LOGE(
+                "SummarizationMiddlewareHandle 手动压缩 subagent 执行失败: {}",
+                item.errorMessage
+            );
+            co_return "";
+        }
+        // 错误串透传防护 (与中断路径一致): 不得把错误串当摘要写回
+        if (item.content.size() >= 2 && item.content.front() == '{'
+            && item.content.find("\"error\"") != std::string::npos) {
+            XX_LOGW(
+                "SummarizationMiddlewareHandle 手动压缩结果为错误串, 按失败处理: {}",
+                std::string_view{item.content}.substr(0, 256)
+            );
+            co_return "";
+        }
+        co_return item.content;
+    }
+
     auto args = neograph::json{
         {"subagent",             "subagent_task"       },
         {"messages",             std::move(reqMsgsJson)},
@@ -524,6 +597,18 @@ asio::awaitable<std::string> SummarizationMiddlewareHandle::doSummarizeWithLLM(
                 XX_LOGE(
                     "SummarizationMiddlewareHandle 压缩 subagent 执行失败: {}",
                     resp->errorMessage
+                );
+                co_return "";
+            }
+            // 取消/错误串透传防护: 子代理被取消时宿主返回
+            // `{"error":"Sub-agent cancelled..."}` (AgentRunner 已优先按取消
+            // 抛, 此处为直接调用路径的兜底), 不得当作有效摘要写回上下文,
+            // 否则表现为"压缩成功 + 继续执行", 取消形同虚设
+            if (resp->result.size() >= 2 && resp->result.front() == '{'
+                && resp->result.find("\"error\"") != std::string::npos) {
+                XX_LOGW(
+                    "SummarizationMiddlewareHandle 压缩结果为错误串, 按失败处理: {}",
+                    std::string_view{resp->result}.substr(0, 256)
                 );
                 co_return "";
             }
@@ -713,7 +798,9 @@ asio::awaitable<void>
             );
 
             /// llm 压缩 (同上下文 subagent, 中断后由 Session 派生并 resume)
-            auto summary = co_await doSummarizeWithLLM(sessionId, toSummarize);
+            // 手动压缩在 agent 空闲时触发 (无 AgentRunner 中断循环), 不能走
+        // NodeInterrupt 中断委派 (无人消费会逃逸 detached 被吞), 直派模式
+        auto summary = co_await doSummarizeWithLLM(sessionId, toSummarize, /*direct=*/true);
 
             enum class ReplaceAction {
                 None,

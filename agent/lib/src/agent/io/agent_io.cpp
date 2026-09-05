@@ -3,6 +3,7 @@
 #include "agentxx/event/event_stream.h"
 #include "agentxx/event/events.h"
 #include "agentxx/middlewares/middleware.h"
+#include "neograph/graph/cancel.h"
 
 namespace agentxx {
 namespace agent {
@@ -162,6 +163,10 @@ void AgentIOBase::registerOnBus(std::shared_ptr<agentxx::event::EventBus> sessio
     registeredBus_ = sessionBus;
 
     // 注册 interrupt 处理器
+    // - 取消 (WireCancel → onCancel) 与 HIL 等待互斥: handleInterrupt
+    //   被取消信号打断时返回特殊标记 `{"__cancelled__":true}`, 调用方
+    //   (AgentRunner) 据此不 resume 而直接抛 CancelledException,
+    //   避免"取消 HIL 弹窗后自动以空结果 resume 继续执行"的死循环
     auto& interruptRR
         = sessionBus->getRR<events::ReqInterrupt, events::RespInterrupt>(events::Topic::Interrupt);
     interruptServerId_ = interruptRR.registerServer(
@@ -173,8 +178,11 @@ void AgentIOBase::registerOnBus(std::shared_ptr<agentxx::event::EventBus> sessio
                 req.interruptValue,
                 req.interruptArgsJson
             );
+            // 取消标记: handleInterrupt 被取消时返回 {"__cancelled__":true},
+            // handled=false 使调用方不写回 resume 值 (见 AgentRunner)
+            bool cancelled = result.is_object() && result.value("__cancelled__", false);
             co_return events::RespInterrupt{
-                .handled    = true,
+                .handled    = !cancelled,
                 .resultJson = result.dump(),
             };
         }
@@ -212,6 +220,12 @@ void AgentIOBase::registerOnBus(std::shared_ptr<agentxx::event::EventBus> sessio
                 arg.toJson().dump()
             );
 
+            // 取消透传: HIL 等待被 WireCancel 打断时 handleInterrupt 返回
+            // {"__cancelled__":true}, 此处必须抛取消而非判为拒绝,
+            // 否则取消权限弹窗会被当成"[Permission denied]"正常继续执行
+            if (result.is_object() && result.value("__cancelled__", false)) {
+                throw neograph::graph::CancelledException("permission interrupted by cancel");
+            }
             bool allowed = false;
             if (result.is_array() && !result.empty()) {
                 auto val = result[0];

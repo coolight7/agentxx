@@ -117,15 +117,23 @@ public:
     /// - 请求参数: subagent="subagent_task", messages=压缩段原消息(含 system)
     ///   + 末尾追加 user 压缩指令 (结构化透传, 无文本转录),
     ///   sessionId=父线程 (与父会话相同 threadid + 相同模型 → 命中 KV cache),
-    ///   tools 不传入 (子代理无任何工具, 仅对当前上下文原样做压缩, 不经过
+    ///   tools=[] (子代理无任何工具, 仅对当前上下文原样做压缩, 不经过
     ///   share_store 外置), enable_summarization=false (禁止二次压缩)
     /// - subagent 内部完成"阅读上下文 → 输出摘要"的完整 agent 循环,
     ///   最终纯文本输出即为摘要
-    /// - 通过 NodeInterrupt 中断父轮次派生 subagent, resume 后返回结果;
-    ///   无 subagentManager / 消息为空 / 压缩失败时返回空串 (调用方保留原消息)
+    /// - direct=false (默认): 自动触发压缩, 在 agent 轮次内调用 —— 经
+    ///   NodeInterrupt 中断父轮次派生 subagent (SubagentExecute RR →
+    ///   requestInterrupt), resume 后返回结果; 必须在 AgentRunner
+    ///   中断循环内执行, 否则 NodeInterrupt 无人处理会逃逸
+    /// - direct=true: 手动触发压缩, agent 空闲时调用 (无 AgentRunner 中断
+    ///   循环) —— 直接经宿主 AgentHost::spawnBatch 派生压缩子代理并等待
+    ///   完成, 不抛 NodeInterrupt; 需要 AgentContext::host 有效, 超时
+    ///   或失败返回空字符串 (调用方保留原消息)
+    /// - 无 subagentManager / 消息为空 / 压缩失败时返回空串 (调用方保留原消息)
     asio::awaitable<std::string> doSummarizeWithLLM(
         std::string_view                          sessionId,
-        const std::vector<neograph::ChatMessage>& messages
+        const std::vector<neograph::ChatMessage>& messages,
+        bool                                      direct = false
     );
 
     /// 硬截断兜底: 保留 system + 截断说明 + 最近消息 (30% 预算)

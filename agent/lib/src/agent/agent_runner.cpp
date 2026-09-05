@@ -20,6 +20,11 @@ asio::awaitable<AgentRunner::Outcome> AgentRunner::run(
 ) {
     auto session = ctx->getSession(sessionId);
 
+    // 首跑 cfg 已被 move 进 engine, 提前保存 resume 需要沿用的运行参数
+    // (resume 必须与首跑同 stream_mode/max_steps, 否则事件回调/步数预算漂移)
+    const auto resumeStreamMode = cfg.stream_mode;
+    const auto resumeMaxSteps   = cfg.max_steps;
+
     auto fOnBeforeResume = [&]() -> asio::awaitable<void> {
         engine->update_state(std::string{sessionId}, [&](neograph::graph::GraphState& state) {
             state.overwrite("messages", session->llmMessages);
@@ -148,6 +153,26 @@ asio::awaitable<AgentRunner::Outcome> AgentRunner::run(
                                     );
                 }
                 if (batchResp.has_value()) {
+                    // 取消检查: 子代理被取消 (返回 cancelled 错误项) 时不写回
+                    // resume 值, 由外层统一按取消处理, 避免把
+                    // `{"error":"...cancelled..."}` 当摘要/结果 resume 后继续执行
+                    bool subagentCancelled = false;
+                    for (const auto& r : batchResp->results) {
+                        if (r.hasError
+                            && (r.errorMessage.find("cancel") != std::string::npos
+                                || r.errorMessage.find("Cancel") != std::string::npos
+                                || r.errorMessage.find("取消") != std::string::npos
+                                || r.errorMessage.find("中断") != std::string::npos)) {
+                            subagentCancelled = true;
+                            break;
+                        }
+                    }
+                    if (subagentCancelled
+                        || (cancelToken && cancelToken->is_cancelled())) {
+                        throw neograph::graph::CancelledException(
+                            "subagent delegation cancelled"
+                        );
+                    }
                     agentxx::tools::buildSubagentResumeValues(
                         resumeValues,
                         *batchResp,
@@ -190,12 +215,19 @@ asio::awaitable<AgentRunner::Outcome> AgentRunner::run(
                                 interruptTimeout
                             );
                     }();
+                    // HIL 未响应 (无处理者/超时/过期): 不写回 resume 值,
+                    // 由外层按"中断未完成"处理; 取消标记则直接抛取消,
+                    // 不再 resume (否则"打断后马上自动恢复")
                     if (resp.has_value() && resp->handled) {
                         auto rid = interruptArg.resultId;
                         if (rid.empty()) {
                             rid = std::to_string(argIndex);
                         }
                         resumeValues[rid] = neograph::json::parse(resp->resultJson);
+                    } else if (
+                        resp.has_value() && !resp->handled
+                        && resp->resultJson.find("__cancelled__") != std::string::npos) {
+                        throw neograph::graph::CancelledException("HIL interrupted by cancel");
                     }
                 }
             }
@@ -215,9 +247,23 @@ asio::awaitable<AgentRunner::Outcome> AgentRunner::run(
 
             co_await fOnBeforeResume();
 
+            // 取消检查: 中断处理完成、resume 前若令牌已取消则直接抛取消,
+            // 不再恢复执行 (否则表现为"打断后马上自动恢复继续执行")
+            if (cancelToken && cancelToken->is_cancelled()) {
+                throw neograph::graph::CancelledException("cancelled before resume");
+            }
+
             // 恢复执行中断点, 直接回到触发中断的 Node
+            // - 必须携带 cancel_token: 否则 resume 出的新 run 无取消能力,
+            //   后续 llm/toolcall 的取消埋点 (if cancel_token) 全部跳过,
+            //   在途 HTTP 也无法被打断, 表现为"压缩完成后怎么都停不下来"
+            neograph::graph::RunConfig resumeCfg;
+            resumeCfg.thread_id     = std::string{sessionId};
+            resumeCfg.cancel_token  = cancelToken;
+            resumeCfg.stream_mode   = resumeStreamMode;
+            resumeCfg.max_steps     = resumeMaxSteps;
             result = co_await engine->resume_async(
-                std::string{sessionId},
+                std::move(resumeCfg),
                 neograph::json{},
                 hooks.eventCallback
             );
