@@ -81,8 +81,7 @@
 |---|---|---|---|---|
 | agentxx_codegraph | 37.1M | 38.4M | 37.6M | 代码分析定位，方便LLM快速查找代码中的函数、变量等符号的定义和引用 |
 | agentxx_computer_use | 525K | - | - | 提供 tool 支持控制鼠标、键盘 |
-| agentxx_execute_command | 1.7M | 7.2M | - | Bash/powershell 命令行执行 |
-| agentxx_execute_javascript | 140K | 143K | - | 示例 Javascript版 agentxx_execute_command |
+| agentxx_execute_command | 1.7M | 1.9M | - | Bash/powershell 命令行执行 |
 | agentxx_filesystem | 9.3M | 14M | - | 文件读写 List/Read/Write/Edit/Glob/Grep |
 | agentxx_javascript_engine | 1.1M | 1.4M | 1.1M | Javascript代码执行引擎，可以依赖该插件实现JS插件 |
 | agentxx_math | 347K | 413K | - | 数学计算工具 |

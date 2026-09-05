@@ -108,8 +108,8 @@ target_include_directories(${PLUGIN_NAME} PRIVATE
 )
 
 # 裸库名依赖解析目录 (与 lib 一致): neograph 系/yyjson/hs_runtime 位于
-# AGENTXX_INSTALL_DIR/lib; OpenSSL 预构建归档目录供下方 ELF 尾部兜底裸名
-# (crypto/ssl) 解析
+# AGENTXX_INSTALL_DIR/lib; OpenSSL 预构建目录 (正序依赖经 imported target
+# 绝对路径链接, 此处仅为兜底解析保留)
 target_link_directories(${PLUGIN_NAME} PRIVATE
   "${AGENTXX_INSTALL_DIR}/lib/"
   "${OPENSSL_ROOT_DIR}/lib64"
@@ -148,30 +148,6 @@ if (XX_IS_WIN_D)
   # ui_control: 鼠标/键盘注入与光标查询 (user32)
   target_link_libraries(${PLUGIN_NAME} PRIVATE user32)
 endif()
-if (NOT XX_IS_WIN_D)
-  # ELF (GNU ld/lld) 单遍扫描无法自解析相互引用的静态归档成员 (libhs↔
-  # libcrypto、util↔html2md/neograph); 尾部以裸库名重复提供打破循环
-  # (裸名字符串不被 CMake 去重, 等价于原先的绝对路径补链; MSVC 多遍解析
-  # 无需此兜底), 解析目录由上方 target_link_directories 提供
-  set(_tail_libs crypto ssl)
-  if (AGENTXX_ENABLE_HYPERSCAN)
-    list(APPEND _tail_libs hs hs_runtime)
-  endif()
-  if (AGENTXX_LINUX_IO_URING_SUPPORTED)
-    list(APPEND _tail_libs uring)
-  endif()
-  list(APPEND _tail_libs
-    neograph_sqlite neograph_acp neograph_mcp neograph_mcp_types neograph_async neograph_llm neograph_core yyjson)
-  # group 迭代扫描: crypto/ssl↔hs↔neograph 归档成员相互引用链较长, 单遍
-    # 扫描两次不足以收敛, start-group 让 ld 反复解析直至无新未定义符号
-    target_link_libraries(${PLUGIN_NAME} PRIVATE
-      "-Wl,--start-group"
-      ${_tail_libs}
-      "-Wl,--end-group"
-    )
-  unset(_tail_libs)
-endif()
-
 set_target_properties(${PLUGIN_NAME} PROPERTIES
   PREFIX "lib"
   CXX_STANDARD 26
