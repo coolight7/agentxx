@@ -7,8 +7,10 @@
 - 冻结 system prompt
 - OpWatchdog debug 时启用、配置启用
 
-- 修复 linux LTO 错误
 - agent-io 的 server-client 改为一对多
+- 链式 session 任务队列
+- 修改 tui 多语言支持增加自动判断当前系统环境
+- 修复测试错误
 
 ## 提示词优化
 - 如果编译需要配置特定参数，写成脚本或者写入到AGENTS.md

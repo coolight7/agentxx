@@ -379,11 +379,16 @@ else ()
   set(_AGENTXX_CXX_FLAGS "${_AGENTXX_COMMON_C_CXX_FLAGS} ${_AGENTXX_CXX_FLAGS} -fvisibility=default -ffunction-sections -fdata-sections -Wall -fPIC -pipe -include cstddef")
   
   # 交叉编译到 Windows (MinGW) 时禁用 LTO: 旧版 bfd ld 无 LLVMgold 插件, 无法链接 -flto 产生的 LLVM bitcode
-  # (需 lld 才能处理, 但为简化 hermetic 构建, 直接禁用 LTO, 仅影响 Release 性能, 不影响功能)
+  # - 需 lld 才能处理, 但为简化 hermetic 构建, 直接禁用 LTO
   if (CMAKE_CROSSCOMPILING AND CMAKE_SYSTEM_NAME STREQUAL "Windows")
     set(_AGENTXX_LTO_FLAGS "")
+  elseif (XX_IS_GCC_D)
+    # GCC 下 -flto 会导致 lto-wrapper 默认以单线程串行编译全部 LTRANS 任务
+    # (触发 "warning: using serial compilation of N LTRANS jobs"), 耗时达数十分钟且易超时;
+    # 使用 -flto=auto 启用多核并行 LTO 代码生成
+    set(_AGENTXX_LTO_FLAGS "-flto=auto")
   else()
-    set(_AGENTXX_LTO_FLAGS "-flto")
+    set(_AGENTXX_LTO_FLAGS "-flto=thin")
   endif()
   set(CMAKE_C_FLAGS_RELEASE          "${_AGENTXX_C_FLAGS}   -O3 ${_AGENTXX_LTO_FLAGS} ${CMAKE_C_FLAGS_RELEASE}")
   set(CMAKE_CXX_FLAGS_RELEASE        "${_AGENTXX_CXX_FLAGS} -O3 ${_AGENTXX_LTO_FLAGS} ${CMAKE_CXX_FLAGS_RELEASE}")
@@ -410,7 +415,11 @@ else ()
   endif()
   if (XX_IS_GCC_D)
     # GCC 16+ 编译 C++26 模板/协程时默认 gc 阈值过小易触发编译器 ICE (gt_ggc_mx_lang_tree_node), 放宽 gc 阈值
-    string(APPEND _AGENTXX_DEBUG_EXTRA_FLAGS " --param ggc-min-expand=100 --param ggc-min-heapsize=1048576")
+    set(_AGENTXX_GCC_GC_FLAGS "--param ggc-min-expand=100 --param ggc-min-heapsize=1048576")
+    string(APPEND _AGENTXX_DEBUG_EXTRA_FLAGS " ${_AGENTXX_GCC_GC_FLAGS}")
+    string(APPEND CMAKE_CXX_FLAGS_RELEASE " ${_AGENTXX_GCC_GC_FLAGS}")
+    string(APPEND CMAKE_C_FLAGS_RELEASE " ${_AGENTXX_GCC_GC_FLAGS}")
+    unset(_AGENTXX_GCC_GC_FLAGS)
   endif()
   set(CMAKE_C_FLAGS_DEBUG            "${_AGENTXX_C_FLAGS}   ${_AGENTXX_DEBUG_EXTRA_FLAGS} ${CMAKE_C_FLAGS_DEBUG}")
   set(CMAKE_CXX_FLAGS_DEBUG          "${_AGENTXX_CXX_FLAGS} ${_AGENTXX_DEBUG_EXTRA_FLAGS} ${CMAKE_CXX_FLAGS_DEBUG}")
@@ -1165,6 +1174,9 @@ if (AGENTXX_ENABLE_HYPERSCAN)
 endif()
 if (AGENTXX_ENABLE_PLUGIN_CODEGRAPH)
   add_dependencies(agentxx_lib_repo codegraph_repo)
+endif()
+if (AGENTXX_ENABLE_PLUGIN_JS)
+  add_dependencies(agentxx_lib_repo quickjs_repo)
 endif()
 
 if (AGENTXX_BUILD_CLIENT)

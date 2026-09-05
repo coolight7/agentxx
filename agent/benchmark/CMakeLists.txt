@@ -139,7 +139,9 @@ endif()
 
 if (NOT XX_IS_WIN_D)
   target_link_libraries(agentxx_benchmark PRIVATE ${CMAKE_DL_LIBS})
-  target_link_options(agentxx_benchmark PRIVATE "-flto=auto")
+  if (XX_IS_GCC_D)
+    target_link_options(agentxx_benchmark PRIVATE "-flto=auto")
+  endif()
 endif()
 
 if (XX_IS_MSVC_D)

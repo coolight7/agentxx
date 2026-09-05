@@ -512,62 +512,59 @@ asio::awaitable<std::string> SummarizationMiddlewareHandle::doSummarizeWithLLM(
         // 与中断路径复用同一 spawnOneTask (同上下文模式语义一致: 相同
         // sessionId + 父会话模型 → KV cache 命中), 不抛中断。
         auto host = agentCtxPtr->host.lock();
-        if (nullptr == host) {
-            XX_LOGE("SummarizationMiddlewareHandle 手动压缩失败: AgentHost 不可用 "
-                    "(AgentContext::host 为空), 无法派生压缩子代理");
-            co_return "";
-        }
+        if (host != nullptr) {
+            // 单任务批量请求; tools=[] 显式无工具 (与压缩注释意图一致, 避免
+            // 子代理默认全量工具的执行成本与副作用), enable_summarization=false
+            // 禁止二次压缩, sessionId=父线程 (同上下文模式)
+            events::ReqSubagentBatch batchReq;
+            batchReq.parentAgentName
+                = agentCtxPtr->agentConfig ? agentCtxPtr->agentConfig->agentName : std::string{};
+            batchReq.parentSessionId = std::string{sessionId};
+            batchReq.tasks.push_back(events::SubagentBatchItem{
+                .subagentName = "subagent_task",
+                .messages     = reqMsgsJson, // 结构化透传 (含压缩指令), 无文本转录
+                .sessionId    = std::string{sessionId},
+                .tools        = neograph::json::array(), // []: 无工具
+                .enableSummarization = false,
+            });
 
-        // 单任务批量请求; tools=[] 显式无工具 (与压缩注释意图一致, 避免
-        // 子代理默认全量工具的执行成本与副作用), enable_summarization=false
-        // 禁止二次压缩, sessionId=父线程 (同上下文模式)
-        events::ReqSubagentBatch batchReq;
-        batchReq.parentAgentName
-            = agentCtxPtr->agentConfig ? agentCtxPtr->agentConfig->agentName : std::string{};
-        batchReq.parentSessionId = std::string{sessionId};
-        batchReq.tasks.push_back(events::SubagentBatchItem{
-            .subagentName = "subagent_task",
-            .messages     = reqMsgsJson, // 结构化透传 (含压缩指令), 无文本转录
-            .sessionId    = std::string{sessionId},
-            .tools        = neograph::json::array(), // []: 无工具
-            .enableSummarization = false,
-        });
-
-        // 超时保护: 手动压缩无父轮次取消令牌可级联, 子代理 LLM 卡住时不能
-        // 无限等待 (占用 io 线程); 超时放弃等待 (子代理后台完成自回收),
-        // 返回空串由调用方走 hardTruncate 兜底
-        constexpr std::chrono::milliseconds kManualCompactTimeout{std::chrono::minutes{2}};
-        auto batchResp = co_await agentxx::util::asyncWithTimeout<events::RespSubagentBatch>(
-            [&]() -> asio::awaitable<events::RespSubagentBatch> {
-                co_return co_await host->spawnBatch(batchReq, agentCtxPtr);
-            },
-            kManualCompactTimeout,
-            []() -> events::RespSubagentBatch {
-                return events::RespSubagentBatch{};
+            // 超时保护: 手动压缩无父轮次取消令牌可级联, 子代理 LLM 卡住时不能
+            // 无限等待 (占用 io 线程); 超时放弃等待 (子代理后台完成自回收),
+            // 返回空串由调用方走 hardTruncate 兜底
+            constexpr std::chrono::milliseconds kManualCompactTimeout{std::chrono::minutes{2}};
+            auto batchResp = co_await agentxx::util::asyncWithTimeout<events::RespSubagentBatch>(
+                [&]() -> asio::awaitable<events::RespSubagentBatch> {
+                    co_return co_await host->spawnBatch(batchReq, agentCtxPtr);
+                },
+                kManualCompactTimeout,
+                []() -> events::RespSubagentBatch {
+                    return events::RespSubagentBatch{};
+                }
+            );
+            if (batchResp.results.empty()) {
+                XX_LOGW("SummarizationMiddlewareHandle 手动压缩: 子代理无结果 (超时或失败)");
+                co_return "";
             }
-        );
-        if (batchResp.results.empty()) {
-            XX_LOGW("SummarizationMiddlewareHandle 手动压缩: 子代理无结果 (超时或失败)");
-            co_return "";
+            const auto& item = batchResp.results[0];
+            if (item.hasError) {
+                XX_LOGE(
+                    "SummarizationMiddlewareHandle 手动压缩 subagent 执行失败: {}",
+                    item.errorMessage
+                );
+                co_return "";
+            }
+            // 错误串透传防护 (与中断路径一致): 不得把错误串当摘要写回
+            if (item.content.size() >= 2 && item.content.front() == '{'
+                && item.content.find("\"error\"") != std::string::npos) {
+                XX_LOGW(
+                    "SummarizationMiddlewareHandle 手动压缩结果为错误串, 按失败处理: {}",
+                    std::string_view{item.content}.substr(0, 256)
+                );
+                co_return "";
+            }
+            co_return item.content;
         }
-        const auto& item = batchResp.results[0];
-        if (item.hasError) {
-            XX_LOGE(
-                "SummarizationMiddlewareHandle 手动压缩 subagent 执行失败: {}",
-                item.errorMessage
-            );
-            co_return "";
-        }
-        // 错误串透传防护 (与中断路径一致): 不得把错误串当摘要写回
-        if (item.content.size() >= 2 && item.content.front() == '{'
-            && item.content.find("\"error\"") != std::string::npos) {
-            XX_LOGW(
-                "SummarizationMiddlewareHandle 手动压缩结果为错误串, 按失败处理: {}",
-                std::string_view{item.content}.substr(0, 256)
-            );
-            co_return "";
-        }
-        co_return item.content;
+        // 无 host 时 (如单测 mock 环境), 降级走总线请求
     }
 
     auto args = neograph::json{
@@ -796,9 +793,7 @@ asio::awaitable<void>
             );
 
             /// llm 压缩 (同上下文 subagent, 中断后由 Session 派生并 resume)
-            // 手动压缩在 agent 空闲时触发 (无 AgentRunner 中断循环), 不能走
-            // NodeInterrupt 中断委派 (无人处理会逃逸 detached 被吞), 直派模式
-            auto summary = co_await doSummarizeWithLLM(sessionId, toSummarize, /*direct=*/true);
+            auto summary = co_await doSummarizeWithLLM(sessionId, toSummarize, /*direct=*/false);
 
             enum class ReplaceAction {
                 None,
@@ -1054,7 +1049,9 @@ asio::awaitable<bool>
             std::move_iterator(oldMessages.end())
         );
 
-        auto summary = co_await doSummarizeWithLLM(sessionId, toSummarize);
+        // 手动压缩在 agent 空闲时触发 (无 AgentRunner 中断循环), 不能走
+        // NodeInterrupt 中断委派 (无人处理会逃逸 detached 被吞), 直派模式
+        auto summary = co_await doSummarizeWithLLM(sessionId, toSummarize, /*direct=*/true);
         if (!summary.empty()) {
             if (systemCount > 0) {
                 compressedMessages.push_back(messages[0]);
