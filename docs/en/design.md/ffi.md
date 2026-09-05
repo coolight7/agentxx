@@ -1,5 +1,3 @@
-> 文档自动翻译自[zh-cn](/docs/zh-cn/design.md/ffi.md)版 (This document is automatically translated from the [zh-cn](/docs/zh-cn/design.md/ffi.md) version.)
-
 # libagentxx FFI C API Export Layer
 
 > Implemented and verified by tests (`agentxx_test ffi_c_api`)

@@ -1,5 +1,3 @@
-> 文档自动翻译自[zh-cn](/docs/zh-cn/design.md/index.md)版 (This document is automatically translated from the [zh-cn](/docs/zh-cn/design.md/index.md) version.)
-
 # Agentxx Comprehensive Architecture Design Document
 > Related docs: [design.md](index.md) (Architecture) · [plugins.md](plugins.md) (Pure C ABI Plugin Paradigm) · [ffi.md](ffi.md) (FFI Interface Design)
 
@@ -1042,205 +1040,291 @@ deps::DependencyContainer
 
 ```
 agent/
-├── lib/                          # Core libagentxx library
+├── lib/                          # libagentxx core library
 │   ├── include/agentxx/
-│   │   ├── agentxx.h             # Master library header
-│   │   ├── ffi_api.h             # Pure C ABI FFI export contract (stable cross-language interface; see ffi.md)
+│   │   ├── agentxx.h             # Umbrella library header
+│   │   ├── ffi_api.h             # FFI pure C ABI export contract (sole cross-language stable interface; see ffi.md)
 │   │   ├── agent/                # Agent Core
-│   │   │   ├── base_agent.h      # BaseAgent base class (infrastructure, ReAct loop, session management)
-│   │   │   ├── code_agent.h      # CodeAgent (inherits BaseAgent, adds programming tools and middlewares)
-│   │   │   ├── agent_host.h      # AgentHost process-level host (manages root agent and subagents as peers)
-│   │   │   │                     #   AgentNode / AgentRegistry / spawnBatch / HostBus / A2A bridge
-│   │   │   ├── agent_runner.h    # AgentRunner unified "run + interrupt + resume" execution loop
-│   │   │   ├── config.h          # AgentConfig / ModelConfig configurations
+│   │   │   ├── base_agent.h      # BaseAgent base class (core infrastructure + ReAct loop + session execution)
+│   │   │   ├── code_agent.h      # CodeAgent (inherits BaseAgent, programming tools/middlewares)
+│   │   │   ├── agent_host.h      # AgentHost process-level host (primary agent & subagents register/derive/reclaim peer-to-peer)
+│   │   │   │                     #   AgentNode / AgentRegistry / spawnBatch / HostBus / A2A bridging
+│   │   │   ├── agent_runner.h    # AgentRunner unified "engine run + interrupt handle + resume" loop (shared by primary & subagents)
+│   │   │   ├── config.h          # AgentConfig / ModelConfig configuration
 │   │   │   ├── config_static.h   # Static paths configuration
 │   │   │   ├── context.h         # AgentContext / Session / SessionsManager / ContextStats
-│   │   │   │                     #   Session: thread binding (viewMessages/chainHash single-thread access)
-│   │   │   ├── checkpoint_store.h # Single checkpoint storage: SingleCheckpointStore strategy base +
-│   │   │   │                     #   InMemorySingleCheckpointStore (retains latest per thread,
-│   │   │   │                     #   auto-evicts history on save, O(super-steps) -> O(threads))
+│   │   │   │                     #   Session: thread-bound (viewMessages / chainHash read/write on single thread)
+│   │   │   ├── checkpoint_store.h # Single checkpoint store: SingleCheckpointStore policy base class +
+│   │   │   │                     #   InMemorySingleCheckpointStore (only newest per thread, auto-prunes history on save: O(super-steps) -> O(threads))
 │   │   │   ├── conversation_types.h # Delta (NodeStart/End/seq/timing) / SyncPayload /
-│   │   │   │                     #   ViewMessage (UI presentation message, role-specific sub-structs) /
+│   │   │   │                     #   ViewMessage (UI presentation message with role-specific substructures) /
 │   │   │   │                     #   ChainHash / AppendComponentNotification
 │   │   │   ├── model_registry.h  # ModelProviderRegistry (runtime model switching)
-│   │   │   ├── session_store.h   # SQLite session persistence: single session.db
-│   │   │   │                     #   (view_message/llm_context/meta/store tables), per-sessionId
-│   │   │   │                     #   directories, non-creating reads
+│   │   │   ├── session_store.h   # Session SQLite persistence: single database session.db
+│   │   │   │                     #   (view_message/llm_context/meta/store four tables, including share store KV),
+│   │   │   │                     #   partitioned by sessionId directory, read paths never create empty directories
 │   │   │   ├── prompt.h          # AgentPrompt / ToolPrompt prompt management
-│   │   │   ├── training.h        # EvolutionTrainingAgent (mutation, evaluation, optimization, convergence)
-│   │   │   └── io/               # Remote Communication & IO Endpoints
-│   │   │       ├── agent_server.h    # AgentServer (WS server with token auth; serveTransport for in-process)
-│   │   │       ├── session_server_agent_io.h # SessionServerAgentIO (session driver, delta buffering, grace,
+│   │   │   ├── training.h        # EvolutionTrainingAgent evolutionary training (mutate/evaluate/optimize/convergence checks)
+│   │   │   └── io/               # Remote Communication
+│   │   │       ├── agent_server.h    # AgentServer (WS server with token authentication; serveTransport for in-process reuse)
+│   │   │       ├── session_server_agent_io.h # SessionServerAgentIO (session driver, delta buffering/replay, grace timer,
 │   │   │       │                          #   server message queue, plugin event forwarding via WirePluginData)
-│   │   │       ├── wire_protocol.h   # Wire Protocol message schemas and serialization
-│   │   │       ├── agent_io.h        # AgentIOBase endpoint base class (client/server contract)
-│   │   │       ├── client_event_sink.h # Client event sink (forwards endpoint events to client plugins)
-│   │   │       ├── agent_io_transport.h # Transport abstraction base class (connect/recv/send/close/alive)
-│   │   │       ├── channel_io_transport.h # In-process zero-serialization Channel transport
-│   │   │       └── ws_io_transport.h  # WebSocket transport (JSON codec, heartbeat, auto-reconnect)
+│   │   │       ├── wire_protocol.h   # Wire Protocol message types and serialization
+│   │   │       ├── agent_io.h        # AgentIOBase endpoint base class (client/server operational contract)
+│   │   │       ├── client_event_sink.h # Client event sink (forwards endpoint events to client plugin system)
+│   │   │       ├── agent_io_transport.h # Transport layer abstract base class (connect/recv/send/close/alive)
+│   │   │       ├── channel_io_transport.h # In-process Channel transport (zero-copy / zero-serialization)
+│   │   │       └── ws_io_transport.h  # WebSocket transport (JSON codec / heartbeats / reconnection)
 │   │   ├── deps/                 # Dependency Injection
-│   │   │   └── injector.h        # DependencyContainer (factory, singleton, named registries)
-│   │   ├── event/                # Strongly-Typed Event System
-│   │   │   ├── events.h          # Event definitions (Topic namespaces, event structs)
+│   │   │   └── injector.h        # DependencyContainer (factory / singleton / named registrations)
+│   │   ├── event/                # Strongly-typed Event System
+│   │   │   ├── events.h          # Event type definitions (Topic namespace / Event structs)
 │   │   │   ├── event_stream.h    # EventBus / EventStream / RequestResponseStream
-│   │   │   └── event_host.h      # HostBus event definitions (agent.spawn/message/progress/done)
+│   │   │   └── event_host.h      # HostBus event types (agent.spawn/message/progress/done)
 │   │   ├── nodes/                # Graph Nodes
 │   │   │   ├── wrap_handle.h     # WrapHandleBaseNode stacked middleware base class
-│   │   │   ├── modelcall.h       # ModelCallWrapNode (LLM invocations, dynamic model switching)
-│   │   │   ├── toolcall.h        # ToolcallWrapNode (tool dispatch, automatic compression)
+│   │   │   ├── modelcall.h       # ModelCallWrapNode (LLM invocation, dynamic model switching)
+│   │   │   ├── toolcall.h        # ToolcallWrapNode (tool dispatch, automatic output compaction)
 │   │   │   └── agentcall.h       # AgentStart/EndCallWrapNode (session lifecycle hooks)
-│   │   ├── plugin/               # Plugin System (native C++ plugins, pure C ABI, API v1: frozen core vtable + 16 agent tables + 7 client tables)
-│   │   │   ├── api/              # Public plugin headers (C ABI contract + SDK; included via api/ prefix)
-│   │   │   │   ├── plugin_api.h      # Pure C ABI contract (frozen core vtable + COM QueryInterface; see plugins.md)
+│   │   ├── plugin/               # Plugin System (hot-swappable native C++ plugins, pure C ABI, API v1 — frozen core vtable + 16 agent tables + 7 client tables)
+│   │   │   ├── api/              # Plugin API headers (shared C ABI contract + plugin SDK; host references use api/ prefix)
+│   │   │   │   ├── plugin_api.h      # Pure C ABI contract (sole cross-version stable interface; see plugins.md) — frozen core vtable + COM QueryInterface
 │   │   │   │   ├── client_plugin_api.h # Client-side plugin pure C ABI contract (UI-agnostic semantic layer)
-│   │   │   │   ├── plugin_kit.h      # C++ SDK header-only (PluginBase/Task/awaiters/tools/hooks/spawn in agentxx::plugin; includes former iface aggregation + sync adapters)
-│   │   │   │   └── plugin_guard.h    # Plugin C ABI boundary exception handler header-only
+│   │   │   │   ├── plugin_kit.h      # C++ SDK header-only (PluginBase/Task/awaiters/tool/hook/capability/spawn under namespace agentxx::plugin; includes interface table aggregation & sync tool adapters)
+│   │   │   │   └── plugin_guard.h    # Exception boundary handling header-only for C ABI (namespace agentxx::plugin)
 │   │   │   ├── op_driver.h       # Async operation driver (AgentxxOpNotify Done protocol)
 │   │   │   ├── plugin_manager.h  # PluginManager lifecycle (load/enable/disable/unload) /
-│   │   │   │                     #   PluginTool (C callback → thread-pool execution) /
-│   │   │   │                     #   PluginMiddlewareHandle (7 hooks → C callbacks) /
-│   │   │   │                     #   CapabilityRegistry / NativeLoader (dlopen ↔ LoadLibraryW)
-│   │   │   ├── plugin_manager_base.h # Common plugin manager base (shared agent/client: instances, IO dispatch, memory)
+│   │   │   │                     #   PluginTool (C callback -> thread pool offload execution) /
+│   │   │   │                     #   PluginMiddlewareHandle (7 hooks -> C callbacks) /
+│   │   │   │                     #   CapabilityRegistry / NativeLoader (dlopen <-> LoadLibraryW)
+│   │   │   ├── plugin_manager_base.h # Common base class for plugin managers (shared by agent/client: instance base, IO posting, waiting, memory management pair)
 │   │   │   ├── plugin_common.h   # Host-side common plugin utilities
 │   │   │   ├── client_plugin_manager.h # ClientPluginManager (client-side loading, UI registry, command pipeline)
-│   │   │   └── tool_registry.h   # Dynamic plugin tool lookup (shared_ptr lifecycle, static name collision checks)
+│   │   │   └── tool_registry.h   # Dynamic plugin tool lookup table (shared_ptr keepalive, static tool name conflict detection)
 │   │   ├── middlewares/          # Middlewares
 │   │   │   ├── middleware.h      # BaseMiddlewareHandle / MiddlewareContext / State base classes
-│   │   │   ├── permission.h      # PermissionMiddleware (tool permission HITL)
-│   │   │   ├── skill.h           # SkillMiddleware (skill discovery and loading)
-│   │   │   ├── memory_file.h     # MemoryFileMiddleware (context memory injection)
-│   │   │   ├── subagent_manager.h # SubagentManagerMiddleware (owns agentxx_subagent)
+│   │   │   ├── permission.h      # PermissionMiddleware (tool invocation permission HITL)
+│   │   │   ├── skill.h           # SkillMiddleware (skill discovery and execution)
+│   │   │   ├── memory_file.h     # MemoryFileMiddleware (context memory files injection)
+│   │   │   ├── subagent_manager.h # SubagentManagerMiddleware (subagent delegation management, owns agentxx_subagent)
 │   │   │   └── summarization.h   # SummarizationMiddleware (context compaction)
-│   │   ├── tools/                # Tools (core keeps share_store/subagent/tool_skill_search template/git_worktree;
-│   │   │                         #   filesystem/command/web/RAG/string/datetime/planning moved to plugins)
+│   │   ├── tools/                # Tools (lib only retains share_store / subagent / tool_skill_search template / git_worktree;
+│   │   │                         #   filesystem, command, websearch, RAG, string, system datetime, and planning migrated to independent plugins under agent/plugins/)
 │   │   │   ├── tool.h            # XXToolBase / XXToolWrap tool base classes
-│   │   │   ├── share_store.h     # Session text storage (agentxx_share_store)
+│   │   │   ├── share_store.h     # Session-level variable storage (agentxx_share_store)
 │   │   │   ├── subagent.h        # Subagent management tool (agentxx_subagent)
-│   │   │   ├── tool_skill_search.h # Lazy tool/skill search task template (not a standalone tool)
-│   │   │   └── git_worktree.h    # Git Worktree tool (create/info/status/remove)
+│   │   │   ├── tool_skill_search.h # Tool/skill lazy-retrieval search subagent task (logic inlined; currently not registered as standalone tool)
+│   │   │   └── git_worktree.h    # Git Worktree tool (create/info/status/remove; enabled via YAML worktree.enable)
 │   │   ├── protocol/             # Protocol Implementations
-│   │   │   ├── openai_provider.h  # OpenAI Chat Completions API (streaming/non-streaming/SSE)
-│   │   │   ├── anthropic_provider.h # Anthropic Messages API (thinking/tool_use)
+│   │   │   ├── openai_provider.h  # OpenAI Chat Completions API (streaming / non-streaming / SSE)
+│   │   │   ├── anthropic_provider.h # Anthropic Messages API (thinking / tool_use)
 │   │   │   ├── mcp_client.h      # MCP Client (HTTP SSE + stdio, multi-version negotiation)
 │   │   │   ├── mcp_server.h      # MCP Server (HTTP + stdio, tool/resource/prompt)
 │   │   │   ├── a2a_client.h      # A2A Client (Agent Card / SendMessage / Task management)
-│   │   │   ├── a2a_server.h      # A2A Server (JSON-RPC, task state machines)
+│   │   │   ├── a2a_server.h      # A2A Server (JSON-RPC, task state machine)
 │   │   │   ├── acp_server.h      # ACP Server (stdio mode)
-│   │   │   └── protocol_base.h   # Protocol base classes
-│   │   └── util/                 # Utility Classes
-│   │       ├── log.h             # Logging system (XX_LOG macros, LogDispatcher, LogSink)
-│   │       ├── string_util.h     # String utilities (encoding conversion, normalization, base64, natural sort)
-│   │       ├── http_client.h     # HTTP Client based on Boost.Beast (keep-alive pool, per-endpoint concurrency limit,
-│   │       │                     #   per-io_context connection bucketing via HttpPoolContextGuard)
-│   │       ├── http_server.h     # HTTP Server (routing, WS, SSE, SSL)
-│   │       ├── http_header.h     # HeaderMap (case-insensitive HTTP header management)
+│   │   │   └── protocol_base.h   # Protocol base class
+│   │   └── util/                 # Utilities
+│   │       ├── log.h             # Logging system (XX_LOG macro, LogDispatcher, LogSink)
+│   │       ├── string_util.h     # String utilities (encoding conversion, path normalization, base64, natural sort, IgnoreCaseMap, etc.)
+│   │       ├── http_client.h     # HTTP Client (Boost.Beast based)
+│   │       │                     #   Connection pool: keep-alive idle connection reuse + per-endpoint concurrency cap
+│   │       │                     #   (maxConcurrentConnections, default 5); auto-retries on stale connection failure;
+│   │       │                     #   Idle connections bucketed by io_context (cross-context socket reuse is UB);
+│   │       │                     #   HttpPoolContextGuard service releases idle connections when io_context destructs,
+│   │       │                     #   preventing dangling reactor use-after-free bugs
+│   │       ├── http_server.h     # HTTP Server (routing / WS / SSE / SSL)
+│   │       ├── http_header.h     # HeaderMap (case-insensitive HTTP header container)
 │   │       ├── ws_client.h       # WebSocket Client
 │   │       ├── exception.h       # Exception handling utilities
 │   │       ├── lru_cache.h       # LRU Cache
 │   │       ├── diff_util.h       # Line-level diff (unified diff format)
-│   │       ├── regex.h           # Regex engine (Hyperscan)
-│   │       ├── aho_corasick.h    # Aho-Corasick multi-pattern string matching
+│   │       ├── regex.h           # Regular expression engine (Hyperscan)
+│   │       ├── aho_corasick.h    # Aho-Corasick multi-pattern search
 │   │       ├── router.h          # HTTP Router
-│   │       ├── sqlite.h          # SQLite RAII wrapper (SqliteDb/Stmt, WAL + busy_timeout)
+│   │       ├── sqlite.h          # Lightweight RAII SQLite wrapper (SqliteDb/Stmt, WAL + busy_timeout)
 │   │       ├── async_mutex.h     # Coroutine-aware async mutex (based on concurrent_channel)
-│   │       ├── async_offload.h   # Thread-pool offloading (offloadAsync/offloadCancellableAsync)
-│   │       ├── worktree.h        # Git worktree wrapper (direct argv execution with timeout termination)
-│   │       └── util.h            # General system detection utilities
-│   └── src/                      # Source implementations (mirrors include directory hierarchy)
+│   │       ├── async_offload.h   # Thread-pool blocking offload (offloadAsync /
+│   │       │                     #   offloadCancellableAsync / asyncWithTimeout)
+│   │       ├── worktree.h        # Git worktree encapsulation (direct argv invocation / process group timeout termination)
+│   │       └── util.h            # General utilities (system detection, etc.)
+│   └── src/                      # Source files (mirrors include directory structure)
 │
-├── client/                       # agentxx_cli Executable
-│   ├── main.cpp                  # CLI entry: argument parsing → config loading → mode dispatch
+├── client/                       # agentxx_cli executable
+│   ├── main.cpp                  # Entry point: argument parsing -> config loading -> mode dispatch
 │   ├── include/agentxx-client/
-│   │   ├── config_loader.h       # YAML config loading, .env parsing, variable expansion
-│   │   ├── mode_runners.h        # Execution mode dispatchers (local/remote × tui/cli)
+│   │   ├── config_loader.h       # YAML configuration loading / .env parsing / environment variable expansion
+│   │   ├── mode_runners.h        # Execution mode runners (local/remote × tui/cli unified invocation)
 │   │   ├── io/
 │   │   │   ├── stdio/
 │   │   │   │   ├── agent_stdio.h # StdIOClientAgentIO (stdin/stdout interaction)
-│   │   │   │   ├── cli_plugin_adapter.h # CLI plugin adapter (command pipeline/event forwarding)
+│   │   │   │   ├── cli_plugin_adapter.h # CLI plugin adapter (command pipeline / client event forwarding)
 │   │   │   │   └── stdin_reader.h # Asynchronous stdin reader
 │   │   │   └── tui/
-│   │   │       ├── agent_tui.h   # TUIClientAgentIO (FTXUI UI, rendering, input queues, dialogs)
-│   │   │       ├── tui_plugin_adapter.h # TUI plugin adapter (UI registry/command pipeline/events)
-│   │   │       ├── scrollable.h  # Scrollable (full-build scroll container for sidebars)
-│   │   │       ├── lazy_scrollable.h # LazyScrollable (virtual lazy rendering + LRU bounded cache)
-│   │   │       ├── tui_theme.h   # TUI theme palettes
+│   │   │       ├── agent_tui.h   # TUIClientAgentIO (FTXUI terminal UI: reception/rendering/queues/permissions/logging)
+│   │   │       ├── tui_plugin_adapter.h # TUI plugin adapter (UI registry / command pipeline / client event forwarding)
+│   │   │       ├── scrollable.h  # Scrollable (fully-constructed scrollable container for short lists such as sidebars)
+│   │   │       ├── lazy_scrollable.h # LazyScrollable (lazy construction + bounded LRU cache + viewport partial rendering)
+│   │   │       ├── tui_theme.h   # TUI theme styling and palettes
 │   │   │       ├── framework/    # TUI Framework Layer
-│   │   │       │   ├── tui_state.h       # TUI state aggregation
-│   │   │       │   ├── tui_context.h     # TUI rendering context (theme, state, dimensions)
-│   │   │       │   ├── tui_settings.h    # TUI global settings singleton
-│   │   │       │   └── modal_container.h # Overlay modal containers
-│   │   │       └── components/   # TUI UI Components
+│   │   │       │   ├── tui_state.h       # Aggregated TUI state (messages, sidebar, pending input queue, etc.)
+│   │   │       │   ├── tui_context.h     # TUI rendering context (theme / state / terminal dimensions)
+│   │   │       │   ├── tui_settings.h    # Global TUI settings singleton (theme / animation / log level)
+│   │   │       │   └── modal_container.h # Modal dialog container (permission / interrupt popups)
+│   │   │       └── components/   # TUI Render Components
 │   │   │           ├── message_list.h # Message list rendering
-│   │   │           ├── sidebar.h      # Right-hand sidebar (logs, info, planning)
-│   │   │           ├── overlays.h     # Overlays (permissions, interrupts, model picker)
-│   │   │           ├── input_bar.h    # Input bar
-│   │   │           ├── status_bar.h   # Status bar (token metrics, activity state)
-│   │   │           └── spinner.h      # Loading spinner
-│   │   ├── train/                # Training mode
-│   │   └── util/                 # Client utilities
-│   └── src/                      # Source files matching headers
+│   │   │           ├── sidebar.h      # Right-hand sidebar (Log / Info / Planning tabs)
+│   │   │           ├── overlays.h     # Overlays (Permissions / Interrupts / Model Selector)
+│   │   │           ├── input_bar.h    # Input entry bar
+│   │   │           ├── status_bar.h   # Status bar (token context utilization / activity status)
+│   │   │           └── spinner.h      # Loading spinner animations
+│   │   ├── train/                # Training mode (train.h: EvolutionTrainingAgent wiring / test case loading / evolutionary loop entry)
+│   │   └── util/                 # Client utilities (util.h: general client helpers)
+│   └── src/                      # Source files
+│       ├── main.cpp
+│       ├── config_loader.cpp
+│       ├── mode_runners.cpp
+│       ├── io/
+│       │   ├── stdio/agent_stdio.cpp, stdin_reader.cpp
+│       │   └── tui/
+│       │       ├── agent_tui.cpp
+│       │       ├── tui_theme.cpp
+│       │       ├── scrollable.cpp
+│       │       ├── lazy_scrollable.cpp  # LazyScrollable virtual rendering implementation
+│       │       ├── tui_sidebar_content.cpp # Sidebar content (Log / Info / Planning)
+│       │       ├── tui_log_sink.cpp        # TUI log sink
+│       │       ├── framework/              # TUI framework implementation (tui_state/modal_container/...)
+│       │       └── components/             # Render components implementation: message_list / sidebar /
+│       │                                   #   overlays / input_bar / status_bar / spinner
+│       ├── train/train.cpp        # Training implementation
+│       └── util/util.cpp          # Client utility implementation
 │
-├── test/                         # agentxx_test Test Suites
-│   ├── test.cpp                  # Test entry point and test module scheduling
-│   ├── test_framework.h          # Lightweight test framework (assertions, TestResult)
-│   ├── test_toolcall_args.*      # Tool argument automatic correction tests
-│   ├── test_ffi_c_api.*          # FFI C API test suite (lifecycle, interaction, HITL, queues)
-│   ├── core/                     # Core library tests (agent, hosts, providers, protocols, storage)
-│   ├── plugin/                   # Plugin tests (system, resources, multi-instance, built-in plugins)
-│   └── client/                   # Client tests (config, TUI state, input, streaming, scrolling)
+├── test/                         # agentxx_test test executable
+│   ├── test.cpp                  # Test entry point: module registration and scheduling (synchronous/asynchronous grouping)
+│   ├── test_framework.h          # Test framework (assertion macros / TestResult)
+│   ├── test_toolcall_args.*      # Tool argument automatic type coercion tests
+│   ├── test_ffi_c_api.*          # FFI C API tests (lifecycle / interaction / HITL / event queue)
+│   ├── core/                     # Core library tests (libagentxx)
+│   │   ├── test_agent.*          # CodeAgent integration tests (mock LLM Server: tool calls / multi-turn / permissions / retry exhaustion / exception handling)
+│   │   │                         #   test_agent.h provides shared mock LLM simulator (DaSimServer),
+│   │   │                         #   reused by agent_host/session_persistence/remote_agent/cancel/memgrowth, etc.
+│   │   ├── test_agent_host.*     # AgentHost host tests (subagent derivation / depth concurrency budget / reclamation)
+│   │   ├── test_training.*       # Evolutionary training tests (mutation / evaluation / optimization / convergence / persistence)
+│   │   ├── test_events.*         # Event type tests
+│   │   ├── test_event_stream.*   # EventBus / EventStream / RequestResponseStream tests
+│   │   ├── test_event_bridge.*   # EventBridge event translation tests
+│   │   ├── test_interrupt_bus.*  # Interrupt bus HITL tests
+│   │   ├── test_subagent_bus.*   # Subagent bus tests (including batch delegation / cross-agent routing)
+│   │   ├── test_concurrency.*    # Concurrency tests
+│   │   ├── test_cancel.*         # Cancellation semantics tests (CancelToken dual channels / operation_aborted translation)
+│   │   ├── test_message_supplement.* # Message completion and repair tests
+│   │   ├── test_summarization.*  # Context compaction tests (token accounting / deduplication / LLM summarization)
+│   │   ├── test_checkpoint_store.* # Single checkpoint store tests (InMemorySingleCheckpointStore)
+│   │   ├── test_memgrowth.*      # Multi-turn memory growth tests (leak detection)
+│   │   ├── test_session_persistence.* # Session SQLite persistence tests (messages / context / share store persistence and recovery)
+│   │   ├── test_remote_agent.*   # Remote Agent tests (WebSocket transport / SessionServerAgentIO)
+│   │   ├── test_mcp.*            # MCP protocol tests (multi-version / HTTP / stdio)
+│   │   ├── test_a2a.*            # A2A protocol tests
+│   │   ├── test_acp.*            # ACP protocol tests
+│   │   ├── test_websocket.*      # WebSocket tests
+│   │   ├── test_http.*           # HTTP client and server tests
+│   │   ├── test_network_timeout.* # Network timeout behavior tests
+│   │   ├── test_openai_provider.* # OpenAI Provider tests (SSE / thinking / tool_calls / rate limits)
+│   │   ├── test_anthropic_provider.* # Anthropic Provider tests
+│   │   ├── test_string_util.*    # String utility tests
+│   │   ├── test_regex.*          # Regex engine tests
+│   │   ├── test_diff_util.*      # Diff utility tests
+│   │   ├── test_aho_corasick.*   # Aho-Corasick multi-pattern search tests
+│   │   ├── test_util_misc.*      # Miscellaneous utility tests
+│   │   ├── test_settings_db.*    # Global settings SQLite database tests
+│   │   ├── test_misc_fixes.*     # Miscellaneous bug fix regressions
+│   │   ├── test_share_store.*    # ShareStore tests
+│   │   ├── test_subagent_tool.*  # Subagent tool argument validation and recovery tests
+│   │   ├── test_worktree.*       # Git worktree wrapper and filesystem isolation tests
+│   │   ├── test_filesystem_tools.* # Filesystem tool tests (directly testing shared *_impl.h implementation)
+│   │   ├── test_command_tools.*  # Command execution tool tests (directly testing shared implementation)
+│   │   ├── test_math_tools.*     # Mathematical computation tool tests (directly testing shared implementation)
+│   │   ├── test_web_search_tools.* # Web search tool tests (directly testing shared implementation)
+│   │   ├── test_rag_search_tools.* # RAG search tests (directly testing shared implementation)
+│   │   ├── test_string_tools.*   # String tool tests (html2md / regexp; directly testing shared implementation)
+│   │   └── test_datetime_tool.*  # Datetime tool tests (directly testing shared implementation)
+│   ├── plugin/                   # Plugin tests (plugin infrastructure + specific plugin integrations)
+│   │   ├── test_plugins.*        # Plugin system tests (loading / tools / hooks / events / hot-reloading; module name `plugins`)
+│   │   ├── test_plugin_resources.* # Plugin session resource extension tests (Skills / Memory / MCP declarative + runtime)
+│   │   ├── test_plugin_multi_instance.* # Plugin multi-instance isolation tests (The Three Iron Rules)
+│   │   ├── test_client_plugins.* # Client-side plugin tests (skipped during monolithic built-in compilation)
+│   │   ├── test_codegraph_tools.* # CodeGraph plugin integration tests (5 tools: search/context/callers/callees/path)
+│   │   ├── test_cpu_gpu_use.*    # system_monitor plugin integration tests (system resource monitoring)
+│   │   ├── test_screen_capture.* # screen_capture plugin integration tests (Windows only)
+│   │   └── test_text_selection_monitor.* # text_selection_monitor plugin integration tests (Windows only)
+│   └── client/                   # Client-side tests (compiled conditionally under AGENTXX_BUILD_CLIENT)
+│       ├── test_config_loader.*  # YAML configuration loading tests
+│       ├── test_mermaid_state.*  # Mermaid state machine parser tests
+│       ├── test_thread_id.*      # sessionId uniqueness tests (module name `sessionId`)
+│       ├── test_tui_input.*      # TUI input handling tests
+│       ├── test_tui_interrupt.*  # TUI interrupt interaction tests
+│       ├── test_tui_scroll.*     # TUI scrolling tests
+│       ├── test_tui_settings.*   # TUI settings persistence tests
+│       ├── test_tui_sidebar.*    # TUI sidebar content and section tests
+│       ├── test_tui_stream.*     # TUI token streaming tests
+│       └── test_tui_tool_header.* # TUI tool header rendering tests
 │
-├── benchmark/                    # Performance benchmarks
+├── benchmark/                    # Benchmark tests (typically compiled only in Release mode)
 │
-├── third_party/                  # Third-Party Dependencies
-│   ├── boost/                    # asio, beast, process, exception
-│   ├── codegraph-cpp/            # Code graph parser
+├── third_party/                  # Third-party dependencies
+│   ├── boost/                    # asio / beast / process / exception
+│   ├── codegraph-cpp/            # Code graph analysis
 │   ├── curl/                     # HTTP
 │   ├── fmt/                      # Formatting
 │   ├── FTXUI/                    # Terminal UI
-│   ├── glob/                     # Glob matching
+│   ├── glob/                     # File globbing
 │   ├── html2md/                  # HTML to Markdown
 │   ├── hyperscan/                # Regex engine
 │   ├── iconv/                    # Character encoding conversion
 │   ├── liburing/                 # io_uring
-│   ├── markdown_ftxui/           # Markdown & Mermaid state diagram rendering
-│   ├── NeoGraph/                 # Graph execution engine
+│   ├── markdown_ftxui/           # markdown-ui: Markdown rendering (cmark-gfm parser + FTXUI DOM),
+│   │                            #   includes Mermaid stateDiagram-v2 rendering (state_diagram.*)
+│   ├── NeoGraph/                 # Graph execution engine (LLM calls / tool dispatch)
 │   ├── OpenSSL/                  # TLS/SSL
-│   ├── quickjs/                  # QuickJS engine
-│   ├── simdjson/                 # High-performance JSON parsing
-│   ├── sqlite3/                  # Database engine
-│   ├── uchardet/                 # Encoding detection
+│   ├── quickjs/                  # QuickJS (JavaScript plugin engine; submodule quickjs-ng, AGENTXX_ENABLE_PLUGIN_JS)
+│   ├── simdjson/                 # JSON parsing
+│   ├── sqlite3/                  # Database
+│   ├── uchardet/                 # Character encoding detection
 │   ├── yaml-cpp/                 # YAML parser
 │   └── zlib/                     # Compression
 │
-├── ffi/                          # Foreign Language Bindings
-│   └── dart/                     # Dart FFI bindings (ffigen.yaml generating agentxx_ffi_bindings.dart)
+├── ffi/                          # Language binding generation configurations
+│   └── dart/                     # Dart FFI bindings (ffigen.yaml generates
+│                                 #   agentxx_ffi_bindings.dart from ffi_api.h; dart pub get + ffigen)
 │
-├── example/                      # Examples
-│   └── ffi/dart/                 # Dart CLI example driving libagentxx via FFI
+├── example/                      # Embedding and binding examples
+│   └── ffi/dart/                 # Dart CLI example (drives libagentxx via FFI:
+│                                 #   streaming rendering, HITL permissions, session switching, mock LLM smoke checks)
 │
-├── plugins/                      # Dynamic Plugins (built to exec/plugins/<plugin_name>/)
-│   ├── example_plugin/           # Dual-sided C++ plugin template
-│   ├── example_graph_node/       # Graph extension sample (custom node types + set_graph_json; needs agent.graph)
-│   ├── example_js/               # JavaScript plugin template
-│   ├── example_resources/        # Declarative and programmatic resource contribution template
-│   ├── agentxx_javascript_engine/ # QuickJS engine plugin
-│   ├── agentxx_execute_javascript/ # JS code execution tool plugin
-│   ├── agentxx_codegraph/        # CodeGraph analysis plugin (5 tools: search/context/callers/callees/path + sidebar info)
-│   ├── agentxx_filesystem/       # Filesystem tools plugin
-│   ├── agentxx_execute_command/  # Command execution tools plugin
-│   ├── agentxx_math/             # Math expression evaluation tool plugin
-│   ├── agentxx_websearch/        # Web search tools plugin
+├── plugins/                      # Plugins (standalone dynamic libraries/directories, depends only on plugin_api.h;
+│                                 #   artifacts output to exec/plugins/<plugin_name>/)
+│   ├── example_plugin/           # Example C++ plugin (dual-sided): tools, hooks, events, capabilities, client entry
+│   ├── example_graph_node/       # Graph extension sample plugin (custom node types + set_graph_json graph modification; depends on agent.graph)
+│   ├── example_js/               # Example JavaScript plugin (C++ shell wrapper + plugin.js; depends: javascript_engine)
+│   ├── example_resources/        # Session resource contribution example (declarative & programmatic MCP/Skills/rules)
+│   ├── agentxx_javascript_engine/ # QuickJS engine plugin (exports capability interpreter.js; dedicated JS thread + sandbox)
+│   ├── agentxx_execute_javascript/ # JS code execution tool plugin (agentxx_execute_javascript; depends: javascript_engine)
+│   ├── agentxx_codegraph/        # CodeGraph code analysis plugin (search/context/callers/callees/path, 5 tools + client Info section)
+│   ├── agentxx_filesystem/       # Filesystem tools plugin (6 tools: list/read/write/edit/glob/grep)
+│   ├── agentxx_execute_command/  # Command execution plugin (2 tools: bash/windows)
+│   ├── agentxx_math/             # Math computation plugin (agentxx_math_calculate)
+│   ├── agentxx_websearch/        # Web search plugin (3 tools: search/fetch/fetch_markdown)
 │   ├── agentxx_rag_search/       # Vector semantic search plugin
-│   ├── agentxx_string/           # String utilities plugin
-│   ├── agentxx_system/           # System time plugin
-│   ├── agentxx_planning/         # Planning tool and TUI plan decoration plugin
+│   ├── agentxx_string/           # String processing plugin (2 tools: html_to_markdown/regexp)
+│   ├── agentxx_system/           # System clock plugin (get_current_datetime)
+│   ├── agentxx_planning/         # Task planning plugin + client-side Plan visualization decor
 │   ├── agentxx_screen_capture/   # Screen capture plugin (Windows only)
-│   ├── agentxx_computer_use/     # Mouse/keyboard control plugin (Windows only)
-│   ├── agentxx_system_monitor/   # Resource monitor plugin (tool + background sampling + TUI status)
-│   ├── agentxx_audio_stream/     # Audio stream capture plugin (Windows WASAPI)
-│   └── agentxx_text_selection_monitor/ # Text selection listener plugin (Windows UI Automation)
+│   ├── agentxx_computer_use/     # Mouse and keyboard automation plugin (Windows only; depends: screen_capture)
+│   ├── agentxx_system_monitor/   # System resource monitoring plugin (tools + background periodic sampling + client status bar rendering)
+│   ├── agentxx_audio_stream/     # Audio stream capture plugin (Windows WASAPI only)
+│   └── agentxx_text_selection_monitor/ # Text selection event listener plugin (Windows UI Automation only)
 │
-└── script/                       # Build & Run Scripts
+└── script/                       # Build and test scripts
     ├── linux_debug_build.sh
     ├── linux_release_build.sh
     ├── windows_debug_build.bat
@@ -1257,49 +1341,50 @@ BaseAgent (Base Class)
   │     ├── ModelCallWrapNode → OpenAIProvider / AnthropicProvider
   │     ├── ToolcallWrapNode → XXToolBase tool collection
   │     └── AgentStart/EndCallWrapNode
-  ├── AgentRunner (Unified execution/interrupt loop shared between root and subagents)
-  ├── MiddlewareContext → Middleware Stack
+  ├── AgentRunner (Unified interrupt loop, shared by primary & subagents)
+  ├── MiddlewareContext → Middleware stack
   ├── AgentContext
   │     ├── sessions (SessionsManager) → Session (per sessionId)
-  │     │     ├── viewMessages + chainHash (IO thread exclusive; client receives Wire copies)
-  │     │     ├── llmMessages (IO thread exclusive)
-  │     │     ├── cancelToken / modelName (IO thread exclusive)
+  │     │     ├── viewMessages + chainHash (single IO thread read/write; transferred to client via Wire copies)
+  │     │     ├── llmMessages (IO thread read/write)
+  │     │     ├── cancelToken / modelName (IO thread read/write)
   │     │     ├── activity / contextStats (atomic, cross-thread safe)
-  │     │     ├── deltaSeq (uint64_t, incremented only on IO thread)
-  │     │     └── io / bus (session-level)
-  │     ├── sessions->sessionStore (SessionStore SQLite persistence; optional)
+  │     │     ├── deltaSeq (plain uint64_t, incremented strictly on IO thread)
+  │     │     └── io / bus (session level)
+  │     ├── sessions->sessionStore (SessionStore, SQLite persistence; nullable)
   │     ├── ModelProviderRegistry
   │     └── EventBus
   └── AgentConfig → ModelConfig / AgentPrompt
 
 CodeAgent (Inherits BaseAgent)
-  ├── Tools: core keeps share_store/subagent/git_worktree (+lazy wiring); filesystem/command/web/
-  │   RAG/string/datetime/planning/CodeGraph are all injected via plugins (YAML plugins section)
+  ├── Tools: lib only retains share_store / subagent / git_worktree (+ lazy-loading wiring);
+  │   Filesystem, command execution, websearch, RAG, string utilities, system clock,
+  │   planning, CodeGraph, etc., are all injected as plugins (via YAML plugins section)
   └── Middlewares: SubagentManager → Summarization → Permission → Skill → MemoryFile → LogPrint
-      (planning/worktree are plugin+tool forms, not middlewares)
-  └── Middlewares: Permission → Skill → MemoryFile → Summarization → Planning → LogPrint
+      (planning/worktree exist as plugins + tools rather than middlewares)
 
 SessionServerAgentIO (Remote Session Driver)
-  ├── AgentIOBase (Server endpoint)
+  ├── AgentIOBase (Server-side endpoint)
   ├── BaseAgent.runTurnAsync()
   ├── deltaBuf (Disconnection buffer) + grace timer
-  └── AgentIOTransportBase (Injected from AgentServer)
+  └── AgentIOTransportBase (Supplied from AgentServer)
 
 Client (agentxx_cli)
   ├── TUIClientAgentIO / StdIOClientAgentIO → AgentIOBase
   ├── ChannelAgentIOTransport / WsAgentIOTransport → AgentIOTransportBase
   ├── ConfigLoader → YAML + .env
-  └── ModeRunners → local/remote × tui/cli permutations
+  └── ModeRunners → local/remote × tui/cli combinations
      ├── runLocalTuiUnified / runLocalCliUnified
      └── runRemoteTui / runRemoteCli
 
 EventBus (Event Bus)
-  ├── EventStream<T> (Unidirectional: publish/subscribe/unsubscribe)
-  ├── RequestResponseStream<Req, Resp> (Bidirectional: request/serve)
+  ├── EventStream<T> (Unidirectional: publish / subscribe / unsubscribe)
+  ├── RequestResponseStream<Req, Resp> (Bidirectional: request / serve)
   └── Topic table (Topic namespace constants)
 ```
 
 ---
+
 
 ## Appendix A: Core Data Models (conversation_types.h)
 

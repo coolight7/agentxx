@@ -1,5 +1,3 @@
-> 文档自动翻译自[zh-cn](/docs/zh-cn/develop.md)版 (This document is automatically translated from the [zh-cn](/docs/zh-cn/develop.md) version.)
-
 # Development Guide
 
 > Related: [design.md](/docs/en/design.md/index.md) (Architecture) · [plugins.md](/docs/en/design.md/plugins.md) (Plugins) · [ffi.md](/docs/en/design.md/ffi.md) (FFI)

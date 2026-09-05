@@ -1,5 +1,3 @@
-> 文档自动翻译自[zh-cn](/docs/zh-cn/design.md/plugins.md)版 (This document is automatically translated from the [zh-cn](/docs/zh-cn/design.md/plugins.md) version.)
-
 # Plugin System Development Guide
 
 > Related: [design.md](index.md) (Core Architecture) · [ffi.md](ffi.md) (FFI) · Source: [agent/plugins/](/agent/plugins/) · C ABI Contracts: [plugin_api.h](/agent/lib/include/agentxx/plugin/api/plugin_api.h) / [client_plugin_api.h](/agent/lib/include/agentxx/plugin/api/client_plugin_api.h) / SDK: [plugin_kit.h](/agent/lib/include/agentxx/plugin/api/plugin_kit.h)
@@ -204,7 +202,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_agent_destroy(void* plugin_
 
 | IID | Version | Capability |
 |---|---|---|
-| `agentxx.client.ui` | 1 | `register_status_item/update/unregister`, `register_panel/update/unregister`, `register_info_section/update/unregister`, `register_command/unregister`, `show_toast`, `update_tool_decor(tool_call_id, decor_json)`. |
+| `agentxx.client.ui` | 2 | `register_status_item/update/unregister`, `register_panel/update/unregister`, `register_info_section/update/unregister`, `register_command/unregister`, `show_toast`, `update_tool_decor(tool_call_id, decor_json)`, `register_tool_renderer(spec)/unregister_tool_renderer(tool_name)`. |
 | `agentxx.client.events` | 1 | `subscribe/unsubscribe` (See `AgentxxClientEvent`: `READY`, `CONN_STATE`, `USER_INPUT`, `DELTA`, `TURN_END`, `SESSION_SWITCH`, `PLUGIN_DATA`). |
 | `agentxx.client.session` | 1 | `get_client_state` (snapshot JSON), `send_user_input`, `request_cancel`. |
 | `agentxx.client.wire` | 1 | `send_plugin_data(event, json)` → Dispatched to server as `client.{plugin}.{event}`. |
@@ -212,7 +210,21 @@ extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_agent_destroy(void* plugin_
 | `agentxx.client.json` | 1 | `json_get_string/json_escape`. |
 | `agentxx.client.log` | 1 | `log(level, msg)`. |
 
-`update_tool_decor` allows plugins to drive tool call rendering decorations: Subscribing to `tool_start` in `EVT_DELTA` (containing full `arguments`), the plugin pushes `{displayName, summary, items[]}` JSON keyed by `tool_call_id` (items schema mirrors panel, with additional `diagram` kind). The host automatically manages cleanup and restoration during plugin unload/disable; a prominent example is `agentxx_planning` (where plan visualization is entirely plugin-driven).
+### Specialized Tool Rendering Architecture (Tool Rendering & Decor)
+
+The Agentxx client adopts a unified, layered tool-specialized rendering mechanism. The TUI core is completely decoupled, containing zero hardcoded tool names:
+
+1. **Type-Level Tool Renderers (`register_tool_renderer`)**:
+   - During client initialization, plugins register specialized rendering definitions (`AgentxxToolRenderSpec`) keyed by `tool_name`, universally taking effect when the TUI renders messages for that tool (both during real-time streaming and history replay).
+   - **Dual-Track Mechanism**:
+     - **`<key, render_fn>` Callback Function**: Provides an `AgentxxToolRenderFn` receiving `AgentxxToolRenderInput` (`tool_name`, `args_json`, `result_text`, `is_finished`, `is_error`, `max_width`) and returning `AgentxxToolRenderOutput` (`displayName`, `summary`, `items_json`). Suitable for tools requiring complex argument parsing, conditional formatting, or dynamic UI item generation (e.g. `read` offset-limit parameters, `glob`/`grep` patterns and file summaries, `edit` diff comparisons).
+     - **Declarative Template (`template_json`)**: When `render_fn == NULL`, the host automatically extracts fields from `args_json` and formats the summary according to the declarative template, e.g. `{"displayName":"Search","summaryKey":"query"}` or `{"displayName":"Bash","summaryKey":"command"}`.
+   - **Generic Diff Rendering**: Expanded `items_json` supports `{"kind":"diff","path":"...","old_str":"...","new_str":"..."}`. The TUI generically renders this as an adaptive side-by-side or unified diff comparison, freely reusable by any plugin.
+2. **Instance-Level Tool Decorations (`update_tool_decor`)**:
+   - Subscribing to `tool_start` in `EVT_DELTA`, the plugin pushes semantic JSON keyed by the specific invocation's `tool_call_id` (taking higher priority than type-level renderers). A prominent implementation is `agentxx_planning` (generating dynamic ASCII / Mermaid state diagrams and reactive todo lists at runtime).
+3. **Priority Order and Fallback Path**:
+   - Lookup order during rendering: `toolDecors` (by `tool_call_id`) > `toolRenderers` (by `tool_name`) > Generic fallback presentation (raw `toolName` + arguments/result text).
+   - When a plugin unloads or is disabled, the host automatically strips its registrations and cleanly reverts to the fallback presentation, restoring specialized views losslessly upon re-enablement.
 
 ---
 

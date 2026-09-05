@@ -1,5 +1,3 @@
-> 文档自动翻译自[zh-cn](/docs/zh-cn/build/FAQ.md)版 (This document is automatically translated from the [zh-cn](/docs/zh-cn/build/FAQ.md) version.)
-
 # Frequently Asked Questions (FAQ)
 
 ## Compiler Crashes with GCC Internal Compiler Error (ICE) During Build
@@ -25,3 +23,7 @@ rm -rf bin.v2
 ## Whether CMake Should Use ExternalProject or FetchContent When Adding Dependencies
 - We recommend standardizing on `ExternalProject`. Although `FetchContent` is also usable, their execution timing differs: libraries imported via `FetchContent` (executed during the configure stage) may fail to find libraries imported via `ExternalProject` (executed during the build stage) using `find_package`.
 - We previously attempted standardizing on `FetchContent`. Initially, because `FetchContent` automatically inherits parent project variables, we thought it would be convenient for cross-platform and cross-compilation. However, it does not support non-CMake projects and lacks granular control over `install` and `build` details. Therefore, we ultimately standardized on `ExternalProject`.
+
+## Running agentxx_cli and Shared Library File Locking
+- On Windows, build scripts cannot overwrite the binaries while the application is currently running because the operating system locks active executables and DLLs.
+- On Linux, while the file can be replaced/overwritten, doing so can cause the running application to crash (e.g. segmentation fault). Always stop running instances before rebuilding.

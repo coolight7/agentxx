@@ -1,5 +1,3 @@
-> 文档自动翻译自[zh-cn](/docs/zh-cn/)版 (This document is automatically translated from the [zh-cn](/README.md) version.)
-
 # Agentxx
 [Github agentxx](https://github.com/coolight7/agentxx)
 
@@ -13,8 +11,8 @@
 ██║  ██║╚██████╔╝███████╗██║ ╚████║   ██║      ╚═══════   ═══════╝
 ╚═╝  ╚═╝ ╚═════╝ ╚══════╝╚═╝  ╚═══╝   ╚═╝         ╚══╝     ╚══╝   
 ```
-- An AI Agent implemented asynchronously using C++ coroutines, compilable as a `single executable` or `dynamic shared library` for direct execution. Designed for resource-constrained devices like standard PCs and mobile phones, minimizing memory footprint, binary size, and shedding heavy dependencies like shared dynamic runtimes, Python, and Node.js.
-- Designed to be embedded into apps to provide high-performance Agent capabilities, alongside an out-of-the-box CLI / TUI Code Agent. GUI clients are planned to be powered by [Lumenxx](https://github.com/coolight7/lumenxx-docx), with upcoming support for audio/video processing and automation control Agents.
+- An AI Agent implemented asynchronously using C++ coroutines, compilable as a `single executable` or `dynamic shared library` for direct execution. Designed to minimize memory footprint, reduce binary size, and eliminate heavy runtime dependencies such as dynamic shared libraries, Python, and JavaScript, making it suitable for resource-constrained devices like standard PCs and mobile phones.
+- Designed to be embedded into applications to provide high-performance Agent capabilities, alongside an out-of-the-box CLI / TUI Code Agent. GUI clients are planned to be supported by [Lumenxx](https://github.com/coolight7/lumenxx-docx), with upcoming support for audio/video processing, automation control, and other specialized Agents.
 - Tested and verified running single-turn autonomous tasks continuously for over 5 hours. Agentxx itself has actively participated in its own codebase development.
 
 > The agent core, server services, TUI, plugin interface, and FFI interfaces are preliminarily implemented, but may still undergo significant refactoring and API adjustments.
@@ -58,37 +56,41 @@
 
 ### Binary Size and Dependencies
 - Both the executable `agentxx_cli` and the shared library `libagentxx` statically link dependencies where possible to minimize dynamic library requirements. Symbol visibility control and pruning are applied during build.
-- Below are measurements with `only agentxx compiled, unneeded dependencies stripped`, tested on `Date: 2026/08/22, commit: b35b226399062dc1196bced06d2c4f209de9e0fa`:
-- Memory Footprint:
+- Default compilation optimizations favor performance. For minimal binary footprint, optional dependencies like Hyperscan / Boost.Process can be omitted and `-Os`/`-Oz` optimization flags applied.
+- The following measurements reflect `Release compilation favoring performance, including all optional dependencies such as Hyperscan and Boost.Process`, tested on `Date: 2026/09/04, commit: f2121cec2869b6df31e1b15a2ff62305dcc1b005`.
+- Memory Footprint (externally loading 5 common plugins: `agentxx_filesystem`, `agentxx_execute_command`, `agentxx_system`, `agentxx_websearch`, `agentxx_planning`):
 
 | agentxx_cli Target | Init RAM | 100K Context | 200K Context | Notes |
 |---|---|---|---|---|
-| **Win / TUI** | 3.1 MB | 12.2 MB | 19.6 MB | Measured via Task Manager |
-| **Linux / TUI** | 1.9 MB | 8.9 MB | 14.1 MB | RES-SHR measured via `top`. Only depends on system libs, so measures exclusive memory |
+| **Win / TUI** | 3.4 MB | 12.2 MB | 19.6 MB | Measured via Task Manager |
+| **Linux / TUI** | 3.1 MB | 8.9 MB | 14.1 MB | RES-SHR measured via `top`. Only depends on system libs, so measures exclusive memory |
 
 - Executable & Shared Library Binary Sizes:
 
 | System | agentxx_cli | libagentxx | Compiler | Notes |
 |---|---|---|---|---|
-| **Windows** | 18.3 MB | 12.6 MB | MSVC 19.51.36247.0 / Visual Studio 18 2026 · x86_64 · -O2 | Recommend bundling MSVC runtime |
-| **Linux** | 13.3 MB | 17.8 MB | GCC 16.1.0 · x86_64 · -O3 · --strip-all | Recommend bundling libstdc++.so.6, libgcc_s.so.1 |
+| **Windows** | 16.3 MB | 12.4 MB | MSVC 19.51.36247.0 / Visual Studio 18 2026 · x86_64 · -O2 | Recommend bundling MSVC runtime |
+| **Linux** | 21.1 MB | 15.7 MB | GCC 16.1.0 · x86_64 · -O3 · --strip-all | Recommend bundling libstdc++.so.6, libgcc_s.so.1 |
 | **Android** | - | 14.0 MB | NDK-r29 · Clang 21.0.0 · android-21-arm64-v8a · -O3 · --strip-all | Recommend bundling libc++.so |
 
 - Built-in Plugin Shared Library Sizes (`-` indicates unsupported on this platform):
 
 | Plugin | Windows (.dll) | Linux (.so) | Android (.so) | Notes |
 |---|---|---|---|---|
-| agentxx_codegraph | 36.9 MB | 38.2 MB | 37.6 MB | Code analysis & navigation to quickly locate symbol definitions and references |
-| agentxx_computer_use | 379 KB | - | - | Provides mouse and keyboard control tools |
-| agentxx_javascript_engine | 1.1 MB | 1.2 MB | 1.1 MB | JS execution engine allowing custom JavaScript plugins |
-| agentxx_screen_capture | 383 KB | - | - | Captures screen image frames |
-| agentxx_system_monitor | 428 KB | 629 KB | - | Reads system CPU, RAM, and GPU utilization |
-| agentxx_text_selection_monitor | 399 KB | - | - | Listens to system-wide text selection event streams |
-| agentxx_string | 8.9 MB | - | - | String processing and HTML-to-Markdown conversion |
-| agentxx_rag_search | 6.7 MB | - | - | RAG retrieval |
-| agentxx_math | 346 KB | - | - | Mathematical computation tools |
-
-- Default compilation optimizations favor performance. For minimal binary footprint, optional dependencies like Hyperscan/Boost.Process can be omitted and `-Os`/`-Oz` optimization flags applied.
+| agentxx_codegraph | 37.1 MB | 38.4 MB | 37.6 MB | Code analysis & navigation to quickly locate symbol definitions and references |
+| agentxx_computer_use | 525 KB | - | - | Provides tools for mouse and keyboard control |
+| agentxx_execute_command | 1.7 MB | 1.9 MB | - | Bash / PowerShell command-line execution |
+| agentxx_filesystem | 9.3 MB | 14 MB | - | File I/O: List / Read / Write / Edit / Glob / Grep |
+| agentxx_javascript_engine | 1.1 MB | 1.4 MB | 1.1 MB | JavaScript execution engine allowing custom JS plugins |
+| agentxx_math | 347 KB | 413 KB | - | Mathematical computation tools |
+| agentxx_planning | 378 KB | 430 KB | - | Strategic Roadmap + Tactical Task Details two-level planning + Memo |
+| agentxx_rag_search | 6.7 MB | 8.6 MB | - | RAG retrieval |
+| agentxx_screen_capture | 535 KB | - | - | Captures screen image frames |
+| agentxx_string | 8.9 MB | 13.6 MB | - | String processing and HTML-to-Markdown conversion |
+| agentxx_system | 511 KB | 418 KB | - | System tool: retrieves local datetime |
+| agentxx_system_monitor | 461 KB | 586 KB | - | Reads system CPU, RAM, and GPU utilization |
+| agentxx_text_selection_monitor | 503 KB | - | - | Listens to system-wide text selection event streams |
+| agentxx_websearch | 6.7 MB | 8.7 MB | - | Web search, download, and webpage-to-Markdown conversion |
 
 ## Roadmap & Planned Features
 ### Core Modules
@@ -119,7 +121,7 @@
         - web_fetch_url (raw response body)
         - ⬜ Subagent integration with external LLM search APIs
     - ✅ planning
-        - Two-level task planning (Strategic Roadmap + Tactical Tasks) + Notes/Memo
+        - Strategic Roadmap + Tactical Task Details two-level planning + Memo
         - Mermaid / stateDiagram-v2 state machine diagrams describing macro task flow
         - todos describing immediate granular next steps
     - ✅ RAG
@@ -171,11 +173,6 @@
 - ✅ **Middleware**
     - Hierarchical stack interception: Executes `start` in order, pushes corresponding `end` onto stack, and unwinds stack upon completion: `agentCallStart`, `agentCallEnd`, `modelCallStart`, `modelCallEnd`, `toolCallStart`, `toolCallEnd`.
     - Actual stack: SubagentManager → Summarization → Permission → Skill → MemoryFile → LogPrint.
-- ✅ **Task Planning** (`agentxx_planning` dual-sided plugin)
-    - Two-layer planning.
-    - Mermaid stateDiagram-v2 state machine diagrams representing overall milestones.
-    - todo_list tracking immediate tactical execution items.
-    - Plans persist under `{dataDir}/plans/`; client renders via tool decor + Info section.
 - ✅ **Context Compaction** (`SummarizationMiddleware`)
     - Token usage tracking / heuristic estimation; initiates automatic compaction at configured thresholds.
     - Tool-specific compaction handlers:
@@ -247,7 +244,7 @@
 - ⬜ Dynamic loading based on `ModelName`, falling back to default prompts when unmatched.
 
 ### Plugin Support
-- ✅ C/C++ plugin support allowing extensible modifications to both Agent and Client UI. See [Plugin Documentation](/docs/en/design.md/plugins.md); [Built-in Plugins](/agent/plugins/); [Example Plugin](/agent/plugins/example_plugin/).
+- ✅ C/C++ plugin support allowing extensible modifications to both Agent and Client UI. See [Plugin Development Documentation](/docs/en/design.md/plugins.md); [Built-in Plugins](/agent/plugins/); [Example Plugin](/agent/plugins/example_plugin/).
     - Can be compiled either as standalone dynamic shared libraries or statically embedded into `libagentxx`.
     - High compatibility achieved via pure C APIs, COM-style querying, explicit 8-byte structure alignment, fixed-width integer types (`int32_t`, `int64_t`), unified calling conventions, and passing structs by pointer rather than value. This ensures runtime compatibility across different compilers, standard library implementations, and dependency versions; validated by mixing Debug/Release binaries of `agentxx_cli` with plugin dynamic libraries.
     - Native asynchronous interfaces supporting cooperative non-blocking coroutine execution between host and plugins within a single thread without locking.
@@ -347,6 +344,7 @@
 - Recommended Compilers:
     - Linux: GCC 16.1. (Certain coroutine functions caused compiler ICE with GCC 13.2).
     - Windows: MSVC / Visual Studio 2026. (Older versions like VS 2022 unverified).
+- For users in mainland China, using a proxy/VPN is recommended as some steps require downloading GitHub repositories.
 - Clone repository and submodules:
 ```sh
 git clone https://github.com/coolight7/agentxx
@@ -365,7 +363,7 @@ npm install --legacy-peer-deps
     - [Windows Executable (.exe) / Shared Library (.dll) / Static Library (.lib)](/docs/en/build/windows.md)
 - Generated Library Linking:
     - Shared library: `libagentxx` (Debug adds `d`: `libagentxxd`). Unified multi-platform naming, differing only in extensions (`.so`, `.dll`, `.dylib`).
-    - Static library: `libagentxx_static` (Debug adds `d`: `libagentxx_staticd`). Unified naming across platforms (`.a`, `.lib`). Supports static linking of all dependencies to produce standalone executables like `agentxx_cli` (verified on Linux and Windows).
+    - Static library: `libagentxx_static` (Debug adds `d`: `libagentxx_staticd`). Unified naming across platforms (`.a`, `.lib`). Supports static linking of all dependencies to produce standalone executables like `agentxx_cli` (verified on Linux and Windows). You can likewise statically link `libagentxx_static` and its static dependencies into your own application to eliminate dynamic library dependencies.
     - Builds default to shared `libagentxx` and static `libagentxx_static`, dynamically linking runtime libraries (libstdc++, libgcc, msvcrt `/MD` | `/MDd`).
 
 ## Configuration & Running
@@ -393,10 +391,14 @@ agentxx_cli tui --agent ws://127.0.0.1:7007/agent --token passwd # Starts TUI cl
 ```
 
 ## LICENSE & THIRD_PARTY
-- [MIT License](LICENSE)
+- [MIT License](/LICENSE)
 - Open source licenses of statically/dynamically linked third-party libraries apply according to their terms.
 - Thanks to the following open source projects:
-    - [boost](https://github.com/boostorg/boost) (asio, beast, process, exception)
+    - [boost](https://github.com/boostorg/boost)
+        - asio
+        - beast
+        - process
+        - exception
     - [codegraph-cpp](https://github.com/plutoaac/codegraph-cpp)
     - [curl](https://github.com/curl/curl)
     - [fmt](https://github.com/fmtlib/fmt)

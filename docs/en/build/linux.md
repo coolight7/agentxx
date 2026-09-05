@@ -1,13 +1,46 @@
-> 文档自动翻译自[zh-cn](/docs/zh-cn/build/linux.md)版 (This document is automatically translated from the [zh-cn](/docs/zh-cn/build/linux.md) version.)
-
 # Linux Executable / Dynamic Library Build Guide
 
 - OS Environment: Linux
 - C++ Standard: Requires C++26+.
 - Recommended Compiler: Linux / GCC 16.1. Previously when compiling with GCC 13.2, certain coroutine functions would cause internal compiler errors (ICE).
 
-## Getting Started
-- Install or compile Boost 1.92
+---
+- There are two ways to start compilation:
+  - [Automated Build Script](#automated-build-script): Handles most operations and dependencies automatically.
+  - [Manual Compilation](#manual-compilation): Manually control versions, flags, and build steps for Boost, OpenSSL, and dependencies.
+---
+
+## Automated Build Script
+
+- Simply execute the build script (`agent/script/linux_debug_build.sh` / `linux_release_build.sh`).
+- The script automatically prepares the build environment and dependencies without manual `apt` packages, handling:
+>
+> 1. **Prerequisite Environment Checks**: Checks for `cmake` / `ninja` / `make` / `curl|wget` / `tar` / `python3` and a C++26 compiler (`g++>=14` or `clang++>=18`), exiting with installation instructions if missing.
+> 2. **Automatic Dependency Building** (compiles all libraries from source, avoiding system or apt packages):
+>    `Boost 1.92` (debug and release variants) and `OpenSSL 4.0.1` are automatically compiled from source to `agent/third_party/boost-linux-build-{debug,release}/` and `agent/third_party/OpenSSL-linux-build/`; existing artifacts are automatically reused.
+>    `ragel` (Hyperscan code generator) prioritizes system-installed versions, falling back to downloading source and building locally if absent.
+>
+- Related Environment Variables (Optional):
+
+| Variable | Description |
+| --- | --- |
+| `AGENTXX_SKIP_AUTO_DEPS=1` | Skips automatic dependency building (fails immediately if dependency directories are missing) |
+| `AGENTXX_DEPS_FORCE=1` | Bypasses artifact reuse, forcing a complete rebuild of dependencies (except ragel, which reuses system version) |
+| `BOOST_ROOT` / `OPENSSL_ROOT_DIR` | Manually specifies paths to existing installed libraries, taking precedence over automatic building |
+| `AGENTXX_ENABLE_HYPERSCAN=OFF` | Disables Hyperscan; ragel is no longer required |
+| `AGENTXX_BUILD_PARALLEL=N` | Number of parallel compilation jobs (debug defaults to 4; release defaults to CPU core count) |
+
+## Manual Compilation
+
+- Prepare build prerequisites using `apt` or equivalent package manager: `cmake`, `ninja-build`, `make`, `curl|wget`, `tar`, `python3`, and optionally `ccache` / `patchelf` / `ragel` (required by Hyperscan):
+```sh
+sudo apt-get install -y cmake ninja-build patchelf ccache zip ragel \
+    libtool autoconf automake make bzip2 xz-utils unzip curl wget
+```
+- `g++>=14` (or `clang++>=18`), GCC 16.1 is recommended.
+
+### Compiling Boost 1.92
+
 - Installation can be done directly via your system package manager, but pay attention to the version; matching our development version `1.92` is recommended.
 - Compiling manually:
 ```sh
@@ -40,6 +73,7 @@ export CFLAGS="-fPIC"
 # ./b2 --clean-all
 # rm -rf bin.v2
 ```
+
 ### Compiling OpenSSL from Source
 - Compilation:
 ```sh
@@ -59,6 +93,7 @@ cd "$openssl_source_dir"
 make
 make install
 ```
+
 ### Compiling agentxx
 - Launch agentxx compilation. Other dependencies will be downloaded automatically. After successful compilation, the command-line client will run automatically:
 ```sh
@@ -77,7 +112,7 @@ cd {PROJECT_ROOT}
 
 - Executables: `agent/build/{platform}-{mode}/exec/agentxx_cli` / `agentxx_test` / `agentxx_benchmark`
 - Plugin Shared Libraries (Standalone Dynamic Library Mode): `agent/build/{platform}-{mode}/exec/plugins/<plugin_name>/` (dispatched by directory when containing a `plugin.yaml` manifest)
-- Shared Library (FFI): `agent/build/{platform}-{mode}/lib/libagentxx_shared.so` (Exports C symbols see `agent/lib/ffi_symbols.map`)
+- Shared Library (FFI): `agent/build/{platform}-{mode}/lib/libagentxx_shared.so` (Exports C symbols; see `agent/lib/ffi_symbols.map`)
 
 ## Debug Build Acceleration
 
