@@ -1145,6 +1145,8 @@ inline std::string fileGrepExecute(
 //   卸载到线程池，上述协程路径不再被注册，仅保留于头文件内供测试直调；
 //   BOOST_ASIO_HAS_FILE 不可用平台回退到同步实现，行为与 offload 一致
 // =====================================================================
+#if defined(BOOST_ASIO_HAS_FILE)
+
 namespace detail {
 
 /// stream_file 异步读取完整文件内容 (原始字节; 不做编码转换)
@@ -1173,8 +1175,6 @@ inline asio::awaitable<std::string>
 }
 
 } // namespace detail
-
-#if defined(BOOST_ASIO_HAS_FILE)
 
 /// agentxx_filesystem_read 执行体协程版 (原 FilesystemReadTextFileTool::execute_async)
 /// - line_offset/line_limit 模式经 async_read_until 逐行推进 (保留原始换行符);

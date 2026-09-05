@@ -57,42 +57,42 @@
 | ⬜ | IOS | 待测试兼容 |
 
 ### 编译后的体积和依赖库
-- Agentxx 编译后输出的 可执行程序`agentxx_cli`、动态库`libagentxx` 都会尽量静态链接依赖库，保持编译结果对动态库的依赖尽量少；编译优化 控制导出符号，裁剪无用符号
-- 默认的编译优化倾向于追求性能，如果需要裁剪体积，可以移除 Hyperscan/Boost.process 等可选库、采用 -Os/-Oz 体积编译优化
-- 以下是`Release倾向性能优化编译，添加了Hyperscan/Boost.process等所有可选依赖库`时的体积和运行时内存占用, 测试于 `时间: 2026/09/04, commit: f2121cec2869b6df31e1b15a2ff62305dcc1b005`
-- 内存占用 (外置加载5个常用插件 agentxx_filesystem,agentxx_execute_command,agentxx_system,agentxx_websearch,agentxx_planning):
+- Agentxx 编译后输出的 可执行程序`agentxx_cli`、动态库`libagentxx` 都会尽量静态链接依赖库，保持编译结果对动态库的依赖尽量少; 编译优化 控制导出符号，裁剪无用符号
+- 默认的编译优化倾向于追求性能，如果需要裁剪体积，可以移除 Hyperscan 等可选库、采用 -Os/-Oz 体积编译优化
+- 以下是`Release倾向性能优化编译`,`添加了Hyperscan等所有可选依赖库`时的体积和运行时内存占用, 测试于 `时间: 2026/09/04, commit: f2121cec2869b6df31e1b15a2ff62305dcc1b005`
+- **内存占用** (外置加载5个常用插件 agentxx_filesystem,agentxx_execute_command,agentxx_system,agentxx_websearch,agentxx_planning):
 
 | agentxx_cli Target | 初始化 RAM | 100K 上下文 | 200K上下文 | TIP |
 |---|---|---|---|---|
 | **Win/TUI** | 3.4M | 12.2M | 19.6M | 任务管理器查看内存占用 |
 | **Linux/TUI** | 3.1M | 8.9M | 14.1M | top命令查看RES-SHR, agentxx_cli 仅依赖系统库，不需要其他动态库，因此仅计算独占内存大小 |
 
-- 可执行文件/动态库文件体积:
+- **可执行文件/动态库文件体积**:
 
 | System | agentxx_cli | libagentxx | compiler | TIP |
 |---|---|---|---|---|
 | **Windows** | 16.3M | 12.4M | MSVC 19.51.36247.0/Visual Studio 18 2026 · x86_64 · -O2 | 打包时建议带上msvc运行时 |
-| **Linux** | 21.1M | 15.7M | GCC 16.1.0 · x86_64 · -O3 · --strip-all | 打包时建议带上 libstdc++.so.6,libgcc_s.so.1 |
-| **Android** | - | 14.0M | NDK-r29 · Clang 21.0.0 · android-21-arm64-v8a · -O3 · --strip-all | 打包建议带上 libc++.so |
+| **Linux** | 21.1M | 15.7M | GCC 16.1.0 · x86_64 · -O3 · --strip-unneeded | 打包时建议带上 libstdc++.so.6,libgcc_s.so.1 |
+| **Android** | - | 14.1M | NDK-r29 · Clang 21.0.0 · android-21-arm64-v8a · -O3 · --strip-unneeded | 打包建议带上 libc++_shared.so |
 
-- 内置插件动态库文件体积 (横线 - 表示该插件不支持此系统):
+- **插件动态库文件体积** (横线 - 表示该插件不支持此系统):
 
 | Plugin | Windows/.dll | Linux/.so | Androi/.so | TIP |
 |---|---|---|---|---|
-| agentxx_codegraph | 37.1M | 38.4M | 37.6M | 代码分析定位，方便LLM快速查找代码中的函数、变量等符号的定义和引用 |
+| agentxx_codegraph | 37.1M | 38.4M | 37.7M | 代码分析定位，方便LLM快速查找代码中的函数、变量等符号的定义和引用 |
 | agentxx_computer_use | 525K | - | - | 提供 tool 支持控制鼠标、键盘 |
-| agentxx_execute_command | 1.7M | 1.9M | - | Bash/powershell 命令行执行 |
-| agentxx_filesystem | 9.3M | 14M | - | 文件读写 List/Read/Write/Edit/Glob/Grep |
-| agentxx_javascript_engine | 1.1M | 1.4M | 1.1M | Javascript代码执行引擎，可以依赖该插件实现JS插件 |
-| agentxx_math | 347K | 413K | - | 数学计算工具 |
-| agentxx_planning | 378K | 430K | - | 目标规划 + 渐进任务细节 两层任务规划 + 备忘录 |
-| agentxx_rag_search | 6.7M | 8.6M | - | RAG 检索 |
+| agentxx_execute_command | 1.7M | 1.9M | 1.7M | Bash/powershell 命令行执行 |
+| agentxx_filesystem | 9.3M | 14M | 1.9M | 文件读写 List/Read/Write/Edit/Glob/Grep |
+| agentxx_javascript_engine | 1.1M | 1.4M | 1.2M | Javascript代码执行引擎，可以依赖该插件实现JS插件 |
+| agentxx_math | 347K | 413K | 310K | 数学计算工具 |
+| agentxx_planning | 378K | 430K | 320K | 目标规划 + 渐进任务细节 两层任务规划 + 备忘录 |
+| agentxx_rag_search | 6.7M | 8.6M | 7.5M | RAG 检索 |
 | agentxx_screen_capture | 535K | - | - | 获取屏幕图像帧 |
-| agentxx_string | 8.9M | 13.6M | - | 字符串处理、HTML-Markdown转换 |
-| agentxx_system | 511K | 418K | - | 系统工具 读取本地时间 |
-| agentxx_system_monitor | 461K | 586K | - | 读取系统CPU、内存、GPU占用 |
+| agentxx_string | 8.9M | 13.6M | 1.6M | 字符串处理、HTML-Markdown转换 |
+| agentxx_system | 511K | 418K | 307K | 系统工具 读取本地时间 |
+| agentxx_system_monitor | 461K | 586K | 430K | 读取系统CPU、内存、GPU占用 |
 | agentxx_text_selection_monitor | 503K | - | - | 接收系统的文本选择事件流 |
-| agentxx_websearch | 6.7M | 8.7M | - | 网络搜索、下载、网页转Markdown |
+| agentxx_websearch | 6.7M | 8.7M | 7.6M | 网络搜索、下载、网页转Markdown |
 
 ## 计划实现
 ### 基础模块

@@ -13,6 +13,9 @@ script_dir=$(cd "$(dirname "$0")" && pwd)
 src_dir="$script_dir/../"
 build_dir="$script_dir/../build/android-release"
 abi_list=("arm64-v8a")
+if [[ -n "${ANDROID_ABI:-}" ]]; then
+    abi_list=("$ANDROID_ABI")
+fi
 
 source "$script_dir/deps/libbuild.sh"
 agxxdeps_src_dir="$src_dir/third_party"
@@ -25,7 +28,7 @@ agxxdeps_parallel="$AGENTXX_BUILD_PARALLEL"
 NDK_ROOT=""
 if [[ -n "${BOOST_ROOT:-}" && -n "${OPENSSL_ROOT_DIR:-}" ]]; then
     # 用户显式指定了两者, NDK 仅用于 cmake 工具链
-    NDK_ROOT="${ANDROID_NDK_ROOT:-}"
+    NDK_ROOT="${ANDROID_NDK_ROOT:-${ANDROID_NDK_HOME:-}}"
 else
     NDK_ROOT=$(agxxdeps_ndk_root) || exit 1
 fi
@@ -43,10 +46,10 @@ fi
 
 # 需要 ragel 时: android 默认 hyperscan OFF, 无需 ragel (保持 OFF)
 
-for abi in ${abi_list[@]}; do
+for abi in "${abi_list[@]}"; do
     abi_build_dir="$build_dir/$abi"
-    # 目标 ABI，默认 arm64-v8a
-    ANDROID_ABI="${ANDROID_ABI:-$abi}"
+    # 目标 ABI
+    ANDROID_ABI="$abi"
     # 最低 API 级别
     ANDROID_PLATFORM="${ANDROID_PLATFORM:-android-21}"
     # NDK 工具链文件
@@ -65,11 +68,13 @@ for abi in ${abi_list[@]}; do
                 "$src_dir/third_party/OpenSSL-android-build" "$abi" || exit 1
         fi
     fi
-    if [[ -z "${BOOST_ROOT:-}" ]]; then
-        BOOST_ROOT=$(cd "$src_dir/third_party/boost-android-build-release/$abi" && pwd)
+    target_boost_root="${BOOST_ROOT:-}"
+    if [[ -z "$target_boost_root" ]]; then
+        target_boost_root=$(cd "$src_dir/third_party/boost-android-build-release/$abi" && pwd)
     fi
-    if [[ -z "${OPENSSL_ROOT_DIR:-}" ]]; then
-        OPENSSL_ROOT_DIR=$(cd "$src_dir/third_party/OpenSSL-android-build/$abi" && pwd)
+    target_openssl_root_dir="${OPENSSL_ROOT_DIR:-}"
+    if [[ -z "$target_openssl_root_dir" ]]; then
+        target_openssl_root_dir=$(cd "$src_dir/third_party/OpenSSL-android-build/$abi" && pwd)
     fi
     # ===== 编译环境前置检查 =====
     _env_fail=0
@@ -83,7 +88,7 @@ for abi in ${abi_list[@]}; do
         exit 1
     fi
     unset _env_fail _t
-    for _depdir in "$BOOST_ROOT" "$OPENSSL_ROOT_DIR"; do
+    for _depdir in "$target_boost_root" "$target_openssl_root_dir"; do
         if [[ ! -d "$_depdir" ]]; then
             echo "ERROR: 依赖目录不存在: $_depdir"
             echo "  请删除后重试让脚本自动交叉编译, 或设置 AGENTXX_SKIP_AUTO_DEPS=1 跳过"
@@ -99,8 +104,8 @@ for abi in ${abi_list[@]}; do
     echo "  ANDROID_ABI:       $ANDROID_ABI"
     echo "  ANDROID_PLATFORM:  $ANDROID_PLATFORM"
     echo "  Build Dir:         $abi_build_dir"
-    echo "  BOOST_ROOT:        $BOOST_ROOT"
-    echo "  OPENSSL_ROOT_DIR:  $OPENSSL_ROOT_DIR"
+    echo "  BOOST_ROOT:        $target_boost_root"
+    echo "  OPENSSL_ROOT_DIR:  $target_openssl_root_dir"
     echo "============================================"
 
     # 启用插件编译: 插件动态库输出到 {build}/exec/plugins/
@@ -114,8 +119,8 @@ for abi in ${abi_list[@]}; do
         -DANDROID_PLATFORM="$ANDROID_PLATFORM" \
         -DANDROID_STL=c++_shared \
         -DCMAKE_BUILD_TYPE=Release \
-        -DBOOST_ROOT="${BOOST_ROOT}" \
-        -DOPENSSL_ROOT_DIR="${OPENSSL_ROOT_DIR}" \
+        -DBOOST_ROOT="${target_boost_root}" \
+        -DOPENSSL_ROOT_DIR="${target_openssl_root_dir}" \
         -DXX_IS_RELEASE_D=1 \
         -DAGENTXX_BUILD_CLIENT=OFF \
         -DAGENTXX_BUILD_TEST=OFF \
@@ -128,7 +133,8 @@ for abi in ${abi_list[@]}; do
         exit 1
     fi
 
-    cmake --build "$abi_build_dir" --config Release
+    echo "[build] parallel jobs: ${AGENTXX_BUILD_PARALLEL}"
+    cmake --build "$abi_build_dir" --config Release --parallel "${AGENTXX_BUILD_PARALLEL}"
 
     if [[ $? -ne 0 ]]; then
         echo "cmake build failed!"
@@ -141,9 +147,6 @@ for abi in ${abi_list[@]}; do
         echo "cmake install failed!"
         exit 1
     fi
-
-    "$NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip" --strip-unneeded "$abi_build_dir/exec/libagentxx.so"
-    find "$abi_build_dir/exec/plugins/" -type f -name "*.so" -exec "$NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip" --strip-unneeded {} \;
 
     # ===== 复制 NDK C++ 运行时到 exec (release 发布分发) =====
     # - 本工程 -DANDROID_STL=c++_shared，libagentxx.so 动态依赖 libc++_shared.so，
@@ -173,18 +176,22 @@ for abi in ${abi_list[@]}; do
         if [[ -n "$_cxx_shared" && -f "$_cxx_shared" ]]; then
             echo "[runtime] bundle libc++_shared.so -> $abi_build_dir/exec/ ($_cxx_shared)"
             cp -v "$_cxx_shared" "$abi_build_dir/exec/" || true
-            "$NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip" --strip-unneeded "$abi_build_dir/exec/libc++_shared.so" 2>/dev/null || true
         else
             echo "WARNING: libc++_shared.so not found for $ANDROID_ABI (triple=$_ndk_triple api=$_ndk_api)"
         fi
         unset _ndk_triple _ndk_api _cxx_shared _cand
-        echo "[runtime] exec libs:"
-        ls -lh "$abi_build_dir/exec/"*.so* 2>/dev/null || true
     fi
+
+    # 对 exec 目录下所有产物动态库进行 strip
+    find "$abi_build_dir/exec" -type f -name "*.so" -exec "$NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip" --strip-unneeded {} +
+
+    echo "[runtime] exec libs:"
+    ls -lh "$abi_build_dir/exec/"*.so* 2>/dev/null || true
 
     echo ""
     echo "============================================"
     echo "  编译完成!"
-    echo "  输出目录: $abi_build_dir/agentxx-project-install/"
+    echo "  动态库目录: $abi_build_dir/exec/"
+    echo "  输出目录:   $abi_build_dir/agentxx-project-install/"
     echo "============================================"
 done
