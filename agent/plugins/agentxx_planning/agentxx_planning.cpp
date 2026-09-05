@@ -778,9 +778,8 @@ static void clearSection(ClientCtx& ctx) {
 
 /// 用最近缓存内容刷新 Info 段落 (client io 线程调用)
 ///
-/// 三段式: Graph(按钮弹窗) / Todo / Note — 参考剥离前的 TUI renderPlanningInfo
-/// (Plan 标题 + Graph 按钮 + todos 列表 + notes 段)，经通用 items 表达:
-/// - Graph: title + button{label,mermaid} + steps hint
+/// 两段式: Todo / Note — 参考剥离前的 TUI renderPlanningInfo
+/// (Plan 标题 + todos 列表 + notes 段)，经通用 items 表达:
 /// - Todo: title + 各 todo 行 (icon+content)
 /// - Note: title + 内容
 static void refreshPlanSection(ClientCtx& ctx) {
@@ -809,20 +808,6 @@ static void refreshPlanSection(ClientCtx& ctx) {
             clientJsonEscape(ctx, text)
         ));
     };
-    auto buttonItem = [&](const std::string& label, const std::string& mermaid) {
-        items.push_back(fmt::format(
-            R"({{"kind":"button","label":{},"mermaid":{}}})",
-            clientJsonEscape(ctx, label),
-            clientJsonEscape(ctx, mermaid)
-        ));
-    };
-
-    // ---- Graph: 状态图按钮 + 概要 ----
-    const auto roadmap = plan.value("roadmap", std::string{});
-    if (!roadmap.empty()) {
-        textItem("|- Graph", "normal");
-        buttonItem(" Graph ", roadmap);
-    }
 
     // ---- Todo: 待办列表 (独立分区) ----
     const bool hasTodos
