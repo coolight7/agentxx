@@ -45,35 +45,41 @@ set VCPkgLocalAppDataDisabled=1
 rem find Ragel (winget links dir kept for fallback)
 set "PATH=%PATH%;%localappdata%\Microsoft\WinGet\Links\"
 
-rem ===== Hermetic deps: self-build Boost/OpenSSL/ragel (not system installs) =====
-rem - SKIP: set AGENTXX_SKIP_AUTO_DEPS=1 to disable auto-build (then the dirs
+rem ===== Hermetic deps: self-build/fetch Boost/OpenSSL/ragel (not system installs) =====
+rem - SKIP: set AGENTXX_SKIP_AUTO_DEPS=1 to disable auto-fetch (then the dirs
 rem   below must already exist, else cmake fails with a clear message)
 rem - Prebuilt dirs under third_party are reused automatically when present.
+rem - OpenSSL is downloaded as slproweb Win64 prebuilt installer (no perl).
 rem - The ps1 is pure ASCII; output goes through powershell stdout.
 if "%AGENTXX_SKIP_AUTO_DEPS%"=="1" goto deps_skip_all
 rem ===== compile environment pre-check (fail fast with clear message) =====
-rem check: cmake, perl (OpenSSL Configure needs), git (boost source fetch),
-rem        Visual Studio (vswhere or known install paths)
+rem check: cmake, git (boost source fetch), Visual Studio (vswhere or dir scan)
 where cmake >nul 2>&1
 if errorlevel 1 (
     echo [env] cmake not found, install from https://cmake.org/download/
     exit /b 1
 )
-where perl >nul 2>&1
-if errorlevel 1 (
-    echo [env] perl not found ^(OpenSSL Configure needs it^), install Strawberry Perl and add to PATH
-    exit /b 1
-)
 where git >nul 2>&1
 if errorlevel 1 (
-    echo [env] git not found ^(needed to fetch boost/openssl sources if missing^)
+    echo [env] git not found ^(needed to fetch boost sources if missing^)
     exit /b 1
 )
 set "AGENTXX_VS_FOUND="
+if exist "%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" set "AGENTXX_VS_FOUND=1"
 if exist "%ProgramFiles%\Microsoft Visual Studio\Installer\vswhere.exe" set "AGENTXX_VS_FOUND=1"
-if exist "C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\Tools\VsDevCmd.bat" set "AGENTXX_VS_FOUND=1"
-if exist "C:\Program Files\Microsoft Visual Studio\2022\Professional\Common7\Tools\VsDevCmd.bat" set "AGENTXX_VS_FOUND=1"
-if exist "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\Common7\Tools\VsDevCmd.bat" set "AGENTXX_VS_FOUND=1"
+rem fallback: scan "<pf>\Microsoft Visual Studio\<ver>\<edition>\Common7\Tools\" for
+rem VsDevCmd.bat (VS2022/2026 install under ProgramFiles, VS2019 under (x86)).
+if not defined AGENTXX_VS_FOUND (
+    for %%R in ("%ProgramFiles%" "%ProgramFiles(x86)%") do (
+        if exist "%%~R\Microsoft Visual Studio\" (
+            for /D %%V in ("%%~R\Microsoft Visual Studio\*") do (
+                for /D %%E in ("%%V\*") do (
+                    if exist "%%E\Common7\Tools\VsDevCmd.bat" set "AGENTXX_VS_FOUND=1"
+                )
+            )
+        )
+    )
+)
 if not defined AGENTXX_VS_FOUND (
     echo [env] Visual Studio with MSVC not found ^(need VsDevCmd.bat, VS2022+ recommended^)
     exit /b 1
@@ -91,19 +97,22 @@ if not defined AGENTXX_DEPS_NEEDED goto deps_done
 echo [deps] Boost/OpenSSL/ragel windows artifacts missing, self-building/fetching ...
 powershell -NoProfile -ExecutionPolicy Bypass -File "%script_dir%deps\prepare_windows_deps.ps1" -Mode Debug -SrcDir "%src_dir%third_party"
 if %ERRORLEVEL% neq 0 (
-    echo [deps] self-build deps failed ^(AGENTXX_SKIP_AUTO_DEPS=1 to skip^)
+    echo [deps] auto deps failed ^(AGENTXX_SKIP_AUTO_DEPS=1 to skip^)
     exit /b 1
 )
 :deps_done
 :deps_skip_all
+rem NOTE: assign WITHOUT a trailing backslash: `set "VAR=...\dir\"` makes the
+rem closing quote part of the value (cmd pairs the quotes), corrupting the
+rem later -DBOOST_ROOT=... expansion (seen as `debug" -DOPENSSL_ROOT_DIR=...`).
 if not defined BOOST_ROOT (
     if exist "%src_dir%\third_party\boost-windows-build-debug\" (
-        set "BOOST_ROOT=%src_dir%\third_party\boost-windows-build-debug\"
+        set "BOOST_ROOT=%src_dir%\third_party\boost-windows-build-debug"
     )
 )
 if not defined OPENSSL_ROOT_DIR (
     if exist "%src_dir%\third_party\OpenSSL-windows-build\" (
-        set "OPENSSL_ROOT_DIR=%src_dir%\third_party\OpenSSL-windows-build\"
+        set "OPENSSL_ROOT_DIR=%src_dir%\third_party\OpenSSL-windows-build"
     )
 )
 

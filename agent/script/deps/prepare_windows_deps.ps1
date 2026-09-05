@@ -3,12 +3,21 @@
 # -----------------------------------------------------------------------------
 # Called by windows_debug_build.bat / windows_release_build.bat.
 # Goal: Boost / OpenSSL / ragel are all built/fetched locally by this repo,
-#       not from system (choco/vcpkg/prebuilt exe) packages.
+#       not from system (choco/vcpkg) packages.
 #
 # Artifacts are placed under {SrcDir}/third_party/:
 #   boost-windows-build-{debug|release}  -> Boost 1.92 built with local MSVC b2
-#   OpenSSL-windows-build                -> OpenSSL 4.0.1 built with local MSVC nmake
-#   tools/ragel-<ver>/bin/ragel.exe      -> locally built ragel (hyperscan parser)
+#   OpenSSL-windows-build                -> OpenSSL 4.x prebuilt for MSVC
+#        downloaded from slproweb (https://slproweb.com/products/Win32OpenSSL.html)
+#        and silently installed to this dir. No perl / nasm needed.
+#   tools/ragel-<ver>/bin/ragel.exe      -> locally staged ragel (hyperscan parser)
+#
+# OpenSSL version selection:
+#   - default: the newest 4.x from slproweb hash manifest
+#     (https://slproweb.com/download/win32_openssl_hashes.json), with a pinned
+#     4.0.2 last-chance fallback when the manifest is unreachable
+#   - override: set env AGENTXX_OPENSSL_VERSION, e.g. 4.0.1 / 4.0.2
+# Existing artifacts in OpenSSL-windows-build are reused as-is.
 #
 # Usage:
 #   powershell -ExecutionPolicy Bypass -File deps\prepare_windows_deps.ps1 `
@@ -30,16 +39,31 @@ function Write-Info  { Write-Host "[deps] $args" -ForegroundColor Cyan }
 function Write-Warn  { Write-Host "[deps][WARN] $args" -ForegroundColor Yellow }
 function Write-Err   { Write-Host "[deps][ERROR] $args" -ForegroundColor Red }
 
-# Download helper with optional sha256 check
+# Download helper with optional sha256 check.
+# Uses WebClient with TLS1.2+ and retries: Invoke-WebRequest often dies with
+# "unexpected EOF" on slproweb's large installers.
 function Download-File {
     param([string]$Url, [string]$Dest, [string]$Sha = "")
     if ((Test-Path $Dest) -and $Sha) {
         $h = (Get-FileHash -Algorithm SHA256 $Dest).Hash.ToLower()
         if ($h -eq $Sha.ToLower()) { Write-Info "cache hit: $(Split-Path $Dest -Leaf)"; return }
     }
-    Write-Info "download $Url"
     [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor 3072
-    Invoke-WebRequest -Uri $Url -OutFile $Dest -UseBasicParsing
+    $wc = New-Object System.Net.WebClient
+    $attempt = 0
+    while ($true) {
+        $attempt++
+        try {
+            Write-Info "download $Url (attempt $attempt)"
+            $wc.DownloadFile($Url, $Dest)
+            break
+        } catch {
+            if ($attempt -ge 3) { throw "download failed after 3 attempts: $($_.Exception.Message)" }
+            Write-Warn "download attempt $attempt failed: $($_.Exception.Message), retrying ..."
+            Start-Sleep -Seconds 3
+        }
+    }
+    $wc.Dispose()
     if ($Sha) {
         $h = (Get-FileHash -Algorithm SHA256 $Dest).Hash.ToLower()
         if ($h -ne $Sha.ToLower()) { Write-Err "sha256 mismatch: $Dest"; throw "sha256 mismatch" }
@@ -55,7 +79,7 @@ function Get-Vswhere {
     return ""
 }
 
-# ===== locate MSVC developer prompt =====
+# ===== locate MSVC developer prompt (vswhere first, dir scan fallback) =====
 function Find-VsDevCmd {
     $vswhere = Get-Vswhere
     if ($vswhere) {
@@ -65,12 +89,17 @@ function Find-VsDevCmd {
             if (Test-Path $p) { return $p }
         }
     }
-    foreach ($p in @(
-        "C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\Tools\VsDevCmd.bat",
-        "C:\Program Files\Microsoft Visual Studio\2022\Professional\Common7\Tools\VsDevCmd.bat",
-        "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\Common7\Tools\VsDevCmd.bat",
-        "C:\Program Files (x86)\Microsoft Visual Studio\2019\Community\Common7\Tools\VsDevCmd.bat")) {
-        if (Test-Path $p) { return $p }
+    # fallback: scan any "<version>\<edition>" layout under both ProgramFiles
+    # roots (VS2022/2026 use C:\Program Files\Microsoft Visual Studio\NN\...,
+    # VS2019 used C:\Program Files (x86)\...), no hard-coded install paths.
+    foreach ($pf in @(${env:ProgramFiles}, ${env:ProgramFiles(x86)})) {
+        if (-not $pf -or -not (Test-Path $pf)) { continue }
+        foreach ($verDir in Get-ChildItem -Path (Join-Path $pf "Microsoft Visual Studio") -Directory -ErrorAction SilentlyContinue) {
+            foreach ($edDir in Get-ChildItem -Path $verDir.FullName -Directory -ErrorAction SilentlyContinue) {
+                $p = Join-Path $edDir.FullName "Common7\Tools\VsDevCmd.bat"
+                if (Test-Path $p) { return $p }
+            }
+        }
     }
     return ""
 }
@@ -142,69 +171,124 @@ function Ensure-Boost {
     Write-Info "Boost($variant) done: $install"
 }
 
-# ===== OpenSSL (MSVC nmake, no-asm to skip nasm) =====
+# ===== OpenSSL (slproweb prebuilt for MSVC, silent install, no perl) =====
+# slproweb provides Win64 dev installers which contain everything CMake
+# needs (include/ + lib/VC/x64/{MD,MDd,MT,MTd} + bin/). We download the EXE
+# pinned by sha256 from the official hash manifest and install it straight
+# into third_party/OpenSSL-windows-build.
+# NOTE: the slproweb 4.x installer requires elevation. When this script is
+# not running elevated (typical desktop use) the install step triggers one
+# UAC prompt via -Verb RunAs; on CI (admin runner) it installs silently.
+# perl / nasm are never needed.
+function Get-OpenSSL-Meta {
+    param([string]$Version, [string]$JsonUrl, [string]$FileKey)
+    # returns @{ version; url; sha256; installer }
+    try {
+        $json = Invoke-RestMethod -Uri $JsonUrl -UseBasicParsing
+        $f = $json.files.$FileKey
+        if (-not $f) { throw "file entry not found: $FileKey" }
+        return @{ version = $Version; url = $f.url; sha256 = $f.sha256; installer = $f.installer }
+    } catch {
+        Write-Warn "failed to resolve OpenSSL $Version metadata: $($_.Exception.Message)"
+        return $null
+    }
+}
+
+function Test-IsAdmin {
+    $id = [Security.Principal.WindowsIdentity]::GetCurrent()
+    $p = New-Object Security.Principal.WindowsPrincipal($id)
+    return $p.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+}
+
 function Ensure-OpenSSL {
     $install = Join-Path $SrcDir "OpenSSL-windows-build"
-    $osslSrc = Join-Path $SrcDir "openssl-4.0.1"
-    if (-not (Test-Path "$osslSrc\Configure")) {
-        # accept other openssl* dir names
-        $cand = Get-ChildItem -Path $SrcDir -Directory -Filter "openssl*" | Where-Object { Test-Path "$($_.FullName)\Configure" } | Select-Object -First 1
-        if ($cand) {
-            $osslSrc = $cand.FullName
-        } else {
-            # source dir is not in git, auto-download openssl-4.0.1
-            Write-Info "OpenSSL source not found, downloading openssl-4.0.1 ..."
-            New-Item -ItemType Directory -Force -Path (Join-Path $SrcDir "tools") | Out-Null
-            $arc = Join-Path $SrcDir "tools\_openssl-4.0.1.tar.gz"
-            Download-File "https://github.com/openssl/openssl/archive/refs/tags/openssl-4.0.1.tar.gz" $arc
-            $tmpDir = Join-Path $SrcDir "tools\_ossl_extract"
-            if (Test-Path $tmpDir) { Remove-Item -Recurse -Force $tmpDir }
-            New-Item -ItemType Directory -Force -Path $tmpDir | Out-Null
-            tar -xzf $arc -C $tmpDir
-            # github archive extracts as openssl-openssl-<tag>
-            $extDir = Get-ChildItem -Path $tmpDir -Directory -Filter "openssl-*" | Select-Object -First 1
-            if (-not $extDir) { throw "openssl archive layout unexpected" }
-            if (Test-Path $osslSrc) { Remove-Item -Recurse -Force $osslSrc }
-            Move-Item $extDir.FullName $osslSrc
-            Remove-Item -Recurse -Force $tmpDir
-            Remove-Item $arc -ErrorAction SilentlyContinue
-        }
-    }
-    # Reuse existing artifacts (user prebuilt install / previous success)
-    if ((Test-Path "$install\include\openssl\opensslv.h") -and
-        ((Test-Path "$install\lib\libssl.lib") -or (Test-Path "$install\lib64\libssl.lib"))) {
+    # Reuse existing artifacts (user prebuilt install / previous success).
+    # Accept both install layouts:
+    #   - this script's slproweb install:  include/ + lib/VC/x64/MD/libssl_static.lib
+    #   - manual nmake install_sw:         include/ + lib/libssl.lib
+    $haveInclude = Test-Path "$install\include\openssl\opensslv.h"
+    $haveLib = (Test-Path "$install\lib\libssl.lib") -or
+               (Test-Path "$install\lib\VC\x64\MD\libssl_static.lib")
+    if ($haveInclude -and $haveLib) {
         Write-Info "OpenSSL artifacts exist, reuse: $install"
         return
     }
-    $vsDevCmd = Find-VsDevCmd
-    if (-not $vsDevCmd) { throw "Visual Studio not found (need VsDevCmd.bat)" }
+    $jsonUrl = "https://slproweb.com/download/win32_openssl_hashes.json"
+    $toolsDir = Join-Path $SrcDir "tools"
+    New-Item -ItemType Directory -Force -Path $toolsDir | Out-Null
 
-    Write-Info "=============================================="
-    Write-Info "start self-building OpenSSL with MSVC (no-asm, no nasm needed)"
-    Write-Info "  source: $osslSrc"
-    Write-Info "  install: $install"
-    Write-Info "=============================================="
+    # --- resolve target version + installer file ---
+    $version = $env:AGENTXX_OPENSSL_VERSION
+    $meta = $null
+    if ($version) {
+        # exact version requested (e.g. AGENTXX_OPENSSL_VERSION=4.0.2):
+        # use the x64 (INTEL/64-bit) non-light EXE from the hash manifest
+        $key = "Win64OpenSSL-$($version -replace '\.', '_').exe"
+        Write-Info "AGENTXX_OPENSSL_VERSION set: OpenSSL $version"
+        $meta = Get-OpenSSL-Meta $version $jsonUrl $key
+        if (-not $meta) { throw "AGENTXX_OPENSSL_VERSION $version not found in slproweb hash manifest" }
+    } else {
+        # default: newest OpenSSL 4.x from the manifest
+        Write-Info "resolving newest OpenSSL 4.x from $jsonUrl ..."
+        try {
+            $json = Invoke-RestMethod -Uri $jsonUrl -UseBasicParsing
+            $pick = $json.files.PSObject.Properties |
+                Where-Object { $_.Name -match '^Win64OpenSSL-(4_\d+_\d+).exe$' } |
+                Sort-Object { [version]($_.Name -replace '^Win64OpenSSL-|\.exe$', '' -replace '_', '.') } -Descending |
+                Select-Object -First 1
+            if (-not $pick) { throw "no Win64OpenSSL 4.x in manifest" }
+            $meta = @{ version = $pick.Name -replace '^Win64OpenSSL-|\.exe$', '' -replace '_', '.'
+                       url = $pick.Value.url; sha256 = $pick.Value.sha256; installer = $pick.Value.installer }
+        } catch {
+            Write-Warn "failed to resolve newest 4.x from manifest: $($_.Exception.Message)"
+        }
+        if (-not $meta) {
+            # Last-chance fallback when the manifest is unreachable:
+            # pin the newest known Win64 dev EXE (update when slproweb bumps).
+            Write-Warn "fallback to pinned Win64OpenSSL-4.0.2"
+            $meta = @{
+                version   = "4.0.2"
+                url       = "https://slproweb.com/download/Win64OpenSSL-4_0_2.exe"
+                sha256    = "39e840f7b94e2bf63e8edf4c57b383a8d11b883227d610a426b1a40626c8d9fc"
+                installer = "exe"
+            }
+        }
+    }
+    Write-Info "OpenSSL prebuilt: $($meta.version) ($($meta.installer)), sha256 pinned"
+
+    $arc = Join-Path $toolsDir "Win64OpenSSL-$($meta.version -replace '\.', '_').exe"
+    Download-File $meta.url $arc $meta.sha256
+    if (-not (Test-Path $arc)) { throw "OpenSSL installer download failed: $arc" }
+
+    # --- install straight into OpenSSL-windows-build ---
+    # "/DIR=" must be the last option passed to the NSIS installer.
+    $oldOpenSslDir = Join-Path $SrcDir "OpenSSL-windows-build"
+    if (Test-Path $oldOpenSslDir) {
+        Write-Warn "replacing existing (possibly partial) OpenSSL-windows-build"
+        Remove-Item -Recurse -Force $oldOpenSslDir
+    }
     New-Item -ItemType Directory -Force -Path $install | Out-Null
-
-    if (-not (Get-Command perl -ErrorAction SilentlyContinue)) {
-        throw "OpenSSL MSVC build needs perl on PATH (install Strawberry Perl)"
+    Write-Info "installing OpenSSL into $install ..."
+    $args = @("/S", "/DIR=`"$install`"")
+    $p = $null
+    if (Test-IsAdmin) {
+        # CI / elevated shells: silent install, no UAC
+        $p = Start-Process -FilePath $arc -ArgumentList $args -PassThru -Wait
+    } else {
+        # Desktop: slproweb 4.x installer needs elevation; trigger one UAC
+        # prompt (RunAs). User must click "Yes" once.
+        Write-Warn "OpenSSL installer needs administrator rights, requesting elevation (accept the UAC prompt) ..."
+        try {
+            $p = Start-Process -FilePath $arc -ArgumentList $args -Verb RunAs -PassThru -Wait
+        } catch {
+            throw "elevated OpenSSL install failed/cancelled: $($_.Exception.Message)"
+        }
     }
-
-    $steps = @(
-        "cd /d `"$osslSrc`" && perl Configure VC-WIN64A no-shared no-asm no-tests no-docs --prefix=`"$install`" --openssldir=`"$install`"",
-        "cd /d `"$osslSrc`" && nmake",
-        "cd /d `"$osslSrc`" && nmake install_sw"
-    )
-    foreach ($s in $steps) {
-        Write-Info "exec: $s"
-        Invoke-InVcEnv $vsDevCmd $s | Out-Null
-        if ($LASTEXITCODE -ne 0) { throw "OpenSSL build step failed: $s" }
+    if ($p.ExitCode -ne 0) { throw "OpenSSL installer failed with exit code $($p.ExitCode)" }
+    if (-not (Test-Path "$install\include\openssl\opensslv.h")) {
+        throw "OpenSSL install artifacts missing: $install (installer ran but layout unexpected?)"
     }
-    if (-not (Test-Path "$install\include\openssl\opensslv.h") -or
-        -not (Test-Path "$install\lib\libssl.lib")) {
-        throw "OpenSSL install artifacts missing: $install"
-    }
-    Write-Info "OpenSSL done: $install"
+    Write-Info "OpenSSL $($meta.version) prebuilt installed: $install"
 }
 
 # ===== ragel (hyperscan parser generator; no official Windows build) =====

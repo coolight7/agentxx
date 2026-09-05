@@ -1752,9 +1752,10 @@ asio::awaitable<TestResult> run_summarization_tests() {
         XX_TEST_EXPECT_EQ(r, std::string{""});
     }
 
-    // --- T20. subagent 失败返回错误 JSON (非空串): 当前实现将其作为
-    //           "摘要文本" 写回上下文 (行为记录: 错误信息透传给父 LLM,
-    //           由其自行识别处理; 后续如改为失败判定需同步更新本用例) ---
+    // --- T20. subagent 失败返回错误 JSON (非空串): 不得当作有效摘要,
+    //           按失败处理 (走失败计数/保留原消息或硬截断), 不污染上下文 ---
+    // - 背景: 子代理被取消时宿主返回 `{"error":"Sub-agent cancelled..."}`
+    //   错误串; 若当摘要写回, 取消后会显示"压缩成功"并继续执行
     {
         auto env = std::make_shared<SummarizationTestEnv>();
         env->session()->setModelName("small");
@@ -1773,12 +1774,11 @@ asio::awaitable<TestResult> run_summarization_tests() {
             makeMsg("assistant", "a4"),
         };
         auto r = co_await env->handle->doSummarizeWithLLM(env->sessionId, msgs);
-        // 错误 JSON 非空 → doSummarizeWithLLM 原样返回 (未做失败判定)
-        XX_TEST_EXPECT_EQ(r, std::string{R"({"error":"fake subagent failed"})"});
+        // 错误 JSON → doSummarizeWithLLM 按失败返回空串
+        XX_TEST_EXPECT_EQ(r, std::string{""});
 
-        // onModelcallRunFunc 视其为成功压缩 → Compact 写回, 摘要内容含错误 JSON
+        // onModelcallRunFunc 视其为失败 → 保留原消息, 失败计数 +1
         auto res = co_await runModelcall(env->handle, env->ctx, env->sessionId, msgs, 900);
-        // 与 T5 同布局: system(1) + 总结对(2) + recent 6 条 = 9
         XX_TEST_EXPECT_EQ(res.size(), size_t{9});
         bool hasErrorSummary = false;
         for (const auto& m : res) {
@@ -1786,7 +1786,12 @@ asio::awaitable<TestResult> run_summarization_tests() {
                 hasErrorSummary = true;
             }
         }
-        XX_TEST_EXPECT_TRUE(hasErrorSummary);
+        XX_TEST_EXPECT_FALSE(hasErrorSummary);
+        auto failCount = env->ctx->middlewareHandleContext->getGraphDataItemValue<size_t>(
+            env->sessionId,
+            agentxx::middleware::MiddlewareContext::graphDataKey_summarizationFailCount
+        );
+        XX_TEST_EXPECT_EQ(failCount, size_t{1});
     }
 
     // --- T20. 触发压缩时先发 viewMessage "正在压缩上下文", 压缩完成更新为 "压缩上下文

@@ -16,10 +16,6 @@
     - 选择win版本安装，如: cmake-x.x.x-windows-x86_64.msi
     - https://github.com/Kitware/CMake/releases/download/v4.4.0-rc2/cmake-4.4.0-rc2-windows-x86_64.msi
 
-### perl (OpenSSL 构建需要)
-- OpenSSL 的 Windows 构建需要 `perl` 运行 `Configure`, 可用 Git 自带
-  (`C:\Program Files\Git\usr\bin\perl.exe`, 构建脚本在 CI 上会自动加入 PATH),
-  或安装 Strawberry Perl 并加入 `PATH`。
 ### pkg-config
 - 安装 pkg-config:
 ```pwsh
@@ -40,17 +36,16 @@ pkg-config --version
 ## 自动编译脚本
 
 - 执行构建脚本即可 (`agent/script/windows_debug_build.bat` / `agent/script/windows_release_build.bat`) 
-- 编译脚本会自动准备全部编译环境与依赖库, 无需手动下载预编译包，自动处理:
+- 编译脚本会自动准备全部编译环境与依赖库, 自动处理:
 >
-> 1. **环境前置检查**: `cmake`、`perl` (OpenSSL 构建需要, 可用 Git 自带)、
->    `git` (缺源码时自动下载)、Visual Studio (MSVC, 需要 `VsDevCmd.bat`),
->    缺失时直接报错并给出安装提示。
-> 2. **依赖自构建** (全部使用自己编译的库, 不用系统/choco/vcpkg 预编译包):
+> 1. **环境前置检查**: `cmake`、`git` (缺源码时自动下载)、
+>    Visual Studio (MSVC, 需要 `VsDevCmd.bat`, vswhere 或目录扫描定位,
+>    无硬编码安装路径), 缺失时直接报错并给出安装提示。
+> 2. **依赖准备**:
 >    `Boost 1.92` (debug/release 两版) 用本机 MSVC `b2` 自动编译到
 >    `agent/third_party/boost-windows-build-{debug,release}/`;
->    `OpenSSL 4.0.1` 用本机 MSVC `nmake` (带 `no-asm`, 无需 nasm) 自动编译到
->    `agent/third_party/OpenSSL-windows-build/`;
->    已有产物自动复用。
+>    `OpenSSL 4.x` 自动下载 slproweb Win64 **预编译**安装包
+>    (sha256 校验) 静默安装到 `agent/third_party/OpenSSL-windows-build/`,
 >    `ragel` (hyperscan 代码生成器) 优先用系统已装版本
 >    (`winget install PolarGoose.Ragel`), 缺失时下载预编译包暂存到
 >    `agent/third_party/tools/ragel-*/bin/`。
@@ -59,8 +54,9 @@ pkg-config --version
 
 | 变量 | 说明 |
 | --- | --- |
-| `AGENTXX_SKIP_AUTO_DEPS=1` | 跳过自动构建 (依赖目录缺失时 cmake 直接报错) |
-| `BOOST_ROOT` / `OPENSSL_ROOT_DIR` | 手动指定已安装路径, 优先于自动构建 |
+| `AGENTXX_SKIP_AUTO_DEPS=1` | 跳过自动准备 (依赖目录缺失时 cmake 直接报错) |
+| `AGENTXX_OPENSSL_VERSION=x.y.z` | 固定 OpenSSL 预编译版本 (默认 manifest 最新 4.x) |
+| `BOOST_ROOT` / `OPENSSL_ROOT_DIR` | 手动指定已安装路径, 优先于自动准备 |
 | `AGENTXX_BUILD_PARALLEL=N` | 并行任务数 (默认 4) |
 | `AGENTXX_ENABLE_HYPERSCAN=OFF` | 传给 cmake 关闭 hyperscan, 则不需要 ragel |
 
@@ -105,7 +101,7 @@ cd "%boost_source_dir%"
 ### 编译 openssl
 - 有两种方式，任选一个:
   1. 下载预编译包: 前往下载 `https://slproweb.com/products/Win32OpenSSL.html`, 进入网页后往下滑动，找到 `Win64 OpenSSL vx.x.x`，注意没有末尾 Light，下载其 `EXE` 或 `MSI` 都行，然后运行安装，安装目录选择到 `{项目根目录}/agent/third_party/OpenSSL-windows-build/` 即可
-  2. 从perl安装，需要用本机 MSVC 自动从源码编译 (`no-asm`, 无需 nasm)参考 `agent/third_party/openssl-4.0.1/NOTES-WINDOWS.md`:
+  2. 从源码自行编译 (可选, 需要 perl): 用本机 MSVC 从源码编译 (`no-asm`, 无需 nasm), 参考 `agent/third_party/openssl-4.0.1/NOTES-WINDOWS.md`:
 ```sh
 perl Configure VC-WIN64A no-shared no-asm no-tests no-docs nmake
 nmake install_sw

@@ -88,21 +88,15 @@ jobs:
           ./agent/script/linux_release_build.sh
 
       # ===== Windows 环境依赖准备 =====
-      # - Boost/OpenSSL 由 windows_release_build.bat 内部用 MSVC 自源码构建,
-      #   不依赖任何预编译/系统安装包。
-      # - perl: OpenSSL Configure 必需, 用 windows-latest 自带 git-perl。
+      # - Boost 由 windows_release_build.bat 内部用 MSVC 自源码构建;
+      #   OpenSSL 由脚本自动下载 slproweb Win64 预编译包 (sha256 校验),
+      #   均不依赖系统/预装包, 无需 perl / nasm。
       # - ragel: hyperscan 代码生成器。无官方 Windows 二进制, 用 winget 装
       #   (非库依赖, 只是构建工具), 脚本找不到时会自行下载替代。
       - name: Install Dependencies (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $perlDir = "C:\Program Files\Git\usr\bin"
-          if (Test-Path "$perlDir\perl.exe") {
-            echo "GIT_PERL_DIR=$perlDir" | Out-File -FilePath $env:GITHUB_ENV -Encoding ascii -Append
-          } else {
-            Write-Host "git-perl not found; OpenSSL self-build may fail"
-          }
           # ragel via winget (best effort; prepare_windows_deps.ps1 会兜底下载)
           try {
             winget install --id=PolarGoose.Ragel -e --accept-source-agreements --accept-package-agreements --silent | Out-Host
@@ -114,8 +108,7 @@ jobs:
         if: runner.os == 'Windows'
         shell: cmd
         run: |
-          rem append git perl and winget links to PATH
-          if defined GIT_PERL_DIR set "PATH=%GIT_PERL_DIR%;%PATH%"
+          rem append winget links to PATH (ragel fallback)
           set "PATH=%PATH%;%localappdata%\Microsoft\WinGet\Links\"
           echo [build] Running Windows release build script...
           call ${{ matrix.build_script }}
