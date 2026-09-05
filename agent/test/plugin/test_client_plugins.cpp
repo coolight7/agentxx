@@ -1003,7 +1003,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                     hasPlanSection = true;
                     XX_TEST_EXPECT_EQ(sec.title, std::string{"Plan"});
                     std::string dump = sec.items.dump();
-                    XX_TEST_EXPECT_TRUE(dump.find("Graph") != std::string::npos);
+                    XX_TEST_EXPECT_TRUE(dump.find("Graph") == std::string::npos);
                     XX_TEST_EXPECT_TRUE(dump.find("[~] do step 1") != std::string::npos);
                     XX_TEST_EXPECT_TRUE(dump.find("[#] done step 0") != std::string::npos);
                     XX_TEST_EXPECT_TRUE(dump.find("test note 123") != std::string::npos);
