@@ -1,7 +1,7 @@
 # bench 增加测试 agentxx_cli, libagnetxx 性能
 - 难度: 很高
 - 类型: 新增功能
-- 基于commit: 7c3b46268bd0a48545fca9d00d4e12e879f19602
+- 基于commit: a6c45638ab4dee66643a35cf8663133b81086967
 - 需求:
 ```md
 - benchmark 仿照 test 支持模块化，然后增加支持测试 `agentxx_cli` 在加载5个常用插件(agentxx_filesystem,agentxx_execute_command,agentxx_system,agentxx_websearch,agentxx_planning)的情况下，以下模式时在（程序启动时、100K token左右上下文、200K token左右上下文）的内存占用、cpu占用:

@@ -31,7 +31,24 @@ target_compile_definitions(agentxx_benchmark PRIVATE
   AGENTXX_BENCH_OUTPUT_DIR="${AGENTXX_BENCH_OUTPUT_DIR}"
 )
 
-target_include_directories(agentxx_benchmark PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+target_include_directories(agentxx_benchmark PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../plugins/"
+)
+
+if (AGENTXX_BUILD_CLIENT)
+  set(AGENTXX_CLIENT_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../client/")
+  file(GLOB_RECURSE client_SOURCES
+    CONFIGURE_DEPENDS
+    "${AGENTXX_CLIENT_SOURCE_DIR}/src/*.cpp" "${AGENTXX_CLIENT_SOURCE_DIR}/src/*.cc" "${AGENTXX_CLIENT_SOURCE_DIR}/src/*.cxx"
+  )
+  target_sources(agentxx_benchmark PRIVATE
+    ${client_SOURCES}
+  )
+  target_include_directories(agentxx_benchmark PRIVATE
+    "${AGENTXX_CLIENT_SOURCE_DIR}/include/"
+  )
+endif()
 
 find_package(PkgConfig REQUIRED)
 
@@ -88,6 +105,18 @@ if (AGENTXX_LINUX_IO_URING_SUPPORTED)
   target_link_libraries(agentxx_benchmark PRIVATE
     PkgConfig::uring
   )
+endif()
+
+if (AGENTXX_BUILD_CLIENT)
+  find_package(ftxui REQUIRED)
+  find_package(markdown-ui REQUIRED)
+  target_link_libraries(agentxx_benchmark PRIVATE ftxui::ftxui markdown::markdown-ui)
+  target_compile_definitions(agentxx_benchmark PRIVATE AGENTXX_BUILD_CLIENT=1)
+endif()
+
+if (NOT XX_IS_WIN_D)
+  target_link_libraries(agentxx_benchmark PRIVATE ${CMAKE_DL_LIBS})
+  target_link_options(agentxx_benchmark PRIVATE "-flto=auto")
 endif()
 
 if (XX_IS_MSVC_D)
