@@ -230,8 +230,7 @@ fi
 strip --strip-all "$build_dir/exec/agentxx_cli"
 strip --strip-all "$build_dir/exec/agentxx_benchmark"
 strip --strip-unneeded "$build_dir/exec/libagentxx.so"
-strip --strip-unneeded "$build_dir/exec/*.so*"
-find "$build_dir/exec/plugins/" -type f -name "*.so*" -exec strip --strip-unneeded {} \;
+find "$build_dir/exec/" -type f -name "*.so*" -exec strip --strip-unneeded {} \;
 
 # ===== 归档发布包 (AGENTXX_PACKAGE_RELEASE=1 时自动执行) =====
 if [[ "${AGENTXX_PACKAGE_RELEASE:-0}" == "1" && -n "$AGENTXX_VERSION" ]]; then
