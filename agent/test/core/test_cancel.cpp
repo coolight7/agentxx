@@ -231,7 +231,7 @@ asio::awaitable<void> test_catchErrorAsync_cancel_conversion() {
 }
 
 // ===========================================================================
-// E2E: LLM 请求在途时取消 => "Cancelled by user", 且不等待慢速响应完成
+// E2E: LLM 请求尚未返回时取消 => "Cancelled by user", 且不等待慢速响应完成
 // ===========================================================================
 asio::awaitable<void> test_agent_cancel_llm_request() {
     auto sim     = startDaSimServer();
@@ -263,7 +263,7 @@ asio::awaitable<void> test_agent_cancel_llm_request() {
             timer.expires_after(std::chrono::milliseconds(5));
             co_await timer.async_wait(asio::use_awaitable);
         }
-        // 稍等进入 LLM HTTP 在途状态再取消
+        // 稍等进入 LLM HTTP 请求未返回状态再取消
         timer.expires_after(std::chrono::milliseconds(300));
         co_await timer.async_wait(asio::use_awaitable);
         auto session = agent.agentContext->sessions->get("cancel_llm_test");

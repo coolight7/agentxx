@@ -14,7 +14,7 @@
  * - JS 内 callTool 命中本引擎工具: 同线程内联执行 (防自锁)
  * - 卸载安全: JsPluginCtx 由 shared_ptr 管理; 跨线程经 mirror 表 (互斥锁) 查
  *   强引用; 插件卸载 (deleted) 后已入队任务检查标志跳过; JSContext 释放由
- *   JsPluginCtx 析构完成 (在途任务全部结束后)
+ *   JsPluginCtx 析构完成 (全部进行中的任务结束后)
  *
  * 沙箱: 内存限制 (JS_SetMemoryLimit) + 栈限制 + 指令中断超时; 不引入
  * quickjs-libc (无 os/std 模块); 全局仅注入标准 ECMA 内置 + agentxx 桥
@@ -106,16 +106,16 @@ struct JsHookBinding {
     int         point = -1; ///< 事件订阅时为 -1
 };
 
-/// 脚本插件上下文 (生命周期: plugins_ / mirror / 在途任务共享)
+/// 脚本插件上下文 (生命周期: plugins_ / mirror / 进行中任务共享持有)
 /// - 数据成员仅 JS 线程访问 (deleted/inflight 亦仅 JS 线程, 任务串行)
-/// - JSContext 释放: 析构函数 (在途任务全部结束后由最后一个持有者析构)
+/// - JSContext 释放: 析构函数 (全部进行中的任务结束后由最后一个持有者析构)
 struct JsPluginCtx {
     std::string              name;
     JSContext*               ctx      = nullptr;
     const AgentxxPluginHost* host     = nullptr; ///< 脚本插件宿主句柄
     JsEngine*                engine   = nullptr;
     bool                     deleted  = false; ///< 已卸载 (入队任务检查后跳过)
-    size_t                   inflight = 0;     ///< 在途访问任务数 (execute/hook/event)
+    size_t                   inflight = 0;     ///< 进行中的任务数 (execute/hook/event)
     /// 工具表: 普通对象 name -> {execute, name, description}
     JSValue tools = JS_UNDEFINED;
     /// 钩子表: Array(7) 元素为 fn 或 null
@@ -153,7 +153,7 @@ public:
         }
         cv_.notify_all();
         if (thread_.joinable()) {
-            thread_.join(); // 处理完已入队任务 (含在途 execute) 后退出
+            thread_.join(); // 处理完已入队任务 (含进行中的 execute) 后退出
         }
         if (rt_) {
             JS_FreeRuntime(rt_);
@@ -535,7 +535,7 @@ private:
             std::lock_guard<std::mutex> lk(mirrorMtx_);
             mirror_.erase(name);
         }
-        // 在途任务全部结束后 shared_ptr 归零 → JsPluginCtx 析构 → JS_FreeContext
+        // 全部进行中的任务结束后 shared_ptr 归零 → JsPluginCtx 析构 → JS_FreeContext
     }
 
     // ==================== 工具执行 (JS 线程) ====================

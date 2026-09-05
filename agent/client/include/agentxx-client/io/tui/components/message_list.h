@@ -305,7 +305,7 @@ private:
 
     /// 历史分页预取判定 (滚轮事件处理后调用): 滚动接近已加载窗口顶部且
     /// 还有更早历史时经 ctx_.requestMoreHistory 发起分页请求。
-    /// - 在途去重由实现方 (TUIClientAgentIO::requestOlderHistory) 保证,
+    /// - 请求去重由实现方 (TUIClientAgentIO::requestOlderHistory) 保证,
     ///   此处仅做廉价条件过滤
     void maybeRequestMoreHistory();
     /// 触发预取的距顶阈值 (行): 距窗口顶部不足该行数即提前拉取下一页,

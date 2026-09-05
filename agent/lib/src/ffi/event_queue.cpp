@@ -53,7 +53,7 @@ void AGENTXX_FFI_CALL agentxx_ffi_event_queue_free(AgentxxFFIEventQueue* q) {
     // closed 置位与 notify_all 必须持锁完成:
     // - 保证与并发 on_event/pop 的加锁顺序互斥, 不会出现 "对方刚检查完
     //   closed==false 还没来得及 notify, 本函数就 delete" 的夹缝 UAF
-    // - 唤醒全部在途 pop (其以 ERR_STATE 返回)
+    // - 唤醒全部正在等待返回的 pop (其以 ERR_STATE 返回)
     {
         std::lock_guard<std::mutex> lock(q->m);
         q->closed = true;
@@ -61,7 +61,7 @@ void AGENTXX_FFI_CALL agentxx_ffi_event_queue_free(AgentxxFFIEventQueue* q) {
         decltype(q->items){}.swap(q->items);
         q->cv.notify_all();
     }
-    // 等待全部在途 pop 退出后再释放对象: 被唤醒者可能尚未重新上锁检查 closed。
+    // 等待所有尚未返回的 pop 调用返回后再释放对象: 被唤醒者可能尚未重新上锁检查 closed。
     // 最坏自旋时长 = 单次 pop 的 timeout_ms (pop 恒有界返回, 不会死等)。
     // 注意: 本函数返回后句柄立即失效, 调用方须保证其他线程不再以该句柄调用
     // 任何 event_queue API (裸指针无法防御 free 之后新进入的调用)。
@@ -125,7 +125,7 @@ int32_t AGENTXX_FFI_CALL agentxx_ffi_event_queue_pop(
         return AGENTXX_FFI_ERR_INVALID;
     }
 
-    // 在途标记 (free 等待其归零); RAII 保证异常路径也递减
+    // 正在等待的 pop 计数 (free 等待其归零); RAII 保证异常路径也递减
     struct WaiterGuard {
         AgentxxFFIEventQueue* q;
 

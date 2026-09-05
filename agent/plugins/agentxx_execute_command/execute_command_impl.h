@@ -373,8 +373,8 @@ inline asio::awaitable<std::string> runProcPipeline(
         } else {
             result << "[ExitCode]\n" << exitCode << "\n";
             if (all_output || 0 != exitCode) {
-                // 手动裁剪: 每路 stdout/stderr 独立按 UTF-8 长度限制, 格式对标
-                // ToolcallNode::execTool 的 [Content offloaded...]，通过 storeFn
+                // 手动裁剪: 每路 stdout/stderr 独立按 UTF-8 长度限制, 格式与
+                // ToolcallNode::execTool 的 [Content offloaded...] 保持一致，通过 storeFn
                 // 将完整内容 offload 到 share_store（超限时）并带 ID
                 if (strout.empty() || agentxx::util::autoConvertToUtf8(strout)) {
                     if (!strout.empty()) {

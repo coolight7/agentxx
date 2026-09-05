@@ -30,12 +30,12 @@ struct TUICtx {
 
     /// 请求加载更早的历史消息 (历史分页; 线程安全)
     /// - MessageListComponent 检测到滚动接近窗口顶部时调用; 实现方
-    ///   (TUIClientAgentIO::requestOlderHistory) 内部做在途去重与边界判断
+    ///   (TUIClientAgentIO::requestOlderHistory) 内部做请求去重与边界判断
     std::function<void()> requestMoreHistory;
 
     /// 请求加载更早的持久化会话页 (会话列表分页; 线程安全)
     /// - SessionSelectorOverlay 选择项接近已加载列表末尾时调用; 实现方
-    ///   (TUIClientAgentIO::requestNextSessionListPage) 内部做在途去重、
+    ///   (TUIClientAgentIO::requestNextSessionListPage) 内部做请求去重、
     ///   hasMore 边界判断并以上一页最后一条为 keyset 游标发起请求
     std::function<void()> requestMoreSessions;
 

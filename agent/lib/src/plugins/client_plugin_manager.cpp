@@ -156,8 +156,9 @@ bool parseCommandAction(const std::string& jsonText, std::string& action) {
 // =====================================================================
 
 ClientPluginInstance::~ClientPluginInstance() {
-    // dlclose (与 agent 侧 PluginInstance 一致): 调用方保证无在途回调
-    // (unloadAsync 等 inflight 归零后移除; shutdownAll 进程退出路径约定无在途)
+    // dlclose (与 agent 侧 PluginInstance 一致): 调用方保证无未返回的回调
+    // (unloadAsync 等 inflight 归零后移除; shutdownAll 进程退出路径约定
+    // 没有尚未返回的插件回调)
     if (dlHandle) {
         NativeLoader::close(dlHandle);
         dlHandle = nullptr;
@@ -467,7 +468,7 @@ asio::awaitable<bool> ClientPluginManager::unloadAsync(std::string_view name) {
     // 不再收到任何回调
     detachAll(inst.get(), false);
 
-    // 等 in-flight 回调归零 (超时放弃: 保持已 detach 状态, 复位可稍后重试)
+    // 等未返回的回调归零 (超时放弃: 保持已 detach 状态, 复位可稍后重试)
     if (!co_await waitInflightZero(inst, std::chrono::seconds{10})) {
         inst->unloadRequested = false;
         XX_LOGW("[client_plugin] `{}` inflight not zero, unload aborted (retry later)", name);
@@ -775,7 +776,7 @@ asio::awaitable<void>
 void ClientPluginManager::shutdownAll() {
     // 依赖图级联卸载 (先子后父) —— 与 agent 侧 shutdownAll 一致:
     // 脚本类插件 (depends 引擎) 先卸载, 引擎最后 dlclose
-    // - 不等在途回调: 调用方 (进程退出) 须保证无在途插件回调
+    // - 不等未返回的插件回调: 调用方 (进程退出) 须保证没有尚未返回的插件回调
     std::vector<std::string> names;
     names.reserve(plugins_.size());
     for (const auto& [name, inst] : plugins_) {

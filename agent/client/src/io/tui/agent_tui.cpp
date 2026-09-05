@@ -145,7 +145,7 @@ void TUIClientAgentIO::enqueueUiAction(std::function<void()> fn) {
 void TUIClientAgentIO::postRedraw() {
     // 合并同一时刻的多次重绘请求: 流式输出时 client 线程每 token 调用一次,
     // 若每次 Post 都触发完整渲染, 渲染成本被 token 到达频率放大。
-    // - redrawPosted_: 合并标记, 仅当无在途 Custom 事件时才 Post
+    // - redrawPosted_: 合并标记, 仅当无待处理 Custom 事件时才 Post
     // - redrawSeq_: 请求计数, UI 线程在帧结束时据此补帧 (见 start() 帧循环):
     //   帧期间到达的请求可能被合并进本帧渲染, 而本帧 frameState 快照取自帧开头,
     //   渲染结果可能未反映其状态变更, 需要补一帧以最新快照重绘
@@ -410,13 +410,13 @@ void TUIClientAgentIO::start() {
             postRedraw();
         };
         // 历史分页钩子: MessageListComponent 滚动接近窗口顶部时触发
-        // (requestOlderHistory 内部做在途去重与边界判断; sendToPeer 经
+        // (requestOlderHistory 内部做请求去重与边界判断; sendToPeer 经
         // transport 写队列投递, 线程安全)
         ctx_.requestMoreHistory = [this] {
             requestOlderHistory();
         };
         // 会话列表分页钩子: SessionSelectorOverlay 选择项接近已加载列表末尾时
-        // 触发预取下一页 (requestNextSessionListPage 内部做在途去重与边界判断)
+        // 触发预取下一页 (requestNextSessionListPage 内部做请求去重与边界判断)
         ctx_.requestMoreSessions = [this] {
             requestNextSessionListPage();
         };
@@ -849,13 +849,13 @@ void TUIClientAgentIO::start() {
                 // client 线程可原地修改 state, 拷贝成本降为零。
                 // Element 树在 OnRender 中已自包含 (文本已复制), 布局/绘制不依赖快照。
                 ctx_.frameState.reset();
-                // 帧完成: 本帧处理的在途 Custom 已对应一次渲染 (frameState 为本帧开头快照)。
-                // 清除在途标记, 使新的 postRedraw 能重新 Post;
+                // 帧完成: 本帧处理的待处理 Custom 已对应一次渲染 (frameState 为本帧开头快照)。
+                // 清除待处理标记, 使新的 postRedraw 能重新 Post;
                 // 若帧期间有新请求被合并 (计数 != 帧基线), 说明本帧渲染可能未反映其
                 // 状态变更 (快照取于帧开头), 补 Post 一帧, 保证以最新快照重绘。
                 // 注意: 不能在帧开头 reset —— FTXUI 的 RunUntilIdle 会在同一帧内处理
                 // 事件处理期间 Post 的 Custom, 帧开头 reset 后帧中到达的请求会因合并
-                // 标记为真而被丢弃且无在途事件, 导致重绘丢失 (如模型弹窗列表不刷新)。
+                // 标记为真而被丢弃且无待处理事件, 导致重绘丢失 (如模型弹窗列表不刷新)。
                 redrawPosted_.store(false, std::memory_order_release);
                 if (redrawSeq_.load(std::memory_order_acquire) != frameBaseline
                     && !redrawPosted_.exchange(true, std::memory_order_acq_rel)) {
@@ -1509,7 +1509,7 @@ void TUIClientAgentIO::onViewMessagesPage(const agentxx::agent::WireViewMessages
     {
         std::lock_guard<std::mutex> lock(sharedState_.mutex());
         auto&                       st = sharedState_.mutableState();
-        // 在途标志复位 (无论本页是否可用, 请求生命周期已结束)
+        // 加载标志复位 (无论本页是否可用, 请求生命周期已结束)
         st.historyLoading = false;
         // 会话不匹配: 切换会话后迟到的旧页响应, 丢弃
         if (!page.sessionId.empty() && page.sessionId != currentSessionId()) {
@@ -1528,8 +1528,8 @@ void TUIClientAgentIO::onViewMessagesPage(const agentxx::agent::WireViewMessages
             }
             return;
         }
-        // 连续性校验: 页尾必须紧贴当前窗口首条 (分页请求按序应答且单在途,
-        // 不连续说明窗口已被 Sync 整体替换, 本页过期丢弃)
+        // 连续性校验: 页尾必须紧贴当前窗口首条 (分页请求按序应答且同一时刻
+        // 只有一个请求, 不连续说明窗口已被 Sync 整体替换, 本页过期丢弃)
         const uint64_t pageEnd = page.startIndex + page.messages.size();
         if (st.historyWindowStart != 0 || !st.messages.empty()) {
             if (pageEnd != st.historyWindowStart) {
@@ -1571,7 +1571,7 @@ void TUIClientAgentIO::requestOlderHistory() {
     {
         std::lock_guard<std::mutex> lock(sharedState_.mutex());
         auto&                       st = sharedState_.mutableState();
-        // 边界判断 + 在途去重 (UI 线程滚动事件可能高频触发)
+        // 边界判断 + 请求去重 (UI 线程滚动事件可能高频触发)
         if (st.historyLoading || !st.hasMoreHistory()) {
             return;
         }
@@ -1593,7 +1593,7 @@ void TUIClientAgentIO::onSessionListPage(const agentxx::agent::WireSessionList& 
     {
         std::lock_guard<std::mutex> lock(sharedState_.mutex());
         auto&                       st = sharedState_.mutableState();
-        // 在途标志复位 (无论本页是否可用, 请求生命周期已结束)
+        // 加载标志复位 (无论本页是否可用, 请求生命周期已结束)
         st.sessionListLoadingMore = false;
         // 兼容: 响应无分页元数据 (totalCount==0 && !hasMore) 时视为
         // 全量列表, 直接替换本地列表
@@ -1635,7 +1635,7 @@ void TUIClientAgentIO::requestNextSessionListPage() {
     {
         std::lock_guard<std::mutex> lock(sharedState_.mutex());
         auto&                       st = sharedState_.mutableState();
-        // 边界判断 + 在途去重 (UI 线程滚动事件可能高频触发)
+        // 边界判断 + 请求去重 (UI 线程滚动事件可能高频触发)
         if (!st.sessionListLoaded || !st.sessionListHasMore || st.sessionListLoadingMore
             || st.sessionList.empty()) {
             return;
@@ -1964,7 +1964,7 @@ void TUIClientAgentIO::onSync(const agentxx::agent::WireSyncPayload& payload) {
             }
             // 历史分页窗口元数据: fromIndex = 本批消息的起始绝对下标
             // (尾窗同步时 > 0, 上方还有更早历史待分页拉取; 全量同步时为 0);
-            // 在途页请求随整体替换作废, 复位加载标志
+            // 未返回的分页请求随整体替换作废, 复位加载标志
             st->historyWindowStart = payload.fromIndex;
             st->historyTotal
                 = payload.totalMessages != 0 ? payload.totalMessages : payload.messages.size();

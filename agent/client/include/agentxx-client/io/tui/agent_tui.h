@@ -361,7 +361,7 @@ private:
     /// ::notifyPrepended 保持视口内容稳定)
     void onViewMessagesPage(const agentxx::agent::WireViewMessagesPage& page);
     /// 请求更早历史 (ctx_.requestMoreHistory 入口; UI 线程触发):
-    /// - historyLoading 在途去重; hasMoreHistory 边界判断
+    /// - 已有请求未返回时直接忽略 (historyLoading 去重); hasMoreHistory 边界判断
     /// - 页大小 kHistoryPageSize 与服务端默认兜底一致
     void requestOlderHistory();
     /// 历史分页每页条数 (与服务端 SessionServerAgentIO 的默认兜底一致)
@@ -373,7 +373,7 @@ private:
     /// 更新 totalCount/hasMore 分页元数据 (旧版服务端全量响应按替换处理)
     void onSessionListPage(const agentxx::agent::WireSessionList& resp);
     /// 请求下一页会话列表 (ctx_.requestMoreSessions 入口; UI 线程触发):
-    /// - sessionListLoadingMore 在途去重; sessionListHasMore 边界判断
+    /// - 已有请求未返回时直接忽略 (sessionListLoadingMore 去重); sessionListHasMore 边界判断
     /// - 游标取已加载列表最后一条的 (lastActiveMs, sessionId)
     void requestNextSessionListPage();
     /// 会话列表分页每页条数 (首屏一页即可覆盖弹窗可视区域数倍, 减少请求次数)
@@ -484,7 +484,7 @@ private:
     size_t logCacheLineCount_ = 0;
 
     /// 重绘请求合并 (postRedraw 由 client/UI 线程并发调用):
-    /// - redrawPosted_: 执行中 Custom 标记, 仅当无在途事件时才 Post, 同帧内多次请求合并为一次
+    /// - redrawPosted_: 已投递尚未处理的 Custom 标记, 仅当无待处理事件时才 Post, 同帧内多次请求合并为一次
     /// - redrawSeq_:    请求计数, UI 线程在帧结束时据此判断帧期间是否有请求被合并
     ///                  (被合并进本帧渲染, 而本帧快照取的是帧开头, 可能未反映其状态变更),
     ///                  若有则补 Post 一帧, 保证以最新快照重绘, 避免请求丢失

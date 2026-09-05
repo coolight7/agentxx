@@ -47,7 +47,7 @@
  *     AGENTXX_FFI_ERR_STATE); 其余 API 任意线程可调用
  *   - 同一句柄的所有非同步 API 可并发调用 (内部投递 io 线程串行执行);
  *     同步查询类 API (get_model_info/get_context_messages/list_sessions)
- *     同一时刻同一句柄仅允许一个在途
+ *     同一时刻同一句柄仅允许一个调用尚未返回
  */
 #ifndef AGENTXX_FFI_API_H
 #define AGENTXX_FFI_API_H

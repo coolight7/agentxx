@@ -252,7 +252,7 @@ DaSimServer startDaSimServer() {
                 }
 
                 if (g_da_sim_delay_ms > 0) {
-                    // 模拟慢速 LLM: 延迟后再响应, 供取消测试中断在途请求
+                    // 模拟慢速 LLM: 延迟后再响应, 供取消测试中断尚未完成的请求
                     asio::steady_timer delayTimer(
                         co_await asio::this_coro::executor,
                         std::chrono::milliseconds(g_da_sim_delay_ms)

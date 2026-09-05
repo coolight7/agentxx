@@ -17,9 +17,9 @@ struct LazyBuiltItem {
     /// 本条目在内存中的实际占用估算字节数 (参与字节预算统计; 估算值即可)。
     ///
     /// 注意: 应为"渲染结果的内存开销"而非"源数据字节" —— 若按源文本
-    /// 字节上报, 字节预算与真实内存脱节 (如 FTXUI 渲染树为源文本 30~70 倍,
-    /// 按源字节预算会放行远超预期的驻留内存)。调用方需按实际放大折算
-    /// (见 MessageListComponent::buildMessageItem 按 ×64 系数上报)。
+    /// 字节上报, 字节预算与真实内存占用不一致 (如 FTXUI 渲染树为源文本
+    /// 30~70 倍, 按源字节预算会放行远超预期的驻留内存)。调用方需按实际
+    /// 放大折算 (见 MessageListComponent::buildMessageItem 按 ×64 系数上报)。
     size_t sourceBytes = 0;
     /// 是否可缓存 (如流式增量项每帧都变, 缓存无意义, 置 false)
     bool cacheable = true;

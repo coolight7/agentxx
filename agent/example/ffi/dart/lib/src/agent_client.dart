@@ -7,7 +7,7 @@
 ///   解析为 [AgentEvent] 广播到 [events] 流 —— 全程无悬垂指针风险
 ///   (直接用 NativeCallable.listener 会因 "payload 仅回调期间有效" 而悬垂)。
 /// - 同步查询 (get_model_info 等) 直接转发原生调用; 返回字符串经 agentxx_ffi_free
-///   释放。同一句柄同一时刻仅允许一个在途同步查询 (见 ffi_api.h 注释)。
+///   释放。同一句柄同一时刻仅允许一个尚未返回的同步查询 (见 ffi_api.h 注释)。
 /// - stop/destroy 必须在回调线程以外调用 —— Dart 主 isolate 天然满足。
 library;
 

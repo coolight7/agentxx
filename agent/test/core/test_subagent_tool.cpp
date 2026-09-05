@@ -698,7 +698,7 @@ asio::awaitable<TestResult> run_subagent_tool_tests() {
         }
     }
 
-    // ==================== S6. 写入-读取 key 规则闭环 (build ↔ extract) ====================
+    // ===== S6. 写入-读取两侧的 key 规则往返一致 (build ↔ extract) =====
 
     {
         // 写入侧 (agent_runner 中断循环) 与读取侧 (execute_async) 共用
