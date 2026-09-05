@@ -290,7 +290,7 @@ if [[ -z "$MINGW_WINDRES" ]]; then
     fi
 fi
 
-# 是否为 Clang 工具链 (影响 CMake 旗标与 Boost toolset 选择)
+# 是否为 Clang 工具链 (影响 CMake 参数与 Boost toolset 选择)
 USE_CLANG_MINGW=0
 if [[ "$MINGW_CXX" == *"clang"* ]]; then
     USE_CLANG_MINGW=1

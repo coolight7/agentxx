@@ -64,7 +64,7 @@ extern \"C\" void agentxx_plugin_agent_builtin_destroy_${PLUGIN_NAME}(void* plug
   )
   if (UNIX)
     # Android bionic 将 pthread 并入 libc, 无独立 libpthread 库, 仅链接 dl/m
-    if (CMAKE_SYSTEM_NAME STREQUAL "Android")
+    if (XX_IS_ANDROID_D)
       list(APPEND _codegraph_libs dl m)
     else()
       list(APPEND _codegraph_libs pthread dl m)
@@ -138,7 +138,7 @@ target_link_libraries(${PLUGIN_NAME} PRIVATE
 # pthread/dl/m 为 Linux 系统库; Windows/MSVC 无对应导入库 (std::thread 原生), 条件链接
 # Android bionic 将 pthread 并入 libc, 无独立 libpthread 库, 仅链接 dl/m
 if (UNIX)
-  if (CMAKE_SYSTEM_NAME STREQUAL "Android")
+  if (XX_IS_ANDROID_D)
     target_link_libraries(${PLUGIN_NAME} PRIVATE dl m)
   else()
     target_link_libraries(${PLUGIN_NAME} PRIVATE pthread dl m)

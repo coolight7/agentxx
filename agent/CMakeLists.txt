@@ -97,7 +97,7 @@ option(AGENTXX_ENABLE_ASAN "Enable AddressSanitizer for Debug builds." ON)
 # - 插桩仅作用于本项目编译的代码: 预编译三方库不插桩, 不构成误报源,
 #   报告即项目自身代码问题;
 # - 附带 -fno-sanitize-recover=undefined: 命中即 abort (测试进程退出码非零),
-#   避免报告被静默吞掉; 若三方头文件触发良性 UB 可临时移除该旗标定位
+#   避免报告被静默吞掉; 若三方头文件触发良性 UB 可临时移除该参数定位
 option(AGENTXX_ENABLE_UBSAN "Enable UndefinedBehaviorSanitizer for Debug builds (GCC/Clang)." OFF)
 # TSAN: 检测数据竞争。适用本项目并发模型 (io_context 多协程交错/offload 线程池/
 # SessionStore 锁/WS 与 TUI 线程)。限制:
@@ -198,7 +198,7 @@ endif ()
 # - HyperScan 仅支持 Linux (MSVC 分支受限支持), MinGW (GCC 交叉到 Windows)
 #   无可用实现, 强制关闭以避免 hyperscan_repo ExternalProject 构建失败;
 #   正则能力自动回退到 std::regex (见 lib/src/util/regex.cpp)
-if (CMAKE_CROSSCOMPILING AND CMAKE_SYSTEM_NAME STREQUAL "Windows" AND NOT XX_IS_MSVC_D AND AGENTXX_ENABLE_HYPERSCAN)
+if (CMAKE_CROSSCOMPILING AND XX_IS_WIN_D AND NOT XX_IS_MSVC_D AND AGENTXX_ENABLE_HYPERSCAN)
   message(WARNING "[agentxx] HyperScan not supported on MinGW cross (Windows+GCC), force AGENTXX_ENABLE_HYPERSCAN=OFF")
   set(AGENTXX_ENABLE_HYPERSCAN OFF CACHE BOOL "Add HyperScan for regex support. Use std::regex if disable." FORCE)
 endif()
@@ -343,13 +343,13 @@ if (XX_IS_MSVC_D)
     # 在库内部。注意与 Linux 差异: MSVC ASan 不包含 LeakSanitizer, 内存泄漏
     # 检测仍需依赖 Linux 构建。
     # 历史注释勘误: 早前 "使用 /fsanitize=address 时可能导致链接错误 (uchardet)"
-    # 实为三方库自身在 Debug 注入了 GCC 风格 -fsanitize=address 旗标 (cl.exe
+    # 实为三方库自身在 Debug 注入了 GCC 风格 -fsanitize=address 参数 (cl.exe
     # 不识别) 所致, 并非 MSVC ASan 本身不可用 (该块已在 third_party/uchardet
     # 中注释掉, 见 docs/zh-cn/build/windows.md FAQ)。
     if (AGENTXX_ENABLE_ASAN)
-      # 冲突旗标清理:
+      # 冲突参数清理:
       # - /RTC*: 与 ASan 插桩互斥 (官方文档明确不兼容; CMake 内置 Debug 默认
-      #   旗标即 "/Zi /Ob0 /Od /RTC1");
+      #   参数即 "/Zi /Ob0 /Od /RTC1");
       foreach (_lang IN ITEMS C CXX)
         string(REGEX REPLACE "(^| )/RTC[A-Za-z0-9]*( |$)" " " CMAKE_${_lang}_FLAGS_DEBUG "${CMAKE_${_lang}_FLAGS_DEBUG}")
         string(APPEND CMAKE_${_lang}_FLAGS_DEBUG " /fsanitize=address")
@@ -357,16 +357,14 @@ if (XX_IS_MSVC_D)
       # - 增量链接与 ASan 互斥: 清理 DEBUG 配置默认的 /INCREMENTAL
       #   (CMAKE_*_LINKER_FLAGS_DEBUG 内置默认值即 "/debug /INCREMENTAL");
       #   并在通用 LINKER_FLAGS 显式关闭 (/INCREMENTAL:NO), 保证无论嵌套构建中
-      #   配置旗标与通用旗标的拼接顺序如何, 最终生效的都是非增量链接
+      #   配置参数与通用参数的拼接顺序如何, 最终生效的都是非增量链接
       foreach (_ld IN ITEMS CMAKE_EXE_LINKER_FLAGS_DEBUG CMAKE_SHARED_LINKER_FLAGS_DEBUG)
         string(REGEX REPLACE "(^| )/INCREMENTAL(:[A-Za-z]+)?( |$)" " " ${_ld} "${${_ld}}")
         string(APPEND ${_ld} " /INCREMENTAL:NO")
       endforeach ()
-    endif ()
-    set(_AGENTXX_LDFLAGS "${LDFLAGS} ${_AGENTXX_LDFLAGS}")
-    if (AGENTXX_ENABLE_ASAN)
       string(APPEND _AGENTXX_LDFLAGS " /INCREMENTAL:NO")
     endif ()
+    set(_AGENTXX_LDFLAGS "${LDFLAGS} ${_AGENTXX_LDFLAGS}")
   endif()
 
   # set(CMAKE_INTERPROCEDURAL_OPTIMIZATION TRUE)
@@ -383,7 +381,7 @@ else ()
   
   # 交叉编译到 Windows (MinGW) 时禁用 LTO: 旧版 bfd ld 无 LLVMgold 插件, 无法链接 -flto 产生的 LLVM bitcode
   # - 需 lld 才能处理, 但为简化 hermetic 构建, 直接禁用 LTO
-  if (CMAKE_CROSSCOMPILING AND CMAKE_SYSTEM_NAME STREQUAL "Windows")
+  if (CMAKE_CROSSCOMPILING AND XX_IS_WIN_D)
     set(_AGENTXX_LTO_FLAGS "")
   elseif (XX_IS_GCC_D)
     # GCC 下 -flto 会导致 lto-wrapper 默认以单线程串行编译全部 LTRANS 任务
@@ -401,7 +399,7 @@ else ()
   set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "${_AGENTXX_CXX_FLAGS} ${CMAKE_CXX_FLAGS_RELWITHDEBINFO}")
   # Debug 编译加速: -g / sanitizers 均可通过选项关闭;
   # - sanitizer 组合 (见顶部选项说明): TSAN 与 ASAN 运行时互斥, 已由前置
-  #   guard 保证不同时启用; UBSAN 可与任一叠加; 全部关闭时仅保留调试辅助旗标
+  #   guard 保证不同时启用; UBSAN 可与任一叠加; 全部关闭时仅保留调试辅助参数
   # - 通用: -fno-omit-frame-pointer 保证 sanitizer/性能分析的栈回溯完整
   # - 关闭 DEBUG_INFO 时: 需同时剔除 CMake 为 GCC/Clang 默认追加的 -g
   #   (CMAKE_CXX_FLAGS_DEBUG 默认值即 "-g")，否则产物依旧膨胀
@@ -451,7 +449,7 @@ string(APPEND CMAKE_SHARED_LINKER_FLAGS " ${_AGENTXX_LDFLAGS}")
 
 # 交叉到 Windows 时, 基础 FLAGS 也需包含 WINNT 定义, 供 try_compile (curl 等) 检测使用
 # 仅设置 CMAKE_C_FLAGS_RELEASE 等变体不足以被不带 CONFIG 的 try_compile 继承
-if (CMAKE_CROSSCOMPILING AND CMAKE_SYSTEM_NAME STREQUAL "Windows")
+if (CMAKE_CROSSCOMPILING AND XX_IS_WIN_D)
   if (NOT XX_IS_MSVC_D)
     # 将通用 WINNT 定义注入基础 FLAGS, 使子项目 (ExternalProject) 的 try_compile 可见
     # 避免 curl 误判 _WIN32_WINNT=0x0502 而报错 "Vista or newer is required"
@@ -476,7 +474,7 @@ if (NOT XX_IS_MSVC_D)
     # - Android: NDK clang 的 LTO 链接需要 NDK 内的 LLVMgold.so 插件, 宿主链接器会因
     #   找不到插件而失败 (mold: fatal: could not open plugin file .../lib/LLVMgold.so)
     # - Windows/MinGW: 宿主 mold/gold 与 MinGW ld 不兼容, -fuse-ld=mold 会导致链接失败
-    if (ANDROID OR CMAKE_SYSTEM_NAME STREQUAL "Android" OR CMAKE_CROSSCOMPILING)
+    if (ANDROID OR XX_IS_ANDROID_D OR CMAKE_CROSSCOMPILING)
       message("[agentxx] Cross compile, use default linker")
     else ()
       find_program(_AGENTXX_MOLD_EXECUTABLE mold)
@@ -596,7 +594,7 @@ set(_AGENTXX_COMMON_CMAKE_ARGS
     # 链接器 (mold/gold/-fsanitize 等) 同样需要显式传递给嵌套构建
     "-DCMAKE_EXE_LINKER_FLAGS=${CMAKE_EXE_LINKER_FLAGS}"
     "-DCMAKE_SHARED_LINKER_FLAGS=${CMAKE_SHARED_LINKER_FLAGS}"
-    # DEBUG 链接旗标变体同样显式传递: MSVC ASan 开启时顶层已清理 /INCREMENTAL
+    # DEBUG 链接参数变体同样显式传递: MSVC ASan 开启时顶层已清理 /INCREMENTAL
     # 并追加 /INCREMENTAL:NO, 嵌套工程需使用一致的值 (否则嵌套会回退到内置
     # 默认值 "/debug /INCREMENTAL", 与 ASan 互斥)
     "-DCMAKE_EXE_LINKER_FLAGS_DEBUG=${CMAKE_EXE_LINKER_FLAGS_DEBUG}"
@@ -917,7 +915,7 @@ if (AGENTXX_ENABLE_HYPERSCAN)
   # _AGENTXX_COMMON_CMAKE_ARGS/_AGENTXX_COMMON_CMAKE_CACHE_ARGS 透传给嵌套构建,
   # 会导致 Release 下 hyperscan (FAT_RUNTIME=ON, 仅 Release) 必现构建失败,
   # 而 Debug (FAT_RUNTIME=OFF) 不受影响。故 hyperscan 嵌套构建单独剥离 LTO
-  # 旗标 (仅损失 hyperscan 自身的 LTO 优化, 不影响主工程)。
+  # 参数 (仅损失 hyperscan 自身的 LTO 优化, 不影响主工程)。
   # 注意: -flto 内嵌在 CMAKE_C/CXX_FLAGS_RELEASE 等字符串中间, 且同时存在于
   # CMAKE_ARGS 与 CMAKE_CACHE_ARGS 两处, 需逐项过滤而非追加覆盖
   # (ExternalProject 对重复 -D 的覆盖语义不可靠, 且 CACHE 变量后值不一定覆盖先值)。
@@ -1016,10 +1014,12 @@ ExternalProject_Add(
 # yaml-cpp: MinGW libstdc++ 10 (apt) 与 Clang 18 在 C++23 下 valarray 异常规格不兼容
 # 交叉到 Windows 时降至 C++14 以避免 /usr/lib/gcc/.../valarray:1224 报错
 # (C++17 仍触发相同错误, 需更低)
-if (CMAKE_CROSSCOMPILING AND CMAKE_SYSTEM_NAME STREQUAL "Windows")
+if (CMAKE_CROSSCOMPILING AND XX_IS_WIN_D)
   set(_YAML_CPP_CXX_STD 14)
 else()
-  set(_YAML_CPP_CXX_STD 23)
+  # 必须与主工程 C++ 标准一致 (C++26), 避免 std::runtime_error 等基础异常类型
+  # 在 C++23 与 C++26 间的虚析构函数/内联规范差异导致 LTO 报 ODR 违规 (-Wodr)
+  set(_YAML_CPP_CXX_STD ${CMAKE_CXX_STANDARD})
 endif()
 ExternalProject_Add(
   yaml_cpp_repo
