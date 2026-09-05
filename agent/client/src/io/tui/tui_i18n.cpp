@@ -222,6 +222,6 @@ std::string_view TuiI18n::t(std::string_view key) const noexcept {
     if (it == tbl.end()) {
         return key; // 未配置的 key 原样返回, 便于尽早发现漏配
     }
-    const TuiLanguage lang = TUISettings::instance().language();
+    const TuiLanguage lang = TUISettings::instance().effectiveLanguage();
     return (lang == TuiLanguage::EnUs) ? it->second.first : it->second.second;
 }

@@ -35,16 +35,44 @@ enum class TailThinkingMode : int {
     SingleLine = 1, ///< 保持单行折叠截取末尾字符显示
 };
 
-/// 界面语言 (简体中文 / English)
+/// 界面语言 (自动 / 简体中文 / English)
 ///
 /// 语言取值供界面翻译表 [TuiI18n](/agent/client/include/agentxx-client/io/tui/framework/tui_i18n.h)
-/// 查询使用: 界面代码只写翻译 key, 展示文本由当前语言决定。
-/// - 默认简体中文 (既有界面语言; 英文用户可在设置弹窗切换, 选择持久化)
-/// - 持久化键: tui.lang (global.db), 值为 0/1
+/// 查询使用: 界面代码只写翻译 key, 展示文本由实际生效语言决定。
+/// - Auto: 自动检测当前系统语言环境, 在已支持语言列表中选择语言使用 (默认)
+/// - ZhCn: 简体中文 (zh-cn)
+/// - EnUs: English (en-us)
+/// - 持久化键: tui.lang (global.db), 值为 0/1/2
 enum class TuiLanguage : int {
-    ZhCn = 0, ///< 简体中文 (默认)
-    EnUs = 1, ///< English
+    Auto = 0, ///< 自动 (根据系统语言环境选择, 默认)
+    ZhCn = 1, ///< 简体中文 (zh-cn)
+    EnUs = 2, ///< English (en-us)
 };
+
+/// 根据系统语言标签字符串在已支持的语言列表中匹配最佳语言
+///
+/// - 支持常见格式: BCP-47 (如 "zh-CN", "en-US", "zh-Hans-CN"),
+///   POSIX locale (如 "zh_CN.UTF-8", "en_US.UTF-8"),
+///   以及简写 ("zh", "en") 或语言名 ("chinese", "english")
+/// - 多条目列表 (如 LANGUAGE="zh_CN:zh:en"): 依次尝试匹配首个已支持的语言
+/// - 匹配规则:
+///   1) 中文相关 (zh, zh-cn, zh-tw, zh-hk, chinese 等) -> TuiLanguage::ZhCn
+///   2) 英文相关 (en, en-us, en-gb, english 等) -> TuiLanguage::EnUs
+///   3) 其它非中文系统语言 (如 ja, ko, fr, de, es, ru 等) -> 回退到 TuiLanguage::EnUs (国际通用语言)
+///   4) 空串或无法识别 (如 "C", "POSIX") -> 回退到默认中文 TuiLanguage::ZhCn
+///
+/// - `args`:
+///     - [localeStr] 待匹配的系统语言标签或 locale 字符串
+/// - `return` 匹配到的已支持语言 (ZhCn 或 EnUs, 永不返回 Auto)
+TuiLanguage matchSupportedLanguage(std::string_view localeStr) noexcept;
+
+/// 探测当前操作系统的语言环境标签 (跨平台: 环境变量 -> Win32 API -> setlocale)
+///
+/// - `return` 探测到的系统语言字符串 (未获取到返回空字符串)
+std::string detectSystemLocale();
+
+/// 探测当前系统语言环境并返回匹配的已支持语言 (ZhCn 或 EnUs)
+TuiLanguage detectSystemLanguage();
 
 /// 权限询问处理模式已移除: 改为由 yaml 配置文件 `permission.mode` 指定
 /// (ask/all_ask/pass/deny, 见
@@ -101,11 +129,11 @@ public:
         = TailThinkingMode::AutoExpand;
 
     /// 语言显示名称 (供设置弹窗展示; 与 TuiLanguage 枚举值一一对应)
-    inline static constexpr std::array<const char*, 2> kLanguageNames
-        = {"简体中文 (zh-cn)", "English (en-us)"};
+    inline static constexpr std::array<const char*, 3> kLanguageNames
+        = {"自动 (Auto)", "简体中文 (zh-cn)", "English (en-us)"};
 
-    /// 默认界面语言: 简体中文 (既有界面语言; 可在设置弹窗切换, 选择持久化)
-    inline static constexpr TuiLanguage kDefaultLanguage = TuiLanguage::ZhCn;
+    /// 默认界面语言: 自动 (根据系统语言环境在已支持语言列表中自动选择)
+    inline static constexpr TuiLanguage kDefaultLanguage = TuiLanguage::Auto;
 
     /// 主题枚举 (与 tui.theme 库中存储的整数值对应)
     enum ThemeKind : int {
@@ -142,8 +170,7 @@ public:
             tailThinkingMode_.store(static_cast<int>(tailThink), std::memory_order_release);
         }
         auto lang = db_->getInt64("tui.lang", -1);
-        if (lang == static_cast<int64_t>(TuiLanguage::ZhCn)
-            || lang == static_cast<int64_t>(TuiLanguage::EnUs)) {
+        if (lang >= 0 && lang < static_cast<int64_t>(kLanguageNames.size())) {
             language_.store(static_cast<int>(lang), std::memory_order_release);
         }
     }
@@ -249,24 +276,50 @@ public:
         return tailThinkingModeName(tailThinkingMode());
     }
 
-    /// 获取当前界面语言 (0=简体中文, 1=English; 越界值按简体中文处理)
+    /// 获取当前界面语言设置项 (0=Auto, 1=ZhCn, 2=EnUs; 越界值按 Auto 处理)
     TuiLanguage language() const noexcept {
         const int v = language_.load(std::memory_order_acquire);
-        return (v == static_cast<int>(TuiLanguage::EnUs)) ? TuiLanguage::EnUs
-                                                          : TuiLanguage::ZhCn;
+        if (v >= 0 && v < static_cast<int>(kLanguageNames.size())) {
+            return static_cast<TuiLanguage>(v);
+        }
+        return kDefaultLanguage;
     }
 
-    /// 设置界面语言 (非法值按简体中文处理)
+    /// 设置界面语言 (非法值按 Auto 处理)
     /// - 变更同步持久化到全局设置数据库 (失败仅记日志, 不影响本次设置)
     inline void setLanguage(TuiLanguage lang) noexcept {
-        language_.store(
-            lang == TuiLanguage::EnUs ? static_cast<int>(TuiLanguage::EnUs)
-                                      : static_cast<int>(TuiLanguage::ZhCn),
-            std::memory_order_release
-        );
+        const int v   = static_cast<int>(lang);
+        const int val = (v >= 0 && v < static_cast<int>(kLanguageNames.size()))
+                            ? v
+                            : static_cast<int>(kDefaultLanguage);
+        language_.store(val, std::memory_order_release);
+        if (val == static_cast<int>(TuiLanguage::Auto)) {
+            refreshAutoLanguage();
+        }
         if (db_) {
             db_->setInt64("tui.lang", language_.load(std::memory_order_relaxed));
         }
+    }
+
+    /// 获取当前实际生效的界面语言 (始终返回已支持的具体语言: ZhCn 或 EnUs, 绝不返回 Auto)
+    /// - 当 language() == Auto 时, 返回根据系统语言环境自动解析的语言
+    /// - 当 language() != Auto 时, 直接返回用户指定的语言 (ZhCn 或 EnUs)
+    TuiLanguage effectiveLanguage() const noexcept {
+        const TuiLanguage cur = language();
+        if (cur == TuiLanguage::Auto) {
+            const int resolved = autoResolvedLanguage_.load(std::memory_order_acquire);
+            return (resolved == static_cast<int>(TuiLanguage::EnUs)) ? TuiLanguage::EnUs
+                                                                     : TuiLanguage::ZhCn;
+        }
+        return cur;
+    }
+
+    /// 刷新自动模式下的系统语言探测缓存
+    inline void refreshAutoLanguage() noexcept {
+        autoResolvedLanguage_.store(
+            static_cast<int>(detectSystemLanguage()),
+            std::memory_order_release
+        );
     }
 
     /// 语言显示名称 (当前设置值)
@@ -281,7 +334,8 @@ public:
 private:
 
     TUISettings() :
-        animationLevel_(static_cast<int>(kDefaultAnimationLevel)) {}
+        animationLevel_(static_cast<int>(kDefaultAnimationLevel)),
+        autoResolvedLanguage_(static_cast<int>(detectSystemLanguage())) {}
 
     /// 动画等级名称 (越界返回 "Unknown")
     inline static constexpr std::string_view levelName(AnimationLevel level) noexcept {
@@ -318,8 +372,10 @@ private:
     std::atomic<int> logLevel_{static_cast<int>(kDefaultLogLevel)};
     /// 末尾思考展示模式 (存储为 int 以便原子读写; 0=AutoExpand, 1=SingleLine)
     std::atomic<int> tailThinkingMode_{static_cast<int>(kDefaultTailThinkingMode)};
-    /// 界面语言 (存储为 int 以便原子读写; 0=简体中文, 1=English)
+    /// 界面语言设置 (存储为 int 以便原子读写; 0=Auto, 1=ZhCn, 2=EnUs)
     std::atomic<int> language_{static_cast<int>(kDefaultLanguage)};
+    /// 自动模式下解析出的生效语言 (始终为已支持的具体语言: ZhCn 或 EnUs)
+    std::atomic<int> autoResolvedLanguage_{static_cast<int>(TuiLanguage::ZhCn)};
     /// 全局设置数据库 (空 = 未持久化, 设置仅存内存)
     std::shared_ptr<agentxx::util::SettingsDb> db_;
 };

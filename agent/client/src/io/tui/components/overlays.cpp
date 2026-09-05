@@ -362,7 +362,7 @@ Element SettingsOverlay::OnRender() {
     }
     items.push_back(thinkEntry | reflect(tailThinkingBox_));
 
-    // 界面语言 (点击/Enter 循环切换: 简体中文 zh-cn <-> English en-us)
+    // 界面语言 (点击/Enter 循环切换: 自动 Auto <-> 简体中文 zh-cn <-> English en-us)
     items.push_back(text(" "));
     items.push_back(text(tr("settings.langLabel")) | color(theme.hintColor));
     auto langEntry

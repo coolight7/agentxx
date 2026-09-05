@@ -3,6 +3,7 @@
 #include "agentxx-client/io/tui/agent_tui.h"
 #include "agentxx-client/io/tui/framework/tui_i18n.h"
 #include "agentxx-client/io/tui/framework/tui_settings.h"
+#include "agentxx/util/env.h"
 #include "agentxx/util/settings_db.h"
 #include <chrono>
 #include <filesystem>
@@ -148,10 +149,146 @@ void test_log_level_names_table() {
     XX_TEST_EXPECT_EQ(TUISettings::kLogLevelNames[5], std::string_view("Out"));
 }
 
+void test_language_names_table() {
+    XX_TEST_EXPECT_EQ(TUISettings::kLanguageNames.size(), (size_t)3);
+    XX_TEST_EXPECT_EQ(TUISettings::kLanguageNames[0], std::string_view("自动 (Auto)"));
+    XX_TEST_EXPECT_EQ(TUISettings::kLanguageNames[1], std::string_view("简体中文 (zh-cn)"));
+    XX_TEST_EXPECT_EQ(TUISettings::kLanguageNames[2], std::string_view("English (en-us)"));
+}
+
+void test_match_supported_language() {
+    // 中文环境格式
+    const char* zhCases[] = {
+        "zh-CN",
+        "zh_CN",
+        "zh_CN.UTF-8",
+        "zh_CN.GBK",
+        "zh-Hans-CN",
+        "zh-Hans",
+        "zh-Hant-TW",
+        "zh_TW",
+        "zh_HK.UTF-8",
+        "zh-SG",
+        "zh",
+        "chinese",
+        "Chinese (Simplified)_China.936",
+        "  zh-cn  ",
+        "zh_CN.UTF-8@pinyin",
+    };
+    for (const char* loc : zhCases) {
+        XX_TEST_EXPECT_TRUE(matchSupportedLanguage(loc) == TuiLanguage::ZhCn);
+    }
+
+    // 英文环境格式
+    const char* enCases[] = {
+        "en-US",
+        "en_US",
+        "en_US.UTF-8",
+        "en-GB",
+        "en_GB.UTF-8",
+        "en-CA",
+        "en-AU",
+        "en",
+        "english",
+        "English_United States.1252",
+        "  en-us  ",
+    };
+    for (const char* loc : enCases) {
+        XX_TEST_EXPECT_TRUE(matchSupportedLanguage(loc) == TuiLanguage::EnUs);
+    }
+
+    // 其它非中文系统环境 (在已支持列表 [ZhCn, EnUs] 中回退为国际通用语言 EnUs)
+    const char* otherCases[] = {
+        "ja_JP.UTF-8",
+        "ja-JP",
+        "ko_KR.UTF-8",
+        "ko-KR",
+        "fr_FR.UTF-8",
+        "fr-FR",
+        "de_DE.UTF-8",
+        "de-DE",
+        "es_ES.UTF-8",
+        "ru_RU.UTF-8",
+        "it_IT.UTF-8",
+    };
+    for (const char* loc : otherCases) {
+        XX_TEST_EXPECT_TRUE(matchSupportedLanguage(loc) == TuiLanguage::EnUs);
+    }
+
+    // 无法识别/空环境/C/POSIX -> 回退默认中文 ZhCn
+    const char* fallbackCases[] = {
+        "",
+        "   ",
+        "C",
+        "POSIX",
+        "c",
+        "posix",
+        "C.UTF-8",
+        "unknown-custom-12345",
+    };
+    for (const char* loc : fallbackCases) {
+        XX_TEST_EXPECT_TRUE(matchSupportedLanguage(loc) == TuiLanguage::ZhCn);
+    }
+
+    // 多语言优先级列表 (LANGUAGE 语法)
+    XX_TEST_EXPECT_TRUE(matchSupportedLanguage("zh_CN:en_US") == TuiLanguage::ZhCn);
+    XX_TEST_EXPECT_TRUE(matchSupportedLanguage("en_US:zh_CN") == TuiLanguage::EnUs);
+    XX_TEST_EXPECT_TRUE(matchSupportedLanguage("fr_FR:zh_CN") == TuiLanguage::EnUs);
+    XX_TEST_EXPECT_TRUE(matchSupportedLanguage("C:zh_CN") == TuiLanguage::ZhCn);
+}
+
+void test_auto_language_detection() {
+    auto& settings = TUISettings::instance();
+    auto& env      = agentxx::util::ApplicationEnv::instance();
+    auto& i18n     = TuiI18n::instance();
+
+    // 设为自动模式
+    settings.setLanguage(TuiLanguage::Auto);
+    XX_TEST_EXPECT_TRUE(settings.language() == TuiLanguage::Auto);
+    XX_TEST_EXPECT_EQ(settings.languageName(), std::string_view("自动 (Auto)"));
+
+    // 模拟英文系统环境
+    env.set("LANG", std::string_view{"en_US.UTF-8"});
+    settings.refreshAutoLanguage();
+    XX_TEST_EXPECT_TRUE(settings.effectiveLanguage() == TuiLanguage::EnUs);
+    XX_TEST_EXPECT_EQ(i18n.t("settings.title"), std::string_view(" Settings "));
+
+    // 模拟中文系统环境
+    env.set("LANG", std::string_view{"zh_CN.UTF-8"});
+    settings.refreshAutoLanguage();
+    XX_TEST_EXPECT_TRUE(settings.effectiveLanguage() == TuiLanguage::ZhCn);
+    XX_TEST_EXPECT_EQ(i18n.t("settings.title"), std::string_view(" 设置 "));
+
+    // 模拟其它语言系统环境 (回退 EnUs)
+    env.set("LANG", std::string_view{"ja_JP.UTF-8"});
+    settings.refreshAutoLanguage();
+    XX_TEST_EXPECT_TRUE(settings.effectiveLanguage() == TuiLanguage::EnUs);
+    XX_TEST_EXPECT_EQ(i18n.t("settings.title"), std::string_view(" Settings "));
+
+    // 当用户显式指定语言时, effectiveLanguage 忽略系统环境
+    settings.setLanguage(TuiLanguage::ZhCn);
+    XX_TEST_EXPECT_TRUE(settings.effectiveLanguage() == TuiLanguage::ZhCn);
+    XX_TEST_EXPECT_EQ(i18n.t("settings.title"), std::string_view(" 设置 "));
+
+    settings.setLanguage(TuiLanguage::EnUs);
+    env.set("LANG", std::string_view{"zh_CN.UTF-8"});
+    XX_TEST_EXPECT_TRUE(settings.effectiveLanguage() == TuiLanguage::EnUs);
+    XX_TEST_EXPECT_EQ(i18n.t("settings.title"), std::string_view(" Settings "));
+
+    // 清理模拟环境变量并恢复默认设置
+    env.remove("LANG");
+    settings.setLanguage(TUISettings::kDefaultLanguage);
+}
+
 void test_language_set_get() {
     auto& settings = TUISettings::instance();
 
-    // 默认简体中文
+    // 默认自动 (Auto)
+    XX_TEST_EXPECT_TRUE(settings.language() == TuiLanguage::Auto);
+    XX_TEST_EXPECT_EQ(settings.languageName(), std::string_view("自动 (Auto)"));
+
+    // 切换简体中文 → 读回
+    settings.setLanguage(TuiLanguage::ZhCn);
     XX_TEST_EXPECT_TRUE(settings.language() == TuiLanguage::ZhCn);
     XX_TEST_EXPECT_EQ(settings.languageName(), std::string_view("简体中文 (zh-cn)"));
 
@@ -160,11 +297,12 @@ void test_language_set_get() {
     XX_TEST_EXPECT_TRUE(settings.language() == TuiLanguage::EnUs);
     XX_TEST_EXPECT_EQ(settings.languageName(), std::string_view("English (en-us)"));
 
-    // 切回简体中文
-    settings.setLanguage(TuiLanguage::ZhCn);
-    XX_TEST_EXPECT_TRUE(settings.language() == TuiLanguage::ZhCn);
+    // 切回自动
+    settings.setLanguage(TuiLanguage::Auto);
+    XX_TEST_EXPECT_TRUE(settings.language() == TuiLanguage::Auto);
+    XX_TEST_EXPECT_EQ(settings.languageName(), std::string_view("自动 (Auto)"));
 
-    // 恢复默认 (简体中文)
+    // 恢复默认 (Auto)
     settings.setLanguage(TUISettings::kDefaultLanguage);
 }
 
@@ -407,6 +545,13 @@ void test_persist_to_db() {
         XX_TEST_EXPECT_EQ(fresh.getInt64("tui.lang", -1), int64_t{static_cast<int>(TuiLanguage::ZhCn)});
     }
 
+    // 变更为自动 (Auto)
+    settings.setLanguage(TuiLanguage::Auto);
+    {
+        auto fresh = agentxx::util::SettingsDb(dbPath);
+        XX_TEST_EXPECT_EQ(fresh.getInt64("tui.lang", -1), int64_t{static_cast<int>(TuiLanguage::Auto)});
+    }
+
     // 恢复默认, 避免影响其他用例
     settings.setAnimationLevel(TUISettings::kDefaultAnimationLevel);
     settings.setLogLevel(TUISettings::kDefaultLogLevel);
@@ -429,6 +574,9 @@ TestResult testTuiSettings() {
     test_level_names_table();
     test_log_level_set_get();
     test_log_level_names_table();
+    test_language_names_table();
+    test_match_supported_language();
+    test_auto_language_detection();
     test_language_set_get();
     test_i18n_lookup_switches_with_language();
     test_tail_thinking_mode_set_get();

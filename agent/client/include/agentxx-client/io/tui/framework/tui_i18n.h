@@ -7,8 +7,8 @@
 
 /// 界面翻译表列 (与 TUISettings 语言设置一致)
 ///
-/// 语言取值定义在 tui_settings.h 的 TuiLanguage (ZhCn=0 简体中文 / EnUs=1
-/// English), 持久化键 `tui.lang` (global.db), 默认简体中文。
+/// 语言取值定义在 tui_settings.h 的 TuiLanguage (Auto=0 自动 / ZhCn=1 简体中文 /
+/// EnUs=2 English), 持久化键 `tui.lang` (global.db), 默认自动选择系统语言。
 /// 本头文件仅提供查询接口, 翻译表与查找实现在 tui_i18n.cpp。
 ///
 /// 设计约定:
