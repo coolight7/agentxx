@@ -1189,10 +1189,14 @@ if (AGENTXX_BUILD_BENCHMARK)
     INSTALL_ALWAYS TRUE
     CMAKE_ARGS
       ${_AGENTXX_COMMON_CMAKE_ARGS}
+      -DAGENTXX_BUILD_CLIENT=${AGENTXX_BUILD_CLIENT}
     CMAKE_CACHE_ARGS
       ${_AGENTXX_COMMON_CMAKE_CACHE_ARGS}
     TEST_COMMAND ""
   )
+  if (AGENTXX_BUILD_CLIENT)
+    add_dependencies(agentxx_benchmark_repo agentxx_client_repo)
+  endif()
 endif()
 
 # ===== MSVC ASan 动态运行时部署 =====

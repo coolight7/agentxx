@@ -7,6 +7,8 @@
 - 冻结 system prompt
 - OpWatchdog debug 时启用、配置启用
 
+- 修复 linux LTO 错误
+
 ## 提示词优化
 - 如果编译需要配置特定参数，写成脚本或者写入到AGENTS.md
 - 自动建议生成、修改、总结一些经验到 AGENTS.md
