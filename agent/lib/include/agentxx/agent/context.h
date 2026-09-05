@@ -445,7 +445,7 @@ public:
 
     /// 当前执行图 JSON 定义 (插件可经 graph 接口表查看/修改)
     /// - 初始为 BaseAgent::initGraphDefinition() 的默认图 (名称 "agentxx.default");
-    ///   插件加载后可 set_graph_json 覆盖; BaseAgent 在构建 engine 前消费此值,
+    ///   插件加载后可 set_graph_json 覆盖; BaseAgent 在构建 engine 前处理此值,
     ///   插件修改非法时回退默认图并记日志
     neograph::json graphDefinitionJson = neograph::json::object();
 

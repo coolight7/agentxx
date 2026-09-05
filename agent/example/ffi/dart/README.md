@@ -54,7 +54,7 @@ Dart 侧轮询取出。`AgentClient` 已完整封装该流程。
 ### 同步查询约束
 
 `get_model_info / get_context_messages / list_sessions` 为阻塞式同步查询,
-同一句柄同一时刻仅允许一个在途 (C API 契约)。
+同一句柄同一时刻仅允许一个执行中 (C API 契约)。
 
 ## 目录结构
 

@@ -187,7 +187,7 @@ struct SidebarFixture {
     }
 
     /// 在 (x, y) 模拟一次左键点击 (Pressed + Released)
-    /// - 组件仅在 Released 时处理点击 (Pressed 由拖选跟踪消费, 不改变状态),
+    /// - 组件仅在 Released 时处理点击 (Pressed 由拖选跟踪处理, 不改变状态),
     ///   故以 Released 的处理结果为准
     bool clickAt(int x, int y) {
         ftxui::Mouse m;

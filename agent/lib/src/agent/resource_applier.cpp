@@ -326,7 +326,7 @@ bool AgentResourceApplier::addMcpServer(
 
     // 连接身份: client 在登记前创建, 协程各阶段经指针比对识别 stale 条目
     // (注销后旧协程不再写回任何状态; 连接释放依赖 shared_ptr 引用计数 —— 不与
-    // 在途网络操作并发 close, 由最后一个引用析构时关闭, 规避竞态)
+    // 执行中网络操作并发 close, 由最后一个引用析构时关闭, 规避竞态)
     auto client = std::make_shared<server::McpClient>(server::McpClient::Config{
         .serverUrl       = cfg.url,
         .protocolVersion = std::string{server::McpClient::kProtocol2026_07_28},
@@ -376,7 +376,7 @@ bool AgentResourceApplier::deactivateMcp(std::string_view nameSpace) {
     if (it == mcpEntries_.end()) {
         return false;
     }
-    // Ready: 摘除其全部动态工具 (在途调用靠 ToolRegistry 返回的 shared_ptr 保活跑完);
+    // Ready: 摘除其全部动态工具 (执行中调用靠 ToolRegistry 返回的 shared_ptr 保活跑完);
     // Connecting: 直接摘条目 —— 协程各阶段检查 stale 后自行退出。
     // 两种情况均不主动并发 close (见 addMcpServer 注释), 连接由引用计数回收。
     if (it->second.status == McpEntry::Status::Ready) {

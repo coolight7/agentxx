@@ -193,13 +193,12 @@ Element SessionSelectorOverlay::OnRender() {
         if (st.sessionListLoadingMore) {
             items.push_back(text("↓ 加载中...") | dim);
         } else if (st.sessionListHasMore) {
-            const std::string hint = st.sessionListTotalCount > 0
-                                         ? fmt::format(
-                                               "已加载 {}/{}  ↓ 下移加载更多",
-                                               st.sessionList.size(),
-                                               st.sessionListTotalCount
-                                           )
-                                         : std::string("↓ 下移加载更多");
+            const std::string hint = st.sessionListTotalCount > 0 ? fmt::format(
+                                         "已加载 {}/{}  ↓ 下移加载更多",
+                                         st.sessionList.size(),
+                                         st.sessionListTotalCount
+                                     )
+                                                                  : std::string("↓ 下移加载更多");
             items.push_back(text(hint) | dim);
         }
     }
@@ -235,7 +234,7 @@ bool SessionSelectorOverlay::OnEvent(Event event) {
             ++selectedIndex_;
         }
         // 选择项接近已加载列表末尾时预取下一页 (提前 kSessionPrefetchAhead 项):
-        // 实现方内部做在途去重与 hasMore 边界判断, 高频调用安全
+        // 实现方内部做执行中去重与 hasMore 边界判断, 高频调用安全
         constexpr int kSessionPrefetchAhead = 3;
         if (ctx_.requestMoreSessions && selectedIndex_ + kSessionPrefetchAhead >= count) {
             ctx_.requestMoreSessions();

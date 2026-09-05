@@ -14,7 +14,7 @@
 //      resultId 为空按任务序号兜底 (summarization 直接调用路径)
 //   5) parseSubagentBatchFromInterrupt: 统一批量语义解析 + 旧单发格式兼容
 //   6) 写入侧 buildSubagentResumeValues 与读取侧 execute_async 的 key 规则
-//      闭环一致 (含 hasError 任务写 {"error": ...})
+//      一致 (含 hasError 任务写 {"error": ...})
 
 #include "test_subagent_tool.h"
 
@@ -472,7 +472,7 @@ asio::awaitable<TestResult> run_subagent_tool_tests() {
                      {"content", "compress me"},
                  }})                        },
                 {"sessionId", env->sessionId},
-                // 注意: 无 tool_call_id (压缩中间件直接调用)
+ // 注意: 无 tool_call_id (压缩中间件直接调用)
             };
             try {
                 (void)co_await env->tool->execute_async(args);
@@ -554,7 +554,7 @@ asio::awaitable<TestResult> run_subagent_tool_tests() {
                 {"subagent",  "worker"      },
                 {"message",   "m"           },
                 {"sessionId", env->sessionId},
-                // 无 tool_call_id
+ // 无 tool_call_id
             };
             try {
                 (void)co_await env->tool->execute_async(args);

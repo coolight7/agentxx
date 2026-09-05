@@ -38,7 +38,7 @@ struct LogEntry {
 };
 
 /// 日志接收基类
-/// - 内置线程安全有界队列: 生产者线程调 enqueue() 入队, 宿主线程调 pump() 消费
+/// - 内置线程安全有界队列: 生产者线程调 enqueue() 入队, 宿主线程调 pump() 处理
 /// - onLog() 总在宿主线程串行执行, 子类无需自行加锁
 /// - 队列满时丢弃新条目并计数, 保证生产者永不阻塞
 class LogSink {
@@ -49,7 +49,7 @@ public:
     /// 生产者线程调用, 线程安全入队 (满则丢弃)
     void enqueue(std::shared_ptr<const LogEntry> entry);
 
-    /// 宿主线程调用, 排空队列并逐条调 onLog; 返回消费条数
+    /// 宿主线程调用, 排空队列并逐条调 onLog; 返回处理条数
     size_t pump();
 
     /// 等待队列排空 (默认循环调 pump; ThreadedLogSink 覆写为等待后台线程)
@@ -75,7 +75,7 @@ protected:
     std::atomic<uint64_t>                       dropped_{0};
 };
 
-/// 自带后台消费线程的 LogSink
+/// 自带后台处理线程的 LogSink
 /// - 构造时启动线程, 析构时停止并 drain 剩余日志
 /// - 适用于 stderr 输出、网络转发等无需绑定特定线程的 sink
 class ThreadedLogSink : public LogSink {

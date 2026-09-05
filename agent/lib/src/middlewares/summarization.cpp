@@ -505,7 +505,7 @@ asio::awaitable<std::string> SummarizationMiddlewareHandle::doSummarizeWithLLM(
     if (direct) {
         // 手动压缩直派模式 (agent 空闲触发, 无 AgentRunner 中断循环):
         // 不再走 SubagentExecute RR → requestInterrupt 抛 NodeInterrupt 的
-        // 中断委派路径 —— 该路径的中断只能由 AgentRunner 消费, 空闲时
+        // 中断委派路径 —— 该路径的中断只能由 AgentRunner 处理, 空闲时
         // 会穿透所有 catchErrorAsync 逃逸到 EventBus publish 的 detached
         // 协程被 asio 静默丢弃, 表现为压缩永久卡在 "Summarizizing..."。
         // 改为直接经宿主 AgentHost::spawnBatch 派生压缩子代理并等待完成,
@@ -513,10 +513,8 @@ asio::awaitable<std::string> SummarizationMiddlewareHandle::doSummarizeWithLLM(
         // sessionId + 父会话模型 → KV cache 命中), 不抛中断。
         auto host = agentCtxPtr->host.lock();
         if (nullptr == host) {
-            XX_LOGE(
-                "SummarizationMiddlewareHandle 手动压缩失败: AgentHost 不可用 "
-                "(AgentContext::host 为空), 无法派生压缩子代理"
-            );
+            XX_LOGE("SummarizationMiddlewareHandle 手动压缩失败: AgentHost 不可用 "
+                    "(AgentContext::host 为空), 无法派生压缩子代理");
             co_return "";
         }
 
@@ -528,10 +526,10 @@ asio::awaitable<std::string> SummarizationMiddlewareHandle::doSummarizeWithLLM(
             = agentCtxPtr->agentConfig ? agentCtxPtr->agentConfig->agentName : std::string{};
         batchReq.parentSessionId = std::string{sessionId};
         batchReq.tasks.push_back(events::SubagentBatchItem{
-            .subagentName        = "subagent_task",
-            .messages            = reqMsgsJson, // 结构化透传 (含压缩指令), 无文本转录
-            .sessionId           = std::string{sessionId},
-            .tools               = neograph::json::array(), // []: 无工具
+            .subagentName = "subagent_task",
+            .messages     = reqMsgsJson, // 结构化透传 (含压缩指令), 无文本转录
+            .sessionId    = std::string{sessionId},
+            .tools        = neograph::json::array(), // []: 无工具
             .enableSummarization = false,
         });
 
@@ -799,8 +797,8 @@ asio::awaitable<void>
 
             /// llm 压缩 (同上下文 subagent, 中断后由 Session 派生并 resume)
             // 手动压缩在 agent 空闲时触发 (无 AgentRunner 中断循环), 不能走
-        // NodeInterrupt 中断委派 (无人消费会逃逸 detached 被吞), 直派模式
-        auto summary = co_await doSummarizeWithLLM(sessionId, toSummarize, /*direct=*/true);
+            // NodeInterrupt 中断委派 (无人处理会逃逸 detached 被吞), 直派模式
+            auto summary = co_await doSummarizeWithLLM(sessionId, toSummarize, /*direct=*/true);
 
             enum class ReplaceAction {
                 None,

@@ -275,7 +275,7 @@ namespace {
 /* ==================== 插件事件发布 ====================
  * 规划内容变化 → 发布 "agentxx_planning.planning" (载荷为完整规划 JSON)。
  * server 侧经事件总线转发为 WirePluginData{plugin, event, data}, client 侧
- * 插件订阅 EVT_PLUGIN_DATA 消费并渲染 Info 栏段落 (见下方 client 入口)。
+ * 插件订阅 EVT_PLUGIN_DATA 处理并渲染 Info 栏段落 (见下方 client 入口)。
  */
 void publishPlanningEvent(PluginCtx& ctx, const std::string& planJson) {
     if (!ctx.iface.events || !ctx.iface.events->publish || planJson.empty()) {
@@ -512,7 +512,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int32_t AGENTXX_PLUGIN_CALL
                             );
                         }
 
-                        // 通用接口: 持久化到 {dataDir}/plans + 事件发布 (宿主/客户端通用消费)
+                        // 通用接口: 持久化到 {dataDir}/plans + 事件发布 (宿主/客户端通用处理)
                         publishPlanningEvent(c, planJson);
 
                         return "success";

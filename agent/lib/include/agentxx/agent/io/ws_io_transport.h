@@ -123,7 +123,7 @@ private:
 
     /// 握手期间 (connect 等待 HelloAck) 到达的非 HelloAck 消息 (仅 ex_ 线程访问)
     /// - 协议上服务端先发 HelloAck 再重放, 正常为空; 防御性保留先于 HelloAck
-    ///   到达的消息 (如 Log/ContextStats), 由 recv() 优先消费, 避免被握手循环丢弃
+    ///   到达的消息 (如 Log/ContextStats), 由 recv() 优先处理, 避免被握手循环丢弃
     std::deque<agentxx::agent::WireMessage> helloPending_;
 
     std::atomic<bool> stopped_{false};

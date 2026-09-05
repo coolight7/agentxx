@@ -141,7 +141,7 @@ public:
         scrollable_->resetSelectionHighlight();
     }
 
-    /// 处理可折叠消息的鼠标点击 (供外部 CatchEvent 调用); 返回是否消费了事件
+    /// 处理可折叠消息的鼠标点击 (供外部 CatchEvent 调用); 返回是否处理了事件
     /// - 普通消息 (Think/Tool/System/Tip): 切换该消息的 collapsed
     /// - 流式末尾正在输出的 Think 子项: 切换流式折叠覆盖态 (streamThinkOverride_)
     bool handleCollapsibleClick(const ftxui::Mouse& mouse);

@@ -10,7 +10,7 @@
 ///
 /// 设计:
 /// - 持有 main (主界面) 和至多一个 activeModal (模态弹窗)
-/// - 事件分发: 模态打开时优先派发给模态; 模态消费则不传递到 main
+/// - 事件分发: 模态打开时优先派发给模态; 被处理则不传递到 main
 /// - 渲染: main 始终渲染; 模态叠加在 main 之上 (居中), 背景降低亮度
 ///
 /// 替代原 CatchEvent 中的 if (showModelSelector_) ... if (showSettings_) ... 链:

@@ -1978,7 +1978,7 @@ static asio::awaitable<void> test_model_switch_with_next_input() {
     auto sc         = std::make_shared<agentxx::agent::SessionServerAgentIO>(ex, agent, scCfg);
     sc->setTransport(std::shared_ptr<agentxx::agent::AgentIOTransportBase>(std::move(serverT)));
 
-    // transport 接收循环 (onPeerMessage 消费客户端消息) + 会话驱动循环 (run)
+    // transport 接收循环 (onPeerMessage 处理客户端消息) + 会话驱动循环 (run)
     asio::co_spawn(
         ex,
         [sc]() -> asio::awaitable<void> {

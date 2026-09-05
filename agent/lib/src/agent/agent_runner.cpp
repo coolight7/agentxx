@@ -167,11 +167,8 @@ asio::awaitable<AgentRunner::Outcome> AgentRunner::run(
                             break;
                         }
                     }
-                    if (subagentCancelled
-                        || (cancelToken && cancelToken->is_cancelled())) {
-                        throw neograph::graph::CancelledException(
-                            "subagent delegation cancelled"
-                        );
+                    if (subagentCancelled || (cancelToken && cancelToken->is_cancelled())) {
+                        throw neograph::graph::CancelledException("subagent delegation cancelled");
                     }
                     agentxx::tools::buildSubagentResumeValues(
                         resumeValues,
@@ -224,9 +221,7 @@ asio::awaitable<AgentRunner::Outcome> AgentRunner::run(
                             rid = std::to_string(argIndex);
                         }
                         resumeValues[rid] = neograph::json::parse(resp->resultJson);
-                    } else if (
-                        resp.has_value() && !resp->handled
-                        && resp->resultJson.find("__cancelled__") != std::string::npos) {
+                    } else if (resp.has_value() && !resp->handled && resp->resultJson.find("__cancelled__") != std::string::npos) {
                         throw neograph::graph::CancelledException("HIL interrupted by cancel");
                     }
                 }
@@ -256,13 +251,13 @@ asio::awaitable<AgentRunner::Outcome> AgentRunner::run(
             // 恢复执行中断点, 直接回到触发中断的 Node
             // - 必须携带 cancel_token: 否则 resume 出的新 run 无取消能力,
             //   后续 llm/toolcall 的取消埋点 (if cancel_token) 全部跳过,
-            //   在途 HTTP 也无法被打断, 表现为"压缩完成后怎么都停不下来"
+            //   执行中 HTTP 也无法被打断, 表现为"压缩完成后怎么都停不下来"
             neograph::graph::RunConfig resumeCfg;
-            resumeCfg.thread_id     = std::string{sessionId};
-            resumeCfg.cancel_token  = cancelToken;
-            resumeCfg.stream_mode   = resumeStreamMode;
-            resumeCfg.max_steps     = resumeMaxSteps;
-            result = co_await engine->resume_async(
+            resumeCfg.thread_id    = std::string{sessionId};
+            resumeCfg.cancel_token = cancelToken;
+            resumeCfg.stream_mode  = resumeStreamMode;
+            resumeCfg.max_steps    = resumeMaxSteps;
+            result                 = co_await engine->resume_async(
                 std::move(resumeCfg),
                 neograph::json{},
                 hooks.eventCallback

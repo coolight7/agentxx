@@ -892,20 +892,20 @@ asio::awaitable<TestResult> run_plugin_tests() {
             XX_TEST_EXPECT_TRUE(ev30 != nullptr && ev30->publish != nullptr);
             XX_TEST_EXPECT_EQ(
                 ev30 ? ev30->publish(
-                           &inst30->host,
-                           agentxx::plugin::PluginStringView::fromCstr("demo.topic"),
-                           agentxx::plugin::PluginStringView::fromCstr(R"({"k":"v"})")
-                       )
+                    &inst30->host,
+                    agentxx::plugin::PluginStringView::fromCstr("demo.topic"),
+                    agentxx::plugin::PluginStringView::fromCstr(R"({"k":"v"})")
+                )
                      : -1,
                 0
             );
             ctx->pluginManager->disable("example_plugin");
             // 禁用状态: 接口表 publish 拒绝 (返回非 0)
             int rc = ev30 ? ev30->publish(
-                                &inst30->host,
-                                agentxx::plugin::PluginStringView::fromCstr("demo.topic"),
-                                agentxx::plugin::PluginStringView::fromCstr(R"({"k":"v"})")
-                            )
+                         &inst30->host,
+                         agentxx::plugin::PluginStringView::fromCstr("demo.topic"),
+                         agentxx::plugin::PluginStringView::fromCstr(R"({"k":"v"})")
+                     )
                           : -1;
             XX_TEST_EXPECT_TRUE(rc != 0);
             co_await ctx->pluginManager->unloadAsync("example_plugin");
@@ -1370,7 +1370,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
         }
     }
 
-    // ---- 34. 卸载主动取消闭环 (挂起中的 60s sleep 工具由 unload 立即取消) ----
+    // ---- 34. 卸载主动取消 (挂起中的 60s sleep 工具由 unload 立即取消) ----
     {
         auto instEx = co_await ctx->pluginManager->loadPluginAsync(path);
         XX_TEST_EXPECT_TRUE(instEx != nullptr);

@@ -51,7 +51,7 @@ spawn 协程挂在宿主 sleep 定时器上, 插件卸载时无人取消 → 协
 
 让 spawn 注册时获得一个与工具 op **同构**的宿主句柄:
 持 inflight (存活标记) + 可取消 + 完成通知。卸载时 detachAll 统一 cancel、
-waitInflightZero 统一等待 —— 闭环后 prepare_unload + drainUnloadIo 均不再需要。
+waitInflightZero 统一等待 —— prepare_unload + drainUnloadIo 均不再需要。
 
 关键机制全部现成, 无需发明:
 - `AgentxxPluginOperatorHandle` = `{caller, cancelFn, cancelled}` (plugin_manager.h)
@@ -411,7 +411,7 @@ coroAddr 仅在 io 线程读写 (cancel_fn 与完成路径都在 io 线程访问
    **`PluginBase::spawn` 与自由函数 `spawn(Ctx&, Fn&&)` 两份实现都要改**
    (建议抽公共 helper); `PluginBase::stopSpawns` 标记废弃 (保留兼容)
 5. **plugin_manager_lifecycle.cpp**: unloadAsync 删除 drain/prepare 特例,
-   回归纯 waitInflightZero 闭环
+   回归纯 waitInflightZero 
 6. **system_monitor**: 撤销 prepare_unload 导出 (回归纯 spawn)
 7. **测试**:
    - cpu_gpu 无泄漏 (现有用例即覆盖: load → spawn 挂起 → unload 快速回收;

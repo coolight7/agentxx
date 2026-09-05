@@ -200,7 +200,7 @@ void TUIClientAgentIO::sendPluginUserInput(std::string text) {
         return;
     }
     // 与用户输入同排队语义 (见 start() 中 inputCfg.onSend 的分支逻辑):
-    // - 中断等待输入: 直接投递到输入通道 (由中断流程消费)
+    // - 中断等待输入: 直接投递到输入通道 (由中断流程处理)
     // - 未连接 (Connecting/Failed): 进待发送队列
     // - 流式中: 进待发送队列 (轮次结束后分发)
     // - 空闲: 立即发送
@@ -630,10 +630,10 @@ void TUIClientAgentIO::start() {
         modal_ = ModalContainer::Create(mainRenderer);
         modal_->setBgColor(theme_.backgroundColor);
 
-        // 全局快捷键 + 鼠标 (F2/F3/F12/Escape/点击): 组件未消费的事件到此处理
+        // 全局快捷键 + 鼠标 (F2/F3/F12/Escape/点击): 组件未处理的事件到此处理
         auto handler = CatchEvent(modal_, [&](Event event) -> bool {
             // 全局退出快捷键: 优先处理, 弹窗打开时也放行 (否则模态期间 Ctrl+C 被
-            // 弹窗 OnEvent 无条件消费, 无法退出程序)
+            // 弹窗 OnEvent 无条件处理, 无法退出程序)
             if (event == Event::CtrlC) {
                 running_ = false;
                 // 关闭 transport 以打断可能阻塞中的 connect/重连/recv 循环,
@@ -677,7 +677,7 @@ void TUIClientAgentIO::start() {
                             if (sidebar_) {
                                 sidebar_->clearSelectionHighlight();
                             }
-                            // 消费事件: 拖选释放不应触发下方按钮/折叠点击;
+                            // 处理事件: 拖选释放不应触发下方按钮/折叠点击;
                             // (handleSelection(handled=true) 将清除选择高亮,
                             // 复制已完成, 符合"松开即复制"语义)
                             return true;
@@ -820,7 +820,7 @@ void TUIClientAgentIO::start() {
                 // 路径读取装饰等插件注册数据)
                 ctx_.frameState->pluginRegistry
                     = pluginManager_ ? pluginManager_->uiRegistrySnapshot() : nullptr;
-                // 消费 client 线程投递的 UI 动作 (弹窗开关/消息列表吸附等):
+                // 处理 client 线程投递的 UI 动作 (弹窗开关/消息列表吸附等):
                 // 必须在渲染之前执行, 使本帧渲染反映其效果;
                 // 动作仅访问 UI 线程独占组件 (modal_/messageList_), 不依赖本帧快照
                 {
@@ -833,7 +833,7 @@ void TUIClientAgentIO::start() {
                         fn();
                     }
                 }
-                // 日志 sink 排空 (丢弃防护: 不消费则生产者可能丢弃新日志):
+                // 日志 sink 排空 (丢弃防护: 不处理则生产者可能丢弃新日志):
                 // 仅当 Logs tab 存在且为当前激活 tab 时才触发重绘 —— agent 运行时
                 // 日志量很大, 若 tab 未打开, 日志变化不影响任何可见 UI, 每批日志
                 // 都触发整帧渲染 (布局 + 全屏 ToString + stdout 写) 是纯浪费
@@ -849,11 +849,11 @@ void TUIClientAgentIO::start() {
                 // client 线程可原地修改 state, 拷贝成本降为零。
                 // Element 树在 OnRender 中已自包含 (文本已复制), 布局/绘制不依赖快照。
                 ctx_.frameState.reset();
-                // 帧完成: 本帧消费的在途 Custom 已对应一次渲染 (frameState 为本帧开头快照)。
+                // 帧完成: 本帧处理的在途 Custom 已对应一次渲染 (frameState 为本帧开头快照)。
                 // 清除在途标记, 使新的 postRedraw 能重新 Post;
                 // 若帧期间有新请求被合并 (计数 != 帧基线), 说明本帧渲染可能未反映其
                 // 状态变更 (快照取于帧开头), 补 Post 一帧, 保证以最新快照重绘。
-                // 注意: 不能在帧开头 reset —— FTXUI 的 RunUntilIdle 会在同一帧内消费
+                // 注意: 不能在帧开头 reset —— FTXUI 的 RunUntilIdle 会在同一帧内处理
                 // 事件处理期间 Post 的 Custom, 帧开头 reset 后帧中到达的请求会因合并
                 // 标记为真而被丢弃且无在途事件, 导致重绘丢失 (如模型弹窗列表不刷新)。
                 redrawPosted_.store(false, std::memory_order_release);
@@ -1776,11 +1776,11 @@ void TUIClientAgentIO::onDelta(const agentxx::agent::WireDelta& delta) {
                 m->startTimeMs        = delta.startTimeMs > 0
                                             ? delta.startTimeMs
                                             : static_cast<int64_t>(
-                                           std::chrono::duration_cast<std::chrono::milliseconds>(
-                                               std::chrono::system_clock::now().time_since_epoch()
-                                           )
-                                               .count()
-                                       );
+                                         std::chrono::duration_cast<std::chrono::milliseconds>(
+                                             std::chrono::system_clock::now().time_since_epoch()
+                                         )
+                                             .count()
+                                     );
                 st.messages.push_back(std::move(m));
                 st.isStreaming = true;
             } break;
@@ -1841,8 +1841,7 @@ void TUIClientAgentIO::onDelta(const agentxx::agent::WireDelta& delta) {
                         st.pendingTokenStartTimeMs = delta.startTimeMs;
                         st.pendingTokenDurationMs  = delta.durationMs;
                     }
-                } else if (!st.messages.empty()
-                           && st.messages.back()->role != TUIMessage::Role::Think) {
+                } else if (!st.messages.empty() && st.messages.back()->role != TUIMessage::Role::Think) {
                     auto& m       = sharedState_.mutableMessage(st, st.messages.size() - 1);
                     m.startTimeMs = delta.startTimeMs;
                     m.durationMs  = delta.durationMs;

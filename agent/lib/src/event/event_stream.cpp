@@ -397,7 +397,7 @@ void EventBridge::handleChannelWrite(const neograph::graph::GraphEvent& event) {
                 if (!target->id.empty()) {
                     session_->updateViewMessage(*target);
                 }
-                // (edit 工具参数 unified diff: 渲染端自行计算, 无消费者, 不再生成;
+                // (edit 工具参数 unified diff: 渲染端自行计算, 无处理者, 不再生成;
                 //  ToolData::diff 字段保留供未来)
             }
             emitDelta(WireDelta{
@@ -617,7 +617,7 @@ void EventBridge::publishModelToken(const std::string& token, std::string_view k
     }
     auto  busPtr = ctxPtr->bus;
     auto& bus    = *busPtr;
-    // 无订阅者时跳过: 避免每个 token 创建一次无消费者的协程
+    // 无订阅者时跳过: 避免每个 token 创建一次无处理者的协程
     // (ModelToken topic 当前无生产订阅者, 该检查使热路径零开销)
     if (false
         == bus.hasListeners<agentxx::events::EventModelToken>(agentxx::events::Topic::ModelToken)) {

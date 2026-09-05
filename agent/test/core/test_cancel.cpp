@@ -296,7 +296,7 @@ asio::awaitable<void> test_agent_cancel_llm_request() {
     XX_TEST_EXPECT_TRUE(watcherExc == nullptr);
     XX_TEST_EXPECT_TRUE(turnResult.hasError);
     XX_TEST_EXPECT_EQ(turnResult.errorMessage, std::string{"Cancelled by user"});
-    // 在途 LLM 请求应被中断, 不应等待满 5s 延迟
+    // 执行中 LLM 请求应被中断, 不应等待满 5s 延迟
     XX_TEST_EXPECT_TRUE(elapsedMs < 4000);
 
     g_da_sim_delay_ms = 0;
@@ -436,7 +436,7 @@ asio::awaitable<void> test_agent_cancel_toolcall() {
 
     auto cancelWatcher = [&]() -> asio::awaitable<void> {
         asio::steady_timer timer(ex);
-        // 串行 toolcall: 先执行 slow (2s 在途), 取消发生在 slow 执行期间:
+        // 串行 toolcall: 先执行 slow (2s 执行中), 取消发生在 slow 执行期间:
         // - slow 被取消信号立即中断 (未自然完成) → 经取消埋点补 [User canceled]
         // - marker 排在 slow 之后, 取消后不再执行
         for (int i = 0; i < 2000; ++i) {

@@ -93,7 +93,7 @@ static T catchError(std::function<T()> func, std::function<T(std::string)> onErr
 // - 数据目录由宿主提供: 入口 (agentxx_codegraph.cpp) 经 agentxx.agent.config
 //   接口表 get_config 读取 dataDir 后拼接 "{dataDir}/sqlite" 传入构造函数;
 //   环境变量派生配置 (yaml ${VAR}) 由宿主配置加载器统一展开 (.env/内置/系统
-//   变量优先级见 docs/zh-cn/design.md), 插件侧只消费最终值
+//   变量优先级见 docs/zh-cn/design.md), 插件侧只处理最终值
 // - sqliteDir 为空视为配置缺失: initialize 失败并记日志
 //   (不再从 HOME/TMPDIR 等环境变量自行推导默认目录)
 // ---------------------------------------------------------------------------

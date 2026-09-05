@@ -37,8 +37,8 @@ class CliRenderer {
     switch (event) {
       case ReadyEvent():
         _endThinking();
-        stdout.writeln(
-            Ansi.paint('✓ Agent 就绪 (sessionId: ${event.sessionId})', Ansi.cyan));
+        stdout.writeln(Ansi.paint(
+            '✓ Agent 就绪 (sessionId: ${event.sessionId})', Ansi.cyan));
       case SyncEvent():
         _endThinking();
         stdout.writeln(Ansi.paint('[历史会话已同步]', Ansi.gray));
@@ -66,7 +66,8 @@ class CliRenderer {
       case ModelInfoEvent():
         _endThinking();
         stdout.writeln(Ansi.paint(
-            '模型: ${event.currentModel} (共 ${event.models.length} 个可用)', Ansi.cyan));
+            '模型: ${event.currentModel} (共 ${event.models.length} 个可用)',
+            Ansi.cyan));
       case ComponentsEvent():
         stdout.writeln(Ansi.paint('[组件信息已加载]', Ansi.gray));
       case PluginDataEvent():
@@ -76,13 +77,14 @@ class CliRenderer {
             (raw.length > 400 ? '${raw.substring(0, 400)}…' : raw));
       case ErrorEvent():
         _endThinking();
-        stdout.writeln(Ansi.paint('✗ 内部错误(${event.code}): ${event.message}', Ansi.red));
+        stdout.writeln(
+            Ansi.paint('✗ 内部错误(${event.code}): ${event.message}', Ansi.red));
       case InterruptReqEvent():
         // 由 CliRepl 处理交互 (渲染在 _printFlowHeader), 此处不输出
         break;
       case InterruptExpiredEvent():
-        stdout.writeln(Ansi.paint(
-            '⚠ 中断 ${event.interruptId} 已过期或被取消', Ansi.yellow));
+        stdout.writeln(
+            Ansi.paint('⚠ 中断 ${event.interruptId} 已过期或被取消', Ansi.yellow));
     }
   }
 
@@ -105,7 +107,9 @@ class CliRenderer {
       case 'tool_end':
         _endThinking();
         final result = _preview(d.result, maxLines: 4, maxChars: 480);
-        final mark = d.hasError ? Ansi.paint('✗ 结果', Ansi.red) : Ansi.paint('✓ 结果', Ansi.green);
+        final mark = d.hasError
+            ? Ansi.paint('✗ 结果', Ansi.red)
+            : Ansi.paint('✓ 结果', Ansi.green);
         stdout.writeln('  $mark${result.isEmpty ? '' : ': $result'}');
       case 'turn_start':
       case 'node_start':
@@ -162,7 +166,7 @@ class CliRepl {
   final AgentClient client;
   final renderer = CliRenderer();
 
-  /// FIFO 中断流程队列 (同一时刻通常仅一个在途)
+  /// FIFO 中断流程队列 (同一时刻通常仅一个执行中)
   final _flows = <_InterruptFlow>[];
 
   final _doneCompleter = Completer<void>();
@@ -264,7 +268,8 @@ class CliRepl {
     // 无需输入的中断 (inputs 为空): 直接空数组应答, 不进入逐项询问
     if (!e.isPermissionAsk && e.inputs.isEmpty) {
       stdout.writeln();
-      stdout.writeln(Ansi.paint('❓ 需要确认 (${e.interruptName}, 无输入项)', Ansi.magenta));
+      stdout.writeln(
+          Ansi.paint('❓ 需要确认 (${e.interruptName}, 无输入项)', Ansi.magenta));
       _respondFlow(flow);
       return;
     }
@@ -280,9 +285,11 @@ class CliRepl {
       stdout.writeln(Ansi.paint('❓ 需要补充输入 (${e.interruptName})', Ansi.magenta));
       for (final item in e.inputs) {
         final depict = item.depict.isEmpty ? '' : ' —— ${item.depict}';
-        final enumHint =
-            item.enumValues.isNotEmpty ? ' 可选: ${item.enumValues.join('|')}' : '';
-        final defHint = item.defaultValue.isEmpty ? '' : ' (回车默认: ${item.defaultValue})';
+        final enumHint = item.enumValues.isNotEmpty
+            ? ' 可选: ${item.enumValues.join('|')}'
+            : '';
+        final defHint =
+            item.defaultValue.isEmpty ? '' : ' (回车默认: ${item.defaultValue})';
         stdout.writeln('   · ${item.label}$depict$enumHint$defHint');
       }
       stdout.writeln('   请按顺序逐项回答:');
@@ -357,8 +364,8 @@ class CliRepl {
 
     if (value == null) {
       stdout.writeln(Ansi.paint(
-          '   输入无效, 请重新输入 (${input.type == 'enum' ? '可选: ${input.enumValues.join('|')}'
-              : '期望类型: ${input.type.isEmpty ? '文本' : input.type}'})', Ansi.yellow));
+          '   输入无效, 请重新输入 (${input.type == 'enum' ? '可选: ${input.enumValues.join('|')}' : '期望类型: ${input.type.isEmpty ? '文本' : input.type}'})',
+          Ansi.yellow));
       _askCurrentItem(flow);
       return;
     }
@@ -373,9 +380,9 @@ class CliRepl {
 
   void _respondFlow(_InterruptFlow flow) {
     try {
-      client.interruptRespond(
-          flow.event.interruptId, jsonEncode(flow.answers));
-      stdout.writeln(Ansi.paint('   已应答 (${flow.answers.join(", ")})', Ansi.gray));
+      client.interruptRespond(flow.event.interruptId, jsonEncode(flow.answers));
+      stdout.writeln(
+          Ansi.paint('   已应答 (${flow.answers.join(", ")})', Ansi.gray));
       // 权限 "always": 注册路径规则, 同路径后续不再询问
       if (flow.rememberPermission && flow.event.isPermissionAsk) {
         try {
@@ -422,8 +429,11 @@ class CliRepl {
   // -------------------------------------------------------------------------
 
   Future<void> _runCommand(String cmdLine) async {
-    final parts =
-        cmdLine.substring(1).split(RegExp(r'\s+')).where((p) => p.isNotEmpty).toList();
+    final parts = cmdLine
+        .substring(1)
+        .split(RegExp(r'\s+'))
+        .where((p) => p.isNotEmpty)
+        .toList();
     final cmd = parts.isEmpty ? '' : parts.first;
     final arg = parts.skip(1).join(' ');
 
@@ -450,11 +460,13 @@ class CliRepl {
                   .take(40)
                   .join('\n'));
             } else {
-              stdout.writeln(Ansi.paint('查询失败: ${client.lastQueryError}', Ansi.red));
+              stdout.writeln(
+                  Ansi.paint('查询失败: ${client.lastQueryError}', Ansi.red));
             }
           } else {
             client.selectModel(arg);
-            stdout.writeln(Ansi.paint("已请求切换到 '$arg' (结果经 MODEL_INFO 通知)", Ansi.gray));
+            stdout.writeln(
+                Ansi.paint("已请求切换到 '$arg' (结果经 MODEL_INFO 通知)", Ansi.gray));
           }
         case 'sessions':
           final data = client.listSessions();
@@ -483,7 +495,8 @@ class CliRepl {
         case 'context':
           final data = client.getContextMessages();
           if (data == null) {
-            stdout.writeln(Ansi.paint('查询失败: ${client.lastQueryError}', Ansi.red));
+            stdout.writeln(
+                Ansi.paint('查询失败: ${client.lastQueryError}', Ansi.red));
           } else {
             final messages = data['messages'] as List<dynamic>? ?? const [];
             stdout.writeln('当前 LLM 上下文共 ${messages.length} 条消息:');
@@ -493,8 +506,9 @@ class CliRepl {
                 final content = (m['content']?.toString() ?? '')
                     .replaceAll('\n', ' ')
                     .trim();
-                final preview =
-                    content.length > 60 ? '${content.substring(0, 60)}…' : content;
+                final preview = content.length > 60
+                    ? '${content.substring(0, 60)}…'
+                    : content;
                 stdout.writeln('  [$role] $preview');
               }
             }
@@ -510,8 +524,7 @@ class CliRepl {
           } else {
             for (final entry in logs.take(50)) {
               if (entry is Map<String, dynamic>) {
-                stdout.writeln(
-                    '[${entry['level']}] ${entry['message']}');
+                stdout.writeln('[${entry['level']}] ${entry['message']}');
               }
             }
           }

@@ -24,7 +24,7 @@ int g_sb_failed = 0;
 namespace agentxx {
 namespace test {
 
-/// 验证: bus.request<ReqSubagentBatch, RespSubagentBatch> 请求-响应闭环 (统一批量)
+/// 验证: bus.request<ReqSubagentBatch, RespSubagentBatch> 请求-响应 (统一批量)
 /// - 注册一个模拟 server, 验证请求参数传递与响应回填
 asio::awaitable<void> test_subagent_bus_request_response() {
     auto agentContext = std::make_shared<agentxx::agent::AgentContext>();

@@ -160,7 +160,7 @@ endif()
 # --- 每插件内置判定 + 统一装载 ---
 # macro (非 function): 不产生新变量作用域, 子目录内置分支的 PARENT_SCOPE
 # 收集变量直接回到本目录作用域; _AGENTXX_ADD_AS_BUILTIN 为目录作用域变量,
-# add_subdirectory 后子目录继承本次判定值 (各插件 CMakeLists 开头消费),
+# add_subdirectory 后子目录继承本次判定值 (各插件 CMakeLists 开头处理),
 # 实现"名单内插件内置合并 / 名单外插件独立动态库"的混合模式
 macro(agentxx_load_plugin _dir_name _enable_var)
   if (${_enable_var})

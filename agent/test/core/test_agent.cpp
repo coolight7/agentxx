@@ -178,7 +178,7 @@ int g_da_sim_request_count = 0;
 int g_da_sim_fail_count = 0;
 /// 前 N 次请求返回 tool_calls (之后返回纯文本); -1 = 不限制 (旧行为)
 /// - 供嵌套委派等"先工具后文本"的多请求序列测试; 由测试显式设置并在
-///   结束时恢复 -1 (响应 handler 消费递减, 不自动重置)
+///   结束时恢复 -1 (响应 handler 处理递减, 不自动重置)
 int g_da_sim_tool_calls_remaining = -1;
 
 /// 默认模拟器配置

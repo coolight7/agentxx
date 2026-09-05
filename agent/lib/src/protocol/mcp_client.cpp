@@ -2190,7 +2190,7 @@ void McpClient::closeInternal() {
         errorResp["jsonrpc"] = "2.0";
         errorResp["id"]      = id;
         errorResp["error"]   = jsonRpcError(-32000, "Client closed before response");
-        // promise 可能已被接收方消费 (重复响应), set_value 抛 future_error 时忽略
+        // promise 可能已被接收方处理 (重复响应), set_value 抛 future_error 时忽略
         agentxx::util::catchError<bool>(
             [&]() -> bool {
                 req->promise.set_value(std::move(errorResp));
@@ -2264,7 +2264,7 @@ void McpClient::deliverResponse(const json& response) {
         pending_.erase(it);
     }
 
-    // promise 可能已被消费, set_value 抛 future_error 时忽略
+    // promise 可能已被处理, set_value 抛 future_error 时忽略
     agentxx::util::catchError<bool>(
         [&]() -> bool {
             req->promise.set_value(response);

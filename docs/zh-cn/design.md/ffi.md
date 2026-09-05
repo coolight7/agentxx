@@ -63,7 +63,7 @@
 
 1. `ChannelAgentIOTransport::makePair(clientEx, agentEx)` → 双端点 `setTransport`
 2. **在 agent 线程**: 先 `co_spawn(serverIO->runTransportLoop())`: init 期间客户端请求
-   (`WireHello`/`WireGetModel`) 有消费方, 不排队积压
+   (`WireHello`/`WireGetModel`) 有处理方, 不排队积压
 3. **在 agent 线程**: `co_spawn(runAgentMain)`: `init()` → `AgentHost::create+attachRoot`
    (子代理委派) → 跨线程请求组件信息 → `notifyServerReady` (触发 `EVT_READY`) → `serverIO->run()`
    (会话驱动循环)
@@ -134,7 +134,7 @@ cb.user_data = q;
 /* ... agentxx_ffi_create/start 后, 宿主线程序列化取事件: */
 int32_t type; AgentxxString json;
 while ((rc = agentxx_ffi_event_queue_pop(q, &type, &json, 50)) == AGENTXX_FFI_OK) {
-    /* 消费 type / json.data (大小为 json.size); 用后释放: */
+    /* 处理 type / json.data (大小为 json.size); 用后释放: */
     agentxx_ffi_string_free(&json);
 }
 agentxx_ffi_event_queue_free(q);

@@ -111,7 +111,7 @@ asio::awaitable<bool> WsAgentIOTransport::connect(const WireHello& hello) {
     helloSessionId_ = hello.sessionId;
 
     // 客户端模式：发送 hello 并等待 helloAck
-    // 注意：HelloAck 在此处被消费 (仅用于握手判断), 不会传递给 runTransportLoop 的调用方
+    // 注意：HelloAck 在此处被处理 (仅用于握手判断), 不会传递给 runTransportLoop 的调用方
     auto helloJson = io::makeHello(hello.sessionId, hello.token, hello.lastSeq, hello.tailHash);
     writeQueue_->try_send(ErrorCode{}, helloJson.dump());
 
@@ -126,7 +126,7 @@ asio::awaitable<bool> WsAgentIOTransport::connect(const WireHello& hello) {
                     break;
                 }
                 // 防御: 先于 HelloAck 到达的其余消息 (如 Log/ContextStats) 缓存
-                // 起来供 recv() 消费, 避免被握手循环丢弃 (协议上服务端先发
+                // 起来供 recv() 处理, 避免被握手循环丢弃 (协议上服务端先发
                 // HelloAck 再重放, 正常路径此列表为空)
                 helloPending_.push_back(std::move(msg));
             }

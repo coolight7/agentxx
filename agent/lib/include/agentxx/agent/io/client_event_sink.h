@@ -26,7 +26,7 @@ public:
 
     virtual ~ClientEventSink() = default;
 
-    /// 服务端就绪 (agent init 完成, 会话驱动循环即将开始消费输入)
+    /// 服务端就绪 (agent init 完成, 会话驱动循环即将开始处理输入)
     /// - payload: {"uiCaps": n, "sessionId": "..."}
     virtual void onReady() {}
 

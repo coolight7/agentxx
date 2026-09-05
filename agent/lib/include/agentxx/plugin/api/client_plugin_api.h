@@ -412,7 +412,7 @@ typedef int32_t(AGENTXX_PLUGIN_CALL* AgentxxClientPluginCreateFn)(
     const AgentxxPluginHost* host,
     void**                   plugin_ctx
 );
-/// 可选: 插件实例销毁 (宿主等全部在途回调完成后调用; 宿主会在此之前自动
+/// 可选: 插件实例销毁 (宿主等全部执行中回调完成后调用; 宿主会在此之前自动
 /// 反注册该实例的一切 status item/panel/command/订阅)。只销毁对应 create
 /// 产出的实例上下文, 与其他并存实例无关。
 typedef void(AGENTXX_PLUGIN_CALL* AgentxxClientPluginDestroyFn)(void* plugin_ctx);

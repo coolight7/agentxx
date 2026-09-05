@@ -396,7 +396,7 @@ static bool checkCanceledMessageSequence(const neograph::json& msgs) {
         return false;
     }
     // 未完成的 tool 自动补充 [User canceled] (按 tool_calls 声明顺序):
-    // - slow 先执行, 取消时在途未完成 → 补充 [User canceled]
+    // - slow 先执行, 取消时执行中未完成 → 补充 [User canceled]
     if (msgs[3].value("tool_call_id", std::string{}) != "call_slow_1") {
         return false;
     }
@@ -475,7 +475,7 @@ asio::awaitable<void> test_cancel_auto_supplement() {
     auto ex = co_await asio::this_coro::executor;
 
     // 串行 toolcall: 等待 slow 开始执行后再取消, 确保取消发生在 slow 执行期间:
-    // - slow (2s 在途) 被取消信号立即中断, 未完成 → 补充 [User canceled]
+    // - slow (2s 执行中) 被取消信号立即中断, 未完成 → 补充 [User canceled]
     // - fast 排在 slow 之后, 取消后不再执行 → 同样补充 [User canceled]
     auto cancelWatcher = [&]() -> asio::awaitable<void> {
         asio::steady_timer timer(ex);

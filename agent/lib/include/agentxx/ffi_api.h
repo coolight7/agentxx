@@ -234,7 +234,7 @@ AGENTXX_FFI_EXPORT int32_t AGENTXX_FFI_CALL
 
 /* ==================== 会话交互 (异步, 投递 io 线程执行) ==================== */
 
-/// 发送用户输入 (EVT_READY 前发送会缓存, 就绪后按序消费)
+/// 发送用户输入 (EVT_READY 前发送会缓存, 就绪后按序处理)
 AGENTXX_FFI_EXPORT int32_t AGENTXX_FFI_CALL
     agentxx_ffi_send_input(AgentxxFFIAgent* a, const AgentxxStringView* text, AgentxxString* log);
 

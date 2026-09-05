@@ -83,7 +83,7 @@ void AGENTXX_FFI_CALL agentxx_ffi_event_queue_on_event(
     {
         std::lock_guard<std::mutex> lock(q->m);
         if (q->closed) {
-            return; // 队列已销毁/正在销毁: 丢弃 (宿主已停止消费)
+            return; // 队列已销毁/正在销毁: 丢弃 (宿主已停止处理)
         }
         if (q->items.size() >= AgentxxFFIEventQueue::kMaxQueued) {
             // 超限丢最旧, 并补发一条错误提示让宿主可感知丢失

@@ -1117,7 +1117,7 @@ AgentContext
   ├── establishConnection(): wsConnect + 失败重试 (退避 reconnectBackoff, 可取消)
   ├── writeLoop():    writeQueue (concurrent_channel, cap=4096) → ws send
   ├── readLoop():     ws recv → 反序列化 → recvQueue (concurrent_channel, cap=256)
-  │                     → recv() 消费; 断线后进入自动重连循环:
+  │                     → recv() 处理; 断线后进入自动重连循环:
   │                       重连 → 重建 writeQueue → 发送 Hello(lastSeq, tailHash)
   │                       → 服务端增量重放 (seq 不连续时回退全量 Sync)
   ├── heartbeatLoop(): 每 heartbeatInterval 发送 Ping
@@ -1127,7 +1127,7 @@ AgentContext
 
 - 写/读队列均为有界 concurrent_channel, `try_send` 失败即丢弃 (见"已知问题"
   问题 3); 队列关闭使挂起的 async_receive 抛异常, 循环自然退出
-- HelloAck 在 connect() 握手阶段被消费, 不进入 runTransportLoop 的消息流
+- HelloAck 在 connect() 握手阶段被处理, 不进入 runTransportLoop 的消息流
 - 服务端模式 (AgentServer 注入已建立的 WsClient): 不发送 hello, 不重连,
   握手由 AgentServer::serveTransport 完成
 

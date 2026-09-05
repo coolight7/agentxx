@@ -190,7 +190,7 @@ asio::awaitable<TestResult>
         }
     }
 
-    // ---- 5. spawn 宿主托管: 周期采集任务注册到宿主 + 卸载闭环 ----
+    // ---- 5. spawn 宿主托管: 周期采集任务注册到宿主 + 卸载 ----
     // (agentxx_system_monitor 在 create 内 spawn 周期采集任务; spawn
     // 经 agentxx.agent.tasks 接口表注册到宿主: 句柄在 outstandingOps +
     // inflight+1。卸载时 detachAll cancel → 协程退出 → notify → inflight 归零

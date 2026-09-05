@@ -14,7 +14,7 @@ namespace plugin {
 /// 动态工具注册表 (热插拔插件工具)
 ///
 /// 设计要点:
-/// - 统一以 shared_ptr 持有插件工具: 摘除注册后, 在途调用仍由局部
+/// - 统一以 shared_ptr 持有插件工具: 摘除注册后, 执行中调用仍由局部
 ///   shared_ptr 引用计数保活, 代码段不会在执行中被卸载 (插件卸载须等
 ///   插件实例 inflight==0, 见 PluginManager)
 /// - 仅 io 线程读写 (与 Session 无锁模型一致); 工具执行在宿主线程池,
@@ -29,7 +29,7 @@ public:
     /// 注册工具; 名称冲突 (表内/静态工具) 返回 false
     bool registerTool(std::string name, std::shared_ptr<agentxx::tools::XXToolBase> tool);
 
-    /// 摘除工具 (按名称); 返回被摘除的工具 (在途调用靠返回的 shared_ptr 保活)
+    /// 摘除工具 (按名称); 返回被摘除的工具 (执行中调用靠返回的 shared_ptr 保活)
     std::shared_ptr<agentxx::tools::XXToolBase> unregisterTool(std::string_view name);
 
     /// 查找工具; 返回 shared_ptr (保持代码段存活, 可跨线程使用)

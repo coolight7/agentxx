@@ -208,7 +208,7 @@ struct WirePluginData {
 /// client 插件事件上行 (Client -> Server)
 /// - client 侧插件 (agentxx_plugin_client_create) 经 send_plugin_data 发出的跨端事件;
 ///   服务端收到后发布到事件总线 topic `client.{插件名}.{事件名}` (载荷 std::string),
-///   由 agent 侧同名插件订阅消费
+///   由 agent 侧同名插件订阅处理
 /// - 宿主不解析载荷语义; 频率由插件自身控制 (与 WirePluginData 对称)
 struct WirePluginDataUp {
     /// 发送方插件名 (client 侧实例名, 与 agent 侧同名插件对应)

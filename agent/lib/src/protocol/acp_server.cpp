@@ -57,7 +57,7 @@ void AcpProtocolHandler::stop() {
         }
     }
     workersCv_.notify_all();
-    // 等待所有在途 worker 结束: worker 为 detached 线程, 若不等待, 本对象析构后
+    // 等待所有执行中 worker 结束: worker 为 detached 线程, 若不等待, 本对象析构后
     // 仍在运行的 worker 会访问已销毁成员 (agent_/sessions/sink) → UAF。
     // worker 检测到 cancel/stop 标志后退出 (callClient 亦自带超时, 不会永久阻塞)。
     drainWorkers();

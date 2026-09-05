@@ -109,7 +109,7 @@ static std::shared_ptr<agentxx::plugin::ClientPluginManager> setupClientPlugins(
 }
 
 /// 插件命令拦截 (CLI 输入循环 / 任意 io 线程调用):
-/// 输入以 "/" 开头且匹配插件注册命令时执行命令回调并返回 true (已消费);
+/// 输入以 "/" 开头且匹配插件注册命令时执行命令回调并返回 true (已处理);
 /// 未命中命令返回 false (按普通消息发送)
 static bool
     tryInvokePluginCommand(agentxx::plugin::ClientPluginManager* mgr, const std::string& input) {
@@ -192,7 +192,7 @@ static std::shared_ptr<agent::SessionServerAgentIO> setupLocalUnifiedDirect(
     // 各 Wire 消息处理在 init 前均安全:
     // - WireGetModel: getCurrentModelName 在 modelRegistry 为空时回退 agentConfig
     // - WireHello: 历史为空时全量同步为空; Session 未绑定 io 线程时 assertIoThread 为 no-op
-    // - WireUserInput: 仅入队, 由 init 之后启动的 run() 循环消费 (run 依赖 engine)
+    // - WireUserInput: 仅入队, 由 init 之后启动的 run() 循环处理 (run 依赖 engine)
     asio::co_spawn(
         *agent->ioCtx,
         [serverIO]() -> asio::awaitable<void> {
@@ -203,7 +203,7 @@ static std::shared_ptr<agent::SessionServerAgentIO> setupLocalUnifiedDirect(
 
     // 在 agent 线程启动: init -> supervisor -> 会话驱动循环
     // (run 依赖 init 产出的 engine, 须在 init 完成之后启动;
-    //   init 前的用户输入会先缓存在 inputChannel, run 启动后正常消费)
+    //   init 前的用户输入会先缓存在 inputChannel, run 启动后正常处理)
     asio::co_spawn(
         *agent->ioCtx,
         [agent, serverIO, clientIO, sessionId]() -> asio::awaitable<void> {
@@ -223,9 +223,9 @@ static std::shared_ptr<agent::SessionServerAgentIO> setupLocalUnifiedDirect(
             // 客户端将永远显示不出已加载的组件
             clientIO->requestAppendComponentInfo(sessionId);
             // 通知客户端: server-io 就绪 (init/组件加载完成, 会话驱动循环即将
-            // 启动并开始消费用户输入)。客户端 (TUI) 据此解除"启动中"输入限制,
+            // 启动并开始处理用户输入)。客户端 (TUI) 据此解除"启动中"输入限制,
             // 刷新连接前排队输入 (此时发送的输入由 server-io 端 inputChannel 缓存,
-            // run() 启动后正常消费)
+            // run() 启动后正常处理)
             clientIO->onServerReady();
             co_await serverIO->run();
         },

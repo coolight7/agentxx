@@ -70,7 +70,7 @@ struct ViewMessage {
         std::string toolName;
         std::string toolCallId;
         std::string toolResult;
-        /// edit 工具参数 unified diff (server 生成预留; 当前渲染端自行计算, 未消费)
+        /// edit 工具参数 unified diff (server 生成预留; 当前渲染端自行计算, 未处理)
         std::string diff;
         bool        toolFinished = false;
     };

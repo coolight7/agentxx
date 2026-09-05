@@ -80,7 +80,7 @@ void testLogDispatcherConcurrency() {
         th.join();
     }
 
-    // dispatch 仅入队, 需 pump 消费后 onLog 才执行
+    // dispatch 仅入队, 需 pump 处理后 onLog 才执行
     for (int i = 0; i < kSinks; ++i) {
         sinks[i]->pump();
     }

@@ -891,7 +891,7 @@ void MessageListComponent::maybeRequestMoreHistory() {
     if (scrollable_->scrollOffset() > kHistoryPrefetchRows) {
         return; // 距窗口顶部尚远
     }
-    // 在途去重与边界校验在实现方内部完成 (historyLoading 原子判定)
+    // 执行中去重与边界校验在实现方内部完成 (historyLoading 原子判定)
     ctx_.requestMoreHistory();
 }
 

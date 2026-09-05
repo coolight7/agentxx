@@ -51,7 +51,7 @@ namespace agent {
 //   自适应 (如 emit_message_tip 在无 toast 接口的宿主上降级)。
 //
 // 注意: server_plugins/client_interfaces 会转发到对端 (不以 "client." 开头,
-// 不触环回跳过), 对端插件同样可订阅消费。
+// 不触环回跳过), 对端插件同样可订阅处理。
 static constexpr std::string_view kHostPluginName    = "agentxx_host";
 static constexpr std::string_view kEvtClientAttached = "client_attached";
 static constexpr std::string_view kEvtServerPlugins  = "server_plugins";
@@ -164,7 +164,7 @@ asio::awaitable<neograph::json> SessionServerAgentIO::handleInterrupt(
     // WireCancel 到达 (onCancel 置旗级联) 时打断 async_receive,
     // 返回 {"__cancelled__":true} 使 AgentRunner 不 resume 而抛取消
     // (fork 子随本协程帧持有, 生命周期安全; 父 S 由 Session 持有)
-    auto sessForCancel = session();
+    auto                                          sessForCancel = session();
     std::shared_ptr<neograph::graph::CancelToken> waitOp;
     if (sessForCancel) {
         if (auto sessToken = sessForCancel->getCancelToken()) {
@@ -193,10 +193,9 @@ asio::awaitable<neograph::json> SessionServerAgentIO::handleInterrupt(
                     }
                 } else {
                     if (waitOp) {
-                        result = co_await ch->async_receive(asio::bind_cancellation_slot(
-                            waitOp->slot(),
-                            asio::use_awaitable
-                        ));
+                        result = co_await ch->async_receive(
+                            asio::bind_cancellation_slot(waitOp->slot(), asio::use_awaitable)
+                        );
                     } else {
                         result = co_await ch->async_receive(asio::use_awaitable);
                     }
@@ -221,7 +220,9 @@ asio::awaitable<neograph::json> SessionServerAgentIO::handleInterrupt(
     if (cancelled) {
         // 被取消: 不发过期通知 (客户端的取消已由 WireCancel 驱动本地收尾),
         // 返回取消标记, 调用方不 resume
-        co_return neograph::json{{"__cancelled__", true}};
+        co_return neograph::json{
+            {"__cancelled__", true}
+        };
     }
     if (!gotResponse) {
         // 超时/异常结束 (用户未响应): 通知客户端该中断已过期,
@@ -261,7 +262,7 @@ void SessionServerAgentIO::pushMessageQueueItem(std::string text, std::string mo
     // 注意: 空闲 + 队列为空时即使处于暂停态也立即执行并解除暂停。
     // - 暂停态来自上一轮的异常/取消/中断 (run() 轮末按结果置位), 用于阻止
     //   "积压消息"自动继续执行; 但此刻队列已空, 本条是用户主动发送的新输入,
-    //   视为明确的新轮次指令 —— 若不解除暂停, 驱动循环不会消费队列, 该消息
+    //   视为明确的新轮次指令 —— 若不解除暂停, 驱动循环不会处理队列, 该消息
     //   将永远滞留等待 (异常中断后 TUI 发送消息卡在队列的根因)
     const bool willExecuteImmediately
         = !turnActive_.load(std::memory_order_acquire) && messageQueue_.empty();
@@ -431,7 +432,7 @@ void SessionServerAgentIO::onPeerMessage(WireMessage msg) {
                                             p.hasMore
                                         };
                                     }
-                                    // 旧行为全量列举 (totalCount/hasMore 旧客户端不消费)
+                                    // 旧行为全量列举 (totalCount/hasMore 旧客户端不处理)
                                     auto sessions = sessionStore->listSessions();
                                     co_return WireSessionList{std::move(sessions), 0, false};
                                 }
@@ -499,7 +500,7 @@ void SessionServerAgentIO::onPeerMessage(WireMessage msg) {
                 }
                 // client 插件事件上行: 发布到 agent 事件总线 topic
                 // `plugin.client.{插件名}.{事件名}` (载荷 std::string), 由 agent
-                // 侧插件经 subscribe("client.{插件名}.{事件名}") 订阅消费
+                // 侧插件经 subscribe("client.{插件名}.{事件名}") 订阅处理
                 // (跨端插件数据通道 client → agent);
                 // 前缀 "plugin.client." 的发布不会被 subscribePluginEvents 转发
                 // 回客户端 (见该处环回跳过逻辑)
@@ -593,7 +594,7 @@ void SessionServerAgentIO::handleHello(const WireHello& hello, std::vector<std::
     // HelloAck 之后发送的重放消息经客户端 recvQueue 缓冲, 由 runTransportLoop 正常处理。
     // ack.plugins: 服务端已加载 agent 侧插件结构化信息 (名字+版本+声明接口;
     // client 插件判断对端可用性与能力的正式通道; 与下方 server_plugins 约定
-    // 事件二选一消费均可)
+    // 事件二选一处理均可)
     std::vector<WireHelloAck::PluginInfo> loadedPlugins;
     if (auto agent = agent_.lock();
         agent && agent->agentContext && agent->agentContext->pluginManager) {
@@ -629,7 +630,7 @@ void SessionServerAgentIO::handleHello(const WireHello& hello, std::vector<std::
 
     // 宿主约定事件 (见文件头 kHostPluginName 注释):
     // - server_plugins: 同 ack.plugins 的约定事件形态 (结构化对象数组, 供
-    //   已运行的 client 插件经 EVT_PLUGIN_DATA 订阅消费, 不依赖握手字段)
+    //   已运行的 client 插件经 EVT_PLUGIN_DATA 订阅处理, 不依赖握手字段)
     // - client_attached: 每次连接握手后重发一次 (重连/同会话新客户端也能
     //   获得状态快照; 与 subscribePluginEvents 处的发布重复无害)
     if (auto agent = agent_.lock(); agent && agent->agentContext) {

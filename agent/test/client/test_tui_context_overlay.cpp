@@ -315,7 +315,7 @@ TestResult testTuiContextOverlay() {
         m.motion = ftxui::Mouse::Pressed;
         m.x      = 50;
         m.y      = 12;
-        // 事件被消费 (Scrollable 内部处理), 不崩溃
+        // 事件被处理 (Scrollable 内部处理), 不崩溃
         fx.comp->OnEvent(ftxui::Event::Mouse("", m));
         auto screen3 = fx.render();
         XX_TEST_EXPECT_TRUE(screen3.find("LLM Context") != std::string::npos);

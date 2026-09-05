@@ -1,6 +1,6 @@
 # 插件框架 v1 重构设计（锚定协程模型）
 
-> 状态: 设计定稿，待实施（2026-08 评审修订：线程契约勘误 / 完成协议钉死 / 句柄生命周期 / 卸载取消闭环 / 实施顺序重排 / websearch 默认姿势反转）
+> 状态: 设计定稿，待实施（2026-08 评审修订：线程契约勘误 / 完成协议钉死 / 句柄生命周期 / 卸载取消 / 实施顺序重排 / websearch 默认姿势反转）
 > 关联: [plugins.md](../../../docs/zh-cn/plugins.md)（旧设计存档）、[design.md](../../../docs/zh-cn/design.md)
 > 本文是插件系统的**最终重构蓝图**。不保留任何历史版本兼容；`AGENTXX_PLUGIN_API_VERSION = 1` 重新定义。
 
@@ -94,7 +94,7 @@ C++20 协程帧是插件自己的堆内存；**`coroutine_handle::resume()` 从�
 
 ### 2.3 操作协议：从三件套到两件套
 
-旧协议 `start/poll/cancel` 中，`poll` 的唯一消费者是寄生轮询层。仓库内迁移后不再有任何 poll 型操作，故 **ABI 直接删除 poll**：
+旧协议 `start/poll/cancel` 中，`poll` 的唯一处理者是寄生轮询层。仓库内迁移后不再有任何 poll 型操作，故 **ABI 直接删除 poll**：
 
 ```c
 /// 被调方操作 = start(启动, 可内联完成) + cancel(协作式取消请求);
@@ -127,7 +127,7 @@ sleep_poll 型的等价形态，cb 即推进点）；C++ 插件则直接用 kit 
 |---|---|
 | `start` / `cancel` 回调 | 仅宿主 io 线程调用；非阻塞快速返回（单次 ≤~1ms，看门狗 >100ms WARN） |
 | 宿主→插件的原语回调（`sleep` cb / `offload` done / `call_tool` cb…） | 宿主保证在【宿主 io 线程】派发，且**一律经 `asio::post` 入队、禁止同步重入**（含内联完成型目标，见 §4.3）→ 在其中 `resume()` 即为锚定交错；post 派发同时保证恢复不发生在调用方栈上（嵌套深度恒定） |
-| 插件→宿主的 `AgentxxOpNotify.done` | **插件任意线程可调**（JS 引擎等自有线程形态依赖此点，宿主不做线程约束）：OpCore 以 CAS 保证恰好一次、`concurrent_channel.try_send` 为线程安全 kick；等待方在 io 线程被唤醒取结果。「io 线程派发」只承诺唤醒/消费侧，不约束 done 调用侧 |
+| 插件→宿主的 `AgentxxOpNotify.done` | **插件任意线程可调**（JS 引擎等自有线程形态依赖此点，宿主不做线程约束）：OpCore 以 CAS 保证恰好一次、`concurrent_channel.try_send` 为线程安全 kick；等待方在 io 线程被唤醒取结果。「io 线程派发」只承诺唤醒/处理侧，不约束 done 调用侧 |
 | 插件内多协程 | 同实例多个锚定协程交错 = 单线程协作式并发：共享状态只在检查点之间一致，跨 `co_await` 不持有不变量（与内置工具同纪律） |
 | 插件协程段 | 物理执行于宿主 io 线程；两次挂起之间的同步代码 ≤~100ms（看门狗阈值）；禁止阻塞调用 |
 | 需要阻塞/CPU 密集段 | `co_await c.offload(fn)` 下池，完成后回 io 线程续跑 |
@@ -446,7 +446,7 @@ awaitPluginOp(args):
 | **websearch** | polled (asio http 私有 loop) | `blocking_tool`+curl easy 为将来可选简化 | 与 filesystem 同理：impl 已是 asio 协程，reactor 迁移几乎零改动；curl 重写自带编码/压缩/代理行为差异风险（§10），不应作为默认；reactor 形态天然支持高并发，无需预留升级触发条件 |
 | **execute_command** | polled (bp::v2) + popen 双路径 | popen 回退并入 `blocking_tool` | 保留精确唤醒/超时击杀语义；双路径样板消失 |
 | **system_monitor** 能力采样 | polled (100ms 定时等待) | `tool` + `c.sleep(100)` | 教科书式受益者 |
-| system_monitor 周期采集 | add_timer + offload | `spawn` + sleep 循环 + offload | add_timer 消费者清零 |
+| system_monitor 周期采集 | add_timer + offload | `spawn` + sleep 循环 + offload | add_timer 处理者清零 |
 | text_selection_monitor delayMs | offload（delayMs 在执行函数内） | `blocking_tool` | 机械替换 |
 | audio_stream / screen_capture / computer_use | offload | `blocking_tool` | 机械替换 |
 | codegraph | offload + 全局日志 sink | `blocking_tool` + Logger 成员化 | 多实例日志串扰修复 |
@@ -454,11 +454,11 @@ awaitPluginOp(args):
 | example_js / example_plugin 互调 | 阻塞 call_tool / invoke_capability | kit condvar 助手（签名同形） | offload 工作线程场景专用 |
 | planning client 段 / 双端 UI | 同步回调 | 不动 | client 侧模型不变 |
 
-### 7.1 被删除 ABI 的消费面清单（核查结论：影响范围封闭）
+### 7.1 被删除 ABI 的处理面清单（核查结论：影响范围封闭）
 
-| 被删项 | 消费者 | 迁移动作 |
+| 被删项 | 处理者 | 迁移动作 |
 |--------|--------|----------|
-| `AgentxxHostOp` / `makeHostOp` / hop_* | lib 内部（op_driver.h、plugin_manager.*）+ **test_plugins.cpp §31 起 4 组用例**（op->poll / op->take / 恰一次 / 句柄语义断言）——并非零消费者 | 宿主侧重写时移除；测试用例同步改写为回调形断言（cb 状态/payload/恰一次/free 义务），验证目标不变 |
+| `AgentxxHostOp` / `makeHostOp` / hop_* | lib 内部（op_driver.h、plugin_manager.*）+ **test_plugins.cpp §31 起 4 组用例**（op->poll / op->take / 恰一次 / 句柄语义断言）——并非零处理者 | 宿主侧重写时移除；测试用例同步改写为回调形断言（cb 状态/payload/恰一次/free 义务），验证目标不变 |
 | 阻塞版 `call_tool` / `invoke_capability` | javascript_engine ×1、example_js ×2、example_plugin ×1 | kit 提供 condvar 助手，签名同形，机械替换 |
 | `add_timer` / `cancel_timer` | 仅 system_monitor | spawn+sleep 循环重写采集器 |
 | `execute_poll` / `hook_poll` 字段 | javascript_engine（置 NULL 处）、example_plugin sleeper、test_plugins.cpp 3 个 poll 用例 | 字段删除 + 用例按两件套协议重写（取消语义测试目标不变） |
@@ -474,13 +474,13 @@ Phase A  lib 内核 (纯增量, 旧 ABI 面不动): scheduler 追加 sleep/cance
          (add_timer 暂留) + op_driver 重写 (OpCore/有界停靠/放弃路径哨兵; 对旧
          三件套照常驱动 poll —— 未迁移的 polled 插件仍依赖它) + 回调形
          call_tool_async / invoke_capability_async 以新成员追加 (旧 HostOp/阻塞版
-         暂留; 过渡期接口表成员追加仅限仓内同步重编译——项目无外部二进制消费者)
+         暂留; 过渡期接口表成员追加仅限仓内同步重编译——项目无外部二进制处理者)
          └─ 验收: 现有 plugins 测试模块全绿 (旧路径行为不变) + 取消延迟专项测试
 Phase B  plugin_kit.h: PluginBase / Task<T> (含完成协议, 见 5.2) / 原语族 /
          注册族 / spawn / Logger / 阻塞助手 (condvar)
 Phase C  14 个内置插件逐个迁移到 kit 注册族 (新旧姿势并存, 每迁一个跑一次测试);
          test_plugins.cpp 的 3 组 poll 用例 + 4 组 HostOp 用例随迁移改写为回调形
-Phase C2 ABI 收尾 (最后一个旧姿势消费者迁完后一次性执行):
+Phase C2 ABI 收尾 (最后一个旧姿势处理者迁完后一次性执行):
          删除 execute_poll/hook_poll 字段、AgentxxHostOp 族、阻塞版
          call_tool/invoke_capability、add_timer/cancel_timer;
          删除 plugin_poll_loop.h; plugin_tool_sync.h 并入 kit (纯 C 薄层保留);
@@ -538,7 +538,7 @@ Phase A 即删 poll/HostOp，会使 4 个 polled 插件与 7 组测试用例当�
 | Task resume 边界抛异常 | 包装层全捕获 → FAILED；铁律写入 kit 注释与文档 |
 | execute_command 常驻线程成本 | 每实例 1 线程、空闲 park 零 CPU；destroy join；与 JS 引擎同款成熟模式 |
 | 第三方手写两件套的学习曲线 | kit 默认姿势只需写一个协程函数；两件套仅框架作者接触；纯 C 作者可用 sleep+post+cb 组合（§2.3） |
-| 删除 add_timer 影响潜在第三方 | 项目未推广、无外部消费者；且 sleep 循环表达力覆盖其全部用例 |
+| 删除 add_timer 影响潜在第三方 | 项目未推广、无外部处理者；且 sleep 循环表达力覆盖其全部用例 |
 | 完成回调早于 awaiter 挂起（内联完成型目标） | 宿主侧一律 post 派发 + kit awaiter 原子完成标志双保险（§4.3/§5.3）；测试 #13 覆盖 |
 | 卸载撞上挂起中的长 sleep / 不可取消后台任务 | detachAll 对 outstanding-op 登记表逐项发 cancel（§3.3）；仍不可取消者走既有 30s 超时放弃路径 |
 | Task 帧销毁与 done/guard 释放时序错位 → 卸载后跑析构 | finishIfDone 单点收尾：先销毁帧再 done（§5.2）；测试 #3/#6 覆盖 |

@@ -30,7 +30,7 @@ void AgentIOBase::setEventSink(std::shared_ptr<ClientEventSink> sink) {
 
 asio::awaitable<void> AgentIOBase::runTransportLoop() {
     // 捕获局部 transport 引用: 服务端同一 sessionId 的新连接替换旧连接
-    // (AgentServer::serveTransport 中 setTransport) 时, 本协程应继续消费旧
+    // (AgentServer::serveTransport 中 setTransport) 时, 本协程应继续处理旧
     // transport 直至其关闭自然退出, 而不是跟随成员 transport_ 切换到新
     // transport 上发起第二个接收循环 (消息被两个循环瓜分 / 协程泄漏)
     auto transport = transport_;

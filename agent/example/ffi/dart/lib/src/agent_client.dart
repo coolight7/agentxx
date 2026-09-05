@@ -194,7 +194,7 @@ class AgentClient {
   // 会话交互 (转发原生; 失败抛 AgentxxException)
   // -------------------------------------------------------------------------
 
-  /// 发送用户输入 (READY 前发送会被服务端缓存, 就绪后按序消费)
+  /// 发送用户输入 (READY 前发送会被服务端缓存, 就绪后按序处理)
   void sendInput(String text) {
     _checkHandle('发送输入');
     final (rc, log) = withUtf8(

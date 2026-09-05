@@ -14,7 +14,7 @@ namespace agent {
 namespace io {
 
 /// 将服务端日志经 transport 转发给远程客户端的 LogSink
-/// 继承 ThreadedLogSink: 后台线程串行消费, send 无需额外加锁
+/// 继承 ThreadedLogSink: 后台线程串行处理, send 无需额外加锁
 class TransportLogSink : public util::ThreadedLogSink {
 public:
 

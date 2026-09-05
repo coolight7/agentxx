@@ -19,7 +19,7 @@
 #include "fmt/format.h"
 #include "ftxui/component/component.hpp"
 #include "ftxui/component/screen_interactive.hpp"
-#include "markdown/text_utils.hpp" // utf8_byte_length/utf8_codepoint/codepoint_width (预览按显示列宽截断)
+#include "markdown/text_utils.hpp"
 #include "neograph/api.h"
 #include <atomic>
 #include <chrono>
@@ -180,7 +180,7 @@ class InputComponent;
 /// - SidebarComponent: 侧边栏 tab + 拖拽
 /// - Overlay 组件: 模型选择/设置/待发送/上下文弹窗
 ///
-/// 线程模型 (不变):
+/// 线程模型:
 /// - client 线程: onDelta/onSync/onPeerMessage → sharedState_.mutate()
 /// - UI 线程: FTXUI Loop 渲染 + 事件; 每帧 readSnapshot() 后无锁渲染
 class TUIClientAgentIO : public agentxx::agent::AgentIOBase,
@@ -382,7 +382,7 @@ private:
     /// 将 UI 线程独占的组件操作 (弹窗开关/消息列表状态等) 投递到 UI 线程执行。
     /// client 线程 (onDelta/onSync/onPeerMessage) 不得直接触碰组件树
     /// (modal_/messageList_ 等由 UI 线程独占), 必须经本接口排队,
-    /// 由帧循环开头消费, 消除跨线程数据竞争。
+    /// 由帧循环开头处理, 消除跨线程数据竞争。
     void enqueueUiAction(std::function<void()> fn);
 
     void postRedraw();
@@ -484,7 +484,7 @@ private:
     size_t logCacheLineCount_ = 0;
 
     /// 重绘请求合并 (postRedraw 由 client/UI 线程并发调用):
-    /// - redrawPosted_: 在途 Custom 标记, 仅当无在途事件时才 Post, 同帧内多次请求合并为一次
+    /// - redrawPosted_: 执行中 Custom 标记, 仅当无在途事件时才 Post, 同帧内多次请求合并为一次
     /// - redrawSeq_:    请求计数, UI 线程在帧结束时据此判断帧期间是否有请求被合并
     ///                  (被合并进本帧渲染, 而本帧快照取的是帧开头, 可能未反映其状态变更),
     ///                  若有则补 Post 一帧, 保证以最新快照重绘, 避免请求丢失

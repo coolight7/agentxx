@@ -10,7 +10,7 @@
 #
 # 构建侧注入 (agent/lib/CMakeLists.txt):
 #   target_link_options(agentxx_shared PRIVATE "-Wl,--version-script=<本文件>")
-# 仅作用于共享库; agentxx_static (cli/test/benchmark 消费) 不受影响。
+# 仅作用于共享库; agentxx_static (cli/test/benchmark 处理) 不受影响。
 #
 # 注意: 新增导出符号时在此追加 (同时更新 agentxx/ffi_api.h 与文档)。
 {

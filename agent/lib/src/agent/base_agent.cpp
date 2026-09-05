@@ -119,8 +119,7 @@ static void checkToolSchemaValidity(
                 schema.contains("type") ? schema["type"].dump() : "<missing>"
             );
         }
-    } else if (schema.contains("type") && schema["type"].is_string()
-               && schema["type"].get<std::string>() == "array") {
+    } else if (schema.contains("type") && schema["type"].is_string() && schema["type"].get<std::string>() == "array") {
         // array 类型必须带 items (Gemini 缺 items 报 "missing field")
         XX_LOGE(
             "Tool `{}` schema `{}`: type \"array\" must have an \"items\" field; "
@@ -783,9 +782,9 @@ asio::awaitable<BaseAgent::TurnResult> BaseAgent::runTurnAsync(
     );
 
     // 插入提示消息: 由 agent 线程追加到会话历史 (viewMessages) 并发送
-    // InsertMessage WireDelta 通知 UI 追加对应消息。UI 端直接消费完整 ViewMessage,
+    // InsertMessage WireDelta 通知 UI 追加对应消息。UI 端直接处理完整 ViewMessage,
     // 保证 viewMessages / Sync 恢复 / 持久化与展示内容一致。
-    // - 无对端 (headless) 时不插入 (提示为展示用途, headless 无消费者)
+    // - 无对端 (headless) 时不插入 (提示为展示用途, headless 无处理者)
     auto insertMessageTip =
         [&](std::string text, ViewMessage::TipLevel level, int64_t startMs = 0, int64_t durMs = 0) {
             if (!session->io) {
@@ -964,7 +963,7 @@ asio::awaitable<BaseAgent::TurnResult> BaseAgent::runTurnAsync(
                 state.overwrite("messages", session->llmMessages);
             });
         }
-        // 消费后即清理 (含 getGraphDataItemValue 对缺失键自动创建的空条目):
+        // 处理后即清理 (含 getGraphDataItemValue 对缺失键自动创建的空条目):
         // 防止过期快照残留, 在后续无关错误中被误用作上下文回退源
         agentContext->middlewareHandleContext->removeGraphDataItem(
             sessionId,

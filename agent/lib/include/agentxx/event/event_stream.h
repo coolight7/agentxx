@@ -103,7 +103,7 @@ public:
 
     /// 当前是否有订阅者
     /// - 供高频发布方 (如 EventBridge 每 token 一次) 在 co_spawn/构造事件前跳过空流,
-    ///   避免无消费者的协程创建与事件构造开销
+    ///   避免无处理者的协程创建与事件构造开销
     bool hasListeners() const noexcept {
         return !listeners_.empty();
     }

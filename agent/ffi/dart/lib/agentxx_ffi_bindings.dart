@@ -394,7 +394,7 @@ class AgentxxFfiBindings {
       int Function(ffi.Pointer<AgentxxFFIAgent>, ffi.Pointer<ffi.Char>,
           ffi.Pointer<ffi.Pointer<ffi.Char>>)>();
 
-  /// 发送用户输入 (EVT_READY 前发送会缓存, 就绪后按序消费)
+  /// 发送用户输入 (EVT_READY 前发送会缓存, 就绪后按序处理)
   int agentxx_ffi_send_input(
     ffi.Pointer<AgentxxFFIAgent> a,
     ffi.Pointer<ffi.Char> text,

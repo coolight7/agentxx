@@ -16,7 +16,7 @@ struct LazyBuiltItem {
     ftxui::Element element;
     /// 本条目在内存中的实际占用估算字节数 (参与字节预算统计; 估算值即可)。
     ///
-    /// 语义注意: 应为"渲染结果的内存开销"而非"源数据字节" —— 若按源文本
+    /// 注意: 应为"渲染结果的内存开销"而非"源数据字节" —— 若按源文本
     /// 字节上报, 字节预算与真实内存脱节 (如 FTXUI 渲染树为源文本 30~70 倍,
     /// 按源字节预算会放行远超预期的驻留内存)。调用方需按实际放大折算
     /// (见 MessageListComponent::buildMessageItem 按 ×64 系数上报)。
@@ -28,15 +28,15 @@ struct LazyBuiltItem {
     std::vector<std::shared_ptr<void>> attachments;
 };
 
-/// 懒构建可滚动容器 (对标 Flutter ListView.builder)
+/// 懒构建可滚动容器 (仿照 Flutter ListView.builder)
 ///
-/// 与全量构建的 Scrollable 不同, 本组件采用惰性构建 + 有界缓存:
+/// 与全量构建的 Scrollable 不同, 本组件采用惰性构建 + 局部缓存:
 ///
 /// - [懒构建] 通过 itemCount()/itemKey()/estimateHeight()/buildItem() 回调描述列表,
 ///   仅按需构建子项 Element; 每帧只对与视口相交的可见子项调用 buildItem
 /// - [视口局部布局/绘制] 布局阶段仅对可见子项执行测量与布局, 渲染阶段仅绘制
 ///   可见子项 (超出部分经 screen stencil 裁剪); 不可见子项零成本
-/// - [有界缓存] 已构建的子项 Element 按 LRU 缓存 (条数 + 累计源字节双预算),
+/// - [局部缓存] 已构建的子项 Element 按 LRU 缓存 (条数 + 累计源字节双预算),
 ///   窗口外的旧子项被淘汰释放 —— 内存占用与列表长度解耦 (消息列表不再随
 ///   对话持续无限增长)
 /// - [高度缓存与估算] 子项高度按 (itemKey, 视口宽度) 缓存; 未测量过的子项使用

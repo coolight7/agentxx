@@ -69,7 +69,7 @@ namespace plugin {
 // =====================================================================
 
 /// 插件实例公共基类 (agent 侧 PluginInstance / client 侧 ClientPluginInstance 继承)
-/// - 持有跨端一致的元信息/依赖/启用标志/在途计数/宿主句柄
+/// - 持有跨端一致的元信息/依赖/启用标志/执行中计数/宿主句柄
 /// - InflightGuard 为公共 RAII (事件 handler / 命令 execute / 异步 op 入口计数)
 struct PluginInstanceBase {
     std::string name;        ///< 唯一标识 (与对端插件共用命名空间)
@@ -89,7 +89,7 @@ struct PluginInstanceBase {
     bool userDisabled    = false; ///< 是否被用户显式禁用 (区别于级联禁用)
     bool unloadRequested = false; ///< 已请求卸载 (防重复)
 
-    /// 在途回调计数 (原子, 跨线程: 事件 handler/命令 execute/异步 op)
+    /// 执行中回调计数 (原子, 跨线程: 事件 handler/命令 execute/异步 op)
     std::atomic<size_t> inflight{0};
 
     explicit PluginInstanceBase(std::string in_name) :
@@ -100,7 +100,7 @@ struct PluginInstanceBase {
     PluginInstanceBase(const PluginInstanceBase&)            = delete;
     PluginInstanceBase& operator=(const PluginInstanceBase&) = delete;
 
-    /// 在途计数 RAII (事件 handler / 命令 execute 入口调用)
+    /// 执行中计数 RAII (事件 handler / 命令 execute 入口调用)
     struct InflightGuard {
         PluginInstanceBase* inst;
 
@@ -235,7 +235,7 @@ public:
         return agentxx::plugin::collectReverseRequiredDeps(plugins_, target, onlyEnabled);
     }
 
-    /// 等待插件在途计数归零 (io 线程协程轮询, 指数退避); 超时返回 false
+    /// 等待插件执行中计数归零 (io 线程协程轮询, 指数退避); 超时返回 false
     /// 两侧共享实现 (原 agent 侧固定 10ms 轮询, client 侧指数退避 —— 统一
     /// 采用指数退避 20ms→1s, 减少慢回调等待期间 io 线程定时器唤醒)
     asio::awaitable<bool>

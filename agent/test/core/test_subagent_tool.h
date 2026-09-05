@@ -14,7 +14,7 @@ namespace test {
 ///   NodeInterrupt 中断流程与参数存储 / resume 结果提取 (单发纯文本、
 ///   批量 json 数组、resultId 缺失按序号兜底) / parseSubagentBatchFromInterrupt
 ///   批量与旧单发格式解析 / makeSubagentResumeKey + buildSubagentResumeValues
-///   写入-读取 key 规则闭环
+///   写入-读取 key 规则
 asio::awaitable<TestResult> run_subagent_tool_tests();
 
 } // namespace test

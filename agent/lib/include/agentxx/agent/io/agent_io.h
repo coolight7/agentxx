@@ -93,7 +93,7 @@ public:
 
     /// 服务端就绪通知 [client] (默认空实现, 客户端端点按需覆写):
     /// - 本地模式: server-io (SessionServerAgentIO) 的会话驱动循环启动前由
-    ///   mode_runners 调用, 表示 init() 等启动工作完成、可以开始消费用户输入
+    ///   mode_runners 调用, 表示 init() 等启动工作完成、可以开始处理用户输入
     /// - 远程模式: 连接握手完成后由连接协程调用
     /// 客户端 (TUI) 据此解除"启动中"输入限制并刷新待发送队列
     /// - 基类默认实现通知事件接收器 (ClientEventSink::onReady); 覆写方应调用

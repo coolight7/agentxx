@@ -1089,7 +1089,7 @@ void ClientPluginManager::onPluginData(const agentxx::agent::WirePluginData& dat
     }
 
     // 对端缺失提示 (每插件名一次): 无任何 client 插件订阅 EVT_PLUGIN_DATA 时,
-    // 该插件事件在本地无人消费 —— 多半是对应插件未在本端加载 (分进程/分设备
+    // 该插件事件在本地无人处理 —— 多半是对应插件未在本端加载 (分进程/分设备
     // 部署时单侧缺失)。仅警告一次, 不随事件频率刷屏; 正常情况 (有插件订阅,
     // 各自按名过滤) 不受影响。
     bool hasSubscriber = false;

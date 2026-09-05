@@ -182,8 +182,8 @@ public:
     explicit ClientPluginInstance(std::string in_name) :
         PluginInstanceBase(std::move(in_name)) {}
 
-    /// 析构时 dlclose (与 agent 侧 PluginInstance 一致; 调用方保证无在途回调:
-    /// unloadAsync 等 inflight 归零后移除, shutdownAll 进程退出路径约定无在途)
+    /// 析构时 dlclose (与 agent 侧 PluginInstance 一致; 调用方保证无执行中回调:
+    /// unloadAsync 等 inflight 归零后移除, shutdownAll 进程退出路径约定无执行中)
     ~ClientPluginInstance();
 };
 
@@ -266,7 +266,7 @@ public:
         bool                                allowMissingEntry = false
     );
 
-    /// 卸载插件 (按名称; 等全部在途回调完成后才 dlclose)
+    /// 卸载插件 (按名称; 等全部执行中回调完成后才 dlclose)
     asio::awaitable<bool> unloadAsync(std::string_view name);
 
     /// 禁用插件 (UI 项摘除/命令停用; 立即生效)
@@ -284,7 +284,7 @@ public:
     asio::awaitable<void>
         loadConfiguredClientPlugins(const std::vector<agentxx::agent::PluginConfig>& plugins);
 
-    /// 同步卸载全部插件 (进程退出路径; 不等在途回调, 调用方须保证无在途回调)
+    /// 同步卸载全部插件 (进程退出路径; 不等执行中回调, 调用方须保证无执行中回调)
     void shutdownAll();
 
     // ==================== 查询 ====================

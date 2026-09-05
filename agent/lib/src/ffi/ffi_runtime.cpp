@@ -475,7 +475,7 @@ asio::awaitable<void> FfiAgentRuntime::runAgentMain() {
     state_ = State::Ready;
     clientIO_->notifyServerReady();
 
-    // 会话驱动循环: 消费用户输入 → runTurnAsync → 推送事件
+    // 会话驱动循环: 处理用户输入 → runTurnAsync → 推送事件
     co_await serverIO_->run();
 }
 

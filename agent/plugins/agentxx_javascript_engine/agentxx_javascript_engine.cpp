@@ -799,7 +799,7 @@ private:
         JSValue    bridge = JS_NewObject(ctx);
 
         auto def = [&](const char* name, int magic, int nargs) {
-            // 注意: JS_SetProperty* 为 move 语义 (消费传入值), 不得再 Free
+            // 注意: JS_SetProperty* 为 move 语义 (处理传入值), 不得再 Free
             JSValue fn = JS_NewCFunction2(
                 ctx,
                 reinterpret_cast<JSCFunction*>(&JsEngine::bridgeCall),
@@ -1557,13 +1557,13 @@ JSValue JsEngine::bridgeCall(
             std::string p  = jsToCppString(ctx, argv[0]);
             int         rc = (magic == B_ADD_SKILL_DIR)
                                  ? iface.resources->register_skill_dir(
-                               host,
-                               agentxx::plugin::PluginStringView::fromCstr(p.c_str())
-                           )
+                             host,
+                             agentxx::plugin::PluginStringView::fromCstr(p.c_str())
+                         )
                                  : iface.resources->register_memory_file(
-                               host,
-                               agentxx::plugin::PluginStringView::fromCstr(p.c_str())
-                           );
+                             host,
+                             agentxx::plugin::PluginStringView::fromCstr(p.c_str())
+                         );
             if (rc != 0) {
                 return throwJsError(
                     ctx,

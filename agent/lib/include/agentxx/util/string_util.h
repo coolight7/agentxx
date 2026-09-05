@@ -49,8 +49,6 @@ inline static constexpr int CODE_z = 122;
 
 using PinyinCallback = std::function<std::string(std::string_view)>;
 
-// constexpr 字符操作辅助函数，替代非 constexpr 的
-// std::tolower/std::toupper/std::isspace
 [[nodiscard]] constexpr char charToLower(char c) noexcept {
     return (c >= 'A' && c <= 'Z') ? static_cast<char>(c + ('a' - 'A')) : c;
 }
@@ -464,7 +462,7 @@ using IgnoreCaseSet = std::unordered_set<std::string, IgnoreCaseHash, IgnoreCase
             result.append(str.data() + i, step);
             i += step;
         } else {
-            // 非法序列: 替换其 maximal subpart (已消费的 j 个字节)
+            // 非法序列: 替换其 maximal subpart (已处理的 j 个字节)
             result.append(kReplacement, 3);
             i += j;
         }

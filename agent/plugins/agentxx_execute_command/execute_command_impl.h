@@ -85,7 +85,7 @@ namespace detail {
 constexpr size_t kMaxStdOutUtf8Length = 30000;
 constexpr size_t kMaxStdErrUtf8Length = 30000;
 
-/// 统一格式的截断实现 (对标 ToolcallNode::execTool)
+/// 统一格式的截断实现 (仿照 ToolcallNode::execTool)
 inline std::string truncateWithStoreFormat(
     const std::string& s,
     size_t             maxLen,
@@ -420,7 +420,7 @@ inline asio::awaitable<std::string> runProcPipeline(
     // 超时守护: 到点整组终止 (Linux 连子孙进程一起清理) 并置标记;
     // 之后挂起直至被并行组取消 —— 由主工作基于 timedOut 组装超时结果。
     // 【禁止】对已被并行组取消的 async_wait 再补二次等待: bp::v2 的
-    // 退出状态仅投递一次 (SIGCHLD 已被首个 wait 消费), 二次 wait 会
+    // 退出状态仅投递一次 (SIGCHLD 已被首个 wait 处理), 二次 wait 会
     // 永久挂起并把整个工具调用吊死 (历史卡死 bug 根因)
     auto timeoutGuard = [&]() -> asio::awaitable<void> {
         if (timeout > 0) {
@@ -501,10 +501,10 @@ inline asio::awaitable<std::string> bashExecuteAsync(
         procExe,
         procArgs,
         boost::process::process_environment(procEnv),
-        // 子进程初始工作目录: 会话工作目录 (未配置时显式取进程 cwd, 行为等价继承)
+ // 子进程初始工作目录: 会话工作目录 (未配置时显式取进程 cwd, 行为等价继承)
         boost::process::process_start_dir{detail::subprocessWorkDir(workDir)},
-        // stdin 重定向到 null 设备 (Windows: NUL / POSIX: /dev/null),
-        // 避免子进程 (如交互式命令) 抢读 agent 进程的终端输入
+ // stdin 重定向到 null 设备 (Windows: NUL / POSIX: /dev/null),
+  // 避免子进程 (如交互式命令) 抢读 agent 进程的终端输入
         boost::process::process_stdio{.in = nullptr, .out = outpip, .err = errpip},
     };
 
@@ -563,9 +563,9 @@ inline asio::awaitable<std::string> windowsExecuteAsync(
         procExe,
         launch.args,
         boost::process::process_environment(procEnv),
-        // 子进程初始工作目录: 会话工作目录 (未配置时显式取进程 cwd, 行为等价继承)
+ // 子进程初始工作目录: 会话工作目录 (未配置时显式取进程 cwd, 行为等价继承)
         boost::process::process_start_dir{detail::subprocessWorkDir(workDir)},
-        // stdin 重定向到 null 设备, 避免子进程抢读 agent 进程的终端输入
+ // stdin 重定向到 null 设备, 避免子进程抢读 agent 进程的终端输入
         boost::process::process_stdio{.in = nullptr, .out = outpip, .err = errpip}
     };
 

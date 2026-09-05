@@ -147,7 +147,7 @@ struct ScrollFixture {
         return screen.ToString();
     }
 
-    /// 在消息列表区域中部发送滚轮事件 (返回是否被消费)
+    /// 在消息列表区域中部发送滚轮事件 (返回是否被处理)
     bool wheel(ftxui::Mouse::Button button) {
         ftxui::Mouse m;
         m.button = button;
@@ -627,7 +627,7 @@ TestResult testTuiScroll() {
         XX_TEST_EXPECT_TRUE(collapsed1.find("+ # ") != std::string::npos);
         XX_TEST_EXPECT_TRUE(collapsed1.find("SYSM_TAIL_9XYZ") == std::string::npos);
 
-        // 模拟点击 header → 展开 (消费事件, 且消息折叠状态翻转)
+        // 模拟点击 header → 展开 (处理事件, 且消息折叠状态翻转)
         bool clicked = false;
         for (const auto& box : f.comp->collapsibleBoxes()) {
             if (box.IsEmpty()) {
@@ -1517,7 +1517,7 @@ TestResult testTuiScroll() {
             XX_TEST_EXPECT_TRUE(frame.find("THK_TAIL_18C") != std::string::npos);
         }
 
-        // 点击流式末尾 Think 的辅助: 点击第一个非空命中区中心 (返回是否消费)
+        // 点击流式末尾 Think 的辅助: 点击第一个非空命中区中心 (返回是否处理)
         auto clickFirstCollapsible = [](ScrollFixture& fx) -> bool {
             for (const auto& box : fx.comp->collapsibleBoxes()) {
                 if (box.IsEmpty()) {

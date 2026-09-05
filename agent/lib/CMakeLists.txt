@@ -48,7 +48,7 @@ file(GLOB_RECURSE agentxx_SOURCES
 #     解析; 链接顺序敏感, 与 lib 自身一致); OpenSSL (imported target,
 #     find_dependency 链解析, include 路径随 INTERFACE 传递)
 #   - 条件 pkg-config 模块: hyperscan (AGENTXX_ENABLE_HYPERSCAN) / uring
-#     (AGENTXX_LINUX_IO_URING_SUPPORTED) —— 消费方项目须定义同名 PkgConfig::*
+#     (AGENTXX_LINUX_IO_URING_SUPPORTED) —— 处理方项目须定义同名 PkgConfig::*
 #     target (见 plugins/CMakeLists.txt, 与 client/test 做法一致)
 #   - PUBLIC include (install 头/neograph deps/Boost) 由下方 _AGENTXX_USAGE_TARGETS
 #     循环提供并随 INTERFACE 导出
@@ -92,7 +92,7 @@ list(APPEND agentxx_SOURCES ${AGENTXX_BUILTIN_PLUGIN_MANIFEST_SOURCE})
 #   否则 PackageProject 生成的 install(EXPORT) 会因 obj 不在导出集中而报错；
 #   改为把 usage requirements (宏/头文件路径) 统一设置到 obj 与共享/静态库上。
 #   对共享/静态库用 PUBLIC 即可: 它们无源文件可编，编译部分静默忽略，
-#   INTERFACE 部分照常传播给 client/test；obj 的 INTERFACE 部分无人消费，均无害。
+#   INTERFACE 部分照常传播给 client/test；obj 的 INTERFACE 部分无人处理，均无害。
 # - MSVC: 保留原有双编译路径 (dllexport 等符号语义差异，避免行为回归)。
 if (XX_IS_MSVC_D)
   # 创建 动态库/静态库
@@ -175,7 +175,7 @@ unset(_agentxx_target)
 
 find_package(PkgConfig REQUIRED)
 # 添加依赖库后应当同步更新 [packageProject:DEPENDENCIES]
-# (agentxx_util 为 libagentxx 的 PUBLIC 依赖: 消费方 find_package
+# (agentxx_util 为 libagentxx 的 PUBLIC 依赖: 处理方 find_package
 #  agentxx_shared/agentxx_static 时经 find_dependency(agentxx_util) 传递解析)
 set (agentxx_DEPENDENCIES "iconv CONFIG;uchardet;fmt;simdjson;ZLIB CONFIG;OpenSSL;Boost CONFIG;yaml-cpp;CURL CONFIG;SQLite3 CONFIG;html2md;Glob;agentxx_util")
 # 必须显式 CONFIG 模式: CMake >= 3.28 内置 Findiconv.cmake 模块在混合模式下
@@ -233,7 +233,7 @@ unset(_agentxx_target)
 #     解析, include 路径随 INTERFACE 传递 (插件 include http_client.h 时
 #     beast ssl 需要 openssl 头, 无需自行配置)
 # - 注意: 链接项必须用 imported target (Iconv::Iconv / fmt::fmt ...) 而非
-#   裸库名 (charset): 裸名导出后消费方需自行配置 link_directories, 插件项目
+#   裸库名 (charset): 裸名导出后处理方需自行配置 link_directories, 插件项目
 #   无此配置会链接失败; 裸库名仅用于 install/lib 内存在的库 (neograph 系/
 #   yyjson/hs_runtime, 经 link_directories 解析)
 # - iconv 目标名兼容: Iconv::Iconv 在两种来源下均存在 (libiconv-native
@@ -242,7 +242,7 @@ unset(_agentxx_target)
 #   模块模式 (glibc 系统 iconv) 下不存在, 下方条件链接
 
 # 裸库名依赖解析目录 (PUBLIC 传播): neograph 系/yyjson/hs_runtime 位于
-# AGENTXX_INSTALL_DIR/lib, 插件消费本库后自动获得, 无需自行 link_directories
+# AGENTXX_INSTALL_DIR/lib, 插件处理本库后自动获得, 无需自行 link_directories
 target_link_directories(agentxx_util PUBLIC "${AGENTXX_INSTALL_DIR}/lib/")
 target_link_libraries(agentxx_util PUBLIC
   fmt::fmt
@@ -339,12 +339,12 @@ if (AGENTXX_ENABLE_HYPERSCAN)
   # agentxx_static 不链接 hyperscan: 静态库的 PRIVATE 依赖导出为
   # $<LINK_ONLY:...> 且排在 INTERFACE 开头 (在 agentxx_util 之前), 而
   # regex.cpp.o 现在位于独立的 agentxx_util.a (在其后), GNU ld 单遍扫描
-  # 归档无法回溯解析 hs_* 符号 → 静态库消费者 (client/test/benchmark)
+  # 归档无法回溯解析 hs_* 符号 → 静态库处理者 (client/test/benchmark)
   # 均已自行 PRIVATE 链接 hyperscan, 由它们按自身顺序解析
   # agentxx_util 的 regex.cpp 在 AGENTXX_ENABLE_HYPERSCAN=1 时用 hyperscan
   # 实现 (宏经 _AGENTXX_USAGE_TARGETS 的 PUBLIC 编译定义传播给本库);
   # PUBLIC 链接 (与 agentxx_shared 一致): 导出 INTERFACE 带
-  # $<LINK_ONLY:PkgConfig::hyperscan> + hs_runtime 裸名, 消费方项目须
+  # $<LINK_ONLY:PkgConfig::hyperscan> + hs_runtime 裸名, 处理方项目须
   # pkg_check_modules(libhs) 定义同名 target (见 plugins/CMakeLists.txt,
   # 与 client/test 一致); hs_runtime 裸名经 agentxx_util 的 PUBLIC
   # link_directories (install/lib) 解析
@@ -381,7 +381,7 @@ set(_AGENTXX_LINK_LIBS
 # 顺序: 目标文件 → agentxx_util.a → 其依赖库; CMake 会把 agentxx_util 的
 # INTERFACE 依赖 (fmt/sqlite3/uchardet/iconv) 紧跟在 agentxx_util 之后展开)
 # - agentxx_obj PRIVATE: 仅编译期 usage requirements (头路径/宏)
-# - agentxx_shared/static PUBLIC: 目标文件并入共享库; 静态库消费者连带链接
+# - agentxx_shared/static PUBLIC: 目标文件并入共享库; 静态库处理者连带链接
 foreach(_agentxx_target ${_AGENTXX_OBJ_LINK_TARGETS})
   target_link_libraries(${_agentxx_target} PRIVATE agentxx_util)
 endforeach()
@@ -405,7 +405,7 @@ endif()
 # 内置插件合并编译: 依赖库 (quickjs/codegraph 系/平台库) 与 include 路径
 # - 收集自 plugins/CMakeLists.txt 内置分支 (各插件子目录追加 PARENT_SCOPE)
 # - 链接策略与 _AGENTXX_LINK_LIBS 一致 (obj PRIVATE 供编译; 共享/静态库
-#   PUBLIC 保证静态库消费者连带链接)
+#   PUBLIC 保证静态库处理者连带链接)
 # 内置插件 OBJECT 库目标文件合并进共享/静态库 (各插件 OBJECT 库自带
 # per-plugin 编译定义/包含路径, 与 lib 自身源码互不影响)
 foreach(_plugin_target ${AGENTXX_BUILTIN_PLUGIN_OBJECT_TARGETS})
@@ -414,7 +414,7 @@ foreach(_plugin_target ${AGENTXX_BUILTIN_PLUGIN_OBJECT_TARGETS})
 endforeach()
 # 内置插件依赖库 (quickjs/codegraph 系/平台库; 收集自 plugins 内置分支,
 # 与 _AGENTXX_LINK_LIBS 相同链接策略: obj PRIVATE 供编译; 共享/静态库
-# PUBLIC 保证静态库消费者连带链接)
+# PUBLIC 保证静态库处理者连带链接)
 foreach(_agentxx_target ${_AGENTXX_OBJ_LINK_TARGETS})
   target_link_libraries(${_agentxx_target} PRIVATE ${AGENTXX_BUILTIN_PLUGIN_LINK_LIBS})
 endforeach()
@@ -449,7 +449,7 @@ if (AGENTXX_LINUX_IO_URING_SUPPORTED)
   target_link_libraries(agentxx_shared PRIVATE PkgConfig::uring)
   # agentxx_util: asio 文件 I/O 在 -DASIO_HAS_IO_URING 下引用 io_uring 符号
   # (宏由顶层统一传入所有子项目), PUBLIC 链接使使用 util 重模块 (http_client
-  # 等 asio 实现) 的插件直接获得; 消费方项目须 pkg_check_modules(liburing)
+  # 等 asio 实现) 的插件直接获得; 处理方项目须 pkg_check_modules(liburing)
   # 定义同名 target (见 plugins/CMakeLists.txt, 与 client/test 一致)
   target_link_libraries(agentxx_util PUBLIC PkgConfig::uring)
 endif()
@@ -497,11 +497,11 @@ packageProject(
 # find_dependency(iconv CONFIG), 强制匹配 libiconv-native 安装的
 # iconvConfig.cmake, CONFIG 模式成功时 find_package 框架设置精确的小写
 # iconv_FOUND=TRUE; 若仅写 "iconv" 则会退化为模块模式, 目标 Iconv::iconv/
-# Iconv::charset 不存在, 消费方链接 agentxx_util 时直接报 target not found)
+# Iconv::charset 不存在, 处理方链接 agentxx_util 时直接报 target not found)
 # - OpenSSL::SSL/Crypto 为 INTERFACE_LINK_LIBRARIES 中的 imported target,
-#   须在 DEPENDENCIES 中声明以便消费方 find_dependency 解析
+#   须在 DEPENDENCIES 中声明以便处理方 find_dependency 解析
 # - neograph 系/yyjson/hs_runtime 为裸库名, 经 PUBLIC link_directories 解析,
-#   无需 find_dependency; PkgConfig::hyperscan/uring 由消费方项目自行
+#   无需 find_dependency; PkgConfig::hyperscan/uring 由处理方项目自行
 #   pkg_check_modules 定义 (见 plugins/CMakeLists.txt)
 set(agentxx_util_DEPENDENCIES "fmt;SQLite3 CONFIG;uchardet;iconv CONFIG;OpenSSL")
 packageProject(
