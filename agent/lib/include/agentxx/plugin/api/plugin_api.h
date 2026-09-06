@@ -450,7 +450,7 @@ typedef struct AgentxxPluginsIface {
 /* ==================== 接口表: 宿主配置 (agentxx.agent.config) ==================== */
 
 #define AGENTXX_PLUGIN_IFACE_AGENT_CONFIG         "agentxx.agent.config"
-#define AGENTXX_PLUGIN_IFACE_AGENT_CONFIG_VERSION 1
+#define AGENTXX_PLUGIN_IFACE_AGENT_CONFIG_VERSION 2
 
 typedef struct AgentxxPluginConfigIface {
     int32_t  version; ///< 必须 == AGENTXX_PLUGIN_IFACE_AGENT_CONFIG_VERSION
@@ -490,6 +490,16 @@ typedef struct AgentxxPluginConfigIface {
     int32_t(AGENTXX_PLUGIN_CALL* get_plugin_config_path)(
         const AgentxxPluginHost* host,
         AgentxxPluginString*     out
+    );
+    /// 读取当前使用的语言 (io 线程; 返回 0 成功, out 填入语言代码如 "en" / "zh-cn", host->alloc 分配; 默认 "en")
+    int32_t(AGENTXX_PLUGIN_CALL* get_language)(
+        const AgentxxPluginHost* host,
+        AgentxxPluginString*     out
+    );
+    /// 指定使用的语言 (io 线程; 返回 0 成功; 不支持 auto, 为空或 auto 时回退为 "en")
+    int32_t(AGENTXX_PLUGIN_CALL* set_language)(
+        const AgentxxPluginHost*       host,
+        const AgentxxPluginStringView* language
     );
 } AgentxxPluginConfigIface;
 

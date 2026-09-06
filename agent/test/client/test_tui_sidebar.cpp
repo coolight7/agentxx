@@ -11,6 +11,7 @@
 #include "agentxx-client/io/tui/components/overlays.h"
 #include "agentxx-client/io/tui/components/sidebar.h"
 #include "agentxx-client/io/tui/framework/tui_context.h"
+#include "agentxx-client/io/tui/framework/tui_settings.h"
 #include "agentxx-client/io/tui/framework/tui_state.h"
 #include "agentxx-client/io/tui/tui_theme.h"
 #include "ftxui/component/event.hpp"
@@ -213,6 +214,9 @@ struct SidebarFixture {
 } // namespace
 
 TestResult testTuiSidebar() {
+    auto savedLang = TUISettings::instance().language();
+    TUISettings::instance().setLanguage(TuiLanguage::ZhCn);
+
     // ---- 场景 0 (诊断): 裸 Scrollable 渲染基线 ----
     {
         auto scroll = Scrollable::Create([]() -> std::vector<ScrollItem> {
@@ -353,6 +357,8 @@ TestResult testTuiSidebar() {
         overlay->OnEvent(ftxui::Event::Escape);
         XX_TEST_EXPECT_TRUE(closed);
     }
+
+    TUISettings::instance().setLanguage(savedLang);
 
     return TestResult{g_tui_sidebar_passed, g_tui_sidebar_failed};
 }

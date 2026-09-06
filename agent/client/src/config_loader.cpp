@@ -520,6 +520,16 @@ YamlAppConfig loadYamlConfig(
         }
     }
 
+    // 语言配置 (yaml `language`, 默认 "en", 不支持 auto)
+    if (root["language"]) {
+        auto val = resolveEnvVars(
+            root["language"].as<std::string>("en"),
+            dotEnvVars,
+            overrideEnvVars
+        );
+        cfg.language = agent::normalizeLanguage(val);
+    }
+
     // 统一数据根目录 (全局设置/会话/codegraph 索引等数据存放根)
     // - 为空使用默认 ~/.agentxx/; 支持 ${VAR} 展开, `~` 展开由调用方完成
     if (root["data_dir"]) {

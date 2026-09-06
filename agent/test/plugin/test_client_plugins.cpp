@@ -348,6 +348,46 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
     }
     XX_TEST_EXPECT_TRUE(mgr->hasCommand("example"));
     XX_TEST_EXPECT_TRUE(mgr->hasCommand("example_toast"));
+
+    // ---- 2.5 接口表: agentxx.client.self get_language / set_language ----
+    {
+        auto ifaceSelf = agentxx::plugin::queryInterface<AgentxxClientSelfIface>(
+            &inst->host,
+            AGENTXX_IFACE_CLIENT_SELF
+        );
+        XX_TEST_EXPECT_TRUE(ifaceSelf != nullptr);
+        if (ifaceSelf) {
+            XX_TEST_EXPECT_EQ(ifaceSelf->version, AGENTXX_IFACE_CLIENT_SELF_VERSION);
+            // 默认语言为 "en"
+            AgentxxPluginString langOut{};
+            XX_TEST_EXPECT_EQ(ifaceSelf->get_language(&inst->host, &langOut), 0);
+            XX_TEST_EXPECT_TRUE(langOut.data != nullptr);
+            if (langOut.data) {
+                XX_TEST_EXPECT_EQ(std::string(langOut.data, langOut.size), std::string("en"));
+            }
+            agentxx::plugin::PluginString::free(&inst->host, &langOut);
+
+            // 设置语言为 "zh-cn"
+            AgentxxPluginStringView zhSv{"zh-cn", 5};
+            XX_TEST_EXPECT_EQ(ifaceSelf->set_language(&inst->host, &zhSv), 0);
+            XX_TEST_EXPECT_EQ(ifaceSelf->get_language(&inst->host, &langOut), 0);
+            XX_TEST_EXPECT_TRUE(langOut.data != nullptr);
+            if (langOut.data) {
+                XX_TEST_EXPECT_EQ(std::string(langOut.data, langOut.size), std::string("zh-cn"));
+            }
+            agentxx::plugin::PluginString::free(&inst->host, &langOut);
+
+            // 不支持 auto, 传 auto 回退为 en
+            AgentxxPluginStringView autoSv{"auto", 4};
+            XX_TEST_EXPECT_EQ(ifaceSelf->set_language(&inst->host, &autoSv), 0);
+            XX_TEST_EXPECT_EQ(ifaceSelf->get_language(&inst->host, &langOut), 0);
+            XX_TEST_EXPECT_TRUE(langOut.data != nullptr);
+            if (langOut.data) {
+                XX_TEST_EXPECT_EQ(std::string(langOut.data, langOut.size), std::string("en"));
+            }
+            agentxx::plugin::PluginString::free(&inst->host, &langOut);
+        }
+    }
     XX_TEST_EXPECT_FALSE(mgr->hasCommand("no_such_command"));
 
     // 插件 loadNativeAsync 在 io 线程, entry 的注册经 ioCallSync 同步完成:

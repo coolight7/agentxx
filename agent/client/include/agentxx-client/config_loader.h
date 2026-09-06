@@ -55,6 +55,8 @@ struct YamlAppConfig {
     std::string                                   useModelTrain;
     std::string                                   useModelTrainScorer;
     std::string                                   useModelTrainOptimizer;
+    /// 使用的语言 (yaml `language`, 默认 "en", 不支持 auto)
+    std::string language = "en";
     /// 统一数据根目录 (yaml `data_dir`, 支持 `~`/环境变量展开)
     /// - 为空表示不持久化: 设置/会话/codegraph 数据仅存内存 (BaseAgent 输出警告)
     /// - 特殊关键字 `default` (仅 tui/cli 模式): 使用当前系统数据目录

@@ -215,6 +215,11 @@ bool FfiAgentRuntime::buildConfigs(
         config->sessionStoreDirectory = jsonStr(cfgJ, "sessionStoreDirectory", "");
         config->agentName             = jsonStr(cfgJ, "agentName", config->agentName);
         config->llmMaxRetry           = jsonInt(cfgJ, "llmMaxRetry", config->llmMaxRetry);
+        config->language              = agent::normalizeLanguage(jsonStr(cfgJ, "language", "en"));
+        {
+            std::lock_guard<std::mutex> lock(langMutex_);
+            language_ = config->language;
+        }
         config->permissionMode = permissionModeFromString(jsonStr(cfgJ, "permissionMode", "ask"));
         jsonStrArray(cfgJ, "permissionAllowPaths", config->permissionAllowPaths);
         jsonStrArray(cfgJ, "permissionDenyPaths", config->permissionDenyPaths);
@@ -431,7 +436,19 @@ int FfiAgentRuntime::start(std::string& err) {
     // 2) Client-IO 线程协程: client 接收循环 + hello
     asio::post(*clientIoCtx_, [self = shared_from_this()]() {
         asio::co_spawn(*self->clientIoCtx_, self->clientIO_->runTransportLoop(), asio::detached);
-        self->clientIO_->sendToPeer(agent::WireHello{self->sessionId_, "", 0, ""});
+        std::string curLang;
+        {
+            std::lock_guard<std::mutex> lock(self->langMutex_);
+            curLang = self->language_;
+        }
+        self->clientIO_->sendToPeer(agent::WireHello{
+            .sessionId = self->sessionId_,
+            .token     = "",
+            .lastSeq   = 0,
+            .tailHash  = "",
+            .model     = "",
+            .language  = curLang,
+        });
         self->clientIO_->sendToPeer(agent::WireGetModel{self->sessionId_});
     });
 
@@ -683,6 +700,31 @@ int FfiAgentRuntime::switchSession(std::string_view sessionId, std::string& err)
         clientIO->sendToPeer(agent::WireSwitchSession{std::move(newTid)});
     });
     return AGENTXX_FFI_OK;
+}
+
+int FfiAgentRuntime::setLanguage(std::string_view language, std::string& err) {
+    if (!stateUsable(state())) {
+        err = "状态错误: 未启动或已停止";
+        return AGENTXX_FFI_ERR_STATE;
+    }
+    auto norm = agent::normalizeLanguage(language);
+    {
+        std::lock_guard<std::mutex> lock(langMutex_);
+        language_ = norm;
+    }
+    if (agent_ && serverIoCtx_) {
+        auto ag  = agent_;
+        auto sid = sessionId_;
+        asio::post(*serverIoCtx_, [ag, sid, norm]() {
+            ag->setLanguage(norm, sid);
+        });
+    }
+    return AGENTXX_FFI_OK;
+}
+
+std::string FfiAgentRuntime::getLanguage(std::string& err) {
+    std::lock_guard<std::mutex> lock(langMutex_);
+    return language_.empty() ? "en" : language_;
 }
 
 // ---------------------------------------------------------------------------

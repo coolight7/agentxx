@@ -553,6 +553,13 @@ void SessionServerAgentIO::onPeerMessage(WireMessage msg) {
 void SessionServerAgentIO::handleHello(const WireHello& hello, std::vector<std::string> models) {
     cancelGraceTimer();
 
+    if (!hello.language.empty()) {
+        auto agent = agent_.lock();
+        if (agent) {
+            agent->setLanguage(hello.language, config_.sessionId);
+        }
+    }
+
     std::vector<WireDelta>            replayDeltas;
     std::optional<WireSyncPayload>    replaySync;
     std::string                       tailHash;

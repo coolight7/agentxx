@@ -314,6 +314,29 @@ public:
         return cur;
     }
 
+    /// 获取当前真实生效使用的语言代码 ("en" 或 "zh-cn"; 绝不返回 "auto")
+    inline std::string languageCode() const noexcept {
+        return (effectiveLanguage() == TuiLanguage::ZhCn) ? "zh-cn" : "en";
+    }
+
+    /// 根据语言代码字符串设置语言 ("auto" -> Auto, "zh"/"zh-cn" -> ZhCn, 其余包括 "en" -> EnUs)
+    inline void setLanguageByCode(std::string_view code) noexcept {
+        std::string s{code};
+        for (auto& c : s) {
+            if (c >= 'A' && c <= 'Z') {
+                c = static_cast<char>(c + ('a' - 'A'));
+            }
+        }
+        if (s == "auto") {
+            setLanguage(TuiLanguage::Auto);
+        } else if (s == "zh" || s == "zh-cn" || s.starts_with("zh-") || s.starts_with("zh_")
+            || s.find("chinese") != std::string::npos) {
+            setLanguage(TuiLanguage::ZhCn);
+        } else {
+            setLanguage(TuiLanguage::EnUs);
+        }
+    }
+
     /// 刷新自动模式下的系统语言探测缓存
     inline void refreshAutoLanguage() noexcept {
         autoResolvedLanguage_.store(

@@ -116,6 +116,48 @@ asio::awaitable<TestResult> run_plugin_tests() {
     XX_TEST_EXPECT_TRUE(ctx->pluginManager->capabilities()->has("example.demo"));
     XX_TEST_EXPECT_TRUE(ctx->pluginManager->hasCapability("example.demo") == 1);
 
+    // ---- 2.5 接口表: agentxx.agent.config get_language / set_language ----
+    {
+        auto ifaceConfig = agentxx::plugin::queryInterface<AgentxxPluginConfigIface>(
+            &inst->host,
+            AGENTXX_PLUGIN_IFACE_AGENT_CONFIG
+        );
+        XX_TEST_EXPECT_TRUE(ifaceConfig != nullptr);
+        if (ifaceConfig) {
+            XX_TEST_EXPECT_EQ(ifaceConfig->version, AGENTXX_PLUGIN_IFACE_AGENT_CONFIG_VERSION);
+            // 默认语言为 "en"
+            AgentxxPluginString langOut{};
+            XX_TEST_EXPECT_EQ(ifaceConfig->get_language(&inst->host, &langOut), 0);
+            XX_TEST_EXPECT_TRUE(langOut.data != nullptr);
+            if (langOut.data) {
+                XX_TEST_EXPECT_EQ(std::string(langOut.data, langOut.size), std::string("en"));
+            }
+            agentxx::plugin::PluginString::free(&inst->host, &langOut);
+
+            // 切换语言为 "zh-cn"
+            AgentxxPluginStringView zhSv{"zh-cn", 5};
+            XX_TEST_EXPECT_EQ(ifaceConfig->set_language(&inst->host, &zhSv), 0);
+
+            XX_TEST_EXPECT_EQ(ifaceConfig->get_language(&inst->host, &langOut), 0);
+            XX_TEST_EXPECT_TRUE(langOut.data != nullptr);
+            if (langOut.data) {
+                XX_TEST_EXPECT_EQ(std::string(langOut.data, langOut.size), std::string("zh-cn"));
+            }
+            agentxx::plugin::PluginString::free(&inst->host, &langOut);
+
+            // 不支持 auto, 传 auto 回退为 en
+            AgentxxPluginStringView autoSv{"auto", 4};
+            XX_TEST_EXPECT_EQ(ifaceConfig->set_language(&inst->host, &autoSv), 0);
+
+            XX_TEST_EXPECT_EQ(ifaceConfig->get_language(&inst->host, &langOut), 0);
+            XX_TEST_EXPECT_TRUE(langOut.data != nullptr);
+            if (langOut.data) {
+                XX_TEST_EXPECT_EQ(std::string(langOut.data, langOut.size), std::string("en"));
+            }
+            agentxx::plugin::PluginString::free(&inst->host, &langOut);
+        }
+    }
+
     // ---- 3. 工具执行 (同步 C 回调经线程池卸载) ----
     {
         auto tool = ctx->toolRegistry->find("example_echo");
@@ -1490,13 +1532,13 @@ asio::awaitable<TestResult> run_plugin_tests() {
             // mock provider 供 llm 节点输出意图)
             {
                 // 注册 4 个基础节点类型 (对齐 BaseAgent::initRegisterNodes)
-                auto agCtx = gctx;
+                std::weak_ptr<agentxx::agent::AgentContext> agCtx = gctx;
                 gctx->graphRegistry->register_type(
                     std::string{"xx_MiddlewareWrapAgentStartCall"},
                     [agCtx](const std::string&, const neograph::json&, const neograph::graph::NodeContext&) {
                         return std::make_unique<agentxx::nodes::AgentStartCallWrapNode>(
                             "agent_start",
-                            agCtx
+                            agCtx.lock()
                         );
                     }
                 );
@@ -1505,7 +1547,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
                     [agCtx](const std::string&, const neograph::json&, const neograph::graph::NodeContext&) {
                         return std::make_unique<agentxx::nodes::AgentEndCallWrapNode>(
                             "agent_end",
-                            agCtx
+                            agCtx.lock()
                         );
                     }
                 );
@@ -1516,7 +1558,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
                         const neograph::json&,
                         const neograph::graph::NodeContext& nc
                     ) {
-                        return std::make_unique<agentxx::nodes::ModelCallWrapNode>(name, nc, agCtx);
+                        return std::make_unique<agentxx::nodes::ModelCallWrapNode>(name, nc, agCtx.lock());
                     }
                 );
                 gctx->graphRegistry->register_type(
@@ -1526,7 +1568,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
                         const neograph::json&,
                         const neograph::graph::NodeContext& nc
                     ) {
-                        return std::make_unique<agentxx::nodes::ToolcallWrapNode>(name, nc, agCtx);
+                        return std::make_unique<agentxx::nodes::ToolcallWrapNode>(name, nc, agCtx.lock());
                     }
                 );
 
@@ -1675,8 +1717,12 @@ asio::awaitable<TestResult> run_plugin_tests() {
             }
 
             co_await gctx->pluginManager->unloadAsync("example_graph_node");
+            gctx->graphRegistry.reset();
+            gctx->pluginManager->shutdownAll();
         }
     }
+
+    ctx->pluginManager->shutdownAll();
 
     co_return TestResult{g_plugin_passed, g_plugin_failed};
 }

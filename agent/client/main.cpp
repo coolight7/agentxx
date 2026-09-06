@@ -183,6 +183,9 @@ static void applySharedRuntimeConfig(
     config->permissionAllowPaths = yamlCfg.permissionAllowPaths;
     config->permissionDenyPaths  = yamlCfg.permissionDenyPaths;
 
+    // 语言配置 (默认 "en", 不支持 auto)
+    config->language = agentxx::agent::normalizeLanguage(yamlCfg.language);
+
     // 子代理开关 (yaml `subagent.enable`, 默认 true)
     config->enableSubagent = yamlCfg.enableSubagent;
     // git worktree 模式 (yaml `worktree.enable`, 默认 false)
@@ -603,6 +606,10 @@ Options:
                 agentxx::agent::AgentConfigStatic::getGlobalSettingsDbPath(resolvedDataDir)
             );
             TUISettings::instance().attachDb(std::move(settingsDb));
+        }
+        // 若配置文件显式指定了语言，更新 TUI 界面语言
+        if (!yamlCfg.language.empty()) {
+            TUISettings::instance().setLanguageByCode(yamlCfg.language);
         }
     }
 

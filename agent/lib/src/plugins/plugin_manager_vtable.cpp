@@ -893,6 +893,46 @@ static int32_t AGENTXX_PLUGIN_CALL
 }
 
 static int32_t AGENTXX_PLUGIN_CALL
+    xx_get_language(const AgentxxPluginHost* host, AgentxxPluginString* out) {
+    return agentxx::plugin::guardVtableCall(-1, [&]() -> int32_t {
+        if (!out) {
+            return -1;
+        }
+        auto mgr = mgrOf(host);
+        if (!mgr) {
+            return -1;
+        }
+        auto mgrPtr = mgr;
+        auto lang   = ioCallSync<std::string>(mgrPtr, [mgrPtr]() {
+            return mgrPtr->getLanguage();
+        });
+        if (lang.empty()) {
+            lang = "en";
+        }
+        hostMemorySetString(out, lang);
+        return 0;
+    });
+}
+
+static int32_t AGENTXX_PLUGIN_CALL
+    xx_set_language(const AgentxxPluginHost* host, const AgentxxPluginStringView* language) {
+    return agentxx::plugin::guardVtableCall(-1, [&]() -> int32_t {
+        auto mgr = mgrOf(host);
+        if (!mgr) {
+            return -1;
+        }
+        std::string lang = (language && language->data)
+                               ? std::string(language->data, static_cast<size_t>(language->size))
+                               : std::string{};
+        auto mgrPtr = mgr;
+        ioCallSyncVoid(mgrPtr, [mgrPtr, lang]() {
+            mgrPtr->setLanguage(lang);
+        });
+        return 0;
+    });
+}
+
+static int32_t AGENTXX_PLUGIN_CALL
     xx_get_prompt(const AgentxxPluginHost* host, AgentxxPluginString* out) {
     return agentxx::plugin::guardVtableCall(-1, [&]() -> int32_t {
         if (!out) {
@@ -1175,6 +1215,8 @@ static const AgentxxPluginConfigIface g_ifaceConfig = {
     /* get_tool_prompt */ xx_get_tool_prompt,
     /* get_session_work_dir */ xx_get_session_work_dir,
     /* get_plugin_config_path */ xx_get_plugin_config_path,
+    /* get_language */ xx_get_language,
+    /* set_language */ xx_set_language,
 };
 
 static const AgentxxPluginPromptIface g_ifacePrompt = {
@@ -1547,6 +1589,7 @@ std::string PluginManager::getConfigJson() {
     neograph::json out;
     out["dataDir"]     = c->agentConfig->dataDir;
     out["projectRoot"] = c->agentConfig->workDir;
+    out["language"]    = getLanguage();
 #if XX_IS_WIN_D
     out["platform"] = "windows";
 #elif XX_IS_MACOS_D
@@ -1559,6 +1602,21 @@ std::string PluginManager::getConfigJson() {
     out["platform"] = "android";
 #endif
     return out.dump();
+}
+
+std::string PluginManager::getLanguage() {
+    auto c = agentContext_.lock();
+    if (!c) {
+        return "en";
+    }
+    return c->getLanguage();
+}
+
+void PluginManager::setLanguage(std::string_view lang) {
+    auto c = agentContext_.lock();
+    if (c) {
+        c->setLanguage(lang);
+    }
 }
 
 std::string PluginManager::getToolPromptJson(const std::string& toolName) {

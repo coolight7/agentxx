@@ -489,6 +489,12 @@ public:
     std::string getOwnInfoJson(ClientPluginInstance* inst);
     std::string getPluginArgsJson(ClientPluginInstance* inst);
     std::string getPluginConfigPath(ClientPluginInstance* inst);
+    std::string getLanguage() const {
+        return language_.empty() ? "en" : language_;
+    }
+    void setLanguage(std::string_view lang) {
+        language_ = agent::normalizeLanguage(lang);
+    }
     /// 会话操作 (代理到端点)
     void sendUserInputToPeer(
         ClientPluginInstance*   inst,
@@ -594,6 +600,7 @@ private:
 
     /// 因接口要求未满足被跳过的插件 (io 线程; 见 skippedPlugins())
     std::map<std::string, std::string> skippedPlugins_{};
+    std::string language_ = "en";
 };
 
 /// UI 适配器抽象接口 (UI 无关语义层 → 具体 UI 实现)

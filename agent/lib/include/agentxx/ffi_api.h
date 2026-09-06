@@ -265,6 +265,20 @@ AGENTXX_FFI_EXPORT int32_t AGENTXX_FFI_CALL agentxx_ffi_switch_session(
     AgentxxString*           log
 );
 
+/// 指定使用的语言 (如 "en", "zh-cn"; 不支持 auto, 空或 auto 默认回退 "en")
+AGENTXX_FFI_EXPORT int32_t AGENTXX_FFI_CALL agentxx_ffi_set_language(
+    AgentxxFFIAgent*         a,
+    const AgentxxStringView* language,
+    AgentxxString*           log
+);
+
+/// 读取当前使用的语言 (返回当前生效的语言代码, 如 "en", "zh-cn"; out 经 agentxx_ffi_string_free 释放)
+AGENTXX_FFI_EXPORT int32_t AGENTXX_FFI_CALL agentxx_ffi_get_language(
+    AgentxxFFIAgent* a,
+    AgentxxString*   out,
+    AgentxxString*   log
+);
+
 /* ==================== 同步查询 (阻塞等待服务端响应, 最长 10s) ====================
  * 返回值: int32_t 状态码 (AGENTXX_FFI_OK 成功); out 填入 JSON 结果 (agentxx_ffi_string_free 释放);
  * 失败时 log 含详情 */

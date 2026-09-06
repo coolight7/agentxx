@@ -349,7 +349,8 @@ inline neograph::json makeHello(
     std::string_view sessionId,
     std::string_view token,
     uint64_t         lastSeq  = 0,
-    std::string_view tailHash = ""
+    std::string_view tailHash = "",
+    std::string_view language = ""
 ) {
     neograph::json j = {
         {"type",      MsgType::Hello},
@@ -361,6 +362,9 @@ inline neograph::json makeHello(
     }
     if (!tailHash.empty()) {
         j["tailHash"] = tailHash;
+    }
+    if (!language.empty()) {
+        j["language"] = language;
     }
     return j;
 }

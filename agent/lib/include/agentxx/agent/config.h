@@ -1,5 +1,6 @@
 #pragma once
 
+#include "agentxx/util/string_util.h"
 #include "neograph/api.h"
 #include "neograph/json.h"
 #include "prompt.h"
@@ -16,6 +17,15 @@ class MiddlewareContext;
 } // namespace middleware
 
 namespace agent {
+
+/// 规范化语言代码 (不支持 auto, 空串或 "auto" 默认回退 "en")
+inline std::string normalizeLanguage(std::string_view lang) noexcept {
+    auto s = agentxx::util::toLower(lang);
+    if (lang.empty() || s == "auto") {
+        return "en";
+    }
+    return s;
+}
 
 /// 权限询问处理模式 (yaml `permission.mode` 指定; 默认 Ask)
 ///
@@ -167,6 +177,9 @@ public:
 
     std::string agentName     = "Agentxx";
     std::string agentNameView = "Agentxx";
+
+    /// 会话使用的语言 (yaml `language`, 默认 "en", 不支持 auto)
+    std::string language = "en";
 
     /// share store 桥接 (运行时注入, 非配置项):
     /// - 非空时, 本 agent 的 `agentxx_share_store` 工具读写该 MiddlewareContext

@@ -37,6 +37,10 @@ data_dir: default
 #   - 插件宿主信息 projectRoot (如 codegraph 未配置 paths 时默认索引该目录)
 # work_dir: ${AGENTXX_WORK_DIR}
 
+# === 语言配置
+# 指定使用的语言 (默认 en; 可选: en / zh-cn)
+# language: en
+
 # === 权限配置
 # - mode: 询问处理模式
 #   - ask:     当前工作目录内允许读写, 其他路径询问用户 (默认)

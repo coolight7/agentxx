@@ -365,6 +365,52 @@ int32_t AGENTXX_FFI_CALL agentxx_ffi_switch_session(
     }
 }
 
+int32_t AGENTXX_FFI_CALL agentxx_ffi_set_language(
+    AgentxxFFIAgent*         a,
+    const AgentxxStringView* language,
+    AgentxxString*           log
+) {
+    if (a == nullptr || !a->impl) {
+        return ffiFail(AGENTXX_FFI_ERR_INVALID, "null handle", log);
+    }
+    std::string err;
+    try {
+        std::string_view langSv = (language != nullptr && language->data != nullptr)
+                                      ? svToCpp(language)
+                                      : std::string_view{"en"};
+        const int rc = a->impl->setLanguage(langSv, err);
+        return ffiFinish(rc, err, log);
+    } catch (...) {
+        return ffiFail(AGENTXX_FFI_ERR_INTERNAL, cxxErrText(), log);
+    }
+}
+
+int32_t AGENTXX_FFI_CALL agentxx_ffi_get_language(
+    AgentxxFFIAgent* a,
+    AgentxxString*   out,
+    AgentxxString*   log
+) {
+    if (out == nullptr) {
+        return ffiFail(AGENTXX_FFI_ERR_INVALID, "null out pointer", log);
+    }
+    out->data = nullptr;
+    out->size = 0;
+    if (a == nullptr || !a->impl) {
+        return ffiFail(AGENTXX_FFI_ERR_INVALID, "null handle", log);
+    }
+    std::string err;
+    try {
+        auto lang = a->impl->getLanguage(err);
+        if (lang.empty() && !err.empty()) {
+            return ffiFail(AGENTXX_FFI_ERR_INTERNAL, err, log);
+        }
+        fillString(out, lang);
+        return AGENTXX_FFI_OK;
+    } catch (...) {
+        return ffiFail(AGENTXX_FFI_ERR_INTERNAL, cxxErrText(), log);
+    }
+}
+
 // ---------------------------------------------------------------------------
 // 同步查询
 // ---------------------------------------------------------------------------

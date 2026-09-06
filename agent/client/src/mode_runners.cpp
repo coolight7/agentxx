@@ -241,8 +241,19 @@ static std::shared_ptr<agent::SessionServerAgentIO> setupLocalUnifiedDirect(
         asio::detached
     );
 
-    // 发送 hello 触发服务端重放/同步
-    clientIO->sendToPeer(agent::WireHello{sessionId, "", 0, ""});
+    // 发送 hello 触发服务端重放/同步 (传入客户端界面语言)
+    std::string clientLang = "en";
+    if (dynamic_cast<TUIClientAgentIO*>(clientIO.get()) != nullptr) {
+        clientLang = TUISettings::instance().languageCode();
+    }
+    clientIO->sendToPeer(agent::WireHello{
+        .sessionId = sessionId,
+        .token     = "",
+        .lastSeq   = 0,
+        .tailHash  = "",
+        .model     = "",
+        .language  = clientLang,
+    });
 
     return serverIO;
 }
@@ -412,7 +423,14 @@ static asio::awaitable<void> runRemoteCliAsync(
     XX_LOGI("======= Agentxx Remote Client (CLI, auto-reconnect) =======");
 
     // 连接并握手
-    agent::WireHello hello{sessionId, token, 0, ""};
+    agent::WireHello hello{
+        .sessionId = sessionId,
+        .token     = token,
+        .lastSeq   = 0,
+        .tailHash  = "",
+        .model     = "",
+        .language  = "en",
+    };
     bool             ok = co_await transport->connect(hello);
     if (!ok) {
         XX_LOGE("[remote_cli] connection failed");
@@ -502,7 +520,14 @@ static asio::awaitable<void> runRemoteTuiAsync(
     //   返回 false → banner 显示"连接失败 + [重试]"等待用户点击
     // - 用户点击重试 → requestRetry() 置 Connecting 并唤醒 waitRetry 重新循环
     // - TUI 退出 (running_=false) 时流程尽快终止
-    agent::WireHello hello{sessionId, token, 0, ""};
+    agent::WireHello hello{
+        .sessionId = sessionId,
+        .token     = token,
+        .lastSeq   = 0,
+        .tailHash  = "",
+        .model     = "",
+        .language  = TUISettings::instance().languageCode(),
+    };
     bool             connected = false;
     while (!connected) {
         agent::WsAgentIOTransport::Config transportCfg;

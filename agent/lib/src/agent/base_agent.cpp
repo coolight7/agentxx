@@ -680,6 +680,19 @@ void BaseAgent::selectModel(std::string_view sessionId, std::string_view modelNa
     }
 }
 
+std::string BaseAgent::getLanguage(std::string_view sessionId) const {
+    if (agentContext) {
+        return agentContext->getLanguage(sessionId);
+    }
+    return "en";
+}
+
+void BaseAgent::setLanguage(std::string_view language, std::string_view sessionId) {
+    if (agentContext) {
+        agentContext->setLanguage(language, sessionId);
+    }
+}
+
 void BaseAgent::collectAppendComponentInfo(std::vector<AppendComponentNotification>& notifications
 ) {
     // MCP 工具

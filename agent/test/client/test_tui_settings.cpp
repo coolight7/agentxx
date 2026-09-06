@@ -251,29 +251,39 @@ void test_auto_language_detection() {
     env.set("LANG", std::string_view{"en_US.UTF-8"});
     settings.refreshAutoLanguage();
     XX_TEST_EXPECT_TRUE(settings.effectiveLanguage() == TuiLanguage::EnUs);
+    XX_TEST_EXPECT_EQ(settings.languageCode(), std::string("en"));
     XX_TEST_EXPECT_EQ(i18n.t("settings.title"), std::string_view(" Settings "));
 
     // 模拟中文系统环境
     env.set("LANG", std::string_view{"zh_CN.UTF-8"});
     settings.refreshAutoLanguage();
     XX_TEST_EXPECT_TRUE(settings.effectiveLanguage() == TuiLanguage::ZhCn);
+    XX_TEST_EXPECT_EQ(settings.languageCode(), std::string("zh-cn"));
     XX_TEST_EXPECT_EQ(i18n.t("settings.title"), std::string_view(" 设置 "));
 
     // 模拟其它语言系统环境 (回退 EnUs)
     env.set("LANG", std::string_view{"ja_JP.UTF-8"});
     settings.refreshAutoLanguage();
     XX_TEST_EXPECT_TRUE(settings.effectiveLanguage() == TuiLanguage::EnUs);
+    XX_TEST_EXPECT_EQ(settings.languageCode(), std::string("en"));
     XX_TEST_EXPECT_EQ(i18n.t("settings.title"), std::string_view(" Settings "));
 
     // 当用户显式指定语言时, effectiveLanguage 忽略系统环境
     settings.setLanguage(TuiLanguage::ZhCn);
     XX_TEST_EXPECT_TRUE(settings.effectiveLanguage() == TuiLanguage::ZhCn);
+    XX_TEST_EXPECT_EQ(settings.languageCode(), std::string("zh-cn"));
     XX_TEST_EXPECT_EQ(i18n.t("settings.title"), std::string_view(" 设置 "));
 
     settings.setLanguage(TuiLanguage::EnUs);
     env.set("LANG", std::string_view{"zh_CN.UTF-8"});
     XX_TEST_EXPECT_TRUE(settings.effectiveLanguage() == TuiLanguage::EnUs);
+    XX_TEST_EXPECT_EQ(settings.languageCode(), std::string("en"));
     XX_TEST_EXPECT_EQ(i18n.t("settings.title"), std::string_view(" Settings "));
+
+    // 按语言代码切换: 传入 auto 时设置为 Auto, 但 languageCode 始终返回具体语言代码
+    settings.setLanguageByCode("auto");
+    XX_TEST_EXPECT_TRUE(settings.language() == TuiLanguage::Auto);
+    XX_TEST_EXPECT_TRUE(settings.languageCode() == "zh-cn" || settings.languageCode() == "en");
 
     // 清理模拟环境变量并恢复默认设置
     env.remove("LANG");
@@ -302,7 +312,7 @@ void test_language_set_get() {
     XX_TEST_EXPECT_TRUE(settings.language() == TuiLanguage::Auto);
     XX_TEST_EXPECT_EQ(settings.languageName(), std::string_view("自动 (Auto)"));
 
-    // 恢复默认 (Auto)
+    // 恢复默认
     settings.setLanguage(TUISettings::kDefaultLanguage);
 }
 
@@ -543,6 +553,13 @@ void test_persist_to_db() {
         XX_TEST_EXPECT_EQ(fresh.getInt64("tui.logLevel", -1), int64_t{1});       // Debug
         XX_TEST_EXPECT_EQ(fresh.getInt64("tui.tailThinking", -1), int64_t{0});   // AutoExpand
         XX_TEST_EXPECT_EQ(fresh.getInt64("tui.lang", -1), int64_t{static_cast<int>(TuiLanguage::ZhCn)});
+    }
+
+    // 变更为 English (EnUs)
+    settings.setLanguage(TuiLanguage::EnUs);
+    {
+        auto fresh = agentxx::util::SettingsDb(dbPath);
+        XX_TEST_EXPECT_EQ(fresh.getInt64("tui.lang", -1), int64_t{static_cast<int>(TuiLanguage::EnUs)});
     }
 
     // 变更为自动 (Auto)

@@ -25,6 +25,7 @@ struct WireHello {
     uint64_t    lastSeq = 0;
     std::string tailHash;
     std::string model;
+    std::string language = "en"; ///< 界面/客户端指定使用的语言 (默认 "en", 不支持 auto)
 };
 
 struct WireHelloAck {

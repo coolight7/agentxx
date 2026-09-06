@@ -31,6 +31,8 @@
     agentxx_ffi_select_model;
     agentxx_ffi_set_permission;
     agentxx_ffi_switch_session;
+    agentxx_ffi_set_language;
+    agentxx_ffi_get_language;
     agentxx_ffi_get_model_info;
     agentxx_ffi_get_context_messages;
     agentxx_ffi_list_sessions;

@@ -327,7 +327,7 @@ typedef struct AgentxxClientWireIface {
 /* ==================== 接口表: 自描述/配置 (agentxx.client.self) ==================== */
 
 #define AGENTXX_IFACE_CLIENT_SELF         "agentxx.client.self"
-#define AGENTXX_IFACE_CLIENT_SELF_VERSION 1
+#define AGENTXX_IFACE_CLIENT_SELF_VERSION 2
 
 typedef struct AgentxxClientSelfIface {
     int32_t  version; ///< 必须 == AGENTXX_IFACE_CLIENT_SELF_VERSION
@@ -352,6 +352,16 @@ typedef struct AgentxxClientSelfIface {
     int32_t(AGENTXX_PLUGIN_CALL* get_plugin_config_path)(
         const AgentxxPluginHost* host,
         AgentxxPluginString*     out
+    );
+    /// 读取当前 client 使用的语言 (client io 线程; 返回 0 成功, out 填入如 "en" / "zh-cn", host->alloc 分配)
+    int32_t(AGENTXX_PLUGIN_CALL* get_language)(
+        const AgentxxPluginHost* host,
+        AgentxxPluginString*     out
+    );
+    /// 指定使用的语言 (client io 线程; 返回 0 成功; 不支持 auto, 为空或 auto 时回退为 "en")
+    int32_t(AGENTXX_PLUGIN_CALL* set_language)(
+        const AgentxxPluginHost*       host,
+        const AgentxxPluginStringView* language
     );
 } AgentxxClientSelfIface;
 

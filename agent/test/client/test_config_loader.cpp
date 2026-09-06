@@ -983,10 +983,48 @@ void test_subagent_enable_env_expand() {
     fs::remove(path, ec);
 }
 
+void test_language_config() {
+    // 1. 默认未指定: "en"
+    {
+        auto cfg = loadYaml("data_dir: default\n");
+        XX_TEST_EXPECT_EQ(cfg.language, std::string("en"));
+    }
+    // 2. 显式指定 "zh-cn"
+    {
+        auto cfg = loadYaml("language: zh-cn\n");
+        XX_TEST_EXPECT_EQ(cfg.language, std::string("zh-cn"));
+    }
+    // 3. 显式指定 "en"
+    {
+        auto cfg = loadYaml("language: en\n");
+        XX_TEST_EXPECT_EQ(cfg.language, std::string("en"));
+    }
+    // 4. 不支持 auto: 指定 "auto" 回退为 "en"
+    {
+        auto cfg = loadYaml("language: auto\n");
+        XX_TEST_EXPECT_EQ(cfg.language, std::string("en"));
+    }
+    {
+        auto cfg = loadYaml("language: AUTO\n");
+        XX_TEST_EXPECT_EQ(cfg.language, std::string("en"));
+    }
+    // 5. 空字符串回退为 "en"
+    {
+        auto cfg = loadYaml("language: \"\"\n");
+        XX_TEST_EXPECT_EQ(cfg.language, std::string("en"));
+    }
+    // 6. 支持环境变量展开
+    {
+        auto cfg = loadYamlWithDotEnv("language: ${MY_LANG}\n", {{"MY_LANG", "zh-cn"}});
+        XX_TEST_EXPECT_EQ(cfg.language, std::string("zh-cn"));
+    }
+}
+
 TestResult testConfigLoader() {
     g_config_loader_passed = 0;
     g_config_loader_failed = 0;
 
+    test_language_config();
     test_permission_mode_default_ask();
     test_permission_mode_ask();
     test_permission_mode_all_ask();

@@ -3,6 +3,7 @@
 #include "agentxx-client/io/tui/agent_tui.h"
 #include "agentxx-client/io/tui/components/message_list.h"
 #include "agentxx-client/io/tui/framework/tui_context.h"
+#include "agentxx-client/io/tui/framework/tui_settings.h"
 #include "agentxx-client/io/tui/framework/tui_state.h"
 #include "agentxx-client/io/tui/tui_theme.h"
 #include "agentxx/util/string_util.h"
@@ -797,6 +798,9 @@ TestResult testTuiInterrupt() {
     g_tui_interrupt_passed = 0;
     g_tui_interrupt_failed = 0;
 
+    auto savedLang = TUISettings::instance().language();
+    TUISettings::instance().setLanguage(TuiLanguage::ZhCn);
+
     // bool
     test_bool_render_yes_no();
     test_bool_click_yes_confirms_true();
@@ -834,6 +838,8 @@ TestResult testTuiInterrupt() {
     test_cancel_marks_all_and_notifies();
     test_cancel_rendered();
     test_expired_rendered();
+
+    TUISettings::instance().setLanguage(savedLang);
 
     return TestResult{g_tui_interrupt_passed, g_tui_interrupt_failed};
 }

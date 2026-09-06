@@ -11,6 +11,7 @@
 
 #include "agentxx-client/io/tui/components/overlays.h"
 #include "agentxx-client/io/tui/framework/tui_context.h"
+#include "agentxx-client/io/tui/framework/tui_settings.h"
 #include "agentxx-client/io/tui/framework/tui_state.h"
 #include "agentxx-client/io/tui/tui_theme.h"
 #include "ftxui/component/event.hpp"
@@ -173,6 +174,9 @@ neograph::json makeContextMessages() {
 } // namespace
 
 TestResult testTuiContextOverlay() {
+    auto savedLang = TUISettings::instance().language();
+    TUISettings::instance().setLanguage(TuiLanguage::ZhCn);
+
     // 测试环境无真实终端: 设置大 fallback 尺寸, 使弹窗 OnRender 的
     // Terminal::Size() 计算出的弹窗高度与测试视口一致 (否则固定 24 行,
     // 展开的长 JSON 被滚动裁剪, 断言失败)
@@ -323,6 +327,8 @@ TestResult testTuiContextOverlay() {
         // 滚动偏移已下移 (内容超高时) 或保持 (内容未超高)
         XX_TEST_EXPECT_TRUE(fx.comp->headerBoxes().size() == 4);
     }
+
+    TUISettings::instance().setLanguage(savedLang);
 
     return {g_tui_context_overlay_passed, g_tui_context_overlay_failed};
 }

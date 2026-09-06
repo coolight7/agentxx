@@ -292,7 +292,7 @@ static asio::awaitable<void> test_remote_protocol_roundtrip() {
         }
     }
     {
-        agentxx::agent::WireHello hello{"sess", "tok", 3, "th"};
+        agentxx::agent::WireHello hello{"sess", "tok", 3, "th", "", "zh-cn"};
         auto                      json = WsAgentIOTransport::serialize(WireMessage{hello});
         auto                      back = WsAgentIOTransport::deserialize(json);
         XX_TEST_EXPECT_TRUE(back.has_value());
@@ -303,6 +303,7 @@ static asio::awaitable<void> test_remote_protocol_roundtrip() {
                 XX_TEST_EXPECT_EQ(h->sessionId, std::string("sess"));
                 XX_TEST_EXPECT_EQ(h->token, std::string("tok"));
                 XX_TEST_EXPECT_EQ(h->lastSeq, uint64_t{3});
+                XX_TEST_EXPECT_EQ(h->language, std::string("zh-cn"));
             }
         }
     }
@@ -1978,6 +1979,18 @@ static asio::awaitable<void> test_model_switch_with_next_input() {
     auto sc         = std::make_shared<agentxx::agent::SessionServerAgentIO>(ex, agent, scCfg);
     sc->setTransport(std::shared_ptr<agentxx::agent::AgentIOTransportBase>(std::move(serverT)));
 
+    // 客户端发送带语言的 WireHello (模拟 TUI 连接传入语言)
+    clientT->send(agentxx::agent::WireMessage{
+        agentxx::agent::WireHello{
+            .sessionId = "model-switch-session",
+            .token     = "",
+            .lastSeq   = 0,
+            .tailHash  = "",
+            .model     = "",
+            .language  = "zh-cn",
+        }
+    });
+
     // transport 接收循环 (onPeerMessage 处理客户端消息) + 会话驱动循环 (run)
     asio::co_spawn(
         ex,
@@ -1993,6 +2006,17 @@ static asio::awaitable<void> test_model_switch_with_next_input() {
         },
         asio::detached
     );
+
+    // 验证服务端收到 WireHello 后语言生效
+    bool langApplied = false;
+    for (int i = 0; i < 200; ++i) {
+        if (agent->getLanguage("model-switch-session") == "zh-cn") {
+            langApplied = true;
+            break;
+        }
+        co_await testSleep(ex, std::chrono::milliseconds{50});
+    }
+    XX_TEST_EXPECT_TRUE(langApplied);
 
     // ---- 首条消息携带模型 "model-b": 该轮会话开始时自动切换 ----
     const int req0 = g_da_sim_request_count;

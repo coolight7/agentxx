@@ -590,6 +590,8 @@ public:
     );
     std::string getPluginArgsJson(PluginInstance* inst);
     std::string getPluginConfigPath(PluginInstance* inst);
+    std::string getLanguage();
+    void        setLanguage(std::string_view lang);
 
     std::string getSessionWorkDir();
     std::string getSessionWorkDir(const std::string& threadId);

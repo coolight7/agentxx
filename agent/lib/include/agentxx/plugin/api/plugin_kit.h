@@ -834,6 +834,27 @@ public:
         return res;
     }
 
+    std::string language() const {
+        if (!host || !iface.config || !iface.config->get_language) {
+            return "en";
+        }
+        AgentxxPluginString s{nullptr, 0};
+        if (iface.config->get_language(host, &s) == 0 && s.data) {
+            std::string res(s.data, static_cast<size_t>(s.size));
+            PluginString::free(host, &s);
+            return res;
+        }
+        return "en";
+    }
+
+    bool setLanguage(std::string_view lang) const {
+        if (!host || !iface.config || !iface.config->set_language) {
+            return false;
+        }
+        auto langSv = PluginStringView::from(lang.data(), lang.size());
+        return iface.config->set_language(host, &langSv) == 0;
+    }
+
     bool sessionCancelled(AgentxxPluginStringView tid) const {
         if (!host || !iface.cancel || !iface.cancel->is_cancelled) {
             return false;

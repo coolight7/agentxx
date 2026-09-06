@@ -752,10 +752,92 @@ void testEventQueue() {
 namespace agentxx {
 namespace test {
 
+void testLanguageApis() {
+    FfiMockLLM mock;
+    uint16_t   port = 0;
+    if (!mock.start(port)) {
+        TEST_FAIL << "mock LLM server start failed" << std::endl;
+        g_ffi_failed++;
+        return;
+    }
+    auto mjson   = mock.modelJson();
+    auto mjsonSv = agentxx_string_view(mjson.data(), mjson.size());
+
+    // 1. 默认语言测试: 未配置 language 时默认 "en"
+    {
+        AgentxxString    log{};
+        AgentxxFFIAgent* a = agentxx_ffi_create(nullptr, &mjsonSv, nullptr, &log);
+        XX_TEST_EXPECT_TRUE(a != nullptr);
+
+        // 启动前读取语言
+        AgentxxString langOut{};
+        XX_TEST_EXPECT_EQ(agentxx_ffi_get_language(a, &langOut, &log), AGENTXX_FFI_OK);
+        XX_TEST_EXPECT_TRUE(langOut.data != nullptr);
+        if (langOut.data != nullptr) {
+            XX_TEST_EXPECT_EQ(std::string(langOut.data, langOut.size), std::string("en"));
+        }
+        agentxx_ffi_string_free(&langOut);
+
+        // 启动
+        XX_TEST_EXPECT_EQ(agentxx_ffi_start(a, &log), AGENTXX_FFI_OK);
+
+        // 切换为 zh-cn
+        auto zhSv = agentxx_string_view_cstr("zh-cn");
+        XX_TEST_EXPECT_EQ(agentxx_ffi_set_language(a, &zhSv, &log), AGENTXX_FFI_OK);
+
+        XX_TEST_EXPECT_EQ(agentxx_ffi_get_language(a, &langOut, &log), AGENTXX_FFI_OK);
+        XX_TEST_EXPECT_TRUE(langOut.data != nullptr);
+        if (langOut.data != nullptr) {
+            XX_TEST_EXPECT_EQ(std::string(langOut.data, langOut.size), std::string("zh-cn"));
+        }
+        agentxx_ffi_string_free(&langOut);
+
+        // 不支持 auto: 设为 auto 自动回退为 en
+        auto autoSv = agentxx_string_view_cstr("auto");
+        XX_TEST_EXPECT_EQ(agentxx_ffi_set_language(a, &autoSv, &log), AGENTXX_FFI_OK);
+
+        XX_TEST_EXPECT_EQ(agentxx_ffi_get_language(a, &langOut, &log), AGENTXX_FFI_OK);
+        XX_TEST_EXPECT_TRUE(langOut.data != nullptr);
+        if (langOut.data != nullptr) {
+            XX_TEST_EXPECT_EQ(std::string(langOut.data, langOut.size), std::string("en"));
+        }
+        agentxx_ffi_string_free(&langOut);
+
+        // 错误参数校验
+        XX_TEST_EXPECT_EQ(agentxx_ffi_get_language(nullptr, &langOut, nullptr), AGENTXX_FFI_ERR_INVALID);
+        XX_TEST_EXPECT_EQ(agentxx_ffi_get_language(a, nullptr, nullptr), AGENTXX_FFI_ERR_INVALID);
+        XX_TEST_EXPECT_EQ(agentxx_ffi_set_language(nullptr, &zhSv, nullptr), AGENTXX_FFI_ERR_INVALID);
+
+        XX_TEST_EXPECT_EQ(agentxx_ffi_stop(a, &log), AGENTXX_FFI_OK);
+        XX_TEST_EXPECT_EQ(agentxx_ffi_destroy(a, &log), AGENTXX_FFI_OK);
+    }
+
+    // 2. config_json 指定初始 language: "zh-cn"
+    {
+        AgentxxString    log{};
+        std::string      cfgStr = "{\"language\": \"zh-cn\"}";
+        auto             cfgSv  = agentxx_string_view_cstr(cfgStr.c_str());
+        AgentxxFFIAgent* a      = agentxx_ffi_create(&cfgSv, &mjsonSv, nullptr, &log);
+        XX_TEST_EXPECT_TRUE(a != nullptr);
+
+        AgentxxString langOut{};
+        XX_TEST_EXPECT_EQ(agentxx_ffi_get_language(a, &langOut, &log), AGENTXX_FFI_OK);
+        XX_TEST_EXPECT_TRUE(langOut.data != nullptr);
+        if (langOut.data != nullptr) {
+            XX_TEST_EXPECT_EQ(std::string(langOut.data, langOut.size), std::string("zh-cn"));
+        }
+        agentxx_ffi_string_free(&langOut);
+
+        XX_TEST_EXPECT_EQ(agentxx_ffi_destroy(a, &log), AGENTXX_FFI_OK);
+    }
+    mock.stop();
+}
+
 agentxx::test::TestResult testFfiCApi() {
     testVersionAndMemory();
     testCreateInvalid();
     testLifecycleAndConversation();
+    testLanguageApis();
     testHilInterrupt();
     testCancel();
     testMultipleRuntimesConcurrent();

@@ -120,6 +120,7 @@ private:
     std::atomic<uint64_t> lastDeltaSeq_{0};
     std::string           lastTailHash_;
     std::string           helloSessionId_; // 首次 connect 时的 sessionId, 重连时复用
+    std::string           helloLanguage_;  // 首次 connect 时的 language, 重连时复用
 
     /// 握手期间 (connect 等待 HelloAck) 到达的非 HelloAck 消息 (仅 ex_ 线程访问)
     /// - 协议上服务端先发 HelloAck 再重放, 正常为空; 防御性保留先于 HelloAck

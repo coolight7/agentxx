@@ -109,10 +109,11 @@ asio::awaitable<bool> WsAgentIOTransport::connect(const WireHello& hello) {
 
     // 记录 sessionId 供重连时复用
     helloSessionId_ = hello.sessionId;
+    helloLanguage_  = hello.language;
 
     // 客户端模式：发送 hello 并等待 helloAck
     // 注意：HelloAck 在此处被处理 (仅用于握手判断), 不会传递给 runTransportLoop 的调用方
-    auto helloJson = io::makeHello(hello.sessionId, hello.token, hello.lastSeq, hello.tailHash);
+    auto helloJson = io::makeHello(hello.sessionId, hello.token, hello.lastSeq, hello.tailHash, hello.language);
     writeQueue_->try_send(ErrorCode{}, helloJson.dump());
 
     // 等待 HelloAck; 超时或 channel 关闭时按连接失败处理
@@ -358,7 +359,8 @@ asio::awaitable<void> WsAgentIOTransport::readLoop() {
                 helloSessionId_,
                 token_,
                 lastDeltaSeq_.load(std::memory_order_acquire),
-                lastTailHash_
+                lastTailHash_,
+                helloLanguage_
             );
             writeQueue_->try_send(ErrorCode{}, helloJson.dump());
             reconnected = true;
@@ -440,7 +442,7 @@ std::string WsAgentIOTransport::serialize(const WireMessage& msg) {
         [](const auto& m) -> std::string {
             using T = std::decay_t<decltype(m)>;
             if constexpr (std::is_same_v<T, WireHello>) {
-                return io::makeHello(m.sessionId, m.token, m.lastSeq, m.tailHash).dump();
+                return io::makeHello(m.sessionId, m.token, m.lastSeq, m.tailHash, m.language).dump();
             } else if constexpr (std::is_same_v<T, WireHelloAck>) {
                 return io::makeHelloAck(m.ok, m.sessionId, m.tailHash, m.models, m.plugins).dump();
             } else if constexpr (std::is_same_v<T, WireUserInput>) {
@@ -618,6 +620,7 @@ std::optional<WireMessage> WsAgentIOTransport::deserialize(std::string_view json
         hello.token     = j.value("token", std::string{});
         hello.lastSeq   = j.value("lastSeq", uint64_t{0});
         hello.tailHash  = j.value("tailHash", std::string{});
+        hello.language  = j.value("language", std::string{});
         return WireMessage{std::move(hello)};
     } else if (t == io::MsgType::UserInput) {
         WireUserInput input;

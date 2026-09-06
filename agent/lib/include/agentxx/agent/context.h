@@ -310,10 +310,23 @@ public:
         return worktreeBinding_;
     }
 
+    /// 设置本会话使用的语言 (仅 io 线程; 不支持 auto, 空或 auto 回退 "en")
+    void setLanguage(std::string_view lang) {
+        assertIoThread();
+        language_ = normalizeLanguage(lang);
+    }
+
+    /// 获取本会话使用的语言 (仅 io 线程, 为空表示未单独设置)
+    std::string getLanguage() const {
+        assertIoThread();
+        return language_;
+    }
+
 private:
 
     std::shared_ptr<neograph::graph::CancelToken> cancelToken_ = nullptr;
     std::string                                   modelName_;
+    std::string                                   language_;
     uint64_t                                      msgIdCounter_ = 0;
 
     /// worktree 绑定 (仅 io 线程读写; path 为空 = 未绑定)
@@ -504,6 +517,38 @@ public:
 
     /// 清除会话工作目录覆写 (该会话回退 AgentConfig::resolvedWorkDir)
     void clearSessionWorkDir(std::string_view sessionId);
+
+    /// 获取语言: 优先返回指定 session 的语言, 若为空回退到 agentConfig->language, 最终兜底 "en"
+    std::string getLanguage(std::string_view sessionId = "") const {
+        if (!sessionId.empty() && sessions) {
+            auto sess = sessions->get(sessionId);
+            if (sess) {
+                auto l = sess->getLanguage();
+                if (!l.empty()) {
+                    return l;
+                }
+            }
+        }
+        if (agentConfig && !agentConfig->language.empty()) {
+            return agentConfig->language;
+        }
+        return "en";
+    }
+
+    /// 设置语言: 不支持 auto, 空或 auto 归一化为 "en"
+    /// 若 sessionId 非空则设置会话独立语言, 同时同步更新 agentConfig->language; 若 sessionId 为空则仅更新 agentConfig->language
+    void setLanguage(std::string_view lang, std::string_view sessionId = "") {
+        auto norm = normalizeLanguage(lang);
+        if (!sessionId.empty() && sessions) {
+            auto sess = sessions->get(sessionId);
+            if (sess) {
+                sess->setLanguage(norm);
+            }
+        }
+        if (agentConfig) {
+            agentConfig->language = norm;
+        }
+    }
 
     std::string getSessionCurrentModelName(std::string_view sessionId) const;
     // 可能会变，建议仅在同步代码中使用

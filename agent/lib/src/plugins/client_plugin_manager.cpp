@@ -1866,6 +1866,44 @@ int32_t AGENTXX_PLUGIN_CALL
     });
 }
 
+static int32_t AGENTXX_PLUGIN_CALL
+    xx_cget_language(const AgentxxPluginHost* host, AgentxxPluginString* out) {
+    return agentxx::plugin::guardVtableCall(-1, [&]() -> int32_t {
+        if (!out) {
+            return -1;
+        }
+        auto mgr = clientMgrOf(host);
+        if (!mgr) {
+            return -1;
+        }
+        auto s = ioCallSync<std::string>(mgr, [&]() -> std::string {
+            return mgr->getLanguage();
+        });
+        if (s.empty()) {
+            s = "en";
+        }
+        hostMemorySetString(out, s);
+        return 0;
+    });
+}
+
+static int32_t AGENTXX_PLUGIN_CALL
+    xx_cset_language(const AgentxxPluginHost* host, const AgentxxPluginStringView* language) {
+    return agentxx::plugin::guardVtableCall(-1, [&]() -> int32_t {
+        auto mgr = clientMgrOf(host);
+        if (!mgr) {
+            return -1;
+        }
+        std::string lang = (language && language->data)
+                               ? std::string(language->data, static_cast<size_t>(language->size))
+                               : std::string{};
+        ioCallSyncVoid(mgr, [&]() {
+            mgr->setLanguage(lang);
+        });
+        return 0;
+    });
+}
+
 /// "agentxx.client.ui" 展示接口表访问器: 表内成员恒非空 (函数实现存在), 子能力是否
 /// 可用由各 register 入口的 hostSupportedInterfaces 门禁决定 (拒绝时返回
 /// NULL/非 0) —— 与接口表 "NULL = 不支持" 契约的分工: 表级 NULL 用于宿主
@@ -1923,6 +1961,8 @@ const AgentxxClientSelfIface g_clientIfaceSelf = {
     /* get_own_info */ xx_cget_own_info,
     /* get_plugin_args */ xx_cget_plugin_args,
     /* get_plugin_config_path */ xx_cget_plugin_config_path,
+    /* get_language */ xx_cget_language,
+    /* set_language */ xx_cset_language,
 };
 
 const AgentxxClientJsonIface g_clientIfaceJson = {

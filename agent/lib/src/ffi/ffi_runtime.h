@@ -110,6 +110,8 @@ public:
     int selectModel(std::string_view modelName, std::string& err);
     int setPermission(std::string_view path, int allow, int op, std::string& err);
     int switchSession(std::string_view sessionId, std::string& err);
+    int setLanguage(std::string_view language, std::string& err);
+    std::string getLanguage(std::string& err);
 
     // -------------------------------------------------------------------
     // 同步查询 (阻塞等待服务端应答, 最长 10s; 返回 JSON 字符串或空)
@@ -238,6 +240,10 @@ private:
     mutable std::mutex          logMutex_;
     std::deque<LogItem>         logRing_;
     static constexpr size_t     kLogRingCap = 512;
+
+    // ---- 语言设置 (langMutex_ 保护) ----
+    mutable std::mutex langMutex_;
+    std::string        language_ = "en";
 };
 
 } // namespace ffi
