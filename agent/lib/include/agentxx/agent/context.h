@@ -3,6 +3,7 @@
 #include "agentxx/agent/config.h"
 #include "agentxx/agent/conversation_types.h"
 #include "agentxx/util/log.h"
+#include "asio/awaitable.hpp"
 #include "asio/thread_pool.hpp"
 #include <atomic>
 #include <cassert>
@@ -380,10 +381,14 @@ private:
 class SessionsManager {
 public:
 
-    /// 获取或创建指定 sessionId 的会话
-    /// - 创建时若已注入持久化 (sessionStore), 从 SQLite 恢复该 thread 的
-    ///   历史消息/LLM 上下文, 并绑定持久化回调
+    /// 获取或创建指定 sessionId 的会话 (同步版本: 若未加载且有 sessionStore 则同步加载, 供非协程上下文兜底)
     std::shared_ptr<Session> getOrCreate(std::string_view sessionId);
+
+    /// 获取或创建指定 sessionId 的会话 (异步版本: 若未加载且有 pool, 卸载 loadSession 到线程池, 避免卡住 io 线程)
+    asio::awaitable<std::shared_ptr<Session>> getOrCreateAsync(
+        std::string_view   sessionId,
+        asio::thread_pool* pool = nullptr
+    );
 
     /// 获取指定 sessionId 的会话; 不存在时返回 nullptr
     std::shared_ptr<Session> get(std::string_view sessionId);
@@ -500,8 +505,11 @@ public:
         = std::make_shared<asio::thread_pool>(std::max(2u, std::thread::hardware_concurrency() / 2)
         );
 
-    /// 便捷方法：获取或创建指定 sessionId 的会话
+    /// 便捷方法：获取或创建指定 sessionId 的会话 (同步)
     std::shared_ptr<Session> getSession(std::string_view sessionId);
+
+    /// 便捷方法：异步获取或创建指定 sessionId 的会话 (自动利用 threadPool 卸载 SQLite 阻塞 IO)
+    asio::awaitable<std::shared_ptr<Session>> getSessionAsync(std::string_view sessionId);
 
     /// 统一的会话工作目录取值入口 (getSessionWorkDir; 全部使用方经此取值,
     /// 不直接读进程 cwd / AgentConfig::workDir):
