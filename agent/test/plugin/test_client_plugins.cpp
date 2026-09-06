@@ -1202,6 +1202,107 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         }
     }
 
+    // ---- 15b. agentxx_filesystem client 插件: glob/grep 渲染兼容单字符串参数 ----
+    // 真实会话中 LLM 常把 file_patterns/text_patterns/regex_patterns 下发为
+    // 单个字符串而非数组; 渲染回调取不到数组时摘要退化为空, 折叠头丢失检索参数。
+    // 此处用真实插件的注册回调覆盖: 数组 / 单字符串 / 混合 text+regex。
+    {
+        auto fsPath = findPluginPath("agentxx_filesystem");
+        auto fsInst = co_await mgr->loadNativeAsync(fsPath);
+        XX_TEST_EXPECT_TRUE(fsInst != nullptr);
+        if (fsInst) {
+            auto reg = mgr->uiRegistrySnapshot();
+            XX_TEST_EXPECT_TRUE(reg != nullptr);
+
+            // glob 数组形态 (旧行为, 回归保护)
+            auto globArr = agentxx::plugin::renderClientTool(
+                reg.get(),
+                "call_glob_arr",
+                "agentxx_filesystem_glob",
+                R"({"file_patterns":["a","b","c","d"]})",
+                "",
+                true,
+                false,
+                100
+            );
+            XX_TEST_EXPECT_TRUE(globArr.matched);
+            XX_TEST_EXPECT_EQ(globArr.displayName, "Glob");
+            XX_TEST_EXPECT_TRUE(globArr.summary.find("a, b, ...") != std::string::npos);
+
+            // glob 单字符串形态 (真实 LLM 下发形态)
+            auto globStr = agentxx::plugin::renderClientTool(
+                reg.get(),
+                "call_glob_str",
+                "agentxx_filesystem_glob",
+                R"({"file_patterns":"agent/test/*.cpp"})",
+                "",
+                true,
+                false,
+                100
+            );
+            XX_TEST_EXPECT_TRUE(globStr.matched);
+            XX_TEST_EXPECT_EQ(globStr.displayName, "Glob");
+            XX_TEST_EXPECT_TRUE(
+                globStr.summary.find("agent/test/*.cpp") != std::string::npos
+            );
+
+            // grep 数组形态 (旧行为, 回归保护)
+            auto grepArr = agentxx::plugin::renderClientTool(
+                reg.get(),
+                "call_grep_arr",
+                "agentxx_filesystem_grep",
+                R"({"text_patterns":["foo"],"file_patterns":["src/**/*.h"]})",
+                "",
+                true,
+                false,
+                100
+            );
+            XX_TEST_EXPECT_TRUE(grepArr.matched);
+            XX_TEST_EXPECT_EQ(grepArr.displayName, "Grep");
+            XX_TEST_EXPECT_TRUE(grepArr.summary.find(R"("foo")") != std::string::npos);
+            XX_TEST_EXPECT_TRUE(grepArr.summary.find("src/**/*.h") != std::string::npos);
+
+            // grep 单字符串形态 (真实 LLM 下发形态: file/text 均为单字符串)
+            auto grepStr = agentxx::plugin::renderClientTool(
+                reg.get(),
+                "call_grep_str",
+                "agentxx_filesystem_grep",
+                R"({"text_patterns":"startDaSimServer","file_patterns":"agent/test/core/test_agent.cpp"})",
+                "",
+                true,
+                false,
+                100
+            );
+            XX_TEST_EXPECT_TRUE(grepStr.matched);
+            XX_TEST_EXPECT_EQ(grepStr.displayName, "Grep");
+            XX_TEST_EXPECT_TRUE(
+                grepStr.summary.find(R"("startDaSimServer")") != std::string::npos
+            );
+            XX_TEST_EXPECT_TRUE(
+                grepStr.summary.find("agent/test/core/test_agent.cpp") != std::string::npos
+            );
+
+            // grep 混合形态: 单字符串 text + 数组 regex (摘要合并展示)
+            auto grepMix = agentxx::plugin::renderClientTool(
+                reg.get(),
+                "call_grep_mix",
+                "agentxx_filesystem_grep",
+                R"({"text_patterns":"hello","regex_patterns":["world"],"file_patterns":["src/**/*.txt"]})",
+                "",
+                true,
+                false,
+                100
+            );
+            XX_TEST_EXPECT_TRUE(grepMix.matched);
+            XX_TEST_EXPECT_TRUE(grepMix.summary.find(R"("hello")") != std::string::npos);
+            XX_TEST_EXPECT_TRUE(grepMix.summary.find(R"("world")") != std::string::npos);
+            XX_TEST_EXPECT_TRUE(grepMix.summary.find("src/**/*.txt") != std::string::npos);
+
+            co_await mgr->unloadAsync("agentxx_filesystem");
+            XX_TEST_EXPECT_TRUE(mgr->find("agentxx_filesystem") == nullptr);
+        }
+    }
+
     // ---- 16. agentxx_websearch client 插件: 工具特化渲染 (模版) ----
     {
         auto wsPath = findPluginPath("agentxx_websearch");

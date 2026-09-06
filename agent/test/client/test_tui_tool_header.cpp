@@ -114,7 +114,26 @@ std::shared_ptr<agentxx::plugin::ClientUiRegistry> makeTestToolRegistry() {
         .renderFn = readFn,
     });
 
-    // Glob (回调)
+    // Glob (回调; 与真实插件回调同语义: 兼容单字符串/数组)
+    // - 提取逻辑镜像 agentxx_fs_plugin::stringListArg (单字符串包装为单元素
+    //   列表, 数组逐项提取字符串), 保证夹具摘要与真实渲染一致
+    static auto globFilesOf = [](const neograph::json& j) -> std::vector<std::string> {
+        std::vector<std::string> out;
+        if (!j.is_object() || !j.contains("file_patterns")) {
+            return out;
+        }
+        const auto& v = j["file_patterns"];
+        if (v.is_string()) {
+            out.push_back(v.get<std::string>());
+        } else if (v.is_array()) {
+            for (const auto& item : v) {
+                if (item.is_string()) {
+                    out.push_back(item.get<std::string>());
+                }
+            }
+        }
+        return out;
+    };
     static auto globFn
         = [](void*, const AgentxxToolRenderInput* in, AgentxxToolRenderOutput* out) -> int32_t {
         std::string_view args(in->args_json.data ? in->args_json.data : "", in->args_json.size);
@@ -127,7 +146,7 @@ std::shared_ptr<agentxx::plugin::ClientUiRegistry> makeTestToolRegistry() {
         if (!j.is_object()) {
             return -1;
         }
-        auto         files = j.value("file_patterns", std::vector<std::string>{});
+        auto         files = globFilesOf(j);
         std::string  joined;
         const size_t n = std::min<size_t>(files.size(), 2);
         for (size_t i = 0; i < n; ++i) {
@@ -149,7 +168,26 @@ std::shared_ptr<agentxx::plugin::ClientUiRegistry> makeTestToolRegistry() {
         .renderFn = globFn,
     });
 
-    // Grep (回调)
+    // Grep (回调; 与真实插件回调同语义: 兼容单字符串/数组)
+    static auto grepListOf
+        = [](const neograph::json& j, std::string_view key) -> std::vector<std::string> {
+        std::vector<std::string> out;
+        std::string              k{key};
+        if (!j.is_object() || !j.contains(k)) {
+            return out;
+        }
+        const auto& v = j[k];
+        if (v.is_string()) {
+            out.push_back(v.get<std::string>());
+        } else if (v.is_array()) {
+            for (const auto& item : v) {
+                if (item.is_string()) {
+                    out.push_back(item.get<std::string>());
+                }
+            }
+        }
+        return out;
+    };
     static auto grepFn
         = [](void*, const AgentxxToolRenderInput* in, AgentxxToolRenderOutput* out) -> int32_t {
         std::string_view args(in->args_json.data ? in->args_json.data : "", in->args_json.size);
@@ -162,9 +200,9 @@ std::shared_ptr<agentxx::plugin::ClientUiRegistry> makeTestToolRegistry() {
         if (!j.is_object()) {
             return -1;
         }
-        auto                     textPats  = j.value("text_patterns", std::vector<std::string>{});
-        auto                     regexPats = j.value("regex_patterns", std::vector<std::string>{});
-        auto                     files     = j.value("file_patterns", std::vector<std::string>{});
+        auto textPats  = grepListOf(j, "text_patterns");
+        auto regexPats = grepListOf(j, "regex_patterns");
+        auto files     = grepListOf(j, "file_patterns");
         std::vector<std::string> shown;
         for (const auto& p : textPats) {
             if (shown.size() >= 2) {
@@ -480,6 +518,9 @@ void testTuiToolHeaderFilesystem() {
     XX_TEST_EXPECT_TRUE(f.render().find("Glob · agent/lib/**/*.cpp") != std::string::npos);
     f.pushTool("agentxx_filesystem_glob", R"({"file_patterns":["a","b","c","d"]})");
     XX_TEST_EXPECT_TRUE(f.render().find("Glob · a, b, ...") != std::string::npos);
+    // glob: LLM 实际下发的单字符串形态 (非数组) 同样展示检索路径
+    f.pushTool("agentxx_filesystem_glob", R"({"file_patterns":"agent/test/*.cpp"})");
+    XX_TEST_EXPECT_TRUE(f.render().find("Glob · agent/test/*.cpp") != std::string::npos);
 
     // grep: 引号包裹的匹配模式 (参数区, 中括号) + 文件模式 (主参数)
     f.pushTool(
@@ -487,6 +528,15 @@ void testTuiToolHeaderFilesystem() {
         R"({"text_patterns":["foo"],"file_patterns":["src/**/*.h"]})"
     );
     XX_TEST_EXPECT_TRUE(f.render().find(R"(Grep · ["foo"] src/**/*.h)") != std::string::npos);
+    // grep: LLM 实际下发的单字符串形态 (file/text 均为单字符串) 同样展示参数
+    f.pushTool(
+        "agentxx_filesystem_grep",
+        R"({"text_patterns":"startDaSimServer","file_patterns":"agent/test/core/test_agent.cpp"})"
+    );
+    XX_TEST_EXPECT_TRUE(
+        f.render().find(R"(Grep · ["startDaSimServer"] agent/test/core/test_agent.cpp)")
+        != std::string::npos
+    );
     f.pushTool(
         "agentxx_filesystem_grep",
         R"({"text_patterns":["a","b","c"],"file_patterns":["agent/**/*.cpp"]})"
