@@ -302,6 +302,15 @@ asio::awaitable<events::RespSubagentBatchItem> AgentHost::spawnOneTask(
     std::shared_ptr<neograph::graph::CancelToken> cancelToken,
     std::shared_ptr<AgentContext>                 parentAgentCtx
 ) {
+    if (cancelToken && cancelToken->is_cancelled()) {
+        co_return events::RespSubagentBatchItem{
+            .resultId     = task.resultId,
+            .hasError     = true,
+            .cancelled    = true,
+            .errorMessage = "Subagent cancelled before execution",
+        };
+    }
+
     const auto& subagentName = task.subagentName;
     // ---- 宿主预算检查 (深度 / 并发) ----
     size_t parentDepth = 0;
@@ -651,11 +660,20 @@ asio::awaitable<events::RespSubagentBatchItem> AgentHost::spawnOneTask(
             );
 
             events::RespSubagentBatchItem respItem;
-            if (runnerOutcome.unresolvedInterrupt) {
+            if (cancelToken && cancelToken->is_cancelled()) {
+                respItem = events::RespSubagentBatchItem{
+                    .resultId     = task.resultId,
+                    .hasError     = true,
+                    .cancelled    = true,
+                    .errorMessage = "Sub-agent cancelled",
+                    .agentId      = agentId,
+                };
+            } else if (runnerOutcome.unresolvedInterrupt) {
                 // 中断仍未完成 (无处理者/未响应): 显式报错
                 respItem = events::RespSubagentBatchItem{
                     .resultId     = task.resultId,
                     .hasError     = true,
+                    .cancelled    = false,
                     .errorMessage = fmt::format(
                         "Sub-agent interrupted at node `{}` (interrupt not handled in subagent scope)",
                         runnerOutcome.interruptNode
@@ -664,9 +682,11 @@ asio::awaitable<events::RespSubagentBatchItem> AgentHost::spawnOneTask(
                 };
             } else {
                 respItem = events::RespSubagentBatchItem{
-                    .resultId = task.resultId,
-                    .content  = oss.str(),
-                    .agentId  = agentId,
+                    .resultId  = task.resultId,
+                    .content   = oss.str(),
+                    .hasError  = false,
+                    .cancelled = false,
+                    .agentId   = agentId,
                 };
             }
             publishProgress(agentId, node->parentAgentId, "turn_end", "");
@@ -699,6 +719,7 @@ asio::awaitable<events::RespSubagentBatchItem> AgentHost::spawnOneTask(
             co_return events::RespSubagentBatchItem{
                 .resultId     = task.resultId,
                 .hasError     = true,
+                .cancelled    = false,
                 .errorMessage = fmt::format("Sub-agent failed: {}", errmsg),
                 .agentId      = agentId,
             };
@@ -708,6 +729,7 @@ asio::awaitable<events::RespSubagentBatchItem> AgentHost::spawnOneTask(
             return events::RespSubagentBatchItem{
                 .resultId     = task.resultId,
                 .hasError     = true,
+                .cancelled    = true,
                 .errorMessage = fmt::format("Sub-agent cancelled: {}", errmsg),
                 .agentId      = agentId,
             };
@@ -781,9 +803,19 @@ asio::awaitable<events::RespSubagentBatch> AgentHost::spawnBatch(
                         co_return events::RespSubagentBatchItem{
                             .resultId     = task.resultId,
                             .hasError     = true,
+                            .cancelled    = false,
                             .errorMessage = fmt::format("Sub-agent failed: {}", std::move(errmsg)),
                         };
-                    }
+                    },
+                    [&task](std::string& errmsg) -> std::optional<events::RespSubagentBatchItem> {
+                        return events::RespSubagentBatchItem{
+                            .resultId     = task.resultId,
+                            .hasError     = true,
+                            .cancelled    = true,
+                            .errorMessage = fmt::format("Sub-agent cancelled: {}", std::move(errmsg)),
+                        };
+                    },
+                    cancelToken
                 );
                 (*results)[i] = std::move(r);
             },

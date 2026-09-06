@@ -153,17 +153,18 @@ asio::awaitable<AgentRunner::Outcome> AgentRunner::run(
                                     );
                 }
                 if (batchResp.has_value()) {
-                    // 取消检查: 子代理被取消 (返回 cancelled 错误项) 时不写回
-                    // resume 值, 由外层统一按取消处理, 避免把
-                    // `{"error":"...cancelled..."}` 当摘要/结果 resume 后继续执行
+                    // 取消检查: 子代理被取消 (返回 cancelled 结构化字段置位) 时不写回
+                    // resume 值, 由外层统一按取消处理, 避免把结果当正常摘要/结果 resume 后继续执行
                     bool subagentCancelled = false;
                     for (const auto& r : batchResp->results) {
-                        if (r.hasError
-                            && (r.errorMessage.find("cancel") != std::string::npos
-                                || r.errorMessage.find("Cancel") != std::string::npos
-                                || r.errorMessage.find("取消") != std::string::npos
-                                || r.errorMessage.find("中断") != std::string::npos)) {
+                        if (r.cancelled) {
                             subagentCancelled = true;
+                            XX_LOGI(
+                                "AgentRunner `{}` subagent delegation cancelled: resultId={}, msg={}",
+                                sessionId,
+                                r.resultId,
+                                r.errorMessage
+                            );
                             break;
                         }
                     }
