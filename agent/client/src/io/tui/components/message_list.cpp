@@ -1013,7 +1013,11 @@ LazyBuiltItem MessageListComponent::buildMessageItem(const TUIMessage& msg, size
     const int maxWidth = std::max(1, scrollable_->contentWidth());
 
     std::vector<std::unique_ptr<markdown::DomBuilder>> builders;
-    auto block = buildMessageBlock(msg, index, maxWidth, builders);
+    const size_t decorHitsBefore     = decorHits_.size();
+    const size_t interruptHitsBefore = interruptHits_.size();
+    auto         block               = buildMessageBlock(msg, index, maxWidth, builders);
+    const bool   hasDecorHits        = (decorHits_.size() > decorHitsBefore);
+    const bool   hasInterruptHits    = (interruptHits_.size() > interruptHitsBefore);
 
     LazyBuiltItem out;
     out.element           = vbox({std::move(block), text("")});
@@ -1026,16 +1030,33 @@ LazyBuiltItem MessageListComponent::buildMessageItem(const TUIMessage& msg, size
     out.sourceBytes = srcBytes * 64;
     // 中断消息不缓存: 每帧重建以刷新控件 reflect 命中区域 (interruptHits_),
     // 否则缓存命中时控件 Box 丢失, 点击无法命中; 中断消息数量少, 成本可忽略
+    // 带有可点击 decor 按钮的工具消息同样不缓存: 每帧重建以刷新 decorHits_,
+    // 避免缓存命中时 reflect 持有的 Box 随 decorHits_.clear() 被释放导致 UAF,
+    // 且保证每帧点击命中区域有效
     // 运行中的 Tool 消息在头部使用加载动画时同样不缓存: 缓存命中的旧 Element
     // 是静止帧快照, 点阵不会随动画推进转动; 每帧重建仅此一条消息, 成本可忽略
     // (动画等级不足时保持可缓存, 与原行为一致)
     const bool runToolAnimating = msg.role == TUIMessage::Role::Tool && msg.tool
                                   && !msg.tool->toolFinished && runSpinner_->animationEnabled();
-    out.cacheable = (msg.role != TUIMessage::Role::Interrupt) && !runToolAnimating;
+    out.cacheable = (msg.role != TUIMessage::Role::Interrupt) && !hasInterruptHits
+                    && !runToolAnimating && !hasDecorHits;
     // markdown DomBuilder 生命周期与 Element 绑定
     // (Element 内 reflect 的链接 Box 指向 builder 内部容器)
     for (auto& b : builders) {
         out.attachments.push_back(std::move(b));
+    }
+    // 控件 Box 的生命周期与 Element 绑定:
+    // 即使 decorHits_ / interruptHits_ 在下一帧被清空, Reflect 所引用的 Box
+    // 也由 Element 的 attachments 持有而不会被提前析构, 杜绝 UAF 悬空指针
+    for (size_t i = decorHitsBefore; i < decorHits_.size(); ++i) {
+        if (decorHits_[i].box) {
+            out.attachments.push_back(decorHits_[i].box);
+        }
+    }
+    for (size_t i = interruptHitsBefore; i < interruptHits_.size(); ++i) {
+        if (interruptHits_[i].box) {
+            out.attachments.push_back(interruptHits_[i].box);
+        }
     }
     return out;
 }
@@ -2047,13 +2068,10 @@ Element MessageListComponent::buildInterruptControl(const TUIMessage& msg, size_
         });
     } else if (id.inputType == "enum") {
         // 枚举项竖直列表 (选中项高亮)
-        enumBoxes_.resize(id.inputEnums.size());
         Elements items;
         for (size_t i = 0; i < id.inputEnums.size(); ++i) {
-            if (!enumBoxes_[i]) {
-                enumBoxes_[i] = mkBox();
-            }
-            auto entry = text(fmt::format(
+            auto enumBox = mkBox();
+            auto entry   = text(fmt::format(
                 " {} {}",
                 (static_cast<int>(i) == ui.selected) ? "▸" : " ",
                 id.inputEnums[i]
@@ -2064,8 +2082,8 @@ Element MessageListComponent::buildInterruptControl(const TUIMessage& msg, size_
             } else {
                 entry = entry | color(theme.buttonTextColor);
             }
-            entry = entry | reflect(*enumBoxes_[i]);
-            hit(kHitEnumItem, static_cast<int>(i), enumBoxes_[i]);
+            entry = entry | reflect(*enumBox);
+            hit(kHitEnumItem, static_cast<int>(i), enumBox);
             items.push_back(entry);
         }
         // 底部操作行: 确认 + 取消

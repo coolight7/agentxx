@@ -88,6 +88,20 @@ public:
         std::shared_ptr<ftxui::Box> box;
     };
 
+    /// decor 按钮命中盒 (UI 线程独占; 与 interruptHits_ 同生命期):
+    /// - OnRender 开头清空, 本帧 scrollable_->Render() 中构建可见 Tool 消息的
+    ///   decor 按钮时填充 (buildMessageBlock → appendDecorItems)
+    /// - box 经 shared_ptr 持有 (reflect 在布局 SetBox 时写回, 与中断控件同机制;
+    ///   构建阶段记录值为空 Box, 点击读最新布局位置)
+    /// - 点击命中后拷贝 (plugin/ownerId/actionId/argsJson) 经 dispatchAction 投递
+    struct DecorHitBox {
+        std::string                 plugin;
+        std::string                 ownerId;
+        std::string                 actionId;
+        std::string                 argsJson;
+        std::shared_ptr<ftxui::Box> box;
+    };
+
     explicit MessageListComponent(TUICtx& ctx);
 
     ftxui::Element OnRender() override;
@@ -173,6 +187,11 @@ public:
     /// 命中 decorHits_ 后经 pluginManager->dispatchAction 投递 io 线程派发
     bool handleDecorButtonClick(const ftxui::Mouse& mouse);
 
+    /// 测试辅助: 最近一次渲染的 decor 按钮命中区域
+    const std::vector<DecorHitBox>& decorHitBoxes() const {
+        return decorHits_;
+    }
+
     /// 测试辅助: 当前激活的中断消息索引 (npos = 无)
     size_t activeInterruptMsg() const {
         return activeInterruptMsg_;
@@ -205,20 +224,6 @@ private:
     /// 点击时命中检测; 与 collapsibleBoxes_ 生命周期一致)
     std::vector<InterruptHitBox> interruptHits_;
 
-    /// decor 按钮命中盒 (UI 线程独占; 与 interruptHits_ 同生命期):
-    /// - OnRender 开头清空, 本帧 scrollable_->Render() 中构建可见 Tool 消息的
-    ///   decor 按钮时填充 (buildMessageBlock → appendDecorItems)
-    /// - box 经 shared_ptr 持有 (reflect 在布局 SetBox 时写回, 与中断控件同机制;
-    ///   构建阶段记录值为空 Box, 点击读最新布局位置)
-    /// - 点击命中后拷贝 (plugin/ownerId/actionId/argsJson) 经 dispatchAction 投递
-    struct DecorHitBox {
-        std::string                 plugin;
-        std::string                 ownerId;
-        std::string                 actionId;
-        std::string                 argsJson;
-        std::shared_ptr<ftxui::Box> box;
-    };
-
     std::vector<DecorHitBox> decorHits_;
 
     /// 连接失败 banner 的"重试"按钮命中区域 (UI 线程独占; buildBanner 渲染时
@@ -226,9 +231,6 @@ private:
     ftxui::Box retryButtonBox_;
     /// 当前激活编辑的中断消息索引 (点击输入框/控件时设置, Esc 清除)
     size_t activeInterruptMsg_ = static_cast<size_t>(-1);
-
-    // ---- 中断控件 Box (渲染时 reflect 填充; 由 interruptHits_ 持 shared_ptr 引用) ----
-    std::vector<std::shared_ptr<ftxui::Box>> enumBoxes_;
 
     // ---- 中断消息交互 ----
     /// 点击命中中断控件 (是/否、±、枚举项、输入框、确认、取消); 命中返回 true
@@ -353,16 +355,6 @@ private:
         ftxui::Elements&                        lines,
         int                                     maxWidth
     );
-
-    /// 测试辅助: 最近一次构建的 decor 按钮命中 (与 decorHits_ 对应)
-    struct DecorHit {
-        ftxui::Box box; ///< reflect 填充 (值拷贝; 构建期布局前为空, 布局后由 FTXUI
-                        ///< 写回需经引用——见实现注释)
-        std::string plugin;
-        std::string ownerId;
-        std::string actionId;
-        std::string argsJson;
-    };
 
     TUICtx&                         ctx_;
     std::shared_ptr<LazyScrollable> scrollable_;

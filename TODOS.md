@@ -9,7 +9,6 @@
 
 - 图像音视频输入
 
-- agent-io 的 server-client 改为一对多
 - 链式 session 任务队列
 - 修复测试错误
 - 添加 XX_IS_MINGW __MINGW32__

@@ -441,6 +441,33 @@ struct ToolHeaderFixture {
         });
     }
 
+    /// 注入含可点击按钮的工具消息装饰 (真实 planning 插件经 update_tool_decor 推送)
+    void pushDecorWithButton() {
+        sharedState.mutate([&](TUIRenderState& st) {
+            auto  reg         = st.pluginRegistry
+                                    ? std::make_shared<agentxx::plugin::ClientUiRegistry>(*st.pluginRegistry)
+                                    : std::make_shared<agentxx::plugin::ClientUiRegistry>();
+            auto& d           = reg->toolDecors.emplace_back();
+            d.plugin          = "agentxx_planning";
+            d.toolCallId      = "call_1";
+            d.displayName     = "Plan";
+            d.summary         = "[~] reproduce issue";
+            d.items           = neograph::json::parse(R"([
+                {"kind":"button","label":" Graph ","action_id":"planning.open_graph","args":{},"role":"accent"},
+                {"kind":"text","role":"title","text":"Todos:"},
+                {"kind":"text","role":"normal","text":"[~] do task A"}
+            ])");
+            // 模拟插件注册的 action 绑定 (使 parsePluginButton 判定为 clickable)
+            agentxx::plugin::ClientActionBinding binding;
+            binding.targetId = "";
+            binding.plugin   = "agentxx_planning";
+            binding.cb       = [](const AgentxxUiActionContext*, void*) {};
+            binding.ud       = nullptr;
+            reg->actionBindings.push_back(std::move(binding));
+            st.pluginRegistry = std::move(reg);
+        });
+    }
+
     /// 剥离 ANSI 转义序列, 获取纯文本表示
     static std::string stripAnsi(std::string_view str) {
         std::string out;
@@ -729,6 +756,56 @@ void testTuiToolHeaderDecor() {
     );
 }
 
+// 含可点击 decor 按钮的消息展开与多帧渲染回归测试:
+// 1. 初始折叠, decorHitBoxes 为空
+// 2. 展开后首帧渲染出按钮, 且 decorHitBoxes 记录按钮命中区
+// 3. 展开后次帧再次渲染 (未修改状态):
+//    - 修复前在 ASAN 下因缓存复用访问已释放 Box 产生 heap-use-after-free 崩溃
+//    - 修复后不崩溃, decorHitBoxes 持续有效, box 指针非空
+// 4. 再次折叠后 decorHitBoxes 清空
+void testTuiToolHeaderDecorButtonMultiFrame() {
+    ToolHeaderFixture f(120, 24);
+    f.pushTool(
+        "agentxx_planning",
+        R"({"mode":"write","roadmap":"stateDiagram-v2\n[*] --> s1\ns1 --> [*]","todos":[{"state":"in_progress","content":"reproduce issue"}]})",
+        true,
+        true // 初始折叠
+    );
+    f.pushDecorWithButton();
+
+    // 帧 1: 折叠渲染
+    std::string collapsed = f.render();
+    XX_TEST_EXPECT_TRUE(collapsed.find("+ [Tool] ") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(f.comp->decorHitBoxes().empty());
+
+    // 点击展开消息 (模拟用户点击展开)
+    f.sharedState.mutate([&](TUIRenderState& st) {
+        st.messages[0]->collapsed = false;
+    });
+
+    // 帧 2: 展开渲染, 此时生成 decorHits 按钮
+    std::string expanded1 = f.render();
+    XX_TEST_EXPECT_TRUE(expanded1.find("- [Tool] Plan") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(expanded1.find("Graph") != std::string::npos);
+    XX_TEST_EXPECT_EQ(f.comp->decorHitBoxes().size(), size_t{1});
+    XX_TEST_EXPECT_EQ(f.comp->decorHitBoxes()[0].actionId, "planning.open_graph");
+
+    // 帧 3: 保持展开状态再次渲染 (未修改状态) —— 回归防 UAF 与命中持续有效
+    std::string expanded2 = f.render();
+    XX_TEST_EXPECT_TRUE(expanded2.find("- [Tool] Plan") != std::string::npos);
+    XX_TEST_EXPECT_EQ(f.comp->decorHitBoxes().size(), size_t{1});
+    XX_TEST_EXPECT_EQ(f.comp->decorHitBoxes()[0].actionId, "planning.open_graph");
+    XX_TEST_EXPECT_TRUE(f.comp->decorHitBoxes()[0].box != nullptr);
+
+    // 帧 4: 再次折叠
+    f.sharedState.mutate([&](TUIRenderState& st) {
+        st.messages[0]->collapsed = true;
+    });
+    std::string collapsed2 = f.render();
+    XX_TEST_EXPECT_TRUE(collapsed2.find("+ [Tool] ") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(f.comp->decorHitBoxes().empty());
+}
+
 // 执行失败工具折叠与展开渲染:
 // 1. 折叠时保持特化 toolName (如 "Read", "Write", "Bash" 等), 异常结果显示在后面并标红
 // 2. 未知工具折叠时显示原始 toolName + 异常结果并标红
@@ -940,6 +1017,7 @@ TestResult testTuiToolHeader() {
     testTuiToolHeaderOverflow();
     testTuiToolHeaderRunning();
     testTuiToolHeaderDecor();
+    testTuiToolHeaderDecorButtonMultiFrame();
     testTuiToolHeaderFailed();
     testTuiToolHeaderDuration();
     return {g_tui_tool_header_passed, g_tui_tool_header_failed};
