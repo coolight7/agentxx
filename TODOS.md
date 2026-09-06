@@ -2,14 +2,13 @@
 - BaseAgent 增加支持 usage 统计
 - eventBus 改为tree，命名空间使用 axx/bxx/cc
 - 支持修改上下文
-- 验证subagent、summarization
+- 验证subagent
 
 - 冻结 system prompt
 - OpWatchdog debug 时启用、配置启用
 
 - agent-io 的 server-client 改为一对多
 - 链式 session 任务队列
-- 传递 多语言支持到 插件
 - 修复测试错误
 - 添加 XX_IS_MINGW __MINGW32__
 
