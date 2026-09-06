@@ -778,8 +778,6 @@ static void clearSection(ClientCtx& ctx) {
 
 /// 用最近缓存内容刷新 Info 段落 (client io 线程调用)
 ///
-/// 两段式: Todo / Note — 参考剥离前的 TUI renderPlanningInfo
-/// (Plan 标题 + todos 列表 + notes 段)，经通用 items 表达:
 /// - Todo: title + 各 todo 行 (icon+content)
 /// - Note: title + 内容
 static void refreshPlanSection(ClientCtx& ctx) {
@@ -809,7 +807,22 @@ static void refreshPlanSection(ClientCtx& ctx) {
         ));
     };
 
-    // ---- Todo: 待办列表 (独立分区) ----
+    auto buttonItem = [&](const std::string& label, const std::string& mermaid) {
+        items.push_back(fmt::format(
+            R"({{"kind":"button","label":{},"mermaid":{}}})",
+            clientJsonEscape(ctx, label),
+            clientJsonEscape(ctx, mermaid)
+        ));
+    };
+
+    // ---- Graph: 状态图按钮 + 概要 ----
+    const auto roadmap = plan.value("roadmap", std::string{});
+    if (!roadmap.empty()) {
+        textItem("|- ", "normal");
+        buttonItem("[Graph]", roadmap);
+    }
+
+    // ---- Todo: 待办列表 ----
     const bool hasTodos
         = plan.contains("todos") && plan["todos"].is_array() && !plan["todos"].empty();
     if (hasTodos) {
@@ -830,7 +843,7 @@ static void refreshPlanSection(ClientCtx& ctx) {
         }
     }
 
-    // ---- Note: 备忘 (独立分区, 与 Todo 分隔) ----
+    // ---- Note: 备忘 ----
     if (plan.contains("notes")) {
         const auto& nv = plan["notes"];
         if (nv.is_string()) {
@@ -848,11 +861,10 @@ static void refreshPlanSection(ClientCtx& ctx) {
 }
 
 /// EVT_PLUGIN_DATA: 过滤本插件规划事件 {plugin:"agentxx_planning", event:"planning"}
-/// → 更新 Info 栏段落 (最近一次规划概览)
+/// → 更新 Info 栏段落
 static void AGENTXX_PLUGIN_CALL
     on_client_plugin_data(const AgentxxPluginStringView* payload_json, void* ud) {
     auto* ctxRaw = static_cast<ClientCtx*>(ud);
-    // C ABI 回调异常守卫 (client io 线程派发直调)
     agentxx::plugin::guardCallVoid(clientGuardLogger(ctxRaw), [&] {
         auto* ctx = static_cast<ClientCtx*>(ud);
         if (!ctx || !ctx->host) {
@@ -869,9 +881,11 @@ static void AGENTXX_PLUGIN_CALL
             ctx->iface.json->json_get_string(ctx->host, payload_json, &kEvent, &event);
             ctx->iface.json->json_get_string(ctx->host, payload_json, &kData, &data);
         }
-        const bool mine = plugin.data && event.data && data.data
-                          && std::strcmp(plugin.data, "agentxx_planning") == 0
-                          && std::strcmp(event.data, "planning") == 0;
+        const bool mine
+            = plugin.data && event.data && data.data
+              && agentxx::plugin::PluginStringView::str(plugin)
+                     == std::string_view{"agentxx_planning"}
+              && agentxx::plugin::PluginStringView::str(event) == std::string_view{"planning"};
         if (mine) {
             ctx->last_plan_json.assign(data.data, static_cast<size_t>(data.size));
             refreshPlanSection(*ctx);
