@@ -89,7 +89,7 @@ static std::string buildCapturePath(PluginCtx& ctx, int screenIndex) {
         = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count()
           % 1000;
     std::tm tm{};
-#if defined(_WIN32)
+#if XX_IS_WIN_D
     localtime_s(&tm, &tt);
 #else
     localtime_r(&tt, &tm);

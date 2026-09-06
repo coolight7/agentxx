@@ -60,6 +60,16 @@
 #include "boost/process.hpp"
 #endif
 
+#if XX_IS_WIN_D && defined(BOOST_PROCESS_V2_PROCESS_HPP)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
+
 namespace agentxx_execmd_plugin {
 
 /// 取消查询回调 (返回 true 表示会话已取消); 测试可传 nullptr 等价无取消支持
@@ -197,6 +207,11 @@ inline std::string subprocessWorkDir(const std::string& workDir) {
     return ".";
 }
 
+// 前置声明 (定义在下方 WinJobGuard/killProcGroup 之后; procCancelWatchLoop
+// 与 timeoutGuard 需要调用它们)
+inline void killProcGroup(boost::process::process& proc, void* winJob = nullptr);
+inline void closePipesAfterKill(asio::readable_pipe& outpip, asio::readable_pipe& errpip);
+
 /// 会话取消监听协程体 (与主工作经 awaitable_operators 并行运行):
 /// - 轮询 isCancelled 回调 (宿主会话取消令牌 + op cancel_flag 双通道),
 ///   取消时终止子进程
@@ -206,11 +221,17 @@ inline std::string subprocessWorkDir(const std::string& workDir) {
 ///   由主工作完成驱动整体终结 —— 同时保证寄生 loop 不会被无限轮询的 watcher
 ///   吊住 (历史 bug: detached watcher + RAII guard 互相死等)
 /// - Linux: 子进程经 setsid 启动 (pgid == pid), `kill(-pid)` 可整组清理
+/// - Windows: 子进程挂入 Job Object, `TerminateJobObject` 整树清理
 /// - 注意: watcher 只终止、不调用 async_wait —— boost.process v2 的
 ///   async_wait op 内部引用共享的 exit_status_ 成员, 与主协程并发 wait
 ///   会产生数据竞争; 子进程回收由主协程负责
-inline asio::awaitable<void>
-    procCancelWatchLoop(boost::process::process& proc, const IsCancelledFn& isCancelled) {
+inline asio::awaitable<void> procCancelWatchLoop(
+    boost::process::process& proc,
+    asio::readable_pipe&     outpip,
+    asio::readable_pipe&     errpip,
+    void*                    winJob,
+    const IsCancelledFn&     isCancelled
+) {
     asio::steady_timer timer(co_await asio::this_coro::executor);
     if (!isCancelled) {
         // 无取消源: 挂起直至被并行组取消 (主工作完成)
@@ -225,27 +246,93 @@ inline asio::awaitable<void>
             co_return; // 被并行组取消: 主工作已完成
         }
     }
-    // 会话取消: 终止子进程后挂起, 让主工作自然收尾
-#if XX_IS_WIN_D
-    neograph_asio_error_code ec;
-    proc.terminate(ec);
-#else
-    // setsid 启动, pgid == pid; kill 负 pid 整组清理 (含 bash 派生的子孙进程)
-    ::kill(-static_cast<pid_t>(proc.id()), SIGKILL);
-#endif
+    // 会话取消: 终止整棵进程树 (Windows: Job Object; Linux: 进程组) 后挂起,
+    // 让主工作自然收尾; 终止后主动关闭本端管道读句柄, 确保即使有漏网
+    // 孙进程仍持有写端, 在途 async_read 也能立刻以错误完成, 避免主工作
+    // 永久等待 EOF 而挂死 (见 runProcPipeline timeoutGuard 同款处理)
+    detail::killProcGroup(proc, winJob);
+    detail::closePipesAfterKill(outpip, errpip);
     timer.expires_after(std::chrono::hours(24));
     co_await timer.async_wait(asio::as_tuple(asio::use_awaitable));
 }
 
-/// 终止子进程及其进程组 (Linux: 整组 SIGKILL; Windows: terminate), 用于超时场景
-inline void killProcGroup(boost::process::process& proc) {
 #if XX_IS_WIN_D
+/// Windows Job Object 句柄封装 (仅 Windows + bp::v2 编译路径存在):
+/// - CreateJobObject 创建, 配置 JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE:
+///   最后一个 job 句柄关闭时自动终止其中所有进程 —— 即便调用方忘记显式
+///   TerminateJobObject (异常路径/析构), 子进程树也不会泄漏成孤儿
+/// - AssignProcessToJobObject 把直接子进程挂入; 其后代 (pwsh 再派生 ping
+///   等) 自动继承同一 job (除非它们自身创建了不允许 breakaway 的嵌套 job)
+/// - TerminateJobObject 整树终止: 修复原先只 TerminateProcess 直接子进程,
+///   漏杀持管道写端的孙进程导致管道永不 EOF、工具永久挂起的缺陷
+struct WinJobGuard {
+    void* job = nullptr; // HANDLE
+
+    WinJobGuard() {
+        HANDLE h = ::CreateJobObjectW(nullptr, nullptr);
+        if (!h) {
+            return;
+        }
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION info{};
+        info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        if (!::SetInformationJobObject(h, JobObjectExtendedLimitInformation, &info, sizeof(info))) {
+            ::CloseHandle(h);
+            return;
+        }
+        job = h;
+    }
+
+    ~WinJobGuard() {
+        if (job) {
+            // 兜底整树终止 (正常路径 runProcPipeline 已 TerminateJobObject,
+            // 此处幂等; 主要覆盖异常/提前返回路径防孤儿)
+            ::TerminateJobObject(static_cast<HANDLE>(job), 260);
+            ::CloseHandle(static_cast<HANDLE>(job));
+        }
+    }
+
+    WinJobGuard(const WinJobGuard&)            = delete;
+    WinJobGuard& operator=(const WinJobGuard&) = delete;
+
+    bool valid() const {
+        return job != nullptr;
+    }
+
+    void* handle() const {
+        return job;
+    }
+};
+#endif
+
+/// 终止子进程及其整棵进程树
+/// - Linux: setsid 启动, pgid == pid, `kill(-pid)` 整组 SIGKILL
+/// - Windows: 若已挂入 Job Object (winJob 非空) 则 TerminateJobObject 整树
+///   终止 (pwsh 派生的孙进程一并清理); 否则回退 TerminateProcess 仅杀直接子进程
+inline void killProcGroup(boost::process::process& proc, void* winJob) {
+#if XX_IS_WIN_D
+    if (winJob) {
+        ::TerminateJobObject(static_cast<HANDLE>(winJob), 260);
+        return;
+    }
     neograph_asio_error_code ec;
     proc.terminate(ec);
 #else
     // setsid 启动, pgid == pid; kill 负 pid 整组清理 (含 bash 派生的子孙进程)
+    (void)winJob;
     ::kill(-static_cast<pid_t>(proc.id()), SIGKILL);
 #endif
+}
+
+/// 终止子进程后主动关闭 stdout/stderr 管道本端读句柄:
+/// - 目的: 即使进程树未杀净 (例如 Windows 下 Job assign 失败回退
+///   TerminateProcess, 孙进程仍持有管道写端), 在途 async_read(transfer_all)
+///   也会立即以错误结束, 使 runProcPipeline 主工作能返回, 不会永久挂起
+/// - 仅在 kill 之后调用 (正常结束路径由子进程自然关闭写端, 无需关闭)
+/// - Linux 整组 SIGKILL 后子进程写端必然关闭, 此调用幂等无害
+inline void closePipesAfterKill(asio::readable_pipe& outpip, asio::readable_pipe& errpip) {
+    neograph_asio_error_code ec;
+    outpip.close(ec);
+    errpip.close(ec);
 }
 
 /// 构造超时错误结果文本 (多行纯文本输出, 非 JSON)
@@ -329,6 +416,8 @@ inline WinProcLaunch buildWinProcLaunch(std::string_view command) {
 /// - mainWork / timeoutGuard / procCancelWatchLoop 三路并行, 只有主工作完成能
 ///   终结整体 (后两者动作后挂起, 见 procCancelWatchLoop 注释)
 /// - 返回组装后的结果文本; 组合协程异常原样传播 (调用方 C ABI 边界兜底)
+/// - winJob: Windows 下子进程挂入的 Job Object (HANDLE); 超时/取消时经
+///   TerminateJobObject 整树终止。Linux 恒为 nullptr (进程组已覆盖)
 inline asio::awaitable<std::string> runProcPipeline(
     boost::process::process& proc,
     asio::readable_pipe&     outpip,
@@ -336,7 +425,8 @@ inline asio::awaitable<std::string> runProcPipeline(
     int                      timeout,
     bool                     all_output,
     const IsCancelledFn&     isCancelled,
-    const StoreFn&           storeFn = nullptr
+    const StoreFn&           storeFn = nullptr,
+    void*                    winJob  = nullptr
 ) {
     std::string              strout, strerr;
     neograph_asio_error_code errCodeStdOut, errCodeStdErr;
@@ -429,7 +519,12 @@ inline asio::awaitable<std::string> runProcPipeline(
             auto [ec] = co_await t.async_wait(asio::as_tuple(asio::use_awaitable));
             if (!ec) {
                 timedOut.store(true, std::memory_order_release);
-                detail::killProcGroup(proc);
+                detail::killProcGroup(proc, winJob);
+                // 终止后主动关闭本端管道读句柄: 若进程树未杀净 (Windows 下
+                // Job 不可用/assign 失败回退 TerminateProcess 时, 漏网孙进程
+                // 仍持有写端), 在途 async_read 立即以错误完成, 主工作不会
+                // 永久等待 EOF —— 保证工具调用到点必返回
+                detail::closePipesAfterKill(outpip, errpip);
             }
         }
         asio::steady_timer idle(co_await asio::this_coro::executor);
@@ -443,7 +538,10 @@ inline asio::awaitable<std::string> runProcPipeline(
     // 完成能终结整体
     {
         using namespace asio::experimental::awaitable_operators;
-        co_await (mainWork() || timeoutGuard() || detail::procCancelWatchLoop(proc, isCancelled));
+        co_await (
+            mainWork() || timeoutGuard()
+            || detail::procCancelWatchLoop(proc, outpip, errpip, winJob, isCancelled)
+        );
     }
     co_return resultStr;
 }
@@ -558,6 +656,15 @@ inline asio::awaitable<std::string> windowsExecuteAsync(
         };
         procExe = boost::process::environment::find_executable(launch.exeName);
     }
+
+#if XX_IS_WIN_D
+    // Windows Job Object: 把子进程整棵树 (pwsh/cmd 及其派生的孙进程, 如
+    // ping -t) 纳入同一 job。超时/取消时 TerminateJobObject 一次整树终止,
+    // 修复只杀直接子进程导致孙进程持管道写端、工具永久挂起的缺陷。
+    // KILL_ON_JOB_CLOSE 保证异常路径下 job 析构时进程树也被清理, 不泄漏孤儿。
+    detail::WinJobGuard winJobGuard;
+    void*               winJob = winJobGuard.valid() ? winJobGuard.handle() : nullptr;
+
     auto proc = boost::process::process{
         ex,
         procExe,
@@ -569,6 +676,33 @@ inline asio::awaitable<std::string> windowsExecuteAsync(
         boost::process::process_stdio{.in = nullptr, .out = outpip, .err = errpip}
     };
 
+    // CreateProcess 返回后立即挂入 job。这里不做 CREATE_SUSPENDED + 挂起期
+    // assign (bp v2 launcher 在返回前关闭主线程句柄, 无法恢复线程; 且其
+    // on_success initializer 存在返回类型缺陷), 而是接受极小竞态窗口:
+    // 即使孙进程抢跑逃逸出 job, 方案 B (kill 后关闭管道) 仍保证工具到点
+    // 返回, 不会永久挂起。assign 失败 (如子进程已在他 job 且不允许
+    // breakaway) 仅告警并回退单进程 terminate。
+    if (winJob) {
+        HANDLE hProc = proc.handle().native_handle();
+        if (!hProc || hProc == INVALID_HANDLE_VALUE
+            || !::AssignProcessToJobObject(static_cast<HANDLE>(winJob), hProc)) {
+            XX_LOGW("ExecuteWindowsCommandTool: AssignProcessToJobObject failed, "
+                    "fallback to single-process terminate");
+            winJob = nullptr;
+        }
+    }
+#else
+    auto proc = boost::process::process{
+        ex,
+        procExe,
+        launch.args,
+        boost::process::process_environment(procEnv),
+        boost::process::process_start_dir{detail::subprocessWorkDir(workDir)},
+        boost::process::process_stdio{.in = nullptr, .out = outpip, .err = errpip}
+    };
+    void* winJob = nullptr;
+#endif
+
     // 会话取消监听: 与主工作并行运行 (语义同 bashExecuteAsync)
     co_return co_await detail::runProcPipeline(
         proc,
@@ -577,7 +711,8 @@ inline asio::awaitable<std::string> windowsExecuteAsync(
         timeout,
         all_output,
         isCancelled,
-        storeFn
+        storeFn,
+        winJob
     );
 }
 

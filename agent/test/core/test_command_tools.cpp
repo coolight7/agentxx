@@ -604,7 +604,7 @@ asio::awaitable<void> test_detect_powershell(std::weak_ptr<agentxx::agent::Agent
     }
     // WSL: interop 环境下通常可用, 但不强制断言 (interop 可能被禁用);
     // 可用时校验字段格式
-#elif XX_IS_WINDOWS_D
+#elif XX_IS_WIN_D
     // 原生 Windows: 通常可用, 不强制断言 (精简系统可能无 PowerShell)
 #endif
     if (info.available) {
@@ -714,6 +714,57 @@ asio::awaitable<void>
     }
     co_return;
 }
+
+#if defined(BOOST_PROCESS_V2_PROCESS_HPP) && XX_IS_WIN_D
+/// 回归测试: 超时须整树终止孙进程 (Windows Job Object 修复)
+/// - 背景: pwsh 执行 `ping -t 127.0.0.1` 会派生孙进程 ping.exe -t;
+///   旧实现超时只 TerminateProcess(pwsh), ping 孙进程仍持 stdout 管道写端,
+///   导致 async_read 永不 EOF、工具永久挂起 (用户复现: timeout=5 不返回)
+/// - 修复: 子进程挂入 Job Object (KILL_ON_JOB_CLOSE), 超时 TerminateJobObject
+///   整树终止; 且 kill 后关闭管道读端 (方案 B) 兜底保证到点返回
+asio::awaitable<void>
+    test_windows_timeout_kills_descendants(std::weak_ptr<agentxx::agent::AgentContext> agentContext
+    ) {
+    auto tool = agentxx::tools::ExecuteWindowsCommandTool{agentContext};
+
+    auto start = std::chrono::steady_clock::now();
+    // ping -t 无限 ping, 若进程树未被整树终止则本调用永不返回 (测试框架
+    // 会挂死 → 用 2s 超时 + 总耗时断言兜底, 不依赖框架看门狗)
+    auto args = neograph::json{
+        {"command", "ping -t 127.0.0.1"},
+        {"timeout", 2                  },
+    };
+    auto result    = co_await tool.execute_async(args);
+    auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                         std::chrono::steady_clock::now() - start
+    )
+                         .count();
+    // 应返回超时错误 (而非挂死)
+    XX_TEST_EXPECT_TRUE(result.find("timed out") != std::string::npos);
+    // 应到点及时返回: 留 6s 余量 (进程启动/调度抖动), 远小于无限 ping
+    XX_TEST_EXPECT_TRUE(elapsedMs < 8000);
+    TEST_INFO << "ping -t timeout returned in " << elapsedMs << "ms" << std::endl;
+
+    // 验证孙进程 ping.exe 已被清理 (无孤儿残留)
+    // 给系统一点时间完成 job 终止后的进程对象回收
+    asio::steady_timer delay(co_await asio::this_coro::executor);
+    delay.expires_after(std::chrono::milliseconds(500));
+    co_await delay.async_wait(asio::as_tuple(asio::use_awaitable));
+    auto checkArgs = neograph::json{
+  // 当前会话唯一应无残留 ping (可能有其他程序的 ping, 用命令行特征过滤:
+  // -t 127.0.0.1 精确匹配本测试派生的)
+        {"command",
+         "$p = Get-CimInstance Win32_Process -Filter \"Name='ping.exe'\" | "
+         "Where-Object { $_.CommandLine -match '127\\.0\\.0\\.1' -and $_.CommandLine -match '-t' }; "
+         "if ($p) { Write-Output 'PING_ORPHAN_ALIVE' } else { Write-Output 'NO_PING_ORPHAN' }"},
+        {"timeout", 10                                                                        },
+    };
+    auto check = co_await tool.execute_async(checkArgs);
+    XX_TEST_EXPECT_TRUE(check.find("NO_PING_ORPHAN") != std::string::npos);
+    TEST_INFO << "ping orphan check output: " << check << std::endl;
+    co_return;
+}
+#endif // BOOST_PROCESS_V2_PROCESS_HPP && XX_IS_WIN_D
 
 #if defined(BOOST_PROCESS_V2_PROCESS_HPP)
 /// poll 寄生驱动并发性: 两条 sleep 命令并行执行总耗时 ≈ 单条 (而非串行 2 倍)
@@ -842,10 +893,14 @@ asio::awaitable<TestResult>
 #endif
 #endif
 
-#if XX_IS_WINDOWS_D
+#if XX_IS_WIN_D
     co_await run(test_windows_command_get_definition);
     co_await run(test_windows_get_definition_properties);
     co_await run(test_windows_command_empty_command);
+#if defined(BOOST_PROCESS_V2_PROCESS_HPP)
+    // Windows Job Object 回归: ping -t 无限循环须在超时后整树终止并返回
+    co_await run(test_windows_timeout_kills_descendants);
+#endif
 #elif XX_IS_LINUX_D
     // WSL: ExecuteWindowsCommandTool 同样注册 (经 interop 调 Windows 侧),
     // 与 [code_agent.cpp](/agent/lib/src/agent/code_agent.cpp) 的注册条件保持一致

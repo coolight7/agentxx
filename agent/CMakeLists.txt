@@ -1014,8 +1014,13 @@ ExternalProject_Add(
 # yaml-cpp: MinGW libstdc++ 10 (apt) 与 Clang 18 在 C++23 下 valarray 异常规格不兼容
 # 交叉到 Windows 时降至 C++14 以避免 /usr/lib/gcc/.../valarray:1224 报错
 # (C++17 仍触发相同错误, 需更低)
-if (CMAKE_CROSSCOMPILING AND XX_IS_WIN_D)
-  set(_YAML_CPP_CXX_STD 14)
+if (XX_IS_WIN_D)
+  if (CMAKE_CROSSCOMPILING)
+    set(_YAML_CPP_CXX_STD 14)
+  else()
+    # msvc 还没有 26
+    set(_YAML_CPP_CXX_STD 23)
+  endif()
 else()
   # 必须与主工程 C++ 标准一致 (C++26), 避免 std::runtime_error 等基础异常类型
   # 在 C++23 与 C++26 间的虚析构函数/内联规范差异导致 LTO 报 ODR 违规 (-Wodr)
@@ -1029,8 +1034,9 @@ ExternalProject_Add(
     ${_AGENTXX_COMMON_CMAKE_ARGS}
     -DCMAKE_C_STANDARD=${CMAKE_C_STANDARD}
     -DCMAKE_CXX_STANDARD=${_YAML_CPP_CXX_STD}
+    -DCMAKE_CXX_STANDARD_REQUIRED=OFF
     -DYAML_CPP_BUILD_CONTRIB=OFF
-    -DYAML_CPP_BUILD_TOOLS=ON
+    -DYAML_CPP_BUILD_TOOLS=OFF
     -DYAML_BUILD_SHARED_LIBS=OFF
     -DYAML_ENABLE_PIC=ON
     -DYAML_CPP_BUILD_TESTS=OFF

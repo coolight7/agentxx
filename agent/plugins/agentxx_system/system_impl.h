@@ -21,12 +21,12 @@ inline std::string currentDatetimeExecute() {
     // NOTE: Android NDK / llvm-mingw libc++ 未实现 chrono tzdb (current_zone/zoned_time 不存在),
     // 属于编译期缺失而非运行时异常, 必须条件编译直接走 localtime 路径
     std::string localTimeStr;
-#if (defined(XX_IS_ANDROID_D) && XX_IS_ANDROID_D) || defined(_LIBCPP_VERSION) \
-    || defined(__MINGW32__) || (defined(_WIN32) && !defined(_MSC_VER))
+#if XX_IS_ANDROID_D || defined(_LIBCPP_VERSION) || defined(__MINGW32__) \
+    || (XX_IS_WIN_D && !defined(_MSC_VER))
     {
         std::time_t t = std::chrono::system_clock::to_time_t(now);
         std::tm     tmv{};
-#if defined(_WIN32)
+#if XX_IS_WIN_D
         localtime_s(&tmv, &t);
 #else
         localtime_r(&t, &tmv);
@@ -48,7 +48,7 @@ inline std::string currentDatetimeExecute() {
     } catch (...) {
         std::time_t t = std::chrono::system_clock::to_time_t(now);
         std::tm     tmv{};
-#if defined(XX_IS_WIN_D) && XX_IS_WIN_D
+#if XX_IS_WIN_D
         localtime_s(&tmv, &t);
 #else
         localtime_r(&t, &tmv);
