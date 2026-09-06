@@ -61,7 +61,8 @@ asio::awaitable<void>
         g_st_passed++;
         TEST_PASS << "StringHtml2MarkdownTool::get_definition() name correct" << std::endl;
     } else {
-        std::cout << "[FAIL] StringHtml2MarkdownTool::get_definition() name incorrect" << std::endl;
+        g_st_failed++;
+        TEST_FAIL << "StringHtml2MarkdownTool::get_definition() name incorrect" << std::endl;
     }
     co_return;
 }
@@ -74,7 +75,8 @@ asio::awaitable<void>
     };
     auto result = co_await tool.execute_async(args);
     if (result.find("\"error\"") != std::string::npos) {
-        std::cout << "[PASS] StringHtml2MarkdownTool returns error for empty content" << std::endl;
+        g_st_passed++;
+        TEST_PASS << "StringHtml2MarkdownTool returns error for empty content" << std::endl;
     } else {
         g_st_failed++;
         TEST_FAIL << "StringHtml2MarkdownTool should return error for empty "

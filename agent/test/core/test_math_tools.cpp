@@ -57,8 +57,8 @@ static void checkResult(
         TEST_PASS << testName << " -> " << actual << std::endl;
     } else {
         g_math_failed++;
-        std::cout << "[FAIL] " << testName << " expected: '" << expected << "', got: '" << actual
-                  << "'" << std::endl;
+        TEST_FAIL << testName << " expected: '" << expected << "', got: '" << actual << "'"
+                  << std::endl;
     }
 }
 
@@ -72,8 +72,8 @@ static void checkContains(
         TEST_PASS << testName << " contains '" << substr << "' -> " << actual << std::endl;
     } else {
         g_math_failed++;
-        std::cout << "[FAIL] " << testName << " expected to contain '" << substr << "', got: '"
-                  << actual << "'" << std::endl;
+        TEST_FAIL << testName << " expected to contain '" << substr << "', got: '" << actual << "'"
+                  << std::endl;
     }
 }
 
@@ -626,7 +626,7 @@ static asio::awaitable<void>
             }
         } else {
             g_math_failed++;
-            std::cout << "[FAIL] ToolRegistry does not contain agentxx_math_calculate" << std::endl;
+            TEST_FAIL << "ToolRegistry does not contain agentxx_math_calculate" << std::endl;
         }
 
         co_await ctx->pluginManager->unloadAsync("agentxx_math");
@@ -635,7 +635,7 @@ static asio::awaitable<void>
             TEST_PASS << "PluginManager unloaded agentxx_math successfully" << std::endl;
         } else {
             g_math_failed++;
-            std::cout << "[FAIL] ToolRegistry still contains tool after unload" << std::endl;
+            TEST_FAIL << "ToolRegistry still contains tool after unload" << std::endl;
         }
     } else {
         TEST_INFO << "agentxx_math plugin dynamic library not found at: " << path
@@ -648,8 +648,6 @@ asio::awaitable<TestResult>
     g_math_passed = 0;
     g_math_failed = 0;
 
-    std::cout << "--- math_tools ---" << std::endl;
-
     co_await test_basic_arithmetic(agentContext);
     co_await test_power_and_factorial(agentContext);
     co_await test_implicit_multiplication(agentContext);
@@ -660,9 +658,6 @@ asio::awaitable<TestResult>
     co_await test_precision_and_special_values(agentContext);
     co_await test_error_handling(agentContext);
     co_await test_plugin_dynamic_load(agentContext);
-
-    std::cout << "--- math_tools done: passed=" << g_math_passed << " failed=" << g_math_failed
-              << " ---" << std::endl;
 
     co_return TestResult(g_math_passed, g_math_failed);
 }

@@ -7,6 +7,9 @@
 - 冻结 system prompt
 - OpWatchdog debug 时启用、配置启用
 
+- Glob/Grep 折叠渲染不显示检索路径
+- Plan 渲染调整
+
 - agent-io 的 server-client 改为一对多
 - 链式 session 任务队列
 - 修复测试错误

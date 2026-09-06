@@ -50,7 +50,8 @@ asio::awaitable<void>
         g_dt_passed++;
         TEST_PASS << "GetCurrentDateTimeTool::get_definition() name correct" << std::endl;
     } else {
-        std::cout << "[FAIL] GetCurrentDateTimeTool::get_definition() name incorrect" << std::endl;
+        g_dt_failed++;
+        TEST_FAIL << "GetCurrentDateTimeTool::get_definition() name incorrect" << std::endl;
     }
     co_return;
 }
@@ -86,14 +87,15 @@ asio::awaitable<void>
     if (std::regex_search(result, match, timestampRegex)) {
         auto timestamp = std::stoll(match[1].str());
         if (timestamp > 0) {
-            std::cout << "[PASS] GetCurrentDateTimeTool timestamp is a positive number"
-                      << std::endl;
+            g_dt_passed++;
+            TEST_PASS << "GetCurrentDateTimeTool timestamp is a positive number" << std::endl;
         } else {
             g_dt_failed++;
             TEST_FAIL << "GetCurrentDateTimeTool timestamp should be positive" << std::endl;
         }
     } else {
-        std::cout << "[FAIL] GetCurrentDateTimeTool timestamp format incorrect, got: " << result
+        g_dt_failed++;
+        TEST_FAIL << "GetCurrentDateTimeTool timestamp format incorrect, got: " << result
                   << std::endl;
     }
     co_return;

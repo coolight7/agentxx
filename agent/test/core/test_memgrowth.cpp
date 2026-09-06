@@ -1,7 +1,8 @@
 // 内存增长实测: 用 mock LLM 跑多轮会话, 逐轮采样进程内存与各容器大小,
 // 验证 agentxx_cli 消息轮次增加时内存增长的来源与是否泄漏。
 //
-// 用法: agentxx_test memgrowth [--mem-turns N] [--mem-size KB] [--mem-warmup N]
+// 用法: agentxx_test memgrowth (经环境变量覆盖: MEM_TURNS / MEM_RESP_KB /
+// MEM_HUGE_LIMIT / MEM_SCENARIOS, 后者为逗号分隔的 0/1/2 子集选择)
 //
 // 输出每轮: RSS/Private 内存、viewMessages / llmMessages / shareStore 的大小,
 // 量化各模块内存占用。
@@ -21,6 +22,7 @@
 #include <chrono>
 #include <cstdio>
 #include <cstring>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -132,7 +134,8 @@ asio::awaitable<int> runScenario(
     bool        hugeTokenLimit, // true = 关闭压缩 (模拟不触发 summarization)
     bool        nonStream,      // true = 使用 runOverMsgsTurnAsync (无 token 流式事件)
     bool        runAgentCtx,    // true = 后台线程运行 agent io_context (模拟真实 CLI)
-    std::string label
+    std::string label,
+    int&        okTurnsOut
 ) {
     auto sim     = startDaSimServer();
     auto baseUrl = "http://127.0.0.1:" + std::to_string(sim.port);
@@ -218,6 +221,7 @@ asio::awaitable<int> runScenario(
 
     size_t lastLive = 0;
     (void)lastLive;
+    size_t okTurns = 0;
     for (size_t turn = 0; turn < turns; ++turn) {
         std::fprintf(
             stderr,
@@ -263,6 +267,8 @@ asio::awaitable<int> runScenario(
                 .content = input,
             });
             auto text = co_await agent->runOverMsgsTurnAsync(sessionId, msgs);
+            // runOverMsgsTurnAsync 走 runInternalAsync(headless 无会话落盘):
+            // 会话容器为空属预期, 仅以非空回复判定本轮成功
             if (text.empty()) {
                 ok = false;
             }
@@ -279,6 +285,7 @@ asio::awaitable<int> runScenario(
             std::fflush(stdout);
             break;
         }
+        ++okTurns;
         std::fprintf(stderr, "[memgrow] turn %zu done ok=%d\n", turn, (int)ok);
 
         if (turn < warmupSkip || (turn + 1) % 5 != 0) {
@@ -349,11 +356,16 @@ asio::awaitable<int> runScenario(
 #endif
     std::printf("\n");
 
+    // 清理 agent 资源: 无论是否起后台线程, CodeAgent 持有的插件实例/
+    // GraphEngine 线程等都须显式释放, 否则跨场景累积导致内存/句柄泄漏
+    // (shutdownAll 为同步卸载, 要求调用时无执行中回调 —— 此处各 turn 已
+    // 完成, 与单测直调插件后 unloadAsync 语义一致; 要求 io 线程环境,
+    // 故在测试协程所在 io_context 上同步调用)
+    if (agent->agentContext && agent->agentContext->pluginManager) {
+        agent->agentContext->pluginManager->shutdownAll();
+    }
     // 停止 agent io_context 后台线程
     if (runAgentCtx) {
-        if (agent->agentContext && agent->agentContext->pluginManager) {
-            agent->agentContext->pluginManager->shutdownAll();
-        }
         if (agentWorkGuard) {
             agentWorkGuard->reset();
         }
@@ -361,10 +373,17 @@ asio::awaitable<int> runScenario(
         if (agentThread.joinable()) {
             agentThread.join();
         }
+    } else {
+        // 未起后台线程时 engine 的 poll 线程仍可能持有 ioCtx 工作:
+        // 显式 stop + poll_one 排空, 避免残留回调在 agent 析构后触发
+        if (agent->ioCtx) {
+            agent->ioCtx->stop();
+        }
     }
 
     sim.stop();
-    co_return 0;
+    okTurnsOut = static_cast<int>(okTurns);
+    co_return static_cast<int>(okTurns);
 }
 
 } // namespace
@@ -376,8 +395,12 @@ asio::awaitable<int> runScenario(
 asio::awaitable<TestResult> run_memgrowth_tests() {
     TestResult r;
 
-    size_t turns      = 60;
-    size_t responseKB = 16;
+    // 默认轻量参数: 全量测试须在数分钟内完成。
+    // 原默认 60turns×16KB×3场景 在 Windows debug 下单轮可达数秒、全量超 5 分钟,
+    // 导致全量测试超时挂死。历史重压场景仍可经环境变量恢复:
+    // MEM_TURNS / MEM_RESP_KB / MEM_HUGE_LIMIT / MEM_SCENARIOS(逗号分隔 0/1/2)。
+    size_t turns      = 5;
+    size_t responseKB = 2;
     size_t warmupSkip = 0;
     bool   hugeLimit  = false;
 
@@ -396,6 +419,29 @@ asio::awaitable<TestResult> run_memgrowth_tests() {
     if (auto vOpt = agentxx::util::ApplicationEnv::instance().get("MEM_HUGE_LIMIT")) {
         hugeLimit = (std::strtoull(vOpt->c_str(), nullptr, 10) != 0);
     }
+    // MEM_SCENARIOS: 逗号分隔的子集选择 (0=stream16k, 1=stream16k_ctx, 2=nostream16k),
+    // 未设置时默认全跑 (轻量参数下三场景仍很快)
+    std::set<int> scenarios{0, 1, 2};
+    if (auto vOpt = agentxx::util::ApplicationEnv::instance().get("MEM_SCENARIOS")) {
+        scenarios.clear();
+        std::string cur;
+        for (char c : *vOpt) {
+            if (c == ',') {
+                if (!cur.empty() && cur[0] >= '0' && cur[0] <= '2') {
+                    scenarios.insert(cur[0] - '0');
+                }
+                cur.clear();
+            } else if (c >= '0' && c <= '2') {
+                cur.push_back(c);
+            }
+        }
+        if (!cur.empty() && cur[0] >= '0' && cur[0] <= '2') {
+            scenarios.insert(cur[0] - '0');
+        }
+        if (scenarios.empty()) {
+            scenarios = {0, 1, 2};
+        }
+    }
 
     std::printf(
         "======= Memory Growth Probe (turns=%zu, resp=%zuKB, hugeLimit=%d) =======\n",
@@ -405,14 +451,34 @@ asio::awaitable<TestResult> run_memgrowth_tests() {
     );
 
     // 场景 1: 默认流式 16KB 回复 (agent io_context 未运行 → 复现泄漏)
-    co_await runScenario(turns, responseKB, warmupSkip, hugeLimit, false, false, "stream16k");
+    int totalOk = 0, totalWant = 0;
+    auto runOne
+        = [&](size_t t, size_t kb, size_t warm, bool huge, bool ns, bool ctx, const char* label)
+        -> asio::awaitable<void> {
+        int ok = 0;
+        co_await runScenario(t, kb, warm, huge, ns, ctx, label, ok);
+        totalOk   += ok;
+        totalWant += static_cast<int>(t);
+    };
+    if (scenarios.count(0)) {
+        co_await runOne(turns, responseKB, warmupSkip, hugeLimit, false, false, "stream16k");
+    }
     // 场景 2: 流式 16KB + 后台运行 agent io_context (模拟真实 CLI)
-    co_await runScenario(turns, responseKB, warmupSkip, hugeLimit, false, true, "stream16k_ctx");
+    if (scenarios.count(1)) {
+        co_await runOne(turns, responseKB, warmupSkip, hugeLimit, false, true, "stream16k_ctx");
+    }
     // 场景 3: 非流式 16KB (隔离流式 token 事件路径)
-    co_await runScenario(turns, responseKB, warmupSkip, hugeLimit, true, false, "nostream16k");
+    if (scenarios.count(2)) {
+        co_await runOne(turns, responseKB, warmupSkip, hugeLimit, true, false, "nostream16k");
+    }
 
-    r.passed = 1;
-    r.failed = 0;
+    // 每场景 turns 轮全部成功才算通过: 失败轮数计入 failed, 成功轮数计入 passed
+    // (原实现恒返回 passed=1, 轮次失败仅打印 FAILED 文本, 失败不可见)
+    r.passed = totalOk;
+    r.failed = totalWant - totalOk;
+    if (totalWant == 0) {
+        r.passed = 1;
+    }
     co_return r;
 }
 

@@ -653,7 +653,9 @@ void testTuiToolHeaderDecor() {
     XX_TEST_EXPECT_TRUE(
         expanded.find("agentxx_planning") == std::string::npos
     ); ///< 无原始工具名特化
-    XX_TEST_EXPECT_TRUE(expanded.find("State Diagram:") != std::string::npos);
+    // 状态图以 inline diagram 回退渲染 (夹具 items 仅含 diagram 无 button;
+    // 插件真实输出为可点击 Graph 按钮 + 兼容 diagram 双份)
+    XX_TEST_EXPECT_TRUE(expanded.find("Graph") == std::string::npos);
     XX_TEST_EXPECT_TRUE(expanded.find("Todos:") != std::string::npos);
     XX_TEST_EXPECT_TRUE(expanded.find("[~] do task A") != std::string::npos);
     XX_TEST_EXPECT_TRUE(expanded.find("working on A") != std::string::npos);

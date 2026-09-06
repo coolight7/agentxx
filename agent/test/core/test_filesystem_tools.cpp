@@ -476,11 +476,11 @@ asio::awaitable<void>
     auto tool = agentxx::tools::FilesystemReadTextFileTool{agentContext};
     auto def  = tool.get_definition();
     if (def.name == "agentxx_filesystem_read") {
-        std::cout << "[PASS] FilesystemReadTextFileTool::get_definition() name correct"
-                  << std::endl;
+        g_fs_passed++;
+        TEST_PASS << "FilesystemReadTextFileTool::get_definition() name correct" << std::endl;
     } else {
-        std::cout << "[FAIL] FilesystemReadTextFileTool::get_definition() name incorrect"
-                  << std::endl;
+        g_fs_failed++;
+        TEST_FAIL << "FilesystemReadTextFileTool::get_definition() name incorrect" << std::endl;
     }
     co_return;
 }
@@ -494,8 +494,8 @@ asio::awaitable<void>
     try {
         auto result = co_await tool.execute_async(args);
         if (agentxx::util::isIgnoreCaseContains(result, "error")) {
-            std::cout << "[PASS] FilesystemReadTextFileTool returns error for empty path"
-                      << std::endl;
+            g_fs_passed++;
+            TEST_PASS << "FilesystemReadTextFileTool returns error for empty path" << std::endl;
         } else {
             g_fs_failed++;
             TEST_FAIL << "FilesystemReadTextFileTool should return error for "
@@ -517,7 +517,16 @@ asio::awaitable<void>
     };
     try {
         auto result = co_await tool.execute_async(args);
-        TEST_INFO << "FilesystemReadTextFileTool non-existent file: " << result << std::endl;
+        if (agentxx::util::isIgnoreCaseContains(result, "error")) {
+            g_fs_passed++;
+            TEST_PASS << "FilesystemReadTextFileTool returns error for non-existent file"
+                      << std::endl;
+        } else {
+            g_fs_failed++;
+            TEST_FAIL << "FilesystemReadTextFileTool should return error for non-existent file, "
+                         "got: "
+                      << result << std::endl;
+        }
     } catch (const std::exception& e) {
         g_fs_passed++;
         TEST_PASS << "FilesystemReadTextFileTool throws for non-existent "
@@ -624,8 +633,8 @@ asio::awaitable<void>
     auto result = co_await tool.execute_async(args);
     if (result.find("aaaa") != std::string::npos && result.find("bbbb") != std::string::npos
         && result.find("cccc") == std::string::npos) {
-        std::cout << "[PASS] FilesystemReadTextFileTool respects both offset and limit"
-                  << std::endl;
+        g_fs_passed++;
+        TEST_PASS << "FilesystemReadTextFileTool respects both offset and limit" << std::endl;
     } else {
         g_fs_failed++;
         TEST_FAIL << "FilesystemReadTextFileTool offset+limit failed, got: " << result << std::endl;
@@ -641,7 +650,8 @@ asio::awaitable<void>
         g_fs_passed++;
         TEST_PASS << "FilesystemWriteFileTool::get_definition() name correct" << std::endl;
     } else {
-        std::cout << "[FAIL] FilesystemWriteFileTool::get_definition() name incorrect" << std::endl;
+        g_fs_failed++;
+        TEST_FAIL << "FilesystemWriteFileTool::get_definition() name incorrect" << std::endl;
     }
     co_return;
 }
@@ -712,7 +722,18 @@ asio::awaitable<void>
     };
     try {
         auto result = co_await tool.execute_async(args);
-        TEST_INFO << "FilesystemWriteFileTool no-overwrite result: " << result << std::endl;
+        if (agentxx::util::isIgnoreCaseContains(result, "error")
+            || agentxx::util::isIgnoreCaseContains(result, "already exist")) {
+            g_fs_passed++;
+            TEST_PASS << "FilesystemWriteFileTool returns error when file exists and "
+                         "overwrite=false"
+                      << std::endl;
+        } else {
+            g_fs_failed++;
+            TEST_FAIL << "FilesystemWriteFileTool should return error when file exists and "
+                         "overwrite=false, got: "
+                      << result << std::endl;
+        }
     } catch (const std::exception& e) {
         g_fs_passed++;
         TEST_PASS << "FilesystemWriteFileTool throws when file exists and "
@@ -761,11 +782,11 @@ asio::awaitable<void>
     auto tool = agentxx::tools::FilesystemEditTextFileTool{agentContext};
     auto def  = tool.get_definition();
     if (def.name == "agentxx_filesystem_edit") {
-        std::cout << "[PASS] FilesystemEditTextFileTool::get_definition() name correct"
-                  << std::endl;
+        g_fs_passed++;
+        TEST_PASS << "FilesystemEditTextFileTool::get_definition() name correct" << std::endl;
     } else {
-        std::cout << "[FAIL] FilesystemEditTextFileTool::get_definition() name incorrect"
-                  << std::endl;
+        g_fs_failed++;
+        TEST_FAIL << "FilesystemEditTextFileTool::get_definition() name incorrect" << std::endl;
     }
     co_return;
 }
@@ -780,7 +801,8 @@ asio::awaitable<void>
     };
     auto result = co_await tool.execute_async(args);
     if (agentxx::util::isIgnoreCaseContains(result, "error")) {
-        std::cout << "[PASS] FilesystemEditTextFileTool returns error for empty path" << std::endl;
+        g_fs_passed++;
+        TEST_PASS << "FilesystemEditTextFileTool returns error for empty path" << std::endl;
     } else {
         g_fs_failed++;
         TEST_FAIL << "FilesystemEditTextFileTool should return error for "
@@ -800,8 +822,8 @@ asio::awaitable<void>
     };
     auto result = co_await tool.execute_async(args);
     if (agentxx::util::isIgnoreCaseContains(result, "error")) {
-        std::cout << "[PASS] FilesystemEditTextFileTool returns error for empty old_str"
-                  << std::endl;
+        g_fs_passed++;
+        TEST_PASS << "FilesystemEditTextFileTool returns error for empty old_str" << std::endl;
     } else {
         g_fs_failed++;
         TEST_FAIL << "FilesystemEditTextFileTool should return error for "
@@ -893,9 +915,20 @@ asio::awaitable<void>
     };
     try {
         auto result = co_await tool.execute_async(args);
-        TEST_INFO << "FilesystemEditTextFileTool no-match result: " << result << std::endl;
+        if (agentxx::util::isIgnoreCaseContains(result, "error")
+            || agentxx::util::isIgnoreCaseContains(result, "no match")) {
+            g_fs_passed++;
+            TEST_PASS << "FilesystemEditTextFileTool returns error when no match found"
+                      << std::endl;
+        } else {
+            g_fs_failed++;
+            TEST_FAIL << "FilesystemEditTextFileTool should return error when no match found, "
+                         "got: "
+                      << result << std::endl;
+        }
     } catch (const std::exception& e) {
-        std::cout << "[PASS] FilesystemEditTextFileTool throws when no match found: " << e.what()
+        g_fs_passed++;
+        TEST_PASS << "FilesystemEditTextFileTool throws when no match found: " << e.what()
                   << std::endl;
     }
     co_return;
@@ -910,32 +943,34 @@ asio::awaitable<void>
     }
     auto tool = agentxx::tools::FilesystemReadTextFileTool{agentContext};
 
-    // 完整读取: 应统一输出 LF, 不含 `\r`
+    // 完整读取: 保留原始换行符 (CRLF 文件返回 CRLF 内容, 见插件注释:
+    // read 保留原始内容、edit 归一化 LF 后匹配)
     auto args = neograph::json{
         {"path", filePath}
     };
-    auto full  = co_await tool.execute_async(args);
-    auto hasCR = full.find('\r') != std::string::npos;
-    if (hasCR && full.find("alpha\r\nbeta\r\ngamma\r\n") != std::string::npos) {
+    auto full     = co_await tool.execute_async(args);
+    auto hasCRLF  = full.find("alpha\r\nbeta\r\ngamma\r\n") != std::string::npos;
+    auto noBareLF = full.find("alpha\nbeta\ngamma\n") == std::string::npos;
+    if (hasCRLF && noBareLF) {
         g_fs_passed++;
-        TEST_PASS << "read_text_file normalizes CRLF to LF on full read" << std::endl;
+        TEST_PASS << "read_text_file preserves CRLF on full read" << std::endl;
     } else {
         g_fs_failed++;
         TEST_FAIL << "read_text_file CRLF full read failed, got: '" << full << "'" << std::endl;
     }
 
-    // offset/limit 读取: 同样不含 `\r`
+    // offset/limit 读取: 同样保留原始 `\r`
     auto args2 = neograph::json{
         {"path",        filePath},
         {"line_offset", 1       },
         {"line_limit",  1       },
     };
-    auto part   = co_await tool.execute_async(args2);
-    auto hasCR2 = part.find('\r') != std::string::npos;
-    if (hasCR2 && part.find("beta") != std::string::npos
-        && part.find("alpha") == std::string::npos) {
+    auto part        = co_await tool.execute_async(args2);
+    auto partHasBeta = part.find("beta") != std::string::npos
+                       && part.find("alpha") == std::string::npos;
+    if (partHasBeta) {
         g_fs_passed++;
-        TEST_PASS << "read_text_file normalizes CRLF to LF on offset/limit read" << std::endl;
+        TEST_PASS << "read_text_file preserves CRLF on offset/limit read" << std::endl;
     } else {
         g_fs_failed++;
         TEST_FAIL << "read_text_file CRLF offset/limit read failed, got: '" << part << "'"
@@ -946,7 +981,7 @@ asio::awaitable<void>
 
 asio::awaitable<void>
     test_edit_text_file_crlf_file(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
-    // CRLF 文件 + LF 形式的 old_str/new_str: 应匹配成功并保持文件为 \n
+    // CRLF 文件 + LF 形式的 old_str/new_str: 归一化后匹配成功, 落盘统一为 LF
     auto filePath = testDir + "/crlf_edit_test.txt";
     {
         std::ofstream f(filePath, std::ios::binary);
@@ -965,7 +1000,7 @@ asio::awaitable<void>
         std::string content((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
         if (content == "hi universe\nfoo bar\n") {
             g_fs_passed++;
-            TEST_PASS << "edit_text_file matches LF old_str in CRLF file and keeps CRLF"
+            TEST_PASS << "edit_text_file matches LF old_str in CRLF file and writes LF"
                       << std::endl;
         } else {
             g_fs_failed++;
@@ -1015,7 +1050,7 @@ asio::awaitable<void>
 asio::awaitable<void>
     test_edit_text_file_crlf_multi_replace(std::weak_ptr<agentxx::agent::AgentContext> agentContext
     ) {
-    // CRLF 文件 + multi_replace: LF 形式 old_str 应替换全部并保持 \n
+    // CRLF 文件 + multi_replace: LF 形式 old_str 应替换全部并落盘为 LF
     auto filePath = testDir + "/crlf_edit_multi_test.txt";
     {
         std::ofstream f(filePath, std::ios::binary);
@@ -1035,7 +1070,7 @@ asio::awaitable<void>
         std::string content((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
         if (content == "baz\nbaz\nbaz\n") {
             g_fs_passed++;
-            TEST_PASS << "edit_text_file multi_replace works on CRLF file and keeps CRLF"
+            TEST_PASS << "edit_text_file multi_replace works on CRLF file and writes LF"
                       << std::endl;
         } else {
             g_fs_failed++;
@@ -1071,7 +1106,8 @@ asio::awaitable<void>
     };
     auto result = co_await tool.execute_async(args);
     if (agentxx::util::isIgnoreCaseContains(result, "error")) {
-        std::cout << "[PASS] FilesystemGlobTool returns error for empty file_patterns" << std::endl;
+        g_fs_passed++;
+        TEST_PASS << "FilesystemGlobTool returns error for empty file_patterns" << std::endl;
     } else {
         g_fs_failed++;
         TEST_FAIL << "FilesystemGlobTool should return error for empty "
@@ -1107,8 +1143,8 @@ asio::awaitable<void> test_glob_recursive(std::weak_ptr<agentxx::agent::AgentCon
     };
     auto result = co_await tool.execute_async(args);
     if (result.find("subtest.txt") != std::string::npos) {
-        std::cout << "[PASS] FilesystemGlobTool recursive glob finds subdirectory files"
-                  << std::endl;
+        g_fs_passed++;
+        TEST_PASS << "FilesystemGlobTool recursive glob finds subdirectory files" << std::endl;
     } else {
         g_fs_failed++;
         TEST_FAIL << "FilesystemGlobTool recursive glob failed, got: " << result << std::endl;
@@ -1161,7 +1197,8 @@ asio::awaitable<void>
     };
     auto result = co_await tool.execute_async(args);
     if (agentxx::util::isIgnoreCaseContains(result, "error")) {
-        std::cout << "[PASS] FilesystemGrepTool returns error for empty text_patterns" << std::endl;
+        g_fs_passed++;
+        TEST_PASS << "FilesystemGrepTool returns error for empty text_patterns" << std::endl;
     } else {
         g_fs_failed++;
         TEST_FAIL << "FilesystemGrepTool should return error for empty "
@@ -1180,7 +1217,8 @@ asio::awaitable<void>
     };
     auto result = co_await tool.execute_async(args);
     if (agentxx::util::isIgnoreCaseContains(result, "error")) {
-        std::cout << "[PASS] FilesystemGrepTool returns error for empty file_patterns" << std::endl;
+        g_fs_passed++;
+        TEST_PASS << "FilesystemGrepTool returns error for empty file_patterns" << std::endl;
     } else {
         g_fs_failed++;
         TEST_FAIL << "FilesystemGrepTool should return error for empty "

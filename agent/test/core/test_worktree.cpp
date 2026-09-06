@@ -15,6 +15,17 @@ namespace test {
 int g_wt_passed = 0;
 int g_wt_failed = 0;
 
+} // namespace test
+} // namespace agentxx
+
+// 断言计数宏覆盖: 放在全局作用域定义 (本文件后续所有 XX_TEST_EXPECT_* 生效),
+// 不经头文件导出, 避免泄漏到其他测试模块
+#define XX_TEST_PASSED agentxx::test::g_wt_passed
+#define XX_TEST_FAILED agentxx::test::g_wt_failed
+
+namespace agentxx {
+namespace test {
+
 namespace {
 
 /// 递归删除目录 (忽略错误)

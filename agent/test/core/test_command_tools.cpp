@@ -159,7 +159,8 @@ asio::awaitable<void>
         g_cmd_passed++;
         TEST_PASS << "ExecuteBashCommandTool::get_definition() name correct" << std::endl;
     } else {
-        std::cout << "[FAIL] ExecuteBashCommandTool::get_definition() name incorrect" << std::endl;
+        g_cmd_failed++;
+        TEST_FAIL << "ExecuteBashCommandTool::get_definition() name incorrect" << std::endl;
     }
     co_return;
 }
@@ -172,7 +173,8 @@ asio::awaitable<void>
     };
     auto result = co_await tool.execute_async(args);
     if (result.find("\"error\"") != std::string::npos) {
-        std::cout << "[PASS] ExecuteBashCommandTool returns error for empty command" << std::endl;
+        g_cmd_passed++;
+        TEST_PASS << "ExecuteBashCommandTool returns error for empty command" << std::endl;
     } else {
         g_cmd_failed++;
         TEST_FAIL << "ExecuteBashCommandTool should return error for empty "
@@ -255,10 +257,11 @@ asio::awaitable<void>
     auto tool = agentxx::tools::ExecuteWindowsCommandTool{agentContext};
     auto def  = tool.get_definition();
     if (def.name == "agentxx_execute_windows_command") {
-        std::cout << "[PASS] ExecuteWindowsCommandTool::get_definition() name correct" << std::endl;
+        g_cmd_passed++;
+        TEST_PASS << "ExecuteWindowsCommandTool::get_definition() name correct" << std::endl;
     } else {
-        std::cout << "[FAIL] ExecuteWindowsCommandTool::get_definition() name incorrect"
-                  << std::endl;
+        g_cmd_failed++;
+        TEST_FAIL << "ExecuteWindowsCommandTool::get_definition() name incorrect" << std::endl;
     }
     co_return;
 }
@@ -271,11 +274,11 @@ asio::awaitable<void>
     };
     auto result = co_await tool.execute_async(args);
     if (result.find("\"error\"") != std::string::npos) {
-        std::cout << "[PASS] ExecuteWindowsCommandTool returns error for empty command"
-                  << std::endl;
+        g_cmd_passed++;
+        TEST_PASS << "ExecuteWindowsCommandTool returns error for empty command" << std::endl;
     } else {
-        std::cout << "[FAIL] ExecuteWindowsCommandTool should return error for empty "
-                     "command, got: "
+        g_cmd_failed++;
+        TEST_FAIL << "ExecuteWindowsCommandTool should return error for empty command, got: "
                   << result << std::endl;
     }
     co_return;

@@ -182,7 +182,8 @@ asio::awaitable<void>
         g_ws_passed++;
         TEST_PASS << "WebSearchTool returns error for empty query" << std::endl;
     } else {
-        std::cout << "[FAIL] WebSearchTool should return error for empty query, got: " << result
+        g_ws_failed++;
+        TEST_FAIL << "WebSearchTool should return error for empty query, got: " << result
                   << std::endl;
     }
     co_return;
@@ -205,8 +206,8 @@ asio::awaitable<void> test_web_search_definition_has_required_query(
             }
         }
         if (hasQuery) {
-            std::cout << "[PASS] WebSearchTool definition has 'query' as required param"
-                      << std::endl;
+            g_ws_passed++;
+            TEST_PASS << "WebSearchTool definition has 'query' as required param" << std::endl;
         } else {
             g_ws_failed++;
             TEST_FAIL << "WebSearchTool definition missing 'query' in required" << std::endl;
@@ -243,7 +244,8 @@ asio::awaitable<void>
         g_ws_passed++;
         TEST_PASS << "WebFetchUrlTool returns error for empty url" << std::endl;
     } else {
-        std::cout << "[FAIL] WebFetchUrlTool should return error for empty url, got: " << result
+        g_ws_failed++;
+        TEST_FAIL << "WebFetchUrlTool should return error for empty url, got: " << result
                   << std::endl;
     }
     co_return;
@@ -276,7 +278,8 @@ asio::awaitable<void> test_web_fetch_url_markdown_get_definition(
         g_ws_passed++;
         TEST_PASS << "WebFetchUrlMarkdownTool::get_definition() name correct" << std::endl;
     } else {
-        std::cout << "[FAIL] WebFetchUrlMarkdownTool::get_definition() name incorrect" << std::endl;
+        g_ws_failed++;
+        TEST_FAIL << "WebFetchUrlMarkdownTool::get_definition() name incorrect" << std::endl;
     }
     co_return;
 }
