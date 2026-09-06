@@ -164,6 +164,7 @@ private:
 
     std::atomic_size_t              correlationSeq_{0};
     std::atomic_size_t              serverId_{0};
+    std::atomic_size_t              rrIndex_{0};
     std::map<size_t, ServerHandler> servers_{}; // <serverId, handler>
 
 public:
@@ -206,9 +207,11 @@ public:
             };
         }
 
-        auto correlationId = ++correlationSeq_;
-        auto serverIt      = servers_.begin();
-        auto handler       = serverIt->second;
+        auto   correlationId = ++correlationSeq_;
+        size_t idx           = rrIndex_.fetch_add(1, std::memory_order_relaxed) % servers_.size();
+        auto   serverIt      = servers_.begin();
+        std::advance(serverIt, idx);
+        auto   handler       = serverIt->second;
 
         auto out = co_await agentxx::util::catchErrorToUnexpectedAsync<RespType>(
             [&]() -> asio::awaitable<std::expected<RespType, std::string>> {
@@ -645,7 +648,7 @@ private:
     /// - 仅在 io 线程访问, 无需同步
     std::chrono::steady_clock::time_point tpsStartTime_{};
     double                                tpsTokenCount_ = 0.0; ///< 当前流累计估算 token 数
-    size_t                                tpsPendingChars_ = 0; ///< 批量估算待折算字符数
+    std::string                           tpsPendingText_{};    ///< 批量估算待折算文本
     double                                tpsLastPushSec_ = 0.0; ///< 上次推送时的累计秒数
     double tpsLastPushToken_   = 0.0; ///< 上次推送时的累计 token 数
     double tpsPushIntervalSec_ = 3.0; ///< 推送间隔 (秒)

@@ -140,14 +140,13 @@ void EventBridge::handleLLMToken(const neograph::graph::GraphEvent& event) {
     }
 
     // 累计估算 token 数: 批量估算 (每16 token推送窗口再估, 减少 countTokens 遍历)
-    // 此处仅累加字符数, 推送时统一折算 token, 降低每 token 的估算开销
-    tpsPendingChars_ += token.size();
-    // 每 16 token (估算 len * 4) 或窗口到期再做一次 countTokens 批量折算
+    // 此处累加文本, 推送时统一经 countTokens 折算 token, 保持与 summarization 同口径
+    tpsPendingText_ += token;
+    // 每 16 token (约 64 字节) 或窗口到期再做一次 countTokens 批量折算
     constexpr size_t kBatchChars = 64;
-    if (tpsPendingChars_ >= kBatchChars) {
-        // 近似折算: 批量按比例估算, 避免逐 token 遍历
-        tpsTokenCount_   += static_cast<double>(tpsPendingChars_) / 4.0;
-        tpsPendingChars_  = 0;
+    if (tpsPendingText_.size() >= kBatchChars) {
+        tpsTokenCount_   += countTokens(tpsPendingText_);
+        tpsPendingText_.clear();
     }
     // 定时推送一次平均速度 (token/s) - push 时会把 pending 一并结算
     pushTpsIfDue();
@@ -437,16 +436,16 @@ void EventBridge::handleTurnStart() {
     // 重置流级统计 (防御: 上轮异常结束可能未结算)
     tpsStartTime_     = {};
     tpsTokenCount_    = 0.0;
-    tpsPendingChars_  = 0;
+    tpsPendingText_.clear();
     tpsLastPushSec_   = 0.0;
     tpsLastPushToken_ = 0.0;
 }
 
 void EventBridge::settleCurrentStream() {
-    // 结算 pending 字符
-    if (tpsPendingChars_ > 0) {
-        tpsTokenCount_   += static_cast<double>(tpsPendingChars_) / 4.0;
-        tpsPendingChars_  = 0;
+    // 结算 pending 文本
+    if (!tpsPendingText_.empty()) {
+        tpsTokenCount_   += countTokens(tpsPendingText_);
+        tpsPendingText_.clear();
     }
     // 无进行中的流 (当前流无 token 输出) 时跳过
     if (tpsTokenCount_ <= 0.0) {
@@ -463,7 +462,7 @@ void EventBridge::settleCurrentStream() {
     // 重置流级计数 (下一个流重新开始计时)
     tpsStartTime_     = {};
     tpsTokenCount_    = 0.0;
-    tpsPendingChars_  = 0;
+    tpsPendingText_.clear();
     tpsLastPushSec_   = 0.0;
     tpsLastPushToken_ = 0.0;
 }
@@ -551,31 +550,11 @@ double EventBridge::countTokens(std::string_view text) {
     }
 
     // 回退: 无 summarization (测试/裸 EventBridge) 时的内置估算
-    // 口径与 SummarizationMiddlewareHandle::countTokensForUtf8Str 完全一致:
+    // 口径与 SummarizationMiddlewareHandle::countTokensForUtf8Str / util::estimateTokenCount 完全一致:
     // - 0xF8-0xFF (无效 UTF-8 前导, 5/6 字节编码已被 RFC 3629 废弃) 按 ascii
     //   单字节处理, 避免吞掉后续字节少计
     // - ascii ≈ 4 字符/token, 非 ascii ≈ 1.1 字符/token (分别折算后相加)
-    size_t unicodeCount = 0, asciiCount = 0;
-    for (size_t i = 0, step = 0; i < text.size(); i += step) {
-        unsigned char byte = static_cast<unsigned char>(text[i]);
-        if (byte >= 0xF8) {
-            step = 1;
-            ++asciiCount;
-            continue;
-        } else if (byte >= 0xF0) {
-            step = 4;
-        } else if (byte >= 0xE0) {
-            step = 3;
-        } else if (byte >= 0xC0) {
-            step = 2;
-        } else {
-            step = 1;
-            ++asciiCount;
-            continue;
-        }
-        ++unicodeCount;
-    }
-    return static_cast<double>(unicodeCount) / 1.1 + static_cast<double>(asciiCount) / 4.0;
+    return util::estimateTokenCount(text, 1.1, 4.0);
 }
 
 void EventBridge::pushTpsIfDue() {
@@ -589,10 +568,10 @@ void EventBridge::pushTpsIfDue() {
     if (nowSec - tpsLastPushSec_ < tpsPushIntervalSec_) {
         return;
     }
-    // 结算 pending 字符再计算窗口 tps
-    if (tpsPendingChars_ > 0) {
-        tpsTokenCount_   += static_cast<double>(tpsPendingChars_) / 4.0;
-        tpsPendingChars_  = 0;
+    // 结算 pending 文本再计算窗口 tps
+    if (!tpsPendingText_.empty()) {
+        tpsTokenCount_   += countTokens(tpsPendingText_);
+        tpsPendingText_.clear();
     }
     // 最近一个窗口 (推送周期) 内的平均生成速度:
     // 窗口内 token 增量 / 窗口实际时长, 而非自流开始以来的累计平均
