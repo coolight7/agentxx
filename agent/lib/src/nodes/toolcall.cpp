@@ -737,12 +737,13 @@ asio::awaitable<void> ToolcallWrapNode::baseRun(
     // Find the last assistant message with tool_calls
     const neograph::ChatMessage* assistantMsg      = nullptr;
     size_t                       assistantMsgIndex = 0;
-    for (auto it = messages.rbegin(); it != messages.rend(); ++it) {
-        if (it->role == "assistant" && !it->tool_calls.empty()) {
-            assistantMsg = &(*it);
+    for (size_t i = messages.size(); i > 0; --i) {
+        const auto& msg = messages[i - 1];
+        if (msg.role == "assistant" && !msg.tool_calls.empty()) {
+            assistantMsg      = &msg;
+            assistantMsgIndex = i - 1;
             break;
         }
-        ++assistantMsgIndex;
     }
     if (!assistantMsg) {
         out = neograph::graph::NodeOutput{};
@@ -756,7 +757,7 @@ asio::awaitable<void> ToolcallWrapNode::baseRun(
 //   警告日志供排查; 不跳过执行, 避免掩盖真正的问题
 #if XX_IS_DEBUG_D
     {
-        const int64_t assistantIndex = static_cast<int64_t>(assistantMsg - &messages.front());
+        const int64_t assistantIndex = static_cast<int64_t>(assistantMsgIndex);
         std::set<std::string> replied;
         for (size_t i = static_cast<size_t>(assistantIndex) + 1; i < messages.size(); ++i) {
             if (messages[i].role == "tool" && false == messages[i].tool_call_id.empty()) {

@@ -3,6 +3,7 @@
 #include "agentxx/agent/session_store.h"
 #include "agentxx/plugin/plugin_manager.h"
 #include "agentxx/tools/subagent.h"
+#include "agentxx/util/async_offload.h"
 #include "agentxx/util/container_util.h"
 #include "agentxx/util/log.h"
 #include "neograph/graph/registry.h"
@@ -35,7 +36,22 @@ AgentContext::~AgentContext() {
 }
 
 Session::~Session() {
-    flushPendingViewOps();
+    // 析构线程安全守卫:
+    // - pendingViewOps_ 与 hooks_ 严格约定仅在 bound io 线程访问
+    // - 若 Session 在非 io 线程析构 (如 SessionsManager::remove 或 AgentHost::destroyAgent
+    //   在其他线程释放最后引用), 禁止跨线程触发 SQLite 落库或并发读写 pendingViewOps_;
+    //   此时宿主/进程正在拆卸, 直接丢弃待落盘操作并记录警告
+    if (isIoThread()) {
+        flushPendingViewOps();
+    } else {
+        if (!pendingViewOps_.empty()) {
+            XX_LOGW(
+                "Session destructor called off io thread; discarding {} pending view ops",
+                pendingViewOps_.size()
+            );
+            pendingViewOps_.clear();
+        }
+    }
 }
 
 std::string Session::appendViewMessage(ViewMessage msg) {
@@ -225,6 +241,60 @@ std::shared_ptr<Session> SessionsManager::getOrCreate(std::string_view sessionId
     return session;
 }
 
+asio::awaitable<std::shared_ptr<Session>> SessionsManager::getOrCreateAsync(
+    std::string_view   sessionId,
+    asio::thread_pool* pool
+) {
+    auto it = sessions_.find(sessionId);
+    if (it != sessions_.end()) {
+        co_return it->second;
+    }
+
+    auto                        sessionStore = this->sessionStore;
+    SessionStore::LoadedSession loaded;
+    if (sessionStore) {
+        if (pool) {
+            loaded = co_await agentxx::util::offloadAsync<SessionStore::LoadedSession>(
+                *pool,
+                [sessionStore, sid = std::string(sessionId)]()
+                    -> asio::awaitable<SessionStore::LoadedSession> {
+                    co_return sessionStore->loadSession(sid);
+                }
+            );
+        } else {
+            loaded = sessionStore->loadSession(sessionId);
+        }
+    }
+
+    it = sessions_.find(sessionId);
+    if (it != sessions_.end()) {
+        co_return it->second;
+    }
+
+    auto session = std::make_shared<Session>();
+    if (sessionStore) {
+        session->restore(std::move(loaded.viewMessages), loaded.msgIdCounter);
+        session->llmMessages = std::move(loaded.llmMessages);
+        auto tid             = std::string{sessionId};
+        session->setStoreHooks(SessionStoreHooks{
+            .onAppendViewMessage =
+                [sessionStore, tid](const ViewMessage& msg, uint64_t counter) {
+                    sessionStore->appendViewMessage(tid, msg, counter);
+                },
+            .onUpdateViewMessage =
+                [sessionStore, tid](const ViewMessage& msg) {
+                    sessionStore->updateViewMessage(tid, msg);
+                },
+            .onSaveLlmMessages =
+                [sessionStore, tid](const neograph::json& msgs) {
+                    sessionStore->saveLlmMessages(tid, msgs);
+                },
+        });
+    }
+    util::insertHeterogeneous(sessions_, std::string{sessionId}, session);
+    co_return session;
+}
+
 std::shared_ptr<Session> SessionsManager::get(std::string_view sessionId) {
     auto it = sessions_.find(sessionId);
     return it == sessions_.end() ? nullptr : it->second;
@@ -237,6 +307,14 @@ void SessionsManager::remove(std::string_view sessionId) {
 
 std::shared_ptr<Session> AgentContext::getSession(std::string_view sessionId) {
     return sessions->getOrCreate(sessionId);
+}
+
+asio::awaitable<std::shared_ptr<Session>> AgentContext::getSessionAsync(std::string_view sessionId
+) {
+    if (sessions) {
+        co_return co_await sessions->getOrCreateAsync(sessionId, threadPool.get());
+    }
+    co_return nullptr;
 }
 
 void AgentContext::setSessionWorkDir(std::string_view sessionId, std::string_view absWorkDir) {

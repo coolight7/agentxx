@@ -507,7 +507,7 @@ asio::awaitable<std::string> SummarizationMiddlewareHandle::doSummarizeWithLLM(
         // 不再走 SubagentExecute RR → requestInterrupt 抛 NodeInterrupt 的
         // 中断委派路径 —— 该路径的中断只能由 AgentRunner 处理, 空闲时
         // 会穿透所有 catchErrorAsync 逃逸到 EventBus publish 的 detached
-        // 协程被 asio 静默丢弃, 表现为压缩永久卡在 "Summarizizing..."。
+        // 协程被 asio 静默丢弃, 表现为压缩永久卡在 "Summarizing..."。
         // 改为直接经宿主 AgentHost::spawnBatch 派生压缩子代理并等待完成,
         // 与中断路径复用同一 spawnOneTask (同上下文模式语义一致: 相同
         // sessionId + 父会话模型 → KV cache 命中), 不抛中断。
@@ -744,7 +744,7 @@ asio::awaitable<void>
         // 1. 触发压缩时，先发送一条 viewMessage 提示 "正在压缩上下文"
         agentxx::agent::ViewMessage vm = agentxx::agent::ViewMessage::makeText(
             agentxx::agent::ViewMessage::Role::Tip,
-            "Summarizizing LLM Context...",
+            "Summarizing LLM Context...",
             startTimeMs
         );
         vm.tip->tipLevel = agentxx::agent::ViewMessage::TipLevel::Info;
@@ -754,7 +754,7 @@ asio::awaitable<void>
             if (session->io) {
                 session->io->sendToPeer(agentxx::agent::WireDelta{
                     .type    = agentxx::agent::WireDelta::Type::InsertMessage,
-                    .seq     = ++session->deltaSeq,
+                    .seq     = session->nextDeltaSeq(),
                     .message = std::make_shared<agentxx::agent::ViewMessage>(vm),
                 });
             }
@@ -764,6 +764,35 @@ asio::awaitable<void>
         doSummarizeToolcall(messages);
         cleanNoiseMessages(messages);
 
+        // 冷却检查: 若上次压缩后消息增长不足 (<= 2 条) 且当前仍处于 >= 75% 高水位，
+        // 说明普通的 LLM 摘要无法压下水位，为避免每轮 modelcall 都反复派生 subagent 无效压缩，
+        // 直接降级硬截断以彻底释放空间
+        size_t lastSummarizedMsgCount = 0;
+        {
+            const auto& countJson
+                = agentCtxPtr->middlewareHandleContext->getGraphDataItemValue<neograph::json>(
+                    sessionId,
+                    agentxx::middleware::MiddlewareContext::graphDataKey_summarizationLastMsgCount
+                );
+            if (countJson.is_number_integer()) {
+                lastSummarizedMsgCount = countJson.get<size_t>();
+            }
+        }
+        size_t currentFailCount = 0;
+        {
+            const auto& fcJson
+                = agentCtxPtr->middlewareHandleContext->getGraphDataItemValue<neograph::json>(
+                    sessionId,
+                    agentxx::middleware::MiddlewareContext::graphDataKey_summarizationFailCount
+                );
+            if (fcJson.is_number_integer()) {
+                currentFailCount = fcJson.get<size_t>();
+            }
+        }
+        const bool coolDownActive
+            = (currentFailCount == 0 && lastSummarizedMsgCount > 0
+               && messages.size() <= lastSummarizedMsgCount + 2);
+
         // LLM 同上下文压缩
         const size_t systemCount = (!messages.empty() && messages[0].role == "system") ? 1 : 0;
         const size_t recentBudget
@@ -772,7 +801,15 @@ asio::awaitable<void>
         const size_t oldStart = systemCount;
 
         std::vector<neograph::ChatMessage> compressedMessages;
-        if (oldEnd > oldStart) {
+        bool                               compacted = false;
+        if (coolDownActive) {
+            XX_LOGD(
+                "SummarizationMiddlewareHandle: 上次压缩后消息增长不足 ({} <= {} + 2), 处于冷却期, 跳过重复 LLM 压缩",
+                messages.size(),
+                lastSummarizedMsgCount
+            );
+            compressedMessages = messages;
+        } else if (oldEnd > oldStart) {
             // 压缩段 (system 之后, recent 之前)
             auto oldMessages = std::vector<neograph::ChatMessage>{
                 messages.begin() + oldStart,
@@ -835,6 +872,7 @@ asio::awaitable<void>
             }
 
             if (action == ReplaceAction::Compact) {
+                compacted = true;
                 if (systemCount > 0) {
                     // 系统消息
                     compressedMessages.push_back(messages[0]);
@@ -868,7 +906,7 @@ asio::awaitable<void>
             compressedMessages = messages;
         }
 
-        // ---- 兜底: 压缩后仍超限 → 降级硬截断, 保证请求能发出 ----
+        // ---- 兜底: 压缩后仍超限 (>= 95%) → 降级硬截断, 保证请求能发出 ----
         // 场景: LLM 摘要本身超长 / recent 段单条消息超大 (如超大附件、长日志),
         // 即使按预算切分 (recent 至少 1 条) 仍 >= 95% 上限;
         // 硬截断 (30% 预算 + 单条二分截断) 是最终兜底
@@ -885,6 +923,22 @@ asio::awaitable<void>
         neograph::to_json(newMsgsJson, compressedMessages);
         in.state.overwrite("messages", newMsgsJson);
 
+        if (compacted) {
+            // 成功压缩: 记录本次压缩后的消息条数, 供后续轮次做冷却判断
+            agentCtxPtr->middlewareHandleContext->setGraphDataItemValue<size_t>(
+                sessionId,
+                agentxx::middleware::MiddlewareContext::graphDataKey_summarizationLastMsgCount,
+                compressedMessages.size()
+            );
+        } else {
+            // 未做 LLM 压缩或失败/硬截断: 复位冷却基准
+            agentCtxPtr->middlewareHandleContext->setGraphDataItemValue<size_t>(
+                sessionId,
+                agentxx::middleware::MiddlewareContext::graphDataKey_summarizationLastMsgCount,
+                size_t{0}
+            );
+        }
+
         // 计算新 token 量与耗时，更新刚刚的 viewMessage 为
         //     "压缩上下文 {旧}->{新}/{最大} · {耗时}"
         const auto newTokens = countTokens({}, compressedMessages, enableCountThinking);
@@ -894,7 +948,7 @@ asio::awaitable<void>
             )
                                        .count());
         vm.text = fmt::format(
-            "Summarizied LLM Context {}->{}/{} · {}",
+            "Summarized LLM Context {}->{}/{} · {}",
             oldTokens,
             newTokens,
             modelContenxtMaxToken,
@@ -906,7 +960,7 @@ asio::awaitable<void>
             if (session->io) {
                 session->io->sendToPeer(agentxx::agent::WireDelta{
                     .type    = agentxx::agent::WireDelta::Type::UpdateMessage,
-                    .seq     = ++session->deltaSeq,
+                    .seq     = session->nextDeltaSeq(),
                     .message = std::make_shared<agentxx::agent::ViewMessage>(vm),
                 });
             }
@@ -1006,7 +1060,7 @@ asio::awaitable<bool>
     // 1. 触发压缩时，先发送一条 viewMessage 提示 "正在压缩上下文"
     agentxx::agent::ViewMessage vm = agentxx::agent::ViewMessage::makeText(
         agentxx::agent::ViewMessage::Role::Tip,
-        "Summarizizing LLM Context...",
+        "Summarizing LLM Context...",
         startTimeMs
     );
     vm.tip->tipLevel = agentxx::agent::ViewMessage::TipLevel::Info;
@@ -1015,7 +1069,7 @@ asio::awaitable<bool>
     if (session->io) {
         session->io->sendToPeer(agentxx::agent::WireDelta{
             .type    = agentxx::agent::WireDelta::Type::InsertMessage,
-            .seq     = ++session->deltaSeq,
+            .seq     = session->nextDeltaSeq(),
             .message = std::make_shared<agentxx::agent::ViewMessage>(vm),
         });
     }
@@ -1078,7 +1132,7 @@ asio::awaitable<bool>
         compressedMessages = messages;
     }
 
-    // ---- 兜底: 压缩后仍超限 → 降级硬截断, 保证请求能发出 ----
+    // ---- 兜底: 压缩后仍超限 (>= 95%) → 降级硬截断, 保证请求能发出 ----
     // (与 onModelcallRunFunc 相同语义; 手动压缩也保证结果不超限)
     if (countTokens({}, compressedMessages, enableCountThinking) >= modelContenxtMaxToken * 0.95) {
         XX_LOGW(
@@ -1094,7 +1148,7 @@ asio::awaitable<bool>
     session->llmMessages = newMsgsJson;
     session->saveLlmMessages();
 
-    // 4. 更新统计与 viewMessage 为 "Summarizied LLM Context {旧}->{新}/{最大} · {耗时}"
+    // 4. 更新统计与 viewMessage 为 "Summarized LLM Context {旧}->{新}/{最大} · {耗时}"
     const auto newTokens = countTokens({}, compressedMessages, enableCountThinking);
     const auto durationMs
         = static_cast<int64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -1102,7 +1156,7 @@ asio::awaitable<bool>
         )
                                    .count());
     vm.text = fmt::format(
-        "Summarizied LLM Context {}->{}/{} · {}",
+        "Summarized LLM Context {}->{}/{} · {}",
         oldTokens,
         newTokens,
         modelContenxtMaxToken,
@@ -1113,7 +1167,7 @@ asio::awaitable<bool>
     if (session->io) {
         session->io->sendToPeer(agentxx::agent::WireDelta{
             .type    = agentxx::agent::WireDelta::Type::UpdateMessage,
-            .seq     = ++session->deltaSeq,
+            .seq     = session->nextDeltaSeq(),
             .message = std::make_shared<agentxx::agent::ViewMessage>(vm),
         });
         session->io->sendToPeer(agentxx::agent::WireContextStats{newTokens, modelContenxtMaxToken});

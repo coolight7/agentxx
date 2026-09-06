@@ -1106,7 +1106,7 @@ asio::awaitable<TestResult> run_summarization_tests() {
         XX_TEST_EXPECT_EQ(maxContextTokensOf(env->ctx, env->sessionId), size_t{1000});
         XX_TEST_EXPECT_TRUE(env->session()->viewMessages.size() >= 1);
         XX_TEST_EXPECT_TRUE(
-            env->session()->viewMessages.back().text.find("Summarizied LLM Context")
+            env->session()->viewMessages.back().text.find("Summarized LLM Context")
             != std::string::npos
         );
     }
@@ -1170,7 +1170,7 @@ asio::awaitable<TestResult> run_summarization_tests() {
         XX_TEST_EXPECT_EQ(contextTokensOf(env->ctx, env->sessionId), size_t{58});
         XX_TEST_EXPECT_TRUE(env->session()->viewMessages.size() >= 1);
         XX_TEST_EXPECT_TRUE(
-            env->session()->viewMessages.back().text.find("Summarizied LLM Context")
+            env->session()->viewMessages.back().text.find("Summarized LLM Context")
             != std::string::npos
         );
     }
@@ -1820,7 +1820,7 @@ asio::awaitable<TestResult> run_summarization_tests() {
         const auto& vm = sess->viewMessages.back();
         XX_TEST_EXPECT_EQ(vm.role, agentxx::agent::ViewMessage::Role::Tip);
         // 验证格式: 包含 "压缩上下文 900->.../1000 · "
-        XX_TEST_EXPECT_TRUE(vm.text.starts_with("Summarizied LLM Context 900->"));
+        XX_TEST_EXPECT_TRUE(vm.text.starts_with("Summarized LLM Context 900->"));
         XX_TEST_EXPECT_TRUE(vm.text.find("/1000 · ") != std::string::npos);
     }
 
@@ -1846,7 +1846,7 @@ asio::awaitable<TestResult> run_summarization_tests() {
         XX_TEST_EXPECT_TRUE(env->session()->llmMessages.is_array());
         XX_TEST_EXPECT_TRUE(env->session()->viewMessages.size() >= 1);
         const auto& vm = env->session()->viewMessages.back();
-        XX_TEST_EXPECT_TRUE(vm.text.starts_with("Summarizied LLM Context "));
+        XX_TEST_EXPECT_TRUE(vm.text.starts_with("Summarized LLM Context "));
     }
 
     // ==================== 新增: 无工具压缩 + 压缩后仍超限兜底 ====================

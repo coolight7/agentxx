@@ -316,7 +316,8 @@ struct RespCrossAgent {
 struct RespSubagentBatchItem {
     std::string resultId;
     std::string content;
-    bool        hasError = false;
+    bool        hasError  = false;
+    bool        cancelled = false;
     std::string errorMessage;
     /// 宿主派生时的 agent 唯一 id (AgentHost 填充; 节点已回收, 仅用于日志/关联)
     std::string agentId;

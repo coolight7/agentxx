@@ -756,7 +756,7 @@ asio::awaitable<BaseAgent::TurnResult> BaseAgent::runTurnAsync(
     std::string_view             modelName
 ) {
     TurnResult turnResult;
-    auto       session = agentContext->getSession(sessionId);
+    auto       session = co_await agentContext->getSessionAsync(sessionId);
     session->bindIoThread();
     session->assertIoThread();
 

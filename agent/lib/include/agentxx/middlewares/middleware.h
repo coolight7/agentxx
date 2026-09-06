@@ -409,6 +409,11 @@ public:
     ///   达到上限 (或超限严重) 时触发硬截断兜底
     inline static const std::string graphDataKey_summarizationFailCount{"xx_summarizationFailCount"
     };
+    /// 上次成功压缩后的消息数量
+    /// - 用于自动压缩冷却: 若上次压缩后消息条数增长不足且仍处于超限水位，避免反复派生 subagent 无效压缩
+    inline static const std::string graphDataKey_summarizationLastMsgCount{
+        "xx_summarizationLastMsgCount"
+    };
     inline static const std::string graphDataKey_interruptArgs{"xx_interruptArgs"};
     inline static const std::string graphDataKey_interruptResult{"xx_interruptResult"};
     /// 中断发生的节点名 (供程序重启恢复中断时复用)

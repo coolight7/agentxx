@@ -485,6 +485,55 @@ using IgnoreCaseSet = std::unordered_set<std::string, IgnoreCaseHash, IgnoreCase
     return true;
 }
 
+/// 估算 UTF-8 文本的 token 数量 (统一口径)
+/// - 口径统一规则:
+///   - 0xF8-0xFF (无效 UTF-8 前导) 按 ascii 单字节处理
+///   - 统计 unicode (非 ascii) 与 ascii 字符数
+///   - 分别折算: unicode / unicodeCharsPerToken + ascii / asciiCharsPerToken
+/// - `args`:
+///     - [str] 待估算的 UTF-8 文本
+///     - [unicodeCharsPerToken] 每个 token 对应的 unicode 字符数 (默认 1.1)
+///     - [asciiCharsPerToken] 每个 token 对应的 ascii 字符数 (默认 4.0)
+/// - `return` 估算的 token 数量 (浮点数)
+[[nodiscard]] inline double estimateTokenCount(
+    std::string_view str,
+    double           unicodeCharsPerToken = 1.1,
+    double           asciiCharsPerToken   = 4.0
+) noexcept {
+    if (str.empty()) {
+        return 0.0;
+    }
+    if (unicodeCharsPerToken <= 0.0) {
+        unicodeCharsPerToken = 1.1;
+    }
+    if (asciiCharsPerToken <= 0.0) {
+        asciiCharsPerToken = 4.0;
+    }
+    size_t unicodeCount = 0;
+    size_t asciiCount   = 0;
+    for (size_t i = 0, step = 0; i < str.size(); i += step) {
+        unsigned char byte = static_cast<unsigned char>(str[i]);
+        if (byte >= 0xF8) {
+            step = 1;
+            ++asciiCount;
+            continue;
+        } else if (byte >= 0xF0) {
+            step = 4;
+        } else if (byte >= 0xE0) {
+            step = 3;
+        } else if (byte >= 0xC0) {
+            step = 2;
+        } else {
+            step = 1;
+            ++asciiCount;
+            continue;
+        }
+        ++unicodeCount;
+    }
+    return static_cast<double>(unicodeCount) / unicodeCharsPerToken
+           + static_cast<double>(asciiCount) / asciiCharsPerToken;
+}
+
 template<typename T>
 [[nodiscard]] inline std::string
     stringVectorJoin(const std::vector<T>& list, std::string_view sep = ", ") {
