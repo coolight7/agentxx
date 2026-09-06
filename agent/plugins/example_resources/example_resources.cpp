@@ -193,8 +193,8 @@ extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_agent_destroy(void* plugin_
                     agentxx::plugin::PluginString::free(host, &p);
                     auto        pos  = libPath.find_last_of("/\\");
                     std::string base = pos == std::string::npos ? "." : libPath.substr(0, pos);
-                    std::string d = fmt::format("{}/skills_runtime", base);
-                    auto        dSv = agentxx::plugin::PluginStringView::from(d.data(), d.size());
+                    std::string d    = fmt::format("{}/skills_runtime", base);
+                    auto        dSv  = agentxx::plugin::PluginStringView::from(d.data(), d.size());
                     iface.resources->unregister_skill_dir(host, &dSv);
                 }
                 agentxx::plugin::PluginString::free(host, &info);

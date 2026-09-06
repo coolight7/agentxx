@@ -68,11 +68,8 @@ void AgentServer::bindIoThread() const noexcept {
 
 void AgentServer::bindIoThreadIfUnset() const noexcept {
     std::thread::id expected{};
-    ioThreadId_.compare_exchange_strong(
-        expected,
-        std::this_thread::get_id(),
-        std::memory_order_relaxed
-    );
+    ioThreadId_
+        .compare_exchange_strong(expected, std::this_thread::get_id(), std::memory_order_relaxed);
 }
 
 bool AgentServer::isIoThread() const noexcept {
@@ -87,8 +84,7 @@ void AgentServer::assertIoThread() const {
     }
 #ifndef NDEBUG
     assert(
-        false
-        && "AgentServer: all operations must only be performed on the bound agent io thread"
+        false && "AgentServer: all operations must only be performed on the bound agent io thread"
     );
 #else
     XX_LOGE(

@@ -472,7 +472,7 @@ asio::awaitable<TestResult> run_subagent_tool_tests() {
                      {"content", "compress me"},
                  }})                        },
                 {"sessionId", env->sessionId},
- // 注意: 无 tool_call_id (压缩中间件直接调用)
+                // 注意: 无 tool_call_id (压缩中间件直接调用)
             };
             try {
                 (void)co_await env->tool->execute_async(args);
@@ -554,7 +554,7 @@ asio::awaitable<TestResult> run_subagent_tool_tests() {
                 {"subagent",  "worker"      },
                 {"message",   "m"           },
                 {"sessionId", env->sessionId},
- // 无 tool_call_id
+                // 无 tool_call_id
             };
             try {
                 (void)co_await env->tool->execute_async(args);

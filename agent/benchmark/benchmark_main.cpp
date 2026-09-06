@@ -30,7 +30,7 @@ struct BenchModule {
     std::string           name;
     std::string           description;
     std::function<void()> run;
-    bool                  isSubResource = false; ///< 是否为 resource 的子模块 (全量时由 resource 代替)
+    bool isSubResource = false; ///< 是否为 resource 的子模块 (全量时由 resource 代替)
 };
 
 } // namespace
@@ -86,34 +86,53 @@ int main(int argn, char** argv) {
 
     // 模块注册表 (仿 test 单点维护)
     std::vector<BenchModule> modules = {
-        {"string_util", "Benchmark string manipulation and path conversion", agentxx::bench::benchStringUtil},
-        {"aho_corasick", "Benchmark Aho-Corasick multi-pattern search", agentxx::bench::benchAhoCorasick},
+        {"string_util",
+         "Benchmark string manipulation and path conversion", agentxx::bench::benchStringUtil},
+        {"aho_corasick",
+         "Benchmark Aho-Corasick multi-pattern search", agentxx::bench::benchAhoCorasick},
         {"regex", "Benchmark regex matching and pattern substitution", agentxx::bench::benchRegex},
         {"router", "Benchmark URL routing and dispatching", agentxx::bench::benchRouter},
-        {"code_agent_init", "Benchmark CodeAgent cold initialization", agentxx::bench::benchCodeAgentInit},
-        {"code_agent_init_warm", "Benchmark CodeAgent warm initialization", agentxx::bench::benchCodeAgentInitWarm},
-        {"code_agent_turn", "Benchmark CodeAgent single conversation turn", [=]() {
-            auto cfg = makeCodeAgentConfig();
-            agentxx::bench::benchCodeAgentRunConversationTurnAsync(cfg);
-        }},
-        {"code_agent_simple", "Benchmark CodeAgent simple completion", [=]() {
-            auto cfg = makeCodeAgentConfig();
-            agentxx::bench::benchCodeAgentSimpleCompletion(cfg);
-        }},
-        {"code_agent_multi", "Benchmark CodeAgent multi-turn conversation", [=]() {
-            auto cfg = makeCodeAgentConfig();
-            agentxx::bench::benchCodeAgentMultiTurn(cfg);
-        }},
-        {"code_agent_large_history", "Benchmark CodeAgent with large conversation history", [=]() {
-            auto cfg = makeCodeAgentConfig();
-            agentxx::bench::benchCodeAgentLargeHistory(cfg);
-        }},
-        {"resource", "Benchmark memory and CPU across all 5 modes (startup/100K/200K)", agentxx::bench::benchResourceAll},
-        {"resource_cli", "Benchmark memory and CPU for in-process CLI", agentxx::bench::benchResourceCli, true},
-        {"resource_tui", "Benchmark memory and CPU for in-process TUI", agentxx::bench::benchResourceTui, true},
-        {"resource_split_cli", "Benchmark memory and CPU for split CLI + Server", agentxx::bench::benchResourceSplitCli, true},
-        {"resource_split_tui", "Benchmark memory and CPU for split TUI + Server", agentxx::bench::benchResourceSplitTui, true},
-        {"resource_ffi", "Benchmark memory and CPU for libagentxx_shared control group", agentxx::bench::benchResourceFfi, true},
+        {"code_agent_init",
+         "Benchmark CodeAgent cold initialization", agentxx::bench::benchCodeAgentInit},
+        {"code_agent_init_warm",
+         "Benchmark CodeAgent warm initialization", agentxx::bench::benchCodeAgentInitWarm},
+        {"code_agent_turn",
+         "Benchmark CodeAgent single conversation turn", [=]() {
+             auto cfg = makeCodeAgentConfig();
+             agentxx::bench::benchCodeAgentRunConversationTurnAsync(cfg);
+         }},
+        {"code_agent_simple",
+         "Benchmark CodeAgent simple completion", [=]() {
+             auto cfg = makeCodeAgentConfig();
+             agentxx::bench::benchCodeAgentSimpleCompletion(cfg);
+         }},
+        {"code_agent_multi",
+         "Benchmark CodeAgent multi-turn conversation", [=]() {
+             auto cfg = makeCodeAgentConfig();
+             agentxx::bench::benchCodeAgentMultiTurn(cfg);
+         }},
+        {"code_agent_large_history",
+         "Benchmark CodeAgent with large conversation history", [=]() {
+             auto cfg = makeCodeAgentConfig();
+             agentxx::bench::benchCodeAgentLargeHistory(cfg);
+         }},
+        {"resource",
+         "Benchmark memory and CPU across all 5 modes (startup/100K/200K)", agentxx::bench::benchResourceAll},
+        {"resource_cli",
+         "Benchmark memory and CPU for in-process CLI", agentxx::bench::benchResourceCli,
+         true},
+        {"resource_tui",
+         "Benchmark memory and CPU for in-process TUI", agentxx::bench::benchResourceTui,
+         true},
+        {"resource_split_cli",
+         "Benchmark memory and CPU for split CLI + Server", agentxx::bench::benchResourceSplitCli,
+         true},
+        {"resource_split_tui",
+         "Benchmark memory and CPU for split TUI + Server", agentxx::bench::benchResourceSplitTui,
+         true},
+        {"resource_ffi",
+         "Benchmark memory and CPU for libagentxx_shared control group", agentxx::bench::benchResourceFfi,
+         true},
     };
 
     // 处理 --list
@@ -143,7 +162,7 @@ int main(int argn, char** argv) {
         }
     }
 
-    bool runAll = selectedModules.empty();
+    bool runAll    = selectedModules.empty();
     auto shouldRun = [&](const BenchModule& mod) {
         if (runAll) {
             // 全量运行时: 运行非子模块 (resource 会覆盖所有 resource_* 细分)
@@ -175,19 +194,23 @@ int main(int argn, char** argv) {
         if (!shouldRun(mod)) {
             continue;
         }
-        std::cout << "\n>>> Running module: " << mod.name << " (" << mod.description << ")" << std::endl;
+        std::cout << "\n>>> Running module: " << mod.name << " (" << mod.description << ")"
+                  << std::endl;
         try {
             mod.run();
         } catch (const std::exception& e) {
-            std::cerr << "[Error] Module " << mod.name << " threw exception: " << e.what() << std::endl;
+            std::cerr << "[Error] Module " << mod.name << " threw exception: " << e.what()
+                      << std::endl;
             if (failFast) {
-                std::cerr << "======= FAIL-FAST: aborting after " << mod.name << " =======" << std::endl;
+                std::cerr << "======= FAIL-FAST: aborting after " << mod.name
+                          << " =======" << std::endl;
                 std::_Exit(1);
             }
         } catch (...) {
             std::cerr << "[Error] Module " << mod.name << " threw unknown exception" << std::endl;
             if (failFast) {
-                std::cerr << "======= FAIL-FAST: aborting after " << mod.name << " =======" << std::endl;
+                std::cerr << "======= FAIL-FAST: aborting after " << mod.name
+                          << " =======" << std::endl;
                 std::_Exit(1);
             }
         }

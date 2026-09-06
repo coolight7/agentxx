@@ -198,13 +198,10 @@ Element SessionSelectorOverlay::OnRender() {
         if (st.sessionListLoadingMore) {
             items.push_back(text(tr("session.loadingMore")) | dim);
         } else if (st.sessionListHasMore) {
-            const std::string hint = st.sessionListTotalCount > 0
-                                         ? trf(
-                                               "session.loadedMore",
-                                               st.sessionList.size(),
-                                               st.sessionListTotalCount
-                                           )
-                                         : std::string(tr("session.loadMore"));
+            const std::string hint
+                = st.sessionListTotalCount > 0
+                      ? trf("session.loadedMore", st.sessionList.size(), st.sessionListTotalCount)
+                      : std::string(tr("session.loadMore"));
             items.push_back(text(hint) | dim);
         }
     }
@@ -328,10 +325,7 @@ Element SettingsOverlay::OnRender() {
     // 动画等级 (点击/Enter 循环切换; 组件经 TUISettings::isAnimationEnabled() 判断启用)
     items.push_back(text(" "));
     items.push_back(text(tr("settings.animLabel")) | color(theme.hintColor));
-    auto animEntry = text(trf(
-        "settings.animValue",
-        TUISettings::instance().animationLevelName()
-    ));
+    auto animEntry = text(trf("settings.animValue", TUISettings::instance().animationLevelName()));
     if (selectedIndex_ == 1) {
         animEntry = animEntry | bgcolor(theme.buttonActiveBgColor)
                     | color(theme.buttonActiveTextColor) | bold | focus;
@@ -368,8 +362,7 @@ Element SettingsOverlay::OnRender() {
     // 界面语言 (点击/Enter 循环切换: 自动 Auto <-> 简体中文 zh-cn <-> English en-us)
     items.push_back(text(" "));
     items.push_back(text(tr("settings.langLabel")) | color(theme.hintColor));
-    auto langEntry
-        = text(trf("settings.langValue", TUISettings::instance().languageName()));
+    auto langEntry = text(trf("settings.langValue", TUISettings::instance().languageName()));
     if (selectedIndex_ == 4) {
         langEntry = langEntry | bgcolor(theme.buttonActiveBgColor)
                     | color(theme.buttonActiveTextColor) | bold | focus;
@@ -756,9 +749,8 @@ std::vector<ScrollItem> AboutOverlay::buildItems() {
 
     std::string dataDirStr = ctx_.dataDir;
     if (dataDirStr.empty()) {
-        dataDirStr = ctx_.remoteUrl.empty()
-                         ? agentxx::agent::AgentConfigStatic::getDataDir("")
-                         : std::string(tr("about.remoteNoCfg"));
+        dataDirStr = ctx_.remoteUrl.empty() ? agentxx::agent::AgentConfigStatic::getDataDir("")
+                                            : std::string(tr("about.remoteNoCfg"));
     }
 
     std::string workDirStr = ctx_.workDir;
@@ -1190,10 +1182,7 @@ Element ContextOverlay::OnRender() {
     const int popupW = std::min(wantW, availW);
     const int popupH = std::min(wantH, availH);
 
-    auto title = trf(
-        "ctx.title",
-        (msgsPtr && msgsPtr->is_array()) ? msgsPtr->size() : 0
-    );
+    auto title = trf("ctx.title", (msgsPtr && msgsPtr->is_array()) ? msgsPtr->size() : 0);
 
     // 先渲染滚动区, 再返回整体布局; 折叠头命中区域由事件处理时
     // 从 scrollable_->visibleBoxes() 实时反推 (见 headerBoxes/handleHeaderClick)
@@ -1325,11 +1314,7 @@ void ContextOverlay::toggleExpanded(size_t index) {
 // MermaidDiagramOverlay
 // ---------------------------------------------------------------------------
 
-MermaidDiagramOverlay::MermaidDiagramOverlay(
-    TUICtx&     ctx,
-    std::string mermaid,
-    std::string title
-) :
+MermaidDiagramOverlay::MermaidDiagramOverlay(TUICtx& ctx, std::string mermaid, std::string title) :
     ctx_(ctx),
     mermaid_(std::move(mermaid)),
     title_(std::move(title)) {
@@ -1378,15 +1363,15 @@ ftxui::Element MermaidDiagramOverlay::OnRender() {
         ftxui::filler(),
         ftxui::text(" "),
     });
-    const int   margin = 2;
-    const int   termW  = ftxui::Terminal::Size().dimx;
-    const int   termH  = ftxui::Terminal::Size().dimy;
-    const int   wantW  = std::max(40, termW * 4 / 5);
-    const int   wantH  = std::max(14, termH * 4 / 5);
-    const int   availW = std::max(1, termW - margin * 2);
-    const int   availH = std::max(1, termH - margin * 2);
-    const int   popupW = std::min(wantW, availW);
-    const int   popupH = std::min(wantH, availH);
+    const int         margin    = 2;
+    const int         termW     = ftxui::Terminal::Size().dimx;
+    const int         termH     = ftxui::Terminal::Size().dimy;
+    const int         wantW     = std::max(40, termW * 4 / 5);
+    const int         wantH     = std::max(14, termH * 4 / 5);
+    const int         availW    = std::max(1, termW - margin * 2);
+    const int         availH    = std::max(1, termH - margin * 2);
+    const int         popupW    = std::min(wantW, availW);
+    const int         popupH    = std::min(wantH, availH);
     return ftxui::vbox({
                header,
                ftxui::separator(),
@@ -1582,8 +1567,14 @@ namespace {
 /// 通用 overlay 弹窗尺寸: 宽/高按屏占比, 不超过可用空间, 双约束防塌缩
 /// (抄 Mermaid/Failed: 惰性 viewport 自然高度会塌缩成单行, 必须同时给
 /// GREATER_THAN 下限)
-void overlayPopupSize(int widthFracNum, int widthFracDen, int heightFracNum, int heightFracDen,
-                      int& popupW, int& popupH) {
+void overlayPopupSize(
+    int  widthFracNum,
+    int  widthFracDen,
+    int  heightFracNum,
+    int  heightFracDen,
+    int& popupW,
+    int& popupH
+) {
     const int termW  = Terminal::Size().dimx;
     const int termH  = Terminal::Size().dimy;
     const int wantW  = std::max(40, termW * widthFracNum / widthFracDen);
@@ -1594,11 +1585,7 @@ void overlayPopupSize(int widthFracNum, int widthFracDen, int heightFracNum, int
     popupH           = std::min(wantH, availH);
 }
 
-bool overlayScrollByKey(
-    TUICtx&                          ctx,
-    const std::shared_ptr<Scrollable>& scrollable,
-    Event                              event
-) {
+bool overlayScrollByKey(TUICtx& ctx, const std::shared_ptr<Scrollable>& scrollable, Event event) {
     if (event == Event::ArrowUp) {
         scrollable->setScrollOffset(scrollable->scrollOffset() - 1);
         scrollable->setStickToBottom(false);
@@ -1618,12 +1605,12 @@ bool overlayScrollByKey(
 }
 
 Element overlayFrame(
-    TUICtx&                 ctx,
-    const std::string&      title,
-    const ftxui::Color&     accent,
-    Scrollable&             scrollable,
-    int                     widthFracNum,
-    int                     widthFracDen
+    TUICtx&             ctx,
+    const std::string&  title,
+    const ftxui::Color& accent,
+    Scrollable&         scrollable,
+    int                 widthFracNum,
+    int                 widthFracDen
 ) {
     int popupW = 0, popupH = 0;
     overlayPopupSize(widthFracNum, widthFracDen, 4, 5, popupW, popupH);
@@ -1670,8 +1657,8 @@ std::vector<ScrollItem> TextOverlay::buildItems() {
             auto ast     = parser->parse(content_);
             auto builder = std::make_shared<markdown::DomBuilder>();
             builder->set_max_width(maxW);
-            cachedElement_ = builder->build(ast, -1, theme.markdownTheme)
-                             | color(theme.normalColor);
+            cachedElement_
+                = builder->build(ast, -1, theme.markdownTheme) | color(theme.normalColor);
             cachedAttachments_.push_back(std::move(builder));
         } else {
             cachedElement_ = paragraph(content_) | color(theme.normalColor);
@@ -1730,10 +1717,7 @@ DiffOverlay::DiffOverlay(
 std::vector<ScrollItem> DiffOverlay::buildItems() {
     const auto& theme = *ctx_.theme;
     return {
-        ScrollItem{
-            agentxx::client::renderPluginDiff(path_, oldStr_, newStr_, theme),
-            false
-        }
+        ScrollItem{agentxx::client::renderPluginDiff(path_, oldStr_, newStr_, theme), false}
     };
 }
 
@@ -1764,10 +1748,10 @@ bool DiffOverlay::OnEvent(Event event) {
 }
 
 CustomOverlay::CustomOverlay(
-    TUICtx&       ctx,
-    std::string   title,
+    TUICtx&        ctx,
+    std::string    title,
     neograph::json items,
-    std::string   ownerPlugin
+    std::string    ownerPlugin
 ) :
     ctx_(ctx),
     title_(std::move(title)),
@@ -1777,8 +1761,7 @@ CustomOverlay::CustomOverlay(
         // CUSTOM overlay 内容经 Scrollable 全量构建 (按钮盒经 reflect 收集到 hits_):
         // hits_ 与 items 子项一一对应, 视口外为空 Box (Scrollable.visibleBoxes)
         const auto& theme = *ctx_.theme;
-        auto        reg
-            = ctx_.pluginManager ? ctx_.pluginManager->uiRegistrySnapshot() : nullptr;
+        auto        reg   = ctx_.pluginManager ? ctx_.pluginManager->uiRegistrySnapshot() : nullptr;
         const auto* regPtr = reg.get();
         Elements    els;
         hits_.clear();
@@ -1826,7 +1809,7 @@ CustomOverlay::CustomOverlay(
                     continue;
                 }
                 agentxx::client::PluginButtonDesc desc;
-                const bool isButton = (kind == "button" || kind == "action");
+                const bool                        isButton = (kind == "button" || kind == "action");
                 if (isButton
                     && agentxx::client::parsePluginButton(it, ownerPlugin_, regPtr, desc)) {
                     // text + button 隐式同行合并: 前一项为纯 text 且本按钮无
@@ -1913,7 +1896,12 @@ bool CustomOverlay::OnEvent(Event event) {
                     continue;
                 }
                 if (auto mgr = ctx_.pluginManager) {
-                    mgr->dispatchAction(ownerPlugin_, AGENTXX_CLIENT_OVERLAY_OWNER, h.actionId, h.argsJson);
+                    mgr->dispatchAction(
+                        ownerPlugin_,
+                        AGENTXX_CLIENT_OVERLAY_OWNER,
+                        h.actionId,
+                        h.argsJson
+                    );
                 }
                 ctx_.postRedraw();
                 return true;

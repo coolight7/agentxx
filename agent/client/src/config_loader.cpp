@@ -522,11 +522,8 @@ YamlAppConfig loadYamlConfig(
 
     // 语言配置 (yaml `language`, 默认 "en", 不支持 auto)
     if (root["language"]) {
-        auto val = resolveEnvVars(
-            root["language"].as<std::string>("en"),
-            dotEnvVars,
-            overrideEnvVars
-        );
+        auto val
+            = resolveEnvVars(root["language"].as<std::string>("en"), dotEnvVars, overrideEnvVars);
         cfg.language = agent::normalizeLanguage(val);
     }
 

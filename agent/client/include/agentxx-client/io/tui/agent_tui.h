@@ -292,9 +292,9 @@ public:
 
     /// 通用插件按钮命中表项 (sidebar/panel 渲染时挂载, 全局点击时命中检测)
     struct UiHitTarget {
-        ftxui::Box  box; ///< reflect 填充的屏幕绝对坐标
-        std::string plugin;   ///< 来自 registry 条目 plugin 字段
-        std::string ownerId;  ///< section_id / panel_id / tool_call_id
+        ftxui::Box  box;     ///< reflect 填充的屏幕绝对坐标
+        std::string plugin;  ///< 来自 registry 条目 plugin 字段
+        std::string ownerId; ///< section_id / panel_id / tool_call_id
         std::string actionId;
         std::string argsJson; ///< dump (无参 "{}")
     };
@@ -523,7 +523,8 @@ private:
     size_t logCacheLineCount_ = 0;
 
     /// 重绘请求合并 (postRedraw 由 client/UI 线程并发调用):
-    /// - redrawPosted_: 已投递尚未处理的 Custom 标记, 仅当无待处理事件时才 Post, 同帧内多次请求合并为一次
+    /// - redrawPosted_: 已投递尚未处理的 Custom 标记, 仅当无待处理事件时才 Post,
+    /// 同帧内多次请求合并为一次
     /// - redrawSeq_:    请求计数, UI 线程在帧结束时据此判断帧期间是否有请求被合并
     ///                  (被合并进本帧渲染, 而本帧快照取的是帧开头, 可能未反映其状态变更),
     ///                  若有则补 Post 一帧, 保证以最新快照重绘, 避免请求丢失

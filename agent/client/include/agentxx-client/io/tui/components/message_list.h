@@ -356,7 +356,8 @@ private:
 
     /// 测试辅助: 最近一次构建的 decor 按钮命中 (与 decorHits_ 对应)
     struct DecorHit {
-        ftxui::Box  box; ///< reflect 填充 (值拷贝; 构建期布局前为空, 布局后由 FTXUI 写回需经引用——见实现注释)
+        ftxui::Box box; ///< reflect 填充 (值拷贝; 构建期布局前为空, 布局后由 FTXUI
+                        ///< 写回需经引用——见实现注释)
         std::string plugin;
         std::string ownerId;
         std::string actionId;

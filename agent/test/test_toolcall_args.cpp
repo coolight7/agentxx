@@ -961,9 +961,17 @@ TestResult testToolcallArgs() {
     // #53 repeatCallCheck 工具属性配置语义
     {
         struct MockTool : public neograph::Tool {
-            std::string get_name() const override { return "mock"; }
-            neograph::ChatTool get_definition() const override { return {}; }
-            std::string execute(const neograph::json&) override { return {}; }
+            std::string get_name() const override {
+                return "mock";
+            }
+
+            neograph::ChatTool get_definition() const override {
+                return {};
+            }
+
+            std::string execute(const neograph::json&) override {
+                return {};
+            }
         };
 
         MockTool toolWithCheck;

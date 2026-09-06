@@ -198,7 +198,7 @@ static void injectCodegraphSystemPrompt(
     append["codegraph"]      = std::string(kSystemCodegraphPrompt);
     j["appendSystemPrompts"] = append;
     std::string payload      = j.dump();
-    auto        payloadSv    = agentxx::plugin::PluginStringView::from(payload.data(), payload.size());
+    auto        payloadSv = agentxx::plugin::PluginStringView::from(payload.data(), payload.size());
     if (iface.prompt->set_prompt(host, &payloadSv) != 0) {
         pluginLog(
             host,
@@ -287,7 +287,7 @@ static void ensureToolPromptsInHost(
     if (!dirty) {
         return;
     }
-    patch["toolPrompt"] = tools;
+    patch["toolPrompt"]   = tools;
     std::string payload   = patch.dump();
     auto        payloadSv = agentxx::plugin::PluginStringView::from(payload.data(), payload.size());
     if (iface.prompt->set_prompt(host, &payloadSv) != 0) {
@@ -703,9 +703,11 @@ static void snapshotQueryDone(void* ud, void* result, const AgentxxPluginStringV
                 if (!ctx->projectRoot.empty()) {
                     j["project_root"] = ctx->projectRoot;
                 }
-                std::string payload       = j.dump();
-                auto        statusTopic   = agentxx::plugin::PluginStringView::fromCstr("agentxx_codegraph.status");
-                auto        payloadSv     = agentxx::plugin::PluginStringView::from(payload.data(), payload.size());
+                std::string payload = j.dump();
+                auto        statusTopic
+                    = agentxx::plugin::PluginStringView::fromCstr("agentxx_codegraph.status");
+                auto payloadSv
+                    = agentxx::plugin::PluginStringView::from(payload.data(), payload.size());
                 ctx->iface.events->publish(ctx->host, &statusTopic, &payloadSv);
                 if (files && *files > 0) {
                     codegraph::Json p = codegraph::Json::object();
@@ -713,8 +715,9 @@ static void snapshotQueryDone(void* ud, void* result, const AgentxxPluginStringV
                     p["total"]        = *files;
                     p["current_file"] = "";
                     std::string pp    = p.dump();
-                    auto        progTopic = agentxx::plugin::PluginStringView::fromCstr("agentxx_codegraph.progress");
-                    auto        ppSv      = agentxx::plugin::PluginStringView::from(pp.data(), pp.size());
+                    auto        progTopic
+                        = agentxx::plugin::PluginStringView::fromCstr("agentxx_codegraph.progress");
+                    auto ppSv = agentxx::plugin::PluginStringView::from(pp.data(), pp.size());
                     ctx->iface.events->publish(ctx->host, &progTopic, &ppSv);
                 }
             }
@@ -850,9 +853,11 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                     j["processed"]      = processed;
                     j["total"]          = total;
                     j["current_file"]   = std::string{currentFile};
-                    std::string payload   = j.dump();
-                    auto        progTopic = agentxx::plugin::PluginStringView::fromCstr("agentxx_codegraph.progress");
-                    auto        payloadSv = agentxx::plugin::PluginStringView::from(payload.data(), payload.size());
+                    std::string payload = j.dump();
+                    auto        progTopic
+                        = agentxx::plugin::PluginStringView::fromCstr("agentxx_codegraph.progress");
+                    auto payloadSv
+                        = agentxx::plugin::PluginStringView::from(payload.data(), payload.size());
                     ctxRaw->iface.events->publish(ctxRaw->host, &progTopic, &payloadSv);
                 } catch (...) {
                 }
@@ -912,24 +917,22 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
         });
 
         if (ctx->iface.events && ctx->iface.events->subscribe) {
-            auto attachTopic = agentxx::plugin::PluginStringView::fromCstr("agentxx_host.client_attached");
-            ctx->iface.events->subscribe(
-                host,
-                &attachTopic,
-                on_client_attached,
-                ctx.get()
-            );
+            auto attachTopic
+                = agentxx::plugin::PluginStringView::fromCstr("agentxx_host.client_attached");
+            ctx->iface.events->subscribe(host, &attachTopic, on_client_attached, ctx.get());
         }
 
         pluginLog(host, ctx->iface.log, 2, "agentxx_codegraph loaded (6 tools)");
 
         if (ctx->iface.events && ctx->iface.events->publish) {
-            codegraph::Json j           = codegraph::Json::object();
-            j["loaded"]                 = true;
-            j["project_root"]           = projectRoot;
-            std::string payload         = j.dump();
-            auto        statusTopic     = agentxx::plugin::PluginStringView::fromCstr("agentxx_codegraph.status");
-            auto        payloadSv       = agentxx::plugin::PluginStringView::from(payload.data(), payload.size());
+            codegraph::Json j   = codegraph::Json::object();
+            j["loaded"]         = true;
+            j["project_root"]   = projectRoot;
+            std::string payload = j.dump();
+            auto        statusTopic
+                = agentxx::plugin::PluginStringView::fromCstr("agentxx_codegraph.status");
+            auto payloadSv
+                = agentxx::plugin::PluginStringView::from(payload.data(), payload.size());
             ctx->iface.events->publish(ctx->host, &statusTopic, &payloadSv);
         }
 
@@ -1129,8 +1132,9 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
             raw = ctx.get();
 
             if (ctx->ui && ctx->ui->register_info_section) {
-                auto idSv    = agentxx::plugin::PluginStringView::fromCstr("agentxx_codegraph.status");
-                auto titleSv = agentxx::plugin::PluginStringView::fromCstr(R"({"title":"CodeGraph"})");
+                auto idSv = agentxx::plugin::PluginStringView::fromCstr("agentxx_codegraph.status");
+                auto titleSv
+                    = agentxx::plugin::PluginStringView::fromCstr(R"({"title":"CodeGraph"})");
                 ctx->section = ctx->ui->register_info_section(host, &idSv, &titleSv);
                 if (ctx->section) {
                     refreshSection(*ctx);
@@ -1148,7 +1152,9 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
             }
 
             if (ctx->iface.log && ctx->iface.log->log) {
-                auto msgSv = agentxx::plugin::PluginStringView::fromCstr("agentxx_codegraph client loaded");
+                auto msgSv
+                    = agentxx::plugin::PluginStringView::fromCstr("agentxx_codegraph client loaded"
+                    );
                 ctx->iface.log->log(host, 2, &msgSv);
             }
             *plugin_ctx = ctx.release();
@@ -1176,7 +1182,9 @@ extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_client_destroy(void* plugin
             }
             ctx->current_file.clear();
             if (ctx->iface.log && ctx->iface.log->log) {
-                auto msgSv = agentxx::plugin::PluginStringView::fromCstr("agentxx_codegraph client unloaded");
+                auto msgSv = agentxx::plugin::PluginStringView::fromCstr(
+                    "agentxx_codegraph client unloaded"
+                );
                 ctx->iface.log->log(ctx->host, 2, &msgSv);
             }
             delete ctx;

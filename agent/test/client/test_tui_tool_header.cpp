@@ -200,9 +200,9 @@ std::shared_ptr<agentxx::plugin::ClientUiRegistry> makeTestToolRegistry() {
         if (!j.is_object()) {
             return -1;
         }
-        auto textPats  = grepListOf(j, "text_patterns");
-        auto regexPats = grepListOf(j, "regex_patterns");
-        auto files     = grepListOf(j, "file_patterns");
+        auto                     textPats  = grepListOf(j, "text_patterns");
+        auto                     regexPats = grepListOf(j, "regex_patterns");
+        auto                     files     = grepListOf(j, "file_patterns");
         std::vector<std::string> shown;
         for (const auto& p : textPats) {
             if (shown.size() >= 2) {

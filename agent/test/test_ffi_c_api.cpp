@@ -804,9 +804,15 @@ void testLanguageApis() {
         agentxx_ffi_string_free(&langOut);
 
         // 错误参数校验
-        XX_TEST_EXPECT_EQ(agentxx_ffi_get_language(nullptr, &langOut, nullptr), AGENTXX_FFI_ERR_INVALID);
+        XX_TEST_EXPECT_EQ(
+            agentxx_ffi_get_language(nullptr, &langOut, nullptr),
+            AGENTXX_FFI_ERR_INVALID
+        );
         XX_TEST_EXPECT_EQ(agentxx_ffi_get_language(a, nullptr, nullptr), AGENTXX_FFI_ERR_INVALID);
-        XX_TEST_EXPECT_EQ(agentxx_ffi_set_language(nullptr, &zhSv, nullptr), AGENTXX_FFI_ERR_INVALID);
+        XX_TEST_EXPECT_EQ(
+            agentxx_ffi_set_language(nullptr, &zhSv, nullptr),
+            AGENTXX_FFI_ERR_INVALID
+        );
 
         XX_TEST_EXPECT_EQ(agentxx_ffi_stop(a, &log), AGENTXX_FFI_OK);
         XX_TEST_EXPECT_EQ(agentxx_ffi_destroy(a, &log), AGENTXX_FFI_OK);

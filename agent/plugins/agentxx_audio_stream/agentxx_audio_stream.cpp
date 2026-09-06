@@ -127,7 +127,8 @@ bool AudioStreamHolder::start(
                 tsMs,
                 jsonEscape(ctx, toBase64(data.data))
             );
-            auto topicSv = agentxx::plugin::PluginStringView::fromCstr("agentxx_audio_stream.audio");
+            auto topicSv
+                = agentxx::plugin::PluginStringView::fromCstr("agentxx_audio_stream.audio");
             auto payloadSv
                 = agentxx::plugin::PluginStringView::from(payload.data(), payload.size());
             ctx->iface.events->publish(ctx->host, &topicSv, &payloadSv);

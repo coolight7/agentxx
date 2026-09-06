@@ -757,7 +757,7 @@ asio::awaitable<void> ToolcallWrapNode::baseRun(
 //   警告日志供排查; 不跳过执行, 避免掩盖真正的问题
 #if XX_IS_DEBUG_D
     {
-        const int64_t assistantIndex = static_cast<int64_t>(assistantMsgIndex);
+        const int64_t         assistantIndex = static_cast<int64_t>(assistantMsgIndex);
         std::set<std::string> replied;
         for (size_t i = static_cast<size_t>(assistantIndex) + 1; i < messages.size(); ++i) {
             if (messages[i].role == "tool" && false == messages[i].tool_call_id.empty()) {

@@ -1552,9 +1552,8 @@ JSValue JsEngine::bridgeCall(
             }
             std::string p   = jsToCppString(ctx, argv[0]);
             auto        pSv = agentxx::plugin::PluginStringView::fromCstr(p.c_str());
-            int         rc  = (magic == B_ADD_SKILL_DIR)
-                                  ? iface.resources->register_skill_dir(host, &pSv)
-                                  : iface.resources->register_memory_file(host, &pSv);
+            int rc = (magic == B_ADD_SKILL_DIR) ? iface.resources->register_skill_dir(host, &pSv)
+                                                : iface.resources->register_memory_file(host, &pSv);
             if (rc != 0) {
                 return throwJsError(
                     ctx,

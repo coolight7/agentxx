@@ -241,10 +241,8 @@ std::shared_ptr<Session> SessionsManager::getOrCreate(std::string_view sessionId
     return session;
 }
 
-asio::awaitable<std::shared_ptr<Session>> SessionsManager::getOrCreateAsync(
-    std::string_view   sessionId,
-    asio::thread_pool* pool
-) {
+asio::awaitable<std::shared_ptr<Session>>
+    SessionsManager::getOrCreateAsync(std::string_view sessionId, asio::thread_pool* pool) {
     auto it = sessions_.find(sessionId);
     if (it != sessions_.end()) {
         co_return it->second;
@@ -256,8 +254,8 @@ asio::awaitable<std::shared_ptr<Session>> SessionsManager::getOrCreateAsync(
         if (pool) {
             loaded = co_await agentxx::util::offloadAsync<SessionStore::LoadedSession>(
                 *pool,
-                [sessionStore, sid = std::string(sessionId)]()
-                    -> asio::awaitable<SessionStore::LoadedSession> {
+                [sessionStore,
+                 sid = std::string(sessionId)]() -> asio::awaitable<SessionStore::LoadedSession> {
                     co_return sessionStore->loadSession(sid);
                 }
             );

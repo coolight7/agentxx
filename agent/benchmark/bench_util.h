@@ -28,9 +28,9 @@ struct BenchResult {
 
 /// 资源占用基准测试结果 (内存、CPU、容器大小、Token 等)
 struct ResourceResult {
-    std::string mode;         ///< 模式: cli | tui | split_cli | split_tui | ffi
-    std::string side;         ///< 侧: self | server | client
-    std::string point;        ///< 采样时机: startup | ctx100k | ctx200k
+    std::string mode;                 ///< 模式: cli | tui | split_cli | split_tui | ffi
+    std::string side;                 ///< 侧: self | server | client
+    std::string point;                ///< 采样时机: startup | ctx100k | ctx200k
     double      rssMB         = 0.0;  ///< 常驻物理内存 (MB)
     double      privateMB     = 0.0;  ///< 私有内存 (MB)
     double      cpuIdlePct    = -1.0; ///< 空闲期 CPU 占用百分比 (负数表示未测)

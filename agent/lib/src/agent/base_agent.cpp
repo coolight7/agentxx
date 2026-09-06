@@ -120,7 +120,8 @@ static void checkToolSchemaValidity(
                 schema.contains("type") ? schema["type"].dump() : "<missing>"
             );
         }
-    } else if (schema.contains("type") && schema["type"].is_string() && schema["type"].get<std::string>() == "array") {
+    } else if (schema.contains("type") && schema["type"].is_string()
+               && schema["type"].get<std::string>() == "array") {
         // array 类型必须带 items (Gemini 缺 items 报 "missing field")
         XX_LOGE(
             "Tool `{}` schema `{}`: type \"array\" must have an \"items\" field; "

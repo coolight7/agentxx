@@ -1024,9 +1024,10 @@ static void testSessionDestructorThreadSafety() {
             XX_TEST_EXPECT_TRUE(sess->isIoThread());
 
             sess->setStoreHooks(agentxx::agent::SessionStoreHooks{
-                .onAppendViewMessage = [&](const agentxx::agent::ViewMessage&, uint64_t) {
-                    hookCalled = true;
-                },
+                .onAppendViewMessage =
+                    [&](const agentxx::agent::ViewMessage&, uint64_t) {
+                        hookCalled = true;
+                    },
             });
 
             // 首次立即落库, 将 viewLastPersistMs 置为当前时间
@@ -1046,13 +1047,14 @@ static void testSessionDestructorThreadSafety() {
     // Case 2: 在非 io 线程析构 -> 安全丢弃, 禁止跨线程调用 hook
     {
         bool hookCalledOffThread = false;
-        auto sess = std::make_shared<agentxx::agent::Session>();
+        auto sess                = std::make_shared<agentxx::agent::Session>();
         sess->bindIoThread(); // 绑定到当前线程
 
         sess->setStoreHooks(agentxx::agent::SessionStoreHooks{
-            .onAppendViewMessage = [&](const agentxx::agent::ViewMessage&, uint64_t) {
-                hookCalledOffThread = true;
-            },
+            .onAppendViewMessage =
+                [&](const agentxx::agent::ViewMessage&, uint64_t) {
+                    hookCalledOffThread = true;
+                },
         });
 
         // 首次立即落库

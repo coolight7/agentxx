@@ -965,9 +965,9 @@ asio::awaitable<void>
         {"line_offset", 1       },
         {"line_limit",  1       },
     };
-    auto part        = co_await tool.execute_async(args2);
-    auto partHasBeta = part.find("beta") != std::string::npos
-                       && part.find("alpha") == std::string::npos;
+    auto part = co_await tool.execute_async(args2);
+    auto partHasBeta
+        = part.find("beta") != std::string::npos && part.find("alpha") == std::string::npos;
     if (partHasBeta) {
         g_fs_passed++;
         TEST_PASS << "read_text_file preserves CRLF on offset/limit read" << std::endl;

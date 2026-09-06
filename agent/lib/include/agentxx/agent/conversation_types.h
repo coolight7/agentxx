@@ -173,9 +173,9 @@ public:
     void reset();
 
     /// 当前链尾哈希值 (uint64; 未追加任何数据时为 0)
-    uint64_t    tail() const;
+    uint64_t tail() const;
     /// 已追加的段数 (供调用方判断是否首次追加)
-    uint64_t    count() const;
+    uint64_t count() const;
     /// 链尾哈希的十六进制字符串 (固定 16 位, 如 "9c3f..." 小写)
     std::string tailHex() const;
 

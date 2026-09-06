@@ -187,9 +187,9 @@ public:
     /// 工具消息装饰 (disable 保留, enable 恢复; 无句柄 —— 以 plugin+toolCallId 键控)
     std::vector<ClientToolDecor> toolDecorRegs;
     /// 工具特化渲染器 (disable 保留, enable 恢复; 以 plugin+toolName 键控)
-    std::vector<ClientToolRenderReg>           toolRenderRegs;
+    std::vector<ClientToolRenderReg> toolRenderRegs;
     /// 通用动作绑定 (disable 保留, enable 恢复; 以 plugin+targetId 键控)
-    std::vector<ClientActionBinding> actionRegs;
+    std::vector<ClientActionBinding>           actionRegs;
     std::vector<std::shared_ptr<Subscription>> subscriptions; ///< 已订阅事件 (disable 保留)
     std::vector<std::shared_ptr<void>> statusItemHandles; ///< 状态栏项宿主句柄 (enable 期)
     std::vector<std::shared_ptr<void>> panelHandles;      ///< 面板宿主句柄 (enable 期)
@@ -552,12 +552,15 @@ public:
     std::string getOwnInfoJson(ClientPluginInstance* inst);
     std::string getPluginArgsJson(ClientPluginInstance* inst);
     std::string getPluginConfigPath(ClientPluginInstance* inst);
+
     std::string getLanguage() const {
         return language_.empty() ? "en" : language_;
     }
+
     void setLanguage(std::string_view lang) {
         language_ = agent::normalizeLanguage(lang);
     }
+
     /// 会话操作 (代理到端点)
     void sendUserInputToPeer(
         ClientPluginInstance*   inst,
@@ -663,7 +666,7 @@ private:
 
     /// 因接口要求未满足被跳过的插件 (io 线程; 见 skippedPlugins())
     std::map<std::string, std::string> skippedPlugins_{};
-    std::string language_ = "en";
+    std::string                        language_ = "en";
 };
 
 /// UI 适配器抽象接口 (UI 无关语义层 → 具体 UI 实现)

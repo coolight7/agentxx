@@ -101,9 +101,9 @@ typedef struct AgentxxToolRenderSpec {
 
 /// 动作派发上下文 (宿主在 client io 线程构造, 仅本次回调有效; 全部只读借用)
 typedef struct AgentxxUiActionContext {
-    int32_t                 version;     ///< == 1
-    uint32_t                _reserved;   ///< 8 字节补齐
-    AgentxxPluginStringView owner_id;    ///< 归属: section_id / panel_id / tool_call_id / "__overlay"
+    int32_t  version;                 ///< == 1
+    uint32_t _reserved;               ///< 8 字节补齐
+    AgentxxPluginStringView owner_id; ///< 归属: section_id / panel_id / tool_call_id / "__overlay"
     AgentxxPluginStringView action_id;   ///< 按钮声明的 action_id
     AgentxxPluginStringView action_args; ///< 参数 JSON object dump (空 = 无参)
 } AgentxxUiActionContext;
@@ -119,7 +119,7 @@ typedef enum AgentxxOverlayType {
     AGENTXX_OVERLAY_MERMAID = 0, ///< 状态图: payload = mermaid 源码
     AGENTXX_OVERLAY_TEXT    = 1, ///< 文本/Markdown: payload = 原文
     AGENTXX_OVERLAY_DIFF    = 2, ///< 对比: payload = JSON {path,old_str,new_str}
-    AGENTXX_OVERLAY_CUSTOM  = 3  ///< 自定义: payload = JSON {"items":[...]} (同 panel/items schema)
+    AGENTXX_OVERLAY_CUSTOM = 3 ///< 自定义: payload = JSON {"items":[...]} (同 panel/items schema)
 } AgentxxOverlayType;
 
 /// 通用 overlay 参数 (全部只读借用, 宿主拷贝后使用)
@@ -419,7 +419,8 @@ typedef struct AgentxxClientSelfIface {
         const AgentxxPluginHost* host,
         AgentxxPluginString*     out
     );
-    /// 读取当前 client 使用的语言 (client io 线程; 返回 0 成功, out 填入如 "en" / "zh-cn", host->alloc 分配)
+    /// 读取当前 client 使用的语言 (client io 线程; 返回 0 成功, out 填入如 "en" / "zh-cn",
+    /// host->alloc 分配)
     int32_t(AGENTXX_PLUGIN_CALL* get_language)(
         const AgentxxPluginHost* host,
         AgentxxPluginString*     out

@@ -1982,13 +1982,13 @@ static asio::awaitable<void> test_model_switch_with_next_input() {
     // 客户端发送带语言的 WireHello (模拟 TUI 连接传入语言)
     clientT->send(agentxx::agent::WireMessage{
         agentxx::agent::WireHello{
-            .sessionId = "model-switch-session",
-            .token     = "",
-            .lastSeq   = 0,
-            .tailHash  = "",
-            .model     = "",
-            .language  = "zh-cn",
-        }
+                                  .sessionId = "model-switch-session",
+                                  .token     = "",
+                                  .lastSeq   = 0,
+                                  .tailHash  = "",
+                                  .model     = "",
+                                  .language  = "zh-cn",
+                                  }
     });
 
     // transport 接收循环 (onPeerMessage 处理客户端消息) + 会话驱动循环 (run)
@@ -3057,9 +3057,8 @@ static asio::awaitable<void> test_session_controller_queue_resume_after_abort() 
         agentxx::agent::WireUserInput{"queue-resume-test-session", "turn 6 (backlog)", ""}
     });
     // 发送取消中断 turn 5
-    clientT->send(agentxx::agent::WireMessage{
-        agentxx::agent::WireCancel{"queue-resume-test-session"}
-    });
+    clientT->send(agentxx::agent::WireMessage{agentxx::agent::WireCancel{"queue-resume-test-session"
+    }});
     // 等待 turn 5 结束 (cancelled/error)
     XX_TEST_EXPECT_TRUE(co_await waitForTurns(5));
     {

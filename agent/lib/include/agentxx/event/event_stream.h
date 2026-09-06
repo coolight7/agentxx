@@ -211,7 +211,7 @@ public:
         size_t idx           = rrIndex_.fetch_add(1, std::memory_order_relaxed) % servers_.size();
         auto   serverIt      = servers_.begin();
         std::advance(serverIt, idx);
-        auto   handler       = serverIt->second;
+        auto handler = serverIt->second;
 
         auto out = co_await agentxx::util::catchErrorToUnexpectedAsync<RespType>(
             [&]() -> asio::awaitable<std::expected<RespType, std::string>> {

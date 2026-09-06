@@ -489,10 +489,10 @@ class CustomOverlay : public ftxui::ComponentBase {
 public:
 
     explicit CustomOverlay(
-        TUICtx&          ctx,
-        std::string      title,
-        neograph::json   items,
-        std::string      ownerPlugin
+        TUICtx&        ctx,
+        std::string    title,
+        neograph::json items,
+        std::string    ownerPlugin
     );
 
     void onClose(std::function<void()> fn) {

@@ -75,7 +75,7 @@ namespace {
 
 std::string generateBenchSessionId() {
     static std::atomic<uint64_t> seq{0};
-    auto now = std::chrono::steady_clock::now().time_since_epoch().count();
+    auto                         now = std::chrono::steady_clock::now().time_since_epoch().count();
     return fmt::format("bench_sess_{}_{}", now, seq.fetch_add(1));
 }
 
@@ -87,13 +87,18 @@ std::filesystem::path createBenchTempDir(const std::string& prefix) {
         base = fs::current_path(ec);
     }
     static std::atomic<uint32_t> seq{0};
-    auto name = fmt::format("{}_{}_{}", prefix, static_cast<long>(
+    auto                         name = fmt::format(
+        "{}_{}_{}",
+        prefix,
+        static_cast<long>(
 #if XX_IS_WIN_D
-        ::GetCurrentProcessId()
+            ::GetCurrentProcessId()
 #else
-        getpid()
+            getpid()
 #endif
-    ), seq.fetch_add(1));
+        ),
+        seq.fetch_add(1)
+    );
     fs::path dir = base / name;
     fs::create_directories(dir, ec);
 
@@ -127,8 +132,8 @@ uint16_t findFreeTcpPort() {
 struct ResourceLlmSimServer {
     std::unique_ptr<agentxx::util::HttpServer> svr;
     std::thread                                thr;
-    uint16_t                                   port        = 0;
-    std::shared_ptr<std::atomic<size_t>>       turnCounter = std::make_shared<std::atomic<size_t>>(0);
+    uint16_t                                   port  = 0;
+    std::shared_ptr<std::atomic<size_t>> turnCounter = std::make_shared<std::atomic<size_t>>(0);
 
     ResourceLlmSimServer() = default;
 
@@ -182,9 +187,9 @@ ResourceLlmSimServer startResourceLlmSimServer() {
     cfg.maxConnections   = 128;
     cfg.maxRequestBody   = 10 * 1024 * 1024;
 
-    sim.svr      = std::make_unique<agentxx::util::HttpServer>(cfg);
-    auto* rawSvr = sim.svr.get();
-    auto turnCounter = sim.turnCounter;
+    sim.svr           = std::make_unique<agentxx::util::HttpServer>(cfg);
+    auto* rawSvr      = sim.svr.get();
+    auto  turnCounter = sim.turnCounter;
 
     // GET /health
     rawSvr->router().add(
@@ -205,22 +210,26 @@ ResourceLlmSimServer startResourceLlmSimServer() {
     );
 
     auto chatHandler = std::make_shared<agentxx::util::HttpServer::Handler>(
-        [turnCounter](agentxx::util::HttpServer::Request&  req,
-                      agentxx::util::HttpServer::Response& resp,
-                      std::string_view) -> asio::awaitable<void> {
+        [turnCounter](
+            agentxx::util::HttpServer::Request&  req,
+            agentxx::util::HttpServer::Response& resp,
+            std::string_view
+        ) -> asio::awaitable<void> {
             namespace http = boost::beast::http;
 
             std::string_view body = req.body();
-            bool stream = (body.find("\"stream\":true") != std::string_view::npos
-                        || body.find("\"stream\": true") != std::string_view::npos);
+            bool             stream
+                = (body.find("\"stream\":true") != std::string_view::npos
+                   || body.find("\"stream\": true") != std::string_view::npos);
 
             // 判断是否为预热轮次
             bool isWarmup = (body.find("RES-BENCH") == std::string_view::npos);
 
-            bool lastIsTool = false;
+            bool lastIsTool  = false;
             auto lastRolePos = body.rfind("\"role\"");
             if (lastRolePos != std::string_view::npos) {
-                auto roleSub = body.substr(lastRolePos, std::min<size_t>(body.size() - lastRolePos, 40));
+                auto roleSub
+                    = body.substr(lastRolePos, std::min<size_t>(body.size() - lastRolePos, 40));
                 if (roleSub.find("\"tool\"") != std::string_view::npos) {
                     lastIsTool = true;
                 }
@@ -234,7 +243,8 @@ ResourceLlmSimServer startResourceLlmSimServer() {
                 turnCounter->fetch_add(1);
             } else if (lastIsTool) {
                 // tool 结果回来, assistant 返回摘要 (本轮正式结束)
-                replyContent = "RES-BENCH assist summary | 已成功读取 README.md 前 40 行内容，并完成分析任务。";
+                replyContent
+                    = "RES-BENCH assist summary | 已成功读取 README.md 前 40 行内容，并完成分析任务。";
                 turnCounter->fetch_add(1);
             } else {
                 // user 请求, assistant 返回 tool_call: agentxx_filesystem_read
@@ -242,7 +252,7 @@ ResourceLlmSimServer startResourceLlmSimServer() {
                 tc["id"]       = "call-000001";
                 tc["type"]     = "function";
                 tc["function"] = {
-                    {"name",      "agentxx_filesystem_read"                                    },
+                    {"name",      "agentxx_filesystem_read"                                     },
                     {"arguments", "{\"path\":\"README.md\",\"line_offset\":0,\"line_limit\":40}"}
                 };
                 toolCalls.push_back(tc);
@@ -267,8 +277,8 @@ ResourceLlmSimServer startResourceLlmSimServer() {
                     } else {
                         choice["finish_reason"] = finishReason;
                     }
-                    ev["choices"] = neograph::json::array({choice});
-                    sseBody      += "data: " + ev.dump() + "\n\n";
+                    ev["choices"]  = neograph::json::array({choice});
+                    sseBody       += "data: " + ev.dump() + "\n\n";
                 };
 
                 neograph::json d;
@@ -353,15 +363,15 @@ ResourceLlmSimServer startResourceLlmSimServer() {
 
 struct ProcessHandle {
 #if XX_IS_WIN_D
-    HANDLE   hProcess    = nullptr;
-    HANDLE   hThread     = nullptr;
-    HANDLE   hStdinWrite = nullptr;
-    DWORD    pid         = 0;
+    HANDLE hProcess    = nullptr;
+    HANDLE hThread     = nullptr;
+    HANDLE hStdinWrite = nullptr;
+    DWORD  pid         = 0;
 #else
-    pid_t    pid          = 0;
-    int      stdinWriteFd = -1;
+    pid_t pid          = 0;
+    int   stdinWriteFd = -1;
 #endif
-    bool     running      = false;
+    bool running = false;
 };
 
 ProcessHandle spawnChildProcess(
@@ -371,10 +381,10 @@ ProcessHandle spawnChildProcess(
 ) {
     ProcessHandle ph;
 #if XX_IS_WIN_D
-    HANDLE hStdinRead = nullptr;
-    HANDLE hStdinWrite = nullptr;
+    HANDLE              hStdinRead  = nullptr;
+    HANDLE              hStdinWrite = nullptr;
     SECURITY_ATTRIBUTES sa{};
-    sa.nLength = sizeof(sa);
+    sa.nLength        = sizeof(sa);
     sa.bInheritHandle = TRUE;
     if (::CreatePipe(&hStdinRead, &hStdinWrite, &sa, 0)) {
         ::SetHandleInformation(hStdinWrite, HANDLE_FLAG_INHERIT, 0);
@@ -386,14 +396,14 @@ ProcessHandle spawnChildProcess(
         cmd += " \"" + a + "\"";
     }
     STARTUPINFOA si{};
-    si.cb = sizeof(si);
-    si.dwFlags = STARTF_USESTDHANDLES;
-    si.hStdInput = hStdinRead ? hStdinRead : ::GetStdHandle(STD_INPUT_HANDLE);
+    si.cb         = sizeof(si);
+    si.dwFlags    = STARTF_USESTDHANDLES;
+    si.hStdInput  = hStdinRead ? hStdinRead : ::GetStdHandle(STD_INPUT_HANDLE);
     si.hStdOutput = INVALID_HANDLE_VALUE;
-    si.hStdError = INVALID_HANDLE_VALUE;
+    si.hStdError  = INVALID_HANDLE_VALUE;
 
     PROCESS_INFORMATION pi{};
-    BOOL ok = ::CreateProcessA(
+    BOOL                ok = ::CreateProcessA(
         nullptr,
         cmd.data(),
         nullptr,
@@ -570,50 +580,50 @@ void benchResourceCli() {
 #else
     std::cout << "\n=== Resource Benchmark: M1 In-Process CLI ===" << std::endl;
 
-    auto sim = startResourceLlmSimServer();
-    auto tmpDir = createBenchTempDir("bench_m1_cli");
-    auto& reporter = BenchReporter::instance();
-    const auto& counts = getCalibratedCounts();
+    auto        sim      = startResourceLlmSimServer();
+    auto        tmpDir   = createBenchTempDir("bench_m1_cli");
+    auto&       reporter = BenchReporter::instance();
+    const auto& counts   = getCalibratedCounts();
 
-    auto agentConfig = std::make_shared<agent::AgentConfig>();
-    agentConfig->dataDir = (tmpDir / "data").string();
-    agentConfig->workDir = tmpDir.string();
-    agentConfig->permissionMode = agent::PermissionMode::Pass;
+    auto agentConfig                = std::make_shared<agent::AgentConfig>();
+    agentConfig->dataDir            = (tmpDir / "data").string();
+    agentConfig->workDir            = tmpDir.string();
+    agentConfig->permissionMode     = agent::PermissionMode::Pass;
     agentConfig->enableSessionStore = false;
-    agentConfig->enableSubagent = false;
-    agentConfig->enableWorktree = false;
+    agentConfig->enableSubagent     = false;
+    agentConfig->enableWorktree     = false;
 
     // 模型配置: 指向本地 mock LLM
     agent::ModelConfig mc;
-    mc.name = "bench-sim";
-    mc.type = "openai";
-    mc.baseUrl = fmt::format("http://127.0.0.1:{}/v1", sim.port);
-    mc.apiKey = "EMPTY";
-    mc.modelName = "bench-sim";
-    mc.modelContenxtMaxToken = 8 << 20; // 8M 确保不触发压缩/截断
-    agentConfig->model = mc;
+    mc.name                               = "bench-sim";
+    mc.type                               = "openai";
+    mc.baseUrl                            = fmt::format("http://127.0.0.1:{}/v1", sim.port);
+    mc.apiKey                             = "EMPTY";
+    mc.modelName                          = "bench-sim";
+    mc.modelContenxtMaxToken              = 8 << 20; // 8M 确保不触发压缩/截断
+    agentConfig->model                    = mc;
     agentConfig->availableModels[mc.name] = mc;
-    agentConfig->currentModelName = mc.name;
+    agentConfig->currentModelName         = mc.name;
 
     // 5 常用插件
-    auto pluginPlan = prepare5Plugins();
+    auto pluginPlan      = prepare5Plugins();
     agentConfig->plugins = pluginPlan.agentConfigs;
 
-    auto agent = std::make_shared<agent::CodeAgent>(agentConfig);
-    auto agentWork = asio::make_work_guard(*agent->ioCtx);
+    auto        agent     = std::make_shared<agent::CodeAgent>(agentConfig);
+    auto        agentWork = asio::make_work_guard(*agent->ioCtx);
     std::thread agentThread([agent]() {
         agent->ioCtx->run();
     });
 
     asio::io_context clientCtx;
-    auto clientEx = clientCtx.get_executor();
-    auto io = std::make_shared<StdIOClientAgentIO>();
-    std::string sessionId = generateBenchSessionId();
+    auto             clientEx  = clientCtx.get_executor();
+    auto             io        = std::make_shared<StdIOClientAgentIO>();
+    std::string      sessionId = generateBenchSessionId();
     io->setSessionId(sessionId);
 
     // Client 插件管理器
     auto clientPlugins = agentConfig->plugins;
-    auto pluginMgr = std::make_shared<agentxx::plugin::ClientPluginManager>(clientEx);
+    auto pluginMgr     = std::make_shared<agentxx::plugin::ClientPluginManager>(clientEx);
     pluginMgr->setUiAdapter(std::make_shared<agentxx::client::CliPluginAdapter>(io));
     pluginMgr->setSessionId(sessionId);
     io->setEventSink(pluginMgr);
@@ -641,10 +651,11 @@ void benchResourceCli() {
     io->setTransport(std::shared_ptr<agent::AgentIOTransportBase>(std::move(clientTransport)));
 
     agent::SessionServerAgentIO::Config scCfg;
-    scCfg.sessionId = sessionId;
+    scCfg.sessionId            = sessionId;
     scCfg.initialSyncTailCount = 0; // CLI: 全量同步
     auto serverIO = std::make_shared<agent::SessionServerAgentIO>(agentEx, agent, scCfg);
-    serverIO->setTransport(std::shared_ptr<agent::AgentIOTransportBase>(std::move(serverTransport)));
+    serverIO->setTransport(std::shared_ptr<agent::AgentIOTransportBase>(std::move(serverTransport))
+    );
 
     std::atomic<bool> serverReady{false};
     if (auto ctx = agent->agentContext) {
@@ -682,7 +693,7 @@ void benchResourceCli() {
     );
 
     // 启动 client 线程运行 clientCtx
-    auto clientWork = asio::make_work_guard(clientCtx);
+    auto        clientWork = asio::make_work_guard(clientCtx);
     std::thread clientThread([&clientCtx]() {
         clientCtx.run();
     });
@@ -698,7 +709,7 @@ void benchResourceCli() {
 
     // 首轮短 turn 预热
     std::atomic<bool> turnDone{false};
-    auto origSink = io->eventSink();
+    auto              origSink = io->eventSink();
     // 监听 turnEnd 事件
     io->sendToPeer(agent::WireUserInput{sessionId, "hello"});
     // 等待首轮执行完毕
@@ -721,19 +732,19 @@ void benchResourceCli() {
     auto idleCpuWin = cpuBegin(0);
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
     double idleCpu = cpuEnd(idleCpuWin);
-    auto mem0 = sampleMemoryMedian(0);
+    auto   mem0    = sampleMemoryMedian(0);
 
     ResourceResult res0;
-    res0.mode = "cli";
-    res0.side = "self";
-    res0.point = "startup";
-    res0.rssMB = mem0.rssMB;
-    res0.privateMB = mem0.privateMB;
-    res0.cpuIdlePct = idleCpu;
-    res0.cpuBusyPct = 0.0;
-    res0.pluginsAgent = agent->agentContext->pluginManager->list().size();
+    res0.mode          = "cli";
+    res0.side          = "self";
+    res0.point         = "startup";
+    res0.rssMB         = mem0.rssMB;
+    res0.privateMB     = mem0.privateMB;
+    res0.cpuIdlePct    = idleCpu;
+    res0.cpuBusyPct    = 0.0;
+    res0.pluginsAgent  = agent->agentContext->pluginManager->list().size();
     res0.pluginsClient = pluginMgr->list().size();
-    res0.note = "headless-cli, Channel, tail=0";
+    res0.note          = "headless-cli, Channel, tail=0";
 
     {
         std::promise<void> p;
@@ -741,9 +752,9 @@ void benchResourceCli() {
             if (auto sess = agent->agentContext->getSession(sessionId)) {
                 res0.viewCount = sess->viewMessages.size();
                 res0.viewBytes = estimateViewMessagesBytes(sess->viewMessages);
-                res0.llmCount = sess->llmMessages.size();
-                res0.llmBytes = estimateLlmMessagesBytes(sess->llmMessages);
-                res0.tokens = 150; // 预热痕量
+                res0.llmCount  = sess->llmMessages.size();
+                res0.llmBytes  = estimateLlmMessagesBytes(sess->llmMessages);
+                res0.tokens    = 150; // 预热痕量
             }
             p.set_value();
         });
@@ -753,7 +764,7 @@ void benchResourceCli() {
     printResourceResult(res0);
 
     // ---------------- P1: ~100K 上下文 ----------------
-    auto busyWin1 = cpuBegin(0);
+    auto              busyWin1 = cpuBegin(0);
     std::atomic<bool> p1Injected{false};
     asio::post(*agent->ioCtx, [&]() {
         if (auto sess = agent->agentContext->getSession(sessionId)) {
@@ -763,24 +774,25 @@ void benchResourceCli() {
                 sess->appendViewMessage(g.viewTool);
                 sess->appendViewMessage(g.viewAssist);
 
-                sess->llmMessages.push_back({{"role", "user"}, {"content", g.userMsg.content}});
                 sess->llmMessages.push_back({
-                    {"role", "assistant"},
-                    {"content", nullptr},
-                    {"tool_calls", {{
-                        {"id", g.assistMsg.tool_calls[0].id},
-                        {"type", "function"},
-                        {"function", {
-                            {"name", g.assistMsg.tool_calls[0].name},
-                            {"arguments", g.assistMsg.tool_calls[0].arguments}
-                        }}
-                    }}}
+                    {"role",    "user"           },
+                    {"content", g.userMsg.content}
                 });
                 sess->llmMessages.push_back({
-                    {"role", "tool"},
+                    {"role",       "assistant"                                 },
+                    {"content",    nullptr                                     },
+                    {"tool_calls",
+                     {{{"id", g.assistMsg.tool_calls[0].id},
+                       {"type", "function"},
+                       {"function",
+                        {{"name", g.assistMsg.tool_calls[0].name},
+                         {"arguments", g.assistMsg.tool_calls[0].arguments}}}}}}
+                });
+                sess->llmMessages.push_back({
+                    {"role",         "tool"                },
                     {"tool_call_id", g.toolMsg.tool_call_id},
-                    {"name", g.toolMsg.tool_name},
-                    {"content", g.toolMsg.content}
+                    {"name",         g.toolMsg.tool_name   },
+                    {"content",      g.toolMsg.content     }
                 });
             }
         }
@@ -795,19 +807,19 @@ void benchResourceCli() {
     std::this_thread::sleep_for(std::chrono::milliseconds(300));
     double busyCpu1 = cpuEnd(busyWin1);
 
-    auto mem1 = sampleMemoryMedian(0);
+    auto           mem1 = sampleMemoryMedian(0);
     ResourceResult res1;
-    res1.mode = "cli";
-    res1.side = "self";
-    res1.point = "ctx100k";
-    res1.rssMB = mem1.rssMB;
-    res1.privateMB = mem1.privateMB;
-    res1.cpuIdlePct = -1.0;
-    res1.cpuBusyPct = busyCpu1;
-    res1.tokens = counts.actualTokens100;
-    res1.pluginsAgent = res0.pluginsAgent;
+    res1.mode          = "cli";
+    res1.side          = "self";
+    res1.point         = "ctx100k";
+    res1.rssMB         = mem1.rssMB;
+    res1.privateMB     = mem1.privateMB;
+    res1.cpuIdlePct    = -1.0;
+    res1.cpuBusyPct    = busyCpu1;
+    res1.tokens        = counts.actualTokens100;
+    res1.pluginsAgent  = res0.pluginsAgent;
     res1.pluginsClient = res0.pluginsClient;
-    res1.note = "injected fixed groups";
+    res1.note          = "injected fixed groups";
 
     {
         std::promise<void> p;
@@ -815,8 +827,8 @@ void benchResourceCli() {
             if (auto sess = agent->agentContext->getSession(sessionId)) {
                 res1.viewCount = sess->viewMessages.size();
                 res1.viewBytes = estimateViewMessagesBytes(sess->viewMessages);
-                res1.llmCount = sess->llmMessages.size();
-                res1.llmBytes = estimateLlmMessagesBytes(sess->llmMessages);
+                res1.llmCount  = sess->llmMessages.size();
+                res1.llmBytes  = estimateLlmMessagesBytes(sess->llmMessages);
             }
             p.set_value();
         });
@@ -826,7 +838,7 @@ void benchResourceCli() {
     printResourceResult(res1);
 
     // ---------------- P2: ~200K 上下文 ----------------
-    auto busyWin2 = cpuBegin(0);
+    auto              busyWin2 = cpuBegin(0);
     std::atomic<bool> p2Injected{false};
     asio::post(*agent->ioCtx, [&]() {
         if (auto sess = agent->agentContext->getSession(sessionId)) {
@@ -836,24 +848,25 @@ void benchResourceCli() {
                 sess->appendViewMessage(g.viewTool);
                 sess->appendViewMessage(g.viewAssist);
 
-                sess->llmMessages.push_back({{"role", "user"}, {"content", g.userMsg.content}});
                 sess->llmMessages.push_back({
-                    {"role", "assistant"},
-                    {"content", nullptr},
-                    {"tool_calls", {{
-                        {"id", g.assistMsg.tool_calls[0].id},
-                        {"type", "function"},
-                        {"function", {
-                            {"name", g.assistMsg.tool_calls[0].name},
-                            {"arguments", g.assistMsg.tool_calls[0].arguments}
-                        }}
-                    }}}
+                    {"role",    "user"           },
+                    {"content", g.userMsg.content}
                 });
                 sess->llmMessages.push_back({
-                    {"role", "tool"},
+                    {"role",       "assistant"                                 },
+                    {"content",    nullptr                                     },
+                    {"tool_calls",
+                     {{{"id", g.assistMsg.tool_calls[0].id},
+                       {"type", "function"},
+                       {"function",
+                        {{"name", g.assistMsg.tool_calls[0].name},
+                         {"arguments", g.assistMsg.tool_calls[0].arguments}}}}}}
+                });
+                sess->llmMessages.push_back({
+                    {"role",         "tool"                },
                     {"tool_call_id", g.toolMsg.tool_call_id},
-                    {"name", g.toolMsg.tool_name},
-                    {"content", g.toolMsg.content}
+                    {"name",         g.toolMsg.tool_name   },
+                    {"content",      g.toolMsg.content     }
                 });
             }
         }
@@ -868,19 +881,19 @@ void benchResourceCli() {
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
     double busyCpu2 = cpuEnd(busyWin2);
 
-    auto mem2 = sampleMemoryMedian(0);
+    auto           mem2 = sampleMemoryMedian(0);
     ResourceResult res2;
-    res2.mode = "cli";
-    res2.side = "self";
-    res2.point = "ctx200k";
-    res2.rssMB = mem2.rssMB;
-    res2.privateMB = mem2.privateMB;
-    res2.cpuIdlePct = -1.0;
-    res2.cpuBusyPct = busyCpu2;
-    res2.tokens = counts.actualTokens200;
-    res2.pluginsAgent = res0.pluginsAgent;
+    res2.mode          = "cli";
+    res2.side          = "self";
+    res2.point         = "ctx200k";
+    res2.rssMB         = mem2.rssMB;
+    res2.privateMB     = mem2.privateMB;
+    res2.cpuIdlePct    = -1.0;
+    res2.cpuBusyPct    = busyCpu2;
+    res2.tokens        = counts.actualTokens200;
+    res2.pluginsAgent  = res0.pluginsAgent;
     res2.pluginsClient = res0.pluginsClient;
-    res2.note = "injected fixed groups";
+    res2.note          = "injected fixed groups";
 
     {
         std::promise<void> p;
@@ -888,8 +901,8 @@ void benchResourceCli() {
             if (auto sess = agent->agentContext->getSession(sessionId)) {
                 res2.viewCount = sess->viewMessages.size();
                 res2.viewBytes = estimateViewMessagesBytes(sess->viewMessages);
-                res2.llmCount = sess->llmMessages.size();
-                res2.llmBytes = estimateLlmMessagesBytes(sess->llmMessages);
+                res2.llmCount  = sess->llmMessages.size();
+                res2.llmBytes  = estimateLlmMessagesBytes(sess->llmMessages);
             }
             p.set_value();
         });
@@ -926,42 +939,42 @@ void benchResourceTui() {
 #else
     std::cout << "\n=== Resource Benchmark: M2 In-Process TUI ===" << std::endl;
 
-    auto sim = startResourceLlmSimServer();
-    auto tmpDir = createBenchTempDir("bench_m2_tui");
-    auto& reporter = BenchReporter::instance();
-    const auto& counts = getCalibratedCounts();
+    auto        sim      = startResourceLlmSimServer();
+    auto        tmpDir   = createBenchTempDir("bench_m2_tui");
+    auto&       reporter = BenchReporter::instance();
+    const auto& counts   = getCalibratedCounts();
 
-    auto agentConfig = std::make_shared<agent::AgentConfig>();
-    agentConfig->dataDir = (tmpDir / "data").string();
-    agentConfig->workDir = tmpDir.string();
-    agentConfig->permissionMode = agent::PermissionMode::Pass;
+    auto agentConfig                = std::make_shared<agent::AgentConfig>();
+    agentConfig->dataDir            = (tmpDir / "data").string();
+    agentConfig->workDir            = tmpDir.string();
+    agentConfig->permissionMode     = agent::PermissionMode::Pass;
     agentConfig->enableSessionStore = false;
-    agentConfig->enableSubagent = false;
-    agentConfig->enableWorktree = false;
+    agentConfig->enableSubagent     = false;
+    agentConfig->enableWorktree     = false;
 
     agent::ModelConfig mc;
-    mc.name = "bench-sim";
-    mc.type = "openai";
-    mc.baseUrl = fmt::format("http://127.0.0.1:{}/v1", sim.port);
-    mc.apiKey = "EMPTY";
-    mc.modelName = "bench-sim";
-    mc.modelContenxtMaxToken = 8 << 20;
-    agentConfig->model = mc;
+    mc.name                               = "bench-sim";
+    mc.type                               = "openai";
+    mc.baseUrl                            = fmt::format("http://127.0.0.1:{}/v1", sim.port);
+    mc.apiKey                             = "EMPTY";
+    mc.modelName                          = "bench-sim";
+    mc.modelContenxtMaxToken              = 8 << 20;
+    agentConfig->model                    = mc;
     agentConfig->availableModels[mc.name] = mc;
-    agentConfig->currentModelName = mc.name;
+    agentConfig->currentModelName         = mc.name;
 
-    auto pluginPlan = prepare5Plugins();
+    auto pluginPlan      = prepare5Plugins();
     agentConfig->plugins = pluginPlan.agentConfigs;
 
-    auto agent = std::make_shared<agent::CodeAgent>(agentConfig);
-    auto agentWork = asio::make_work_guard(*agent->ioCtx);
+    auto        agent     = std::make_shared<agent::CodeAgent>(agentConfig);
+    auto        agentWork = asio::make_work_guard(*agent->ioCtx);
     std::thread agentThread([agent]() {
         agent->ioCtx->run();
     });
 
     asio::io_context clientCtx;
-    auto clientEx = clientCtx.get_executor();
-    std::string sessionId = generateBenchSessionId();
+    auto             clientEx  = clientCtx.get_executor();
+    std::string      sessionId = generateBenchSessionId();
 
     // 注意: TUIClientAgentIO 绝不调用 start()! 仅作端点和共享堆存储
     auto tui = std::make_shared<TUIClientAgentIO>(
@@ -972,7 +985,7 @@ void benchResourceTui() {
     );
 
     auto clientPlugins = agentConfig->plugins;
-    auto pluginMgr = std::make_shared<agentxx::plugin::ClientPluginManager>(clientEx);
+    auto pluginMgr     = std::make_shared<agentxx::plugin::ClientPluginManager>(clientEx);
     pluginMgr->setUiAdapter(std::make_shared<agentxx::client::TuiPluginAdapter>(tui));
     pluginMgr->setSessionId(sessionId);
     tui->setPluginManager(pluginMgr);
@@ -999,10 +1012,11 @@ void benchResourceTui() {
     tui->setTransport(std::shared_ptr<agent::AgentIOTransportBase>(std::move(clientTransport)));
 
     agent::SessionServerAgentIO::Config scCfg;
-    scCfg.sessionId = sessionId;
+    scCfg.sessionId            = sessionId;
     scCfg.initialSyncTailCount = 100; // TUI: 尾窗 100
     auto serverIO = std::make_shared<agent::SessionServerAgentIO>(agentEx, agent, scCfg);
-    serverIO->setTransport(std::shared_ptr<agent::AgentIOTransportBase>(std::move(serverTransport)));
+    serverIO->setTransport(std::shared_ptr<agent::AgentIOTransportBase>(std::move(serverTransport))
+    );
 
     std::atomic<bool> serverReady{false};
     asio::co_spawn(
@@ -1033,7 +1047,7 @@ void benchResourceTui() {
         asio::detached
     );
 
-    auto clientWork = asio::make_work_guard(clientCtx);
+    auto        clientWork = asio::make_work_guard(clientCtx);
     std::thread clientThread([&clientCtx]() {
         clientCtx.run();
     });
@@ -1066,19 +1080,19 @@ void benchResourceTui() {
     auto idleCpuWin = cpuBegin(0);
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
     double idleCpu = cpuEnd(idleCpuWin);
-    auto mem0 = sampleMemoryMedian(0);
+    auto   mem0    = sampleMemoryMedian(0);
 
     ResourceResult res0;
-    res0.mode = "tui";
-    res0.side = "self";
-    res0.point = "startup";
-    res0.rssMB = mem0.rssMB;
-    res0.privateMB = mem0.privateMB;
-    res0.cpuIdlePct = idleCpu;
-    res0.cpuBusyPct = 0.0;
-    res0.pluginsAgent = agent->agentContext->pluginManager->list().size();
+    res0.mode          = "tui";
+    res0.side          = "self";
+    res0.point         = "startup";
+    res0.rssMB         = mem0.rssMB;
+    res0.privateMB     = mem0.privateMB;
+    res0.cpuIdlePct    = idleCpu;
+    res0.cpuBusyPct    = 0.0;
+    res0.pluginsAgent  = agent->agentContext->pluginManager->list().size();
     res0.pluginsClient = pluginMgr->list().size();
-    res0.note = "headless-tui, Channel, tail=100";
+    res0.note          = "headless-tui, Channel, tail=100";
 
     {
         std::promise<void> p;
@@ -1086,9 +1100,9 @@ void benchResourceTui() {
             if (auto sess = agent->agentContext->getSession(sessionId)) {
                 res0.viewCount = sess->viewMessages.size();
                 res0.viewBytes = estimateViewMessagesBytes(sess->viewMessages);
-                res0.llmCount = sess->llmMessages.size();
-                res0.llmBytes = estimateLlmMessagesBytes(sess->llmMessages);
-                res0.tokens = 150;
+                res0.llmCount  = sess->llmMessages.size();
+                res0.llmBytes  = estimateLlmMessagesBytes(sess->llmMessages);
+                res0.tokens    = 150;
             }
             p.set_value();
         });
@@ -1098,7 +1112,7 @@ void benchResourceTui() {
     printResourceResult(res0);
 
     // ---------------- P1: ~100K 上下文 ----------------
-    auto busyWin1 = cpuBegin(0);
+    auto              busyWin1 = cpuBegin(0);
     std::atomic<bool> p1Injected{false};
     asio::post(*agent->ioCtx, [&]() {
         if (auto sess = agent->agentContext->getSession(sessionId)) {
@@ -1108,24 +1122,25 @@ void benchResourceTui() {
                 sess->appendViewMessage(g.viewTool);
                 sess->appendViewMessage(g.viewAssist);
 
-                sess->llmMessages.push_back({{"role", "user"}, {"content", g.userMsg.content}});
                 sess->llmMessages.push_back({
-                    {"role", "assistant"},
-                    {"content", nullptr},
-                    {"tool_calls", {{
-                        {"id", g.assistMsg.tool_calls[0].id},
-                        {"type", "function"},
-                        {"function", {
-                            {"name", g.assistMsg.tool_calls[0].name},
-                            {"arguments", g.assistMsg.tool_calls[0].arguments}
-                        }}
-                    }}}
+                    {"role",    "user"           },
+                    {"content", g.userMsg.content}
                 });
                 sess->llmMessages.push_back({
-                    {"role", "tool"},
+                    {"role",       "assistant"                                 },
+                    {"content",    nullptr                                     },
+                    {"tool_calls",
+                     {{{"id", g.assistMsg.tool_calls[0].id},
+                       {"type", "function"},
+                       {"function",
+                        {{"name", g.assistMsg.tool_calls[0].name},
+                         {"arguments", g.assistMsg.tool_calls[0].arguments}}}}}}
+                });
+                sess->llmMessages.push_back({
+                    {"role",         "tool"                },
                     {"tool_call_id", g.toolMsg.tool_call_id},
-                    {"name", g.toolMsg.tool_name},
-                    {"content", g.toolMsg.content}
+                    {"name",         g.toolMsg.tool_name   },
+                    {"content",      g.toolMsg.content     }
                 });
             }
         }
@@ -1142,24 +1157,26 @@ void benchResourceTui() {
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
     double busyCpu1 = cpuEnd(busyWin1);
 
-    auto mem1 = sampleMemoryMedian(0);
+    auto           mem1 = sampleMemoryMedian(0);
     ResourceResult res1;
-    res1.mode = "tui";
-    res1.side = "self";
-    res1.point = "ctx100k";
-    res1.rssMB = mem1.rssMB;
-    res1.privateMB = mem1.privateMB;
-    res1.cpuIdlePct = -1.0;
-    res1.cpuBusyPct = busyCpu1;
-    res1.tokens = counts.actualTokens100;
-    res1.pluginsAgent = res0.pluginsAgent;
+    res1.mode          = "tui";
+    res1.side          = "self";
+    res1.point         = "ctx100k";
+    res1.rssMB         = mem1.rssMB;
+    res1.privateMB     = mem1.privateMB;
+    res1.cpuIdlePct    = -1.0;
+    res1.cpuBusyPct    = busyCpu1;
+    res1.tokens        = counts.actualTokens100;
+    res1.pluginsAgent  = res0.pluginsAgent;
     res1.pluginsClient = res0.pluginsClient;
     for (int w = 0; w < 20; ++w) {
-        if (!tui->sharedState().readSnapshot()->messages.empty()) break;
+        if (!tui->sharedState().readSnapshot()->messages.empty()) {
+            break;
+        }
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
     auto tuiSnap1 = tui->sharedState().readSnapshot();
-    res1.note = fmt::format("tail=100 + pagePull, tuiMsgCount={}", tuiSnap1->messages.size());
+    res1.note     = fmt::format("tail=100 + pagePull, tuiMsgCount={}", tuiSnap1->messages.size());
 
     {
         std::promise<void> p;
@@ -1167,8 +1184,8 @@ void benchResourceTui() {
             if (auto sess = agent->agentContext->getSession(sessionId)) {
                 res1.viewCount = sess->viewMessages.size();
                 res1.viewBytes = estimateViewMessagesBytes(sess->viewMessages);
-                res1.llmCount = sess->llmMessages.size();
-                res1.llmBytes = estimateLlmMessagesBytes(sess->llmMessages);
+                res1.llmCount  = sess->llmMessages.size();
+                res1.llmBytes  = estimateLlmMessagesBytes(sess->llmMessages);
             }
             p.set_value();
         });
@@ -1178,7 +1195,7 @@ void benchResourceTui() {
     printResourceResult(res1);
 
     // ---------------- P2: ~200K 上下文 ----------------
-    auto busyWin2 = cpuBegin(0);
+    auto              busyWin2 = cpuBegin(0);
     std::atomic<bool> p2Injected{false};
     asio::post(*agent->ioCtx, [&]() {
         if (auto sess = agent->agentContext->getSession(sessionId)) {
@@ -1188,24 +1205,25 @@ void benchResourceTui() {
                 sess->appendViewMessage(g.viewTool);
                 sess->appendViewMessage(g.viewAssist);
 
-                sess->llmMessages.push_back({{"role", "user"}, {"content", g.userMsg.content}});
                 sess->llmMessages.push_back({
-                    {"role", "assistant"},
-                    {"content", nullptr},
-                    {"tool_calls", {{
-                        {"id", g.assistMsg.tool_calls[0].id},
-                        {"type", "function"},
-                        {"function", {
-                            {"name", g.assistMsg.tool_calls[0].name},
-                            {"arguments", g.assistMsg.tool_calls[0].arguments}
-                        }}
-                    }}}
+                    {"role",    "user"           },
+                    {"content", g.userMsg.content}
                 });
                 sess->llmMessages.push_back({
-                    {"role", "tool"},
+                    {"role",       "assistant"                                 },
+                    {"content",    nullptr                                     },
+                    {"tool_calls",
+                     {{{"id", g.assistMsg.tool_calls[0].id},
+                       {"type", "function"},
+                       {"function",
+                        {{"name", g.assistMsg.tool_calls[0].name},
+                         {"arguments", g.assistMsg.tool_calls[0].arguments}}}}}}
+                });
+                sess->llmMessages.push_back({
+                    {"role",         "tool"                },
                     {"tool_call_id", g.toolMsg.tool_call_id},
-                    {"name", g.toolMsg.tool_name},
-                    {"content", g.toolMsg.content}
+                    {"name",         g.toolMsg.tool_name   },
+                    {"content",      g.toolMsg.content     }
                 });
             }
         }
@@ -1221,24 +1239,26 @@ void benchResourceTui() {
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
     double busyCpu2 = cpuEnd(busyWin2);
 
-    auto mem2 = sampleMemoryMedian(0);
+    auto           mem2 = sampleMemoryMedian(0);
     ResourceResult res2;
-    res2.mode = "tui";
-    res2.side = "self";
-    res2.point = "ctx200k";
-    res2.rssMB = mem2.rssMB;
-    res2.privateMB = mem2.privateMB;
-    res2.cpuIdlePct = -1.0;
-    res2.cpuBusyPct = busyCpu2;
-    res2.tokens = counts.actualTokens200;
-    res2.pluginsAgent = res0.pluginsAgent;
+    res2.mode          = "tui";
+    res2.side          = "self";
+    res2.point         = "ctx200k";
+    res2.rssMB         = mem2.rssMB;
+    res2.privateMB     = mem2.privateMB;
+    res2.cpuIdlePct    = -1.0;
+    res2.cpuBusyPct    = busyCpu2;
+    res2.tokens        = counts.actualTokens200;
+    res2.pluginsAgent  = res0.pluginsAgent;
     res2.pluginsClient = res0.pluginsClient;
     for (int w = 0; w < 20; ++w) {
-        if (tui->sharedState().readSnapshot()->messages.size() > 100) break;
+        if (tui->sharedState().readSnapshot()->messages.size() > 100) {
+            break;
+        }
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
     auto tuiSnap2 = tui->sharedState().readSnapshot();
-    res2.note = fmt::format("tail=100 + pagePull, tuiMsgCount={}", tuiSnap2->messages.size());
+    res2.note     = fmt::format("tail=100 + pagePull, tuiMsgCount={}", tuiSnap2->messages.size());
 
     {
         std::promise<void> p;
@@ -1246,8 +1266,8 @@ void benchResourceTui() {
             if (auto sess = agent->agentContext->getSession(sessionId)) {
                 res2.viewCount = sess->viewMessages.size();
                 res2.viewBytes = estimateViewMessagesBytes(sess->viewMessages);
-                res2.llmCount = sess->llmMessages.size();
-                res2.llmBytes = estimateLlmMessagesBytes(sess->llmMessages);
+                res2.llmCount  = sess->llmMessages.size();
+                res2.llmBytes  = estimateLlmMessagesBytes(sess->llmMessages);
             }
             p.set_value();
         });
@@ -1286,13 +1306,13 @@ void benchResourceSplitCli() {
         return;
     }
 
-    auto sim = startResourceLlmSimServer();
-    auto tmpDir = createBenchTempDir("bench_m3_split_cli");
-    auto& reporter = BenchReporter::instance();
-    const auto& counts = getCalibratedCounts();
+    auto        sim      = startResourceLlmSimServer();
+    auto        tmpDir   = createBenchTempDir("bench_m3_split_cli");
+    auto&       reporter = BenchReporter::instance();
+    const auto& counts   = getCalibratedCounts();
 
-    uint16_t serverPort = findFreeTcpPort();
-    std::string token = "bench_split_token_333";
+    uint16_t    serverPort = findFreeTcpPort();
+    std::string token      = "bench_split_token_333";
 
     // 写入 server 配置文件 server.yaml
     std::string serverYaml = (tmpDir / "server.yaml").string();
@@ -1321,13 +1341,16 @@ void benchResourceSplitCli() {
     }
 
     // 启动 server 子进程
-    std::vector<std::string> serverArgs = {
-        "server",
-        "--config", serverYaml,
-        "--host", "127.0.0.1",
-        "--port", std::to_string(serverPort),
-        "--token", token
-    };
+    std::vector<std::string> serverArgs
+        = {"server",
+           "--config",
+           serverYaml,
+           "--host",
+           "127.0.0.1",
+           "--port",
+           std::to_string(serverPort),
+           "--token",
+           token};
     auto serverProc = spawnChildProcess(cliBin, serverArgs, tmpDir.string());
     if (!serverProc.running) {
         std::cout << "  [resource][split_cli] failed to spawn server process" << std::endl;
@@ -1338,8 +1361,8 @@ void benchResourceSplitCli() {
     bool serverOk = false;
     for (int i = 0; i < 150; ++i) {
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
-        asio::io_context testCtx;
-        asio::ip::tcp::socket sock(testCtx);
+        asio::io_context          testCtx;
+        asio::ip::tcp::socket     sock(testCtx);
         boost::system::error_code ec;
         sock.connect(asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), serverPort), ec);
         if (!ec) {
@@ -1369,13 +1392,9 @@ void benchResourceSplitCli() {
     }
 
     // 启动 client 子进程 (agentxx_cli cli --config client.yaml --agent ws://... --token ...)
-    std::string wsUrl = fmt::format("ws://127.0.0.1:{}/agent", serverPort);
-    std::vector<std::string> clientArgs = {
-        "cli",
-        "--config", clientYaml,
-        "--agent", wsUrl,
-        "--token", token
-    };
+    std::string              wsUrl = fmt::format("ws://127.0.0.1:{}/agent", serverPort);
+    std::vector<std::string> clientArgs
+        = {"cli", "--config", clientYaml, "--agent", wsUrl, "--token", token};
     auto clientProc = spawnChildProcess(cliBin, clientArgs, tmpDir.string());
     if (!clientProc.running) {
         std::cout << "  [resource][split_cli] failed to spawn client process" << std::endl;
@@ -1392,37 +1411,37 @@ void benchResourceSplitCli() {
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
     double idleCpuServer = cpuEnd(idleWinServer);
     double idleCpuClient = cpuEnd(idleWinClient);
-    auto memServer0 = sampleMemoryMedian(serverProc.pid);
-    auto memClient0 = sampleMemoryMedian(clientProc.pid);
+    auto   memServer0    = sampleMemoryMedian(serverProc.pid);
+    auto   memClient0    = sampleMemoryMedian(clientProc.pid);
 
     ResourceResult resServer0;
-    resServer0.mode = "split_cli";
-    resServer0.side = "server";
-    resServer0.point = "startup";
-    resServer0.rssMB = memServer0.rssMB;
-    resServer0.privateMB = memServer0.privateMB;
-    resServer0.cpuIdlePct = idleCpuServer;
+    resServer0.mode         = "split_cli";
+    resServer0.side         = "server";
+    resServer0.point        = "startup";
+    resServer0.rssMB        = memServer0.rssMB;
+    resServer0.privateMB    = memServer0.privateMB;
+    resServer0.cpuIdlePct   = idleCpuServer;
     resServer0.pluginsAgent = 5;
-    resServer0.note = "real server process, WebSocket";
+    resServer0.note         = "real server process, WebSocket";
     reporter.addResource(resServer0);
     printResourceResult(resServer0);
 
     ResourceResult resClient0;
-    resClient0.mode = "split_cli";
-    resClient0.side = "client";
-    resClient0.point = "startup";
-    resClient0.rssMB = memClient0.rssMB;
-    resClient0.privateMB = memClient0.privateMB;
-    resClient0.cpuIdlePct = idleCpuClient;
+    resClient0.mode          = "split_cli";
+    resClient0.side          = "client";
+    resClient0.point         = "startup";
+    resClient0.rssMB         = memClient0.rssMB;
+    resClient0.privateMB     = memClient0.privateMB;
+    resClient0.cpuIdlePct    = idleCpuClient;
     resClient0.pluginsClient = 4;
-    resClient0.note = "real cli process, WebSocket";
+    resClient0.note          = "real cli process, WebSocket";
     reporter.addResource(resClient0);
     printResourceResult(resClient0);
 
     // ---------------- P1: ~100K 真实驱动与采样 ----------------
-    auto busyWinServer1 = cpuBegin(serverProc.pid);
-    auto busyWinClient1 = cpuBegin(clientProc.pid);
-    size_t startTurn1 = sim.turnCounter->load();
+    auto   busyWinServer1 = cpuBegin(serverProc.pid);
+    auto   busyWinClient1 = cpuBegin(clientProc.pid);
+    size_t startTurn1     = sim.turnCounter->load();
     for (size_t i = 0; i < counts.n100; ++i) {
         std::string userLine = fmt::format(
             "RES-BENCH user turn {:06d} | The quick brown fox jumps over the lazy dog. 请列出当前目录并读取 README 前 40 行。 #FIXED-9f3a\n",
@@ -1430,7 +1449,13 @@ void benchResourceSplitCli() {
         );
 #if XX_IS_WIN_D
         DWORD written = 0;
-        ::WriteFile(clientProc.hStdinWrite, userLine.data(), static_cast<DWORD>(userLine.size()), &written, nullptr);
+        ::WriteFile(
+            clientProc.hStdinWrite,
+            userLine.data(),
+            static_cast<DWORD>(userLine.size()),
+            &written,
+            nullptr
+        );
 #else
         if (clientProc.stdinWriteFd >= 0) {
             ssize_t w = write(clientProc.stdinWriteFd, userLine.data(), userLine.size());
@@ -1452,39 +1477,39 @@ void benchResourceSplitCli() {
     auto memClient1 = sampleMemoryMedian(clientProc.pid);
 
     ResourceResult resServer1;
-    resServer1.mode = "split_cli";
-    resServer1.side = "server";
-    resServer1.point = "ctx100k";
-    resServer1.rssMB = memServer1.rssMB;
-    resServer1.privateMB = memServer1.privateMB;
-    resServer1.cpuBusyPct = busyCpuServer1;
-    resServer1.tokens = counts.actualTokens100;
+    resServer1.mode         = "split_cli";
+    resServer1.side         = "server";
+    resServer1.point        = "ctx100k";
+    resServer1.rssMB        = memServer1.rssMB;
+    resServer1.privateMB    = memServer1.privateMB;
+    resServer1.cpuBusyPct   = busyCpuServer1;
+    resServer1.tokens       = counts.actualTokens100;
     resServer1.pluginsAgent = 5;
-    resServer1.llmCount = counts.n100 * 3;
-    resServer1.llmBytes = counts.n100 * 3800;
-    resServer1.note = "real server process, real WS turns";
+    resServer1.llmCount     = counts.n100 * 3;
+    resServer1.llmBytes     = counts.n100 * 3800;
+    resServer1.note         = "real server process, real WS turns";
     reporter.addResource(resServer1);
     printResourceResult(resServer1);
 
     ResourceResult resClient1;
-    resClient1.mode = "split_cli";
-    resClient1.side = "client";
-    resClient1.point = "ctx100k";
-    resClient1.rssMB = memClient1.rssMB;
-    resClient1.privateMB = memClient1.privateMB;
-    resClient1.cpuBusyPct = busyCpuClient1;
-    resClient1.tokens = counts.actualTokens100;
+    resClient1.mode          = "split_cli";
+    resClient1.side          = "client";
+    resClient1.point         = "ctx100k";
+    resClient1.rssMB         = memClient1.rssMB;
+    resClient1.privateMB     = memClient1.privateMB;
+    resClient1.cpuBusyPct    = busyCpuClient1;
+    resClient1.tokens        = counts.actualTokens100;
     resClient1.pluginsClient = 4;
-    resClient1.viewCount = counts.n100 * 3;
-    resClient1.viewBytes = counts.n100 * 4000;
-    resClient1.note = "real cli process, WebSocket";
+    resClient1.viewCount     = counts.n100 * 3;
+    resClient1.viewBytes     = counts.n100 * 4000;
+    resClient1.note          = "real cli process, WebSocket";
     reporter.addResource(resClient1);
     printResourceResult(resClient1);
 
     // ---------------- P2: ~200K 真实驱动与采样 ----------------
-    auto busyWinServer2 = cpuBegin(serverProc.pid);
-    auto busyWinClient2 = cpuBegin(clientProc.pid);
-    size_t startTurn2 = sim.turnCounter->load();
+    auto   busyWinServer2 = cpuBegin(serverProc.pid);
+    auto   busyWinClient2 = cpuBegin(clientProc.pid);
+    size_t startTurn2     = sim.turnCounter->load();
     for (size_t i = counts.n100; i < counts.n200; ++i) {
         std::string userLine = fmt::format(
             "RES-BENCH user turn {:06d} | The quick brown fox jumps over the lazy dog. 请列出当前目录并读取 README 前 40 行。 #FIXED-9f3a\n",
@@ -1492,7 +1517,13 @@ void benchResourceSplitCli() {
         );
 #if XX_IS_WIN_D
         DWORD written = 0;
-        ::WriteFile(clientProc.hStdinWrite, userLine.data(), static_cast<DWORD>(userLine.size()), &written, nullptr);
+        ::WriteFile(
+            clientProc.hStdinWrite,
+            userLine.data(),
+            static_cast<DWORD>(userLine.size()),
+            &written,
+            nullptr
+        );
 #else
         if (clientProc.stdinWriteFd >= 0) {
             ssize_t w = write(clientProc.stdinWriteFd, userLine.data(), userLine.size());
@@ -1514,32 +1545,32 @@ void benchResourceSplitCli() {
     auto memClient2 = sampleMemoryMedian(clientProc.pid);
 
     ResourceResult resServer2;
-    resServer2.mode = "split_cli";
-    resServer2.side = "server";
-    resServer2.point = "ctx200k";
-    resServer2.rssMB = memServer2.rssMB;
-    resServer2.privateMB = memServer2.privateMB;
-    resServer2.cpuBusyPct = busyCpuServer2;
-    resServer2.tokens = counts.actualTokens200;
+    resServer2.mode         = "split_cli";
+    resServer2.side         = "server";
+    resServer2.point        = "ctx200k";
+    resServer2.rssMB        = memServer2.rssMB;
+    resServer2.privateMB    = memServer2.privateMB;
+    resServer2.cpuBusyPct   = busyCpuServer2;
+    resServer2.tokens       = counts.actualTokens200;
     resServer2.pluginsAgent = 5;
-    resServer2.llmCount = counts.n200 * 3;
-    resServer2.llmBytes = counts.n200 * 3800;
-    resServer2.note = "real server process, real WS turns";
+    resServer2.llmCount     = counts.n200 * 3;
+    resServer2.llmBytes     = counts.n200 * 3800;
+    resServer2.note         = "real server process, real WS turns";
     reporter.addResource(resServer2);
     printResourceResult(resServer2);
 
     ResourceResult resClient2;
-    resClient2.mode = "split_cli";
-    resClient2.side = "client";
-    resClient2.point = "ctx200k";
-    resClient2.rssMB = memClient2.rssMB;
-    resClient2.privateMB = memClient2.privateMB;
-    resClient2.cpuBusyPct = busyCpuClient2;
-    resClient2.tokens = counts.actualTokens200;
+    resClient2.mode          = "split_cli";
+    resClient2.side          = "client";
+    resClient2.point         = "ctx200k";
+    resClient2.rssMB         = memClient2.rssMB;
+    resClient2.privateMB     = memClient2.privateMB;
+    resClient2.cpuBusyPct    = busyCpuClient2;
+    resClient2.tokens        = counts.actualTokens200;
     resClient2.pluginsClient = 4;
-    resClient2.viewCount = counts.n200 * 3;
-    resClient2.viewBytes = counts.n200 * 4000;
-    resClient2.note = "real cli process, WebSocket";
+    resClient2.viewCount     = counts.n200 * 3;
+    resClient2.viewBytes     = counts.n200 * 4000;
+    resClient2.note          = "real cli process, WebSocket";
     reporter.addResource(resClient2);
     printResourceResult(resClient2);
 
@@ -1563,13 +1594,13 @@ void benchResourceSplitTui() {
         return;
     }
 
-    auto sim = startResourceLlmSimServer();
-    auto tmpDir = createBenchTempDir("bench_m4_split_tui");
-    auto& reporter = BenchReporter::instance();
-    const auto& counts = getCalibratedCounts();
+    auto        sim      = startResourceLlmSimServer();
+    auto        tmpDir   = createBenchTempDir("bench_m4_split_tui");
+    auto&       reporter = BenchReporter::instance();
+    const auto& counts   = getCalibratedCounts();
 
-    uint16_t serverPort = findFreeTcpPort();
-    std::string token = "bench_split_token_444";
+    uint16_t    serverPort = findFreeTcpPort();
+    std::string token      = "bench_split_token_444";
 
     std::string serverYaml = (tmpDir / "server.yaml").string();
     {
@@ -1596,13 +1627,16 @@ void benchResourceSplitTui() {
         }
     }
 
-    std::vector<std::string> serverArgs = {
-        "server",
-        "--config", serverYaml,
-        "--host", "127.0.0.1",
-        "--port", std::to_string(serverPort),
-        "--token", token
-    };
+    std::vector<std::string> serverArgs
+        = {"server",
+           "--config",
+           serverYaml,
+           "--host",
+           "127.0.0.1",
+           "--port",
+           std::to_string(serverPort),
+           "--token",
+           token};
     auto serverProc = spawnChildProcess(cliBin, serverArgs, tmpDir.string());
     if (!serverProc.running) {
         std::cout << "  [resource][split_tui] failed to spawn server process" << std::endl;
@@ -1612,8 +1646,8 @@ void benchResourceSplitTui() {
     bool serverOk = false;
     for (int i = 0; i < 150; ++i) {
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
-        asio::io_context testCtx;
-        asio::ip::tcp::socket sock(testCtx);
+        asio::io_context          testCtx;
+        asio::ip::tcp::socket     sock(testCtx);
         boost::system::error_code ec;
         sock.connect(asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), serverPort), ec);
         if (!ec) {
@@ -1631,8 +1665,8 @@ void benchResourceSplitTui() {
 #ifdef AGENTXX_BUILD_CLIENT
     // Client 使用 bench 进程内的 headless TUI 端点经 WS 直连该 Server
     asio::io_context clientCtx;
-    auto clientEx = clientCtx.get_executor();
-    std::string sessionId = generateBenchSessionId();
+    auto             clientEx  = clientCtx.get_executor();
+    std::string      sessionId = generateBenchSessionId();
 
     auto tui = std::make_shared<TUIClientAgentIO>(
         clientEx,
@@ -1640,8 +1674,8 @@ void benchResourceSplitTui() {
         TUITheme::darkTheme(),
         agent::PermissionMode::Pass
     );
-    std::string wsUrl = fmt::format("ws://127.0.0.1:{}/agent", serverPort);
-    auto wsTransport = std::make_shared<agent::WsAgentIOTransport>(
+    std::string wsUrl       = fmt::format("ws://127.0.0.1:{}/agent", serverPort);
+    auto        wsTransport = std::make_shared<agent::WsAgentIOTransport>(
         clientEx,
         wsUrl,
         token,
@@ -1654,7 +1688,7 @@ void benchResourceSplitTui() {
         clientEx,
         [&]() -> asio::awaitable<void> {
             agent::WireHello hello{sessionId, token, 0, ""};
-            bool ok = co_await wsTransport->connect(hello);
+            bool             ok = co_await wsTransport->connect(hello);
             if (ok) {
                 connected.store(true);
                 co_await tui->runTransportLoop();
@@ -1663,7 +1697,7 @@ void benchResourceSplitTui() {
         asio::detached
     );
 
-    auto clientWork = asio::make_work_guard(clientCtx);
+    auto        clientWork = asio::make_work_guard(clientCtx);
     std::thread clientThread([&clientCtx]() {
         clientCtx.run();
     });
@@ -1681,37 +1715,37 @@ void benchResourceSplitTui() {
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
     double idleCpuServer = cpuEnd(idleWinServer);
     double idleCpuClient = cpuEnd(idleWinClient);
-    auto memServer0 = sampleMemoryMedian(serverProc.pid);
-    auto memClient0 = sampleMemoryMedian(0);
+    auto   memServer0    = sampleMemoryMedian(serverProc.pid);
+    auto   memClient0    = sampleMemoryMedian(0);
 
     ResourceResult resServer0;
-    resServer0.mode = "split_tui";
-    resServer0.side = "server";
-    resServer0.point = "startup";
-    resServer0.rssMB = memServer0.rssMB;
-    resServer0.privateMB = memServer0.privateMB;
-    resServer0.cpuIdlePct = idleCpuServer;
+    resServer0.mode         = "split_tui";
+    resServer0.side         = "server";
+    resServer0.point        = "startup";
+    resServer0.rssMB        = memServer0.rssMB;
+    resServer0.privateMB    = memServer0.privateMB;
+    resServer0.cpuIdlePct   = idleCpuServer;
     resServer0.pluginsAgent = 5;
-    resServer0.note = "real server process, WebSocket";
+    resServer0.note         = "real server process, WebSocket";
     reporter.addResource(resServer0);
     printResourceResult(resServer0);
 
     ResourceResult resClient0;
-    resClient0.mode = "split_tui";
-    resClient0.side = "client";
-    resClient0.point = "startup";
-    resClient0.rssMB = memClient0.rssMB;
-    resClient0.privateMB = memClient0.privateMB;
-    resClient0.cpuIdlePct = idleCpuClient;
+    resClient0.mode          = "split_tui";
+    resClient0.side          = "client";
+    resClient0.point         = "startup";
+    resClient0.rssMB         = memClient0.rssMB;
+    resClient0.privateMB     = memClient0.privateMB;
+    resClient0.cpuIdlePct    = idleCpuClient;
     resClient0.pluginsClient = 4;
-    resClient0.note = "headless-TUI over WS client, real server process";
+    resClient0.note          = "headless-TUI over WS client, real server process";
     reporter.addResource(resClient0);
     printResourceResult(resClient0);
 
     // P1: ~100K 驱动与采样
-    auto busyWinServer1 = cpuBegin(serverProc.pid);
-    auto busyWinClient1 = cpuBegin(0);
-    size_t startTurn1 = sim.turnCounter->load();
+    auto   busyWinServer1 = cpuBegin(serverProc.pid);
+    auto   busyWinClient1 = cpuBegin(0);
+    size_t startTurn1     = sim.turnCounter->load();
     for (size_t i = 0; i < counts.n100; ++i) {
         std::string userText = fmt::format(
             "RES-BENCH user turn {:06d} | The quick brown fox jumps over the lazy dog. 请列出当前目录并读取 README 前 40 行。 #FIXED-9f3a",
@@ -1729,45 +1763,45 @@ void benchResourceSplitTui() {
     double busyCpuServer1 = cpuEnd(busyWinServer1);
     double busyCpuClient1 = cpuEnd(busyWinClient1);
 
-    auto memServer1 = sampleMemoryMedian(serverProc.pid);
-    auto memClient1 = sampleMemoryMedian(0);
-    auto tuiSnap1 = tui->sharedState().readSnapshot();
-    size_t tuiMsgs1 = (tuiSnap1 != nullptr) ? tuiSnap1->messages.size() : 0;
+    auto   memServer1 = sampleMemoryMedian(serverProc.pid);
+    auto   memClient1 = sampleMemoryMedian(0);
+    auto   tuiSnap1   = tui->sharedState().readSnapshot();
+    size_t tuiMsgs1   = (tuiSnap1 != nullptr) ? tuiSnap1->messages.size() : 0;
 
     ResourceResult resServer1;
-    resServer1.mode = "split_tui";
-    resServer1.side = "server";
-    resServer1.point = "ctx100k";
-    resServer1.rssMB = memServer1.rssMB;
-    resServer1.privateMB = memServer1.privateMB;
-    resServer1.cpuBusyPct = busyCpuServer1;
-    resServer1.tokens = counts.actualTokens100;
+    resServer1.mode         = "split_tui";
+    resServer1.side         = "server";
+    resServer1.point        = "ctx100k";
+    resServer1.rssMB        = memServer1.rssMB;
+    resServer1.privateMB    = memServer1.privateMB;
+    resServer1.cpuBusyPct   = busyCpuServer1;
+    resServer1.tokens       = counts.actualTokens100;
     resServer1.pluginsAgent = 5;
-    resServer1.llmCount = counts.n100 * 3;
-    resServer1.llmBytes = counts.n100 * 3800;
-    resServer1.note = "real server process, real WS turns";
+    resServer1.llmCount     = counts.n100 * 3;
+    resServer1.llmBytes     = counts.n100 * 3800;
+    resServer1.note         = "real server process, real WS turns";
     reporter.addResource(resServer1);
     printResourceResult(resServer1);
 
     ResourceResult resClient1;
-    resClient1.mode = "split_tui";
-    resClient1.side = "client";
-    resClient1.point = "ctx100k";
-    resClient1.rssMB = memClient1.rssMB;
-    resClient1.privateMB = memClient1.privateMB;
-    resClient1.cpuBusyPct = busyCpuClient1;
-    resClient1.tokens = counts.actualTokens100;
+    resClient1.mode          = "split_tui";
+    resClient1.side          = "client";
+    resClient1.point         = "ctx100k";
+    resClient1.rssMB         = memClient1.rssMB;
+    resClient1.privateMB     = memClient1.privateMB;
+    resClient1.cpuBusyPct    = busyCpuClient1;
+    resClient1.tokens        = counts.actualTokens100;
     resClient1.pluginsClient = 4;
-    resClient1.viewCount = tuiMsgs1;
-    resClient1.viewBytes = tuiMsgs1 * 800;
-    resClient1.note = "headless-TUI over WS client";
+    resClient1.viewCount     = tuiMsgs1;
+    resClient1.viewBytes     = tuiMsgs1 * 800;
+    resClient1.note          = "headless-TUI over WS client";
     reporter.addResource(resClient1);
     printResourceResult(resClient1);
 
     // P2: ~200K 驱动与采样
-    auto busyWinServer2 = cpuBegin(serverProc.pid);
-    auto busyWinClient2 = cpuBegin(0);
-    size_t startTurn2 = sim.turnCounter->load();
+    auto   busyWinServer2 = cpuBegin(serverProc.pid);
+    auto   busyWinClient2 = cpuBegin(0);
+    size_t startTurn2     = sim.turnCounter->load();
     for (size_t i = counts.n100; i < counts.n200; ++i) {
         std::string userText = fmt::format(
             "RES-BENCH user turn {:06d} | The quick brown fox jumps over the lazy dog. 请列出当前目录并读取 README 前 40 行。 #FIXED-9f3a",
@@ -1785,38 +1819,38 @@ void benchResourceSplitTui() {
     double busyCpuServer2 = cpuEnd(busyWinServer2);
     double busyCpuClient2 = cpuEnd(busyWinClient2);
 
-    auto memServer2 = sampleMemoryMedian(serverProc.pid);
-    auto memClient2 = sampleMemoryMedian(0);
-    auto tuiSnap2 = tui->sharedState().readSnapshot();
-    size_t tuiMsgs2 = (tuiSnap2 != nullptr) ? tuiSnap2->messages.size() : 0;
+    auto   memServer2 = sampleMemoryMedian(serverProc.pid);
+    auto   memClient2 = sampleMemoryMedian(0);
+    auto   tuiSnap2   = tui->sharedState().readSnapshot();
+    size_t tuiMsgs2   = (tuiSnap2 != nullptr) ? tuiSnap2->messages.size() : 0;
 
     ResourceResult resServer2;
-    resServer2.mode = "split_tui";
-    resServer2.side = "server";
-    resServer2.point = "ctx200k";
-    resServer2.rssMB = memServer2.rssMB;
-    resServer2.privateMB = memServer2.privateMB;
-    resServer2.cpuBusyPct = busyCpuServer2;
-    resServer2.tokens = counts.actualTokens200;
+    resServer2.mode         = "split_tui";
+    resServer2.side         = "server";
+    resServer2.point        = "ctx200k";
+    resServer2.rssMB        = memServer2.rssMB;
+    resServer2.privateMB    = memServer2.privateMB;
+    resServer2.cpuBusyPct   = busyCpuServer2;
+    resServer2.tokens       = counts.actualTokens200;
     resServer2.pluginsAgent = 5;
-    resServer2.llmCount = counts.n200 * 3;
-    resServer2.llmBytes = counts.n200 * 3800;
-    resServer2.note = "real server process, real WS turns";
+    resServer2.llmCount     = counts.n200 * 3;
+    resServer2.llmBytes     = counts.n200 * 3800;
+    resServer2.note         = "real server process, real WS turns";
     reporter.addResource(resServer2);
     printResourceResult(resServer2);
 
     ResourceResult resClient2;
-    resClient2.mode = "split_tui";
-    resClient2.side = "client";
-    resClient2.point = "ctx200k";
-    resClient2.rssMB = memClient2.rssMB;
-    resClient2.privateMB = memClient2.privateMB;
-    resClient2.cpuBusyPct = busyCpuClient2;
-    resClient2.tokens = counts.actualTokens200;
+    resClient2.mode          = "split_tui";
+    resClient2.side          = "client";
+    resClient2.point         = "ctx200k";
+    resClient2.rssMB         = memClient2.rssMB;
+    resClient2.privateMB     = memClient2.privateMB;
+    resClient2.cpuBusyPct    = busyCpuClient2;
+    resClient2.tokens        = counts.actualTokens200;
     resClient2.pluginsClient = 4;
-    resClient2.viewCount = tuiMsgs2;
-    resClient2.viewBytes = tuiMsgs2 * 800;
-    resClient2.note = "headless-TUI over WS client";
+    resClient2.viewCount     = tuiMsgs2;
+    resClient2.viewBytes     = tuiMsgs2 * 800;
+    resClient2.note          = "headless-TUI over WS client";
     reporter.addResource(resClient2);
     printResourceResult(resClient2);
 
@@ -1864,35 +1898,22 @@ void benchResourceFfi() {
 #endif
 
     // 函数指针定义
-    AgentxxFFIAgent* (*agentxx_ffi_create)(
-        const AgentxxStringView*,
-        const AgentxxStringView*,
-        const AgentxxFFICallbacks*,
-        AgentxxString*
-    ) = nullptr;
+    AgentxxFFIAgent* (*agentxx_ffi_create)(const AgentxxStringView*, const AgentxxStringView*, const AgentxxFFICallbacks*, AgentxxString*)
+        = nullptr;
     int32_t (*agentxx_ffi_start)(AgentxxFFIAgent*, AgentxxString*) = nullptr;
-    int32_t (*agentxx_ffi_stop)(AgentxxFFIAgent*) = nullptr;
-    void (*agentxx_ffi_destroy)(AgentxxFFIAgent*) = nullptr;
-    int32_t (*agentxx_ffi_send_input)(
-        AgentxxFFIAgent*,
-        const AgentxxStringView*,
-        const AgentxxStringView*,
-        AgentxxString*
-    ) = nullptr;
-    int32_t (*agentxx_ffi_get_context_messages)(
-        AgentxxFFIAgent*,
-        AgentxxString*,
-        AgentxxString*
-    ) = nullptr;
+    int32_t (*agentxx_ffi_stop)(AgentxxFFIAgent*)                  = nullptr;
+    void (*agentxx_ffi_destroy)(AgentxxFFIAgent*)                  = nullptr;
+    int32_t (*agentxx_ffi_send_input)(AgentxxFFIAgent*, const AgentxxStringView*, const AgentxxStringView*, AgentxxString*)
+        = nullptr;
+    int32_t (*agentxx_ffi_get_context_messages)(AgentxxFFIAgent*, AgentxxString*, AgentxxString*)
+        = nullptr;
     void (*agentxx_ffi_string_free)(AgentxxString*) = nullptr;
 
-    bool symsOk = RESOLVE_SYM(agentxx_ffi_create)
-               && RESOLVE_SYM(agentxx_ffi_start)
-               && RESOLVE_SYM(agentxx_ffi_stop)
-               && RESOLVE_SYM(agentxx_ffi_destroy)
-               && RESOLVE_SYM(agentxx_ffi_send_input)
-               && RESOLVE_SYM(agentxx_ffi_get_context_messages)
-               && RESOLVE_SYM(agentxx_ffi_string_free);
+    bool symsOk = RESOLVE_SYM(agentxx_ffi_create) && RESOLVE_SYM(agentxx_ffi_start)
+                  && RESOLVE_SYM(agentxx_ffi_stop) && RESOLVE_SYM(agentxx_ffi_destroy)
+                  && RESOLVE_SYM(agentxx_ffi_send_input)
+                  && RESOLVE_SYM(agentxx_ffi_get_context_messages)
+                  && RESOLVE_SYM(agentxx_ffi_string_free);
 
     if (!symsOk) {
         std::cout << "  [resource][ffi] failed to resolve required FFI symbols" << std::endl;
@@ -1904,58 +1925,60 @@ void benchResourceFfi() {
         return;
     }
 
-    auto sim = startResourceLlmSimServer();
-    auto tmpDir = createBenchTempDir("bench_ffi");
-    auto& reporter = BenchReporter::instance();
-    const auto& counts = getCalibratedCounts();
+    auto        sim      = startResourceLlmSimServer();
+    auto        tmpDir   = createBenchTempDir("bench_ffi");
+    auto&       reporter = BenchReporter::instance();
+    const auto& counts   = getCalibratedCounts();
 
     // 配置 JSON
     neograph::json cfgJson;
-    cfgJson["dataDir"] = (tmpDir / "data").string();
-    cfgJson["workDir"] = tmpDir.string();
-    cfgJson["permissionMode"] = "pass";
+    cfgJson["dataDir"]            = (tmpDir / "data").string();
+    cfgJson["workDir"]            = tmpDir.string();
+    cfgJson["permissionMode"]     = "pass";
     cfgJson["enableSessionStore"] = false;
-    cfgJson["enableSubagent"] = false;
-    cfgJson["enableWorktree"] = false;
-    cfgJson["llmMaxRetry"] = 0;
+    cfgJson["enableSubagent"]     = false;
+    cfgJson["enableWorktree"]     = false;
+    cfgJson["llmMaxRetry"]        = 0;
 
     neograph::json pluginsArr = neograph::json::array();
     for (const auto& name : getBench5PluginNames()) {
         neograph::json p;
-        p["path"] = resolveBenchPluginDir(name);
+        p["path"]    = resolveBenchPluginDir(name);
         p["enabled"] = true;
-        p["sides"] = "auto";
+        p["sides"]   = "auto";
         pluginsArr.push_back(p);
     }
     cfgJson["plugins"] = pluginsArr;
 
     // 模型 JSON
     neograph::json modelJson;
-    modelJson["name"] = "bench-sim";
-    modelJson["type"] = "openai";
-    modelJson["baseUrl"] = fmt::format("http://127.0.0.1:{}/v1", sim.port);
-    modelJson["apiKey"] = "EMPTY";
-    modelJson["modelName"] = "bench-sim";
+    modelJson["name"]                 = "bench-sim";
+    modelJson["type"]                 = "openai";
+    modelJson["baseUrl"]              = fmt::format("http://127.0.0.1:{}/v1", sim.port);
+    modelJson["apiKey"]               = "EMPTY";
+    modelJson["modelName"]            = "bench-sim";
     modelJson["modelContextMaxToken"] = 8 << 20;
 
-    std::string cfgStr = cfgJson.dump();
+    std::string cfgStr   = cfgJson.dump();
     std::string modelStr = modelJson.dump();
 
     AgentxxStringView cfgSv{cfgStr.data(), static_cast<uint64_t>(cfgStr.size())};
     AgentxxStringView modelSv{modelStr.data(), static_cast<uint64_t>(modelStr.size())};
 
     struct FfiEventTracker {
-        std::mutex m;
+        std::mutex              m;
         std::condition_variable cv;
-        bool ready = false;
-        bool turnDone = false;
+        bool                    ready    = false;
+        bool                    turnDone = false;
     } tracker;
 
     AgentxxFFICallbacks cb{};
     cb.user_data = &tracker;
-    cb.on_event = [](int32_t type, const AgentxxStringView*, void* ud) {
+    cb.on_event  = [](int32_t type, const AgentxxStringView*, void* ud) {
         auto* tr = static_cast<FfiEventTracker*>(ud);
-        if (!tr) return;
+        if (!tr) {
+            return;
+        }
         std::lock_guard<std::mutex> lock(tr->m);
         if (type == AGENTXX_FFI_EVT_READY) {
             tr->ready = true;
@@ -1966,7 +1989,7 @@ void benchResourceFfi() {
         }
     };
 
-    AgentxxString logOut{nullptr, 0};
+    AgentxxString    logOut{nullptr, 0};
     AgentxxFFIAgent* ffiAgent = agentxx_ffi_create(&cfgSv, &modelSv, &cb, &logOut);
     if (logOut.data) {
         agentxx_ffi_string_free(&logOut);
@@ -2005,7 +2028,7 @@ void benchResourceFfi() {
     }
 
     // 预热一轮
-    std::string warmupInput = "hello";
+    std::string       warmupInput = "hello";
     AgentxxStringView wInputSv{warmupInput.data(), static_cast<uint64_t>(warmupInput.size())};
     tracker.turnDone = false;
     agentxx_ffi_send_input(ffiAgent, &wInputSv, nullptr, &logOut);
@@ -2024,20 +2047,20 @@ void benchResourceFfi() {
     auto idleWin = cpuBegin(0);
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
     double idleCpu = cpuEnd(idleWin);
-    auto mem0 = sampleMemoryMedian(0);
+    auto   mem0    = sampleMemoryMedian(0);
 
     ResourceResult res0;
-    res0.mode = "ffi";
-    res0.side = "self";
-    res0.point = "startup";
-    res0.rssMB = mem0.rssMB;
-    res0.privateMB = mem0.privateMB;
-    res0.cpuIdlePct = idleCpu;
-    res0.cpuBusyPct = 0.0;
-    res0.pluginsAgent = 5;
+    res0.mode          = "ffi";
+    res0.side          = "self";
+    res0.point         = "startup";
+    res0.rssMB         = mem0.rssMB;
+    res0.privateMB     = mem0.privateMB;
+    res0.cpuIdlePct    = idleCpu;
+    res0.cpuBusyPct    = 0.0;
+    res0.pluginsAgent  = 5;
     res0.pluginsClient = 4;
-    res0.tokens = 150;
-    res0.note = "FfiClientAgentIO over in-process Channel, dll loaded";
+    res0.tokens        = 150;
+    res0.note          = "FfiClientAgentIO over in-process Channel, dll loaded";
 
     AgentxxString ctxOut{nullptr, 0};
     if (agentxx_ffi_get_context_messages(ffiAgent, &ctxOut, &logOut) == 0 && ctxOut.data) {
@@ -2054,7 +2077,7 @@ void benchResourceFfi() {
     // ---------------- P1: ~100K ----------------
     auto busyWin1 = cpuBegin(0);
     for (size_t i = 0; i < counts.n100; ++i) {
-        tracker.turnDone = false;
+        tracker.turnDone     = false;
         std::string userText = fmt::format(
             "RES-BENCH user turn {:06d} | The quick brown fox jumps over the lazy dog. 请列出当前目录并读取 README 前 40 行。 #FIXED-9f3a",
             i + 1
@@ -2071,31 +2094,34 @@ void benchResourceFfi() {
     }
     double busyCpu1 = cpuEnd(busyWin1);
 
-    auto mem1 = sampleMemoryMedian(0);
+    auto           mem1 = sampleMemoryMedian(0);
     ResourceResult res1;
-    res1.mode = "ffi";
-    res1.side = "self";
-    res1.point = "ctx100k";
-    res1.rssMB = mem1.rssMB;
-    res1.privateMB = mem1.privateMB;
-    res1.cpuIdlePct = -1.0;
-    res1.cpuBusyPct = busyCpu1;
-    res1.tokens = counts.actualTokens100;
-    res1.pluginsAgent = 5;
+    res1.mode          = "ffi";
+    res1.side          = "self";
+    res1.point         = "ctx100k";
+    res1.rssMB         = mem1.rssMB;
+    res1.privateMB     = mem1.privateMB;
+    res1.cpuIdlePct    = -1.0;
+    res1.cpuBusyPct    = busyCpu1;
+    res1.tokens        = counts.actualTokens100;
+    res1.pluginsAgent  = 5;
     res1.pluginsClient = 4;
-    res1.note = "real turns driven via agentxx_ffi_send_input";
+    res1.note          = "real turns driven via agentxx_ffi_send_input";
 
     AgentxxString ctxOut1{nullptr, 0};
     if (agentxx_ffi_get_context_messages(ffiAgent, &ctxOut1, &logOut) == 0 && ctxOut1.data) {
         res1.llmBytes = ctxOut1.size;
         try {
-            auto j = neograph::json::parse(std::string_view{ctxOut1.data, static_cast<size_t>(ctxOut1.size)});
+            auto j = neograph::json::parse(
+                std::string_view{ctxOut1.data, static_cast<size_t>(ctxOut1.size)}
+            );
             if (j.is_array()) {
-                res1.llmCount = j.size();
+                res1.llmCount  = j.size();
                 res1.viewCount = j.size();
                 res1.viewBytes = res1.llmBytes;
             }
-        } catch (...) {}
+        } catch (...) {
+        }
         agentxx_ffi_string_free(&ctxOut1);
     }
     if (logOut.data) {
@@ -2108,7 +2134,7 @@ void benchResourceFfi() {
     // ---------------- P2: ~200K ----------------
     auto busyWin2 = cpuBegin(0);
     for (size_t i = counts.n100; i < counts.n200; ++i) {
-        tracker.turnDone = false;
+        tracker.turnDone     = false;
         std::string userText = fmt::format(
             "RES-BENCH user turn {:06d} | The quick brown fox jumps over the lazy dog. 请列出当前目录并读取 README 前 40 行。 #FIXED-9f3a",
             i + 1
@@ -2125,31 +2151,34 @@ void benchResourceFfi() {
     }
     double busyCpu2 = cpuEnd(busyWin2);
 
-    auto mem2 = sampleMemoryMedian(0);
+    auto           mem2 = sampleMemoryMedian(0);
     ResourceResult res2;
-    res2.mode = "ffi";
-    res2.side = "self";
-    res2.point = "ctx200k";
-    res2.rssMB = mem2.rssMB;
-    res2.privateMB = mem2.privateMB;
-    res2.cpuIdlePct = -1.0;
-    res2.cpuBusyPct = busyCpu2;
-    res2.tokens = counts.actualTokens200;
-    res2.pluginsAgent = 5;
+    res2.mode          = "ffi";
+    res2.side          = "self";
+    res2.point         = "ctx200k";
+    res2.rssMB         = mem2.rssMB;
+    res2.privateMB     = mem2.privateMB;
+    res2.cpuIdlePct    = -1.0;
+    res2.cpuBusyPct    = busyCpu2;
+    res2.tokens        = counts.actualTokens200;
+    res2.pluginsAgent  = 5;
     res2.pluginsClient = 4;
-    res2.note = "real turns driven via agentxx_ffi_send_input";
+    res2.note          = "real turns driven via agentxx_ffi_send_input";
 
     AgentxxString ctxOut2{nullptr, 0};
     if (agentxx_ffi_get_context_messages(ffiAgent, &ctxOut2, &logOut) == 0 && ctxOut2.data) {
         res2.llmBytes = ctxOut2.size;
         try {
-            auto j = neograph::json::parse(std::string_view{ctxOut2.data, static_cast<size_t>(ctxOut2.size)});
+            auto j = neograph::json::parse(
+                std::string_view{ctxOut2.data, static_cast<size_t>(ctxOut2.size)}
+            );
             if (j.is_array()) {
-                res2.llmCount = j.size();
+                res2.llmCount  = j.size();
                 res2.viewCount = j.size();
                 res2.viewBytes = res2.llmBytes;
             }
-        } catch (...) {}
+        } catch (...) {
+        }
         agentxx_ffi_string_free(&ctxOut2);
     }
     if (logOut.data) {

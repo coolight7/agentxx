@@ -381,14 +381,14 @@ private:
 class SessionsManager {
 public:
 
-    /// 获取或创建指定 sessionId 的会话 (同步版本: 若未加载且有 sessionStore 则同步加载, 供非协程上下文兜底)
+    /// 获取或创建指定 sessionId 的会话 (同步版本: 若未加载且有 sessionStore 则同步加载,
+    /// 供非协程上下文兜底)
     std::shared_ptr<Session> getOrCreate(std::string_view sessionId);
 
-    /// 获取或创建指定 sessionId 的会话 (异步版本: 若未加载且有 pool, 卸载 loadSession 到线程池, 避免卡住 io 线程)
-    asio::awaitable<std::shared_ptr<Session>> getOrCreateAsync(
-        std::string_view   sessionId,
-        asio::thread_pool* pool = nullptr
-    );
+    /// 获取或创建指定 sessionId 的会话 (异步版本: 若未加载且有 pool, 卸载 loadSession 到线程池,
+    /// 避免卡住 io 线程)
+    asio::awaitable<std::shared_ptr<Session>>
+        getOrCreateAsync(std::string_view sessionId, asio::thread_pool* pool = nullptr);
 
     /// 获取指定 sessionId 的会话; 不存在时返回 nullptr
     std::shared_ptr<Session> get(std::string_view sessionId);
@@ -551,7 +551,8 @@ public:
     }
 
     /// 设置语言: 不支持 auto, 空或 auto 归一化为 "en"
-    /// 若 sessionId 非空则设置会话独立语言, 同时同步更新 agentConfig->language; 若 sessionId 为空则仅更新 agentConfig->language
+    /// 若 sessionId 非空则设置会话独立语言, 同时同步更新 agentConfig->language; 若 sessionId
+    /// 为空则仅更新 agentConfig->language
     void setLanguage(std::string_view lang, std::string_view sessionId = "") {
         auto norm = normalizeLanguage(lang);
         if (!sessionId.empty() && sessions) {

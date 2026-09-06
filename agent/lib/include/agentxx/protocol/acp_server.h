@@ -197,7 +197,7 @@ public:
     /// 实际监听端口 (自动分配端口时用)
     uint16_t port() const;
     /// 是否已停止
-    bool     isStopped() const;
+    bool isStopped() const;
 
     /// 底层协议处理器引用
     AcpProtocolHandler& handler();

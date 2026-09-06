@@ -809,10 +809,11 @@ asio::awaitable<events::RespSubagentBatch> AgentHost::spawnBatch(
                     },
                     [&task](std::string& errmsg) -> std::optional<events::RespSubagentBatchItem> {
                         return events::RespSubagentBatchItem{
-                            .resultId     = task.resultId,
-                            .hasError     = true,
-                            .cancelled    = true,
-                            .errorMessage = fmt::format("Sub-agent cancelled: {}", std::move(errmsg)),
+                            .resultId  = task.resultId,
+                            .hasError  = true,
+                            .cancelled = true,
+                            .errorMessage
+                            = fmt::format("Sub-agent cancelled: {}", std::move(errmsg)),
                         };
                     },
                     cancelToken

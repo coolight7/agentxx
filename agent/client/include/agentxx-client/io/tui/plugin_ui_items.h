@@ -15,8 +15,8 @@
 /// - estimatePluginButtonLines: 高度估算 (button 恒 1 行)
 /// - renderPluginDiff: diff 内容渲染 (message decor 与 DiffOverlay 共用;
 ///   复用 computeLineDiff + side-by-side/统一双样式, 避免双份实现)
-#include "agentxx/plugin/client_plugin_manager.h"
 #include "agentxx-client/io/tui/tui_theme.h"
+#include "agentxx/plugin/client_plugin_manager.h"
 #include "agentxx/util/diff_util.h"
 #include "ftxui/dom/elements.hpp"
 #include "neograph/json.h"
@@ -37,11 +37,11 @@ enum class PluginButtonRole : uint8_t {
 
 /// button 项解析结果
 struct PluginButtonDesc {
-    std::string       label;    ///< 按钮文字 (已 strip; 渲染时自动左右补空格)
-    std::string       prefix;   ///< 同行前导 (如 "|- "; 空 = 无前缀)
-    std::string       actionId; ///< 可点动作 id (空 = 纯静态)
-    std::string       argsJson; ///< 点击透传参数 dump (无参 = "{}")
-    PluginButtonRole  role = PluginButtonRole::Normal;
+    std::string      label;    ///< 按钮文字 (已 strip; 渲染时自动左右补空格)
+    std::string      prefix;   ///< 同行前导 (如 "|- "; 空 = 无前缀)
+    std::string      actionId; ///< 可点动作 id (空 = 纯静态)
+    std::string      argsJson; ///< 点击透传参数 dump (无参 = "{}")
+    PluginButtonRole role = PluginButtonRole::Normal;
     /// 是否可点: actionId 非空 && 快照有该 plugin 绑定 (精确或 "" 兜底)
     bool clickable = false;
 };
@@ -51,21 +51,18 @@ struct PluginButtonDesc {
 /// - args 缺失/非 object → "{}"; role 非法值 → Normal
 /// - clickable 由 hasPluginBinding(plugin, reg) 决定 (reg 可空 → false)
 bool parsePluginButton(
-    const neograph::json&                  it,
-    std::string_view                       plugin,
+    const neograph::json&                    it,
+    std::string_view                         plugin,
     const agentxx::plugin::ClientUiRegistry* reg,
-    PluginButtonDesc&                      out
+    PluginButtonDesc&                        out
 );
 
 /// 按 role 配色渲染按钮 (label 自动左右各补一空格)
 ftxui::Element renderPluginButton(const PluginButtonDesc& desc, const TUITheme& theme);
 
 /// text 项按 role 配色渲染 (title=高亮强调/normal=普通/hint=减淡)
-ftxui::Element renderPluginTextItem(
-    const std::string& text,
-    const std::string& role,
-    const TUITheme&    theme
-);
+ftxui::Element
+    renderPluginTextItem(const std::string& text, const std::string& role, const TUITheme& theme);
 
 /// diff 内容渲染 (message decor 与 DiffOverlay 共用)
 /// - path 非空时首行展示 "  file: {path}"
@@ -79,15 +76,12 @@ ftxui::Element renderPluginDiff(
 );
 
 /// 快照中是否存在该 plugin 的绑定 (精确 target 或 "" 兜底任一)
-bool hasPluginBinding(
-    std::string_view                       plugin,
-    const agentxx::plugin::ClientUiRegistry* reg
-);
+bool hasPluginBinding(std::string_view plugin, const agentxx::plugin::ClientUiRegistry* reg);
 
 /// 快照中是否存在该 plugin 在指定 owner 下的绑定 (精确 owner 优先, 否则 "" 兜底)
 bool hasPluginBindingFor(
-    std::string_view                       plugin,
-    std::string_view                       ownerId,
+    std::string_view                         plugin,
+    std::string_view                         ownerId,
     const agentxx::plugin::ClientUiRegistry* reg
 );
 

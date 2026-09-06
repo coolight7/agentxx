@@ -494,11 +494,13 @@ void TUIClientAgentIO::start() {
         // 标题随界面语言变化 (语言切换时经 refreshLanguage 重新设置)
         sidebar_->setPinnedTabs({
             {std::string(kInfoTabId),
-             std::string(tr("sidebar.info")), [this]() {
+             std::string(tr("sidebar.info")),
+             [this]() {
                  ensureInfoSidebarTab();
              }},
             {std::string(kLogTabId),
-             std::string(tr("sidebar.logs")), [this]() {
+             std::string(tr("sidebar.logs")),
+             [this]() {
                  ensureLogSidebarTab();
              }},
         });
@@ -632,8 +634,8 @@ void TUIClientAgentIO::start() {
             if (!st.pendingInputs.empty()) {
                 pendingBar = hbox({
                     text(" "),
-                    text(trf("queue.barTitle", st.pendingInputs.size()))
-                        | color(theme_.accentColor) | bold | reflect(pendingCounterBox_),
+                    text(trf("queue.barTitle", st.pendingInputs.size())) | color(theme_.accentColor)
+                        | bold | reflect(pendingCounterBox_),
                     text(" "),
                     text(tr("queue.insert")) | bgcolor(theme_.buttonBgColor)
                         | color(theme_.buttonTextColor) | bold | reflect(pendingInsertButtonBox_),
@@ -1221,11 +1223,13 @@ void TUIClientAgentIO::refreshSidebarTabTitles() {
     // 常驻标签标题 (tabs 竖向列表顶部固定按钮): 语言切换后重新设置
     sidebar_->setPinnedTabs({
         {std::string(kInfoTabId),
-         std::string(tr("sidebar.info")), [this]() {
+         std::string(tr("sidebar.info")),
+         [this]() {
              ensureInfoSidebarTab();
          }},
         {std::string(kLogTabId),
-         std::string(tr("sidebar.logs")), [this]() {
+         std::string(tr("sidebar.logs")),
+         [this]() {
              ensureLogSidebarTab();
          }},
     });
@@ -2004,11 +2008,11 @@ void TUIClientAgentIO::onDelta(const agentxx::agent::WireDelta& delta) {
                 m->startTimeMs        = delta.startTimeMs > 0
                                             ? delta.startTimeMs
                                             : static_cast<int64_t>(
-                                         std::chrono::duration_cast<std::chrono::milliseconds>(
-                                             std::chrono::system_clock::now().time_since_epoch()
-                                         )
-                                             .count()
-                                     );
+                                           std::chrono::duration_cast<std::chrono::milliseconds>(
+                                               std::chrono::system_clock::now().time_since_epoch()
+                                           )
+                                               .count()
+                                       );
                 st.messages.push_back(std::move(m));
                 st.isStreaming = true;
             } break;
@@ -2069,7 +2073,8 @@ void TUIClientAgentIO::onDelta(const agentxx::agent::WireDelta& delta) {
                         st.pendingTokenStartTimeMs = delta.startTimeMs;
                         st.pendingTokenDurationMs  = delta.durationMs;
                     }
-                } else if (!st.messages.empty() && st.messages.back()->role != TUIMessage::Role::Think) {
+                } else if (!st.messages.empty()
+                           && st.messages.back()->role != TUIMessage::Role::Think) {
                     auto& m       = sharedState_.mutableMessage(st, st.messages.size() - 1);
                     m.startTimeMs = delta.startTimeMs;
                     m.durationMs  = delta.durationMs;

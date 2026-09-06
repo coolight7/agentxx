@@ -18,10 +18,7 @@ PluginButtonRole parseButtonRole(std::string_view role) {
     return PluginButtonRole::Normal;
 }
 
-bool hasPluginBinding(
-    std::string_view                         plugin,
-    const agentxx::plugin::ClientUiRegistry* reg
-) {
+bool hasPluginBinding(std::string_view plugin, const agentxx::plugin::ClientUiRegistry* reg) {
     if (!reg || plugin.empty()) {
         return false;
     }
@@ -66,7 +63,7 @@ bool parsePluginButton(
     if (!it.is_object()) {
         return false;
     }
-    const auto kind = it.value("kind", std::string{"text"});
+    const auto  kind = it.value("kind", std::string{"text"});
     std::string label, prefix, actionId, roleStr = "normal";
     std::string argsJson = "{}";
     if (kind == "button") {
@@ -94,12 +91,12 @@ bool parsePluginButton(
     if (label.empty()) {
         label = "Button";
     }
-    out.label      = std::move(label);
-    out.prefix     = std::move(prefix);
-    out.actionId   = std::move(actionId);
-    out.argsJson   = std::move(argsJson);
-    out.role       = parseButtonRole(roleStr);
-    out.clickable  = !out.actionId.empty() && hasPluginBinding(plugin, reg);
+    out.label     = std::move(label);
+    out.prefix    = std::move(prefix);
+    out.actionId  = std::move(actionId);
+    out.argsJson  = std::move(argsJson);
+    out.role      = parseButtonRole(roleStr);
+    out.clickable = !out.actionId.empty() && hasPluginBinding(plugin, reg);
     return true;
 }
 
@@ -150,7 +147,7 @@ Element renderPluginDiff(
     int              screenW
 ) {
     using agentxx::util::DiffLineType;
-    const int sw = (screenW > 0) ? screenW : Terminal::Size().dimx;
+    const int sw   = (screenW > 0) ? screenW : Terminal::Size().dimx;
     auto      diff = agentxx::util::computeLineDiff(oldStr, newStr);
     if (diff.empty()) {
         Elements els;

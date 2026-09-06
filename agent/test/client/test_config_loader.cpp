@@ -1015,7 +1015,12 @@ void test_language_config() {
     }
     // 6. 支持环境变量展开
     {
-        auto cfg = loadYamlWithDotEnv("language: ${MY_LANG}\n", {{"MY_LANG", "zh-cn"}});
+        auto cfg = loadYamlWithDotEnv(
+            "language: ${MY_LANG}\n",
+            {
+                {"MY_LANG", "zh-cn"}
+        }
+        );
         XX_TEST_EXPECT_EQ(cfg.language, std::string("zh-cn"));
     }
 }

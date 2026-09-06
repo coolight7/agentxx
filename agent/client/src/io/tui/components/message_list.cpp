@@ -1091,8 +1091,7 @@ LazyBuiltItem MessageListComponent::buildStreamingItem(const TUIRenderState& st)
                 );
             } else if (st.pendingTokenThink && st.pendingTokenThink->isEncrypted) {
                 header.push_back(
-                    text(tr("think.encrypted")) | color(theme.thinkingColor) | dim
-                    | xflex_shrink
+                    text(tr("think.encrypted")) | color(theme.thinkingColor) | dim | xflex_shrink
                 );
             }
             block = hbox(std::move(header));
@@ -1645,11 +1644,12 @@ Element MessageListComponent::buildMessageBlock(
                     // 头行: 类型 + 进度
                     Elements header;
                     header.push_back(
-                        text(trf(
-                            "interrupt.header",
-                            msg.interrupt->inputIndex,
-                            msg.interrupt->inputTotal
-                        )) | color(theme.accentColor) | bold
+                        text(
+                            trf("interrupt.header",
+                                msg.interrupt->inputIndex,
+                                msg.interrupt->inputTotal)
+                        )
+                        | color(theme.accentColor) | bold
                     );
                     header.push_back(
                         text(msg.interrupt->inputLabel) | color(theme.accentColor) | xflex_shrink
@@ -1759,9 +1759,9 @@ void MessageListComponent::appendDecorItems(
     const auto& theme = *ctx_.theme;
     // 状态图渲染宽度预算: 内容缩进 (4) + 边界余量 (2); 下限保底可读
     const int diagW = (maxWidth > 0) ? std::max(20, maxWidth - 6) : 0;
-    auto        reg
-        = ctx_.frameState && ctx_.frameState->pluginRegistry ? ctx_.frameState->pluginRegistry.get()
-                                                             : nullptr;
+    auto      reg   = ctx_.frameState && ctx_.frameState->pluginRegistry
+                          ? ctx_.frameState->pluginRegistry.get()
+                          : nullptr;
 
     auto hit = [this, &plugin, &ownerId](std::string actionId, std::string argsJson) {
         DecorHitBox hb;

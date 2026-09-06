@@ -222,7 +222,8 @@ asio::awaitable<AgentRunner::Outcome> AgentRunner::run(
                             rid = std::to_string(argIndex);
                         }
                         resumeValues[rid] = neograph::json::parse(resp->resultJson);
-                    } else if (resp.has_value() && !resp->handled && resp->resultJson.find("__cancelled__") != std::string::npos) {
+                    } else if (resp.has_value() && !resp->handled
+                               && resp->resultJson.find("__cancelled__") != std::string::npos) {
                         throw neograph::graph::CancelledException("HIL interrupted by cancel");
                     }
                 }

@@ -54,13 +54,13 @@ ftxui::Element buildLogLine(const TUILogSink::Line& line, const TUITheme& theme)
 /// - text + button 隐式同行合并与 prefix 显式前缀统一在此实现
 /// - diagram 保留静态内联渲染 (历史消息兼容), 不挂点击
 static void appendPluginItems(
-    const neograph::json&                        items,
-    std::string_view                             plugin,
-    std::string_view                             ownerId,
-    const agentxx::plugin::ClientUiRegistry*     reg,
-    const TUITheme&                              theme,
-    ftxui::Elements&                             out,
-    std::vector<TUIClientAgentIO::UiHitTarget>&  hits
+    const neograph::json&                       items,
+    std::string_view                            plugin,
+    std::string_view                            ownerId,
+    const agentxx::plugin::ClientUiRegistry*    reg,
+    const TUITheme&                             theme,
+    ftxui::Elements&                            out,
+    std::vector<TUIClientAgentIO::UiHitTarget>& hits
 ) {
     if (!items.is_array()) {
         return;

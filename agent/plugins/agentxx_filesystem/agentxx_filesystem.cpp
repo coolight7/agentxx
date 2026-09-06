@@ -796,7 +796,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int32_t AGENTXX_PLUGIN_CALL
                     if (!args.is_object()) {
                         return;
                     }
-                    auto files = agentxx_fs_plugin::stringListArg(args, "file_patterns");
+                    auto         files = agentxx_fs_plugin::stringListArg(args, "file_patterns");
                     std::string  joined;
                     const size_t n = std::min<size_t>(files.size(), 2);
                     for (size_t i = 0; i < n; ++i) {
@@ -830,10 +830,9 @@ extern "C" AGENTXX_PLUGIN_EXPORT int32_t AGENTXX_PLUGIN_CALL
                     if (!args.is_object()) {
                         return;
                     }
-                    auto textPats = agentxx_fs_plugin::stringListArg(args, "text_patterns");
-                    auto regexPats
-                        = agentxx_fs_plugin::stringListArg(args, "regex_patterns");
-                    auto files = agentxx_fs_plugin::stringListArg(args, "file_patterns");
+                    auto textPats  = agentxx_fs_plugin::stringListArg(args, "text_patterns");
+                    auto regexPats = agentxx_fs_plugin::stringListArg(args, "regex_patterns");
+                    auto files     = agentxx_fs_plugin::stringListArg(args, "file_patterns");
                     std::vector<std::string> shown;
                     for (const auto& p : textPats) {
                         if (shown.size() >= 2) {

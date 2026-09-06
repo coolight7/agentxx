@@ -27,7 +27,7 @@ public:
     std::string_view t(std::string_view key) const noexcept;
 
     /// 带格式参数的查询 (占位符 {} 同 fmt 语义, 如 t("x", count))
-    template <typename... Args>
+    template<typename... Args>
     std::string t(std::string_view key, Args&&... args) const {
         return fmt::format(fmt::runtime(t(key)), std::forward<Args>(args)...);
     }
@@ -44,7 +44,7 @@ inline std::string_view tr(std::string_view key) {
 }
 
 /// 便捷查询 (带格式参数, 返回 std::string)
-template <typename... Args>
+template<typename... Args>
 inline std::string trf(std::string_view key, Args&&... args) {
     return TuiI18n::instance().t(key, std::forward<Args>(args)...);
 }

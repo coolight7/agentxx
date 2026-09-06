@@ -3025,7 +3025,11 @@ void ClientPluginManager::dispatchAction(
               argsJson = std::move(argsJson)]() mutable {
         auto inst = self->find(plugin);
         if (!inst || !inst->enabled) {
-            XX_LOGW("[client_plugin] dispatch action `{}` dropped: plugin `{}` missing/disabled", actionId, plugin);
+            XX_LOGW(
+                "[client_plugin] dispatch action `{}` dropped: plugin `{}` missing/disabled",
+                actionId,
+                plugin
+            );
             return;
         }
         // 精确匹配优先, 未命中回落实例级 fallback ("")
@@ -3073,7 +3077,7 @@ void ClientPluginManager::dispatchAction(
             }
         }
         PluginInstanceBase::InflightGuard guard(inst.get());
-        AgentxxUiActionContext             ctx{};
+        AgentxxUiActionContext            ctx{};
         ctx.version     = 1;
         ctx.owner_id    = agentxx::plugin::PluginStringView::from(ownerId.data(), ownerId.size());
         ctx.action_id   = agentxx::plugin::PluginStringView::from(actionId.data(), actionId.size());
@@ -3109,9 +3113,9 @@ int ClientPluginManager::openOverlay(ClientPluginInstance* inst, const AgentxxOv
     }
     const std::string title   = svToStr(spec->title);
     const std::string payload = svToStr(spec->payload);
-    const std::string extra
-        = agentxx::plugin::PluginStringView::empty(&spec->extra_json) ? "{}"
-                                                                      : svToStr(spec->extra_json);
+    const std::string extra   = agentxx::plugin::PluginStringView::empty(&spec->extra_json)
+                                    ? "{}"
+                                    : svToStr(spec->extra_json);
     // 拷贝字符串后直调 adapter (TUI 实现内部 postToUi, 不阻塞插件)
     uiAdapter_->onOverlayOpen(inst->name, spec->type, title, payload, extra);
     return 0;

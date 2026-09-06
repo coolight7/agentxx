@@ -106,8 +106,7 @@ struct PluginStringView {
 
     /// 宿主堆字符串 → std::string_view (零拷贝; NULL data 视为空串)
     static std::string_view str(const AgentxxPluginString& s) noexcept {
-        return s.data ? std::string_view{s.data, static_cast<size_t>(s.size)}
-                      : std::string_view{};
+        return s.data ? std::string_view{s.data, static_cast<size_t>(s.size)} : std::string_view{};
     }
 
     /// 指针重载
@@ -3007,11 +3006,11 @@ public:
     /// 生成 button JSON (action_id 自增 act_N; args 缺省 {}; role 缺省 normal)
     /// - onClick 为空时仍生成可点按钮 (固定 id 由调用方另行 on() 绑定, 如 planning 常量)
     neograph::json makeButton(
-        std::string  label,
-        Handler      onClick  = nullptr,
-        std::string  prefix   = "",
-        std::string  role     = "normal",
-        neograph::json args   = neograph::json::object()
+        std::string    label,
+        Handler        onClick = nullptr,
+        std::string    prefix  = "",
+        std::string    role    = "normal",
+        neograph::json args    = neograph::json::object()
     ) {
         const std::string id = "act_" + std::to_string(++counter_);
         if (onClick) {
@@ -3030,8 +3029,7 @@ public:
     }
 
     /// C 回调 (填入 bind_action_handler 的 on_action; ud = 本实例指针)
-    static void AGENTXX_PLUGIN_CALL
-        dispatch(const AgentxxUiActionContext* ctx, void* ud) {
+    static void AGENTXX_PLUGIN_CALL dispatch(const AgentxxUiActionContext* ctx, void* ud) {
         auto* self = static_cast<ActionController*>(ud);
         if (!self || !ctx) {
             return;

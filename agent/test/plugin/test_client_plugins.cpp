@@ -1322,9 +1322,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             );
             XX_TEST_EXPECT_TRUE(globStr.matched);
             XX_TEST_EXPECT_EQ(globStr.displayName, "Glob");
-            XX_TEST_EXPECT_TRUE(
-                globStr.summary.find("agent/test/*.cpp") != std::string::npos
-            );
+            XX_TEST_EXPECT_TRUE(globStr.summary.find("agent/test/*.cpp") != std::string::npos);
 
             // grep 数组形态 (旧行为, 回归保护)
             auto grepArr = agentxx::plugin::renderClientTool(
@@ -1355,9 +1353,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             );
             XX_TEST_EXPECT_TRUE(grepStr.matched);
             XX_TEST_EXPECT_EQ(grepStr.displayName, "Grep");
-            XX_TEST_EXPECT_TRUE(
-                grepStr.summary.find(R"("startDaSimServer")") != std::string::npos
-            );
+            XX_TEST_EXPECT_TRUE(grepStr.summary.find(R"("startDaSimServer")") != std::string::npos);
             XX_TEST_EXPECT_TRUE(
                 grepStr.summary.find("agent/test/core/test_agent.cpp") != std::string::npos
             );
@@ -1464,8 +1460,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 // cb 空 → 失败
                 auto emptySv = agentxx::plugin::PluginStringView::from("", 0);
                 XX_TEST_EXPECT_TRUE(
-                    ui->bind_action_handler(&exInst->host, &emptySv, nullptr, &hitsFallback)
-                    != 0
+                    ui->bind_action_handler(&exInst->host, &emptySv, nullptr, &hitsFallback) != 0
                 );
                 // bind fallback ("") + 精确 ("sec1")
                 auto secSv = agentxx::plugin::PluginStringView::fromCstr("sec1");
@@ -1533,10 +1528,12 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                     }
                     XX_TEST_EXPECT_TRUE(any);
                 }
+
                 // dispatch 上下文内容校验 (owner/action/args 透传)
                 struct CtxCap {
                     std::string owner, action, args;
                 };
+
                 CtxCap cap;
                 auto   capFn = +[](const AgentxxUiActionContext* ctx, void* ud) {
                     auto* c = static_cast<CtxCap*>(ud);
@@ -1552,11 +1549,13 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                         }
                     }
                 };
-                XX_TEST_EXPECT_EQ(
-                    ui->bind_action_handler(&exInst->host, &emptySv, capFn, &cap),
-                    0
+                XX_TEST_EXPECT_EQ(ui->bind_action_handler(&exInst->host, &emptySv, capFn, &cap), 0);
+                mgr->dispatchAction(
+                    "example_plugin",
+                    "toolCallX",
+                    "planning.open_graph",
+                    R"({"k":1})"
                 );
-                mgr->dispatchAction("example_plugin", "toolCallX", "planning.open_graph", R"({"k":1})");
                 XX_TEST_EXPECT_EQ(cap.owner, "toolCallX");
                 XX_TEST_EXPECT_EQ(cap.action, "planning.open_graph");
                 XX_TEST_EXPECT_TRUE(cap.args.find("\"k\"") != std::string::npos);
@@ -1604,7 +1603,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 badType.type    = 99;
                 XX_TEST_EXPECT_TRUE(ui->open_overlay(&exInst->host, &badType) != 0);
                 // MERMAID 成功 → 适配器收到信号
-                const char* mermaid = "stateDiagram-v2\n[*] --> a\na --> [*]";
+                const char*        mermaid = "stateDiagram-v2\n[*] --> a\na --> [*]";
                 AgentxxOverlaySpec spec{};
                 spec.version    = 1;
                 spec.type       = AGENTXX_OVERLAY_MERMAID;
@@ -1623,10 +1622,10 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 XX_TEST_EXPECT_EQ(adapter->overlayCloseCount(), 1);
                 // DIFF payload 透传 (宿主不解析, 仅校验类型)
                 AgentxxOverlaySpec diffSpec{};
-                diffSpec.version    = 1;
-                diffSpec.type       = AGENTXX_OVERLAY_DIFF;
-                diffSpec.title      = agentxx::plugin::PluginStringView::fromCstr("D");
-                diffSpec.payload    = agentxx::plugin::PluginStringView::fromCstr(
+                diffSpec.version = 1;
+                diffSpec.type    = AGENTXX_OVERLAY_DIFF;
+                diffSpec.title   = agentxx::plugin::PluginStringView::fromCstr("D");
+                diffSpec.payload = agentxx::plugin::PluginStringView::fromCstr(
                     R"({"path":"a","old_str":"x","new_str":"y"})"
                 );
                 diffSpec.extra_json = agentxx::plugin::PluginStringView::fromCstr("{}");
@@ -1649,17 +1648,14 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             agentxx::agent::WirePluginData plData;
             plData.plugin = "agentxx_planning";
             plData.event  = "planning";
-            plData.data
-                = R"({"roadmap":"stateDiagram-v2\n[*] --> e2e\ne2e --> [*]","todos":[]})";
+            plData.data   = R"({"roadmap":"stateDiagram-v2\n[*] --> e2e\ne2e --> [*]","todos":[]})";
             mgr->onPluginData(plData);
             const int openBefore = adapter->overlayOpenCount();
             // decor owner=toolCallId 同样被 fallback 接住
             mgr->dispatchAction("agentxx_planning", "call_e2e_1", "planning.open_graph", "{}");
             XX_TEST_EXPECT_EQ(adapter->overlayOpenCount(), openBefore + 1);
             XX_TEST_EXPECT_EQ(adapter->lastOverlayType(), AGENTXX_OVERLAY_MERMAID);
-            XX_TEST_EXPECT_TRUE(
-                adapter->lastOverlayPayload().find("e2e") != std::string::npos
-            );
+            XX_TEST_EXPECT_TRUE(adapter->lastOverlayPayload().find("e2e") != std::string::npos);
             XX_TEST_EXPECT_EQ(adapter->lastOverlayTitle(), "Planning Roadmap");
             co_await mgr->unloadAsync("agentxx_planning");
             XX_TEST_EXPECT_TRUE(mgr->find("agentxx_planning") == nullptr);
@@ -1679,7 +1675,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             [&](const neograph::json& args) {
                 ++hitsB;
                 XX_TEST_EXPECT_EQ(args.value("k", 0), 1);
-            },
+        },
             "|- ",
             "accent",
             neograph::json{{"k", 1}}
@@ -1703,20 +1699,20 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         XX_TEST_EXPECT_EQ(hitsA, 1);
         // dispatch 自增 id (args 透传)
         AgentxxUiActionContext ctxB{};
-        ctxB.version = 1;
-        std::string bIdStr = btn.value("action_id", "");
+        ctxB.version         = 1;
+        std::string bIdStr   = btn.value("action_id", "");
         std::string bArgsStr = btn["args"].dump();
-        auto bIdSv = agentxx::plugin::PluginStringView::from(bIdStr.data(), bIdStr.size());
-        auto bArgsSv = agentxx::plugin::PluginStringView::from(bArgsStr.data(), bArgsStr.size());
+        auto        bIdSv = agentxx::plugin::PluginStringView::from(bIdStr.data(), bIdStr.size());
+        auto bArgsSv   = agentxx::plugin::PluginStringView::from(bArgsStr.data(), bArgsStr.size());
         ctxB.action_id = bIdSv;
         ctxB.action_args = bArgsSv;
         agentxx::plugin::kit::ActionController::dispatch(&ctxB, &ctl);
         XX_TEST_EXPECT_EQ(hitsB, 1);
         // 未知 id / 空指针守卫 (不崩溃)
         AgentxxUiActionContext ctxC{};
-        ctxC.version = 1;
-        auto cId = agentxx::plugin::PluginStringView::fromCstr("no.such");
-        ctxC.action_id = cId;
+        ctxC.version     = 1;
+        auto cId         = agentxx::plugin::PluginStringView::fromCstr("no.such");
+        ctxC.action_id   = cId;
         ctxC.action_args = emptyArgs;
         agentxx::plugin::kit::ActionController::dispatch(&ctxC, &ctl);
         agentxx::plugin::kit::ActionController::dispatch(nullptr, &ctl);
@@ -1731,7 +1727,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         agentxx::plugin::ClientUiRegistry reg;
         // 无绑定 → button 不可点
         PluginButtonDesc desc;
-        neograph::json btnJson = neograph::json::parse(
+        neograph::json   btnJson = neograph::json::parse(
             R"({"kind":"button","label":"[Graph]","action_id":"planning.open_graph","args":{},"role":"accent"})"
         );
         XX_TEST_EXPECT_TRUE(parsePluginButton(btnJson, "agentxx_planning", &reg, desc));
@@ -1744,7 +1740,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         agentxx::plugin::ClientActionBinding b;
         b.plugin   = "agentxx_planning";
         b.targetId = "";
-        b.cb = +[](const AgentxxUiActionContext*, void*) {};
+        b.cb       = +[](const AgentxxUiActionContext*, void*) {};
         reg.actionBindings.push_back(b);
         XX_TEST_EXPECT_TRUE(hasPluginBinding("agentxx_planning", &reg));
         XX_TEST_EXPECT_TRUE(hasPluginBindingFor("agentxx_planning", "call_x", &reg));
@@ -1764,25 +1760,20 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         XX_TEST_EXPECT_TRUE(parsePluginButton(btnJson, "other_plugin", &reg, desc3));
         XX_TEST_EXPECT_FALSE(desc3.clickable);
         // 旧 action kind 兼容: action_id=id, role=accent
-        neograph::json actJson = neograph::json::parse(
-            R"({"kind":"action","id":"rebuild","label":"Rebuild"})"
-        );
+        neograph::json actJson
+            = neograph::json::parse(R"({"kind":"action","id":"rebuild","label":"Rebuild"})");
         PluginButtonDesc descAct;
         XX_TEST_EXPECT_TRUE(parsePluginButton(actJson, "agentxx_planning", &reg, descAct));
         XX_TEST_EXPECT_EQ(descAct.actionId, "rebuild");
         XX_TEST_EXPECT_TRUE(descAct.role == PluginButtonRole::Accent);
         // 无 action_id → 静态 (不可点, 但解析成功)
-        neograph::json staticJson = neograph::json::parse(
-            R"({"kind":"button","label":"Static"})"
-        );
+        neograph::json staticJson = neograph::json::parse(R"({"kind":"button","label":"Static"})");
         PluginButtonDesc descStatic;
         XX_TEST_EXPECT_TRUE(parsePluginButton(staticJson, "agentxx_planning", &reg, descStatic));
         XX_TEST_EXPECT_TRUE(descStatic.actionId.empty());
         XX_TEST_EXPECT_FALSE(descStatic.clickable);
         // 非 button → false
-        neograph::json textJson = neograph::json::parse(
-            R"({"kind":"text","text":"hi"})"
-        );
+        neograph::json   textJson = neograph::json::parse(R"({"kind":"text","text":"hi"})");
         PluginButtonDesc descText;
         XX_TEST_EXPECT_FALSE(parsePluginButton(textJson, "agentxx_planning", &reg, descText));
         // role 非法值 → Normal; danger 映射

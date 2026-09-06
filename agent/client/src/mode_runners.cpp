@@ -431,7 +431,7 @@ static asio::awaitable<void> runRemoteCliAsync(
         .model     = "",
         .language  = "en",
     };
-    bool             ok = co_await transport->connect(hello);
+    bool ok = co_await transport->connect(hello);
     if (!ok) {
         XX_LOGE("[remote_cli] connection failed");
         co_return;
@@ -528,7 +528,7 @@ static asio::awaitable<void> runRemoteTuiAsync(
         .model     = "",
         .language  = TUISettings::instance().languageCode(),
     };
-    bool             connected = false;
+    bool connected = false;
     while (!connected) {
         agent::WsAgentIOTransport::Config transportCfg;
         // 有限次尝试后返回失败 (默认 0=无限内部重连, 用户永远等不到失败提示)

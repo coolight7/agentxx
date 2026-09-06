@@ -405,9 +405,9 @@ interfaces:
         agentxx::agent::McpServerConfig ycfg;
         ycfg.url                                    = "https://yaml.example";
         ctx->agentConfig->mcpServerUrls["yaml_ns2"] = ycfg;
-        const char* specConflict                    = R"({"namespace":"yaml_ns2","url":"https://z"})";
+        const char* specConflict   = R"({"namespace":"yaml_ns2","url":"https://z"})";
         auto        specConflictSv = agentxx::plugin::PluginStringView::fromCstr(specConflict);
-        rc                         = res3 ? res3->register_mcp_server(&inst->host, &specConflictSv) : 0;
+        rc = res3 ? res3->register_mcp_server(&inst->host, &specConflictSv) : 0;
         XX_TEST_EXPECT_TRUE(rc != 0);
 
         // ---- 其他 owner 抢注同名命名空间: 因 t_mcp 未注册(冻结)故可成功 ----

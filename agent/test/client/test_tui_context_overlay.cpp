@@ -322,8 +322,10 @@ TestResult testTuiContextOverlay() {
         // 事件被处理 (Scrollable 内部处理), 不崩溃
         fx.comp->OnEvent(ftxui::Event::Mouse("", m));
         auto screen3 = fx.render();
-        XX_TEST_EXPECT_TRUE(screen3.find("LLM Context") != std::string::npos
-                            || screen3.find("LLM 上下文") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(
+            screen3.find("LLM Context") != std::string::npos
+            || screen3.find("LLM 上下文") != std::string::npos
+        );
         // 滚动偏移已下移 (内容超高时) 或保持 (内容未超高)
         XX_TEST_EXPECT_TRUE(fx.comp->headerBoxes().size() == 4);
     }

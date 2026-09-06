@@ -921,10 +921,10 @@ static int32_t AGENTXX_PLUGIN_CALL
         if (!mgr) {
             return -1;
         }
-        std::string lang = (language && language->data)
-                               ? std::string(language->data, static_cast<size_t>(language->size))
-                               : std::string{};
-        auto mgrPtr = mgr;
+        std::string lang   = (language && language->data)
+                                 ? std::string(language->data, static_cast<size_t>(language->size))
+                                 : std::string{};
+        auto        mgrPtr = mgr;
         ioCallSyncVoid(mgrPtr, [mgrPtr, lang]() {
             mgrPtr->setLanguage(lang);
         });

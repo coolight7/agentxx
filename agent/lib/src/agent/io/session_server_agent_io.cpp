@@ -187,9 +187,8 @@ asio::awaitable<void> SessionServerAgentIO::runTransportLoop() {
     co_await runTransportLoop(std::move(transport));
 }
 
-asio::awaitable<void> SessionServerAgentIO::runTransportLoop(
-    std::shared_ptr<AgentIOTransportBase> transport
-) {
+asio::awaitable<void>
+    SessionServerAgentIO::runTransportLoop(std::shared_ptr<AgentIOTransportBase> transport) {
     if (!transport) {
         co_return;
     }
@@ -530,7 +529,8 @@ void SessionServerAgentIO::onPeerMessage(
                 auto self         = shared_from_this();
                 asio::co_spawn(
                     ex_,
-                    [self, sessionStore, agent, req = std::move(m), sender]() -> asio::awaitable<void> {
+                    [self, sessionStore, agent, req = std::move(m), sender](
+                    ) -> asio::awaitable<void> {
                         WireSessionList resp;
                         if (agent->agentContext->threadPool) {
                             resp = co_await agentxx::util::offloadAsync<WireSessionList>(
@@ -579,8 +579,8 @@ void SessionServerAgentIO::onPeerMessage(
                 // 先在线程池中异步预热加载目标会话历史, 避免在 io 线程产生阻塞 SQLite 读
                 asio::co_spawn(
                     ex_,
-                    [self = shared_from_this(), newId = std::move(m.sessionId)]()
-                        -> asio::awaitable<void> {
+                    [self  = shared_from_this(),
+                     newId = std::move(m.sessionId)]() -> asio::awaitable<void> {
                         if (auto agent = self->agent_.lock(); agent && agent->agentContext) {
                             co_await agent->agentContext->getSessionAsync(newId);
                         }

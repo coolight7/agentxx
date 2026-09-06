@@ -378,18 +378,15 @@ int32_t AGENTXX_FFI_CALL agentxx_ffi_set_language(
         std::string_view langSv = (language != nullptr && language->data != nullptr)
                                       ? svToCpp(language)
                                       : std::string_view{"en"};
-        const int rc = a->impl->setLanguage(langSv, err);
+        const int        rc     = a->impl->setLanguage(langSv, err);
         return ffiFinish(rc, err, log);
     } catch (...) {
         return ffiFail(AGENTXX_FFI_ERR_INTERNAL, cxxErrText(), log);
     }
 }
 
-int32_t AGENTXX_FFI_CALL agentxx_ffi_get_language(
-    AgentxxFFIAgent* a,
-    AgentxxString*   out,
-    AgentxxString*   log
-) {
+int32_t AGENTXX_FFI_CALL
+    agentxx_ffi_get_language(AgentxxFFIAgent* a, AgentxxString* out, AgentxxString* log) {
     if (out == nullptr) {
         return ffiFail(AGENTXX_FFI_ERR_INVALID, "null out pointer", log);
     }

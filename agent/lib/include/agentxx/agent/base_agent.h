@@ -61,7 +61,8 @@ public:
     /// 指定会话当前实际使用的模型显示名称 (解析会话选择/默认模型)
     std::string getCurrentModelName(std::string_view sessionId) const;
 
-    /// 获取当前使用的语言 (若指定 sessionId 且该会话有独立设置则优先返回, 否则返回 agentConfig->language, 兜底 "en")
+    /// 获取当前使用的语言 (若指定 sessionId 且该会话有独立设置则优先返回, 否则返回
+    /// agentConfig->language, 兜底 "en")
     std::string getLanguage(std::string_view sessionId = "") const;
 
     /// 指定使用的语言 (不支持 auto, 为空或 auto 设为 "en")

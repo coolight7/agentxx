@@ -1083,13 +1083,11 @@ extern "C" AGENTXX_PLUGIN_EXPORT int32_t AGENTXX_PLUGIN_CALL
                         return;
                     }
                     AgentxxOverlaySpec spec{};
-                    spec.version    = 1;
-                    spec.type       = AGENTXX_OVERLAY_MERMAID;
-                    spec.title      = agentxx::plugin::PluginStringView::fromCstr("Planning Roadmap");
-                    spec.payload    = agentxx::plugin::PluginStringView::from(
-                        roadmap.data(),
-                        roadmap.size()
-                    );
+                    spec.version = 1;
+                    spec.type    = AGENTXX_OVERLAY_MERMAID;
+                    spec.title   = agentxx::plugin::PluginStringView::fromCstr("Planning Roadmap");
+                    spec.payload
+                        = agentxx::plugin::PluginStringView::from(roadmap.data(), roadmap.size());
                     spec.extra_json = agentxx::plugin::PluginStringView::fromCstr("{}");
                     c->ui->open_overlay(c->host, &spec);
                 });

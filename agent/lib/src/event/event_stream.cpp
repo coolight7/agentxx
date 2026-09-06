@@ -145,7 +145,7 @@ void EventBridge::handleLLMToken(const neograph::graph::GraphEvent& event) {
     // 每 16 token (约 64 字节) 或窗口到期再做一次 countTokens 批量折算
     constexpr size_t kBatchChars = 64;
     if (tpsPendingText_.size() >= kBatchChars) {
-        tpsTokenCount_   += countTokens(tpsPendingText_);
+        tpsTokenCount_ += countTokens(tpsPendingText_);
         tpsPendingText_.clear();
     }
     // 定时推送一次平均速度 (token/s) - push 时会把 pending 一并结算
@@ -434,8 +434,8 @@ void EventBridge::handleTurnStart() {
     turnTpsTokenCount_  = 0.0;
     turnTpsDurationSec_ = 0.0;
     // 重置流级统计 (防御: 上轮异常结束可能未结算)
-    tpsStartTime_     = {};
-    tpsTokenCount_    = 0.0;
+    tpsStartTime_  = {};
+    tpsTokenCount_ = 0.0;
     tpsPendingText_.clear();
     tpsLastPushSec_   = 0.0;
     tpsLastPushToken_ = 0.0;
@@ -444,7 +444,7 @@ void EventBridge::handleTurnStart() {
 void EventBridge::settleCurrentStream() {
     // 结算 pending 文本
     if (!tpsPendingText_.empty()) {
-        tpsTokenCount_   += countTokens(tpsPendingText_);
+        tpsTokenCount_ += countTokens(tpsPendingText_);
         tpsPendingText_.clear();
     }
     // 无进行中的流 (当前流无 token 输出) 时跳过
@@ -460,8 +460,8 @@ void EventBridge::settleCurrentStream() {
         turnTpsDurationSec_ += elapsedSec;
     }
     // 重置流级计数 (下一个流重新开始计时)
-    tpsStartTime_     = {};
-    tpsTokenCount_    = 0.0;
+    tpsStartTime_  = {};
+    tpsTokenCount_ = 0.0;
     tpsPendingText_.clear();
     tpsLastPushSec_   = 0.0;
     tpsLastPushToken_ = 0.0;
@@ -550,7 +550,8 @@ double EventBridge::countTokens(std::string_view text) {
     }
 
     // 回退: 无 summarization (测试/裸 EventBridge) 时的内置估算
-    // 口径与 SummarizationMiddlewareHandle::countTokensForUtf8Str / util::estimateTokenCount 完全一致:
+    // 口径与 SummarizationMiddlewareHandle::countTokensForUtf8Str / util::estimateTokenCount
+    // 完全一致:
     // - 0xF8-0xFF (无效 UTF-8 前导, 5/6 字节编码已被 RFC 3629 废弃) 按 ascii
     //   单字节处理, 避免吞掉后续字节少计
     // - ascii ≈ 4 字符/token, 非 ascii ≈ 1.1 字符/token (分别折算后相加)
@@ -570,7 +571,7 @@ void EventBridge::pushTpsIfDue() {
     }
     // 结算 pending 文本再计算窗口 tps
     if (!tpsPendingText_.empty()) {
-        tpsTokenCount_   += countTokens(tpsPendingText_);
+        tpsTokenCount_ += countTokens(tpsPendingText_);
         tpsPendingText_.clear();
     }
     // 最近一个窗口 (推送周期) 内的平均生成速度:

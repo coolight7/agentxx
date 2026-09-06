@@ -68,7 +68,9 @@ std::optional<TuiLanguage> matchSingleLocale(std::string_view raw) noexcept {
         if (c == '_') {
             norm.push_back('-');
         } else {
-            norm.push_back(static_cast<char>(agentxx::util::charToLower(static_cast<unsigned char>(c))));
+            norm.push_back(
+                static_cast<char>(agentxx::util::charToLower(static_cast<unsigned char>(c)))
+            );
         }
     }
 
@@ -110,12 +112,10 @@ TuiLanguage matchSupportedLanguage(std::string_view localeStr) noexcept {
     // 支持按优先级组合的多条目列表 (如 GNU LANGUAGE="zh_CN:zh:en_US:en" 或带分号)
     while (!localeStr.empty()) {
         const auto sepPos = localeStr.find_first_of(":;,");
-        const auto item   = (sepPos == std::string_view::npos)
-                                ? localeStr
-                                : localeStr.substr(0, sepPos);
-        localeStr = (sepPos == std::string_view::npos)
-                        ? std::string_view{}
-                        : localeStr.substr(sepPos + 1);
+        const auto item
+            = (sepPos == std::string_view::npos) ? localeStr : localeStr.substr(0, sepPos);
+        localeStr = (sepPos == std::string_view::npos) ? std::string_view{}
+                                                       : localeStr.substr(sepPos + 1);
 
         const auto matched = matchSingleLocale(item);
         if (matched.has_value()) {

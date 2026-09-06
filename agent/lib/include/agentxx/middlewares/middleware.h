@@ -410,7 +410,8 @@ public:
     inline static const std::string graphDataKey_summarizationFailCount{"xx_summarizationFailCount"
     };
     /// 上次成功压缩后的消息数量
-    /// - 用于自动压缩冷却: 若上次压缩后消息条数增长不足且仍处于超限水位，避免反复派生 subagent 无效压缩
+    /// - 用于自动压缩冷却: 若上次压缩后消息条数增长不足且仍处于超限水位，避免反复派生 subagent
+    /// 无效压缩
     inline static const std::string graphDataKey_summarizationLastMsgCount{
         "xx_summarizationLastMsgCount"
     };

@@ -131,8 +131,8 @@ inline ProcMemSample sampleProcessMemory(uint32_t pid = 0) {
             }
             out.rssMB = static_cast<double>(residentPages * pageSize) / (1024.0 * 1024.0);
             if (residentPages >= sharedPages) {
-                out.privateMB
-                    = static_cast<double>((residentPages - sharedPages) * pageSize) / (1024.0 * 1024.0);
+                out.privateMB = static_cast<double>((residentPages - sharedPages) * pageSize)
+                                / (1024.0 * 1024.0);
             } else {
                 out.privateMB = out.rssMB;
             }
@@ -145,8 +145,7 @@ inline ProcMemSample sampleProcessMemory(uint32_t pid = 0) {
 }
 
 /// 采样多次取 RSS 中位数以抑抖动
-inline ProcMemSample
-    sampleMemoryMedian(uint32_t pid = 0, size_t times = 3, int intervalMs = 50) {
+inline ProcMemSample sampleMemoryMedian(uint32_t pid = 0, size_t times = 3, int intervalMs = 50) {
     std::vector<ProcMemSample> samples;
     for (size_t i = 0; i < times; ++i) {
         auto s = sampleProcessMemory(pid);
@@ -188,10 +187,10 @@ inline CpuWindow cpuBegin(uint32_t pid = 0) {
     if (h) {
         FILETIME ftCreation{}, ftExit{}, ftKernel{}, ftUser{};
         if (::GetProcessTimes(h, &ftCreation, &ftExit, &ftKernel, &ftUser)) {
-            uint64_t k = (static_cast<uint64_t>(ftKernel.dwHighDateTime) << 32)
-                         | ftKernel.dwLowDateTime;
-            uint64_t u = (static_cast<uint64_t>(ftUser.dwHighDateTime) << 32)
-                         | ftUser.dwLowDateTime;
+            uint64_t k
+                = (static_cast<uint64_t>(ftKernel.dwHighDateTime) << 32) | ftKernel.dwLowDateTime;
+            uint64_t u
+                = (static_cast<uint64_t>(ftUser.dwHighDateTime) << 32) | ftUser.dwLowDateTime;
             win.cpuTimeTicks = k + u; // 100ns 单位
             win.valid        = true;
         }
@@ -248,10 +247,10 @@ inline double cpuEnd(const CpuWindow& win) {
     if (h) {
         FILETIME ftCreation{}, ftExit{}, ftKernel{}, ftUser{};
         if (::GetProcessTimes(h, &ftCreation, &ftExit, &ftKernel, &ftUser)) {
-            uint64_t k = (static_cast<uint64_t>(ftKernel.dwHighDateTime) << 32)
-                         | ftKernel.dwLowDateTime;
-            uint64_t u = (static_cast<uint64_t>(ftUser.dwHighDateTime) << 32)
-                         | ftUser.dwLowDateTime;
+            uint64_t k
+                = (static_cast<uint64_t>(ftKernel.dwHighDateTime) << 32) | ftKernel.dwLowDateTime;
+            uint64_t u
+                = (static_cast<uint64_t>(ftUser.dwHighDateTime) << 32) | ftUser.dwLowDateTime;
             uint64_t ticks2 = k + u;
             if (h != ::GetCurrentProcess()) {
                 ::CloseHandle(h);
@@ -278,8 +277,8 @@ inline double cpuEnd(const CpuWindow& win) {
         if (lastParen != std::string::npos && lastParen + 1 < content.size()) {
             std::istringstream iss(content.substr(lastParen + 1));
             std::string        state;
-            uint64_t           ppid, pgrp, session, tty, tpgid, flags, minflt, cminflt, majflt, cmajflt;
-            uint64_t           utime = 0, stime = 0;
+            uint64_t ppid, pgrp, session, tty, tpgid, flags, minflt, cminflt, majflt, cmajflt;
+            uint64_t utime = 0, stime = 0;
             if (iss >> state >> ppid >> pgrp >> session >> tty >> tpgid >> flags >> minflt
                 >> cminflt >> majflt >> cmajflt >> utime >> stime) {
                 uint64_t ticks2 = utime + stime;
@@ -332,8 +331,12 @@ inline std::string resolveBenchPluginDir(const std::string& pluginName) {
 #endif
     candidates.push_back(fs::current_path(ec) / "plugins" / pluginName);
     candidates.push_back(fs::current_path(ec) / "exec" / "plugins" / pluginName);
-    candidates.push_back(fs::current_path(ec) / "agent" / "build" / "linux-release" / "exec" / "plugins" / pluginName);
-    candidates.push_back(fs::current_path(ec) / "agent" / "build" / "linux-debug" / "exec" / "plugins" / pluginName);
+    candidates.push_back(
+        fs::current_path(ec) / "agent" / "build" / "linux-release" / "exec" / "plugins" / pluginName
+    );
+    candidates.push_back(
+        fs::current_path(ec) / "agent" / "build" / "linux-debug" / "exec" / "plugins" / pluginName
+    );
 
     auto hasLibFile = [](const fs::path& dir) {
         std::error_code                     ec2;
@@ -364,7 +367,7 @@ inline std::string findSharedLibPath() {
 
 #if XX_IS_WIN_D
     const std::vector<std::string> libNames = {"libagentxx.dll", "agentxx.dll"};
-    wchar_t buf[MAX_PATH];
+    wchar_t                        buf[MAX_PATH];
     if (::GetModuleFileNameW(nullptr, buf, MAX_PATH) > 0) {
         auto parent = fs::path(buf).parent_path();
         for (const auto& name : libNames) {
@@ -402,12 +405,12 @@ inline std::string findSharedLibPath() {
 
 inline std::string getFixedToolResultPayload() {
     // 构造固定 3000B 包含中文与 ASCII 的载荷 (使单组约 2000 tokens, 50 组≈100K, 100 组≈200K)
-    static const std::string kUnit =
-        "RES-BENCH tool result fixed payload line: The quick brown fox jumps over the lazy dog. "
-        "资源占用固定载荷，覆盖 unicode 折算分支与 ascii 折算分支。 "
-        "Standard test vectors for memory and cpu benchmark verification. "
-        "Fixed payload padding to reach deterministic byte length for reproducible measurements. "
-        "1234567890!@#$%^&*()_+-=[]{}|;:,.<>?/`~ ";
+    static const std::string kUnit
+        = "RES-BENCH tool result fixed payload line: The quick brown fox jumps over the lazy dog. "
+          "资源占用固定载荷，覆盖 unicode 折算分支与 ascii 折算分支。 "
+          "Standard test vectors for memory and cpu benchmark verification. "
+          "Fixed payload padding to reach deterministic byte length for reproducible measurements. "
+          "1234567890!@#$%^&*()_+-=[]{}|;:,.<>?/`~ ";
     std::string out;
     out.reserve(3000);
     while (out.size() + kUnit.size() <= 3000) {
@@ -438,11 +441,8 @@ inline FixedGroup makeFixedGroup(size_t index) {
     );
     std::string callId   = fmt::format("call-{}", idxStr);
     std::string toolArgs = "{\"path\":\"README.md\",\"line_offset\":0,\"line_limit\":40}";
-    std::string toolContent = fmt::format(
-        "RES-BENCH tool result {} | {}",
-        idxStr,
-        getFixedToolResultPayload()
-    );
+    std::string toolContent
+        = fmt::format("RES-BENCH tool result {} | {}", idxStr, getFixedToolResultPayload());
     std::string assistSummary = fmt::format(
         "RES-BENCH assist summary {} | 已成功读取 README.md 前 40 行内容，并完成分析任务。",
         idxStr
@@ -468,14 +468,14 @@ inline FixedGroup makeFixedGroup(size_t index) {
     // 2. View 消息
     g.viewUser = agent::ViewMessage::makeText(agent::ViewMessage::Role::User, userContent);
 
-    g.viewTool.role      = agent::ViewMessage::Role::Tool;
-    g.viewTool.text      = toolArgs;
+    g.viewTool.role = agent::ViewMessage::Role::Tool;
+    g.viewTool.text = toolArgs;
     agent::ViewMessage::ToolData td;
-    td.toolName     = "agentxx_filesystem_read";
-    td.toolCallId   = callId;
-    td.toolResult   = toolContent;
-    td.toolFinished = true;
-    g.viewTool.tool = td;
+    td.toolName          = "agentxx_filesystem_read";
+    td.toolCallId        = callId;
+    td.toolResult        = toolContent;
+    td.toolFinished      = true;
+    g.viewTool.tool      = td;
     g.viewTool.collapsed = true;
 
     g.viewAssist = agent::ViewMessage::makeText(agent::ViewMessage::Role::Assistant, assistSummary);
@@ -488,7 +488,9 @@ inline FixedGroup makeFixedGroup(size_t index) {
 // ---------------------------------------------------------------------------
 
 inline size_t countLlmTokens(const std::vector<neograph::ChatMessage>& msgs) {
-    agentxx::middleware::SummarizationMiddlewareHandle handle(std::weak_ptr<agentxx::agent::AgentContext>{});
+    agentxx::middleware::SummarizationMiddlewareHandle handle(
+        std::weak_ptr<agentxx::agent::AgentContext>{}
+    );
     return handle.countTokens({}, msgs, false);
 }
 
@@ -502,10 +504,10 @@ struct CalibratedCounts {
 
 inline const CalibratedCounts& getCalibratedCounts() {
     static CalibratedCounts counts = []() {
-        CalibratedCounts c;
-        auto             g1 = makeFixedGroup(1);
+        CalibratedCounts                   c;
+        auto                               g1       = makeFixedGroup(1);
         std::vector<neograph::ChatMessage> oneGroup = {g1.userMsg, g1.assistMsg, g1.toolMsg};
-        c.groupTokens = countLlmTokens(oneGroup);
+        c.groupTokens                               = countLlmTokens(oneGroup);
         if (c.groupTokens == 0) {
             c.groupTokens = 450; // 防除零
         }

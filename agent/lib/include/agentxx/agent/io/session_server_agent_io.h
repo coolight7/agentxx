@@ -127,12 +127,13 @@ public:
 
     /// 处理客户端 hello: 按需重放 delta 或全量 sync, 发送 helloAck (仅定向回复给 sender 客户端)
     void handleHello(
-        const WireHello&                                hello,
-        std::vector<std::string>                        models = {},
-        const std::shared_ptr<AgentIOTransportBase>&    sender = nullptr
+        const WireHello&                             hello,
+        std::vector<std::string>                     models = {},
+        const std::shared_ptr<AgentIOTransportBase>& sender = nullptr
     );
 
-    /// 传输断开时调用: 若指定 transport 则仅移除该客户端; 仅当无存活客户端且轮次进行中才启动 grace 定时器
+    /// 传输断开时调用: 若指定 transport 则仅移除该客户端; 仅当无存活客户端且轮次进行中才启动 grace
+    /// 定时器
     void onDisconnect(const std::shared_ptr<AgentIOTransportBase>& transport = nullptr);
 
     // ----- 查询 -----
@@ -216,7 +217,8 @@ private:
     void cancelGraceTimer();
     void failAllPending();
 
-    /// 处理客户端历史分页请求 (WireGetViewMessages → WireViewMessagesPage, target 指定时仅回复给请求方)
+    /// 处理客户端历史分页请求 (WireGetViewMessages → WireViewMessagesPage, target
+    /// 指定时仅回复给请求方)
     void handleGetViewMessages(
         const WireGetViewMessages&                   req,
         const std::shared_ptr<AgentIOTransportBase>& target = nullptr

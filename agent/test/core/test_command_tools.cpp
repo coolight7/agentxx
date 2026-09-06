@@ -754,8 +754,8 @@ asio::awaitable<void>
     delay.expires_after(std::chrono::milliseconds(500));
     co_await delay.async_wait(asio::as_tuple(asio::use_awaitable));
     auto checkArgs = neograph::json{
-  // 当前会话唯一应无残留 ping (可能有其他程序的 ping, 用命令行特征过滤:
-  // -t 127.0.0.1 精确匹配本测试派生的)
+        // 当前会话唯一应无残留 ping (可能有其他程序的 ping, 用命令行特征过滤:
+        // -t 127.0.0.1 精确匹配本测试派生的)
         {"command",
          "$p = Get-CimInstance Win32_Process -Filter \"Name='ping.exe'\" | "
          "Where-Object { $_.CommandLine -match '127\\.0\\.0\\.1' -and $_.CommandLine -match '-t' }; "

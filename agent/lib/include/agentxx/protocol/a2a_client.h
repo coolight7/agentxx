@@ -26,11 +26,11 @@ class A2aClient {
 public:
 
     struct Config {
-        std::string          baseUrl;                                   ///< A2A 服务器基础地址
-        std::string          a2aEndpoint   = "/a2a";                    ///< A2A JSON-RPC 端点路径
+        std::string          baseUrl;                ///< A2A 服务器基础地址
+        std::string          a2aEndpoint   = "/a2a"; ///< A2A JSON-RPC 端点路径
         std::string          agentCardPath = "/.well-known/agent-card.json"; ///< Agent Card 路径
-        std::chrono::seconds requestTimeout{60};                        ///< 请求超时
-        std::string          protocolVersion = "1.0";                   ///< 协议版本
+        std::chrono::seconds requestTimeout{60};                             ///< 请求超时
+        std::string          protocolVersion = "1.0";                        ///< 协议版本
     };
 
     explicit A2aClient(Config config);

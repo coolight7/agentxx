@@ -58,8 +58,8 @@ enum class TuiLanguage : int {
 /// - 匹配规则:
 ///   1) 中文相关 (zh, zh-cn, zh-tw, zh-hk, chinese 等) -> TuiLanguage::ZhCn
 ///   2) 英文相关 (en, en-us, en-gb, english 等) -> TuiLanguage::EnUs
-///   3) 其它非中文系统语言 (如 ja, ko, fr, de, es, ru 等) -> 回退到 TuiLanguage::EnUs (国际通用语言)
-///   4) 空串或无法识别 (如 "C", "POSIX") -> 回退到默认中文 TuiLanguage::ZhCn
+///   3) 其它非中文系统语言 (如 ja, ko, fr, de, es, ru 等) -> 回退到 TuiLanguage::EnUs
+///   (国际通用语言) 4) 空串或无法识别 (如 "C", "POSIX") -> 回退到默认中文 TuiLanguage::ZhCn
 ///
 /// - `args`:
 ///     - [localeStr] 待匹配的系统语言标签或 locale 字符串
@@ -330,7 +330,7 @@ public:
         if (s == "auto") {
             setLanguage(TuiLanguage::Auto);
         } else if (s == "zh" || s == "zh-cn" || s.starts_with("zh-") || s.starts_with("zh_")
-            || s.find("chinese") != std::string::npos) {
+                   || s.find("chinese") != std::string::npos) {
             setLanguage(TuiLanguage::ZhCn);
         } else {
             setLanguage(TuiLanguage::EnUs);

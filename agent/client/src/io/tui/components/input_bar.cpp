@@ -15,10 +15,10 @@ InputComponent::InputComponent(TUICtx& ctx, Config config) :
     option.cursor_position = 0;
     // 占位符绑定到成员字符串的引用: FTXUI Input 渲染时实时读取该引用,
     // 语言切换后仅需刷新成员 (见 refreshLanguage), 无需重建组件
-    placeholderText_       = std::string(TuiI18n::instance().t("input.placeholder"));
-    option.placeholder     = StringRef(&placeholderText_);
-    option.on_enter        = nullptr;
-    option.transform       = [this](InputState state) {
+    placeholderText_   = std::string(TuiI18n::instance().t("input.placeholder"));
+    option.placeholder = StringRef(&placeholderText_);
+    option.on_enter    = nullptr;
+    option.transform   = [this](InputState state) {
         if (state.is_placeholder) {
             const auto& theme  = *ctx_.theme;
             state.element     |= color(theme.hintColor);

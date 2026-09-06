@@ -934,10 +934,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
             XX_TEST_EXPECT_TRUE(ev30 != nullptr && ev30->publish != nullptr);
             auto topicSv = agentxx::plugin::PluginStringView::fromCstr("demo.topic");
             auto paySv   = agentxx::plugin::PluginStringView::fromCstr(R"({"k":"v"})");
-            XX_TEST_EXPECT_EQ(
-                ev30 ? ev30->publish(&inst30->host, &topicSv, &paySv) : -1,
-                0
-            );
+            XX_TEST_EXPECT_EQ(ev30 ? ev30->publish(&inst30->host, &topicSv, &paySv) : -1, 0);
             ctx->pluginManager->disable("example_plugin");
             // 禁用状态: 接口表 publish 拒绝 (返回非 0)
             int rc = ev30 ? ev30->publish(&inst30->host, &topicSv, &paySv) : -1;
@@ -1550,7 +1547,11 @@ asio::awaitable<TestResult> run_plugin_tests() {
                         const neograph::json&,
                         const neograph::graph::NodeContext& nc
                     ) {
-                        return std::make_unique<agentxx::nodes::ModelCallWrapNode>(name, nc, agCtx.lock());
+                        return std::make_unique<agentxx::nodes::ModelCallWrapNode>(
+                            name,
+                            nc,
+                            agCtx.lock()
+                        );
                     }
                 );
                 gctx->graphRegistry->register_type(
@@ -1560,7 +1561,11 @@ asio::awaitable<TestResult> run_plugin_tests() {
                         const neograph::json&,
                         const neograph::graph::NodeContext& nc
                     ) {
-                        return std::make_unique<agentxx::nodes::ToolcallWrapNode>(name, nc, agCtx.lock());
+                        return std::make_unique<agentxx::nodes::ToolcallWrapNode>(
+                            name,
+                            nc,
+                            agCtx.lock()
+                        );
                     }
                 );
 

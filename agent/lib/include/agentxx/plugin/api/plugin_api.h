@@ -458,7 +458,8 @@ typedef struct AgentxxPluginConfigIface {
         const AgentxxPluginHost* host,
         AgentxxPluginString*     out
     );
-    /// 读取当前使用的语言 (io 线程; 返回 0 成功, out 填入语言代码如 "en" / "zh-cn", host->alloc 分配; 默认 "en")
+    /// 读取当前使用的语言 (io 线程; 返回 0 成功, out 填入语言代码如 "en" / "zh-cn", host->alloc
+    /// 分配; 默认 "en")
     int32_t(AGENTXX_PLUGIN_CALL* get_language)(
         const AgentxxPluginHost* host,
         AgentxxPluginString*     out

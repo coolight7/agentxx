@@ -6,9 +6,9 @@
 #include "agentxx/util/http_server.h"
 #include "asio/any_io_executor.hpp"
 #include "asio/awaitable.hpp"
+#include <atomic>
 #include <chrono>
 #include <map>
-#include <atomic>
 #include <memory>
 #include <string>
 #include <thread>

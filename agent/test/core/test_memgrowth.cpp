@@ -451,10 +451,10 @@ asio::awaitable<TestResult> run_memgrowth_tests() {
     );
 
     // 场景 1: 默认流式 16KB 回复 (agent io_context 未运行 → 复现泄漏)
-    int totalOk = 0, totalWant = 0;
+    int  totalOk = 0, totalWant = 0;
     auto runOne
-        = [&](size_t t, size_t kb, size_t warm, bool huge, bool ns, bool ctx, const char* label)
-        -> asio::awaitable<void> {
+        = [&](size_t t, size_t kb, size_t warm, bool huge, bool ns, bool ctx, const char* label
+          ) -> asio::awaitable<void> {
         int ok = 0;
         co_await runScenario(t, kb, warm, huge, ns, ctx, label, ok);
         totalOk   += ok;
