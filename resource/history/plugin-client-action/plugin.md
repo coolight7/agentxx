@@ -1,190 +1,228 @@
 # 插件 Client 端事件处理与声明式交互重构方案
 
-> 状态: 设计提案 (待评审)  
-> 目标: 彻底消除 TUI 核心层对特定插件 (如 Planning、CodeGraph 等) 的特化分支与硬编码交互逻辑，建立一套纯粹由插件声明 UI、驱动事件回调、绑定函数执行的通用 Client 端交互架构。
+> 目标: 彻底消除 TUI 核心层对特定插件 (Planning 等) 的特化分支与硬编码交互，
+> 建立由插件声明 UI、驱动事件回调、绑定函数执行的通用 Client 端交互架构。
+>
+> 已确认决策:
+> - 术语统一为 `overlay`（不再用 `modal`），与 TUI 现有 `ModalContainer` /
+>   `MermaidDiagramOverlay` / `FailedComponentsOverlay` 对齐。
+> - 路由采用 **方案 A：实例级 fallback**（`bind("", dispatch)` 兜底 +
+>   decor 以 `toolCallId` 作 `owner_id`），不采用纯 per-target。
+> - `failedViewButtonBox_` / `openFailedAppendComponents` 是核心 Append 失败 UI，
+>   **保留**，不进通用拾取。同样保留 `pendingInsert/Counter`、`contextButton`、
+>   `retryButtonBox`、状态栏盒子等核心交互。
+> - `open_overlay` 首版即实现 `MERMAID / TEXT / DIFF / CUSTOM` 四种类型。
 
 ---
 
 ## 1. 背景与核心诉求
 
-### 1.1 现状与痛点
+### 1.1 现状与痛点（经代码勘误后的准确清单）
 
-当前 Agentxx 的插件系统在 Client 端已经实现了初步的**声明式 UI 渲染**：
-- 插件通过 `AgentxxClientUiIface` 注册面板 (`register_panel`)、Info 栏段落 (`register_info_section`) 或工具装饰 (`update_tool_decor`)。
-- 渲染内容以统一的 JSON 数据传递 (`{"items": [{"kind": "text", ...}, {"kind": "button", ...}]}`)。
-- TUI 具备通用的 `appendPluginItems` 负责把 JSON 翻译为 FTXUI 的 `Element`。
+当前真正的插件特化只有一处（Planning），但散落在三地：
 
-然而，当前的交互层存在**渲染与行为脱节**的核心缺陷：
-
-| 交互维度 | 现状处理方式 | 核心缺陷与隐患 |
+| 位置 | 现状 | 定性 |
 | :--- | :--- | :--- |
-| **按钮展示** | 插件在 JSON 声明 `{"kind":"button","label":"..."}` | 仅具备视觉样式，无法携带交互意图 |
-| **点击响应** | 宿主偷看特定字段 (如 `mermaid`) 或特化 ID (如 `agentxx_planning.plan`) 挂载命中区域 | 宿主产生插件特化分支，反向侵入核心层；新插件无法扩展交互 |
-| **逻辑执行** | 宿主在 `agent_tui.cpp` 写死点击动作 (如写死打开状态图弹窗) | 插件无法在点击时执行自身 C/C++ 业务逻辑、无法调用后端能力 |
-| **生命周期** | 按钮的 `ftxui::Box` 散落在 TUI 成员变量中单独维护 | 状态脆弱，缺乏通用帧级拾取器，难以支持动态列表与多按钮场景 |
+| `agent_tui.h:555` `planGraphButtonBox_ / planGraphMermaid_` + `openMermaidDiagram(string)` | Info 栏写死 Plan Graph 弹窗 | 真特化，删除 |
+| `tui_sidebar_content.cpp:appendPluginItems(mermaidButtonBox, mermaidSource)` + `renderInfoSidebar` 每帧清空/填充 | 偷看 `button.mermaid` 挂 `reflect` | 真特化，通用化 |
+| `agent_tui.cpp:750` `planGraphButtonBox_.Contain` 分支 | 写死点击动作 | 真特化，接入通用派发 |
+| `message_list.cpp:appendDecorItems` 的 `button` 分支 | 纯静态渲染，无 `reflect`、无点击 | 半特化：`mermaid / diagram` 语义是 planning 泄漏，需转 `action_id` |
+| `message_list.cpp:appendDecorItems` 的 `diagram` 分支 | 内联展开整张状态大图 | 兼容保留渲染，但不再承担交互 |
+| `agent_tui.cpp:renderPluginPanel` 的 `kind=="action"` 分支 | 渲染 `◈ label` 纯文本，无回调 | 遗留死 schema，统一到 `button + action_id` |
+| 三处渲染 helper（sidebar / panel / message）各写一份 button 解析 | 样式与拾取逻辑三份拷贝 | 收敛到同一共享 helper，否则下次还漂移 |
+
+非特化、必须保留的核心 UI：
+
+- `failedViewButtonBox_` + `openFailedAppendComponents`（Append 失败组）。
+- `pendingInsertButtonBox_ / pendingCounterBox_`（待发送队列）。
+- `contextButtonBox_`（Logs Menu）、`retryButtonBox_`（连接失败 banner）、
+  状态栏 `modelBox / sessionBox / settingsBox`。
+- `MermaidDiagramOverlay` 本体是通用组件，只是当前只有 planning 在用；
+  保留并改为通用 `open_overlay` 驱动（支持自定义标题）。
 
 ### 1.2 核心诉求
 
-1. **宿主彻底通用化 (Zero Specialization)**：
-   TUI 核心层退化为纯粹的“渲染引擎 + 事件拾取派发器”，不包含任何插件名称、业务意图或特定弹窗的硬编码。
-2. **真正的插件交互闭环 (True Plugin Interactivity)**：
-   插件应当能够在声明按钮的同时，将点击事件绑定到插件实例自身的函数/闭包执行；插件可以在回调中发起网络请求、调用 Agent 工具、代发用户消息、更新自身 UI 或调用宿主基础能力。
-3. **解决声明式 JSON 与函数执行的关联难点**：
-   既要保持 C ABI 的安全与跨边界解耦，又要让插件开发者能够以现代 C++ 的直观方式（如 Lambda 闭包）编写交互逻辑。
+1. **宿主彻底通用化 (Zero Specialization)**：TUI 退化为“渲染引擎 + 几何拾取
+   + 线程派发”，不含任何插件名、业务意图。
+2. **真正的插件交互闭环**：插件声明按钮的同时绑定到实例自身函数；回调中可
+   调后端能力、代发消息、更新 UI、请求宿主 overlay 能力。
+3. **C ABI 安全 + 现代 C++ 体验**：跨 `.so/.dll` 只走 C 数据与 C 函数指针；
+   插件侧以 Lambda 风格编写逻辑（`ActionController`）。
 
 ---
 
-## 2. 核心难点与约束分析
-
-在 C++ 插件架构中，将纯声明式 JSON 与动态函数执行关联起来，存在以下关键技术约束：
+## 2. 约束分析
 
 ### 2.1 C ABI 边界与多实例三铁律
 
-- **类型安全边界**：插件由动态库 (`.so` / `.dll`) 承载，宿主与插件跨边界仅能传递 C 基础类型、定长结构体及纯 C 函数指针。禁止跨边界传递 `std::function`、C++ 类实例或依赖特定编译器虚表的类型。
-- **多实例隔离**：同一进程内可能加载同一动态库的多个并发实例（多实例三铁律）。按钮回调不能依赖全局或函数静态变量，必须能够精确还原当前触发实例的上下文指针 (`user_data`)。
-- **不可序列化性**：内存函数指针无法安全序列化为 JSON 文本（存在 ASLR 随机化、野指针攻击以及悬挂指针风险）。
+- 跨边界仅传 C 基础类型、定长结构体、纯 C 函数指针；禁 `std::function`、
+  C++ 类、虚表类型。
+- 同一动态库可多实例并存；回调必须经 `user_data` 精确还原实例，禁全局 /
+  函数级 static 缓存。
+- 内存函数指针不可序列化为 JSON（ASLR、野指针、悬垂风险）；JSON 只传
+  `action_id` 字符串，函数映射留在插件进程侧内存 `map<action_id, lambda>`。
 
-### 2.2 FTXUI 渲染机制与屏幕坐标动态性
+### 2.2 FTXUI 与线程模型
 
-- **每帧动态拾取**：FTXUI 没有类似 DOM 的持久化树节点，界面每帧通过 `reflect(box)` 动态拾取屏幕绝对像素坐标。终端缩放、历史滚动、列表伸缩均会导致按钮坐标每帧变动。
-- **事件与渲染生命周期脱节**：
-  - 渲染发生在 `OnRender` 阶段（UI 线程）。
-  - 点击发生在 `OnEvent` 阶段（UI 线程）。
-  - 插件业务执行通常需要调度到 **Client IO 线程**，以保证与网络 IO、会话状态的同步无锁安全。
-- **悬挂点击与 UAF (Use-After-Free) 隐患**：若用户点击屏幕的瞬间，插件正在异步推送全新 JSON（已删除旧按钮），拾取器必须防止触发已被释放的回调上下文。
-
----
-
-## 3. 总体架构设计：Action-Driven 声明式交互模型
-
-为了突破上述难点，设计采用 **Action-Driven（动作驱动）的三层混合交互模型**：
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    插件层 (C++ SDK / Kit)                    │
-│   kit.button("Graph", [this](auto& args){ openRoadmap(); }) │
-└──────────────────────────────┬──────────────────────────────┘
-                               │  1. 自动生成 action_id
-                               │  2. 本地实例保存 map<action_id, Lambda>
-                               ▼
-┌─────────────────────────────────────────────────────────────┐
-│                    C ABI 边界 (纯数据与 C 函数)               │
-│   JSON: {"kind":"button", "action_id":"act_1", ...}         │
-│   C 回调: on_action(const AgentxxUiActionContext*, ud)       │
-└──────────────────────────────┬──────────────────────────────┘
-                               │
-                               ▼
-┌─────────────────────────────────────────────────────────────┐
-│                  宿主层 (ClientPluginManager & TUI)          │
-│   1. OnRender: 拾取按钮 Box -> HitTargetRegistry            │
-│   2. OnEvent : 点击命中测试 -> postToIo -> 派发插件回调        │
-│   3. Host Cap: 插件回调中反向请求宿主弹窗/Toast能力          │
-└─────────────────────────────────────────────────────────────┘
-```
-
-### 3.1 架构分层职责
-
-1. **L1 - C ABI 规范层 (ABI Specification)**：
-   - 规定无状态的 `action_id` 协议与通用参数 `action_args`。
-   - 定义统一的动作分发回调签名 `AgentxxUiActionFn`。
-   - 扩展 UI 接口表，提供宿主通用基础 UI 能力（如模态弹窗、Toast 等）。
-2. **L2 - 宿主引擎层 (TUI & ClientPluginManager)**：
-   - **渲染器**：通用解析 JSON 中的 `button` / `action`，并自动生成帧级命中目标 (`HitTarget`)。
-   - **拾取器**：在 FTXUI 鼠标事件中做统一几何拾取（Hit-Testing），识别点击项。
-   - **派发器**：安全跨线程将点击动作投递回 Client IO 线程并调用对应插件回调。
-3. **L3 - 插件 SDK 封装层 (Plugin Kit)**：
-   - 为插件开发者提供轻量级 Controller，将 `action_id` 映射封装为现代 C++ Lambda，消除手写分支代码。
+- 无 DOM 持久节点；每帧 `reflect(box)` 拾取屏幕绝对坐标；缩放/滚动/伸缩
+  导致坐标每帧变动 → 命中表必须**每帧重建**。
+- 渲染在 UI 线程 `OnRender`；点击在 UI 线程 `OnEvent`；插件业务在
+  **Client IO 线程**（与网络 IO、会话状态同线程，无锁安全）。
+- 点击瞬间插件可能正推送新 JSON（旧按钮已删除）→ UI 线程只拷贝字符串快照，
+  IO 线程二次校验绑定有效性，防 UAF。
 
 ---
 
-## 4. 接口设计与 ABI 规范 (API v1 增量)
+## 3. 总体架构：Action-Driven（三层）+ 方案 A 路由
 
-在 `agent/lib/include/agentxx/plugin/api/client_plugin_api.h` 中进行 ABI 扩展。遵循 API v1 规范（8 字节对齐、明确调用约定、结构体指针入参出参）。
+```
+┌──────────────────────────────────────────────────────────────┐
+│ 插件层 (Kit ActionController)                                 │
+│ kit.on("planning.open_graph", [this](args){ openOverlay(); })│
+└──────────────────────────────┬───────────────────────────────┘
+                               │ 1. action_id -> lambda (实例内存)
+                               │ 2. JSON 只带 action_id + args
+                               ▼
+┌──────────────────────────────────────────────────────────────┐
+│ C ABI 边界                                                    │
+│ JSON: {"kind":"button","action_id":"planning.open_graph",...}│
+│ C 回调: on_action(const AgentxxUiActionContext*, ud)         │
+│ 能力: bind_action_handler / open_overlay / close_overlay     │
+└──────────────────────────────┬───────────────────────────────┘
+                               ▼
+┌──────────────────────────────────────────────────────────────┐
+│ 宿主层 (Manager + TUI)                                        │
+│ Render: 通用解析 button -> HitTargetRegistry (每帧重建)       │
+│ Event : 几何命中 -> postToIo -> 校验 -> 插件回调 (IO 线程)     │
+│ Overlay: 通用 open_overlay(spec) -> Overlay 组件              │
+└──────────────────────────────────────────────────────────────┘
+```
 
-### 4.1 动作上下文与回调函数定义
+### 3.1 为什么是方案 A（实例级 fallback）
+
+`bind` 按 `target_id`（段落/面板 ID）绑定，一个 `bind` 管该 target 下全部
+按钮（靠 `action_id` 区分）。但消息装饰 `ClientToolDecor` 的 key 是动态
+`tool_call_id`（每次工具调用 newborn），插件无法提前预知逐个 `bind`。
+
+- **方案 A（采用）**：允许 `target_id == ""` 表示本实例兜底。派发时精确匹配
+  优先，未命中回落到 `""`。decor 按钮以 `toolCallId` 作 `owner_id`，
+  插件 `bind` 一次永久生效。
+- **方案 B（否决）**：纯 per-target，每个 call 都 `bind/unbind`，引入
+  “先渲染还是先绑定”时序竞争、绑定数随对话无限涨、切换会话清理复杂。
+
+派发上下文统一为 `(plugin, owner_id, action_id, args)`：
+
+- Info/Panel：`owner_id = section_id / panel_id`。
+- Decor：`owner_id = tool_call_id`。
+- CUSTOM overlay 内按钮：`plugin = opener`，`owner_id = "__overlay"`，
+  同样被 fallback 接住（见 §7.4）。
+
+---
+
+## 4. ABI 规范（`client_plugin_api.h`，v2 → v3）
+
+全局 `AGENTXX_CLIENT_PLUGIN_API_VERSION` 保持 1；`AgentxxClientUiIface`
+独立演进至 3，**尾部追加**新成员，老插件/老宿主按版本截断视角兼容。
+
+### 4.1 动作上下文与回调
 
 ```c
-/// 动作触发上下文 (宿主传给插件的点击现场数据)
 typedef struct AgentxxUiActionContext {
-    int32_t                 version;     ///< 必须 == 1
-    uint32_t                _reserved;   ///< 8 字节对齐
-    AgentxxPluginStringView section_id;  ///< 所属段落/面板/装饰 ID
+    int32_t                 version;     ///< == 1
+    uint32_t                _reserved;
+    AgentxxPluginStringView owner_id;    ///< section_id / panel_id / tool_call_id / "__overlay"
     AgentxxPluginStringView action_id;   ///< 按钮声明的 action_id
-    AgentxxPluginStringView action_args; ///< 按钮携带的参数 JSON (可选, 空串表示无参数)
+    AgentxxPluginStringView action_args; ///< JSON object dump（空 = 无参）
 } AgentxxUiActionContext;
 
-/// 动作执行回调函数签名 (由宿主在 Client IO 线程调用)
 typedef void(AGENTXX_PLUGIN_CALL *AgentxxUiActionFn)(
     const AgentxxUiActionContext* ctx,
     void*                         user_data
 );
 ```
 
-### 4.2 注册规范结构体 (取代原本无结构的 propsJson)
-
-为避免破坏旧接口指针布局，保持向后兼容性，对 `register_info_section` 和 `register_panel` 引入带 Spec 扩展的注册方式，或将现有 `propsJson` 赋予标准化 schema：
-
-**方案选择：通过 propsJson 声明动作能力（轻量且完全向下兼容）**
-
-无需更改现有的函数指针签名，插件在 `register_info_section` 或 `register_panel` 时传递的 `propsJson` 中声明支持的动作路由：
+### 4.2 Overlay 类型与参数（四种，首版全实现）
 
 ```c
-/* 在 AgentxxClientUiIface 中扩展通用事件与能力表 */
+typedef enum AgentxxOverlayType {
+    AGENTXX_OVERLAY_MERMAID = 0, ///< 状态图：payload = mermaid 源码
+    AGENTXX_OVERLAY_TEXT    = 1, ///< 文本/Markdown：payload = 原文
+    AGENTXX_OVERLAY_DIFF    = 2, ///< 对比：payload = JSON {path,old_str,new_str}
+    AGENTXX_OVERLAY_CUSTOM  = 3, ///< 自定义：payload = JSON {"items":[...]}
+} AgentxxOverlayType;
 
-/// 通用模态弹窗类型
-typedef enum AgentxxModalType {
-    AGENTXX_MODAL_MERMAID = 0,  ///< Mermaid 状态图/架构图全屏弹窗
-    AGENTXX_MODAL_TEXT    = 1,  ///< 纯文本/Markdown 滚动查看弹窗
-    AGENTXX_MODAL_DIFF    = 2,  ///< 代码 Diff 差异对比弹窗
-    AGENTXX_MODAL_CUSTOM  = 3,  ///< 预留自定义组件弹窗
-} AgentxxModalType;
+typedef struct AgentxxOverlaySpec {
+    int32_t                 version;    ///< == 1
+    int32_t                 type;       ///< AgentxxOverlayType
+    AgentxxPluginStringView title;      ///< 标题（空则宿主回退默认）
+    AgentxxPluginStringView payload;    ///< 内容（语义见下表）
+    AgentxxPluginStringView extra_json; ///< 扩展（JSON object，可空 "{}"）
+} AgentxxOverlaySpec;
+```
 
-/// 弹窗请求参数
-typedef struct AgentxxModalSpec {
-    int32_t                 version;     ///< 必须 == 1
-    int32_t                 type;        ///< 见 AgentxxModalType
-    AgentxxPluginStringView title;       ///< 弹窗标题
-    AgentxxPluginStringView payload;     ///< 弹窗内容 (Mermaid源码/文本内容/Diff JSON)
-    AgentxxPluginStringView extra_json;  ///< 扩展参数 (主题、宽高等)
-} AgentxxModalSpec;
+| type | payload | extra_json（可选） | TUI 复用件 |
+| :--- | :--- | :--- | :--- |
+| MERMAID | mermaid 源码（`stateDiagram-v2 ...`） | `{"width_frac":0.8}` | `MermaidDiagramOverlay`（构造改传 title） |
+| TEXT | 原文 | `{"markdown":true/false}`（缺省 true 按 markdown 渲染，否则纯段落） | 新 `TextOverlay`（Scrollable + markdown/paragraph） |
+| DIFF | `{"path":"...","old_str":"...","new_str":"..."}` | `{"side_by_side":true}`（缺省按宽度自适应 ≥100 列并排） | 新 `DiffOverlay`（复用 `computeLineDiff` + `renderEditToolDiff` 逻辑，需从 `message_list.cpp` 抽共享 helper） |
+| CUSTOM | `{"items":[{kind:text/progress/badge/separator/button}...]}`（同 panel/items schema，button 同样走 `action_id`） | `{"width_frac":0.8}` | 新 `CustomOverlay`（Scrollable + 共享 button helper + overlay 局部命中） |
 
-/* 在 AgentxxClientUiIface (升级至 VERSION 3) 新增通用操作接口 */
+`open / close` 语义：
+
+- 单模态 last-wins：`open_overlay` 替换当前 overlay（含核心弹窗），记录
+  `overlayOwner = plugin`；`close_overlay` 关闭当前（任何插件都可关，
+  manager 传 plugin 名仅记日志/鉴权预留）。
+- 调用线程：插件 `on_action` 内（IO 线程）直接调；manager 拷贝字符串后
+  `postToUi`，不阻塞插件。
+
+### 4.3 `AgentxxClientUiIface` 新增成员（v3，尾部追加）
+
+```c
 typedef struct AgentxxClientUiIface {
-    int32_t version; ///< == 3
-    uint32_t _reserved;
-    
-    // ... 保持既有状态栏、面板、Info段落、命令接口不变 ...
+    int32_t version; uint32_t _reserved;
+    /* ... v2 既有成员保持顺序与偏移不变 ... */
 
-    /* ---- 通用交互与模态能力 (v3 新增) ---- */
-    
-    /// 注册段落/面板的交互动作监听器 (为指定 section/panel 绑定统一的 action 回调)
+    /* ---- 通用交互 (v3 新增) ---- */
+    /// 绑定动作处理器。target_id 空串 = 本实例兜底（方案 A）。
+    /// 同一 (plugin, target_id) 重复绑定覆盖；返回 0 成功。
     int32_t(AGENTXX_PLUGIN_CALL* bind_action_handler)(
         const AgentxxPluginHost*       host,
-        const AgentxxPluginStringView* target_id,  ///< section_id 或 panel_id
-        AgentxxUiActionFn              on_action,  ///< 动作触发回调
-        void*                          user_data   ///< 实例上下文
-    );
-
-    /// 弹出通用宿主模态框 (如 Mermaid 状态图、文本详情等)
-    int32_t(AGENTXX_PLUGIN_CALL* open_modal)(
+        const AgentxxPluginStringView* target_id,
+        AgentxxUiActionFn              on_action,
+        void*                          user_data);
+    int32_t(AGENTXX_PLUGIN_CALL* unbind_action_handler)(
+        const AgentxxPluginHost*       host,
+        const AgentxxPluginStringView* target_id);
+    /// 通用 overlay。spec->version 必须 == 1；返回 0 成功。
+    int32_t(AGENTXX_PLUGIN_CALL* open_overlay)(
         const AgentxxPluginHost*  host,
-        const AgentxxModalSpec*   spec
-    );
-
-    /// 关闭当前打开的模态框
-    void(AGENTXX_PLUGIN_CALL* close_modal)(
-        const AgentxxPluginHost* host
-    );
+        const AgentxxOverlaySpec* spec);
+    void(AGENTXX_PLUGIN_CALL* close_overlay)(
+        const AgentxxPluginHost* host);
 } AgentxxClientUiIface;
 ```
 
+### 4.4 接口协商（`plugin_common.h`）
+
+新增能力名：
+
+```c
+ClientAction  = "agentxx.client.action";  // bind/unbind + button 拾取派发
+ClientOverlay = "agentxx.client.overlay"; // open/close overlay
+```
+
+- `TuiPluginAdapter::supportedInterfaces()` 增加两者；`CliPluginAdapter`
+  不声明（CLI 无按钮面/弹窗面）。
+- `clientUiIface()` 表按适配器能力置 NULL：不支持时 `bind/open` 为 NULL，
+  插件判空降级（planning 仍推送内容，只是按钮不可点）。
+- `plugin.yaml` 以 `optional` 声明：
+  `optional: [agentxx.client.info_section, agentxx.client.action, agentxx.client.overlay]`。
+
 ---
 
-## 5. 声明式 JSON Schema 规范
+## 5. 声明式 JSON Schema
 
-无论是 Info 栏段落、侧边栏面板、还是消息体展开装饰，所有的 `items` 统一遵循增强后的按钮 Schema：
-
-### 5.1 按钮元素定义
+### 5.1 按钮（Info / Panel / Decor / CUSTOM overlay 通用）
 
 ```json
 {
@@ -192,248 +230,325 @@ typedef struct AgentxxClientUiIface {
   "label": "[Graph]",
   "prefix": "|- ",
   "action_id": "planning.open_graph",
-  "args": {
-    "view_mode": "full",
-    "step_id": "phase_1"
-  },
-  "role": "normal"
+  "args": {"view_mode": "full"},
+  "role": "accent"
 }
 ```
 
-字段说明：
-- `kind`: 固定为 `"button"`。
-- `label`: 按钮显示的文字标签（如 `"[Graph]"`、`"Retry"`）。
-- `prefix`: 可选的前缀字符串（如 `"|- "`）。当配置前缀时，渲染器自动将前缀与按钮以同一行展示，保证对齐。
-- `action_id`: **关键字段**。用户点击该按钮时派发的动作唯一标识符。
-- `args`: 可选的 JSON 对象。插件可以在声明时塞入业务上下文，点击时宿主原样透传回回调函数。
-- `role`: 可选视觉等级：`"normal"`（默认按钮背景）、`"accent"`（强调色）、`"danger"`（危险/报错色）。
+- `label` 必填（按钮文字；TUI 自动左右各补一空格，无需插件手写）。
+- `prefix` 可选（同行前导，如 `"|- "`；等价于“前一项 text + 本按钮”的隐式
+  合并，渲染器两者都支持，效果一致）。
+- `action_id`：有则可点（且快照中有该 plugin 绑定才挂 `reflect`），无则纯静态。
+- `args`：可选 object，点击时 `dump` 后透传 `action_args`（建议 ≤64KB，
+  超限宿主截断记日志）。
+- `role`：`normal`（默认按钮配色）/ `accent`（强调）/ `danger`（错误色，
+  如删除/高危操作）。
 
-### 5.2 兼容“行内文本 + 按钮”的紧凑语法
+### 5.2 兼容规则（首版双发，下版清理）
 
-除了独立的 `button` 项外，很多树状视图（如规划列表）需要前导文本后紧跟按钮。
-通用渲染器支持两种表达方式（插件可任选其一，效果完全等价）：
-1. **隐式同行合并**：连续的 `{"kind":"text", "text":"|- "}` 紧跟 `{"kind":"button", "label":"[Graph]"}`。
-2. **显式前缀属性**：单个按钮项携带 `"prefix": "|- "`。
+- `button.mermaid`（老 planning）：新 TUI **不再据此弹窗**，仅老宿主兼容；
+  首版 planning 同时发 `action_id + mermaid`，下版删 `mermaid`。
+- `button` 无 `action_id`：静态渲染（CLI/老链路行为）。
+- Panel 旧 `{"kind":"action","id":...,"label":...}`：视为
+  `action_id = id` 兼容渲染。
+- `diagram` kind：保留静态内联渲染（历史消息兼容），不挂点击。
 
 ---
 
-## 6. 宿主 TUI 侧的通用拾取与派发机制
+## 6. ClientPluginManager 设计
 
-### 6.1 帧级命中目标注册表 (HitTargetRegistry)
-
-TUI 不需要针对任何特定插件存储 `Box`（如不再需要 `planGraphButtonBox_`、`failedViewButtonBox_` 等）。改为每帧统一维护动态拾取列表：
+### 6.1 数据结构（`client_plugin_manager.h`）
 
 ```cpp
-// 帧内可点击目标条目
-struct UiHitTarget {
-    ftxui::Box        box;         // 屏幕绝对渲染包围盒 (由 reflect 填充)
-    std::string       targetId;    // 所属 section_id 或 panel_id
-    std::string       actionId;    // 声明的 action_id
-    neograph::json    args;        // 声明时携带的参数
-    AgentxxUiActionFn callback;    // 注册时绑定的 C 回调函数
-    void*             userData;    // 插件实例上下文指针
+struct ClientActionBinding {
+    std::string       targetId;  // "" = 实例级 fallback
+    std::string       plugin;
+    AgentxxUiActionFn cb = nullptr;
+    void*             ud = nullptr;
 };
+// ClientUiRegistry 新增：
+std::vector<ClientActionBinding> actionBindings; // COW 快照，UI 线程无锁读
+// ClientPluginInstance 新增（disable 保留、unload 清理，与 xxxRegs 一致）：
+std::vector<ClientActionBinding> actionRegs;
 ```
 
-### 6.2 渲染生命周期管线 (Render Pipeline)
+快照可见性是关键：绑定表必须进 `ClientUiRegistry`，否则 UI 线程渲染时
+查不到“该按钮是否可点”。
 
-1. **每帧渲染前清空**：
-   在 `renderInfoSidebar()` / `renderPluginPanel()` 入口：
-   ```cpp
-   hitTargets_.clear();
-   ```
-2. **渲染元素并挂载 Reflect**：
-   在通用 `appendPluginItems` 处理 `kind == "button"` 时：
-   - 检查该按钮是否声明了 `action_id` 且当前 section/panel 绑定了有效回调。
-   - 若是，向 `hitTargets_` 追加一项，并将当前 FTXUI 元素的包围盒通过 `reflect(target.box)` 关联：
-     ```cpp
-     if (!actionId.empty() && actionFn) {
-         auto& target = hitTargets_.emplace_back();
-         target.targetId = sec.id;
-         target.actionId = actionId;
-         target.args     = it.value("args", neograph::json::object());
-         target.callback = actionFn;
-         target.userData = actionUserData;
-         btnElement      = btnElement | reflect(target.box);
-     }
-     ```
+### 6.2 写路径（IO 线程）
 
-### 6.3 鼠标事件拾取与无锁跨线程派发
+- `bindActionHandler(inst, targetId, cb, ud)`：`cb` 空则失败；同
+  `(plugin, targetId)` 覆盖；同步写 `uiRegistry_`（COW）+ `inst->actionRegs`。
+- `unbindActionHandler(inst, targetId)`：摘除（不存在忽略）。
+- `registerPanel / registerInfoSection / updateToolDecor` 不变（内容与绑定
+  正交，按钮可先渲染后绑定，渲染时按快照有无绑定决定是否可点）。
+- `detachAll(inst, keepInfo)`：摘除该 plugin 的注册表条目 + adapter 信号；
+  `keepInfo=true`（disable）保留 `actionRegs`，`false`（unload）彻底清。
+  `enable` 按 `actionRegs` 重建快照（与 panel/info 恢复同 pattern）。
+- `openOverlay(inst, spec)`：校验 `version/type`，拷贝
+  `(title, payload, extra)` 为 `std::string` 后调
+  `adapter->onOverlayOpen(plugin, type, title, payload, extra)`。
+- `closeOverlay(inst)`：调 `adapter->onOverlayClose(plugin)`。
 
-在 `agent_tui.cpp` 的 `OnEvent` 鼠标处理逻辑中：
+### 6.3 读/派发路径
 
 ```cpp
-if (mouse.button == Mouse::Left && mouse.motion == Mouse::Released) {
-    // 统一命中测试
-    for (const auto& target : hitTargets_) {
-        if (target.box.Contain(mouse.x, mouse.y)) {
-            // 命中有效按钮 -> 异步派发至 Client IO 线程
-            const auto targetId = target.targetId;
-            const auto actionId = target.actionId;
-            const auto argsJson = target.args.dump();
-            const auto cb       = target.callback;
-            void*      ud       = target.userData;
-
-            clientMgr_->postToIo([=]() {
-                AgentxxUiActionContext actCtx{
-                    .version     = 1,
-                    ._reserved   = 0,
-                    .section_id  = PluginStringView::from(targetId),
-                    .action_id   = PluginStringView::from(actionId),
-                    .action_args = PluginStringView::from(argsJson),
-                };
-                // 安全调用插件回调
-                cb(&actCtx, ud);
-            });
-            return true; // 拦截事件，避免穿透
-        }
-    }
-}
+// UI 线程调（点击命中后），内部 postToIo：
+void dispatchAction(std::string plugin, std::string ownerId,
+                    std::string actionId, std::string argsJson);
 ```
 
-**安全性设计说明**：
-- 点击事件在 UI 线程发生后，仅拷贝字符串与指针参数，通过线程池安全投递到 Client IO 线程。
-- 插件的 `callback` 执行在 Client IO 线程，与插件的网络通信、事件订阅处于同一线程上下文，不存在多线程数据竞态。
+IO 线程二次校验（缺一即丢弃记日志）：
+
+1. `plugins_.find(plugin)` 存在且 `enabled`；
+2. 精确 `bindings[ownerId]` 命中，否则回落 `bindings[""]`；
+3. 快照中的 `cb/ud` 与实例当前一致（防“点击瞬间 unbind/unload” UAF）；
+4. `InflightGuard` 后直调 `cb(&ctx, ud)`，异常兜底不打断循环。
+
+`action_args` 传 `argsJson` 的 `dump`（无参传空视图，Kit 侧统一给 `{}`）。
+
+### 6.4 vtable（`client_plugin_manager.cpp`）
+
+新增 `xx_cbind_action_handler / xx_cunbind_action_handler / xx_copen_overlay /
+xx_cclose_overlay`，全部包 `guardVtableCall` + `ioCallSync` 回 IO 线程，
+与现有 `register/update` 件一致。`query_interface` 返回的 `clientUiIface()`
+按 `hostSupportedInterfaces()` 置空不支持成员。
+
+### 6.5 `PluginUiAdapter` 新增
+
+```cpp
+virtual void onOverlayOpen(const std::string& plugin, int type,
+    const std::string& title, const std::string& payload,
+    const std::string& extraJson) {}
+virtual void onOverlayClose(const std::string& plugin) {}
+```
+
+TUI 实现 `postToUi` 投递；CLI 空实现（且能力未声明，manager 侧已拒）。
 
 ---
 
-## 7. 插件 SDK / Kit 封装：现代 C++ 交互体验
+## 7. TUI 设计（零特化）
 
-为了避免插件编写繁琐的 C 风格字符串对比，在 `plugin_kit.h` 提供轻量级交互控制器封装：
+### 7.1 删除清单（彻底移除）
+
+- `agent_tui.h`：`planGraphButtonBox_ / planGraphMermaid_` 成员、
+  `openMermaidDiagram(const std::string&)` 声明。
+- `tui_sidebar_content.cpp`：`appendPluginItems` 的 `mermaidButtonBox /
+  mermaidSource` 参数、`renderInfoSidebar` 的逐帧清空填充、偷看 `mermaid`
+  的两个分支。
+- `agent_tui.cpp`：`planGraph` 点击分支；`renderPluginPanel` 的
+  `kind=="action"` 静态分支（改走通用 button）。
+- `message_list.cpp`：`button` 分支中“`mermaid` 即弹窗”的注释与逻辑
+  （改走 `action_id`）。
+
+保留：`failedView`、`pendingInsert/Counter`、`contextButton`、`retry`、
+状态栏盒子及各自点击分支。
+
+### 7.2 共享渲染 helper（新文件 `plugin_ui_items.h/.cpp`）
+
+sidebar / panel / message 三处共用，杜绝三份拷贝漂移：
+
+```cpp
+struct PluginButtonDesc {
+    std::string label, prefix, actionId, argsJson, role;
+    bool clickable = false; // actionId 非空 && 快照有该 plugin 绑定
+};
+bool parsePluginButton(const neograph::json& it, PluginButtonDesc& out);
+ftxui::Element renderPluginButton(const PluginButtonDesc&, const TUITheme&);
+// role 配色：normal=buttonBg/Text；accent=buttonActiveBg/Text；danger=error 背景 + buttonText
+```
+
+`text + button` 隐式同行合并与 `prefix` 显式前缀在此统一实现。
+
+### 7.3 帧级命中表（`agent_tui.h`）
+
+```cpp
+struct UiHitTarget {
+    ftxui::Box  box;      // reflect 填充
+    std::string plugin;   // 来自 registry 条目 plugin 字段
+    std::string ownerId;  // section_id / panel_id / tool_call_id
+    std::string actionId;
+    std::string argsJson; // dump
+};
+std::vector<UiHitTarget> hitTargets_; // UI 线程独占，每帧 clear
+```
+
+渲染（UI 线程）：
+
+1. `renderInfoSidebar / renderPluginPanel` 入口 `hitTargets_.clear()`。
+   message 侧 `appendDecorItems` 以 decor 为单位追加（不清全局表，
+   由外层帧统一清；需明确与 `interruptHits_/collapsibleBoxes_` 同生命期）。
+2. `button` 有 `action_id` 且快照 `actionBindings` 含该 `plugin`
+   （精确或 `""`）→ `emplace_back` 并 `reflect(target.box)`。
+3. `hasBinding(plugin)` 为快照线性扫描（绑定数小，`O(B)` 可接受）。
+
+点击（UI 线程 → IO 线程）：
+
+```cpp
+// agent_tui 全局 CatchEvent + MessageListComponent::OnEvent 共用：
+bool hitTestPluginButton(const Mouse& m, UiHitTarget& out);
+if (hit && mgr) { mgr->dispatchAction(hit.plugin, hit.ownerId, hit.actionId, hit.argsJson); return true; }
+```
+
+顺序：在 `retry / collapsible / pending / failedView` 之后、状态栏之前；
+`modal_->hasModal()` 时跳过主界面拾取（与现有逻辑一致）。
+message 内按钮由 `MessageListComponent::OnEvent` 就地处理（它有独立事件流，
+不能只靠全局 CatchEvent）。
+
+### 7.4 通用 overlay（`agent_tui.h/.cpp` + `overlays.h/.cpp`）
+
+```cpp
+void TUIClientAgentIO::openOverlay(int type, std::string title,
+    std::string payload, std::string extraJson, std::string ownerPlugin);
+void TUIClientAgentIO::closeOverlay();
+```
+
+- `postToUi` + `modal_->pushModal(overlay)` + `postRedraw`；
+  记录 `overlayOwnerPlugin_`（CUSTOM 内按钮与 close 归因用）。
+- `MermaidDiagramOverlay` 构造加 `title` 参数（空则回退 `tr("graph.title")`）。
+- 新 `TextOverlay` / `DiffOverlay` / `CustomOverlay`（均 Scrollable + Esc 关 +
+  `overlay.scrollHint` 底栏；尺寸规范抄 `Mermaid/Failed`：宽 4/5（DIFF 可 4/5，
+  TEXT/CUSTOM 3/5），高 4/5，`GREATER+LESS_THAN` 双约束防塌缩）。
+- `CustomOverlay` 局部命中：在 `OnRender` 收集按钮盒，`OnEvent` 命中后
+  `manager->dispatchAction(ownerPlugin, "__overlay", actionId, args)`。
+  需持有 `weak_ptr<ClientPluginManager>`（经 `TUICtx::pluginManager` 传入，
+  与 sidebar/message 一致）。
+- `DiffOverlay` 的 diff 渲染从 `message_list.cpp::renderEditToolDiff`
+  抽为共享函数（放 `plugin_ui_items` 或 `util`，避免双份实现）。
+
+---
+
+## 8. Kit 设计（`plugin_kit.h`，header-only）
 
 ```cpp
 namespace agentxx::kit {
-
 class ActionController {
 public:
-    using ActionHandler = std::function<void(const neograph::json& args)>;
-
-    /// 绑定命名动作处理函数
-    void on(std::string actionId, ActionHandler handler) {
-        handlers_[std::move(actionId)] = std::move(handler);
-    }
-
-    /// 便捷生成按钮 JSON 并自动绑定无参 Lambda
-    neograph::json makeButton(
-        std::string label,
-        std::function<void()> onClick,
-        std::string prefix = ""
-    ) {
-        std::string actId = fmt::format("act_{}", ++counter_);
-        handlers_[actId]  = [fn = std::move(onClick)](const neograph::json&) {
-            fn();
-        };
-        neograph::json btn;
-        btn["kind"]      = "button";
-        btn["label"]     = std::move(label);
-        btn["action_id"] = std::move(actId);
-        if (!prefix.empty()) {
-            btn["prefix"] = std::move(prefix);
-        }
-        return btn;
-    }
-
-    /// C ABI 派发入口 (由 plugin_kit 自动连接到宿主 bind_action_handler)
-    static void AGENTXX_PLUGIN_CALL dispatch(const AgentxxUiActionContext* ctx, void* ud) {
-        auto* self = static_cast<ActionController*>(ud);
-        if (!self || !ctx) return;
-        std::string actId(ctx->action_id.data, ctx->action_id.size);
-        if (auto it = self->handlers_.find(actId); it != self->handlers_.end()) {
-            neograph::json args = neograph::json::object();
-            if (ctx->action_args.data && ctx->action_args.size > 0) {
-                try {
-                    args = neograph::json::parse(std::string_view(ctx->action_args.data, ctx->action_args.size));
-                } catch (...) {}
-            }
-            it->second(args);
-        }
-    }
-
+    using Handler = std::function<void(const neograph::json& args)>;
+    void on(std::string actionId, Handler h);
+    neograph::json makeButton(std::string label, std::function<void()> onClick,
+        std::string prefix = "", std::string role = "normal",
+        neograph::json args = neograph::json::object());
+    static void AGENTXX_PLUGIN_CALL dispatch(
+        const AgentxxUiActionContext* ctx, void* ud);
 private:
-    std::unordered_map<std::string, ActionHandler> handlers_;
+    std::unordered_map<std::string, Handler> handlers_;
     uint64_t counter_ = 0;
 };
-
-} // namespace agentxx::kit
+}
 ```
+
+- 只在 IO 线程 `on/dispatch`（与事件 handler 同约定），无需锁。
+- `dispatch`：空指针守卫 → `action_id` 查表 → `action_args` 解析失败给 `{}`
+  → 调 handler（异常吞掉记日志，不外泄 C 边界）。
+- `makeButton` 自增 `act_N`，`args` 缺省 `{}`；需要固定 id 的（如 planning
+  常量）直接用 `on("planning.open_graph", ...)` + 手写 JSON。
 
 ---
 
-## 8. 重构案例推导：Planning Graph 按钮的彻底重塑
+## 9. Planning 迁移（双发一版）与时序
 
-重构完成后，以 `agentxx_planning` 插件为例，展现架构演进的质变：
+```cpp
+// 初始化：bind 一次（fallback），target_id = ""
+ctx.ui->bind_action_handler(ctx.host, &emptySv, &ActionController::dispatch, &ctx.actions);
+ctx.actions.on("planning.open_graph", [&ctx](const neograph::json&) {
+    AgentxxOverlaySpec spec{1, AGENTXX_OVERLAY_MERMAID,
+        PluginStringView::fromCstr("Planning Roadmap"),
+        PluginStringView::from(ctx.current_roadmap),
+        PluginStringView::fromCstr("{}")};
+    ctx.ui->open_overlay(ctx.host, &spec);
+});
+// items：同时带 action_id（新）+ mermaid（老兼容）
+{"kind":"button","prefix":"|- ","label":"[Graph]",
+ "action_id":"planning.open_graph","args":{},"role":"accent",
+ "mermaid":"<roadmap>"}  // 下版删除 mermaid
+```
 
-### 8.1 重构前 vs 重构后时序对比
+重构后时序：
 
 ```mermaid
 sequenceDiagram
     autonumber
-    Note over PlanningPlugin, TUI: 【重构前】特化耦合
-    PlanningPlugin->>TUI: update_info_section(包含 roadmap 与硬编码字段)
-    Note over TUI: TUI 特化检测: if sec.id == "agentxx_planning.plan"<br/>提取首个 button，强制塞入 titleRow 右侧
-    User->>TUI: 鼠标点击 Plan 标题右侧
-    Note over TUI: TUI 内部硬编码调 openMermaidDiagram<br/>(插件对此完全无感知)
-
-    Note over PlanningPlugin, TUI: 【重构后】完全由插件自决驱动
-    PlanningPlugin->>Kit: makeButton("[Graph]", [this]{ openModal(); }, "|- ")
-    Kit->>PlanningPlugin: 返回通用 Button JSON (携带 action_id)
-    PlanningPlugin->>TUI: update_info_section(通用 items JSON)
-    Note over TUI: TUI 通用渲染器按声明正常同行渲染 "|- " + [Graph]<br/>reflect 挂载至通用的 HitTargetRegistry
-    User->>TUI: 鼠标点击 [Graph] 按钮
-    TUI->>PlanningPlugin: 派发 on_action("planning.open_graph", args)
-    PlanningPlugin->>TUI: ui->open_modal(AGENTXX_MODAL_MERMAID, title, roadmap)
-    Note over TUI: 宿主通用模态组件展示弹窗
+    Note over PlanningPlugin, TUI: 完全由插件自决驱动（重构后）
+    PlanningPlugin->>Kit: on("planning.open_graph", openOverlay)
+    PlanningPlugin->>TUI: update_info_section(通用 items，含 action_id)
+    Note over TUI: 通用渲染 + reflect 挂载 HitTargetRegistry
+    User->>TUI: 点击 [Graph]
+    TUI->>PlanningPlugin: on_action(owner=section_id, action=open_graph)
+    PlanningPlugin->>TUI: open_overlay(MERMAID, roadmap)
+    Note over TUI: 通用 overlay 组件展示
 ```
 
-### 8.2 插件端实现代码 (Clean & Idiomatic)
-
-在 `agentxx_planning.cpp` 内部：
-
-```cpp
-// 1. 初始化阶段绑定段落处理器
-ctx.ui->bind_action_handler(ctx.host, &secIdSv, &ActionController::dispatch, &ctx.actions);
-
-// 2. 注册 Graph 按钮点击行为
-ctx.actions.on("planning.open_graph", [&ctx](const neograph::json&) {
-    AgentxxModalSpec spec{
-        .version    = 1,
-        .type       = AGENTXX_MODAL_MERMAID,
-        .title      = PluginStringView::fromCstr("Planning Roadmap"),
-        .payload    = PluginStringView::from(ctx.current_roadmap),
-        .extra_json = PluginStringView::fromCstr("{}"),
-    };
-    ctx.ui->open_modal(ctx.host, &spec);
-});
-
-// 3. 构建渲染 items
-if (!roadmap.empty()) {
-    neograph::json btn;
-    btn["kind"]      = "button";
-    btn["prefix"]    = "|- ";
-    btn["label"]     = "[Graph]";
-    btn["action_id"] = "planning.open_graph";
-    items.push_back(btn.dump());
-}
-```
+- Info 段 `refreshPlanSection` 与 decor `buildDecorItems` 同改；
+  decor 按钮 `owner_id` 自动为 `toolCallId`（TUI 侧组装，无需插件操心）。
+- decor 的内联 `diagram` 回退项首版保留（老宿主/测试兼容），下版删。
+- `plugin.yaml` 加 `optional: [agentxx.client.action, agentxx.client.overlay]`。
 
 ---
 
-## 9. 演进路线与实施计划
+## 10. 兼容与演进路线
 
-重构按三阶段平滑演进，不破坏现有功能：
+| 组合 | 行为 |
+| :--- | :--- |
+| 新插件 + 新宿主 | `action_id` 点击 → 回调 → `open_overlay` |
+| 新插件（双发）+ 老宿主 | 老 TUI 仍看 `mermaid` 弹窗；`bind/open` 为 NULL 安全降级 |
+| 老插件（纯 `mermaid`）+ 新宿主 | `diagram` 静态渲染，无点击（下版插件跟进） |
+| CLI（无 action/overlay 能力） | `bind/open` NULL，按钮静态化，不崩 |
 
-### 阶段 1：ABI 接口扩展与宿主基础能力 (Core Extension)
-1. 在 `client_plugin_api.h` 定义 `AgentxxUiActionContext`、`AgentxxUiActionFn` 与 `AgentxxModalSpec`。
-2. 升级 `AgentxxClientUiIface` 版本至 3，增加 `bind_action_handler` 与 `open_modal` 接口定义。
-3. 在 `ClientPluginManager` 中实现动作绑定表的注册、注销与生命周期清理。
+三阶段（每阶段独立编译测试）：
 
-### 阶段 2：宿主通用拾取与通用弹窗 (TUI Universal Dispatch)
-1. 在 `TUIClientAgentIO` 引入 `std::vector<UiHitTarget> hitTargets_` 通用拾取管道。
-2. 重构 `appendPluginItems`，使其自动为带 `action_id` 的按钮执行通用 reflect 挂载。
-3. 在 `TUIClientAgentIO` 实现通用的 `openModal(spec)`，取代旧有专用的 `openMermaidDiagram`。
-4. 移除 `agent_tui.cpp` 中所有针对 `planGraphButtonBox_`、`failedViewButtonBox_` 的专用点击分支，统一接入 `hitTargets_` 派发。
+1. **ABI + Manager**：`client_plugin_api.h v3` + `plugin_common.h` 能力常量 +
+   绑定表/快照/`dispatchAction`/vtable 四件套 + adapter 扩展。
+2. **TUI 通用化**：共享 helper + `hitTargets_` 三处接入 + 通用 overlay
+   四组件 + 删除 §7.1 清单。
+3. **Kit + 迁移 + 测试**：`ActionController` + planning 双发 + 用例更新。
 
-### 阶段 3：插件 SDK 适配与业务迁移 (Migration)
-1. 在 `plugin_kit.h` 增加 `ActionController` 便捷封装。
-2. 迁移 `agentxx_planning` 插件采用标准的 `action_id` 与 `open_modal` 模式。
-3. 补充插件按钮点击、跨线程派发及模态框唤起的自动化单元测试。
+---
+
+## 11. 测试计划
+
+- Manager 单测（`test_client_plugins` 扩展）：bind/unbind 覆盖语义、
+  精确优先 vs fallback、decor `owner=toolCallId` 派发、disable 保留/enable
+  恢复、unload 后点击丢弃、未知 action 丢弃、`open_overlay` 参数校验。
+- TUI（headless 可测部分）：快照驱动下可点按钮挂 `reflect`、无绑定不挂、
+  `role` 配色映射、`prefix`/合并布局、命中拷贝字段正确。
+- Planning 端到端：`PLUGIN_DATA → Info 段含 action_id`、`tool_start/end →
+  decor 按钮`、`dispatch("planning.open_graph") → open_overlay(MERMAID)`。
+- 回归：`agentxx_test client_plugins` + 全量；`mermaid` 双发断言首版保留，
+  下版改严格断言。
+
+---
+
+## 12. 文件变更清单
+
+| 文件 | 变更 |
+| :--- | :--- |
+| `agent/lib/include/agentxx/plugin/api/client_plugin_api.h` | `VERSION 2→3`；加 `ActionContext/Fn`、`OverlayType/Spec`；`UiIface` 尾部加 4 函数 |
+| `agent/lib/include/agentxx/plugin/plugin_common.h` | 加 `ClientAction / ClientOverlay` 能力常量 |
+| `agent/lib/include/agentxx/plugin/client_plugin_manager.h` | 加 `ClientActionBinding`、`Registry::actionBindings`、`Instance::actionRegs`、`dispatchAction/openOverlay/closeOverlay`、`Adapter::onOverlayOpen/Close` |
+| `agent/lib/src/plugins/client_plugin_manager.cpp` | 绑定 CRUD/快照/detach/enable 恢复/派发校验/vtable 四件套/`clientUiIface` 门禁 |
+| `agent/lib/include/agentxx/plugin/api/plugin_kit.h` | 加 `kit::ActionController` |
+| `agent/client/include/agentxx-client/io/tui/agent_tui.h` | 删 planGraph 成员/`openMermaidDiagram`；加 `UiHitTarget/hitTargets_/openOverlay/closeOverlay/overlayOwner_` |
+| `agent/client/src/io/tui/agent_tui.cpp` | 删 planGraph 分支；加通用命中派发 + `openOverlay` 实现 + `renderPluginPanel` 通用 button |
+| `agent/client/src/io/tui/tui_sidebar_content.cpp` | `appendPluginItems` 去 mermaid 参数，转共享 helper + 命中挂载 |
+| `agent/client/src/io/tui/components/message_list.cpp` | `appendDecorItems` button 接命中；`renderEditToolDiff` 抽共享 |
+| `agent/client/include/.../components/overlays.h` + `overlays.cpp` | `Mermaid` 加 title；新 `Text/Diff/CustomOverlay` |
+| `agent/client/.../tui/plugin_ui_items.h/.cpp`（新） | 共享 button 解析/渲染/role 配色/diff helper |
+| `agent/client/include/.../tui/tui_plugin_adapter.h` | 声明 action/overlay 能力；实现 `onOverlayOpen/Close`（`postToUi`） |
+| `agent/client/include/.../stdio/cli_plugin_adapter.h` | 不变（不声明新能力即降级） |
+| `agent/plugins/agentxx_planning/agentxx_planning.cpp + plugin.yaml` | `bind("")` + `on(open_graph)` + 双发 + optional 能力 |
+| `agent/test/plugin/test_client_plugins.cpp` | 新增 action/overlay 用例，更新 planning 断言 |
+
+---
+
+## 13. 风险与缓解
+
+- **悬垂回调**：IO 线程二次校验 + `InflightGuard` + 快照拷贝，unload/disable
+  后点击直接丢弃。
+- **overlay 竞争**：单模态 last-wins；`overlayOwner_` 仅用于 CUSTOM 归因与日志，
+  不做强互斥（可接受）。
+- **CUSTOM 递归按钮**：overlay 局部命中走同一 `dispatchAction`，owner 固定
+  `"__overlay"`，fallback 覆盖，无需新协议。
+- **性能**：绑定数小（通常 <20），线性扫描无压力；命中表每帧重建仅存可点项；
+  `args` 建议上限 64KB。
+- **三处渲染漂移复发**：强制走 `plugin_ui_items` 共享 helper，CR 拦独立实现。
