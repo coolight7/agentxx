@@ -2,6 +2,7 @@
 #include "agentxx-client/io/tui/components/message_list.h"
 #include "agentxx-client/io/tui/components/sidebar.h"
 #include "agentxx-client/io/tui/framework/tui_i18n.h"
+#include "agentxx-client/io/tui/plugin_ui_items.h"
 #include "agentxx/util/exception.h"
 #include "agentxx/util/log.h"
 #include "agentxx/util/string_util.h"
@@ -9,6 +10,7 @@
 #include "ftxui/screen/terminal.hpp"
 #include <algorithm>
 #include <filesystem>
+#include <markdown/state_diagram.hpp>
 
 using namespace ftxui;
 
@@ -46,18 +48,19 @@ ftxui::Element buildLogLine(const TUILogSink::Line& line, const TUITheme& theme)
     return paragraph(prefix + line.text) | color(c);
 }
 
-/// 渲染插件段落/面板 items JSON 元素 (kind: text/progress/badge/separator;
-/// schema 见
-/// [client_plugin_api.h](/agent/lib/include/agentxx/plugin/api/client_plugin_api.h)
-/// register_panel/register_info_section)
-/// - text 项支持 role 指定样式: "title"=高亮强调 / "normal"=普通文本(默认) /
-///   "hint"=减淡提示
+/// 渲染插件段落/面板 items JSON 元素 (通用, 零特化; 共享 helper 收敛点)
+/// - text/progress/badge/separator/button/diagram/diff 全走 plugin_ui_items
+/// - button 有 action_id 且快照有该 plugin 绑定 → 挂 hitTargets_ 并 reflect
+/// - text + button 隐式同行合并与 prefix 显式前缀统一在此实现
+/// - diagram 保留静态内联渲染 (历史消息兼容), 不挂点击
 static void appendPluginItems(
-    const neograph::json& items,
-    const TUITheme&       theme,
-    ftxui::Elements&      out,
-    ftxui::Box*           mermaidButtonBox = nullptr,
-    std::string*          mermaidSource    = nullptr
+    const neograph::json&                        items,
+    std::string_view                             plugin,
+    std::string_view                             ownerId,
+    const agentxx::plugin::ClientUiRegistry*     reg,
+    const TUITheme&                              theme,
+    ftxui::Elements&                             out,
+    std::vector<TUIClientAgentIO::UiHitTarget>&  hits
 ) {
     if (!items.is_array()) {
         return;
@@ -73,61 +76,45 @@ static void appendPluginItems(
         }
         const auto kind = it.value("kind", std::string{"text"});
         if (kind == "text") {
-            const auto role   = it.value("role", std::string{"normal"});
-            const auto txtStr = it.value("text", std::string{});
-
             // 若下一个 item 为 button (如 "|- " 后面紧跟按钮), 则合并为单行展示
             if (i + 1 < itemCount && items[i + 1].is_object()
-                && items[i + 1].value("kind", std::string{}) == "button") {
-                const auto& btnIt   = items[i + 1];
-                const auto  mermaid = btnIt.value("mermaid", std::string{});
-                const auto  label   = btnIt.value(
-                    "label",
-                    btnIt.value(
-                        "text",
-                        !mermaid.empty() ? std::string(tr("info.graphButton"))
-                                         : std::string{"Button"}
-                    )
-                );
-                std::string btnLabel = label;
-                if (!btnLabel.empty() && btnLabel.front() != ' ' && btnLabel.back() != ' ') {
-                    btnLabel = " " + btnLabel + " ";
+                && (items[i + 1].value("kind", std::string{}) == "button"
+                    || items[i + 1].value("kind", std::string{}) == "action")) {
+                agentxx::client::PluginButtonDesc desc;
+                if (agentxx::client::parsePluginButton(items[i + 1], plugin, reg, desc)) {
+                    Element btn = agentxx::client::renderPluginButton(desc, theme);
+                    if (desc.clickable) {
+                        TUIClientAgentIO::UiHitTarget t;
+                        t.plugin   = std::string{plugin};
+                        t.ownerId  = std::string{ownerId};
+                        t.actionId = desc.actionId;
+                        t.argsJson = desc.argsJson;
+                        hits.push_back(std::move(t));
+                        btn = btn | reflect(hits.back().box);
+                    }
+                    push(hbox({
+                        agentxx::client::renderPluginTextItem(
+                            it.value("text", std::string{}),
+                            it.value("role", std::string{"normal"}),
+                            theme
+                        ),
+                        std::move(btn),
+                    }));
+                    ++i;
+                    continue;
                 }
-                Element btn = text(btnLabel) | bgcolor(theme.buttonBgColor)
-                              | color(theme.buttonTextColor) | bold;
-                if (!mermaid.empty() && mermaidButtonBox && mermaidSource) {
-                    *mermaidSource = mermaid;
-                    btn            = btn | reflect(*mermaidButtonBox);
-                }
-
-                ftxui::Color textColor = theme.normalColor;
-                if (role == "title") {
-                    textColor = theme.accentColor;
-                } else if (role == "hint") {
-                    textColor = theme.hintColor;
-                }
-                push(hbox({
-                    text(txtStr) | color(textColor),
-                    std::move(btn),
-                }));
-                ++i;
-                continue;
             }
-
-            const auto txt = paragraph(txtStr);
-            if (role == "title") {
-                push(txt | color(theme.accentColor) | bold);
-            } else if (role == "hint") {
-                push(txt | color(theme.hintColor));
-            } else {
-                push(txt | color(theme.normalColor));
-            }
+            push(agentxx::client::renderPluginTextItem(
+                it.value("text", std::string{}),
+                it.value("role", std::string{"normal"}),
+                theme
+            ));
         } else if (kind == "progress") {
             const double v      = it.value("value", 0.0);
             const int    w      = 10;
             const int    filled = static_cast<int>(v * w);
             std::string  bar;
-            bar.reserve(w);
+            bar.reserve(static_cast<size_t>(w));
             for (int j = 0; j < w; ++j) {
                 bar += (j < filled) ? '#' : '-';
             }
@@ -139,36 +126,49 @@ static void appendPluginItems(
             push(text("● " + it.value("text", std::string{})) | color(theme.accentColor));
         } else if (kind == "separator") {
             push(text("─") | color(theme.hintColor) | dim);
-        } else if (kind == "button") {
-            const auto  prefix  = it.value("prefix", std::string{});
-            const auto  mermaid = it.value("mermaid", std::string{});
-            const auto  label   = it.value(
-                "label",
-                it.value(
-                    "text",
-                    !mermaid.empty() ? std::string(tr("info.graphButton"))
-                                     : std::string{"Button"}
-                )
-            );
-            std::string btnLabel = label;
-            if (!btnLabel.empty() && btnLabel.front() != ' ' && btnLabel.back() != ' ') {
-                btnLabel = " " + btnLabel + " ";
+        } else if (kind == "button" || kind == "action") {
+            agentxx::client::PluginButtonDesc desc;
+            if (!agentxx::client::parsePluginButton(it, plugin, reg, desc)) {
+                continue;
             }
-            Element btn = text(btnLabel) | bgcolor(theme.buttonBgColor)
-                          | color(theme.buttonTextColor) | bold;
-            if (!mermaid.empty() && mermaidButtonBox && mermaidSource) {
-                *mermaidSource = mermaid;
-                btn            = btn | reflect(*mermaidButtonBox);
+            Element btn = agentxx::client::renderPluginButton(desc, theme);
+            if (desc.clickable) {
+                TUIClientAgentIO::UiHitTarget t;
+                t.plugin   = std::string{plugin};
+                t.ownerId  = std::string{ownerId};
+                t.actionId = desc.actionId;
+                t.argsJson = desc.argsJson;
+                hits.push_back(std::move(t));
+                btn = btn | reflect(hits.back().box);
             }
-
-            if (!prefix.empty()) {
+            if (!desc.prefix.empty()) {
                 push(hbox({
-                    text(prefix) | color(theme.normalColor),
+                    text(desc.prefix) | color(theme.normalColor),
                     std::move(btn),
                 }));
             } else {
                 push(std::move(btn));
             }
+        } else if (kind == "diagram") {
+            // 静态内联渲染 (历史消息兼容), 不挂点击
+            const auto mermaid = it.value("mermaid", std::string{});
+            auto       diagram = markdown::parseMermaidStateDiagram(mermaid);
+            if (!diagram.nodes.empty()) {
+                const int diagW = std::max(20, Terminal::Size().dimx - 16);
+                push(markdown::renderMermaidStateDiagram(
+                    diagram,
+                    diagW,
+                    theme.normalColor,
+                    markdown::diagramNodeColor(theme.markdownTheme)
+                ));
+            }
+        } else if (kind == "diff") {
+            push(agentxx::client::renderPluginDiff(
+                it.value("path", std::string{}),
+                it.value("old_str", std::string{}),
+                it.value("new_str", std::string{}),
+                theme
+            ));
         }
     }
 }
@@ -223,9 +223,7 @@ std::vector<ScrollItem> TUIClientAgentIO::renderInfoSidebar() {
     // 每帧从 client 插件注册表快照读取, 无需缓存):
     // - 段落在 Append 之后按注册顺序展示 (标题 + items, items schema 同面板)
     // - 若段落无内容项则跳过，避免仅显示孤立标题
-    // - 携带 mermaid 字段的 button 项通用绑定状态图弹窗交互 (点击 reflect 命中区域并弹窗)
-    planGraphButtonBox_ = ftxui::Box{0, -1, 0, -1};
-    planGraphMermaid_.clear();
+    // - button 走通用 action_id 派发 (owner=section_id, 经 hitTargets_ 挂载)
     if (auto mgr = pluginManager_) {
         auto reg = mgr->uiRegistrySnapshot();
         if (reg && !reg->infoSections.empty()) {
@@ -233,10 +231,12 @@ std::vector<ScrollItem> TUIClientAgentIO::renderInfoSidebar() {
                 Elements secItems;
                 appendPluginItems(
                     sec.items,
+                    sec.plugin,
+                    sec.id,
+                    reg.get(),
                     theme_,
                     secItems,
-                    &planGraphButtonBox_,
-                    &planGraphMermaid_
+                    hitTargets_
                 );
                 if (secItems.empty()) {
                     continue;

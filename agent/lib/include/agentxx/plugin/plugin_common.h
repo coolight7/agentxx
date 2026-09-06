@@ -293,6 +293,10 @@ inline constexpr std::string_view ClientPromptModal = "agentxx.client.prompt_mod
 inline constexpr std::string_view ClientMsgDecor    = "agentxx.client.msg_decor";
 inline constexpr std::string_view ClientInfoSection = "agentxx.client.info_section";
 inline constexpr std::string_view ClientCommand     = "agentxx.client.command";
+/// 通用交互 (ui 表 v3 bind/unbind + button 拾取派发; TUI 声明, CLI 不声明)
+inline constexpr std::string_view ClientAction = "agentxx.client.action";
+/// 通用 overlay (ui 表 v3 open/close; TUI 声明, CLI 不声明)
+inline constexpr std::string_view ClientOverlay = "agentxx.client.overlay";
 } // namespace plugin_interfaces
 
 /// 宿主支持的接口集合 (稳定名字符串; io 线程构建后只读)

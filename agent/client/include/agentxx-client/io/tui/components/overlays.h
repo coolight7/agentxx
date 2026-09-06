@@ -8,6 +8,7 @@
 #include "ftxui/screen/box.hpp"
 #include <functional>
 #include <markdown/state_diagram.hpp>
+#include <neograph/json.h>
 #include <set>
 #include <string>
 #include <vector>
@@ -294,9 +295,9 @@ private:
     std::vector<size_t> headerItemIndex_;
 };
 
-/// Mermaid 状态图弹窗 (Plan Graph 按钮触发)
+/// Mermaid 状态图弹窗 (通用 open_overlay MERMAID 驱动; 标题可自定义)
 ///
-/// 显示单条 roadmap (Mermaid stateDiagram-v2) 的 ASCII 状态图:
+/// 显示单条 mermaid (stateDiagram-v2) 的 ASCII 状态图:
 /// - 全宽渲染, 内部 Scrollable 滚动 (滚轮 / Up/Down)
 /// - 节点按 id 状态后缀着色 (_in_progress/_completed/_failed/_pending)
 /// - 支持动态 mermaid 字符串 (构造时传入), 弹窗打开期间不变
@@ -304,7 +305,7 @@ private:
 class MermaidDiagramOverlay : public ftxui::ComponentBase {
 public:
 
-    explicit MermaidDiagramOverlay(TUICtx& ctx, std::string mermaid);
+    explicit MermaidDiagramOverlay(TUICtx& ctx, std::string mermaid, std::string title = {});
 
     void onClose(std::function<void()> fn) {
         onClose_ = std::move(fn);
@@ -319,6 +320,7 @@ private:
 
     TUICtx&                     ctx_;
     std::string                 mermaid_;
+    std::string                 title_;
     std::shared_ptr<Scrollable> scrollable_;
     std::function<void()>       onClose_;
 
@@ -401,4 +403,121 @@ private:
     ftxui::Box llmContextBox_;
     ftxui::Box summyContextBox_;
     ftxui::Box clearLogsBox_;
+};
+
+/// 通用文本 overlay (open_overlay TEXT 驱动; payload=原文, extra={"markdown":bool})
+///
+/// - markdown=true (缺省): 按 markdown 主题渲染 (mermaid 围栏渲染为状态图)
+/// - markdown=false: 纯段落渲染
+/// - Scrollable + Esc 关 + overlay.scrollHint 底栏; 宽 3/5、高 4/5 双约束防塌缩
+class TextOverlay : public ftxui::ComponentBase {
+public:
+
+    explicit TextOverlay(TUICtx& ctx, std::string title, std::string content, bool markdown = true);
+
+    void onClose(std::function<void()> fn) {
+        onClose_ = std::move(fn);
+    }
+
+    bool           OnEvent(ftxui::Event event) override;
+    ftxui::Element OnRender() override;
+
+private:
+
+    std::vector<ScrollItem> buildItems();
+
+    TUICtx&                     ctx_;
+    std::string                 title_;
+    std::string                 content_;
+    bool                        markdown_;
+    std::shared_ptr<Scrollable> scrollable_;
+    std::function<void()>       onClose_;
+
+    /// markdown 渲染缓存 (DomBuilder 生命周期与 Element 绑定, 见 attachments)
+    std::vector<std::shared_ptr<void>> cachedAttachments_;
+    std::string                        cachedContent_;
+    int                                cachedMaxW_ = 0;
+    std::string                        cachedThemeName_;
+    bool                               cachedMarkdown_ = true;
+    ftxui::Element                     cachedElement_;
+};
+
+/// 通用 diff overlay (open_overlay DIFF 驱动; payload={path,old_str,new_str})
+///
+/// - 渲染复用 message diff 逻辑 (computeLineDiff + side-by-side/统一样式,
+///   见 plugin_ui_items renderPluginDiff)
+/// - Scrollable + Esc 关 + overlay.scrollHint 底栏; 宽 4/5、高 4/5 双约束
+class DiffOverlay : public ftxui::ComponentBase {
+public:
+
+    explicit DiffOverlay(
+        TUICtx&     ctx,
+        std::string title,
+        std::string path,
+        std::string oldStr,
+        std::string newStr
+    );
+
+    void onClose(std::function<void()> fn) {
+        onClose_ = std::move(fn);
+    }
+
+    bool           OnEvent(ftxui::Event event) override;
+    ftxui::Element OnRender() override;
+
+private:
+
+    std::vector<ScrollItem> buildItems();
+
+    TUICtx&                     ctx_;
+    std::string                 title_;
+    std::string                 path_;
+    std::string                 oldStr_;
+    std::string                 newStr_;
+    std::shared_ptr<Scrollable> scrollable_;
+    std::function<void()>       onClose_;
+};
+
+/// 通用自定义 overlay (open_overlay CUSTOM 驱动; payload={"items":[...]})
+///
+/// - items schema 同 panel/items (text/progress/badge/separator/button),
+///   button 同样走 action_id + 通用派发 (owner 固定 "__overlay", 被 fallback 接住)
+/// - overlay 内局部命中: OnRender 收集按钮盒, OnEvent 命中后经
+///   ctx_.pluginManager->dispatchAction(ownerPlugin, "__overlay", actionId, args)
+/// - Scrollable + Esc 关 + overlay.scrollHint 底栏; 宽 3/5、高 4/5 双约束
+class CustomOverlay : public ftxui::ComponentBase {
+public:
+
+    explicit CustomOverlay(
+        TUICtx&          ctx,
+        std::string      title,
+        neograph::json   items,
+        std::string      ownerPlugin
+    );
+
+    void onClose(std::function<void()> fn) {
+        onClose_ = std::move(fn);
+    }
+
+    bool           OnEvent(ftxui::Event event) override;
+    ftxui::Element OnRender() override;
+
+private:
+
+    TUICtx&                     ctx_;
+    std::string                 title_;
+    neograph::json              items_;
+    std::string                 ownerPlugin_;
+    std::shared_ptr<Scrollable> scrollable_;
+    std::function<void()>       onClose_;
+
+    /// overlay 内按钮局部命中盒 (OnRender 收集, OnEvent 命中检测;
+    /// 与 CustomOverlayItem 对应, 视口外为空 Box)
+    struct OverlayHit {
+        ftxui::Box  box;
+        std::string actionId;
+        std::string argsJson;
+    };
+
+    std::vector<OverlayHit> hits_;
 };

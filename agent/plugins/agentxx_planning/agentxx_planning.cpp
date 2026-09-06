@@ -565,14 +565,20 @@ extern "C" AGENTXX_PLUGIN_EXPORT void AGENTXX_PLUGIN_CALL
 struct ClientCtx {
     const AgentxxPluginHost*      host = nullptr;
     agentxx::plugin::ClientIfaces iface{};
-    /// "agentxx.client.ui" 展示接口表 (Info 段落/工具装饰; CLI 等不支持时成员 NULL 降级)
+    /// "agentxx.client.ui" 展示接口表 (Info 段落/工具装饰/action/overlay;
+    /// CLI 等不支持时成员 NULL 降级: planning 仍推送内容, 只是按钮不可点)
     const AgentxxClientUiIface* ui      = nullptr;
     AgentxxInfoSection*         section = nullptr; ///< 懒注册句柄 (null=未展示)
     std::string                 last_plan_json;    ///< 最近一次规划内容缓存 (Info 段落)
     /// 进行中 planning 工具调用的参数缓存 (tool_call_id → arguments JSON;
     /// tool_start 缓存, tool_end 刷新最终装饰后摘除)
     std::map<std::string, std::string> pending_args;
+    /// 通用交互动作控制器 (action_id → handler; dispatch 经 ud 恢复本实例)
+    agentxx::plugin::kit::ActionController actions;
 };
+
+/// planning 状态图动作 id (Info 段/decor 按钮共用; bind 一次永久生效)
+constexpr const char* kActionOpenGraph = "planning.open_graph";
 
 /// client 侧守卫日志闭包工厂
 static auto clientGuardLogger(ClientCtx* ctx) noexcept {
@@ -676,10 +682,12 @@ static std::string buildDecorItems(const ClientCtx& ctx, const neograph::json& p
         ));
     };
     auto buttonItem = [&](const std::string& label, const std::string& mermaid) {
-        // Graph 按钮: 点击弹窗渲染状态图 (mermaid 源完整透传)
+        // Graph 按钮: 通用 action_id 派发 (新宿主点击回调 → open_overlay MERMAID);
+        // 双发 mermaid 字段供老宿主兼容 (下版删除 mermaid)
         items.push_back(fmt::format(
-            R"({{"kind":"button","label":{},"mermaid":{}}})",
+            R"({{"kind":"button","label":{},"action_id":"{}","args":{{}},"role":"accent","mermaid":{}}})",
             clientJsonEscape(ctx, label),
+            kActionOpenGraph,
             clientJsonEscape(ctx, mermaid)
         ));
     };
@@ -807,9 +815,12 @@ static void refreshPlanSection(ClientCtx& ctx) {
     };
 
     auto buttonItem = [&](const std::string& label, const std::string& mermaid) {
+        // Graph 按钮: 通用 action_id 派发 (新宿主点击回调 → open_overlay MERMAID);
+        // 双发 mermaid 字段供老宿主兼容 (下版删除 mermaid)
         items.push_back(fmt::format(
-            R"({{"kind":"button","label":{},"mermaid":{}}})",
+            R"({{"kind":"button","label":{},"action_id":"{}","args":{{}},"role":"accent","mermaid":{}}})",
             clientJsonEscape(ctx, label),
+            kActionOpenGraph,
             clientJsonEscape(ctx, mermaid)
         ));
     };
@@ -1049,6 +1060,55 @@ extern "C" AGENTXX_PLUGIN_EXPORT int32_t AGENTXX_PLUGIN_CALL
             ctx->iface = agentxx::plugin::ClientIfaces::query(host);
             ctx->ui    = ctx->iface.ui;
             raw        = ctx.get();
+
+            // 通用交互绑定 (方案 A fallback: target_id="" 本实例兜底, 一次永久生效):
+            // - Info 段 / decor 按钮均以 action_id="planning.open_graph" 声明,
+            //   owner_id 由宿主组装 (section_id / tool_call_id), 此处无需逐个 bind
+            // - ui 缺失或 bind 为 NULL (CLI/老宿主) 时静默降级: 内容仍推送, 按钮不可点
+            if (ctx->ui && ctx->ui->bind_action_handler) {
+                ctx->actions.on(kActionOpenGraph, [ctxPtr = ctx.get()](const neograph::json&) {
+                    auto* c = ctxPtr;
+                    if (!c || !c->host || !c->ui || !c->ui->open_overlay
+                        || c->last_plan_json.empty()) {
+                        return;
+                    }
+                    std::string roadmap;
+                    try {
+                        roadmap = neograph::json::parse(c->last_plan_json)
+                                      .value("roadmap", std::string{});
+                    } catch (...) {
+                        return;
+                    }
+                    if (roadmap.empty()) {
+                        return;
+                    }
+                    AgentxxOverlaySpec spec{};
+                    spec.version    = 1;
+                    spec.type       = AGENTXX_OVERLAY_MERMAID;
+                    spec.title      = agentxx::plugin::PluginStringView::fromCstr("Planning Roadmap");
+                    spec.payload    = agentxx::plugin::PluginStringView::from(
+                        roadmap.data(),
+                        roadmap.size()
+                    );
+                    spec.extra_json = agentxx::plugin::PluginStringView::fromCstr("{}");
+                    c->ui->open_overlay(c->host, &spec);
+                });
+                auto emptySv = agentxx::plugin::PluginStringView::from("", 0);
+                if (ctx->ui->bind_action_handler(
+                        host,
+                        &emptySv,
+                        &agentxx::plugin::kit::ActionController::dispatch,
+                        &ctx->actions
+                    )
+                    != 0) {
+                    auto warnSv = agentxx::plugin::PluginStringView::fromCstr(
+                        "agentxx_planning client: bind open_graph failed (buttons static)"
+                    );
+                    if (ctx->iface.log && ctx->iface.log->log) {
+                        ctx->iface.log->log(host, 3, &warnSv);
+                    }
+                }
+            }
 
             // 事件订阅 (卸载时宿主自动退订); events/ui 缺失时仅失去渲染能力,
             // 不阻塞加载 (CLI 等精简宿主场景)

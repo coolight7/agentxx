@@ -5,6 +5,7 @@
 #include "agentxx-client/io/tui/components/sidebar.h"
 #include "agentxx-client/io/tui/components/status_bar.h"
 #include "agentxx-client/io/tui/framework/tui_i18n.h"
+#include "agentxx-client/io/tui/plugin_ui_items.h"
 #include "agentxx-client/mode_runners.h"
 #include "agentxx/agent/model_registry.h"
 #include "agentxx/middlewares/middleware.h"
@@ -289,6 +290,8 @@ void TUIClientAgentIO::removePluginPanelTab(const std::string& id) {
 
 std::vector<ScrollItem> TUIClientAgentIO::renderPluginPanel(const std::string& panelId) {
     // UI 线程调用 (侧边栏 tab render 回调); 读取注册表快照 (短锁拷贝 shared_ptr)
+    // 通用 button 渲染: 走 plugin_ui_items 共享 helper + hitTargets_ 命中挂载
+    // (kind=="action" 遗留 schema 兼容为 button + action_id)
     std::vector<ScrollItem> out;
     auto                    mgr = pluginManager_;
     if (!mgr) {
@@ -309,42 +312,91 @@ std::vector<ScrollItem> TUIClientAgentIO::renderPluginPanel(const std::string& p
         return out;
     }
     const auto& theme = theme_;
-    // 面板内容: items JSON 数组 (kind: text/progress/action/badge/separator;
+    // 面板内容: items JSON 数组 (kind: text/progress/button/badge/separator;
     // text 支持 role: title=高亮 / normal=普通(默认) / hint=减淡)
     if (panel->items.is_array()) {
-        for (const auto& it : panel->items) {
+        const size_t n = panel->items.size();
+        for (size_t i = 0; i < n; ++i) {
+            const auto& it = panel->items[i];
             if (!it.is_object()) {
                 continue;
             }
             const auto kind = it.value("kind", std::string{"text"});
             if (kind == "text") {
-                const auto role = it.value("role", std::string{"normal"});
-                const auto txt  = text(it.value("text", std::string{}));
-                if (role == "title") {
-                    out.push_back(ScrollItem{txt | color(theme.accentColor) | bold});
-                } else if (role == "hint") {
-                    out.push_back(ScrollItem{txt | color(theme.hintColor)});
-                } else {
-                    out.push_back(ScrollItem{txt | color(theme.normalColor)});
+                // text + button 隐式同行合并: 下一项为 button 时合并为单行
+                if (i + 1 < n && panel->items[i + 1].is_object()
+                    && (panel->items[i + 1].value("kind", std::string{}) == "button"
+                        || panel->items[i + 1].value("kind", std::string{}) == "action")) {
+                    agentxx::client::PluginButtonDesc desc;
+                    if (agentxx::client::parsePluginButton(
+                            panel->items[i + 1],
+                            panel->plugin,
+                            reg.get(),
+                            desc
+                        )) {
+                        Element btn = agentxx::client::renderPluginButton(desc, theme);
+                        if (desc.clickable) {
+                            UiHitTarget t;
+                            t.plugin   = panel->plugin;
+                            t.ownerId  = panel->id;
+                            t.actionId = desc.actionId;
+                            t.argsJson = desc.argsJson;
+                            hitTargets_.push_back(std::move(t));
+                            btn = btn | reflect(hitTargets_.back().box);
+                        }
+                        out.push_back(ScrollItem{hbox({
+                            agentxx::client::renderPluginTextItem(
+                                it.value("text", std::string{}),
+                                it.value("role", std::string{"normal"}),
+                                theme
+                            ),
+                            std::move(btn),
+                        })});
+                        ++i;
+                        continue;
+                    }
                 }
+                out.push_back(ScrollItem{agentxx::client::renderPluginTextItem(
+                    it.value("text", std::string{}),
+                    it.value("role", std::string{"normal"}),
+                    theme
+                )});
             } else if (kind == "progress") {
                 const double v      = it.value("value", 0.0);
                 const int    w      = 10;
                 const int    filled = static_cast<int>(v * w);
                 std::string  bar;
-                bar.reserve(w);
-                for (int i = 0; i < w; ++i) {
-                    bar += (i < filled) ? '#' : '-';
+                bar.reserve(static_cast<size_t>(w));
+                for (int j = 0; j < w; ++j) {
+                    bar += (j < filled) ? '#' : '-';
                 }
                 out.push_back(ScrollItem{hbox({
                     text("[" + bar + "]") | color(theme.accentColor),
                     text(fmt::format(" {}%", static_cast<int>(v * 100))) | color(theme.hintColor),
                 })});
-            } else if (kind == "action") {
-                out.push_back(ScrollItem{
-                    text("◈ " + it.value("label", std::string{"(action)"}))
-                    | color(theme.buttonActiveTextColor) | bold
-                });
+            } else if (kind == "button" || kind == "action") {
+                agentxx::client::PluginButtonDesc desc;
+                if (!agentxx::client::parsePluginButton(it, panel->plugin, reg.get(), desc)) {
+                    continue;
+                }
+                Element btn = agentxx::client::renderPluginButton(desc, theme);
+                if (desc.clickable) {
+                    UiHitTarget t;
+                    t.plugin   = panel->plugin;
+                    t.ownerId  = panel->id;
+                    t.actionId = desc.actionId;
+                    t.argsJson = desc.argsJson;
+                    hitTargets_.push_back(std::move(t));
+                    btn = btn | reflect(hitTargets_.back().box);
+                }
+                if (!desc.prefix.empty()) {
+                    out.push_back(ScrollItem{hbox({
+                        text(desc.prefix) | color(theme.normalColor),
+                        std::move(btn),
+                    })});
+                } else {
+                    out.push_back(ScrollItem{std::move(btn)});
+                }
             } else if (kind == "badge") {
                 out.push_back(ScrollItem{
                     text("● " + it.value("text", std::string{})) | color(theme.accentColor)
@@ -571,6 +623,9 @@ void TUIClientAgentIO::start() {
             // client 插件 UI 注册表快照 (工具消息装饰等; 每帧刷新, 渲染期无锁读)
             ctx_.frameState->pluginRegistry
                 = pluginManager_ ? pluginManager_->uiRegistrySnapshot() : nullptr;
+            // 通用插件按钮命中表: 每帧重建 (renderPluginPanel/renderInfoSidebar
+            // 追加, 仅存可点项; 缩放/滚动/伸缩导致坐标每帧变动)
+            hitTargets_.clear();
             const auto& st = *ctx_.frameState;
 
             Element pendingBar = text("");
@@ -746,11 +801,20 @@ void TUIClientAgentIO::start() {
                         openFailedAppendComponents();
                         return true;
                     }
-                    // Info 侧边栏 Plan Graph 按钮点击 → 打开状态图弹窗
-                    if (planGraphButtonBox_.Contain(mouse.x, mouse.y)
-                        && !planGraphMermaid_.empty()) {
-                        openMermaidDiagram(planGraphMermaid_);
-                        return true;
+                    // 通用插件按钮点击 → 经 manager 派发到插件回调 (IO 线程)
+                    // (顺序: retry/collapsible/pending/failedView 之后、状态栏之前;
+                    // modal 打开时已在上方跳过主界面拾取)
+                    if (pluginManager_) {
+                        UiHitTarget hit;
+                        if (hitTestPluginButton(mouse, hit)) {
+                            pluginManager_->dispatchAction(
+                                hit.plugin,
+                                hit.ownerId,
+                                hit.actionId,
+                                hit.argsJson
+                            );
+                            return true;
+                        }
                     }
                     // 状态栏模型区域点击 → 打开模型选择弹窗
                     if (statusBar_ && statusBar_->modelBox().Contain(mouse.x, mouse.y)) {
@@ -1185,14 +1249,125 @@ void TUIClientAgentIO::openFailedAppendComponents() {
     postRedraw();
 }
 
-void TUIClientAgentIO::openMermaidDiagram(const std::string& mermaid) {
-    if (modal_ && !modal_->hasModal() && !mermaid.empty()) {
-        auto overlay = std::make_shared<MermaidDiagramOverlay>(ctx_, mermaid);
-        overlay->onClose([this] {
-            modal_->popModal();
-        });
-        modal_->pushModal(overlay);
+bool TUIClientAgentIO::hitTestPluginButton(const ftxui::Mouse& mouse, UiHitTarget& out) const {
+    for (const auto& t : hitTargets_) {
+        if (t.box.Contain(mouse.x, mouse.y)) {
+            out = t;
+            return true;
+        }
     }
+    return false;
+}
+
+void TUIClientAgentIO::openOverlay(
+    int         type,
+    std::string title,
+    std::string payload,
+    std::string extraJson,
+    std::string ownerPlugin
+) {
+    // UI 线程调用 (适配器经 postToUi 投递); 单模态 last-wins
+    if (!modal_ || modal_->hasModal()) {
+        return;
+    }
+    overlayOwnerPlugin_ = std::move(ownerPlugin);
+    std::shared_ptr<ftxui::ComponentBase> overlay;
+    // extra_json 可选扩展: width_frac (弹窗宽度占比, 缺省按类型默认)
+    double widthFrac = 0.0;
+    try {
+        if (!extraJson.empty() && extraJson != "{}") {
+            auto extra = neograph::json::parse(extraJson);
+            if (extra.is_object() && extra.contains("width_frac")
+                && extra["width_frac"].is_number()) {
+                widthFrac = extra["width_frac"].get<double>();
+            }
+        }
+    } catch (...) {
+        widthFrac = 0.0;
+    }
+    (void)widthFrac; // 各 overlay 按类型默认占比 (extra 暂仅日志/鉴权预留扩展)
+    switch (type) {
+        case AGENTXX_OVERLAY_MERMAID: {
+            if (payload.empty()) {
+                return;
+            }
+            auto m = std::make_shared<MermaidDiagramOverlay>(ctx_, payload, title);
+            m->onClose([this] {
+                modal_->popModal();
+            });
+            overlay = std::move(m);
+            break;
+        }
+        case AGENTXX_OVERLAY_TEXT: {
+            bool markdown = true;
+            try {
+                if (!extraJson.empty() && extraJson != "{}") {
+                    auto extra = neograph::json::parse(extraJson);
+                    if (extra.is_object() && extra.contains("markdown")
+                        && extra["markdown"].is_boolean()) {
+                        markdown = extra["markdown"].get<bool>();
+                    }
+                }
+            } catch (...) {
+            }
+            auto m = std::make_shared<TextOverlay>(ctx_, title, payload, markdown);
+            m->onClose([this] {
+                modal_->popModal();
+            });
+            overlay = std::move(m);
+            break;
+        }
+        case AGENTXX_OVERLAY_DIFF: {
+            std::string path, oldStr, newStr;
+            try {
+                auto j = neograph::json::parse(payload.empty() ? "{}" : payload);
+                path   = j.value("path", std::string{});
+                oldStr = j.value("old_str", std::string{});
+                newStr = j.value("new_str", std::string{});
+            } catch (...) {
+                return;
+            }
+            auto m = std::make_shared<DiffOverlay>(ctx_, title, path, oldStr, newStr);
+            m->onClose([this] {
+                modal_->popModal();
+            });
+            overlay = std::move(m);
+            break;
+        }
+        case AGENTXX_OVERLAY_CUSTOM: {
+            neograph::json items = neograph::json::array();
+            try {
+                auto j = neograph::json::parse(payload.empty() ? "{}" : payload);
+                if (j.is_object() && j.contains("items") && j["items"].is_array()) {
+                    items = j["items"];
+                } else if (j.is_array()) {
+                    items = j;
+                }
+            } catch (...) {
+                return;
+            }
+            auto m = std::make_shared<CustomOverlay>(ctx_, title, items, overlayOwnerPlugin_);
+            m->onClose([this] {
+                modal_->popModal();
+            });
+            overlay = std::move(m);
+            break;
+        }
+        default:
+            return;
+    }
+    if (overlay) {
+        modal_->pushModal(std::move(overlay));
+    }
+    postRedraw();
+}
+
+void TUIClientAgentIO::closeOverlay() {
+    // UI 线程调用 (适配器经 postToUi 投递)
+    if (modal_ && modal_->hasModal()) {
+        modal_->popModal();
+    }
+    overlayOwnerPlugin_.clear();
     postRedraw();
 }
 

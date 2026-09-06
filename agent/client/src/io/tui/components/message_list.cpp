@@ -2,6 +2,7 @@
 #include "agentxx-client/io/tui/agent_tui.h" // formatDurationMilliseconds / oneLinePreview
 #include "agentxx-client/io/tui/framework/tui_i18n.h"
 #include "agentxx-client/io/tui/framework/tui_settings.h"
+#include "agentxx-client/io/tui/plugin_ui_items.h"
 #include "agentxx/plugin/client_plugin_manager.h" // ClientToolDecor 完整定义 (头文件中仅前置声明)
 #include "agentxx/util/diff_util.h"
 #include "agentxx/util/exception.h"
@@ -441,6 +442,9 @@ Element MessageListComponent::OnRender() {
     // Interrupt 消息时填充 (buildInterruptControl), 供下一帧点击命中检测
     interruptHits_.clear();
 
+    // decor 按钮命中: 同 interruptHits_ 生命期 (OnRender 清空 + 构建期填充)
+    decorHits_.clear();
+
     return hbox({
                text("   "),
                scrollable_->Render() | bold | flex,
@@ -452,6 +456,9 @@ Element MessageListComponent::OnRender() {
 bool MessageListComponent::OnEvent(Event event) {
     if (event.is_mouse()) {
         const auto& mouse = event.mouse();
+        if (handleDecorButtonClick(mouse)) {
+            return true;
+        }
         if (handleCollapsibleClick(mouse)) {
             return true;
         }
@@ -770,7 +777,7 @@ size_t MessageListComponent::estimateHeight(size_t index, int width) {
                             const auto kind = it.value("kind", std::string{"text"});
                             if (kind == "text") {
                                 decorLines += estimateLines(it.value("text", std::string{}), width);
-                            } else if (kind == "button") {
+                            } else if (kind == "button" || kind == "action") {
                                 decorLines += 1;
                             } else if (kind == "separator") {
                                 decorLines += 1;
@@ -1551,7 +1558,23 @@ Element MessageListComponent::buildMessageBlock(
             if (expanded) {
                 if (renderRes.matched && !renderRes.items.empty() && !(finished && isError)) {
                     // 插件装饰/特化工具体 (items 渲染; 失败时回退通用错误展示)
-                    appendDecorItems(renderRes.items, lines, maxWidth);
+                    // decor 按钮 owner=tool_call_id (renderRes 携带归因);
+                    // 非 decor (toolRenderer) 按钮 owner 同样为 tool_call_id
+                    // (TUI 侧组装, 无需插件操心)
+                    agentxx::plugin::ClientToolDecor decorForBody;
+                    if (renderRes.isDecor) {
+                        decorForBody.plugin      = renderRes.decorPlugin;
+                        decorForBody.toolCallId  = renderRes.decorToolCallId.empty()
+                                                       ? msg.tool->toolCallId
+                                                       : renderRes.decorToolCallId;
+                        decorForBody.displayName = renderRes.displayName;
+                        decorForBody.summary     = renderRes.summary;
+                        decorForBody.items       = renderRes.items;
+                    } else {
+                        decorForBody.toolCallId = msg.tool->toolCallId;
+                        decorForBody.items      = renderRes.items;
+                    }
+                    appendDecorToolBody(decorForBody, lines, maxWidth);
                 } else {
                     if (!msg.text.empty()) {
                         // 参数 JSON 缩进格式化 (2 空格) 便于阅读; 解析失败回退原文
@@ -1703,102 +1726,10 @@ void MessageListComponent::appendEditToolBody(const TUIMessage& msg, Elements& l
 }
 
 Element MessageListComponent::renderEditToolDiff(std::string_view oldStr, std::string_view newStr) {
-    using agentxx::util::DiffLineType;
+    // 历史遗留入口: 转调共享 helper (与 DiffOverlay/decor diff 同实现),
+    // 保留供旧调用点兼容; 新代码直接用 renderPluginDiff
     const auto& theme = *ctx_.theme;
-    auto        diff  = agentxx::util::computeLineDiff(oldStr, newStr);
-    if (diff.empty()) {
-        return text(tr("tool.noChanges")) | color(theme.hintColor);
-    }
-
-    const int  screenW    = Terminal::Size().dimx;
-    const bool sideBySide = screenW >= 100;
-
-    auto trunc = [](std::string_view s, size_t maxChars) -> std::string {
-        const auto idx = agentxx::util::findIndexByUtf8Length(s, maxChars);
-        if (idx > 0 && idx < s.size()) {
-            return fmt::format("{}...", s.substr(0, idx));
-        }
-        return std::string{s};
-    };
-
-    if (!sideBySide) {
-        const size_t maxChars = static_cast<size_t>(std::max(20, screenW - 6));
-        Elements     lines;
-        for (const auto& l : diff) {
-            Color       c      = theme.toolColor;
-            std::string prefix = " ";
-            if (l.type == DiffLineType::Add) {
-                c      = theme.accentColor;
-                prefix = "+";
-            } else if (l.type == DiffLineType::Delete) {
-                c      = theme.errorColor;
-                prefix = "-";
-            }
-            lines.push_back(hbox({
-                text(prefix) | color(c),
-                text(" ") | color(theme.hintColor),
-                text(trunc(l.text, maxChars)) | color(c),
-            }));
-        }
-        return vbox(std::move(lines));
-    }
-
-    const int colW  = std::max(20, (screenW - 3) / 2);
-    const int textW = std::max(8, colW - 6);
-
-    Elements leftLines;
-    Elements rightLines;
-    auto     emptyCell = [&]() {
-        return text(" ") | color(theme.hintColor);
-    };
-    auto makeCell = [&](std::string_view sign, int no, std::string_view txt, Color c) {
-        std::string noStr = (no > 0) ? std::to_string(no) : std::string{};
-        return hbox({
-            text(sign) | color(c),
-            text(noStr) | color(theme.hintColor) | size(WIDTH, EQUAL, 4),
-            text(" "),
-            text(trunc(txt, static_cast<size_t>(textW))) | color(c) | xflex_shrink,
-        });
-    };
-
-    size_t i = 0;
-    while (i < diff.size()) {
-        if (diff[i].type == DiffLineType::Context) {
-            leftLines.push_back(makeCell(" ", diff[i].oldLineNo, diff[i].text, theme.toolColor));
-            rightLines.push_back(makeCell(" ", diff[i].newLineNo, diff[i].text, theme.toolColor));
-            ++i;
-            continue;
-        }
-        std::vector<const agentxx::util::DiffLine*> dels;
-        std::vector<const agentxx::util::DiffLine*> adds;
-        while (i < diff.size() && diff[i].type == DiffLineType::Delete) {
-            dels.push_back(&diff[i]);
-            ++i;
-        }
-        while (i < diff.size() && diff[i].type == DiffLineType::Add) {
-            adds.push_back(&diff[i]);
-            ++i;
-        }
-        const size_t maxk = std::max(dels.size(), adds.size());
-        for (size_t k = 0; k < maxk; ++k) {
-            leftLines.push_back(
-                (k < dels.size())
-                    ? makeCell("-", dels[k]->oldLineNo, dels[k]->text, theme.errorColor)
-                    : emptyCell()
-            );
-            rightLines.push_back(
-                (k < adds.size())
-                    ? makeCell("+", adds[k]->newLineNo, adds[k]->text, theme.accentColor)
-                    : emptyCell()
-            );
-        }
-    }
-
-    return hbox({
-        vbox(std::move(leftLines)) | flex,
-        separator(),
-        vbox(std::move(rightLines)) | flex,
-    });
+    return agentxx::client::renderPluginDiff({}, oldStr, newStr, theme);
 }
 
 // ---------------------------------------------------------------------------
@@ -1806,7 +1737,8 @@ Element MessageListComponent::renderEditToolDiff(std::string_view oldStr, std::s
 // 装饰内容 (displayName/summary/items) 由插件经 update_tool_decor 推送,
 // items schema 见
 // [client_plugin_api.h](/agent/lib/include/agentxx/plugin/api/client_plugin_api.h)
-// (text/diagram kind)
+// (text/button/diagram/separator/diff); button 走通用 action_id 派发
+// (owner=tool_call_id), 解析/配色走 plugin_ui_items 共享 helper
 // ---------------------------------------------------------------------------
 
 void MessageListComponent::appendDecorToolBody(
@@ -1814,17 +1746,33 @@ void MessageListComponent::appendDecorToolBody(
     Elements&                               lines,
     int                                     maxWidth
 ) {
-    appendDecorItems(decor.items, lines, maxWidth);
+    appendDecorItems(decor.items, decor.plugin, decor.toolCallId, lines, maxWidth);
 }
 
 void MessageListComponent::appendDecorItems(
     const neograph::json& items,
+    const std::string&    plugin,
+    const std::string&    ownerId,
     Elements&             lines,
     int                   maxWidth
 ) {
     const auto& theme = *ctx_.theme;
     // 状态图渲染宽度预算: 内容缩进 (4) + 边界余量 (2); 下限保底可读
     const int diagW = (maxWidth > 0) ? std::max(20, maxWidth - 6) : 0;
+    auto        reg
+        = ctx_.frameState && ctx_.frameState->pluginRegistry ? ctx_.frameState->pluginRegistry.get()
+                                                             : nullptr;
+
+    auto hit = [this, &plugin, &ownerId](std::string actionId, std::string argsJson) {
+        DecorHitBox hb;
+        hb.plugin   = plugin;
+        hb.ownerId  = ownerId;
+        hb.actionId = std::move(actionId);
+        hb.argsJson = std::move(argsJson);
+        hb.box      = std::make_shared<Box>();
+        decorHits_.push_back(std::move(hb));
+        return decorHits_.back().box;
+    };
 
     for (const auto& it : items) {
         if (!it.is_object()) {
@@ -1832,42 +1780,41 @@ void MessageListComponent::appendDecorItems(
         }
         const auto kind = it.value("kind", std::string{"text"});
         if (kind == "text") {
-            // role 样式映射: title=高亮强调 / normal=普通 / hint=减淡提示
-            const auto  role   = it.value("role", std::string{"normal"});
-            const auto& txt    = it.value("text", std::string{});
-            Color       c      = theme.normalColor;
-            bool        isBold = false;
-            bool        isDim  = false;
-            if (role == "title") {
-                c      = theme.accentColor;
-                isBold = true;
-            } else if (role == "hint") {
-                c     = theme.hintColor;
-                isDim = true;
-            }
-            Element el = paragraph(txt) | color(c);
-            if (isBold) {
-                el = el | bold;
-            }
-            if (isDim) {
+            // role 样式映射走共享 helper (title=高亮强调 / normal=普通 / hint=减淡提示)
+            const auto& txt = it.value("text", std::string{});
+            Element     el  = agentxx::client::renderPluginTextItem(
+                txt,
+                it.value("role", std::string{"normal"}),
+                theme
+            );
+            // hint 减淡: 共享 helper 未加 dim, 此处补 (与历史渲染一致)
+            if (it.value("role", std::string{"normal"}) == "hint") {
                 el = el | dim;
             }
+            // title 加粗: 共享 helper 已加 bold, 此处不再重复
             lines.push_back(hbox({
                 text("    "),
                 el | xflex_shrink,
             }));
-        } else if (kind == "button") {
-            // Graph 按钮 (点击弹窗): 渲染为带背景的标签, 与 Todo/Note 视觉分区
-            const auto label = it.value("label", std::string{"Button"});
-            // 若携带 mermaid，则为 Graph 弹窗按钮；否则为通用操作按钮
-            Element btn = text(" " + label + " ") | bgcolor(theme.buttonBgColor)
-                          | color(theme.buttonTextColor) | bold;
+        } else if (kind == "button" || kind == "action") {
+            // 通用按钮: 解析 + 配色走共享 helper; 可点时挂 decorHits_ + reflect
+            // (owner=tool_call_id, 以 toolCallId 作 owner_id, fallback 覆盖)
+            agentxx::client::PluginButtonDesc desc;
+            if (!agentxx::client::parsePluginButton(it, plugin, reg, desc)) {
+                continue;
+            }
+            Element btn = agentxx::client::renderPluginButton(desc, theme);
+            if (desc.clickable) {
+                auto box = hit(desc.actionId, desc.argsJson);
+                btn      = btn | reflect(*box);
+            }
             lines.push_back(hbox({
                 text("    "),
                 btn | xflex_shrink,
             }));
         } else if (kind == "diagram") {
             // Mermaid stateDiagram-v2 ASCII 状态图 (通用组件; 解析失败静默跳过)
+            // 兼容保留渲染, 不承担交互 (交互走 button + action_id)
             const auto mermaid = it.value("mermaid", std::string{});
             auto       diagram = markdown::parseMermaidStateDiagram(mermaid);
             if (!diagram.nodes.empty()) {
@@ -1889,20 +1836,37 @@ void MessageListComponent::appendDecorItems(
                 text("─") | color(theme.hintColor) | dim | xflex_shrink,
             }));
         } else if (kind == "diff") {
-            // 差异对比渲染 (旧 appendEditToolBody 通用化): 支持 side-by-side 与统一 diff
-            const auto path   = it.value("path", std::string{});
-            const auto oldStr = it.value("old_str", std::string{});
-            const auto newStr = it.value("new_str", std::string{});
-            if (!path.empty()) {
-                lines.push_back(hbox({
-                    text(tr("tool.file")) | color(theme.hintColor),
-                    text(path) | color(theme.toolColor) | xflex_shrink,
-                }));
-            }
-            lines.push_back(renderEditToolDiff(oldStr, newStr));
+            // 差异对比渲染走共享 helper (与 DiffOverlay 同实现)
+            lines.push_back(agentxx::client::renderPluginDiff(
+                it.value("path", std::string{}),
+                it.value("old_str", std::string{}),
+                it.value("new_str", std::string{}),
+                theme
+            ));
         }
         // 其余 kind 忽略 (未知项向前兼容)
     }
+}
+
+bool MessageListComponent::handleDecorButtonClick(const Mouse& mouse) {
+    if (mouse.button != Mouse::Left || mouse.motion != Mouse::Released) {
+        return false;
+    }
+    for (const auto& h : decorHits_) {
+        if (!h.box) {
+            continue;
+        }
+        const auto& box = *h.box;
+        if (mouse.y < box.y_min || mouse.y > box.y_max || mouse.x < box.x_min
+            || mouse.x > box.x_max) {
+            continue;
+        }
+        if (auto mgr = ctx_.pluginManager) {
+            mgr->dispatchAction(h.plugin, h.ownerId, h.actionId, h.argsJson);
+        }
+        return true;
+    }
+    return false;
 }
 
 // ---------------------------------------------------------------------------

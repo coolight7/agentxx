@@ -94,6 +94,16 @@ struct ClientToolRenderReg {
     std::string         templateSummaryTemplate;
 };
 
+/// 通用动作绑定记录 (UI 注册表快照条目; bind_action_handler 写入)
+/// - targetId 空串 = 本实例兜底 (方案 A fallback: 精确匹配优先, 未命中回落 "")
+/// - 内容与绑定正交: 按钮可先渲染后绑定, 渲染时按快照有无绑定决定是否可点
+struct ClientActionBinding {
+    std::string       targetId; ///< 归属键 (section_id/panel_id/tool_call_id); "" = 兜底
+    std::string       plugin;   ///< 所属插件名
+    AgentxxUiActionFn cb = nullptr;
+    void*             ud = nullptr;
+};
+
 /// UI 注册表快照 (UI 线程渲染读取; COW shared_ptr 语义)
 struct ClientUiRegistry {
     std::vector<ClientStatusItem>    statusItems;
@@ -102,6 +112,8 @@ struct ClientUiRegistry {
     std::vector<ClientCommand>       commands;
     std::vector<ClientToolDecor>     toolDecors;
     std::vector<ClientToolRenderReg> toolRenderers;
+    /// 通用动作绑定 (COW 快照: UI 线程渲染时查"该按钮是否可点", 无锁读)
+    std::vector<ClientActionBinding> actionBindings;
 };
 
 /// 工具特化渲染统一结果
@@ -111,6 +123,11 @@ struct ClientToolRenderResult {
     neograph::json items   = neograph::json::array();
     bool           matched = false;
     bool           isDecor = false; ///< 是否来自动态 toolDecors (update_tool_decor)
+    /// decor 归因 (isDecor=true 时有效; UI 侧组装 owner_id=toolCallId 用):
+    /// button 派发 owner_id 统一为 tool_call_id (以 toolCallId 作 owner_id,
+    /// 插件 bind 一次永久生效, 见方案 A); 非 decor 时为空
+    std::string decorPlugin;
+    std::string decorToolCallId;
 };
 
 /// 渲染客户端工具特化内容 (折叠头/展开体)
@@ -171,6 +188,8 @@ public:
     std::vector<ClientToolDecor> toolDecorRegs;
     /// 工具特化渲染器 (disable 保留, enable 恢复; 以 plugin+toolName 键控)
     std::vector<ClientToolRenderReg>           toolRenderRegs;
+    /// 通用动作绑定 (disable 保留, enable 恢复; 以 plugin+targetId 键控)
+    std::vector<ClientActionBinding> actionRegs;
     std::vector<std::shared_ptr<Subscription>> subscriptions; ///< 已订阅事件 (disable 保留)
     std::vector<std::shared_ptr<void>> statusItemHandles; ///< 状态栏项宿主句柄 (enable 期)
     std::vector<std::shared_ptr<void>> panelHandles;      ///< 面板宿主句柄 (enable 期)
@@ -450,6 +469,50 @@ public:
         return unregisterToolRenderer(inst, strToSv(tool_name));
     }
 
+    /// 绑定动作处理器 (io 线程; cb 空则失败; 同 (plugin,targetId) 覆盖)
+    /// - targetId 空串 = 本实例兜底 (方案 A fallback)
+    /// - 同步写 uiRegistry_ (COW) + inst->actionRegs (disable/enable 恢复用)
+    /// 返回 0 成功
+    int bindActionHandler(
+        ClientPluginInstance*   inst,
+        AgentxxPluginStringView target_id,
+        AgentxxUiActionFn       on_action,
+        void*                   user_data
+    );
+
+    int bindActionHandler(
+        ClientPluginInstance* inst,
+        std::string_view      target_id,
+        AgentxxUiActionFn     on_action,
+        void*                 user_data
+    ) {
+        return bindActionHandler(inst, strToSv(target_id), on_action, user_data);
+    }
+
+    /// 解绑动作处理器 (不存在忽略, 返回 0)
+    int unbindActionHandler(ClientPluginInstance* inst, AgentxxPluginStringView target_id);
+
+    int unbindActionHandler(ClientPluginInstance* inst, std::string_view target_id) {
+        return unbindActionHandler(inst, strToSv(target_id));
+    }
+
+    /// UI 线程调 (点击命中后), 内部 postToIo 到 io 线程二次校验后派发:
+    /// 插件存在且 enabled → 精确 bindings[ownerId] 命中否则回落 [""] →
+    /// 快照 cb/ud 与实例当前一致 → InflightGuard 后直调 cb
+    /// - 任意线程可调 (UI 线程点击路径)
+    void dispatchAction(
+        std::string plugin,
+        std::string ownerId,
+        std::string actionId,
+        std::string argsJson
+    );
+
+    /// 通用 overlay 打开 (io 线程; 校验 version/type, 拷贝字符串后经
+    /// adapter->onOverlayOpen 投递 UI 线程); 返回 0 成功
+    int openOverlay(ClientPluginInstance* inst, const AgentxxOverlaySpec* spec);
+    /// 通用 overlay 关闭 (io 线程; 经 adapter->onOverlayClose)
+    void closeOverlay(ClientPluginInstance* inst);
+
     /// 注册命令; 返回 0 成功 (名字冲突返回非 0)
     int registerCommand(
         ClientPluginInstance*   inst,
@@ -670,6 +733,20 @@ public:
     ) {
         return false;
     }
+
+    /// 通用 overlay 打开 (client io 线程; 快速返回, 实现须自行跨线程投递)
+    /// - type: AgentxxOverlayType (0=MERMAID 1=TEXT 2=DIFF 3=CUSTOM)
+    /// - 单模态 last-wins: 替换当前 overlay (含核心弹窗)
+    virtual void onOverlayOpen(
+        const std::string& /*plugin*/,
+        int /*type*/,
+        const std::string& /*title*/,
+        const std::string& /*payload*/,
+        const std::string& /*extraJson*/
+    ) {}
+
+    /// 通用 overlay 关闭 (client io 线程; plugin 仅记日志/鉴权预留)
+    virtual void onOverlayClose(const std::string& /*plugin*/) {}
 };
 
 } // namespace plugin

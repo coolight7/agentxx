@@ -7,8 +7,13 @@
 /// 4. 命令执行: /example (send 动作) / example_toast (toast 动作)
 /// 5. 跨端数据: send_plugin_data → adapter sendPluginData (WirePluginDataUp 路径)
 /// 6. disable/enable 恢复与 unload 清理 (含 Info 栏段落注册/摘除信号)
+/// 18. 通用交互: bind/unbind 覆盖 + 精确优先 vs fallback + 上下文透传
+/// 19. 通用 overlay: open/close 参数校验 + 适配器信号
+/// 20. planning 端到端: dispatch(open_graph) → open_overlay(MERMAID)
+/// 21. kit::ActionController 单测 (header-only, 无宿主)
 #include "test_client_plugins.h"
 
+#include "agentxx-client/io/tui/plugin_ui_items.h"
 #include "agentxx/plugin/api/plugin_kit.h"
 #include "agentxx/plugin/client_plugin_manager.h"
 #include "agentxx/util/log.h"
@@ -92,7 +97,9 @@ public:
             std::string{pi::ClientToast},
             std::string{pi::ClientInfoSection},
             std::string{pi::ClientCommand},
-            std::string{pi::ClientMsgDecor}
+            std::string{pi::ClientMsgDecor},
+            std::string{pi::ClientAction},
+            std::string{pi::ClientOverlay}
         };
     }
 
@@ -182,6 +189,28 @@ public:
         return true;
     }
 
+    void onOverlayOpen(
+        const std::string& plugin,
+        int                type,
+        const std::string& title,
+        const std::string& payload,
+        const std::string& extraJson
+    ) override {
+        std::lock_guard<std::mutex> lock(m_);
+        ++overlayOpenCount_;
+        lastOverlayPlugin_  = plugin;
+        lastOverlayType_    = type;
+        lastOverlayTitle_   = title;
+        lastOverlayPayload_ = payload;
+        lastOverlayExtra_   = extraJson;
+    }
+
+    void onOverlayClose(const std::string& plugin) override {
+        std::lock_guard<std::mutex> lock(m_);
+        ++overlayCloseCount_;
+        lastOverlayClosePlugin_ = plugin;
+    }
+
     // ---- 读取 (加锁) ----
     int statusRegistered() const {
         std::lock_guard<std::mutex> lock(m_);
@@ -233,6 +262,36 @@ public:
         return dataUpCount_;
     }
 
+    int overlayOpenCount() const {
+        std::lock_guard<std::mutex> lock(m_);
+        return overlayOpenCount_;
+    }
+
+    int overlayCloseCount() const {
+        std::lock_guard<std::mutex> lock(m_);
+        return overlayCloseCount_;
+    }
+
+    int lastOverlayType() const {
+        std::lock_guard<std::mutex> lock(m_);
+        return lastOverlayType_;
+    }
+
+    std::string lastOverlayPlugin() const {
+        std::lock_guard<std::mutex> lock(m_);
+        return lastOverlayPlugin_;
+    }
+
+    std::string lastOverlayTitle() const {
+        std::lock_guard<std::mutex> lock(m_);
+        return lastOverlayTitle_;
+    }
+
+    std::string lastOverlayPayload() const {
+        std::lock_guard<std::mutex> lock(m_);
+        return lastOverlayPayload_;
+    }
+
     std::string lastSent() const {
         std::lock_guard<std::mutex> lock(m_);
         return lastSent_;
@@ -273,7 +332,10 @@ private:
     int                toastCount_            = 0;
     int                sendCount_             = 0;
     int                dataUpCount_           = 0;
+    int                overlayOpenCount_      = 0;
+    int                overlayCloseCount_     = 0;
     int                lastToastLvl_          = 0;
+    int                lastOverlayType_       = -1;
     std::string        lastStatusId_;
     std::string        lastPanelId_;
     std::string        lastInfoSectionId_;
@@ -282,6 +344,11 @@ private:
     std::string        lastDataPlugin_;
     std::string        lastDataEvent_;
     std::string        lastDataJson_;
+    std::string        lastOverlayPlugin_;
+    std::string        lastOverlayTitle_;
+    std::string        lastOverlayPayload_;
+    std::string        lastOverlayExtra_;
+    std::string        lastOverlayClosePlugin_;
 };
 
 asio::awaitable<TestResult> run_client_plugin_tests() {
@@ -1045,12 +1112,17 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                     XX_TEST_EXPECT_TRUE(dump.find("[#] done step 0") != std::string::npos);
                     XX_TEST_EXPECT_TRUE(dump.find("test note 123") != std::string::npos);
                     // 验证 items 中的 |- 前缀与 Graph 按钮布局契约
+                    // (双发: 新 action_id + 老 mermaid 兼容字段)
                     XX_TEST_EXPECT_TRUE(sec.items.is_array());
                     XX_TEST_EXPECT_TRUE(sec.items.size() >= 2);
                     XX_TEST_EXPECT_EQ(sec.items[0].value("kind", ""), std::string{"text"});
                     XX_TEST_EXPECT_EQ(sec.items[0].value("text", ""), std::string{"|- "});
                     XX_TEST_EXPECT_EQ(sec.items[1].value("kind", ""), std::string{"button"});
                     XX_TEST_EXPECT_EQ(sec.items[1].value("label", ""), std::string{"[Graph]"});
+                    XX_TEST_EXPECT_EQ(
+                        sec.items[1].value("action_id", ""),
+                        std::string{"planning.open_graph"}
+                    );
                     XX_TEST_EXPECT_TRUE(sec.items[1].contains("mermaid"));
                 }
             }
@@ -1364,6 +1436,368 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
 
             co_await mgr->unloadAsync("agentxx_execute_command");
             XX_TEST_EXPECT_TRUE(mgr->find("agentxx_execute_command") == nullptr);
+        }
+    }
+
+    // ---- 18. 通用交互: bind/unbind 覆盖语义 + 精确优先 vs fallback ----
+    {
+        std::atomic<int> hitsExact{0};
+        std::atomic<int> hitsFallback{0};
+        std::string      gotOwner, gotAction, gotArgs;
+        auto             exactFn = +[](const AgentxxUiActionContext* ctx, void* ud) {
+            ++(*static_cast<std::atomic<int>*>(ud));
+            (void)ctx;
+        };
+        auto fallbackFn = +[](const AgentxxUiActionContext* ctx, void* ud) {
+            ++(*static_cast<std::atomic<int>*>(ud));
+            (void)ctx;
+        };
+        // 用 example_plugin 实例的 host 直调 vtable (io 线程同步)
+        auto exPath = findExamplePluginPath();
+        auto exInst = co_await mgr->loadNativeAsync(exPath);
+        XX_TEST_EXPECT_TRUE(exInst != nullptr);
+        if (exInst) {
+            const auto ui = agentxx::plugin::ClientIfaces::query(&exInst->host).ui;
+            XX_TEST_EXPECT_TRUE(ui != nullptr && ui->bind_action_handler != nullptr);
+            XX_TEST_EXPECT_TRUE(ui != nullptr && ui->unbind_action_handler != nullptr);
+            if (ui && ui->bind_action_handler && ui->unbind_action_handler) {
+                // cb 空 → 失败
+                auto emptySv = agentxx::plugin::PluginStringView::from("", 0);
+                XX_TEST_EXPECT_TRUE(
+                    ui->bind_action_handler(&exInst->host, &emptySv, nullptr, &hitsFallback)
+                    != 0
+                );
+                // bind fallback ("") + 精确 ("sec1")
+                auto secSv = agentxx::plugin::PluginStringView::fromCstr("sec1");
+                XX_TEST_EXPECT_EQ(
+                    ui->bind_action_handler(&exInst->host, &emptySv, fallbackFn, &hitsFallback),
+                    0
+                );
+                XX_TEST_EXPECT_EQ(
+                    ui->bind_action_handler(&exInst->host, &secSv, exactFn, &hitsExact),
+                    0
+                );
+                // 快照可见 (UI 线程渲染依据)
+                {
+                    auto reg = mgr->uiRegistrySnapshot();
+                    XX_TEST_EXPECT_TRUE(reg != nullptr);
+                    if (reg) {
+                        XX_TEST_EXPECT_TRUE(reg->actionBindings.size() >= 2);
+                    }
+                }
+                // 精确优先: owner=sec1 → exact
+                mgr->dispatchAction("example_plugin", "sec1", "a.do", "{}");
+                XX_TEST_EXPECT_EQ(hitsExact.load(), 1);
+                XX_TEST_EXPECT_EQ(hitsFallback.load(), 0);
+                // 未命中精确 → 回落 "": owner=other → fallback
+                mgr->dispatchAction("example_plugin", "other", "a.do", "{}");
+                XX_TEST_EXPECT_EQ(hitsExact.load(), 1);
+                XX_TEST_EXPECT_EQ(hitsFallback.load(), 1);
+                // 覆盖语义: 同 (plugin,target) 重绑覆盖
+                std::atomic<int> hitsExact2{0};
+                XX_TEST_EXPECT_EQ(
+                    ui->bind_action_handler(&exInst->host, &secSv, exactFn, &hitsExact2),
+                    0
+                );
+                mgr->dispatchAction("example_plugin", "sec1", "a.do", "{}");
+                XX_TEST_EXPECT_EQ(hitsExact.load(), 1);
+                XX_TEST_EXPECT_EQ(hitsExact2.load(), 1);
+                // unbind 精确后回落 fallback
+                XX_TEST_EXPECT_EQ(ui->unbind_action_handler(&exInst->host, &secSv), 0);
+                mgr->dispatchAction("example_plugin", "sec1", "a.do", "{}");
+                XX_TEST_EXPECT_EQ(hitsFallback.load(), 2);
+                // disable 保留 / enable 恢复
+                mgr->disable("example_plugin");
+                {
+                    auto reg = mgr->uiRegistrySnapshot();
+                    bool any = false;
+                    if (reg) {
+                        for (const auto& b : reg->actionBindings) {
+                            if (b.plugin == "example_plugin") {
+                                any = true;
+                            }
+                        }
+                    }
+                    XX_TEST_EXPECT_FALSE(any);
+                }
+                mgr->enable("example_plugin");
+                {
+                    auto reg = mgr->uiRegistrySnapshot();
+                    bool any = false;
+                    if (reg) {
+                        for (const auto& b : reg->actionBindings) {
+                            if (b.plugin == "example_plugin") {
+                                any = true;
+                            }
+                        }
+                    }
+                    XX_TEST_EXPECT_TRUE(any);
+                }
+                // dispatch 上下文内容校验 (owner/action/args 透传)
+                struct CtxCap {
+                    std::string owner, action, args;
+                };
+                CtxCap cap;
+                auto   capFn = +[](const AgentxxUiActionContext* ctx, void* ud) {
+                    auto* c = static_cast<CtxCap*>(ud);
+                    if (ctx) {
+                        if (ctx->owner_id.data) {
+                            c->owner.assign(ctx->owner_id.data, ctx->owner_id.size);
+                        }
+                        if (ctx->action_id.data) {
+                            c->action.assign(ctx->action_id.data, ctx->action_id.size);
+                        }
+                        if (ctx->action_args.data) {
+                            c->args.assign(ctx->action_args.data, ctx->action_args.size);
+                        }
+                    }
+                };
+                XX_TEST_EXPECT_EQ(
+                    ui->bind_action_handler(&exInst->host, &emptySv, capFn, &cap),
+                    0
+                );
+                mgr->dispatchAction("example_plugin", "toolCallX", "planning.open_graph", R"({"k":1})");
+                XX_TEST_EXPECT_EQ(cap.owner, "toolCallX");
+                XX_TEST_EXPECT_EQ(cap.action, "planning.open_graph");
+                XX_TEST_EXPECT_TRUE(cap.args.find("\"k\"") != std::string::npos);
+                // 未知 action_id 同样派发 (插件侧查表, 宿主不拦截);
+                // 无绑定插件 → 丢弃不崩溃
+                mgr->dispatchAction("example_plugin", "sec1", "no.such", "{}");
+                mgr->dispatchAction("no_plugin", "sec1", "a.do", "{}");
+            }
+            co_await mgr->unloadAsync("example_plugin");
+            XX_TEST_EXPECT_TRUE(mgr->find("example_plugin") == nullptr);
+            // unload 后点击丢弃 (快照已清)
+            {
+                auto reg = mgr->uiRegistrySnapshot();
+                bool any = false;
+                if (reg) {
+                    for (const auto& b : reg->actionBindings) {
+                        if (b.plugin == "example_plugin") {
+                            any = true;
+                        }
+                    }
+                }
+                XX_TEST_EXPECT_FALSE(any);
+            }
+        }
+    }
+
+    // ---- 19. 通用 overlay: open/close 参数校验 + 适配器信号 ----
+    {
+        auto exPath = findExamplePluginPath();
+        auto exInst = co_await mgr->loadNativeAsync(exPath);
+        XX_TEST_EXPECT_TRUE(exInst != nullptr);
+        if (exInst) {
+            const auto ui = agentxx::plugin::ClientIfaces::query(&exInst->host).ui;
+            XX_TEST_EXPECT_TRUE(ui != nullptr && ui->open_overlay != nullptr);
+            XX_TEST_EXPECT_TRUE(ui != nullptr && ui->close_overlay != nullptr);
+            if (ui && ui->open_overlay && ui->close_overlay) {
+                // version 非法 → 失败
+                AgentxxOverlaySpec badVer{};
+                badVer.version = 99;
+                badVer.type    = AGENTXX_OVERLAY_MERMAID;
+                XX_TEST_EXPECT_TRUE(ui->open_overlay(&exInst->host, &badVer) != 0);
+                // type 越界 → 失败
+                AgentxxOverlaySpec badType{};
+                badType.version = 1;
+                badType.type    = 99;
+                XX_TEST_EXPECT_TRUE(ui->open_overlay(&exInst->host, &badType) != 0);
+                // MERMAID 成功 → 适配器收到信号
+                const char* mermaid = "stateDiagram-v2\n[*] --> a\na --> [*]";
+                AgentxxOverlaySpec spec{};
+                spec.version    = 1;
+                spec.type       = AGENTXX_OVERLAY_MERMAID;
+                spec.title      = agentxx::plugin::PluginStringView::fromCstr("T");
+                spec.payload    = agentxx::plugin::PluginStringView::fromCstr(mermaid);
+                spec.extra_json = agentxx::plugin::PluginStringView::fromCstr("{}");
+                XX_TEST_EXPECT_EQ(ui->open_overlay(&exInst->host, &spec), 0);
+                XX_TEST_EXPECT_EQ(adapter->overlayOpenCount(), 1);
+                XX_TEST_EXPECT_EQ(adapter->lastOverlayType(), AGENTXX_OVERLAY_MERMAID);
+                XX_TEST_EXPECT_EQ(adapter->lastOverlayPlugin(), "example_plugin");
+                XX_TEST_EXPECT_TRUE(
+                    adapter->lastOverlayPayload().find("stateDiagram-v2") != std::string::npos
+                );
+                // close → 适配器收到信号 (不崩溃)
+                ui->close_overlay(&exInst->host);
+                XX_TEST_EXPECT_EQ(adapter->overlayCloseCount(), 1);
+                // DIFF payload 透传 (宿主不解析, 仅校验类型)
+                AgentxxOverlaySpec diffSpec{};
+                diffSpec.version    = 1;
+                diffSpec.type       = AGENTXX_OVERLAY_DIFF;
+                diffSpec.title      = agentxx::plugin::PluginStringView::fromCstr("D");
+                diffSpec.payload    = agentxx::plugin::PluginStringView::fromCstr(
+                    R"({"path":"a","old_str":"x","new_str":"y"})"
+                );
+                diffSpec.extra_json = agentxx::plugin::PluginStringView::fromCstr("{}");
+                XX_TEST_EXPECT_EQ(ui->open_overlay(&exInst->host, &diffSpec), 0);
+                XX_TEST_EXPECT_EQ(adapter->overlayOpenCount(), 2);
+                XX_TEST_EXPECT_EQ(adapter->lastOverlayType(), AGENTXX_OVERLAY_DIFF);
+            }
+            co_await mgr->unloadAsync("example_plugin");
+            XX_TEST_EXPECT_TRUE(mgr->find("example_plugin") == nullptr);
+        }
+    }
+
+    // ---- 20. planning 端到端: dispatch(open_graph) → open_overlay(MERMAID) ----
+    {
+        auto plPath = findPluginPath("agentxx_planning");
+        auto plInst = co_await mgr->loadNativeAsync(plPath);
+        XX_TEST_EXPECT_TRUE(plInst != nullptr);
+        if (plInst) {
+            // 先推送规划 (Info 段 + last_plan_json 就绪)
+            agentxx::agent::WirePluginData plData;
+            plData.plugin = "agentxx_planning";
+            plData.event  = "planning";
+            plData.data
+                = R"({"roadmap":"stateDiagram-v2\n[*] --> e2e\ne2e --> [*]","todos":[]})";
+            mgr->onPluginData(plData);
+            const int openBefore = adapter->overlayOpenCount();
+            // decor owner=toolCallId 同样被 fallback 接住
+            mgr->dispatchAction("agentxx_planning", "call_e2e_1", "planning.open_graph", "{}");
+            XX_TEST_EXPECT_EQ(adapter->overlayOpenCount(), openBefore + 1);
+            XX_TEST_EXPECT_EQ(adapter->lastOverlayType(), AGENTXX_OVERLAY_MERMAID);
+            XX_TEST_EXPECT_TRUE(
+                adapter->lastOverlayPayload().find("e2e") != std::string::npos
+            );
+            XX_TEST_EXPECT_EQ(adapter->lastOverlayTitle(), "Planning Roadmap");
+            co_await mgr->unloadAsync("agentxx_planning");
+            XX_TEST_EXPECT_TRUE(mgr->find("agentxx_planning") == nullptr);
+        }
+    }
+
+    // ---- 21. kit::ActionController 单测 (header-only, 无宿主) ----
+    {
+        agentxx::plugin::kit::ActionController ctl;
+        XX_TEST_EXPECT_TRUE(ctl.empty());
+        int hitsA = 0, hitsB = 0;
+        ctl.on("a.open", [&](const neograph::json&) {
+            ++hitsA;
+        });
+        auto btn = ctl.makeButton(
+            "Go",
+            [&](const neograph::json& args) {
+                ++hitsB;
+                XX_TEST_EXPECT_EQ(args.value("k", 0), 1);
+            },
+            "|- ",
+            "accent",
+            neograph::json{{"k", 1}}
+        );
+        XX_TEST_EXPECT_TRUE(!ctl.empty());
+        XX_TEST_EXPECT_EQ(ctl.size(), 2U);
+        XX_TEST_EXPECT_EQ(btn.value("kind", ""), "button");
+        XX_TEST_EXPECT_EQ(btn.value("label", ""), "Go");
+        XX_TEST_EXPECT_EQ(btn.value("prefix", ""), "|- ");
+        XX_TEST_EXPECT_EQ(btn.value("role", ""), "accent");
+        XX_TEST_EXPECT_TRUE(btn.contains("action_id"));
+        XX_TEST_EXPECT_TRUE(btn.contains("args"));
+        // dispatch 固定 id
+        AgentxxUiActionContext ctxA{};
+        ctxA.version     = 1;
+        auto aId         = agentxx::plugin::PluginStringView::fromCstr("a.open");
+        auto emptyArgs   = agentxx::plugin::PluginStringView::fromCstr("{}");
+        ctxA.action_id   = aId;
+        ctxA.action_args = emptyArgs;
+        agentxx::plugin::kit::ActionController::dispatch(&ctxA, &ctl);
+        XX_TEST_EXPECT_EQ(hitsA, 1);
+        // dispatch 自增 id (args 透传)
+        AgentxxUiActionContext ctxB{};
+        ctxB.version = 1;
+        std::string bIdStr = btn.value("action_id", "");
+        std::string bArgsStr = btn["args"].dump();
+        auto bIdSv = agentxx::plugin::PluginStringView::from(bIdStr.data(), bIdStr.size());
+        auto bArgsSv = agentxx::plugin::PluginStringView::from(bArgsStr.data(), bArgsStr.size());
+        ctxB.action_id = bIdSv;
+        ctxB.action_args = bArgsSv;
+        agentxx::plugin::kit::ActionController::dispatch(&ctxB, &ctl);
+        XX_TEST_EXPECT_EQ(hitsB, 1);
+        // 未知 id / 空指针守卫 (不崩溃)
+        AgentxxUiActionContext ctxC{};
+        ctxC.version = 1;
+        auto cId = agentxx::plugin::PluginStringView::fromCstr("no.such");
+        ctxC.action_id = cId;
+        ctxC.action_args = emptyArgs;
+        agentxx::plugin::kit::ActionController::dispatch(&ctxC, &ctl);
+        agentxx::plugin::kit::ActionController::dispatch(nullptr, &ctl);
+        agentxx::plugin::kit::ActionController::dispatch(&ctxC, nullptr);
+        XX_TEST_EXPECT_EQ(hitsA, 1);
+        XX_TEST_EXPECT_EQ(hitsB, 1);
+    }
+
+    // ---- 22. plugin_ui_items 共享 helper 单测 (headless, 无 FTXUI 布局) ----
+    {
+        using namespace agentxx::client;
+        agentxx::plugin::ClientUiRegistry reg;
+        // 无绑定 → button 不可点
+        PluginButtonDesc desc;
+        neograph::json btnJson = neograph::json::parse(
+            R"({"kind":"button","label":"[Graph]","action_id":"planning.open_graph","args":{},"role":"accent"})"
+        );
+        XX_TEST_EXPECT_TRUE(parsePluginButton(btnJson, "agentxx_planning", &reg, desc));
+        XX_TEST_EXPECT_EQ(desc.label, "[Graph]");
+        XX_TEST_EXPECT_EQ(desc.actionId, "planning.open_graph");
+        XX_TEST_EXPECT_EQ(desc.argsJson, "{}");
+        XX_TEST_EXPECT_TRUE(desc.role == PluginButtonRole::Accent);
+        XX_TEST_EXPECT_FALSE(desc.clickable);
+        // 绑定后 → 可点 (fallback "" 覆盖)
+        agentxx::plugin::ClientActionBinding b;
+        b.plugin   = "agentxx_planning";
+        b.targetId = "";
+        b.cb = +[](const AgentxxUiActionContext*, void*) {};
+        reg.actionBindings.push_back(b);
+        XX_TEST_EXPECT_TRUE(hasPluginBinding("agentxx_planning", &reg));
+        XX_TEST_EXPECT_TRUE(hasPluginBindingFor("agentxx_planning", "call_x", &reg));
+        XX_TEST_EXPECT_FALSE(hasPluginBindingFor("agentxx_planning", "call_x", nullptr));
+        XX_TEST_EXPECT_FALSE(hasPluginBinding("other_plugin", &reg));
+        PluginButtonDesc desc2;
+        XX_TEST_EXPECT_TRUE(parsePluginButton(btnJson, "agentxx_planning", &reg, desc2));
+        XX_TEST_EXPECT_TRUE(desc2.clickable);
+        // 精确绑定同样可点; 他插件不可点
+        reg.actionBindings.clear();
+        b.targetId = "call_x";
+        reg.actionBindings.push_back(b);
+        XX_TEST_EXPECT_TRUE(hasPluginBindingFor("agentxx_planning", "call_x", &reg));
+        // owner=other 时精确未命中且无 "" 兜底 → false
+        XX_TEST_EXPECT_FALSE(hasPluginBindingFor("agentxx_planning", "other_owner", &reg));
+        PluginButtonDesc desc3;
+        XX_TEST_EXPECT_TRUE(parsePluginButton(btnJson, "other_plugin", &reg, desc3));
+        XX_TEST_EXPECT_FALSE(desc3.clickable);
+        // 旧 action kind 兼容: action_id=id, role=accent
+        neograph::json actJson = neograph::json::parse(
+            R"({"kind":"action","id":"rebuild","label":"Rebuild"})"
+        );
+        PluginButtonDesc descAct;
+        XX_TEST_EXPECT_TRUE(parsePluginButton(actJson, "agentxx_planning", &reg, descAct));
+        XX_TEST_EXPECT_EQ(descAct.actionId, "rebuild");
+        XX_TEST_EXPECT_TRUE(descAct.role == PluginButtonRole::Accent);
+        // 无 action_id → 静态 (不可点, 但解析成功)
+        neograph::json staticJson = neograph::json::parse(
+            R"({"kind":"button","label":"Static"})"
+        );
+        PluginButtonDesc descStatic;
+        XX_TEST_EXPECT_TRUE(parsePluginButton(staticJson, "agentxx_planning", &reg, descStatic));
+        XX_TEST_EXPECT_TRUE(descStatic.actionId.empty());
+        XX_TEST_EXPECT_FALSE(descStatic.clickable);
+        // 非 button → false
+        neograph::json textJson = neograph::json::parse(
+            R"({"kind":"text","text":"hi"})"
+        );
+        PluginButtonDesc descText;
+        XX_TEST_EXPECT_FALSE(parsePluginButton(textJson, "agentxx_planning", &reg, descText));
+        // role 非法值 → Normal; danger 映射
+        XX_TEST_EXPECT_TRUE(parseButtonRole("normal") == PluginButtonRole::Normal);
+        XX_TEST_EXPECT_TRUE(parseButtonRole("accent") == PluginButtonRole::Accent);
+        XX_TEST_EXPECT_TRUE(parseButtonRole("danger") == PluginButtonRole::Danger);
+        XX_TEST_EXPECT_TRUE(parseButtonRole("weird") == PluginButtonRole::Normal);
+        // render 不崩溃 (headless 仅构造 Element, 不布局)
+        {
+            auto el1 = renderPluginButton(desc2, TUITheme::darkTheme());
+            XX_TEST_EXPECT_TRUE(static_cast<bool>(el1));
+            auto el2 = renderPluginTextItem("hi", "title", TUITheme::darkTheme());
+            XX_TEST_EXPECT_TRUE(static_cast<bool>(el2));
+            auto el3 = renderPluginDiff("p", "a\n", "b\n", TUITheme::darkTheme(), 120);
+            XX_TEST_EXPECT_TRUE(static_cast<bool>(el3));
         }
     }
 

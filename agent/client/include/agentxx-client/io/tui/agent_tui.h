@@ -276,6 +276,32 @@ public:
     /// 渲染插件侧边栏面板内容 (UI 线程; 从 pluginManager UI 注册表快照读取)
     std::vector<ScrollItem> renderPluginPanel(const std::string& panelId);
 
+    /// 通用 overlay 打开 (open_overlay 驱动; UI 线程; 单模态 last-wins):
+    /// - type: AgentxxOverlayType (0=MERMAID 1=TEXT 2=DIFF 3=CUSTOM)
+    /// - ownerPlugin: 发起插件 (CUSTOM 内按钮与 close 归因用)
+    /// (由 TuiPluginAdapter 在 client io 线程经 postToUi 投递调用)
+    void openOverlay(
+        int         type,
+        std::string title,
+        std::string payload,
+        std::string extraJson,
+        std::string ownerPlugin
+    );
+    /// 通用 overlay 关闭 (UI 线程; 由 TuiPluginAdapter 经 postToUi 投递调用)
+    void closeOverlay();
+
+    /// 通用插件按钮命中表项 (sidebar/panel 渲染时挂载, 全局点击时命中检测)
+    struct UiHitTarget {
+        ftxui::Box  box; ///< reflect 填充的屏幕绝对坐标
+        std::string plugin;   ///< 来自 registry 条目 plugin 字段
+        std::string ownerId;  ///< section_id / panel_id / tool_call_id
+        std::string actionId;
+        std::string argsJson; ///< dump (无参 "{}")
+    };
+
+    /// 通用插件按钮命中检测 (UI 线程; 命中时拷贝出 out 并返回 true)
+    bool hitTestPluginButton(const ftxui::Mouse& mouse, UiHitTarget& out) const;
+
     /// 显示 toast (任意线程可调用; 内部投递到 UI 线程)
     void uiToast(std::string text, int level);
 
@@ -446,8 +472,6 @@ private:
     void ensureLogSidebarTab();
     /// 打开加载失败组件列表模态 (Info 侧边栏 Append "Failed" 组 [view] 按钮触发)
     void openFailedAppendComponents();
-    /// 打开 Graph 状态图弹窗 (Info 侧边栏 Plan Graph 按钮 / 工具消息 Graph 按钮触发)
-    void openMermaidDiagram(const std::string& mermaid);
 
     /// 刷新界面语言后更新侧边栏常驻/已建 tab 标题 (UI 线程)
     void refreshSidebarTabTitles();
@@ -551,10 +575,19 @@ private:
     /// Info 侧边栏 Append "Failed" 组 [view] 按钮命中区域
     /// (渲染时 reflect; 无失败项时重置为无效区域防误触, 见 renderInfoSidebar)
     ftxui::Box failedViewButtonBox_;
-    /// Info 侧边栏 Plan Graph 按钮命中区域 (渲染时 reflect; 无 Plan 时无效)
-    ftxui::Box planGraphButtonBox_;
-    /// 当前 Plan 的 mermaid 源码 (与 planGraphButtonBox_ 同步更新, 点击时用于弹窗)
-    std::string planGraphMermaid_;
+
+    /// 通用插件按钮命中表 (UI 线程独占, 每帧重建):
+    /// - sidebar/panel 渲染入口 clear, message decor 以 decor 为单位追加
+    ///   (与 interruptHits_/collapsibleBoxes_ 同生命期: OnRender 填充,
+    ///   OnEvent/catch 命中检测)
+    /// - 仅存可点项 (action_id 非空 && 快照有该 plugin 绑定)
+    /// - 点击时拷贝 (plugin, ownerId, actionId, argsJson) 快照经
+    ///   manager->dispatchAction 投递 io 线程二次校验后派发
+    std::vector<UiHitTarget> hitTargets_;
+
+    /// 当前通用 overlay 的发起插件 (CUSTOM 内按钮与 close 归因用;
+    /// 单模态 last-wins, 仅记日志/归因, 不做强互斥)
+    std::string overlayOwnerPlugin_;
 
     static constexpr const char* kLogTabId            = "xx_logs";
     static constexpr const char* kInfoTabId           = "xx_info";

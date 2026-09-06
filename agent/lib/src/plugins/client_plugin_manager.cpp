@@ -674,6 +674,22 @@ void ClientPluginManager::enableImpl(std::string_view name, bool userInitiated) 
         }
         uiRegistry_ = std::move(cur);
     }
+    // 通用动作绑定恢复 (直接写回注册表快照, UI 线程恢复可点)
+    for (const auto& reg : inst->actionRegs) {
+        std::lock_guard<std::mutex> lock(uiMutex_);
+        auto                        cur = std::make_shared<ClientUiRegistry>(*uiRegistry_);
+        bool                        dup = false;
+        for (const auto& b : cur->actionBindings) {
+            if (b.plugin == inst->name && b.targetId == reg.targetId) {
+                dup = true;
+                break;
+            }
+        }
+        if (!dup) {
+            cur->actionBindings.push_back(reg);
+        }
+        uiRegistry_ = std::move(cur);
+    }
     XX_LOGI("[client_plugin] enabled: {}", inst->name);
 }
 
@@ -1177,6 +1193,14 @@ void ClientPluginManager::detachAll(ClientPluginInstance* inst, bool keepInfo) {
                 ++it;
             }
         }
+        auto& ab = reg->actionBindings;
+        for (auto it = ab.begin(); it != ab.end();) {
+            if (it->plugin == inst->name) {
+                it = ab.erase(it);
+            } else {
+                ++it;
+            }
+        }
         auto& cm = reg->commands;
         for (auto it = cm.begin(); it != cm.end();) {
             if (it->plugin == inst->name) {
@@ -1220,6 +1244,7 @@ void ClientPluginManager::detachAll(ClientPluginInstance* inst, bool keepInfo) {
         inst->commandRegs.clear();
         inst->toolDecorRegs.clear();
         inst->toolRenderRegs.clear();
+        inst->actionRegs.clear();
         inst->subscriptions.clear();
     }
 }
@@ -1904,6 +1929,71 @@ static int32_t AGENTXX_PLUGIN_CALL
     });
 }
 
+// ---- 通用交互: 动作绑定 / overlay ----
+
+int32_t AGENTXX_PLUGIN_CALL xx_cbind_action_handler(
+    const AgentxxPluginHost*       host,
+    const AgentxxPluginStringView* target_id,
+    AgentxxUiActionFn              on_action,
+    void*                          user_data
+) {
+    return agentxx::plugin::guardVtableCall(-1, [&]() -> int32_t {
+        auto mgr  = clientMgrOf(host);
+        auto inst = clientInstOf(host);
+        if (!mgr || !inst || !on_action) {
+            return -1;
+        }
+        auto targetVal = target_id ? *target_id : agentxx::plugin::PluginStringView::from("", 0);
+        return ioCallSync<int32_t>(mgr, [&]() -> int32_t {
+            return mgr->bindActionHandler(inst, targetVal, on_action, user_data);
+        });
+    });
+}
+
+int32_t AGENTXX_PLUGIN_CALL xx_cunbind_action_handler(
+    const AgentxxPluginHost*       host,
+    const AgentxxPluginStringView* target_id
+) {
+    return agentxx::plugin::guardVtableCall(-1, [&]() -> int32_t {
+        auto mgr  = clientMgrOf(host);
+        auto inst = clientInstOf(host);
+        if (!mgr || !inst) {
+            return -1;
+        }
+        auto targetVal = target_id ? *target_id : agentxx::plugin::PluginStringView::from("", 0);
+        return ioCallSync<int32_t>(mgr, [&]() -> int32_t {
+            return mgr->unbindActionHandler(inst, targetVal);
+        });
+    });
+}
+
+int32_t AGENTXX_PLUGIN_CALL
+    xx_copen_overlay(const AgentxxPluginHost* host, const AgentxxOverlaySpec* spec) {
+    return agentxx::plugin::guardVtableCall(-1, [&]() -> int32_t {
+        auto mgr  = clientMgrOf(host);
+        auto inst = clientInstOf(host);
+        if (!mgr || !inst || !spec) {
+            return -1;
+        }
+        return ioCallSync<int32_t>(mgr, [&]() -> int32_t {
+            return mgr->openOverlay(inst, spec);
+        });
+    });
+}
+
+void AGENTXX_PLUGIN_CALL xx_cclose_overlay(const AgentxxPluginHost* host) {
+    agentxx::plugin::guardVtableCallVoid([&]() {
+        auto mgr  = clientMgrOf(host);
+        auto inst = clientInstOf(host);
+        if (!mgr || !inst) {
+            return;
+        }
+        ioCallSyncVoid(mgr, [&]() {
+            mgr->closeOverlay(inst);
+        });
+    });
+}
+
 /// "agentxx.client.ui" 展示接口表访问器: 表内成员恒非空 (函数实现存在), 子能力是否
 /// 可用由各 register 入口的 hostSupportedInterfaces 门禁决定 (拒绝时返回
 /// NULL/非 0) —— 与接口表 "NULL = 不支持" 契约的分工: 表级 NULL 用于宿主
@@ -1928,6 +2018,10 @@ static const AgentxxClientUiIface* clientUiIface() {
         /* update_tool_decor */ xx_cupdate_tool_decor,
         /* register_tool_renderer */ xx_cregister_tool_renderer,
         /* unregister_tool_renderer */ xx_cunregister_tool_renderer,
+        /* bind_action_handler */ xx_cbind_action_handler,
+        /* unbind_action_handler */ xx_cunbind_action_handler,
+        /* open_overlay */ xx_copen_overlay,
+        /* close_overlay */ xx_cclose_overlay,
     };
     return &table;
 }
@@ -2825,6 +2919,211 @@ int ClientPluginManager::unregisterToolRenderer(
     return 0;
 }
 
+int ClientPluginManager::bindActionHandler(
+    ClientPluginInstance*   inst,
+    AgentxxPluginStringView target_id,
+    AgentxxUiActionFn       on_action,
+    void*                   user_data
+) {
+    if (!inst || !on_action) {
+        return -1;
+    }
+    const std::string target = svToStr(target_id); // 空串 = 实例级 fallback
+    if (!hostSupportedInterfaces().contains(std::string{plugin_interfaces::ClientAction})) {
+        XX_LOGW(
+            "[client_plugin] bind_action `{}` rejected: interface agentxx.client.action unsupported",
+            target.empty() ? "(fallback)" : target
+        );
+        return -1;
+    }
+    ClientActionBinding reg;
+    reg.targetId = target;
+    reg.plugin   = inst->name;
+    reg.cb       = on_action;
+    reg.ud       = user_data;
+    {
+        std::lock_guard<std::mutex> lock(uiMutex_);
+        auto                        cur      = std::make_shared<ClientUiRegistry>(*uiRegistry_);
+        bool                        replaced = false;
+        for (auto& b : cur->actionBindings) {
+            if (b.plugin == inst->name && b.targetId == target) {
+                b        = reg;
+                replaced = true;
+                break;
+            }
+        }
+        if (!replaced) {
+            cur->actionBindings.push_back(reg);
+        }
+        uiRegistry_ = std::move(cur);
+    }
+    bool replacedInst = false;
+    for (auto& b : inst->actionRegs) {
+        if (b.targetId == target) {
+            b            = reg;
+            replacedInst = true;
+            break;
+        }
+    }
+    if (!replacedInst) {
+        inst->actionRegs.push_back(reg);
+    }
+    return 0;
+}
+
+int ClientPluginManager::unbindActionHandler(
+    ClientPluginInstance*   inst,
+    AgentxxPluginStringView target_id
+) {
+    if (!inst) {
+        return -1;
+    }
+    const std::string target = svToStr(target_id);
+    {
+        std::lock_guard<std::mutex> lock(uiMutex_);
+        auto                        cur = std::make_shared<ClientUiRegistry>(*uiRegistry_);
+        cur->actionBindings.erase(
+            std::remove_if(
+                cur->actionBindings.begin(),
+                cur->actionBindings.end(),
+                [&](const auto& b) {
+                    return b.plugin == inst->name && b.targetId == target;
+                }
+            ),
+            cur->actionBindings.end()
+        );
+        uiRegistry_ = std::move(cur);
+    }
+    inst->actionRegs.erase(
+        std::remove_if(
+            inst->actionRegs.begin(),
+            inst->actionRegs.end(),
+            [&](const auto& b) {
+                return b.targetId == target;
+            }
+        ),
+        inst->actionRegs.end()
+    );
+    return 0;
+}
+
+void ClientPluginManager::dispatchAction(
+    std::string plugin,
+    std::string ownerId,
+    std::string actionId,
+    std::string argsJson
+) {
+    if (plugin.empty() || actionId.empty()) {
+        return;
+    }
+    // UI 线程只拷贝字符串快照, 派发回 io 线程二次校验 (防"点击瞬间 unbind/unload" UAF)
+    auto self = shared_from_this();
+    postToIo([self,
+              plugin   = std::move(plugin),
+              ownerId  = std::move(ownerId),
+              actionId = std::move(actionId),
+              argsJson = std::move(argsJson)]() mutable {
+        auto inst = self->find(plugin);
+        if (!inst || !inst->enabled) {
+            XX_LOGW("[client_plugin] dispatch action `{}` dropped: plugin `{}` missing/disabled", actionId, plugin);
+            return;
+        }
+        // 精确匹配优先, 未命中回落实例级 fallback ("")
+        const ClientActionBinding* hit = nullptr;
+        for (const auto& b : inst->actionRegs) {
+            if (b.targetId == ownerId && b.cb) {
+                hit = &b;
+                break;
+            }
+        }
+        if (!hit) {
+            for (const auto& b : inst->actionRegs) {
+                if (b.targetId.empty() && b.cb) {
+                    hit = &b;
+                    break;
+                }
+            }
+        }
+        if (!hit) {
+            XX_LOGW(
+                "[client_plugin] dispatch action `{}` dropped: no binding (plugin=`{}`, owner=`{}`)",
+                actionId,
+                plugin,
+                ownerId
+            );
+            return;
+        }
+        // 快照一致性: 快照中的 cb/ud 须与实例当前一致 (防点击瞬间 unbind 后重绑旧回调)
+        {
+            std::lock_guard<std::mutex> lock(self->uiMutex_);
+            bool                        snapOk = false;
+            for (const auto& b : self->uiRegistry_->actionBindings) {
+                if (b.plugin == plugin && b.targetId == hit->targetId && b.cb == hit->cb
+                    && b.ud == hit->ud) {
+                    snapOk = true;
+                    break;
+                }
+            }
+            if (!snapOk) {
+                XX_LOGW(
+                    "[client_plugin] dispatch action `{}` dropped: binding changed mid-flight",
+                    actionId
+                );
+                return;
+            }
+        }
+        PluginInstanceBase::InflightGuard guard(inst.get());
+        AgentxxUiActionContext             ctx{};
+        ctx.version     = 1;
+        ctx.owner_id    = agentxx::plugin::PluginStringView::from(ownerId.data(), ownerId.size());
+        ctx.action_id   = agentxx::plugin::PluginStringView::from(actionId.data(), actionId.size());
+        ctx.action_args = agentxx::plugin::PluginStringView::from(argsJson.data(), argsJson.size());
+        auto cb         = hit->cb;
+        auto ud         = hit->ud;
+        // C ABI 回调异常兜底: 单个插件违约不得打断 io 事件循环
+        try {
+            cb(&ctx, ud);
+        } catch (const std::exception& e) {
+            XX_LOGW("[client_plugin] `{}` action `{}` threw: {}", plugin, actionId, e.what());
+        } catch (...) {
+            XX_LOGW("[client_plugin] `{}` action `{}` threw unknown exception", plugin, actionId);
+        }
+    });
+}
+
+int ClientPluginManager::openOverlay(ClientPluginInstance* inst, const AgentxxOverlaySpec* spec) {
+    if (!inst || !spec || spec->version != 1) {
+        return -1;
+    }
+    if (spec->type < AGENTXX_OVERLAY_MERMAID || spec->type > AGENTXX_OVERLAY_CUSTOM) {
+        return -1;
+    }
+    if (!hostSupportedInterfaces().contains(std::string{plugin_interfaces::ClientOverlay})) {
+        XX_LOGW(
+            "[client_plugin] open_overlay rejected: interface agentxx.client.overlay unsupported"
+        );
+        return -1;
+    }
+    if (!uiAdapter_) {
+        return -1;
+    }
+    const std::string title   = svToStr(spec->title);
+    const std::string payload = svToStr(spec->payload);
+    const std::string extra
+        = agentxx::plugin::PluginStringView::empty(&spec->extra_json) ? "{}"
+                                                                      : svToStr(spec->extra_json);
+    // 拷贝字符串后直调 adapter (TUI 实现内部 postToUi, 不阻塞插件)
+    uiAdapter_->onOverlayOpen(inst->name, spec->type, title, payload, extra);
+    return 0;
+}
+
+void ClientPluginManager::closeOverlay(ClientPluginInstance* inst) {
+    if (!inst || !uiAdapter_) {
+        return;
+    }
+    uiAdapter_->onOverlayClose(inst->name);
+}
+
 ClientToolRenderResult renderClientTool(
     const ClientUiRegistry* reg,
     std::string_view        toolCallId,
@@ -2844,11 +3143,13 @@ ClientToolRenderResult renderClientTool(
     if (!toolCallId.empty()) {
         for (const auto& d : reg->toolDecors) {
             if (d.toolCallId == toolCallId) {
-                res.displayName = d.displayName;
-                res.summary     = d.summary;
-                res.items       = d.items;
-                res.matched     = true;
-                res.isDecor     = true;
+                res.displayName     = d.displayName;
+                res.summary         = d.summary;
+                res.items           = d.items;
+                res.matched         = true;
+                res.isDecor         = true;
+                res.decorPlugin     = d.plugin;
+                res.decorToolCallId = d.toolCallId;
                 return res;
             }
         }

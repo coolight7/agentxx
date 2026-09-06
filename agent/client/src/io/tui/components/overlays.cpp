@@ -2,6 +2,7 @@
 #include "agentxx-client/io/tui/agent_tui.h"
 #include "agentxx-client/io/tui/framework/tui_i18n.h"
 #include "agentxx-client/io/tui/framework/tui_settings.h"
+#include "agentxx-client/io/tui/plugin_ui_items.h"
 #include "agentxx/agent/config_static.h"
 #include "agentxx/plugin/api/plugin_api.h"
 #include "agentxx/util/exception.h"
@@ -10,6 +11,8 @@
 #include "ftxui/screen/terminal.hpp"
 #include <algorithm>
 #include <filesystem>
+#include <markdown/dom_builder.hpp>
+#include <markdown/parser.hpp>
 #include <markdown/state_diagram.hpp>
 #include <markdown/text_utils.hpp>
 
@@ -1322,9 +1325,14 @@ void ContextOverlay::toggleExpanded(size_t index) {
 // MermaidDiagramOverlay
 // ---------------------------------------------------------------------------
 
-MermaidDiagramOverlay::MermaidDiagramOverlay(TUICtx& ctx, std::string mermaid) :
+MermaidDiagramOverlay::MermaidDiagramOverlay(
+    TUICtx&     ctx,
+    std::string mermaid,
+    std::string title
+) :
     ctx_(ctx),
-    mermaid_(std::move(mermaid)) {
+    mermaid_(std::move(mermaid)),
+    title_(std::move(title)) {
     scrollable_ = std::make_shared<Scrollable>([this]() -> std::vector<ScrollItem> {
         return buildItems();
     });
@@ -1362,9 +1370,11 @@ std::vector<ScrollItem> MermaidDiagramOverlay::buildItems() {
 }
 
 ftxui::Element MermaidDiagramOverlay::OnRender() {
-    const auto& theme  = *ctx_.theme;
-    auto        header = ftxui::hbox({
-        ftxui::text(tr("graph.title")) | ftxui::bold,
+    const auto& theme = *ctx_.theme;
+    // 标题: 插件自定义优先, 空则回退通用翻译
+    const std::string titleText = title_.empty() ? std::string(tr("graph.title")) : title_;
+    auto              header    = ftxui::hbox({
+        ftxui::text(titleText) | ftxui::bold,
         ftxui::filler(),
         ftxui::text(" "),
     });
@@ -1558,6 +1568,364 @@ bool FailedComponentsOverlay::OnEvent(Event event) {
             scrollable_->setStickToBottom(true);
         }
         ctx_.postRedraw();
+        return true;
+    }
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// 通用 overlay: Text / Diff / Custom (open_overlay 驱动, 零插件特化)
+// ---------------------------------------------------------------------------
+
+namespace {
+
+/// 通用 overlay 弹窗尺寸: 宽/高按屏占比, 不超过可用空间, 双约束防塌缩
+/// (抄 Mermaid/Failed: 惰性 viewport 自然高度会塌缩成单行, 必须同时给
+/// GREATER_THAN 下限)
+void overlayPopupSize(int widthFracNum, int widthFracDen, int heightFracNum, int heightFracDen,
+                      int& popupW, int& popupH) {
+    const int termW  = Terminal::Size().dimx;
+    const int termH  = Terminal::Size().dimy;
+    const int wantW  = std::max(40, termW * widthFracNum / widthFracDen);
+    const int wantH  = std::max(10, termH * heightFracNum / heightFracDen);
+    const int availW = std::max(1, termW - 4);
+    const int availH = std::max(1, termH - 4);
+    popupW           = std::min(wantW, availW);
+    popupH           = std::min(wantH, availH);
+}
+
+bool overlayScrollByKey(
+    TUICtx&                          ctx,
+    const std::shared_ptr<Scrollable>& scrollable,
+    Event                              event
+) {
+    if (event == Event::ArrowUp) {
+        scrollable->setScrollOffset(scrollable->scrollOffset() - 1);
+        scrollable->setStickToBottom(false);
+        ctx.postRedraw();
+        return true;
+    }
+    if (event == Event::ArrowDown) {
+        scrollable->setScrollOffset(scrollable->scrollOffset() + 1);
+        if (scrollable->totalHeight() - scrollable->viewportHeight()
+            <= scrollable->scrollOffset()) {
+            scrollable->setStickToBottom(true);
+        }
+        ctx.postRedraw();
+        return true;
+    }
+    return false;
+}
+
+Element overlayFrame(
+    TUICtx&                 ctx,
+    const std::string&      title,
+    const ftxui::Color&     accent,
+    Scrollable&             scrollable,
+    int                     widthFracNum,
+    int                     widthFracDen
+) {
+    int popupW = 0, popupH = 0;
+    overlayPopupSize(widthFracNum, widthFracDen, 4, 5, popupW, popupH);
+    (void)ctx;
+    return vbox({
+               hbox({text(title.empty() ? " " : title) | bold, filler(), text(" ")}),
+               separator(),
+               hbox({text(" "), scrollable.Render() | flex, text(" ")}) | flex,
+               separator(),
+               text(tr("overlay.scrollHint")) | center | dim,
+           })
+           | border | size(WIDTH, GREATER_THAN, popupW) | size(WIDTH, LESS_THAN, popupW)
+           | size(HEIGHT, GREATER_THAN, popupH) | size(HEIGHT, LESS_THAN, popupH) | color(accent);
+}
+
+} // namespace
+
+TextOverlay::TextOverlay(TUICtx& ctx, std::string title, std::string content, bool markdown) :
+    ctx_(ctx),
+    title_(std::move(title)),
+    content_(std::move(content)),
+    markdown_(markdown) {
+    scrollable_ = std::make_shared<Scrollable>([this]() -> std::vector<ScrollItem> {
+        return buildItems();
+    });
+    scrollable_->setStickToBottom(false);
+    Add(scrollable_);
+}
+
+std::vector<ScrollItem> TextOverlay::buildItems() {
+    const auto& theme = *ctx_.theme;
+    const int   maxW  = std::max(40, Terminal::Size().dimx - 10);
+    if (cachedContent_ != content_ || cachedMaxW_ != maxW || cachedThemeName_ != theme.name
+        || cachedMarkdown_ != markdown_) {
+        cachedContent_   = content_;
+        cachedMaxW_      = maxW;
+        cachedThemeName_ = theme.name;
+        cachedMarkdown_  = markdown_;
+        cachedAttachments_.clear();
+        if (content_.empty()) {
+            cachedElement_ = text(tr("info.empty")) | dim;
+        } else if (markdown_) {
+            auto parser  = markdown::make_cmark_parser();
+            auto ast     = parser->parse(content_);
+            auto builder = std::make_shared<markdown::DomBuilder>();
+            builder->set_max_width(maxW);
+            cachedElement_ = builder->build(ast, -1, theme.markdownTheme)
+                             | color(theme.normalColor);
+            cachedAttachments_.push_back(std::move(builder));
+        } else {
+            cachedElement_ = paragraph(content_) | color(theme.normalColor);
+        }
+    }
+    return {
+        ScrollItem{cachedElement_, false}
+    };
+}
+
+Element TextOverlay::OnRender() {
+    const auto& theme = *ctx_.theme;
+    return overlayFrame(ctx_, title_, theme.accentColor, *scrollable_, 3, 5);
+}
+
+bool TextOverlay::OnEvent(Event event) {
+    if (event == Event::Escape) {
+        ctx_.postRedraw();
+        if (onClose_) {
+            onClose_();
+        }
+        return true;
+    }
+    if (event.is_mouse()) {
+        if (scrollable_->OnEvent(event)) {
+            ctx_.postRedraw();
+            return true;
+        }
+        return true;
+    }
+    if (overlayScrollByKey(ctx_, scrollable_, event)) {
+        return true;
+    }
+    return true;
+}
+
+DiffOverlay::DiffOverlay(
+    TUICtx&     ctx,
+    std::string title,
+    std::string path,
+    std::string oldStr,
+    std::string newStr
+) :
+    ctx_(ctx),
+    title_(std::move(title)),
+    path_(std::move(path)),
+    oldStr_(std::move(oldStr)),
+    newStr_(std::move(newStr)) {
+    scrollable_ = std::make_shared<Scrollable>([this]() -> std::vector<ScrollItem> {
+        return buildItems();
+    });
+    scrollable_->setStickToBottom(false);
+    Add(scrollable_);
+}
+
+std::vector<ScrollItem> DiffOverlay::buildItems() {
+    const auto& theme = *ctx_.theme;
+    return {
+        ScrollItem{
+            agentxx::client::renderPluginDiff(path_, oldStr_, newStr_, theme),
+            false
+        }
+    };
+}
+
+Element DiffOverlay::OnRender() {
+    const auto& theme = *ctx_.theme;
+    return overlayFrame(ctx_, title_, theme.accentColor, *scrollable_, 4, 5);
+}
+
+bool DiffOverlay::OnEvent(Event event) {
+    if (event == Event::Escape) {
+        ctx_.postRedraw();
+        if (onClose_) {
+            onClose_();
+        }
+        return true;
+    }
+    if (event.is_mouse()) {
+        if (scrollable_->OnEvent(event)) {
+            ctx_.postRedraw();
+            return true;
+        }
+        return true;
+    }
+    if (overlayScrollByKey(ctx_, scrollable_, event)) {
+        return true;
+    }
+    return true;
+}
+
+CustomOverlay::CustomOverlay(
+    TUICtx&       ctx,
+    std::string   title,
+    neograph::json items,
+    std::string   ownerPlugin
+) :
+    ctx_(ctx),
+    title_(std::move(title)),
+    items_(std::move(items)),
+    ownerPlugin_(std::move(ownerPlugin)) {
+    scrollable_ = std::make_shared<Scrollable>([this]() -> std::vector<ScrollItem> {
+        // CUSTOM overlay 内容经 Scrollable 全量构建 (按钮盒经 reflect 收集到 hits_):
+        // hits_ 与 items 子项一一对应, 视口外为空 Box (Scrollable.visibleBoxes)
+        const auto& theme = *ctx_.theme;
+        auto        reg
+            = ctx_.pluginManager ? ctx_.pluginManager->uiRegistrySnapshot() : nullptr;
+        const auto* regPtr = reg.get();
+        Elements    els;
+        hits_.clear();
+        if (items_.is_array()) {
+            auto push = [&](Element el) {
+                els.push_back(std::move(el));
+            };
+            const size_t n = items_.size();
+            for (size_t i = 0; i < n; ++i) {
+                const auto& it = items_[i];
+                if (!it.is_object()) {
+                    continue;
+                }
+                const auto kind = it.value("kind", std::string{"text"});
+                if (kind == "text") {
+                    push(agentxx::client::renderPluginTextItem(
+                        it.value("text", std::string{}),
+                        it.value("role", std::string{"normal"}),
+                        theme
+                    ));
+                    continue;
+                }
+                if (kind == "progress") {
+                    const double v      = it.value("value", 0.0);
+                    const int    w      = 10;
+                    const int    filled = static_cast<int>(v * w);
+                    std::string  bar;
+                    bar.reserve(static_cast<size_t>(w));
+                    for (int j = 0; j < w; ++j) {
+                        bar += (j < filled) ? '#' : '-';
+                    }
+                    push(hbox({
+                        text("[" + bar + "]") | color(theme.accentColor),
+                        text(fmt::format(" {}%", static_cast<int>(v * 100)))
+                            | color(theme.hintColor),
+                    }));
+                    continue;
+                }
+                if (kind == "badge") {
+                    push(text("● " + it.value("text", std::string{})) | color(theme.accentColor));
+                    continue;
+                }
+                if (kind == "separator") {
+                    push(text("─") | color(theme.hintColor) | dim);
+                    continue;
+                }
+                agentxx::client::PluginButtonDesc desc;
+                const bool isButton = (kind == "button" || kind == "action");
+                if (isButton
+                    && agentxx::client::parsePluginButton(it, ownerPlugin_, regPtr, desc)) {
+                    // text + button 隐式同行合并: 前一项为纯 text 且本按钮无
+                    // 显式 prefix 时, 合并为单行 (与 sidebar 行为一致)
+                    Element btn = agentxx::client::renderPluginButton(desc, theme);
+                    if (desc.clickable) {
+                        OverlayHit hit;
+                        hit.actionId = desc.actionId;
+                        hit.argsJson = desc.argsJson;
+                        hits_.push_back(std::move(hit));
+                        const size_t hitIdx = hits_.size() - 1;
+                        btn                 = btn | reflect(hits_[hitIdx].box);
+                    }
+                    if (!desc.prefix.empty()) {
+                        push(hbox({
+                            text(desc.prefix) | color(theme.normalColor),
+                            std::move(btn),
+                        }));
+                    } else {
+                        push(std::move(btn));
+                    }
+                    continue;
+                }
+                if (kind == "diagram") {
+                    const auto mermaid = it.value("mermaid", std::string{});
+                    auto       diagram = markdown::parseMermaidStateDiagram(mermaid);
+                    if (!diagram.nodes.empty()) {
+                        const int diagW = std::max(20, Terminal::Size().dimx - 16);
+                        push(markdown::renderMermaidStateDiagram(
+                            diagram,
+                            diagW,
+                            theme.normalColor,
+                            markdown::diagramNodeColor(theme.markdownTheme)
+                        ));
+                    }
+                    continue;
+                }
+                if (kind == "diff") {
+                    push(agentxx::client::renderPluginDiff(
+                        it.value("path", std::string{}),
+                        it.value("old_str", std::string{}),
+                        it.value("new_str", std::string{}),
+                        theme
+                    ));
+                    continue;
+                }
+            }
+        }
+        if (els.empty()) {
+            els.push_back(text(tr("info.empty")) | color(theme.hintColor));
+        }
+        // hits_ 按按钮出现顺序收集; 可见性由 visibleBoxes 在 OnEvent 时判定
+        std::vector<ScrollItem> out;
+        out.reserve(els.size());
+        for (auto& el : els) {
+            out.push_back(ScrollItem{std::move(el), false});
+        }
+        return out;
+    });
+    scrollable_->setStickToBottom(false);
+    Add(scrollable_);
+}
+
+Element CustomOverlay::OnRender() {
+    const auto& theme = *ctx_.theme;
+    return overlayFrame(ctx_, title_, theme.accentColor, *scrollable_, 3, 5);
+}
+
+bool CustomOverlay::OnEvent(Event event) {
+    if (event == Event::Escape) {
+        ctx_.postRedraw();
+        if (onClose_) {
+            onClose_();
+        }
+        return true;
+    }
+    if (event.is_mouse()) {
+        const auto& mouse = event.mouse();
+        if (mouse.button == Mouse::Left && mouse.motion == Mouse::Released) {
+            // overlay 局部命中: 按钮盒经 reflect 填充, 命中后走同一 dispatchAction
+            // (owner 固定 "__overlay", 被实例级 fallback 接住)
+            for (const auto& h : hits_) {
+                if (!h.box.Contain(mouse.x, mouse.y)) {
+                    continue;
+                }
+                if (auto mgr = ctx_.pluginManager) {
+                    mgr->dispatchAction(ownerPlugin_, AGENTXX_CLIENT_OVERLAY_OWNER, h.actionId, h.argsJson);
+                }
+                ctx_.postRedraw();
+                return true;
+            }
+        }
+        if (scrollable_->OnEvent(event)) {
+            ctx_.postRedraw();
+            return true;
+        }
+        return true;
+    }
+    if (overlayScrollByKey(ctx_, scrollable_, event)) {
         return true;
     }
     return true;

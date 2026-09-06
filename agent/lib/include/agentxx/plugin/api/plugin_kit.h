@@ -34,6 +34,7 @@
 #include <string>
 #include <string_view>
 #include <thread>
+#include <unordered_map>
 
 namespace agentxx {
 namespace plugin {
@@ -2976,6 +2977,109 @@ inline int32_t registerToolTemplate(
 
     return ui->register_tool_renderer(host, &spec);
 }
+
+/* ==================== Client 侧通用交互: ActionController (header-only) ====================
+ *
+ * 插件侧 Lambda 风格的动作绑定设施 (实例内存 map<action_id, handler>):
+ * - JSON 只传 action_id 字符串 (函数指针不可序列化, 见三铁律), 映射留在插件侧内存
+ * - 只在 IO 线程 on/dispatch (与事件 handler 同约定), 无需锁
+ * - dispatch 为 C 回调 (填入 bind_action_handler), 空指针守卫 + 参数解析失败给 {}
+ *   + handler 异常吞掉记日志, 不外泄 C 边界
+ */
+
+namespace kit {
+
+class ActionController {
+public:
+
+    using Handler = std::function<void(const neograph::json& args)>;
+
+    /// 注册动作处理器 (IO 线程; 同 actionId 覆盖)
+    void on(std::string actionId, Handler h) {
+        handlers_[std::move(actionId)] = std::move(h);
+    }
+
+    /// 注销动作处理器 (不存在忽略)
+    void off(const std::string& actionId) {
+        handlers_.erase(actionId);
+    }
+
+    /// 生成 button JSON (action_id 自增 act_N; args 缺省 {}; role 缺省 normal)
+    /// - onClick 为空时仍生成可点按钮 (固定 id 由调用方另行 on() 绑定, 如 planning 常量)
+    neograph::json makeButton(
+        std::string  label,
+        Handler      onClick  = nullptr,
+        std::string  prefix   = "",
+        std::string  role     = "normal",
+        neograph::json args   = neograph::json::object()
+    ) {
+        const std::string id = "act_" + std::to_string(++counter_);
+        if (onClick) {
+            handlers_[id] = std::move(onClick);
+        }
+        neograph::json btn = neograph::json::object();
+        btn["kind"]        = "button";
+        btn["label"]       = std::move(label);
+        if (!prefix.empty()) {
+            btn["prefix"] = std::move(prefix);
+        }
+        btn["action_id"] = id;
+        btn["args"]      = std::move(args);
+        btn["role"]      = std::move(role);
+        return btn;
+    }
+
+    /// C 回调 (填入 bind_action_handler 的 on_action; ud = 本实例指针)
+    static void AGENTXX_PLUGIN_CALL
+        dispatch(const AgentxxUiActionContext* ctx, void* ud) {
+        auto* self = static_cast<ActionController*>(ud);
+        if (!self || !ctx) {
+            return;
+        }
+        try {
+            const std::string actionId(
+                ctx->action_id.data ? ctx->action_id.data : "",
+                static_cast<size_t>(ctx->action_id.size)
+            );
+            auto it = self->handlers_.find(actionId);
+            if (it == self->handlers_.end() || !it->second) {
+                return;
+            }
+            neograph::json args = neograph::json::object();
+            if (ctx->action_args.data && ctx->action_args.size > 0) {
+                try {
+                    auto parsed = neograph::json::parse(std::string_view{
+                        ctx->action_args.data,
+                        static_cast<size_t>(ctx->action_args.size)
+                    });
+                    if (parsed.is_object()) {
+                        args = std::move(parsed);
+                    }
+                } catch (...) {
+                    // 解析失败给 {} (约定)
+                }
+            }
+            it->second(args);
+        } catch (...) {
+            // handler 异常不外泄 C 边界 (宿主另有兜底, 此处静默吞掉)
+        }
+    }
+
+    bool empty() const noexcept {
+        return handlers_.empty();
+    }
+
+    size_t size() const noexcept {
+        return handlers_.size();
+    }
+
+private:
+
+    std::unordered_map<std::string, Handler> handlers_;
+    uint64_t                                 counter_ = 0;
+};
+
+} // namespace kit
 
 } // namespace plugin
 } // namespace agentxx

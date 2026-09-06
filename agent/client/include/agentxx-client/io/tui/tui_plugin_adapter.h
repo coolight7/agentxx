@@ -38,6 +38,10 @@ public:
             // 工具消息装饰 (ui 表 v2 update_tool_decor): 消息列表按装饰
             // items 通用渲染插件推送的工具体内容
             std::string{pi::ClientMsgDecor},
+            // 通用交互 (ui 表 v3 bind/unbind + button 拾取派发)
+            std::string{pi::ClientAction},
+            // 通用 overlay (ui 表 v3 open/close)
+            std::string{pi::ClientOverlay},
         };
     }
 
@@ -147,6 +151,34 @@ public:
             override {
         auto tui = tui_.lock();
         return tui ? tui->sendPluginDataUp(plugin, event, json) : false;
+    }
+
+    // ---- 通用 overlay (io 线程; 投递到 UI 线程打开/关闭) ----
+    void onOverlayOpen(
+        const std::string& plugin,
+        int                type,
+        const std::string& title,
+        const std::string& payload,
+        const std::string& extraJson
+    ) override {
+        auto tui = tui_.lock();
+        if (!tui) {
+            return;
+        }
+        tui->postToUi([tui, plugin, type, title, payload, extraJson]() {
+            tui->openOverlay(type, title, payload, extraJson, plugin);
+        });
+    }
+
+    void onOverlayClose(const std::string& plugin) override {
+        auto tui = tui_.lock();
+        if (!tui) {
+            return;
+        }
+        tui->postToUi([tui, plugin]() {
+            (void)plugin; // 归因预留 (当前单模态 last-wins, 直接关闭)
+            tui->closeOverlay();
+        });
     }
 
 private:

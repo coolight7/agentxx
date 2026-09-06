@@ -169,6 +169,10 @@ public:
         return retryButtonBox_;
     }
 
+    /// 处理 decor 按钮点击 (供 MessageListComponent::OnEvent 与外部调用):
+    /// 命中 decorHits_ 后经 pluginManager->dispatchAction 投递 io 线程派发
+    bool handleDecorButtonClick(const ftxui::Mouse& mouse);
+
     /// 测试辅助: 当前激活的中断消息索引 (npos = 无)
     size_t activeInterruptMsg() const {
         return activeInterruptMsg_;
@@ -200,6 +204,22 @@ private:
     /// 最近一次渲染时记录的中断控件命中区域 (UI 线程独占; 渲染时填充,
     /// 点击时命中检测; 与 collapsibleBoxes_ 生命周期一致)
     std::vector<InterruptHitBox> interruptHits_;
+
+    /// decor 按钮命中盒 (UI 线程独占; 与 interruptHits_ 同生命期):
+    /// - OnRender 开头清空, 本帧 scrollable_->Render() 中构建可见 Tool 消息的
+    ///   decor 按钮时填充 (buildMessageBlock → appendDecorItems)
+    /// - box 经 shared_ptr 持有 (reflect 在布局 SetBox 时写回, 与中断控件同机制;
+    ///   构建阶段记录值为空 Box, 点击读最新布局位置)
+    /// - 点击命中后拷贝 (plugin/ownerId/actionId/argsJson) 经 dispatchAction 投递
+    struct DecorHitBox {
+        std::string                 plugin;
+        std::string                 ownerId;
+        std::string                 actionId;
+        std::string                 argsJson;
+        std::shared_ptr<ftxui::Box> box;
+    };
+
+    std::vector<DecorHitBox> decorHits_;
 
     /// 连接失败 banner 的"重试"按钮命中区域 (UI 线程独占; buildBanner 渲染时
     /// reflect 填充, TUIClientAgentIO 全局鼠标事件检测点击)
@@ -315,12 +335,33 @@ private:
     void           appendEditToolBody(const TUIMessage& msg, ftxui::Elements& lines);
     ftxui::Element renderEditToolDiff(std::string_view oldStr, std::string_view newStr);
     /// 插件装饰工具体通用渲染 (items: text/button/diagram/separator/diff; 内容由插件定义)
-    void appendDecorItems(const neograph::json& items, ftxui::Elements& lines, int maxWidth);
+    /// - button 走通用 action_id 派发: owner=tool_call_id (decor 按钮以 toolCallId
+    ///   作 owner_id, 插件 bind 一次永久生效, 见方案 A fallback)
+    /// - decor 按钮命中挂载到 decorHits_ (与 interruptHits_/collapsibleBoxes_ 同生命期:
+    ///   OnRender 清空 + 构建期填充, OnEvent/命中检测读取); 全局 CatchEvent 侧经
+    ///   pluginDecorHits() 读取 (MessageListComponent 有独立事件流, 不能只靠全局)
+    /// - text/button 解析与配色走 plugin_ui_items 共享 helper; diff 走 renderPluginDiff
+    void appendDecorItems(
+        const neograph::json& items,
+        const std::string&    plugin,
+        const std::string&    ownerId,
+        ftxui::Elements&      lines,
+        int                   maxWidth
+    );
     void appendDecorToolBody(
         const agentxx::plugin::ClientToolDecor& decor,
         ftxui::Elements&                        lines,
         int                                     maxWidth
     );
+
+    /// 测试辅助: 最近一次构建的 decor 按钮命中 (与 decorHits_ 对应)
+    struct DecorHit {
+        ftxui::Box  box; ///< reflect 填充 (值拷贝; 构建期布局前为空, 布局后由 FTXUI 写回需经引用——见实现注释)
+        std::string plugin;
+        std::string ownerId;
+        std::string actionId;
+        std::string argsJson;
+    };
 
     TUICtx&                         ctx_;
     std::shared_ptr<LazyScrollable> scrollable_;

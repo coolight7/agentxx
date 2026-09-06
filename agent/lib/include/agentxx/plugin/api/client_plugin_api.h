@@ -97,10 +97,47 @@ typedef struct AgentxxToolRenderSpec {
     AgentxxPluginStringView template_json; ///< 预设模版 JSON (render_fn 为 NULL 时由宿主解析执行)
 } AgentxxToolRenderSpec;
 
+/* ==================== 通用交互: 动作回调与 overlay (v3) ==================== */
+
+/// 动作派发上下文 (宿主在 client io 线程构造, 仅本次回调有效; 全部只读借用)
+typedef struct AgentxxUiActionContext {
+    int32_t                 version;     ///< == 1
+    uint32_t                _reserved;   ///< 8 字节补齐
+    AgentxxPluginStringView owner_id;    ///< 归属: section_id / panel_id / tool_call_id / "__overlay"
+    AgentxxPluginStringView action_id;   ///< 按钮声明的 action_id
+    AgentxxPluginStringView action_args; ///< 参数 JSON object dump (空 = 无参)
+} AgentxxUiActionContext;
+
+/// 动作处理器 (client io 线程同步调用; 不得抛异常出边界, 宿主兜底)
+typedef void(AGENTXX_PLUGIN_CALL* AgentxxUiActionFn)(
+    const AgentxxUiActionContext* ctx,
+    void*                         user_data
+);
+
+/// 通用 overlay 类型 (首版四种, 一次实现)
+typedef enum AgentxxOverlayType {
+    AGENTXX_OVERLAY_MERMAID = 0, ///< 状态图: payload = mermaid 源码
+    AGENTXX_OVERLAY_TEXT    = 1, ///< 文本/Markdown: payload = 原文
+    AGENTXX_OVERLAY_DIFF    = 2, ///< 对比: payload = JSON {path,old_str,new_str}
+    AGENTXX_OVERLAY_CUSTOM  = 3  ///< 自定义: payload = JSON {"items":[...]} (同 panel/items schema)
+} AgentxxOverlayType;
+
+/// 通用 overlay 参数 (全部只读借用, 宿主拷贝后使用)
+typedef struct AgentxxOverlaySpec {
+    int32_t                 version;    ///< == 1
+    int32_t                 type;       ///< AgentxxOverlayType
+    AgentxxPluginStringView title;      ///< 标题 (空则宿主回退默认)
+    AgentxxPluginStringView payload;    ///< 内容 (语义见 AgentxxOverlayType)
+    AgentxxPluginStringView extra_json; ///< 扩展 JSON object (可空; 如 {"width_frac":0.8})
+} AgentxxOverlaySpec;
+
+/// CUSTOM overlay 内按钮归属 (owner_id 固定值, 走实例级 fallback 派发)
+#define AGENTXX_CLIENT_OVERLAY_OWNER "__overlay"
+
 /* ==================== 接口表: 展示/命令/toast (agentxx.client.ui) ==================== */
 
 #define AGENTXX_IFACE_CLIENT_UI         "agentxx.client.ui"
-#define AGENTXX_IFACE_CLIENT_UI_VERSION 2
+#define AGENTXX_IFACE_CLIENT_UI_VERSION 3
 
 typedef struct AgentxxClientUiIface {
     int32_t  version; ///< 必须 == AGENTXX_IFACE_CLIENT_UI_VERSION
@@ -250,6 +287,35 @@ typedef struct AgentxxClientUiIface {
         const AgentxxPluginHost*       host,
         const AgentxxPluginStringView* tool_name
     );
+
+    /* ---- 通用交互 (v3 新增; 老宿主按版本截断视角, 本段成员为 NULL 即不支持) ---- */
+    /// 绑定动作处理器 (client io 线程约束):
+    /// - target_id: 归属键 (section_id / panel_id / tool_call_id); 空串 = 本实例
+    ///   兜底 (方案 A fallback: 精确匹配优先, 未命中回落到 "")
+    /// - 同一 (plugin, target_id) 重复绑定覆盖; on_action 为 NULL 时返回非 0
+    /// - 返回 0 成功
+    int32_t(AGENTXX_PLUGIN_CALL* bind_action_handler)(
+        const AgentxxPluginHost*       host,
+        const AgentxxPluginStringView* target_id,
+        AgentxxUiActionFn              on_action,
+        void*                          user_data
+    );
+    /// 解绑动作处理器 (不存在忽略, 返回 0)
+    int32_t(AGENTXX_PLUGIN_CALL* unbind_action_handler)(
+        const AgentxxPluginHost*       host,
+        const AgentxxPluginStringView* target_id
+    );
+    /// 通用 overlay (client io 线程约束; 插件 on_action 内直接调用):
+    /// - 单模态 last-wins: 替换当前 overlay (含核心弹窗), 记录 opener 插件名
+    /// - spec->version 必须 == 1; type 越界返回非 0
+    /// - 宿主拷贝字符串后 postToUi, 不阻塞插件
+    /// - 返回 0 成功
+    int32_t(AGENTXX_PLUGIN_CALL* open_overlay)(
+        const AgentxxPluginHost*  host,
+        const AgentxxOverlaySpec* spec
+    );
+    /// 关闭当前 overlay (任何插件都可关; manager 传插件名仅记日志/鉴权预留)
+    void(AGENTXX_PLUGIN_CALL* close_overlay)(const AgentxxPluginHost* host);
 } AgentxxClientUiIface;
 
 /* ==================== 接口表: 事件订阅 (agentxx.client.events) ==================== */

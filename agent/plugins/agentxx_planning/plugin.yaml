@@ -13,3 +13,5 @@ interfaces:
     - agentxx.agent.prompt
   optional:
     - agentxx.client.info_section
+    - agentxx.client.action
+    - agentxx.client.overlay
