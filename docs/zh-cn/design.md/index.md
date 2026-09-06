@@ -1125,8 +1125,7 @@ AgentContext
       seq <= last 直接丢弃, 避免 UI 重复渲染
 ```
 
-- 写/读队列均为有界 concurrent_channel, `try_send` 失败即丢弃 (见"已知问题"
-  问题 3); 队列关闭使挂起的 async_receive 抛异常, 循环自然退出
+- 写/读队列均为有界 concurrent_channel, `try_send` 失败即丢弃; 队列关闭使挂起的 async_receive 抛异常, 循环自然退出
 - HelloAck 在 connect() 握手阶段被处理, 不进入 runTransportLoop 的消息流
 - 服务端模式 (AgentServer 注入已建立的 WsClient): 不发送 hello, 不重连,
   握手由 AgentServer::serveTransport 完成

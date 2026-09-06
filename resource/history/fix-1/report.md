@@ -146,28 +146,6 @@ if (r.hasError && (find("cancel") || find("Cancel") || find("取消") || find("�
 
 ---
 
-### P1-3 Transport 静默丢消息
-
-位置：
-
-- `agent/lib/src/agent/io/ws_io_transport.cpp`（`send()`）
-- `agent/lib/src/agent/io/channel_io_transport.cpp`（`send()`）
-
-现状：
-
-- 两处都是 `try_send` 失败就吞掉（WS 侧连日志都没有，Channel 侧 cap=4096）。
-- 突发流量（全量 Sync + delta burst + 队列更新）下丢的是 `TurnResult / MessageQueueUpdate` 这类**不可恢复**的消息，而 delta 丢了只会回退全量 Sync。
-- 设计文档自己都承认这是“已知问题 3”。
-
-建议：
-
-- 至少加计数器 + `XX_LOGW`（采样限频）。
-- ContextStats 类高频消息做合并-coalesce，Sync / 结果类消息走阻塞发送或独立高优先级队列。
-
-WS 客户端的 delta 去重（`seq <= cur` 丢弃）只处理了“重复”，没处理“空洞”：中间丢了一个 seq，`lastDeltaSeq_` 照样前移到最大值，空洞永久存在，直到下次重连才用 Sync 修复。建议检测到 `seq > cur + 1` 记一次 warn（采样），给以后做 gap-triggered Sync 留钩子。
-
----
-
 ### P1-4 压缩模块的两个自相矛盾 + 一个死循环风险
 
 位置：
@@ -184,7 +162,7 @@ WS 客户端的 delta 去重（`seq <= cur` 丢弃）只处理了“重复”，
 
 ---
 
-### P1-5 `Session::nextDeltaSeq` 被旁路
+### P1-5 `Session::nextDeltaSeq` 被忽略
 
 位置：
 
