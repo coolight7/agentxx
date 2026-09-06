@@ -96,7 +96,114 @@ SessionServerAgentIO::~SessionServerAgentIO() {
 }
 
 // ---------------------------------------------------------------------------
-// AgentIOBase: 主动发送 (BaseAgent 产出的事件经此转发给客户端)
+// 多客户端 Transport 管理 (一对多 1:N)
+// ---------------------------------------------------------------------------
+
+void SessionServerAgentIO::setTransport(std::shared_ptr<AgentIOTransportBase> transport) {
+    AgentIOBase::setTransport(transport);
+    if (transport) {
+        attachClient(std::move(transport));
+    }
+}
+
+void SessionServerAgentIO::attachClient(std::shared_ptr<AgentIOTransportBase> transport) {
+    if (!transport) {
+        return;
+    }
+    cancelGraceTimer();
+    auto it = std::find(clients_.begin(), clients_.end(), transport);
+    if (it == clients_.end()) {
+        clients_.push_back(transport);
+    }
+    if (!transport_) {
+        transport_ = transport;
+    }
+}
+
+void SessionServerAgentIO::detachClient(const std::shared_ptr<AgentIOTransportBase>& transport) {
+    if (!transport) {
+        return;
+    }
+    auto it = std::find(clients_.begin(), clients_.end(), transport);
+    if (it != clients_.end()) {
+        clients_.erase(it);
+    }
+    if (transport_ == transport) {
+        transport_ = clients_.empty() ? nullptr : clients_.back();
+    }
+}
+
+size_t SessionServerAgentIO::clientCount() const noexcept {
+    return clients_.size();
+}
+
+bool SessionServerAgentIO::hasAliveClient() const noexcept {
+    for (const auto& t : clients_) {
+        if (t && t->alive()) {
+            return true;
+        }
+    }
+    return false;
+}
+
+std::vector<std::shared_ptr<AgentIOTransportBase>> SessionServerAgentIO::clients() const {
+    return clients_;
+}
+
+void SessionServerAgentIO::broadcastToClients(const WireMessage& msg) {
+    for (auto it = clients_.begin(); it != clients_.end();) {
+        auto& t = *it;
+        if (!t || !t->alive()) {
+            if (transport_ == t) {
+                transport_.reset();
+            }
+            it = clients_.erase(it);
+            continue;
+        }
+        t->send(msg);
+        ++it;
+    }
+    if (!transport_ && !clients_.empty()) {
+        transport_ = clients_.back();
+    }
+}
+
+void SessionServerAgentIO::sendToClient(
+    const std::shared_ptr<AgentIOTransportBase>& transport,
+    WireMessage                                  msg
+) {
+    if (transport && transport->alive()) {
+        transport->send(std::move(msg));
+    } else {
+        sendToPeer(std::move(msg));
+    }
+}
+
+asio::awaitable<void> SessionServerAgentIO::runTransportLoop() {
+    auto transport = transport_;
+    if (!transport) {
+        co_return;
+    }
+    co_await runTransportLoop(std::move(transport));
+}
+
+asio::awaitable<void> SessionServerAgentIO::runTransportLoop(
+    std::shared_ptr<AgentIOTransportBase> transport
+) {
+    if (!transport) {
+        co_return;
+    }
+    while (transport->alive()) {
+        auto msg = co_await transport->recv();
+        if (!msg.has_value()) {
+            break;
+        }
+        onPeerMessage(std::move(*msg), transport);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// AgentIOBase: 主动发送 (BaseAgent 产出的事件经此广播给所有在线客户端)
 // ---------------------------------------------------------------------------
 
 void SessionServerAgentIO::sendToPeer(WireMessage msg) {
@@ -113,7 +220,7 @@ void SessionServerAgentIO::sendToPeer(WireMessage msg) {
             }
         }
     }
-    AgentIOBase::sendToPeer(std::move(msg));
+    broadcastToClients(msg);
 }
 
 // ---------------------------------------------------------------------------
@@ -227,7 +334,7 @@ asio::awaitable<neograph::json> SessionServerAgentIO::handleInterrupt(
     if (!gotResponse) {
         // 超时/异常结束 (用户未响应): 通知客户端该中断已过期,
         // 使客户端将对应未操作的中断消息标记为过期并结束等待
-        if (transport_ && transport_->alive()) {
+        if (hasAliveClient()) {
             sendToPeer(WireInterruptExpired{id, config_.sessionId});
         }
     }
@@ -320,11 +427,18 @@ void SessionServerAgentIO::removeQueueItem(std::string_view itemId) {
 // ---------------------------------------------------------------------------
 
 void SessionServerAgentIO::onPeerMessage(WireMessage msg) {
+    onPeerMessage(std::move(msg), nullptr);
+}
+
+void SessionServerAgentIO::onPeerMessage(
+    WireMessage                                  msg,
+    const std::shared_ptr<AgentIOTransportBase>& sender
+) {
     std::visit(
-        [this](auto&& m) {
+        [this, &sender](auto&& m) {
             using T = std::decay_t<decltype(m)>;
             if constexpr (std::is_same_v<T, WireHello>) {
-                handleHello(m);
+                handleHello(m, {}, sender);
             } else if constexpr (std::is_same_v<T, WireUserInput>) {
                 cancelGraceTimer();
                 pushMessageQueueItem(std::move(m.text), std::move(m.model));
@@ -341,7 +455,7 @@ void SessionServerAgentIO::onPeerMessage(WireMessage msg) {
                 // 客户端历史分页请求: 切片 [max(0, before-count), before) 回应。
                 // viewMessages 为 append-only, 绝对下标恒定, 轮次进行中追加
                 // 新消息不影响既有下标, 无竞态; 全程 ex_ 线程 (= Session io 线程)
-                handleGetViewMessages(m);
+                handleGetViewMessages(m, sender);
             } else if constexpr (std::is_same_v<T, WireClearMessageQueue>) {
                 clearMessageQueue();
             } else if constexpr (std::is_same_v<T, WireRemoveQueueItem>) {
@@ -366,7 +480,7 @@ void SessionServerAgentIO::onPeerMessage(WireMessage msg) {
                         models.push_back(name);
                     }
                 }
-                sendToPeer(WireModelInfo{std::move(currentModel), std::move(models)});
+                sendToClient(sender, WireModelInfo{std::move(currentModel), std::move(models)});
             } else if constexpr (std::is_same_v<T, WireGetAppendComponentInfo>) {
                 auto agent = agent_.lock();
                 if (!agent) {
@@ -375,14 +489,14 @@ void SessionServerAgentIO::onPeerMessage(WireMessage msg) {
                 // 客户端拉取加载的组件信息: 收集已加载的 MCP/Skill/Memory 并回填
                 std::vector<AppendComponentNotification> notifications;
                 agent->collectAppendComponentInfo(notifications);
-                sendToPeer(WireAppendComponentInfo{std::move(notifications)});
+                sendToClient(sender, WireAppendComponentInfo{std::move(notifications)});
             } else if constexpr (std::is_same_v<T, WireGetContext>) {
                 auto sess = session();
                 if (!sess) {
-                    sendToPeer(WireContextMessages{neograph::json::array()});
+                    sendToClient(sender, WireContextMessages{neograph::json::array()});
                     return;
                 }
-                sendToPeer(WireContextMessages{sess->llmMessages});
+                sendToClient(sender, WireContextMessages{sess->llmMessages});
             } else if constexpr (std::is_same_v<T, WireCompactContext>) {
                 auto agent = agent_.lock();
                 if (!agent || !agent->agentContext || !agent->agentContext->bus) {
@@ -409,14 +523,14 @@ void SessionServerAgentIO::onPeerMessage(WireMessage msg) {
                 auto agent = agent_.lock();
                 if (!agent || !agent->agentContext
                     || !agent->agentContext->sessions->sessionStore) {
-                    sendToPeer(WireSessionList{});
+                    sendToClient(sender, WireSessionList{});
                     return;
                 }
                 auto sessionStore = agent->agentContext->sessions->sessionStore;
                 auto self         = shared_from_this();
                 asio::co_spawn(
                     ex_,
-                    [self, sessionStore, agent, req = std::move(m)]() -> asio::awaitable<void> {
+                    [self, sessionStore, agent, req = std::move(m), sender]() -> asio::awaitable<void> {
                         WireSessionList resp;
                         if (agent->agentContext->threadPool) {
                             resp = co_await agentxx::util::offloadAsync<WireSessionList>(
@@ -456,7 +570,7 @@ void SessionServerAgentIO::onPeerMessage(WireMessage msg) {
                                 resp = WireSessionList{sessionStore->listSessions(), 0, false};
                             }
                         }
-                        self->sendToPeer(std::move(resp));
+                        self->sendToClient(sender, std::move(resp));
                     },
                     asio::detached
                 );
@@ -564,7 +678,11 @@ void SessionServerAgentIO::onPeerMessage(WireMessage msg) {
 // 连接管理
 // ---------------------------------------------------------------------------
 
-void SessionServerAgentIO::handleHello(const WireHello& hello, std::vector<std::string> models) {
+void SessionServerAgentIO::handleHello(
+    const WireHello&                             hello,
+    std::vector<std::string>                     models,
+    const std::shared_ptr<AgentIOTransportBase>& sender
+) {
     cancelGraceTimer();
 
     if (!hello.language.empty()) {
@@ -634,19 +752,32 @@ void SessionServerAgentIO::handleHello(const WireHello& hello, std::vector<std::
     helloAck.tailHash  = std::move(tailHash);
     helloAck.models    = std::move(models);
     helloAck.plugins   = std::move(loadedPlugins);
-    sendToPeer(std::move(helloAck));
+
+    auto doSend = [&](WireMessage m) {
+        if (sender) {
+            sendToClient(sender, std::move(m));
+        } else {
+            sendToPeer(std::move(m));
+        }
+    };
+
+    doSend(std::move(helloAck));
 
     for (const auto& d : replayDeltas) {
-        sendToPeer(d);
+        doSend(d);
     }
     if (replaySync.has_value()) {
-        sendToPeer(std::move(replaySync.value()));
+        doSend(std::move(replaySync.value()));
     }
 
-    sendContextStats();
+    if (sender) {
+        sendContextStats(sender);
+    } else {
+        sendContextStats();
+    }
 
     for (auto& req : pendingInterrupts) {
-        sendToPeer(std::move(req));
+        doSend(std::move(req));
     }
 
     // 宿主约定事件 (见文件头 kHostPluginName 注释):
@@ -684,8 +815,25 @@ void SessionServerAgentIO::handleHello(const WireHello& hello, std::vector<std::
     }
 }
 
-void SessionServerAgentIO::onDisconnect() {
-    if (turnActive_.load(std::memory_order_acquire)) {
+void SessionServerAgentIO::onDisconnect(const std::shared_ptr<AgentIOTransportBase>& transport) {
+    if (transport) {
+        detachClient(transport);
+    } else {
+        for (auto it = clients_.begin(); it != clients_.end();) {
+            if (!(*it) || !(*it)->alive()) {
+                if (transport_ == *it) {
+                    transport_.reset();
+                }
+                it = clients_.erase(it);
+            } else {
+                ++it;
+            }
+        }
+        if (!transport_ && !clients_.empty()) {
+            transport_ = clients_.back();
+        }
+    }
+    if (!hasAliveClient() && turnActive_.load(std::memory_order_acquire)) {
         startGraceTimer();
     }
 }
@@ -748,6 +896,8 @@ void SessionServerAgentIO::resolveInterrupt(int64_t id, neograph::json result) {
     auto it = pending_.find(id);
     if (it != pending_.end()) {
         it->second.ch->try_send(ErrorCode{}, std::move(result));
+        // 该中断已被某一客户端处理解决, 广播通知所有客户端此中断已结束
+        sendToPeer(WireInterruptExpired{id, config_.sessionId});
     }
 }
 
@@ -977,8 +1127,15 @@ void SessionServerAgentIO::stopImpl() {
         }
         pluginSubId_ = 0;
     }
+    for (auto& t : clients_) {
+        if (t) {
+            t->close();
+        }
+    }
+    clients_.clear();
     if (transport_) {
         transport_->close();
+        transport_.reset();
     }
 }
 
@@ -1042,7 +1199,10 @@ std::string SessionServerAgentIO::currentTailHash() {
     return sess ? sess->getHashInfo().tailHex : std::string{};
 }
 
-void SessionServerAgentIO::handleGetViewMessages(const WireGetViewMessages& req) {
+void SessionServerAgentIO::handleGetViewMessages(
+    const WireGetViewMessages&                   req,
+    const std::shared_ptr<AgentIOTransportBase>& target
+) {
     // 默认页大小: 客户端 count==0 时的兜底 (与 TUI 端请求页大小一致)
     static constexpr uint32_t kDefaultHistoryPageSize = 100;
 
@@ -1051,14 +1211,14 @@ void SessionServerAgentIO::handleGetViewMessages(const WireGetViewMessages& req)
     // 会话校验: 端点绑定单一会话; 不匹配的请求按错投处理回空页
     // (切换会话后迟到的旧请求 / 客户端状态异常), 避免泄漏其他会话内容
     if (!req.sessionId.empty() && req.sessionId != config_.sessionId) {
-        sendToPeer(std::move(page));
+        sendToClient(target, std::move(page));
         return;
     }
     auto sess = session();
     if (!sess) {
         // 会话不存在 (已清理/未创建): 回空页, totalMessages=0 使客户端
         // 判定无更早历史并复位加载状态
-        sendToPeer(std::move(page));
+        sendToClient(target, std::move(page));
         return;
     }
     const size_t total = sess->viewMessageCount();
@@ -1077,17 +1237,22 @@ void SessionServerAgentIO::handleGetViewMessages(const WireGetViewMessages& req)
             static_cast<size_t>(before)
         );
     }
-    sendToPeer(std::move(page));
+    sendToClient(target, std::move(page));
 }
 
-void SessionServerAgentIO::sendContextStats() {
+void SessionServerAgentIO::sendContextStats(const std::shared_ptr<AgentIOTransportBase>& target) {
     auto sess = session();
     if (!sess || !sess->contextStats) {
         return;
     }
-    auto ctxTokens = sess->contextStats->contextTokens;
-    auto maxTokens = sess->contextStats->maxContextTokens;
-    sendToPeer(WireContextStats{ctxTokens, maxTokens});
+    auto             ctxTokens = sess->contextStats->contextTokens;
+    auto             maxTokens = sess->contextStats->maxContextTokens;
+    WireContextStats stats{ctxTokens, maxTokens};
+    if (target) {
+        sendToClient(target, stats);
+    } else {
+        sendToPeer(stats);
+    }
 }
 
 std::shared_ptr<Session> SessionServerAgentIO::session() {
@@ -1120,7 +1285,7 @@ void SessionServerAgentIO::startGraceTimer() {
             if (ec) {
                 co_return;
             }
-            bool hasTransport = self->transport_ && self->transport_->alive();
+            bool hasTransport = self->hasAliveClient();
             if (!hasTransport && self->turnActive_.load(std::memory_order_acquire)) {
                 XX_LOGW(
                     "[session_ctrl] grace period expired, cancelling turn (thread={})",
@@ -1147,7 +1312,7 @@ void SessionServerAgentIO::failAllPending() {
     for (auto& [id, p] : pending_) {
         // 通知客户端该中断已过期 (停止/断线宽限期满/会话取消), 使客户端
         // 将对应未操作的中断消息标记为过期并结束等待
-        if (transport_ && transport_->alive()) {
+        if (hasAliveClient()) {
             sendToPeer(WireInterruptExpired{id, config_.sessionId});
         }
         p.ch->close();

@@ -2117,6 +2117,356 @@ static asio::awaitable<void> test_model_switch_with_next_input() {
 }
 
 // ---------------------------------------------------------------------------
+// 一对多 (1:N) 测试:
+// 一个 SessionServerAgentIO 控制器支持同时连接多个 ClientAgentIO transport
+// - 客户端 1 和 2 同时连接到同一个 session
+// - 广播: 实时 Delta 发送给所有连接中的客户端
+// - 单播: 新客户端握手独立重放，不重复发给已在线客户端
+// - 消息队列: 任意客户端发送输入，所有客户端均收到队列更新
+// - 中断: 所有客户端收到中断，某一客户端响应后全员收到过期通知关闭弹窗
+// - 宽限期: 单个客户端断开不触发宽限期，只有全部客户端断开才触发
+// ---------------------------------------------------------------------------
+
+static asio::awaitable<void> test_session_controller_one_to_many() {
+    auto ex = co_await asio::this_coro::executor;
+
+    SessionServerAgentIO::Config cfg;
+    cfg.sessionId        = "multi-client-session";
+    cfg.gracePeriod      = std::chrono::milliseconds{400};
+    cfg.interruptTimeout = std::chrono::seconds{10};
+    cfg.deltaBufferCap   = 100;
+
+    auto sc = std::make_shared<SessionServerAgentIO>(
+        ex,
+        std::weak_ptr<agentxx::agent::BaseAgent>{},
+        cfg
+    );
+
+    // 1. 接入客户端 1
+    auto [c1, s1] = agentxx::agent::ChannelAgentIOTransport::makePair(ex, ex);
+    auto client1  = std::shared_ptr<agentxx::agent::AgentIOTransportBase>(std::move(c1));
+    auto server1  = std::shared_ptr<agentxx::agent::AgentIOTransportBase>(std::move(s1));
+
+    sc->attachClient(server1);
+    XX_TEST_EXPECT_EQ(sc->clientCount(), size_t{1});
+    XX_TEST_EXPECT_TRUE(sc->hasAliveClient());
+
+    asio::co_spawn(ex, sc->runTransportLoop(server1), asio::detached);
+
+    // 客户端 1 握手 Hello
+    client1->send(agentxx::agent::WireHello{"multi-client-session", "", 0, ""});
+    auto msg1 = co_await client1->recv();
+    XX_TEST_EXPECT_TRUE(msg1.has_value());
+    if (msg1) {
+        auto* ack = std::get_if<agentxx::agent::WireHelloAck>(&*msg1);
+        XX_TEST_EXPECT_TRUE(ack != nullptr);
+        if (ack) {
+            XX_TEST_EXPECT_TRUE(ack->ok);
+            XX_TEST_EXPECT_EQ(ack->sessionId, std::string("multi-client-session"));
+        }
+    }
+
+    // 2. 控制器产出 delta 1, 2, 3，验证客户端 1 实时收到
+    for (uint64_t s = 1; s <= 3; ++s) {
+        agentxx::agent::WireDelta d;
+        d.type = agentxx::agent::WireDelta::Type::TextToken;
+        d.seq  = s;
+        d.text = "token-" + std::to_string(s);
+        sc->sendToPeer(d);
+    }
+
+    for (uint64_t s = 1; s <= 3; ++s) {
+        auto dmsg = co_await client1->recv();
+        XX_TEST_EXPECT_TRUE(dmsg.has_value());
+        if (dmsg) {
+            auto* d = std::get_if<agentxx::agent::WireDelta>(&*dmsg);
+            XX_TEST_EXPECT_TRUE(d != nullptr);
+            if (d) {
+                XX_TEST_EXPECT_EQ(d->seq, s);
+                XX_TEST_EXPECT_EQ(d->text, "token-" + std::to_string(s));
+            }
+        }
+    }
+
+    // 3. 接入客户端 2 (并发连接)
+    auto [c2, s2] = agentxx::agent::ChannelAgentIOTransport::makePair(ex, ex);
+    auto client2  = std::shared_ptr<agentxx::agent::AgentIOTransportBase>(std::move(c2));
+    auto server2  = std::shared_ptr<agentxx::agent::AgentIOTransportBase>(std::move(s2));
+
+    sc->attachClient(server2);
+    XX_TEST_EXPECT_EQ(sc->clientCount(), size_t{2});
+    asio::co_spawn(ex, sc->runTransportLoop(server2), asio::detached);
+
+    // 客户端 2 握手，请求 lastSeq=1 之后的增量重放
+    client2->send(agentxx::agent::WireHello{"multi-client-session", "", 1, ""});
+
+    // 客户端 2 应收到 HelloAck，随后收到定向重放的 delta 2 和 delta 3
+    auto msg2 = co_await client2->recv();
+    XX_TEST_EXPECT_TRUE(msg2.has_value());
+    if (msg2) {
+        auto* ack = std::get_if<agentxx::agent::WireHelloAck>(&*msg2);
+        XX_TEST_EXPECT_TRUE(ack != nullptr);
+        if (ack) {
+            XX_TEST_EXPECT_TRUE(ack->ok);
+        }
+    }
+
+    auto r2 = co_await client2->recv();
+    XX_TEST_EXPECT_TRUE(r2.has_value());
+    if (r2) {
+        auto* d = std::get_if<agentxx::agent::WireDelta>(&*r2);
+        XX_TEST_EXPECT_TRUE(d != nullptr);
+        if (d) {
+            XX_TEST_EXPECT_EQ(d->seq, uint64_t{2});
+        }
+    }
+
+    auto r3 = co_await client2->recv();
+    XX_TEST_EXPECT_TRUE(r3.has_value());
+    if (r3) {
+        auto* d = std::get_if<agentxx::agent::WireDelta>(&*r3);
+        XX_TEST_EXPECT_TRUE(d != nullptr);
+        if (d) {
+            XX_TEST_EXPECT_EQ(d->seq, uint64_t{3});
+        }
+    }
+
+    // 4. 广播 Delta: 控制器产出 delta 4，验证客户端 1 和 2 均实时收到
+    {
+        agentxx::agent::WireDelta d4;
+        d4.type = agentxx::agent::WireDelta::Type::TextToken;
+        d4.seq  = 4;
+        d4.text = "broadcast-token-4";
+        sc->sendToPeer(d4);
+    }
+
+    auto c1_d4 = co_await client1->recv();
+    XX_TEST_EXPECT_TRUE(c1_d4.has_value());
+    if (c1_d4) {
+        auto* d = std::get_if<agentxx::agent::WireDelta>(&*c1_d4);
+        XX_TEST_EXPECT_TRUE(d != nullptr);
+        if (d) {
+            XX_TEST_EXPECT_EQ(d->seq, uint64_t{4});
+            XX_TEST_EXPECT_EQ(d->text, std::string("broadcast-token-4"));
+        }
+    }
+
+    auto c2_d4 = co_await client2->recv();
+    XX_TEST_EXPECT_TRUE(c2_d4.has_value());
+    if (c2_d4) {
+        auto* d = std::get_if<agentxx::agent::WireDelta>(&*c2_d4);
+        XX_TEST_EXPECT_TRUE(d != nullptr);
+        if (d) {
+            XX_TEST_EXPECT_EQ(d->seq, uint64_t{4});
+            XX_TEST_EXPECT_EQ(d->text, std::string("broadcast-token-4"));
+        }
+    }
+
+    // 5. 客户端 2 发送消息队列输入 (当前轮次进行中，输入进入排队队列并广播更新)
+    sc->setTurnActiveForTest(true);
+    client2->send(agentxx::agent::WireUserInput{"multi-client-session", "input from client2", ""});
+
+    // 双方应收到 WireMessageQueueUpdate
+    auto c1_qu = co_await client1->recv();
+    XX_TEST_EXPECT_TRUE(c1_qu.has_value());
+    if (c1_qu) {
+        auto* qu = std::get_if<agentxx::agent::WireMessageQueueUpdate>(&*c1_qu);
+        XX_TEST_EXPECT_TRUE(qu != nullptr);
+        if (qu) {
+            XX_TEST_EXPECT_EQ(qu->items.size(), size_t{1});
+            if (!qu->items.empty()) {
+                XX_TEST_EXPECT_EQ(qu->items[0].text, std::string("input from client2"));
+            }
+        }
+    }
+
+    auto c2_qu = co_await client2->recv();
+    XX_TEST_EXPECT_TRUE(c2_qu.has_value());
+    if (c2_qu) {
+        auto* qu = std::get_if<agentxx::agent::WireMessageQueueUpdate>(&*c2_qu);
+        XX_TEST_EXPECT_TRUE(qu != nullptr);
+        if (qu) {
+            XX_TEST_EXPECT_EQ(qu->items.size(), size_t{1});
+            if (!qu->items.empty()) {
+                XX_TEST_EXPECT_EQ(qu->items[0].text, std::string("input from client2"));
+            }
+        }
+    }
+    sc->setTurnActiveForTest(false);
+
+    // 6. 中断协同测试: 控制器发起中断，两个客户端都收到请求，客户端 1 答复后双方结束
+    auto interruptDone = std::make_shared<bool>(false);
+    asio::co_spawn(
+        ex,
+        [sc, interruptDone]() -> asio::awaitable<void> {
+            auto res = co_await sc->handleInterrupt("multi-client-session", "perm", "ask", "{}");
+            *interruptDone = true;
+            co_return;
+        },
+        asio::detached
+    );
+
+    // 客户端 1 收到中断请求
+    auto c1_ir = co_await client1->recv();
+    XX_TEST_EXPECT_TRUE(c1_ir.has_value());
+    int64_t reqId = 0;
+    if (c1_ir) {
+        auto* req = std::get_if<agentxx::agent::WireInterruptRequest>(&*c1_ir);
+        XX_TEST_EXPECT_TRUE(req != nullptr);
+        if (req) {
+            reqId = req->id;
+            XX_TEST_EXPECT_EQ(req->node, std::string("perm"));
+        }
+    }
+
+    // 客户端 2 也收到中断请求
+    auto c2_ir = co_await client2->recv();
+    XX_TEST_EXPECT_TRUE(c2_ir.has_value());
+    if (c2_ir) {
+        auto* req = std::get_if<agentxx::agent::WireInterruptRequest>(&*c2_ir);
+        XX_TEST_EXPECT_TRUE(req != nullptr);
+        if (req) {
+            XX_TEST_EXPECT_EQ(req->id, reqId);
+        }
+    }
+
+    // 客户端 1 回复中断允许
+    client1->send(agentxx::agent::WireInterruptResponse{
+        .id     = reqId,
+        .result = neograph::json::array({"true"}),
+    });
+
+    co_await testSleep(ex, std::chrono::milliseconds{50});
+    XX_TEST_EXPECT_TRUE(*interruptDone);
+
+    // 客户端 1 和客户端 2 均收到广播的 WireInterruptExpired (通知弹窗已处理结束)
+    auto c1_exp = co_await client1->recv();
+    XX_TEST_EXPECT_TRUE(c1_exp.has_value());
+    if (c1_exp) {
+        auto* exp = std::get_if<agentxx::agent::WireInterruptExpired>(&*c1_exp);
+        XX_TEST_EXPECT_TRUE(exp != nullptr);
+        if (exp) {
+            XX_TEST_EXPECT_EQ(exp->id, reqId);
+        }
+    }
+
+    auto c2_exp = co_await client2->recv();
+    XX_TEST_EXPECT_TRUE(c2_exp.has_value());
+    if (c2_exp) {
+        auto* exp = std::get_if<agentxx::agent::WireInterruptExpired>(&*c2_exp);
+        XX_TEST_EXPECT_TRUE(exp != nullptr);
+        if (exp) {
+            XX_TEST_EXPECT_EQ(exp->id, reqId);
+        }
+    }
+
+    // 7. 多客户端断开与宽限期:
+    // 客户端 1 断开，但客户端 2 依然在线，轮次活动时不应触发宽限期超时取消
+    sc->setTurnActiveForTest(true);
+    auto turnCancelled = std::make_shared<bool>(false);
+    asio::co_spawn(
+        ex,
+        [sc, turnCancelled]() -> asio::awaitable<void> {
+            co_await sc->handleInterrupt("multi-client-session", "wait", "val", "{}");
+            *turnCancelled = true;
+            co_return;
+        },
+        asio::detached
+    );
+
+    // 消费掉客户端 1 和 2 上的 handleInterrupt 弹窗请求消息
+    co_await client1->recv();
+    co_await client2->recv();
+
+    // 关闭客户端 1
+    client1->close();
+    server1->close();
+    sc->onDisconnect(server1);
+
+    XX_TEST_EXPECT_EQ(sc->clientCount(), size_t{1});
+    XX_TEST_EXPECT_TRUE(sc->hasAliveClient());
+
+    // 等待 500ms (大于 gracePeriod 400ms)
+    co_await testSleep(ex, std::chrono::milliseconds{500});
+    // 因为客户端 2 仍然在线，轮次没有被取消！
+    XX_TEST_EXPECT_FALSE(*turnCancelled);
+
+    // 现在关闭客户端 2 (所有客户端均断开)
+    client2->close();
+    server2->close();
+    sc->onDisconnect(server2);
+
+    XX_TEST_EXPECT_EQ(sc->clientCount(), size_t{0});
+    XX_TEST_EXPECT_FALSE(sc->hasAliveClient());
+
+    // 此时进入宽限期，等待 500ms 后宽限期满，轮次被取消，中断结束
+    co_await testSleep(ex, std::chrono::milliseconds{500});
+    XX_TEST_EXPECT_TRUE(*turnCancelled);
+
+    sc->stop();
+    co_return;
+}
+
+// ---------------------------------------------------------------------------
+// AgentServer 多客户端并发接入测试:
+// 验证 AgentServer::serveTransport 不再踢掉旧连接, 同一 sessionId 允许多个客户端并存
+// 且多客户端同时接收到真实 BaseAgent 的运行状态输出与轮次完成
+// ---------------------------------------------------------------------------
+
+static asio::awaitable<void> test_agent_server_multi_client() {
+    auto ex = co_await asio::this_coro::executor;
+
+    agentxx::agent::io::AgentServer::Config srvCfg;
+    srvCfg.token             = "secret-123";
+    srvCfg.autoGenerateToken = false;
+    auto server              = std::make_shared<agentxx::agent::io::AgentServer>(
+        std::shared_ptr<agentxx::agent::BaseAgent>{},
+        srvCfg
+    );
+
+    // 客户端 1 的 transport pair
+    auto [c1, s1] = agentxx::agent::ChannelAgentIOTransport::makePair(ex, ex);
+    auto client1  = std::shared_ptr<agentxx::agent::AgentIOTransportBase>(std::move(c1));
+    auto server1  = std::shared_ptr<agentxx::agent::AgentIOTransportBase>(std::move(s1));
+
+    // 客户端 2 的 transport pair
+    auto [c2, s2] = agentxx::agent::ChannelAgentIOTransport::makePair(ex, ex);
+    auto client2  = std::shared_ptr<agentxx::agent::AgentIOTransportBase>(std::move(c2));
+    auto server2  = std::shared_ptr<agentxx::agent::AgentIOTransportBase>(std::move(s2));
+
+    // 服务端分别 serve 两个客户端 transport
+    asio::co_spawn(ex, server->serveTransport(server1), asio::detached);
+    asio::co_spawn(ex, server->serveTransport(server2), asio::detached);
+
+    // 客户端 1 握手
+    client1->send(agentxx::agent::WireHello{"co-session", "secret-123", 0, ""});
+    auto ack1 = co_await client1->recv();
+    XX_TEST_EXPECT_TRUE(ack1.has_value());
+    if (ack1) {
+        auto* a = std::get_if<agentxx::agent::WireHelloAck>(&*ack1);
+        XX_TEST_EXPECT_TRUE(a != nullptr && a->ok);
+    }
+
+    // 客户端 2 握手同一个 session
+    client2->send(agentxx::agent::WireHello{"co-session", "secret-123", 0, ""});
+    auto ack2 = co_await client2->recv();
+    XX_TEST_EXPECT_TRUE(ack2.has_value());
+    if (ack2) {
+        auto* a = std::get_if<agentxx::agent::WireHelloAck>(&*ack2);
+        XX_TEST_EXPECT_TRUE(a != nullptr && a->ok);
+    }
+
+    // 验证：客户端 1 和客户端 2 均依然 alive (旧连接未被踢掉，支持 1:N 并存)
+    XX_TEST_EXPECT_TRUE(client1->alive());
+    XX_TEST_EXPECT_TRUE(client2->alive());
+
+    client1->close();
+    client2->close();
+    server->stop();
+    co_return;
+}
+
+// ---------------------------------------------------------------------------
 // 22. viewMessages 历史分页: 尾窗 hello 同步 + WireGetViewMessages 分页拉取
 //     (initialSyncTailCount>0 时首次接入仅同步末尾窗口; 客户端按绝对下标
 //      向上分页拉取更早历史; beforeIndex==0 兜底从末尾取; count==0 用默认页大小;
@@ -2815,6 +3165,12 @@ asio::awaitable<TestResult> run_remote_agent_tests() {
 
     std::cout << "  [remote] session controller queue resume after abort..." << std::endl;
     co_await test_session_controller_queue_resume_after_abort();
+
+    std::cout << "  [remote] session controller one to many..." << std::endl;
+    co_await test_session_controller_one_to_many();
+
+    std::cout << "  [remote] agent server multi client..." << std::endl;
+    co_await test_agent_server_multi_client();
 
     std::cout << "  [remote] view messages pagination..." << std::endl;
     co_await test_view_messages_pagination();

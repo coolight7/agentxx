@@ -27,13 +27,20 @@ class Session;
 
 /// 按 sessionId 持久的会话控制器 (服务端 AgentIOBase 端点)
 ///
-/// 数据流: BaseAgent → SessionServerAgentIO → transport → 客户端 AgentIOBase
+/// 数据流: BaseAgent → SessionServerAgentIO → 1:N transports → 客户端 AgentIOBase
 ///         客户端 AgentIOBase → transport → SessionServerAgentIO → BaseAgent
 ///
 /// - 作为 AgentIOBase 被 BaseAgent 驱动; 驱动循环独立于连接存在
+/// - 一对多支持: 支持多个客户端 (多个 UI / TUI / CLI) 同时连接同一个会话控制器
+///   - 广播: 会话实时增量 (WireDelta)、轮次结果 (WireTurnResult)、上下文统计 (WireContextStats)、
+///     消息队列更新 (WireMessageQueueUpdate)、中断询问 (WireInterruptRequest)、
+///     中断结束 (WireInterruptExpired)、插件数据 (WirePluginData) 面向所有客户端广播
+///   - 单播: 客户端握手重放/初始化 (HelloAck/Replay)、历史分页请求 (WireGetViewMessages)、
+///     会话列表 (WireListSessions)、模型查询等仅发回给发起请求的具体客户端 transport
 /// - 持有 delta 环形缓冲, 供重连时增量重放 (seq 连续则重放, 否则回退全量 sync)
-/// - 通过 transport 与客户端端点通信 (Channel 或 WS)
-/// - 线程模型: 所有成员状态 (deltaBuffer_/pending_/graceTimer_) 仅在 ex_ 线程访问，
+/// - 多客户端断开与宽限期: 只要有至少一个客户端在线，就不会触发宽限期;
+///   仅当所有客户端均断开且轮次活动时才进入 gracePeriod 宽限期; 期间任意客户端接入即取消宽限期
+/// - 线程模型: 所有成员状态 (clients_/deltaBuffer_/pending_/graceTimer_) 仅在 ex_ 线程访问，
 ///   无需锁保护; stop() 通过 asio::dispatch(ex_) 保证在 ex_ 线程执行清理
 class SessionServerAgentIO : public AgentIOBase,
                              public std::enable_shared_from_this<SessionServerAgentIO> {
@@ -59,8 +66,41 @@ public:
 
     ~SessionServerAgentIO() override;
 
-    // ----- AgentIOBase: 主动发送 (覆写: 新产出的 WireDelta 先写入重放缓冲再转发客户端) -----
+    // ----- 多客户端 Transport 管理 (一对多 1:N) -----
+
+    /// 设置默认传输层 (覆写 AgentIOBase: 添加到客户端列表并设为当前 transport)
+    void setTransport(std::shared_ptr<AgentIOTransportBase> transport) override;
+
+    /// 接入一个新的客户端传输层
+    void attachClient(std::shared_ptr<AgentIOTransportBase> transport);
+
+    /// 移除一个已断开的客户端传输层
+    void detachClient(const std::shared_ptr<AgentIOTransportBase>& transport);
+
+    /// 获取当前已连接客户端数量
+    size_t clientCount() const noexcept;
+
+    /// 是否存在存活 (alive) 的客户端传输
+    bool hasAliveClient() const noexcept;
+
+    /// 获取当前所有客户端传输列表快照
+    std::vector<std::shared_ptr<AgentIOTransportBase>> clients() const;
+
+    /// 广播消息到所有活跃的客户端
+    void broadcastToClients(const WireMessage& msg);
+
+    /// 定向发送消息给特定客户端
+    void sendToClient(const std::shared_ptr<AgentIOTransportBase>& transport, WireMessage msg);
+
+    // ----- AgentIOBase: 主动发送 (覆写: 新产出的 WireDelta 先写入重放缓冲再广播给所有客户端) -----
     void sendToPeer(WireMessage msg) override;
+
+    // ----- AgentIOBase: 传输接收循环 -----
+    /// 针对基类 transport 运行接收循环 (兼容原有单连接用法)
+    asio::awaitable<void> runTransportLoop() override;
+
+    /// 针对特定客户端传输层运行接收循环 (多连接并发使用)
+    asio::awaitable<void> runTransportLoop(std::shared_ptr<AgentIOTransportBase> transport);
 
     // ----- AgentIOBase: 对端从我这拉取的 (BaseAgent 调用) -----
     asio::awaitable<std::optional<std::string>> getInput() override;
@@ -73,6 +113,7 @@ public:
 
     // ----- AgentIOBase: 对端发来的消息分发 -----
     void onPeerMessage(WireMessage msg) override;
+    void onPeerMessage(WireMessage msg, const std::shared_ptr<AgentIOTransportBase>& sender);
 
     // ----- 生命周期 -----
 
@@ -84,11 +125,15 @@ public:
 
     // ----- 连接管理 -----
 
-    /// 处理客户端 hello: 按需重放 delta 或全量 sync, 发送 helloAck
-    void handleHello(const WireHello& hello, std::vector<std::string> models = {});
+    /// 处理客户端 hello: 按需重放 delta 或全量 sync, 发送 helloAck (仅定向回复给 sender 客户端)
+    void handleHello(
+        const WireHello&                                hello,
+        std::vector<std::string>                        models = {},
+        const std::shared_ptr<AgentIOTransportBase>&    sender = nullptr
+    );
 
-    /// 传输断开时调用: 若轮次进行中则启动 grace 定时器
-    void onDisconnect();
+    /// 传输断开时调用: 若指定 transport 则仅移除该客户端; 仅当无存活客户端且轮次进行中才启动 grace 定时器
+    void onDisconnect(const std::shared_ptr<AgentIOTransportBase>& transport = nullptr);
 
     // ----- 查询 -----
 
@@ -157,8 +202,8 @@ private:
     WireSyncPayload          buildTailSync(size_t tailCount);
     std::shared_ptr<Session> session();
 
-    /// 向客户端推送当前上下文统计
-    void sendContextStats();
+    /// 向客户端推送当前上下文统计 (target 指定时仅发向该客户端; 为空时向所有客户端广播)
+    void sendContextStats(const std::shared_ptr<AgentIOTransportBase>& target = nullptr);
 
     /// 向客户端推送当前消息队列更新
     void sendMessageQueueUpdate();
@@ -171,8 +216,11 @@ private:
     void cancelGraceTimer();
     void failAllPending();
 
-    /// 处理客户端历史分页请求 (WireGetViewMessages → WireViewMessagesPage)
-    void handleGetViewMessages(const WireGetViewMessages& req);
+    /// 处理客户端历史分页请求 (WireGetViewMessages → WireViewMessagesPage, target 指定时仅回复给请求方)
+    void handleGetViewMessages(
+        const WireGetViewMessages&                   req,
+        const std::shared_ptr<AgentIOTransportBase>& target = nullptr
+    );
 
     /// 实际清理逻辑 (须在 ex_ 线程执行)
     void stopImpl();
@@ -194,6 +242,9 @@ private:
     asio::any_io_executor    ex_;
     std::weak_ptr<BaseAgent> agent_;
     Config                   config_;
+
+    // 多客户端列表 (1:N 支持, 仅 ex_ 线程访问: attach/detach/broadcast)
+    std::vector<std::shared_ptr<AgentIOTransportBase>> clients_;
 
     // delta 环形缓冲 (仅 ex_ 线程访问: sendToPeer 写, handleHello 读)
     std::deque<WireDelta> deltaBuffer_;

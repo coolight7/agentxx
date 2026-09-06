@@ -45,7 +45,10 @@ namespace agent {
 /// - [双向]   client/server 端点都可用/需实现
 /// - [client] 仅客户端端点应当实现或使用
 /// - [server] 仅服务端端点 (被 BaseAgent 驱动的一侧) 应当实现或使用
-/// - [client-io] 与 [server-io] 是一对一的
+/// - [client-io] 与 [server-io]:
+///   - client 侧端点面对单个 server 端点 (或会话)
+///   - server 侧端点 (SessionServerAgentIO) 支持连接多个 client-io (一对多 1:N),
+///     使多个 UI (如终端 TUI/CLI、Web 界面等) 可同时连接查看并交互同一个 session
 class AgentIOBase {
 public:
 
@@ -130,10 +133,10 @@ public:
     // -----------------------------------------------------------------------
 
     /// 设置传输层 (构造后注入; 端点间通信前必须设置)
-    void setTransport(std::shared_ptr<AgentIOTransportBase> transport);
+    virtual void setTransport(std::shared_ptr<AgentIOTransportBase> transport);
 
-    /// 获取传输层 (可能为 nullptr)
-    std::shared_ptr<AgentIOTransportBase> transport() const noexcept;
+    /// 获取传输层 (可能为 nullptr; 服务端支持多客户端时返回当前/首个传输层)
+    virtual std::shared_ptr<AgentIOTransportBase> transport() const noexcept;
 
     /// 设置事件接收器 (client 插件系统等扩展点的被动回调入口)
     /// - 由模式启动时 (mode_runners) 注入; 端点是 sink 的持有方 (shared_ptr)
@@ -147,7 +150,7 @@ public:
     /// 运行接收循环: 从 transport 读消息并 dispatch 到 onPeerMessage
     /// - 应在协程中 co_await 调用; transport 关闭时自然退出
     /// - 未设置 transport 时立即返回
-    asio::awaitable<void> runTransportLoop();
+    virtual asio::awaitable<void> runTransportLoop();
 
     // -----------------------------------------------------------------------
     // 事件总线 [server] (仅被 BaseAgent 驱动的端点使用)

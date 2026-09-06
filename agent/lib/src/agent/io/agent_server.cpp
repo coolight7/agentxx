@@ -200,6 +200,9 @@ asio::awaitable<void> AgentServer::handleWs(util::HttpServer::WsStream& ws) {
 asio::awaitable<void> AgentServer::serveTransport(std::shared_ptr<AgentIOTransportBase> transport) {
     bindIoThreadIfUnset();
     assertIoThread();
+    if (!ex_) {
+        ex_ = co_await asio::this_coro::executor;
+    }
 
     // 服务端模式初始化: 启动读写循环, 不发送 hello
     WireHello dummyHello;
@@ -240,28 +243,21 @@ asio::awaitable<void> AgentServer::serveTransport(std::shared_ptr<AgentIOTranspo
         }
     }
 
-    // 同一 sessionId 已有旧连接时, 先关闭旧 transport:
-    // 否则旧连接的 runTransportLoop 协程继续存活, 两个接收循环并发处理
-    // 同一会话的消息 (输入重复执行/消息交错), 且旧 transport 持续占用资源
-    if (auto oldTransport = ctrl->transport();
-        oldTransport && oldTransport.get() != transport.get()) {
-        oldTransport->close();
-    }
-
-    // 绑定 transport 到 controller, 发送 helloAck + 增量重放
-    ctrl->setTransport(transport);
-    ctrl->handleHello(*hello, std::move(models));
+    // 一对多 (1:N) 接入: 一个 session 允许同时连接多个 client transport (多个 UI 共同查看/操作)
+    ctrl->attachClient(transport);
+    // 仅向新接入的 transport 定向发送 helloAck 与增量重放 / tail sync, 不干扰其他在线客户端
+    ctrl->handleHello(*hello, std::move(models), transport);
 
     // 注册日志转发 sink: 将服务端日志经 transport 推送给远程客户端
     auto logSink = std::make_shared<TransportLogSink>(transport);
     util::LogDispatcher::instance().addSink(logSink);
 
-    // 运行接收循环 (直到 transport 关闭)
-    co_await ctrl->runTransportLoop();
+    // 运行针对该客户端的独立接收循环 (直到 transport 关闭)
+    co_await ctrl->runTransportLoop(transport);
 
-    // 连接断开
+    // 该连接断开
     util::LogDispatcher::instance().removeSink(logSink);
-    ctrl->onDisconnect();
+    ctrl->onDisconnect(transport);
 }
 
 } // namespace io
