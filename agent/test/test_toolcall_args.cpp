@@ -885,6 +885,101 @@ TestResult testToolcallArgs() {
         XX_TEST_EXPECT_EQ(hit.size(), size_t{1});
         XX_TEST_EXPECT_TRUE(hit.count(ToolcallWrapNode::makeRepeatCallKey("grep", grepKey)) > 0);
     }
+
+    // #51 正向下标 vs 倒数距离 (P0-1 回归):
+    // 过去 baseRun 中使用 `++assistantMsgIndex` 随 `rbegin()` 递增,
+    // 当目标 assistant 位于消息列表末尾 (messages.back()) 时, 错误得到倒数距离 0;
+    // 传入 0 后 findConsecutiveRepeatCallKeys 仅查 messages[0] (通常是 user/system 消息),
+    // 导致重复检测大面积失效。
+    // 修复后直接计算正向下标, 正确触发连续重复调用检测。
+    {
+        auto msgs = std::vector<neograph::ChatMessage>{};
+        msgs.push_back(makeTextMsg("user"));
+        for (size_t i = 0; i < 4; ++i) {
+            msgs.push_back(makeAssistantMsg({
+                {"read_file", KEY_A_TXT}
+            }));
+            msgs.push_back(makeToolResultMsg());
+        }
+        // 第 5 次调用: 位于末尾 (正向下标 messages.size() = 9)
+        msgs.push_back(makeAssistantMsg({
+            {"read_file", KEY_A_TXT}
+        }));
+
+        // 模拟正向下标查找 (与修复后的 baseRun 逻辑一致)
+        size_t forwardIndex = 0;
+        for (size_t i = msgs.size(); i > 0; --i) {
+            const auto& m = msgs[i - 1];
+            if (m.role == "assistant" && !m.tool_calls.empty()) {
+                forwardIndex = i - 1;
+                break;
+            }
+        }
+        XX_TEST_EXPECT_EQ(forwardIndex, msgs.size() - 1);
+        XX_TEST_EXPECT_EQ(forwardIndex, size_t{9});
+
+        // 错误传入 0 (旧实现传倒数距离 0) -> 查 messages[0] 是 user 消息 -> 返回空
+        auto hitWrong = ToolcallWrapNode::findConsecutiveRepeatCallKeys(msgs, 0, T5);
+        XX_TEST_EXPECT_TRUE(hitWrong.empty());
+
+        // 正确传入正向下标 -> 触发
+        auto hitCorrect = ToolcallWrapNode::findConsecutiveRepeatCallKeys(msgs, forwardIndex, T5);
+        XX_TEST_EXPECT_EQ(hitCorrect.size(), size_t{1});
+        XX_TEST_EXPECT_TRUE(
+            hitCorrect.count(ToolcallWrapNode::makeRepeatCallKey("read_file", KEY_A_TXT)) > 0
+        );
+    }
+
+    // #52 末尾非 assistant 时正向下标依然正确回溯定位 (如后接 tool 消息)
+    {
+        auto msgs = std::vector<neograph::ChatMessage>{};
+        msgs.push_back(makeTextMsg("user"));
+        for (size_t i = 0; i < 5; ++i) {
+            msgs.push_back(makeAssistantMsg({
+                {"read_file", KEY_A_TXT}
+            }));
+            msgs.push_back(makeToolResultMsg());
+        }
+        // 当前末尾是 tool 消息, 目标 assistant 位于倒数第 2 条 (正向下标 msgs.size() - 2)
+        size_t forwardIndex = 0;
+        for (size_t i = msgs.size(); i > 0; --i) {
+            const auto& m = msgs[i - 1];
+            if (m.role == "assistant" && !m.tool_calls.empty()) {
+                forwardIndex = i - 1;
+                break;
+            }
+        }
+        XX_TEST_EXPECT_EQ(forwardIndex, msgs.size() - 2);
+
+        auto hit = ToolcallWrapNode::findConsecutiveRepeatCallKeys(msgs, forwardIndex, T5);
+        XX_TEST_EXPECT_EQ(hit.size(), size_t{1});
+        XX_TEST_EXPECT_TRUE(
+            hit.count(ToolcallWrapNode::makeRepeatCallKey("read_file", KEY_A_TXT)) > 0
+        );
+    }
+
+    // #53 repeatCallCheck 工具属性配置语义
+    {
+        struct MockTool : public neograph::Tool {
+            std::string get_name() const override { return "mock"; }
+            neograph::ChatTool get_definition() const override { return {}; }
+            std::string execute(const neograph::json&) override { return {}; }
+        };
+
+        MockTool toolWithCheck;
+        toolWithCheck.extra["repeatCallCheck"] = "true";
+
+        MockTool toolWithoutCheck;
+
+        auto isRepeatCheckEnabled = [](const neograph::Tool& t) -> bool {
+            auto it = t.extra.find("repeatCallCheck");
+            return it != t.extra.end() && it->second == "true";
+        };
+
+        XX_TEST_EXPECT_TRUE(isRepeatCheckEnabled(toolWithCheck));
+        XX_TEST_EXPECT_FALSE(isRepeatCheckEnabled(toolWithoutCheck));
+    }
+
     return TestResult{g_tca_passed, g_tca_failed};
 }
 

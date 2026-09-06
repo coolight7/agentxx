@@ -807,6 +807,49 @@ asio::awaitable<TestResult> run_subagent_tool_tests() {
                 std::string{"tc_rid"}
             );
         }
+
+        // --- D. P0-3 回归: 包含 "中断"/"取消"/"cancel" 的普通错误不应被误判为取消 ---
+        {
+            agentxx::events::RespSubagentBatch resp;
+            resp.results.push_back(agentxx::events::RespSubagentBatchItem{
+                .resultId     = "network-interrupt-task",
+                .content      = "",
+                .hasError     = true,
+                .cancelled    = false,
+                .errorMessage = "网络中断: connection reset by peer",
+            });
+            resp.results.push_back(agentxx::events::RespSubagentBatchItem{
+                .resultId     = "cancel-order-task",
+                .content      = "",
+                .hasError     = true,
+                .cancelled    = false,
+                .errorMessage = "Failed to cancel remote order: order already finalized",
+            });
+            resp.results.push_back(agentxx::events::RespSubagentBatchItem{
+                .resultId     = "real-cancelled-task",
+                .content      = "",
+                .hasError     = true,
+                .cancelled    = true,
+                .errorMessage = "Sub-agent cancelled",
+            });
+
+            // 结构化 cancelled 标志断言: 只有真正的取消任务 cancelled==true
+            XX_TEST_EXPECT_FALSE(resp.results[0].cancelled);
+            XX_TEST_EXPECT_FALSE(resp.results[1].cancelled);
+            XX_TEST_EXPECT_TRUE(resp.results[2].cancelled);
+
+            // 前两个普通错误应当能正常写入 resumeValues
+            neograph::json resumeValues;
+            agentxx::tools::buildSubagentResumeValues(resumeValues, resp, "tc_p03");
+            XX_TEST_EXPECT_EQ(
+                resumeValues["tc_p03_network-interrupt-task"].value("error", std::string{}),
+                std::string{"网络中断: connection reset by peer"}
+            );
+            XX_TEST_EXPECT_EQ(
+                resumeValues["tc_p03_cancel-order-task"].value("error", std::string{}),
+                std::string{"Failed to cancel remote order: order already finalized"}
+            );
+        }
     }
 
     co_return TestResult{g_sat_passed, g_sat_failed};

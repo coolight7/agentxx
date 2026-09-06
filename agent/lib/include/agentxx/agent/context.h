@@ -155,6 +155,13 @@ public:
         ioThreadId_.compare_exchange_strong(expected, std::this_thread::get_id());
     }
 
+    /// 判断当前线程是否为已绑定的 io 线程
+    /// - 未绑定时 (ioThreadId_ == default) 返回 true, 允许初始化阶段/单线程使用
+    bool isIoThread() const noexcept {
+        auto bound = ioThreadId_.load(std::memory_order_relaxed);
+        return bound == std::thread::id{} || bound == std::this_thread::get_id();
+    }
+
     /// 断言当前线程为已绑定的 io 线程
     /// - 未绑定时 (ioThreadId_ == default) 不触发, 允许初始化阶段使用
     /// - 已绑定后, 非 io 线程调用在 Debug 下 assert 失败, Release 下记录错误并返回

@@ -35,7 +35,22 @@ AgentContext::~AgentContext() {
 }
 
 Session::~Session() {
-    flushPendingViewOps();
+    // 析构线程安全守卫:
+    // - pendingViewOps_ 与 hooks_ 严格约定仅在 bound io 线程访问
+    // - 若 Session 在非 io 线程析构 (如 SessionsManager::remove 或 AgentHost::destroyAgent
+    //   在其他线程释放最后引用), 禁止跨线程触发 SQLite 落库或并发读写 pendingViewOps_;
+    //   此时宿主/进程正在拆卸, 直接丢弃待落盘操作并记录警告
+    if (isIoThread()) {
+        flushPendingViewOps();
+    } else {
+        if (!pendingViewOps_.empty()) {
+            XX_LOGW(
+                "Session destructor called off io thread; discarding {} pending view ops",
+                pendingViewOps_.size()
+            );
+            pendingViewOps_.clear();
+        }
+    }
 }
 
 std::string Session::appendViewMessage(ViewMessage msg) {

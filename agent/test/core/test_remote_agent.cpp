@@ -2697,6 +2697,47 @@ static asio::awaitable<void> test_session_controller_queue_resume_after_abort() 
         XX_TEST_EXPECT_TRUE(!turnResults[3].hasError && !turnResults[3].interrupted);
     }
 
+    // ---- 5) P0-2 回归: 积压消息 (backlog) + 暂停态 + 用户新输入 -> 解除暂停恢复执行, 不死锁 ----
+    // 发送 turn 5 开始运行, 同时排队 turn 6 (进入积压队列)
+    clientT->send(agentxx::agent::WireMessage{
+        agentxx::agent::WireUserInput{"queue-resume-test-session", "turn 5", ""}
+    });
+    // 排队一条积压消息
+    clientT->send(agentxx::agent::WireMessage{
+        agentxx::agent::WireUserInput{"queue-resume-test-session", "turn 6 (backlog)", ""}
+    });
+    // 发送取消中断 turn 5
+    clientT->send(agentxx::agent::WireMessage{
+        agentxx::agent::WireCancel{"queue-resume-test-session"}
+    });
+    // 等待 turn 5 结束 (cancelled/error)
+    XX_TEST_EXPECT_TRUE(co_await waitForTurns(5));
+    {
+        std::lock_guard<std::mutex> lk(mu);
+        XX_TEST_EXPECT_TRUE(turnResults[4].interrupted || turnResults[4].hasError);
+    }
+    // 等待确认 turn 6 因队列暂停而没有自动执行
+    co_await testSleep(ex, std::chrono::milliseconds{150});
+    {
+        std::lock_guard<std::mutex> lk(mu);
+        XX_TEST_EXPECT_EQ(turnResults.size(), size_t{5});
+    }
+
+    // 此时处于: 空闲 + 队列非空 (含 turn 6) + queuePaused_ == true
+    // 用户发送新消息 turn 7: 必须解除暂停并唤醒循环, 使 turn 6 和 turn 7 均得到执行, 绝不死锁!
+    clientT->send(agentxx::agent::WireMessage{
+        agentxx::agent::WireUserInput{"queue-resume-test-session", "turn 7 (new input)", ""}
+    });
+
+    // 等待 turn 6 和 turn 7 均完成 (预期 turnResults.size() 达到 7)
+    XX_TEST_EXPECT_TRUE(co_await waitForTurns(7));
+    {
+        std::lock_guard<std::mutex> lk(mu);
+        XX_TEST_EXPECT_EQ(turnResults.size(), size_t{7});
+        XX_TEST_EXPECT_TRUE(!turnResults[5].hasError && !turnResults[5].interrupted);
+        XX_TEST_EXPECT_TRUE(!turnResults[6].hasError && !turnResults[6].interrupted);
+    }
+
     clientT->close();
     sc->stop();
     sim.stop();

@@ -1011,6 +1011,70 @@ static asio::awaitable<void> testTurnEndTipPersistenceRoundtrip() {
     co_return;
 }
 
+/// P0-4 回归: Session 析构函数线程安全
+/// - 绑定的 io 线程析构时正常 flushPendingViewOps
+/// - 非 io 线程析构时安全丢弃 pendingViewOps, 禁止跨线程调用 SQLite hooks
+static void testSessionDestructorThreadSafety() {
+    // Case 1: 在绑定的 io 线程析构 -> 正常回放
+    {
+        bool hookCalled = false;
+        {
+            auto sess = std::make_shared<agentxx::agent::Session>();
+            sess->bindIoThread();
+            XX_TEST_EXPECT_TRUE(sess->isIoThread());
+
+            sess->setStoreHooks(agentxx::agent::SessionStoreHooks{
+                .onAppendViewMessage = [&](const agentxx::agent::ViewMessage&, uint64_t) {
+                    hookCalled = true;
+                },
+            });
+
+            // 首次立即落库, 将 viewLastPersistMs 置为当前时间
+            sess->appendViewMessage(makeMsg(agentxx::agent::ViewMessage::Role::User, "msg1"));
+            hookCalled = false;
+
+            // 节流窗口内第二条: 进入 pendingViewOps_
+            sess->appendViewMessage(makeMsg(agentxx::agent::ViewMessage::Role::User, "msg2"));
+            XX_TEST_EXPECT_FALSE(hookCalled);
+
+            // sess 随作用域在当前 (io) 线程析构
+        }
+        // 绑定的 io 线程析构应触发 flushPendingViewOps, 回放未落盘操作
+        XX_TEST_EXPECT_TRUE(hookCalled);
+    }
+
+    // Case 2: 在非 io 线程析构 -> 安全丢弃, 禁止跨线程调用 hook
+    {
+        bool hookCalledOffThread = false;
+        auto sess = std::make_shared<agentxx::agent::Session>();
+        sess->bindIoThread(); // 绑定到当前线程
+
+        sess->setStoreHooks(agentxx::agent::SessionStoreHooks{
+            .onAppendViewMessage = [&](const agentxx::agent::ViewMessage&, uint64_t) {
+                hookCalledOffThread = true;
+            },
+        });
+
+        // 首次立即落库
+        sess->appendViewMessage(makeMsg(agentxx::agent::ViewMessage::Role::User, "msg1"));
+        hookCalledOffThread = false;
+        // 节流窗口内第二条: 进入 pendingViewOps_
+        sess->appendViewMessage(makeMsg(agentxx::agent::ViewMessage::Role::User, "msg2"));
+        XX_TEST_EXPECT_FALSE(hookCalledOffThread);
+
+        // 将 sess 移交给其他工作线程析构
+        std::thread workerThread([s = std::move(sess)]() mutable {
+            XX_TEST_EXPECT_FALSE(s->isIoThread());
+            // s 在 workerThread 析构: 触发 Session::~Session()
+            s.reset();
+        });
+        workerThread.join();
+
+        // 非 io 线程析构不应调用 hook
+        XX_TEST_EXPECT_FALSE(hookCalledOffThread);
+    }
+}
+
 asio::awaitable<TestResult> run_session_persistence_tests() {
     g_sp_passed = 0;
     g_sp_failed = 0;
@@ -1024,6 +1088,7 @@ asio::awaitable<TestResult> run_session_persistence_tests() {
     testMiddlewareShareStorePersistence();
     testSanitizeThreadId();
     testSessionListPagination();
+    testSessionDestructorThreadSafety();
 
     // E2E 需要独立 io_context (BaseAgent 内部有自身的 io 循环)
     asio::io_context io;
