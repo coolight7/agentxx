@@ -1044,6 +1044,14 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                     XX_TEST_EXPECT_TRUE(dump.find("[~] do step 1") != std::string::npos);
                     XX_TEST_EXPECT_TRUE(dump.find("[#] done step 0") != std::string::npos);
                     XX_TEST_EXPECT_TRUE(dump.find("test note 123") != std::string::npos);
+                    // 验证 items 中的 |- 前缀与 Graph 按钮布局契约
+                    XX_TEST_EXPECT_TRUE(sec.items.is_array());
+                    XX_TEST_EXPECT_TRUE(sec.items.size() >= 2);
+                    XX_TEST_EXPECT_EQ(sec.items[0].value("kind", ""), std::string{"text"});
+                    XX_TEST_EXPECT_EQ(sec.items[0].value("text", ""), std::string{"|- "});
+                    XX_TEST_EXPECT_EQ(sec.items[1].value("kind", ""), std::string{"button"});
+                    XX_TEST_EXPECT_EQ(sec.items[1].value("label", ""), std::string{"[Graph]"});
+                    XX_TEST_EXPECT_TRUE(sec.items[1].contains("mermaid"));
                 }
             }
             XX_TEST_EXPECT_TRUE(hasPlanSection);

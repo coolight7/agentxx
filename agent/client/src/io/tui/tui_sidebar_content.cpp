@@ -52,22 +52,69 @@ ftxui::Element buildLogLine(const TUILogSink::Line& line, const TUITheme& theme)
 /// register_panel/register_info_section)
 /// - text 项支持 role 指定样式: "title"=高亮强调 / "normal"=普通文本(默认) /
 ///   "hint"=减淡提示
-static void
-    appendPluginItems(const neograph::json& items, const TUITheme& theme, ftxui::Elements& out) {
+static void appendPluginItems(
+    const neograph::json& items,
+    const TUITheme&       theme,
+    ftxui::Elements&      out,
+    ftxui::Box*           mermaidButtonBox = nullptr,
+    std::string*          mermaidSource    = nullptr
+) {
     if (!items.is_array()) {
         return;
     }
     auto push = [&](ftxui::Element el) {
         out.push_back(std::move(el));
     };
-    for (const auto& it : items) {
+    const size_t itemCount = items.size();
+    for (size_t i = 0; i < itemCount; ++i) {
+        const auto& it = items[i];
         if (!it.is_object()) {
             continue;
         }
         const auto kind = it.value("kind", std::string{"text"});
         if (kind == "text") {
-            const auto role = it.value("role", std::string{"normal"});
-            const auto txt  = paragraph(it.value("text", std::string{}));
+            const auto role   = it.value("role", std::string{"normal"});
+            const auto txtStr = it.value("text", std::string{});
+
+            // 若下一个 item 为 button (如 "|- " 后面紧跟按钮), 则合并为单行展示
+            if (i + 1 < itemCount && items[i + 1].is_object()
+                && items[i + 1].value("kind", std::string{}) == "button") {
+                const auto& btnIt   = items[i + 1];
+                const auto  mermaid = btnIt.value("mermaid", std::string{});
+                const auto  label   = btnIt.value(
+                    "label",
+                    btnIt.value(
+                        "text",
+                        !mermaid.empty() ? std::string(tr("info.graphButton"))
+                                         : std::string{"Button"}
+                    )
+                );
+                std::string btnLabel = label;
+                if (!btnLabel.empty() && btnLabel.front() != ' ' && btnLabel.back() != ' ') {
+                    btnLabel = " " + btnLabel + " ";
+                }
+                Element btn = text(btnLabel) | bgcolor(theme.buttonBgColor)
+                              | color(theme.buttonTextColor) | bold;
+                if (!mermaid.empty() && mermaidButtonBox && mermaidSource) {
+                    *mermaidSource = mermaid;
+                    btn            = btn | reflect(*mermaidButtonBox);
+                }
+
+                ftxui::Color textColor = theme.normalColor;
+                if (role == "title") {
+                    textColor = theme.accentColor;
+                } else if (role == "hint") {
+                    textColor = theme.hintColor;
+                }
+                push(hbox({
+                    text(txtStr) | color(textColor),
+                    std::move(btn),
+                }));
+                ++i;
+                continue;
+            }
+
+            const auto txt = paragraph(txtStr);
             if (role == "title") {
                 push(txt | color(theme.accentColor) | bold);
             } else if (role == "hint") {
@@ -81,8 +128,8 @@ static void
             const int    filled = static_cast<int>(v * w);
             std::string  bar;
             bar.reserve(w);
-            for (int i = 0; i < w; ++i) {
-                bar += (i < filled) ? '#' : '-';
+            for (int j = 0; j < w; ++j) {
+                bar += (j < filled) ? '#' : '-';
             }
             push(hbox({
                 text("[" + bar + "]") | color(theme.accentColor),
@@ -93,13 +140,35 @@ static void
         } else if (kind == "separator") {
             push(text("─") | color(theme.hintColor) | dim);
         } else if (kind == "button") {
-            // 通用按钮 (如 Plan Graph 弹窗触发): 渲染为带背景的标签
-            const auto label = it.value("label", it.value("text", std::string{"Button"}));
-            // 普通按钮样式 (无点击捕获时仅视觉区分)
-            push(
-                text(" " + label + " ") | bgcolor(theme.buttonBgColor)
-                | color(theme.buttonTextColor) | bold
+            const auto  prefix  = it.value("prefix", std::string{});
+            const auto  mermaid = it.value("mermaid", std::string{});
+            const auto  label   = it.value(
+                "label",
+                it.value(
+                    "text",
+                    !mermaid.empty() ? std::string(tr("info.graphButton"))
+                                     : std::string{"Button"}
+                )
             );
+            std::string btnLabel = label;
+            if (!btnLabel.empty() && btnLabel.front() != ' ' && btnLabel.back() != ' ') {
+                btnLabel = " " + btnLabel + " ";
+            }
+            Element btn = text(btnLabel) | bgcolor(theme.buttonBgColor)
+                          | color(theme.buttonTextColor) | bold;
+            if (!mermaid.empty() && mermaidButtonBox && mermaidSource) {
+                *mermaidSource = mermaid;
+                btn            = btn | reflect(*mermaidButtonBox);
+            }
+
+            if (!prefix.empty()) {
+                push(hbox({
+                    text(prefix) | color(theme.normalColor),
+                    std::move(btn),
+                }));
+            } else {
+                push(std::move(btn));
+            }
         }
     }
 }
@@ -154,85 +223,35 @@ std::vector<ScrollItem> TUIClientAgentIO::renderInfoSidebar() {
     // 每帧从 client 插件注册表快照读取, 无需缓存):
     // - 段落在 Append 之后按注册顺序展示 (标题 + items, items schema 同面板)
     // - 若段落无内容项则跳过，避免仅显示孤立标题
-    // - Plan Graph 按钮特殊处理: 渲染为可点击按钮，点击弹窗状态图
+    // - 携带 mermaid 字段的 button 项通用绑定状态图弹窗交互 (点击 reflect 命中区域并弹窗)
     planGraphButtonBox_ = ftxui::Box{0, -1, 0, -1};
     planGraphMermaid_.clear();
     if (auto mgr = pluginManager_) {
         auto reg = mgr->uiRegistrySnapshot();
         if (reg && !reg->infoSections.empty()) {
             for (const auto& sec : reg->infoSections) {
-                if (sec.id == "agentxx_planning.plan") {
-                    // Plan 定制渲染: Graph(按钮弹窗) / Todo / Note 三段式
-                    // (参考剥离前的 renderPlanningInfo: Plan 标题 + Graph 按钮 + todos + notes)
-                    Elements secEls;
-                    if (!sec.title.empty()) {
-                        // 标题行: Plan + Graph 按钮 (若有 roadmap)
-                        Elements titleRow;
-                        titleRow.push_back(text(sec.title) | color(theme_.accentColor));
-                        // 从 items 中提取 Graph 的 mermaid (button kind)
-                        std::string graphMermaid;
-                        for (const auto& it : sec.items) {
-                            if (it.is_object() && it.value("kind", std::string{}) == "button") {
-                                graphMermaid = it.value("mermaid", std::string{});
-                                break;
-                            }
-                        }
-                        if (!graphMermaid.empty()) {
-                            titleRow.push_back(text(" "));
-                            titleRow.push_back(
-                                text(tr("info.graphButton")) | bgcolor(theme_.buttonBgColor)
-                                | color(theme_.buttonTextColor) | reflect(planGraphButtonBox_)
-                            );
-                            planGraphMermaid_ = graphMermaid;
-                        }
-                        secEls.push_back(hbox(std::move(titleRow)));
-                    }
-                    // 剩余 items: 按通用渲染 but 跳过已处理的 button (已在标题行渲染)
-                    bool isFirstGraphButtonSkipped = false;
-                    for (const auto& it : sec.items) {
-                        if (!it.is_object()) {
-                            continue;
-                        }
-                        const auto kind = it.value("kind", std::string{"text"});
-                        if (kind == "button" && !isFirstGraphButtonSkipped) {
-                            // 首个 Graph 按钮已在标题行渲染，跳过避免重复
-                            isFirstGraphButtonSkipped = true;
-                            continue;
-                        }
-                        // Graph 段的 "Graph:" title 已在按钮行体现, 跳过重复标题?
-                        // 保留 Todo/Note 的 title 文本
-                        Elements       tmp;
-                        neograph::json arr = neograph::json::array();
-                        arr.push_back(it);
-                        appendPluginItems(arr, theme_, tmp);
-                        for (auto& el : tmp) {
-                            secEls.push_back(std::move(el));
-                        }
-                    }
-                    if (secEls.empty()) {
-                        continue;
-                    }
-                    elements.push_back(vbox(std::move(secEls)));
-                    elements.push_back(text(" "));
-                } else {
-                    Elements secItems;
-                    // Info 栏段落列表项按 Append 段样式 ("|  xxx") 展示
-                    appendPluginItems(sec.items, theme_, secItems);
-                    if (secItems.empty()) {
-                        continue;
-                    }
-                    Elements secEls;
-                    if (!sec.title.empty()) {
-                        secEls.push_back(text(sec.title) | color(theme_.accentColor));
-                    }
-                    secEls.insert(
-                        secEls.end(),
-                        std::make_move_iterator(secItems.begin()),
-                        std::make_move_iterator(secItems.end())
-                    );
-                    elements.push_back(vbox(std::move(secEls)));
-                    elements.push_back(text(" "));
+                Elements secItems;
+                appendPluginItems(
+                    sec.items,
+                    theme_,
+                    secItems,
+                    &planGraphButtonBox_,
+                    &planGraphMermaid_
+                );
+                if (secItems.empty()) {
+                    continue;
                 }
+                Elements secEls;
+                if (!sec.title.empty()) {
+                    secEls.push_back(text(sec.title) | color(theme_.accentColor));
+                }
+                secEls.insert(
+                    secEls.end(),
+                    std::make_move_iterator(secItems.begin()),
+                    std::make_move_iterator(secItems.end())
+                );
+                elements.push_back(vbox(std::move(secEls)));
+                elements.push_back(text(" "));
             }
         }
     }
