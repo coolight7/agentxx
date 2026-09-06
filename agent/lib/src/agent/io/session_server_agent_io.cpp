@@ -462,7 +462,18 @@ void SessionServerAgentIO::onPeerMessage(WireMessage msg) {
                 );
             } else if constexpr (std::is_same_v<T, WireSwitchSession>) {
                 // 客户端请求切换会话 (弹窗选择后); 运行态拦截由客户端前置完成
-                switchSession(std::move(m.sessionId));
+                // 先在线程池中异步预热加载目标会话历史, 避免在 io 线程产生阻塞 SQLite 读
+                asio::co_spawn(
+                    ex_,
+                    [self = shared_from_this(), newId = std::move(m.sessionId)]()
+                        -> asio::awaitable<void> {
+                        if (auto agent = self->agent_.lock(); agent && agent->agentContext) {
+                            co_await agent->agentContext->getSessionAsync(newId);
+                        }
+                        self->switchSession(std::move(newId));
+                    },
+                    asio::detached
+                );
             } else if constexpr (std::is_same_v<T, WireSetPermission>) {
                 // 客户端记住权限选择: 经 EventBus 发布规则到权限中间件,
                 // 后续访问该路径或其子目录时按规则直接允许/拒绝, 不再询问

@@ -653,7 +653,7 @@ void testTuiToolHeaderDecor() {
     XX_TEST_EXPECT_TRUE(
         expanded.find("agentxx_planning") == std::string::npos
     ); ///< 无原始工具名特化
-    XX_TEST_EXPECT_TRUE(expanded.find("State Diagram:") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(expanded.find("phase1") != std::string::npos);
     XX_TEST_EXPECT_TRUE(expanded.find("Todos:") != std::string::npos);
     XX_TEST_EXPECT_TRUE(expanded.find("[~] do task A") != std::string::npos);
     XX_TEST_EXPECT_TRUE(expanded.find("working on A") != std::string::npos);
