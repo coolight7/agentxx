@@ -391,7 +391,6 @@ struct ToolHeaderFixture {
             d.displayName     = "Plan";
             d.summary         = "[~] reproduce issue; [ ] fix root cause; [#] write tests";
             d.items           = neograph::json::parse(R"([
-                {"kind":"text","role":"title","text":"State Diagram:"},
                 {"kind":"diagram","mermaid":"stateDiagram-v2\n[*] --> phase1\nphase1 --> [*]"},
                 {"kind":"text","role":"title","text":"Todos:"},
                 {"kind":"text","role":"normal","text":"[~] do task A"},

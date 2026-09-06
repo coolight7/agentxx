@@ -687,7 +687,6 @@ static std::string buildDecorItems(const ClientCtx& ctx, const neograph::json& p
     // ---- Graph: 状态图 (按钮，点击弹窗) ----
     const auto roadmap = plan.value("roadmap", std::string{});
     if (!roadmap.empty()) {
-        textItem("State Diagram:", "title");
         buttonItem(" Graph ", roadmap);
         // 兼容旧 TUI: 保留 inline diagram 供不支持 button 的客户端回退渲染；
         // 新 TUI 优先将 button 渲染为可点击弹窗，旧测试仍可通过 diagram 断言。
