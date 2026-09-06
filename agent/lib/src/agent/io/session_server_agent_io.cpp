@@ -259,23 +259,26 @@ void SessionServerAgentIO::pushMessageQueueItem(std::string text, std::string mo
     item.model       = std::move(model);
     item.createdAtMs = nowMs;
 
-    // 注意: 空闲 + 队列为空时即使处于暂停态也立即执行并解除暂停。
+    // 注意: 空闲状态下收到用户新输入时, 无论队列是否已有积压消息, 均解除暂停并唤醒执行:
     // - 暂停态来自上一轮的异常/取消/中断 (run() 轮末按结果置位), 用于阻止
-    //   "积压消息"自动继续执行; 但此刻队列已空, 本条是用户主动发送的新输入,
-    //   视为明确的新轮次指令 —— 若不解除暂停, 驱动循环不会处理队列, 该消息
-    //   将永远滞留等待 (异常中断后 TUI 发送消息卡在队列的根因)
-    const bool willExecuteImmediately
-        = !turnActive_.load(std::memory_order_acquire) && messageQueue_.empty();
+    //   "积压消息"自动继续执行; 此刻用户主动发送了新输入, 视为明确的新轮次指令
+    // - 若空闲且队列为空: 本条消息将被驱动循环立即弹出执行, 此时不向客户端推送中间的
+    //   1->0 队列状态, 避免 UI 闪烁
+    // - 若空闲且队列已有积压消息: 解除暂停并唤醒驱动循环, 驱动循环从队首依次恢复执行,
+    //   同时向客户端推送包含全部排队项的最新队列状态
+    const bool isIdle   = !turnActive_.load(std::memory_order_acquire);
+    const bool wasEmpty = messageQueue_.empty();
 
     messageQueue_.push_back(std::move(item));
 
-    if (willExecuteImmediately) {
-        // 当前完全空闲，此条消息将被驱动循环立即弹出执行，不向客户端推送中间的 1->0 队列状态，避免
-        // UI 闪烁
+    if (isIdle) {
         queuePaused_ = false;
         wakeChannel_->try_send(ErrorCode{}, 1);
+        if (!wasEmpty) {
+            sendMessageQueueUpdate();
+        }
     } else {
-        // 真正进入排队等待 (前有进行中轮次 / 前有积压消息)，同步队列给客户端
+        // 真正进入排队等待 (前有进行中轮次)，同步队列给客户端
         sendMessageQueueUpdate();
     }
 }
@@ -929,6 +932,9 @@ asio::awaitable<void> SessionServerAgentIO::run() {
             queuePaused_ = false;
         } else {
             queuePaused_ = true;
+            if (!messageQueue_.empty()) {
+                sendMessageQueueUpdate();
+            }
         }
         turnActive_.store(false, std::memory_order_release);
     }
