@@ -98,13 +98,12 @@ bool TextSelectionHolder::start(int debounceMs) {
                     jsonEscape(*ctx, sourceName(evt.source)),
                     tsMs
                 );
-                ctx->iface.events->publish(
-                    ctx->host,
-                    agentxx::plugin::PluginStringView::fromCstr(
-                        "agentxx_text_selection_monitor.selection"
-                    ),
-                    agentxx::plugin::PluginStringView::from(payload.data(), payload.size())
+                auto topicSv = agentxx::plugin::PluginStringView::fromCstr(
+                    "agentxx_text_selection_monitor.selection"
                 );
+                auto payloadSv
+                    = agentxx::plugin::PluginStringView::from(payload.data(), payload.size());
+                ctx->iface.events->publish(ctx->host, &topicSv, &payloadSv);
             } catch (...) {
                 if (ctx) {
                     ctx->log.error("selection event publish failed");

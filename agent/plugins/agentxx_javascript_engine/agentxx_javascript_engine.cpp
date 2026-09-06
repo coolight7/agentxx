@@ -1193,10 +1193,8 @@ JSValue JsEngine::bridgeCall(
             if (name.empty()) {
                 return JS_ThrowTypeError(ctx, "unregisterTool: name required");
             }
-            iface.tools->unregister_tool(
-                host,
-                agentxx::plugin::PluginStringView::from(name.data(), name.size())
-            );
+            auto nameSv = agentxx::plugin::PluginStringView::from(name.data(), name.size());
+            iface.tools->unregister_tool(host, &nameSv);
             JS_SetPropertyStr(ctx, pctx->tools, name.c_str(), JS_UNDEFINED);
             return JS_UNDEFINED;
         }
@@ -1552,16 +1550,11 @@ JSValue JsEngine::bridgeCall(
             if (argc < 1 || !JS_IsString(argv[0])) {
                 return JS_ThrowTypeError(ctx, "path string required");
             }
-            std::string p  = jsToCppString(ctx, argv[0]);
-            int         rc = (magic == B_ADD_SKILL_DIR)
-                                 ? iface.resources->register_skill_dir(
-                             host,
-                             agentxx::plugin::PluginStringView::fromCstr(p.c_str())
-                         )
-                                 : iface.resources->register_memory_file(
-                             host,
-                             agentxx::plugin::PluginStringView::fromCstr(p.c_str())
-                         );
+            std::string p   = jsToCppString(ctx, argv[0]);
+            auto        pSv = agentxx::plugin::PluginStringView::fromCstr(p.c_str());
+            int         rc  = (magic == B_ADD_SKILL_DIR)
+                                  ? iface.resources->register_skill_dir(host, &pSv)
+                                  : iface.resources->register_memory_file(host, &pSv);
             if (rc != 0) {
                 return throwJsError(
                     ctx,
@@ -1576,16 +1569,11 @@ JSValue JsEngine::bridgeCall(
             if (argc < 1 || !JS_IsString(argv[0])) {
                 return JS_ThrowTypeError(ctx, "path string required");
             }
-            std::string p  = jsToCppString(ctx, argv[0]);
-            bool        ok = (magic == B_REMOVE_SKILL_DIR)
-                                 ? iface.resources->unregister_skill_dir(
-                                host,
-                                agentxx::plugin::PluginStringView::fromCstr(p.c_str())
-                            ) == 0
-                                 : iface.resources->unregister_memory_file(
-                                host,
-                                agentxx::plugin::PluginStringView::fromCstr(p.c_str())
-                            ) == 0;
+            std::string p   = jsToCppString(ctx, argv[0]);
+            auto        pSv = agentxx::plugin::PluginStringView::fromCstr(p.c_str());
+            bool        ok  = (magic == B_REMOVE_SKILL_DIR)
+                                  ? (iface.resources->unregister_skill_dir(host, &pSv) == 0)
+                                  : (iface.resources->unregister_memory_file(host, &pSv) == 0);
             return ok ? JS_TRUE : JS_FALSE;
         }
 
@@ -1636,11 +1624,8 @@ JSValue JsEngine::bridgeCall(
             );
             agentxx::plugin::PluginString::free(host, &nsEsc);
             agentxx::plugin::PluginString::free(host, &urlEsc);
-            if (iface.resources->register_mcp_server(
-                    host,
-                    agentxx::plugin::PluginStringView::fromCstr(spec.c_str())
-                )
-                != 0) {
+            auto specSv = agentxx::plugin::PluginStringView::fromCstr(spec.c_str());
+            if (iface.resources->register_mcp_server(host, &specSv) != 0) {
                 return throwJsError(
                     ctx,
                     fmt::format("addMcpServer register failed (conflict?): {}", ns)
@@ -1653,13 +1638,9 @@ JSValue JsEngine::bridgeCall(
             if (argc < 1 || !JS_IsString(argv[0])) {
                 return JS_ThrowTypeError(ctx, "removeMcpServer: namespace required");
             }
-            std::string ns = jsToCppString(ctx, argv[0]);
-            return iface.resources->unregister_mcp_server(
-                       host,
-                       agentxx::plugin::PluginStringView::from(ns.data(), ns.size())
-                   ) == 0
-                       ? JS_TRUE
-                       : JS_FALSE;
+            std::string ns   = jsToCppString(ctx, argv[0]);
+            auto        nsSv = agentxx::plugin::PluginStringView::from(ns.data(), ns.size());
+            return iface.resources->unregister_mcp_server(host, &nsSv) == 0 ? JS_TRUE : JS_FALSE;
         }
 
         default:

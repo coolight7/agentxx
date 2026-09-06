@@ -97,6 +97,24 @@ struct PluginStringView {
                        : std::string_view{};
     }
 
+    /// 指针重载
+    static std::string_view str(const AgentxxPluginStringView* sv) noexcept {
+        return (sv && sv->data) ? std::string_view{sv->data, static_cast<size_t>(sv->size)}
+                                : std::string_view{};
+    }
+
+    /// 宿主堆字符串 → std::string_view (零拷贝; NULL data 视为空串)
+    static std::string_view str(const AgentxxPluginString& s) noexcept {
+        return s.data ? std::string_view{s.data, static_cast<size_t>(s.size)}
+                      : std::string_view{};
+    }
+
+    /// 指针重载
+    static std::string_view str(const AgentxxPluginString* s) noexcept {
+        return (s && s->data) ? std::string_view{s->data, static_cast<size_t>(s->size)}
+                              : std::string_view{};
+    }
+
     /// 宿主堆字符串 → ABI 视图 (原 agentxx_plugin_string_to_sv)
     static AgentxxPluginStringView toSv(const AgentxxPluginString& s) noexcept {
         return AgentxxPluginStringView{s.data, s.size};
@@ -314,7 +332,7 @@ const Iface* queryInterface(const AgentxxPluginHost* host, std::string_view iid)
 template<typename Iface>
 const Iface*
     queryInterface(const AgentxxPluginHost* host, const AgentxxPluginStringView& iid) noexcept {
-    if (!host || !host->vtable || !host->vtable->query_interface || iid.empty()) {
+    if (!host || !host->vtable || !host->vtable->query_interface || PluginStringView::empty(iid)) {
         return nullptr;
     }
     return static_cast<const Iface*>(host->vtable->query_interface(host, &iid));

@@ -203,11 +203,8 @@ asio::awaitable<TestResult> run_plugin_multi_instance_tests() {
             size_t inflightBefore = instC->inflight.load(std::memory_order_acquire);
 
             // 通知完成 (模拟插件协程结束上报) → inflight-1 + 句柄回收 (异步)
-            ntf.done(
-                ntf.host_ud,
-                AGENTXX_PLUGIN_OPERATOR_OK,
-                agentxx::plugin::PluginStringView::from(nullptr, 0)
-            );
+            auto nullSv = agentxx::plugin::PluginStringView::from(nullptr, 0);
+            ntf.done(ntf.host_ud, AGENTXX_PLUGIN_OPERATOR_OK, &nullSv);
             XX_TEST_EXPECT_TRUE(
                 st->done.exchange(true) == false
             ); ///< 恰好一次语义由 OpCore CAS 保证
@@ -266,11 +263,8 @@ asio::awaitable<TestResult> run_plugin_multi_instance_tests() {
                 // cancel_fn 被调用 (协作式)
                 XX_TEST_EXPECT_TRUE(st->cancelCount.load(std::memory_order_relaxed) >= 1);
                 // 取消后仍可上报完成 (宿主幂等; 不 UAF)
-                ntf2.done(
-                    ntf2.host_ud,
-                    AGENTXX_PLUGIN_OPERATOR_CANCELLED,
-                    agentxx::plugin::PluginStringView::from(nullptr, 0)
-                );
+                auto nullSv2 = agentxx::plugin::PluginStringView::from(nullptr, 0);
+                ntf2.done(ntf2.host_ud, AGENTXX_PLUGIN_OPERATOR_CANCELLED, &nullSv2);
                 for (int i = 0; i < 100; ++i) {
                     auto stillTracked = std::any_of(
                         instC->outstandingOps.begin(),

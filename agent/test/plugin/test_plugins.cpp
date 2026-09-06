@@ -932,23 +932,15 @@ asio::awaitable<TestResult> run_plugin_tests() {
             // 启用状态: publish 正常 (agentxx.agent.events 接口表)
             const auto ev30 = agentxx::plugin::AgentIfaces::query(&inst30->host).events;
             XX_TEST_EXPECT_TRUE(ev30 != nullptr && ev30->publish != nullptr);
+            auto topicSv = agentxx::plugin::PluginStringView::fromCstr("demo.topic");
+            auto paySv   = agentxx::plugin::PluginStringView::fromCstr(R"({"k":"v"})");
             XX_TEST_EXPECT_EQ(
-                ev30 ? ev30->publish(
-                    &inst30->host,
-                    agentxx::plugin::PluginStringView::fromCstr("demo.topic"),
-                    agentxx::plugin::PluginStringView::fromCstr(R"({"k":"v"})")
-                )
-                     : -1,
+                ev30 ? ev30->publish(&inst30->host, &topicSv, &paySv) : -1,
                 0
             );
             ctx->pluginManager->disable("example_plugin");
             // 禁用状态: 接口表 publish 拒绝 (返回非 0)
-            int rc = ev30 ? ev30->publish(
-                         &inst30->host,
-                         agentxx::plugin::PluginStringView::fromCstr("demo.topic"),
-                         agentxx::plugin::PluginStringView::fromCstr(R"({"k":"v"})")
-                     )
-                          : -1;
+            int rc = ev30 ? ev30->publish(&inst30->host, &topicSv, &paySv) : -1;
             XX_TEST_EXPECT_TRUE(rc != 0);
             co_await ctx->pluginManager->unloadAsync("example_plugin");
         }

@@ -40,8 +40,8 @@ struct ResCtx {
 
     void logErr(const std::string& msg) const {
         if (host && iface.log && iface.log->log) {
-            iface.log
-                ->log(host, 4, agentxx::plugin::PluginStringView::from(msg.data(), msg.size()));
+            auto sv = agentxx::plugin::PluginStringView::from(msg.data(), msg.size());
+            iface.log->log(host, 4, &sv);
         }
     }
 };
@@ -134,29 +134,20 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
             if (ctx->iface.resources && ctx->iface.resources->register_skill_dir && ctx->iface.log
                 && ctx->iface.log->log) {
                 std::string runtimeSkillDir = fmt::format("{}/skills_runtime", base);
-                if (ctx->iface.resources->register_skill_dir(
-                        host,
-                        agentxx::plugin::PluginStringView::from(
-                            runtimeSkillDir.data(),
-                            runtimeSkillDir.size()
-                        )
-                    )
-                    != 0) {
-                    ctx->iface.log->log(
-                        host,
-                        3,
-                        agentxx::plugin::PluginStringView::fromCstr(
-                            "[example_resources] register runtime skill dir failed"
-                        )
+                auto        skillDirSv      = agentxx::plugin::PluginStringView::from(
+                    runtimeSkillDir.data(),
+                    runtimeSkillDir.size()
+                );
+                if (ctx->iface.resources->register_skill_dir(host, &skillDirSv) != 0) {
+                    auto warnSv = agentxx::plugin::PluginStringView::fromCstr(
+                        "[example_resources] register runtime skill dir failed"
                     );
+                    ctx->iface.log->log(host, 3, &warnSv);
                 } else {
-                    ctx->iface.log->log(
-                        host,
-                        2,
-                        agentxx::plugin::PluginStringView::fromCstr(
-                            "[example_resources] runtime skill dir registered: skills_runtime/"
-                        )
+                    auto infoSv = agentxx::plugin::PluginStringView::fromCstr(
+                        "[example_resources] runtime skill dir registered: skills_runtime/"
                     );
+                    ctx->iface.log->log(host, 2, &infoSv);
                 }
             }
 
@@ -202,11 +193,9 @@ extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_agent_destroy(void* plugin_
                     agentxx::plugin::PluginString::free(host, &p);
                     auto        pos  = libPath.find_last_of("/\\");
                     std::string base = pos == std::string::npos ? "." : libPath.substr(0, pos);
-                    std::string d    = fmt::format("{}/skills_runtime", base);
-                    iface.resources->unregister_skill_dir(
-                        host,
-                        agentxx::plugin::PluginStringView::from(d.data(), d.size())
-                    );
+                    std::string d = fmt::format("{}/skills_runtime", base);
+                    auto        dSv = agentxx::plugin::PluginStringView::from(d.data(), d.size());
+                    iface.resources->unregister_skill_dir(host, &dSv);
                 }
                 agentxx::plugin::PluginString::free(host, &info);
             }

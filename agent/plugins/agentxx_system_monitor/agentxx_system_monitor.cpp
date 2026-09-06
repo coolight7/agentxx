@@ -600,13 +600,10 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
             }
 
             if (ctx->iface.log && ctx->iface.log->log) {
-                ctx->iface.log->log(
-                    host,
-                    2,
-                    agentxx::plugin::PluginStringView::fromCstr(
-                        "agentxx_system_monitor client loaded"
-                    )
+                auto loadedSv = agentxx::plugin::PluginStringView::fromCstr(
+                    "agentxx_system_monitor client loaded"
                 );
+                ctx->iface.log->log(host, 2, &loadedSv);
             }
             *plugin_ctx = ctx.release();
             return 0;
@@ -632,20 +629,15 @@ extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_client_destroy(void* plugin
                 ctx->section = nullptr;
             }
             if (ctx->ui && ctx->ui->unregister_command) {
-                ctx->ui->unregister_command(
-                    ctx->host,
-                    agentxx::plugin::PluginStringView::fromCstr("sysinfo")
-                );
+                auto cmdSv = agentxx::plugin::PluginStringView::fromCstr("sysinfo");
+                ctx->ui->unregister_command(ctx->host, &cmdSv);
             }
             ctx->last_usage_json.clear();
             if (ctx->iface.log && ctx->iface.log->log) {
-                ctx->iface.log->log(
-                    ctx->host,
-                    2,
-                    agentxx::plugin::PluginStringView::fromCstr(
-                        "agentxx_system_monitor client unloaded"
-                    )
+                auto unloadedSv = agentxx::plugin::PluginStringView::fromCstr(
+                    "agentxx_system_monitor client unloaded"
                 );
+                ctx->iface.log->log(ctx->host, 2, &unloadedSv);
             }
             delete ctx;
         }

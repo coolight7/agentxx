@@ -377,9 +377,8 @@ AgentxxPluginOperatorHandle* PluginManager::callToolAsync(
         }
         setErr(errMsg);
         if (cb) {
-            cb(ud,
-               AGENTXX_PLUGIN_OPERATOR_FAILED,
-               agentxx::plugin::PluginStringView::from(errMsg.data(), errMsg.size()));
+            auto errSv = agentxx::plugin::PluginStringView::from(errMsg.data(), errMsg.size());
+            cb(ud, AGENTXX_PLUGIN_OPERATOR_FAILED, &errSv);
         }
         return nullptr;
     }
@@ -480,9 +479,8 @@ AgentxxPluginOperatorHandle* PluginManager::invokeCapabilityAsync(
         }
         setErr(errMsg);
         if (cb) {
-            cb(ud,
-               AGENTXX_PLUGIN_OPERATOR_FAILED,
-               agentxx::plugin::PluginStringView::from(errMsg.data(), errMsg.size()));
+            auto errSv = agentxx::plugin::PluginStringView::from(errMsg.data(), errMsg.size());
+            cb(ud, AGENTXX_PLUGIN_OPERATOR_FAILED, &errSv);
         }
         return nullptr;
     }

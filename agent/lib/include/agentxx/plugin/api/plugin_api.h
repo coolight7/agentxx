@@ -62,28 +62,9 @@ extern "C" {
 
 /// 只读字符串视图: 指向调用方内存 (UTF-8), 不要求 NUL 结尾
 /// - C ABI: data(8) + size(8) 纯 POD, 恒按指针/出参传递 (不按值跨边界)
-/// - C++ 便捷: 提供值→指针转换成员与 empty() 查询 (布局不变, 便于值语义调用)
 typedef struct AgentxxPluginStringView {
     const char* data; ///< 指向 UTF-8 字节序列 (可含任意字节, 不必 NUL 结尾)
     uint64_t    size; ///< 字节数 (明确定长 64 位)
-
-#ifdef __cplusplus
-    AgentxxPluginStringView() :
-        data(nullptr),
-        size(0) {}
-
-    AgentxxPluginStringView(const char* d, uint64_t n) :
-        data(d),
-        size(n) {}
-
-    operator const AgentxxPluginStringView*() const {
-        return this;
-    }
-
-    bool empty() const {
-        return data == nullptr || size == 0;
-    }
-#endif
 } AgentxxPluginStringView;
 
 typedef struct AgentxxPluginHost AgentxxPluginHost;
@@ -94,20 +75,6 @@ typedef struct AgentxxPluginHost AgentxxPluginHost;
 typedef struct AgentxxPluginString {
     char* data; ///< 指向宿主堆分配的 UTF-8 字节序列 (以 \0 结尾; 空串或 NULL 时可为 NULL)
     uint64_t size; ///< 字节数 (不含结尾 \0; O(1) 访问)
-
-#ifdef __cplusplus
-    AgentxxPluginString() :
-        data(nullptr),
-        size(0) {}
-
-    AgentxxPluginString(char* d, uint64_t n) :
-        data(d),
-        size(n) {}
-
-    operator const AgentxxPluginString*() const {
-        return this;
-    }
-#endif
 } AgentxxPluginString;
 
 /// ==================== 插件元信息 ====================

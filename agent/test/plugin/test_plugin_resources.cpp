@@ -350,12 +350,8 @@ interfaces:
         // ---- 运行时注册 skill 目录 (冻结后应拒绝: 仅 yaml 与初始化时追加生效) ----
         auto runtimeSkill = tmpRoot / "runtime_skills";
         fs::create_directories(runtimeSkill, ec);
-        int rc
-            = res3 ? res3->register_skill_dir(
-                         &inst->host,
-                         agentxx::plugin::PluginStringView::fromCstr(runtimeSkill.string().c_str())
-                     )
-                   : -1;
+        auto skillSv = agentxx::plugin::PluginStringView::fromCstr(runtimeSkill.string().c_str());
+        int  rc      = res3 ? res3->register_skill_dir(&inst->host, &skillSv) : -1;
         XX_TEST_EXPECT_TRUE(rc != 0); // frozen after init
         XX_TEST_EXPECT_FALSE(contains(skillMw->skillDirPathList(), runtimeSkill.string()));
 
@@ -374,36 +370,21 @@ interfaces:
         }
 
         // ---- 重复注册亦拒绝 (冻结) ----
-        rc = res3 ? res3->register_skill_dir(
-                        &inst->host,
-                        agentxx::plugin::PluginStringView::fromCstr(runtimeSkill.string().c_str())
-                    )
-                  : -1;
+        rc = res3 ? res3->register_skill_dir(&inst->host, &skillSv) : -1;
         XX_TEST_EXPECT_TRUE(rc != 0);
 
         // ---- 注销亦拒绝 (冻结) ----
-        rc = res3 ? res3->unregister_skill_dir(
-                        &inst->host,
-                        agentxx::plugin::PluginStringView::fromCstr(runtimeSkill.string().c_str())
-                    )
-                  : -1;
+        rc = res3 ? res3->unregister_skill_dir(&inst->host, &skillSv) : -1;
         XX_TEST_EXPECT_TRUE(rc != 0);
         XX_TEST_EXPECT_FALSE(contains(skillMw->skillDirPathList(), runtimeSkill.string()));
-        rc = res3 ? res3->unregister_skill_dir(
-                        &inst->host,
-                        agentxx::plugin::PluginStringView::fromCstr(runtimeSkill.string().c_str())
-                    )
-                  : 0;
+        rc = res3 ? res3->unregister_skill_dir(&inst->host, &skillSv) : 0;
         XX_TEST_EXPECT_TRUE(rc != 0);
 
         // ---- MCP 注册亦拒绝 (冻结) ----
         const char* mcpSpec
             = R"({"namespace":"t_mcp","url":"https://127.0.0.1:9/sse","timeout":3})";
-        rc = res3 ? res3->register_mcp_server(
-                        &inst->host,
-                        agentxx::plugin::PluginStringView::fromCstr(mcpSpec)
-                    )
-                  : -1;
+        auto mcpSpecSv = agentxx::plugin::PluginStringView::fromCstr(mcpSpec);
+        rc             = res3 ? res3->register_mcp_server(&inst->host, &mcpSpecSv) : -1;
         XX_TEST_EXPECT_TRUE(rc != 0);
         co_await sleepMs(150);
         {
@@ -424,12 +405,9 @@ interfaces:
         agentxx::agent::McpServerConfig ycfg;
         ycfg.url                                    = "https://yaml.example";
         ctx->agentConfig->mcpServerUrls["yaml_ns2"] = ycfg;
-        const char* specConflict = R"({"namespace":"yaml_ns2","url":"https://z"})";
-        rc                       = res3 ? res3->register_mcp_server(
-                        &inst->host,
-                        agentxx::plugin::PluginStringView::fromCstr(specConflict)
-                    )
-                                        : 0;
+        const char* specConflict                    = R"({"namespace":"yaml_ns2","url":"https://z"})";
+        auto        specConflictSv = agentxx::plugin::PluginStringView::fromCstr(specConflict);
+        rc                         = res3 ? res3->register_mcp_server(&inst->host, &specConflictSv) : 0;
         XX_TEST_EXPECT_TRUE(rc != 0);
 
         // ---- 其他 owner 抢注同名命名空间: 因 t_mcp 未注册(冻结)故可成功 ----
@@ -441,11 +419,8 @@ interfaces:
         applier->removeMcpServer("other_owner", "t_mcp");
 
         // ---- 注销亦拒绝 (未注册且冻结) ----
-        rc = res3 ? res3->unregister_mcp_server(
-                        &inst->host,
-                        agentxx::plugin::PluginStringView::fromCstr("t_mcp")
-                    )
-                  : -1;
+        auto tmcpSv = agentxx::plugin::PluginStringView::fromCstr("t_mcp");
+        rc          = res3 ? res3->unregister_mcp_server(&inst->host, &tmcpSv) : -1;
         XX_TEST_EXPECT_TRUE(rc != 0);
         auto snapAfter = applier->ownedBy(ownerName);
         XX_TEST_EXPECT_FALSE(contains(snapAfter.mcpNamespaces, "t_mcp"));

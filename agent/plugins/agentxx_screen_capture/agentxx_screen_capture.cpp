@@ -58,11 +58,9 @@ inline bool ScreenCaptureHolder::startStreaming(int frameRate) {
                         frame.isPrimary ? "true" : "false",
                         frame.pixelData.size()
                     );
-                    ctx->iface.events->publish(
-                        ctx->host,
-                        agentxx::plugin::PluginStringView::fromCstr("agentxx_screen_capture.frame"),
-                        agentxx::plugin::PluginStringView::from(payload.data(), payload.size())
-                    );
+                    auto topicSv   = agentxx::plugin::PluginStringView::fromCstr("agentxx_screen_capture.frame");
+                    auto payloadSv = agentxx::plugin::PluginStringView::from(payload.data(), payload.size());
+                    ctx->iface.events->publish(ctx->host, &topicSv, &payloadSv);
                 }
             } catch (...) {
             }

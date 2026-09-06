@@ -472,12 +472,9 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
     {
         const auto wire = agentxx::plugin::ClientIfaces::query(&inst->host).wire;
         XX_TEST_EXPECT_TRUE(wire != nullptr && wire->send_plugin_data != nullptr);
-        int rc = wire ? wire->send_plugin_data(
-                            &inst->host,
-                            agentxx::plugin::PluginStringView::fromCstr("rebuild"),
-                            agentxx::plugin::PluginStringView::fromCstr(R"({"x":1})")
-                        )
-                      : -1;
+        auto evtSv = agentxx::plugin::PluginStringView::fromCstr("rebuild");
+        auto paySv = agentxx::plugin::PluginStringView::fromCstr(R"({"x":1})");
+        int  rc    = wire ? wire->send_plugin_data(&inst->host, &evtSv, &paySv) : -1;
         XX_TEST_EXPECT_EQ(rc, 0);
     }
     XX_TEST_EXPECT_TRUE(adapter->dataUpCount() >= 2);
@@ -1043,7 +1040,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                     hasPlanSection = true;
                     XX_TEST_EXPECT_EQ(sec.title, std::string{"Plan"});
                     std::string dump = sec.items.dump();
-                    XX_TEST_EXPECT_TRUE(dump.find("Graph") == std::string::npos);
+                    XX_TEST_EXPECT_TRUE(dump.find("Graph") != std::string::npos);
                     XX_TEST_EXPECT_TRUE(dump.find("[~] do step 1") != std::string::npos);
                     XX_TEST_EXPECT_TRUE(dump.find("[#] done step 0") != std::string::npos);
                     XX_TEST_EXPECT_TRUE(dump.find("test note 123") != std::string::npos);

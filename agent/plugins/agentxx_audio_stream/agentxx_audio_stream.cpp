@@ -127,11 +127,10 @@ bool AudioStreamHolder::start(
                 tsMs,
                 jsonEscape(ctx, toBase64(data.data))
             );
-            ctx->iface.events->publish(
-                ctx->host,
-                agentxx::plugin::PluginStringView::fromCstr("agentxx_audio_stream.audio"),
-                agentxx::plugin::PluginStringView::from(payload.data(), payload.size())
-            );
+            auto topicSv = agentxx::plugin::PluginStringView::fromCstr("agentxx_audio_stream.audio");
+            auto payloadSv
+                = agentxx::plugin::PluginStringView::from(payload.data(), payload.size());
+            ctx->iface.events->publish(ctx->host, &topicSv, &payloadSv);
         } catch (...) {
             if (ctx) {
                 ctx->log.error("audio event publish failed");
