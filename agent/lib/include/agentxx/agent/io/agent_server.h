@@ -8,9 +8,10 @@
 #include "asio/awaitable.hpp"
 #include <chrono>
 #include <map>
+#include <atomic>
 #include <memory>
-#include <mutex>
 #include <string>
+#include <thread>
 
 namespace agentxx {
 namespace agent {
@@ -18,6 +19,8 @@ namespace io {
 
 /// Agent 服务
 /// - 单 io_context/单线程多协程: 复用 BaseAgent.ioCtx
+/// - 单线程契约: 本类所有成员与方法从根源上限定仅在 agent io 线程上使用 (通过 assertIoThread 校验);
+///   如何被调用由调用方负责 (外部线程调用须自行 co_spawn/post 到 agent 的 executor), 内部无需线程锁
 /// - 每个 sessionId 一个 SessionServerAgentIO (与连接解耦, 支持断线 grace 重挂 + 增量重放)
 /// - 两种接入方式:
 ///   - WS 服务: start(ex) 启动 HttpServer, 每个 WS 连接 -> serveTransport
@@ -63,11 +66,17 @@ public:
     }
 
     /// 在给定传输上服务一个连接 (WS handler 与进程内 ChannelAgentIOTransport 共用)
-    /// - 须在 agent 的 executor 上 co_await
+    /// - 须在 agent 的 executor 线程上 co_await (assertIoThread 强制校验)
     asio::awaitable<void> serveTransport(std::shared_ptr<AgentIOTransportBase> transport);
 
     /// 生成随机 hex token
     static std::string generateToken(size_t bytes = 24);
+
+    /// 断言当前线程为已绑定的 agent io 线程 (单线程无锁契约强制校验)
+    void assertIoThread() const;
+    bool isIoThread() const noexcept;
+    void bindIoThread() const noexcept;
+    void bindIoThreadIfUnset() const noexcept;
 
 private:
 
@@ -76,12 +85,13 @@ private:
     /// 取/建指定 sessionId 的 SessionServerAgentIO (并启动其驱动循环)
     std::shared_ptr<SessionServerAgentIO> getOrCreateController(std::string_view sessionId);
 
-    std::shared_ptr<BaseAgent>        agent_;
-    Config                            config_;
-    std::unique_ptr<util::HttpServer> http_;
-    asio::any_io_executor             ex_;
+    std::shared_ptr<BaseAgent>           agent_;
+    Config                               config_;
+    std::unique_ptr<util::HttpServer>    http_;
+    asio::any_io_executor                ex_;
+    mutable std::atomic<std::thread::id> ioThreadId_{};
 
-    // 控制器映射：单线程访问，无需锁
+    // 控制器映射：单线程成员，仅限 agent io 线程访问，无需锁
     std::map<std::string, std::shared_ptr<SessionServerAgentIO>, std::less<>> controllers_;
 };
 

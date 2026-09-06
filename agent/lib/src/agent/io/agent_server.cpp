@@ -35,6 +35,9 @@ private:
 AgentServer::AgentServer(std::shared_ptr<BaseAgent> agent, Config config) :
     agent_(std::move(agent)),
     config_(std::move(config)) {
+    if (agent_ && agent_->ioCtx) {
+        ex_ = agent_->ioCtx->get_executor();
+    }
     if (config_.http.address.empty()) {
         config_.http.address = "0.0.0.0";
     }
@@ -44,7 +47,58 @@ AgentServer::AgentServer(std::shared_ptr<BaseAgent> agent, Config config) :
 }
 
 AgentServer::~AgentServer() {
-    stop();
+    if (isIoThread()) {
+        stop();
+    } else {
+        if (http_) {
+            http_->stop();
+        }
+        if (!controllers_.empty()) {
+            XX_LOGW(
+                "[agent_server] AgentServer destroyed off io thread; skipping controllers_ cleanup "
+                "to avoid data race. Callers must call stop() on the agent io thread."
+            );
+        }
+    }
+}
+
+void AgentServer::bindIoThread() const noexcept {
+    ioThreadId_.store(std::this_thread::get_id(), std::memory_order_relaxed);
+}
+
+void AgentServer::bindIoThreadIfUnset() const noexcept {
+    std::thread::id expected{};
+    ioThreadId_.compare_exchange_strong(
+        expected,
+        std::this_thread::get_id(),
+        std::memory_order_relaxed
+    );
+}
+
+bool AgentServer::isIoThread() const noexcept {
+    auto bound = ioThreadId_.load(std::memory_order_relaxed);
+    return bound == std::thread::id{} || bound == std::this_thread::get_id();
+}
+
+void AgentServer::assertIoThread() const {
+    auto bound = ioThreadId_.load(std::memory_order_relaxed);
+    if (bound == std::thread::id{} || bound == std::this_thread::get_id()) {
+        return;
+    }
+#ifndef NDEBUG
+    assert(
+        false
+        && "AgentServer: all operations must only be performed on the bound agent io thread"
+    );
+#else
+    XX_LOGE(
+        "AgentServer: method called off io thread (bound={}, current={}). Callers must post to the "
+        "agent executor!",
+        bound == std::thread::id{} ? std::string{"unbound"} : std::string{"bound"},
+        std::this_thread::get_id() == std::thread::id{} ? std::string{"unknown"}
+                                                        : std::string{"other"}
+    );
+#endif
 }
 
 std::string AgentServer::generateToken(size_t bytes) {
@@ -61,7 +115,8 @@ std::string AgentServer::generateToken(size_t bytes) {
 }
 
 void AgentServer::start(asio::any_io_executor ex) {
-    ex_   = ex;
+    ex_ = ex;
+    bindIoThread();
     http_ = std::make_unique<util::HttpServer>(config_.http);
     http_->enableWebSocket(config_.defaultBasePath, [this](util::HttpServer::WsStream& ws) {
         return handleWs(ws);
@@ -77,10 +132,11 @@ void AgentServer::start(asio::any_io_executor ex) {
 }
 
 void AgentServer::stop() {
+    assertIoThread();
     if (http_) {
         http_->stop();
     }
-    // 无锁遍历关闭
+    // 单线程无锁遍历关闭
     for (auto& [id, ctrl] : controllers_) {
         ctrl->stop();
     }
@@ -93,7 +149,8 @@ uint16_t AgentServer::port() const {
 
 std::shared_ptr<SessionServerAgentIO> AgentServer::getOrCreateController(std::string_view sessionId
 ) {
-    auto it = controllers_.find(sessionId); // 无锁查找
+    assertIoThread();
+    auto it = controllers_.find(sessionId); // 单线程无锁查找
     if (it != controllers_.end()) {
         return it->second;
     }
@@ -132,6 +189,7 @@ std::shared_ptr<SessionServerAgentIO> AgentServer::getOrCreateController(std::st
 }
 
 asio::awaitable<void> AgentServer::handleWs(util::HttpServer::WsStream& ws) {
+    bindIoThreadIfUnset();
     auto ex     = co_await asio::this_coro::executor;
     auto client = util::wrapAcceptedWs(ex, std::move(ws));
     auto transport
@@ -140,6 +198,9 @@ asio::awaitable<void> AgentServer::handleWs(util::HttpServer::WsStream& ws) {
 }
 
 asio::awaitable<void> AgentServer::serveTransport(std::shared_ptr<AgentIOTransportBase> transport) {
+    bindIoThreadIfUnset();
+    assertIoThread();
+
     // 服务端模式初始化: 启动读写循环, 不发送 hello
     WireHello dummyHello;
     bool      initOk = co_await transport->connect(dummyHello);
@@ -162,6 +223,11 @@ asio::awaitable<void> AgentServer::serveTransport(std::shared_ptr<AgentIOTranspo
     if (!authOk) {
         transport->send(WireHelloAck{.ok = false, .sessionId = hello->sessionId});
         co_return;
+    }
+
+    // 异步预热/加载 session 历史与上下文 (若尚未加载, 将 SQLite 读卸载到 threadPool)
+    if (agent_ && agent_->agentContext) {
+        co_await agent_->agentContext->getSessionAsync(hello->sessionId);
     }
 
     auto ctrl = getOrCreateController(hello->sessionId);
