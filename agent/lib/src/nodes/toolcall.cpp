@@ -244,9 +244,14 @@ std::set<std::string> ToolcallWrapNode::findConsecutiveRepeatCallKeys(
                     ++(it->second);
                     if (it->second >= threshold) {
                         triggered.insert(it->first);
-                        return triggered;
                     }
+                } else if (threshold <= 1) {
+                    triggered.insert(it->first);
                 }
+            }
+            if (!triggered.empty()) {
+                // 本轮已发现达到阈值的循环调用 (支持同轮多 key 并行触发), 立即返回
+                return triggered;
             }
             if (assistantCount > 1 && allNewKeys) {
                 // 非当前轮且与已统计内容零重叠: 该条开启了全新调用,
