@@ -1,5 +1,7 @@
 #include "agentxx/nodes/agentcall.h"
 
+#include "agentxx/event/event_stream.h"
+
 namespace agentxx {
 namespace nodes {
 
@@ -13,7 +15,16 @@ asio::awaitable<void> AgentStartCallWrapNode::onNodeStart(neograph::graph::NodeI
     {
         // 创建单次执行的临时数据
         auto ptr = agentContext.lock();
-        ptr->middlewareHandleContext->graphData[in.ctx.thread_id].clear();
+        if (ptr) {
+            if (ptr->middlewareHandleContext) {
+                ptr->middlewareHandleContext->graphData[in.ctx.thread_id].clear();
+            }
+            if (ptr->bus) {
+                neograph::json j;
+                j["sessionId"] = in.ctx.thread_id;
+                co_await ptr->bus->publish("plugin.agentxx.round_start", j.dump());
+            }
+        }
     }
     co_return;
 }

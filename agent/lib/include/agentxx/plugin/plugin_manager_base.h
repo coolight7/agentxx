@@ -27,8 +27,8 @@
 /// (ioThreadId_ 为原子, inflight 为原子, 跨线程递增/递减)。
 #pragma once
 
-#include "agentxx/plugin/api/plugin_kit.h" /* AgentxxPluginHost 等 C ABI 类型 */
-#include "agentxx/plugin/plugin_common.h"  /* collectReverseRequiredDeps (模板) */
+#include "agentxx/plugin/api/plugin_kit.h"
+#include "agentxx/plugin/plugin_common.h"
 #include "agentxx/util/log.h"
 #include "asio/any_io_executor.hpp"
 #include "asio/awaitable.hpp"

@@ -537,12 +537,32 @@ asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadNativeAsync(
     }
 
     plugins_[name] = inst;
-    int rc         = createFn(&inst->host, &inst->pluginCtx);
+    int rc         = -1;
+    try {
+        rc = createFn(&inst->host, &inst->pluginCtx);
+    } catch (const std::exception& e) {
+        XX_LOGE("Plugin `{}` create threw: {}", name, e.what());
+        rc = -1;
+    } catch (...) {
+        XX_LOGE("Plugin `{}` create threw unknown exception", name);
+        rc = -1;
+    }
+
     if (rc != 0) {
+        XX_LOGE("Plugin `{}` create failed (code={}), performing rollback", name, rc);
+        detachAll(inst.get());
+        eraseMiddleware(inst->middleware.get());
+        inst->middleware = nullptr;
+        if (auto c = agentContext_.lock()) {
+            if (c->resourceApplier) {
+                c->resourceApplier->removeAllOwned(inst->name);
+            }
+        }
         plugins_.erase(name);
-        NativeLoader::close(dl);
-        inst->dlHandle = nullptr;
-        XX_LOGE("Plugin `{}` create failed (code={})", name, rc);
+        if (inst->dlHandle) {
+            NativeLoader::close(inst->dlHandle);
+            inst->dlHandle = nullptr;
+        }
         co_return nullptr;
     }
 
@@ -600,10 +620,28 @@ asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadBuiltinAsync
     }
 
     plugins_[name] = inst;
-    int rc         = entry->create(&inst->host, &inst->pluginCtx);
+    int rc         = -1;
+    try {
+        rc = entry->create(&inst->host, &inst->pluginCtx);
+    } catch (const std::exception& e) {
+        XX_LOGE("Builtin plugin `{}` create threw: {}", name, e.what());
+        rc = -1;
+    } catch (...) {
+        XX_LOGE("Builtin plugin `{}` create threw unknown exception", name);
+        rc = -1;
+    }
+
     if (rc != 0) {
+        XX_LOGE("Builtin plugin `{}` create failed (code={}), performing rollback", name, rc);
+        detachAll(inst.get());
+        eraseMiddleware(inst->middleware.get());
+        inst->middleware = nullptr;
+        if (auto c = agentContext_.lock()) {
+            if (c->resourceApplier) {
+                c->resourceApplier->removeAllOwned(inst->name);
+            }
+        }
         plugins_.erase(name);
-        XX_LOGE("Builtin plugin `{}` create failed (code={})", name, rc);
         co_return nullptr;
     }
 

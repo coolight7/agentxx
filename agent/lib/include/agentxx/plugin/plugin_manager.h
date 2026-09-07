@@ -598,11 +598,12 @@ public:
     std::string getModelConfigJson();
     bool        isSessionCancelled(const std::string& threadId);
 
+    void detachAll(PluginInstance* inst);
+
 private:
 
     friend class PluginInstance;
 
-    void detachAll(PluginInstance* inst);
     void eraseMiddleware(PluginMiddlewareHandle* mw);
 
     struct PendingMiddlewareCleanup {

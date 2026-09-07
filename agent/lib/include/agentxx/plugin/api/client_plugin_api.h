@@ -138,7 +138,7 @@ typedef struct AgentxxOverlaySpec {
 /* ==================== 接口表: 展示/命令/toast (agentxx.client.ui) ==================== */
 
 #define AGENTXX_IFACE_CLIENT_UI         "agentxx.client.ui"
-#define AGENTXX_IFACE_CLIENT_UI_VERSION 3
+#define AGENTXX_IFACE_CLIENT_UI_VERSION 1
 
 typedef struct AgentxxClientUiIface {
     int32_t  version; ///< 必须 == AGENTXX_IFACE_CLIENT_UI_VERSION
@@ -394,7 +394,7 @@ typedef struct AgentxxClientWireIface {
 /* ==================== 接口表: 自描述/配置 (agentxx.client.self) ==================== */
 
 #define AGENTXX_IFACE_CLIENT_SELF         "agentxx.client.self"
-#define AGENTXX_IFACE_CLIENT_SELF_VERSION 2
+#define AGENTXX_IFACE_CLIENT_SELF_VERSION 1
 
 typedef struct AgentxxClientSelfIface {
     int32_t  version; ///< 必须 == AGENTXX_IFACE_CLIENT_SELF_VERSION

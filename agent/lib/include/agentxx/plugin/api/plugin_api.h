@@ -417,7 +417,7 @@ typedef struct AgentxxPluginsIface {
 /* ==================== 接口表: 宿主配置 (agentxx.agent.config) ==================== */
 
 #define AGENTXX_PLUGIN_IFACE_AGENT_CONFIG         "agentxx.agent.config"
-#define AGENTXX_PLUGIN_IFACE_AGENT_CONFIG_VERSION 2
+#define AGENTXX_PLUGIN_IFACE_AGENT_CONFIG_VERSION 1
 
 typedef struct AgentxxPluginConfigIface {
     int32_t  version; ///< 必须 == AGENTXX_PLUGIN_IFACE_AGENT_CONFIG_VERSION
