@@ -11,6 +11,7 @@
 #include "agentxx/protocol/acp_server.h"
 #include "agentxx/util/env.h"
 #include "agentxx/util/exception.h"
+#include "agentxx/util/http_client.h"
 #include "agentxx/util/settings_db.h"
 #include "agentxx/util/string_util.h"
 #include "agentxx/version.h"
@@ -147,7 +148,7 @@ static std::string extractTokenFromUrl(std::string& url) {
             = query.substr(pos, amp == std::string::npos ? std::string::npos : amp - pos);
         auto eq = kv.find('=');
         if (eq != std::string::npos && kv.substr(0, eq) == "token") {
-            token = kv.substr(eq + 1);
+            token = agentxx::util::HttpClient::urlDecode(kv.substr(eq + 1));
         }
         if (amp == std::string::npos) {
             break;
