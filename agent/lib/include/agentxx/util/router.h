@@ -5,6 +5,7 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <string_view>
 
 /// 路由
 /// 程序启动后基本固定，因此 map 不需要处理线程安全问题
@@ -19,19 +20,21 @@ protected:
 
         /// 路径
         std::string path;
-        /// 父节点 (最长前缀匹配时用于沿父链回退查找处理函数); 根节点为 nullptr
+        /// 父节点 (最长前缀匹配时用于沿父链回退查找处理函数); 根节点为 nullptr (非拥有型弱引用)
         RouterTreePort* parent = nullptr;
         /// 对应Http方法的处理函数
-        std::array<std::shared_ptr<HANLDE_TPYE>, HANLDE_NUM> handles;
-        /// 子节点
-        std::map<std::string, RouterTreePort*> child;
+        std::array<std::shared_ptr<HANLDE_TPYE>, HANLDE_NUM> handles{};
+        /// 子节点 (智能指针管理生命周期，避免内存泄漏与 O(N^2) 递归析构)
+        std::map<std::string, std::unique_ptr<RouterTreePort>> child;
 
-        RouterTreePort(std::string_view in_path = "") noexcept :
+        explicit RouterTreePort(std::string_view in_path = "") noexcept :
             path(in_path) {
             for (size_t i = 0; i < handles.size(); ++i) {
                 handles[i] = nullptr;
             }
         }
+
+        ~RouterTreePort() = default;
 
         /// 返回对应路径节点，不存在则返回nullptr
         RouterTreePort*
@@ -77,19 +80,20 @@ protected:
                     if (it != child.end()) {
                         // 存在子节点
                         re_path += in_path;
-                        return it->second;
+                        return it->second.get();
                     } else {
                         if (do_add) {
-                            auto treeptr     = new RouterTreePort(in_path);
-                            treeptr->parent  = this;
-                            child[in_path]   = treeptr;
-                            re_path         += in_path;
+                            auto tree_up    = std::make_unique<RouterTreePort>(in_path);
+                            auto treeptr    = tree_up.get();
+                            treeptr->parent = this;
+                            child[in_path]  = std::move(tree_up);
+                            re_path        += in_path;
                             return treeptr;
                         } else {
                             it = child.find("*");
                             if (it != child.end()) {
                                 re_path += "*";
-                                return it->second;
+                                return it->second.get();
                             } else if (loose) {
                                 // 最长前缀匹配: 无更深的精确子节点时回退到当前节点
                                 if (!re_path.empty() && re_path.back() == '/') {
@@ -132,9 +136,10 @@ protected:
             } else {
                 if (do_add) {
                     // 如果需要新建子节点
-                    auto treeptr          = new RouterTreePort(str);
+                    auto tree_up          = std::make_unique<RouterTreePort>(str);
+                    auto treeptr          = tree_up.get();
                     treeptr->parent       = this;
-                    child[str]            = treeptr;
+                    child[str]            = std::move(tree_up);
                     const size_t re_size  = re_path.size();
                     re_path              += str;
                     re_path              += '/';
@@ -149,7 +154,7 @@ protected:
                     it = child.find("*");
                     if (it != child.end()) {
                         re_path += "*";
-                        return it->second;
+                        return it->second.get();
                     } else if (loose) {
                         // 最长前缀匹配: 回退到当前节点，去掉刚累积的分隔符
                         if (!re_path.empty() && re_path.back() == '/') {
@@ -169,7 +174,7 @@ protected:
         /// - [in_index] 仅支持一个类型下标
         bool setHandle(std::shared_ptr<HANLDE_TPYE> in_fun, int in_index) {
             if (in_index >= 0 && static_cast<size_t>(in_index) < handles.size()) {
-                handles[in_index] = in_fun;
+                handles[in_index] = std::move(in_fun);
                 return true;
             } else {
                 return false;
@@ -187,21 +192,9 @@ protected:
             }
         }
 
-        /// 清空子节点
-        void clearChild() {
-            for (auto it = child.begin(); it != child.end();) {
-                // 调用子节点的清理
-                it->second->clearChild();
-                // 释放子节点
-                delete (it->second);
-                child.erase(it);
-                // 重置it的指向
-                it = child.begin();
-            }
-        }
-
-        ~RouterTreePort() {
-            this->clearChild();
+        /// 清空子节点 (线性 O(N) 递归析构)
+        void clearChild() noexcept {
+            child.clear();
         }
     };
 
@@ -216,13 +209,8 @@ protected:
     /// 路由查找缓存容量
     static constexpr size_t routerCacheCapacity = 1024;
 
-    /// 路由查找 LRU 缓存 (函数内 thread_local 避免 inline 变量在 MinGW+libc++ 下的重复符号)
-    static agentxx::util::LruCache<std::string, _RouterCacheValue_s>& getCacheMap() {
-        thread_local agentxx::util::LruCache<std::string, _RouterCacheValue_s> instance{
-            routerCacheCapacity
-        };
-        return instance;
-    }
+    /// 路由查找 LRU 缓存 (作为实例普通成员，各实例完全隔离，消除全局污染与野指针)
+    agentxx::util::LruCache<std::string, _RouterCacheValue_s> cacheMap_{routerCacheCapacity};
 
     // 路由字典树
     RouterTreePort routerTree;
@@ -259,13 +247,7 @@ public:
     XXRouter() noexcept :
         routerTree("/") {}
 
-    /// 析构时清空共享缓存:
-    /// cacheMap 为同类所有实例共享的 thread_local 缓存, 其中保存的是本路由树
-    /// 的原始节点指针; 树销毁后必须清空, 否则后续其他路由实例 (如按模式重建的
-    /// 权限中间件) 可能命中悬空指针导致 use-after-free
-    ~XXRouter() {
-        getCacheMap().clear();
-    }
+    ~XXRouter() = default;
 
     /// 添加路由
     /// - 允许使用通配符 *
@@ -273,14 +255,14 @@ public:
     /// - 路径中连续的 / 将被视为仅一个 /，结尾的 / 将被忽略（文件夹路径与文件路径等价注册）
     /// - 即 /a//b///c 等同于 /a/b/c；/a/b/ 等同于 /a/b
     bool add(std::string_view in_path, int in_index, std::shared_ptr<HANLDE_TPYE> in_fun) {
-        getCacheMap().clear();
+        cacheMap_.clear();
         const char* strp = in_path.data();
         while ('/' == *strp) {
             ++strp;
         }
         std::string re_path{};
         auto        treep = this->routerTree.getChild(strp, re_path, true);
-        return treep->setHandle(in_fun, in_index);
+        return treep->setHandle(std::move(in_fun), in_index);
     }
 
     /// 判断是否存在路由位置，使用缓存
@@ -298,7 +280,7 @@ public:
             int                in_index,
             std::string&       re_path,
             bool               prefix_fallback = false) {
-        auto                      cached  = getCacheMap().get(in_path);
+        auto                      cached  = cacheMap_.get(in_path);
         XXRouter::RouterTreePort* treeptr = nullptr;
         if (cached.has_value()) {
             treeptr = cached->treeptr;
@@ -309,7 +291,7 @@ public:
         if (treeptr != nullptr) {
             auto handles = treeptr->getHandle(in_index);
             if (handles) {
-                getCacheMap().put(in_path, {re_path, treeptr});
+                cacheMap_.put(in_path, {re_path, treeptr});
             } else if (prefix_fallback) {
                 // 节点自身无对应处理函数时，沿父链向上回退查找
                 // 父链回退命中的结果不写缓存（缓存条目需保证节点自身持有处理函数）
@@ -360,7 +342,7 @@ public:
         std::string re_path{};
         auto        treep = this->routerTree.getChild(strp, re_path, false);
         if (treep) {
-            getCacheMap().clear();
+            cacheMap_.clear();
             auto handles = treep->getHandle(in_index);
             treep->setHandle(nullptr, in_index);
             return handles;
@@ -370,13 +352,13 @@ public:
 
     /// 清理缓存
     void clearCache() {
-        getCacheMap().clear();
+        cacheMap_.clear();
     }
 
     /// 清空路由
     void clear() {
         this->routerTree.clearChild();
         // 节点已释放, 清空缓存
-        getCacheMap().clear();
+        cacheMap_.clear();
     }
 };

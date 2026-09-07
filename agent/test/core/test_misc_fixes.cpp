@@ -423,6 +423,30 @@ static void test_chain_hash() {
     XX_TEST_EXPECT_EQ(ch.tail(), 0u);
 }
 
+static void test_router_multi_instance_isolation() {
+    // 验证方案 3: 多个 XXRouter 实例之间缓存完全隔离, 销毁一个实例不会破坏另一个实例的缓存
+    std::string re_path;
+    auto router1 = std::make_unique<XXRouter<int, 4>>();
+    XXRouter<int, 4> router2;
+
+    router1->add("/api/data", 0, std::make_shared<int>(100));
+    router2.add("/api/data", 0, std::make_shared<int>(200));
+
+    // 填充 router1 与 router2 的独立缓存
+    auto h1 = router1->get("/api/data", 0, re_path);
+    XX_TEST_EXPECT_TRUE(h1 != nullptr && *h1 == 100);
+
+    auto h2 = router2.get("/api/data", 0, re_path);
+    XX_TEST_EXPECT_TRUE(h2 != nullptr && *h2 == 200);
+
+    // 销毁 router1
+    router1.reset();
+
+    // router2 再次查询缓存应依然有效且不受影响
+    auto h2_cached = router2.get("/api/data", 0, re_path);
+    XX_TEST_EXPECT_TRUE(h2_cached != nullptr && *h2_cached == 200);
+}
+
 TestResult testMiscFixes() {
     g_mf_passed = 0;
     g_mf_failed = 0;
@@ -432,6 +456,7 @@ TestResult testMiscFixes() {
     test_router();
     test_router_more();
     test_router_prefix_fallback();
+    test_router_multi_instance_isolation();
     test_chain_hash();
 
     return TestResult{g_mf_passed, g_mf_failed};
