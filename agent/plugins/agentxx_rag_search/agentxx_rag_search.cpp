@@ -32,13 +32,16 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
     "RAG semantic search over configured docs paths (embedding based)",
     [](RagPluginCtx& ctx) -> int32_t {
         if (!ctx.iface.model || !ctx.iface.model->get_config) {
-            ctx.log.warn(fmt::format("agentxx_rag_search: host model iface unavailable, `{}` not registered", kNameSearch));
+            ctx.log.warn(fmt::format(
+                "agentxx_rag_search: host model iface unavailable, `{}` not registered",
+                kNameSearch
+            ));
             return 0;
         }
         AgentxxPluginString json{nullptr, 0};
         ctx.iface.model->get_config(ctx.host, &json);
         neograph::json cfg;
-        bool hasCfg = false;
+        bool           hasCfg = false;
         if (json.data) {
             std::string cfgJson(json.data, static_cast<size_t>(json.size));
             PluginString::free(ctx.host, &json);
@@ -51,8 +54,8 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
         }
 
         std::vector<std::string> ragDocsPaths;
-        std::string baseUrl;
-        std::string modelName;
+        std::string              baseUrl;
+        std::string              modelName;
         if (hasCfg) {
             baseUrl   = cfg.value("baseUrl", std::string{});
             modelName = cfg.value("modelName", std::string{});
@@ -65,7 +68,9 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
             }
         }
         if (ragDocsPaths.empty()) {
-            ctx.log.info("agentxx_rag_search: `ragDocsPaths` not configured or empty, search tool skipped");
+            ctx.log.info(
+                "agentxx_rag_search: `ragDocsPaths` not configured or empty, search tool skipped"
+            );
             return 0;
         }
 
@@ -77,17 +82,31 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
         bool isAddSuccess = ctx.store->addDocuments(std::move(docs));
         ctx.log.log(
             isAddSuccess ? 2 : 3,
-            fmt::format("RAG: loading {} documents to vector index {}", docxSize, isAddSuccess ? "done" : "failed")
+            fmt::format(
+                "RAG: loading {} documents to vector index {}",
+                docxSize,
+                isAddSuccess ? "done" : "failed"
+            )
         );
 
         if (!ctx.iface.tools || !ctx.iface.tools->register_tool) {
             return 0;
         }
 
-        auto schema = ctx.schema(kNameSearch)
-            .string("query", "Search query text to find relevant documents.", /*required=*/true)
-            .integer("top_k", "Number of top relevant results to return (default 3, min 1, max 50).", false, 3)
-            .build();
+        auto schema
+            = ctx.schema(kNameSearch)
+                  .string(
+                      "query",
+                      "Search query text to find relevant documents.",
+                      /*required=*/true
+                  )
+                  .integer(
+                      "top_k",
+                      "Number of top relevant results to return (default 3, min 1, max 50).",
+                      false,
+                      3
+                  )
+                  .build();
 
         blocking_tool(
             ctx,
@@ -96,8 +115,10 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
             schema,
             [](RagPluginCtx& c, std::string_view args_json) -> std::string {
                 ArgReader args(args_json);
-                auto query = args.require<std::string>("query");
-                if (!args.ok()) return args.errorMessage();
+                auto      query = args.require<std::string>("query");
+                if (!args.ok()) {
+                    return args.errorMessage();
+                }
                 int top_k = std::clamp(args.value("top_k", 3), 1, 50);
 
                 if (!c.store) {

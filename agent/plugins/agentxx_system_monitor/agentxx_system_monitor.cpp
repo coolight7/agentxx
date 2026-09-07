@@ -66,15 +66,24 @@ std::string formatUsageText(const CpuGpuUsage& usage) {
         if (!gpu.name.empty()) {
             ss << fmt::format(
                 "GPU {} [{}]: GPU Usage: {:.1f}%, VRAM: {}MB Used / {}MB Total",
-                i, gpu.name, gpu.usagePercent, gpu.dedicatedVramUsedMB, gpu.dedicatedVramMB
+                i,
+                gpu.name,
+                gpu.usagePercent,
+                gpu.dedicatedVramUsedMB,
+                gpu.dedicatedVramMB
             );
         } else {
             ss << fmt::format(
                 "GPU {}: GPU Usage: {:.1f}%, VRAM: {}MB Used / {}MB Total",
-                i, gpu.usagePercent, gpu.dedicatedVramUsedMB, gpu.dedicatedVramMB
+                i,
+                gpu.usagePercent,
+                gpu.dedicatedVramUsedMB,
+                gpu.dedicatedVramMB
             );
         }
-        if (i + 1 < usage.gpus.size()) ss << "\n";
+        if (i + 1 < usage.gpus.size()) {
+            ss << "\n";
+        }
     }
     return ss.str();
 }
@@ -87,7 +96,7 @@ struct SysMonCtx : public PluginBase {
 
     CpuGpuUsage querySync() {
         asio::io_context io;
-        CpuGpuUsage usage;
+        CpuGpuUsage      usage;
         asio::co_spawn(
             io,
             [this, &usage]() -> asio::awaitable<void> {
@@ -123,7 +132,8 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
         capability(
             ctx,
             "agentxx.system_usage",
-            [](SysMonCtx& c, const AgentxxPluginHost*, std::string_view, std::string_view) -> std::string {
+            [](SysMonCtx& c, const AgentxxPluginHost*, std::string_view, std::string_view
+            ) -> std::string {
                 auto usage = c.querySync();
                 return usageToJson(usage);
             }
@@ -137,7 +147,9 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
                 &t1,
                 [](const AgentxxPluginStringView* event_json, void* ud) {
                     auto* c = static_cast<SysMonCtx*>(ud);
-                    if (!c) return;
+                    if (!c) {
+                        return;
+                    }
                     try {
                         std::string s(
                             event_json && event_json->data ? event_json->data : "{}",
@@ -145,7 +157,8 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
                         );
                         auto j = neograph::json::parse(s);
                         c->usageEnabled.store(j.value("enabled", true), std::memory_order_release);
-                    } catch (...) {}
+                    } catch (...) {
+                    }
                 },
                 &ctx
             );
@@ -156,8 +169,12 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
                 &t2,
                 [](const AgentxxPluginStringView*, void* ud) {
                     auto* c = static_cast<SysMonCtx*>(ud);
-                    if (!c || !c->usageEnabled.load(std::memory_order_relaxed)) return;
-                    if (!c->iface.scheduler || !c->iface.scheduler->offload) return;
+                    if (!c || !c->usageEnabled.load(std::memory_order_relaxed)) {
+                        return;
+                    }
+                    if (!c->iface.scheduler || !c->iface.scheduler->offload) {
+                        return;
+                    }
                     c->iface.scheduler->offload(
                         c->host,
                         nullptr,
@@ -167,10 +184,12 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
                         },
                         [](void* ud, void* res, const AgentxxPluginStringView*) {
                             auto* c = static_cast<SysMonCtx*>(ud);
-                            if (res && c && c->host && c->iface.events && c->iface.events->publish) {
-                                auto* u = static_cast<CpuGpuUsage*>(res);
+                            if (res && c && c->host && c->iface.events
+                                && c->iface.events->publish) {
+                                auto*       u    = static_cast<CpuGpuUsage*>(res);
                                 std::string json = usageToJson(*u);
-                                auto topicSv = PluginStringView::fromCstr("agentxx_system_monitor.usage");
+                                auto        topicSv
+                                    = PluginStringView::fromCstr("agentxx_system_monitor.usage");
                                 auto jsonSv = PluginStringView::from(json.data(), json.size());
                                 c->iface.events->publish(c->host, &topicSv, &jsonSv);
                                 delete u;
@@ -190,11 +209,13 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
                     auto usage = co_await offload(c, [&](volatile int*) {
                         return c.querySync();
                     });
-                    if (ctl.cancelled()) break;
+                    if (ctl.cancelled()) {
+                        break;
+                    }
 
                     std::string json = usageToJson(usage);
-                    auto topicSv = PluginStringView::fromCstr("agentxx_system_monitor.usage");
-                    auto jsonSv = PluginStringView::from(json.data(), json.size());
+                    auto topicSv     = PluginStringView::fromCstr("agentxx_system_monitor.usage");
+                    auto jsonSv      = PluginStringView::from(json.data(), json.size());
                     if (c.iface.events && c.iface.events->publish) {
                         c.iface.events->publish(c.host, &topicSv, &jsonSv);
                     }
@@ -242,13 +263,14 @@ static UsageStat parseUsage(const std::string& raw) {
                 }
             }
         }
-    } catch (...) {}
+    } catch (...) {
+    }
     return st;
 }
 
 static std::string buildUsageInfoItemsJson(const SysMonClientCtx&, const UsageStat& st) {
-    neograph::json items = neograph::json::array();
-    auto pushText = [&](const std::string& text, const std::string& role = "normal") {
+    neograph::json items    = neograph::json::array();
+    auto           pushText = [&](const std::string& text, const std::string& role = "normal") {
         neograph::json it;
         it["kind"] = "text";
         it["role"] = role;
@@ -280,13 +302,16 @@ static std::string buildUsageInfoItemsJson(const SysMonClientCtx&, const UsageSt
 }
 
 static void refreshUsageDisplay(SysMonClientCtx& ctx) {
-    if (!ctx.host) return;
+    if (!ctx.host) {
+        return;
+    }
     if (!ctx.section && ctx.iface.ui && ctx.iface.ui->register_info_section) {
         auto idSv    = PluginStringView::fromCstr("agentxx_system_monitor.usage");
         auto propsSv = PluginStringView::fromCstr(R"({"title":"System"})");
         ctx.section  = ctx.iface.ui->register_info_section(ctx.host, &idSv, &propsSv);
     }
-    if (!ctx.section || !ctx.iface.ui || !ctx.iface.ui->update_info_section || ctx.last_usage_json.empty()) {
+    if (!ctx.section || !ctx.iface.ui || !ctx.iface.ui->update_info_section
+        || ctx.last_usage_json.empty()) {
         return;
     }
     std::string json;
@@ -307,11 +332,13 @@ AGENTXX_PLUGIN_CLIENT_EXPORT(
     "1.0.0",
     "System resource usage: Info section (CPU/RAM/GPU), /sysinfo toggle",
     [](SysMonClientCtx& ctx) -> int32_t {
-        if (!ctx.iface.ui) return 0;
+        if (!ctx.iface.ui) {
+            return 0;
+        }
 
-        auto idSv = PluginStringView::fromCstr("agentxx_system_monitor.usage");
+        auto idSv    = PluginStringView::fromCstr("agentxx_system_monitor.usage");
         auto propsSv = PluginStringView::fromCstr(R"({"title":"System"})");
-        ctx.section = ctx.iface.ui->register_info_section(ctx.host, &idSv, &propsSv);
+        ctx.section  = ctx.iface.ui->register_info_section(ctx.host, &idSv, &propsSv);
 
         if (ctx.iface.events && ctx.iface.events->subscribe) {
             ctx.iface.events->subscribe(
@@ -319,9 +346,13 @@ AGENTXX_PLUGIN_CLIENT_EXPORT(
                 AGENTXX_CLIENT_EVT_PLUGIN_DATA,
                 [](const AgentxxPluginStringView* payload_json, void* ud) {
                     auto* ctx = static_cast<SysMonClientCtx*>(ud);
-                    if (!ctx || PluginStringView::empty(payload_json)) return;
+                    if (!ctx || PluginStringView::empty(payload_json)) {
+                        return;
+                    }
                     try {
-                        auto j = neograph::json::parse(std::string_view(payload_json->data, payload_json->size));
+                        auto j = neograph::json::parse(
+                            std::string_view(payload_json->data, payload_json->size)
+                        );
                         if (j.value("plugin", std::string{}) != "agentxx_system_monitor"
                             || j.value("event", std::string{}) != "usage") {
                             return;
@@ -330,7 +361,8 @@ AGENTXX_PLUGIN_CLIENT_EXPORT(
                             ctx->last_usage_json = j["data"].get<std::string>();
                             refreshUsageDisplay(*ctx);
                         }
-                    } catch (...) {}
+                    } catch (...) {
+                    }
                 },
                 &ctx
             );
@@ -338,24 +370,32 @@ AGENTXX_PLUGIN_CLIENT_EXPORT(
 
         if (ctx.iface.ui->register_command) {
             auto nameSv = PluginStringView::fromCstr("sysinfo");
-            auto descSv = PluginStringView::fromCstr("Toggle system resource usage display in sidebar Info section");
+            auto descSv = PluginStringView::fromCstr(
+                "Toggle system resource usage display in sidebar Info section"
+            );
             ctx.iface.ui->register_command(
                 ctx.host,
                 &nameSv,
                 &descSv,
-                [](void* ud, const AgentxxPluginStringView*, AgentxxPluginString* actionOut, AgentxxPluginString*) -> int32_t {
+                [](void* ud,
+                   const AgentxxPluginStringView*,
+                   AgentxxPluginString* actionOut,
+                   AgentxxPluginString*) -> int32_t {
                     auto* ctx = static_cast<SysMonClientCtx*>(ud);
-                    if (!ctx) return -1;
+                    if (!ctx) {
+                        return -1;
+                    }
                     const bool next = !ctx->usage_enabled.load(std::memory_order_relaxed);
                     ctx->usage_enabled.store(next, std::memory_order_relaxed);
                     refreshUsageDisplay(*ctx);
                     if (ctx->iface.wire && ctx->iface.wire->send_plugin_data) {
                         std::string payload = next ? R"({"enabled":true})" : R"({"enabled":false})";
-                        auto evtSv = PluginStringView::fromCstr("usage_enabled");
-                        auto paySv = PluginStringView::from(payload.data(), payload.size());
+                        auto        evtSv   = PluginStringView::fromCstr("usage_enabled");
+                        auto        paySv = PluginStringView::from(payload.data(), payload.size());
                         ctx->iface.wire->send_plugin_data(ctx->host, &evtSv, &paySv);
                     }
-                    std::string text = next ? "System resource info: ON" : "System resource info: OFF";
+                    std::string text
+                        = next ? "System resource info: ON" : "System resource info: OFF";
                     std::string stateStr = ctx->clientState();
                     if (!stateStr.empty() && stateStr != "{}") {
                         try {
@@ -363,20 +403,26 @@ AGENTXX_PLUGIN_CLIENT_EXPORT(
                             if (st.contains("agentPlugins") && st["agentPlugins"].is_array()) {
                                 bool found = false;
                                 for (const auto& v : st["agentPlugins"]) {
-                                    if (v.is_object() && v.value("name", std::string{}) == "agentxx_system_monitor") {
+                                    if (v.is_object()
+                                        && v.value("name", std::string{})
+                                               == "agentxx_system_monitor") {
                                         found = true;
                                     }
                                 }
-                                if (!found) text += " (warn: plugin missing on server side; toggle is local only)";
+                                if (!found) {
+                                    text
+                                        += " (warn: plugin missing on server side; toggle is local only)";
+                                }
                             }
-                        } catch (...) {}
+                        } catch (...) {
+                        }
                     }
                     neograph::json out;
-                    out["action"] = "toast";
-                    out["text"]   = text;
-                    out["level"]  = 0;
+                    out["action"]      = "toast";
+                    out["text"]        = text;
+                    out["level"]       = 0;
                     std::string dumped = out.dump();
-                    auto paySv = PluginStringView::from(dumped.data(), dumped.size());
+                    auto        paySv  = PluginStringView::from(dumped.data(), dumped.size());
                     if (actionOut) {
                         *actionOut = PluginString::from(ctx->host, &paySv);
                     }

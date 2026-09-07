@@ -31,12 +31,25 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
     "1.0.0",
     "Mathematical expression evaluator: parse and calculate math expressions",
     [](MathPluginCtx& ctx) -> int32_t {
-        auto schema = ctx.schema(kNameCalculate)
-            .string("expression", "The mathematical expression string to evaluate, e.g. '2 + 3 * 4', 'sin(pi / 4) ^ 2', 'sqrt(16) + log10(100)', '5!', 'gcd(48, 18)'.", /*required=*/true)
-            .integer("precision", "Optional decimal precision for floating point output (e.g. 2 for 2 decimal places, range 0 to 15).")
-            .enumString("angle_unit", "Angle unit for trigonometric functions: 'rad' (radians, default) or 'deg' (degrees).",
-                        {"rad", "deg"}, false, "rad")
-            .build();
+        auto schema
+            = ctx.schema(kNameCalculate)
+                  .string(
+                      "expression",
+                      "The mathematical expression string to evaluate, e.g. '2 + 3 * 4', 'sin(pi / 4) ^ 2', 'sqrt(16) + log10(100)', '5!', 'gcd(48, 18)'.",
+                      /*required=*/true
+                  )
+                  .integer(
+                      "precision",
+                      "Optional decimal precision for floating point output (e.g. 2 for 2 decimal places, range 0 to 15)."
+                  )
+                  .enumString(
+                      "angle_unit",
+                      "Angle unit for trigonometric functions: 'rad' (radians, default) or 'deg' (degrees).",
+                      {"rad", "deg"},
+                      false,
+                      "rad"
+                  )
+                  .build();
 
         fast_tool(
             ctx,

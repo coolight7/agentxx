@@ -50,6 +50,7 @@ struct TextSelectionHolder {
 
 struct TextSelectionPluginCtx : public PluginBase {
     TextSelectionHolder holder;
+
     ~TextSelectionPluginCtx() override {
         holder.stop();
     }
@@ -78,11 +79,9 @@ bool TextSelectionHolder::start(int debounceMs) {
                     ctx->jsonEscape(sourceName(evt.source)),
                     tsMs
                 );
-                auto topicSv = PluginStringView::fromCstr(
-                    "agentxx_text_selection_monitor.selection"
-                );
-                auto payloadSv
-                    = PluginStringView::from(payload.data(), payload.size());
+                auto topicSv
+                    = PluginStringView::fromCstr("agentxx_text_selection_monitor.selection");
+                auto payloadSv = PluginStringView::from(payload.data(), payload.size());
                 ctx->iface.events->publish(ctx->host, &topicSv, &payloadSv);
             } catch (...) {
             }
@@ -106,11 +105,19 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
     [](TextSelectionPluginCtx& ctx) -> int32_t {
         ctx.holder.ctx = &ctx;
 
-        auto schema = ctx.schema("agentxx_text_selection_monitor")
-            .enumString("command", "Operation command: start listening, stop listening, or query running status.",
-                        {"start", "stop", "status"}, /*required=*/true)
-            .integer("debounce_ms", "Debounce interval in milliseconds (default: 150). Only applies to start command.")
-            .build();
+        auto schema
+            = ctx.schema("agentxx_text_selection_monitor")
+                  .enumString(
+                      "command",
+                      "Operation command: start listening, stop listening, or query running status.",
+                      {"start", "stop", "status"},
+                      /*required=*/true
+                  )
+                  .integer(
+                      "debounce_ms",
+                      "Debounce interval in milliseconds (default: 150). Only applies to start command."
+                  )
+                  .build();
 
         blocking_tool(
             ctx,
@@ -119,14 +126,16 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
             schema,
             [](TextSelectionPluginCtx& c, std::string_view args_json) -> std::string {
                 ArgReader args(args_json);
-                auto command = args.require<std::string>("command");
-                if (!args.ok()) return args.errorMessage();
+                auto      command = args.require<std::string>("command");
+                if (!args.ok()) {
+                    return args.errorMessage();
+                }
 
                 TextSelectionHolder& holder = c.holder;
 
                 if (command == "start") {
                     int64_t debounceMs = args.value("debounce_ms", int64_t{0});
-                    bool ok = holder.start(static_cast<int>(debounceMs));
+                    bool    ok         = holder.start(static_cast<int>(debounceMs));
                     return fmt::format(R"({{"ok":{},"running":true}})", ok ? "true" : "false");
                 }
 

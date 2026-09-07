@@ -857,8 +857,9 @@ asio::awaitable<void>
 
 /// 预取消会话测试: 命令启动前 sessionKey 已在注册表中标记为取消,
 /// runProcPipeline 应在启动前/极早立即退出并组装退出状态
-asio::awaitable<void>
-    test_command_cancel_registry_precancelled(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+asio::awaitable<void> test_command_cancel_registry_precancelled(
+    std::weak_ptr<agentxx::agent::AgentContext> agentContext
+) {
     agentxx_execmd_plugin::CancelRegistry reg;
     reg.cancel("precancelled_sess");
 
@@ -877,7 +878,8 @@ asio::awaitable<void>
     );
     auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
                        std::chrono::steady_clock::now() - start
-    ).count();
+    )
+                       .count();
 
     // 预取消应在极短时间内完成 (远小于 30s)
     XX_TEST_EXPECT_TRUE(elapsed < 2000);
@@ -891,7 +893,8 @@ asio::awaitable<void>
 /// 运行中的命令经 CancelRegistry 注册, 调用 registry.cancel(key)
 /// 零轮询、事件驱动立即杀死子进程并返回
 asio::awaitable<void>
-    test_command_cancel_registry_promptly(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+    test_command_cancel_registry_promptly(std::weak_ptr<agentxx::agent::AgentContext> agentContext
+    ) {
 #if XX_IS_LINUX_D
     if (agentxx::util::isRunningInWSL()) {
         TEST_INFO << "skip cancel-registry-promptly assert on WSL (process-group kill "
@@ -901,14 +904,14 @@ asio::awaitable<void>
     }
 #endif
     agentxx_execmd_plugin::CancelRegistry reg;
-    auto args = neograph::json{
-        {"command", "sleep 30"},
-        {"timeout", 60        },
+    auto                                  args = neograph::json{
+                                         {"command", "sleep 30"},
+                                         {"timeout", 60        },
     };
-    auto ex = co_await asio::this_coro::executor;
-    std::string result;
+    auto              ex = co_await asio::this_coro::executor;
+    std::string       result;
     std::atomic<bool> done{false};
-    auto start = std::chrono::steady_clock::now();
+    auto              start = std::chrono::steady_clock::now();
 
     asio::co_spawn(
         ex,
@@ -946,18 +949,21 @@ asio::awaitable<void>
 
     auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
                        std::chrono::steady_clock::now() - start
-    ).count();
+    )
+                       .count();
 
     XX_TEST_EXPECT_TRUE(elapsed < 5000);
     XX_TEST_EXPECT_TRUE(result.find("ExitCode") != std::string::npos);
     XX_TEST_EXPECT_EQ(reg.activeCount(), size_t(0));
-    TEST_INFO << "event-driven CancelRegistry prompt cancel returned in " << elapsed << "ms" << std::endl;
+    TEST_INFO << "event-driven CancelRegistry prompt cancel returned in " << elapsed << "ms"
+              << std::endl;
     co_return;
 }
 
 /// 多会话隔离测试: CancelRegistry 取消 sess_A 不影响正在并发执行的 sess_B
-asio::awaitable<void>
-    test_command_cancel_registry_multi_session(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+asio::awaitable<void> test_command_cancel_registry_multi_session(
+    std::weak_ptr<agentxx::agent::AgentContext> agentContext
+) {
 #if XX_IS_LINUX_D
     if (agentxx::util::isRunningInWSL()) {
         TEST_INFO << "skip cancel-registry-multi-session assert on WSL (process-group kill "
@@ -967,7 +973,7 @@ asio::awaitable<void>
     }
 #endif
     agentxx_execmd_plugin::CancelRegistry reg;
-    auto ex = co_await asio::this_coro::executor;
+    auto                                  ex = co_await asio::this_coro::executor;
 
     auto argsA = neograph::json{
         {"command", "sleep 30"},
@@ -978,7 +984,7 @@ asio::awaitable<void>
         {"timeout", 60                 },
     };
 
-    std::string resultA, resultB;
+    std::string       resultA, resultB;
     std::atomic<bool> doneA{false}, doneB{false};
 
     asio::co_spawn(
@@ -1044,16 +1050,22 @@ asio::awaitable<void> test_cancel_registry_basic(std::weak_ptr<agentxx::agent::A
     XX_TEST_EXPECT_EQ(reg.activeCount(), size_t(0));
     XX_TEST_EXPECT_FALSE(reg.isCancelled("sess_1"));
 
-    int cb1_count = 0;
-    int cb2_count = 0;
-    auto id1 = reg.registerCallback("sess_1", [&cb1_count]() { cb1_count++; });
-    auto id2 = reg.registerCallback("sess_1", [&cb2_count]() { cb2_count++; });
+    int  cb1_count = 0;
+    int  cb2_count = 0;
+    auto id1       = reg.registerCallback("sess_1", [&cb1_count]() {
+        cb1_count++;
+    });
+    auto id2       = reg.registerCallback("sess_1", [&cb2_count]() {
+        cb2_count++;
+    });
     XX_TEST_EXPECT_TRUE(id1 != 0);
     XX_TEST_EXPECT_TRUE(id2 != 0);
     XX_TEST_EXPECT_EQ(reg.activeCount(), size_t(2));
 
-    int cb3_count = 0;
-    auto id3 = reg.registerCallback("sess_2", [&cb3_count]() { cb3_count++; });
+    int  cb3_count = 0;
+    auto id3       = reg.registerCallback("sess_2", [&cb3_count]() {
+        cb3_count++;
+    });
     XX_TEST_EXPECT_TRUE(id3 != 0);
     XX_TEST_EXPECT_EQ(reg.activeCount(), size_t(3));
 
@@ -1071,8 +1083,10 @@ asio::awaitable<void> test_cancel_registry_basic(std::weak_ptr<agentxx::agent::A
     XX_TEST_EXPECT_EQ(cb1_count, 1);
 
     // 在已取消的 key 上新注册: 同步触发
-    int cb4_count = 0;
-    auto id4 = reg.registerCallback("sess_1", [&cb4_count]() { cb4_count++; });
+    int  cb4_count = 0;
+    auto id4       = reg.registerCallback("sess_1", [&cb4_count]() {
+        cb4_count++;
+    });
     XX_TEST_EXPECT_EQ(cb4_count, 1);
     XX_TEST_EXPECT_EQ(id4, 0ULL);
 
@@ -1085,7 +1099,9 @@ asio::awaitable<void> test_cancel_registry_basic(std::weak_ptr<agentxx::agent::A
     {
         int scoped_count = 0;
         {
-            auto guard = reg.bind("sess_3", [&scoped_count]() { scoped_count++; });
+            auto guard = reg.bind("sess_3", [&scoped_count]() {
+                scoped_count++;
+            });
             XX_TEST_EXPECT_EQ(reg.activeCount(), size_t(1));
         }
         // 离开作用域自动 unregister
@@ -1103,12 +1119,13 @@ asio::awaitable<void> test_cancel_registry_basic(std::weak_ptr<agentxx::agent::A
 }
 
 /// CancelRegistry 多线程并发测试 (验证竞态消除与线程安全)
-asio::awaitable<void> test_cancel_registry_concurrency(std::weak_ptr<agentxx::agent::AgentContext>) {
+asio::awaitable<void>
+    test_cancel_registry_concurrency(std::weak_ptr<agentxx::agent::AgentContext>) {
     agentxx_execmd_plugin::CancelRegistry reg;
-    std::atomic<int> triggered{0};
-    std::atomic<bool> stop{false};
-    constexpr int kThreads = 4;
-    std::vector<std::thread> workers;
+    std::atomic<int>                      triggered{0};
+    std::atomic<bool>                     stop{false};
+    constexpr int                         kThreads = 4;
+    std::vector<std::thread>              workers;
 
     for (int t = 0; t < kThreads; ++t) {
         workers.emplace_back([&reg, &triggered, &stop, t]() {

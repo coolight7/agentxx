@@ -825,12 +825,12 @@ Element AboutOverlay::OnRender() {
     const int  margin   = 2;
     const int  termW    = termSize.dimx;
     const int  termH    = termSize.dimy;
-    const int wantW  = std::max(50, std::min(76, termW * 4 / 5));
-    const int wantH  = std::max(12, std::min(24, termH * 4 / 5));
-    const int availW = std::max(1, termW - margin * 2);
-    const int availH = std::max(1, termH - margin * 2);
-    const int popupW = std::min(wantW, availW);
-    const int popupH = std::min(wantH, availH);
+    const int  wantW    = std::max(50, std::min(76, termW * 4 / 5));
+    const int  wantH    = std::max(12, std::min(24, termH * 4 / 5));
+    const int  availW   = std::max(1, termW - margin * 2);
+    const int  availH   = std::max(1, termH - margin * 2);
+    const int  popupW   = std::min(wantW, availW);
+    const int  popupH   = std::min(wantH, availH);
     return vbox({
                header,
                separator(),
@@ -1508,12 +1508,12 @@ Element FailedComponentsOverlay::OnRender() {
     const int  margin   = 2;
     const int  termW    = termSize.dimx;
     const int  termH    = termSize.dimy;
-    const int wantW  = std::max(40, termW * 3 / 5);
-    const int wantH  = std::max(10, termH * 2 / 5);
-    const int availW = std::max(1, termW - margin * 2);
-    const int availH = std::max(1, termH - margin * 2);
-    const int popupW = std::min(wantW, availW);
-    const int popupH = std::min(wantH, availH);
+    const int  wantW    = std::max(40, termW * 3 / 5);
+    const int  wantH    = std::max(10, termH * 2 / 5);
+    const int  availW   = std::max(1, termW - margin * 2);
+    const int  availH   = std::max(1, termH - margin * 2);
+    const int  popupW   = std::min(wantW, availW);
+    const int  popupH   = std::min(wantH, availH);
     return vbox({
                header,
                separator(),

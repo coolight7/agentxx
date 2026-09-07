@@ -335,7 +335,8 @@ public:
         std::fprintf(stderr, "[cancel-test-dbg] CancelSlowTool execute_async called!\n");
         executed_->store(true, std::memory_order_release);
         try {
-            // 模拟耗时 IO: 5s 等待, 取消时被 operation_aborted 立即中断 (避免高负载下 2s 偶发自然跑完)
+            // 模拟耗时 IO: 5s 等待, 取消时被 operation_aborted 立即中断 (避免高负载下 2s
+            // 偶发自然跑完)
             asio::steady_timer timer(co_await asio::this_coro::executor, std::chrono::seconds(5));
             co_await timer.async_wait(asio::use_awaitable);
             finished_->store(true, std::memory_order_release);
@@ -491,8 +492,15 @@ asio::awaitable<void> test_agent_cancel_toolcall() {
     )
                                .count();
 
-    std::fprintf(stderr, "[cancel-test-dbg] turnResult: hasError=%d, err=%s, slowExec=%d, slowFinish=%d, elapsed=%lld\n",
-        (int)turnResult.hasError, turnResult.errorMessage.c_str(), (int)agent.slowExecuted.load(), (int)agent.slowFinished.load(), (long long)elapsedMs);
+    std::fprintf(
+        stderr,
+        "[cancel-test-dbg] turnResult: hasError=%d, err=%s, slowExec=%d, slowFinish=%d, elapsed=%lld\n",
+        (int)turnResult.hasError,
+        turnResult.errorMessage.c_str(),
+        (int)agent.slowExecuted.load(),
+        (int)agent.slowFinished.load(),
+        (long long)elapsedMs
+    );
 
     XX_TEST_EXPECT_TRUE(turnExc == nullptr);
     XX_TEST_EXPECT_TRUE(watcherExc == nullptr);
@@ -638,10 +646,10 @@ asio::awaitable<void> test_offload_cancel_token() {
 // backlog 积压 + 取消导致暂停态 + 用户推入新输入 -> 解除暂停恢复执行, 不死锁
 // ===========================================================================
 static asio::awaitable<void> test_cancel_queue_paused_backlog_resume() {
-    auto ex = co_await asio::this_coro::executor;
+    auto                                         ex = co_await asio::this_coro::executor;
     agentxx::agent::SessionServerAgentIO::Config cfg;
     cfg.sessionId = "cancel-queue-paused-test";
-    auto sc = std::make_shared<agentxx::agent::SessionServerAgentIO>(
+    auto sc       = std::make_shared<agentxx::agent::SessionServerAgentIO>(
         ex,
         std::weak_ptr<agentxx::agent::BaseAgent>{},
         cfg
@@ -667,7 +675,9 @@ static asio::awaitable<void> test_cancel_queue_paused_backlog_resume() {
 
     // 5. 关键断言 (P0-2/P3-2): 空闲态下队列有积压 (backlog 非空), 此时推入新用户输入
     // 必须自动解除暂停 (queuePaused_ 变为 false), 唤醒 channel, 避免死锁
-    sc->onPeerMessage(agentxx::agent::WireUserInput{std::string(sc->sessionId()), "new user input", ""});
+    sc->onPeerMessage(
+        agentxx::agent::WireUserInput{std::string(sc->sessionId()), "new user input", ""}
+    );
     XX_TEST_EXPECT_FALSE(sc->isQueuePausedForTest());
     XX_TEST_EXPECT_EQ(sc->queueSizeForTest(), size_t{3});
 

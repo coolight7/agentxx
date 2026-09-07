@@ -6,11 +6,26 @@
 #include "codegraph_manager.h"
 #include "codegraph_plugin.h"
 
-#define XX_LOGT(...) do { this->log(0, fmt::format(__VA_ARGS__)); } while (0)
-#define XX_LOGD(...) do { this->log(1, fmt::format(__VA_ARGS__)); } while (0)
-#define XX_LOGI(...) do { this->log(2, fmt::format(__VA_ARGS__)); } while (0)
-#define XX_LOGW(...) do { this->log(3, fmt::format(__VA_ARGS__)); } while (0)
-#define XX_LOGE(...) do { this->log(4, fmt::format(__VA_ARGS__)); } while (0)
+#define XX_LOGT(...)                            \
+    do {                                        \
+        this->log(0, fmt::format(__VA_ARGS__)); \
+    } while (0)
+#define XX_LOGD(...)                            \
+    do {                                        \
+        this->log(1, fmt::format(__VA_ARGS__)); \
+    } while (0)
+#define XX_LOGI(...)                            \
+    do {                                        \
+        this->log(2, fmt::format(__VA_ARGS__)); \
+    } while (0)
+#define XX_LOGW(...)                            \
+    do {                                        \
+        this->log(3, fmt::format(__VA_ARGS__)); \
+    } while (0)
+#define XX_LOGE(...)                            \
+    do {                                        \
+        this->log(4, fmt::format(__VA_ARGS__)); \
+    } while (0)
 #include "glob/glob.h"
 #include <algorithm>
 #include <atomic>
@@ -272,7 +287,6 @@ static std::optional<fs::path>
 /// - sqlite 的写锁竞争是瞬时的 (busy_timeout=5000 等待 + WAL 短事务), 重试后基本必成
 /// - fn 抛异常时由内部 catchError 捕获, 按 attempt 指数退避后重试
 /// - 全部尝试失败返回 false (已记录错误日志)
-
 
 // ---------------------------------------------------------------------------
 // .gitignore / .gitmodules 规则解析与匹配
@@ -702,6 +716,7 @@ static int score_target(const codegraph::Node& source, const codegraph::Node& ca
 
 class CodeGraphManager::Impl {
 public:
+
     void setLogSink(LogSink sink) {
         logSink_ = std::move(sink);
     }
@@ -711,200 +726,209 @@ public:
             logSink_(level, msg);
         }
     }
+
 private:
+
     LogSink logSink_;
-template<typename F>
-bool runWithRetry(std::string_view what, int attempts, F&& fn) {
-    for (int attempt = 1; attempt <= attempts; ++attempt) {
-        bool ok = catchError<bool>(
-            [&]() -> bool {
-                fn();
-                return true;
-            },
-            [&](std::string errmsg) -> bool {
-                if (attempt < attempts) {
-                    XX_LOGW(
-                        "CodeGraphManager: {} failed (attempt {}/{}), retry: {}",
-                        what,
-                        attempt,
-                        attempts,
-                        errmsg
-                    );
-                    std::this_thread::sleep_for(std::chrono::milliseconds(150 * attempt));
-                } else {
-                    XX_LOGE(
-                        "CodeGraphManager: {} failed after {} attempts: {}",
-                        what,
-                        attempts,
-                        errmsg
-                    );
-                }
-                return false;
-            }
-        );
-        if (ok) {
-            return true;
-        }
-    }
-    return false;
-}
 
-/// 带有限重试的事务提交: BEGIN -> fn(写操作) -> COMMIT
-/// - 写锁竞争 (SQLITE_BUSY) 时回滚并重试整个事务, 避免静默丢失该批写入
-/// - fn 仅执行写操作, 不负责事务边界
-template<typename F>
-bool runTransactionWithRetry(std::string_view what, int attempts, codegraph::Database* db, F&& fn) {
-    for (int attempt = 1; attempt <= attempts; ++attempt) {
-        bool inTx = false;
-        bool ok   = catchError<bool>(
-            [&]() -> bool {
-                db->begin_transaction();
-                inTx = true;
-                fn();
-                db->commit();
-                inTx = false;
+    template<typename F>
+    bool runWithRetry(std::string_view what, int attempts, F&& fn) {
+        for (int attempt = 1; attempt <= attempts; ++attempt) {
+            bool ok = catchError<bool>(
+                [&]() -> bool {
+                    fn();
+                    return true;
+                },
+                [&](std::string errmsg) -> bool {
+                    if (attempt < attempts) {
+                        XX_LOGW(
+                            "CodeGraphManager: {} failed (attempt {}/{}), retry: {}",
+                            what,
+                            attempt,
+                            attempts,
+                            errmsg
+                        );
+                        std::this_thread::sleep_for(std::chrono::milliseconds(150 * attempt));
+                    } else {
+                        XX_LOGE(
+                            "CodeGraphManager: {} failed after {} attempts: {}",
+                            what,
+                            attempts,
+                            errmsg
+                        );
+                    }
+                    return false;
+                }
+            );
+            if (ok) {
                 return true;
-            },
-            [&](std::string errmsg) -> bool {
-                // 回滚需容错: 若 BEGIN 本身失败则无活跃事务, ROLLBACK 会再抛异常
-                if (inTx) {
-                    catchError<bool>(
-                        [&]() -> bool {
-                            db->rollback();
-                            return true;
-                        },
-                        [](std::string) -> bool {
-                            return false;
-                        }
-                    );
+            }
+        }
+        return false;
+    }
+
+    /// 带有限重试的事务提交: BEGIN -> fn(写操作) -> COMMIT
+    /// - 写锁竞争 (SQLITE_BUSY) 时回滚并重试整个事务, 避免静默丢失该批写入
+    /// - fn 仅执行写操作, 不负责事务边界
+    template<typename F>
+    bool runTransactionWithRetry(
+        std::string_view     what,
+        int                  attempts,
+        codegraph::Database* db,
+        F&&                  fn
+    ) {
+        for (int attempt = 1; attempt <= attempts; ++attempt) {
+            bool inTx = false;
+            bool ok   = catchError<bool>(
+                [&]() -> bool {
+                    db->begin_transaction();
+                    inTx = true;
+                    fn();
+                    db->commit();
                     inTx = false;
+                    return true;
+                },
+                [&](std::string errmsg) -> bool {
+                    // 回滚需容错: 若 BEGIN 本身失败则无活跃事务, ROLLBACK 会再抛异常
+                    if (inTx) {
+                        catchError<bool>(
+                            [&]() -> bool {
+                                db->rollback();
+                                return true;
+                            },
+                            [](std::string) -> bool {
+                                return false;
+                            }
+                        );
+                        inTx = false;
+                    }
+                    if (attempt < attempts) {
+                        XX_LOGW(
+                            "CodeGraphManager: {} failed (attempt {}/{}), retry: {}",
+                            what,
+                            attempt,
+                            attempts,
+                            errmsg
+                        );
+                        std::this_thread::sleep_for(std::chrono::milliseconds(150 * attempt));
+                    } else {
+                        XX_LOGE(
+                            "CodeGraphManager: {} failed after {} attempts: {}",
+                            what,
+                            attempts,
+                            errmsg
+                        );
+                    }
+                    return false;
                 }
-                if (attempt < attempts) {
-                    XX_LOGW(
-                        "CodeGraphManager: {} failed (attempt {}/{}), retry: {}",
-                        what,
-                        attempt,
-                        attempts,
-                        errmsg
-                    );
-                    std::this_thread::sleep_for(std::chrono::milliseconds(150 * attempt));
-                } else {
-                    XX_LOGE(
-                        "CodeGraphManager: {} failed after {} attempts: {}",
-                        what,
-                        attempts,
-                        errmsg
-                    );
+            );
+            if (ok) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    void traverse_source_files(
+        std::string_view                             root_path,
+        const std::vector<std::regex>&               ignore_path_regexes,
+        bool                                         use_gitignore,
+        const std::function<bool(std::string_view)>& on_file
+    ) {
+        // 遍历异常记录日志后中止; 已回调的文件保持已处理状态 (不重复处理)
+        catchError<bool>(
+            [&]() -> bool {
+                GitIgnoreMatcher matcher;
+                if (use_gitignore) {
+                    // 内置规则: `.git` 元数据目录 (任意层级, 含项目根下的 .git)
+                    // 整体忽略, 不进入索引
+                    matcher.addGitDirIgnore();
                 }
+
+                // 目录忽略判断 (剪枝): 内置过滤(补尾/使子串匹配命中目录自身) +
+                // ignorePaths 正则 + gitignore
+                auto isDirIgnored = [&](const fs::path& dir) -> bool {
+                    std::string s = dir.generic_string();
+                    if (should_skip(fmt::format("{}/", s))) {
+                        return true;
+                    }
+                    for (const auto& re : ignore_path_regexes) {
+                        if (std::regex_match(s, re)) {
+                            return true;
+                        }
+                    }
+                    return matcher.isIgnored(dir);
+                };
+                // 文件忽略判断: 内置过滤 + ignorePaths 正则 + gitignore
+                auto isFileIgnored = [&](const std::string& s) -> bool {
+                    if (should_skip(s)) {
+                        return true;
+                    }
+                    for (const auto& re : ignore_path_regexes) {
+                        if (std::regex_match(s, re)) {
+                            return true;
+                        }
+                    }
+                    return matcher.isIgnored(fs::path(s));
+                };
+
+                std::vector<fs::path> stack;
+                stack.push_back(fs::path(root_path));
+                while (!stack.empty()) {
+                    fs::path dir = std::move(stack.back());
+                    stack.pop_back();
+
+                    if (use_gitignore) {
+                        // 每层目录追加本层 .gitignore 与 .gitmodules 规则 (父级
+                        // 规则保留, 子目录规则追加在后, 匹配时后者优先; 嵌套 git
+                        // 仓库的 .gitmodules 也在所在层级生效)
+                        matcher.addIgnoreFile(dir / ".gitignore");
+                        matcher.addSubmodules(dir / ".gitmodules");
+                    }
+
+                    std::error_code ec;
+                    for (auto it = fs::directory_iterator(
+                             dir,
+                             fs::directory_options::skip_permission_denied,
+                             ec
+                         );
+                         it != fs::directory_iterator();
+                         it.increment(ec)) {
+                        if (ec) {
+                            break;
+                        }
+                        const auto&     entry = *it;
+                        fs::path        p     = entry.path();
+                        std::error_code typeEc;
+                        if (entry.is_directory(typeEc)) {
+                            if (isDirIgnored(p)) {
+                                continue; // 剪枝: 整棵子树忽略, 不进入
+                            }
+                            stack.push_back(std::move(p));
+                        } else if (entry.is_regular_file(typeEc)) {
+                            std::string path_str = p.generic_string();
+                            if (isFileIgnored(path_str)) {
+                                continue;
+                            }
+                            std::string lang = codegraph::detect_language(path_str);
+                            if (lang.empty()) {
+                                continue;
+                            }
+                            // 边遍历边回调 (调用方即时索引并通知进度; 返回 false 停止遍历)
+                            if (!on_file(path_str)) {
+                                return false; // 主动中断, 不视为错误
+                            }
+                        }
+                    }
+                }
+                return true;
+            },
+            [this](std::string errmsg) -> bool {
+                XX_LOGE("CodeGraphManager: traverse_source_files error: {}", errmsg);
                 return false;
             }
         );
-        if (ok) {
-            return true;
-        }
     }
-    return false;
-}
-void traverse_source_files(
-    std::string_view                             root_path,
-    const std::vector<std::regex>&               ignore_path_regexes,
-    bool                                         use_gitignore,
-    const std::function<bool(std::string_view)>& on_file
-) {
-    // 遍历异常记录日志后中止; 已回调的文件保持已处理状态 (不重复处理)
-    catchError<bool>(
-        [&]() -> bool {
-            GitIgnoreMatcher matcher;
-            if (use_gitignore) {
-                // 内置规则: `.git` 元数据目录 (任意层级, 含项目根下的 .git)
-                // 整体忽略, 不进入索引
-                matcher.addGitDirIgnore();
-            }
-
-            // 目录忽略判断 (剪枝): 内置过滤(补尾/使子串匹配命中目录自身) +
-            // ignorePaths 正则 + gitignore
-            auto isDirIgnored = [&](const fs::path& dir) -> bool {
-                std::string s = dir.generic_string();
-                if (should_skip(fmt::format("{}/", s))) {
-                    return true;
-                }
-                for (const auto& re : ignore_path_regexes) {
-                    if (std::regex_match(s, re)) {
-                        return true;
-                    }
-                }
-                return matcher.isIgnored(dir);
-            };
-            // 文件忽略判断: 内置过滤 + ignorePaths 正则 + gitignore
-            auto isFileIgnored = [&](const std::string& s) -> bool {
-                if (should_skip(s)) {
-                    return true;
-                }
-                for (const auto& re : ignore_path_regexes) {
-                    if (std::regex_match(s, re)) {
-                        return true;
-                    }
-                }
-                return matcher.isIgnored(fs::path(s));
-            };
-
-            std::vector<fs::path> stack;
-            stack.push_back(fs::path(root_path));
-            while (!stack.empty()) {
-                fs::path dir = std::move(stack.back());
-                stack.pop_back();
-
-                if (use_gitignore) {
-                    // 每层目录追加本层 .gitignore 与 .gitmodules 规则 (父级
-                    // 规则保留, 子目录规则追加在后, 匹配时后者优先; 嵌套 git
-                    // 仓库的 .gitmodules 也在所在层级生效)
-                    matcher.addIgnoreFile(dir / ".gitignore");
-                    matcher.addSubmodules(dir / ".gitmodules");
-                }
-
-                std::error_code ec;
-                for (auto it = fs::directory_iterator(
-                         dir,
-                         fs::directory_options::skip_permission_denied,
-                         ec
-                     );
-                     it != fs::directory_iterator();
-                     it.increment(ec)) {
-                    if (ec) {
-                        break;
-                    }
-                    const auto&     entry = *it;
-                    fs::path        p     = entry.path();
-                    std::error_code typeEc;
-                    if (entry.is_directory(typeEc)) {
-                        if (isDirIgnored(p)) {
-                            continue; // 剪枝: 整棵子树忽略, 不进入
-                        }
-                        stack.push_back(std::move(p));
-                    } else if (entry.is_regular_file(typeEc)) {
-                        std::string path_str = p.generic_string();
-                        if (isFileIgnored(path_str)) {
-                            continue;
-                        }
-                        std::string lang = codegraph::detect_language(path_str);
-                        if (lang.empty()) {
-                            continue;
-                        }
-                        // 边遍历边回调 (调用方即时索引并通知进度; 返回 false 停止遍历)
-                        if (!on_file(path_str)) {
-                            return false; // 主动中断, 不视为错误
-                        }
-                    }
-                }
-            }
-            return true;
-        },
-        [this](std::string errmsg) -> bool {
-            XX_LOGE("CodeGraphManager: traverse_source_files error: {}", errmsg);
-            return false;
-        }
-    );
-}
 
 public:
 public:

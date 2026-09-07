@@ -444,15 +444,15 @@ struct ToolHeaderFixture {
     /// 注入含可点击按钮的工具消息装饰 (真实 planning 插件经 update_tool_decor 推送)
     void pushDecorWithButton() {
         sharedState.mutate([&](TUIRenderState& st) {
-            auto  reg         = st.pluginRegistry
-                                    ? std::make_shared<agentxx::plugin::ClientUiRegistry>(*st.pluginRegistry)
-                                    : std::make_shared<agentxx::plugin::ClientUiRegistry>();
-            auto& d           = reg->toolDecors.emplace_back();
-            d.plugin          = "agentxx_planning";
-            d.toolCallId      = "call_1";
-            d.displayName     = "Plan";
-            d.summary         = "[~] reproduce issue";
-            d.items           = neograph::json::parse(R"([
+            auto  reg     = st.pluginRegistry
+                                ? std::make_shared<agentxx::plugin::ClientUiRegistry>(*st.pluginRegistry)
+                                : std::make_shared<agentxx::plugin::ClientUiRegistry>();
+            auto& d       = reg->toolDecors.emplace_back();
+            d.plugin      = "agentxx_planning";
+            d.toolCallId  = "call_1";
+            d.displayName = "Plan";
+            d.summary     = "[~] reproduce issue";
+            d.items       = neograph::json::parse(R"([
                 {"kind":"button","label":" Graph ","action_id":"planning.open_graph","args":{},"role":"accent"},
                 {"kind":"text","role":"title","text":"Todos:"},
                 {"kind":"text","role":"normal","text":"[~] do task A"}

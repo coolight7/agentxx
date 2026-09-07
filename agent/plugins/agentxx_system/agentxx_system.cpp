@@ -23,15 +23,9 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
     [](SysPluginCtx& ctx) -> int32_t {
         auto schema = ctx.schema(kNameDatetime).build();
 
-        fast_tool(
-            ctx,
-            kNameDatetime,
-            kDepictDatetime,
-            schema,
-            [](std::string_view) -> std::string {
-                return currentDatetimeExecute();
-            }
-        );
+        fast_tool(ctx, kNameDatetime, kDepictDatetime, schema, [](std::string_view) -> std::string {
+            return currentDatetimeExecute();
+        });
 
         return 0;
     }

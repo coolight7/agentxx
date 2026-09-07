@@ -39,6 +39,7 @@ namespace plugin {
 const void* AGENTXX_PLUGIN_CALL
     xx_query_interface(const AgentxxPluginHost*, const AgentxxPluginStringView* iid);
 }
+
 namespace test {
 
 /// 定位插件库目录 (通用; exe 同目录优先, cwd 回退; 校验目录内存在动态库产物,
@@ -648,6 +649,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
             // 注册带超时的慢工具: 超时 100ms, 阻塞操作 600ms 后才完成
             // (阻塞委托型 offload线程池: execute 经 scheduler.offload 在宿主阻塞池线程执行)
             struct SlowCtx : public agentxx::plugin::PluginBase {};
+
             static SlowCtx slowCtx;
             slowCtx.init(&inst23->host);
             agentxx::plugin::blocking_tool(
@@ -1172,6 +1174,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
         //      适配层转 AGENTXX_PLUGIN_OPERATOR_FAILED, 异常不穿越 C ABI
         {
             struct BoomCtx : public agentxx::plugin::PluginBase {};
+
             static BoomCtx boomCtx;
             boomCtx.init(&inst31->host);
             agentxx::plugin::blocking_tool(
@@ -1190,7 +1193,9 @@ asio::awaitable<TestResult> run_plugin_tests() {
                     auto out = co_await tool->execute_async(neograph::json{});
                     XX_TEST_EXPECT_TRUE(false);
                 } catch (const std::exception& e) {
-                    XX_TEST_EXPECT_TRUE(std::string(e.what()).find("shim boom") != std::string::npos);
+                    XX_TEST_EXPECT_TRUE(
+                        std::string(e.what()).find("shim boom") != std::string::npos
+                    );
                 }
             }
             ctx->pluginManager->unregisterTool(inst31.get(), "boom_tool");
@@ -1726,10 +1731,16 @@ asio::awaitable<TestResult> run_plugin_tests() {
         XX_TEST_EXPECT_EQ(reg.activeCount(), size_t(0));
         XX_TEST_EXPECT_FALSE(reg.isCancelled("sess_1"));
 
-        int cb1_count = 0, cb2_count = 0, cb3_count = 0;
-        auto id1 = reg.registerCallback("sess_1", [&cb1_count]() { cb1_count++; });
-        auto id2 = reg.registerCallback("sess_1", [&cb2_count]() { cb2_count++; });
-        auto id3 = reg.registerCallback("sess_2", [&cb3_count]() { cb3_count++; });
+        int  cb1_count = 0, cb2_count = 0, cb3_count = 0;
+        auto id1 = reg.registerCallback("sess_1", [&cb1_count]() {
+            cb1_count++;
+        });
+        auto id2 = reg.registerCallback("sess_1", [&cb2_count]() {
+            cb2_count++;
+        });
+        auto id3 = reg.registerCallback("sess_2", [&cb3_count]() {
+            cb3_count++;
+        });
         XX_TEST_EXPECT_TRUE(id1 != 0);
         XX_TEST_EXPECT_TRUE(id2 != 0);
         XX_TEST_EXPECT_TRUE(id3 != 0);
@@ -1749,8 +1760,10 @@ asio::awaitable<TestResult> run_plugin_tests() {
         XX_TEST_EXPECT_EQ(cb1_count, 1);
 
         // 预取消状态下新注册: 同步触发并返回 0
-        int cb4_count = 0;
-        auto id4 = reg.registerCallback("sess_1", [&cb4_count]() { cb4_count++; });
+        int  cb4_count = 0;
+        auto id4       = reg.registerCallback("sess_1", [&cb4_count]() {
+            cb4_count++;
+        });
         XX_TEST_EXPECT_EQ(cb4_count, 1);
         XX_TEST_EXPECT_EQ(id4, 0ULL);
 
@@ -1763,7 +1776,9 @@ asio::awaitable<TestResult> run_plugin_tests() {
         {
             int scoped_count = 0;
             {
-                auto guard = reg.bind("sess_scoped", [&scoped_count]() { scoped_count++; });
+                auto guard = reg.bind("sess_scoped", [&scoped_count]() {
+                    scoped_count++;
+                });
                 XX_TEST_EXPECT_EQ(reg.activeCount(), size_t(1));
                 // 测试 move 语义
                 auto guard2 = std::move(guard);
@@ -1785,6 +1800,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
             struct ResourceOnStack {
                 std::atomic<bool> destroyed{false};
                 std::atomic<bool> accessedDuringCb{false};
+
                 ~ResourceOnStack() {
                     destroyed.store(true, std::memory_order_release);
                 }
@@ -1871,6 +1887,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
         // 36.4 PluginBase 集成与 sessionCancelled 本地优先读取
         {
             struct DummyPlugin : public agentxx::plugin::PluginBase {};
+
             DummyPlugin plug;
             XX_TEST_EXPECT_FALSE(plug.sessionCancelled("test_sess"));
 
@@ -1883,25 +1900,31 @@ asio::awaitable<TestResult> run_plugin_tests() {
 
     // ---- 37. 插件加载失败的事务性回滚 (RAII 回滚验证) ----
     {
-        auto rollbackCtx = std::make_shared<agentxx::agent::AgentContext>();
+        auto rollbackCtx         = std::make_shared<agentxx::agent::AgentContext>();
         rollbackCtx->agentConfig = std::make_shared<agentxx::agent::AgentConfig>();
-        rollbackCtx->middlewareHandleContext = std::make_shared<agentxx::middleware::MiddlewareContext>();
-        rollbackCtx->bus = std::make_shared<agentxx::event::EventBus>(co_await asio::this_coro::executor);
-        rollbackCtx->toolRegistry = std::make_shared<agentxx::plugin::ToolRegistry>();
+        rollbackCtx->middlewareHandleContext
+            = std::make_shared<agentxx::middleware::MiddlewareContext>();
+        rollbackCtx->bus
+            = std::make_shared<agentxx::event::EventBus>(co_await asio::this_coro::executor);
+        rollbackCtx->toolRegistry  = std::make_shared<agentxx::plugin::ToolRegistry>();
         rollbackCtx->pluginManager = std::make_shared<agentxx::plugin::PluginManager>(rollbackCtx);
         rollbackCtx->pluginManager->setIoExecutor(co_await asio::this_coro::executor);
 
         auto fakeInst = std::make_shared<agentxx::plugin::PluginInstance>("fake_rollback_plugin");
         fakeInst->manager = rollbackCtx->pluginManager;
-        fakeInst->self = fakeInst;
-        auto vtableSv = agentxx::plugin::PluginStringView::fromCstr("__vtable");
-        fakeInst->host.vtable = (const AgentxxHostVtable*)agentxx::plugin::xx_query_interface(nullptr, &vtableSv);
+        fakeInst->self    = fakeInst;
+        auto vtableSv     = agentxx::plugin::PluginStringView::fromCstr("__vtable");
+        fakeInst->host.vtable
+            = (const AgentxxHostVtable*)agentxx::plugin::xx_query_interface(nullptr, &vtableSv);
         fakeInst->host.opaque = fakeInst.get();
 
         struct FakeCtx : public agentxx::plugin::PluginBase {};
+
         FakeCtx fctx;
         fctx.init(&fakeInst->host);
-        agentxx::plugin::fast_tool(fctx, "fake_rollback_tool", "desc", "{}", [](std::string_view) { return "ok"; });
+        agentxx::plugin::fast_tool(fctx, "fake_rollback_tool", "desc", "{}", [](std::string_view) {
+            return "ok";
+        });
         XX_TEST_EXPECT_TRUE(rollbackCtx->toolRegistry->contains("fake_rollback_tool"));
 
         // 验证 detachAll 完全拔除工具与订阅
@@ -1918,9 +1941,9 @@ asio::awaitable<TestResult> run_plugin_tests() {
         auto tool = ctx->toolRegistry->find("example_caller");
         XX_TEST_EXPECT_TRUE(tool != nullptr);
         if (tool) {
-            constexpr int kTotalCalls = 1000;
+            constexpr int    kTotalCalls = 1000;
             std::atomic<int> completed{0};
-            auto ex = co_await asio::this_coro::executor;
+            auto             ex = co_await asio::this_coro::executor;
             for (int i = 0; i < kTotalCalls; ++i) {
                 asio::co_spawn(
                     ex,
@@ -1929,7 +1952,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
                             {"sessionId", fmt::format("conc_{}", i)},
                             {"x", i},
                         });
-                        auto j = neograph::json::parse(out);
+                        auto j   = neograph::json::parse(out);
                         if (j["via_call_tool"]["echo"]["x"].get<int>() == i) {
                             completed.fetch_add(1, std::memory_order_relaxed);
                         }
@@ -1937,7 +1960,9 @@ asio::awaitable<TestResult> run_plugin_tests() {
                     asio::detached
                 );
             }
-            for (int waitCount = 0; waitCount < 500 && completed.load(std::memory_order_relaxed) < kTotalCalls; ++waitCount) {
+            for (int waitCount = 0;
+                 waitCount < 500 && completed.load(std::memory_order_relaxed) < kTotalCalls;
+                 ++waitCount) {
                 co_await sleepMs(10);
             }
             XX_TEST_EXPECT_EQ(completed.load(), kTotalCalls);
@@ -1950,19 +1975,19 @@ asio::awaitable<TestResult> run_plugin_tests() {
         auto sysMonPath = findPluginDir("agentxx_system_monitor");
         if (std::filesystem::exists(sysMonPath)) {
             constexpr int kInstances = 10;
-            auto ex = co_await asio::this_coro::executor;
-            std::vector<std::shared_ptr<agent::AgentContext>> contexts;
+            auto          ex         = co_await asio::this_coro::executor;
+            std::vector<std::shared_ptr<agent::AgentContext>>    contexts;
             std::vector<std::shared_ptr<plugin::PluginInstance>> instances;
             contexts.reserve(kInstances);
             instances.reserve(kInstances);
 
             for (int i = 0; i < kInstances; ++i) {
-                auto c = std::make_shared<agent::AgentContext>();
-                c->agentConfig = std::make_shared<agent::AgentConfig>();
+                auto c                     = std::make_shared<agent::AgentContext>();
+                c->agentConfig             = std::make_shared<agent::AgentConfig>();
                 c->middlewareHandleContext = std::make_shared<middleware::MiddlewareContext>();
-                c->bus = std::make_shared<event::EventBus>(ex);
-                c->toolRegistry = std::make_shared<plugin::ToolRegistry>();
-                c->pluginManager = std::make_shared<plugin::PluginManager>(c);
+                c->bus                     = std::make_shared<event::EventBus>(ex);
+                c->toolRegistry            = std::make_shared<plugin::ToolRegistry>();
+                c->pluginManager           = std::make_shared<plugin::PluginManager>(c);
                 c->pluginManager->setIoExecutor(ex);
 
                 auto inst = co_await c->pluginManager->loadPluginAsync(sysMonPath);
@@ -1985,7 +2010,9 @@ asio::awaitable<TestResult> run_plugin_tests() {
             // 全部卸载
             for (int i = 0; i < kInstances; ++i) {
                 co_await contexts[i]->pluginManager->unloadAsync("agentxx_system_monitor");
-                XX_TEST_EXPECT_FALSE(contexts[i]->toolRegistry->contains("agentxx_get_system_core_info"));
+                XX_TEST_EXPECT_FALSE(
+                    contexts[i]->toolRegistry->contains("agentxx_get_system_core_info")
+                );
                 contexts[i]->pluginManager->shutdownAll();
             }
         }

@@ -390,16 +390,30 @@ extern "C" AGENTXX_PLUGIN_EXPORT int32_t AGENTXX_PLUGIN_CALL
             // 规划持久化 + 事件发布为通用接口 (不再依赖专用 planning iface)
 
             {
-                std::string schema = ctx->schema(kNamePlanning)
-                    .enumString("mode",
-                                "Operation mode: `write` saves/updates the planning content "
-                                "(requires `roadmap`); `read` returns the previously saved "
-                                "planning content of this session.",
-                                {"write", "read"}, /*required=*/true)
-                    .string("roadmap", "(write only, required) STRATEGIC LAYER: Mermaid stateDiagram-v2 of the overall workflow.")
-                    .array("todos", "(write only) TACTICAL LAYER: Near-term task items (state/content).", "object")
-                    .string("notes", "(write only) MEMO LAYER: Any additional notes, tips, reminders.")
-                    .build();
+                std::string schema
+                    = ctx->schema(kNamePlanning)
+                          .enumString(
+                              "mode",
+                              "Operation mode: `write` saves/updates the planning content "
+                              "(requires `roadmap`); `read` returns the previously saved "
+                              "planning content of this session.",
+                              {"write", "read"},
+                              /*required=*/true
+                          )
+                          .string(
+                              "roadmap",
+                              "(write only, required) STRATEGIC LAYER: Mermaid stateDiagram-v2 of the overall workflow."
+                          )
+                          .array(
+                              "todos",
+                              "(write only) TACTICAL LAYER: Near-term task items (state/content).",
+                              "object"
+                          )
+                          .string(
+                              "notes",
+                              "(write only) MEMO LAYER: Any additional notes, tips, reminders."
+                          )
+                          .build();
 
                 agentxx::plugin::fast_tool(
                     *ctx,

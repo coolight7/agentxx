@@ -1013,11 +1013,11 @@ LazyBuiltItem MessageListComponent::buildMessageItem(const TUIMessage& msg, size
     const int maxWidth = std::max(1, scrollable_->contentWidth());
 
     std::vector<std::unique_ptr<markdown::DomBuilder>> builders;
-    const size_t decorHitsBefore     = decorHits_.size();
-    const size_t interruptHitsBefore = interruptHits_.size();
-    auto         block               = buildMessageBlock(msg, index, maxWidth, builders);
-    const bool   hasDecorHits        = (decorHits_.size() > decorHitsBefore);
-    const bool   hasInterruptHits    = (interruptHits_.size() > interruptHitsBefore);
+    const size_t                                       decorHitsBefore     = decorHits_.size();
+    const size_t                                       interruptHitsBefore = interruptHits_.size();
+    auto       block            = buildMessageBlock(msg, index, maxWidth, builders);
+    const bool hasDecorHits     = (decorHits_.size() > decorHitsBefore);
+    const bool hasInterruptHits = (interruptHits_.size() > interruptHitsBefore);
 
     LazyBuiltItem out;
     out.element           = vbox({std::move(block), text("")});

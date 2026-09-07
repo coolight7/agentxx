@@ -224,13 +224,13 @@ void DaSimServer::stop() {
 
 DaSimServer startDaSimServer() {
     // 重置全局模拟状态与连接池, 避免跨用例/跨模块测试污染
-    g_da_sim_response_content     = "Hello! I am a simulated LLM response for testing.";
-    g_da_sim_prompt_tokens        = 100;
-    g_da_sim_completion_tokens    = 50;
-    g_da_sim_tool_calls           = neograph::json::array();
-    g_da_sim_reasoning_content    = "";
-    g_da_sim_delay_ms             = 0;
-    g_da_sim_last_request         = neograph::json::object();
+    g_da_sim_response_content  = "Hello! I am a simulated LLM response for testing.";
+    g_da_sim_prompt_tokens     = 100;
+    g_da_sim_completion_tokens = 50;
+    g_da_sim_tool_calls        = neograph::json::array();
+    g_da_sim_reasoning_content = "";
+    g_da_sim_delay_ms          = 0;
+    g_da_sim_last_request      = neograph::json::object();
     g_da_sim_requests.clear();
     g_da_sim_request_count        = 0;
     g_da_sim_fail_count           = 0;

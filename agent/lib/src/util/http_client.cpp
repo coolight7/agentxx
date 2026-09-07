@@ -409,8 +409,8 @@ public:
     /// - 新建连接失败/被取消时归还并发名额并唤醒等待者后原样抛出异常
     asio::awaitable<std::shared_ptr<PooledConnection>>
         acquire(const HttpPoolKey& key, size_t maxConcurrent, const RequestConfig& config) {
-        auto               executor = co_await asio::this_coro::executor;
-        auto&              ctx      = asio::query(executor, asio::execution::context);
+        auto  executor = co_await asio::this_coro::executor;
+        auto& ctx      = asio::query(executor, asio::execution::context);
 
         for (;;) {
             bool                    create = false;
@@ -479,10 +479,11 @@ public:
             // 并发达到上限: 挂入等待队列, release/新建失败时精准唤醒 (带 30s 兜底超时与取消保护)
             if (waiter) {
                 struct WaiterGuard {
-                    std::mutex&                                   mtx;
+                    std::mutex&                                    mtx;
                     std::map<HttpPoolKey, Entry, HttpPoolKeyLess>& entries;
-                    const HttpPoolKey&                            key;
-                    std::shared_ptr<Waiter>                       waiter;
+                    const HttpPoolKey&                             key;
+                    std::shared_ptr<Waiter>                        waiter;
+
                     ~WaiterGuard() {
                         if (waiter && waiter->active) {
                             std::lock_guard<std::mutex> lock(mtx);

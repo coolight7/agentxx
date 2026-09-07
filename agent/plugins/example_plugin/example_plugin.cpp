@@ -27,11 +27,11 @@
 struct AgentCtx : public agentxx::plugin::PluginBase {};
 
 struct ClientCtx : public agentxx::plugin::ClientPluginBase {
-    const AgentxxClientUiIface*   ui           = nullptr;
-    AgentxxStatusItem*            status_item  = nullptr;
-    AgentxxPanel*                 panel        = nullptr;
-    AgentxxInfoSection*           info_section = nullptr;
-    int                           turn_count   = 0;
+    const AgentxxClientUiIface* ui           = nullptr;
+    AgentxxStatusItem*          status_item  = nullptr;
+    AgentxxPanel*               panel        = nullptr;
+    AgentxxInfoSection*         info_section = nullptr;
+    int                         turn_count   = 0;
 };
 
 static auto agentGuardLogger(AgentCtx* ctx) noexcept {
@@ -456,10 +456,10 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
             if (!host || !host->vtable || !plugin_ctx) {
                 return -1;
             }
-            auto ctx   = std::make_unique<ClientCtx>();
+            auto ctx = std::make_unique<ClientCtx>();
             ctx->init(host);
-            ctx->ui    = ctx->iface.ui;
-            raw        = ctx.get();
+            ctx->ui = ctx->iface.ui;
+            raw     = ctx.get();
 
             auto sidSv  = agentxx::plugin::PluginStringView::fromCstr("example_plugin.turns");
             auto initSv = agentxx::plugin::PluginStringView::fromCstr(R"({"text":"turns: 0"})");

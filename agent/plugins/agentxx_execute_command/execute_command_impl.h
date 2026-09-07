@@ -263,7 +263,8 @@ inline asio::awaitable<void> procCancelWatchLoop(
             sessionKey,
             [&proc, winJob, &outpip, &errpip, ex, cancelTimer, cancelled]() {
                 bool expected = false;
-                if (!cancelled->compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
+                if (!cancelled
+                         ->compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
                     return;
                 }
                 // 立即整组 kill (Linux: setsid killpg, Windows: TerminateJobObject)

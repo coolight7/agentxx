@@ -40,11 +40,12 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
     "Execute system commands (bash/windows terminal) with timeout/cancellation",
     [](ExecPluginCtx& ctx) -> int32_t {
 #if XX_IS_WIN_D
-        auto winSchema = ctx.schema(kNameWindows)
-            .string("command", "The Windows command to execute.", /*required=*/true)
-            .integer("timeout", kTimeoutDesc, false, 60)
-            .boolean("all_output", kAllOutputDesc, false, true)
-            .build();
+        auto winSchema
+            = ctx.schema(kNameWindows)
+                  .string("command", "The Windows command to execute.", /*required=*/true)
+                  .integer("timeout", kTimeoutDesc, false, 60)
+                  .boolean("all_output", kAllOutputDesc, false, true)
+                  .build();
 
 #if defined(BOOST_PROCESS_V2_PROCESS_HPP)
         blocking_tool(
@@ -52,8 +53,12 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
             kNameWindows,
             kDepictWinPlaceholder,
             winSchema,
-            [](ExecPluginCtx& c, std::string_view args_json, std::string_view tid, std::string_view workDir, volatile int32_t* cancel_flag) -> std::string {
-                ArgReader args(args_json);
+            [](ExecPluginCtx&    c,
+               std::string_view  args_json,
+               std::string_view  tid,
+               std::string_view  workDir,
+               volatile int32_t* cancel_flag) -> std::string {
+                ArgReader   args(args_json);
                 std::string tidStr(tid);
                 if (cancel_flag && *cancel_flag != 0) {
                     c.cancelRegistry.cancel(tidStr);
@@ -64,8 +69,8 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
                         return c.addShareStore(tidStr, content);
                     };
                 }
-                asio::io_context io;
-                std::string result;
+                asio::io_context   io;
+                std::string        result;
                 std::exception_ptr ep;
                 asio::co_spawn(
                     io,
@@ -75,7 +80,8 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
                                 args.raw(),
                                 std::string(workDir),
                                 [&c, tidStr, cancel_flag]() -> bool {
-                                    if (cancel_flag && *cancel_flag != 0) return true;
+                                    if (cancel_flag && *cancel_flag != 0)
+                                        return true;
                                     return c.cancelRegistry.isCancelled(tidStr);
                                 },
                                 storeFn,
@@ -89,7 +95,8 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
                     asio::detached
                 );
                 io.run();
-                if (ep) std::rethrow_exception(ep);
+                if (ep)
+                    std::rethrow_exception(ep);
                 return result;
             }
         );
@@ -99,14 +106,19 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
             kNameWindows,
             kDepictWinPlaceholder,
             winSchema,
-            [](ExecPluginCtx& c, std::string_view args_json, std::string_view tid, std::string_view workDir, volatile int32_t* cancel_flag) -> std::string {
-                ArgReader args(args_json);
+            [](ExecPluginCtx&    c,
+               std::string_view  args_json,
+               std::string_view  tid,
+               std::string_view  workDir,
+               volatile int32_t* cancel_flag) -> std::string {
+                ArgReader   args(args_json);
                 std::string tidStr(tid);
                 if (cancel_flag && *cancel_flag != 0) {
                     c.cancelRegistry.cancel(tidStr);
                 }
                 auto isCancelled = [&c, tidStr, cancel_flag]() -> bool {
-                    if (cancel_flag && *cancel_flag != 0) return true;
+                    if (cancel_flag && *cancel_flag != 0)
+                        return true;
                     return c.cancelRegistry.isCancelled(tidStr);
                 };
                 StoreFn storeFn = nullptr;
@@ -129,10 +141,10 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
 
 #else // Linux / POSIX
         auto bashSchema = ctx.schema(kNameBash)
-            .string("command", kBashCommandDesc, /*required=*/true)
-            .integer("timeout", kTimeoutDesc, false, 60)
-            .boolean("all_output", kAllOutputDesc, false, true)
-            .build();
+                              .string("command", kBashCommandDesc, /*required=*/true)
+                              .integer("timeout", kTimeoutDesc, false, 60)
+                              .boolean("all_output", kAllOutputDesc, false, true)
+                              .build();
 
 #if defined(BOOST_PROCESS_V2_PROCESS_HPP)
         blocking_tool(
@@ -140,8 +152,12 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
             kNameBash,
             kDepictBash,
             bashSchema,
-            [](ExecPluginCtx& c, std::string_view args_json, std::string_view tid, std::string_view workDir, volatile int32_t* cancel_flag) -> std::string {
-                ArgReader args(args_json);
+            [](ExecPluginCtx&    c,
+               std::string_view  args_json,
+               std::string_view  tid,
+               std::string_view  workDir,
+               volatile int32_t* cancel_flag) -> std::string {
+                ArgReader   args(args_json);
                 std::string tidStr(tid);
                 if (cancel_flag && *cancel_flag != 0) {
                     c.cancelRegistry.cancel(tidStr);
@@ -152,8 +168,8 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
                         return c.addShareStore(tidStr, content);
                     };
                 }
-                asio::io_context io;
-                std::string result;
+                asio::io_context   io;
+                std::string        result;
                 std::exception_ptr ep;
                 asio::co_spawn(
                     io,
@@ -163,7 +179,8 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
                                 args.raw(),
                                 std::string(workDir),
                                 [&c, tidStr, cancel_flag]() -> bool {
-                                    if (cancel_flag && *cancel_flag != 0) return true;
+                                    if (cancel_flag && *cancel_flag != 0)
+                                        return true;
                                     return c.cancelRegistry.isCancelled(tidStr);
                                 },
                                 storeFn,
@@ -177,7 +194,8 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
                     asio::detached
                 );
                 io.run();
-                if (ep) std::rethrow_exception(ep);
+                if (ep)
+                    std::rethrow_exception(ep);
                 return result;
             }
         );
@@ -187,14 +205,19 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
             kNameBash,
             kDepictBash,
             bashSchema,
-            [](ExecPluginCtx& c, std::string_view args_json, std::string_view tid, std::string_view workDir, volatile int32_t* cancel_flag) -> std::string {
-                ArgReader args(args_json);
+            [](ExecPluginCtx&    c,
+               std::string_view  args_json,
+               std::string_view  tid,
+               std::string_view  workDir,
+               volatile int32_t* cancel_flag) -> std::string {
+                ArgReader   args(args_json);
                 std::string tidStr(tid);
                 if (cancel_flag && *cancel_flag != 0) {
                     c.cancelRegistry.cancel(tidStr);
                 }
                 auto isCancelled = [&c, tidStr, cancel_flag]() -> bool {
-                    if (cancel_flag && *cancel_flag != 0) return true;
+                    if (cancel_flag && *cancel_flag != 0)
+                        return true;
                     return c.cancelRegistry.isCancelled(tidStr);
                 };
                 StoreFn storeFn = nullptr;

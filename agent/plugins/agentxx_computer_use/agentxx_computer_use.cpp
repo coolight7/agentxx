@@ -114,7 +114,7 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
             return -1;
         }
 
-        auto p = ctx.toolPrompt("agentxx_ui_control_keyboard_mouse");
+        auto        p      = ctx.toolPrompt("agentxx_ui_control_keyboard_mouse");
         std::string depict = p.depict.empty() ? kUiControlDefaultDepict : p.depict;
 
         agentxx::plugin::blocking_tool(
@@ -123,11 +123,8 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
             depict,
             makeUiControlSchema(),
             [](ComputerUsePluginCtx&, std::string_view args_json) -> std::string {
-                std::string argsStr(
-                    args_json.data() ? args_json.data() : "{}",
-                    args_json.size()
-                );
-                SimpleJson args(argsStr.empty() ? "{}" : argsStr);
+                std::string argsStr(args_json.data() ? args_json.data() : "{}", args_json.size());
+                SimpleJson  args(argsStr.empty() ? "{}" : argsStr);
                 if (!args.ok()) {
                     throw std::runtime_error("invalid args json");
                 }

@@ -27,9 +27,10 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
     "String tools: regex operations and html to markdown conversion",
     [](StringPluginCtx& ctx) -> int32_t {
         // 1. html_to_markdown
-        auto html2mdSchema = ctx.schema(kNameHtml2Md)
-            .string("content", "The HTML string to convert.", /*required=*/true)
-            .build();
+        auto html2mdSchema
+            = ctx.schema(kNameHtml2Md)
+                  .string("content", "The HTML string to convert.", /*required=*/true)
+                  .build();
 
         blocking_tool(
             ctx,
@@ -43,16 +44,30 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
         );
 
         // 2. regexp
-        auto regexpSchema = ctx.schema(kNameRegexp)
-            .string("content", "The input text to operate on.", /*required=*/true)
-            .stringArray("exps", "Array of regex patterns. A match succeeds if ANY pattern matches.", /*required=*/true)
-            .enumString("opt", R"(Operation mode:
+        auto regexpSchema
+            = ctx.schema(kNameRegexp)
+                  .string("content", "The input text to operate on.", /*required=*/true)
+                  .stringArray(
+                      "exps",
+                      "Array of regex patterns. A match succeeds if ANY pattern matches.",
+                      /*required=*/true
+                  )
+                  .enumString(
+                      "opt",
+                      R"(Operation mode:
 `search`: Return all match results.
 `replace`: Replace matches with `replace_str` and return the resulting text.
 `remove`: Remove all matches and return the resulting text.)",
-                        {"search", "replace", "remove"}, /*required=*/true)
-            .string("replace_str", "Default: empty string. The replacement string used when `opt` is `replace`.", false, "")
-            .build();
+                      {"search", "replace", "remove"},
+                      /*required=*/true
+                  )
+                  .string(
+                      "replace_str",
+                      "Default: empty string. The replacement string used when `opt` is `replace`.",
+                      false,
+                      ""
+                  )
+                  .build();
 
         blocking_tool(
             ctx,

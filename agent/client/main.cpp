@@ -593,13 +593,14 @@ Options:
     // ======================== TUI 全局设置持久化 ========================
     // 全局设置 (主题/动画等级/日志等级/末尾思考/界面语言等) 存于 {dataDir}/sqlite/global.db,
     // 绑定到 TUISettings 单例, 设置变更时同步落库, 重启后恢复
-    // - dataDir 未配置 (为空) 时: 回退使用系统默认数据目录 (Platform Default), 确保设置可靠持久化到数据库
+    // - dataDir 未配置 (为空) 时: 回退使用系统默认数据目录 (Platform Default),
+    // 确保设置可靠持久化到数据库
     // - 注意: 系统资源显示开关已迁移到 agentxx_system_monitor 插件 (命令 /sysinfo)
     if (mode == "tui") {
         const std::string globalDbDir = resolvedDataDir.empty()
                                             ? agentxx::agent::AgentConfigStatic::systemDataDir()
                                             : resolvedDataDir;
-        auto settingsDb = std::make_shared<agentxx::util::SettingsDb>(
+        auto              settingsDb  = std::make_shared<agentxx::util::SettingsDb>(
             agentxx::agent::AgentConfigStatic::getGlobalSettingsDbPath(globalDbDir)
         );
         TUISettings::instance().attachDb(std::move(settingsDb));

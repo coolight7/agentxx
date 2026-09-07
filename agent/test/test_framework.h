@@ -118,20 +118,20 @@ void printTestValue(std::ostream& os, const T& v) {
         }                                                        \
     } while (0)
 
-#define XX_TEST_EXPECT_GE(expr, expected)                          \
-    do {                                                           \
-        auto _result   = (expr);                                   \
-        auto _expected = (expected);                               \
-        if (_result >= _expected) {                                \
-            XX_TEST_PASSED++;                                      \
-        } else {                                                   \
-            XX_TEST_FAILED++;                                      \
+#define XX_TEST_EXPECT_GE(expr, expected)                         \
+    do {                                                          \
+        auto _result   = (expr);                                  \
+        auto _expected = (expected);                              \
+        if (_result >= _expected) {                               \
+            XX_TEST_PASSED++;                                     \
+        } else {                                                  \
+            XX_TEST_FAILED++;                                     \
             TEST_FAIL << "line " << __LINE__ << ": expected >= "; \
-            agentxx::test::printTestValue(std::cout, _expected);   \
-            std::cout << ", got ";                                 \
-            agentxx::test::printTestValue(std::cout, _result);     \
-            std::cout << std::endl;                                \
-        }                                                          \
+            agentxx::test::printTestValue(std::cout, _expected);  \
+            std::cout << ", got ";                                \
+            agentxx::test::printTestValue(std::cout, _result);    \
+            std::cout << std::endl;                               \
+        }                                                         \
     } while (0)
 
 #define XX_TEST_EXPECT_NULLOPT(expr)                                               \

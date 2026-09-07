@@ -75,9 +75,9 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
             if (!host || !host->vtable || !plugin_ctx) {
                 return -1;
             }
-            auto ctx   = std::make_unique<ShellCtx>();
+            auto ctx = std::make_unique<ShellCtx>();
             ctx->init(host);
-            raw        = ctx.get();
+            raw = ctx.get();
             if (!ctx->iface.capabilities || !ctx->iface.plugins || !ctx->iface.json
                 || !ctx->iface.log) {
                 return -1;
@@ -171,11 +171,11 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
             }
 
             AgentxxPluginString err{nullptr, 0};
-            auto  capSv2 = agentxx::plugin::PluginStringView::fromCstr("interpreter.js");
-            auto  loadSv = agentxx::plugin::PluginStringView::fromCstr("load");
-            auto  argsSv = agentxx::plugin::PluginStringView::from(args.data(), args.size());
+            auto  capSv2  = agentxx::plugin::PluginStringView::fromCstr("interpreter.js");
+            auto  loadSv  = agentxx::plugin::PluginStringView::fromCstr("load");
+            auto  argsSv  = agentxx::plugin::PluginStringView::from(args.data(), args.size());
             auto* cbState = new LoadCbState{ctx.get(), ctx->lifeToken()};
-            auto* h      = s_if.capabilities->invoke_capability_async(
+            auto* h       = s_if.capabilities->invoke_capability_async(
                 host,
                 &capSv2,
                 &loadSv,
@@ -191,8 +191,8 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                     delete holder;
                     std::string_view pl
                         = payload && payload->data
-                                   ? std::string_view(payload->data, static_cast<size_t>(payload->size))
-                                   : "";
+                                    ? std::string_view(payload->data, static_cast<size_t>(payload->size))
+                                    : "";
                     if (status != AGENTXX_PLUGIN_OPERATOR_OK) {
                         shellLog(
                             c,

@@ -12,8 +12,7 @@
 
 namespace agentxx_execmd_plugin {
 
-struct PluginCtx : public agentxx::plugin::PluginBase {
-};
+struct PluginCtx : public agentxx::plugin::PluginBase {};
 
 inline void pluginLog(const PluginCtx* ctx, int level, const std::string& msg) {
     if (ctx) {

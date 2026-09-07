@@ -467,7 +467,9 @@ struct Logger {
     ) = nullptr;
 
     void log(int32_t level, std::string_view msg) const noexcept {
-        if (!host) return;
+        if (!host) {
+            return;
+        }
         if (logFn) {
             auto sv = PluginStringView::from(msg.data(), msg.size());
             logFn(host, level, &sv);
@@ -504,9 +506,11 @@ struct Logger {
 /// - 职责: 管理会话级别与操作级别的取消事件注册、注销与原子通知
 /// - 线程安全: 完全支持多线程并发注册、注销与触发
 /// - 内存自治: 纯堆内存实例，无任何全局/静态状态，严格契合多实例契约
-/// - 零悬挂保证: unregisterCallback 会等待并排他锁定正在执行中的回调，确保调用栈上的对象不会在回调执行中析构
+/// - 零悬挂保证: unregisterCallback
+/// 会等待并排他锁定正在执行中的回调，确保调用栈上的对象不会在回调执行中析构
 class CancelRegistry {
 public:
+
     using CancelCallback = std::function<void()>;
     using RegId          = uint64_t;
 
@@ -517,7 +521,8 @@ public:
         CancelCallback       cb;
     };
 
-    CancelRegistry()  = default;
+    CancelRegistry() = default;
+
     ~CancelRegistry() {
         cancelAll();
     }
@@ -566,7 +571,8 @@ public:
     }
 
     /// 注销回调 (命令/操作正常结束退出作用域时调用)
-    /// - 排他性防悬挂保证: 若此时 cancel 正在另一线程执行该回调，elock 会阻塞等待其执行完毕，避免回调访问已被销毁的对象
+    /// - 排他性防悬挂保证: 若此时 cancel 正在另一线程执行该回调，elock
+    /// 会阻塞等待其执行完毕，避免回调访问已被销毁的对象
     void unregisterCallback(RegId id) {
         if (id == 0) {
             return;
@@ -574,7 +580,7 @@ public:
         std::shared_ptr<CallbackEntry> entry;
         {
             std::lock_guard<std::mutex> lock(mu_);
-            auto it = entries_.find(id);
+            auto                        it = entries_.find(id);
             if (it != entries_.end()) {
                 entry = std::move(it->second);
                 entries_.erase(it);
@@ -706,19 +712,26 @@ public:
     /// RAII 守卫：离开作用域自动安全注销
     class [[nodiscard]] ScopedRegistration {
     public:
+
         ScopedRegistration() = default;
+
         ScopedRegistration(CancelRegistry* reg, RegId id) :
-            reg_(reg), id_(id) {}
+            reg_(reg),
+            id_(id) {}
+
         ~ScopedRegistration() {
             if (reg_ && id_ != 0) {
                 reg_->unregisterCallback(id_);
             }
         }
+
         ScopedRegistration(ScopedRegistration&& o) noexcept :
-            reg_(o.reg_), id_(o.id_) {
+            reg_(o.reg_),
+            id_(o.id_) {
             o.reg_ = nullptr;
             o.id_  = 0;
         }
+
         ScopedRegistration& operator=(ScopedRegistration&& o) noexcept {
             if (this != &o) {
                 if (reg_ && id_ != 0) {
@@ -731,18 +744,21 @@ public:
             }
             return *this;
         }
+
         ScopedRegistration(const ScopedRegistration&)            = delete;
         ScopedRegistration& operator=(const ScopedRegistration&) = delete;
 
         RegId id() const noexcept {
             return id_;
         }
+
         void release() noexcept {
             reg_ = nullptr;
             id_  = 0;
         }
 
     private:
+
         CancelRegistry* reg_ = nullptr;
         RegId           id_  = 0;
     };
@@ -754,6 +770,7 @@ public:
     }
 
 private:
+
     mutable std::mutex                                        mu_;
     std::atomic<RegId>                                        nextId_{1};
     std::unordered_map<RegId, std::shared_ptr<CallbackEntry>> entries_;
@@ -767,8 +784,8 @@ private:
 
 struct OpCtl {
     std::shared_ptr<std::atomic<bool>> cancelFlag;
-    const AgentxxPluginHost*           host           = nullptr;
-    const AgentxxPluginCancelIface*    cancelIface    = nullptr;
+    const AgentxxPluginHost*           host        = nullptr;
+    const AgentxxPluginCancelIface*    cancelIface = nullptr;
     std::string                        threadId;
     CancelRegistry*                    cancelRegistry = nullptr;
 
@@ -813,7 +830,9 @@ inline std::string
 
 class ToolSchemaBuilder {
 public:
-    explicit ToolSchemaBuilder(ToolPromptText prompt = {}) : prompt_(std::move(prompt)) {}
+
+    explicit ToolSchemaBuilder(ToolPromptText prompt = {}) :
+        prompt_(std::move(prompt)) {}
 
     ToolSchemaBuilder& string(
         std::string_view           name,
@@ -891,11 +910,8 @@ public:
         return *this;
     }
 
-    ToolSchemaBuilder& stringArray(
-        std::string_view name,
-        std::string_view desc,
-        bool             required = false
-    ) {
+    ToolSchemaBuilder&
+        stringArray(std::string_view name, std::string_view desc, bool required = false) {
         return array(name, desc, "string", required);
     }
 
@@ -908,7 +924,9 @@ public:
         neograph::json prop;
         prop["type"]        = "array";
         prop["description"] = toolPromptArgDesc(prompt_, name, desc);
-        prop["items"]       = neograph::json{{"type", std::string(itemType)}};
+        prop["items"]       = neograph::json{
+                  {"type", std::string(itemType)}
+        };
         properties_[std::string(name)] = std::move(prop);
         if (required) {
             required_.push_back(std::string(name));
@@ -950,6 +968,7 @@ public:
     }
 
 private:
+
     ToolPromptText           prompt_;
     neograph::json           properties_ = neograph::json::object();
     std::vector<std::string> required_;
@@ -992,6 +1011,7 @@ inline T jsonGet(const neograph::json& j) {
 
 class ArgReader {
 public:
+
     explicit ArgReader(std::string_view jsonStr) {
         if (!jsonStr.empty()) {
             try {
@@ -1126,7 +1146,8 @@ public:
     }
 
 private:
-    neograph::json           root_ = neograph::json::object();
+
+    neograph::json           root_          = neograph::json::object();
     bool                     hasParseError_ = false;
     std::vector<std::string> errors_;
 };
@@ -1357,9 +1378,10 @@ public:
     const AgentxxPluginHost* host = nullptr;
     AgentIfaces              iface;
     Logger                   log;
-    CancelRegistry           cancelRegistry; ///< 框架级事件驱动取消注册表 (每个实例独立一份)
+    CancelRegistry cancelRegistry; ///< 框架级事件驱动取消注册表 (每个实例独立一份)
 
     PluginBase() = default;
+
     virtual ~PluginBase() {
         if (lifeToken_) {
             lifeToken_->store(false, std::memory_order_release);
@@ -1381,7 +1403,7 @@ public:
 
         // 挂钩会话轮次开始：自动为当前会话重置 cancelRegistry
         if (iface.events && iface.events->subscribe) {
-            auto topicSv = PluginStringView::fromCstr("plugin.agentxx.round_start");
+            auto topicSv   = PluginStringView::fromCstr("plugin.agentxx.round_start");
             roundStartSub_ = iface.events->subscribe(
                 host,
                 &topicSv,
@@ -1391,10 +1413,9 @@ public:
                         return;
                     }
                     try {
-                        auto j = neograph::json::parse(std::string_view{
-                            ev->data,
-                            static_cast<size_t>(ev->size)
-                        });
+                        auto j = neograph::json::parse(
+                            std::string_view{ev->data, static_cast<size_t>(ev->size)}
+                        );
                         std::string sid = j.value("sessionId", "");
                         if (!sid.empty()) {
                             self->cancelRegistry.clearCancelled(sid);
@@ -1670,6 +1691,7 @@ public:
     void spawn(this Self& self, Fn&& fn);
 
 private:
+
     std::shared_ptr<std::atomic<bool>> lifeToken_     = std::make_shared<std::atomic<bool>>(true);
     AgentxxPluginSubscription*         roundStartSub_ = nullptr;
 };
@@ -1837,6 +1859,7 @@ inline void resumeCoroutine(const AgentxxPluginHost* host, std::coroutine_handle
             struct ResumeData {
                 std::coroutine_handle<Promise> h;
             };
+
             auto* d = new ResumeData{handle};
             ifs.scheduler->post_to_io(
                 host,
@@ -1864,8 +1887,8 @@ inline void resumeCoroutine(const AgentxxPluginHost* host, std::coroutine_handle
 }
 
 struct CallToolState {
-    const AgentxxPluginHost*       host     = nullptr;
-    const AgentxxPluginToolsIface* tools    = nullptr;
+    const AgentxxPluginHost*       host  = nullptr;
+    const AgentxxPluginToolsIface* tools = nullptr;
     std::string                    name;
     std::string                    argsJson;
     std::string                    threadId;
@@ -1874,7 +1897,7 @@ struct CallToolState {
     std::string                    payload;
     std::string                    startError;
     std::atomic<AwaiterState>      state{AwaiterState::INIT};
-    void*                          coroAddr = nullptr;
+    void*                          coroAddr            = nullptr;
     void (*schedPost)(const AgentxxPluginHost*, void*) = nullptr;
 };
 
@@ -1909,7 +1932,7 @@ struct CallToolAwaiter {
 
         auto*               holder = new std::shared_ptr<CallToolState>(st);
         AgentxxPluginString err{nullptr, 0};
-        auto nameSv = PluginStringView::from(st->name.data(), st->name.size());
+        auto                nameSv = PluginStringView::from(st->name.data(), st->name.size());
         auto argsSv = PluginStringView::from(st->argsJson.data(), st->argsJson.size());
         auto tidSv  = PluginStringView::from(st->threadId.data(), st->threadId.size());
 
@@ -1987,8 +2010,8 @@ struct CallToolAwaiter {
 };
 
 struct InvokeCapState {
-    const AgentxxPluginHost*              host     = nullptr;
-    const AgentxxPluginCapabilitiesIface* caps     = nullptr;
+    const AgentxxPluginHost*              host = nullptr;
+    const AgentxxPluginCapabilitiesIface* caps = nullptr;
     std::string                           capability;
     std::string                           method;
     std::string                           argsJson;
@@ -1997,7 +2020,7 @@ struct InvokeCapState {
     std::string                           payload;
     std::string                           startError;
     std::atomic<AwaiterState>             state{AwaiterState::INIT};
-    void*                                 coroAddr = nullptr;
+    void*                                 coroAddr     = nullptr;
     void (*schedPost)(const AgentxxPluginHost*, void*) = nullptr;
 };
 
@@ -2112,7 +2135,6 @@ struct InvokeCapAwaiter {
         return std::move(st->payload);
     }
 };
-
 
 } // namespace detail
 
@@ -2609,14 +2631,14 @@ inline void blocking_tool(
             }
         }
         auto* job = new Job{
-            .shim          = shim,
-            .notify        = notify ? *notify : AgentxxPluginOperatorNotify{nullptr, nullptr},
-            .args          = std::string(
+            .shim   = shim,
+            .notify = notify ? *notify : AgentxxPluginOperatorNotify{nullptr, nullptr},
+            .args   = std::string(
                 args_json && args_json->data ? args_json->data : "{}",
                 args_json ? static_cast<size_t>(args_json->size) : 0
             ),
-            .tid           = std::move(tidStr),
-            .tcid          = std::string(
+            .tid  = std::move(tidStr),
+            .tcid = std::string(
                 tool_call_id && tool_call_id->data ? tool_call_id->data : "",
                 tool_call_id ? static_cast<size_t>(tool_call_id->size) : 0
             ),
@@ -2628,7 +2650,8 @@ inline void blocking_tool(
             .isCancelled   = false
         };
 
-        if (shim && shim->ctx && shim->ctx->iface.scheduler && shim->ctx->iface.scheduler->offload) {
+        if (shim && shim->ctx && shim->ctx->iface.scheduler
+            && shim->ctx->iface.scheduler->offload) {
             shim->ctx->iface.scheduler->offload(
                 shim->ctx->host,
                 &job->cancelFlag,
@@ -2643,7 +2666,8 @@ inline void blocking_tool(
                                           std::string_view,
                                           std::string_view,
                                           volatile int32_t*>) {
-                            j->resultPayload = j->shim->fn(*j->shim->ctx, j->args, j->tid, j->workDir, cflag);
+                            j->resultPayload
+                                = j->shim->fn(*j->shim->ctx, j->args, j->tid, j->workDir, cflag);
                         } else if constexpr (std::is_invocable_v<
                                                  BlockFn,
                                                  Ctx&,
@@ -2657,7 +2681,8 @@ inline void blocking_tool(
                                                  std::string_view,
                                                  std::string_view,
                                                  std::string_view>) {
-                            j->resultPayload = j->shim->fn(*j->shim->ctx, j->args, j->tid, j->workDir);
+                            j->resultPayload
+                                = j->shim->fn(*j->shim->ctx, j->args, j->tid, j->workDir);
                         } else if constexpr (std::is_invocable_v<
                                                  BlockFn,
                                                  Ctx&,
@@ -2692,7 +2717,7 @@ inline void blocking_tool(
                 },
                 [](void* ud, void* res, const AgentxxPluginStringView* err) {
                     (void)res;
-                    auto* j = static_cast<Job*>(ud);
+                    auto*                   j       = static_cast<Job*>(ud);
                     int32_t                 st      = AGENTXX_PLUGIN_OPERATOR_OK;
                     AgentxxPluginStringView payload = PluginStringView::from(nullptr, 0);
 
@@ -2705,12 +2730,18 @@ inline void blocking_tool(
                         } else {
                             st = AGENTXX_PLUGIN_OPERATOR_FAILED;
                         }
-                        payload = PluginStringView::from(j->errorPayload.data(), j->errorPayload.size());
+                        payload = PluginStringView::from(
+                            j->errorPayload.data(),
+                            j->errorPayload.size()
+                        );
                     } else if (j->isCancelled || j->cancelFlag != 0) {
                         st = AGENTXX_PLUGIN_OPERATOR_CANCELLED;
                     } else {
                         st      = AGENTXX_PLUGIN_OPERATOR_OK;
-                        payload = PluginStringView::from(j->resultPayload.data(), j->resultPayload.size());
+                        payload = PluginStringView::from(
+                            j->resultPayload.data(),
+                            j->resultPayload.size()
+                        );
                     }
 
                     if (j->notify.done) {
@@ -2741,7 +2772,6 @@ inline void blocking_tool(
         ctx.iface.tools->register_tool(ctx.host, &spec);
     }
 }
-
 
 template<typename Ctx, typename HookFn>
 inline void hook(Ctx& ctx, AgentxxPluginHookPoint point, HookFn&& fn) {
@@ -3256,12 +3286,14 @@ private:
 
 class ClientPluginBase {
 public:
+
     const AgentxxPluginHost* host = nullptr;
     ClientIfaces             iface{};
     Logger                   log;
     kit::ActionController    actions;
 
-    ClientPluginBase()  = default;
+    ClientPluginBase() = default;
+
     virtual ~ClientPluginBase() {
         if (lifeToken_) {
             lifeToken_->store(false, std::memory_order_release);
@@ -3386,15 +3418,90 @@ public:
     }
 
 private:
-    std::shared_ptr<std::atomic<bool>>                  lifeToken_ = std::make_shared<std::atomic<bool>>(true);
+
+    std::shared_ptr<std::atomic<bool>> lifeToken_ = std::make_shared<std::atomic<bool>>(true);
     std::vector<std::unique_ptr<void, void (*)(void*)>> shims_;
 };
 
 /* ==================== 一键式插件导出宏族 ==================== */
 
-#define AGENTXX_PLUGIN_AGENT_EXPORT(CtxType, Name, Ver, Desc, ...)                     extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo*                           agentxx_plugin_agent_get_info(void) {                                                   static const AgentxxPluginInfo info{                                                    AGENTXX_PLUGIN_API_VERSION, 0,                                                      agentxx::plugin::PluginStringView::fromCstr(Name),                                  agentxx::plugin::PluginStringView::fromCstr(Ver),                                   agentxx::plugin::PluginStringView::fromCstr(Desc),                              };                                                                                  return &info;                                                                   }                                                                                   extern "C" AGENTXX_PLUGIN_EXPORT int32_t                                            agentxx_plugin_agent_create(const AgentxxPluginHost* host, void** plugin_ctx) {         if (!host || !plugin_ctx) return -1;                                                auto ctx = std::make_unique<CtxType>();                                             ctx->init(host);                                                                    try {                                                                                   auto setup = (__VA_ARGS__);                                                         int32_t rc = setup(*ctx);                                                           if (rc != 0) return rc;                                                         } catch (const std::exception& e) {                                                     ctx->log.error(fmt::format("Plugin setup exception: {}", e.what()));                return -1;                                                                      } catch (...) {                                                                         ctx->log.error("Plugin setup unknown exception");                                   return -1;                                                                      }                                                                                   *plugin_ctx = ctx.release();                                                        return 0;                                                                       }                                                                                   extern "C" AGENTXX_PLUGIN_EXPORT void                                               agentxx_plugin_agent_destroy(void* plugin_ctx) {                                        auto* ctx = static_cast<CtxType*>(plugin_ctx);                                      if (ctx) delete ctx;                                                            }
+#define AGENTXX_PLUGIN_AGENT_EXPORT(CtxType, Name, Ver, Desc, ...)                               \
+    extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_agent_get_info(void \
+    ) {                                                                                          \
+        static const AgentxxPluginInfo info{                                                     \
+            AGENTXX_PLUGIN_API_VERSION,                                                          \
+            0,                                                                                   \
+            agentxx::plugin::PluginStringView::fromCstr(Name),                                   \
+            agentxx::plugin::PluginStringView::fromCstr(Ver),                                    \
+            agentxx::plugin::PluginStringView::fromCstr(Desc),                                   \
+        };                                                                                       \
+        return &info;                                                                            \
+    }                                                                                            \
+    extern "C" AGENTXX_PLUGIN_EXPORT int32_t                                                     \
+        agentxx_plugin_agent_create(const AgentxxPluginHost* host, void** plugin_ctx) {          \
+        if (!host || !plugin_ctx)                                                                \
+            return -1;                                                                           \
+        auto ctx = std::make_unique<CtxType>();                                                  \
+        ctx->init(host);                                                                         \
+        try {                                                                                    \
+            auto    setup = (__VA_ARGS__);                                                       \
+            int32_t rc    = setup(*ctx);                                                         \
+            if (rc != 0)                                                                         \
+                return rc;                                                                       \
+        } catch (const std::exception& e) {                                                      \
+            ctx->log.error(fmt::format("Plugin setup exception: {}", e.what()));                 \
+            return -1;                                                                           \
+        } catch (...) {                                                                          \
+            ctx->log.error("Plugin setup unknown exception");                                    \
+            return -1;                                                                           \
+        }                                                                                        \
+        *plugin_ctx = ctx.release();                                                             \
+        return 0;                                                                                \
+    }                                                                                            \
+    extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_agent_destroy(void* plugin_ctx) {       \
+        auto* ctx = static_cast<CtxType*>(plugin_ctx);                                           \
+        if (ctx)                                                                                 \
+            delete ctx;                                                                          \
+    }
 
-#define AGENTXX_PLUGIN_CLIENT_EXPORT(CtxType, Name, Ver, Desc, ...)                    extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxClientPluginInfo*                     agentxx_plugin_client_get_info(void) {                                                  static const AgentxxClientPluginInfo info{                                              AGENTXX_CLIENT_PLUGIN_API_VERSION, 0,                                               agentxx::plugin::PluginStringView::fromCstr(Name),                                  agentxx::plugin::PluginStringView::fromCstr(Ver),                                   agentxx::plugin::PluginStringView::fromCstr(Desc),                              };                                                                                  return &info;                                                                   }                                                                                   extern "C" AGENTXX_PLUGIN_EXPORT int32_t                                            agentxx_plugin_client_create(const AgentxxPluginHost* host, void** plugin_ctx) {         if (!host || !plugin_ctx) return -1;                                                auto ctx = std::make_unique<CtxType>();                                             ctx->init(host);                                                                    try {                                                                                   auto setup = (__VA_ARGS__);                                                         int32_t rc = setup(*ctx);                                                           if (rc != 0) return rc;                                                         } catch (const std::exception& e) {                                                     ctx->log.error(fmt::format("Client plugin setup exception: {}", e.what()));             return -1;                                                                      } catch (...) {                                                                         ctx->log.error("Client plugin setup unknown exception");                            return -1;                                                                      }                                                                                   *plugin_ctx = ctx.release();                                                        return 0;                                                                       }                                                                                   extern "C" AGENTXX_PLUGIN_EXPORT void                                               agentxx_plugin_client_destroy(void* plugin_ctx) {                                       auto* ctx = static_cast<CtxType*>(plugin_ctx);                                      if (ctx) delete ctx;                                                            }
+#define AGENTXX_PLUGIN_CLIENT_EXPORT(CtxType, Name, Ver, Desc, ...)                         \
+    extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxClientPluginInfo*                         \
+        agentxx_plugin_client_get_info(void) {                                              \
+        static const AgentxxClientPluginInfo info{                                          \
+            AGENTXX_CLIENT_PLUGIN_API_VERSION,                                              \
+            0,                                                                              \
+            agentxx::plugin::PluginStringView::fromCstr(Name),                              \
+            agentxx::plugin::PluginStringView::fromCstr(Ver),                               \
+            agentxx::plugin::PluginStringView::fromCstr(Desc),                              \
+        };                                                                                  \
+        return &info;                                                                       \
+    }                                                                                       \
+    extern "C" AGENTXX_PLUGIN_EXPORT int32_t                                                \
+        agentxx_plugin_client_create(const AgentxxPluginHost* host, void** plugin_ctx) {    \
+        if (!host || !plugin_ctx)                                                           \
+            return -1;                                                                      \
+        auto ctx = std::make_unique<CtxType>();                                             \
+        ctx->init(host);                                                                    \
+        try {                                                                               \
+            auto    setup = (__VA_ARGS__);                                                  \
+            int32_t rc    = setup(*ctx);                                                    \
+            if (rc != 0)                                                                    \
+                return rc;                                                                  \
+        } catch (const std::exception& e) {                                                 \
+            ctx->log.error(fmt::format("Client plugin setup exception: {}", e.what()));     \
+            return -1;                                                                      \
+        } catch (...) {                                                                     \
+            ctx->log.error("Client plugin setup unknown exception");                        \
+            return -1;                                                                      \
+        }                                                                                   \
+        *plugin_ctx = ctx.release();                                                        \
+        return 0;                                                                           \
+    }                                                                                       \
+    extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_client_destroy(void* plugin_ctx) { \
+        auto* ctx = static_cast<CtxType*>(plugin_ctx);                                      \
+        if (ctx)                                                                            \
+            delete ctx;                                                                     \
+    }
 
 } // namespace plugin
 } // namespace agentxx

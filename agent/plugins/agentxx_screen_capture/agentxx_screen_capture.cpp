@@ -26,12 +26,13 @@ struct ScreenCaptureHolder {
     void stopStreaming();
 
     agentxx_screen_capture_plugin::ScreenCapture capture_;
-    ScreenCaptureScreenCapturePluginCtx*                      ctx = nullptr;
+    ScreenCaptureScreenCapturePluginCtx*         ctx = nullptr;
 };
 
 struct ScreenCapturePluginCtx : public agentxx::plugin::PluginBase {
     std::string                          captures_dir;
     std::unique_ptr<ScreenCaptureHolder> holder;
+
     ~ScreenCapturePluginCtx() override {
         if (holder) {
             holder->capture_.shutdown();
@@ -165,13 +166,35 @@ static const char* kScreenCaptureDefaultDepict
       "pixel data never enters the conversation.";
 
 static void registerScreenCaptureTool(ScreenCapturePluginCtx& ctx) {
-    auto schema = ctx.schema("agentxx_screen_capture")
-        .enumString("command", "Operation to perform: capture_all (default), capture_mouse, capture_screen, get_screen_count, start_streaming, stop_streaming.",
-                    {"capture_all", "capture_mouse", "capture_screen", "get_screen_count", "start_streaming", "stop_streaming"})
-        .integer("screen_index", "Optional 0-based screen index for capture_screen (or default capture when specified).")
-        .integer("frame_rate", "Target frame rate (1-30) for start_streaming. Default: 5.", false, 5)
-        .boolean("save_images", "Save each captured frame as a PNG file under the host dataDir 'captures/' directory and return its file path. Pixels never enter the conversation. Default: true.", false, true)
-        .build();
+    auto schema
+        = ctx.schema("agentxx_screen_capture")
+              .enumString(
+                  "command",
+                  "Operation to perform: capture_all (default), capture_mouse, capture_screen, get_screen_count, start_streaming, stop_streaming.",
+                  {"capture_all",
+                   "capture_mouse",
+                   "capture_screen",
+                   "get_screen_count",
+                   "start_streaming",
+                   "stop_streaming"}
+              )
+              .integer(
+                  "screen_index",
+                  "Optional 0-based screen index for capture_screen (or default capture when specified)."
+              )
+              .integer(
+                  "frame_rate",
+                  "Target frame rate (1-30) for start_streaming. Default: 5.",
+                  false,
+                  5
+              )
+              .boolean(
+                  "save_images",
+                  "Save each captured frame as a PNG file under the host dataDir 'captures/' directory and return its file path. Pixels never enter the conversation. Default: true.",
+                  false,
+                  true
+              )
+              .build();
 
     auto        p      = ctx.toolPrompt("agentxx_screen_capture");
     std::string depict = p.depict.empty() ? kScreenCaptureDefaultDepict : p.depict;
@@ -187,11 +210,11 @@ static void registerScreenCaptureTool(ScreenCapturePluginCtx& ctx) {
                 throw std::runtime_error(args.errorMessage());
             }
 
-            ScreenCaptureHolder& capture = *c.holder;
-            std::string command = args.value("command", std::string{});
-            bool saveImages = args.value("save_images", true);
-            int64_t idx = args.value("screen_index", int64_t{-1});
-            int64_t fr = args.value("frame_rate", int64_t{5});
+            ScreenCaptureHolder& capture    = *c.holder;
+            std::string          command    = args.value("command", std::string{});
+            bool                 saveImages = args.value("save_images", true);
+            int64_t              idx        = args.value("screen_index", int64_t{-1});
+            int64_t              fr         = args.value("frame_rate", int64_t{5});
 
             if (command.empty()) {
                 command = (idx >= 0) ? "capture_screen" : "capture_all";
@@ -203,8 +226,8 @@ static void registerScreenCaptureTool(ScreenCapturePluginCtx& ctx) {
             }
 
             if (command == "capture_screen") {
-                int target = (idx >= 0) ? static_cast<int>(idx) : 0;
-                auto frame = capture.capture_.captureScreen(target);
+                int  target = (idx >= 0) ? static_cast<int>(idx) : 0;
+                auto frame  = capture.capture_.captureScreen(target);
                 if (!frame.has_value()) {
                     return R"({"ok":false,"error":"capture_screen failed: invalid screen index or capture error"})";
                 }
@@ -224,13 +247,20 @@ static void registerScreenCaptureTool(ScreenCapturePluginCtx& ctx) {
             }
 
             if (command == "get_screen_count") {
-                return fmt::format(R"({{"ok":true,"count":{}}})", capture.capture_.getScreenCount());
+                return fmt::format(
+                    R"({{"ok":true,"count":{}}})",
+                    capture.capture_.getScreenCount()
+                );
             }
 
             if (command == "start_streaming") {
-                int rate = std::clamp(static_cast<int>(fr), 1, 30);
-                bool ok = capture.startStreaming(rate);
-                return fmt::format(R"({{"ok":{},"streaming":true,"frame_rate":{}}})", ok ? "true" : "false", rate);
+                int  rate = std::clamp(static_cast<int>(fr), 1, 30);
+                bool ok   = capture.startStreaming(rate);
+                return fmt::format(
+                    R"({{"ok":{},"streaming":true,"frame_rate":{}}})",
+                    ok ? "true" : "false",
+                    rate
+                );
             }
 
             if (command == "stop_streaming") {
@@ -259,18 +289,19 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
         std::string cfgStr = ctx.config();
         if (!cfgStr.empty() && cfgStr != "{}") {
             try {
-                auto j = neograph::json::parse(cfgStr);
+                auto        j       = neograph::json::parse(cfgStr);
                 std::string dataDir = j.value("dataDir", std::string{});
                 if (!dataDir.empty()) {
-                    namespace fs = std::filesystem;
-                    fs::path targetDir = fs::path(dataDir) / "captures";
+                    namespace fs              = std::filesystem;
+                    fs::path        targetDir = fs::path(dataDir) / "captures";
                     std::error_code ec;
                     fs::create_directories(targetDir, ec);
                     if (!ec) {
                         ctx.captures_dir = targetDir.string();
                     }
                 }
-            } catch (...) {}
+            } catch (...) {
+            }
         }
 
         if (!ctx.iface.tools || !ctx.iface.tools->register_tool) {
