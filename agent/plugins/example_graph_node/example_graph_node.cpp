@@ -150,6 +150,7 @@ void* AGENTXX_PLUGIN_CALL intentRouterRunStart(
     AgentxxPluginString*               error_out
 ) {
     auto* ctx = static_cast<AgentCtx*>(user_data);
+    (void)ctx;
     (void)node_name;
     (void)thread_id;
     (void)error_out;
@@ -284,6 +285,7 @@ void* AGENTXX_PLUGIN_CALL datetimeNodeRunStart(
     AgentxxPluginString*               error_out
 ) {
     auto* ctx = static_cast<AgentCtx*>(user_data);
+    (void)ctx;
     (void)node_name;
     (void)config_json;
     (void)state_json;

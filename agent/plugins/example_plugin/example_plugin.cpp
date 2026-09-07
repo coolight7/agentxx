@@ -26,9 +26,7 @@
 
 struct AgentCtx : public agentxx::plugin::PluginBase {};
 
-struct ClientCtx {
-    const AgentxxPluginHost*      host = nullptr;
-    agentxx::plugin::ClientIfaces iface{};
+struct ClientCtx : public agentxx::plugin::ClientPluginBase {
     const AgentxxClientUiIface*   ui           = nullptr;
     AgentxxStatusItem*            status_item  = nullptr;
     AgentxxPanel*                 panel        = nullptr;
@@ -459,8 +457,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                 return -1;
             }
             auto ctx   = std::make_unique<ClientCtx>();
-            ctx->host  = host;
-            ctx->iface = agentxx::plugin::ClientIfaces::query(host);
+            ctx->init(host);
             ctx->ui    = ctx->iface.ui;
             raw        = ctx.get();
 

@@ -6,42 +6,11 @@
 #include "codegraph_manager.h"
 #include "codegraph_plugin.h"
 
-// ---- 本 TU 日志宏 (多实例契约: sink 由 CodeGraphManager::setLogSink 注入,
-// 路由到【注入方实例】的宿主接口表。注: 同进程多实例时后注入者覆盖前者 ——
-// 仅影响 manager 内部诊断日志的实例归属, 功能数据不受影响) ----
-// manager 内部诊断日志 sink (setLogSink 注入; 见上方多实例说明)
-static std::atomic<agentxx_codegraph_plugin::CodeGraphManager::LogSink*> g_mgr_log_sink{nullptr};
-
-void agentxx_codegraph_plugin::CodeGraphManager::setLogSink(LogSink sink) {
-    logSink_ = std::move(sink);
-    g_mgr_log_sink.store(&logSink_, std::memory_order_release);
-}
-
-#define XX_LOGT(...)                                                     \
-    do {                                                                 \
-        if (auto* sink = g_mgr_log_sink.load(std::memory_order_acquire)) \
-            (*sink)(0, fmt::format(__VA_ARGS__));                        \
-    } while (0)
-#define XX_LOGD(...)                                                     \
-    do {                                                                 \
-        if (auto* sink = g_mgr_log_sink.load(std::memory_order_acquire)) \
-            (*sink)(1, fmt::format(__VA_ARGS__));                        \
-    } while (0)
-#define XX_LOGI(...)                                                     \
-    do {                                                                 \
-        if (auto* sink = g_mgr_log_sink.load(std::memory_order_acquire)) \
-            (*sink)(2, fmt::format(__VA_ARGS__));                        \
-    } while (0)
-#define XX_LOGW(...)                                                     \
-    do {                                                                 \
-        if (auto* sink = g_mgr_log_sink.load(std::memory_order_acquire)) \
-            (*sink)(3, fmt::format(__VA_ARGS__));                        \
-    } while (0)
-#define XX_LOGE(...)                                                     \
-    do {                                                                 \
-        if (auto* sink = g_mgr_log_sink.load(std::memory_order_acquire)) \
-            (*sink)(4, fmt::format(__VA_ARGS__));                        \
-    } while (0)
+#define XX_LOGT(...) do { this->log(0, fmt::format(__VA_ARGS__)); } while (0)
+#define XX_LOGD(...) do { this->log(1, fmt::format(__VA_ARGS__)); } while (0)
+#define XX_LOGI(...) do { this->log(2, fmt::format(__VA_ARGS__)); } while (0)
+#define XX_LOGW(...) do { this->log(3, fmt::format(__VA_ARGS__)); } while (0)
+#define XX_LOGE(...) do { this->log(4, fmt::format(__VA_ARGS__)); } while (0)
 #include "glob/glob.h"
 #include <algorithm>
 #include <atomic>
@@ -303,99 +272,7 @@ static std::optional<fs::path>
 /// - sqlite 的写锁竞争是瞬时的 (busy_timeout=5000 等待 + WAL 短事务), 重试后基本必成
 /// - fn 抛异常时由内部 catchError 捕获, 按 attempt 指数退避后重试
 /// - 全部尝试失败返回 false (已记录错误日志)
-template<typename F>
-static bool runWithRetry(std::string_view what, int attempts, F&& fn) {
-    for (int attempt = 1; attempt <= attempts; ++attempt) {
-        bool ok = catchError<bool>(
-            [&]() -> bool {
-                fn();
-                return true;
-            },
-            [&](std::string errmsg) -> bool {
-                if (attempt < attempts) {
-                    XX_LOGW(
-                        "CodeGraphManager: {} failed (attempt {}/{}), retry: {}",
-                        what,
-                        attempt,
-                        attempts,
-                        errmsg
-                    );
-                    std::this_thread::sleep_for(std::chrono::milliseconds(150 * attempt));
-                } else {
-                    XX_LOGE(
-                        "CodeGraphManager: {} failed after {} attempts: {}",
-                        what,
-                        attempts,
-                        errmsg
-                    );
-                }
-                return false;
-            }
-        );
-        if (ok) {
-            return true;
-        }
-    }
-    return false;
-}
 
-/// 带有限重试的事务提交: BEGIN -> fn(写操作) -> COMMIT
-/// - 写锁竞争 (SQLITE_BUSY) 时回滚并重试整个事务, 避免静默丢失该批写入
-/// - fn 仅执行写操作, 不负责事务边界
-template<typename F>
-static bool
-    runTransactionWithRetry(std::string_view what, int attempts, codegraph::Database* db, F&& fn) {
-    for (int attempt = 1; attempt <= attempts; ++attempt) {
-        bool inTx = false;
-        bool ok   = catchError<bool>(
-            [&]() -> bool {
-                db->begin_transaction();
-                inTx = true;
-                fn();
-                db->commit();
-                inTx = false;
-                return true;
-            },
-            [&](std::string errmsg) -> bool {
-                // 回滚需容错: 若 BEGIN 本身失败则无活跃事务, ROLLBACK 会再抛异常
-                if (inTx) {
-                    catchError<bool>(
-                        [&]() -> bool {
-                            db->rollback();
-                            return true;
-                        },
-                        [](std::string) -> bool {
-                            return false;
-                        }
-                    );
-                    inTx = false;
-                }
-                if (attempt < attempts) {
-                    XX_LOGW(
-                        "CodeGraphManager: {} failed (attempt {}/{}), retry: {}",
-                        what,
-                        attempt,
-                        attempts,
-                        errmsg
-                    );
-                    std::this_thread::sleep_for(std::chrono::milliseconds(150 * attempt));
-                } else {
-                    XX_LOGE(
-                        "CodeGraphManager: {} failed after {} attempts: {}",
-                        what,
-                        attempts,
-                        errmsg
-                    );
-                }
-                return false;
-            }
-        );
-        if (ok) {
-            return true;
-        }
-    }
-    return false;
-}
 
 // ---------------------------------------------------------------------------
 // .gitignore / .gitmodules 规则解析与匹配
@@ -771,7 +648,164 @@ static bool isGitRuleFile(std::string_view path) {
 /// - gitignore 按层级继承: 每进入一层目录追加该层 .gitignore 与 .gitmodules
 ///   规则 (父级规则保留), 并内置忽略 `.git` 目录
 /// - 显式栈遍历替代 recursive_directory_iterator, 避免深目录树递归栈溢出
-static void traverse_source_files(
+
+static bool is_changed(
+    codegraph::Database&       db,
+    const fs::directory_entry& entry,
+    std::string_view           file_path
+) {
+    auto existing = db.get_file(std::string{file_path});
+    if (!existing.has_value()) {
+        return true;
+    }
+    // 无法读取文件元信息时按"已变更"处理, 触发重新索引
+    return catchError<bool>(
+        [&]() -> bool {
+            auto ftime = fs::last_write_time(entry);
+            auto mtime = std::chrono::duration_cast<std::chrono::seconds>(ftime.time_since_epoch())
+                             .count();
+            return existing->mtime != mtime
+                   || existing->size != static_cast<int64_t>(fs::file_size(entry));
+        },
+        [](std::string) -> bool {
+            return true;
+        }
+    );
+}
+
+static int score_target(const codegraph::Node& source, const codegraph::Node& candidate) {
+    int score = 0;
+    if (source.file_path == candidate.file_path) {
+        score += 10;
+    } else {
+        auto src_dir  = source.file_path.rfind('/');
+        auto cand_dir = candidate.file_path.rfind('/');
+        if (src_dir != std::string::npos && cand_dir != std::string::npos) {
+            if (source.file_path.substr(0, src_dir) == candidate.file_path.substr(0, cand_dir)) {
+                score += 5;
+            }
+        }
+    }
+    if (!source.qualified_name.empty() && !candidate.qualified_name.empty()) {
+        auto src_colon  = source.qualified_name.rfind("::");
+        auto cand_colon = candidate.qualified_name.rfind("::");
+        if (src_colon != std::string::npos && cand_colon != std::string::npos) {
+            std::string src_ns  = source.qualified_name.substr(0, src_colon);
+            std::string cand_ns = candidate.qualified_name.substr(0, cand_colon);
+            if (src_ns == cand_ns) {
+                score += 3;
+            }
+        }
+    }
+    return score;
+}
+
+class CodeGraphManager::Impl {
+public:
+    void setLogSink(LogSink sink) {
+        logSink_ = std::move(sink);
+    }
+
+    void log(int level, const std::string& msg) const {
+        if (logSink_) {
+            logSink_(level, msg);
+        }
+    }
+private:
+    LogSink logSink_;
+template<typename F>
+bool runWithRetry(std::string_view what, int attempts, F&& fn) {
+    for (int attempt = 1; attempt <= attempts; ++attempt) {
+        bool ok = catchError<bool>(
+            [&]() -> bool {
+                fn();
+                return true;
+            },
+            [&](std::string errmsg) -> bool {
+                if (attempt < attempts) {
+                    XX_LOGW(
+                        "CodeGraphManager: {} failed (attempt {}/{}), retry: {}",
+                        what,
+                        attempt,
+                        attempts,
+                        errmsg
+                    );
+                    std::this_thread::sleep_for(std::chrono::milliseconds(150 * attempt));
+                } else {
+                    XX_LOGE(
+                        "CodeGraphManager: {} failed after {} attempts: {}",
+                        what,
+                        attempts,
+                        errmsg
+                    );
+                }
+                return false;
+            }
+        );
+        if (ok) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/// 带有限重试的事务提交: BEGIN -> fn(写操作) -> COMMIT
+/// - 写锁竞争 (SQLITE_BUSY) 时回滚并重试整个事务, 避免静默丢失该批写入
+/// - fn 仅执行写操作, 不负责事务边界
+template<typename F>
+bool runTransactionWithRetry(std::string_view what, int attempts, codegraph::Database* db, F&& fn) {
+    for (int attempt = 1; attempt <= attempts; ++attempt) {
+        bool inTx = false;
+        bool ok   = catchError<bool>(
+            [&]() -> bool {
+                db->begin_transaction();
+                inTx = true;
+                fn();
+                db->commit();
+                inTx = false;
+                return true;
+            },
+            [&](std::string errmsg) -> bool {
+                // 回滚需容错: 若 BEGIN 本身失败则无活跃事务, ROLLBACK 会再抛异常
+                if (inTx) {
+                    catchError<bool>(
+                        [&]() -> bool {
+                            db->rollback();
+                            return true;
+                        },
+                        [](std::string) -> bool {
+                            return false;
+                        }
+                    );
+                    inTx = false;
+                }
+                if (attempt < attempts) {
+                    XX_LOGW(
+                        "CodeGraphManager: {} failed (attempt {}/{}), retry: {}",
+                        what,
+                        attempt,
+                        attempts,
+                        errmsg
+                    );
+                    std::this_thread::sleep_for(std::chrono::milliseconds(150 * attempt));
+                } else {
+                    XX_LOGE(
+                        "CodeGraphManager: {} failed after {} attempts: {}",
+                        what,
+                        attempts,
+                        errmsg
+                    );
+                }
+                return false;
+            }
+        );
+        if (ok) {
+            return true;
+        }
+    }
+    return false;
+}
+void traverse_source_files(
     std::string_view                             root_path,
     const std::vector<std::regex>&               ignore_path_regexes,
     bool                                         use_gitignore,
@@ -865,65 +899,14 @@ static void traverse_source_files(
             }
             return true;
         },
-        [](std::string errmsg) -> bool {
+        [this](std::string errmsg) -> bool {
             XX_LOGE("CodeGraphManager: traverse_source_files error: {}", errmsg);
             return false;
         }
     );
 }
 
-static bool is_changed(
-    codegraph::Database&       db,
-    const fs::directory_entry& entry,
-    std::string_view           file_path
-) {
-    auto existing = db.get_file(std::string{file_path});
-    if (!existing.has_value()) {
-        return true;
-    }
-    // 无法读取文件元信息时按"已变更"处理, 触发重新索引
-    return catchError<bool>(
-        [&]() -> bool {
-            auto ftime = fs::last_write_time(entry);
-            auto mtime = std::chrono::duration_cast<std::chrono::seconds>(ftime.time_since_epoch())
-                             .count();
-            return existing->mtime != mtime
-                   || existing->size != static_cast<int64_t>(fs::file_size(entry));
-        },
-        [](std::string) -> bool {
-            return true;
-        }
-    );
-}
-
-static int score_target(const codegraph::Node& source, const codegraph::Node& candidate) {
-    int score = 0;
-    if (source.file_path == candidate.file_path) {
-        score += 10;
-    } else {
-        auto src_dir  = source.file_path.rfind('/');
-        auto cand_dir = candidate.file_path.rfind('/');
-        if (src_dir != std::string::npos && cand_dir != std::string::npos) {
-            if (source.file_path.substr(0, src_dir) == candidate.file_path.substr(0, cand_dir)) {
-                score += 5;
-            }
-        }
-    }
-    if (!source.qualified_name.empty() && !candidate.qualified_name.empty()) {
-        auto src_colon  = source.qualified_name.rfind("::");
-        auto cand_colon = candidate.qualified_name.rfind("::");
-        if (src_colon != std::string::npos && cand_colon != std::string::npos) {
-            std::string src_ns  = source.qualified_name.substr(0, src_colon);
-            std::string cand_ns = candidate.qualified_name.substr(0, cand_colon);
-            if (src_ns == cand_ns) {
-                score += 3;
-            }
-        }
-    }
-    return score;
-}
-
-class CodeGraphManager::Impl {
+public:
 public:
 
     /// - [sqliteDir] sqlite 数据目录 (为空使用默认 {dataDir}/sqlite/)
@@ -1048,7 +1031,7 @@ public:
                 running_.store(true);
                 return true;
             },
-            [](std::string errmsg) -> bool {
+            [this](std::string errmsg) -> bool {
                 XX_LOGE("CodeGraphManager: initialize failed: {}", errmsg);
                 return false;
             }
@@ -1896,7 +1879,7 @@ public:
                                 file_watcher_->poll(1000);
                                 return true;
                             },
-                            [](std::string errmsg) -> bool {
+                            [this](std::string errmsg) -> bool {
                                 XX_LOGE("CodeGraphManager: file watcher poll error: {}", errmsg);
                                 return false;
                             }
@@ -1906,7 +1889,7 @@ public:
                 });
                 return true;
             },
-            [](std::string errmsg) -> bool {
+            [this](std::string errmsg) -> bool {
                 XX_LOGE("CodeGraphManager: startFileWatcher error: {}", errmsg);
                 return false;
             }
@@ -2212,7 +2195,18 @@ private:
 ///   环境变量推导默认目录, 为空时 initialize 失败)
 /// - [config] 索引过滤配置 (加载路径/忽略路径/gitignore 开关)
 CodeGraphManager::CodeGraphManager(std::string sqliteDir, CodeGraphIndexConfig config) :
-    impl_(std::make_unique<Impl>(std::move(sqliteDir), std::move(config))) {}
+    impl_(std::make_unique<Impl>(std::move(sqliteDir), std::move(config))) {
+    if (logSink_) {
+        impl_->setLogSink(logSink_);
+    }
+}
+
+void agentxx_codegraph_plugin::CodeGraphManager::setLogSink(LogSink sink) {
+    logSink_ = sink;
+    if (impl_) {
+        impl_->setLogSink(std::move(sink));
+    }
+}
 
 CodeGraphManager::~CodeGraphManager() {
     impl_->shutdown();

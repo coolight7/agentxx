@@ -4,6 +4,7 @@
 #include <string>
 
 using namespace agentxx_system_plugin;
+using namespace agentxx::plugin;
 
 namespace {
 
@@ -12,67 +13,26 @@ constexpr std::string_view kDepictDatetime = "Get the current date, time, and Un
 
 } // namespace
 
-extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_agent_get_info(void) {
-    return agentxx::plugin::guardCall(
-        [](const char*) noexcept {},
-        nullptr,
-        [&]() -> const AgentxxPluginInfo* {
-            static const AgentxxPluginInfo info{
-                AGENTXX_PLUGIN_API_VERSION,
-                0,
-                agentxx::plugin::PluginStringView::fromCstr("agentxx_system"),
-                agentxx::plugin::PluginStringView::fromCstr("1.0.0"),
-                agentxx::plugin::PluginStringView::fromCstr(
-                    "System info tools: current date/time with Unix timestamp"
-                ),
-            };
-            return &info;
-        }
-    );
-}
+struct SysPluginCtx : public PluginBase {};
 
-extern "C" AGENTXX_PLUGIN_EXPORT int
-    agentxx_plugin_agent_create(const AgentxxPluginHost* host, void** plugin_ctx) {
-    PluginCtx* raw = nullptr;
-    return agentxx::plugin::guardCall(
-        [&raw](const char* msg) noexcept {
-            ctxGuardLogger(raw)(msg);
-        },
-        -1,
-        [&]() -> int {
-            if (!host || !host->vtable || !plugin_ctx) {
-                return -1;
+AGENTXX_PLUGIN_AGENT_EXPORT(
+    SysPluginCtx,
+    "agentxx_system",
+    "1.0.0",
+    "System info tools: current date/time with Unix timestamp",
+    [](SysPluginCtx& ctx) -> int32_t {
+        auto schema = ctx.schema(kNameDatetime).build();
+
+        fast_tool(
+            ctx,
+            kNameDatetime,
+            kDepictDatetime,
+            schema,
+            [](std::string_view) -> std::string {
+                return currentDatetimeExecute();
             }
-            auto ctx = std::make_unique<PluginCtx>();
-            ctx->init(host);
-            raw = ctx.get();
+        );
 
-            if (!ctx->iface.tools || !ctx->iface.tools->register_tool) {
-                return -1;
-            }
-
-            // agentxx_get_current_datetime (fast_tool)
-            agentxx::plugin::fast_tool(
-                *ctx,
-                kNameDatetime,
-                kDepictDatetime,
-                R"({"type":"object","properties":{}})",
-                [](std::string_view) -> std::string {
-                    return currentDatetimeExecute();
-                }
-            );
-
-            *plugin_ctx = ctx.release();
-            return 0;
-        }
-    );
-}
-
-extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_agent_destroy(void* plugin_ctx) {
-    auto* ctx = static_cast<PluginCtx*>(plugin_ctx);
-    agentxx::plugin::guardCallVoid(ctxGuardLogger(ctx), [&] {
-        if (ctx) {
-            delete ctx;
-        }
-    });
-}
+        return 0;
+    }
+);

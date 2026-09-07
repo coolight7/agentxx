@@ -1118,6 +1118,7 @@ JSValue JsEngine::bridgeCall(
     }
     const AgentxxPluginHost* host = pctx->host;
     const auto&              vt   = *host->vtable; // 核心: alloc/free/strdup
+    (void)vt;
     // COM 风格接口表查询 (进程级静态数据; 各能力经稳定 IID 分发)
     const agentxx::plugin::AgentIfaces iface  = agentxx::plugin::AgentIfaces::query(host);
     auto*                              engine = pctx->engine;
@@ -1748,7 +1749,6 @@ static void* AGENTXX_PLUGIN_CALL jsCapStart(
                     std::string err2;
                     const int   rc2
                         = engine->loadScriptOnJsThread(caller_host, name, path, code, err2);
-                    const AgentxxPluginHost* eh = engine->host();
                     if (rc2 != 0) {
                         auto errSv2
                             = agentxx::plugin::PluginStringView::from(err2.data(), err2.size());

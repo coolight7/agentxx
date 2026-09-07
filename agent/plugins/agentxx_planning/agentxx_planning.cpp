@@ -390,60 +390,21 @@ extern "C" AGENTXX_PLUGIN_EXPORT int32_t AGENTXX_PLUGIN_CALL
             // 规划持久化 + 事件发布为通用接口 (不再依赖专用 planning iface)
 
             {
-                agentxx::plugin::ToolPromptText p      = ctx->toolPrompt(kNamePlanning);
-                std::string                     depict = p.depict;
-                if (depict.empty()) {
-                    depict = kDepictPlanning;
-                }
-                std::string schema = neograph::json{
-                {"type", "object"},
-                {"required", neograph::json::array({"mode"})},
-                {"properties",
-                 {
-                     {"mode",
-                      {
-                          {"type", "string"},
-                          {"enum", neograph::json::array({"write", "read"})},
-                          {"description",
-                           agentxx::plugin::toolPromptArgDesc(p,
-                                   "mode",
-                                   "Operation mode: `write` saves/updates the planning content "
-                                   "(requires `roadmap`); `read` returns the previously saved "
-                                   "planning content of this session.")},
-                      }},
-                     {"roadmap",
-                      {
-                          {"type", "string"},
-                          {"description",
-                           agentxx::plugin::toolPromptArgDesc(p,
-                                   "roadmap",
-                                   "(write only, required) STRATEGIC LAYER: Mermaid stateDiagram-v2 of the overall workflow.")},
-                      }},
-                     {"todos",
-                      {
-                          {"type", "array"},
-                          {"items", neograph::json{{"type", "object"}}},
-                          {"description",
-                           agentxx::plugin::toolPromptArgDesc(p,
-                                   "todos",
-                                   "(write only) TACTICAL LAYER: Near-term task items (state/content).")},
-                      }},
-                     {"notes",
-                      {
-                          {"type", "string"},
-                          {"description",
-                           agentxx::plugin::toolPromptArgDesc(p,
-                                   "notes",
-                                   "(write only) MEMO LAYER: Any additional notes, tips, reminders.")},
-                      }},
-                 }},
-            }
-                                  .dump();
+                std::string schema = ctx->schema(kNamePlanning)
+                    .enumString("mode",
+                                "Operation mode: `write` saves/updates the planning content "
+                                "(requires `roadmap`); `read` returns the previously saved "
+                                "planning content of this session.",
+                                {"write", "read"}, /*required=*/true)
+                    .string("roadmap", "(write only, required) STRATEGIC LAYER: Mermaid stateDiagram-v2 of the overall workflow.")
+                    .array("todos", "(write only) TACTICAL LAYER: Near-term task items (state/content).", "object")
+                    .string("notes", "(write only) MEMO LAYER: Any additional notes, tips, reminders.")
+                    .build();
 
                 agentxx::plugin::fast_tool(
                     *ctx,
                     kNamePlanning,
-                    depict,
+                    kDepictPlanning,
                     schema,
                     [](PluginCtx& c, std::string_view args_json, std::string_view thread_id
                     ) -> std::string {
@@ -727,6 +688,7 @@ static std::string buildDecorItems(const ClientCtx& ctx, const neograph::json& p
             clientJsonEscape(ctx, text)
         ));
     };
+    (void)textItem;
     auto buttonItem = [&](const std::string& label, const std::string& mermaid) {
         // Graph 按钮: 通用 action_id 派发 (新宿主点击回调 → open_overlay MERMAID);
         // 双发 mermaid 字段供老宿主兼容 (下版删除 mermaid)

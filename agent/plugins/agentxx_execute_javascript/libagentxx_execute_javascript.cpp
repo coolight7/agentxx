@@ -15,11 +15,14 @@
 
 namespace {
 
-struct ShellCtx {
-    const AgentxxPluginHost*     host = nullptr;
-    agentxx::plugin::AgentIfaces iface{};
-    std::string                  name;
-    std::string                  dir;
+struct ShellCtx : public agentxx::plugin::PluginBase {
+    std::string name;
+    std::string dir;
+};
+
+struct LoadCbState {
+    ShellCtx*                        ctx = nullptr;
+    std::weak_ptr<std::atomic<bool>> lifeToken;
 };
 
 void shellLog(const ShellCtx* ctx, int level, const std::string& msg) {
@@ -73,8 +76,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                 return -1;
             }
             auto ctx   = std::make_unique<ShellCtx>();
-            ctx->host  = host;
-            ctx->iface = agentxx::plugin::AgentIfaces::query(host);
+            ctx->init(host);
             raw        = ctx.get();
             if (!ctx->iface.capabilities || !ctx->iface.plugins || !ctx->iface.json
                 || !ctx->iface.log) {
@@ -172,13 +174,21 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
             auto  capSv2 = agentxx::plugin::PluginStringView::fromCstr("interpreter.js");
             auto  loadSv = agentxx::plugin::PluginStringView::fromCstr("load");
             auto  argsSv = agentxx::plugin::PluginStringView::from(args.data(), args.size());
+            auto* cbState = new LoadCbState{ctx.get(), ctx->lifeToken()};
             auto* h      = s_if.capabilities->invoke_capability_async(
                 host,
                 &capSv2,
                 &loadSv,
                 &argsSv,
                 [](void* ud, int32_t status, const AgentxxPluginStringView* payload) {
-                    auto*            c = static_cast<ShellCtx*>(ud);
+                    auto* holder = static_cast<LoadCbState*>(ud);
+                    auto  token  = holder->lifeToken.lock();
+                    if (!token || !token->load(std::memory_order_acquire)) {
+                        delete holder;
+                        return;
+                    }
+                    auto* c = holder->ctx;
+                    delete holder;
                     std::string_view pl
                         = payload && payload->data
                                    ? std::string_view(payload->data, static_cast<size_t>(payload->size))
@@ -200,10 +210,11 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                         );
                     }
                 },
-                ctx.get(),
+                cbState,
                 &err
             );
             if (!h) {
+                delete cbState;
                 std::string errStr = err.data ? std::string(err.data, static_cast<size_t>(err.size))
                                               : "load script async dispatch failed";
                 if (err.data) {

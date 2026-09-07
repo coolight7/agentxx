@@ -43,14 +43,6 @@ struct PluginCtx : public agentxx::plugin::PluginBase {
     }
 };
 
-static auto ctxGuardLogger(PluginCtx* ctx) noexcept {
-    return [ctx](const char* msg) noexcept {
-        if (ctx) {
-            ctx->log.error(msg ? msg : "");
-        }
-    };
-}
-
 static HostConfig
     readHostConfig(const AgentxxPluginHost* host, const agentxx::plugin::AgentIfaces& iface) {
     HostConfig cfg;

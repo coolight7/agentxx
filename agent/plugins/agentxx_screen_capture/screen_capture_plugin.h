@@ -28,15 +28,6 @@ inline void pluginLog(
     }
 }
 
-using PluginLogSink = std::function<void(int level, const std::string& msg)>;
-inline std::atomic<const PluginLogSink*> g_log_sink{nullptr};
-
-inline void pluginLog(int level, const std::string& msg) {
-    if (const auto* sink = g_log_sink.load(std::memory_order_acquire)) {
-        (*sink)(level, msg);
-    }
-}
-
 class SimpleJson {
 public:
 

@@ -35,6 +35,10 @@ int g_plugin_failed = 0;
 #define XX_TEST_FAILED g_plugin_failed
 
 namespace agentxx {
+namespace plugin {
+const void* AGENTXX_PLUGIN_CALL
+    xx_query_interface(const AgentxxPluginHost*, const AgentxxPluginStringView* iid);
+}
 namespace test {
 
 /// 定位插件库目录 (通用; exe 同目录优先, cwd 回退; 校验目录内存在动态库产物,
@@ -642,33 +646,20 @@ asio::awaitable<TestResult> run_plugin_tests() {
         XX_TEST_EXPECT_TRUE(inst23 != nullptr);
         if (inst23) {
             // 注册带超时的慢工具: 超时 100ms, 阻塞操作 600ms 后才完成
-            // (阻塞委托型 offload线程池: execute 经 scheduler.offload 在宿主阻塞池
-            // 线程执行, 与插件作者使用 agentxx::plugin::registerSyncTool 的真实路径一致)
-            static agentxx::plugin::SyncToolSpec slowSpec;
-            slowSpec.name = agentxx::plugin::PluginStringView::fromCstr("slow_timeout_tool");
-            slowSpec.description
-                = agentxx::plugin::PluginStringView::fromCstr("slow tool for unload race test");
-            slowSpec.parameters_json = agentxx::plugin::PluginStringView::fromCstr("{}");
-            // 阻塞委托型 execute: 在宿主阻塞池线程睡 600ms 后返回结果
-            // (模拟不可中断的慢任务, 忽略 cancel_flag)
-            slowSpec.execute = +[](void* ud,
-                                   const AgentxxPluginStringView*,
-                                   const AgentxxPluginStringView*,
-                                   const AgentxxPluginStringView*,
-                                   volatile int32_t*,
-                                   AgentxxPluginString*) -> AgentxxPluginString {
-                std::this_thread::sleep_for(std::chrono::milliseconds(600));
-                const auto* host = static_cast<const AgentxxPluginHost*>(ud);
-                return agentxx::plugin::PluginString::fromCstr(host, "{}");
-            };
-            slowSpec.user_data          = &inst23->host;
-            slowSpec.default_timeout_ms = 100;
-            // API v1: offload线程池适配异步接口 为调用方内嵌存储 (随插件实例 ctx 生死; 此处测试
-            // 直接持有)
-            static agentxx::plugin::SyncToolShim slowSpecShim;
-            XX_TEST_EXPECT_EQ(
-                agentxx::plugin::registerSyncTool(&inst23->host, &slowSpec, &slowSpecShim),
-                0
+            // (阻塞委托型 offload线程池: execute 经 scheduler.offload 在宿主阻塞池线程执行)
+            struct SlowCtx : public agentxx::plugin::PluginBase {};
+            static SlowCtx slowCtx;
+            slowCtx.init(&inst23->host);
+            agentxx::plugin::blocking_tool(
+                slowCtx,
+                "slow_timeout_tool",
+                "slow tool for unload race test",
+                "{}",
+                [](SlowCtx&, std::string_view) -> std::string {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(600));
+                    return "{}";
+                },
+                100
             );
 
             auto tool = ctx->toolRegistry->find("slow_timeout_tool");
@@ -1177,23 +1168,32 @@ asio::awaitable<TestResult> run_plugin_tests() {
             ctx->pluginManager->unregisterTool(inst31.get(), "null_start_tool");
         }
 
-        // 31.6 异常守卫: offload线程池适配异步接口 work 函数兜底 —— 用户 execute 抛异常时
-        //      适配层 转 error_out + NULL, 异常不穿越 C ABI (host 为空也不崩)
+        // 31.6 异常守卫: blocking_tool 异常守卫兜底 —— 用户 execute 抛异常时
+        //      适配层转 AGENTXX_PLUGIN_OPERATOR_FAILED, 异常不穿越 C ABI
         {
-            static agentxx::plugin::SyncJob shimJob{};
-            shimJob.shim.fn = +[](void*,
-                                  const AgentxxPluginStringView*,
-                                  const AgentxxPluginStringView*,
-                                  const AgentxxPluginStringView*,
-                                  volatile int32_t*,
-                                  AgentxxPluginString*) -> AgentxxPluginString {
-                throw std::runtime_error("shim boom");
-            };
-            shimJob.shim.host           = nullptr; ///< host 缺失时 err_dup 安全放弃
-            AgentxxPluginString shimErr = {nullptr, 0};
-            void* shimResult            = agentxx::plugin::syncJobWork(&shimJob, nullptr, &shimErr);
-            XX_TEST_EXPECT_TRUE(shimResult == nullptr);
-            XX_TEST_EXPECT_TRUE(shimErr.data == nullptr); ///< 无宿主无法分配错误串, 安全放弃
+            struct BoomCtx : public agentxx::plugin::PluginBase {};
+            static BoomCtx boomCtx;
+            boomCtx.init(&inst31->host);
+            agentxx::plugin::blocking_tool(
+                boomCtx,
+                "boom_tool",
+                "boom test",
+                "{}",
+                [](BoomCtx&, std::string_view) -> std::string {
+                    throw std::runtime_error("shim boom");
+                }
+            );
+            auto tool = ctx->toolRegistry->find("boom_tool");
+            XX_TEST_EXPECT_TRUE(tool != nullptr);
+            if (tool) {
+                try {
+                    auto out = co_await tool->execute_async(neograph::json{});
+                    XX_TEST_EXPECT_TRUE(false);
+                } catch (const std::exception& e) {
+                    XX_TEST_EXPECT_TRUE(std::string(e.what()).find("shim boom") != std::string::npos);
+                }
+            }
+            ctx->pluginManager->unregisterTool(inst31.get(), "boom_tool");
         }
 
         // 31.7 异常守卫: 事件 handler 违约抛异常 → 宿主派发兜底,
@@ -1878,6 +1878,116 @@ asio::awaitable<TestResult> run_plugin_tests() {
             plug.cancelRegistry.cancel("test_sess");
             // 本地直接命中, 零跨线程 host 交互
             XX_TEST_EXPECT_TRUE(plug.sessionCancelled("test_sess"));
+        }
+    }
+
+    // ---- 37. 插件加载失败的事务性回滚 (RAII 回滚验证) ----
+    {
+        auto rollbackCtx = std::make_shared<agentxx::agent::AgentContext>();
+        rollbackCtx->agentConfig = std::make_shared<agentxx::agent::AgentConfig>();
+        rollbackCtx->middlewareHandleContext = std::make_shared<agentxx::middleware::MiddlewareContext>();
+        rollbackCtx->bus = std::make_shared<agentxx::event::EventBus>(co_await asio::this_coro::executor);
+        rollbackCtx->toolRegistry = std::make_shared<agentxx::plugin::ToolRegistry>();
+        rollbackCtx->pluginManager = std::make_shared<agentxx::plugin::PluginManager>(rollbackCtx);
+        rollbackCtx->pluginManager->setIoExecutor(co_await asio::this_coro::executor);
+
+        auto fakeInst = std::make_shared<agentxx::plugin::PluginInstance>("fake_rollback_plugin");
+        fakeInst->manager = rollbackCtx->pluginManager;
+        fakeInst->self = fakeInst;
+        auto vtableSv = agentxx::plugin::PluginStringView::fromCstr("__vtable");
+        fakeInst->host.vtable = (const AgentxxHostVtable*)agentxx::plugin::xx_query_interface(nullptr, &vtableSv);
+        fakeInst->host.opaque = fakeInst.get();
+
+        struct FakeCtx : public agentxx::plugin::PluginBase {};
+        FakeCtx fctx;
+        fctx.init(&fakeInst->host);
+        agentxx::plugin::fast_tool(fctx, "fake_rollback_tool", "desc", "{}", [](std::string_view) { return "ok"; });
+        XX_TEST_EXPECT_TRUE(rollbackCtx->toolRegistry->contains("fake_rollback_tool"));
+
+        // 验证 detachAll 完全拔除工具与订阅
+        rollbackCtx->pluginManager->detachAll(fakeInst.get());
+        XX_TEST_EXPECT_FALSE(rollbackCtx->toolRegistry->contains("fake_rollback_tool"));
+        XX_TEST_EXPECT_EQ(fakeInst->subscriptions.size(), size_t(0));
+        rollbackCtx->pluginManager->shutdownAll();
+    }
+
+    // ---- 38. 并发调用 call_tool 零死锁三态机压力测试 ----
+    {
+        auto instCall = co_await ctx->pluginManager->loadPluginAsync(path);
+        XX_TEST_EXPECT_TRUE(instCall != nullptr);
+        auto tool = ctx->toolRegistry->find("example_caller");
+        XX_TEST_EXPECT_TRUE(tool != nullptr);
+        if (tool) {
+            constexpr int kTotalCalls = 1000;
+            std::atomic<int> completed{0};
+            auto ex = co_await asio::this_coro::executor;
+            for (int i = 0; i < kTotalCalls; ++i) {
+                asio::co_spawn(
+                    ex,
+                    [&tool, &completed, i]() -> asio::awaitable<void> {
+                        auto out = co_await tool->execute_async(neograph::json{
+                            {"sessionId", fmt::format("conc_{}", i)},
+                            {"x", i},
+                        });
+                        auto j = neograph::json::parse(out);
+                        if (j["via_call_tool"]["echo"]["x"].get<int>() == i) {
+                            completed.fetch_add(1, std::memory_order_relaxed);
+                        }
+                    },
+                    asio::detached
+                );
+            }
+            for (int waitCount = 0; waitCount < 500 && completed.load(std::memory_order_relaxed) < kTotalCalls; ++waitCount) {
+                co_await sleepMs(10);
+            }
+            XX_TEST_EXPECT_EQ(completed.load(), kTotalCalls);
+        }
+        co_await ctx->pluginManager->unloadAsync("example_plugin");
+    }
+
+    // ---- 39. 多实例并发隔离 (10 个独立 AgentContext 并行加载 agentxx_system_monitor) ----
+    {
+        auto sysMonPath = findPluginDir("agentxx_system_monitor");
+        if (std::filesystem::exists(sysMonPath)) {
+            constexpr int kInstances = 10;
+            auto ex = co_await asio::this_coro::executor;
+            std::vector<std::shared_ptr<agent::AgentContext>> contexts;
+            std::vector<std::shared_ptr<plugin::PluginInstance>> instances;
+            contexts.reserve(kInstances);
+            instances.reserve(kInstances);
+
+            for (int i = 0; i < kInstances; ++i) {
+                auto c = std::make_shared<agent::AgentContext>();
+                c->agentConfig = std::make_shared<agent::AgentConfig>();
+                c->middlewareHandleContext = std::make_shared<middleware::MiddlewareContext>();
+                c->bus = std::make_shared<event::EventBus>(ex);
+                c->toolRegistry = std::make_shared<plugin::ToolRegistry>();
+                c->pluginManager = std::make_shared<plugin::PluginManager>(c);
+                c->pluginManager->setIoExecutor(ex);
+
+                auto inst = co_await c->pluginManager->loadPluginAsync(sysMonPath);
+                XX_TEST_EXPECT_TRUE(inst != nullptr);
+                XX_TEST_EXPECT_TRUE(c->toolRegistry->contains("agentxx_get_system_core_info"));
+                contexts.push_back(c);
+                instances.push_back(inst);
+            }
+
+            // 每个实例独立调用其工具
+            for (int i = 0; i < kInstances; ++i) {
+                auto tool = contexts[i]->toolRegistry->find("agentxx_get_system_core_info");
+                XX_TEST_EXPECT_TRUE(tool != nullptr);
+                if (tool) {
+                    auto out = co_await tool->execute_async(neograph::json{});
+                    XX_TEST_EXPECT_TRUE(out.find("CPU Usage:") != std::string::npos);
+                }
+            }
+
+            // 全部卸载
+            for (int i = 0; i < kInstances; ++i) {
+                co_await contexts[i]->pluginManager->unloadAsync("agentxx_system_monitor");
+                XX_TEST_EXPECT_FALSE(contexts[i]->toolRegistry->contains("agentxx_get_system_core_info"));
+                contexts[i]->pluginManager->shutdownAll();
+            }
         }
     }
 

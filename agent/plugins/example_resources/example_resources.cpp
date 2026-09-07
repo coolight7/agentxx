@@ -125,7 +125,6 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
             // COM 风格接口表查询 (存入本实例上下文; 原函数级 static 缓存多实例不安全)
             ctx->iface       = agentxx::plugin::AgentIfaces::query(host);
             raw              = ctx.get();
-            const auto& g_if = ctx->iface;
 
             auto base = dirOf(ownInfoString(host, ctx->iface, "path"));
 

@@ -102,71 +102,39 @@ static std::string makeUiControlSchema() {
 
 using namespace agentxx_computer_use_plugin;
 
-extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_agent_get_info(void) {
-    static const AgentxxPluginInfo info{
-        AGENTXX_PLUGIN_API_VERSION,
-        0,
-        agentxx::plugin::PluginStringView::fromCstr("agentxx_computer_use"),
-        agentxx::plugin::PluginStringView::fromCstr("1.0.0"),
-        agentxx::plugin::PluginStringView::fromCstr(
-            "Computer control on Windows: mouse, keyboard, and scroll input (SendInput based)"
-        ),
-    };
-    return &info;
-}
+struct ComputerUsePluginCtx : public agentxx::plugin::PluginBase {};
 
-extern "C" AGENTXX_PLUGIN_EXPORT int
-    agentxx_plugin_agent_create(const AgentxxPluginHost* host, void** plugin_ctx) {
-    PluginCtx* raw = nullptr;
-    return agentxx::plugin::guardCall(
-        [&raw](const char* msg) noexcept {
-            ctxGuardLogger(raw)(msg);
-        },
-        -1,
-        [&]() -> int {
-            if (!host || !host->vtable || !plugin_ctx) {
-                return -1;
-            }
-            auto ctx = std::make_unique<PluginCtx>();
-            ctx->init(host);
-            raw = ctx.get();
+AGENTXX_PLUGIN_AGENT_EXPORT(
+    ComputerUsePluginCtx,
+    "agentxx_computer_use",
+    "1.0.0",
+    "Computer control on Windows: mouse, keyboard, and scroll input (SendInput based)",
+    [](ComputerUsePluginCtx& ctx) -> int32_t {
+        if (!ctx.iface.tools || !ctx.iface.tools->register_tool) {
+            return -1;
+        }
 
-            if (!ctx->iface.tools || !ctx->iface.tools->register_tool) {
-                return -1;
-            }
+        auto p = ctx.toolPrompt("agentxx_ui_control_keyboard_mouse");
+        std::string depict = p.depict.empty() ? kUiControlDefaultDepict : p.depict;
 
-            auto        p      = ctx->toolPrompt("agentxx_ui_control_keyboard_mouse");
-            std::string depict = p.depict.empty() ? kUiControlDefaultDepict : p.depict;
-
-            agentxx::plugin::blocking_tool(
-                *ctx,
-                "agentxx_ui_control_keyboard_mouse",
-                depict,
-                makeUiControlSchema(),
-                [](PluginCtx&, std::string_view args_json) -> std::string {
-                    std::string argsStr(
-                        args_json.data() ? args_json.data() : "{}",
-                        args_json.size()
-                    );
-                    SimpleJson args(argsStr.empty() ? "{}" : argsStr);
-                    if (!args.ok()) {
-                        throw std::runtime_error("invalid args json");
-                    }
-                    return uiControlExecute(args);
+        agentxx::plugin::blocking_tool(
+            ctx,
+            "agentxx_ui_control_keyboard_mouse",
+            depict,
+            makeUiControlSchema(),
+            [](ComputerUsePluginCtx&, std::string_view args_json) -> std::string {
+                std::string argsStr(
+                    args_json.data() ? args_json.data() : "{}",
+                    args_json.size()
+                );
+                SimpleJson args(argsStr.empty() ? "{}" : argsStr);
+                if (!args.ok()) {
+                    throw std::runtime_error("invalid args json");
                 }
-            );
+                return uiControlExecute(args);
+            }
+        );
 
-            *plugin_ctx = ctx.release();
-            return 0;
-        }
-    );
-}
-
-extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_agent_destroy(void* plugin_ctx) {
-    auto* ctx = static_cast<PluginCtx*>(plugin_ctx);
-    agentxx::plugin::guardCallVoid(ctxGuardLogger(ctx), [&] {
-        if (ctx) {
-            delete ctx;
-        }
-    });
-}
+        return 0;
+    }
+);

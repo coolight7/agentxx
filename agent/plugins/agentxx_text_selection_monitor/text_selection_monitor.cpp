@@ -748,19 +748,24 @@ private:
         return true;
     }
 
-    static int findCDPPort() {
-        static int                                   cachedPort = 0;
-        static std::chrono::steady_clock::time_point cacheTime  = {};
-        constexpr auto                               kCacheTtl  = std::chrono::seconds(30);
+    std::mutex                            cdpCacheMutex_;
+    int                                   cdpCachedPort_ = 0;
+    std::chrono::steady_clock::time_point cdpCacheTime_{};
 
-        if (cachedPort != 0) {
-            auto age = std::chrono::duration_cast<std::chrono::seconds>(
-                std::chrono::steady_clock::now() - cacheTime
-            );
-            if (age < kCacheTtl) {
-                return (cachedPort > 0) ? cachedPort : 0;
+    int findCDPPort() {
+        constexpr auto kCacheTtl = std::chrono::seconds(30);
+
+        {
+            std::lock_guard<std::mutex> lk(cdpCacheMutex_);
+            if (cdpCachedPort_ != 0) {
+                auto age = std::chrono::duration_cast<std::chrono::seconds>(
+                    std::chrono::steady_clock::now() - cdpCacheTime_
+                );
+                if (age < kCacheTtl) {
+                    return (cdpCachedPort_ > 0) ? cdpCachedPort_ : 0;
+                }
+                cdpCachedPort_ = 0;
             }
-            cachedPort = 0;
         }
 
         for (int port : {9222, 9223, 9224, 9225, 9226, 9227, 9228, 9229, 9230}) {
@@ -812,8 +817,11 @@ private:
                                 0
                             )
                             && WinHttpReceiveResponse(hRequest, nullptr)) {
-                            cachedPort = port;
-                            cacheTime  = std::chrono::steady_clock::now();
+                            {
+                                std::lock_guard<std::mutex> lk(cdpCacheMutex_);
+                                cdpCachedPort_ = port;
+                                cdpCacheTime_  = std::chrono::steady_clock::now();
+                            }
                             WinHttpCloseHandle(hRequest);
                             WinHttpCloseHandle(hConnect);
                             WinHttpCloseHandle(hSession);
@@ -829,8 +837,11 @@ private:
             }
         }
 
-        cachedPort = -1;
-        cacheTime  = std::chrono::steady_clock::now();
+        {
+            std::lock_guard<std::mutex> lk(cdpCacheMutex_);
+            cdpCachedPort_ = -1;
+            cdpCacheTime_  = std::chrono::steady_clock::now();
+        }
         return 0;
     }
 
