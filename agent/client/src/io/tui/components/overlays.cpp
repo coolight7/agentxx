@@ -1701,6 +1701,95 @@ bool TextOverlay::OnEvent(Event event) {
     return true;
 }
 
+std::shared_ptr<ftxui::ComponentBase> createUniversalOverlay(
+    TUICtx&               ctx,
+    int                   type,
+    std::string_view      title,
+    std::string_view      payload,
+    std::string_view      extraJson,
+    std::string_view      ownerPlugin,
+    std::function<void()> onClose
+) {
+    switch (type) {
+        case AGENTXX_OVERLAY_MERMAID: {
+            if (payload.empty()) {
+                return nullptr;
+            }
+            auto m = std::make_shared<MermaidDiagramOverlay>(
+                ctx,
+                std::string(payload),
+                std::string(title)
+            );
+            m->onClose(std::move(onClose));
+            return m;
+        }
+        case AGENTXX_OVERLAY_TEXT: {
+            bool markdown = true;
+            try {
+                if (!extraJson.empty() && extraJson != "{}") {
+                    auto extra = neograph::json::parse(extraJson);
+                    if (extra.is_object() && extra.contains("markdown")
+                        && extra["markdown"].is_boolean()) {
+                        markdown = extra["markdown"].get<bool>();
+                    }
+                }
+            } catch (...) {
+            }
+            auto m = std::make_shared<TextOverlay>(
+                ctx,
+                std::string(title),
+                std::string(payload),
+                markdown
+            );
+            m->onClose(std::move(onClose));
+            return m;
+        }
+        case AGENTXX_OVERLAY_DIFF: {
+            std::string path, oldStr, newStr;
+            try {
+                auto j = neograph::json::parse(payload.empty() ? "{}" : payload);
+                path   = j.value("path", std::string{});
+                oldStr = j.value("old_str", std::string{});
+                newStr = j.value("new_str", std::string{});
+            } catch (...) {
+                return nullptr;
+            }
+            auto m = std::make_shared<DiffOverlay>(
+                ctx,
+                std::string(title),
+                std::move(path),
+                std::move(oldStr),
+                std::move(newStr)
+            );
+            m->onClose(std::move(onClose));
+            return m;
+        }
+        case AGENTXX_OVERLAY_CUSTOM: {
+            neograph::json items = neograph::json::array();
+            try {
+                auto j = neograph::json::parse(payload.empty() ? "{}" : payload);
+                if (j.is_object() && j.contains("items") && j["items"].is_array()) {
+                    items = j["items"];
+                } else if (j.is_array()) {
+                    items = std::move(j);
+                }
+            } catch (...) {
+                return nullptr;
+            }
+            auto m = std::make_shared<CustomOverlay>(
+                ctx,
+                std::string(title),
+                std::move(items),
+                std::string(ownerPlugin)
+            );
+            m->onClose(std::move(onClose));
+            return m;
+        }
+        default:
+            return nullptr;
+    }
+}
+
 DiffOverlay::DiffOverlay(
     TUICtx&     ctx,
     std::string title,

@@ -521,3 +521,14 @@ private:
 
     std::vector<OverlayHit> hits_;
 };
+
+/// 创建通用覆盖层弹窗工厂函数 (支持 Mermaid / Text / Diff / Custom 弹窗)
+std::shared_ptr<ftxui::ComponentBase> createUniversalOverlay(
+    TUICtx&               ctx,
+    int                   type,
+    std::string_view      title,
+    std::string_view      payload,
+    std::string_view      extraJson,
+    std::string_view      ownerPlugin,
+    std::function<void()> onClose
+);
