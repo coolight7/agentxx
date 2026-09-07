@@ -1,4 +1,5 @@
 #include "agentxx-client/io/tui/agent_tui.h"
+#include "agentxx-client/util/clipboard.h"
 #include "agentxx-client/io/tui/components/input_bar.h"
 #include "agentxx-client/io/tui/components/message_list.h"
 #include "agentxx-client/io/tui/components/overlays.h"
@@ -34,74 +35,6 @@
 #include <memory>
 
 using namespace ftxui;
-
-// ---------------------------------------------------------------------------
-// 系统剪贴板写入 (跨平台)
-// ---------------------------------------------------------------------------
-// 复制鼠标选中文本时调用; 仅写入, 不读取。
-//
-// 实现:
-// - Windows: Win32 API (OpenClipboard + SetClipboardData(CF_UNICODETEXT)),
-//   对任何图形终端/控制台均可靠
-// - 其他平台 (Linux/macOS/WSL): OSC 52 转义序列写入终端主剪贴板,
-//   依赖终端模拟器支持 (xterm/Windows Terminal/wezterm/kitty 等; tmux 需配置)
-
-#if XX_IS_WIN_D
-#include <windows.h>
-
-/// Windows: UTF-8 文本写入系统剪贴板 (UTF-8 -> UTF-16)
-static bool copyTextToSystemClipboard(const std::string& text) {
-    if (text.empty()) {
-        return false;
-    }
-    // OpenClipboard(nullptr): 不关联具体窗口, 供无 GUI 窗口句柄的线程使用
-    if (!OpenClipboard(nullptr)) {
-        return false;
-    }
-    EmptyClipboard();
-    bool      ok = false;
-    const int wlen
-        = MultiByteToWideChar(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), nullptr, 0);
-    if (wlen > 0) {
-        HGLOBAL hMem = GlobalAlloc(GMEM_MOVEABLE, static_cast<SIZE_T>(wlen + 1) * sizeof(wchar_t));
-        if (hMem) {
-            wchar_t* dst = static_cast<wchar_t*>(GlobalLock(hMem));
-            if (dst) {
-                MultiByteToWideChar(
-                    CP_UTF8,
-                    0,
-                    text.data(),
-                    static_cast<int>(text.size()),
-                    dst,
-                    wlen
-                );
-                dst[wlen] = L'\0';
-                GlobalUnlock(hMem);
-                // 成功时剪贴板拥有 hMem 所有权; 失败则释放, 避免泄漏
-                ok = SetClipboardData(CF_UNICODETEXT, hMem) != nullptr;
-                if (!ok) {
-                    GlobalFree(hMem);
-                }
-            } else {
-                GlobalFree(hMem);
-            }
-        }
-    }
-    CloseClipboard();
-    return ok;
-}
-#else
-
-/// 其他平台: OSC 52 序列写入终端主剪贴板 (c = CLIPBOARD)
-static bool copyTextToSystemClipboard(const std::string& text) {
-    if (text.empty()) {
-        return false;
-    }
-    // ESC ] 52 ; c ; <base64> BEL — 无可见输出, 与 FTXUI 屏幕刷新流交错安全
-    std::cout << "\x1b]52;c;" << agentxx::util::base64Encode(text) << "\x07" << std::flush;
-    return true;
-}
-#endif
 
 // ---------------------------------------------------------------------------
 // 构造 / 析构
@@ -429,7 +362,7 @@ bool TUIClientAgentIO::copySelectionToClipboard() {
     if (text.empty()) {
         return false;
     }
-    const bool ok = copyTextToSystemClipboard(text);
+    const bool ok = agentxx::client::copyTextToSystemClipboard(text);
     if (ok) {
         showToast(trf("toast.copied", text.size()));
     } else {
@@ -1275,91 +1208,17 @@ void TUIClientAgentIO::openOverlay(
         return;
     }
     overlayOwnerPlugin_ = std::move(ownerPlugin);
-    std::shared_ptr<ftxui::ComponentBase> overlay;
-    // extra_json 可选扩展: width_frac (弹窗宽度占比, 缺省按类型默认)
-    double widthFrac = 0.0;
-    try {
-        if (!extraJson.empty() && extraJson != "{}") {
-            auto extra = neograph::json::parse(extraJson);
-            if (extra.is_object() && extra.contains("width_frac")
-                && extra["width_frac"].is_number()) {
-                widthFrac = extra["width_frac"].get<double>();
-            }
+    auto overlay = createUniversalOverlay(
+        ctx_,
+        type,
+        title,
+        payload,
+        extraJson,
+        overlayOwnerPlugin_,
+        [this] {
+            modal_->popModal();
         }
-    } catch (...) {
-        widthFrac = 0.0;
-    }
-    (void)widthFrac; // 各 overlay 按类型默认占比 (extra 暂仅日志/鉴权预留扩展)
-    switch (type) {
-        case AGENTXX_OVERLAY_MERMAID: {
-            if (payload.empty()) {
-                return;
-            }
-            auto m = std::make_shared<MermaidDiagramOverlay>(ctx_, payload, title);
-            m->onClose([this] {
-                modal_->popModal();
-            });
-            overlay = std::move(m);
-            break;
-        }
-        case AGENTXX_OVERLAY_TEXT: {
-            bool markdown = true;
-            try {
-                if (!extraJson.empty() && extraJson != "{}") {
-                    auto extra = neograph::json::parse(extraJson);
-                    if (extra.is_object() && extra.contains("markdown")
-                        && extra["markdown"].is_boolean()) {
-                        markdown = extra["markdown"].get<bool>();
-                    }
-                }
-            } catch (...) {
-            }
-            auto m = std::make_shared<TextOverlay>(ctx_, title, payload, markdown);
-            m->onClose([this] {
-                modal_->popModal();
-            });
-            overlay = std::move(m);
-            break;
-        }
-        case AGENTXX_OVERLAY_DIFF: {
-            std::string path, oldStr, newStr;
-            try {
-                auto j = neograph::json::parse(payload.empty() ? "{}" : payload);
-                path   = j.value("path", std::string{});
-                oldStr = j.value("old_str", std::string{});
-                newStr = j.value("new_str", std::string{});
-            } catch (...) {
-                return;
-            }
-            auto m = std::make_shared<DiffOverlay>(ctx_, title, path, oldStr, newStr);
-            m->onClose([this] {
-                modal_->popModal();
-            });
-            overlay = std::move(m);
-            break;
-        }
-        case AGENTXX_OVERLAY_CUSTOM: {
-            neograph::json items = neograph::json::array();
-            try {
-                auto j = neograph::json::parse(payload.empty() ? "{}" : payload);
-                if (j.is_object() && j.contains("items") && j["items"].is_array()) {
-                    items = j["items"];
-                } else if (j.is_array()) {
-                    items = j;
-                }
-            } catch (...) {
-                return;
-            }
-            auto m = std::make_shared<CustomOverlay>(ctx_, title, items, overlayOwnerPlugin_);
-            m->onClose([this] {
-                modal_->popModal();
-            });
-            overlay = std::move(m);
-            break;
-        }
-        default:
-            return;
-    }
+    );
     if (overlay) {
         modal_->pushModal(std::move(overlay));
     }
