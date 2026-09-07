@@ -77,9 +77,11 @@ Tool Characteristics:
 - **Automatic Compaction**: Compresses summaries when tool outputs exceed `toolcallSummaryLimitOutputLength` (default 2K) and the tool enables `autoSummaryOutput` (original text offloaded via share_store).
 - **Lazy Loading**: Plugin tools register on demand; `XXToolBase::canDelayLoad` flags deferrable tools (default true), injecting only names into the system prompt initially.
 - **Argument Self-Healing**: `ToolcallWrapNode::autoFixArgsType` auto-corrects argument types against JSON Schema (string↔array/number/boolean coercion), improving model compatibility.
-- **Repeat-Call Guard**: Tools enabling `repeatCallCheck` prompt the user via the permission bus when identical calls repeat consecutively within one LLM↔tool chain up to `toolcallRepeatCheckThreshold` (default 5, 0=disabled).
+- **Repeat-Call Guard**: Tools enabling `repeatCallCheck` prompt the user via the permission bus when identical calls repeat consecutively within one LLM↔tool chain up to `toolcallRepeatCheckThreshold` (default 5, 0=disabled) to prevent infinite loops.
 - **Deduplication**: Filesystem tools integrate with `SummarizationToolHandle`, pruning older duplicate call results.
-- **MCP Extensibility**: Connects to external MCP Servers via MCP Client, dynamically registering remote tools over HTTP SSE and stdio transports (namespace-prefix isolation, 120s default call timeout).
+- **Context Repair Optimization**: `ModelCallWrapNode::repairMessages` automatically validates and fixes message structure (coalescing consecutive same-role messages, normalizing tool_call/tool_result pairing) with minimal copying overhead.
+- **Event-Driven Cancellation**: Subprocess tools (e.g. `agentxx_execute_command`) integrate with the framework's centralized `CancelRegistry`, delivering millisecond-level instant termination of process groups and IO pipes rather than relying solely on polling loops.
+- **MCP Extensibility & Resilience**: Connects to external MCP Servers via MCP Client, dynamically registering remote tools over HTTP SSE and stdio transports (namespace-prefix isolation, 120s initialization/invocation timeout); failed components are uniformly recorded in `appendComponentInfo.failedComponents` for client UI diagnostics.
 
 ### Git Worktree Mode (YAML `worktree.enable`, Disabled by Default)
 
@@ -1421,10 +1423,15 @@ EventBus (Event Bus)
 
 ## Appendix B: Plugin System v1 Key Concepts (See plugins.md)
 
-- COM-style interface table query: Frozen core vtable (`alloc`/`free` + `query_interface`; the former `strdup` slot was removed from the vtable in favor of the header-inline `agentxx_plugin_strdup` built on `alloc`), querying dedicated interface tables via string `IID`s (with independent table version fields, all currently 1).
-- Agent side: 16 interface tables (`tools`, `hooks`, `events`, `capabilities`, `scheduler`, `session`, `plugins`, `config`, `model`, `cancel`, `prompt`, `json`, `log`, `resources`, `graph`, `tasks`; the tasks table takes `notify` as an out-param for host-managed background tasks).
+- COM-style interface table query: Frozen core vtable (`alloc`/`free` + `query_interface`; the former `strdup` slot was removed from the vtable in favor of the header-inline `agentxx_plugin_strdup` built on `alloc`), querying dedicated interface tables via string `IID`s (with independent table version fields, all currently 1); loading performs `>=` version compatibility checks.
+- Agent side: 16 interface tables (`tools`, `hooks`, `events`, `capabilities`, `scheduler`, `session`, `plugins`, `config` including get/set_language, `model`, `cancel`, `prompt`, `json`, `log`, `resources`, `graph`, `tasks`; the tasks table takes `notify` as an out-param for host-managed background tasks).
 - Client side: 7 interface tables (`ui` v2 with tool renderers + instance decors, `events`, `session`, `wire`, `self`, `json`, `log`; see `client_plugin_api.h`).
-- SDK (`plugin_kit.h`): `PluginBase` state base + `Task<T>` coroutines + awaiters (`sleep`/`yield`/`offload`/`call_tool`/`invoke_cap`) + registration family (`tool`/`fast_tool`/`blocking_tool`/`hook`/`capability`/`spawn`). Background tasks spawned via `spawn` register to host `agentxx.agent.tasks`, allowing clean shutdown without dangling frames.
+- Modern SDK (`plugin_kit.h`):
+  - `AGENTXX_PLUGIN_AGENT_EXPORT` / `AGENTXX_PLUGIN_CLIENT_EXPORT` declarative macros wrapping C ABI exception boundaries and context management.
+  - `ToolSchemaBuilder` fluent schema generator auto-merged with host `toolPrompt`.
+  - `ArgReader` error-tolerant parameter parser with smart type conversions.
+  - `CancelRegistry` centralized event-driven cancellation manager with `ScopedRegistration` RAII protection.
+  - `PluginBase` state base + `Task<T>` coroutines + awaiters (`sleep`/`yield`/`offload`/`call_tool`/`invoke_cap`) + registration family (`tool`/`fast_tool`/`blocking_tool`/`hook`/`capability`/`spawn`).
 - Three Iron Rules of Multi-Instance Safety: No mutable global statics / State recovered via `user_data` closures / Cache interface tables in instance contexts.
 - Export control: `-fvisibility=hidden` + version script whitelist (`AGENTXX_PLUGIN_EXPORT`).
 - Platform matrix: Evaluated at the start of each plugin's `CMakeLists.txt` via `plugin_platform_support.cmake`.

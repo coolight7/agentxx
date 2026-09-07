@@ -37,10 +37,13 @@ Test module names are listed in the registry table at the top of `agent/test/tes
 
 ## 3. Plugin Development
 
-- Entry points: `agentxx_plugin_agent_create/destroy` (client side `agentxx_plugin_client_create/destroy`), marked with `AGENTXX_PLUGIN_EXPORT`.
-- Follow the Three Iron Rules: No mutable global statics / State recovered via `user_data` closures / Interface tables cached into instance context.
-- When reusing `agentxx_util`, use `find_package(agentxx_util)` + `target_link_libraries(PRIVATE agentxx_util)` (convenience library for built-in plugins; third-party plugins only need pure C headers).
-- Platform matrix is evaluated at the beginning of each plugin's `CMakeLists.txt` via the `gate` function in `plugin_platform_support.cmake`.
+- **Declarative Export**: Prefer `AGENTXX_PLUGIN_AGENT_EXPORT` (client side `AGENTXX_PLUGIN_CLIENT_EXPORT`), which automatically generates C entry points with ABI exception guards and manages context lifecycle.
+- **Fluent Schema & Tolerant Reader**: Declare tool argument schemas via `ctx.schema(toolName)` (auto-merged with host `toolPrompt`); use `ArgReader` inside execution callbacks for error-tolerant and type-safe argument extraction.
+- **Event-Driven Cancellation**: Register cancellation actions for subprocesses and long-running tasks via `ctx.cancelRegistry.registerCallback(sessionKey, cb)` (yielding an RAII `ScopedRegistration` guard) for millisecond-level instant termination.
+- **Follow the Three Iron Rules**: No mutable global statics / State recovered via `user_data` closures / Interface tables cached into instance context.
+- **Record Failed Components**: External resource failures (MCP, Skills, Memory) should be recorded in `appendComponentInfo.failedComponents` for client UI reporting.
+- **Reusing `agentxx_util`**: Built-in plugins use `find_package(agentxx_util)` + `target_link_libraries(PRIVATE agentxx_util)` (third-party plugins need only the pure C ABI header).
+- **Platform Matrix**: Evaluated at the start of each plugin's `CMakeLists.txt` via `plugin_platform_support.cmake`.
 
 For details, see [plugins.md](/docs/en/design.md/plugins.md).
 

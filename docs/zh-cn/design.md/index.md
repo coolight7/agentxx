@@ -82,9 +82,11 @@ git_worktree 及延迟加载装配 (`ToolSkillSearchSubAgentTask` 模板类, 当
 - **自动压缩**: 工具输出超过阈值 (`toolcallSummaryLimitOutputLength`, 默认 2K) 且该 tool 启用 `autoSummaryOutput` 时压缩摘要 (经 share_store 卸载原文)
 - **延迟加载**: 插件工具按需注册；`XXToolBase::canDelayLoad` 标记可延迟工具 (默认 true), 初始仅名称注入 system prompt
 - **参数自愈**: `ToolcallWrapNode::autoFixArgsType` 按 JSON Schema 自动修正参数类型 (string↔数组/数值/布尔互转), 提高模型兼容性
-- **重复调用检查**: 启用 `repeatCallCheck` 的 tool 在同一 llm↔tool 链内连续同参调用达阈值 (`toolcallRepeatCheckThreshold`, 默认 5, 0=禁用) 时经 permission 总线询问用户
+- **重复调用检查**: 启用 `repeatCallCheck` 的 tool 在同一 llm↔tool 链内连续同名同参调用达阈值 (`toolcallRepeatCheckThreshold`, 默认 5, 0=禁用) 时经 permission 总线询问用户确认，防止模型陷入死循环；重置轮次时自愈
 - **去重机制**: 文件读写等工具支持 SummarizationToolHandle，重复调用时截断旧结果
-- **MCP 扩展**: 通过 MCP Client 连接外部 MCP Server，动态注册远程工具 (支持 HTTP SSE 和 stdio 传输, 命名空间前缀隔离, 默认 120s 调用超时)
+- **上下文修复优化**: `ModelCallWrapNode::repairMessages` 在调用 LLM 前自动检查和修复上下文结构（合并连续同角色消息、规范化 tool_call 与 tool_result 配对），采用按需验证与最小拷贝优化，显著降低深轮次对话的开销
+- **事件驱动取消**: 命令执行等重型工具接入插件开发框架通用设施 `CancelRegistry`，支持跨线程排他防悬挂锁与即时回调通知，在 Windows 与 Linux/POSIX 下毫秒级即时终止子进程组与管道，而非单纯依赖休眠轮询
+- **MCP 扩展与容错**: 通过 MCP Client 连接外部 MCP Server，动态注册远程工具 (支持 HTTP SSE 和 stdio 传输, 命名空间前缀隔离, 默认 120s 初始化与调用超时)；初始化失败的组件统一记录于 `appendComponentInfo.failedComponents`，供 UI 集中查看和统计
 
 ### Git Worktree 模式 (yaml `worktree.enable`, 默认关闭)
 
@@ -356,11 +358,12 @@ TUI [F4] 打开会话选择弹窗 → WireListSessions (服务端阻塞 I/O 卸�
     本地模式由 SessionServerAgentIO 驱动循环启动前回调 onServerReady 置就绪,
     远程模式由 mode_runners 连接协程驱动 (ConnState 存于 TUIRenderState::connState)
   - 启动进度逐步展示: server-io init() 各阶段 (检测系统环境/模型注册表/中间件/
-    加载 MCP server/RAG/插件等) 经 AgentContext::initNotifier →
-    AgentIOBase::onServerProgress 上报, "启动中"banner 同步显示当前执行的操作,
+    加载 MCP server/RAG/插件等) 经 AgentContext::ThreadSafeInitNotifier (互斥锁保证线程安全)
+    → AgentIOBase::onServerProgress 上报, "启动中"banner 同步显示当前执行的操作,
     完成后显示按键提示 (banner itemKey 计入
     connState+startupProgress 使 LazyScrollable 缓存失效重建)
     远程模式由 mode_runners 连接协程驱动 (ConnState 存于 TUIRenderState::connState)
+  - 多语言与国际化 (TuiI18n): 界面显示语言已完全与 YAML 解耦，统一由 TUI 设置窗口直接切换并持久化到 `{dataDir}/sqlite/global.db` 的 `tui.lang` (支持 Auto 自动识别系统语言 / ZhCn 简体中文 / EnUs 英文)，运行时无锁查表且支持格式化占位符。会话与模型提示词语言则由 Agent 端独立支持 `getLanguage/setLanguage`
   - 屏幕上方 toast 提示
   - 鼠标拖选复制: 左键拖选后松开复制到系统剪贴板 (Windows 走 Win32 API,
     其他平台走 OSC 52 转义序列, 依赖终端支持; 复制结果经 toast 提示)
@@ -903,6 +906,10 @@ end1  ←   end2  ←   end3
   等待方 co_await 也不会提前返回 —— 带 CancelToken 的重载额外启动 watcher 协程
   轮询令牌, 取消时置位 cancelFlag 打通 "会话取消 -> 工作线程轮询退出" 通知链
   (filesystem_list/glob/grep 已接入)
+- **插件事件驱动取消 (`CancelRegistry`)**: 针对跨进程命令执行 (如 `agentxx_execute_command` 的 bash/PowerShell 子进程) 与长耗时插件任务，单纯休眠轮询无法及时打断阻塞中的子进程。框架在 `plugin_kit.h` 提供了实例级 `CancelRegistry` 机制：
+  - 任务启动时通过 `registerCallback(sessionKey, cb)` 注册取消动作（如向子进程组发送 `SIGKILL` / `TerminateProcess` 并关闭输出管道），获取 `ScopedRegistration` RAII 守卫；
+  - 宿主触发取消或重置时，即时调用已注册的取消动作，内部通过排他互斥锁与生命周期状态标记保证即使任务正在退出也不会发生回调访问已悬挂对象的竞争；
+  - 若注册时会话已处于取消态，立即在锁外同步执行取消回调，避免错过时机；新轮次开始时由 `PluginBase` 自动监听 `plugin.agentxx.round_start` 清空会话取消标记。
 
 不可中断段 (收尾/持久化) 不依赖"异常恰好没传到"，需显式防护：
 catch `CancelledException` → 完成必要收尾 → rethrow，或用
@@ -1584,10 +1591,16 @@ EventBus (事件总线)
 
 ## 附录 B: 插件系统 v1 要点 (详见 plugins.md)
 
-- COM 风格接口表查询: 核心 vtable 冻结 (alloc/free + query_interface; 原 strdup 槽位已移出 vtable, 改为基于 alloc 的头文件内联 `agentxx_plugin_strdup`), 能力按 IID 字符串查询独立接口表 (首字段 version 独立演进, 当前全为 1)
-- Agent 侧 16 张接口表: tools / hooks / events / capabilities / scheduler / session / plugins / config / model / cancel / prompt / json / log / resources / graph / tasks (tasks 表 `notify` 为出参, 供宿主托管后台任务)
+- COM 风格接口表查询: 核心 vtable 冻结 (alloc/free + query_interface; 原 strdup 槽位已移出 vtable, 改为基于 alloc 的头文件内联 `agentxx_plugin_strdup`), 能力按 IID 字符串查询独立接口表 (首字段 version 独立演进, 当前全为 1)；加载阶段要求 API 版本 `>=` 宿主版本以保障向前兼容
+- Agent 侧 16 张接口表: tools / hooks / events / capabilities / scheduler / session / plugins / config (含 get/set_language) / model / cancel / prompt / json / log / resources / graph / tasks (tasks 表 `notify` 为出参, 供宿主托管后台任务)
 - Client 侧 7 张接口表: ui (v2, 含工具特化渲染器与实例装饰) / events / session / wire / self / json / log (详见 client_plugin_api.h)
-- SDK (plugin_kit.h): PluginBase 状态基类 + Task<T> 锚定协程 + sleep/yield/offload/call_tool/invoke_cap awaiter + tool/fast_tool/blocking_tool/hook/capability/spawn 注册族 (含原 plugin_iface_helper.h 接口表聚合与同步适配器, 已并入 kit); 后台任务 spawn 以 post_to_io 锚定宿主 io 线程
+- 现代 SDK (plugin_kit.h): 
+  - `AGENTXX_PLUGIN_AGENT_EXPORT` / `AGENTXX_PLUGIN_CLIENT_EXPORT` 声明式导出宏, 自动包裹 C ABI 异常守卫与实例上下文生命周期
+  - `ToolSchemaBuilder` 链式参数构建器，自动与宿主 `toolPrompt` 提示词覆盖融合
+  - `ArgReader` 宽容类型解析与参数智能自愈
+  - `CancelRegistry` 框架级事件驱动取消注册表，提供会话取消即时回调与 `ScopedRegistration` 防悬挂互斥保护
+  - `PluginBase` 状态基类 + `Task<T>` 锚定协程 + `sleep/yield/offload/call_tool/invoke_cap` awaiter
+  - `tool/fast_tool/blocking_tool/hook/capability/spawn` 便捷注册族
 - 多实例三铁律: 禁止可变全局 static / 状态经 user_data 闭包恢复 / 接口表缓存入实例上下文
 - 导出控制: -fvisibility=hidden + version script 白名单 (AGENTXX_PLUGIN_EXPORT), 单端插件兼容 Android lld
 - 平台矩阵: 各插件 CMakeLists 开头经 plugin_platform_support.cmake 判定 (screen_capture/computer_use/text_selection_monitor 仅 Windows 等)

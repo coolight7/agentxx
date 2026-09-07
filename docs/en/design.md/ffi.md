@@ -145,7 +145,7 @@ agentxx_ffi_event_queue_free(q);
 | Event Queue | `agentxx_ffi_event_queue_create` / `agentxx_ffi_event_queue_free` / `..._on_event` / `..._pop` | See Section 4.2 |
 | Built-in Plugins | `agentxx_plugin_get_builtin_plugins` | Manifest entry for monolithic embedded plugin mode (used by PluginManager; 26th whitelist symbol, hiding 170k C++ symbols) |
 
-Version Policy: Global `AGENTXX_FFI_API_VERSION` is reset to 1. Adding non-breaking symbols/fields does not increment it; breaking removals, renames, or semantic parameter modifications will increment it.
+Version Policy: Global `AGENTXX_FFI_API_VERSION` is reset to 1. Callers and language bindings should verify `agentxx_ffi_api_version() >= AGENTXX_FFI_API_VERSION` to ensure forward compatibility; adding non-breaking symbols/fields does not increment it, while breaking removals, renames, or semantic parameter modifications will increment it.
 
 ### 4.4 Event Types (`AgentxxFFIEventType`, payloads are `const AgentxxStringView*` JSON)
 

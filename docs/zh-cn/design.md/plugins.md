@@ -94,63 +94,121 @@ auto b64 = agentxx::util::base64Encode(data);
 
 ## 6. C++ 插件开发方式 (SDK `plugin_kit.h`)
 
-推荐使用官方 header-only SDK `plugin_kit.h` (仅依赖 `plugin_api.h`)：
+推荐使用官方 header-only SDK `plugin_kit.h` (位于 `agentxx/plugin/api/plugin_kit.h`)。
+最新框架提供了开箱即用的声明式导出宏、链式 Schema 构建器、宽容参数提取器与通用取消注册中心：
 
 ```cpp
 #include "agentxx/plugin/api/plugin_kit.h"
-struct MyPluginCtx : public agentxx::plugin::PluginBase {};
 
-extern "C" AGENTXX_PLUGIN_EXPORT int32_t agentxx_plugin_agent_create(const AgentxxPluginHost* host, void** plugin_ctx) {
-    auto ctx = std::make_unique<MyPluginCtx>();
-    ctx->init(host);
+using namespace agentxx::plugin;
 
-    // Task 锚定协程工具 (可精确 sleep / yield / call_tool / offload)
-    agentxx::plugin::tool(*ctx, "my_async_tool", "desc", R"({"type":"object","properties":{}})",
-        [](MyPluginCtx& c, std::string_view args_json, agentxx::plugin::OpCtl ctl) -> agentxx::plugin::Task<std::string> {
-            co_await agentxx::plugin::sleep(c, 100);
-            ctl.throw_if_cancelled();
-            // 跨插件互调: co_await agentxx::plugin::call_tool(c, "other_tool", "{}", threadId);
-            co_return R"({"status":"ok"})";
+struct MyPluginCtx : public PluginBase {};
+
+// 使用声明式导出宏 (自动封装入口符号、C ABI 边界异常守卫与实例上下文生命周期)
+AGENTXX_PLUGIN_AGENT_EXPORT(
+    MyPluginCtx,
+    "my_plugin",
+    "1.0.0",
+    "My awesome plugin description",
+    [](MyPluginCtx& ctx) -> int32_t {
+        // 1. ToolSchemaBuilder: 链式构建 JSON Schema (自动与宿主 toolPrompt 提示词覆盖融合)
+        auto mySchema = ctx.schema("my_blocking_tool")
+                            .string("path", "Target file path", /*required=*/true)
+                            .integer("timeout", "Timeout in seconds", false, 60)
+                            .boolean("all_output", "Return all output", false, true)
+                            .build();
+
+        // 2. 阻塞工具 (自动卸载到宿主 blockingPool 线程池，不占 IO 线程)
+        // 回调直接注入: (ctx, args_json, tid, workDir, cancel_flag)
+        blocking_tool(
+            ctx,
+            "my_blocking_tool",
+            "Perform heavy work in worker thread",
+            mySchema,
+            [](MyPluginCtx&     c,
+               std::string_view args_json,
+               std::string_view tid,
+               std::string_view workDir,
+               volatile int32_t* cancel_flag) -> std::string {
+                // ArgReader: 宽容类型提取 (支持 string/number/bool/json 宽容转换与自愈)
+                ArgReader args(args_json);
+                auto path = args.require<std::string>("path");
+                if (!args.ok()) {
+                    return args.errorMessage();
+                }
+
+                // 配合 CancelRegistry 检查取消 (事件驱动或状态查询)
+                if ((cancel_flag && *cancel_flag != 0) || c.sessionCancelled(tid)) {
+                    return "cancelled";
+                }
+
+                return R"({"status":"done"})";
+            }
+        );
+
+        // 3. 快同步内联工具 (<~1ms, IO 线程直接计算并返回)
+        fast_tool(ctx, "my_fast_tool", "Fast tool depict", R"({"type":"object","properties":{}})",
+            [](MyPluginCtx& c, std::string_view args_json, std::string_view tid) -> std::string {
+                return R"({"result":42})";
+            }
+        );
+
+        // 4. Task 锚定协程工具 (可精确 co_await sleep / yield / call_tool / offload)
+        tool(ctx, "my_async_tool", "Async coroutine tool", R"({"type":"object","properties":{}})",
+            [](MyPluginCtx& c, std::string_view args_json, OpCtl ctl) -> Task<std::string> {
+                co_await sleep(c, 100);
+                ctl.throw_if_cancelled();
+                // 跨插件互调: co_await call_tool(c, "other_tool", "{}", ctl.threadId());
+                co_return R"({"status":"ok"})";
+            }
+        );
+
+        // 5. 后台协作任务 (宿主托管: 自动注册 agentxx.agent.tasks, 卸载时宿主统一取消并精确等待退出)
+        spawn(ctx, [](MyPluginCtx& c, OpCtl ctl) -> Task<void> {
+            while (!ctl.cancelled()) {
+                co_await sleep(c, 5000);
+                if (ctl.cancelled()) break;
+                // 周期采集并发布事件
+            }
         });
 
-    // 快同步内联 (<~1ms, IO 线程直接计算返回)
-    agentxx::plugin::fast_tool(*ctx, "my_fast_tool", "desc", R"({"type":"object","properties":{}})",
-        [](MyPluginCtx& c, std::string_view args_json, std::string_view tid) -> std::string {
-            return R"({"result":42})";
+        // 6. 钩子 (7 个钩子点: agent_start/end, model_start/run/end, tool_start/end)
+        hook(ctx, AGENTXX_PLUGIN_HOOK_MODEL_START, [](MyPluginCtx& c, std::string_view in) {
+            // ...
         });
 
-    // 阻塞工具 (自动卸载到宿主 blockingPool, 不占 IO 线程)
-    agentxx::plugin::blocking_tool(*ctx, "my_blocking_tool", "desc", R"({"type":"object","properties":{}})",
-        [](MyPluginCtx& c, std::string_view args_json) -> std::string {
-            // 重型计算/同步文件/网络操作
-            return R"({"done":true})";
+        // 7. 能力 (跨插件通用 RPC 通道)
+        capability(ctx, "my.cap", [](MyPluginCtx& c, const AgentxxPluginHost* caller,
+                                     std::string_view method, std::string_view args) {
+            return "{}";
         });
 
-    // 后台协作任务 (宿主托管: 自动注册 agentxx.agent.tasks, 卸载时宿主统一
-    // 取消并精确等待退出, 无协程帧悬挂)
-    agentxx::plugin::spawn(*ctx, [](MyPluginCtx& c, agentxx::plugin::OpCtl ctl) -> agentxx::plugin::Task<void> {
-        while (!ctl.cancelled()) {
-            co_await agentxx::plugin::sleep(c, 5000);
-            if (ctl.cancelled()) break;
-            // 采集并 publish 事件
-        }
-    });
-
-    // 钩子 (7 钩子点: agent_start/end, model_start/run/end, tool_start/end)
-    agentxx::plugin::hook(*ctx, AGENTXX_HOOK_MODEL_START, [](MyPluginCtx& c, std::string_view in){ /*...*/ });
-
-    // 能力 (跨插件通用 RPC 通道)
-    agentxx::plugin::capability(*ctx, "my.cap", [](MyPluginCtx& c, const AgentxxPluginHost* caller, std::string_view method, std::string_view args){ return "{}"; });
-
-    *plugin_ctx = ctx.release();
-    return 0;
-}
-extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_agent_destroy(void* plugin_ctx) {
-    delete static_cast<MyPluginCtx*>(plugin_ctx);
-}
+        return 0;
+    }
+);
 ```
 
-**统一异步操作模型 (两件套 start/cancel)**：工具/钩子/能力均为 `start` (IO 线程非阻塞启动) + `cancel` (协作式) 两件套，终结经 `AgentxxOpNotify.done(status,payload)` 恰好一次上报；`Task` 协程帧先销毁后 `done` 上报，支持 `offload` 阻塞池委托与 `call_tool`/`invoke_cap` 锚定互调。
+### SDK 核心基础设施组件
+
+1. **导出宏 (`AGENTXX_PLUGIN_AGENT_EXPORT` / `AGENTXX_PLUGIN_CLIENT_EXPORT`)**:
+   - 自动生成 `agentxx_plugin_agent_get_info` / `create` / `destroy` (及 client 侧对应符号)
+   - 包含完整的 `guardCall` 异常守卫（向日志报告 C++ 异常，阻止异常越界穿透 C ABI）
+   - 自动创建实例上下文堆对象（继承自 `PluginBase`），调用 `ctx->init(host)` 并挂载资源
+2. **链式 Schema 构建器 (`ToolSchemaBuilder`)**:
+   - 经 `ctx.schema("tool_name")` 获得构建器实例，通过 `.string()`, `.integer()`, `.number()`, `.boolean()`, `.array()`, `.stringArray()`, `.enumString()` 等链式声明参数
+   - 自动从宿主 `toolPrompt` 中提取当前语言下的参数说明并优先覆盖默认注释，最后调用 `.build()` 输出标准 JSON Schema 字符串
+3. **强类型参数提取器 (`ArgReader`)**:
+   - 宽容解析输入 JSON：容忍格式宽松，并在类型不匹配时尝试智能自愈（如字符串 `"true"`/`"1"` 转布尔，数字转字符串等）
+   - 提供 `args.require<T>("key")`（若缺少则置错误标记）、`args.get<T>("key")`（返回 `std::optional<T>`）
+   - `args.ok()` 与 `args.errorMessage()` 方便快速校验和返回参数错误
+4. **事件驱动取消注册中心 (`CancelRegistry`)**:
+   - 已提升至插件开发框架通用基础设施（`agentxx::plugin::CancelRegistry`），各实例独立持有 `ctx.cancelRegistry`
+   - `ctx.init()` 自动订阅 `plugin.agentxx.round_start` 事件，新轮次开始时自动清除对应会话的历史已取消标记
+   - 支持 `registerCallback(key, cb)` 注册基于会话标识的取消回调，支持 RAII `ScopedRegistration` 守卫，提供排他互斥与防悬挂锁保护，避免回调访问已析构的局部资源
+   - 适用于长时间运行的外部进程或底层阻塞 IO（如 `agentxx_execute_command`），一旦宿主发起取消即可毫秒级即时终止子进程组，无需等待轮询间隔
+5. **统一异步操作模型 (两件套 start/cancel)**：
+   - 工具/钩子/能力均为 `start` (IO 线程非阻塞启动) + `cancel` (协作式) 两件套，终结经 `AgentxxPluginOperatorNotify.done(status,payload)` 恰好一次上报
+   - `Task` 协程帧先销毁后 `done` 上报，支持 `offload` 阻塞池委托与 `call_tool`/`invoke_cap` 锚定互调
 
 **后台任务 spawn (宿主托管)**：`spawn` 启动的后台协作任务 (如周期采集 `while(!cancelled()) { offload; sleep; }`) 自 API v1 起注册到宿主 `agentxx.agent.tasks` 接口表，与工具/能力 op 同构管理：
 
@@ -187,7 +245,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_agent_destroy(void* plugin_
 | `agentxx.agent.scheduler` | 1 | `is_io_thread/post_to_io/pump_io`, `sleep/cancel_sleep`, `offload` (阻塞池委托, 需 cancel_flag) |
 | `agentxx.agent.session` | 1 | `get_share_store/add_share_store/emit_message_tip` (IO 线程) |
 | `agentxx.agent.plugins` | 1 | `list_plugins/get_plugin/get_own_info` (JSON) |
-| `agentxx.agent.config` | 1 | `get_config/get_plugin_args/get_tool_prompt/get_session_work_dir/get_plugin_config_path` (后者 session_id 为空时返回默认会话工作目录；`get_plugin_config_path` 返回 yaml `config` 归一化绝对路径，可指向文件/目录) |
+| `agentxx.agent.config` | 1 | `get_config/get_plugin_args/get_tool_prompt/get_session_work_dir/get_plugin_config_path/get_language/set_language` (get_session_work_dir session_id 为空时返回默认会话工作目录；`get_plugin_config_path` 返回 yaml `config` 归一化绝对路径，可指向文件/目录；`get_language/set_language` 查询或指定运行时生效语言) |
 | `agentxx.agent.model` | 1 | `get_config` (主模型及关联配置 JSON) |
 | `agentxx.agent.cancel` | 1 | `is_cancelled(threadId)` (advisory, 权威通知为 cancel 回调) |
 | `agentxx.agent.prompt` | 1 | `get_prompt/set_prompt` (宿主提示词读写) |
@@ -221,6 +279,18 @@ Agentxx 客户端采用统一的分层工具特化渲染机制，TUI 核心层�
      - **`<key, render_fn>` 回调函数**：提供 `AgentxxToolRenderFn`，接收 `AgentxxToolRenderInput` (`tool_name`, `args_json`, `result_text`, `is_finished`, `is_error`, `max_width`)，输出 `AgentxxToolRenderOutput` (`displayName`, `summary`, `items_json`)。适用于需要复杂参数解析、条件格式化或动态生成 UI 项的工具 (如 `read` 区间参数、`glob`/`grep` 模式与文件摘要、`edit` diff 差异对比)。
      - **预设模版 (`template_json`)**：当 `render_fn == NULL` 时，宿主按声明式模板自动从 `args_json` 中提取字段并格式化摘要，如 `{"displayName":"Search","summaryKey":"query"}` 或 `{"displayName":"Bash","summaryKey":"command"}`。
    - **通用 Diff 渲染**：展开体 `items_json` 新增支持 `{"kind":"diff","path":"...","old_str":"...","new_str":"..."}`，TUI 会通用化渲染为自适应屏幕宽度的 side-by-side 或统一差异对比，任何插件均可自由复用。
+   - **SDK 辅助函数 (`registerToolRenderer`)**：
+     `plugin_kit.h` 提供了基于现代 C++ Lambda 的辅助封装，抹平 C ABI 结构体与内存分配细节：
+     ```cpp
+     agentxx::plugin::registerToolRenderer(host, ui, "agentxx_filesystem_read",
+         [](const agentxx::plugin::ToolRenderInput& in, agentxx::plugin::ToolRenderOutput& out) {
+             out.displayName = "Read";
+             ArgReader args(in.argsJson);
+             out.summary = args.get<std::string>("path").value_or("");
+         },
+         ctx.shimStorage
+     );
+     ```
 2. **实例级工具装饰 (`update_tool_decor`)**：
    - 订阅 `EVT_DELTA` 的 `tool_start` 后，按特定调用 `tool_call_id` 推送语义 JSON (优先级高于类型级渲染器)；典型实现见 `agentxx_planning` (运行时生成 ASCII/Mermaid 状态图与动态待办列表)。
 3. **优先级与降级路径**：

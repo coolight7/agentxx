@@ -161,7 +161,8 @@ agentxx_ffi_event_queue_free(q);
 | 内置插件 | `agentxx_plugin_get_builtin_plugins` | 内置合并编译模式插件清单入口 (PluginManager 使用; 白名单第 26 个符号, 隐藏 17 万 C++ 符号) |
 
 版本策略: 全局 `AGENTXX_FFI_API_VERSION` 重置为 1;
-新增符号/字段为非破坏性不递增, 删除/重命名或修改参数语义时递增。
+调用方/宿主绑定加载时应当校验 `agentxx_ffi_api_version() >= AGENTXX_FFI_API_VERSION`，
+以支持非破坏性扩展向前兼容；新增符号/字段为非破坏性不递增，删除/重命名或修改参数语义时递增。
 
 ### 4.4 事件类型 (`AgentxxFFIEventType`, payload 均为 `const AgentxxStringView*` JSON)
 

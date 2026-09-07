@@ -37,12 +37,15 @@
 
 ## 3. 插件开发
 
-- 入口 `agentxx_plugin_agent_create/destroy` (client 侧 `agentxx_plugin_client_create/destroy`)，`AGENTXX_PLUGIN_EXPORT` 标记
-- 遵守三铁律：无可变全局 static / 状态经 `user_data` 闭包恢复 / 接口表缓存入实例上下文
-- 复用 `agentxx_util` 时 `find_package(agentxx_util)` + `target_link_libraries(PRIVATE agentxx_util)` (内置插件便捷，第三方仅需纯 C 头)
-- 平台矩阵在各插件 `CMakeLists.txt` 开头经 `plugin_platform_support.cmake` 的 `gate` 判定
+- **声明式宏**: 推荐直接使用 `AGENTXX_PLUGIN_AGENT_EXPORT` (client 侧 `AGENTXX_PLUGIN_CLIENT_EXPORT`)，自动生成入口符号并包装 C ABI 异常守卫与实例生命周期
+- **声明式 Schema & 提取**: 通过 `ctx.schema(toolName)` 链式声明参数类型与说明，自动与宿主 `toolPrompt` 覆盖融合；在执行函数内使用 `ArgReader` 进行智能自愈与强类型参数提取
+- **事件驱动取消**: 长耗时外部进程或阻塞 IO 统一通过 `ctx.cancelRegistry.registerCallback(sessionKey, cb)` 注册取消动作（支持 `ScopedRegistration` RAII 自动反注册与防悬挂互斥保护），实现毫秒级即时终止
+- **遵守三铁律**：无可变全局 static / 状态经 `user_data` 闭包恢复 / 接口表缓存入实例上下文
+- **组件异常记录**：MCP、Skill、Memory 等外部资源初始化失败时统一记录于 `appendComponentInfo.failedComponents`，供客户端查看详细错误信息
+- **复用 `agentxx_util`**：内置插件 `find_package(agentxx_util)` + `target_link_libraries(PRIVATE agentxx_util)` (第三方插件仅需包含纯 C ABI 头即可)
+- **平台矩阵**：在各插件 `CMakeLists.txt` 开头经 `plugin_platform_support.cmake` 的 `gate` 函数按需控制编译平台
 
-详见 [plugins.md](../../docs/zh-cn/plugins.md)
+详见 [plugins.md](design.md/plugins.md)
 
 ## 4. 调试与日志
 

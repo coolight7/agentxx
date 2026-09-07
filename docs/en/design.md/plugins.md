@@ -94,61 +94,117 @@ auto b64 = agentxx::util::base64Encode(data);
 
 ## 6. C++ Plugin Development Workflow (SDK `plugin_kit.h`)
 
-We recommend using the official header-only SDK `plugin_kit.h` (depends only on `plugin_api.h`):
+We recommend using the official header-only SDK `plugin_kit.h` (`agentxx/plugin/api/plugin_kit.h`).
+The modern framework provides declarative export macros, a fluent schema builder, tolerant argument parsing, and centralized cancellation management:
 
 ```cpp
 #include "agentxx/plugin/api/plugin_kit.h"
-struct MyPluginCtx : public agentxx::plugin::PluginBase {};
 
-extern "C" AGENTXX_PLUGIN_EXPORT int32_t agentxx_plugin_agent_create(const AgentxxPluginHost* host, void** plugin_ctx) {
-    auto ctx = std::make_unique<MyPluginCtx>();
-    ctx->init(host);
+using namespace agentxx::plugin;
 
-    // Coroutine tool anchored by Task (supports sleep / yield / call_tool / offload)
-    agentxx::plugin::tool(*ctx, "my_async_tool", "desc", R"({"type":"object","properties":{}})",
-        [](MyPluginCtx& c, std::string_view args_json, agentxx::plugin::OpCtl ctl) -> agentxx::plugin::Task<std::string> {
-            co_await agentxx::plugin::sleep(c, 100);
-            ctl.throw_if_cancelled();
-            // Cross-plugin call: co_await agentxx::plugin::call_tool(c, "other_tool", "{}", threadId);
-            co_return R"({"status":"ok"})";
+struct MyPluginCtx : public PluginBase {};
+
+// Declarative export macro (encapsulates entry symbols, C ABI boundary guards, and context lifecycle)
+AGENTXX_PLUGIN_AGENT_EXPORT(
+    MyPluginCtx,
+    "my_plugin",
+    "1.0.0",
+    "My awesome plugin description",
+    [](MyPluginCtx& ctx) -> int32_t {
+        // 1. ToolSchemaBuilder: fluent JSON schema declaration (auto-merged with host toolPrompt)
+        auto mySchema = ctx.schema("my_blocking_tool")
+                            .string("path", "Target file path", /*required=*/true)
+                            .integer("timeout", "Timeout in seconds", false, 60)
+                            .boolean("all_output", "Return all output", false, true)
+                            .build();
+
+        // 2. Blocking tool (automatically offloaded to host blockingPool, non-blocking to IO thread)
+        // Injected callback: (ctx, args_json, tid, workDir, cancel_flag)
+        blocking_tool(
+            ctx,
+            "my_blocking_tool",
+            "Perform heavy work in worker thread",
+            mySchema,
+            [](MyPluginCtx&     c,
+               std::string_view args_json,
+               std::string_view tid,
+               std::string_view workDir,
+               volatile int32_t* cancel_flag) -> std::string {
+                // ArgReader: tolerant type extraction (smart conversions between string/number/bool/json)
+                ArgReader args(args_json);
+                auto path = args.require<std::string>("path");
+                if (!args.ok()) {
+                    return args.errorMessage();
+                }
+
+                // Check cancellation via CancelRegistry or flag
+                if ((cancel_flag && *cancel_flag != 0) || c.sessionCancelled(tid)) {
+                    return "cancelled";
+                }
+
+                return R"({"status":"done"})";
+            }
+        );
+
+        // 3. Fast synchronous inline tool (<~1ms, executed directly on IO thread)
+        fast_tool(ctx, "my_fast_tool", "Fast tool depict", R"({"type":"object","properties":{}})",
+            [](MyPluginCtx& c, std::string_view args_json, std::string_view tid) -> std::string {
+                return R"({"result":42})";
+            }
+        );
+
+        // 4. Task coroutine tool (supports co_await sleep / yield / call_tool / offload)
+        tool(ctx, "my_async_tool", "Async coroutine tool", R"({"type":"object","properties":{}})",
+            [](MyPluginCtx& c, std::string_view args_json, OpCtl ctl) -> Task<std::string> {
+                co_await sleep(c, 100);
+                ctl.throw_if_cancelled();
+                // Cross-plugin call: co_await call_tool(c, "other_tool", "{}", ctl.threadId());
+                co_return R"({"status":"ok"})";
+            }
+        );
+
+        // 5. Host-managed background task
+        spawn(ctx, [](MyPluginCtx& c, OpCtl ctl) -> Task<void> {
+            while (!ctl.cancelled()) {
+                co_await sleep(c, 5000);
+                if (ctl.cancelled()) break;
+                // Periodic event publishing
+            }
         });
 
-    // Fast synchronous inline tool (<~1ms, executed and returned directly on IO thread)
-    agentxx::plugin::fast_tool(*ctx, "my_fast_tool", "desc", R"({"type":"object","properties":{}})",
-        [](MyPluginCtx& c, std::string_view args_json, std::string_view tid) -> std::string {
-            return R"({"result":42})";
+        // 6. Hooks (7 hook points)
+        hook(ctx, AGENTXX_PLUGIN_HOOK_MODEL_START, [](MyPluginCtx& c, std::string_view in) {
+            // ...
         });
 
-    // Blocking tool (automatically offloaded to host blockingPool, non-blocking to IO thread)
-    agentxx::plugin::blocking_tool(*ctx, "my_blocking_tool", "desc", R"({"type":"object","properties":{}})",
-        [](MyPluginCtx& c, std::string_view args_json) -> std::string {
-            // Heavy computation / synchronous file I/O / blocking network calls
-            return R"({"done":true})";
+        // 7. Capabilities (generic cross-plugin RPC)
+        capability(ctx, "my.cap", [](MyPluginCtx& c, const AgentxxPluginHost* caller,
+                                     std::string_view method, std::string_view args) {
+            return "{}";
         });
 
-    // Background cooperative task (Host-managed: auto-registered with agentxx.agent.tasks;
-    // on plugin unload, the host cancels and cleanly waits for exit with no dangling frames)
-    agentxx::plugin::spawn(*ctx, [](MyPluginCtx& c, agentxx::plugin::OpCtl ctl) -> agentxx::plugin::Task<void> {
-        while (!ctl.cancelled()) {
-            co_await agentxx::plugin::sleep(c, 5000);
-            if (ctl.cancelled()) break;
-            // Collect and publish events
-        }
-    });
-
-    // Hooks (7 hook points: agent_start/end, model_start/run/end, tool_start/end)
-    agentxx::plugin::hook(*ctx, AGENTXX_HOOK_MODEL_START, [](MyPluginCtx& c, std::string_view in){ /*...*/ });
-
-    // Capabilities (Generic RPC channel across plugins)
-    agentxx::plugin::capability(*ctx, "my.cap", [](MyPluginCtx& c, const AgentxxPluginHost* caller, std::string_view method, std::string_view args){ return "{}"; });
-
-    *plugin_ctx = ctx.release();
-    return 0;
-}
-extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_agent_destroy(void* plugin_ctx) {
-    delete static_cast<MyPluginCtx*>(plugin_ctx);
-}
+        return 0;
+    }
+);
 ```
+
+### SDK Core Infrastructure Highlights
+
+1. **Export Macros (`AGENTXX_PLUGIN_AGENT_EXPORT` / `AGENTXX_PLUGIN_CLIENT_EXPORT`)**:
+   - Automatically defines exported C entry points (`agentxx_plugin_agent_get_info`, `create`, `destroy`).
+   - Wraps all entry calls in `guardCall` exception guards, intercepting C++ exceptions from crossing C ABI boundaries.
+   - Manages heap-allocated instance context (`PluginBase`) lifecycle cleanly.
+2. **Fluent Schema Builder (`ToolSchemaBuilder`)**:
+   - Obtainable via `ctx.schema("tool_name")`, supporting `.string()`, `.integer()`, `.number()`, `.boolean()`, `.array()`, `.stringArray()`, `.enumString()`, and `.build()`.
+   - Merges localized descriptions from host `toolPrompt` automatically.
+3. **Tolerant Parameter Reader (`ArgReader`)**:
+   - Parses input JSON with smart auto-healing (e.g. converting `"true"`/`"1"` to boolean, numbers to strings).
+   - Provides `require<T>()`, `get<T>()`, `ok()`, and `errorMessage()` for error-resilient parameter extraction.
+4. **Event-Driven Cancellation Registry (`CancelRegistry`)**:
+   - Centralized, instance-isolated cancellation manager (`ctx.cancelRegistry`).
+   - Automatically clears per-session cancellation flags when `plugin.agentxx.round_start` fires.
+   - Supports `registerCallback(sessionKey, cb)` returning an RAII `ScopedRegistration` guard with reentrant mutex and lifetime safety protection to eliminate dangling references during concurrent teardowns.
+   - Ideal for sub-processes or long-running blocking operations (`agentxx_execute_command`) to immediately kill process trees and close IO pipes on cancellation.
 
 **Unified Asynchronous Operation Model (Two-piece start/cancel)**: Tools, hooks, and capabilities all adhere to the `start` (non-blocking invocation on IO thread) + `cancel` (cooperative cancellation) lifecycle. Completion is reported exactly once via `AgentxxOpNotify.done(status, payload)`. `Task` coroutine frames are destroyed before invoking `done`, supporting `offload` blocking-pool delegation and `call_tool` / `invoke_cap` cross-plugin invocations.
 
@@ -186,7 +242,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_agent_destroy(void* plugin_
 | `agentxx.agent.scheduler` | 1 | `is_io_thread/post_to_io/pump_io`, `sleep/cancel_sleep`, `offload` (delegates to blocking pool, requires `cancel_flag`). |
 | `agentxx.agent.session` | 1 | `get_share_store/add_share_store/emit_message_tip` (IO thread). |
 | `agentxx.agent.plugins` | 1 | `list_plugins/get_plugin/get_own_info` (JSON). |
-| `agentxx.agent.config` | 1 | `get_config/get_plugin_args/get_tool_prompt/get_session_work_dir/get_plugin_config_path` (`get_session_work_dir` returns default workdir when session ID is empty; `get_plugin_config_path` returns normalized absolute path configured via YAML `config`, pointing to a file or directory). |
+| `agentxx.agent.config` | 1 | `get_config/get_plugin_args/get_tool_prompt/get_session_work_dir/get_plugin_config_path/get_language/set_language` (`get_session_work_dir` returns default workdir when session ID is empty; `get_plugin_config_path` returns normalized absolute path configured via YAML `config`, pointing to a file or directory; `get_language/set_language` queries/overrides runtime language). |
 | `agentxx.agent.model` | 1 | `get_config` (Active model and associated config JSON). |
 | `agentxx.agent.cancel` | 1 | `is_cancelled(threadId)` (Advisory polling; authoritative notification comes via cancel callback). |
 | `agentxx.agent.prompt` | 1 | `get_prompt/set_prompt` (Host prompt read/write access). |
@@ -220,6 +276,18 @@ The Agentxx client adopts a unified, layered tool-specialized rendering mechanis
      - **`<key, render_fn>` Callback Function**: Provides an `AgentxxToolRenderFn` receiving `AgentxxToolRenderInput` (`tool_name`, `args_json`, `result_text`, `is_finished`, `is_error`, `max_width`) and returning `AgentxxToolRenderOutput` (`displayName`, `summary`, `items_json`). Suitable for tools requiring complex argument parsing, conditional formatting, or dynamic UI item generation (e.g. `read` offset-limit parameters, `glob`/`grep` patterns and file summaries, `edit` diff comparisons).
      - **Declarative Template (`template_json`)**: When `render_fn == NULL`, the host automatically extracts fields from `args_json` and formats the summary according to the declarative template, e.g. `{"displayName":"Search","summaryKey":"query"}` or `{"displayName":"Bash","summaryKey":"command"}`.
    - **Generic Diff Rendering**: Expanded `items_json` supports `{"kind":"diff","path":"...","old_str":"...","new_str":"..."}`. The TUI generically renders this as an adaptive side-by-side or unified diff comparison, freely reusable by any plugin.
+   - **SDK Helper (`registerToolRenderer`)**:
+     `plugin_kit.h` provides an ergonomic modern C++ lambda wrapper:
+     ```cpp
+     agentxx::plugin::registerToolRenderer(host, ui, "agentxx_filesystem_read",
+         [](const agentxx::plugin::ToolRenderInput& in, agentxx::plugin::ToolRenderOutput& out) {
+             out.displayName = "Read";
+             ArgReader args(in.argsJson);
+             out.summary = args.get<std::string>("path").value_or("");
+         },
+         ctx.shimStorage
+     );
+     ```
 2. **Instance-Level Tool Decorations (`update_tool_decor`)**:
    - Subscribing to `tool_start` in `EVT_DELTA`, the plugin pushes semantic JSON keyed by the specific invocation's `tool_call_id` (taking higher priority than type-level renderers). A prominent implementation is `agentxx_planning` (generating dynamic ASCII / Mermaid state diagrams and reactive todo lists at runtime).
 3. **Priority Order and Fallback Path**:
