@@ -13,11 +13,13 @@
 #include "agentxx/util/http_client.h"
 #include "agentxx/version.h"
 #include "html2md/html2md.h"
+#include <asio/as_tuple.hpp>
 #include <asio/co_spawn.hpp>
 #include <asio/detached.hpp>
 #include <asio/execution/context.hpp>
 #include <asio/execution_context.hpp>
 #include <asio/steady_timer.hpp>
+#include <list>
 #include <map>
 #include <neograph/provider.h>
 #include <openssl/ssl.h>
@@ -339,9 +341,9 @@ asio::awaitable<std::shared_ptr<PooledConnection>>
 /// 即使服务端提前断开, 复用失败也会自动用新连接重试一次 (见 isPoolRetryableError)。
 inline constexpr auto kPoolIdleTimeout = std::chrono::seconds{120};
 
-/// 并发上限等待时的轮询间隔: 等待是稀有的 (仅同一端点并发超过上限时), 50ms 粒度
-/// 可接受; 相比等待队列, 轮询天然支持取消且无跨 executor 唤醒的复杂度
-inline constexpr auto kPoolWaitPollInterval = std::chrono::milliseconds{50};
+/// 并发上限等待时的兜底超时: 正常情况下由 release/建连失败精准唤醒等待队列,
+/// 消除 50ms 忙轮询与突发请求惊群; 30s 作为安全兜底超时
+inline constexpr auto kPoolWaitTimeout = std::chrono::seconds{30};
 
 /// 复用失效重试判定: 仅当错误表明"连接在对端已被关闭/重置" (请求几乎未到达
 /// 服务端) 时, 才允许用新连接重试一次。
@@ -403,16 +405,16 @@ public:
     ///   (跨上下文复用 socket 是未定义行为), 因此空闲池按 io_context 分桶
     /// - maxConcurrent==0 表示不限制 (始终新建, 仍可复用空闲)
     /// - 空闲连接超过 kPoolIdleTimeout 未复用 (服务端很可能已断开) 时丢弃重建
-    /// - 并发达到上限时轮询等待; 等待可被取消 (中止等待, 不修改池状态)
-    /// - 新建连接失败/被取消时归还并发名额并抛出异常
+    /// - 并发达到上限时进入等待队列 (FIFO), release/建连失败精准按需唤醒 (消除 50ms 轮询与惊群)
+    /// - 新建连接失败/被取消时归还并发名额并唤醒等待者后原样抛出异常
     asio::awaitable<std::shared_ptr<PooledConnection>>
         acquire(const HttpPoolKey& key, size_t maxConcurrent, const RequestConfig& config) {
         auto               executor = co_await asio::this_coro::executor;
-        asio::steady_timer pollTimer(executor);
-        auto&              ctx = asio::query(executor, asio::execution::context);
+        auto&              ctx      = asio::query(executor, asio::execution::context);
 
         for (;;) {
-            bool create = false;
+            bool                    create = false;
+            std::shared_ptr<Waiter> waiter;
             {
                 std::lock_guard<std::mutex> lock(mtx_);
                 auto&                       entry = entries_[key];
@@ -437,6 +439,11 @@ public:
                     create           = true;
                 } else {
                     ++entry.queuedWaits;
+                    waiter         = std::make_shared<Waiter>();
+                    waiter->timer  = std::make_shared<asio::steady_timer>(executor);
+                    waiter->ctx    = &ctx;
+                    waiter->active = true;
+                    entry.waiters.push_back(waiter);
                 }
             }
             if (create) {
@@ -445,17 +452,54 @@ public:
                     conn->fresh = true;
                     co_return conn;
                 } catch (...) {
-                    // 新建失败或外部取消: 归还并发名额后原样抛出
-                    std::lock_guard<std::mutex> lock(mtx_);
-                    if (entries_[key].active > 0) {
-                        --entries_[key].active;
+                    // 新建失败或外部取消: 归还并发名额并精准唤醒一个等待者后原样抛出
+                    std::shared_ptr<asio::steady_timer> toNotify;
+                    {
+                        std::lock_guard<std::mutex> lock(mtx_);
+                        auto&                       entry = entries_[key];
+                        if (entry.active > 0) {
+                            --entry.active;
+                        }
+                        while (!entry.waiters.empty()) {
+                            auto w = entry.waiters.front();
+                            entry.waiters.pop_front();
+                            if (w->active) {
+                                w->active = false;
+                                toNotify  = w->timer;
+                                break;
+                            }
+                        }
+                    }
+                    if (toNotify) {
+                        toNotify->cancel();
                     }
                     throw;
                 }
             }
-            // 并发达到上限: 轮询等待空闲连接/名额 (可取消)
-            pollTimer.expires_after(kPoolWaitPollInterval);
-            co_await pollTimer.async_wait(asio::use_awaitable);
+            // 并发达到上限: 挂入等待队列, release/新建失败时精准唤醒 (带 30s 兜底超时与取消保护)
+            if (waiter) {
+                struct WaiterGuard {
+                    std::mutex&                                   mtx;
+                    std::map<HttpPoolKey, Entry, HttpPoolKeyLess>& entries;
+                    const HttpPoolKey&                            key;
+                    std::shared_ptr<Waiter>                       waiter;
+                    ~WaiterGuard() {
+                        if (waiter && waiter->active) {
+                            std::lock_guard<std::mutex> lock(mtx);
+                            if (waiter->active) {
+                                waiter->active = false;
+                                auto it        = entries.find(key);
+                                if (it != entries.end()) {
+                                    it->second.waiters.remove(waiter);
+                                }
+                            }
+                        }
+                    }
+                } guard{mtx_, entries_, key, waiter};
+
+                waiter->timer->expires_after(kPoolWaitTimeout);
+                co_await waiter->timer->async_wait(asio::as_tuple(asio::use_awaitable));
+            }
         }
     }
 
@@ -470,14 +514,29 @@ public:
             },
             conn->stream
         );
-        std::lock_guard<std::mutex> lock(mtx_);
-        auto&                       entry = entries_[key];
-        if (entry.active > 0) {
-            --entry.active;
+        std::shared_ptr<asio::steady_timer> toNotify;
+        {
+            std::lock_guard<std::mutex> lock(mtx_);
+            auto&                       entry = entries_[key];
+            if (entry.active > 0) {
+                --entry.active;
+            }
+            if (reusable && isOpen(*conn)) {
+                conn->lastUsed = std::chrono::steady_clock::now();
+                entry.idleByCtx[&ctx].push_back(std::move(conn));
+            }
+            while (!entry.waiters.empty()) {
+                auto w = entry.waiters.front();
+                entry.waiters.pop_front();
+                if (w->active) {
+                    w->active = false;
+                    toNotify  = w->timer;
+                    break;
+                }
+            }
         }
-        if (reusable && isOpen(*conn)) {
-            conn->lastUsed = std::chrono::steady_clock::now();
-            entry.idleByCtx[&ctx].push_back(std::move(conn));
+        if (toNotify) {
+            toNotify->cancel();
         }
     }
 
@@ -513,11 +572,24 @@ public:
 
     /// 关闭并清空全部空闲连接 (测试收尾/io_context 销毁前; 不影响借出的连接)
     void clear() {
-        std::lock_guard<std::mutex> lock(mtx_);
-        for (auto& [key, entry] : entries_) {
-            for (auto& [ctx, conns] : entry.idleByCtx) {
-                conns.clear(); // 析构关闭 socket
+        std::vector<std::shared_ptr<asio::steady_timer>> toCancel;
+        {
+            std::lock_guard<std::mutex> lock(mtx_);
+            for (auto& [key, entry] : entries_) {
+                for (auto& [ctx, conns] : entry.idleByCtx) {
+                    conns.clear(); // 析构关闭 socket
+                }
+                for (auto& w : entry.waiters) {
+                    if (w->active) {
+                        w->active = false;
+                        toCancel.push_back(w->timer);
+                    }
+                }
+                entry.waiters.clear();
             }
+        }
+        for (auto& t : toCancel) {
+            t->cancel();
         }
     }
 
@@ -525,25 +597,49 @@ public:
     /// 此时该 io_context 的 scheduler/reactor 等内部服务尚未销毁 (守卫后注册先销毁),
     /// 可安全析构这些 socket; 调用方持锁保证与 acquire/release/clear 互斥。
     void dropContext(asio::execution_context* ctx) {
-        std::lock_guard<std::mutex> lock(mtx_);
-        for (auto& [key, entry] : entries_) {
-            entry.idleByCtx.erase(ctx); // 析构关闭该上下文上的空闲 socket
+        std::vector<std::shared_ptr<asio::steady_timer>> toCancel;
+        {
+            std::lock_guard<std::mutex> lock(mtx_);
+            for (auto& [key, entry] : entries_) {
+                entry.idleByCtx.erase(ctx); // 析构关闭该上下文上的空闲 socket
+                for (auto it = entry.waiters.begin(); it != entry.waiters.end();) {
+                    if ((*it)->ctx == ctx) {
+                        if ((*it)->active) {
+                            (*it)->active = false;
+                            toCancel.push_back((*it)->timer);
+                        }
+                        it = entry.waiters.erase(it);
+                    } else {
+                        ++it;
+                    }
+                }
+            }
+        }
+        for (auto& t : toCancel) {
+            t->cancel();
         }
     }
 
 private:
+
+    struct Waiter {
+        std::shared_ptr<asio::steady_timer> timer;
+        asio::execution_context*            ctx    = nullptr;
+        bool                                active = true;
+    };
 
     struct Entry {
         // 空闲连接按 io_context 分桶: 连接只能被创建它的 io_context 复用,
         // 且该 io_context 销毁时 (经 HttpPoolContextGuard) 桶随上下文一起释放,
         // 避免池持有指向已销毁 io_context 的连接
         std::map<asio::execution_context*, std::vector<std::shared_ptr<PooledConnection>>>
-               idleByCtx;
-        size_t active      = 0;
-        size_t created     = 0;
-        size_t reused      = 0;
-        size_t peakActive  = 0;
-        size_t queuedWaits = 0;
+                                           idleByCtx;
+        std::list<std::shared_ptr<Waiter>> waiters;
+        size_t                             active      = 0;
+        size_t                             created     = 0;
+        size_t                             reused      = 0;
+        size_t                             peakActive  = 0;
+        size_t                             queuedWaits = 0;
     };
 
     mutable std::mutex                            mtx_;
@@ -759,6 +855,40 @@ std::string HttpClient::urlEncode(std::string_view s) {
             out.push_back('%');
             out.push_back(kHex[c >> 4]);
             out.push_back(kHex[c & 0xF]);
+        }
+    }
+    return out;
+}
+
+std::string HttpClient::urlDecode(std::string_view s) {
+    std::string out;
+    out.reserve(s.size());
+    for (size_t i = 0; i < s.size(); ++i) {
+        if (s[i] == '+') {
+            out.push_back(' ');
+        } else if (s[i] == '%' && i + 2 < s.size()) {
+            auto fromHex = [](char c) -> int {
+                if (c >= '0' && c <= '9') {
+                    return c - '0';
+                }
+                if (c >= 'a' && c <= 'f') {
+                    return c - 'a' + 10;
+                }
+                if (c >= 'A' && c <= 'F') {
+                    return c - 'A' + 10;
+                }
+                return -1;
+            };
+            int h1 = fromHex(s[i + 1]);
+            int h2 = fromHex(s[i + 2]);
+            if (h1 >= 0 && h2 >= 0) {
+                out.push_back(static_cast<char>((h1 << 4) | h2));
+                i += 2;
+            } else {
+                out.push_back('%');
+            }
+        } else {
+            out.push_back(s[i]);
         }
     }
     return out;
