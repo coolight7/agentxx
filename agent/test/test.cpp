@@ -279,17 +279,37 @@ int main(int argn, char** argv) {
                 co_await run("subagent_bus", agentxx::test::run_subagent_bus_tests);
                 co_await run("subagent_tool", agentxx::test::run_subagent_tool_tests);
                 co_await run("agent_host", agentxx::test::run_agent_host_tests);
-                co_await runCtx("string_tools", agentxx::test::run_string_tools_tests, agentContext);
+                co_await runCtx(
+                    "string_tools",
+                    agentxx::test::run_string_tools_tests,
+                    agentContext
+                );
                 co_await runCtx("math_tools", agentxx::test::run_math_tools_tests, agentContext);
                 co_await run("share_store", agentxx::test::run_share_store_tests);
                 co_await run("session_persistence", agentxx::test::run_session_persistence_tests);
-                co_await runCtx("rag_search", agentxx::test::run_rag_search_tools_tests, agentContext);
+                co_await runCtx(
+                    "rag_search",
+                    agentxx::test::run_rag_search_tools_tests,
+                    agentContext
+                );
                 co_await runCtx("datetime", agentxx::test::run_datetime_tool_tests, agentContext);
-                co_await runCtx("filesystem", agentxx::test::run_filesystem_tools_tests, agentContext);
+                co_await runCtx(
+                    "filesystem",
+                    agentxx::test::run_filesystem_tools_tests,
+                    agentContext
+                );
                 co_await runCtx("command", agentxx::test::run_command_tools_tests, agentContext);
                 co_await run("worktree", agentxx::test::run_worktree_tests);
-                co_await runCtx("web_search", agentxx::test::run_web_search_tools_tests, agentContext);
-                co_await runCtx("codegraph", agentxx::test::run_codegraph_tools_tests, agentContext);
+                co_await runCtx(
+                    "web_search",
+                    agentxx::test::run_web_search_tools_tests,
+                    agentContext
+                );
+                co_await runCtx(
+                    "codegraph",
+                    agentxx::test::run_codegraph_tools_tests,
+                    agentContext
+                );
                 co_await runCtx(
                     "screen_capture",
                     agentxx::test::run_screen_capture_tests,
@@ -312,7 +332,10 @@ int main(int argn, char** argv) {
                 co_await run("anthropic_provider", agentxx::test::run_anthropic_provider_tests);
                 co_await run("plugins", agentxx::test::run_plugin_tests);
                 co_await run("plugin_resources", agentxx::test::run_plugin_resource_tests);
-                co_await run("plugin_multi_instance", agentxx::test::run_plugin_multi_instance_tests);
+                co_await run(
+                    "plugin_multi_instance",
+                    agentxx::test::run_plugin_multi_instance_tests
+                );
                 co_await run("client_plugins", agentxx::test::run_client_plugin_tests);
                 co_await run("cancel", agentxx::test::run_cancel_tests);
                 co_await run("message_supplement", agentxx::test::run_message_supplement_tests);
