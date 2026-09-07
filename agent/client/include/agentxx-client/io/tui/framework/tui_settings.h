@@ -172,6 +172,9 @@ public:
         auto lang = db_->getInt64("tui.lang", -1);
         if (lang >= 0 && lang < static_cast<int64_t>(kLanguageNames.size())) {
             language_.store(static_cast<int>(lang), std::memory_order_release);
+            if (lang == static_cast<int>(TuiLanguage::Auto)) {
+                refreshAutoLanguage();
+            }
         }
     }
 

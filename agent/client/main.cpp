@@ -183,9 +183,6 @@ static void applySharedRuntimeConfig(
     config->permissionAllowPaths = yamlCfg.permissionAllowPaths;
     config->permissionDenyPaths  = yamlCfg.permissionDenyPaths;
 
-    // 语言配置 (默认 "en", 不支持 auto)
-    config->language = agentxx::agent::normalizeLanguage(yamlCfg.language);
-
     // 子代理开关 (yaml `subagent.enable`, 默认 true)
     config->enableSubagent = yamlCfg.enableSubagent;
     // git worktree 模式 (yaml `worktree.enable`, 默认 false)
@@ -593,24 +590,20 @@ Options:
     applySharedRuntimeConfig(config, yamlCfg, resolvePath);
 
     // ======================== TUI 全局设置持久化 ========================
-    // 全局设置 (动画等级/日志等级等) 存于 {dataDir}/sqlite/global.db,
+    // 全局设置 (主题/动画等级/日志等级/末尾思考/界面语言等) 存于 {dataDir}/sqlite/global.db,
     // 绑定到 TUISettings 单例, 设置变更时同步落库, 重启后恢复
-    // - dataDir 未配置 (为空) 时: 不绑定数据库, 设置仅存内存 (进程生命周期有效)
+    // - dataDir 未配置 (为空) 时: 回退使用系统默认数据目录 (Platform Default), 确保设置可靠持久化到数据库
     // - 注意: 系统资源显示开关已迁移到 agentxx_system_monitor 插件 (命令 /sysinfo)
     if (mode == "tui") {
-        if (resolvedDataDir.empty()) {
-            XX_LOGI("[Config] data_dir not set: TUI settings will NOT be persisted "
-                    "(in-memory only)");
-        } else {
-            auto settingsDb = std::make_shared<agentxx::util::SettingsDb>(
-                agentxx::agent::AgentConfigStatic::getGlobalSettingsDbPath(resolvedDataDir)
-            );
-            TUISettings::instance().attachDb(std::move(settingsDb));
-        }
-        // 若配置文件显式指定了语言，更新 TUI 界面语言
-        if (!yamlCfg.language.empty()) {
-            TUISettings::instance().setLanguageByCode(yamlCfg.language);
-        }
+        const std::string globalDbDir = resolvedDataDir.empty()
+                                            ? agentxx::agent::AgentConfigStatic::systemDataDir()
+                                            : resolvedDataDir;
+        auto settingsDb = std::make_shared<agentxx::util::SettingsDb>(
+            agentxx::agent::AgentConfigStatic::getGlobalSettingsDbPath(globalDbDir)
+        );
+        TUISettings::instance().attachDb(std::move(settingsDb));
+        // 本地会话 Agent 语言默认同步为 TUI 设置项恢复出的实际生效语言 ("zh-cn" 或 "en")
+        config->language = TUISettings::instance().languageCode();
     }
 
     // ======================== CodeAgent Websocket Server 服务模式 ========================

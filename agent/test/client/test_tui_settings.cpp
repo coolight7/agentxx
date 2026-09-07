@@ -510,7 +510,7 @@ void test_concurrent_access() {
 }
 
 void test_persist_to_db() {
-    // 绑定全局设置数据库后, 设置变更同步落库 (验证写入 global.db 文件)
+    // 绑定全局设置数据库后, 验证从数据库恢复已存设置, 以及设置变更同步落库 (写入 global.db 文件)
     auto& settings = TUISettings::instance();
 
     auto root = fs::temp_directory_path()
@@ -520,8 +520,19 @@ void test_persist_to_db() {
                 );
     auto dbPath = (root / "global.db").string();
 
+    // 预先向数据库写入历史记录 (模拟上次会话已保存的语言和主题)
+    {
+        agentxx::util::SettingsDb pre(dbPath);
+        pre.setInt64("tui.lang", static_cast<int64_t>(TuiLanguage::ZhCn));
+        pre.setInt64("tui.theme", static_cast<int64_t>(TUISettings::kThemeLight));
+    }
+
     auto db = std::make_shared<agentxx::util::SettingsDb>(dbPath);
     settings.attachDb(db);
+
+    // 校验 attachDb 成功从数据库恢复已存设置
+    XX_TEST_EXPECT_TRUE(settings.language() == TuiLanguage::ZhCn);
+    XX_TEST_EXPECT_TRUE(settings.themeKind() == TUISettings::kThemeLight);
 
     // 写入设置 → 直接读库文件校验持久化 (绕过单例, 模拟重启后的新进程)
     settings.setThemeKind(TUISettings::kThemeLight);
