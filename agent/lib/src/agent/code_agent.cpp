@@ -142,48 +142,49 @@ Read-only tasks (analysis/questions) don't need a worktree.)";
             agentxx::middleware::MiddlewareWrapHandle<agentxx::middleware::BaseMiddlewareState>>(
             "LogPrint",
             agentContext,
-            (agentxx::middleware::onGraphNodeBeforeCallFunc) nullptr,
-            (agentxx::middleware::onGraphNodeAfterCallFunc) nullptr,
-            (agentxx::middleware::onGraphNodeBeforeCallFunc) nullptr,
-            [config
-             = agentContext->agentConfig](neograph::graph::NodeInput& in) -> asio::awaitable<void> {
-                if (config->logPrintMessagesBeforeLLM) {
-                    agentxx::middleware::BaseMiddlewareHandleInterface::printMessages(
-                        in.state.get_messages(),
-                        config->logPrintMessagesBeforeLLMWithSystemMsg
-                    );
-                }
-                co_return;
-            },
-            (agentxx::middleware::onGraphNodeAfterCallFunc) nullptr,
-            [ctx = std::weak_ptr<AgentContext>(agentContext),
-             config
-             = agentContext->agentConfig](neograph::graph::NodeInput& in) -> asio::awaitable<void> {
-                if (config->logPrintToolcall) {
-                    agentxx::nodes::ToolcallWrapNode::defStdoutLogOnToolcallStart(in);
-                }
-                if (auto ctxPtr = ctx.lock()) {
-                    auto session = ctxPtr->sessions->get(in.ctx.thread_id);
-                    if (session) {
-                        session->activity = SessionActivity::ExecutingTool;
+            agentxx::middleware::MiddlewareHooks{
+                .onModelcallRun = [config = agentContext->agentConfig](
+                                      neograph::graph::NodeInput& in
+                                  ) -> asio::awaitable<void> {
+                    if (config->logPrintMessagesBeforeLLM) {
+                        agentxx::middleware::BaseMiddlewareHandleInterface::printMessages(
+                            in.state.get_messages(),
+                            config->logPrintMessagesBeforeLLMWithSystemMsg
+                        );
                     }
-                }
-                co_return;
-            },
-            [ctx = std::weak_ptr<AgentContext>(agentContext), config = agentContext->agentConfig](
-                const neograph::graph::NodeInput& in,
-                neograph::graph::NodeOutput&      result
-            ) -> asio::awaitable<void> {
-                if (config->logPrintToolcall) {
-                    agentxx::nodes::ToolcallWrapNode::defStdoutLogOnToolcallEnd(in, result);
-                }
-                if (auto ctxPtr = ctx.lock()) {
-                    auto session = ctxPtr->sessions->get(in.ctx.thread_id);
-                    if (session) {
-                        session->activity = SessionActivity::Idle;
+                    co_return;
+                },
+                .onToolcallStart = [ctx = std::weak_ptr<AgentContext>(agentContext),
+                                    config = agentContext->agentConfig](
+                                       neograph::graph::NodeInput& in
+                                   ) -> asio::awaitable<void> {
+                    if (config->logPrintToolcall) {
+                        agentxx::nodes::ToolcallWrapNode::defStdoutLogOnToolcallStart(in);
                     }
-                }
-                co_return;
+                    if (auto ctxPtr = ctx.lock()) {
+                        auto session = ctxPtr->sessions->get(in.ctx.thread_id);
+                        if (session) {
+                            session->activity = SessionActivity::ExecutingTool;
+                        }
+                    }
+                    co_return;
+                },
+                .onToolcallEnd = [ctx = std::weak_ptr<AgentContext>(agentContext),
+                                  config = agentContext->agentConfig](
+                                     const neograph::graph::NodeInput& in,
+                                     neograph::graph::NodeOutput&      result
+                                 ) -> asio::awaitable<void> {
+                    if (config->logPrintToolcall) {
+                        agentxx::nodes::ToolcallWrapNode::defStdoutLogOnToolcallEnd(in, result);
+                    }
+                    if (auto ctxPtr = ctx.lock()) {
+                        auto session = ctxPtr->sessions->get(in.ctx.thread_id);
+                        if (session) {
+                            session->activity = SessionActivity::Idle;
+                        }
+                    }
+                    co_return;
+                },
             }
         )
     );

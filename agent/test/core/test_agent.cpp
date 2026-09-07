@@ -120,16 +120,12 @@ public:
         Base(
             "ThrowToolcallStart",
             agentContext,
-            nullptr, // onAgentcallStart
-            nullptr, // onAgentcallEnd
-            nullptr, // onModelcallStart
-            nullptr, // onModelcallRun
-            nullptr, // onModelcallEnd
-            // onToolcallStart: 每次 tools 节点 start 阶段抛出异常
-            [](neograph::graph::NodeInput&) -> asio::awaitable<void> {
-                throw std::runtime_error("simulated toolcall start failure");
-            },
-            nullptr // onToolcallEnd
+            agentxx::middleware::MiddlewareHooks{
+                // onToolcallStart: 每次 tools 节点 start 阶段抛出异常
+                .onToolcallStart = [](neograph::graph::NodeInput&) -> asio::awaitable<void> {
+                    throw std::runtime_error("simulated toolcall start failure");
+                },
+            }
         ) {}
 };
 
