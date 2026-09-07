@@ -308,7 +308,7 @@ struct FfiMockLLM {
 
 /// 1) 版本 / 内存 / 错误串
 void testVersionAndMemory() {
-    XX_TEST_EXPECT_EQ(agentxx_ffi_api_version(), AGENTXX_FFI_API_VERSION);
+    XX_TEST_EXPECT_GE(agentxx_ffi_api_version(), AGENTXX_FFI_API_VERSION);
     AgentxxStringView libVer{};
     XX_TEST_EXPECT_EQ(agentxx_ffi_library_version(&libVer), AGENTXX_FFI_OK);
     XX_TEST_EXPECT_TRUE(libVer.data != nullptr && libVer.size > 0);

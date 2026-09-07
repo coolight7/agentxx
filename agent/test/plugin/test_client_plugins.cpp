@@ -834,8 +834,8 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         mgr->onPluginData(orphan);
     }
 
-    // ---- 11. 接口协商: 宿主支持集 / require 门禁 / 发现通道 ----
-    // - 门禁双道生效: dlopen 前跳过 (loadConfiguredClientPlugins) 与
+    // ---- 11. 接口协商: 宿主支持集 / require 限制 / 发现通道 ----
+    // - 限制双道生效: dlopen 前跳过 (loadConfiguredClientPlugins) 与
     //   dlopen 后直连路径 (loadNativeAsync); 此处覆盖后者 + 发现通道
     {
         namespace fs = std::filesystem;
@@ -850,7 +850,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         // 未置位的能力不得出现 (keybind 预留位未置)
         XX_TEST_EXPECT_FALSE(stateJson.find("agentxx.client.keybind") != std::string::npos);
 
-        // 11.2 require 未满足 → 加载跳过并记录原因 (直连路径, dlopen 后门禁):
+        // 11.2 require 未满足 → 加载跳过并记录原因 (直连路径, dlopen 后限制):
         // 拷贝真实可加载的示例库, manifest 声明本宿主不支持的必选接口
         auto gateDir
             = fs::temp_directory_path()
@@ -895,7 +895,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 );
             }
 
-            // 11.3 同一插件声明全部可满足 → 正常加载 (门禁放行回归) +
+            // 11.3 同一插件声明全部可满足 → 正常加载 (限制放行回归) +
             //      READY payload 携带接口清单
             {
                 std::ofstream f(gateDir / "plugin.yaml", std::ios::binary | std::ios::trunc);
@@ -927,11 +927,11 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 };
                 const auto events11 = agentxx::plugin::ClientIfaces::query(&okInst->host).events;
                 auto       sub      = events11 ? events11->subscribe(
-                                          &okInst->host,
-                                          AGENTXX_CLIENT_EVT_READY,
-                                          readyFn,
-                                          &readyPayload
-                                      )
+                               &okInst->host,
+                               AGENTXX_CLIENT_EVT_READY,
+                               readyFn,
+                               &readyPayload
+                           )
                                                : nullptr;
                 XX_TEST_EXPECT_TRUE(sub != nullptr);
                 mgr->onReady();

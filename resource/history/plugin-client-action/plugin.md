@@ -526,7 +526,7 @@ sequenceDiagram
 | `agent/lib/include/agentxx/plugin/api/client_plugin_api.h` | `VERSION 2→3`；加 `ActionContext/Fn`、`OverlayType/Spec`；`UiIface` 尾部加 4 函数 |
 | `agent/lib/include/agentxx/plugin/plugin_common.h` | 加 `ClientAction / ClientOverlay` 能力常量 |
 | `agent/lib/include/agentxx/plugin/client_plugin_manager.h` | 加 `ClientActionBinding`、`Registry::actionBindings`、`Instance::actionRegs`、`dispatchAction/openOverlay/closeOverlay`、`Adapter::onOverlayOpen/Close` |
-| `agent/lib/src/plugins/client_plugin_manager.cpp` | 绑定 CRUD/快照/detach/enable 恢复/派发校验/vtable 四件套/`clientUiIface` 门禁 |
+| `agent/lib/src/plugins/client_plugin_manager.cpp` | 绑定 CRUD/快照/detach/enable 恢复/派发校验/vtable 四件套/`clientUiIface` 限制 |
 | `agent/lib/include/agentxx/plugin/api/plugin_kit.h` | 加 `kit::ActionController` |
 | `agent/client/include/agentxx-client/io/tui/agent_tui.h` | 删 planGraph 成员/`openMermaidDiagram`；加 `UiHitTarget/hitTargets_/openOverlay/closeOverlay/overlayOwner_` |
 | `agent/client/src/io/tui/agent_tui.cpp` | 删 planGraph 分支；加通用命中派发 + `openOverlay` 实现 + `renderPluginPanel` 通用 button |

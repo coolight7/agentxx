@@ -294,9 +294,9 @@ asio::awaitable<std::shared_ptr<ClientPluginInstance>> ClientPluginManager::load
             XX_LOGW("[client_plugin] `{}` get_info threw unknown exception", path);
         }
         if (info) {
-            if (info->api_version != AGENTXX_CLIENT_PLUGIN_API_VERSION) {
+            if (info->api_version < AGENTXX_CLIENT_PLUGIN_API_VERSION) {
                 XX_LOGE(
-                    "[client_plugin] `{}` api_version {} mismatch (host expects {})",
+                    "[client_plugin] `{}` api_version {} mismatch (host expects >= {})",
                     path,
                     info->api_version,
                     AGENTXX_CLIENT_PLUGIN_API_VERSION
@@ -323,7 +323,7 @@ asio::awaitable<std::shared_ptr<ClientPluginInstance>> ClientPluginManager::load
         co_return nullptr;
     }
 
-    // ---- 接口协商门禁 (三层协商第 2 层; 见
+    // ---- 接口协商限制 (三层协商第 2 层; 见
     //      [plugin_common.h](/agent/lib/include/agentxx/plugin/plugin_common.h) 接口协商节) ----
     // require 中本侧相关项未满足 → 跳过加载 (INFO + 记录原因, 非错误:
     // 同一插件目录服务 cli/tui/gui 多宿主, 本宿主缺某接口是预期情况);
@@ -415,8 +415,8 @@ asio::awaitable<std::shared_ptr<ClientPluginInstance>> ClientPluginManager::load
     inst->host.opaque     = inst.get();
     inst->host.vtable     = hostVtable();
 
-    // (v4) min_ui_caps 位图门禁已移除: 接口要求统一由上方清单 interfaces
-    // require 门禁承担 (字符串集, 见
+    // (v4) min_ui_caps 位图限制已移除: 接口要求统一由上方清单 interfaces
+    // require 限制承担 (字符串集, 见
     // [plugin_common.h](/agent/lib/include/agentxx/plugin/plugin_common.h) 接口协商节)
 
     // entry 卸载到内部线程池执行 (A2): 与 agent 侧一致 —— entry 内 vtable
@@ -710,7 +710,7 @@ asio::awaitable<void>
         const PluginConfig* cfg = nullptr;
     };
 
-    // 宿主支持接口集 (加载前计算一次; 三层协商第 2 层的 require 门禁数据源)
+    // 宿主支持接口集 (加载前计算一次; 三层协商第 2 层的 require 限制数据源)
     const auto hostIfaces = hostSupportedInterfaces();
 
     std::vector<Item> items;
@@ -743,7 +743,7 @@ asio::awaitable<void>
                 )) {
                 it.name    = name;
                 it.depends = std::move(depends);
-                // 接口协商门禁 (dlopen 前跳过): require 未满足 → 记录原因并
+                // 接口协商限制 (dlopen 前跳过): require 未满足 → 记录原因并
                 // 跳过 (INFO 非错误; loadNativeAsync 内对直连调用有同款检查)
                 auto check = checkInterfacesForSide(ifaces, hostIfaces, false);
                 if (!check.satisfied) {
@@ -1995,7 +1995,7 @@ void AGENTXX_PLUGIN_CALL xx_cclose_overlay(const AgentxxPluginHost* host) {
 }
 
 /// "agentxx.client.ui" 展示接口表访问器: 表内成员恒非空 (函数实现存在), 子能力是否
-/// 可用由各 register 入口的 hostSupportedInterfaces 门禁决定 (拒绝时返回
+/// 可用由各 register 入口的 hostSupportedInterfaces 限制决定 (拒绝时返回
 /// NULL/非 0) —— 与接口表 "NULL = 不支持" 契约的分工: 表级 NULL 用于宿主
 /// 整体缺失某子能力入口的场景 (当前宿主全量装配, 保留判空语义供第三方精简
 /// 宿主使用)。以函数内静态表实现 (前向引用无需 extern 声明)
@@ -2632,7 +2632,7 @@ int ClientPluginManager::registerCommand(
     std::string nameStr = svToStr(name);
     std::string descStr = svToStr(description);
     // 命令输入管线接口 (agentxx.client.command): 无命令输入面的宿主拒绝注册 ——
-    // 与其他 register_* 的接口门禁行为一致
+    // 与其他 register_* 的接口限制行为一致
     if (!hostSupportedInterfaces().contains(std::string{plugin_interfaces::ClientCommand})) {
         XX_LOGW(
             "[client_plugin] command `{}` rejected: interface agentxx.client.command unsupported",

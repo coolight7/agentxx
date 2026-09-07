@@ -39,7 +39,7 @@ Agentxx 插件系统采用 **纯 C ABI + COM 风格接口表查询**：
   - 核心 vtable 精简：移除原 `strdup` 槽位，改为基于 `alloc` 的头文件内联实现 `agentxx_plugin_strdup`
   - C++ 辅助便捷层：`AgentxxPluginStringView` 与 `AgentxxPluginString` 内置 `operator const T*()` 隐式取址转换与 `empty()` 方法，文件尾部提供值传兼容重载与 `agentxx_plugin_string_free` 重载
 - **接口表独立演进**：每张表首字段 `int32_t version` 独立版本号；表内函数指针可能为 `NULL` (宿主未实现该子能力，调用前判空)
-- **版本门禁**：全局 `AGENTXX_PLUGIN_API_VERSION` / `AGENTXX_CLIENT_PLUGIN_API_VERSION` 均重置为 1，加载时精确匹配否则拒绝；新增能力 = 新增接口表或表内追加成员并递增该表版本，全局版本号不动
+- **版本限制**：全局 `AGENTXX_PLUGIN_API_VERSION` / `AGENTXX_CLIENT_PLUGIN_API_VERSION` 均重置为 1，加载时要求 `>=` 宿主版本否则拒绝；新增能力 = 新增接口表或表内追加成员并递增该表版本，全局版本号不动
 - **线程约定**：`query_interface/alloc` 任意线程；注册类与 session/config/prompt 等 IO 约束操作由宿主内部投递同步等待；两件套 `start/cancel` 由宿主在 IO 线程驱动 (单次 <~1ms)；`AgentxxPluginOperatorNotify.done` 可任意线程回调；宿主派发给插件的完成回调 (`AgentxxOpCb`/sleep/offload done) 保证在 IO 线程 `post` 入队
 
 ---

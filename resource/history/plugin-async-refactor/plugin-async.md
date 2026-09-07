@@ -192,7 +192,7 @@ sleep_poll 型的等价形态，cb 即推进点）；C++ 插件则直接用 kit 
 ### 4.1 入口符号与全局版本
 
 ```c
-#define AGENTXX_PLUGIN_API_VERSION 1   // 重新定义; 宿主精确匹配门禁, 无历史兼容
+#define AGENTXX_PLUGIN_API_VERSION 1   // 重新定义; 宿主精确匹配限制, 无历史兼容
 入口符号不变: agentxx_plugin_get_info / _create(host, void** ctx) / _destroy(ctx)
 client 侧对称三符号不变 (client_plugin_api.h 同步小改, 见 4.4)
 ```
@@ -270,7 +270,7 @@ void  (*cancel_sleep)(const AgentxxHost* host, void* timer);
   `host->free`；CANCELLED 时 payload 可为 NULL（同旧 take 语义）。
 - `ToolSpec` 字符串字段、flags、timeout 语义沿用；**删除字段**：`execute_poll`；
   `HookSpec` 删除 `hook_poll`；`register_capability_ex` 删除 poll 参数
-  （`AgentxxCapStartFn` 签名不变）。全局版本门禁使布局变更无需过渡。
+  （`AgentxxCapStartFn` 签名不变）。全局版本限制使布局变更无需过渡。
 
 ### 4.4 client_plugin_api.h
 
@@ -492,7 +492,7 @@ Phase E  测试补充 + windows/linux debug 全量构建回归
 每阶段完成后编译 + 测试通过再进入下一阶段；Windows 环境优先验证（当前开发机），
 Linux 交叉检查（脚本构建）。
 
-ABI 破坏性删除集中在 C2 一次完成：版本重置门禁使布局变更无需兼容过渡，但工程顺序上
+ABI 破坏性删除集中在 C2 一次完成：版本重置限制使布局变更无需兼容过渡，但工程顺序上
 「先并存迁移、后删旧面」保证**任意中间提交均可编译、可测试、可回退**（原方案的
 Phase A 即删 poll/HostOp，会使 4 个 polled 插件与 7 组测试用例当场编译失败，
 「Phase A 全绿」不可达）。

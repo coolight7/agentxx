@@ -232,7 +232,7 @@ std::string resolvePluginEntryPath(const std::filesystem::path& dir, const std::
 /// 背景: client 宿主形态多样 (cli/tui/gui/第三方 app), 各自支持的插件接口
 /// 不同; server (server-io) 仅有 libagentxx 一个实现, agent 侧接口集 ≡ 核心
 /// 契约 + 全部标准接口表 (版本匹配即全集)。协商机制因此是不对称的:
-/// 机制通用, 实际起作用的门禁集中在 client 侧。
+/// 机制通用, 实际起作用的限制集中在 client 侧。
 ///
 /// 三层设计 (详见 [plugins.md](/docs/zh-cn/design.md/plugins.md) 4.7):
 /// 1. 声明层: 插件 plugin.yaml `interfaces.require/optional` 列出依赖的接口
@@ -251,7 +251,7 @@ std::string resolvePluginEntryPath(const std::filesystem::path& dir, const std::
 /// (第三方私有接口用 "<vendor>.<name>", 宿主不认识的名称一律视为不支持);
 /// 前缀过滤规则见 sideCaresAboutInterface。
 ///
-/// api_version 精确匹配门禁保留且不被本机制替代: 核心结构体是 C 结构,
+/// api_version 限制 (要求 >= 当前基准版本) 保留且不被本机制替代: 核心结构体是 C 结构,
 /// 老宿主+新插件按新偏移读字段是 UB —— 接口协商只解决"功能子集"维度。
 /// COM 风格接口表机制使未来新增能力不再动全局版本号: 每个接口表自带
 /// version 字段独立演进。

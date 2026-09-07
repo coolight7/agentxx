@@ -15,7 +15,7 @@
 ///   * 跨堆内存两件套: alloc(uint64_t) / free(void*)
 ///   * COM 风格能力查询: query_interface (strdup 移出 vtable 改由内联函数基于 alloc 实现)
 /// - 版本策略:
-///   * 全局 AGENTXX_PLUGIN_API_VERSION 严格匹配门禁 (当前为 1)
+///   * 全局 AGENTXX_PLUGIN_API_VERSION 版本限制 (要求 >= AGENTXX_PLUGIN_API_VERSION，当前为 1)
 ///   * 接口表首字段为 int32_t version (全部重置为 1)
 ///
 #ifndef AGENTXX_PLUGIN_API_H
@@ -80,7 +80,7 @@ typedef struct AgentxxPluginString {
 /// ==================== 插件元信息 ====================
 
 typedef struct AgentxxPluginInfo {
-    int32_t                 api_version; ///< 必须 == AGENTXX_PLUGIN_API_VERSION
+    int32_t                 api_version; ///< 必须 >= AGENTXX_PLUGIN_API_VERSION
     uint32_t                _reserved;   ///< 8 字节补齐
     AgentxxPluginStringView name;        ///< 唯一标识 (只读借用)
     AgentxxPluginStringView version;

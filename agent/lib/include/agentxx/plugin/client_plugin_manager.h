@@ -158,7 +158,7 @@ public:
     /// dlHandle/pluginCtx/enabled/inflight 等), 见
     /// [plugin_manager_base.h](/agent/lib/include/agentxx/plugin/plugin_manager_base.h)
     /// 接口声明 (plugin.yaml `interfaces`; 加载时随 manifest 解析传入,
-    /// 直连库路径为空) —— 宿主门禁依据, 经 list() 暴露供展示/排查
+    /// 直连库路径为空) —— 宿主限制依据, 经 list() 暴露供展示/排查
     PluginManifestInterfaces interfaces;
 
     /// 本插件专属宿主句柄 (vtable 为宿主静态函数表, opaque 指向本实例)
@@ -320,7 +320,7 @@ public:
     }
 
     /// 宿主当前支持的接口名集合 (由 uiAdapter->supportedInterfaces() 声明;
-    /// io 线程; 门禁检查与 EVT_READY / get_client_state 的
+    /// io 线程; 限制检查与 EVT_READY / get_client_state 的
     /// interfaces 数组共用本结果 —— 单一事实来源)
     InterfaceSet hostSupportedInterfaces() const;
 
@@ -675,7 +675,7 @@ private:
 /// - supportedInterfaces(): 声明支持的接口名集合 ("client.panel" 等, 常量见
 ///   [plugin_common.h](/agent/lib/include/agentxx/plugin/plugin_common.h)
 ///   plugin_interfaces; 宿主据此装配 "client.ui" 接口表、
-///   子能力门禁判定与插件加载门禁)
+///   子能力限制判定与插件加载限制)
 /// - 各回调在 client io 线程调用, 实现必须快速返回; 涉及 UI 线程独占操作
 ///   (组件树修改/重绘) 须自行跨线程投递 (如 TUI 的 enqueueUiAction)
 /// - 注册表数据 (text/items) 由 ClientPluginManager 持有, UI 渲染经
@@ -686,7 +686,7 @@ public:
     virtual ~PluginUiAdapter() = default;
 
     /// 声明支持的接口名集合 (plugin_interfaces 常量; 决定 agentxx.client.ui 接口表
-    /// 内哪些成员非 NULL 与加载门禁判定)
+    /// 内哪些成员非 NULL 与加载限制判定)
     virtual InterfaceSet supportedInterfaces() const = 0;
 
     /// ---- 信号回调 (client io 线程; 快速返回) ----

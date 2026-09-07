@@ -243,7 +243,7 @@ interfaces:
         XX_TEST_EXPECT_TRUE(plugin::sideCaresAboutInterface("vendor.custom", true));
         XX_TEST_EXPECT_TRUE(plugin::sideCaresAboutInterface("vendor.custom", false));
 
-        // ---- 宿主支持集门禁 (client 视角; v4 起宿主接口集为名字集合,
+        // ---- 宿主支持集限制 (client 视角; v4 起宿主接口集为名字集合,
         //      位图映射已移除 —— 直接构造支持集) ----
         {
             plugin::InterfaceSet hostIf;
@@ -381,10 +381,9 @@ interfaces:
         XX_TEST_EXPECT_TRUE(rc != 0);
 
         // ---- MCP 注册亦拒绝 (冻结) ----
-        const char* mcpSpec
-            = R"({"namespace":"t_mcp","url":"http://127.0.0.1:9/sse","timeout":3})";
-        auto mcpSpecSv = agentxx::plugin::PluginStringView::fromCstr(mcpSpec);
-        rc             = res3 ? res3->register_mcp_server(&inst->host, &mcpSpecSv) : -1;
+        const char* mcpSpec = R"({"namespace":"t_mcp","url":"http://127.0.0.1:9/sse","timeout":3})";
+        auto        mcpSpecSv = agentxx::plugin::PluginStringView::fromCstr(mcpSpec);
+        rc                    = res3 ? res3->register_mcp_server(&inst->host, &mcpSpecSv) : -1;
         XX_TEST_EXPECT_TRUE(rc != 0);
         co_await sleepMs(150);
         {

@@ -2,7 +2,7 @@
 // libagentxx FFI C API 绑定 (自动生成, 勿手改)。
 // 来源头文件: agent/lib/include/agentxx/ffi_api.h (唯一跨版本稳定接口)。
 // 再生命令: 在本目录执行 `dart run ffigen` (配置见同目录 ffigen.yaml)。
-// 使用前应以 apiVersion 校验 AGENTXX_FFI_API_VERSION 契约一致性。
+// 使用前应以 apiVersion 校验 >= AGENTXX_FFI_API_VERSION 契约一致性。
 // ---------------------------------------------------------------------------
 
 // AUTO GENERATED FILE, DO NOT EDIT.

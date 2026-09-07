@@ -10,7 +10,8 @@
 ///   * 结构体入参统一采用指针传递 (const Struct*)
 ///   * 结构体返回值统一改为函数出参 (Struct* out) 并返回 int32_t 状态码
 /// - 版本策略:
-///   * 全局 AGENTXX_CLIENT_PLUGIN_API_VERSION 严格匹配门禁 (当前为 1)
+///   * 全局 AGENTXX_CLIENT_PLUGIN_API_VERSION 版本限制 (要求 >=
+///   AGENTXX_CLIENT_PLUGIN_API_VERSION，当前为 1)
 ///   * 全部接口表版本统一重置为 1
 #ifndef AGENTXX_CLIENT_PLUGIN_API_H
 #define AGENTXX_CLIENT_PLUGIN_API_H
@@ -33,7 +34,7 @@ extern "C" {
 /* ==================== 插件元信息 ==================== */
 
 typedef struct AgentxxClientPluginInfo {
-    int32_t                 api_version; ///< 必须 == AGENTXX_CLIENT_PLUGIN_API_VERSION
+    int32_t                 api_version; ///< 必须 >= AGENTXX_CLIENT_PLUGIN_API_VERSION
     uint32_t                _reserved;   ///< 8 字节补齐
     AgentxxPluginStringView name;        ///< 唯一标识 (与 agent 侧插件共用命名空间)
     AgentxxPluginStringView version;

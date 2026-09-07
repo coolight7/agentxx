@@ -61,7 +61,7 @@ preamble: |
   // libagentxx FFI C API 绑定 (自动生成, 勿手改)。
   // 来源头文件: agent/lib/include/agentxx/ffi_api.h (唯一跨版本稳定接口)。
   // 再生命令: 在本目录执行 `dart run ffigen` (配置见同目录 ffigen.yaml)。
-  // 使用前应以 apiVersion 校验 AGENTXX_FFI_API_VERSION 契约一致性。
+  // 使用前应以 apiVersion 校验 >= AGENTXX_FFI_API_VERSION 契约一致性。
   // ---------------------------------------------------------------------------
 # C 枚举整型宽度由实现定义 (ffi_api.h 的 AgentxxFFIEventType 实际为 int32);
 # ffigen 按主流编译器尺寸模拟映射为 Int32, 显式确认以消除警告

@@ -39,12 +39,12 @@ class AgentClient {
       : _lib = lib ?? openAgentxxLibrary(override: dllPath) {
     _bind = bind.AgentxxFfiBindings(_lib);
 
-    // 版本契约校验: 绑定与动态库必须同代 (AGENTXX_FFI_API_VERSION)
+    // 版本契约校验: 动态库必须满足最低版本 (>= AGENTXX_FFI_API_VERSION)
     final apiVersion = _bind.agentxx_ffi_api_version();
-    if (apiVersion != bind.AGENTXX_FFI_API_VERSION) {
+    if (apiVersion < bind.AGENTXX_FFI_API_VERSION) {
       throw StateError(
         'FFI API 版本不匹配: 动态库=$apiVersion, '
-        '绑定=${bind.AGENTXX_FFI_API_VERSION}; 请重新生成绑定或更新动态库',
+        '绑定期望>=${bind.AGENTXX_FFI_API_VERSION}; 请重新生成绑定或更新动态库',
       );
     }
   }

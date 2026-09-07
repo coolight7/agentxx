@@ -500,10 +500,10 @@ asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadNativeAsync(
     }
 
     const AgentxxPluginInfo* info = getInfoFn ? getInfoFn() : nullptr;
-    if (info && info->api_version != AGENTXX_PLUGIN_API_VERSION) {
+    if (info && info->api_version < AGENTXX_PLUGIN_API_VERSION) {
         NativeLoader::close(dl);
         XX_LOGE(
-            "Plugin `{}` API version mismatch (got {}, host requires {})",
+            "Plugin `{}` API version mismatch (got {}, host requires >= {})",
             path,
             info->api_version,
             AGENTXX_PLUGIN_API_VERSION
@@ -568,9 +568,9 @@ asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadBuiltinAsync
     }
 
     const AgentxxPluginInfo* info = entry->get_info ? entry->get_info() : nullptr;
-    if (info && info->api_version != AGENTXX_PLUGIN_API_VERSION) {
+    if (info && info->api_version < AGENTXX_PLUGIN_API_VERSION) {
         XX_LOGE(
-            "Builtin plugin `{}` API version mismatch (got {}, host requires {})",
+            "Builtin plugin `{}` API version mismatch (got {}, host requires >= {})",
             name,
             info->api_version,
             AGENTXX_PLUGIN_API_VERSION

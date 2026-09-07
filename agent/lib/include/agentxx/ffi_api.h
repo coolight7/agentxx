@@ -166,7 +166,7 @@ AGENTXX_FFI_EXPORT int32_t AGENTXX_FFI_CALL
 
 /* ==================== 版本与错误信息 ==================== */
 
-/// 当前 FFI API 版本 (== AGENTXX_FFI_API_VERSION)
+/// 当前 FFI API 版本 (>= AGENTXX_FFI_API_VERSION)
 AGENTXX_FFI_EXPORT int32_t AGENTXX_FFI_CALL agentxx_ffi_api_version(void);
 
 /// 库版本字符串视图 (静态存储, 勿释放)
