@@ -549,13 +549,12 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                    volatile int*    cancel_flag) -> std::string {
                     auto arguments   = args_json.empty() ? neograph::json::object()
                                                          : neograph::json::parse(args_json);
-                    auto isCancelled = [&c, tid, cancel_flag]() -> bool {
+                    std::string tidStr(tid);
+                    auto isCancelled = [&c, tidStr, cancel_flag]() -> bool {
                         if (cancel_flag && *cancel_flag != 0) {
                             return true;
                         }
-                        return c.sessionCancelled(
-                            agentxx::plugin::PluginStringView::from(tid.data(), tid.size())
-                        );
+                        return c.cancelRegistry.isCancelled(tidStr);
                     };
                     return fileListExecute(arguments, std::string(workDir), isCancelled);
                 }
@@ -574,13 +573,12 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                    volatile int*    cancel_flag) -> std::string {
                     auto arguments   = args_json.empty() ? neograph::json::object()
                                                          : neograph::json::parse(args_json);
-                    auto isCancelled = [&c, tid, cancel_flag]() -> bool {
+                    std::string tidStr(tid);
+                    auto isCancelled = [&c, tidStr, cancel_flag]() -> bool {
                         if (cancel_flag && *cancel_flag != 0) {
                             return true;
                         }
-                        return c.sessionCancelled(
-                            agentxx::plugin::PluginStringView::from(tid.data(), tid.size())
-                        );
+                        return c.cancelRegistry.isCancelled(tidStr);
                     };
                     return fileGlobExecute(arguments, std::string(workDir), isCancelled);
                 }
@@ -599,13 +597,12 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                    volatile int*    cancel_flag) -> std::string {
                     auto arguments   = args_json.empty() ? neograph::json::object()
                                                          : neograph::json::parse(args_json);
-                    auto isCancelled = [&c, tid, cancel_flag]() -> bool {
+                    std::string tidStr(tid);
+                    auto isCancelled = [&c, tidStr, cancel_flag]() -> bool {
                         if (cancel_flag && *cancel_flag != 0) {
                             return true;
                         }
-                        return c.sessionCancelled(
-                            agentxx::plugin::PluginStringView::from(tid.data(), tid.size())
-                        );
+                        return c.cancelRegistry.isCancelled(tidStr);
                     };
                     return fileGrepExecute(arguments, std::string(workDir), isCancelled);
                 }

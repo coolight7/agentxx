@@ -18,6 +18,7 @@
 #include "fmt/format.h"
 #include "neograph/json.h"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -35,6 +36,8 @@
 #include <string_view>
 #include <thread>
 #include <unordered_map>
+#include <unordered_set>
+#include <vector>
 
 namespace agentxx {
 namespace plugin {
@@ -484,16 +487,285 @@ struct Logger {
     }
 };
 
+/* ==================== 插件框架事件驱动取消注册表 (CancelRegistry) ==================== */
+
+/// 插件框架事件驱动取消注册表
+/// - 职责: 管理会话级别与操作级别的取消事件注册、注销与原子通知
+/// - 线程安全: 完全支持多线程并发注册、注销与触发
+/// - 内存自治: 纯堆内存实例，无任何全局/静态状态，严格契合多实例契约
+/// - 零悬挂保证: unregisterCallback 会等待并排他锁定正在执行中的回调，确保调用栈上的对象不会在回调执行中析构
+class CancelRegistry {
+public:
+    using CancelCallback = std::function<void()>;
+    using RegId          = uint64_t;
+
+    /// 回调实体封装：支持并发排他保护与生命周期状态标记
+    struct CallbackEntry {
+        std::recursive_mutex mu;
+        bool                 disposed{false};
+        CancelCallback       cb;
+    };
+
+    CancelRegistry()  = default;
+    ~CancelRegistry() {
+        cancelAll();
+    }
+
+    CancelRegistry(const CancelRegistry&)            = delete;
+    CancelRegistry& operator=(const CancelRegistry&) = delete;
+
+    /// 注册取消回调
+    /// - `key`: 会话标识 (sessionId / thread_id)，为空表示未绑定会话的独立操作
+    /// - `cb`: 取消触发时的回调动作
+    /// - `return`: 注册凭证 ID (0 表示由于已经处于取消态而直接同步触发，无需反注册)
+    RegId registerCallback(std::string_view key, CancelCallback cb) {
+        if (!cb) {
+            return 0;
+        }
+        auto entry = std::make_shared<CallbackEntry>();
+        entry->cb  = std::move(cb);
+
+        RegId id               = nextId_.fetch_add(1, std::memory_order_relaxed);
+        bool  alreadyCancelled = false;
+        {
+            std::lock_guard<std::mutex> lock(mu_);
+            if (!key.empty() && cancelledKeys_.count(std::string(key)) > 0) {
+                alreadyCancelled = true;
+            } else {
+                entries_[id] = entry;
+                if (!key.empty()) {
+                    keyToIds_[std::string(key)].push_back(id);
+                    idToKey_[id] = std::string(key);
+                }
+            }
+        }
+
+        // 若该 key 之前已由宿主下发过取消，锁外直接同步执行回调
+        if (alreadyCancelled) {
+            std::lock_guard<std::recursive_mutex> elock(entry->mu);
+            if (entry->cb) {
+                try {
+                    entry->cb();
+                } catch (...) {
+                }
+            }
+            return 0;
+        }
+        return id;
+    }
+
+    /// 注销回调 (命令/操作正常结束退出作用域时调用)
+    /// - 排他性防悬挂保证: 若此时 cancel 正在另一线程执行该回调，elock 会阻塞等待其执行完毕，避免回调访问已被销毁的对象
+    void unregisterCallback(RegId id) {
+        if (id == 0) {
+            return;
+        }
+        std::shared_ptr<CallbackEntry> entry;
+        {
+            std::lock_guard<std::mutex> lock(mu_);
+            auto it = entries_.find(id);
+            if (it != entries_.end()) {
+                entry = std::move(it->second);
+                entries_.erase(it);
+            } else {
+                auto ait = activeInvocations_.find(id);
+                if (ait != activeInvocations_.end()) {
+                    entry = ait->second;
+                }
+            }
+            auto kit = idToKey_.find(id);
+            if (kit != idToKey_.end()) {
+                auto vkit = keyToIds_.find(kit->second);
+                if (vkit != keyToIds_.end()) {
+                    auto& vec = vkit->second;
+                    vec.erase(std::remove(vec.begin(), vec.end(), id), vec.end());
+                    if (vec.empty()) {
+                        keyToIds_.erase(vkit);
+                    }
+                }
+                idToKey_.erase(kit);
+            }
+        }
+        if (entry) {
+            std::lock_guard<std::recursive_mutex> elock(entry->mu);
+            entry->disposed = true;
+            entry->cb       = nullptr;
+        }
+    }
+
+    /// 触发指定 key 的取消通知
+    /// - 将 key 标记为已取消；提取该 key 下所有未注销的回调并在全局锁外安全执行
+    void cancel(std::string_view key) {
+        if (key.empty()) {
+            return;
+        }
+        std::vector<std::pair<RegId, std::shared_ptr<CallbackEntry>>> toInvoke;
+        {
+            std::lock_guard<std::mutex> lock(mu_);
+            cancelledKeys_.insert(std::string(key));
+            auto kit = keyToIds_.find(std::string(key));
+            if (kit != keyToIds_.end()) {
+                for (RegId id : kit->second) {
+                    auto eit = entries_.find(id);
+                    if (eit != entries_.end()) {
+                        toInvoke.push_back({id, eit->second});
+                        activeInvocations_[id] = eit->second;
+                        entries_.erase(eit);
+                    }
+                    idToKey_.erase(id);
+                }
+                keyToIds_.erase(kit);
+            }
+        }
+        // 在全局锁外执行回调，避免回调内部加锁导致死锁
+        for (auto& [id, entry] : toInvoke) {
+            {
+                std::lock_guard<std::recursive_mutex> elock(entry->mu);
+                if (!entry->disposed && entry->cb) {
+                    try {
+                        entry->cb();
+                    } catch (...) {
+                    }
+                    entry->cb = nullptr;
+                }
+            }
+            {
+                std::lock_guard<std::mutex> lock(mu_);
+                activeInvocations_.erase(id);
+            }
+        }
+    }
+
+    /// 触发所有正在运行任务的取消 (插件卸载或实例销毁时兜底调用)
+    void cancelAll() {
+        std::vector<std::pair<RegId, std::shared_ptr<CallbackEntry>>> toInvoke;
+        {
+            std::lock_guard<std::mutex> lock(mu_);
+            for (auto& [id, entry] : entries_) {
+                toInvoke.push_back({id, entry});
+                activeInvocations_[id] = entry;
+            }
+            entries_.clear();
+            keyToIds_.clear();
+            idToKey_.clear();
+        }
+        for (auto& [id, entry] : toInvoke) {
+            {
+                std::lock_guard<std::recursive_mutex> elock(entry->mu);
+                if (!entry->disposed && entry->cb) {
+                    try {
+                        entry->cb();
+                    } catch (...) {
+                    }
+                    entry->cb = nullptr;
+                }
+            }
+            {
+                std::lock_guard<std::mutex> lock(mu_);
+                activeInvocations_.erase(id);
+            }
+        }
+    }
+
+    /// 查询指定 key 是否已被标记取消
+    /// - 纯内存无跨线程调用，避免向宿主 IO 线程高频查询
+    bool isCancelled(std::string_view key) const {
+        if (key.empty()) {
+            return false;
+        }
+        std::lock_guard<std::mutex> lock(mu_);
+        return cancelledKeys_.count(std::string(key)) > 0;
+    }
+
+    /// 重置指定 key 的取消标记 (新轮次开始时可选调用)
+    void clearCancelled(std::string_view key) {
+        if (key.empty()) {
+            return;
+        }
+        std::lock_guard<std::mutex> lock(mu_);
+        cancelledKeys_.erase(std::string(key));
+    }
+
+    /// 查询当前注册的活跃回调总数
+    size_t activeCount() const {
+        std::lock_guard<std::mutex> lock(mu_);
+        return entries_.size();
+    }
+
+    /// RAII 守卫：离开作用域自动安全注销
+    class [[nodiscard]] ScopedRegistration {
+    public:
+        ScopedRegistration() = default;
+        ScopedRegistration(CancelRegistry* reg, RegId id) :
+            reg_(reg), id_(id) {}
+        ~ScopedRegistration() {
+            if (reg_ && id_ != 0) {
+                reg_->unregisterCallback(id_);
+            }
+        }
+        ScopedRegistration(ScopedRegistration&& o) noexcept :
+            reg_(o.reg_), id_(o.id_) {
+            o.reg_ = nullptr;
+            o.id_  = 0;
+        }
+        ScopedRegistration& operator=(ScopedRegistration&& o) noexcept {
+            if (this != &o) {
+                if (reg_ && id_ != 0) {
+                    reg_->unregisterCallback(id_);
+                }
+                reg_   = o.reg_;
+                id_    = o.id_;
+                o.reg_ = nullptr;
+                o.id_  = 0;
+            }
+            return *this;
+        }
+        ScopedRegistration(const ScopedRegistration&)            = delete;
+        ScopedRegistration& operator=(const ScopedRegistration&) = delete;
+
+        RegId id() const noexcept {
+            return id_;
+        }
+        void release() noexcept {
+            reg_ = nullptr;
+            id_  = 0;
+        }
+
+    private:
+        CancelRegistry* reg_ = nullptr;
+        RegId           id_  = 0;
+    };
+
+    /// 快捷绑定接口，返回 ScopedRegistration
+    ScopedRegistration bind(std::string_view key, CancelCallback cb) {
+        RegId id = registerCallback(key, std::move(cb));
+        return ScopedRegistration(this, id);
+    }
+
+private:
+    mutable std::mutex                                        mu_;
+    std::atomic<RegId>                                        nextId_{1};
+    std::unordered_map<RegId, std::shared_ptr<CallbackEntry>> entries_;
+    std::unordered_map<RegId, std::shared_ptr<CallbackEntry>> activeInvocations_;
+    std::unordered_map<std::string, std::vector<RegId>>       keyToIds_;
+    std::unordered_map<RegId, std::string>                    idToKey_;
+    std::unordered_set<std::string>                           cancelledKeys_;
+};
+
 /* ==================== 操作控制对象 (OpCtl) ==================== */
 
 struct OpCtl {
     std::shared_ptr<std::atomic<bool>> cancelFlag;
-    const AgentxxPluginHost*           host        = nullptr;
-    const AgentxxPluginCancelIface*    cancelIface = nullptr;
+    const AgentxxPluginHost*           host           = nullptr;
+    const AgentxxPluginCancelIface*    cancelIface    = nullptr;
     std::string                        threadId;
+    CancelRegistry*                    cancelRegistry = nullptr;
 
     bool cancelled() const noexcept {
         if (cancelFlag && cancelFlag->load(std::memory_order_acquire)) {
+            return true;
+        }
+        if (cancelRegistry && !threadId.empty() && cancelRegistry->isCancelled(threadId)) {
             return true;
         }
         if (host && cancelIface && cancelIface->is_cancelled && !threadId.empty()) {
@@ -752,8 +1024,11 @@ public:
     const AgentxxPluginHost* host = nullptr;
     AgentIfaces              iface;
     Logger                   log;
+    CancelRegistry           cancelRegistry; ///< 框架级事件驱动取消注册表 (每个实例独立一份)
 
-    virtual ~PluginBase() = default;
+    virtual ~PluginBase() {
+        cancelRegistry.cancelAll();
+    }
 
     void init(const AgentxxPluginHost* h) {
         host         = h;
@@ -873,11 +1148,26 @@ public:
         return iface.config->set_language(host, &langSv) == 0;
     }
 
+    /// 会话是否已取消 (优化版: 优先本地无抖动查询)
+    /// - 宿主下发 cancel 时已通过 execute_cancel 写入 cancelRegistry
+    /// - 故本地为 true 时必然已取消，直接返回 true，避免任何跨线程通信
     bool sessionCancelled(AgentxxPluginStringView tid) const {
+        if (!tid.data || tid.size == 0) {
+            return false;
+        }
+        std::string_view sv(tid.data, static_cast<size_t>(tid.size));
+        if (cancelRegistry.isCancelled(sv)) {
+            return true;
+        }
+        // 兜底 advisory: 仅当本地未记录且有接口表时才走宿主查询 (通常首次进入时判断)
         if (!host || !iface.cancel || !iface.cancel->is_cancelled) {
             return false;
         }
-        return iface.cancel->is_cancelled(host, &tid) != 0;
+        bool hostCancelled = iface.cancel->is_cancelled(host, &tid) != 0;
+        if (hostCancelled) {
+            const_cast<CancelRegistry&>(cancelRegistry).cancel(sv);
+        }
+        return hostCancelled;
     }
 
     bool sessionCancelled(std::string_view tid) const {
@@ -1717,6 +2007,7 @@ inline void tool(
         ToolShim*                          shim;
         std::shared_ptr<std::atomic<bool>> cancelFlag;
         void*                              coroAddr = nullptr;
+        std::string                        tid;
     };
 
     AgentxxPluginToolSpec spec{};
@@ -1740,15 +2031,24 @@ inline void tool(
         auto* shim = static_cast<ToolShim*>(user_data);
         (void)tool_call_id;
         (void)error_out;
-        auto  cancelFlag = std::make_shared<std::atomic<bool>>(false);
+        std::string tidStr(
+            thread_id && thread_id->data ? thread_id->data : "",
+            thread_id ? static_cast<size_t>(thread_id->size) : 0
+        );
+        CancelRegistry* cancelReg = nullptr;
+        if (shim->ctx) {
+            cancelReg = &shim->ctx->cancelRegistry;
+        }
+        auto cancelFlag = std::make_shared<std::atomic<bool>>(false);
+        if (cancelReg && !tidStr.empty() && cancelReg->isCancelled(tidStr)) {
+            cancelFlag->store(true, std::memory_order_release);
+        }
         OpCtl ctl{
             cancelFlag,
-            shim->ctx->host,
-            shim->ctx->iface.cancel,
-            std::string(
-                thread_id && thread_id->data ? thread_id->data : "",
-                thread_id ? static_cast<size_t>(thread_id->size) : 0
-            )
+            shim->ctx ? shim->ctx->host : nullptr,
+            shim->ctx ? shim->ctx->iface.cancel : nullptr,
+            tidStr,
+            cancelReg
         };
 
         std::string_view args(
@@ -1778,7 +2078,7 @@ inline void tool(
             return nullptr;
         }
 
-        auto* job    = new Job{shim, cancelFlag, h.address()};
+        auto* job    = new Job{shim, cancelFlag, h.address(), std::move(tidStr)};
         p.opCleanup_ = [job]() {
             delete job;
         };
@@ -1793,6 +2093,9 @@ inline void tool(
         auto* job = static_cast<Job*>(op);
         if (job->cancelFlag) {
             job->cancelFlag->store(true, std::memory_order_release);
+        }
+        if (job->shim && job->shim->ctx && !job->tid.empty()) {
+            job->shim->ctx->cancelRegistry.cancel(job->tid);
         }
         if (job->coroAddr) {
             auto handle
@@ -1961,9 +2264,13 @@ inline void blocking_tool(
             thread_id ? static_cast<size_t>(thread_id->size) : 0
         );
         std::string workDirCache;
+        int32_t     initCancelFlag = 0;
         if (shim->ctx) {
             auto tidSv   = PluginStringView::from(tidStr.data(), tidStr.size());
             workDirCache = shim->ctx->workDir(tidSv);
+            if (!tidStr.empty() && shim->ctx->cancelRegistry.isCancelled(tidStr)) {
+                initCancelFlag = 1;
+            }
         }
         auto* job = new Job{
             shim,
@@ -1978,7 +2285,7 @@ inline void blocking_tool(
                 tool_call_id ? static_cast<size_t>(tool_call_id->size) : 0
             ),
             std::move(workDirCache),
-            0
+            initCancelFlag
         };
 
         if (shim->ctx->iface.scheduler && shim->ctx->iface.scheduler->offload) {
@@ -2093,10 +2400,8 @@ inline void blocking_tool(
         }
         auto* job       = static_cast<Job*>(op);
         job->cancelFlag = 1;
-        if (job->shim && job->shim->ctx) {
-            if constexpr (requires { job->shim->ctx->cancelRegistry.cancel(std::string_view{job->tid}); }) {
-                job->shim->ctx->cancelRegistry.cancel(job->tid);
-            }
+        if (job->shim && job->shim->ctx && !job->tid.empty()) {
+            job->shim->ctx->cancelRegistry.cancel(job->tid);
         }
     };
 

@@ -1719,6 +1719,168 @@ asio::awaitable<TestResult> run_plugin_tests() {
         }
     }
 
+    // ---- 36. 插件 SDK 框架级 CancelRegistry 与防 UAF / 并发测试 ----
+    {
+        // 36.1 基础功能与幂等性
+        agentxx::plugin::CancelRegistry reg;
+        XX_TEST_EXPECT_EQ(reg.activeCount(), size_t(0));
+        XX_TEST_EXPECT_FALSE(reg.isCancelled("sess_1"));
+
+        int cb1_count = 0, cb2_count = 0, cb3_count = 0;
+        auto id1 = reg.registerCallback("sess_1", [&cb1_count]() { cb1_count++; });
+        auto id2 = reg.registerCallback("sess_1", [&cb2_count]() { cb2_count++; });
+        auto id3 = reg.registerCallback("sess_2", [&cb3_count]() { cb3_count++; });
+        XX_TEST_EXPECT_TRUE(id1 != 0);
+        XX_TEST_EXPECT_TRUE(id2 != 0);
+        XX_TEST_EXPECT_TRUE(id3 != 0);
+        XX_TEST_EXPECT_EQ(reg.activeCount(), size_t(3));
+
+        // 仅取消 sess_1
+        reg.cancel("sess_1");
+        XX_TEST_EXPECT_EQ(cb1_count, 1);
+        XX_TEST_EXPECT_EQ(cb2_count, 1);
+        XX_TEST_EXPECT_EQ(cb3_count, 0);
+        XX_TEST_EXPECT_TRUE(reg.isCancelled("sess_1"));
+        XX_TEST_EXPECT_FALSE(reg.isCancelled("sess_2"));
+        XX_TEST_EXPECT_EQ(reg.activeCount(), size_t(1));
+
+        // 重复 cancel 幂等
+        reg.cancel("sess_1");
+        XX_TEST_EXPECT_EQ(cb1_count, 1);
+
+        // 预取消状态下新注册: 同步触发并返回 0
+        int cb4_count = 0;
+        auto id4 = reg.registerCallback("sess_1", [&cb4_count]() { cb4_count++; });
+        XX_TEST_EXPECT_EQ(cb4_count, 1);
+        XX_TEST_EXPECT_EQ(id4, 0ULL);
+
+        // cancelAll: 批量清理与触发剩余回调
+        reg.cancelAll();
+        XX_TEST_EXPECT_EQ(cb3_count, 1);
+        XX_TEST_EXPECT_EQ(reg.activeCount(), size_t(0));
+
+        // ScopedRegistration RAII 守卫移动与作用域注销
+        {
+            int scoped_count = 0;
+            {
+                auto guard = reg.bind("sess_scoped", [&scoped_count]() { scoped_count++; });
+                XX_TEST_EXPECT_EQ(reg.activeCount(), size_t(1));
+                // 测试 move 语义
+                auto guard2 = std::move(guard);
+                XX_TEST_EXPECT_EQ(reg.activeCount(), size_t(1));
+            }
+            XX_TEST_EXPECT_EQ(reg.activeCount(), size_t(0));
+            reg.cancel("sess_scoped");
+            XX_TEST_EXPECT_EQ(scoped_count, 0);
+        }
+
+        // clearCancelled 重置标记
+        XX_TEST_EXPECT_TRUE(reg.isCancelled("sess_1"));
+        reg.clearCancelled("sess_1");
+        XX_TEST_EXPECT_FALSE(reg.isCancelled("sess_1"));
+
+        // 36.2 防 UAF 排空验证 (Anti-UAF Protocol):
+        // 验证 unregisterCallback 必须阻塞等待正在并发执行的回调完成，杜绝回调访问被析构对象
+        {
+            struct ResourceOnStack {
+                std::atomic<bool> destroyed{false};
+                std::atomic<bool> accessedDuringCb{false};
+                ~ResourceOnStack() {
+                    destroyed.store(true, std::memory_order_release);
+                }
+            };
+
+            auto              res = std::make_unique<ResourceOnStack>();
+            std::atomic<bool> cbStarted{false};
+            std::atomic<bool> unregisterDone{false};
+
+            auto regId = reg.registerCallback("sess_uaf", [&, r = res.get()]() {
+                cbStarted.store(true, std::memory_order_release);
+                // 模拟耗时外部系统调用/中断流程
+                std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                if (!r->destroyed.load(std::memory_order_acquire)) {
+                    r->accessedDuringCb.store(true, std::memory_order_release);
+                }
+            });
+
+            // 线程 1 触发 cancel
+            std::thread tCancel([&reg]() {
+                reg.cancel("sess_uaf");
+            });
+
+            // 等待回调开始执行
+            while (!cbStarted.load(std::memory_order_acquire)) {
+                std::this_thread::yield();
+            }
+
+            // 此时回调正在执行中，我们在主线程调用 unregisterCallback
+            // 由于内部 entry->mu 保护，unregisterCallback 必须等待回调执行完毕
+            reg.unregisterCallback(regId);
+            unregisterDone.store(true, std::memory_order_release);
+
+            // 销毁资源
+            res.reset();
+
+            tCancel.join();
+            XX_TEST_EXPECT_TRUE(unregisterDone.load());
+        }
+
+        // 36.3 多线程高频并发压力测试 (8 线程并发注册/注销/取消)
+        {
+            agentxx::plugin::CancelRegistry benchReg;
+            std::atomic<int>                triggered{0};
+            std::atomic<bool>               stop{false};
+            constexpr int                   kThreads = 8;
+            std::vector<std::thread>        workers;
+
+            for (int t = 0; t < kThreads; ++t) {
+                workers.emplace_back([&benchReg, &triggered, &stop, t]() {
+                    std::string key = fmt::format("sess_bench_{}", t % 4);
+                    while (!stop.load(std::memory_order_relaxed)) {
+                        auto id = benchReg.registerCallback(key, [&triggered]() {
+                            triggered.fetch_add(1, std::memory_order_relaxed);
+                        });
+                        if (id != 0) {
+                            std::this_thread::yield();
+                            benchReg.unregisterCallback(id);
+                        }
+                    }
+                });
+            }
+
+            for (int i = 0; i < 50; ++i) {
+                benchReg.cancel("sess_bench_0");
+                benchReg.clearCancelled("sess_bench_0");
+                benchReg.cancel("sess_bench_1");
+                benchReg.clearCancelled("sess_bench_1");
+                benchReg.cancel("sess_bench_2");
+                benchReg.clearCancelled("sess_bench_2");
+                benchReg.cancel("sess_bench_3");
+                benchReg.clearCancelled("sess_bench_3");
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+
+            stop.store(true, std::memory_order_relaxed);
+            for (auto& w : workers) {
+                w.join();
+            }
+            benchReg.cancelAll();
+            XX_TEST_EXPECT_EQ(benchReg.activeCount(), size_t(0));
+        }
+
+        // 36.4 PluginBase 集成与 sessionCancelled 本地优先读取
+        {
+            struct DummyPlugin : public agentxx::plugin::PluginBase {};
+            DummyPlugin plug;
+            XX_TEST_EXPECT_FALSE(plug.sessionCancelled("test_sess"));
+
+            // 宿主 execute_cancel 或本地登记取消
+            plug.cancelRegistry.cancel("test_sess");
+            // 本地直接命中, 零跨线程 host 交互
+            XX_TEST_EXPECT_TRUE(plug.sessionCancelled("test_sess"));
+        }
+    }
+
     ctx->pluginManager->shutdownAll();
 
     co_return TestResult{g_plugin_passed, g_plugin_failed};

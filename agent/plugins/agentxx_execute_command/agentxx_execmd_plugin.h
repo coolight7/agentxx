@@ -13,7 +13,6 @@
 namespace agentxx_execmd_plugin {
 
 struct PluginCtx : public agentxx::plugin::PluginBase {
-    CancelRegistry cancelRegistry;
 };
 
 inline void pluginLog(const PluginCtx* ctx, int level, const std::string& msg) {
