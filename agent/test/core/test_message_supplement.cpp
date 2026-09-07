@@ -225,9 +225,9 @@ public:
 
     asio::awaitable<std::string> execute_async(const neograph::json&) override {
         started_->store(true, std::memory_order_release);
-        // 模拟耗时异步 IO: 最长等待 2s (取消时被取消语义中断, 未完成
-        // → 自动补充 [User canceled])
-        asio::steady_timer timer(co_await asio::this_coro::executor, std::chrono::seconds(2));
+        // 模拟耗时异步 IO: 最长等待 5s (取消时被取消语义中断, 未完成
+        // → 自动补充 [User canceled]; 5s 避免全量测试高负载下 2s 偶发自然完成)
+        asio::steady_timer timer(co_await asio::this_coro::executor, std::chrono::seconds(5));
         co_await timer.async_wait(asio::use_awaitable);
         co_return "slow done";
     }
@@ -542,6 +542,8 @@ asio::awaitable<void> test_cancel_auto_supplement() {
         XX_TEST_EXPECT_TRUE(ok);
     }
 
+    g_da_sim_tool_calls = neograph::json::array();
+    sim.stop();
     co_return;
 }
 

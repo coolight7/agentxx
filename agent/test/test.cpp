@@ -136,11 +136,19 @@ int main(int argn, char** argv) {
     };
 
     agentxx::test::TestResult total;
+    bool                      failFastTriggered = false;
+
+    struct FailFastException : public std::runtime_error {
+        using std::runtime_error::runtime_error;
+    };
 
     std::cout << "======= Test Start =======" << std::endl;
 
     // ---- 同步测试模块 ----
     auto runSync = [&](const std::string& name, auto fn) {
+        if (failFastTriggered) {
+            return;
+        }
         if (!shouldRun(name)) {
             TEST_INFO << name << ": skipped" << std::endl;
             return;
@@ -152,151 +160,181 @@ int main(int argn, char** argv) {
                   << " ---" << std::endl;
         if (r.failed > 0 && agentxx::test::g_failFast) {
             std::cout << "======= FAIL-FAST: aborting after " << name << " =======" << std::endl;
-            std::_Exit(1);
+            failFastTriggered = true;
+            throw FailFastException("fail-fast aborted");
         }
     };
 
-    runSync("string_util", agentxx::test::testStringUtil);
-    runSync("regex", agentxx::test::testRegex);
-    runSync("diff_util", agentxx::test::testDiffUtil);
-    runSync("events", agentxx::test::test_events);
-    runSync("concurrency", agentxx::test::testConcurrency);
-    runSync("misc_fixes", agentxx::test::testMiscFixes);
-    runSync("aho_corasick", agentxx::test::testAhoCorasick);
-    runSync("util_misc", agentxx::test::testUtilMisc);
-    runSync("training", agentxx::test::testTraining);
-    runSync("settings_db", agentxx::test::testSettingsDb);
-    runSync("toolcall_args", agentxx::test::testToolcallArgs);
-    runSync("ffi_c_api", agentxx::test::testFfiCApi);
+    try {
+        runSync("string_util", agentxx::test::testStringUtil);
+        runSync("regex", agentxx::test::testRegex);
+        runSync("diff_util", agentxx::test::testDiffUtil);
+        runSync("events", agentxx::test::test_events);
+        runSync("concurrency", agentxx::test::testConcurrency);
+        runSync("misc_fixes", agentxx::test::testMiscFixes);
+        runSync("aho_corasick", agentxx::test::testAhoCorasick);
+        runSync("util_misc", agentxx::test::testUtilMisc);
+        runSync("training", agentxx::test::testTraining);
+        runSync("settings_db", agentxx::test::testSettingsDb);
+        runSync("toolcall_args", agentxx::test::testToolcallArgs);
+        runSync("ffi_c_api", agentxx::test::testFfiCApi);
 #ifdef AGENTXX_BUILD_CLIENT
-    runSync("config_loader", agentxx::test::testConfigLoader);
-    runSync("tui_settings", agentxx::test::testTuiSettings);
-    runSync("tui_input", agentxx::test::testTuiInput);
-    runSync("tui_interrupt", agentxx::test::testTuiInterrupt);
-    runSync("tui_scroll", agentxx::test::testTuiScroll);
-    runSync("tui_sidebar", agentxx::test::testTuiSidebar);
-    runSync("tui_context_overlay", agentxx::test::testTuiContextOverlay);
-    runSync("tui_stream", agentxx::test::testTuiStream);
-    runSync("tui_tool_header", agentxx::test::testTuiToolHeader);
-    runSync("sessionId", agentxx::test::testSessionId);
-    runSync("mermaid_state", agentxx::test::testMermaidState);
+        runSync("config_loader", agentxx::test::testConfigLoader);
+        runSync("tui_settings", agentxx::test::testTuiSettings);
+        runSync("tui_input", agentxx::test::testTuiInput);
+        runSync("tui_interrupt", agentxx::test::testTuiInterrupt);
+        runSync("tui_scroll", agentxx::test::testTuiScroll);
+        runSync("tui_sidebar", agentxx::test::testTuiSidebar);
+        runSync("tui_context_overlay", agentxx::test::testTuiContextOverlay);
+        runSync("tui_stream", agentxx::test::testTuiStream);
+        runSync("tui_tool_header", agentxx::test::testTuiToolHeader);
+        runSync("sessionId", agentxx::test::testSessionId);
+        runSync("mermaid_state", agentxx::test::testMermaidState);
 #endif
+    } catch (const FailFastException&) {
+        // fail-fast: 同步模块失败, 已标记 failFastTriggered 并跳过后续测试
+    }
 
     // ---- 异步测试模块 ----
-    asio::co_spawn(
-        ioCtx,
-        [&]() -> asio::awaitable<void> {
-            auto agentConfig          = std::make_shared<agentxx::agent::AgentConfig>();
-            auto agentContext         = std::make_shared<agentxx::agent::AgentContext>();
-            agentContext->agentConfig = agentConfig;
+    if (!failFastTriggered) {
+        asio::co_spawn(
+            ioCtx,
+            [&]() -> asio::awaitable<void> {
+                auto agentConfig          = std::make_shared<agentxx::agent::AgentConfig>();
+                auto agentContext         = std::make_shared<agentxx::agent::AgentContext>();
+                agentContext->agentConfig = agentConfig;
 
-            auto run = [&](const std::string& name, auto testFn) -> asio::awaitable<void> {
-                if (!shouldRun(name)) {
-                    TEST_INFO << name << ": skipped" << std::endl;
-                    co_return;
-                }
-                std::cout << "--- " << name << " ---" << std::endl;
-                try {
-                    auto r  = co_await testFn();
-                    total  += r;
-                    std::cout << "--- " << name << " done: passed=" << r.passed
-                              << " failed=" << r.failed << " ---" << std::endl;
-                    if (r.failed > 0 && agentxx::test::g_failFast) {
-                        std::cout << "======= FAIL-FAST: aborting after " << name
-                                  << " =======" << std::endl;
-                        std::_Exit(1);
+                auto run = [&](const std::string& name, auto testFn) -> asio::awaitable<void> {
+                    if (failFastTriggered) {
+                        co_return;
                     }
-                } catch (const std::exception& e) {
-                    TEST_FAIL << name << " suite exception: " << e.what() << std::endl;
-                    total.failed++;
-                    if (agentxx::test::g_failFast) {
-                        std::_Exit(1);
+                    if (!shouldRun(name)) {
+                        TEST_INFO << name << ": skipped" << std::endl;
+                        co_return;
                     }
-                }
-            };
-
-            auto runCtx
-                = [&](const std::string& name, auto testFn, auto ctx) -> asio::awaitable<void> {
-                if (!shouldRun(name)) {
-                    TEST_INFO << name << ": skipped" << std::endl;
-                    co_return;
-                }
-                std::cout << "--- " << name << " ---" << std::endl;
-                try {
-                    auto r  = co_await testFn(ctx);
-                    total  += r;
-                    std::cout << "--- " << name << " done: passed=" << r.passed
-                              << " failed=" << r.failed << " ---" << std::endl;
-                    if (r.failed > 0 && agentxx::test::g_failFast) {
-                        std::cout << "======= FAIL-FAST: aborting after " << name
-                                  << " =======" << std::endl;
-                        std::_Exit(1);
+                    std::cout << "--- " << name << " ---" << std::endl;
+                    try {
+                        auto r  = co_await testFn();
+                        total  += r;
+                        std::cout << "--- " << name << " done: passed=" << r.passed
+                                  << " failed=" << r.failed << " ---" << std::endl;
+                        if (r.failed > 0 && agentxx::test::g_failFast) {
+                            std::cout << "======= FAIL-FAST: aborting after " << name
+                                      << " =======" << std::endl;
+                            failFastTriggered = true;
+                            ioCtx.stop();
+                            co_return;
+                        }
+                    } catch (const std::exception& e) {
+                        TEST_FAIL << name << " suite exception: " << e.what() << std::endl;
+                        total.failed++;
+                        if (agentxx::test::g_failFast) {
+                            std::cout << "======= FAIL-FAST: aborting after " << name
+                                      << " =======" << std::endl;
+                            failFastTriggered = true;
+                            ioCtx.stop();
+                            co_return;
+                        }
                     }
-                } catch (const std::exception& e) {
-                    TEST_FAIL << name << " suite exception: " << e.what() << std::endl;
-                    total.failed++;
-                    if (agentxx::test::g_failFast) {
-                        std::_Exit(1);
+                };
+
+                auto runCtx
+                    = [&](const std::string& name, auto testFn, auto ctx) -> asio::awaitable<void> {
+                    if (failFastTriggered) {
+                        co_return;
                     }
-                }
-            };
+                    if (!shouldRun(name)) {
+                        TEST_INFO << name << ": skipped" << std::endl;
+                        co_return;
+                    }
+                    std::cout << "--- " << name << " ---" << std::endl;
+                    try {
+                        auto r  = co_await testFn(ctx);
+                        total  += r;
+                        std::cout << "--- " << name << " done: passed=" << r.passed
+                                  << " failed=" << r.failed << " ---" << std::endl;
+                        if (r.failed > 0 && agentxx::test::g_failFast) {
+                            std::cout << "======= FAIL-FAST: aborting after " << name
+                                      << " =======" << std::endl;
+                            failFastTriggered = true;
+                            ioCtx.stop();
+                            co_return;
+                        }
+                    } catch (const std::exception& e) {
+                        TEST_FAIL << name << " suite exception: " << e.what() << std::endl;
+                        total.failed++;
+                        if (agentxx::test::g_failFast) {
+                            std::cout << "======= FAIL-FAST: aborting after " << name
+                                      << " =======" << std::endl;
+                            failFastTriggered = true;
+                            ioCtx.stop();
+                            co_return;
+                        }
+                    }
+                };
 
-            co_await run("event_stream", agentxx::test::run_event_stream_tests);
-            co_await run("event_bridge", agentxx::test::run_event_bridge_tests);
-            co_await run("interrupt_bus", agentxx::test::run_interrupt_bus_tests);
-            co_await run("subagent_bus", agentxx::test::run_subagent_bus_tests);
-            co_await run("subagent_tool", agentxx::test::run_subagent_tool_tests);
-            co_await run("agent_host", agentxx::test::run_agent_host_tests);
-            co_await runCtx("string_tools", agentxx::test::run_string_tools_tests, agentContext);
-            co_await runCtx("math_tools", agentxx::test::run_math_tools_tests, agentContext);
-            co_await run("share_store", agentxx::test::run_share_store_tests);
-            co_await run("session_persistence", agentxx::test::run_session_persistence_tests);
-            co_await runCtx("rag_search", agentxx::test::run_rag_search_tools_tests, agentContext);
-            co_await runCtx("datetime", agentxx::test::run_datetime_tool_tests, agentContext);
-            co_await runCtx("filesystem", agentxx::test::run_filesystem_tools_tests, agentContext);
-            co_await runCtx("command", agentxx::test::run_command_tools_tests, agentContext);
-            co_await run("worktree", agentxx::test::run_worktree_tests);
-            co_await runCtx("web_search", agentxx::test::run_web_search_tools_tests, agentContext);
-            co_await runCtx("codegraph", agentxx::test::run_codegraph_tools_tests, agentContext);
-            co_await runCtx(
-                "screen_capture",
-                agentxx::test::run_screen_capture_tests,
-                agentContext
-            );
-            co_await runCtx("cpu_gpu", agentxx::test::run_cpu_gpu_use_tests, agentContext);
-            co_await runCtx(
-                "text_selection",
-                agentxx::test::run_text_selection_monitor_tests,
-                agentContext
-            );
-            co_await run("http", agentxx::test::run_http_client_tests);
-            co_await run("network_timeout", agentxx::test::run_network_timeout_tests);
-            co_await run("websocket", agentxx::test::run_websocket_tests);
-            co_await run("remote_agent", agentxx::test::run_remote_agent_tests);
-            co_await run("mcp", agentxx::test::run_mcp_tests);
-            co_await run("acp", agentxx::test::run_acp_tests);
-            co_await run("a2a", agentxx::test::run_a2a_tests);
-            co_await run("openai_provider", agentxx::test::run_openai_provider_tests);
-            co_await run("anthropic_provider", agentxx::test::run_anthropic_provider_tests);
-            co_await run("plugins", agentxx::test::run_plugin_tests);
-            co_await run("plugin_resources", agentxx::test::run_plugin_resource_tests);
-            co_await run("plugin_multi_instance", agentxx::test::run_plugin_multi_instance_tests);
-            co_await run("client_plugins", agentxx::test::run_client_plugin_tests);
-            co_await run("cancel", agentxx::test::run_cancel_tests);
-            co_await run("message_supplement", agentxx::test::run_message_supplement_tests);
-            co_await run("summarization", agentxx::test::run_summarization_tests);
-            co_await run("checkpoint_store", agentxx::test::run_checkpoint_store_tests);
-            co_await run("agent", agentxx::test::run_agent_tests);
-            co_await run("memgrowth", agentxx::test::run_memgrowth_tests);
+                co_await run("event_stream", agentxx::test::run_event_stream_tests);
+                co_await run("event_bridge", agentxx::test::run_event_bridge_tests);
+                co_await run("interrupt_bus", agentxx::test::run_interrupt_bus_tests);
+                co_await run("subagent_bus", agentxx::test::run_subagent_bus_tests);
+                co_await run("subagent_tool", agentxx::test::run_subagent_tool_tests);
+                co_await run("agent_host", agentxx::test::run_agent_host_tests);
+                co_await runCtx("string_tools", agentxx::test::run_string_tools_tests, agentContext);
+                co_await runCtx("math_tools", agentxx::test::run_math_tools_tests, agentContext);
+                co_await run("share_store", agentxx::test::run_share_store_tests);
+                co_await run("session_persistence", agentxx::test::run_session_persistence_tests);
+                co_await runCtx("rag_search", agentxx::test::run_rag_search_tools_tests, agentContext);
+                co_await runCtx("datetime", agentxx::test::run_datetime_tool_tests, agentContext);
+                co_await runCtx("filesystem", agentxx::test::run_filesystem_tools_tests, agentContext);
+                co_await runCtx("command", agentxx::test::run_command_tools_tests, agentContext);
+                co_await run("worktree", agentxx::test::run_worktree_tests);
+                co_await runCtx("web_search", agentxx::test::run_web_search_tools_tests, agentContext);
+                co_await runCtx("codegraph", agentxx::test::run_codegraph_tools_tests, agentContext);
+                co_await runCtx(
+                    "screen_capture",
+                    agentxx::test::run_screen_capture_tests,
+                    agentContext
+                );
+                co_await runCtx("cpu_gpu", agentxx::test::run_cpu_gpu_use_tests, agentContext);
+                co_await runCtx(
+                    "text_selection",
+                    agentxx::test::run_text_selection_monitor_tests,
+                    agentContext
+                );
+                co_await run("http", agentxx::test::run_http_client_tests);
+                co_await run("network_timeout", agentxx::test::run_network_timeout_tests);
+                co_await run("websocket", agentxx::test::run_websocket_tests);
+                co_await run("remote_agent", agentxx::test::run_remote_agent_tests);
+                co_await run("mcp", agentxx::test::run_mcp_tests);
+                co_await run("acp", agentxx::test::run_acp_tests);
+                co_await run("a2a", agentxx::test::run_a2a_tests);
+                co_await run("openai_provider", agentxx::test::run_openai_provider_tests);
+                co_await run("anthropic_provider", agentxx::test::run_anthropic_provider_tests);
+                co_await run("plugins", agentxx::test::run_plugin_tests);
+                co_await run("plugin_resources", agentxx::test::run_plugin_resource_tests);
+                co_await run("plugin_multi_instance", agentxx::test::run_plugin_multi_instance_tests);
+                co_await run("client_plugins", agentxx::test::run_client_plugin_tests);
+                co_await run("cancel", agentxx::test::run_cancel_tests);
+                co_await run("message_supplement", agentxx::test::run_message_supplement_tests);
+                co_await run("summarization", agentxx::test::run_summarization_tests);
+                co_await run("checkpoint_store", agentxx::test::run_checkpoint_store_tests);
+                co_await run("agent", agentxx::test::run_agent_tests);
+                co_await run("memgrowth", agentxx::test::run_memgrowth_tests);
 
-            ioCtx.stop();
-        },
-        asio::detached
-    );
-    ioCtx.run();
+                ioCtx.stop();
+            },
+            asio::detached
+        );
+        ioCtx.run();
+    }
 
-    std::cout << "======= Test Done =======" << std::endl;
+    if (failFastTriggered) {
+        std::cout << "======= FAIL-FAST: Tests aborted =======" << std::endl;
+    } else {
+        std::cout << "======= Test Done =======" << std::endl;
+    }
     std::cout << "Total: passed=" << total.passed << " failed=" << total.failed << std::endl;
+    std::cout.flush();
 
     // 正常退出: 从 main 返回以刷新 stdout 并运行析构 (避免 _Exit 丢失末尾输出/掩盖资源泄漏)
     return total.failed > 0 ? 1 : 0;

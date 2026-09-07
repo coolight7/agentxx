@@ -524,7 +524,7 @@ void FfiAgentRuntime::stopInternal() {
     if (serverIO_) {
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{20};
         while (serverIO_->running() && std::chrono::steady_clock::now() < deadline) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
         if (serverIO_->running()) {
             XX_LOGW("[ffi] stop: serverIO run loop did not exit within 20s, forcing stop");

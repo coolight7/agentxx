@@ -2,6 +2,7 @@
 
 #include "agentxx-client/config_loader.h"
 #include "agentxx/util/env.h"
+#include "agentxx/util/http_client.h"
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
@@ -632,6 +633,28 @@ void test_plugin_args_paths_parse() {
     }
 }
 
+void test_yaml_to_json_big_integer() {
+    // P3-4: 超过 32 位 int 范围的大整数精确解析为整数 (long long), 不丢失精度到 double
+    auto cfg = loadYaml(R"(plugins:
+  - path: "/opt/plugins/test_plugin"
+    enabled: true
+    args:
+      big_num: 10000000000
+)");
+    XX_TEST_EXPECT_EQ(cfg.plugins.size(), size_t{1});
+    if (cfg.plugins.size() == 1) {
+        XX_TEST_EXPECT_TRUE(cfg.plugins[0].args.contains("big_num"));
+        XX_TEST_EXPECT_TRUE(cfg.plugins[0].args["big_num"].is_number_integer());
+        XX_TEST_EXPECT_EQ(cfg.plugins[0].args["big_num"].get<long long>(), 10000000000LL);
+    }
+}
+
+void test_url_decode() {
+    // P3-4: URL 解码功能验证 (支持 + 转空格, %XX 十六进制还原)
+    auto decoded = agentxx::util::HttpClient::urlDecode("hello%20world%2B%2F%3D+test%21");
+    XX_TEST_EXPECT_EQ(decoded, std::string("hello world+/= test!"));
+}
+
 void test_plugin_missing_path_skipped() {
     // path 缺失 (唯一必填字段): 跳过 (记警告)
     auto cfg = loadYaml("plugins:\n  - enabled: true\n");
@@ -1067,6 +1090,8 @@ TestResult testConfigLoader() {
     test_plugins_empty_by_default();
     test_plugin_name_form_removed();
     test_plugin_args_paths_parse();
+    test_yaml_to_json_big_integer();
+    test_url_decode();
     test_plugin_missing_path_skipped();
     test_plugin_args_env_expand();
     test_plugins_config_path_parse();
