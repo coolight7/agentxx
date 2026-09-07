@@ -1,5 +1,4 @@
 #include "agentxx-client/io/tui/agent_tui.h"
-#include "agentxx-client/util/clipboard.h"
 #include "agentxx-client/io/tui/components/input_bar.h"
 #include "agentxx-client/io/tui/components/message_list.h"
 #include "agentxx-client/io/tui/components/overlays.h"
@@ -8,6 +7,7 @@
 #include "agentxx-client/io/tui/framework/tui_i18n.h"
 #include "agentxx-client/io/tui/plugin_ui_items.h"
 #include "agentxx-client/mode_runners.h"
+#include "agentxx-client/util/clipboard.h"
 #include "agentxx/agent/model_registry.h"
 #include "agentxx/middlewares/middleware.h"
 #include "agentxx/middlewares/permission.h"
@@ -1208,7 +1208,7 @@ void TUIClientAgentIO::openOverlay(
         return;
     }
     overlayOwnerPlugin_ = std::move(ownerPlugin);
-    auto overlay = createUniversalOverlay(
+    auto overlay        = createUniversalOverlay(
         ctx_,
         type,
         title,

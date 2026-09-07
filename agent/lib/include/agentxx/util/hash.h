@@ -11,10 +11,8 @@ inline constexpr uint64_t kFnv1a64Prime       = 1099511628211ULL;
 /// - 纯 constexpr 实现, 支持编译期求值与运行期快速计算
 /// - `s`: 待哈希的输入字符串/字节切片
 /// - `seed`: 初始哈希种子, 默认取标准 FNV 偏移基准
-[[nodiscard]] inline constexpr uint64_t fnv1a64(
-    std::string_view s,
-    uint64_t seed = kFnv1a64OffsetBasis
-) noexcept {
+[[nodiscard]] inline constexpr uint64_t
+    fnv1a64(std::string_view s, uint64_t seed = kFnv1a64OffsetBasis) noexcept {
     uint64_t hash = seed;
     for (unsigned char c : s) {
         hash ^= c;

@@ -423,8 +423,8 @@ void insertAbortedToolResults(
         auto appendToolResult = neograph::json::array();
         for (const auto& tool : assistantMsg->tool_calls) {
             auto msg = neograph::ChatMessage{
-                .role         = "tool",
-                .content      = fmt::format("[{}/Exception aborted: {}]", phasePrefix, exceptionStr),
+                .role    = "tool",
+                .content = fmt::format("[{}/Exception aborted: {}]", phasePrefix, exceptionStr),
                 .tool_call_id = tool.id,
                 .tool_name    = tool.name,
                 .flags        = neograph::MessageFlag::AutoInserted,

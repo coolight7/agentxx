@@ -83,11 +83,11 @@ protected:
                         return it->second.get();
                     } else {
                         if (do_add) {
-                            auto tree_up    = std::make_unique<RouterTreePort>(in_path);
-                            auto treeptr    = tree_up.get();
-                            treeptr->parent = this;
-                            child[in_path]  = std::move(tree_up);
-                            re_path        += in_path;
+                            auto tree_up     = std::make_unique<RouterTreePort>(in_path);
+                            auto treeptr     = tree_up.get();
+                            treeptr->parent  = this;
+                            child[in_path]   = std::move(tree_up);
+                            re_path         += in_path;
                             return treeptr;
                         } else {
                             it = child.find("*");

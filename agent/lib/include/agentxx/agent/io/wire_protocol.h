@@ -979,27 +979,27 @@ inline std::string msgType(const neograph::json& j) {
 // ---------------------------------------------------------------------------
 
 neograph::json toJson(const WireHello& msg);
-WireHello helloFromJson(const neograph::json& j);
+WireHello      helloFromJson(const neograph::json& j);
 
 neograph::json toJson(const WireHelloAck& msg);
-WireHelloAck helloAckFromJson(const neograph::json& j);
+WireHelloAck   helloAckFromJson(const neograph::json& j);
 
 neograph::json toJson(const WireUserInput& msg);
-WireUserInput userInputFromJson(const neograph::json& j);
+WireUserInput  userInputFromJson(const neograph::json& j);
 
 neograph::json toJson(const WireCancel& msg);
-WireCancel cancelFromJson(const neograph::json& j);
+WireCancel     cancelFromJson(const neograph::json& j);
 
-neograph::json toJson(const WireSelectModel& msg);
+neograph::json  toJson(const WireSelectModel& msg);
 WireSelectModel selectModelFromJson(const neograph::json& j);
 
-neograph::json toJson(const WireInterruptRequest& msg);
+neograph::json       toJson(const WireInterruptRequest& msg);
 WireInterruptRequest interruptRequestFromJson(const neograph::json& j);
 
-neograph::json toJson(const WireInterruptResponse& msg);
+neograph::json        toJson(const WireInterruptResponse& msg);
 WireInterruptResponse interruptResponseFromJson(const neograph::json& j);
 
-neograph::json toJson(const WireInterruptExpired& msg);
+neograph::json       toJson(const WireInterruptExpired& msg);
 WireInterruptExpired interruptExpiredFromJson(const neograph::json& j);
 
 neograph::json toJson(const WireDelta& msg);
@@ -1009,34 +1009,34 @@ neograph::json toJson(const WireSyncPayload& msg);
 neograph::json toJson(const WireTurnResult& msg);
 WireTurnResult turnResultFromJson(const neograph::json& j);
 
-neograph::json toJson(const WireContextStats& msg);
+neograph::json   toJson(const WireContextStats& msg);
 WireContextStats contextStatsFromJson(const neograph::json& j);
 
 neograph::json toJson(const WireError& msg);
-WireError errorFromJson(const neograph::json& j);
+WireError      errorFromJson(const neograph::json& j);
 
 neograph::json toJson(const WireLog& msg);
-WireLog logFromJson(const neograph::json& j);
+WireLog        logFromJson(const neograph::json& j);
 
 neograph::json toJson(const WireGetModel& msg);
-WireGetModel getModelFromJson(const neograph::json& j);
+WireGetModel   getModelFromJson(const neograph::json& j);
 
 neograph::json toJson(const WireModelInfo& msg);
-WireModelInfo modelInfoFromJson(const neograph::json& j);
+WireModelInfo  modelInfoFromJson(const neograph::json& j);
 
-neograph::json toJson(const WireGetAppendComponentInfo& msg);
+neograph::json             toJson(const WireGetAppendComponentInfo& msg);
 WireGetAppendComponentInfo getAppendComponentInfoFromJson(const neograph::json& j);
 
-neograph::json toJson(const WireAppendComponentInfo& msg);
+neograph::json          toJson(const WireAppendComponentInfo& msg);
 WireAppendComponentInfo appendComponentInfoMessageFromJson(const neograph::json& j);
 
 neograph::json toJson(const WireGetContext& msg);
 WireGetContext getContextFromJson(const neograph::json& j);
 
-neograph::json toJson(const WireCompactContext& msg);
+neograph::json     toJson(const WireCompactContext& msg);
 WireCompactContext compactContextFromJson(const neograph::json& j);
 
-neograph::json toJson(const WireContextMessages& msg);
+neograph::json      toJson(const WireContextMessages& msg);
 WireContextMessages contextMessagesFromJson(const neograph::json& j);
 
 neograph::json toJson(const WireListSessions& msg);

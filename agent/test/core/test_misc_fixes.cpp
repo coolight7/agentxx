@@ -425,8 +425,8 @@ static void test_chain_hash() {
 
 static void test_router_multi_instance_isolation() {
     // 验证方案 3: 多个 XXRouter 实例之间缓存完全隔离, 销毁一个实例不会破坏另一个实例的缓存
-    std::string re_path;
-    auto router1 = std::make_unique<XXRouter<int, 4>>();
+    std::string      re_path;
+    auto             router1 = std::make_unique<XXRouter<int, 4>>();
     XXRouter<int, 4> router2;
 
     router1->add("/api/data", 0, std::make_shared<int>(100));

@@ -328,57 +328,153 @@ WireContextMessages contextMessagesFromJson(const neograph::json& j) {
 // ---------------------------------------------------------------------------
 
 std::string serialize(const WireMessage& msg) {
-    return std::visit([](const auto& m) -> std::string {
-        return toJson(m).dump();
-    }, msg);
+    return std::visit(
+        [](const auto& m) -> std::string {
+            return toJson(m).dump();
+        },
+        msg
+    );
 }
 
-using DeserializerFn = std::optional<WireMessage>(*)(const neograph::json&);
+using DeserializerFn = std::optional<WireMessage> (*)(const neograph::json&);
 
 static const std::unordered_map<std::string_view, DeserializerFn>& getDeserializerMap() {
     static const std::unordered_map<std::string_view, DeserializerFn> s_map = {
-        {MsgType::Hello,                  [](const neograph::json& j) -> std::optional<WireMessage> { return helloFromJson(j); }},
-        {MsgType::HelloAck,               [](const neograph::json& j) -> std::optional<WireMessage> { return helloAckFromJson(j); }},
-        {MsgType::UserInput,              [](const neograph::json& j) -> std::optional<WireMessage> { return userInputFromJson(j); }},
-        {MsgType::Cancel,                 [](const neograph::json& j) -> std::optional<WireMessage> { return cancelFromJson(j); }},
-        {MsgType::SelectModel,            [](const neograph::json& j) -> std::optional<WireMessage> { return selectModelFromJson(j); }},
-        {MsgType::InterruptRequest,       [](const neograph::json& j) -> std::optional<WireMessage> { return interruptRequestFromJson(j); }},
-        {MsgType::InterruptResponse,      [](const neograph::json& j) -> std::optional<WireMessage> { return interruptResponseFromJson(j); }},
-        {MsgType::InterruptExpired,       [](const neograph::json& j) -> std::optional<WireMessage> { return interruptExpiredFromJson(j); }},
-        {MsgType::DeltaMsg,               [](const neograph::json& j) -> std::optional<WireMessage> {
-            auto d = deltaMsgFromJson(j);
-            return d.has_value() ? std::optional<WireMessage>{std::move(d.value())} : std::nullopt;
-        }},
-        {MsgType::SyncMsg,                [](const neograph::json& j) -> std::optional<WireMessage> {
-            auto s = syncMsgFromJson(j);
-            return s.has_value() ? std::optional<WireMessage>{std::move(s.value())} : std::nullopt;
-        }},
-        {MsgType::TurnResult,             [](const neograph::json& j) -> std::optional<WireMessage> { return turnResultFromJson(j); }},
-        {MsgType::ContextStats,           [](const neograph::json& j) -> std::optional<WireMessage> { return contextStatsFromJson(j); }},
-        {MsgType::ErrorMsg,               [](const neograph::json& j) -> std::optional<WireMessage> { return errorFromJson(j); }},
-        {MsgType::LogMsg,                 [](const neograph::json& j) -> std::optional<WireMessage> { return logFromJson(j); }},
-        {MsgType::GetModel,               [](const neograph::json& j) -> std::optional<WireMessage> { return getModelFromJson(j); }},
-        {MsgType::ModelInfo,              [](const neograph::json& j) -> std::optional<WireMessage> { return modelInfoFromJson(j); }},
-        {MsgType::GetAppendComponentInfo, [](const neograph::json& j) -> std::optional<WireMessage> { return getAppendComponentInfoFromJson(j); }},
-        {MsgType::AppendComponentInfo,    [](const neograph::json& j) -> std::optional<WireMessage> { return appendComponentInfoMessageFromJson(j); }},
-        {MsgType::GetContext,             [](const neograph::json& j) -> std::optional<WireMessage> { return getContextFromJson(j); }},
-        {MsgType::CompactContext,         [](const neograph::json& j) -> std::optional<WireMessage> { return compactContextFromJson(j); }},
-        {MsgType::ContextMessages,        [](const neograph::json& j) -> std::optional<WireMessage> { return contextMessagesFromJson(j); }},
-        {MsgType::ListSessions,           [](const neograph::json& j) -> std::optional<WireMessage> { return listSessionsFromJson(j); }},
-        {MsgType::SessionList,            [](const neograph::json& j) -> std::optional<WireMessage> { return sessionListFromJson(j); }},
-        {MsgType::SwitchSession,          [](const neograph::json& j) -> std::optional<WireMessage> { return switchSessionFromJson(j); }},
-        {MsgType::SetPermission,          [](const neograph::json& j) -> std::optional<WireMessage> { return setPermissionFromJson(j); }},
-        {MsgType::PluginData,             [](const neograph::json& j) -> std::optional<WireMessage> { return pluginDataFromJson(j); }},
-        {MsgType::PluginDataUp,           [](const neograph::json& j) -> std::optional<WireMessage> { return pluginDataUpFromJson(j); }},
-        {MsgType::MessageQueueUpdate,     [](const neograph::json& j) -> std::optional<WireMessage> { return messageQueueUpdateFromJson(j); }},
-        {MsgType::ClearMessageQueue,      [](const neograph::json& j) -> std::optional<WireMessage> { return clearMessageQueueFromJson(j); }},
-        {MsgType::RemoveQueueItem,        [](const neograph::json& j) -> std::optional<WireMessage> { return removeQueueItemFromJson(j); }},
-        {MsgType::InterruptAndRunNext,    [](const neograph::json& j) -> std::optional<WireMessage> { return interruptAndRunNextFromJson(j); }},
-        {MsgType::GetViewMessages,        [](const neograph::json& j) -> std::optional<WireMessage> { return getViewMessagesFromJson(j); }},
-        {MsgType::ViewMessagesPage,       [](const neograph::json& j) -> std::optional<WireMessage> {
-            auto p = viewMessagesPageFromJson(j);
-            return p.has_value() ? std::optional<WireMessage>{std::move(p.value())} : std::nullopt;
-        }},
+        {MsgType::Hello,
+         [](const neograph::json& j) -> std::optional<WireMessage> {
+             return helloFromJson(j);
+         }},
+        {MsgType::HelloAck,
+         [](const neograph::json& j) -> std::optional<WireMessage> {
+             return helloAckFromJson(j);
+         }},
+        {MsgType::UserInput,
+         [](const neograph::json& j) -> std::optional<WireMessage> {
+             return userInputFromJson(j);
+         }},
+        {MsgType::Cancel,
+         [](const neograph::json& j) -> std::optional<WireMessage> {
+             return cancelFromJson(j);
+         }},
+        {MsgType::SelectModel,
+         [](const neograph::json& j) -> std::optional<WireMessage> {
+             return selectModelFromJson(j);
+         }},
+        {MsgType::InterruptRequest,
+         [](const neograph::json& j) -> std::optional<WireMessage> {
+             return interruptRequestFromJson(j);
+         }},
+        {MsgType::InterruptResponse,
+         [](const neograph::json& j) -> std::optional<WireMessage> {
+             return interruptResponseFromJson(j);
+         }},
+        {MsgType::InterruptExpired,
+         [](const neograph::json& j) -> std::optional<WireMessage> {
+             return interruptExpiredFromJson(j);
+         }},
+        {MsgType::DeltaMsg,
+         [](const neograph::json& j) -> std::optional<WireMessage> {
+             auto d = deltaMsgFromJson(j);
+             return d.has_value() ? std::optional<WireMessage>{std::move(d.value())} : std::nullopt;
+         }},
+        {MsgType::SyncMsg,
+         [](const neograph::json& j) -> std::optional<WireMessage> {
+             auto s = syncMsgFromJson(j);
+             return s.has_value() ? std::optional<WireMessage>{std::move(s.value())} : std::nullopt;
+         }},
+        {MsgType::TurnResult,
+         [](const neograph::json& j) -> std::optional<WireMessage> {
+             return turnResultFromJson(j);
+         }},
+        {MsgType::ContextStats,
+         [](const neograph::json& j) -> std::optional<WireMessage> {
+             return contextStatsFromJson(j);
+         }},
+        {MsgType::ErrorMsg,
+         [](const neograph::json& j) -> std::optional<WireMessage> {
+             return errorFromJson(j);
+         }},
+        {MsgType::LogMsg,
+         [](const neograph::json& j) -> std::optional<WireMessage> {
+             return logFromJson(j);
+         }},
+        {MsgType::GetModel,
+         [](const neograph::json& j) -> std::optional<WireMessage> {
+             return getModelFromJson(j);
+         }},
+        {MsgType::ModelInfo,
+         [](const neograph::json& j) -> std::optional<WireMessage> {
+             return modelInfoFromJson(j);
+         }},
+        {MsgType::GetAppendComponentInfo,
+         [](const neograph::json& j) -> std::optional<WireMessage> {
+             return getAppendComponentInfoFromJson(j);
+         }},
+        {MsgType::AppendComponentInfo,
+         [](const neograph::json& j) -> std::optional<WireMessage> {
+             return appendComponentInfoMessageFromJson(j);
+         }},
+        {MsgType::GetContext,
+         [](const neograph::json& j) -> std::optional<WireMessage> {
+             return getContextFromJson(j);
+         }},
+        {MsgType::CompactContext,
+         [](const neograph::json& j) -> std::optional<WireMessage> {
+             return compactContextFromJson(j);
+         }},
+        {MsgType::ContextMessages,
+         [](const neograph::json& j) -> std::optional<WireMessage> {
+             return contextMessagesFromJson(j);
+         }},
+        {MsgType::ListSessions,
+         [](const neograph::json& j) -> std::optional<WireMessage> {
+             return listSessionsFromJson(j);
+         }},
+        {MsgType::SessionList,
+         [](const neograph::json& j) -> std::optional<WireMessage> {
+             return sessionListFromJson(j);
+         }},
+        {MsgType::SwitchSession,
+         [](const neograph::json& j) -> std::optional<WireMessage> {
+             return switchSessionFromJson(j);
+         }},
+        {MsgType::SetPermission,
+         [](const neograph::json& j) -> std::optional<WireMessage> {
+             return setPermissionFromJson(j);
+         }},
+        {MsgType::PluginData,
+         [](const neograph::json& j) -> std::optional<WireMessage> {
+             return pluginDataFromJson(j);
+         }},
+        {MsgType::PluginDataUp,
+         [](const neograph::json& j) -> std::optional<WireMessage> {
+             return pluginDataUpFromJson(j);
+         }},
+        {MsgType::MessageQueueUpdate,
+         [](const neograph::json& j) -> std::optional<WireMessage> {
+             return messageQueueUpdateFromJson(j);
+         }},
+        {MsgType::ClearMessageQueue,
+         [](const neograph::json& j) -> std::optional<WireMessage> {
+             return clearMessageQueueFromJson(j);
+         }},
+        {MsgType::RemoveQueueItem,
+         [](const neograph::json& j) -> std::optional<WireMessage> {
+             return removeQueueItemFromJson(j);
+         }},
+        {MsgType::InterruptAndRunNext,
+         [](const neograph::json& j) -> std::optional<WireMessage> {
+             return interruptAndRunNextFromJson(j);
+         }},
+        {MsgType::GetViewMessages,
+         [](const neograph::json& j) -> std::optional<WireMessage> {
+             return getViewMessagesFromJson(j);
+         }},
+        {MsgType::ViewMessagesPage,
+         [](const neograph::json& j) -> std::optional<WireMessage> {
+             auto p = viewMessagesPageFromJson(j);
+             return p.has_value() ? std::optional<WireMessage>{std::move(p.value())} : std::nullopt;
+         }},
     };
     return s_map;
 }
@@ -393,9 +489,9 @@ std::optional<WireMessage> deserialize(std::string_view jsonText) {
     if (!j.is_object()) {
         return std::nullopt;
     }
-    std::string t = msgType(j);
+    std::string t   = msgType(j);
     const auto& map = getDeserializerMap();
-    auto it = map.find(t);
+    auto        it  = map.find(t);
     if (it != map.end()) {
         return it->second(j);
     }

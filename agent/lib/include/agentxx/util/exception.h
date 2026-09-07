@@ -48,9 +48,9 @@ enum class ControlFlowKind {
 };
 
 struct ExceptionClassification {
-    bool isControlFlow = false; // 取消信号或中断异常
-    ControlFlowKind controlKind = ControlFlowKind::None;
-    std::string errInfo;
+    bool               isControlFlow = false; // 取消信号或中断异常
+    ControlFlowKind    controlKind   = ControlFlowKind::None;
+    std::string        errInfo;
     std::exception_ptr exPtr;
 };
 
@@ -66,22 +66,21 @@ inline ExceptionClassification classifyCurrentException(
         res.controlKind   = ControlFlowKind::Cancelled;
         res.errInfo       = e.what();
         agentxx::util::autoConvertToUtf8(res.errInfo);
-        res.exPtr         = std::current_exception();
+        res.exPtr = std::current_exception();
     } catch (const neograph::graph::NodeInterrupt& e) {
         res.isControlFlow = true;
         res.controlKind   = ControlFlowKind::Interrupt;
         res.errInfo       = e.what();
         agentxx::util::autoConvertToUtf8(res.errInfo);
-        res.exPtr         = std::current_exception();
+        res.exPtr = std::current_exception();
     } catch (const neograph_asio_system_error& e) {
         if (isCancelAbort(e, cancelToken)) {
             // 取消信号中断异步 IO 产生的 operation_aborted 按取消语义处理
             res.isControlFlow = true;
             res.controlKind   = ControlFlowKind::Cancelled;
             res.errInfo       = "operation aborted";
-            res.exPtr         = std::make_exception_ptr(
-                neograph::graph::CancelledException("operation aborted")
-            );
+            res.exPtr
+                = std::make_exception_ptr(neograph::graph::CancelledException("operation aborted"));
         } else {
             auto ec      = e.code();
             auto errInfo = std::string{e.what()};
@@ -97,12 +96,12 @@ inline ExceptionClassification classifyCurrentException(
         // boost::exception 在 std::exception 之前捕获, 保留完整诊断信息
         res.errInfo = boost::diagnostic_information(e);
         agentxx::util::autoConvertToUtf8(res.errInfo);
-        res.exPtr   = std::current_exception();
+        res.exPtr = std::current_exception();
     } catch (const std::exception& e) {
         // 部分系统上 (如 Windows) 系统函数返回的异常消息使用本地代码页, 需转为 UTF-8
         res.errInfo = e.what();
         agentxx::util::autoConvertToUtf8(res.errInfo);
-        res.exPtr   = std::current_exception();
+        res.exPtr = std::current_exception();
     } catch (...) {
         res.errInfo = "unknown exception";
         res.exPtr   = std::current_exception();
@@ -111,7 +110,8 @@ inline ExceptionClassification classifyCurrentException(
 }
 
 template<typename T = void, typename Func, typename OnError, typename OnRethrow = std::nullptr_t>
-    requires(!std::is_same_v<std::decay_t<OnRethrow>, std::shared_ptr<neograph::graph::CancelToken>>)
+    requires(!std::
+                 is_same_v<std::decay_t<OnRethrow>, std::shared_ptr<neograph::graph::CancelToken>>)
 T catchError(
     Func&&                                        func,
     OnError&&                                     onError,
@@ -146,7 +146,8 @@ T catchError(
             } else {
                 std::rethrow_exception(info.exPtr);
             }
-            std::string prefix = (info.controlKind == ControlFlowKind::Interrupt) ? "NodeInterrupt" : "Cancelled";
+            std::string prefix
+                = (info.controlKind == ControlFlowKind::Interrupt) ? "NodeInterrupt" : "Cancelled";
             errmsg = fmt::format("{}: {}", prefix, info.errInfo);
         } else {
             errmsg = std::move(info.errInfo);
@@ -166,11 +167,17 @@ T catchError(
     OnError&&                                     onError,
     std::shared_ptr<neograph::graph::CancelToken> cancelToken
 ) {
-    return catchError<T>(std::forward<Func>(func), std::forward<OnError>(onError), nullptr, std::move(cancelToken));
+    return catchError<T>(
+        std::forward<Func>(func),
+        std::forward<OnError>(onError),
+        nullptr,
+        std::move(cancelToken)
+    );
 }
 
 template<typename T = void, typename Func, typename OnError, typename OnRethrow = std::nullptr_t>
-    requires(!std::is_same_v<std::decay_t<OnRethrow>, std::shared_ptr<neograph::graph::CancelToken>>)
+    requires(!std::
+                 is_same_v<std::decay_t<OnRethrow>, std::shared_ptr<neograph::graph::CancelToken>>)
 asio::awaitable<T> catchErrorAsync(
     Func&&                                        func,
     OnError&&                                     onError,
@@ -205,7 +212,8 @@ asio::awaitable<T> catchErrorAsync(
             } else {
                 std::rethrow_exception(info.exPtr);
             }
-            std::string prefix = (info.controlKind == ControlFlowKind::Interrupt) ? "NodeInterrupt" : "Cancelled";
+            std::string prefix
+                = (info.controlKind == ControlFlowKind::Interrupt) ? "NodeInterrupt" : "Cancelled";
             errmsg = fmt::format("{}: {}", prefix, info.errInfo);
         } else {
             errmsg = std::move(info.errInfo);
@@ -225,15 +233,19 @@ asio::awaitable<T> catchErrorAsync(
     OnError&&                                     onError,
     std::shared_ptr<neograph::graph::CancelToken> cancelToken
 ) {
-    return catchErrorAsync<T>(std::forward<Func>(func), std::forward<OnError>(onError), nullptr, std::move(cancelToken));
+    return catchErrorAsync<T>(
+        std::forward<Func>(func),
+        std::forward<OnError>(onError),
+        nullptr,
+        std::move(cancelToken)
+    );
 }
 
 template<typename T, typename Func>
-asio::awaitable<std::expected<T, std::string>>
-    catchErrorToUnexpectedAsync(
-        Func&&                                        func,
-        std::shared_ptr<neograph::graph::CancelToken> cancelToken = nullptr
-    ) {
+asio::awaitable<std::expected<T, std::string>> catchErrorToUnexpectedAsync(
+    Func&&                                        func,
+    std::shared_ptr<neograph::graph::CancelToken> cancelToken = nullptr
+) {
     co_return co_await catchErrorAsync<std::expected<T, std::string>>(
         std::forward<Func>(func),
         [](std::string errmsg) -> asio::awaitable<std::expected<T, std::string>> {
@@ -245,11 +257,10 @@ asio::awaitable<std::expected<T, std::string>>
 }
 
 template<typename T, typename Func>
-asio::awaitable<std::optional<T>>
-    catchErrorToOptionalAsync(
-        Func&&                                        func,
-        std::shared_ptr<neograph::graph::CancelToken> cancelToken = nullptr
-    ) {
+asio::awaitable<std::optional<T>> catchErrorToOptionalAsync(
+    Func&&                                        func,
+    std::shared_ptr<neograph::graph::CancelToken> cancelToken = nullptr
+) {
     co_return co_await catchErrorAsync<std::optional<T>>(
         std::forward<Func>(func),
         [](std::string /*errmsg*/) -> asio::awaitable<std::optional<T>> {

@@ -143,9 +143,9 @@ Read-only tasks (analysis/questions) don't need a worktree.)";
             "LogPrint",
             agentContext,
             agentxx::middleware::MiddlewareHooks{
-                .onModelcallRun = [config = agentContext->agentConfig](
-                                      neograph::graph::NodeInput& in
-                                  ) -> asio::awaitable<void> {
+                .onModelcallRun
+                = [config = agentContext->agentConfig](neograph::graph::NodeInput& in
+                  ) -> asio::awaitable<void> {
                     if (config->logPrintMessagesBeforeLLM) {
                         agentxx::middleware::BaseMiddlewareHandleInterface::printMessages(
                             in.state.get_messages(),
@@ -154,10 +154,10 @@ Read-only tasks (analysis/questions) don't need a worktree.)";
                     }
                     co_return;
                 },
-                .onToolcallStart = [ctx = std::weak_ptr<AgentContext>(agentContext),
-                                    config = agentContext->agentConfig](
-                                       neograph::graph::NodeInput& in
-                                   ) -> asio::awaitable<void> {
+                .onToolcallStart
+                = [ctx    = std::weak_ptr<AgentContext>(agentContext),
+                   config = agentContext->agentConfig](neograph::graph::NodeInput& in
+                  ) -> asio::awaitable<void> {
                     if (config->logPrintToolcall) {
                         agentxx::nodes::ToolcallWrapNode::defStdoutLogOnToolcallStart(in);
                     }
@@ -169,7 +169,7 @@ Read-only tasks (analysis/questions) don't need a worktree.)";
                     }
                     co_return;
                 },
-                .onToolcallEnd = [ctx = std::weak_ptr<AgentContext>(agentContext),
+                .onToolcallEnd = [ctx    = std::weak_ptr<AgentContext>(agentContext),
                                   config = agentContext->agentConfig](
                                      const neograph::graph::NodeInput& in,
                                      neograph::graph::NodeOutput&      result
