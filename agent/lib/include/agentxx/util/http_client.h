@@ -73,6 +73,7 @@ inline constexpr uint64_t kDefaultMaxResponseBody = 10 * 1024 * 1024;
 ///   总超时 —— 只要数据持续到达, 连接就一直保持
 /// - keepAlive: 启用 HTTP keep-alive + 连接池复用 (见 maxConcurrentConnections)。
 ///   false (默认) 时请求头带 Connection: close, 每次新建连接、响应后立即关闭。
+///   LLM 提供者等高频长连接端点需显式启用以复用连接池。
 /// - maxConcurrentConnections: keepAlive=true 时生效, 每个端点
 ///   (scheme://host:port + sslVerify) 的最大并发连接数; 默认 5, 0 = 不限制
 ///   (仍复用空闲连接)。超过上限的并发请求排队等待空闲连接。
@@ -95,6 +96,8 @@ public:
     static std::pair<std::string, std::string> splitUrl(std::string_view url);
 
     static std::string urlEncode(std::string_view s);
+
+    static std::string urlDecode(std::string_view s);
 
     static bool respIsSucc(const HttpResponse& resp);
 
