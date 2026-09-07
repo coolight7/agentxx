@@ -49,7 +49,7 @@ inline int collapsedPreviewBudget(int maxWidth, int prefixCols) {
 Element ModelSelectorOverlay::OnRender() {
     const auto& st         = *ctx_.frameState;
     const auto& theme      = *ctx_.theme;
-    const int   maxVisible = std::max(5, Terminal::Size().dimy / 2);
+    const int   maxVisible = std::max(5, ctx_.terminalSize().dimy / 2);
 
     Elements items;
     for (size_t i = 0; i < st.modelNames.size(); ++i) {
@@ -144,7 +144,7 @@ void ModelSelectorOverlay::confirmSelection() {
 Element SessionSelectorOverlay::OnRender() {
     const auto& st         = *ctx_.frameState;
     const auto& theme      = *ctx_.theme;
-    const int   maxVisible = std::max(5, Terminal::Size().dimy / 2);
+    const int   maxVisible = std::max(5, ctx_.terminalSize().dimy / 2);
 
     // 列表项布局: 索引 0 = 固定 "新会话" 入口, 其后为持久化会话 (sessionList[0..])
     itemBoxes_.assign(st.sessionList.size() + 1, Box{});
@@ -821,9 +821,10 @@ Element AboutOverlay::OnRender() {
         text(" "),
     });
 
-    const int margin = 2;
-    const int termW  = Terminal::Size().dimx;
-    const int termH  = Terminal::Size().dimy;
+    const auto termSize = ctx_.terminalSize();
+    const int  margin   = 2;
+    const int  termW    = termSize.dimx;
+    const int  termH    = termSize.dimy;
     const int wantW  = std::max(50, std::min(76, termW * 4 / 5));
     const int wantH  = std::max(12, std::min(24, termH * 4 / 5));
     const int availW = std::max(1, termW - margin * 2);
@@ -920,7 +921,7 @@ Element PendingInputsOverlay::OnRender() {
         items.push_back(row | reflect(itemBoxes_[i]));
     }
 
-    const int maxVisible = std::max(5, Terminal::Size().dimy / 2);
+    const int maxVisible = std::max(5, ctx_.terminalSize().dimy / 2);
     return vbox({
                header,
                separator(),
@@ -1169,12 +1170,13 @@ ftxui::Element ContextOverlay::buildMessageBody(const neograph::json& m) {
 }
 
 Element ContextOverlay::OnRender() {
-    const auto& theme   = *ctx_.theme;
-    const auto& msgsPtr = ctx_.frameState->contextMessages;
+    const auto& theme    = *ctx_.theme;
+    const auto& msgsPtr  = ctx_.frameState->contextMessages;
+    const auto  termSize = ctx_.terminalSize();
 
     const int margin = 2;
-    const int termW  = Terminal::Size().dimx;
-    const int termH  = Terminal::Size().dimy;
+    const int termW  = termSize.dimx;
+    const int termH  = termSize.dimy;
     const int wantW  = std::max(60, termW * 4 / 5);
     const int wantH  = std::max(14, termH * 4 / 5);
     const int availW = std::max(1, termW - margin * 2);
@@ -1327,7 +1329,7 @@ MermaidDiagramOverlay::MermaidDiagramOverlay(TUICtx& ctx, std::string mermaid, s
 
 std::vector<ScrollItem> MermaidDiagramOverlay::buildItems() {
     const auto& theme = *ctx_.theme;
-    const int   maxW  = std::max(40, ftxui::Terminal::Size().dimx - 10);
+    const int   maxW  = std::max(40, ctx_.terminalSize().dimx - 10);
     if (cachedMermaid_ != mermaid_ || cachedMaxW_ != maxW || cachedThemeName_ != theme.name) {
         cachedMermaid_   = mermaid_;
         cachedMaxW_      = maxW;
@@ -1364,8 +1366,9 @@ ftxui::Element MermaidDiagramOverlay::OnRender() {
         ftxui::text(" "),
     });
     const int         margin    = 2;
-    const int         termW     = ftxui::Terminal::Size().dimx;
-    const int         termH     = ftxui::Terminal::Size().dimy;
+    const auto        termSize  = ctx_.terminalSize();
+    const int         termW     = termSize.dimx;
+    const int         termH     = termSize.dimy;
     const int         wantW     = std::max(40, termW * 4 / 5);
     const int         wantH     = std::max(14, termH * 4 / 5);
     const int         availW    = std::max(1, termW - margin * 2);
@@ -1501,9 +1504,10 @@ Element FailedComponentsOverlay::OnRender() {
     // 弹窗大小: 宽 3/5 屏、高 2/5 屏, 不超过窗口可用空间 (减去边距);
     // 高度同时给 GREATER_THAN 下限, 避免惰性 viewport 自然高度塌缩成单行
     // (原因详见下方弹窗 OnRender 注释)
-    const int margin = 2;
-    const int termW  = Terminal::Size().dimx;
-    const int termH  = Terminal::Size().dimy;
+    const auto termSize = ctx_.terminalSize();
+    const int  margin   = 2;
+    const int  termW    = termSize.dimx;
+    const int  termH    = termSize.dimy;
     const int wantW  = std::max(40, termW * 3 / 5);
     const int wantH  = std::max(10, termH * 2 / 5);
     const int availW = std::max(1, termW - margin * 2);
@@ -1568,21 +1572,23 @@ namespace {
 /// (抄 Mermaid/Failed: 惰性 viewport 自然高度会塌缩成单行, 必须同时给
 /// GREATER_THAN 下限)
 void overlayPopupSize(
-    int  widthFracNum,
-    int  widthFracDen,
-    int  heightFracNum,
-    int  heightFracDen,
-    int& popupW,
-    int& popupH
+    const TUICtx& ctx,
+    int           widthFracNum,
+    int           widthFracDen,
+    int           heightFracNum,
+    int           heightFracDen,
+    int&          popupW,
+    int&          popupH
 ) {
-    const int termW  = Terminal::Size().dimx;
-    const int termH  = Terminal::Size().dimy;
-    const int wantW  = std::max(40, termW * widthFracNum / widthFracDen);
-    const int wantH  = std::max(10, termH * heightFracNum / heightFracDen);
-    const int availW = std::max(1, termW - 4);
-    const int availH = std::max(1, termH - 4);
-    popupW           = std::min(wantW, availW);
-    popupH           = std::min(wantH, availH);
+    const auto termSize = ctx.terminalSize();
+    const int  termW    = termSize.dimx;
+    const int  termH    = termSize.dimy;
+    const int  wantW    = std::max(40, termW * widthFracNum / widthFracDen);
+    const int  wantH    = std::max(10, termH * heightFracNum / heightFracDen);
+    const int  availW   = std::max(1, termW - 4);
+    const int  availH   = std::max(1, termH - 4);
+    popupW              = std::min(wantW, availW);
+    popupH              = std::min(wantH, availH);
 }
 
 bool overlayScrollByKey(TUICtx& ctx, const std::shared_ptr<Scrollable>& scrollable, Event event) {
@@ -1613,7 +1619,7 @@ Element overlayFrame(
     int                 widthFracDen
 ) {
     int popupW = 0, popupH = 0;
-    overlayPopupSize(widthFracNum, widthFracDen, 4, 5, popupW, popupH);
+    overlayPopupSize(ctx, widthFracNum, widthFracDen, 4, 5, popupW, popupH);
     (void)ctx;
     return vbox({
                hbox({text(title.empty() ? " " : title) | bold, filler(), text(" ")}),
@@ -1642,7 +1648,7 @@ TextOverlay::TextOverlay(TUICtx& ctx, std::string title, std::string content, bo
 
 std::vector<ScrollItem> TextOverlay::buildItems() {
     const auto& theme = *ctx_.theme;
-    const int   maxW  = std::max(40, Terminal::Size().dimx - 10);
+    const int   maxW  = std::max(40, ctx_.terminalSize().dimx - 10);
     if (cachedContent_ != content_ || cachedMaxW_ != maxW || cachedThemeName_ != theme.name
         || cachedMarkdown_ != markdown_) {
         cachedContent_   = content_;
@@ -1837,7 +1843,7 @@ CustomOverlay::CustomOverlay(
                     const auto mermaid = it.value("mermaid", std::string{});
                     auto       diagram = markdown::parseMermaidStateDiagram(mermaid);
                     if (!diagram.nodes.empty()) {
-                        const int diagW = std::max(20, Terminal::Size().dimx - 16);
+                        const int diagW = std::max(20, ctx_.terminalSize().dimx - 16);
                         push(markdown::renderMermaidStateDiagram(
                             diagram,
                             diagW,

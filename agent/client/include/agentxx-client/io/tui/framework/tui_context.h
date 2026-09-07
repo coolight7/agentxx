@@ -4,6 +4,7 @@
 #include "agentxx-client/io/tui/tui_theme.h"
 #include "agentxx/agent/context.h"
 #include "agentxx/plugin/client_plugin_manager.h"
+#include "ftxui/screen/terminal.hpp"
 #include <atomic>
 #include <functional>
 #include <memory>
@@ -58,4 +59,18 @@ struct TUICtx {
     /// 命令管线经此读取 UI 注册表快照; 线程安全: uiRegistrySnapshot/hasCommand
     /// 短锁, 渲染可无锁读取返回的 snapshot)
     std::shared_ptr<agentxx::plugin::ClientPluginManager> pluginManager;
+
+    /// 视口/终端尺寸覆盖 (宽, 高; 0 表示未覆盖, 运行时回退 Terminal::Size())
+    /// - 离屏测试夹具或嵌入特定容器时可通过此字段注入确定的视口尺寸,
+    ///   避免组件 OnRender 直接读取外部物理终端导致测试结果随终端窗口大小漂移
+    int viewportWidth  = 0;
+    int viewportHeight = 0;
+
+    /// 获取当前生效的终端/视口尺寸: 若显式设置了视口尺寸则优先使用, 否则读取 Terminal::Size()
+    ftxui::Dimensions terminalSize() const {
+        if (viewportWidth > 0 && viewportHeight > 0) {
+            return {viewportWidth, viewportHeight};
+        }
+        return ftxui::Terminal::Size();
+    }
 };

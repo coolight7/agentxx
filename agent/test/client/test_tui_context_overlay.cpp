@@ -51,13 +51,15 @@ struct ContextOverlayFixture {
     std::shared_ptr<ContextOverlay> comp;
 
     ContextOverlayFixture() {
-        ctx.state      = &sharedState;
-        ctx.frameState = sharedState.readSnapshot();
-        ctx.postRedraw = [] {};
-        ctx.theme      = &theme;
-        ctx.sessionId  = "s";
-        ctx.remoteUrl  = "";
-        comp           = std::make_shared<ContextOverlay>(ctx);
+        ctx.state          = &sharedState;
+        ctx.frameState     = sharedState.readSnapshot();
+        ctx.postRedraw     = [] {};
+        ctx.theme          = &theme;
+        ctx.sessionId      = "s";
+        ctx.remoteUrl      = "";
+        ctx.viewportWidth  = width;
+        ctx.viewportHeight = height;
+        comp               = std::make_shared<ContextOverlay>(ctx);
     }
 
     /// 写入 contextMessages (模拟服务端 WireContextMessages 推送)
@@ -69,9 +71,11 @@ struct ContextOverlayFixture {
 
     /// 渲染一帧并返回屏幕纯文本 (剥离 ANSI 样式转义 + 统一换行为 \n)
     std::string render() {
-        ctx.frameState = sharedState.readSnapshot();
-        auto el        = comp->Render();
-        auto screen    = ftxui::Screen::Create(
+        ctx.viewportWidth  = width;
+        ctx.viewportHeight = height;
+        ctx.frameState     = sharedState.readSnapshot();
+        auto el            = comp->Render();
+        auto screen        = ftxui::Screen::Create(
             ftxui::Dimension::Fixed(width),
             ftxui::Dimension::Fixed(height)
         );
@@ -303,6 +307,8 @@ TestResult testTuiContextOverlay() {
     // ---- 场景 7: 滚轮滚动不崩溃且可滚动 (多消息展开后) ----
     {
         ContextOverlayFixture fx;
+        // 适当高度确保逐项展开前 3 条消息时折叠头均在视口可见区域内
+        fx.height = 36;
         fx.setMessages(makeContextMessages());
         auto screen = fx.render();
         // 逐个点击展开前 3 条 (system/user/assistant); tool 保持折叠

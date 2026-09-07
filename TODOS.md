@@ -10,7 +10,6 @@
 - 图像音视频输入
 
 - 链式 session 任务队列
-- 修复测试错误
 - 添加 XX_IS_MINGW __MINGW32__
 - SVG绘制支持
 
