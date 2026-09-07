@@ -695,31 +695,10 @@ static std::string buildDecorItems(const ClientCtx& ctx, const neograph::json& p
         return plan["items"].dump();
     }
     std::vector<std::string> items;
-    auto                     textItem = [&](const std::string& text, const std::string& role) {
-        items.push_back(fmt::format(
-            R"({{"kind":"text","role":{},"text":{}}})",
-            clientJsonEscape(ctx, role),
-            clientJsonEscape(ctx, text)
-        ));
-    };
-    (void)textItem;
-    auto buttonItem = [&](const std::string& label, const std::string& mermaid) {
-        // Graph 按钮: 通用 action_id 派发 (新宿主点击回调 → open_overlay MERMAID);
-        // 双发 mermaid 字段供老宿主兼容 (下版删除 mermaid)
-        items.push_back(fmt::format(
-            R"({{"kind":"button","label":{},"action_id":"{}","args":{{}},"role":"accent","mermaid":{}}})",
-            clientJsonEscape(ctx, label),
-            kActionOpenGraph,
-            clientJsonEscape(ctx, mermaid)
-        ));
-    };
 
-    // ---- Graph: 状态图 (按钮，点击弹窗) ----
+    // ---- Graph: 状态图 ----
     const auto roadmap = plan.value("roadmap", std::string{});
     if (!roadmap.empty()) {
-        buttonItem(" Graph ", roadmap);
-        // 兼容旧 TUI: 保留 inline diagram 供不支持 button 的客户端回退渲染；
-        // 新 TUI 优先将 button 渲染为可点击弹窗，旧测试仍可通过 diagram 断言。
         items.push_back(
             fmt::format(R"({{"kind":"diagram","mermaid":{}}})", clientJsonEscape(ctx, roadmap))
         );
@@ -824,7 +803,7 @@ static void refreshPlanSection(ClientCtx& ctx) {
     const auto roadmap = plan.value("roadmap", std::string{});
     if (!roadmap.empty()) {
         textItem("|- ", "normal");
-        buttonItem("[ Graph ]", roadmap);
+        buttonItem("Graph", roadmap);
     }
 
     // ---- Todo & Note 渲染 ----

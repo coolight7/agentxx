@@ -102,8 +102,8 @@ bool parsePluginButton(
 
 Element renderPluginButton(const PluginButtonDesc& desc, const TUITheme& theme) {
     std::string btnLabel = desc.label;
-    if (!btnLabel.empty() && btnLabel.front() != ' ' && btnLabel.back() != ' ') {
-        btnLabel = " " + btnLabel + " ";
+    if (!btnLabel.empty()) {
+        btnLabel = fmt::format("[ {} ]", btnLabel);
     }
     Element btn;
     switch (desc.role) {
