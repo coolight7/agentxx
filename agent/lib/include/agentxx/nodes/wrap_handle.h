@@ -184,46 +184,12 @@ public:
                 // 成功执行 start 才记录: 出错项不参与 end 回放 (与原语义一致)
                 startedIdxs.push_back(i);
                 continue;
-            } catch (const neograph::graph::CancelledException&) {
-                errorRethrow = true;
-                errInfo      = "cancelled";
-                onHandleStartError(errorRethrow, true, errInfo, *item, in, out);
-                errorPtr = std::current_exception();
-            } catch (const neograph::graph::NodeInterrupt&) {
-                errorRethrow = true;
-                errInfo      = "interrupt";
-                onHandleStartError(errorRethrow, true, errInfo, *item, in, out);
-                errorPtr = std::current_exception();
-            } catch (const neograph_asio_system_error& e) {
-                if (agentxx::util::isCancelAbort(e, in.ctx.cancel_token)) {
-                    // asio 取消信号中断 co_await 的异常表现, 转换为取消语义重抛,
-                    // 避免被当作普通错误吞掉后继续执行 graph
-                    errorRethrow = true;
-                    errInfo      = "operation cancelled";
-                    onHandleStartError(errorRethrow, true, errInfo, *item, in, out);
-                    errorPtr = std::make_exception_ptr(
-                        neograph::graph::CancelledException("operation aborted")
-                    );
-                } else {
-                    errInfo = agentxx::util::autoTryConvertToUtf8(e.what());
-                    // 替代 baseRun
-                    onHandleStartError(errorRethrow, true, errInfo, *item, in, out);
-                    errorPtr = std::current_exception();
-                }
-            } catch (const boost::exception& e) {
-                // boost::exception 在 std::exception 之前捕获, 保留完整诊断信息
-                errInfo = agentxx::util::autoTryConvertToUtf8(boost::diagnostic_information(e));
-                onHandleStartError(errorRethrow, true, errInfo, *item, in, out);
-                errorPtr = std::current_exception();
-            } catch (const std::exception& e) {
-                errInfo = agentxx::util::autoTryConvertToUtf8(e.what());
-                // 替代 baseRun
-                onHandleStartError(errorRethrow, true, errInfo, *item, in, out);
-                errorPtr = std::current_exception();
             } catch (...) {
-                errInfo = "Unknown error";
+                auto info    = agentxx::util::classifyCurrentException(in.ctx.cancel_token);
+                errorRethrow = info.isControlFlow;
+                errInfo      = std::move(info.errInfo);
+                errorPtr     = info.exPtr;
                 onHandleStartError(errorRethrow, true, errInfo, *item, in, out);
-                errorPtr = std::current_exception();
             }
             XX_LOGE("{}/Start call `{}` exception: {}", nodeName, item->name, errInfo);
             // 触发异常，不再执行后面的 start / baseRun
@@ -236,44 +202,12 @@ public:
                     co_await baseRun(agentCtxPtr->middlewareHandleContext->handles, in, out);
                     i = len;
                     break;
-                } catch (const neograph::graph::CancelledException&) {
-                    errorRethrow = true;
-                    errInfo      = "cancelled";
-                    onHandleBaseRunError(errorRethrow, true, errInfo, in, out);
-                    errorPtr = std::current_exception();
-                } catch (const neograph::graph::NodeInterrupt&) {
-                    errorRethrow = true;
-                    errInfo      = "interrupt";
-                    onHandleBaseRunError(errorRethrow, true, errInfo, in, out);
-                    errorPtr = std::current_exception();
-                } catch (const neograph_asio_system_error& e) {
-                    if (agentxx::util::isCancelAbort(e, in.ctx.cancel_token)) {
-                        // asio 取消信号中断 co_await 的异常表现, 转换为取消语义重抛,
-                        // 避免被当作普通错误吞掉后继续执行 graph
-                        errorRethrow = true;
-                        errInfo      = "operation cancelled";
-                        onHandleBaseRunError(errorRethrow, true, errInfo, in, out);
-                        errorPtr = std::make_exception_ptr(
-                            neograph::graph::CancelledException("operation aborted")
-                        );
-                    } else {
-                        errInfo = agentxx::util::autoTryConvertToUtf8(e.what());
-                        onHandleBaseRunError(errorRethrow, true, errInfo, in, out);
-                        errorPtr = std::current_exception();
-                    }
-                } catch (const boost::exception& e) {
-                    // boost::exception 在 std::exception 之前捕获, 保留完整诊断信息
-                    errInfo = agentxx::util::autoTryConvertToUtf8(boost::diagnostic_information(e));
-                    onHandleBaseRunError(errorRethrow, true, errInfo, in, out);
-                    errorPtr = std::current_exception();
-                } catch (const std::exception& e) {
-                    errInfo = agentxx::util::autoTryConvertToUtf8(e.what());
-                    onHandleBaseRunError(errorRethrow, true, errInfo, in, out);
-                    errorPtr = std::current_exception();
                 } catch (...) {
-                    errInfo = "Unknown error";
+                    auto info    = agentxx::util::classifyCurrentException(in.ctx.cancel_token);
+                    errorRethrow = info.isControlFlow;
+                    errInfo      = std::move(info.errInfo);
+                    errorPtr     = info.exPtr;
                     onHandleBaseRunError(errorRethrow, true, errInfo, in, out);
-                    errorPtr = std::current_exception();
                 }
                 XX_LOGE("{}/run exception: {}", nodeName, errInfo);
             } else if (nullptr != errorPtr) {
@@ -298,55 +232,14 @@ public:
                 try {
                     co_await onHandleEnd(*item, in, out);
                     continue;
-                } catch (const neograph::graph::CancelledException&) {
-                    errorRethrow = true;
-                    errInfo      = "cancelled";
-                    onHandleEndError(errorRethrow, true, errInfo, *item, in, out);
-                    errorPtr = std::current_exception();
-                } catch (const neograph::graph::NodeInterrupt&) {
-                    errorRethrow = true;
-                    errInfo      = "interrupt";
-                    onHandleEndError(errorRethrow, true, errInfo, *item, in, out);
-                    errorPtr = std::current_exception();
-                } catch (const neograph_asio_system_error& e) {
-                    if (agentxx::util::isCancelAbort(e, in.ctx.cancel_token)) {
-                        // asio 取消信号中断 co_await 的异常表现, 转换为取消语义重抛,
-                        // 避免被当作普通错误吞掉后继续执行 graph
-                        errorRethrow = true;
-                        errInfo      = "operation cancelled";
-                        onHandleEndError(errorRethrow, true, errInfo, *item, in, out);
-                        errorPtr = std::make_exception_ptr(
-                            neograph::graph::CancelledException("operation aborted")
-                        );
-                    } else {
-                        errInfo = agentxx::util::autoTryConvertToUtf8(e.what());
-                        onHandleEndError(errorRethrow, true, errInfo, *item, in, out);
-                        if (false == errorRethrow) {
-                            // 避免覆盖之前的错误，导致未重新抛出异常
-                            errorPtr = std::current_exception();
-                        }
-                    }
-                } catch (const boost::exception& e) {
-                    // boost::exception 在 std::exception 之前捕获, 保留完整诊断信息
-                    errInfo = agentxx::util::autoTryConvertToUtf8(boost::diagnostic_information(e));
-                    onHandleEndError(errorRethrow, true, errInfo, *item, in, out);
-                    if (false == errorRethrow) {
-                        // 避免覆盖之前的错误，导致未重新抛出异常
-                        errorPtr = std::current_exception();
-                    }
-                } catch (const std::exception& e) {
-                    errInfo = agentxx::util::autoTryConvertToUtf8(e.what());
-                    onHandleEndError(errorRethrow, true, errInfo, *item, in, out);
-                    if (false == errorRethrow) {
-                        // 避免覆盖之前的错误，导致未重新抛出异常
-                        errorPtr = std::current_exception();
-                    }
                 } catch (...) {
-                    errInfo = "Unknown error";
-                    onHandleEndError(errorRethrow, true, errInfo, *item, in, out);
-                    if (false == errorRethrow) {
-                        errorPtr = std::current_exception();
+                    auto info    = agentxx::util::classifyCurrentException(in.ctx.cancel_token);
+                    errorRethrow = info.isControlFlow;
+                    errInfo      = std::move(info.errInfo);
+                    if (errorRethrow || nullptr == errorPtr) {
+                        errorPtr = info.exPtr;
                     }
+                    onHandleEndError(errorRethrow, true, errInfo, *item, in, out);
                 }
                 XX_LOGE("{}/End call `{}` exception: {}", nodeName, item->name, errInfo);
             }
