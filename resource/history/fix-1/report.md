@@ -196,15 +196,6 @@ auto serverIt = servers_.begin();
 
 ## P2：可优化点（性能 / 体验）
 
-### P2-1 Toolcall 串行执行
-
-位置：`agent/lib/src/nodes/toolcall.cpp`（`baseRun`，注释自带 `TODO: 真正并行`）
-
-- 现状是把 awaitable 攒进 vector 再逐个 `co_await`。LLM 一次并行调 5 个 read / grep 时延迟 ×5。
-- 建议用 `parallel_group` 或逐个 `co_spawn` + channel 回收，并发度可配（默认 `min(工具数, 8)`），注意中断时未完成的补 `[User canceled]` 语义保留。
-
----
-
 ### P2-2 HTTP 连接池可能根本没被 LLM 流量用到
 
 位置：
@@ -261,17 +252,6 @@ auto serverIt = servers_.begin();
 ---
 
 ## P3：重构建议（结构层面）
-
-### P3-1 拆大文件
-
-- `http_client.cpp`（66KB，含 DNS / 连接池 / SSE）
-- `session_server_agent_io.cpp`（1142 行：驱动循环 + 队列 + grace + 分页 + 插件转发）
-- `toolcall.cpp`（1081 行：参数自愈 + 重复检测 + 执行 + 重试 + 压缩）
-- `plugin_manager_vtable.cpp`（61KB）
-
-建议至少把“消息队列管理”“历史分页”“插件事件转发”从 SessionServerAgentIO 里拆成独立单元；toolcall 的 `autoFixArgsType` / repeat-check / 结果压缩各自独立可单测（现在 repeat-check 零测试就是拆得不够的后果）。
-
----
 
 ### P3-2 补最缺的两块测试
 

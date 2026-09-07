@@ -161,6 +161,16 @@ public:
         turnActive_.store(v, std::memory_order_release);
     }
 
+    /// 测试辅助: 获取消息队列是否处于暂停态
+    bool isQueuePausedForTest() const noexcept {
+        return queuePaused_;
+    }
+
+    /// 测试辅助: 获取当前消息队列大小
+    size_t queueSizeForTest() const noexcept {
+        return messageQueue_.size();
+    }
+
     /// 当前 viewMessages 的链式哈希尾 (供 hello_ack/sync)
     std::string currentTailHash();
 

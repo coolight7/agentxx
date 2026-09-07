@@ -329,6 +329,7 @@ bool AgentResourceApplier::addMcpServer(
         .serverUrl       = cfg.url,
         .protocolVersion = std::string{server::McpClient::kProtocol2026_07_28},
         .toolNamespace   = ns,
+        .initTimeout     = cfg.toolTimeout.count() > 0 ? cfg.toolTimeout : std::chrono::milliseconds{10000},
         .toolCallTimeout = cfg.toolTimeout,
     });
 
@@ -389,6 +390,15 @@ bool AgentResourceApplier::deactivateMcp(std::string_view nameSpace) {
         }
     }
     it->second.abortRequested = true;
+    if (it->second.client) {
+        asio::co_spawn(
+            ioExecutor_,
+            [c = it->second.client]() -> asio::awaitable<void> {
+                co_await c->close();
+            },
+            asio::detached
+        );
+    }
     mcpEntries_.erase(it);
     return true;
 }

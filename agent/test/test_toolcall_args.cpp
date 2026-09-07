@@ -988,6 +988,37 @@ TestResult testToolcallArgs() {
         XX_TEST_EXPECT_FALSE(isRepeatCheckEnabled(toolWithoutCheck));
     }
 
+    // #54 多 key 并行循环检测: 每轮 assistant 同时包含多个不同 toolcall,
+    // 连续交替达 threshold 轮时, 所有达标 key 均必须被正确检出 (多 key 并行, P3-2)
+    {
+        auto msgs = std::vector<neograph::ChatMessage>{};
+        msgs.push_back(makeTextMsg("user"));
+        const auto keyReadFile = KEY_A_TXT;
+        const auto keyBashCmd  = R"({"command":"git status"})";
+        for (size_t i = 0; i < 4; ++i) {
+            msgs.push_back(makeAssistantMsg({
+                {"read_file",    keyReadFile},
+                {"bash_command", keyBashCmd }
+            }));
+            msgs.push_back(makeToolResultMsg());
+            msgs.push_back(makeToolResultMsg());
+        }
+        // 第 5 轮: 两者均达标
+        msgs.push_back(makeAssistantMsg({
+            {"read_file",    keyReadFile},
+            {"bash_command", keyBashCmd }
+        }));
+        auto last = msgs.size() - 1;
+        auto hit  = ToolcallWrapNode::findConsecutiveRepeatCallKeys(msgs, last, T5);
+        XX_TEST_EXPECT_EQ(hit.size(), size_t{2});
+        XX_TEST_EXPECT_TRUE(
+            hit.count(ToolcallWrapNode::makeRepeatCallKey("read_file", keyReadFile)) > 0
+        );
+        XX_TEST_EXPECT_TRUE(
+            hit.count(ToolcallWrapNode::makeRepeatCallKey("bash_command", keyBashCmd)) > 0
+        );
+    }
+
     return TestResult{g_tca_passed, g_tca_failed};
 }
 

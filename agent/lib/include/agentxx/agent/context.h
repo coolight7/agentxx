@@ -490,13 +490,58 @@ public:
     /// - 节点/工具可经此感知宿主 (如查询子代理模板、发起跨 agent 消息)
     std::weak_ptr<AgentHost> host;
 
+    /// 线程安全的启动进度通知器包装:
+    /// 允许跨线程安全赋值 (client 线程注册) 与调用 (agent 线程上报),
+    /// 消除数据竞争隐患
+    struct ThreadSafeInitNotifier {
+        mutable std::mutex                    mtx;
+        std::function<void(std::string_view)> fn;
+
+        ThreadSafeInitNotifier() = default;
+
+        ThreadSafeInitNotifier(const ThreadSafeInitNotifier& other) {
+            std::lock_guard<std::mutex> lock(other.mtx);
+            fn = other.fn;
+        }
+
+        ThreadSafeInitNotifier& operator=(const ThreadSafeInitNotifier& other) {
+            if (this != &other) {
+                std::scoped_lock lock(mtx, other.mtx);
+                fn = other.fn;
+            }
+            return *this;
+        }
+
+        ThreadSafeInitNotifier& operator=(std::function<void(std::string_view)> newFn) {
+            std::lock_guard<std::mutex> lock(mtx);
+            fn = std::move(newFn);
+            return *this;
+        }
+
+        void operator()(std::string_view step) const {
+            std::function<void(std::string_view)> copyFn;
+            {
+                std::lock_guard<std::mutex> lock(mtx);
+                copyFn = fn;
+            }
+            if (copyFn) {
+                copyFn(step);
+            }
+        }
+
+        explicit operator bool() const noexcept {
+            std::lock_guard<std::mutex> lock(mtx);
+            return static_cast<bool>(fn);
+        }
+    };
+
     /// agent 启动进度通知回调 (由客户端端点 (TUI) 注册; 无注册则为空, no-op)
     /// - 调用方: BaseAgent::init() / CodeAgent::initTools() 各启动阶段
     ///   (agent 线程, 同步调用, 不阻塞启动流程)
     /// - 语义: 报告当前正在执行的启动操作 (如 "加载 MCP server: xxx"),
     ///   供 TUI 在"启动中"banner 中逐步展示
-    /// - 线程安全: 回调实现 (TUI onServerProgress) 内部自行加锁同步
-    std::function<void(std::string_view)> initNotifier;
+    /// - 线程安全: 包装为 ThreadSafeInitNotifier, 跨线程读写安全
+    ThreadSafeInitNotifier initNotifier;
 
     /// 阻塞操作执行线程池 (文件系统遍历、glob、DNS 解析等同步阻塞操作)
     /// - 通过 agentxx::util::offloadAsync / offloadCancellableAsync 使用

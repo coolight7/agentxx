@@ -382,7 +382,7 @@ interfaces:
 
         // ---- MCP 注册亦拒绝 (冻结) ----
         const char* mcpSpec
-            = R"({"namespace":"t_mcp","url":"https://127.0.0.1:9/sse","timeout":3})";
+            = R"({"namespace":"t_mcp","url":"http://127.0.0.1:9/sse","timeout":3})";
         auto mcpSpecSv = agentxx::plugin::PluginStringView::fromCstr(mcpSpec);
         rc             = res3 ? res3->register_mcp_server(&inst->host, &mcpSpecSv) : -1;
         XX_TEST_EXPECT_TRUE(rc != 0);
@@ -412,7 +412,8 @@ interfaces:
 
         // ---- 其他 owner 抢注同名命名空间: 因 t_mcp 未注册(冻结)故可成功 ----
         agentxx::agent::McpServerConfig anyCfg;
-        anyCfg.url = "https://any";
+        anyCfg.url         = "http://127.0.0.1:9";
+        anyCfg.toolTimeout = std::chrono::milliseconds{10};
         std::string err;
         XX_TEST_EXPECT_TRUE(applier->addMcpServer("other_owner", "t_mcp", anyCfg, err));
         // 清理 other_owner 的 t_mcp 以免影响后续
@@ -452,7 +453,7 @@ memory:
   - assets/NOTES.md
 mcp:
   - namespace: t_decl
-    url: https://127.0.0.1:9/sse
+    url: http://127.0.0.1:9/sse
     timeout: 3
 )yaml"
         );
@@ -517,7 +518,7 @@ memory:
   - notes.md
 mcp:
   - namespace: t_fail
-    url: https://127.0.0.1:9/sse
+    url: http://127.0.0.1:9/sse
 )yaml"
         );
         auto beforeSkills = skillMw->skillDirPathList();
@@ -530,10 +531,11 @@ mcp:
         XX_TEST_EXPECT_TRUE(skillMw->skillDirPathList() == beforeSkills); // 未被污染
     }
 
-    // 清理临时目录
+    // 清理临时目录并等待后台协程收尾
     ctx->resourceApplier.reset();
     ctx->pluginManager.reset();
     fs::remove_all(tmpRoot, ec);
+    co_await sleepMs(100);
 
     co_return TestResult{g_res_passed, g_res_failed};
 }

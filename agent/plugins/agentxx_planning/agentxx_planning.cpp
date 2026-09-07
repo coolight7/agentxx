@@ -667,6 +667,51 @@ static std::string buildTodosSummary(const neograph::json& plan) {
     return summary;
 }
 
+/// 提取公共渲染逻辑: 渲染 Todo 列表与 Note 备忘 (P3-5 消除 buildDecorItems 与 refreshPlanSection 的渲染重复)
+static void appendTodoAndNoteItems(
+    const ClientCtx&          ctx,
+    const neograph::json&     plan,
+    std::vector<std::string>& items
+) {
+    auto textItem = [&](const std::string& text, const std::string& role) {
+        items.push_back(fmt::format(
+            R"({{"kind":"text","role":{},"text":{}}})",
+            clientJsonEscape(ctx, role),
+            clientJsonEscape(ctx, text)
+        ));
+    };
+
+    // ---- Todo: 待办列表 ----
+    const bool hasTodos
+        = plan.contains("todos") && plan["todos"].is_array() && !plan["todos"].empty();
+    if (hasTodos) {
+        textItem("|- Todo", "normal");
+        for (const auto& td : plan["todos"]) {
+            if (td.is_object()) {
+                const auto state   = td.value("state", std::string{});
+                const auto content = td.value("content", std::string{});
+                if (!content.empty()) {
+                    textItem(
+                        fmt::format("{} {}", todoIcon(state), content),
+                        std::string{todoRole(state)}
+                    );
+                }
+            } else if (td.is_string()) {
+                textItem(fmt::format("[ ] {}", td.get<std::string>()), "hint");
+            }
+        }
+    }
+
+    // ---- Note: 备忘 (与 Todo 分区独立渲染, 避免交错) ----
+    if (plan.contains("notes")) {
+        const auto& nv = plan["notes"];
+        if (nv.is_string()) {
+            textItem("|- Note", "normal");
+            textItem(nv.get<std::string>(), "hint");
+        }
+    }
+}
+
 /// 组装展开体 items JSON 数组元素 (Graph / Todo / Note 三段式, 参考剥离前的
 /// TUI appendPlanToolBody + Info 侧边栏 Plan 渲染; Graph 为按钮弹窗)
 static std::string buildDecorItems(const ClientCtx& ctx, const neograph::json& plan) {
@@ -703,35 +748,8 @@ static std::string buildDecorItems(const ClientCtx& ctx, const neograph::json& p
         );
     }
 
-    // ---- Todo: 待办列表 ----
-    const bool hasTodos
-        = plan.contains("todos") && plan["todos"].is_array() && !plan["todos"].empty();
-    if (hasTodos) {
-        textItem("|- Todo", "normal");
-        for (const auto& td : plan["todos"]) {
-            if (td.is_object()) {
-                const auto state   = td.value("state", std::string{});
-                const auto content = td.value("content", std::string{});
-                if (!content.empty()) {
-                    textItem(
-                        fmt::format("{} {}", todoIcon(state), content),
-                        std::string{todoRole(state)}
-                    );
-                }
-            } else if (td.is_string()) {
-                textItem(fmt::format("[ ] {}", td.get<std::string>()), "hint");
-            }
-        }
-    }
-
-    // ---- Note: 备忘 (与 Todo 分区独立渲染, 避免交错) ----
-    if (plan.contains("notes")) {
-        const auto& nv = plan["notes"];
-        if (nv.is_string()) {
-            textItem("|- Note", "normal");
-            textItem(nv.get<std::string>(), "hint");
-        }
-    }
+    // ---- Todo & Note 渲染 ----
+    appendTodoAndNoteItems(ctx, plan, items);
 
     return fmt::format(R"([{}])", fmt::join(items, ","));
 }
@@ -832,35 +850,8 @@ static void refreshPlanSection(ClientCtx& ctx) {
         buttonItem("[Graph]", roadmap);
     }
 
-    // ---- Todo: 待办列表 ----
-    const bool hasTodos
-        = plan.contains("todos") && plan["todos"].is_array() && !plan["todos"].empty();
-    if (hasTodos) {
-        textItem("|- Todo", "normal");
-        for (const auto& td : plan["todos"]) {
-            if (td.is_object()) {
-                const auto state   = td.value("state", std::string{});
-                const auto content = td.value("content", std::string{});
-                if (!content.empty()) {
-                    textItem(
-                        fmt::format("{} {}", todoIcon(state), content),
-                        std::string{todoRole(state)}
-                    );
-                }
-            } else if (td.is_string()) {
-                textItem(fmt::format("[ ] {}", td.get<std::string>()), "hint");
-            }
-        }
-    }
-
-    // ---- Note: 备忘 ----
-    if (plan.contains("notes")) {
-        const auto& nv = plan["notes"];
-        if (nv.is_string()) {
-            textItem("|- Note", "normal");
-            textItem(nv.get<std::string>(), "hint");
-        }
-    }
+    // ---- Todo & Note 渲染 ----
+    appendTodoAndNoteItems(ctx, plan, items);
 
     if (items.empty()) {
         return; // 内容为空不推送, 避免出现只有标题的空段落

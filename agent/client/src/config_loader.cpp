@@ -216,9 +216,9 @@ static neograph::json yamlToJsonResolveEnv(
         return neograph::json{};
     }
     if (node.IsScalar()) {
-        int    i;
-        double d;
-        auto   s = resolveEnvVars(node.as<std::string>(), dotEnvVars, overrideEnvVars);
+        long long i;
+        double    d;
+        auto      s = resolveEnvVars(node.as<std::string>(), dotEnvVars, overrideEnvVars);
         if (s == "true") {
             return neograph::json(true);
         }
@@ -256,8 +256,8 @@ static neograph::json yamlToJson(const YAML::Node& node) {
         return neograph::json{};
     }
     if (node.IsScalar()) {
-        int    i;
-        double d;
+        long long i;
+        double    d;
         // 注意: 必须用圆括号构造标量, 不能用花括号!
         // neograph::json 存在 json(std::initializer_list<json>) 构造函数,
         // C++ 花括号初始化优先匹配它, 导致标量被包成单元素数组:

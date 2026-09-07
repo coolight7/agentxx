@@ -1,6 +1,7 @@
 #include "test_agent.h"
 
 #include "agentxx/agent/code_agent.h"
+#include "agentxx/agent/io/session_server_agent_io.h"
 #include "agentxx/tools/tool.h"
 #include "agentxx/util/async_offload.h"
 #include "agentxx/util/exception.h"
@@ -300,6 +301,7 @@ asio::awaitable<void> test_agent_cancel_llm_request() {
     XX_TEST_EXPECT_TRUE(elapsedMs < 4000);
 
     g_da_sim_delay_ms = 0;
+    sim.stop();
     co_return;
 }
 
@@ -330,11 +332,18 @@ public:
     }
 
     asio::awaitable<std::string> execute_async(const neograph::json&) override {
+        std::fprintf(stderr, "[cancel-test-dbg] CancelSlowTool execute_async called!\n");
         executed_->store(true, std::memory_order_release);
-        // 模拟耗时 IO: 2s 等待, 取消时被 operation_aborted 立即中断
-        asio::steady_timer timer(co_await asio::this_coro::executor, std::chrono::seconds(2));
-        co_await timer.async_wait(asio::use_awaitable);
-        finished_->store(true, std::memory_order_release);
+        try {
+            // 模拟耗时 IO: 5s 等待, 取消时被 operation_aborted 立即中断 (避免高负载下 2s 偶发自然跑完)
+            asio::steady_timer timer(co_await asio::this_coro::executor, std::chrono::seconds(5));
+            co_await timer.async_wait(asio::use_awaitable);
+            finished_->store(true, std::memory_order_release);
+            std::fprintf(stderr, "[cancel-slow-dbg] timer naturally finished!\n");
+        } catch (const std::exception& e) {
+            std::fprintf(stderr, "[cancel-slow-dbg] timer threw: %s\n", e.what());
+            throw;
+        }
         co_return "slow done";
     }
 
@@ -439,13 +448,16 @@ asio::awaitable<void> test_agent_cancel_toolcall() {
         // 串行 toolcall: 先执行 slow (2s 执行中), 取消发生在 slow 执行期间:
         // - slow 被取消信号立即中断 (未自然完成) → 经取消埋点补 [User canceled]
         // - marker 排在 slow 之后, 取消后不再执行
+        bool foundSlow = false;
         for (int i = 0; i < 2000; ++i) {
             if (agent.slowExecuted.load(std::memory_order_acquire)) {
+                foundSlow = true;
                 break;
             }
             timer.expires_after(std::chrono::milliseconds(5));
             co_await timer.async_wait(asio::use_awaitable);
         }
+        std::fprintf(stderr, "[cancel-test-dbg] foundSlow=%d\n", (int)foundSlow);
         auto session = agent.agentContext->sessions->get("cancel_tool_test");
         if (session) {
             auto token = session->getCancelToken();
@@ -478,6 +490,9 @@ asio::awaitable<void> test_agent_cancel_toolcall() {
                                std::chrono::steady_clock::now() - startAt
     )
                                .count();
+
+    std::fprintf(stderr, "[cancel-test-dbg] turnResult: hasError=%d, err=%s, slowExec=%d, slowFinish=%d, elapsed=%lld\n",
+        (int)turnResult.hasError, turnResult.errorMessage.c_str(), (int)agent.slowExecuted.load(), (int)agent.slowFinished.load(), (long long)elapsedMs);
 
     XX_TEST_EXPECT_TRUE(turnExc == nullptr);
     XX_TEST_EXPECT_TRUE(watcherExc == nullptr);
@@ -537,6 +552,8 @@ asio::awaitable<void> test_agent_cancel_toolcall() {
         XX_TEST_EXPECT_TRUE(markerCanceled);
     }
 
+    g_da_sim_tool_calls = neograph::json::array();
+    sim.stop();
     co_return;
 }
 
@@ -616,6 +633,48 @@ asio::awaitable<void> test_offload_cancel_token() {
     co_return;
 }
 
+// ===========================================================================
+// 取消后队列语义测试 (P0-2 / P3-2):
+// backlog 积压 + 取消导致暂停态 + 用户推入新输入 -> 解除暂停恢复执行, 不死锁
+// ===========================================================================
+static asio::awaitable<void> test_cancel_queue_paused_backlog_resume() {
+    auto ex = co_await asio::this_coro::executor;
+    agentxx::agent::SessionServerAgentIO::Config cfg;
+    cfg.sessionId = "cancel-queue-paused-test";
+    auto sc = std::make_shared<agentxx::agent::SessionServerAgentIO>(
+        ex,
+        std::weak_ptr<agentxx::agent::BaseAgent>{},
+        cfg
+    );
+
+    // 1. 模拟轮次进行中: turnActive = true
+    sc->setTurnActiveForTest(true);
+
+    // 2. 在轮次进行中，推入积压消息 backlog 1 和 backlog 2
+    sc->onPeerMessage(agentxx::agent::WireUserInput{std::string(sc->sessionId()), "backlog 1", ""});
+    sc->onPeerMessage(agentxx::agent::WireUserInput{std::string(sc->sessionId()), "backlog 2", ""});
+    XX_TEST_EXPECT_EQ(sc->queueSizeForTest(), size_t{2});
+    XX_TEST_EXPECT_FALSE(sc->isQueuePausedForTest());
+
+    // 3. 轮次进行中收到取消: 队列应被暂停 (queuePaused_ = true)
+    sc->onPeerMessage(agentxx::agent::WireCancel{std::string(sc->sessionId())});
+    XX_TEST_EXPECT_TRUE(sc->isQueuePausedForTest());
+
+    // 4. 轮次结束，回到空闲态: turnActive = false
+    sc->setTurnActiveForTest(false);
+    XX_TEST_EXPECT_TRUE(sc->isQueuePausedForTest());
+    XX_TEST_EXPECT_EQ(sc->queueSizeForTest(), size_t{2});
+
+    // 5. 关键断言 (P0-2/P3-2): 空闲态下队列有积压 (backlog 非空), 此时推入新用户输入
+    // 必须自动解除暂停 (queuePaused_ 变为 false), 唤醒 channel, 避免死锁
+    sc->onPeerMessage(agentxx::agent::WireUserInput{std::string(sc->sessionId()), "new user input", ""});
+    XX_TEST_EXPECT_FALSE(sc->isQueuePausedForTest());
+    XX_TEST_EXPECT_EQ(sc->queueSizeForTest(), size_t{3});
+
+    sc->stop();
+    co_return;
+}
+
 asio::awaitable<TestResult> run_cancel_tests() {
     g_cancel_passed = 0;
     g_cancel_failed = 0;
@@ -626,6 +685,7 @@ asio::awaitable<TestResult> run_cancel_tests() {
         co_await test_catchError_cancel_conversion();
         co_await test_catchErrorAsync_cancel_conversion();
         co_await test_offload_cancel_token();
+        co_await test_cancel_queue_paused_backlog_resume();
         co_await test_agent_cancel_llm_request();
         co_await test_agent_cancel_toolcall();
     } catch (const std::exception& e) {
