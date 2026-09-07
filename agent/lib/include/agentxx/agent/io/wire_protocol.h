@@ -974,6 +974,101 @@ inline std::string msgType(const neograph::json& j) {
     return j.is_object() ? j.value("type", std::string{}) : std::string{};
 }
 
+// ---------------------------------------------------------------------------
+// 统一的 toJson / fromJson 声明与顶层序列化接口 (方案 1)
+// ---------------------------------------------------------------------------
+
+neograph::json toJson(const WireHello& msg);
+WireHello helloFromJson(const neograph::json& j);
+
+neograph::json toJson(const WireHelloAck& msg);
+WireHelloAck helloAckFromJson(const neograph::json& j);
+
+neograph::json toJson(const WireUserInput& msg);
+WireUserInput userInputFromJson(const neograph::json& j);
+
+neograph::json toJson(const WireCancel& msg);
+WireCancel cancelFromJson(const neograph::json& j);
+
+neograph::json toJson(const WireSelectModel& msg);
+WireSelectModel selectModelFromJson(const neograph::json& j);
+
+neograph::json toJson(const WireInterruptRequest& msg);
+WireInterruptRequest interruptRequestFromJson(const neograph::json& j);
+
+neograph::json toJson(const WireInterruptResponse& msg);
+WireInterruptResponse interruptResponseFromJson(const neograph::json& j);
+
+neograph::json toJson(const WireInterruptExpired& msg);
+WireInterruptExpired interruptExpiredFromJson(const neograph::json& j);
+
+neograph::json toJson(const WireDelta& msg);
+
+neograph::json toJson(const WireSyncPayload& msg);
+
+neograph::json toJson(const WireTurnResult& msg);
+WireTurnResult turnResultFromJson(const neograph::json& j);
+
+neograph::json toJson(const WireContextStats& msg);
+WireContextStats contextStatsFromJson(const neograph::json& j);
+
+neograph::json toJson(const WireError& msg);
+WireError errorFromJson(const neograph::json& j);
+
+neograph::json toJson(const WireLog& msg);
+WireLog logFromJson(const neograph::json& j);
+
+neograph::json toJson(const WireGetModel& msg);
+WireGetModel getModelFromJson(const neograph::json& j);
+
+neograph::json toJson(const WireModelInfo& msg);
+WireModelInfo modelInfoFromJson(const neograph::json& j);
+
+neograph::json toJson(const WireGetAppendComponentInfo& msg);
+WireGetAppendComponentInfo getAppendComponentInfoFromJson(const neograph::json& j);
+
+neograph::json toJson(const WireAppendComponentInfo& msg);
+WireAppendComponentInfo appendComponentInfoMessageFromJson(const neograph::json& j);
+
+neograph::json toJson(const WireGetContext& msg);
+WireGetContext getContextFromJson(const neograph::json& j);
+
+neograph::json toJson(const WireCompactContext& msg);
+WireCompactContext compactContextFromJson(const neograph::json& j);
+
+neograph::json toJson(const WireContextMessages& msg);
+WireContextMessages contextMessagesFromJson(const neograph::json& j);
+
+neograph::json toJson(const WireListSessions& msg);
+
+neograph::json toJson(const WireSessionList& msg);
+
+neograph::json toJson(const WireSwitchSession& msg);
+
+neograph::json toJson(const WireSetPermission& msg);
+
+neograph::json toJson(const WirePluginData& msg);
+
+neograph::json toJson(const WirePluginDataUp& msg);
+
+neograph::json toJson(const WireMessageQueueUpdate& msg);
+
+neograph::json toJson(const WireClearMessageQueue& msg);
+
+neograph::json toJson(const WireRemoveQueueItem& msg);
+
+neograph::json toJson(const WireInterruptAndRunNext& msg);
+
+neograph::json toJson(const WireGetViewMessages& msg);
+
+neograph::json toJson(const WireViewMessagesPage& msg);
+
+/// 统一序列化为 JSON 字符串
+std::string serialize(const WireMessage& msg);
+
+/// 统一从 JSON 字符串反序列化为 WireMessage
+std::optional<WireMessage> deserialize(std::string_view jsonText);
+
 } // namespace io
 } // namespace agent
 } // namespace agentxx
