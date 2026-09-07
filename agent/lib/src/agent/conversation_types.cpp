@@ -1,21 +1,16 @@
 #include "agentxx/agent/conversation_types.h"
+#include "agentxx/util/hash.h"
 #include <fmt/format.h>
 
 namespace agentxx {
 namespace agent {
 
-static uint64_t fnv1a(std::string_view data, uint64_t seed) {
-    uint64_t hash = seed;
-    for (unsigned char c : data) {
-        hash ^= c;
-        hash *= 1099511628211ULL;
-    }
-    return hash;
-}
-
 void ChainHash::append(std::string_view serialized) {
     // 用 count_ 判断首次追加, 而非 hash_==0 (合法链哈希也可能算出 0, 会错误重置种子)
-    hash_ = fnv1a(serialized, count_ == 0 ? 14695981039346656037ULL : hash_);
+    hash_ = agentxx::util::hash::fnv1a64(
+        serialized,
+        count_ == 0 ? agentxx::util::hash::kFnv1a64OffsetBasis : hash_
+    );
     ++count_;
 }
 

@@ -3,6 +3,7 @@
 #include "agentxx/agent/config_static.h"
 #include "agentxx/util/container_util.h"
 #include "agentxx/util/exception.h"
+#include "agentxx/util/hash.h"
 #include "agentxx/util/log.h"
 #include <algorithm>
 #include <chrono>
@@ -22,15 +23,8 @@ namespace {
 static constexpr size_t kMaxSessionDataDirLen = 96;
 
 /// FNV-1a 64 位哈希 (截断用低 32 位 hex 输出)
-/// - 仅用于清洗后目录名的短标识, 确定性跨平台一致
-static uint64_t fnv1a64(std::string_view s) {
-    uint64_t hash = 1469598103934665603ULL;
-    for (unsigned char c : s) {
-        hash ^= c;
-        hash *= 1099511628211ULL;
-    }
-    return hash;
-}
+/// - 统一使用 agentxx::util::hash::fnv1a64 算法
+using agentxx::util::hash::fnv1a64;
 
 /// 默认数据根目录: {dataDir}/sqlite/sessions/
 /// - dataDir 为空时回退 ~/.agentxx/ (取不到用户主目录时回退系统临时目录)
