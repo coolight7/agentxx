@@ -455,98 +455,106 @@ void ModelCallWrapNode::repairMessages(neograph::graph::NodeInput& in) {
         //   history_contents/tool_calls 追加, flags 按位或, extra 对象字段合并(后者覆盖).
         {
             if (msgs.size() >= 2) {
-                std::vector<neograph::ChatMessage> merged;
-                merged.reserve(msgs.size());
-                size_t mergedCount = 0;
-                for (auto& m : msgs) {
-                    if (!merged.empty() && merged.back().role == "user" && m.role == "user") {
-                        auto& prev = merged.back();
-                        // content: "\n\n" 拼接, 避免空串产生多余分隔符
-                        if (!m.content.empty()) {
-                            if (!prev.content.empty()) {
-                                prev.content += "\n\n";
-                                prev.content += m.content;
-                            } else {
-                                prev.content = m.content;
-                            }
-                        }
-                        // reasoning_content 同理
-                        if (!m.reasoning_content.empty()) {
-                            if (!prev.reasoning_content.empty()) {
-                                prev.reasoning_content += "\n\n";
-                                prev.reasoning_content += m.reasoning_content;
-                            } else {
-                                prev.reasoning_content = m.reasoning_content;
-                            }
-                        }
-                        // 多模态附件
-                        if (!m.image_urls.empty()) {
-                            prev.image_urls.insert(
-                                prev.image_urls.end(),
-                                m.image_urls.begin(),
-                                m.image_urls.end()
-                            );
-                        }
-                        if (!m.audio_urls.empty()) {
-                            prev.audio_urls.insert(
-                                prev.audio_urls.end(),
-                                m.audio_urls.begin(),
-                                m.audio_urls.end()
-                            );
-                        }
-                        if (!m.video_urls.empty()) {
-                            prev.video_urls.insert(
-                                prev.video_urls.end(),
-                                m.video_urls.begin(),
-                                m.video_urls.end()
-                            );
-                        }
-                        if (!m.history_contents.empty()) {
-                            prev.history_contents.insert(
-                                prev.history_contents.end(),
-                                m.history_contents.begin(),
-                                m.history_contents.end()
-                            );
-                        }
-                        // user 正常不应带 tool_calls, 但若异常携带则追加保留
-                        if (!m.tool_calls.empty()) {
-                            prev.tool_calls.insert(
-                                prev.tool_calls.end(),
-                                m.tool_calls.begin(),
-                                m.tool_calls.end()
-                            );
-                        }
-                        // tool_call_id/tool_name 不处理 (user 角色无此字段)
-                        // flags 合并
-                        prev.flags = prev.flags | m.flags;
-                        // extra 合并: 对象则字段级合并, 否则有值时覆盖
-                        if (!m.extra.is_null() && !m.extra.empty()) {
-                            if (prev.extra.is_null() || prev.extra.empty()) {
-                                prev.extra = m.extra;
-                            } else if (prev.extra.is_object() && m.extra.is_object()) {
-                                for (auto kv : m.extra.items()) {
-                                    prev.extra[kv.first] = kv.second;
-                                }
-                            } else {
-                                // 非对象 extra 直接以新值覆盖旧值
-                                prev.extra = m.extra;
-                            }
-                        }
-                        ++mergedCount;
-                    } else {
-                        // 拷贝而非移动: 保持原 msgs 完整, 仅在真正合并时才替换
-                        merged.push_back(m);
+                bool hasConsecutiveUser = false;
+                for (size_t i = 1; i < msgs.size(); ++i) {
+                    if (msgs[i - 1].role == "user" && msgs[i].role == "user") {
+                        hasConsecutiveUser = true;
+                        break;
                     }
                 }
-                if (merged.size() != msgs.size()) {
-                    XX_LOGD(
-                        "RepairMessages: merged {} consecutive user message(s): {} -> {}",
-                        mergedCount,
-                        msgs.size(),
-                        merged.size()
-                    );
-                    msgs       = std::move(merged);
-                    haveChange = true;
+                if (hasConsecutiveUser) {
+                    std::vector<neograph::ChatMessage> merged;
+                    merged.reserve(msgs.size());
+                    size_t mergedCount = 0;
+                    for (auto& m : msgs) {
+                        if (!merged.empty() && merged.back().role == "user" && m.role == "user") {
+                            auto& prev = merged.back();
+                            // content: "\n\n" 拼接, 避免空串产生多余分隔符
+                            if (!m.content.empty()) {
+                                if (!prev.content.empty()) {
+                                    prev.content += "\n\n";
+                                    prev.content += m.content;
+                                } else {
+                                    prev.content = std::move(m.content);
+                                }
+                            }
+                            // reasoning_content 同理
+                            if (!m.reasoning_content.empty()) {
+                                if (!prev.reasoning_content.empty()) {
+                                    prev.reasoning_content += "\n\n";
+                                    prev.reasoning_content += m.reasoning_content;
+                                } else {
+                                    prev.reasoning_content = std::move(m.reasoning_content);
+                                }
+                            }
+                            // 多模态附件
+                            if (!m.image_urls.empty()) {
+                                prev.image_urls.insert(
+                                    prev.image_urls.end(),
+                                    std::make_move_iterator(m.image_urls.begin()),
+                                    std::make_move_iterator(m.image_urls.end())
+                                );
+                            }
+                            if (!m.audio_urls.empty()) {
+                                prev.audio_urls.insert(
+                                    prev.audio_urls.end(),
+                                    std::make_move_iterator(m.audio_urls.begin()),
+                                    std::make_move_iterator(m.audio_urls.end())
+                                );
+                            }
+                            if (!m.video_urls.empty()) {
+                                prev.video_urls.insert(
+                                    prev.video_urls.end(),
+                                    std::make_move_iterator(m.video_urls.begin()),
+                                    std::make_move_iterator(m.video_urls.end())
+                                );
+                            }
+                            if (!m.history_contents.empty()) {
+                                prev.history_contents.insert(
+                                    prev.history_contents.end(),
+                                    std::make_move_iterator(m.history_contents.begin()),
+                                    std::make_move_iterator(m.history_contents.end())
+                                );
+                            }
+                            // user 正常不应带 tool_calls, 但若异常携带则追加保留
+                            if (!m.tool_calls.empty()) {
+                                prev.tool_calls.insert(
+                                    prev.tool_calls.end(),
+                                    std::make_move_iterator(m.tool_calls.begin()),
+                                    std::make_move_iterator(m.tool_calls.end())
+                                );
+                            }
+                            // tool_call_id/tool_name 不处理 (user 角色无此字段)
+                            // flags 合并
+                            prev.flags = prev.flags | m.flags;
+                            // extra 合并: 对象则字段级合并, 否则有值时覆盖
+                            if (!m.extra.is_null() && !m.extra.empty()) {
+                                if (prev.extra.is_null() || prev.extra.empty()) {
+                                    prev.extra = std::move(m.extra);
+                                } else if (prev.extra.is_object() && m.extra.is_object()) {
+                                    for (auto kv : m.extra.items()) {
+                                        prev.extra[kv.first] = kv.second;
+                                    }
+                                } else {
+                                    // 非对象 extra 直接以新值覆盖旧值
+                                    prev.extra = std::move(m.extra);
+                                }
+                            }
+                            ++mergedCount;
+                        } else {
+                            merged.push_back(std::move(m));
+                        }
+                    }
+                    if (merged.size() != msgs.size()) {
+                        XX_LOGD(
+                            "RepairMessages: merged {} consecutive user message(s): {} -> {}",
+                            mergedCount,
+                            msgs.size(),
+                            merged.size()
+                        );
+                        msgs       = std::move(merged);
+                        haveChange = true;
+                    }
                 }
             }
         }
