@@ -1118,7 +1118,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                     XX_TEST_EXPECT_EQ(sec.items[0].value("kind", ""), std::string{"text"});
                     XX_TEST_EXPECT_EQ(sec.items[0].value("text", ""), std::string{"|- "});
                     XX_TEST_EXPECT_EQ(sec.items[1].value("kind", ""), std::string{"button"});
-                    XX_TEST_EXPECT_EQ(sec.items[1].value("label", ""), std::string{"[Graph]"});
+                    XX_TEST_EXPECT_EQ(sec.items[1].value("label", ""), std::string{"[ Graph ]"});
                     XX_TEST_EXPECT_EQ(
                         sec.items[1].value("action_id", ""),
                         std::string{"planning.open_graph"}
@@ -1728,10 +1728,10 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         // 无绑定 → button 不可点
         PluginButtonDesc desc;
         neograph::json   btnJson = neograph::json::parse(
-            R"({"kind":"button","label":"[Graph]","action_id":"planning.open_graph","args":{},"role":"accent"})"
+            R"({"kind":"button","label":"[ Graph ]","action_id":"planning.open_graph","args":{},"role":"accent"})"
         );
         XX_TEST_EXPECT_TRUE(parsePluginButton(btnJson, "agentxx_planning", &reg, desc));
-        XX_TEST_EXPECT_EQ(desc.label, "[Graph]");
+        XX_TEST_EXPECT_EQ(desc.label, "[ Graph ]");
         XX_TEST_EXPECT_EQ(desc.actionId, "planning.open_graph");
         XX_TEST_EXPECT_EQ(desc.argsJson, "{}");
         XX_TEST_EXPECT_TRUE(desc.role == PluginButtonRole::Accent);

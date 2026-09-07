@@ -8,6 +8,8 @@
 - OpWatchdog debug 时启用、配置启用
 
 - 图像音视频输入
+- 使用 simdjson 代替 neograph::json
+- 统一 tui 按钮内容风格为 [ xxx ]
 
 - 链式 session 任务队列
 - 添加 XX_IS_MINGW __MINGW32__

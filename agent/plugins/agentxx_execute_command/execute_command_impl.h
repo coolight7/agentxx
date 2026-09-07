@@ -42,6 +42,7 @@
 #include "asio/steady_timer.hpp"
 #include "asio/this_coro.hpp"
 #include "asio/use_awaitable.hpp"
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <csignal>
@@ -49,11 +50,13 @@
 #include <filesystem>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <neograph/json.h>
 #include <sstream>
 #include <string>
 #include <system_error>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #if defined(AGENTXX_ENABLE_BOOST_PROCESS) && AGENTXX_ENABLE_BOOST_PROCESS
@@ -77,6 +80,247 @@ using IsCancelledFn = std::function<bool()>;
 
 /// 写入 share_store 回调 (返回 ID，失败返回 -1); 插件侧注入，测试可传 nullptr
 using StoreFn = std::function<long long(std::string_view)>;
+
+/// 事件驱动的命令取消注册表
+/// - 支持按 sessionKey (sessionId / thread_id) 注册取消回调，
+///   会话或命令被取消时由宿主 execute_cancel 或业务层事件驱动直接触发回调，
+///   彻底消除原先 20ms 轮询 isCancelled() 及跨线程同步 post 到 io 线程造成的严重抖动
+/// - 多实例铁律契约: 实例状态只能保存在 *plugin_ctx 堆块内，本类无任何全局/函数级 static 状态
+/// - 线程安全: 支持多工作线程并发注册、注销，以及 io 线程并发触发 cancel
+/// - 零悬挂保证: unregisterCallback 会等待并排他锁定正在执行中的回调，确保进程/管道对象不会在回调执行中析构
+class CancelRegistry {
+public:
+    using CancelCallback = std::function<void()>;
+    using RegId          = uint64_t;
+
+    struct CallbackEntry {
+        std::mutex     mu;
+        bool           disposed{false};
+        CancelCallback cb;
+    };
+
+    CancelRegistry()  = default;
+    ~CancelRegistry() {
+        cancelAll();
+    }
+
+    CancelRegistry(const CancelRegistry&)            = delete;
+    CancelRegistry& operator=(const CancelRegistry&) = delete;
+
+    /// 注册取消回调
+    /// - `key`: 会话标识 (sessionId / thread_id)，为空表示未绑定会话的独立命令
+    /// - `cb`: 取消触发时的回调
+    /// - `return`: 注册 ID (非 0 表示有效)
+    RegId registerCallback(std::string_view key, CancelCallback cb) {
+        if (!cb) {
+            return 0;
+        }
+        auto entry = std::make_shared<CallbackEntry>();
+        entry->cb  = std::move(cb);
+
+        RegId id               = nextId_.fetch_add(1, std::memory_order_relaxed);
+        bool  alreadyCancelled = false;
+        {
+            std::lock_guard<std::mutex> lock(mu_);
+            if (!key.empty() && cancelledKeys_.count(std::string(key)) > 0) {
+                alreadyCancelled = true;
+            } else {
+                entries_[id] = entry;
+                if (!key.empty()) {
+                    keyToIds_[std::string(key)].push_back(id);
+                    idToKey_[id] = std::string(key);
+                }
+            }
+        }
+
+        if (alreadyCancelled) {
+            // 已被取消: 锁外同步触发
+            std::lock_guard<std::mutex> elock(entry->mu);
+            if (entry->cb) {
+                try {
+                    entry->cb();
+                } catch (...) {
+                }
+            }
+            return 0;
+        }
+        return id;
+    }
+
+    /// 注销回调 (命令正常结束时调用，等待进行中的取消回调完成以杜绝 UAF)
+    void unregisterCallback(RegId id) {
+        if (id == 0) {
+            return;
+        }
+        std::shared_ptr<CallbackEntry> entry;
+        {
+            std::lock_guard<std::mutex> lock(mu_);
+            auto it = entries_.find(id);
+            if (it != entries_.end()) {
+                entry = std::move(it->second);
+                entries_.erase(it);
+            }
+            auto kit = idToKey_.find(id);
+            if (kit != idToKey_.end()) {
+                auto vkit = keyToIds_.find(kit->second);
+                if (vkit != keyToIds_.end()) {
+                    auto& vec = vkit->second;
+                    vec.erase(std::remove(vec.begin(), vec.end(), id), vec.end());
+                    if (vec.empty()) {
+                        keyToIds_.erase(vkit);
+                    }
+                }
+                idToKey_.erase(kit);
+            }
+        }
+        if (entry) {
+            std::lock_guard<std::mutex> elock(entry->mu);
+            entry->disposed = true;
+            entry->cb       = nullptr;
+        }
+    }
+
+    /// 触发指定 key 的取消
+    /// - 将 key 标记为已取消，提取该 key 下所有未注销的回调并锁外执行
+    void cancel(std::string_view key) {
+        if (key.empty()) {
+            return;
+        }
+        std::vector<std::shared_ptr<CallbackEntry>> toInvoke;
+        {
+            std::lock_guard<std::mutex> lock(mu_);
+            cancelledKeys_.insert(std::string(key));
+            auto kit = keyToIds_.find(std::string(key));
+            if (kit != keyToIds_.end()) {
+                for (RegId id : kit->second) {
+                    auto eit = entries_.find(id);
+                    if (eit != entries_.end()) {
+                        toInvoke.push_back(eit->second);
+                        entries_.erase(eit);
+                    }
+                    idToKey_.erase(id);
+                }
+                keyToIds_.erase(kit);
+            }
+        }
+        for (auto& entry : toInvoke) {
+            std::lock_guard<std::mutex> elock(entry->mu);
+            if (!entry->disposed && entry->cb) {
+                try {
+                    entry->cb();
+                } catch (...) {
+                }
+                entry->cb = nullptr;
+            }
+        }
+    }
+
+    /// 取消所有正在运行的命令
+    void cancelAll() {
+        std::vector<std::shared_ptr<CallbackEntry>> toInvoke;
+        {
+            std::lock_guard<std::mutex> lock(mu_);
+            for (auto& [id, entry] : entries_) {
+                toInvoke.push_back(entry);
+            }
+            entries_.clear();
+            keyToIds_.clear();
+            idToKey_.clear();
+        }
+        for (auto& entry : toInvoke) {
+            std::lock_guard<std::mutex> elock(entry->mu);
+            if (!entry->disposed && entry->cb) {
+                try {
+                    entry->cb();
+                } catch (...) {
+                }
+                entry->cb = nullptr;
+            }
+        }
+    }
+
+    /// 查询指定 key 是否已在注册表中标记为取消
+    bool isCancelled(std::string_view key) const {
+        if (key.empty()) {
+            return false;
+        }
+        std::lock_guard<std::mutex> lock(mu_);
+        return cancelledKeys_.count(std::string(key)) > 0;
+    }
+
+    /// 重置某个 key 的取消标记 (新轮次开始时可选调用)
+    void clearCancelled(std::string_view key) {
+        if (key.empty()) {
+            return;
+        }
+        std::lock_guard<std::mutex> lock(mu_);
+        cancelledKeys_.erase(std::string(key));
+    }
+
+    /// 当前活跃注册数 (用于测试或监控)
+    size_t activeCount() const {
+        std::lock_guard<std::mutex> lock(mu_);
+        return entries_.size();
+    }
+
+    /// RAII 自动注销守卫
+    class [[nodiscard]] ScopedRegistration {
+    public:
+        ScopedRegistration() = default;
+        ScopedRegistration(CancelRegistry* reg, RegId id) :
+            reg_(reg), id_(id) {}
+        ~ScopedRegistration() {
+            if (reg_ && id_ != 0) {
+                reg_->unregisterCallback(id_);
+            }
+        }
+        ScopedRegistration(ScopedRegistration&& o) noexcept :
+            reg_(o.reg_), id_(o.id_) {
+            o.reg_ = nullptr;
+            o.id_  = 0;
+        }
+        ScopedRegistration& operator=(ScopedRegistration&& o) noexcept {
+            if (this != &o) {
+                if (reg_ && id_ != 0) {
+                    reg_->unregisterCallback(id_);
+                }
+                reg_   = o.reg_;
+                id_    = o.id_;
+                o.reg_ = nullptr;
+                o.id_  = 0;
+            }
+            return *this;
+        }
+        ScopedRegistration(const ScopedRegistration&)            = delete;
+        ScopedRegistration& operator=(const ScopedRegistration&) = delete;
+
+        RegId id() const noexcept {
+            return id_;
+        }
+        void release() noexcept {
+            reg_ = nullptr;
+            id_  = 0;
+        }
+
+    private:
+        CancelRegistry* reg_ = nullptr;
+        RegId           id_  = 0;
+    };
+
+    /// 便捷注册并返回 RAII 守卫
+    ScopedRegistration bind(std::string_view key, CancelCallback cb) {
+        RegId id = registerCallback(key, std::move(cb));
+        return ScopedRegistration(this, id);
+    }
+
+private:
+    mutable std::mutex                                        mu_;
+    std::atomic<RegId>                                        nextId_{1};
+    std::unordered_map<RegId, std::shared_ptr<CallbackEntry>> entries_;
+    std::unordered_map<std::string, std::vector<RegId>>       keyToIds_;
+    std::unordered_map<RegId, std::string>                    idToKey_;
+    std::unordered_set<std::string>                           cancelledKeys_;
+};
 
 namespace detail {
 
@@ -213,8 +457,8 @@ inline void killProcGroup(boost::process::process& proc, void* winJob = nullptr)
 inline void closePipesAfterKill(asio::readable_pipe& outpip, asio::readable_pipe& errpip);
 
 /// 会话取消监听协程体 (与主工作经 awaitable_operators 并行运行):
-/// - 轮询 isCancelled 回调 (宿主会话取消令牌 + op cancel_flag 双通道),
-///   取消时终止子进程
+/// - 事件驱动: 优先通过 CancelRegistry 事件回调触发 killProcGroup 与关闭管道，
+///   唤醒 cancelTimer 挂起，彻底代替 20ms 轮询与跨线程同步 post 到 io 线程造成的严重抖动
 /// - 【关键生命周期语义】动作完成后不立即结束, 而是挂起直至被并行组取消:
 ///   || 组合下"任一先完成即整体完成并取消其余", 若本协程在 kill 后立刻返回,
 ///   会在主工作组装结果前把它整体取消 (丢失输出); 挂起让主工作自然收尾,
@@ -229,31 +473,87 @@ inline asio::awaitable<void> procCancelWatchLoop(
     boost::process::process& proc,
     asio::readable_pipe&     outpip,
     asio::readable_pipe&     errpip,
+    void*                    winJob         = nullptr,
+    CancelRegistry*          cancelRegistry = nullptr,
+    std::string_view         sessionKey     = {},
+    const IsCancelledFn&     isCancelled    = nullptr
+) {
+    auto ex          = co_await asio::this_coro::executor;
+    auto cancelTimer = std::make_shared<asio::steady_timer>(ex);
+    auto cancelled   = std::make_shared<std::atomic<bool>>(false);
+
+    // 1. 初始状态检查 (单次原子/内存判断，非轮询)
+    if ((cancelRegistry && !sessionKey.empty() && cancelRegistry->isCancelled(sessionKey))
+        || (isCancelled && isCancelled())) {
+        cancelled->store(true, std::memory_order_release);
+        detail::killProcGroup(proc, winJob);
+        detail::closePipesAfterKill(outpip, errpip);
+        cancelTimer->expires_after(std::chrono::hours(24));
+        co_await cancelTimer->async_wait(asio::as_tuple(asio::use_awaitable));
+        co_return;
+    }
+
+    // 2. 事件驱动取消注册 (零轮询)
+    CancelRegistry::ScopedRegistration regGuard;
+    if (cancelRegistry) {
+        regGuard = cancelRegistry->bind(
+            sessionKey,
+            [&proc, winJob, &outpip, &errpip, ex, cancelTimer, cancelled]() {
+                bool expected = false;
+                if (!cancelled->compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
+                    return;
+                }
+                // 立即整组 kill (Linux: setsid killpg, Windows: TerminateJobObject)
+                detail::killProcGroup(proc, winJob);
+                // 在管道绑定的 executor 上关闭读句柄并取消等待计时器
+                asio::post(ex, [&outpip, &errpip, cancelTimer]() {
+                    detail::closePipesAfterKill(outpip, errpip);
+                    cancelTimer->cancel();
+                });
+            }
+        );
+    }
+
+    // 3. 挂起等待：等待取消事件唤醒或由并行组取消 (主工作完成)
+    cancelTimer->expires_at(std::chrono::steady_clock::time_point::max());
+    auto [ec] = co_await cancelTimer->async_wait(asio::as_tuple(asio::use_awaitable));
+    (void)ec;
+
+    // 如果未触发取消，说明主工作正常完成，并行组取消了本协程
+    if (!cancelled->load(std::memory_order_acquire)) {
+        // 退化兜底：若未提供 cancelRegistry 但提供了 isCancelled 回调 (旧单测适配)
+        if (!cancelRegistry && isCancelled && isCancelled()) {
+            detail::killProcGroup(proc, winJob);
+            detail::closePipesAfterKill(outpip, errpip);
+            cancelTimer->expires_after(std::chrono::hours(24));
+            co_await cancelTimer->async_wait(asio::as_tuple(asio::use_awaitable));
+        }
+        co_return;
+    }
+
+    // 4. 由注册表取消事件触发：子进程已在回调中 kill，管道已关闭。
+    // 挂起直至被并行组取消 (主工作自然读取 EOF 并组装退出结果)
+    cancelTimer->expires_after(std::chrono::hours(24));
+    co_await cancelTimer->async_wait(asio::as_tuple(asio::use_awaitable));
+}
+
+/// 兼容旧签名的重载
+inline asio::awaitable<void> procCancelWatchLoop(
+    boost::process::process& proc,
+    asio::readable_pipe&     outpip,
+    asio::readable_pipe&     errpip,
     void*                    winJob,
     const IsCancelledFn&     isCancelled
 ) {
-    asio::steady_timer timer(co_await asio::this_coro::executor);
-    if (!isCancelled) {
-        // 无取消源: 挂起直至被并行组取消 (主工作完成)
-        timer.expires_after(std::chrono::hours(24));
-        co_await timer.async_wait(asio::as_tuple(asio::use_awaitable));
-        co_return;
-    }
-    while (false == isCancelled()) {
-        timer.expires_after(std::chrono::milliseconds(20));
-        auto [ec] = co_await timer.async_wait(asio::as_tuple(asio::use_awaitable));
-        if (ec) {
-            co_return; // 被并行组取消: 主工作已完成
-        }
-    }
-    // 会话取消: 终止整棵进程树 (Windows: Job Object; Linux: 进程组) 后挂起,
-    // 让主工作自然收尾; 终止后主动关闭本端管道读句柄, 确保即使有漏网
-    // 孙进程仍持有写端, 在途 async_read 也能立刻以错误完成, 避免主工作
-    // 永久等待 EOF 而挂死 (见 runProcPipeline timeoutGuard 同款处理)
-    detail::killProcGroup(proc, winJob);
-    detail::closePipesAfterKill(outpip, errpip);
-    timer.expires_after(std::chrono::hours(24));
-    co_await timer.async_wait(asio::as_tuple(asio::use_awaitable));
+    co_return co_await procCancelWatchLoop(
+        proc,
+        outpip,
+        errpip,
+        winJob,
+        /*cancelRegistry=*/nullptr,
+        /*sessionKey=*/"",
+        isCancelled
+    );
 }
 
 #if XX_IS_WIN_D
@@ -424,9 +724,11 @@ inline asio::awaitable<std::string> runProcPipeline(
     asio::readable_pipe&     errpip,
     int                      timeout,
     bool                     all_output,
-    const IsCancelledFn&     isCancelled,
-    const StoreFn&           storeFn = nullptr,
-    void*                    winJob  = nullptr
+    const IsCancelledFn&     isCancelled    = nullptr,
+    const StoreFn&           storeFn        = nullptr,
+    void*                    winJob         = nullptr,
+    CancelRegistry*          cancelRegistry = nullptr,
+    std::string_view         sessionKey     = {}
 ) {
     std::string              strout, strerr;
     neograph_asio_error_code errCodeStdOut, errCodeStdErr;
@@ -540,7 +842,15 @@ inline asio::awaitable<std::string> runProcPipeline(
         using namespace asio::experimental::awaitable_operators;
         co_await (
             mainWork() || timeoutGuard()
-            || detail::procCancelWatchLoop(proc, outpip, errpip, winJob, isCancelled)
+            || detail::procCancelWatchLoop(
+                proc,
+                outpip,
+                errpip,
+                winJob,
+                cancelRegistry,
+                sessionKey,
+                isCancelled
+            )
         );
     }
     co_return resultStr;
@@ -561,8 +871,10 @@ inline asio::awaitable<std::string> runProcPipeline(
 inline asio::awaitable<std::string> bashExecuteAsync(
     const neograph::json& arguments,
     const std::string&    workDir,
-    const IsCancelledFn&  isCancelled = nullptr,
-    const StoreFn&        storeFn     = nullptr
+    const IsCancelledFn&  isCancelled    = nullptr,
+    const StoreFn&        storeFn        = nullptr,
+    CancelRegistry*       cancelRegistry = nullptr,
+    std::string_view      sessionKey     = {}
 ) {
     auto command = arguments.value("command", std::string{});
     if (command.empty()) {
@@ -571,6 +883,24 @@ inline asio::awaitable<std::string> bashExecuteAsync(
     // [all_output] 为false时，仅执行失败才返回 stdout和stderr
     auto all_output = arguments.value("all_output", true);
     auto timeout    = arguments.value("timeout", 60);
+
+    std::string effectiveSessionKey{sessionKey};
+    if (effectiveSessionKey.empty() && arguments.contains("sessionId")
+        && arguments["sessionId"].is_string()) {
+        effectiveSessionKey = arguments["sessionId"].get<std::string>();
+    }
+
+    if ((cancelRegistry && !effectiveSessionKey.empty()
+         && cancelRegistry->isCancelled(effectiveSessionKey))
+        || (isCancelled && isCancelled())) {
+        co_return "[ExitCode]\n130\n[Error]\nCommand cancelled before execution.\n";
+    }
+
+    if ((cancelRegistry && !effectiveSessionKey.empty()
+         && cancelRegistry->isCancelled(effectiveSessionKey))
+        || (isCancelled && isCancelled())) {
+        co_return "[ExitCode]\n130\n[Error]\nCommand cancelled before execution.\n";
+    }
 
     // 寄生驱动: 管道/进程绑定到当前协程的 executor (插件实例 PollLoop),
     // 由宿主 io 线程经 pollOnce 非阻塞步进 (不再自建 io_context + run())
@@ -614,7 +944,10 @@ inline asio::awaitable<std::string> bashExecuteAsync(
         timeout,
         all_output,
         isCancelled,
-        storeFn
+        storeFn,
+        /*winJob=*/nullptr,
+        cancelRegistry,
+        effectiveSessionKey
     );
 }
 
@@ -622,8 +955,10 @@ inline asio::awaitable<std::string> bashExecuteAsync(
 inline asio::awaitable<std::string> windowsExecuteAsync(
     const neograph::json& arguments,
     const std::string&    workDir,
-    const IsCancelledFn&  isCancelled = nullptr,
-    const StoreFn&        storeFn     = nullptr
+    const IsCancelledFn&  isCancelled    = nullptr,
+    const StoreFn&        storeFn        = nullptr,
+    CancelRegistry*       cancelRegistry = nullptr,
+    std::string_view      sessionKey     = {}
 ) {
     auto command = arguments.value("command", std::string{});
     if (command.empty()) {
@@ -631,6 +966,12 @@ inline asio::awaitable<std::string> windowsExecuteAsync(
     }
     auto all_output = arguments.value("all_output", true);
     auto timeout    = arguments.value("timeout", 60);
+
+    std::string effectiveSessionKey{sessionKey};
+    if (effectiveSessionKey.empty() && arguments.contains("sessionId")
+        && arguments["sessionId"].is_string()) {
+        effectiveSessionKey = arguments["sessionId"].get<std::string>();
+    }
 
     auto                ex = co_await asio::this_coro::executor;
     asio::readable_pipe outpip{ex}, errpip{ex};
@@ -712,7 +1053,9 @@ inline asio::awaitable<std::string> windowsExecuteAsync(
         all_output,
         isCancelled,
         storeFn,
-        winJob
+        winJob,
+        cancelRegistry,
+        effectiveSessionKey
     );
 }
 
@@ -727,11 +1070,22 @@ inline asio::awaitable<std::string> windowsExecuteAsync(
 inline std::string bashExecute(
     const neograph::json& arguments,
     const std::string&    workDir,
-    const IsCancelledFn&  isCancelled = nullptr,
-    const StoreFn&        storeFn     = nullptr
+    const IsCancelledFn&  isCancelled    = nullptr,
+    const StoreFn&        storeFn        = nullptr,
+    CancelRegistry*       cancelRegistry = nullptr,
+    std::string_view      sessionKey     = {}
 ) {
     (void)workDir;
-    (void)isCancelled;
+    std::string effectiveSessionKey{sessionKey};
+    if (effectiveSessionKey.empty() && arguments.contains("sessionId")
+        && arguments["sessionId"].is_string()) {
+        effectiveSessionKey = arguments["sessionId"].get<std::string>();
+    }
+    if ((cancelRegistry && !effectiveSessionKey.empty()
+         && cancelRegistry->isCancelled(effectiveSessionKey))
+        || (isCancelled && isCancelled())) {
+        return R"({"error":"Execution cancelled"})";
+    }
     auto command = arguments.value("command", std::string{});
     if (command.empty()) {
         return R"({"error":"Arg `command` is empty"})";
@@ -770,11 +1124,13 @@ inline std::string bashExecute(
 inline std::string windowsExecute(
     const neograph::json& arguments,
     const std::string&    workDir,
-    const IsCancelledFn&  isCancelled = nullptr,
-    const StoreFn&        storeFn     = nullptr
+    const IsCancelledFn&  isCancelled    = nullptr,
+    const StoreFn&        storeFn        = nullptr,
+    CancelRegistry*       cancelRegistry = nullptr,
+    std::string_view      sessionKey     = {}
 ) {
     // 无 bp::v2 时 Windows 命令同样走 popen 回退 (cmd.exe 语义由提示词引导)
-    return bashExecute(arguments, workDir, isCancelled, storeFn);
+    return bashExecute(arguments, workDir, isCancelled, storeFn, cancelRegistry, sessionKey);
 }
 
 #endif // BOOST_PROCESS_V2_PROCESS_HPP

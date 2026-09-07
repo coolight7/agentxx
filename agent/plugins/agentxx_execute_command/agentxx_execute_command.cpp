@@ -171,23 +171,19 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                    std::string_view tid,
                    std::string_view workDir,
                    volatile int*    cancel_flag) -> std::string {
-                    auto arguments   = args_json.empty() ? neograph::json::object()
-                                                         : neograph::json::parse(args_json);
-                    auto isCancelled = [&c, tid, cancel_flag]() -> bool {
-                        if (cancel_flag && *cancel_flag != 0)
-                            return true;
-                        return c.sessionCancelled(
-                            agentxx::plugin::PluginStringView::from(tid.data(), tid.size())
-                        );
-                    };
+                    auto arguments = args_json.empty() ? neograph::json::object()
+                                                       : neograph::json::parse(args_json);
+                    std::string tidStr(tid);
+                    if (cancel_flag && *cancel_flag != 0) {
+                        c.cancelRegistry.cancel(tidStr);
+                    }
                     StoreFn storeFn = nullptr;
                     if (!tid.empty() && c.iface.session && c.iface.session->add_share_store) {
-                        std::string tidCopy(tid);
-                        storeFn = [&c, tidCopy](std::string_view content) -> long long {
+                        storeFn = [&c, tidStr](std::string_view content) -> long long {
                             return c.addShareStore(
                                 agentxx::plugin::PluginStringView::from(
-                                    tidCopy.data(),
-                                    tidCopy.size()
+                                    tidStr.data(),
+                                    tidStr.size()
                                 ),
                                 content
                             );
@@ -203,8 +199,10 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                                 result = co_await windowsExecuteAsync(
                                     arguments,
                                     std::string(workDir),
-                                    isCancelled,
-                                    storeFn
+                                    /*isCancelled=*/nullptr,
+                                    storeFn,
+                                    &c.cancelRegistry,
+                                    tidStr
                                 );
                             } catch (...) {
                                 ep = std::current_exception();
@@ -231,29 +229,37 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                    std::string_view tid,
                    std::string_view workDir,
                    volatile int*    cancel_flag) -> std::string {
-                    auto arguments   = args_json.empty() ? neograph::json::object()
-                                                         : neograph::json::parse(args_json);
-                    auto isCancelled = [&c, tid, cancel_flag]() -> bool {
+                    auto arguments = args_json.empty() ? neograph::json::object()
+                                                       : neograph::json::parse(args_json);
+                    std::string tidStr(tid);
+                    if (cancel_flag && *cancel_flag != 0) {
+                        c.cancelRegistry.cancel(tidStr);
+                    }
+                    auto isCancelled = [&c, tidStr, cancel_flag]() -> bool {
                         if (cancel_flag && *cancel_flag != 0)
                             return true;
-                        return c.sessionCancelled(
-                            agentxx::plugin::PluginStringView::from(tid.data(), tid.size())
-                        );
+                        return c.cancelRegistry.isCancelled(tidStr);
                     };
                     StoreFn storeFn = nullptr;
                     if (!tid.empty() && c.iface.session && c.iface.session->add_share_store) {
-                        std::string tidCopy(tid);
-                        storeFn = [&c, tidCopy](std::string_view content) -> long long {
+                        storeFn = [&c, tidStr](std::string_view content) -> long long {
                             return c.addShareStore(
                                 agentxx::plugin::PluginStringView::from(
-                                    tidCopy.data(),
-                                    tidCopy.size()
+                                    tidStr.data(),
+                                    tidStr.size()
                                 ),
                                 content
                             );
                         };
                     }
-                    return windowsExecute(arguments, std::string(workDir), isCancelled, storeFn);
+                    return windowsExecute(
+                        arguments,
+                        std::string(workDir),
+                        isCancelled,
+                        storeFn,
+                        &c.cancelRegistry,
+                        tidStr
+                    );
                 },
                 0,
                 AGENTXX_PLUGIN_TOOL_FLAG_NONE
@@ -275,23 +281,19 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                    std::string_view tid,
                    std::string_view workDir,
                    volatile int*    cancel_flag) -> std::string {
-                    auto arguments   = args_json.empty() ? neograph::json::object()
-                                                         : neograph::json::parse(args_json);
-                    auto isCancelled = [&c, tid, cancel_flag]() -> bool {
-                        if (cancel_flag && *cancel_flag != 0)
-                            return true;
-                        return c.sessionCancelled(
-                            agentxx::plugin::PluginStringView::from(tid.data(), tid.size())
-                        );
-                    };
+                    auto arguments = args_json.empty() ? neograph::json::object()
+                                                       : neograph::json::parse(args_json);
+                    std::string tidStr(tid);
+                    if (cancel_flag && *cancel_flag != 0) {
+                        c.cancelRegistry.cancel(tidStr);
+                    }
                     StoreFn storeFn = nullptr;
                     if (!tid.empty() && c.iface.session && c.iface.session->add_share_store) {
-                        std::string tidCopy(tid);
-                        storeFn = [&c, tidCopy](std::string_view content) -> long long {
+                        storeFn = [&c, tidStr](std::string_view content) -> long long {
                             return c.addShareStore(
                                 agentxx::plugin::PluginStringView::from(
-                                    tidCopy.data(),
-                                    tidCopy.size()
+                                    tidStr.data(),
+                                    tidStr.size()
                                 ),
                                 content
                             );
@@ -307,8 +309,10 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                                 result = co_await bashExecuteAsync(
                                     arguments,
                                     std::string(workDir),
-                                    isCancelled,
-                                    storeFn
+                                    /*isCancelled=*/nullptr,
+                                    storeFn,
+                                    &c.cancelRegistry,
+                                    tidStr
                                 );
                             } catch (...) {
                                 ep = std::current_exception();
@@ -335,29 +339,37 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                    std::string_view tid,
                    std::string_view workDir,
                    volatile int*    cancel_flag) -> std::string {
-                    auto arguments   = args_json.empty() ? neograph::json::object()
-                                                         : neograph::json::parse(args_json);
-                    auto isCancelled = [&c, tid, cancel_flag]() -> bool {
+                    auto arguments = args_json.empty() ? neograph::json::object()
+                                                       : neograph::json::parse(args_json);
+                    std::string tidStr(tid);
+                    if (cancel_flag && *cancel_flag != 0) {
+                        c.cancelRegistry.cancel(tidStr);
+                    }
+                    auto isCancelled = [&c, tidStr, cancel_flag]() -> bool {
                         if (cancel_flag && *cancel_flag != 0)
                             return true;
-                        return c.sessionCancelled(
-                            agentxx::plugin::PluginStringView::from(tid.data(), tid.size())
-                        );
+                        return c.cancelRegistry.isCancelled(tidStr);
                     };
                     StoreFn storeFn = nullptr;
                     if (!tid.empty() && c.iface.session && c.iface.session->add_share_store) {
-                        std::string tidCopy(tid);
-                        storeFn = [&c, tidCopy](std::string_view content) -> long long {
+                        storeFn = [&c, tidStr](std::string_view content) -> long long {
                             return c.addShareStore(
                                 agentxx::plugin::PluginStringView::from(
-                                    tidCopy.data(),
-                                    tidCopy.size()
+                                    tidStr.data(),
+                                    tidStr.size()
                                 ),
                                 content
                             );
                         };
                     }
-                    return bashExecute(arguments, std::string(workDir), isCancelled, storeFn);
+                    return bashExecute(
+                        arguments,
+                        std::string(workDir),
+                        isCancelled,
+                        storeFn,
+                        &c.cancelRegistry,
+                        tidStr
+                    );
                 },
                 0,
                 AGENTXX_PLUGIN_TOOL_FLAG_NONE
@@ -375,6 +387,9 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
 extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_agent_destroy(void* plugin_ctx) {
     auto* ctx = static_cast<PluginCtx*>(plugin_ctx);
     agentxx::plugin::guardCallVoid(ctxGuardLogger(ctx), [&] {
+        if (ctx) {
+            ctx->cancelRegistry.cancelAll();
+        }
         delete ctx;
     });
 }

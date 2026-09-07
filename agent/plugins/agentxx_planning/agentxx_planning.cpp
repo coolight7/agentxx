@@ -667,7 +667,8 @@ static std::string buildTodosSummary(const neograph::json& plan) {
     return summary;
 }
 
-/// 提取公共渲染逻辑: 渲染 Todo 列表与 Note 备忘 (P3-5 消除 buildDecorItems 与 refreshPlanSection 的渲染重复)
+/// 提取公共渲染逻辑: 渲染 Todo 列表与 Note 备忘 (P3-5 消除 buildDecorItems 与 refreshPlanSection
+/// 的渲染重复)
 static void appendTodoAndNoteItems(
     const ClientCtx&          ctx,
     const neograph::json&     plan,
@@ -847,7 +848,7 @@ static void refreshPlanSection(ClientCtx& ctx) {
     const auto roadmap = plan.value("roadmap", std::string{});
     if (!roadmap.empty()) {
         textItem("|- ", "normal");
-        buttonItem("[Graph]", roadmap);
+        buttonItem("[ Graph ]", roadmap);
     }
 
     // ---- Todo & Note 渲染 ----

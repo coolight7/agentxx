@@ -4,6 +4,7 @@
 #include "agentxx/plugin/api/plugin_api.h"
 #include "agentxx/plugin/api/plugin_guard.h"
 #include "agentxx/plugin/api/plugin_kit.h"
+#include "execute_command_impl.h"
 #include <fmt/format.h>
 #include <memory>
 #include <neograph/json.h>
@@ -11,7 +12,9 @@
 
 namespace agentxx_execmd_plugin {
 
-struct PluginCtx : public agentxx::plugin::PluginBase {};
+struct PluginCtx : public agentxx::plugin::PluginBase {
+    CancelRegistry cancelRegistry;
+};
 
 inline void pluginLog(const PluginCtx* ctx, int level, const std::string& msg) {
     if (ctx) {

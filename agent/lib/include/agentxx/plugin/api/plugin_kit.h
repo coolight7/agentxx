@@ -2093,6 +2093,11 @@ inline void blocking_tool(
         }
         auto* job       = static_cast<Job*>(op);
         job->cancelFlag = 1;
+        if (job->shim && job->shim->ctx) {
+            if constexpr (requires { job->shim->ctx->cancelRegistry.cancel(std::string_view{job->tid}); }) {
+                job->shim->ctx->cancelRegistry.cancel(job->tid);
+            }
+        }
     };
 
     if (ctx.iface.tools && ctx.iface.tools->register_tool) {
