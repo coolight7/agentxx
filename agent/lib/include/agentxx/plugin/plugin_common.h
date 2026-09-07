@@ -3,9 +3,8 @@
 /// 背景: [plugin_manager.cpp](/agent/lib/src/plugins/plugin_manager.cpp) (agent 侧)
 /// 与 [client_plugin_manager.cpp](/agent/lib/src/plugins/client_plugin_manager.cpp)
 /// (client 侧) 存在大量重复基建 (插件名推导 / manifest 解析 / entry 路径解析 /
-/// 拓扑排序 / 反向依赖收集 / io 线程同步等待 / C ABI 异常兜底宏)。提取到本头
-/// 避免两侧行为漂移 —— 历史上 client 侧多次"漏掉 agent 侧已修的问题" (见
-/// [plugins.md](/docs/zh-cn/design.md/plugins.md) 13.x 记录), 公共化后修复只做一次。
+/// 拓扑排序 / 反向依赖收集 / io 线程同步等待 / C ABI 异常兜底宏)。提取到本文件
+/// 避免两侧行为漂移
 ///
 /// 内容:
 /// - XX_PLUGIN_CATCH_*: C ABI 边界异常兜底宏 (宏定义, 无 ODR 问题)

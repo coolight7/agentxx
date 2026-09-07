@@ -10,9 +10,7 @@
 /// - 级联卸载/禁用骨架 (collectReverseRequiredDeps + waitInflightZero)
 /// - 可执行目录 helper (跨平台 GetModuleFileNameW /proc/self/exe)
 /// - C ABI 内存三件套 (alloc/free/strdup)
-/// 提取到本基类避免两侧行为漂移 (历史上 client 侧多次"漏掉 agent 侧已修
-/// 的问题", 见 [plugins.md](/docs/zh-cn/design.md/plugins.md) 13.x 记录),
-/// 公共化后修复只做一次。
+/// 提取到本基类避免两侧行为漂移
 ///
 /// 结构:
 /// - PluginInstanceBase: 实例公共基类 (两侧 PluginInstance/ClientPluginInstance
