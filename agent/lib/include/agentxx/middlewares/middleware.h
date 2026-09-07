@@ -238,6 +238,19 @@ public:
     }
 };
 
+/// 中间件生命周期拦截钩子集合
+/// - 采用聚合体设计, 未指定的阶段天然默认为 nullptr
+/// - 支持 C++20 指定初始化器 (Designated Initializers)
+struct MiddlewareHooks {
+    onGraphNodeBeforeCallFunc onAgentcallStart = nullptr;
+    onGraphNodeAfterCallFunc  onAgentcallEnd   = nullptr;
+    onGraphNodeBeforeCallFunc onModelcallStart = nullptr;
+    onGraphNodeBeforeCallFunc onModelcallRun   = nullptr;
+    onGraphNodeAfterCallFunc  onModelcallEnd   = nullptr;
+    onGraphNodeBeforeCallFunc onToolcallStart  = nullptr;
+    onGraphNodeAfterCallFunc  onToolcallEnd    = nullptr;
+};
+
 template<BaseMiddlewareStateType T>
 class MiddlewareWrapHandle : public BaseMiddlewareHandle<T> {
 public:
@@ -253,22 +266,41 @@ public:
     MiddlewareWrapHandle(
         std::string_view                            in_name,
         std::weak_ptr<agentxx::agent::AgentContext> in_agentContext,
-        const onGraphNodeBeforeCallFunc&            in_onAgentcallStart = nullptr,
-        const onGraphNodeAfterCallFunc&             in_onAgentcallEnd   = nullptr,
-        const onGraphNodeBeforeCallFunc&            in_onModelcallStart = nullptr,
-        const onGraphNodeBeforeCallFunc&            in_onModelcallRun   = nullptr,
-        const onGraphNodeAfterCallFunc&             in_onModelcallEnd   = nullptr,
-        const onGraphNodeBeforeCallFunc&            in_onToolcallStart  = nullptr,
-        const onGraphNodeAfterCallFunc&             in_onToolcallEnd    = nullptr
+        MiddlewareHooks                             in_hooks = {}
     ) :
         BaseMiddlewareHandle<T>(in_name, in_agentContext),
-        onAgentcallStart(in_onAgentcallStart),
-        onAgentcallEnd(in_onAgentcallEnd),
-        onModelcallStart(in_onModelcallStart),
-        onModelcallRun(in_onModelcallRun),
-        onModelcallEnd(in_onModelcallEnd),
-        onToolcallStart(in_onToolcallStart),
-        onToolcallEnd(in_onToolcallEnd) {}
+        onAgentcallStart(std::move(in_hooks.onAgentcallStart)),
+        onAgentcallEnd(std::move(in_hooks.onAgentcallEnd)),
+        onModelcallStart(std::move(in_hooks.onModelcallStart)),
+        onModelcallRun(std::move(in_hooks.onModelcallRun)),
+        onModelcallEnd(std::move(in_hooks.onModelcallEnd)),
+        onToolcallStart(std::move(in_hooks.onToolcallStart)),
+        onToolcallEnd(std::move(in_hooks.onToolcallEnd)) {}
+
+    MiddlewareWrapHandle(
+        std::string_view                            in_name,
+        std::weak_ptr<agentxx::agent::AgentContext> in_agentContext,
+        const onGraphNodeBeforeCallFunc&            in_onAgentcallStart,
+        const onGraphNodeAfterCallFunc&             in_onAgentcallEnd,
+        const onGraphNodeBeforeCallFunc&            in_onModelcallStart,
+        const onGraphNodeBeforeCallFunc&            in_onModelcallRun,
+        const onGraphNodeAfterCallFunc&             in_onModelcallEnd,
+        const onGraphNodeBeforeCallFunc&            in_onToolcallStart,
+        const onGraphNodeAfterCallFunc&             in_onToolcallEnd
+    ) :
+        MiddlewareWrapHandle(
+            in_name,
+            in_agentContext,
+            MiddlewareHooks{
+                .onAgentcallStart = in_onAgentcallStart,
+                .onAgentcallEnd   = in_onAgentcallEnd,
+                .onModelcallStart = in_onModelcallStart,
+                .onModelcallRun   = in_onModelcallRun,
+                .onModelcallEnd   = in_onModelcallEnd,
+                .onToolcallStart  = in_onToolcallStart,
+                .onToolcallEnd    = in_onToolcallEnd,
+            }
+        ) {}
 
     asio::awaitable<void> onAgentcallStartFunc(neograph::graph::NodeInput& in) override {
         if (nullptr != onAgentcallStart) {
