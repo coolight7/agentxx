@@ -82,8 +82,8 @@ inline void benchStringUtil() {
             text += "field1,field2,field3,field4,field5\n";
         }
 
-        auto r = runBench("strSplitCopid [2MB CSV text]", 50, [&]() {
-            auto result = agentxx::util::strSplitCopid(text, ',');
+        auto r = runBench("strSplitCopied [2MB CSV text]", 50, [&]() {
+            auto result = agentxx::util::strSplitCopied(text, ',');
             (void)result;
         });
         printResult(r);

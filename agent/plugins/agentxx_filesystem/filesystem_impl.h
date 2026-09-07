@@ -79,22 +79,9 @@ inline std::string wsAbs(const std::string& workDir, const std::string& path) {
     return agentxx::util::toCurrentSystemAbsolutePath(path, workDir);
 }
 
-/// 将文本中的 LF (`\n`) 行尾统一转换为 CRLF (`\r\n`)。
+/// 将文本中的 CRLF (`\r\n`) 行尾统一转换为 LF (`\n`)。
 inline void normalizeCrlfToLf(std::string& text) {
-    if (text.find("\r\n") == std::string::npos) {
-        return;
-    }
-    std::string out;
-    out.reserve(text.size());
-    for (size_t i = 0; i < text.size();) {
-        if (text[i] == '\r' && i + 1 < text.size() && text[i + 1] == '\n') {
-            out += '\n';
-            i   += 2;
-        } else {
-            out += text[i++];
-        }
-    }
-    text.swap(out);
+    agentxx::util::normalizeCrlfToLf(text);
 }
 
 /// 解析 `type` 参数为类型集合。支持 string 或 array 两种形式。

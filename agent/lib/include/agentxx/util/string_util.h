@@ -9,6 +9,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <fmt/ranges.h>
 #include <format>
 #include <functional>
 #include <iomanip>
@@ -534,18 +535,18 @@ using IgnoreCaseSet = std::unordered_set<std::string, IgnoreCaseHash, IgnoreCase
            + static_cast<double>(asciiCount) / asciiCharsPerToken;
 }
 
+/// 泛型范围字符串拼接
+/// - 支持任意标准 input_range 容器与视图 (vector/list/set/span/views 等)
+template<std::ranges::input_range Range>
+[[nodiscard]] inline std::string stringJoin(const Range& range, std::string_view sep = ", ") {
+    return fmt::format("{}", fmt::join(range, sep));
+}
+
+/// vector 字符串拼接 (向后兼容接口，内部转发至 stringJoin)
 template<typename T>
 [[nodiscard]] inline std::string
     stringVectorJoin(const std::vector<T>& list, std::string_view sep = ", ") {
-    std::ostringstream oss;
-    auto               len = list.size();
-    for (size_t i = 0; i < len; ++i) {
-        oss << list[i];
-        if (i < len - 1) {
-            oss << sep;
-        }
-    }
-    return oss.str();
+    return stringJoin(list, sep);
 }
 
 [[nodiscard]] inline std::vector<std::string_view>
@@ -563,7 +564,8 @@ template<typename T>
     return result;
 }
 
-[[nodiscard]] inline std::vector<std::string> strSplitCopid(std::string_view in_str, char delim) {
+/// 字符分割并拷贝为 std::string 列表
+[[nodiscard]] inline std::vector<std::string> strSplitCopied(std::string_view in_str, char delim) {
     auto                     split = in_str | std::views::split(delim);
     std::vector<std::string> result;
 
@@ -571,6 +573,38 @@ template<typename T>
         result.emplace_back(sub.begin(), sub.end());
     }
     return result;
+}
+
+/// 将文本中的 CRLF (`\r\n`) 行尾统一转换为 LF (`\n`)
+inline void normalizeCrlfToLf(std::string& text) {
+    if (text.find("\r\n") == std::string::npos) {
+        return;
+    }
+    std::string out;
+    out.reserve(text.size());
+    for (size_t i = 0; i < text.size();) {
+        if (text[i] == '\r' && i + 1 < text.size() && text[i + 1] == '\n') {
+            out += '\n';
+            i   += 2;
+        } else {
+            out += text[i++];
+        }
+    }
+    text.swap(out);
+}
+
+/// 将文本中的单独 LF (`\n`) 行尾统一转换为 CRLF (`\r\n`)
+inline void normalizeLfToCrlf(std::string& text) {
+    std::string out;
+    out.reserve(text.size() + text.size() / 10);
+    for (size_t i = 0; i < text.size(); ++i) {
+        if (text[i] == '\n' && (i == 0 || text[i - 1] != '\r')) {
+            out += "\r\n";
+        } else {
+            out += text[i];
+        }
+    }
+    text.swap(out);
 }
 
 [[nodiscard]] inline constexpr std::string_view toStringNotNull(const char* str) {

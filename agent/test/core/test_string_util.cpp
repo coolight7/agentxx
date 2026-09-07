@@ -803,9 +803,10 @@ void test_strSplit() {
     XX_TEST_EXPECT_EQ(r5[0], std::string_view("abc"));
 
     // 拷贝版本
-    auto r6 = agentxx::util::strSplitCopid("a;b;c", ';');
-    XX_TEST_EXPECT_EQ(r6.size(), (size_t)3);
-    XX_TEST_EXPECT_EQ(r6[1], std::string("b"));
+    auto r6_new = agentxx::util::strSplitCopied("x/y/z", '/');
+    XX_TEST_EXPECT_EQ(r6_new.size(), (size_t)3);
+    XX_TEST_EXPECT_EQ(r6_new[0], std::string("x"));
+    XX_TEST_EXPECT_EQ(r6_new[2], std::string("z"));
 }
 
 void test_stringVectorJoin() {
@@ -817,6 +818,21 @@ void test_stringVectorJoin() {
     XX_TEST_EXPECT_EQ(agentxx::util::stringVectorJoin(std::vector<std::string>{"a"}, "-"), "a");
     // 非字符串元素
     XX_TEST_EXPECT_EQ(agentxx::util::stringVectorJoin(std::vector<int>{1, 2, 3}, "-"), "1-2-3");
+
+    // stringJoin: 泛型 input_range
+    std::vector<std::string> vec{"x", "y", "z"};
+    XX_TEST_EXPECT_EQ(agentxx::util::stringJoin(vec, "/"), "x/y/z");
+    std::vector<int> nums{10, 20, 30};
+    XX_TEST_EXPECT_EQ(agentxx::util::stringJoin(nums, ":"), "10:20:30");
+
+    // normalizeCrlfToLf / normalizeLfToCrlf
+    std::string text1 = "line1\r\nline2\r\nline3";
+    agentxx::util::normalizeCrlfToLf(text1);
+    XX_TEST_EXPECT_EQ(text1, "line1\nline2\nline3");
+
+    std::string text2 = "line1\nline2\nline3";
+    agentxx::util::normalizeLfToCrlf(text2);
+    XX_TEST_EXPECT_EQ(text2, "line1\r\nline2\r\nline3");
 }
 
 void test_toStringNotNull() {

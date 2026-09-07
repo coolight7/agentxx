@@ -86,7 +86,7 @@ asio::awaitable<std::pair<std::string, agentxx::middleware::_SkillMetadata>>
                         data.compatibility = metadata["compatibility"].as<std::string>();
                     }
                     if (metadata["allowed-tools"].IsScalar()) {
-                        data.allowed_tools = agentxx::util::strSplitCopid(
+                        data.allowed_tools = agentxx::util::strSplitCopied(
                             metadata["allowed-tools"].as<std::string>(),
                             ' '
                         );
