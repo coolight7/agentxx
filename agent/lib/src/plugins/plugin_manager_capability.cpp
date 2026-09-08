@@ -311,7 +311,7 @@ AgentxxPluginOperatorHandle* PluginManager::callToolAsync(
         return nullptr;
     }
 
-    const auto&    spec   = pluginTool->spec();
+    const auto&         spec   = pluginTool->spec();
     agentxx::util::Json parsed = agentxx::util::Json::object();
     if (!agentxx::plugin::PluginStringView::empty(args_json)) {
         try {

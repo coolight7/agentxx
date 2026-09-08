@@ -5,6 +5,7 @@
 /// - 依赖: agentxx::util::Json + fmt + C++ 标准数学库
 #pragma once
 
+#include "agentxx/util/json.h"
 #include <algorithm>
 #include <cctype>
 #include <charconv>
@@ -12,7 +13,6 @@
 #include <cstdint>
 #include <fmt/format.h>
 #include <limits>
-#include "agentxx/util/json.h"
 #include <numbers>
 #include <numeric>
 #include <optional>

@@ -434,8 +434,11 @@ asio::awaitable<TestResult> run_subagent_tool_tests() {
                           {"message", "t1"},
                           {"result_id", "r1"}
                       },
-                      agentxx::util::Json{{"subagent", "worker"}, {"message", "t2"}, {"result_id", "r2"}}
-                     }
+                      agentxx::util::Json{
+                          {"subagent", "worker"},
+                          {"message", "t2"},
+                          {"result_id", "r2"}
+                      }}
                  )                             },
                 {"sessionId",    env->sessionId},
                 {"tool_call_id", "call_B"      },
@@ -524,8 +527,11 @@ asio::awaitable<TestResult> run_subagent_tool_tests() {
                           {"message", "t1"},
                           {"result_id", "r1"}
                       },
-                      agentxx::util::Json{{"subagent", "worker"}, {"message", "t2"}, {"result_id", "r2"}}
-                     }
+                      agentxx::util::Json{
+                          {"subagent", "worker"},
+                          {"message", "t2"},
+                          {"result_id", "r2"}
+                      }}
                  )                             },
                 {"sessionId",    env->sessionId},
                 {"tool_call_id", "call_E"      },
@@ -585,14 +591,14 @@ asio::awaitable<TestResult> run_subagent_tool_tests() {
             auto passthroughMsgs      = agentxx::util::Json::array({passthroughMsg});
 
             agentxx::util::Json taskItem{
-                {"subagent",             "researcher"                                  },
-                {"system_prompt",        "be brief"                                    },
-                {"message",              "find foo"                                    },
-                {"messages",             std::move(passthroughMsgs)                    },
-                {"sessionId",            "same-ctx-thread"                             },
+                {"subagent",             "researcher"                                       },
+                {"system_prompt",        "be brief"                                         },
+                {"message",              "find foo"                                         },
+                {"messages",             std::move(passthroughMsgs)                         },
+                {"sessionId",            "same-ctx-thread"                                  },
                 {"tools",                agentxx::util::Json::array({"agentxx_share_store"})},
-                {"enable_summarization", false                                         },
-                {"result_id",            "parse-r1"                                    },
+                {"enable_summarization", false                                              },
+                {"result_id",            "parse-r1"                                         },
             };
 
             agentxx::middleware::InterruptHandleArg handleArg;
@@ -641,9 +647,18 @@ asio::awaitable<TestResult> run_subagent_tool_tests() {
             handleArg.arg      = agentxx::util::Json{
                      {"tasks",
                       agentxx::util::Json::array(
-                     {agentxx::util::Json{{"subagent", "a"}, {"message", "m1"}, {"result_id", "x1"}},
-                           agentxx::util::Json{{"subagent", "b"}, {"message", "m2"}, {"result_id", "x2"}},
-                           agentxx::util::Json{{"subagent", "c"}, {"message", "m3"}, {"result_id", "x3"}}}
+                     {agentxx::util::Json{
+                               {"subagent", "a"},
+                               {"message", "m1"},
+                               {"result_id", "x1"}
+                      },
+                           agentxx::util::Json{
+                               {"subagent", "b"},
+                               {"message", "m2"},
+                               {"result_id", "x2"}
+                      },
+                           agentxx::util::Json{{"subagent", "c"}, {"message", "m3"}, {"result_id", "x3"}}
+                     }
                  )}
             };
             auto batch
@@ -727,7 +742,11 @@ asio::awaitable<TestResult> run_subagent_tool_tests() {
             agentxx::util::Json args{
                 {"tasks",
                  agentxx::util::Json::array(
-                     {agentxx::util::Json{{"subagent", "w"}, {"message", "m1"}, {"result_id", "res-1"}},
+                     {agentxx::util::Json{
+                          {"subagent", "w"},
+                          {"message", "m1"},
+                          {"result_id", "res-1"}
+                      },
                       agentxx::util::Json{{"subagent", "w"}, {"message", "m2"}}}
                  )                               },
                 {"sessionId",    env->sessionId  },

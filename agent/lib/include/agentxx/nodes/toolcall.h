@@ -60,7 +60,7 @@ public:
     ///   用于询问提示中向用户展示
     asio::awaitable<std::string> execTool(
         neograph::Tool*                                      tool,
-        agentxx::util::Json&                                      args,
+        agentxx::util::Json&                                 args,
         const std::shared_ptr<neograph::graph::CancelToken>& cancelToken,
         bool                                                 repeatCallTriggered = false,
         std::string_view                                     repeatCallKey       = {}

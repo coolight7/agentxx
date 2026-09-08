@@ -13,6 +13,7 @@
 #include "agentxx/agent/model_registry.h"
 #include "agentxx/plugin/client_plugin_manager.h"
 #include "agentxx/util/exception.h"
+#include "agentxx/util/json.h"
 #include "agentxx/util/log.h"
 #include "agentxx/util/ws_client.h"
 #include "asio/co_spawn.hpp"
@@ -22,7 +23,6 @@
 #include "asio/steady_timer.hpp"
 #include "asio/use_awaitable.hpp"
 #include "fmt/format.h"
-#include "agentxx/util/json.h"
 #include <atomic>
 #include <chrono>
 #include <cstdint>

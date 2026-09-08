@@ -4,9 +4,9 @@
 #include "agentxx/plugin/api/plugin_api.h"
 #include "agentxx/plugin/api/plugin_guard.h"
 #include "agentxx/plugin/api/plugin_kit.h"
+#include "agentxx/util/json.h"
 #include <fmt/format.h>
 #include <memory>
-#include "agentxx/util/json.h"
 #include <string>
 
 namespace agentxx_math_plugin {

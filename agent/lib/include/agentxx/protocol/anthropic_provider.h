@@ -2,8 +2,8 @@
 
 #include "agentxx/agent/config.h"
 #include "agentxx/util/exception.h"
-#include "agentxx/util/json_view.h"
 #include "agentxx/util/http_client.h"
+#include "agentxx/util/json_view.h"
 #include "agentxx/util/log.h"
 #include "agentxx/util/string_util.h"
 #include "asio/awaitable.hpp"
@@ -67,7 +67,9 @@ public:
 
     /// 向 completion.message.extra[kThinkingBlocksKey] 追加一个 thinking 相关块
     /// (thinking/redacted_thinking), 首次追加时初始化为数组
-    static void appendThinkingBlock(neograph::ChatCompletion& completion, const agentxx::util::Json& block);
+    static void
+        appendThinkingBlock(neograph::ChatCompletion& completion, const agentxx::util::Json& block);
+
     // (实现见 anthropic_provider.cpp: 经 bridge 转入 message.extra(neograph::json))
 
     /// 解析 Anthropic SSE 响应缓冲
@@ -155,10 +157,11 @@ public:
 
         size_t lineStart = 0;
         while (lineStart < block.size()) {
-            auto lineEnd = block.find('\n', lineStart);
+            auto        lineEnd = block.find('\n', lineStart);
             std::string line{
                 (lineEnd == std::string::npos) ? block.substr(lineStart)
-                                               : block.substr(lineStart, lineEnd - lineStart)};
+                                               : block.substr(lineStart, lineEnd - lineStart)
+            };
             lineStart = (lineEnd == std::string::npos) ? block.size() : lineEnd + 1;
 
             if (!line.empty() && line.back() == '\r') {
@@ -192,14 +195,15 @@ public:
         // - View 仅做只读导航 (event/usage/delta 标量提取无 DOM 堆分配)
         // - 仅 thinking/redacted 块组装需要 Json DOM (appendThinkingBlock 物化)
         agentxx::util::JsonView jv;
-        bool parsed = agentxx::util::catchError<bool>(
+        bool                    parsed = agentxx::util::catchError<bool>(
             [&]() -> bool {
                 jv = agentxx::util::JsonView::parse(payload);
                 return true;
             },
             [](std::string) -> bool {
                 return false;
-            });
+            }
+        );
         if (!parsed || !jv.is_object()) {
             return false;
         }
@@ -247,7 +251,7 @@ public:
                 }
             }
         } else if (currentEvent == "content_block_start") {
-            int idx = viewInt(jv, "index", 0);
+            int  idx    = viewInt(jv, "index", 0);
             auto cbView = jv["content_block"];
             if (cbView.valid() && cbView.is_object()) {
                 std::string type;
@@ -259,7 +263,7 @@ public:
                 }
                 blockTypes[idx] = type;
                 if (type == "tool_use") {
-                    tcMap[idx].id = viewStr(cbView["id"]);
+                    tcMap[idx].id   = viewStr(cbView["id"]);
                     tcMap[idx].name = viewStr(cbView["name"]);
                 } else if (type == "redacted_thinking") {
                     // redacted_thinking 块必须在多轮对话中原样回传 (命中后物化)
@@ -270,12 +274,12 @@ public:
                 }
             }
         } else if (currentEvent == "content_block_delta") {
-            int idx = viewInt(jv, "index", 0);
+            int  idx       = viewInt(jv, "index", 0);
             auto deltaView = jv["delta"];
             if (deltaView.valid() && deltaView.is_object()) {
                 std::string deltaType = viewStr(deltaView["type"]);
                 if (deltaType == "text_delta") {
-                    auto text = viewStr(deltaView["text"]);
+                    auto text    = viewStr(deltaView["text"]);
                     fullContent += text;
                     if (on_chunk) {
                         on_chunk(neograph::ChatStreamChunk{
@@ -284,31 +288,33 @@ public:
                         });
                     }
                 } else if (deltaType == "thinking_delta") {
-                    auto thinking = viewStr(deltaView["thinking"]);
-                    fullThinking += thinking;
+                    auto thinking       = viewStr(deltaView["thinking"]);
+                    fullThinking       += thinking;
                     thinkingTexts[idx] += thinking;
                     if (on_chunk) {
                         on_chunk(neograph::ChatStreamChunk{
-                            neograph::ChatStreamChunk::TYPE_THINKING, thinking});
+                            neograph::ChatStreamChunk::TYPE_THINKING,
+                            thinking
+                        });
                     }
                 } else if (deltaType == "signature_delta") {
                     // thinking 块的 signature, 多轮对话回传 thinking 时 Anthropic 要求携带
                     blockSignatures[idx] += viewStr(deltaView["signature"]);
                 } else if (deltaType == "input_json_delta") {
-                    auto partialJson = viewStr(deltaView["partial_json"]);
+                    auto partialJson      = viewStr(deltaView["partial_json"]);
                     tcMap[idx].arguments += partialJson;
                 }
             }
         } else if (currentEvent == "content_block_stop") {
-            int idx = viewInt(jv, "index", 0);
-            auto it = blockTypes.find(idx);
+            int  idx = viewInt(jv, "index", 0);
+            auto it  = blockTypes.find(idx);
             if (it != blockTypes.end() && it->second == "thinking") {
                 auto sigIt = blockSignatures.find(idx);
                 // 仅保存带 signature 的 thinking 块: 无 signature 的 thinking 回传会被 API 拒绝
                 if (sigIt != blockSignatures.end() && !sigIt->second.empty()) {
                     agentxx::util::Json b;
-                    b["type"] = "thinking";
-                    b["thinking"] = thinkingTexts[idx];
+                    b["type"]      = "thinking";
+                    b["thinking"]  = thinkingTexts[idx];
                     b["signature"] = sigIt->second;
                     appendThinkingBlock(completion, std::move(b));
                 }
@@ -342,7 +348,7 @@ private:
 
     asio::awaitable<neograph::ChatCompletion> doStream(
         const neograph::CompletionParams&  params,
-        const agentxx::util::Json&              body,
+        const agentxx::util::Json&         body,
         neograph::FormatDataStreamCallback on_chunk
     );
 

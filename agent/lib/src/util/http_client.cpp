@@ -9,8 +9,10 @@
 #include <netinet/tcp.h>
 #endif
 
+#include "agentxx/util/asio_error.h"
 #include "agentxx/util/exception.h"
 #include "agentxx/util/http_client.h"
+#include "agentxx/util/http_error.h"
 #include "agentxx/version.h"
 #include "html2md/html2md.h"
 #include <asio/as_tuple.hpp>
@@ -21,8 +23,6 @@
 #include <asio/steady_timer.hpp>
 #include <list>
 #include <map>
-#include "agentxx/util/asio_error.h"
-#include "agentxx/util/http_error.h"
 #include <openssl/ssl.h>
 #include <openssl/tls1.h> // TLS1_VERSION 等协议版本常量 (enableTlsAutoNegotiate)
 #include <variant>
@@ -1611,10 +1611,10 @@ asio::awaitable<std::expected<HttpResponse, std::string>> HttpClient::headAsync(
 }
 
 asio::awaitable<std::expected<HttpResponse, std::string>> HttpClient::postAsync(
-    std::string_view      url,
+    std::string_view           url,
     const agentxx::util::Json& body,
-    const HeaderMap&      extraHeaders,
-    const RequestConfig&  config
+    const HeaderMap&           extraHeaders,
+    const RequestConfig&       config
 ) {
     co_return co_await requestAsync(
         "POST",

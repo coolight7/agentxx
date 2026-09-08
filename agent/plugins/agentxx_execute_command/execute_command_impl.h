@@ -28,10 +28,11 @@
 #pragma once
 
 #include "agentxx/plugin/api/plugin_kit.h"
+#include "agentxx/util/asio_error.h"
+#include "agentxx/util/json.h"
 #include "agentxx/util/log.h"
 #include "agentxx/util/string_util.h"
 #include "agentxx/util/util.h"
-#include "agentxx/util/asio_error.h"
 #include "asio/as_tuple.hpp"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
@@ -53,7 +54,6 @@
 #include <functional>
 #include <memory>
 #include <mutex>
-#include "agentxx/util/json.h"
 #include <sstream>
 #include <string>
 #include <system_error>
@@ -635,11 +635,11 @@ inline asio::awaitable<std::string> runProcPipeline(
 /// agentxx_execute_bash_command 执行体 (原 ExecuteBashCommandTool::execute_async)
 inline asio::awaitable<std::string> bashExecuteAsync(
     const agentxx::util::Json& arguments,
-    const std::string&    workDir,
-    const IsCancelledFn&  isCancelled    = nullptr,
-    const StoreFn&        storeFn        = nullptr,
-    CancelRegistry*       cancelRegistry = nullptr,
-    std::string_view      sessionKey     = {}
+    const std::string&         workDir,
+    const IsCancelledFn&       isCancelled    = nullptr,
+    const StoreFn&             storeFn        = nullptr,
+    CancelRegistry*            cancelRegistry = nullptr,
+    std::string_view           sessionKey     = {}
 ) {
     auto command = arguments.value("command", std::string{});
     if (command.empty()) {
@@ -719,11 +719,11 @@ inline asio::awaitable<std::string> bashExecuteAsync(
 /// agentxx_execute_windows_command 执行体 (原 ExecuteWindowsCommandTool::execute_async)
 inline asio::awaitable<std::string> windowsExecuteAsync(
     const agentxx::util::Json& arguments,
-    const std::string&    workDir,
-    const IsCancelledFn&  isCancelled    = nullptr,
-    const StoreFn&        storeFn        = nullptr,
-    CancelRegistry*       cancelRegistry = nullptr,
-    std::string_view      sessionKey     = {}
+    const std::string&         workDir,
+    const IsCancelledFn&       isCancelled    = nullptr,
+    const StoreFn&             storeFn        = nullptr,
+    CancelRegistry*            cancelRegistry = nullptr,
+    std::string_view           sessionKey     = {}
 ) {
     auto command = arguments.value("command", std::string{});
     if (command.empty()) {
@@ -834,11 +834,11 @@ inline asio::awaitable<std::string> windowsExecuteAsync(
 
 inline std::string bashExecute(
     const agentxx::util::Json& arguments,
-    const std::string&    workDir,
-    const IsCancelledFn&  isCancelled    = nullptr,
-    const StoreFn&        storeFn        = nullptr,
-    CancelRegistry*       cancelRegistry = nullptr,
-    std::string_view      sessionKey     = {}
+    const std::string&         workDir,
+    const IsCancelledFn&       isCancelled    = nullptr,
+    const StoreFn&             storeFn        = nullptr,
+    CancelRegistry*            cancelRegistry = nullptr,
+    std::string_view           sessionKey     = {}
 ) {
     (void)workDir;
     std::string effectiveSessionKey{sessionKey};
@@ -888,11 +888,11 @@ inline std::string bashExecute(
 
 inline std::string windowsExecute(
     const agentxx::util::Json& arguments,
-    const std::string&    workDir,
-    const IsCancelledFn&  isCancelled    = nullptr,
-    const StoreFn&        storeFn        = nullptr,
-    CancelRegistry*       cancelRegistry = nullptr,
-    std::string_view      sessionKey     = {}
+    const std::string&         workDir,
+    const IsCancelledFn&       isCancelled    = nullptr,
+    const StoreFn&             storeFn        = nullptr,
+    CancelRegistry*            cancelRegistry = nullptr,
+    std::string_view           sessionKey     = {}
 ) {
     // 无 bp::v2 时 Windows 命令同样走 popen 回退 (cmd.exe 语义由提示词引导)
     return bashExecute(arguments, workDir, isCancelled, storeFn, cancelRegistry, sessionKey);

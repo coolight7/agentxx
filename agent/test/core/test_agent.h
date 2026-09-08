@@ -1,10 +1,10 @@
 #pragma once
 
 #include "agentxx/util/http_server.h"
+#include "agentxx/util/json.h"
 #include <asio/awaitable.hpp>
 #include <memory>
 #include <neograph/api.h>
-#include "agentxx/util/json.h"
 #include <string>
 #include <thread>
 #include <vector>
@@ -17,9 +17,9 @@ namespace test {
 // ===========================================================================
 // Local LLM Simulator — an OpenAI-compatible HTTP server
 // ===========================================================================
-extern std::string    g_da_sim_response_content;
-extern int            g_da_sim_prompt_tokens;
-extern int            g_da_sim_completion_tokens;
+extern std::string         g_da_sim_response_content;
+extern int                 g_da_sim_prompt_tokens;
+extern int                 g_da_sim_completion_tokens;
 extern agentxx::util::Json g_da_sim_tool_calls;
 /// 最后一次收到的 /chat/completions 请求体 (供测试断言模型名/消息前缀)
 extern agentxx::util::Json g_da_sim_last_request;

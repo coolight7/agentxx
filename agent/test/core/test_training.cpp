@@ -241,11 +241,11 @@ void testVariantSerializationRoundtrip() {
     XX_TEST_EXPECT_EQ(back.promptHash(), v.promptHash());
 
     // 兼容旧格式: 无 smoothedScore/evalRounds 字段时取默认值
-    agentxx::util::Json old     = agentxx::util::Json::object();
-    old["id"]              = "legacy";
-    old["cumulativeScore"] = 1.0;
-    old["testCount"]       = 2;
-    auto legacy            = acc.promptVariantFromJson(old);
+    agentxx::util::Json old = agentxx::util::Json::object();
+    old["id"]               = "legacy";
+    old["cumulativeScore"]  = 1.0;
+    old["testCount"]        = 2;
+    auto legacy             = acc.promptVariantFromJson(old);
     XX_TEST_EXPECT_EQ(legacy.smoothedScore, -1.0);
     XX_TEST_EXPECT_EQ(legacy.evalRounds, 0);
 }

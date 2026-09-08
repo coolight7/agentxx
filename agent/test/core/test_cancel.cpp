@@ -418,25 +418,25 @@ asio::awaitable<void> test_agent_cancel_toolcall() {
     // LLM 返回两个 toolcall: 先慢速 tool, 后标记 tool
     g_da_sim_tool_calls = agentxx::util::Json::array({
         agentxx::util::Json{
-                       {"index", 0},
-                       {"id", "call_slow_1"},
-                       {"type", "function"},
-                       {"function",
+                            {"index", 0},
+                            {"id", "call_slow_1"},
+                            {"type", "function"},
+                            {"function",
              agentxx::util::Json{
                  {"name", "test_slow"},
                  {"arguments", "{}"},
              }},
-                       },
+                            },
         agentxx::util::Json{
-                       {"index", 1},
-                       {"id", "call_marker_1"},
-                       {"type", "function"},
-                       {"function",
+                            {"index", 1},
+                            {"id", "call_marker_1"},
+                            {"type", "function"},
+                            {"function",
              agentxx::util::Json{
                  {"name", "test_marker"},
                  {"arguments", "{}"},
              }},
-                       },
+                            },
     });
 
     CancelTestAgent agent(cfg);
@@ -520,12 +520,12 @@ asio::awaitable<void> test_agent_cancel_toolcall() {
     //   走 isCancel 分支保存完整上下文 (wrap_handle 在 rethrow 前写入 tempMessages),
     //   因此这里轮询等待保存完成
     {
-        auto               ex2 = co_await asio::this_coro::executor;
-        asio::steady_timer poll(ex2);
-        agentxx::util::Json     im;
-        bool               slowCanceled   = false;
-        bool               markerCanceled = false;
-        const auto         deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
+        auto                ex2 = co_await asio::this_coro::executor;
+        asio::steady_timer  poll(ex2);
+        agentxx::util::Json im;
+        bool                slowCanceled   = false;
+        bool                markerCanceled = false;
+        const auto          deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
         while (std::chrono::steady_clock::now() < deadline) {
             // 轮末错误路径已把 tempMessages 快照收敛进 llmMessages 并清理
             // graphData, 断言权威面 (llmMessages) 即可

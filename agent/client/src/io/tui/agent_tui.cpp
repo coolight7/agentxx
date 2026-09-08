@@ -441,7 +441,10 @@ void TUIClientAgentIO::start() {
         });
 
         InputComponent::Config inputCfg;
-        inputCfg.onSend = [this](std::string text, std::vector<agentxx::agent::MediaAttachment> attachments) -> bool {
+        inputCfg.onSend = [this](
+                              std::string                                  text,
+                              std::vector<agentxx::agent::MediaAttachment> attachments
+                          ) -> bool {
             // ---- 插件命令拦截 (UI 线程) ----
             // 输入以 "/" 开头且匹配插件注册的命令时, 拦截并投递到 client io
             // 线程执行命令回调 (execute 返回动作 JSON, 由宿主解释执行);
@@ -457,7 +460,7 @@ void TUIClientAgentIO::start() {
                     std::string argsText
                         = spacePos == std::string::npos ? std::string{} : text.substr(spacePos + 1);
                     agentxx::util::Json args = agentxx::util::Json::object();
-                    args["text"]        = argsText;
+                    args["text"]             = argsText;
                     pluginManager_->postCommandInvocation(cmdName, args.dump());
                     return true;
                 }
@@ -494,7 +497,9 @@ void TUIClientAgentIO::start() {
             return ctx_.frameState && ctx_.frameState->isStreaming;
         };
         inputCfg.canAttach = [this] {
-            if (!ctx_.frameState) return false;
+            if (!ctx_.frameState) {
+                return false;
+            }
             return ctx_.frameState->currentModelCapability().hasMultimodalInput();
         };
         inputCfg.onOpenAttachPicker = [this] {
@@ -1308,8 +1313,7 @@ void TUIClientAgentIO::openFilePickerOverlay() {
         return;
     }
     // 检查附件数量限制
-    if (inputBar_
-        && inputBar_->attachments().size() >= agentxx::agent::kMaxAttachmentsPerMessage) {
+    if (inputBar_ && inputBar_->attachments().size() >= agentxx::agent::kMaxAttachmentsPerMessage) {
         showToast(std::string(tr("toast.attachLimit")));
         postRedraw();
         return;
@@ -1344,11 +1348,11 @@ void TUIClientAgentIO::openFilePickerOverlay() {
         // 大小限制检查
         uint64_t maxSize = agentxx::agent::maxBytesForMediaType(mediaType);
         if (fileSize > maxSize) {
-            showToast(trf(
-                "toast.attachTooLarge",
-                fmt::format("{:.1f} MB", static_cast<double>(fileSize) / (1024.0 * 1024.0)),
-                fmt::format("{:.0f} MB", static_cast<double>(maxSize) / (1024.0 * 1024.0))
-            ));
+            showToast(
+                trf("toast.attachTooLarge",
+                    fmt::format("{:.1f} MB", static_cast<double>(fileSize) / (1024.0 * 1024.0)),
+                    fmt::format("{:.0f} MB", static_cast<double>(maxSize) / (1024.0 * 1024.0)))
+            );
             postRedraw();
             return;
         }
@@ -1367,7 +1371,7 @@ void TUIClientAgentIO::openFilePickerOverlay() {
         ifs.close();
 
         // Base64 编码为 Data URL
-        auto base64 = agentxx::util::base64Encode(fileData);
+        auto base64  = agentxx::util::base64Encode(fileData);
         auto dataUrl = fmt::format("data:{};base64,{}", mimeType, base64);
 
         // 构建 MediaAttachment
@@ -1560,7 +1564,8 @@ void TUIClientAgentIO::onPeerMessage(agentxx::agent::WireMessage msg) {
                 {
                     std::lock_guard<std::mutex> lock(sharedState_.mutex());
                     auto&                       st = sharedState_.mutableState();
-                    st.contextMessages    = std::make_shared<agentxx::util::Json>(std::move(m.messages));
+                    st.contextMessages
+                        = std::make_shared<agentxx::util::Json>(std::move(m.messages));
                     st.showContextOverlay = true;
                 }
                 // 打开上下文弹窗: 组件树由 UI 线程独占, 须投递到 UI 线程执行
@@ -1657,8 +1662,8 @@ void TUIClientAgentIO::sendUserInputLocked(
             currentSessionId(),
             text,
             std::move(pendingModel),
-            std::move(attachments)}
-        );
+            std::move(attachments)
+        });
     } else {
         // 无 transport (遗留直连模式): 输入经本地 channel 送达, 无法携带
         // 模型选择, 已取走的 pendingModel 直接丢弃 (该模式下不切换模型)

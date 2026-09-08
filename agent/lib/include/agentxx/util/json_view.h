@@ -42,6 +42,7 @@ public:
     bool valid() const noexcept {
         return valid_;
     }
+
     explicit operator bool() const noexcept {
         return valid();
     }
@@ -67,9 +68,11 @@ public:
     // ----- 只读导航 (缺失时返回无效视图, 不抛异常; 子视图可跨语句持有) -----
     JsonView operator[](std::string_view key) const noexcept;
     JsonView operator[](size_t index) const noexcept;
+
     JsonView operator[](int index) const noexcept {
         return (*this)[static_cast<size_t>(index)];
     }
+
     JsonView at(std::string_view key) const;
     JsonView at(size_t index) const;
     bool     contains(std::string_view key) const noexcept;
@@ -89,6 +92,7 @@ public:
             return def;
         }
     }
+
     std::string value(std::string_view key, const char* def) const;
 
     template<typename T>
@@ -105,6 +109,7 @@ private:
         simdjson::padded_string padded;
         simdjson::dom::parser   parser;
     };
+
     simdjson::dom::element   elem_{};
     std::shared_ptr<Storage> storage_;
     bool                     valid_ = false;

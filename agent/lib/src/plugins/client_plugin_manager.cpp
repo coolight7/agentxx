@@ -567,7 +567,7 @@ void ClientPluginManager::enableImpl(std::string_view name, bool userInitiated) 
         inst->statusItemHandles.push_back(h);
         if (uiAdapter_) {
             agentxx::util::Json props = agentxx::util::Json::object();
-            props["text"]        = reg.text;
+            props["text"]             = reg.text;
             uiAdapter_->onStatusItemRegistered(reg.id, props, reg.align, reg.order);
         }
     }
@@ -594,7 +594,7 @@ void ClientPluginManager::enableImpl(std::string_view name, bool userInitiated) 
         inst->panelHandles.push_back(h);
         if (uiAdapter_) {
             agentxx::util::Json props = agentxx::util::Json::object();
-            props["title"]       = reg.title;
+            props["title"]            = reg.title;
             uiAdapter_->onPanelRegistered(reg.id, props);
         }
     }
@@ -621,7 +621,7 @@ void ClientPluginManager::enableImpl(std::string_view name, bool userInitiated) 
         inst->infoSectionHandles.push_back(h);
         if (uiAdapter_) {
             agentxx::util::Json props = agentxx::util::Json::object();
-            props["title"]       = reg.title;
+            props["title"]            = reg.title;
             uiAdapter_->onInfoSectionRegistered(reg.id, props);
         }
     }
@@ -978,10 +978,10 @@ void ClientPluginManager::dispatchCommandAction(const std::string& actionJson) {
 // ==================== 会话上下文 ====================
 
 std::string ClientPluginManager::clientStateJson() const {
-    agentxx::util::Json j     = agentxx::util::Json::object();
-    j["sessionId"]       = sessionId_;
-    j["connState"]       = connState_;
-    j["startupProgress"] = startupProgress_;
+    agentxx::util::Json j = agentxx::util::Json::object();
+    j["sessionId"]        = sessionId_;
+    j["connState"]        = connState_;
+    j["startupProgress"]  = startupProgress_;
     // 宿主支持的接口名清单 (三层协商第 3 层 —— 插件据此自行决定启用哪些
     // 功能; 见 [plugin_common.h](/agent/lib/include/agentxx/plugin/plugin_common.h)
     // 接口协商节)。位图 uiCaps 字段已移除 (v4)
@@ -1029,25 +1029,25 @@ void ClientPluginManager::onReady() {
     // 据此自适应 —— 如 emit_message_tip 在无 toast 接口的宿主上降级)
     if (uiAdapter_) {
         agentxx::util::Json up = agentxx::util::Json::object();
-        up["sessionId"]   = sessionId_;
-        up["interfaces"]  = j["interfaces"];
+        up["sessionId"]        = sessionId_;
+        up["interfaces"]       = j["interfaces"];
         uiAdapter_->sendPluginData("agentxx_host", "client_interfaces", up.dump());
     }
 }
 
 void ClientPluginManager::onConnStateChanged(std::string_view state, std::string_view progress) {
-    connState_           = std::string{state};
-    startupProgress_     = std::string{progress};
-    agentxx::util::Json j     = agentxx::util::Json::object();
-    j["connState"]       = connState_;
-    j["startupProgress"] = startupProgress_;
+    connState_            = std::string{state};
+    startupProgress_      = std::string{progress};
+    agentxx::util::Json j = agentxx::util::Json::object();
+    j["connState"]        = connState_;
+    j["startupProgress"]  = startupProgress_;
     dispatchEvent(AGENTXX_CLIENT_EVT_CONN_STATE, j.dump());
 }
 
 void ClientPluginManager::onUserInput(std::string_view sessionId, std::string_view text) {
     agentxx::util::Json j = agentxx::util::Json::object();
-    j["sessionId"]   = std::string{sessionId};
-    j["text"]        = std::string{text};
+    j["sessionId"]        = std::string{sessionId};
+    j["text"]             = std::string{text};
     dispatchEvent(AGENTXX_CLIENT_EVT_USER_INPUT, j.dump());
 }
 
@@ -1057,9 +1057,9 @@ void ClientPluginManager::onDelta(const agentxx::agent::WireDelta& delta) {
 
 void ClientPluginManager::onTurnResult(const agentxx::agent::WireTurnResult& result) {
     agentxx::util::Json j = agentxx::util::Json::object();
-    j["sessionId"]   = result.sessionId;
-    j["hasError"]    = result.hasError;
-    j["interrupted"] = result.interrupted;
+    j["sessionId"]        = result.sessionId;
+    j["hasError"]         = result.hasError;
+    j["interrupted"]      = result.interrupted;
     if (!result.errorMessage.empty()) {
         j["errorMessage"] = result.errorMessage;
     }
@@ -1069,9 +1069,9 @@ void ClientPluginManager::onTurnResult(const agentxx::agent::WireTurnResult& res
 }
 
 void ClientPluginManager::onSessionSwitched(std::string_view sessionId) {
-    sessionId_       = std::string{sessionId};
+    sessionId_            = std::string{sessionId};
     agentxx::util::Json j = agentxx::util::Json::object();
-    j["sessionId"]   = sessionId_;
+    j["sessionId"]        = sessionId_;
     dispatchEvent(AGENTXX_CLIENT_EVT_SESSION_SWITCH, j.dump());
 }
 
@@ -1137,9 +1137,9 @@ void ClientPluginManager::onPluginData(const agentxx::agent::WirePluginData& dat
     }
 
     agentxx::util::Json j = agentxx::util::Json::object();
-    j["plugin"]      = data.plugin;
-    j["event"]       = data.event;
-    j["data"]        = data.data;
+    j["plugin"]           = data.plugin;
+    j["event"]            = data.event;
+    j["data"]             = data.data;
     dispatchEvent(AGENTXX_CLIENT_EVT_PLUGIN_DATA, j.dump());
 }
 
@@ -1370,7 +1370,8 @@ int32_t AGENTXX_PLUGIN_CALL xx_cjson_get_string(
         return -1;
     }
     try {
-        auto j = agentxx::util::Json::parse(std::string{json->data, static_cast<size_t>(json->size)});
+        auto j
+            = agentxx::util::Json::parse(std::string{json->data, static_cast<size_t>(json->size)});
         auto v = jsonStr(j, std::string_view{key->data, static_cast<size_t>(key->size)});
         if (v.empty() && !j.contains(std::string{key->data, static_cast<size_t>(key->size)})) {
             return -1;
@@ -1397,7 +1398,7 @@ int32_t AGENTXX_PLUGIN_CALL xx_cjson_escape(
     }
     try {
         agentxx::util::Json j       = std::string{s->data, static_cast<size_t>(s->size)};
-        auto           dumpStr = j.dump();
+        auto                dumpStr = j.dump();
         hostMemorySetString(out, dumpStr);
         return 0;
     } catch (...) {
@@ -2118,7 +2119,7 @@ void* ClientPluginManager::registerStatusItem(
         }
     }
     // 解析 initial_json → text
-    std::string    text;
+    std::string         text;
     agentxx::util::Json props;
     try {
         props = agentxx::util::Json::parse(
@@ -2167,7 +2168,7 @@ int ClientPluginManager::updateStatusItem(
         return -1;
     }
     agentxx::util::Json props;
-    std::string    text;
+    std::string         text;
     try {
         props = agentxx::util::Json::parse(
             agentxx::plugin::PluginStringView::empty(json) ? "{}" : svToSv(json)
@@ -2262,7 +2263,7 @@ void* ClientPluginManager::registerPanel(
         }
     }
     agentxx::util::Json props;
-    std::string    title;
+    std::string         title;
     try {
         props = agentxx::util::Json::parse(
             agentxx::plugin::PluginStringView::empty(props_json) ? "{}" : svToSv(props_json)
@@ -2336,7 +2337,7 @@ int ClientPluginManager::updatePanel(
         }
     }
     agentxx::util::Json payload = agentxx::util::Json::object();
-    payload["items"]       = items;
+    payload["items"]            = items;
     if (uiAdapter_) {
         uiAdapter_->onPanelUpdated(h->id, payload);
     }
@@ -2403,7 +2404,7 @@ void* ClientPluginManager::registerInfoSection(
         }
     }
     agentxx::util::Json props;
-    std::string    title;
+    std::string         title;
     try {
         props = agentxx::util::Json::parse(
             agentxx::plugin::PluginStringView::empty(props_json) ? "{}" : svToSv(props_json)
@@ -2474,7 +2475,7 @@ int ClientPluginManager::updateInfoSection(
         }
     }
     agentxx::util::Json payload = agentxx::util::Json::object();
-    payload["items"]       = items;
+    payload["items"]            = items;
     if (uiAdapter_) {
         uiAdapter_->onInfoSectionUpdated(h->id, payload);
     }
@@ -2747,11 +2748,11 @@ std::string ClientPluginManager::getOwnInfoJson(ClientPluginInstance* inst) {
         return "{}";
     }
     agentxx::util::Json j = agentxx::util::Json::object();
-    j["name"]        = inst->name;
-    j["version"]     = inst->version;
-    j["description"] = inst->description;
-    j["path"]        = inst->path;
-    j["config"]      = inst->configPath;
+    j["name"]             = inst->name;
+    j["version"]          = inst->version;
+    j["description"]      = inst->description;
+    j["path"]             = inst->path;
+    j["config"]           = inst->configPath;
     return j.dump();
 }
 

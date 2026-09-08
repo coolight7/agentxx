@@ -19,10 +19,10 @@
 #endif
 #include "text_selection_monitor_plugin.h"
 
+#include "agentxx/util/json_view.h"
 #include "asio/awaitable.hpp"
 #include "asio/use_awaitable.hpp"
 #include "text_selection_monitor.h"
-#include "agentxx/util/json_view.h"
 #include <chrono>
 #include <mutex>
 #include <optional>
@@ -30,7 +30,7 @@
 #include <type_traits>
 
 #include "agentxx/util/asio_error.h"
-namespace asio                   = ::boost::asio;
+namespace asio = ::boost::asio;
 
 namespace agentxx_text_selection_monitor_plugin {
 

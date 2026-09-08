@@ -1,8 +1,8 @@
 #pragma once
 
+#include "agentxx/util/json.h"
 #include "agentxx/util/string_util.h"
 #include "neograph/api.h"
-#include "agentxx/util/json.h"
 #include "prompt.h"
 #include <chrono>
 #include <expected>

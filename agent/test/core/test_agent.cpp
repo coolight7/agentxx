@@ -160,12 +160,12 @@ private:
 // ===========================================================================
 // Enhanced LLM Simulator Implementation
 // ===========================================================================
-std::string    g_da_sim_response_content  = "Hello! I am a simulated LLM response for testing.";
-int            g_da_sim_prompt_tokens     = 100;
-int            g_da_sim_completion_tokens = 50;
+std::string         g_da_sim_response_content = "Hello! I am a simulated LLM response for testing.";
+int                 g_da_sim_prompt_tokens    = 100;
+int                 g_da_sim_completion_tokens = 50;
 agentxx::util::Json g_da_sim_tool_calls        = agentxx::util::Json::array();
-std::string    g_da_sim_reasoning_content = "";
-int            g_da_sim_delay_ms          = 0;
+std::string         g_da_sim_reasoning_content = "";
+int                 g_da_sim_delay_ms          = 0;
 agentxx::util::Json g_da_sim_last_request      = agentxx::util::Json::object();
 /// 按到达顺序记录所有 /chat/completions 请求 (供测试断言多次请求)
 std::vector<agentxx::util::Json> g_da_sim_requests;
@@ -714,15 +714,15 @@ asio::awaitable<void> test_agent_tool_calls() {
     g_da_sim_response_content = "";
     g_da_sim_tool_calls       = agentxx::util::Json::array({
         agentxx::util::Json{
-                       {"index", 0},
-                       {"id", "call_test_1"},
-                       {"type", "function"},
-                       {"function",
+                            {"index", 0},
+                            {"id", "call_test_1"},
+                            {"type", "function"},
+                            {"function",
                    agentxx::util::Json{
                        {"name", "agentxx_filesystem_list"},
                        {"arguments", "{}"},
              }},
-                       },
+                            },
     });
 
     agentxx::agent::CodeAgent agent(cfg);
@@ -1001,15 +1001,15 @@ asio::awaitable<void> test_agent_session_activity_toolcall() {
     g_da_sim_response_content = "";
     g_da_sim_tool_calls       = agentxx::util::Json::array({
         agentxx::util::Json{
-                       {"index", 0},
-                       {"id", "call_act_1"},
-                       {"type", "function"},
-                       {"function",
+                            {"index", 0},
+                            {"id", "call_act_1"},
+                            {"type", "function"},
+                            {"function",
                    agentxx::util::Json{
                        {"name", "agentxx_filesystem_list"},
                        {"arguments", "{}"},
              }},
-                       },
+                            },
     });
 
     agentxx::agent::CodeAgent agent(cfg);
@@ -1121,15 +1121,15 @@ asio::awaitable<void> test_agent_llm_retry_exhaust() {
     g_da_sim_response_content = "";
     g_da_sim_tool_calls       = agentxx::util::Json::array({
         agentxx::util::Json{
-                       {"index", 0},
-                       {"id", "call_retry_1"},
-                       {"type", "function"},
-                       {"function",
+                            {"index", 0},
+                            {"id", "call_retry_1"},
+                            {"type", "function"},
+                            {"function",
                    agentxx::util::Json{
                        {"name", "agentxx_filesystem_list"},
                        {"arguments", "{}"},
              }},
-                       },
+                            },
     });
 
     auto r1 = co_await agent.runTurnAsync("retry_test", "List files", nullptr);
@@ -1190,15 +1190,15 @@ asio::awaitable<void> test_agent_toolcall_intercept_exception() {
     g_da_sim_response_content = "Final answer after tool error.";
     g_da_sim_tool_calls       = agentxx::util::Json::array({
         agentxx::util::Json{
-                       {"index", 0},
-                       {"id", "call_intercept_1"},
-                       {"type", "function"},
-                       {"function",
+                            {"index", 0},
+                            {"id", "call_intercept_1"},
+                            {"type", "function"},
+                            {"function",
                    agentxx::util::Json{
                        {"name", "agentxx_filesystem_list"},
                        {"arguments", "{}"},
              }},
-                       },
+                            },
     });
 
     agentxx::agent::CodeAgent agent(cfg);

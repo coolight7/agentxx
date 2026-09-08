@@ -1,7 +1,7 @@
-#include "agentxx/util/neograph_json_bridge.h"
 #include "agentxx/protocol/anthropic_provider.h"
 #include "agentxx/protocol/openai_provider.h"
 #include "agentxx/util/exception.h"
+#include "agentxx/util/neograph_json_bridge.h"
 #include "fmt/format.h"
 #include <chrono>
 #include <random>
@@ -95,7 +95,7 @@ std::pair<std::string, agentxx::util::Json> AnthropicProvider::convertMessages(
     const std::vector<neograph::ChatMessage>& messages,
     bool                                      sendThinking
 ) {
-    std::string    system;
+    std::string         system;
     agentxx::util::Json arr = agentxx::util::Json::array();
 
     // 是否携带从 Anthropic 响应中捕获的带 signature 的 thinking 块
@@ -107,24 +107,25 @@ std::pair<std::string, agentxx::util::Json> AnthropicProvider::convertMessages(
     };
     // 追加 thinking 相关块: 优先使用响应中捕获的原始块 (含 signature, Anthropic 要求回传
     // thinking 时携带原始 signature); 无捕获时降级使用 reasoning_content (跨 provider/旧历史)
-    auto appendThinkingBlocks = [&](agentxx::util::Json& contentArr, const neograph::ChatMessage& msg) {
-        if (!sendThinking) {
-            return;
-        }
-        if (hasThinkingBlocks(msg)) {
-            auto extra = agentxx::util::fromNeographJson(msg.extra);
-            for (const auto& b : extra[kThinkingBlocksKey]) {
-                contentArr.push_back(b);
-            }
-            return;
-        }
-        if (!msg.reasoning_content.empty()) {
-            contentArr.push_back({
-                {"type",     "thinking"           },
-                {"thinking", msg.reasoning_content}
-            });
-        }
-    };
+    auto appendThinkingBlocks
+        = [&](agentxx::util::Json& contentArr, const neograph::ChatMessage& msg) {
+              if (!sendThinking) {
+                  return;
+              }
+              if (hasThinkingBlocks(msg)) {
+                  auto extra = agentxx::util::fromNeographJson(msg.extra);
+                  for (const auto& b : extra[kThinkingBlocksKey]) {
+                      contentArr.push_back(b);
+                  }
+                  return;
+              }
+              if (!msg.reasoning_content.empty()) {
+                  contentArr.push_back({
+                      {"type",     "thinking"           },
+                      {"thinking", msg.reasoning_content}
+                  });
+              }
+          };
 
     for (const auto& msg : messages) {
         if (msg.role == "system") {
@@ -137,7 +138,7 @@ std::pair<std::string, agentxx::util::Json> AnthropicProvider::convertMessages(
 
         if (msg.role == "tool") {
             agentxx::util::Json j;
-            j["role"]                  = "user";
+            j["role"]                       = "user";
             agentxx::util::Json content_arr = agentxx::util::Json::array();
             agentxx::util::Json tool_result;
             tool_result["type"]        = "tool_result";
@@ -148,7 +149,7 @@ std::pair<std::string, agentxx::util::Json> AnthropicProvider::convertMessages(
             arr.push_back(std::move(j));
         } else if (msg.role == "assistant" && !msg.tool_calls.empty()) {
             agentxx::util::Json j;
-            j["role"]                  = "assistant";
+            j["role"]                       = "assistant";
             agentxx::util::Json content_arr = agentxx::util::Json::array();
             appendThinkingBlocks(content_arr, msg);
             if (!msg.content.empty()) {
@@ -180,7 +181,7 @@ std::pair<std::string, agentxx::util::Json> AnthropicProvider::convertMessages(
         } else if (sendThinking && msg.role == "assistant"
                    && (!msg.reasoning_content.empty() || hasThinkingBlocks(msg))) {
             agentxx::util::Json j;
-            j["role"]                  = "assistant";
+            j["role"]                       = "assistant";
             agentxx::util::Json content_arr = agentxx::util::Json::array();
             appendThinkingBlocks(content_arr, msg);
             if (!msg.content.empty()) {
@@ -198,9 +199,9 @@ std::pair<std::string, agentxx::util::Json> AnthropicProvider::convertMessages(
             //   - 视频: {"type":"video","source":{base64|url}}
             // data URL 解析为 base64 源 (自动推导 media_type); HTTP URL 使用 url 源
             agentxx::util::Json j;
-            j["role"]                   = msg.role;
-            agentxx::util::Json content_arr  = agentxx::util::Json::array();
-            auto           appendSource = [&](const std::string& url, const std::string& kind) {
+            j["role"]                       = msg.role;
+            agentxx::util::Json content_arr = agentxx::util::Json::array();
+            auto appendSource               = [&](const std::string& url, const std::string& kind) {
                 if (auto parsed = neograph::parse_data_url(url)) {
                     content_arr.push_back({
                         {"type",   kind            },
@@ -261,9 +262,9 @@ std::pair<std::string, agentxx::util::Json> AnthropicProvider::convertMessages(
         return m;
     };
     agentxx::util::Json merged     = agentxx::util::Json::array();
-    bool           hasPending = false;
+    bool                hasPending = false;
     agentxx::util::Json pending;
-    auto           flushPending = [&]() {
+    auto                flushPending = [&]() {
         if (hasPending) {
             merged.push_back(std::move(pending));
             hasPending = false;
@@ -475,7 +476,7 @@ asio::awaitable<neograph::ChatCompletion>
 
 asio::awaitable<neograph::ChatCompletion> AnthropicProvider::doStream(
     const neograph::CompletionParams&  params,
-    const agentxx::util::Json&              body,
+    const agentxx::util::Json&         body,
     neograph::FormatDataStreamCallback on_chunk
 ) {
     using namespace agentxx::util;

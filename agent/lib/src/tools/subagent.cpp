@@ -1,5 +1,5 @@
-#include "agentxx/util/neograph_json_bridge.h"
 #include "agentxx/tools/subagent.h"
+#include "agentxx/util/neograph_json_bridge.h"
 
 #include "agentxx/event/event_stream.h"
 #include "agentxx/event/events.h"
@@ -202,98 +202,98 @@ neograph::ChatTool SubAgentManagerTool::get_definition() const {
     };
 
     agentxx::util::Json params = agentxx::util::Json{
-                       {"type", "object"},
-                       {
-                "properties",
+        {"type", "object"},
+        {
+         "properties", {
                 {
+                    "tasks",
                     {
-                        "tasks",
+                        {"type", "array"},
                         {
-                            {"type", "array"},
-                            {
-                                "description",
-                                "Optional batch of subagent tasks, each an object of "
-                                "{subagent, system_prompt, message, messages, session_id, "
-                                "tools, enable_summarization, result_id}. When provided "
-                                "(non-empty), the top-level single-task fields are ignored "
-                                "and all tasks run in parallel.",
-                            },
-                            {"items", taskItemSchema},
+                            "description",
+                            "Optional batch of subagent tasks, each an object of "
+                            "{subagent, system_prompt, message, messages, session_id, "
+                            "tools, enable_summarization, result_id}. When provided "
+                            "(non-empty), the top-level single-task fields are ignored "
+                            "and all tasks run in parallel.",
                         },
+                        {"items", taskItemSchema},
                     },
+                },
+                {
+                    "subagent",
                     {
-                        "subagent",
+                        {"type", "string"},
+                        // 注意: 必须用圆括号直接初始化 (而非 {} 列表初始化),
+                        // 否则重载决议会优先选择 initializer_list 构造函数,
+                        // 把 vector 包成单个元素产生 [[...]] 嵌套数组,
+                        // 生成非法 enum schema 导致严格校验的上游 (如 gpt-5.6-luna) HTTP 400
+                        {"enum", agentxx::util::Json(subagentNameList)},
                         {
-                            {"type", "string"},
-                            // 注意: 必须用圆括号直接初始化 (而非 {} 列表初始化),
-                            // 否则重载决议会优先选择 initializer_list 构造函数,
-                            // 把 vector 包成单个元素产生 [[...]] 嵌套数组,
-                            // 生成非法 enum schema 导致严格校验的上游 (如 gpt-5.6-luna) HTTP 400
-                            {"enum", agentxx::util::Json(subagentNameList)},
-                            {
-                                "description",
-                                fmt::format(
-                                    "{}\n{}",
-                                    prompt.getArg("subagent"),
-                                    subagentNameDepict.str()
-                                ),
-                            },
-                        },
-                    },
-                    {
-                        "system_prompt",
-                        {
-                            {"type", "string"},
-                            {"description", prompt.getArg("system_prompt")},
-                        },
-                    },
-                    {
-                        "message",
-                        {
-                            {"type", "string"},
-                            {"description", prompt.getArg("message")},
-                        },
-                    },
-                    {
-                        "messages",
-                        {
-                            {"type", "array"},
-                            // 同 taskItemSchema: Gemini 要求 array 必须带 items
-                            {"items", {{"type", "object"}}},
-                            {"description", prompt.getArg("messages")},
-                        },
-                    },
-                    {
-                        "session_id",
-                        {
-                            {"type", "string"},
-                            {"description", prompt.getArg("session_id")},
-                        },
-                    },
-                    {
-                        "tools",
-                        {
-                            {"type", "array"},
-                            {"items", {{"type", "string"}}},
-                            {"description", prompt.getArg("tools")},
-                        },
-                    },
-                    {
-                        "enable_summarization",
-                        {
-                            {"type", "boolean"},
-                            {"description", prompt.getArg("enable_summarization")},
+                            "description",
+                            fmt::format(
+                                "{}\n{}",
+                                prompt.getArg("subagent"),
+                                subagentNameDepict.str()
+                            ),
                         },
                     },
                 },
-            }, {
-                "required",
-                agentxx::util::Json::array({"subagent", "message"}),
-            }, };
+                {
+                    "system_prompt",
+                    {
+                        {"type", "string"},
+                        {"description", prompt.getArg("system_prompt")},
+                    },
+                },
+                {
+                    "message",
+                    {
+                        {"type", "string"},
+                        {"description", prompt.getArg("message")},
+                    },
+                },
+                {
+                    "messages",
+                    {
+                        {"type", "array"},
+                        // 同 taskItemSchema: Gemini 要求 array 必须带 items
+                        {"items", {{"type", "object"}}},
+                        {"description", prompt.getArg("messages")},
+                    },
+                },
+                {
+                    "session_id",
+                    {
+                        {"type", "string"},
+                        {"description", prompt.getArg("session_id")},
+                    },
+                },
+                {
+                    "tools",
+                    {
+                        {"type", "array"},
+                        {"items", {{"type", "string"}}},
+                        {"description", prompt.getArg("tools")},
+                    },
+                },
+                {
+                    "enable_summarization",
+                    {
+                        {"type", "boolean"},
+                        {"description", prompt.getArg("enable_summarization")},
+                    },
+                },
+            }, },
+        {
+         "required", agentxx::util::Json::array({"subagent", "message"}),
+         },
+    };
     return {"agentxx_subagent", prompt.depict, agentxx::util::toNeographJson(params)};
 }
 
-asio::awaitable<std::string> SubAgentManagerTool::execute_async(const agentxx::util::Json& arguments) {
+asio::awaitable<std::string> SubAgentManagerTool::execute_async(const agentxx::util::Json& arguments
+) {
     // 统一批量委派 (单发与批量合并):
     // - `tasks` 数组非空: 批量模式 (每项一个子代理任务, 并行运行)
     // - 无 `tasks`: 单任务模式 (顶层 subagent/message 字段; summarization
@@ -303,14 +303,14 @@ asio::awaitable<std::string> SubAgentManagerTool::execute_async(const agentxx::u
     // 此处按相同规则提取并聚合返回
 
     struct TaskArg {
-        std::string                   subagent;
-        std::string                   systemPrompt;
-        std::string                   message;
+        std::string                        subagent;
+        std::string                        systemPrompt;
+        std::string                        message;
         std::optional<agentxx::util::Json> messages;
-        std::string                   sessionId;
+        std::string                        sessionId;
         std::optional<agentxx::util::Json> tools;
-        std::optional<bool>           enableSummarization;
-        std::string                   resultId;
+        std::optional<bool>                enableSummarization;
+        std::string                        resultId;
     };
 
     auto parseTask = [](const agentxx::util::Json& t) -> TaskArg {

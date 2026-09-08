@@ -1095,8 +1095,8 @@ std::vector<ftxui::Box> ContextOverlay::headerBoxes() const {
 
 ftxui::Element ContextOverlay::buildMessageHeader(
     const agentxx::util::Json& m,
-    bool                  expanded,
-    const ftxui::Color&   roleColor
+    bool                       expanded,
+    const ftxui::Color&        roleColor
 ) {
     const auto& theme     = *ctx_.theme;
     const auto  role      = ctxMsgRole(m);
@@ -1852,10 +1852,10 @@ bool DiffOverlay::OnEvent(Event event) {
 }
 
 CustomOverlay::CustomOverlay(
-    TUICtx&        ctx,
-    std::string    title,
+    TUICtx&             ctx,
+    std::string         title,
     agentxx::util::Json items,
-    std::string    ownerPlugin
+    std::string         ownerPlugin
 ) :
     ctx_(ctx),
     title_(std::move(title)),

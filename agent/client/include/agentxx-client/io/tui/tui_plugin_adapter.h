@@ -58,7 +58,8 @@ public:
         }
     }
 
-    void onStatusItemUpdated(const std::string& /*id*/, const agentxx::util::Json& /*props*/) override {
+    void onStatusItemUpdated(const std::string& /*id*/, const agentxx::util::Json& /*props*/)
+        override {
         if (auto tui = tui_.lock()) {
             tui->requestRedraw();
         }

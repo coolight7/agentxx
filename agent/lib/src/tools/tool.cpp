@@ -12,7 +12,7 @@ namespace tools {
 
 std::shared_ptr<neograph::graph::CancelToken> getSessionCancelToken(
     const std::shared_ptr<agentxx::agent::AgentContext>& agentCtx,
-    const agentxx::util::Json&                                args
+    const agentxx::util::Json&                           args
 ) {
     if (nullptr == agentCtx || nullptr == agentCtx->sessions) {
         return nullptr;
@@ -65,10 +65,10 @@ asio::awaitable<std::string> XXToolBase::execute_async(const neograph::json& arg
 
 std::string XXToolBase::execute(const neograph::json& arguments) {
     // 同步桥接: 独立 io_context 驱动 Json 主接口 (与原 AsyncTool::execute 语义一致)
-    auto                 args = agentxx::util::fromNeographJson(arguments);
-    std::string          out;
-    std::exception_ptr   eptr;
-    asio::io_context     io;
+    auto               args = agentxx::util::fromNeographJson(arguments);
+    std::string        out;
+    std::exception_ptr eptr;
+    asio::io_context   io;
     asio::co_spawn(
         io,
         [&]() -> asio::awaitable<void> {

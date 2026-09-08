@@ -153,9 +153,9 @@ private:
     std::condition_variable workersCv_;
 
     // -- 出站请求追踪 (agent→client) --
-    mutable std::mutex                                               pendingMu_;
+    mutable std::mutex                                                    pendingMu_;
     std::map<int64_t, std::shared_ptr<std::promise<agentxx::util::Json>>> pending_;
-    std::atomic<int64_t>                                             nextOutboundId_{1};
+    std::atomic<int64_t>                                                  nextOutboundId_{1};
 };
 
 // ===========================================================================
@@ -180,7 +180,7 @@ public:
 
     HttpAcpServer(
         std::shared_ptr<agentxx::agent::BaseAgent> agent,
-        agentxx::util::Json                             agentInfo,
+        agentxx::util::Json                        agentInfo,
         Config                                     config
     );
 
@@ -240,10 +240,11 @@ private:
     void writeJsonResponse(
         util::HttpServer::Response& resp,
         boost::beast::http::status  status,
-        const agentxx::util::Json&       body
+        const agentxx::util::Json&  body
     );
 
-    agentxx::util::Json jsonRpcError(const agentxx::util::Json& id, int code, std::string_view message) const;
+    agentxx::util::Json
+        jsonRpcError(const agentxx::util::Json& id, int code, std::string_view message) const;
 
     // -----------------------------------------------------------------------
     // 成员
@@ -255,7 +256,7 @@ private:
     std::unique_ptr<util::HttpServer>          httpServer_;
 
     // 挂起的异步响应追踪 (HTTP 传输用)
-    std::mutex                                                       pendingMutex_;
+    std::mutex                                                            pendingMutex_;
     std::map<int64_t, std::shared_ptr<std::promise<agentxx::util::Json>>> pendingResponses_;
 };
 

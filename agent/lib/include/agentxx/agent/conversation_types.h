@@ -148,7 +148,7 @@ struct MediaAttachment {
 
     agentxx::util::Json toJson() const {
         agentxx::util::Json j = agentxx::util::Json::object();
-        j["type"]        = std::string(mediaTypeToString(type));
+        j["type"]             = std::string(mediaTypeToString(type));
         if (!displayName.empty()) {
             j["display_name"] = displayName;
         }
@@ -601,8 +601,8 @@ inline agentxx::util::Json ViewMessage::toJson() const {
         }
     }
     if (interrupt) {
-        agentxx::util::Json it  = agentxx::util::Json::object();
-        it["interrupt_id"] = interrupt->interruptId;
+        agentxx::util::Json it = agentxx::util::Json::object();
+        it["interrupt_id"]     = interrupt->interruptId;
         if (!interrupt->inputLabel.empty()) {
             it["input_label"] = interrupt->inputLabel;
         }

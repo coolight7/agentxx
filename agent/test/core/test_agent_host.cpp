@@ -414,7 +414,7 @@ asio::awaitable<void> test_host_spawn_tool_policy() {
 
             // 顺序派生 4 次 (不同工具策略), 请求体按到达顺序记录
             auto spawnOne = [&](std::optional<agentxx::util::Json> tools,
-                                std::string                   tag) -> asio::awaitable<void> {
+                                std::string                        tag) -> asio::awaitable<void> {
                 // [workaround] 聚合提取为具名变量, 绕过 g++ 16.1 ICE
                 agentxx::events::ReqSubagentBatch req{
                     .parentAgentName = "root",
@@ -715,15 +715,15 @@ asio::awaitable<void> test_host_spawn_nested_delegation() {
     g_da_sim_tool_calls_remaining = 1;
     g_da_sim_tool_calls           = agentxx::util::Json::array({
         agentxx::util::Json{
-                       {"index", 0},
-                       {"id", "call_nested_1"},
-                       {"type", "function"},
-                       {"function",
+                            {"index", 0},
+                            {"id", "call_nested_1"},
+                            {"type", "function"},
+                            {"function",
                        agentxx::util::Json{
                            {"name", "agentxx_subagent"},
                            {"arguments", R"({"tasks":[{"subagent":"subagent_task","message":"leaf task"}]})"},
              }},
-                       },
+                            },
     });
 
     auto                              io = std::make_shared<asio::io_context>();

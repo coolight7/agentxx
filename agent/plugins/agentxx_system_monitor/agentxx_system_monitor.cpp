@@ -5,6 +5,7 @@
 #include "agentxx/plugin/api/client_plugin_api.h"
 #include "agentxx/plugin/api/plugin_guard.h"
 #include "agentxx/plugin/api/plugin_kit.h"
+#include "agentxx/util/json.h"
 #include "agentxx/util/log.h"
 #include "agentxx/util/string_util.h"
 #include "agentxx/util/util.h"
@@ -12,7 +13,6 @@
 #include "asio/detached.hpp"
 #include "asio/io_context.hpp"
 #include "fmt/format.h"
-#include "agentxx/util/json.h"
 
 #include <atomic>
 #include <chrono>
@@ -30,10 +30,10 @@ constexpr int kUsageIntervalSec = 5;
 
 std::string usageToJson(const CpuGpuUsage& u) {
     agentxx::util::Json j;
-    j["cpu"]            = u.cpuUsagePercent;
-    j["mem_total_mb"]   = u.memory.totalPhysicalMB;
-    j["mem_used_mb"]    = u.memory.usedPhysicalMB;
-    j["mem_percent"]    = u.memory.usagePercent;
+    j["cpu"]                 = u.cpuUsagePercent;
+    j["mem_total_mb"]        = u.memory.totalPhysicalMB;
+    j["mem_used_mb"]         = u.memory.usedPhysicalMB;
+    j["mem_percent"]         = u.memory.usagePercent;
     agentxx::util::Json gpus = agentxx::util::Json::array();
     for (const auto& g : u.gpus) {
         gpus.push_back({
@@ -269,8 +269,8 @@ static UsageStat parseUsage(const std::string& raw) {
 }
 
 static std::string buildUsageInfoItemsJson(const SysMonClientCtx&, const UsageStat& st) {
-    agentxx::util::Json items    = agentxx::util::Json::array();
-    auto           pushText = [&](const std::string& text, const std::string& role = "normal") {
+    agentxx::util::Json items = agentxx::util::Json::array();
+    auto pushText             = [&](const std::string& text, const std::string& role = "normal") {
         agentxx::util::Json it;
         it["kind"] = "text";
         it["role"] = role;

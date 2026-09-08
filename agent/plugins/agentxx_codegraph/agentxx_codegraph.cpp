@@ -67,11 +67,10 @@ static HostConfig
             std::string s{json.data, static_cast<size_t>(json.size)};
             agentxx::plugin::PluginString::free(host, &json);
             agentxx::plugin::ArgReader args(s);
-            cfg.loadPaths   = args.value<std::vector<std::string>>("paths", {});
-            cfg.ignorePaths = args.value<std::vector<std::string>>("ignore_paths", {});
-            cfg.useGitignore
-                = args.value<bool>("use_gitignore", cfg.useGitignore);
-            cfg.loadCwd = args.value<bool>("load_cwd", cfg.loadCwd);
+            cfg.loadPaths    = args.value<std::vector<std::string>>("paths", {});
+            cfg.ignorePaths  = args.value<std::vector<std::string>>("ignore_paths", {});
+            cfg.useGitignore = args.value<bool>("use_gitignore", cfg.useGitignore);
+            cfg.loadCwd      = args.value<bool>("load_cwd", cfg.loadCwd);
         }
     }
     return cfg;
@@ -197,7 +196,7 @@ static void ensureToolPromptsInHost(
     std::string s{json.data, static_cast<size_t>(json.size)};
     agentxx::plugin::PluginString::free(host, &json);
     agentxx::plugin::ArgReader promptArgs(s);
-    static const char* kToolNames[] = {
+    static const char*         kToolNames[] = {
         "agentxx_codegraph_search",
         "agentxx_codegraph_context",
         "agentxx_codegraph_callers",
@@ -424,12 +423,12 @@ static void registerAllTools(PluginCtx& ctx) {
             b.dump({"query"}),
             [](PluginCtx& c, std::string_view args_json) -> std::string {
                 agentxx::plugin::ArgReader args(args_json);
-                std::string query = args.value<std::string>("query", std::string{});
+                std::string                query = args.value<std::string>("query", std::string{});
                 if (query.empty()) {
                     return "error: Arg `query` is empty";
                 }
                 int64_t limit64 = args.value<int64_t>("limit", 20);
-                auto r = c.mgr->searchSymbols(query, static_cast<int>(limit64));
+                auto    r       = c.mgr->searchSymbols(query, static_cast<int>(limit64));
                 if (!r.success) {
                     return fmt::format("error: {}", r.error);
                 }
@@ -493,7 +492,7 @@ static void registerAllTools(PluginCtx& ctx) {
                 }
                 int64_t limit64 = args.value<int64_t>("limit", 10);
                 int64_t depth64 = args.value<int64_t>("max_depth", 3);
-                auto r = c.mgr->getSymbolContext(
+                auto    r       = c.mgr->getSymbolContext(
                     symbol,
                     static_cast<int>(limit64),
                     static_cast<int>(depth64)
@@ -532,7 +531,7 @@ static void registerAllTools(PluginCtx& ctx) {
                     return "error: Arg `symbol` is empty";
                 }
                 int64_t depth64 = args.value<int64_t>("max_depth", 3);
-                auto r = c.mgr->getCallers(symbol, static_cast<int>(depth64));
+                auto    r       = c.mgr->getCallers(symbol, static_cast<int>(depth64));
                 if (!r.success) {
                     return fmt::format("error: {}", r.error);
                 }
@@ -567,7 +566,7 @@ static void registerAllTools(PluginCtx& ctx) {
                     return "error: Arg `symbol` is empty";
                 }
                 int64_t depth64 = args.value<int64_t>("max_depth", 3);
-                auto r = c.mgr->getCallees(symbol, static_cast<int>(depth64));
+                auto    r       = c.mgr->getCallees(symbol, static_cast<int>(depth64));
                 if (!r.success) {
                     return fmt::format("error: {}", r.error);
                 }
@@ -598,13 +597,13 @@ static void registerAllTools(PluginCtx& ctx) {
             b.dump({"from", "to"}),
             [](PluginCtx& c, std::string_view args_json) -> std::string {
                 agentxx::plugin::ArgReader args(args_json);
-                std::string from = args.value<std::string>("from", std::string{});
-                std::string to   = args.value<std::string>("to", std::string{});
+                std::string                from = args.value<std::string>("from", std::string{});
+                std::string                to   = args.value<std::string>("to", std::string{});
                 if (from.empty() || to.empty()) {
                     return "error: Args `from` and `to` are required";
                 }
                 int64_t depth64 = args.value<int64_t>("max_depth", 10);
-                auto r = c.mgr->findPath(from, to, static_cast<int>(depth64));
+                auto    r       = c.mgr->findPath(from, to, static_cast<int>(depth64));
                 if (!r.success) {
                     return fmt::format("error: {}", r.error);
                 }
@@ -929,8 +928,8 @@ struct ClientCtx {
 };
 
 static std::string buildInfoItemsJson(ClientCtx& c) {
-    agentxx::util::Json items    = agentxx::util::Json::array();
-    auto           pushText = [&](const std::string& text, const std::string& role = "normal") {
+    agentxx::util::Json items = agentxx::util::Json::array();
+    auto pushText             = [&](const std::string& text, const std::string& role = "normal") {
         agentxx::util::Json it;
         it["kind"] = "text";
         it["role"] = role;

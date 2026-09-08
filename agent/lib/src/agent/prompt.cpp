@@ -52,7 +52,7 @@ agentxx::util::Json AgentPrompt::toJson() const {
         agentxx::util::Json tools = agentxx::util::Json::object();
         for (const auto& kv : toolPrompt) {
             agentxx::util::Json tp;
-            tp["depict"]        = kv.second.depict;
+            tp["depict"]             = kv.second.depict;
             agentxx::util::Json args = agentxx::util::Json::object();
             for (const auto& a : kv.second.args) {
                 args[a.first] = a.second;

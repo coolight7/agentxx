@@ -102,7 +102,7 @@ inline std::string
 /// 将批量委派响应写入中断结果 map (key 规则见 makeSubagentResumeKey)
 /// - 单任务返回纯文本, 多任务按任务顺序编号; 错误任务写入 {"error": ...}
 inline void buildSubagentResumeValues(
-    agentxx::util::Json&                  resumeValues,
+    agentxx::util::Json&             resumeValues,
     const events::RespSubagentBatch& batchResp,
     std::string_view                 toolCallId
 ) {

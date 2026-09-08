@@ -1,9 +1,9 @@
-#include "agentxx/util/neograph_json_bridge.h"
 #include "test_acp.h"
 #include "agentxx/agent/code_agent.h"
 #include "agentxx/protocol/acp_server.h"
 #include "agentxx/tools/tool.h"
 #include "agentxx/util/http_client.h"
+#include "agentxx/util/neograph_json_bridge.h"
 #include <asio/awaitable.hpp>
 #include <asio/detached.hpp>
 #include <asio/io_context.hpp>
@@ -55,16 +55,13 @@ static std::shared_ptr<agentxx::agent::CodeAgent> makeTestAgent(const std::strin
     auto agent              = std::make_shared<agentxx::agent::CodeAgent>(config);
 
     agentxx::util::Json def = {
-        {"name",     name                                                               },
-        {"channels", {{"messages", {{"reducer", "append"}}}}                            },
+        {"name",     name                                                                    },
+        {"channels", {{"messages", {{"reducer", "append"}}}}                                 },
         {"nodes",    agentxx::util::Json::object()                                           },
         {"edges",    agentxx::util::Json::array({{{"from", "__start__"}, {"to", "__end__"}}})},
     };
     neograph::graph::NodeContext ctx;
-    agent->engine = neograph::graph::GraphEngine::compile(
-        agentxx::util::toNeographJson(def),
-        ctx
-    );
+    agent->engine = neograph::graph::GraphEngine::compile(agentxx::util::toNeographJson(def), ctx);
     return agent;
 }
 

@@ -277,15 +277,15 @@ asio::awaitable<void> test_interrupt_auto_supplement() {
     // 首次 LLM 调用返回 tool_call; 响应后 sim 自动清空, 第二次调用返回 content
     g_da_sim_tool_calls = agentxx::util::Json::array({
         agentxx::util::Json{
-                       {"index", 0},
-                       {"id", "call_it_1"},
-                       {"type", "function"},
-                       {"function",
+                            {"index", 0},
+                            {"id", "call_it_1"},
+                            {"type", "function"},
+                            {"function",
              agentxx::util::Json{
                  {"name", "test_interrupt"},
                  {"arguments", "{}"},
              }},
-                       },
+                            },
     });
 
     SupplementTestAgent agent(cfg);
@@ -448,25 +448,25 @@ asio::awaitable<void> test_cancel_auto_supplement() {
     // LLM 返回两个 toolcall: 先慢速 tool, 后快速 tool
     g_da_sim_tool_calls = agentxx::util::Json::array({
         agentxx::util::Json{
-                       {"index", 0},
-                       {"id", "call_slow_1"},
-                       {"type", "function"},
-                       {"function",
+                            {"index", 0},
+                            {"id", "call_slow_1"},
+                            {"type", "function"},
+                            {"function",
              agentxx::util::Json{
                  {"name", "test_slow"},
                  {"arguments", "{}"},
              }},
-                       },
+                            },
         agentxx::util::Json{
-                       {"index", 1},
-                       {"id", "call_fast_1"},
-                       {"type", "function"},
-                       {"function",
+                            {"index", 1},
+                            {"id", "call_fast_1"},
+                            {"type", "function"},
+                            {"function",
              agentxx::util::Json{
                  {"name", "test_fast"},
                  {"arguments", "{}"},
              }},
-                       },
+                            },
     });
 
     SupplementTestAgent agent(cfg);
@@ -522,11 +522,11 @@ asio::awaitable<void> test_cancel_auto_supplement() {
     // 轮询等待自动补充消息最终保存完成 (baseRun 走 isCancel 分支后,
     // wrap_handle 在 rethrow 前写入 tempMessages)
     {
-        auto               ex2 = co_await asio::this_coro::executor;
-        asio::steady_timer poll(ex2);
-        bool               ok = false;
-        agentxx::util::Json     im;
-        const auto         deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
+        auto                ex2 = co_await asio::this_coro::executor;
+        asio::steady_timer  poll(ex2);
+        bool                ok = false;
+        agentxx::util::Json im;
+        const auto          deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
         while (std::chrono::steady_clock::now() < deadline) {
             // 轮末错误路径已把 tempMessages 快照收敛进 llmMessages 并清理
             // graphData, 断言权威面 (llmMessages) 即可

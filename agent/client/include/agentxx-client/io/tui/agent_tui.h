@@ -346,12 +346,12 @@ public:
     void refreshLanguage();
 
     asio::awaitable<std::optional<std::string>> getInput() override;
-    asio::awaitable<agentxx::util::Json>             handleInterrupt(
-                    std::string_view sessionId,
-                    std::string_view interruptNode,
-                    std::string_view interruptValue,
-                    std::string_view interruptArgJson
-                ) override;
+    asio::awaitable<agentxx::util::Json>        handleInterrupt(
+               std::string_view sessionId,
+               std::string_view interruptNode,
+               std::string_view interruptValue,
+               std::string_view interruptArgJson
+           ) override;
     void requestCancel(std::string sessionId) override;
 
     /// 记录待应用模型选择
@@ -390,8 +390,8 @@ private:
     void pushCurrentTokenLocked(TUIRenderState& st);
     void cancelCurrentRunLocked(TUIRenderState& st);
     void sendUserInputLocked(
-        TUIRenderState&                          st,
-        std::string                              text,
+        TUIRenderState&                              st,
+        std::string                                  text,
         std::vector<agentxx::agent::MediaAttachment> attachments = {}
     );
     void onMessageQueueUpdate(const agentxx::agent::WireMessageQueueUpdate& update);

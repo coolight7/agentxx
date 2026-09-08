@@ -547,7 +547,7 @@ void AcpProtocolHandler::emitAgentMessageChunk(std::string_view sessionId, std::
 
 HttpAcpServer::HttpAcpServer(
     std::shared_ptr<agentxx::agent::BaseAgent> agent,
-    agentxx::util::Json                             agentInfo,
+    agentxx::util::Json                        agentInfo,
     Config                                     config
 ) :
     config_(std::move(config)),
@@ -592,7 +592,7 @@ void HttpAcpServer::setupHandlerSink() {
     handler_.setNotificationSink([this](const agentxx::util::Json& envelope) {
         if (!envelope.contains("method") && envelope.contains("id") && !envelope["id"].is_null()) {
             agentxx::util::Json id    = envelope["id"];
-            int64_t        idVal = id.is_number_integer() ? id.get<int64_t>() : -1;
+            int64_t             idVal = id.is_number_integer() ? id.get<int64_t>() : -1;
 
             std::unique_lock lock(pendingMutex_);
             auto             it = pendingResponses_.find(idVal);
@@ -652,7 +652,7 @@ asio::awaitable<void> HttpAcpServer::handleAcpRequest(
 ) {
     namespace http = boost::beast::http;
 
-    bool           isError     = false;
+    bool                isError     = false;
     agentxx::util::Json requestJson = agentxx::util::catchError<agentxx::util::Json>(
         [&req]() -> agentxx::util::Json {
             return agentxx::util::Json::parse(req.body());
@@ -714,7 +714,7 @@ asio::awaitable<void> HttpAcpServer::handleAcpRequest(
             resp,
             http::status::accepted,
             agentxx::util::Json{
-                {"jsonrpc", "2.0"                   },
+                {"jsonrpc", "2.0"                        },
                 {"id",      agentxx::util::Json(nullptr) },
                 {"result",  agentxx::util::Json::object()}
         }
@@ -801,7 +801,7 @@ void HttpAcpServer::stopSSE() {}
 void HttpAcpServer::writeJsonResponse(
     util::HttpServer::Response& resp,
     boost::beast::http::status  status,
-    const agentxx::util::Json&       body
+    const agentxx::util::Json&  body
 ) {
     resp.result(status);
     resp.set(boost::beast::http::field::content_type, "application/json");
@@ -828,7 +828,7 @@ agentxx::util::Json
 
 StdioAcpServer::StdioAcpServer(
     std::shared_ptr<agentxx::agent::BaseAgent> agent,
-    agentxx::util::Json                             agentInfo
+    agentxx::util::Json                        agentInfo
 ) :
     agent_(std::move(agent)),
     handler_(
@@ -880,7 +880,7 @@ void StdioAcpServer::run(std::istream& in, std::ostream& out) {
         }
 
         agentxx::util::Json env;
-        bool           parsed = agentxx::util::catchError<bool>(
+        bool                parsed = agentxx::util::catchError<bool>(
             [&]() -> bool {
                 env = agentxx::util::Json::parse(line);
                 return true;

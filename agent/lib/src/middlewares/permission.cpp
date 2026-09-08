@@ -115,7 +115,7 @@ void PermissionMiddlewareHandle::setFilesystemPermission(
 
 asio::awaitable<bool> PermissionMiddlewareHandle::defOnFilesystemHandle(
     const neograph::Tool& item,
-    agentxx::util::Json&       args,
+    agentxx::util::Json&  args,
     size_t                index
 ) {
     auto path      = args.value<std::string>("path", "");
@@ -183,7 +183,7 @@ asio::awaitable<bool> PermissionMiddlewareHandle::defOnFilesystemHandle(
 
 asio::awaitable<bool> PermissionMiddlewareHandle::requestPermission(
     const neograph::Tool& item,
-    agentxx::util::Json&       args,
+    agentxx::util::Json&  args,
     std::string           category,
     std::string           target
 ) {
@@ -264,7 +264,7 @@ void PermissionMiddlewareHandle::registerOnBus(const std::shared_ptr<agentxx::ev
                                  auto it = handles.find(req.toolName);
                                  if (it != handles.end()) {
                                      DummyPermissionTool dummyTool(req.toolName);
-                                     agentxx::util::Json      argsCopy = req.arguments;
+                                     agentxx::util::Json argsCopy = req.arguments;
                                      auto allow = co_await it->second(dummyTool, argsCopy);
                                      co_return events::RespToolPermissionCheck{.allow = allow};
                                  }

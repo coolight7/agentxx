@@ -91,7 +91,7 @@ void appendEscaped(std::string& out, std::string_view s) {
     };
     static constexpr char kHex[] = "0123456789abcdef";
     for (size_t i = 0; i < s.size(); ++i) {
-        const unsigned char c = static_cast<unsigned char>(s[i]);
+        const unsigned char c        = static_cast<unsigned char>(s[i]);
         char                shortEsc = '\0';
         switch (c) {
             case '"':
@@ -144,10 +144,11 @@ void appendDouble(std::string& out, double v) {
     }
     char buf[32];
     // %.17g 保证往返精度, 再裁掉多余尾零 (保留至少一位小数点后数字)
-    int n = std::snprintf(buf, sizeof(buf), "%.17g", v);
+    int         n = std::snprintf(buf, sizeof(buf), "%.17g", v);
     std::string s(buf, static_cast<size_t>(n > 0 ? n : 0));
     // 纯整数写法 (如 "3") 补 ".0", 与 neograph dump 的浮点形态一致
-    const bool hasDotOrExp = (s.find('.') != std::string::npos) || (s.find('e') != std::string::npos)
+    const bool hasDotOrExp = (s.find('.') != std::string::npos)
+                             || (s.find('e') != std::string::npos)
                              || (s.find('E') != std::string::npos);
     if (!hasDotOrExp) {
         s += ".0";
@@ -251,8 +252,7 @@ void dumpInto(std::string& out, const Json& j, int indent, int depth) {
 
 // string_view 键比较 (保序对象线性查找用)
 bool keyEquals(const std::string& k, std::string_view key) noexcept {
-    return k.size() == key.size()
-           && (k.empty() || std::string_view{k.data(), k.size()} == key);
+    return k.size() == key.size() && (k.empty() || std::string_view{k.data(), k.size()} == key);
 }
 
 } // namespace
@@ -600,11 +600,11 @@ Json Json::parse(std::string_view sv) {
     simdjson::dom::element  elem;
     auto                    err = parser.parse(padded).get(elem);
     if (err != simdjson::SUCCESS) {
-        std::string msg = "Json::parse: ";
-        msg += simdjson::error_message(err);
-        msg += " (input ";
-        msg += std::to_string(sv.size());
-        msg += " bytes)";
+        std::string msg  = "Json::parse: ";
+        msg             += simdjson::error_message(err);
+        msg             += " (input ";
+        msg             += std::to_string(sv.size());
+        msg             += " bytes)";
         throw parse_error(msg);
     }
     return elementToJson(elem);
@@ -1243,7 +1243,7 @@ std::pair<std::string_view, Json&> Json::ItemsIterable::iterator::operator*() co
     if (it_.obj_ != nullptr && it_.obj_->type_ == Json::Type::Object
         && it_.idx_ < it_.obj_->storage_.obj_val_.size()) {
         const std::string& ks = it_.obj_->storage_.obj_val_[it_.idx_].first;
-        k = std::string_view{ks.data(), ks.size()};
+        k                     = std::string_view{ks.data(), ks.size()};
     }
     return {k, v};
 }

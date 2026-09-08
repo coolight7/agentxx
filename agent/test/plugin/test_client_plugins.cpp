@@ -153,7 +153,8 @@ public:
         lastInfoSectionId_ = id;
     }
 
-    void onInfoSectionUpdated(const std::string& id, const agentxx::util::Json& /*items*/) override {
+    void
+        onInfoSectionUpdated(const std::string& id, const agentxx::util::Json& /*items*/) override {
         std::lock_guard<std::mutex> lock(m_);
         ++infoSectionUpdated_;
         lastInfoSectionId_ = id;
@@ -1726,8 +1727,8 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         using namespace agentxx::client;
         agentxx::plugin::ClientUiRegistry reg;
         // 无绑定 → button 不可点
-        PluginButtonDesc desc;
-        agentxx::util::Json   btnJson = agentxx::util::Json::parse(
+        PluginButtonDesc    desc;
+        agentxx::util::Json btnJson = agentxx::util::Json::parse(
             R"({"kind":"button","label":"Graph","action_id":"planning.open_graph","args":{},"role":"accent"})"
         );
         XX_TEST_EXPECT_TRUE(parsePluginButton(btnJson, "agentxx_planning", &reg, desc));
@@ -1767,14 +1768,15 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         XX_TEST_EXPECT_EQ(descAct.actionId, "rebuild");
         XX_TEST_EXPECT_TRUE(descAct.role == PluginButtonRole::Accent);
         // 无 action_id → 静态 (不可点, 但解析成功)
-        agentxx::util::Json staticJson = agentxx::util::Json::parse(R"({"kind":"button","label":"Static"})");
+        agentxx::util::Json staticJson
+            = agentxx::util::Json::parse(R"({"kind":"button","label":"Static"})");
         PluginButtonDesc descStatic;
         XX_TEST_EXPECT_TRUE(parsePluginButton(staticJson, "agentxx_planning", &reg, descStatic));
         XX_TEST_EXPECT_TRUE(descStatic.actionId.empty());
         XX_TEST_EXPECT_FALSE(descStatic.clickable);
         // 非 button → false
-        agentxx::util::Json   textJson = agentxx::util::Json::parse(R"({"kind":"text","text":"hi"})");
-        PluginButtonDesc descText;
+        agentxx::util::Json textJson = agentxx::util::Json::parse(R"({"kind":"text","text":"hi"})");
+        PluginButtonDesc    descText;
         XX_TEST_EXPECT_FALSE(parsePluginButton(textJson, "agentxx_planning", &reg, descText));
         // role 非法值 → Normal; danger 映射
         XX_TEST_EXPECT_TRUE(parseButtonRole("normal") == PluginButtonRole::Normal);

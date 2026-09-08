@@ -1,10 +1,10 @@
 #pragma once
 
+#include "agentxx/util/json.h"
 #include "agentxx/util/util.h"
 #include "fmt/format.h"
 #include <cassert>
 #include <map>
-#include "agentxx/util/json.h"
 #include <string>
 #include <string_view>
 #include <vector>

@@ -14,6 +14,7 @@
 /// - header-only: 仅被 lib 内工具与测试包含, 不进入 agentxx_util 静态库
 ///   (boost.process 头依赖不随 util 库传递)
 
+#include "agentxx/util/asio_error.h"
 #include "agentxx/util/log.h"
 #include "asio/as_tuple.hpp"
 #include "asio/co_spawn.hpp"
@@ -32,7 +33,6 @@
 #include <filesystem>
 #include <fmt/format.h>
 #include <fstream>
-#include "agentxx/util/asio_error.h"
 #include <optional>
 #include <string>
 #include <system_error>

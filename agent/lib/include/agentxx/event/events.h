@@ -1,10 +1,10 @@
 #pragma once
 
+#include "agentxx/util/json.h"
 #include "agentxx/util/log.h"
 #include "neograph/graph/cancel.h"
 #include <chrono>
 #include <memory>
-#include "agentxx/util/json.h"
 #include <optional>
 #include <string>
 #include <string_view>
@@ -331,9 +331,9 @@ struct RespSubagentBatch {
 
 /// 工具执行权限检查 (service.permission.check)
 struct ReqToolPermissionCheck {
-    std::string    agentName;
-    std::string    sessionId;
-    std::string    toolName;
+    std::string         agentName;
+    std::string         sessionId;
+    std::string         toolName;
     agentxx::util::Json arguments;
 };
 

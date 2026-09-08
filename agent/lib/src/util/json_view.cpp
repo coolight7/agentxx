@@ -74,14 +74,12 @@ JsonView::JsonView(simdjson::dom::element elem) noexcept :
     valid_(true) {}
 
 JsonView JsonView::parse(std::string_view sv) {
-    auto storage = std::make_shared<Storage>();
+    auto storage    = std::make_shared<Storage>();
     storage->padded = simdjson::padded_string(sv.data(), sv.size());
     simdjson::dom::element elem;
     auto                   err = storage->parser.parse(storage->padded).get(elem);
     if (err != simdjson::SUCCESS) {
-        throw Json::parse_error(
-            std::string("JsonView::parse: ") + simdjson::error_message(err)
-        );
+        throw Json::parse_error(std::string("JsonView::parse: ") + simdjson::error_message(err));
     }
     JsonView view;
     view.elem_    = elem;
@@ -93,14 +91,12 @@ JsonView JsonView::parse(std::string_view sv) {
 JsonView JsonView::parse(std::string_view sv, simdjson::dom::parser& parser) {
     // 外部 parser 场景: 输入拷贝进视图自持的 padded 缓冲, element tape
     // 仍在外部 parser 内 —— 调用方须保证 parser 在视图使用期间有效
-    auto storage = std::make_shared<Storage>();
+    auto storage    = std::make_shared<Storage>();
     storage->padded = simdjson::padded_string(sv.data(), sv.size());
     simdjson::dom::element elem;
     auto                   err = parser.parse(storage->padded).get(elem);
     if (err != simdjson::SUCCESS) {
-        throw Json::parse_error(
-            std::string("JsonView::parse: ") + simdjson::error_message(err)
-        );
+        throw Json::parse_error(std::string("JsonView::parse: ") + simdjson::error_message(err));
     }
     JsonView view;
     view.elem_    = elem;

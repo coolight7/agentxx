@@ -1,9 +1,9 @@
 #include "test_toolcall_args.h"
 
 #include "agentxx/nodes/toolcall.h"
-#include "fmt/format.h"
 #include "agentxx/util/json.h"
 #include "agentxx/util/neograph_json_bridge.h"
+#include "fmt/format.h"
 #include <cstddef>
 #include <string>
 #include <utility>
@@ -30,7 +30,7 @@ namespace {
 /// - 返回图边界类型 (ChatTool::parameters 为 neograph::json)
 neograph::json makeParams(const std::pair<std::string, agentxx::util::Json>& prop) {
     return agentxx::util::toNeographJson(agentxx::util::Json{
-        {"type",       "object"                                 },
+        {"type",       "object"                                      },
         {"properties", agentxx::util::Json{{prop.first, prop.second}}},
     });
 }
@@ -273,10 +273,11 @@ TestResult testToolcallArgs() {
     // #14 联合类型 ["string", "number"]: string 与 number 均已合法, 不做转换
     {
         neograph::ChatTool def;
-        def.name       = "tool_o";
-        def.parameters = makeParams({"v", {{"type", agentxx::util::Json::array({"string", "number"})}}});
-        auto args      = agentxx::util::Json{
-                 {"v", "42"}
+        def.name = "tool_o";
+        def.parameters
+            = makeParams({"v", {{"type", agentxx::util::Json::array({"string", "number"})}}});
+        auto args = agentxx::util::Json{
+            {"v", "42"}
         };
         XX_TEST_EXPECT_FALSE(agentxx::nodes::ToolcallWrapNode::autoFixArgsType(def, args));
         XX_TEST_EXPECT_TRUE(args["v"].is_string());
@@ -450,11 +451,11 @@ TestResult testToolcallArgs() {
                  {"ratio", {{"type", "string"}}},
              }                     },
         });
-        auto args = agentxx::util::Json{
-            {"tags",  "t1"},
-            {"name",  "n" },
-            {"count", "3" },
-            {"ratio", 0.5 }
+        auto args      = agentxx::util::Json{
+                 {"tags",  "t1"},
+                 {"name",  "n" },
+                 {"count", "3" },
+                 {"ratio", 0.5 }
         };
         XX_TEST_EXPECT_TRUE(agentxx::nodes::ToolcallWrapNode::autoFixArgsType(def, args));
         XX_TEST_EXPECT_TRUE(args["tags"].is_array());
@@ -584,10 +585,11 @@ TestResult testToolcallArgs() {
     // #35 联合类型 ["string", "number"]: 数值参数已合法, 不做数值间转换
     {
         neograph::ChatTool def;
-        def.name       = "tool_aj";
-        def.parameters = makeParams({"v", {{"type", agentxx::util::Json::array({"string", "number"})}}});
-        auto args      = agentxx::util::Json{
-                 {"v", 5}
+        def.name = "tool_aj";
+        def.parameters
+            = makeParams({"v", {{"type", agentxx::util::Json::array({"string", "number"})}}});
+        auto args = agentxx::util::Json{
+            {"v", 5}
         };
         XX_TEST_EXPECT_FALSE(agentxx::nodes::ToolcallWrapNode::autoFixArgsType(def, args));
         XX_TEST_EXPECT_TRUE(args["v"].is_number_integer());

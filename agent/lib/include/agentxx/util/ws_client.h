@@ -1,5 +1,6 @@
 #pragma once
 
+#include "agentxx/util/asio_error.h"
 #include "agentxx/util/log.h"
 #include "agentxx/util/string_util.h"
 #include "asio/awaitable.hpp"
@@ -16,7 +17,6 @@
 #include <chrono>
 #include <expected>
 #include <memory>
-#include "agentxx/util/asio_error.h"
 #include <string>
 #include <string_view>
 #include <vector>

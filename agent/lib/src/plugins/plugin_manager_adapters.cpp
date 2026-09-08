@@ -1,5 +1,5 @@
-#include "agentxx/util/neograph_json_bridge.h"
 #include "agentxx/plugin/plugin_manager.h"
+#include "agentxx/util/neograph_json_bridge.h"
 
 #include "agentxx/event/event_stream.h"
 #include "agentxx/plugin/op_driver.h"

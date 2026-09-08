@@ -75,8 +75,8 @@ std::shared_ptr<agentxx::plugin::ClientUiRegistry> makeTestToolRegistry() {
     // Read (回调)
     static auto readFn
         = [](void*, const AgentxxToolRenderInput* in, AgentxxToolRenderOutput* out) -> int32_t {
-        std::string_view args(in->args_json.data ? in->args_json.data : "", in->args_json.size);
-        agentxx::util::Json   j;
+        std::string_view    args(in->args_json.data ? in->args_json.data : "", in->args_json.size);
+        agentxx::util::Json j;
         try {
             j = agentxx::util::Json::parse(args);
         } catch (...) {
@@ -137,8 +137,8 @@ std::shared_ptr<agentxx::plugin::ClientUiRegistry> makeTestToolRegistry() {
     };
     static auto globFn
         = [](void*, const AgentxxToolRenderInput* in, AgentxxToolRenderOutput* out) -> int32_t {
-        std::string_view args(in->args_json.data ? in->args_json.data : "", in->args_json.size);
-        agentxx::util::Json   j;
+        std::string_view    args(in->args_json.data ? in->args_json.data : "", in->args_json.size);
+        agentxx::util::Json j;
         try {
             j = agentxx::util::Json::parse(args);
         } catch (...) {
@@ -191,8 +191,8 @@ std::shared_ptr<agentxx::plugin::ClientUiRegistry> makeTestToolRegistry() {
     };
     static auto grepFn
         = [](void*, const AgentxxToolRenderInput* in, AgentxxToolRenderOutput* out) -> int32_t {
-        std::string_view args(in->args_json.data ? in->args_json.data : "", in->args_json.size);
-        agentxx::util::Json   j;
+        std::string_view    args(in->args_json.data ? in->args_json.data : "", in->args_json.size);
+        agentxx::util::Json j;
         try {
             j = agentxx::util::Json::parse(args);
         } catch (...) {
@@ -259,8 +259,8 @@ std::shared_ptr<agentxx::plugin::ClientUiRegistry> makeTestToolRegistry() {
     // Edit (回调)
     static auto editFn
         = [](void*, const AgentxxToolRenderInput* in, AgentxxToolRenderOutput* out) -> int32_t {
-        std::string_view args(in->args_json.data ? in->args_json.data : "", in->args_json.size);
-        agentxx::util::Json   j;
+        std::string_view    args(in->args_json.data ? in->args_json.data : "", in->args_json.size);
+        agentxx::util::Json j;
         try {
             j = agentxx::util::Json::parse(args);
         } catch (...) {
@@ -276,11 +276,11 @@ std::shared_ptr<agentxx::plugin::ClientUiRegistry> makeTestToolRegistry() {
         out->summary       = makeTestString(" · " + path);
         if (!in->is_error) {
             agentxx::util::Json diffItem;
-            diffItem["kind"]    = "diff";
-            diffItem["path"]    = std::move(path);
-            diffItem["old_str"] = std::move(oldStr);
-            diffItem["new_str"] = std::move(newStr);
-            agentxx::util::Json arr  = agentxx::util::Json::array();
+            diffItem["kind"]        = "diff";
+            diffItem["path"]        = std::move(path);
+            diffItem["old_str"]     = std::move(oldStr);
+            diffItem["new_str"]     = std::move(newStr);
+            agentxx::util::Json arr = agentxx::util::Json::array();
             arr.push_back(std::move(diffItem));
             out->items_json = makeTestString(arr.dump());
         }

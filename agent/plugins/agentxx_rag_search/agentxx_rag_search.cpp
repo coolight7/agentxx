@@ -41,7 +41,7 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
         AgentxxPluginString json{nullptr, 0};
         ctx.iface.model->get_config(ctx.host, &json);
         agentxx::util::Json cfg;
-        bool           hasCfg = false;
+        bool                hasCfg = false;
         if (json.data) {
             std::string cfgJson(json.data, static_cast<size_t>(json.size));
             PluginString::free(ctx.host, &json);

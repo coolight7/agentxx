@@ -14,7 +14,7 @@
 #include <boost/system/error_code.hpp>
 #include <boost/system/system_error.hpp>
 #ifdef NEOGRAPH_USE_BOOST_ASIO
-namespace asio = ::boost::asio;
+namespace asio                  = ::boost::asio;
 using agentxx_asio_system_error = ::boost::system::system_error;
 using agentxx_asio_error_code   = ::boost::system::error_code;
 #else

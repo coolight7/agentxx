@@ -1,8 +1,8 @@
 #include "test_anthropic_provider.h"
-#include "agentxx/util/neograph_json_bridge.h"
 #include "agentxx/protocol/anthropic_provider.h"
 #include "agentxx/util/http_client.h"
 #include "agentxx/util/http_server.h"
+#include "agentxx/util/neograph_json_bridge.h"
 #include <asio/awaitable.hpp>
 #include <asio/co_spawn.hpp>
 #include <asio/detached.hpp>
@@ -276,9 +276,9 @@ void test_convert_tools() {
     std::vector<neograph::ChatTool> tools = {
         {.name        = "get_weather",
          .description = "Get weather",
-         .parameters
-         = agentxx::util::parseNeographJson(R"({"type":"object","properties":{"location":{"type":"string"}}})")
-        },
+         .parameters  = agentxx::util::parseNeographJson(
+             R"({"type":"object","properties":{"location":{"type":"string"}}})"
+         )},
     };
     auto arr = server::AnthropicProvider::convertTools(tools);
     XX_TEST_EXPECT_EQ(arr.size(), (size_t)1);
@@ -406,7 +406,7 @@ public:
     std::string                 lastRequestBody;
     std::string                 lastRequestHeaders;
 
-    std::vector<std::string>      sseChunks;
+    std::vector<std::string>           sseChunks;
     std::optional<agentxx::util::Json> customResponse;
 
     static std::string sseEvent(std::string_view event, std::string_view data) {
@@ -1951,14 +1951,14 @@ void test_convert_messages_merges_consecutive_roles() {
 /// sendThinking 时应优先原样回传从响应中捕获的带 signature 的 thinking 块
 void test_convert_messages_thinking_signature_roundtrip() {
     neograph::ChatMessage msg;
-    msg.role                                                 = "assistant";
-    msg.content                                              = "Answer";
-    msg.reasoning_content                                    = "Thinking text";
+    msg.role              = "assistant";
+    msg.content           = "Answer";
+    msg.reasoning_content = "Thinking text";
     msg.extra[server::AnthropicProvider::kThinkingBlocksKey] = agentxx::util::parseNeographJson(R"([
         {"type":"thinking","thinking":"Thinking text","signature":"sig123"},
         {"type":"redacted_thinking","data":"redacted-data"}
     ])");
-    std::vector<neograph::ChatMessage> msgs                  = {msg};
+    std::vector<neograph::ChatMessage> msgs = {msg};
     auto [system, arr] = server::AnthropicProvider::convertMessages(msgs, true);
     XX_TEST_EXPECT_TRUE(arr[0]["content"].is_array());
     const auto& blocks = arr[0]["content"];

@@ -2,7 +2,6 @@
 
 #include "agentxx/agent/config.h"
 #include "agentxx/agent/conversation_types.h"
-#include <neograph/json.h>
 #include "agentxx/util/log.h"
 #include "asio/awaitable.hpp"
 #include "asio/thread_pool.hpp"
@@ -12,6 +11,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <neograph/json.h>
 #include <string>
 #include <thread>
 #include <vector>

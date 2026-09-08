@@ -448,7 +448,7 @@ asio::awaitable<void>
     {
         auto tool = agentxx::tools::WebFetchUrlTool{agentContext};
         auto args = agentxx::util::Json{
-            {"url",    baseUrl + "/echo-header"                                   },
+            {"url",    baseUrl + "/echo-header"                                        },
             {"header", agentxx::util::Json{{"X-Test-Header", "fetch-url-header-value"}}},
         };
         auto result = co_await tool.execute_async(args);
@@ -464,7 +464,7 @@ asio::awaitable<void>
     {
         auto tool = agentxx::tools::WebFetchUrlMarkdownTool{agentContext};
         auto args = agentxx::util::Json{
-            {"url",    baseUrl + "/echo-header"                                  },
+            {"url",    baseUrl + "/echo-header"                                       },
             {"header", agentxx::util::Json{{"X-Test-Header", "fetch-md-header-value"}}},
         };
         auto result = co_await tool.execute_async(args);
@@ -482,8 +482,8 @@ asio::awaitable<void>
         auto tool
             = agentxx::tools::WebSearchTool{baseUrl + "/echo-header?q={}", false, agentContext};
         auto args = agentxx::util::Json{
-            {"query",   "test"                                                      },
-            {"timeout", 10                                                          },
+            {"query",   "test"                                                           },
+            {"timeout", 10                                                               },
             {"header",  agentxx::util::Json{{"X-Test-Header", "search-raw-header-value"}}},
         };
         auto result = co_await tool.execute_async(args);
@@ -500,8 +500,8 @@ asio::awaitable<void>
         auto tool
             = agentxx::tools::WebSearchTool{baseUrl + "/echo-header?q={}", true, agentContext};
         auto args = agentxx::util::Json{
-            {"query",   "test"                                                     },
-            {"timeout", 10                                                         },
+            {"query",   "test"                                                          },
+            {"timeout", 10                                                              },
             {"header",  agentxx::util::Json{{"X-Test-Header", "search-md-header-value"}}},
         };
         auto result = co_await tool.execute_async(args);

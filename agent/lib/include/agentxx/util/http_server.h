@@ -1,5 +1,6 @@
 #pragma once
 
+#include "agentxx/util/asio_error.h"
 #include "agentxx/util/exception.h"
 #include "agentxx/util/log.h"
 #include "agentxx/util/router.h"
@@ -22,7 +23,6 @@
 #include <functional>
 #include <list>
 #include <memory>
-#include "agentxx/util/asio_error.h"
 #include <optional>
 #include <string>
 #include <thread>

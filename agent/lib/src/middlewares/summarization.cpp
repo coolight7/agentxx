@@ -1,5 +1,5 @@
-#include "agentxx/util/neograph_json_bridge.h"
 #include "agentxx/middlewares/summarization.h"
+#include "agentxx/util/neograph_json_bridge.h"
 
 #include "agentxx/agent/agent_host.h"
 #include "agentxx/agent/io/agent_io.h"

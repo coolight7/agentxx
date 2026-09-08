@@ -11,8 +11,8 @@
 #include <thread>
 #include <vector>
 
-#include <asio/awaitable.hpp>
 #include "agentxx/util/json.h"
+#include <asio/awaitable.hpp>
 
 #include "agentxx/agent/base_agent.h"
 #include "agentxx/util/http_server.h"

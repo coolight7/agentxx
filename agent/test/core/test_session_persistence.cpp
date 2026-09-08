@@ -6,6 +6,7 @@
 #include "agentxx/agent/io/session_server_agent_io.h"
 #include "agentxx/agent/session_store.h"
 #include "agentxx/middlewares/middleware.h"
+#include "agentxx/util/json.h"
 #include "agentxx/util/log.h"
 #include <asio/co_spawn.hpp>
 #include <asio/detached.hpp>
@@ -13,7 +14,6 @@
 #include <chrono>
 #include <filesystem>
 #include <fmt/format.h>
-#include "agentxx/util/json.h"
 #include <string>
 #include <vector>
 
@@ -98,9 +98,9 @@ agentxx::agent::ViewMessage makeMsg(agentxx::agent::ViewMessage::Role role, std:
 // ---------------------------------------------------------------------------
 
 static TestResult testViewMessagesRoundtrip() {
-    using agentxx::agent::SessionStore;
     using agentxx::agent::MediaAttachment;
     using agentxx::agent::MediaType;
+    using agentxx::agent::SessionStore;
     using V = agentxx::agent::ViewMessage;
 
     auto root = makeTempRoot();
@@ -178,9 +178,9 @@ static TestResult testViewMessagesRoundtrip() {
 
     // ---- 多模态附件: 落库剥离 dataUrl, 元数据保留 ----
     {
-        auto root2 = makeTempRoot();
-        auto p     = std::make_shared<SessionStore>(root2);
-        V    msg   = makeMsg(V::Role::User, "see chart");
+        auto            root2 = makeTempRoot();
+        auto            p     = std::make_shared<SessionStore>(root2);
+        V               msg   = makeMsg(V::Role::User, "see chart");
         MediaAttachment att;
         att.type        = MediaType::Image;
         att.displayName = "chart.png";
@@ -205,13 +205,11 @@ static TestResult testViewMessagesRoundtrip() {
             }
         }
         // wire 往返保留 dataUrl (内存/Sync 路径不受剥离影响)
-        auto j   = msg.toJson();
-        auto rt  = V::fromJson(j);
+        auto j  = msg.toJson();
+        auto rt = V::fromJson(j);
         XX_TEST_EXPECT_EQ(rt.attachments.size(), size_t{1});
         if (!rt.attachments.empty()) {
-            XX_TEST_EXPECT_EQ(
-                rt.attachments[0].dataUrl, "data:image/png;base64,AAAABBBB"
-            );
+            XX_TEST_EXPECT_EQ(rt.attachments[0].dataUrl, "data:image/png;base64,AAAABBBB");
         }
         fs::remove_all(root2);
     }
@@ -535,9 +533,9 @@ static TestResult testPersistThrottle() {
         // ---- 第二次结算 (窗口内): 内存增长, 未落盘 ----
         s1->appendSettledLlmMessages(agentxx::util::Json::array({
             agentxx::util::Json{
-                           {"role", "assistant"},
-                           {"content", "a1"},
-                           },
+                                {"role", "assistant"},
+                                {"content", "a1"},
+                                },
         }));
         XX_TEST_EXPECT_EQ(s1->llmMessages.size(), size_t{2});
         {
@@ -844,10 +842,10 @@ static asio::awaitable<void> testSessionPersistenceE2E() {
         g_da_sim_response_content = "E2E final answer";
         g_da_sim_tool_calls       = agentxx::util::Json::array({
             agentxx::util::Json{
-                           {"index", 0},
-                           {"id", "call_e2e_1"},
-                           {"type", "function"},
-                           {
+                                {"index", 0},
+                                {"id", "call_e2e_1"},
+                                {"type", "function"},
+                                {
                     "function",
                     agentxx::util::Json{
                               {"name", "agentxx_filesystem_list"},

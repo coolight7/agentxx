@@ -1,4 +1,5 @@
 /// agentxx_screen_capture —— 屏幕捕获插件 (Windows)
+#include "agentxx/util/json.h"
 #include "fmt/format.h"
 #include "screen_capture.h"
 #include "screen_capture_plugin.h"
@@ -11,7 +12,6 @@
 #include <filesystem>
 #include <functional>
 #include <memory>
-#include "agentxx/util/json.h"
 #include <string>
 #include <vector>
 
@@ -119,15 +119,15 @@ static agentxx::util::Json frameToJson(
     const agentxx_screen_capture_plugin::ScreenFrame& f,
     bool                                              saveImages
 ) {
-    agentxx::util::Json j  = agentxx::util::Json::object();
-    j["width"]        = f.width;
-    j["height"]       = f.height;
-    j["offset_x"]     = f.offsetX;
-    j["offset_y"]     = f.offsetY;
-    j["screen_index"] = f.screenIndex;
-    j["screen_name"]  = f.screenName;
-    j["is_primary"]   = f.isPrimary;
-    j["pixel_bytes"]  = static_cast<int64_t>(f.pixelData.size());
+    agentxx::util::Json j = agentxx::util::Json::object();
+    j["width"]            = f.width;
+    j["height"]           = f.height;
+    j["offset_x"]         = f.offsetX;
+    j["offset_y"]         = f.offsetY;
+    j["screen_index"]     = f.screenIndex;
+    j["screen_name"]      = f.screenName;
+    j["is_primary"]       = f.isPrimary;
+    j["pixel_bytes"]      = static_cast<int64_t>(f.pixelData.size());
     if (saveImages && !f.pixelData.empty() && !ctx.captures_dir.empty()) {
         std::string path = buildCapturePath(ctx, f.screenIndex);
         if (ctx.holder->capture_.saveFramePng(f, path)) {
@@ -153,8 +153,8 @@ static std::string framesResult(
         arr.push_back(frameToJson(ctx, f, saveImages));
     }
     agentxx::util::Json j = agentxx::util::Json::object();
-    j["ok"]          = true;
-    j["frames"]      = arr;
+    j["ok"]               = true;
+    j["frames"]           = arr;
     return j.dump();
 }
 

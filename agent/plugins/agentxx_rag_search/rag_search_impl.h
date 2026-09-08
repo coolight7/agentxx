@@ -685,7 +685,7 @@ inline EmbedFn makeHttpEmbedder(std::string baseUrl, std::string model) {
         }
 
         try {
-            auto                             respBody = agentxx::util::Json::parse(resp.value().body);
+            auto respBody = agentxx::util::Json::parse(resp.value().body);
             std::vector<std::vector<double>> embeddings;
 
             for (const auto& item : respBody["data"]) {

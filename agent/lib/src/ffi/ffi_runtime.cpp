@@ -190,7 +190,7 @@ bool FfiAgentRuntime::buildConfigs(
 
     // ---- 顶层配置 (config_json) ----
     agentxx::util::Json cfgJ;
-    auto           cfgSv = toSv(config_json);
+    auto                cfgSv = toSv(config_json);
     if (!cfgSv.empty()) {
         try {
             cfgJ = agentxx::util::Json::parse(cfgSv);
@@ -235,9 +235,9 @@ bool FfiAgentRuntime::buildConfigs(
                     continue;
                 }
                 agentxx::agent::McpServerConfig mc;
-                mc.url                    = jsonStr(v, "url", "");
-                const int timeoutSec      = jsonInt(v, "timeoutSec", 120);
-                mc.toolTimeout            = std::chrono::milliseconds(timeoutSec * 1000);
+                mc.url                       = jsonStr(v, "url", "");
+                const int timeoutSec         = jsonInt(v, "timeoutSec", 120);
+                mc.toolTimeout               = std::chrono::milliseconds(timeoutSec * 1000);
                 config->mcpServerUrls[nsStr] = std::move(mc);
             }
         }
@@ -268,7 +268,7 @@ bool FfiAgentRuntime::buildConfigs(
 
     // ---- 模型配置 (model_json 优先, 其次 config_json.model) ----
     agentxx::util::Json mj;
-    auto           modelSv = toSv(model_json);
+    auto                modelSv = toSv(model_json);
     if (!modelSv.empty()) {
         try {
             mj = agentxx::util::Json::parse(modelSv);
@@ -732,7 +732,10 @@ std::string FfiAgentRuntime::getLanguage(std::string& err) {
 // 同步查询
 // ---------------------------------------------------------------------------
 
-void FfiAgentRuntime::onSyncReplyOnClientThread(FfiClientAgentIO::SyncKind kind, agentxx::util::Json j) {
+void FfiAgentRuntime::onSyncReplyOnClientThread(
+    FfiClientAgentIO::SyncKind kind,
+    agentxx::util::Json        j
+) {
     std::shared_ptr<SyncWait> waiter;
     {
         std::lock_guard<std::mutex> lock(syncMutex_);
@@ -841,7 +844,7 @@ int FfiAgentRuntime::interruptRespond(
         return AGENTXX_FFI_ERR_INTERRUPT;
     }
     agentxx::util::Json val   = agentxx::util::Json::array();
-    auto           valSv = toSv(valuesJson);
+    auto                valSv = toSv(valuesJson);
     if (!valSv.empty()) {
         try {
             val = agentxx::util::Json::parse(valSv);

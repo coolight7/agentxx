@@ -15,10 +15,10 @@
 #include "agentxx/plugin/api/client_plugin_api.h"
 
 #include "agentxx/plugin/api/plugin_api.h"
-#include "fmt/format.h"
-#include "fmt/ranges.h"
 #include "agentxx/util/json.h"
 #include "agentxx/util/json_view.h"
+#include "fmt/format.h"
+#include "fmt/ranges.h"
 #include <type_traits>
 
 #include <algorithm>
@@ -46,7 +46,7 @@ namespace agentxx {
 namespace plugin {
 
 /// 插件作用域 JSON 别名 (自主 Json 体系, 不再依赖 neograph)
-using Json = agentxx::util::Json;
+using Json     = agentxx::util::Json;
 using JsonView = agentxx::util::JsonView;
 
 /* ==================== C++ 字符串/接口便捷工具 (非 ABI) ====================
@@ -975,7 +975,7 @@ public:
 private:
 
     ToolPromptText           prompt_;
-    agentxx::util::Json           properties_ = agentxx::util::Json::object();
+    agentxx::util::Json      properties_ = agentxx::util::Json::object();
     std::vector<std::string> required_;
 };
 
@@ -1151,7 +1151,7 @@ public:
 
 private:
 
-    agentxx::util::Json           root_          = agentxx::util::Json::object();
+    agentxx::util::Json      root_          = agentxx::util::Json::object();
     bool                     hasParseError_ = false;
     std::vector<std::string> errors_;
 };
@@ -3085,8 +3085,8 @@ struct ToolRenderInput {
 };
 
 struct ToolRenderOutput {
-    std::string    displayName;
-    std::string    summary;
+    std::string         displayName;
+    std::string         summary;
     agentxx::util::Json items = agentxx::util::Json::array();
 };
 
@@ -3213,10 +3213,10 @@ public:
     /// 生成 button JSON (action_id 自增 act_N; args 缺省 {}; role 缺省 normal)
     /// - onClick 为空时仍生成可点按钮 (固定 id 由调用方另行 on() 绑定, 如 planning 常量)
     agentxx::util::Json makeButton(
-        std::string    label,
-        Handler        onClick = nullptr,
-        std::string    prefix  = "",
-        std::string    role    = "normal",
+        std::string         label,
+        Handler             onClick = nullptr,
+        std::string         prefix  = "",
+        std::string         role    = "normal",
         agentxx::util::Json args    = agentxx::util::Json::object()
     ) {
         const std::string id = "act_" + std::to_string(++counter_);
@@ -3224,8 +3224,8 @@ public:
             handlers_[id] = std::move(onClick);
         }
         agentxx::util::Json btn = agentxx::util::Json::object();
-        btn["kind"]        = "button";
-        btn["label"]       = std::move(label);
+        btn["kind"]             = "button";
+        btn["label"]            = std::move(label);
         if (!prefix.empty()) {
             btn["prefix"] = std::move(prefix);
         }

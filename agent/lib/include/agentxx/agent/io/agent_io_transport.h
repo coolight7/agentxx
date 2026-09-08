@@ -1,9 +1,9 @@
 #pragma once
 
 #include "agentxx/agent/conversation_types.h"
-#include "asio/awaitable.hpp"
 #include "agentxx/util/asio_error.h"
 #include "agentxx/util/json.h"
+#include "asio/awaitable.hpp"
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -51,8 +51,8 @@ struct WireHelloAck {
 };
 
 struct WireUserInput {
-    std::string                  sessionId;
-    std::string                  text;
+    std::string sessionId;
+    std::string text;
     /// 本条消息携带的模型选择 (空 = 不切换): TUI 切模型不再即时发送
     /// WireSelectModel, 而是随下一次用户消息携带, BaseAgent 执行该轮会话
     /// 开始时 (runTurnAsync 内 selectModel) 自动切换
@@ -78,7 +78,7 @@ struct WireInterruptRequest {
 };
 
 struct WireInterruptResponse {
-    int64_t        id = 0;
+    int64_t             id = 0;
     agentxx::util::Json result;
 };
 

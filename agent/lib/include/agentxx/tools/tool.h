@@ -25,7 +25,7 @@ namespace tools {
 /// - 会话不存在 (如非 toolcall 路径调用) 或令牌为空时返回 nullptr (无取消支持)
 std::shared_ptr<neograph::graph::CancelToken> getSessionCancelToken(
     const std::shared_ptr<agentxx::agent::AgentContext>& agentCtx,
-    const agentxx::util::Json&                                args
+    const agentxx::util::Json&                           args
 );
 
 /// - 封装原始的 [neograph::Tool] 类型，添加额外功能

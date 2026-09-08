@@ -1630,7 +1630,7 @@ std::string PluginManager::getToolPromptJson(const std::string& toolName) {
         return {};
     }
     agentxx::util::Json out;
-    out["depict"]       = it->second.depict;
+    out["depict"]            = it->second.depict;
     agentxx::util::Json args = agentxx::util::Json::object();
     for (const auto& [k, v] : it->second.args) {
         args[k] = v;
@@ -1787,7 +1787,7 @@ std::string PluginManager::getModelConfigJson() {
     if (!c || !c->agentConfig) {
         return {};
     }
-    const auto&    cfg = *c->agentConfig;
+    const auto&         cfg = *c->agentConfig;
     agentxx::util::Json out;
     out["baseUrl"]                       = cfg.model.baseUrl;
     out["apiKey"]                        = cfg.model.apiKey;

@@ -104,12 +104,12 @@ public:
 
     // ----- AgentIOBase: 对端从我这拉取的 (BaseAgent 调用) -----
     asio::awaitable<std::optional<std::string>> getInput() override;
-    asio::awaitable<agentxx::util::Json>             handleInterrupt(
-                    std::string_view sessionId,
-                    std::string_view interruptNode,
-                    std::string_view interruptValue,
-                    std::string_view interruptArgJson
-                ) override;
+    asio::awaitable<agentxx::util::Json>        handleInterrupt(
+               std::string_view sessionId,
+               std::string_view interruptNode,
+               std::string_view interruptValue,
+               std::string_view interruptArgJson
+           ) override;
 
     // ----- AgentIOBase: 对端发来的消息分发 -----
     void onPeerMessage(WireMessage msg) override;
@@ -193,13 +193,16 @@ private:
     using ErrorCode = neograph_asio_error_code;
 
     struct PendingInterrupt {
-        std::shared_ptr<asio::experimental::concurrent_channel<void(ErrorCode, agentxx::util::Json)>> ch;
+        std::shared_ptr<
+            asio::experimental::concurrent_channel<void(ErrorCode, agentxx::util::Json)>>
+                    ch;
         std::string node;
         std::string value;
         std::string argJson;
     };
 
-    using RespChannel = asio::experimental::concurrent_channel<void(ErrorCode, agentxx::util::Json)>;
+    using RespChannel
+        = asio::experimental::concurrent_channel<void(ErrorCode, agentxx::util::Json)>;
     using WakeChannel = asio::experimental::concurrent_channel<void(ErrorCode, int)>;
 
     /// 取 seq 之后的 delta; nullopt 表示需全量 sync

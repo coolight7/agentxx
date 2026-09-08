@@ -1,8 +1,8 @@
-#include "agentxx/util/neograph_json_bridge.h"
 #include "agentxx/middlewares/middleware.h"
 #include "agentxx/agent/session_store.h"
 #include "agentxx/tools/tool.h"
 #include "agentxx/util/container_util.h"
+#include "agentxx/util/neograph_json_bridge.h"
 #include <algorithm>
 #include <charconv>
 
@@ -414,7 +414,7 @@ void MiddlewareContext::cleanupSession(std::string_view sessionId) {
 }
 
 void MiddlewareContext::throwNodeInterruptBase(
-    std::string_view      sessionId,
+    std::string_view           sessionId,
     const agentxx::util::Json& msgs
 ) {
     // if (msgs.is_array()) {
@@ -428,7 +428,7 @@ void MiddlewareContext::throwNodeInterruptBase(
 asio::awaitable<agentxx::util::Json> MiddlewareContext::requestInterrupt(
     std::string_view                           sessionId,
     const std::function<InterruptHandleArg()>& onCreateArg,
-    const agentxx::util::Json&                      msgs
+    const agentxx::util::Json&                 msgs
 ) {
     auto result = std::move(getGraphDataItemValue<agentxx::util::Json>(
         sessionId,
@@ -468,7 +468,10 @@ void MiddlewareContext::setGraphDataFromState(
     neograph::graph::GraphState& state,
     std::string_view             sessionId
 ) {
-    setGraphDataFromState(agentxx::util::fromNeographJson(state.get(channel_savedGraphData)), sessionId);
+    setGraphDataFromState(
+        agentxx::util::fromNeographJson(state.get(channel_savedGraphData)),
+        sessionId
+    );
 }
 
 void MiddlewareContext::setGraphDataFromState(agentxx::util::Json j, std::string_view sessionId) {

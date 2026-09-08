@@ -1,8 +1,8 @@
 #pragma once
 // 协议公共基类/工具, 收敛 A2A/ACP/MCP 重复的 JSON-RPC/路由/Http 逻辑
 #include "agentxx/util/http_server.h"
-#include "agentxx/util/log.h"
 #include "agentxx/util/json.h"
+#include "agentxx/util/log.h"
 
 namespace agentxx {
 namespace server {
@@ -44,7 +44,7 @@ inline agentxx::util::Json jsonRpcErrorResponse(agentxx::util::Json id, agentxx:
 inline void writeJsonResponse(
     util::HttpServer::Response& resp,
     boost::beast::http::status  status,
-    const agentxx::util::Json&       body
+    const agentxx::util::Json&  body
 ) {
     resp.result(status);
     resp.set(boost::beast::http::field::content_type, "application/json");

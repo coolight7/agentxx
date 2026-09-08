@@ -63,16 +63,19 @@ public:
 
         using std::runtime_error::runtime_error;
     };
+
     class parse_error : public exception {
     public:
 
         using exception::exception;
     };
+
     class type_error : public exception {
     public:
 
         using exception::exception;
     };
+
     class out_of_range : public exception {
     public:
 
@@ -136,9 +139,11 @@ public:
     // ----- 类型检测 -----
     bool is_null() const noexcept;
     bool is_bool() const noexcept;
+
     bool is_boolean() const noexcept {
         return is_bool();
     }
+
     bool is_number() const noexcept;
     bool is_number_integer() const noexcept;
     bool is_number_unsigned() const noexcept;
@@ -148,6 +153,7 @@ public:
     bool is_object() const noexcept;
     /// 非 null 且非容器 (与 agentxx::util::Json 一致)
     bool is_primitive() const noexcept;
+
     Type type() const noexcept {
         return type_;
     }
@@ -172,14 +178,16 @@ public:
     /// 可写访问: 缺失键自动插入 Null (null 节点先提升为对象)
     /// - 类型不匹配 (非对象) 时返回线程局部的空节点引用 (写入丢失,
     ///   与 agentxx::util::Json 的游离 null 句柄语义一致, 仅读场景安全)
-    Json&       operator[](std::string_view key);
+    Json& operator[](std::string_view key);
     /// 只读访问: 缺失时返回全局 Null 常量
     const Json& operator[](std::string_view key) const noexcept;
     Json&       operator[](size_t index);
     const Json& operator[](size_t index) const noexcept;
-    Json&       operator[](int index) {
+
+    Json& operator[](int index) {
         return (*this)[static_cast<size_t>(index)];
     }
+
     const Json& operator[](int index) const noexcept {
         return (*this)[static_cast<size_t>(index)];
     }
@@ -189,9 +197,11 @@ public:
     const Json& at(std::string_view key) const;
     Json&       at(size_t index);
     const Json& at(size_t index) const;
-    Json&       at(int index) {
+
+    Json& at(int index) {
         return at(static_cast<size_t>(index));
     }
+
     const Json& at(int index) const {
         return at(static_cast<size_t>(index));
     }
@@ -224,6 +234,7 @@ public:
             return default_val;
         }
     }
+
     /// 字符串字面量默认值重载 (避免模板把 `const char*` 推导为数组类型)
     std::string value(std::string_view key, const char* default_val) const;
 
@@ -254,6 +265,7 @@ public:
     // ----- 比较 -----
     /// 结构化相等 (类型 + 值 + 对象键序均一致; 1 与 1.0 不相等)
     bool operator==(const Json& o) const noexcept;
+
     bool operator!=(const Json& o) const noexcept {
         return !(*this == o);
     }
@@ -276,6 +288,7 @@ private:
     static const Json& constNull() noexcept;
 
     Type type_ = Type::Null;
+
     union Storage {
         bool        bool_val_;
         int64_t     int_val_;
@@ -286,6 +299,7 @@ private:
         object_t    obj_val_;
 
         Storage() noexcept {}
+
         ~Storage() noexcept {}
     } storage_;
 };
@@ -334,7 +348,8 @@ public:
     pointer   operator->() const noexcept;
     iterator& operator++() noexcept;
     bool      operator==(const iterator& o) const noexcept;
-    bool      operator!=(const iterator& o) const noexcept {
+
+    bool operator!=(const iterator& o) const noexcept {
         return !(*this == o);
     }
 
@@ -363,11 +378,12 @@ public:
     /// mutable 迭代器可隐式转为 const 迭代器
     const_iterator(const iterator& it) noexcept;
 
-    reference operator*() const noexcept;
-    pointer   operator->() const noexcept;
+    reference       operator*() const noexcept;
+    pointer         operator->() const noexcept;
     const_iterator& operator++() noexcept;
     bool            operator==(const const_iterator& o) const noexcept;
-    bool            operator!=(const const_iterator& o) const noexcept {
+
+    bool operator!=(const const_iterator& o) const noexcept {
         return !(*this == o);
     }
 
@@ -394,7 +410,8 @@ public:
         iterator() noexcept = default;
         std::pair<std::string_view, Json&> operator*() const noexcept;
         iterator&                          operator++() noexcept;
-        bool operator==(const iterator& o) const noexcept;
+        bool                               operator==(const iterator& o) const noexcept;
+
         bool operator!=(const iterator& o) const noexcept {
             return !(*this == o);
         }
@@ -411,8 +428,10 @@ public:
 private:
 
     friend class Json;
+
     explicit ItemsIterable(Json& j) noexcept :
         j_(j) {}
+
     Json& j_;
 };
 
@@ -426,7 +445,8 @@ public:
         iterator() noexcept = default;
         std::pair<std::string, Json> operator*() const;
         iterator&                    operator++() noexcept;
-        bool operator==(const iterator& o) const noexcept;
+        bool                         operator==(const iterator& o) const noexcept;
+
         bool operator!=(const iterator& o) const noexcept {
             return !(*this == o);
         }
@@ -443,8 +463,10 @@ public:
 private:
 
     friend class Json;
+
     explicit ConstItemsIterable(const Json& j) noexcept :
         j_(j) {}
+
     const Json& j_;
 };
 
@@ -456,6 +478,7 @@ inline std::ostream& operator<<(std::ostream& os, const Json& j) {
 inline void toJson(Json& j, const Json& v) {
     j = v;
 }
+
 inline void fromJson(const Json& j, Json& v) {
     v = j;
 }
@@ -478,6 +501,7 @@ inline Json reflectToJson(const T& obj) {
     toJson(j, obj);
     return j;
 }
+
 template<typename T>
 inline T reflectFromJson(const Json& j) {
     T obj{};

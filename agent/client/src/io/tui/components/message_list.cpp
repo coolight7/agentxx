@@ -1820,10 +1820,10 @@ void MessageListComponent::appendDecorToolBody(
 
 void MessageListComponent::appendDecorItems(
     const agentxx::util::Json& items,
-    const std::string&    plugin,
-    const std::string&    ownerId,
-    Elements&             lines,
-    int                   maxWidth
+    const std::string&         plugin,
+    const std::string&         ownerId,
+    Elements&                  lines,
+    int                        maxWidth
 ) {
     const auto& theme = *ctx_.theme;
     // 状态图渲染宽度预算: 内容缩进 (4) + 边界余量 (2); 下限保底可读

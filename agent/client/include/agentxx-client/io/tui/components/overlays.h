@@ -4,13 +4,13 @@
 #include "agentxx-client/io/tui/scrollable.h"
 #include "agentxx/agent/conversation_types.h"
 #include "agentxx/agent/io/agent_io_transport.h"
+#include "agentxx/util/json.h"
 #include "ftxui/component/component_base.hpp"
 #include "ftxui/component/event.hpp"
 #include "ftxui/dom/elements.hpp"
 #include "ftxui/screen/box.hpp"
 #include <functional>
 #include <markdown/state_diagram.hpp>
-#include "agentxx/util/json.h"
 #include <set>
 #include <string>
 #include <vector>
@@ -273,8 +273,11 @@ private:
     std::vector<ScrollItem> buildItems();
 
     /// 构建单条消息的折叠头 (含 +/- 标记与单行预览)
-    ftxui::Element
-        buildMessageHeader(const agentxx::util::Json& m, bool expanded, const ftxui::Color& roleColor);
+    ftxui::Element buildMessageHeader(
+        const agentxx::util::Json& m,
+        bool                       expanded,
+        const ftxui::Color&        roleColor
+    );
 
     /// 构建单条消息的展开体: 完整原始 JSON (dump(2) 美化多行)
     ftxui::Element buildMessageBody(const agentxx::util::Json& m);
@@ -491,10 +494,10 @@ class CustomOverlay : public ftxui::ComponentBase {
 public:
 
     explicit CustomOverlay(
-        TUICtx&        ctx,
-        std::string    title,
+        TUICtx&             ctx,
+        std::string         title,
         agentxx::util::Json items,
-        std::string    ownerPlugin
+        std::string         ownerPlugin
     );
 
     void onClose(std::function<void()> fn) {
@@ -508,7 +511,7 @@ private:
 
     TUICtx&                     ctx_;
     std::string                 title_;
-    agentxx::util::Json              items_;
+    agentxx::util::Json         items_;
     std::string                 ownerPlugin_;
     std::shared_ptr<Scrollable> scrollable_;
     std::function<void()>       onClose_;

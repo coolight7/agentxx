@@ -1,9 +1,9 @@
 #include "test_openai_provider.h"
-#include "agentxx/util/neograph_json_bridge.h"
 #include "agentxx/agent/model_registry.h"
 #include "agentxx/protocol/openai_provider.h"
 #include "agentxx/util/http_client.h"
 #include "agentxx/util/http_server.h"
+#include "agentxx/util/neograph_json_bridge.h"
 #include <asio/awaitable.hpp>
 #include <asio/co_spawn.hpp>
 #include <asio/detached.hpp>
@@ -185,10 +185,11 @@ void test_fill_missing_tool_call_ids_unique() {
 
 void test_config_defaults() {
     agentxx::agent::ModelConfig mc;
-    mc.name        = "test";
-    mc.apiKey      = "sk-defaults-test";
-    mc.extraConfig = agentxx::util::Json::parse(R"({"top_p":0.9,"frequency_penalty":0.2,"seed":42})");
-    auto p         = server::OpenAIProvider::create(mc);
+    mc.name   = "test";
+    mc.apiKey = "sk-defaults-test";
+    mc.extraConfig
+        = agentxx::util::Json::parse(R"({"top_p":0.9,"frequency_penalty":0.2,"seed":42})");
+    auto p = server::OpenAIProvider::create(mc);
     XX_TEST_EXPECT_TRUE(p != nullptr);
 }
 
@@ -307,13 +308,13 @@ public:
         makeCompletionResponse(std::string_view content, int prompt = 10, int completion = 5)
             const {
         agentxx::util::Json resp;
-        resp["id"]                            = "chatcmpl-mock";
-        resp["object"]                        = "chat.completion";
-        resp["created"]                       = 1700000000;
-        resp["model"]                         = "mock-model";
-        resp["choices"]                       = agentxx::util::Json::array({agentxx::util::Json::object()});
-        resp["choices"][0]["index"]           = 0;
-        resp["choices"][0]["message"]["role"] = "assistant";
+        resp["id"]                  = "chatcmpl-mock";
+        resp["object"]              = "chat.completion";
+        resp["created"]             = 1700000000;
+        resp["model"]               = "mock-model";
+        resp["choices"]             = agentxx::util::Json::array({agentxx::util::Json::object()});
+        resp["choices"][0]["index"] = 0;
+        resp["choices"][0]["message"]["role"]    = "assistant";
         resp["choices"][0]["message"]["content"] = std::string(content);
         resp["choices"][0]["finish_reason"]      = "stop";
         resp["usage"]["prompt_tokens"]           = prompt;
@@ -3409,8 +3410,9 @@ asio::awaitable<void> test_responses_reasoning_configurable(MockOpenAIServer& mo
         params.messages = {
             neograph::ChatMessage{.role = "user", .content = "hi"}
         };
-        params.extra_fields
-            = agentxx::util::parseNeographJson(R"({"reasoning":{"effort":"high","summary":"concise"}})");
+        params.extra_fields = agentxx::util::parseNeographJson(
+            R"({"reasoning":{"effort":"high","summary":"concise"}})"
+        );
         try {
             co_await provider->invoke(params, nullptr);
             auto sent = agentxx::util::Json::parse(mock.lastRequestBody);
@@ -3659,8 +3661,8 @@ asio::awaitable<void> test_responses_reasoning_item_missing_summary_normalized(
               {{"id", "msg_muse_1"},
                {"type", "message"},
                {"status", "completed"},
-               {"content", agentxx::util::Json::array({{{"type", "output_text"}, {"text", "回答内容"}}})
-               },
+               {"content",
+                agentxx::util::Json::array({{{"type", "output_text"}, {"text", "回答内容"}}})},
                {"role", "assistant"}}}
          )},
         {
@@ -3910,7 +3912,8 @@ asio::awaitable<void>
     {
         auto mc         = makeCodexCfg(baseUrl);
         mc.sendThinking = true;
-        mc.extraConfig  = agentxx::util::Json::parse(R"({"include":["reasoning.encrypted_content"]})");
+        mc.extraConfig
+            = agentxx::util::Json::parse(R"({"include":["reasoning.encrypted_content"]})");
         auto                       provider = server::OpenAIProvider::create(mc);
         neograph::CompletionParams params;
         params.model    = "gpt-5-codex";

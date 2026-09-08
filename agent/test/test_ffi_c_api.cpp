@@ -14,8 +14,8 @@
 
 #include "agentxx/ffi_api.h"
 #include "agentxx/util/http_server.h"
-#include "agentxx/version.h"
 #include "agentxx/util/json.h"
+#include "agentxx/version.h"
 
 #if XX_IS_WIN_D
 #ifndef WIN32_LEAN_AND_MEAN

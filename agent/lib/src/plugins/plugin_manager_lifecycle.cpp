@@ -408,7 +408,7 @@ std::vector<PluginManager::PluginListView> PluginManager::list() const {
 }
 
 std::string PluginManager::listPluginsJson() {
-    auto           views = list();
+    auto                views = list();
     agentxx::util::Json arr   = agentxx::util::Json::array();
     for (const auto& v : views) {
         agentxx::util::Json item;
@@ -446,7 +446,7 @@ std::string PluginManager::getPluginJson(const std::string& name) {
     item["optional_depends"]    = inst->optionalDepends;
     item["required_interfaces"] = inst->interfaces.require;
     item["optional_interfaces"] = inst->interfaces.optional;
-    agentxx::util::Json caps         = agentxx::util::Json::array();
+    agentxx::util::Json caps    = agentxx::util::Json::array();
     for (const auto& c : inst->capabilityRegistrations) {
         caps.push_back(c.name);
     }

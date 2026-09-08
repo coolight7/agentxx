@@ -5,12 +5,13 @@
 #pragma once
 
 #include "agentxx/util/aho_corasick.h"
+#include "agentxx/util/asio_error.h"
 #include "agentxx/util/exception.h"
+#include "agentxx/util/json.h"
 #include "agentxx/util/log.h"
 #include "agentxx/util/regex.h"
 #include "agentxx/util/string_util.h"
 #include "agentxx/util/util.h"
-#include "agentxx/util/asio_error.h"
 #include "asio/any_io_executor.hpp"
 #include "asio/error.hpp"
 #include "asio/read.hpp"
@@ -31,7 +32,6 @@
 #include <functional>
 #include <limits>
 #include <memory>
-#include "agentxx/util/json.h"
 #include <regex>
 #include <set>
 #include <sstream>
@@ -180,8 +180,8 @@ inline std::string readFileContent(const std::string& filepath) {
 // =====================================================================
 inline std::string fileListExecuteImpl(
     const agentxx::util::Json& arguments,
-    const std::string&    workDir,
-    const IsCancelledFn&  isCancelled = nullptr
+    const std::string&         workDir,
+    const IsCancelledFn&       isCancelled = nullptr
 ) {
     auto targetPath = detail::wsAbs(workDir, arguments.value("path", std::string{}));
     if (targetPath.empty()) {
@@ -317,7 +317,7 @@ inline std::string fileListExecuteImpl(
 // =====================================================================
 inline std::string fileReadExecuteImpl(
     const agentxx::util::Json& arguments,
-    const std::string&    workDir,
+    const std::string&         workDir,
     const IsCancelledFn& isCancelled = nullptr // 单文件短操作不轮询; 形参保持与其他执行体一致
 ) {
     auto filepath = detail::wsAbs(workDir, arguments.value("path", std::string{}));
@@ -394,7 +394,7 @@ inline std::string fileReadExecuteImpl(
 // =====================================================================
 inline std::string fileWriteExecuteImpl(
     const agentxx::util::Json& arguments,
-    const std::string&    workDir,
+    const std::string&         workDir,
     const IsCancelledFn& isCancelled = nullptr // 单文件短操作不轮询; 形参保持与其他执行体一致
 ) {
     auto filepath = detail::wsAbs(workDir, arguments.value("path", std::string{}));
@@ -447,7 +447,7 @@ inline std::string fileWriteExecuteImpl(
 // =====================================================================
 inline std::string fileEditExecuteImpl(
     const agentxx::util::Json& arguments,
-    const std::string&    workDir,
+    const std::string&         workDir,
     const IsCancelledFn& isCancelled = nullptr // 单文件短操作不轮询; 形参保持与其他执行体一致
 ) {
     auto filepath = detail::wsAbs(workDir, arguments.value("path", std::string{}));
@@ -548,8 +548,8 @@ inline std::string fileEditExecuteImpl(
 // =====================================================================
 inline std::string fileGlobExecuteImpl(
     const agentxx::util::Json& arguments,
-    const std::string&    workDir,
-    const IsCancelledFn&  isCancelled = nullptr
+    const std::string&         workDir,
+    const IsCancelledFn&       isCancelled = nullptr
 ) {
     auto file_patterns = arguments.value("file_patterns", std::vector<std::string>{});
     if (file_patterns.empty()) {
@@ -564,9 +564,9 @@ inline std::string fileGlobExecuteImpl(
 
     // 注: 路径匹配固定为大小写敏感 (移除 case-insensitive 支持)。历史原因见
     // lib filesystem.cpp 同注释 (case_fold 会破坏 max_depth 前缀计算与盘符识别)。
-    auto maxDepth        = arguments.value<int64_t>("max_depth", -1);
-    auto doSort          = arguments.value<bool>("sort", false);
-    auto typeFilter      = detail::collectTypeFilter(arguments.value("type", agentxx::util::Json{}));
+    auto maxDepth   = arguments.value<int64_t>("max_depth", -1);
+    auto doSort     = arguments.value<bool>("sort", false);
+    auto typeFilter = detail::collectTypeFilter(arguments.value("type", agentxx::util::Json{}));
     auto excludePatterns = arguments.value("exclude_patterns", std::vector<std::string>{});
     for (auto& item : excludePatterns) {
         item = detail::wsAbs(workDir, item);
@@ -693,8 +693,8 @@ inline std::string fileGlobExecuteImpl(
 // =====================================================================
 inline std::string fileGrepExecuteImpl(
     const agentxx::util::Json& arguments,
-    const std::string&    workDir,
-    const IsCancelledFn&  isCancelled = nullptr
+    const std::string&         workDir,
+    const IsCancelledFn&       isCancelled = nullptr
 ) {
     // 搜索模式参数 (两者均可省略, 但至少指定其一; 同时指定时结果为两者并集):
     // - text_patterns  : 纯文本字面量匹配 (对齐 grep -F, 不经正则解释)
@@ -1069,8 +1069,8 @@ inline std::string asErrorText(Fn&& fn) {
 
 inline std::string fileListExecute(
     const agentxx::util::Json& arguments,
-    const std::string&    workDir,
-    const IsCancelledFn&  isCancelled = nullptr
+    const std::string&         workDir,
+    const IsCancelledFn&       isCancelled = nullptr
 ) {
     return detail::asErrorText([&] {
         return fileListExecuteImpl(arguments, workDir, isCancelled);
@@ -1079,8 +1079,8 @@ inline std::string fileListExecute(
 
 inline std::string fileReadExecute(
     const agentxx::util::Json& arguments,
-    const std::string&    workDir,
-    const IsCancelledFn&  isCancelled = nullptr
+    const std::string&         workDir,
+    const IsCancelledFn&       isCancelled = nullptr
 ) {
     return detail::asErrorText([&] {
         return fileReadExecuteImpl(arguments, workDir, isCancelled);
@@ -1089,8 +1089,8 @@ inline std::string fileReadExecute(
 
 inline std::string fileWriteExecute(
     const agentxx::util::Json& arguments,
-    const std::string&    workDir,
-    const IsCancelledFn&  isCancelled = nullptr
+    const std::string&         workDir,
+    const IsCancelledFn&       isCancelled = nullptr
 ) {
     return detail::asErrorText([&] {
         return fileWriteExecuteImpl(arguments, workDir, isCancelled);
@@ -1099,8 +1099,8 @@ inline std::string fileWriteExecute(
 
 inline std::string fileEditExecute(
     const agentxx::util::Json& arguments,
-    const std::string&    workDir,
-    const IsCancelledFn&  isCancelled = nullptr
+    const std::string&         workDir,
+    const IsCancelledFn&       isCancelled = nullptr
 ) {
     return detail::asErrorText([&] {
         return fileEditExecuteImpl(arguments, workDir, isCancelled);
@@ -1109,8 +1109,8 @@ inline std::string fileEditExecute(
 
 inline std::string fileGlobExecute(
     const agentxx::util::Json& arguments,
-    const std::string&    workDir,
-    const IsCancelledFn&  isCancelled = nullptr
+    const std::string&         workDir,
+    const IsCancelledFn&       isCancelled = nullptr
 ) {
     return detail::asErrorText([&] {
         return fileGlobExecuteImpl(arguments, workDir, isCancelled);
@@ -1119,8 +1119,8 @@ inline std::string fileGlobExecute(
 
 inline std::string fileGrepExecute(
     const agentxx::util::Json& arguments,
-    const std::string&    workDir,
-    const IsCancelledFn&  isCancelled = nullptr
+    const std::string&         workDir,
+    const IsCancelledFn&       isCancelled = nullptr
 ) {
     return detail::asErrorText([&] {
         return fileGrepExecuteImpl(arguments, workDir, isCancelled);

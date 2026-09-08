@@ -179,7 +179,8 @@ inline asio::awaitable<std::string> webFetchExecuteAsync(const agentxx::util::Js
 }
 
 /// agentxx_web_fetch_markdown 执行体 (原 WebFetchUrlMarkdownTool::execute_async)
-inline asio::awaitable<std::string> webFetchMarkdownExecuteAsync(const agentxx::util::Json& arguments) {
+inline asio::awaitable<std::string>
+    webFetchMarkdownExecuteAsync(const agentxx::util::Json& arguments) {
     std::string url = arguments.value("url", std::string{});
     if (url.empty()) {
         co_return R"({"error":"Arg `url` is empty"})";
@@ -208,8 +209,8 @@ inline asio::awaitable<std::string> webFetchMarkdownExecuteAsync(const agentxx::
 /// - searchApiUrl 含 `{}` 占位符 (fmt::runtime), URL 编码后的 query 填入
 inline asio::awaitable<std::string> webSearchExecuteAsync(
     const agentxx::util::Json& arguments,
-    std::string_view      searchApiUrl,
-    bool                  convertHtml2markdown
+    std::string_view           searchApiUrl,
+    bool                       convertHtml2markdown
 ) {
     std::string query = arguments.value("query", std::string{});
     if (query.empty()) {
@@ -263,8 +264,10 @@ inline asio::awaitable<std::string> webSearchExecuteAsync(
 
 /// agentxx_web_search 执行体 —— 模型搜索路径 (原 ModelWebSearchTool::execute_async)
 /// - 经 OpenAI 兼容 chat/completions 非流式请求实现 (见文件头注释)
-inline asio::awaitable<std::string>
-    modelWebSearchExecuteAsync(const agentxx::util::Json& arguments, const ModelSearchConfig& modelCfg) {
+inline asio::awaitable<std::string> modelWebSearchExecuteAsync(
+    const agentxx::util::Json& arguments,
+    const ModelSearchConfig&   modelCfg
+) {
     std::string query = arguments.value("query", std::string{});
     if (query.empty()) {
         co_return R"({"error":"Arg `query` is empty"})";
@@ -288,21 +291,21 @@ inline asio::awaitable<std::string>
     // 构造 chat/completions 请求体: system+user 两条消息, temperature=0
     // (与原 OpenAIProvider 调用参数一致)
     agentxx::util::Json body = agentxx::util::Json::object();
-    body["model"]       = cfg.modelName;
-    body["temperature"] = 0.0f;
-    body["messages"]    = agentxx::util::Json::array({
+    body["model"]            = cfg.modelName;
+    body["temperature"]      = 0.0f;
+    body["messages"]         = agentxx::util::Json::array({
         agentxx::util::Json{
-                       {"role", "system"},
-                       {"content",
-                "You are a web search assistant. Search the internet "
-                   "for the user's query and provide comprehensive, "
-                   "accurate results with sources. Respond in the same "
-                   "language as the query."},
-                       },
+                            {"role", "system"},
+                            {"content",
+                     "You are a web search assistant. Search the internet "
+                             "for the user's query and provide comprehensive, "
+                             "accurate results with sources. Respond in the same "
+                             "language as the query."},
+                            },
         agentxx::util::Json{
-                       {"role", "user"},
-                       {"content", query},
-                       },
+                            {"role", "user"},
+                            {"content", query},
+                            },
     });
 
     auto extraHeaders = agentxx::util::HeaderMap{};

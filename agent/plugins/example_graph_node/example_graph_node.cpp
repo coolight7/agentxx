@@ -309,10 +309,10 @@ void* AGENTXX_PLUGIN_CALL datetimeNodeRunStart(
         const std::string text = fmt::format("当前系统日期时间: {}", buf);
         // assistant 消息 (role/content 字段, 与图消息 JSON 字段一致)
         agentxx::util::Json msg = agentxx::util::Json::object();
-        msg["role"]        = "assistant";
-        msg["content"]     = text;
-        msg["startTimeMs"] = nowMs;
-        msg["durationMs"]  = int64_t{0};
+        msg["role"]             = "assistant";
+        msg["content"]          = text;
+        msg["startTimeMs"]      = nowMs;
+        msg["durationMs"]       = int64_t{0};
 
         agentxx::util::Json msgs = agentxx::util::Json::array();
         msgs.push_back(std::move(msg));
@@ -390,7 +390,7 @@ static int modifyGraphToIntentFlow(AgentCtx& ctx, std::string& errOut) {
 
     // ---- 组装新图 ----
     agentxx::util::Json graph = agentxx::util::Json::object();
-    graph["name"]        = "example_graph_node.intent";
+    graph["name"]             = "example_graph_node.intent";
 
     // channels: 原 channels + 路由 channel
     agentxx::util::Json channels = agentxx::util::Json::object();
@@ -415,9 +415,11 @@ static int modifyGraphToIntentFlow(AgentCtx& ctx, std::string& errOut) {
         nodes = def["nodes"];
     }
     nodes["intent_router"] = agentxx::util::Json{
-        {"type",     "example_intent_router"                                                      },
-        {"intents",  agentxx::util::Json::array({agentxx::util::Json("datetime"), agentxx::util::Json("normal")})},
-        {"fallback", "normal"                                                                     },
+        {"type",     "example_intent_router"},
+        {"intents",
+         agentxx::util::Json::array({agentxx::util::Json("datetime"), agentxx::util::Json("normal")}
+         )                                  },
+        {"fallback", "normal"               },
     };
     nodes["datetime_node"] = agentxx::util::Json{
         {"type", "example_datetime"},

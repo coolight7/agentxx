@@ -6,10 +6,10 @@
 /// - 依赖: html2md (第三方, AGENTXX_INSTALL_DIR 安装) + agentxx_util (XXRegex)
 #pragma once
 
+#include "agentxx/util/json.h"
 #include "agentxx/util/log.h"
 #include "agentxx/util/regex.h"
 #include <html2md/html2md.h>
-#include "agentxx/util/json.h"
 #include <string>
 #include <vector>
 

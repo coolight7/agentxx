@@ -1,9 +1,9 @@
+#include "agentxx/util/json.h"
 #include "computer_use_plugin.h"
 #include "fmt/format.h"
 #include <cctype>
 #include <chrono>
 #include <map>
-#include "agentxx/util/json.h"
 #include <string>
 #include <thread>
 #include <vector>
@@ -1067,8 +1067,8 @@ std::string uiControlExecute(const agentxx::util::Json& arguments) {
         || !arguments["commands"].is_array()) {
         return R"({"error":"Arg `commands` is required and must be an array"})";
     }
-    const auto& arr = arguments["commands"];
-    int64_t interval_ms = 50;
+    const auto& arr         = arguments["commands"];
+    int64_t     interval_ms = 50;
     if (arguments.contains("interval_ms")) {
         const auto& iv = arguments["interval_ms"];
         if (iv.is_number_integer()) {
@@ -1079,10 +1079,10 @@ std::string uiControlExecute(const agentxx::util::Json& arguments) {
     }
 
     agentxx::util::Json results    = agentxx::util::Json::array();
-    int            ok_count   = 0;
-    int            fail_count = 0;
-    size_t         i          = 0;
-    bool           first      = true;
+    int                 ok_count   = 0;
+    int                 fail_count = 0;
+    size_t              i          = 0;
+    bool                first      = true;
     for (const auto& elem : arr) {
         if (!first && interval_ms > 0) {
             std::this_thread::sleep_for(std::chrono::milliseconds(interval_ms));
@@ -1090,13 +1090,12 @@ std::string uiControlExecute(const agentxx::util::Json& arguments) {
         first = false;
 
         UiCmdFields f;
-        if (!elem.is_object() || !uiControlParseCmd(elem, f) || !f.hasAction
-            || f.action.empty()) {
-}
+        if (!elem.is_object() || !uiControlParseCmd(elem, f) || !f.hasAction || f.action.empty()) {
+        }
 #else
 std::string uiControlExecute(const agentxx::util::Json&) {
     return R"({"error":"agentxx_ui_control_keyboard_mouse is not available on current system"})";
 }
 #endif
 
-} // namespace agentxx_computer_use_plugin
+    } // namespace agentxx_computer_use_plugin

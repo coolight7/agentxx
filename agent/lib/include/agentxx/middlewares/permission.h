@@ -93,7 +93,7 @@ public:
     /// 经总线发起权限询问; 无 prompter 或被拒绝时返回 false
     asio::awaitable<bool> requestPermission(
         const neograph::Tool& item,
-        agentxx::util::Json&       args,
+        agentxx::util::Json&  args,
         std::string           category,
         std::string           target
     );

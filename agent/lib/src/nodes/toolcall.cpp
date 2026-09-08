@@ -1,5 +1,5 @@
-#include "agentxx/util/neograph_json_bridge.h"
 #include "agentxx/nodes/toolcall.h"
+#include "agentxx/util/neograph_json_bridge.h"
 
 #include "agentxx/event/event_stream.h"
 #include "agentxx/event/events.h"
@@ -489,7 +489,7 @@ asio::awaitable<void> ToolcallWrapNode::onHandleEnd(
 
 asio::awaitable<std::string> ToolcallWrapNode::execTool(
     neograph::Tool*                                      tool,
-    agentxx::util::Json&                                      args,
+    agentxx::util::Json&                                 args,
     const std::shared_ptr<neograph::graph::CancelToken>& cancelToken,
     bool                                                 repeatCallTriggered,
     std::string_view                                     repeatCallKey

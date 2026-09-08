@@ -3,9 +3,9 @@
 #include "agentxx/agent/io/agent_io.h"
 #include "agentxx/agent/io/wire_protocol.h"
 #include "agentxx/ffi_api.h"
+#include "agentxx/util/json.h"
 #include "asio/any_io_executor.hpp"
 #include "asio/experimental/concurrent_channel.hpp"
-#include "agentxx/util/json.h"
 #include <atomic>
 #include <functional>
 #include <map>
@@ -120,8 +120,9 @@ protected:
 
 private:
 
-    using ErrorCode   = neograph_asio_error_code;
-    using RespChannel = asio::experimental::concurrent_channel<void(ErrorCode, agentxx::util::Json)>;
+    using ErrorCode = neograph_asio_error_code;
+    using RespChannel
+        = asio::experimental::concurrent_channel<void(ErrorCode, agentxx::util::Json)>;
 
     /// client io 线程: 挂起等待宿主应答 (agentxx_ffi_interrupt_respond 经 submitInterruptResponse
     /// 完成 channel); 返回 {answered=false} 表示通道被关闭 (过期/停止, 不回送响应)

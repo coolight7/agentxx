@@ -1,8 +1,8 @@
 #pragma once
 
 #include "agentxx/agent/conversation_types.h"
-#include "agentxx/util/sqlite.h"
 #include "agentxx/util/json.h"
+#include "agentxx/util/sqlite.h"
 #include <map>
 #include <memory>
 #include <mutex>
@@ -42,7 +42,7 @@ public:
 
     struct LoadedSession {
         std::vector<ViewMessage> viewMessages;
-        agentxx::util::Json           llmMessages = agentxx::util::Json::array();
+        agentxx::util::Json      llmMessages = agentxx::util::Json::array();
         /// 恢复后的 msg id 计数器 (保证新消息 id 不与已存消息冲突)
         uint64_t msgIdCounter = 0;
     };

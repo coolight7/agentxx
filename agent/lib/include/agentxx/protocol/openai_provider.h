@@ -162,13 +162,13 @@ private:
 
     asio::awaitable<neograph::ChatCompletion> doStream(
         const neograph::CompletionParams&  params,
-        const agentxx::util::Json&              body,
+        const agentxx::util::Json&         body,
         neograph::FormatDataStreamCallback on_chunk
     );
 
     asio::awaitable<neograph::ChatCompletion> doStreamResponses(
         const neograph::CompletionParams&  params,
-        const agentxx::util::Json&              body,
+        const agentxx::util::Json&         body,
         neograph::FormatDataStreamCallback on_chunk
     );
 

@@ -1,8 +1,8 @@
 /// agentxx_computer_use —— 计算机控制插件 (Windows)
+#include "agentxx/util/json.h"
 #include "computer_use_plugin.h"
 #include "fmt/format.h"
 #include <cstring>
-#include "agentxx/util/json.h"
 #include <string>
 
 namespace agentxx_computer_use_plugin {
@@ -27,15 +27,15 @@ static const char* kUiControlDefaultDepict
       "Shortcut execution automatically presses modifier keys, presses target key, and releases in reverse order.";
 
 static std::string makeUiControlSchema() {
-    agentxx::util::Json schema                                  = agentxx::util::Json::object();
-    schema["type"]                                         = "object";
-    schema["required"]                                     = agentxx::util::Json::array({"actions"});
-    schema["properties"]                                   = agentxx::util::Json::object();
-    schema["properties"]["actions"]                        = agentxx::util::Json::object();
-    schema["properties"]["actions"]["type"]                = "array";
-    schema["properties"]["actions"]["items"]               = agentxx::util::Json::object();
-    schema["properties"]["actions"]["items"]["type"]       = "object";
-    schema["properties"]["actions"]["items"]["required"]   = agentxx::util::Json::array({"action"});
+    agentxx::util::Json schema                           = agentxx::util::Json::object();
+    schema["type"]                                       = "object";
+    schema["required"]                                   = agentxx::util::Json::array({"actions"});
+    schema["properties"]                                 = agentxx::util::Json::object();
+    schema["properties"]["actions"]                      = agentxx::util::Json::object();
+    schema["properties"]["actions"]["type"]              = "array";
+    schema["properties"]["actions"]["items"]             = agentxx::util::Json::object();
+    schema["properties"]["actions"]["items"]["type"]     = "object";
+    schema["properties"]["actions"]["items"]["required"] = agentxx::util::Json::array({"action"});
     schema["properties"]["actions"]["items"]["properties"] = agentxx::util::Json::object();
     schema["properties"]["actions"]["items"]["properties"]["action"]      = agentxx::util::Json({
         {"type", "string"},
@@ -66,7 +66,7 @@ static std::string makeUiControlSchema() {
         {"type", "integer"}
     });
     schema["properties"]["actions"]["items"]["properties"]["button"]      = agentxx::util::Json({
-        {"type", "string"                                          },
+        {"type", "string"                                               },
         {"enum", agentxx::util::Json::array({"left", "right", "middle"})}
     });
     schema["properties"]["actions"]["items"]["properties"]["clicks"]      = agentxx::util::Json({
@@ -76,7 +76,7 @@ static std::string makeUiControlSchema() {
         {"type", "integer"}
     });
     schema["properties"]["actions"]["items"]["properties"]["direction"]   = agentxx::util::Json({
-        {"type", "string"                             },
+        {"type", "string"                                  },
         {"enum", agentxx::util::Json::array({"up", "down"})}
     });
     schema["properties"]["actions"]["items"]["properties"]["text"]        = agentxx::util::Json({
@@ -86,7 +86,7 @@ static std::string makeUiControlSchema() {
         {"type", "string"}
     });
     schema["properties"]["actions"]["items"]["properties"]["keys"]        = agentxx::util::Json({
-        {"type",  "array"                             },
+        {"type",  "array"                                  },
         {"items", agentxx::util::Json({{"type", "string"}})}
     });
     schema["properties"]["actions"]["items"]["properties"]["delay_ms"]    = agentxx::util::Json({

@@ -1,5 +1,5 @@
-#include "agentxx/util/neograph_json_bridge.h"
 #include "agentxx/agent/base_agent.h"
+#include "agentxx/util/neograph_json_bridge.h"
 
 #include "agentxx/agent/agent_runner.h"
 #include "agentxx/agent/checkpoint_store.h"
@@ -913,8 +913,7 @@ asio::awaitable<BaseAgent::TurnResult> BaseAgent::runTurnAsync(
     auto eventCallback = eventBridge->makeCallback();
     auto cfg           = neograph::graph::RunConfig{
                   .thread_id   = std::string{sessionId},
-                  .input       = {{"messages",
-                                agentxx::util::toNeographJson(session->llmMessages)}},
+                  .input       = {{"messages", agentxx::util::toNeographJson(session->llmMessages)}},
                   .max_steps   = 1 << 30,
                   .stream_mode = neograph::graph::StreamMode::EVENTS | neograph::graph::StreamMode::TOKENS
                        | neograph::graph::StreamMode::VALUES | neograph::graph::StreamMode::UPDATES,
@@ -949,10 +948,11 @@ asio::awaitable<BaseAgent::TurnResult> BaseAgent::runTurnAsync(
                         agentxx::middleware::MiddlewareContext::graphDataKey_interruptNode
                     );
                 r.interrupt_value = agentxx::util::toNeographJson(
-                    agentContext->middlewareHandleContext->getGraphDataItemValue<agentxx::util::Json>(
-                        sessionId,
-                        agentxx::middleware::MiddlewareContext::graphDataKey_interruptValue
-                    )
+                    agentContext->middlewareHandleContext
+                        ->getGraphDataItemValue<agentxx::util::Json>(
+                            sessionId,
+                            agentxx::middleware::MiddlewareContext::graphDataKey_interruptValue
+                        )
                 );
                 recovered = std::move(r);
             }
@@ -1010,10 +1010,11 @@ asio::awaitable<BaseAgent::TurnResult> BaseAgent::runTurnAsync(
 
     if (turnResult.hasError) {
         // - 出现异常时 state.messages 已经被回滚，提取临时保存的上下文，并写回 state
-        auto& im = agentContext->middlewareHandleContext->getGraphDataItemValue<agentxx::util::Json>(
-            sessionId,
-            agentxx::middleware::MiddlewareContext::graphDataKey_tempMessages
-        );
+        auto& im
+            = agentContext->middlewareHandleContext->getGraphDataItemValue<agentxx::util::Json>(
+                sessionId,
+                agentxx::middleware::MiddlewareContext::graphDataKey_tempMessages
+            );
         if (im.is_array()) {
             XX_LOGD(
                 "Recover(By exception) LLM-Messages Context: old({}) -> new({})",
@@ -1022,10 +1023,7 @@ asio::awaitable<BaseAgent::TurnResult> BaseAgent::runTurnAsync(
             );
             session->llmMessages = std::move(im);
             engine->update_state(std::string{sessionId}, [&](neograph::graph::GraphState& state) {
-                state.overwrite(
-                    "messages",
-                    agentxx::util::toNeographJson(session->llmMessages)
-                );
+                state.overwrite("messages", agentxx::util::toNeographJson(session->llmMessages));
             });
         }
         // 处理后即清理 (含 getGraphDataItemValue 对缺失键自动创建的空条目):

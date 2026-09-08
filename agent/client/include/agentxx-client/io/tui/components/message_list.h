@@ -364,10 +364,10 @@ private:
     /// - text/button 解析与配色走 plugin_ui_items 共享 helper; diff 走 renderPluginDiff
     void appendDecorItems(
         const agentxx::util::Json& items,
-        const std::string&    plugin,
-        const std::string&    ownerId,
-        ftxui::Elements&      lines,
-        int                   maxWidth
+        const std::string&         plugin,
+        const std::string&         ownerId,
+        ftxui::Elements&           lines,
+        int                        maxWidth
     );
     void appendDecorToolBody(
         const agentxx::plugin::ClientToolDecor& decor,

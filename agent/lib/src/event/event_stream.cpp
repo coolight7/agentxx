@@ -1,5 +1,5 @@
-#include "agentxx/util/neograph_json_bridge.h"
 #include "agentxx/event/event_stream.h"
+#include "agentxx/util/neograph_json_bridge.h"
 
 #include "agentxx/agent/io/agent_io_transport.h"
 #include "agentxx/middlewares/summarization.h"
@@ -210,9 +210,8 @@ void EventBridge::handleChannelWrite(const neograph::graph::GraphEvent& event) {
 
     auto chan = event.data.value("channel", std::string{});
     // event.data 为图边界类型 (neograph::json): value 整体转业务 Json
-    auto value = event.data.contains("value")
-                     ? agentxx::util::fromNeographJson(event.data["value"])
-                     : agentxx::util::Json{};
+    auto value = event.data.contains("value") ? agentxx::util::fromNeographJson(event.data["value"])
+                                              : agentxx::util::Json{};
 
     // 通用提示消息: 转发为 WireDelta::MessageUITip, 由 client 端插入提示消息
     if (chan == "message_tip" && value.is_object()) {

@@ -264,8 +264,8 @@ asio::awaitable<agentxx::util::Json> SessionServerAgentIO::handleInterrupt(
     });
 
     agentxx::util::Json result      = agentxx::util::Json::array();
-    bool           gotResponse = false;
-    bool           cancelled   = false;
+    bool                gotResponse = false;
+    bool                cancelled   = false;
     // HIL 等待必须可取消: 取当前会话 token 的 fork 子并绑定 slot,
     // WireCancel 到达 (onCancel 置旗级联) 时打断 async_receive,
     // 返回 {"__cancelled__":true} 使 AgentRunner 不 resume 而抛取消
@@ -480,8 +480,8 @@ void SessionServerAgentIO::onPeerMessage(
                 if (!agent) {
                     return;
                 }
-                std::string                      currentModel = agent->getCurrentModelName(m.sessionId);
-                std::vector<std::string>         models;
+                std::string              currentModel = agent->getCurrentModelName(m.sessionId);
+                std::vector<std::string> models;
                 std::vector<ModelCapabilityInfo> capabilities;
                 if (agent->agentContext && agent->agentContext->agentConfig) {
                     for (const auto& [name, mc] :
@@ -500,7 +500,8 @@ void SessionServerAgentIO::onPeerMessage(
                     WireModelInfo{
                         std::move(currentModel),
                         std::move(models),
-                        std::move(capabilities)}
+                        std::move(capabilities)
+                    }
                 );
             } else if constexpr (std::is_same_v<T, WireGetAppendComponentInfo>) {
                 auto agent = agent_.lock();

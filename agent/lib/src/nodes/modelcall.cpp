@@ -645,9 +645,9 @@ asio::awaitable<void> ModelCallWrapNode::baseRun(
 
     {
         // 添加 system Msg (图 state 为 neograph::json 方言)
-        neograph::json msglist = in.state.get("messages");
-        bool haveSystemMsg = false;
-        auto newSystemMsg  = neograph::ChatMessage{.role = "system"};
+        neograph::json msglist       = in.state.get("messages");
+        bool           haveSystemMsg = false;
+        auto           newSystemMsg  = neograph::ChatMessage{.role = "system"};
         if (msglist.is_array() && false == msglist.empty()) {
             auto systemMsg = neograph::ChatMessage{};
             neograph::from_json(msglist.front(), systemMsg);
@@ -872,21 +872,21 @@ asio::awaitable<void> ModelCallWrapNode::baseRun(
         // 由 client 端 (TUI/stdio) 插入提示消息)
         if (nullptr != in.stream_cb) {
             // 实际等待时长: retry*3 秒 + 限速附加延时 (appendDelay 单位: 秒)
-            const auto delaySec = retry * 3 + appendDelay;
+            const auto     delaySec = retry * 3 + appendDelay;
             neograph::json tipJson  = neograph::json{
-                       {"channel", "message_tip"},
-                       {"value",
-                        neograph::json{
-                            {"tipType", "warning"},
-                            {"text",
-                             fmt::format(
+                 {"channel", "message_tip"},
+                 {"value",
+                  neograph::json{
+                      {"tipType", "warning"},
+                      {"text",
+                       fmt::format(
                           "LLM API 请求失败，{} 秒后自动重试 ({}/{})，错误: {}",
                           delaySec,
                           retry,
                           agentCtxPtr->agentConfig->llmMaxRetry,
                           errInfo
                       )},
-                 }                              },
+                 }                        },
             };
             (*in.stream_cb)(neograph::graph::GraphEvent{
                 neograph::graph::GraphEvent::Type::CHANNEL_WRITE,

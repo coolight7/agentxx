@@ -1,5 +1,5 @@
-#include "agentxx/util/neograph_json_bridge.h"
 #include "agentxx/tools/git_worktree.h"
+#include "agentxx/util/neograph_json_bridge.h"
 
 #include "agentxx/event/event_stream.h"
 #include "agentxx/event/events.h"
@@ -146,7 +146,7 @@ neograph::ChatTool GitWorktreeTool::get_definition() const {
         }
     }
     agentxx::util::Json params = agentxx::util::Json{
-        {"type",       "object"                      },
+        {"type",       "object"                           },
         {"properties",
          {
              {"opt",
@@ -182,7 +182,7 @@ Allowed chars: letters, digits, `.`, `_`, `-`. Required by `create` (a timestamp
                    R"(`remove` only. Default `false`. When true, delete even if the worktree has uncommitted/untracked changes or unpushed commits — data loss risk; prefer committing first.)"
                   },
               }},
-         }                                           },
+         }                                                },
         {"required",   agentxx::util::Json::array({"opt"})},
     };
     return {name, depict, agentxx::util::toNeographJson(params)};
@@ -222,68 +222,159 @@ asio::awaitable<std::string> GitWorktreeTool::execute_async(const agentxx::util:
 
     // ---- info: 无需写操作, 但列举/状态探测涉及子进程, 卸载线程池执行 ----
     if (opt == "info") {
-        auto result = co_await agentxx::util::offloadCancellableAsync<std::string>(
-            *ctxPtr->threadPool,
-            cancelToken,
-            [&, effectiveDir, knownRepoRoot](std::atomic<bool>& cancelFlag
-            ) -> asio::awaitable<std::string> {
-                namespace fw     = agentxx::util::worktree;
-                std::string root = knownRepoRoot;
-                if (root.empty()) {
-                    if (effectiveDir.empty() || !fw::isInsideWorkTree(effectiveDir)) {
-                        co_return R"({"error":"not inside a git repository","hint":"worktree mode requires a git repository with at least one commit"})";
-                    }
-                    auto r = fw::repoRoot(effectiveDir);
-                    if (!r) {
-                        co_return R"({"error":"cannot resolve repository root"})";
-                    }
-                    root = *r;
-                }
-                auto           entries = fw::listWorktrees(root);
-                agentxx::util::Json arr     = agentxx::util::Json::array();
-                std::string    boundName;
-                if (binding != nullptr) {
-                    boundName = binding->name;
-                }
-                for (const auto& e : entries) {
-                    if (cancelFlag.load(std::memory_order_acquire)) {
-                        co_return R"({"error":"cancelled"})";
-                    }
-                    auto st    = fw::statusSummary(e.path);
-                    bool dirty = st ? st->dirtyFiles() : false;
-                    arr.push_back(agentxx::util::Json{
-                        {"path",     e.path     },
-                        {"branch",   e.branch   },
-                        {"head",     e.head     },
-                        {"bare",     e.bare     },
-                        {"detached", e.detached },
-                        {"dirty",    dirty      },
-                        {"current",
-                         !boundName.empty()
-                             && std::filesystem::path{e.path}.filename().generic_string()
-                                    == boundName},
-                    });
-                }
-                agentxx::util::Json out{
-                    {"repoRoot",  root},
-                    {"worktrees", arr },
-                };
-                if (binding != nullptr) {
-                    out["current"] = agentxx::util::Json{
-                        {"name",   binding->name  },
-                        {"path",   binding->path  },
-                        {"branch", binding->branch},
-                    };
-                } else if (!config->inheritedWorktreePath.empty()) {
-                    out["inherited"] = config->inheritedWorktreePath;
-                } else {
-                    out["current"] = nullptr;
-                    out["hint"]
-                        = "Not in a worktree yet. Call opt=create to start an isolated workspace for code-modifying tasks.";
-                }
-                co_return out.dump();
-            }
-        );
+        auto result
+            = co_await agentxx::
+                util::
+                    offloadCancellableAsync<std::string>(
+                        *ctxPtr->threadPool,
+                        cancelToken,
+                        [&, effectiveDir, knownRepoRoot](std::atomic<bool>& cancelFlag) -> asio::
+                                                                                            awaitable<
+                                                                                                std::
+                                                                                                    string> {
+                                                                                                namespace fw
+                                                                                                    = agentxx::
+                                                                                                        util::
+                                                                                                            worktree;
+                                                                                                std::string
+                                                                                                    root
+                                                                                                    = knownRepoRoot;
+                                                                                                if (root.empty(
+                                                                                                    )) {
+                                                                                                    if (effectiveDir
+                                                                                                            .empty(
+                                                                                                            )
+                                                                                                        || !fw::isInsideWorkTree(
+                                                                                                            effectiveDir
+                                                                                                        )) {
+                                                                                                        co_return R"({"error":"not inside a git repository","hint":"worktree mode requires a git repository with at least one commit"})";
+                                                                                                    }
+                                                                                                    auto r = fw::
+                                                                                                        repoRoot(
+                                                                                                            effectiveDir
+                                                                                                        );
+                                                                                                    if (!r) {
+                                                                                                        co_return R"({"error":"cannot resolve repository root"})";
+                                                                                                    }
+                                                                                                    root
+                                                                                                        = *r;
+                                                                                                }
+                                                                                                auto
+                                                                                                    entries
+                                                                                                    = fw::listWorktrees(
+                                                                                                        root
+                                                                                                    );
+                                                                                                agentxx::
+                                                                                                    util::Json
+                                                                                                        arr
+                                                                                                    = agentxx::util::
+                                                                                                        Json::array(
+                                                                                                        );
+                                                                                                std::string
+                                                                                                    boundName;
+                                                                                                if (binding
+                                                                                                    != nullptr) {
+                                                                                                    boundName
+                                                                                                        = binding
+                                                                                                              ->name;
+                                                                                                }
+                                                                                                for (const auto&
+                                                                                                         e :
+                                                                                                     entries) {
+                                                                                                    if (cancelFlag
+                                                                                                            .load(
+                                                                                                                std::
+                                                                                                                    memory_order_acquire
+                                                                                                            )) {
+                                                                                                        co_return R"({"error":"cancelled"})";
+                                                                                                    }
+                                                                                                    auto
+                                                                                                        st
+                                                                                                        = fw::statusSummary(
+                                                                                                            e.path
+                                                                                                        );
+                                                                                                    bool
+                                                                                                        dirty
+                                                                                                        = st ? st->dirtyFiles(
+                                                                                                               )
+                                                                                                             : false;
+                                                                                                    arr.push_back(agentxx::util::Json{
+                                                                                                        {"path",
+                                                                                                         e.path
+                                                                                                        },
+                                                                                                        {"branch",
+                                                                                                         e.branch
+                                                                                                        },
+                                                                                                        {"head",
+                                                                                                         e.head
+                                                                                                        },
+                                                                                                        {"bare",
+                                                                                                         e.bare
+                                                                                                        },
+                                                                                                        {"detached",
+                                                                                                         e.detached
+                                                                                                        },
+                                                                                                        {"dirty",
+                                                                                                         dirty
+                                                                                                        },
+                                                                                                        {"current",
+                                                                                                         !boundName
+                                                                                                                 .empty(
+                                                                                                                 )
+                                                                                                             && std::filesystem::
+                                                                                                                        path{e.path
+                                                                                                                        }
+                                                                                                                            .filename(
+                                                                                                                            )
+                                                                                                                            .generic_string(
+                                                                                                                            )
+                                                                                                                    == boundName
+                                                                                                        },
+                                                                                                    }
+                                                                                                    );
+                                                                                                }
+                                                                                                agentxx::util::Json out{
+                                                                                                    {"repoRoot",
+                                                                                                     root
+                                                                                                    },
+                                                                                                    {"worktrees",
+                                                                                                     arr
+                                                                                                    },
+                                                                                                };
+                                                                                                if (binding
+                                                                                                    != nullptr) {
+                                                                                                    out["current"] = agentxx::util::Json{
+                                                                                                        {"name",
+                                                                                                         binding
+                                                                                                             ->name
+                                                                                                        },
+                                                                                                        {"path",
+                                                                                                         binding
+                                                                                                             ->path
+                                                                                                        },
+                                                                                                        {"branch",
+                                                                                                         binding
+                                                                                                             ->branch
+                                                                                                        },
+                                                                                                    };
+                                                                                                } else if (!config
+                                                                                                                ->inheritedWorktreePath
+                                                                                                                .empty(
+                                                                                                                )) {
+                                                                                                    out["inherited"]
+                                                                                                        = config
+                                                                                                              ->inheritedWorktreePath;
+                                                                                                } else {
+                                                                                                    out["current"]
+                                                                                                        = nullptr;
+                                                                                                    out["hint"]
+                                                                                                        = "Not in a worktree yet. Call opt=create to start an isolated workspace for code-modifying tasks.";
+                                                                                                }
+                                                                                                co_return out
+                                                                                                    .dump(
+                                                                                                    );
+                                                                                            }
+                    );
         co_return result;
     }
 

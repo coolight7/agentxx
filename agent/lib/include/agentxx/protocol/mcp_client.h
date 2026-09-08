@@ -3,6 +3,7 @@
 #include "agentxx/protocol/mcp_server.h"
 #include "agentxx/tools/tool.h"
 #include "agentxx/util/http_client.h"
+#include "agentxx/util/json.h"
 #include "agentxx/version.h"
 #include "asio/awaitable.hpp"
 #include <atomic>
@@ -12,7 +13,6 @@
 #include <memory>
 #include <mutex>
 #include <neograph/api.h>
-#include "agentxx/util/json.h"
 #include <neograph/types.h>
 #include <optional>
 #include <string>

@@ -188,7 +188,7 @@ private:
     std::string                   description_;
     std::string                   parametersJson_;
     AgentxxPluginToolSpec         spec_;
-    agentxx::util::Json                parameters_;
+    agentxx::util::Json           parameters_;
     std::weak_ptr<PluginInstance> instance_;
 };
 

@@ -1,10 +1,10 @@
 #include "agentxx/agent/agent_runner.h"
 
 #include "agentxx/agent/io/session_server_agent_io.h"
-#include "agentxx/util/neograph_json_bridge.h"
 #include "agentxx/event/event_stream.h"
 #include "agentxx/tools/subagent.h"
 #include "agentxx/util/log.h"
+#include "agentxx/util/neograph_json_bridge.h"
 #include <optional>
 
 namespace agentxx {
@@ -52,8 +52,7 @@ asio::awaitable<AgentRunner::Outcome> AgentRunner::run(
             // (handleInterrupt/权限询问) 仍会读取该快照校验中断时刻上下文;
             // 清理时机收敛到图完整结束 (下方 else 分支)
         } else {
-            session->llmMessages
-                = agentxx::util::fromNeographJson(result.channel_raw("messages"));
+            session->llmMessages = agentxx::util::fromNeographJson(result.channel_raw("messages"));
             // 图已完整结束: 清理中断/异常期间遗留的 tempMessages 快照。
             // - 本轮为 resume 完成时快照已被权威结果取代, 留存会误导后续
             //   错误路径的上下文回退源 (过期回卷)

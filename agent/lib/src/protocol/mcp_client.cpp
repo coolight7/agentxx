@@ -1,5 +1,5 @@
-#include "agentxx/util/neograph_json_bridge.h"
 #include "agentxx/protocol/mcp_client.h"
+#include "agentxx/util/neograph_json_bridge.h"
 
 #include "agentxx/util/async_offload.h"
 #include "agentxx/util/exception.h"

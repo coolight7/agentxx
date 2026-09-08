@@ -597,7 +597,10 @@ void SessionStore::appendViewMessage(
     );
 }
 
-void SessionStore::saveLlmMessages(std::string_view sessionId, const agentxx::util::Json& llmMessages) {
+void SessionStore::saveLlmMessages(
+    std::string_view           sessionId,
+    const agentxx::util::Json& llmMessages
+) {
     std::lock_guard<std::mutex> lock(mutex_);
     agentxx::util::catchError<bool>(
         [&]() -> bool {

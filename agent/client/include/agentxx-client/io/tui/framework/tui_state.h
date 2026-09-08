@@ -40,12 +40,12 @@ using TUIMessage = agentxx::agent::ViewMessage;
 
 /// 排队等待发送的用户输入 (服务端消息队列在客户端的镜像)
 struct TUIPendingInput {
-    std::string id;
-    std::string text;
-    std::string model;
+    std::string                                  id;
+    std::string                                  text;
+    std::string                                  model;
     std::vector<agentxx::agent::MediaAttachment> attachments;
-    int64_t     createdAtMs = 0;
-    bool        expanded    = false;
+    int64_t                                      createdAtMs = 0;
+    bool                                         expanded    = false;
 };
 
 /// agent-io 连接状态 (消息列表 banner 显示 + 输入发送限制)
@@ -178,7 +178,7 @@ struct TUIRenderState {
     /// 获取当前活动模型的能力描述
     agentxx::agent::ModelCapabilityInfo currentModelCapability() const {
         std::string active = !pendingModel.empty() ? pendingModel : cachedModelName;
-        auto it = modelCapabilities.find(active);
+        auto        it     = modelCapabilities.find(active);
         if (it != modelCapabilities.end()) {
             return it->second;
         }

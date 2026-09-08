@@ -367,7 +367,8 @@ public:
 
     /// 根据 tool call 参数生成去重 key。
     /// 返回 std::nullopt 表示该次调用不需要去重。
-    std::function<std::optional<std::string>(const agentxx::util::Json& args)> generateDeduplicationKey;
+    std::function<std::optional<std::string>(const agentxx::util::Json& args)>
+        generateDeduplicationKey;
 
     /// 当发现重复（旧数据已被新数据覆盖）时，截断旧的 toolcall request
     std::function<void(neograph::ToolCall&)> truncateRequest;
@@ -395,7 +396,7 @@ public:
     };
 
     std::string                           name;
-    agentxx::util::Json                        arg;
+    agentxx::util::Json                   arg;
     std::vector<InterruptHandleInputItem> inputs;
     std::string                           resultId;
 
@@ -535,10 +536,7 @@ public:
                     // item 为 agentxx::util::Json: 经桥接转回 neograph::json 再反序列化
                     // (middleware.h 不直引 bridge 头, 此处经 dump/parse 文本中转,
                     //  graphData 恢复为低频路径, 开销可忽略)
-                    neograph::from_json(
-                        neograph::json::parse(item.dump()),
-                        msg
-                    );
+                    neograph::from_json(neograph::json::parse(item.dump()), msg);
                     msgs.push_back(std::move(msg));
                 }
             }
@@ -643,7 +641,7 @@ public:
     asio::awaitable<agentxx::util::Json> requestInterrupt(
         std::string_view                           sessionId,
         const std::function<InterruptHandleArg()>& onCreateArg,
-        const agentxx::util::Json&                      msgs
+        const agentxx::util::Json&                 msgs
     );
 
     /// 将 graphData 中 JSON 兼容条目序列化到 state channel
