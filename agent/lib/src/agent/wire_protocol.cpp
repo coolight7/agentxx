@@ -18,7 +18,7 @@ neograph::json toJson(const WireHelloAck& msg) {
 }
 
 neograph::json toJson(const WireUserInput& msg) {
-    return makeUserInput(msg.sessionId, msg.text, msg.model);
+    return makeUserInput(msg.sessionId, msg.text, msg.model, msg.attachments);
 }
 
 neograph::json toJson(const WireCancel& msg) {
@@ -77,7 +77,7 @@ neograph::json toJson(const WireGetModel& msg) {
 }
 
 neograph::json toJson(const WireModelInfo& msg) {
-    return makeModelInfo(msg.currentModel, msg.models);
+    return makeModelInfo(msg.currentModel, msg.models, msg.capabilities);
 }
 
 neograph::json toJson(const WireGetAppendComponentInfo& msg) {
@@ -201,6 +201,11 @@ WireUserInput userInputFromJson(const neograph::json& j) {
     input.sessionId = j.value("sessionId", std::string{});
     input.text      = j.value("text", std::string{});
     input.model     = j.value("model", std::string{});
+    if (j.contains("attachments") && j["attachments"].is_array()) {
+        for (const auto& item : j["attachments"]) {
+            input.attachments.push_back(MediaAttachment::fromJson(item));
+        }
+    }
     return input;
 }
 
@@ -288,6 +293,16 @@ WireModelInfo modelInfoFromJson(const neograph::json& j) {
             if (m.is_string()) {
                 info.models.push_back(m.get<std::string>());
             }
+        }
+    }
+    if (j.contains("capabilities") && j["capabilities"].is_array()) {
+        for (const auto& c : j["capabilities"]) {
+            ModelCapabilityInfo cap;
+            cap.name       = c.value("name", std::string{});
+            cap.imageInput = c.value("image_input", false);
+            cap.audioInput = c.value("audio_input", false);
+            cap.videoInput = c.value("video_input", false);
+            info.capabilities.push_back(std::move(cap));
         }
     }
     return info;

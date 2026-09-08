@@ -76,7 +76,8 @@ public:
         std::string_view             sessionId,
         std::string_view             userInput,
         std::shared_ptr<AgentIOBase> io,
-        std::string_view             modelName = ""
+        std::string_view             modelName   = "",
+        std::vector<MediaAttachment> attachments = {}
     );
 
     /// 收集会话启动时通知的信息 (MCP/Skill/Memory)

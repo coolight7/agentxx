@@ -754,7 +754,8 @@ asio::awaitable<BaseAgent::TurnResult> BaseAgent::runTurnAsync(
     std::string_view             sessionId,
     std::string_view             userInput,
     std::shared_ptr<AgentIOBase> io, // server-io
-    std::string_view             modelName
+    std::string_view             modelName,
+    std::vector<MediaAttachment> attachments
 ) {
     TurnResult turnResult;
     auto       session = co_await agentContext->getSessionAsync(sessionId);
@@ -839,13 +840,45 @@ asio::awaitable<BaseAgent::TurnResult> BaseAgent::runTurnAsync(
         {"role",    "user"        },
         {"content", processedInput},
     };
+    if (!attachments.empty()) {
+        neograph::json imgUrls   = neograph::json::array();
+        neograph::json audioUrls = neograph::json::array();
+        neograph::json videoUrls = neograph::json::array();
+        for (const auto& att : attachments) {
+            const auto& url = att.dataUrl.empty() ? att.pathOrUrl : att.dataUrl;
+            if (url.empty()) {
+                continue;
+            }
+            switch (att.type) {
+                case MediaType::Image:
+                    imgUrls.push_back(url);
+                    break;
+                case MediaType::Audio:
+                    audioUrls.push_back(url);
+                    break;
+                case MediaType::Video:
+                    videoUrls.push_back(url);
+                    break;
+            }
+        }
+        if (!imgUrls.empty()) {
+            userMsgJson["image_urls"] = std::move(imgUrls);
+        }
+        if (!audioUrls.empty()) {
+            userMsgJson["audio_urls"] = std::move(audioUrls);
+        }
+        if (!videoUrls.empty()) {
+            userMsgJson["video_urls"] = std::move(videoUrls);
+        }
+    }
+
     // 展示历史 (ViewMessage) 与 LLM 上下文 (原始 json) 分集维护:
     // 历史用于 client 同步/展示, 上下文仅用于调用 LLM API
     // - 附带开始时间戳: 会话列表的 lastActiveMs 依赖此值 (持久化 meta),
     //   无时间戳时列表无法显示活动时间
-    const auto userMsgId = session->appendViewMessage(
-        ViewMessage::makeText(ViewMessage::Role::User, processedInput, startTimeMs)
-    );
+    auto userViewMsg = ViewMessage::makeText(ViewMessage::Role::User, processedInput, startTimeMs);
+    userViewMsg.attachments = attachments;
+    const auto userMsgId    = session->appendViewMessage(std::move(userViewMsg));
     session->llmMessages.push_back(std::move(userMsgJson));
 
     // 记录轮次开始: 重置轮级 LLM API 平均生成速度 (token/s) 统计

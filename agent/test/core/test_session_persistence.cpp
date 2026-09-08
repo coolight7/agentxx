@@ -99,6 +99,8 @@ agentxx::agent::ViewMessage makeMsg(agentxx::agent::ViewMessage::Role role, std:
 
 static TestResult testViewMessagesRoundtrip() {
     using agentxx::agent::SessionStore;
+    using agentxx::agent::MediaAttachment;
+    using agentxx::agent::MediaType;
     using V = agentxx::agent::ViewMessage;
 
     auto root = makeTempRoot();
@@ -173,6 +175,46 @@ static TestResult testViewMessagesRoundtrip() {
     }
     // 清理
     fs::remove_all(root);
+
+    // ---- 多模态附件: 落库剥离 dataUrl, 元数据保留 ----
+    {
+        auto root2 = makeTempRoot();
+        auto p     = std::make_shared<SessionStore>(root2);
+        V    msg   = makeMsg(V::Role::User, "see chart");
+        MediaAttachment att;
+        att.type        = MediaType::Image;
+        att.displayName = "chart.png";
+        att.mimeType    = "image/png";
+        att.pathOrUrl   = "/tmp/chart.png";
+        att.dataUrl     = "data:image/png;base64,AAAABBBB";
+        att.sizeBytes   = 42;
+        msg.attachments.push_back(att);
+        p->appendViewMessage("t-attach", msg, 1);
+        auto loaded = p->loadSession("t-attach");
+        XX_TEST_EXPECT_EQ(loaded.viewMessages.size(), size_t{1});
+        if (!loaded.viewMessages.empty()) {
+            const auto& atts = loaded.viewMessages[0].attachments;
+            XX_TEST_EXPECT_EQ(atts.size(), size_t{1});
+            if (!atts.empty()) {
+                XX_TEST_EXPECT_EQ(atts[0].displayName, "chart.png");
+                XX_TEST_EXPECT_EQ(atts[0].mimeType, "image/png");
+                XX_TEST_EXPECT_EQ(atts[0].pathOrUrl, "/tmp/chart.png");
+                XX_TEST_EXPECT_EQ(atts[0].sizeBytes, uint64_t{42});
+                // Base64 已剥离, 避免数据库膨胀
+                XX_TEST_EXPECT_TRUE(atts[0].dataUrl.empty());
+            }
+        }
+        // wire 往返保留 dataUrl (内存/Sync 路径不受剥离影响)
+        auto j   = msg.toJson();
+        auto rt  = V::fromJson(j);
+        XX_TEST_EXPECT_EQ(rt.attachments.size(), size_t{1});
+        if (!rt.attachments.empty()) {
+            XX_TEST_EXPECT_EQ(
+                rt.attachments[0].dataUrl, "data:image/png;base64,AAAABBBB"
+            );
+        }
+        fs::remove_all(root2);
+    }
     return TestResult{};
 }
 

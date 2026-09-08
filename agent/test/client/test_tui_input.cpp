@@ -36,6 +36,7 @@ struct InputFixture {
     TUITheme       theme       = TUITheme::darkTheme();
     int            redrawCount = 0;
     std::string    sentText;
+    std::vector<agentxx::agent::MediaAttachment> sentAttachments;
     bool           sent = false;
 
     TUICtx ctx;
@@ -54,9 +55,13 @@ struct InputFixture {
     /// 创建组件; ComponentBase 不可移动, 使用 shared_ptr 持有
     std::shared_ptr<InputComponent> makeComponent() {
         InputComponent::Config cfg;
-        cfg.onSend = [this](std::string text) -> bool {
-            sentText = std::move(text);
-            sent     = true;
+        cfg.onSend = [this](
+                         std::string text,
+                         std::vector<agentxx::agent::MediaAttachment> atts
+                     ) -> bool {
+            sentText        = std::move(text);
+            sentAttachments = std::move(atts);
+            sent            = true;
             return true;
         };
         return std::make_shared<InputComponent>(ctx, std::move(cfg));
@@ -198,7 +203,7 @@ void test_send_rejected_retains_input() {
     InputFixture           f;
     InputComponent::Config cfg;
     // 模拟 server-io 未初始化就绪, 拒绝发送
-    cfg.onSend = [](std::string) -> bool {
+    cfg.onSend = [](std::string, std::vector<agentxx::agent::MediaAttachment>) -> bool {
         return false;
     };
     auto comp = std::make_shared<InputComponent>(f.ctx, std::move(cfg));
@@ -282,6 +287,81 @@ void test_clear_resets_paste_state() {
     XX_TEST_EXPECT_EQ(comp->inputText(), std::string("b"));
 }
 
+// ---------------------------------------------------------------------------
+// 多模态附件托盘: 挂载后随 Enter 一并发送, 发送成功后清空托盘
+// ---------------------------------------------------------------------------
+
+void test_input_attachment_tray_send() {
+    InputFixture f;
+    auto         comp = f.makeComponent();
+
+    agentxx::agent::MediaAttachment att;
+    att.type        = agentxx::agent::MediaType::Image;
+    att.displayName = "chart.png";
+    att.mimeType    = "image/png";
+    att.pathOrUrl   = "/tmp/chart.png";
+    att.dataUrl     = "data:image/png;base64,AAA";
+    att.sizeBytes   = 1234;
+    comp->addAttachment(att);
+
+    XX_TEST_EXPECT_EQ(comp->attachments().size(), size_t{1});
+
+    InputFixture::type(*comp, "hi");
+    comp->OnEvent(ftxui::Event::Return);
+
+    XX_TEST_EXPECT_TRUE(f.sent);
+    XX_TEST_EXPECT_EQ(f.sentText, std::string("hi"));
+    XX_TEST_EXPECT_EQ(f.sentAttachments.size(), size_t{1});
+    if (!f.sentAttachments.empty()) {
+        XX_TEST_EXPECT_EQ(f.sentAttachments[0].displayName, std::string("chart.png"));
+        XX_TEST_EXPECT_EQ(f.sentAttachments[0].dataUrl, std::string("data:image/png;base64,AAA"));
+    }
+    // 发送成功后托盘清空
+    XX_TEST_EXPECT_TRUE(comp->attachments().empty());
+    XX_TEST_EXPECT_TRUE(comp->inputText().empty());
+}
+
+// ---------------------------------------------------------------------------
+// [+ 附件] 按钮显隐: canAttach==false 时不展示, true 时展示
+// ---------------------------------------------------------------------------
+
+void test_input_attach_button_visibility() {
+    // 不支持多模态: 按钮隐藏
+    {
+        InputFixture           f;
+        InputComponent::Config cfg;
+        cfg.onSend    = [](std::string, std::vector<agentxx::agent::MediaAttachment>) {
+            return true;
+        };
+        cfg.canAttach = [] {
+            return false;
+        };
+        auto comp = std::make_shared<InputComponent>(f.ctx, std::move(cfg));
+        ftxui::Screen screen(80, 6);
+        ftxui::Render(screen, comp->OnRender());
+        XX_TEST_EXPECT_TRUE(screen.ToString().find("Attach") == std::string::npos);
+        XX_TEST_EXPECT_TRUE(screen.ToString().find("附件") == std::string::npos);
+    }
+    // 支持多模态: 按钮展示
+    {
+        InputFixture           f;
+        InputComponent::Config cfg;
+        cfg.onSend    = [](std::string, std::vector<agentxx::agent::MediaAttachment>) {
+            return true;
+        };
+        cfg.canAttach = [] {
+            return true;
+        };
+        auto comp = std::make_shared<InputComponent>(f.ctx, std::move(cfg));
+        ftxui::Screen screen(80, 6);
+        ftxui::Render(screen, comp->OnRender());
+        const auto out = screen.ToString();
+        XX_TEST_EXPECT_TRUE(
+            out.find("Attach") != std::string::npos || out.find("附件") != std::string::npos
+        );
+    }
+}
+
 void test_tui_state_message_queue_sync() {
     TUISharedState sharedState;
 
@@ -333,7 +413,7 @@ void test_spinner_frame_advances_via_tree() {
     InputFixture           f;
     bool                   streaming = false;
     InputComponent::Config cfg;
-    cfg.onSend = [](std::string) -> bool {
+    cfg.onSend = [](std::string, std::vector<agentxx::agent::MediaAttachment>) -> bool {
         return true;
     };
     cfg.isStreaming = [&streaming] {
@@ -394,6 +474,8 @@ TestResult testTuiInput() {
     test_clear_resets_paste_state();
     test_spinner_frame_advances_via_tree();
     test_tui_state_message_queue_sync();
+    test_input_attachment_tray_send();
+    test_input_attach_button_visibility();
 
     return TestResult{g_tui_input_passed, g_tui_input_failed};
 }

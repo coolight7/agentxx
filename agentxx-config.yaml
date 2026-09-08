@@ -78,6 +78,14 @@ models:
     # - [max_concurrent_connections] 可选，默认 5；该模型 API 端点的最大并发连接数（0 = 不限制）。
     # LLM 请求启用 HTTP keep-alive 连接池，空闲连接复用，超过上限的并发请求排队等待
     max_concurrent_connections: 5
+    # - 多模态文件输入能力 (可选，默认全 false = 纯文本模型):
+    #   image_input/audio_input/video_input 任一为 true 时，TUI 输入框右侧才展示
+    #   [+ 📎 附件] 按钮；文件选择弹窗按此过滤可选类型
+    #   (图片: png/jpg/jpeg/webp/gif/bmp ≤10MB; 音频: wav/mp3/ogg/m4a/aac/flac ≤25MB;
+    #    视频: mp4/mov/webm/mkv ≤50MB; 单次消息附件 ≤5)
+    image_input: false
+    audio_input: false
+    video_input: false
     extra_api_config:
       reasoning_effort: "high"
 
@@ -114,6 +122,10 @@ models:
     model_name: "deepseek/deepseek-v4-flash"
     send_thinking: true
     model_context_max_token: 1000000
+    # 多模态示例: 如该模型支持视觉输入可改为 true，TUI 即显示附件按钮
+    image_input: false
+    audio_input: false
+    video_input: false
     extra_api_config:
       reasoning_effort: "max"
   - name: command-code-muse-spark-1.3-contributor
@@ -124,6 +136,9 @@ models:
     send_thinking: true
     request_reasoning_summary: false
     model_context_max_token: 1000000
+    image_input: true
+    audio_input: false
+    video_input: false
     extra_api_config:
       reasoning_effort: xhigh
   - name: opencode-ds-v4-flash
@@ -166,6 +181,9 @@ models:
     model_name: "gemini-3.8-flash-high"
     model_context_max_token: 1000000
     send_thinking: true
+    image_input: true
+    audio_input: false
+    video_input: false
     extra_api_config:
       reasoning:
         effort: max

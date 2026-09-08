@@ -905,16 +905,25 @@ Element PendingInputsOverlay::OnRender() {
         auto        delBtn = text(" ✕ ") | bgcolor(theme.buttonBgColor) | color(theme.systemColor)
                       | reflect(delBoxes_[i]);
         Element row;
+        auto    body = pi.expanded ? paragraph(pi.text) | flex
+                                   : text(oneLinePreview(pi.text)) | color(theme.userColor) | flex;
+        // 多模态排队项: 标题行后缀附件计数, 不展示 Base64 内容
+        if (!pi.attachments.empty()) {
+            body = hbox({
+                std::move(body),
+                text(trf("queue.attachCount", pi.attachments.size())) | color(theme.accentColor),
+            });
+        }
         if (pi.expanded) {
             row = hbox({
                 text("- ") | color(theme.hintColor),
-                paragraph(pi.text) | flex,
+                std::move(body),
                 delBtn,
             });
         } else {
             row = hbox({
                 text("+ ") | color(theme.userColor),
-                text(oneLinePreview(pi.text)) | color(theme.userColor) | flex,
+                std::move(body),
                 delBtn,
             });
         }

@@ -14,6 +14,10 @@
 #include "markdown/parser.hpp"
 #include "markdown/state_diagram.hpp"
 #include "markdown/text_utils.hpp"
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
+#include <thread>
 
 using namespace ftxui;
 
@@ -69,9 +73,6 @@ inline int collapsedPreviewBudget(int maxWidth, int prefixCols) {
 }
 
 /// 取最后一个非空行 (供"末尾思考"折叠预览使用):
-/// SingleLine 折叠模式只应展示最新进度行; tailLinePreview 本身会把整段文本
-/// 空白扁平化后截取末尾, 在宽终端下 (预算超过最后一行长度) 会把更早的行
-/// (含首行头部) 一并带入预览。此处先限制在单个行内再交由 tailLinePreview 截取。
 inline std::string_view lastNonBlankLine(std::string_view s) {
     size_t end = s.size();
     while (end > 0) {
@@ -302,6 +303,9 @@ static bool isToolResultError(std::string_view result) {
            || result.starts_with("[Interrupt]") || result.starts_with("[Permission");
 }
 
+/// 多模态附件大小文本 (文件顶部匿名命名空间内，供 buildMessageBlock 卡片使用)
+/// - 提前声明：定义在文件尾部匿名命名空间（与落盘/打开辅助同处）
+std::string attachmentSizeText(uint64_t bytes);
 } // namespace
 
 MessageListComponent::MessageListComponent(TUICtx& ctx) :
@@ -445,6 +449,9 @@ Element MessageListComponent::OnRender() {
     // decor 按钮命中: 同 interruptHits_ 生命期 (OnRender 清空 + 构建期填充)
     decorHits_.clear();
 
+    // 附件卡片命中: 同 decorHits_ 生命期
+    attachmentHits_.clear();
+
     return hbox({
                text("   "),
                scrollable_->Render() | bold | flex,
@@ -457,6 +464,9 @@ bool MessageListComponent::OnEvent(Event event) {
     if (event.is_mouse()) {
         const auto& mouse = event.mouse();
         if (handleDecorButtonClick(mouse)) {
+            return true;
+        }
+        if (handleAttachmentClick(mouse)) {
             return true;
         }
         if (handleCollapsibleClick(mouse)) {
@@ -732,7 +742,7 @@ size_t MessageListComponent::estimateHeight(size_t index, int width) {
         // corrected 重算, 浪费且无法收敛到精确总高度。
         switch (msg.role) {
             case TUIMessage::Role::User:
-                return estimateLines(msg.text, width) + 1;
+                return estimateLines(msg.text, width) + msg.attachments.size() + 1;
             case TUIMessage::Role::Assistant:
                 // Assistant 走 renderMarkdown (cmark-gfm + DomBuilder): 段内
                 // 单换行 (softbreak) 合并为空格, 按此语义估算 (estimateLines
@@ -1015,9 +1025,11 @@ LazyBuiltItem MessageListComponent::buildMessageItem(const TUIMessage& msg, size
     std::vector<std::unique_ptr<markdown::DomBuilder>> builders;
     const size_t                                       decorHitsBefore     = decorHits_.size();
     const size_t                                       interruptHitsBefore = interruptHits_.size();
-    auto       block            = buildMessageBlock(msg, index, maxWidth, builders);
-    const bool hasDecorHits     = (decorHits_.size() > decorHitsBefore);
-    const bool hasInterruptHits = (interruptHits_.size() > interruptHitsBefore);
+    const size_t attachmentHitsBefore                                      = attachmentHits_.size();
+    auto         block             = buildMessageBlock(msg, index, maxWidth, builders);
+    const bool   hasDecorHits      = (decorHits_.size() > decorHitsBefore);
+    const bool   hasInterruptHits  = (interruptHits_.size() > interruptHitsBefore);
+    const bool   hasAttachmentHits = (attachmentHits_.size() > attachmentHitsBefore);
 
     LazyBuiltItem out;
     out.element           = vbox({std::move(block), text("")});
@@ -1039,7 +1051,7 @@ LazyBuiltItem MessageListComponent::buildMessageItem(const TUIMessage& msg, size
     const bool runToolAnimating = msg.role == TUIMessage::Role::Tool && msg.tool
                                   && !msg.tool->toolFinished && runSpinner_->animationEnabled();
     out.cacheable = (msg.role != TUIMessage::Role::Interrupt) && !hasInterruptHits
-                    && !runToolAnimating && !hasDecorHits;
+                    && !runToolAnimating && !hasDecorHits && !hasAttachmentHits;
     // markdown DomBuilder 生命周期与 Element 绑定
     // (Element 内 reflect 的链接 Box 指向 builder 内部容器)
     for (auto& b : builders) {
@@ -1056,6 +1068,11 @@ LazyBuiltItem MessageListComponent::buildMessageItem(const TUIMessage& msg, size
     for (size_t i = interruptHitsBefore; i < interruptHits_.size(); ++i) {
         if (interruptHits_[i].box) {
             out.attachments.push_back(interruptHits_[i].box);
+        }
+    }
+    for (size_t i = attachmentHitsBefore; i < attachmentHits_.size(); ++i) {
+        if (attachmentHits_[i].box) {
+            out.attachments.push_back(attachmentHits_[i].box);
         }
     }
     return out;
@@ -1296,13 +1313,43 @@ Element MessageListComponent::buildMessageBlock(
     const auto& theme = *ctx_.theme;
 
     switch (msg.role) {
-        case TUIMessage::Role::User:
+        case TUIMessage::Role::User: {
             // 内容超宽时 xflex_shrink 使段落吸收剩余宽度换行/裁剪,
             // 避免 hbox 按比例压缩前缀 "> " (见 ftxui box_helper::ComputeShrinkHard)
-            return hbox({
+            Elements userElements;
+            // 多模态附件卡片 (仅展示元信息, 不展示 Base64 数据; 点击调系统查看器)
+            for (size_t ai = 0; ai < msg.attachments.size(); ++ai) {
+                const auto&      att = msg.attachments[ai];
+                AttachmentHitBox hit;
+                hit.msgIndex = msgIndex;
+                hit.attIndex = ai;
+                hit.box      = std::make_shared<Box>();
+                attachmentHits_.push_back(std::move(hit));
+                auto       boxPtr = attachmentHits_.back().box;
+                const auto iconKey
+                    = att.type == agentxx::agent::MediaType::Image   ? "msg.attachImage"
+                      : att.type == agentxx::agent::MediaType::Audio ? "msg.attachAudio"
+                                                                     : "msg.attachVideo";
+                auto cardRow = hbox({
+                                   text(fmt::format(
+                                       "┌── {}: {} ",
+                                       TuiI18n::instance().t(iconKey),
+                                       att.displayName
+                                   )) | color(theme.accentColor)
+                                       | bold,
+                                   text(attachmentSizeText(att.sizeBytes)) | dim,
+                                   text(std::string(TuiI18n::instance().t("msg.attachOpen")))
+                                       | color(theme.accentColor),
+                               })
+                               | reflect(*boxPtr);
+                userElements.push_back(cardRow);
+            }
+            userElements.push_back(hbox({
                 text("> ") | color(theme.userColor),
                 paragraph(msg.text) | color(theme.userColor) | xflex_shrink,
-            });
+            }));
+            return vbox(std::move(userElements));
+        }
         case TUIMessage::Role::Assistant: {
             auto [el, builder]
                 = renderMarkdown(msg.text, theme.assistantColor, theme.markdownTheme, maxWidth);
@@ -1885,6 +1932,115 @@ bool MessageListComponent::handleDecorButtonClick(const Mouse& mouse) {
         if (auto mgr = ctx_.pluginManager) {
             mgr->dispatchAction(h.plugin, h.ownerId, h.actionId, h.argsJson);
         }
+        return true;
+    }
+    return false;
+}
+
+/// 多模态附件落盘/打开辅助 (与 MessageListComponent 解耦, 便于测试)
+namespace {
+
+std::string attachmentSizeText(uint64_t bytes);
+
+/// 将附件解析为本地可打开路径:
+/// - 本地已存在文件直接返回
+/// - 远端 dataUrl 则解码落盘到临时目录后返回 (失败返回空)
+
+std::string resolveAttachmentLocalPath(const agentxx::agent::MediaAttachment& att) {
+    std::error_code ec;
+    if (!att.pathOrUrl.empty() && std::filesystem::is_regular_file(att.pathOrUrl, ec) && !ec) {
+        return att.pathOrUrl;
+    }
+    if (!att.dataUrl.empty() && att.dataUrl.rfind("data:", 0) == 0) {
+        const auto comma = att.dataUrl.find(',');
+        if (comma == std::string::npos) {
+            return "";
+        }
+        auto raw = agentxx::util::base64Decode(std::string_view{att.dataUrl}.substr(comma + 1));
+        if (!raw.has_value()) {
+            return "";
+        }
+        auto dir = std::filesystem::temp_directory_path(ec) / "agentxx-media";
+        if (ec) {
+            return "";
+        }
+        std::filesystem::create_directories(dir, ec);
+        // 防目录穿越: 仅取文件名部分
+        std::string name = att.displayName.empty() ? "attachment.bin" : att.displayName;
+        name             = std::filesystem::path(name).filename().string();
+        if (name.empty()) {
+            name = "attachment.bin";
+        }
+        auto          dst = dir / name;
+        std::ofstream ofs(dst, std::ios::binary);
+        if (!ofs) {
+            return "";
+        }
+        ofs.write(raw->data(), static_cast<std::streamsize>(raw->size()));
+        if (!ofs) {
+            return "";
+        }
+        return dst.string();
+    }
+    return att.pathOrUrl;
+}
+
+/// 调系统默认程序打开 ( detached 线程, 不阻塞 UI )
+void openPathWithSystemViewer(std::string path) {
+    if (path.empty()) {
+        return;
+    }
+    std::thread([p = std::move(path)] {
+#if defined(_WIN32)
+        std::string cmd = "start \"\" \"" + p + "\"";
+        (void)std::system(cmd.c_str());
+#elif defined(__APPLE__)
+        std::string cmd = "open \"" + p + "\" >/dev/null 2>&1 &";
+        (void)std::system(cmd.c_str());
+#else
+        std::string cmd = "xdg-open \"" + p + "\" >/dev/null 2>&1 &";
+        (void)std::system(cmd.c_str());
+#endif
+    }).detach();
+}
+
+std::string attachmentSizeText(uint64_t bytes) {
+    if (bytes == 0) {
+        return "";
+    }
+    if (bytes < 1024 * 1024) {
+        return fmt::format("{:.1f} KB", static_cast<double>(bytes) / 1024.0);
+    }
+    return fmt::format("{:.1f} MB", static_cast<double>(bytes) / (1024.0 * 1024.0));
+}
+
+} // namespace
+
+bool MessageListComponent::handleAttachmentClick(const Mouse& mouse) {
+    if (mouse.button != Mouse::Left || mouse.motion != Mouse::Released) {
+        return false;
+    }
+    if (!ctx_.frameState) {
+        return false;
+    }
+    for (const auto& h : attachmentHits_) {
+        if (!h.box) {
+            continue;
+        }
+        const auto& box = *h.box;
+        if (mouse.y < box.y_min || mouse.y > box.y_max || mouse.x < box.x_min
+            || mouse.x > box.x_max) {
+            continue;
+        }
+        const auto& msgs = ctx_.frameState->messages;
+        if (h.msgIndex >= msgs.size()) {
+            continue;
+        }
+        const auto& atts = msgs[h.msgIndex]->attachments;
+        if (h.attIndex >= atts.size()) {
+            continue;
+        }
+        openPathWithSystemViewer(resolveAttachmentLocalPath(atts[h.attIndex]));
         return true;
     }
     return false;

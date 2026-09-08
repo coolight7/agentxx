@@ -43,6 +43,7 @@ struct TUIPendingInput {
     std::string id;
     std::string text;
     std::string model;
+    std::vector<agentxx::agent::MediaAttachment> attachments;
     int64_t     createdAtMs = 0;
     bool        expanded    = false;
 };
@@ -170,6 +171,19 @@ struct TUIRenderState {
     size_t contextTokens    = 0;
     size_t maxContextTokens = 0;
     double tps              = 0.0;
+
+    /// 各模型多模态能力 (WireModelInfo 填充)
+    std::map<std::string, agentxx::agent::ModelCapabilityInfo> modelCapabilities;
+
+    /// 获取当前活动模型的能力描述
+    agentxx::agent::ModelCapabilityInfo currentModelCapability() const {
+        std::string active = !pendingModel.empty() ? pendingModel : cachedModelName;
+        auto it = modelCapabilities.find(active);
+        if (it != modelCapabilities.end()) {
+            return it->second;
+        }
+        return agentxx::agent::ModelCapabilityInfo{.name = active};
+    }
 };
 
 /// COW 共享状态容器 (封装 mutex + shared_ptr + COW 辅助)

@@ -1,6 +1,7 @@
 #include "agentxx-client/io/tui/components/input_bar.h"
 #include "agentxx-client/io/tui/framework/tui_i18n.h"
 #include "agentxx-client/io/tui/framework/tui_settings.h"
+#include "fmt/format.h"
 #include "ftxui/component/event.hpp"
 #include "ftxui/screen/terminal.hpp"
 
@@ -60,29 +61,98 @@ Element InputComponent::OnRender() {
         indicator = text(">") | color(theme.accentColor) | bold;
     }
 
+    // 多模态文件选择按钮 [+ 📎 附件] (仅当当前模型支持多模态输入时展示)
+    Element attachButton = text("");
+    if (config_.canAttach && config_.canAttach()) {
+        attachButton = hbox({
+            text(" "),
+            text(std::string(TuiI18n::instance().t("input.attach"))) | color(theme.accentColor)
+                | bold | reflect(attachButtonBox_),
+        });
+    } else {
+        attachButtonBox_ = Box{};
+    }
+
+    // 待发附件挂载托盘 (Attachment Tray)
+    Element trayElement = text("");
+    attachmentDeleteBoxes_.assign(attachments_.size(), Box{});
+    if (!attachments_.empty()) {
+        Elements trayItems;
+        trayItems.push_back(
+            text(trf("input.attachTray", attachments_.size())) | bold | color(theme.accentColor)
+        );
+        for (size_t i = 0; i < attachments_.size(); ++i) {
+            const auto& att     = attachments_[i];
+            auto        icon    = agentxx::agent::MediaAttachment::mediaTypeIcon(att.type);
+            auto        sizeStr = agentxx::util::formatSize(att.sizeBytes);
+            auto delBtn = text(" ✕ ") | bgcolor(theme.buttonBgColor) | color(theme.systemColor)
+                          | bold | reflect(attachmentDeleteBoxes_[i]);
+            auto pill = hbox({
+                            text(fmt::format(" [{} {} {} ", icon, att.displayName, sizeStr)),
+                            delBtn,
+                            text("] "),
+                        })
+                        | bgcolor(theme.buttonActiveBgColor) | color(theme.buttonActiveTextColor);
+            trayItems.push_back(pill);
+        }
+        trayElement = hbox(std::move(trayItems)) | bgcolor(theme.inputBgColor) | xflex;
+    }
+
     const int maxInputTotalLines = std::max(3, Terminal::Size().dimy / 2);
+
+    Elements vboxChildren;
+    if (!attachments_.empty()) {
+        vboxChildren.push_back(text(" "));
+        vboxChildren.push_back(trayElement);
+        vboxChildren.push_back(separator() | color(theme.hintColor));
+    }
+    vboxChildren.push_back(text(" "));
+    vboxChildren.push_back(hbox({
+        text("  "),
+        indicator,
+        text("  "),
+        input_->Render() | color(theme.inputTextColor) | flex,
+        attachButton,
+        text("  "),
+    }));
+    vboxChildren.push_back(text(" "));
+
     return hbox({
         text(" "),
-        vbox({
-            text(" "),
-            hbox({
-                text("  "),
-                indicator,
-                text("  "),
-                input_->Render() | color(theme.inputTextColor) | flex,
-                text("  "),
-            }),
-            text(" "),
-        }) | bgcolor(theme.inputBgColor)
-            | xflex | size(HEIGHT, GREATER_THAN, 3) | size(HEIGHT, LESS_THAN, maxInputTotalLines),
+        vbox(std::move(vboxChildren)) | bgcolor(theme.inputBgColor) | xflex
+            | size(HEIGHT, GREATER_THAN, 3) | size(HEIGHT, LESS_THAN, maxInputTotalLines),
         text(" "),
     });
 }
 
 bool InputComponent::OnEvent(Event event) {
+    if (event.is_mouse()) {
+        const auto& mouse = event.mouse();
+        if (mouse.button == Mouse::Left && mouse.motion == Mouse::Released) {
+            // 点击 [+ 📎 附件] 按钮
+            if (attachButtonBox_.Contain(mouse.x, mouse.y)) {
+                if (config_.onOpenAttachPicker) {
+                    config_.onOpenAttachPicker();
+                }
+                return true;
+            }
+            // 点击附件删除按钮 ✕
+            for (size_t i = 0; i < attachmentDeleteBoxes_.size(); ++i) {
+                if (attachmentDeleteBoxes_[i].Contain(mouse.x, mouse.y)) {
+                    if (i < attachments_.size()) {
+                        attachments_.erase(attachments_.begin() + i);
+                        ctx_.postRedraw();
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+
     if (event == Event::CtrlL) {
-        if (!inputText_.empty()) {
+        if (!inputText_.empty() || !attachments_.empty()) {
             inputText_.clear();
+            attachments_.clear();
             // 同步重置粘贴状态, 避免残留粘贴缓冲区在结束时被插入
             inPaste_ = false;
             pasteBuffer_.clear();
@@ -157,13 +227,14 @@ bool InputComponent::OnEvent(Event event) {
         if (start > 0) {
             text = text.substr(start);
         }
-        if (!text.empty()) {
+        if (!text.empty() || !attachments_.empty()) {
             bool handled = false;
             if (config_.onSend) {
-                handled = config_.onSend(std::move(text));
+                handled = config_.onSend(std::move(text), attachments_);
             }
             if (handled) {
                 inputText_.clear();
+                attachments_.clear();
             }
         }
         ctx_.postRedraw();

@@ -10,6 +10,173 @@
 namespace agentxx {
 namespace agent {
 
+/// 多模态媒体类型
+enum class MediaType : uint8_t {
+    Image,
+    Audio,
+    Video
+};
+
+inline std::string_view mediaTypeToString(MediaType t) noexcept {
+    switch (t) {
+        case MediaType::Image:
+            return "image";
+        case MediaType::Audio:
+            return "audio";
+        case MediaType::Video:
+            return "video";
+    }
+    return "image";
+}
+
+inline MediaType mediaTypeFromString(std::string_view s) noexcept {
+    if (s == "audio") {
+        return MediaType::Audio;
+    }
+    if (s == "video") {
+        return MediaType::Video;
+    }
+    return MediaType::Image;
+}
+
+/// 多模态单文件/单次限额 (与 TUI 预检/服务端收敛一致)
+inline constexpr uint64_t kMaxImageBytes            = 10ULL * 1024 * 1024;
+inline constexpr uint64_t kMaxAudioBytes            = 25ULL * 1024 * 1024;
+inline constexpr uint64_t kMaxVideoBytes            = 50ULL * 1024 * 1024;
+inline constexpr size_t   kMaxAttachmentsPerMessage = 5;
+
+/// 小写后缀 (含 '.') -> MediaType, 非媒体返回 nullopt
+inline std::optional<MediaType> mediaTypeFromExtension(std::string_view ext) noexcept {
+    if (ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".webp" || ext == ".gif"
+        || ext == ".bmp") {
+        return MediaType::Image;
+    }
+    if (ext == ".wav" || ext == ".mp3" || ext == ".ogg" || ext == ".m4a" || ext == ".aac"
+        || ext == ".flac") {
+        return MediaType::Audio;
+    }
+    if (ext == ".mp4" || ext == ".mov" || ext == ".webm" || ext == ".mkv") {
+        return MediaType::Video;
+    }
+    return std::nullopt;
+}
+
+/// 小写后缀 -> MIME, 未知返回空
+inline std::string_view mimeTypeFromExtension(std::string_view ext) noexcept {
+    if (ext == ".png") {
+        return "image/png";
+    }
+    if (ext == ".jpg" || ext == ".jpeg") {
+        return "image/jpeg";
+    }
+    if (ext == ".webp") {
+        return "image/webp";
+    }
+    if (ext == ".gif") {
+        return "image/gif";
+    }
+    if (ext == ".bmp") {
+        return "image/bmp";
+    }
+    if (ext == ".wav") {
+        return "audio/wav";
+    }
+    if (ext == ".mp3") {
+        return "audio/mpeg";
+    }
+    if (ext == ".ogg") {
+        return "audio/ogg";
+    }
+    if (ext == ".m4a") {
+        return "audio/mp4";
+    }
+    if (ext == ".aac") {
+        return "audio/aac";
+    }
+    if (ext == ".flac") {
+        return "audio/flac";
+    }
+    if (ext == ".mp4") {
+        return "video/mp4";
+    }
+    if (ext == ".mov") {
+        return "video/quicktime";
+    }
+    if (ext == ".webm") {
+        return "video/webm";
+    }
+    if (ext == ".mkv") {
+        return "video/x-matroska";
+    }
+    return "";
+}
+
+inline uint64_t maxBytesForMediaType(MediaType t) noexcept {
+    switch (t) {
+        case MediaType::Image:
+            return kMaxImageBytes;
+        case MediaType::Audio:
+            return kMaxAudioBytes;
+        case MediaType::Video:
+            return kMaxVideoBytes;
+    }
+    return kMaxImageBytes;
+}
+
+/// 通用附件对象
+struct MediaAttachment {
+    MediaType   type = MediaType::Image;
+    std::string displayName; ///< 文件名 (展示用，如 "chart.png")
+    std::string mimeType;    ///< MIME 类型 (如 "image/png", "audio/wav")
+    std::string pathOrUrl;   ///< 本地绝对路径或 HTTP(S) URL
+    std::string dataUrl;     ///< RFC 2397 格式: "data:<mime>;base64,<payload>"
+    uint64_t    sizeBytes = 0;
+
+    inline static std::string_view mediaTypeIcon(agentxx::agent::MediaType type) {
+        switch (type) {
+            case agentxx::agent::MediaType::Image:
+                return "📷";
+            case agentxx::agent::MediaType::Audio:
+                return "🎵";
+            case agentxx::agent::MediaType::Video:
+                return "🎬";
+        }
+        return "📷";
+    }
+
+    neograph::json toJson() const {
+        neograph::json j = neograph::json::object();
+        j["type"]        = std::string(mediaTypeToString(type));
+        if (!displayName.empty()) {
+            j["display_name"] = displayName;
+        }
+        if (!mimeType.empty()) {
+            j["mime_type"] = mimeType;
+        }
+        if (!pathOrUrl.empty()) {
+            j["path_or_url"] = pathOrUrl;
+        }
+        if (!dataUrl.empty()) {
+            j["data_url"] = dataUrl;
+        }
+        if (sizeBytes > 0) {
+            j["size_bytes"] = sizeBytes;
+        }
+        return j;
+    }
+
+    static MediaAttachment fromJson(const neograph::json& j) {
+        MediaAttachment att;
+        att.type        = mediaTypeFromString(j.value("type", std::string{}));
+        att.displayName = j.value("display_name", std::string{});
+        att.mimeType    = j.value("mime_type", std::string{});
+        att.pathOrUrl   = j.value("path_or_url", std::string{});
+        att.dataUrl     = j.value("data_url", std::string{});
+        att.sizeBytes   = j.value("size_bytes", uint64_t{0});
+        return att;
+    }
+};
+
 /// UI 展示消息 (server Session::viewMessages / wire Sync / client 渲染共用)
 ///
 /// 设计: 通用字段 (role/text/时间戳/折叠) 平铺, 角色专属字段按 role 放入
@@ -110,6 +277,9 @@ struct ViewMessage {
     std::optional<TipData>       tip       = std::nullopt; ///< Role::Tip 有效
     std::optional<InterruptData> interrupt = std::nullopt; ///< Role::Interrupt 有效
     std::optional<ThinkData>     think     = std::nullopt; ///< Role::Think 有效
+
+    /// 多模态媒体附件列表
+    std::vector<MediaAttachment> attachments;
 
     /// 便捷构造: 纯文本消息 (User/Assistant/Think/System/Tip)
     /// - Tip 消息自动创建 tip 子结构 (tipLevel 默认 Info), 且默认折叠展示
@@ -248,10 +418,11 @@ struct WireDelta {
 
 /// 排队等待发送的消息条目 (服务端按会话维护, 同步到客户端展示)
 struct MessageQueueItem {
-    std::string id;              ///< 条目唯一标识 (如 "q-1")
-    std::string text;            ///< 消息内容
-    std::string model;           ///< 本条消息指定的待应用模型 (空 = 默认/当前)
-    int64_t     createdAtMs = 0; ///< 创建时间戳 (毫秒)
+    std::string id;    ///< 条目唯一标识 (如 "q-1")
+    std::string text;  ///< 消息内容
+    std::string model; ///< 本条消息指定的待应用模型 (空 = 默认/当前)
+    std::vector<MediaAttachment> attachments;     ///< 排队项保留附件
+    int64_t                      createdAtMs = 0; ///< 创建时间戳 (毫秒)
 };
 
 struct WireSyncPayload {
@@ -452,6 +623,13 @@ inline neograph::json ViewMessage::toJson() const {
         }
         j["interrupt"] = std::move(it);
     }
+    if (!attachments.empty()) {
+        neograph::json arr = neograph::json::array();
+        for (const auto& a : attachments) {
+            arr.push_back(a.toJson());
+        }
+        j["attachments"] = std::move(arr);
+    }
     return j;
 }
 
@@ -530,6 +708,11 @@ inline ViewMessage ViewMessage::fromJson(const neograph::json& j) {
         case ViewMessage::Role::System:
         case ViewMessage::Role::Assistant:
             break;
+    }
+    if (j.contains("attachments") && j["attachments"].is_array()) {
+        for (const auto& aj : j["attachments"]) {
+            m.attachments.push_back(MediaAttachment::fromJson(aj));
+        }
     }
     return m;
 }

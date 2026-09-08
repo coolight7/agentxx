@@ -50,12 +50,13 @@ struct WireHelloAck {
 };
 
 struct WireUserInput {
-    std::string sessionId;
-    std::string text;
+    std::string                  sessionId;
+    std::string                  text;
     /// 本条消息携带的模型选择 (空 = 不切换): TUI 切模型不再即时发送
     /// WireSelectModel, 而是随下一次用户消息携带, BaseAgent 执行该轮会话
     /// 开始时 (runTurnAsync 内 selectModel) 自动切换
-    std::string model;
+    std::string                  model;
+    std::vector<MediaAttachment> attachments; ///< 携带附件
 };
 
 struct WireCancel {
@@ -119,10 +120,23 @@ struct WireGetModel {
     std::string sessionId;
 };
 
+/// 单个模型的多模态输入能力描述
+struct ModelCapabilityInfo {
+    std::string name;
+    bool        imageInput = false;
+    bool        audioInput = false;
+    bool        videoInput = false;
+
+    bool hasMultimodalInput() const noexcept {
+        return imageInput || audioInput || videoInput;
+    }
+};
+
 /// 服务端模型信息响应 (Server -> Client)
 struct WireModelInfo {
-    std::string              currentModel;
-    std::vector<std::string> models;
+    std::string                      currentModel;
+    std::vector<std::string>         models;
+    std::vector<ModelCapabilityInfo> capabilities; ///< 各模型的多模态能力清单
 };
 
 /// 客户端请求会话启动信息 (Client -> Server): 拉取已加载的 MCP/Skill/Memory 列表

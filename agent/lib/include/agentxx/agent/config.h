@@ -117,6 +117,18 @@ public:
     /// 扩展 LLM Api 请求参数，合并到请求 body
     neograph::json extraConfig;
 
+    /// 是否支持图像输入 (多模态)
+    bool imageInput = false;
+    /// 是否支持音频输入 (多模态)
+    bool audioInput = false;
+    /// 是否支持视频输入 (多模态)
+    bool videoInput = false;
+
+    /// 是否支持任何一种多模态输入
+    bool hasMultimodalInput() const noexcept {
+        return imageInput || audioInput || videoInput;
+    }
+
     bool isValid() const;
 
     bool isOpenaiApi() const;

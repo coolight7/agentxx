@@ -247,6 +247,21 @@ Parent Agent LLM calls agentxx_subagent (single task = tasks array with 1 item, 
   - Right-hand sidebar (Log console, Information panels, Planning visualization).
   - Pending user input queue: Inputs submitted during active turns queue up and dispatch automatically when the turn finishes. Synchronized via `MessageQueueUpdate`, supporting single item removal, full clear, and immediate interruption execution ("insert" button via `WireInterruptAndRunNext`).
   - Deferred model application: Confirming a model change in the selector dialog does not switch immediately; it attaches to the next user message (`WireUserInput.model`), applying automatically when the agent starts the next turn (mirroring remote `--model` parameter behavior); immediate switching remains available via `WireSelectModel`.
+  - Multimodal file input (yaml `models[].image_input/audio_input/video_input`):
+    the `[+ Attach]` button appears at the input bar only when the current model supports
+    any multimodal input (no hotkey; mouse click opens FilePickerOverlay via `modal_->pushModal`);
+    the picker filters by model capability (images png/jpg/jpeg/webp/gif/bmp; audio
+    wav/mp3/ogg/m4a/aac/flac; video mp4/mov/webm/mkv; non-media hidden,
+    unsupported types dimmed and unselectable) with directory navigation
+    (Up/Down + Enter + Esc + filter + mouse); the client reads the file and Base64-encodes
+    it as an RFC 2397 Data URL, mounts it to the attachment tray after size pre-check
+    (image <=10MB / audio <=25MB / video <=50MB / <=5 per message, oversize rejected
+    via toast), and sends it with text via `WireUserInput.attachments`; the server queues
+    attachments and assembles them into ChatMessage image/audio/video_urls for providers;
+    the message list renders attachment cards (click opens via system viewer,
+    remote dataUrl is spooled to a temp dir first); SQLite persistence strips dataUrl
+    keeping only metadata; context compaction downgrades old attachments to
+    plain-text tags.
   - File edit diff comparison rendering.
   - Mermaid stateDiagram-v2 state machine rendering (renders ```mermaid blocks in messages, and Plan dialog roadmap state diagrams).
   - Context token utilization status bar.
@@ -368,6 +383,16 @@ models:
     max_concurrent_connections: 5   # Maximum concurrent HTTP connections for this model endpoint (default 5, 0=unlimited)
                                     # LLM requests use an HTTP keep-alive connection pool: idle connections are reused;
                                     # excess concurrent requests queue for available connections
+    image_input: false              # Whether image input is supported (multimodal; default false)
+    audio_input: false              # Whether audio input is supported (multimodal; default false)
+    video_input: false              # Whether video input is supported (multimodal; default false)
+                                    # When any is true, the TUI input bar shows a [+ Attach] button;
+                                    # the file picker filters by these types (images png/jpg/jpeg/webp/gif/bmp
+                                    # <=10MB; audio wav/mp3/ogg/m4a/aac/flac <=25MB;
+                                    # video mp4/mov/webm/mkv <=50MB; <=5 attachments per message).
+                                    # The client reads files and transmits them as RFC 2397 Data URL (Base64);
+                                    # SQLite persistence strips dataUrl keeping only metadata; during context
+                                    # compaction old attachments downgrade to plain-text tags
     model_context_max_token: 128000
     extra_headers:              # Additional HTTP request headers (e.g. custom authentication/gateway headers)
       x-custom-header: "value"

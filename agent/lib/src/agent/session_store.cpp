@@ -138,6 +138,18 @@ static std::string titlePreview(std::string_view s, size_t max = 60) {
     return line;
 }
 
+/// 持久化轻量化：剥离附件的 dataUrl (Base64 数据)，仅保留文件路径与元数据
+ViewMessage stripAttachmentDataUrl(const ViewMessage& msg) {
+    if (msg.attachments.empty()) {
+        return msg;
+    }
+    ViewMessage copy = msg;
+    for (auto& att : copy.attachments) {
+        att.dataUrl.clear();
+    }
+    return copy;
+}
+
 } // namespace
 
 void SessionStore::updateViewMessage(std::string_view sessionId, const ViewMessage& msg) {
@@ -153,7 +165,7 @@ void SessionStore::updateViewMessage(std::string_view sessionId, const ViewMessa
             auto update
                 = db.prepare("UPDATE view_message SET json = ? WHERE json_extract(json, '$.id') = ?"
                 );
-            update.bindText(1, msg.toJson().dump());
+            update.bindText(1, stripAttachmentDataUrl(msg).toJson().dump());
             update.bindText(2, msg.id);
             update.step();
             return true;
@@ -525,7 +537,7 @@ void SessionStore::appendViewMessage(
             bool inTx = true;
             try {
                 auto insert = db.prepare("INSERT INTO view_message(json) VALUES (?)");
-                insert.bindText(1, msg.toJson().dump());
+                insert.bindText(1, stripAttachmentDataUrl(msg).toJson().dump());
                 insert.step();
 
                 // UPSERT 计数: 新线程首条消息时 meta 不存在, 需 INSERT

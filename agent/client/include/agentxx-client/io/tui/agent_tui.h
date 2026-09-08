@@ -389,7 +389,11 @@ private:
 
     void pushCurrentTokenLocked(TUIRenderState& st);
     void cancelCurrentRunLocked(TUIRenderState& st);
-    void sendUserInputLocked(TUIRenderState& st, std::string text);
+    void sendUserInputLocked(
+        TUIRenderState&                          st,
+        std::string                              text,
+        std::vector<agentxx::agent::MediaAttachment> attachments = {}
+    );
     void onMessageQueueUpdate(const agentxx::agent::WireMessageQueueUpdate& update);
 
     // ---- 历史分页 (viewMessages 尾窗同步 + 向上滚动分页拉取) ----
@@ -435,6 +439,12 @@ private:
     /// - 仅当前会话非运行状态时可打开 (否则提示先停止当前会话)
     /// - 请求服务端会话列表并展示; 确认后经 WireSwitchSession 切换
     void openSessionSelector();
+
+    /// 打开多模态文件选择弹窗 (FilePickerOverlay)
+    /// - 按当前活动模型的多模态能力过滤可选文件类型
+    /// - 选中文件后读取、预检大小、Base64 编码为 Data URL 并挂载到输入栏附件托盘
+    void openFilePickerOverlay();
+
     /// 屏幕上方提示 (toast): 设置提示文本并安排 kToastDuration 后触发重绘,
     /// 由 UI 线程渲染时检查超时并清除 (toastText_/toastShownAt_ 为 UI 线程独占,
     /// 定时器回调仅触发重绘, 不直接写状态, 无跨线程竞争)

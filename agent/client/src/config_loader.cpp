@@ -419,6 +419,30 @@ YamlAppConfig loadYamlConfig(
                     mc.modelContenxtMaxToken = static_cast<size_t>(parsed);
                 }
             }
+            if (node["image_input"]) {
+                mc.imageInput = agentxx::util::toLower(resolveEnvVars(
+                                    (node["image_input"]).as<std::string>("false"),
+                                    dotEnvVars,
+                                    overrideEnvVars
+                                ))
+                                == "true";
+            }
+            if (node["audio_input"]) {
+                mc.audioInput = agentxx::util::toLower(resolveEnvVars(
+                                    (node["audio_input"]).as<std::string>("false"),
+                                    dotEnvVars,
+                                    overrideEnvVars
+                                ))
+                                == "true";
+            }
+            if (node["video_input"]) {
+                mc.videoInput = agentxx::util::toLower(resolveEnvVars(
+                                    (node["video_input"]).as<std::string>("false"),
+                                    dotEnvVars,
+                                    overrideEnvVars
+                                ))
+                                == "true";
+            }
             if (node["extra_api_config"]) {
                 mc.extraConfig = yamlToJson(node["extra_api_config"]);
             }

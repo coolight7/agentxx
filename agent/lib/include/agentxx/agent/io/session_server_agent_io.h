@@ -218,7 +218,11 @@ private:
 
     /// 向客户端推送当前消息队列更新
     void sendMessageQueueUpdate();
-    void pushMessageQueueItem(std::string text, std::string model);
+    void pushMessageQueueItem(
+        std::string                  text,
+        std::string                  model       = "",
+        std::vector<MediaAttachment> attachments = {}
+    );
     void interruptAndRunNext();
     void clearMessageQueue();
     void removeQueueItem(std::string_view itemId);

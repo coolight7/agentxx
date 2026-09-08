@@ -285,6 +285,13 @@ inline neograph::json messageQueueItemToJson(const MessageQueueItem& item) {
     if (!item.model.empty()) {
         j["model"] = item.model;
     }
+    if (!item.attachments.empty()) {
+        neograph::json arr = neograph::json::array();
+        for (const auto& att : item.attachments) {
+            arr.push_back(att.toJson());
+        }
+        j["attachments"] = std::move(arr);
+    }
     return j;
 }
 
@@ -294,6 +301,11 @@ inline MessageQueueItem messageQueueItemFromJson(const neograph::json& j) {
     item.text        = j.value("text", std::string{});
     item.model       = j.value("model", std::string{});
     item.createdAtMs = j.value("createdAtMs", int64_t{0});
+    if (j.contains("attachments") && j["attachments"].is_array()) {
+        for (const auto& att : j["attachments"]) {
+            item.attachments.push_back(MediaAttachment::fromJson(att));
+        }
+    }
     return item;
 }
 
@@ -369,8 +381,12 @@ inline neograph::json makeHello(
     return j;
 }
 
-inline neograph::json
-    makeUserInput(std::string_view sessionId, std::string_view text, std::string_view model = "") {
+inline neograph::json makeUserInput(
+    std::string_view                    sessionId,
+    std::string_view                    text,
+    std::string_view                    model       = "",
+    const std::vector<MediaAttachment>& attachments = {}
+) {
     neograph::json j = {
         {"type",      MsgType::UserInput},
         {"sessionId", sessionId         },
@@ -378,6 +394,13 @@ inline neograph::json
     };
     if (!model.empty()) {
         j["model"] = model;
+    }
+    if (!attachments.empty()) {
+        neograph::json arr = neograph::json::array();
+        for (const auto& att : attachments) {
+            arr.push_back(att.toJson());
+        }
+        j["attachments"] = std::move(arr);
     }
     return j;
 }
@@ -561,14 +584,29 @@ inline neograph::json makeGetModel(std::string_view sessionId) {
     };
 }
 
-inline neograph::json
-    makeModelInfo(std::string_view currentModel, const std::vector<std::string>& models) {
+inline neograph::json makeModelInfo(
+    std::string_view                       currentModel,
+    const std::vector<std::string>&        models,
+    const std::vector<ModelCapabilityInfo>& capabilities = {}
+) {
     neograph::json j = {
         {"type",         MsgType::ModelInfo},
         {"currentModel", currentModel      },
     };
     if (!models.empty()) {
         j["models"] = models;
+    }
+    if (!capabilities.empty()) {
+        neograph::json caps = neograph::json::array();
+        for (const auto& cap : capabilities) {
+            caps.push_back({
+                {"name",        cap.name      },
+                {"image_input", cap.imageInput},
+                {"audio_input", cap.audioInput},
+                {"video_input", cap.videoInput},
+            });
+        }
+        j["capabilities"] = std::move(caps);
     }
     return j;
 }

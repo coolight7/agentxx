@@ -351,8 +351,12 @@ void SessionServerAgentIO::sendMessageQueueUpdate() {
     });
 }
 
-void SessionServerAgentIO::pushMessageQueueItem(std::string text, std::string model) {
-    if (text.empty()) {
+void SessionServerAgentIO::pushMessageQueueItem(
+    std::string                  text,
+    std::string                  model,
+    std::vector<MediaAttachment> attachments
+) {
+    if (text.empty() && attachments.empty()) {
         return;
     }
     const auto nowMs = static_cast<int64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -363,6 +367,7 @@ void SessionServerAgentIO::pushMessageQueueItem(std::string text, std::string mo
     item.id          = fmt::format("q-{}", nextQueueItemId_++);
     item.text        = std::move(text);
     item.model       = std::move(model);
+    item.attachments = std::move(attachments);
     item.createdAtMs = nowMs;
 
     // 注意: 空闲状态下收到用户新输入时, 无论队列是否已有积压消息, 均解除暂停并唤醒执行:
@@ -440,7 +445,11 @@ void SessionServerAgentIO::onPeerMessage(
                 handleHello(m, {}, sender);
             } else if constexpr (std::is_same_v<T, WireUserInput>) {
                 cancelGraceTimer();
-                pushMessageQueueItem(std::move(m.text), std::move(m.model));
+                pushMessageQueueItem(
+                    std::move(m.text),
+                    std::move(m.model),
+                    std::move(m.attachments)
+                );
             } else if constexpr (std::is_same_v<T, WireCancel>) {
                 // 仅在轮次进行中时暂停队列: 空闲时收到取消 (无轮次可取消) 不应
                 // 置位暂停, 否则后续所有新输入都会因队列被误暂停而永远等待执行
@@ -471,15 +480,28 @@ void SessionServerAgentIO::onPeerMessage(
                 if (!agent) {
                     return;
                 }
-                std::string              currentModel = agent->getCurrentModelName(m.sessionId);
-                std::vector<std::string> models;
+                std::string                      currentModel = agent->getCurrentModelName(m.sessionId);
+                std::vector<std::string>         models;
+                std::vector<ModelCapabilityInfo> capabilities;
                 if (agent->agentContext && agent->agentContext->agentConfig) {
                     for (const auto& [name, mc] :
                          agent->agentContext->agentConfig->availableModels) {
                         models.push_back(name);
+                        capabilities.push_back(ModelCapabilityInfo{
+                            .name       = name,
+                            .imageInput = mc.imageInput,
+                            .audioInput = mc.audioInput,
+                            .videoInput = mc.videoInput,
+                        });
                     }
                 }
-                sendToClient(sender, WireModelInfo{std::move(currentModel), std::move(models)});
+                sendToClient(
+                    sender,
+                    WireModelInfo{
+                        std::move(currentModel),
+                        std::move(models),
+                        std::move(capabilities)}
+                );
             } else if constexpr (std::is_same_v<T, WireGetAppendComponentInfo>) {
                 auto agent = agent_.lock();
                 if (!agent) {
@@ -1047,7 +1069,8 @@ asio::awaitable<void> SessionServerAgentIO::run() {
                     config_.sessionId,
                     currentItem.text,
                     shared_from_this(),
-                    turnModel
+                    turnModel,
+                    std::move(currentItem.attachments)
                 );
                 sendToPeer(WireTurnResult{
                     .sessionId    = config_.sessionId,

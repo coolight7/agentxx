@@ -88,7 +88,7 @@ public:
         std::shared_ptr<ftxui::Box> box;
     };
 
-    /// decor 按钮命中盒 (UI 线程独占; 与 interruptHits_ 同生命期):
+    /// decor 按钮命中检测 (UI 线程独占; 与 interruptHits_ 同生命期):
     /// - OnRender 开头清空, 本帧 scrollable_->Render() 中构建可见 Tool 消息的
     ///   decor 按钮时填充 (buildMessageBlock → appendDecorItems)
     /// - box 经 shared_ptr 持有 (reflect 在布局 SetBox 时写回, 与中断控件同机制;
@@ -99,6 +99,15 @@ public:
         std::string                 ownerId;
         std::string                 actionId;
         std::string                 argsJson;
+        std::shared_ptr<ftxui::Box> box;
+    };
+
+    /// 多模态附件卡片命中检测 (UI 线程独占; 与 decorHits_ 同生命期):
+    /// - OnRender 开头清空, 构建可见 User 消息附件卡片时填充
+    /// - 点击命中后经系统默认程序打开原文件 (远端 dataUrl 先落盘到临时目录)
+    struct AttachmentHitBox {
+        size_t                      msgIndex = static_cast<size_t>(-1);
+        size_t                      attIndex = 0;
         std::shared_ptr<ftxui::Box> box;
     };
 
@@ -187,9 +196,17 @@ public:
     /// 命中 decorHits_ 后经 pluginManager->dispatchAction 投递 io 线程派发
     bool handleDecorButtonClick(const ftxui::Mouse& mouse);
 
+    /// 处理多模态附件卡片点击: 调系统默认程序打开原文件
+    bool handleAttachmentClick(const ftxui::Mouse& mouse);
+
     /// 测试辅助: 最近一次渲染的 decor 按钮命中区域
     const std::vector<DecorHitBox>& decorHitBoxes() const {
         return decorHits_;
+    }
+
+    /// 测试辅助: 最近一次渲染的附件卡片命中区域
+    const std::vector<AttachmentHitBox>& attachmentHitBoxes() const {
+        return attachmentHits_;
     }
 
     /// 测试辅助: 当前激活的中断消息索引 (npos = 无)
@@ -225,6 +242,8 @@ private:
     std::vector<InterruptHitBox> interruptHits_;
 
     std::vector<DecorHitBox> decorHits_;
+
+    std::vector<AttachmentHitBox> attachmentHits_;
 
     /// 连接失败 banner 的"重试"按钮命中区域 (UI 线程独占; buildBanner 渲染时
     /// reflect 填充, TUIClientAgentIO 全局鼠标事件检测点击)

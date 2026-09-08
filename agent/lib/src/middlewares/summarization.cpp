@@ -35,6 +35,36 @@ bool isNoiseMessage(const neograph::ChatMessage& m) {
            || c == "[Empty]" || c.empty();
 }
 
+/// 将消息中的多模态 data URL (Base64) 降级为文本标记, 避免大量 Base64 消耗上下文 Token
+void downgradeMultimodalUrlsToText(std::vector<neograph::ChatMessage>& messages) {
+    for (auto& msg : messages) {
+        if (!msg.image_urls.empty()) {
+            for (const auto& url : msg.image_urls) {
+                if (url.starts_with("data:")) {
+                    msg.content += "\n[用户附带了图片]";
+                }
+            }
+            msg.image_urls.clear();
+        }
+        if (!msg.audio_urls.empty()) {
+            for (const auto& url : msg.audio_urls) {
+                if (url.starts_with("data:")) {
+                    msg.content += "\n[用户附带了音频]";
+                }
+            }
+            msg.audio_urls.clear();
+        }
+        if (!msg.video_urls.empty()) {
+            for (const auto& url : msg.video_urls) {
+                if (url.starts_with("data:")) {
+                    msg.content += "\n[用户附带了视频]";
+                }
+            }
+            msg.video_urls.clear();
+        }
+    }
+}
+
 /// 判断两条消息是否完全等价 (用于相邻重复折叠)
 bool isSameMessage(const neograph::ChatMessage& a, const neograph::ChatMessage& b) {
     if (a.role != b.role || a.content != b.content || a.tool_call_id != b.tool_call_id
@@ -829,6 +859,10 @@ asio::awaitable<void>
                 std::move_iterator(oldMessages.end())
             );
 
+            // 压缩前清洗旧消息中的多模态 data URL (Base64) 替换为纯文本标签
+            // TODO: 替换前存储为文件，记录路径
+            downgradeMultimodalUrlsToText(toSummarize);
+
             /// llm 压缩 (同上下文 subagent, 中断后由 Session 派生并 resume)
             auto summary = co_await doSummarizeWithLLM(sessionId, toSummarize, /*direct=*/false);
 
@@ -1102,6 +1136,9 @@ asio::awaitable<bool>
             std::move_iterator(oldMessages.begin()),
             std::move_iterator(oldMessages.end())
         );
+
+        // 压缩前清洗旧消息中的多模态 data URL (Base64) 降级为纯文本标签
+        downgradeMultimodalUrlsToText(toSummarize);
 
         // 手动压缩在 agent 空闲时触发 (无 AgentRunner 中断循环), 不能走
         // NodeInterrupt 中断委派 (无人处理会逃逸 detached 被吞), 直派模式

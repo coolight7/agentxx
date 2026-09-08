@@ -41,6 +41,13 @@ constexpr Entry kTable[] = {
      "Please stop the current session before switching",                                    "请先停止当前会话, 再进行会话切换"                                                     },
     {"toast.copied",          "Copied ({})",                                                "已复制 ({})"                                                                                      },
     {"toast.copyFailed",      "Copy failed (clipboard unavailable)",                        "复制失败 (剪贴板不可用)"                                                                   },
+    {"toast.attachNotSupported",
+     "Current model does not support multimodal file input",                               "当前模型不支持多模态文件输入"                                                        },
+    {"toast.attachLimit",     "Max attachments per message (5) reached",                    "已达到单次对话最大附件数 (5)"                                                        },
+    {"toast.attachReadFail",  "Cannot read file: {}",                                       "无法读取文件: {}"                                                                     },
+    {"toast.attachTooLarge",  "File too large ({}, limit {})",                              "文件过大 ({}, 限制 {})"                                                                 },
+    {"toast.attachOpenFail",  "Cannot open file",                                           "无法打开文件"                                                                         },
+    {"toast.attachBadType",   "Unsupported file type",                                      "不支持的文件类型"                                                                     },
 
     // ---- 待发送消息队列 (顶栏 + 弹窗) ----
     {"queue.barTitle",        "  · Message Queue: {}",                                     "  · 待发送消息队列: {}"                                                                      },
@@ -48,12 +55,32 @@ constexpr Entry kTable[] = {
     {"queue.title",           " Pending Message Queue ",                                    " 待发送消息队列 "                                                                             },
     {"queue.clear",           " Clear ",                                                    " 清空 "                                                                                            },
     {"queue.empty",           " (empty) ",                                                  " (空) "                                                                                             },
+    {"queue.attachCount",     " [📎x{}]",                                                  " [📎x{}]"                                                                                        },
     {"queue.hint",
      " Click message to expand/collapse  Click ✕ to delete  [Esc] Close ",                " 点击消息展开/折叠  点击 ✕ 删除  [Esc] 关闭 "                                        },
 
     // ---- 输入框 ----
     {"input.placeholder",
      "Type a message... (ESC:Interrupt, Enter:Send, Alt+Enter:Newline)",                    "输入消息... (Esc: 中断, Enter: 发送, Alt+Enter: 换行)"                                     },
+    {"input.attach",          "[+ 📎 Attach]",                                             "[+ 📎 附件]"                                                                               },
+    {"input.attachTray",      " 📎 Pending ({}): ",                                        " 📎 待发附件 ({}): "                                                                      },
+    {"msg.attachImage",       "📷 Image",                                                  "📷 图像附件"                                                                                },
+    {"msg.attachAudio",       "🎵 Audio",                                                  "🎵 音频附件"                                                                                },
+    {"msg.attachVideo",       "🎬 Video",                                                  "🎬 视频附件"                                                                                },
+    {"msg.attachOpen",        " [Enter/Click to open] ──┐",                               " [Enter/点击打开] ──┐"                                                                  },
+
+    // ---- 文件选择弹窗 ----
+    {"picker.title",          " Select File [model supports: {}] ",                         " 选择文件 [当前模型支持: {}] "                                                      },
+    {"picker.path",           " Path: ",                                                    " 路径: "                                                                                      },
+    {"picker.filter",         " Filter: ",                                                  " 过滤: "                                                                                      },
+    {"picker.image",          " Image 📷 ",                                                " 图像 📷 "                                                                                  },
+    {"picker.audio",          " Audio 🎵 ",                                                " 音频 🎵 "                                                                                  },
+    {"picker.video",          " Video 🎬 ",                                                " 视频 🎬 "                                                                                  },
+    {"picker.parent",         "[..] Parent",                                                "[..] 上级目录"                                                                              },
+    {"picker.empty",          "  (no matching media files)",                                "  (无匹配的媒体文件)"                                                                      },
+    {"picker.unsupported",    "[model does not support {}] ",                               "[当前模型不支持{}] "                                                                      },
+    {"picker.hint",
+     " [Up/Down] Move  [Enter] Select/Enter dir  [Esc] Cancel ",                            " [↑/↓] 移动光标  |  [Enter] 确认选择/进入目录  |  [Esc] 取消/关闭 "               },
 
     // ---- 模型选择弹窗 ----
     {"model.title",           " Select Model ",                                             " 选择模型 "                                                                                      },

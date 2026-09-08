@@ -344,6 +344,20 @@ TUI [F4] 打开会话选择弹窗 → WireListSessions (服务端阻塞 I/O 卸�
   - 模型选择待应用机制: 模型选择弹窗确认后不即时切换, 而是随下一条发送的用户消息
     (WireUserInput.model) 携带, agent 执行新一轮时自动应用 (远程 --model 参数同路径);
     立即切换仍可经 WireSelectModel
+  - 多模态文件输入 (yaml `models[].image_input/audio_input/video_input`):
+    仅当前模型支持任一多模态输入时, 输入框右侧展示 [+ 📎 附件] 按钮
+    (无键盘快捷键, 鼠标点击经 `modal_->pushModal` 打开 FilePickerOverlay);
+    弹窗按模型能力过滤可选类型 (图片 png/jpg/jpeg/webp/gif/bmp; 音频
+    wav/mp3/ogg/m4a/aac/flac; 视频 mp4/mov/webm/mkv; 非媒体不展示,
+    不支持类型灰显不可选), 目录导航 (↑/↓ + Enter + Esc + 过滤 + 鼠标);
+    选中后客户端读取并 Base64 编码为 RFC 2397 Data URL, 经大小预检
+    (图像 ≤10MB / 音频 ≤25MB / 视频 ≤50MB / 单次 ≤5, 超限 toast 拒绝)
+    挂载到输入框上方附件托盘 (✕ 可移除, Enter 随文本打包经
+    WireUserInput.attachments 发送); 服务端排队保留附件并组装为
+    ChatMessage image/audio/video_urls 送入 Provider; 消息列表以卡片展示
+    附件元信息 (点击调系统查看器打开, 远端 dataUrl 先落盘临时目录);
+    SQLite 落库剥离 dataUrl 仅留元数据; 上下文压缩时旧附件降级为
+    [用户附带了图片/音频/视频] 纯文本标签
   - 文件编辑 diff 对比渲染
   - Mermaid stateDiagram-v2 状态图渲染 (消息中 ```mermaid 代码块 / Plan 弹窗显示 roadmap 状态图)
   - 上下文 token 占用状态栏
@@ -502,6 +516,16 @@ models:
     max_concurrent_connections: 5   # 该模型 API 端点的最大并发连接数 (默认 5, 0=不限制)
                                     # LLM 请求启用 HTTP keep-alive 连接池: 空闲连接复用,
                                     # 超过上限的并发请求排队等待空闲连接
+    image_input: false              # 是否支持图像输入 (多模态; 默认 false)
+    audio_input: false              # 是否支持音频输入 (多模态; 默认 false)
+    video_input: false              # 是否支持视频输入 (多模态; 默认 false)
+                                    # 任一为 true 时 TUI 输入框右侧展示 [+ 📎 附件] 按钮;
+                                    # 文件选择弹窗按此过滤可选类型 (图片 png/jpg/jpeg/webp/gif/bmp
+                                    # ≤10MB; 音频 wav/mp3/ogg/m4a/aac/flac ≤25MB;
+                                    # 视频 mp4/mov/webm/mkv ≤50MB; 单次消息附件 ≤5)。
+                                    # 客户端读取并 Base64 编码为 RFC 2397 Data URL 传输;
+                                    # SQLite 落库剥离 dataUrl 仅留元数据; 上下文压缩时旧附件
+                                    # 降级为 [用户附带了图片/音频/视频] 纯文本标签
     model_context_max_token: 128000
     extra_headers:              # 额外 HTTP 请求头 (如自定义鉴权/网关透传)
       x-custom-header: "value"

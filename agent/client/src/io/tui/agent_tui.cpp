@@ -30,7 +30,9 @@
 #include <atomic>
 #include <charconv>
 #include <cstdint>
+#include <filesystem>
 #include <format>
+#include <fstream>
 #include <iostream>
 #include <memory>
 
@@ -439,7 +441,7 @@ void TUIClientAgentIO::start() {
         });
 
         InputComponent::Config inputCfg;
-        inputCfg.onSend = [this](std::string text) -> bool {
+        inputCfg.onSend = [this](std::string text, std::vector<agentxx::agent::MediaAttachment> attachments) -> bool {
             // ---- 插件命令拦截 (UI 线程) ----
             // 输入以 "/" 开头且匹配插件注册的命令时, 拦截并投递到 client io
             // 线程执行命令回调 (execute 返回动作 JSON, 由宿主解释执行);
@@ -481,7 +483,7 @@ void TUIClientAgentIO::start() {
                 postRedraw();
                 return false;
             } else {
-                sendUserInputLocked(st, std::move(text));
+                sendUserInputLocked(st, std::move(text), std::move(attachments));
                 return true;
             }
         };
@@ -490,6 +492,13 @@ void TUIClientAgentIO::start() {
         };
         inputCfg.isStreaming = [this] {
             return ctx_.frameState && ctx_.frameState->isStreaming;
+        };
+        inputCfg.canAttach = [this] {
+            if (!ctx_.frameState) return false;
+            return ctx_.frameState->currentModelCapability().hasMultimodalInput();
+        };
+        inputCfg.onOpenAttachPicker = [this] {
+            openFilePickerOverlay();
         };
         inputBar_ = std::make_shared<InputComponent>(ctx_, std::move(inputCfg));
 
@@ -1284,6 +1293,102 @@ void TUIClientAgentIO::openSessionSelector() {
     postRedraw();
 }
 
+void TUIClientAgentIO::openFilePickerOverlay() {
+    if (!modal_ || modal_->hasModal()) {
+        return;
+    }
+    // 获取当前模型多模态能力
+    agentxx::agent::ModelCapabilityInfo cap;
+    if (ctx_.frameState) {
+        cap = ctx_.frameState->currentModelCapability();
+    }
+    if (!cap.hasMultimodalInput()) {
+        showToast(std::string(tr("toast.attachNotSupported")));
+        postRedraw();
+        return;
+    }
+    // 检查附件数量限制
+    if (inputBar_
+        && inputBar_->attachments().size() >= agentxx::agent::kMaxAttachmentsPerMessage) {
+        showToast(std::string(tr("toast.attachLimit")));
+        postRedraw();
+        return;
+    }
+
+    auto overlay = std::make_shared<FilePickerOverlay>(ctx_, cap);
+    overlay->onClose([this] {
+        modal_->popModal();
+    });
+    overlay->onSelectFile([this, cap](std::string filePath) {
+        // 预检: 读取文件、判断大小、Base64 编码为 Data URL、挂载到托盘
+        std::error_code ec;
+        auto            fileSize = std::filesystem::file_size(filePath, ec);
+        if (ec) {
+            showToast(trf("toast.attachReadFail", ec.message()));
+            postRedraw();
+            return;
+        }
+
+        // 推断 MIME 类型和媒体类型 (与 FilePicker 白名单收敛)
+        auto ext  = agentxx::util::toLower(std::filesystem::path(filePath).extension().string());
+        auto mt   = agentxx::agent::mediaTypeFromExtension(ext);
+        auto mime = agentxx::agent::mimeTypeFromExtension(ext);
+        if (!mt.has_value() || mime.empty()) {
+            showToast(std::string(tr("toast.attachBadType")));
+            postRedraw();
+            return;
+        }
+        agentxx::agent::MediaType mediaType = *mt;
+        std::string               mimeType(mime);
+
+        // 大小限制检查
+        uint64_t maxSize = agentxx::agent::maxBytesForMediaType(mediaType);
+        if (fileSize > maxSize) {
+            showToast(trf(
+                "toast.attachTooLarge",
+                fmt::format("{:.1f} MB", static_cast<double>(fileSize) / (1024.0 * 1024.0)),
+                fmt::format("{:.0f} MB", static_cast<double>(maxSize) / (1024.0 * 1024.0))
+            ));
+            postRedraw();
+            return;
+        }
+
+        // 读取文件内容
+        std::ifstream ifs(filePath, std::ios::binary);
+        if (!ifs) {
+            showToast(std::string(tr("toast.attachOpenFail")));
+            postRedraw();
+            return;
+        }
+        std::string fileData(
+            (std::istreambuf_iterator<char>(ifs)),
+            std::istreambuf_iterator<char>()
+        );
+        ifs.close();
+
+        // Base64 编码为 Data URL
+        auto base64 = agentxx::util::base64Encode(fileData);
+        auto dataUrl = fmt::format("data:{};base64,{}", mimeType, base64);
+
+        // 构建 MediaAttachment
+        agentxx::agent::MediaAttachment att;
+        att.type        = mediaType;
+        att.displayName = std::filesystem::path(filePath).filename().string();
+        att.mimeType    = mimeType;
+        att.pathOrUrl   = filePath;
+        att.dataUrl     = std::move(dataUrl);
+        att.sizeBytes   = fileSize;
+
+        // 挂载到输入栏附件托盘
+        if (inputBar_) {
+            inputBar_->addAttachment(std::move(att));
+        }
+        postRedraw();
+    });
+    modal_->pushModal(overlay);
+    postRedraw();
+}
+
 void TUIClientAgentIO::switchToSession(std::string newThreadId) {
     if (newThreadId.empty() || newThreadId == currentSessionId()) {
         return;
@@ -1426,6 +1531,9 @@ void TUIClientAgentIO::onPeerMessage(agentxx::agent::WireMessage msg) {
                     if (!m.currentModel.empty()) {
                         st.cachedModelName = m.currentModel;
                     }
+                    for (const auto& cap : m.capabilities) {
+                        st.modelCapabilities[cap.name] = cap;
+                    }
                     st.modelInfoLoaded = true;
                 }
                 postRedraw();
@@ -1531,7 +1639,11 @@ void TUIClientAgentIO::cancelCurrentRunLocked(TUIRenderState& st) {
     st.isStreaming = false;
 }
 
-void TUIClientAgentIO::sendUserInputLocked(TUIRenderState& st, std::string text) {
+void TUIClientAgentIO::sendUserInputLocked(
+    TUIRenderState&                              st,
+    std::string                                  text,
+    std::vector<agentxx::agent::MediaAttachment> attachments
+) {
     resetTrailingRunningToolsLocked(st);
     // 事件接收器通知用原文 (inputChannel 分支会 move text, 提前拷贝)
     const std::string notifyText = text;
@@ -1541,7 +1653,11 @@ void TUIClientAgentIO::sendUserInputLocked(TUIRenderState& st, std::string text)
     std::string pendingModel = std::move(st.pendingModel);
     st.pendingModel.clear();
     if (transport_) {
-        sendToPeer(agentxx::agent::WireUserInput{currentSessionId(), text, std::move(pendingModel)}
+        sendToPeer(agentxx::agent::WireUserInput{
+            currentSessionId(),
+            text,
+            std::move(pendingModel),
+            std::move(attachments)}
         );
     } else {
         // 无 transport (遗留直连模式): 输入经本地 channel 送达, 无法携带
@@ -1574,6 +1690,7 @@ void TUIClientAgentIO::onMessageQueueUpdate(const agentxx::agent::WireMessageQue
             pi.id          = item.id;
             pi.text        = item.text;
             pi.model       = item.model;
+            pi.attachments = item.attachments;
             pi.createdAtMs = item.createdAtMs;
             auto key       = pi.id.empty() ? pi.text : pi.id;
             if (expandedMap.count(key)) {

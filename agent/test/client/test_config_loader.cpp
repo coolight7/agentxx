@@ -540,6 +540,55 @@ void test_model_request_reasoning_summary() {
 }
 
 // ---------------------------------------------------------------------------
+// 多模态输入能力 (yaml `models[].image_input/audio_input/video_input`, 默认 false)
+// ---------------------------------------------------------------------------
+
+void test_model_multimodal_input() {
+    // 未配置: 默认全 false, hasMultimodalInput() == false (向后兼容纯文本)
+    auto cfg = loadYaml("models:\n  - name: m1\n    type: \"openai\"\n");
+    auto it  = cfg.models.find("m1");
+    XX_TEST_EXPECT_TRUE(it != cfg.models.end());
+    if (it != cfg.models.end()) {
+        XX_TEST_EXPECT_FALSE(it->second.imageInput);
+        XX_TEST_EXPECT_FALSE(it->second.audioInput);
+        XX_TEST_EXPECT_FALSE(it->second.videoInput);
+        XX_TEST_EXPECT_FALSE(it->second.hasMultimodalInput());
+    }
+
+    // 显式开启 image/audio
+    cfg = loadYaml(R"(models:
+  - name: m2
+    type: "openai"
+    image_input: true
+    audio_input: true
+    video_input: false
+)");
+    it  = cfg.models.find("m2");
+    XX_TEST_EXPECT_TRUE(it != cfg.models.end());
+    if (it != cfg.models.end()) {
+        XX_TEST_EXPECT_TRUE(it->second.imageInput);
+        XX_TEST_EXPECT_TRUE(it->second.audioInput);
+        XX_TEST_EXPECT_FALSE(it->second.videoInput);
+        XX_TEST_EXPECT_TRUE(it->second.hasMultimodalInput());
+    }
+
+    // 全开 video
+    cfg = loadYaml(R"(models:
+  - name: m3
+    type: "openai"
+    video_input: true
+)");
+    it  = cfg.models.find("m3");
+    XX_TEST_EXPECT_TRUE(it != cfg.models.end());
+    if (it != cfg.models.end()) {
+        XX_TEST_EXPECT_FALSE(it->second.imageInput);
+        XX_TEST_EXPECT_FALSE(it->second.audioInput);
+        XX_TEST_EXPECT_TRUE(it->second.videoInput);
+        XX_TEST_EXPECT_TRUE(it->second.hasMultimodalInput());
+    }
+}
+
+// ---------------------------------------------------------------------------
 // codegraph 参数迁移到插件配置 (yaml `plugins` 条目 args):
 // 宿主只整体解析 args json, 不解析其字段语义 (字段由插件自行定义)
 // ---------------------------------------------------------------------------
@@ -1044,6 +1093,7 @@ TestResult testConfigLoader() {
     test_plugins_env_expand();
     test_model_max_concurrent_connections();
     test_model_request_reasoning_summary();
+    test_model_multimodal_input();
     test_plugins_empty_by_default();
     test_plugin_name_form_removed();
     test_plugin_args_paths_parse();
