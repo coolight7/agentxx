@@ -84,10 +84,10 @@ public:
         co_return std::nullopt;
     }
 
-    asio::awaitable<neograph::json>
+    asio::awaitable<agentxx::util::Json>
         handleInterrupt(std::string_view, std::string_view, std::string_view, std::string_view)
             override {
-        co_return neograph::json::array({"true"});
+        co_return agentxx::util::Json::array({"true"});
     }
 
     size_t deltaCount() {
@@ -112,7 +112,7 @@ static asio::awaitable<void> testSleep(asio::any_io_executor ex, std::chrono::mi
 // WS 收发辅助 (服务端 handler 内使用)
 // ---------------------------------------------------------------------------
 
-static asio::awaitable<bool> wsSendJson(HttpServer::WsStream& ws, const neograph::json& j) {
+static asio::awaitable<bool> wsSendJson(HttpServer::WsStream& ws, const agentxx::util::Json& j) {
     auto s = j.dump();
     ws.text(true);
     neograph_asio_error_code ec;
@@ -120,7 +120,7 @@ static asio::awaitable<bool> wsSendJson(HttpServer::WsStream& ws, const neograph
     co_return !ec;
 }
 
-static asio::awaitable<std::optional<neograph::json>> wsRecvJson(HttpServer::WsStream& ws) {
+static asio::awaitable<std::optional<agentxx::util::Json>> wsRecvJson(HttpServer::WsStream& ws) {
     boost::beast::flat_buffer buf;
     neograph_asio_error_code  ec;
     co_await ws.async_read(buf, asio::redirect_error(asio::use_awaitable, ec));
@@ -128,7 +128,7 @@ static asio::awaitable<std::optional<neograph::json>> wsRecvJson(HttpServer::WsS
         co_return std::nullopt;
     }
     try {
-        co_return neograph::json::parse(boost::beast::buffers_to_string(buf.data()));
+        co_return agentxx::util::Json::parse(boost::beast::buffers_to_string(buf.data()));
     } catch (const std::exception&) {
         co_return std::nullopt;
     }
@@ -1952,7 +1952,7 @@ static asio::awaitable<void> test_model_switch_with_next_input() {
     auto       sim            = startDaSimServer();
     const auto baseUrl        = "http://127.0.0.1:" + std::to_string(sim.port);
     g_da_sim_response_content = "hello from model switch test";
-    g_da_sim_tool_calls       = neograph::json::array();
+    g_da_sim_tool_calls       = agentxx::util::Json::array();
 
     auto cfg             = std::make_shared<agentxx::agent::AgentConfig>();
     cfg->model.baseUrl   = baseUrl;
@@ -2333,7 +2333,7 @@ static asio::awaitable<void> test_session_controller_one_to_many() {
     // 客户端 1 回复中断允许
     client1->send(agentxx::agent::WireInterruptResponse{
         .id     = reqId,
-        .result = neograph::json::array({"true"}),
+        .result = agentxx::util::Json::array({"true"}),
     });
 
     co_await testSleep(ex, std::chrono::milliseconds{50});
@@ -2770,7 +2770,7 @@ static asio::awaitable<void> test_session_controller_message_queue() {
     auto       sim            = startDaSimServer();
     const auto baseUrl        = "http://127.0.0.1:" + std::to_string(sim.port);
     g_da_sim_response_content = "echo response from queue test";
-    g_da_sim_tool_calls       = neograph::json::array();
+    g_da_sim_tool_calls       = agentxx::util::Json::array();
 
     auto cfg             = std::make_shared<agentxx::agent::AgentConfig>();
     cfg->model.baseUrl   = baseUrl;
@@ -2930,7 +2930,7 @@ static asio::awaitable<void> test_session_controller_queue_resume_after_abort() 
     auto       sim            = startDaSimServer();
     const auto baseUrl        = "http://127.0.0.1:" + std::to_string(sim.port);
     g_da_sim_response_content = "echo response from queue resume test";
-    g_da_sim_tool_calls       = neograph::json::array();
+    g_da_sim_tool_calls       = agentxx::util::Json::array();
     g_da_sim_fail_count       = 0;
 
     auto cfg             = std::make_shared<agentxx::agent::AgentConfig>();

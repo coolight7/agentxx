@@ -7,14 +7,14 @@
 #include <vector>
 
 #include <asio/awaitable.hpp>
-#include <neograph/json.h>
+#include "agentxx/util/json.h"
 
 #include "agentxx/util/http_client.h"
 
 namespace agentxx {
 namespace server {
 
-using json = neograph::json;
+using json = agentxx::util::Json;
 
 /// A2A (Agent-to-Agent) 客户端
 ///

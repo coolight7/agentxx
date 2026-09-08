@@ -12,7 +12,7 @@
 #include <vector>
 
 #include <asio/awaitable.hpp>
-#include <neograph/json.h>
+#include "agentxx/util/json.h"
 
 #include "agentxx/agent/base_agent.h"
 #include "agentxx/util/http_server.h"
@@ -20,7 +20,7 @@
 namespace agentxx {
 namespace server {
 
-using json = neograph::json;
+using json = agentxx::util::Json;
 
 // ---------------------------------------------------------------------------
 // A2A 协议数据模型 (v1.0)

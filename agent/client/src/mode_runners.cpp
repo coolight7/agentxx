@@ -22,7 +22,7 @@
 #include "asio/steady_timer.hpp"
 #include "asio/use_awaitable.hpp"
 #include "fmt/format.h"
-#include "neograph/json.h"
+#include "agentxx/util/json.h"
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -123,7 +123,7 @@ static bool
         return false;
     }
     // 参数: 剩余部分整体放入 {"text": "..."} (语义由插件定义)
-    neograph::json args = neograph::json::object();
+    agentxx::util::Json args = agentxx::util::Json::object();
     args["text"] = spacePos == std::string::npos ? std::string{} : input.substr(spacePos + 1);
     mgr->invokeCommand(cmdName, args.dump()); // io 线程同步调用 (快速返回约定)
     return true;

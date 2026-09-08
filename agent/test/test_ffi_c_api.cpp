@@ -15,7 +15,7 @@
 #include "agentxx/ffi_api.h"
 #include "agentxx/util/http_server.h"
 #include "agentxx/version.h"
-#include "neograph/json.h"
+#include "agentxx/util/json.h"
 
 #if XX_IS_WIN_D
 #ifndef WIN32_LEAN_AND_MEAN
@@ -141,7 +141,7 @@ struct FfiEventRecorder {
                 continue;
             }
             try {
-                auto j = neograph::json::parse(payload);
+                auto j = agentxx::util::Json::parse(payload);
                 if (j.value("kind", std::string{}) == kind) {
                     return true;
                 }
@@ -172,28 +172,28 @@ struct FfiMockLLM {
     /// 文本流式 SSE chunks (openai chat completion 流式格式)
     static std::string textSse(std::string_view content) {
         const std::string id = "chatcmpl-ffi-mock";
-        return std::string("data: ") + neograph::json{
+        return std::string("data: ") + agentxx::util::Json{
             {"id", id},
             {"object", "chat.completion.chunk"},
             {"model", "ffi-mock"},
-            {"choices", neograph::json::array({
-                neograph::json{{"index", 0}, {"delta", {{"role", "assistant"}, {"content", ""}}}},
+            {"choices", agentxx::util::Json::array({
+                agentxx::util::Json{{"index", 0}, {"delta", {{"role", "assistant"}, {"content", ""}}}},
             })},
         }.dump() + "\n\n"
-        + "data: " + neograph::json{
+        + "data: " + agentxx::util::Json{
             {"id", id},
             {"object", "chat.completion.chunk"},
             {"model", "ffi-mock"},
-            {"choices", neograph::json::array({
-                neograph::json{{"index", 0}, {"delta", {{"content", content}}}},
+            {"choices", agentxx::util::Json::array({
+                agentxx::util::Json{{"index", 0}, {"delta", {{"content", content}}}},
             })},
         }.dump() + "\n\n"
-        + "data: " + neograph::json{
+        + "data: " + agentxx::util::Json{
             {"id", id},
             {"object", "chat.completion.chunk"},
             {"model", "ffi-mock"},
-            {"choices", neograph::json::array({
-                neograph::json{{"index", 0}, {"delta", neograph::json::object()}, {"finish_reason", "stop"}},
+            {"choices", agentxx::util::Json::array({
+                agentxx::util::Json{{"index", 0}, {"delta", agentxx::util::Json::object()}, {"finish_reason", "stop"}},
             })},
         }.dump() + "\n\n"
         + "data: [DONE]\n\n";
@@ -202,17 +202,17 @@ struct FfiMockLLM {
     /// 工具调用流式 SSE chunks
     static std::string toolCallSse(const char* toolName, std::string_view argsJson) {
         const std::string id = "chatcmpl-ffi-tool";
-        return std::string("data: ") + neograph::json{
+        return std::string("data: ") + agentxx::util::Json{
             {"id", id},
             {"object", "chat.completion.chunk"},
             {"model", "ffi-mock"},
-            {"choices", neograph::json::array({
-                neograph::json{
+            {"choices", agentxx::util::Json::array({
+                agentxx::util::Json{
                     {"index", 0},
                     {"delta", {
                         {"role", "assistant"},
-                        {"tool_calls", neograph::json::array({
-                            neograph::json{
+                        {"tool_calls", agentxx::util::Json::array({
+                            agentxx::util::Json{
                                 {"index", 0},
                                 {"id", "call-ffi-1"},
                                 {"type", "function"},
@@ -223,12 +223,12 @@ struct FfiMockLLM {
                 },
             })},
         }.dump() + "\n\n"
-        + "data: " + neograph::json{
+        + "data: " + agentxx::util::Json{
             {"id", id},
             {"object", "chat.completion.chunk"},
             {"model", "ffi-mock"},
-            {"choices", neograph::json::array({
-                neograph::json{{"index", 0}, {"delta", neograph::json::object()}, {"finish_reason", "tool_calls"}},
+            {"choices", agentxx::util::Json::array({
+                agentxx::util::Json{{"index", 0}, {"delta", agentxx::util::Json::object()}, {"finish_reason", "tool_calls"}},
             })},
         }.dump() + "\n\n"
         + "data: [DONE]\n\n";
@@ -291,7 +291,7 @@ struct FfiMockLLM {
 
     /// 构造 model_json 指向本 mock
     std::string modelJson() const {
-        return neograph::json{
+        return agentxx::util::Json{
             {"name",      "ffi-mock"                                          },
             {"type",      "openai"                                            },
             {"baseUrl",   "http://127.0.0.1:" + std::to_string(server->port())},
@@ -423,7 +423,7 @@ void testLifecycleAndConversation() {
     {
         auto turn = rec.first(AGENTXX_FFI_EVT_TURN_END);
         try {
-            auto j = neograph::json::parse(turn);
+            auto j = agentxx::util::Json::parse(turn);
             XX_TEST_EXPECT_TRUE(j.value("hasError", true) == false);
         } catch (...) {
             g_ffi_failed++;
@@ -439,7 +439,7 @@ void testLifecycleAndConversation() {
     XX_TEST_EXPECT_TRUE(ctx.data != nullptr);
     if (ctx.data != nullptr) {
         try {
-            auto j = neograph::json::parse(std::string_view(ctx.data, ctx.size));
+            auto j = agentxx::util::Json::parse(std::string_view(ctx.data, ctx.size));
             XX_TEST_EXPECT_TRUE(j.contains("messages") && j["messages"].is_array());
             XX_TEST_EXPECT_TRUE(j["messages"].size() > 0);
         } catch (...) {
@@ -455,7 +455,7 @@ void testLifecycleAndConversation() {
     XX_TEST_EXPECT_TRUE(sess.data != nullptr);
     if (sess.data != nullptr) {
         try {
-            auto j = neograph::json::parse(std::string_view(sess.data, sess.size));
+            auto j = agentxx::util::Json::parse(std::string_view(sess.data, sess.size));
             XX_TEST_EXPECT_TRUE(j.contains("sessions") && j["sessions"].is_array());
         } catch (...) {
             g_ffi_failed++;
@@ -470,7 +470,7 @@ void testLifecycleAndConversation() {
     XX_TEST_EXPECT_TRUE(logs.data != nullptr);
     if (logs.data != nullptr) {
         try {
-            auto j = neograph::json::parse(std::string_view(logs.data, logs.size));
+            auto j = agentxx::util::Json::parse(std::string_view(logs.data, logs.size));
             XX_TEST_EXPECT_TRUE(j.is_array());
         } catch (...) {
             g_ffi_failed++;
@@ -512,8 +512,8 @@ void testHilInterrupt() {
     std::string configJson = R"({"permissionMode": "all_ask"})";
     if (!pluginDir.empty()) {
         try {
-            auto cfg       = neograph::json::parse(configJson);
-            cfg["plugins"] = neograph::json::array({neograph::json{{"path", pluginDir}}});
+            auto cfg       = agentxx::util::Json::parse(configJson);
+            cfg["plugins"] = agentxx::util::Json::array({agentxx::util::Json{{"path", pluginDir}}});
             configJson     = cfg.dump();
         } catch (...) {
             TEST_FAIL << "inject plugins config failed" << std::endl;
@@ -550,7 +550,7 @@ void testHilInterrupt() {
     {
         auto payload = rec.first(AGENTXX_FFI_EVT_INTERRUPT_REQ);
         try {
-            auto j      = neograph::json::parse(payload);
+            auto j      = agentxx::util::Json::parse(payload);
             interruptId = j.value("interruptId", int64_t{-1});
             XX_TEST_EXPECT_TRUE(interruptId > 0);
             std::string argJson = j.value("argJson", std::string{});
@@ -578,7 +578,7 @@ void testHilInterrupt() {
     {
         auto turn = rec.first(AGENTXX_FFI_EVT_TURN_END);
         try {
-            auto j = neograph::json::parse(turn);
+            auto j = agentxx::util::Json::parse(turn);
             XX_TEST_EXPECT_TRUE(j.value("hasError", true) == false);
         } catch (...) {
             g_ffi_failed++;
@@ -641,7 +641,7 @@ void testCancel() {
     {
         auto turn = rec.first(AGENTXX_FFI_EVT_TURN_END);
         try {
-            auto j = neograph::json::parse(turn);
+            auto j = agentxx::util::Json::parse(turn);
             XX_TEST_EXPECT_TRUE(j.value("hasError", false) == true);
             XX_TEST_EXPECT_TRUE(
                 j.value("errorMessage", std::string{}).find("Cancelled") != std::string::npos

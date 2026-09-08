@@ -38,22 +38,22 @@ void AgentPrompt::refreshEnvDetectedPrompts() {
     );
 }
 
-neograph::json AgentPrompt::toJson() const {
-    neograph::json j;
+agentxx::util::Json AgentPrompt::toJson() const {
+    agentxx::util::Json j;
     j["systemPrompt"] = systemPrompt;
     {
-        neograph::json append = neograph::json::object();
+        agentxx::util::Json append = agentxx::util::Json::object();
         for (const auto& kv : appendSystemPrompts) {
             append[kv.first] = kv.second;
         }
         j["appendSystemPrompts"] = std::move(append);
     }
     {
-        neograph::json tools = neograph::json::object();
+        agentxx::util::Json tools = agentxx::util::Json::object();
         for (const auto& kv : toolPrompt) {
-            neograph::json tp;
+            agentxx::util::Json tp;
             tp["depict"]        = kv.second.depict;
-            neograph::json args = neograph::json::object();
+            agentxx::util::Json args = agentxx::util::Json::object();
             for (const auto& a : kv.second.args) {
                 args[a.first] = a.second;
             }
@@ -65,11 +65,11 @@ neograph::json AgentPrompt::toJson() const {
     return j;
 }
 
-void AgentPrompt::fromJson(const neograph::json& j) {
+void AgentPrompt::fromJson(const agentxx::util::Json& j) {
     mergeFromJson(j);
 }
 
-void AgentPrompt::mergeFromJson(const neograph::json& j) {
+void AgentPrompt::mergeFromJson(const agentxx::util::Json& j) {
     if (j.contains("systemPrompt") && j["systemPrompt"].is_string()) {
         systemPrompt = j["systemPrompt"].get<std::string>();
     }

@@ -55,11 +55,9 @@ static HostConfig
         if (json.data) {
             std::string s{json.data, static_cast<size_t>(json.size)};
             agentxx::plugin::PluginString::free(host, &json);
-            SimpleJson j(s);
-            if (j.ok()) {
-                jsonGetString(j.doc().at_pointer("/dataDir"), cfg.dataDir);
-                jsonGetString(j.doc().at_pointer("/projectRoot"), cfg.projectRoot);
-            }
+            agentxx::plugin::ArgReader args(s);
+            cfg.dataDir     = args.value<std::string>("dataDir", std::string{});
+            cfg.projectRoot = args.value<std::string>("projectRoot", std::string{});
         }
     }
     if (iface.config->get_plugin_args) {
@@ -68,36 +66,12 @@ static HostConfig
         if (json.data) {
             std::string s{json.data, static_cast<size_t>(json.size)};
             agentxx::plugin::PluginString::free(host, &json);
-            SimpleJson j(s);
-            if (j.ok()) {
-                auto& doc  = j.doc();
-                auto  pRes = doc.at_pointer("/paths");
-                if (!pRes.error()) {
-                    auto arr = pRes.get_array();
-                    if (!arr.error()) {
-                        for (auto item : arr.value()) {
-                            std::string str;
-                            if (jsonGetString(item, str) && !str.empty()) {
-                                cfg.loadPaths.push_back(str);
-                            }
-                        }
-                    }
-                }
-                auto ipRes = doc.at_pointer("/ignore_paths");
-                if (!ipRes.error()) {
-                    auto arr = ipRes.get_array();
-                    if (!arr.error()) {
-                        for (auto item : arr.value()) {
-                            std::string str;
-                            if (jsonGetString(item, str) && !str.empty()) {
-                                cfg.ignorePaths.push_back(str);
-                            }
-                        }
-                    }
-                }
-                jsonGetBool(doc.at_pointer("/use_gitignore"), cfg.useGitignore);
-                jsonGetBool(doc.at_pointer("/load_cwd"), cfg.loadCwd);
-            }
+            agentxx::plugin::ArgReader args(s);
+            cfg.loadPaths   = args.value<std::vector<std::string>>("paths", {});
+            cfg.ignorePaths = args.value<std::vector<std::string>>("ignore_paths", {});
+            cfg.useGitignore
+                = args.value<bool>("use_gitignore", cfg.useGitignore);
+            cfg.loadCwd = args.value<bool>("load_cwd", cfg.loadCwd);
         }
     }
     return cfg;
@@ -222,10 +196,7 @@ static void ensureToolPromptsInHost(
     }
     std::string s{json.data, static_cast<size_t>(json.size)};
     agentxx::plugin::PluginString::free(host, &json);
-    SimpleJson j(s);
-    if (!j.ok()) {
-        return;
-    }
+    agentxx::plugin::ArgReader promptArgs(s);
     static const char* kToolNames[] = {
         "agentxx_codegraph_search",
         "agentxx_codegraph_context",
@@ -236,9 +207,12 @@ static void ensureToolPromptsInHost(
     codegraph::Json patch = codegraph::Json::object();
     codegraph::Json tools = codegraph::Json::object();
     bool            dirty = false;
+    // 已有提示词经 ArgReader 原始 Json 判断存在性
+    const auto& raw = promptArgs.raw();
+    const bool  hasToolPrompt
+        = raw.is_object() && raw.contains("toolPrompt") && raw["toolPrompt"].is_object();
     for (const char* name : kToolNames) {
-        std::string pointer = fmt::format("/toolPrompt/{}", name);
-        if (!j.doc().at_pointer(pointer).error()) {
+        if (hasToolPrompt && raw["toolPrompt"].contains(name)) {
             continue;
         }
         auto p = defaultToolPrompt(name);
@@ -449,15 +423,12 @@ static void registerAllTools(PluginCtx& ctx) {
             depict,
             b.dump({"query"}),
             [](PluginCtx& c, std::string_view args_json) -> std::string {
-                std::string argsStr(args_json.data() ? args_json.data() : "{}", args_json.size());
-                SimpleJson  a(argsStr.empty() ? "{}" : argsStr);
-                std::string query;
-                jsonGetString(a.doc().at_pointer("/query"), query);
+                agentxx::plugin::ArgReader args(args_json);
+                std::string query = args.value<std::string>("query", std::string{});
                 if (query.empty()) {
                     return "error: Arg `query` is empty";
                 }
-                int64_t limit64 = 20;
-                jsonGetInt(a.doc().at_pointer("/limit"), limit64);
+                int64_t limit64 = args.value<int64_t>("limit", 20);
                 auto r = c.mgr->searchSymbols(query, static_cast<int>(limit64));
                 if (!r.success) {
                     return fmt::format("error: {}", r.error);
@@ -515,16 +486,13 @@ static void registerAllTools(PluginCtx& ctx) {
             depict,
             b.dump({"symbol"}),
             [](PluginCtx& c, std::string_view args_json) -> std::string {
-                std::string argsStr(args_json.data() ? args_json.data() : "{}", args_json.size());
-                SimpleJson  a(argsStr.empty() ? "{}" : argsStr);
-                std::string symbol;
-                jsonGetString(a.doc().at_pointer("/symbol"), symbol);
+                agentxx::plugin::ArgReader args(args_json);
+                std::string symbol = args.value<std::string>("symbol", std::string{});
                 if (symbol.empty()) {
                     return "error: Arg `symbol` is empty";
                 }
-                int64_t limit64 = 10, depth64 = 3;
-                jsonGetInt(a.doc().at_pointer("/limit"), limit64);
-                jsonGetInt(a.doc().at_pointer("/max_depth"), depth64);
+                int64_t limit64 = args.value<int64_t>("limit", 10);
+                int64_t depth64 = args.value<int64_t>("max_depth", 3);
                 auto r = c.mgr->getSymbolContext(
                     symbol,
                     static_cast<int>(limit64),
@@ -558,15 +526,12 @@ static void registerAllTools(PluginCtx& ctx) {
             depict,
             b.dump({"symbol"}),
             [](PluginCtx& c, std::string_view args_json) -> std::string {
-                std::string argsStr(args_json.data() ? args_json.data() : "{}", args_json.size());
-                SimpleJson  a(argsStr.empty() ? "{}" : argsStr);
-                std::string symbol;
-                jsonGetString(a.doc().at_pointer("/symbol"), symbol);
+                agentxx::plugin::ArgReader args(args_json);
+                std::string symbol = args.value<std::string>("symbol", std::string{});
                 if (symbol.empty()) {
                     return "error: Arg `symbol` is empty";
                 }
-                int64_t depth64 = 3;
-                jsonGetInt(a.doc().at_pointer("/max_depth"), depth64);
+                int64_t depth64 = args.value<int64_t>("max_depth", 3);
                 auto r = c.mgr->getCallers(symbol, static_cast<int>(depth64));
                 if (!r.success) {
                     return fmt::format("error: {}", r.error);
@@ -596,15 +561,12 @@ static void registerAllTools(PluginCtx& ctx) {
             depict,
             b.dump({"symbol"}),
             [](PluginCtx& c, std::string_view args_json) -> std::string {
-                std::string argsStr(args_json.data() ? args_json.data() : "{}", args_json.size());
-                SimpleJson  a(argsStr.empty() ? "{}" : argsStr);
-                std::string symbol;
-                jsonGetString(a.doc().at_pointer("/symbol"), symbol);
+                agentxx::plugin::ArgReader args(args_json);
+                std::string symbol = args.value<std::string>("symbol", std::string{});
                 if (symbol.empty()) {
                     return "error: Arg `symbol` is empty";
                 }
-                int64_t depth64 = 3;
-                jsonGetInt(a.doc().at_pointer("/max_depth"), depth64);
+                int64_t depth64 = args.value<int64_t>("max_depth", 3);
                 auto r = c.mgr->getCallees(symbol, static_cast<int>(depth64));
                 if (!r.success) {
                     return fmt::format("error: {}", r.error);
@@ -635,16 +597,13 @@ static void registerAllTools(PluginCtx& ctx) {
             depict,
             b.dump({"from", "to"}),
             [](PluginCtx& c, std::string_view args_json) -> std::string {
-                std::string argsStr(args_json.data() ? args_json.data() : "{}", args_json.size());
-                SimpleJson  a(argsStr.empty() ? "{}" : argsStr);
-                std::string from, to;
-                jsonGetString(a.doc().at_pointer("/from"), from);
-                jsonGetString(a.doc().at_pointer("/to"), to);
+                agentxx::plugin::ArgReader args(args_json);
+                std::string from = args.value<std::string>("from", std::string{});
+                std::string to   = args.value<std::string>("to", std::string{});
                 if (from.empty() || to.empty()) {
                     return "error: Args `from` and `to` are required";
                 }
-                int64_t depth64 = 10;
-                jsonGetInt(a.doc().at_pointer("/max_depth"), depth64);
+                int64_t depth64 = args.value<int64_t>("max_depth", 10);
                 auto r = c.mgr->findPath(from, to, static_cast<int>(depth64));
                 if (!r.success) {
                     return fmt::format("error: {}", r.error);
@@ -970,9 +929,9 @@ struct ClientCtx {
 };
 
 static std::string buildInfoItemsJson(ClientCtx& c) {
-    neograph::json items    = neograph::json::array();
+    agentxx::util::Json items    = agentxx::util::Json::array();
     auto           pushText = [&](const std::string& text, const std::string& role = "normal") {
-        neograph::json it;
+        agentxx::util::Json it;
         it["kind"] = "text";
         it["role"] = role;
         it["text"] = text;
@@ -989,7 +948,7 @@ static std::string buildInfoItemsJson(ClientCtx& c) {
                     fmt::format("|- indexing {:.0f}% ({}/{})", pct * 100.0, c.processed, c.total),
                     "normal"
                 );
-                neograph::json prog;
+                agentxx::util::Json prog;
                 prog["kind"]  = "progress";
                 prog["value"] = pct;
                 items.push_back(std::move(prog));
@@ -1010,7 +969,7 @@ static std::string buildInfoItemsJson(ClientCtx& c) {
             pushText("|- wait for index", "hint");
         }
     }
-    neograph::json out;
+    agentxx::util::Json out;
     out["items"] = std::move(items);
     return out.dump();
 }
@@ -1043,20 +1002,20 @@ static void AGENTXX_PLUGIN_CALL
         payload_json ? static_cast<size_t>(payload_json->size) : 0
     );
     try {
-        auto j      = neograph::json::parse(raw);
+        auto j      = agentxx::util::Json::parse(raw);
         auto plugin = j.value("plugin", std::string{});
         auto event  = j.value("event", std::string{});
         if (plugin != "agentxx_codegraph") {
             return;
         }
-        neograph::json d;
+        agentxx::util::Json d;
         if (j.contains("data")) {
             auto dv = j["data"];
             if (dv.is_string()) {
                 try {
-                    d = neograph::json::parse(dv.get<std::string>());
+                    d = agentxx::util::Json::parse(dv.get<std::string>());
                 } catch (...) {
-                    d = neograph::json::object();
+                    d = agentxx::util::Json::object();
                 }
             } else if (dv.is_object()) {
                 d = dv;

@@ -2,7 +2,7 @@
 
 #include "agentxx/util/string_util.h"
 #include "neograph/api.h"
-#include "neograph/json.h"
+#include "agentxx/util/json.h"
 #include "prompt.h"
 #include <chrono>
 #include <expected>
@@ -115,7 +115,7 @@ public:
     size_t modelContenxtMaxToken = 0;
 
     /// 扩展 LLM Api 请求参数，合并到请求 body
-    neograph::json extraConfig;
+    agentxx::util::Json extraConfig;
 
     /// 是否支持图像输入 (多模态)
     bool imageInput = false;
@@ -173,7 +173,7 @@ struct PluginConfig {
 
     /// 插件参数 (yaml `args`; 宿主原样保存并整体传递给插件,
     /// 不解析具体字段 —— 参数语义由插件自行定义)
-    neograph::json args;
+    agentxx::util::Json args;
 
     /// 插件配置文件所在目录或文件路径 (yaml `config`)
     /// - 可指向文件或目录; 支持 `~` 与 ${VAR} 展开, 相对路径按工作目录解析

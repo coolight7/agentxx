@@ -168,11 +168,11 @@ asio::awaitable<TestResult> run_plugin_tests() {
         auto tool = ctx->toolRegistry->find("example_echo");
         XX_TEST_EXPECT_TRUE(tool != nullptr);
         if (tool) {
-            auto out = co_await tool->execute_async(neograph::json{
+            auto out = co_await tool->execute_async(agentxx::util::Json{
                 {"sessionId", "t1"   },
                 {"hello",     "world"},
             });
-            auto j   = neograph::json::parse(out);
+            auto j   = agentxx::util::Json::parse(out);
             XX_TEST_EXPECT_EQ(j["echo"]["hello"].get<std::string>(), "world");
             XX_TEST_EXPECT_EQ(j["sessionId"].get<std::string>(), "t1");
         }
@@ -183,11 +183,11 @@ asio::awaitable<TestResult> run_plugin_tests() {
         auto tool = ctx->toolRegistry->find("example_caller");
         XX_TEST_EXPECT_TRUE(tool != nullptr);
         if (tool) {
-            auto out = co_await tool->execute_async(neograph::json{
+            auto out = co_await tool->execute_async(agentxx::util::Json{
                 {"sessionId", "t1"},
                 {"x",         42  },
             });
-            auto j   = neograph::json::parse(out);
+            auto j   = agentxx::util::Json::parse(out);
             XX_TEST_EXPECT_EQ(j["via_call_tool"]["echo"]["x"].get<int>(), 42);
         }
     }
@@ -206,7 +206,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
             XX_TEST_EXPECT_TRUE(ctx->toolRegistry->contains(cmdToolName));
             auto tool = ctx->toolRegistry->find(cmdToolName);
             if (tool) {
-                auto out = co_await tool->execute_async(neograph::json{
+                auto out = co_await tool->execute_async(agentxx::util::Json{
                     {"command", "echo polled_e2e_ok"},
                     {"timeout", 15                  },
                 });
@@ -241,14 +241,14 @@ asio::awaitable<TestResult> run_plugin_tests() {
             XX_TEST_EXPECT_TRUE(tool != nullptr);
             if (tool) {
                 // 1. 同步计算与返回值
-                auto out1 = co_await tool->execute_async(neograph::json{
+                auto out1 = co_await tool->execute_async(agentxx::util::Json{
                     {"code", "return 2+3"},
                 });
                 XX_TEST_EXPECT_TRUE(out1.find("5") != std::string::npos);
                 XX_TEST_EXPECT_TRUE(out1.find("[ExitCode]\n0") != std::string::npos);
 
                 // 2. 控制台输出与异常捕获
-                auto out2 = co_await tool->execute_async(neograph::json{
+                auto out2 = co_await tool->execute_async(agentxx::util::Json{
                     {"code", "console.log('hi_js'); throw new Error('oops_js')"},
                 });
                 XX_TEST_EXPECT_TRUE(out2.find("hi_js") != std::string::npos);
@@ -257,7 +257,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
                 XX_TEST_EXPECT_TRUE(out2.find("[ExitCode]\n1") != std::string::npos);
 
                 // 3. 异步 Promise 等待与对象 JSON 返回
-                auto out3 = co_await tool->execute_async(neograph::json{
+                auto out3 = co_await tool->execute_async(agentxx::util::Json{
                     {"code",
                      "await new Promise(r=>setTimeout(r,10)); return { status: 'async_ok', val: 42 };"
                     },
@@ -266,28 +266,28 @@ asio::awaitable<TestResult> run_plugin_tests() {
                 XX_TEST_EXPECT_TRUE(out3.find("42") != std::string::npos);
 
                 // 4. 超时场景处理 (1秒超时)
-                auto out4 = co_await tool->execute_async(neograph::json{
+                auto out4 = co_await tool->execute_async(agentxx::util::Json{
                     {"code",    "await new Promise(r=>setTimeout(r,2000)); return 99"},
                     {"timeout", 1                                                    },
                 });
                 XX_TEST_EXPECT_TRUE(out4.find("Command timed out") != std::string::npos);
 
                 // 5. all_output=false 策略 (成功不输出，失败输出)
-                auto out5 = co_await tool->execute_async(neograph::json{
+                auto out5 = co_await tool->execute_async(agentxx::util::Json{
                     {"code",       "console.log('secret_log'); return 'hide_log';"},
                     {"all_output", false                                          },
                 });
                 XX_TEST_EXPECT_TRUE(out5.find("secret_log") == std::string::npos);
                 XX_TEST_EXPECT_TRUE(out5.find("[ExitCode]\n0") != std::string::npos);
 
-                auto out5_err = co_await tool->execute_async(neograph::json{
+                auto out5_err = co_await tool->execute_async(agentxx::util::Json{
                     {"code",       "console.log('err_log'); throw new Error('visible_on_fail');"},
                     {"all_output", false                                                        },
                 });
                 XX_TEST_EXPECT_TRUE(out5_err.find("visible_on_fail") != std::string::npos);
 
                 // 6. 大文本截断
-                auto out6 = co_await tool->execute_async(neograph::json{
+                auto out6 = co_await tool->execute_async(agentxx::util::Json{
                     {"code", "let s = 'x'.repeat(35000); console.log(s); return s.length;"},
                 });
                 XX_TEST_EXPECT_TRUE(out6.find("[Content offloaded") != std::string::npos);
@@ -297,7 +297,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
             auto aliasTool = ctx->toolRegistry->find("agentxx_execute_js");
             XX_TEST_EXPECT_TRUE(aliasTool != nullptr);
             if (aliasTool) {
-                auto outAlias = co_await aliasTool->execute_async(neograph::json{
+                auto outAlias = co_await aliasTool->execute_async(agentxx::util::Json{
                     {"code", "return 'alias_ok';"},
                 });
                 XX_TEST_EXPECT_TRUE(outAlias.find("alias_ok") != std::string::npos);
@@ -390,7 +390,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
                 return neograph::ChatTool{};
             }
 
-            asio::awaitable<std::string> execute_async(const neograph::json&) override {
+            asio::awaitable<std::string> execute_async(const agentxx::util::Json&) override {
                 co_return std::string{};
             }
         };
@@ -476,21 +476,21 @@ asio::awaitable<TestResult> run_plugin_tests() {
             auto tool = ctx->toolRegistry->find("js_hello");
             XX_TEST_EXPECT_TRUE(tool != nullptr);
             if (tool) {
-                auto out = co_await tool->execute_async(neograph::json{
+                auto out = co_await tool->execute_async(agentxx::util::Json{
                     {"sessionId", "t1"     },
                     {"name",      "agentxx"},
                 });
-                auto j   = neograph::json::parse(out);
+                auto j   = agentxx::util::Json::parse(out);
                 XX_TEST_EXPECT_EQ(j["greeting"].get<std::string>(), "Hello, agentxx!");
                 XX_TEST_EXPECT_EQ(j["from"].get<std::string>(), "js plugin");
             }
             auto asyncTool = ctx->toolRegistry->find("js_async_wait");
             XX_TEST_EXPECT_TRUE(asyncTool != nullptr);
             if (asyncTool) {
-                auto out = co_await asyncTool->execute_async(neograph::json{
+                auto out = co_await asyncTool->execute_async(agentxx::util::Json{
                     {"sessionId", "t2"}
                 });
-                auto j   = neograph::json::parse(out);
+                auto j   = agentxx::util::Json::parse(out);
                 XX_TEST_EXPECT_EQ(j["waited"].get<bool>(), true);
                 XX_TEST_EXPECT_EQ(j["session"].get<std::string>(), "t2");
             }
@@ -501,10 +501,10 @@ asio::awaitable<TestResult> run_plugin_tests() {
             auto tool = ctx->toolRegistry->find("js_call_js");
             XX_TEST_EXPECT_TRUE(tool != nullptr);
             if (tool) {
-                auto out = co_await tool->execute_async(neograph::json{
+                auto out = co_await tool->execute_async(agentxx::util::Json{
                     {"name", "inner-x"}
                 });
-                auto j   = neograph::json::parse(out);
+                auto j   = agentxx::util::Json::parse(out);
                 XX_TEST_EXPECT_EQ(j["inner"]["greeting"].get<std::string>(), "Hello, inner-x!");
             }
         }
@@ -514,10 +514,10 @@ asio::awaitable<TestResult> run_plugin_tests() {
             auto tool = ctx->toolRegistry->find("js_call_host");
             XX_TEST_EXPECT_TRUE(tool != nullptr);
             if (tool) {
-                auto out = co_await tool->execute_async(neograph::json{
+                auto out = co_await tool->execute_async(agentxx::util::Json{
                     {"hello", "host"}
                 });
-                auto j   = neograph::json::parse(out);
+                auto j   = agentxx::util::Json::parse(out);
                 XX_TEST_EXPECT_EQ(j["host"]["echo"]["hello"].get<std::string>(), "host");
             }
         }
@@ -590,7 +590,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
                 auto engineJson = ctx->pluginManager->getPluginJson("agentxx_javascript_engine");
                 XX_TEST_EXPECT_FALSE(engineJson.empty());
                 if (!engineJson.empty()) {
-                    auto j = neograph::json::parse(engineJson);
+                    auto j = agentxx::util::Json::parse(engineJson);
                     XX_TEST_EXPECT_EQ(j["name"].get<std::string>(), "agentxx_javascript_engine");
                     bool hasInterp = false;
                     for (const auto& c : j["capabilities"]) {
@@ -603,7 +603,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
                 auto jsJson = ctx->pluginManager->getPluginJson("example_js");
                 XX_TEST_EXPECT_FALSE(jsJson.empty());
                 if (!jsJson.empty()) {
-                    auto j = neograph::json::parse(jsJson);
+                    auto j = agentxx::util::Json::parse(jsJson);
                     XX_TEST_EXPECT_EQ(
                         j["depends"][0].get<std::string>(),
                         "agentxx_javascript_engine"
@@ -619,7 +619,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
                 auto allJson = ctx->pluginManager->listPluginsJson();
                 XX_TEST_EXPECT_FALSE(allJson.empty());
                 if (!allJson.empty()) {
-                    auto arr     = neograph::json::parse(allJson);
+                    auto arr     = agentxx::util::Json::parse(allJson);
                     bool foundJs = false;
                     for (const auto& item : arr) {
                         if (item["name"].get<std::string>() == "example_js"
@@ -672,7 +672,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
                 asio::co_spawn(
                     ex,
                     [&execDone, tool]() -> asio::awaitable<void> {
-                        auto out = co_await tool->execute_async(neograph::json{});
+                        auto out = co_await tool->execute_async(agentxx::util::Json{});
                         (void)out; // 超时返回 "[Plugin tool timeout]"
                         execDone.store(true);
                         co_return;
@@ -833,14 +833,14 @@ asio::awaitable<TestResult> run_plugin_tests() {
             auto tpJson = ctx->pluginManager->getToolPromptJson("example_echo");
             XX_TEST_EXPECT_FALSE(tpJson.empty());
             if (!tpJson.empty()) {
-                auto j = neograph::json::parse(tpJson);
+                auto j = agentxx::util::Json::parse(tpJson);
                 XX_TEST_EXPECT_TRUE(j["depict"].is_string());
             }
             // get_prompt 完整提示词含该条目
             auto fullJson = ctx->pluginManager->getPromptJson();
             XX_TEST_EXPECT_FALSE(fullJson.empty());
             if (!fullJson.empty()) {
-                auto j = neograph::json::parse(fullJson);
+                auto j = agentxx::util::Json::parse(fullJson);
                 XX_TEST_EXPECT_TRUE(
                     j.contains("toolPrompt") && j["toolPrompt"].is_object()
                     && j["toolPrompt"].contains("example_echo")
@@ -888,7 +888,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
         agentxx::agent::PluginConfig              pc;
         pc.path    = path;
         pc.enabled = true;
-        pc.args    = neograph::json{
+        pc.args    = agentxx::util::Json{
                {"custom_key", "custom_value"}
         };
 
@@ -910,7 +910,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
             auto json = ctx->pluginManager->getPluginArgsJson(inst29.get());
             XX_TEST_EXPECT_FALSE(json.empty());
             if (!json.empty()) {
-                auto j = neograph::json::parse(json);
+                auto j = agentxx::util::Json::parse(json);
                 XX_TEST_EXPECT_EQ(j["custom_key"].get<std::string>(), "custom_value");
             }
             co_await ctx->pluginManager->unloadAsync("example_plugin");
@@ -1015,7 +1015,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
             auto asyncTool = ctx->toolRegistry->find("async_notify_tool");
             XX_TEST_EXPECT_TRUE(asyncTool != nullptr);
             if (asyncTool) {
-                auto out = co_await asyncTool->execute_async(neograph::json{
+                auto out = co_await asyncTool->execute_async(agentxx::util::Json{
                     {"sessionId", "t31"}
                 });
                 XX_TEST_EXPECT_EQ(out, "{}");
@@ -1085,7 +1085,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
 
             bool cancelledThrown = false;
             try {
-                auto out = co_await cancelTool->execute_async(neograph::json{
+                auto out = co_await cancelTool->execute_async(agentxx::util::Json{
                     {"sessionId", "t_plugin_cancel"}
                 });
                 (void)out;
@@ -1122,7 +1122,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
             if (throwTool) {
                 bool failedAsExpected = false;
                 try {
-                    auto out = co_await throwTool->execute_async(neograph::json{
+                    auto out = co_await throwTool->execute_async(agentxx::util::Json{
                         {"sessionId", "t31"}
                     });
                     (void)out;
@@ -1158,7 +1158,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
             if (nullTool) {
                 bool failedAsExpected = false;
                 try {
-                    auto out = co_await nullTool->execute_async(neograph::json{
+                    auto out = co_await nullTool->execute_async(agentxx::util::Json{
                         {"sessionId", "t31"}
                     });
                     (void)out;
@@ -1190,7 +1190,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
             XX_TEST_EXPECT_TRUE(tool != nullptr);
             if (tool) {
                 try {
-                    auto out = co_await tool->execute_async(neograph::json{});
+                    auto out = co_await tool->execute_async(agentxx::util::Json{});
                     XX_TEST_EXPECT_TRUE(false);
                 } catch (const std::exception& e) {
                     XX_TEST_EXPECT_TRUE(
@@ -1392,7 +1392,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
             XX_TEST_EXPECT_TRUE(tool != nullptr);
             if (tool) {
                 auto t0  = std::chrono::steady_clock::now();
-                auto out = co_await tool->execute_async(neograph::json{
+                auto out = co_await tool->execute_async(agentxx::util::Json{
                     {"durationMs", 50}
                 });
                 auto ms  = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -1948,11 +1948,11 @@ asio::awaitable<TestResult> run_plugin_tests() {
                 asio::co_spawn(
                     ex,
                     [&tool, &completed, i]() -> asio::awaitable<void> {
-                        auto out = co_await tool->execute_async(neograph::json{
+                        auto out = co_await tool->execute_async(agentxx::util::Json{
                             {"sessionId", fmt::format("conc_{}", i)},
                             {"x", i},
                         });
-                        auto j   = neograph::json::parse(out);
+                        auto j   = agentxx::util::Json::parse(out);
                         if (j["via_call_tool"]["echo"]["x"].get<int>() == i) {
                             completed.fetch_add(1, std::memory_order_relaxed);
                         }
@@ -2002,7 +2002,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
                 auto tool = contexts[i]->toolRegistry->find("agentxx_get_system_core_info");
                 XX_TEST_EXPECT_TRUE(tool != nullptr);
                 if (tool) {
-                    auto out = co_await tool->execute_async(neograph::json{});
+                    auto out = co_await tool->execute_async(agentxx::util::Json{});
                     XX_TEST_EXPECT_TRUE(out.find("CPU Usage:") != std::string::npos);
                 }
             }

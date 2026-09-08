@@ -283,7 +283,7 @@ size_t estimateMarkdownLines(std::string_view s, int width) {
 std::string formatToolArgs(std::string_view argsText) {
     return agentxx::util::catchError<std::string>(
         [&]() -> std::string {
-            auto j = neograph::json::parse(argsText);
+            auto j = agentxx::util::Json::parse(argsText);
             if (!j.is_object()) {
                 return std::string{argsText};
             }
@@ -1775,7 +1775,7 @@ void MessageListComponent::appendEditToolBody(const TUIMessage& msg, Elements& l
     std::string path, oldStr, newStr;
     agentxx::util::catchError<bool>(
         [&]() -> bool {
-            auto args = neograph::json::parse(msg.text);
+            auto args = agentxx::util::Json::parse(msg.text);
             path      = args.value("path", std::string{});
             oldStr    = args.value("old_str", std::string{});
             newStr    = args.value("new_str", std::string{});
@@ -1819,7 +1819,7 @@ void MessageListComponent::appendDecorToolBody(
 }
 
 void MessageListComponent::appendDecorItems(
-    const neograph::json& items,
+    const agentxx::util::Json& items,
     const std::string&    plugin,
     const std::string&    ownerId,
     Elements&             lines,

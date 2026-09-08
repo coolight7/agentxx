@@ -1,4 +1,5 @@
 #include "test_openai_provider.h"
+#include "agentxx/util/neograph_json_bridge.h"
 #include "agentxx/agent/model_registry.h"
 #include "agentxx/protocol/openai_provider.h"
 #include "agentxx/util/http_client.h"
@@ -186,13 +187,13 @@ void test_config_defaults() {
     agentxx::agent::ModelConfig mc;
     mc.name        = "test";
     mc.apiKey      = "sk-defaults-test";
-    mc.extraConfig = neograph::json::parse(R"({"top_p":0.9,"frequency_penalty":0.2,"seed":42})");
+    mc.extraConfig = agentxx::util::Json::parse(R"({"top_p":0.9,"frequency_penalty":0.2,"seed":42})");
     auto p         = server::OpenAIProvider::create(mc);
     XX_TEST_EXPECT_TRUE(p != nullptr);
 }
 
 void test_extra_body_with_custom_params() {
-    auto extra                 = neograph::json::object();
+    auto extra                 = agentxx::util::Json::object();
     extra["top_p"]             = 0.95;
     extra["frequency_penalty"] = 0.5;
     extra["presence_penalty"]  = 0.3;
@@ -200,7 +201,7 @@ void test_extra_body_with_custom_params() {
     extra["response_format"]   = {
         {"type", "json_object"}
     };
-    extra["stop"] = neograph::json::parse(R"(["\n\n","STOP"])");
+    extra["stop"] = agentxx::util::Json::parse(R"(["\n\n","STOP"])");
 
     agentxx::agent::ModelConfig mc;
     mc.name        = "test";
@@ -283,7 +284,7 @@ public:
     std::vector<std::string> sseChunks;
 
     // Optional override: when non-null, used for the next non-streaming response
-    std::optional<neograph::json> customResponse;
+    std::optional<agentxx::util::Json> customResponse;
 
     // MockMode::Raw 使用的原始状态码与 body
     int         rawStatus = 200;
@@ -302,15 +303,15 @@ public:
         return "data: [DONE]\n\n";
     }
 
-    neograph::json
+    agentxx::util::Json
         makeCompletionResponse(std::string_view content, int prompt = 10, int completion = 5)
             const {
-        neograph::json resp;
+        agentxx::util::Json resp;
         resp["id"]                            = "chatcmpl-mock";
         resp["object"]                        = "chat.completion";
         resp["created"]                       = 1700000000;
         resp["model"]                         = "mock-model";
-        resp["choices"]                       = neograph::json::array({neograph::json::object()});
+        resp["choices"]                       = agentxx::util::Json::array({agentxx::util::Json::object()});
         resp["choices"][0]["index"]           = 0;
         resp["choices"][0]["message"]["role"] = "assistant";
         resp["choices"][0]["message"]["content"] = std::string(content);
@@ -321,7 +322,7 @@ public:
         return resp;
     }
 
-    neograph::json makeCompletionResponse(
+    agentxx::util::Json makeCompletionResponse(
         std::string_view content,
         std::string_view reasoning,
         int              prompt     = 10,
@@ -332,27 +333,27 @@ public:
         return resp;
     }
 
-    neograph::json makeToolCallResponse() const {
-        auto tcFunc         = neograph::json::object();
+    agentxx::util::Json makeToolCallResponse() const {
+        auto tcFunc         = agentxx::util::Json::object();
         tcFunc["name"]      = "get_weather";
         tcFunc["arguments"] = R"({"location":"Tokyo"})";
-        auto tc             = neograph::json::object();
+        auto tc             = agentxx::util::Json::object();
         tc["id"]            = "call_abc123";
         tc["type"]          = "function";
         tc["function"]      = tcFunc;
-        auto tcArr          = neograph::json::array();
+        auto tcArr          = agentxx::util::Json::array();
         tcArr.push_back(tc);
-        auto msg                = neograph::json::object();
+        auto msg                = agentxx::util::Json::object();
         msg["role"]             = "assistant";
-        msg["content"]          = neograph::json(nullptr);
+        msg["content"]          = agentxx::util::Json(nullptr);
         msg["tool_calls"]       = tcArr;
-        auto choice             = neograph::json::object();
+        auto choice             = agentxx::util::Json::object();
         choice["index"]         = 0;
         choice["finish_reason"] = "tool_calls";
         choice["message"]       = msg;
-        auto choices            = neograph::json::array();
+        auto choices            = agentxx::util::Json::array();
         choices.push_back(choice);
-        neograph::json resp;
+        agentxx::util::Json resp;
         resp["id"]      = "chatcmpl-tool";
         resp["object"]  = "chat.completion";
         resp["created"] = 1700000001;
@@ -365,24 +366,24 @@ public:
     // OpenAI Responses API (/responses) response builders
     // ------------------------------------------------------------------
 
-    neograph::json
+    agentxx::util::Json
         makeResponsesResponse(std::string_view content, int prompt = 10, int completion = 5) const {
-        auto textPart           = neograph::json::object();
+        auto textPart           = agentxx::util::Json::object();
         textPart["type"]        = "output_text";
         textPart["text"]        = std::string(content);
-        textPart["annotations"] = neograph::json::array();
-        auto contentArr         = neograph::json::array();
+        textPart["annotations"] = agentxx::util::Json::array();
+        auto contentArr         = agentxx::util::Json::array();
         contentArr.push_back(textPart);
 
-        auto msgItem       = neograph::json::object();
+        auto msgItem       = agentxx::util::Json::object();
         msgItem["type"]    = "message";
         msgItem["role"]    = "assistant";
         msgItem["content"] = contentArr;
 
-        auto output = neograph::json::array();
+        auto output = agentxx::util::Json::array();
         output.push_back(msgItem);
 
-        neograph::json resp;
+        agentxx::util::Json resp;
         resp["id"]     = "resp_mock";
         resp["object"] = "response";
         resp["status"] = "completed";
@@ -395,8 +396,8 @@ public:
         return resp;
     }
 
-    neograph::json makeResponsesToolCallResponse() const {
-        auto fcItem         = neograph::json::object();
+    agentxx::util::Json makeResponsesToolCallResponse() const {
+        auto fcItem         = agentxx::util::Json::object();
         fcItem["type"]      = "function_call";
         fcItem["id"]        = "fc_1";
         fcItem["call_id"]   = "call_abc123";
@@ -404,10 +405,10 @@ public:
         fcItem["arguments"] = R"({"location":"Tokyo"})";
         fcItem["status"]    = "completed";
 
-        auto output = neograph::json::array();
+        auto output = agentxx::util::Json::array();
         output.push_back(fcItem);
 
-        neograph::json resp;
+        agentxx::util::Json resp;
         resp["id"]     = "resp_tool";
         resp["object"] = "response";
         resp["status"] = "completed";
@@ -642,7 +643,7 @@ std::unique_ptr<MockOpenAIServer> startMockServer(uint16_t& outPort) {
 
 void test_parse_response_message_with_reasoning() {
     // Simulate an OpenAI non-streaming response choice with reasoning_content
-    auto choice = neograph::json::parse(
+    auto choice = agentxx::util::parseNeographJson(
         R"({
         "index": 0,
         "message": {
@@ -662,7 +663,7 @@ void test_parse_response_message_with_reasoning() {
 
 /// Vercel AI Gateway / 部分网关把推理内容放在 message.reasoning 字段
 void test_parse_response_message_with_reasoning_field() {
-    auto choice = neograph::json::parse(
+    auto choice = agentxx::util::parseNeographJson(
         R"({
         "index": 0,
         "message": {
@@ -682,7 +683,7 @@ void test_parse_response_message_with_reasoning_field() {
 
 /// message.reasoning 为 null 时不应抛异常, 保持空
 void test_parse_response_message_null_reasoning_field() {
-    auto choice = neograph::json::parse(
+    auto choice = agentxx::util::parseNeographJson(
         R"({
         "index": 0,
         "message": {
@@ -701,7 +702,7 @@ void test_parse_response_message_null_reasoning_field() {
 
 void test_parse_response_message_with_thinking_field() {
     // Some providers (e.g. Anthropic-style) use "thinking" instead
-    auto choice = neograph::json::parse(
+    auto choice = agentxx::util::parseNeographJson(
         R"({
         "index": 0,
         "message": {
@@ -720,7 +721,7 @@ void test_parse_response_message_with_thinking_field() {
 }
 
 void test_parse_response_message_without_reasoning() {
-    auto choice = neograph::json::parse(
+    auto choice = agentxx::util::parseNeographJson(
         R"({
         "index": 0,
         "message": {
@@ -738,7 +739,7 @@ void test_parse_response_message_without_reasoning() {
 
 void test_parse_response_message_null_reasoning() {
     // Some providers return "reasoning_content": null
-    auto choice = neograph::json::parse(
+    auto choice = agentxx::util::parseNeographJson(
         R"({
         "index": 0,
         "message": {
@@ -757,7 +758,7 @@ void test_parse_response_message_null_reasoning() {
 
 void test_parse_response_message_reasoning_preferred_over_thinking() {
     // When both are present, reasoning_content should win
-    auto choice = neograph::json::parse(
+    auto choice = agentxx::util::parseNeographJson(
         R"({
         "index": 0,
         "message": {
@@ -808,7 +809,7 @@ void test_messages_to_json_reasoning_roundtrip() {
     auto jsonStr = arr[0].dump();
 
     // Now simulate what a provider would receive and how it would be parsed
-    auto choice = neograph::json::parse(
+    auto choice = agentxx::util::parseNeographJson(
         R"({"index":0,"message":)" + jsonStr + R"(,"finish_reason":"stop"})"
     );
     auto parsed = neograph::parse_response_message(choice);
@@ -1162,7 +1163,7 @@ void test_extract_tool_calls_xml_with_args() {
     XX_TEST_EXPECT_EQ(calls.size(), (size_t)1);
     if (calls.size() == 1) {
         XX_TEST_EXPECT_EQ(calls[0].name, "get_weather");
-        auto args = neograph::json::parse(calls[0].arguments);
+        auto args = agentxx::util::parseNeographJson(calls[0].arguments);
         XX_TEST_EXPECT_EQ(args["location"].get<std::string>(), "Tokyo");
         XX_TEST_EXPECT_EQ(args["unit"].get<std::string>(), "c");
     }
@@ -1177,7 +1178,7 @@ void test_extract_tool_calls_xml_bare_function() {
     XX_TEST_EXPECT_EQ(calls.size(), (size_t)1);
     if (calls.size() == 1) {
         XX_TEST_EXPECT_EQ(calls[0].name, "musicxx_GetMediaInfo");
-        auto args = neograph::json::parse(calls[0].arguments);
+        auto args = agentxx::util::parseNeographJson(calls[0].arguments);
         XX_TEST_EXPECT_EQ(args["id"].get<int>(), 42);
     }
     XX_TEST_EXPECT_EQ(content, "请稍等");
@@ -1217,7 +1218,7 @@ void test_extract_tool_calls_xml_with_json_block() {
     XX_TEST_EXPECT_EQ(calls.size(), (size_t)1);
     if (calls.size() == 1) {
         XX_TEST_EXPECT_EQ(calls[0].name, "get_weather");
-        auto args = neograph::json::parse(calls[0].arguments);
+        auto args = agentxx::util::parseNeographJson(calls[0].arguments);
         XX_TEST_EXPECT_EQ(args["city"].get<std::string>(), "Beijing");
     }
     XX_TEST_EXPECT_TRUE(content.empty());
@@ -1241,7 +1242,7 @@ void test_extract_tool_calls_xml_in_thinking() {
     XX_TEST_EXPECT_EQ(calls.size(), (size_t)1);
     if (calls.size() == 1) {
         XX_TEST_EXPECT_EQ(calls[0].name, "musicxx_GetMediaInfo");
-        auto args = neograph::json::parse(calls[0].arguments);
+        auto args = agentxx::util::parseNeographJson(calls[0].arguments);
         XX_TEST_EXPECT_EQ(args["song"].get<std::string>(), "test");
     }
     XX_TEST_EXPECT_EQ(content, "先获取歌曲信息。");
@@ -1307,7 +1308,7 @@ asio::awaitable<void> test_non_streaming_completion(MockOpenAIServer& mock, uint
         XX_TEST_EXPECT_TRUE(result.usage.total_tokens > 0);
 
         // Verify the request body contains expected fields
-        auto sent = neograph::json::parse(mock.lastRequestBody);
+        auto sent = agentxx::util::Json::parse(mock.lastRequestBody);
         XX_TEST_EXPECT_EQ(sent["model"].get<std::string>(), "gpt-4o-mini");
         XX_TEST_EXPECT_TRUE(sent.contains("messages"));
         XX_TEST_EXPECT_EQ(sent["messages"][0]["role"].get<std::string>(), "user");
@@ -1333,7 +1334,7 @@ asio::awaitable<void> test_non_streaming_tool_call(MockOpenAIServer& mock, uint1
         neograph::ChatTool{
                            .name        = "get_weather",
                            .description = "Get weather for a location",
-                           .parameters  = neograph::json::parse(
+                           .parameters  = agentxx::util::parseNeographJson(
                 R"({"type":"object","properties":{"location":{"type":"string"}}})"
             )
         }
@@ -1367,26 +1368,26 @@ asio::awaitable<void>
     mock.mode           = MockMode::Normal;
 
     // 构造一个没有 "id" 字段的 tool_call 响应
-    auto tcFunc         = neograph::json::object();
+    auto tcFunc         = agentxx::util::Json::object();
     tcFunc["name"]      = "get_weather";
     tcFunc["arguments"] = R"({"location":"Beijing"})";
-    auto tc             = neograph::json::object();
+    auto tc             = agentxx::util::Json::object();
     // 注意: 不设置 tc["id"]
     tc["type"]     = "function";
     tc["function"] = tcFunc;
-    auto tcArr     = neograph::json::array();
+    auto tcArr     = agentxx::util::Json::array();
     tcArr.push_back(tc);
-    auto msg                = neograph::json::object();
+    auto msg                = agentxx::util::Json::object();
     msg["role"]             = "assistant";
-    msg["content"]          = neograph::json(nullptr);
+    msg["content"]          = agentxx::util::Json(nullptr);
     msg["tool_calls"]       = tcArr;
-    auto choice             = neograph::json::object();
+    auto choice             = agentxx::util::Json::object();
     choice["index"]         = 0;
     choice["finish_reason"] = "tool_calls";
     choice["message"]       = msg;
-    auto choices            = neograph::json::array();
+    auto choices            = agentxx::util::Json::array();
     choices.push_back(choice);
-    neograph::json resp;
+    agentxx::util::Json resp;
     resp["id"]      = "chatcmpl-no-id";
     resp["object"]  = "chat.completion";
     resp["created"] = 1700000002;
@@ -1406,7 +1407,7 @@ asio::awaitable<void>
         neograph::ChatTool{
                            .name        = "get_weather",
                            .description = "Get weather for a location",
-                           .parameters  = neograph::json::parse(
+                           .parameters  = agentxx::util::parseNeographJson(
                 R"({"type":"object","properties":{"location":{"type":"string"}}})"
             )
         }
@@ -1466,7 +1467,7 @@ asio::awaitable<void> test_streaming_tool_call_missing_id(MockOpenAIServer& mock
         neograph::ChatTool{
                            .name        = "get_weather",
                            .description = "Get weather for a location",
-                           .parameters  = neograph::json::parse(
+                           .parameters  = agentxx::util::parseNeographJson(
                 R"({"type":"object","properties":{"location":{"type":"string"}}})"
             )
         }
@@ -1560,7 +1561,7 @@ asio::awaitable<void> test_extra_body_passthrough(MockOpenAIServer& mock, uint16
     std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
     mock.mode           = MockMode::Normal;
 
-    auto extra     = neograph::json::object();
+    auto extra     = agentxx::util::Json::object();
     extra["top_p"] = 0.9;
     extra["seed"]  = 12345;
 
@@ -1579,7 +1580,7 @@ asio::awaitable<void> test_extra_body_passthrough(MockOpenAIServer& mock, uint16
         XX_TEST_EXPECT_EQ(result.message.role, "assistant");
 
         // Verify request body includes extra_body fields
-        auto sent = neograph::json::parse(mock.lastRequestBody);
+        auto sent = agentxx::util::Json::parse(mock.lastRequestBody);
         XX_TEST_EXPECT_TRUE(sent.contains("top_p"));
         XX_TEST_EXPECT_EQ(sent["top_p"].get<double>(), 0.9);
         XX_TEST_EXPECT_TRUE(sent.contains("seed"));
@@ -1606,7 +1607,7 @@ asio::awaitable<void> test_per_call_extra_fields(MockOpenAIServer& mock, uint16_
 
     try {
         co_await provider->invoke(params, nullptr);
-        auto sent = neograph::json::parse(mock.lastRequestBody);
+        auto sent = agentxx::util::Json::parse(mock.lastRequestBody);
         // per-call extra_fields should override the provider defaults
         XX_TEST_EXPECT_TRUE(sent.contains("temperature"));
         XX_TEST_EXPECT_EQ(sent["temperature"].get<double>(), 0.2);
@@ -2280,7 +2281,7 @@ asio::awaitable<void>
 
     try {
         co_await provider->invoke(params, nullptr);
-        auto sent = neograph::json::parse(mock.lastRequestBody);
+        auto sent = agentxx::util::Json::parse(mock.lastRequestBody);
         XX_TEST_EXPECT_FALSE(sent["messages"][0].contains("reasoning_content"));
         XX_TEST_EXPECT_EQ(sent["messages"][0]["content"].get<std::string>(), "Previous answer");
     } catch (const std::exception& e) {
@@ -2309,7 +2310,7 @@ asio::awaitable<void>
 
     try {
         co_await provider->invoke(params, nullptr);
-        auto sent = neograph::json::parse(mock.lastRequestBody);
+        auto sent = agentxx::util::Json::parse(mock.lastRequestBody);
         XX_TEST_EXPECT_TRUE(sent["messages"][0].contains("reasoning_content"));
         XX_TEST_EXPECT_EQ(
             sent["messages"][0]["reasoning_content"].get<std::string>(),
@@ -2337,7 +2338,7 @@ asio::awaitable<void>
 
     try {
         co_await provider->invoke(params, nullptr);
-        auto sent = neograph::json::parse(mock.lastRequestBody);
+        auto sent = agentxx::util::Json::parse(mock.lastRequestBody);
         // No reasoning_content at all — sendThinking flag should not inject it
         XX_TEST_EXPECT_FALSE(sent["messages"][0].contains("reasoning_content"));
         XX_TEST_EXPECT_EQ(sent["messages"][0]["content"].get<std::string>(), "Hello");
@@ -3065,7 +3066,7 @@ asio::awaitable<void> test_max_tokens_sent(MockOpenAIServer& mock, uint16_t port
 
     try {
         co_await provider->invoke(params, nullptr);
-        auto sent = neograph::json::parse(mock.lastRequestBody);
+        auto sent = agentxx::util::Json::parse(mock.lastRequestBody);
         XX_TEST_EXPECT_TRUE(sent.contains("max_tokens"));
         XX_TEST_EXPECT_EQ(sent["max_tokens"].get<int>(), 1024);
     } catch (const std::exception& e) {
@@ -3090,7 +3091,7 @@ asio::awaitable<void> test_max_completion_tokens_sent(MockOpenAIServer& mock, ui
 
     try {
         co_await provider->invoke(params, nullptr);
-        auto sent = neograph::json::parse(mock.lastRequestBody);
+        auto sent = agentxx::util::Json::parse(mock.lastRequestBody);
         XX_TEST_EXPECT_TRUE(sent.contains("max_completion_tokens"));
         XX_TEST_EXPECT_EQ(sent["max_completion_tokens"].get<int>(), 512);
         XX_TEST_EXPECT_FALSE(sent.contains("max_tokens"));
@@ -3150,7 +3151,7 @@ asio::awaitable<void> test_custom_api_path(MockOpenAIServer& mock, uint16_t port
     try {
         co_await provider->invoke(params, nullptr);
         // 请求到达 /v1/chat/completions 路由则 lastRequestBody 会被填充
-        auto sent = neograph::json::parse(mock.lastRequestBody);
+        auto sent = agentxx::util::Json::parse(mock.lastRequestBody);
         XX_TEST_EXPECT_EQ(sent["model"].get<std::string>(), "gpt-4o-mini");
     } catch (const std::exception& e) {
         XX_TEST_FAILED++;
@@ -3174,7 +3175,7 @@ asio::awaitable<void> test_send_temperature_disabled(MockOpenAIServer& mock, uin
 
     try {
         co_await provider->invoke(params, nullptr);
-        auto sent = neograph::json::parse(mock.lastRequestBody);
+        auto sent = agentxx::util::Json::parse(mock.lastRequestBody);
         XX_TEST_EXPECT_FALSE(sent.contains("temperature"));
     } catch (const std::exception& e) {
         XX_TEST_FAILED++;
@@ -3225,7 +3226,7 @@ asio::awaitable<void> test_multimodal_body_chat_completions(MockOpenAIServer& mo
 
     try {
         co_await provider->invoke(params, nullptr);
-        auto sent = neograph::json::parse(mock.lastRequestBody);
+        auto sent = agentxx::util::Json::parse(mock.lastRequestBody);
         XX_TEST_EXPECT_TRUE(sent["messages"].is_array());
         const auto& content = sent["messages"][0]["content"];
         XX_TEST_EXPECT_TRUE(content.is_array());
@@ -3272,7 +3273,7 @@ asio::awaitable<void> test_multimodal_body_responses(MockOpenAIServer& mock, uin
 
     try {
         co_await provider->invoke(params, nullptr);
-        auto sent = neograph::json::parse(mock.lastRequestBody);
+        auto sent = agentxx::util::Json::parse(mock.lastRequestBody);
         XX_TEST_EXPECT_TRUE(sent["input"].is_array());
 
         const auto& item = sent["input"][0];
@@ -3334,7 +3335,7 @@ asio::awaitable<void> test_responses_non_streaming(MockOpenAIServer& mock, uint1
         XX_TEST_EXPECT_TRUE(result.usage.total_tokens > 0);
         XX_TEST_EXPECT_EQ(result.stop_reason, "end_turn");
 
-        auto sent = neograph::json::parse(mock.lastRequestBody);
+        auto sent = agentxx::util::Json::parse(mock.lastRequestBody);
         XX_TEST_EXPECT_EQ(sent["model"].get<std::string>(), "gpt-5-codex");
         // codex 默认: store=false; reasoning 不再硬编码, 由 extraConfig/extra_fields 控制
         XX_TEST_EXPECT_TRUE(sent.contains("store"));
@@ -3359,7 +3360,7 @@ asio::awaitable<void> test_responses_reasoning_configurable(MockOpenAIServer& mo
     // 1) config 级: extraConfig.reasoning
     {
         auto mc        = makeCodexCfg(baseUrl);
-        mc.extraConfig = neograph::json::parse(R"({"reasoning":{"effort":"medium"}})");
+        mc.extraConfig = agentxx::util::Json::parse(R"({"reasoning":{"effort":"medium"}})");
         auto                       provider = server::OpenAIProvider::create(mc);
         neograph::CompletionParams params;
         params.model    = "gpt-5-codex";
@@ -3368,7 +3369,7 @@ asio::awaitable<void> test_responses_reasoning_configurable(MockOpenAIServer& mo
         };
         try {
             co_await provider->invoke(params, nullptr);
-            auto sent = neograph::json::parse(mock.lastRequestBody);
+            auto sent = agentxx::util::Json::parse(mock.lastRequestBody);
             XX_TEST_EXPECT_TRUE(sent.contains("reasoning"));
             XX_TEST_EXPECT_EQ(sent["reasoning"]["effort"].get<std::string>(), "medium");
         } catch (const std::exception& e) {
@@ -3380,17 +3381,17 @@ asio::awaitable<void> test_responses_reasoning_configurable(MockOpenAIServer& mo
     // 2) per-call 级: params.extra_fields.reasoning 覆盖 config 级
     {
         auto mc        = makeCodexCfg(baseUrl);
-        mc.extraConfig = neograph::json::parse(R"({"reasoning":{"effort":"medium"}})");
+        mc.extraConfig = agentxx::util::Json::parse(R"({"reasoning":{"effort":"medium"}})");
         auto                       provider = server::OpenAIProvider::create(mc);
         neograph::CompletionParams params;
         params.model    = "gpt-5-codex";
         params.messages = {
             neograph::ChatMessage{.role = "user", .content = "hi"}
         };
-        params.extra_fields = neograph::json::parse(R"({"reasoning":{"effort":"low"}})");
+        params.extra_fields = agentxx::util::parseNeographJson(R"({"reasoning":{"effort":"low"}})");
         try {
             co_await provider->invoke(params, nullptr);
-            auto sent = neograph::json::parse(mock.lastRequestBody);
+            auto sent = agentxx::util::Json::parse(mock.lastRequestBody);
             XX_TEST_EXPECT_TRUE(sent.contains("reasoning"));
             XX_TEST_EXPECT_EQ(sent["reasoning"]["effort"].get<std::string>(), "low");
         } catch (const std::exception& e) {
@@ -3409,10 +3410,10 @@ asio::awaitable<void> test_responses_reasoning_configurable(MockOpenAIServer& mo
             neograph::ChatMessage{.role = "user", .content = "hi"}
         };
         params.extra_fields
-            = neograph::json::parse(R"({"reasoning":{"effort":"high","summary":"concise"}})");
+            = agentxx::util::parseNeographJson(R"({"reasoning":{"effort":"high","summary":"concise"}})");
         try {
             co_await provider->invoke(params, nullptr);
-            auto sent = neograph::json::parse(mock.lastRequestBody);
+            auto sent = agentxx::util::Json::parse(mock.lastRequestBody);
             XX_TEST_EXPECT_TRUE(sent.contains("reasoning"));
             XX_TEST_EXPECT_EQ(sent["reasoning"]["effort"].get<std::string>(), "high");
             XX_TEST_EXPECT_EQ(sent["reasoning"]["summary"].get<std::string>(), "concise");
@@ -3444,7 +3445,7 @@ asio::awaitable<void> test_responses_send_thinking(MockOpenAIServer& mock, uint1
 
     try {
         co_await provider->invoke(params, nullptr);
-        auto sent = neograph::json::parse(mock.lastRequestBody);
+        auto sent = agentxx::util::Json::parse(mock.lastRequestBody);
 
         // 请求 reasoning 摘要 (官方 include 值: reasoning.summary_text)
         XX_TEST_EXPECT_TRUE(sent.contains("include"));
@@ -3484,31 +3485,31 @@ asio::awaitable<void>
 
     // 1) 测试非流式捕获 encrypted_content 与 reasoning_tokens
     {
-        mock.customResponse = neograph::json{
+        mock.customResponse = agentxx::util::Json{
             {"id", "resp_test_enc"},
             {"object", "response"},
             {"created_at", 1787260000},
             {"status", "completed"},
             {"model", "gemini-3.7-flash-high"},
             {"output",
-             neograph::json::array(
+             agentxx::util::Json::array(
                  {{{"id", "rs_test_1"},
                    {"type", "reasoning"},
                    {"encrypted_content", kMockEncrypted},
-                   {"summary", neograph::json::array()}},
+                   {"summary", agentxx::util::Json::array()}},
                   {{"id", "msg_test_1"},
                    {"type", "message"},
                    {"status", "completed"},
                    {"content",
-                    neograph::json::array({{{"type", "output_text"}, {"text", "回答内容"}}})},
+                    agentxx::util::Json::array({{{"type", "output_text"}, {"text", "回答内容"}}})},
                    {"role", "assistant"}}}
              )},
             {
-             "usage", neograph::json{
+             "usage", agentxx::util::Json{
                     {"input_tokens", 10},
                     {"output_tokens", 20},
                     {"total_tokens", 30},
-                    {"output_tokens_details", neograph::json{{"reasoning_tokens", 854}}}
+                    {"output_tokens_details", agentxx::util::Json{{"reasoning_tokens", 854}}}
                 }, }
         };
 
@@ -3550,7 +3551,7 @@ asio::awaitable<void>
             };
 
             co_await provider->invoke(params2, nullptr);
-            auto sent = neograph::json::parse(mock.lastRequestBody);
+            auto sent = agentxx::util::Json::parse(mock.lastRequestBody);
             XX_TEST_EXPECT_TRUE(sent.contains("input"));
             const auto& input          = sent["input"];
             int         reasoningIndex = -1;
@@ -3646,24 +3647,24 @@ asio::awaitable<void> test_responses_reasoning_item_missing_summary_normalized(
     mock.mode           = MockMode::ResponsesNormal;
 
     // 上游返回的 reasoning item 不带 summary 字段 (muse / ConsoleGo 网关行为)
-    mock.customResponse = neograph::json{
+    mock.customResponse = agentxx::util::Json{
         {"id", "resp_muse_no_summary"},
         {"object", "response"},
         {"created_at", 1787260000},
         {"status", "completed"},
         {"model", "muse-spark-1.2-contributor"},
         {"output",
-         neograph::json::array(
+         agentxx::util::Json::array(
              {{{"id", "rs_muse_1"}, {"type", "reasoning"}, {"encrypted_content", "enc_muse_data"}},
               {{"id", "msg_muse_1"},
                {"type", "message"},
                {"status", "completed"},
-               {"content", neograph::json::array({{{"type", "output_text"}, {"text", "回答内容"}}})
+               {"content", agentxx::util::Json::array({{{"type", "output_text"}, {"text", "回答内容"}}})
                },
                {"role", "assistant"}}}
          )},
         {
-         "usage", neograph::json{{"input_tokens", 10}, {"output_tokens", 20}, {"total_tokens", 30}},
+         "usage", agentxx::util::Json{{"input_tokens", 10}, {"output_tokens", 20}, {"total_tokens", 30}},
          }
     };
 
@@ -3701,7 +3702,7 @@ asio::awaitable<void> test_responses_reasoning_item_missing_summary_normalized(
         };
 
         co_await provider->invoke(params2, nullptr);
-        auto sent = neograph::json::parse(mock.lastRequestBody);
+        auto sent = agentxx::util::Json::parse(mock.lastRequestBody);
         XX_TEST_EXPECT_TRUE(sent.contains("input"));
         bool foundNormalized = false;
         for (const auto& item : sent["input"]) {
@@ -3889,7 +3890,7 @@ asio::awaitable<void>
 
         try {
             co_await provider->invoke(params, nullptr);
-            auto sent = neograph::json::parse(mock.lastRequestBody);
+            auto sent = agentxx::util::Json::parse(mock.lastRequestBody);
             XX_TEST_EXPECT_FALSE(sent.contains("include"));
             const auto& input = sent["input"];
             XX_TEST_EXPECT_TRUE(input.is_array());
@@ -3909,7 +3910,7 @@ asio::awaitable<void>
     {
         auto mc         = makeCodexCfg(baseUrl);
         mc.sendThinking = true;
-        mc.extraConfig  = neograph::json::parse(R"({"include":["reasoning.encrypted_content"]})");
+        mc.extraConfig  = agentxx::util::Json::parse(R"({"include":["reasoning.encrypted_content"]})");
         auto                       provider = server::OpenAIProvider::create(mc);
         neograph::CompletionParams params;
         params.model    = "gpt-5-codex";
@@ -3919,7 +3920,7 @@ asio::awaitable<void>
 
         try {
             co_await provider->invoke(params, nullptr);
-            auto sent = neograph::json::parse(mock.lastRequestBody);
+            auto sent = agentxx::util::Json::parse(mock.lastRequestBody);
             XX_TEST_EXPECT_TRUE(sent.contains("include"));
             XX_TEST_EXPECT_TRUE(sent["include"].is_array());
             XX_TEST_EXPECT_EQ(sent["include"].size(), (size_t)1);
@@ -3947,7 +3948,7 @@ asio::awaitable<void> test_responses_no_send_thinking(MockOpenAIServer& mock, ui
 
     try {
         co_await provider->invoke(params, nullptr);
-        auto sent = neograph::json::parse(mock.lastRequestBody);
+        auto sent = agentxx::util::Json::parse(mock.lastRequestBody);
         XX_TEST_EXPECT_FALSE(sent.contains("include"));
         const auto& input = sent["input"];
         XX_TEST_EXPECT_TRUE(input.is_array());
@@ -3978,7 +3979,7 @@ asio::awaitable<void>
         neograph::ChatTool{
                            .name        = "get_weather",
                            .description = "Get weather for a location",
-                           .parameters  = neograph::json::parse(
+                           .parameters  = agentxx::util::parseNeographJson(
                 R"({"type":"object","properties":{"location":{"type":"string"}}})"
             )
         }
@@ -4048,7 +4049,7 @@ asio::awaitable<void> test_responses_streaming_tool_call(MockOpenAIServer& mock,
         neograph::ChatTool{
                            .name        = "get_weather",
                            .description = "Get weather for a location",
-                           .parameters  = neograph::json::parse(
+                           .parameters  = agentxx::util::parseNeographJson(
                 R"({"type":"object","properties":{"location":{"type":"string"}}})"
             )
         }
@@ -4246,7 +4247,7 @@ asio::awaitable<void> test_error_top_level_message(MockOpenAIServer& mock, uint1
 asio::awaitable<void> test_responses_status_failed(MockOpenAIServer& mock, uint16_t port) {
     std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
     mock.mode           = MockMode::ResponsesNormal;
-    mock.customResponse = neograph::json::parse(
+    mock.customResponse = agentxx::util::Json::parse(
         R"({"id":"resp_failed","object":"response","status":"failed",
             "error":{"message":"content policy violation","code":"content_filter"}})"
     );

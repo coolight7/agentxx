@@ -67,6 +67,10 @@ target_sources(agentxx_test PRIVATE
 # include path: 根目录 (test_framework.h 等共享头) + core/ + plugin/ + client/
 # 使 test.cpp 的 #include "test_xxx.h" 与子目录测试的
 # #include "test_framework.h" 均无需改动路径
+# neograph/json.h 内部 #include <yyjson.h> (构建期头, 见 lib/client 说明)
+if (DEFINED neograph_SOURCE_DIR)
+  target_include_directories(agentxx_test PRIVATE "${neograph_SOURCE_DIR}/deps/yyjson/")
+endif()
 target_include_directories(agentxx_test PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}"
   "${CMAKE_CURRENT_SOURCE_DIR}/core/"

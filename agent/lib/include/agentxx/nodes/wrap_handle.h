@@ -2,6 +2,7 @@
 
 #include "agentxx/middlewares/middleware.h"
 #include "agentxx/util/exception.h"
+#include "agentxx/util/neograph_json_bridge.h"
 #include "agentxx/util/string_util.h"
 #include "asio/io_context.hpp"
 #include "fmt/format.h"
@@ -258,7 +259,7 @@ public:
             }
             // 保存此时的上下文，如果直接抛异常到 neograph::engine，会丢失本轮 session 增加的上下文
             auto session = agentCtxPtr->getSession(in.ctx.thread_id);
-            auto data    = in.state.get("messages");
+            auto data    = agentxx::util::fromNeographJson(in.state.get("messages"));
             XX_LOGD("Store(By WrapHandleBaseNode/rethrow) LLM-Messages Context: {}", data.size());
             agentCtxPtr->middlewareHandleContext->setGraphDataItemValue(
                 in.ctx.thread_id,

@@ -105,7 +105,7 @@ public:
 
     void onStatusItemRegistered(
         const std::string& id,
-        const neograph::json& /*props*/,
+        const agentxx::util::Json& /*props*/,
         int /*align*/,
         int /*order*/
     ) override {
@@ -114,7 +114,7 @@ public:
         lastStatusId_ = id;
     }
 
-    void onStatusItemUpdated(const std::string& id, const neograph::json& /*props*/) override {
+    void onStatusItemUpdated(const std::string& id, const agentxx::util::Json& /*props*/) override {
         std::lock_guard<std::mutex> lock(m_);
         ++statusUpdated_;
         lastStatusId_ = id;
@@ -126,13 +126,13 @@ public:
         lastStatusId_ = id;
     }
 
-    void onPanelRegistered(const std::string& id, const neograph::json& /*props*/) override {
+    void onPanelRegistered(const std::string& id, const agentxx::util::Json& /*props*/) override {
         std::lock_guard<std::mutex> lock(m_);
         ++panelRegistered_;
         lastPanelId_ = id;
     }
 
-    void onPanelUpdated(const std::string& id, const neograph::json& /*items*/) override {
+    void onPanelUpdated(const std::string& id, const agentxx::util::Json& /*items*/) override {
         std::lock_guard<std::mutex> lock(m_);
         ++panelUpdated_;
         lastPanelId_ = id;
@@ -146,14 +146,14 @@ public:
 
     void onInfoSectionRegistered(
         const std::string& id,
-        const neograph::json& /*props*/
+        const agentxx::util::Json& /*props*/
     ) override {
         std::lock_guard<std::mutex> lock(m_);
         ++infoSectionRegistered_;
         lastInfoSectionId_ = id;
     }
 
-    void onInfoSectionUpdated(const std::string& id, const neograph::json& /*items*/) override {
+    void onInfoSectionUpdated(const std::string& id, const agentxx::util::Json& /*items*/) override {
         std::lock_guard<std::mutex> lock(m_);
         ++infoSectionUpdated_;
         lastInfoSectionId_ = id;
@@ -742,7 +742,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         agentxx::agent::PluginConfig              pc;
         pc.path    = path;
         pc.enabled = true;
-        pc.args    = neograph::json{
+        pc.args    = agentxx::util::Json{
                {"client_key", "client_val"}
         };
 
@@ -770,7 +770,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             XX_TEST_EXPECT_TRUE(json.data != nullptr);
             if (json.data) {
                 try {
-                    auto j = neograph::json::parse(std::string{json.data, json.size});
+                    auto j = agentxx::util::Json::parse(std::string{json.data, json.size});
                     XX_TEST_EXPECT_EQ(j["client_key"].get<std::string>(), "client_val");
                 } catch (const std::exception& e) {
                     XX_TEST_EXPECT_TRUE(false);
@@ -1667,18 +1667,18 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         agentxx::plugin::kit::ActionController ctl;
         XX_TEST_EXPECT_TRUE(ctl.empty());
         int hitsA = 0, hitsB = 0;
-        ctl.on("a.open", [&](const neograph::json&) {
+        ctl.on("a.open", [&](const agentxx::util::Json&) {
             ++hitsA;
         });
         auto btn = ctl.makeButton(
             "Go",
-            [&](const neograph::json& args) {
+            [&](const agentxx::util::Json& args) {
                 ++hitsB;
                 XX_TEST_EXPECT_EQ(args.value("k", 0), 1);
         },
             "|- ",
             "accent",
-            neograph::json{{"k", 1}}
+            agentxx::util::Json{{"k", 1}}
         );
         XX_TEST_EXPECT_TRUE(!ctl.empty());
         XX_TEST_EXPECT_EQ(ctl.size(), 2U);
@@ -1727,7 +1727,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         agentxx::plugin::ClientUiRegistry reg;
         // 无绑定 → button 不可点
         PluginButtonDesc desc;
-        neograph::json   btnJson = neograph::json::parse(
+        agentxx::util::Json   btnJson = agentxx::util::Json::parse(
             R"({"kind":"button","label":"Graph","action_id":"planning.open_graph","args":{},"role":"accent"})"
         );
         XX_TEST_EXPECT_TRUE(parsePluginButton(btnJson, "agentxx_planning", &reg, desc));
@@ -1760,20 +1760,20 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         XX_TEST_EXPECT_TRUE(parsePluginButton(btnJson, "other_plugin", &reg, desc3));
         XX_TEST_EXPECT_FALSE(desc3.clickable);
         // 旧 action kind 兼容: action_id=id, role=accent
-        neograph::json actJson
-            = neograph::json::parse(R"({"kind":"action","id":"rebuild","label":"Rebuild"})");
+        agentxx::util::Json actJson
+            = agentxx::util::Json::parse(R"({"kind":"action","id":"rebuild","label":"Rebuild"})");
         PluginButtonDesc descAct;
         XX_TEST_EXPECT_TRUE(parsePluginButton(actJson, "agentxx_planning", &reg, descAct));
         XX_TEST_EXPECT_EQ(descAct.actionId, "rebuild");
         XX_TEST_EXPECT_TRUE(descAct.role == PluginButtonRole::Accent);
         // 无 action_id → 静态 (不可点, 但解析成功)
-        neograph::json staticJson = neograph::json::parse(R"({"kind":"button","label":"Static"})");
+        agentxx::util::Json staticJson = agentxx::util::Json::parse(R"({"kind":"button","label":"Static"})");
         PluginButtonDesc descStatic;
         XX_TEST_EXPECT_TRUE(parsePluginButton(staticJson, "agentxx_planning", &reg, descStatic));
         XX_TEST_EXPECT_TRUE(descStatic.actionId.empty());
         XX_TEST_EXPECT_FALSE(descStatic.clickable);
         // 非 button → false
-        neograph::json   textJson = neograph::json::parse(R"({"kind":"text","text":"hi"})");
+        agentxx::util::Json   textJson = agentxx::util::Json::parse(R"({"kind":"text","text":"hi"})");
         PluginButtonDesc descText;
         XX_TEST_EXPECT_FALSE(parsePluginButton(textJson, "agentxx_planning", &reg, descText));
         // role 非法值 → Normal; danger 映射

@@ -92,7 +92,7 @@ size_t estimateHistoryBytes(const std::vector<agentxx::agent::ViewMessage>& h) {
     return total;
 }
 
-size_t estimateJsonBytes(const neograph::json& j) {
+size_t estimateJsonBytes(const agentxx::util::Json& j) {
     return j.dump().size();
 }
 
@@ -162,7 +162,7 @@ asio::awaitable<int> runScenario(
         big.resize(k);
     }
     g_da_sim_response_content  = big;
-    g_da_sim_tool_calls        = neograph::json::array();
+    g_da_sim_tool_calls        = agentxx::util::Json::array();
     g_da_sim_prompt_tokens     = static_cast<int>(k / 4);
     g_da_sim_completion_tokens = static_cast<int>(k / 4);
 

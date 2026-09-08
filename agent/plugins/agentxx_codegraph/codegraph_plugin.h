@@ -6,8 +6,7 @@
 #include "agentxx/plugin/api/plugin_kit.h"
 #include "codegraph/core/json.hpp"
 #include "fmt/format.h"
-#include <cstring>
-#include <memory>
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -27,61 +26,6 @@ inline void pluginLog(
     }
 }
 
-class SimpleJson {
-public:
-
-    explicit SimpleJson(const std::string& s) {
-        padded_ = std::make_unique<simdjson::padded_string>(s);
-        auto r  = parser_.iterate(*padded_);
-        if (r.error()) {
-            ok_ = false;
-            return;
-        }
-        doc_ = std::move(r).value();
-        ok_  = true;
-    }
-
-    bool ok() const {
-        return ok_;
-    }
-
-    simdjson::ondemand::document& doc() {
-        return doc_;
-    }
-
-private:
-
-    simdjson::ondemand::parser               parser_;
-    std::unique_ptr<simdjson::padded_string> padded_;
-    simdjson::ondemand::document             doc_;
-    bool                                     ok_ = false;
-};
-
-inline bool
-    jsonGetString(simdjson::simdjson_result<simdjson::ondemand::value> v, std::string& out) {
-    if (v.error()) {
-        return false;
-    }
-    std::string_view sv;
-    if (v.value().get_string().get(sv)) {
-        return false;
-    }
-    out = std::string(sv);
-    return true;
-}
-
-inline bool jsonGetBool(simdjson::simdjson_result<simdjson::ondemand::value> v, bool& out) {
-    if (v.error()) {
-        return false;
-    }
-    return !v.value().get_bool().get(out);
-}
-
-inline bool jsonGetInt(simdjson::simdjson_result<simdjson::ondemand::value> v, int64_t& out) {
-    if (v.error()) {
-        return false;
-    }
-    return !v.value().get_int64().get(out);
-}
-
+/// 参数读取统一经 plugin_kit.h 的 ArgReader (agentxx::util::Json 驱动),
+/// 不再手写 simdjson 解析桩 (历史 SimpleJson/jsonGet* 已删除)
 } // namespace agentxx_codegraph_plugin

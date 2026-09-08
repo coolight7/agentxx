@@ -1,3 +1,4 @@
+#include "agentxx/util/neograph_json_bridge.h"
 #include "agentxx/middlewares/summarization.h"
 
 #include "agentxx/agent/agent_host.h"
@@ -324,12 +325,12 @@ void SummarizationMiddlewareHandle::doSummarizeToolcall(std::vector<neograph::Ch
                         }
                     }
 
-                    neograph::json args;
+                    agentxx::util::Json args;
                     if (toolcallIndex >= 0) {
                         // 非法 JSON 参数: 跳过该条而非中断整轮压缩
                         agentxx::util::catchError<bool>(
                             [&]() -> bool {
-                                args = neograph::json::parse(
+                                args = agentxx::util::Json::parse(
                                     messages[lastMsgIndex].tool_calls[toolcallIndex].arguments
                                 );
                                 return true;
@@ -356,11 +357,11 @@ void SummarizationMiddlewareHandle::doSummarizeToolcall(std::vector<neograph::Ch
                     if (itemHandleIt != summarizationToolHandles.end()
                         && itemHandleIt->second.generateDeduplicationKey
                         && itemHandleIt->second.truncateRequest) {
-                        neograph::json args;
+                        agentxx::util::Json args;
                         // 非法 JSON 参数: 跳过该条而非中断整轮压缩
                         agentxx::util::catchError<bool>(
                             [&]() -> bool {
-                                args = neograph::json::parse(tc.arguments);
+                                args = agentxx::util::Json::parse(tc.arguments);
                                 return true;
                             },
                             [](std::string) -> bool {
@@ -529,8 +530,9 @@ asio::awaitable<std::string> SummarizationMiddlewareHandle::doSummarizeWithLLM(
     //   最终纯文本输出即为摘要
     // - 首次调用抛 NodeInterrupt 暂停父轮次, Session 派生 subagent,
     //   resume 后此调用返回 subagent 输出 (摘要)
-    neograph::json reqMsgsJson;
-    neograph::to_json(reqMsgsJson, reqMsgs);
+    neograph::json neoReqMsgs;
+    neograph::to_json(neoReqMsgs, reqMsgs);
+    agentxx::util::Json reqMsgsJson = agentxx::util::fromNeographJson(neoReqMsgs);
 
     if (direct) {
         // 手动压缩直派模式 (agent 空闲触发, 无 AgentRunner 中断循环):
@@ -554,7 +556,7 @@ asio::awaitable<std::string> SummarizationMiddlewareHandle::doSummarizeWithLLM(
                 .subagentName = "subagent_task",
                 .messages     = reqMsgsJson, // 结构化透传 (含压缩指令), 无文本转录
                 .sessionId    = std::string{sessionId},
-                .tools        = neograph::json::array(), // []: 无工具
+                .tools        = agentxx::util::Json::array(), // []: 无工具
                 .enableSummarization = false,
             });
 
@@ -597,7 +599,7 @@ asio::awaitable<std::string> SummarizationMiddlewareHandle::doSummarizeWithLLM(
         // 无 host 时 (如单测 mock 环境), 降级走总线请求
     }
 
-    auto args = neograph::json{
+    auto args = agentxx::util::Json{
         {"subagent",             "subagent_task"       },
         {"messages",             std::move(reqMsgsJson)},
         {"sessionId",            std::string{sessionId}},
@@ -740,7 +742,7 @@ asio::awaitable<void>
     size_t apiTokenUsage = 0;
     {
         const auto& apiTokenUsageJson
-            = agentCtxPtr->middlewareHandleContext->getGraphDataItemValue<neograph::json>(
+            = agentCtxPtr->middlewareHandleContext->getGraphDataItemValue<agentxx::util::Json>(
                 in.ctx.thread_id,
                 agentxx::middleware::MiddlewareContext::graphDataKey_LLMTokenUsage
             );
@@ -759,7 +761,7 @@ asio::awaitable<void>
         session->contextStats->maxContextTokens = modelContenxtMaxToken;
     }
 
-    neograph::json newMsgsJson;
+    agentxx::util::Json newMsgsJson;
 
     // ---- 超过 75% 上限时自动压缩 ----
     if (tokenUsage >= modelContenxtMaxToken * 0.75) {
@@ -800,7 +802,7 @@ asio::awaitable<void>
         size_t lastSummarizedMsgCount = 0;
         {
             const auto& countJson
-                = agentCtxPtr->middlewareHandleContext->getGraphDataItemValue<neograph::json>(
+                = agentCtxPtr->middlewareHandleContext->getGraphDataItemValue<agentxx::util::Json>(
                     sessionId,
                     agentxx::middleware::MiddlewareContext::graphDataKey_summarizationLastMsgCount
                 );
@@ -811,7 +813,7 @@ asio::awaitable<void>
         size_t currentFailCount = 0;
         {
             const auto& fcJson
-                = agentCtxPtr->middlewareHandleContext->getGraphDataItemValue<neograph::json>(
+                = agentCtxPtr->middlewareHandleContext->getGraphDataItemValue<agentxx::util::Json>(
                     sessionId,
                     agentxx::middleware::MiddlewareContext::graphDataKey_summarizationFailCount
                 );
@@ -954,8 +956,9 @@ asio::awaitable<void>
             compressedMessages = hardTruncate(messages, systemCount, modelContenxtMaxToken);
         }
 
-        neograph::to_json(newMsgsJson, compressedMessages);
-        in.state.overwrite("messages", newMsgsJson);
+        neograph::json neoNewMsgs;
+        neograph::to_json(neoNewMsgs, compressedMessages);
+        in.state.overwrite("messages", neoNewMsgs);
 
         if (compacted) {
             // 成功压缩: 记录本次压缩后的消息条数, 供后续轮次做冷却判断
@@ -1007,7 +1010,7 @@ asio::awaitable<void>
 
     if (newMsgsJson.is_array() && false == newMsgsJson.empty()) {
         auto msgSize = newMsgsJson.size();
-        in.state.overwrite("messages", std::move(newMsgsJson));
+        in.state.overwrite("messages", agentxx::util::toNeographJson(newMsgsJson));
         if (agentCtxPtr->agentConfig->logPrintSummarizationResultTokenCount) {
             XX_LOGD(
                 R"_(
@@ -1065,7 +1068,8 @@ asio::awaitable<bool>
         messages.reserve(session->llmMessages.size());
         for (const auto& item : session->llmMessages) {
             neograph::ChatMessage msg;
-            neograph::from_json(item, msg);
+            auto                  neoItem = agentxx::util::toNeographJson(item);
+            neograph::from_json(neoItem, msg);
             messages.push_back(std::move(msg));
         }
     }
@@ -1180,9 +1184,9 @@ asio::awaitable<bool>
         compressedMessages = hardTruncate(messages, systemCount, modelContenxtMaxToken);
     }
 
-    neograph::json newMsgsJson;
-    neograph::to_json(newMsgsJson, compressedMessages);
-    session->llmMessages = newMsgsJson;
+    neograph::json neoNewMsgs;
+    neograph::to_json(neoNewMsgs, compressedMessages);
+    session->llmMessages = agentxx::util::fromNeographJson(neoNewMsgs);
     session->saveLlmMessages();
 
     // 4. 更新统计与 viewMessage 为 "Summarized LLM Context {旧}->{新}/{最大} · {耗时}"

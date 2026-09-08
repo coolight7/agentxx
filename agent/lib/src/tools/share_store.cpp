@@ -1,3 +1,4 @@
+#include "agentxx/util/neograph_json_bridge.h"
 #include "agentxx/tools/share_store.h"
 
 #include "agentxx/agent/context.h"
@@ -18,7 +19,7 @@ SessionShareStoreTool::SessionShareStoreTool(
 std::optional<agentxx::middleware::SummarizationToolHandle>
     SessionShareStoreTool::createSummarizationToolHandle() const {
     return agentxx::middleware::SummarizationToolHandle{
-        .generateDeduplicationKey = [](const neograph::json& args) -> std::optional<std::string> {
+        .generateDeduplicationKey = [](const agentxx::util::Json& args) -> std::optional<std::string> {
             if (args.is_object() && args["id"].is_string()) {
                 auto line_offset = args.value<int64_t>("line_offset", -1);
                 auto line_limit  = args.value<int64_t>("line_limit", -1);
@@ -33,7 +34,7 @@ std::optional<agentxx::middleware::SummarizationToolHandle>
         },
         .truncateRequest =
             [](neograph::ToolCall& toolcall) {
-                auto args          = neograph::json::parse(toolcall.arguments);
+                auto args          = agentxx::util::Json::parse(toolcall.arguments);
                 args["text"]       = "[Outdated Message Truncated]";
                 toolcall.arguments = args.dump();
             },
@@ -50,10 +51,7 @@ neograph::ChatTool SessionShareStoreTool::get_definition() const {
     auto        agentPtr = agentContext.lock();
     const auto& prompt   = agentPtr->agentConfig->prompt.toolPrompt[get_name()];
 
-    return {
-        get_name(),
-        prompt.depict,
-        neograph::json{
+    agentxx::util::Json params = agentxx::util::Json{
                        {"type", "object"},
                        {
                 "properties",
@@ -63,7 +61,7 @@ neograph::ChatTool SessionShareStoreTool::get_definition() const {
                         {
                             {"type", "string"},
                             {"enum",
-                             neograph::json::array({
+                             agentxx::util::Json::array({
                                  "get",
                                  "insert",
                                  "set",
@@ -101,12 +99,12 @@ neograph::ChatTool SessionShareStoreTool::get_definition() const {
                         },
                     },
                 },
-            }, {"required", neograph::json::array({"opt"})},
-                       },
-    };
+            }, {"required", agentxx::util::Json::array({"opt"})},
+                       };
+    return {get_name(), prompt.depict, agentxx::util::toNeographJson(params)};
 }
 
-asio::awaitable<std::string> SessionShareStoreTool::execute_async(const neograph::json& arguments) {
+asio::awaitable<std::string> SessionShareStoreTool::execute_async(const agentxx::util::Json& arguments) {
     auto session_id = arguments.value("sessionId", std::string{});
     if (session_id.empty()) {
         co_return R"({"error":"Toolcall inner error, need `sessionId`"})";
@@ -182,7 +180,7 @@ asio::awaitable<std::string> SessionShareStoreTool::execute_async(const neograph
     }
     if (text_opt == std::string_view{"insert"}) {
         auto reId = mctx->addShareStoreItemValue(session_id, sliceByLine(std::move(text)));
-        co_return neograph::json{
+        co_return agentxx::util::Json{
             {"id", reId},
         }
             .dump();

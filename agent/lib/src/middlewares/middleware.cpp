@@ -1,3 +1,4 @@
+#include "agentxx/util/neograph_json_bridge.h"
 #include "agentxx/middlewares/middleware.h"
 #include "agentxx/agent/session_store.h"
 #include "agentxx/tools/tool.h"
@@ -17,13 +18,13 @@ agentxx::middleware::BaseMiddlewareHandleInterface::~BaseMiddlewareHandleInterfa
 namespace agentxx {
 namespace middleware {
 
-neograph::json
+agentxx::util::Json
     BaseMiddlewareHandleInterface::getLastMessageJson(const neograph::graph::NodeInput& in) {
     auto messages = in.state.get("messages");
     if (messages.is_array() && messages.size() > 0) {
-        return messages.back();
+        return agentxx::util::fromNeographJson(messages.back());
     }
-    return neograph::json(nullptr);
+    return agentxx::util::Json(nullptr);
 }
 
 std::optional<neograph::ChatMessage>
@@ -32,8 +33,9 @@ std::optional<neograph::ChatMessage>
     if (false == lastMsgJson.is_object()) {
         return std::nullopt;
     }
-    auto result = neograph::ChatMessage{};
-    neograph::from_json(lastMsgJson, result);
+    auto result  = neograph::ChatMessage{};
+    auto neoJson = agentxx::util::toNeographJson(lastMsgJson);
+    neograph::from_json(neoJson, result);
     return result;
 }
 
@@ -115,7 +117,7 @@ void BaseMiddlewareHandleInterface::printMessages(
 }
 
 InterruptHandleArg::InterruptHandleInputItem
-    InterruptHandleArg::InterruptHandleInputItem::fromJson(const neograph::json& data) {
+    InterruptHandleArg::InterruptHandleInputItem::fromJson(const agentxx::util::Json& data) {
     auto result = InterruptHandleInputItem{};
     if (data.is_object()) {
         if (data["label"].is_string()) {
@@ -137,8 +139,8 @@ InterruptHandleArg::InterruptHandleInputItem
     return result;
 }
 
-neograph::json InterruptHandleArg::InterruptHandleInputItem::toJson() const {
-    return neograph::json{
+agentxx::util::Json InterruptHandleArg::InterruptHandleInputItem::toJson() const {
+    return agentxx::util::Json{
         {"label",        label       },
         {"depict",       depict      },
         {"type",         type        },
@@ -147,11 +149,11 @@ neograph::json InterruptHandleArg::InterruptHandleInputItem::toJson() const {
     };
 }
 
-bool InterruptHandleArg::isAccordingFormat(const neograph::json& data) {
+bool InterruptHandleArg::isAccordingFormat(const agentxx::util::Json& data) {
     return data.is_object() && data["name"].is_string();
 }
 
-std::optional<InterruptHandleArg> InterruptHandleArg::fromJson(const neograph::json& data) {
+std::optional<InterruptHandleArg> InterruptHandleArg::fromJson(const agentxx::util::Json& data) {
     if (false == isAccordingFormat(data)) {
         return std::nullopt;
     }
@@ -171,12 +173,12 @@ std::optional<InterruptHandleArg> InterruptHandleArg::fromJson(const neograph::j
     return result;
 }
 
-neograph::json InterruptHandleArg::toJson() const {
-    auto inputsJson = neograph::json::array();
+agentxx::util::Json InterruptHandleArg::toJson() const {
+    auto inputsJson = agentxx::util::Json::array();
     for (const auto& item : inputs) {
         inputsJson.push_back(item.toJson());
     }
-    return neograph::json{
+    return agentxx::util::Json{
         {"name",     name      },
         {"arg",      arg       },
         {"inputs",   inputsJson},
@@ -184,7 +186,7 @@ neograph::json InterruptHandleArg::toJson() const {
     };
 }
 
-std::vector<InterruptHandleArg> InterruptHandleArg::listFromJson(const neograph::json& data) {
+std::vector<InterruptHandleArg> InterruptHandleArg::listFromJson(const agentxx::util::Json& data) {
     auto relist = std::vector<InterruptHandleArg>{};
     if (data.is_array()) {
         for (const auto& item : data) {
@@ -197,21 +199,26 @@ std::vector<InterruptHandleArg> InterruptHandleArg::listFromJson(const neograph:
     return relist;
 }
 
-neograph::json InterruptHandleArg::listToJson(const std::vector<InterruptHandleArg>& data) {
-    auto relist = neograph::json::array();
+agentxx::util::Json InterruptHandleArg::listToJson(const std::vector<InterruptHandleArg>& data) {
+    auto relist = agentxx::util::Json::array();
     for (const auto& item : data) {
         relist.push_back(item.toJson());
     }
     return relist;
 }
 
-neograph::json MiddlewareContext::anyToJson(const std::any& val) {
+agentxx::util::Json MiddlewareContext::anyToJson(const std::any& val) {
     if (!val.has_value()) {
         return nullptr;
     }
     auto& t = val.type();
+    if (t == typeid(agentxx::util::Json)) {
+        return std::any_cast<agentxx::util::Json>(val);
+    }
+    // 兼容: 历史路径可能仍存入 neograph::json (如未迁移的调用点),
+    // 经桥接转为业务 Json, 避免 checkpoint 落盘丢值
     if (t == typeid(neograph::json)) {
-        return std::any_cast<neograph::json>(val);
+        return agentxx::util::fromNeographJson(std::any_cast<neograph::json>(val));
     }
     if (t == typeid(std::nullptr_t)) {
         return nullptr;
@@ -251,11 +258,11 @@ neograph::json MiddlewareContext::anyToJson(const std::any& val) {
     }
     if (t == typeid(std::vector<neograph::ChatMessage>)) {
         auto& msgs = std::any_cast<const std::vector<neograph::ChatMessage>&>(val);
-        auto  arr  = neograph::json::array();
+        auto  arr  = agentxx::util::Json::array();
         for (const auto& msg : msgs) {
-            neograph::json j;
-            neograph::to_json(j, msg);
-            arr.push_back(std::move(j));
+            neograph::json nj;
+            neograph::to_json(nj, msg);
+            arr.push_back(agentxx::util::fromNeographJson(nj));
         }
         return arr;
     }
@@ -408,7 +415,7 @@ void MiddlewareContext::cleanupSession(std::string_view sessionId) {
 
 void MiddlewareContext::throwNodeInterruptBase(
     std::string_view      sessionId,
-    const neograph::json& msgs
+    const agentxx::util::Json& msgs
 ) {
     // if (msgs.is_array()) {
     // 直接抛异常到 neograph::engine 的话会丢失本轮 session 上下文，因此需要临时保存，这里改为交由
@@ -418,12 +425,12 @@ void MiddlewareContext::throwNodeInterruptBase(
     throw neograph::graph::NodeInterrupt{"xx-NodeInterrupt"};
 }
 
-asio::awaitable<neograph::json> MiddlewareContext::requestInterrupt(
+asio::awaitable<agentxx::util::Json> MiddlewareContext::requestInterrupt(
     std::string_view                           sessionId,
     const std::function<InterruptHandleArg()>& onCreateArg,
-    const neograph::json&                      msgs
+    const agentxx::util::Json&                      msgs
 ) {
-    auto result = std::move(getGraphDataItemValue<neograph::json>(
+    auto result = std::move(getGraphDataItemValue<agentxx::util::Json>(
         sessionId,
         MiddlewareContext::graphDataKey_interruptResult
     ));
@@ -451,7 +458,7 @@ neograph::json MiddlewareContext::getGraphDataToState(
     auto           it    = graphData.find(sessionId);
     if (it != graphData.end()) {
         for (const auto& [key, val] : it->second) {
-            saved[key] = anyToJson(val);
+            saved[key] = agentxx::util::toNeographJson(anyToJson(val));
         }
     }
     return saved;
@@ -461,10 +468,10 @@ void MiddlewareContext::setGraphDataFromState(
     neograph::graph::GraphState& state,
     std::string_view             sessionId
 ) {
-    setGraphDataFromState(state.get(channel_savedGraphData), sessionId);
+    setGraphDataFromState(agentxx::util::fromNeographJson(state.get(channel_savedGraphData)), sessionId);
 }
 
-void MiddlewareContext::setGraphDataFromState(neograph::json j, std::string_view sessionId) {
+void MiddlewareContext::setGraphDataFromState(agentxx::util::Json j, std::string_view sessionId) {
     if (j.is_object()) {
         auto data = std::map<std::string, std::any, std::less<>>{};
         for (auto it = j.begin(); it != j.end(); ++it) {

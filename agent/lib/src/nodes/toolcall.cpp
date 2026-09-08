@@ -1,3 +1,4 @@
+#include "agentxx/util/neograph_json_bridge.h"
 #include "agentxx/nodes/toolcall.h"
 
 #include "agentxx/event/event_stream.h"
@@ -103,7 +104,7 @@ bool parseFullNumber(std::string_view s, T& out) {
 }
 
 /// 数值 json -> 十进制字符串 (整数用 to_string, 浮点用最短可往返表示)
-std::string numberToJsonString(const neograph::json& v) {
+std::string numberToJsonString(const agentxx::util::Json& v) {
     if (v.is_number_unsigned()) {
         return std::to_string(v.get<unsigned long long>());
     }
@@ -146,7 +147,7 @@ struct SchemaTypes {
     }
 };
 
-SchemaTypes getSchemaTypes(const neograph::json& schema) {
+SchemaTypes getSchemaTypes(const agentxx::util::Json& schema) {
     SchemaTypes t;
     if (!schema.is_object()) {
         return t;
@@ -179,7 +180,7 @@ SchemaTypes getSchemaTypes(const neograph::json& schema) {
 }
 
 /// 数组元素是否允许为字符串 (items 未声明或声明为 string 时视为字符串数组)
-bool isStringArrayItems(const neograph::json& schema) {
+bool isStringArrayItems(const agentxx::util::Json& schema) {
     auto items = schema["items"];
     if (items.is_object()) {
         auto itemType = items.value("type", std::string{});
@@ -280,15 +281,17 @@ std::set<std::string> ToolcallWrapNode::findConsecutiveRepeatCallKeys(
 /// - [单字符串数组] -> string: 参数声明为字符串而传入单元素字符串数组时, 解包为字符串
 /// - 仅当目标类型不包含 arg 当前类型时转换; 无法解析或类型不明确时保持原样
 /// `return` 是否发生了参数转换
-bool ToolcallWrapNode::autoFixArgsType(const neograph::ChatTool& def, neograph::json& args) {
+bool ToolcallWrapNode::autoFixArgsType(const neograph::ChatTool& def, agentxx::util::Json& args) {
     if (!args.is_object()) {
         return false;
     }
-    const auto& params = def.parameters;
+    // def.parameters 为图边界类型 (neograph::json): 快照为业务 Json 后统一处理
+    // (工具 schema 为小对象，拷贝开销可忽略)
+    const agentxx::util::Json params = agentxx::util::fromNeographJson(def.parameters);
     if (!params.is_object()) {
         return false;
     }
-    const auto& props = params["properties"];
+    const auto props = params["properties"];
     if (!props.is_object()) {
         return false;
     }
@@ -308,7 +311,7 @@ bool ToolcallWrapNode::autoFixArgsType(const neograph::ChatTool& def, neograph::
             auto str = arg.get<std::string>();
             // 1) string -> 字符串数组
             if (types.isArray && isStringArrayItems(schema)) {
-                auto arr = neograph::json::array();
+                auto arr = agentxx::util::Json::array();
                 arr.push_back(arg);
                 args[name] = std::move(arr);
                 fixInfo    = "string -> [string]";
@@ -420,7 +423,7 @@ void insertAbortedToolResults(
             messages
         );
     if (assistantMsg && !assistantMsg->tool_calls.empty()) {
-        auto appendToolResult = neograph::json::array();
+        auto appendToolResult = agentxx::util::Json::array();
         for (const auto& tool : assistantMsg->tool_calls) {
             auto msg = neograph::ChatMessage{
                 .role    = "tool",
@@ -429,13 +432,13 @@ void insertAbortedToolResults(
                 .tool_name    = tool.name,
                 .flags        = neograph::MessageFlag::AutoInserted,
             };
-            auto msgJson = neograph::json{};
+            neograph::json msgJson;
             neograph::to_json(msgJson, msg);
-            appendToolResult.push_back(std::move(msgJson));
+            appendToolResult.push_back(agentxx::util::fromNeographJson(msgJson));
         }
         result.writes.push_back(neograph::graph::ChannelWrite{
             "messages",
-            std::move(appendToolResult),
+            agentxx::util::toNeographJson(appendToolResult),
         });
     }
 }
@@ -486,7 +489,7 @@ asio::awaitable<void> ToolcallWrapNode::onHandleEnd(
 
 asio::awaitable<std::string> ToolcallWrapNode::execTool(
     neograph::Tool*                                      tool,
-    neograph::json&                                      args,
+    agentxx::util::Json&                                      args,
     const std::shared_ptr<neograph::graph::CancelToken>& cancelToken,
     bool                                                 repeatCallTriggered,
     std::string_view                                     repeatCallKey
@@ -549,7 +552,7 @@ asio::awaitable<std::string> ToolcallWrapNode::execTool(
                         auto arg     = InterruptHandleArg{};
                         arg.name     = "repeat_toolcall";
                         arg.resultId = args.value("tool_call_id", std::string{});
-                        arg.arg      = neograph::json{
+                        arg.arg      = agentxx::util::Json{
                                     {"tool_name", tool->get_name()},
                                     {"key",       repeatCallKey   },
                         };
@@ -620,7 +623,13 @@ asio::awaitable<std::string> ToolcallWrapNode::execTool(
         std::exception_ptr errorPtr;
 
         try {
-            result = co_await tool->real_execute_async(args);
+            if (auto* xxTool = dynamic_cast<agentxx::tools::XXToolBase*>(tool)) {
+                result = co_await xxTool->execute_async(args);
+            } else {
+                // 原生 neograph::Tool (如未包装的 MCP 透传工具): 经桥接调用
+                auto neoArgs = agentxx::util::toNeographJson(args);
+                result       = co_await tool->execute_async(neoArgs);
+            }
             break;
         } catch (const neograph::graph::CancelledException&) {
             isCancel = true;
@@ -701,7 +710,7 @@ asio::awaitable<void> ToolcallWrapNode::baseRun(
     auto toolcallsCache = std::map<std::string, std::string>{};
     {
         auto toolcallsCacheJson
-            = agentCtxPtr->middlewareHandleContext->getGraphDataItemValue<neograph::json>(
+            = agentCtxPtr->middlewareHandleContext->getGraphDataItemValue<agentxx::util::Json>(
                 in.ctx.thread_id,
                 agentxx::middleware::MiddlewareContext::graphDataKey_interruptToolcallCache
             );
@@ -712,7 +721,8 @@ asio::awaitable<void> ToolcallWrapNode::baseRun(
         if (toolcallsCacheJson.is_array()) {
             for (const auto& item : toolcallsCacheJson) {
                 neograph::ChatMessage msg;
-                neograph::from_json(item, msg);
+                auto                  neoItem = agentxx::util::toNeographJson(item);
+                neograph::from_json(neoItem, msg);
                 if (false == msg.tool_call_id.empty()
                     && false == neograph::hasFlag(msg.flags, neograph::MessageFlag::Interrupt)) {
                     toolcallsCache[msg.tool_call_id] = std::move(msg.content);
@@ -775,8 +785,8 @@ asio::awaitable<void> ToolcallWrapNode::baseRun(
 
     bool isInterrupt   = false;
     bool isCancel      = false;
-    auto interruptArgs = std::map<std::string, neograph::json>{};
-    auto results       = neograph::json::array();
+    auto interruptArgs = std::map<std::string, agentxx::util::Json>{};
+    auto results       = agentxx::util::Json::array();
     // 已执行完成的 tool_call_id (取消时用于区分已完成/未完成, 未完成的补 [User canceled])
     std::set<std::string> completedToolcallIds{};
     std::exception_ptr    cancelErrorPtr;
@@ -836,7 +846,7 @@ asio::awaitable<void> ToolcallWrapNode::baseRun(
                 co_await agentxx::util::catchErrorAsync<bool>(
                     [&]() -> asio::awaitable<bool> {
                         try {
-                            auto args = neograph::json::parse(tc.arguments);
+                            auto args = agentxx::util::Json::parse(tc.arguments);
                             if (args.is_object()) {
                                 // append arg `session_id`
                                 args["sessionId"] = in.ctx.thread_id;
@@ -886,7 +896,7 @@ asio::awaitable<void> ToolcallWrapNode::baseRun(
             co_await agentxx::util::catchErrorAsync<bool>(
                 [&]() -> asio::awaitable<bool> {
                     try {
-                        auto args = neograph::json::parse(tc.arguments);
+                        auto args = agentxx::util::Json::parse(tc.arguments);
                         if (args.is_object()) {
                             // append arg `session_id`
                             args["sessionId"] = in.ctx.thread_id;
@@ -953,9 +963,9 @@ asio::awaitable<void> ToolcallWrapNode::baseRun(
         // TODO: 真正并行
         try {
             auto           msg = co_await std::move(item);
-            neograph::json msg_json;
-            neograph::to_json(msg_json, msg);
-            results.push_back(msg_json);
+            neograph::json neoJson;
+            neograph::to_json(neoJson, msg);
+            results.push_back(agentxx::util::fromNeographJson(neoJson));
             completedToolcallIds.insert(msg.tool_call_id);
         } catch (const neograph::graph::CancelledException&) {
             // - 取消: 停止执行后续 tool, 由下方补齐未完成 tool 的取消提示消息
@@ -983,29 +993,31 @@ asio::awaitable<void> ToolcallWrapNode::baseRun(
             tool_msg.tool_name    = tc.name;
             tool_msg.content      = "[User canceled]";
             tool_msg.flags        = neograph::MessageFlag::AutoInserted;
-            neograph::json msg_json;
-            neograph::to_json(msg_json, tool_msg);
-            results.push_back(std::move(msg_json));
+            neograph::json neoJson;
+            neograph::to_json(neoJson, tool_msg);
+            results.push_back(agentxx::util::fromNeographJson(neoJson));
         }
-        in.state.write("messages", results);
+        in.state.write("messages", agentxx::util::toNeographJson(results));
         // 往外抛 cancel 异常，由 WrapNode 处理上下文临时保存
         std::rethrow_exception(cancelErrorPtr);
     }
 
     if (isInterrupt) {
         // 暂存 toolcall list 结果到 graphData
-        agentCtxPtr->middlewareHandleContext->setGraphDataItemValue<neograph::json>(
+        agentCtxPtr->middlewareHandleContext->setGraphDataItemValue<agentxx::util::Json>(
             in.ctx.thread_id,
             agentxx::middleware::MiddlewareContext::graphDataKey_interruptToolcallCache,
             results
         );
-        // 保存当前 messages，供 handler 恢复
-        auto messages = in.state.get("messages");
+        // 保存当前 messages，供 handler 恢复 (图 state 为 neograph::json 方言，转业务 Json)
+        auto messages = agentxx::util::fromNeographJson(in.state.get("messages"));
         // 重新抛出异常
         agentCtxPtr->middlewareHandleContext->throwNodeInterruptBase(in.ctx.thread_id, messages);
     }
 
-    out.writes.push_back(neograph::graph::ChannelWrite{"messages", std::move(results)});
+    out.writes.push_back(
+        neograph::graph::ChannelWrite{"messages", agentxx::util::toNeographJson(results)}
+    );
     co_return;
 }
 

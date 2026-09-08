@@ -69,7 +69,7 @@ enum class ConnState : uint8_t {
 /// 性能设计 (流式输出的热路径):
 /// - currentToken 为 shared_ptr<string>: 流式追加 token 时按需 COW 字符串本体,
 ///   避免每 token 深拷贝整个已累积文本 (O(n²) -> O(n))
-/// - contextMessages 为 shared_ptr<json>: neograph::json 拷贝是深拷贝
+/// - contextMessages 为 shared_ptr<json>: agentxx::util::Json 拷贝是深拷贝
 ///   (yyjson_mut_val_mut_copy 全树复制), 若放在 COW 全量拷贝内,
 ///   每 token 都会复制整个上下文 JSON; 指针化后 COW 拷贝仅 O(1)
 struct TUIRenderState {
@@ -144,7 +144,7 @@ struct TUIRenderState {
     std::deque<TUIPendingInput> pendingInputs;
 
     /// 上下文消息快照 (弹窗展示用); 为 null 表示尚未获取
-    std::shared_ptr<neograph::json> contextMessages;
+    std::shared_ptr<agentxx::util::Json> contextMessages;
 
     bool showContextOverlay = false;
 

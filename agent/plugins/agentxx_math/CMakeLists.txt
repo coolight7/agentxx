@@ -1,5 +1,5 @@
 # agentxx_math —— 数学计算工具插件 (表达式求值)
-# - 默认: 独立动态库 (MODULE), 仅依赖纯 C ABI 头 + fmt + neograph(json)
+# - 默认: 独立动态库 (MODULE), 仅依赖纯 C ABI 头 + agentxx_util (Json/JsonView)
 # - 内置模式:
 #   源文件编译为 OBJECT 库合并进 libagentxx
 set(PLUGIN_NAME agentxx_math)
@@ -27,7 +27,7 @@ if (_AGENTXX_ADD_AS_BUILTIN)
   target_include_directories(${_target} PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}"          # agentxx_math_plugin.h / math_impl.h
     "${AGENTXX_LIB_INCLUDE_DIR}"           # agentxx/plugin/plugin_api.h
-    "${AGENTXX_INSTALL_DIR}/include"       # fmt neograph
+    "${AGENTXX_INSTALL_DIR}/include"       # agentxx_util (Json/JsonView)
   )
   target_link_libraries(${_target} PRIVATE agentxx_util)
   set_target_properties(${_target} PROPERTIES
@@ -67,37 +67,20 @@ add_library(${PLUGIN_NAME} SHARED
 if (NOT TARGET agentxx_util)
   find_package(agentxx_util REQUIRED)
 endif()
-find_package(html2md REQUIRED)
-find_package(OpenSSL REQUIRED)
-
 target_include_directories(${PLUGIN_NAME} PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}"          # agentxx_math_plugin.h / math_impl.h
   "${AGENTXX_LIB_INCLUDE_DIR}"           # agentxx/plugin/plugin_api.h
-  "${AGENTXX_INSTALL_DIR}/include/"      # fmt neograph
+  "${AGENTXX_INSTALL_DIR}/include/"      # agentxx_util (Json/JsonView)
 )
 
 # 裸库名依赖解析目录
 target_link_directories(${PLUGIN_NAME} PRIVATE
   "${AGENTXX_INSTALL_DIR}/lib/"
-  "${OPENSSL_ROOT_DIR}/lib64"
-  "${OPENSSL_ROOT_DIR}/lib"
+  # (历史: 此处曾解析 neograph/yyjson/OpenSSL 裸库名; 现仅保留 hs_runtime 兜底)
 )
 
 target_link_libraries(${PLUGIN_NAME} PRIVATE
   agentxx_util
-  html2md
-  OpenSSL::SSL
-  OpenSSL::Crypto
-  # === neograph vvv 链接顺序是必要的 (与 lib 自身一致) ===
-  neograph_sqlite
-  neograph_acp
-  neograph_mcp
-  neograph_mcp_types
-  neograph_async
-  neograph_llm
-  neograph_core
-  # === neograph ^^^
-  yyjson
 )
 if (AGENTXX_ENABLE_HYPERSCAN)
   target_link_libraries(${PLUGIN_NAME} PRIVATE PkgConfig::hyperscan hs_runtime)

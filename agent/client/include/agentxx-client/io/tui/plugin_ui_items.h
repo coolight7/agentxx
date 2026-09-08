@@ -19,7 +19,7 @@
 #include "agentxx/plugin/client_plugin_manager.h"
 #include "agentxx/util/diff_util.h"
 #include "ftxui/dom/elements.hpp"
-#include "neograph/json.h"
+#include "agentxx/util/json.h"
 #include <string>
 
 namespace agentxx {
@@ -51,7 +51,7 @@ struct PluginButtonDesc {
 /// - args 缺失/非 object → "{}"; role 非法值 → Normal
 /// - clickable 由 hasPluginBinding(plugin, reg) 决定 (reg 可空 → false)
 bool parsePluginButton(
-    const neograph::json&                    it,
+    const agentxx::util::Json&                    it,
     std::string_view                         plugin,
     const agentxx::plugin::ClientUiRegistry* reg,
     PluginButtonDesc&                        out

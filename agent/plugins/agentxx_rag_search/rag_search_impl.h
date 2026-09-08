@@ -1,7 +1,7 @@
 /// agentxx_rag_search 插件 —— 工具实现 (纯函数, 不含 C ABI 胶水)
 /// - 从 libagentxx src/tools/rag_search 拆分: 同名工具同行为 (agentxx_rag_search)
 /// - 头文件-only: 插件入口与测试共同包含, 保证插件行为与测试覆盖一致
-/// - 依赖: agentxx_util (HttpClient / 字符串工具 / 异常捕获) + fmt + neograph(json)
+/// - 依赖: agentxx_util (HttpClient / Json / 字符串工具 / 异常捕获) + fmt
 /// - 与原实现的差异点:
 ///   - 原版 asio 协程接口改为同步实现 (插件 execute 回调已运行在宿主线程池,
 ///     阻塞安全); embedding 网络调用经局部 io_context 驱动至完成 (与
@@ -648,9 +648,9 @@ inline EmbedFn makeHttpEmbedder(std::string baseUrl, std::string model) {
             return std::vector<std::vector<double>>{};
         }
 
-        auto body     = neograph::json::object();
+        auto body     = agentxx::util::Json::object();
         body["model"] = model;
-        body["input"] = neograph::json(texts);
+        body["input"] = agentxx::util::Json(texts);
 
         // 与原 EmbeddingClient 一致: 不携带额外请求头 (embedding 服务多为
         // 本地部署, 原实现即空 headers)
@@ -685,7 +685,7 @@ inline EmbedFn makeHttpEmbedder(std::string baseUrl, std::string model) {
         }
 
         try {
-            auto                             respBody = neograph::json::parse(resp.value().body);
+            auto                             respBody = agentxx::util::Json::parse(resp.value().body);
             std::vector<std::vector<double>> embeddings;
 
             for (const auto& item : respBody["data"]) {

@@ -122,10 +122,6 @@ if (NOT EXISTS "${AGENTXX_LIB_INCLUDE_DIR}")
   message(FATAL_ERROR "[agentxx_plugins] libagentxx include dir not found: ${AGENTXX_LIB_INCLUDE_DIR}")
 endif()
 
-if (NOT DEFINED neograph_SOURCE_DIR)
-  set(neograph_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/neograph")
-endif()
-
 add_compile_definitions(
   __STDC_CONSTANT_MACROS
   XX_IS_DEBUG_D=${XX_IS_DEBUG_D}
@@ -140,10 +136,11 @@ add_compile_definitions(
   CPPHTTPLIB_OPENSSL_SUPPORT
 )
 
+# (历史: 此处曾全局 include neograph yyjson 头; 自 Json 自主化重构起移除,
+#  插件统一经 agentxx_util 获得 Json/JsonView + simdjson, 不再直连图引擎)
 include_directories(
   "${AGENTXX_LIB_INCLUDE_DIR}"
   "${AGENTXX_INSTALL_DIR}/include"
-  "${neograph_SOURCE_DIR}/deps/yyjson"
 )
 
 # --- 名单解析: AGENTXX_PLUGIN_BUILTIN_LIST → ALL 标志 / 具名名单 ---

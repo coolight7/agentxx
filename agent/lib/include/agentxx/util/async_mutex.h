@@ -23,7 +23,7 @@ namespace util {
 class AsyncMutex {
 private:
 
-    using ErrorCode = neograph_asio_error_code;
+    using ErrorCode = agentxx_asio_error_code;
     using Channel   = asio::experimental::concurrent_channel<void(ErrorCode)>;
 
 public:

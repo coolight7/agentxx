@@ -6,11 +6,8 @@
 #include "agentxx/plugin/api/plugin_kit.h"
 #include "agentxx/util/log.h"
 #include "fmt/format.h"
-#include "simdjson.h"
 #include <atomic>
-#include <cstring>
 #include <functional>
-#include <memory>
 #include <string>
 #include <vector>
 
@@ -36,59 +33,7 @@ inline char* pluginStrdup(const AgentxxPluginHost* host, const char* s) {
     return agentxx::plugin::PluginString::strdup(host, &sv);
 }
 
-class SimpleJson {
-public:
-
-    explicit SimpleJson(const std::string& s) {
-        padded_ = std::make_unique<simdjson::padded_string>(s);
-        auto r  = parser_.iterate(*padded_);
-        if (r.error()) {
-            ok_ = false;
-            return;
-        }
-        doc_ = std::move(r).value();
-        ok_  = true;
-    }
-
-    bool ok() const {
-        return ok_;
-    }
-
-    simdjson::ondemand::document& doc() {
-        return doc_;
-    }
-
-private:
-
-    simdjson::ondemand::parser               parser_{};
-    std::unique_ptr<simdjson::padded_string> padded_{};
-    simdjson::ondemand::document             doc_{};
-    bool                                     ok_ = false;
-};
-
-inline bool
-    jsonGetString(simdjson::simdjson_result<simdjson::ondemand::value> val, std::string& out) {
-    if (val.error()) {
-        return false;
-    }
-    auto sv = val.get_string();
-    if (sv.error()) {
-        return false;
-    }
-    out = sv.value();
-    return true;
-}
-
-inline bool jsonGetInt(simdjson::simdjson_result<simdjson::ondemand::value> val, int64_t& out) {
-    if (val.error()) {
-        return false;
-    }
-    auto v = val.get_int64();
-    if (v.error()) {
-        return false;
-    }
-    out = v.value();
-    return true;
-}
+/// 参数读取统一经 plugin_kit.h 的 ArgReader (agentxx::util::Json 驱动),
+/// 不再手写 simdjson::ondemand 局部解析桩 (历史 SimpleJson/jsonGet* 已删除)
 
 } // namespace agentxx_text_selection_monitor_plugin

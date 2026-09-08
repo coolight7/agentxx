@@ -346,7 +346,7 @@ public:
     void refreshLanguage();
 
     asio::awaitable<std::optional<std::string>> getInput() override;
-    asio::awaitable<neograph::json>             handleInterrupt(
+    asio::awaitable<agentxx::util::Json>             handleInterrupt(
                     std::string_view sessionId,
                     std::string_view interruptNode,
                     std::string_view interruptValue,

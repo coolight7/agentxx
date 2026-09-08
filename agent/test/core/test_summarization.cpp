@@ -26,6 +26,7 @@
 #include "agentxx/middlewares/middleware.h"
 #include "agentxx/middlewares/summarization.h"
 #include "agentxx/tools/subagent.h"
+#include "agentxx/util/neograph_json_bridge.h"
 #include "fmt/format.h"
 #include "neograph/graph/node.h"
 #include "neograph/graph/run_context.h"
@@ -63,7 +64,7 @@ public:
     /// 预设的摘要文本 (空串模拟压缩失败)
     std::string summary;
     /// 记录每次调用收到的参数
-    std::vector<neograph::json> receivedArguments;
+    std::vector<agentxx::util::Json> receivedArguments;
     /// 是否返回错误 (true 时返回 error json, 模拟 subagent 执行失败)
     bool failWithError = false;
     /// 是否抛出异常 (true 时 execute_async 抛 std::runtime_error,
@@ -76,7 +77,7 @@ public:
     ) :
         SubAgentManagerTool(in_nodeName, std::move(in_agentContext)) {}
 
-    asio::awaitable<std::string> execute_async(const neograph::json& arguments) override {
+    asio::awaitable<std::string> execute_async(const agentxx::util::Json& arguments) override {
         receivedArguments.emplace_back(arguments);
         if (throwException) {
             throw std::runtime_error("fake subagent crashed");
@@ -244,7 +245,7 @@ static size_t maxContextTokensOf(
 /// filesystem 风格: 按 args["path"] 去重, 仅截断旧 response
 static agentxx::middleware::SummarizationToolHandle makeReadFileHandle() {
     agentxx::middleware::SummarizationToolHandle th;
-    th.generateDeduplicationKey = [](const neograph::json& args) -> std::optional<std::string> {
+    th.generateDeduplicationKey = [](const agentxx::util::Json& args) -> std::optional<std::string> {
         if (!args.is_object()) {
             return std::nullopt;
         }
@@ -264,7 +265,7 @@ static agentxx::middleware::SummarizationToolHandle makeReadFileHandle() {
 /// planning 风格: 恒定 key, 仅截断旧 request
 static agentxx::middleware::SummarizationToolHandle makeConstantKeyHandle(std::string key) {
     agentxx::middleware::SummarizationToolHandle th;
-    th.generateDeduplicationKey = [key = std::move(key)](const neograph::json&) {
+    th.generateDeduplicationKey = [key = std::move(key)](const agentxx::util::Json&) {
         return std::optional<std::string>{key};
     };
     th.truncateRequest = [](neograph::ToolCall& tc) {
@@ -310,7 +311,7 @@ static asio::awaitable<std::vector<neograph::ChatMessage>> runModelcall(
         ctx->middlewareHandleContext->setGraphDataItemValue(
             sessionId,
             agentxx::middleware::MiddlewareContext::graphDataKey_LLMTokenUsage,
-            neograph::json(*apiTokenUsage)
+            agentxx::util::Json(*apiTokenUsage)
         );
     } else {
         ctx->middlewareHandleContext->removeGraphDataItem(
@@ -685,7 +686,7 @@ asio::awaitable<TestResult> run_summarization_tests() {
             p3.mergeFromJson(p2.toJson());
             XX_TEST_EXPECT_EQ(p3.appendSystemPrompts.at("summarization"), std::string{"CUSTOM"});
             // 缺失字段合并: 保持原值
-            neograph::json partial = neograph::json{
+            agentxx::util::Json partial = agentxx::util::Json{
                 {"systemPrompt", "SYS"}
             };
             p3.mergeFromJson(partial);
@@ -1696,10 +1697,10 @@ asio::awaitable<TestResult> run_summarization_tests() {
 
         // ② resume: 按 key 规则回填结果 ("1" = 无 resultId 时按序号兜底),
         //    再次调用返回摘要文本, 不再抛中断
-        ctx->middlewareHandleContext->setGraphDataItemValue<neograph::json>(
+        ctx->middlewareHandleContext->setGraphDataItemValue<agentxx::util::Json>(
             sid,
             agentxx::middleware::MiddlewareContext::graphDataKey_interruptResult,
-            neograph::json{
+            agentxx::util::Json{
                 {"1", "real-tool summary"}
         }
         );
@@ -1837,9 +1838,9 @@ asio::awaitable<TestResult> run_summarization_tests() {
             makeMsg("user", "u2"),
             makeMsg("assistant", "a2"),
         };
-        neograph::json msgsJson;
-        neograph::to_json(msgsJson, msgs);
-        env->session()->llmMessages = msgsJson;
+        neograph::json neoMsgsJson;
+        neograph::to_json(neoMsgsJson, msgs);
+        env->session()->llmMessages = agentxx::util::fromNeographJson(neoMsgsJson);
 
         bool ok = co_await env->handle->compactSessionContext(env->sessionId);
         XX_TEST_EXPECT_TRUE(ok);
@@ -2015,9 +2016,9 @@ asio::awaitable<TestResult> run_summarization_tests() {
             makeMsg("user", "u4"),
             makeMsg("assistant", "a4"),
         };
-        neograph::json msgsJson;
-        neograph::to_json(msgsJson, msgs);
-        env->session()->llmMessages = msgsJson;
+        neograph::json neoMsgsJson;
+        neograph::to_json(neoMsgsJson, msgs);
+        env->session()->llmMessages = agentxx::util::fromNeographJson(neoMsgsJson);
 
         bool ok = co_await env->handle->compactSessionContext(env->sessionId);
         XX_TEST_EXPECT_TRUE(ok);
@@ -2026,7 +2027,7 @@ asio::awaitable<TestResult> run_summarization_tests() {
         std::vector<neograph::ChatMessage> res;
         for (const auto& item : env->session()->llmMessages) {
             neograph::ChatMessage msg;
-            neograph::from_json(item, msg);
+            neograph::from_json(agentxx::util::toNeographJson(item), msg);
             res.push_back(std::move(msg));
         }
         XX_TEST_EXPECT_EQ(res.size(), size_t{10});

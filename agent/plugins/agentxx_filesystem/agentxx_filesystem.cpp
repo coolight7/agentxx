@@ -463,7 +463,7 @@ AGENTXX_PLUGIN_CLIENT_EXPORT(
             std::string oldStr = args.value("old_str", "");
             std::string newStr = args.value("new_str", "");
             if (!path.empty() && (!oldStr.empty() || !newStr.empty())) {
-                neograph::json diffItem;
+                agentxx::util::Json diffItem;
                 diffItem["kind"]    = "diff";
                 diffItem["path"]    = path;
                 diffItem["old_str"] = std::move(oldStr);

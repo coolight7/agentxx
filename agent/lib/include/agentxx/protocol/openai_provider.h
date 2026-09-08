@@ -150,9 +150,9 @@ private:
     /// 从错误响应 body 中提取 error.message / error.code, 失败时返回原 body
     static std::string extractApiError(const std::string& body);
 
-    neograph::json buildBody(const neograph::CompletionParams& params) const;
+    agentxx::util::Json buildBody(const neograph::CompletionParams& params) const;
 
-    neograph::json buildResponsesBody(const neograph::CompletionParams& params) const;
+    agentxx::util::Json buildResponsesBody(const neograph::CompletionParams& params) const;
 
     asio::awaitable<neograph::ChatCompletion> completeAsync(const neograph::CompletionParams& params
     );
@@ -162,13 +162,13 @@ private:
 
     asio::awaitable<neograph::ChatCompletion> doStream(
         const neograph::CompletionParams&  params,
-        const neograph::json&              body,
+        const agentxx::util::Json&              body,
         neograph::FormatDataStreamCallback on_chunk
     );
 
     asio::awaitable<neograph::ChatCompletion> doStreamResponses(
         const neograph::CompletionParams&  params,
-        const neograph::json&              body,
+        const agentxx::util::Json&              body,
         neograph::FormatDataStreamCallback on_chunk
     );
 

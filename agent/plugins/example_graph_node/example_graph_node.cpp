@@ -87,17 +87,17 @@ std::string normalizeIntent(std::string_view s) {
 }
 
 /// 从 GraphState::serialize() 结果读取 messages channel 值 (json 数组)
-neograph::json stateMessages(const neograph::json& state) {
+agentxx::util::Json stateMessages(const agentxx::util::Json& state) {
     if (state.is_object() && state.contains("channels") && state["channels"].is_object()
         && state["channels"].contains("messages") && state["channels"]["messages"].is_object()
         && state["channels"]["messages"].contains("value")) {
         return state["channels"]["messages"]["value"];
     }
-    return neograph::json::array();
+    return agentxx::util::Json::array();
 }
 
 /// 获取最后一条 assistant 消息内容 (无则返回空)
-std::string lastAssistantContent(const neograph::json& messages) {
+std::string lastAssistantContent(const agentxx::util::Json& messages) {
     if (!messages.is_array()) {
         return {};
     }
@@ -116,7 +116,7 @@ std::string lastAssistantContent(const neograph::json& messages) {
 }
 
 /// 最后一条 assistant 消息是否含 tool_calls
-bool lastAssistantHasToolCalls(const neograph::json& messages) {
+bool lastAssistantHasToolCalls(const agentxx::util::Json& messages) {
     if (!messages.is_array()) {
         return false;
     }
@@ -164,7 +164,7 @@ void* AGENTXX_PLUGIN_CALL intentRouterRunStart(
     };
 
     try {
-        auto state    = neograph::json::parse(std::string_view(
+        auto state    = agentxx::util::Json::parse(std::string_view(
             state_json && state_json->data ? state_json->data : "{}",
             state_json ? static_cast<size_t>(state_json->size) : 0
         ));
@@ -174,7 +174,7 @@ void* AGENTXX_PLUGIN_CALL intentRouterRunStart(
         std::vector<std::string> intents;
         std::string              fallback = "normal";
         if (config_json && config_json->data && config_json->size) {
-            auto cfg = neograph::json::parse(
+            auto cfg = agentxx::util::Json::parse(
                 std::string_view(config_json->data, static_cast<size_t>(config_json->size))
             );
             if (cfg.is_object()) {
@@ -215,7 +215,7 @@ void* AGENTXX_PLUGIN_CALL intentRouterRunStart(
             // 命中意图时移除该纯意图消息 (避免污染后续 agent loop 上下文)
             if (route != fallback && messages.is_array() && !messages.empty()) {
                 auto origin          = stateMessages(state);
-                messages             = neograph::json::array();
+                messages             = agentxx::util::Json::array();
                 const size_t n       = origin.size();
                 bool         removed = false;
                 for (size_t i = 0; i < n; ++i) {
@@ -231,7 +231,7 @@ void* AGENTXX_PLUGIN_CALL intentRouterRunStart(
                     // overwrite messages (去掉意图消息)
                     const std::string payload = fmt::format(
                         R"({{"writes":[{{"channel":"__route__","value":{}}},{{"channel":"__intent_checked","value":true}},{{"channel":"messages","value":{},"mode":"overwrite"}}]}})",
-                        neograph::json(route).dump(),
+                        agentxx::util::Json(route).dump(),
                         messages.dump()
                     );
                     done(payload);
@@ -241,7 +241,7 @@ void* AGENTXX_PLUGIN_CALL intentRouterRunStart(
             // 未命中/未移除: 仅写路由标记
             const std::string payload = fmt::format(
                 R"({{"writes":[{{"channel":"__route__","value":{}}},{{"channel":"__intent_checked","value":true}}]}})",
-                neograph::json(route).dump()
+                agentxx::util::Json(route).dump()
             );
             done(payload);
             return nullptr;
@@ -251,7 +251,7 @@ void* AGENTXX_PLUGIN_CALL intentRouterRunStart(
         route                     = lastAssistantHasToolCalls(messages) ? "tools" : "end";
         const std::string payload = fmt::format(
             R"({{"writes":[{{"channel":"__route__","value":{}}}]}})",
-            neograph::json(route).dump()
+            agentxx::util::Json(route).dump()
         );
         done(payload);
         return nullptr;
@@ -307,14 +307,14 @@ void* AGENTXX_PLUGIN_CALL datetimeNodeRunStart(
         std::strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", &tm);
 
         const std::string text = fmt::format("当前系统日期时间: {}", buf);
-        // assistant 消息 (与 neograph ChatMessage::to_json 字段一致)
-        neograph::json msg = neograph::json::object();
+        // assistant 消息 (role/content 字段, 与图消息 JSON 字段一致)
+        agentxx::util::Json msg = agentxx::util::Json::object();
         msg["role"]        = "assistant";
         msg["content"]     = text;
         msg["startTimeMs"] = nowMs;
         msg["durationMs"]  = int64_t{0};
 
-        neograph::json msgs = neograph::json::array();
+        agentxx::util::Json msgs = agentxx::util::Json::array();
         msgs.push_back(std::move(msg));
 
         const std::string payload
@@ -367,9 +367,9 @@ static int modifyGraphToIntentFlow(AgentCtx& ctx, std::string& errOut) {
     std::string jsonStr(graphJson.data, static_cast<size_t>(graphJson.size));
     agentxx::plugin::PluginString::free(ctx.host, &graphJson);
 
-    neograph::json def;
+    agentxx::util::Json def;
     try {
-        def = neograph::json::parse(jsonStr);
+        def = agentxx::util::Json::parse(jsonStr);
     } catch (const std::exception& e) {
         errOut = fmt::format("default graph JSON parse failed: {}", e.what());
         return -1;
@@ -389,61 +389,61 @@ static int modifyGraphToIntentFlow(AgentCtx& ctx, std::string& errOut) {
     }
 
     // ---- 组装新图 ----
-    neograph::json graph = neograph::json::object();
+    agentxx::util::Json graph = agentxx::util::Json::object();
     graph["name"]        = "example_graph_node.intent";
 
     // channels: 原 channels + 路由 channel
-    neograph::json channels = neograph::json::object();
+    agentxx::util::Json channels = agentxx::util::Json::object();
     if (def.contains("channels") && def["channels"].is_object()) {
         channels = def["channels"];
     }
     if (!channels.contains("__route__")) {
-        channels["__route__"] = neograph::json{
+        channels["__route__"] = agentxx::util::Json{
             {"reducer", "overwrite"}
         };
     }
     if (!channels.contains("__intent_checked")) {
-        channels["__intent_checked"] = neograph::json{
+        channels["__intent_checked"] = agentxx::util::Json{
             {"reducer", "overwrite"}
         };
     }
     graph["channels"] = std::move(channels);
 
     // nodes: 原 4 节点 + intent_router + datetime_node
-    neograph::json nodes = neograph::json::object();
+    agentxx::util::Json nodes = agentxx::util::Json::object();
     if (def.contains("nodes") && def["nodes"].is_object()) {
         nodes = def["nodes"];
     }
-    nodes["intent_router"] = neograph::json{
+    nodes["intent_router"] = agentxx::util::Json{
         {"type",     "example_intent_router"                                                      },
-        {"intents",  neograph::json::array({neograph::json("datetime"), neograph::json("normal")})},
+        {"intents",  agentxx::util::Json::array({agentxx::util::Json("datetime"), agentxx::util::Json("normal")})},
         {"fallback", "normal"                                                                     },
     };
-    nodes["datetime_node"] = neograph::json{
+    nodes["datetime_node"] = agentxx::util::Json{
         {"type", "example_datetime"},
     };
     graph["nodes"] = std::move(nodes);
 
     // edges: 意图路由流程
-    neograph::json edges = neograph::json::array();
-    edges.push_back(neograph::json{
+    agentxx::util::Json edges = agentxx::util::Json::array();
+    edges.push_back(agentxx::util::Json{
         {"from", "__start__"  },
         {"to",   "agent_start"}
     });
-    edges.push_back(neograph::json{
+    edges.push_back(agentxx::util::Json{
         {"from", "agent_start"},
         {"to",   "llm"        }
     });
-    edges.push_back(neograph::json{
+    edges.push_back(agentxx::util::Json{
         {"from", "llm"          },
         {"to",   "intent_router"}
     });
-    edges.push_back(neograph::json{
+    edges.push_back(agentxx::util::Json{
         {"from",      "intent_router"},
         {"type",      "conditional"  },
         {"condition", "route_channel"},
         {"routes",
-         neograph::json{
+         agentxx::util::Json{
              {"datetime", "datetime_node"},
              {"normal", "llm"},
              {"tools", "tools"},
@@ -451,15 +451,15 @@ static int modifyGraphToIntentFlow(AgentCtx& ctx, std::string& errOut) {
              {"default", "agent_end"},
          }                           },
     });
-    edges.push_back(neograph::json{
+    edges.push_back(agentxx::util::Json{
         {"from", "tools"},
         {"to",   "llm"  }
     });
-    edges.push_back(neograph::json{
+    edges.push_back(agentxx::util::Json{
         {"from", "datetime_node"},
         {"to",   "__end__"      }
     });
-    edges.push_back(neograph::json{
+    edges.push_back(agentxx::util::Json{
         {"from", "agent_end"},
         {"to",   "__end__"  }
     });

@@ -126,7 +126,7 @@ void runTrainingMode(
                         (std::istreambuf_iterator<char>(tcFile)),
                         std::istreambuf_iterator<char>()
                     );
-                    auto j = neograph::json::parse(content);
+                    auto j = agentxx::util::Json::parse(content);
                     if (j.is_array()) {
                         // 复用库内解析: 字段语义与文件加载完全一致, 含重名唯一化
                         trainCfg.testCases = agentxx::agent::testCasesFromJson(j);

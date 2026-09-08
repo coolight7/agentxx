@@ -363,7 +363,7 @@ private:
     ///   pluginDecorHits() 读取 (MessageListComponent 有独立事件流, 不能只靠全局)
     /// - text/button 解析与配色走 plugin_ui_items 共享 helper; diff 走 renderPluginDiff
     void appendDecorItems(
-        const neograph::json& items,
+        const agentxx::util::Json& items,
         const std::string&    plugin,
         const std::string&    ownerId,
         ftxui::Elements&      lines,

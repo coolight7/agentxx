@@ -1,4 +1,5 @@
 #include "agentxx/middlewares/permission.h"
+#include "agentxx/tools/tool.h"
 
 #include "agentxx/event/event_stream.h"
 #include "agentxx/event/events.h"
@@ -10,31 +11,23 @@ namespace middleware {
 
 namespace {
 
-class DummyPermissionTool : public neograph::Tool {
+class DummyPermissionTool : public agentxx::tools::XXToolBase {
 public:
 
     explicit DummyPermissionTool(std::string name) :
-        name_(std::move(name)) {}
+        agentxx::tools::XXToolBase(name, {}) {}
 
     neograph::ChatTool get_definition() const override {
         return neograph::ChatTool{
-            .name        = name_,
+            .name        = name,
             .description = "",
             .parameters  = neograph::json::object(),
         };
     }
 
-    std::string get_name() const override {
-        return name_;
+    asio::awaitable<std::string> execute_async(const agentxx::util::Json&) override {
+        co_return std::string{};
     }
-
-    std::string execute(const neograph::json&) override {
-        return {};
-    }
-
-private:
-
-    std::string name_;
 };
 
 /// 判断规范化路径 (尾斜杠目录前缀) 是否位于指定目录子树内
@@ -122,7 +115,7 @@ void PermissionMiddlewareHandle::setFilesystemPermission(
 
 asio::awaitable<bool> PermissionMiddlewareHandle::defOnFilesystemHandle(
     const neograph::Tool& item,
-    neograph::json&       args,
+    agentxx::util::Json&       args,
     size_t                index
 ) {
     auto path      = args.value<std::string>("path", "");
@@ -190,7 +183,7 @@ asio::awaitable<bool> PermissionMiddlewareHandle::defOnFilesystemHandle(
 
 asio::awaitable<bool> PermissionMiddlewareHandle::requestPermission(
     const neograph::Tool& item,
-    neograph::json&       args,
+    agentxx::util::Json&       args,
     std::string           category,
     std::string           target
 ) {
@@ -227,18 +220,18 @@ asio::awaitable<bool> PermissionMiddlewareHandle::requestPermission(
 
 void PermissionMiddlewareHandle::registerFilesystemHandles() {
     auto readHandle
-        = [this](const neograph::Tool& item, neograph::json& args) -> asio::awaitable<bool> {
+        = [this](const neograph::Tool& item, agentxx::util::Json& args) -> asio::awaitable<bool> {
         co_return co_await defOnFilesystemHandle(item, args, FilesystemPermissionREAD);
     };
 
     handles["agentxx_filesystem_list"] = readHandle;
     handles["agentxx_filesystem_read"] = readHandle;
     handles["agentxx_filesystem_write"]
-        = [this](const neograph::Tool& item, neograph::json& args) -> asio::awaitable<bool> {
+        = [this](const neograph::Tool& item, agentxx::util::Json& args) -> asio::awaitable<bool> {
         co_return co_await defOnFilesystemHandle(item, args, FilesystemPermissionWRITE);
     };
     handles["agentxx_filesystem_edit"]
-        = [this](const neograph::Tool& item, neograph::json& args) -> asio::awaitable<bool> {
+        = [this](const neograph::Tool& item, agentxx::util::Json& args) -> asio::awaitable<bool> {
         co_return co_await defOnFilesystemHandle(item, args, FilesystemPermissionWRITE);
     };
     // handles["agentxx_filesystem_glob"] = readHandle;
@@ -271,7 +264,7 @@ void PermissionMiddlewareHandle::registerOnBus(const std::shared_ptr<agentxx::ev
                                  auto it = handles.find(req.toolName);
                                  if (it != handles.end()) {
                                      DummyPermissionTool dummyTool(req.toolName);
-                                     neograph::json      argsCopy = req.arguments;
+                                     agentxx::util::Json      argsCopy = req.arguments;
                                      auto allow = co_await it->second(dummyTool, argsCopy);
                                      co_return events::RespToolPermissionCheck{.allow = allow};
                                  }

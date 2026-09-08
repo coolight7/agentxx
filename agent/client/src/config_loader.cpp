@@ -207,91 +207,91 @@ std::string resolveEnvVars(
 /// YAML → JSON 并递归展开 ${VAR} (插件 args 专用)
 /// - 标量先经 resolveEnvVars 展开再判断类型 (true/false/数字/字符串)
 /// - 与 yamlToJson 语义一致, 仅多了 env 展开步骤
-static neograph::json yamlToJsonResolveEnv(
+static agentxx::util::Json yamlToJsonResolveEnv(
     const YAML::Node&                         node,
     const std::map<std::string, std::string>& dotEnvVars,
     const std::map<std::string, std::string>& overrideEnvVars
 ) {
     if (!node.IsDefined() || node.IsNull()) {
-        return neograph::json{};
+        return agentxx::util::Json{};
     }
     if (node.IsScalar()) {
         long long i;
         double    d;
         auto      s = resolveEnvVars(node.as<std::string>(), dotEnvVars, overrideEnvVars);
         if (s == "true") {
-            return neograph::json(true);
+            return agentxx::util::Json(true);
         }
         if (s == "false") {
-            return neograph::json(false);
+            return agentxx::util::Json(false);
         }
         if (util::parseNumberFromString(s, i).ec == std::errc{}) {
-            return neograph::json(i);
+            return agentxx::util::Json(i);
         }
         if (util::parseNumberFromString(s, d).ec == std::errc{}) {
-            return neograph::json(d);
+            return agentxx::util::Json(d);
         }
-        return neograph::json(s);
+        return agentxx::util::Json(s);
     }
     if (node.IsSequence()) {
-        neograph::json arr = neograph::json::array();
+        agentxx::util::Json arr = agentxx::util::Json::array();
         for (const auto& item : node) {
             arr.push_back(yamlToJsonResolveEnv(item, dotEnvVars, overrideEnvVars));
         }
         return arr;
     }
     if (node.IsMap()) {
-        neograph::json obj = neograph::json::object();
+        agentxx::util::Json obj = agentxx::util::Json::object();
         for (const auto& kv : node) {
             obj[kv.first.as<std::string>()]
                 = yamlToJsonResolveEnv(kv.second, dotEnvVars, overrideEnvVars);
         }
         return obj;
     }
-    return neograph::json{};
+    return agentxx::util::Json{};
 }
 
-static neograph::json yamlToJson(const YAML::Node& node) {
+static agentxx::util::Json yamlToJson(const YAML::Node& node) {
     if (!node.IsDefined() || node.IsNull()) {
-        return neograph::json{};
+        return agentxx::util::Json{};
     }
     if (node.IsScalar()) {
         long long i;
         double    d;
         // 注意: 必须用圆括号构造标量, 不能用花括号!
-        // neograph::json 存在 json(std::initializer_list<json>) 构造函数,
+        // agentxx::util::Json 存在 json(std::initializer_list<json>) 构造函数,
         // C++ 花括号初始化优先匹配它, 导致标量被包成单元素数组:
         //   json{true} -> [true], json{"high"} -> ["high"]
         // 圆括号才能精确匹配 json(bool)/json(int)/json(double)/json(string) 标量构造。
         if (node.as<std::string>() == "true") {
-            return neograph::json(true);
+            return agentxx::util::Json(true);
         }
         if (node.as<std::string>() == "false") {
-            return neograph::json(false);
+            return agentxx::util::Json(false);
         }
         if (util::parseNumberFromString(node.as<std::string>(), i).ec == std::errc{}) {
-            return neograph::json(i);
+            return agentxx::util::Json(i);
         }
         if (util::parseNumberFromString(node.as<std::string>(), d).ec == std::errc{}) {
-            return neograph::json(d);
+            return agentxx::util::Json(d);
         }
-        return neograph::json(node.as<std::string>());
+        return agentxx::util::Json(node.as<std::string>());
     }
     if (node.IsSequence()) {
-        neograph::json arr = neograph::json::array();
+        agentxx::util::Json arr = agentxx::util::Json::array();
         for (const auto& item : node) {
             arr.push_back(yamlToJson(item));
         }
         return arr;
     }
     if (node.IsMap()) {
-        neograph::json obj = neograph::json::object();
+        agentxx::util::Json obj = agentxx::util::Json::object();
         for (const auto& kv : node) {
             obj[kv.first.as<std::string>()] = yamlToJson(kv.second);
         }
         return obj;
     }
-    return neograph::json{};
+    return agentxx::util::Json{};
 }
 
 // ---------------------------------------------------------------------------

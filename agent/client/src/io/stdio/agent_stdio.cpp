@@ -220,7 +220,7 @@ bool StdIOClientAgentIO::sendPluginDataUp(
     return true;
 }
 
-asio::awaitable<neograph::json> StdIOClientAgentIO::handleInterrupt(
+asio::awaitable<agentxx::util::Json> StdIOClientAgentIO::handleInterrupt(
     std::string_view sessionId,
     std::string_view interruptNode,
     std::string_view interruptValue,
@@ -231,7 +231,7 @@ asio::awaitable<neograph::json> StdIOClientAgentIO::handleInterrupt(
     agentxx::util::catchError<bool>(
         [&]() -> bool {
             argOpt = agentxx::middleware::InterruptHandleArg::fromJson(
-                neograph::json::parse(interruptArgJson)
+                agentxx::util::Json::parse(interruptArgJson)
             );
             return true;
         },
@@ -241,7 +241,7 @@ asio::awaitable<neograph::json> StdIOClientAgentIO::handleInterrupt(
         }
     );
     if (!argOpt.has_value()) {
-        co_return neograph::json::array();
+        co_return agentxx::util::Json::array();
     }
     const auto& handleArg = argOpt.value();
 
@@ -260,7 +260,7 @@ asio::awaitable<neograph::json> StdIOClientAgentIO::handleInterrupt(
                                   : "┣━ Unknown InterruptHandleArg"
     ) << std::endl;
 
-    auto result = neograph::json::array();
+    auto result = agentxx::util::Json::array();
     std::cout << "\n  ┏━━━━━━ Input ━━━━━━┓\n" << std::flush;
     bool haveWaitInput = false;
 

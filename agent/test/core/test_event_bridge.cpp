@@ -4,6 +4,7 @@
 #include "agentxx/event/event_stream.h"
 #include "agentxx/event/events.h"
 #include "agentxx/middlewares/summarization.h"
+#include "agentxx/util/json.h"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
 #include "asio/io_context.hpp"
@@ -57,10 +58,10 @@ public:
         co_return std::nullopt;
     }
 
-    asio::awaitable<neograph::json>
+    asio::awaitable<agentxx::util::Json>
         handleInterrupt(std::string_view, std::string_view, std::string_view, std::string_view)
             override {
-        co_return neograph::json::array();
+        co_return agentxx::util::Json::array();
     }
 };
 

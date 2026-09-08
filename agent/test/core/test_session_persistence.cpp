@@ -13,7 +13,7 @@
 #include <chrono>
 #include <filesystem>
 #include <fmt/format.h>
-#include <neograph/json.h>
+#include "agentxx/util/json.h"
 #include <string>
 #include <vector>
 
@@ -226,26 +226,26 @@ static TestResult testLlmMessagesRoundtrip() {
         auto p = std::make_shared<SessionStore>(root);
 
         // 空上下文
-        p->saveLlmMessages("t2", neograph::json::array());
+        p->saveLlmMessages("t2", agentxx::util::Json::array());
         auto l1 = p->loadSession("t2");
         XX_TEST_EXPECT_TRUE(l1.llmMessages.is_array());
         XX_TEST_EXPECT_EQ(l1.llmMessages.size(), size_t{0});
 
         // 带 system/user/assistant/tool 的上下文
-        neograph::json ctx = neograph::json::array();
-        ctx.push_back(neograph::json{
+        agentxx::util::Json ctx = agentxx::util::Json::array();
+        ctx.push_back(agentxx::util::Json{
             {"role",    "system"},
             {"content", "sys"   },
         });
-        ctx.push_back(neograph::json{
+        ctx.push_back(agentxx::util::Json{
             {"role",    "user"},
             {"content", "u1"  },
         });
-        ctx.push_back(neograph::json{
+        ctx.push_back(agentxx::util::Json{
             {"role",    "assistant"},
             {"content", "a1"       },
         });
-        ctx.push_back(neograph::json{
+        ctx.push_back(agentxx::util::Json{
             {"role",         "tool"      },
             {"tool_call_id", "call_1"    },
             {"content",      R"({"r":1})"},
@@ -431,12 +431,12 @@ static TestResult testSessionStoreIntegration() {
         s1->appendViewMessage(ViewMessage::makeText(V::Role::User, "u1"));
         s1->appendViewMessage(ViewMessage::makeText(V::Role::Assistant, "a1"));
         s1->appendViewMessage(makeMsg(V::Role::Tool, R"({"tool":"x"})"));
-        s1->llmMessages = neograph::json::array();
-        s1->llmMessages.push_back(neograph::json{
+        s1->llmMessages = agentxx::util::Json::array();
+        s1->llmMessages.push_back(agentxx::util::Json{
             {"role",    "system"},
             {"content", "sys"   }
         });
-        s1->llmMessages.push_back(neograph::json{
+        s1->llmMessages.push_back(agentxx::util::Json{
             {"role",    "user"},
             {"content", "u1"  }
         });
@@ -521,8 +521,8 @@ static TestResult testPersistThrottle() {
             XX_TEST_EXPECT_EQ(loaded.msgIdCounter, uint64_t{1});
         }
         // ---- llm 节流: 首次结算立即落盘 ----
-        neograph::json ctx = neograph::json::array();
-        ctx.push_back(neograph::json{
+        agentxx::util::Json ctx = agentxx::util::Json::array();
+        ctx.push_back(agentxx::util::Json{
             {"role",    "user"},
             {"content", "u1"  },
         });
@@ -533,8 +533,8 @@ static TestResult testPersistThrottle() {
             XX_TEST_EXPECT_EQ(probe.loadSession("throttle").llmMessages.size(), size_t{1});
         }
         // ---- 第二次结算 (窗口内): 内存增长, 未落盘 ----
-        s1->appendSettledLlmMessages(neograph::json::array({
-            neograph::json{
+        s1->appendSettledLlmMessages(agentxx::util::Json::array({
+            agentxx::util::Json{
                            {"role", "assistant"},
                            {"content", "a1"},
                            },
@@ -842,14 +842,14 @@ static asio::awaitable<void> testSessionPersistenceE2E() {
         // 收尾请求返回真实文本 (provider 层已把完全空响应当作生成失败,
         // 模拟器/用例遵循同一契约: 回合以带内容的 assistant 消息结束)
         g_da_sim_response_content = "E2E final answer";
-        g_da_sim_tool_calls       = neograph::json::array({
-            neograph::json{
+        g_da_sim_tool_calls       = agentxx::util::Json::array({
+            agentxx::util::Json{
                            {"index", 0},
                            {"id", "call_e2e_1"},
                            {"type", "function"},
                            {
                     "function",
-                    neograph::json{
+                    agentxx::util::Json{
                               {"name", "agentxx_filesystem_list"},
                               {"arguments", "{}"},
                     },
@@ -976,7 +976,7 @@ static asio::awaitable<void> testTurnEndTipPersistenceRoundtrip() {
         };
 
         g_da_sim_response_content  = "Turn result text";
-        g_da_sim_tool_calls        = neograph::json::array();
+        g_da_sim_tool_calls        = agentxx::util::Json::array();
         g_da_sim_reasoning_content = "";
 
         // 第一次运行: 传入 server-io 驱动会话, 验证轮次结束时插入 Tip 消息并落盘

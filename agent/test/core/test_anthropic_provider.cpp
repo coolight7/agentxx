@@ -1,4 +1,5 @@
 #include "test_anthropic_provider.h"
+#include "agentxx/util/neograph_json_bridge.h"
 #include "agentxx/protocol/anthropic_provider.h"
 #include "agentxx/util/http_client.h"
 #include "agentxx/util/http_server.h"
@@ -276,7 +277,7 @@ void test_convert_tools() {
         {.name        = "get_weather",
          .description = "Get weather",
          .parameters
-         = neograph::json::parse(R"({"type":"object","properties":{"location":{"type":"string"}}})")
+         = agentxx::util::parseNeographJson(R"({"type":"object","properties":{"location":{"type":"string"}}})")
         },
     };
     auto arr = server::AnthropicProvider::convertTools(tools);
@@ -289,7 +290,7 @@ void test_convert_tools() {
 }
 
 void test_parse_response_text() {
-    auto resp       = neograph::json::parse(R"({
+    auto resp       = agentxx::util::Json::parse(R"({
     "id": "msg_001",
     "type": "message",
     "role": "assistant",
@@ -308,7 +309,7 @@ void test_parse_response_text() {
 }
 
 void test_parse_response_tool_use() {
-    auto resp       = neograph::json::parse(R"({
+    auto resp       = agentxx::util::Json::parse(R"({
     "id": "msg_002",
     "type": "message",
     "role": "assistant",
@@ -330,7 +331,7 @@ void test_parse_response_tool_use() {
 }
 
 void test_parse_response_thinking() {
-    auto resp       = neograph::json::parse(R"({
+    auto resp       = agentxx::util::Json::parse(R"({
     "id": "msg_003",
     "type": "message",
     "role": "assistant",
@@ -347,7 +348,7 @@ void test_parse_response_thinking() {
 }
 
 void test_parse_response_mixed() {
-    auto resp       = neograph::json::parse(R"({
+    auto resp       = agentxx::util::Json::parse(R"({
     "id": "msg_004",
     "type": "message",
     "role": "assistant",
@@ -368,7 +369,7 @@ void test_parse_response_mixed() {
 }
 
 void test_parse_response_usage() {
-    auto resp       = neograph::json::parse(R"({
+    auto resp       = agentxx::util::Json::parse(R"({
     "id": "msg_005",
     "type": "message",
     "role": "assistant",
@@ -406,15 +407,15 @@ public:
     std::string                 lastRequestHeaders;
 
     std::vector<std::string>      sseChunks;
-    std::optional<neograph::json> customResponse;
+    std::optional<agentxx::util::Json> customResponse;
 
     static std::string sseEvent(std::string_view event, std::string_view data) {
         return "event: " + std::string(event) + "\ndata: " + std::string(data) + "\n\n";
     }
 
-    neograph::json
+    agentxx::util::Json
         makeTextResponse(std::string_view content, int inputTok = 10, int outputTok = 5) const {
-        return neograph::json::parse(
+        return agentxx::util::Json::parse(
             R"({
       "id": "msg_mock",
       "type": "message",
@@ -428,8 +429,8 @@ public:
         );
     }
 
-    neograph::json makeToolCallResponse() const {
-        return neograph::json::parse(R"({
+    agentxx::util::Json makeToolCallResponse() const {
+        return agentxx::util::Json::parse(R"({
       "id": "msg_tool",
       "type": "message",
       "role": "assistant",
@@ -442,8 +443,8 @@ public:
     })");
     }
 
-    neograph::json makeThinkingResponse() const {
-        return neograph::json::parse(R"({
+    agentxx::util::Json makeThinkingResponse() const {
+        return agentxx::util::Json::parse(R"({
       "id": "msg_think",
       "type": "message",
       "role": "assistant",
@@ -627,7 +628,7 @@ asio::awaitable<void> test_non_streaming_completion(MockAnthropicServer& mock, u
         XX_TEST_EXPECT_TRUE(result.message.content.find("Hello") != std::string::npos);
         XX_TEST_EXPECT_TRUE(result.usage.total_tokens > 0);
 
-        auto sent = neograph::json::parse(mock.lastRequestBody);
+        auto sent = agentxx::util::Json::parse(mock.lastRequestBody);
         XX_TEST_EXPECT_EQ(sent["model"].get<std::string>(), "claude-sonnet-4-20250514");
         XX_TEST_EXPECT_TRUE(sent.contains("messages"));
         XX_TEST_EXPECT_TRUE(sent.contains("max_tokens"));
@@ -652,7 +653,7 @@ asio::awaitable<void> test_non_streaming_tool_call(MockAnthropicServer& mock, ui
         neograph::ChatTool{
                            .name        = "get_weather",
                            .description = "Get weather",
-                           .parameters  = neograph::json::parse(
+                           .parameters  = agentxx::util::parseNeographJson(
                 R"({"type":"object","properties":{"location":{"type":"string"}}})"
             )
         }
@@ -801,13 +802,13 @@ asio::awaitable<void> test_request_body_format(MockAnthropicServer& mock, uint16
         neograph::ChatTool{
                            .name        = "search",
                            .description = "Search the web",
-                           .parameters  = neograph::json::parse(R"({"type":"object","properties":{}})")
+                           .parameters  = agentxx::util::parseNeographJson(R"({"type":"object","properties":{}})")
         }
     };
 
     try {
         co_await provider->invoke(params, nullptr);
-        auto sent = neograph::json::parse(mock.lastRequestBody);
+        auto sent = agentxx::util::Json::parse(mock.lastRequestBody);
 
         // System should be top-level
         XX_TEST_EXPECT_TRUE(sent.contains("system"));
@@ -850,7 +851,7 @@ asio::awaitable<void> test_sendthinking_in_request_body(MockAnthropicServer& moc
 
     try {
         co_await provider->invoke(params, nullptr);
-        auto sent = neograph::json::parse(mock.lastRequestBody);
+        auto sent = agentxx::util::Json::parse(mock.lastRequestBody);
 
         // First message should have thinking content block
         XX_TEST_EXPECT_TRUE(sent["messages"][0]["content"].is_array());
@@ -1042,7 +1043,7 @@ asio::awaitable<void> test_streaming_tool_call(MockAnthropicServer& mock, uint16
         neograph::ChatTool{
                            .name        = "get_weather",
                            .description = "Get weather",
-                           .parameters  = neograph::json::parse(
+                           .parameters  = agentxx::util::parseNeographJson(
                 R"({"type":"object","properties":{"location":{"type":"string"}}})"
             )
         }
@@ -1953,7 +1954,7 @@ void test_convert_messages_thinking_signature_roundtrip() {
     msg.role                                                 = "assistant";
     msg.content                                              = "Answer";
     msg.reasoning_content                                    = "Thinking text";
-    msg.extra[server::AnthropicProvider::kThinkingBlocksKey] = neograph::json::parse(R"([
+    msg.extra[server::AnthropicProvider::kThinkingBlocksKey] = agentxx::util::parseNeographJson(R"([
         {"type":"thinking","thinking":"Thinking text","signature":"sig123"},
         {"type":"redacted_thinking","data":"redacted-data"}
     ])");
@@ -2050,7 +2051,7 @@ void test_convert_messages_multimodal_merge() {
 
 /// 非流式响应解析: 带 signature 的 thinking 块与 redacted_thinking 块应存入 extra 以便回传
 void test_parse_response_thinking_signature() {
-    auto resp       = neograph::json::parse(R"({
+    auto resp       = agentxx::util::Json::parse(R"({
         "content": [
             {"type":"thinking","thinking":"Hmm...","signature":"sig-abc"},
             {"type":"redacted_thinking","data":"EQo=="},

@@ -46,14 +46,13 @@ file(GLOB_RECURSE agentxx_SOURCES
 # - 定位: 本库面向 agentxx 内置插件 (便捷复用); 第三方插件完全不需要它
 #   (纯 C ABI 头即可, 甚至不用 C++), 不 find_package 本库即零影响
 # - 收录范围: **src/util/ 全部源文件** (http_client/http_server/ws_client/
-#   string_util/util/sqlite/settings_db/log/regex/http_header) + include/agentxx/
-#   util/ 全部头文件
+#   string_util/util/sqlite/settings_db/log/regex/http_header/json/json_view) +
+#   include/agentxx/util/ 全部头文件
 # - 依赖: **全部 PUBLIC 链接 + PUBLIC include 传递** (内置插件链接本库后直接
 #   获得全部 util 能力, 无需自行配置任何依赖):
 #   - 轻量 (imported target, config find_dependency 链解析): fmt / SQLite3 /
-#     uchardet / iconv
-#   - 重依赖: neograph 系 + yyjson (裸库名, 经 PUBLIC link_directories 传播
-#     解析; 链接顺序敏感, 与 lib 自身一致); OpenSSL (imported target,
+#     uchardet / iconv / simdjson (json.cpp/json_view.cpp 的解析底层)
+#   - 重依赖: OpenSSL (imported target,
 #     find_dependency 链解析, include 路径随 INTERFACE 传递)
 #   - 条件 pkg-config 模块: hyperscan (AGENTXX_ENABLE_HYPERSCAN) / uring
 #     (AGENTXX_LINUX_IO_URING_SUPPORTED) —— 处理方项目须定义同名 PkgConfig::*
@@ -216,7 +215,10 @@ foreach(_agentxx_target ${_AGENTXX_USAGE_TARGETS})
     $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
     # 标记为 SYSTEM 防止 include 影响 warning 转 error 判断
     "${AGENTXX_INSTALL_DIR}/include/"
-    "${neograph_SOURCE_DIR}/deps/yyjson/"
+    # neograph 自身头 (cancel/graph 等) 经 install/include 提供, 其内部
+    # json.h 依赖的 yyjson.h 经 neograph 源码 deps 目录补齐 (仅构建期,
+    # 不再向插件/下游传播; Json 自主化后业务代码不再直引 yyjson)
+    "$<BUILD_INTERFACE:${neograph_SOURCE_DIR}/deps/yyjson/>"
   )
   target_include_directories(${_agentxx_target} SYSTEM PUBLIC 
     "${Boost_INCLUDE_DIRS}"
@@ -232,24 +234,27 @@ unset(_agentxx_target)
 # 全部 util 能力; 第三方插件不 find_package 本库即零影响)
 # - 轻量 (imported target): 插件 find_package(agentxx_util) 后经 config 的
 #   find_dependency 链解析 —— string_util.cpp (uchardet 编码检测 + iconv
-#   编码转换), util.cpp (fmt), sqlite.cpp/settings_db.cpp (sqlite3)
-# - 重依赖 (裸库名 + imported target 混合):
-#   - neograph 系 + yyjson 为裸库名 (与 lib 自身 _AGENTXX_LINK_LIBS 一致),
-#     经下方 PUBLIC link_directories (AGENTXX_INSTALL_DIR/lib) 传播解析;
-#     链接顺序敏感 (sqlite → acp → mcp → async → llm → core)
+#   编码转换), util.cpp (fmt), sqlite.cpp/settings_db.cpp (sqlite3),
+#   json.cpp/json_view.cpp (simdjson)
+# - 重依赖 (imported target):
+#   - simdjson::simdjson: json 解析底层 (PUBLIC, 插件侧 Json/JsonView 内联
+#     代码引用 simdjson 头, 需 include + 链接传播; 静态库, 无体积顾虑)
 #   - OpenSSL::SSL / OpenSSL::Crypto 为 imported target, config find_dependency
 #     解析, include 路径随 INTERFACE 传递 (插件 include http_client.h 时
 #     beast ssl 需要 openssl 头, 无需自行配置)
 # - 注意: 链接项必须用 imported target (Iconv::Iconv / fmt::fmt ...) 而非
 #   裸库名 (charset): 裸名导出后处理方需自行配置 link_directories, 插件项目
-#   无此配置会链接失败; 裸库名仅用于 install/lib 内存在的库 (neograph 系/
-#   yyjson/hs_runtime, 经 link_directories 解析)
+#   无此配置会链接失败; 裸库名仅用于 install/lib 内存在的库 (hs_runtime,
+#   经 link_directories 解析)
 # - iconv 目标名兼容: Iconv::Iconv 在两种来源下均存在 (libiconv-native
 #   config 中为 Iconv::iconv 的 ALIAS, CMake 内置 Findiconv.cmake 模块为
 #   原生目标); Iconv::charset 仅 libiconv-native config 提供 (Windows),
 #   模块模式 (glibc 系统 iconv) 下不存在, 下方条件链接
+# - 历史: 本库曾 PUBLIC 链接 neograph 系 + yyjson (Json 经 neograph::json 实现);
+#   自 Json 自主化重构起彻底移除 —— 插件仅需 agentxx_util + simdjson,
+#   不再被迫链接图引擎全套库 (见 docs/zh-cn/plugins.md 4.5/4.6 节)
 
-# 裸库名依赖解析目录 (PUBLIC 传播): neograph 系/yyjson/hs_runtime 位于
+# 裸库名依赖解析目录 (PUBLIC 传播): hs_runtime 位于
 # AGENTXX_INSTALL_DIR/lib, 插件处理本库后自动获得, 无需自行 link_directories
 target_link_directories(agentxx_util PUBLIC "${AGENTXX_INSTALL_DIR}/lib/")
 target_link_libraries(agentxx_util PUBLIC
@@ -258,15 +263,7 @@ target_link_libraries(agentxx_util PUBLIC
   uchardet::libuchardet
   Iconv::iconv
   Iconv::charset
-  # === neograph vvv 链接顺序是必要的 (与 lib 自身一致) ===
-  neograph_sqlite
-  neograph_acp
-  neograph_mcp
-  neograph_async
-  neograph_llm
-  neograph_core
-  # === neograph ^^^
-  yyjson
+  simdjson::simdjson
   OpenSSL::SSL
   OpenSSL::Crypto
 )
@@ -504,12 +501,12 @@ packageProject(
 # iconvConfig.cmake, CONFIG 模式成功时 find_package 框架设置精确的小写
 # iconv_FOUND=TRUE; 若仅写 "iconv" 则会退化为模块模式, 目标 Iconv::iconv/
 # Iconv::charset 不存在, 处理方链接 agentxx_util 时直接报 target not found)
-# - OpenSSL::SSL/Crypto 为 INTERFACE_LINK_LIBRARIES 中的 imported target,
-#   须在 DEPENDENCIES 中声明以便处理方 find_dependency 解析
-# - neograph 系/yyjson/hs_runtime 为裸库名, 经 PUBLIC link_directories 解析,
+# - OpenSSL::SSL/Crypto 与 simdjson::simdjson 为 INTERFACE_LINK_LIBRARIES 中的
+#   imported target, 须在 DEPENDENCIES 中声明以便处理方 find_dependency 解析
+# - hs_runtime 为裸库名, 经 PUBLIC link_directories 解析,
 #   无需 find_dependency; PkgConfig::hyperscan/uring 由处理方项目自行
 #   pkg_check_modules 定义 (见 plugins/CMakeLists.txt)
-set(agentxx_util_DEPENDENCIES "fmt;SQLite3 CONFIG;uchardet;iconv CONFIG;OpenSSL")
+set(agentxx_util_DEPENDENCIES "fmt;SQLite3 CONFIG;uchardet;iconv CONFIG;OpenSSL;simdjson")
 packageProject(
   NAME agentxx_util
   VERSION ${PROJECT_VERSION}

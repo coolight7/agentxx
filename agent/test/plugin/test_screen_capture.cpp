@@ -162,10 +162,10 @@ asio::awaitable<agentxx::test::TestResult>
         auto tool = ctx->toolRegistry->find("agentxx_screen_capture");
         XX_TEST_EXPECT_TRUE(tool != nullptr);
         if (tool) {
-            auto out = co_await tool->execute_async(neograph::json{
+            auto out = co_await tool->execute_async(agentxx::util::Json{
                 {"command", "get_screen_count"}
             });
-            auto j   = neograph::json::parse(out);
+            auto j   = agentxx::util::Json::parse(out);
             XX_TEST_EXPECT_EQ(j["ok"].get<bool>(), true);
             screenCount = j["count"].get<int>();
             XX_TEST_EXPECT_TRUE(screenCount > 0);
@@ -176,11 +176,11 @@ asio::awaitable<agentxx::test::TestResult>
     {
         auto tool = ctx->toolRegistry->find("agentxx_screen_capture");
         if (tool) {
-            auto out = co_await tool->execute_async(neograph::json{
+            auto out = co_await tool->execute_async(agentxx::util::Json{
                 {"command",     "capture_all"},
                 {"save_images", false        },
             });
-            auto j   = neograph::json::parse(out);
+            auto j   = agentxx::util::Json::parse(out);
             XX_TEST_EXPECT_EQ(j["ok"].get<bool>(), true);
             XX_TEST_EXPECT_TRUE(j["frames"].size() > 0);
             const auto& f0 = j["frames"][0];
@@ -196,10 +196,10 @@ asio::awaitable<agentxx::test::TestResult>
     {
         auto tool = ctx->toolRegistry->find("agentxx_screen_capture");
         if (tool) {
-            auto out = co_await tool->execute_async(neograph::json{
+            auto out = co_await tool->execute_async(agentxx::util::Json{
                 {"save_images", true}
             });
-            auto j   = neograph::json::parse(out);
+            auto j   = agentxx::util::Json::parse(out);
             XX_TEST_EXPECT_EQ(j["ok"].get<bool>(), true);
             XX_TEST_EXPECT_EQ(j["frames"].size(), static_cast<size_t>(screenCount));
             for (size_t i = 0; i < j["frames"].size(); ++i) {
@@ -225,12 +225,12 @@ asio::awaitable<agentxx::test::TestResult>
     {
         auto tool = ctx->toolRegistry->find("agentxx_screen_capture");
         if (tool) {
-            auto out = co_await tool->execute_async(neograph::json{
+            auto out = co_await tool->execute_async(agentxx::util::Json{
                 {"command",      "capture_screen"},
                 {"screen_index", 0               },
                 {"save_images",  false           },
             });
-            auto j   = neograph::json::parse(out);
+            auto j   = agentxx::util::Json::parse(out);
             XX_TEST_EXPECT_EQ(j["ok"].get<bool>(), true);
             XX_TEST_EXPECT_EQ(j["frames"].size(), 1u);
             const auto& f0 = j["frames"][0];
@@ -244,11 +244,11 @@ asio::awaitable<agentxx::test::TestResult>
     {
         auto tool = ctx->toolRegistry->find("agentxx_screen_capture");
         if (tool) {
-            auto out = co_await tool->execute_async(neograph::json{
+            auto out = co_await tool->execute_async(agentxx::util::Json{
                 {"command",      "capture_screen"},
                 {"screen_index", 99999           }
             });
-            auto j   = neograph::json::parse(out);
+            auto j   = agentxx::util::Json::parse(out);
             XX_TEST_EXPECT_EQ(j["ok"].get<bool>(), false);
         }
     }

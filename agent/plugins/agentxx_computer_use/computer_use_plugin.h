@@ -4,11 +4,11 @@
 #include "agentxx/plugin/api/plugin_api.h"
 #include "agentxx/plugin/api/plugin_guard.h"
 #include "agentxx/plugin/api/plugin_kit.h"
+#include "agentxx/util/json.h"
 #include "fmt/format.h"
-#include "simdjson.h"
-#include <cstring>
-#include <memory>
+#include <cstdint>
 #include <string>
+#include <vector>
 
 namespace agentxx_computer_use_plugin {
 
@@ -24,71 +24,7 @@ inline void pluginLog(
     }
 }
 
-class SimpleJson {
-public:
-
-    explicit SimpleJson(const std::string& s) {
-        padded_ = std::make_unique<simdjson::padded_string>(s);
-        auto r  = parser_.iterate(*padded_);
-        if (r.error()) {
-            ok_ = false;
-            return;
-        }
-        doc_ = std::move(r).value();
-        ok_  = true;
-    }
-
-    bool ok() const {
-        return ok_;
-    }
-
-    simdjson::ondemand::document& doc() {
-        return doc_;
-    }
-
-private:
-
-    simdjson::ondemand::parser               parser_{};
-    std::unique_ptr<simdjson::padded_string> padded_{};
-    simdjson::ondemand::document             doc_{};
-    bool                                     ok_ = false;
-};
-
-inline bool
-    jsonGetString(simdjson::simdjson_result<simdjson::ondemand::value> val, std::string& out) {
-    if (val.error()) {
-        return false;
-    }
-    auto sv = val.get_string();
-    if (sv.error()) {
-        return false;
-    }
-    out = sv.value();
-    return true;
-}
-
-inline bool jsonGetInt(simdjson::simdjson_result<simdjson::ondemand::value> val, int64_t& out) {
-    if (val.error()) {
-        return false;
-    }
-    auto v = val.get_int64();
-    if (v.error()) {
-        return false;
-    }
-    out = v.value();
-    return true;
-}
-
-inline bool jsonGetBool(simdjson::simdjson_result<simdjson::ondemand::value> val, bool& out) {
-    if (val.error()) {
-        return false;
-    }
-    auto v = val.get_bool();
-    if (v.error()) {
-        return false;
-    }
-    out = v.value();
-    return true;
-}
+/// 参数读取统一经 agentxx::util::Json (自主 DOM, simdjson 驱动解析),
+/// 不再手写 simdjson::ondemand 局部解析桩 (历史 SimpleJson/jsonGet* 已删除)
 
 } // namespace agentxx_computer_use_plugin

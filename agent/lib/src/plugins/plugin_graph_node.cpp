@@ -1,3 +1,4 @@
+#include "agentxx/util/neograph_json_bridge.h"
 #include "agentxx/plugin/plugin_graph_node.h"
 
 #include "agentxx/plugin/op_driver.h"
@@ -89,7 +90,7 @@ asio::awaitable<neograph::graph::NodeOutput> PluginGraphNode::run(neograph::grap
     // {"writes": [{"channel","value","mode"}], "command": {...}|null, "sends": [...]}
     neograph::graph::NodeOutput out;
     try {
-        auto j = neograph::json::parse(payload);
+        auto j = agentxx::util::Json::parse(payload);
         if (!j.is_object()) {
             throw std::runtime_error("node output is not a JSON object");
         }
@@ -101,7 +102,7 @@ asio::awaitable<neograph::graph::NodeOutput> PluginGraphNode::run(neograph::grap
                 }
                 neograph::graph::ChannelWrite cw;
                 cw.channel = w["channel"].get<std::string>();
-                cw.value   = w["value"];
+                cw.value   = agentxx::util::toNeographJson(w["value"]);
                 if (w.contains("mode") && w["mode"].is_string()
                     && w["mode"].get<std::string>() == "overwrite") {
                     cw.mode = neograph::graph::ChannelWrite::Mode::Overwrite;
@@ -122,7 +123,7 @@ asio::awaitable<neograph::graph::NodeOutput> PluginGraphNode::run(neograph::grap
                         }
                         neograph::graph::ChannelWrite cw;
                         cw.channel = u["channel"].get<std::string>();
-                        cw.value   = u["value"];
+                        cw.value   = agentxx::util::toNeographJson(u["value"]);
                         if (u.contains("mode") && u["mode"].is_string()
                             && u["mode"].get<std::string>() == "overwrite") {
                             cw.mode = neograph::graph::ChannelWrite::Mode::Overwrite;
@@ -141,7 +142,7 @@ asio::awaitable<neograph::graph::NodeOutput> PluginGraphNode::run(neograph::grap
                 neograph::graph::Send send;
                 send.target_node = s["target_node"].get<std::string>();
                 if (s.contains("input") && s["input"].is_object()) {
-                    send.input = s["input"];
+                    send.input = agentxx::util::toNeographJson(s["input"]);
                 }
                 out.sends.push_back(std::move(send));
             }

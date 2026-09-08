@@ -45,7 +45,7 @@ public:
         co_return std::nullopt;
     }
 
-    asio::awaitable<neograph::json> handleInterrupt(
+    asio::awaitable<agentxx::util::Json> handleInterrupt(
         std::string_view /*sessionId*/,
         std::string_view interruptNode,
         std::string_view /*interruptValue*/,
@@ -53,9 +53,9 @@ public:
     ) override {
         ++interruptCalls;
         if (interruptNode == "permission") {
-            co_return neograph::json::array({permissionAllow ? "true" : "false"});
+            co_return agentxx::util::Json::array({permissionAllow ? "true" : "false"});
         }
-        co_return neograph::json::array({interruptTag});
+        co_return agentxx::util::Json::array({interruptTag});
     }
 };
 
@@ -317,7 +317,7 @@ asio::awaitable<void> test_permission_relative_path() {
 
     auto check = [&](std::string_view rel, std::string_view abs) -> asio::awaitable<void> {
         // 相对路径访问
-        auto relArgs = neograph::json{
+        auto relArgs = agentxx::util::Json{
             {"path", std::string{rel}}
         };
         auto relOk = co_await permission->defOnFilesystemHandle(
@@ -326,7 +326,7 @@ asio::awaitable<void> test_permission_relative_path() {
             agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionWRITE
         );
         // 对应绝对路径访问
-        auto absArgs = neograph::json{
+        auto absArgs = agentxx::util::Json{
             {"path", std::string{abs}}
         };
         auto absOk = co_await permission->defOnFilesystemHandle(
@@ -353,7 +353,7 @@ asio::awaitable<void> test_permission_relative_path() {
 
     // 4. 空路径与 cwd 路径均不命中 {cwd}/* 规则, 回退到 /* INTERRUPT
     //    (无 prompter 时均拒绝, 行为一致)
-    auto emptyArgs = neograph::json{
+    auto emptyArgs = agentxx::util::Json{
         {"path", ""}
     };
     auto emptyOk = co_await permission->defOnFilesystemHandle(
@@ -361,7 +361,7 @@ asio::awaitable<void> test_permission_relative_path() {
         emptyArgs,
         agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionWRITE
     );
-    auto cwdArgs = neograph::json{
+    auto cwdArgs = agentxx::util::Json{
         {"path", cwd}
     };
     auto cwdOk = co_await permission->defOnFilesystemHandle(
@@ -411,7 +411,7 @@ asio::awaitable<void> test_permission_remember_rule() {
 
     auto write = [&](std::string_view path) -> asio::awaitable<bool> {
         // 必须携带 sessionId: requestPermission 经 sessions->get(sessionId) 取会话总线
-        auto args = neograph::json{
+        auto args = agentxx::util::Json{
             {"path",      std::string{path}},
             {"sessionId", "remember_test"  }
         };

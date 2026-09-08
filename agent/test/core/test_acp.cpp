@@ -1,3 +1,4 @@
+#include "agentxx/util/neograph_json_bridge.h"
 #include "test_acp.h"
 #include "agentxx/agent/code_agent.h"
 #include "agentxx/protocol/acp_server.h"
@@ -53,14 +54,17 @@ static std::shared_ptr<agentxx::agent::CodeAgent> makeTestAgent(const std::strin
     config->model.modelName = "acp-test-mock";
     auto agent              = std::make_shared<agentxx::agent::CodeAgent>(config);
 
-    neograph::json def = {
+    agentxx::util::Json def = {
         {"name",     name                                                               },
         {"channels", {{"messages", {{"reducer", "append"}}}}                            },
-        {"nodes",    neograph::json::object()                                           },
-        {"edges",    neograph::json::array({{{"from", "__start__"}, {"to", "__end__"}}})},
+        {"nodes",    agentxx::util::Json::object()                                           },
+        {"edges",    agentxx::util::Json::array({{{"from", "__start__"}, {"to", "__end__"}}})},
     };
     neograph::graph::NodeContext ctx;
-    agent->engine = neograph::graph::GraphEngine::compile(def, ctx);
+    agent->engine = neograph::graph::GraphEngine::compile(
+        agentxx::util::toNeographJson(def),
+        ctx
+    );
     return agent;
 }
 

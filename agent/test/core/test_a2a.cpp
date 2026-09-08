@@ -28,7 +28,7 @@ using agentxx::server::A2aServer;
 using agentxx::server::A2aTaskState;
 using agentxx::server::taskStateFromString;
 using agentxx::server::taskStateToString;
-using json = neograph::json;
+using json = agentxx::util::Json;
 
 // ---------------------------------------------------------------------------
 // Unit tests: data model helpers

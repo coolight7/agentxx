@@ -312,10 +312,10 @@ AgentxxPluginOperatorHandle* PluginManager::callToolAsync(
     }
 
     const auto&    spec   = pluginTool->spec();
-    neograph::json parsed = neograph::json::object();
+    agentxx::util::Json parsed = agentxx::util::Json::object();
     if (!agentxx::plugin::PluginStringView::empty(args_json)) {
         try {
-            auto j = neograph::json::parse(std::string_view{args_json.data, args_json.size});
+            auto j = agentxx::util::Json::parse(std::string_view{args_json.data, args_json.size});
             if (j.is_object()) {
                 parsed = std::move(j);
             }

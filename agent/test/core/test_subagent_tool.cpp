@@ -199,7 +199,7 @@ asio::awaitable<TestResult> run_subagent_tool_tests() {
 
         // --- A. 空 subagent 名 ---
         {
-            auto r = co_await env->tool->execute_async(neograph::json{
+            auto r = co_await env->tool->execute_async(agentxx::util::Json{
                 {"message", "m"}
             });
             XX_TEST_EXPECT_EQ(r, std::string{R"({"error":"Arg `subagent` is empty"})"});
@@ -207,7 +207,7 @@ asio::awaitable<TestResult> run_subagent_tool_tests() {
 
         // --- B. 空 message 且无 messages (两者至少其一) ---
         {
-            auto r = co_await env->tool->execute_async(neograph::json{
+            auto r = co_await env->tool->execute_async(agentxx::util::Json{
                 {"subagent", "alpha"}
             });
             XX_TEST_EXPECT_EQ(r, std::string{R"({"error":"Arg `message` is empty"})"});
@@ -218,10 +218,10 @@ asio::awaitable<TestResult> run_subagent_tool_tests() {
         // --- C. 有 messages 无 message → 合法 (进入中断流程) ---
         {
             env->resetInterruptState();
-            neograph::json args{
+            agentxx::util::Json args{
                 {"subagent",     "alpha"       },
                 {"messages",
-                 neograph::json::array({neograph::json{
+                 agentxx::util::Json::array({agentxx::util::Json{
                      {"role", "user"},
                      {"content", "hi"},
                  }})                           },
@@ -241,7 +241,7 @@ asio::awaitable<TestResult> run_subagent_tool_tests() {
         {
             env->resetInterruptState();
             env->registerTask("beta", "B");
-            auto r = co_await env->tool->execute_async(neograph::json{
+            auto r = co_await env->tool->execute_async(agentxx::util::Json{
                 {"subagent", "nope"},
                 {"message",  "m"   },
             });
@@ -254,11 +254,11 @@ asio::awaitable<TestResult> run_subagent_tool_tests() {
         // --- E. 批量任务中第二个非法 → 整体拒绝, 不派发任何任务 ---
         {
             env->resetInterruptState();
-            auto r = co_await env->tool->execute_async(neograph::json{
+            auto r = co_await env->tool->execute_async(agentxx::util::Json{
                 {"tasks",
-                 neograph::json::array(
-                     {neograph::json{{"subagent", "alpha"}, {"message", "ok"}},
-                      neograph::json{{"subagent", "ghost"}, {"message", "bad"}}}
+                 agentxx::util::Json::array(
+                     {agentxx::util::Json{{"subagent", "alpha"}, {"message", "ok"}},
+                      agentxx::util::Json{{"subagent", "ghost"}, {"message", "bad"}}}
                  )},
             });
             XX_TEST_EXPECT_TRUE(r.find("\"error\"") != std::string::npos);
@@ -277,7 +277,7 @@ asio::awaitable<TestResult> run_subagent_tool_tests() {
                 "alpha",
                 std::make_shared<agentxx::tools::SubAgentNormalTask>("alpha", "A")
             ));
-            auto r = co_await orphanTool->execute_async(neograph::json{
+            auto r = co_await orphanTool->execute_async(agentxx::util::Json{
                 {"subagent", "alpha"},
                 {"message",  "m"    },
             });
@@ -289,7 +289,7 @@ asio::awaitable<TestResult> run_subagent_tool_tests() {
             auto envNoMctx = std::make_shared<SubagentToolEnv>();
             envNoMctx->ctx->middlewareHandleContext.reset();
             envNoMctx->registerTask("alpha", "A");
-            auto r = co_await envNoMctx->tool->execute_async(neograph::json{
+            auto r = co_await envNoMctx->tool->execute_async(agentxx::util::Json{
                 {"subagent", "alpha"},
                 {"message",  "m"    },
             });
@@ -306,19 +306,19 @@ asio::awaitable<TestResult> run_subagent_tool_tests() {
         // --- A. 批量任务: 中断参数完整映射所有字段 ---
         {
             env->resetInterruptState();
-            neograph::json args{
+            agentxx::util::Json args{
                 {"tasks",
-                 neograph::json::array(
-                     {neograph::json{
+                 agentxx::util::Json::array(
+                     {agentxx::util::Json{
                           {"subagent", "worker"},
                           {"system_prompt", "sp-1"},
                           {"message", "task one"},
                           {"sessionId", "ctx-thread-1"},
-                          {"tools", neograph::json::array({"agentxx_share_store"})},
+                          {"tools", agentxx::util::Json::array({"agentxx_share_store"})},
                           {"enable_summarization", false},
                           {"result_id", "rid-1"},
                       },
-                      neograph::json{
+                      agentxx::util::Json{
                           {"subagent", "worker"},
                           {"message", "task two"},
                       }}
@@ -367,7 +367,7 @@ asio::awaitable<TestResult> run_subagent_tool_tests() {
         // --- B. 单任务模式 (顶层字段): 包装为 1 个 task, resultId 取 tool_call_id ---
         {
             env->resetInterruptState();
-            neograph::json args{
+            agentxx::util::Json args{
                 {"subagent",      "worker"      },
                 {"system_prompt", "solo-sp"     },
                 {"message",       "solo task"   },
@@ -400,7 +400,7 @@ asio::awaitable<TestResult> run_subagent_tool_tests() {
         // --- A. 单任务 + 自定义 resultId → 返回纯文本 ---
         {
             env->resetInterruptState();
-            neograph::json args{
+            agentxx::util::Json args{
                 {"subagent",     "worker"      },
                 {"message",      "m"           },
                 {"result_id",    "rid-A"       },
@@ -412,10 +412,10 @@ asio::awaitable<TestResult> run_subagent_tool_tests() {
             } catch (const neograph::graph::NodeInterrupt&) {
             }
             // 写入侧按 key 规则回填结果
-            env->ctx->middlewareHandleContext->setGraphDataItemValue<neograph::json>(
+            env->ctx->middlewareHandleContext->setGraphDataItemValue<agentxx::util::Json>(
                 env->sessionId,
                 agentxx::middleware::MiddlewareContext::graphDataKey_interruptResult,
-                neograph::json{
+                agentxx::util::Json{
                     {"call_A_rid-A", "single result text"}
             }
             );
@@ -426,15 +426,15 @@ asio::awaitable<TestResult> run_subagent_tool_tests() {
         // --- B. 多任务 → 按 makeSubagentResumeKey 规则提取并返回 json 数组 (按任务顺序) ---
         {
             env->resetInterruptState();
-            neograph::json args{
+            agentxx::util::Json args{
                 {"tasks",
-                 neograph::json::array(
-                     {neograph::json{
+                 agentxx::util::Json::array(
+                     {agentxx::util::Json{
                           {"subagent", "worker"},
                           {"message", "t1"},
                           {"result_id", "r1"}
                       },
-                      neograph::json{{"subagent", "worker"}, {"message", "t2"}, {"result_id", "r2"}}
+                      agentxx::util::Json{{"subagent", "worker"}, {"message", "t2"}, {"result_id", "r2"}}
                      }
                  )                             },
                 {"sessionId",    env->sessionId},
@@ -444,17 +444,17 @@ asio::awaitable<TestResult> run_subagent_tool_tests() {
                 (void)co_await env->tool->execute_async(args);
             } catch (const neograph::graph::NodeInterrupt&) {
             }
-            env->ctx->middlewareHandleContext->setGraphDataItemValue<neograph::json>(
+            env->ctx->middlewareHandleContext->setGraphDataItemValue<agentxx::util::Json>(
                 env->sessionId,
                 agentxx::middleware::MiddlewareContext::graphDataKey_interruptResult,
                 // 故意乱序写入, 验证读取按任务顺序聚合
-                neograph::json{
+                agentxx::util::Json{
                     {"call_B_r2", "second result"},
                     {"call_B_r1", "first result" },
             }
             );
             auto r      = co_await env->tool->execute_async(args);
-            auto parsed = neograph::json::parse(r);
+            auto parsed = agentxx::util::Json::parse(r);
             XX_TEST_EXPECT_TRUE(parsed.is_array());
             XX_TEST_EXPECT_EQ(parsed.size(), size_t{2});
             XX_TEST_EXPECT_EQ(parsed[0].get<std::string>(), std::string{"first result"});
@@ -464,10 +464,10 @@ asio::awaitable<TestResult> run_subagent_tool_tests() {
         // --- C. resultId 全空 (summarization 直接调用路径): 按任务序号兜底编号 ---
         {
             env->resetInterruptState();
-            neograph::json args{
+            agentxx::util::Json args{
                 {"subagent",  "worker"      },
                 {"messages",
-                 neograph::json::array({neograph::json{
+                 agentxx::util::Json::array({agentxx::util::Json{
                      {"role", "user"},
                      {"content", "compress me"},
                  }})                        },
@@ -478,10 +478,10 @@ asio::awaitable<TestResult> run_subagent_tool_tests() {
                 (void)co_await env->tool->execute_async(args);
             } catch (const neograph::graph::NodeInterrupt&) {
             }
-            env->ctx->middlewareHandleContext->setGraphDataItemValue<neograph::json>(
+            env->ctx->middlewareHandleContext->setGraphDataItemValue<agentxx::util::Json>(
                 env->sessionId,
                 agentxx::middleware::MiddlewareContext::graphDataKey_interruptResult,
-                neograph::json{
+                agentxx::util::Json{
                     {"1", "summary text"}
             }
             );
@@ -492,7 +492,7 @@ asio::awaitable<TestResult> run_subagent_tool_tests() {
         // --- D. 非 string 结果值 (如 {"error":...}): dump 后作为文本返回 ---
         {
             env->resetInterruptState();
-            neograph::json args{
+            agentxx::util::Json args{
                 {"subagent",     "worker"      },
                 {"message",      "m"           },
                 {"sessionId",    env->sessionId},
@@ -502,11 +502,11 @@ asio::awaitable<TestResult> run_subagent_tool_tests() {
                 (void)co_await env->tool->execute_async(args);
             } catch (const neograph::graph::NodeInterrupt&) {
             }
-            env->ctx->middlewareHandleContext->setGraphDataItemValue<neograph::json>(
+            env->ctx->middlewareHandleContext->setGraphDataItemValue<agentxx::util::Json>(
                 env->sessionId,
                 agentxx::middleware::MiddlewareContext::graphDataKey_interruptResult,
-                neograph::json{
-                    {"call_D_1", neograph::json{{"error", "subagent failed"}}},
+                agentxx::util::Json{
+                    {"call_D_1", agentxx::util::Json{{"error", "subagent failed"}}},
             }
             );
             auto r = co_await env->tool->execute_async(args);
@@ -516,15 +516,15 @@ asio::awaitable<TestResult> run_subagent_tool_tests() {
         // --- E. 部分 key 缺失: 缺失任务跳过, 剩余单结果降级为纯文本 ---
         {
             env->resetInterruptState();
-            neograph::json args{
+            agentxx::util::Json args{
                 {"tasks",
-                 neograph::json::array(
-                     {neograph::json{
+                 agentxx::util::Json::array(
+                     {agentxx::util::Json{
                           {"subagent", "worker"},
                           {"message", "t1"},
                           {"result_id", "r1"}
                       },
-                      neograph::json{{"subagent", "worker"}, {"message", "t2"}, {"result_id", "r2"}}
+                      agentxx::util::Json{{"subagent", "worker"}, {"message", "t2"}, {"result_id", "r2"}}
                      }
                  )                             },
                 {"sessionId",    env->sessionId},
@@ -535,10 +535,10 @@ asio::awaitable<TestResult> run_subagent_tool_tests() {
             } catch (const neograph::graph::NodeInterrupt&) {
             }
             // 仅写入 r2 的结果 (r1 缺失, 如宿主超时未应答)
-            env->ctx->middlewareHandleContext->setGraphDataItemValue<neograph::json>(
+            env->ctx->middlewareHandleContext->setGraphDataItemValue<agentxx::util::Json>(
                 env->sessionId,
                 agentxx::middleware::MiddlewareContext::graphDataKey_interruptResult,
-                neograph::json{
+                agentxx::util::Json{
                     {"call_E_r2", "only second"}
             }
             );
@@ -550,7 +550,7 @@ asio::awaitable<TestResult> run_subagent_tool_tests() {
         // --- F. resultId 为空且按序号未命中: 兜底取 map 第一个字符串值 ---
         {
             env->resetInterruptState();
-            neograph::json args{
+            agentxx::util::Json args{
                 {"subagent",  "worker"      },
                 {"message",   "m"           },
                 {"sessionId", env->sessionId},
@@ -560,11 +560,11 @@ asio::awaitable<TestResult> run_subagent_tool_tests() {
                 (void)co_await env->tool->execute_async(args);
             } catch (const neograph::graph::NodeInterrupt&) {
             }
-            env->ctx->middlewareHandleContext->setGraphDataItemValue<neograph::json>(
+            env->ctx->middlewareHandleContext->setGraphDataItemValue<agentxx::util::Json>(
                 env->sessionId,
                 agentxx::middleware::MiddlewareContext::graphDataKey_interruptResult,
                 // 序号 key "1" 缺失 (如旧版写入方以其他规则命名), 兜底逻辑生效
-                neograph::json{
+                agentxx::util::Json{
                     {"legacy_key", "fallback string"}
             }
             );
@@ -579,18 +579,18 @@ asio::awaitable<TestResult> run_subagent_tool_tests() {
         // --- A. 统一批量语义: 全字段解析 ---
         {
             // 结构化透传消息 (逐层构造, 避免深层内联嵌套初始化)
-            neograph::json passthroughMsg;
+            agentxx::util::Json passthroughMsg;
             passthroughMsg["role"]    = "system";
             passthroughMsg["content"] = "sys";
-            auto passthroughMsgs      = neograph::json::array({passthroughMsg});
+            auto passthroughMsgs      = agentxx::util::Json::array({passthroughMsg});
 
-            neograph::json taskItem{
+            agentxx::util::Json taskItem{
                 {"subagent",             "researcher"                                  },
                 {"system_prompt",        "be brief"                                    },
                 {"message",              "find foo"                                    },
                 {"messages",             std::move(passthroughMsgs)                    },
                 {"sessionId",            "same-ctx-thread"                             },
-                {"tools",                neograph::json::array({"agentxx_share_store"})},
+                {"tools",                agentxx::util::Json::array({"agentxx_share_store"})},
                 {"enable_summarization", false                                         },
                 {"result_id",            "parse-r1"                                    },
             };
@@ -598,8 +598,8 @@ asio::awaitable<TestResult> run_subagent_tool_tests() {
             agentxx::middleware::InterruptHandleArg handleArg;
             handleArg.name     = "subagent";
             handleArg.resultId = "call_parse";
-            handleArg.arg      = neograph::json{
-                     {"tasks", neograph::json::array({std::move(taskItem)})},
+            handleArg.arg      = agentxx::util::Json{
+                     {"tasks", agentxx::util::Json::array({std::move(taskItem)})},
             };
             auto batch = agentxx::tools::parseSubagentBatchFromInterrupt(
                 handleArg,
@@ -638,12 +638,12 @@ asio::awaitable<TestResult> run_subagent_tool_tests() {
             agentxx::middleware::InterruptHandleArg handleArg;
             handleArg.name     = "subagent";
             handleArg.resultId = "call_multi";
-            handleArg.arg      = neograph::json{
+            handleArg.arg      = agentxx::util::Json{
                      {"tasks",
-                      neograph::json::array(
-                     {neograph::json{{"subagent", "a"}, {"message", "m1"}, {"result_id", "x1"}},
-                           neograph::json{{"subagent", "b"}, {"message", "m2"}, {"result_id", "x2"}},
-                           neograph::json{{"subagent", "c"}, {"message", "m3"}, {"result_id", "x3"}}}
+                      agentxx::util::Json::array(
+                     {agentxx::util::Json{{"subagent", "a"}, {"message", "m1"}, {"result_id", "x1"}},
+                           agentxx::util::Json{{"subagent", "b"}, {"message", "m2"}, {"result_id", "x2"}},
+                           agentxx::util::Json{{"subagent", "c"}, {"message", "m3"}, {"result_id", "x3"}}}
                  )}
             };
             auto batch
@@ -664,7 +664,7 @@ asio::awaitable<TestResult> run_subagent_tool_tests() {
             agentxx::middleware::InterruptHandleArg handleArg;
             handleArg.name     = "subagent";
             handleArg.resultId = "call_legacy";
-            handleArg.arg      = neograph::json{
+            handleArg.arg      = agentxx::util::Json{
                      {"subagent",             "old-style"},
                      {"system_prompt",        "old-sp"   },
                      {"message",              "old-msg"  },
@@ -688,7 +688,7 @@ asio::awaitable<TestResult> run_subagent_tool_tests() {
             agentxx::middleware::InterruptHandleArg handleArg;
             handleArg.name     = "subagent";
             handleArg.resultId = "";
-            handleArg.arg      = neograph::json::object();
+            handleArg.arg      = agentxx::util::Json::object();
             auto batch
                 = agentxx::tools::parseSubagentBatchFromInterrupt(handleArg, "p", "t", nullptr);
             XX_TEST_EXPECT_EQ(batch.tasks.size(), size_t{1});
@@ -715,7 +715,7 @@ asio::awaitable<TestResult> run_subagent_tool_tests() {
                 .resultId = "", // 无 result_id → 按序号兜底 (第 2 个任务)
                 .content  = "payload-two",
             });
-            neograph::json resumeValues;
+            agentxx::util::Json resumeValues;
             agentxx::tools::buildSubagentResumeValues(resumeValues, resp, "tc_closed_loop");
             XX_TEST_EXPECT_TRUE(resumeValues.contains("tc_closed_loop_res-1"));
             XX_TEST_EXPECT_TRUE(resumeValues.contains("tc_closed_loop_2"));
@@ -724,11 +724,11 @@ asio::awaitable<TestResult> run_subagent_tool_tests() {
             auto env = std::make_shared<SubagentToolEnv>();
             env->registerTask("w", "w");
             env->resetInterruptState();
-            neograph::json args{
+            agentxx::util::Json args{
                 {"tasks",
-                 neograph::json::array(
-                     {neograph::json{{"subagent", "w"}, {"message", "m1"}, {"result_id", "res-1"}},
-                      neograph::json{{"subagent", "w"}, {"message", "m2"}}}
+                 agentxx::util::Json::array(
+                     {agentxx::util::Json{{"subagent", "w"}, {"message", "m1"}, {"result_id", "res-1"}},
+                      agentxx::util::Json{{"subagent", "w"}, {"message", "m2"}}}
                  )                               },
                 {"sessionId",    env->sessionId  },
                 {"tool_call_id", "tc_closed_loop"},
@@ -737,13 +737,13 @@ asio::awaitable<TestResult> run_subagent_tool_tests() {
                 (void)co_await env->tool->execute_async(args);
             } catch (const neograph::graph::NodeInterrupt&) {
             }
-            env->ctx->middlewareHandleContext->setGraphDataItemValue<neograph::json>(
+            env->ctx->middlewareHandleContext->setGraphDataItemValue<agentxx::util::Json>(
                 env->sessionId,
                 agentxx::middleware::MiddlewareContext::graphDataKey_interruptResult,
                 resumeValues
             );
             auto r      = co_await env->tool->execute_async(args);
-            auto parsed = neograph::json::parse(r);
+            auto parsed = agentxx::util::Json::parse(r);
             XX_TEST_EXPECT_TRUE(parsed.is_array());
             XX_TEST_EXPECT_EQ(parsed.size(), size_t{2});
             XX_TEST_EXPECT_EQ(parsed[0].get<std::string>(), std::string{"payload-one"});
@@ -759,7 +759,7 @@ asio::awaitable<TestResult> run_subagent_tool_tests() {
                 .hasError     = true,
                 .errorMessage = "depth budget exhausted",
             });
-            neograph::json resumeValues;
+            agentxx::util::Json resumeValues;
             agentxx::tools::buildSubagentResumeValues(resumeValues, resp, "tc_err");
             XX_TEST_EXPECT_TRUE(resumeValues["tc_err_err-task"].is_object());
             XX_TEST_EXPECT_EQ(
@@ -771,7 +771,7 @@ asio::awaitable<TestResult> run_subagent_tool_tests() {
             auto env = std::make_shared<SubagentToolEnv>();
             env->registerTask("w", "w");
             env->resetInterruptState();
-            neograph::json args{
+            agentxx::util::Json args{
                 {"subagent",     "w"           },
                 {"message",      "m"           },
                 {"result_id",    "err-task"    },
@@ -782,7 +782,7 @@ asio::awaitable<TestResult> run_subagent_tool_tests() {
                 (void)co_await env->tool->execute_async(args);
             } catch (const neograph::graph::NodeInterrupt&) {
             }
-            env->ctx->middlewareHandleContext->setGraphDataItemValue<neograph::json>(
+            env->ctx->middlewareHandleContext->setGraphDataItemValue<agentxx::util::Json>(
                 env->sessionId,
                 agentxx::middleware::MiddlewareContext::graphDataKey_interruptResult,
                 resumeValues
@@ -839,7 +839,7 @@ asio::awaitable<TestResult> run_subagent_tool_tests() {
             XX_TEST_EXPECT_TRUE(resp.results[2].cancelled);
 
             // 前两个普通错误应当能正常写入 resumeValues
-            neograph::json resumeValues;
+            agentxx::util::Json resumeValues;
             agentxx::tools::buildSubagentResumeValues(resumeValues, resp, "tc_p03");
             XX_TEST_EXPECT_EQ(
                 resumeValues["tc_p03_network-interrupt-task"].value("error", std::string{}),

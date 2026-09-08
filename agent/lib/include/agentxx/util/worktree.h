@@ -32,7 +32,7 @@
 #include <filesystem>
 #include <fmt/format.h>
 #include <fstream>
-#include <neograph/define.h>
+#include "agentxx/util/asio_error.h"
 #include <optional>
 #include <string>
 #include <system_error>

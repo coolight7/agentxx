@@ -263,13 +263,13 @@ SessionStore::LoadedSession SessionStore::loadSession(std::string_view sessionId
             // 展示历史 (按追加顺序)
             auto stmt = db.prepare("SELECT json FROM view_message ORDER BY seq");
             while (stmt.step()) {
-                auto j = neograph::json::parse(stmt.columnText(0));
+                auto j = agentxx::util::Json::parse(stmt.columnText(0));
                 out.viewMessages.push_back(ViewMessage::fromJson(j));
             }
             // LLM 上下文 (单行)
             auto ctxStmt = db.prepare("SELECT json FROM llm_context WHERE id = 1");
             if (ctxStmt.step()) {
-                out.llmMessages = neograph::json::parse(ctxStmt.columnText(0));
+                out.llmMessages = agentxx::util::Json::parse(ctxStmt.columnText(0));
             }
             // meta: msgIdCounter
             auto metaStmt = db.prepare("SELECT key, value FROM meta");
@@ -597,7 +597,7 @@ void SessionStore::appendViewMessage(
     );
 }
 
-void SessionStore::saveLlmMessages(std::string_view sessionId, const neograph::json& llmMessages) {
+void SessionStore::saveLlmMessages(std::string_view sessionId, const agentxx::util::Json& llmMessages) {
     std::lock_guard<std::mutex> lock(mutex_);
     agentxx::util::catchError<bool>(
         [&]() -> bool {

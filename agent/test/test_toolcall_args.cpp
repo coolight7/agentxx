@@ -2,7 +2,8 @@
 
 #include "agentxx/nodes/toolcall.h"
 #include "fmt/format.h"
-#include "neograph/json.h"
+#include "agentxx/util/json.h"
+#include "agentxx/util/neograph_json_bridge.h"
 #include <cstddef>
 #include <string>
 #include <utility>
@@ -26,11 +27,12 @@ int g_tca_failed = 0;
 namespace {
 
 /// 构造参数 schema: { "type": "object", "properties": { name: propSchema } }
-neograph::json makeParams(const std::pair<std::string, neograph::json>& prop) {
-    return neograph::json{
+/// - 返回图边界类型 (ChatTool::parameters 为 neograph::json)
+neograph::json makeParams(const std::pair<std::string, agentxx::util::Json>& prop) {
+    return agentxx::util::toNeographJson(agentxx::util::Json{
         {"type",       "object"                                 },
-        {"properties", neograph::json{{prop.first, prop.second}}},
-    };
+        {"properties", agentxx::util::Json{{prop.first, prop.second}}},
+    });
 }
 
 /// 常用测试参数 JSON 字符串 (重复检测用例共用)
@@ -85,7 +87,7 @@ TestResult testToolcallArgs() {
             "paths",
             {{"type", "array"}, {"items", {{"type", "string"}}}}
         });
-        auto args      = neograph::json{
+        auto args      = agentxx::util::Json{
                  {"paths", "a.txt"}
         };
         XX_TEST_EXPECT_TRUE(agentxx::nodes::ToolcallWrapNode::autoFixArgsType(def, args));
@@ -99,7 +101,7 @@ TestResult testToolcallArgs() {
         neograph::ChatTool def;
         def.name       = "tool_b";
         def.parameters = makeParams({"tags", {{"type", "array"}}});
-        auto args      = neograph::json{
+        auto args      = agentxx::util::Json{
                  {"tags", "x"}
         };
         XX_TEST_EXPECT_TRUE(agentxx::nodes::ToolcallWrapNode::autoFixArgsType(def, args));
@@ -115,7 +117,7 @@ TestResult testToolcallArgs() {
             "commands",
             {{"type", "array"}, {"items", {{"type", "object"}}}}
         });
-        auto args      = neograph::json{
+        auto args      = agentxx::util::Json{
                  {"commands", "click"}
         };
         XX_TEST_EXPECT_FALSE(agentxx::nodes::ToolcallWrapNode::autoFixArgsType(def, args));
@@ -127,8 +129,8 @@ TestResult testToolcallArgs() {
         neograph::ChatTool def;
         def.name = "tool_e";
         def.parameters
-            = makeParams({"items", {{"type", neograph::json::array({"array", "string"})}}});
-        auto args = neograph::json{
+            = makeParams({"items", {{"type", agentxx::util::Json::array({"array", "string"})}}});
+        auto args = agentxx::util::Json{
             {"items", "s"}
         };
         XX_TEST_EXPECT_TRUE(agentxx::nodes::ToolcallWrapNode::autoFixArgsType(def, args));
@@ -143,8 +145,8 @@ TestResult testToolcallArgs() {
             "tags",
             {{"type", "array"}, {"items", {{"type", "string"}}}}
         });
-        auto args      = neograph::json{
-                 {"tags", neograph::json::array({"a", "b"})}
+        auto args      = agentxx::util::Json{
+                 {"tags", agentxx::util::Json::array({"a", "b"})}
         };
         XX_TEST_EXPECT_FALSE(agentxx::nodes::ToolcallWrapNode::autoFixArgsType(def, args));
         XX_TEST_EXPECT_EQ(args["tags"].size(), size_t{2});
@@ -156,7 +158,7 @@ TestResult testToolcallArgs() {
         neograph::ChatTool def;
         def.name       = "tool_g";
         def.parameters = makeParams({"count", {{"type", "integer"}}});
-        auto args      = neograph::json{
+        auto args      = agentxx::util::Json{
                  {"count", "42"}
         };
         XX_TEST_EXPECT_TRUE(agentxx::nodes::ToolcallWrapNode::autoFixArgsType(def, args));
@@ -169,7 +171,7 @@ TestResult testToolcallArgs() {
         neograph::ChatTool def;
         def.name       = "tool_h";
         def.parameters = makeParams({"ratio", {{"type", "number"}}});
-        auto args      = neograph::json{
+        auto args      = agentxx::util::Json{
                  {"ratio", "3.14"}
         };
         XX_TEST_EXPECT_TRUE(agentxx::nodes::ToolcallWrapNode::autoFixArgsType(def, args));
@@ -182,14 +184,14 @@ TestResult testToolcallArgs() {
         neograph::ChatTool def;
         def.name       = "tool_i";
         def.parameters = makeParams({"a", {{"type", "integer"}}});
-        auto args      = neograph::json{
+        auto args      = agentxx::util::Json{
                  {"a", "  -7  "}
         };
         XX_TEST_EXPECT_TRUE(agentxx::nodes::ToolcallWrapNode::autoFixArgsType(def, args));
         XX_TEST_EXPECT_EQ(args["a"].get<long long>(), -7);
 
         def.parameters = makeParams({"b", {{"type", "integer"}}});
-        args           = neograph::json{
+        args           = agentxx::util::Json{
                       {"b", "+5"}
         };
         XX_TEST_EXPECT_TRUE(agentxx::nodes::ToolcallWrapNode::autoFixArgsType(def, args));
@@ -201,7 +203,7 @@ TestResult testToolcallArgs() {
         neograph::ChatTool def;
         def.name       = "tool_j";
         def.parameters = makeParams({"count", {{"type", "integer"}}});
-        auto args      = neograph::json{
+        auto args      = agentxx::util::Json{
                  {"count", "3.5"}
         };
         XX_TEST_EXPECT_FALSE(agentxx::nodes::ToolcallWrapNode::autoFixArgsType(def, args));
@@ -213,7 +215,7 @@ TestResult testToolcallArgs() {
         neograph::ChatTool def;
         def.name       = "tool_k";
         def.parameters = makeParams({"count", {{"type", "number"}}});
-        auto args      = neograph::json{
+        auto args      = agentxx::util::Json{
                  {"count", "abc"}
         };
         XX_TEST_EXPECT_FALSE(agentxx::nodes::ToolcallWrapNode::autoFixArgsType(def, args));
@@ -225,12 +227,12 @@ TestResult testToolcallArgs() {
         neograph::ChatTool def;
         def.name       = "tool_l";
         def.parameters = makeParams({"n", {{"type", "number"}}});
-        auto args      = neograph::json{
+        auto args      = agentxx::util::Json{
                  {"n", ""}
         };
         XX_TEST_EXPECT_FALSE(agentxx::nodes::ToolcallWrapNode::autoFixArgsType(def, args));
 
-        args = neograph::json{
+        args = agentxx::util::Json{
             {"n", "0x10"}
         };
         XX_TEST_EXPECT_FALSE(agentxx::nodes::ToolcallWrapNode::autoFixArgsType(def, args));
@@ -242,7 +244,7 @@ TestResult testToolcallArgs() {
         neograph::ChatTool def;
         def.name       = "tool_m";
         def.parameters = makeParams({"n", {{"type", "number"}}});
-        auto args      = neograph::json{
+        auto args      = agentxx::util::Json{
                  {"n", "7"}
         };
         XX_TEST_EXPECT_TRUE(agentxx::nodes::ToolcallWrapNode::autoFixArgsType(def, args));
@@ -254,14 +256,14 @@ TestResult testToolcallArgs() {
         neograph::ChatTool def;
         def.name       = "tool_n";
         def.parameters = makeParams({"text", {{"type", "string"}}});
-        auto args      = neograph::json{
+        auto args      = agentxx::util::Json{
                  {"text", 42}
         };
         XX_TEST_EXPECT_TRUE(agentxx::nodes::ToolcallWrapNode::autoFixArgsType(def, args));
         XX_TEST_EXPECT_TRUE(args["text"].is_string());
         XX_TEST_EXPECT_EQ(args["text"].get<std::string>(), std::string{"42"});
 
-        args = neograph::json{
+        args = agentxx::util::Json{
             {"text", 3.5}
         };
         XX_TEST_EXPECT_TRUE(agentxx::nodes::ToolcallWrapNode::autoFixArgsType(def, args));
@@ -272,14 +274,14 @@ TestResult testToolcallArgs() {
     {
         neograph::ChatTool def;
         def.name       = "tool_o";
-        def.parameters = makeParams({"v", {{"type", neograph::json::array({"string", "number"})}}});
-        auto args      = neograph::json{
+        def.parameters = makeParams({"v", {{"type", agentxx::util::Json::array({"string", "number"})}}});
+        auto args      = agentxx::util::Json{
                  {"v", "42"}
         };
         XX_TEST_EXPECT_FALSE(agentxx::nodes::ToolcallWrapNode::autoFixArgsType(def, args));
         XX_TEST_EXPECT_TRUE(args["v"].is_string());
 
-        args = neograph::json{
+        args = agentxx::util::Json{
             {"v", 42}
         };
         XX_TEST_EXPECT_FALSE(agentxx::nodes::ToolcallWrapNode::autoFixArgsType(def, args));
@@ -291,8 +293,8 @@ TestResult testToolcallArgs() {
         neograph::ChatTool def;
         def.name = "tool_p";
         def.parameters
-            = makeParams({"v", {{"type", neograph::json::array({"number", "integer"})}}});
-        auto args = neograph::json{
+            = makeParams({"v", {{"type", agentxx::util::Json::array({"number", "integer"})}}});
+        auto args = agentxx::util::Json{
             {"v", "3.5"}
         };
         XX_TEST_EXPECT_TRUE(agentxx::nodes::ToolcallWrapNode::autoFixArgsType(def, args));
@@ -306,13 +308,13 @@ TestResult testToolcallArgs() {
         neograph::ChatTool def;
         def.name       = "tool_q";
         def.parameters = makeParams({"flag", {{"type", "boolean"}}});
-        auto args      = neograph::json{
+        auto args      = agentxx::util::Json{
                  {"flag", "true"}
         };
         XX_TEST_EXPECT_TRUE(agentxx::nodes::ToolcallWrapNode::autoFixArgsType(def, args));
         XX_TEST_EXPECT_EQ(args["flag"].get<bool>(), true);
 
-        args = neograph::json{
+        args = agentxx::util::Json{
             {"flag", "false"}
         };
         XX_TEST_EXPECT_TRUE(agentxx::nodes::ToolcallWrapNode::autoFixArgsType(def, args));
@@ -324,7 +326,7 @@ TestResult testToolcallArgs() {
         neograph::ChatTool def;
         def.name       = "tool_r";
         def.parameters = makeParams({"flag", {{"type", "boolean"}}});
-        auto args      = neograph::json{
+        auto args      = agentxx::util::Json{
                  {"flag", "yes"}
         };
         XX_TEST_EXPECT_FALSE(agentxx::nodes::ToolcallWrapNode::autoFixArgsType(def, args));
@@ -336,13 +338,13 @@ TestResult testToolcallArgs() {
         neograph::ChatTool def;
         def.name       = "tool_s";
         def.parameters = makeParams({"text", {{"type", "string"}}});
-        auto args      = neograph::json{
+        auto args      = agentxx::util::Json{
                  {"text", true}
         };
         XX_TEST_EXPECT_TRUE(agentxx::nodes::ToolcallWrapNode::autoFixArgsType(def, args));
         XX_TEST_EXPECT_EQ(args["text"].get<std::string>(), std::string{"true"});
 
-        args = neograph::json{
+        args = agentxx::util::Json{
             {"text", false}
         };
         XX_TEST_EXPECT_TRUE(agentxx::nodes::ToolcallWrapNode::autoFixArgsType(def, args));
@@ -355,8 +357,8 @@ TestResult testToolcallArgs() {
         neograph::ChatTool def;
         def.name       = "tool_t";
         def.parameters = makeParams({"text", {{"type", "string"}}});
-        auto args      = neograph::json{
-                 {"text", neograph::json::array({"hello"})}
+        auto args      = agentxx::util::Json{
+                 {"text", agentxx::util::Json::array({"hello"})}
         };
         XX_TEST_EXPECT_TRUE(agentxx::nodes::ToolcallWrapNode::autoFixArgsType(def, args));
         XX_TEST_EXPECT_TRUE(args["text"].is_string());
@@ -368,8 +370,8 @@ TestResult testToolcallArgs() {
         neograph::ChatTool def;
         def.name       = "tool_u";
         def.parameters = makeParams({"text", {{"type", "string"}}});
-        auto args      = neograph::json{
-                 {"text", neograph::json::array({"a", "b"})}
+        auto args      = agentxx::util::Json{
+                 {"text", agentxx::util::Json::array({"a", "b"})}
         };
         XX_TEST_EXPECT_FALSE(agentxx::nodes::ToolcallWrapNode::autoFixArgsType(def, args));
         XX_TEST_EXPECT_TRUE(args["text"].is_array());
@@ -381,7 +383,7 @@ TestResult testToolcallArgs() {
         neograph::ChatTool def;
         def.name       = "tool_v";
         def.parameters = makeParams({"content", {{"type", "string"}}});
-        auto args      = neograph::json{
+        auto args      = agentxx::util::Json{
                  {"content", "hello"}
         };
         XX_TEST_EXPECT_FALSE(agentxx::nodes::ToolcallWrapNode::autoFixArgsType(def, args));
@@ -393,7 +395,7 @@ TestResult testToolcallArgs() {
         neograph::ChatTool def;
         def.name       = "tool_w";
         def.parameters = makeParams({"tags", {{"type", "array"}}});
-        auto args      = neograph::json{
+        auto args      = agentxx::util::Json{
                  {"other", "x"}
         };
         XX_TEST_EXPECT_FALSE(agentxx::nodes::ToolcallWrapNode::autoFixArgsType(def, args));
@@ -407,7 +409,7 @@ TestResult testToolcallArgs() {
             "scores",
             {{"type", "array"}, {"items", {{"type", "number"}}}}
         });
-        auto args      = neograph::json{
+        auto args      = agentxx::util::Json{
                  {"scores", "42"}
         };
         XX_TEST_EXPECT_FALSE(agentxx::nodes::ToolcallWrapNode::autoFixArgsType(def, args));
@@ -419,7 +421,7 @@ TestResult testToolcallArgs() {
         neograph::ChatTool def;
         def.name       = "tool_y";
         def.parameters = makeParams({"tags", {{"type", "array"}}});
-        auto args      = neograph::json{"not_object"};
+        auto args      = agentxx::util::Json{"not_object"};
         XX_TEST_EXPECT_FALSE(agentxx::nodes::ToolcallWrapNode::autoFixArgsType(def, args));
     }
 
@@ -428,7 +430,7 @@ TestResult testToolcallArgs() {
         neograph::ChatTool def;
         def.name       = "tool_z";
         def.parameters = neograph::json::array();
-        auto args      = neograph::json{
+        auto args      = agentxx::util::Json{
                  {"tags", "x"}
         };
         XX_TEST_EXPECT_FALSE(agentxx::nodes::ToolcallWrapNode::autoFixArgsType(def, args));
@@ -438,17 +440,17 @@ TestResult testToolcallArgs() {
     {
         neograph::ChatTool def;
         def.name       = "tool_aa";
-        def.parameters = neograph::json{
+        def.parameters = agentxx::util::toNeographJson(agentxx::util::Json{
             {"type",       "object"},
             {"properties",
-             neograph::json{
+             agentxx::util::Json{
                  {"tags", {{"type", "array"}, {"items", {{"type", "string"}}}}},
                  {"name", {{"type", "string"}}},
                  {"count", {{"type", "integer"}}},
                  {"ratio", {{"type", "string"}}},
              }                     },
-        };
-        auto args = neograph::json{
+        });
+        auto args = agentxx::util::Json{
             {"tags",  "t1"},
             {"name",  "n" },
             {"count", "3" },
@@ -472,8 +474,8 @@ TestResult testToolcallArgs() {
             "paths",
             {{"type", "array"}, {"items", {{"type", "string"}}}}
         });
-        auto args      = neograph::json{
-                 {"paths", neograph::json::array({"a", "b", "c"})}
+        auto args      = agentxx::util::Json{
+                 {"paths", agentxx::util::Json::array({"a", "b", "c"})}
         };
         XX_TEST_EXPECT_FALSE(agentxx::nodes::ToolcallWrapNode::autoFixArgsType(def, args));
         XX_TEST_EXPECT_EQ(args["paths"].size(), size_t{3});
@@ -485,7 +487,7 @@ TestResult testToolcallArgs() {
         neograph::ChatTool def;
         def.name       = "tool_ac";
         def.parameters = makeParams({"ratio", {{"type", "number"}}});
-        auto args      = neograph::json{
+        auto args      = agentxx::util::Json{
                  {"ratio", 42}
         };
         XX_TEST_EXPECT_TRUE(agentxx::nodes::ToolcallWrapNode::autoFixArgsType(def, args));
@@ -498,7 +500,7 @@ TestResult testToolcallArgs() {
         neograph::ChatTool def;
         def.name       = "tool_ad";
         def.parameters = makeParams({"size", {{"type", "number"}}});
-        auto args      = neograph::json{
+        auto args      = agentxx::util::Json{
                  {"size", 12345678901ULL}
         };
         XX_TEST_EXPECT_TRUE(agentxx::nodes::ToolcallWrapNode::autoFixArgsType(def, args));
@@ -511,7 +513,7 @@ TestResult testToolcallArgs() {
         neograph::ChatTool def;
         def.name       = "tool_ae";
         def.parameters = makeParams({"count", {{"type", "integer"}}});
-        auto args      = neograph::json{
+        auto args      = agentxx::util::Json{
                  {"count", 3.0}
         };
         XX_TEST_EXPECT_TRUE(agentxx::nodes::ToolcallWrapNode::autoFixArgsType(def, args));
@@ -524,7 +526,7 @@ TestResult testToolcallArgs() {
         neograph::ChatTool def;
         def.name       = "tool_af";
         def.parameters = makeParams({"count", {{"type", "integer"}}});
-        auto args      = neograph::json{
+        auto args      = agentxx::util::Json{
                  {"count", -3.0}
         };
         XX_TEST_EXPECT_TRUE(agentxx::nodes::ToolcallWrapNode::autoFixArgsType(def, args));
@@ -537,7 +539,7 @@ TestResult testToolcallArgs() {
         neograph::ChatTool def;
         def.name       = "tool_ag";
         def.parameters = makeParams({"count", {{"type", "integer"}}});
-        auto args      = neograph::json{
+        auto args      = agentxx::util::Json{
                  {"count", 3.5}
         };
         XX_TEST_EXPECT_FALSE(agentxx::nodes::ToolcallWrapNode::autoFixArgsType(def, args));
@@ -550,7 +552,7 @@ TestResult testToolcallArgs() {
         neograph::ChatTool def;
         def.name       = "tool_ah";
         def.parameters = makeParams({"count", {{"type", "integer"}}});
-        auto args      = neograph::json{
+        auto args      = agentxx::util::Json{
                  {"count", 1e20}
         };
         XX_TEST_EXPECT_FALSE(agentxx::nodes::ToolcallWrapNode::autoFixArgsType(def, args));
@@ -562,15 +564,15 @@ TestResult testToolcallArgs() {
         neograph::ChatTool def;
         def.name = "tool_ai";
         def.parameters
-            = makeParams({"v", {{"type", neograph::json::array({"number", "integer"})}}});
-        auto args = neograph::json{
+            = makeParams({"v", {{"type", agentxx::util::Json::array({"number", "integer"})}}});
+        auto args = agentxx::util::Json{
             {"v", 7}
         };
         // 整数同时满足两种声明, 不转换
         XX_TEST_EXPECT_FALSE(agentxx::nodes::ToolcallWrapNode::autoFixArgsType(def, args));
         XX_TEST_EXPECT_TRUE(args["v"].is_number_integer());
 
-        args = neograph::json{
+        args = agentxx::util::Json{
             {"v", 2.0}
         };
         // 声明含 integer, 整值浮点转为整数后对两种声明均合法
@@ -583,8 +585,8 @@ TestResult testToolcallArgs() {
     {
         neograph::ChatTool def;
         def.name       = "tool_aj";
-        def.parameters = makeParams({"v", {{"type", neograph::json::array({"string", "number"})}}});
-        auto args      = neograph::json{
+        def.parameters = makeParams({"v", {{"type", agentxx::util::Json::array({"string", "number"})}}});
+        auto args      = agentxx::util::Json{
                  {"v", 5}
         };
         XX_TEST_EXPECT_FALSE(agentxx::nodes::ToolcallWrapNode::autoFixArgsType(def, args));

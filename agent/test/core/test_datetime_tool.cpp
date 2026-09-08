@@ -31,7 +31,7 @@ struct GetCurrentDateTimeTool {
         };
     }
 
-    asio::awaitable<std::string> execute_async(const neograph::json&) const {
+    asio::awaitable<std::string> execute_async(const agentxx::util::Json&) const {
         co_return agentxx_system_plugin::currentDatetimeExecute();
     }
 };
@@ -59,7 +59,7 @@ asio::awaitable<void>
 asio::awaitable<void> test_datetime_execute(std::weak_ptr<agentxx::agent::AgentContext> agentContext
 ) {
     auto tool   = agentxx::tools::GetCurrentDateTimeTool{agentContext};
-    auto result = co_await tool.execute_async(neograph::json{});
+    auto result = co_await tool.execute_async(agentxx::util::Json{});
 
     bool hasTimestamp = result.find("Timestamp:") != std::string::npos;
     bool hasLocalTime = result.find("Local Time (24Hour):") != std::string::npos;
@@ -80,7 +80,7 @@ asio::awaitable<void> test_datetime_execute(std::weak_ptr<agentxx::agent::AgentC
 asio::awaitable<void>
     test_datetime_timestamp_format(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool   = agentxx::tools::GetCurrentDateTimeTool{agentContext};
-    auto result = co_await tool.execute_async(neograph::json{});
+    auto result = co_await tool.execute_async(agentxx::util::Json{});
 
     std::regex  timestampRegex(R"(Timestamp: (\d+) millisecond)");
     std::smatch match;
@@ -104,7 +104,7 @@ asio::awaitable<void>
 asio::awaitable<void>
     test_datetime_date_format(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool   = agentxx::tools::GetCurrentDateTimeTool{agentContext};
-    auto result = co_await tool.execute_async(neograph::json{});
+    auto result = co_await tool.execute_async(agentxx::util::Json{});
 
     std::regex dateRegex(R"(\d{4}-\d{2}-\d{2})");
     auto       count = size_t{0};
@@ -129,7 +129,7 @@ asio::awaitable<void>
 asio::awaitable<void>
     test_datetime_time_format(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool   = agentxx::tools::GetCurrentDateTimeTool{agentContext};
-    auto result = co_await tool.execute_async(neograph::json{});
+    auto result = co_await tool.execute_async(agentxx::util::Json{});
 
     std::regex timeRegex(R"(\d{2}:\d{2}:\d{2})");
     auto       count = size_t{0};

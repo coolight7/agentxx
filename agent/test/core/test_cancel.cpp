@@ -245,7 +245,7 @@ asio::awaitable<void> test_agent_cancel_llm_request() {
     cfg->prompt.systemPrompt = "You are a helpful assistant.";
 
     g_da_sim_response_content = "Should never arrive";
-    g_da_sim_tool_calls       = neograph::json::array();
+    g_da_sim_tool_calls       = agentxx::util::Json::array();
     g_da_sim_delay_ms         = 5000;
 
     agentxx::agent::CodeAgent agent(cfg);
@@ -331,7 +331,7 @@ public:
         };
     }
 
-    asio::awaitable<std::string> execute_async(const neograph::json&) override {
+    asio::awaitable<std::string> execute_async(const agentxx::util::Json&) override {
         std::fprintf(stderr, "[cancel-test-dbg] CancelSlowTool execute_async called!\n");
         executed_->store(true, std::memory_order_release);
         try {
@@ -370,7 +370,7 @@ public:
         };
     }
 
-    asio::awaitable<std::string> execute_async(const neograph::json&) override {
+    asio::awaitable<std::string> execute_async(const agentxx::util::Json&) override {
         // 标记 tool: 串行 toolcall 下排在 slow 之后, slow 被取消中断后不再执行
         executed_->store(true, std::memory_order_release);
         co_return "marker";
@@ -416,23 +416,23 @@ asio::awaitable<void> test_agent_cancel_toolcall() {
     g_da_sim_response_content = "";
     g_da_sim_delay_ms         = 0;
     // LLM 返回两个 toolcall: 先慢速 tool, 后标记 tool
-    g_da_sim_tool_calls = neograph::json::array({
-        neograph::json{
+    g_da_sim_tool_calls = agentxx::util::Json::array({
+        agentxx::util::Json{
                        {"index", 0},
                        {"id", "call_slow_1"},
                        {"type", "function"},
                        {"function",
-             neograph::json{
+             agentxx::util::Json{
                  {"name", "test_slow"},
                  {"arguments", "{}"},
              }},
                        },
-        neograph::json{
+        agentxx::util::Json{
                        {"index", 1},
                        {"id", "call_marker_1"},
                        {"type", "function"},
                        {"function",
-             neograph::json{
+             agentxx::util::Json{
                  {"name", "test_marker"},
                  {"arguments", "{}"},
              }},
@@ -522,7 +522,7 @@ asio::awaitable<void> test_agent_cancel_toolcall() {
     {
         auto               ex2 = co_await asio::this_coro::executor;
         asio::steady_timer poll(ex2);
-        neograph::json     im;
+        agentxx::util::Json     im;
         bool               slowCanceled   = false;
         bool               markerCanceled = false;
         const auto         deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
@@ -530,7 +530,7 @@ asio::awaitable<void> test_agent_cancel_toolcall() {
             // 轮末错误路径已把 tempMessages 快照收敛进 llmMessages 并清理
             // graphData, 断言权威面 (llmMessages) 即可
             auto sess      = agent.agentContext->sessions->get("cancel_tool_test");
-            im             = sess ? sess->llmMessages : neograph::json{};
+            im             = sess ? sess->llmMessages : agentxx::util::Json{};
             slowCanceled   = false;
             markerCanceled = false;
             if (im.is_array()) {
@@ -560,7 +560,7 @@ asio::awaitable<void> test_agent_cancel_toolcall() {
         XX_TEST_EXPECT_TRUE(markerCanceled);
     }
 
-    g_da_sim_tool_calls = neograph::json::array();
+    g_da_sim_tool_calls = agentxx::util::Json::array();
     sim.stop();
     co_return;
 }

@@ -1,5 +1,7 @@
 #pragma once
 
+#include <neograph/json.h>
+
 #include "agentxx/agent/config.h"
 #include "agentxx/agent/context.h"
 #include "agentxx/agent/io/agent_io.h"
@@ -155,6 +157,7 @@ protected:
     virtual neograph::json initGraphDefinition();
 
     /// 获取当前执行图 JSON 定义 (构建 engine 前生效的最终值, 含插件修改)
+    /// - 图定义是图引擎方言 (neograph::json), 与业务 Json 分离
     const neograph::json& getGraphDefinitionJson() const {
         return agentContext ? agentContext->graphDefinitionJson : graphDefinitionJson_;
     }

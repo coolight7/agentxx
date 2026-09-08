@@ -53,7 +53,7 @@ inline std::string testResolvedWorkDir(const std::weak_ptr<agentxx::agent::Agent
         neograph::ChatTool get_definition() const {                                          \
             return {TOOL_NAME, DEPICT, {}};                                                  \
         }                                                                                    \
-        asio::awaitable<std::string> execute_async(const neograph::json& args) const {       \
+        asio::awaitable<std::string> execute_async(const agentxx::util::Json& args) const {       \
             co_return ::agentxx_fs_plugin::IMPL_FN(args, testResolvedWorkDir(ctx), nullptr); \
         }                                                                                    \
     };
@@ -69,7 +69,7 @@ inline std::string testResolvedWorkDir(const std::weak_ptr<agentxx::agent::Agent
         neograph::ChatTool get_definition() const {                                                \
             return {TOOL_NAME, DEPICT, {}};                                                        \
         }                                                                                          \
-        asio::awaitable<std::string> execute_async(const neograph::json& args) const {             \
+        asio::awaitable<std::string> execute_async(const agentxx::util::Json& args) const {             \
             co_return co_await ::agentxx_fs_plugin::IMPL_ASYNC_FN(args, testResolvedWorkDir(ctx)); \
         }                                                                                          \
     };
@@ -176,7 +176,7 @@ asio::awaitable<void>
 asio::awaitable<void>
     test_list_file_empty_path(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::FileSystemListTool{agentContext};
-    auto args = neograph::json{
+    auto args = agentxx::util::Json{
         {"path", ""}
     };
     auto result = co_await tool.execute_async(args);
@@ -195,7 +195,7 @@ asio::awaitable<void>
 asio::awaitable<void> test_list_file_basic(std::weak_ptr<agentxx::agent::AgentContext> agentContext
 ) {
     auto tool = agentxx::tools::FileSystemListTool{agentContext};
-    auto args = neograph::json{
+    auto args = agentxx::util::Json{
         {"path", testDir}
     };
     auto result = co_await tool.execute_async(args);
@@ -215,7 +215,7 @@ asio::awaitable<void> test_list_file_basic(std::weak_ptr<agentxx::agent::AgentCo
 asio::awaitable<void>
     test_list_file_recursive(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::FileSystemListTool{agentContext};
-    auto args = neograph::json{
+    auto args = agentxx::util::Json{
         {"path",      testDir},
         {"recursive", true   },
     };
@@ -234,7 +234,7 @@ asio::awaitable<void>
 asio::awaitable<void> test_list_file_limit(std::weak_ptr<agentxx::agent::AgentContext> agentContext
 ) {
     auto tool = agentxx::tools::FileSystemListTool{agentContext};
-    auto args = neograph::json{
+    auto args = agentxx::util::Json{
         {"path",  testDir},
         {"limit", 1      },
     };
@@ -259,7 +259,7 @@ asio::awaitable<void> test_list_file_limit(std::weak_ptr<agentxx::agent::AgentCo
 asio::awaitable<void>
     test_list_file_info_fields(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::FileSystemListTool{agentContext};
-    auto args = neograph::json{
+    auto args = agentxx::util::Json{
         {"path", testDir}
     };
     auto result = co_await tool.execute_async(args);
@@ -286,7 +286,7 @@ asio::awaitable<void>
     test_list_file_relative_path(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool    = agentxx::tools::FileSystemListTool{agentContext};
     auto relPath = testDirRelativeToCwd();
-    auto args    = neograph::json{
+    auto args    = agentxx::util::Json{
            {"path", relPath}
     };
     auto result = co_await tool.execute_async(args);
@@ -378,7 +378,7 @@ asio::awaitable<void>
     test_list_relative_path_with_workdir(std::weak_ptr<agentxx::agent::AgentContext>) {
     auto ctx  = makeWorkDirContext(testDir);
     auto tool = agentxx::tools::FileSystemListTool{ctx};
-    auto args = neograph::json{
+    auto args = agentxx::util::Json{
         {"path", "."}
     };
     auto result = co_await tool.execute_async(args);
@@ -399,7 +399,7 @@ asio::awaitable<void>
 asio::awaitable<void> test_read_relative_with_workdir(std::weak_ptr<agentxx::agent::AgentContext>) {
     auto ctx  = makeWorkDirContext(testDir);
     auto tool = agentxx::tools::FilesystemReadTextFileTool{ctx};
-    auto args = neograph::json{
+    auto args = agentxx::util::Json{
         {"path", "subdir/subtest.txt"}
     };
     auto result = co_await tool.execute_async(args);
@@ -420,8 +420,8 @@ asio::awaitable<void>
     test_glob_relative_pattern_with_workdir(std::weak_ptr<agentxx::agent::AgentContext>) {
     auto ctx  = makeWorkDirContext(testDir);
     auto tool = agentxx::tools::FilesystemGlobTool{ctx};
-    auto args = neograph::json{
-        {"file_patterns", neograph::json::array({"*.txt"})},
+    auto args = agentxx::util::Json{
+        {"file_patterns", agentxx::util::Json::array({"*.txt"})},
     };
     auto result = co_await tool.execute_async(args);
     if (result.find("test1.txt") != std::string::npos
@@ -456,7 +456,7 @@ asio::awaitable<void>
         f << "tilde probe\n";
     }
     auto tool = agentxx::tools::FileSystemListTool{agentContext};
-    auto args = neograph::json{
+    auto args = agentxx::util::Json{
         {"path", "~/agentxx_list_tilde_probe.txt"}
     };
     auto result = co_await tool.execute_async(args);
@@ -488,7 +488,7 @@ asio::awaitable<void>
 asio::awaitable<void>
     test_read_text_file_empty_path(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::FilesystemReadTextFileTool{agentContext};
-    auto args = neograph::json{
+    auto args = agentxx::util::Json{
         {"path", ""}
     };
     try {
@@ -512,7 +512,7 @@ asio::awaitable<void>
 asio::awaitable<void>
     test_read_text_file_not_exist(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::FilesystemReadTextFileTool{agentContext};
-    auto args = neograph::json{
+    auto args = agentxx::util::Json{
         {"path", testDir + "/nonexistent.txt"}
     };
     try {
@@ -539,7 +539,7 @@ asio::awaitable<void>
 asio::awaitable<void>
     test_read_text_file_full(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::FilesystemReadTextFileTool{agentContext};
-    auto args = neograph::json{
+    auto args = agentxx::util::Json{
         {"path", testDir + "/test1.txt"}
     };
     auto result = co_await tool.execute_async(args);
@@ -561,7 +561,7 @@ asio::awaitable<void>
         f << "aaaa\nbbbb\ncccc\ndddd\n";
     }
     auto tool = agentxx::tools::FilesystemReadTextFileTool{agentContext};
-    auto args = neograph::json{
+    auto args = agentxx::util::Json{
         {"path",        offsetFile},
         {"line_offset", 0         },
     };
@@ -582,7 +582,7 @@ asio::awaitable<void>
     test_read_text_file_relative_path(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool    = agentxx::tools::FilesystemReadTextFileTool{agentContext};
     auto relPath = testDirRelativeToCwd() + "/test1.txt";
-    auto args    = neograph::json{
+    auto args    = agentxx::util::Json{
            {"path", relPath}
     };
     auto result = co_await tool.execute_async(args);
@@ -600,7 +600,7 @@ asio::awaitable<void>
 asio::awaitable<void>
     test_read_text_file_limit(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::FilesystemReadTextFileTool{agentContext};
-    auto args = neograph::json{
+    auto args = agentxx::util::Json{
         {"path",       testDir + "/offset_test.txt"},
         {"line_limit", 3                           },
     };
@@ -625,7 +625,7 @@ asio::awaitable<void>
 asio::awaitable<void>
     test_read_text_file_offset_and_limit(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::FilesystemReadTextFileTool{agentContext};
-    auto args = neograph::json{
+    auto args = agentxx::util::Json{
         {"path",        testDir + "/offset_test.txt"},
         {"line_offset", 0                           },
         {"line_limit",  2                           },
@@ -659,7 +659,7 @@ asio::awaitable<void>
 asio::awaitable<void>
     test_write_file_empty_path(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::FilesystemWriteFileTool{agentContext};
-    auto args = neograph::json{
+    auto args = agentxx::util::Json{
         {"path", ""}
     };
     auto result = co_await tool.execute_async(args);
@@ -679,7 +679,7 @@ asio::awaitable<void>
     test_write_file_create(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool     = agentxx::tools::FilesystemWriteFileTool{agentContext};
     auto filePath = testDir + "/write_test.txt";
-    auto args     = neograph::json{
+    auto args     = agentxx::util::Json{
             {"path",    filePath          },
             {"content", "hello write test"},
     };
@@ -715,7 +715,7 @@ asio::awaitable<void>
     ) {
     auto tool     = agentxx::tools::FilesystemWriteFileTool{agentContext};
     auto filePath = testDir + "/test1.txt";
-    auto args     = neograph::json{
+    auto args     = agentxx::util::Json{
             {"path",      filePath     },
             {"content",   "new content"},
             {"overwrite", false        },
@@ -751,7 +751,7 @@ asio::awaitable<void>
         std::ofstream f(filePath);
         f << "original content\n";
     }
-    auto args = neograph::json{
+    auto args = agentxx::util::Json{
         {"path",      filePath             },
         {"content",   "overwritten content"},
         {"overwrite", true                 },
@@ -794,7 +794,7 @@ asio::awaitable<void>
 asio::awaitable<void>
     test_edit_text_file_empty_path(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::FilesystemEditTextFileTool{agentContext};
-    auto args = neograph::json{
+    auto args = agentxx::util::Json{
         {"path",    "" },
         {"old_str", "a"},
         {"new_str", "b"},
@@ -815,7 +815,7 @@ asio::awaitable<void>
 asio::awaitable<void>
     test_edit_text_file_empty_old_str(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::FilesystemEditTextFileTool{agentContext};
-    auto args = neograph::json{
+    auto args = agentxx::util::Json{
         {"path",    testDir + "/test1.txt"},
         {"old_str", ""                    },
         {"new_str", "b"                   },
@@ -842,7 +842,7 @@ asio::awaitable<void>
     }
 
     auto tool = agentxx::tools::FilesystemEditTextFileTool{agentContext};
-    auto args = neograph::json{
+    auto args = agentxx::util::Json{
         {"path",    filePath     },
         {"old_str", "hello world"},
         {"new_str", "hi universe"},
@@ -877,7 +877,7 @@ asio::awaitable<void>
     }
 
     auto tool = agentxx::tools::FilesystemEditTextFileTool{agentContext};
-    auto args = neograph::json{
+    auto args = agentxx::util::Json{
         {"path",          filePath},
         {"old_str",       "foo"   },
         {"new_str",       "baz"   },
@@ -908,7 +908,7 @@ asio::awaitable<void>
     test_edit_text_file_no_match(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto filePath = testDir + "/edit_test.txt";
     auto tool     = agentxx::tools::FilesystemEditTextFileTool{agentContext};
-    auto args     = neograph::json{
+    auto args     = agentxx::util::Json{
             {"path",    filePath                },
             {"old_str", "nonexistent_string_xyz"},
             {"new_str", "replacement"           },
@@ -945,7 +945,7 @@ asio::awaitable<void>
 
     // 完整读取: 保留原始换行符 (CRLF 文件返回 CRLF 内容, 见插件注释:
     // read 保留原始内容、edit 归一化 LF 后匹配)
-    auto args = neograph::json{
+    auto args = agentxx::util::Json{
         {"path", filePath}
     };
     auto full     = co_await tool.execute_async(args);
@@ -960,7 +960,7 @@ asio::awaitable<void>
     }
 
     // offset/limit 读取: 同样保留原始 `\r`
-    auto args2 = neograph::json{
+    auto args2 = agentxx::util::Json{
         {"path",        filePath},
         {"line_offset", 1       },
         {"line_limit",  1       },
@@ -989,7 +989,7 @@ asio::awaitable<void>
     }
 
     auto tool = agentxx::tools::FilesystemEditTextFileTool{agentContext};
-    auto args = neograph::json{
+    auto args = agentxx::util::Json{
         {"path",    filePath              },
         {"old_str", "hello world\nfoo bar"},
         {"new_str", "hi universe\nfoo bar"},
@@ -1023,7 +1023,7 @@ asio::awaitable<void>
     }
 
     auto tool = agentxx::tools::FilesystemEditTextFileTool{agentContext};
-    auto args = neograph::json{
+    auto args = agentxx::util::Json{
         {"path",    filePath       },
         {"old_str", "alpha\r\nbeta"},
         {"new_str", "AA\r\nBB"     },
@@ -1058,7 +1058,7 @@ asio::awaitable<void>
     }
 
     auto tool = agentxx::tools::FilesystemEditTextFileTool{agentContext};
-    auto args = neograph::json{
+    auto args = agentxx::util::Json{
         {"path",          filePath},
         {"old_str",       "foo"   },
         {"new_str",       "baz"   },
@@ -1101,8 +1101,8 @@ asio::awaitable<void>
 asio::awaitable<void>
     test_glob_empty_patterns(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::FilesystemGlobTool{agentContext};
-    auto args = neograph::json{
-        {"file_patterns", neograph::json::array()},
+    auto args = agentxx::util::Json{
+        {"file_patterns", agentxx::util::Json::array()},
     };
     auto result = co_await tool.execute_async(args);
     if (agentxx::util::isIgnoreCaseContains(result, "error")) {
@@ -1120,8 +1120,8 @@ asio::awaitable<void>
 asio::awaitable<void> test_glob_find_files(std::weak_ptr<agentxx::agent::AgentContext> agentContext
 ) {
     auto tool = agentxx::tools::FilesystemGlobTool{agentContext};
-    auto args = neograph::json{
-        {"file_patterns", neograph::json::array({testDir + "/*.txt"})},
+    auto args = agentxx::util::Json{
+        {"file_patterns", agentxx::util::Json::array({testDir + "/*.txt"})},
     };
     auto result = co_await tool.execute_async(args);
     if (result.find("test1.txt") != std::string::npos
@@ -1138,8 +1138,8 @@ asio::awaitable<void> test_glob_find_files(std::weak_ptr<agentxx::agent::AgentCo
 asio::awaitable<void> test_glob_recursive(std::weak_ptr<agentxx::agent::AgentContext> agentContext
 ) {
     auto tool = agentxx::tools::FilesystemGlobTool{agentContext};
-    auto args = neograph::json{
-        {"file_patterns", neograph::json::array({testDir + "/**/*.txt"})},
+    auto args = agentxx::util::Json{
+        {"file_patterns", agentxx::util::Json::array({testDir + "/**/*.txt"})},
     };
     auto result = co_await tool.execute_async(args);
     if (result.find("subtest.txt") != std::string::npos) {
@@ -1157,8 +1157,8 @@ asio::awaitable<void>
     test_glob_relative_pattern(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool   = agentxx::tools::FilesystemGlobTool{agentContext};
     auto relDir = testDirRelativeToCwd();
-    auto args   = neograph::json{
-          {"file_patterns", neograph::json::array({relDir + "/*.txt"})},
+    auto args   = agentxx::util::Json{
+          {"file_patterns", agentxx::util::Json::array({relDir + "/*.txt"})},
     };
     auto result = co_await tool.execute_async(args);
     if (result.find("test1.txt") != std::string::npos
@@ -1190,10 +1190,10 @@ asio::awaitable<void>
     test_grep_empty_text_patterns(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::FilesystemGrepTool{agentContext};
     // text_patterns 与 regex_patterns 均为空: 应报错 (至少指定其一)
-    auto args = neograph::json{
-        {"text_patterns",  neograph::json::array()                    },
-        {"regex_patterns", neograph::json::array()                    },
-        {"file_patterns",  neograph::json::array({testDir + "/*.txt"})},
+    auto args = agentxx::util::Json{
+        {"text_patterns",  agentxx::util::Json::array()                    },
+        {"regex_patterns", agentxx::util::Json::array()                    },
+        {"file_patterns",  agentxx::util::Json::array({testDir + "/*.txt"})},
     };
     auto result = co_await tool.execute_async(args);
     if (agentxx::util::isIgnoreCaseContains(result, "error")) {
@@ -1211,9 +1211,9 @@ asio::awaitable<void>
 asio::awaitable<void>
     test_grep_empty_file_patterns(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::FilesystemGrepTool{agentContext};
-    auto args = neograph::json{
-        {"text_patterns", neograph::json::array({"hello"})},
-        {"file_patterns", neograph::json::array()         },
+    auto args = agentxx::util::Json{
+        {"text_patterns", agentxx::util::Json::array({"hello"})},
+        {"file_patterns", agentxx::util::Json::array()         },
     };
     auto result = co_await tool.execute_async(args);
     if (agentxx::util::isIgnoreCaseContains(result, "error")) {
@@ -1232,9 +1232,9 @@ asio::awaitable<void> test_grep_text_search(std::weak_ptr<agentxx::agent::AgentC
 ) {
     auto tool = agentxx::tools::FilesystemGrepTool{agentContext};
     // text_patterns 现为纯文本匹配 (开关已移除)
-    auto args = neograph::json{
-        {"text_patterns", neograph::json::array({"hello"})           },
-        {"file_patterns", neograph::json::array({testDir + "/*.txt"})},
+    auto args = agentxx::util::Json{
+        {"text_patterns", agentxx::util::Json::array({"hello"})           },
+        {"file_patterns", agentxx::util::Json::array({testDir + "/*.txt"})},
         {"output_mode",   "files_with_matches"                       },
     };
     auto result = co_await tool.execute_async(args);
@@ -1252,9 +1252,9 @@ asio::awaitable<void>
     test_grep_regex_search(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::FilesystemGrepTool{agentContext};
     // 正则搜索改由 regex_patterns 指定 (text_patterns 不再按正则解释)
-    auto args = neograph::json{
-        {"regex_patterns", neograph::json::array({"line[0-9]"})           },
-        {"file_patterns",  neograph::json::array({testDir + "/test1.txt"})},
+    auto args = agentxx::util::Json{
+        {"regex_patterns", agentxx::util::Json::array({"line[0-9]"})           },
+        {"file_patterns",  agentxx::util::Json::array({testDir + "/test1.txt"})},
         {"output_mode",    "files_with_matches"                           },
     };
     auto result = co_await tool.execute_async(args);
@@ -1274,10 +1274,10 @@ asio::awaitable<void>
 asio::awaitable<void>
     test_grep_text_and_regex_union(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::FilesystemGrepTool{agentContext};
-    auto args = neograph::json{
-        {"text_patterns",  neograph::json::array({"hello world"})     },
-        {"regex_patterns", neograph::json::array({"line[0-9]"})       },
-        {"file_patterns",  neograph::json::array({testDir + "/*.txt"})},
+    auto args = agentxx::util::Json{
+        {"text_patterns",  agentxx::util::Json::array({"hello world"})     },
+        {"regex_patterns", agentxx::util::Json::array({"line[0-9]"})       },
+        {"file_patterns",  agentxx::util::Json::array({testDir + "/*.txt"})},
         {"output_mode",    "files_with_matches"                       },
     };
     auto result = co_await tool.execute_async(args);
@@ -1300,10 +1300,10 @@ asio::awaitable<void>
     test_grep_text_and_regex_union_content(std::weak_ptr<agentxx::agent::AgentContext> agentContext
     ) {
     auto tool = agentxx::tools::FilesystemGrepTool{agentContext};
-    auto args = neograph::json{
-        {"text_patterns",  neograph::json::array({"hello"})               },
-        {"regex_patterns", neograph::json::array({"world"})               },
-        {"file_patterns",  neograph::json::array({testDir + "/test2.txt"})},
+    auto args = agentxx::util::Json{
+        {"text_patterns",  agentxx::util::Json::array({"hello"})               },
+        {"regex_patterns", agentxx::util::Json::array({"world"})               },
+        {"file_patterns",  agentxx::util::Json::array({testDir + "/test2.txt"})},
         {"output_mode",    "content"                                      },
     };
     auto result = co_await tool.execute_async(args);
@@ -1328,9 +1328,9 @@ asio::awaitable<void>
 asio::awaitable<void>
     test_grep_content_mode(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::FilesystemGrepTool{agentContext};
-    auto args = neograph::json{
-        {"text_patterns", neograph::json::array({"hello"})               },
-        {"file_patterns", neograph::json::array({testDir + "/test2.txt"})},
+    auto args = agentxx::util::Json{
+        {"text_patterns", agentxx::util::Json::array({"hello"})               },
+        {"file_patterns", agentxx::util::Json::array({testDir + "/test2.txt"})},
         {"output_mode",   "content"                                      },
     };
     auto result = co_await tool.execute_async(args);
@@ -1358,9 +1358,9 @@ asio::awaitable<void>
     auto tool = agentxx::tools::FilesystemGrepTool{agentContext};
     // 多文件 content 模式: 每个文件应有独立的组头 "{filepath}:",
     // 且每个文件的组头仅出现一次 (减少路径重复), 各文件行归属自己的组头之下
-    auto args = neograph::json{
-        {"regex_patterns",     neograph::json::array({".*e.*"})           },
-        {"file_patterns",      neograph::json::array({testDir + "/*.txt"})},
+    auto args = agentxx::util::Json{
+        {"regex_patterns",     agentxx::util::Json::array({".*e.*"})           },
+        {"file_patterns",      agentxx::util::Json::array({testDir + "/*.txt"})},
         {"output_mode",        "content"                                  },
         {"max_count_per_file", 1                                          },
     };
@@ -1393,9 +1393,9 @@ asio::awaitable<void>
     test_grep_case_insensitive(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::FilesystemGrepTool{agentContext};
     // 搜索 "HELLO" (大写), case_sensitive=false 应匹配到 "hello world"
-    auto args = neograph::json{
-        {"text_patterns",  neograph::json::array({"HELLO"})               },
-        {"file_patterns",  neograph::json::array({testDir + "/test2.txt"})},
+    auto args = agentxx::util::Json{
+        {"text_patterns",  agentxx::util::Json::array({"HELLO"})               },
+        {"file_patterns",  agentxx::util::Json::array({testDir + "/test2.txt"})},
         {"output_mode",    "files_with_matches"                           },
         {"case_sensitive", false                                          },
     };
@@ -1415,9 +1415,9 @@ asio::awaitable<void>
     test_grep_case_sensitive_default(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::FilesystemGrepTool{agentContext};
     // 搜索 "HELLO" (大写), 默认 case_sensitive=true 不应匹配到 "hello world"
-    auto args = neograph::json{
-        {"text_patterns", neograph::json::array({"HELLO"})               },
-        {"file_patterns", neograph::json::array({testDir + "/test2.txt"})},
+    auto args = agentxx::util::Json{
+        {"text_patterns", agentxx::util::Json::array({"HELLO"})               },
+        {"file_patterns", agentxx::util::Json::array({testDir + "/test2.txt"})},
         {"output_mode",   "files_with_matches"                           },
     };
     auto result = co_await tool.execute_async(args);
@@ -1437,9 +1437,9 @@ asio::awaitable<void>
     test_grep_max_count_per_file(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::FilesystemGrepTool{agentContext};
     // test1.txt 有 line1~line5, 搜索 "line" 应匹配 5 次, 限制 max_count_per_file=2
-    auto args = neograph::json{
-        {"text_patterns",      neograph::json::array({"line"})                },
-        {"file_patterns",      neograph::json::array({testDir + "/test1.txt"})},
+    auto args = agentxx::util::Json{
+        {"text_patterns",      agentxx::util::Json::array({"line"})                },
+        {"file_patterns",      agentxx::util::Json::array({testDir + "/test1.txt"})},
         {"output_mode",        "files_with_matches"                           },
         {"max_count_per_file", 2                                              },
     };
@@ -1460,9 +1460,9 @@ asio::awaitable<void>
     auto tool = agentxx::tools::FilesystemGrepTool{agentContext};
     // test1.txt: line1\nline2\nline3\nline4\nline5\n
     // 搜索 "line3", context_lines=1, 应输出第 2,3,4 行
-    auto args = neograph::json{
-        {"text_patterns", neograph::json::array({"line3"})               },
-        {"file_patterns", neograph::json::array({testDir + "/test1.txt"})},
+    auto args = agentxx::util::Json{
+        {"text_patterns", agentxx::util::Json::array({"line3"})               },
+        {"file_patterns", agentxx::util::Json::array({testDir + "/test1.txt"})},
         {"output_mode",   "content"                                      },
         {"context_lines", 1                                              },
     };
@@ -1487,8 +1487,8 @@ asio::awaitable<void> test_glob_type_filter(std::weak_ptr<agentxx::agent::AgentC
 ) {
     auto tool = agentxx::tools::FilesystemGlobTool{agentContext};
     // 只匹配目录
-    auto args = neograph::json{
-        {"file_patterns", neograph::json::array({testDir + "/*"})},
+    auto args = agentxx::util::Json{
+        {"file_patterns", agentxx::util::Json::array({testDir + "/*"})},
         {"type",          "dir"                                  },
     };
     auto result = co_await tool.execute_async(args);
@@ -1508,9 +1508,9 @@ asio::awaitable<void>
     test_glob_exclude_patterns(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::FilesystemGlobTool{agentContext};
     // 匹配所有 txt, 排除 test1.txt
-    auto args = neograph::json{
-        {"file_patterns",    neograph::json::array({testDir + "/*.txt"})    },
-        {"exclude_patterns", neograph::json::array({testDir + "/test1.txt"})},
+    auto args = agentxx::util::Json{
+        {"file_patterns",    agentxx::util::Json::array({testDir + "/*.txt"})    },
+        {"exclude_patterns", agentxx::util::Json::array({testDir + "/test1.txt"})},
     };
     auto result = co_await tool.execute_async(args);
     // 应包含 test2.txt, 不应包含 test1.txt
@@ -1531,8 +1531,8 @@ asio::awaitable<void>
     test_glob_case_sensitive(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::FilesystemGlobTool{agentContext};
     // testDir 下只有小写 test1.txt, 大写模式应匹配不到 (大小写敏感)
-    auto args = neograph::json{
-        {"file_patterns", neograph::json::array({testDir + "/TEST1.TXT"})},
+    auto args = agentxx::util::Json{
+        {"file_patterns", agentxx::util::Json::array({testDir + "/TEST1.TXT"})},
     };
     auto result = co_await tool.execute_async(args);
     if (result.find("test1.txt") == std::string::npos) {
@@ -1550,8 +1550,8 @@ asio::awaitable<void>
 asio::awaitable<void> test_glob_max_depth(std::weak_ptr<agentxx::agent::AgentContext> agentContext
 ) {
     auto tool = agentxx::tools::FilesystemGlobTool{agentContext};
-    auto args = neograph::json{
-        {"file_patterns", neograph::json::array({testDir + "/**/*.txt"})},
+    auto args = agentxx::util::Json{
+        {"file_patterns", agentxx::util::Json::array({testDir + "/**/*.txt"})},
         {"max_depth",     1                                             },
     };
     auto result = co_await tool.execute_async(args);
@@ -1571,8 +1571,8 @@ asio::awaitable<void>
     test_glob_non_recursive(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::FilesystemGlobTool{agentContext};
     // 不含 `**` 的模式不应递归: *.txt 只匹配当前目录
-    auto args = neograph::json{
-        {"file_patterns", neograph::json::array({testDir + "/*.txt"})},
+    auto args = agentxx::util::Json{
+        {"file_patterns", agentxx::util::Json::array({testDir + "/*.txt"})},
     };
     auto result = co_await tool.execute_async(args);
     // 应包含 test1.txt, test2.txt, 不应包含 subdir/subtest.txt
@@ -1593,9 +1593,9 @@ asio::awaitable<void>
 asio::awaitable<void>
     test_grep_no_match_fail_fast(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::FilesystemGrepTool{agentContext};
-    auto args = neograph::json{
-        {"text_patterns", neograph::json::array({"never_match_any_text"})     },
-        {"file_patterns", neograph::json::array({testDir + "/no_such_dir/**"})},
+    auto args = agentxx::util::Json{
+        {"text_patterns", agentxx::util::Json::array({"never_match_any_text"})     },
+        {"file_patterns", agentxx::util::Json::array({testDir + "/no_such_dir/**"})},
         {"timeout",       60                                                  }, // 修复前会白等 60s
     };
     auto t0     = std::chrono::steady_clock::now();
@@ -1621,9 +1621,9 @@ asio::awaitable<void>
 asio::awaitable<void>
     test_grep_skip_directories(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::FilesystemGrepTool{agentContext};
-    auto args = neograph::json{
-        {"text_patterns", neograph::json::array({"hello world"})    },
-        {"file_patterns", neograph::json::array({testDir + "/**/*"})},
+    auto args = agentxx::util::Json{
+        {"text_patterns", agentxx::util::Json::array({"hello world"})    },
+        {"file_patterns", agentxx::util::Json::array({testDir + "/**/*"})},
         {"output_mode",   "files_with_matches"                      },
     };
     auto result = co_await tool.execute_async(args);
@@ -1672,9 +1672,9 @@ asio::awaitable<void> test_grep_mem_stress(std::weak_ptr<agentxx::agent::AgentCo
     };
 
     // 正则 + files_with_matches
-    auto args = neograph::json{
-        {"regex_patterns", neograph::json::array({"token_\\d+", "func\\d+"})},
-        {"file_patterns",  neograph::json::array({stressDir + "/**/*"})     },
+    auto args = agentxx::util::Json{
+        {"regex_patterns", agentxx::util::Json::array({"token_\\d+", "func\\d+"})},
+        {"file_patterns",  agentxx::util::Json::array({stressDir + "/**/*"})     },
     };
     auto rss0 = rssKB();
     for (int i = 0; i < 30; i++) {
@@ -1688,9 +1688,9 @@ asio::awaitable<void> test_grep_mem_stress(std::weak_ptr<agentxx::agent::AgentCo
     auto rss1 = rssKB();
 
     // 纯文本 (AhoCorasick) + content 模式
-    auto args2 = neograph::json{
-        {"text_patterns", neograph::json::array({"token_5", "func3"}) },
-        {"file_patterns", neograph::json::array({stressDir + "/**/*"})},
+    auto args2 = agentxx::util::Json{
+        {"text_patterns", agentxx::util::Json::array({"token_5", "func3"}) },
+        {"file_patterns", agentxx::util::Json::array({stressDir + "/**/*"})},
         {"output_mode",   "content"                                   },
     };
     for (int i = 0; i < 30; i++) {
@@ -1725,8 +1725,8 @@ asio::awaitable<void>
     auto tool = agentxx::tools::FilesystemGlobTool{agentContext};
 
     // 1) 递归 glob: 应能遍历该目录且路径中包含 UTF-8 字符 (不抛异常)
-    auto argsRec = neograph::json{
-        {"file_patterns", neograph::json::array({testDir + "/**/*"})},
+    auto argsRec = agentxx::util::Json{
+        {"file_patterns", agentxx::util::Json::array({testDir + "/**/*"})},
         {"limit",         0                                         },
     };
     auto resRec        = co_await tool.execute_async(argsRec);
@@ -1734,8 +1734,8 @@ asio::awaitable<void>
     bool hasUnicodeDir = resRec.find("utf8_glob_ßµ™∃") != std::string::npos;
 
     // 2) 直接用含非 ASCII 字符的 pattern 匹配
-    auto argsDirect = neograph::json{
-        {"file_patterns", neograph::json::array({unicodeDir + "/*.txt"})},
+    auto argsDirect = agentxx::util::Json{
+        {"file_patterns", agentxx::util::Json::array({unicodeDir + "/*.txt"})},
     };
     auto resDirect      = co_await tool.execute_async(argsDirect);
     bool hasDirectMatch = resDirect.find("sample.txt") != std::string::npos;
@@ -1766,9 +1766,9 @@ asio::awaitable<void>
     }
 
     auto tool = agentxx::tools::FilesystemGrepTool{agentContext};
-    auto args = neograph::json{
-        {"text_patterns", neograph::json::array({"match_token_in_unicode_dir"})},
-        {"file_patterns", neograph::json::array({testDir + "/**/*"})           },
+    auto args = agentxx::util::Json{
+        {"text_patterns", agentxx::util::Json::array({"match_token_in_unicode_dir"})},
+        {"file_patterns", agentxx::util::Json::array({testDir + "/**/*"})           },
         {"output_mode",   "files_with_matches"                                 },
     };
     auto result   = co_await tool.execute_async(args);
@@ -1795,10 +1795,10 @@ asio::awaitable<void>
     ) {
     auto tool = agentxx::tools::FilesystemGrepTool{agentContext};
     // 传入两个 pattern: 一个是指向不存在目录的 pattern, 另一个是指向有效文件的 pattern
-    auto args = neograph::json{
-        {"text_patterns", neograph::json::array({"hello world"})                               },
+    auto args = agentxx::util::Json{
+        {"text_patterns", agentxx::util::Json::array({"hello world"})                               },
         {"file_patterns",
-         neograph::json::array({testDir + "/no_such_sub_dir/**/*.txt", testDir + "/test2.txt"})},
+         agentxx::util::Json::array({testDir + "/no_such_sub_dir/**/*.txt", testDir + "/test2.txt"})},
         {"output_mode",   "files_with_matches"                                                 },
     };
     auto result = co_await tool.execute_async(args);
@@ -1835,7 +1835,7 @@ asio::awaitable<void>
     auto tool = agentxx::tools::FileSystemListTool{agentContext};
 
     // 1) 非递归列出
-    auto argsNonRec = neograph::json{
+    auto argsNonRec = agentxx::util::Json{
         {"path",      chineseDir},
         {"recursive", false     }
     };
@@ -1845,7 +1845,7 @@ asio::awaitable<void>
     bool noSubFile = resNonRec.find("深层中文文件.txt") == std::string::npos;
 
     // 2) 递归列出
-    auto argsRec = neograph::json{
+    auto argsRec = agentxx::util::Json{
         {"path",      chineseDir},
         {"recursive", true      }
     };
@@ -1880,7 +1880,7 @@ asio::awaitable<void>
     auto tool = agentxx::tools::FilesystemReadTextFileTool{agentContext};
 
     // 1) 全量读取 (异步/stream_file)
-    auto argsFull = neograph::json{
+    auto argsFull = agentxx::util::Json{
         {"path", filePath}
     };
     auto resFull = co_await tool.execute_async(argsFull);
@@ -1888,7 +1888,7 @@ asio::awaitable<void>
                   && resFull.find("第三行结束行") != std::string::npos;
 
     // 2) 分段读取 (offset + limit)
-    auto argsSlice = neograph::json{
+    auto argsSlice = agentxx::util::Json{
         {"path",        filePath},
         {"line_offset", 1       },
         {"line_limit",  1       }
@@ -1926,7 +1926,7 @@ asio::awaitable<void>
     auto tool = agentxx::tools::FilesystemWriteFileTool{agentContext};
 
     // 1) 首次创建: 自动创建多层中文父目录
-    auto argsCreate = neograph::json{
+    auto argsCreate = agentxx::util::Json{
         {"path",      filePath                 },
         {"content",   "中文内容第一版\n"},
         {"overwrite", false                    }
@@ -1947,7 +1947,7 @@ asio::awaitable<void>
     }
 
     // 3) overwrite=true 成功覆盖
-    auto argsOverwrite = neograph::json{
+    auto argsOverwrite = agentxx::util::Json{
         {"path",      filePath                    },
         {"content",   "覆盖后的中文内容\n"},
         {"overwrite", true                        }
@@ -1966,7 +1966,7 @@ asio::awaitable<void>
 
     // 4) 同步版 write 直测
     auto syncFilePath = chineseDir + "/同步写入文件.txt";
-    auto syncArgs     = neograph::json{
+    auto syncArgs     = agentxx::util::Json{
             {"path",      syncFilePath          },
             {"content",   "同步中文写入\n"},
             {"overwrite", true                  }
@@ -2003,7 +2003,7 @@ asio::awaitable<void>
     auto tool = agentxx::tools::FilesystemEditTextFileTool{agentContext};
 
     // 1) 单处替换
-    auto argsSingle = neograph::json{
+    auto argsSingle = agentxx::util::Json{
         {"path",          filePath                   },
         {"old_str",       "目标旧字符串_AAA"   },
         {"new_str",       "已替换新字符串_BBB"},
@@ -2013,7 +2013,7 @@ asio::awaitable<void>
     bool singleOk  = (resSingle == "success");
 
     // 2) 多处替换 (剩余的一处替换)
-    auto argsMulti = neograph::json{
+    auto argsMulti = agentxx::util::Json{
         {"path",          filePath                   },
         {"old_str",       "目标旧字符串_AAA"   },
         {"new_str",       "已替换新字符串_CCC"},
@@ -2035,7 +2035,7 @@ asio::awaitable<void>
                      && readContent.find("目标旧字符串_AAA") == std::string::npos;
 
     // 3) 同步版 edit 直测
-    auto syncArgs = neograph::json{
+    auto syncArgs = agentxx::util::Json{
         {"path",          filePath                   },
         {"old_str",       "已替换新字符串_BBB"},
         {"new_str",       "同步替换新内容"    },
@@ -2074,16 +2074,16 @@ asio::awaitable<void>
     auto tool = agentxx::tools::FilesystemGlobTool{agentContext};
 
     // 1) 递归 pattern 匹配中文目录下的 .txt
-    auto argsRec = neograph::json{
-        {"file_patterns", neograph::json::array({testDir + "/中文测试目录_通配符/**/*.txt"})},
+    auto argsRec = agentxx::util::Json{
+        {"file_patterns", agentxx::util::Json::array({testDir + "/中文测试目录_通配符/**/*.txt"})},
     };
     auto resRec = co_await tool.execute_async(argsRec);
     bool recOk  = resRec.find("文档_一.txt") != std::string::npos
                  && resRec.find("文档_二.log") == std::string::npos;
 
     // 2) 直接用含中文的 pattern 匹配
-    auto argsDirect = neograph::json{
-        {"file_patterns", neograph::json::array({chineseDir + "/*"})},
+    auto argsDirect = agentxx::util::Json{
+        {"file_patterns", agentxx::util::Json::array({chineseDir + "/*"})},
     };
     auto resDirect = co_await tool.execute_async(argsDirect);
     bool directOk  = resDirect.find("文档_一.txt") != std::string::npos
@@ -2118,9 +2118,9 @@ asio::awaitable<void>
     auto tool = agentxx::tools::FilesystemGrepTool{agentContext};
 
     // 1) files_with_matches 文本搜索
-    auto argsFwm = neograph::json{
-        {"text_patterns", neograph::json::array({"检索特征码_中文关键字"})},
-        {"file_patterns", neograph::json::array({chineseDir + "/*.txt"})            },
+    auto argsFwm = agentxx::util::Json{
+        {"text_patterns", agentxx::util::Json::array({"检索特征码_中文关键字"})},
+        {"file_patterns", agentxx::util::Json::array({chineseDir + "/*.txt"})            },
         {"output_mode",   "files_with_matches"                                      }
     };
     auto resFwm = co_await tool.execute_async(argsFwm);
@@ -2128,9 +2128,9 @@ asio::awaitable<void>
                  && resFwm.find("[Error]") == std::string::npos;
 
     // 2) content 模式正则搜索
-    auto argsContent = neograph::json{
-        {"regex_patterns", neograph::json::array({R"(检索特征码_中文关键字_\d+)"})},
-        {"file_patterns",  neograph::json::array({testDir + "/**/*.txt"})                   },
+    auto argsContent = agentxx::util::Json{
+        {"regex_patterns", agentxx::util::Json::array({R"(检索特征码_中文关键字_\d+)"})},
+        {"file_patterns",  agentxx::util::Json::array({testDir + "/**/*.txt"})                   },
         {"output_mode",    "content"                                                        }
     };
     auto resContent = co_await tool.execute_async(argsContent);
@@ -2225,7 +2225,7 @@ asio::awaitable<void> test_plugin_real_link() {
     // 经 ToolRegistry 全链路执行 (op_driver 驱动插件三件套); sessionId 注入
     // thread_id → 会话工作目录解析链路
     auto callTool
-        = [&](const char* name, const neograph::json& args) -> asio::awaitable<std::string> {
+        = [&](const char* name, const agentxx::util::Json& args) -> asio::awaitable<std::string> {
         auto tool = linkCtx->toolRegistry->find(name);
         if (!tool) {
             co_return "[Error] tool not found";
@@ -2239,7 +2239,7 @@ asio::awaitable<void> test_plugin_real_link() {
     {
         auto out = co_await callTool(
             "agentxx_filesystem_write",
-            neograph::json{
+            agentxx::util::Json{
                 {"path",    "link_smoke.txt"},
                 {"content", "alpha\nbeta\n" }
         }
@@ -2252,7 +2252,7 @@ asio::awaitable<void> test_plugin_real_link() {
     {
         auto out = co_await callTool(
             "agentxx_filesystem_read",
-            neograph::json{
+            agentxx::util::Json{
                 {"path", "link_smoke.txt"}
         }
         );
@@ -2261,7 +2261,7 @@ asio::awaitable<void> test_plugin_real_link() {
         );
         auto part = co_await callTool(
             "agentxx_filesystem_read",
-            neograph::json{
+            agentxx::util::Json{
                 {"path",        "link_smoke.txt"},
                 {"line_offset", 1               },
                 {"line_limit",  1               }
@@ -2276,7 +2276,7 @@ asio::awaitable<void> test_plugin_real_link() {
     {
         auto out = co_await callTool(
             "agentxx_filesystem_edit",
-            neograph::json{
+            agentxx::util::Json{
                 {"path",    "link_smoke.txt"},
                 {"old_str", "beta"          },
                 {"new_str", "gamma"         }
@@ -2292,7 +2292,7 @@ asio::awaitable<void> test_plugin_real_link() {
     {
         auto out = co_await callTool(
             "agentxx_filesystem_list",
-            neograph::json{
+            agentxx::util::Json{
                 {"path", "."}
         }
         );
@@ -2303,9 +2303,9 @@ asio::awaitable<void> test_plugin_real_link() {
     {
         auto out = co_await callTool(
             "agentxx_filesystem_grep",
-            neograph::json{
-                {"text_patterns", neograph::json::array({"gamma"})},
-                {"file_patterns", neograph::json::array({"*.txt"})},
+            agentxx::util::Json{
+                {"text_patterns", agentxx::util::Json::array({"gamma"})},
+                {"file_patterns", agentxx::util::Json::array({"*.txt"})},
                 {"output_mode",   "files_with_matches"            }
         }
         );
@@ -2316,7 +2316,7 @@ asio::awaitable<void> test_plugin_real_link() {
     {
         auto outW = co_await callTool(
             "agentxx_filesystem_write",
-            neograph::json{
+            agentxx::util::Json{
                 {"path",    "中文目录_真实链路/中文文件.txt"},
                 {"content", "中文链路数据_初始版本\n"         }
         }
@@ -2328,7 +2328,7 @@ asio::awaitable<void> test_plugin_real_link() {
 
         auto outR = co_await callTool(
             "agentxx_filesystem_read",
-            neograph::json{
+            agentxx::util::Json{
                 {"path", "中文目录_真实链路/中文文件.txt"}
         }
         );
@@ -2336,7 +2336,7 @@ asio::awaitable<void> test_plugin_real_link() {
 
         auto outE = co_await callTool(
             "agentxx_filesystem_edit",
-            neograph::json{
+            agentxx::util::Json{
                 {"path",    "中文目录_真实链路/中文文件.txt"},
                 {"old_str", "初始版本"                              },
                 {"new_str", "更新版本"                              }
@@ -2346,7 +2346,7 @@ asio::awaitable<void> test_plugin_real_link() {
 
         auto outL = co_await callTool(
             "agentxx_filesystem_list",
-            neograph::json{
+            agentxx::util::Json{
                 {"path", "中文目录_真实链路"}
         }
         );
@@ -2354,9 +2354,9 @@ asio::awaitable<void> test_plugin_real_link() {
 
         auto outG = co_await callTool(
             "agentxx_filesystem_grep",
-            neograph::json{
-                {"text_patterns", neograph::json::array({"更新版本"})                   },
-                {"file_patterns", neograph::json::array({"中文目录_真实链路/*.txt"})},
+            agentxx::util::Json{
+                {"text_patterns", agentxx::util::Json::array({"更新版本"})                   },
+                {"file_patterns", agentxx::util::Json::array({"中文目录_真实链路/*.txt"})},
                 {"output_mode",   "files_with_matches"                                      }
         }
         );

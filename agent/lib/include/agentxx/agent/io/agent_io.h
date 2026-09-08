@@ -5,9 +5,10 @@
 #include "agentxx/agent/io/client_event_sink.h"
 #include "agentxx/util/log.h"
 #include "asio/awaitable.hpp"
+#include "agentxx/util/asio_error.h"
 #include "asio/this_coro.hpp"
 #include "fmt/format.h"
-#include "neograph/json.h"
+#include "agentxx/util/json.h"
 #include <functional>
 #include <memory>
 #include <optional>
@@ -121,7 +122,7 @@ public:
     /// 统一的 HIL 处理: 用于权限询问、中断输入收集等所有用户交互场景
     /// - server 侧: 经会话总线 (registerOnBus) 被 BaseAgent 的中断流程调用
     /// - client 侧: 收到对端 WireInterruptRequest 后由 onPeerMessage 调用
-    virtual asio::awaitable<neograph::json> handleInterrupt(
+    virtual asio::awaitable<agentxx::util::Json> handleInterrupt(
         std::string_view sessionId,
         std::string_view interruptNode,
         std::string_view interruptValue,

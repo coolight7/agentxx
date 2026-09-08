@@ -925,7 +925,7 @@ asio::awaitable<void> test_http_client_beast_server() {
     }
 
     {
-        neograph::json j = {
+        agentxx::util::Json j = {
             {"msg", "hi"}
         };
         auto resp = co_await HttpClient::postAsync(baseUrl + "/echo", j);

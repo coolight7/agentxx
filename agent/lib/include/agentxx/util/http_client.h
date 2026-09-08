@@ -1,9 +1,12 @@
 #pragma once
 
+#include "agentxx/util/http_error.h"
 #include "agentxx/util/http_header.h"
+#include "agentxx/util/json.h"
 #include "agentxx/util/log.h"
 #include "agentxx/util/string_util.h"
 #include "asio/awaitable.hpp"
+#include "agentxx/util/asio_error.h"
 #include "asio/cancel_after.hpp"
 #include "asio/ip/tcp.hpp"
 #include "asio/redirect_error.hpp"
@@ -22,9 +25,6 @@
 #include <functional>
 #include <limits>
 #include <memory>
-#include <mutex>
-#include <neograph/api.h>
-#include <neograph/json.h>
 #include <optional>
 #include <string>
 
@@ -50,7 +50,7 @@ struct HttpResponse {
 
     static bool isTextContentType(std::string_view contentType) noexcept;
 
-    std::optional<neograph::json> bodyJson() const;
+    std::optional<Json> bodyJson() const;
 
     std::optional<std::string> bodyText() const;
 };
@@ -245,7 +245,7 @@ public:
     /// - 每次收到新数据块时调用 onChunk (分块间隔受 readChunkTimeout 约束)
     /// - onChunk 返回 true 表示流已结束 (如收到 [DONE]/response.completed/message_stop),
     ///   此时立即断开连接并停止读取, 避免对端 keep-alive 不关闭时白等 readChunkTimeout
-    /// - HTTP 429 时抛出 neograph::RateLimitError (解析 retry-after)
+    /// - HTTP 429 时抛出 agentxx::util::RateLimitError (解析 retry-after)
     /// - 其他非 2xx 时抛出 std::runtime_error
     /// - 网络/超时错误抛出 neograph_asio_system_error
     static asio::awaitable<void> requestSseAsync(
@@ -315,10 +315,10 @@ public:
     );
 
     static asio::awaitable<std::expected<HttpResponse, std::string>> postAsync(
-        std::string_view      url,
-        const neograph::json& body,
-        const HeaderMap&      extraHeaders = {},
-        const RequestConfig&  config       = {}
+        std::string_view     url,
+        const Json&          body,
+        const HeaderMap&     extraHeaders = {},
+        const RequestConfig& config       = {}
     );
 
     static asio::awaitable<std::expected<HttpResponse, std::string>> postAsync(

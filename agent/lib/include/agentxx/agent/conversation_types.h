@@ -1,6 +1,8 @@
 #pragma once
 
-#include "neograph/json.h"
+#include <memory>
+
+#include "agentxx/util/json.h"
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -144,8 +146,8 @@ struct MediaAttachment {
         return "📷︎";
     }
 
-    neograph::json toJson() const {
-        neograph::json j = neograph::json::object();
+    agentxx::util::Json toJson() const {
+        agentxx::util::Json j = agentxx::util::Json::object();
         j["type"]        = std::string(mediaTypeToString(type));
         if (!displayName.empty()) {
             j["display_name"] = displayName;
@@ -165,7 +167,7 @@ struct MediaAttachment {
         return j;
     }
 
-    static MediaAttachment fromJson(const neograph::json& j) {
+    static MediaAttachment fromJson(const agentxx::util::Json& j) {
         MediaAttachment att;
         att.type        = mediaTypeFromString(j.value("type", std::string{}));
         att.displayName = j.value("display_name", std::string{});
@@ -299,10 +301,10 @@ struct ViewMessage {
     }
 
     /// 序列化为 wire/哈希 JSON (角色专属字段按 role 输出)
-    neograph::json toJson() const;
+    agentxx::util::Json toJson() const;
     /// 从 wire/哈希 JSON 解析; 非法 role 或缺省字段时按默认值解析。
     /// 保证 role 专属子结构在对应 role 下非空 (Tool/System/Interrupt)
-    static ViewMessage fromJson(const neograph::json& j);
+    static ViewMessage fromJson(const agentxx::util::Json& j);
 };
 
 /// 会话列表条目摘要 (会话选择弹窗展示用)
@@ -550,8 +552,8 @@ inline ViewMessage::InterruptStatus viewMessageInterruptStatusFromString(std::st
     return S::Waiting;
 }
 
-inline neograph::json ViewMessage::toJson() const {
-    neograph::json j = neograph::json::object();
+inline agentxx::util::Json ViewMessage::toJson() const {
+    agentxx::util::Json j = agentxx::util::Json::object();
     if (!id.empty()) {
         j["id"] = id;
     }
@@ -563,7 +565,7 @@ inline neograph::json ViewMessage::toJson() const {
         j["collapsed"] = true;
     }
     if (tool) {
-        neograph::json t = neograph::json::object();
+        agentxx::util::Json t = agentxx::util::Json::object();
         if (!tool->toolName.empty()) {
             t["tool_name"] = tool->toolName;
         }
@@ -582,12 +584,12 @@ inline neograph::json ViewMessage::toJson() const {
         j["tool"] = std::move(t);
     }
     if (tip) {
-        j["tip"] = neograph::json{
+        j["tip"] = agentxx::util::Json{
             {"tip_level", std::string(viewMessageTipLevelToString(tip->tipLevel))},
         };
     }
     if (think) {
-        neograph::json th = neograph::json::object();
+        agentxx::util::Json th = agentxx::util::Json::object();
         if (think->reasoningTokens > 0) {
             th["reasoning_tokens"] = think->reasoningTokens;
         }
@@ -599,7 +601,7 @@ inline neograph::json ViewMessage::toJson() const {
         }
     }
     if (interrupt) {
-        neograph::json it  = neograph::json::object();
+        agentxx::util::Json it  = agentxx::util::Json::object();
         it["interrupt_id"] = interrupt->interruptId;
         if (!interrupt->inputLabel.empty()) {
             it["input_label"] = interrupt->inputLabel;
@@ -614,7 +616,7 @@ inline neograph::json ViewMessage::toJson() const {
             it["input_default"] = interrupt->inputDefault;
         }
         if (!interrupt->inputEnums.empty()) {
-            neograph::json arr = neograph::json::array();
+            agentxx::util::Json arr = agentxx::util::Json::array();
             for (const auto& e : interrupt->inputEnums) {
                 arr.push_back(e);
             }
@@ -630,7 +632,7 @@ inline neograph::json ViewMessage::toJson() const {
         j["interrupt"] = std::move(it);
     }
     if (!attachments.empty()) {
-        neograph::json arr = neograph::json::array();
+        agentxx::util::Json arr = agentxx::util::Json::array();
         for (const auto& a : attachments) {
             arr.push_back(a.toJson());
         }
@@ -639,7 +641,7 @@ inline neograph::json ViewMessage::toJson() const {
     return j;
 }
 
-inline ViewMessage ViewMessage::fromJson(const neograph::json& j) {
+inline ViewMessage ViewMessage::fromJson(const agentxx::util::Json& j) {
     ViewMessage m;
     m.id          = j.value("id", std::string{});
     m.text        = j.value("text", std::string{});

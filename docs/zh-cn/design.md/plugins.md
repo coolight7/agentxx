@@ -74,7 +74,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_agent_destroy(void* plugin_
 
 ## 5. 工具函数复用 (`agentxx_util`)
 
-面向项目内置插件，可通过独立静态库 `agentxx_util` 复用主程序全部基础工具 (字符串/编码检测/UTF-8 转换/路径规范化/Base64/HTTP/SQLite/正则/日志等)：
+面向项目内置插件，可通过独立静态库 `agentxx_util` 复用主程序全部基础工具 (字符串/编码检测/UTF-8 转换/路径规范化/Base64/HTTP/SQLite/正则/日志/JSON 等)：
 
 ```cmake
 find_package(agentxx_util REQUIRED)
@@ -84,9 +84,12 @@ target_link_libraries(${PLUGIN_NAME} PRIVATE agentxx_util)
 ```cpp
 #include "agentxx/util/string_util.h"
 auto b64 = agentxx::util::base64Encode(data);
+#include "agentxx/util/json.h"
+#include "agentxx/util/json_view.h"
+// 业务/插件统一用 agentxx::util::Json/JsonView (simdjson 驱动); 高频只读先 JsonView::parse 路由, 命中后 to_json() 物化
 ```
 
-- `agentxx_util` 由 `agent/lib/src/util/` 全部源文件编译，libagentxx 与各插件各自静态链接一份副本，符号经导出控制隐藏互不冲突；依赖全部 `PUBLIC` 传递 (fmt/sqlite3/uchardet/iconv + neograph/yyjson/OpenSSL/hyperscan/uring)
+- `agentxx_util` 由 `agent/lib/src/util/` 全部源文件编译 (含 `json.cpp`/`json_view.cpp`, simdjson 驱动的自主 `agentxx::util::Json`/`JsonView`)，libagentxx 与各插件各自静态链接一份副本，符号经导出控制隐藏互不冲突；依赖全部 `PUBLIC` 传递 (fmt/sqlite3/uchardet/iconv + simdjson/OpenSSL/hyperscan/uring, 自 JSON 自主化起已彻底移除 neograph 系/yyjson)
 - 定位为内置插件便捷库 (与主程序同一 superbuild 构建、依赖齐全)；第三方插件仅需纯 C 头 `plugin_api.h` / SDK `plugin_kit.h`，无需链接宿主库
 - 未引用模块按目标文件提取自动裁剪 (9 插件 `DT_NEEDED` 仅系统库)
 

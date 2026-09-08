@@ -1,5 +1,5 @@
 # agentxx_planning —— 任务规划工具插件 (agentxx_planning_write)
-# - 默认: 独立动态库 (MODULE), 仅依赖纯 C ABI 头 + fmt + neograph(json)
+# - 默认: 独立动态库 (MODULE), 仅依赖纯 C ABI 头 + agentxx_util (Json/JsonView)
 # - 内置模式:
 #   源文件编译为 OBJECT 库合并进 libagentxx
 set(PLUGIN_NAME agentxx_planning)
@@ -33,7 +33,7 @@ if (_AGENTXX_ADD_AS_BUILTIN)
   target_include_directories(${_target} PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}"          # agentxx_planning_plugin.h
     "${AGENTXX_LIB_INCLUDE_DIR}"           # agentxx/plugin/plugin_api.h
-    "${AGENTXX_INSTALL_DIR}/include"       # fmt neograph
+    "${AGENTXX_INSTALL_DIR}/include"       # agentxx_util (Json/JsonView)
   )
   target_link_libraries(${_target} PRIVATE agentxx_util)
   set_target_properties(${_target} PROPERTIES
@@ -79,42 +79,21 @@ if (NOT TARGET agentxx_util)
   # 下 util 目标已存在于宿主工程, 跳过导入 (此时 install 目录尚未生成 config)
   find_package(agentxx_util REQUIRED)
 endif()
-find_package(html2md REQUIRED)
-# OpenSSL 保持模块模式 (FindOpenSSL, 与 lib 一致): 本项目 OpenSSL 为预构建
-# 目录 (无 config), OPENSSL_ROOT_DIR 由顶层 superbuild 传入精确指向预构建
-# 目录, 不会命中系统 OpenSSL (独立构建未传时回退系统库)
-find_package(OpenSSL REQUIRED)
 
 target_include_directories(${PLUGIN_NAME} PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}"          # agentxx_planning_plugin.h
   "${AGENTXX_LIB_INCLUDE_DIR}"           # agentxx/plugin/plugin_api.h
-  "${AGENTXX_INSTALL_DIR}/include/"      # fmt neograph
+  "${AGENTXX_INSTALL_DIR}/include/"      # agentxx_util (Json/JsonView)
 )
 
-# 裸库名依赖解析目录 (与 lib 一致): neograph 系/yyjson/hs_runtime 位于
-# AGENTXX_INSTALL_DIR/lib; OpenSSL 预构建目录 (正序依赖经 imported target
-# 绝对路径链接, 此处仅为兜底解析保留)
+# 裸库名依赖解析目录: hs_runtime 位于
+# AGENTXX_INSTALL_DIR/lib 经 agentxx_util PUBLIC link_directories 传播已可解析 hs_runtime; 此处保留供直连裸库名兜底
 target_link_directories(${PLUGIN_NAME} PRIVATE
   "${AGENTXX_INSTALL_DIR}/lib/"
-  "${OPENSSL_ROOT_DIR}/lib64"
-  "${OPENSSL_ROOT_DIR}/lib"
 )
 
 target_link_libraries(${PLUGIN_NAME} PRIVATE
   agentxx_util
-  html2md
-  OpenSSL::SSL
-  OpenSSL::Crypto
-  # === neograph vvv 链接顺序是必要的 (与 lib 自身一致) ===
-  neograph_sqlite
-  neograph_acp
-  neograph_mcp
-  neograph_mcp_types
-  neograph_async
-  neograph_llm
-  neograph_core
-  # === neograph ^^^
-  yyjson
 )
 if (AGENTXX_ENABLE_HYPERSCAN)
   # hyperscan pkg-config 模块由 plugins/CMakeLists.txt 统一定义 (与

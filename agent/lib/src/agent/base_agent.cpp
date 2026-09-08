@@ -1,3 +1,4 @@
+#include "agentxx/util/neograph_json_bridge.h"
 #include "agentxx/agent/base_agent.h"
 
 #include "agentxx/agent/agent_runner.h"
@@ -63,7 +64,7 @@ BaseAgent::BaseAgent(std::shared_ptr<agentxx::agent::AgentConfig> in_config) {
 /// - 检查点:
 ///   * enum 必须是数组, 且元素必须是标量 (string/number/boolean/null),
 ///     不能是数组/对象 —— 嵌套容器属于非法 enum schema;
-///     (曾出现 neograph::json{vector} 列表初始化误选 initializer_list
+///     (曾出现 agentxx::util::Json{vector} 列表初始化误选 initializer_list
 ///     构造函数产生 [["x"]] 嵌套数组的案例, 见
 ///     [subagent.cpp](/agent/lib/src/tools/subagent.cpp))
 ///   * array 类型必须带 items 字段 (Gemini 缺 items 报 "missing field")
@@ -821,7 +822,9 @@ asio::awaitable<BaseAgent::TurnResult> BaseAgent::runTurnAsync(
 
     bool resumeInterrupt = false;
     if (false == agentContext->middlewareHandleContext->graphData.contains(sessionId)) {
-        auto data = engine->get_state(std::string{sessionId}).value_or(neograph::json{});
+        auto data = agentxx::util::fromNeographJson(
+            engine->get_state(std::string{sessionId}).value_or(neograph::json{})
+        );
         if (data.is_object()
             && data.contains(agentxx::middleware::MiddlewareContext::channel_savedGraphData)
             && data[agentxx::middleware::MiddlewareContext::channel_savedGraphData].is_object()) {
@@ -836,14 +839,14 @@ asio::awaitable<BaseAgent::TurnResult> BaseAgent::runTurnAsync(
     auto processedInput = std::string{userInput};
     agentxx::util::autoConvertToUtf8(processedInput);
 
-    auto userMsgJson = neograph::json{
+    auto userMsgJson = agentxx::util::Json{
         {"role",    "user"        },
         {"content", processedInput},
     };
     if (!attachments.empty()) {
-        neograph::json imgUrls   = neograph::json::array();
-        neograph::json audioUrls = neograph::json::array();
-        neograph::json videoUrls = neograph::json::array();
+        agentxx::util::Json imgUrls   = agentxx::util::Json::array();
+        agentxx::util::Json audioUrls = agentxx::util::Json::array();
+        agentxx::util::Json videoUrls = agentxx::util::Json::array();
         for (const auto& att : attachments) {
             const auto& url = att.dataUrl.empty() ? att.pathOrUrl : att.dataUrl;
             if (url.empty()) {
@@ -910,7 +913,8 @@ asio::awaitable<BaseAgent::TurnResult> BaseAgent::runTurnAsync(
     auto eventCallback = eventBridge->makeCallback();
     auto cfg           = neograph::graph::RunConfig{
                   .thread_id   = std::string{sessionId},
-                  .input       = {{"messages", session->llmMessages}},
+                  .input       = {{"messages",
+                                agentxx::util::toNeographJson(session->llmMessages)}},
                   .max_steps   = 1 << 30,
                   .stream_mode = neograph::graph::StreamMode::EVENTS | neograph::graph::StreamMode::TOKENS
                        | neograph::graph::StreamMode::VALUES | neograph::graph::StreamMode::UPDATES,
@@ -944,11 +948,12 @@ asio::awaitable<BaseAgent::TurnResult> BaseAgent::runTurnAsync(
                         sessionId,
                         agentxx::middleware::MiddlewareContext::graphDataKey_interruptNode
                     );
-                r.interrupt_value
-                    = agentContext->middlewareHandleContext->getGraphDataItemValue<neograph::json>(
+                r.interrupt_value = agentxx::util::toNeographJson(
+                    agentContext->middlewareHandleContext->getGraphDataItemValue<agentxx::util::Json>(
                         sessionId,
                         agentxx::middleware::MiddlewareContext::graphDataKey_interruptValue
-                    );
+                    )
+                );
                 recovered = std::move(r);
             }
 
@@ -1005,7 +1010,7 @@ asio::awaitable<BaseAgent::TurnResult> BaseAgent::runTurnAsync(
 
     if (turnResult.hasError) {
         // - 出现异常时 state.messages 已经被回滚，提取临时保存的上下文，并写回 state
-        auto& im = agentContext->middlewareHandleContext->getGraphDataItemValue<neograph::json>(
+        auto& im = agentContext->middlewareHandleContext->getGraphDataItemValue<agentxx::util::Json>(
             sessionId,
             agentxx::middleware::MiddlewareContext::graphDataKey_tempMessages
         );
@@ -1017,7 +1022,10 @@ asio::awaitable<BaseAgent::TurnResult> BaseAgent::runTurnAsync(
             );
             session->llmMessages = std::move(im);
             engine->update_state(std::string{sessionId}, [&](neograph::graph::GraphState& state) {
-                state.overwrite("messages", session->llmMessages);
+                state.overwrite(
+                    "messages",
+                    agentxx::util::toNeographJson(session->llmMessages)
+                );
             });
         }
         // 处理后即清理 (含 getGraphDataItemValue 对缺失键自动创建的空条目):
@@ -1118,7 +1126,7 @@ asio::awaitable<BaseAgent::SimpleRunResult> BaseAgent::runInternalAsync(
     bool                                 cleanupAfter
 ) {
     selectModel(sessionId, modelName);
-    auto inputMessages = neograph::json::array();
+    neograph::json inputMessages = neograph::json::array();
     for (auto& msg : messages) {
         neograph::json j;
         neograph::to_json(j, msg);

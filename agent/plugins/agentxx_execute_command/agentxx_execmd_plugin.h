@@ -7,7 +7,7 @@
 #include "execute_command_impl.h"
 #include <fmt/format.h>
 #include <memory>
-#include <neograph/json.h>
+#include "agentxx/util/json.h"
 #include <string>
 
 namespace agentxx_execmd_plugin {

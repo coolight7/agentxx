@@ -2,7 +2,8 @@
 
 #include "agentxx/agent/conversation_types.h"
 #include "agentxx/agent/io/agent_io_transport.h"
-#include "neograph/json.h"
+#include "agentxx/util/json.h"
+#include "agentxx/util/json_view.h"
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -150,8 +151,8 @@ inline std::optional<WireDelta::Type> deltaTypeFromString(std::string_view s) no
     return std::nullopt;
 }
 
-inline neograph::json deltaToJson(const WireDelta& d) {
-    neograph::json j = neograph::json::object();
+inline agentxx::util::Json deltaToJson(const WireDelta& d) {
+    agentxx::util::Json j = agentxx::util::Json::object();
     j["type"]        = std::string(deltaTypeToString(d.type));
     j["seq"]         = d.seq;
     if (!d.text.empty()) {
@@ -196,7 +197,7 @@ inline neograph::json deltaToJson(const WireDelta& d) {
     }
     // TurnStart 即时回显附件元数据（不含 dataUrl，见 WireDelta::attachments 注释）
     if (d.type == WireDelta::Type::TurnStart && !d.attachments.empty()) {
-        neograph::json arr = neograph::json::array();
+        agentxx::util::Json arr = agentxx::util::Json::array();
         for (const auto& a : d.attachments) {
             MediaAttachment meta = a;
             meta.dataUrl.clear();
@@ -205,7 +206,7 @@ inline neograph::json deltaToJson(const WireDelta& d) {
         j["attachments"] = std::move(arr);
     }
     if (d.think) {
-        neograph::json th = neograph::json::object();
+        agentxx::util::Json th = agentxx::util::Json::object();
         if (d.think->reasoningTokens > 0) {
             th["reasoning_tokens"] = d.think->reasoningTokens;
         }
@@ -236,7 +237,7 @@ inline neograph::json deltaToJson(const WireDelta& d) {
     return j;
 }
 
-inline std::optional<WireDelta> deltaFromJson(const neograph::json& j) {
+inline std::optional<WireDelta> deltaFromJson(const agentxx::util::Json& j) {
     if (!j.is_object()) {
         return std::nullopt;
     }
@@ -292,8 +293,8 @@ inline std::optional<WireDelta> deltaFromJson(const neograph::json& j) {
 // WireSyncPayload <-> json
 // ---------------------------------------------------------------------------
 
-inline neograph::json messageQueueItemToJson(const MessageQueueItem& item) {
-    neograph::json j = {
+inline agentxx::util::Json messageQueueItemToJson(const MessageQueueItem& item) {
+    agentxx::util::Json j = {
         {"id",          item.id         },
         {"text",        item.text       },
         {"createdAtMs", item.createdAtMs},
@@ -302,7 +303,7 @@ inline neograph::json messageQueueItemToJson(const MessageQueueItem& item) {
         j["model"] = item.model;
     }
     if (!item.attachments.empty()) {
-        neograph::json arr = neograph::json::array();
+        agentxx::util::Json arr = agentxx::util::Json::array();
         for (const auto& att : item.attachments) {
             arr.push_back(att.toJson());
         }
@@ -311,7 +312,7 @@ inline neograph::json messageQueueItemToJson(const MessageQueueItem& item) {
     return j;
 }
 
-inline MessageQueueItem messageQueueItemFromJson(const neograph::json& j) {
+inline MessageQueueItem messageQueueItemFromJson(const agentxx::util::Json& j) {
     MessageQueueItem item;
     item.id          = j.value("id", std::string{});
     item.text        = j.value("text", std::string{});
@@ -325,20 +326,20 @@ inline MessageQueueItem messageQueueItemFromJson(const neograph::json& j) {
     return item;
 }
 
-inline neograph::json syncToJson(const WireSyncPayload& p) {
-    neograph::json j = neograph::json::object();
+inline agentxx::util::Json syncToJson(const WireSyncPayload& p) {
+    agentxx::util::Json j = agentxx::util::Json::object();
     j["fromIndex"]   = p.fromIndex;
     j["tailHash"]    = p.tailHash;
     // 历史分页元数据 (尾窗同步时 fromIndex>0 / totalMessages>0; 全量同步
     // 时 totalMessages == messages.size(), 字段冗余但便于客户端统一判断)
     j["totalMessages"] = p.totalMessages;
-    neograph::json arr = neograph::json::array();
+    agentxx::util::Json arr = agentxx::util::Json::array();
     for (const auto& vm : p.messages) {
         arr.push_back(vm.toJson());
     }
     j["messages"] = std::move(arr);
     if (!p.messageQueue.empty()) {
-        neograph::json qArr = neograph::json::array();
+        agentxx::util::Json qArr = agentxx::util::Json::array();
         for (const auto& item : p.messageQueue) {
             qArr.push_back(messageQueueItemToJson(item));
         }
@@ -347,7 +348,7 @@ inline neograph::json syncToJson(const WireSyncPayload& p) {
     return j;
 }
 
-inline std::optional<WireSyncPayload> syncFromJson(const neograph::json& j) {
+inline std::optional<WireSyncPayload> syncFromJson(const agentxx::util::Json& j) {
     if (!j.is_object()) {
         return std::nullopt;
     }
@@ -355,7 +356,7 @@ inline std::optional<WireSyncPayload> syncFromJson(const neograph::json& j) {
     p.fromIndex     = j.value("fromIndex", uint64_t{0});
     p.tailHash      = j.value("tailHash", std::string{});
     p.totalMessages = j.value("totalMessages", uint64_t{0});
-    auto msgs       = j.value("messages", neograph::json::array());
+    auto msgs       = j.value("messages", agentxx::util::Json::array());
     if (msgs.is_array()) {
         for (const auto& m : msgs) {
             p.messages.push_back(ViewMessage::fromJson(m));
@@ -373,14 +374,14 @@ inline std::optional<WireSyncPayload> syncFromJson(const neograph::json& j) {
 // 消息构造 (Client -> Server)
 // ---------------------------------------------------------------------------
 
-inline neograph::json makeHello(
+inline agentxx::util::Json makeHello(
     std::string_view sessionId,
     std::string_view token,
     uint64_t         lastSeq  = 0,
     std::string_view tailHash = "",
     std::string_view language = ""
 ) {
-    neograph::json j = {
+    agentxx::util::Json j = {
         {"type",      MsgType::Hello},
         {"sessionId", sessionId     },
         {"token",     token         },
@@ -397,13 +398,13 @@ inline neograph::json makeHello(
     return j;
 }
 
-inline neograph::json makeUserInput(
+inline agentxx::util::Json makeUserInput(
     std::string_view                    sessionId,
     std::string_view                    text,
     std::string_view                    model       = "",
     const std::vector<MediaAttachment>& attachments = {}
 ) {
-    neograph::json j = {
+    agentxx::util::Json j = {
         {"type",      MsgType::UserInput},
         {"sessionId", sessionId         },
         {"text",      text              },
@@ -412,7 +413,7 @@ inline neograph::json makeUserInput(
         j["model"] = model;
     }
     if (!attachments.empty()) {
-        neograph::json arr = neograph::json::array();
+        agentxx::util::Json arr = agentxx::util::Json::array();
         for (const auto& att : attachments) {
             arr.push_back(att.toJson());
         }
@@ -421,31 +422,31 @@ inline neograph::json makeUserInput(
     return j;
 }
 
-inline neograph::json makeInterruptResponse(int64_t id, const neograph::json& result) {
-    return neograph::json{
+inline agentxx::util::Json makeInterruptResponse(int64_t id, const agentxx::util::Json& result) {
+    return agentxx::util::Json{
         {"type",   MsgType::InterruptResponse},
         {"id",     id                        },
         {"result", result                    },
     };
 }
 
-inline neograph::json makeCancel(std::string_view sessionId) {
-    return neograph::json{
+inline agentxx::util::Json makeCancel(std::string_view sessionId) {
+    return agentxx::util::Json{
         {"type",      MsgType::Cancel},
         {"sessionId", sessionId      },
     };
 }
 
-inline neograph::json makeSelectModel(std::string_view sessionId, std::string_view model) {
-    return neograph::json{
+inline agentxx::util::Json makeSelectModel(std::string_view sessionId, std::string_view model) {
+    return agentxx::util::Json{
         {"type",      MsgType::SelectModel},
         {"sessionId", sessionId           },
         {"model",     model               },
     };
 }
 
-inline neograph::json makePing(int64_t t) {
-    return neograph::json{
+inline agentxx::util::Json makePing(int64_t t) {
+    return agentxx::util::Json{
         {"type", MsgType::Ping},
         {"t",    t            },
     };
@@ -455,14 +456,14 @@ inline neograph::json makePing(int64_t t) {
 // 消息构造 (Server -> Client)
 // ---------------------------------------------------------------------------
 
-inline neograph::json makeHelloAck(
+inline agentxx::util::Json makeHelloAck(
     bool                                         ok,
     std::string_view                             sessionId,
     std::string_view                             tailHash,
     const std::vector<std::string>&              models,
     const std::vector<WireHelloAck::PluginInfo>& plugins = {}
 ) {
-    neograph::json j = {
+    agentxx::util::Json j = {
         {"type",      MsgType::HelloAck},
         {"ok",        ok               },
         {"sessionId", sessionId        },
@@ -476,7 +477,7 @@ inline neograph::json makeHelloAck(
     // 服务端已加载插件结构化列表 (名字+版本+声明接口, client 插件据此判断
     // 对端可用性与能力); 空时不携带 (缺字段按"服务端未提供"处理)
     if (!plugins.empty()) {
-        auto arr = neograph::json::array();
+        auto arr = agentxx::util::Json::array();
         for (const auto& p : plugins) {
             arr.push_back({
                 {"name",       p.name      },
@@ -489,8 +490,8 @@ inline neograph::json makeHelloAck(
     return j;
 }
 
-inline neograph::json makeDeltaMsg(const WireDelta& d) {
-    neograph::json j = deltaToJson(d);
+inline agentxx::util::Json makeDeltaMsg(const WireDelta& d) {
+    agentxx::util::Json j = deltaToJson(d);
     // 复用 deltaToJson 的字段, 但信封 type 固定为 "delta"
     j["type"] = MsgType::DeltaMsg;
     j["kind"] = std::string(deltaTypeToString(d.type));
@@ -498,7 +499,7 @@ inline neograph::json makeDeltaMsg(const WireDelta& d) {
 }
 
 /// 从 "delta" 信封还原 WireDelta (type 字段取自 "kind")
-inline std::optional<WireDelta> deltaMsgFromJson(const neograph::json& j) {
+inline std::optional<WireDelta> deltaMsgFromJson(const agentxx::util::Json& j) {
     if (!j.is_object()) {
         return std::nullopt;
     }
@@ -507,8 +508,8 @@ inline std::optional<WireDelta> deltaMsgFromJson(const neograph::json& j) {
     return deltaFromJson(patched);
 }
 
-inline neograph::json makeSyncMsg(const WireSyncPayload& p, uint64_t deltaSeq = 0) {
-    neograph::json j = syncToJson(p);
+inline agentxx::util::Json makeSyncMsg(const WireSyncPayload& p, uint64_t deltaSeq = 0) {
+    agentxx::util::Json j = syncToJson(p);
     j["type"]        = MsgType::SyncMsg;
     if (deltaSeq > 0) {
         j["deltaSeq"] = deltaSeq;
@@ -516,18 +517,18 @@ inline neograph::json makeSyncMsg(const WireSyncPayload& p, uint64_t deltaSeq = 
     return j;
 }
 
-inline std::optional<WireSyncPayload> syncMsgFromJson(const neograph::json& j) {
+inline std::optional<WireSyncPayload> syncMsgFromJson(const agentxx::util::Json& j) {
     return syncFromJson(j);
 }
 
-inline neograph::json makeInterruptRequest(
+inline agentxx::util::Json makeInterruptRequest(
     int64_t          id,
     std::string_view sessionId,
     std::string_view node,
     std::string_view value,
     std::string_view argJson
 ) {
-    return neograph::json{
+    return agentxx::util::Json{
         {"type",      MsgType::InterruptRequest},
         {"id",        id                       },
         {"sessionId", sessionId                },
@@ -538,15 +539,15 @@ inline neograph::json makeInterruptRequest(
 }
 
 /// 服务端通知中断已过期 (超时/取消): 对应 WireInterruptRequest 的 id
-inline neograph::json makeInterruptExpired(int64_t id, std::string_view sessionId) {
-    return neograph::json{
+inline agentxx::util::Json makeInterruptExpired(int64_t id, std::string_view sessionId) {
+    return agentxx::util::Json{
         {"type",      MsgType::InterruptExpired},
         {"id",        id                       },
         {"sessionId", sessionId                },
     };
 }
 
-inline neograph::json makeTurnResult(
+inline agentxx::util::Json makeTurnResult(
     std::string_view sessionId,
     bool             hasError,
     std::string_view errorMessage,
@@ -554,7 +555,7 @@ inline neograph::json makeTurnResult(
     int64_t          startTimeMs = 0,
     int64_t          durationMs  = 0
 ) {
-    neograph::json j = {
+    agentxx::util::Json j = {
         {"type",        MsgType::TurnResult},
         {"sessionId",   sessionId          },
         {"hasError",    hasError           },
@@ -572,9 +573,9 @@ inline neograph::json makeTurnResult(
     return j;
 }
 
-inline neograph::json
+inline agentxx::util::Json
     makeContextStats(uint64_t contextTokens, uint64_t maxContextTokens, double tps = 0.0) {
-    neograph::json j = {
+    agentxx::util::Json j = {
         {"type",             MsgType::ContextStats},
         {"contextTokens",    contextTokens        },
         {"maxContextTokens", maxContextTokens     },
@@ -585,27 +586,27 @@ inline neograph::json
     return j;
 }
 
-inline neograph::json makeError(int code, std::string_view message) {
-    return neograph::json{
+inline agentxx::util::Json makeError(int code, std::string_view message) {
+    return agentxx::util::Json{
         {"type",    MsgType::ErrorMsg},
         {"code",    code             },
         {"message", message          },
     };
 }
 
-inline neograph::json makeGetModel(std::string_view sessionId) {
-    return neograph::json{
+inline agentxx::util::Json makeGetModel(std::string_view sessionId) {
+    return agentxx::util::Json{
         {"type",      MsgType::GetModel},
         {"sessionId", sessionId        },
     };
 }
 
-inline neograph::json makeModelInfo(
+inline agentxx::util::Json makeModelInfo(
     std::string_view                       currentModel,
     const std::vector<std::string>&        models,
     const std::vector<ModelCapabilityInfo>& capabilities = {}
 ) {
-    neograph::json j = {
+    agentxx::util::Json j = {
         {"type",         MsgType::ModelInfo},
         {"currentModel", currentModel      },
     };
@@ -613,7 +614,7 @@ inline neograph::json makeModelInfo(
         j["models"] = models;
     }
     if (!capabilities.empty()) {
-        neograph::json caps = neograph::json::array();
+        agentxx::util::Json caps = agentxx::util::Json::array();
         for (const auto& cap : capabilities) {
             caps.push_back({
                 {"name",        cap.name      },
@@ -631,8 +632,8 @@ inline neograph::json makeModelInfo(
 // AppendComponentNotification <-> json (客户端拉取 MCP/Skill/Memory 启动信息)
 // ---------------------------------------------------------------------------
 
-inline neograph::json appendComponentNotificationToJson(const AppendComponentNotification& n) {
-    return neograph::json{
+inline agentxx::util::Json appendComponentNotificationToJson(const AppendComponentNotification& n) {
+    return agentxx::util::Json{
         {"type",         static_cast<int>(n.type)},
         {"name",         n.name                  },
         {"success",      n.success               },
@@ -640,7 +641,7 @@ inline neograph::json appendComponentNotificationToJson(const AppendComponentNot
     };
 }
 
-inline AppendComponentNotification appendComponentNotificationFromJson(const neograph::json& j) {
+inline AppendComponentNotification appendComponentNotificationFromJson(const agentxx::util::Json& j) {
     AppendComponentNotification n;
     n.type         = static_cast<AppendComponentNotification::Type>(j.value("type", 0));
     n.name         = j.value("name", std::string{});
@@ -649,19 +650,19 @@ inline AppendComponentNotification appendComponentNotificationFromJson(const neo
     return n;
 }
 
-inline neograph::json makeGetAppendComponentInfo(std::string_view sessionId) {
-    return neograph::json{
+inline agentxx::util::Json makeGetAppendComponentInfo(std::string_view sessionId) {
+    return agentxx::util::Json{
         {"type",      MsgType::GetAppendComponentInfo},
         {"sessionId", sessionId                      },
     };
 }
 
-inline neograph::json
+inline agentxx::util::Json
     makeAppendComponentInfo(const std::vector<AppendComponentNotification>& notifications) {
-    neograph::json j = {
+    agentxx::util::Json j = {
         {"type", MsgType::AppendComponentInfo}
     };
-    neograph::json arr = neograph::json::array();
+    agentxx::util::Json arr = agentxx::util::Json::array();
     for (const auto& n : notifications) {
         arr.push_back(appendComponentNotificationToJson(n));
     }
@@ -669,10 +670,10 @@ inline neograph::json
     return j;
 }
 
-inline std::vector<AppendComponentNotification> appendComponentInfoFromJson(const neograph::json& j
+inline std::vector<AppendComponentNotification> appendComponentInfoFromJson(const agentxx::util::Json& j
 ) {
     std::vector<AppendComponentNotification> out;
-    auto arr = j.value("notifications", neograph::json::array());
+    auto arr = j.value("notifications", agentxx::util::Json::array());
     if (arr.is_array()) {
         for (const auto& item : arr) {
             out.push_back(appendComponentNotificationFromJson(item));
@@ -681,31 +682,31 @@ inline std::vector<AppendComponentNotification> appendComponentInfoFromJson(cons
     return out;
 }
 
-inline neograph::json makePong(int64_t t) {
-    return neograph::json{
+inline agentxx::util::Json makePong(int64_t t) {
+    return agentxx::util::Json{
         {"type", MsgType::Pong},
         {"t",    t            },
     };
 }
 
-inline neograph::json makeGetContext(std::string_view sessionId) {
-    return neograph::json{
+inline agentxx::util::Json makeGetContext(std::string_view sessionId) {
+    return agentxx::util::Json{
         {"type",      MsgType::GetContext},
         {"sessionId", sessionId          },
     };
 }
 
-inline neograph::json makeCompactContext(std::string_view sessionId) {
-    return neograph::json{
+inline agentxx::util::Json makeCompactContext(std::string_view sessionId) {
+    return agentxx::util::Json{
         {"type",      MsgType::CompactContext},
         {"sessionId", sessionId              },
     };
 }
 
 /// 客户端记住权限选择 (Client -> Server): 注册路径规则到服务端权限中间件
-inline neograph::json
+inline agentxx::util::Json
     makeSetPermission(std::string_view sessionId, std::string_view path, bool allow, size_t index) {
-    return neograph::json{
+    return agentxx::util::Json{
         {"type",      MsgType::SetPermission},
         {"sessionId", sessionId             },
         {"path",      path                  },
@@ -714,7 +715,7 @@ inline neograph::json
     };
 }
 
-inline WireSetPermission setPermissionFromJson(const neograph::json& j) {
+inline WireSetPermission setPermissionFromJson(const agentxx::util::Json& j) {
     WireSetPermission m;
     m.sessionId = j.value("sessionId", std::string{});
     m.path      = j.value("path", std::string{});
@@ -723,8 +724,8 @@ inline WireSetPermission setPermissionFromJson(const neograph::json& j) {
     return m;
 }
 
-inline neograph::json makeContextMessages(const neograph::json& messages) {
-    return neograph::json{
+inline agentxx::util::Json makeContextMessages(const agentxx::util::Json& messages) {
+    return agentxx::util::Json{
         {"type",     MsgType::ContextMessages},
         {"messages", messages                },
     };
@@ -737,9 +738,9 @@ inline neograph::json makeContextMessages(const neograph::json& messages) {
 /// 客户端请求持久化会话列表 (无载荷; 列举全部持久化会话)
 /// - 分页字段可选: beforeMs/beforeId/limit 均缺省时为旧行为 (全量列举),
 ///   与旧版服务端互通
-inline neograph::json
+inline agentxx::util::Json
     makeListSessions(int64_t beforeMs = 0, std::string_view beforeId = "", uint32_t limit = 0) {
-    neograph::json j = {
+    agentxx::util::Json j = {
         {"type", MsgType::ListSessions},
     };
     if (beforeMs > 0) {
@@ -754,7 +755,7 @@ inline neograph::json
     return j;
 }
 
-inline WireListSessions listSessionsFromJson(const neograph::json& j) {
+inline WireListSessions listSessionsFromJson(const agentxx::util::Json& j) {
     WireListSessions m;
     m.beforeMs = j.value("beforeMs", int64_t{0});
     m.beforeId = j.value("beforeId", std::string{});
@@ -762,8 +763,8 @@ inline WireListSessions listSessionsFromJson(const neograph::json& j) {
     return m;
 }
 
-inline neograph::json sessionInfoToJson(const SessionInfo& s) {
-    neograph::json j = {
+inline agentxx::util::Json sessionInfoToJson(const SessionInfo& s) {
+    agentxx::util::Json j = {
         {"sessionId",    s.sessionId   },
         {"lastActiveMs", s.lastActiveMs},
     };
@@ -773,7 +774,7 @@ inline neograph::json sessionInfoToJson(const SessionInfo& s) {
     return j;
 }
 
-inline SessionInfo sessionInfoFromJson(const neograph::json& j) {
+inline SessionInfo sessionInfoFromJson(const agentxx::util::Json& j) {
     SessionInfo s;
     s.sessionId    = j.value("sessionId", std::string{});
     s.title        = j.value("title", std::string{});
@@ -781,15 +782,15 @@ inline SessionInfo sessionInfoFromJson(const neograph::json& j) {
     return s;
 }
 
-inline neograph::json makeSessionList(
+inline agentxx::util::Json makeSessionList(
     const std::vector<SessionInfo>& sessions,
     uint64_t                        totalCount = 0,
     bool                            hasMore    = false
 ) {
-    neograph::json j = {
+    agentxx::util::Json j = {
         {"type", MsgType::SessionList}
     };
-    neograph::json arr = neograph::json::array();
+    agentxx::util::Json arr = agentxx::util::Json::array();
     for (const auto& s : sessions) {
         arr.push_back(sessionInfoToJson(s));
     }
@@ -804,9 +805,9 @@ inline neograph::json makeSessionList(
     return j;
 }
 
-inline WireSessionList sessionListFromJson(const neograph::json& j) {
+inline WireSessionList sessionListFromJson(const agentxx::util::Json& j) {
     WireSessionList out;
-    auto            arr = j.value("sessions", neograph::json::array());
+    auto            arr = j.value("sessions", agentxx::util::Json::array());
     if (arr.is_array()) {
         for (const auto& item : arr) {
             out.sessions.push_back(sessionInfoFromJson(item));
@@ -819,14 +820,14 @@ inline WireSessionList sessionListFromJson(const neograph::json& j) {
 }
 
 /// 客户端请求切换当前连接的会话
-inline neograph::json makeSwitchSession(std::string_view sessionId) {
-    return neograph::json{
+inline agentxx::util::Json makeSwitchSession(std::string_view sessionId) {
+    return agentxx::util::Json{
         {"type",      MsgType::SwitchSession},
         {"sessionId", sessionId             },
     };
 }
 
-inline WireSwitchSession switchSessionFromJson(const neograph::json& j) {
+inline WireSwitchSession switchSessionFromJson(const agentxx::util::Json& j) {
     WireSwitchSession m;
     m.sessionId = j.value("sessionId", std::string{});
     return m;
@@ -839,8 +840,8 @@ inline WireSwitchSession switchSessionFromJson(const neograph::json& j) {
 
 /// 插件事件转发 (Server -> Client): 插件经事件总线发布的事件原样转发
 /// - data 为 JSON 载荷字符串 (语义由插件定义); 频率由插件自身控制
-inline neograph::json makePluginData(const WirePluginData& p) {
-    neograph::json j = {
+inline agentxx::util::Json makePluginData(const WirePluginData& p) {
+    agentxx::util::Json j = {
         {"type",   MsgType::PluginData},
         {"plugin", p.plugin           },
         {"event",  p.event            },
@@ -849,7 +850,7 @@ inline neograph::json makePluginData(const WirePluginData& p) {
     return j;
 }
 
-inline WirePluginData pluginDataFromJson(const neograph::json& j) {
+inline WirePluginData pluginDataFromJson(const agentxx::util::Json& j) {
     WirePluginData p;
     p.plugin = j.value("plugin", std::string{});
     p.event  = j.value("event", std::string{});
@@ -860,8 +861,8 @@ inline WirePluginData pluginDataFromJson(const neograph::json& j) {
 /// client 插件事件上行 (Client -> Server): WirePluginDataUp
 /// - 载荷 JSON 原样透传 (语义由插件定义); 服务端发布到事件总线
 ///   topic `client.{插件名}.{事件名}`
-inline neograph::json makePluginDataUp(const WirePluginDataUp& p) {
-    neograph::json j = {
+inline agentxx::util::Json makePluginDataUp(const WirePluginDataUp& p) {
+    agentxx::util::Json j = {
         {"type",   MsgType::PluginDataUp},
         {"plugin", p.plugin             },
         {"event",  p.event              },
@@ -870,7 +871,7 @@ inline neograph::json makePluginDataUp(const WirePluginDataUp& p) {
     return j;
 }
 
-inline WirePluginDataUp pluginDataUpFromJson(const neograph::json& j) {
+inline WirePluginDataUp pluginDataUpFromJson(const agentxx::util::Json& j) {
     WirePluginDataUp p;
     p.plugin = j.value("plugin", std::string{});
     p.event  = j.value("event", std::string{});
@@ -882,13 +883,13 @@ inline WirePluginDataUp pluginDataUpFromJson(const neograph::json& j) {
 // 消息队列相关 (Client <-> Server)
 // ---------------------------------------------------------------------------
 
-inline neograph::json
+inline agentxx::util::Json
     makeMessageQueueUpdate(std::string_view sessionId, const std::vector<MessageQueueItem>& items) {
-    neograph::json j = {
+    agentxx::util::Json j = {
         {"type",      MsgType::MessageQueueUpdate},
         {"sessionId", sessionId                  },
     };
-    neograph::json arr = neograph::json::array();
+    agentxx::util::Json arr = agentxx::util::Json::array();
     for (const auto& item : items) {
         arr.push_back(messageQueueItemToJson(item));
     }
@@ -896,7 +897,7 @@ inline neograph::json
     return j;
 }
 
-inline WireMessageQueueUpdate messageQueueUpdateFromJson(const neograph::json& j) {
+inline WireMessageQueueUpdate messageQueueUpdateFromJson(const agentxx::util::Json& j) {
     WireMessageQueueUpdate u;
     u.sessionId = j.value("sessionId", std::string{});
     if (j.contains("items") && j["items"].is_array()) {
@@ -907,42 +908,42 @@ inline WireMessageQueueUpdate messageQueueUpdateFromJson(const neograph::json& j
     return u;
 }
 
-inline neograph::json makeClearMessageQueue(std::string_view sessionId) {
-    return neograph::json{
+inline agentxx::util::Json makeClearMessageQueue(std::string_view sessionId) {
+    return agentxx::util::Json{
         {"type",      MsgType::ClearMessageQueue},
         {"sessionId", sessionId                 },
     };
 }
 
-inline WireClearMessageQueue clearMessageQueueFromJson(const neograph::json& j) {
+inline WireClearMessageQueue clearMessageQueueFromJson(const agentxx::util::Json& j) {
     WireClearMessageQueue q;
     q.sessionId = j.value("sessionId", std::string{});
     return q;
 }
 
-inline neograph::json makeRemoveQueueItem(std::string_view sessionId, std::string_view itemId) {
-    return neograph::json{
+inline agentxx::util::Json makeRemoveQueueItem(std::string_view sessionId, std::string_view itemId) {
+    return agentxx::util::Json{
         {"type",      MsgType::RemoveQueueItem},
         {"sessionId", sessionId               },
         {"itemId",    itemId                  },
     };
 }
 
-inline WireRemoveQueueItem removeQueueItemFromJson(const neograph::json& j) {
+inline WireRemoveQueueItem removeQueueItemFromJson(const agentxx::util::Json& j) {
     WireRemoveQueueItem q;
     q.sessionId = j.value("sessionId", std::string{});
     q.itemId    = j.value("itemId", std::string{});
     return q;
 }
 
-inline neograph::json makeInterruptAndRunNext(std::string_view sessionId) {
-    return neograph::json{
+inline agentxx::util::Json makeInterruptAndRunNext(std::string_view sessionId) {
+    return agentxx::util::Json{
         {"type",      MsgType::InterruptAndRunNext},
         {"sessionId", sessionId                   },
     };
 }
 
-inline WireInterruptAndRunNext interruptAndRunNextFromJson(const neograph::json& j) {
+inline WireInterruptAndRunNext interruptAndRunNextFromJson(const agentxx::util::Json& j) {
     WireInterruptAndRunNext q;
     q.sessionId = j.value("sessionId", std::string{});
     return q;
@@ -954,9 +955,9 @@ inline WireInterruptAndRunNext interruptAndRunNextFromJson(const neograph::json&
 
 /// 客户端请求历史分页 (Client -> Server): [max(0, beforeIndex-count), beforeIndex)
 /// - beforeIndex == 0 表示"从末尾向前取 count 条"; count == 0 用服务端默认页大小
-inline neograph::json
+inline agentxx::util::Json
     makeGetViewMessages(std::string_view sessionId, uint64_t beforeIndex, uint32_t count) {
-    neograph::json j = {
+    agentxx::util::Json j = {
         {"type",        MsgType::GetViewMessages},
         {"sessionId",   sessionId               },
         {"beforeIndex", beforeIndex             },
@@ -965,7 +966,7 @@ inline neograph::json
     return j;
 }
 
-inline WireGetViewMessages getViewMessagesFromJson(const neograph::json& j) {
+inline WireGetViewMessages getViewMessagesFromJson(const agentxx::util::Json& j) {
     WireGetViewMessages m;
     m.sessionId   = j.value("sessionId", std::string{});
     m.beforeIndex = j.value("beforeIndex", uint64_t{0});
@@ -975,19 +976,19 @@ inline WireGetViewMessages getViewMessagesFromJson(const neograph::json& j) {
 
 /// 服务端历史分页响应 (Server -> Client): 绝对下标区间
 /// [startIndex, startIndex + messages.size())
-inline neograph::json makeViewMessagesPage(
+inline agentxx::util::Json makeViewMessagesPage(
     std::string_view                sessionId,
     uint64_t                        startIndex,
     uint64_t                        totalCount,
     const std::vector<ViewMessage>& messages
 ) {
-    neograph::json j = {
+    agentxx::util::Json j = {
         {"type",       MsgType::ViewMessagesPage},
         {"sessionId",  sessionId                },
         {"startIndex", startIndex               },
         {"totalCount", totalCount               },
     };
-    neograph::json arr = neograph::json::array();
+    agentxx::util::Json arr = agentxx::util::Json::array();
     for (const auto& vm : messages) {
         arr.push_back(vm.toJson());
     }
@@ -995,7 +996,7 @@ inline neograph::json makeViewMessagesPage(
     return j;
 }
 
-inline std::optional<WireViewMessagesPage> viewMessagesPageFromJson(const neograph::json& j) {
+inline std::optional<WireViewMessagesPage> viewMessagesPageFromJson(const agentxx::util::Json& j) {
     if (!j.is_object()) {
         return std::nullopt;
     }
@@ -1003,7 +1004,7 @@ inline std::optional<WireViewMessagesPage> viewMessagesPageFromJson(const neogra
     p.sessionId  = j.value("sessionId", std::string{});
     p.startIndex = j.value("startIndex", uint64_t{0});
     p.totalCount = j.value("totalCount", uint64_t{0});
-    auto msgs    = j.value("messages", neograph::json::array());
+    auto msgs    = j.value("messages", agentxx::util::Json::array());
     if (msgs.is_array()) {
         for (const auto& m : msgs) {
             p.messages.push_back(ViewMessage::fromJson(m));
@@ -1012,8 +1013,8 @@ inline std::optional<WireViewMessagesPage> viewMessagesPageFromJson(const neogra
     return p;
 }
 
-inline neograph::json makeLog(int level, std::string message) {
-    return neograph::json{
+inline agentxx::util::Json makeLog(int level, std::string message) {
+    return agentxx::util::Json{
         {"type",    MsgType::LogMsg   },
         {"level",   level             },
         {"message", std::move(message)},
@@ -1024,98 +1025,114 @@ inline neograph::json makeLog(int level, std::string message) {
 // 通用字段读取
 // ---------------------------------------------------------------------------
 
-inline std::string msgType(const neograph::json& j) {
+inline std::string msgType(const agentxx::util::Json& j) {
     return j.is_object() ? j.value("type", std::string{}) : std::string{};
+}
+
+/// 高频路由: JsonView 零拷贝提取 type (§4.3, ws_io_transport 收包路径先命中再物化)
+inline std::string msgTypeView(const agentxx::util::JsonView& jv) {
+    if (!jv.is_object()) {
+        return {};
+    }
+    auto v = jv["type"];
+    if (!v.valid() || !v.is_string()) {
+        return {};
+    }
+    try {
+        return std::string(v.get_string_view());
+    } catch (...) {
+        return {};
+    }
 }
 
 // ---------------------------------------------------------------------------
 // 统一的 toJson / fromJson 声明与顶层序列化接口 (方案 1)
 // ---------------------------------------------------------------------------
 
-neograph::json toJson(const WireHello& msg);
-WireHello      helloFromJson(const neograph::json& j);
+agentxx::util::Json toJson(const WireHello& msg);
+WireHello      helloFromJson(const agentxx::util::Json& j);
 
-neograph::json toJson(const WireHelloAck& msg);
-WireHelloAck   helloAckFromJson(const neograph::json& j);
+agentxx::util::Json toJson(const WireHelloAck& msg);
+WireHelloAck   helloAckFromJson(const agentxx::util::Json& j);
 
-neograph::json toJson(const WireUserInput& msg);
-WireUserInput  userInputFromJson(const neograph::json& j);
+agentxx::util::Json toJson(const WireUserInput& msg);
+WireUserInput  userInputFromJson(const agentxx::util::Json& j);
 
-neograph::json toJson(const WireCancel& msg);
-WireCancel     cancelFromJson(const neograph::json& j);
+agentxx::util::Json toJson(const WireCancel& msg);
+WireCancel     cancelFromJson(const agentxx::util::Json& j);
 
-neograph::json  toJson(const WireSelectModel& msg);
-WireSelectModel selectModelFromJson(const neograph::json& j);
+agentxx::util::Json  toJson(const WireSelectModel& msg);
+WireSelectModel selectModelFromJson(const agentxx::util::Json& j);
 
-neograph::json       toJson(const WireInterruptRequest& msg);
-WireInterruptRequest interruptRequestFromJson(const neograph::json& j);
+agentxx::util::Json       toJson(const WireInterruptRequest& msg);
+WireInterruptRequest interruptRequestFromJson(const agentxx::util::Json& j);
 
-neograph::json        toJson(const WireInterruptResponse& msg);
-WireInterruptResponse interruptResponseFromJson(const neograph::json& j);
+agentxx::util::Json        toJson(const WireInterruptResponse& msg);
+WireInterruptResponse interruptResponseFromJson(const agentxx::util::Json& j);
 
-neograph::json       toJson(const WireInterruptExpired& msg);
-WireInterruptExpired interruptExpiredFromJson(const neograph::json& j);
+agentxx::util::Json       toJson(const WireInterruptExpired& msg);
+WireInterruptExpired interruptExpiredFromJson(const agentxx::util::Json& j);
 
-neograph::json toJson(const WireDelta& msg);
+agentxx::util::Json toJson(const WireDelta& msg);
 
-neograph::json toJson(const WireSyncPayload& msg);
+agentxx::util::Json toJson(const WireSyncPayload& msg);
 
-neograph::json toJson(const WireTurnResult& msg);
-WireTurnResult turnResultFromJson(const neograph::json& j);
+agentxx::util::Json toJson(const WireTurnResult& msg);
+WireTurnResult turnResultFromJson(const agentxx::util::Json& j);
 
-neograph::json   toJson(const WireContextStats& msg);
-WireContextStats contextStatsFromJson(const neograph::json& j);
+agentxx::util::Json   toJson(const WireContextStats& msg);
+WireContextStats contextStatsFromJson(const agentxx::util::Json& j);
 
-neograph::json toJson(const WireError& msg);
-WireError      errorFromJson(const neograph::json& j);
+agentxx::util::Json toJson(const WireError& msg);
+WireError      errorFromJson(const agentxx::util::Json& j);
 
-neograph::json toJson(const WireLog& msg);
-WireLog        logFromJson(const neograph::json& j);
+agentxx::util::Json toJson(const WireLog& msg);
+WireLog        logFromJson(const agentxx::util::Json& j);
 
-neograph::json toJson(const WireGetModel& msg);
-WireGetModel   getModelFromJson(const neograph::json& j);
+agentxx::util::Json toJson(const WireGetModel& msg);
+WireGetModel   getModelFromJson(const agentxx::util::Json& j);
 
-neograph::json toJson(const WireModelInfo& msg);
-WireModelInfo  modelInfoFromJson(const neograph::json& j);
+agentxx::util::Json toJson(const WireModelInfo& msg);
+WireModelInfo  modelInfoFromJson(const agentxx::util::Json& j);
 
-neograph::json             toJson(const WireGetAppendComponentInfo& msg);
-WireGetAppendComponentInfo getAppendComponentInfoFromJson(const neograph::json& j);
+agentxx::util::Json             toJson(const WireGetAppendComponentInfo& msg);
+WireGetAppendComponentInfo getAppendComponentInfoFromJson(const agentxx::util::Json& j);
 
-neograph::json          toJson(const WireAppendComponentInfo& msg);
-WireAppendComponentInfo appendComponentInfoMessageFromJson(const neograph::json& j);
+agentxx::util::Json          toJson(const WireAppendComponentInfo& msg);
+WireAppendComponentInfo appendComponentInfoMessageFromJson(const agentxx::util::Json& j);
 
-neograph::json toJson(const WireGetContext& msg);
-WireGetContext getContextFromJson(const neograph::json& j);
+agentxx::util::Json toJson(const WireGetContext& msg);
+WireGetContext getContextFromJson(const agentxx::util::Json& j);
 
-neograph::json     toJson(const WireCompactContext& msg);
-WireCompactContext compactContextFromJson(const neograph::json& j);
+agentxx::util::Json     toJson(const WireCompactContext& msg);
+WireCompactContext compactContextFromJson(const agentxx::util::Json& j);
 
-neograph::json      toJson(const WireContextMessages& msg);
-WireContextMessages contextMessagesFromJson(const neograph::json& j);
+agentxx::util::Json      toJson(const WireContextMessages& msg);
+WireContextMessages contextMessagesFromJson(const agentxx::util::Json& j);
 
-neograph::json toJson(const WireListSessions& msg);
+agentxx::util::Json toJson(const WireListSessions& msg);
 
-neograph::json toJson(const WireSessionList& msg);
+agentxx::util::Json toJson(const WireSessionList& msg);
 
-neograph::json toJson(const WireSwitchSession& msg);
+agentxx::util::Json toJson(const WireSwitchSession& msg);
 
-neograph::json toJson(const WireSetPermission& msg);
+agentxx::util::Json toJson(const WireSetPermission& msg);
 
-neograph::json toJson(const WirePluginData& msg);
+agentxx::util::Json toJson(const WirePluginData& msg);
 
-neograph::json toJson(const WirePluginDataUp& msg);
+agentxx::util::Json toJson(const WirePluginDataUp& msg);
 
-neograph::json toJson(const WireMessageQueueUpdate& msg);
+agentxx::util::Json toJson(const WireMessageQueueUpdate& msg);
 
-neograph::json toJson(const WireClearMessageQueue& msg);
+agentxx::util::Json toJson(const WireClearMessageQueue& msg);
 
-neograph::json toJson(const WireRemoveQueueItem& msg);
+agentxx::util::Json toJson(const WireRemoveQueueItem& msg);
 
-neograph::json toJson(const WireInterruptAndRunNext& msg);
+agentxx::util::Json toJson(const WireInterruptAndRunNext& msg);
 
-neograph::json toJson(const WireGetViewMessages& msg);
+agentxx::util::Json toJson(const WireGetViewMessages& msg);
 
-neograph::json toJson(const WireViewMessagesPage& msg);
+agentxx::util::Json toJson(const WireViewMessagesPage& msg);
 
 /// 统一序列化为 JSON 字符串
 std::string serialize(const WireMessage& msg);

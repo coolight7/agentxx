@@ -104,7 +104,7 @@ public:
 
     // ----- AgentIOBase: 对端从我这拉取的 (BaseAgent 调用) -----
     asio::awaitable<std::optional<std::string>> getInput() override;
-    asio::awaitable<neograph::json>             handleInterrupt(
+    asio::awaitable<agentxx::util::Json>             handleInterrupt(
                     std::string_view sessionId,
                     std::string_view interruptNode,
                     std::string_view interruptValue,
@@ -193,13 +193,13 @@ private:
     using ErrorCode = neograph_asio_error_code;
 
     struct PendingInterrupt {
-        std::shared_ptr<asio::experimental::concurrent_channel<void(ErrorCode, neograph::json)>> ch;
+        std::shared_ptr<asio::experimental::concurrent_channel<void(ErrorCode, agentxx::util::Json)>> ch;
         std::string node;
         std::string value;
         std::string argJson;
     };
 
-    using RespChannel = asio::experimental::concurrent_channel<void(ErrorCode, neograph::json)>;
+    using RespChannel = asio::experimental::concurrent_channel<void(ErrorCode, agentxx::util::Json)>;
     using WakeChannel = asio::experimental::concurrent_channel<void(ErrorCode, int)>;
 
     /// 取 seq 之后的 delta; nullopt 表示需全量 sync
@@ -241,7 +241,7 @@ private:
     /// 实际清理逻辑 (须在 ex_ 线程执行)
     void stopImpl();
 
-    void resolveInterrupt(int64_t id, neograph::json result);
+    void resolveInterrupt(int64_t id, agentxx::util::Json result);
     void onCancel();
 
     // ----- 插件事件转发 (仅 ex_ 线程访问) -----

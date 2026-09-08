@@ -9,6 +9,7 @@
 #include <netinet/tcp.h>
 #endif
 
+#include "agentxx/util/asio_error.h"
 #include "agentxx/util/ws_client.h"
 
 #include "agentxx/util/exception.h"

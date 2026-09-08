@@ -96,7 +96,7 @@ struct ExecuteBashCommandTool {
         );
     }
 
-    asio::awaitable<std::string> execute_async(const neograph::json& args) const {
+    asio::awaitable<std::string> execute_async(const agentxx::util::Json& args) const {
 #if defined(BOOST_PROCESS_V2_PROCESS_HPP)
         // poll 寄生驱动协程版执行体 (与插件注册路径同一实现)
         co_return co_await agentxx_execmd_plugin::bashExecuteAsync(
@@ -129,7 +129,7 @@ struct ExecuteWindowsCommandTool {
         );
     }
 
-    asio::awaitable<std::string> execute_async(const neograph::json& args) const {
+    asio::awaitable<std::string> execute_async(const agentxx::util::Json& args) const {
 #if defined(BOOST_PROCESS_V2_PROCESS_HPP)
         co_return co_await agentxx_execmd_plugin::windowsExecuteAsync(
             args,
@@ -169,7 +169,7 @@ asio::awaitable<void>
 asio::awaitable<void>
     test_linux_command_empty_command(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::ExecuteBashCommandTool{agentContext};
-    auto args = neograph::json{
+    auto args = agentxx::util::Json{
         {"command", ""}
     };
     auto result = co_await tool.execute_async(args);
@@ -188,7 +188,7 @@ asio::awaitable<void>
 asio::awaitable<void>
     test_linux_command_echo(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::ExecuteBashCommandTool{agentContext};
-    auto args = neograph::json{
+    auto args = agentxx::util::Json{
         {"command", "echo hello_test"}
     };
     auto result = co_await tool.execute_async(args);
@@ -205,7 +205,7 @@ asio::awaitable<void>
 asio::awaitable<void> test_linux_command_ls(std::weak_ptr<agentxx::agent::AgentContext> agentContext
 ) {
     auto tool = agentxx::tools::ExecuteBashCommandTool{agentContext};
-    auto args = neograph::json{
+    auto args = agentxx::util::Json{
         {"command", "ls /tmp"}
     };
     auto result = co_await tool.execute_async(args);
@@ -222,7 +222,7 @@ asio::awaitable<void> test_linux_command_ls(std::weak_ptr<agentxx::agent::AgentC
 asio::awaitable<void>
     test_linux_command_pwd(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::ExecuteBashCommandTool{agentContext};
-    auto args = neograph::json{
+    auto args = agentxx::util::Json{
         {"command", "pwd"}
     };
     auto result = co_await tool.execute_async(args);
@@ -239,7 +239,7 @@ asio::awaitable<void>
 asio::awaitable<void>
     test_linux_command_whoami(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::ExecuteBashCommandTool{agentContext};
-    auto args = neograph::json{
+    auto args = agentxx::util::Json{
         {"command", "whoami"}
     };
     auto result = co_await tool.execute_async(args);
@@ -270,7 +270,7 @@ asio::awaitable<void>
 asio::awaitable<void>
     test_windows_command_empty_command(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::ExecuteWindowsCommandTool{agentContext};
-    auto args = neograph::json{
+    auto args = agentxx::util::Json{
         {"command", ""}
     };
     auto result = co_await tool.execute_async(args);
@@ -338,7 +338,7 @@ asio::awaitable<void>
 asio::awaitable<void>
     test_linux_timeout_disabled(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::ExecuteBashCommandTool{agentContext};
-    auto args = neograph::json{
+    auto args = agentxx::util::Json{
         {"command", "echo timeout_disabled_test"},
         {"timeout", 0                           },
     };
@@ -350,7 +350,7 @@ asio::awaitable<void>
 asio::awaitable<void>
     test_linux_timeout_triggers(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::ExecuteBashCommandTool{agentContext};
-    auto args = neograph::json{
+    auto args = agentxx::util::Json{
         {"command", "sleep 5"},
         {"timeout", 1        },
     };
@@ -362,7 +362,7 @@ asio::awaitable<void>
 asio::awaitable<void>
     test_linux_timeout_partial_output(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::ExecuteBashCommandTool{agentContext};
-    auto args = neograph::json{
+    auto args = agentxx::util::Json{
         {"command", "echo 'before_sleep' && sleep 5"},
         {"timeout", 1                               },
     };
@@ -374,7 +374,7 @@ asio::awaitable<void>
 asio::awaitable<void>
     test_linux_timeout_default(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::ExecuteBashCommandTool{agentContext};
-    auto args = neograph::json{
+    auto args = agentxx::util::Json{
         {"command", "echo default_timeout_ok"}
     };
     auto result = co_await tool.execute_async(args);
@@ -387,7 +387,7 @@ asio::awaitable<void>
 asio::awaitable<void>
     test_linux_all_output_false_success(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::ExecuteBashCommandTool{agentContext};
-    auto args = neograph::json{
+    auto args = agentxx::util::Json{
         {"command",    "echo success_msg"},
         {"all_output", false             },
     };
@@ -400,7 +400,7 @@ asio::awaitable<void>
 asio::awaitable<void>
     test_linux_all_output_false_failure(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::ExecuteBashCommandTool{agentContext};
-    auto args = neograph::json{
+    auto args = agentxx::util::Json{
         {"command",    "echo fail_msg && exit 1"},
         {"all_output", false                    },
     };
@@ -414,7 +414,7 @@ asio::awaitable<void>
 
 asio::awaitable<void> test_linux_stderr(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::ExecuteBashCommandTool{agentContext};
-    auto args = neograph::json{
+    auto args = agentxx::util::Json{
         {"command", "echo stderr_test_msg >&2"}
     };
     auto result = co_await tool.execute_async(args);
@@ -425,7 +425,7 @@ asio::awaitable<void> test_linux_stderr(std::weak_ptr<agentxx::agent::AgentConte
 asio::awaitable<void>
     test_linux_nonzero_exit(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::ExecuteBashCommandTool{agentContext};
-    auto args = neograph::json{
+    auto args = agentxx::util::Json{
         {"command", "exit 42"}
     };
     auto result = co_await tool.execute_async(args);
@@ -436,7 +436,7 @@ asio::awaitable<void>
 asio::awaitable<void>
     test_linux_special_chars(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::ExecuteBashCommandTool{agentContext};
-    auto args = neograph::json{
+    auto args = agentxx::util::Json{
         {"command", "echo 'hello with spaces and $pecial chars!'"}
     };
     auto result = co_await tool.execute_async(args);
@@ -447,7 +447,7 @@ asio::awaitable<void>
 asio::awaitable<void>
     test_linux_long_output(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::ExecuteBashCommandTool{agentContext};
-    auto args = neograph::json{
+    auto args = agentxx::util::Json{
         {"command", "for i in $(seq 1 100); do echo \"line_$i\"; done"}
     };
     auto result = co_await tool.execute_async(args);
@@ -462,7 +462,7 @@ asio::awaitable<void>
     test_linux_timeout_json_escaping(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::ExecuteBashCommandTool{agentContext};
     // 输出含双引号/反斜杠/换行后超时; 修复前 fmt 拼接会产生非法 JSON
-    auto args = neograph::json{
+    auto args = agentxx::util::Json{
         {"command", R"(printf 'has "quotes" and \\backslash\n'; sleep 5)"},
         {"timeout", 1                                                    },
     };
@@ -485,7 +485,7 @@ asio::awaitable<void>
     test_linux_timeout_kills_descendants(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     // auto tool = agentxx::tools::ExecuteBashCommandTool{agentContext};
     // // bash 派生后台 sleep 子孙进程并持有 stdout 管道; 修复后经 setsid+killpg 整组清理
-    // auto args = neograph::json{
+    // auto args = agentxx::util::Json{
     //     {"command", "bash -c '(sleep 31.7 &) ; echo started; sleep 31.7'"},
     //     {"timeout", 1                                                    },
     // };
@@ -502,7 +502,7 @@ asio::awaitable<void>
     // // 检测后台 sleep 是否仍存活 (孤儿); 用拼接 pattern 避免 pgrep 匹配到自身命令行
     // asio::steady_timer delay(co_await asio::this_coro::executor, std::chrono::milliseconds(300));
     // co_await delay.async_wait(asio::use_awaitable);
-    // auto checkArgs = neograph::json{
+    // auto checkArgs = agentxx::util::Json{
     //     {"command",
     //      R"(A="sleep 31"; B=".7"; pgrep -f "$A$B" >/dev/null 2>&1 && echo ORPHAN_ALIVE || echo
     //      NO_ORPHAN)"
@@ -564,12 +564,12 @@ asio::awaitable<void> test_command_subprocess_workdir(std::weak_ptr<agentxx::age
         co_return;
     }
     auto tool = agentxx::tools::ExecuteWindowsCommandTool{ctx};
-    auto args = neograph::json{
+    auto args = agentxx::util::Json{
         {"command", "Get-ChildItem -Name"}
     };
 #else
     auto tool = agentxx::tools::ExecuteBashCommandTool{ctx};
-    auto args = neograph::json{
+    auto args = agentxx::util::Json{
         {"command", "ls"}
     };
 #endif
@@ -659,7 +659,7 @@ asio::awaitable<void>
     auto tool = agentxx::tools::ExecuteWindowsCommandTool{agentContext};
     {
         // 基本执行
-        auto args = neograph::json{
+        auto args = agentxx::util::Json{
             {"command", "Write-Output 'ps_tool_echo_ok'"},
             {"timeout", 60                              },
         };
@@ -669,7 +669,7 @@ asio::awaitable<void>
     }
     {
         // 字面量 $ 不应被展开 (引号/$ 解析问题的核心回归测试)
-        auto args = neograph::json{
+        auto args = agentxx::util::Json{
             {"command", "Write-Output 'a$b'"},
             {"timeout", 60                  },
         };
@@ -678,7 +678,7 @@ asio::awaitable<void>
     }
     {
         // 变量赋值 + 双引号插值
-        auto args = neograph::json{
+        auto args = agentxx::util::Json{
             {"command", "$x = 'v1'; Write-Output \"val=$x\""},
             {"timeout", 60                                  },
         };
@@ -687,7 +687,7 @@ asio::awaitable<void>
     }
     {
         // 脚本 exit 码透传
-        auto args = neograph::json{
+        auto args = agentxx::util::Json{
             {"command", "Write-Output 'before_exit'; exit 42"},
             {"timeout", 60                                   },
         };
@@ -697,7 +697,7 @@ asio::awaitable<void>
     }
     {
         // 异常 (throw) 转 stdout + exit 1
-        auto args = neograph::json{
+        auto args = agentxx::util::Json{
             {"command", "Get-Content 'C:\\__agentxx_test_no_such__.txt' -ErrorAction Stop"},
             {"timeout", 60                                                                },
         };
@@ -706,7 +706,7 @@ asio::awaitable<void>
     }
     {
         // 脚本块花括号 (PS 常用语法; 包装模板的 fmt::format 不应破坏大括号)
-        auto args = neograph::json{
+        auto args = agentxx::util::Json{
             {"command",
              "Get-Process | Where-Object { $_.Id -gt 0 } | Select-Object -First 1 | ForEach-Object { Write-Output ('pid_ok') }"
             },
@@ -734,7 +734,7 @@ asio::awaitable<void>
     auto start = std::chrono::steady_clock::now();
     // ping -t 无限 ping, 若进程树未被整树终止则本调用永不返回 (测试框架
     // 会挂死 → 用 2s 超时 + 总耗时断言兜底, 不依赖框架看门狗)
-    auto args = neograph::json{
+    auto args = agentxx::util::Json{
         {"command", "ping -t 127.0.0.1"},
         {"timeout", 2                  },
     };
@@ -754,7 +754,7 @@ asio::awaitable<void>
     asio::steady_timer delay(co_await asio::this_coro::executor);
     delay.expires_after(std::chrono::milliseconds(500));
     co_await delay.async_wait(asio::as_tuple(asio::use_awaitable));
-    auto checkArgs = neograph::json{
+    auto checkArgs = agentxx::util::Json{
         // 当前会话唯一应无残留 ping (可能有其他程序的 ping, 用命令行特征过滤:
         // -t 127.0.0.1 精确匹配本测试派生的)
         {"command",
@@ -776,7 +776,7 @@ asio::awaitable<void>
 asio::awaitable<void>
     test_command_concurrent_commands(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::ExecuteBashCommandTool{agentContext};
-    auto args = neograph::json{
+    auto args = agentxx::util::Json{
         {"command", "sleep 1 && echo concurrent_done"},
         {"timeout", 10                               },
     };
@@ -831,7 +831,7 @@ asio::awaitable<void>
         co_return;
     }
 #endif
-    auto args = neograph::json{
+    auto args = agentxx::util::Json{
         {"command", "sleep 30"},
         {"timeout", 60        },
     };
@@ -863,7 +863,7 @@ asio::awaitable<void> test_command_cancel_registry_precancelled(
     agentxx_execmd_plugin::CancelRegistry reg;
     reg.cancel("precancelled_sess");
 
-    auto args = neograph::json{
+    auto args = agentxx::util::Json{
         {"command", "sleep 30"},
         {"timeout", 60        },
     };
@@ -904,7 +904,7 @@ asio::awaitable<void>
     }
 #endif
     agentxx_execmd_plugin::CancelRegistry reg;
-    auto                                  args = neograph::json{
+    auto                                  args = agentxx::util::Json{
                                          {"command", "sleep 30"},
                                          {"timeout", 60        },
     };
@@ -975,11 +975,11 @@ asio::awaitable<void> test_command_cancel_registry_multi_session(
     agentxx_execmd_plugin::CancelRegistry reg;
     auto                                  ex = co_await asio::this_coro::executor;
 
-    auto argsA = neograph::json{
+    auto argsA = agentxx::util::Json{
         {"command", "sleep 30"},
         {"timeout", 60        },
     };
-    auto argsB = neograph::json{
+    auto argsB = agentxx::util::Json{
         {"command", "echo session_b_ok"},
         {"timeout", 60                 },
     };

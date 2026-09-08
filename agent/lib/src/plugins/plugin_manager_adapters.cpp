@@ -1,3 +1,4 @@
+#include "agentxx/util/neograph_json_bridge.h"
 #include "agentxx/plugin/plugin_manager.h"
 
 #include "agentxx/event/event_stream.h"
@@ -37,7 +38,7 @@ PluginTool::PluginTool(
         spec.parameters_json.data ? spec.parameters_json.data : "",
         spec.parameters_json.size
     },
-    parameters_(neograph::json::object()),
+    parameters_(agentxx::util::Json::object()),
     instance_(instance) {
     spec_      = spec;
     spec_.name = agentxx::plugin::PluginStringView::from(name_.data(), name_.size());
@@ -48,7 +49,7 @@ PluginTool::PluginTool(
 
     if (!parametersJson_.empty()) {
         try {
-            auto params = neograph::json::parse(parametersJson_);
+            auto params = agentxx::util::Json::parse(parametersJson_);
             if (params.is_object()) {
                 parameters_ = std::move(params);
             }
@@ -62,11 +63,11 @@ neograph::ChatTool PluginTool::get_definition() const {
     neograph::ChatTool def;
     def.name        = name_;
     def.description = description_;
-    def.parameters  = parameters_;
+    def.parameters  = agentxx::util::toNeographJson(parameters_);
     return def;
 }
 
-asio::awaitable<std::string> PluginTool::execute_async(const neograph::json& arguments) {
+asio::awaitable<std::string> PluginTool::execute_async(const agentxx::util::Json& arguments) {
     auto inst = instance_.lock();
     if (!inst) {
         throw std::runtime_error("plugin instance released");
@@ -161,9 +162,9 @@ void PluginMiddlewareHandle::clearHook(AgentxxPluginHookPoint point) {
     hooks_[static_cast<size_t>(point)] = HookEntry{};
 }
 
-static neograph::json
+static agentxx::util::Json
     summarizeNodeInput(AgentxxPluginHookPoint point, const neograph::graph::NodeInput& in) {
-    neograph::json j;
+    agentxx::util::Json j;
     j["sessionId"] = in.ctx.thread_id;
     j["point"]     = static_cast<int>(point);
     return j;
@@ -504,12 +505,12 @@ int PluginManager::setGraphJson(PluginInstance* inst, AgentxxPluginStringView gr
         return -1;
     }
     try {
-        auto j = neograph::json::parse(std::string_view{graph_json.data, graph_json.size});
+        auto j = agentxx::util::Json::parse(std::string_view{graph_json.data, graph_json.size});
         if (!j.is_object()) {
             XX_LOGW("Plugin `{}` set_graph_json: not a JSON object", inst->name);
             return -1;
         }
-        ctx->graphDefinitionJson = std::move(j);
+        ctx->graphDefinitionJson = agentxx::util::toNeographJson(j);
         XX_LOGI("Plugin `{}` modified graph definition", inst->name);
         return 0;
     } catch (const std::exception& e) {

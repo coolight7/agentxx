@@ -2,6 +2,7 @@
 
 #include "agentxx/agent/config.h"
 #include "agentxx/util/exception.h"
+#include "agentxx/util/json_view.h"
 #include "agentxx/util/http_client.h"
 #include "agentxx/util/log.h"
 #include "agentxx/util/string_util.h"
@@ -53,25 +54,21 @@ public:
     /// 将 neograph 消息转换为 Anthropic 格式
     /// - `return` {system_string, messages_json_array}
     /// - [sendThinking] 是否携带 thinking 内容块
-    static std::pair<std::string, neograph::json> convertMessages(
+    static std::pair<std::string, agentxx::util::Json> convertMessages(
         const std::vector<neograph::ChatMessage>& messages,
         bool                                      sendThinking = false
     );
 
     /// 将 neograph 工具定义转换为 Anthropic 格式
-    static neograph::json convertTools(const std::vector<neograph::ChatTool>& tools);
+    static agentxx::util::Json convertTools(const std::vector<neograph::ChatTool>& tools);
 
     /// 解析非流式 Anthropic 响应
-    static neograph::ChatCompletion parseResponse(const neograph::json& resp);
+    static neograph::ChatCompletion parseResponse(const agentxx::util::Json& resp);
 
     /// 向 completion.message.extra[kThinkingBlocksKey] 追加一个 thinking 相关块
     /// (thinking/redacted_thinking), 首次追加时初始化为数组
-    static void appendThinkingBlock(neograph::ChatCompletion& completion, neograph::json block) {
-        if (!completion.message.extra.contains(kThinkingBlocksKey)) {
-            completion.message.extra[kThinkingBlocksKey] = neograph::json::array();
-        }
-        completion.message.extra[kThinkingBlocksKey].push_back(std::move(block));
-    }
+    static void appendThinkingBlock(neograph::ChatCompletion& completion, const agentxx::util::Json& block);
+    // (实现见 anthropic_provider.cpp: 经 bridge 转入 message.extra(neograph::json))
 
     /// 解析 Anthropic SSE 响应缓冲
     /// - 事件分隔符同时支持 "\n\n" 与 "\r\n\r\n" (SSE 规范允许 \r\n 行结尾)
@@ -158,11 +155,10 @@ public:
 
         size_t lineStart = 0;
         while (lineStart < block.size()) {
-            auto        lineEnd = block.find('\n', lineStart);
+            auto lineEnd = block.find('\n', lineStart);
             std::string line{
                 (lineEnd == std::string::npos) ? block.substr(lineStart)
-                                               : block.substr(lineStart, lineEnd - lineStart)
-            };
+                                               : block.substr(lineStart, lineEnd - lineStart)};
             lineStart = (lineEnd == std::string::npos) ? block.size() : lineEnd + 1;
 
             if (!line.empty() && line.back() == '\r') {
@@ -192,48 +188,94 @@ public:
             return false;
         }
 
-        neograph::json j;
-        bool           parsed = agentxx::util::catchError<bool>(
+        // 高频路径: JsonView 零拷贝路由 (§4.3) + 命中后按需物化
+        // - View 仅做只读导航 (event/usage/delta 标量提取无 DOM 堆分配)
+        // - 仅 thinking/redacted 块组装需要 Json DOM (appendThinkingBlock 物化)
+        agentxx::util::JsonView jv;
+        bool parsed = agentxx::util::catchError<bool>(
             [&]() -> bool {
-                j = neograph::json::parse(payload);
+                jv = agentxx::util::JsonView::parse(payload);
                 return true;
             },
             [](std::string) -> bool {
                 return false;
-            }
-        );
-        if (!parsed) {
+            });
+        if (!parsed || !jv.is_object()) {
             return false;
         }
+        auto viewStr = [](const agentxx::util::JsonView& v) -> std::string {
+            if (!v.valid() || !v.is_string()) {
+                return {};
+            }
+            try {
+                return std::string(v.get_string_view());
+            } catch (...) {
+                return {};
+            }
+        };
+        auto viewInt = [](const agentxx::util::JsonView& obj, std::string_view key, int def) {
+            if (!obj.is_object()) {
+                return def;
+            }
+            auto v = obj[key];
+            if (!v.valid() || v.is_null()) {
+                return def;
+            }
+            try {
+                if (v.is_int64()) {
+                    return static_cast<int>(v.get_int64());
+                }
+                if (v.is_uint64()) {
+                    return static_cast<int>(v.get_uint64());
+                }
+                if (v.is_double()) {
+                    return static_cast<int>(v.get_double());
+                }
+            } catch (...) {
+            }
+            return def;
+        };
 
         // 允许异常时字节抛出给到 ModelCallNode ，以便自动处理
         if (currentEvent == "message_start") {
-            if (j.contains("message") && j["message"].contains("usage")) {
-                auto u                         = j["message"]["usage"];
-                completion.usage.prompt_tokens = u.value("input_tokens", 0);
+            auto msgView = jv["message"];
+            if (msgView.valid() && msgView.is_object()) {
+                auto usageView = msgView["usage"];
+                if (usageView.valid() && usageView.is_object()) {
+                    completion.usage.prompt_tokens
+                        = viewInt(usageView, "input_tokens", completion.usage.prompt_tokens);
+                }
             }
         } else if (currentEvent == "content_block_start") {
-            int idx = j.value("index", 0);
-            if (j.contains("content_block")) {
-                auto type       = j["content_block"].value("type", std::string{});
+            int idx = viewInt(jv, "index", 0);
+            auto cbView = jv["content_block"];
+            if (cbView.valid() && cbView.is_object()) {
+                std::string type;
+                {
+                    auto tv = cbView["type"];
+                    if (tv.valid() && tv.is_string()) {
+                        type = viewStr(tv);
+                    }
+                }
                 blockTypes[idx] = type;
                 if (type == "tool_use") {
-                    tcMap[idx].id   = j["content_block"].value("id", std::string{});
-                    tcMap[idx].name = j["content_block"].value("name", std::string{});
+                    tcMap[idx].id = viewStr(cbView["id"]);
+                    tcMap[idx].name = viewStr(cbView["name"]);
                 } else if (type == "redacted_thinking") {
-                    // redacted_thinking 块必须在多轮对话中原样回传
-                    neograph::json b;
+                    // redacted_thinking 块必须在多轮对话中原样回传 (命中后物化)
+                    agentxx::util::Json b;
                     b["type"] = "redacted_thinking";
-                    b["data"] = j["content_block"].value("data", std::string{});
+                    b["data"] = viewStr(cbView["data"]);
                     appendThinkingBlock(completion, std::move(b));
                 }
             }
         } else if (currentEvent == "content_block_delta") {
-            int idx = j.value("index", 0);
-            if (j.contains("delta")) {
-                auto deltaType = j["delta"].value("type", std::string{});
+            int idx = viewInt(jv, "index", 0);
+            auto deltaView = jv["delta"];
+            if (deltaView.valid() && deltaView.is_object()) {
+                std::string deltaType = viewStr(deltaView["type"]);
                 if (deltaType == "text_delta") {
-                    auto text    = j["delta"].value("text", std::string{});
+                    auto text = viewStr(deltaView["text"]);
                     fullContent += text;
                     if (on_chunk) {
                         on_chunk(neograph::ChatStreamChunk{
@@ -242,42 +284,46 @@ public:
                         });
                     }
                 } else if (deltaType == "thinking_delta") {
-                    auto thinking       = j["delta"].value("thinking", std::string{});
-                    fullThinking       += thinking;
+                    auto thinking = viewStr(deltaView["thinking"]);
+                    fullThinking += thinking;
                     thinkingTexts[idx] += thinking;
                     if (on_chunk) {
                         on_chunk(neograph::ChatStreamChunk{
-                            neograph::ChatStreamChunk::TYPE_THINKING,
-                            thinking
-                        });
+                            neograph::ChatStreamChunk::TYPE_THINKING, thinking});
                     }
                 } else if (deltaType == "signature_delta") {
                     // thinking 块的 signature, 多轮对话回传 thinking 时 Anthropic 要求携带
-                    blockSignatures[idx] += j["delta"].value("signature", std::string{});
+                    blockSignatures[idx] += viewStr(deltaView["signature"]);
                 } else if (deltaType == "input_json_delta") {
-                    auto partialJson      = j["delta"].value("partial_json", std::string{});
+                    auto partialJson = viewStr(deltaView["partial_json"]);
                     tcMap[idx].arguments += partialJson;
                 }
             }
         } else if (currentEvent == "content_block_stop") {
-            int  idx = j.value("index", 0);
-            auto it  = blockTypes.find(idx);
+            int idx = viewInt(jv, "index", 0);
+            auto it = blockTypes.find(idx);
             if (it != blockTypes.end() && it->second == "thinking") {
                 auto sigIt = blockSignatures.find(idx);
                 // 仅保存带 signature 的 thinking 块: 无 signature 的 thinking 回传会被 API 拒绝
                 if (sigIt != blockSignatures.end() && !sigIt->second.empty()) {
-                    neograph::json b;
-                    b["type"]      = "thinking";
-                    b["thinking"]  = thinkingTexts[idx];
+                    agentxx::util::Json b;
+                    b["type"] = "thinking";
+                    b["thinking"] = thinkingTexts[idx];
                     b["signature"] = sigIt->second;
                     appendThinkingBlock(completion, std::move(b));
                 }
             }
         } else if (currentEvent == "message_delta") {
-            if (j.contains("usage")) {
-                completion.usage.completion_tokens = j["usage"].value<int>("output_tokens", 0);
-                completion.usage.total_tokens
-                    = completion.usage.prompt_tokens + completion.usage.completion_tokens;
+            auto usageView = jv["usage"];
+            if (usageView.valid() && usageView.is_object()) {
+                // 命中后物化语义: output_tokens 缺失时保持原值 (与原 value<int> 缺省 0 不同,
+                // 此处显式判 contains 后再覆盖, 避免无 usage 块时误清零; 有 usage 块时按原语义)
+                if (usageView.contains("output_tokens")) {
+                    completion.usage.completion_tokens
+                        = viewInt(usageView, "output_tokens", completion.usage.completion_tokens);
+                    completion.usage.total_tokens
+                        = completion.usage.prompt_tokens + completion.usage.completion_tokens;
+                }
             }
         }
         return currentEvent == "message_stop";
@@ -289,14 +335,14 @@ private:
 
     explicit AnthropicProvider(agentxx::agent::ModelConfig config);
 
-    neograph::json buildBody(const neograph::CompletionParams& params) const;
+    agentxx::util::Json buildBody(const neograph::CompletionParams& params) const;
 
     asio::awaitable<neograph::ChatCompletion> completeAsync(const neograph::CompletionParams& params
     );
 
     asio::awaitable<neograph::ChatCompletion> doStream(
         const neograph::CompletionParams&  params,
-        const neograph::json&              body,
+        const agentxx::util::Json&              body,
         neograph::FormatDataStreamCallback on_chunk
     );
 

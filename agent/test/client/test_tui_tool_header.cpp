@@ -76,9 +76,9 @@ std::shared_ptr<agentxx::plugin::ClientUiRegistry> makeTestToolRegistry() {
     static auto readFn
         = [](void*, const AgentxxToolRenderInput* in, AgentxxToolRenderOutput* out) -> int32_t {
         std::string_view args(in->args_json.data ? in->args_json.data : "", in->args_json.size);
-        neograph::json   j;
+        agentxx::util::Json   j;
         try {
-            j = neograph::json::parse(args);
+            j = agentxx::util::Json::parse(args);
         } catch (...) {
             return -1;
         }
@@ -118,7 +118,7 @@ std::shared_ptr<agentxx::plugin::ClientUiRegistry> makeTestToolRegistry() {
     // Glob (回调; 与真实插件回调同语义: 兼容单字符串/数组)
     // - 提取逻辑镜像 agentxx_fs_plugin::stringListArg (单字符串包装为单元素
     //   列表, 数组逐项提取字符串), 保证夹具摘要与真实渲染一致
-    static auto globFilesOf = [](const neograph::json& j) -> std::vector<std::string> {
+    static auto globFilesOf = [](const agentxx::util::Json& j) -> std::vector<std::string> {
         std::vector<std::string> out;
         if (!j.is_object() || !j.contains("file_patterns")) {
             return out;
@@ -138,9 +138,9 @@ std::shared_ptr<agentxx::plugin::ClientUiRegistry> makeTestToolRegistry() {
     static auto globFn
         = [](void*, const AgentxxToolRenderInput* in, AgentxxToolRenderOutput* out) -> int32_t {
         std::string_view args(in->args_json.data ? in->args_json.data : "", in->args_json.size);
-        neograph::json   j;
+        agentxx::util::Json   j;
         try {
-            j = neograph::json::parse(args);
+            j = agentxx::util::Json::parse(args);
         } catch (...) {
             return -1;
         }
@@ -171,7 +171,7 @@ std::shared_ptr<agentxx::plugin::ClientUiRegistry> makeTestToolRegistry() {
 
     // Grep (回调; 与真实插件回调同语义: 兼容单字符串/数组)
     static auto grepListOf
-        = [](const neograph::json& j, std::string_view key) -> std::vector<std::string> {
+        = [](const agentxx::util::Json& j, std::string_view key) -> std::vector<std::string> {
         std::vector<std::string> out;
         std::string              k{key};
         if (!j.is_object() || !j.contains(k)) {
@@ -192,9 +192,9 @@ std::shared_ptr<agentxx::plugin::ClientUiRegistry> makeTestToolRegistry() {
     static auto grepFn
         = [](void*, const AgentxxToolRenderInput* in, AgentxxToolRenderOutput* out) -> int32_t {
         std::string_view args(in->args_json.data ? in->args_json.data : "", in->args_json.size);
-        neograph::json   j;
+        agentxx::util::Json   j;
         try {
-            j = neograph::json::parse(args);
+            j = agentxx::util::Json::parse(args);
         } catch (...) {
             return -1;
         }
@@ -260,9 +260,9 @@ std::shared_ptr<agentxx::plugin::ClientUiRegistry> makeTestToolRegistry() {
     static auto editFn
         = [](void*, const AgentxxToolRenderInput* in, AgentxxToolRenderOutput* out) -> int32_t {
         std::string_view args(in->args_json.data ? in->args_json.data : "", in->args_json.size);
-        neograph::json   j;
+        agentxx::util::Json   j;
         try {
-            j = neograph::json::parse(args);
+            j = agentxx::util::Json::parse(args);
         } catch (...) {
             return -1;
         }
@@ -275,12 +275,12 @@ std::shared_ptr<agentxx::plugin::ClientUiRegistry> makeTestToolRegistry() {
         out->displayName   = makeTestString("Edit");
         out->summary       = makeTestString(" · " + path);
         if (!in->is_error) {
-            neograph::json diffItem;
+            agentxx::util::Json diffItem;
             diffItem["kind"]    = "diff";
             diffItem["path"]    = std::move(path);
             diffItem["old_str"] = std::move(oldStr);
             diffItem["new_str"] = std::move(newStr);
-            neograph::json arr  = neograph::json::array();
+            agentxx::util::Json arr  = agentxx::util::Json::array();
             arr.push_back(std::move(diffItem));
             out->items_json = makeTestString(arr.dump());
         }
@@ -429,7 +429,7 @@ struct ToolHeaderFixture {
             d.toolCallId      = "call_1";
             d.displayName     = "Plan";
             d.summary         = "[~] reproduce issue; [ ] fix root cause; [#] write tests";
-            d.items           = neograph::json::parse(R"([
+            d.items           = agentxx::util::Json::parse(R"([
                 {"kind":"diagram","mermaid":"stateDiagram-v2\n[*] --> phase1\nphase1 --> [*]"},
                 {"kind":"text","role":"title","text":"Todos:"},
                 {"kind":"text","role":"normal","text":"[~] do task A"},
@@ -453,7 +453,7 @@ struct ToolHeaderFixture {
             d.toolCallId  = "call_1";
             d.displayName = "Plan";
             d.summary     = "[~] reproduce issue";
-            d.items       = neograph::json::parse(R"([
+            d.items       = agentxx::util::Json::parse(R"([
                 {"kind":"button","label":" Graph ","action_id":"planning.open_graph","args":{},"role":"accent"},
                 {"kind":"text","role":"title","text":"Todos:"},
                 {"kind":"text","role":"normal","text":"[~] do task A"}

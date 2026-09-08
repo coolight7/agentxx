@@ -172,7 +172,7 @@ public:
 
     neograph::ChatTool get_definition() const override;
 
-    asio::awaitable<std::string> execute_async(const neograph::json& arguments) override;
+    asio::awaitable<std::string> execute_async(const agentxx::util::Json& arguments) override;
 
     std::shared_ptr<PluginInstance> instance() const {
         return instance_.lock();
@@ -188,7 +188,7 @@ private:
     std::string                   description_;
     std::string                   parametersJson_;
     AgentxxPluginToolSpec         spec_;
-    neograph::json                parameters_;
+    agentxx::util::Json                parameters_;
     std::weak_ptr<PluginInstance> instance_;
 };
 

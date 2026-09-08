@@ -1,6 +1,7 @@
 #include "agentxx/agent/agent_runner.h"
 
 #include "agentxx/agent/io/session_server_agent_io.h"
+#include "agentxx/util/neograph_json_bridge.h"
 #include "agentxx/event/event_stream.h"
 #include "agentxx/tools/subagent.h"
 #include "agentxx/util/log.h"
@@ -27,7 +28,7 @@ asio::awaitable<AgentRunner::Outcome> AgentRunner::run(
 
     auto fOnBeforeResume = [&]() -> asio::awaitable<void> {
         engine->update_state(std::string{sessionId}, [&](neograph::graph::GraphState& state) {
-            state.overwrite("messages", session->llmMessages);
+            state.overwrite("messages", agentxx::util::toNeographJson(session->llmMessages));
         });
         if (hooks.onBeforeResume) {
             co_await hooks.onBeforeResume(sessionId);
@@ -40,7 +41,7 @@ asio::awaitable<AgentRunner::Outcome> AgentRunner::run(
             // 中断时 [result] 内的 messages 是被 neograph::engine
             // 回滚的，本轮 session 的上下文已经被丢弃；应该取中断时
             // 保存的 messages
-            auto imCopy = ctx->middlewareHandleContext->getGraphDataItemValue<neograph::json>(
+            auto imCopy = ctx->middlewareHandleContext->getGraphDataItemValue<agentxx::util::Json>(
                 sessionId,
                 agentxx::middleware::MiddlewareContext::graphDataKey_tempMessages
             );
@@ -51,7 +52,8 @@ asio::awaitable<AgentRunner::Outcome> AgentRunner::run(
             // (handleInterrupt/权限询问) 仍会读取该快照校验中断时刻上下文;
             // 清理时机收敛到图完整结束 (下方 else 分支)
         } else {
-            session->llmMessages = result.channel_raw("messages");
+            session->llmMessages
+                = agentxx::util::fromNeographJson(result.channel_raw("messages"));
             // 图已完整结束: 清理中断/异常期间遗留的 tempMessages 快照。
             // - 本轮为 resume 完成时快照已被权威结果取代, 留存会误导后续
             //   错误路径的上下文回退源 (过期回卷)
@@ -97,10 +99,10 @@ asio::awaitable<AgentRunner::Outcome> AgentRunner::run(
             agentxx::middleware::MiddlewareContext::graphDataKey_interruptNode,
             result->interrupt_node
         );
-        ctx->middlewareHandleContext->setGraphDataItemValue<neograph::json>(
+        ctx->middlewareHandleContext->setGraphDataItemValue<agentxx::util::Json>(
             sessionId,
             agentxx::middleware::MiddlewareContext::graphDataKey_interruptValue,
-            result->interrupt_value
+            agentxx::util::fromNeographJson(result->interrupt_value)
         );
 
         // 本轮 graph 还没有执行完成, 序列化 graphData 到 state checkpoint,
@@ -116,12 +118,13 @@ asio::awaitable<AgentRunner::Outcome> AgentRunner::run(
         outcome.interrupted = true;
         auto interruptNode  = crudeResult->interrupt_node;
         auto interruptValue = crudeResult->interrupt_value.dump();
+        (void)interruptValue;
 
-        auto resumeValues = neograph::json{};
+        auto resumeValues = agentxx::util::Json{};
 
         // 从 [graphDataKey_interruptArgs] 提取中断参数
         const auto interruptArglist = agentxx::middleware::InterruptHandleArg::listFromJson(
-            ctx->middlewareHandleContext->getGraphDataItemValue<neograph::json>(
+            ctx->middlewareHandleContext->getGraphDataItemValue<agentxx::util::Json>(
                 sessionId,
                 agentxx::middleware::MiddlewareContext::graphDataKey_interruptArgs
             )
@@ -221,7 +224,7 @@ asio::awaitable<AgentRunner::Outcome> AgentRunner::run(
                         if (rid.empty()) {
                             rid = std::to_string(argIndex);
                         }
-                        resumeValues[rid] = neograph::json::parse(resp->resultJson);
+                        resumeValues[rid] = agentxx::util::Json::parse(resp->resultJson);
                     } else if (resp.has_value() && !resp->handled
                                && resp->resultJson.find("__cancelled__") != std::string::npos) {
                         throw neograph::graph::CancelledException("HIL interrupted by cancel");
@@ -236,7 +239,7 @@ asio::awaitable<AgentRunner::Outcome> AgentRunner::run(
                 sessionId,
                 agentxx::middleware::MiddlewareContext::graphDataKey_interruptArgs
             );
-            ctx->middlewareHandleContext->setGraphDataItemValue<neograph::json>(
+            ctx->middlewareHandleContext->setGraphDataItemValue<agentxx::util::Json>(
                 sessionId,
                 agentxx::middleware::MiddlewareContext::graphDataKey_interruptResult,
                 resumeValues

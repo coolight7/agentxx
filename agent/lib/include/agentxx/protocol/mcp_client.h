@@ -12,7 +12,7 @@
 #include <memory>
 #include <mutex>
 #include <neograph/api.h>
-#include <neograph/json.h>
+#include "agentxx/util/json.h"
 #include <neograph/types.h>
 #include <optional>
 #include <string>
@@ -363,7 +363,7 @@ public:
 
     neograph::ChatTool get_definition() const override;
 
-    asio::awaitable<std::string> execute_async(const neograph::json& arguments) override;
+    asio::awaitable<std::string> execute_async(const agentxx::util::Json& arguments) override;
 
     std::string get_name() const override;
 

@@ -2,6 +2,7 @@
 
 #include "agentxx/agent/config.h"
 #include "agentxx/agent/conversation_types.h"
+#include <neograph/json.h>
 #include "agentxx/util/log.h"
 #include "asio/awaitable.hpp"
 #include "asio/thread_pool.hpp"
@@ -75,7 +76,7 @@ struct SessionStoreHooks {
     std::function<void(const ViewMessage&)> onUpdateViewMessage;
 
     /// 保存 LLM 上下文消息 (每轮对话结束时调用)
-    std::function<void(const neograph::json&)> onSaveLlmMessages;
+    std::function<void(const agentxx::util::Json&)> onSaveLlmMessages;
 };
 
 /// 上下文统计 (供 UI 显示上下文占用)
@@ -134,7 +135,7 @@ public:
 
     /// LLM 上下文消息 (可压缩/裁剪, 仅用于调用 LLM API)
     /// - 仅 ioContext 线程可读写
-    neograph::json llmMessages = neograph::json::array();
+    agentxx::util::Json llmMessages = agentxx::util::Json::array();
 
     /// viewMessages 的链式哈希 (用于 client 校验一致性)
     /// - 仅 ioContext 线程可读写 (appendViewMessage 内部更新)
@@ -263,7 +264,7 @@ public:
     ///   (kPersistThrottleMs), 而非整轮
     /// - 节流: 距上次落盘 >= kPersistThrottleMs 时立即保存; 窗口内仅更新内存,
     ///   待下次结算触发或轮末 saveLlmMessages() 统一落盘
-    void appendSettledLlmMessages(const neograph::json& settledMsgs);
+    void appendSettledLlmMessages(const agentxx::util::Json& settledMsgs);
 
     /// 请求节流保存当前 llmMessages (首次触发立即落盘, 窗口内合并)
     void requestSaveLlmMessages();

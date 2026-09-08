@@ -31,7 +31,7 @@ if (_AGENTXX_ADD_AS_BUILTIN)
   target_include_directories(${_target} PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}"          # agentxx_websearch_plugin.h / websearch_impl.h
     "${AGENTXX_LIB_INCLUDE_DIR}"           # agentxx/plugin/plugin_api.h
-    "${AGENTXX_INSTALL_DIR}/include"       # fmt neograph html2md
+    "${AGENTXX_INSTALL_DIR}/include"       # agentxx_util (Json/JsonView) html2md
   )
   # 复用 agentxx_util 工具库 (HttpClient 实现经静态裁剪自动收录);
   # html2md 以裸库名追加进 libagentxx 收集通道 (与 agentxx_string 同理)
@@ -82,41 +82,22 @@ if (NOT TARGET agentxx_util)
   find_package(agentxx_util REQUIRED)
 endif()
 find_package(html2md REQUIRED)
-# OpenSSL 保持模块模式 (FindOpenSSL, 与 lib 一致): 本项目 OpenSSL 为预构建
-# 目录 (无 config), OPENSSL_ROOT_DIR 由顶层 superbuild 传入精确指向预构建
-# 目录, 不会命中系统 OpenSSL (独立构建未传时回退系统库)
-find_package(OpenSSL REQUIRED)
 
 target_include_directories(${PLUGIN_NAME} PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}"          # agentxx_websearch_plugin.h / websearch_impl.h
   "${AGENTXX_LIB_INCLUDE_DIR}"           # agentxx/plugin/plugin_api.h
-  "${AGENTXX_INSTALL_DIR}/include/"      # fmt neograph html2md
+  "${AGENTXX_INSTALL_DIR}/include/"      # agentxx_util (Json/JsonView) html2md
 )
 
-# 裸库名依赖解析目录 (与 lib 一致): neograph 系/yyjson/hs_runtime 位于
-# AGENTXX_INSTALL_DIR/lib; OpenSSL 预构建目录 (正序依赖经 imported target
-# 绝对路径链接, 此处仅为兜底解析保留)
+# 裸库名依赖解析目录: hs_runtime 位于
+# AGENTXX_INSTALL_DIR/lib 经 agentxx_util PUBLIC link_directories 传播已可解析 hs_runtime; 此处保留供直连裸库名兜底
 target_link_directories(${PLUGIN_NAME} PRIVATE
   "${AGENTXX_INSTALL_DIR}/lib/"
-  "${OPENSSL_ROOT_DIR}/lib64"
-  "${OPENSSL_ROOT_DIR}/lib"
 )
 
 target_link_libraries(${PLUGIN_NAME} PRIVATE
   agentxx_util
   html2md
-  OpenSSL::SSL
-  OpenSSL::Crypto
-  # === neograph vvv 链接顺序是必要的 (与 lib 自身一致) ===
-  neograph_sqlite
-  neograph_acp
-  neograph_mcp
-  neograph_mcp_types
-  neograph_async
-  neograph_llm
-  neograph_core
-  # === neograph ^^^
-  yyjson
 )
 if (AGENTXX_ENABLE_HYPERSCAN)
   # hyperscan pkg-config 模块由 plugins/CMakeLists.txt 统一定义 (与

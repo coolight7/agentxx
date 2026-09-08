@@ -1,3 +1,4 @@
+#include "agentxx/util/neograph_json_bridge.h"
 #include "agentxx/protocol/mcp_client.h"
 
 #include "agentxx/util/async_offload.h"
@@ -2295,11 +2296,11 @@ neograph::ChatTool McpClientTool::get_definition() const {
     neograph::ChatTool tool;
     tool.name        = namespacedName();
     tool.description = def_.description;
-    tool.parameters  = def_.inputSchema;
+    tool.parameters  = agentxx::util::toNeographJson(def_.inputSchema);
     return tool;
 }
 
-asio::awaitable<std::string> McpClientTool::execute_async(const neograph::json& arguments) {
+asio::awaitable<std::string> McpClientTool::execute_async(const agentxx::util::Json& arguments) {
     // 工具调用整体超时 (配置项 toolCallTimeout, 毫秒; 0 = 不限制):
     // - 覆盖 callTool 的完整流程 (含 HeaderMismatch 重试等), 是总超时兜底
     // - 超时时取消底层请求 (HTTP/stdio), 返回超时错误; 外部取消按原语义传播

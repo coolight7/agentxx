@@ -171,7 +171,7 @@ std::string hostDataDir(const PluginCtx& ctx) {
     std::string s(j.data, static_cast<size_t>(j.size));
     agentxx::plugin::PluginString::free(ctx.host, &j);
     try {
-        auto o = neograph::json::parse(s);
+        auto o = agentxx::util::Json::parse(s);
         return o.value("dataDir", std::string{});
     } catch (...) {
         return {};
@@ -302,7 +302,7 @@ void AGENTXX_PLUGIN_CALL on_client_attached(const AgentxxPluginStringView* event
             }
             std::string sessionId;
             try {
-                sessionId = neograph::json::parse(
+                sessionId = agentxx::util::Json::parse(
                                 std::string{event_json->data, static_cast<size_t>(event_json->size)}
                 )
                                 .value("sessionId", std::string{});
@@ -367,8 +367,8 @@ extern "C" AGENTXX_PLUGIN_EXPORT int32_t AGENTXX_PLUGIN_CALL
 
             // 注入 planning 附加提示词至宿主 (经通用 appendSystemPrompts)
             if (ctx->iface.prompt && ctx->iface.prompt->set_prompt) {
-                neograph::json j;
-                j["appendSystemPrompts"]             = neograph::json::object();
+                agentxx::util::Json j;
+                j["appendSystemPrompts"]             = agentxx::util::Json::object();
                 j["appendSystemPrompts"]["planning"] = std::string{kSystemPlanningPrompt};
                 std::string js                       = j.dump();
                 auto promptSv = agentxx::plugin::PluginStringView::from(js.data(), js.size());
@@ -426,8 +426,8 @@ extern "C" AGENTXX_PLUGIN_EXPORT int32_t AGENTXX_PLUGIN_CALL
                             args_json.data() ? args_json.data() : "",
                             args_json.size()
                         );
-                        auto arguments = argsStr.empty() ? neograph::json::object()
-                                                         : neograph::json::parse(argsStr);
+                        auto arguments = argsStr.empty() ? agentxx::util::Json::object()
+                                                         : agentxx::util::Json::parse(argsStr);
 
                         const auto mode = arguments.value("mode", std::string{});
                         if (mode != "write" && mode != "read") {
@@ -444,7 +444,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int32_t AGENTXX_PLUGIN_CALL
                                 return R"({"error":"No saved planning in this session. Call with mode=\"write\" first."})";
                             }
                             try {
-                                auto v = neograph::json::parse(saved);
+                                auto v = agentxx::util::Json::parse(saved);
                                 return v.dump(2);
                             } catch (...) {
                                 return R"({"error":"Saved planning is corrupted. Rewrite it with mode=\"write\"."})";
@@ -462,11 +462,11 @@ extern "C" AGENTXX_PLUGIN_EXPORT int32_t AGENTXX_PLUGIN_CALL
                         }
                         std::string notes = arguments.value("notes", std::string{});
 
-                        neograph::json planStore = neograph::json::object();
+                        agentxx::util::Json planStore = agentxx::util::Json::object();
                         planStore["roadmap"]     = roadmap;
                         if (!todosJson.empty()) {
                             try {
-                                planStore["todos"] = neograph::json::parse(todosJson);
+                                planStore["todos"] = agentxx::util::Json::parse(todosJson);
                             } catch (...) {
                                 return R"({"error":"Arg `todos` is not valid JSON"})";
                             }
@@ -614,7 +614,7 @@ std::string_view todoRole(std::string_view state) {
 } // namespace
 
 /// 折叠头一行摘要: todos 格式化为 "[~] a; [ ] b" (与历史 TUI 预览一致)
-static std::string buildTodosSummary(const neograph::json& plan) {
+static std::string buildTodosSummary(const agentxx::util::Json& plan) {
     std::string summary;
     if (!plan.contains("todos") || !plan["todos"].is_array()) {
         return summary;
@@ -646,7 +646,7 @@ static std::string buildTodosSummary(const neograph::json& plan) {
 /// 的渲染重复)
 static void appendTodoAndNoteItems(
     const ClientCtx&          ctx,
-    const neograph::json&     plan,
+    const agentxx::util::Json&     plan,
     std::vector<std::string>& items
 ) {
     auto textItem = [&](const std::string& text, const std::string& role) {
@@ -690,7 +690,7 @@ static void appendTodoAndNoteItems(
 
 /// 组装展开体 items JSON 数组元素 (Graph / Todo / Note 三段式, 参考剥离前的
 /// TUI appendPlanToolBody + Info 侧边栏 Plan 渲染; Graph 为按钮弹窗)
-static std::string buildDecorItems(const ClientCtx& ctx, const neograph::json& plan) {
+static std::string buildDecorItems(const ClientCtx& ctx, const agentxx::util::Json& plan) {
     if (plan.contains("items") && plan["items"].is_array()) {
         return plan["items"].dump();
     }
@@ -712,7 +712,7 @@ static std::string buildDecorItems(const ClientCtx& ctx, const neograph::json& p
 
 /// 推送/更新工具消息装饰 (client io 线程; ui 成员判空降级)
 static void
-    pushToolDecor(ClientCtx& ctx, const std::string& toolCallId, const neograph::json& plan) {
+    pushToolDecor(ClientCtx& ctx, const std::string& toolCallId, const agentxx::util::Json& plan) {
     if (!ctx.ui || !ctx.ui->update_tool_decor || !ctx.host || toolCallId.empty()) {
         return;
     }
@@ -769,9 +769,9 @@ static void refreshPlanSection(ClientCtx& ctx) {
     if (!ctx.section || ctx.last_plan_json.empty()) {
         return;
     }
-    neograph::json plan;
+    agentxx::util::Json plan;
     try {
-        plan = neograph::json::parse(ctx.last_plan_json);
+        plan = agentxx::util::Json::parse(ctx.last_plan_json);
     } catch (...) {
         return;
     }
@@ -885,9 +885,9 @@ static void AGENTXX_PLUGIN_CALL
         if (raw.find("\"agentxx_planning\"") == std::string_view::npos) {
             return;
         }
-        neograph::json d;
+        agentxx::util::Json d;
         try {
-            d = neograph::json::parse(raw);
+            d = agentxx::util::Json::parse(raw);
         } catch (...) {
             return;
         }
@@ -902,9 +902,9 @@ static void AGENTXX_PLUGIN_CALL
 
         if (type == "tool_start") {
             const auto     argsStr = d.value("arguments", std::string{});
-            neograph::json args;
+            agentxx::util::Json args;
             try {
-                args = argsStr.empty() ? neograph::json::object() : neograph::json::parse(argsStr);
+                args = argsStr.empty() ? agentxx::util::Json::object() : agentxx::util::Json::parse(argsStr);
             } catch (...) {
                 return;
             }
@@ -914,9 +914,9 @@ static void AGENTXX_PLUGIN_CALL
             ctx->pending_args[callId] = args.dump();
             if (args.value("mode", std::string{}) == "read") {
                 // read: 结果尚未返回, 占位提示 (tool_end 时替换为结果摘要)
-                neograph::json placeholder = neograph::json::object();
-                placeholder["items"]       = neograph::json::array();
-                neograph::json hint        = neograph::json::object();
+                agentxx::util::Json placeholder = agentxx::util::Json::object();
+                placeholder["items"]       = agentxx::util::Json::array();
+                agentxx::util::Json hint        = agentxx::util::Json::object();
                 hint["kind"]               = "text";
                 hint["role"]               = "hint";
                 hint["text"]               = "Reading saved planning...";
@@ -932,13 +932,13 @@ static void AGENTXX_PLUGIN_CALL
         auto it = ctx->pending_args.find(callId);
         if (it != ctx->pending_args.end()) {
             try {
-                auto args = neograph::json::parse(it->second);
+                auto args = agentxx::util::Json::parse(it->second);
                 if (args.value("mode", std::string{}) == "read") {
                     // read 结果即保存的规划 JSON (见 agent 侧 execute)
                     const auto result = d.value("result", std::string{});
                     if (!result.empty()) {
                         try {
-                            pushToolDecor(*ctx, callId, neograph::json::parse(result));
+                            pushToolDecor(*ctx, callId, agentxx::util::Json::parse(result));
                         } catch (...) {
                             // 非法结果保持占位装饰
                         }
@@ -1013,7 +1013,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int32_t AGENTXX_PLUGIN_CALL
             //   owner_id 由宿主组装 (section_id / tool_call_id), 此处无需逐个 bind
             // - ui 缺失或 bind 为 NULL (CLI/老宿主) 时静默降级: 内容仍推送, 按钮不可点
             if (ctx->ui && ctx->ui->bind_action_handler) {
-                ctx->actions.on(kActionOpenGraph, [ctxPtr = ctx.get()](const neograph::json&) {
+                ctx->actions.on(kActionOpenGraph, [ctxPtr = ctx.get()](const agentxx::util::Json&) {
                     auto* c = ctxPtr;
                     if (!c || !c->host || !c->ui || !c->ui->open_overlay
                         || c->last_plan_json.empty()) {
@@ -1021,7 +1021,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int32_t AGENTXX_PLUGIN_CALL
                     }
                     std::string roadmap;
                     try {
-                        roadmap = neograph::json::parse(c->last_plan_json)
+                        roadmap = agentxx::util::Json::parse(c->last_plan_json)
                                       .value("roadmap", std::string{});
                     } catch (...) {
                         return;

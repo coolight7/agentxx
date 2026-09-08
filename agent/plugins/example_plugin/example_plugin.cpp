@@ -158,7 +158,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                 ) -> agentxx::plugin::Task<std::string> {
                     int ms = 200;
                     try {
-                        auto j = neograph::json::parse(args);
+                        auto j = agentxx::util::Json::parse(args);
                         if (j.contains("durationMs") && j["durationMs"].is_number()) {
                             ms = j["durationMs"].get<int>();
                         }

@@ -130,12 +130,12 @@ asio::awaitable<neograph::ChatCompletion> ModelCallWrapNode::onReceiveToken(
             }
 
             if (nullptr != callback) {
-                neograph::json json;
-                neograph::to_json(json, token);
+                neograph::json neoJson;
+                neograph::to_json(neoJson, token);
                 (*callback)(neograph::graph::GraphEvent{
                     neograph::graph::GraphEvent::Type::LLM_TOKEN,
                     nodeName,
-                    json,
+                    neoJson,
                 });
             }
         };
@@ -265,7 +265,7 @@ void ModelCallWrapNode::repairMessages(neograph::graph::NodeInput& in) {
                 .content = std::string{defaultContinueTip},
                 .flags   = neograph::MessageFlag::AutoInserted,
             };
-            auto userMsgJson = neograph::json{};
+            neograph::json userMsgJson;
             neograph::to_json(userMsgJson, userMsg);
             in.state.write("messages", neograph::json::array({userMsgJson}));
             // 无需通知 [CHANNEL_WRITE]，避免在 UI 层插入该消息
@@ -560,7 +560,7 @@ void ModelCallWrapNode::repairMessages(neograph::graph::NodeInput& in) {
         }
 
         auto checkInfo
-            = agentCtxPtr->middlewareHandleContext->getGraphDataItemValue<neograph::json>(
+            = agentCtxPtr->middlewareHandleContext->getGraphDataItemValue<agentxx::util::Json>(
                 in.ctx.thread_id,
                 agentxx::middleware::MiddlewareContext::graphDataKey_messageCheckInfo
             );
@@ -621,15 +621,15 @@ void ModelCallWrapNode::repairMessages(neograph::graph::NodeInput& in) {
                 agentxx::middleware::BaseMiddlewareHandleInterface::printMessage(msg);
             }
         }
-        agentCtxPtr->middlewareHandleContext->setGraphDataItemValue<neograph::json>(
+        agentCtxPtr->middlewareHandleContext->setGraphDataItemValue<agentxx::util::Json>(
             in.ctx.thread_id,
             agentxx::middleware::MiddlewareContext::graphDataKey_messageCheckInfo,
             std::move(checkInfo)
         );
 
         if (haveChange) {
-            // 覆盖回 state
-            auto msglist = neograph::json::array();
+            // 覆盖回 state (图 state 为 neograph::json 方言)
+            neograph::json msglist = neograph::json::array();
             neograph::to_json(msglist, msgs);
             in.state.overwrite("messages", std::move(msglist));
         }
@@ -644,8 +644,8 @@ asio::awaitable<void> ModelCallWrapNode::baseRun(
     auto agentCtxPtr = agentContext.lock();
 
     {
-        // 添加 system Msg
-        auto msglist       = in.state.get("messages");
+        // 添加 system Msg (图 state 为 neograph::json 方言)
+        neograph::json msglist = in.state.get("messages");
         bool haveSystemMsg = false;
         auto newSystemMsg  = neograph::ChatMessage{.role = "system"};
         if (msglist.is_array() && false == msglist.empty()) {
@@ -718,7 +718,7 @@ asio::awaitable<void> ModelCallWrapNode::baseRun(
             msglist[0] = std::move(sysMsgJson);
         } else {
             // 缺少 system msg，在开头插入
-            auto newlist = neograph::json::array();
+            neograph::json newlist = neograph::json::array();
             newlist.push_back(std::move(sysMsgJson));
             for (auto item : msglist.items()) {
                 newlist.push_back(std::move(item.second));
@@ -746,9 +746,9 @@ asio::awaitable<void> ModelCallWrapNode::baseRun(
             .reasoning_content = thinking,
             .flags             = neograph::MessageFlag::AutoInserted,
         };
-        auto msgJson = neograph::json{};
+        neograph::json msgJson;
         neograph::to_json(msgJson, msg);
-        auto appendMsgJsons = neograph::json::array({msgJson});
+        neograph::json appendMsgJsons = neograph::json::array({msgJson});
         in.state.write("messages", appendMsgJsons);
         if (nullptr != in.stream_cb) {
             (*in.stream_cb)(neograph::graph::GraphEvent{
@@ -873,7 +873,7 @@ asio::awaitable<void> ModelCallWrapNode::baseRun(
         if (nullptr != in.stream_cb) {
             // 实际等待时长: retry*3 秒 + 限速附加延时 (appendDelay 单位: 秒)
             const auto delaySec = retry * 3 + appendDelay;
-            auto       tipJson  = neograph::json{
+            neograph::json tipJson  = neograph::json{
                        {"channel", "message_tip"},
                        {"value",
                         neograph::json{

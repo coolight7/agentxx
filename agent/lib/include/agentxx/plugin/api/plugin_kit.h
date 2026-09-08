@@ -17,7 +17,8 @@
 #include "agentxx/plugin/api/plugin_api.h"
 #include "fmt/format.h"
 #include "fmt/ranges.h"
-#include "neograph/json.h"
+#include "agentxx/util/json.h"
+#include "agentxx/util/json_view.h"
 #include <type_traits>
 
 #include <algorithm>
@@ -43,6 +44,10 @@
 
 namespace agentxx {
 namespace plugin {
+
+/// 插件作用域 JSON 别名 (自主 Json 体系, 不再依赖 neograph)
+using Json = agentxx::util::Json;
+using JsonView = agentxx::util::JsonView;
 
 /* ==================== C++ 字符串/接口便捷工具 (非 ABI) ====================
  *
@@ -840,7 +845,7 @@ public:
         bool                       required = false,
         std::optional<std::string> defVal   = std::nullopt
     ) {
-        neograph::json prop;
+        agentxx::util::Json prop;
         prop["type"]        = "string";
         prop["description"] = toolPromptArgDesc(prompt_, name, desc);
         if (defVal.has_value()) {
@@ -859,7 +864,7 @@ public:
         bool                   required = false,
         std::optional<int64_t> defVal   = std::nullopt
     ) {
-        neograph::json prop;
+        agentxx::util::Json prop;
         prop["type"]        = "integer";
         prop["description"] = toolPromptArgDesc(prompt_, name, desc);
         if (defVal.has_value()) {
@@ -878,7 +883,7 @@ public:
         bool                  required = false,
         std::optional<double> defVal   = std::nullopt
     ) {
-        neograph::json prop;
+        agentxx::util::Json prop;
         prop["type"]        = "number";
         prop["description"] = toolPromptArgDesc(prompt_, name, desc);
         if (defVal.has_value()) {
@@ -897,7 +902,7 @@ public:
         bool                required = false,
         std::optional<bool> defVal   = std::nullopt
     ) {
-        neograph::json prop;
+        agentxx::util::Json prop;
         prop["type"]        = "boolean";
         prop["description"] = toolPromptArgDesc(prompt_, name, desc);
         if (defVal.has_value()) {
@@ -921,10 +926,10 @@ public:
         std::string_view itemType = "string",
         bool             required = false
     ) {
-        neograph::json prop;
+        agentxx::util::Json prop;
         prop["type"]        = "array";
         prop["description"] = toolPromptArgDesc(prompt_, name, desc);
-        prop["items"]       = neograph::json{
+        prop["items"]       = agentxx::util::Json{
                   {"type", std::string(itemType)}
         };
         properties_[std::string(name)] = std::move(prop);
@@ -941,7 +946,7 @@ public:
         bool                       required = false,
         std::optional<std::string> defVal   = std::nullopt
     ) {
-        neograph::json prop;
+        agentxx::util::Json prop;
         prop["type"]        = "string";
         prop["description"] = toolPromptArgDesc(prompt_, name, desc);
         prop["enum"]        = options;
@@ -956,13 +961,13 @@ public:
     }
 
     std::string build() const {
-        neograph::json schema;
+        agentxx::util::Json schema;
         schema["type"]       = "object";
         schema["properties"] = properties_;
         if (!required_.empty()) {
             schema["required"] = required_;
         } else {
-            schema["required"] = neograph::json::array();
+            schema["required"] = agentxx::util::Json::array();
         }
         return schema.dump();
     }
@@ -970,7 +975,7 @@ public:
 private:
 
     ToolPromptText           prompt_;
-    neograph::json           properties_ = neograph::json::object();
+    agentxx::util::Json           properties_ = agentxx::util::Json::object();
     std::vector<std::string> required_;
 };
 
@@ -978,7 +983,7 @@ private:
 
 namespace detail {
 template<typename T>
-inline T jsonGet(const neograph::json& j) {
+inline T jsonGet(const agentxx::util::Json& j) {
     if constexpr (std::is_same_v<T, std::string>) {
         return j.get<std::string>();
     } else if constexpr (std::is_same_v<T, bool>) {
@@ -1001,8 +1006,8 @@ inline T jsonGet(const neograph::json& j) {
         return j.get<unsigned>();
     } else if constexpr (std::is_same_v<T, std::vector<std::string>>) {
         return j.get<std::vector<std::string>>();
-    } else if constexpr (std::is_same_v<T, neograph::json>) {
-        return j.get<neograph::json>();
+    } else if constexpr (std::is_same_v<T, agentxx::util::Json>) {
+        return j.get<agentxx::util::Json>();
     } else {
         return j.get<T>();
     }
@@ -1015,16 +1020,16 @@ public:
     explicit ArgReader(std::string_view jsonStr) {
         if (!jsonStr.empty()) {
             try {
-                root_ = neograph::json::parse(jsonStr);
+                root_ = agentxx::util::Json::parse(jsonStr);
                 if (!root_.is_object()) {
-                    root_ = neograph::json::object();
+                    root_ = agentxx::util::Json::object();
                 }
             } catch (...) {
                 hasParseError_ = true;
-                root_          = neograph::json::object();
+                root_          = agentxx::util::Json::object();
             }
         } else {
-            root_ = neograph::json::object();
+            root_ = agentxx::util::Json::object();
         }
     }
 
@@ -1037,17 +1042,16 @@ public:
         if (hasParseError_ || !root_.is_object()) {
             return std::nullopt;
         }
-        std::string k(key);
-        if (!root_.contains(k)) {
+        if (!root_.contains(key)) {
             return std::nullopt;
         }
-        auto val = root_[k];
+        auto val = root_[key];
         if (val.is_null()) {
             return std::nullopt;
         }
 
         try {
-            if constexpr (std::is_same_v<T, neograph::json>) {
+            if constexpr (std::is_same_v<T, agentxx::util::Json>) {
                 return val;
             } else if constexpr (std::is_same_v<T, std::string>) {
                 if (val.is_string()) {
@@ -1141,13 +1145,13 @@ public:
         return fmt::format("Argument error: {}", fmt::join(errors_, "; "));
     }
 
-    const neograph::json& raw() const noexcept {
+    const agentxx::util::Json& raw() const noexcept {
         return root_;
     }
 
 private:
 
-    neograph::json           root_          = neograph::json::object();
+    agentxx::util::Json           root_          = agentxx::util::Json::object();
     bool                     hasParseError_ = false;
     std::vector<std::string> errors_;
 };
@@ -1413,7 +1417,7 @@ public:
                         return;
                     }
                     try {
-                        auto j = neograph::json::parse(
+                        auto j = agentxx::util::Json::parse(
                             std::string_view{ev->data, static_cast<size_t>(ev->size)}
                         );
                         std::string sid = j.value("sessionId", "");
@@ -1478,7 +1482,7 @@ public:
         std::string jsonStr(s.data, static_cast<size_t>(s.size));
         PluginString::free(host, &s);
         try {
-            auto j = neograph::json::parse(jsonStr);
+            auto j = agentxx::util::Json::parse(jsonStr);
             if (j.contains("depict") && j["depict"].is_string()) {
                 res.depict = j["depict"].get<std::string>();
             }
@@ -3083,7 +3087,7 @@ struct ToolRenderInput {
 struct ToolRenderOutput {
     std::string    displayName;
     std::string    summary;
-    neograph::json items = neograph::json::array();
+    agentxx::util::Json items = agentxx::util::Json::array();
 };
 
 /// 注册基于回调函数的工具特化渲染器 (<key, 渲染func>)
@@ -3165,7 +3169,7 @@ inline int32_t registerToolTemplate(
     if (!host || !ui || !ui->register_tool_renderer) {
         return -1;
     }
-    neograph::json j;
+    agentxx::util::Json j;
     j["displayName"]    = std::string(displayName);
     j["summaryKey"]     = std::string(summaryKey);
     std::string jsonStr = j.dump();
@@ -3194,7 +3198,7 @@ namespace kit {
 class ActionController {
 public:
 
-    using Handler = std::function<void(const neograph::json& args)>;
+    using Handler = std::function<void(const agentxx::util::Json& args)>;
 
     /// 注册动作处理器 (IO 线程; 同 actionId 覆盖)
     void on(std::string actionId, Handler h) {
@@ -3208,18 +3212,18 @@ public:
 
     /// 生成 button JSON (action_id 自增 act_N; args 缺省 {}; role 缺省 normal)
     /// - onClick 为空时仍生成可点按钮 (固定 id 由调用方另行 on() 绑定, 如 planning 常量)
-    neograph::json makeButton(
+    agentxx::util::Json makeButton(
         std::string    label,
         Handler        onClick = nullptr,
         std::string    prefix  = "",
         std::string    role    = "normal",
-        neograph::json args    = neograph::json::object()
+        agentxx::util::Json args    = agentxx::util::Json::object()
     ) {
         const std::string id = "act_" + std::to_string(++counter_);
         if (onClick) {
             handlers_[id] = std::move(onClick);
         }
-        neograph::json btn = neograph::json::object();
+        agentxx::util::Json btn = agentxx::util::Json::object();
         btn["kind"]        = "button";
         btn["label"]       = std::move(label);
         if (!prefix.empty()) {
@@ -3246,10 +3250,10 @@ public:
             if (it == self->handlers_.end() || !it->second) {
                 return;
             }
-            neograph::json args = neograph::json::object();
+            agentxx::util::Json args = agentxx::util::Json::object();
             if (ctx->action_args.data && ctx->action_args.size > 0) {
                 try {
-                    auto parsed = neograph::json::parse(std::string_view{
+                    auto parsed = agentxx::util::Json::parse(std::string_view{
                         ctx->action_args.data,
                         static_cast<size_t>(ctx->action_args.size)
                     });

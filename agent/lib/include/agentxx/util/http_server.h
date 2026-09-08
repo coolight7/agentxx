@@ -22,8 +22,7 @@
 #include <functional>
 #include <list>
 #include <memory>
-#include <neograph/api.h>
-#include <neograph/json.h>
+#include "agentxx/util/asio_error.h"
 #include <optional>
 #include <string>
 #include <thread>

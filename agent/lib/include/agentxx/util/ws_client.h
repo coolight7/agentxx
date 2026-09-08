@@ -16,7 +16,7 @@
 #include <chrono>
 #include <expected>
 #include <memory>
-#include <neograph/api.h>
+#include "agentxx/util/asio_error.h"
 #include <string>
 #include <string_view>
 #include <vector>

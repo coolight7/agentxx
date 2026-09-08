@@ -74,7 +74,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_agent_destroy(void* plugin_
 
 ## 5. Tool Function Reuse (`agentxx_util`)
 
-Built-in plugins can reuse all core utility functions (string manipulation, encoding detection, UTF-8 conversion, path normalization, Base64, HTTP, SQLite, regex, logging, etc.) via the standalone static library `agentxx_util`:
+Built-in plugins can reuse all core utility functions (string manipulation, encoding detection, UTF-8 conversion, path normalization, Base64, HTTP, SQLite, regex, logging, JSON, etc.) via the standalone static library `agentxx_util`:
 
 ```cmake
 find_package(agentxx_util REQUIRED)
@@ -84,9 +84,12 @@ target_link_libraries(${PLUGIN_NAME} PRIVATE agentxx_util)
 ```cpp
 #include "agentxx/util/string_util.h"
 auto b64 = agentxx::util::base64Encode(data);
+#include "agentxx/util/json.h"
+#include "agentxx/util/json_view.h"
+// Business/plugin code uniformly uses agentxx::util::Json/JsonView (simdjson-backed); hot read-only paths route via JsonView::parse first, then to_json() on hit
 ```
 
-- `agentxx_util` is compiled from all source files in `agent/lib/src/util/`. Both `libagentxx` and individual plugins statically link their own copy; symbols are hidden via export visibility control without conflict. Dependencies are transitively propagated as `PUBLIC` (fmt, sqlite3, uchardet, iconv + neograph, yyjson, OpenSSL, hyperscan, uring).
+- `agentxx_util` is compiled from all source files in `agent/lib/src/util/` (including `json.cpp`/`json_view.cpp`, simdjson-backed `agentxx::util::Json`/`JsonView`). Both `libagentxx` and individual plugins statically link their own copy; symbols are hidden via export visibility control without conflict. Dependencies are transitively propagated as `PUBLIC` (fmt, sqlite3, uchardet, iconv + simdjson, OpenSSL, hyperscan, uring; neograph/yyjson fully removed since JSON autonomization).
 - Intended as a convenience library for built-in plugins (built within the same superbuild with full dependencies). Third-party plugins only need the pure C header `plugin_api.h` / SDK `plugin_kit.h` without linking against host libraries.
 - Unreferenced modules are automatically pruned based on object file extraction (9 built-in plugins have `DT_NEEDED` pointing only to system libraries).
 

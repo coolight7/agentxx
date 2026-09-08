@@ -48,7 +48,7 @@ public:
     // ---- 状态栏项 ----
     void onStatusItemRegistered(
         const std::string& id,
-        const neograph::json& /*props*/,
+        const agentxx::util::Json& /*props*/,
         int /*align*/,
         int /*order*/
     ) override {
@@ -58,7 +58,7 @@ public:
         }
     }
 
-    void onStatusItemUpdated(const std::string& /*id*/, const neograph::json& /*props*/) override {
+    void onStatusItemUpdated(const std::string& /*id*/, const agentxx::util::Json& /*props*/) override {
         if (auto tui = tui_.lock()) {
             tui->requestRedraw();
         }
@@ -71,7 +71,7 @@ public:
     }
 
     // ---- 侧边栏面板 ----
-    void onPanelRegistered(const std::string& id, const neograph::json& props) override {
+    void onPanelRegistered(const std::string& id, const agentxx::util::Json& props) override {
         auto tui = tui_.lock();
         if (!tui) {
             return;
@@ -84,7 +84,7 @@ public:
         });
     }
 
-    void onPanelUpdated(const std::string& /*id*/, const neograph::json& /*items*/) override {
+    void onPanelUpdated(const std::string& /*id*/, const agentxx::util::Json& /*items*/) override {
         if (auto tui = tui_.lock()) {
             tui->requestRedraw();
         }
@@ -103,7 +103,7 @@ public:
     // ---- Info 栏段落 (渲染进内置 Info tab; 每帧从注册表快照读取) ----
     void onInfoSectionRegistered(
         const std::string& /*id*/,
-        const neograph::json& /*props*/
+        const agentxx::util::Json& /*props*/
     ) override {
         // 触发重绘即可, Info tab 渲染时从注册表快照读取段落
         if (auto tui = tui_.lock()) {
@@ -113,7 +113,7 @@ public:
 
     void onInfoSectionUpdated(
         const std::string& /*id*/,
-        const neograph::json& /*items*/
+        const agentxx::util::Json& /*items*/
     ) override {
         if (auto tui = tui_.lock()) {
             tui->requestRedraw();

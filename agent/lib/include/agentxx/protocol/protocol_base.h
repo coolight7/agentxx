@@ -2,7 +2,7 @@
 // 协议公共基类/工具, 收敛 A2A/ACP/MCP 重复的 JSON-RPC/路由/Http 逻辑
 #include "agentxx/util/http_server.h"
 #include "agentxx/util/log.h"
-#include <neograph/json.h>
+#include "agentxx/util/json.h"
 
 namespace agentxx {
 namespace server {
@@ -14,9 +14,9 @@ inline constexpr int kJsonRpcMethodNotFound = -32601;
 inline constexpr int kJsonRpcInvalidParams  = -32602;
 inline constexpr int kJsonRpcInternalError  = -32603;
 
-inline neograph::json
-    jsonRpcError(int code, std::string_view msg, std::optional<neograph::json> data = {}) {
-    neograph::json err;
+inline agentxx::util::Json
+    jsonRpcError(int code, std::string_view msg, std::optional<agentxx::util::Json> data = {}) {
+    agentxx::util::Json err;
     err["code"]    = code;
     err["message"] = std::string(msg);
     if (data) {
@@ -25,16 +25,16 @@ inline neograph::json
     return err;
 }
 
-inline neograph::json jsonRpcResponse(neograph::json id, neograph::json result) {
-    neograph::json r;
+inline agentxx::util::Json jsonRpcResponse(agentxx::util::Json id, agentxx::util::Json result) {
+    agentxx::util::Json r;
     r["jsonrpc"] = "2.0";
     r["id"]      = std::move(id);
     r["result"]  = std::move(result);
     return r;
 }
 
-inline neograph::json jsonRpcErrorResponse(neograph::json id, neograph::json error) {
-    neograph::json r;
+inline agentxx::util::Json jsonRpcErrorResponse(agentxx::util::Json id, agentxx::util::Json error) {
+    agentxx::util::Json r;
     r["jsonrpc"] = "2.0";
     r["id"]      = std::move(id);
     r["error"]   = std::move(error);
@@ -44,7 +44,7 @@ inline neograph::json jsonRpcErrorResponse(neograph::json id, neograph::json err
 inline void writeJsonResponse(
     util::HttpServer::Response& resp,
     boost::beast::http::status  status,
-    const neograph::json&       body
+    const agentxx::util::Json&       body
 ) {
     resp.result(status);
     resp.set(boost::beast::http::field::content_type, "application/json");

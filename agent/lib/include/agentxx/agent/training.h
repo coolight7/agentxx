@@ -4,7 +4,7 @@
 #include "agentxx/agent/config.h"
 #include "agentxx/agent/config_static.h"
 #include "neograph/graph/cancel.h"
-#include "neograph/json.h"
+#include "agentxx/util/json.h"
 #include <atomic>
 #include <functional>
 #include <map>
@@ -24,13 +24,13 @@ struct TrainingTestCase {
     std::string input;
     std::string expectedOutput; // 描述预期的结果、评分标准等（供评分器参考）
     std::string equalOutput;    // 若不为空，则判断 agent 输出是否与此完全相等
-    neograph::json extra;
+    agentxx::util::Json extra;
 };
 
 /// 从 JSON 数组解析测试用例
 /// - 空名称自动生成 `case_N`；重名自动追加 `#N` 后缀，
 ///   保证 perTestCaseScores 的键唯一不互相覆盖
-std::vector<TrainingTestCase> testCasesFromJson(const neograph::json& j);
+std::vector<TrainingTestCase> testCasesFromJson(const agentxx::util::Json& j);
 
 /// 从 JSON 文件中加载测试用例 (实现见 [training.cpp](/agent/lib/src/agent/training.cpp))
 std::vector<TrainingTestCase> loadTestCasesFromFile(std::string_view filePath);
@@ -45,14 +45,14 @@ std::string stripMarkdownCodeBlock(std::string_view content);
 
 /// 从 LLM 响应中解析 JSON：先剥离 markdown 代码块，失败则尝试提取首个 {...}
 /// 子串 (实现见 [training.cpp](/agent/lib/src/agent/training.cpp))
-neograph::json parseJsonFromResponse(std::string_view content);
+agentxx::util::Json parseJsonFromResponse(std::string_view content);
 
 /// 规范化优化器/变异器输出的 prompt patch：
 /// - 剔除空串字段：optimizerPrompt/mutationPrompt 均约定 ""=保持不变，
 ///   而 AgentPrompt::mergeFromJson 会用 JSON 中存在的字符串字段（含空串）
 ///   覆盖现值，必须先经此过滤，否则"想保留字段"会被误清空
 /// - 剔除非 prompt 字段（analysis/strategy 等）与 toolPrompt 中的空 depict/args
-neograph::json normalizePromptPatch(const neograph::json& parsed);
+agentxx::util::Json normalizePromptPatch(const agentxx::util::Json& parsed);
 
 /// 对字符串进行 UTF-8 安全的字符级随机变异：
 /// 以 mutationRate 概率对每个码点执行 插入(ASCII)/替换(ASCII)/删除，
@@ -66,14 +66,14 @@ struct TrainingScore {
     std::string    feedback;
     bool           passed    = false;
     int            iteration = 0;
-    neograph::json extra;
+    agentxx::util::Json extra;
 };
 
 /// 优化器/变异器输出的 prompt 修改 patch
 /// - patch 是一个 JSON，结构同 AgentPrompt::toJson，仅包含要修改的字段
 /// - 空 patch 表示无修改
 struct OptimizedPrompts {
-    neograph::json patch;
+    agentxx::util::Json patch;
     std::string    analysis;
 };
 
@@ -92,7 +92,7 @@ struct PromptVariant {
     int                           generation = 0;
     std::string                   parentId;
     std::map<std::string, double> perTestCaseScores;
-    neograph::json                extra;
+    agentxx::util::Json                extra;
 
     double averageScore() const;
 
@@ -249,9 +249,9 @@ protected:
 
     // ---- 文件 I/O ----
 
-    neograph::json promptVariantToJson(const PromptVariant& v) const;
+    agentxx::util::Json promptVariantToJson(const PromptVariant& v) const;
 
-    PromptVariant promptVariantFromJson(const neograph::json& j) const;
+    PromptVariant promptVariantFromJson(const agentxx::util::Json& j) const;
 
     /// 轮转备份保存文件：file -> file.1 -> file.2 -> ... -> file.N
     void rotateSaveFile(std::string_view path, int keepCount);

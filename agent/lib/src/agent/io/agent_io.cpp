@@ -208,7 +208,7 @@ void AgentIOBase::registerOnBus(std::shared_ptr<agentxx::event::EventBus> sessio
             // 透传权限上下文给客户端 (记住权限选择时使用):
             // - category: 权限分类 ("filesystem_read" / "filesystem_write")
             // - target:   受约束目标 (已标准化的绝对路径, 与中间件规则匹配口径一致)
-            arg.arg = neograph::json{
+            arg.arg = agentxx::util::Json{
                 {"category", req.category},
                 {"target",   req.target  },
             };

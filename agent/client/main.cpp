@@ -571,7 +571,7 @@ Options:
             *agent->ioCtx,
             [agent]() -> asio::awaitable<void> {
                 co_await agent->init();
-                agentxx::server::StdioAcpServer server(agent, neograph::json::object());
+                agentxx::server::StdioAcpServer server(agent, agentxx::util::Json::object());
                 server.run();
                 co_return;
             },

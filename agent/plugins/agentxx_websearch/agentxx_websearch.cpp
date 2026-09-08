@@ -50,7 +50,7 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
                 std::string cfgJson(json.data, static_cast<size_t>(json.size));
                 PluginString::free(ctx.host, &json);
                 try {
-                    auto cfg                  = neograph::json::parse(cfgJson);
+                    auto cfg                  = agentxx::util::Json::parse(cfgJson);
                     ctx.convert_html2markdown = cfg.value("websearchConvertHtml2markdown", true);
                     ctx.search_api_url        = cfg.value("websearchApiUrl", std::string{});
                     if (cfg.contains("websearchModel") && cfg["websearchModel"].is_object()) {

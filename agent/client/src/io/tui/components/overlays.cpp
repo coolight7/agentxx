@@ -1005,13 +1005,13 @@ bool PendingInputsOverlay::handleMouse(const Mouse& mouse) {
 namespace {
 
 /// 从消息 JSON 提取 role 字符串 (缺失时返回空串)
-std::string ctxMsgRole(const neograph::json& m) {
+std::string ctxMsgRole(const agentxx::util::Json& m) {
     return m.value("role", std::string{});
 }
 
 /// 从消息 JSON 提取 tool_calls 名称列表 (缺失/非数组返回空)
 /// 用于折叠头预览与展开体摘要行
-std::vector<std::string> ctxMsgToolNames(const neograph::json& m) {
+std::vector<std::string> ctxMsgToolNames(const agentxx::util::Json& m) {
     std::vector<std::string> names;
     if (!m.contains("tool_calls")) {
         return names;
@@ -1094,7 +1094,7 @@ std::vector<ftxui::Box> ContextOverlay::headerBoxes() const {
 }
 
 ftxui::Element ContextOverlay::buildMessageHeader(
-    const neograph::json& m,
+    const agentxx::util::Json& m,
     bool                  expanded,
     const ftxui::Color&   roleColor
 ) {
@@ -1134,7 +1134,7 @@ ftxui::Element ContextOverlay::buildMessageHeader(
     return head;
 }
 
-ftxui::Element ContextOverlay::buildMessageBody(const neograph::json& m) {
+ftxui::Element ContextOverlay::buildMessageBody(const agentxx::util::Json& m) {
     const auto& theme = *ctx_.theme;
 
     // 摘要行: 完整字段清单 (role + content 长度 + tool_calls 数 + 其余字段),
@@ -1736,7 +1736,7 @@ std::shared_ptr<ftxui::ComponentBase> createUniversalOverlay(
             bool markdown = true;
             try {
                 if (!extraJson.empty() && extraJson != "{}") {
-                    auto extra = neograph::json::parse(extraJson);
+                    auto extra = agentxx::util::Json::parse(extraJson);
                     if (extra.is_object() && extra.contains("markdown")
                         && extra["markdown"].is_boolean()) {
                         markdown = extra["markdown"].get<bool>();
@@ -1756,7 +1756,7 @@ std::shared_ptr<ftxui::ComponentBase> createUniversalOverlay(
         case AGENTXX_OVERLAY_DIFF: {
             std::string path, oldStr, newStr;
             try {
-                auto j = neograph::json::parse(payload.empty() ? "{}" : payload);
+                auto j = agentxx::util::Json::parse(payload.empty() ? "{}" : payload);
                 path   = j.value("path", std::string{});
                 oldStr = j.value("old_str", std::string{});
                 newStr = j.value("new_str", std::string{});
@@ -1774,9 +1774,9 @@ std::shared_ptr<ftxui::ComponentBase> createUniversalOverlay(
             return m;
         }
         case AGENTXX_OVERLAY_CUSTOM: {
-            neograph::json items = neograph::json::array();
+            agentxx::util::Json items = agentxx::util::Json::array();
             try {
-                auto j = neograph::json::parse(payload.empty() ? "{}" : payload);
+                auto j = agentxx::util::Json::parse(payload.empty() ? "{}" : payload);
                 if (j.is_object() && j.contains("items") && j["items"].is_array()) {
                     items = j["items"];
                 } else if (j.is_array()) {
@@ -1854,7 +1854,7 @@ bool DiffOverlay::OnEvent(Event event) {
 CustomOverlay::CustomOverlay(
     TUICtx&        ctx,
     std::string    title,
-    neograph::json items,
+    agentxx::util::Json items,
     std::string    ownerPlugin
 ) :
     ctx_(ctx),

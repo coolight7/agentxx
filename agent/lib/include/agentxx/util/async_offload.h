@@ -22,9 +22,9 @@
 /// 用法示例:
 /// ```c++
 ///   auto& pool = agentCtx->threadPool;
-///   auto result = co_await agentxx::util::offloadCancellableAsync<neograph::json>(
+///   auto result = co_await agentxx::util::offloadCancellableAsync<agentxx::util::Json>(
 ///       *pool,
-///       [](std::atomic<bool>& cancel_flag) -> neograph::json {
+///       [](std::atomic<bool>& cancel_flag) -> agentxx::util::Json {
 ///           for (auto& entry : std::filesystem::directory_iterator(path)) {
 ///               if (cancel_flag.load(std::memory_order_acquire)) {
 ///                   throw neograph::graph::CancelledException("listing cancelled");

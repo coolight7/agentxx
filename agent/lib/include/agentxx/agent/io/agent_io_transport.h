@@ -2,7 +2,8 @@
 
 #include "agentxx/agent/conversation_types.h"
 #include "asio/awaitable.hpp"
-#include "neograph/json.h"
+#include "agentxx/util/asio_error.h"
+#include "agentxx/util/json.h"
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -78,7 +79,7 @@ struct WireInterruptRequest {
 
 struct WireInterruptResponse {
     int64_t        id = 0;
-    neograph::json result;
+    agentxx::util::Json result;
 };
 
 /// 服务端通知中断已过期 (超时/会话取消) (Server -> Client)
@@ -156,7 +157,7 @@ struct WireGetContext {
 
 /// 服务端 LLM 上下文消息响应 (Server -> Client)
 struct WireContextMessages {
-    neograph::json messages;
+    agentxx::util::Json messages;
 };
 
 /// 客户端请求压缩当前会话上下文 (Client -> Server)

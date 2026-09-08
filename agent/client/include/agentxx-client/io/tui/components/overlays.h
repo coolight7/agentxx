@@ -10,7 +10,7 @@
 #include "ftxui/screen/box.hpp"
 #include <functional>
 #include <markdown/state_diagram.hpp>
-#include <neograph/json.h>
+#include "agentxx/util/json.h"
 #include <set>
 #include <string>
 #include <vector>
@@ -274,10 +274,10 @@ private:
 
     /// 构建单条消息的折叠头 (含 +/- 标记与单行预览)
     ftxui::Element
-        buildMessageHeader(const neograph::json& m, bool expanded, const ftxui::Color& roleColor);
+        buildMessageHeader(const agentxx::util::Json& m, bool expanded, const ftxui::Color& roleColor);
 
     /// 构建单条消息的展开体: 完整原始 JSON (dump(2) 美化多行)
-    ftxui::Element buildMessageBody(const neograph::json& m);
+    ftxui::Element buildMessageBody(const agentxx::util::Json& m);
 
     /// 鼠标左键释放时切换命中的消息行折叠状态
     bool handleHeaderClick(const ftxui::Mouse& mouse);
@@ -493,7 +493,7 @@ public:
     explicit CustomOverlay(
         TUICtx&        ctx,
         std::string    title,
-        neograph::json items,
+        agentxx::util::Json items,
         std::string    ownerPlugin
     );
 
@@ -508,7 +508,7 @@ private:
 
     TUICtx&                     ctx_;
     std::string                 title_;
-    neograph::json              items_;
+    agentxx::util::Json              items_;
     std::string                 ownerPlugin_;
     std::shared_ptr<Scrollable> scrollable_;
     std::function<void()>       onClose_;

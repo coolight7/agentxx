@@ -77,7 +77,7 @@ size_t PromptVariant::promptHash() const {
 
 // ======================== 测试用例加载 ========================
 
-std::vector<TrainingTestCase> testCasesFromJson(const neograph::json& j) {
+std::vector<TrainingTestCase> testCasesFromJson(const agentxx::util::Json& j) {
     std::vector<TrainingTestCase> cases;
     if (!j.is_array()) {
         XX_LOGE("[Training] Test case JSON is not an array");
@@ -93,7 +93,7 @@ std::vector<TrainingTestCase> testCasesFromJson(const neograph::json& j) {
         tc.input          = item.value("input", "");
         tc.expectedOutput = item.value("expectedOutput", "");
         tc.equalOutput    = item.value("equalOutput", "");
-        tc.extra          = item.value("extra", neograph::json::object());
+        tc.extra          = item.value("extra", agentxx::util::Json::object());
         if (tc.name.empty()) {
             tc.name = fmt::format("case_{}", ++autoIdx);
         }
@@ -123,7 +123,7 @@ std::vector<TrainingTestCase> loadTestCasesFromFile(std::string_view filePath) {
             );
             ifs.close();
 
-            auto j = neograph::json::parse(content);
+            auto j = agentxx::util::Json::parse(content);
             cases  = testCasesFromJson(j);
             XX_LOGD("[Training] Loaded {} test cases from {}", cases.size(), filePath);
             return true;
@@ -199,17 +199,17 @@ std::string stripMarkdownCodeBlock(std::string_view content) {
     return result;
 }
 
-neograph::json parseJsonFromResponse(std::string_view content) {
+agentxx::util::Json parseJsonFromResponse(std::string_view content) {
     auto stripped = stripMarkdownCodeBlock(content);
-    return agentxx::util::catchError<neograph::json>(
-        [&stripped]() -> neograph::json {
-            return neograph::json::parse(stripped);
+    return agentxx::util::catchError<agentxx::util::Json>(
+        [&stripped]() -> agentxx::util::Json {
+            return agentxx::util::Json::parse(stripped);
         },
-        [&stripped](std::string errmsg) -> neograph::json {
+        [&stripped](std::string errmsg) -> agentxx::util::Json {
             auto first = stripped.find('{');
             auto last  = stripped.rfind('}');
             if (first != std::string::npos && last != std::string::npos && last > first) {
-                return neograph::json::parse(stripped.substr(first, last - first + 1));
+                return agentxx::util::Json::parse(stripped.substr(first, last - first + 1));
             }
             // 两种解析均失败: 以原始错误信息抛出, 由调用方统一处理
             throw std::runtime_error(std::move(errmsg));
@@ -217,8 +217,8 @@ neograph::json parseJsonFromResponse(std::string_view content) {
     );
 }
 
-neograph::json normalizePromptPatch(const neograph::json& parsed) {
-    neograph::json patch = neograph::json::object();
+agentxx::util::Json normalizePromptPatch(const agentxx::util::Json& parsed) {
+    agentxx::util::Json patch = agentxx::util::Json::object();
 
     // 顶层字符串字段: 空串视为"保持不变", 直接剔除 (约定见 optimizer/mutation prompt)
     auto addStringIfNonEmpty = [&](const char* key) {
@@ -232,7 +232,7 @@ neograph::json normalizePromptPatch(const neograph::json& parsed) {
     addStringIfNonEmpty("systemPrompt");
     // 通用附加系统提示词：按 key 逐项处理，空串视为保持不变
     if (parsed.contains("appendSystemPrompts") && parsed["appendSystemPrompts"].is_object()) {
-        neograph::json append = neograph::json::object();
+        agentxx::util::Json append = agentxx::util::Json::object();
         for (const auto& item : parsed["appendSystemPrompts"].items()) {
             if (item.second.is_string()) {
                 auto s = item.second.get<std::string>();
@@ -248,12 +248,12 @@ neograph::json normalizePromptPatch(const neograph::json& parsed) {
 
     // toolPrompt: 同样剔除空 depict / 空 args 值; 整个工具无有效内容时不加入 patch
     if (parsed.contains("toolPrompt") && parsed["toolPrompt"].is_object()) {
-        neograph::json tools = neograph::json::object();
+        agentxx::util::Json tools = agentxx::util::Json::object();
         for (const auto& t : parsed["toolPrompt"].items()) {
             if (!t.second.is_object()) {
                 continue;
             }
-            neograph::json tp = neograph::json::object();
+            agentxx::util::Json tp = agentxx::util::Json::object();
             if (t.second.contains("depict") && t.second["depict"].is_string()) {
                 auto depict = t.second["depict"].get<std::string>();
                 if (!depict.empty()) {
@@ -261,7 +261,7 @@ neograph::json normalizePromptPatch(const neograph::json& parsed) {
                 }
             }
             if (t.second.contains("args") && t.second["args"].is_object()) {
-                neograph::json args = neograph::json::object();
+                agentxx::util::Json args = agentxx::util::Json::object();
                 for (const auto& a : t.second["args"].items()) {
                     if (a.second.is_string()) {
                         auto v = a.second.get<std::string>();
@@ -428,8 +428,8 @@ void EvolutionTrainingAgent::applyVariantToTrainAgent(const PromptVariant& varia
     cfg->prompt = variant.prompt;
 }
 
-neograph::json EvolutionTrainingAgent::promptVariantToJson(const PromptVariant& v) const {
-    neograph::json j;
+agentxx::util::Json EvolutionTrainingAgent::promptVariantToJson(const PromptVariant& v) const {
+    agentxx::util::Json j;
     j["id"]              = v.id;
     j["prompt"]          = v.prompt.toJson();
     j["cumulativeScore"] = v.cumulativeScore;
@@ -440,7 +440,7 @@ neograph::json EvolutionTrainingAgent::promptVariantToJson(const PromptVariant& 
     j["generation"]    = v.generation;
     j["parentId"]      = v.parentId;
     {
-        neograph::json scores = neograph::json::object();
+        agentxx::util::Json scores = agentxx::util::Json::object();
         for (const auto& kv : v.perTestCaseScores) {
             scores[kv.first] = kv.second;
         }
@@ -450,7 +450,7 @@ neograph::json EvolutionTrainingAgent::promptVariantToJson(const PromptVariant& 
     return j;
 }
 
-PromptVariant EvolutionTrainingAgent::promptVariantFromJson(const neograph::json& j) const {
+PromptVariant EvolutionTrainingAgent::promptVariantFromJson(const agentxx::util::Json& j) const {
     PromptVariant v;
     v.id = j.value("id", std::string{});
     if (j.contains("prompt") && j["prompt"].is_object()) {
@@ -468,10 +468,10 @@ PromptVariant EvolutionTrainingAgent::promptVariantFromJson(const neograph::json
     if (j.contains("perTestCaseScores") && j["perTestCaseScores"].is_object()) {
         auto scores = j["perTestCaseScores"];
         for (const auto& item : scores.items()) {
-            v.perTestCaseScores[item.first] = item.second.get<double>();
+            v.perTestCaseScores[std::string{item.first}] = item.second.get<double>();
         }
     }
-    v.extra = j.value("extra", neograph::json::object());
+    v.extra = j.value("extra", agentxx::util::Json::object());
     return v;
 }
 
@@ -514,12 +514,12 @@ void EvolutionTrainingAgent::savePopulationToFile(std::string_view filePath, int
                 rotateSaveFile(filePath, backupCount);
             }
 
-            neograph::json j = neograph::json::array();
+            agentxx::util::Json j = agentxx::util::Json::array();
             for (const auto& v : population) {
                 j.push_back(promptVariantToJson(v));
             }
 
-            neograph::json root;
+            agentxx::util::Json root;
             root["population"]        = j;
             root["generationCounter"] = generationCounter;
             root["savedAt"]           = std::chrono::system_clock::now().time_since_epoch().count();
@@ -600,7 +600,7 @@ bool EvolutionTrainingAgent::loadPopulationFromFile(std::string_view filePath) {
                 return false;
             }
 
-            auto root = neograph::json::parse(content);
+            auto root = agentxx::util::Json::parse(content);
             if (!(root.contains("population") && root["population"].is_array())) {
                 return false;
             }

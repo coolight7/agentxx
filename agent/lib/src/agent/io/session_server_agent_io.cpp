@@ -238,7 +238,7 @@ asio::awaitable<std::optional<std::string>> SessionServerAgentIO::getInput() {
     co_return std::nullopt;
 }
 
-asio::awaitable<neograph::json> SessionServerAgentIO::handleInterrupt(
+asio::awaitable<agentxx::util::Json> SessionServerAgentIO::handleInterrupt(
     std::string_view /*sessionId*/,
     std::string_view interruptNode,
     std::string_view interruptValue,
@@ -263,7 +263,7 @@ asio::awaitable<neograph::json> SessionServerAgentIO::handleInterrupt(
         .argJson   = std::string{interruptArgJson},
     });
 
-    neograph::json result      = neograph::json::array();
+    agentxx::util::Json result      = agentxx::util::Json::array();
     bool           gotResponse = false;
     bool           cancelled   = false;
     // HIL 等待必须可取消: 取当前会话 token 的 fork 子并绑定 slot,
@@ -326,7 +326,7 @@ asio::awaitable<neograph::json> SessionServerAgentIO::handleInterrupt(
     if (cancelled) {
         // 被取消: 不发过期通知 (客户端的取消已由 WireCancel 驱动本地收尾),
         // 返回取消标记, 调用方不 resume
-        co_return neograph::json{
+        co_return agentxx::util::Json{
             {"__cancelled__", true}
         };
     }
@@ -514,7 +514,7 @@ void SessionServerAgentIO::onPeerMessage(
             } else if constexpr (std::is_same_v<T, WireGetContext>) {
                 auto sess = session();
                 if (!sess) {
-                    sendToClient(sender, WireContextMessages{neograph::json::array()});
+                    sendToClient(sender, WireContextMessages{agentxx::util::Json::array()});
                     return;
                 }
                 sendToClient(sender, WireContextMessages{sess->llmMessages});
@@ -808,7 +808,7 @@ void SessionServerAgentIO::handleHello(
     // - client_attached: 每次连接握手后重发一次 (重连/同会话新客户端也能
     //   获得状态快照; 与 subscribePluginEvents 处的发布重复无害)
     if (auto agent = agent_.lock(); agent && agent->agentContext) {
-        auto pluginInfos = neograph::json::array();
+        auto pluginInfos = agentxx::util::Json::array();
         if (agent->agentContext->pluginManager) {
             for (const auto& p : agent->agentContext->pluginManager->list()) {
                 auto interfaces = p.requiredInterfaces;
@@ -825,7 +825,7 @@ void SessionServerAgentIO::handleHello(
         publishHostEvent(
             agent->agentContext->bus,
             kEvtServerPlugins,
-            neograph::json{
+            agentxx::util::Json{
                 {"plugins", pluginInfos}
         }.dump()
         );
@@ -914,7 +914,7 @@ void SessionServerAgentIO::switchSession(std::string newThreadId) {
     sendContextStats();
 }
 
-void SessionServerAgentIO::resolveInterrupt(int64_t id, neograph::json result) {
+void SessionServerAgentIO::resolveInterrupt(int64_t id, agentxx::util::Json result) {
     auto it = pending_.find(id);
     if (it != pending_.end()) {
         it->second.ch->try_send(ErrorCode{}, std::move(result));

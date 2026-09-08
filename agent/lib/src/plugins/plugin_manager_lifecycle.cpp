@@ -409,9 +409,9 @@ std::vector<PluginManager::PluginListView> PluginManager::list() const {
 
 std::string PluginManager::listPluginsJson() {
     auto           views = list();
-    neograph::json arr   = neograph::json::array();
+    agentxx::util::Json arr   = agentxx::util::Json::array();
     for (const auto& v : views) {
-        neograph::json item;
+        agentxx::util::Json item;
         item["name"]                = v.name;
         item["version"]             = v.version;
         item["description"]         = v.description;
@@ -434,7 +434,7 @@ std::string PluginManager::getPluginJson(const std::string& name) {
     if (!inst) {
         return {};
     }
-    neograph::json item;
+    agentxx::util::Json item;
     item["name"]                = inst->name;
     item["version"]             = inst->version;
     item["description"]         = inst->description;
@@ -446,7 +446,7 @@ std::string PluginManager::getPluginJson(const std::string& name) {
     item["optional_depends"]    = inst->optionalDepends;
     item["required_interfaces"] = inst->interfaces.require;
     item["optional_interfaces"] = inst->interfaces.optional;
-    neograph::json caps         = neograph::json::array();
+    agentxx::util::Json caps         = agentxx::util::Json::array();
     for (const auto& c : inst->capabilityRegistrations) {
         caps.push_back(c.name);
     }

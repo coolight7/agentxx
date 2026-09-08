@@ -10,6 +10,7 @@
 #include "agentxx/util/regex.h"
 #include "agentxx/util/string_util.h"
 #include "agentxx/util/util.h"
+#include "agentxx/util/asio_error.h"
 #include "asio/any_io_executor.hpp"
 #include "asio/error.hpp"
 #include "asio/read.hpp"
@@ -30,7 +31,7 @@
 #include <functional>
 #include <limits>
 #include <memory>
-#include <neograph/json.h>
+#include "agentxx/util/json.h"
 #include <regex>
 #include <set>
 #include <sstream>
@@ -86,7 +87,7 @@ inline void normalizeCrlfToLf(std::string& text) {
 
 /// 解析 `type` 参数为类型集合。支持 string 或 array 两种形式。
 /// 返回空集合表示 "any" (不按类型过滤)。合法值: file / dir / symlink / other / any。
-inline std::set<std::string> collectTypeFilter(const neograph::json& typeArg) {
+inline std::set<std::string> collectTypeFilter(const agentxx::util::Json& typeArg) {
     std::set<std::string> types;
     auto                  addOne = [&](const std::string& t) {
         if (t == "any" || t.empty()) {
@@ -178,7 +179,7 @@ inline std::string readFileContent(const std::string& filepath) {
 // agentxx_filesystem_list 执行体 (原 FileSystemListTool::execute_async)
 // =====================================================================
 inline std::string fileListExecuteImpl(
-    const neograph::json& arguments,
+    const agentxx::util::Json& arguments,
     const std::string&    workDir,
     const IsCancelledFn&  isCancelled = nullptr
 ) {
@@ -315,7 +316,7 @@ inline std::string fileListExecuteImpl(
 // agentxx_filesystem_read 执行体 (原 FilesystemReadTextFileTool::execute_async)
 // =====================================================================
 inline std::string fileReadExecuteImpl(
-    const neograph::json& arguments,
+    const agentxx::util::Json& arguments,
     const std::string&    workDir,
     const IsCancelledFn& isCancelled = nullptr // 单文件短操作不轮询; 形参保持与其他执行体一致
 ) {
@@ -392,7 +393,7 @@ inline std::string fileReadExecuteImpl(
 // agentxx_filesystem_write 执行体 (原 FilesystemWriteFileTool::execute_async)
 // =====================================================================
 inline std::string fileWriteExecuteImpl(
-    const neograph::json& arguments,
+    const agentxx::util::Json& arguments,
     const std::string&    workDir,
     const IsCancelledFn& isCancelled = nullptr // 单文件短操作不轮询; 形参保持与其他执行体一致
 ) {
@@ -445,7 +446,7 @@ inline std::string fileWriteExecuteImpl(
 // agentxx_filesystem_edit 执行体 (原 FilesystemEditTextFileTool::execute_async)
 // =====================================================================
 inline std::string fileEditExecuteImpl(
-    const neograph::json& arguments,
+    const agentxx::util::Json& arguments,
     const std::string&    workDir,
     const IsCancelledFn& isCancelled = nullptr // 单文件短操作不轮询; 形参保持与其他执行体一致
 ) {
@@ -546,7 +547,7 @@ inline std::string fileEditExecuteImpl(
 // agentxx_filesystem_glob 执行体 (原 FilesystemGlobTool::execute_async)
 // =====================================================================
 inline std::string fileGlobExecuteImpl(
-    const neograph::json& arguments,
+    const agentxx::util::Json& arguments,
     const std::string&    workDir,
     const IsCancelledFn&  isCancelled = nullptr
 ) {
@@ -565,7 +566,7 @@ inline std::string fileGlobExecuteImpl(
     // lib filesystem.cpp 同注释 (case_fold 会破坏 max_depth 前缀计算与盘符识别)。
     auto maxDepth        = arguments.value<int64_t>("max_depth", -1);
     auto doSort          = arguments.value<bool>("sort", false);
-    auto typeFilter      = detail::collectTypeFilter(arguments.value("type", neograph::json{}));
+    auto typeFilter      = detail::collectTypeFilter(arguments.value("type", agentxx::util::Json{}));
     auto excludePatterns = arguments.value("exclude_patterns", std::vector<std::string>{});
     for (auto& item : excludePatterns) {
         item = detail::wsAbs(workDir, item);
@@ -691,7 +692,7 @@ inline std::string fileGlobExecuteImpl(
 // agentxx_filesystem_grep 执行体 (原 FilesystemGrepTool::execute_async)
 // =====================================================================
 inline std::string fileGrepExecuteImpl(
-    const neograph::json& arguments,
+    const agentxx::util::Json& arguments,
     const std::string&    workDir,
     const IsCancelledFn&  isCancelled = nullptr
 ) {
@@ -1067,7 +1068,7 @@ inline std::string asErrorText(Fn&& fn) {
 } // namespace detail
 
 inline std::string fileListExecute(
-    const neograph::json& arguments,
+    const agentxx::util::Json& arguments,
     const std::string&    workDir,
     const IsCancelledFn&  isCancelled = nullptr
 ) {
@@ -1077,7 +1078,7 @@ inline std::string fileListExecute(
 }
 
 inline std::string fileReadExecute(
-    const neograph::json& arguments,
+    const agentxx::util::Json& arguments,
     const std::string&    workDir,
     const IsCancelledFn&  isCancelled = nullptr
 ) {
@@ -1087,7 +1088,7 @@ inline std::string fileReadExecute(
 }
 
 inline std::string fileWriteExecute(
-    const neograph::json& arguments,
+    const agentxx::util::Json& arguments,
     const std::string&    workDir,
     const IsCancelledFn&  isCancelled = nullptr
 ) {
@@ -1097,7 +1098,7 @@ inline std::string fileWriteExecute(
 }
 
 inline std::string fileEditExecute(
-    const neograph::json& arguments,
+    const agentxx::util::Json& arguments,
     const std::string&    workDir,
     const IsCancelledFn&  isCancelled = nullptr
 ) {
@@ -1107,7 +1108,7 @@ inline std::string fileEditExecute(
 }
 
 inline std::string fileGlobExecute(
-    const neograph::json& arguments,
+    const agentxx::util::Json& arguments,
     const std::string&    workDir,
     const IsCancelledFn&  isCancelled = nullptr
 ) {
@@ -1117,7 +1118,7 @@ inline std::string fileGlobExecute(
 }
 
 inline std::string fileGrepExecute(
-    const neograph::json& arguments,
+    const agentxx::util::Json& arguments,
     const std::string&    workDir,
     const IsCancelledFn&  isCancelled = nullptr
 ) {
@@ -1167,7 +1168,7 @@ inline asio::awaitable<std::string>
 /// - line_offset/line_limit 模式经 async_read_until 逐行推进 (保留原始换行符);
 ///   其余整文件读取; 读取后 autoConvertToUtf8 (保留 crlf 或 \n 原样不转换)
 inline asio::awaitable<std::string>
-    fileReadExecuteAsyncImpl(const neograph::json& arguments, const std::string& workDir) {
+    fileReadExecuteAsyncImpl(const agentxx::util::Json& arguments, const std::string& workDir) {
     auto filepath = detail::wsAbs(workDir, arguments.value("path", std::string{}));
     if (filepath.empty()) {
         co_return R"([Error] Arg `path` is empty)";
@@ -1256,7 +1257,7 @@ inline asio::awaitable<std::string>
 /// - overwrite=false 且目标存在时报错; 自动创建缺失的父目录;
 ///   stream_file create|truncate 打开后 async_write 全量写入
 inline asio::awaitable<std::string>
-    fileWriteExecuteAsyncImpl(const neograph::json& arguments, const std::string& workDir) {
+    fileWriteExecuteAsyncImpl(const agentxx::util::Json& arguments, const std::string& workDir) {
     auto filepath = detail::wsAbs(workDir, arguments.value("path", std::string{}));
     if (filepath.empty()) {
         co_return R"([Error] Arg `path` is empty)";
@@ -1311,7 +1312,7 @@ inline asio::awaitable<std::string>
 /// - 异步读完整文件 → UTF-8/LF 归一化 → 替换 → 原子写 (同目录临时文件 +
 ///   rename 覆盖), 与同步版行为一致
 inline asio::awaitable<std::string>
-    fileEditExecuteAsyncImpl(const neograph::json& arguments, const std::string& workDir) {
+    fileEditExecuteAsyncImpl(const agentxx::util::Json& arguments, const std::string& workDir) {
     auto filepath = detail::wsAbs(workDir, arguments.value("path", std::string{}));
     if (filepath.empty()) {
         co_return "[Error] Arg `path` is empty";
@@ -1418,17 +1419,17 @@ inline asio::awaitable<std::string>
 /// 注册侧检测同一宏, 会改走 offload线程池适配异步接口 注册, 本回退仅供
 /// 测试等直调场景保持单一入口
 inline asio::awaitable<std::string>
-    fileReadExecuteAsyncImpl(const neograph::json& arguments, const std::string& workDir) {
+    fileReadExecuteAsyncImpl(const agentxx::util::Json& arguments, const std::string& workDir) {
     co_return fileReadExecuteImpl(arguments, workDir);
 }
 
 inline asio::awaitable<std::string>
-    fileWriteExecuteAsyncImpl(const neograph::json& arguments, const std::string& workDir) {
+    fileWriteExecuteAsyncImpl(const agentxx::util::Json& arguments, const std::string& workDir) {
     co_return fileWriteExecuteImpl(arguments, workDir);
 }
 
 inline asio::awaitable<std::string>
-    fileEditExecuteAsyncImpl(const neograph::json& arguments, const std::string& workDir) {
+    fileEditExecuteAsyncImpl(const agentxx::util::Json& arguments, const std::string& workDir) {
     co_return fileEditExecuteImpl(arguments, workDir);
 }
 
@@ -1441,7 +1442,7 @@ inline asio::awaitable<std::string>
 ///   协程帧内存续, 若经普通函数中转临时 lambda 会因栈帧提前返回而悬垂
 ///   (ASan stack-use-after-return 已复现)
 inline asio::awaitable<std::string>
-    fileReadExecuteAsync(const neograph::json& arguments, const std::string& workDir) {
+    fileReadExecuteAsync(const agentxx::util::Json& arguments, const std::string& workDir) {
     try {
 #if defined(BOOST_ASIO_HAS_FILE)
         co_return co_await fileReadExecuteAsyncImpl(arguments, workDir);
@@ -1455,7 +1456,7 @@ inline asio::awaitable<std::string>
 }
 
 inline asio::awaitable<std::string>
-    fileWriteExecuteAsync(const neograph::json& arguments, const std::string& workDir) {
+    fileWriteExecuteAsync(const agentxx::util::Json& arguments, const std::string& workDir) {
     try {
 #if defined(BOOST_ASIO_HAS_FILE)
         co_return co_await fileWriteExecuteAsyncImpl(arguments, workDir);
@@ -1469,7 +1470,7 @@ inline asio::awaitable<std::string>
 }
 
 inline asio::awaitable<std::string>
-    fileEditExecuteAsync(const neograph::json& arguments, const std::string& workDir) {
+    fileEditExecuteAsync(const agentxx::util::Json& arguments, const std::string& workDir) {
     try {
 #if defined(BOOST_ASIO_HAS_FILE)
         co_return co_await fileEditExecuteAsyncImpl(arguments, workDir);

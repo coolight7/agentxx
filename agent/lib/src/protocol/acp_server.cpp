@@ -398,7 +398,7 @@ void AcpProtocolHandler::workerRunPrompt(
                 return true;
             }
 
-            json state;
+            neograph::json state;
             state["prompt"]          = userText;
             state["_acp_session_id"] = sessionId;
 
@@ -547,7 +547,7 @@ void AcpProtocolHandler::emitAgentMessageChunk(std::string_view sessionId, std::
 
 HttpAcpServer::HttpAcpServer(
     std::shared_ptr<agentxx::agent::BaseAgent> agent,
-    neograph::json                             agentInfo,
+    agentxx::util::Json                             agentInfo,
     Config                                     config
 ) :
     config_(std::move(config)),
@@ -589,9 +589,9 @@ AcpProtocolHandler& HttpAcpServer::handler() {
 }
 
 void HttpAcpServer::setupHandlerSink() {
-    handler_.setNotificationSink([this](const neograph::json& envelope) {
+    handler_.setNotificationSink([this](const agentxx::util::Json& envelope) {
         if (!envelope.contains("method") && envelope.contains("id") && !envelope["id"].is_null()) {
-            neograph::json id    = envelope["id"];
+            agentxx::util::Json id    = envelope["id"];
             int64_t        idVal = id.is_number_integer() ? id.get<int64_t>() : -1;
 
             std::unique_lock lock(pendingMutex_);
@@ -653,18 +653,18 @@ asio::awaitable<void> HttpAcpServer::handleAcpRequest(
     namespace http = boost::beast::http;
 
     bool           isError     = false;
-    neograph::json requestJson = agentxx::util::catchError<neograph::json>(
-        [&req]() -> neograph::json {
-            return neograph::json::parse(req.body());
+    agentxx::util::Json requestJson = agentxx::util::catchError<agentxx::util::Json>(
+        [&req]() -> agentxx::util::Json {
+            return agentxx::util::Json::parse(req.body());
         },
-        [&](std::string errmsg) -> neograph::json {
+        [&](std::string errmsg) -> agentxx::util::Json {
             writeJsonResponse(
                 resp,
                 http::status::bad_request,
                 AcpProtocolHandler::makeParseError(std::move(errmsg))
             );
             isError = true;
-            return neograph::json{};
+            return agentxx::util::Json{};
         }
     );
     if (isError) {
@@ -683,13 +683,13 @@ asio::awaitable<void> HttpAcpServer::handleAcpRequest(
         co_return;
     }
 
-    neograph::json id = requestJson.contains("id") ? requestJson["id"] : neograph::json{};
+    agentxx::util::Json id = requestJson.contains("id") ? requestJson["id"] : agentxx::util::Json{};
 
-    neograph::json response = agentxx::util::catchError<neograph::json>(
-        [&]() -> neograph::json {
+    agentxx::util::Json response = agentxx::util::catchError<agentxx::util::Json>(
+        [&]() -> agentxx::util::Json {
             return handler_.handleMessage(requestJson);
         },
-        [&](std::string errmsg) -> neograph::json {
+        [&](std::string errmsg) -> agentxx::util::Json {
             XX_LOGE("[acp] handleMessage error: {}", errmsg);
             writeJsonResponse(
                 resp,
@@ -697,7 +697,7 @@ asio::awaitable<void> HttpAcpServer::handleAcpRequest(
                 jsonRpcError(id, -32603, fmt::format("Internal error: {}", errmsg))
             );
             isError = true;
-            return neograph::json{};
+            return agentxx::util::Json{};
         }
     );
     if (isError) {
@@ -713,10 +713,10 @@ asio::awaitable<void> HttpAcpServer::handleAcpRequest(
         writeJsonResponse(
             resp,
             http::status::accepted,
-            neograph::json{
+            agentxx::util::Json{
                 {"jsonrpc", "2.0"                   },
-                {"id",      neograph::json(nullptr) },
-                {"result",  neograph::json::object()}
+                {"id",      agentxx::util::Json(nullptr) },
+                {"result",  agentxx::util::Json::object()}
         }
         );
         co_return;
@@ -728,7 +728,7 @@ asio::awaitable<void> HttpAcpServer::handleAcpRequest(
         idVal             = static_cast<int64_t>(std::hash<std::string>{}(idStr));
     }
 
-    auto promise = std::make_shared<std::promise<neograph::json>>();
+    auto promise = std::make_shared<std::promise<agentxx::util::Json>>();
     auto future  = promise->get_future().share();
 
     {
@@ -765,7 +765,7 @@ asio::awaitable<void> HttpAcpServer::handleAcpRequest(
         co_return;
     }
 
-    neograph::json asyncResponse = future.get();
+    agentxx::util::Json asyncResponse = future.get();
     {
         std::unique_lock lock(pendingMutex_);
         pendingResponses_.erase(idVal);
@@ -801,7 +801,7 @@ void HttpAcpServer::stopSSE() {}
 void HttpAcpServer::writeJsonResponse(
     util::HttpServer::Response& resp,
     boost::beast::http::status  status,
-    const neograph::json&       body
+    const agentxx::util::Json&       body
 ) {
     resp.result(status);
     resp.set(boost::beast::http::field::content_type, "application/json");
@@ -809,10 +809,10 @@ void HttpAcpServer::writeJsonResponse(
     resp.prepare_payload();
 }
 
-neograph::json
-    HttpAcpServer::jsonRpcError(const neograph::json& id, int code, std::string_view message)
+agentxx::util::Json
+    HttpAcpServer::jsonRpcError(const agentxx::util::Json& id, int code, std::string_view message)
         const {
-    neograph::json err;
+    agentxx::util::Json err;
     err["jsonrpc"] = "2.0";
     err["id"]      = id;
     err["error"]   = {
@@ -828,7 +828,7 @@ neograph::json
 
 StdioAcpServer::StdioAcpServer(
     std::shared_ptr<agentxx::agent::BaseAgent> agent,
-    neograph::json                             agentInfo
+    agentxx::util::Json                             agentInfo
 ) :
     agent_(std::move(agent)),
     handler_(
@@ -863,7 +863,7 @@ void StdioAcpServer::run(std::istream& in, std::ostream& out) {
     auto outMu  = std::make_shared<std::mutex>();
     auto outPtr = &out;
 
-    handler_.setNotificationSink([outPtr, outMu](const neograph::json& env) {
+    handler_.setNotificationSink([outPtr, outMu](const agentxx::util::Json& env) {
         auto            s = env.dump();
         std::lock_guard lk(*outMu);
         (*outPtr) << s << '\n';
@@ -879,10 +879,10 @@ void StdioAcpServer::run(std::istream& in, std::ostream& out) {
             continue;
         }
 
-        neograph::json env;
+        agentxx::util::Json env;
         bool           parsed = agentxx::util::catchError<bool>(
             [&]() -> bool {
-                env = neograph::json::parse(line);
+                env = agentxx::util::Json::parse(line);
                 return true;
             },
             [&](std::string) -> bool {

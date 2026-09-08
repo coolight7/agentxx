@@ -31,6 +31,7 @@
 #include "agentxx/util/log.h"
 #include "agentxx/util/string_util.h"
 #include "agentxx/util/util.h"
+#include "agentxx/util/asio_error.h"
 #include "asio/as_tuple.hpp"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
@@ -52,7 +53,7 @@
 #include <functional>
 #include <memory>
 #include <mutex>
-#include <neograph/json.h>
+#include "agentxx/util/json.h"
 #include <sstream>
 #include <string>
 #include <system_error>
@@ -633,7 +634,7 @@ inline asio::awaitable<std::string> runProcPipeline(
 
 /// agentxx_execute_bash_command 执行体 (原 ExecuteBashCommandTool::execute_async)
 inline asio::awaitable<std::string> bashExecuteAsync(
-    const neograph::json& arguments,
+    const agentxx::util::Json& arguments,
     const std::string&    workDir,
     const IsCancelledFn&  isCancelled    = nullptr,
     const StoreFn&        storeFn        = nullptr,
@@ -717,7 +718,7 @@ inline asio::awaitable<std::string> bashExecuteAsync(
 
 /// agentxx_execute_windows_command 执行体 (原 ExecuteWindowsCommandTool::execute_async)
 inline asio::awaitable<std::string> windowsExecuteAsync(
-    const neograph::json& arguments,
+    const agentxx::util::Json& arguments,
     const std::string&    workDir,
     const IsCancelledFn&  isCancelled    = nullptr,
     const StoreFn&        storeFn        = nullptr,
@@ -832,7 +833,7 @@ inline asio::awaitable<std::string> windowsExecuteAsync(
 // =====================================================================
 
 inline std::string bashExecute(
-    const neograph::json& arguments,
+    const agentxx::util::Json& arguments,
     const std::string&    workDir,
     const IsCancelledFn&  isCancelled    = nullptr,
     const StoreFn&        storeFn        = nullptr,
@@ -861,7 +862,7 @@ inline std::string bashExecute(
 #endif
     if (!pipe) {
         auto ec = std::error_code{errno, std::system_category()};
-        return neograph::json{
+        return agentxx::util::Json{
             {"error", fmt::format("Exec command failed. Error: {}", ec.message())},
         }
             .dump();
@@ -886,7 +887,7 @@ inline std::string bashExecute(
 }
 
 inline std::string windowsExecute(
-    const neograph::json& arguments,
+    const agentxx::util::Json& arguments,
     const std::string&    workDir,
     const IsCancelledFn&  isCancelled    = nullptr,
     const StoreFn&        storeFn        = nullptr,

@@ -6,7 +6,7 @@
 #include "agentxx/plugin/api/plugin_kit.h"
 #include <fmt/format.h>
 #include <memory>
-#include <neograph/json.h>
+#include "agentxx/util/json.h"
 #include <string>
 
 namespace agentxx_system_plugin {

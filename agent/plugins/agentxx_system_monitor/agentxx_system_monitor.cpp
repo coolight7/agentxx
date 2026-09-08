@@ -12,7 +12,7 @@
 #include "asio/detached.hpp"
 #include "asio/io_context.hpp"
 #include "fmt/format.h"
-#include "neograph/json.h"
+#include "agentxx/util/json.h"
 
 #include <atomic>
 #include <chrono>
@@ -29,12 +29,12 @@ namespace {
 constexpr int kUsageIntervalSec = 5;
 
 std::string usageToJson(const CpuGpuUsage& u) {
-    neograph::json j;
+    agentxx::util::Json j;
     j["cpu"]            = u.cpuUsagePercent;
     j["mem_total_mb"]   = u.memory.totalPhysicalMB;
     j["mem_used_mb"]    = u.memory.usedPhysicalMB;
     j["mem_percent"]    = u.memory.usagePercent;
-    neograph::json gpus = neograph::json::array();
+    agentxx::util::Json gpus = agentxx::util::Json::array();
     for (const auto& g : u.gpus) {
         gpus.push_back({
             {"name",                   g.name               },
@@ -155,7 +155,7 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
                             event_json && event_json->data ? event_json->data : "{}",
                             event_json ? static_cast<size_t>(event_json->size) : 0
                         );
-                        auto j = neograph::json::parse(s);
+                        auto j = agentxx::util::Json::parse(s);
                         c->usageEnabled.store(j.value("enabled", true), std::memory_order_release);
                     } catch (...) {
                     }
@@ -246,7 +246,7 @@ struct UsageStat {
 static UsageStat parseUsage(const std::string& raw) {
     UsageStat st;
     try {
-        auto j        = neograph::json::parse(raw);
+        auto j        = agentxx::util::Json::parse(raw);
         st.cpu        = j.value("cpu", 0.0);
         st.memPct     = j.value("mem_percent", 0.0);
         st.memUsedMb  = j.value<int64_t>("mem_used_mb", 0);
@@ -269,9 +269,9 @@ static UsageStat parseUsage(const std::string& raw) {
 }
 
 static std::string buildUsageInfoItemsJson(const SysMonClientCtx&, const UsageStat& st) {
-    neograph::json items    = neograph::json::array();
+    agentxx::util::Json items    = agentxx::util::Json::array();
     auto           pushText = [&](const std::string& text, const std::string& role = "normal") {
-        neograph::json it;
+        agentxx::util::Json it;
         it["kind"] = "text";
         it["role"] = role;
         it["text"] = text;
@@ -296,7 +296,7 @@ static std::string buildUsageInfoItemsJson(const SysMonClientCtx&, const UsageSt
     } else if (st.gpuCount > 1) {
         pushText(fmt::format("|- GPU {}x · {:.0f}%", st.gpuCount, st.gpuPeakPct), "normal");
     }
-    neograph::json out;
+    agentxx::util::Json out;
     out["items"] = std::move(items);
     return out.dump();
 }
@@ -318,8 +318,8 @@ static void refreshUsageDisplay(SysMonClientCtx& ctx) {
     if (ctx.usage_enabled.load(std::memory_order_relaxed)) {
         json = buildUsageInfoItemsJson(ctx, parseUsage(ctx.last_usage_json));
     } else {
-        neograph::json off;
-        off["items"] = neograph::json::array();
+        agentxx::util::Json off;
+        off["items"] = agentxx::util::Json::array();
         json         = off.dump();
     }
     auto jsonSv = PluginStringView::from(json.data(), json.size());
@@ -350,7 +350,7 @@ AGENTXX_PLUGIN_CLIENT_EXPORT(
                         return;
                     }
                     try {
-                        auto j = neograph::json::parse(
+                        auto j = agentxx::util::Json::parse(
                             std::string_view(payload_json->data, payload_json->size)
                         );
                         if (j.value("plugin", std::string{}) != "agentxx_system_monitor"
@@ -399,7 +399,7 @@ AGENTXX_PLUGIN_CLIENT_EXPORT(
                     std::string stateStr = ctx->clientState();
                     if (!stateStr.empty() && stateStr != "{}") {
                         try {
-                            auto st = neograph::json::parse(stateStr);
+                            auto st = agentxx::util::Json::parse(stateStr);
                             if (st.contains("agentPlugins") && st["agentPlugins"].is_array()) {
                                 bool found = false;
                                 for (const auto& v : st["agentPlugins"]) {
@@ -417,7 +417,7 @@ AGENTXX_PLUGIN_CLIENT_EXPORT(
                         } catch (...) {
                         }
                     }
-                    neograph::json out;
+                    agentxx::util::Json out;
                     out["action"]      = "toast";
                     out["text"]        = text;
                     out["level"]       = 0;

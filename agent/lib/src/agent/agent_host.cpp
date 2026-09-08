@@ -588,7 +588,9 @@ asio::awaitable<events::RespSubagentBatchItem> AgentHost::spawnOneTask(
             // 否则回退 systemPrompt + message 文本 (默认独立行为)
             neograph::json inputMessages;
             if (task.messages.has_value()) {
-                inputMessages = *task.messages;
+                // task.messages 为 agentxx::util::Json (事件层类型):
+                // 经文本中转回 neograph::json (子代理派生低频路径)
+                inputMessages = neograph::json::parse(task.messages->dump());
             } else {
                 inputMessages = neograph::json::array({
                     {{"role", "system"}, {"content", sysPrompt}                },

@@ -21,17 +21,16 @@
 
 #include "asio/awaitable.hpp"
 #include "asio/use_awaitable.hpp"
-#include "simdjson.h"
 #include "text_selection_monitor.h"
+#include "agentxx/util/json_view.h"
 #include <chrono>
 #include <mutex>
 #include <optional>
 #include <thread>
 #include <type_traits>
 
+#include "agentxx/util/asio_error.h"
 namespace asio                   = ::boost::asio;
-using neograph_asio_system_error = ::boost::system::system_error;
-using neograph_asio_error_code   = ::boost::system::error_code;
 
 namespace agentxx_text_selection_monitor_plugin {
 
@@ -1052,30 +1051,16 @@ private:
     }
 
     static std::optional<std::string> extractCdpResult(std::string_view json) {
-        simdjson::ondemand::parser parser;
-        simdjson::padded_string    padded(json);
-        auto                       doc = parser.iterate(padded);
-        if (doc.error()) {
+        try {
+            auto view = agentxx::util::JsonView::parse(json);
+            auto val  = view["result"]["result"]["value"];
+            if (!val.is_string()) {
+                return std::nullopt;
+            }
+            return std::string(val.get_string_view());
+        } catch (...) {
             return std::nullopt;
         }
-        auto result = doc.find_field("result");
-        if (result.error()) {
-            return std::nullopt;
-        }
-        auto innerResult = result.find_field("result");
-        if (innerResult.error()) {
-            return std::nullopt;
-        }
-        auto val = innerResult.find_field("value");
-        if (val.error()) {
-            return std::nullopt;
-        }
-        std::string_view sv;
-        auto             err = val.get(sv);
-        if (err) {
-            return std::nullopt;
-        }
-        return std::string(sv);
     }
 
     std::pair<std::string, TextSource> getSelectedTextByCDP(HWND hwnd) {
@@ -1097,26 +1082,18 @@ private:
         std::string targetTitle;
 
         {
-            simdjson::ondemand::parser parser;
-            simdjson::padded_string    padded(targetsJson);
-            auto                       doc = parser.iterate(padded);
-            if (!doc.error()) {
-                for (auto elem : doc.get_array()) {
-                    if (elem.error()) {
-                        continue;
-                    }
-                    std::string_view id;
-                    std::string_view title;
-                    auto             obj = elem.get_object();
-                    if (obj.error()) {
-                        continue;
-                    }
-                    auto idField    = obj["id"];
-                    auto titleField = obj["title"];
-                    if (idField.error() || titleField.error()) {
-                        continue;
-                    }
-                    if (idField.get(id) || titleField.get(title)) {
+            // CDP /json 目标列表: 经 JsonView 零拷贝提取 id/title
+            // (历史 simdjson::ondemand 局部解析已统一为新体系)
+            try {
+                auto targets = agentxx::util::JsonView::parse(targetsJson);
+                if (!targets.is_array()) {
+                    return {};
+                }
+                for (size_t i = 0, n = targets.size(); i < n; ++i) {
+                    auto elem  = targets[i];
+                    auto id    = elem.value<std::string_view>("id", std::string_view{});
+                    auto title = elem.value<std::string_view>("title", std::string_view{});
+                    if (id.empty() || title.empty()) {
                         continue;
                     }
 
@@ -1150,6 +1127,8 @@ private:
                         targetTitle = std::string(title);
                     }
                 }
+            } catch (...) {
+                return {};
             }
         }
 

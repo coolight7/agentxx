@@ -33,7 +33,7 @@
 #include "asio/post.hpp"
 #include "asio/steady_timer.hpp"
 #include "asio/use_awaitable.hpp"
-#include "neograph/json.h"
+#include "agentxx/util/json.h"
 
 #include <algorithm>
 #include <atomic>
@@ -78,7 +78,7 @@ struct PluginInstanceBase {
     std::string path;        ///< 加载的库路径/内置路径
     /// 插件配置参数 (yaml `plugins` 条目 args; 宿主原样保存, 经 vtable
     /// get_plugin_args 整体返回给插件, 不解析其字段语义)
-    neograph::json args = neograph::json::object();
+    agentxx::util::Json args = agentxx::util::Json::object();
     /// 插件配置文件所在目录或文件路径 (yaml `config`, 归一化为绝对路径)
     std::string              configPath;
     std::vector<std::string> depends; ///< 必选依赖 (未安装加载失败; 卸载/禁用级联)

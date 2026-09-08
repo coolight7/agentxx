@@ -2,7 +2,7 @@
 /// - 头文件-only: 插件入口与测试
 ///   ([test_math_tools.cpp](/agent/test/core/test_math_tools.cpp))
 ///   共同包含, 保证插件行为与测试覆盖一致
-/// - 依赖: neograph (json) + fmt + C++ 标准数学库
+/// - 依赖: agentxx::util::Json + fmt + C++ 标准数学库
 #pragma once
 
 #include <algorithm>
@@ -12,7 +12,7 @@
 #include <cstdint>
 #include <fmt/format.h>
 #include <limits>
-#include <neograph/json.h>
+#include "agentxx/util/json.h"
 #include <numbers>
 #include <numeric>
 #include <optional>
@@ -1457,7 +1457,7 @@ inline double evaluateExpression(std::string_view expr, AngleUnit angle_unit = A
 ///   - `expression` (string, required): 要计算的数学表达式
 ///   - `precision` (int, optional): 保留小数位数
 ///   - `angle_unit` (string, optional): 角度单位 ("rad" 或 "deg", 默认为 "rad")
-inline std::string mathCalculateExecute(const neograph::json& arguments) {
+inline std::string mathCalculateExecute(const agentxx::util::Json& arguments) {
     auto expr = arguments.value("expression", std::string{});
     if (expr.empty()) {
         return R"({"error":"Arg `expression` is empty"})";

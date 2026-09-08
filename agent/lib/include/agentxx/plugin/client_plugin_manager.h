@@ -8,7 +8,7 @@
 #include "asio/any_io_executor.hpp"
 #include "asio/awaitable.hpp"
 #include "asio/thread_pool.hpp"
-#include "neograph/json.h"
+#include "agentxx/util/json.h"
 #include <atomic>
 #include <functional>
 #include <map>
@@ -40,7 +40,7 @@ struct ClientPanel {
     std::string    plugin;                          ///< 所属插件名
     std::string    id;                              ///< 全局唯一 id
     std::string    title;                           ///< tab 标题
-    neograph::json items = neograph::json::array(); ///< {"items":[{...}]} 内容
+    agentxx::util::Json items = agentxx::util::Json::array(); ///< {"items":[{...}]} 内容
 };
 
 /// Info 栏段落注册记录 (UI 注册表快照条目)
@@ -50,7 +50,7 @@ struct ClientInfoSection {
     std::string    plugin;                          ///< 所属插件名
     std::string    id;                              ///< 全局唯一 id
     std::string    title;                           ///< 段落标题 (空 = 无标题)
-    neograph::json items = neograph::json::array(); ///< {"items":[{...}]} 内容
+    agentxx::util::Json items = agentxx::util::Json::array(); ///< {"items":[{...}]} 内容
 };
 
 /// 工具消息装饰注册记录 (UI 注册表快照条目; update_tool_decor 写入)
@@ -62,7 +62,7 @@ struct ClientToolDecor {
     std::string    toolCallId;  ///< 目标工具调用 id
     std::string    displayName; ///< 折叠头显示名 (空 = 原始 toolName)
     std::string    summary;     ///< 折叠头一行摘要 (空 = 回退参数预览)
-    neograph::json items = neograph::json::array(); ///< 展开体 items ({"items":[...]})
+    agentxx::util::Json items = agentxx::util::Json::array(); ///< 展开体 items ({"items":[...]})
     /// 内容版本号 (每次更新递增; 计入 TUI 块缓存 key —— 消息指针不变时
     /// 装饰更新仍需触发该消息块重建)
     uint64_t version = 0;
@@ -120,7 +120,7 @@ struct ClientUiRegistry {
 struct ClientToolRenderResult {
     std::string    displayName;
     std::string    summary;
-    neograph::json items   = neograph::json::array();
+    agentxx::util::Json items   = agentxx::util::Json::array();
     bool           matched = false;
     bool           isDecor = false; ///< 是否来自动态 toolDecors (update_tool_decor)
     /// decor 归因 (isDecor=true 时有效; UI 侧组装 owner_id=toolCallId 用):
@@ -694,27 +694,27 @@ public:
     /// 状态栏项注册/更新/移除 (props: {"text","tooltip"})
     virtual void onStatusItemRegistered(
         const std::string& /*id*/,
-        const neograph::json& /*props*/,
+        const agentxx::util::Json& /*props*/,
         int /*align*/,
         int /*order*/
     ) {}
 
-    virtual void onStatusItemUpdated(const std::string& /*id*/, const neograph::json& /*props*/) {}
+    virtual void onStatusItemUpdated(const std::string& /*id*/, const agentxx::util::Json& /*props*/) {}
 
     virtual void onStatusItemRemoved(const std::string& /*id*/) {}
 
     /// 面板注册/更新/移除 (props: {"title"}; items: {"items":[...]})
-    virtual void onPanelRegistered(const std::string& /*id*/, const neograph::json& /*props*/) {}
+    virtual void onPanelRegistered(const std::string& /*id*/, const agentxx::util::Json& /*props*/) {}
 
-    virtual void onPanelUpdated(const std::string& /*id*/, const neograph::json& /*items*/) {}
+    virtual void onPanelUpdated(const std::string& /*id*/, const agentxx::util::Json& /*items*/) {}
 
     virtual void onPanelRemoved(const std::string& /*id*/) {}
 
     /// Info 栏段落注册/更新/移除 (props: {"title"}; items: {"items":[...]})
     virtual void
-        onInfoSectionRegistered(const std::string& /*id*/, const neograph::json& /*props*/) {}
+        onInfoSectionRegistered(const std::string& /*id*/, const agentxx::util::Json& /*props*/) {}
 
-    virtual void onInfoSectionUpdated(const std::string& /*id*/, const neograph::json& /*items*/) {}
+    virtual void onInfoSectionUpdated(const std::string& /*id*/, const agentxx::util::Json& /*items*/) {}
 
     virtual void onInfoSectionRemoved(const std::string& /*id*/) {}
 

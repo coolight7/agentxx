@@ -1,7 +1,7 @@
 # agentxx_audio_stream —— 音频流捕获插件 (Windows WASAPI)
 # - 默认: 独立动态库 (MODULE)
 # - 内置模式: 源文件编译为 OBJECT 库合并进
-#   libagentxx; fmt/simdjson 为 libagentxx 既有依赖; WASAPI/COM 等平台库
+#   libagentxx; agentxx_util 为既有依赖; WASAPI/COM 等平台库
 #   经 AGENTXX_BUILTIN_PLUGIN_LINK_LIBS 补链接
 # - 从 libagentxx src/expand/audio_stream 拆分独立:
 #   - 工具 agentxx_audio_stream (start/stop/status)
@@ -31,7 +31,7 @@ if (_AGENTXX_ADD_AS_BUILTIN)
   target_include_directories(${_target} PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}"          # audio_stream.h / audio_stream_plugin.h
     "${AGENTXX_LIB_INCLUDE_DIR}"           # agentxx/plugin/plugin_api.h
-    "${AGENTXX_INSTALL_DIR}/include"       # simdjson.h fmt
+    "${AGENTXX_INSTALL_DIR}/include"       # agentxx_util (Json/JsonView)
   )
   # 复用 agentxx_util 工具库 (libagentxx 已链接本库; 此处经 PRIVATE 链接仅
   # 传递编译宏/头路径: util 头文件依赖 XX_IS_* 宏与 include 路径)
@@ -82,7 +82,7 @@ add_library(${PLUGIN_NAME} SHARED
 target_include_directories(${PLUGIN_NAME} PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}"          # audio_stream.h / audio_stream_plugin.h
   "${AGENTXX_LIB_INCLUDE_DIR}"           # agentxx/plugin/plugin_api.h
-  "${AGENTXX_INSTALL_DIR}/include"       # simdjson.h fmt
+  "${AGENTXX_INSTALL_DIR}/include"       # agentxx_util (Json/JsonView)
 )
 # 复用 agentxx_util 工具库 (插件静态链接, 与宿主副本符号互不冲突;
 # find_package 经 AGENTXX_INSTALL_DIR 的 agentxx_util config 解析,
@@ -92,11 +92,9 @@ if (NOT TARGET agentxx_util)
   # 下 util 目标已存在于宿主工程, 跳过导入 (此时 install 目录尚未生成 config)
   find_package(agentxx_util REQUIRED)
 endif()
-find_package(fmt REQUIRED)
+# (历史: 此处曾直连 simdjson/fmt; 自 Json 自主化重构起经 agentxx_util PUBLIC 传递, 不再单列)
 target_link_libraries(${PLUGIN_NAME} PRIVATE
   agentxx_util
-  simdjson
-  fmt::fmt
 )
 target_link_directories(${PLUGIN_NAME} PRIVATE
   "${AGENTXX_INSTALL_DIR}/lib"

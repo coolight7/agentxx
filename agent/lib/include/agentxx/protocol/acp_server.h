@@ -11,7 +11,7 @@
 #include <set>
 #include <string>
 
-#include <neograph/json.h>
+#include "agentxx/util/json.h"
 
 #include "agentxx/agent/base_agent.h"
 #include "agentxx/util/http_server.h"
@@ -20,7 +20,7 @@
 namespace agentxx {
 namespace server {
 
-using json = neograph::json;
+using json = agentxx::util::Json;
 
 // ---------------------------------------------------------------------------
 // ACP 协议处理器 (HTTP 与 stdio 传输共用)
@@ -154,7 +154,7 @@ private:
 
     // -- 出站请求追踪 (agent→client) --
     mutable std::mutex                                               pendingMu_;
-    std::map<int64_t, std::shared_ptr<std::promise<neograph::json>>> pending_;
+    std::map<int64_t, std::shared_ptr<std::promise<agentxx::util::Json>>> pending_;
     std::atomic<int64_t>                                             nextOutboundId_{1};
 };
 
@@ -180,7 +180,7 @@ public:
 
     HttpAcpServer(
         std::shared_ptr<agentxx::agent::BaseAgent> agent,
-        neograph::json                             agentInfo,
+        agentxx::util::Json                             agentInfo,
         Config                                     config
     );
 
@@ -240,10 +240,10 @@ private:
     void writeJsonResponse(
         util::HttpServer::Response& resp,
         boost::beast::http::status  status,
-        const neograph::json&       body
+        const agentxx::util::Json&       body
     );
 
-    neograph::json jsonRpcError(const neograph::json& id, int code, std::string_view message) const;
+    agentxx::util::Json jsonRpcError(const agentxx::util::Json& id, int code, std::string_view message) const;
 
     // -----------------------------------------------------------------------
     // 成员
@@ -256,7 +256,7 @@ private:
 
     // 挂起的异步响应追踪 (HTTP 传输用)
     std::mutex                                                       pendingMutex_;
-    std::map<int64_t, std::shared_ptr<std::promise<neograph::json>>> pendingResponses_;
+    std::map<int64_t, std::shared_ptr<std::promise<agentxx::util::Json>>> pendingResponses_;
 };
 
 // ===========================================================================
@@ -268,7 +268,7 @@ private:
 class StdioAcpServer {
 public:
 
-    StdioAcpServer(std::shared_ptr<agentxx::agent::BaseAgent> agent, neograph::json agentInfo);
+    StdioAcpServer(std::shared_ptr<agentxx::agent::BaseAgent> agent, agentxx::util::Json agentInfo);
 
     StdioAcpServer(const StdioAcpServer&)            = delete;
     StdioAcpServer& operator=(const StdioAcpServer&) = delete;

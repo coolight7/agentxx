@@ -2,7 +2,7 @@
 
 #include "agentxx/agent/conversation_types.h"
 #include "agentxx/util/sqlite.h"
-#include "neograph/json.h"
+#include "agentxx/util/json.h"
 #include <map>
 #include <memory>
 #include <mutex>
@@ -42,7 +42,7 @@ public:
 
     struct LoadedSession {
         std::vector<ViewMessage> viewMessages;
-        neograph::json           llmMessages = neograph::json::array();
+        agentxx::util::Json           llmMessages = agentxx::util::Json::array();
         /// 恢复后的 msg id 计数器 (保证新消息 id 不与已存消息冲突)
         uint64_t msgIdCounter = 0;
     };
@@ -96,7 +96,7 @@ public:
 
     /// 保存 LLM 上下文消息 (整表替换; 每轮对话结束时调用)
     /// - 失败仅记录日志, 不影响内存状态
-    void saveLlmMessages(std::string_view sessionId, const neograph::json& llmMessages);
+    void saveLlmMessages(std::string_view sessionId, const agentxx::util::Json& llmMessages);
 
     // ---- share store (session.db store 表) ----
 

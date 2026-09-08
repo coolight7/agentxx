@@ -42,6 +42,11 @@ target_sources(agentxx_cli PRIVATE
 )
 
 target_include_directories(agentxx_cli PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/include/")
+# neograph/json.h 内部 #include <yyjson.h> (构建期头, 见 lib/CMakeLists 说明):
+# client 经 find_package(agentxx_static) 只得 install/include, 需补 neograph 源码 deps 路径
+if (DEFINED neograph_SOURCE_DIR)
+  target_include_directories(agentxx_cli PRIVATE "${neograph_SOURCE_DIR}/deps/yyjson/")
+endif()
 
 # 注意: 不要添加 /FS /MP 编译选项 —— 顶层已统一管理; 命令行出现重复 /FS 时
 # VS18 FileTracker 失效，每次构建都会全量重编 (勿删此注释)

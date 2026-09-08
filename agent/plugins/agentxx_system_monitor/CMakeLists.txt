@@ -1,7 +1,7 @@
 # agentxx_system_monitor —— 系统资源监控插件 (CPU/内存/GPU)
-# - 默认: 独立动态库 (MODULE), 仅依赖纯 C ABI 头 + asio (boost 头文件) + fmt + simdjson
+# - 默认: 独立动态库 (MODULE), 仅依赖纯 C ABI 头 + agentxx_util (Json/JsonView) + asio (boost 头文件)
 # - 内置模式: 源文件编译为 OBJECT 库合并进
-#   libagentxx; asio/fmt/simdjson 为 libagentxx 既有依赖, 仅补链接平台库 (pdh)
+#   libagentxx; agentxx_util/asio 为既有依赖, 仅补链接平台库 (pdh)
 # - 从 libagentxx src/expand/get_cpu_gpu_use 拆分独立:
 #   - 工具 agentxx_get_system_core_info (原内置工具迁移, 同名同行为)
 #   - 能力 agentxx.system_usage (方法 query): 宿主 TUI 系统资源展示链路
@@ -39,7 +39,7 @@ if (_AGENTXX_ADD_AS_BUILTIN)
   target_include_directories(${_target} PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}"          # cpu_gpu_monitor.h / system_monitor_plugin.h
     "${AGENTXX_LIB_INCLUDE_DIR}"           # agentxx/plugin/plugin_api.h
-    "${AGENTXX_INSTALL_DIR}/include"       # simdjson.h fmt
+    "${AGENTXX_INSTALL_DIR}/include"       # agentxx_util (Json/JsonView)
     "${BOOST_ROOT}/include/"
     "${BOOST_ROOT}/include/boost/"
   )
@@ -95,7 +95,7 @@ add_library(${PLUGIN_NAME} SHARED
 target_include_directories(${PLUGIN_NAME} PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}"          # cpu_gpu_monitor.h / system_monitor_plugin.h
   "${AGENTXX_LIB_INCLUDE_DIR}"           # agentxx/plugin/plugin_api.h
-  "${AGENTXX_INSTALL_DIR}/include"       # simdjson.h fmt
+  "${AGENTXX_INSTALL_DIR}/include"       # agentxx_util (Json/JsonView)
 )
 # 复用 agentxx_util 工具库 (插件静态链接, 与宿主副本符号互不冲突;
 # find_package 经 AGENTXX_INSTALL_DIR 的 agentxx_util config 解析,
@@ -105,11 +105,9 @@ if (NOT TARGET agentxx_util)
   # 下 util 目标已存在于宿主工程, 跳过导入 (此时 install 目录尚未生成 config)
   find_package(agentxx_util REQUIRED)
 endif()
-find_package(fmt REQUIRED)
+# (历史: 此处曾直连 simdjson/fmt; 自 Json 自主化重构起经 agentxx_util PUBLIC 传递, 不再单列)
 target_link_libraries(${PLUGIN_NAME} PRIVATE
   agentxx_util
-  simdjson
-  fmt::fmt
 )
 target_link_directories(${PLUGIN_NAME} PRIVATE
   "${AGENTXX_INSTALL_DIR}/lib"

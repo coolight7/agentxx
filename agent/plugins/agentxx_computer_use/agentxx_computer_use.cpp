@@ -2,11 +2,11 @@
 #include "computer_use_plugin.h"
 #include "fmt/format.h"
 #include <cstring>
-#include <neograph/json.h>
+#include "agentxx/util/json.h"
 #include <string>
 
 namespace agentxx_computer_use_plugin {
-std::string uiControlExecute(agentxx_computer_use_plugin::SimpleJson& arguments);
+std::string uiControlExecute(const agentxx::util::Json& arguments);
 
 struct PluginCtx : public agentxx::plugin::PluginBase {};
 
@@ -27,20 +27,20 @@ static const char* kUiControlDefaultDepict
       "Shortcut execution automatically presses modifier keys, presses target key, and releases in reverse order.";
 
 static std::string makeUiControlSchema() {
-    neograph::json schema                                  = neograph::json::object();
+    agentxx::util::Json schema                                  = agentxx::util::Json::object();
     schema["type"]                                         = "object";
-    schema["required"]                                     = neograph::json::array({"actions"});
-    schema["properties"]                                   = neograph::json::object();
-    schema["properties"]["actions"]                        = neograph::json::object();
+    schema["required"]                                     = agentxx::util::Json::array({"actions"});
+    schema["properties"]                                   = agentxx::util::Json::object();
+    schema["properties"]["actions"]                        = agentxx::util::Json::object();
     schema["properties"]["actions"]["type"]                = "array";
-    schema["properties"]["actions"]["items"]               = neograph::json::object();
+    schema["properties"]["actions"]["items"]               = agentxx::util::Json::object();
     schema["properties"]["actions"]["items"]["type"]       = "object";
-    schema["properties"]["actions"]["items"]["required"]   = neograph::json::array({"action"});
-    schema["properties"]["actions"]["items"]["properties"] = neograph::json::object();
-    schema["properties"]["actions"]["items"]["properties"]["action"]      = neograph::json({
+    schema["properties"]["actions"]["items"]["required"]   = agentxx::util::Json::array({"action"});
+    schema["properties"]["actions"]["items"]["properties"] = agentxx::util::Json::object();
+    schema["properties"]["actions"]["items"]["properties"]["action"]      = agentxx::util::Json({
         {"type", "string"},
         {"enum",
-         neograph::json::array(
+         agentxx::util::Json::array(
              {"move_cursor",
                    "mouse_down",
                    "mouse_up",
@@ -59,40 +59,40 @@ static std::string makeUiControlSchema() {
                    "wait"}
          )               }
     });
-    schema["properties"]["actions"]["items"]["properties"]["x"]           = neograph::json({
+    schema["properties"]["actions"]["items"]["properties"]["x"]           = agentxx::util::Json({
         {"type", "integer"}
     });
-    schema["properties"]["actions"]["items"]["properties"]["y"]           = neograph::json({
+    schema["properties"]["actions"]["items"]["properties"]["y"]           = agentxx::util::Json({
         {"type", "integer"}
     });
-    schema["properties"]["actions"]["items"]["properties"]["button"]      = neograph::json({
+    schema["properties"]["actions"]["items"]["properties"]["button"]      = agentxx::util::Json({
         {"type", "string"                                          },
-        {"enum", neograph::json::array({"left", "right", "middle"})}
+        {"enum", agentxx::util::Json::array({"left", "right", "middle"})}
     });
-    schema["properties"]["actions"]["items"]["properties"]["clicks"]      = neograph::json({
+    schema["properties"]["actions"]["items"]["properties"]["clicks"]      = agentxx::util::Json({
         {"type", "integer"}
     });
-    schema["properties"]["actions"]["items"]["properties"]["amount"]      = neograph::json({
+    schema["properties"]["actions"]["items"]["properties"]["amount"]      = agentxx::util::Json({
         {"type", "integer"}
     });
-    schema["properties"]["actions"]["items"]["properties"]["direction"]   = neograph::json({
+    schema["properties"]["actions"]["items"]["properties"]["direction"]   = agentxx::util::Json({
         {"type", "string"                             },
-        {"enum", neograph::json::array({"up", "down"})}
+        {"enum", agentxx::util::Json::array({"up", "down"})}
     });
-    schema["properties"]["actions"]["items"]["properties"]["text"]        = neograph::json({
+    schema["properties"]["actions"]["items"]["properties"]["text"]        = agentxx::util::Json({
         {"type", "string"}
     });
-    schema["properties"]["actions"]["items"]["properties"]["key"]         = neograph::json({
+    schema["properties"]["actions"]["items"]["properties"]["key"]         = agentxx::util::Json({
         {"type", "string"}
     });
-    schema["properties"]["actions"]["items"]["properties"]["keys"]        = neograph::json({
+    schema["properties"]["actions"]["items"]["properties"]["keys"]        = agentxx::util::Json({
         {"type",  "array"                             },
-        {"items", neograph::json({{"type", "string"}})}
+        {"items", agentxx::util::Json({{"type", "string"}})}
     });
-    schema["properties"]["actions"]["items"]["properties"]["delay_ms"]    = neograph::json({
+    schema["properties"]["actions"]["items"]["properties"]["delay_ms"]    = agentxx::util::Json({
         {"type", "integer"}
     });
-    schema["properties"]["actions"]["items"]["properties"]["duration_ms"] = neograph::json({
+    schema["properties"]["actions"]["items"]["properties"]["duration_ms"] = agentxx::util::Json({
         {"type", "integer"}
     });
     return schema.dump();
@@ -123,12 +123,11 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
             depict,
             makeUiControlSchema(),
             [](ComputerUsePluginCtx&, std::string_view args_json) -> std::string {
-                std::string argsStr(args_json.data() ? args_json.data() : "{}", args_json.size());
-                SimpleJson  args(argsStr.empty() ? "{}" : argsStr);
-                if (!args.ok()) {
+                agentxx::plugin::ArgReader reader(args_json);
+                if (reader.hasParseError()) {
                     throw std::runtime_error("invalid args json");
                 }
-                return uiControlExecute(args);
+                return uiControlExecute(reader.raw());
             }
         );
 

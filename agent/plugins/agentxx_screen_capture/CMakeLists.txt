@@ -1,7 +1,7 @@
 # agentxx_screen_capture —— 屏幕捕获插件 (Windows)
-# - 默认: 独立动态库 (MODULE), 仅依赖纯 C ABI 头 + neograph::json (yyjson) + simdjson
+# - 默认: 独立动态库 (MODULE), 仅依赖纯 C ABI 头 + agentxx_util (Json/JsonView)
 # - 内置模式: 源文件编译为 OBJECT 库合并进
-#   libagentxx; neograph/yyjson/fmt/simdjson 为 libagentxx 既有依赖; DXGI/D3D11/WIC 等平台库
+#   libagentxx; agentxx_util/simdjson 为 libagentxx 既有依赖; DXGI/D3D11/WIC 等平台库
 #   经 AGENTXX_BUILTIN_PLUGIN_LINK_LIBS 补链接 (libagentxx 不再无条件携带
 #   插件专用库)
 # - 提供: agentxx_screen_capture (单帧/全部屏幕/鼠标屏/流式推送)
@@ -35,7 +35,7 @@ if (_AGENTXX_ADD_AS_BUILTIN)
   target_include_directories(${_target} PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}"          # screen_capture.h / screen_capture_plugin.h
     "${AGENTXX_LIB_INCLUDE_DIR}"           # agentxx/plugin/plugin_api.h
-    "${AGENTXX_INSTALL_DIR}/include"       # fmt neograph simdjson.h
+    "${AGENTXX_INSTALL_DIR}/include"       # agentxx_util (Json/JsonView) simdjson.h
   )
   # 复用 agentxx_util 工具库 (libagentxx 已链接本库; 此处经 PRIVATE 链接仅
   # 传递编译宏/头路径: util 头文件依赖 XX_IS_* 宏与 include 路径)
@@ -89,51 +89,30 @@ add_library(${PLUGIN_NAME} SHARED
 # target_include_directories 声明头路径 / target_link_directories 提供裸库名
 # 解析目录 / target_link_libraries 以 imported target + 裸库名链接。
 # 复用 agentxx_util 工具库 (插件静态链接, 与宿主副本符号互不冲突;
-# neograph::json 实现经 yyjson)
+# agentxx::util::Json 经 agentxx_util)
 if (NOT TARGET agentxx_util)
   # 独立构建本插件时经安装 config 导入; 内置合并模式 (经 libagentxx 构建)
   # 下 util 目标已存在于宿主工程, 跳过导入 (此时 install 目录尚未生成 config)
   find_package(agentxx_util REQUIRED)
 endif()
-find_package(html2md REQUIRED)
-# OpenSSL 保持模块模式 (FindOpenSSL, 与 lib 一致): 本项目 OpenSSL 为预构建
-# 目录 (无 config), OPENSSL_ROOT_DIR 由顶层 superbuild 传入精确指向预构建
-# 目录, 不会命中系统 OpenSSL (独立构建未传时回退系统库)
-find_package(OpenSSL REQUIRED)
 find_package(fmt REQUIRED)
 
 target_include_directories(${PLUGIN_NAME} PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}"          # screen_capture.h / screen_capture_plugin.h
   "${AGENTXX_LIB_INCLUDE_DIR}"           # agentxx/plugin/plugin_api.h
-  "${AGENTXX_INSTALL_DIR}/include/"      # fmt neograph simdjson.h
+  "${AGENTXX_INSTALL_DIR}/include/"      # agentxx_util (Json/JsonView) simdjson.h
 )
 
-# 裸库名依赖解析目录 (与 lib 一致): neograph 系/yyjson/hs_runtime 位于
-# AGENTXX_INSTALL_DIR/lib; OpenSSL 预构建目录 (正序依赖经 imported target
-# 绝对路径链接, 此处仅为兜底解析保留)
+# 裸库名依赖解析目录: hs_runtime 位于
+# AGENTXX_INSTALL_DIR/lib 经 agentxx_util PUBLIC link_directories 传播已可解析 hs_runtime; 此处保留供直连裸库名兜底
 target_link_directories(${PLUGIN_NAME} PRIVATE
   "${AGENTXX_INSTALL_DIR}/lib/"
-  "${OPENSSL_ROOT_DIR}/lib64"
-  "${OPENSSL_ROOT_DIR}/lib"
 )
 
 target_link_libraries(${PLUGIN_NAME} PRIVATE
   agentxx_util
   simdjson
   fmt::fmt
-  html2md
-  OpenSSL::SSL
-  OpenSSL::Crypto
-  # === neograph vvv 链接顺序是必要的 (与 lib 自身一致) ===
-  neograph_sqlite
-  neograph_acp
-  neograph_mcp
-  neograph_mcp_types
-  neograph_async
-  neograph_llm
-  neograph_core
-  # === neograph ^^^
-  yyjson
 )
 if (AGENTXX_ENABLE_HYPERSCAN)
   # hyperscan pkg-config 模块由 plugins/CMakeLists.txt 统一定义 (与

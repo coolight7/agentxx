@@ -1,3 +1,4 @@
+#include "agentxx/util/neograph_json_bridge.h"
 #include "agentxx/tools/subagent.h"
 
 #include "agentxx/event/event_stream.h"
@@ -36,13 +37,13 @@ events::ReqSubagentBatch parseSubagentBatchFromInterrupt(
                 .message      = t.value("message", std::string{}),
                 // 结构化消息透传 (同上下文模式): 中断参数携带完整消息前缀
                 .messages = (t.contains("messages") && t["messages"].is_array())
-                                ? std::optional<neograph::json>{t["messages"]}
+                                ? std::optional<agentxx::util::Json>{t["messages"]}
                                 : std::nullopt,
                 // 指定运行 session (同上下文模式): 空时保持默认独立 subagent 线程
                 .sessionId = t.value("sessionId", std::string{}),
                 // 工具策略 (无工具/继承父/自定义): 缺省不设置 (子代理默认全量)
                 .tools = (t.contains("tools") && t["tools"].is_array())
-                             ? std::optional<neograph::json>{t["tools"]}
+                             ? std::optional<agentxx::util::Json>{t["tools"]}
                              : std::nullopt,
                 // 压缩中间件开关: 缺省不设置 (继承 config 默认)
                 .enableSummarization
@@ -60,11 +61,11 @@ events::ReqSubagentBatch parseSubagentBatchFromInterrupt(
             .systemPrompt = arg.value("system_prompt", std::string{}),
             .message      = arg.value("message", std::string{}),
             .messages     = (arg.contains("messages") && arg["messages"].is_array())
-                                ? std::optional<neograph::json>{arg["messages"]}
+                                ? std::optional<agentxx::util::Json>{arg["messages"]}
                                 : std::nullopt,
             .sessionId    = arg.value("sessionId", std::string{}),
             .tools        = (arg.contains("tools") && arg["tools"].is_array())
-                                ? std::optional<neograph::json>{arg["tools"]}
+                                ? std::optional<agentxx::util::Json>{arg["tools"]}
                                 : std::nullopt,
             .enableSummarization
             = (arg.contains("enable_summarization") && arg["enable_summarization"].is_boolean())
@@ -115,7 +116,7 @@ neograph::ChatTool SubAgentManagerTool::get_definition() const {
     }
 
     // 任务项结构 (tasks 数组元素, 与顶层单任务字段一致)
-    const auto taskItemSchema = neograph::json{
+    const auto taskItemSchema = agentxx::util::Json{
         {"type", "object"},
         {
          "properties", {
@@ -197,13 +198,10 @@ neograph::ChatTool SubAgentManagerTool::get_definition() const {
                     },
                 },
             }, },
-        {"required", neograph::json::array({"subagent", "message"})},
+        {"required", agentxx::util::Json::array({"subagent", "message"})},
     };
 
-    return {
-        "agentxx_subagent",
-        prompt.depict,
-        neograph::json{
+    agentxx::util::Json params = agentxx::util::Json{
                        {"type", "object"},
                        {
                 "properties",
@@ -231,7 +229,7 @@ neograph::ChatTool SubAgentManagerTool::get_definition() const {
                             // 否则重载决议会优先选择 initializer_list 构造函数,
                             // 把 vector 包成单个元素产生 [[...]] 嵌套数组,
                             // 生成非法 enum schema 导致严格校验的上游 (如 gpt-5.6-luna) HTTP 400
-                            {"enum", neograph::json(subagentNameList)},
+                            {"enum", agentxx::util::Json(subagentNameList)},
                             {
                                 "description",
                                 fmt::format(
@@ -290,12 +288,12 @@ neograph::ChatTool SubAgentManagerTool::get_definition() const {
                 },
             }, {
                 "required",
-                neograph::json::array({"subagent", "message"}),
-            }, },
-    };
+                agentxx::util::Json::array({"subagent", "message"}),
+            }, };
+    return {"agentxx_subagent", prompt.depict, agentxx::util::toNeographJson(params)};
 }
 
-asio::awaitable<std::string> SubAgentManagerTool::execute_async(const neograph::json& arguments) {
+asio::awaitable<std::string> SubAgentManagerTool::execute_async(const agentxx::util::Json& arguments) {
     // 统一批量委派 (单发与批量合并):
     // - `tasks` 数组非空: 批量模式 (每项一个子代理任务, 并行运行)
     // - 无 `tasks`: 单任务模式 (顶层 subagent/message 字段; summarization
@@ -308,14 +306,14 @@ asio::awaitable<std::string> SubAgentManagerTool::execute_async(const neograph::
         std::string                   subagent;
         std::string                   systemPrompt;
         std::string                   message;
-        std::optional<neograph::json> messages;
+        std::optional<agentxx::util::Json> messages;
         std::string                   sessionId;
-        std::optional<neograph::json> tools;
+        std::optional<agentxx::util::Json> tools;
         std::optional<bool>           enableSummarization;
         std::string                   resultId;
     };
 
-    auto parseTask = [](const neograph::json& t) -> TaskArg {
+    auto parseTask = [](const agentxx::util::Json& t) -> TaskArg {
         TaskArg task;
         task.subagent     = t.value("subagent", std::string{});
         task.systemPrompt = t.value("system_prompt", std::string{});
@@ -388,9 +386,9 @@ asio::awaitable<std::string> SubAgentManagerTool::execute_async(const neograph::
     auto result = co_await agentCtxPtr->middlewareHandleContext->requestInterrupt(
         sessionId,
         [&]() {
-            auto tasksJson = neograph::json::array();
+            auto tasksJson = agentxx::util::Json::array();
             for (const auto& task : tasks) {
-                auto t = neograph::json{
+                auto t = agentxx::util::Json{
                     {"subagent",      task.subagent    },
                     {"system_prompt", task.systemPrompt},
                     {"message",       task.message     },
@@ -419,7 +417,7 @@ asio::awaitable<std::string> SubAgentManagerTool::execute_async(const neograph::
             }
             return agentxx::middleware::InterruptHandleArg{
                 .name     = "subagent",
-                .arg      = neograph::json{{"tasks", std::move(tasksJson)}},
+                .arg      = agentxx::util::Json{{"tasks", std::move(tasksJson)}},
                 .resultId = resultId,
             };
         },
@@ -429,7 +427,7 @@ asio::awaitable<std::string> SubAgentManagerTool::execute_async(const neograph::
     // 提取结果: key = (tool_call_id + "_") + (task.result_id | 任务序号)
     // (与中断处理循环 buildSubagentResumeValues 共用 makeSubagentResumeKey 规则;
     //  前缀避免同一轮多个中断的序号 key 互相覆盖)
-    auto   outputs = neograph::json::array();
+    auto   outputs = agentxx::util::Json::array();
     size_t idx     = 0;
     for (const auto& task : tasks) {
         ++idx;

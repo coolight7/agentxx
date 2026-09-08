@@ -67,13 +67,13 @@ public:
         co_return std::string{"test_input"};
     }
 
-    asio::awaitable<neograph::json> handleInterrupt(
+    asio::awaitable<agentxx::util::Json> handleInterrupt(
         std::string_view /*sessionId*/,
         std::string_view /*interruptNode*/,
         std::string_view /*interruptValue*/,
         std::string_view /*interruptArgJson*/
     ) override {
-        co_return neograph::json::array();
+        co_return agentxx::util::Json::array();
     }
 };
 
@@ -93,7 +93,7 @@ public:
         co_return std::nullopt;
     }
 
-    asio::awaitable<neograph::json> handleInterrupt(
+    asio::awaitable<agentxx::util::Json> handleInterrupt(
         std::string_view /*sessionId*/,
         std::string_view interruptNode,
         std::string_view /*interruptValue*/,
@@ -101,9 +101,9 @@ public:
     ) override {
         if (interruptNode == "permission") {
             permissionCalls++;
-            co_return neograph::json::array({"true"});
+            co_return agentxx::util::Json::array({"true"});
         }
-        co_return neograph::json::array();
+        co_return agentxx::util::Json::array();
     }
 };
 
@@ -163,12 +163,12 @@ private:
 std::string    g_da_sim_response_content  = "Hello! I am a simulated LLM response for testing.";
 int            g_da_sim_prompt_tokens     = 100;
 int            g_da_sim_completion_tokens = 50;
-neograph::json g_da_sim_tool_calls        = neograph::json::array();
+agentxx::util::Json g_da_sim_tool_calls        = agentxx::util::Json::array();
 std::string    g_da_sim_reasoning_content = "";
 int            g_da_sim_delay_ms          = 0;
-neograph::json g_da_sim_last_request      = neograph::json::object();
+agentxx::util::Json g_da_sim_last_request      = agentxx::util::Json::object();
 /// 按到达顺序记录所有 /chat/completions 请求 (供测试断言多次请求)
-std::vector<neograph::json> g_da_sim_requests;
+std::vector<agentxx::util::Json> g_da_sim_requests;
 /// 累计请求计数 (每次 /chat/completions 请求递增, 含失败请求), 供测试验证调用次数
 int g_da_sim_request_count = 0;
 /// 剩余失败次数: >0 时接下来的请求直接返回 HTTP 500 并递减, 用于模拟 LLM API 持续失败
@@ -214,7 +214,7 @@ void DaSimServer::stop() {
     port                          = 0;
     g_da_sim_delay_ms             = 0;
     g_da_sim_fail_count           = 0;
-    g_da_sim_tool_calls           = neograph::json::array();
+    g_da_sim_tool_calls           = agentxx::util::Json::array();
     g_da_sim_tool_calls_remaining = -1;
 }
 
@@ -223,10 +223,10 @@ DaSimServer startDaSimServer() {
     g_da_sim_response_content  = "Hello! I am a simulated LLM response for testing.";
     g_da_sim_prompt_tokens     = 100;
     g_da_sim_completion_tokens = 50;
-    g_da_sim_tool_calls        = neograph::json::array();
+    g_da_sim_tool_calls        = agentxx::util::Json::array();
     g_da_sim_reasoning_content = "";
     g_da_sim_delay_ms          = 0;
-    g_da_sim_last_request      = neograph::json::object();
+    g_da_sim_last_request      = agentxx::util::Json::object();
     g_da_sim_requests.clear();
     g_da_sim_request_count        = 0;
     g_da_sim_fail_count           = 0;
@@ -278,7 +278,7 @@ DaSimServer startDaSimServer() {
                     }
                 }
 
-                auto j      = neograph::json::parse(req.body());
+                auto j      = agentxx::util::Json::parse(req.body());
                 bool stream = j.value("stream", false);
                 // tool_calls 次数控制: g_da_sim_tool_calls_remaining >= 0 时,
                 // 前 N 次请求返回 tool_calls, 之后返回纯文本 (供嵌套委派等
@@ -306,14 +306,14 @@ DaSimServer startDaSimServer() {
                 if (stream) {
                     std::string sseBody;
                     auto        append
-                        = [&](const neograph::json& delta, const std::string& finishReason) {
-                              auto ev       = neograph::json::object();
+                        = [&](const agentxx::util::Json& delta, const std::string& finishReason) {
+                              auto ev       = agentxx::util::Json::object();
                               ev["id"]      = "chatcmpl-test-sim";
                               ev["object"]  = "chat.completion.chunk";
                               ev["created"] = 1234567890;
                               ev["model"]   = "test-sim";
 
-                              auto choice     = neograph::json::object();
+                              auto choice     = agentxx::util::Json::object();
                               choice["index"] = 0;
                               choice["delta"] = delta;
                               if (finishReason.empty()) {
@@ -321,13 +321,13 @@ DaSimServer startDaSimServer() {
                               } else {
                                   choice["finish_reason"] = finishReason;
                               }
-                              ev["choices"] = neograph::json::array({choice});
+                              ev["choices"] = agentxx::util::Json::array({choice});
 
                               sseBody += "data: " + ev.dump() + "\n\n";
                           };
 
                     {
-                        auto d    = neograph::json::object();
+                        auto d    = agentxx::util::Json::object();
                         d["role"] = "assistant";
                         if (hasToolCalls) {
                             d["content"] = nullptr;
@@ -339,34 +339,34 @@ DaSimServer startDaSimServer() {
 
                     // 模拟 thinking 模型: 先推送 reasoning_content 增量 (TYPE_THINKING)
                     if (!g_da_sim_reasoning_content.empty()) {
-                        auto d                 = neograph::json::object();
+                        auto d                 = agentxx::util::Json::object();
                         d["reasoning_content"] = g_da_sim_reasoning_content;
                         append(d, "");
                     }
 
                     if (hasToolCalls) {
-                        auto d          = neograph::json::object();
+                        auto d          = agentxx::util::Json::object();
                         d["tool_calls"] = g_da_sim_tool_calls;
                         append(d, "");
-                        append(neograph::json::object(), "tool_calls");
+                        append(agentxx::util::Json::object(), "tool_calls");
                     } else {
                         const auto& content = respContent;
                         std::string acc;
                         for (size_t i = 0; i < content.size(); ++i) {
                             acc += content[i];
                             if (content[i] == ' ' || acc.size() >= 10 || i == content.size() - 1) {
-                                auto d       = neograph::json::object();
+                                auto d       = agentxx::util::Json::object();
                                 d["content"] = acc;
                                 append(d, "");
                                 acc.clear();
                             }
                         }
                         if (!acc.empty()) {
-                            auto d       = neograph::json::object();
+                            auto d       = agentxx::util::Json::object();
                             d["content"] = acc;
                             append(d, "");
                         }
-                        append(neograph::json::object(), "stop");
+                        append(agentxx::util::Json::object(), "stop");
                     }
 
                     sseBody += "data: [DONE]\n\n";
@@ -377,7 +377,7 @@ DaSimServer startDaSimServer() {
                     resp.body() = std::move(sseBody);
                     resp.prepare_payload();
                 } else {
-                    auto msg    = neograph::json::object();
+                    auto msg    = agentxx::util::Json::object();
                     msg["role"] = "assistant";
                     if (!g_da_sim_reasoning_content.empty()) {
                         msg["reasoning_content"] = g_da_sim_reasoning_content;
@@ -389,22 +389,22 @@ DaSimServer startDaSimServer() {
                         msg["content"] = respContent;
                     }
 
-                    auto choice             = neograph::json::object();
+                    auto choice             = agentxx::util::Json::object();
                     choice["index"]         = 0;
                     choice["message"]       = msg;
                     choice["finish_reason"] = hasToolCalls ? "tool_calls" : "stop";
 
-                    auto usage                 = neograph::json::object();
+                    auto usage                 = agentxx::util::Json::object();
                     usage["prompt_tokens"]     = g_da_sim_prompt_tokens;
                     usage["completion_tokens"] = g_da_sim_completion_tokens;
                     usage["total_tokens"] = g_da_sim_prompt_tokens + g_da_sim_completion_tokens;
 
-                    auto respBody       = neograph::json::object();
+                    auto respBody       = agentxx::util::Json::object();
                     respBody["id"]      = "chatcmpl-test-sim";
                     respBody["object"]  = "chat.completion";
                     respBody["created"] = 1234567890;
                     respBody["model"]   = "test-sim";
-                    respBody["choices"] = neograph::json::array({choice});
+                    respBody["choices"] = agentxx::util::Json::array({choice});
                     respBody["usage"]   = usage;
 
                     resp.result(http::status::ok);
@@ -413,7 +413,7 @@ DaSimServer startDaSimServer() {
                     resp.prepare_payload();
                 }
 
-                g_da_sim_tool_calls        = neograph::json::array();
+                g_da_sim_tool_calls        = agentxx::util::Json::array();
                 g_da_sim_reasoning_content = "";
                 co_return;
             }
@@ -507,7 +507,7 @@ asio::awaitable<void> test_agent_permission_mode_rules() {
     auto check
         = [&](agentxx::agent::CodeAgent& agent, std::string_view path, const std::string& sessionId
           ) -> asio::awaitable<bool> {
-        auto args = neograph::json{
+        auto args = agentxx::util::Json{
             {"path",      std::string{path}},
             {"sessionId", sessionId        }
         };
@@ -664,7 +664,7 @@ asio::awaitable<void> test_agent_single_input() {
     cfg->prompt.systemPrompt = "You are a helpful assistant.";
 
     g_da_sim_response_content = "This is the test response content.";
-    g_da_sim_tool_calls       = neograph::json::array();
+    g_da_sim_tool_calls       = agentxx::util::Json::array();
 
     agentxx::agent::CodeAgent agent(cfg);
     co_await agent.init();
@@ -688,7 +688,7 @@ asio::awaitable<void> test_agent_conversation_turn() {
     cfg->prompt.systemPrompt = "You are a helpful assistant.";
 
     g_da_sim_response_content = "Hello from the simulated LLM!";
-    g_da_sim_tool_calls       = neograph::json::array();
+    g_da_sim_tool_calls       = agentxx::util::Json::array();
 
     agentxx::agent::CodeAgent agent(cfg);
     co_await agent.init();
@@ -712,13 +712,13 @@ asio::awaitable<void> test_agent_tool_calls() {
     cfg->prompt.systemPrompt = "You are a helpful assistant.";
 
     g_da_sim_response_content = "";
-    g_da_sim_tool_calls       = neograph::json::array({
-        neograph::json{
+    g_da_sim_tool_calls       = agentxx::util::Json::array({
+        agentxx::util::Json{
                        {"index", 0},
                        {"id", "call_test_1"},
                        {"type", "function"},
                        {"function",
-                   neograph::json{
+                   agentxx::util::Json{
                        {"name", "agentxx_filesystem_list"},
                        {"arguments", "{}"},
              }},
@@ -746,7 +746,7 @@ asio::awaitable<void> test_agent_multi_turn() {
     cfg->prompt.systemPrompt = "You are a helpful assistant.";
 
     g_da_sim_response_content = "Response for turn ";
-    g_da_sim_tool_calls       = neograph::json::array();
+    g_da_sim_tool_calls       = agentxx::util::Json::array();
 
     agentxx::agent::CodeAgent agent(cfg);
     co_await agent.init();
@@ -773,7 +773,7 @@ asio::awaitable<void> test_agent_large_history() {
     cfg->prompt.systemPrompt = "You are a helpful assistant.";
 
     g_da_sim_response_content = "Final response after long history.";
-    g_da_sim_tool_calls       = neograph::json::array();
+    g_da_sim_tool_calls       = agentxx::util::Json::array();
 
     agentxx::agent::CodeAgent agent(cfg);
     co_await agent.init();
@@ -795,7 +795,7 @@ asio::awaitable<void> test_agent_nonstream() {
     cfg->model.modelName = "test-sim";
 
     g_da_sim_response_content = "Non-stream test response.";
-    g_da_sim_tool_calls       = neograph::json::array();
+    g_da_sim_tool_calls       = agentxx::util::Json::array();
 
     agentxx::agent::CodeAgent agent(cfg);
     co_await agent.init();
@@ -863,7 +863,7 @@ asio::awaitable<void> test_agent_io_session_bus() {
     cfg->model.modelName      = "test-sim";
     cfg->prompt.systemPrompt  = "You are a helpful assistant.";
     g_da_sim_response_content = "Hello from IO session bus test!";
-    g_da_sim_tool_calls       = neograph::json::array();
+    g_da_sim_tool_calls       = agentxx::util::Json::array();
 
     agentxx::agent::CodeAgent agent(cfg);
     co_await agent.init();
@@ -900,7 +900,7 @@ asio::awaitable<void> test_agent_turn_system_message() {
     cfg->model.modelName      = "test-sim";
     cfg->prompt.systemPrompt  = "You are a helpful assistant.";
     g_da_sim_response_content = "System message test!";
-    g_da_sim_tool_calls       = neograph::json::array();
+    g_da_sim_tool_calls       = agentxx::util::Json::array();
 
     agentxx::agent::CodeAgent agent(cfg);
     co_await agent.init();
@@ -951,7 +951,7 @@ asio::awaitable<void> test_agent_io_null() {
     cfg->model.apiKey         = "EMPTY";
     cfg->model.modelName      = "test-sim";
     g_da_sim_response_content = "Null IO test.";
-    g_da_sim_tool_calls       = neograph::json::array();
+    g_da_sim_tool_calls       = agentxx::util::Json::array();
 
     agentxx::agent::CodeAgent agent(cfg);
     co_await agent.init();
@@ -973,7 +973,7 @@ asio::awaitable<void> test_agent_session_activity_streaming() {
     cfg->model.apiKey         = "EMPTY";
     cfg->model.modelName      = "test-sim";
     g_da_sim_response_content = "Activity check response.";
-    g_da_sim_tool_calls       = neograph::json::array();
+    g_da_sim_tool_calls       = agentxx::util::Json::array();
 
     agentxx::agent::CodeAgent agent(cfg);
     co_await agent.init();
@@ -999,13 +999,13 @@ asio::awaitable<void> test_agent_session_activity_toolcall() {
     cfg->model.apiKey         = "EMPTY";
     cfg->model.modelName      = "test-sim";
     g_da_sim_response_content = "";
-    g_da_sim_tool_calls       = neograph::json::array({
-        neograph::json{
+    g_da_sim_tool_calls       = agentxx::util::Json::array({
+        agentxx::util::Json{
                        {"index", 0},
                        {"id", "call_act_1"},
                        {"type", "function"},
                        {"function",
-                   neograph::json{
+                   agentxx::util::Json{
                        {"name", "agentxx_filesystem_list"},
                        {"arguments", "{}"},
              }},
@@ -1035,7 +1035,7 @@ asio::awaitable<void> test_agent_multi_session_io() {
     cfg->model.apiKey         = "EMPTY";
     cfg->model.modelName      = "test-sim";
     g_da_sim_response_content = "Multi-session response.";
-    g_da_sim_tool_calls       = neograph::json::array();
+    g_da_sim_tool_calls       = agentxx::util::Json::array();
 
     agentxx::agent::CodeAgent agent(cfg);
     co_await agent.init();
@@ -1073,7 +1073,7 @@ asio::awaitable<void> test_agent_reuse_session_bus() {
     cfg->model.apiKey         = "EMPTY";
     cfg->model.modelName      = "test-sim";
     g_da_sim_response_content = "Reuse session bus test.";
-    g_da_sim_tool_calls       = neograph::json::array();
+    g_da_sim_tool_calls       = agentxx::util::Json::array();
 
     agentxx::agent::CodeAgent agent(cfg);
     co_await agent.init();
@@ -1119,13 +1119,13 @@ asio::awaitable<void> test_agent_llm_retry_exhaust() {
 
     // ---- 第一轮: llm 返回 tool_calls, tools 执行一次 ----
     g_da_sim_response_content = "";
-    g_da_sim_tool_calls       = neograph::json::array({
-        neograph::json{
+    g_da_sim_tool_calls       = agentxx::util::Json::array({
+        agentxx::util::Json{
                        {"index", 0},
                        {"id", "call_retry_1"},
                        {"type", "function"},
                        {"function",
-                   neograph::json{
+                   agentxx::util::Json{
                        {"name", "agentxx_filesystem_list"},
                        {"arguments", "{}"},
              }},
@@ -1139,7 +1139,7 @@ asio::awaitable<void> test_agent_llm_retry_exhaust() {
 
     // ---- 第二轮: llm 持续失败 (重试耗尽后应结束本轮) ----
     g_da_sim_response_content = "fallback text"; // bug 场景下第 4 次请求会成功返回此文本
-    g_da_sim_tool_calls = neograph::json::array();
+    g_da_sim_tool_calls = agentxx::util::Json::array();
     // 接下来 2 次请求返回 500: 第 1 次失败 + 1 次重试失败
     g_da_sim_fail_count = 2;
 
@@ -1188,13 +1188,13 @@ asio::awaitable<void> test_agent_toolcall_intercept_exception() {
     g_da_sim_request_count    = 0;
     g_da_sim_fail_count       = 0;
     g_da_sim_response_content = "Final answer after tool error.";
-    g_da_sim_tool_calls       = neograph::json::array({
-        neograph::json{
+    g_da_sim_tool_calls       = agentxx::util::Json::array({
+        agentxx::util::Json{
                        {"index", 0},
                        {"id", "call_intercept_1"},
                        {"type", "function"},
                        {"function",
-                   neograph::json{
+                   agentxx::util::Json{
                        {"name", "agentxx_filesystem_list"},
                        {"arguments", "{}"},
              }},

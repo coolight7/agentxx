@@ -63,12 +63,12 @@ constexpr Entry kTable[] = {
     // ---- 输入框 ----
     {"input.placeholder",
      "Type a message... (ESC:Interrupt, Enter:Send, Alt+Enter:Newline)",                    "输入消息... (Esc: 中断, Enter: 发送, Alt+Enter: 换行)"                                     },
-    {"input.attach",             "[ 📎︎︎ ]",                                          "[ 📎︎︎ ]"                                                                                      },
+    {"input.attach",             "[📎︎︎]",                                            "[📎︎︎]"                                                                                        },
     {"input.attachTray",         " 📎︎︎ Pending ({}): ",                              " 📎︎︎ 待发附件 ({}): "                                                                     },
     {"msg.attachImage",          "📷︎ Image",                                           "📷︎ 图像附件"                                                                                },
     {"msg.attachAudio",          "🎵︎ Audio",                                           "🎵︎ 音频附件"                                                                                },
     {"msg.attachVideo",          "🎬︎ Video",                                           "🎬︎ 视频附件"                                                                                },
-    {"msg.attachOpen",           " [Click to show in file manager]",                  " [点击在文件管理器中显示]"                                                              },
+    {"msg.attachOpen",           " [Click to show in file manager]",                        " [点击在文件管理器中显示]"                                                                },
 
     // ---- 文件选择弹窗 ----
     {"picker.title",             " Select File [model supports: {}] ",                      " 选择文件 [当前模型支持: {}] "                                                             },

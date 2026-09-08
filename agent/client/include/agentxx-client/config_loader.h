@@ -3,7 +3,7 @@
 #include "agentxx/agent/config.h"
 #include "agentxx/agent/model_registry.h"
 #include "agentxx/util/log.h"
-#include "neograph/json.h"
+#include "agentxx/util/json.h"
 #include <map>
 #include <memory>
 #include <string>

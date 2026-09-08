@@ -36,7 +36,7 @@ public:
         return tool_->get_definition();
     }
 
-    asio::awaitable<std::string> execute_async(const neograph::json& arguments) override {
+    asio::awaitable<std::string> execute_async(const agentxx::util::Json& arguments) override {
         co_return co_await tool_->execute_async(arguments);
     }
 

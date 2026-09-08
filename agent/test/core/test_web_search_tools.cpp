@@ -75,7 +75,7 @@ struct WebSearchTool {
         return searchDefinition();
     }
 
-    asio::awaitable<std::string> execute_async(const neograph::json& args) const {
+    asio::awaitable<std::string> execute_async(const agentxx::util::Json& args) const {
         co_return co_await agentxx_websearch_plugin::webSearchExecuteAsync(
             args,
             searchApiUrl,
@@ -95,7 +95,7 @@ struct WebFetchUrlTool {
         };
     }
 
-    asio::awaitable<std::string> execute_async(const neograph::json& args) const {
+    asio::awaitable<std::string> execute_async(const agentxx::util::Json& args) const {
         co_return co_await agentxx_websearch_plugin::webFetchExecuteAsync(args);
     }
 };
@@ -124,7 +124,7 @@ struct ModelWebSearchTool {
         };
     }
 
-    asio::awaitable<std::string> execute_async(const neograph::json& args) const {
+    asio::awaitable<std::string> execute_async(const agentxx::util::Json& args) const {
         co_return co_await agentxx_websearch_plugin::modelWebSearchExecuteAsync(args, modelCfg);
     }
 
@@ -144,7 +144,7 @@ struct WebFetchUrlMarkdownTool {
         };
     }
 
-    asio::awaitable<std::string> execute_async(const neograph::json& args) const {
+    asio::awaitable<std::string> execute_async(const agentxx::util::Json& args) const {
         co_return co_await agentxx_websearch_plugin::webFetchMarkdownExecuteAsync(args);
     }
 };
@@ -174,7 +174,7 @@ asio::awaitable<void>
     test_web_search_empty_query(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool
         = agentxx::tools::WebSearchTool{"https://example.com/search?q={}", false, agentContext};
-    auto args = neograph::json{
+    auto args = agentxx::util::Json{
         {"query", ""}
     };
     auto result = co_await tool.execute_async(args);
@@ -236,7 +236,7 @@ asio::awaitable<void>
 asio::awaitable<void>
     test_web_fetch_url_empty_url(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::WebFetchUrlTool{agentContext};
-    auto args = neograph::json{
+    auto args = agentxx::util::Json{
         {"url", ""}
     };
     auto result = co_await tool.execute_async(args);
@@ -288,7 +288,7 @@ asio::awaitable<void>
     test_web_fetch_url_markdown_empty_url(std::weak_ptr<agentxx::agent::AgentContext> agentContext
     ) {
     auto tool = agentxx::tools::WebFetchUrlMarkdownTool{agentContext};
-    auto args = neograph::json{
+    auto args = agentxx::util::Json{
         {"url", ""}
     };
     auto result = co_await tool.execute_async(args);
@@ -447,9 +447,9 @@ asio::awaitable<void>
     // WebFetchUrlTool: header 参数 (JSON 对象格式)
     {
         auto tool = agentxx::tools::WebFetchUrlTool{agentContext};
-        auto args = neograph::json{
+        auto args = agentxx::util::Json{
             {"url",    baseUrl + "/echo-header"                                   },
-            {"header", neograph::json{{"X-Test-Header", "fetch-url-header-value"}}},
+            {"header", agentxx::util::Json{{"X-Test-Header", "fetch-url-header-value"}}},
         };
         auto result = co_await tool.execute_async(args);
         if (result.find("fetch-url-header-value") != std::string::npos) {
@@ -463,9 +463,9 @@ asio::awaitable<void>
     // WebFetchUrlMarkdownTool: header 参数
     {
         auto tool = agentxx::tools::WebFetchUrlMarkdownTool{agentContext};
-        auto args = neograph::json{
+        auto args = agentxx::util::Json{
             {"url",    baseUrl + "/echo-header"                                  },
-            {"header", neograph::json{{"X-Test-Header", "fetch-md-header-value"}}},
+            {"header", agentxx::util::Json{{"X-Test-Header", "fetch-md-header-value"}}},
         };
         auto result = co_await tool.execute_async(args);
         if (result.find("fetch-md-header-value") != std::string::npos) {
@@ -481,10 +481,10 @@ asio::awaitable<void>
     {
         auto tool
             = agentxx::tools::WebSearchTool{baseUrl + "/echo-header?q={}", false, agentContext};
-        auto args = neograph::json{
+        auto args = agentxx::util::Json{
             {"query",   "test"                                                      },
             {"timeout", 10                                                          },
-            {"header",  neograph::json{{"X-Test-Header", "search-raw-header-value"}}},
+            {"header",  agentxx::util::Json{{"X-Test-Header", "search-raw-header-value"}}},
         };
         auto result = co_await tool.execute_async(args);
         if (result.find("search-raw-header-value") != std::string::npos) {
@@ -499,10 +499,10 @@ asio::awaitable<void>
     {
         auto tool
             = agentxx::tools::WebSearchTool{baseUrl + "/echo-header?q={}", true, agentContext};
-        auto args = neograph::json{
+        auto args = agentxx::util::Json{
             {"query",   "test"                                                     },
             {"timeout", 10                                                         },
-            {"header",  neograph::json{{"X-Test-Header", "search-md-header-value"}}},
+            {"header",  agentxx::util::Json{{"X-Test-Header", "search-md-header-value"}}},
         };
         auto result = co_await tool.execute_async(args);
         if (result.find("search-md-header-value") != std::string::npos) {
@@ -518,7 +518,7 @@ asio::awaitable<void>
     // timeout 参数被接受 (正常服务器不应报错)
     {
         auto tool = agentxx::tools::WebFetchUrlTool{agentContext};
-        auto args = neograph::json{
+        auto args = agentxx::util::Json{
             {"url",     baseUrl + "/hello"},
             {"timeout", 5                 },
         };

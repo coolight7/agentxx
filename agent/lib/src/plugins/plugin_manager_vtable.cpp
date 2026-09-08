@@ -546,7 +546,7 @@ static int32_t AGENTXX_PLUGIN_CALL
             std::string result = "agentxx.default";
             if (!json.empty()) {
                 try {
-                    auto j = neograph::json::parse(json);
+                    auto j = agentxx::util::Json::parse(json);
                     if (j.is_object() && j.contains("name") && j["name"].is_string()) {
                         result = j["name"].get<std::string>();
                     }
@@ -706,7 +706,7 @@ static int32_t AGENTXX_PLUGIN_CALL xx_json_get_string(
     try {
         std::string jsonStr{json->data, static_cast<size_t>(json->size)};
         std::string keyStr{key->data, static_cast<size_t>(key->size)};
-        auto        j = neograph::json::parse(jsonStr);
+        auto        j = agentxx::util::Json::parse(jsonStr);
         if (j.is_object() && j.contains(keyStr) && j[keyStr].is_string()) {
             std::string val = j[keyStr].get<std::string>();
             hostMemorySetString(out, val);
@@ -1481,7 +1481,7 @@ int PluginManager::registerMcpServer(PluginInstance* inst, AgentxxPluginStringVi
         return -1;
     }
     try {
-        auto j = neograph::json::parse(
+        auto j = agentxx::util::Json::parse(
             std::string_view{specJson.data, static_cast<size_t>(specJson.size)}
         );
         auto ns         = j.value("namespace", std::string{});
@@ -1543,13 +1543,13 @@ std::string PluginManager::ownResourcesJson(const PluginInstance* inst) {
     }
     auto snap    = c->resourceApplier->ownedBy(inst->name);
     auto toArray = [](const std::vector<std::string>& v) {
-        neograph::json a = neograph::json::array();
+        agentxx::util::Json a = agentxx::util::Json::array();
         for (const auto& s : v) {
             a.push_back(s);
         }
         return a;
     };
-    neograph::json out;
+    agentxx::util::Json out;
     out["skills"] = toArray(snap.skillDirs);
     out["memory"] = toArray(snap.memoryFiles);
     out["mcp"]    = toArray(snap.mcpNamespaces);
@@ -1586,7 +1586,7 @@ std::string PluginManager::getConfigJson() {
     if (!c || !c->agentConfig) {
         return {};
     }
-    neograph::json out;
+    agentxx::util::Json out;
     out["dataDir"]     = c->agentConfig->dataDir;
     out["projectRoot"] = c->agentConfig->workDir;
     out["language"]    = getLanguage();
@@ -1629,9 +1629,9 @@ std::string PluginManager::getToolPromptJson(const std::string& toolName) {
     if (it == prompts.end()) {
         return {};
     }
-    neograph::json out;
+    agentxx::util::Json out;
     out["depict"]       = it->second.depict;
-    neograph::json args = neograph::json::object();
+    agentxx::util::Json args = agentxx::util::Json::object();
     for (const auto& [k, v] : it->second.args) {
         args[k] = v;
     }
@@ -1656,7 +1656,7 @@ int PluginManager::setPromptJson(PluginInstance* inst, AgentxxPluginStringView p
         return -1;
     }
     try {
-        auto j = neograph::json::parse(
+        auto j = agentxx::util::Json::parse(
             std::string_view{prompt_json.data, static_cast<size_t>(prompt_json.size)}
         );
         if (!j.is_object()) {
@@ -1683,12 +1683,13 @@ int PluginManager::setPromptJson(PluginInstance* inst, AgentxxPluginStringView p
 
         if (j.contains("appendSystemPrompts") && j["appendSystemPrompts"].is_object()) {
             for (const auto& [key, _] : j["appendSystemPrompts"].items()) {
-                backupAppendKey(key);
+                backupAppendKey(std::string{key});
             }
         }
 
         if (j.contains("toolPrompt") && j["toolPrompt"].is_object()) {
-            for (const auto& [toolName, _] : j["toolPrompt"].items()) {
+            for (const auto& [toolNameView, _] : j["toolPrompt"].items()) {
+                const std::string toolName{toolNameView};
                 if (std::find(
                         inst->promptBackup.backedUpTools.begin(),
                         inst->promptBackup.backedUpTools.end(),
@@ -1787,14 +1788,14 @@ std::string PluginManager::getModelConfigJson() {
         return {};
     }
     const auto&    cfg = *c->agentConfig;
-    neograph::json out;
+    agentxx::util::Json out;
     out["baseUrl"]                       = cfg.model.baseUrl;
     out["apiKey"]                        = cfg.model.apiKey;
     out["modelName"]                     = cfg.model.modelName;
     out["websearchApiUrl"]               = cfg.websearchApiUrl;
     out["websearchConvertHtml2markdown"] = cfg.websearchConvertHtml2markdown;
     if (cfg.websearchModel) {
-        neograph::json wm;
+        agentxx::util::Json wm;
         wm["baseUrl"]                 = cfg.websearchModel->baseUrl;
         wm["apiKey"]                  = cfg.websearchModel->apiKey;
         wm["modelName"]               = cfg.websearchModel->modelName;

@@ -14,7 +14,7 @@
 #include <vector>
 
 #include <asio/awaitable.hpp>
-#include <neograph/json.h>
+#include "agentxx/util/json.h"
 
 #include "agentxx/util/http_server.h"
 #include "agentxx/version.h"
@@ -22,7 +22,7 @@
 namespace agentxx {
 namespace server {
 
-using json = neograph::json;
+using json = agentxx::util::Json;
 
 // ---------------------------------------------------------------------------
 // JSON-RPC 工具函数

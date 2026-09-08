@@ -18,7 +18,7 @@
 #include "ftxui/component/mouse.hpp"
 #include "ftxui/dom/elements.hpp"
 #include "ftxui/screen/screen.hpp"
-#include "neograph/json.h"
+#include "agentxx/util/json.h"
 #include <memory>
 #include <string>
 #include <vector>
@@ -63,9 +63,9 @@ struct ContextOverlayFixture {
     }
 
     /// 写入 contextMessages (模拟服务端 WireContextMessages 推送)
-    void setMessages(neograph::json msgs) {
+    void setMessages(agentxx::util::Json msgs) {
         sharedState.mutate([&](TUIRenderState& st) {
-            st.contextMessages = std::make_shared<neograph::json>(std::move(msgs));
+            st.contextMessages = std::make_shared<agentxx::util::Json>(std::move(msgs));
         });
     }
 
@@ -164,8 +164,8 @@ struct ContextOverlayFixture {
 };
 
 /// 构造典型上下文消息数组: 系统 + 用户 + 助手(带 tool_calls) + 工具结果
-neograph::json makeContextMessages() {
-    return neograph::json::parse(R"([
+agentxx::util::Json makeContextMessages() {
+    return agentxx::util::Json::parse(R"([
         {"role":"system","content":"You are a helpful assistant."},
         {"role":"user","content":"Hello, please check the weather."},
         {"role":"assistant","content":"","tool_calls":[
@@ -299,7 +299,7 @@ TestResult testTuiContextOverlay() {
     // ---- 场景 6: 空消息数组显示 (空) 占位 ----
     {
         ContextOverlayFixture fx;
-        fx.setMessages(neograph::json::array());
+        fx.setMessages(agentxx::util::Json::array());
         auto screen = fx.render();
         XX_TEST_EXPECT_TRUE(screen.find("(空)") != std::string::npos);
     }

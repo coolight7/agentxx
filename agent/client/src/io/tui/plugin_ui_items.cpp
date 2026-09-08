@@ -54,7 +54,7 @@ bool hasPluginBindingFor(
 }
 
 bool parsePluginButton(
-    const neograph::json&                    it,
+    const agentxx::util::Json&                    it,
     std::string_view                         plugin,
     const agentxx::plugin::ClientUiRegistry* reg,
     PluginButtonDesc&                        out

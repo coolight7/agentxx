@@ -5,7 +5,7 @@
 #include "agentxx/ffi_api.h"
 #include "asio/any_io_executor.hpp"
 #include "asio/experimental/concurrent_channel.hpp"
-#include "neograph/json.h"
+#include "agentxx/util/json.h"
 #include <atomic>
 #include <functional>
 #include <map>
@@ -67,7 +67,7 @@ public:
 
     /// 本 client 端点不注册会话总线, 此纯虚实现仅满足契约 (返回值未使用);
     /// 真实 HIL 流程: onPeerMessage(WireInterruptRequest) → waitHostInterrupt()
-    asio::awaitable<neograph::json> handleInterrupt(
+    asio::awaitable<agentxx::util::Json> handleInterrupt(
         std::string_view sessionId,
         std::string_view interruptNode,
         std::string_view interruptValue,
@@ -83,7 +83,7 @@ public:
 
     /// 提交中断应答 (client io 线程): 完成挂起的等待并触发回送 WireInterruptResponse;
     /// id 无效返回 false
-    bool submitInterruptResponse(int64_t interruptId, neograph::json values);
+    bool submitInterruptResponse(int64_t interruptId, agentxx::util::Json values);
 
     /// 失败全部挂起中断 (client io 线程调用; 停止或析构时清理)
     void failAllPendingInterrupts();
@@ -99,7 +99,7 @@ public:
     };
 
     /// client io 线程: 把指定类型的服务端应答转发给运行层同步查询等待方
-    std::function<void(SyncKind, neograph::json)> onSyncReply;
+    std::function<void(SyncKind, agentxx::util::Json)> onSyncReply;
 
 protected:
 
@@ -121,17 +121,17 @@ protected:
 private:
 
     using ErrorCode   = neograph_asio_error_code;
-    using RespChannel = asio::experimental::concurrent_channel<void(ErrorCode, neograph::json)>;
+    using RespChannel = asio::experimental::concurrent_channel<void(ErrorCode, agentxx::util::Json)>;
 
     /// client io 线程: 挂起等待宿主应答 (agentxx_ffi_interrupt_respond 经 submitInterruptResponse
     /// 完成 channel); 返回 {answered=false} 表示通道被关闭 (过期/停止, 不回送响应)
-    asio::awaitable<std::pair<bool, neograph::json>>
+    asio::awaitable<std::pair<bool, agentxx::util::Json>>
         waitHostInterrupt(int64_t id, std::shared_ptr<RespChannel> ch);
 
     /// client io 线程: 发事件到 C 回调 (异常不外泄)
     void emitEvent(AgentxxFFIEventType type, std::string json);
 
-    static std::string dump(const neograph::json& j);
+    static std::string dump(const agentxx::util::Json& j);
 
     asio::any_io_executor ex_;
 

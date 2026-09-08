@@ -50,7 +50,7 @@ public:
     /// <name, handle>
     std::map<
         std::string,
-        std::function<asio::awaitable<bool>(const neograph::Tool& item, neograph::json& args)>>
+        std::function<asio::awaitable<bool>(const neograph::Tool& item, agentxx::util::Json& args)>>
         handles{};
 
     /// 未命中任何已注册规则时 (router 返回 nullptr) 的默认处理操作。
@@ -88,12 +88,12 @@ public:
     std::string normalizePermissionPath(std::string_view path, std::string_view sessionId) const;
 
     asio::awaitable<bool>
-        defOnFilesystemHandle(const neograph::Tool& item, neograph::json& args, size_t index);
+        defOnFilesystemHandle(const neograph::Tool& item, agentxx::util::Json& args, size_t index);
 
     /// 经总线发起权限询问; 无 prompter 或被拒绝时返回 false
     asio::awaitable<bool> requestPermission(
         const neograph::Tool& item,
-        neograph::json&       args,
+        agentxx::util::Json&       args,
         std::string           category,
         std::string           target
     );

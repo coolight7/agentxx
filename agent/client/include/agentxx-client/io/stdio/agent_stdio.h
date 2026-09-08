@@ -2,7 +2,7 @@
 
 #include "agentxx/agent/io/agent_io.h"
 #include "asio/awaitable.hpp"
-#include "neograph/json.h"
+#include "agentxx/util/json.h"
 #include <iostream>
 #include <optional>
 #include <string>
@@ -35,7 +35,7 @@ public:
 
     asio::awaitable<std::optional<std::string>> getInput() override;
 
-    asio::awaitable<neograph::json> handleInterrupt(
+    asio::awaitable<agentxx::util::Json> handleInterrupt(
         std::string_view sessionId,
         std::string_view interruptNode,
         std::string_view interruptValue,

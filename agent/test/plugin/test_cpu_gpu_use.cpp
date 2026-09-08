@@ -127,7 +127,7 @@ asio::awaitable<TestResult>
         auto tool = ctx->toolRegistry->find("agentxx_get_system_core_info");
         XX_TEST_EXPECT_TRUE(tool != nullptr);
         if (tool) {
-            auto out = co_await tool->execute_async(neograph::json::object());
+            auto out = co_await tool->execute_async(agentxx::util::Json::object());
             TEST_INFO << "get_system_core_info output:\n" << out << std::endl;
             XX_TEST_EXPECT_TRUE(out.find("CPU Usage:") != std::string::npos);
             XX_TEST_EXPECT_TRUE(out.find("Memory:") != std::string::npos);
@@ -168,7 +168,7 @@ asio::awaitable<TestResult>
         }
         XX_TEST_EXPECT_EQ(opStatus, AGENTXX_PLUGIN_OPERATOR_OK);
         if (!payload.empty()) {
-            auto j = neograph::json::parse(payload);
+            auto j = agentxx::util::Json::parse(payload);
             if (j.is_object()) {
                 double cpu = j.value("cpu", -1.0);
                 XX_TEST_EXPECT_TRUE(cpu >= 0.0 && cpu <= 100.0);

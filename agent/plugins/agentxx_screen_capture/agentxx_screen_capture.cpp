@@ -11,7 +11,7 @@
 #include <filesystem>
 #include <functional>
 #include <memory>
-#include <neograph/json.h>
+#include "agentxx/util/json.h"
 #include <string>
 #include <vector>
 
@@ -114,12 +114,12 @@ static std::string buildCapturePath(PluginCtx& ctx, int screenIndex) {
     );
 }
 
-static neograph::json frameToJson(
+static agentxx::util::Json frameToJson(
     PluginCtx&                                        ctx,
     const agentxx_screen_capture_plugin::ScreenFrame& f,
     bool                                              saveImages
 ) {
-    neograph::json j  = neograph::json::object();
+    agentxx::util::Json j  = agentxx::util::Json::object();
     j["width"]        = f.width;
     j["height"]       = f.height;
     j["offset_x"]     = f.offsetX;
@@ -148,11 +148,11 @@ static std::string framesResult(
     if (frames.empty()) {
         return R"({"ok":false,"error":"capture failed"})";
     }
-    neograph::json arr = neograph::json::array();
+    agentxx::util::Json arr = agentxx::util::Json::array();
     for (const auto& f : frames) {
         arr.push_back(frameToJson(ctx, f, saveImages));
     }
-    neograph::json j = neograph::json::object();
+    agentxx::util::Json j = agentxx::util::Json::object();
     j["ok"]          = true;
     j["frames"]      = arr;
     return j.dump();
@@ -289,7 +289,7 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
         std::string cfgStr = ctx.config();
         if (!cfgStr.empty() && cfgStr != "{}") {
             try {
-                auto        j       = neograph::json::parse(cfgStr);
+                auto        j       = agentxx::util::Json::parse(cfgStr);
                 std::string dataDir = j.value("dataDir", std::string{});
                 if (!dataDir.empty()) {
                     namespace fs              = std::filesystem;

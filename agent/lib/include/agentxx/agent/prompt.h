@@ -4,7 +4,7 @@
 #include "fmt/format.h"
 #include <cassert>
 #include <map>
-#include <neograph/json.h>
+#include "agentxx/util/json.h"
 #include <string>
 #include <string_view>
 #include <vector>
@@ -878,15 +878,15 @@ Absent (default): the sub-agent's default full tool set.)"},
     /// - 首次调用阻塞 (子进程探测, 结果按进程缓存), 之后立即返回
     void refreshEnvDetectedPrompts();
 
-    neograph::json toJson() const;
+    agentxx::util::Json toJson() const;
 
     /// 用 JSON 整体覆写当前提示词 (JSON 中缺失的字段保持不变)
-    void fromJson(const neograph::json& j);
+    void fromJson(const agentxx::util::Json& j);
 
     /// 按补丁合并: 仅覆写 JSON 中出现的字段, 未出现的字段保持原样
     /// - toolPrompt 中已有工具: 仅覆写 JSON 中出现的 depict/args 子字段
     /// - toolPrompt 中尚无的工具: 插入新条目
-    void mergeFromJson(const neograph::json& j);
+    void mergeFromJson(const agentxx::util::Json& j);
 
     /// 计算整个提示词的哈希, 用于训练种群去重
     size_t promptHash() const;

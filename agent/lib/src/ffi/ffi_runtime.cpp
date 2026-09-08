@@ -35,7 +35,7 @@ using agentxx::agent::ModelConfig;
 namespace {
 
 /// 宽松读取字符串 (非字符串时返回默认值)
-std::string jsonStr(const neograph::json& j, const char* key, std::string def) {
+std::string jsonStr(const agentxx::util::Json& j, const char* key, std::string def) {
     if (j.contains(key) && j[key].is_string()) {
         return j[key].get<std::string>();
     }
@@ -44,7 +44,7 @@ std::string jsonStr(const neograph::json& j, const char* key, std::string def) {
 
 /// 宽松读取整数 (非数字时返回默认值)
 template<typename T>
-T jsonInt(const neograph::json& j, const char* key, T def) {
+T jsonInt(const agentxx::util::Json& j, const char* key, T def) {
     if (j.contains(key) && j[key].is_number_integer()) {
         return j[key].get<T>();
     }
@@ -52,7 +52,7 @@ T jsonInt(const neograph::json& j, const char* key, T def) {
 }
 
 /// 宽松读取 bool
-bool jsonBool(const neograph::json& j, const char* key, bool def) {
+bool jsonBool(const agentxx::util::Json& j, const char* key, bool def) {
     if (j.contains(key) && j[key].is_boolean()) {
         return j[key].get<bool>();
     }
@@ -60,7 +60,7 @@ bool jsonBool(const neograph::json& j, const char* key, bool def) {
 }
 
 /// 宽松读取字符串数组
-void jsonStrArray(const neograph::json& j, const char* key, std::vector<std::string>& out) {
+void jsonStrArray(const agentxx::util::Json& j, const char* key, std::vector<std::string>& out) {
     if (!j.contains(key) || !j[key].is_array()) {
         return;
     }
@@ -128,9 +128,9 @@ std::string FfiAgentRuntime::drainLogs() {
         std::lock_guard<std::mutex> lock(logMutex_);
         drained.swap(logRing_);
     }
-    neograph::json arr = neograph::json::array();
+    agentxx::util::Json arr = agentxx::util::Json::array();
     for (const auto& item : drained) {
-        neograph::json entry;
+        agentxx::util::Json entry;
         entry["level"]   = item.level;
         entry["message"] = item.message;
         arr.push_back(std::move(entry));
@@ -189,11 +189,11 @@ bool FfiAgentRuntime::buildConfigs(
     auto config = std::make_shared<AgentConfig>();
 
     // ---- 顶层配置 (config_json) ----
-    neograph::json cfgJ;
+    agentxx::util::Json cfgJ;
     auto           cfgSv = toSv(config_json);
     if (!cfgSv.empty()) {
         try {
-            cfgJ = neograph::json::parse(cfgSv);
+            cfgJ = agentxx::util::Json::parse(cfgSv);
         } catch (const std::exception& e) {
             err = fmt::format("config_json 非法 JSON: {}", e.what());
             return false;
@@ -230,6 +230,7 @@ bool FfiAgentRuntime::buildConfigs(
         // MCP 服务器: {"ns": {"url": "...", "timeoutSec": 120}}
         if (cfgJ.contains("mcpServers") && cfgJ["mcpServers"].is_object()) {
             for (const auto& [ns, v] : cfgJ["mcpServers"].items()) {
+                const std::string nsStr{ns};
                 if (!v.is_object()) {
                     continue;
                 }
@@ -237,7 +238,7 @@ bool FfiAgentRuntime::buildConfigs(
                 mc.url                    = jsonStr(v, "url", "");
                 const int timeoutSec      = jsonInt(v, "timeoutSec", 120);
                 mc.toolTimeout            = std::chrono::milliseconds(timeoutSec * 1000);
-                config->mcpServerUrls[ns] = std::move(mc);
+                config->mcpServerUrls[nsStr] = std::move(mc);
             }
         }
 
@@ -266,11 +267,11 @@ bool FfiAgentRuntime::buildConfigs(
     }
 
     // ---- 模型配置 (model_json 优先, 其次 config_json.model) ----
-    neograph::json mj;
+    agentxx::util::Json mj;
     auto           modelSv = toSv(model_json);
     if (!modelSv.empty()) {
         try {
-            mj = neograph::json::parse(modelSv);
+            mj = agentxx::util::Json::parse(modelSv);
         } catch (const std::exception& e) {
             err = fmt::format("model_json 非法 JSON: {}", e.what());
             return false;
@@ -301,7 +302,7 @@ bool FfiAgentRuntime::buildConfigs(
     if (mj.contains("extraHeaders") && mj["extraHeaders"].is_object()) {
         for (const auto& [k, v] : mj["extraHeaders"].items()) {
             if (v.is_string()) {
-                mc.extraHeaders[k] = v.get<std::string>();
+                mc.extraHeaders[std::string{k}] = v.get<std::string>();
             }
         }
     }
@@ -395,7 +396,7 @@ int FfiAgentRuntime::start(std::string& err) {
 
     // 同步应答路由: client io 线程收到 Wire 响应时完成对应 promise
     auto weakSelf          = std::weak_ptr<FfiAgentRuntime>{shared_from_this()};
-    clientIO_->onSyncReply = [weakSelf](FfiClientAgentIO::SyncKind kind, neograph::json j) {
+    clientIO_->onSyncReply = [weakSelf](FfiClientAgentIO::SyncKind kind, agentxx::util::Json j) {
         if (auto sp = weakSelf.lock()) {
             sp->onSyncReplyOnClientThread(kind, std::move(j));
         }
@@ -731,7 +732,7 @@ std::string FfiAgentRuntime::getLanguage(std::string& err) {
 // 同步查询
 // ---------------------------------------------------------------------------
 
-void FfiAgentRuntime::onSyncReplyOnClientThread(FfiClientAgentIO::SyncKind kind, neograph::json j) {
+void FfiAgentRuntime::onSyncReplyOnClientThread(FfiClientAgentIO::SyncKind kind, agentxx::util::Json j) {
     std::shared_ptr<SyncWait> waiter;
     {
         std::lock_guard<std::mutex> lock(syncMutex_);
@@ -839,11 +840,11 @@ int FfiAgentRuntime::interruptRespond(
         err = fmt::format("中断 #{} 不存在、已应答或已过期", interruptId);
         return AGENTXX_FFI_ERR_INTERRUPT;
     }
-    neograph::json val   = neograph::json::array();
+    agentxx::util::Json val   = agentxx::util::Json::array();
     auto           valSv = toSv(valuesJson);
     if (!valSv.empty()) {
         try {
-            val = neograph::json::parse(valSv);
+            val = agentxx::util::Json::parse(valSv);
         } catch (const std::exception& e) {
             err = fmt::format("valuesJson 非法 JSON: {}", e.what());
             return AGENTXX_FFI_ERR_JSON;

@@ -21,7 +21,8 @@
 #include <asio/steady_timer.hpp>
 #include <list>
 #include <map>
-#include <neograph/provider.h>
+#include "agentxx/util/asio_error.h"
+#include "agentxx/util/http_error.h"
 #include <openssl/ssl.h>
 #include <openssl/tls1.h> // TLS1_VERSION 等协议版本常量 (enableTlsAutoNegotiate)
 #include <variant>
@@ -803,7 +804,7 @@ bool HttpResponse::isTextContentType(std::string_view contentType) noexcept {
     return false;
 }
 
-std::optional<neograph::json> HttpResponse::bodyJson() const {
+std::optional<agentxx::util::Json> HttpResponse::bodyJson() const {
     auto ct = contentType();
     if (!isJsonContentType(ct)) {
         return std::nullopt;
@@ -812,11 +813,11 @@ std::optional<neograph::json> HttpResponse::bodyJson() const {
         return std::nullopt;
     }
     // 解析失败 (非法 JSON) 返回 nullopt 而不是抛异常
-    return agentxx::util::catchError<std::optional<neograph::json>>(
-        [this]() -> std::optional<neograph::json> {
-            return neograph::json::parse(body);
+    return agentxx::util::catchError<std::optional<agentxx::util::Json>>(
+        [this]() -> std::optional<agentxx::util::Json> {
+            return agentxx::util::Json::parse(body);
         },
-        [](std::string) -> std::optional<neograph::json> {
+        [](std::string) -> std::optional<agentxx::util::Json> {
             return std::nullopt;
         }
     );
@@ -1421,7 +1422,7 @@ asio::awaitable<void> HttpClient::requestSseAsync(
                     retryAfter = seconds;
                 }
             }
-            throw neograph::RateLimitError(
+            throw agentxx::util::RateLimitError(
                 fmt::format("API error (HTTP 429): {}", resp.body()),
                 retryAfter
             );
@@ -1611,7 +1612,7 @@ asio::awaitable<std::expected<HttpResponse, std::string>> HttpClient::headAsync(
 
 asio::awaitable<std::expected<HttpResponse, std::string>> HttpClient::postAsync(
     std::string_view      url,
-    const neograph::json& body,
+    const agentxx::util::Json& body,
     const HeaderMap&      extraHeaders,
     const RequestConfig&  config
 ) {

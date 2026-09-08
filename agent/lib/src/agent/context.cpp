@@ -129,7 +129,7 @@ void Session::saveLlmMessages() {
     }
 }
 
-void Session::appendSettledLlmMessages(const neograph::json& settledMsgs) {
+void Session::appendSettledLlmMessages(const agentxx::util::Json& settledMsgs) {
     assertIoThread();
     if (!settledMsgs.is_array() || settledMsgs.empty()) {
         return;
@@ -232,7 +232,7 @@ std::shared_ptr<Session> SessionsManager::getOrCreate(std::string_view sessionId
                     sessionStore->updateViewMessage(tid, msg);
                 },
             .onSaveLlmMessages =
-                [sessionStore, tid](const neograph::json& msgs) {
+                [sessionStore, tid](const agentxx::util::Json& msgs) {
                     sessionStore->saveLlmMessages(tid, msgs);
                 },
         });
@@ -284,7 +284,7 @@ asio::awaitable<std::shared_ptr<Session>>
                     sessionStore->updateViewMessage(tid, msg);
                 },
             .onSaveLlmMessages =
-                [sessionStore, tid](const neograph::json& msgs) {
+                [sessionStore, tid](const agentxx::util::Json& msgs) {
                     sessionStore->saveLlmMessages(tid, msgs);
                 },
         });

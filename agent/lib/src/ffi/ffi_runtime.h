@@ -3,7 +3,7 @@
 #include "agentxx/ffi_api.h"
 #include "agentxx/util/log.h"
 #include "ffi_client_io.h"
-#include "neograph/json.h"
+#include "agentxx/util/json.h"
 #include <asio/awaitable.hpp>
 #include <asio/executor_work_guard.hpp>
 #include <asio/io_context.hpp>
@@ -195,7 +195,7 @@ private:
     void stopInternal();
 
     /// client io 线程: 处理同步应答 (完成对应 SyncWait)
-    void onSyncReplyOnClientThread(FfiClientAgentIO::SyncKind kind, neograph::json j);
+    void onSyncReplyOnClientThread(FfiClientAgentIO::SyncKind kind, agentxx::util::Json j);
 
     /// 同步查询通用实现; send 为 client io 线程执行的请求发送动作
     std::string

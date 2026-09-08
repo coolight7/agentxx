@@ -456,7 +456,7 @@ void TUIClientAgentIO::start() {
                     // 参数: 剩余部分整体作为 {"text": "..."} 传入 (语义由插件定义)
                     std::string argsText
                         = spacePos == std::string::npos ? std::string{} : text.substr(spacePos + 1);
-                    neograph::json args = neograph::json::object();
+                    agentxx::util::Json args = agentxx::util::Json::object();
                     args["text"]        = argsText;
                     pluginManager_->postCommandInvocation(cmdName, args.dump());
                     return true;
@@ -1560,7 +1560,7 @@ void TUIClientAgentIO::onPeerMessage(agentxx::agent::WireMessage msg) {
                 {
                     std::lock_guard<std::mutex> lock(sharedState_.mutex());
                     auto&                       st = sharedState_.mutableState();
-                    st.contextMessages    = std::make_shared<neograph::json>(std::move(m.messages));
+                    st.contextMessages    = std::make_shared<agentxx::util::Json>(std::move(m.messages));
                     st.showContextOverlay = true;
                 }
                 // 打开上下文弹窗: 组件树由 UI 线程独占, 须投递到 UI 线程执行
@@ -2238,7 +2238,7 @@ void TUIClientAgentIO::onContextStats(const agentxx::agent::WireContextStats& st
 //   通道关闭 (server 过期通知 / TUI 退出) 时终止, 返回已收集结果
 // ---------------------------------------------------------------------------
 
-asio::awaitable<neograph::json> TUIClientAgentIO::handleInterrupt(
+asio::awaitable<agentxx::util::Json> TUIClientAgentIO::handleInterrupt(
     std::string_view sessionId,
     std::string_view interruptNode,
     std::string_view interruptValue,
@@ -2248,7 +2248,7 @@ asio::awaitable<neograph::json> TUIClientAgentIO::handleInterrupt(
     agentxx::util::catchError<bool>(
         [&]() -> bool {
             argOpt = agentxx::middleware::InterruptHandleArg::fromJson(
-                neograph::json::parse(interruptArgJson)
+                agentxx::util::Json::parse(interruptArgJson)
             );
             return true;
         },
@@ -2258,7 +2258,7 @@ asio::awaitable<neograph::json> TUIClientAgentIO::handleInterrupt(
         }
     );
     if (!argOpt.has_value()) {
-        co_return neograph::json::array();
+        co_return agentxx::util::Json::array();
     }
     const auto& handleArg = argOpt.value();
 
@@ -2294,7 +2294,7 @@ asio::awaitable<neograph::json> TUIClientAgentIO::handleInterrupt(
                 )));
             }
             postRedraw();
-            co_return neograph::json::array({"true"});
+            co_return agentxx::util::Json::array({"true"});
         }
         if (permissionMode_ == agentxx::agent::PermissionMode::Deny) {
             {
@@ -2307,7 +2307,7 @@ asio::awaitable<neograph::json> TUIClientAgentIO::handleInterrupt(
                 )));
             }
             postRedraw();
-            co_return neograph::json::array({"false"});
+            co_return agentxx::util::Json::array({"false"});
         }
     }
 
@@ -2360,7 +2360,7 @@ asio::awaitable<neograph::json> TUIClientAgentIO::handleInterrupt(
 
     // 收集结果: 各输入项确认后按 inputIndex 回填 (支持任意顺序确认),
     // 整体取消 (inputIndex=-1) 或通道关闭 (过期/退出) 时终止
-    auto                                    result = neograph::json::array();
+    auto                                    result = agentxx::util::Json::array();
     std::vector<std::optional<std::string>> values(total);
     size_t                                  confirmedCount = 0;
     bool                                    remember = false; // 权限询问: 记住本次选择

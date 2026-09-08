@@ -9,7 +9,7 @@
 #include "agentxx/util/log.h"
 #include "agentxx/util/regex.h"
 #include <html2md/html2md.h>
-#include <neograph/json.h>
+#include "agentxx/util/json.h"
 #include <string>
 #include <vector>
 
@@ -17,7 +17,7 @@ namespace agentxx_string_plugin {
 
 /// agentxx_string_html_to_markdown 执行体 (原 StringHtml2MarkdownTool::execute_async)
 /// - content 为空返回错误 JSON; 其余异常由调用方 (C ABI 边界) 捕获
-inline std::string htmlToMarkdownExecute(const neograph::json& arguments) {
+inline std::string htmlToMarkdownExecute(const agentxx::util::Json& arguments) {
     auto content = arguments.value("content", std::string{});
     if (content.empty()) {
         return R"({"error":"Arg `content` is empty"})";
@@ -31,7 +31,7 @@ inline std::string htmlToMarkdownExecute(const neograph::json& arguments) {
 }
 
 /// agentxx_string_regexp 执行体 (原 StringRegexpTool::execute_async)
-inline std::string regexpExecute(const neograph::json& arguments) {
+inline std::string regexpExecute(const agentxx::util::Json& arguments) {
     auto content = arguments.value("content", std::string{});
     if (content.empty()) {
         return R"({"error":"Arg `content` is empty"})";
@@ -52,12 +52,12 @@ inline std::string regexpExecute(const neograph::json& arguments) {
     if (match_opt == std::string_view{"search"}) {
         auto results = std::vector<agentxx::util::XXRegexMatchResult>{};
         if (regex->match(content, results)) {
-            auto relist = neograph::json::array();
+            auto relist = agentxx::util::Json::array();
             for (size_t i = 0; i < results.size(); ++i) {
                 const auto& item = results[i];
                 relist.push_back(content.substr(item.start, item.end - item.start));
             }
-            return neograph::json{
+            return agentxx::util::Json{
                 {"tip", fmt::format("Match found {} items.", results.size())},
                 {"result", relist},
             }

@@ -3,6 +3,7 @@
 #include "agentxx/agent/context.h"
 #include "agentxx/util/container_util.h"
 #include "agentxx/util/log.h"
+#include "agentxx/util/neograph_json_bridge.h"
 #include "asio/io_context.hpp"
 #include "fmt/format.h"
 #include <any>
@@ -106,7 +107,7 @@ public:
 
     virtual ~BaseMiddlewareHandleInterface();
 
-    static neograph::json getLastMessageJson(const neograph::graph::NodeInput& in);
+    static agentxx::util::Json getLastMessageJson(const neograph::graph::NodeInput& in);
 
     static std::optional<neograph::ChatMessage> getLastMessage(const neograph::graph::NodeInput& in
     );
@@ -366,7 +367,7 @@ public:
 
     /// 根据 tool call 参数生成去重 key。
     /// 返回 std::nullopt 表示该次调用不需要去重。
-    std::function<std::optional<std::string>(const neograph::json& args)> generateDeduplicationKey;
+    std::function<std::optional<std::string>(const agentxx::util::Json& args)> generateDeduplicationKey;
 
     /// 当发现重复（旧数据已被新数据覆盖）时，截断旧的 toolcall request
     std::function<void(neograph::ToolCall&)> truncateRequest;
@@ -388,25 +389,25 @@ public:
         std::string              defaultValue;
         std::vector<std::string> enumValues;
 
-        static InterruptHandleInputItem fromJson(const neograph::json& data);
+        static InterruptHandleInputItem fromJson(const agentxx::util::Json& data);
 
-        neograph::json toJson() const;
+        agentxx::util::Json toJson() const;
     };
 
     std::string                           name;
-    neograph::json                        arg;
+    agentxx::util::Json                        arg;
     std::vector<InterruptHandleInputItem> inputs;
     std::string                           resultId;
 
-    static bool isAccordingFormat(const neograph::json& data);
+    static bool isAccordingFormat(const agentxx::util::Json& data);
 
-    static std::optional<InterruptHandleArg> fromJson(const neograph::json& data);
+    static std::optional<InterruptHandleArg> fromJson(const agentxx::util::Json& data);
 
-    neograph::json toJson() const;
+    agentxx::util::Json toJson() const;
 
-    static std::vector<InterruptHandleArg> listFromJson(const neograph::json& data);
+    static std::vector<InterruptHandleArg> listFromJson(const agentxx::util::Json& data);
 
-    static neograph::json listToJson(const std::vector<InterruptHandleArg>& data);
+    static agentxx::util::Json listToJson(const std::vector<InterruptHandleArg>& data);
 };
 
 class MiddlewareContext {
@@ -480,13 +481,13 @@ public:
     explicit MiddlewareContext(std::shared_ptr<agentxx::agent::SessionStore> sessionStore) :
         persistence_(sessionStore) {}
 
-    /// 将 std::any 转为 neograph::json（用于序列化到 state）
-    static neograph::json anyToJson(const std::any& val);
+    /// 将 std::any 转为 agentxx::util::Json（用于序列化到 state）
+    static agentxx::util::Json anyToJson(const std::any& val);
 
-    /// 将 neograph::json 转为 T（用于从 state 恢复后按需转换）
+    /// 将 agentxx::util::Json 转为 T（用于从 state 恢复后按需转换）
     template<typename T>
-    static T jsonToValue(const neograph::json& j) {
-        if constexpr (std::is_same_v<T, neograph::json>) {
+    static T jsonToValue(const agentxx::util::Json& j) {
+        if constexpr (std::is_same_v<T, agentxx::util::Json>) {
             return j;
         } else if constexpr (std::is_same_v<T, std::string>) {
             if (j.is_string()) {
@@ -531,7 +532,13 @@ public:
             if (j.is_array()) {
                 for (const auto& item : j) {
                     neograph::ChatMessage msg;
-                    neograph::from_json(item, msg);
+                    // item 为 agentxx::util::Json: 经桥接转回 neograph::json 再反序列化
+                    // (middleware.h 不直引 bridge 头, 此处经 dump/parse 文本中转,
+                    //  graphData 恢复为低频路径, 开销可忽略)
+                    neograph::from_json(
+                        neograph::json::parse(item.dump()),
+                        msg
+                    );
                     msgs.push_back(std::move(msg));
                 }
             }
@@ -555,12 +562,22 @@ public:
         if (!val.has_value() || val.type() == typeid(T)) {
             return;
         }
-        if (val.type() == typeid(neograph::json)) {
-            auto j = std::any_cast<neograph::json>(std::move(val));
+        if (val.type() == typeid(agentxx::util::Json)) {
+            auto j = std::any_cast<agentxx::util::Json>(std::move(val));
             val    = jsonToValue<T>(j);
             return;
         }
-        if constexpr (std::is_same_v<T, neograph::json>) {
+        // 兼容: 历史存入的 neograph::json 先桥接为业务 Json 再转换
+        if (val.type() == typeid(neograph::json)) {
+            auto j = agentxx::util::fromNeographJson(std::any_cast<neograph::json>(std::move(val)));
+            if constexpr (std::is_same_v<T, agentxx::util::Json>) {
+                val = std::move(j);
+            } else {
+                val = jsonToValue<T>(j);
+            }
+            return;
+        }
+        if constexpr (std::is_same_v<T, agentxx::util::Json>) {
             val = anyToJson(val);
         }
     }
@@ -620,13 +637,13 @@ public:
     }
 
     /// 一般用于捕获到 NodeInterrupt 后重新抛出，而不能作为首次抛出使用
-    void throwNodeInterruptBase(std::string_view sessionId, const neograph::json& msgs);
+    void throwNodeInterruptBase(std::string_view sessionId, const agentxx::util::Json& msgs);
 
     /// 工具请求中断：检查已有结果（resume 后）或存储参数并抛异常
-    asio::awaitable<neograph::json> requestInterrupt(
+    asio::awaitable<agentxx::util::Json> requestInterrupt(
         std::string_view                           sessionId,
         const std::function<InterruptHandleArg()>& onCreateArg,
-        const neograph::json&                      msgs
+        const agentxx::util::Json&                      msgs
     );
 
     /// 将 graphData 中 JSON 兼容条目序列化到 state channel
@@ -636,7 +653,7 @@ public:
     /// 从 state channel 恢复 graphData (用于中断 resume)
     void setGraphDataFromState(neograph::graph::GraphState& state, std::string_view sessionId);
 
-    void setGraphDataFromState(neograph::json j, std::string_view sessionId);
+    void setGraphDataFromState(agentxx::util::Json j, std::string_view sessionId);
 
 private:
 

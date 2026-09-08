@@ -84,7 +84,7 @@ static inline std::string parseBuiltinName(std::string_view p) {
 }
 
 /// 从 JSON 提取字符串字段 (缺失/非字符串返回空)
-std::string jsonStr(const neograph::json& j, std::string_view key) {
+std::string jsonStr(const agentxx::util::Json& j, std::string_view key) {
     if (!j.is_object()) {
         return {};
     }
@@ -103,7 +103,7 @@ std::string jsonStr(const neograph::json& j, std::string_view key) {
 }
 
 /// 从 JSON 提取 int 字段 (缺失/非数字返回默认)
-int jsonInt(const neograph::json& j, std::string_view key, int def) {
+int jsonInt(const agentxx::util::Json& j, std::string_view key, int def) {
     if (!j.is_object()) {
         return def;
     }
@@ -129,7 +129,7 @@ bool parseCommandAction(const std::string& jsonText, std::string& action) {
         return false; // 空结果 = 已处理完毕, 无动作
     }
     try {
-        auto j = neograph::json::parse(jsonText);
+        auto j = agentxx::util::Json::parse(jsonText);
         if (!j.is_object()) {
             return false;
         }
@@ -405,7 +405,7 @@ asio::awaitable<std::shared_ptr<ClientPluginInstance>> ClientPluginManager::load
     inst->path        = path;
     // 插件配置参数随加载直接传入 (C2, 与 agent 侧一致): 宿主不解析字段语义,
     // 插件经 vtable get_plugin_args 整体读取; 直连路径 cfg 为 nullptr → {}
-    inst->args            = cfg ? cfg->args : neograph::json::object();
+    inst->args            = cfg ? cfg->args : agentxx::util::Json::object();
     inst->configPath      = cfg ? cfg->configPath : std::string{};
     inst->dlHandle        = handle;
     inst->depends         = std::move(depends);
@@ -566,7 +566,7 @@ void ClientPluginManager::enableImpl(std::string_view name, bool userInitiated) 
         }
         inst->statusItemHandles.push_back(h);
         if (uiAdapter_) {
-            neograph::json props = neograph::json::object();
+            agentxx::util::Json props = agentxx::util::Json::object();
             props["text"]        = reg.text;
             uiAdapter_->onStatusItemRegistered(reg.id, props, reg.align, reg.order);
         }
@@ -593,7 +593,7 @@ void ClientPluginManager::enableImpl(std::string_view name, bool userInitiated) 
         }
         inst->panelHandles.push_back(h);
         if (uiAdapter_) {
-            neograph::json props = neograph::json::object();
+            agentxx::util::Json props = agentxx::util::Json::object();
             props["title"]       = reg.title;
             uiAdapter_->onPanelRegistered(reg.id, props);
         }
@@ -620,7 +620,7 @@ void ClientPluginManager::enableImpl(std::string_view name, bool userInitiated) 
         }
         inst->infoSectionHandles.push_back(h);
         if (uiAdapter_) {
-            neograph::json props = neograph::json::object();
+            agentxx::util::Json props = agentxx::util::Json::object();
             props["title"]       = reg.title;
             uiAdapter_->onInfoSectionRegistered(reg.id, props);
         }
@@ -957,7 +957,7 @@ void ClientPluginManager::dispatchCommandAction(const std::string& actionJson) {
     }
     if (action == "toast") {
         try {
-            auto j = neograph::json::parse(actionJson);
+            auto j = agentxx::util::Json::parse(actionJson);
             uiAdapter_->onToast(jsonStr(j, "text"), jsonInt(j, "level", 0));
         } catch (...) {
             uiAdapter_->onToast("(plugin toast)", 0);
@@ -966,7 +966,7 @@ void ClientPluginManager::dispatchCommandAction(const std::string& actionJson) {
     }
     if (action == "send") {
         try {
-            auto j = neograph::json::parse(actionJson);
+            auto j = agentxx::util::Json::parse(actionJson);
             uiAdapter_->sendPluginMessage(jsonStr(j, "text"));
         } catch (const std::exception& e) {
             XX_LOGE("[client_plugin] invalid send action: {}", e.what());
@@ -978,7 +978,7 @@ void ClientPluginManager::dispatchCommandAction(const std::string& actionJson) {
 // ==================== 会话上下文 ====================
 
 std::string ClientPluginManager::clientStateJson() const {
-    neograph::json j     = neograph::json::object();
+    agentxx::util::Json j     = agentxx::util::Json::object();
     j["sessionId"]       = sessionId_;
     j["connState"]       = connState_;
     j["startupProgress"] = startupProgress_;
@@ -986,7 +986,7 @@ std::string ClientPluginManager::clientStateJson() const {
     // 功能; 见 [plugin_common.h](/agent/lib/include/agentxx/plugin/plugin_common.h)
     // 接口协商节)。位图 uiCaps 字段已移除 (v4)
     j["interfaces"] = [&] {
-        auto arr = neograph::json::array();
+        auto arr = agentxx::util::Json::array();
         for (const auto& n : hostSupportedInterfaces()) {
             arr.push_back(n);
         }
@@ -995,7 +995,7 @@ std::string ClientPluginManager::clientStateJson() const {
     // 服务端已加载的 agent 侧插件结构化列表 [{name,version,interfaces},...]
     // (空数组 = 未知, 见成员注释)
     j["agentPlugins"] = [&] {
-        auto arr = neograph::json::array();
+        auto arr = agentxx::util::Json::array();
         for (const auto& p : serverPlugins_) {
             arr.push_back({
                 {"name",       p.name      },
@@ -1011,12 +1011,12 @@ std::string ClientPluginManager::clientStateJson() const {
 // ==================== ClientEventSink 实现 ====================
 
 void ClientPluginManager::onReady() {
-    neograph::json j = neograph::json::object();
+    agentxx::util::Json j = agentxx::util::Json::object();
     // 宿主支持的接口名清单 (启动后最早可得的协商结果, 插件在 READY 回调内
     // 即可完成功能启用决策; 位图 uiCaps 字段已移除, 见
     // [client_plugin_api.h](/agent/lib/include/agentxx/plugin/api/client_plugin_api.h) v4)
     j["interfaces"] = [&] {
-        auto arr = neograph::json::array();
+        auto arr = agentxx::util::Json::array();
         for (const auto& n : hostSupportedInterfaces()) {
             arr.push_back(n);
         }
@@ -1028,7 +1028,7 @@ void ClientPluginManager::onReady() {
     // 服务端存储并经事件总线发布, agent 侧插件订阅 "agentxx_host.client_interfaces"
     // 据此自适应 —— 如 emit_message_tip 在无 toast 接口的宿主上降级)
     if (uiAdapter_) {
-        neograph::json up = neograph::json::object();
+        agentxx::util::Json up = agentxx::util::Json::object();
         up["sessionId"]   = sessionId_;
         up["interfaces"]  = j["interfaces"];
         uiAdapter_->sendPluginData("agentxx_host", "client_interfaces", up.dump());
@@ -1038,14 +1038,14 @@ void ClientPluginManager::onReady() {
 void ClientPluginManager::onConnStateChanged(std::string_view state, std::string_view progress) {
     connState_           = std::string{state};
     startupProgress_     = std::string{progress};
-    neograph::json j     = neograph::json::object();
+    agentxx::util::Json j     = agentxx::util::Json::object();
     j["connState"]       = connState_;
     j["startupProgress"] = startupProgress_;
     dispatchEvent(AGENTXX_CLIENT_EVT_CONN_STATE, j.dump());
 }
 
 void ClientPluginManager::onUserInput(std::string_view sessionId, std::string_view text) {
-    neograph::json j = neograph::json::object();
+    agentxx::util::Json j = agentxx::util::Json::object();
     j["sessionId"]   = std::string{sessionId};
     j["text"]        = std::string{text};
     dispatchEvent(AGENTXX_CLIENT_EVT_USER_INPUT, j.dump());
@@ -1056,7 +1056,7 @@ void ClientPluginManager::onDelta(const agentxx::agent::WireDelta& delta) {
 }
 
 void ClientPluginManager::onTurnResult(const agentxx::agent::WireTurnResult& result) {
-    neograph::json j = neograph::json::object();
+    agentxx::util::Json j = agentxx::util::Json::object();
     j["sessionId"]   = result.sessionId;
     j["hasError"]    = result.hasError;
     j["interrupted"] = result.interrupted;
@@ -1070,7 +1070,7 @@ void ClientPluginManager::onTurnResult(const agentxx::agent::WireTurnResult& res
 
 void ClientPluginManager::onSessionSwitched(std::string_view sessionId) {
     sessionId_       = std::string{sessionId};
-    neograph::json j = neograph::json::object();
+    agentxx::util::Json j = agentxx::util::Json::object();
     j["sessionId"]   = sessionId_;
     dispatchEvent(AGENTXX_CLIENT_EVT_SESSION_SWITCH, j.dump());
 }
@@ -1082,7 +1082,7 @@ void ClientPluginManager::onPluginData(const agentxx::agent::WirePluginData& dat
     // 事件照常向插件分发
     if (data.plugin == "agentxx_host" && data.event == "server_plugins") {
         try {
-            auto                          j = neograph::json::parse(data.data);
+            auto                          j = agentxx::util::Json::parse(data.data);
             std::vector<ServerPluginInfo> infos;
             if (j.contains("plugins") && j["plugins"].is_array()) {
                 for (const auto& p : j["plugins"]) {
@@ -1136,7 +1136,7 @@ void ClientPluginManager::onPluginData(const agentxx::agent::WirePluginData& dat
         );
     }
 
-    neograph::json j = neograph::json::object();
+    agentxx::util::Json j = agentxx::util::Json::object();
     j["plugin"]      = data.plugin;
     j["event"]       = data.event;
     j["data"]        = data.data;
@@ -1370,7 +1370,7 @@ int32_t AGENTXX_PLUGIN_CALL xx_cjson_get_string(
         return -1;
     }
     try {
-        auto j = neograph::json::parse(std::string{json->data, static_cast<size_t>(json->size)});
+        auto j = agentxx::util::Json::parse(std::string{json->data, static_cast<size_t>(json->size)});
         auto v = jsonStr(j, std::string_view{key->data, static_cast<size_t>(key->size)});
         if (v.empty() && !j.contains(std::string{key->data, static_cast<size_t>(key->size)})) {
             return -1;
@@ -1396,7 +1396,7 @@ int32_t AGENTXX_PLUGIN_CALL xx_cjson_escape(
         return -1;
     }
     try {
-        neograph::json j       = std::string{s->data, static_cast<size_t>(s->size)};
+        agentxx::util::Json j       = std::string{s->data, static_cast<size_t>(s->size)};
         auto           dumpStr = j.dump();
         hostMemorySetString(out, dumpStr);
         return 0;
@@ -2119,9 +2119,9 @@ void* ClientPluginManager::registerStatusItem(
     }
     // 解析 initial_json → text
     std::string    text;
-    neograph::json props;
+    agentxx::util::Json props;
     try {
-        props = neograph::json::parse(
+        props = agentxx::util::Json::parse(
             agentxx::plugin::PluginStringView::empty(json) ? "{}" : svToSv(json)
         );
         text = jsonStr(props, "text");
@@ -2166,10 +2166,10 @@ int ClientPluginManager::updateStatusItem(
     if (!inst || !h) {
         return -1;
     }
-    neograph::json props;
+    agentxx::util::Json props;
     std::string    text;
     try {
-        props = neograph::json::parse(
+        props = agentxx::util::Json::parse(
             agentxx::plugin::PluginStringView::empty(json) ? "{}" : svToSv(json)
         );
         text = jsonStr(props, "text");
@@ -2261,10 +2261,10 @@ void* ClientPluginManager::registerPanel(
             }
         }
     }
-    neograph::json props;
+    agentxx::util::Json props;
     std::string    title;
     try {
-        props = neograph::json::parse(
+        props = agentxx::util::Json::parse(
             agentxx::plugin::PluginStringView::empty(props_json) ? "{}" : svToSv(props_json)
         );
         title = jsonStr(props, "title");
@@ -2307,9 +2307,9 @@ int ClientPluginManager::updatePanel(
     if (!inst || !h) {
         return -1;
     }
-    neograph::json items = neograph::json::array();
+    agentxx::util::Json items = agentxx::util::Json::array();
     try {
-        auto j = neograph::json::parse(
+        auto j = agentxx::util::Json::parse(
             agentxx::plugin::PluginStringView::empty(items_json) ? "{}" : svToSv(items_json)
         );
         if (j.contains("items") && j["items"].is_array()) {
@@ -2335,7 +2335,7 @@ int ClientPluginManager::updatePanel(
             break;
         }
     }
-    neograph::json payload = neograph::json::object();
+    agentxx::util::Json payload = agentxx::util::Json::object();
     payload["items"]       = items;
     if (uiAdapter_) {
         uiAdapter_->onPanelUpdated(h->id, payload);
@@ -2402,10 +2402,10 @@ void* ClientPluginManager::registerInfoSection(
             }
         }
     }
-    neograph::json props;
+    agentxx::util::Json props;
     std::string    title;
     try {
-        props = neograph::json::parse(
+        props = agentxx::util::Json::parse(
             agentxx::plugin::PluginStringView::empty(props_json) ? "{}" : svToSv(props_json)
         );
         title = jsonStr(props, "title");
@@ -2445,9 +2445,9 @@ int ClientPluginManager::updateInfoSection(
     if (!inst || !h) {
         return -1;
     }
-    neograph::json items = neograph::json::array();
+    agentxx::util::Json items = agentxx::util::Json::array();
     try {
-        auto j = neograph::json::parse(
+        auto j = agentxx::util::Json::parse(
             agentxx::plugin::PluginStringView::empty(items_json) ? "{}" : svToSv(items_json)
         );
         if (j.contains("items") && j["items"].is_array()) {
@@ -2473,7 +2473,7 @@ int ClientPluginManager::updateInfoSection(
             break;
         }
     }
-    neograph::json payload = neograph::json::object();
+    agentxx::util::Json payload = agentxx::util::Json::object();
     payload["items"]       = items;
     if (uiAdapter_) {
         uiAdapter_->onInfoSectionUpdated(h->id, payload);
@@ -2561,7 +2561,7 @@ int ClientPluginManager::updateToolDecor(
     // 更新/插入
     ClientToolDecor decor;
     try {
-        auto j = neograph::json::parse(json);
+        auto j = agentxx::util::Json::parse(json);
         if (!j.is_object()) {
             return -1;
         }
@@ -2746,7 +2746,7 @@ std::string ClientPluginManager::getOwnInfoJson(ClientPluginInstance* inst) {
     if (!inst) {
         return "{}";
     }
-    neograph::json j = neograph::json::object();
+    agentxx::util::Json j = agentxx::util::Json::object();
     j["name"]        = inst->name;
     j["version"]     = inst->version;
     j["description"] = inst->description;
@@ -2841,7 +2841,7 @@ int ClientPluginManager::registerToolRenderer(
     if (!spec->render_fn && !agentxx::plugin::PluginStringView::empty(&spec->template_json)) {
         reg.templateJson = svToStr(spec->template_json);
         try {
-            auto j = neograph::json::parse(reg.templateJson);
+            auto j = agentxx::util::Json::parse(reg.templateJson);
             if (j.is_object()) {
                 reg.templateDisplayName     = j.value("displayName", std::string{});
                 reg.templateSummaryKey      = j.value("summaryKey", std::string{});
@@ -3207,7 +3207,7 @@ ClientToolRenderResult renderClientTool(
                         }
                         if (output.items_json.data) {
                             try {
-                                res.items = neograph::json::parse(std::string_view{
+                                res.items = agentxx::util::Json::parse(std::string_view{
                                     output.items_json.data,
                                     static_cast<size_t>(output.items_json.size)
                                 });
@@ -3223,7 +3223,7 @@ ClientToolRenderResult renderClientTool(
 
                     if (!r.templateSummaryKey.empty() && !argsJson.empty()) {
                         try {
-                            auto j = neograph::json::parse(argsJson);
+                            auto j = agentxx::util::Json::parse(argsJson);
                             if (j.is_object() && j.contains(r.templateSummaryKey)) {
                                 const auto& val = j[r.templateSummaryKey];
                                 std::string rawVal;

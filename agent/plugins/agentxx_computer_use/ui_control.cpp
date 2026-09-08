@@ -3,7 +3,7 @@
 #include <cctype>
 #include <chrono>
 #include <map>
-#include <neograph/json.h>
+#include "agentxx/util/json.h"
 #include <string>
 #include <thread>
 #include <vector>
@@ -13,10 +13,6 @@
 #undef max
 #undef min
 #endif
-
-// computer_use_plugin.h 的 JSON 辅助 (jsonGetString/jsonGetInt 等) 定义于
-// agentxx_computer_use_plugin 命名空间, 此处直接使用
-using namespace agentxx_computer_use_plugin;
 
 namespace agentxx_computer_use_plugin {
 
@@ -868,7 +864,7 @@ static UICmdResult uiControlGetScreenSize() {
     return {true, fmt::format("screen_size: {}x{} (virtual screen, covers all monitors)", vw, vh)};
 }
 
-/// 命令对象字段 (顺序无关提取; ondemand 惰性迭代要求按序访问, 这里遍历全部字段匹配)
+/// 命令对象字段 (顺序无关提取)
 struct UiCmdFields {
     bool        hasAction = false;
     bool        hasX = false, hasY = false, hasX1 = false, hasY1 = false;
@@ -881,60 +877,54 @@ struct UiCmdFields {
     int64_t                  delta = 0, duration = 200, ms = 100;
 };
 
-static bool uiControlParseCmd(simdjson::ondemand::value& v, UiCmdFields& f) {
-    if (v.type().error() || v.type().value() != simdjson::ondemand::json_type::object) {
+static bool jsonStr(const agentxx::util::Json& o, std::string_view key, std::string& out) {
+    if (!o.is_object() || !o.contains(key) || !o[key].is_string()) {
         return false;
     }
-    simdjson::ondemand::object obj;
-    if (v.get_object().get(obj)) {
+    out = o[key].get<std::string>();
+    return true;
+}
+
+static bool jsonInt(const agentxx::util::Json& o, std::string_view key, int64_t& out) {
+    if (!o.is_object() || !o.contains(key)) {
         return false;
     }
-    for (auto field : obj) {
-        std::string_view key;
-        // key() 返回 raw_json_string (get 只接受 raw_json_string&), 用
-        // unescaped_key 直接取转义后的 string_view (simdjson API 兼容)
-        if (field.unescaped_key().get(key)) {
-            continue;
-        }
-        auto val = field.value();
-        if (key == "action") {
-            f.hasAction = jsonGetString(val, f.action);
-        } else if (key == "x") {
-            f.hasX = jsonGetInt(val, f.x);
-        } else if (key == "y") {
-            f.hasY = jsonGetInt(val, f.y);
-        } else if (key == "x1") {
-            f.hasX1 = jsonGetInt(val, f.x1);
-        } else if (key == "y1") {
-            f.hasY1 = jsonGetInt(val, f.y1);
-        } else if (key == "x2") {
-            f.hasX2 = jsonGetInt(val, f.x2);
-        } else if (key == "y2") {
-            f.hasY2 = jsonGetInt(val, f.y2);
-        } else if (key == "delta") {
-            f.hasDelta = jsonGetInt(val, f.delta);
-        } else if (key == "key") {
-            f.hasKey = jsonGetString(val, f.key);
-        } else if (key == "text") {
-            f.hasText = jsonGetString(val, f.text);
-        } else if (key == "button") {
-            f.hasButton = jsonGetString(val, f.button);
-        } else if (key == "ms") {
-            f.hasMs = jsonGetInt(val, f.ms);
-        } else if (key == "durationMs") {
-            f.hasDuration = jsonGetInt(val, f.duration);
-        } else if (key == "keys") {
-            simdjson::ondemand::array arr;
-            if (!val.value().get_array().get(arr)) {
-                f.hasKeys = true;
-                for (auto e : arr) {
-                    std::string_view sv;
-                    if (e.get_string().get(sv)) {
-                        break;
-                    }
-                    f.keys.emplace_back(sv);
-                }
+    const auto& v = o[key];
+    if (v.is_number_integer()) {
+        out = v.get<int64_t>();
+        return true;
+    }
+    if (v.is_number()) {
+        out = static_cast<int64_t>(v.get<double>());
+        return true;
+    }
+    return false;
+}
+
+static bool uiControlParseCmd(const agentxx::util::Json& v, UiCmdFields& f) {
+    if (!v.is_object()) {
+        return false;
+    }
+    f.hasAction   = jsonStr(v, "action", f.action);
+    f.hasX        = jsonInt(v, "x", f.x);
+    f.hasY        = jsonInt(v, "y", f.y);
+    f.hasX1       = jsonInt(v, "x1", f.x1);
+    f.hasY1       = jsonInt(v, "y1", f.y1);
+    f.hasX2       = jsonInt(v, "x2", f.x2);
+    f.hasY2       = jsonInt(v, "y2", f.y2);
+    f.hasDelta    = jsonInt(v, "delta", f.delta);
+    f.hasKey      = jsonStr(v, "key", f.key);
+    f.hasText     = jsonStr(v, "text", f.text);
+    f.hasButton   = jsonStr(v, "button", f.button);
+    f.hasMs       = jsonInt(v, "ms", f.ms);
+    f.hasDuration = jsonInt(v, "durationMs", f.duration);
+    if (v.contains("keys") && v["keys"].is_array()) {
+        f.hasKeys = true;
+        for (const auto& e : v["keys"]) {
+            if (!e.is_string()) {
+                break;
             }
+            f.keys.emplace_back(e.get<std::string>());
         }
     }
     return true;
@@ -1072,63 +1062,39 @@ static UICmdResult uiControlExecuteOne(const UiCmdFields& f) {
     return UICmdResult{false, fmt::format("unknown action: {}", action)};
 }
 
-std::string uiControlExecute(agentxx_computer_use_plugin::SimpleJson& arguments) {
-    auto commands = arguments.doc().at_pointer("/commands");
-    if (commands.error()) {
+std::string uiControlExecute(const agentxx::util::Json& arguments) {
+    if (!arguments.is_object() || !arguments.contains("commands")
+        || !arguments["commands"].is_array()) {
         return R"({"error":"Arg `commands` is required and must be an array"})";
     }
-    simdjson::ondemand::array arr;
-    if (commands.value().get_array().get(arr)) {
-        return R"({"error":"Arg `commands` is required and must be an array"})";
-    }
+    const auto& arr = arguments["commands"];
     int64_t interval_ms = 50;
-    jsonGetInt(arguments.doc().at_pointer("/interval_ms"), interval_ms);
+    if (arguments.contains("interval_ms")) {
+        const auto& iv = arguments["interval_ms"];
+        if (iv.is_number_integer()) {
+            interval_ms = iv.get<int64_t>();
+        } else if (iv.is_number()) {
+            interval_ms = static_cast<int64_t>(iv.get<double>());
+        }
+    }
 
-    neograph::json results    = neograph::json::array();
+    agentxx::util::Json results    = agentxx::util::Json::array();
     int            ok_count   = 0;
     int            fail_count = 0;
     size_t         i          = 0;
     bool           first      = true;
-    for (auto elem : arr) {
+    for (const auto& elem : arr) {
         if (!first && interval_ms > 0) {
             std::this_thread::sleep_for(std::chrono::milliseconds(interval_ms));
         }
         first = false;
 
         UiCmdFields f;
-        if (elem.error() || !uiControlParseCmd(elem.value(), f) || !f.hasAction
+        if (!elem.is_object() || !uiControlParseCmd(elem, f) || !f.hasAction
             || f.action.empty()) {
-            results.push_back(neograph::json{
-                {"index",  i                       },
-                {"action", ""                      },
-                {"ok",     false                   },
-                {"msg",    "missing `action` field"},
-            });
-            fail_count++;
-            break;
-        }
-        auto r = uiControlExecuteOne(f);
-        if (r.ok) {
-            ok_count++;
-        } else {
-            fail_count++;
-        }
-        results.push_back(neograph::json{
-            {"index",  i       },
-            {"action", f.action},
-            {"ok",     r.ok    },
-            {"msg",    r.msg   },
-        });
-        if (!r.ok) {
-            break;
-        }
-        ++i;
-    }
-
-    return results.dump();
 }
 #else
-std::string uiControlExecute(agentxx_computer_use_plugin::SimpleJson&) {
+std::string uiControlExecute(const agentxx::util::Json&) {
     return R"({"error":"agentxx_ui_control_keyboard_mouse is not available on current system"})";
 }
 #endif

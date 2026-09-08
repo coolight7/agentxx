@@ -51,10 +51,10 @@ asio::awaitable<TestResult>
         auto tool = ctx->toolRegistry->find("agentxx_text_selection_monitor");
         XX_TEST_EXPECT_TRUE(tool != nullptr);
         if (tool) {
-            auto out = co_await tool->execute_async(neograph::json{
+            auto out = co_await tool->execute_async(agentxx::util::Json{
                 {"command", "status"}
             });
-            auto j   = neograph::json::parse(out);
+            auto j   = agentxx::util::Json::parse(out);
             XX_TEST_EXPECT_EQ(j["ok"].get<bool>(), true);
             XX_TEST_EXPECT_EQ(j["running"].get<bool>(), false);
         }
@@ -64,18 +64,18 @@ asio::awaitable<TestResult>
     {
         auto tool = ctx->toolRegistry->find("agentxx_text_selection_monitor");
         if (tool) {
-            auto out = co_await tool->execute_async(neograph::json{
+            auto out = co_await tool->execute_async(agentxx::util::Json{
                 {"command",     "start"},
                 {"debounce_ms", 300    },
             });
-            auto j   = neograph::json::parse(out);
+            auto j   = agentxx::util::Json::parse(out);
             XX_TEST_EXPECT_EQ(j["ok"].get<bool>(), true);
             XX_TEST_EXPECT_EQ(j["running"].get<bool>(), true);
 
-            auto out2 = co_await tool->execute_async(neograph::json{
+            auto out2 = co_await tool->execute_async(agentxx::util::Json{
                 {"command", "stop"}
             });
-            auto j2   = neograph::json::parse(out2);
+            auto j2   = agentxx::util::Json::parse(out2);
             XX_TEST_EXPECT_EQ(j2["ok"].get<bool>(), true);
             XX_TEST_EXPECT_EQ(j2["running"].get<bool>(), false);
         }
