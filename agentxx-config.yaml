@@ -141,6 +141,18 @@ models:
     video_input: false
     extra_api_config:
       reasoning_effort: xhigh
+  - name: ofapp-gpt
+    type: "openai-responses"
+    base_url: "https://api.ofapp.cn/v1"
+    api_key: "${OFAPP_API_KEY}"
+    model_name: "gpt-5.6-luna"
+    # 注意: 该模型上游不支持 include:["reasoning.summary_text"],
+    # send_thinking 必须为 false (否则会触发 HTTP 400 invalid_prompt)
+    # send_thinking: false
+    model_context_max_token: 1000000
+    extra_api_config:
+      reasoning:
+        effort: max
   - name: opencode-ds-v4-flash
     type: "openai-responses"
     base_url: "https://opencode.ai/zen/go/v1"
