@@ -244,7 +244,7 @@
 - ⬜ Dynamic loading based on `ModelName`, falling back to default prompts when unmatched.
 
 ### Plugin Support
-- ✅ C/C++ plugin support allowing extensible modifications to both Agent and Client UI. See [Plugin Development Documentation](/docs/en/design.md/plugins.md); [Built-in Plugins](/agent/plugins/); [Example Plugin](/agent/plugins/example_plugin/).
+- ✅ C/C++ plugin support allowing extensible modifications to both Agent and Client UI. See [Plugin Development Documentation](/docs/en/design/plugins.md); [Built-in Plugins](/agent/plugins/); [Example Plugin](/agent/plugins/example_plugin/).
     - Can be compiled either as standalone dynamic shared libraries or statically embedded into `libagentxx`.
     - High compatibility achieved via pure C APIs, COM-style querying, explicit 8-byte structure alignment, fixed-width integer types (`int32_t`, `int64_t`), unified calling conventions, and passing structs by pointer rather than value. This ensures runtime compatibility across different compilers, standard library implementations, and dependency versions; validated by mixing Debug/Release binaries of `agentxx_cli` with plugin dynamic libraries.
     - Native asynchronous interfaces supporting cooperative non-blocking coroutine execution between host and plugins within a single thread without locking.
@@ -269,7 +269,7 @@
 - ⬜ Qwen3-TTS (text-to-speech).
 
 ### FFI Dynamic Library Interface
-- ✅ [FFI C API Symbols Export](/agent/ffi/); [Design Document](/docs/en/design.md/ffi.md); [Examples](/agent/example/ffi/).
+- ✅ [FFI C API Symbols Export](/agent/ffi/); [Design Document](/docs/en/design/ffi.md); [Examples](/agent/example/ffi/).
 - Allows other programming languages to invoke `libagentxx` to create agents, run sessions, and manage tools via SDK wrappers or direct dynamic library loading (`dlopen` / `LoadLibrary`).
 - Language SDKs:
     - ✅ Flutter / Dart; [SDK](/agent/ffi/dart/); [Example](/agent/example/ffi/dart/).
@@ -301,7 +301,7 @@
         - ✅ Automatically repairs role ordering in message history.
 
 ## Directory Structure
-- For detailed architecture, see [design.md](/docs/en/design.md/index.md).
+- For detailed architecture, see [design](/docs/en/design/index.md).
 - `agent`:
     - C++ Agent implementation.
     - Modular extensions, AI inspection, and regression tests built on core framework.

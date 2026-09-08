@@ -305,7 +305,7 @@
         - ✅自动修复上下文角色顺序
 
 ## 目录结构
-- 详细代码结构和功能见[design.md](docs/zh-cn/design.md)
+- 详细代码结构和功能见[design](docs/zh-cn/design/index.md)
 - `agent`:
     - C++ 实现 Agent
     - 手写实现基础框架后，AI模块化扩展功能和检查、补充测试

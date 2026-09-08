@@ -1,7 +1,7 @@
 # libagentxx FFI C API 导出层
 
 > 已实现并测试通过 (`agentxx_test ffi_c_api`)
-> 相关文档: [design.md](design.md) (主程序架构) · [plugins.md](plugins.md) (纯 C ABI 插件范式)
+> 相关文档: [design](index.md) (主程序架构) · [plugins.md](plugins.md) (纯 C ABI 插件范式)
 - 修改了 ffi 源码、设计后，应当更新当前文档，如果ffi接口变动，应当同步更新 [其他编程语言导出接口](/agent/ffi/) 和 [示例](/agent/example/ffi/)
 
 ## 1. 概述与目标

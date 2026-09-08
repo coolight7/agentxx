@@ -1,6 +1,6 @@
 # 开发指南
 
-> 关联: [design.md](/docs/zh-cn/design.md) (架构) · [plugins.md](/docs/zh-cn/plugins.md) (插件) · [ffi.md](/docs/zh-cn/ffi.md) (FFI)
+> 关联: [design](/docs/zh-cn/index.md) (架构) · [plugins.md](/docs/zh-cn/plugins.md) (插件) · [ffi.md](/docs/zh-cn/ffi.md) (FFI)
 
 ## 1. 测试
 
@@ -45,7 +45,7 @@
 - **复用 `agentxx_util`**：内置插件 `find_package(agentxx_util)` + `target_link_libraries(PRIVATE agentxx_util)` (第三方插件仅需包含纯 C ABI 头即可)
 - **平台矩阵**：在各插件 `CMakeLists.txt` 开头经 `plugin_platform_support.cmake` 的 `gate` 函数按需控制编译平台
 
-详见 [plugins.md](design.md/plugins.md)
+详见 [plugins.md](design/plugins.md)
 
 ## 4. 调试与日志
 

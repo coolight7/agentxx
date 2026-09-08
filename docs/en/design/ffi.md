@@ -1,7 +1,7 @@
 # libagentxx FFI C API Export Layer
 
 > Implemented and verified by tests (`agentxx_test ffi_c_api`)
-> Related docs: [design.md](index.md) (Core Architecture) · [plugins.md](plugins.md) (Pure C ABI Plugin Paradigm)
+> Related docs: [design](index.md) (Core Architecture) · [plugins.md](plugins.md) (Pure C ABI Plugin Paradigm)
 - When modifying FFI source code or design, this document must be updated. If the FFI interface changes, synchronously update the [exported bindings for other programming languages](/agent/ffi/) and [examples](/agent/example/ffi/).
 
 ## 1. Overview & Objectives

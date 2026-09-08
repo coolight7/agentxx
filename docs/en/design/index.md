@@ -1,5 +1,5 @@
 # Agentxx Comprehensive Architecture Design Document
-> Related docs: [design.md](index.md) (Architecture) · [plugins.md](plugins.md) (Pure C ABI Plugin Paradigm) · [ffi.md](ffi.md) (FFI Interface Design)
+> Related docs: [design](index.md) (Architecture) · [plugins.md](plugins.md) (Pure C ABI Plugin Paradigm) · [ffi.md](ffi.md) (FFI Interface Design)
 
 ## Table of Contents
 

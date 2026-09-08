@@ -1,6 +1,6 @@
 # Agentxx 整体代码审查报告
 
-- 审查范围：`agent/lib`、`agent/client`、`agent/plugins`、`agent/test`、`docs/zh-cn/design.md(+plugins.md)`
+- 审查范围：`agent/lib`、`agent/client`、`agent/plugins`、`agent/test`、`docs/zh-cn/design(+plugins.md)`
 
 ---
 
@@ -289,6 +289,6 @@ auto serverIt = servers_.begin();
 
 ## 附录：审查方法
 
-- 通读 `docs/zh-cn/design.md` 与 `plugins.md` 建立架构基线（ReAct 循环、双消息集、Wire 协议、插件 C ABI、TUI 懒渲染）。
+- 通读 `docs/zh-cn/design` 与 `plugins.md` 建立架构基线（ReAct 循环、双消息集、Wire 协议、插件 C ABI、TUI 懒渲染）。
 - 精读 `agent/lib` 核心：`base_agent.cpp`、`context.cpp`、`event_stream.cpp`、`toolcall.cpp`、`modelcall.cpp`、`session_server_agent_io.cpp`、`ws_io_transport.cpp`、`agent_io.cpp`、`agent_server.cpp`、`agent_runner.cpp`、`agent_host.cpp`、`session_store.cpp`、`summarization.cpp`、`permission.cpp`、`middleware.cpp/h`、`wrap_handle.h`、`config.h`、`conversation_types.h`、`wire_protocol.h`、`http_client.h/cpp`、`async_offload.h`、`exception.h`、`log.h`、`code_agent.cpp`。
 - 通读 `agent/client`（`main.cpp`、`mode_runners.cpp`、`config_loader.cpp`）、`agent/plugins`（`execute_command_impl.h`、`filesystem_impl.h`、`agentxx_planning.cpp` 等）与 `agent/test/test.cpp` 入口及模块划分。

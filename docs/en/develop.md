@@ -1,6 +1,6 @@
 # Development Guide
 
-> Related: [design.md](/docs/en/design.md/index.md) (Architecture) · [plugins.md](/docs/en/design.md/plugins.md) (Plugins) · [ffi.md](/docs/en/design.md/ffi.md) (FFI)
+> Related: [design](/docs/en/design/index.md) (Architecture) · [plugins.md](/docs/en/design/plugins.md) (Plugins) · [ffi.md](/docs/en/design/ffi.md) (FFI)
 
 ## 1. Testing
 
@@ -45,7 +45,7 @@ Test module names are listed in the registry table at the top of `agent/test/tes
 - **Reusing `agentxx_util`**: Built-in plugins use `find_package(agentxx_util)` + `target_link_libraries(PRIVATE agentxx_util)` (third-party plugins need only the pure C ABI header).
 - **Platform Matrix**: Evaluated at the start of each plugin's `CMakeLists.txt` via `plugin_platform_support.cmake`.
 
-For details, see [plugins.md](/docs/en/design.md/plugins.md).
+For details, see [plugins.md](/docs/en/design/plugins.md).
 
 ## 4. Debugging and Logging
 

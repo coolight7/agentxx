@@ -8,7 +8,7 @@
 ///   - 规划写入成功后发布 "agentxx_planning.planning" 插件事件 (载荷为完整
 ///     规划 JSON); 订阅宿主约定事件 agentxx_host.client_attached, 客户端接入/
 ///     重连时重发当前会话已保存规划 (状态快照自愈, 见
-///     [plugins.md](/docs/zh-cn/design.md/plugins.md) 7.3.1)
+///     [plugins.md](/docs/zh-cn/design/plugins.md) 7.3.1)
 ///   - client 侧入口 (agentxx_plugin_client_create): Plan 渲染完全由插件驱动 ——
 ///     ① 工具消息装饰: 订阅 EVT_DELTA 经 update_tool_decor 推送语义层装饰
 ///     (折叠头显示名/摘要 + 展开体 items: 状态图/todos/notes), TUI 按通用
@@ -287,7 +287,7 @@ void publishPlanningEvent(PluginCtx& ctx, const std::string& planJson) {
 
 /// 宿主约定事件 client_attached: 客户端接入/重连 → 重发当前会话已保存规划
 /// (修复 "事件先于客户端订阅而丢失 → UI 永久空白", 见
-/// [plugins.md](/docs/zh-cn/design.md/plugins.md) 7.3.1)
+/// [plugins.md](/docs/zh-cn/design/plugins.md) 7.3.1)
 void AGENTXX_PLUGIN_CALL on_client_attached(const AgentxxPluginStringView* event_json, void* ud) {
     auto* ctxRaw = static_cast<PluginCtx*>(ud);
     // C ABI 回调异常守卫 (agent io 线程派发直调)
@@ -463,7 +463,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int32_t AGENTXX_PLUGIN_CALL
                         std::string notes = arguments.value("notes", std::string{});
 
                         agentxx::util::Json planStore = agentxx::util::Json::object();
-                        planStore["roadmap"]     = roadmap;
+                        planStore["roadmap"]          = roadmap;
                         if (!todosJson.empty()) {
                             try {
                                 planStore["todos"] = agentxx::util::Json::parse(todosJson);
@@ -645,9 +645,9 @@ static std::string buildTodosSummary(const agentxx::util::Json& plan) {
 /// 提取公共渲染逻辑: 渲染 Todo 列表与 Note 备忘 (P3-5 消除 buildDecorItems 与 refreshPlanSection
 /// 的渲染重复)
 static void appendTodoAndNoteItems(
-    const ClientCtx&          ctx,
-    const agentxx::util::Json&     plan,
-    std::vector<std::string>& items
+    const ClientCtx&           ctx,
+    const agentxx::util::Json& plan,
+    std::vector<std::string>&  items
 ) {
     auto textItem = [&](const std::string& text, const std::string& role) {
         items.push_back(fmt::format(
@@ -901,10 +901,11 @@ static void AGENTXX_PLUGIN_CALL
         const auto callId = d.value("tool_call_id", std::string{});
 
         if (type == "tool_start") {
-            const auto     argsStr = d.value("arguments", std::string{});
+            const auto          argsStr = d.value("arguments", std::string{});
             agentxx::util::Json args;
             try {
-                args = argsStr.empty() ? agentxx::util::Json::object() : agentxx::util::Json::parse(argsStr);
+                args = argsStr.empty() ? agentxx::util::Json::object()
+                                       : agentxx::util::Json::parse(argsStr);
             } catch (...) {
                 return;
             }
@@ -915,11 +916,11 @@ static void AGENTXX_PLUGIN_CALL
             if (args.value("mode", std::string{}) == "read") {
                 // read: 结果尚未返回, 占位提示 (tool_end 时替换为结果摘要)
                 agentxx::util::Json placeholder = agentxx::util::Json::object();
-                placeholder["items"]       = agentxx::util::Json::array();
+                placeholder["items"]            = agentxx::util::Json::array();
                 agentxx::util::Json hint        = agentxx::util::Json::object();
-                hint["kind"]               = "text";
-                hint["role"]               = "hint";
-                hint["text"]               = "Reading saved planning...";
+                hint["kind"]                    = "text";
+                hint["role"]                    = "hint";
+                hint["text"]                    = "Reading saved planning...";
                 placeholder["items"].push_back(hint);
                 pushToolDecor(*ctx, callId, placeholder);
                 return;
