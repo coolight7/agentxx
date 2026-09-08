@@ -6,7 +6,6 @@
 >
 > - 范围：`agent/lib/include/agentxx/plugin/`、`agent/lib/src/plugins/`、`agent/plugins/`，以及 `agent/test/plugin/` 和相关 core/client 测试；补查 AgentContext 销毁、BaseAgent 装配、TUI 渲染调用链。
 > - 验证平台：Linux x86_64 / GCC 16.1 / 现有 Debug + AddressSanitizer 构建。未声称 Windows、Android、不同 STL 组合已验证。
-> - 本轮继续审查时 HEAD 仍为 `992495e17d6c2fca86123652d2e5cfdfe4b4950a`，涉及的产品源码没有新增工作区修改。
 > - 下文路径均相对仓库根目录；行号以以上源码版本为准。测试使用现有 Debug 产物，独立探针优先包含源码头；未全量重建，不把已有产物通过当作全部当前源码的构建证明。
 
 ## 1. 核心结论
