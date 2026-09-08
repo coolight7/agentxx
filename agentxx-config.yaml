@@ -141,6 +141,16 @@ models:
     video_input: false
     extra_api_config:
       reasoning_effort: xhigh
+  - name: bblabu-gpt
+    type: "openai-responses"
+    base_url: "https://api.bblabu.ai/v1"
+    api_key: "${BBLABU_API_KEI}"
+    read_chunk_timeout: 100
+    model_name: "gpt-6-astra"
+    model_context_max_token: 600000
+    extra_api_config:
+      reasoning:
+        effort: max
   - name: ofapp-gpt
     type: "openai-responses"
     base_url: "https://api.ofapp.cn/v1"

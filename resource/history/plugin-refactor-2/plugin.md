@@ -1,541 +1,690 @@
-# 插件框架架构审查与重构方案
+# 插件框架 Reset-v1 重构任务交接文档
 
-> **文档状态：审查最终报告；重构尚未实施。**
+> **文档状态：最终交接版；方案已定稿，产品代码重构尚未开始。**
 >
-> 本文由 Agentxx 根据当前源码、现有插件、测试及独立最小复现整理；只分析与提出方案，未修改产品实现或现有测试。
+> 本文供后续新会话直接执行。它合并了前期源码审查、独立探针结论和用户确认后的最终设计，不再保留互相冲突的旧阶段方案。
 >
-> - 范围：`agent/lib/include/agentxx/plugin/`、`agent/lib/src/plugins/`、`agent/plugins/`，以及 `agent/test/plugin/` 和相关 core/client 测试；补查 AgentContext 销毁、BaseAgent 装配、TUI 渲染调用链。
-> - 验证平台：Linux x86_64 / GCC 16.1 / 现有 Debug + AddressSanitizer 构建。未声称 Windows、Android、不同 STL 组合已验证。
-> - 下文路径均相对仓库根目录；行号以以上源码版本为准。测试使用现有 Debug 产物，独立探针优先包含源码头；未全量重建，不把已有产物通过当作全部当前源码的构建证明。
+> **重要前提**：项目尚未对外推广，当前插件只有仓库内置开发插件。因此本轮允许同时修改宿主、C ABI、C++ SDK、内置插件和测试，完全放弃历史插件兼容；接口和线程语义可以彻底重置，但所有内置插件必须在同一提交序列中迁移完成。
 
-## 1. 核心结论
+---
 
-**方向正确，但当前实现不能认定为已满足全部设计要求，也不宜仅依据现有测试通过就认定卸载和异步边界安全。**
+## 0. 新会话执行须知
 
-值得保留的基础设计是：纯 C 数据边界、`alloc/free/query_interface` 最小宿主表、按 IID 查询扩展表、实例上下文隔离、工具/钩子/能力的 `start + cancel + done` 协议、宿主 Asio 协程与插件自有 C++ coroutine 的回调桥接、UI 语义 JSON 与具体组件分离。
+### 0.1 当前状态
 
-问题集中在协议实现一致性，而不是需要推翻 C ABI：
+- 本文是任务交接文档，不表示重构已经完成。
+- 截至本次交接，未完成任何产品级 Reset-v1 实现；此前只进行了源码阅读、问题复现和方案整理。
+- 仓库中已有用户未提交修改，至少包括：
+  - `agentxx-config.yaml`
+  - `resource/history/plugin-refactor-2/index.md`
+- 新会话开始时必须先执行 `git status --short --branch`，不得覆盖上述修改，也不得重置整个工作树。
+- `resource/history/plugin-refactor-2/plugin.md` 是本任务的最终事实来源；旧的 `docs/zh-cn/design/plugins.md` 在实现完成后再按本文更新，不能反过来覆盖本文的 Reset-v1 决策。
 
-1. **生命周期保护不完整**：业务上下文、DSO 代码、调用方完成回调、排队的调度任务、旧 UI 快照及已编译图节点，没有统一的存活与关闭规则。
-2. **异步协议存在互斥条件错误**：启动失败既返回空句柄又调用完成回调，SDK 会重复释放回调上下文。
-3. **线程边界不一致**：部分宿主异步互调只把查询投递到 IO 线程，真正 `start` 仍在调用线程执行；完成通知先发布终态再写结果。
-4. **“无轮询”只对部分路径成立**：普通操作等待确实是协程事件等待；卸载计数仍指数退避轮询；JS Promise 驱动仍含 1ms 轮询与递归执行队列。
-5. **生产插件并未普遍使用同线程原生异步**：HTTP、命令、RAG、系统采样大量采用 `blocking_tool → 私有 io_context.run()`，每个等待占据 worker。
-6. **多实例约束没有贯彻到底层**：系统监控的 GPU/PDH 可变静态缓存、文本选择监控的全局实例指针依然存在。
-7. **SDK 不足以支撑自然的协程拆分**：`Task<T>` 不能 `co_await` 子 Task，`offload` 返回 void 编译失败，hook helper 会忽略协程返回值。
+### 0.2 总目标
 
-两轮合计通过独立 ASan 探针确认 **9 类 use-after-free 触发路径**，另确认 JS 跨脚本循环等待、协程 hook 被忽略、Client 退订后仍派发、提示词撤销串扰等问题，见 §4。这里的“9 类”按触发路径归类，不表示九个互不相关的根因。
+将当前插件框架从“多处各自管理异步操作和卸载计数”重构为一个有明确状态机的运行时：
 
-本轮重跑现有四个框架模块 **740 条断言通过**，九个相关业务模块 **440 条断言通过**，合计 **1180 passed / 0 failed**。二者不矛盾：现有测试多数覆盖正常调用、直接实现或受限环境，未覆盖此次复现的交叉路径。
+1. 插件实例、动态库、插件上下文、注册项、排队任务、完成回调和已编译图节点有统一生命周期。
+2. 工具、hook、capability、graph node、后台任务、sleep、offload、跨插件互调使用统一的 Operation 协议。
+3. 所有跨线程完成结果先复制到宿主拥有的完成包，再在所属 IO 线程发布；不以原子变量顺序和裸指针猜测安全。
+4. 卸载和退出是可等待的异步过程；未达到安全条件时不得 destroy 或 dlclose。
+5. SDK 能够自然组合 `Task<T>`，拥有跨挂起点的输入，正确支持 `void`、异常和取消。
+6. Client UI 只消费宿主拥有的语义模型，旧快照、旧动作和旧 renderer 不得调用已销毁插件代码。
+7. 所有内置插件在 Linux Debug、Windows 编译/专项测试及多实例场景下遵守同一契约。
 
-**建议先固定异步协议和退出安全条件，再统一运行时，最后迁移插件及整理 SDK；不要先把文件拆小、把 mutex 删除，或只在几个裸指针上补 shared_ptr。**
+### 0.3 明确不做的事
 
-## 2. 当前架构
+- 不保留旧 API 表布局、旧字段顺序、旧线程保证或旧插件二进制兼容。
+- 不在 C ABI 中传递 STL、Asio executor、C++ 异常、`std::atomic*`、`coroutine_handle` 或 C++ 对象布局。
+- 不用增加几个 `shared_ptr`、删除 mutex、延长一个裸指针或增加轮询来掩盖生命周期问题。
+- 不把“析构函数调用 shutdown”当作异步关闭；析构只能处理已经安全关闭的对象。
+- 不把阻塞 IO 一律改成协程。纯 CPU、文件遍历、正则、向量计算可以使用受控线程池，但必须可取消、可限额、可等待。
 
-### 2.1 分层与职责
+---
 
-| 层 | 主要文件 | 实际职责 |
+## 1. 当前源码范围与事实基线
+
+### 1.1 主要代码位置
+
+| 层 | 主要文件 | 当前职责 |
 |---|---|---|
-| C ABI | `plugin/api/plugin_api.h`、`client_plugin_api.h` | 基础类型、借用/拥有字符串、接口表、回调、opaque handle、入口 typedef |
-| 插件 C++ SDK | `plugin/api/plugin_kit.h`（3511 行）、`plugin_guard.h` | 字符串封装、接口查询、Task/awaiter、取消注册表、工具/钩子/能力注册、UI helper、导出宏 |
-| 宿主公共设施 | `plugin_common.*`、`plugin_manager_base.h` | manifest、路径、依赖排序、跨线程同步桥、inflight、卸载等待 |
-| Agent 管理器 | `plugin_manager_lifecycle.cpp`、`*_vtable.cpp`、`*_adapters.cpp`、`*_capability.cpp`、`*_scheduler.cpp`、`*_tasks.cpp` | 动态库/内置加载、注册、互调、资源与提示词、调度、卸载 |
-| 操作驱动 | `op_driver.h` | 调用插件 start、等待 done、取消/超时后的后台等待、句柄回收 |
-| 引擎适配 | `PluginTool`、`PluginMiddlewareHandle`、`PluginGraphNode`、`ToolRegistry` | 插件 C 回调适配为宿主工具/中间件/图节点 |
-| Client 管理器 | `client_plugin_manager.*`（cpp 3274 行） | UI 注册快照、命令、事件、动作、overlay、插件加载卸载、全部 client vtable |
-| 插件业务 | `agent/plugins/`（20 个目录） | 文件/命令/网络/数学/RAG/监控/规划/图节点/JS 等 |
+| C ABI | `agent/lib/include/agentxx/plugin/api/plugin_api.h` | Agent 核心表、工具、hook、事件、capability、scheduler、tasks 等接口 |
+| Client ABI | `agent/lib/include/agentxx/plugin/api/client_plugin_api.h` | Client 事件、UI 注册、命令、renderer、动作和 overlay 接口 |
+| C++ SDK | `agent/lib/include/agentxx/plugin/api/plugin_kit.h`、`plugin_guard.h` | `PluginBase`、`Task`、awaiter、tool/hook/capability/spawn helper、Client helper |
+| Agent 公共基建 | `plugin_common.*`、`plugin_manager_base.h` | manifest、依赖排序、IO 投递、内存工具、inflight、卸载等待 |
+| Agent 管理器 | `plugin_manager.h`、`plugin_manager_lifecycle.cpp`、`plugin_manager_vtable.cpp`、`plugin_manager_adapters.cpp`、`plugin_manager_capability.cpp`、`plugin_manager_scheduler.cpp`、`plugin_manager_tasks.cpp` | 加载、注册、调度、互调、资源、提示词、卸载 |
+| 异步驱动 | `agent/lib/include/agentxx/plugin/op_driver.h` | `OpCore`、start/done 等待、取消、超时后的后台收尾、句柄回收 |
+| 图适配 | `plugin_graph_node.h/.cpp` | 将 C ABI graph node 适配为 NeoGraph 节点 |
+| Client 管理器 | `client_plugin_manager.h`、`client_plugin_manager.cpp` | Client 插件加载、事件、命令、UI 注册表、renderer、动作和卸载 |
+| Agent 生命周期 | `agent/context.cpp`、`agent/base_agent.cpp`、`agent/agent_host.cpp` | AgentContext/AgentHost 的插件装配和销毁 |
+| 内置插件 | `agent/plugins/` | filesystem、command、web、RAG、monitor、planning、JS、平台插件和示例 |
+| 测试 | `agent/test/plugin/`、相关 `agent/test/core/`、Client 测试 | 插件系统、资源、多实例、Client 和业务插件测试 |
 
-### 2.2 ABI 与扩展机制
+### 1.2 当前执行链
 
-- 核心宿主表是 `alloc(uint64_t) / free(void*) / query_interface(host*, iid*)`，Agent/Client 共用 `AgentxxPluginHost`。
-- Agent 有 16 张标准扩展表，Client 有 7 张。结构体参数通过指针传递；字符串为 `{data, uint64_t size}`。
-- 跨边界没有直接传 `std::string`、`std::function`、Asio executor 或 C++ coroutine handle；SDK 的 C++ 类型只在各自模块内部使用，这一点正确。
-- opaque `void*` 可以指向插件私有 C++ 对象，只要宿主不解释对象布局、不析构它、只原样回传；这不等于把 C++ 对象按值暴露到 ABI。宿主与插件之间的隔离是 **ABI/所有权隔离，不是进程内安全沙箱**。
-- `#pragma pack(push, 8)` 是最大成员对齐约束，并不等于对所有目标平台承诺所有结构都具有 8 字节自然对齐；兼容性应按目标架构验证 `sizeof/alignof/offsetof`。
-- 当前接口表仅有 `version`，查询 helper 未验证版本，表没有长度字段；尚缺完整演进协议。
-- 这是 **COM 风格接口发现**，不是完整 Windows COM/IUnknown 对象模型；目前无需为追求名称一致而引入通用 AddRef/Release 对象体系。
-
-### 2.3 普通异步工具链
+普通插件工具目前大致走：
 
 ```text
 Toolcall / PluginTool::execute_async
   → awaitPluginOp
-  → 插件 execute_start(user_data, args*, session*, call_id*, notify*, error*)
-      ├─ fast_tool：同步计算，done，返回 nullptr
-      ├─ tool：创建 Task 帧，resume，到 co_await 时挂起，返回 Job*
-      └─ blocking_tool：保存输入，scheduler.offload，返回 Job*
-  → 宿主 concurrent_channel.async_receive 挂起
-  → 插件完成后 notify.done
-  → 宿主解析状态并恢复等待协程
+  → execute_start(args/session/call_id/notify/error)
+      ├─ fast_tool：done 后返回 nullptr
+      ├─ tool：创建 SDK Task，resume 后在 sleep/call/offload 处挂起，返回 Job*
+      └─ blocking_tool：创建 Job，调用 scheduler.offload
+  → OpCore channel / cancellation_signal 等待
+  → 插件调用 notify.done
+  → 宿主恢复等待协程并回收句柄
 ```
 
-`while (!notified) co_await channel.receive()` 本身不是定时轮询；不能仅看见 while 就判定是假异步。正常的 sleep awaiter 也是定时器到期回调恢复，而不是周期查结果。
+这条链的主要问题不是“用了协程”，而是：
 
-但“真实协程”和“正确协程”是两件事：任务取消、失败、卸载、任意线程 done 的实现仍有错误。
+- `OpCore` 的状态、payload、通知和回调可能由不同线程修改/读取。
+- 完成通知可能在调用方 DSO、provider DSO、插件上下文或管理器已经进入关闭状态后到达。
+- `inflight` 只覆盖部分执行阶段，不能覆盖排队任务和 caller 回调。
+- `waitInflightZero` 通过指数退避定时器轮询，不是一次性 idle 事件。
+- `PluginManagerBase` 维护额外 `ioTasks_` 队列，入队 lambda 捕获裸 `this`。
+- `AgentContext::~AgentContext()` 和 Client `shutdownAll()` 是同步路径，可能直接 destroy/dlclose。
 
-### 2.4 生命周期与 UI
+---
 
-- Agent 将实例放入 `plugins_` 后调用 create；工具注册后即能被查询；JS 壳在脚本未加载完成时就返回 create 成功。
-- unload：设置 `unloadRequested` → 摘注册/取消部分操作 → 轮询 inflight → destroy → 从表移除；DSO 在实例最终析构时关闭。
-- shutdown：不等待 inflight，直接 destroy；`AgentContext::~AgentContext()` 会走此路径，并非仅操作系统退出才调用。
-- Client 的 dlopen/create 在单线程 pool 中运行，普通事件/命令在 client IO 线程；UI 数据采用 COW 快照。
-- **工具 renderer 是例外**：快照包含插件函数指针和裸 userData，TUI 渲染直接调用，没有保护实例或参与 inflight。
+## 2. 已确认问题清单
 
-## 3. 逐项对照设计要求
+以下问题已经通过源码分析或独立 Debug/ASan 探针确认。后续实现必须为每类问题增加回归测试；编号用于交接，不要求保留旧实现中的行号。
 
-| 预期 | 当前判断 | 依据 |
+### 2.1 P0：内存安全、死锁和退出安全
+
+| 编号 | 问题 | 当前根因 | Reset-v1 要求 |
+|---|---|---|---|
+| F01 | 互调 start 失败时重复调用完成回调 | `nullptr + error` 失败出口仍同步调用 cb，SDK 再按空句柄处理 | 未接受请求绝不回调；所有登记失败回滚 |
+| F02 | Agent unsubscribe 释放后仍写 `sub->inst` | vector/EventBus 移除最后引用后 vtable 继续访问裸指针 | 句柄有独立宿主控制块；失效标记先于释放，重复 unsubscribe 安全 |
+| F03 | 旧 Client UI 快照调用已销毁 renderer | 快照保存函数指针和裸 `userData`，destroy 后仍可被 TUI 使用 | 快照只保存语义结果/renderer 代次；失效后回退通用展示 |
+| F04 | 已编译 GraphNode 在 unload 后使用 plugin context | 节点强持有实例但 unload 仍 destroy，`enabled` 不能表示上下文存活 | 节点持 lifetime/代次；Closing 后拒绝执行，只返回插件已关闭 |
+| F05 | `shutdownAll` 不等待后台 Task | 取消挂起协程后立即 destroy，后续恢复访问 ctx | 增加真正的异步 shutdown；destroy 只能发生在 idle 后 |
+| F06 | worker 发起互调时 `start` 不在 IO 线程 | 只把 registry 查询投递到 IO，后续登记和 start 仍在调用线程 | ABI 接收入口先复制输入，完整 start/cancel/登记流程投递所属 IO |
+| F07 | 跨插件操作只保护 provider 不保护 caller | caller 的完成函数和 `userData` 属于 caller DSO，caller 可先卸载 | 每个操作同时持 caller/provider lease，caller lease 覆盖 cb 返回 |
+| F13 | SDK 挂起后继续读取 ABI 借用参数 | `string_view` 只复制地址，不保活 `args/session/call_id` | root operation 建立拥有的 Request，视图只在 Request 存活期间有效 |
+| F14 | done 后到 reaper 前仍可调用失效 cancel_ud | 句柄还在 vector 中，cancelFn 未检查已完成状态 | 完成提交先使 cancel 失效；完成后 cancel 只返回 completed |
+| F15 | 管理器销毁后排队 lambda 仍执行 | `postToIo`/`postToIoAsync` 捕获裸 `this` | 直接向 executor 投递拥有状态包；不捕获裸 manager |
+| F16 | JS 顶层脚本失败遗留工具/事件/timer | 注册先发生，失败只销毁 JS binding | 脚本初始化是注册事务，失败先撤销全部副作用，再释放 JSContext |
+| F17 | JS A 调 JS B 同一线程循环等待 | `call_tool_blocking` 阻塞 JS 线程，B 又排队同一线程 | JS API 始终返回 Promise，完成事件回 JS 线程 settle |
+| P0-A | `OpCore` 先发布 notified 后写 payload | acquire/release 不能修复错误写入顺序；doneSignal 和回收通道竞态 | 任意线程只提交拥有完成包；IO 线程一次性提交状态、payload、回调和计数 |
+| P0-B | `volatile int32_t` 跨线程取消是数据竞争 | IO 写、worker 读，volatile 不是同步原语 | 使用不透明 CancelToken + `is_cancelled`，SDK 不暴露 ABI 原子地址 |
+| P0-C | done 不等于插件代码完全返回 | JS/自建线程可能在 done 后继续执行 DSO 代码 | 明确 done 为终止协议；插件必须在 done 后立即返回；宿主 lease 覆盖受管执行阶段 |
+
+### 2.2 P1：协议完整性、可恢复性和功能正确性
+
+| 编号 | 问题 | Reset-v1 要求 |
 |---|---|---|
-| C API，基础变量/C 结构体指针/opaque handle 隔离 | 基本符合 | 两个 ABI 头 C17 编译通过；未发现公开表直接暴露 STL/Asio；Linux 16 个现有 DSO 导出表符合入口限制 |
-| COM 风格查询，接口独立演进 | 发现机制符合，兼容策略不完整 | IID 查询存在；version 不检查、无长度、Agent manifest require 未执行检查 |
-| 异常不能穿越边界 | 不完全符合 | SDK create 分配/init 在 try 外；部分 vtable、renderer 后处理与 agent get_info/destroy 缺完整守卫 |
-| 默认同一线程、无业务锁、协程交错 | 部分符合 | tool/sleep 主路径符合；worker 互调 start 错位；内部多重 mutex/atomic 与私有 loop 普遍存在 |
-| 非阻塞 | 不完全符合 | RAG create 同步网络；system_usage capability 直接 run 私有 loop；destroy join；pool 被长期等待占据 |
-| 等待异步结果不轮询 | 不完全符合 | 普通 op 等待是事件式；waitInflightZero 与 JS drivePromise 仍轮询 |
-| 真协程，便于函数组合 | 仅基础能力具备 | Task 无子任务 await 支持；void offload 编译错误；hook helper 不处理 Task 返回值 |
-| 多实例隔离 | 上层较好，底层不符合 | GPU/PDH 可变 static、文本选择 instancePtr，详见 §5 |
-| 安全卸载/失败回滚 | 不符合 | 9 类 ASan 触发路径，以及调用方无保护、排队任务不计数等 |
-
-“无锁”应准确限定为 **宿主会话及默认插件状态由单 IO 线程串行管理，无需业务锁**，而不是要求 Asio 内部、操作系统、显式 worker、UI 跨线程快照绝对没有同步原语。不能为了删除锁而让真实跨线程访问发生数据竞争。
-
-## 4. 已验证的问题与修复方向
-
-证据等级：**R**＝本次运行/编译复现；**S**＝源码能确定的缺陷；**V**＝还需特定环境/压力测试验证具体表现。优先级 P0 为内存安全/死锁/核心协议，P1 为主要功能及设计约束，P2 为整理优化。
-
-### F01 · P0 · 互调启动失败：回调与空返回同时发生，SDK 重复释放（R）
-
-- 宿主：`plugin_manager_capability.cpp:371–384, 473–486`。
-- SDK：`plugin_kit.h:1948–1951, 1976–1982`，capability 同构路径 `2071–2074, 2099–2105`。
-- 被调用方按契约返回 `nullptr + error_out` 后，宿主同步执行 cb，再返回 nullptr。cb 先删除 `holder`；awaiter 在发现 nullptr 时再次删除同一对象。
-- **无需恶意插件**，正常拒绝启动即可触发。独立复现触发 ASan heap-use-after-free，栈定位到 `plugin_kit.h:1977`。
-- 失败前已插入的 outstandingOps 没有回滚，也形成残留。
-
-**修复**：把“未接受请求”和“已接受后失败”严格分开：返回失败/空句柄时绝不派发 cb；接受请求后只能通过恰好一次、IO 线程异步派发的 cb 完成。这里指 **宿主的 call_tool_async / invoke_capability_async 返回协议**；不能误删 provider `execute_start` 既有的 `done + nullptr` 快同步完成形态。所有失败出口回滚登记。对 tools/capabilities 共用一个实现，避免两份错误保持同步。
-
-### F02 · P0 · ABI unsubscribe 在释放订阅后写裸指针（R）
-
-- `plugin_manager_vtable.cpp:164–179`，`plugin_manager_adapters.cpp:575–593`。
-- manager unsubscribe 从 EventBus 和实例 vector 移除最后引用后，vtable 仍执行 `sub->inst = nullptr`。
-- 通过真实 events 接口 `subscribe → unsubscribe` 即出现 ASan 已释放内存写入，定位 `vtable.cpp:178`。
-- 现有测试多直接调用 manager unsubscribe，绕开了有问题的 vtable 尾部。
-
-**修复**：关闭标记在释放前处理；整个反注册操作持强引用；明确句柄注销后的有效期。若要支持 destroy 中重复注销，使用宿主句柄表或存活至实例退出的轻量失效记录，不能凭悬空指针判空实现幂等。
-
-### F03 · P0 · 旧 UI 快照仍可调用已销毁 renderer（R）
-
-- `client_plugin_manager.h:85–116`，`client_plugin_manager.cpp:3132–3220`。
-- TUI 调用：`agent/client/src/io/tui/components/message_list.cpp:768,1515`。
-- 快照只有函数指针/userData；unload 摘除新快照不影响旧快照，但随后 destroy 会删除 shim。
-- 复现：加载 filesystem client → 持有快照 → unload → 通过旧快照 renderClientTool，ASan 在 `plugin_kit.h:3140` 报 UAF。
-- 测试仍持实例引用也不能保护 pluginCtx：**宿主实例存活不等于业务上下文未销毁**。
-
-**修复首选**：UI 只读语义数据，不执行插件代码。renderer 在 client IO 线程按输入版本计算，输出宿主持有的不可变渲染模型；UI 发起请求后使用缓存/默认显示，不同步等待 IO。模板型 renderer 可继续由宿主直接计算。仅给快照补 DSO shared_ptr 不够，因为 ctx 已被 destroy。
-
-### F04 · P0 · 已编译图节点在 unload 后访问已销毁上下文（R）
-
-- `plugin_graph_node.cpp:14–41,65`；`plugin_manager_lifecycle.cpp:333–382`。
-- 节点持有 PluginInstance 强引用，但 unload 明确调用 destroy，且未将 enabled 置 false；node.run 只检查 enabled。
-- 构造节点 → unload → run，ASan 确认插件 user_data UAF。
-- `unregisterGraphNodeType` 只删除实例记录，GraphRegistry 类型还在，重载同类型会冲突；detachAll 本身也没有完整撤销图类型。
-
-**修复**：引入明确生命周期状态；所有调用入口拒绝 Closing/Closed，不以 enabled 代替存活。为已编译图定义策略：默认停止新运行，等待已有运行结束，再销毁上下文；旧节点只返回“插件已卸载”。真正删除工厂或使用带代次的间接注册项，不能以“引擎不会再编译”解释残留无害。
-
-### F05 · P0 · shutdownAll 不等待后台 Task 退出便销毁 ctx（R）
-
-- `plugin_manager_lifecycle.cpp:131–180`；`agent/lib/src/agent/context.cpp:30–35`。
-- `detachAll` 的取消会排队恢复挂起协程，紧接着 shutdown destroy ctx；协程恢复时引用已经失效。
-- 独立复现：spawn 挂起 sleep → shutdownAll → IO 继续处理取消回调，ASan 确认 UAF。
-
-**修复**：增加真正异步的 shutdown，AgentHost/FFI/客户端退出顺序必须在 executor 和 pool 停止前 await。destroy 只释放已停止的实例，不承担 join/异步停止。析构函数不能替代异步 shutdown；兜底宁可隔离保留未停止的模块，也不能强制 dlclose。
-
-### F06 · P0 · worker 发起互调时 execute_start 不在 IO 线程（R）
-
-- `plugin_manager_vtable.cpp:84–103,276–299`。
-- `plugin_manager_capability.cpp:287–312,332–363,448–465`。
-- 只把 registry 查询通过 ioCallSync 回 IO；后续实例检查、outstandingOps 写入和 drive.start 仍在调用线程。
-- 复现输出 `execute_start_off_io=1`。JS 的 `call_tool_blocking` 正好使用这条路径，并非不可达。
-
-**修复**：在 ABI 接收入口复制借用数据，整个 start/cancel/登记流程投递到所属 IO executor；异步入口不应先阻塞 worker 等查表。回调始终异步 IO 派发，SDK 才能用简单同线程状态机。
-
-### F07 · P0 · 跨插件互调只保护 provider，不保护 caller（R）
-
-- `plugin_manager_capability.cpp:332–341,448–459`；`op_driver.h:122–140`。
-- caller 保存 outstandingOps 不等于 caller 有 inflight；done 回调函数属于 caller DSO，userData 也属于 caller。
-- 复现：A 调 B 未完成操作，输出 `caller_inflight=0 provider_inflight=1`；unload A 已成功返回，之后 B done 仍派发 A 的回调。
-
-**修复**：一次跨插件操作至少保护两个角色：provider 业务执行，caller 完成回调。caller 的保护一直持有到完成回调返回；provider 的保护覆盖其所有实际执行及退出协议。持有 caller_host 的第三方引擎也必须有对应租约/托管任务，不能只借用一个裸 host 指针。
-
-### F08 · P1 · sleep 完成记录不回收，且独立 sleep/post 未完整登记（R/S）
-
-- `plugin_manager_scheduler.cpp:22–51`：sleepTimers 插入后，正常到期无 erase。
-- 复现 32 个一次性定时器后：`callbacks=32 retained_timers=32 inflight=0`。
-- sleep 只在回调开始临时加 inflight；排队期间没有计数。`xx_post_to_io` 也只保存 fn/ud，没有持实例执行租约。
-
-**修复**：timer/post 从接受到回调返回都由运行时登记；定时器完成时移除记录，取消与到期竞争统一终结一次。生命周期保护必须覆盖队列等待阶段，不能等到已开始执行才加计数。
-
-### F09 · P1 · 三级依赖禁用不完整，恢复不对称（R）
-
-- `plugin_manager_lifecycle.cpp:252–322`。
-- A 被 B 依赖、B 被 C 依赖，disable A 得到 `A=0 B=0 C=1`；enable A 后 `A=1 B=0 C=1`。
-- 订阅在 detachAll 中 clear，enable 只恢复 tools/hooks/capabilities，订阅和 spawn 不恢复，提示词恢复策略也不对称。
-
-**修复**：明确“暂停”和“停止”区别；依赖禁用按完整图递归，维护用户显式禁用与依赖不可用两类原因。订阅记录保留、暂停派发；后台任务是否重启必须由 on_enable/on_disable 或生命周期接口定义，而不能尝试恢复已销毁的 coroutine frame。
-
-### F10 · P1 · 静态工具冲突注册失败却返回成功（R）
-
-- `plugin_manager_adapters.cpp:262–282`；`tool_registry.cpp:10–30,51–53`。
-- contains 只看动态工具；registerTool 内部会检查 staticToolNames，但 manager 忽略它的返回值，仍登记 toolNames/tools 并返回 0。
-- 复现：`register_rc=0 registry_contains=0 recorded_tools=1`。
-
-**修复**：register 返回值是唯一成功依据；失败不修改实例记录；注销用 owner/注册凭证而非仅 name。SDK 注册 helper 应返回 `[[nodiscard]]` 结果，必要注册失败使初始化事务整体失败。
-
-### F11 · P1 · Task 无法组合，void offload 编译失败（R）
-
-- `plugin_kit.h:1292–1375`：没有 `operator co_await` 或 awaiter 接口。
-- `plugin_kit.h:1775–1783`：始终声明 `optional<ResultType>`，ResultType=void 非法。
-- 编译探针：`co_await child()` 报 `no member named await_ready`；`co_await offload(ctx, [](volatile int32_t*){})` 因 `optional<void>` 失败。
-
-**修复**：区分 root operation 与普通子 Task；Task 支持 continuation、结果移动与异常传递，只有根任务对宿主 done；void 使用专门结果存储。hook/capability/graph 也复用同一 Task 适配器，不再各自造一套 Job。
-
-### F12 · P1 · screen_capture 当前入口无法编译（R）
-
-- `agent/plugins/agentxx_screen_capture/agentxx_screen_capture.cpp:29,91,118,143,224–246`。
-- `ScreenCaptureScreenCapturePluginCtx` 未定义，辅助函数仍使用不存在的 PluginCtx；入口调用 captureAll/captureScreenUnderMouse/formatFramesJson 等与 `screen_capture.h` 不符，且把返回 ScreenFrame 当 optional 使用。
-- Linux 对该入口做语法检查已确认非平台相关的类型错误。默认 Linux 构建跳过 Windows 插件，因而没有暴露这些错误。
-
-**修复**：先统一上下文与真实 API 名称，补 Windows 编译任务和插件级 smoke test；不以删除 gate 或构造空实现来“让测试通过”。
-
-### F13 · P0 · SDK 协程参数仅借用，真实工具互调挂起后读到已释放输入（R）
-
-- SDK：`plugin_kit.h:2405–2410` 将 ABI 的 `args_json` 直接转 `std::string_view` 交给 Task，没有保存请求副本。
-- ABI 已声明入参“仅本次 start 调用有效”。协程参数为 string_view 按值，只复制地址和长度，并不延长底层字符串寿命。
-- `callToolAsync` 的 `drive.start` 捕获 argsStr；返回后 drive 仅有 cancel 闭包/等待协程暂时保活。provider 挂起后，等待协程的 drive 生命周期并不是面向插件的输入保活契约；本轮真实 `SDK caller → call_tool → SDK provider → sleep → 读 args` 已触发 ASan UAF。
-- 另有纯 ABI 探针：start 返回后释放调用方输入，再恢复 Task，同样 UAF。正常 `PluginTool::execute_async` 路径碰巧持有 argsJson 更久，不能据此认为 SDK 输入安全。
-
-**修复**：root operation 在调用业务 Task 前建立拥有 args/session/callId 的 Request；直到帧与清理回调完成后才释放。便捷 SDK 默认给开发者安全视图，C ABI 用户仍遵守“挂起前复制”的原始契约。增加真实互调回归，不仅做手写 notifier 测试。
-
-### F14 · P0 · Task 完成与句柄清理之间，detachAll 仍调用已释放的 cancel_ud（R）
-
-- `plugin_manager_tasks.cpp:98–110` 的 `cancelFn` 没有捕获/检查 OpCore 完成态；`spawnHandleReaper` 要到后续 IO 执行才移除句柄。
-- 探针通过 tasks ABI 注册 → `notify.done` → 释放任务私有 cancel_ud → **宿主直接 detachAll**。输出 `after done inflight=0 handles=1`，随后 ASan 报 cancel 回调读已释放对象。
-- 不需要插件在完成后主动使用失效句柄；触发者是宿主卸载清理。完成协议允许任务在 done 后释放资源，宿主就不能继续把它当可取消任务。
-
-**修复**：完成提交时先让取消入口失效，再通知等待者/降低业务计数；句柄登记和操作终态合并在一处。已完成 ID 的 cancel 只返回 already-completed，不再调用插件代码。
-
-### F15 · P0 · 管理器排队 lambda 捕获裸 this，管理器销毁后仍执行（R）
-
-- `plugin_manager_base.h:177–218` 的 postToIo/postToIoAsync 入队 `[this]`，后续写 ioThreadId_ 并运行私有 ioTasks_。
-- 探针：构造 ClientPluginManager → postToIoAsync(noop) → 释放 manager → IO 继续运行。ASan 定位 `plugin_manager_base.h:203`。
-- 即使业务 lambda 不引用插件、不操作任何状态，也会发生。因此只保护插件实例不能解决运行时自身的生命周期。
-
-**修复**：去掉额外的 ioTasks_ 队列，把已拥有输入和运行时引用的闭包直接 post 到 executor；提交成功后，运行时至少存活到闭包执行/安全丢弃。弱引用可用于“允许丢弃”的宿主纯数据消息，不能静默丢弃需要完成通知的 coroutine resume。
-
-### F16 · P0 · JS 顶层初始化失败后遗留已注册工具，调用即 UAF（R）
-
-- `agentxx_javascript_engine.cpp:463–511, 927–933`。
-- 脚本先 `agentxx.registerTool(...)`，再 `throw Error(...)`；doLoadScript 返回失败、局部 JsPluginCtx 及 binding 已释放，宿主注册仍在。
-- 探针输出 `script_load_status=2`、`script_tool_retained=1`，调用残留工具时 ASan 在 `JsEngine::toolExecuteStart:933` 报 UAF。
-- timer/事件/hook 在失败期间同样需要撤销，不仅是工具；C++ 壳当前不等待 load 的完成结果，扩大了问题暴露范围。
-
-**修复**：脚本初始化使用宿主注册事务；失败时先停止、撤销全部注册与定时器，再释放 JSContext/binding，最后返回失败。不要仅在调用入口捕获错误：访问已释放 binding 时已经来不及。
-
-### F17 · P0 · JS A 调用 JS B 在同一引擎内形成循环等待（R/S）
-
-- `agentxx_javascript_engine.cpp:1224–1283` 只对 **当前脚本自己的 tools** 内联；不同脚本落到 call_tool_blocking。
-- A 所在线程阻塞等待 B；B 的 execute 又排队到同一 JS 线程，永远无法执行。QuickJS interruptHandler 不能中断这里的 C++ condition_variable 等待。
-- 本轮两份极短脚本均加载成功；A 调 B 时 12 秒独立进程截止退出 124，未得到结果。结合上述调用链可确认循环等待，而不是把任意测试超时直接归为死锁。
-
-**修复**：callTool 始终创建 JS Promise 并立即返回；完成事件投递回 JS 线程 settle Promise。即便是同脚本，也复用异步路径，避免特殊内联路径产生不同异常、取消和 callId 语义。此变更涉及脚本 API 行为，提供明确的新 API 版本并迁移脚本为 `await agentxx.callTool(...)`。
-
-### F18 · P1 · Client 当前轮派发没有复查 alive，退订不能阻止后续回调（R）
-
-- `client_plugin_manager.cpp:1255–1296, 2725–2744`：构造快照时检查 alive，逐项派发时不再检查。
-- 两个 READY handler，先执行的 handler 通过 ABI 退订后一个；本轮仍输出 `second_called_after_unsubscribe=1`。
-- shared_ptr 仅保护 Subscription 对象，不保护开发者在退订后释放的 user_data。具体 UAF 取决于用户释放方式；本轮只运行了不释放 user_data 的功能探针，不把它计入 9 类 ASan。
-- dispatchEvent 快照还保存裸 inst，缺 closing/generation 复查；UI action 仅携带名字、不带点击时的注册代次，重绑或同名重载可能把旧点击交给新实例。
-
-**修复**：每个回调执行前在 IO 重查存活、订阅代次、实例状态；派发持实例强引用与执行保护。取消订阅后不再开始新的回调，已开始回调允许结束。动作请求携带实例/绑定代次，而不是比较“当前快照”和“当前注册”后假定等于点击时状态。
-
-### F19 · P1 · hook 接受协程签名，却完全不执行协程（R）
-
-- `plugin_kit.h:2786–2848` 的 hook 只调用 fn 并忽略返回值。
-- 返回 `Task<void>` 可以编译；Task 初始挂起，临时 Task 随即析构，函数体未运行，宿主却收到成功 done。
-- 本轮重跑探针：`coroutine_hook_entered=0 done_notifications=1`。
-
-**修复**：新 SDK 统一识别同步 `void` 与异步 `Task<void>`，使用同一个 root adapter；迁移前对旧 hook 增加严格返回类型约束，宁可编译时报错，不能静默成功。
-
-### F20 · P1 · 提示词“备份—恢复”在多插件叠加时撤销错误（R）
-
-- `plugin_manager_vtable.cpp:1650–1749` 按每个实例保存修改前的值，卸载时无条件写回。
-- A 写 shared=A，B 再写 shared=B；禁用 A 后 shared 被删除，B 的有效贡献消失；再禁用 B，shared 又恢复为已禁用 A 的值。
-- 本轮输出：`after_disable_A_shared=<missing>`、`after_disable_B_shared=A`。
-- setPromptJson 还会在仅修改 append key 时备份整个 systemPrompt；用户或其他插件在其后改 systemPrompt，恢复同样可能覆盖新值。
-
-**修复**：把基础用户配置与插件贡献分离，按 `(owner, key, revision)` 保存声明，以明确优先级合成有效提示词。卸载只删除该 owner 的贡献，不写回旧快照。图定义修改也需要事务/版本规则，不能全局覆盖后在失败路径遗留副作用。
-
-### F21 · P1 · JS Promise rejection 被当作工具成功结果（R）
-
-- `agentxx_javascript_engine.cpp:691–750` 将 rejected Promise 转成普通 JS string；pending job 错误、等待超时也返回字符串。
-- doToolExecute 只对 JS_IsException(result) 标记 error；因此 `Promise.reject("expected rejection")` 本轮正常返回 `result=expected rejection`，没有操作失败。
-- `120000` 是循环次数，不是精确的 120 秒截止时间；任务递归和 long timer 都能改变实际等待长度。
-
-**修复**：Promise 状态映射到操作状态，rejected→FAILED，明确取消→CANCELLED；timeout 用单调时钟截止 timer。JSValue/异常值采用作用域所有权封装，包含 PromiseResult、新建 timer fn 及枚举 atom，防止新增分支泄漏。
-
-## 5. 源码分析、边界约束与尚未运行的专项验证
-
-### 5.1 P0：OpCore 完成发布与回收竞态（S，压力表现待 V）
-
-`op_driver.h:95–142` 先 CAS `notified=true`，再写 status/payload，之后 send channel / emit doneSignal / reset guard。
-
-- IO 等待者可能在 status/payload 尚未写完时看见 notified；release/acquire 不能发布发生在 release 之后的写入。
-- `doneSignal.emit()` 来自任意线程，而 reaper 在 IO 线程绑定 slot；单个 Asio cancellation_signal 并不自动提供这类共享访问同步。
-- 检查 notified 与绑定 slot 非原子事件序列，可能错过通知。
-- 等待者会 move payload，onDone 又为 cb 复制 payload，相关顺序需要统一。
-- registerTask 的 cancelFn 不看 core 完成态，done 后、reaper 尚未移除句柄的窗口调用已失效 cancel_ud；该子问题已单独复现，见 F14。
-- `notified` CAS 只在 OpCore 仍存活时防止重复处理；对已经释放的裸 host_ud 再次 done，shared_from_this/bad_weak_ptr catch 并不能使解引用悬空对象变安全。不能把该 CAS 描述成可以容忍任意晚到的违约回调。
-
-**修复**：分离“完成被认领”与“结果已就绪”。任意线程 done 只负责复制借用载荷并投递完成包，状态提交、取消失效、结果可见、回调派发及所有计数更新均在 IO 线程进行。完成前取消与完成后取消在同一状态机定义，移除单独 reaper/sentinel 的重复通知通道。
-
-### 5.2 P0：volatile 不是跨线程同步（S）
-
-`plugin_kit.h:1781,1794,2597,2769` 的 cancelFlag 在 IO 写、worker 读，是普通 volatile int32_t，按 C++ 内存模型构成数据竞争。
-
-**修复**：不要直接把 `std::atomic*` 改成跨语言 ABI。推荐 opaque cancel token + 宿主 `is_cancelled(token*)` 基础类型返回，插件 SDK 内部包装；插件自己拥有、自己访问的 atomic 可作为私有状态。事件通知驱动阻塞 IO 中断，状态查询仅作为计算循环合作取消检查。
-
-### 5.3 P0：SDK 导出与回调异常守卫不完整（S）
-
-- 导出宏 `plugin_kit.h:3448–3450,3487–3489` 的构造/init 在 try 之外。
-- coroutine tool / blocking_tool 的参数复制、分配、Job 建立不在完整 C 入口守卫内。
-- `xx_call_tool_async`、`xx_log`、`xx_json_escape`、OpCore onDone 等仍有可抛分配操作未完整隔离。
-- renderer 的 JSON dump 在业务 fn 的 catch 之外，且宿主只在 rc==0 时释放输出；错误返回/部分输出有泄漏风险。
-- 手写 create 常把 unique_ptr 建在 guard 内层 lambda，却在外层 catch logger 中使用 raw 指针；异常展开后 raw 可能已悬空。
-- 导出宏及部分手写入口缺 `AGENTXX_PLUGIN_CALL`，一些入口还用 int；在当前 x64 平台往往 ABI 等价，但没有落实声明的严格规约。
-
-**修复**：统一 `noexcept` C trampoline，最外层包住构造/参数复制/结果编码/清理；错误日志不用可能已析构的 ctx；失败上报不能再次依赖可能抛出的格式化。宿主兜底 catch 不能替代插件侧隔离，跨编译器异常不应先越界再期望 catch。
-
-### 5.4 P0/P1：初始化、失败回滚与重复加载没有事务闭环（S）
-
-- Agent `plugins_[name]=inst` 会覆盖同名实例，没有 Client 的重复检查；工具与能力可能仍归旧实例。
-- create 失败 detach 后立即 dlclose，没有 await 尚在启动/取消中的任务，也没有统一释放非空 pluginCtx。
-- SDK create setup 失败会先析构 ctx，宿主回滚才尝试取消已经注册的 spawn，时间顺序相反。
-- JS 壳先返回成功，脚本异步注册工具；依赖者可在未 Ready 时进入，资源冻结也早于 JS 初始化结束。
-- Agent 没有调用 `checkInterfacesForSide`；manifest require 的约束只在 Client 真正实施。
-- Agent unload 超时不复位 unloadRequested，之后无法重试；依赖卸载失败被忽略，仍继续销毁 provider。
-
-**修复**：建立 Loading → Ready → Closing → Closed/CloseFailed 状态机；同步 create 仅分配/查询，增加异步 initialize/shutdown；初始化注册先暂存，成功才提交，失败先停任务再销毁。名字预占和 manifest/info 校验统一由公共 loader 完成。
-
-### 5.5 P1：等待降级可能永久挂起（S；无 pool 路径已有定向运行）
-
-- scheduler.offload 无 pool 时只记日志并返回 void，SDK 等不到 done。本轮显式清空 AgentContext 默认 threadPool 后，25ms 截止观察 `completed=0 inflight=1`；结合源码确认已接受请求没有终结路径。该探针单独退出，不声称已经等待到“永久”。正常 AgentContext 默认创建 pool，不能把“测试没有显式设置 pool”误当作 pool 缺失。
-- sleep 返回 nullptr 没有安排回调时，SleepAwaiter 仍挂起。
-- offload 缺接口时 await_ready=true，但结果 optional 未赋值。
-- call_tool/invoke_cap 缺接口时可能成功返回空字符串；spawn 缺 tasks 继续不受托管运行。
-
-**修复**：必需异步设施缺失必须明确拒绝，不能“成功但不执行”。post/sleep/offload 接受结果统一可观测；所有已接受操作保证一次终结。spawn 没有任务托管时默认禁止启动。
-
-### 5.6 P0/P1：强制转换 coroutine promise 类型不具备可移植保证（S）
-
-`plugin_kit.h:1685–1688, 2248–2254, 2455–2460` 等将协程地址恢复为 `coroutine_handle<PromiseBase<void>>`，即使实际帧来自 `Task<std::string>::promise_type` 或 `Task<void>::promise_type`。C++ 不保证不同 promise 类型的帧偏移与继承布局可这样互换；“基类字段在本编译器上碰巧同位置”不是协程 ABI 契约。
-
-**修复**：root 创建时保存针对真实 Promise 的 `resume/destroy/cancel` 类型擦除函数；只通过正确 promise_type 访问 promise。普通子 Task 不再包含宿主 notifier，continuation 也在模块内完成，不跨 ABI 传 coroutine_handle。
-
-此外 spawn 的 SpawnRecord/starter 完成后仍保存在 spawns_ 中，只把 coroAddr 清空；大量一次性 spawn 会持续保留闭包和捕获对象。应由任务终态主动移除，保留有界诊断历史即可。
-
-### 5.7 P1：执行适配、超时与取消语义不一致（S）
-
-- 普通 PluginTool::execute_async 使用 default_timeout_ms；互调 callToolAsync 直接调用 spec.execute_start，绕过这条超时逻辑，也不走同一输出处理入口。
-- 互调给 args JSON 注入 `tool_call_id`，但给 execute_start 的独立 tool_call_id 参数传空视图；JS `ctx.toolCallId` 与 JSON 中 ID 可能不一致。
-- hooks 的 dispatch 传 `cancelToken=nullptr`，catch std::exception/catch(...) 将宿主取消或中断也当普通 hook 失败记录。宿主 C++ 内部应使用 catchErrorAsync 或显式重抛取消；**只有真正 C ABI 边界才把异常转状态，不能把“异常不越 ABI”推广为“所有内部协程吞掉取消”。**
-- awaitPluginOp 的直接工具、hook、graph 操作没有像互调/tasks 那样加入实例的可枚举取消登记。卸载能看到 inflight 却未必能主动取消这些工作；需要把所有入口接入统一 provider operation 表。
-- 单个工具 timeout 会调用 `cancelRegistry.cancel(sessionId)`，影响同会话其他工具；新轮次 clearCancelled 又只有会话名，没有轮次代次。取消应区分实例、会话轮次、单操作、子操作，单操作取消不应默认污染整轮。
-
-### 5.8 P1：Client Loading 可见性与并发加载仍不完整（S，交错运行待验证）
-
-- Client 的重复名字检查在 create 的 offload 之前，成功后才插 plugins_；两个交错 load 可以都通过检查，注册动作已经执行，最后一次 insert 返回结果未核对。与 Agent 的直接覆盖不同，但同样需要“预占名字 + Loading 记录”。
-- create 在 worker 执行，UI/命令注册通过 ioCallSync 立即进入共享快照；实例却尚未 Ready。renderer 可能在 create 未结束时就执行，与 setup/shim 容器操作并发。
-- Client unload 只递归 enabled 的依赖者。已禁用但上下文仍存在的依赖者也可能持 provider 资源，不能默认忽略。
-- load 使用宿主 util::offloadAsync，若调用方取消而 worker 已进入 create，必须明确 worker/实例的保留与回滚顺序；目前 loader 没有完整的 Loading 关闭事务。该交错未做专项运行，不列为已复现 UAF。
-
-### 5.9 P0：done 与“插件代码已经完全退出”不是同一个事实（S）
-
-- SDK finishIfDone 的顺序是帧销毁 → notify.done → opCleanup；阻塞工具也是 notify.done 后 delete Job。
-- 默认同 IO 回调若由宿主执行保护包住，代码返回之前 IO 不会交错执行另一个回调，通常可以安全收尾；**不能把这一性质推广到任意自建线程上报 done。**
-- JS 工作线程在 done 后还会执行闭包析构/释放 op；单凭 inflight 在 onDone 中归零，IO 可能提前 destroy/dlclose。
-- `InflightGuard` 只持实例裸指针，不拥有实例/模块；callToolAsync 和 capability 的等待状态也未完整拥有 provider 强引用。
-
-**修复**：区分结果已就绪、所有插件执行已返回、模块可卸载。宿主调用的 start/cancel/timer/offload/done 回调必须由宿主侧执行范围保活；自建线程必须进入受管理的线程退出协议。给插件一个“release 最后引用”函数，插件调用后仍要返回插件代码，也不能自动证明安全 dlclose；详见 §7.4。
-
-### 5.10 P1：数据长度、分配与内存释放协议需要补齐（S）
-
-- `PluginString::from/strdup`、hostMemoryCreateString 等未验证 `size + 1` 溢出、uint64_t→size_t 截断或 `data==nullptr && size>0`。这不意味着能防御恶意原生插件，但应防止正常边界参数误用和跨架构错误。
-- 多处先拿 AgentxxPluginString，再构造 std::string，最后手动 free；中间分配抛异常时丢失释放。已有 PluginString RAII 应在接收后立即接管。
-- error_out 是否允许为空、成功时是否清空、失败返回但部分 out 非空的释放责任，应逐表统一。renderer 错误返回时的输出也必须释放。
-- `get_info` 可选且没有完整协商时，未知未来 API 版本被 `>=` 放行并不安全。字符串生命周期、接口表大小、opaque handle 有效期不能靠全局版本检查替代。
-
-## 6. 各插件现状与定向方案
-
-| 插件 | 当前模式 | 主要问题/方案 |
-|---|---|---|
-| example_plugin | fast echo、Task caller/sleep、同步 hook、双端 UI | 保留示例作用；统一导出与守卫；增加失败、取消、卸载示例而不是手写大量样板 |
-| example_graph_node | C start 同步节点、修改图 | 图生命周期见 F04；意图移除代码 `214–229` 实际删除第一条 assistant 而非最后一条；增加多历史消息测试 |
-| example_resources | manifest + create 资源注册 | create `108–162` 未交付 `*plugin_ctx`，局部 ctx 析构却返回成功；修复示例契约 |
-| example_js / execute_javascript | C++ 壳异步请求 JS 引擎 | Ready/失败/卸载异步确认缺失；壳代码重复，应抽取 ScriptModule adapter 或声明式脚本资源 |
-| javascript_engine | 专用线程 + mutex/CV + drivePromise | Promise 轮询、递归泵队列、跨脚本 callTool 阻塞互等；应返回 JS Promise 并在完成事件 settle，而不是同步等待 |
-| execute_command | blocking_tool 内私有 io_context | worker 长时间被进程/管道等待占据；迁移宿主 C process/pipe 异步服务，保留整树取消、独立 stdout/stderr 输出策略 |
-| websearch | blocking_tool 内私有 io_context | 缺外部取消；schema header=array<object> 但实现支持 object/string/string-array，不支持 object-array；统一 schema 并迁移 C HTTP 异步服务 |
-| filesystem | 6 个 blocking_tool；另留一套未注册的异步实现 | 同步/异步代码重复；glob 遍历用恒 false 取消标记；大量 sessionCancelled 可能每项跨线程 fut.get；原子写/no-overwrite/权限及并发需加强 |
-| string | blocking regex/html 转换 | 放 worker 合理，但要定义大小/计算预算与取消边界；不必为追求“协程”强行把纯 CPU 算法塞 IO |
-| math | fast_tool | 组合/排列循环随输入可极大，IO 线程可长时间阻塞；数值转 int64 范围未验、gcd/lcm 溢出；增加预算与 checked conversion |
-| system | fast 时间查询 | 基本适合内联；保留 tzdb 缺失回退，清理重复空上下文/日志 helper |
-| planning | fast_tool 同步读写磁盘 + 事件 | ctx 未调用 init 导致 Logger 未装配；无 dataDir 仍返回 success 却不能 read；事件不带 sessionId；多宿主同文件 .tmp 冲突；增加内存态与异步持久化 |
-| rag_search | create 扫文件/HTTP embedding；查询 blocking | create 会阻塞 IO；按 Ready 状态异步索引；查询可异步 HTTP + worker 向量计算，索引不可变快照 |
-| codegraph | worker 查询、warmup 线程、SQLite/缓存 | 2s sleep 后 join 可阻塞卸载；初始 DB 打开/重试在 create；索引应托管取消；语法提取与框架边界解耦 |
-| system_monitor | spawn/offload、工具 offload、能力同步 querySync | 同一 monitor 可被多 worker/IO 并发访问；GPU/PDH static 违反多实例；能力直接阻塞 IO；改单一采样任务与缓存快照 |
-| screen_capture | Windows DXGI/GDI + 流线程 | 入口编译错误；工具并发与流线程共享 D3D/GDI 可变状态；WIC RPC_E_CHANGED_MODE 后无条件 CoUninitialize 不配对 |
-| computer_use | blocking_tool + SendInput | schema actions 与底层读取 commands/动作名不一致；输入批次需串行，取消需释放已按下键；当前无取消参数 |
-| text_selection_monitor | Windows hooks/UIA + 多线程 | `instancePtr()` 可变 static 串实例；COM 初始化/释放线程不固定；失败把 running=false 后 stop 跳过 join；需专用事件线程与实例路由 |
-| audio_stream | CMake 标称 Windows、实际全平台 stub | `audio_stream.cpp:33` 是 `#if XX_IS_WIN_D && false`；CMake 却放行 Windows；应明确不支持/暂不发布，不能把历史注释当真实能力 |
-
-### JS 需要单独重构，不要把专用线程一概判为错误
-
-运行任意 JS 可能长时间纯计算，留专用线程是合理隔离。必须修的是：
-
-1. `drivePromise:699–739` 不应 while 等某个 Promise；无 timer 时仍 `sleep_for(1ms)`，有 timer 时 wait predicate 只看 stop，不能及时响应新任务。
-2. `B_CALL_TOOL:1224–1283` 只内联当前脚本自己的 tools；另一脚本仍要排入同一 JS 线程，但本线程阻塞在 call_tool_blocking，产生循环等待。
-3. `doEventFire:659–684` 对任意订阅事件遍历该脚本全部 handler，未按触发的 subscription/topic 路由。
-4. `hookStart` 投递后就 done，宿主 hook 完成不等于 JS hook 完成，时序与原生 hook 不同。
-5. `doLoadScript` 顶层已注册部分工具后抛异常，局部 pctx 析构，而宿主注册未撤销，遗留 user_data。
-6. `jsCapStart(unload)` 只投递就 done，不能证明 script 已停止；脚本宿主裸指针仍可能被 JS 队列使用。
-
-## 7. 推荐目标设计与明确的协议选择
-
-### 7.1 不变原则
-
-- C ABI 保持纯数据与 opaque handle，**不传 Asio executor、STL、exception_ptr、coroutine_handle**。
-- 普通业务与状态更新只在所属 IO 线程；明确 offload/JS/平台专用线程是例外。
-- 完成结果和取消由同一个运行时状态机管理；不再让每个接口自行做 reaper/sentinel/计数。
-- 所有异步请求从接受开始计入所属实例；安全条件是没有活跃或排队的插件执行，而不只是“某工具已输出结果”。
-- 无异步设施即拒绝，不降级为 unmanaged 或在当前线程直接 resume。
-
-### 7.2 运行时收敛
-
-拟引入内部 `PluginRuntime / Operation / InstanceLifetime` 三个职责，而非新的跨 ABI C++ 类：
-
-- Runtime：IO executor、模块与实例登记、调度、注册事务、退出。
-- Operation：输入所有权、状态、取消、结果、等待者、caller/provider 租约；所有状态在 IO 修改。
-- InstanceLifetime：Loading/Ready/Disabled/Closing/Closed，计数与一次性 idle 通知。
-
-现有 `OpCore`、callToolAsync/invokeCapabilityAsync/registerTask、sleep/offload/post 的重复路径迁到此处。移除 `pump_io` 的业务使用和额外 ioTasks 队列；旧 ABI 槽保留兼容，但不作为正常协程驱动。
-
-### 7.3 异步生命周期
+| F08 | sleep 记录不回收，post/sleep 排队阶段不计数 | timer/post 从接受到回调返回均是 Operation；完成/取消统一回收 |
+| F09 | 多级依赖禁用/恢复不对称 | 区分 user-disabled 与 dependency-blocked，维护完整依赖图和可恢复状态 |
+| F10 | 静态工具冲突时 manager 仍返回成功并记录工具 | `ToolRegistry::registerTool` 返回值是唯一成功依据，失败不得改实例记录 |
+| F11 | Task 不能组合，`optional<void>` 编译失败 | Task 提供正确 promise 类型的 awaiter、continuation、void 结果和异常传递 |
+| F12 | screen_capture 入口类型/API 不匹配 | 修正上下文和真实 capture API，增加 Windows 编译任务 |
+| F18 | Client 同轮派发不复查 alive | 每个 callback 前复查订阅代次/实例状态；取消后不开始新的回调 |
+| F19 | hook helper 接受 Task 却不执行 | 同一 root adapter 识别同步 void 和异步 `Task<void>`，错误签名必须编译失败 |
+| F20 | prompt 备份恢复覆盖其他 owner 的贡献 | 基础用户配置与 owner contribution 分离，按 owner/key/revision 合成有效值 |
+| F21 | JS rejection 被当成普通成功文本 | rejected→FAILED，取消→CANCELLED，timeout 使用真实单调截止时间 |
+| P1-A | 接口表只有 version、未做严格协商 | Reset-v1 表使用明确版本/大小校验；当前版本必须精确匹配 |
+| P1-B | create/loading/重复加载没有完整事务 | 名称预占，Loading 不可被调用；失败撤销全部注册并可重试 |
+| P1-C | GraphRegistry 类型不能简单删除，重载会冲突 | 使用宿主 GraphTypeSlot/代次间接层，旧工厂永远不调用新/旧失效 ctx |
+
+### 2.3 平台和业务插件问题
+
+- `agentxx_system_monitor` 的 GPU/PDH 状态必须从可变 static 改为实例成员；采样任务和缓存快照按实例管理。
+- `agentxx_text_selection_monitor` 的 `instancePtr()` 静态全局指针必须删除；使用实例绑定的事件线程/窗口路由；COM 初始化和释放必须在同一线程配对。
+- `agentxx_screen_capture` 必须修正当前 Linux 语法检查暴露的入口错误；Windows WIC 只有在实际初始化成功时才 `CoUninitialize`。
+- `agentxx_audio_stream` 当前是 stub，CMake 不得把未实现能力伪装为已支持；应明确跳过构建/发布，直到有真实实现。
+- `agentxx_execute_command`、`agentxx_websearch`、`agentxx_rag_search` 等可先继续受控 offload，但应逐步迁移到宿主 HTTP/process 服务，避免每个请求占用一个长期阻塞 worker。
+- JS 专用线程本身不是错误；必须修复的是同步跨脚本等待、Promise 轮询、失败事务和 stop 完成语义。
+
+---
+
+## 3. Reset-v1 的不可变原则
+
+1. **纯 C ABI**：跨边界只允许定长整数、C 结构体指针、函数指针、字符串视图、宿主分配字符串和 opaque handle。
+2. **严格版本**：Agent/Client 全局 API 版本均为 1；每张表带版本和结构大小；宿主要求精确匹配当前 Reset-v1 表，不保留旧兼容分支。
+3. **实例隔离**：禁止可变全局和函数级 static 保存实例状态；所有状态在 plugin context 或宿主 lifetime 中；回调通过 user data 恢复实例。
+4. **默认 IO 串行**：注册表、生命周期、Operation 状态和默认插件业务只在所属 IO 线程；worker/JS/平台线程是显式例外。
+5. **所有已接受操作必须终结**：接受、取消、失败、异常、缺少设施、超时都必须进入一次且仅一次终态；不能“接受但永远不 done”。
+6. **事件式等待**：卸载等待使用一次性 idle 事件或完成计数触发器；不使用固定间隔/指数退避检查 inflight。
+7. **停止先于销毁**：先阻止新进入，再取消旧操作，再等待所有插件代码和回调返回，最后 stop/destroy/dlclose。
+8. **异常不穿越 C ABI**：所有导出入口、宿主 vtable、插件回调 trampoline、完成回调都要有最外层 noexcept 守卫；内部业务协程不能吞掉取消和 NodeInterrupt。
+9. **语义 UI**：Client UI 快照不保存可直接执行的插件函数指针；插件 renderer 在 Client IO 线程计算，UI 只读宿主拥有的模型。
+10. **没有 unmanaged 降级**：tasks/offload/sleep/post 设施不可用时明确拒绝或生成失败，不允许静默运行无人托管的协程。
+
+---
+
+## 4. 目标运行时设计
+
+### 4.1 三个宿主内部职责
+
+不把 C++ 类暴露到 ABI。实现可以先使用现有文件，最终建议拆出以下职责：
+
+#### `PluginRuntime`
+
+负责：
+
+- 所属 IO executor 和 IO 线程识别。
+- 名称预占、实例表、依赖图、注册事务。
+- 直接向 executor 投递已拥有闭包，不维护 `ioTasks_ + mutex` 二级队列。
+- Operation 表、关闭队列、一次性 idle 通知。
+- 统一加载/启用/禁用/关闭状态变化。
+
+#### `InstanceLifetime`
+
+每个 Agent/Client 实例持有一个宿主 lifetime 控制块，至少包含：
 
 ```text
-解析 manifest / 确认兼容 / 名称预占
-  → 打开模块
-  → create（只建立实例）
-  → initialize_async（暂存注册，允许 await）
-  → 提交注册，Ready，依赖者才可运行
-  → Closing：停止接受新工作
-  → 取消所有既有操作与背景任务
-  → shutdown_async（等待外部线程/平台资源退出）
-  → idle 事件，所有回调返回
-  → destroy（不得再创建异步操作）
-  → 释放模块
+state: Loading | Ready | Disabled | Closing | Closed | CloseFailed
+instance generation
+module handle / plugin context ownership
+lease count
+close requested
+idle notification
+registered operation ids
+registered resources and UI generation
 ```
 
-- idle 等待使用一次性事件/完成列表，减计数到零主动通知；timeout 仅一个截止 timer，不定期查 inflight。
-- 停止超时则保留上下文/模块并报告阻塞项，允许重试；不能跳过失败依赖继续销毁 provider。
-- 禁用保留可恢复注册元数据；如取消了后台 Task，重新启用走明确的 on_enable，而不是假装只需重新 register_tool。
+lease 必须覆盖：排队等待、宿主调用 start/cancel、插件等待、done 完成包、宿主完成回调和清理。`enabled` 只表示逻辑是否启用，不能代替 `state`。
 
-### 7.4 SDK 与插件开发简化
+#### `PluginOperation`
 
-拆分 SDK，但保留 `plugin_kit.h` 作为聚合入口：
+每个操作持有：
 
 ```text
-plugin/api/          # 纯 C ABI
-plugin/sdk/abi.h     # 字符串、查询、noexcept 边界
-plugin/sdk/task.h    # 可组合 Task
-plugin/sdk/async.h   # sleep/yield/offload/call/invoke
-plugin/sdk/plugin.h  # 实例、注册事务、声明式入口
-plugin/sdk/client.h  # UI 模型/动作
-plugin/sdk/json.h    # 可选 Json/Schema/ArgReader（有 util 依赖）
+operation id / state
+owned args, session id, call id, method and payload
+caller lifetime lease (可空)
+provider lifetime lease
+cancel token
+provider opaque handle
+completion packet
+waiting coroutine / callback
 ```
 
-统一工具、hook、capability、graph 的 operation adapter。必需注册返回结果；同步 hook 显式要求 void，异步 hook 显式接受 Task<void>。输入在首次挂起前必须拥有，SDK 传入持有数据的 Request，不让开发者反复猜 string_view 是否还活着。
+状态至少为：
 
-**SDK header-only 不等于零链接依赖**：当前 kit 直接包含 util::Json/fmt，第三方使用 kit 通常仍需它们的实现；应区分“仅 C 头可独立开发”与“完整便利层需要支持库”。
-
-### 7.5 为已有异步 IO 提供纯 C 服务，不传宿主 executor
-
-HTTP、process/pipe、必要的文件 IO 可新增独立接口表，内部复用宿主现有实现；跨边界仍是请求结构体指针、借用/拥有数据、cancel handle、完成回调。
-
-推荐先迁移 websearch 和 execute_command，解决每个网络/进程等待占 worker 的问题。文件遍历/正则/解析/向量计算等不可避免的阻塞或 CPU 工作可继续 offload，但要有取消、预算和受控并发。
-
-## 8. 分阶段实施方案与验收
-
-| 阶段 | 工作 | 必须通过的验收 |
-|---|---|---|
-| P0-A | 修复 F01/F02/F03/F04/F05；补完整异常守卫；修正 call_start 线程 | 5 个 ASan 复现不再报错；失败空返回无 cb；start/cancel/resume 均在所属 IO |
-| P0-B | 统一 Operation/caller-provider 保护、queued callback 计数、终态发布、事件式 idle | 不轮询卸载；caller/provider 任一关闭安全；完成取消交错不丢通知、不重复调用 |
-| P1-A | 异步 initialize/shutdown、注册事务、版本与 manifest 协商、重复加载/依赖恢复 | 未 Ready 不可被依赖；失败注册全部撤销；CloseFailed 可重试；三级/菱形依赖正确 |
-| P1-B | SDK 可组合 Task、void offload、统一 hook/cap/graph adapter、输入所有权 | SDK 正例编译运行；错误签名编译失败；await 缺接口明确错误；无 unmanaged spawn |
-| P1-C | HTTP/process C 服务；迁移 web/command/RAG/system monitor；重构 JS Promise 调度 | 大量等待不按请求数占 worker；JS 跨脚本/原生回调 JS 无死锁；cancel 可终止真实工作 |
-| P1-D | 修复平台入口、全局缓存/实例指针、COM 与设备线程约束 | Windows 编译和双实例测试；Android 最低支持环境验证；音频 stub 不发布 |
-| P2 | Client 文件拆分、统一注册容器/manifest loader、CMake helper、清理旧注释/重复实现 | 行为不变的重构独立提交；示例、文档、构建和测试共用一套契约 |
-
-每一阶段保持旧 ABI 可用或显式拒绝不兼容版本，不应在同一个 v1 表中静默改变结构布局和线程语义。新增表使用独立 IID/版本；若需要变更核心入口契约，明确发布不兼容版本而不是再次“重置全部版本为 1”。
-
-## 9. 本次测试与复现记录
-
-### 9.1 现有测试
-
-使用已有 Debug 产物，未重新全量构建工程：
-
-```bash
-agent/build/linux-debug/exec/agentxx_test plugins
-agent/build/linux-debug/exec/agentxx_test client_plugins plugin_resources plugin_multi_instance
+```text
+Accepted → Running → Cancelling → Completed
+Rejected 仅用于 start 同步返回，不产生 done
 ```
 
-| 模块 | passed | failed | 进程退出 |
-|---|---:|---:|---|
-| plugins | 328 | 0 | 0（独立限时重跑确认） |
-| client_plugins | 300 | 0 | 与下两项同进程，0 |
-| plugin_resources | 83 | 0 | 0 |
-| plugin_multi_instance | 29 | 0 | 0 |
-| 合计 | **740** | **0** | 正常退出 |
+完成包包含 `status + owned payload + error`，由任意线程产生、投递到 IO；只有 IO 线程修改 Operation 终态、调用 callback、失效 cancel、移除句柄和减少 lease。
 
-首次把 tests 与阅读命令放同一工具调用时触发外层 60s 超时；之后独立限时重跑确认退出码 0。因此不把首次工具超时归因于产品死锁。
+### 4.2 完成协议
 
-### 9.2 独立探针
+- 插件 `done` 的 payload 只在本次调用内借用；宿主回调入口第一步复制数据，之后不再保存插件指针。
+- `done` 可从任意线程调用，但不得直接修改宿主 Operation 的业务字段，也不得直接恢复协程。
+- IO 线程收到完成包后：
+  1. 检查 Operation 是否已终结；重复 done 只记录诊断并丢弃。
+  2. 提交 status/payload。
+  3. 使 cancel 入口失效。
+  4. 派发 caller callback（仍持 caller lease）。
+  5. 释放 provider/caller lease 的对应阶段。
+  6. 移除句柄和完成等待者。
+- host-facing `call_tool_async`/`invoke_capability_async` 对“已接受但 provider 同步完成”的调用仍返回宿主托管句柄，完成 callback 异步经 IO 派发；只有真正拒绝才返回 NULL 且不回调。
+- provider 的 `execute_start` 可以保持“同步 done 后返回 NULL”的内部形态，但宿主不能把它等同于拒绝；必须由 Operation 记录已接受/已完成。
 
-临时文件位于 `/tmp/agentxx-plugin-refactor-2-audit/`，不属于产品代码变更。探针使用源码头优先 include、现有 Debug 的编译/链接参数及已构建静态库。ABI C17 探针只包含两个 ABI 头，并检查当前 x64 的 StringView/HostVtable 大小。
+### 4.3 跨插件调用
 
-| 探针 | 结果 |
-|---|---|
-| abi_c | `cc -std=c17 -pedantic-errors -fsyntax-only` 通过 |
-| start_failure | ASan UAF，CallToolAwaiter::await_suspend `plugin_kit.h:1977` |
-| unsubscribe | ASan UAF，`plugin_manager_vtable.cpp:178` |
-| graph | ASan UAF，unload 后 node.run 调用已释放 user_data |
-| shutdown | ASan UAF，取消 sleep 恢复的 Task 访问被 shutdown destroy 的 ctx |
-| stale_ui | ASan UAF，旧快照 renderer 访问已释放 RenderShim |
-| thread | `execute_start_off_io=1` |
-| caller_lifetime | caller 已卸载成功，随后仍收到完成回调 |
-| sleep | `callbacks=32 retained_timers=32 inflight=0` |
-| disable | `A=0 B=0 C=1`，enable A 后 B 仍为 0 |
-| registration | `register_rc=0 registry_contains=0 recorded_tools=1` |
-| kit_nested | 编译失败：Task 不可 co_await |
-| kit_void | 编译失败：optional<void> |
-| screen-syntax | 编译失败：错误的上下文类型/接口调用；非 Windows 全构建结果 |
+一次 A→B 调用必须同时保护：
 
-抽查 example_plugin、execute_command、system_monitor 的 Linux DSO 动态导出表，均只出现预期 agent/client 入口。不能据此推断全部平台/全部插件符号隔离都已验证。
+- B provider lease：覆盖 B 的 start、执行、cancel、done 和受管清理。
+- A caller lease：覆盖 A 的 callback、callback user data 和 callback 返回。
 
-### 9.3 测试覆盖缺口
+如果 caller 正在 Closing，新调用直接拒绝；已有调用仍由 runtime 托管到 callback 返回。`caller->outstandingOps` 只作为诊断/取消索引，不能被当作生命周期保护本身。
 
-- ABI 函数入口与 manager 直调用须分开测，不能认为调用同一底层就完全等价。
-- `test_plugins.cpp:1901–1935` 的“事务回滚”实际仅 fakeInst + detachAll，未执行真实失败 create，更未启动后台任务后失败。
-- `test_plugins.cpp:1937–1970` 的 1000 次并发主要是同 IO 的成功 echo，未验证 worker 发起调用与 start_failure。
-- `test_plugin_multi_instance` 双宿主同 executor、主要 example_plugin，不覆盖 Windows 全局指针、GPU 静态缓存和两 IO 线程并发。
-- 老 UI 快照、保留旧工具/图节点、create 失败、callback 期间注销/卸载，是独立的生命周期维度。
-- 业务测试大量直测 *_impl.h，并有手写 schema；例如 web 测试 header=object 不能发现真实入口 header=array<object>。
-- 需要有截止时间的事件式测试等待与可控 fake scheduler；不要依赖 `sleepMs(2/5/50)` 反复探测来证明实现“无轮询”。
+### 4.4 IO 投递
 
+- 删除 `PluginManagerBase::ioTasks_`、`runPendingIoTasks` 业务路径和捕获裸 `this` 的投递 lambda。
+- `postToIo` 直接 `asio::post(ioExecutor, ownedClosure)`；闭包捕获 `shared_ptr<RuntimeState>` 或独立的 completion state。
+- 无需结果的消息如果 runtime 已失效可以安全丢弃；需要恢复协程、完成 callback 或释放 lease 的任务必须持有 completion state，不能静默丢弃。
+- `pump_io` 从 Reset-v1 scheduler 表删除；插件不得主动驱动宿主事件循环。
 
+### 4.5 事件式 idle
+
+实例接受操作时增加 lease/operation count；操作最终清理时减少。计数从非零降为零时发布一次 idle event，关闭协程等待该事件与一个绝对截止 timer 的竞速：
+
+- idle 先到：允许进入 stop/destroy。
+- deadline 先到：进入 `CloseFailed`，保留实例、ctx 和 DSO，报告阻塞 Operation；可再次调用 close 重试。
+- 不能使用 20ms→1s 等轮询观察计数。
+
+---
+
+## 5. Reset-v1 ABI 设计
+
+### 5.1 通用边界
+
+保持以下基础契约：
+
+- `#pragma pack(push, 8)`，跨边界使用 `int32_t/int64_t/uint32_t/uint64_t`。
+- `AGENTXX_PLUGIN_CALL` 出现在所有入口、函数指针和回调声明上。
+- 核心宿主 vtable 只保留 `alloc/free/query_interface`。
+- `AgentxxPluginStringView` 是借用视图；`AgentxxPluginString` 由宿主分配，接收方负责经 host free 释放。
+- `AgentxxPluginHost` 的 `opaque` 对插件不透明；宿主不解释插件对象布局，也不跨边界析构插件对象。
+
+所有接口表新增/重置为明确的 `version` 和 `struct_size` 字段；宿主查询后必须检查表非空、版本精确等于 1、大小覆盖所需成员，不能读取短表或接受未知版本。
+
+### 5.2 生命周期入口
+
+Agent 和 Client 的内置插件统一导出：
+
+```text
+get_info
+create(host, &plugin_ctx)
+start(plugin_ctx, notify, error_out)
+stop(plugin_ctx, notify, error_out)
+destroy(plugin_ctx)
+```
+
+- `create` 只分配上下文、查询接口和初始化纯本地字段，不提交工具/UI/事件等运行时注册，不启动不可托管线程。
+- `start` 在 IO 线程调用，执行初始化注册事务；可以同步 done，也可以返回宿主托管 Operation 并异步 done。只有 start done 成功后状态才变为 Ready。
+- `stop` 在 Closing 状态调用，取消和等待插件自己的线程/定时器/JS job，撤销当前注册；stop 完成后才能 destroy。start/stop 必须支持重复尝试或明确返回 CloseFailed。
+- `destroy` 不得创建异步工作、调用宿主注册接口或访问已失效 Operation；宿主只有在 idle 且 stop 已完成后调用。
+- 所有入口由 SDK 生成统一 noexcept trampoline；手写入口也必须遵守同一规则。
+
+### 5.3 统一 Operation 和取消
+
+保留统一终态常量：`OK / CANCELLED / FAILED`，新增/重置：
+
+```c
+struct AgentxxPluginOperationHandle; /* opaque */
+struct AgentxxPluginCancelToken;     /* opaque */
+
+int32_t agentxx_plugin_cancel_is_requested(
+    const AgentxxPluginCancelToken* token
+);
+```
+
+工具、hook、capability、graph node、tasks 的 start/cancel/done 使用同一语义：
+
+- start 必须由所属 IO 线程调用。
+- 入参为借用，只在 start 调用期间有效；SDK root adapter 负责复制。
+- start 返回 NULL + error 只表示拒绝，不得调用 done。
+- 接受后必须 exactly-once done；同步 done 也属于接受。
+- cancel 只能由宿主通过 opaque handle 调用；已完成操作 cancel 无操作。
+- 插件不得保存宿主传入的 `notify*`、输入视图或 CancelToken 地址超过协议允许的 Operation 生命周期。
+
+### 5.4 Scheduler v1
+
+删除 `pump_io`、`volatile int32_t* cancel_flag` 和 `cancel_sleep`。scheduler 表的目标语义为：
+
+- `is_io_thread`：只读查询。
+- `post_to_io`：投递一个受 runtime 管理的 callback，返回明确状态；不允许在当前线程同步重入。
+- `sleep`：返回 Operation handle，完成通过统一 notify；取消使用通用 `op_cancel`。
+- `offload`：工作函数接收 `const AgentxxPluginCancelToken*`，返回结果/错误；返回 Operation handle，worker 返回前 token 和 provider lease 保持有效。
+- 缺少 thread pool、工作函数异常、排队失败或设施关闭都要生成失败终态，不能让 awaiter 永久挂起。
+
+`offload` 的工作函数可以继续是同步函数；SDK 对外提供 `offload<T>` 和 `offload<void>` 两条正确类型路径，不能实例化 `std::optional<void>`。插件内部自有 `std::atomic<bool>` 可以使用，但不得把它作为 ABI 参数。
+
+### 5.5 Tasks v1
+
+`register_task` 必须返回宿主托管 Operation handle；无 tasks 表时 `spawn` 直接失败。任务取消时：
+
+1. IO 线程使 Operation 进入 Cancelling 并调用插件 cancel_fn。
+2. 插件唤醒/退出协程。
+3. 任务帧完成后 exactly-once notify.done。
+4. IO 线程提交完成、移除句柄、释放 cancel_ud 的保护。
+
+不再支持 unmanaged spawn，不再允许宿主在 done 后继续对已失效 `cancel_ud` 调用插件代码。
+
+---
+
+## 6. C++ SDK 目标设计
+
+### 6.1 Task
+
+`Task<T>` 必须拆分“普通子 Task”和“宿主 root operation”：
+
+- 普通 Task 提供 `operator co_await`，由正确的 `promise_type` 设置 continuation；子任务完成后恢复父任务，结果移动给父任务，异常传递给父任务。
+- `Task<void>` 使用专门的 void promise/result，不使用 `optional<void>`。
+- root adapter 保存类型擦除的 `resume/destroy/cancel` 函数，但只在创建 root 时针对真实 promise 类型生成；禁止把任意协程帧强制转换为另一种 promise 的 `coroutine_handle`。
+- root adapter 统一完成通知、Operation handle、lifetime lease 和清理；hook/capability/graph/tool/spawn 不再各自实现一套 Job。
+- 取消、`CancelledException`、`NodeInterrupt` 等内部控制流必须继续传播；只有 C ABI trampoline 把真正的异常转为 FAILED。
+
+### 6.2 Request 和输入所有权
+
+SDK 在每个 root tool/capability/graph/hook 操作开始时建立：
+
+```text
+Request {
+  owned args_json;
+  owned session_id;
+  owned tool_call_id / method;
+  cancel token view;
+  plugin context lifetime;
+}
+```
+
+业务 lambda 可拿 `std::string_view`，但这些视图只在 Request 和 root Task 完成前有效。跨 `co_await` 的数据必须由 Request 或业务自己拥有；不能依赖宿主当前恰好延长了原始参数的生命周期。
+
+### 6.3 注册 helper
+
+- `register_tool`、`register_hook`、`register_capability`、renderer/UI 注册函数返回 `[[nodiscard]]` 的状态。
+- 任意注册失败必须能让 start 事务失败并自动撤销之前的注册。
+- hook helper 根据 callable 返回类型严格区分同步 `void` 与异步 `Task<void>`；不匹配时编译失败。
+- `PluginBase` 析构只释放本地状态；不在析构中尝试跨线程等待宿主。
+- SDK 导出宏将 setup 放入 `start` 事务，将 stop 清理放入 `stop`；`create` 只构造 ctx。
+
+### 6.4 SDK 文件组织
+
+可以先保留 `plugin_kit.h` 聚合入口，最终建议拆成：
+
+```text
+plugin/api/             纯 C ABI
+plugin/sdk/abi.h        字符串、接口查询、边界守卫
+plugin/sdk/lifetime.h   Request、CancelToken、Operation adapter
+plugin/sdk/task.h       可组合 Task
+plugin/sdk/async.h      sleep/yield/offload/call/invoke
+plugin/sdk/plugin.h     PluginBase、注册事务、导出宏
+plugin/sdk/client.h     Client 语义模型和动作 helper
+plugin/sdk/json.h       可选 Json/Schema/ArgReader
+```
+
+完整便利 SDK 可以依赖项目 util；仅使用 `plugin_api.h` 的第三方 C 插件不应依赖宿主 C++ 库。
+
+---
+
+## 7. Agent/Client 生命周期和注册事务
+
+### 7.1 实例状态
+
+两侧实例统一使用：
+
+```text
+Loading → Ready
+Ready → Disabled → Ready
+Ready/Disabled → Closing → Closed
+Closing → CloseFailed → Closing（可重试）
+```
+
+- Loading 不出现在可调用注册表中，或所有查询均拒绝。
+- Disabled 保留实例和声明性配置，但不接受新操作；当前操作按策略取消并等待完成。
+- Closing 停止所有新 start、post、renderer 请求和事件回调；已开始的 callback 由 lease 保护到返回。
+- Closed 的 host opaque 只能用于安全失败；不得再次调用插件函数。
+
+### 7.2 加载流程
+
+```text
+解析 manifest
+  → 名称预占（拒绝重复加载）
+  → dlopen / builtin 查找
+  → get_info + API/接口精确校验
+  → create（纯构造）
+  → start（注册事务，可异步）
+  → commit registrations
+  → state = Ready
+  → 依赖者允许加载/调用
+```
+
+失败回滚顺序固定为：
+
+```text
+停止接受新工作
+  → 取消并等待已接受 Operation
+  → 回滚工具/hook/capability/event/resource/prompt/graph/UI 注册
+  → stop（若已经开始）
+  → destroy
+  → 从实例表移除
+  → dlclose
+```
+
+失败路径不得留下工具名、能力名、EventBus 订阅、图类型、prompt 修改、资源记录或 UI 句柄。
+
+### 7.3 卸载和 AgentContext/AgentHost 退出
+
+新增 `PluginManager::shutdownAsync()` 和 Client 对应异步关闭接口。所有 owner 必须在 IO executor 和 blocking pool 停止前 await：
+
+- `BaseAgent` 增加明确的异步 shutdown/stop 调用点。
+- `AgentHost::destroyAgent` 不能同步释放仍可能运行的 AgentContext；改为在所属 IO 上先 await plugin shutdown，再移除 AgentNode。
+- Client mode runner 在停止 transport/UI pool 前 await ClientPluginManager shutdown。
+- `AgentContext::~AgentContext()` 不能直接调用会 destroy/dlclose 的同步 shutdown。析构只处理已关闭状态；若违反调用顺序，必须保留 runtime/module state 并报错，不能强制卸载。
+- `PluginManager`/`ClientPluginManager` 析构必须能证明实例均 Closed；不能把“进程退出”当成所有后台线程已停止的证明。
+
+### 7.4 禁用和依赖恢复
+
+维护两个不同原因集合：
+
+- `userDisabled`：用户明确关闭，依赖恢复不能绕过。
+- `blockedByDependencies`：依赖不可用导致的级联关闭，依赖恢复后可自动解除。
+
+禁用按反向依赖递归处理；启用按依赖拓扑处理。每个插件的 start/stop 事务必须可重复执行，订阅、spawn、prompt、resources、UI 注册不能靠“只重新 register 一部分”伪恢复。
+
+### 7.5 Prompt 贡献
+
+移除“每个插件备份旧值、卸载时无条件写回”的模型。维护：
+
+```text
+base user prompt
+plugin contributions: owner + generation + key + sequence + value
+```
+
+有效 prompt 由宿主按明确优先级合成；卸载/禁用只删除或屏蔽对应 owner 的 contribution，不覆盖其他插件或用户在之后写入的内容。Graph definition 修改也必须走 owner/generation 事务，失败时回滚。
+
+---
+
+## 8. Graph、Client UI 和 JS 目标设计
+
+### 8.1 Graph node
+
+`GraphRegistry` 不能直接让已注册 factory 永久捕获裸 plugin ctx。使用宿主 `GraphTypeSlot`：
+
+- factory 捕获 slot，而不是 plugin context。
+- slot 保存当前 instance lifetime、generation、run_start/run_cancel 和 user data。
+- 创建 node 时复制 generation/lifetime，node.run 每次检查状态。
+- Closing/Closed 时 node.run 返回插件已关闭错误，不调用任何 plugin callback。
+- 重新加载同名 type 时更新 slot 只能服务新编译节点；旧 node 的 generation 不匹配，不能转而调用新实例。
+- 如果第三方 GraphRegistry 无删除接口，不要直接修改为全局可变工厂；使用 slot/代次间接层解决重载和旧节点问题。
+
+### 8.2 Client renderer
+
+当前 `ClientUiRegistry` 快照中的 renderer 函数指针和 `userData` 必须移除或改为仅宿主内部使用。目标链路：
+
+```text
+UI/TUI 提交 render request（拷贝 tool 输入）
+  → Client IO 线程检查 plugin/generation/state
+  → 持 renderer lease 调 plugin render callback
+  → 复制 displayName/summary/items 为宿主 JSON
+  → 更新不可变 semantic render cache/snapshot
+  → UI 下一帧读取 cache；未命中或失效则通用回退
+```
+
+- 模板 renderer 可在 UI 侧纯宿主计算。
+- 自定义 renderer 不在 UI 线程同步调用。
+- 旧 snapshot 只含 cache、plugin name、generation 和 renderer id；generation 失效时不执行 DSO 函数。
+- 输出 JSON 的每个分配字段必须在成功、失败、异常路径释放。
+
+### 8.3 Client 事件和动作
+
+- dispatchEvent 构造快照后，逐个 callback 前复查 `alive`、订阅代次、实例状态；前一个 handler 退订后，后一个尚未开始的 handler 不得执行。
+- subscription handle 使用独立宿主控制块，插件释放 user data 后仍不能被后续 callback 使用。
+- UI action 携带点击时的 plugin/generation/owner；IO 线程复查当前绑定是否仍匹配。重绑、禁用、卸载后旧点击只能丢弃，不能转交同名新实例。
+- Client 命令和 overlay 同样经过 instance lease；卸载时 adapter 只接收宿主已复制的数据。
+
+### 8.4 JS
+
+保留专用 JS 线程用于执行任意 JS，但重构：
+
+1. `callTool` 总是创建 JS Promise，完成/失败/取消事件投递回 JS 线程 settle；禁止 condition_variable 等同步等待。
+2. 删除 `drivePromise` 的 1ms 轮询；使用明确的任务队列事件、timer deadline 和 Promise 状态。
+3. 每个脚本的 tool/hook/event/timer/能力注册属于脚本初始化事务，顶层异常先完整撤销再释放 binding。
+4. `hookStart` 和 `jsCapStart(stop)` 的 done 只在真正业务完成/停止后触发。
+5. rejected Promise 映射为 FAILED，异常值不再当作成功 payload；timeout 使用 `steady_clock` 的绝对截止时间。
+6. 每个 JS 脚本和 engine instance 独立保存状态；不使用跨宿主可变 static。
+
+---
+
+## 9. 内置插件迁移顺序
+
+不要一开始同时修改所有业务插件。按以下顺序迁移，每一步保持可编译：
+
+1. `example_plugin`：作为 SDK 正例，覆盖 fast/tool/sleep/call/offload/hook/capability/spawn 和失败/取消。
+2. `example_resources`：验证 create/start 事务、资源回滚和 Ready 状态。
+3. `example_graph_node`：验证 GraphTypeSlot、旧节点和重载。
+4. `agentxx_filesystem`、`agentxx_string`、`agentxx_math`、`agentxx_system`：验证同步/CPU/offload 的新 SDK 签名。
+5. `agentxx_execute_command`、`agentxx_websearch`、`agentxx_rag_search`：接入 CancelToken；随后迁移宿主 process/HTTP 服务。
+6. `agentxx_system_monitor`、`agentxx_codegraph`、`agentxx_planning`：验证多实例、后台采样、资源、prompt、Client 语义模型。
+7. `agentxx_javascript_engine`、`example_js`、`agentxx_execute_javascript`：最后迁移脚本事务和 Promise 调度。
+8. Windows 插件：`screen_capture`、`computer_use`、`text_selection_monitor`、`audio_stream` 按平台 gate 单独修复和编译。
+
+每个插件必须满足：
+
+- no mutable global/static instance state；
+- start/stop 可重复或明确拒绝重复；
+- 所有注册返回值检查；
+- 所有跨挂起输入由 SDK Request 或插件对象拥有；
+- cancel 使用新 CancelToken/Operation，不读取 volatile ABI 地址；
+- destroy 前没有插件线程、timer、callback 或操作残留。
+
+---
+
+## 10. 实施阶段、提交边界和验收
+
+### R0：交接和契约冻结（本文）
+
+**内容**：确认问题、Reset-v1 ABI、状态机、测试矩阵和迁移顺序。
+
+**验收**：新会话只以本文为方案依据；无旧兼容目标；保留用户工作树修改。
+
+### R1：宿主 Runtime 和 Operation
+
+**内容**：
+
+- 新增/改造 `InstanceLifetime`、Operation 控制块和完成包。
+- 重写 `OpCore`，移除跨线程直接修改 status/payload 的路径。
+- caller/provider 双 lease。
+- 删除 `ioTasks_`、裸 this 投递和 sentinel/reaper 的重复终态通道。
+- sleep/offload/post/timer 从接受到回调返回纳入 Operation。
+- 事件式 idle 和 close deadline。
+
+**必须通过**：F01/F05/F06/F07/F08/F14/F15，以及 OpCore 完成发布压力测试。
+
+### R2：Agent/Client 加载、注册事务和关闭
+
+**内容**：
+
+- 名称预占、Loading/Ready/Closing 状态。
+- create/start/stop/destroy 新入口和 SDK 导出宏。
+- 注册事务覆盖工具、hook、capability、事件、资源、prompt、graph 和 Client UI。
+- `shutdownAsync` 接入 BaseAgent、AgentHost、Client runner。
+- GraphTypeSlot 和 Client semantic renderer cache。
+
+**必须通过**：失败 create 无残留、旧 graph node 安全失败、旧 UI snapshot 安全回退、CloseFailed 可重试、重复加载拒绝。
+
+### R3：ABI v1 和 SDK
+
+**内容**：
+
+- 重写 `plugin_api.h`/`client_plugin_api.h` 的表版本/大小和 scheduler/tasks/cancel。
+- 删除 `pump_io`、volatile cancel、unmanaged spawn 和旧 `cancel_sleep` 语义。
+- 实现可组合 Task、void offload、Request、统一 root adapter。
+- hook/cap/graph/tool 复用同一 adapter。
+
+**必须通过**：C17/C++ ABI layout 检查、nested Task、void offload、错误 hook 签名、输入释放后挂起、取消/异常/超时交错测试。
+
+### R4：内置插件和 JS/平台迁移
+
+**内容**：按 §9 顺序迁移所有内置插件；修复静态实例状态、screen_capture 编译、COM 配对和 JS Promise。
+
+**必须通过**：Linux Debug 全插件构建和插件测试；Windows 编译/双实例专项；JS 跨脚本调用和 rejection/timeout 测试。
+
+### R5：Client、依赖和 prompt 收敛
+
+**内容**：事件 alive 复查、动作代次、prompt contribution、依赖 blocked/userDisabled、enable/disable 事务。
+
+**必须通过**：退订同轮不再派发、旧动作丢弃、prompt 多 owner 叠加/卸载顺序正确、三级和菱形依赖恢复正确。
+
+### R6：验证、文档和发布前审查
+
+**内容**：Debug、ASan/UBSan 定向探针、导出符号、CMake 平台 gate、文档更新和最终 diff 审查。
+
+**必须通过**：所有 P0 回归通过；无已知 UAF、永久挂起、卸载死锁和 unmanaged 操作；更新 `docs/zh-cn/design/plugins.md` 与测试说明；不修改用户已有无关文件。
+
+### 提交建议
+
+建议按以下独立提交，便于新会话或后续开发者回退：
+
+1. `plugin: reset-v1 runtime operation and lifetime`
+2. `plugin: transactional loading and async shutdown`
+3. `plugin: reset scheduler tasks cancel ABI`
+4. `plugin: composable sdk task and request ownership`
+5. `plugin: migrate built-in plugins`
+6. `plugin: client semantic renderer and generation checks`
+7. `plugin: lifecycle regression tests and docs`
+
+不要在一个提交中同时拆文件、改 ABI、迁移所有插件和修改 TUI；每个提交都应有最小构建/测试结果。
+
+---
+
+## 11. 测试和探针矩阵
+
+### 11.1 C ABI 和 SDK 编译测试
+
+- C17 `-pedantic-errors` 包含两个 ABI 头，检查结构体大小、对齐、offsetof、调用约定声明。
+- C++ 正例：`Task<string>` 嵌套、`Task<void>`、offload void、async hook、capability、graph。
+- C++ 反例：错误 hook 返回类型、错误 CancelToken 类型、跨边界传 STL/协程句柄必须失败或不可编译。
+- 检查未知/短 interface table、NULL 函数指针和 API 版本错误均安全拒绝。
+
+### 11.2 Operation/lifetime 回归
+
+使用可控 fake scheduler/fake plugin，不以 `sleepMs(2/5/50)` 反复探测结果：
+
+1. start 拒绝：NULL + error，无 callback，无残留 lease/handle。
+2. provider 同步 done + NULL：视为成功，宿主 callback exactly once。
+3. done 和 cancel 竞速：只产生一个终态，完成后 cancel 不调用 plugin cancel。
+4. worker 任意线程 done：输入 payload 释放后宿主仍取得完整副本。
+5. caller unload 与 provider 未完成互调：caller DSO 不提前释放，callback 返回后才 close。
+6. queued post/sleep/offload 后销毁 manager：不访问裸 this，不恢复悬挂 coroutine。
+7. 32/1000 个 timer/operation：完成后记录全部回收，idle 事件只触发一次。
+8. shutdown 中后台 Task 挂起：取消、恢复、done、ctx destroy、dlclose 顺序正确。
+9. timeout 后立即 unload：等待实际 plugin execution 完全退出，不跳过 lease。
+10. create/start 中途失败：所有注册、资源、prompt、图类型、UI 项回滚。
+
+### 11.3 Client/Graph/JS 回归
+
+- 两个同事件 handler，第一个退订第二个：第二个不执行。
+- 保留旧 renderer snapshot，卸载插件后只返回通用模型，不调用 DSO。
+- 保留旧 action 点击，卸载/重绑后丢弃，不投递给新代次。
+- 编译 graph node，卸载后 run 返回 plugin closed；重载同 type 后旧 node 不调用新实例。
+- A/B JS 脚本相互 callTool，不阻塞 JS 线程。
+- JS top-level 注册后抛异常：工具、hook、event、timer 全部撤销。
+- Promise reject/cancel/timeout 分别映射 FAILED/CANCELLED/FAILED。
+
+### 11.4 多实例和平台回归
+
+- 两个 AgentContext 同进程、不同 IO executor 加载同插件，状态、取消、timer、GPU/PDH、text selection 互不串扰。
+- Windows 编译 `screen_capture`、`computer_use`、`text_selection_monitor`；Linux 不应因平台专属插件入口错误而误报全局通过。
+- 导出符号只包含规定入口；第三方静态依赖符号保持隐藏。
+- audio_stream 未实现时不进入支持矩阵和发布产物。
+
+### 11.5 当前旧基线（仅供比较）
+
+此前使用已有 Debug 产物观察到：
+
+```text
+plugins                         328 passed / 0 failed
+client_plugins                  300 passed / 0 failed
+plugin_resources                 83 passed / 0 failed
+plugin_multi_instance            29 passed / 0 failed
+合计                            740 passed / 0 failed
+相关业务模块合计                 440 passed / 0 failed
+总计                           1180 passed / 0 failed
+```
+
+这只是旧实现的正常路径基线，不代表生命周期问题已经解决，也不代表当前源码重构后的测试结果。重构后应重新构建，不能直接复用旧二进制作为验收依据。
+
+---
+
+## 12. 交接完成标准
+
+新会话在结束本任务前必须：
+
+- [ ] 按 R1～R6 更新本文“实施状态”，不得把计划写成已完成。
+- [ ] 记录每个阶段实际修改的文件、构建命令、测试命令、通过/失败结果。
+- [ ] 失败或超时必须记录原因和是否留下 CloseFailed/临时资源。
+- [ ] 每次修改后查看 `git diff --check` 和 `git status`，保留用户无关修改。
+- [ ] 最终更新 `docs/zh-cn/design/plugins.md`，使公开设计文档与 Reset-v1 实现一致。
+- [ ] 最终明确哪些平台已验证，不能用 Linux 构建结果代替 Windows/Android 验证。
+- [ ] 只有在所有内置插件迁移和专项生命周期测试通过后，才能将本文状态改为“Reset-v1 重构完成”。
+
+**交接给后续会话的第一步**：读取本文，检查工作树，然后从 R1 建立宿主 Operation/Lifetime 基础；不要先修改业务插件，也不要先删除现有测试。
