@@ -7,7 +7,7 @@
 - 冻结 system prompt
 - OpWatchdog debug 时启用、配置启用
 
-- 添加 XX_IS_MINGW __MINGW32__
+- 添加 XX_IS_MINGW_D __MINGW32__
 - 使用 simdjson 代替 neograph::json
 - 统一 tui 按钮内容风格为 [ xxx ]、提示风格为 ( xxx )
 - 检查文件输入是否为 tui 选择路径，发送给 server-io 前转换为 data-url，以便适配分离进程支持
