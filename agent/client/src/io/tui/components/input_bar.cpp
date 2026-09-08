@@ -61,7 +61,7 @@ Element InputComponent::OnRender() {
         indicator = text(">") | color(theme.accentColor) | bold;
     }
 
-    // 多模态文件选择按钮 [+ 📎 附件] (仅当当前模型支持多模态输入时展示)
+    // 多模态文件选择按钮 [+ 📎︎︎ 附件] (仅当当前模型支持多模态输入时展示)
     Element attachButton = text("");
     if (config_.canAttach && config_.canAttach()) {
         attachButton = hbox({
@@ -129,7 +129,7 @@ bool InputComponent::OnEvent(Event event) {
     if (event.is_mouse()) {
         const auto& mouse = event.mouse();
         if (mouse.button == Mouse::Left && mouse.motion == Mouse::Released) {
-            // 点击 [+ 📎 附件] 按钮
+            // 点击 [+ 📎︎︎ 附件] 按钮
             if (attachButtonBox_.Contain(mouse.x, mouse.y)) {
                 if (config_.onOpenAttachPicker) {
                     config_.onOpenAttachPicker();

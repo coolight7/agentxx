@@ -345,7 +345,7 @@ TUI [F4] 打开会话选择弹窗 → WireListSessions (服务端阻塞 I/O 卸�
     (WireUserInput.model) 携带, agent 执行新一轮时自动应用 (远程 --model 参数同路径);
     立即切换仍可经 WireSelectModel
   - 多模态文件输入 (yaml `models[].image_input/audio_input/video_input`):
-    仅当前模型支持任一多模态输入时, 输入框右侧展示 [+ 📎 附件] 按钮
+    仅当前模型支持任一多模态输入时, 输入框右侧展示 [+ 📎︎︎ 附件] 按钮
     (无键盘快捷键, 鼠标点击经 `modal_->pushModal` 打开 FilePickerOverlay);
     弹窗按模型能力过滤可选类型 (图片 png/jpg/jpeg/webp/gif/bmp; 音频
     wav/mp3/ogg/m4a/aac/flac; 视频 mp4/mov/webm/mkv; 非媒体不展示,
@@ -519,7 +519,7 @@ models:
     image_input: false              # 是否支持图像输入 (多模态; 默认 false)
     audio_input: false              # 是否支持音频输入 (多模态; 默认 false)
     video_input: false              # 是否支持视频输入 (多模态; 默认 false)
-                                    # 任一为 true 时 TUI 输入框右侧展示 [+ 📎 附件] 按钮;
+                                    # 任一为 true 时 TUI 输入框右侧展示 [+ 📎︎︎ 附件] 按钮;
                                     # 文件选择弹窗按此过滤可选类型 (图片 png/jpg/jpeg/webp/gif/bmp
                                     # ≤10MB; 音频 wav/mp3/ogg/m4a/aac/flac ≤25MB;
                                     # 视频 mp4/mov/webm/mkv ≤50MB; 单次消息附件 ≤5)。

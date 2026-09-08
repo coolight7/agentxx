@@ -1317,7 +1317,8 @@ Element MessageListComponent::buildMessageBlock(
             // 内容超宽时 xflex_shrink 使段落吸收剩余宽度换行/裁剪,
             // 避免 hbox 按比例压缩前缀 "> " (见 ftxui box_helper::ComputeShrinkHard)
             Elements userElements;
-            // 多模态附件卡片 (仅展示元信息, 不展示 Base64 数据; 点击调系统查看器)
+            // 多模态附件卡片 (仅展示元信息, 不展示 Base64 数据;
+            // 点击在文件管理器中定位显示对应文件)
             for (size_t ai = 0; ai < msg.attachments.size(); ++ai) {
                 const auto&      att = msg.attachments[ai];
                 AttachmentHitBox hit;
@@ -1332,7 +1333,7 @@ Element MessageListComponent::buildMessageBlock(
                                                                      : "msg.attachVideo";
                 auto cardRow = hbox({
                                    text(fmt::format(
-                                       "┌── {}: {} ",
+                                       "|- {}: {} ",
                                        TuiI18n::instance().t(iconKey),
                                        att.displayName
                                    )) | color(theme.accentColor)
@@ -1937,7 +1938,7 @@ bool MessageListComponent::handleDecorButtonClick(const Mouse& mouse) {
     return false;
 }
 
-/// 多模态附件落盘/打开辅助 (与 MessageListComponent 解耦, 便于测试)
+/// 多模态附件落盘/文件管理器定位辅助 (与 MessageListComponent 解耦, 便于测试)
 namespace {
 
 std::string attachmentSizeText(uint64_t bytes);
@@ -1985,20 +1986,36 @@ std::string resolveAttachmentLocalPath(const agentxx::agent::MediaAttachment& at
     return att.pathOrUrl;
 }
 
-/// 调系统默认程序打开 ( detached 线程, 不阻塞 UI )
-void openPathWithSystemViewer(std::string path) {
+/// 在文件管理器中定位显示文件 (选中对应文件; detached 线程, 不阻塞 UI )
+/// - Windows: explorer /select,<path> (选中文件)
+///
+/// - macOS: open -R <path> (在 Finder 中显示)
+///
+/// - Linux: 优先 xdg-open 所在目录 (文件管理器中显示目录),
+///   回退 xdg-open 直接打开 (按桌面默认程序)
+void revealPathInFileManager(std::string path) {
     if (path.empty()) {
         return;
     }
     std::thread([p = std::move(path)] {
-#if defined(_WIN32)
-        std::string cmd = "start \"\" \"" + p + "\"";
+    // 命令参数中的路径加双引号包裹, 防空格/特殊字符截断
+    // (路径本身含双引号属极端情况, 此处不做转义处理)
+#if XX_IS_WIN_D
+        std::string cmd = "explorer /select,\"" + p + "\"";
         (void)std::system(cmd.c_str());
-#elif defined(__APPLE__)
-        std::string cmd = "open \"" + p + "\" >/dev/null 2>&1 &";
+#elif XX_IS_MACOS_D
+        std::string cmd = "open -R \"" + p + "\" >/dev/null 2>&1 &";
         (void)std::system(cmd.c_str());
 #else
-        std::string cmd = "xdg-open \"" + p + "\" >/dev/null 2>&1 &";
+        // Linux 各桌面文件管理器选中文件的参数不统一 (nautilus/dolphin 等),
+        // 统一用文件所在目录调起文件管理器保证可显示对应位置;
+        // 目录不存在 (如临时落盘失败的远端残留路径) 时回退直接打开原路径
+        std::error_code       ec;
+        std::filesystem::path fp(p);
+        std::filesystem::path dir   = fp.parent_path();
+        const bool         hasDir   = !dir.empty() && std::filesystem::is_directory(dir, ec) && !ec;
+        const std::string& showPath = hasDir ? dir.string() : p;
+        std::string        cmd      = "xdg-open \"" + showPath + "\" >/dev/null 2>&1 &";
         (void)std::system(cmd.c_str());
 #endif
     }).detach();
@@ -2017,6 +2034,8 @@ std::string attachmentSizeText(uint64_t bytes) {
 } // namespace
 
 bool MessageListComponent::handleAttachmentClick(const Mouse& mouse) {
+    // 仅支持鼠标点击打开 (无 Enter 等键盘绑定: OnEvent 键盘分支仅处理
+    // 中断输入, 此处不消费任何键盘事件)
     if (mouse.button != Mouse::Left || mouse.motion != Mouse::Released) {
         return false;
     }
@@ -2040,7 +2059,7 @@ bool MessageListComponent::handleAttachmentClick(const Mouse& mouse) {
         if (h.attIndex >= atts.size()) {
             continue;
         }
-        openPathWithSystemViewer(resolveAttachmentLocalPath(atts[h.attIndex]));
+        revealPathInFileManager(resolveAttachmentLocalPath(atts[h.attIndex]));
         return true;
     }
     return false;

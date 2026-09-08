@@ -535,7 +535,7 @@ std::shared_ptr<ftxui::ComponentBase> createUniversalOverlay(
     std::function<void()> onClose
 );
 
-/// 多模态文件选择弹窗 (输入框右侧 [+ 📎 附件] 按钮触发)
+/// 多模态文件选择弹窗 (输入框右侧 [+ 📎︎︎ 附件] 按钮触发)
 ///
 /// - 初始化时接收当前模型的 `ModelCapabilityInfo`, 按支持的媒体类型动态
 ///   过滤目录中的文件 (不支持的类型灰显且不可选, 非媒体文件不展示)
@@ -546,9 +546,9 @@ class FilePickerOverlay : public ftxui::ComponentBase {
 public:
 
     FilePickerOverlay(
-        TUICtx&                                  ctx,
-        agentxx::agent::ModelCapabilityInfo       capability,
-        std::string                              initialDir = ""
+        TUICtx&                             ctx,
+        agentxx::agent::ModelCapabilityInfo capability,
+        std::string                         initialDir = ""
     );
 
     void onClose(std::function<void()> fn) {
@@ -567,32 +567,32 @@ private:
 
     /// 目录条目
     struct DirEntry {
-        std::string name;       ///< 显示名 (文件名)
-        std::string fullPath;   ///< 绝对路径
-        bool        isDir  = false;
-        bool        supported = true; ///< 当前模型是否支持该文件类型
-        uint64_t    sizeBytes = 0;
+        std::string               name;     ///< 显示名 (文件名)
+        std::string               fullPath; ///< 绝对路径
+        bool                      isDir     = false;
+        bool                      supported = true; ///< 当前模型是否支持该文件类型
+        uint64_t                  sizeBytes = 0;
         agentxx::agent::MediaType mediaType = agentxx::agent::MediaType::Image;
     };
 
-    void navigateTo(const std::string& dirPath);
-    void confirmSelection();
-    bool isMediaFile(const std::string& ext) const;
-    bool isSupportedMedia(const std::string& ext) const;
+    void                      navigateTo(const std::string& dirPath);
+    void                      confirmSelection();
+    bool                      isMediaFile(const std::string& ext) const;
+    bool                      isSupportedMedia(const std::string& ext) const;
     agentxx::agent::MediaType guessMediaType(const std::string& ext) const;
 
-    TUICtx&                                ctx_;
-    agentxx::agent::ModelCapabilityInfo    capability_;
-    std::string                            currentDir_;
-    std::vector<DirEntry>                  entries_;
-    std::vector<DirEntry>                  filteredEntries_;
-    int                                    selectedIndex_ = 0;
-    std::string                            filterText_;
-    ftxui::Component                       filterInput_;
-    std::function<void()>                  onClose_;
-    std::function<void(std::string)>       onSelectFile_;
-    std::set<std::string>                  allowedExtensions_;
-    std::vector<ftxui::Box>                itemBoxes_;
+    TUICtx&                             ctx_;
+    agentxx::agent::ModelCapabilityInfo capability_;
+    std::string                         currentDir_;
+    std::vector<DirEntry>               entries_;
+    std::vector<DirEntry>               filteredEntries_;
+    int                                 selectedIndex_ = 0;
+    std::string                         filterText_;
+    ftxui::Component                    filterInput_;
+    std::function<void()>               onClose_;
+    std::function<void(std::string)>    onSelectFile_;
+    std::set<std::string>               allowedExtensions_;
+    std::vector<ftxui::Box>             itemBoxes_;
 
     /// 重新过滤条目 (按 filterText_ 子串匹配文件名)
     void applyFilter();

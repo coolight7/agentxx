@@ -104,7 +104,7 @@ public:
 
     /// 多模态附件卡片命中检测 (UI 线程独占; 与 decorHits_ 同生命期):
     /// - OnRender 开头清空, 构建可见 User 消息附件卡片时填充
-    /// - 点击命中后经系统默认程序打开原文件 (远端 dataUrl 先落盘到临时目录)
+    /// - 点击命中后在文件管理器中定位显示对应文件 远端 dataUrl 先落盘到临时目录
     struct AttachmentHitBox {
         size_t                      msgIndex = static_cast<size_t>(-1);
         size_t                      attIndex = 0;
@@ -196,7 +196,7 @@ public:
     /// 命中 decorHits_ 后经 pluginManager->dispatchAction 投递 io 线程派发
     bool handleDecorButtonClick(const ftxui::Mouse& mouse);
 
-    /// 处理多模态附件卡片点击: 调系统默认程序打开原文件
+    /// 处理多模态附件卡片点击: 在文件管理器中定位显示对应文件
     bool handleAttachmentClick(const ftxui::Mouse& mouse);
 
     /// 测试辅助: 最近一次渲染的 decor 按钮命中区域

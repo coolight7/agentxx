@@ -10,6 +10,7 @@
 
 #include "agentxx-client/io/tui/components/message_list.h"
 #include "agentxx-client/io/tui/framework/tui_context.h"
+#include "agentxx-client/io/tui/framework/tui_i18n.h"
 #include "agentxx-client/io/tui/framework/tui_state.h"
 #include "agentxx-client/io/tui/tui_theme.h"
 #include "asio/io_context.hpp"
@@ -888,7 +889,9 @@ void testTuiToolHeaderFailed() {
         false, // 展开
         "[Error] exit code 1"
     );
-    XX_TEST_EXPECT_TRUE(fExpanded.plainRender().find("result:") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(
+        fExpanded.plainRender().find(TuiI18n::instance().t("tool.result")) != std::string::npos
+    );
     XX_TEST_EXPECT_TRUE(fExpanded.plainRender().find("[Error] exit code 1") != std::string::npos);
     XX_TEST_EXPECT_TRUE(fExpanded.render().find("255;85;85") != std::string::npos);
 }

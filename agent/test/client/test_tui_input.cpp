@@ -32,12 +32,12 @@ namespace test {
 namespace {
 
 struct InputFixture {
-    TUISharedState sharedState;
-    TUITheme       theme       = TUITheme::darkTheme();
-    int            redrawCount = 0;
-    std::string    sentText;
+    TUISharedState                               sharedState;
+    TUITheme                                     theme       = TUITheme::darkTheme();
+    int                                          redrawCount = 0;
+    std::string                                  sentText;
     std::vector<agentxx::agent::MediaAttachment> sentAttachments;
-    bool           sent = false;
+    bool                                         sent = false;
 
     TUICtx ctx;
 
@@ -55,10 +55,8 @@ struct InputFixture {
     /// 创建组件; ComponentBase 不可移动, 使用 shared_ptr 持有
     std::shared_ptr<InputComponent> makeComponent() {
         InputComponent::Config cfg;
-        cfg.onSend = [this](
-                         std::string text,
-                         std::vector<agentxx::agent::MediaAttachment> atts
-                     ) -> bool {
+        cfg.onSend
+            = [this](std::string text, std::vector<agentxx::agent::MediaAttachment> atts) -> bool {
             sentText        = std::move(text);
             sentAttachments = std::move(atts);
             sent            = true;
@@ -330,32 +328,32 @@ void test_input_attach_button_visibility() {
     {
         InputFixture           f;
         InputComponent::Config cfg;
-        cfg.onSend    = [](std::string, std::vector<agentxx::agent::MediaAttachment>) {
+        cfg.onSend = [](std::string, std::vector<agentxx::agent::MediaAttachment>) {
             return true;
         };
         cfg.canAttach = [] {
             return false;
         };
-        auto comp = std::make_shared<InputComponent>(f.ctx, std::move(cfg));
+        auto          comp = std::make_shared<InputComponent>(f.ctx, std::move(cfg));
         ftxui::Screen screen(80, 6);
         ftxui::Render(screen, comp->OnRender());
-        XX_TEST_EXPECT_TRUE(screen.ToString().find("📎") == std::string::npos);
+        XX_TEST_EXPECT_TRUE(screen.ToString().find("📎︎︎") == std::string::npos);
     }
     // 支持多模态: 按钮展示
     {
         InputFixture           f;
         InputComponent::Config cfg;
-        cfg.onSend    = [](std::string, std::vector<agentxx::agent::MediaAttachment>) {
+        cfg.onSend = [](std::string, std::vector<agentxx::agent::MediaAttachment>) {
             return true;
         };
         cfg.canAttach = [] {
             return true;
         };
-        auto comp = std::make_shared<InputComponent>(f.ctx, std::move(cfg));
+        auto          comp = std::make_shared<InputComponent>(f.ctx, std::move(cfg));
         ftxui::Screen screen(80, 6);
         ftxui::Render(screen, comp->OnRender());
         const auto out = screen.ToString();
-        // 按钮文本为 "[ 📎 ]"（中英同形，仅图标），不断言具体文案，只断言相邻空格结构存在
+        // 按钮文本为 "[ 📎︎︎ ]"（中英同形，仅图标）
         XX_TEST_EXPECT_TRUE(out.find("📎") != std::string::npos);
     }
 }

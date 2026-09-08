@@ -135,13 +135,13 @@ struct MediaAttachment {
     inline static std::string_view mediaTypeIcon(agentxx::agent::MediaType type) {
         switch (type) {
             case agentxx::agent::MediaType::Image:
-                return "📷";
+                return "📷︎";
             case agentxx::agent::MediaType::Audio:
-                return "🎵";
+                return "🎵︎";
             case agentxx::agent::MediaType::Video:
-                return "🎬";
+                return "🎬︎";
         }
-        return "📷";
+        return "📷︎";
     }
 
     neograph::json toJson() const {
