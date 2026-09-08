@@ -332,7 +332,7 @@ Json::Json(const std::vector<std::string>& vec) :
 Json::Json(std::initializer_list<Json> il) :
     type_(Type::Null) {
     // nlohmann 启发式: 全部为 [string, X] 二元数组时视为对象, 否则为数组
-    // (空列表视为数组, 与 agentxx::util::Json 一致)
+    // (注意: 空花括号 `Json{}` 不经过此构造, 而是默认构造为 Null)
     bool looksLikeObject = il.size() > 0;
     for (const auto& el : il) {
         if (!el.is_array() || el.size() != 2 || !el[static_cast<size_t>(0)].is_string()) {

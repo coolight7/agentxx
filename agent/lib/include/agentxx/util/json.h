@@ -20,10 +20,12 @@
 #include <vector>
 
 /// C++26 静态反射 (P2996) 特性检测
-/// - 当前工具链 (GCC 16) 尚未提供 `<meta>` / `__cpp_static_reflection`,
-///   此处仅做前瞻性开关, 不可用时自动降级为 ADL `toJson/fromJson` 回退
-#if defined(__cpp_impl_reflection) || defined(__cpp_static_reflection) \
-    || (defined(__has_include) && __has_include(<meta>))
+/// - 仅当编译器真正启用反射时才为 1 (需同时满足: <meta> 可用 + 反射宏已定义,
+///   即编译带 `-freflection`; GCC 16 默认不带该选项, 此时走 ADL 降级路径)
+/// - 注意: 不能仅用 `__has_include(<meta>)` 判断, 否则无 `-freflection` 时
+///   <meta> 内无 `std::meta` 导致 reflectToJson 声明编译失败
+#if (defined(__cpp_impl_reflection) || defined(__cpp_static_reflection)) \
+    && (defined(__has_include) && __has_include(<meta>))
 #define AGENTXX_HAS_CPP26_REFLECTION 1
 #else
 #define AGENTXX_HAS_CPP26_REFLECTION 0
@@ -97,7 +99,7 @@ public:
 
     /// 智能初始化列表构造 (与 agentxx::util::Json 相同的启发式规则):
     /// - 全部元素都是 `[string, X]` 二元数组时视为 Object, 否则视为 Array
-    /// - 空列表视为 Array (与 neograph 一致)
+    /// - 注意: `Json{}` 空花括号走默认构造为 Null (非空数组), 空数组请用 `Json::array()`
     Json(std::initializer_list<Json> il);
 
     Json(const Json& other);
@@ -469,14 +471,15 @@ template<typename T>
 T reflectFromJson(const Json& j);
 #else
 // 未支持反射的编译环境: 回退到普通 ADL toJson/fromJson (由各业务类型自行提供)
+// - 必须 inline: 头文件模板函数在多 TU 包含时否则触发 mold 重复符号链接错误
 template<typename T>
-Json reflectToJson(const T& obj) {
+inline Json reflectToJson(const T& obj) {
     Json j;
     toJson(j, obj);
     return j;
 }
 template<typename T>
-T reflectFromJson(const Json& j) {
+inline T reflectFromJson(const Json& j) {
     T obj{};
     fromJson(j, obj);
     return obj;
