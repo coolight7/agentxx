@@ -414,6 +414,12 @@ struct WireDelta {
 
     /// 完整 ViewMessage 载荷 (InsertMessage 使用)
     std::shared_ptr<ViewMessage> message = nullptr;
+
+    /// TurnStart 即时回显附件 (服务端 viewMessages 权威副本经 Sync 补齐):
+    /// - TurnStart 历史上仅 text+msgId，附件会丢失导致首屏 user 消息无卡片
+    /// - 此处仅传元数据（displayName/mimeType/pathOrUrl/sizeBytes/type），
+    ///   不传 dataUrl（Base64 体积大，走 Sync 全量时再补齐）
+    std::vector<MediaAttachment> attachments;
 };
 
 /// 排队等待发送的消息条目 (服务端按会话维护, 同步到客户端展示)

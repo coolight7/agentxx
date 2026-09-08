@@ -339,8 +339,7 @@ void test_input_attach_button_visibility() {
         auto comp = std::make_shared<InputComponent>(f.ctx, std::move(cfg));
         ftxui::Screen screen(80, 6);
         ftxui::Render(screen, comp->OnRender());
-        XX_TEST_EXPECT_TRUE(screen.ToString().find("Attach") == std::string::npos);
-        XX_TEST_EXPECT_TRUE(screen.ToString().find("附件") == std::string::npos);
+        XX_TEST_EXPECT_TRUE(screen.ToString().find("📎") == std::string::npos);
     }
     // 支持多模态: 按钮展示
     {
@@ -356,9 +355,8 @@ void test_input_attach_button_visibility() {
         ftxui::Screen screen(80, 6);
         ftxui::Render(screen, comp->OnRender());
         const auto out = screen.ToString();
-        XX_TEST_EXPECT_TRUE(
-            out.find("Attach") != std::string::npos || out.find("附件") != std::string::npos
-        );
+        // 按钮文本为 "[ 📎 ]"（中英同形，仅图标），不断言具体文案，只断言相邻空格结构存在
+        XX_TEST_EXPECT_TRUE(out.find("📎") != std::string::npos);
     }
 }
 

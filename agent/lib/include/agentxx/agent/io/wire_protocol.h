@@ -194,6 +194,16 @@ inline neograph::json deltaToJson(const WireDelta& d) {
     if (!d.nodeName.empty()) {
         j["nodeName"] = d.nodeName;
     }
+    // TurnStart 即时回显附件元数据（不含 dataUrl，见 WireDelta::attachments 注释）
+    if (d.type == WireDelta::Type::TurnStart && !d.attachments.empty()) {
+        neograph::json arr = neograph::json::array();
+        for (const auto& a : d.attachments) {
+            MediaAttachment meta = a;
+            meta.dataUrl.clear();
+            arr.push_back(meta.toJson());
+        }
+        j["attachments"] = std::move(arr);
+    }
     if (d.think) {
         neograph::json th = neograph::json::object();
         if (d.think->reasoningTokens > 0) {
@@ -250,6 +260,12 @@ inline std::optional<WireDelta> deltaFromJson(const neograph::json& j) {
     d.durationMs   = j.value("durationMs", int64_t{0});
     d.tps          = j.value("tps", 0.0);
     d.nodeName     = j.value("nodeName", std::string{});
+    if (j.contains("attachments") && j["attachments"].is_array()
+        && d.type == WireDelta::Type::TurnStart) {
+        for (const auto& a : j["attachments"]) {
+            d.attachments.push_back(MediaAttachment::fromJson(a));
+        }
+    }
     if (j.contains("think") && j["think"].is_object()) {
         ViewMessage::ThinkData th;
         th.reasoningTokens = j["think"].value("reasoning_tokens", 0);

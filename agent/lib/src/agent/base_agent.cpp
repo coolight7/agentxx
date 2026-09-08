@@ -884,12 +884,21 @@ asio::awaitable<BaseAgent::TurnResult> BaseAgent::runTurnAsync(
     // 记录轮次开始: 重置轮级 LLM API 平均生成速度 (token/s) 统计
     eventBridge->handleTurnStart();
 
-    eventBridge->emitDelta(WireDelta{
+    // TurnStart 即时回显附件元数据（不含 dataUrl，防大包）：
+    // 客户端据此在 user 消息首屏即渲染附件卡片；dataUrl 经后续 Sync 补齐
+    // （Sync/SessionStore 保留 dataUrl 元数据以外的全量由服务端权威持有）
+    WireDelta turnStartDelta{
         .type        = WireDelta::Type::TurnStart,
         .text        = processedInput,
         .msgId       = userMsgId,
         .startTimeMs = startTimeMs,
-    });
+    };
+    for (const auto& a : attachments) {
+        MediaAttachment meta = a;
+        meta.dataUrl.clear();
+        turnStartDelta.attachments.push_back(std::move(meta));
+    }
+    eventBridge->emitDelta(std::move(turnStartDelta));
 
     auto cancelToken = std::make_shared<neograph::graph::CancelToken>();
     session->setCancelToken(cancelToken);

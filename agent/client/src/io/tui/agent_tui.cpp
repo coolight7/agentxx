@@ -2105,11 +2105,13 @@ void TUIClientAgentIO::onDelta(const agentxx::agent::WireDelta& delta) {
             case Type::TurnStart: {
                 pushCurrentTokenLocked(st);
                 resetTrailingRunningToolsLocked(st);
-                if (!delta.text.empty()) {
+                // 空文本+有附件的纯附件消息也需回显（此前 !text.empty() 会吞掉）
+                if (!delta.text.empty() || !delta.attachments.empty()) {
                     auto msg = std::make_shared<TUIMessage>(
                         TUIMessage::makeText(TUIMessage::Role::User, delta.text, delta.startTimeMs)
                     );
-                    msg->id = delta.msgId;
+                    msg->id          = delta.msgId;
+                    msg->attachments = delta.attachments;
                     st.messages.push_back(std::move(msg));
                     enqueueUiAction([this]() {
                         if (messageList_) {
@@ -2161,6 +2163,7 @@ void TUIClientAgentIO::onSync(const agentxx::agent::WireSyncPayload& payload) {
                 pi.id          = item.id;
                 pi.text        = item.text;
                 pi.model       = item.model;
+                pi.attachments = item.attachments;
                 pi.createdAtMs = item.createdAtMs;
                 st->pendingInputs.push_back(std::move(pi));
             }
