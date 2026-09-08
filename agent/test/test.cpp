@@ -28,6 +28,9 @@
 #include "test_filesystem_tools.h"
 #include "test_http.h"
 #include "test_interrupt_bus.h"
+#include "test_json.h"
+#include "test_json_reflection.h"
+#include "test_json_view.h"
 #include "test_math_tools.h"
 #include "test_mcp.h"
 #include "test_memgrowth.h"
@@ -168,6 +171,9 @@ int main(int argn, char** argv) {
     try {
         runSync("string_util", agentxx::test::testStringUtil);
         runSync("regex", agentxx::test::testRegex);
+        runSync("json", agentxx::test::testJson);
+        runSync("json_view", agentxx::test::testJsonView);
+        runSync("json_reflection", agentxx::test::testJsonReflection);
         runSync("diff_util", agentxx::test::testDiffUtil);
         runSync("events", agentxx::test::test_events);
         runSync("concurrency", agentxx::test::testConcurrency);
