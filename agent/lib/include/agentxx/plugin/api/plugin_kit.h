@@ -15,6 +15,7 @@
 #include "agentxx/plugin/api/client_plugin_api.h"
 
 #include "agentxx/plugin/api/plugin_api.h"
+#include "agentxx/util/container_util.h"
 #include "agentxx/util/json.h"
 #include "agentxx/util/json_view.h"
 #include "fmt/format.h"
@@ -1489,7 +1490,7 @@ public:
             if (j.contains("args") && j["args"].is_object()) {
                 for (const auto& [k, v] : j["args"].items()) {
                     if (v.is_string()) {
-                        res.args[k] = v.get<std::string>();
+                        util::insertOrAssignHeterogeneous(res.args, k, v.get<std::string>());
                     }
                 }
             }

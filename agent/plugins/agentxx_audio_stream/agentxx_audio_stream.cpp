@@ -71,6 +71,8 @@ struct AudioStreamHolder {
 
     agentxx_audio_stream_plugin::AudioStream stream_;
     AudioStreamPluginCtx*                    ctx = nullptr;
+    agentxx_audio_stream_plugin::AudioDataSource source_
+        = agentxx_audio_stream_plugin::AudioDataSource::SystemOutput;
 };
 
 struct AudioStreamPluginCtx : public agentxx::plugin::PluginBase {
@@ -118,7 +120,11 @@ bool AudioStreamHolder::start(
         } catch (...) {
         }
     });
-    return stream_.start(source, targetProcessId);
+    if (!stream_.start(source, targetProcessId)) {
+        return false;
+    }
+    source_ = source;
+    return true;
 }
 
 void AudioStreamHolder::stop() {
@@ -197,7 +203,7 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
                     return fmt::format(
                         R"({{"ok":true,"running":{},"source":"{}"}})",
                         running ? "true" : "false",
-                        sourceName(holder.stream_.currentSource())
+                        sourceName(holder.source_)
                     );
                 }
 

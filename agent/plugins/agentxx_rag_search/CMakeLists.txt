@@ -37,11 +37,14 @@ if (_AGENTXX_ADD_AS_BUILTIN)
   # 复用 agentxx_util 工具库 (libagentxx 已链接本库; 此处经 PRIVATE 链接仅
   # 传递编译宏/头路径/依赖 include: HttpClient 实现于 util http_client.cpp)
   target_link_libraries(${_target} PRIVATE agentxx_util)
+  find_package(html2md REQUIRED)
   # Windows: asio socket 相关系统库 (经 libagentxx 收集通道)
   if (XX_IS_WIN_D)
     set(AGENTXX_BUILTIN_PLUGIN_LINK_LIBS
       "${AGENTXX_BUILTIN_PLUGIN_LINK_LIBS}" ws2_32 mswsock bcrypt PARENT_SCOPE)
   endif()
+  set(AGENTXX_BUILTIN_PLUGIN_LINK_LIBS
+    "${AGENTXX_BUILTIN_PLUGIN_LINK_LIBS}" html2md PARENT_SCOPE)
   set_target_properties(${_target} PROPERTIES
     POSITION_INDEPENDENT_CODE ON
     CXX_STANDARD 26
@@ -86,6 +89,7 @@ if (NOT TARGET agentxx_util)
   # 独立构建本插件时再经安装 config 导入
   find_package(agentxx_util REQUIRED)
 endif()
+find_package(html2md REQUIRED)
 
 target_include_directories(${PLUGIN_NAME} PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}"          # rag_plugin.h / rag_search_impl.h
@@ -102,6 +106,7 @@ target_link_directories(${PLUGIN_NAME} PRIVATE
 
 target_link_libraries(${PLUGIN_NAME} PRIVATE
   agentxx_util
+  html2md
 )
 if (XX_IS_WIN_D)
   # asio socket 相关系统库 (asio 直需, 非 boost.process 传递)

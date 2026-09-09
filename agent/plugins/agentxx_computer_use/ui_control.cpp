@@ -1090,8 +1090,37 @@ std::string uiControlExecute(const agentxx::util::Json& arguments) {
         first = false;
 
         UiCmdFields f;
-        if (!elem.is_object() || !uiControlParseCmd(elem, f) || !f.hasAction || f.action.empty()) {
+        if (!elem.is_object() || !uiControlParseCmd(elem, f) || !f.hasAction
+            || f.action.empty()) {
+            agentxx::util::Json item = agentxx::util::Json::object();
+            item["index"]  = static_cast<int64_t>(i);
+            item["action"] = "";
+            item["ok"]     = false;
+            item["msg"]    = "missing `action` field";
+            results.push_back(std::move(item));
+            ++fail_count;
+            break;
         }
+        auto r = uiControlExecuteOne(f);
+        if (r.ok) {
+            ++ok_count;
+        } else {
+            ++fail_count;
+        }
+        agentxx::util::Json item = agentxx::util::Json::object();
+        item["index"]  = static_cast<int64_t>(i);
+        item["action"] = f.action;
+        item["ok"]     = r.ok;
+        item["msg"]    = r.msg;
+        results.push_back(std::move(item));
+        if (!r.ok) {
+            break;
+        }
+        ++i;
+    }
+
+    return results.dump();
+}
 #else
 std::string uiControlExecute(const agentxx::util::Json&) {
     return R"({"error":"agentxx_ui_control_keyboard_mouse is not available on current system"})";

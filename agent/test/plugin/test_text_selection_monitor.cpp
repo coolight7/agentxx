@@ -7,6 +7,11 @@
 #include <filesystem>
 #include <iostream>
 #include <string>
+#include <vector>
+
+#if XX_IS_WIN_D
+#include <windows.h>
+#endif
 
 namespace agentxx {
 namespace test {
@@ -18,6 +23,34 @@ int g_ts_failed = 0;
 
 #define XX_TEST_PASSED g_ts_passed
 #define XX_TEST_FAILED g_ts_failed
+
+#if XX_IS_WIN_D
+/// 定位 agentxx_text_selection_monitor 插件目录
+static std::string findTextSelectionPluginPath() {
+    std::error_code                    ec;
+    std::vector<std::filesystem::path> candidates;
+    candidates.push_back(
+        std::filesystem::current_path(ec) / "plugins" / "agentxx_text_selection_monitor"
+    );
+
+    wchar_t buf[4096] = {};
+    DWORD   n         = ::GetModuleFileNameW(nullptr, buf, 4096);
+    if (n > 0 && n < 4096) {
+        candidates.push_back(
+            std::filesystem::path(buf, buf + n).parent_path()
+            / "plugins"
+            / "agentxx_text_selection_monitor"
+        );
+    }
+
+    for (const auto& candidate : candidates) {
+        if (std::filesystem::is_directory(candidate, ec)) {
+            return candidate.string();
+        }
+    }
+    return "plugins/agentxx_text_selection_monitor";
+}
+#endif
 
 } // namespace
 

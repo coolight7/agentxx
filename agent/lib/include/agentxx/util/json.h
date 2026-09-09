@@ -13,6 +13,7 @@
 #include <cstdint>
 #include <initializer_list>
 #include <iosfwd>
+#include <ostream>
 #include <stdexcept>
 #include <string>
 #include <string_view>

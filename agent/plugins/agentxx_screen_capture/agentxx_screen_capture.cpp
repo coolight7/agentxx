@@ -26,7 +26,7 @@ struct ScreenCaptureHolder {
     void stopStreaming();
 
     agentxx_screen_capture_plugin::ScreenCapture capture_;
-    ScreenCaptureScreenCapturePluginCtx*         ctx = nullptr;
+    ScreenCapturePluginCtx*                       ctx = nullptr;
 };
 
 struct ScreenCapturePluginCtx : public agentxx::plugin::PluginBase {
@@ -88,7 +88,7 @@ static auto ctxGuardLogger(ScreenCapturePluginCtx* ctx) noexcept {
     };
 }
 
-static std::string buildCapturePath(PluginCtx& ctx, int screenIndex) {
+static std::string buildCapturePath(ScreenCapturePluginCtx& ctx, int screenIndex) {
     const auto now = std::chrono::system_clock::now();
     const auto tt  = std::chrono::system_clock::to_time_t(now);
     const auto millis
@@ -115,7 +115,7 @@ static std::string buildCapturePath(PluginCtx& ctx, int screenIndex) {
 }
 
 static agentxx::util::Json frameToJson(
-    PluginCtx&                                        ctx,
+    ScreenCapturePluginCtx&                           ctx,
     const agentxx_screen_capture_plugin::ScreenFrame& f,
     bool                                              saveImages
 ) {
@@ -141,7 +141,7 @@ static agentxx::util::Json frameToJson(
 }
 
 static std::string framesResult(
-    PluginCtx&                                                     ctx,
+    ScreenCapturePluginCtx&                                       ctx,
     const std::vector<agentxx_screen_capture_plugin::ScreenFrame>& frames,
     bool                                                           saveImages
 ) {
@@ -221,29 +221,29 @@ static void registerScreenCaptureTool(ScreenCapturePluginCtx& ctx) {
             }
 
             if (command == "capture_all") {
-                auto frames = capture.capture_.captureAll();
-                return formatFramesJson(frames, c.captures_dir, saveImages);
+                auto frames = capture.capture_.captureAllScreens();
+                return framesResult(c, frames, saveImages);
             }
 
             if (command == "capture_screen") {
                 int  target = (idx >= 0) ? static_cast<int>(idx) : 0;
                 auto frame  = capture.capture_.captureScreen(target);
-                if (!frame.has_value()) {
+                if (frame.pixelData.empty()) {
                     return R"({"ok":false,"error":"capture_screen failed: invalid screen index or capture error"})";
                 }
                 std::vector<agentxx_screen_capture_plugin::ScreenFrame> frames;
-                frames.push_back(std::move(*frame));
-                return formatFramesJson(frames, c.captures_dir, saveImages);
+                frames.push_back(std::move(frame));
+                return framesResult(c, frames, saveImages);
             }
 
             if (command == "capture_mouse") {
-                auto frame = capture.capture_.captureScreenUnderMouse();
-                if (!frame.has_value()) {
+                auto frame = capture.capture_.captureMouseScreen();
+                if (frame.pixelData.empty()) {
                     return R"({"ok":false,"error":"capture_mouse failed"})";
                 }
                 std::vector<agentxx_screen_capture_plugin::ScreenFrame> frames;
-                frames.push_back(std::move(*frame));
-                return formatFramesJson(frames, c.captures_dir, saveImages);
+                frames.push_back(std::move(frame));
+                return framesResult(c, frames, saveImages);
             }
 
             if (command == "get_screen_count") {

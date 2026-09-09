@@ -33,12 +33,7 @@ The command string is passed as-is to `bash -c` (no extra escaping layer):
 
 struct ExecPluginCtx : public PluginBase {};
 
-AGENTXX_PLUGIN_AGENT_EXPORT(
-    ExecPluginCtx,
-    "agentxx_execute_command",
-    "1.0.0",
-    "Execute system commands (bash/windows terminal) with timeout/cancellation",
-    [](ExecPluginCtx& ctx) -> int32_t {
+static int32_t setupExecPlugin(ExecPluginCtx& ctx) {
 #if XX_IS_WIN_D
         auto winSchema
             = ctx.schema(kNameWindows)
@@ -240,6 +235,13 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
 #endif
         return 0;
     }
+
+AGENTXX_PLUGIN_AGENT_EXPORT(
+    ExecPluginCtx,
+    "agentxx_execute_command",
+    "1.0.0",
+    "Execute system commands (bash/windows terminal) with timeout/cancellation",
+    setupExecPlugin
 );
 
 struct ExecClientCtx : public ClientPluginBase {};
