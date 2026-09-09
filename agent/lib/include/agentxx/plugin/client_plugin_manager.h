@@ -205,6 +205,10 @@ public:
     /// 析构时 dlclose (与 agent 侧 PluginInstance 一致; 调用方保证无执行中回调:
     /// unloadAsync 等 inflight 归零后移除, shutdownAll 进程退出路径约定无执行中)
     ~ClientPluginInstance();
+
+    /// 在所有活动 lease 归零后销毁插件上下文；析构时也作为最后一道安全收尾。
+    /// 返回 false 表示仍有活动 lease，调用方不得关闭动态库。
+    bool destroyPlugin() noexcept;
 };
 
 /// 事件订阅宿主句柄实现 (仅宿主内部; 与

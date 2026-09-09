@@ -11,5 +11,5 @@
     ```
     - 实施方案
     ```md
-    请根据 插件框架架构重构方案文档 resource/history/plugin-refactor-2/plugin.md，仔细思考分析后实现
+    请完整通读 插件框架架构重构方案文档 resource/history/plugin-refactor-2/plugin.md，仔细思考分析后实现
     ```

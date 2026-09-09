@@ -19,8 +19,6 @@
 namespace agentxx {
 namespace plugin {
 
-static std::atomic<size_t> g_pluginCallSeq{0};
-
 static void
     setErrOut(PluginInstance* caller, AgentxxPluginString* error_out, const std::string& msg) {
     if (!error_out || error_out->data) {
@@ -203,323 +201,136 @@ int PluginManager::registerCapabilityEx(
     return 0;
 }
 
-static bool buildCapabilityDrive(
-    PluginManager&          mgr,
-    PluginInstance*         caller,
-    AgentxxPluginStringView capability,
-    AgentxxPluginStringView method,
-    AgentxxPluginStringView args_json,
-    std::string&            providerName,
-    plugin::OpDrive&        drive,
-    std::string&            err
-) {
-    std::string capName = svToStr(capability);
-    std::string methStr = svToStr(method);
-    std::string argStr  = svToStr(args_json);
-    if (argStr.empty()) {
-        argStr = "{}";
-    }
-
-    CapabilityRegistry::Entry entry;
-    bool                      found = false;
-    if (mgr.isIoThread()) {
-        if (const auto* e = mgr.capabilities()->get(capName)) {
-            entry = *e;
-            found = true;
-        }
-    } else {
-        found = ioCallSync<bool>(&mgr, [&mgr, &capName, &entry]() {
-            const auto* e = mgr.capabilities()->get(capName);
-            if (!e) {
-                return false;
-            }
-            entry = *e;
-            return true;
-        });
-    }
-    if (!found) {
-        err = fmt::format("invoke_capability: capability `{}` not registered", capName);
-        return false;
-    }
-    if (!entry.start) {
-        err = fmt::format("invoke_capability: capability `{}` has no method handler", capName);
-        return false;
-    }
-    providerName    = entry.provider;
-    auto weakCaller = caller ? caller->self : std::weak_ptr<PluginInstance>{};
-    drive.start     = [entry, methStr, argStr, weakCaller](
-                      const AgentxxPluginOperatorNotify* notify,
-                      AgentxxPluginString*               e
-                  ) -> void* {
-        const AgentxxPluginHost* callerHost = nullptr;
-        if (auto c = weakCaller.lock()) {
-            callerHost = &c->host;
-        }
-        auto methSv = agentxx::plugin::PluginStringView::from(methStr.data(), methStr.size());
-        auto argSv  = agentxx::plugin::PluginStringView::from(argStr.data(), argStr.size());
-        return entry.start(entry.ctx, callerHost, &methSv, &argSv, notify, e);
-    };
-    drive.cancel = [entry](void* op) {
-        if (entry.cancel) {
-            entry.cancel(entry.ctx, op);
-        }
-    };
-    return true;
-}
-
 AgentxxPluginOperatorHandle* PluginManager::callToolAsync(
-    PluginInstance*               caller,
-    AgentxxPluginStringView       name,
-    AgentxxPluginStringView       args_json,
-    AgentxxPluginStringView       thread_id,
-    AgentxxPluginOperatorCallback cb,
-    void*                         ud,
-    AgentxxPluginString*          error_out
+    PluginInstance* caller, AgentxxPluginStringView name, AgentxxPluginStringView args_json,
+    AgentxxPluginStringView thread_id, AgentxxPluginOperatorCallback cb, void* ud,
+    AgentxxPluginString* error_out
 ) {
-    auto setErr = [&](const std::string& msg) {
-        setErrOut(caller, error_out, msg);
-    };
-    if (!ioExecutor_) {
-        setErr("call_tool_async: io executor not ready");
-        return nullptr;
-    }
-
-    std::string                                 toolName = svToStr(name);
-    std::shared_ptr<agentxx::tools::XXToolBase> tool;
-    bool                                        found = false;
-    if (isIoThread()) {
-        tool  = registry_->find(toolName);
-        found = tool != nullptr;
-    } else {
-        found = ioCallSync<bool>(this, [this, &toolName, &tool]() {
-            tool = registry_->find(toolName);
-            return tool != nullptr;
-        });
-    }
-    if (!found) {
-        setErr(fmt::format("plugin call_tool: tool `{}` not found", toolName));
-        return nullptr;
-    }
-    auto pluginTool = std::dynamic_pointer_cast<PluginTool>(tool);
-    if (!pluginTool) {
-        setErr(fmt::format("plugin call_tool: tool `{}` is not a plugin tool", toolName));
-        return nullptr;
-    }
-    auto targetInst = pluginTool->instance();
-    if (!targetInst || !targetInst->enabled) {
-        setErr(fmt::format("plugin call_tool: tool `{}` plugin disabled/released", toolName));
-        return nullptr;
-    }
-
-    const auto&         spec   = pluginTool->spec();
-    agentxx::util::Json parsed = agentxx::util::Json::object();
-    if (!agentxx::plugin::PluginStringView::empty(args_json)) {
-        try {
-            auto j = agentxx::util::Json::parse(std::string_view{args_json.data, args_json.size});
-            if (j.is_object()) {
-                parsed = std::move(j);
-            }
-        } catch (const std::exception& e) {
-            setErr(fmt::format("plugin call_tool: invalid args_json: {}", e.what()));
+    // 入参在当前调用内复制；查询、登记和完整 start 都在所属 IO 线程执行。
+    if (!isIoThread()) {
+        auto self = shared_from_this();
+        auto owner = caller ? caller->self.lock() : nullptr;
+        /// 排队阶段也保护 caller；只有持有实例对象不能阻止 ctx/dlclose。
+        auto admission = std::make_shared<PluginInstance::InflightGuard>(owner);
+        if (!*admission) {
+            hostMemorySetString(error_out, "plugin caller is closing");
             return nullptr;
         }
+        const std::string toolName = svToStr(name), args = svToStr(args_json), sid = svToStr(thread_id);
+        return ioCallSync<AgentxxPluginOperatorHandle*>(this, [self, owner, admission, toolName, args, sid, cb, ud, error_out] {
+            return self->callToolAsync(owner.get(), toolName, args, sid, cb, ud, error_out);
+        });
     }
-    std::string sessionId  = svToStr(thread_id);
-    parsed["sessionId"]    = sessionId;
-    parsed["tool_call_id"] = fmt::format("plugin_call_{}", ++g_pluginCallSeq);
-    auto argsStr           = parsed.dump();
-
-    auto handle    = std::make_shared<AgentxxPluginOperatorHandle>();
-    handle->caller = caller;
-    if (caller) {
-        caller->outstandingOps.push_back(handle);
-    }
-
-    auto guard = std::make_shared<PluginInstance::InflightGuard>(targetInst.get());
-    auto core  = std::make_shared<OpCore>(ioExecutor_, guard);
-    core->cb   = cb;
-    core->cbUd = ud;
-
-    plugin::OpDrive drive;
-    drive.start =
-        [spec,
-         argsStr,
-         sessionId](const AgentxxPluginOperatorNotify* notify, AgentxxPluginString* err) -> void* {
-        auto argsSv = agentxx::plugin::PluginStringView::from(argsStr.data(), argsStr.size());
-        auto sidSv  = agentxx::plugin::PluginStringView::from(sessionId.data(), sessionId.size());
-        auto tcidSv = agentxx::plugin::PluginStringView::from("", 0);
-        return spec.execute_start(spec.user_data, &argsSv, &sidSv, &tcidSv, notify, err);
-    };
-    drive.cancel = [spec](void* op) {
-        if (spec.execute_cancel) {
-            spec.execute_cancel(spec.user_data, op);
-        }
-    };
-
-    AgentxxPluginString startErr{nullptr, 0};
-    void*               op  = nullptr;
-    auto                ntf = core->notify();
+    std::shared_ptr<OpCore> core;
     try {
-        op = drive.start(&ntf, &startErr);
-    } catch (...) {
-        startErr = agentxx::plugin::PluginString::fromCstr(
-            caller ? &caller->host : nullptr,
-            "start threw"
-        );
-    }
-
-    if (startErr.data || (!op && !core->notified.load(std::memory_order_acquire))) {
-        guard.reset();
-        std::string errMsg
-            = startErr.data ? std::string(startErr.data, startErr.size) : "protocol violation";
-        if (startErr.data && caller) {
-            agentxx::plugin::PluginString::free(&caller->host, &startErr);
+        auto owner = caller ? caller->self.lock() : nullptr;
+        if (!owner || !ioExecutor_) {
+            throw std::runtime_error("call_tool_async: missing caller or IO executor");
         }
-        setErr(errMsg);
-        if (cb) {
-            auto errSv = agentxx::plugin::PluginStringView::from(errMsg.data(), errMsg.size());
-            cb(ud, AGENTXX_PLUGIN_OPERATOR_FAILED, &errSv);
+        const auto toolName = svToStr(name);
+        auto tool = std::dynamic_pointer_cast<PluginTool>(registry_->find(toolName));
+        auto provider = tool ? tool->instance() : nullptr;
+        if (!provider || !provider->enabled || (provider->lifetime && !provider->lifetime->acceptsOperations())) {
+            throw std::runtime_error("call_tool_async: plugin tool not available: " + toolName);
         }
+        const auto spec = tool->spec();
+        if (!spec.execute_start) {
+            throw std::runtime_error("call_tool_async: tool has no start callback");
+        }
+        auto parsed = PluginStringView::empty(args_json) ? util::Json::object()
+                                                       : util::Json::parse(PluginStringView::str(args_json));
+        if (!parsed.is_object()) {
+            throw std::runtime_error("call_tool_async: arguments must be a JSON object");
+        }
+        const auto session = svToStr(thread_id);
+        core = OpCore::create(runtime(), provider, owner, toolName);
+        const auto callId = fmt::format("plugin_call_{}", core->id());
+        parsed["sessionId"] = session;
+        parsed["tool_call_id"] = callId;
+        OpDrive drive;
+        drive.start = [spec, args = parsed.dump(), session, callId](const auto* notify, auto* error) -> void* {
+            const auto a = PluginStringView::from(args), s = PluginStringView::from(session), id = PluginStringView::from(callId);
+            return spec.execute_start(spec.user_data, &a, &s, &id, notify, error);
+        };
+        drive.cancel = [spec](void* op) {
+            if (spec.execute_cancel) {
+                spec.execute_cancel(spec.user_data, op);
+            }
+        };
+        std::string error;
+        if (!core->start(std::move(drive), error)) {
+            setErrOut(caller, error_out, error);
+            return nullptr; // 真正拒绝：不调用 cb。
+        }
+        core->setCallback(cb, ud);
+        return core->handle(); // 同步 done 也返回受管句柄，callback 恒经 IO 发布。
+    } catch (const std::exception& e) {
+        if (core && !core->submitted()) {
+            core->reject();
+        }
+        setErrOut(caller, error_out, e.what());
         return nullptr;
     }
-
-    handle->cancelFn = [core, drive, op]() {
-        if (core->notified.load(std::memory_order_acquire)) {
-            return;
-        }
-        core->cancelRequested.store(true, std::memory_order_release);
-        detail::safeCancelOnce(*core, drive, op);
-    };
-
-    if (handle->cancelled.load(std::memory_order_acquire)) {
-        handle->cancelFn();
-    }
-
-    if (!core->notified.load(std::memory_order_acquire)) {
-        asio::co_spawn(
-            ioExecutor_,
-            [core, drive, op]() -> asio::awaitable<void> {
-                while (!core->notified.load(std::memory_order_acquire)) {
-                    auto [ec]
-                        = co_await core->chan.async_receive(asio::as_tuple(asio::use_awaitable));
-                    (void)ec;
-                }
-            },
-            asio::detached
-        );
-    }
-    // 自动回收 outstandingOps：操作终态后从调用方列表移除，避免悬垂 handle 在后续 unload 时触发 UAF
-    // 零轮询：等待 doneSignal 事件（避免与上方的 sentinel 协程竞争同一 chan 消息）
-    detail::spawnHandleReaper(
-        ioExecutor_,
-        core,
-        caller ? caller->self : std::weak_ptr<PluginInstance>{},
-        handle
-    );
-
-    return handle.get();
 }
 
 AgentxxPluginOperatorHandle* PluginManager::invokeCapabilityAsync(
-    PluginInstance*               caller,
-    AgentxxPluginStringView       capability,
-    AgentxxPluginStringView       method,
-    AgentxxPluginStringView       args_json,
-    AgentxxPluginOperatorCallback cb,
-    void*                         ud,
-    AgentxxPluginString*          error_out
+    PluginInstance* caller, AgentxxPluginStringView capability, AgentxxPluginStringView method,
+    AgentxxPluginStringView args_json, AgentxxPluginOperatorCallback cb, void* ud,
+    AgentxxPluginString* error_out
 ) {
-    auto setErr = [&](const std::string& msg) {
-        setErrOut(caller, error_out, msg);
-    };
-    if (!ioExecutor_) {
-        setErr("invoke_capability_async: io executor not ready");
-        return nullptr;
+    if (!isIoThread()) {
+        auto self = shared_from_this();
+        auto owner = caller ? caller->self.lock() : nullptr;
+        /// 排队阶段也保护 caller；只有持有实例对象不能阻止 ctx/dlclose。
+        auto admission = std::make_shared<PluginInstance::InflightGuard>(owner);
+        if (!*admission) {
+            hostMemorySetString(error_out, "plugin caller is closing");
+            return nullptr;
+        }
+        const std::string cap = svToStr(capability), meth = svToStr(method), args = svToStr(args_json);
+        return ioCallSync<AgentxxPluginOperatorHandle*>(this, [self, owner, admission, cap, meth, args, cb, ud, error_out] {
+            return self->invokeCapabilityAsync(owner.get(), cap, meth, args, cb, ud, error_out);
+        });
     }
-
-    plugin::OpDrive drive;
-    std::string     provider;
-    std::string     err;
-    if (!buildCapabilityDrive(*this, caller, capability, method, args_json, provider, drive, err)) {
-        setErr(err);
-        return nullptr;
-    }
-
-    auto providerInst = find(provider);
-    auto handle       = std::make_shared<AgentxxPluginOperatorHandle>();
-    handle->caller    = caller;
-    if (caller) {
-        caller->outstandingOps.push_back(handle);
-    }
-
-    auto guard = providerInst ? std::make_shared<PluginInstance::InflightGuard>(providerInst.get())
-                              : nullptr;
-    auto core  = std::make_shared<OpCore>(ioExecutor_, guard);
-    core->cb   = cb;
-    core->cbUd = ud;
-
-    AgentxxPluginString startErr{nullptr, 0};
-    void*               op  = nullptr;
-    auto                ntf = core->notify();
+    std::shared_ptr<OpCore> core;
     try {
-        op = drive.start(&ntf, &startErr);
-    } catch (...) {
-        startErr = agentxx::plugin::PluginString::fromCstr(
-            caller ? &caller->host : nullptr,
-            "start threw"
-        );
-    }
-
-    if (startErr.data || (!op && !core->notified.load(std::memory_order_acquire))) {
-        guard.reset();
-        std::string errMsg
-            = startErr.data ? std::string(startErr.data, startErr.size) : "protocol violation";
-        if (startErr.data && caller) {
-            agentxx::plugin::PluginString::free(&caller->host, &startErr);
+        auto owner = caller ? caller->self.lock() : nullptr;
+        if (!owner || !ioExecutor_) {
+            throw std::runtime_error("invoke_capability_async: missing caller or IO executor");
         }
-        setErr(errMsg);
-        if (cb) {
-            auto errSv = agentxx::plugin::PluginStringView::from(errMsg.data(), errMsg.size());
-            cb(ud, AGENTXX_PLUGIN_OPERATOR_FAILED, &errSv);
+        const auto cap = svToStr(capability);
+        const auto* entry = capabilities_->get(cap);
+        auto provider = entry ? find(entry->provider) : nullptr;
+        if (!entry || !entry->start || !provider || !provider->enabled
+            || (provider->lifetime && !provider->lifetime->acceptsOperations())) {
+            throw std::runtime_error("invoke_capability_async: capability not available: " + cap);
         }
+        const auto binding = *entry;
+        OpDrive drive;
+        drive.start = [binding, owner, meth = svToStr(method), args = svToStr(args_json)](const auto* notify, auto* error) -> void* {
+            const auto m = PluginStringView::from(meth), a = PluginStringView::from(args);
+            return binding.start(binding.ctx, &owner->host, &m, &a, notify, error);
+        };
+        drive.cancel = [binding](void* op) {
+            if (binding.cancel) {
+                binding.cancel(binding.ctx, op);
+            }
+        };
+        core = OpCore::create(runtime(), provider, owner, cap);
+        std::string error;
+        if (!core->start(std::move(drive), error)) {
+            setErrOut(caller, error_out, error);
+            return nullptr;
+        }
+        core->setCallback(cb, ud);
+        return core->handle();
+    } catch (const std::exception& e) {
+        if (core && !core->submitted()) {
+            core->reject();
+        }
+        setErrOut(caller, error_out, e.what());
         return nullptr;
     }
-
-    handle->cancelFn = [core, drive, op]() {
-        if (core->notified.load(std::memory_order_acquire)) {
-            return;
-        }
-        core->cancelRequested.store(true, std::memory_order_release);
-        detail::safeCancelOnce(*core, drive, op);
-    };
-
-    if (handle->cancelled.load(std::memory_order_acquire)) {
-        handle->cancelFn();
-    }
-
-    if (!core->notified.load(std::memory_order_acquire)) {
-        asio::co_spawn(
-            ioExecutor_,
-            [core, drive, op]() -> asio::awaitable<void> {
-                while (!core->notified.load(std::memory_order_acquire)) {
-                    auto [ec]
-                        = co_await core->chan.async_receive(asio::as_tuple(asio::use_awaitable));
-                    (void)ec;
-                }
-            },
-            asio::detached
-        );
-    }
-    // 自动回收 outstandingOps：操作终态后从调用方列表移除，避免悬垂 handle 在后续 unload 时触发 UAF
-    // 零轮询：等待 doneSignal 事件（避免与上方的 sentinel 协程竞争同一 chan 消息）
-    detail::spawnHandleReaper(
-        ioExecutor_,
-        core,
-        caller ? caller->self : std::weak_ptr<PluginInstance>{},
-        handle
-    );
-
-    return handle.get();
 }
 
 } // namespace plugin

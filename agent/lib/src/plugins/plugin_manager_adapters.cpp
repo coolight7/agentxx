@@ -275,7 +275,9 @@ int PluginManager::registerTool(PluginInstance* inst, const AgentxxPluginToolSpe
         return -1;
     }
     auto tool = std::make_shared<PluginTool>(agentContext_, shared, *spec);
-    registry_->registerTool(toolName, tool);
+    if (!registry_->registerTool(toolName, tool)) {
+        return -1;
+    }
     inst->toolNames.push_back(toolName);
     inst->tools.push_back(tool);
     XX_LOGI("Plugin `{}` registered tool `{}`", inst->name, toolName);
@@ -539,55 +541,66 @@ AgentxxPluginSubscription* PluginManager::subscribe(
     auto sub     = std::make_shared<AgentxxPluginSubscription>();
     sub->bus     = ctx->bus;
     sub->topic   = fullTopic;
-    sub->inst    = inst;
+    sub->inst    = inst->self;
     sub->handler = handler;
     sub->ud      = ud;
 
     auto subId = ctx->bus->get<std::string>(fullTopic).subscribe(
         [sub](const std::string& data) -> asio::awaitable<void> {
-            if (!sub->inst || !sub->inst->enabled || !sub->handler) {
+            if (!sub->alive.load(std::memory_order_acquire) || !sub->handler) {
                 co_return;
             }
-            PluginInstance::InflightGuard guard(sub->inst);
+            auto inst = sub->inst.lock();
+            if (!inst || !inst->enabled || !inst->lifetime
+                || !inst->lifetime->acceptsOperations()) {
+                co_return;
+            }
+            PluginInstance::InflightGuard guard(inst);
+            if (!guard || !sub->alive.load(std::memory_order_acquire)) {
+                co_return;
+            }
             try {
                 auto dataSv = agentxx::plugin::PluginStringView::from(data.data(), data.size());
                 sub->handler(&dataSv, sub->ud);
             } catch (const std::exception& e) {
-                XX_LOGW(
-                    "Plugin `{}` event handler threw: {}",
-                    sub->inst ? sub->inst->name : "?",
-                    e.what()
-                );
+                XX_LOGW("Plugin `{}` event handler threw: {}", inst->name, e.what());
             } catch (...) {
-                XX_LOGW(
-                    "Plugin `{}` event handler threw unknown exception",
-                    sub->inst ? sub->inst->name : "?"
-                );
+                XX_LOGW("Plugin `{}` event handler threw unknown exception", inst->name);
             }
             co_return;
         }
     );
     sub->subscriptionId = subId;
+    inst->subscriptionHandles.push_back(sub);
     inst->subscriptions.push_back(sub);
     return sub.get();
 }
 
 void PluginManager::unsubscribe(AgentxxPluginSubscription* sub) {
-    if (!sub || !sub->bus || sub->subscriptionId == 0) {
+    if (!sub) {
         return;
     }
-    sub->bus->get<std::string>(sub->topic).unsubscribe(sub->subscriptionId);
-    sub->subscriptionId = 0;
-    if (sub->inst) {
+    bool expected = true;
+    if (!sub->alive.compare_exchange_strong(expected, false, std::memory_order_acq_rel)) {
+        return;
+    }
+    if (sub->bus && sub->subscriptionId != 0) {
+        sub->bus->get<std::string>(sub->topic).unsubscribe(sub->subscriptionId);
+        sub->subscriptionId = 0;
+    }
+    auto inst = sub->inst.lock();
+    sub->inst.reset();
+    if (inst) {
         auto it = std::find_if(
-            sub->inst->subscriptions.begin(),
-            sub->inst->subscriptions.end(),
+            inst->subscriptions.begin(),
+            inst->subscriptions.end(),
             [sub](const std::shared_ptr<AgentxxPluginSubscription>& s) {
                 return s.get() == sub;
             }
         );
-        if (it != sub->inst->subscriptions.end()) {
-            sub->inst->subscriptions.erase(it);
+        if (it != inst->subscriptions.end()) {
+            // 句柄控制块在 vtable 返回后不再解引用。先使其失效，再移除宿主引用。
+            inst->subscriptions.erase(it);
         }
     }
 }

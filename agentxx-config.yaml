@@ -145,21 +145,22 @@ models:
     type: "openai-responses"
     base_url: "https://api.bblabu.ai/v1"
     api_key: "${BBLABU_API_KEI}"
-    read_chunk_timeout: 100
+    send_thinking: false
     model_name: "gpt-6-astra"
-    model_context_max_token: 600000
+    model_context_max_token: 700000
+    include: ["reasoning.encrypted_content"]
     extra_api_config:
       reasoning:
         effort: max
-  - name: ofapp-gpt
-    type: "openai-responses"
-    base_url: "https://api.ofapp.cn/v1"
-    api_key: "${OFAPP_API_KEY}"
-    model_name: "gpt-6-astra"
+  - name: sensenova-kimi-k3
+    type: "openai"
+    base_url: "https://token.sensenova.cn/v1"
+    api_key: "${SENSENOVA_APK_KEY}"
+    read_chunk_timeout: 100
+    model_name: "kimi-k3"
     model_context_max_token: 1000000
     extra_api_config:
-      reasoning:
-        effort: max
+      reasoning_effort: "max"
   - name: opencode-ds-v4-flash
     type: "openai-responses"
     base_url: "https://opencode.ai/zen/go/v1"

@@ -27,25 +27,22 @@
 
 #include "agentxx/plugin/api/plugin_kit.h"
 #include "agentxx/plugin/plugin_common.h"
+#include "agentxx/plugin/plugin_runtime.h"
 #include "agentxx/util/json.h"
 #include "agentxx/util/log.h"
 #include "asio/any_io_executor.hpp"
 #include "asio/awaitable.hpp"
 #include "asio/post.hpp"
-#include "asio/steady_timer.hpp"
-#include "asio/use_awaitable.hpp"
 
 #include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
-#include <deque>
 #include <filesystem>
 #include <functional>
 #include <map>
 #include <memory>
-#include <mutex>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -88,8 +85,19 @@ struct PluginInstanceBase {
     bool                     enabled   = true; ///< 是否启用 (禁用: 注册摘除/命令停用)
     bool userDisabled    = false; ///< 是否被用户显式禁用 (区别于级联禁用)
     bool unloadRequested = false; ///< 已请求卸载 (防重复)
+    /// create 是否成功产出可销毁的 pluginCtx。
+    bool pluginCreated   = false;
+    /// 插件上下文是否已经调用 destroy。只在所属 IO 线程更新。
+    bool pluginDestroyed = false;
+    /// 同步关闭发现活动 lease 时，等待最后一个 lease 释放后再执行 destroy。
+    bool destroyDeferred = false;
 
-    /// 执行中回调计数 (原子, 跨线程: 事件 handler/命令 execute/异步 op)
+    /// Reset-v1 宿主生命周期。实例对象本身只保存业务注册信息；所有跨线程
+    /// 执行都通过 lifetime lease 保证 stop/destroy/dlclose 前已经返回。
+    std::shared_ptr<InstanceLifetime> lifetime;
+
+    /// 兼容查询字段：值与 lifetime->leaseCount() 同步更新，待所有调用方迁移
+    /// 到 lifetime 后可移除。
     std::atomic<size_t> inflight{0};
 
     explicit PluginInstanceBase(std::string in_name) :
@@ -100,19 +108,32 @@ struct PluginInstanceBase {
     PluginInstanceBase(const PluginInstanceBase&)            = delete;
     PluginInstanceBase& operator=(const PluginInstanceBase&) = delete;
 
-    /// 执行中计数 RAII (事件 handler / 命令 execute 入口调用)
+    /// 执行 lease RAII。优先使用 Reset-v1 lifetime；尚未装配 lifetime 的测试
+    /// 伪实例仍更新兼容 inflight 字段。
     struct InflightGuard {
-        PluginInstanceBase* inst;
+        PluginInstanceBase* inst = nullptr;
+        InstanceLease       lease;
+        bool                legacy = false;
 
-        explicit InflightGuard(PluginInstanceBase* i) :
-            inst(i) {
-            if (inst) {
+        explicit InflightGuard(PluginInstanceBase* i, bool allowClosing = false) :
+            inst(i),
+            lease(i ? InstanceLease::acquire(i->lifetime, allowClosing) : InstanceLease{}) {
+            if (inst && inst->lifetime) {
+                if (lease) {
+                    inst->inflight.fetch_add(1, std::memory_order_acq_rel);
+                }
+            } else if (inst) {
+                legacy = true;
                 inst->inflight.fetch_add(1, std::memory_order_acq_rel);
             }
         }
 
+        explicit operator bool() const noexcept {
+            return legacy || static_cast<bool>(lease);
+        }
+
         ~InflightGuard() {
-            if (inst) {
+            if (inst && (legacy || lease)) {
                 inst->inflight.fetch_sub(1, std::memory_order_acq_rel);
             }
         }
@@ -138,11 +159,8 @@ public:
     /// 插件表 <name, instance> (仅 io 线程读写)
     std::map<std::string, InstancePtr, std::less<>> plugins_{};
 
-    explicit PluginManagerBase(asio::any_io_executor ex = {}) :
-        ioExecutor_(std::move(ex)) {
-        if (ioExecutor_) {
-            ioThreadId_.store(std::this_thread::get_id(), std::memory_order_release);
-        }
+    explicit PluginManagerBase(asio::any_io_executor ex = {}) {
+        setIoExecutor(std::move(ex));
     }
 
     virtual ~PluginManagerBase() = default;
@@ -163,65 +181,58 @@ public:
         ioExecutor_ = std::move(ex);
         if (ioExecutor_) {
             ioThreadId_.store(std::this_thread::get_id(), std::memory_order_release);
+        } else {
+            ioThreadId_.store(std::thread::id{}, std::memory_order_release);
         }
     }
 
     bool isIoThread() const {
         const auto tid = ioThreadId_.load(std::memory_order_acquire);
-        return !ioExecutor_ || (tid != std::thread::id{} && tid == std::this_thread::get_id());
+        return ioExecutor_ && tid != std::thread::id{} && tid == std::this_thread::get_id();
     }
 
-    /// 投递到 io 线程 (调用方为 io 线程时同步执行)
+    /// 投递到所属 IO executor。闭包自身必须拥有执行所需状态；这里不再维护
+    /// 捕获 manager 裸指针的二级队列。
     void postToIo(std::function<void()> fn) const {
+        if (!fn) {
+            return;
+        }
         if (isIoThread()) {
             fn();
         } else if (ioExecutor_) {
-            {
-                std::lock_guard lk(ioTasksMtx_);
-                ioTasks_.push_back(std::move(fn));
-            }
-            asio::post(ioExecutor_, [this]() {
-                ioThreadId_.store(std::this_thread::get_id(), std::memory_order_release);
-                runPendingIoTasks();
-            });
-        } else {
-            XX_LOGW("PluginManagerBase::postToIo: no io executor, executing on caller thread");
-            fn();
-        }
-    }
-
-    /// 异步投递到 io 线程 (恒经 asio::post 入队, 禁止同步重入):
-    /// 供 SchedulerIface::post_to_io / YieldAwaiter 等锚定协程恢复路径使用,
-    /// 即使调用方已在 io 线程也一律异步, 避免 await_suspend 内的重入 UB
-    void postToIoAsync(std::function<void()> fn) const {
-        if (ioExecutor_) {
-            {
-                std::lock_guard lk(ioTasksMtx_);
-                ioTasks_.push_back(std::move(fn));
-            }
-            asio::post(ioExecutor_, [this]() {
-                ioThreadId_.store(std::this_thread::get_id(), std::memory_order_release);
-                runPendingIoTasks();
-            });
-        } else {
-            XX_LOGW("PluginManagerBase::postToIoAsync: no io executor, executing on caller thread");
-            fn();
-        }
-    }
-
-    void runPendingIoTasks() const {
-        std::deque<std::function<void()>> tasks;
-        {
-            std::lock_guard lk(ioTasksMtx_);
-            tasks.swap(ioTasks_);
-        }
-        for (auto& t : tasks) {
-            if (t) {
+            asio::post(ioExecutor_, [runtime = runtime_, fn = std::move(fn)]() mutable {
+                runtime->ioThreadId.store(std::this_thread::get_id(), std::memory_order_release);
                 try {
-                    t();
+                    fn();
+                } catch (const std::exception& e) {
+                    XX_LOGW("Plugin IO task threw: {}", e.what());
                 } catch (...) {
+                    XX_LOGW("Plugin IO task threw unknown exception");
                 }
-            }
+            });
+        } else {
+            throw std::runtime_error("plugin runtime has no IO executor");
+        }
+    }
+
+    /// 恒异步投递，防止 await_suspend 内同步重入。
+    void postToIoAsync(std::function<void()> fn) const {
+        if (!fn) {
+            return;
+        }
+        if (ioExecutor_) {
+            asio::post(ioExecutor_, [runtime = runtime_, fn = std::move(fn)]() mutable {
+                runtime->ioThreadId.store(std::this_thread::get_id(), std::memory_order_release);
+                try {
+                    fn();
+                } catch (const std::exception& e) {
+                    XX_LOGW("Plugin asynchronous IO task threw: {}", e.what());
+                } catch (...) {
+                    XX_LOGW("Plugin asynchronous IO task threw unknown exception");
+                }
+            });
+        } else {
+            throw std::runtime_error("plugin runtime has no IO executor");
         }
     }
 
@@ -235,32 +246,29 @@ public:
         return agentxx::plugin::collectReverseRequiredDeps(plugins_, target, onlyEnabled);
     }
 
-    /// 等待插件执行中计数归零 (io 线程协程轮询, 指数退避); 超时返回 false
-    /// 两侧共享实现 (原 agent 侧固定 10ms 轮询, client 侧指数退避 —— 统一
-    /// 采用指数退避 20ms→1s, 减少慢回调等待期间 io 线程定时器唤醒)
+    /// 事件式等待插件执行 lease 归零；不使用定时轮询。
     asio::awaitable<bool>
         waitInflightZero(const InstancePtr& inst, std::chrono::milliseconds timeout) {
         if (!inst) {
             co_return true;
         }
-        auto deadline = std::chrono::steady_clock::now() + timeout;
-        auto backoff  = std::chrono::milliseconds{20};
-        while (inst->inflight.load(std::memory_order_acquire) > 0) {
-            if (std::chrono::steady_clock::now() >= deadline) {
-                XX_LOGW(
-                    "Plugin `{}` waitInflightZero timed out (inflight={})",
-                    inst->name,
-                    inst->inflight.load(std::memory_order_acquire)
-                );
-                co_return false;
-            }
-            auto timer = asio::steady_timer(co_await asio::this_coro::executor);
-            timer.expires_after(backoff);
-            co_await timer.async_wait(asio::use_awaitable);
-            backoff = std::min(backoff * 2, std::chrono::milliseconds{1000});
+        if (!inst->lifetime) {
+            // 仅兼容未装配 runtime 的测试伪实例；生产实例始终有 lifetime。
+            co_return inst->inflight.load(std::memory_order_acquire) == 0;
         }
-        co_return true;
+        const auto deadline = std::chrono::steady_clock::now() + timeout;
+        const bool idle     = co_await inst->lifetime->waitIdleUntil(deadline);
+        if (!idle) {
+            XX_LOGW(
+                "Plugin `{}` wait idle timed out (leases={})",
+                inst->name,
+                inst->lifetime->leaseCount()
+            );
+        }
+        co_return idle;
     }
+
+    const std::shared_ptr<PluginRuntime>& runtime() const noexcept { return runtime_; }
 
     const asio::any_io_executor& ioExecutor() const {
         return ioExecutor_;
@@ -268,11 +276,17 @@ public:
 
 protected:
 
-    mutable std::mutex                        ioTasksMtx_;
-    mutable std::deque<std::function<void()>> ioTasks_;
+    uint64_t nextGeneration() noexcept {
+        return runtime_->nextGeneration++;
+    }
 
-    asio::any_io_executor                ioExecutor_{};
-    mutable std::atomic<std::thread::id> ioThreadId_{};
+    std::shared_ptr<InstanceLifetime> makeLifetime(std::string name) {
+        return std::make_shared<InstanceLifetime>(ioExecutor_, std::move(name), nextGeneration());
+    }
+
+    std::shared_ptr<PluginRuntime> runtime_ = std::make_shared<PluginRuntime>();
+    asio::any_io_executor& ioExecutor_ = runtime_->executor;
+    std::atomic<std::thread::id>& ioThreadId_ = runtime_->ioThreadId;
 };
 
 // =====================================================================

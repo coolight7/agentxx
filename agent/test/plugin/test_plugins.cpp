@@ -1658,7 +1658,9 @@ asio::awaitable<TestResult> run_plugin_tests() {
                              neograph::json{{"role", "user"}, {"content", "现在几点"}},
                          })},
                     };
-                    auto result = engine->run(runCfg);
+                    /// 插件完成包必须经当前 IO executor 提交；同步 run 会创建嵌套
+                    /// io_context 并阻塞当前循环，不能在宿主协程内使用。
+                    auto result = co_await engine->run_async(runCfg);
                     XX_TEST_EXPECT_TRUE(false == result.interrupted);
                     // 输出 messages 含时间
                     bool hasTime = false;
@@ -1689,7 +1691,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
                              neograph::json{{"role", "user"}, {"content", "你好"}},
                          })},
                     };
-                    auto result2 = engine->run(runCfg2);
+                    auto result2 = co_await engine->run_async(runCfg2);
                     XX_TEST_EXPECT_TRUE(false == result2.interrupted);
                     try {
                         auto msgs2 = result2.channel_raw("messages");

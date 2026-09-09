@@ -1,4 +1,5 @@
 #include "agentxx/plugin/plugin_manager.h"
+#include "agentxx/plugin/op_driver.h"
 
 #include "agentxx/agent/config_static.h"
 #include "agentxx/agent/io/agent_io.h"
@@ -67,18 +68,7 @@ static int32_t AGENTXX_PLUGIN_CALL
 }
 
 static void AGENTXX_PLUGIN_CALL xx_op_cancel(::AgentxxPluginOperatorHandle* op) {
-    if (!op) {
-        return;
-    }
-    bool exp = false;
-    if (op->cancelled.compare_exchange_strong(exp, true, std::memory_order_acq_rel)) {
-        if (op->cancelFn) {
-            try {
-                op->cancelFn();
-            } catch (...) {
-            }
-        }
-    }
+    cancelPluginOperation(op);
 }
 
 static ::AgentxxPluginOperatorHandle* AGENTXX_PLUGIN_CALL xx_call_tool_async(
@@ -90,16 +80,16 @@ static ::AgentxxPluginOperatorHandle* AGENTXX_PLUGIN_CALL xx_call_tool_async(
     void*                          ud,
     AgentxxPluginString*           error_out
 ) {
-    auto mgr  = mgrOf(host);
-    auto inst = instOf(host);
-    if (!mgr || !inst || !name) {
-        return nullptr;
-    }
-    AgentxxPluginStringView args
-        = args_json ? *args_json : agentxx::plugin::PluginStringView::from("{}", 2);
-    AgentxxPluginStringView sid
-        = session_id ? *session_id : agentxx::plugin::PluginStringView::from("", 0);
-    return mgr->callToolAsync(inst, *name, args, sid, cb, ud, error_out);
+    return guardVtableCall<::AgentxxPluginOperatorHandle*>(nullptr, [&]() {
+        auto* inst = instOf(host);
+        auto mgr = inst ? inst->manager.lock() : nullptr;
+        if (!mgr || !name) {
+            hostMemorySetString(error_out, "call_tool_async: plugin runtime unavailable");
+            return static_cast<::AgentxxPluginOperatorHandle*>(nullptr);
+        }
+        return mgr->callToolAsync(inst, *name, args_json ? *args_json : AgentxxPluginStringView{},
+                                  session_id ? *session_id : AgentxxPluginStringView{}, cb, ud, error_out);
+    });
 }
 
 static int32_t AGENTXX_PLUGIN_CALL
@@ -166,16 +156,16 @@ static void AGENTXX_PLUGIN_CALL xx_unsubscribe(AgentxxPluginSubscription* sub) {
         if (!sub) {
             return;
         }
-        if (!sub->inst) {
-            return;
-        }
-        auto mgr = sub->inst->manager.lock().get();
+        auto inst = sub->inst.lock();
+        auto mgr  = inst ? inst->manager.lock() : nullptr;
         if (mgr) {
-            ioCallSyncVoid(mgr, [mgr, sub]() {
+            ioCallSyncVoid(mgr.get(), [mgr, sub]() {
                 mgr->unsubscribe(sub);
             });
+        } else {
+            sub->alive.store(false, std::memory_order_release);
+            sub->inst.reset();
         }
-        sub->inst = nullptr;
     });
 }
 
@@ -589,10 +579,13 @@ static void* AGENTXX_PLUGIN_CALL xx_sleep(
         if (!mgr || !inst || !cb) {
             return static_cast<void*>(nullptr);
         }
-        auto mgrPtr  = mgr;
-        auto instPtr = inst;
-        return ioCallSync<void*>(mgrPtr, [mgrPtr, instPtr, ms, cb, ud]() {
-            return mgrPtr->sleep(instPtr, ms, cb, ud);
+        auto manager = inst->manager.lock();
+        auto admission = std::make_shared<PluginInstance::InflightGuard>(inst->self.lock());
+        if (!*admission) {
+            return nullptr;
+        }
+        return ioCallSync<void*>(manager.get(), [manager, admission, ms, cb, ud]() {
+            return manager->sleep(admission->inst.get(), ms, cb, ud);
         });
     });
 }
@@ -626,7 +619,14 @@ static void AGENTXX_PLUGIN_CALL xx_offload(
         if (!mgr || !inst || !work) {
             return;
         }
-        mgr->offload(inst, cancel_flag, work, done, ud);
+        auto manager = inst->manager.lock();
+        auto admission = std::make_shared<PluginInstance::InflightGuard>(inst->self.lock());
+        if (!*admission) {
+            return;
+        }
+        ioCallSyncVoid(manager.get(), [manager, admission, cancel_flag, work, done, ud] {
+            manager->offload(admission->inst.get(), cancel_flag, work, done, ud);
+        });
     });
 }
 
@@ -641,23 +641,26 @@ static void AGENTXX_PLUGIN_CALL xx_post_to_io(
     void* ud
 ) {
     agentxx::plugin::guardVtableCallVoid([&]() {
-        auto mgr = mgrOf(host);
-        if (!mgr || !fn) {
+        auto* inst = instOf(host);
+        auto mgr = inst ? inst->manager.lock() : nullptr;
+        auto owner = inst ? inst->self.lock() : nullptr;
+        if (!mgr || !owner || !fn) {
             return;
         }
-        mgr->postToIoAsync([fn, ud]() {
-            fn(ud);
+        auto admission = std::make_shared<PluginInstance::InflightGuard>(owner);
+        if (!*admission) {
+            return;
+        }
+        ioCallSyncVoid(mgr.get(), [mgr, admission, fn, ud] {
+            mgr->postCallback(admission->inst.get(), fn, ud);
         });
     });
 }
 
 static void AGENTXX_PLUGIN_CALL xx_pump_io(const AgentxxPluginHost* host) {
-    agentxx::plugin::guardVtableCallVoid([&]() {
-        auto mgr = mgrOf(host);
-        if (mgr) {
-            mgr->runPendingIoTasks();
-        }
-    });
+    // Reset-v1 不允许插件主动驱动宿主事件循环。旧字段在 ABI 迁移完成前保留
+    // 为安全 no-op，下一阶段从 Scheduler 表删除。
+    (void)host;
 }
 
 static void AGENTXX_PLUGIN_CALL

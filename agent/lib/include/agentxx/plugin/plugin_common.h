@@ -417,13 +417,13 @@ T ioCallSync(Mgr* mgr, std::function<T()> fn) {
     if (mgr->isIoThread()) {
         return fn();
     }
-    std::promise<T> p;
-    auto            fut = p.get_future();
-    mgr->postToIo([&p, &fn]() {
+    auto p = std::make_shared<std::promise<T>>();
+    auto fut = p->get_future();
+    mgr->postToIo([p, fn = std::move(fn)]() {
         try {
-            p.set_value(fn());
+            p->set_value(fn());
         } catch (...) {
-            p.set_exception(std::current_exception());
+            p->set_exception(std::current_exception());
         }
     });
     return fut.get();
@@ -439,14 +439,14 @@ void ioCallSyncVoid(Mgr* mgr, std::function<void()> fn) {
         fn();
         return;
     }
-    std::promise<void> p;
-    auto               fut = p.get_future();
-    mgr->postToIo([&p, &fn]() {
+    auto p = std::make_shared<std::promise<void>>();
+    auto fut = p->get_future();
+    mgr->postToIo([p, fn = std::move(fn)]() {
         try {
             fn();
-            p.set_value();
+            p->set_value();
         } catch (...) {
-            p.set_exception(std::current_exception());
+            p->set_exception(std::current_exception());
         }
     });
     fut.get();

@@ -104,10 +104,55 @@ void NativeLoader::addSearchPath(std::string_view dir) {
 // =====================================================================
 
 PluginInstance::~PluginInstance() {
+    destroyPlugin();
     if (dlHandle) {
         NativeLoader::close(dlHandle);
         dlHandle = nullptr;
     }
+}
+
+bool PluginInstance::destroyPlugin() noexcept {
+    if (pluginDestroyed) {
+        return true;
+    }
+    if (lifetime && lifetime->leaseCount() != 0) {
+        destroyDeferred = true;
+        XX_LOGE(
+            "Plugin `{}` destroy deferred while {} lease(s) are still active",
+            name,
+            lifetime->leaseCount()
+        );
+        return false;
+    }
+    if (!pluginCreated) {
+        pluginDestroyed = true;
+        destroyDeferred = false;
+        return true;
+    }
+
+    AgentxxPluginDestroyFn destroy = builtinUnload;
+    if (dlHandle) {
+        std::string err;
+        destroy = reinterpret_cast<AgentxxPluginDestroyFn>(
+            NativeLoader::sym(dlHandle, AGENTXX_PLUGIN_AGENT_SYMBOL_DESTROY, err)
+        );
+        if (!destroy && !err.empty()) {
+            XX_LOGW("Plugin `{}` has no destroy entry: {}", name, err);
+        }
+    }
+    if (destroy) {
+        try {
+            destroy(pluginCtx);
+        } catch (const std::exception& e) {
+            XX_LOGW("Plugin `{}` destroy threw: {}", name, e.what());
+        } catch (...) {
+            XX_LOGW("Plugin `{}` destroy threw unknown exception", name);
+        }
+    }
+    pluginCtx       = nullptr;
+    pluginDestroyed = true;
+    destroyDeferred = false;
+    return true;
 }
 
 // =====================================================================
@@ -141,7 +186,8 @@ void PluginManager::shutdownAll() {
             shutdownPlugin(inst);
         }
     }
-    plugins_.clear();
+    // shutdownPlugin 对仍有 lease 的实例会保留上下文和动态库；不能无条件
+    // 清空实例表，否则最后一个 lease 释放后将失去可重试的关闭入口。
 }
 
 void PluginManager::shutdownPlugin(const std::shared_ptr<PluginInstance>& inst) {
@@ -149,6 +195,9 @@ void PluginManager::shutdownPlugin(const std::shared_ptr<PluginInstance>& inst) 
         return;
     }
     inst->unloadRequested = true;
+    if (inst->lifetime) {
+        inst->lifetime->requestClose();
+    }
     for (const auto& dep :
          collectReverseRequiredDeps(plugins_, inst->name, /*onlyEnabled=*/false)) {
         auto depInst = find(dep);
@@ -165,17 +214,27 @@ void PluginManager::shutdownPlugin(const std::shared_ptr<PluginInstance>& inst) 
             c->resourceApplier->removeAllOwned(inst->name);
         }
     }
-    if (inst->dlHandle) {
-        std::string err;
-        auto        fn = reinterpret_cast<AgentxxPluginDestroyFn>(
-            NativeLoader::sym(inst->dlHandle, AGENTXX_PLUGIN_AGENT_SYMBOL_DESTROY, err)
+    // 同步析构路径不能绕过运行中的 lease。注册已撤销，但插件上下文和动态库
+    // 必须保留到所有已接受的 Operation/回调返回；完成回调随后可再次调用
+    // unloadAsync 继续收尾。这里不强行 destroy，也不清空实例记录。
+    if (inst->lifetime && inst->lifetime->leaseCount() != 0) {
+        XX_LOGW(
+            "Plugin shutdown deferred: `{}` still has {} active lease(s)",
+            inst->name,
+            inst->lifetime->leaseCount()
         );
-        if (fn) {
-            fn(inst->pluginCtx);
-        }
-    } else if (inst->builtinUnload) {
-        inst->builtinUnload(inst->pluginCtx);
+        return;
     }
+
+    inst->destroyPlugin();
+    if (!inst->pluginDestroyed) {
+        XX_LOGW("Plugin shutdown deferred after destroy attempt: `{}`", inst->name);
+        return;
+    }
+    if (inst->lifetime) {
+        inst->lifetime->setState(PluginInstanceState::Closed);
+    }
+    plugins_.erase(inst->name);
     XX_LOGI("Plugin shutdown: {}", inst->name);
 }
 
@@ -184,26 +243,14 @@ void PluginManager::detachAll(PluginInstance* inst) {
         return;
     }
 
-    for (auto& op : inst->outstandingOps) {
-        if (op && !op->cancelled.load(std::memory_order_acquire)) {
-            op->cancelled.store(true, std::memory_order_release);
-            if (op->cancelFn) {
-                try {
-                    op->cancelFn();
-                } catch (...) {
-                }
-            }
+    /// 只请求取消，不删除活跃记录；终态提交负责唯一一次清理。
+    /// 回调可能登记其他操作，因此遍历当前快照，避免 vector 迭代器失效。
+    const auto operations = inst->outstandingOps;
+    for (const auto& op : operations) {
+        if (op && !op->completed.load(std::memory_order_acquire) && op->cancelFn) {
+            op->cancelFn();
         }
     }
-    inst->outstandingOps.clear();
-
-    for (auto& [key, timer] : inst->sleepTimers) {
-        (void)key;
-        if (timer && timer->timer) {
-            timer->timer->cancel();
-        }
-    }
-    inst->sleepTimers.clear();
 
     for (const auto& name : inst->toolNames) {
         registry_->unregisterTool(name);
@@ -212,7 +259,8 @@ void PluginManager::detachAll(PluginInstance* inst) {
         if (sub && sub->bus && sub->subscriptionId != 0) {
             sub->bus->get<std::string>(sub->topic).unsubscribe(sub->subscriptionId);
             sub->subscriptionId = 0;
-            sub->inst           = nullptr;
+            sub->alive.store(false, std::memory_order_release);
+            sub->inst.reset();
         }
     }
     inst->subscriptions.clear();
@@ -255,10 +303,16 @@ void PluginManager::disable(std::string_view name) {
         return;
     }
     inst->enabled = false;
+    if (inst->lifetime) {
+        inst->lifetime->setState(PluginInstanceState::Disabled);
+    }
     for (const auto& dep : collectReverseRequiredDeps(plugins_, inst->name, /*onlyEnabled=*/true)) {
         auto depInst = find(dep);
         if (depInst && depInst->enabled) {
             depInst->enabled = false;
+            if (depInst->lifetime) {
+                depInst->lifetime->setState(PluginInstanceState::Disabled);
+            }
             detachAll(depInst.get());
             eraseMiddleware(depInst->middleware.get());
             depInst->middleware = nullptr;
@@ -285,6 +339,9 @@ void PluginManager::enable(std::string_view name) {
         return;
     }
     inst->enabled = true;
+    if (inst->lifetime) {
+        inst->lifetime->setState(PluginInstanceState::Ready);
+    }
     for (const auto& tool : inst->tools) {
         registry_->registerTool(tool->get_definition().name, tool);
     }
@@ -340,6 +397,9 @@ asio::awaitable<bool> PluginManager::unloadAsync(std::string_view name) {
         co_return false;
     }
     inst->unloadRequested = true;
+    if (inst->lifetime) {
+        inst->lifetime->requestClose();
+    }
 
     for (const auto& dep :
          collectReverseRequiredDeps(plugins_, inst->name, /*onlyEnabled=*/false)) {
@@ -361,22 +421,22 @@ asio::awaitable<bool> PluginManager::unloadAsync(std::string_view name) {
 
     bool ok = co_await waitInflightZero(inst, std::chrono::seconds(30));
     if (!ok) {
+        if (inst->lifetime) {
+            inst->lifetime->setState(PluginInstanceState::CloseFailed);
+        }
+        inst->unloadRequested = false;
         XX_LOGE("Plugin `{}` unload timed out waiting for inflight callbacks", inst->name);
         co_return false;
     }
 
-    if (inst->dlHandle) {
-        std::string err;
-        auto        fn = reinterpret_cast<AgentxxPluginDestroyFn>(
-            NativeLoader::sym(inst->dlHandle, AGENTXX_PLUGIN_AGENT_SYMBOL_DESTROY, err)
-        );
-        if (fn) {
-            fn(inst->pluginCtx);
-        }
-    } else if (inst->builtinUnload) {
-        inst->builtinUnload(inst->pluginCtx);
+    inst->destroyPlugin();
+    if (!inst->pluginDestroyed) {
+        XX_LOGW("Plugin `{}` unload deferred after destroy attempt", inst->name);
+        co_return false;
     }
-
+    if (inst->lifetime) {
+        inst->lifetime->setState(PluginInstanceState::Closed);
+    }
     plugins_.erase(std::string(name));
     XX_LOGI("Plugin `{}` unloaded", name);
     co_return true;
@@ -517,7 +577,8 @@ asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadNativeAsync(
         name = name.substr(3);
     }
 
-    auto inst     = std::make_shared<PluginInstance>(name);
+    auto inst      = std::make_shared<PluginInstance>(name);
+    inst->lifetime = makeLifetime(name);
     inst->version = info && info->version.data ? std::string(info->version.data, info->version.size)
                                                : "1.0.0";
     inst->description = info && info->description.data
@@ -540,6 +601,7 @@ asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadNativeAsync(
     int rc         = -1;
     try {
         rc = createFn(&inst->host, &inst->pluginCtx);
+        inst->pluginCreated = (rc == 0 && inst->pluginCtx != nullptr);
     } catch (const std::exception& e) {
         XX_LOGE("Plugin `{}` create threw: {}", name, e.what());
         rc = -1;
@@ -568,6 +630,7 @@ asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadNativeAsync(
 
     applyDeclaredResources(*inst, resources);
     inst->resourcesFrozen = true;
+    inst->lifetime->setState(PluginInstanceState::Ready);
     XX_LOGI("Plugin `{}` loaded successfully", name);
     co_return inst;
 }
@@ -598,7 +661,8 @@ asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadBuiltinAsync
         co_return nullptr;
     }
 
-    auto inst     = std::make_shared<PluginInstance>(name);
+    auto inst      = std::make_shared<PluginInstance>(name);
+    inst->lifetime = makeLifetime(name);
     inst->version = info && info->version.data ? std::string(info->version.data, info->version.size)
                                                : "1.0.0";
     inst->description     = info && info->description.data
@@ -623,6 +687,7 @@ asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadBuiltinAsync
     int rc         = -1;
     try {
         rc = entry->create(&inst->host, &inst->pluginCtx);
+        inst->pluginCreated = (rc == 0 && inst->pluginCtx != nullptr);
     } catch (const std::exception& e) {
         XX_LOGE("Builtin plugin `{}` create threw: {}", name, e.what());
         rc = -1;
@@ -647,6 +712,7 @@ asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadBuiltinAsync
 
     applyDeclaredResources(*inst, resources);
     inst->resourcesFrozen = true;
+    inst->lifetime->setState(PluginInstanceState::Ready);
     XX_LOGI("Builtin plugin `{}` loaded successfully", name);
     co_return inst;
 }

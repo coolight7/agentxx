@@ -38,31 +38,33 @@ class PluginTool;
 class PluginInstance;
 struct OpCore;
 
-struct PluginSleepTimer {
-    std::weak_ptr<PluginInstance>       inst;
-    std::shared_ptr<asio::steady_timer> timer;
-    void(AGENTXX_PLUGIN_CALL* cb)(void* ud) = nullptr;
-    void*             ud                    = nullptr;
-    std::atomic<bool> triggered{false};
-};
-
 } // namespace plugin
 } // namespace agentxx
 
-struct AgentxxPluginOperatorHandle {
-    agentxx::plugin::PluginInstance* caller = nullptr;
-    std::function<void()>            cancelFn;
-    std::atomic<bool>                cancelled{false};
+/// 完成通知端点独立于 OpCore 保存，避免插件违约在 Operation 回收后再次
+/// 调用 notify.done 时解引用已经释放的 OpCore。端点由句柄 tombstone 保活。
+struct AgentxxPluginOperationCompletionEndpoint {
+    std::weak_ptr<agentxx::plugin::OpCore> operation;
+};
+
+struct AgentxxPluginOperatorHandle : std::enable_shared_from_this<AgentxxPluginOperatorHandle> {
+    std::weak_ptr<agentxx::plugin::PluginInstance> caller;
+    asio::any_io_executor                          executor;
+    std::function<void()>                          cancelFn;
+    std::shared_ptr<AgentxxPluginOperationCompletionEndpoint> completionEndpoint;
+    std::atomic<bool> cancelled{false};
+    std::atomic<bool>                              completed{false};
 };
 
 struct AgentxxPluginSubscription {
-    std::shared_ptr<agentxx::event::EventBus> bus;
-    std::string                               topic;
-    size_t                                    subscriptionId = 0;
-    agentxx::plugin::PluginInstance*          inst           = nullptr;
+    std::shared_ptr<agentxx::event::EventBus>       bus;
+    std::string                                     topic;
+    size_t                                          subscriptionId = 0;
+    std::weak_ptr<agentxx::plugin::PluginInstance>  inst;
     void(AGENTXX_PLUGIN_CALL* handler)(const AgentxxPluginStringView* event_json, void* ud)
         = nullptr;
-    void* ud = nullptr;
+    void*             ud = nullptr;
+    std::atomic<bool> alive{true};
 };
 
 namespace agentxx {
@@ -118,10 +120,16 @@ public:
     std::vector<std::string>                                toolNames;
     std::vector<HookRegistration>                           hookRegistrations;
     std::vector<std::shared_ptr<AgentxxPluginSubscription>> subscriptions;
+    std::vector<std::shared_ptr<AgentxxPluginSubscription>> subscriptionHandles;
+    /// 该操作句柄由实例保活到实例安全销毁；outstandingOps 只表示当前活动操作。
+    std::vector<std::shared_ptr<AgentxxPluginOperatorHandle>> operatorHandles;
+    /// Operation 完成端点的宿主 tombstone。操作提交后仍保留到实例销毁，
+    /// 违约的迟到 done 只会命中空 weak_ptr，不会访问已释放的 OpCore。
+    std::vector<std::shared_ptr<AgentxxPluginOperationCompletionEndpoint>> completionEndpoints;
     std::vector<CapabilityRegistration>                     capabilityRegistrations;
     std::vector<GraphNodeTypeRegistration>                  graphNodeTypes;
-    // B6: sleep 定时器改为哈希表 O(1) 取消，避免 vector 线性查找 O(n) 与卸载时 O(n²)
-    std::unordered_map<void*, std::shared_ptr<PluginSleepTimer>> sleepTimers;
+    /// 活跃 sleep 使用 Operation 句柄索引；完成回调开始前移除，取消查询 O(1)。
+    std::unordered_map<void*, std::shared_ptr<AgentxxPluginOperatorHandle>> sleepTimers;
     std::vector<std::shared_ptr<AgentxxPluginOperatorHandle>>    outstandingOps;
     PromptBackup                                                 promptBackup;
 
@@ -136,25 +144,39 @@ public:
 
     ~PluginInstance();
 
+    /// 在所有活动 lease 归零后销毁插件上下文；析构时也作为最后一道安全收尾。
+    /// 返回 false 表示仍有活动 lease，调用方不得关闭动态库。
+    bool destroyPlugin() noexcept;
+
     struct InflightGuard {
         std::shared_ptr<PluginInstance> inst;
+        InstanceLease                  lease;
+        bool                            legacy = false;
 
-        explicit InflightGuard(std::shared_ptr<PluginInstance> i) :
-            inst(std::move(i)) {
-            if (inst) {
+        explicit InflightGuard(std::shared_ptr<PluginInstance> i, bool allowClosing = false) :
+            inst(std::move(i)),
+            lease(inst && inst->lifetime
+                      ? InstanceLease::acquire(inst->lifetime, allowClosing)
+                      : InstanceLease{}) {
+            if (inst && inst->lifetime) {
+                if (lease) {
+                    inst->inflight.fetch_add(1, std::memory_order_acq_rel);
+                }
+            } else if (inst) {
+                legacy = true;
                 inst->inflight.fetch_add(1, std::memory_order_acq_rel);
             }
         }
 
-        explicit InflightGuard(PluginInstance* i) :
-            inst(i ? i->self.lock() : nullptr) {
-            if (inst) {
-                inst->inflight.fetch_add(1, std::memory_order_acq_rel);
-            }
+        explicit InflightGuard(PluginInstance* i, bool allowClosing = false) :
+            InflightGuard(i ? i->self.lock() : nullptr, allowClosing) {}
+
+        explicit operator bool() const noexcept {
+            return legacy || static_cast<bool>(lease);
         }
 
         ~InflightGuard() {
-            if (inst) {
+            if (inst && (legacy || lease)) {
                 inst->inflight.fetch_sub(1, std::memory_order_acq_rel);
             }
         }
@@ -439,6 +461,10 @@ public:
     ) {
         emitMessageTip(inst, strToSv(session_id), strToSv(text), level);
     }
+
+    AgentxxPluginOperatorHandle* postCallback(
+        PluginInstance* inst, void(AGENTXX_PLUGIN_CALL* fn)(void*), void* ud
+    );
 
     void*
          sleep(PluginInstance* inst, int64_t ms, void(AGENTXX_PLUGIN_CALL* cb)(void* ud), void* ud);

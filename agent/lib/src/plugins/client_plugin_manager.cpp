@@ -155,9 +155,7 @@ bool parseCommandAction(const std::string& jsonText, std::string& action) {
 // =====================================================================
 
 ClientPluginInstance::~ClientPluginInstance() {
-    // dlclose (与 agent 侧 PluginInstance 一致): 调用方保证无未返回的回调
-    // (unloadAsync 等 inflight 归零后移除; shutdownAll 进程退出路径约定
-    // 没有尚未返回的插件回调)
+    destroyPlugin();
     if (dlHandle) {
         NativeLoader::close(dlHandle);
         dlHandle = nullptr;
@@ -167,6 +165,50 @@ ClientPluginInstance::~ClientPluginInstance() {
     panelHandles.clear();
     infoSectionHandles.clear();
     subHandles.clear();
+}
+
+bool ClientPluginInstance::destroyPlugin() noexcept {
+    if (pluginDestroyed) {
+        return true;
+    }
+    if (lifetime && lifetime->leaseCount() != 0) {
+        destroyDeferred = true;
+        XX_LOGE(
+            "[client_plugin] `{}` destroy deferred while {} lease(s) are still active",
+            name,
+            lifetime->leaseCount()
+        );
+        return false;
+    }
+    if (!pluginCreated) {
+        pluginDestroyed = true;
+        destroyDeferred = false;
+        return true;
+    }
+
+    AgentxxClientPluginDestroyFn destroy = nullptr;
+    if (dlHandle) {
+        std::string err;
+        destroy = reinterpret_cast<AgentxxClientPluginDestroyFn>(
+            NativeLoader::sym(dlHandle, AGENTXX_PLUGIN_CLIENT_SYMBOL_DESTROY, err)
+        );
+        if (!destroy && !err.empty()) {
+            XX_LOGW("[client_plugin] `{}` has no destroy entry: {}", name, err);
+        }
+    }
+    if (destroy) {
+        try {
+            destroy(pluginCtx);
+        } catch (const std::exception& e) {
+            XX_LOGW("[client_plugin] `{}` destroy threw: {}", name, e.what());
+        } catch (...) {
+            XX_LOGW("[client_plugin] `{}` destroy threw unknown exception", name);
+        }
+    }
+    pluginCtx       = nullptr;
+    pluginDestroyed = true;
+    destroyDeferred = false;
+    return true;
 }
 
 // =====================================================================
@@ -400,6 +442,7 @@ asio::awaitable<std::shared_ptr<ClientPluginInstance>> ClientPluginManager::load
     }
 
     auto inst         = std::make_shared<ClientPluginInstance>(name);
+    inst->lifetime    = makeLifetime(name);
     inst->version     = version;
     inst->description = desc;
     inst->path        = path;
@@ -428,7 +471,11 @@ asio::awaitable<std::shared_ptr<ClientPluginInstance>> ClientPluginManager::load
         *pool_,
         [inst, entryFn]() -> asio::awaitable<int> {
             try {
-                co_return entryFn(&inst->host, &inst->pluginCtx);
+                const auto rc = entryFn(&inst->host, &inst->pluginCtx);
+                if (rc == 0 && inst->pluginCtx != nullptr) {
+                    inst->pluginCreated = true;
+                }
+                co_return rc;
             } catch (const std::exception& e) {
                 XX_LOGE("[client_plugin] `{}` entry threw: {}", inst->name, e.what());
             } catch (...) {
@@ -444,6 +491,7 @@ asio::awaitable<std::shared_ptr<ClientPluginInstance>> ClientPluginManager::load
         co_return nullptr;
     }
 
+    inst->lifetime->setState(PluginInstanceState::Ready);
     util::insertHeterogeneous(plugins_, std::string{name}, inst);
     XX_LOGI("[client_plugin] loaded: {} ({})", name, version);
     co_return inst;
@@ -459,6 +507,9 @@ asio::awaitable<bool> ClientPluginManager::unloadAsync(std::string_view name) {
         co_return false;
     }
     inst->unloadRequested = true;
+    if (inst->lifetime) {
+        inst->lifetime->requestClose();
+    }
 
     // 级联: 必选依赖者先卸载 (先子后父) —— 与 agent 侧 unloadAsync 一致
     for (const auto& child : collectReverseRequiredDeps(plugins_, std::string{name}, true)) {
@@ -473,27 +524,24 @@ asio::awaitable<bool> ClientPluginManager::unloadAsync(std::string_view name) {
     // 等未返回的回调归零 (超时放弃: 保持已 detach 状态, 复位可稍后重试)
     if (!co_await waitInflightZero(inst, std::chrono::seconds{10})) {
         inst->unloadRequested = false;
+        if (inst->lifetime) {
+            inst->lifetime->setState(PluginInstanceState::CloseFailed);
+        }
         XX_LOGW("[client_plugin] `{}` inflight not zero, unload aborted (retry later)", name);
         co_return false;
     }
 
-    // unload 回调 (业务清理; 宿主已自动反注册全部残留; 句柄仍存活:
-    // statusItemHandles/subHandles 等随实例析构释放, 回调内主动反注册安全)
-    // C ABI 回调异常兜底: 插件违约不得打断卸载流程
-    if (inst->dlHandle) {
-        std::string err;
-        auto        fn = reinterpret_cast<AgentxxClientPluginDestroyFn>(
-            NativeLoader::sym(inst->dlHandle, AGENTXX_PLUGIN_CLIENT_SYMBOL_DESTROY, err)
-        );
-        if (fn) {
-            try {
-                fn(inst->pluginCtx);
-            } catch (const std::exception& e) {
-                XX_LOGW("[client_plugin] `{}` unload callback threw: {}", inst->name, e.what());
-            } catch (...) {
-                XX_LOGW("[client_plugin] `{}` unload callback threw unknown exception", inst->name);
-            }
+    inst->destroyPlugin();
+    if (!inst->pluginDestroyed) {
+        inst->unloadRequested = false;
+        if (inst->lifetime) {
+            inst->lifetime->setState(PluginInstanceState::CloseFailed);
         }
+        XX_LOGW("[client_plugin] `{}` unload deferred after destroy attempt", inst->name);
+        co_return false;
+    }
+    if (inst->lifetime) {
+        inst->lifetime->setState(PluginInstanceState::Closed);
     }
     // 从表移除 → 实例析构 → dlclose (~ClientPluginInstance)
     util::eraseHeterogeneous(plugins_, name); // 异构删除免拷贝
@@ -510,6 +558,9 @@ void ClientPluginManager::disableImpl(std::string_view name, bool userInitiated)
         inst->userDisabled = true;
     }
     inst->enabled = false;
+    if (inst->lifetime) {
+        inst->lifetime->setState(PluginInstanceState::Disabled);
+    }
 
     // 级联禁用依赖者 (先子后父)
     for (const auto& child : collectReverseRequiredDeps(plugins_, std::string{name}, true)) {
@@ -534,6 +585,9 @@ void ClientPluginManager::enableImpl(std::string_view name, bool userInitiated) 
         return; // 被用户显式禁用: 级联不复活
     }
     inst->enabled = true;
+    if (inst->lifetime) {
+        inst->lifetime->setState(PluginInstanceState::Ready);
+    }
     if (userInitiated) {
         inst->userDisabled = false;
     }
@@ -807,7 +861,8 @@ void ClientPluginManager::shutdownAll() {
             shutdownClientPlugin(inst);
         }
     }
-    plugins_.clear();
+    // shutdownClientPlugin 对仍有 lease 的实例会保留上下文和动态库；不能无条件
+    // 清空实例表，否则最后一个 lease 释放后将失去可重试的关闭入口。
 }
 
 void ClientPluginManager::shutdownClientPlugin(const std::shared_ptr<ClientPluginInstance>& inst) {
@@ -823,16 +878,26 @@ void ClientPluginManager::shutdownClientPlugin(const std::shared_ptr<ClientPlugi
         }
     }
     detachAll(inst.get(), false);
-    if (inst->dlHandle) {
-        std::string err;
-        auto        fn = reinterpret_cast<AgentxxClientPluginDestroyFn>(
-            NativeLoader::sym(inst->dlHandle, AGENTXX_PLUGIN_CLIENT_SYMBOL_DESTROY, err)
+    // 同步析构路径不能绕过活动 lease。注册已摘除，但插件上下文和 DSO
+    // 必须保留到所有已经接受的回调返回；调用方可稍后通过 unloadAsync 重试。
+    if (inst->lifetime && inst->lifetime->leaseCount() != 0) {
+        XX_LOGW(
+            "[client_plugin] shutdown deferred: `{}` still has {} active lease(s)",
+            inst->name,
+            inst->lifetime->leaseCount()
         );
-        if (fn) {
-            fn(inst->pluginCtx);
-        }
+        return;
     }
-    // dlclose 由 ~ClientPluginInstance 完成 (plugins_.clear() 后实例释放)
+    inst->destroyPlugin();
+    if (!inst->pluginDestroyed) {
+        XX_LOGW("[client_plugin] shutdown deferred after destroy attempt: `{}`", inst->name);
+        return;
+    }
+    if (inst->lifetime) {
+        inst->lifetime->setState(PluginInstanceState::Closed);
+    }
+    // dlclose 由 ~ClientPluginInstance 完成 (实例从表移除后释放)
+    util::eraseHeterogeneous(plugins_, inst->name);
     XX_LOGI("[client_plugin] shutdown: {}", inst->name);
 }
 
