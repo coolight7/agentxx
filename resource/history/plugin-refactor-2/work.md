@@ -2,12 +2,13 @@
 
 > 事实来源：设计定稿是 `resource/history/plugin-refactor-2/plugin.md`（Reset-v1 方案、R0-R6 阶段、F/P 问题编号、测试矩阵）。本文件只记录进度、提交边界、验证结果和待办；与 plugin.md 冲突时以 plugin.md 为准。
 >
-> 本文件更新时间：2026-09-11（P1-2 提交，即当前 HEAD）。**状态：Reset-v1 未完成。**
-> 当前重构进度 = 六个提交：`3a4497ba`（R1-1 Runtime / Operation）、`f861bcf9`（fix-build）、
+> 本文件更新时间：2026-09-11（P1-1 提交，即当前 HEAD）。**状态：Reset-v1 未完成。**
+> 当前重构进度 = 七个提交：`3a4497ba`（R1-1 Runtime / Operation）、`f861bcf9`（fix-build）、
 > `b2b5114a`（Operation/Runtime 可靠性、加载事务与关闭、owner 顺序、ABI v1 / SDK 推进）、
 > `c2869f07`（P0-1 宿主控制块 / 迟到调用安全失败 / 注册执行期复查，见第 3.4 节）、
 > `8c717236`（P0-2 Operation 终态与取消线性化，见第 3.5 节）、
-> P1-2 提交（C17 ABI 编译期检查与接口表严格协商回归，见第 3.6 节）。
+> `aa4b33ff`（P1-2 C17 ABI 编译期检查与接口表严格协商，见第 3.6 节）、
+> P1-1 提交（SDK 拥有型 Request / 统一 root adapter / hook 同步异步分发，见第 3.7 节）。
 > 工作树在该提交后是**干净的**；本文档自身也已包含在最新提交中。
 > 已完成/待完成对照见第 5、6 节，内容明细见第 3、4 节。
 
@@ -255,6 +256,38 @@ shutdown 中挂起后台 Task、超时后立即 unload 的独立用例）。
 
 仍未做：C++ 反例编译测试（错误 hook 签名等必须编译失败）、导出符号白名单检查。
 
+### 3.7 P1-1 提交：SDK 拥有型 Request 与统一 root adapter（R3）
+
+6 文件（`plugin_kit.h`、新增 `agent/test/plugin/test_plugin_sdk.{h,cpp}`、`test.cpp`、
+本文档）。要点：
+
+- **拥有型 Request（F13）**：新增 `detail::RootRequest`（args/session/call_id/method +
+  host + cancel token 视图），在业务代码之前把 ABI 借用视图复制成自己的字符串。
+  `tool()` 的 Job、`hook()` 的 HookJob、`capability()` 的调用点都改为把视图指向
+  Request；宿主借用缓冲区（`drive.start` 的局部字符串）失效后，插件协程继续读取
+  仍然正确。
+- **统一完成守卫**：新增 `detail::CompletionGuard`（exactly-once notify.done；
+  显式 ok/failed/cancelled；`fromCurrentException()` 把异常映射为 FAILED/CANCELLED；
+  作用域结束仍未完成时补 FAILED），`fast_tool`/`hook`/`capability` 的同步路径统一
+  走它，去掉三处重复的 try/catch+done 代码块。
+- **修复真实缺陷（测试暴露）**：`tool()` 与 `spawn` 把 `OpCtl` 放在 start/starter 的
+  栈上并以引用传给业务协程，协程一挂起该引用即悬垂（原 example_plugin 的
+  `ctl.throw_if_cancelled()` 就踩在这里）。现在 `OpCtl` 由 Job / `SpawnRecord` 持有，
+  直到协程真正结束；ASan 的 `stack-use-after-return` 复现与修复都在本次提交内。
+- **钩子同步/异步严格分发（F19）**：`hook()` 用
+  `detail::invokeHook()`（按可调用性选择 fn(ctx,point,input)/fn(ctx,input)/fn(input)）
+  的返回类型做 `if constexpr` 分派：
+    - 返回 `void`：调用返回即完成（异常 → FAILED）；
+    - 返回 `Task<T>`：start 返回 `HookJob*` 作为宿主可取消的 provider 句柄，完成由
+      promise 在协程真正结束后收束；`hook_cancel` 置取消标志并取消嵌套 awaiter。
+- **测试**：新增模块 `plugin_sdk`（`agent/test/test.cpp` 注册），用伪宿主接口表捕获
+  SDK 注册出的 spec，直接按 ABI 驱动 `execute_start`/`hook_start`，可以精确控制
+  借用缓冲区生命周期：覆盖工具输入所有权、同步钩子正常/异常、异步 Task 钩子
+  不提前完成 + provider 句柄 + 借用缓冲区失效后仍能完成。
+
+仍属 P1-1 未做：graph node / capability 的异步 Task 分发（capability 目前仍是同步
+业务）、正反例编译测试（错误签名必须编译失败）。
+
 ---
 
 ## 4. `b2b5114a` 内容明细（已提交，按阶段归类）
@@ -319,7 +352,8 @@ shutdown 中挂起后台 Task、超时后立即 unload 的独立用例）。
 | F07 caller/provider 双 lease | 完成 | `OpCore` 的 provider_/caller_ guard |
 | F08 sleep/post/offload 纳入 Operation 与回收 | 完成 | `plugin_manager_scheduler.cpp` + 测试 |
 | F10 工具冲突不得写入实例记录 | 完成 | `plugin_manager_adapters.cpp` registerTool 返回值为唯一依据 |
-| F13 SDK 借用参数跨挂起 | 未完成 | 仍无 `Request` 拥有模型（R3 待办） |
+| F13 SDK 借用参数跨挂起 | 完成 | `detail::RootRequest` 拥有 args/session/call_id/method；tool/hook/capability 统一使用；SDK 模块用例用失效借用缓冲区验证（第 3.7 节） |
+| F19 hook helper 返回类型分发 | 完成 | `detail::invokeHook` + `if constexpr` 区分同步 void 与 `Task<T>`；异步钩子返回 provider 句柄并可取消（第 3.7 节） |
 | F14 完成后再 cancel 不调用插件 | 完成 | `handle->completed` + `cancelFn` 失效 |
 | F15 管理器销毁后队列 lambda 不访问裸 this | 完成 | 业务投递与 vtable 投递都持有 `shared_ptr<Instance/Manager>` + admission lease（P0-1 落地），不再捕获裸 `inst`/`mgr` |
 | F18 Client 同轮派发复查 alive | 完成 | `client_plugin_manager.cpp:1511` dispatchEvent |
@@ -364,12 +398,17 @@ shutdown 中挂起后台 Task、超时后立即 unload 的独立用例）。
 - 关闭超时目前只输出未终结 Operation 摘要（`label#id`）。若要更强的取证，可在
   摘要里带上每个 Operation 的 `completionPending()` 标记与等待时长。
 
-### P1-1 SDK Request 与统一 root adapter（R3）
+### P1-1 SDK Request 与统一 root adapter（R3）—— 主体完成
 
-- 建立每次 root 操作的拥有型 `Request`（args/session/call_id/method + token 视图 + ctx lifetime），`std::string_view` 只在 Request 生命周期内有效（F13）。
-- tool/hook/capability/graph/spawn 复用同一 root adapter（当前各自一套 Job/shim）。
-- hook helper 按 callable 返回类型严格区分同步 `void` 与 `Task<void>`（F19）。
-- `Task<T>`/`Task<void>`/`offload<void>` 组合、异常与取消传播的正反例编译测试。
+已于第 3.7 节的提交落地：拥有型 `RootRequest`（F13）、`CompletionGuard`
+（exactly-once），hook 的同步/异步严格分发（F19），并顺带修掉 `OpCtl` 栈引用悬垂。
+
+遗留：
+
+- capability 目前仍是同步业务（返回 `Task<T>` 的能力尚未支持）；graph node 的
+  run_start 由各插件自行实现，未纳入 SDK root adapter。
+- `Task<T>`/`Task<void>`/`offload<void>` 组合、异常与取消传播的**正反例编译测试**
+  （错误签名必须编译失败）需要"预期编译失败"机制，尚未建立。
 
 ### P1-2 C ABI v1 编译期与运行期检查（R3/R6）—— 大体完成
 
@@ -530,7 +569,43 @@ client_plugins` 合计 1188 passed / 0 failed。日志：
 /tmp/agentxx-p12-sweep-1.log   # 1649/0（扩展回归）
 ```
 
-### 7.4 `b2b5114a` 的历史验证结果
+### 7.4 P1-1 提交的回归
+
+```bash
+cmake --build agent/build/linux-debug --target agentxx_test_repo -j12
+ASAN_OPTIONS=detect_leaks=1:halt_on_error=0 timeout 1500s \
+  agent/build/linux-debug/exec/agentxx_test \
+  ffi_c_api agent_host subagent_tool subagent_bus plugin_sdk plugin_runtime plugins \
+  plugin_resources plugin_multi_instance client_plugins agent memgrowth --fail-fast
+```
+
+```text
+ffi_c_api             117 passed / 0 failed
+plugin_sdk             29 passed / 0 failed     # 新增模块（F13/F19/完成协议）
+plugin_runtime        439 passed / 0 failed
+subagent_bus           21 passed / 0 failed
+subagent_tool         122 passed / 0 failed
+agent_host             95 passed / 0 failed
+plugins               328 passed / 0 failed
+plugin_resources       83 passed / 0 failed
+plugin_multi_instance  29 passed / 0 failed
+client_plugins        309 passed / 0 failed
+agent                  91 passed / 0 failed
+memgrowth              15 passed / 0 failed
+合计                 1678 passed / 0 failed
+```
+
+日志：`/tmp/agentxx-p11-sweep-1.log`。本阶段还暴露并修复了两个环境问题：
+
+1. 编译期 GCC ICE 会在 build 目录留下**残缺目标文件**（本次是
+   `agentxx_obj.dir/src/agent/agent_runner.cpp.o` 的 `.debug_info` 重定位损坏），
+   之后 mold/lld 一律在链接 `agentxx_cli` 时 SIGSEGV，只有 `-fuse-ld=bfd` 会报出
+   “reloc against `.debug_str': error 4”。删掉该 .o 重新编译即恢复（已记录到第 8 节）。
+2. `libneograph_llm.a` / `libneograph_mcp_types.a` 中存在 0 字节成员
+   （`openai_provider.cpp.o`、`types.cpp.o`，来自更早的构建）。当前链接不需要这些
+   成员，暂未处理；若将来出现 `neither ET_REL nor LLVM bitcode` 警告，需重建该库。
+
+### 7.5 `b2b5114a` 的历史验证结果
 
 以下结果测自 `b2b5114a`（同样为 ASan + LSan、`--fail-fast` 的扩展回归）：
 
@@ -571,19 +646,23 @@ client_plugins 309 / agent 91 / memgrowth 15   合计 1338 passed / 0 failed
 5. 注册/启停事务不完整：enable/disable 旧模型、prompt contribution、注册失败回滚覆盖面。
 6. ~~无 ABI 编译期检查~~：P1-2 已加入 C17 `-pedantic-errors` 编译期断言与 C/C++
    布局对照。仍未做的是 C++ 反例编译测试与导出符号白名单检查（见第 3.6、6 节）。
+7. 构建环境脆弱点（本阶段实测）：GCC 16.1 偶发 ICE 后 build 目录可能残留残缺
+   `.o`，链接器（mold/lld）会直接 SIGSEGV 而不是报错。排查手法：
+   `bash <build>/.../link.txt` 换成 `-fuse-ld=bfd` 重跑，bfd 会给出具体坏目标文件；
+   删掉该 `.o` 重新编译即可。不要为此清空整个 build 目录。
 
 ---
 
 ## 9. 下一步执行顺序（建议）
 
-1. 以当前 HEAD（P1-2 提交）为起点，按 0.3 节复跑构建 + 扩展回归，确认基线（应仍是 1649/0）。
+1. 以当前 HEAD（P1-1 提交）为起点，按 0.3 节复跑构建 + 扩展回归，确认基线（应仍是 1678/0）。
 2. ~~P0-1 宿主控制块~~、~~P0-2 Operation 终态~~：已完成（第 3.4 / 3.5 节）。
    可选收尾：client 侧"旧 host 指针在卸载后安全失败"的专项用例；订阅句柄与
    GraphTypeSlot 旧节点的"代次失效 + 迟到调用"独立用例（机制已具备）。
 3. plugin.md 第 11.2 节剩余用例：5（caller 卸载与 provider 未完成互调）、
    8（shutdown 中挂起后台 Task 的顺序）、9（timeout 后立即 unload）。
-4. P1-1 SDK Request + 统一 root adapter（F13/F19）—— 这是 R3 剩下的主体；
-   之后补 P1-2 遗留的 C++ 反例编译测试与导出符号白名单检查。
+4. ~~P1-1 SDK Request + 统一 root adapter（F13/F19）~~：主体已完成（第 3.7 节）。
+   遗留 capability 异步业务、graph node 纳入 adapter、正反例编译测试。
 5. P1-3 / P1-4 Client 语义模型（renderer cache/动作代次）与注册、启停事务。
 6. P2-1 / P2-2 内置插件与 JS 迁移、平台与文档收尾（含 `docs/zh-cn/design/plugins.md`）。
 

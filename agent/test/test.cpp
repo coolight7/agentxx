@@ -41,6 +41,7 @@
 #include "test_plugin_multi_instance.h"
 #include "test_plugin_resources.h"
 #include "test_plugin_runtime.h"
+#include "test_plugin_sdk.h"
 #include "test_plugins.h"
 #include "test_rag_search_tools.h"
 #include "test_regex.h"
@@ -186,6 +187,7 @@ int main(int argn, char** argv) {
         runSync("toolcall_args", agentxx::test::testToolcallArgs);
         runSync("ffi_c_api", agentxx::test::testFfiCApi);
         runSync("plugin_runtime", agentxx::test::testPluginRuntime);
+        runSync("plugin_sdk", agentxx::test::testPluginSdk);
 #ifdef AGENTXX_BUILD_CLIENT
         runSync("config_loader", agentxx::test::testConfigLoader);
         runSync("tui_settings", agentxx::test::testTuiSettings);

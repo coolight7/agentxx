@@ -1266,6 +1266,160 @@ inline void finishIfDone(std::coroutine_handle<Promise> h) {
     }
 }
 
+/* ==================== 根操作 Request 与完成守卫 ====================
+ *
+ * tool / hook / capability / graph / spawn 这些"根操作"共享同一套协议：
+ * 宿主把 args/session/call_id/method 以**只读借用视图**传入 start，插件必须在
+ * 本次调用内复制需要跨挂起保留的数据；接受之后必须 exactly-once 完成。
+ * 下面两个类型把这套协议集中在一处，避免每个 helper 各写一遍。
+ */
+
+/// 根操作拥有型输入（plugin.md 6.2 / F13）。
+///
+/// - C ABI 传入的视图只在 start 调用期间有效，本结构先把它们复制成自己的
+///   `std::string`，业务代码拿到的 `std::string_view` 因此在整个根操作期间有效；
+/// - 同步路径的 Request 在栈上、异步路径的 Request 在 Job 里持有，随完成回调
+///   一起释放；
+/// - 业务需要跨操作保留时仍要自己复制（Request 之外不保证）。
+struct RootRequest {
+    std::string argsJson;  ///< 工具参数 / 能力参数 JSON（空则为 "{}"）
+    std::string sessionId; ///< ABI thread_id / session_id
+    std::string callId;    ///< 工具 tool_call_id；能力方法名放 method
+    std::string method;    ///< 能力方法名（非能力操作为空）
+
+    const AgentxxPluginHost*        host        = nullptr;
+    const AgentxxPluginCancelToken* cancelToken = nullptr; ///< offload/worker 内的取消令牌视图
+
+    static std::string copyView(const AgentxxPluginStringView* sv, const char* fallback = "") {
+        if (!sv || (!sv->data && sv->size == 0)) {
+            return std::string{fallback};
+        }
+        return std::string(sv->data ? sv->data : "", static_cast<size_t>(sv->size));
+    }
+
+    /// 工具：args/session/tool_call_id
+    static RootRequest forTool(
+        const AgentxxPluginHost*       host,
+        const AgentxxPluginStringView* args,
+        const AgentxxPluginStringView* session,
+        const AgentxxPluginStringView* call
+    ) {
+        RootRequest req;
+        req.host      = host;
+        req.argsJson  = copyView(args, "{}");
+        req.sessionId = copyView(session);
+        req.callId    = copyView(call);
+        return req;
+    }
+
+    /// 钩子：node_input_json（args 为空时按 "{}"）
+    static RootRequest forHook(
+        const AgentxxPluginHost* host, const AgentxxPluginStringView* nodeInputJson
+    ) {
+        RootRequest req;
+        req.host     = host;
+        req.argsJson = copyView(nodeInputJson, "{}");
+        return req;
+    }
+
+    /// 能力：method/args
+    static RootRequest forCapability(
+        const AgentxxPluginHost*       host,
+        const AgentxxPluginStringView* method,
+        const AgentxxPluginStringView* args
+    ) {
+        RootRequest req;
+        req.host     = host;
+        req.method   = copyView(method);
+        req.argsJson = copyView(args, "{}");
+        return req;
+    }
+
+    std::string_view args() const noexcept { return argsJson; }
+    std::string_view session() const noexcept { return sessionId; }
+    std::string_view call() const noexcept { return callId; }
+    std::string_view capMethod() const noexcept { return method; }
+};
+
+/// 根操作完成守卫：保证 notify.done 恰好一次，并把异常统一映射为终态。
+///
+/// 规则（plugin.md 不可变原则 5）：
+/// - 业务代码显式调用 ok()/failed()/cancelled() 表示完成；
+/// - 作用域结束时仍未完成（提前 return 等）时析构补一次 FAILED，绝不留下
+///   "已接受但永远不 done"的操作；
+/// - 重复完成只记录，不重复回调宿主。
+///
+/// 异步路径（Task）由 `PromiseBase` 的 notify_/cancelFlag_ 在同一处收束，
+/// 语义与这里的同步路径一致。
+class CompletionGuard {
+public:
+
+    explicit CompletionGuard(const AgentxxPluginOperatorNotify* notify) :
+        notify_(notify ? *notify : AgentxxPluginOperatorNotify{nullptr, nullptr}) {}
+
+    CompletionGuard(const CompletionGuard&)            = delete;
+    CompletionGuard& operator=(const CompletionGuard&) = delete;
+
+    bool completed() const noexcept {
+        return done_.load(std::memory_order_acquire);
+    }
+
+    /// 完成一次（`status` 为 AGENTXX_PLUGIN_OPERATOR_*）；重复调用返回 false。
+    bool complete(int32_t status, std::string_view payload) noexcept {
+        if (!notify_.done) {
+            done_.store(true, std::memory_order_release);
+            return false;
+        }
+        bool expected = false;
+        if (!done_.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
+            return false;
+        }
+        try {
+            auto sv = PluginStringView::from(payload.data(), payload.size());
+            notify_.done(notify_.host_ud, status, &sv);
+        } catch (...) {
+            // 宿主回调不得抛异常；即便抛了也已经置位，不重复派发。
+        }
+        return true;
+    }
+
+    void ok(std::string_view payload = {}) {
+        complete(AGENTXX_PLUGIN_OPERATOR_OK, payload);
+    }
+
+    void failed(std::string_view error) {
+        complete(AGENTXX_PLUGIN_OPERATOR_FAILED, error);
+    }
+
+    void cancelled(std::string_view reason = {}) {
+        complete(AGENTXX_PLUGIN_OPERATOR_CANCELLED, reason);
+    }
+
+    /// 在 catch 块中调用：把当前异常映射为终态（取消异常映射为 CANCELLED）。
+    void fromCurrentException() noexcept {
+        try {
+            throw;
+        } catch (const CancelledException& e) {
+            cancelled(e.what());
+        } catch (const std::exception& e) {
+            failed(e.what());
+        } catch (...) {
+            failed("unknown plugin error");
+        }
+    }
+
+    ~CompletionGuard() {
+        if (!completed()) {
+            complete(AGENTXX_PLUGIN_OPERATOR_FAILED, "plugin did not complete the operation");
+        }
+    }
+
+private:
+
+    AgentxxPluginOperatorNotify notify_{nullptr, nullptr};
+    std::atomic<bool>           done_{false};
+};
+
 template<typename T>
 struct PromiseBase {
     using value_type = T;
@@ -1777,6 +1931,9 @@ public:
         std::function<void()>              starter;
         std::shared_ptr<std::atomic<bool>> cancelFlag;
         void*                              coroAddr = nullptr;
+        /// 后台任务的 OpCtl 由记录持有：任务协程以引用接收它，必须在挂起后仍然
+        /// 有效（放在 starter 栈上会悬垂）。
+        std::shared_ptr<OpCtl> ctl;
     };
 
     std::vector<std::shared_ptr<SpawnRecord>> spawns_;
@@ -2452,9 +2609,15 @@ inline void spawnTaskImpl(Ctx& ctx, Fn&& fn) {
         return;
     }
 
-    auto starter = [&ctx, fn, cancelFlag, recWeak, hostNotify]() {
-        OpCtl ctl{cancelFlag, ctx.host, ctx.iface.cancel, ""};
-        auto  task = fn(ctx, ctl);
+    auto starter = [&ctx, fn, cancelFlag, rec, recWeak, hostNotify]() {
+        // 任务协程以引用接收 ctl：必须由 SpawnRecord 持有到任务结束（不能放在
+        // starter 的栈上，否则任务一挂起就悬垂）。
+        if (!rec->ctl) {
+            rec->ctl = std::make_shared<OpCtl>(
+                OpCtl{cancelFlag, ctx.host, ctx.iface.cancel, ""}
+            );
+        }
+        auto  task = fn(ctx, *rec->ctl);
         if (task.handle_) {
             auto h        = task.handle_;
             task.handle_  = nullptr;
@@ -2551,7 +2714,12 @@ inline void tool(
         ToolShim*                          shim;
         std::shared_ptr<std::atomic<bool>> cancelFlag;
         void*                              coroAddr = nullptr;
-        std::string                        tid;
+        /// 拥有 args/session/tool_call_id：业务协程可能挂起后继续读取这些视图
+        /// （F13），因此它们必须比 start 调用活得久。
+        detail::RootRequest request;
+        /// OpCtl 同样必须由 Job 拥有：业务协程以引用接收它，挂起后仍会读取
+        /// （例如 ctl.throw_if_cancelled()），放在 start 栈上会悬垂。
+        OpCtl ctl;
     };
 
     AgentxxPluginToolSpec spec{};
@@ -2573,34 +2741,37 @@ inline void tool(
                             const AgentxxPluginOperatorNotify* notify,
                             AgentxxPluginString*               error_out) -> void* {
         auto* shim = static_cast<ToolShim*>(user_data);
-        (void)tool_call_id;
         (void)error_out;
-        std::string tidStr(
-            thread_id && thread_id->data ? thread_id->data : "",
-            thread_id ? static_cast<size_t>(thread_id->size) : 0
+        // 先建立拥有型 Request，再把视图交给业务代码：协程挂起期间 args/
+        // session/tool_call_id 由 Job 持有，不再指向宿主借用缓冲区。
+        auto request = detail::RootRequest::forTool(
+            shim && shim->ctx ? shim->ctx->host : nullptr,
+            args_json,
+            thread_id,
+            tool_call_id
         );
         CancelRegistry* cancelReg = nullptr;
         if (shim->ctx) {
             cancelReg = &shim->ctx->cancelRegistry;
         }
         auto cancelFlag = std::make_shared<std::atomic<bool>>(false);
-        if (cancelReg && !tidStr.empty() && cancelReg->isCancelled(tidStr)) {
+        if (cancelReg && !request.sessionId.empty() && cancelReg->isCancelled(request.sessionId)) {
             cancelFlag->store(true, std::memory_order_release);
         }
+
         OpCtl ctl{
             cancelFlag,
             shim->ctx ? shim->ctx->host : nullptr,
             shim->ctx ? shim->ctx->iface.cancel : nullptr,
-            tidStr,
+            request.sessionId,
             cancelReg
         };
 
-        std::string_view args(
-            args_json && args_json->data ? args_json->data : "{}",
-            args_json ? static_cast<size_t>(args_json->size) : 0
-        );
-        auto task = shim->fn(*shim->ctx, args, ctl);
+        auto* job = new Job{shim, cancelFlag, nullptr, std::move(request), std::move(ctl)};
+
+        auto task = shim->fn(*shim->ctx, job->request.args(), job->ctl);
         if (!task.handle_) {
+            delete job;
             return nullptr;
         }
 
@@ -2619,10 +2790,11 @@ inline void tool(
 
         if (h.done()) {
             detail::finishIfDone(h);
+            delete job;
             return nullptr;
         }
 
-        auto* job    = new Job{shim, cancelFlag, h.address(), std::move(tidStr)};
+        job->coroAddr = h.address();
         p.opCleanup_ = [job]() {
             delete job;
         };
@@ -2638,8 +2810,8 @@ inline void tool(
         if (job->cancelFlag) {
             job->cancelFlag->store(true, std::memory_order_release);
         }
-        if (job->shim && job->shim->ctx && !job->tid.empty()) {
-            job->shim->ctx->cancelRegistry.cancel(job->tid);
+        if (job->shim && job->shim->ctx && !job->request.sessionId.empty()) {
+            job->shim->ctx->cancelRegistry.cancel(job->request.sessionId);
         }
         if (job->coroAddr) {
             auto handle
@@ -2997,11 +3169,39 @@ inline void blocking_tool(
     }
 }
 
+/* ==================== 钩子业务签名分发 (同步/异步共用) ==================== */
+
+namespace detail {
+
+/// 按可调用性选择钩子业务签名：fn(ctx, point, input) / fn(ctx, input) / fn(input)。
+/// 返回类型原样转发：同步钩子通常是 void，异步钩子返回 Task<T>（F19 用返回类型
+/// 严格区分同步与异步，签名不匹配时在 if constexpr 分支给出明确错误）。
+template<typename HookFn, typename Ctx>
+inline decltype(auto) invokeHook(HookFn& fn, Ctx& ctx, int32_t pt, std::string_view input) {
+    if constexpr (std::is_invocable_v<HookFn, Ctx&, AgentxxPluginHookPoint, std::string_view>) {
+        return fn(ctx, static_cast<AgentxxPluginHookPoint>(pt), input);
+    } else if constexpr (std::is_invocable_v<HookFn, Ctx&, std::string_view>) {
+        return fn(ctx, input);
+    } else {
+        return fn(input);
+    }
+}
+
+} // namespace detail
+
 template<typename Ctx, typename HookFn>
 inline void hook(Ctx& ctx, AgentxxPluginHookPoint point, HookFn&& fn) {
     struct HookShim {
         Ctx*                 ctx = nullptr;
         std::decay_t<HookFn> fn;
+    };
+
+    /// 异步钩子的 provider 句柄：拥有输入 Request，并由 promise.opCleanup_ 回收。
+    struct HookJob {
+        HookShim*                          shim = nullptr;
+        std::shared_ptr<std::atomic<bool>> cancelFlag;
+        void*                              coroAddr = nullptr;
+        detail::RootRequest                request;
     };
 
     auto shim = ctx.storeShim(std::make_unique<HookShim>(HookShim{&ctx, std::forward<HookFn>(fn)}));
@@ -3018,42 +3218,82 @@ inline void hook(Ctx& ctx, AgentxxPluginHookPoint point, HookFn&& fn) {
                          AgentxxPluginString*               error_out) -> void* {
         auto* shim = static_cast<HookShim*>(user_data);
         (void)error_out;
-        try {
-            std::string_view input(
-                node_input_json && node_input_json->data ? node_input_json->data : "{}",
-                node_input_json ? static_cast<size_t>(node_input_json->size) : 0
-            );
-            if constexpr (std::is_invocable_v<
-                              HookFn,
-                              Ctx&,
-                              AgentxxPluginHookPoint,
-                              std::string_view>) {
-                shim->fn(*shim->ctx, static_cast<AgentxxPluginHookPoint>(pt), input);
-            } else if constexpr (std::is_invocable_v<HookFn, Ctx&, std::string_view>) {
-                shim->fn(*shim->ctx, input);
-            } else {
-                shim->fn(input);
-            }
-            if (notify && notify->done) {
-                auto okSv = PluginStringView::from(nullptr, 0);
-                notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, &okSv);
-            }
-        } catch (const std::exception& e) {
-            if (notify && notify->done) {
-                std::string what  = e.what();
-                auto        errSv = PluginStringView::from(what.data(), what.size());
-                notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_FAILED, &errSv);
-            }
-        } catch (...) {
-            if (notify && notify->done) {
-                auto errSv = PluginStringView::fromCstr("hook error");
-                notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_FAILED, &errSv);
-            }
+        if (!shim || !shim->ctx) {
+            detail::CompletionGuard guard(notify);
+            guard.failed("hook context released");
+            return nullptr;
         }
-        return nullptr;
+
+        /// 输入纳入拥有型 Request：同步钩子在调用期间有效，异步 Task 由 HookJob
+        /// 持有到协程真正结束（F13）。
+        auto request = detail::RootRequest::forHook(shim->ctx->host, node_input_json);
+
+        using HookRet = decltype(
+            detail::invokeHook(shim->fn, *shim->ctx, pt, std::string_view{})
+        );
+        if constexpr (std::is_void_v<HookRet>) {
+            /// 同步 void 钩子：调用返回即完成；异常统一映射为终态。
+            detail::CompletionGuard guard(notify);
+            try {
+                detail::invokeHook(shim->fn, *shim->ctx, pt, request.args());
+                guard.ok();
+            } catch (...) {
+                guard.fromCurrentException();
+            }
+            return nullptr;
+        } else {
+            /// Task<T> 钩子（通常 Task<void>）：由 promise 在协程结束后收束完成
+            /// 通知，返回 Job 作为宿主可取消的 provider 句柄（F19）。
+            auto* job = new HookJob{
+                shim,
+                std::make_shared<std::atomic<bool>>(false),
+                nullptr,
+                std::move(request)
+            };
+            auto task = detail::invokeHook(shim->fn, *shim->ctx, pt, job->request.args());
+            if (!task.handle_) {
+                delete job;
+                detail::CompletionGuard guard(notify);
+                guard.failed("hook returned an empty task");
+                return nullptr;
+            }
+            auto  h      = task.handle_;
+            task.handle_ = nullptr;
+            auto& p      = h.promise();
+            p.notify_     = notify ? *notify : AgentxxPluginOperatorNotify{nullptr, nullptr};
+            p.host_       = job->request.host;
+            p.cancelFlag_ = job->cancelFlag;
+            try {
+                h.resume();
+            } catch (...) {
+                p.set_exception(std::current_exception());
+            }
+            if (h.done()) {
+                detail::finishIfDone(h);
+                delete job;
+                return nullptr;
+            }
+            job->coroAddr = h.address();
+            p.opCleanup_  = [job]() { delete job; };
+            return job;
+        }
     };
 
-    spec.hook_cancel = nullptr;
+    spec.hook_cancel = [](void* user_data, void* op) {
+        (void)user_data;
+        if (!op) {
+            return;
+        }
+        auto* job = static_cast<HookJob*>(op);
+        if (job->cancelFlag) {
+            job->cancelFlag->store(true, std::memory_order_release);
+        }
+        if (job->coroAddr) {
+            auto handle
+                = std::coroutine_handle<detail::PromiseBase<void>>::from_address(job->coroAddr);
+            handle.promise().cancel_outstanding();
+        }
+    };
 
     if (ctx.iface.hooks && ctx.iface.hooks->register_hook) {
         ctx.iface.hooks->register_hook(ctx.host, &spec);
@@ -3082,15 +3322,15 @@ inline void capability(Ctx& ctx, std::string_view capName, CapFn&& fn) {
                AgentxxPluginString*               error_out) -> void* {
                 auto* shim = static_cast<CapShim*>(user_data);
                 (void)error_out;
+                // 能力入参纳入拥有型 Request：业务只读到 Request 拥有的
+                // method/args（F13），不再依赖宿主借用缓冲区。
+                auto request = detail::RootRequest::forCapability(
+                    shim && shim->ctx ? shim->ctx->host : nullptr,
+                    method,
+                    args_json
+                );
+                detail::CompletionGuard guard(notify);
                 try {
-                    std::string_view meth(
-                        method && method->data ? method->data : "",
-                        method ? static_cast<size_t>(method->size) : 0
-                    );
-                    std::string_view args(
-                        args_json && args_json->data ? args_json->data : "{}",
-                        args_json ? static_cast<size_t>(args_json->size) : 0
-                    );
                     std::string res;
                     if constexpr (std::is_invocable_v<
                                       CapFn,
@@ -3098,31 +3338,19 @@ inline void capability(Ctx& ctx, std::string_view capName, CapFn&& fn) {
                                       const AgentxxPluginHost*,
                                       std::string_view,
                                       std::string_view>) {
-                        res = shim->fn(*shim->ctx, caller_host, meth, args);
+                        res = shim->fn(*shim->ctx, caller_host, request.capMethod(), request.args());
                     } else if constexpr (std::is_invocable_v<
                                              CapFn,
                                              Ctx&,
                                              std::string_view,
                                              std::string_view>) {
-                        res = shim->fn(*shim->ctx, meth, args);
+                        res = shim->fn(*shim->ctx, request.capMethod(), request.args());
                     } else {
-                        res = shim->fn(meth, args);
+                        res = shim->fn(request.capMethod(), request.args());
                     }
-                    if (notify && notify->done) {
-                        auto resSv = PluginStringView::from(res.data(), res.size());
-                        notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, &resSv);
-                    }
-                } catch (const std::exception& e) {
-                    if (notify && notify->done) {
-                        std::string what  = e.what();
-                        auto        errSv = PluginStringView::from(what.data(), what.size());
-                        notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_FAILED, &errSv);
-                    }
+                    guard.ok(res);
                 } catch (...) {
-                    if (notify && notify->done) {
-                        auto errSv = PluginStringView::fromCstr("capability error");
-                        notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_FAILED, &errSv);
-                    }
+                    guard.fromCurrentException();
                 }
                 return nullptr;
             },
