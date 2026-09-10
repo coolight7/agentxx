@@ -111,6 +111,17 @@ struct OpCore : std::enable_shared_from_this<OpCore> {
     const std::string& payload() const noexcept { return completion_.payload; }
     bool completed() const noexcept { return state() == PluginOperationState::Completed; }
 
+    /// 完成包已经产生（插件调用了 done）但还没有在 IO 线程提交。
+    ///
+    /// 这是"完成投递失败但被保留"这一状态的可观察表示：executor 停止时完成包
+    /// 进入 runtime 的待重放队列，Operation 保持未终结且继续持有 caller/provider
+    /// lease；实例关闭会因此等到截止时间并进入 CloseFailed（保留 ctx/DSO，可重试），
+    /// 而不是静默泄漏。executor 重新绑定后完成包会重放并只提交一次。
+    bool completionPending() const {
+        std::lock_guard lock(submitMutex_);
+        return completionSubmitted_ && state() != PluginOperationState::Completed;
+    }
+
     void setCallback(AgentxxPluginOperatorCallback cb, void* ud) noexcept {
         callback_ = cb;
         callbackUd_ = ud;
@@ -197,6 +208,17 @@ struct OpCore : std::enable_shared_from_this<OpCore> {
     }
 
 private:
+    /// 取消与完成提交的线性化协议（违反其中任何一条都会重新引入死锁或重复终态）：
+    ///
+    /// 1. `completionSubmitted_` 是"done 已被接受"的唯一切换点：任意线程都只在
+    ///    持有 `submitMutex_` 时读取与置位，因此重复 done、done 与 cancel/reject
+    ///    竞争只会有一个赢家。
+    /// 2. 持有 `submitMutex_` 期间**绝不调用插件或调用方代码**。插件可能在自己的
+    ///    cancel 实现里同步调用 notify.done，若锁内进入插件就会自锁；因此这里
+    ///    用普通 `std::mutex` 也安全（原先的 recursive_mutex 不再需要）。
+    /// 3. 终态（Completed/Rejected）与调用方回调只在 IO 线程的 [commit] /
+    ///    [reject] 中生效，且只在 `completionSubmitted_` 置位之后；
+    ///    [cancelOnIo] 本身不产生终态，只把状态推进到 Cancelling。
     void cancelOnIo() noexcept {
         std::function<void(void*)> cancel;
         void*                     providerHandle = nullptr;
@@ -401,7 +423,8 @@ private:
     uint64_t id_ = 0;
     std::string label_;
     std::atomic<PluginOperationState> state_{PluginOperationState::Accepted};
-    mutable std::recursive_mutex submitMutex_;
+    /// 取消/完成提交的互斥点。协议见 [cancelOnIo] 上方的说明：锁内不调用插件。
+    mutable std::mutex submitMutex_;
     bool completionSubmitted_ = false;
     CompletionPacket completion_;
     OpDrive drive_;

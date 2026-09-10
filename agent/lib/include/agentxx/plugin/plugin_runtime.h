@@ -322,6 +322,15 @@ struct PluginRuntime {
     std::deque<std::shared_ptr<RuntimeAction>> pendingActions;
     uint64_t nextOperationId = 1;
     uint64_t nextGeneration = 1;
+
+    /// 尚未终结（未提交完成）的 Operation 摘要，形如 `label#id, label#id`。
+    ///
+    /// 用途：关闭超时（CloseFailed）时给出"到底是哪些操作没终结"的可观察信息。
+    /// 完成包在 executor 停止期间会保留在待重放队列里，此时 Operation 仍是未终结
+    /// 状态；这个方法就是它的外部可观察表示。空串表示没有未终结操作。
+    ///
+    /// 定义放在 .cpp（OpCore 在此处只有前置声明）。
+    std::string pendingOperationSummary() const;
 };
 
 inline bool runtimeExecutorStopped(const asio::any_io_executor& executor) noexcept {

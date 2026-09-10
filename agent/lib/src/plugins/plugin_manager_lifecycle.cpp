@@ -105,6 +105,34 @@ void NativeLoader::addSearchPath(std::string_view dir) {
 // PluginInstance
 // =====================================================================
 
+/// 未终结 Operation 摘要（见 [PluginRuntime::pendingOperationSummary]）。
+/// 完成包在 executor 停止期间保留在待重放队列，Operation 因此仍未终结；关闭
+/// 超时把它作为可观察线索输出。
+std::string PluginRuntime::pendingOperationSummary() const {
+    std::vector<std::string> items;
+    {
+        std::lock_guard lock(operationsMutex);
+        for (const auto& entry : operations) {
+            const auto& operation = entry.second;
+            if (!operation || operation->completed()) {
+                continue;
+            }
+            std::string item = operation->label();
+            item += '#';
+            item += std::to_string(entry.first);
+            items.push_back(std::move(item));
+        }
+    }
+    std::string out;
+    for (const auto& item : items) {
+        if (!out.empty()) {
+            out += ", ";
+        }
+        out += item;
+    }
+    return out;
+}
+
 PluginInstance::~PluginInstance() {
     if (lifecycleStopPending()) {
         // stop 从未执行：此时 destroy 会看到不完整的插件状态。析构无法“保留”
@@ -568,7 +596,14 @@ asio::awaitable<bool> PluginManager::unloadAsyncUntil(
             inst->lifetime->setState(PluginInstanceState::CloseFailed);
         }
         inst->unloadRequested = false;
-        XX_LOGE("Plugin `{}` unload timed out waiting for inflight callbacks", inst->name);
+        // 未终结 Operation 摘要：完成包可能已产生但没有投递到 IO 线程（executor
+        // 停止时保留在待重放队列），这是 CloseFailed 的唯一可观察线索。
+        const auto pending = runtime() ? runtime()->pendingOperationSummary() : std::string{};
+        XX_LOGE(
+            "Plugin `{}` unload timed out waiting for inflight callbacks (pending operations: {})",
+            inst->name,
+            pending.empty() ? "none" : pending
+        );
         co_return false;
     }
 

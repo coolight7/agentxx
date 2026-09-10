@@ -515,15 +515,72 @@ TestResult testPluginRuntime() {
         worker.join();
         XX_TEST_EXPECT_FALSE(op->completed());
         XX_TEST_EXPECT_EQ(cb.calls, 0);
+        // 完成包已产生但未提交：Operation 未终结、lease 仍被持有（关闭只能等到
+        // 截止时间进入 CloseFailed），并且这个状态可观察。
+        XX_TEST_EXPECT_TRUE(op->completionPending());
+        // provider 持有自己的 lease，caller（互调方）另有 1 个：完成包未提交前
+        // 两侧都不能归零，关闭因此只能等到截止时间。
+        XX_TEST_EXPECT_EQ(f.provider->lifetime->leaseCount(), size_t{1});
+        XX_TEST_EXPECT_EQ(f.caller->lifetime->leaseCount(), size_t{1});
+        XX_TEST_EXPECT_TRUE(
+            f.manager->runtime()->pendingOperationSummary().find("runtime regression")
+            != std::string::npos
+        );
 
         f.io.restart();
         f.manager->setIoExecutor(f.io.get_executor());
         f.drain();
         XX_TEST_EXPECT_TRUE(op->completed());
+        XX_TEST_EXPECT_FALSE(op->completionPending());
         XX_TEST_EXPECT_EQ(cb.calls, 1);
         XX_TEST_EXPECT_EQ(cb.status, AGENTXX_PLUGIN_OPERATOR_OK);
         XX_TEST_EXPECT_EQ(cb.payload, "completion after restart");
         XX_TEST_EXPECT_TRUE(f.manager->runtime()->operations.empty());
+        XX_TEST_EXPECT_TRUE(f.manager->runtime()->pendingOperationSummary().empty());
+        XX_TEST_EXPECT_EQ(f.provider->lifetime->leaseCount(), size_t{0});
+        XX_TEST_EXPECT_EQ(f.caller->lifetime->leaseCount(), size_t{0});
+    }
+
+    /// P0-2: cancel 与 done 并发竞速 —— 只产生一个终态、回调恰好一次；终态之后
+    /// 到达的 cancel 不再进入插件（`OpCore` 用普通 mutex 保证锁内不调用插件）。
+    {
+        for (int round = 0; round < 32; ++round) {
+            RuntimeFixture  f;
+            CallbackState   cb{.fixture = &f};
+            auto            op     = f.operation();
+            auto            notify = op->notify();
+            std::atomic<int> cancels{0};
+            op->accept([&] { ++cancels; });
+            op->setCallback(CallbackState::done, &cb);
+
+            std::barrier start{3};
+            std::thread  doneThread([&] {
+                start.arrive_and_wait();
+                notify.done(notify.host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+            });
+            std::thread  cancelThread([&] {
+                start.arrive_and_wait();
+                cancelPluginOperation(op->handle());
+            });
+            start.arrive_and_wait();
+            doneThread.join();
+            cancelThread.join();
+            f.drain();
+
+            XX_TEST_EXPECT_TRUE(op->completed());
+            XX_TEST_EXPECT_EQ(cb.calls, 1);
+            XX_TEST_EXPECT_EQ(cb.status, AGENTXX_PLUGIN_OPERATOR_OK);
+            const int cancelsAtTerminal = cancels.load();
+            XX_TEST_EXPECT_TRUE(cancelsAtTerminal == 0 || cancelsAtTerminal == 1);
+
+            /// 终态之后的 cancel 是空操作：不进入插件、不改变终态。
+            cancelPluginOperation(op->handle());
+            f.drain();
+            XX_TEST_EXPECT_EQ(cancels.load(), cancelsAtTerminal);
+            XX_TEST_EXPECT_TRUE(op->completed());
+            XX_TEST_EXPECT_TRUE(f.manager->runtime()->operations.empty());
+            XX_TEST_EXPECT_EQ(f.provider->lifetime->leaseCount(), size_t{0});
+        }
     }
 
     /// executor 停止期间的取消请求不能丢失；恢复后取消和同步 done 仍 exactly-once。
