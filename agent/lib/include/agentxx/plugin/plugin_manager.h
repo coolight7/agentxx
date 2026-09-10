@@ -106,8 +106,6 @@ public:
     /// 初始化完成后冻结，后续固定不可变以防上下文变化 (仅 yaml 声明与初始化追加生效)
     bool resourcesFrozen = false;
 
-    AgentxxPluginHost host{};
-
     struct HookRegistration {
         int32_t point;
         void*(AGENTXX_PLUGIN_CALL*

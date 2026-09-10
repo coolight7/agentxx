@@ -13,6 +13,13 @@
 #define XX_TEST_PASSED result.passed
 #define XX_TEST_FAILED result.failed
 
+namespace agentxx::plugin {
+/// 宿主 vtable 装配入口（定义在 plugin_manager_vtable.cpp；测试用它给伪实例
+/// 拿到真实接口表，从而直接驱动 C ABI 入口）。
+const void* AGENTXX_PLUGIN_CALL
+    xx_query_interface(const AgentxxPluginHost*, const AgentxxPluginStringView* iid);
+} // namespace agentxx::plugin
+
 namespace agentxx::test {
 namespace {
 using namespace agentxx::plugin;
@@ -38,7 +45,13 @@ struct RuntimeFixture {
         auto inst = std::make_shared<PluginInstance>(std::move(name));
         inst->self = inst;
         inst->manager = manager;
-        inst->host.opaque = inst.get();
+        // 宿主控制块：交给插件的 host 视图必须有进程级稳定地址；这里装配真实
+        // 宿主 vtable，便于用例直接驱动 C ABI 入口。
+        auto vtableSv = PluginStringView::fromCstr("__vtable");
+        inst->hostControl = PluginHostControl::create(
+            inst,
+            (const AgentxxHostVtable*)xx_query_interface(nullptr, &vtableSv)
+        );
         const std::weak_ptr<PluginRuntime> runtime = manager->runtime();
         inst->lifetime = std::make_shared<InstanceLifetime>(
             io.get_executor(),
@@ -683,6 +696,99 @@ TestResult testPluginRuntime() {
         XX_TEST_EXPECT_TRUE(inst->lifecycleStopPending());
         inst.reset();
         XX_TEST_EXPECT_EQ(gLifecycleDestroys, 0);
+    }
+
+    /// P0-1: 宿主控制块 —— 实例关闭后，插件保存的旧 host 指针仍然可读，但所有
+    /// vtable 入口安全失败；同名新实例使用新令牌，旧指针绝不转交到新实例。
+    {
+        RuntimeFixture f;
+        const auto*   host = f.provider->hostView();
+        XX_TEST_EXPECT_TRUE(host != nullptr);
+        XX_TEST_EXPECT_TRUE(host->opaque != nullptr);
+        const auto ifaces = AgentIfaces::query(host);
+        XX_TEST_EXPECT_TRUE(ifaces.config != nullptr);
+
+        AgentxxPluginString out{};
+        XX_TEST_EXPECT_EQ(ifaces.config->get_plugin_args(host, &out), 0);
+        hostMemoryFree(out.data);
+
+        // 真实路径里由 destroyPlugin 退休控制块；这里直接触发同一动作。
+        f.provider->retireHostControl();
+        out = {};
+        XX_TEST_EXPECT_TRUE(ifaces.config->get_plugin_args(host, &out) != 0);
+        XX_TEST_EXPECT_TRUE(out.data == nullptr);
+
+        // 卸载后重新加载同名实例：旧 host 指针保持失效，不会命中新实例。
+        auto fresh = f.instance("provider", 77);
+        XX_TEST_EXPECT_TRUE(fresh->hostView() != host);
+        XX_TEST_EXPECT_TRUE(fresh->hostView()->opaque != host->opaque);
+        out = {};
+        XX_TEST_EXPECT_TRUE(ifaces.config->get_plugin_args(host, &out) != 0);
+        XX_TEST_EXPECT_TRUE(out.data == nullptr);
+        out = {};
+        XX_TEST_EXPECT_EQ(ifaces.config->get_plugin_args(fresh->hostView(), &out), 0);
+        hostMemoryFree(out.data);
+    }
+
+    /// P0-1: 注册类入口的执行期复查 —— 排队期间实例进入 Closing 时，注册必须被
+    /// 拒绝，注册表与实例记录都不留下残留。
+    {
+        RuntimeFixture f;
+        auto          spec = fakeTool(nullptr, false);
+        XX_TEST_EXPECT_EQ(f.manager->registerTool(f.provider.get(), &spec), 0);
+        XX_TEST_EXPECT_EQ(f.manager->unregisterTool(f.provider.get(), "runtime_tool"), 0);
+        XX_TEST_EXPECT_TRUE(f.provider->toolNames.empty());
+
+        f.provider->lifetime->requestClose();
+        XX_TEST_EXPECT_TRUE(f.manager->registerTool(f.provider.get(), &spec) != 0);
+        XX_TEST_EXPECT_FALSE(f.manager->registry()->contains("runtime_tool"));
+        XX_TEST_EXPECT_TRUE(f.provider->toolNames.empty());
+    }
+
+    /// P0-1: 完整 vtable 路径 —— 工作线程发起注册，随后实例开始关闭。请求要么在
+    /// 入口被拒绝，要么排队到 IO 线程后由执行期复查拒绝；两种顺序都必须无残留、
+    /// 不阻塞调用线程、lease 归零。
+    {
+        RuntimeFixture f;
+        const auto*   host   = f.provider->hostView();
+        const auto    ifaces = AgentIfaces::query(host);
+        XX_TEST_EXPECT_TRUE(ifaces.tools != nullptr);
+
+        // promise/spec 由 shared_ptr 持有：请求若始终未被执行，线程可在不访问
+        // 悬垂栈对象的前提下结束（正常情况下会走 join）。
+        auto spec      = std::make_shared<AgentxxPluginToolSpec>(fakeTool(nullptr, false));
+        auto entered   = std::make_shared<std::promise<void>>();
+        auto rcPromise = std::make_shared<std::promise<int>>();
+        auto rcFuture  = rcPromise->get_future();
+        std::thread pluginThread([host, ifaces, spec, entered, rcPromise] {
+            entered->set_value();
+            rcPromise->set_value(ifaces.tools->register_tool(host, spec.get()));
+        });
+        entered->get_future().wait();
+        f.provider->lifetime->requestClose();
+
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
+        while (rcFuture.wait_for(std::chrono::milliseconds{0}) != std::future_status::ready
+               && std::chrono::steady_clock::now() < deadline) {
+            f.io.restart();
+            f.io.run_for(std::chrono::milliseconds{2});
+        }
+        const bool finished = rcFuture.wait_for(std::chrono::milliseconds{0})
+                              == std::future_status::ready;
+        XX_TEST_EXPECT_TRUE(finished);
+        const int rc = finished ? rcFuture.get() : 0;
+        if (finished) {
+            pluginThread.join();
+        } else {
+            // 请求未终结说明实现违约（挂起）；分离线程避免测试进程被永久阻塞。
+            pluginThread.detach();
+        }
+
+        XX_TEST_EXPECT_TRUE(rc != 0);
+        XX_TEST_EXPECT_FALSE(f.manager->registry()->contains("runtime_tool"));
+        XX_TEST_EXPECT_TRUE(f.provider->toolNames.empty());
+        f.drain();
+        XX_TEST_EXPECT_EQ(f.provider->lifetime->leaseCount(), size_t{0});
     }
     return result;
 }

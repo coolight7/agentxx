@@ -148,6 +148,7 @@ bool PluginInstance::destroyPlugin() noexcept {
     if (!pluginCreated) {
         pluginDestroyed = true;
         destroyDeferred = false;
+        retireHostControl();
         return true;
     }
 
@@ -173,6 +174,8 @@ bool PluginInstance::destroyPlugin() noexcept {
     pluginCtx       = nullptr;
     pluginDestroyed = true;
     destroyDeferred = false;
+    // 插件上下文已销毁：之后插件持有的旧 host 指针只能安全失败。
+    retireHostControl();
     return true;
 }
 
@@ -776,8 +779,11 @@ asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadNativeAsync(
     inst->ownerSelf   = inst;
     inst->manager     = shared_from_this();
     auto vtableSv     = agentxx::plugin::PluginStringView::fromCstr("__vtable");
-    inst->host.vtable = (const AgentxxHostVtable*)xx_query_interface(nullptr, &vtableSv);
-    inst->host.opaque = inst.get();
+    // 交给插件的 host 视图必须放在进程级稳定的控制块里：插件可能在卸载后继续
+    // 使用旧 host 指针，控制块 tombstone 保证这类迟到调用安全失败。
+    inst->hostControl = PluginHostControl::create(
+        inst, (const AgentxxHostVtable*)xx_query_interface(nullptr, &vtableSv)
+    );
     if (cfg) {
         inst->args       = cfg->args;
         inst->configPath = cfg->configPath;
@@ -786,7 +792,7 @@ asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadNativeAsync(
     plugins_[name] = inst;
     int rc         = -1;
     try {
-        rc = createFn(&inst->host, &inst->pluginCtx);
+        rc = createFn(inst->hostView(), &inst->pluginCtx);
         // 即使 create 返回失败，只要交付了上下文，destroy 仍是宿主的责任。
         inst->pluginCreated = (inst->pluginCtx != nullptr);
     } catch (const std::exception& e) {
@@ -900,8 +906,9 @@ asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadBuiltinAsync
     inst->ownerSelf       = inst;
     inst->manager         = shared_from_this();
     auto vtableSv2        = agentxx::plugin::PluginStringView::fromCstr("__vtable");
-    inst->host.vtable     = (const AgentxxHostVtable*)xx_query_interface(nullptr, &vtableSv2);
-    inst->host.opaque     = inst.get();
+    inst->hostControl     = PluginHostControl::create(
+        inst, (const AgentxxHostVtable*)xx_query_interface(nullptr, &vtableSv2)
+    );
     inst->builtinUnload   = entry->destroy;
     inst->lifecycleStart  = entry->start;
     inst->lifecycleStop   = entry->stop;
@@ -913,7 +920,7 @@ asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadBuiltinAsync
     plugins_[name] = inst;
     int rc         = -1;
     try {
-        rc = entry->create(&inst->host, &inst->pluginCtx);
+        rc = entry->create(inst->hostView(), &inst->pluginCtx);
         inst->pluginCreated = (inst->pluginCtx != nullptr);
     } catch (const std::exception& e) {
         XX_LOGE("Builtin plugin `{}` create threw: {}", name, e.what());

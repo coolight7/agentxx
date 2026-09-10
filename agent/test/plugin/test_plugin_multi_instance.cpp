@@ -100,7 +100,7 @@ asio::awaitable<TestResult> run_plugin_multi_instance_tests() {
     auto instB = co_await ctxB->pluginManager->loadPluginAsync(path);
     XX_TEST_EXPECT_TRUE(instA != nullptr);
     XX_TEST_EXPECT_TRUE(instB != nullptr);
-    XX_TEST_EXPECT_TRUE(instA->host.opaque != instB->host.opaque); ///< 宿主句柄互异
+    XX_TEST_EXPECT_TRUE(instA->hostView()->opaque != instB->hostView()->opaque); ///< 宿主句柄互异
     if (!instA || !instB) {
         XX_TEST_EXPECT_TRUE(false);
         co_return TestResult{g_mi_passed, g_mi_failed};
@@ -235,7 +235,7 @@ asio::awaitable<TestResult> run_plugin_multi_instance_tests() {
             size_t inflightAfter = instC->inflight.load(std::memory_order_acquire);
             XX_TEST_EXPECT_TRUE(inflightAfter < inflightBefore || inflightBefore == 0);
             if (err.data) {
-                agentxx::plugin::PluginString::free(&instC->host, &err);
+                agentxx::plugin::PluginString::free(instC->hostView(), &err);
             }
 
             // 取消路径: 新任务 → xx_op_cancel 语义 (op->cancelled CAS + cancelFn)
@@ -252,7 +252,7 @@ asio::awaitable<TestResult> run_plugin_multi_instance_tests() {
                 &err2
             );
             if (err2.data) {
-                agentxx::plugin::PluginString::free(&instC->host, &err2);
+                agentxx::plugin::PluginString::free(instC->hostView(), &err2);
             }
             XX_TEST_EXPECT_TRUE(h2 != nullptr);
             if (h2) {

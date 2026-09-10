@@ -12,7 +12,7 @@ AgentxxPluginOperatorHandle* PluginManager::registerTask(
     }
     std::shared_ptr<OpCore> core;
     try {
-        if (!inst || !notify || !isIoThread()) {
+        if (!inst || !notify || !isIoThread() || !acceptsRegistration(inst)) {
             throw std::runtime_error("register_task: missing instance/notify or wrong IO thread");
         }
         core = OpCore::create(runtime(), inst->self.lock(), nullptr, "background task");

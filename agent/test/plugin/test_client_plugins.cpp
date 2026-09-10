@@ -427,7 +427,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
     // ---- 2.5 接口表: agentxx.client.self get_language / set_language ----
     {
         auto ifaceSelf = agentxx::plugin::queryInterface<AgentxxClientSelfIface>(
-            &inst->host,
+            inst->hostView(),
             AGENTXX_IFACE_CLIENT_SELF
         );
         XX_TEST_EXPECT_TRUE(ifaceSelf != nullptr);
@@ -435,32 +435,32 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             XX_TEST_EXPECT_EQ(ifaceSelf->version, AGENTXX_IFACE_CLIENT_SELF_VERSION);
             // 默认语言为 "en"
             AgentxxPluginString langOut{};
-            XX_TEST_EXPECT_EQ(ifaceSelf->get_language(&inst->host, &langOut), 0);
+            XX_TEST_EXPECT_EQ(ifaceSelf->get_language(inst->hostView(), &langOut), 0);
             XX_TEST_EXPECT_TRUE(langOut.data != nullptr);
             if (langOut.data) {
                 XX_TEST_EXPECT_EQ(std::string(langOut.data, langOut.size), std::string("en"));
             }
-            agentxx::plugin::PluginString::free(&inst->host, &langOut);
+            agentxx::plugin::PluginString::free(inst->hostView(), &langOut);
 
             // 设置语言为 "zh-cn"
             AgentxxPluginStringView zhSv{"zh-cn", 5};
-            XX_TEST_EXPECT_EQ(ifaceSelf->set_language(&inst->host, &zhSv), 0);
-            XX_TEST_EXPECT_EQ(ifaceSelf->get_language(&inst->host, &langOut), 0);
+            XX_TEST_EXPECT_EQ(ifaceSelf->set_language(inst->hostView(), &zhSv), 0);
+            XX_TEST_EXPECT_EQ(ifaceSelf->get_language(inst->hostView(), &langOut), 0);
             XX_TEST_EXPECT_TRUE(langOut.data != nullptr);
             if (langOut.data) {
                 XX_TEST_EXPECT_EQ(std::string(langOut.data, langOut.size), std::string("zh-cn"));
             }
-            agentxx::plugin::PluginString::free(&inst->host, &langOut);
+            agentxx::plugin::PluginString::free(inst->hostView(), &langOut);
 
             // 不支持 auto, 传 auto 回退为 en
             AgentxxPluginStringView autoSv{"auto", 4};
-            XX_TEST_EXPECT_EQ(ifaceSelf->set_language(&inst->host, &autoSv), 0);
-            XX_TEST_EXPECT_EQ(ifaceSelf->get_language(&inst->host, &langOut), 0);
+            XX_TEST_EXPECT_EQ(ifaceSelf->set_language(inst->hostView(), &autoSv), 0);
+            XX_TEST_EXPECT_EQ(ifaceSelf->get_language(inst->hostView(), &langOut), 0);
             XX_TEST_EXPECT_TRUE(langOut.data != nullptr);
             if (langOut.data) {
                 XX_TEST_EXPECT_EQ(std::string(langOut.data, langOut.size), std::string("en"));
             }
-            agentxx::plugin::PluginString::free(&inst->host, &langOut);
+            agentxx::plugin::PluginString::free(inst->hostView(), &langOut);
         }
     }
     XX_TEST_EXPECT_FALSE(mgr->hasCommand("no_such_command"));
@@ -545,11 +545,11 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
 
     // ---- 5. 跨端数据 (agentxx.client.wire 接口表 send_plugin_data 路径) ----
     {
-        const auto wire = agentxx::plugin::ClientIfaces::query(&inst->host).wire;
+        const auto wire = agentxx::plugin::ClientIfaces::query(inst->hostView()).wire;
         XX_TEST_EXPECT_TRUE(wire != nullptr && wire->send_plugin_data != nullptr);
         auto evtSv = agentxx::plugin::PluginStringView::fromCstr("rebuild");
         auto paySv = agentxx::plugin::PluginStringView::fromCstr(R"({"x":1})");
-        int  rc    = wire ? wire->send_plugin_data(&inst->host, &evtSv, &paySv) : -1;
+        int  rc    = wire ? wire->send_plugin_data(inst->hostView(), &evtSv, &paySv) : -1;
         XX_TEST_EXPECT_EQ(rc, 0);
     }
     XX_TEST_EXPECT_TRUE(adapter->dataUpCount() >= 2);
@@ -670,14 +670,16 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         auto                       subFn   = +[](const AgentxxPluginStringView*, void* ud) {
             ++(*static_cast<std::atomic<int>*>(ud));
         };
-        const auto events8 = agentxx::plugin::ClientIfaces::query(&inst2->host).events;
+        const auto events8 = agentxx::plugin::ClientIfaces::query(inst2->hostView()).events;
         XX_TEST_EXPECT_TRUE(events8 != nullptr && events8->subscribe != nullptr);
         for (int i = 0; i < 4; ++i) {
-            subs[i]
-                = events8
-                      ? events8
-                            ->subscribe(&inst2->host, AGENTXX_CLIENT_EVT_CONN_STATE, subFn, &hits)
-                      : nullptr;
+            subs[i] = events8 ? events8->subscribe(
+                                    inst2->hostView(),
+                                    AGENTXX_CLIENT_EVT_CONN_STATE,
+                                    subFn,
+                                    &hits
+                                )
+                              : nullptr;
             XX_TEST_EXPECT_TRUE(subs[i] != nullptr);
         }
         for (int i = 0; i < 4; ++i) {
@@ -700,7 +702,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
 
         auto st    = std::make_shared<DynSubState>();
         st->inst   = inst2.get();
-        st->events = agentxx::plugin::ClientIfaces::query(&inst2->host).events;
+        st->events = agentxx::plugin::ClientIfaces::query(inst2->hostView()).events;
         st->incFn  = +[](const AgentxxPluginStringView*, void* ud) {
             ++(*static_cast<std::atomic<int>*>(ud));
         };
@@ -709,7 +711,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             ++s->hits;
             if (!s->dynSub) {
                 s->dynSub = s->events->subscribe(
-                    &s->inst->host,
+                    s->inst->hostView(),
                     AGENTXX_CLIENT_EVT_USER_INPUT,
                     s->incFn,
                     &s->hits
@@ -719,7 +721,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         AgentxxPluginSubscription* a
             = st->events
                   ? st->events
-                        ->subscribe(&inst2->host, AGENTXX_CLIENT_EVT_USER_INPUT, aFn, st.get())
+                        ->subscribe(inst2->hostView(), AGENTXX_CLIENT_EVT_USER_INPUT, aFn, st.get())
                   : nullptr;
         XX_TEST_EXPECT_TRUE(a != nullptr);
         mgr->onUserInput("sess-test", "x");
@@ -770,10 +772,10 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         if (instCfg) {
             XX_TEST_EXPECT_EQ(instCfg->args.value("client_key", std::string{}), "client_val");
             // agentxx.client.self 接口表 get_plugin_args 返回实例 args
-            const auto          self9 = agentxx::plugin::ClientIfaces::query(&instCfg->host).self;
+            const auto self9 = agentxx::plugin::ClientIfaces::query(instCfg->hostView()).self;
             AgentxxPluginString json{nullptr, 0};
             if (self9 && self9->get_plugin_args) {
-                self9->get_plugin_args(&instCfg->host, &json);
+                self9->get_plugin_args(instCfg->hostView(), &json);
             }
             XX_TEST_EXPECT_TRUE(json.data != nullptr);
             if (json.data) {
@@ -784,7 +786,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                     XX_TEST_EXPECT_TRUE(false);
                     XX_LOGE("[client_plugin] 9.2 args json parse failed: {}", e.what());
                 }
-                agentxx::plugin::PluginString::free(&instCfg->host, &json);
+                agentxx::plugin::PluginString::free(instCfg->hostView(), &json);
             }
             bool unloadedCfg = co_await mgr->unloadAsync("example_plugin");
             XX_TEST_EXPECT_TRUE(unloadedCfg);
@@ -933,9 +935,10 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                         static_cast<std::string*>(ud)->assign(payload->data, payload->size);
                     }
                 };
-                const auto events11 = agentxx::plugin::ClientIfaces::query(&okInst->host).events;
-                auto       sub      = events11 ? events11->subscribe(
-                                          &okInst->host,
+                const auto events11
+                    = agentxx::plugin::ClientIfaces::query(okInst->hostView()).events;
+                auto sub = events11 ? events11->subscribe(
+                                          okInst->hostView(),
                                           AGENTXX_CLIENT_EVT_READY,
                                           readyFn,
                                           &readyPayload
@@ -1461,23 +1464,29 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         auto exInst = co_await mgr->loadNativeAsync(exPath);
         XX_TEST_EXPECT_TRUE(exInst != nullptr);
         if (exInst) {
-            const auto ui = agentxx::plugin::ClientIfaces::query(&exInst->host).ui;
+            const auto ui = agentxx::plugin::ClientIfaces::query(exInst->hostView()).ui;
             XX_TEST_EXPECT_TRUE(ui != nullptr && ui->bind_action_handler != nullptr);
             XX_TEST_EXPECT_TRUE(ui != nullptr && ui->unbind_action_handler != nullptr);
             if (ui && ui->bind_action_handler && ui->unbind_action_handler) {
                 // cb 空 → 失败
                 auto emptySv = agentxx::plugin::PluginStringView::from("", 0);
                 XX_TEST_EXPECT_TRUE(
-                    ui->bind_action_handler(&exInst->host, &emptySv, nullptr, &hitsFallback) != 0
+                    ui->bind_action_handler(exInst->hostView(), &emptySv, nullptr, &hitsFallback)
+                    != 0
                 );
                 // bind fallback ("") + 精确 ("sec1")
                 auto secSv = agentxx::plugin::PluginStringView::fromCstr("sec1");
                 XX_TEST_EXPECT_EQ(
-                    ui->bind_action_handler(&exInst->host, &emptySv, fallbackFn, &hitsFallback),
+                    ui->bind_action_handler(
+                        exInst->hostView(),
+                        &emptySv,
+                        fallbackFn,
+                        &hitsFallback
+                    ),
                     0
                 );
                 XX_TEST_EXPECT_EQ(
-                    ui->bind_action_handler(&exInst->host, &secSv, exactFn, &hitsExact),
+                    ui->bind_action_handler(exInst->hostView(), &secSv, exactFn, &hitsExact),
                     0
                 );
                 // 快照可见 (UI 线程渲染依据)
@@ -1499,14 +1508,14 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 // 覆盖语义: 同 (plugin,target) 重绑覆盖
                 std::atomic<int> hitsExact2{0};
                 XX_TEST_EXPECT_EQ(
-                    ui->bind_action_handler(&exInst->host, &secSv, exactFn, &hitsExact2),
+                    ui->bind_action_handler(exInst->hostView(), &secSv, exactFn, &hitsExact2),
                     0
                 );
                 mgr->dispatchAction("example_plugin", "sec1", "a.do", "{}");
                 XX_TEST_EXPECT_EQ(hitsExact.load(), 1);
                 XX_TEST_EXPECT_EQ(hitsExact2.load(), 1);
                 // unbind 精确后回落 fallback
-                XX_TEST_EXPECT_EQ(ui->unbind_action_handler(&exInst->host, &secSv), 0);
+                XX_TEST_EXPECT_EQ(ui->unbind_action_handler(exInst->hostView(), &secSv), 0);
                 mgr->dispatchAction("example_plugin", "sec1", "a.do", "{}");
                 XX_TEST_EXPECT_EQ(hitsFallback.load(), 2);
                 // disable 保留 / enable 恢复
@@ -1557,7 +1566,10 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                         }
                     }
                 };
-                XX_TEST_EXPECT_EQ(ui->bind_action_handler(&exInst->host, &emptySv, capFn, &cap), 0);
+                XX_TEST_EXPECT_EQ(
+                    ui->bind_action_handler(exInst->hostView(), &emptySv, capFn, &cap),
+                    0
+                );
                 mgr->dispatchAction(
                     "example_plugin",
                     "toolCallX",
@@ -1596,7 +1608,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         auto exInst = co_await mgr->loadNativeAsync(exPath);
         XX_TEST_EXPECT_TRUE(exInst != nullptr);
         if (exInst) {
-            const auto ui = agentxx::plugin::ClientIfaces::query(&exInst->host).ui;
+            const auto ui = agentxx::plugin::ClientIfaces::query(exInst->hostView()).ui;
             XX_TEST_EXPECT_TRUE(ui != nullptr && ui->open_overlay != nullptr);
             XX_TEST_EXPECT_TRUE(ui != nullptr && ui->close_overlay != nullptr);
             if (ui && ui->open_overlay && ui->close_overlay) {
@@ -1604,12 +1616,12 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 AgentxxOverlaySpec badVer{};
                 badVer.version = 99;
                 badVer.type    = AGENTXX_OVERLAY_MERMAID;
-                XX_TEST_EXPECT_TRUE(ui->open_overlay(&exInst->host, &badVer) != 0);
+                XX_TEST_EXPECT_TRUE(ui->open_overlay(exInst->hostView(), &badVer) != 0);
                 // type 越界 → 失败
                 AgentxxOverlaySpec badType{};
                 badType.version = 1;
                 badType.type    = 99;
-                XX_TEST_EXPECT_TRUE(ui->open_overlay(&exInst->host, &badType) != 0);
+                XX_TEST_EXPECT_TRUE(ui->open_overlay(exInst->hostView(), &badType) != 0);
                 // MERMAID 成功 → 适配器收到信号
                 const char*        mermaid = "stateDiagram-v2\n[*] --> a\na --> [*]";
                 AgentxxOverlaySpec spec{};
@@ -1618,7 +1630,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 spec.title      = agentxx::plugin::PluginStringView::fromCstr("T");
                 spec.payload    = agentxx::plugin::PluginStringView::fromCstr(mermaid);
                 spec.extra_json = agentxx::plugin::PluginStringView::fromCstr("{}");
-                XX_TEST_EXPECT_EQ(ui->open_overlay(&exInst->host, &spec), 0);
+                XX_TEST_EXPECT_EQ(ui->open_overlay(exInst->hostView(), &spec), 0);
                 XX_TEST_EXPECT_EQ(adapter->overlayOpenCount(), 1);
                 XX_TEST_EXPECT_EQ(adapter->lastOverlayType(), AGENTXX_OVERLAY_MERMAID);
                 XX_TEST_EXPECT_EQ(adapter->lastOverlayPlugin(), "example_plugin");
@@ -1626,7 +1638,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                     adapter->lastOverlayPayload().find("stateDiagram-v2") != std::string::npos
                 );
                 // close → 适配器收到信号 (不崩溃)
-                ui->close_overlay(&exInst->host);
+                ui->close_overlay(exInst->hostView());
                 XX_TEST_EXPECT_EQ(adapter->overlayCloseCount(), 1);
                 // DIFF payload 透传 (宿主不解析, 仅校验类型)
                 AgentxxOverlaySpec diffSpec{};
@@ -1637,7 +1649,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                     R"({"path":"a","old_str":"x","new_str":"y"})"
                 );
                 diffSpec.extra_json = agentxx::plugin::PluginStringView::fromCstr("{}");
-                XX_TEST_EXPECT_EQ(ui->open_overlay(&exInst->host, &diffSpec), 0);
+                XX_TEST_EXPECT_EQ(ui->open_overlay(exInst->hostView(), &diffSpec), 0);
                 XX_TEST_EXPECT_EQ(adapter->overlayOpenCount(), 2);
                 XX_TEST_EXPECT_EQ(adapter->lastOverlayType(), AGENTXX_OVERLAY_DIFF);
             }

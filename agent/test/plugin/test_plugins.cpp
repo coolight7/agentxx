@@ -124,7 +124,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
     // ---- 2.5 接口表: agentxx.agent.config get_language / set_language ----
     {
         auto ifaceConfig = agentxx::plugin::queryInterface<AgentxxPluginConfigIface>(
-            &inst->host,
+            inst->hostView(),
             AGENTXX_PLUGIN_IFACE_AGENT_CONFIG
         );
         XX_TEST_EXPECT_TRUE(ifaceConfig != nullptr);
@@ -132,34 +132,34 @@ asio::awaitable<TestResult> run_plugin_tests() {
             XX_TEST_EXPECT_EQ(ifaceConfig->version, AGENTXX_PLUGIN_IFACE_AGENT_CONFIG_VERSION);
             // 默认语言为 "en"
             AgentxxPluginString langOut{};
-            XX_TEST_EXPECT_EQ(ifaceConfig->get_language(&inst->host, &langOut), 0);
+            XX_TEST_EXPECT_EQ(ifaceConfig->get_language(inst->hostView(), &langOut), 0);
             XX_TEST_EXPECT_TRUE(langOut.data != nullptr);
             if (langOut.data) {
                 XX_TEST_EXPECT_EQ(std::string(langOut.data, langOut.size), std::string("en"));
             }
-            agentxx::plugin::PluginString::free(&inst->host, &langOut);
+            agentxx::plugin::PluginString::free(inst->hostView(), &langOut);
 
             // 切换语言为 "zh-cn"
             AgentxxPluginStringView zhSv{"zh-cn", 5};
-            XX_TEST_EXPECT_EQ(ifaceConfig->set_language(&inst->host, &zhSv), 0);
+            XX_TEST_EXPECT_EQ(ifaceConfig->set_language(inst->hostView(), &zhSv), 0);
 
-            XX_TEST_EXPECT_EQ(ifaceConfig->get_language(&inst->host, &langOut), 0);
+            XX_TEST_EXPECT_EQ(ifaceConfig->get_language(inst->hostView(), &langOut), 0);
             XX_TEST_EXPECT_TRUE(langOut.data != nullptr);
             if (langOut.data) {
                 XX_TEST_EXPECT_EQ(std::string(langOut.data, langOut.size), std::string("zh-cn"));
             }
-            agentxx::plugin::PluginString::free(&inst->host, &langOut);
+            agentxx::plugin::PluginString::free(inst->hostView(), &langOut);
 
             // 不支持 auto, 传 auto 回退为 en
             AgentxxPluginStringView autoSv{"auto", 4};
-            XX_TEST_EXPECT_EQ(ifaceConfig->set_language(&inst->host, &autoSv), 0);
+            XX_TEST_EXPECT_EQ(ifaceConfig->set_language(inst->hostView(), &autoSv), 0);
 
-            XX_TEST_EXPECT_EQ(ifaceConfig->get_language(&inst->host, &langOut), 0);
+            XX_TEST_EXPECT_EQ(ifaceConfig->get_language(inst->hostView(), &langOut), 0);
             XX_TEST_EXPECT_TRUE(langOut.data != nullptr);
             if (langOut.data) {
                 XX_TEST_EXPECT_EQ(std::string(langOut.data, langOut.size), std::string("en"));
             }
-            agentxx::plugin::PluginString::free(&inst->host, &langOut);
+            agentxx::plugin::PluginString::free(inst->hostView(), &langOut);
         }
     }
 
@@ -651,7 +651,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
             struct SlowCtx : public agentxx::plugin::PluginBase {};
 
             static SlowCtx slowCtx;
-            slowCtx.init(&inst23->host);
+            slowCtx.init(inst23->hostView());
             agentxx::plugin::blocking_tool(
                 slowCtx,
                 "slow_timeout_tool",
@@ -923,14 +923,14 @@ asio::awaitable<TestResult> run_plugin_tests() {
         XX_TEST_EXPECT_TRUE(inst30 != nullptr);
         if (inst30) {
             // 启用状态: publish 正常 (agentxx.agent.events 接口表)
-            const auto ev30 = agentxx::plugin::AgentIfaces::query(&inst30->host).events;
+            const auto ev30 = agentxx::plugin::AgentIfaces::query(inst30->hostView()).events;
             XX_TEST_EXPECT_TRUE(ev30 != nullptr && ev30->publish != nullptr);
             auto topicSv = agentxx::plugin::PluginStringView::fromCstr("demo.topic");
             auto paySv   = agentxx::plugin::PluginStringView::fromCstr(R"({"k":"v"})");
-            XX_TEST_EXPECT_EQ(ev30 ? ev30->publish(&inst30->host, &topicSv, &paySv) : -1, 0);
+            XX_TEST_EXPECT_EQ(ev30 ? ev30->publish(inst30->hostView(), &topicSv, &paySv) : -1, 0);
             ctx->pluginManager->disable("example_plugin");
             // 禁用状态: 接口表 publish 拒绝 (返回非 0)
-            int rc = ev30 ? ev30->publish(&inst30->host, &topicSv, &paySv) : -1;
+            int rc = ev30 ? ev30->publish(inst30->hostView(), &topicSv, &paySv) : -1;
             XX_TEST_EXPECT_TRUE(rc != 0);
             co_await ctx->pluginManager->unloadAsync("example_plugin");
         }
@@ -973,7 +973,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
             XX_TEST_EXPECT_EQ(cbStatus, AGENTXX_PLUGIN_OPERATOR_OK);
             XX_TEST_EXPECT_TRUE(cbPayload.find("k") != std::string::npos);
             if (e.data) {
-                agentxx::plugin::PluginString::free(&inst31->host, &e);
+                agentxx::plugin::PluginString::free(inst31->hostView(), &e);
             }
 
             // 不存在的工具: 装配失败返回 NULL 并带错误
@@ -990,7 +990,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
             XX_TEST_EXPECT_TRUE(op2 == nullptr);
             XX_TEST_EXPECT_TRUE(e2.data != nullptr);
             if (e2.data) {
-                agentxx::plugin::PluginString::free(&inst31->host, &e2);
+                agentxx::plugin::PluginString::free(inst31->hostView(), &e2);
             }
         }
 
@@ -1176,7 +1176,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
             struct BoomCtx : public agentxx::plugin::PluginBase {};
 
             static BoomCtx boomCtx;
-            boomCtx.init(&inst31->host);
+            boomCtx.init(inst31->hostView());
             agentxx::plugin::blocking_tool(
                 boomCtx,
                 "boom_tool",
@@ -1293,7 +1293,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
                 XX_TEST_EXPECT_TRUE(ares.payload.find("repro_check") != std::string::npos);
                 XX_TEST_EXPECT_TRUE(ms < 10000);
                 if (e.data) {
-                    agentxx::plugin::PluginString::free(&instExec->host, &e);
+                    agentxx::plugin::PluginString::free(instExec->hostView(), &e);
                 }
             }
 
@@ -1334,7 +1334,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
                 XX_TEST_EXPECT_TRUE(ares.payload.find("token_case") != std::string::npos);
                 XX_TEST_EXPECT_TRUE(ms < 10000);
                 if (e.data) {
-                    agentxx::plugin::PluginString::free(&instExec->host, &e);
+                    agentxx::plugin::PluginString::free(instExec->hostView(), &e);
                 }
             }
 
@@ -1375,7 +1375,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
                     || ares.payload.find("ExitCode") != std::string::npos
                 );
                 if (e.data) {
-                    agentxx::plugin::PluginString::free(&instExec->host, &e);
+                    agentxx::plugin::PluginString::free(instExec->hostView(), &e);
                 }
             }
 
@@ -1447,7 +1447,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
             XX_TEST_EXPECT_TRUE(ok);
             XX_TEST_EXPECT_TRUE(ms < 1000); // 卸载立即返回，无需等 30s 超时
             if (e.data) {
-                agentxx::plugin::PluginString::free(&instEx->host, &e);
+                agentxx::plugin::PluginString::free(instEx->hostView(), &e);
             }
         }
     }
@@ -1913,17 +1913,18 @@ asio::awaitable<TestResult> run_plugin_tests() {
         rollbackCtx->pluginManager->setIoExecutor(co_await asio::this_coro::executor);
 
         auto fakeInst = std::make_shared<agentxx::plugin::PluginInstance>("fake_rollback_plugin");
-        fakeInst->manager = rollbackCtx->pluginManager;
-        fakeInst->self    = fakeInst;
-        auto vtableSv     = agentxx::plugin::PluginStringView::fromCstr("__vtable");
-        fakeInst->host.vtable
-            = (const AgentxxHostVtable*)agentxx::plugin::xx_query_interface(nullptr, &vtableSv);
-        fakeInst->host.opaque = fakeInst.get();
+        fakeInst->manager     = rollbackCtx->pluginManager;
+        fakeInst->self        = fakeInst;
+        auto vtableSv         = agentxx::plugin::PluginStringView::fromCstr("__vtable");
+        fakeInst->hostControl = agentxx::plugin::PluginHostControl::create(
+            fakeInst,
+            (const AgentxxHostVtable*)agentxx::plugin::xx_query_interface(nullptr, &vtableSv)
+        );
 
         struct FakeCtx : public agentxx::plugin::PluginBase {};
 
         FakeCtx fctx;
-        fctx.init(&fakeInst->host);
+        fctx.init(fakeInst->hostView());
         agentxx::plugin::fast_tool(fctx, "fake_rollback_tool", "desc", "{}", [](std::string_view) {
             return "ok";
         });

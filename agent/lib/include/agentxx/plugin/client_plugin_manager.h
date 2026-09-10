@@ -171,9 +171,6 @@ public:
     /// 直连库路径为空) —— 宿主限制依据, 经 list() 暴露供展示/排查
     PluginManifestInterfaces interfaces;
 
-    /// 本插件专属宿主句柄 (vtable 为宿主静态函数表, opaque 指向本实例)
-    AgentxxPluginHost host{};
-
     /// 事件订阅记录 (卸载自动退订; 仅 io 线程)
     /// - shared_ptr 存储: 订阅节点地址稳定 (vector 扩容/erase 不悬垂);
     ///   dispatch 时拷贝 shared_ptr 保活, 派发中退订/卸载不 UAF

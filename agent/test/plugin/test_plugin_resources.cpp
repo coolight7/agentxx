@@ -344,21 +344,21 @@ interfaces:
             co_return TestResult{g_res_passed, g_res_failed};
         }
         XX_TEST_EXPECT_EQ(inst->name, ownerName);
-        const auto res3 = agentxx::plugin::AgentIfaces::query(&inst->host).resources;
+        const auto res3 = agentxx::plugin::AgentIfaces::query(inst->hostView()).resources;
         XX_TEST_EXPECT_TRUE(res3 != nullptr && res3->register_skill_dir != nullptr);
 
         // ---- 运行时注册 skill 目录 (冻结后应拒绝: 仅 yaml 与初始化时追加生效) ----
         auto runtimeSkill = tmpRoot / "runtime_skills";
         fs::create_directories(runtimeSkill, ec);
         auto skillSv = agentxx::plugin::PluginStringView::fromCstr(runtimeSkill.string().c_str());
-        int  rc      = res3 ? res3->register_skill_dir(&inst->host, &skillSv) : -1;
+        int  rc      = res3 ? res3->register_skill_dir(inst->hostView(), &skillSv) : -1;
         XX_TEST_EXPECT_TRUE(rc != 0); // frozen after init
         XX_TEST_EXPECT_FALSE(contains(skillMw->skillDirPathList(), runtimeSkill.string()));
 
         // ---- 快照 JSON (get_own_resources) - 运行时 skill 未注册故不含 ----
         AgentxxPluginString json{nullptr, 0};
         if (res3 && res3->get_own_resources) {
-            res3->get_own_resources(&inst->host, &json);
+            res3->get_own_resources(inst->hostView(), &json);
         }
         XX_TEST_EXPECT_TRUE(json.data != nullptr);
         if (json.data) {
@@ -366,37 +366,37 @@ interfaces:
                 std::string_view(json.data, json.size).find("runtime_skills")
                 == std::string_view::npos
             );
-            agentxx::plugin::PluginString::free(&inst->host, &json);
+            agentxx::plugin::PluginString::free(inst->hostView(), &json);
         }
 
         // ---- 重复注册亦拒绝 (冻结) ----
-        rc = res3 ? res3->register_skill_dir(&inst->host, &skillSv) : -1;
+        rc = res3 ? res3->register_skill_dir(inst->hostView(), &skillSv) : -1;
         XX_TEST_EXPECT_TRUE(rc != 0);
 
         // ---- 注销亦拒绝 (冻结) ----
-        rc = res3 ? res3->unregister_skill_dir(&inst->host, &skillSv) : -1;
+        rc = res3 ? res3->unregister_skill_dir(inst->hostView(), &skillSv) : -1;
         XX_TEST_EXPECT_TRUE(rc != 0);
         XX_TEST_EXPECT_FALSE(contains(skillMw->skillDirPathList(), runtimeSkill.string()));
-        rc = res3 ? res3->unregister_skill_dir(&inst->host, &skillSv) : 0;
+        rc = res3 ? res3->unregister_skill_dir(inst->hostView(), &skillSv) : 0;
         XX_TEST_EXPECT_TRUE(rc != 0);
 
         // ---- MCP 注册亦拒绝 (冻结) ----
         const char* mcpSpec = R"({"namespace":"t_mcp","url":"http://127.0.0.1:9/sse","timeout":3})";
         auto        mcpSpecSv = agentxx::plugin::PluginStringView::fromCstr(mcpSpec);
-        rc                    = res3 ? res3->register_mcp_server(&inst->host, &mcpSpecSv) : -1;
+        rc                    = res3 ? res3->register_mcp_server(inst->hostView(), &mcpSpecSv) : -1;
         XX_TEST_EXPECT_TRUE(rc != 0);
         co_await sleepMs(150);
         {
             AgentxxPluginString j2{nullptr, 0};
             if (res3 && res3->get_own_resources) {
-                res3->get_own_resources(&inst->host, &j2);
+                res3->get_own_resources(inst->hostView(), &j2);
             }
             XX_TEST_EXPECT_TRUE(j2.data != nullptr);
             if (j2.data) {
                 XX_TEST_EXPECT_TRUE(
                     std::string_view(j2.data, j2.size).find("t_mcp") == std::string_view::npos
                 );
-                agentxx::plugin::PluginString::free(&inst->host, &j2);
+                agentxx::plugin::PluginString::free(inst->hostView(), &j2);
             }
         }
 
@@ -406,7 +406,7 @@ interfaces:
         ctx->agentConfig->mcpServerUrls["yaml_ns2"] = ycfg;
         const char* specConflict   = R"({"namespace":"yaml_ns2","url":"https://z"})";
         auto        specConflictSv = agentxx::plugin::PluginStringView::fromCstr(specConflict);
-        rc = res3 ? res3->register_mcp_server(&inst->host, &specConflictSv) : 0;
+        rc = res3 ? res3->register_mcp_server(inst->hostView(), &specConflictSv) : 0;
         XX_TEST_EXPECT_TRUE(rc != 0);
 
         // ---- 其他 owner 抢注同名命名空间: 因 t_mcp 未注册(冻结)故可成功 ----
@@ -420,7 +420,7 @@ interfaces:
 
         // ---- 注销亦拒绝 (未注册且冻结) ----
         auto tmcpSv = agentxx::plugin::PluginStringView::fromCstr("t_mcp");
-        rc          = res3 ? res3->unregister_mcp_server(&inst->host, &tmcpSv) : -1;
+        rc          = res3 ? res3->unregister_mcp_server(inst->hostView(), &tmcpSv) : -1;
         XX_TEST_EXPECT_TRUE(rc != 0);
         auto snapAfter = applier->ownedBy(ownerName);
         XX_TEST_EXPECT_FALSE(contains(snapAfter.mcpNamespaces, "t_mcp"));

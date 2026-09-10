@@ -202,6 +202,7 @@ bool ClientPluginInstance::destroyPlugin() noexcept {
     if (!pluginCreated) {
         pluginDestroyed = true;
         destroyDeferred = false;
+        retireHostControl();
         return true;
     }
 
@@ -227,6 +228,8 @@ bool ClientPluginInstance::destroyPlugin() noexcept {
     pluginCtx       = nullptr;
     pluginDestroyed = true;
     destroyDeferred = false;
+    // 插件上下文已销毁：之后插件持有的旧 host 指针只能安全失败。
+    retireHostControl();
     return true;
 }
 
@@ -495,8 +498,10 @@ asio::awaitable<std::shared_ptr<ClientPluginInstance>> ClientPluginManager::load
     inst->manager         = weak_from_this();
     inst->self            = inst;
     inst->ownerSelf       = inst;
-    inst->host.opaque     = inst.get();
-    inst->host.vtable     = hostVtable();
+    // 交给插件的 host 视图放在进程级稳定的控制块里：插件可能保存该指针并在
+    // 卸载后继续调用，控制块 tombstone 保证这类迟到调用安全失败（见
+    // [PluginHostControl]）。
+    inst->hostControl     = PluginHostControl::create(inst, hostVtable());
 
     // (v4) min_ui_caps 位图限制已移除: 接口要求统一由上方清单 interfaces
     // require 限制承担 (字符串集, 见
@@ -511,7 +516,7 @@ asio::awaitable<std::shared_ptr<ClientPluginInstance>> ClientPluginManager::load
         *pool_,
         [inst, entryFn]() -> asio::awaitable<int> {
             try {
-                const auto rc = entryFn(&inst->host, &inst->pluginCtx);
+                const auto rc = entryFn(inst->hostView(), &inst->pluginCtx);
                 inst->pluginCreated = (inst->pluginCtx != nullptr);
                 co_return rc;
             } catch (const std::exception& e) {
@@ -1185,10 +1190,10 @@ void ClientPluginManager::invokeCommand(const std::string& name, const std::stri
         actionJson.assign(out.data, out.size);
     }
     if (err.data) {
-        agentxx::plugin::PluginString::free(&inst->host, &err);
+        agentxx::plugin::PluginString::free(inst->hostView(), &err);
     }
     if (out.data) {
-        agentxx::plugin::PluginString::free(&inst->host, &out);
+        agentxx::plugin::PluginString::free(inst->hostView(), &out);
     }
     dispatchCommandAction(actionJson);
 }
@@ -1562,8 +1567,22 @@ void ClientPluginManager::dispatchEvent(int event, const std::string& payloadJso
 
 namespace {
 
-ClientPluginInstance* clientInstOf(const AgentxxPluginHost* host) {
-    return (host && host->opaque) ? static_cast<ClientPluginInstance*>(host->opaque) : nullptr;
+// =====================================================================
+// vtable 入口公共前置
+// =====================================================================
+
+using ClientHostCall = PluginHostCall<ClientPluginInstance, ClientPluginManager>;
+
+/// 解析宿主控制块，并持有实例/管理器强引用与 admission lease。
+///
+/// - 实例已卸载/已关闭，或传入的 host 指针不是本宿主发放的视图 -> 返回空上下文
+///   （实例与管理器均为 nullptr），入口按失败返回，不访问已释放对象；
+/// - `allowClosing=true` 用于只读查询：关闭过程中仍允许执行（lease 保证卸载会
+///   等它返回）。注册、投递新工作等入口必须用默认值，Closing/Disabled 后拒绝；
+/// - 返回的上下文按值捕获进投递闭包后，卸载的 idle 等待会覆盖"已排队但尚未在
+///   IO 线程执行"的阶段，见 [ioCallSyncKeep]。
+static ClientHostCall enterClientHost(const AgentxxPluginHost* host, bool allowClosing = false) {
+    return enterPluginHost<ClientPluginInstance, ClientPluginManager>(host, allowClosing);
 }
 
 /// "agentxx.client.ui" 展示接口表访问器 (定义于下方接口表装配区, 需在
@@ -1577,11 +1596,6 @@ extern const AgentxxClientWireIface    g_clientIfaceWire;
 extern const AgentxxClientSelfIface    g_clientIfaceSelf;
 extern const AgentxxClientJsonIface    g_clientIfaceJson;
 extern const AgentxxClientLogIface     g_clientIfaceLog;
-
-ClientPluginManager* clientMgrOf(const AgentxxPluginHost* host) {
-    auto inst = clientInstOf(host);
-    return inst ? inst->manager.lock().get() : nullptr;
-}
 
 // ---- 内存 ----
 
@@ -1630,7 +1644,8 @@ int32_t AGENTXX_PLUGIN_CALL xx_cjson_get_string(
     if (!out) {
         return -1;
     }
-    auto inst = clientInstOf(host);
+    auto call = enterClientHost(host, /*allowClosing=*/true);
+    auto inst = call.instance();
     if (!inst || agentxx::plugin::PluginStringView::empty(json)
         || agentxx::plugin::PluginStringView::empty(key)) {
         return -1;
@@ -1658,7 +1673,8 @@ int32_t AGENTXX_PLUGIN_CALL xx_cjson_escape(
     if (!out) {
         return -1;
     }
-    auto inst = clientInstOf(host);
+    auto call = enterClientHost(host, /*allowClosing=*/true);
+    auto inst = call.instance();
     if (!inst || agentxx::plugin::PluginStringView::empty(s)) {
         return -1;
     }
@@ -1714,15 +1730,16 @@ AgentxxStatusItem* AGENTXX_PLUGIN_CALL xx_cregister_status_item(
     int32_t                        order
 ) {
     return agentxx::plugin::guardVtableCall(nullptr, [&]() -> AgentxxStatusItem* {
-        auto mgr  = clientMgrOf(host);
-        auto inst = clientInstOf(host);
+        auto call = enterClientHost(host);
+        auto mgr  = call.manager();
+        auto inst = call.instance();
         if (!mgr || !inst || agentxx::plugin::PluginStringView::empty(id)) {
             return static_cast<AgentxxStatusItem*>(nullptr);
         }
         auto idVal = *id;
         auto jsonVal
             = initial_json ? *initial_json : agentxx::plugin::PluginStringView::from("{}", 2);
-        return ioCallSync<AgentxxStatusItem*>(mgr, [&]() -> AgentxxStatusItem* {
+        return ioCallSyncKeep<AgentxxStatusItem*>(call, mgr, [&]() -> AgentxxStatusItem* {
             return static_cast<AgentxxStatusItem*>(
                 mgr->registerStatusItem(inst, idVal, jsonVal, align, order)
             );
@@ -1736,13 +1753,14 @@ int32_t AGENTXX_PLUGIN_CALL xx_cupdate_status_item(
     const AgentxxPluginStringView* json
 ) {
     return agentxx::plugin::guardVtableCall(-1, [&]() -> int32_t {
-        auto mgr  = clientMgrOf(host);
-        auto inst = clientInstOf(host);
+        auto call = enterClientHost(host);
+        auto mgr  = call.manager();
+        auto inst = call.instance();
         if (!mgr || !inst || !item || !json) {
             return -1;
         }
         auto jsonVal = *json;
-        return ioCallSync<int32_t>(mgr, [&]() -> int32_t {
+        return ioCallSyncKeep<int32_t>(call, mgr, [&]() -> int32_t {
             return mgr->updateStatusItem(inst, item, jsonVal);
         });
     });
@@ -1751,12 +1769,13 @@ int32_t AGENTXX_PLUGIN_CALL xx_cupdate_status_item(
 void AGENTXX_PLUGIN_CALL
     xx_cunregister_status_item(const AgentxxPluginHost* host, AgentxxStatusItem* item) {
     agentxx::plugin::guardVtableCallVoid([&]() {
-        auto mgr  = clientMgrOf(host);
-        auto inst = clientInstOf(host);
+        auto call = enterClientHost(host);
+        auto mgr  = call.manager();
+        auto inst = call.instance();
         if (!mgr || !inst || !item) {
             return;
         }
-        ioCallSyncVoid(mgr, [&]() {
+        ioCallSyncVoidKeep(call, mgr, [&]() {
             mgr->unregisterStatusItem(inst, item);
         });
     });
@@ -1770,14 +1789,15 @@ AgentxxPanel* AGENTXX_PLUGIN_CALL xx_cregister_panel(
     const AgentxxPluginStringView* props_json
 ) {
     return agentxx::plugin::guardVtableCall(nullptr, [&]() -> AgentxxPanel* {
-        auto mgr  = clientMgrOf(host);
-        auto inst = clientInstOf(host);
+        auto call = enterClientHost(host);
+        auto mgr  = call.manager();
+        auto inst = call.instance();
         if (!mgr || !inst || agentxx::plugin::PluginStringView::empty(id)) {
             return static_cast<AgentxxPanel*>(nullptr);
         }
         auto idVal    = *id;
         auto propsVal = props_json ? *props_json : agentxx::plugin::PluginStringView::from("{}", 2);
-        return ioCallSync<AgentxxPanel*>(mgr, [&]() -> AgentxxPanel* {
+        return ioCallSyncKeep<AgentxxPanel*>(call, mgr, [&]() -> AgentxxPanel* {
             return static_cast<AgentxxPanel*>(mgr->registerPanel(inst, idVal, propsVal));
         });
     });
@@ -1789,13 +1809,14 @@ int32_t AGENTXX_PLUGIN_CALL xx_cupdate_panel(
     const AgentxxPluginStringView* items_json
 ) {
     return agentxx::plugin::guardVtableCall(-1, [&]() -> int32_t {
-        auto mgr  = clientMgrOf(host);
-        auto inst = clientInstOf(host);
+        auto call = enterClientHost(host);
+        auto mgr  = call.manager();
+        auto inst = call.instance();
         if (!mgr || !inst || !panel || !items_json) {
             return -1;
         }
         auto itemsVal = *items_json;
-        return ioCallSync<int32_t>(mgr, [&]() -> int32_t {
+        return ioCallSyncKeep<int32_t>(call, mgr, [&]() -> int32_t {
             return mgr->updatePanel(inst, panel, itemsVal);
         });
     });
@@ -1803,12 +1824,13 @@ int32_t AGENTXX_PLUGIN_CALL xx_cupdate_panel(
 
 void AGENTXX_PLUGIN_CALL xx_cunregister_panel(const AgentxxPluginHost* host, AgentxxPanel* panel) {
     agentxx::plugin::guardVtableCallVoid([&]() {
-        auto mgr  = clientMgrOf(host);
-        auto inst = clientInstOf(host);
+        auto call = enterClientHost(host);
+        auto mgr  = call.manager();
+        auto inst = call.instance();
         if (!mgr || !inst || !panel) {
             return;
         }
-        ioCallSyncVoid(mgr, [&]() {
+        ioCallSyncVoidKeep(call, mgr, [&]() {
             mgr->unregisterPanel(inst, panel);
         });
     });
@@ -1822,14 +1844,15 @@ AgentxxInfoSection* AGENTXX_PLUGIN_CALL xx_cregister_info_section(
     const AgentxxPluginStringView* props_json
 ) {
     return agentxx::plugin::guardVtableCall(nullptr, [&]() -> AgentxxInfoSection* {
-        auto mgr  = clientMgrOf(host);
-        auto inst = clientInstOf(host);
+        auto call = enterClientHost(host);
+        auto mgr  = call.manager();
+        auto inst = call.instance();
         if (!mgr || !inst || agentxx::plugin::PluginStringView::empty(id)) {
             return static_cast<AgentxxInfoSection*>(nullptr);
         }
         auto idVal    = *id;
         auto propsVal = props_json ? *props_json : agentxx::plugin::PluginStringView::from("{}", 2);
-        return ioCallSync<AgentxxInfoSection*>(mgr, [&]() -> AgentxxInfoSection* {
+        return ioCallSyncKeep<AgentxxInfoSection*>(call, mgr, [&]() -> AgentxxInfoSection* {
             return static_cast<AgentxxInfoSection*>(mgr->registerInfoSection(inst, idVal, propsVal)
             );
         });
@@ -1842,13 +1865,14 @@ int32_t AGENTXX_PLUGIN_CALL xx_cupdate_info_section(
     const AgentxxPluginStringView* items_json
 ) {
     return agentxx::plugin::guardVtableCall(-1, [&]() -> int32_t {
-        auto mgr  = clientMgrOf(host);
-        auto inst = clientInstOf(host);
+        auto call = enterClientHost(host);
+        auto mgr  = call.manager();
+        auto inst = call.instance();
         if (!mgr || !inst || !section || !items_json) {
             return -1;
         }
         auto itemsVal = *items_json;
-        return ioCallSync<int32_t>(mgr, [&]() -> int32_t {
+        return ioCallSyncKeep<int32_t>(call, mgr, [&]() -> int32_t {
             return mgr->updateInfoSection(inst, section, itemsVal);
         });
     });
@@ -1857,12 +1881,13 @@ int32_t AGENTXX_PLUGIN_CALL xx_cupdate_info_section(
 void AGENTXX_PLUGIN_CALL
     xx_cunregister_info_section(const AgentxxPluginHost* host, AgentxxInfoSection* section) {
     agentxx::plugin::guardVtableCallVoid([&]() {
-        auto mgr  = clientMgrOf(host);
-        auto inst = clientInstOf(host);
+        auto call = enterClientHost(host);
+        auto mgr  = call.manager();
+        auto inst = call.instance();
         if (!mgr || !inst || !section) {
             return;
         }
-        ioCallSyncVoid(mgr, [&]() {
+        ioCallSyncVoidKeep(call, mgr, [&]() {
             mgr->unregisterInfoSection(inst, section);
         });
     });
@@ -1874,15 +1899,16 @@ int32_t AGENTXX_PLUGIN_CALL xx_cupdate_tool_decor(
     const AgentxxPluginStringView* decor_json
 ) {
     return agentxx::plugin::guardVtableCall(-1, [&]() -> int32_t {
-        auto mgr  = clientMgrOf(host);
-        auto inst = clientInstOf(host);
+        auto call = enterClientHost(host);
+        auto mgr  = call.manager();
+        auto inst = call.instance();
         if (!mgr || !inst) {
             return -1;
         }
         auto tcidVal
             = tool_call_id ? *tool_call_id : agentxx::plugin::PluginStringView::from("", 0);
         auto decorVal = decor_json ? *decor_json : agentxx::plugin::PluginStringView::from("", 0);
-        return ioCallSync<int32_t>(mgr, [&]() -> int32_t {
+        return ioCallSyncKeep<int32_t>(call, mgr, [&]() -> int32_t {
             return mgr->updateToolDecor(inst, tcidVal, decorVal);
         });
     });
@@ -1891,12 +1917,13 @@ int32_t AGENTXX_PLUGIN_CALL xx_cupdate_tool_decor(
 int32_t AGENTXX_PLUGIN_CALL
     xx_cregister_tool_renderer(const AgentxxPluginHost* host, const AgentxxToolRenderSpec* spec) {
     return agentxx::plugin::guardVtableCall(-1, [&]() -> int32_t {
-        auto mgr  = clientMgrOf(host);
-        auto inst = clientInstOf(host);
+        auto call = enterClientHost(host);
+        auto mgr  = call.manager();
+        auto inst = call.instance();
         if (!mgr || !inst || !spec) {
             return -1;
         }
-        return ioCallSync<int32_t>(mgr, [&]() -> int32_t {
+        return ioCallSyncKeep<int32_t>(call, mgr, [&]() -> int32_t {
             return mgr->registerToolRenderer(inst, spec);
         });
     });
@@ -1907,13 +1934,14 @@ int32_t AGENTXX_PLUGIN_CALL xx_cunregister_tool_renderer(
     const AgentxxPluginStringView* tool_name
 ) {
     return agentxx::plugin::guardVtableCall(-1, [&]() -> int32_t {
-        auto mgr  = clientMgrOf(host);
-        auto inst = clientInstOf(host);
+        auto call = enterClientHost(host);
+        auto mgr  = call.manager();
+        auto inst = call.instance();
         if (!mgr || !inst || !tool_name) {
             return -1;
         }
         auto tnameVal = *tool_name;
-        return ioCallSync<int32_t>(mgr, [&]() -> int32_t {
+        return ioCallSyncKeep<int32_t>(call, mgr, [&]() -> int32_t {
             return mgr->unregisterToolRenderer(inst, tnameVal);
         });
     });
@@ -1930,14 +1958,15 @@ int32_t AGENTXX_PLUGIN_CALL xx_cregister_command(
     void* ud
 ) {
     return agentxx::plugin::guardVtableCall(-1, [&]() -> int32_t {
-        auto mgr  = clientMgrOf(host);
-        auto inst = clientInstOf(host);
+        auto call = enterClientHost(host);
+        auto mgr  = call.manager();
+        auto inst = call.instance();
         if (!mgr || !inst || !execute || agentxx::plugin::PluginStringView::empty(name)) {
             return -1;
         }
         auto nameVal = *name;
         auto descVal = description ? *description : agentxx::plugin::PluginStringView::from("", 0);
-        return ioCallSync<int32_t>(mgr, [&]() -> int32_t {
+        return ioCallSyncKeep<int32_t>(call, mgr, [&]() -> int32_t {
             return mgr->registerCommand(inst, nameVal, descVal, execute, ud);
         });
     });
@@ -1946,13 +1975,14 @@ int32_t AGENTXX_PLUGIN_CALL xx_cregister_command(
 int32_t AGENTXX_PLUGIN_CALL
     xx_cunregister_command(const AgentxxPluginHost* host, const AgentxxPluginStringView* name) {
     return agentxx::plugin::guardVtableCall(-1, [&]() -> int32_t {
-        auto mgr  = clientMgrOf(host);
-        auto inst = clientInstOf(host);
+        auto call = enterClientHost(host);
+        auto mgr  = call.manager();
+        auto inst = call.instance();
         if (!mgr || !inst || agentxx::plugin::PluginStringView::empty(name)) {
             return -1;
         }
         auto nameVal = *name;
-        return ioCallSync<int32_t>(mgr, [&]() -> int32_t {
+        return ioCallSyncKeep<int32_t>(call, mgr, [&]() -> int32_t {
             return mgr->unregisterCommand(inst, nameVal);
         });
     });
@@ -1966,12 +1996,13 @@ void AGENTXX_PLUGIN_CALL xx_cshow_toast(
     int32_t                        level
 ) {
     agentxx::plugin::guardVtableCallVoid([&]() {
-        auto mgr = clientMgrOf(host);
+        auto call = enterClientHost(host);
+        auto mgr = call.manager();
         if (!mgr || !mgr->uiAdapter() || !text) {
             return;
         }
         std::string textStr{text->data ? text->data : "", static_cast<size_t>(text->size)};
-        ioCallSyncVoid(mgr, [&]() {
+        ioCallSyncVoidKeep(call, mgr, [&]() {
             mgr->uiAdapter()->onToast(textStr, level);
         });
     });
@@ -1986,15 +2017,16 @@ AgentxxPluginSubscription* AGENTXX_PLUGIN_CALL xx_csubscribe(
     void* ud
 ) {
     return agentxx::plugin::guardVtableCall(nullptr, [&]() -> AgentxxPluginSubscription* {
-        auto mgr  = clientMgrOf(host);
-        auto inst = clientInstOf(host);
+        auto call = enterClientHost(host);
+        auto mgr  = call.manager();
+        auto inst = call.instance();
         if (!mgr || !inst || !handler) {
             return static_cast<AgentxxPluginSubscription*>(nullptr);
         }
         if (event < 0 || event >= AGENTXX_CLIENT_EVT_COUNT) {
             return static_cast<AgentxxPluginSubscription*>(nullptr);
         }
-        return ioCallSync<AgentxxPluginSubscription*>(mgr, [&]() -> AgentxxPluginSubscription* {
+        return ioCallSyncKeep<AgentxxPluginSubscription*>(call, mgr, [&]() -> AgentxxPluginSubscription* {
             return static_cast<AgentxxPluginSubscription*>(mgr->subscribe(inst, event, handler, ud)
             );
         });
@@ -2007,9 +2039,10 @@ void AGENTXX_PLUGIN_CALL xx_cunsubscribe(AgentxxPluginSubscription* sub) {
             return;
         }
         auto impl = reinterpret_cast<ClientSubscriptionImpl*>(sub);
-        auto mgr  = impl->inst ? impl->inst->manager.lock().get() : nullptr;
+        // 持有管理器强引用：ioCallSyncVoid 投递期间管理器必须存活。
+        auto mgr = impl->inst ? impl->inst->manager.lock() : nullptr;
         if (mgr) {
-            ioCallSyncVoid(mgr, [&]() {
+            ioCallSyncVoid(mgr.get(), [mgr, impl]() {
                 mgr->unsubscribe(reinterpret_cast<AgentxxPluginSubscription*>(impl));
             });
         }
@@ -2026,11 +2059,12 @@ int32_t AGENTXX_PLUGIN_CALL
         if (!out) {
             return -1;
         }
-        auto mgr = clientMgrOf(host);
+        auto call = enterClientHost(host, /*allowClosing=*/true);
+        auto mgr = call.manager();
         if (!mgr) {
             return -1;
         }
-        auto s = ioCallSync<std::string>(mgr, [&]() -> std::string {
+        auto s = ioCallSyncKeep<std::string>(call, mgr, [&]() -> std::string {
             return mgr->clientStateJson();
         });
         hostMemorySetString(out, s);
@@ -2046,14 +2080,15 @@ int32_t AGENTXX_PLUGIN_CALL xx_csend_user_input(
     const AgentxxPluginStringView* text
 ) {
     return agentxx::plugin::guardVtableCall(-1, [&]() -> int32_t {
-        auto mgr  = clientMgrOf(host);
-        auto inst = clientInstOf(host);
+        auto call = enterClientHost(host);
+        auto mgr  = call.manager();
+        auto inst = call.instance();
         if (!mgr || !inst || agentxx::plugin::PluginStringView::empty(text)) {
             return -1;
         }
         auto tidVal  = thread_id ? *thread_id : agentxx::plugin::PluginStringView::from("", 0);
         auto textVal = *text;
-        return ioCallSync<int32_t>(mgr, [&]() -> int32_t {
+        return ioCallSyncKeep<int32_t>(call, mgr, [&]() -> int32_t {
             mgr->sendUserInputToPeer(inst, tidVal, textVal);
             return 0;
         });
@@ -2063,13 +2098,14 @@ int32_t AGENTXX_PLUGIN_CALL xx_csend_user_input(
 void AGENTXX_PLUGIN_CALL
     xx_crequest_cancel(const AgentxxPluginHost* host, const AgentxxPluginStringView* thread_id) {
     agentxx::plugin::guardVtableCallVoid([&]() {
-        auto mgr  = clientMgrOf(host);
-        auto inst = clientInstOf(host);
+        auto call = enterClientHost(host);
+        auto mgr  = call.manager();
+        auto inst = call.instance();
         if (!mgr || !inst) {
             return;
         }
         auto tidVal = thread_id ? *thread_id : agentxx::plugin::PluginStringView::from("", 0);
-        ioCallSyncVoid(mgr, [&]() {
+        ioCallSyncVoidKeep(call, mgr, [&]() {
             mgr->requestCancelToPeer(inst, tidVal);
         });
     });
@@ -2083,14 +2119,15 @@ int32_t AGENTXX_PLUGIN_CALL xx_csend_plugin_data(
     const AgentxxPluginStringView* json
 ) {
     return agentxx::plugin::guardVtableCall(-1, [&]() -> int32_t {
-        auto mgr  = clientMgrOf(host);
-        auto inst = clientInstOf(host);
+        auto call = enterClientHost(host);
+        auto mgr  = call.manager();
+        auto inst = call.instance();
         if (!mgr || !inst || agentxx::plugin::PluginStringView::empty(event)) {
             return -1;
         }
         auto evtVal  = *event;
         auto jsonVal = json ? *json : agentxx::plugin::PluginStringView::from("{}", 2);
-        return ioCallSync<int32_t>(mgr, [&]() -> int32_t {
+        return ioCallSyncKeep<int32_t>(call, mgr, [&]() -> int32_t {
             return mgr->sendPluginDataToPeer(inst, evtVal, jsonVal);
         });
     });
@@ -2104,12 +2141,13 @@ int32_t AGENTXX_PLUGIN_CALL
         if (!out) {
             return -1;
         }
-        auto mgr  = clientMgrOf(host);
-        auto inst = clientInstOf(host);
+        auto call = enterClientHost(host, /*allowClosing=*/true);
+        auto mgr  = call.manager();
+        auto inst = call.instance();
         if (!mgr || !inst) {
             return -1;
         }
-        auto s = ioCallSync<std::string>(mgr, [&]() -> std::string {
+        auto s = ioCallSyncKeep<std::string>(call, mgr, [&]() -> std::string {
             return mgr->getOwnInfoJson(inst);
         });
         hostMemorySetString(out, s);
@@ -2123,12 +2161,13 @@ int32_t AGENTXX_PLUGIN_CALL
         if (!out) {
             return -1;
         }
-        auto mgr  = clientMgrOf(host);
-        auto inst = clientInstOf(host);
+        auto call = enterClientHost(host, /*allowClosing=*/true);
+        auto mgr  = call.manager();
+        auto inst = call.instance();
         if (!mgr || !inst) {
             return -1;
         }
-        auto s = ioCallSync<std::string>(mgr, [&]() -> std::string {
+        auto s = ioCallSyncKeep<std::string>(call, mgr, [&]() -> std::string {
             return mgr->getPluginArgsJson(inst);
         });
         hostMemorySetString(out, s);
@@ -2142,12 +2181,13 @@ int32_t AGENTXX_PLUGIN_CALL
         if (!out) {
             return -1;
         }
-        auto mgr  = clientMgrOf(host);
-        auto inst = clientInstOf(host);
+        auto call = enterClientHost(host, /*allowClosing=*/true);
+        auto mgr  = call.manager();
+        auto inst = call.instance();
         if (!mgr || !inst || inst->configPath.empty()) {
             return -1;
         }
-        auto s = ioCallSync<std::string>(mgr, [&]() -> std::string {
+        auto s = ioCallSyncKeep<std::string>(call, mgr, [&]() -> std::string {
             return mgr->getPluginConfigPath(inst);
         });
         if (s.empty()) {
@@ -2164,11 +2204,12 @@ static int32_t AGENTXX_PLUGIN_CALL
         if (!out) {
             return -1;
         }
-        auto mgr = clientMgrOf(host);
+        auto call = enterClientHost(host, /*allowClosing=*/true);
+        auto mgr = call.manager();
         if (!mgr) {
             return -1;
         }
-        auto s = ioCallSync<std::string>(mgr, [&]() -> std::string {
+        auto s = ioCallSyncKeep<std::string>(call, mgr, [&]() -> std::string {
             return mgr->getLanguage();
         });
         if (s.empty()) {
@@ -2182,14 +2223,15 @@ static int32_t AGENTXX_PLUGIN_CALL
 static int32_t AGENTXX_PLUGIN_CALL
     xx_cset_language(const AgentxxPluginHost* host, const AgentxxPluginStringView* language) {
     return agentxx::plugin::guardVtableCall(-1, [&]() -> int32_t {
-        auto mgr = clientMgrOf(host);
+        auto call = enterClientHost(host);
+        auto mgr = call.manager();
         if (!mgr) {
             return -1;
         }
         std::string lang = (language && language->data)
                                ? std::string(language->data, static_cast<size_t>(language->size))
                                : std::string{};
-        ioCallSyncVoid(mgr, [&]() {
+        ioCallSyncVoidKeep(call, mgr, [&]() {
             mgr->setLanguage(lang);
         });
         return 0;
@@ -2205,13 +2247,14 @@ int32_t AGENTXX_PLUGIN_CALL xx_cbind_action_handler(
     void*                          user_data
 ) {
     return agentxx::plugin::guardVtableCall(-1, [&]() -> int32_t {
-        auto mgr  = clientMgrOf(host);
-        auto inst = clientInstOf(host);
+        auto call = enterClientHost(host);
+        auto mgr  = call.manager();
+        auto inst = call.instance();
         if (!mgr || !inst || !on_action) {
             return -1;
         }
         auto targetVal = target_id ? *target_id : agentxx::plugin::PluginStringView::from("", 0);
-        return ioCallSync<int32_t>(mgr, [&]() -> int32_t {
+        return ioCallSyncKeep<int32_t>(call, mgr, [&]() -> int32_t {
             return mgr->bindActionHandler(inst, targetVal, on_action, user_data);
         });
     });
@@ -2222,13 +2265,14 @@ int32_t AGENTXX_PLUGIN_CALL xx_cunbind_action_handler(
     const AgentxxPluginStringView* target_id
 ) {
     return agentxx::plugin::guardVtableCall(-1, [&]() -> int32_t {
-        auto mgr  = clientMgrOf(host);
-        auto inst = clientInstOf(host);
+        auto call = enterClientHost(host);
+        auto mgr  = call.manager();
+        auto inst = call.instance();
         if (!mgr || !inst) {
             return -1;
         }
         auto targetVal = target_id ? *target_id : agentxx::plugin::PluginStringView::from("", 0);
-        return ioCallSync<int32_t>(mgr, [&]() -> int32_t {
+        return ioCallSyncKeep<int32_t>(call, mgr, [&]() -> int32_t {
             return mgr->unbindActionHandler(inst, targetVal);
         });
     });
@@ -2237,12 +2281,13 @@ int32_t AGENTXX_PLUGIN_CALL xx_cunbind_action_handler(
 int32_t AGENTXX_PLUGIN_CALL
     xx_copen_overlay(const AgentxxPluginHost* host, const AgentxxOverlaySpec* spec) {
     return agentxx::plugin::guardVtableCall(-1, [&]() -> int32_t {
-        auto mgr  = clientMgrOf(host);
-        auto inst = clientInstOf(host);
+        auto call = enterClientHost(host);
+        auto mgr  = call.manager();
+        auto inst = call.instance();
         if (!mgr || !inst || !spec) {
             return -1;
         }
-        return ioCallSync<int32_t>(mgr, [&]() -> int32_t {
+        return ioCallSyncKeep<int32_t>(call, mgr, [&]() -> int32_t {
             return mgr->openOverlay(inst, spec);
         });
     });
@@ -2250,12 +2295,13 @@ int32_t AGENTXX_PLUGIN_CALL
 
 void AGENTXX_PLUGIN_CALL xx_cclose_overlay(const AgentxxPluginHost* host) {
     agentxx::plugin::guardVtableCallVoid([&]() {
-        auto mgr  = clientMgrOf(host);
-        auto inst = clientInstOf(host);
+        auto call = enterClientHost(host);
+        auto mgr  = call.manager();
+        auto inst = call.instance();
         if (!mgr || !inst) {
             return;
         }
-        ioCallSyncVoid(mgr, [&]() {
+        ioCallSyncVoidKeep(call, mgr, [&]() {
             mgr->closeOverlay(inst);
         });
     });
@@ -2364,6 +2410,11 @@ void* ClientPluginManager::registerStatusItem(
     int                     order
 ) {
     if (!inst || agentxx::plugin::PluginStringView::empty(id)) {
+        return nullptr;
+    }
+    // 执行期复查：请求可能排在 IO 队列里，等执行时实例已进入 Closing/Disabled。
+    if (!acceptsRegistration(inst)) {
+        XX_LOGW("[client_plugin] `{}` registerStatusItem rejected: closing or disabled", inst->name);
         return nullptr;
     }
     std::string idStr = svToStr(id);
@@ -2511,6 +2562,10 @@ void* ClientPluginManager::registerPanel(
     if (!inst || agentxx::plugin::PluginStringView::empty(id)) {
         return nullptr;
     }
+    if (!acceptsRegistration(inst)) {
+        XX_LOGW("[client_plugin] `{}` registerPanel rejected: closing or disabled", inst->name);
+        return nullptr;
+    }
     std::string idStr = svToStr(id);
     if (!hostSupportedInterfaces().contains(std::string{plugin_interfaces::ClientPanel})) {
         XX_LOGW(
@@ -2650,6 +2705,10 @@ void* ClientPluginManager::registerInfoSection(
     AgentxxPluginStringView props_json
 ) {
     if (!inst || agentxx::plugin::PluginStringView::empty(id)) {
+        return nullptr;
+    }
+    if (!acceptsRegistration(inst)) {
+        XX_LOGW("[client_plugin] `{}` registerInfoSection rejected: closing or disabled", inst->name);
         return nullptr;
     }
     std::string idStr = svToStr(id);
@@ -2896,6 +2955,10 @@ int ClientPluginManager::registerCommand(
     if (!inst || !exec || agentxx::plugin::PluginStringView::empty(name)) {
         return -1;
     }
+    if (!acceptsRegistration(inst)) {
+        XX_LOGW("[client_plugin] `{}` registerCommand rejected: closing or disabled", inst->name);
+        return -1;
+    }
     std::string nameStr = svToStr(name);
     std::string descStr = svToStr(description);
     // 命令输入管线接口 (agentxx.client.command): 无命令输入面的宿主拒绝注册 ——
@@ -2973,6 +3036,10 @@ AgentxxPluginSubscription* ClientPluginManager::subscribe(
     void* ud
 ) {
     if (!inst || !handler) {
+        return nullptr;
+    }
+    if (!acceptsRegistration(inst)) {
+        XX_LOGW("[client_plugin] `{}` subscribe rejected: closing or disabled", inst->name);
         return nullptr;
     }
     auto sub   = std::make_shared<ClientSubscriptionImpl>();
@@ -3098,6 +3165,13 @@ int ClientPluginManager::registerToolRenderer(
         || agentxx::plugin::PluginStringView::empty(&spec->tool_name)) {
         return -1;
     }
+    if (!acceptsRegistration(inst)) {
+        XX_LOGW(
+            "[client_plugin] `{}` registerToolRenderer rejected: closing or disabled",
+            inst->name
+        );
+        return -1;
+    }
     const std::string   tname = svToStr(spec->tool_name);
     ClientToolRenderReg reg;
     reg.plugin   = inst->name;
@@ -3208,6 +3282,10 @@ int ClientPluginManager::bindActionHandler(
     void*                   user_data
 ) {
     if (!inst || !on_action) {
+        return -1;
+    }
+    if (!acceptsRegistration(inst)) {
+        XX_LOGW("[client_plugin] `{}` bindActionHandler rejected: closing or disabled", inst->name);
         return -1;
     }
     const std::string target = svToStr(target_id); // 空串 = 实例级 fallback
@@ -3379,6 +3457,10 @@ void ClientPluginManager::dispatchAction(
 
 int ClientPluginManager::openOverlay(ClientPluginInstance* inst, const AgentxxOverlaySpec* spec) {
     if (!inst || !spec || spec->version != 1) {
+        return -1;
+    }
+    if (!acceptsRegistration(inst)) {
+        XX_LOGW("[client_plugin] `{}` openOverlay rejected: closing or disabled", inst->name);
         return -1;
     }
     if (spec->type < AGENTXX_OVERLAY_MERMAID || spec->type > AGENTXX_OVERLAY_CUSTOM) {

@@ -263,6 +263,11 @@ int PluginManager::registerTool(PluginInstance* inst, const AgentxxPluginToolSpe
     if (!inst || !spec || agentxx::plugin::PluginStringView::empty(spec->name)) {
         return -1;
     }
+    // 执行期复查：请求可能排在 IO 队列里，等执行时实例已进入 Closing/Disabled。
+    if (!acceptsRegistration(inst)) {
+        XX_LOGW("Plugin `{}` registerTool rejected: instance is closing or disabled", inst->name);
+        return -1;
+    }
     std::string toolName{spec->name.data, spec->name.size};
 
     if (registry_->contains(toolName)) {
@@ -313,6 +318,10 @@ int PluginManager::unregisterTool(PluginInstance* inst, AgentxxPluginStringView 
 int PluginManager::registerHook(PluginInstance* inst, const AgentxxPluginHookSpec* spec) {
     if (!inst || !spec || spec->point < 0 || spec->point >= AGENTXX_PLUGIN_HOOK_COUNT
         || !spec->hook_start) {
+        return -1;
+    }
+    if (!acceptsRegistration(inst)) {
+        XX_LOGW("Plugin `{}` registerHook rejected: instance is closing or disabled", inst->name);
         return -1;
     }
     auto ctx = agentContext_.lock();
@@ -383,6 +392,13 @@ int PluginManager::registerGraphNodeType(
 ) {
     if (!inst || !spec || agentxx::plugin::PluginStringView::empty(spec->type)
         || !spec->run_start) {
+        return -1;
+    }
+    if (!acceptsRegistration(inst)) {
+        XX_LOGW(
+            "Plugin `{}` registerGraphNodeType rejected: instance is closing or disabled",
+            inst->name
+        );
         return -1;
     }
     auto ctx = agentContext_.lock();
@@ -549,6 +565,10 @@ AgentxxPluginSubscription* PluginManager::subscribe(
     void* ud
 ) {
     if (!inst || agentxx::plugin::PluginStringView::empty(&topic) || !handler) {
+        return nullptr;
+    }
+    if (!acceptsRegistration(inst)) {
+        XX_LOGW("Plugin `{}` subscribe rejected: instance is closing or disabled", inst->name);
         return nullptr;
     }
     auto ctx = agentContext_.lock();

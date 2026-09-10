@@ -65,6 +65,8 @@ struct AgentxxPluginOperationCompletionEndpoint;
 namespace agentxx {
 namespace plugin {
 
+class PluginHostControl;
+
 // =====================================================================
 // 实例公共基类
 // =====================================================================
@@ -121,6 +123,11 @@ struct PluginInstanceBase {
     /// Reset-v1 宿主生命周期。实例对象本身只保存业务注册信息；所有跨线程
     /// 执行都通过 lifetime lease 保证 stop/destroy/dlclose 前已经返回。
     std::shared_ptr<InstanceLifetime> lifetime;
+
+    /// 宿主控制块：交给插件的 `AgentxxPluginHost` 视图保存在控制块内（进程级
+    /// 稳定地址），插件在实例卸载后继续使用旧 host 指针时只会安全失败。
+    /// 见 [PluginHostControl]。
+    std::shared_ptr<PluginHostControl> hostControl;
 
     /// 兼容查询字段：值与 lifetime->leaseCount() 同步更新，待所有调用方迁移
     /// 到 lifetime 后可移除。
@@ -183,7 +190,219 @@ struct PluginInstanceBase {
             }
         }
     };
+
+    /// 交给插件的宿主视图（控制块内地址，永不失效）；未装配控制块返回 nullptr。
+    /// 插件保存该指针跨卸载继续调用时，各 vtable 入口会安全失败。
+    const AgentxxPluginHost* hostView() const noexcept;
+
+    /// 插件上下文销毁后调用：旧 host 指针之后按“实例不存在”安全失败。
+    void retireHostControl() noexcept;
 };
+
+// =====================================================================
+// 宿主控制块 (交给插件的 host 视图)
+// =====================================================================
+
+/// 宿主控制块：插件持有的 `const AgentxxPluginHost*` 必须指向进程级稳定地址。
+///
+/// 背景：插件在 create 时收到 host 指针，可能把它保存在实例字段、工作线程或
+/// 延迟任务里；实例卸载（destroy + dlclose）之后插件仍可能调用宿主 vtable。
+/// 若 host 视图位于 PluginInstance 对象内部，这类迟到调用就是 use-after-free。
+///
+/// 解决方式：
+/// - 每个实例创建一块**永不释放**的控制块，host 视图放在其中，因此插件保存的
+///   地址始终有效；实例关闭时只清空实例引用（tombstone）。
+/// - `host.opaque` 是控制块地址，作为一次性令牌（地址永不复用），经进程级
+///   注册表解析；已关闭实例的旧令牌解析成功但实例为空，所有入口安全失败，
+///   既不会访问已释放对象，也不会把调用转交给后来加载的同名实例。
+///
+/// 控制块数量等于进程内累计加载过的插件实例数（每块约 100 字节）；这是保证
+/// “旧 host 指针安全失败且绝不指向新实例”所付出的固定代价。
+namespace detail {
+
+/// 进程级控制块注册表。这里保存强引用的 tombstone 集合，不做回收：
+/// 控制块必须比插件的引用更长命，地址才可能永不复用。
+struct PluginHostControlRegistry {
+    std::mutex                                                       mutex;
+    std::map<void*, std::shared_ptr<PluginHostControl>, std::less<>> controls;
+};
+
+inline PluginHostControlRegistry& pluginHostControlRegistry() {
+    static PluginHostControlRegistry registry;
+    return registry;
+}
+
+} // namespace detail
+
+class PluginHostControl {
+public:
+
+    /// 创建并注册控制块。`vtable` 为本端宿主静态函数表（agent/client 各自一份）。
+    static std::shared_ptr<PluginHostControl> create(
+        const std::shared_ptr<PluginInstanceBase>& instance,
+        const AgentxxHostVtable*                   vtable
+    ) {
+        std::shared_ptr<PluginHostControl> control(new PluginHostControl(instance, vtable));
+        registerControl(control);
+        return control;
+    }
+
+    /// 交给插件的 host 视图地址（控制块内，永不失效）。
+    const AgentxxPluginHost* host() const noexcept {
+        return &host_;
+    }
+
+    /// 一次性令牌（= 控制块地址，不复用）。
+    void* token() const noexcept {
+        return host_.opaque;
+    }
+
+    uint64_t generation() const noexcept {
+        return generation_;
+    }
+
+    /// 实例仍在时返回强引用；已关闭/已释放返回空。
+    std::shared_ptr<PluginInstanceBase> instance() const noexcept {
+        return instance_.lock();
+    }
+
+    /// 实例关闭后调用：之后所有 vtable 入口按“实例不存在”安全失败。
+    void retire() noexcept {
+        retired_.store(true, std::memory_order_release);
+        instance_.reset();
+    }
+
+    bool retired() const noexcept {
+        return retired_.load(std::memory_order_acquire);
+    }
+
+private:
+
+    PluginHostControl(
+        const std::shared_ptr<PluginInstanceBase>& instance,
+        const AgentxxHostVtable*                   vtable
+    ) :
+        instance_(instance),
+        generation_(instance ? instance->lifetime ? instance->lifetime->generation() : 0 : 0) {
+        host_.vtable = vtable;
+        // 令牌即控制块地址：永不释放 => 永不复用，不会与后续实例混淆。
+        host_.opaque = const_cast<PluginHostControl*>(this);
+    }
+
+    PluginHostControl(const PluginHostControl&)            = delete;
+    PluginHostControl& operator=(const PluginHostControl&) = delete;
+
+    /// 进程级注册表：保存控制块强引用的 tombstone 集合。
+    /// 控制块必须比插件的引用更长命，因此这里不做回收。
+    static void registerControl(const std::shared_ptr<PluginHostControl>& control) {
+        if (!control) {
+            return;
+        }
+        auto&           registry = detail::pluginHostControlRegistry();
+        std::lock_guard lock(registry.mutex);
+        registry.controls.emplace(control->token(), control);
+    }
+
+    AgentxxPluginHost                 host_{};
+    std::weak_ptr<PluginInstanceBase> instance_;
+    uint64_t                          generation_ = 0;
+    std::atomic<bool>                 retired_{false};
+};
+
+inline const AgentxxPluginHost* PluginInstanceBase::hostView() const noexcept {
+    return hostControl ? hostControl->host() : nullptr;
+}
+
+inline void PluginInstanceBase::retireHostControl() noexcept {
+    if (hostControl) {
+        hostControl->retire();
+    }
+}
+
+/// 解析插件传入的 host 视图对应的控制块。
+/// - 未注册的令牌（含插件复制的 host 结构被篡改、旧内存被复用后的垃圾值）返回空；
+/// - 已关闭实例返回控制块本身，调用方据此区分“实例不存在”与“参数非法”。
+inline std::shared_ptr<PluginHostControl>
+    resolvePluginHostControl(const AgentxxPluginHost* host) noexcept {
+    if (!host || !host->opaque) {
+        return nullptr;
+    }
+    try {
+        auto&           registry = detail::pluginHostControlRegistry();
+        std::lock_guard lock(registry.mutex);
+        auto            it = registry.controls.find(host->opaque);
+        return it == registry.controls.end() ? nullptr : it->second;
+    } catch (...) {
+        return nullptr;
+    }
+}
+
+// =====================================================================
+// vtable 入口公共上下文
+// =====================================================================
+
+/// vtable 入口的公共上下文：解析宿主控制块，并持有实例/管理器强引用与
+/// admission lease。
+///
+/// - `ok()` 为 false 时入口必须安全失败（返回非 0 / NULL + error）：
+///   实例已卸载、已关闭、正在关闭（`allowClosing=false`）或参数不是本宿主
+///   发放的 host 视图。
+/// - `guard` 是 admission lease。投递到 IO 线程的闭包按值捕获本对象即可让
+///   卸载的 idle 等待覆盖“已排队但尚未执行”的阶段，避免 dlclose 越过闭包。
+/// - 本对象可拷贝（只含 shared_ptr），因此能放进 `std::function` 闭包。
+template<typename InstanceT, typename ManagerT>
+struct PluginHostCall {
+    std::shared_ptr<InstanceT>                         inst;
+    std::shared_ptr<ManagerT>                          mgr;
+    std::shared_ptr<PluginInstanceBase::InflightGuard> guard;
+
+    bool ok() const noexcept {
+        return inst && mgr && guard && static_cast<bool>(*guard);
+    }
+
+    InstanceT* instance() const noexcept {
+        return inst.get();
+    }
+
+    ManagerT* manager() const noexcept {
+        return mgr.get();
+    }
+};
+
+/// 构造 vtable 入口上下文。
+/// - `allowClosing=false`：注册、投递新工作等“开始新动作”的入口，实例进入
+///   Closing/Disabled 后直接拒绝。
+/// - `allowClosing=true`：只读查询、取消、完成清理等入口，实例关闭过程中仍允许
+///   执行（由 lease 保证 unload 等待其返回），但不产生新注册。
+template<typename InstanceT, typename ManagerT>
+inline PluginHostCall<InstanceT, ManagerT>
+    enterPluginHost(const AgentxxPluginHost* host, bool allowClosing = false) {
+    PluginHostCall<InstanceT, ManagerT> call;
+    auto                                control = resolvePluginHostControl(host);
+    if (!control) {
+        return call;
+    }
+    auto base = control->instance();
+    if (!base) {
+        return call;
+    }
+    auto inst = std::dynamic_pointer_cast<InstanceT>(base);
+    if (!inst) {
+        return call;
+    }
+    auto mgr = inst->manager.lock();
+    if (!mgr) {
+        return call;
+    }
+    auto guard = std::make_shared<PluginInstanceBase::InflightGuard>(base, allowClosing);
+    if (!guard || !static_cast<bool>(*guard)) {
+        return call;
+    }
+    call.inst  = std::move(inst);
+    call.mgr   = std::move(mgr);
+    call.guard = std::move(guard);
+    return call;
+}
 
 // =====================================================================
 // 管理器公共基类 (CRTP: Derived 提供实例类型与具体能力)
@@ -249,6 +468,23 @@ public:
 
     bool isPluginNameLoading(std::string_view name) const {
         return loadingNames_.find(name) != loadingNames_.end();
+    }
+
+    /// 注册类入口的执行期复查（仅 IO 线程调用）。
+    ///
+    /// vtable 入口在调用方线程已取到 admission lease，但请求可能排在 IO 线程
+    /// 队列里、等真正执行时实例已经进入 Closing/Disabled。此时注册必须被拒绝，
+    /// 否则会在撤销注册之后又留下工具/hook/能力等残留。
+    /// - 未装配 lifetime 的测试伪实例按“允许”处理（兼容旧用例）；
+    /// - 实例被显式禁用（enabled=false）时不再接受注册。
+    bool acceptsRegistration(const PluginInstanceBase* inst) const {
+        if (!inst || !inst->enabled) {
+            return false;
+        }
+        if (!inst->lifetime) {
+            return true;
+        }
+        return inst->lifetime->acceptsRegistration();
     }
 
     // ==================== io 线程投递 ====================

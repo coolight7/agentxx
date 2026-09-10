@@ -452,6 +452,59 @@ void ioCallSyncVoid(Mgr* mgr, std::function<void()> fn) {
     fut.get();
 }
 
+/// ioCallSync + 保活：把 `keep` 复制进投递闭包，闭包执行期间额外持有一份
+/// 引用与 admission lease。
+///
+/// 用途：vtable 入口在调用方线程解析出实例/管理器后投递到 IO 线程。若只把原始
+/// 指针放进闭包，请求可能在实例卸载（dlclose）之后才被执行；`keep` 通常就是
+/// [PluginHostCall]，携带实例/管理器强引用与 admission lease，使卸载的 idle
+/// 等待覆盖“已排队但尚未执行”的阶段。
+///
+/// - `keep` 本身不参与调用，只为延长生命周期；
+/// - 其余语义与 [ioCallSync] 完全一致。
+template<typename T, typename Keep, typename Mgr>
+T ioCallSyncKeep(Keep keep, Mgr* mgr, std::function<T()> fn) {
+    if (!mgr) {
+        throw std::runtime_error("plugin manager released");
+    }
+    if (mgr->isIoThread()) {
+        return fn();
+    }
+    auto p   = std::make_shared<std::promise<T>>();
+    auto fut = p->get_future();
+    mgr->postToIo([keep, p, fn = std::move(fn)]() {
+        try {
+            p->set_value(fn());
+        } catch (...) {
+            p->set_exception(std::current_exception());
+        }
+    });
+    return fut.get();
+}
+
+/// ioCallSyncKeep 的 void 特化
+template<typename Keep, typename Mgr>
+void ioCallSyncVoidKeep(Keep keep, Mgr* mgr, std::function<void()> fn) {
+    if (!mgr) {
+        return;
+    }
+    if (mgr->isIoThread()) {
+        fn();
+        return;
+    }
+    auto p   = std::make_shared<std::promise<void>>();
+    auto fut = p->get_future();
+    mgr->postToIo([keep, p, fn = std::move(fn)]() {
+        try {
+            fn();
+            p->set_value();
+        } catch (...) {
+            p->set_exception(std::current_exception());
+        }
+    });
+    fut.get();
+}
+
 /// 收集必选依赖 target 的插件名 (io 线程)
 /// - onlyEnabled=true: 仅统计 enabled 的插件 (卸载/禁用级联)
 /// - onlyEnabled=false: 全部统计 (启用级联: 需恢复被级联禁用的插件)

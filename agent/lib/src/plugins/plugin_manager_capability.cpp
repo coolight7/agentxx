@@ -24,7 +24,7 @@ static void
     if (!error_out || error_out->data) {
         return;
     }
-    const AgentxxPluginHost* host = caller ? &caller->host : nullptr;
+    const AgentxxPluginHost* host = caller ? caller->hostView() : nullptr;
     *error_out                    = agentxx::plugin::PluginString::from(host, strToSv(msg));
     if (!error_out->data) {
         auto* p = static_cast<char*>(hostMemoryAlloc(msg.size() + 1));
@@ -124,6 +124,13 @@ int PluginManager::registerCapability(PluginInstance* inst, AgentxxPluginStringV
     if (!inst || agentxx::plugin::PluginStringView::empty(capability)) {
         return -1;
     }
+    if (!acceptsRegistration(inst)) {
+        XX_LOGW(
+            "Plugin `{}` registerCapability rejected: instance is closing or disabled",
+            inst->name
+        );
+        return -1;
+    }
     std::string capStr{capability.data, capability.size};
     if (!capabilities_->registerCapability(capStr, inst->name)) {
         return -1;
@@ -179,6 +186,13 @@ int PluginManager::registerCapabilityEx(
     void*                                ctx
 ) {
     if (!inst || agentxx::plugin::PluginStringView::empty(capability) || !start) {
+        return -1;
+    }
+    if (!acceptsRegistration(inst)) {
+        XX_LOGW(
+            "Plugin `{}` registerCapabilityEx rejected: instance is closing or disabled",
+            inst->name
+        );
         return -1;
     }
     std::string capStr{capability.data, capability.size};
@@ -309,7 +323,7 @@ AgentxxPluginOperatorHandle* PluginManager::invokeCapabilityAsync(
         OpDrive drive;
         drive.start = [binding, owner, meth = svToStr(method), args = svToStr(args_json)](const auto* notify, auto* error) -> void* {
             const auto m = PluginStringView::from(meth), a = PluginStringView::from(args);
-            return binding.start(binding.ctx, &owner->host, &m, &a, notify, error);
+            return binding.start(binding.ctx, owner->hostView(), &m, &a, notify, error);
         };
         drive.cancel = [binding](void* op) {
             if (binding.cancel) {
