@@ -655,6 +655,66 @@ public:
 
     void detachAll(PluginInstance* inst);
 
+    /// 禁用/启用事务的内部实现（级联递归用）：
+    /// - `userInitiated=true` 表示用户显式操作，会更新 `userDisabled`；
+    /// - 级联（false）只维护 `blockedByDependencies`，不覆盖用户显式禁用标记。
+    /// 依赖级联按直接依赖者递归，覆盖三级/菱形依赖。
+    void disableImpl(std::string_view name, bool userInitiated);
+    void enableImpl(std::string_view name, bool userInitiated);
+
+    /// 摘除实例在宿主侧的注册（工具/hook/capability/graph/订阅/prompt 贡献），
+    /// 但保留实例内的注册记录；启用时由 start 事务或
+    /// [restoreHostSideRegistrations] 按记录恢复。禁用与卸载共用。
+    void detachInstanceRegistrations(PluginInstance* inst);
+
+    /// 清空"由插件 start 事务重新声明"的注册记录（工具/hook/capability/graph）。
+    /// stop 成功后调用，避免下次 start 在旧记录上重复累积。
+    void clearPluginOwnedRegistrations(PluginInstance* inst);
+
+    /// 恢复宿主侧已保存的注册记录（legacy 插件路径；无 start/stop 导出时使用）。
+    void restoreHostSideRegistrations(PluginInstance* inst);
+
+    /// 按需投递禁用/启用事务到本管理器 IO executor（同步入口的异步收尾）。
+    void requestStopForDisable(const std::shared_ptr<PluginInstance>& inst);
+    void requestStartForEnable(const std::shared_ptr<PluginInstance>& inst);
+
+    /// 禁用/启用事务的异步收尾（仅 IO 线程）：
+    /// - `stopForDisable`：调用插件 stop 导出，撤销插件自管资源（订阅/线程/定时器）；
+    ///   失败只记录日志并保持 Disabled（可再次 disable/enable 重试）。
+    /// - `startForEnable`：调用插件 start 导出重新注册；成功后状态回到 Ready。
+    /// 没有 start/stop 导出的 legacy 插件不进入这两个事务（沿用宿主侧已保存注册）。
+    asio::awaitable<void> stopForDisable(std::shared_ptr<PluginInstance> inst);
+    asio::awaitable<void> startForEnable(std::shared_ptr<PluginInstance> inst);
+
+    // ==================== prompt 贡献模型 (R5 / F20) ====================
+    //
+    // 插件对 prompt 的修改不再用"备份后无条件写回"，而是记录为
+    // (owner, key, sequence, value) 贡献：
+    //   有效值 = 首次贡献前的基础值 ⊕ 按 sequence 顺序应用的全部存活贡献
+    // 卸载/禁用只删除该 owner 的贡献并重新合成，因此不会覆盖其他 owner 的贡献，
+    // 也不会把已卸载 owner 的旧值写回；用户或其他宿主代码之后写入的值通过
+    // "基础值 rebase"保留。键名：`system` / `append:<key>` / `tool:<toolName>`。
+    struct PromptValue {
+        bool                                      isTool = false;
+        std::string                               text; ///< isTool=false 时的值
+        std::optional<agentxx::agent::ToolPrompt> tool; ///< isTool=true 时的值
+    };
+
+    struct PromptKeyState {
+        /// 首次贡献前的基础值（`nullopt` = 原本不存在）
+        std::optional<PromptValue> base;
+        /// 宿主上次合成写入的值（用于发现外部修改并 rebase 基础值）
+        std::optional<PromptValue> applied;
+        /// owner -> (sequence, 贡献值)，按 sequence 升序应用
+        std::map<std::string, std::pair<uint64_t, PromptValue>, std::less<>> contributions;
+    };
+
+    /// 删除 `owner` 的全部 prompt 贡献并重新合成受影响键（卸载/禁用路径）。
+    void removePromptContributions(std::string_view owner);
+
+    /// 重新合成单个 prompt 键的有效值（内部使用；见 PromptKeyState 说明）。
+    void recomposePromptKey(const std::string& key);
+
 private:
 
     friend class PluginInstance;
@@ -680,6 +740,8 @@ private:
     std::shared_ptr<CapabilityRegistry>         capabilities_;
     std::map<std::string, std::shared_ptr<GraphTypeSlot>, std::less<>> graphTypeSlots_;
     size_t                                      runningTurns_ = 0;
+    std::map<std::string, PromptKeyState, std::less<>> promptKeys_;
+    uint64_t                                           promptSequence_ = 0;
 };
 
 struct NativeLoader {

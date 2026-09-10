@@ -1725,6 +1725,193 @@ std::string PluginManager::getPromptJson() {
     return c->agentConfig->prompt.toJson().dump();
 }
 
+namespace {
+
+/// prompt 贡献模型内部工具（见 [PluginManager::PromptKeyState]）。
+///
+/// 键名约定：
+/// - `system`          -> agentConfig->prompt.systemPrompt
+/// - `append:<key>`    -> appendSystemPrompts[key]
+/// - `tool:<toolName>` -> toolPrompt[toolName]（结构化值：depict + args）
+std::string promptSystemKey() {
+    return "system";
+}
+std::string promptAppendKey(const std::string& key) {
+    return "append:" + key;
+}
+std::string promptToolKey(const std::string& toolName) {
+    return "tool:" + toolName;
+}
+
+/// 读取键当前值（`nullopt` = 键不存在）。
+std::optional<PluginManager::PromptValue>
+    readPromptKey(const agentxx::agent::AgentPrompt& prompt, const std::string& key) {
+    PluginManager::PromptValue value;
+    if (key == promptSystemKey()) {
+        // systemPrompt 始终存在（空串表示没有系统提示词）。
+        value.isTool = false;
+        value.text   = prompt.systemPrompt;
+        return value;
+    }
+    if (key.size() > 7 && key.compare(0, 7, "append:") == 0) {
+        const std::string name = key.substr(7);
+        auto              it   = prompt.appendSystemPrompts.find(name);
+        if (it == prompt.appendSystemPrompts.end()) {
+            return std::nullopt;
+        }
+        value.isTool = false;
+        value.text   = it->second;
+        return value;
+    }
+    if (key.size() > 5 && key.compare(0, 5, "tool:") == 0) {
+        const std::string name = key.substr(5);
+        auto              it   = prompt.toolPrompt.find(name);
+        if (it == prompt.toolPrompt.end()) {
+            return std::nullopt;
+        }
+        value.isTool = true;
+        value.tool   = it->second;
+        return value;
+    }
+    return std::nullopt;
+}
+
+/// 写入键值（`nullopt` = 删除该键；systemPrompt 视为写空串）。
+void writePromptKey(
+    agentxx::agent::AgentPrompt&                    prompt,
+    const std::string&                              key,
+    const std::optional<PluginManager::PromptValue>& value
+) {
+    if (key == promptSystemKey()) {
+        prompt.systemPrompt = (value && !value->isTool) ? value->text : std::string{};
+        return;
+    }
+    if (key.size() > 7 && key.compare(0, 7, "append:") == 0) {
+        const std::string name = key.substr(7);
+        if (value && !value->isTool) {
+            prompt.appendSystemPrompts[name] = value->text;
+        } else {
+            prompt.appendSystemPrompts.erase(name);
+        }
+        return;
+    }
+    if (key.size() > 5 && key.compare(0, 5, "tool:") == 0) {
+        const std::string name = key.substr(5);
+        if (value && value->isTool && value->tool.has_value()) {
+            prompt.toolPrompt[name] = *value->tool;
+        } else {
+            prompt.toolPrompt.erase(name);
+        }
+    }
+}
+
+/// 两次取值是否相同（用于发现"宿主之外"的修改并 rebase 基础值）。
+bool samePromptValue(
+    const std::optional<PluginManager::PromptValue>& a,
+    const std::optional<PluginManager::PromptValue>& b
+) {
+    if (a.has_value() != b.has_value()) {
+        return false;
+    }
+    if (!a) {
+        return true;
+    }
+    if (a->isTool != b->isTool) {
+        return false;
+    }
+    if (a->isTool) {
+        if (a->tool.has_value() != b->tool.has_value()) {
+            return false;
+        }
+        if (!a->tool) {
+            return true;
+        }
+        return a->tool->depict == b->tool->depict && a->tool->args == b->tool->args;
+    }
+    return a->text == b->text;
+}
+
+/// 把 toolPrompt JSON 子对象合并到已有值上（与 AgentPrompt::mergeFromJson 的
+/// 部分覆盖语义一致：只覆盖出现的 depict/args 子字段）。
+PluginManager::PromptValue mergeToolPromptValue(
+    const std::optional<PluginManager::PromptValue>& current,
+    const agentxx::util::Json&                       spec
+) {
+    PluginManager::PromptValue value;
+    value.isTool = true;
+    agentxx::agent::ToolPrompt tool;
+    if (current && current->isTool && current->tool.has_value()) {
+        tool = *current->tool;
+    }
+    if (spec.is_object()) {
+        if (spec.contains("depict") && spec["depict"].is_string()) {
+            tool.depict = spec["depict"].get<std::string>();
+        }
+        if (spec.contains("args") && spec["args"].is_object()) {
+            for (const auto& [argName, argValue] : spec["args"].items()) {
+                if (argValue.is_string()) {
+                    tool.args[std::string{argName}] = argValue.get<std::string>();
+                }
+            }
+        }
+    }
+    value.tool = std::move(tool);
+    return value;
+}
+
+} // namespace
+
+/// 重新合成单个 prompt 键的有效值：
+///   基础值（首次贡献前；被外部修改时 rebase）⊕ 按 sequence 顺序的全部存活贡献
+void PluginManager::recomposePromptKey(const std::string& key) {
+    auto c = agentContext_.lock();
+    if (!c || !c->agentConfig) {
+        return;
+    }
+    auto&      prompt  = c->agentConfig->prompt;
+    auto&      state   = promptKeys_[key];
+    const auto current = readPromptKey(prompt, key);
+
+    if (!state.base.has_value() && state.contributions.empty() && !state.applied.has_value()) {
+        // 首次接触该键：记录基础值
+        state.base = current;
+    } else if (!samePromptValue(current, state.applied)) {
+        // 宿主之外（用户或其他代码）改过：以当前值为新基础，贡献在其上重新应用
+        state.base = current;
+    }
+
+    std::vector<std::pair<uint64_t, const PromptValue*>> ordered;
+    ordered.reserve(state.contributions.size());
+    for (const auto& [owner, entry] : state.contributions) {
+        (void)owner;
+        ordered.emplace_back(entry.first, &entry.second);
+    }
+    std::sort(ordered.begin(), ordered.end(), [](const auto& a, const auto& b) {
+        return a.first < b.first;
+    });
+
+    std::optional<PromptValue> effective = state.base;
+    for (const auto& [sequence, value] : ordered) {
+        (void)sequence;
+        effective = *value;
+    }
+    writePromptKey(prompt, key, effective);
+    state.applied = effective;
+}
+
+void PluginManager::removePromptContributions(std::string_view owner) {
+    const std::string        ownerName{owner};
+    std::vector<std::string> touched;
+    for (auto& [key, state] : promptKeys_) {
+        if (state.contributions.erase(ownerName) > 0) {
+            touched.push_back(key);
+        }
+    }
+    for (const auto& key : touched) {
+        recomposePromptKey(key);
+    }
+}
+
 int PluginManager::setPromptJson(PluginInstance* inst, AgentxxPluginStringView prompt_json) {
     if (!inst || agentxx::plugin::PluginStringView::empty(&prompt_json)) {
         return -1;
@@ -1745,76 +1932,44 @@ int PluginManager::setPromptJson(PluginInstance* inst, AgentxxPluginStringView p
             return -1;
         }
 
-        if (j.contains("systemPrompt") && !inst->promptBackup.backedUpSystem) {
-            inst->promptBackup.backedUpSystem = true;
-            inst->promptBackup.systemPrompt   = c->agentConfig->prompt.systemPrompt;
-        }
-
-        auto backupAppendKey = [&](const std::string& key) {
-            if (inst->promptBackup.appendSystemPrompts.find(key)
-                != inst->promptBackup.appendSystemPrompts.end()) {
-                return;
-            }
-            auto it = c->agentConfig->prompt.appendSystemPrompts.find(key);
-            if (it != c->agentConfig->prompt.appendSystemPrompts.end()) {
-                inst->promptBackup.appendSystemPrompts[key] = it->second;
-            } else {
-                inst->promptBackup.appendSystemPrompts[key] = std::nullopt;
-            }
+        std::vector<std::string> touched;
+        /// 记录/更新本 owner 对某个键的贡献，并登记待重新合成。
+        auto record = [&](const std::string& key, PromptValue value) {
+            auto& state = promptKeys_[key];
+            state.contributions[inst->name] = {++promptSequence_, std::move(value)};
+            touched.push_back(key);
         };
 
+        if (j.contains("systemPrompt") && j["systemPrompt"].is_string()) {
+            PromptValue value;
+            value.isTool = false;
+            value.text   = j["systemPrompt"].get<std::string>();
+            record(promptSystemKey(), std::move(value));
+        }
         if (j.contains("appendSystemPrompts") && j["appendSystemPrompts"].is_object()) {
-            for (const auto& [key, _] : j["appendSystemPrompts"].items()) {
-                backupAppendKey(std::string{key});
+            for (const auto& [key, value] : j["appendSystemPrompts"].items()) {
+                if (!value.is_string()) {
+                    continue;
+                }
+                PromptValue contribution;
+                contribution.isTool = false;
+                contribution.text   = value.get<std::string>();
+                record(promptAppendKey(std::string{key}), std::move(contribution));
             }
         }
-
         if (j.contains("toolPrompt") && j["toolPrompt"].is_object()) {
-            for (const auto& [toolNameView, _] : j["toolPrompt"].items()) {
-                const std::string toolName{toolNameView};
-                if (std::find(
-                        inst->promptBackup.backedUpTools.begin(),
-                        inst->promptBackup.backedUpTools.end(),
-                        toolName
-                    )
-                    == inst->promptBackup.backedUpTools.end()) {
-                    inst->promptBackup.backedUpTools.push_back(toolName);
-                    auto it = c->agentConfig->prompt.toolPrompt.find(toolName);
-                    if (it != c->agentConfig->prompt.toolPrompt.end()) {
-                        inst->promptBackup.toolPrompt[toolName] = it->second;
-                    } else {
-                        inst->promptBackup.toolPrompt[toolName] = std::nullopt;
-                    }
+            for (const auto& [toolName, spec] : j["toolPrompt"].items()) {
+                if (!spec.is_object()) {
+                    continue;
                 }
+                const std::string key = promptToolKey(std::string{toolName});
+                // 与 mergeFromJson 一致：在"当前有效值"上做部分覆盖
+                record(key, mergeToolPromptValue(readPromptKey(c->agentConfig->prompt, key), spec));
             }
         }
 
-        c->agentConfig->prompt.mergeFromJson(j);
-        if (j.contains("systemPrompt")) {
-            inst->promptBackup.appliedSystemPrompt = c->agentConfig->prompt.systemPrompt;
-        }
-        for (const auto& [key, _] : inst->promptBackup.appendSystemPrompts) {
-            auto it = c->agentConfig->prompt.appendSystemPrompts.find(key);
-            if (it != c->agentConfig->prompt.appendSystemPrompts.end()) {
-                inst->promptBackup.appliedAppendSystemPrompts[key] = it->second;
-            } else {
-                inst->promptBackup.appliedAppendSystemPrompts[key] = std::nullopt;
-            }
-        }
-        for (const auto& [toolName, _] : inst->promptBackup.toolPrompt) {
-            auto it = c->agentConfig->prompt.toolPrompt.find(toolName);
-            if (it == c->agentConfig->prompt.toolPrompt.end()) {
-                inst->promptBackup.appliedToolPromptJson[toolName] = std::nullopt;
-            } else {
-                agentxx::util::Json toolJson = agentxx::util::Json::object();
-                toolJson["depict"] = it->second.depict;
-                agentxx::util::Json args = agentxx::util::Json::object();
-                for (const auto& [key, value] : it->second.args) {
-                    args[key] = value;
-                }
-                toolJson["args"] = std::move(args);
-                inst->promptBackup.appliedToolPromptJson[toolName] = toolJson.dump();
-            }
+        for (const auto& key : touched) {
+            recomposePromptKey(key);
         }
         return 0;
     } catch (...) {
@@ -1822,73 +1977,12 @@ int PluginManager::setPromptJson(PluginInstance* inst, AgentxxPluginStringView p
     }
 }
 
+/// 兼容入口：卸载/禁用时删除该 owner 的 prompt 贡献并重新合成。
 void PluginManager::restorePromptBackup(PluginInstance* inst) {
     if (!inst) {
         return;
     }
-    auto c = agentContext_.lock();
-    if (!c || !c->agentConfig) {
-        return;
-    }
-    auto& pb = inst->promptBackup;
-
-    if (pb.backedUpSystem) {
-        if (!pb.appliedSystemPrompt.has_value()
-            || c->agentConfig->prompt.systemPrompt == *pb.appliedSystemPrompt) {
-            c->agentConfig->prompt.systemPrompt = pb.systemPrompt.value_or("");
-        }
-        pb.backedUpSystem = false;
-    }
-    for (const auto& [key, orig] : pb.appendSystemPrompts) {
-        const auto applied = pb.appliedAppendSystemPrompts.find(key);
-        auto current = c->agentConfig->prompt.appendSystemPrompts.find(key);
-        const bool unchanged = applied == pb.appliedAppendSystemPrompts.end()
-            || (applied->second.has_value() && current != c->agentConfig->prompt.appendSystemPrompts.end()
-                && current->second == *applied->second)
-            || (!applied->second.has_value() && current == c->agentConfig->prompt.appendSystemPrompts.end());
-        if (unchanged) {
-            if (orig.has_value()) {
-                c->agentConfig->prompt.appendSystemPrompts[key] = *orig;
-            } else {
-                c->agentConfig->prompt.appendSystemPrompts.erase(key);
-            }
-        }
-    }
-    pb.appendSystemPrompts.clear();
-    pb.appliedAppendSystemPrompts.clear();
-    pb.appliedSystemPrompt.reset();
-
-    for (const auto& [toolName, origPrompt] : pb.toolPrompt) {
-        bool unchanged = true;
-        auto applied = pb.appliedToolPromptJson.find(toolName);
-        auto current = c->agentConfig->prompt.toolPrompt.find(toolName);
-        if (applied != pb.appliedToolPromptJson.end()) {
-            if (!applied->second.has_value()) {
-                unchanged = current == c->agentConfig->prompt.toolPrompt.end();
-            } else if (current == c->agentConfig->prompt.toolPrompt.end()) {
-                unchanged = false;
-            } else {
-                agentxx::util::Json toolJson = agentxx::util::Json::object();
-                toolJson["depict"] = current->second.depict;
-                agentxx::util::Json args = agentxx::util::Json::object();
-                for (const auto& [key, value] : current->second.args) {
-                    args[key] = value;
-                }
-                toolJson["args"] = std::move(args);
-                unchanged = toolJson.dump() == *applied->second;
-            }
-        }
-        if (unchanged) {
-            if (origPrompt.has_value()) {
-                c->agentConfig->prompt.toolPrompt[toolName] = *origPrompt;
-            } else {
-                c->agentConfig->prompt.toolPrompt.erase(toolName);
-            }
-        }
-    }
-    pb.toolPrompt.clear();
-    pb.appliedToolPromptJson.clear();
-    pb.backedUpTools.clear();
+    removePromptContributions(inst->name);
 }
 
 std::string PluginManager::getPluginArgsJson(PluginInstance* inst) {

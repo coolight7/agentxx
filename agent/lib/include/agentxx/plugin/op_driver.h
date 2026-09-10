@@ -49,8 +49,14 @@ struct OpCore : std::enable_shared_from_this<OpCore> {
         std::string label,
         bool lifecycle = false
     ) {
-        if (!runtime || !runtime->executor || !provider || !provider->enabled
-            || (!lifecycle && provider->lifetime && !provider->lifetime->acceptsRegistration())) {
+        // 生命周期操作 (start/stop) 正是状态切换本身：停用中的实例仍必须能收到
+        // stop，关闭中的实例仍必须能收到 stop。因此这里只对业务操作检查
+        // `enabled`/可注册状态，生命周期操作交给 enable_closing 的 lease 把关
+        // (Closed 仍会拒绝)，见 InstanceLifetime::tryAcquire。
+        if (!runtime || !runtime->executor || !provider
+            || (!lifecycle
+                && (!provider->enabled
+                    || (provider->lifetime && !provider->lifetime->acceptsRegistration())))) {
             throw std::runtime_error("plugin operation rejected: provider is closed or disabled");
         }
         auto core = std::shared_ptr<OpCore>(new OpCore(std::move(runtime), std::move(label)));

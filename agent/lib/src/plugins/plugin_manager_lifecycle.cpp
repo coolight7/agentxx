@@ -418,35 +418,19 @@ void PluginManager::eraseMiddleware(PluginMiddlewareHandle* mw) {
 }
 
 void PluginManager::disable(std::string_view name) {
-    auto inst = find(name);
-    if (!inst || !inst->enabled) {
+    disableImpl(name, /*userInitiated=*/true);
+}
+
+void PluginManager::enable(std::string_view name) {
+    enableImpl(name, /*userInitiated=*/true);
+}
+
+/// 摘除宿主侧注册（保留注册记录）；禁用与卸载共用。
+void PluginManager::detachInstanceRegistrations(PluginInstance* inst) {
+    if (!inst) {
         return;
     }
-    inst->enabled = false;
-    inst->userDisabled = true;
-    inst->blockedByDependencies = false;
-    if (inst->lifetime) {
-        inst->lifetime->setState(PluginInstanceState::Disabled);
-    }
-    for (const auto& dep : collectReverseRequiredDeps(plugins_, inst->name, /*onlyEnabled=*/true)) {
-        auto depInst = find(dep);
-        if (depInst && depInst->enabled) {
-            depInst->enabled = false;
-            depInst->blockedByDependencies = true;
-            if (depInst->lifetime) {
-                depInst->lifetime->setState(PluginInstanceState::Disabled);
-            }
-            detachAll(depInst.get());
-            eraseMiddleware(depInst->middleware.get());
-            depInst->middleware = nullptr;
-            if (auto c = agentContext_.lock()) {
-                if (c->resourceApplier) {
-                    c->resourceApplier->setOwnerEnabled(depInst->name, false);
-                }
-            }
-        }
-    }
-    detachAll(inst.get());
+    detachAll(inst);
     eraseMiddleware(inst->middleware.get());
     inst->middleware = nullptr;
     if (auto c = agentContext_.lock()) {
@@ -456,27 +440,255 @@ void PluginManager::disable(std::string_view name) {
     }
 }
 
-void PluginManager::enable(std::string_view name) {
+/// 清空由插件 start 事务重新声明的注册记录（stop 成功后调用）。
+void PluginManager::clearPluginOwnedRegistrations(PluginInstance* inst) {
+    if (!inst) {
+        return;
+    }
+    inst->toolNames.clear();
+    inst->tools.clear();
+    inst->hookRegistrations.clear();
+    inst->capabilityRegistrations.clear();
+    inst->graphNodeTypes.clear();
+    inst->subscriptions.clear();
+    inst->subscriptionHandles.clear();
+}
+
+void PluginManager::disableImpl(std::string_view name, bool userInitiated) {
+    auto inst = find(name);
+    if (!inst || !inst->enabled) {
+        return;
+    }
+    if (inst->lifetime && inst->lifetime->closeRequested()) {
+        // 已进入关闭流程: 不再接受启用状态变化，避免与 stop/destroy 交错。
+        return;
+    }
+    if (userInitiated) {
+        inst->userDisabled = true;
+        inst->blockedByDependencies = false;
+    } else {
+        // 级联禁用: 只记录原因，不改写用户显式禁用标记。
+        inst->blockedByDependencies = true;
+    }
+    inst->enabled = false;
+    if (inst->lifetime) {
+        inst->lifetime->setState(PluginInstanceState::Disabled);
+    }
+    detachInstanceRegistrations(inst.get());
+    XX_LOGI("Plugin `{}` disabled ({})", inst->name, userInitiated ? "user" : "dependency");
+
+    // 级联禁用依赖者: 只收集直接依赖者，再逐层递归，覆盖三级/菱形依赖。
+    for (const auto& child : collectReverseRequiredDeps(plugins_, inst->name, /*onlyEnabled=*/true)) {
+        disableImpl(child, /*userInitiated=*/false);
+    }
+
+    // start/stop 事务（R5）：导出 stop 的插件必须收到 stop 才能撤销自管资源
+    // （订阅/线程/定时器）；同步入口把事务投递到本管理器 IO executor，
+    // 完成后状态保持 Disabled。
+    requestStopForDisable(inst);
+}
+
+void PluginManager::enableImpl(std::string_view name, bool userInitiated) {
     auto inst = find(name);
     if (!inst || inst->enabled) {
         return;
     }
+    if (inst->lifetime && inst->lifetime->closeRequested()) {
+        return;
+    }
+    if (!userInitiated && inst->userDisabled) {
+        // 用户显式禁用的插件不被级联恢复（F09 / M8）。
+        return;
+    }
+    // 先置位再递归: 既让注册复查通过，也让循环依赖不会无限递归。
     inst->enabled = true;
-    inst->userDisabled = false;
+    if (userInitiated) {
+        inst->userDisabled = false;
+    }
     inst->blockedByDependencies = false;
     if (inst->lifetime) {
         inst->lifetime->setState(PluginInstanceState::Ready);
+    }
+
+    // 先启用必选依赖: 子插件的 start 需要父插件的能力/工具已经可用。
+    for (const auto& dep : inst->depends) {
+        enableImpl(dep, /*userInitiated=*/false);
+    }
+
+    if (inst->lifecycleStart) {
+        // 托管插件: 注册由插件 start 事务重新声明，宿主只负责投递与结果处理。
+        requestStartForEnable(inst);
+    } else {
+        // legacy 插件: 按宿主侧保存的记录恢复注册。
+        restoreHostSideRegistrations(inst.get());
+    }
+    XX_LOGI("Plugin `{}` enabled ({})", inst->name, userInitiated ? "user" : "dependency");
+
+    // 级联恢复因本插件被禁用的依赖者（不覆盖用户显式禁用，F09）。
+    for (const auto& child : collectReverseRequiredDeps(plugins_, inst->name, /*onlyEnabled=*/false)) {
+        enableImpl(child, /*userInitiated=*/false);
+    }
+}
+
+/// 按需投递禁用事务：只有"已 start 且尚未 stop"的实例需要 stop。
+void PluginManager::requestStopForDisable(const std::shared_ptr<PluginInstance>& inst) {
+    if (!inst || !inst->lifecycleStopPending()) {
+        return;
+    }
+    auto self = shared_from_this();
+    try {
+        asio::co_spawn(
+            ioExecutor(),
+            [self, inst]() -> asio::awaitable<void> {
+                co_await self->stopForDisable(inst);
+            },
+            [inst](std::exception_ptr e) {
+                if (!e) {
+                    return;
+                }
+                try {
+                    std::rethrow_exception(e);
+                } catch (const std::exception& ex) {
+                    XX_LOGE("Plugin `{}` disable stop threw: {}", inst->name, ex.what());
+                } catch (...) {
+                    XX_LOGE("Plugin `{}` disable stop threw unknown", inst->name);
+                }
+            }
+        );
+    } catch (const std::exception& e) {
+        XX_LOGW("Plugin `{}` disable stop could not be scheduled: {}", inst->name, e.what());
+    }
+}
+
+/// 按需投递启用事务（导出 start 的插件）。
+void PluginManager::requestStartForEnable(const std::shared_ptr<PluginInstance>& inst) {
+    if (!inst || !inst->lifecycleStart) {
+        return;
+    }
+    auto self = shared_from_this();
+    try {
+        asio::co_spawn(
+            ioExecutor(),
+            [self, inst]() -> asio::awaitable<void> {
+                co_await self->startForEnable(inst);
+            },
+            [inst](std::exception_ptr e) {
+                if (!e) {
+                    return;
+                }
+                try {
+                    std::rethrow_exception(e);
+                } catch (const std::exception& ex) {
+                    XX_LOGE("Plugin `{}` enable start threw: {}", inst->name, ex.what());
+                } catch (...) {
+                    XX_LOGE("Plugin `{}` enable start threw unknown", inst->name);
+                }
+            }
+        );
+    } catch (const std::exception& e) {
+        XX_LOGW("Plugin `{}` enable start could not be scheduled: {}", inst->name, e.what());
+    }
+}
+
+/// 禁用事务的异步部分（IO 线程）：调用插件 stop 撤销自管资源。
+/// - 期间被重新启用时本次事务作废，由 [startForEnable] 先 stop 再 start；
+/// - stop 失败只记录日志并保持 Disabled，实例仍保留（可重试或直接卸载）。
+asio::awaitable<void> PluginManager::stopForDisable(std::shared_ptr<PluginInstance> inst) {
+    if (!inst || !inst->lifecycleStopPending()) {
+        co_return;
+    }
+    if (inst->enabled) {
+        // 等待期间用户又启用了该插件：本次 stop 作废。
+        co_return;
+    }
+    std::string error;
+    if (!co_await awaitPluginLifecycle(
+            runtime(), inst, inst->pluginCtx, inst->lifecycleStop, "plugin stop", error
+        )) {
+        XX_LOGE("Plugin `{}` stop failed while disabling: {}", inst->name, error);
+        co_return;
+    }
+    inst->lifecycleStopped = true;
+    // stop 成功: 插件侧注册已撤销，宿主侧记录同步清空，使下次 start 从干净状态
+    // 重新声明，避免同一工具/能力在多次 enable/disable 后重复累积。
+    clearPluginOwnedRegistrations(inst.get());
+    XX_LOGI("Plugin `{}` stopped for disable", inst->name);
+    co_return;
+}
+
+/// 启用事务的异步部分（IO 线程）：先补齐 stop（若仍欠着），再调用插件 start
+/// 重新提交注册；start 成功后才把状态置回 Ready。
+asio::awaitable<void> PluginManager::startForEnable(std::shared_ptr<PluginInstance> inst) {
+    if (!inst || !inst->lifecycleStart) {
+        co_return;
+    }
+    if (!inst->enabled) {
+        co_return;
+    }
+    // disable 的 stop 事务可能还在排队或正在执行：必须先停干净再 start，
+    // 否则新注册会叠加在未撤销的旧状态之上。
+    if (inst->lifecycleStopPending()) {
+        std::string stopError;
+        if (!co_await awaitPluginLifecycle(
+                runtime(), inst, inst->pluginCtx, inst->lifecycleStop, "plugin stop", stopError
+            )) {
+            if (inst->lifetime) {
+                inst->lifetime->setState(PluginInstanceState::Disabled);
+            }
+            XX_LOGE("Plugin `{}` enable aborted, stop failed: {}", inst->name, stopError);
+            co_return;
+        }
+        inst->lifecycleStopped = true;
+        clearPluginOwnedRegistrations(inst.get());
+    }
+    if (!inst->enabled) {
+        // 等待 stop 期间用户又禁用了该插件。
+        co_return;
+    }
+
+    std::string error;
+    if (!co_await awaitPluginLifecycle(
+            runtime(), inst, inst->pluginCtx, inst->lifecycleStart, "plugin start", error
+        )) {
+        // start 失败: 回到 Disabled 且不留部分注册；实例保持"stop 仍欠着"，
+        // 卸载或下次启用时先 stop 清理，符合 plugin.md 第 7.2 节回滚顺序。
+        inst->enabled = false;
+        inst->blockedByDependencies = false;
+        if (inst->lifetime) {
+            inst->lifetime->setState(PluginInstanceState::Disabled);
+        }
+        detachInstanceRegistrations(inst.get());
+        clearPluginOwnedRegistrations(inst.get());
+        XX_LOGE("Plugin `{}` start failed while enabling: {}", inst->name, error);
+        co_return;
+    }
+    inst->lifecycleStopped = false;
+    if (auto c = agentContext_.lock(); c && c->resourceApplier) {
+        c->resourceApplier->setOwnerEnabled(inst->name, true);
+    }
+    if (inst->lifetime) {
+        inst->lifetime->setState(PluginInstanceState::Ready);
+    }
+    XX_LOGI("Plugin `{}` restarted after enable", inst->name);
+    co_return;
+}
+
+/// 恢复宿主侧已保存的注册记录（legacy 插件路径；也用于 start 事务前的基础恢复）。
+void PluginManager::restoreHostSideRegistrations(PluginInstance* inst) {
+    if (!inst) {
+        return;
     }
     for (const auto& tool : inst->tools) {
         registry_->registerTool(tool->get_definition().name, tool);
     }
     if (!inst->hookRegistrations.empty()) {
         auto ctx = agentContext_.lock();
-        if (ctx && ctx->middlewareHandleContext) {
+        auto self = inst->self.lock();
+        if (ctx && ctx->middlewareHandleContext && self) {
             inst->middleware = std::make_shared<PluginMiddlewareHandle>(
                 fmt::format("{}_middleware", inst->name),
                 agentContext_,
-                inst
+                std::move(self)
             );
             ctx->middlewareHandleContext->handles.push_back(inst->middleware);
             for (const auto& hook : inst->hookRegistrations) {

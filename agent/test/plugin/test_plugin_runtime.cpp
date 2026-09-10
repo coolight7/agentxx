@@ -85,6 +85,16 @@ struct RuntimeFixture {
         // normal state distinct from an explicit stop used by fault tests.
         io.restart();
     }
+
+    /// 推进 IO 直到没有新的就绪处理器：生命周期事务包含多级投递
+    /// (start/stop 完成包 → 状态提交 → 后续步骤)，单次 poll 不足以跑完。
+    void drainAll(int rounds = 8) {
+        for (int i = 0; i < rounds; ++i) {
+            io.restart();
+            io.poll();
+        }
+        io.restart();
+    }
 };
 
 struct CallbackState {
@@ -171,6 +181,48 @@ void installLifecycleHooks(PluginInstance& inst, int* destroys) {
     inst.pluginCreated    = true;
     inst.builtinUnload    = &fakeDestroyHook;
     inst.pluginCtx        = destroys;
+}
+
+/// P1-4 生命周期事务探针: 记录 start/stop 实际调用次数，并让 start 可以按需失败。
+/// 探针本身挂在实例的 pluginCtx 上，不使用任何可变全局状态。
+struct LifecycleProbe {
+    int                            starts    = 0;
+    int                            stops     = 0;
+    bool                           failStart = false;
+    /// start 失败前是否真的登记过工具（证明失败回滚清掉了"部分注册"）。
+    bool                           partialRegistration = false;
+    const AgentxxPluginHost*       host      = nullptr;
+    const AgentxxPluginToolsIface* tools     = nullptr;
+    AgentxxPluginToolSpec          spec{};
+};
+
+void* AGENTXX_PLUGIN_CALL
+    lifecycleStartHook(void* ud, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString* error) {
+    auto& probe = *static_cast<LifecycleProbe*>(ud);
+    ++probe.starts;
+    if (probe.tools && probe.host) {
+        const int32_t rc = probe.tools->register_tool(probe.host, &probe.spec);
+        probe.partialRegistration = (rc == 0);
+    }
+    if (probe.failStart) {
+        // 事务中途失败：宿主必须撤销这次已生效的注册（部分注册回滚）。
+        hostMemorySetString(error, "start refused by probe");
+        return nullptr;
+    }
+    notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+    return nullptr;
+}
+
+void* AGENTXX_PLUGIN_CALL lifecycleStopHook(
+    void* ud, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString*
+) {
+    auto& probe = *static_cast<LifecycleProbe*>(ud);
+    ++probe.stops;
+    if (probe.tools && probe.host) {
+        probe.tools->unregister_tool(probe.host, &probe.spec.name);
+    }
+    notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+    return nullptr;
 }
 } // namespace
 
@@ -877,6 +929,262 @@ TestResult testPluginRuntime() {
         out = {};
         XX_TEST_EXPECT_EQ(ifaces.config->get_plugin_args(fresh->hostView(), &out), 0);
         hostMemoryFree(out.data);
+    }
+
+    /// P1-4/F20: prompt 贡献模型 —— 多 owner 叠加、卸载只移除自己的贡献、不把
+    /// 已卸载 owner 的旧值写回，用户外部修改后卸载保留用户值。
+    {
+        auto ctx         = std::make_shared<agentxx::agent::AgentContext>();
+        ctx->agentConfig = std::make_shared<agentxx::agent::AgentConfig>();
+        RuntimeFixture f(ctx);
+        auto&          prompt     = ctx->agentConfig->prompt;
+        const std::string baseSys = prompt.systemPrompt;
+
+        // 1) 两个 owner 依次写同一个 append 键：后者生效
+        XX_TEST_EXPECT_EQ(
+            f.manager->setPromptJson(f.provider.get(), R"({"appendSystemPrompts":{"demo":"A"}})"),
+            0
+        );
+        XX_TEST_EXPECT_EQ(prompt.appendSystemPrompts["demo"], std::string{"A"});
+        XX_TEST_EXPECT_EQ(
+            f.manager->setPromptJson(f.caller.get(), R"({"appendSystemPrompts":{"demo":"B"}})"),
+            0
+        );
+        XX_TEST_EXPECT_EQ(prompt.appendSystemPrompts["demo"], std::string{"B"});
+
+        // 2) 先卸载写 "A" 的 owner：只剩 caller 的贡献
+        f.manager->restorePromptBackup(f.provider.get());
+        XX_TEST_EXPECT_EQ(prompt.appendSystemPrompts["demo"], std::string{"B"});
+
+        // 3) 再卸载 caller：回到基础值（原本不存在 -> 键删除），不写回已离开的 "A"
+        f.manager->restorePromptBackup(f.caller.get());
+        XX_TEST_EXPECT_TRUE(prompt.appendSystemPrompts.find("demo") == prompt.appendSystemPrompts.end());
+
+        // 4) 外部（用户）修改后卸载：保留用户值
+        XX_TEST_EXPECT_EQ(
+            f.manager->setPromptJson(f.provider.get(), R"({"appendSystemPrompts":{"u":"plugin"}})"),
+            0
+        );
+        prompt.appendSystemPrompts["u"] = "user";
+        f.manager->restorePromptBackup(f.provider.get());
+        XX_TEST_EXPECT_EQ(prompt.appendSystemPrompts["u"], std::string{"user"});
+        prompt.appendSystemPrompts.erase("u");
+
+        // 5) systemPrompt 卸载回到基础值
+        XX_TEST_EXPECT_EQ(
+            f.manager->setPromptJson(f.provider.get(), R"({"systemPrompt":"plugin system"})"),
+            0
+        );
+        XX_TEST_EXPECT_EQ(prompt.systemPrompt, std::string{"plugin system"});
+        f.manager->restorePromptBackup(f.provider.get());
+        XX_TEST_EXPECT_EQ(prompt.systemPrompt, baseSys);
+
+        // 6) toolPrompt：部分覆盖语义 + 卸载删除新增键
+        XX_TEST_EXPECT_EQ(
+            f.manager->setPromptJson(
+                f.provider.get(),
+                R"({"toolPrompt":{"demo_tool":{"depict":"D","args":{"a":"1"}}}})"
+            ),
+            0
+        );
+        XX_TEST_EXPECT_EQ(prompt.toolPrompt["demo_tool"].depict, std::string{"D"});
+        XX_TEST_EXPECT_EQ(prompt.toolPrompt["demo_tool"].args["a"], std::string{"1"});
+        XX_TEST_EXPECT_EQ(
+            f.manager->setPromptJson(
+                f.provider.get(),
+                R"({"toolPrompt":{"demo_tool":{"args":{"b":"2"}}}})"
+            ),
+            0
+        );
+        XX_TEST_EXPECT_EQ(prompt.toolPrompt["demo_tool"].depict, std::string{"D"});
+        XX_TEST_EXPECT_EQ(prompt.toolPrompt["demo_tool"].args["b"], std::string{"2"});
+        f.manager->restorePromptBackup(f.provider.get());
+        XX_TEST_EXPECT_TRUE(prompt.toolPrompt.find("demo_tool") == prompt.toolPrompt.end());
+    }
+
+    /// P1-4: 禁用/启用事务（导出 start/stop 的插件）—— 宿主侧立即摘除注册，
+    /// stop 在 IO 线程撤销插件自管注册，start 重新声明；stop 成功后清空旧记录，
+    /// 因此重复 enable/disable 不会累积重复项。
+    {
+        RuntimeFixture f;
+        auto          inst  = f.instance("lifecycle_plugin", 7);
+        auto          probe = std::make_shared<LifecycleProbe>();
+        probe->host         = inst->hostView();
+        probe->tools        = AgentIfaces::query(probe->host).tools;
+        probe->spec         = fakeTool(nullptr, false);
+        XX_TEST_EXPECT_TRUE(probe->tools != nullptr);
+        if (!probe->tools) {
+            return result;
+        }
+
+        inst->lifecycleStart  = &lifecycleStartHook;
+        inst->lifecycleStop   = &lifecycleStopHook;
+        inst->pluginCtx       = probe.get();
+        inst->lifecycleStarted = true;
+        const int baseStarts  = probe->starts;
+        const int baseStops   = probe->stops;
+
+        // 加载时的初始注册（模拟 create/start 已完成）
+        XX_TEST_EXPECT_EQ(f.manager->registerTool(inst.get(), &probe->spec), 0);
+        XX_TEST_EXPECT_TRUE(f.manager->registry()->contains("runtime_tool"));
+
+        // ---- disable: 宿主侧同步摘除；stop 事务投递到 IO 线程 ----
+        f.manager->disable("lifecycle_plugin");
+        XX_TEST_EXPECT_FALSE(inst->enabled);
+        XX_TEST_EXPECT_TRUE(inst->userDisabled);
+        XX_TEST_EXPECT_EQ(
+            static_cast<int>(inst->lifetime->state()),
+            static_cast<int>(PluginInstanceState::Disabled)
+        );
+        XX_TEST_EXPECT_FALSE(f.manager->registry()->contains("runtime_tool"));
+        XX_TEST_EXPECT_FALSE(inst->lifecycleStopped); // stop 尚未执行
+        XX_TEST_EXPECT_EQ(probe->stops, baseStops);
+        f.drainAll();
+        XX_TEST_EXPECT_EQ(probe->stops, baseStops + 1);
+        XX_TEST_EXPECT_TRUE(inst->lifecycleStopped);
+        XX_TEST_EXPECT_TRUE(inst->toolNames.empty()); // 记录已清空，等待 start 重新声明
+
+        // ---- enable: start 事务重新注册 ----
+        f.manager->enable("lifecycle_plugin");
+        XX_TEST_EXPECT_TRUE(inst->enabled);
+        XX_TEST_EXPECT_FALSE(inst->userDisabled);
+        f.drainAll();
+        XX_TEST_EXPECT_EQ(probe->starts, baseStarts + 1);
+        XX_TEST_EXPECT_FALSE(inst->lifecycleStopped);
+        XX_TEST_EXPECT_EQ(
+            static_cast<int>(inst->lifetime->state()),
+            static_cast<int>(PluginInstanceState::Ready)
+        );
+        XX_TEST_EXPECT_TRUE(f.manager->registry()->contains("runtime_tool"));
+        XX_TEST_EXPECT_EQ(inst->toolNames.size(), size_t{1});
+
+        // ---- 重复 enable/disable 不累积重复项 ----
+        for (int i = 0; i < 3; ++i) {
+            f.manager->disable("lifecycle_plugin");
+            f.drainAll();
+            f.manager->enable("lifecycle_plugin");
+            f.drainAll();
+        }
+        XX_TEST_EXPECT_EQ(probe->starts, baseStarts + 4);
+        XX_TEST_EXPECT_EQ(probe->stops, baseStops + 4);
+        XX_TEST_EXPECT_EQ(inst->toolNames.size(), size_t{1});
+        XX_TEST_EXPECT_EQ(inst->tools.size(), size_t{1});
+
+        // ---- 禁用后立刻启用（stop 事务仍在队列）: 先 stop 再 start ----
+        f.manager->disable("lifecycle_plugin");
+        f.manager->enable("lifecycle_plugin");
+        f.drainAll();
+        XX_TEST_EXPECT_TRUE(inst->enabled);
+        XX_TEST_EXPECT_FALSE(inst->lifecycleStopped);
+        XX_TEST_EXPECT_TRUE(f.manager->registry()->contains("runtime_tool"));
+        XX_TEST_EXPECT_EQ(inst->toolNames.size(), size_t{1});
+        XX_TEST_EXPECT_EQ(probe->starts, baseStarts + 5);
+
+        // ---- start 失败: 回到 Disabled、不留部分注册；再次启用可恢复 ----
+        probe->failStart = true;
+        f.manager->disable("lifecycle_plugin");
+        f.drainAll();
+        const int startsBeforeFail = probe->starts;
+        probe->partialRegistration = false;
+        f.manager->enable("lifecycle_plugin");
+        f.drainAll();
+        XX_TEST_EXPECT_EQ(probe->starts, startsBeforeFail + 1);
+        XX_TEST_EXPECT_TRUE(probe->partialRegistration); // start 确实留下过部分注册
+        XX_TEST_EXPECT_FALSE(inst->enabled);
+        XX_TEST_EXPECT_EQ(
+            static_cast<int>(inst->lifetime->state()),
+            static_cast<int>(PluginInstanceState::Disabled)
+        );
+        XX_TEST_EXPECT_FALSE(f.manager->registry()->contains("runtime_tool")); // 已回滚
+        XX_TEST_EXPECT_TRUE(inst->toolNames.empty());
+
+        probe->failStart = false;
+        f.manager->enable("lifecycle_plugin");
+        f.drainAll();
+        XX_TEST_EXPECT_TRUE(inst->enabled);
+        XX_TEST_EXPECT_EQ(
+            static_cast<int>(inst->lifetime->state()),
+            static_cast<int>(PluginInstanceState::Ready)
+        );
+        XX_TEST_EXPECT_TRUE(f.manager->registry()->contains("runtime_tool"));
+
+        // ---- 关闭流程中的实例不接受启用状态变化 ----
+        inst->lifetime->requestClose();
+        f.manager->disable("lifecycle_plugin");
+        XX_TEST_EXPECT_TRUE(inst->enabled);
+        XX_TEST_EXPECT_EQ(
+            static_cast<int>(inst->lifetime->state()),
+            static_cast<int>(PluginInstanceState::Closing)
+        );
+
+        // ---- 关闭收尾: 欠着的 stop 由卸载路径补齐, 之后才能 destroy ----
+        const int stopsBeforeUnload = probe->stops;
+        bool      unloaded          = false;
+        asio::co_spawn(
+            f.io,
+            [&]() -> asio::awaitable<void> {
+                unloaded = co_await f.manager->unloadAsync("lifecycle_plugin", 500ms);
+            },
+            asio::detached
+        );
+        f.drainAll();
+        XX_TEST_EXPECT_TRUE(unloaded);
+        XX_TEST_EXPECT_EQ(probe->stops, stopsBeforeUnload + 1);
+        XX_TEST_EXPECT_TRUE(inst->pluginDestroyed);
+        XX_TEST_EXPECT_EQ(
+            static_cast<int>(inst->lifetime->state()),
+            static_cast<int>(PluginInstanceState::Closed)
+        );
+        XX_TEST_EXPECT_TRUE(f.manager->find("lifecycle_plugin") == nullptr);
+    }
+
+    /// F09: 依赖级联 —— 三级与菱形依赖的禁用/恢复；用户显式禁用不被级联恢复。
+    {
+        RuntimeFixture f;
+        auto          leaf = f.instance("leaf", 20);
+        auto          mid  = f.instance("mid", 21);
+        auto          side = f.instance("side", 22);
+        auto          top  = f.instance("top", 23);
+        mid->depends       = {"leaf"};
+        side->depends      = {"leaf"};
+        top->depends       = {"mid", "side"}; // 菱形: top 经 mid/side 两级依赖 leaf
+
+        // ---- 三级 + 菱形级联禁用 ----
+        f.manager->disable("leaf");
+        XX_TEST_EXPECT_FALSE(leaf->enabled);
+        XX_TEST_EXPECT_TRUE(leaf->userDisabled);
+        XX_TEST_EXPECT_FALSE(mid->enabled);
+        XX_TEST_EXPECT_TRUE(mid->blockedByDependencies);
+        XX_TEST_EXPECT_FALSE(side->enabled);
+        XX_TEST_EXPECT_TRUE(side->blockedByDependencies);
+        XX_TEST_EXPECT_FALSE(top->enabled); // 三级依赖也被级联
+        XX_TEST_EXPECT_TRUE(top->blockedByDependencies);
+        XX_TEST_EXPECT_FALSE(top->userDisabled);
+
+        // ---- 启用按依赖拓扑恢复全部被级联禁用的插件 ----
+        f.manager->enable("leaf");
+        XX_TEST_EXPECT_TRUE(leaf->enabled);
+        XX_TEST_EXPECT_TRUE(mid->enabled);
+        XX_TEST_EXPECT_TRUE(side->enabled);
+        XX_TEST_EXPECT_TRUE(top->enabled);
+        XX_TEST_EXPECT_FALSE(mid->blockedByDependencies);
+        XX_TEST_EXPECT_FALSE(top->blockedByDependencies);
+
+        // ---- 用户显式禁用的插件不被级联恢复 ----
+        f.manager->disable("top");
+        XX_TEST_EXPECT_TRUE(top->userDisabled);
+        f.manager->disable("leaf");
+        XX_TEST_EXPECT_FALSE(mid->enabled);
+        XX_TEST_EXPECT_TRUE(mid->blockedByDependencies);
+        XX_TEST_EXPECT_TRUE(top->userDisabled); // 用户禁用标记不被级联改写
+        f.manager->enable("leaf");
+        XX_TEST_EXPECT_TRUE(mid->enabled);
+        XX_TEST_EXPECT_TRUE(side->enabled);
+        XX_TEST_EXPECT_FALSE(top->enabled); // 用户显式禁用: 级联不恢复
+        XX_TEST_EXPECT_TRUE(top->userDisabled);
+        f.manager->enable("top"); // 用户显式启用
+        XX_TEST_EXPECT_TRUE(top->enabled);
+        XX_TEST_EXPECT_FALSE(top->userDisabled);
     }
 
     /// P0-1: 注册类入口的执行期复查 —— 排队期间实例进入 Closing 时，注册必须被
