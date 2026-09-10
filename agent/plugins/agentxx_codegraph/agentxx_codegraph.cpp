@@ -30,16 +30,7 @@ struct HostConfig {
 
 struct PluginCtx : public agentxx::plugin::PluginBase {
     std::shared_ptr<agentxx_codegraph_plugin::CodeGraphManager> mgr;
-    std::thread                                                 warmup;
-    std::atomic<bool>                                           stop{false};
     std::string                                                 projectRoot;
-
-    ~PluginCtx() {
-        if (warmup.joinable()) {
-            stop.store(true, std::memory_order_release);
-            warmup.join();
-        }
-    }
 };
 
 static HostConfig
@@ -839,61 +830,102 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
         }
         ctx->projectRoot = projectRoot;
 
-        ensureToolPromptsInHost(ctx->host, ctx->iface);
-        injectCodegraphSystemPrompt(ctx->host, ctx->iface);
-        registerAllTools(*ctx);
-
-        ctx->stop.store(false);
-        ctx->warmup = std::thread([ctxPtr = ctx.get()]() {
-            try {
-                std::this_thread::sleep_for(std::chrono::seconds(2));
-                if (ctxPtr->stop.load(std::memory_order_acquire)) {
-                    return;
-                }
-                auto t0 = std::chrono::steady_clock::now();
-                bool ok = ctxPtr->mgr->updateIndex();
-                auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-                              std::chrono::steady_clock::now() - t0
-                )
-                              .count();
-                pluginLog(
-                    ctxPtr->host,
-                    ctxPtr->iface.log,
-                    ok ? 2 : 3,
-                    fmt::format(
-                        "[codegraph] background warmup index {} ({}ms)",
-                        ok ? "done" : "failed",
-                        ms
-                    )
-                );
-            } catch (...) {
-            }
-        });
-
-        if (ctx->iface.events && ctx->iface.events->subscribe) {
-            auto attachTopic
-                = agentxx::plugin::PluginStringView::fromCstr("agentxx_host.client_attached");
-            ctx->iface.events->subscribe(host, &attachTopic, on_client_attached, ctx.get());
-        }
-
-        pluginLog(host, ctx->iface.log, 2, "agentxx_codegraph loaded (6 tools)");
-
-        if (ctx->iface.events && ctx->iface.events->publish) {
-            codegraph::Json j   = codegraph::Json::object();
-            j["loaded"]         = true;
-            j["project_root"]   = projectRoot;
-            std::string payload = j.dump();
-            auto        statusTopic
-                = agentxx::plugin::PluginStringView::fromCstr("agentxx_codegraph.status");
-            auto payloadSv
-                = agentxx::plugin::PluginStringView::from(payload.data(), payload.size());
-            ctx->iface.events->publish(ctx->host, &statusTopic, &payloadSv);
-        }
-
+        // 工具/prompt/事件/后台索引任务属于 start 事务, 见 codegraphAgentSetup
         *plugin_ctx = ctx.release();
         return 0;
     });
 }
+
+/// 注册事务 (start 的实际内容): 工具/prompt/事件订阅/后台索引预热。
+/// - dataDir 缺失或 initialize 失败时 mgr 为空: 保持降级加载, start 直接完成
+///   (与迁移前 create 的降级行为一致)。
+/// - 后台 warmup 由 std::thread 改为宿主托管任务 (ctx.spawn): 卸载时可取消,
+///   且 offload 期间持有实例 lease, destroy/dlclose 前必然等待索引代码返回。
+static int codegraphAgentSetup(PluginCtx& ctx) {
+    if (!ctx.mgr) {
+        return 0;
+    }
+    ensureToolPromptsInHost(ctx.host, ctx.iface);
+    injectCodegraphSystemPrompt(ctx.host, ctx.iface);
+    registerAllTools(ctx);
+
+    if (ctx.iface.events && ctx.iface.events->subscribe) {
+        auto attachTopic
+            = agentxx::plugin::PluginStringView::fromCstr("agentxx_host.client_attached");
+        ctx.iface.events->subscribe(ctx.host, &attachTopic, on_client_attached, &ctx);
+    }
+
+    ctx.spawn([](PluginCtx& c, agentxx::plugin::OpCtl ctl) -> agentxx::plugin::Task<void> {
+        co_await agentxx::plugin::sleep(c, 2000);
+        if (ctl.cancelled()) {
+            co_return;
+        }
+        const auto startedAt = std::chrono::steady_clock::now();
+        const bool ok        = co_await agentxx::plugin::offload(
+            c,
+            [&c](const AgentxxPluginCancelToken*) { return c.mgr->updateIndex(); }
+        );
+        const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                            std::chrono::steady_clock::now() - startedAt
+        )
+                            .count();
+        pluginLog(
+            c.host,
+            c.iface.log,
+            ok ? 2 : 3,
+            fmt::format(
+                "[codegraph] background warmup index {} ({}ms)", ok ? "done" : "failed", ms
+            )
+        );
+    });
+
+    if (ctx.iface.events && ctx.iface.events->publish) {
+        codegraph::Json j   = codegraph::Json::object();
+        j["loaded"]         = true;
+        j["project_root"]   = ctx.projectRoot;
+        std::string payload = j.dump();
+        auto        statusTopic
+            = agentxx::plugin::PluginStringView::fromCstr("agentxx_codegraph.status");
+        auto payloadSv = agentxx::plugin::PluginStringView::from(payload.data(), payload.size());
+        ctx.iface.events->publish(ctx.host, &statusTopic, &payloadSv);
+    }
+    pluginLog(ctx.host, ctx.iface.log, 2, "agentxx_codegraph started (6 tools)");
+    return 0;
+}
+
+static void* codegraphAgentStart(
+    PluginCtx& ctx, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString* error
+) {
+    if (!notify) {
+        if (error) {
+            agentxx::plugin::PluginString::set(
+                ctx.host, error, "agentxx_codegraph start: notify required"
+            );
+        }
+        return nullptr;
+    }
+    if (codegraphAgentSetup(ctx) != 0) {
+        if (error) {
+            agentxx::plugin::PluginString::set(
+                ctx.host, error, "agentxx_codegraph start: setup failed"
+            );
+        }
+        return nullptr;
+    }
+    notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+    return nullptr;
+}
+
+static void* codegraphAgentStop(
+    PluginCtx&, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString*
+) {
+    // 注册记录与后台任务句柄由宿主在 stop 后统一撤销/取消; 索引数据保留在
+    // 实例上下文中, 下次 start 直接复用。
+    notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+    return nullptr;
+}
+
+AGENTXX_PLUGIN_AGENT_LIFECYCLE_EXPORT(PluginCtx, codegraphAgentStart, codegraphAgentStop)
 
 extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_agent_destroy(void* plugin_ctx) {
     auto* ctx = static_cast<PluginCtx*>(plugin_ctx);

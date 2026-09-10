@@ -37,9 +37,16 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
             kNameHtml2Md,
             kDepictHtml2Md,
             html2mdSchema,
-            [](std::string_view args_json) -> std::string {
+            [](std::string_view args_json, const AgentxxPluginCancelToken* cancel_token) -> std::string {
+                if (agentxx_plugin_cancel_is_requested(cancel_token)) {
+                    throw agentxx::plugin::CancelledException("html2markdown cancelled");
+                }
                 ArgReader args(args_json);
-                return htmlToMarkdownExecute(args.raw());
+                auto      out = htmlToMarkdownExecute(args.raw());
+                if (agentxx_plugin_cancel_is_requested(cancel_token)) {
+                    throw agentxx::plugin::CancelledException("html2markdown cancelled");
+                }
+                return out;
             }
         );
 
@@ -74,9 +81,16 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
             kNameRegexp,
             kDepictRegexp,
             regexpSchema,
-            [](std::string_view args_json) -> std::string {
+            [](std::string_view args_json, const AgentxxPluginCancelToken* cancel_token) -> std::string {
+                if (agentxx_plugin_cancel_is_requested(cancel_token)) {
+                    throw agentxx::plugin::CancelledException("regexp cancelled");
+                }
                 ArgReader args(args_json);
-                return regexpExecute(args.raw());
+                auto      out = regexpExecute(args.raw());
+                if (agentxx_plugin_cancel_is_requested(cancel_token)) {
+                    throw agentxx::plugin::CancelledException("regexp cancelled");
+                }
+                return out;
             }
         );
 

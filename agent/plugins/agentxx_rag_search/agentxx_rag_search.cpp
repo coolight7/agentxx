@@ -113,7 +113,12 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
             kNameSearch,
             kDepictSearch,
             schema,
-            [](RagPluginCtx& c, std::string_view args_json) -> std::string {
+            [](RagPluginCtx& c,
+               std::string_view args_json,
+               const AgentxxPluginCancelToken* cancel_token) -> std::string {
+                if (agentxx_plugin_cancel_is_requested(cancel_token)) {
+                    throw agentxx::plugin::CancelledException("rag_search cancelled");
+                }
                 ArgReader args(args_json);
                 auto      query = args.require<std::string>("query");
                 if (!args.ok()) {
@@ -125,6 +130,9 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
                     return R"({"error":"rag index not initialized"})";
                 }
                 auto results = c.store->search(query, static_cast<size_t>(top_k));
+                if (agentxx_plugin_cancel_is_requested(cancel_token)) {
+                    throw agentxx::plugin::CancelledException("rag_search cancelled");
+                }
                 if (!results.has_value()) {
                     return fmt::format("Search error: {}", results.error());
                 }

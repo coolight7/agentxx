@@ -87,7 +87,12 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
             kNameFetch,
             kDepictFetch,
             fetchSchema,
-            [](WebsearchPluginCtx&, std::string_view args_json) -> std::string {
+            [](WebsearchPluginCtx&,
+               std::string_view args_json,
+               const AgentxxPluginCancelToken* cancel_token) -> std::string {
+                if (agentxx_plugin_cancel_is_requested(cancel_token)) {
+                    throw CancelledException("web_fetch cancelled");
+                }
                 ArgReader          args(args_json);
                 asio::io_context   io;
                 std::string        result;
@@ -104,6 +109,9 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
                     asio::detached
                 );
                 io.run();
+                if (agentxx_plugin_cancel_is_requested(cancel_token)) {
+                    throw CancelledException("web_fetch cancelled");
+                }
                 if (ep) {
                     std::rethrow_exception(ep);
                 }
@@ -142,7 +150,12 @@ When resolving relative links found in the returned Markdown, combine them with 
             kNameFetchMd,
             kDepictFetchMd,
             fetchMdSchema,
-            [](WebsearchPluginCtx&, std::string_view args_json) -> std::string {
+            [](WebsearchPluginCtx&,
+               std::string_view args_json,
+               const AgentxxPluginCancelToken* cancel_token) -> std::string {
+                if (agentxx_plugin_cancel_is_requested(cancel_token)) {
+                    throw CancelledException("web_fetch_markdown cancelled");
+                }
                 ArgReader          args(args_json);
                 asio::io_context   io;
                 std::string        result;
@@ -159,6 +172,9 @@ When resolving relative links found in the returned Markdown, combine them with 
                     asio::detached
                 );
                 io.run();
+                if (agentxx_plugin_cancel_is_requested(cancel_token)) {
+                    throw CancelledException("web_fetch_markdown cancelled");
+                }
                 if (ep) {
                     std::rethrow_exception(ep);
                 }
@@ -187,7 +203,12 @@ When resolving relative links found in the returned Markdown, combine them with 
                 kNameSearch,
                 kDepictSearch,
                 searchSchema,
-                [](WebsearchPluginCtx& c, std::string_view args_json) -> std::string {
+                [](WebsearchPluginCtx& c,
+                   std::string_view args_json,
+                   const AgentxxPluginCancelToken* cancel_token) -> std::string {
+                    if (agentxx_plugin_cancel_is_requested(cancel_token)) {
+                        throw CancelledException("web_search cancelled");
+                    }
                     ArgReader          args(args_json);
                     asio::io_context   io;
                     std::string        result;
@@ -213,6 +234,9 @@ When resolving relative links found in the returned Markdown, combine them with 
                         asio::detached
                     );
                     io.run();
+                    if (agentxx_plugin_cancel_is_requested(cancel_token)) {
+                        throw CancelledException("web_search cancelled");
+                    }
                     if (ep) {
                         std::rethrow_exception(ep);
                     }

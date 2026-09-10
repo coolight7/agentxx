@@ -33,21 +33,21 @@ namespace agentxx {
 namespace test {
 
 /// 与 test_plugins 同款定位逻辑: exe 同目录 plugins/example_plugin
-static std::string findExamplePluginDirMI() {
+static std::string findPluginDirMI(std::string_view pluginName) {
     namespace fs = std::filesystem;
     std::error_code       ec;
     std::vector<fs::path> candidates;
 #if XX_IS_WIN_D
     wchar_t buf[MAX_PATH];
     if (::GetModuleFileNameW(nullptr, buf, MAX_PATH) > 0) {
-        candidates.push_back(fs::path(buf).parent_path() / "plugins" / "example_plugin");
+        candidates.push_back(fs::path(buf).parent_path() / "plugins" / pluginName);
     }
 #else
     if (auto p = fs::read_symlink("/proc/self/exe", ec); !ec) {
-        candidates.push_back(p.parent_path() / "plugins" / "example_plugin");
+        candidates.push_back(p.parent_path() / "plugins" / pluginName);
     }
 #endif
-    candidates.push_back(fs::current_path(ec) / "plugins" / "example_plugin");
+    candidates.push_back(fs::current_path(ec) / "plugins" / pluginName);
     auto hasLibFile = [](const fs::path& dir) {
         std::error_code                     ec2;
         std::filesystem::directory_iterator it(dir, ec2);
@@ -66,6 +66,10 @@ static std::string findExamplePluginDirMI() {
         }
     }
     return {};
+}
+
+static std::string findExamplePluginDirMI() {
+    return findPluginDirMI("example_plugin");
 }
 
 /// 构造最小 AgentContext (与 run_plugin_tests 相同装配)
@@ -282,6 +286,57 @@ asio::awaitable<TestResult> run_plugin_multi_instance_tests() {
                 }
             }
             co_await ctxA->pluginManager->unloadAsync("example_plugin");
+        }
+    }
+
+    // ---- 6. agentxx_system_monitor 双实例: 后台采样任务按实例隔离, 卸载互不影响 ----
+    {
+        auto dir = findPluginDirMI("agentxx_system_monitor");
+        XX_TEST_EXPECT_TRUE(!dir.empty());
+        if (!dir.empty()) {
+            auto monA = co_await ctxA->pluginManager->loadPluginAsync(dir);
+            auto monB = co_await ctxB->pluginManager->loadPluginAsync(dir);
+            XX_TEST_EXPECT_TRUE(monA != nullptr);
+            XX_TEST_EXPECT_TRUE(monB != nullptr);
+            if (monA && monB) {
+                XX_TEST_EXPECT_TRUE(monA.get() != monB.get());
+                XX_TEST_EXPECT_TRUE(monA->hostView()->opaque != monB->hostView()->opaque);
+                // 后台采样任务 (ctx.spawn) 各自登记到自己的实例
+                XX_TEST_EXPECT_FALSE(monA->outstandingOps.empty());
+                XX_TEST_EXPECT_FALSE(monB->outstandingOps.empty());
+                if (!monA->outstandingOps.empty() && !monB->outstandingOps.empty()) {
+                    XX_TEST_EXPECT_TRUE(
+                        monA->outstandingOps.front().get() != monB->outstandingOps.front().get()
+                    );
+                }
+                XX_TEST_EXPECT_TRUE(ctxA->toolRegistry->contains("agentxx_get_system_core_info"));
+                XX_TEST_EXPECT_TRUE(ctxB->toolRegistry->contains("agentxx_get_system_core_info"));
+
+                // 卸载 A: A 的采样任务被取消并回收, B 的实例与任务不受影响
+                XX_TEST_EXPECT_TRUE(
+                    co_await ctxA->pluginManager->unloadAsync(
+                        "agentxx_system_monitor", std::chrono::seconds{10}
+                    )
+                );
+                XX_TEST_EXPECT_EQ(monA->lifetime->leaseCount(), size_t{0});
+                XX_TEST_EXPECT_FALSE(ctxA->toolRegistry->contains("agentxx_get_system_core_info"));
+                XX_TEST_EXPECT_TRUE(ctxB->toolRegistry->contains("agentxx_get_system_core_info"));
+                XX_TEST_EXPECT_FALSE(monB->outstandingOps.empty());
+
+                // B 仍可执行采样工具并得到结果
+                auto toolB = ctxB->toolRegistry->find("agentxx_get_system_core_info");
+                XX_TEST_EXPECT_TRUE(toolB != nullptr);
+                if (toolB) {
+                    auto out = co_await toolB->execute_async(agentxx::util::Json::object());
+                    XX_TEST_EXPECT_TRUE(out.find("CPU Usage:") != std::string::npos);
+                }
+                XX_TEST_EXPECT_TRUE(
+                    co_await ctxB->pluginManager->unloadAsync(
+                        "agentxx_system_monitor", std::chrono::seconds{10}
+                    )
+                );
+                XX_TEST_EXPECT_FALSE(ctxB->toolRegistry->contains("agentxx_get_system_core_info"));
+            }
         }
     }
 

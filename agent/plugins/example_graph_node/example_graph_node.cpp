@@ -476,7 +476,15 @@ static int modifyGraphToIntentFlow(AgentCtx& ctx, std::string& errOut) {
     return 0;
 }
 
-/// ---------------- entry / unload ----------------
+/// ---------------- entry / lifecycle ----------------
+///
+/// 入口语义 (见 docs/zh-cn/design/plugins.md 第 15 节):
+/// - `create`: 只构造上下文与查询接口, 不注册节点类型、不修改执行图。
+/// - `start`: 注册事务 (两个节点类型 + 执行图修改); 注册失败返回 NULL + error,
+///   宿主回滚已生效的节点类型与图类型槽位。
+/// - `stop`: 只给出完成信号; 节点类型注册记录由宿主在 stop 后统一撤销
+///   (GraphTypeSlot 失效使旧编译节点安全失败), 执行图保持当前定义。
+/// - `destroy`: 只释放本地内存。
 
 extern "C" AGENTXX_PLUGIN_EXPORT int
     agentxx_plugin_agent_create(const AgentxxPluginHost* host, void** plugin_ctx) {
@@ -497,48 +505,84 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
             if (!ctx->iface.graph || !ctx->iface.graph->register_node_type) {
                 return -1;
             }
-
-            // 1. 注册意图识别节点类型
-            {
-                AgentxxPluginGraphNodeTypeSpec spec{};
-                spec.type = agentxx::plugin::PluginStringView::fromCstr("example_intent_router");
-                spec.run_start          = intentRouterRunStart;
-                spec.run_cancel         = nullptr;
-                spec.user_data          = ctx.get();
-                spec.config_schema_json = agentxx::plugin::PluginStringView::fromCstr(
-                    R"({"type":"object","properties":{"intents":{"type":"array","items":{"type":"string"}},"fallback":{"type":"string"}}})"
-                );
-                if (ctx->iface.graph->register_node_type(host, &spec) != 0) {
-                    return -1;
-                }
-            }
-            // 2. 注册时间输出节点类型
-            {
-                AgentxxPluginGraphNodeTypeSpec spec{};
-                spec.type       = agentxx::plugin::PluginStringView::fromCstr("example_datetime");
-                spec.run_start  = datetimeNodeRunStart;
-                spec.run_cancel = nullptr;
-                spec.user_data  = ctx.get();
-                spec.config_schema_json
-                    = agentxx::plugin::PluginStringView::fromCstr(R"({"type":"object"})");
-                if (ctx->iface.graph->register_node_type(host, &spec) != 0) {
-                    return -1;
-                }
-            }
-
-            // 3. 修改执行图: 默认图 → 意图路由流程
-            std::string err;
-            if (modifyGraphToIntentFlow(*ctx, err) != 0) {
-                ctx->log.warn("modify graph failed: " + err);
-                // 节点已注册, 图修改失败不阻止插件加载 (宿主回退默认图)
-            }
-
-            ctx->log.info("example_graph_node loaded, graph modified");
             *plugin_ctx = ctx.release();
             return 0;
         }
     );
 }
+
+/// 注册事务 (start 的实际内容); 任一步失败由宿主回滚已生效的注册。
+static int exampleGraphAgentSetup(AgentCtx& ctx) {
+    const AgentxxPluginHost* host = ctx.host;
+
+    // 1. 注册意图识别节点类型
+    {
+        AgentxxPluginGraphNodeTypeSpec spec{};
+        spec.type = agentxx::plugin::PluginStringView::fromCstr("example_intent_router");
+        spec.run_start          = intentRouterRunStart;
+        spec.run_cancel         = nullptr;
+        spec.user_data          = &ctx;
+        spec.config_schema_json = agentxx::plugin::PluginStringView::fromCstr(
+            R"({"type":"object","properties":{"intents":{"type":"array","items":{"type":"string"}},"fallback":{"type":"string"}}})"
+        );
+        if (ctx.iface.graph->register_node_type(host, &spec) != 0) {
+            return -1;
+        }
+    }
+    // 2. 注册时间输出节点类型
+    {
+        AgentxxPluginGraphNodeTypeSpec spec{};
+        spec.type       = agentxx::plugin::PluginStringView::fromCstr("example_datetime");
+        spec.run_start  = datetimeNodeRunStart;
+        spec.run_cancel = nullptr;
+        spec.user_data  = &ctx;
+        spec.config_schema_json
+            = agentxx::plugin::PluginStringView::fromCstr(R"({"type":"object"})");
+        if (ctx.iface.graph->register_node_type(host, &spec) != 0) {
+            return -1;
+        }
+    }
+
+    // 3. 修改执行图: 默认图 → 意图路由流程
+    std::string err;
+    if (modifyGraphToIntentFlow(ctx, err) != 0) {
+        ctx.log.warn("modify graph failed: " + err);
+        // 节点已注册, 图修改失败不阻止插件加载 (宿主回退默认图)
+    }
+    return 0;
+}
+
+static void* exampleGraphAgentStart(
+    AgentCtx& ctx, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString* error
+) {
+    if (!notify) {
+        if (error) {
+            agentxx::plugin::PluginString::set(ctx.host, error, "example_graph_node start: notify required");
+        }
+        return nullptr;
+    }
+    if (exampleGraphAgentSetup(ctx) != 0) {
+        if (error) {
+            agentxx::plugin::PluginString::set(
+                ctx.host, error, "example_graph_node start: registration transaction failed"
+            );
+        }
+        return nullptr;
+    }
+    ctx.log.info("example_graph_node started, graph modified");
+    notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+    return nullptr;
+}
+
+static void* exampleGraphAgentStop(
+    AgentCtx&, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString*
+) {
+    // 没有自管线程/定时器; 注册记录由宿主在 stop 后撤销。
+    notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+    return nullptr;
+}
+
+AGENTXX_PLUGIN_AGENT_LIFECYCLE_EXPORT(AgentCtx, exampleGraphAgentStart, exampleGraphAgentStop)
 
 extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_agent_destroy(void* plugin_ctx) {
     auto* ctx = static_cast<AgentCtx*>(plugin_ctx);
