@@ -54,6 +54,7 @@ namespace {
 constexpr size_t kMemoryLimit   = 64 * 1024 * 1024; ///< JS 内存上限 64MB
 constexpr size_t kStackLimit    = 512 * 1024;       ///< JS 栈上限 512KB
 constexpr size_t kTaskTimeoutMs = 60000;            ///< 单任务 (工具执行等) 超时
+constexpr int64_t kPromiseWaitLimitMs = 120000;    ///< Promise 等待上限 (绝对截止时间)
 
 /// agentxx 桥方法 magic
 enum BridgeMagic {
@@ -85,7 +86,11 @@ enum BridgeMagic {
 struct ToolExecReq {
     std::string args, tid, tcid;
     std::string result, error;
-    bool        done = false;
+    /// Promise 被拒绝或超时: 工具调用必须映射为 FAILED (不再当成成功文本)
+    bool        failed    = false;
+    /// 引擎停止/取消: 工具调用映射为 CANCELLED
+    bool        cancelled = false;
+    bool        done      = false;
 };
 
 /// 工具绑定 (注册工具时创建, 由 JsPluginCtx 持有; execute 回调期间存活
@@ -363,13 +368,18 @@ private:
 
     /// 执行到期定时器回调 (JS 线程直接执行, 不排队; 供任务循环与
     /// drivePromise 等待期间调用)
-    void fireDueTimersInline() {
-        auto now = std::chrono::steady_clock::now();
+    /// 执行全部到期定时器; 返回实际执行的定时器数量 (0 = 没有到期项)。
+    /// 调用方据此决定"立即回到主循环跑新产生的 job", 而不是等下一个定时器。
+    size_t fireDueTimersInline() {
+        size_t fired = 0;
+        auto   now   = std::chrono::steady_clock::now();
         for (auto it = timers_.begin(); it != timers_.end();) {
             if (it->second.due > now) {
                 ++it;
                 continue;
             }
+            ++fired;
+            ++timerEpoch_;
             auto timer = std::move(it->second);
             it         = timers_.erase(it);
             auto pctx  = findPlugin(timer.plugin);
@@ -377,11 +387,20 @@ private:
                 continue; // 上下文已销毁, fn 引用随 JsPluginCtx 释放
             }
             JSValue ret = JS_Call(pctx->ctx, timer.fn, JS_UNDEFINED, 0, nullptr);
-            JSValue r   = drivePromise(pctx.get(), ret);
-            JS_FreeValue(pctx->ctx, r);
+            auto    outcome = drivePromise(pctx->ctx, ret);
+            if (outcome.kind == PromiseOutcome::Kind::Rejected) {
+                guardLog(
+                    fmt::format(
+                        "[interpreter.js] timer callback rejected: {}",
+                        rejectedText(pctx->ctx, outcome)
+                    ).c_str()
+                );
+            }
+            JS_FreeValue(pctx->ctx, outcome.value);
             JS_FreeValue(pctx->ctx, ret);
             JS_FreeValue(pctx->ctx, timer.fn);
         }
+        return fired;
     }
 
     void jsThreadMain() {
@@ -590,15 +609,26 @@ private:
         JS_FreeValue(pctx->ctx, argsObj);
         JS_FreeValue(pctx->ctx, ctxObj);
 
-        JSValue result = drivePromise(pctx.get(), ret);
+        auto outcome = drivePromise(pctx->ctx, ret);
         JS_FreeValue(pctx->ctx, ret);
-        if (JS_IsException(result)) {
-            req.error = extractException(pctx->ctx, result);
-            JS_FreeValue(pctx->ctx, result);
-        } else {
-            req.result = valueToJsonString(pctx->ctx, result);
-            JS_FreeValue(pctx->ctx, result);
+        switch (outcome.kind) {
+            case PromiseOutcome::Kind::Value:
+                req.result = valueToJsonString(pctx->ctx, outcome.value);
+                break;
+            case PromiseOutcome::Kind::Rejected:
+                req.error = rejectedText(pctx->ctx, outcome);
+                req.failed = true;
+                break;
+            case PromiseOutcome::Kind::Timeout:
+                req.error = rejectedText(pctx->ctx, outcome);
+                req.failed = true;
+                break;
+            case PromiseOutcome::Kind::Cancelled:
+                req.error   = rejectedText(pctx->ctx, outcome);
+                req.cancelled = true;
+                break;
         }
+        JS_FreeValue(pctx->ctx, outcome.value);
         JS_FreeValue(pctx->ctx, execFn);
     }
 
@@ -630,8 +660,16 @@ private:
                 arg = JS_NewString(pctx->ctx, payload.c_str());
             }
             JSValue ret = JS_Call(pctx->ctx, fn, JS_UNDEFINED, 1, &arg);
-            JSValue r   = drivePromise(pctx.get(), ret);
-            JS_FreeValue(pctx->ctx, r);
+            auto    outcome = drivePromise(pctx->ctx, ret);
+            if (outcome.kind == PromiseOutcome::Kind::Rejected) {
+                guardLog(
+                    fmt::format(
+                        "[interpreter.js] hook callback rejected: {}",
+                        rejectedText(pctx->ctx, outcome)
+                    ).c_str()
+                );
+            }
+            JS_FreeValue(pctx->ctx, outcome.value);
             JS_FreeValue(pctx->ctx, ret);
             JS_FreeValue(pctx->ctx, arg);
         }
@@ -673,8 +711,16 @@ private:
                         arg = JS_NewString(pctx->ctx, payload.c_str());
                     }
                     JSValue ret = JS_Call(pctx->ctx, handler, JS_UNDEFINED, 1, &arg);
-                    JSValue r   = drivePromise(pctx.get(), ret);
-                    JS_FreeValue(pctx->ctx, r);
+                    auto    outcome = drivePromise(pctx->ctx, ret);
+                    if (outcome.kind == PromiseOutcome::Kind::Rejected) {
+                        guardLog(
+                            fmt::format(
+                                "[interpreter.js] event handler rejected: {}",
+                                rejectedText(pctx->ctx, outcome)
+                            ).c_str()
+                        );
+                    }
+                    JS_FreeValue(pctx->ctx, outcome.value);
                     JS_FreeValue(pctx->ctx, ret);
                     JS_FreeValue(pctx->ctx, arg);
                 }
@@ -686,18 +732,47 @@ private:
 
     // ==================== Promise 驱动 ====================
 
+    /// Promise 驱动结果: 调用方必须据此映射 Operation 终态 ——
+    /// 拒绝/超时是失败, 引擎停止是取消, 不能当成成功文本 (plugin.md 第 8.4 节)。
+    struct PromiseOutcome {
+        enum class Kind { Value, Rejected, Timeout, Cancelled };
+
+        Kind        kind  = Kind::Value;
+        JSValue     value = JS_UNDEFINED; ///< Value=结果值; Rejected=拒绝原因 (均拥有)
+        std::string text;                 ///< Timeout/Cancelled 的说明文本
+    };
+
     /// 驱动 Promise 直至 settle (JS 线程内调用)
-    /// - 非 Promise 原样 Dup; Promise 驱动 job 队列; 返回结果值 (调用方 Free)
-    JSValue drivePromise(JsPluginCtx* pctx, JSValue value) {
-        if (!JS_IsPromise(value)) {
-            return JS_DupValue(pctx->ctx, value);
+    /// - 非 Promise/普通值原样 Dup 为 Value;
+    /// - JS 异常值统一归一为 Rejected (拒绝原因已取出, 不再留在 context 上);
+    /// - 用 steady_clock 绝对截止时间兜底 (interrupt handler 负责打断 CPU 长任务),
+    ///   等待点是"队列任务/下一个定时器/截止时间"三者中最近的一个, 不忙轮询。
+    PromiseOutcome drivePromise(JSContext* ctx, JSValue value) {
+        PromiseOutcome out;
+        if (JS_IsException(value)) {
+            out.kind  = PromiseOutcome::Kind::Rejected;
+            out.value = JS_GetException(ctx);
+            return out;
         }
-        // 等待上限: interrupt handler (60s) 负责打断长任务; 此处 120s 兜底
-        // (sleep 期间 interrupt 不检查, 由本 guard 控制总等待)
-        // B4: drivePromise 期间泵主队列，避免单 Promise 阻塞导致同引擎其他脚本任务饥饿
-        int guard = 0;
-        while (JS_PromiseState(pctx->ctx, value) == JS_PROMISE_PENDING && guard++ < 120000) {
-            // 先泵已入队的主队列任务（工具并发调用等），避免饥饿
+        if (!JS_IsPromise(value)) {
+            out.kind  = PromiseOutcome::Kind::Value;
+            out.value = JS_DupValue(ctx, value);
+            return out;
+        }
+        const auto deadline = std::chrono::steady_clock::now()
+                              + std::chrono::milliseconds(kPromiseWaitLimitMs);
+        while (JS_PromiseState(ctx, value) == JS_PROMISE_PENDING) {
+            if (stop_) {
+                out.kind = PromiseOutcome::Kind::Cancelled;
+                out.text = "interpreter.js engine stopped";
+                return out;
+            }
+            if (std::chrono::steady_clock::now() >= deadline) {
+                out.kind = PromiseOutcome::Kind::Timeout;
+                out.text = fmt::format("promise not settled within {}ms", kPromiseWaitLimitMs);
+                return out;
+            }
+            // 1) 先泵已入队的主队列任务 (工具并发调用等), 避免饥饿
             {
                 std::function<void()> queued;
                 {
@@ -715,38 +790,70 @@ private:
                     continue;
                 }
             }
+            // 2) 执行 QuickJS job (Promise continuation)
             JSContext* jobCtx = nullptr;
             int        rc     = JS_ExecutePendingJob(rt_, &jobCtx);
             if (rc < 0) {
-                return JS_NewString(pctx->ctx, "[pending job exception]");
+                // job 抛出的异常同样按"拒绝"处理, 不再吞成普通字符串
+                JSValue exc = jobCtx ? JS_GetException(jobCtx) : JS_UNDEFINED;
+                out.kind    = PromiseOutcome::Kind::Rejected;
+                out.value   = JS_IsUndefined(exc) ? JS_NewString(ctx, "pending job exception")
+                                                  : exc;
+                return out;
             }
-            if (rc == 0) {
-                // 无 job: 可能等待外部事件 (setTimeout); 执行到期定时器后
-                // 等待下一个定时器到期 (避免 1ms 忙轮询; 新定时器注册会
-                // notify 唤醒, stop_ 时尽快退出)
-                fireDueTimersInline();
-                auto next = nextTimerLocked();
-                if (next == std::chrono::steady_clock::time_point::max()) {
-                    // 无任何定时器: 无法推进, 短暂让出后重试 (Promise 可能
-                    // 依赖 job 队列, 由循环头 JS_ExecutePendingJob 重新检查)
-                    std::this_thread::sleep_for(std::chrono::milliseconds(1));
-                } else {
-                    std::unique_lock<std::mutex> lk(mtx_);
-                    cv_.wait_until(lk, next, [&]() {
-                        return stop_;
-                    });
+            if (rc > 0) {
+                continue;
+            }
+            // 3) 无 job: 执行到期定时器。执行过就先回到循环头重跑 job
+            //    (定时器回调解决 Promise 后会产生新的 continuation job),
+            //    否则等到"下一个定时器到期/截止时间/任务队列/定时器集合变化"。
+            if (fireDueTimersInline() > 0) {
+                continue;
+            }
+            auto                         next = nextTimerLocked();
+            std::unique_lock<std::mutex> lk(mtx_);
+            const uint64_t               epoch = timerEpoch_;
+            auto                         wake = (next == std::chrono::steady_clock::time_point::max())
+                                                   ? deadline
+                                                   : std::min(next, deadline);
+            cv_.wait_until(lk, wake, [&]() {
+                return stop_ || !queue_.empty() || timerEpoch_ != epoch;
+            });
+        }
+        if (JS_PromiseState(ctx, value) == JS_PROMISE_FULFILLED) {
+            out.kind  = PromiseOutcome::Kind::Value;
+            out.value = JS_PromiseResult(ctx, value); // 新引用, 调用方 Free
+            return out;
+        }
+        out.kind  = PromiseOutcome::Kind::Rejected;
+        out.value = JS_PromiseResult(ctx, value);
+        return out;
+    }
+
+    /// 把 PromiseOutcome 的拒绝原因转成宿主错误文本 (调用方随后 Free outcome.value)
+    std::string rejectedText(JSContext* ctx, PromiseOutcome& out) {
+        if (out.kind == PromiseOutcome::Kind::Timeout
+            || out.kind == PromiseOutcome::Kind::Cancelled) {
+            return out.text;
+        }
+        if (JS_IsUndefined(out.value) || JS_IsNull(out.value)) {
+            return "promise rejected";
+        }
+        // Error 对象的 message/name 是非枚举属性, JSON 序列化得到 "{}";
+        // 常见拒绝原因就是 Error, 这里优先取 message。
+        if (JS_IsObject(out.value)) {
+            JSValue msgVal = JS_GetPropertyStr(ctx, out.value, "message");
+            if (JS_IsString(msgVal)) {
+                std::string msg = jsToCppString(ctx, msgVal);
+                JS_FreeValue(ctx, msgVal);
+                if (!msg.empty()) {
+                    return fmt::format("promise rejected: {}", msg);
                 }
+            } else {
+                JS_FreeValue(ctx, msgVal);
             }
         }
-        if (JS_PromiseState(pctx->ctx, value) == JS_PROMISE_FULFILLED) {
-            return JS_PromiseResult(pctx->ctx, value); // 新引用, 调用方 Free
-        }
-        if (JS_PromiseState(pctx->ctx, value) == JS_PROMISE_REJECTED) {
-            JSValue     r = JS_PromiseResult(pctx->ctx, value);
-            std::string s = valueToJsonString(pctx->ctx, r);
-            return JS_NewString(pctx->ctx, s.c_str());
-        }
-        return JS_NewString(pctx->ctx, "[promise timeout]");
+        return fmt::format("promise rejected: {}", valueToJsonString(ctx, out.value));
     }
 
     // ==================== 工具函数 ====================
@@ -873,6 +980,10 @@ private:
 
     std::chrono::steady_clock::time_point taskStart_;
 
+    /// 定时器集合版本号: 注册/清除/执行都会递增, 作为等待条件的唤醒依据
+    /// (只做"是否变化"判断, 不承载业务语义)
+    uint64_t timerEpoch_ = 0;
+
     /// 定时器 (setTimeout; JS 线程访问; fn 为 Dup 引用, 到期执行后 Free)
     struct JsTimer {
         std::chrono::steady_clock::time_point due;
@@ -963,7 +1074,14 @@ void* JsEngine::toolExecuteStart(
                     }
                 } releaser{op};
                 engine->doToolExecute(binding, *req);
-                if (!req->error.empty()) {
+                if (req->cancelled) {
+                    // 引擎停止/取消: 终态为 CANCELLED, 不是普通失败
+                    auto errSv = agentxx::plugin::PluginStringView::from(
+                        req->error.data(),
+                        req->error.size()
+                    );
+                    ntfCopy.done(ntfCopy.host_ud, AGENTXX_PLUGIN_OPERATOR_CANCELLED, &errSv);
+                } else if (!req->error.empty()) {
                     auto errSv = agentxx::plugin::PluginStringView::from(
                         req->error.data(),
                         req->error.size()
@@ -1245,10 +1363,16 @@ JSValue JsEngine::bridgeCall(
                     JSValue ret      = JS_Call(ctx, execFn, JS_UNDEFINED, 2, argv2);
                     JS_FreeValue(ctx, argsObj);
                     JS_FreeValue(ctx, ctxObj);
-                    JSValue result = engine->drivePromise(pctx, ret);
+                    auto    outcome = engine->drivePromise(ctx, ret);
                     JS_FreeValue(ctx, ret);
                     JS_FreeValue(ctx, execFn);
-                    return result;
+                    if (outcome.kind == JsEngine::PromiseOutcome::Kind::Value) {
+                        return outcome.value; // 结果值所有权移交调用方
+                    }
+                    // 拒绝/超时/取消: 抛回 JS (调用方按异常处理)
+                    std::string msg = engine->rejectedText(ctx, outcome);
+                    JS_FreeValue(ctx, outcome.value);
+                    return JS_ThrowTypeError(ctx, "callTool: %s", msg.c_str());
                 }
                 JS_FreeValue(ctx, execFn);
                 return throwJsError(ctx, fmt::format("callTool: execute not a function: {}", name));
@@ -1490,7 +1614,8 @@ JSValue JsEngine::bridgeCall(
             t.plugin            = pctx->name;
             t.fn                = JS_DupValue(ctx, argv[0]);
             engine->timers_[id] = std::move(t);
-            engine->cv_.notify_all(); // 唤醒等待中的 JS 线程 (wait_until 更新)
+            ++engine->timerEpoch_;    // 定时器集合变化: 唤醒等待中的 JS 线程重算
+            engine->cv_.notify_all();
             return JS_NewInt32(ctx, static_cast<int32_t>(id));
         }
 
@@ -1502,6 +1627,7 @@ JSValue JsEngine::bridgeCall(
             JS_ToInt32(ctx, &id, argv[0]);
             auto it = engine->timers_.find(static_cast<uint64_t>(id));
             if (it != engine->timers_.end()) {
+                ++engine->timerEpoch_;
                 JS_FreeValue(ctx, it->second.fn);
                 engine->timers_.erase(it);
             }

@@ -41,6 +41,7 @@ Agentxx 插件系统采用 **纯 C ABI + COM 风格接口表查询**：
 - **接口表独立演进**：每张表首字段 `int32_t version` 独立版本号；表内函数指针可能为 `NULL` (宿主未实现该子能力，调用前判空)
 - **版本限制**：全局 `AGENTXX_PLUGIN_API_VERSION` / `AGENTXX_CLIENT_PLUGIN_API_VERSION` 均重置为 1，加载时要求 `>=` 宿主版本否则拒绝；新增能力 = 新增接口表或表内追加成员并递增该表版本，全局版本号不动
 - **线程约定**：`query_interface/alloc` 任意线程；注册类与 session/config/prompt 等 IO 约束操作由宿主内部投递同步等待；两件套 `start/cancel` 由宿主在 IO 线程驱动 (单次 <~1ms)；`AgentxxPluginOperatorNotify.done` 可任意线程回调；宿主派发给插件的完成回调 (`AgentxxOpCb`/sleep/offload done) 保证在 IO 线程 `post` 入队
+- **实例生命周期、Operation 终态与租约**：见第 15 节（Reset-v1 契约，内置插件必须遵守）
 
 ---
 
@@ -67,8 +68,13 @@ extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_agent_destroy(void* plugin_
 
 - **入口符号集**：
   - Agent 侧：`agentxx_plugin_agent_get_info` / `agentxx_plugin_agent_create` / `agentxx_plugin_agent_destroy`
+    (+ 可选的 `agentxx_plugin_agent_start` / `agentxx_plugin_agent_stop`)
   - Client 侧 (双端/纯 UI)：`agentxx_plugin_client_get_info` / `agentxx_plugin_client_create` / `agentxx_plugin_client_destroy`
+    (+ 可选的 `agentxx_plugin_client_start` / `agentxx_plugin_client_stop`)
 - **构建侧自动化**：`plugins/CMakeLists.txt` 统一配置 ELF `-fvisibility=hidden` + version script 白名单 (通配符 `agentxx_plugin_agent_*`/`agentxx_plugin_client_*`，兼容单端插件在 Android lld 下链接)，macOS `-exported_symbols_list`，MSVC `dllexport`；第三方静态库符号自动隐藏
+- **校验脚本**：`agent/script/check_plugin_exports.sh [plugin-dir]` 用 `nm -D --defined-only`
+  遍历构建产物，要求每张插件库只导出上述入口符号；出现任何其他导出符号即失败
+  (用于确认第三方静态依赖与 `agentxx_util` 的符号确实被隐藏)
 
 ---
 
@@ -218,7 +224,7 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
 - **注册**：`spawn()` 内部自动调 `register_task` (io 线程) → 宿主把句柄推入实例 `outstandingOps` (与工具 op 同列表) 并持 `inflight` (存活标记)
 - **运行**：协程照常经 `sleep`/`offload` 挂起于宿主；宿主无感，句柄静默
 - **卸载**：插件卸载时宿主 `detachAll` 统一取消 (调插件 cancel_fn: 置 cancelFlag + 唤醒挂起的 sleep/offload) → 协程 `while(!cancelled())` 退出 → `finishIfDone` (帧销毁后经 `notify.done` 恰好一次上报) → 宿主 `guard.reset` (inflight-1) + 回收句柄 → `waitInflightZero` 精确等待归零 → `dlclose` 安全，无协程帧悬挂/UAF
-- **降级**：宿主无 `agentxx.agent.tasks` 表或注册失败时 spawn 退化为纯自管协程 (无法被宿主回收，仅 WARN 日志) —— 跨版本固有限制
+- **无降级**：宿主无 `agentxx.agent.tasks` 表或注册失败时 `spawn` 直接失败 (Reset-v1 不再提供无人托管的自管协程退化路径)
 - **线程约束**：`cancel_fn` 由宿主在 io 线程回调 (协作式)；`notify.done` 可从插件任意线程上报 (宿主 `OpCore::onDone` 原子 CAS + 投递回 io)；kit 协程完成路径恒在 io 线程
 
 
@@ -300,6 +306,19 @@ Agentxx 客户端采用统一的分层工具特化渲染机制，TUI 核心层�
    - 渲染时查询顺序：`toolDecors` (按 `tool_call_id`) > `toolRenderers` (按 `tool_name`) > 通用兜底展示 (原始 `toolName` + 参数/结果文本)。
    - 插件卸载/禁用时宿主自动摘除注册并还原兜底展示，启用时无损恢复。
 
+4. **语义渲染缓存 (Reset-v1)**：
+   - 自定义 `render_fn` **只在 client IO 线程执行**：UI 线程提交
+     `ClientToolRenderRequest` (tool_call_id / tool_name / args / result / 宽度等拥有型拷贝)，
+     宿主在 IO 线程复查 renderer lease、实例 `enabled` 与可注册状态后持 lease 调用，
+     把 `displayName/summary/items` 拷成宿主对象写入 `ClientToolRenderCache`；
+     输出 JSON 的每个分配字段在成功/失败/异常路径都由宿主释放。
+   - UI 线程只读缓存：未命中时本次通用回退，结果写入后由
+     `PluginUiAdapter::onToolRenderUpdated` 通知重绘；消息块缓存 key 计入
+     `ClientToolRenderCache::version(key)`，因此"回退 → 语义内容"能及时上屏。
+   - 缓存条目记录产出插件与实例代次；禁用/卸载按插件失效并递增版本号，会话切换清空。
+     旧 UI 快照因此只能回退，不会调用已卸载插件的函数指针。
+   - 预设模版与 `toolDecors` 是纯宿主数据，仍在 UI 线程直接计算。
+
 ---
 
 ## 10. 会话资源贡献 (Skill / Memory / MCP)
@@ -367,3 +386,66 @@ Agentxx 仅维护单一 C++ 插件基础设施；JS 脚本插件经内置 `agent
 - **内置合并编译**：按 `AGENTXX_PLUGIN_BUILTIN_LIST` 合并进 `libagentxx`；此时 `test_ffi_c_api` 与 `client_plugins` 测试按条件跳过动态库路径
 - **产物布局**：独立动态库模式产物统一输出到 `{build}/exec/plugins/<插件名>/` (含 `plugin.yaml` 清单时按目录分派)
 
+---
+
+## 15. Reset-v1 实例生命周期与异步契约
+
+> 本节描述宿主 (agent 侧 `PluginManager` / client 侧 `ClientPluginManager`) 与插件之间的
+> 实例生命周期、Operation 终态与线程契约。它是插件实现的**必须遵守项**；
+> 迁移方案与验收矩阵见 `resource/history/plugin-refactor-2/plugin.md`。
+
+### 15.1 入口与状态机
+
+```
+create (纯构造) → start (注册事务) → Ready
+Ready ⇄ Disabled            (用户或依赖级联)
+Ready/Disabled → Closing → Closed
+Closing → CloseFailed → Closing (可重试)
+```
+
+- `create`：只分配上下文、查询接口、初始化纯本地字段；不提交工具/hook/能力/事件/
+  UI/prompt/graph 注册，不启动不受托管的线程。
+- `start`：在宿主 IO 线程执行注册事务；同步 `notify.done` 返回即视为成功。
+  失败时返回 `NULL + error`（视为拒绝，宿主回滚本次已生效的注册并撤销实例）。
+- `stop`：实例停用或关闭时调用，用于撤销插件自管的线程/定时器/订阅；
+  可重复尝试，失败时实例保持 `Disabled`/`CloseFailed` 且保留上下文与动态库。
+- `destroy`：只在 `stop` 完成且租约归零后调用；不得创建异步工作、不得调用宿主
+  注册接口。
+- SDK：`AGENTXX_PLUGIN_AGENT_LIFECYCLE_EXPORT(Ctx, StartFn, StopFn)` 与
+  `AGENTXX_PLUGIN_CLIENT_LIFECYCLE_EXPORT(Ctx, StartFn, StopFn)` 生成带异常兜底的
+  `agentxx_plugin_{agent,client}_{start,stop}` trampoline；不使用它们的插件保持
+  create 期注册的 legacy 行为（宿主按注册记录恢复/摘除）。
+
+### 15.2 Operation 终态协议
+
+- `start` 返回 `NULL + error` 只表示**拒绝**，此时不得调用 `notify.done`，宿主不产生
+  回调；一旦接受（无论同步还是异步 done），宿主保证恰一次完成回调。
+- `done` 可从任意线程调用；payload 仅在本次调用内借用，宿主第一步复制。
+- 一个 Operation 只产生一个终态：`OK` / `CANCELLED` / `FAILED`；终态之后的
+  `cancel` 为空操作，不再进入插件代码。
+- 取消通过不透明 `AgentxxPluginCancelToken` 查询（`is_cancelled`），插件不得把
+  `volatile` 标志或 ABI 原子地址当作跨线程同步手段。
+- 跨插件互调同时持有 **caller 与 provider 两侧租约**：caller 的完成回调返回前，
+  caller 不会被卸载/destroy。
+
+### 15.3 线程与租约
+
+- 注册表、生命周期、Operation 状态与默认插件业务只在所属 IO 线程；
+  worker/JS/平台线程是显式例外。
+- 宿主在卸载/关闭时先阻止新进入，再取消旧操作，再等待全部插件代码与回调返回
+  （事件式 idle 通知 + 绝对截止时间），最后 stop/destroy/dlclose；
+  超时进入 `CloseFailed` 并保留上下文与动态库（可重试），不会静默泄漏。
+- 插件持有宿主分配的 token（如 `host->opaque`）在实例卸载后继续使用时，
+  宿主保证**安全失败**：入口返回失败值，不访问已释放对象。
+
+### 15.4 启用/禁用事务
+
+- `disable(name)`：宿主同步摘除该实例的注册（工具/hook/能力/事件/资源/prompt 贡献/
+  graph/UI），并把 `stop` 事务投递到所属 IO 线程；级联按直接依赖者递归处理。
+- `enable(name)`：宿主恢复启用状态后，导出 `start` 的插件由 start 事务重新声明注册
+  （未完成前不恢复宿主侧记录），legacy 插件按宿主保存的记录恢复；启用顺序为
+  "先依赖、后依赖者"，用户显式禁用的插件不被级联恢复。
+- prompt 以 `(owner, key, sequence, value)` 贡献模型合成：卸载/禁用只删除该 owner 的
+  贡献并重新合成，不覆盖其他 owner，也不写回已卸载 owner 的旧值。
+- Client 侧动作按钮在渲染时记录 `plugin/generation/owner`，派发到 IO 线程复查：
+  同名插件重载后，旧点击一律丢弃。

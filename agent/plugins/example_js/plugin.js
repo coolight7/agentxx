@@ -45,6 +45,16 @@ agentxx.registerTool({
   },
 });
 
+// ---- 工具 5: Promise 拒绝 (rejection → 工具失败, 不再当成成功文本) ----
+agentxx.registerTool({
+  name: "js_reject_demo",
+  description: "JS plugin demo: a rejected Promise maps to a failed tool call.",
+  parameters: {
+    reason: { type: "string", description: "rejection reason" },
+  },
+  execute: (args) => Promise.reject(new Error(args.reason || "demo rejection")),
+});
+
 // ---- 钩子: agent_start (point 0) ----
 agentxx.onHook(0, (info) => {
   agentxx.log(2, "js hook agent_start fired: " + JSON.stringify(info));

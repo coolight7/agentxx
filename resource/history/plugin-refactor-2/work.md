@@ -2,8 +2,8 @@
 
 > 事实来源：设计定稿是 `resource/history/plugin-refactor-2/plugin.md`（Reset-v1 方案、R0-R6 阶段、F/P 问题编号、测试矩阵）。本文件只记录进度、提交边界、验证结果和待办；与 plugin.md 冲突时以 plugin.md 为准。
 >
-> 本文件更新时间：2026-09-11（P2-1a 提交，即当前 HEAD）。**状态：Reset-v1 未完成。**
-> 当前重构进度 = 十个提交：`3a4497ba`（R1-1 Runtime / Operation）、`f861bcf9`（fix-build）、
+> 本文件更新时间：2026-09-11（P2-1b 提交，即当前 HEAD）。**状态：Reset-v1 未完成。**
+> 当前重构进度 = 十一个提交：`3a4497ba`（R1-1 Runtime / Operation）、`f861bcf9`（fix-build）、
 > `b2b5114a`（Operation/Runtime 可靠性、加载事务与关闭、owner 顺序、ABI v1 / SDK 推进）、
 > `c2869f07`（P0-1 宿主控制块 / 迟到调用安全失败 / 注册执行期复查，见第 3.4 节）、
 > `8c717236`（P0-2 Operation 终态与取消线性化，见第 3.5 节）、
@@ -11,7 +11,8 @@
 > P1-1 提交（SDK 拥有型 Request / 统一 root adapter / hook 同步异步分发，见第 3.7 节）、
 > P1-4 提交（启用/禁用 start-stop 事务、prompt 贡献模型、依赖级联，见第 3.8 节）、
 > P1-3 提交（Client 工具语义渲染缓存、动作代次、client 侧启停事务与依赖级联，见第 3.9 节）、
-> P2-1a 提交（example_plugin 双端 start/stop 迁移 + SDK client 生命周期导出宏 + 导出符号白名单脚本，见第 3.10 节）。
+> P2-1a 提交（example_plugin 双端 start/stop 迁移 + SDK client 生命周期导出宏 + 导出符号白名单脚本，见第 3.10 节）、
+> P2-1b 提交（JS Promise 终态映射 / 事件式等待 + 设计文档 Reset-v1 章节，见第 3.11 节）。
 > 工作树在该提交后是**干净的**；本文档自身也已包含在最新提交中。
 > 已完成/待完成对照见第 5、6 节，内容明细见第 3、4 节。
 
@@ -113,7 +114,9 @@ ASAN_OPTIONS=detect_leaks=1:halt_on_error=0 timeout 1500s \
                           (2026-09-11, 12 文件；见第 3.9 节)
 提交 10（P2-1a）重构插件框架-P2-1a example_plugin 双端 start/stop 迁移与导出符号校验
                           (2026-09-11, 7 文件；见第 3.10 节)
-工作树          干净（无修改、无 untracked）；origin/main 停在 f861bcf9，提交 3-10 均未推送
+提交 11（P2-1b）重构插件框架-P2-1b JS Promise 终态映射与设计文档更新
+                          (2026-09-11, 5 文件；见第 3.11 节)
+工作树          干净（无修改、无 untracked）；origin/main 停在 f861bcf9，提交 3-11 均未推送
 ```
 
 `b2b5114a` 就是此前工作树里的全部增量，代码与验证记录一一对应（未做任何额外改动）；
@@ -433,6 +436,37 @@ graph/UI 注册记录在失败回滚中的显式断言。
 专项；JS（`callTool` Promise、删除 1ms 轮询、顶层异常事务、rejection/timeout 映射）；
 Windows 平台 gate（本机无 Windows 工具链，未验证）。
 
+### 3.11 P2-1b 提交：JS Promise 终态映射与设计文档更新（R4/R6）
+
+5 文件（`agentxx_javascript_engine.cpp`、`example_js/plugin.js`、
+`test_plugins.cpp`、`docs/zh-cn/design/plugins.md` + 本文档）。要点：
+
+- **Promise 终态映射（F21）**：`drivePromise` 返回值由"任何情况都返回一个 JS 字符串"
+  改为 `PromiseOutcome{Value | Rejected | Timeout | Cancelled}`：
+  - JS 异常值统一归一为 `Rejected`（异常对象由驱动侧取出，不再留在 context 上）；
+  - 工具执行据此映射终态：`Value → OK`、`Rejected/Timeout → FAILED`（错误文本带
+    拒绝原因，`Error.message` 优先）、`Cancelled → CANCELLED`；
+  - 拒绝不再被当成普通成功文本（原实现把拒绝原因塞进结果字符串直接返回）；
+  - 定时器/钩子/事件回调中的拒绝改为记录警告日志；
+  - JS 内 `agentxx.callTool` 命中本引擎工具时，拒绝改为抛回 JS。
+- **删除 1ms 忙轮询**：等待点改为"任务队列 / 下一个定时器到期 / 定时器集合版本号变化 /
+  绝对截止时间（`steady_clock`）"四者中最近的一个；定时器集合新增 `timerEpoch_`
+  版本号并在注册/清除/执行时递增，`setTimeout` 注册会 `notify_all` 唤醒等待者。
+  修复过程中发现并解决了一个真实缺陷：执行完到期定时器后必须立即回到循环头重跑
+  QuickJS job（定时器回调解决 Promise 会产生新的 continuation job），否则谓词会
+  一直等到下一个（可能 30s 后的）定时器，导致虚假超时。
+- **正例与回归**：`example_js` 新增演示工具 `js_reject_demo`（返回 rejected Promise）；
+  `plugins` 新增用例断言该工具调用**失败**且错误文本包含拒绝原因。
+- **设计文档更新（plugin.md 第 12 节要求）**：`docs/zh-cn/design/plugins.md` 新增第 15 节
+  “Reset-v1 实例生命周期与异步契约”（状态机、入口语义、Operation 终态、线程与租约、
+  启用/禁用事务、prompt 贡献、动作代次），并更新第 2/4/9 节（线程约定新增第 15 节指引、
+  入口符号集补 start/stop 与 `check_plugin_exports.sh`、工具渲染新增"语义渲染缓存"小节）。
+
+仍属 P2-1 未做（本节未覆盖的 JS 项）：`callTool` 尚未改为“总是返回 Promise + 事件回投
+JS 线程 settle”（当前仍是同步驱动，只是不再把拒绝当成功）；脚本顶层异常的事务化回滚；
+`hookStart` 仍是投递即完成（不等 JS 执行结果）。以上需要重构 JS 执行模型，风险较高，
+留给后续会话。
+
 ---
 
 ## 4. `b2b5114a` 内容明细（已提交，按阶段归类）
@@ -520,6 +554,8 @@ Windows 平台 gate（本机无 Windows 工具链，未验证）。
 | P1-4 生命周期 Operation 状态门禁 | 完成 | `OpCore::create` 只对业务操作检查 `enabled`/可注册状态，生命周期操作放行 Closing、拒绝 Closed |
 | R2 owner 顺序（BaseAgent / AgentHost / Client runner） | 完成 | 见 4.2 节 |
 | R2 Client semantic renderer cache | 完成 | `ClientToolRenderCache` + `requestToolRender`/`performToolRender`：插件 renderer 只在 client io 线程执行，UI 只读宿主语义快照（第 3.9 节） |
+| F21 JS rejection 当成成功文本 | 完成（终态映射） | `PromiseOutcome` + 工具终态映射（第 3.11 节）；`callTool` 的 Promise 化仍未做 |
+| R6 设计文档更新 | 完成 | `docs/zh-cn/design/plugins.md` 第 15 节 Reset-v1 契约 + 第 2/4/9 节修订（第 3.11 节） |
 | P2-1a example_plugin 双端 start/stop 迁移 | 完成 | 第 3.10 节（真实 DSO 走通 create/start/stop/destroy 四条路径） |
 | P2-1a SDK client 生命周期导出宏 | 完成 | `AGENTXX_PLUGIN_CLIENT_LIFECYCLE_EXPORT`（第 3.10 节） |
 | R6 导出符号白名单检查 | 完成 | `agent/script/check_plugin_exports.sh`；16 个插件库只导出入口符号（第 3.10、7.7 节） |
@@ -892,7 +928,41 @@ memgrowth              15 passed / 0 failed
 
 日志：`/tmp/p21-sweep-1.log`。
 
-### 7.8 `b2b5114a` 的历史验证结果
+### 7.8 P2-1b 提交的回归
+
+```bash
+cmake --build agent/build/linux-debug --target agentxx_test_repo -j12
+# 注意: builtin 模式下 example_js/plugin.js 的拷贝挂在动态库 POST_BUILD 上,
+# 只改脚本不会触发拷贝; 本次用 touch 源码 + 重建 example_js 强制刷新资源
+ASAN_OPTIONS=detect_leaks=1:halt_on_error=0 timeout 1500s \
+  agent/build/linux-debug/exec/agentxx_test \
+  ffi_c_api agent_host subagent_tool subagent_bus plugin_sdk plugin_runtime plugins \
+  plugin_resources plugin_multi_instance client_plugins agent memgrowth --fail-fast
+```
+
+```text
+ffi_c_api             117 passed / 0 failed
+plugin_runtime        526 passed / 0 failed
+plugin_sdk             29 passed / 0 failed
+subagent_bus           21 passed / 0 failed
+subagent_tool         122 passed / 0 failed
+agent_host             95 passed / 0 failed
+plugins               331 passed / 0 failed     # P2-1b 新增 3 断言（拒绝→FAILED）
+plugin_resources       83 passed / 0 failed
+plugin_multi_instance  29 passed / 0 failed
+client_plugins        375 passed / 0 failed
+agent                  91 passed / 0 failed
+memgrowth              15 passed / 0 failed
+合计                 1834 passed / 0 failed   （exit=0）
+```
+
+调试过程中确认的失败模式（保留供后续参考）：`drivePromise` 执行定时器后若不立即重跑
+QuickJS job，等待谓词会落到下一个定时器（本机实测为 30s 的超时守卫），表现为
+`promise not settled within 120000ms`；修复点是 `fireDueTimersInline()` 返回已执行数量并
+在 > 0 时 `continue`。日志：`/tmp/p21b-sweep-1.log`（失败排查过程在
+`/tmp/js-fail*.log`）。
+
+### 7.9 `b2b5114a` 的历史验证结果
 
 以下结果测自 `b2b5114a`（同样为 ASan + LSan、`--fail-fast` 的扩展回归）：
 
@@ -959,13 +1029,15 @@ client_plugins 309 / agent 91 / memgrowth 15   合计 1338 passed / 0 failed
    与依赖级联~~：已完成（第 3.9 节）。
 7. P2-1a（example_plugin 双端 start/stop 迁移 + SDK client 生命周期宏 + 导出符号脚本）：
    已完成（第 3.10 节）。
-8. P2-1 剩余 / P2-2 收尾：
+8. ~~P2-1b（JS Promise 终态映射 + 设计文档 Reset-v1 章节）~~：已完成（第 3.11 节）。
+9. P2-1 剩余 / P2-2 收尾：
    - example_resources / example_graph_node 迁移为 start/stop 事务正例；
    - string/math/system 校准 SDK 签名；websearch/rag/planning 接入 CancelToken；
      system_monitor/codegraph 多实例与后台采样专项；
-   - JS：`callTool` 返回 Promise、删除 1ms 轮询、顶层异常事务、rejection/timeout 映射；
+   - JS 剩余：`callTool` 改为始终返回 Promise（完成/失败/取消事件回投 JS 线程 settle）、
+     删除同步 `call_tool_blocking` 路径、脚本顶层异常的事务化回滚、`hookStart` 等真实完成；
    - Windows 平台 gate（screen_capture/computer_use/text_selection_monitor）：需 Windows 工具链；
-   - `docs/zh-cn/design/plugins.md` 按 Reset-v1 重写；UBSan/TSan 定向回归。
+   - 全模块 UBSan/TSan 定向回归（本轮已验证 ASan + LSan）。
 
 每一步完成后：跑对应模块回归，更新本文件第 1、5、6、7 节，再提交。
 

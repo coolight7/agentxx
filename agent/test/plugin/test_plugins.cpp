@@ -513,6 +513,25 @@ asio::awaitable<TestResult> run_plugin_tests() {
             }
         }
 
+        // ---- 15b. JS Promise 拒绝映射为工具失败 (F21: 拒绝不再当成成功文本) ----
+        {
+            auto tool = ctx->toolRegistry->find("js_reject_demo");
+            XX_TEST_EXPECT_TRUE(tool != nullptr);
+            if (tool) {
+                bool        failed = false;
+                std::string message;
+                try {
+                    (void)co_await tool->execute_async(agentxx::util::Json{{"reason", "boom-demo"}}
+                    );
+                } catch (const std::exception& e) {
+                    failed  = true;
+                    message = e.what();
+                }
+                XX_TEST_EXPECT_TRUE(failed);
+                XX_TEST_EXPECT_TRUE(message.find("boom-demo") != std::string::npos);
+            }
+        }
+
         // ---- 16. JS → 宿主插件互调 (C 桥) ----
         {
             auto tool = ctx->toolRegistry->find("js_call_host");
