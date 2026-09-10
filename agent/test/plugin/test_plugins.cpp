@@ -20,6 +20,7 @@
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <string>
 #include <thread>
@@ -543,6 +544,89 @@ asio::awaitable<TestResult> run_plugin_tests() {
                 auto j   = agentxx::util::Json::parse(out);
                 XX_TEST_EXPECT_EQ(j["host"]["echo"]["hello"].get<std::string>(), "host");
             }
+        }
+
+        // ---- 16a. callTool 始终返回 Promise (F17: 不再同步阻塞 JS 线程) ----
+        {
+            auto tool = ctx->toolRegistry->find("js_calltool_kind");
+            XX_TEST_EXPECT_TRUE(tool != nullptr);
+            if (tool) {
+                auto out = co_await tool->execute_async(agentxx::util::Json::object());
+                auto j   = agentxx::util::Json::parse(out);
+                XX_TEST_EXPECT_EQ(j["kind"].get<std::string>(), "object");
+            }
+        }
+
+        // ---- 16b. JS 脚本顶层异常的事务化回滚 (F16) ----
+        // 脚本先注册工具/事件/定时器再抛异常: load 必须失败, 且宿主注册表里
+        // 不留下任何该脚本的注册 (旧实现只释放 JSContext, 注册残留成悬垂句柄)。
+        {
+            namespace fs = std::filesystem;
+            std::error_code ec;
+            const auto      uniqueId = std::chrono::steady_clock::now().time_since_epoch().count();
+            auto scriptPath = fs::temp_directory_path(ec)
+                              / fmt::format("agentxx_js_rollback_{}.js", uniqueId);
+            {
+                std::ofstream f(scriptPath, std::ios::binary);
+                f << R"JS(
+agentxx.registerTool({
+  name: "rollback_probe_tool",
+  description: "registered before the top-level failure",
+  execute: () => "should never run",
+});
+agentxx.subscribe("rollback_probe.topic", () => {});
+setTimeout(() => agentxx.log(2, "rollback probe timer"), 60000);
+throw new Error("top-level rollback probe");
+)JS";
+            }
+            std::string args = fmt::format(
+                R"({{"name":"rollback_probe","path":{}}})",
+                agentxx::util::Json(std::string(scriptPath.string())).dump()
+            );
+            struct LoadState {
+                int         status = -1;
+                bool        done   = false;
+                std::string payload;
+            } st;
+            AgentxxPluginString loadErr{nullptr, 0};
+            auto*               jsInst = ctx->pluginManager->find("example_js").get();
+            XX_TEST_EXPECT_TRUE(jsInst != nullptr);
+            auto* op = ctx->pluginManager->invokeCapabilityAsync(
+                jsInst,
+                "interpreter.js",
+                "load",
+                args,
+                [](void* ud, int32_t status, const AgentxxPluginStringView* payload) {
+                    auto* s    = static_cast<LoadState*>(ud);
+                    s->status  = status;
+                    s->done    = true;
+                    if (payload && payload->data) {
+                        s->payload.assign(payload->data, static_cast<size_t>(payload->size));
+                    }
+                },
+                &st,
+                &loadErr
+            );
+            XX_TEST_EXPECT_TRUE(op != nullptr);
+            if (loadErr.data) {
+                agentxx::plugin::PluginString::free(jsInst->hostView(), &loadErr);
+            }
+            for (int i = 0; i < 500 && !st.done; ++i) {
+                co_await sleepMs(2);
+            }
+            XX_TEST_EXPECT_TRUE(st.done);
+            XX_TEST_EXPECT_TRUE(st.status != AGENTXX_PLUGIN_OPERATOR_OK);
+            // 注册事务回滚: 失败脚本注册的工具必须已从宿主注册表撤销
+            XX_TEST_EXPECT_FALSE(ctx->toolRegistry->contains("rollback_probe_tool"));
+            // 引擎与既有脚本不受影响
+            XX_TEST_EXPECT_TRUE(ctx->toolRegistry->contains("js_hello"));
+            auto hello = ctx->toolRegistry->find("js_hello");
+            if (hello) {
+                auto out = co_await hello->execute_async(agentxx::util::Json{{"name", "after-rollback"}}
+                );
+                XX_TEST_EXPECT_TRUE(out.find("after-rollback") != std::string::npos);
+            }
+            fs::remove(scriptPath, ec);
         }
 
         // ---- 17. 卸载 JS 插件: 工具摘除 + 引擎侧清理 ----

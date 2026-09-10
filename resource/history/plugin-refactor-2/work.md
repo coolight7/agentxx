@@ -2,8 +2,8 @@
 
 > 事实来源：设计定稿是 `resource/history/plugin-refactor-2/plugin.md`（Reset-v1 方案、R0-R6 阶段、F/P 问题编号、测试矩阵）。本文件只记录进度、提交边界、验证结果和待办；与 plugin.md 冲突时以 plugin.md 为准。
 >
-> 本文件更新时间：2026-09-11（R4-1 内置插件迁移提交）。**状态：Reset-v1 未完成。**
-> 当前重构进度 = 十四个提交：`3a4497ba`（R1-1 Runtime / Operation）、`f861bcf9`（fix-build）、
+> 本文件更新时间：2026-09-11（R4-2 JS 迁移提交）。**状态：Reset-v1 未完成。**
+> 当前重构进度 = 十五个提交：`3a4497ba`（R1-1 Runtime / Operation）、`f861bcf9`（fix-build）、
 > `b2b5114a`（Operation/Runtime 可靠性、加载事务与关闭、owner 顺序、ABI v1 / SDK 推进）、
 > `c2869f07`（P0-1 宿主控制块 / 迟到调用安全失败 / 注册执行期复查，见第 3.4 节）、
 > `8c717236`（P0-2 Operation 终态与取消线性化，见第 3.5 节）、
@@ -16,7 +16,8 @@
 > P2-1c 提交（多实例可变静态审计 + 文档例外说明，见第 3.12 节）、
 > R1-2 提交（plugin.md 11.2 用例 5/8/9 + GraphTypeSlot 代次用例 + enable/unload 竞态守卫，见第 3.13 节）、
 > R4-1 提交（example_resources/example_graph_node 迁移、CancelToken 接入、codegraph 后台任务托管、
-> system_monitor 双实例专项，见第 3.14 节）。
+> system_monitor 双实例专项，见第 3.14 节）、
+> R4-2 提交（JS callTool Promise 化 / 顶层异常事务 / hook 与 unload 真实完成，见第 3.15 节）。
 > 工作树在该提交后是**干净的**；本文档自身也已包含在最新提交中。
 > 已完成/待完成对照见第 5、6 节，内容明细见第 3、4 节。
 
@@ -85,7 +86,7 @@ ASAN_OPTIONS=detect_leaks=1:halt_on_error=0 timeout 1500s \
 | R1 Runtime / Operation | 基本完成（P0-2 / R1-2 已落地） | `plugin_runtime.h`/`op_driver.h` 已重写并提交（`3a4497ba`）；`b2b5114a` 补齐完成端点、executor 停止重放、`ioCallSync` 快速失败、idle/lease 守卫；`c2869f07` 把 vtable 投递闭包纳入 admission lease；P0-2 提交把 cancel/done 的线性化协议写成显式约束（普通 mutex）、定义完成投递失败的可观察终态并补竞速/重放回归；R1-2 提交补齐 plugin.md 第 11.2 节 5/8/9 条独立用例与 GraphTypeSlot 代次用例（见第 3.13 节） |
 | R2 加载事务 / 异步关闭 | 大部分完成（P0-1 / P1-3 / P1-4） | 名称预占、`Loading/Ready/Closing/CloseFailed`、`create/start/stop/destroy`、`shutdownAsync`、owner 顺序、`GraphTypeSlot` 已在 `b2b5114a` 落地；P0-1 补齐宿主控制块、迟到调用安全失败、注册执行期复查；P1-4 完成 agent 侧 start/stop 事务；P1-3 完成 Client 语义渲染缓存（插件 renderer 只在 client io 线程执行）与 client 侧启停事务；仍缺加载期 start 失败的真实 DSO 回滚用例 |
 | R3 ABI v1 / SDK | 大部分完成 | 接口表 `struct_size` + SDK 严格校验、opaque CancelToken、scheduler v1（删 `pump_io`/`cancel_sleep`/`volatile`）、tasks handle 语义、SDK scheduler/offload 迁移已在 `b2b5114a` 落地；`c2869f07` 统一 `host.opaque` 令牌；P1-2 补 C17 ABI 编译期检查 + 接口表严格协商；P1-1 补 SDK 拥有型 `Request`、统一 root adapter、hook 同步/异步分发；P2-1a 补 client 生命周期导出宏；仍缺 capability 异步业务、graph node 纳入 SDK adapter、C++ 反例编译测试 |
-| R4 内置插件 / JS / 平台 | 部分完成 | 4 个内置插件已迁到 CancelToken 新签名；`f861bcf9` 修平台插件构建；P2-1a 把 example_plugin 迁移为双端 start/stop 正例；P2-1b 完成 JS Promise 拒绝/超时/取消的终态映射与事件式等待；P2-1c 完成可变静态审计；R4-1 完成 example_resources/example_graph_node 迁移、websearch/rag/string CancelToken 接入、codegraph 后台任务托管与 system_monitor 双实例专项（第 3.14 节）；仍缺 JS `callTool` Promise 化、脚本顶层异常事务、其余内置插件 start/stop 迁移、Windows 平台 gate |
+| R4 内置插件 / JS / 平台 | 大部分完成 | 4 个内置插件已迁到 CancelToken 新签名；`f861bcf9` 修平台插件构建；P2-1a 把 example_plugin 迁移为双端 start/stop 正例；P2-1b 完成 JS Promise 拒绝/超时/取消的终态映射与事件式等待；P2-1c 完成可变静态审计；R4-1 完成 example_resources/example_graph_node 迁移、websearch/rag/string CancelToken 接入、codegraph 后台任务托管与 system_monitor 双实例专项（第 3.14 节）；R4-2 完成 JS `callTool` Promise 化、顶层异常事务、hook/unload 真实完成（第 3.15 节）；仍缺其余内置插件 start/stop 迁移、Windows 平台 gate |
 | R5 Client / 依赖 / prompt | 基本完成（P1-3 / P1-4） | 事件逐 callback 复查 alive、renderer lease、动作派发校验已落地；prompt contribution（F20）与 agent 侧依赖级联（F09）由 P1-4 落地；语义 renderer cache、动作代次、client 侧启停事务与依赖级联由 P1-3 落地；仍缺 UI 侧的"旧快照模块级"端到端用例（现有用例在 manager 层驱动） |
 | R6 验证 / 文档 / 发布审查 | 大部分完成 | P1-2 完成 C17 ABI 编译期检查；P2-1a 完成导出符号白名单脚本（16 库全绿）；P2-1b 完成 `docs/zh-cn/design/plugins.md` Reset-v1 章节（第 15 节）与第 2/3/4/9 节修订；仍缺 UBSan/TSan 与 Windows 平台验证（本机无 Windows 工具链，未验证即不得声明） |
 
@@ -127,7 +128,9 @@ ASAN_OPTIONS=detect_leaks=1:halt_on_error=0 timeout 1500s \
                           (2026-09-11, 3 文件；见第 3.13 节)
 提交 14（R4-1）重构插件框架-R4-1 example 正例迁移、CancelToken 接入与后台任务托管
                           (2026-09-11, 8 文件；见第 3.14 节)
-工作树          干净（无修改、无 untracked）；origin/main 停在 f861bcf9，提交 3-14 均未推送
+提交 15（R4-2）重构插件框架-R4-2 JS callTool Promise 化、顶层异常事务与 hook 真实完成
+                          (2026-09-11, 4 文件；见第 3.15 节)
+工作树          干净（无修改、无 untracked）；origin/main 停在 f861bcf9，提交 3-15 均未推送
 ```
 
 `b2b5114a` 就是此前工作树里的全部增量，代码与验证记录一一对应（未做任何额外改动）；
@@ -548,6 +551,45 @@ JS 线程 settle”（当前仍是同步驱动，只是不再把拒绝当成功�
   工具不受影响。
 - 回归：`plugins` 331 / `plugin_resources` 83 / `plugin_multi_instance` 48 /
   `client_plugins` 375 / `codegraph` 23 全部通过（第 7.12 节）。
+
+### 3.15 R4-2 提交：JS callTool Promise 化、顶层异常事务与 hook 真实完成（R4）
+
+4 文件（`agentxx_javascript_engine.cpp`、`example_js/plugin.js`、
+`agent/test/plugin/test_plugins.cpp` + 本文档）。要点：
+
+**F17 `callTool` 始终返回 Promise（消除 A/B 脚本同线程自锁）**
+
+- `B_CALL_TOOL` 入口改为先 `JS_NewPromiseCapability` 建立 Promise：
+  - 本引擎 JS 工具：同线程执行并把返回值/内部 Promise 经 `then` 链到外层
+    Promise（不阻塞等待；内部 Promise 由外层驱动的 job/timer/队列泵推进）；
+  - 宿主插件工具：改用 `tools->call_tool_async` + 完成回调
+    （`JsCallBridge`），宿主 io 线程只复制结果并 `post` 回 JS 线程 settle
+    （OK → resolve(JSON/字符串)，CANCELLED/FAILED → reject(Error)）。
+  删除 `call_tool_blocking` 调用，JS 线程不再同步等待宿主工具。
+- `drivePromise` 既有的"先泵主队列任务"逻辑保证 settle 任务在嵌套等待中也能执行；
+  引擎停止时 `post` 失败只释放桥、不触碰将随 `JS_FreeRuntime` 释放的 JSValue。
+- `example_js` 的 `js_call_js`/`js_call_host` 示例改为 `async execute + await`；
+  新增 `js_calltool_kind` 断言 `typeof agentxx.callTool(...) == "object"`。
+
+**F16 脚本初始化事务化（顶层异常先撤销再释放 JSContext）**
+
+- `JsPluginCtx` 新增 `rollbackActions`：注册工具/钩子/事件订阅/技能/记忆/MCP
+  成功时按序登记撤销动作；`runRollback` 逆序执行。
+- `doLoadScript` 的 `injectBridge`/`JS_Eval` 失败路径与 `doUnloadScript` 统一经
+  `rollbackScriptEffects()`：先撤销宿主注册与脚本定时器，再释放 JSContext；
+  脚本 `unload` 不再残留指向已释放脚本上下文的工具/订阅。
+- 回归用例：临时脚本先注册工具 + 订阅 + 超时定时器再抛异常 → `load` 失败、
+  宿主注册表无 `rollback_probe_tool` 残留、引擎与既有脚本仍可用。
+
+**`hookStart` / `interpreter.js unload` 的真实完成**
+
+- `hookStart` 不再"投递即完成"：返回非空 provider 句柄，`doHookFire` 在 JS 回调
+  真正结束（含 Promise）后于 JS 线程 `done(OK/FAILED)`；宿主 middleware 本来就会
+  等待该 op。引擎已停止时立即失败终结，不留悬挂句柄。
+- 能力 `unload` 改为 JS 线程任务内执行 `doUnloadScript` 后再 `done`。
+
+回归：`plugins` 331 → 340 断言（16a/16b 共 9 项）；扩展回归 1959 passed / 0 failed
+（第 7.13 节）。
 
 ---
 
@@ -1130,6 +1172,35 @@ codegraph              23 passed / 0 failed   # codegraph warmup 托管化后复
 
 日志：`/tmp/p3-r4c-tests.log`、`/tmp/p3-codegraph2.log`、`/tmp/p3-r1b-sweep.log`。
 
+### 7.13 R4-2 提交的回归
+
+```bash
+cmake --build agent/build/linux-debug -j12     # 含 example_js 资源刷新 (touch 源)
+ASAN_OPTIONS=detect_leaks=1:halt_on_error=0 timeout 1500s \
+  agent/build/linux-debug/exec/agentxx_test \
+  ffi_c_api agent_host subagent_tool subagent_bus plugin_sdk plugin_runtime plugins \
+  plugin_resources plugin_multi_instance client_plugins agent memgrowth codegraph --fail-fast
+```
+
+```text
+ffi_c_api             117 passed / 0 failed
+plugin_runtime        600 passed / 0 failed
+plugin_sdk             29 passed / 0 failed
+subagent_bus           21 passed / 0 failed
+subagent_tool         122 passed / 0 failed
+agent_host             95 passed / 0 failed
+codegraph              23 passed / 0 failed
+plugins               340 passed / 0 failed   # R4-2 新增 9 断言 (Promise 形态 + 顶层回滚)
+plugin_resources       83 passed / 0 failed
+plugin_multi_instance  48 passed / 0 failed
+client_plugins        375 passed / 0 failed
+agent                  91 passed / 0 failed
+memgrowth              15 passed / 0 failed
+合计                 1959 passed / 0 failed   （exit=0，ASan + LSan）
+```
+
+日志：`/tmp/p3-js-sweep.log`。
+
 ### 7.10 `b2b5114a` 的历史验证结果
 
 以下结果测自 `b2b5114a`（同样为 ASan + LSan、`--fail-fast` 的扩展回归）：
@@ -1206,8 +1277,8 @@ client_plugins 309 / agent 91 / memgrowth 15   合计 1338 passed / 0 failed
      fast_tool 无需改动）；~~websearch/rag/planning 接入 CancelToken~~（已完成）；
      ~~system_monitor/codegraph 多实例与后台采样专项~~（已完成：双实例用例 +
      codegraph warmup 托管化）；
-   - JS 剩余：`callTool` 改为始终返回 Promise（完成/失败/取消事件回投 JS 线程 settle）、
-     删除同步 `call_tool_blocking` 路径、脚本顶层异常的事务化回滚、`hookStart` 等真实完成；
+   - ~~JS 剩余：`callTool` 改为始终返回 Promise、删除同步 `call_tool_blocking` 路径、
+     脚本顶层异常的事务化回滚、`hookStart` 等真实完成~~：已在 R4-2 提交落地（第 3.15 节）；
    - Windows 平台 gate（screen_capture/computer_use/text_selection_monitor）：需 Windows 工具链；
    - 全模块 UBSan/TSan 定向回归（本轮已验证 ASan + LSan）。
 

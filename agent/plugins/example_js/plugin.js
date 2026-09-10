@@ -25,12 +25,12 @@ agentxx.registerTool({
   },
 });
 
-// ---- 工具 3: JS 内互调 (callTool 命中本引擎工具 → 内联执行) ----
+// ---- 工具 3: JS 内互调 (callTool 始终返回 Promise; 命中本引擎工具 → 内联执行) ----
 agentxx.registerTool({
   name: "js_call_js",
   description: "Call another JS tool (js_hello) via agentxx.callTool (in-engine).",
-  execute: (args) => {
-    const resp = agentxx.callTool("js_hello", { name: args.name || "inner" }, "");
+  execute: async (args) => {
+    const resp = await agentxx.callTool("js_hello", { name: args.name || "inner" }, "");
     return { inner: resp };
   },
 });
@@ -39,8 +39,8 @@ agentxx.registerTool({
 agentxx.registerTool({
   name: "js_call_host",
   description: "Call host plugin tool example_echo via agentxx.callTool.",
-  execute: (args) => {
-    const resp = agentxx.callTool("example_echo", args, "");
+  execute: async (args) => {
+    const resp = await agentxx.callTool("example_echo", args, "");
     return { host: resp };
   },
 });
@@ -53,6 +53,13 @@ agentxx.registerTool({
     reason: { type: "string", description: "rejection reason" },
   },
   execute: (args) => Promise.reject(new Error(args.reason || "demo rejection")),
+});
+
+// ---- 工具 6: callTool 返回值形态 (F17: 始终为 Promise) ----
+agentxx.registerTool({
+  name: "js_calltool_kind",
+  description: "JS plugin demo: typeof agentxx.callTool(...) must be 'object' (Promise).",
+  execute: () => ({ kind: typeof agentxx.callTool("js_hello", {}, "") }),
 });
 
 // ---- 钩子: agent_start (point 0) ----
