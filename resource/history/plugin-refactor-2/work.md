@@ -86,10 +86,10 @@ ASAN_OPTIONS=detect_leaks=1:halt_on_error=0 timeout 1500s \
 | R0 契约冻结 | 完成 | `plugin.md` 定稿；本文件只做进度记录 |
 | R1 Runtime / Operation | 基本完成（P0-2 / R1-2 已落地） | `plugin_runtime.h`/`op_driver.h` 已重写并提交（`3a4497ba`）；`b2b5114a` 补齐完成端点、executor 停止重放、`ioCallSync` 快速失败、idle/lease 守卫；`c2869f07` 把 vtable 投递闭包纳入 admission lease；P0-2 提交把 cancel/done 的线性化协议写成显式约束（普通 mutex）、定义完成投递失败的可观察终态并补竞速/重放回归；R1-2 提交补齐 plugin.md 第 11.2 节 5/8/9 条独立用例与 GraphTypeSlot 代次用例（见第 3.13 节） |
 | R2 加载事务 / 异步关闭 | 大部分完成（P0-1 / P1-3 / P1-4） | 名称预占、`Loading/Ready/Closing/CloseFailed`、`create/start/stop/destroy`、`shutdownAsync`、owner 顺序、`GraphTypeSlot` 已在 `b2b5114a` 落地；P0-1 补齐宿主控制块、迟到调用安全失败、注册执行期复查；P1-4 完成 agent 侧 start/stop 事务；P1-3 完成 Client 语义渲染缓存（插件 renderer 只在 client io 线程执行）与 client 侧启停事务；仍缺加载期 start 失败的真实 DSO 回滚用例 |
-| R3 ABI v1 / SDK | 大部分完成 | 接口表 `struct_size` + SDK 严格校验、opaque CancelToken、scheduler v1（删 `pump_io`/`cancel_sleep`/`volatile`）、tasks handle 语义、SDK scheduler/offload 迁移已在 `b2b5114a` 落地；`c2869f07` 统一 `host.opaque` 令牌；P1-2 补 C17 ABI 编译期检查 + 接口表严格协商；P1-1 补 SDK 拥有型 `Request`、统一 root adapter、hook 同步/异步分发；P2-1a 补 client 生命周期导出宏；仍缺 capability 异步业务、graph node 纳入 SDK adapter、C++ 反例编译测试 |
+| R3 ABI v1 / SDK | 大部分完成 | 接口表 `struct_size` + SDK 严格校验、opaque CancelToken、scheduler v1（删 `pump_io`/`cancel_sleep`/`volatile`）、tasks handle 语义、SDK scheduler/offload 迁移已在 `b2b5114a` 落地；`c2869f07` 统一 `host.opaque` 令牌；P1-2 补 C17 ABI 编译期检查 + 接口表严格协商；P1-1 补 SDK 拥有型 `Request`、统一 root adapter、hook 同步/异步分发；P2-1a 补 client 生命周期导出宏；R4-3 补 capability 异步 `Task<T>`（第 3.16 节）；仍缺 graph node 纳入 SDK adapter、C++ 反例编译测试 |
 | R4 内置插件 / JS / 平台 | 大部分完成 | 4 个内置插件已迁到 CancelToken 新签名；`f861bcf9` 修平台插件构建；P2-1a 把 example_plugin 迁移为双端 start/stop 正例；P2-1b 完成 JS Promise 拒绝/超时/取消的终态映射与事件式等待；P2-1c 完成可变静态审计；R4-1 完成 example_resources/example_graph_node 迁移、websearch/rag/string CancelToken 接入、codegraph 后台任务托管与 system_monitor 双实例专项（第 3.14 节）；R4-2 完成 JS `callTool` Promise 化、顶层异常事务、hook/unload 真实完成（第 3.15 节）；R4-3 完成 capability 异步 Task 与 math/system/string/websearch/rag 5 个插件 start/stop 迁移（第 3.16 节）；仍缺 filesystem/execute_command/planning/system_monitor/javascript_engine/execute_javascript/example_js 的 start/stop 迁移、graph node 纳入 SDK adapter、Windows 平台 gate |
 | R5 Client / 依赖 / prompt | 基本完成（P1-3 / P1-4） | 事件逐 callback 复查 alive、renderer lease、动作派发校验已落地；prompt contribution（F20）与 agent 侧依赖级联（F09）由 P1-4 落地；语义 renderer cache、动作代次、client 侧启停事务与依赖级联由 P1-3 落地；仍缺 UI 侧的"旧快照模块级"端到端用例（现有用例在 manager 层驱动） |
-| R6 验证 / 文档 / 发布审查 | 大部分完成 | P1-2 完成 C17 ABI 编译期检查；P2-1a 完成导出符号白名单脚本（16 库全绿）；P2-1b 完成 `docs/zh-cn/design/plugins.md` Reset-v1 章节（第 15 节）与第 2/3/4/9 节修订；仍缺 UBSan/TSan 与 Windows 平台验证（本机无 Windows 工具链，未验证即不得声明） |
+| R6 验证 / 文档 / 发布审查 | 大部分完成 | P1-2 完成 C17 ABI 编译期检查；P2-1a 完成导出符号白名单脚本（16 库全绿）；P2-1b 完成 `docs/zh-cn/design/plugins.md` Reset-v1 章节（第 15 节）与第 2/3/4/9 节修订；R4-2/R4-3 补充 JS callTool Promise 与 hook/capability 异步契约（第 12/6 节）；仍缺 UBSan/TSan 与 Windows 平台验证（本机无 Windows 工具链，未验证即不得声明） |
 
 结论：不能把当前状态写成“Reset-v1 完成”。下一阶段建议见第 9 节。
 
@@ -750,8 +750,8 @@ JS 线程 settle”（当前仍是同步驱动，只是不再把拒绝当成功�
 
 遗留：
 
-- capability 目前仍是同步业务（返回 `Task<T>` 的能力尚未支持）；graph node 的
-  run_start 由各插件自行实现，未纳入 SDK root adapter。
+- ~~capability 目前仍是同步业务~~：R4-3 已支持返回 `Task<T>` 的异步能力（第 3.16 节）；
+  graph node 的 run_start 仍由各插件自行实现，未纳入 SDK root adapter。
 - `Task<T>`/`Task<void>`/`offload<void>` 组合、异常与取消传播的**正反例编译测试**
   （错误签名必须编译失败）需要"预期编译失败"机制，尚未建立。
 
@@ -1251,6 +1251,36 @@ plugin_sdk             44 passed / 0 failed   # capability 同步/异步用例�
 
 日志：`/tmp/p3-r4d-tests.log`、`/tmp/p3-cap-tests.log`。
 
+### 7.15 本会话最终扩展回归（全部插件相关模块）
+
+```bash
+ASAN_OPTIONS=detect_leaks=1:halt_on_error=0 timeout 1500s \
+  agent/build/linux-debug/exec/agentxx_test \
+  ffi_c_api agent_host subagent_tool subagent_bus plugin_sdk plugin_runtime plugins \
+  plugin_resources plugin_multi_instance client_plugins agent memgrowth codegraph --fail-fast
+```
+
+```text
+ffi_c_api             117 passed / 0 failed
+plugin_runtime        600 passed / 0 failed
+plugin_sdk             44 passed / 0 failed
+subagent_bus           21 passed / 0 failed
+subagent_tool         122 passed / 0 failed
+agent_host             95 passed / 0 failed
+codegraph              23 passed / 0 failed
+plugins               340 passed / 0 failed
+plugin_resources       83 passed / 0 failed
+plugin_multi_instance  48 passed / 0 failed
+client_plugins        375 passed / 0 failed
+agent                  91 passed / 0 failed
+memgrowth              15 passed / 0 failed
+合计                 1974 passed / 0 failed   （exit=0，ASan + LSan）
+```
+
+未做（不得当作已通过）：全模块 `agentxx_test` 全量（含 tui_*/training/settings_db 等与插件无关
+模块）、UBSan/TSan、Windows/Android 构建与专项、graph node 的 SDK root adapter 化、
+剩余 7 个内置插件的 start/stop 迁移。日志：`/tmp/p3-final-sweep.log`。
+
 ### 7.10 `b2b5114a` 的历史验证结果
 
 以下结果测自 `b2b5114a`（同样为 ASan + LSan、`--fail-fast` 的扩展回归）：
@@ -1325,12 +1355,23 @@ client_plugins 309 / agent 91 / memgrowth 15   合计 1338 passed / 0 failed
      已在 R4-1 提交落地（细节随 R4-1 提交补入本文档）；
    - string/math/system 校准 SDK 签名（string CancelToken 已完成，math/system 为
      fast_tool 无需改动）；~~websearch/rag/planning 接入 CancelToken~~（已完成）；
+     ~~math/system/string/websearch/rag 的 start/stop 迁移~~（R4-3 已完成）；
      ~~system_monitor/codegraph 多实例与后台采样专项~~（已完成：双实例用例 +
      codegraph warmup 托管化）；
    - ~~JS 剩余：`callTool` 改为始终返回 Promise、删除同步 `call_tool_blocking` 路径、
      脚本顶层异常的事务化回滚、`hookStart` 等真实完成~~：已在 R4-2 提交落地（第 3.15 节）；
    - Windows 平台 gate（screen_capture/computer_use/text_selection_monitor）：需 Windows 工具链；
    - 全模块 UBSan/TSan 定向回归（本轮已验证 ASan + LSan）。
+
+10. 下一会话建议起点（按优先级）：
+    - graph node 纳入 SDK root adapter（`plugin_kit.h` 新增 graph_node helper +
+      example_graph_node 迁移 + 专项用例）；
+    - 剩余 7 个内置插件 start/stop 迁移：`agentxx_filesystem`、`agentxx_execute_command`、
+      `agentxx_planning`、`agentxx_system_monitor`、`agentxx_javascript_engine`、
+      `agentxx_execute_javascript`、`example_js`；其中 JS 引擎需要先设计"引擎线程
+      stop/重启"语义（当前线程随 destroy join，不可重复 start）；
+    - C++ 反例编译测试机制（期望编译失败）；
+    - UBSan/TSan 定向构建（建议独立 build 目录，避免污染 linux-debug 基线）。
 
 每一步完成后：跑对应模块回归，更新本文件第 1、5、6、7 节，再提交。
 
