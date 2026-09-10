@@ -558,6 +558,8 @@ asio::awaitable<std::shared_ptr<ClientPluginInstance>> ClientPluginManager::load
 
     inst->lifetime->setState(PluginInstanceState::Ready);
     util::insertHeterogeneous(plugins_, std::string{name}, inst);
+    // UI 点击携带实例代次: 登记后旧代次的点击会在派发复查时被丢弃
+    setRegistryGeneration(inst->name, inst->lifetime->generation(), true);
     releasePluginName(name);
     XX_LOGI("[client_plugin] loaded: {} ({})", name, version);
     co_return inst;
@@ -643,6 +645,8 @@ asio::awaitable<bool> ClientPluginManager::unloadAsyncUntil(
     if (inst->lifetime) {
         inst->lifetime->setState(PluginInstanceState::Closed);
     }
+    // 代次登记随实例移除: 旧 UI 快照的点击找不到代次, 只会被丢弃
+    setRegistryGeneration(name, 0, false);
     // 从表移除 → 实例析构 → dlclose (~ClientPluginInstance)
     util::eraseHeterogeneous(plugins_, name); // 异构删除免拷贝
     XX_LOGI("[client_plugin] unloaded: {}", inst->name);
@@ -675,6 +679,10 @@ void ClientPluginManager::disableImpl(std::string_view name, bool userInitiated)
     if (!inst || !inst->enabled) {
         return;
     }
+    if (inst->lifetime && inst->lifetime->closeRequested()) {
+        // 已进入关闭流程: 不再接受启用状态变化, 避免与 stop/destroy 交错
+        return;
+    }
     if (userInitiated) {
         inst->userDisabled = true;
         inst->blockedByDependencies = false;
@@ -694,6 +702,9 @@ void ClientPluginManager::disableImpl(std::string_view name, bool userInitiated)
     // 摘除 UI 注册 (adapter 通知); 注册信息保留, enable 可恢复
     detachAll(inst.get(), true);
     XX_LOGI("[client_plugin] disabled: {}", inst->name);
+
+    // 导出 stop 的插件: 把 stop 事务投递到 client io 线程, 撤销自管线程/定时器
+    requestStopForDisable(inst);
 }
 
 void ClientPluginManager::disable(std::string_view name) {
@@ -707,6 +718,9 @@ void ClientPluginManager::enableImpl(std::string_view name, bool userInitiated) 
     }
     if (!userInitiated && inst->userDisabled) {
         return; // 被用户显式禁用: 级联不复活
+    }
+    if (inst->lifetime && inst->lifetime->closeRequested()) {
+        return; // 关闭流程中不接受启用状态变化
     }
     inst->enabled = true;
     if (inst->lifetime) {
@@ -722,10 +736,32 @@ void ClientPluginManager::enableImpl(std::string_view name, bool userInitiated) 
         enableImpl(d, false);
     }
 
+    if (inst->lifecycleStart) {
+        // 托管插件 (导出 start): 注册由插件 start 事务重新声明, 宿主不直接恢复记录
+        requestStartForEnable(inst);
+    } else {
+        // legacy 插件: 按宿主侧保存的注册记录恢复 UI 项 (句柄 + 注册表 + adapter 通知)
+        restoreHostSideUiRegistrations(inst.get());
+    }
+    XX_LOGI("[client_plugin] enabled: {}", inst->name);
+
+    // 级联恢复被级联禁用的依赖者 (用户显式禁用的不恢复)
+    for (const auto& child :
+         collectReverseRequiredDeps(plugins_, std::string{name}, /*onlyEnabled=*/false)) {
+        enableImpl(child, false);
+    }
+}
+
+/// 恢复宿主侧已保存的 UI 注册记录 (legacy 插件路径; 无 start 导出时使用):
+/// 重建句柄 + 写回 COW 注册表 + 通知 UI 适配器。
+void ClientPluginManager::restoreHostSideUiRegistrations(ClientPluginInstance* inst) {
+    if (!inst) {
+        return;
+    }
     // 恢复 UI 注册 (注册信息在 disable 时保留): 重建句柄 + 写回注册表 + adapter 通知
     for (const auto& reg : inst->statusItemRegs) {
         auto h    = std::make_shared<AgentxxStatusItem>();
-        h->inst   = inst.get();
+        h->inst   = inst;
         h->id     = reg.id;
         h->plugin = reg.plugin;
         {
@@ -752,7 +788,7 @@ void ClientPluginManager::enableImpl(std::string_view name, bool userInitiated) 
     }
     for (const auto& reg : inst->panelRegs) {
         auto h    = std::make_shared<AgentxxPanel>();
-        h->inst   = inst.get();
+        h->inst   = inst;
         h->id     = reg.id;
         h->plugin = reg.plugin;
         {
@@ -779,7 +815,7 @@ void ClientPluginManager::enableImpl(std::string_view name, bool userInitiated) 
     }
     for (const auto& reg : inst->infoSectionRegs) {
         auto h    = std::make_shared<AgentxxInfoSection>();
-        h->inst   = inst.get();
+        h->inst   = inst;
         h->id     = reg.id;
         h->plugin = reg.plugin;
         {
@@ -873,11 +909,165 @@ void ClientPluginManager::enableImpl(std::string_view name, bool userInitiated) 
         }
         uiRegistry_ = std::move(cur);
     }
-    XX_LOGI("[client_plugin] enabled: {}", inst->name);
 }
 
 void ClientPluginManager::enable(std::string_view name) {
     enableImpl(name, true);
+}
+
+/// 清空"由插件 start 事务重新声明"的注册记录 (stop 成功后调用):
+/// 避免下次 start 在旧记录上重复累积 (UI 项/订阅/渲染器/动作绑定)。
+void ClientPluginManager::clearPluginOwnedUiRegistrations(ClientPluginInstance* inst) {
+    if (!inst) {
+        return;
+    }
+    inst->statusItemRegs.clear();
+    inst->panelRegs.clear();
+    inst->infoSectionRegs.clear();
+    inst->commandRegs.clear();
+    inst->toolDecorRegs.clear();
+    inst->toolRenderRegs.clear();
+    inst->actionRegs.clear();
+    inst->subscriptions.clear();
+    inst->subHandles.clear();
+}
+
+/// 按需投递禁用事务 (仅导出 stop 且"已 start 未 stop"的实例需要)。
+void ClientPluginManager::requestStopForDisable(
+    const std::shared_ptr<ClientPluginInstance>& inst
+) {
+    if (!inst || !inst->lifecycleStopPending()) {
+        return;
+    }
+    auto self = shared_from_this();
+    try {
+        asio::co_spawn(
+            ioExecutor(),
+            [self, inst]() -> asio::awaitable<void> {
+                co_await self->stopForDisable(inst);
+            },
+            [inst](std::exception_ptr e) {
+                if (!e) {
+                    return;
+                }
+                try {
+                    std::rethrow_exception(e);
+                } catch (const std::exception& ex) {
+                    XX_LOGE("[client_plugin] `{}` disable stop threw: {}", inst->name, ex.what());
+                } catch (...) {
+                    XX_LOGE("[client_plugin] `{}` disable stop threw unknown", inst->name);
+                }
+            }
+        );
+    } catch (const std::exception& e) {
+        XX_LOGW(
+            "[client_plugin] `{}` disable stop could not be scheduled: {}",
+            inst->name,
+            e.what()
+        );
+    }
+}
+
+/// 按需投递启用事务 (导出 start 的插件)。
+void ClientPluginManager::requestStartForEnable(
+    const std::shared_ptr<ClientPluginInstance>& inst
+) {
+    if (!inst || !inst->lifecycleStart) {
+        return;
+    }
+    auto self = shared_from_this();
+    try {
+        asio::co_spawn(
+            ioExecutor(),
+            [self, inst]() -> asio::awaitable<void> {
+                co_await self->startForEnable(inst);
+            },
+            [inst](std::exception_ptr e) {
+                if (!e) {
+                    return;
+                }
+                try {
+                    std::rethrow_exception(e);
+                } catch (const std::exception& ex) {
+                    XX_LOGE("[client_plugin] `{}` enable start threw: {}", inst->name, ex.what());
+                } catch (...) {
+                    XX_LOGE("[client_plugin] `{}` enable start threw unknown", inst->name);
+                }
+            }
+        );
+    } catch (const std::exception& e) {
+        XX_LOGW(
+            "[client_plugin] `{}` enable start could not be scheduled: {}",
+            inst->name,
+            e.what()
+        );
+    }
+}
+
+/// 禁用事务的异步部分 (client io 线程): 调用插件 stop 撤销自管资源。
+asio::awaitable<void>
+    ClientPluginManager::stopForDisable(std::shared_ptr<ClientPluginInstance> inst) {
+    if (!inst || !inst->lifecycleStopPending() || inst->enabled) {
+        co_return;
+    }
+    std::string error;
+    if (!co_await awaitPluginLifecycle(
+            runtime(), inst, inst->pluginCtx, inst->lifecycleStop, "client plugin stop", error
+        )) {
+        XX_LOGE("[client_plugin] `{}` stop failed while disabling: {}", inst->name, error);
+        co_return;
+    }
+    inst->lifecycleStopped = true;
+    clearPluginOwnedUiRegistrations(inst.get());
+    XX_LOGI("[client_plugin] `{}` stopped for disable", inst->name);
+    co_return;
+}
+
+/// 启用事务的异步部分 (client io 线程): 先补齐 stop (若仍欠着), 再执行 start
+/// 重新提交 UI/事件注册; start 失败回到 Disabled 且不留部分注册。
+asio::awaitable<void>
+    ClientPluginManager::startForEnable(std::shared_ptr<ClientPluginInstance> inst) {
+    if (!inst || !inst->lifecycleStart || !inst->enabled) {
+        co_return;
+    }
+    if (inst->lifecycleStopPending()) {
+        std::string stopError;
+        if (!co_await awaitPluginLifecycle(
+                runtime(), inst, inst->pluginCtx, inst->lifecycleStop, "client plugin stop",
+                stopError
+            )) {
+            if (inst->lifetime) {
+                inst->lifetime->setState(PluginInstanceState::Disabled);
+            }
+            XX_LOGE("[client_plugin] `{}` enable aborted, stop failed: {}", inst->name, stopError);
+            co_return;
+        }
+        inst->lifecycleStopped = true;
+        clearPluginOwnedUiRegistrations(inst.get());
+    }
+    if (!inst->enabled) {
+        co_return; // 等待 stop 期间用户又禁用了该插件
+    }
+    std::string error;
+    if (!co_await awaitPluginLifecycle(
+            runtime(), inst, inst->pluginCtx, inst->lifecycleStart, "client plugin start", error
+        )) {
+        inst->enabled = false;
+        inst->blockedByDependencies = false;
+        if (inst->lifetime) {
+            inst->lifetime->setState(PluginInstanceState::Disabled);
+        }
+        detachAll(inst.get(), true);
+        clearPluginOwnedUiRegistrations(inst.get());
+        XX_LOGE("[client_plugin] `{}` start failed while enabling: {}", inst->name, error);
+        co_return;
+    }
+    inst->lifecycleStopped = false;
+    if (inst->lifetime) {
+        inst->lifetime->setState(PluginInstanceState::Ready);
+    }
+    XX_LOGI("[client_plugin] `{}` restarted after enable", inst->name);
+    co_return;
 }
 
 asio::awaitable<void>
@@ -1132,6 +1322,269 @@ std::shared_ptr<const ClientUiRegistry> ClientPluginManager::uiRegistrySnapshot(
     return uiRegistry_;
 }
 
+// ==================== 工具语义渲染缓存 ====================
+
+namespace {
+
+/// FNV-1a: 输入特征哈希 (跨平台确定, 与 std::hash 实现无关)
+void hashBytes(uint64_t& h, std::string_view bytes) {
+    for (const unsigned char c : bytes) {
+        h ^= static_cast<uint64_t>(c);
+        h *= 1099511628211ULL;
+    }
+    h ^= 0xFFu; // 字段分隔, 避免 ("ab","c") 与 ("a","bc") 同值
+    h *= 1099511628211ULL;
+}
+
+} // namespace
+
+std::string ClientToolRenderRequest::keyFor(std::string_view toolCallId, std::string_view toolName) {
+    if (!toolCallId.empty()) {
+        return std::string{toolCallId};
+    }
+    std::string key{"#"};
+    key.append(toolName);
+    return key;
+}
+
+uint64_t ClientToolRenderRequest::inputHash() const {
+    uint64_t h = 1469598103934665603ULL;
+    hashBytes(h, toolName);
+    hashBytes(h, argsJson);
+    hashBytes(h, resultText);
+    hashBytes(h, isFinished ? "1" : "0");
+    hashBytes(h, isError ? "1" : "0");
+    hashBytes(h, std::to_string(maxWidth));
+    return h;
+}
+
+std::shared_ptr<const ClientToolRenderEntry>
+    ClientToolRenderCache::lookup(const std::string& key, uint64_t inputHash) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto                        it = entries_.find(key);
+    if (it == entries_.end() || it->second->inputHash != inputHash) {
+        return nullptr;
+    }
+    return it->second;
+}
+
+uint64_t ClientToolRenderCache::version(const std::string& key) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto                        it = versions_.find(key);
+    return it == versions_.end() ? 0 : it->second;
+}
+
+std::shared_ptr<const ClientToolRenderEntry>
+    ClientToolRenderCache::store(ClientToolRenderEntry entry) {
+    auto snapshot = std::make_shared<const ClientToolRenderEntry>(std::move(entry));
+    std::lock_guard<std::mutex> lock(mutex_);
+    ++versions_[snapshot->key];
+    entries_[snapshot->key] = snapshot;
+    return snapshot;
+}
+
+void ClientToolRenderCache::invalidatePlugin(std::string_view plugin) {
+    const std::string owner{plugin};
+    std::lock_guard<std::mutex> lock(mutex_);
+    for (auto it = entries_.begin(); it != entries_.end();) {
+        if (it->second->plugin == owner) {
+            ++versions_[it->first]; // 版本号变化驱动 UI 重建为通用回退
+            it = entries_.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
+void ClientToolRenderCache::clear() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    for (auto& [key, ver] : versions_) {
+        (void)ver;
+        ++versions_[key];
+    }
+    entries_.clear();
+}
+
+size_t ClientToolRenderCache::size() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return entries_.size();
+}
+
+bool ClientToolRenderCache::beginRequest(const std::string& key, uint64_t inputHash) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto                        it = pending_.find(key);
+    if (it != pending_.end() && it->second == inputHash) {
+        return false;
+    }
+    pending_[key] = inputHash;
+    return true;
+}
+
+void ClientToolRenderCache::endRequest(const std::string& key, uint64_t inputHash) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto                        it = pending_.find(key);
+    if (it != pending_.end() && it->second == inputHash) {
+        pending_.erase(it);
+    }
+}
+
+/// 登记/清除插件实例代次 (UI 点击携带代次, io 线程复查; 见
+/// [ClientUiRegistry::instanceGenerations])
+void ClientPluginManager::setRegistryGeneration(
+    std::string_view plugin, uint64_t generation, bool present
+) {
+    if (plugin.empty()) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(uiMutex_);
+    auto                        reg = std::make_shared<ClientUiRegistry>(*uiRegistry_);
+    if (present) {
+        reg->instanceGenerations[std::string{plugin}] = generation;
+    } else {
+        reg->instanceGenerations.erase(std::string{plugin});
+    }
+    uiRegistry_ = std::move(reg);
+}
+
+std::shared_ptr<const ClientToolRenderEntry>
+    ClientPluginManager::requestToolRender(const ClientToolRenderRequest& req) {
+    if (req.toolName.empty()) {
+        return nullptr;
+    }
+    const std::string key   = ClientToolRenderRequest::keyFor(req.toolCallId, req.toolName);
+    const uint64_t    input = req.inputHash();
+    if (auto cached = toolRenderCache_->lookup(key, input)) {
+        return cached;
+    }
+    if (!toolRenderCache_->beginRequest(key, input)) {
+        // 已有同键同输入特征的请求在执行, 本次只回退通用渲染
+        return nullptr;
+    }
+    // 未命中: 拷贝输入后投递到 client io 线程执行 renderer (UI 线程不进入插件代码)。
+    // UI 线程与 io 线程是同一线程时 postToIo 会内联执行, 此时结果已在缓存里,
+    // 直接再查一次即可返回, 不必等下一帧。
+    auto self = shared_from_this();
+    try {
+        postToIo([self, req, key, input]() mutable {
+            self->performToolRender(std::move(req), std::move(key), input);
+        });
+    } catch (const std::exception& e) {
+        XX_LOGW("[client_plugin] tool render request dropped: {}", e.what());
+        toolRenderCache_->endRequest(key, input);
+        return nullptr;
+    }
+    return toolRenderCache_->lookup(key, input);
+}
+
+/// 在 client io 线程执行自定义 renderer 并把结果拷成宿主语义快照。
+/// - 渲染器已摘除/失效/实例禁用 → 写入未命中条目 (UI 回退通用渲染)
+/// - 插件回调返回失败 → 同样写未命中条目, 避免每帧重复请求
+void ClientPluginManager::performToolRender(
+    ClientToolRenderRequest req, std::string key, uint64_t inputHash
+) {
+    // 无论成功/失败/提前返回都要清掉在途标记, 否则该键再也不会重新渲染
+    struct PendingGuard {
+        ClientToolRenderCache*              cache;
+        std::string                         key;
+        uint64_t                            inputHash;
+        ~PendingGuard() {
+            cache->endRequest(key, inputHash);
+        }
+    } pendingGuard{toolRenderCache_.get(), key, inputHash};
+
+    ClientToolRenderEntry entry;
+    entry.key       = key;
+    entry.inputHash = inputHash;
+
+    std::shared_ptr<const ClientUiRegistry> snapshot;
+    {
+        std::lock_guard<std::mutex> lock(uiMutex_);
+        snapshot = uiRegistry_;
+    }
+    // 快照强引用保活: hit 指向快照内的注册记录, 后续插件回调期间不得失效
+    const ClientToolRenderReg* hit = nullptr;
+    for (const auto& r : snapshot->toolRenderers) {
+        if (r.toolName == req.toolName && r.renderFn) {
+            hit = &r;
+            break;
+        }
+    }
+    if (!hit) {
+        toolRenderCache_->store(std::move(entry));
+        return;
+    }
+    entry.plugin = hit->plugin;
+    if (auto rendererOwner = hit->lease ? hit->lease->instance.lock() : nullptr) {
+        entry.generation = rendererOwner->lifetime ? rendererOwner->lifetime->generation() : 0;
+    }
+
+    std::shared_ptr<ClientPluginInstance> owner;
+    if (!hit->lease || !hit->lease->alive.load(std::memory_order_acquire)) {
+        toolRenderCache_->store(std::move(entry));
+        return;
+    }
+    owner = hit->lease->instance.lock();
+    if (!owner || !owner->enabled || !owner->lifetime
+        || !owner->lifetime->acceptsOperations()) {
+        toolRenderCache_->store(std::move(entry));
+        return;
+    }
+    PluginInstanceBase::InflightGuard guard(owner);
+    if (!guard || !hit->lease->alive.load(std::memory_order_acquire) || !owner->enabled
+        || !owner->lifetime->acceptsOperations()) {
+        toolRenderCache_->store(std::move(entry));
+        return;
+    }
+
+    AgentxxToolRenderInput input{};
+    input.version      = 1;
+    input.tool_call_id = agentxx::plugin::PluginStringView::from(req.toolCallId);
+    input.tool_name    = agentxx::plugin::PluginStringView::from(req.toolName);
+    input.args_json    = agentxx::plugin::PluginStringView::from(req.argsJson);
+    input.result_text  = agentxx::plugin::PluginStringView::from(req.resultText);
+    input.is_finished  = req.isFinished ? 1 : 0;
+    input.is_error     = req.isError ? 1 : 0;
+    input.max_width    = req.maxWidth;
+
+    AgentxxToolRenderOutput output{};
+    int32_t                 rc = -1;
+    try {
+        rc = hit->renderFn(hit->userData, &input, &output);
+    } catch (...) {
+        rc = -1;
+    }
+    if (rc == 0) {
+        entry.matched = true;
+        if (output.displayName.data) {
+            entry.displayName.assign(
+                output.displayName.data,
+                static_cast<size_t>(output.displayName.size)
+            );
+        }
+        if (output.summary.data) {
+            entry.summary.assign(output.summary.data, static_cast<size_t>(output.summary.size));
+        }
+        if (output.items_json.data) {
+            try {
+                entry.items = agentxx::util::Json::parse(std::string_view{
+                    output.items_json.data,
+                    static_cast<size_t>(output.items_json.size)
+                });
+            } catch (...) {
+            }
+        }
+    }
+    // 输出字段无论成功/失败/异常路径都由宿主释放 (plugin.md 第 8.2 节)
+    hostMemoryFree(output.displayName.data);
+    hostMemoryFree(output.summary.data);
+    hostMemoryFree(output.items_json.data);
+
+    toolRenderCache_->store(std::move(entry));
+    if (uiAdapter_) {
+        uiAdapter_->onToolRenderUpdated(req.toolCallId, req.toolName);
+    }
+}
+
 bool ClientPluginManager::hasCommand(std::string_view name) const {
     std::lock_guard<std::mutex> lock(uiMutex_);
     for (const auto& c : uiRegistry_->commands) {
@@ -1324,6 +1777,8 @@ void ClientPluginManager::onTurnResult(const agentxx::agent::WireTurnResult& res
 
 void ClientPluginManager::onSessionSwitched(std::string_view sessionId) {
     sessionId_            = std::string{sessionId};
+    // 会话切换后旧的按 tool_call_id 语义结果不再有效, 整体失效 (UI 回退通用渲染)
+    toolRenderCache_->clear();
     agentxx::util::Json j = agentxx::util::Json::object();
     j["sessionId"]        = sessionId_;
     dispatchEvent(AGENTXX_CLIENT_EVT_SESSION_SWITCH, j.dump());
@@ -1410,6 +1865,8 @@ void ClientPluginManager::detachAll(ClientPluginInstance* inst, bool keepInfo) {
             renderer.lease->alive.store(false, std::memory_order_release);
         }
     }
+    // 语义缓存同步失效: 禁用/卸载后 UI 只读缓存, 不重算就应回退通用渲染
+    toolRenderCache_->invalidatePlugin(inst->name);
     // 从 UI 注册表摘除 (adapter 通知)
     {
         std::lock_guard<std::mutex> lock(uiMutex_);
@@ -3371,7 +3828,8 @@ void ClientPluginManager::dispatchAction(
     std::string plugin,
     std::string ownerId,
     std::string actionId,
-    std::string argsJson
+    std::string argsJson,
+    uint64_t    generation
 ) {
     if (plugin.empty() || actionId.empty()) {
         return;
@@ -3382,13 +3840,26 @@ void ClientPluginManager::dispatchAction(
               plugin   = std::move(plugin),
               ownerId  = std::move(ownerId),
               actionId = std::move(actionId),
-              argsJson = std::move(argsJson)]() mutable {
+              argsJson = std::move(argsJson),
+              generation]() mutable {
         auto inst = self->find(plugin);
         if (!inst || !inst->enabled) {
             XX_LOGW(
                 "[client_plugin] dispatch action `{}` dropped: plugin `{}` missing/disabled",
                 actionId,
                 plugin
+            );
+            return;
+        }
+        // 实例代次复查: 同名插件重载后旧点击只能丢弃, 不得转交新实例
+        if (generation != 0 && inst->lifetime && inst->lifetime->generation() != generation) {
+            XX_LOGW(
+                "[client_plugin] dispatch action `{}` dropped: plugin `{}` generation changed "
+                "(click={}, now={})",
+                actionId,
+                plugin,
+                generation,
+                inst->lifetime->generation()
             );
             return;
         }
@@ -3494,6 +3965,7 @@ void ClientPluginManager::closeOverlay(ClientPluginInstance* inst) {
 
 ClientToolRenderResult renderClientTool(
     const ClientUiRegistry* reg,
+    const ClientToolRenderCache* cache,
     std::string_view        toolCallId,
     std::string_view        toolName,
     std::string_view        argsJson,
@@ -3528,76 +4000,33 @@ ClientToolRenderResult renderClientTool(
         for (const auto& r : reg->toolRenderers) {
             if (r.toolName == toolName) {
                 if (r.renderFn) {
-                    std::shared_ptr<ClientPluginInstance> owner;
-                    if (r.lease) {
-                        if (!r.lease->alive.load(std::memory_order_acquire)) {
-                            continue;
-                        }
-                        owner = r.lease->instance.lock();
-                        if (!owner || !owner->enabled || !owner->lifetime
-                            || !owner->lifetime->acceptsOperations()) {
-                            continue;
-                        }
-                    }
-                    PluginInstanceBase::InflightGuard guard(owner);
-                    if (r.lease && (!guard || !r.lease->alive.load(std::memory_order_acquire)
-                                    || !owner->enabled
-                                    || !owner->lifetime->acceptsOperations())) {
-                        continue;
-                    }
-                    AgentxxToolRenderInput input{};
-                    input.version      = 1;
-                    input.tool_call_id = agentxx::plugin::PluginStringView::from(
-                        toolCallId.data(),
-                        toolCallId.size()
-                    );
-                    input.tool_name
-                        = agentxx::plugin::PluginStringView::from(toolName.data(), toolName.size());
-                    input.args_json
-                        = agentxx::plugin::PluginStringView::from(argsJson.data(), argsJson.size());
-                    input.result_text = agentxx::plugin::PluginStringView::from(
-                        resultText.data(),
-                        resultText.size()
-                    );
-                    input.is_finished = isFinished ? 1 : 0;
-                    input.is_error    = isError ? 1 : 0;
-                    input.max_width   = maxWidth;
-
-                    AgentxxToolRenderOutput output{};
-                    int32_t                 rc = -1;
-                    try {
-                        rc = r.renderFn(r.userData, &input, &output);
-                    } catch (...) {
-                        rc = -1;
-                    }
-                    if (rc == 0) {
-                        res.matched = true;
-                        if (output.displayName.data) {
-                            res.displayName.assign(
-                                output.displayName.data,
-                                static_cast<size_t>(output.displayName.size)
-                            );
-                            agentxx::plugin::hostMemoryFree(output.displayName.data);
-                        }
-                        if (output.summary.data) {
-                            res.summary.assign(
-                                output.summary.data,
-                                static_cast<size_t>(output.summary.size)
-                            );
-                            agentxx::plugin::hostMemoryFree(output.summary.data);
-                        }
-                        if (output.items_json.data) {
-                            try {
-                                res.items = agentxx::util::Json::parse(std::string_view{
-                                    output.items_json.data,
-                                    static_cast<size_t>(output.items_json.size)
-                                });
-                            } catch (...) {
-                            }
-                            agentxx::plugin::hostMemoryFree(output.items_json.data);
-                        }
+                    // 自定义 renderer 只在 client io 线程执行 (plugin.md 第 8.2 节):
+                    // UI 线程只用语义缓存; 未命中则本次通用回退 + 提交渲染请求。
+                    if (!cache) {
                         return res;
                     }
+                    ClientToolRenderRequest req;
+                    req.toolCallId = std::string{toolCallId};
+                    req.toolName   = std::string{toolName};
+                    req.argsJson   = std::string{argsJson};
+                    req.resultText = std::string{resultText};
+                    req.isFinished = isFinished;
+                    req.isError    = isError;
+                    req.maxWidth   = maxWidth;
+                    const std::string key
+                        = ClientToolRenderRequest::keyFor(toolCallId, toolName);
+                    auto cached = cache->lookup(key, req.inputHash());
+                    if (!cached || cached->plugin != r.plugin) {
+                        res.matched       = false;
+                        res.pendingRender = true;
+                        res.pendingPlugin = r.plugin;
+                        return res;
+                    }
+                    res.matched     = cached->matched;
+                    res.displayName = cached->displayName;
+                    res.summary     = cached->summary;
+                    res.items       = cached->items;
+                    return res;
                 } else if (!r.templateDisplayName.empty() || !r.templateSummaryKey.empty()) {
                     res.displayName = r.templateDisplayName;
                     res.matched     = true;

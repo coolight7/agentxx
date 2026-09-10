@@ -2,14 +2,15 @@
 
 > 事实来源：设计定稿是 `resource/history/plugin-refactor-2/plugin.md`（Reset-v1 方案、R0-R6 阶段、F/P 问题编号、测试矩阵）。本文件只记录进度、提交边界、验证结果和待办；与 plugin.md 冲突时以 plugin.md 为准。
 >
-> 本文件更新时间：2026-09-11（P1-4 提交，即当前 HEAD）。**状态：Reset-v1 未完成。**
-> 当前重构进度 = 八个提交：`3a4497ba`（R1-1 Runtime / Operation）、`f861bcf9`（fix-build）、
+> 本文件更新时间：2026-09-11（P1-3 提交，即当前 HEAD）。**状态：Reset-v1 未完成。**
+> 当前重构进度 = 九个提交：`3a4497ba`（R1-1 Runtime / Operation）、`f861bcf9`（fix-build）、
 > `b2b5114a`（Operation/Runtime 可靠性、加载事务与关闭、owner 顺序、ABI v1 / SDK 推进）、
 > `c2869f07`（P0-1 宿主控制块 / 迟到调用安全失败 / 注册执行期复查，见第 3.4 节）、
 > `8c717236`（P0-2 Operation 终态与取消线性化，见第 3.5 节）、
 > `aa4b33ff`（P1-2 C17 ABI 编译期检查与接口表严格协商，见第 3.6 节）、
 > P1-1 提交（SDK 拥有型 Request / 统一 root adapter / hook 同步异步分发，见第 3.7 节）、
-> P1-4 提交（启用/禁用 start-stop 事务、prompt 贡献模型、依赖级联，见第 3.8 节）。
+> P1-4 提交（启用/禁用 start-stop 事务、prompt 贡献模型、依赖级联，见第 3.8 节）、
+> P1-3 提交（Client 工具语义渲染缓存、动作代次、client 侧启停事务与依赖级联，见第 3.9 节）。
 > 工作树在该提交后是**干净的**；本文档自身也已包含在最新提交中。
 > 已完成/待完成对照见第 5、6 节，内容明细见第 3、4 节。
 
@@ -76,10 +77,10 @@ ASAN_OPTIONS=detect_leaks=1:halt_on_error=0 timeout 1500s \
 |---|---|---|
 | R0 契约冻结 | 完成 | `plugin.md` 定稿；本文件只做进度记录 |
 | R1 Runtime / Operation | 基本完成（P0-2 已落地） | `plugin_runtime.h`/`op_driver.h` 已重写并提交（`3a4497ba`）；`b2b5114a` 补齐完成端点、executor 停止重放、`ioCallSync` 快速失败、idle/lease 守卫；`c2869f07` 把 vtable 投递闭包纳入 admission lease；P0-2 提交把 cancel/done 的线性化协议写成显式约束（普通 mutex）、定义完成投递失败的可观察终态并补竞速/重放回归；仍缺 plugin.md 第 11.2 节中 5/8/9 条（caller 卸载保护、shutdown 中后台 Task、超时后立即 unload）的独立用例 |
-| R2 加载事务 / 异步关闭 | 部分完成（P0-1 / P1-4 已落地） | 名称预占、`Loading/Ready/Closing/CloseFailed`、`create/start/stop/destroy`、`shutdownAsync`、owner 顺序、`GraphTypeSlot` 已在 `b2b5114a` 落地；P0-1 补齐宿主控制块、迟到调用安全失败、注册执行期复查；P1-4 把 agent 侧 enable/disable 改成 start/stop 事务并补 start 失败回滚用例；仍缺 Client semantic renderer cache、client 侧 enable/disable 事务、加载期 start 失败的 DSO 端到端回滚用例 |
+| R2 加载事务 / 异步关闭 | 大部分完成（P0-1 / P1-3 / P1-4） | 名称预占、`Loading/Ready/Closing/CloseFailed`、`create/start/stop/destroy`、`shutdownAsync`、owner 顺序、`GraphTypeSlot` 已在 `b2b5114a` 落地；P0-1 补齐宿主控制块、迟到调用安全失败、注册执行期复查；P1-4 完成 agent 侧 start/stop 事务；P1-3 完成 Client 语义渲染缓存（插件 renderer 只在 client io 线程执行）与 client 侧启停事务；仍缺加载期 start 失败的真实 DSO 回滚用例 |
 | R3 ABI v1 / SDK | 大幅推进，未完成 | 接口表 `struct_size` + SDK 严格校验、opaque CancelToken、scheduler v1（删 `pump_io`/`cancel_sleep`/`volatile`）、tasks handle 语义、SDK scheduler/offload 迁移已在 `b2b5114a` 落地；`c2869f07` 统一了 `host.opaque` 令牌语义（令牌=控制块地址，永不复用）；P1-2 提交补齐 C17 ABI 编译期检查与 C/C++ 布局对照、接口表严格协商回归；仍缺 SDK `Request` 输入所有权、统一 root adapter、hook `Task<void>` 区分、导出符号检查与 C++ 反例编译测试 |
 | R4 内置插件 / JS / 平台 | 少量迁移 | 4 个内置插件已迁到 CancelToken 新签名；`f861bcf9` 修了平台插件构建；仍缺其余插件迁移、JS 事务/Promise、Windows 平台 gate |
-| R5 Client / 依赖 / prompt | 部分完成 | 事件逐 callback 复查 alive、renderer lease、动作派发校验已落地；prompt contribution（F20）、agent 侧依赖级联（F09）已由 P1-4 落地；仍缺语义 renderer cache 与代次、动作代次、client 侧依赖级联 |
+| R5 Client / 依赖 / prompt | 基本完成（P1-3 / P1-4） | 事件逐 callback 复查 alive、renderer lease、动作派发校验已落地；prompt contribution（F20）与 agent 侧依赖级联（F09）由 P1-4 落地；语义 renderer cache、动作代次、client 侧启停事务与依赖级联由 P1-3 落地；仍缺 UI 侧的"旧快照模块级"端到端用例（现有用例在 manager 层驱动） |
 | R6 验证 / 文档 / 发布审查 | 部分完成 | P1-2 提交完成 C17 ABI 编译期检查；仍缺导出符号检查、全模块/UBSan/TSan/Windows 验证；`docs/zh-cn/design/plugins.md` 未更新 |
 
 结论：不能把当前状态写成“Reset-v1 完成”。下一阶段建议见第 9 节。
@@ -107,7 +108,9 @@ ASAN_OPTIONS=detect_leaks=1:halt_on_error=0 timeout 1500s \
                           (2026-09-11, 6 文件；见第 3.7 节)
 提交 8（P1-4）  重构插件框架-P1-4 启用/禁用事务与 prompt 贡献模型
                           (2026-09-11, 5 文件；见第 3.8 节)
-工作树          干净（无修改、无 untracked）；origin/main 停在 f861bcf9，提交 3-8 均未推送
+提交 9（P1-3）  重构插件框架-P1-3 Client 语义渲染缓存与动作代次
+                          (2026-09-11, 9 文件；见第 3.9 节)
+工作树          干净（无修改、无 untracked）；origin/main 停在 f861bcf9，提交 3-9 均未推送
 ```
 
 `b2b5114a` 就是此前工作树里的全部增量，代码与验证记录一一对应（未做任何额外改动）；
@@ -341,6 +344,55 @@ shutdown 中挂起后台 Task、超时后立即 unload 的独立用例）。
 侧依赖级联恢复）、加载期 start 失败的 DSO 端到端回滚用例（需要真实测试插件）、
 graph/UI 注册记录在失败回滚中的显式断言。
 
+### 3.9 P1-3 提交：Client 语义渲染缓存与动作代次（R2/R5）
+
+12 文件（`client_plugin_manager.{h,cpp}` 为主，TUI 侧
+`message_list.{h,cpp}`/`agent_tui.{h,cpp}`/`tui_sidebar_content.cpp`/`overlays.{h,cpp}`/
+`tui_plugin_adapter.h`，测试 `test_client_plugins.cpp` + 本文档）。要点：
+
+- **工具语义渲染缓存（F03 / plugin.md 第 8.2 节）**：新增
+  `ClientToolRenderEntry` / `ClientToolRenderRequest` / `ClientToolRenderCache`
+  （宿主拥有、写入后不可变、内部短锁）：
+  - `renderClientTool(reg, cache, ...)` 不再调用插件：decor 与预设模版仍是纯宿主
+    计算；命中自定义 renderer 时只读缓存，未命中返回 `matched=false +
+    pendingRender=true`（UI 本次用通用回退）；
+  - UI 侧把输入拷成 `ClientToolRenderRequest` 交给
+    `ClientPluginManager::requestToolRender()`，由 client io 线程的
+    `performToolRender()` 复查 lease/alive/enabled/可注册状态、持 lease 调用
+    `render_fn`，把 displayName/summary/items 拷成宿主对象后写入缓存并
+    `uiAdapter->onToolRenderUpdated()` 通知重绘；
+  - 输入特征哈希（toolName/args/result/finished/error/maxWidth，FNV-1a）决定命中：
+    输入变化必须重新渲染；同键同输入特征的在途请求在缓存内去重，未命中期间不会
+    每帧重复投递；
+  - 输出字段在成功/失败/异常路径统一由宿主 `hostMemoryFree` 释放；
+  - 失效：禁用/卸载走 `invalidatePlugin`（版本号递增 → UI 重建为通用渲染），
+    会话切换整体 `clear()`；条目记录 plugin + 实例代次便于诊断与断言。
+- **动作代次（plugin.md 第 8.3 节）**：`ClientUiRegistry` 新增
+  `instanceGenerations`（插件名 → 实例代次，加载时登记、卸载时移除），TUI 的三处
+  按钮命中框（消息装饰、侧边栏/信息栏、面板）、overlay 按钮都记录渲染快照中的
+  代次；`dispatchAction(..., generation)` 在 client io 线程复查，代次不匹配
+  （同名插件重载）直接丢弃，不转交新实例。
+- **TUI 接线**：消息块缓存 key 计入
+  `ClientToolRenderCache::version(key)`，"通用回退 → 插件语义内容"由
+  `onToolRenderUpdated → requestRedraw` 驱动；工具消息两处渲染入口统一走
+  `queryToolRender()`。
+- **client 侧启用/禁用事务与依赖级联（P1-4 遗留）**：
+  `disableImpl` 在摘除 UI 注册后把 stop 投递到 client io 线程
+  （`stopForDisable` → `clearPluginOwnedUiRegistrations`），`enableImpl` 对导出
+  start 的插件走 `startForEnable`（先补齐欠着的 stop 再 start，失败回到
+  Disabled 并撤销部分注册）；legacy 插件的 UI 记录恢复移入
+  `restoreHostSideUiRegistrations()`；启用/禁用都增加关闭流程守卫，启用按依赖
+  拓扑级联恢复被级联禁用的依赖者（用户显式禁用的不恢复）。
+- **回归（`client_plugins` 309 → 374 断言）**：工具语义渲染缓存用例（首查不回退
+  到插件、请求后命中缓存并带 plugin/generation、输入变化重新渲染、卸载后旧快照
+  只回退且版本号递增）、动作代次用例（当前代次派发、重载后旧代次丢弃、新代次
+  派发）、client 启停事务用例（disable 触发 stop、enable 触发 start、关闭拒绝
+  状态变化、卸载补齐 stop）、client 三级/菱形依赖级联用例。
+
+仍属 P1-3 未做：TUI 组件级的"旧快照渲染"端到端用例（现用例在 manager 层驱动
+`renderClientTool`）；语义缓存目前按 (key, 输入特征) 无上限增长（会话切换会清空，
+但仍可考虑按容量淘汰）；`onToolRenderUpdated` 每次重绘整表，未做按块精确失效。
+
 ---
 
 ## 4. `b2b5114a` 内容明细（已提交，按阶段归类）
@@ -427,8 +479,10 @@ graph/UI 注册记录在失败回滚中的显式断言。
 | F20 prompt 备份恢复覆盖其他 owner | 完成 | owner+sequence 贡献模型 + 基础值 rebase（第 3.8 节） |
 | P1-4 生命周期 Operation 状态门禁 | 完成 | `OpCore::create` 只对业务操作检查 `enabled`/可注册状态，生命周期操作放行 Closing、拒绝 Closed |
 | R2 owner 顺序（BaseAgent / AgentHost / Client runner） | 完成 | 见 4.2 节 |
-| R2 Client semantic renderer cache | 未完成 | renderer 仍在 UI 线程同步调用（有 lease 保护） |
-| R2/R5 client 侧 enable/disable 事务 | 未完成 | client 禁用不触发插件 stop；依赖级联恢复也未做（P1-3 一起处理） |
+| R2 Client semantic renderer cache | 完成 | `ClientToolRenderCache` + `requestToolRender`/`performToolRender`：插件 renderer 只在 client io 线程执行，UI 只读宿主语义快照（第 3.9 节） |
+| R2/R5 client 侧 enable/disable 事务与依赖级联 | 完成 | `stopForDisable`/`startForEnable`/`restoreHostSideUiRegistrations` + 递归级联（第 3.9 节） |
+| F03 旧 Client UI 快照调用已销毁 renderer | 完成 | 缓存条目按插件失效 + 版本号递增；旧快照只能回退通用渲染（第 3.9 节用例） |
+| R5 动作代次 | 完成 | `ClientUiRegistry::instanceGenerations` + `dispatchAction(..., generation)` 复查（第 3.9 节用例） |
 | F02/F03/F04/F16/F17/F21、P0-C | 未完成或仅部分 | 见第 6、8 节（F19/F20 已完成，见第 3.7、3.8 节） |
 | R6 验证 / 文档 | 未开始 | 见第 6、7 节 |
 
@@ -482,11 +536,21 @@ graph/UI 注册记录在失败回滚中的显式断言。
   需要“预期编译失败”的测试机制（脚本或 CMake 试验性编译）。
 - 导出符号白名单检查（第三方静态依赖符号必须隐藏）——需要 `nm`/`objdump` 脚本。
 
-### P1-3 Client semantic renderer cache 与动作代次（R2/R5）
+### P1-3 Client semantic renderer cache 与动作代次（R2/R5）—— 已完成
 
-- renderer 结果改为 Client IO 线程计算的宿主语义快照（displayName/summary/items + generation），UI 只读 cache；旧 snapshot 失效直接通用回退（F03、plugin.md 第 8.2 节）。
-- 动作点击携带 plugin/generation/owner，IO 线程复查后决定丢弃或派发（plugin.md 第 8.3 节）。
-- 回归：保留旧 renderer snapshot、旧 action 点击、重载同名插件。
+已于第 3.9 节的提交落地：
+
+- renderer 结果改为 client io 线程计算的宿主语义快照（displayName/summary/items +
+  plugin/generation + 输入特征），UI 只读 cache；旧 snapshot 失效直接通用回退（F03）。
+- 动作点击携带 plugin/owner/generation，io 线程复查后决定丢弃或派发（同名重载后
+  旧点击不转交新实例）。
+- 回归：旧 renderer snapshot、旧 action 点击、重载同名插件、输入变化重渲染。
+
+遗留：
+
+- 语义缓存无容量上限（会话切换清空，但同一会话内按 tool_call_id 持续增长）。
+- `onToolRenderUpdated` 触发整表重绘，未做按消息块精确失效。
+- 旧快照用例在 manager 层驱动 `renderClientTool`，未覆盖 TUI 组件级路径。
 
 ### P1-4 注册事务与启停事务（R2/R5）—— 已完成（agent 侧）
 
@@ -716,7 +780,40 @@ plugin_multi_instance client_plugins --fail-fast` = 526+29+328+83+29+309
                          #  来源是插件 DSO 内部（<unknown module>）的间接泄漏，非本次回归引入）
 ```
 
-### 7.6 `b2b5114a` 的历史验证结果
+### 7.6 P1-3 提交的回归
+
+```bash
+cmake --build agent/build/linux-debug --target agentxx_test_repo -j12
+cmake --build agent/build/linux-debug --target agentxx_client_repo -j12   # TUI 接线
+ASAN_OPTIONS=detect_leaks=1:halt_on_error=0 timeout 1500s \
+  agent/build/linux-debug/exec/agentxx_test \
+  ffi_c_api agent_host subagent_tool subagent_bus plugin_sdk plugin_runtime plugins \
+  plugin_resources plugin_multi_instance client_plugins agent memgrowth --fail-fast
+```
+
+```text
+ffi_c_api             117 passed / 0 failed
+plugin_runtime        526 passed / 0 failed
+plugin_sdk             29 passed / 0 failed
+subagent_bus           21 passed / 0 failed
+subagent_tool         122 passed / 0 failed
+agent_host             95 passed / 0 failed
+plugins               328 passed / 0 failed
+plugin_resources       83 passed / 0 failed
+plugin_multi_instance  29 passed / 0 failed
+client_plugins        374 passed / 0 failed     # P1-3 新增 65 断言（原 309）
+agent                  91 passed / 0 failed
+memgrowth              15 passed / 0 failed
+合计                 1830 passed / 0 failed   （exit=0）
+```
+
+插件/客户端专项：`plugin_runtime plugin_sdk plugins plugin_resources
+plugin_multi_instance client_plugins --fail-fast` = 526+29+328+83+29+374
+= 1369 passed / 0 failed。TUI 接线通过 `agentxx_cli` 全量重链接验证（无编译/链接错误）；
+未做人工 TUI 会话走查（无显示环境），语义渲染路径由 `client_plugins` 用例覆盖。
+日志：`/tmp/p13-sweep-1.log`。
+
+### 7.7 `b2b5114a` 的历史验证结果
 
 以下结果测自 `b2b5114a`（同样为 ASan + LSan、`--fail-fast` 的扩展回归）：
 
@@ -750,7 +847,8 @@ client_plugins 309 / agent 91 / memgrowth 15   合计 1338 passed / 0 failed
 1. ~~host opaque / vtable 裸指针~~：P0-1 已解决（控制块 + 令牌 + 租约 + 注册执行期复查）。
    仍存在的是"控制块 tombstone 永不回收"的固定内存代价（每实例约 100 字节，见第 3.4 节）。
 2. 同步析构兜底会保留 DSO：stop 未完成或 lease 非零时实例保持 `CloseFailed` 并保留 ctx/DSO（日志明确报错）。这是安全兜底而非最终形态，依赖 owner 先 await `shutdownAsync`。`AgentHost::destroyAgent`（同步）只告警不阻断，新代码应使用 `destroyAgentAsync`。
-3. renderer 仍在调用线程同步执行：有 lease/alive 复查，但不符合 plugin.md 第 8.2 节的语义 cache 模型。
+3. ~~renderer 在调用线程同步执行~~：P1-3 已改为 client io 线程计算语义快照 + UI 只读缓存
+   （第 3.9 节）。仍存在的是缓存条目无容量上限（会话切换清空）。
 4. ~~Operation 取消/终态未收敛~~：P0-2 已收敛（普通 mutex + 契约注释、`completionPending()`/
    `pendingOperationSummary()` 可观察终态、终态后 cancel 空操作）。仍缺的是 11.2 节
    第 5/8/9 条独立用例（见第 3.5、6 节）。
@@ -769,7 +867,7 @@ client_plugins 309 / agent 91 / memgrowth 15   合计 1338 passed / 0 failed
 
 ## 9. 下一步执行顺序（建议）
 
-1. 以当前 HEAD（P1-4 提交）为起点，按 0.3 节复跑构建 + 扩展回归，确认基线（应为 1765/0）。
+1. 以当前 HEAD（P1-3 提交）为起点，按 0.3 节复跑构建 + 扩展回归，确认基线（应为 1830/0）。
 2. ~~P0-1 宿主控制块~~、~~P0-2 Operation 终态~~：已完成（第 3.4 / 3.5 节）。
    可选收尾：client 侧"旧 host 指针在卸载后安全失败"的专项用例；订阅句柄与
    GraphTypeSlot 旧节点的"代次失效 + 迟到调用"独立用例（机制已具备）。
@@ -778,9 +876,15 @@ client_plugins 309 / agent 91 / memgrowth 15   合计 1338 passed / 0 failed
 4. ~~P1-1 SDK Request + 统一 root adapter（F13/F19）~~：主体已完成（第 3.7 节）。
    遗留 capability 异步业务、graph node 纳入 adapter、正反例编译测试。
 5. ~~P1-4 启用/禁用事务与 prompt 贡献模型~~：agent 侧已完成（第 3.8 节）。
-6. P1-3 Client 语义模型（renderer cache / 动作代次）+ client 侧 enable/disable 事务
-   与依赖级联（`client_plugin_manager.{h,cpp}` 一并处理，避免两次改同一段代码）。
-7. P2-1 / P2-2 内置插件与 JS 迁移、平台与文档收尾（含 `docs/zh-cn/design/plugins.md`）。
+6. ~~P1-3 Client 语义模型（renderer cache / 动作代次）+ client 侧 enable/disable 事务
+   与依赖级联~~：已完成（第 3.9 节）。
+7. P2-1 / P2-2 内置插件与 JS 迁移、平台与文档收尾（含 `docs/zh-cn/design/plugins.md`）：
+   - example_plugin / example_resources / example_graph_node 迁移为 start/stop 事务正例；
+   - string/math/system 校准 SDK 签名；websearch/rag/planning 接入 CancelToken；
+     system_monitor/codegraph 多实例与后台采样；
+   - JS：`callTool` 返回 Promise、删除 1ms 轮询、顶层异常事务、rejection/timeout 映射；
+   - Windows 平台 gate（screen_capture/computer_use/text_selection_monitor）与符号白名单检查；
+   - 更新 `docs/zh-cn/design/plugins.md`。
 
 每一步完成后：跑对应模块回归，更新本文件第 1、5、6、7 节，再提交。
 

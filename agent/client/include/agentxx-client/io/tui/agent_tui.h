@@ -297,6 +297,8 @@ public:
         std::string ownerId; ///< section_id / panel_id / tool_call_id
         std::string actionId;
         std::string argsJson; ///< dump (无参 "{}")
+        /// 渲染时快照中的实例代次 (点击派发时复查; 重载同名插件后旧点击被丢弃)
+        uint64_t generation = 0;
     };
 
     /// 通用插件按钮命中检测 (UI 线程; 命中时拷贝出 out 并返回 true)

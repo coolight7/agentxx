@@ -35,10 +35,39 @@ namespace {
 int g_client_plugin_passed = 0;
 int g_client_plugin_failed = 0;
 
+/// 等待若干毫秒 (工具语义渲染请求投递到 io 线程后等待其完成)
+static asio::awaitable<void> sleepMs(int ms) {
+    auto timer
+        = asio::steady_timer(co_await asio::this_coro::executor, std::chrono::milliseconds{ms});
+    co_await timer.async_wait(asio::use_awaitable);
+}
+
 /// 同步关闭路径无法等待 stop 事务: 该 hook 只用于断言“未被调用”。
 void* AGENTXX_PLUGIN_CALL fakeClientStopHook(
     void*, const AgentxxPluginOperatorNotify*, AgentxxPluginString*
 ) {
+    return nullptr;
+}
+
+/// client 侧 start/stop 事务探针 (记录调用次数; 不保存任何跨调用全局状态)
+struct ClientLifecycleProbe {
+    int starts = 0;
+    int stops  = 0;
+};
+
+void* AGENTXX_PLUGIN_CALL probeClientStartHook(
+    void* ud, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString*
+) {
+    ++static_cast<ClientLifecycleProbe*>(ud)->starts;
+    notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+    return nullptr;
+}
+
+void* AGENTXX_PLUGIN_CALL probeClientStopHook(
+    void* ud, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString*
+) {
+    ++static_cast<ClientLifecycleProbe*>(ud)->stops;
+    notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
     return nullptr;
 }
 } // namespace
@@ -358,6 +387,68 @@ private:
     std::string        lastOverlayExtra_;
     std::string        lastOverlayClosePlugin_;
 };
+
+/// 工具语义渲染 (Reset-v1 模型):
+/// - decor / 预设模版: 纯宿主计算, 直接返回
+/// - 自定义 renderer: 只在 client io 线程执行; 未命中时提交请求并等待结果写入
+///   缓存, 再从缓存读取 (UI 线程只读宿主语义快照, 不进入插件代码)
+asio::awaitable<agentxx::plugin::ClientToolRenderResult> renderToolAsync(
+    const std::shared_ptr<agentxx::plugin::ClientPluginManager>& mgr,
+    std::string                                                  toolCallId,
+    std::string                                                  toolName,
+    std::string                                                  argsJson,
+    std::string                                                  resultText,
+    bool                                                         isFinished,
+    bool                                                         isError,
+    int                                                          maxWidth
+) {
+    auto reg   = mgr->uiRegistrySnapshot();
+    auto cache = mgr->toolRenderCache();
+    auto res   = agentxx::plugin::renderClientTool(
+        reg.get(),
+        cache.get(),
+        toolCallId,
+        toolName,
+        argsJson,
+        resultText,
+        isFinished,
+        isError,
+        maxWidth
+    );
+    if (!res.pendingRender) {
+        co_return res;
+    }
+    agentxx::plugin::ClientToolRenderRequest req;
+    req.toolCallId = std::move(toolCallId);
+    req.toolName   = std::move(toolName);
+    req.argsJson   = std::move(argsJson);
+    req.resultText = std::move(resultText);
+    req.isFinished = isFinished;
+    req.isError    = isError;
+    req.maxWidth   = maxWidth;
+    const std::string key  = agentxx::plugin::ClientToolRenderRequest::keyFor(
+        req.toolCallId,
+        req.toolName
+    );
+    const uint64_t hash = req.inputHash();
+    mgr->requestToolRender(req);
+    // 请求可能内联执行 (本协程与 manager 同 executor), 否则让出执行权等它完成
+    for (int i = 0; i < 500 && !cache->lookup(key, hash); ++i) {
+        co_await sleepMs(1);
+    }
+    auto reg2 = mgr->uiRegistrySnapshot();
+    co_return agentxx::plugin::renderClientTool(
+        reg2.get(),
+        cache.get(),
+        req.toolCallId,
+        req.toolName,
+        req.argsJson,
+        req.resultText,
+        isFinished,
+        isError,
+        maxWidth
+    );
+}
 
 asio::awaitable<TestResult> run_client_plugin_tests() {
     g_client_plugin_passed = 0;
@@ -1233,8 +1324,8 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             XX_TEST_EXPECT_TRUE(reg != nullptr);
 
             // 15.1 list (预设模版)
-            auto listRes = agentxx::plugin::renderClientTool(
-                reg.get(),
+            auto listRes = co_await renderToolAsync(
+                mgr,
                 "call_list_1",
                 "agentxx_filesystem_list",
                 R"({"path":"/home/user"})",
@@ -1248,8 +1339,8 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             XX_TEST_EXPECT_EQ(listRes.summary, "/home/user");
 
             // 15.2 read (回调函数: [offset, limit] 区间参数)
-            auto readRes = agentxx::plugin::renderClientTool(
-                reg.get(),
+            auto readRes = co_await renderToolAsync(
+                mgr,
                 "call_read_1",
                 "agentxx_filesystem_read",
                 R"({"path":"/home/user/a.cpp","line_offset":10,"line_limit":50})",
@@ -1264,8 +1355,8 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             XX_TEST_EXPECT_TRUE(readRes.summary.find("/home/user/a.cpp") != std::string::npos);
 
             // 15.3 edit (回调函数: path 摘要 + diff items)
-            auto editRes = agentxx::plugin::renderClientTool(
-                reg.get(),
+            auto editRes = co_await renderToolAsync(
+                mgr,
                 "call_edit_1",
                 "agentxx_filesystem_edit",
                 R"({"path":"/home/user/b.cpp","old_str":"foo","new_str":"bar"})",
@@ -1306,8 +1397,8 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             XX_TEST_EXPECT_TRUE(reg != nullptr);
 
             // glob 数组形态 (旧行为, 回归保护)
-            auto globArr = agentxx::plugin::renderClientTool(
-                reg.get(),
+            auto globArr = co_await renderToolAsync(
+                mgr,
                 "call_glob_arr",
                 "agentxx_filesystem_glob",
                 R"({"file_patterns":["a","b","c","d"]})",
@@ -1321,8 +1412,8 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             XX_TEST_EXPECT_TRUE(globArr.summary.find("a, b, ...") != std::string::npos);
 
             // glob 单字符串形态 (真实 LLM 下发形态)
-            auto globStr = agentxx::plugin::renderClientTool(
-                reg.get(),
+            auto globStr = co_await renderToolAsync(
+                mgr,
                 "call_glob_str",
                 "agentxx_filesystem_glob",
                 R"({"file_patterns":"agent/test/*.cpp"})",
@@ -1336,8 +1427,8 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             XX_TEST_EXPECT_TRUE(globStr.summary.find("agent/test/*.cpp") != std::string::npos);
 
             // grep 数组形态 (旧行为, 回归保护)
-            auto grepArr = agentxx::plugin::renderClientTool(
-                reg.get(),
+            auto grepArr = co_await renderToolAsync(
+                mgr,
                 "call_grep_arr",
                 "agentxx_filesystem_grep",
                 R"({"text_patterns":["foo"],"file_patterns":["src/**/*.h"]})",
@@ -1352,8 +1443,8 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             XX_TEST_EXPECT_TRUE(grepArr.summary.find("src/**/*.h") != std::string::npos);
 
             // grep 单字符串形态 (真实 LLM 下发形态: file/text 均为单字符串)
-            auto grepStr = agentxx::plugin::renderClientTool(
-                reg.get(),
+            auto grepStr = co_await renderToolAsync(
+                mgr,
                 "call_grep_str",
                 "agentxx_filesystem_grep",
                 R"({"text_patterns":"startDaSimServer","file_patterns":"agent/test/core/test_agent.cpp"})",
@@ -1370,8 +1461,8 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             );
 
             // grep 混合形态: 单字符串 text + 数组 regex (摘要合并展示)
-            auto grepMix = agentxx::plugin::renderClientTool(
-                reg.get(),
+            auto grepMix = co_await renderToolAsync(
+                mgr,
                 "call_grep_mix",
                 "agentxx_filesystem_grep",
                 R"({"text_patterns":"hello","regex_patterns":["world"],"file_patterns":["src/**/*.txt"]})",
@@ -1399,8 +1490,8 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             auto reg = mgr->uiRegistrySnapshot();
             XX_TEST_EXPECT_TRUE(reg != nullptr);
 
-            auto searchRes = agentxx::plugin::renderClientTool(
-                reg.get(),
+            auto searchRes = co_await renderToolAsync(
+                mgr,
                 "call_search_1",
                 "agentxx_web_search",
                 R"({"query":"c++26 features"})",
@@ -1427,8 +1518,8 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             auto reg = mgr->uiRegistrySnapshot();
             XX_TEST_EXPECT_TRUE(reg != nullptr);
 
-            auto bashRes = agentxx::plugin::renderClientTool(
-                reg.get(),
+            auto bashRes = co_await renderToolAsync(
+                mgr,
                 "call_bash_1",
                 "agentxx_execute_bash_command",
                 R"({"command":"uname -a"})",
@@ -1813,6 +1904,175 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         }
     }
 
+    // ---- 21b. 工具语义渲染缓存: UI 线程不调用插件 renderer, 旧快照安全回退 ----
+    {
+        auto fsPath = findPluginPath("agentxx_filesystem");
+        auto fsInst = co_await mgr->loadNativeAsync(fsPath);
+        XX_TEST_EXPECT_TRUE(fsInst != nullptr);
+        if (fsInst) {
+            const uint64_t generation = fsInst->lifetime ? fsInst->lifetime->generation() : 0;
+            auto           reg        = mgr->uiRegistrySnapshot();
+            auto           cache      = mgr->toolRenderCache();
+            XX_TEST_EXPECT_TRUE(reg != nullptr && cache != nullptr);
+
+            agentxx::plugin::ClientToolRenderRequest req;
+            req.toolCallId = "call_read_cache_1";
+            req.toolName   = "agentxx_filesystem_read";
+            req.argsJson   = R"({"path":"/home/user/a.cpp","line_offset":10,"line_limit":50})";
+            req.resultText = "";
+            req.isFinished = true;
+            req.isError    = false;
+            req.maxWidth   = 100;
+            const std::string key  = agentxx::plugin::ClientToolRenderRequest::keyFor(
+                req.toolCallId,
+                req.toolName
+            );
+            const uint64_t hash = req.inputHash();
+
+            // 首次查询: 自定义 renderer 未计算 → 通用回退 + 请求渲染 (不进入插件代码)
+            auto first = agentxx::plugin::renderClientTool(
+                reg.get(),
+                cache.get(),
+                req.toolCallId,
+                req.toolName,
+                req.argsJson,
+                req.resultText,
+                req.isFinished,
+                req.isError,
+                req.maxWidth
+            );
+            XX_TEST_EXPECT_FALSE(first.matched);
+            XX_TEST_EXPECT_TRUE(first.pendingRender);
+            XX_TEST_EXPECT_EQ(first.pendingPlugin, std::string{"agentxx_filesystem"});
+            XX_TEST_EXPECT_TRUE(cache->lookup(key, hash) == nullptr);
+
+            // 提交渲染请求: 结果由 client io 线程写入缓存 (含插件名与实例代次)
+            mgr->requestToolRender(req);
+            for (int i = 0; i < 500 && !cache->lookup(key, hash); ++i) {
+                co_await sleepMs(1);
+            }
+            auto entry = cache->lookup(key, hash);
+            XX_TEST_EXPECT_TRUE(entry != nullptr);
+            if (entry) {
+                XX_TEST_EXPECT_TRUE(entry->matched);
+                XX_TEST_EXPECT_EQ(entry->plugin, std::string{"agentxx_filesystem"});
+                XX_TEST_EXPECT_EQ(entry->generation, generation);
+            }
+            const uint64_t versionAfterRender = cache->version(key);
+            XX_TEST_EXPECT_TRUE(versionAfterRender > 0);
+
+            auto second = agentxx::plugin::renderClientTool(
+                reg.get(),
+                cache.get(),
+                req.toolCallId,
+                req.toolName,
+                req.argsJson,
+                req.resultText,
+                req.isFinished,
+                req.isError,
+                req.maxWidth
+            );
+            XX_TEST_EXPECT_TRUE(second.matched);
+            XX_TEST_EXPECT_FALSE(second.pendingRender);
+            XX_TEST_EXPECT_EQ(second.displayName, std::string{"Read"});
+            XX_TEST_EXPECT_TRUE(second.summary.find("[10, 50]") != std::string::npos);
+
+            // 输入变化 (参数/宽度) → 缓存不命中, 需要重新渲染
+            req.argsJson = R"({"path":"/home/user/a.cpp","line_offset":1,"line_limit":2})";
+            auto changed = agentxx::plugin::renderClientTool(
+                reg.get(),
+                cache.get(),
+                req.toolCallId,
+                req.toolName,
+                req.argsJson,
+                req.resultText,
+                req.isFinished,
+                req.isError,
+                req.maxWidth
+            );
+            XX_TEST_EXPECT_TRUE(changed.pendingRender);
+
+            // 卸载后旧快照 + 旧缓存只能回退: 版本号递增驱动 UI 重建为通用渲染
+            co_await mgr->unloadAsync("agentxx_filesystem");
+            XX_TEST_EXPECT_TRUE(mgr->find("agentxx_filesystem") == nullptr);
+            XX_TEST_EXPECT_TRUE(cache->lookup(key, hash) == nullptr);
+            XX_TEST_EXPECT_TRUE(cache->version(key) > versionAfterRender);
+            auto afterUnload = agentxx::plugin::renderClientTool(
+                reg.get(),
+                cache.get(),
+                req.toolCallId,
+                req.toolName,
+                req.argsJson,
+                req.resultText,
+                req.isFinished,
+                req.isError,
+                req.maxWidth
+            );
+            XX_TEST_EXPECT_FALSE(afterUnload.matched);
+        }
+    }
+
+    // ---- 21c. 动作代次: 重新加载同名插件后旧点击不转交新实例 ----
+    {
+        std::atomic<int> hits{0};
+        auto             probeFn = +[](const AgentxxUiActionContext*, void* ud) {
+            ++(*static_cast<std::atomic<int>*>(ud));
+        };
+        auto fsPath = findPluginPath("agentxx_filesystem");
+        auto first  = co_await mgr->loadNativeAsync(fsPath);
+        XX_TEST_EXPECT_TRUE(first != nullptr);
+        if (first) {
+            const auto ui = agentxx::plugin::ClientIfaces::query(first->hostView()).ui;
+            XX_TEST_EXPECT_TRUE(ui != nullptr && ui->bind_action_handler != nullptr);
+            if (ui && ui->bind_action_handler) {
+                auto secSv = agentxx::plugin::PluginStringView::fromCstr("gen_sec");
+                XX_TEST_EXPECT_EQ(
+                    ui->bind_action_handler(first->hostView(), &secSv, probeFn, &hits),
+                    0
+                );
+                auto           reg = mgr->uiRegistrySnapshot();
+                const uint64_t gen1 = reg ? reg->generationOf("agentxx_filesystem") : 0;
+                XX_TEST_EXPECT_TRUE(gen1 != 0);
+
+                // 当前代次点击 → 派发
+                mgr->dispatchAction("agentxx_filesystem", "gen_sec", "a.do", "{}", gen1);
+                XX_TEST_EXPECT_EQ(hits.load(), 1);
+
+                // 卸载 + 重新加载 (新代次) → 旧代次点击丢弃, 新代次点击派发
+                co_await mgr->unloadAsync("agentxx_filesystem");
+                XX_TEST_EXPECT_TRUE(mgr->find("agentxx_filesystem") == nullptr);
+                auto second = co_await mgr->loadNativeAsync(fsPath);
+                XX_TEST_EXPECT_TRUE(second != nullptr);
+                if (second) {
+                    auto reg2 = mgr->uiRegistrySnapshot();
+                    const uint64_t gen2 = reg2 ? reg2->generationOf("agentxx_filesystem") : 0;
+                    XX_TEST_EXPECT_TRUE(gen2 != 0);
+                    XX_TEST_EXPECT_TRUE(gen2 != gen1);
+                    // 旧代次点击: 实例已重载 → 丢弃 (即使绑定同名同 owner)
+                    mgr->dispatchAction("agentxx_filesystem", "gen_sec", "a.do", "{}", gen1);
+                    XX_TEST_EXPECT_EQ(hits.load(), 1);
+                    // 新实例重新绑定后, 新代次点击正常派发
+                    const auto ui2 = agentxx::plugin::ClientIfaces::query(second->hostView()).ui;
+                    XX_TEST_EXPECT_TRUE(ui2 != nullptr && ui2->bind_action_handler != nullptr);
+                    if (ui2 && ui2->bind_action_handler) {
+                        XX_TEST_EXPECT_EQ(
+                            ui2->bind_action_handler(
+                                second->hostView(),
+                                &secSv,
+                                probeFn,
+                                &hits
+                            ),
+                            0
+                        );
+                    }
+                    mgr->dispatchAction("agentxx_filesystem", "gen_sec", "a.do", "{}", gen2);
+                    XX_TEST_EXPECT_EQ(hits.load(), 2);
+                    co_await mgr->unloadAsync("agentxx_filesystem");
+                }
+            }
+        }
+    }
+
     // ---- 22. 同步关闭不得绕过 stop: 实例、上下文与 DSO 保留 + CloseFailed ----
     {
         asio::io_context syncIo;
@@ -1856,6 +2116,143 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         // stop 未完成的实例仍然保留, 不能因其它实例关闭成功而被清理。
         XX_TEST_EXPECT_TRUE(syncMgr->find("fake_pending_stop") != nullptr);
         XX_TEST_EXPECT_TRUE(syncMgr->hasPendingClose());
+    }
+
+    // ---- 23. client 侧禁用/启用事务: 导出 start/stop 的插件收到 stop/start ----
+    {
+        auto createFake = [](const std::shared_ptr<agentxx::plugin::ClientPluginManager>& m,
+                             asio::io_context&                                             io,
+                             std::string                                                   name,
+                             uint64_t generation) {
+            auto inst         = std::make_shared<agentxx::plugin::ClientPluginInstance>(std::move(name));
+            inst->self        = inst;
+            inst->manager     = m;
+            inst->lifetime    = std::make_shared<agentxx::plugin::InstanceLifetime>(
+                io.get_executor(),
+                inst->name,
+                generation
+            );
+            inst->lifetime->setState(agentxx::plugin::PluginInstanceState::Ready);
+            inst->pluginCreated = true;
+            m->plugins_.emplace(inst->name, inst);
+            return inst;
+        };
+        auto drainIo = [](asio::io_context& io) {
+            for (int i = 0; i < 8; ++i) {
+                io.restart();
+                io.poll();
+            }
+            io.restart();
+        };
+
+        asio::io_context io;
+        auto             mgr2  = std::make_shared<agentxx::plugin::ClientPluginManager>(io.get_executor());
+        ClientLifecycleProbe probe;
+        auto inst = createFake(mgr2, io, "fake_lifecycle", uint64_t{7});
+        inst->lifecycleStart  = &probeClientStartHook;
+        inst->lifecycleStop   = &probeClientStopHook;
+        inst->pluginCtx       = &probe;
+        inst->lifecycleStarted = true;
+
+        // 禁用: 宿主侧同步摘除, stop 事务投递到 client io 线程
+        mgr2->disable("fake_lifecycle");
+        XX_TEST_EXPECT_FALSE(inst->enabled);
+        XX_TEST_EXPECT_TRUE(inst->userDisabled);
+        XX_TEST_EXPECT_EQ(probe.stops, 0);
+        drainIo(io);
+        XX_TEST_EXPECT_EQ(probe.stops, 1);
+        XX_TEST_EXPECT_TRUE(inst->lifecycleStopped);
+        XX_TEST_EXPECT_EQ(
+            static_cast<int>(inst->lifetime->state()),
+            static_cast<int>(agentxx::plugin::PluginInstanceState::Disabled)
+        );
+
+        // 启用: start 事务重新声明注册, 成功后回到 Ready
+        mgr2->enable("fake_lifecycle");
+        XX_TEST_EXPECT_TRUE(inst->enabled);
+        XX_TEST_EXPECT_FALSE(inst->userDisabled);
+        drainIo(io);
+        XX_TEST_EXPECT_EQ(probe.starts, 1);
+        XX_TEST_EXPECT_FALSE(inst->lifecycleStopped);
+        XX_TEST_EXPECT_EQ(
+            static_cast<int>(inst->lifetime->state()),
+            static_cast<int>(agentxx::plugin::PluginInstanceState::Ready)
+        );
+
+        // 关闭流程中拒绝启用状态变化
+        inst->lifetime->requestClose();
+        mgr2->disable("fake_lifecycle");
+        XX_TEST_EXPECT_TRUE(inst->enabled);
+
+        // 收尾: 卸载路径补齐欠着的 stop, 之后才能 destroy/dlclose
+        bool closed = false;
+        asio::co_spawn(
+            io,
+            [&]() -> asio::awaitable<void> {
+                closed = co_await mgr2->unloadAsync("fake_lifecycle", std::chrono::milliseconds{500});
+            },
+            asio::detached
+        );
+        drainIo(io);
+        XX_TEST_EXPECT_TRUE(closed);
+        XX_TEST_EXPECT_EQ(probe.stops, 2);
+        XX_TEST_EXPECT_TRUE(mgr2->find("fake_lifecycle") == nullptr);
+    }
+
+    // ---- 24. client 侧依赖级联: 三级/菱形禁用-恢复 + 用户禁用不被级联恢复 ----
+    {
+        auto createFake = [](const std::shared_ptr<agentxx::plugin::ClientPluginManager>& m,
+                             asio::io_context&                                             io,
+                             std::string                                                   name,
+                             uint64_t generation) {
+            auto inst      = std::make_shared<agentxx::plugin::ClientPluginInstance>(std::move(name));
+            inst->self     = inst;
+            inst->manager  = m;
+            inst->lifetime = std::make_shared<agentxx::plugin::InstanceLifetime>(
+                io.get_executor(),
+                inst->name,
+                generation
+            );
+            inst->lifetime->setState(agentxx::plugin::PluginInstanceState::Ready);
+            m->plugins_.emplace(inst->name, inst);
+            return inst;
+        };
+        asio::io_context io;
+        auto mgr2 = std::make_shared<agentxx::plugin::ClientPluginManager>(io.get_executor());
+        auto leaf = createFake(mgr2, io, "leaf", 30);
+        auto mid  = createFake(mgr2, io, "mid", 31);
+        auto side = createFake(mgr2, io, "side", 32);
+        auto top  = createFake(mgr2, io, "top", 33);
+        mid->depends  = {"leaf"};
+        side->depends = {"leaf"};
+        top->depends  = {"mid", "side"}; // 菱形: top 经 mid/side 两级依赖 leaf
+
+        mgr2->disable("leaf");
+        XX_TEST_EXPECT_FALSE(leaf->enabled);
+        XX_TEST_EXPECT_FALSE(mid->enabled);
+        XX_TEST_EXPECT_TRUE(mid->blockedByDependencies);
+        XX_TEST_EXPECT_FALSE(side->enabled);
+        XX_TEST_EXPECT_FALSE(top->enabled); // 三级依赖同样被级联
+        XX_TEST_EXPECT_TRUE(top->blockedByDependencies);
+
+        mgr2->enable("leaf");
+        XX_TEST_EXPECT_TRUE(leaf->enabled);
+        XX_TEST_EXPECT_TRUE(mid->enabled);
+        XX_TEST_EXPECT_TRUE(side->enabled);
+        XX_TEST_EXPECT_TRUE(top->enabled);
+
+        // 用户显式禁用的插件不被级联恢复
+        mgr2->disable("top");
+        XX_TEST_EXPECT_TRUE(top->userDisabled);
+        mgr2->disable("leaf");
+        XX_TEST_EXPECT_FALSE(mid->enabled);
+        mgr2->enable("leaf");
+        XX_TEST_EXPECT_TRUE(mid->enabled);
+        XX_TEST_EXPECT_FALSE(top->enabled);
+        XX_TEST_EXPECT_TRUE(top->userDisabled);
+        mgr2->enable("top");
+        XX_TEST_EXPECT_TRUE(top->enabled);
+        XX_TEST_EXPECT_FALSE(top->userDisabled);
     }
 
     co_return TestResult{g_client_plugin_passed, g_client_plugin_failed};

@@ -18,6 +18,7 @@
 #include <set>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <thread>
 #include <vector>
 
@@ -124,6 +125,16 @@ struct ClientUiRegistry {
     std::vector<ClientToolRenderReg> toolRenderers;
     /// 通用动作绑定 (COW 快照: UI 线程渲染时查"该按钮是否可点", 无锁读)
     std::vector<ClientActionBinding> actionBindings;
+    /// 插件名 → 实例代次 (重载同名插件后代次改变)。UI 渲染时把代次记进按钮命中框,
+    /// 点击派发时由 io 线程复查: 代次不匹配说明实例已重载, 旧点击只能丢弃,
+    /// 不得转交同名新实例 (plugin.md 第 8.3 节)。
+    std::map<std::string, uint64_t, std::less<>> instanceGenerations;
+
+    /// 查询插件实例代次 (0 = 未知/未登记)
+    uint64_t generationOf(std::string_view plugin) const {
+        auto it = instanceGenerations.find(plugin);
+        return it == instanceGenerations.end() ? 0 : it->second;
+    }
 };
 
 /// 工具特化渲染统一结果
@@ -133,6 +144,12 @@ struct ClientToolRenderResult {
     agentxx::util::Json items   = agentxx::util::Json::array();
     bool                matched = false;
     bool                isDecor = false; ///< 是否来自动态 toolDecors (update_tool_decor)
+    /// 命中"按 tool_name 注册的自定义 renderer"但语义结果尚未计算出来:
+    /// 调用方本次用通用回退渲染, 并按 [ClientToolRenderRequest] 提交一次请求。
+    /// 自定义 renderer 不在 UI 线程执行 (见 plugin.md 第 8.2 节)。
+    bool pendingRender = false;
+    /// pendingRender=true 时的 renderer 归属插件 (空 = 未知)
+    std::string pendingPlugin;
     /// decor 归因 (isDecor=true 时有效; UI 侧组装 owner_id=toolCallId 用):
     /// button 派发 owner_id 统一为 tool_call_id (以 toolCallId 作 owner_id,
     /// 插件 bind 一次永久生效, 见方案 A); 非 decor 时为空
@@ -140,13 +157,86 @@ struct ClientToolRenderResult {
     std::string decorToolCallId;
 };
 
-/// 渲染客户端工具特化内容 (折叠头/展开体)
+/// 工具语义渲染结果条目 (宿主拥有; 写入后不再修改, UI 线程只读快照)
+/// - 由 client io 线程在持有 renderer lease 时执行插件回调, 并把
+///   displayName/summary/items 拷成宿主字符串/JSON 后写入
+/// - 插件卸载/禁用/重载时按插件失效, 旧快照因此回退通用渲染 (F03)
+struct ClientToolRenderEntry {
+    std::string         key;        ///< 缓存键 (toolCallId, 空则 "#toolName")
+    std::string         plugin;     ///< 产出该结果的插件名
+    uint64_t            generation = 0; ///< 产出时的实例代次
+    uint64_t            inputHash  = 0; ///< 输入特征 (args/结果/宽度等)
+    bool                matched    = false;
+    std::string         displayName;
+    std::string         summary;
+    agentxx::util::Json items = agentxx::util::Json::array();
+};
+
+/// 工具语义渲染请求 (UI 线程构造; 所有字段为拥有型拷贝, 不在 UI 线程进入插件代码)
+struct ClientToolRenderRequest {
+    std::string toolCallId;
+    std::string toolName;
+    std::string argsJson;
+    std::string resultText;
+    bool        isFinished = false;
+    bool        isError    = false;
+    int         maxWidth   = 0;
+
+    /// 缓存键: 优先按 tool_call_id (每次调用独立), 无 id 时退回 tool_name
+    static std::string keyFor(std::string_view toolCallId, std::string_view toolName);
+
+    /// 输入特征: 任一输入变化都必须重新渲染 (含宽度, 渲染器按宽度换行)
+    uint64_t inputHash() const;
+};
+
+/// 工具语义渲染缓存 (client io 线程写, UI 线程读; 内部短锁)
+/// - `lookup`/`version` 只读宿主拷贝, 不调用插件
+/// - `store` 递增该键版本号, UI 据此重建消息块
+/// - `invalidatePlugin`/`clear` 丢弃条目并递增版本号 (旧快照回退通用渲染)
+class ClientToolRenderCache {
+public:
+
+    std::shared_ptr<const ClientToolRenderEntry>
+        lookup(const std::string& key, uint64_t inputHash) const;
+
+    /// 该键的内容版本号 (0 = 从未写入; 计入 TUI 消息块缓存 key)
+    uint64_t version(const std::string& key) const;
+
+    /// 写入条目 (按 entry.key); 返回写入后的不可变快照
+    std::shared_ptr<const ClientToolRenderEntry> store(ClientToolRenderEntry entry);
+
+    /// 丢弃某插件的全部条目 (禁用/卸载/重载/会话切换)
+    void invalidatePlugin(std::string_view plugin);
+
+    void clear();
+
+    /// 标记"该键的这次输入特征已有渲染请求在执行" (返回 false = 已存在)。
+    /// UI 每帧都会重新查询, 没有这个去重会让未命中期间每帧重复投递请求。
+    bool beginRequest(const std::string& key, uint64_t inputHash);
+    void endRequest(const std::string& key, uint64_t inputHash);
+
+    /// 条目数 (测试/诊断)
+    size_t size() const;
+
+private:
+
+    mutable std::mutex                                                           mutex_;
+    std::unordered_map<std::string, std::shared_ptr<const ClientToolRenderEntry>> entries_;
+    std::unordered_map<std::string, uint64_t>                                     versions_;
+    /// 键 → 在途请求的输入特征
+    std::unordered_map<std::string, uint64_t> pending_;
+};
+
+/// 渲染客户端工具特化内容 (折叠头/展开体; UI 线程可调, 不进入插件代码)
 /// 查询顺序:
 /// 1. toolDecors (按 toolCallId 匹配动态实例级装饰, 如 planning 推送)
-/// 2. toolRenderers (按 toolName 匹配注册的渲染回调或预设模版)
-/// 3. 若均未命中, 返回 matched = false
+/// 2. toolRenderers 预设模版 (纯宿主计算, 直接在 UI 线程算)
+/// 3. toolRenderers 自定义 renderer: 只读 `cache` 中的语义结果;
+///    未命中返回 matched=false + pendingRender=true (调用方提交渲染请求)
+/// 4. 若均未命中, 返回 matched = false
 ClientToolRenderResult renderClientTool(
     const ClientUiRegistry* reg,
+    const ClientToolRenderCache* cache,
     std::string_view        toolCallId,
     std::string_view        toolName,
     std::string_view        argsJson,
@@ -346,6 +436,20 @@ public:
     /// 注册表快照 (短锁拷贝 shared_ptr; UI 线程渲染无锁读取)
     std::shared_ptr<const ClientUiRegistry> uiRegistrySnapshot() const;
 
+    /// 工具语义渲染缓存 (任意线程可读; 内部短锁)。UI 线程只读其中的宿主拷贝,
+    /// 自定义 renderer 的插件回调一律在 client io 线程执行 (plugin.md 第 8.2 节)。
+    std::shared_ptr<ClientToolRenderCache> toolRenderCache() const {
+        return toolRenderCache_;
+    }
+
+    /// 取工具语义渲染结果 (UI 线程):
+    /// - 命中缓存 (同输入特征) → 返回宿主拥有的结果, 不进入插件代码
+    /// - 未命中 → 拷贝输入并投递到 client io 线程执行自定义 renderer, 本次返回
+    ///   nullptr (调用方用通用回退); 结果到达后经 uiAdapter->onToolRenderUpdated
+    ///   通知 UI 重建该消息块
+    std::shared_ptr<const ClientToolRenderEntry>
+        requestToolRender(const ClientToolRenderRequest& req);
+
     /// 命令是否存在 (UI 线程判断是否拦截 "/" 输入; 短锁)
     bool hasCommand(std::string_view name) const;
 
@@ -517,11 +621,14 @@ public:
     /// 插件存在且 enabled → 精确 bindings[ownerId] 命中否则回落 [""] →
     /// 快照 cb/ud 与实例当前一致 → InflightGuard 后直调 cb
     /// - 任意线程可调 (UI 线程点击路径)
+    /// - generation: 点击时 UI 快照中的实例代次 (0 = 不校验)。实例重载后旧点击
+    ///   代次不匹配 → 丢弃, 不转交同名新实例
     void dispatchAction(
         std::string plugin,
         std::string ownerId,
         std::string actionId,
-        std::string argsJson
+        std::string argsJson,
+        uint64_t    generation = 0
     );
 
     /// 通用 overlay 打开 (io 线程; 校验 version/type, 拷贝字符串后经
@@ -650,6 +757,33 @@ private:
     /// {"action":"none"}/{}/非法 → 记日志
     void dispatchCommandAction(const std::string& actionJson);
 
+    /// 执行一次工具语义渲染 (仅 client io 线程; 见 [requestToolRender]):
+    /// 从当前注册表取自定义 renderer, 复查 lease/实例状态后代次, 持 lease 调用
+    /// 插件回调, 把输出拷成宿主对象写入缓存并通知 UI 重绘。
+    void performToolRender(
+        ClientToolRenderRequest req,
+        std::string            key,
+        uint64_t               inputHash
+    );
+
+    /// 登记/清除插件实例代次 (io 线程; 供 UI 点击携带与复查; 见
+    /// [ClientUiRegistry::instanceGenerations])
+    void setRegistryGeneration(std::string_view plugin, uint64_t generation, bool present);
+
+    /// legacy 插件启用时的 UI 注册恢复 (重建句柄 + 写回注册表 + adapter 通知)
+    void restoreHostSideUiRegistrations(ClientPluginInstance* inst);
+
+    /// 清空由插件 start 事务重新声明的注册记录 (stop 成功后调用)
+    void clearPluginOwnedUiRegistrations(ClientPluginInstance* inst);
+
+    /// 按需投递禁用/启用事务到 client io executor (同步入口的异步收尾)
+    void requestStopForDisable(const std::shared_ptr<ClientPluginInstance>& inst);
+    void requestStartForEnable(const std::shared_ptr<ClientPluginInstance>& inst);
+
+    /// 禁用/启用事务的异步部分 (仅 client io 线程; 见 plugin.md 第 7.4 节)
+    asio::awaitable<void> stopForDisable(std::shared_ptr<ClientPluginInstance> inst);
+    asio::awaitable<void> startForEnable(std::shared_ptr<ClientPluginInstance> inst);
+
     /// 内部线程池 (dlopen/entry 卸载执行; shutdownAll 时 join)
     std::unique_ptr<asio::thread_pool> pool_;
 
@@ -662,6 +796,12 @@ private:
     /// UI 注册表 (COW: io 线程写, 任意线程快照读)
     mutable std::mutex                      uiMutex_;
     std::shared_ptr<const ClientUiRegistry> uiRegistry_;
+
+    /// 工具语义渲染缓存 (client io 线程写, UI 线程读; 见
+    /// [ClientToolRenderCache])。自定义 renderer 的插件回调只在 client io
+    /// 线程执行, UI 线程只消费这里已经拷成宿主对象的语义结果 (F03/R2)。
+    std::shared_ptr<ClientToolRenderCache> toolRenderCache_
+        = std::make_shared<ClientToolRenderCache>();
 
     /// 会话上下文 (io 线程)
     std::string sessionId_ = "session";
@@ -775,6 +915,11 @@ public:
 
     /// 通用 overlay 关闭 (client io 线程; plugin 仅记日志/鉴权预留)
     virtual void onOverlayClose(const std::string& /*plugin*/) {}
+
+    /// 工具语义渲染结果已写入缓存 (client io 线程; 触发重绘即可 ——
+    /// 渲染从 toolRenderCache() 读取语义快照, 不在 UI 线程执行插件回调)
+    virtual void
+        onToolRenderUpdated(const std::string& /*toolCallId*/, const std::string& /*toolName*/) {}
 };
 
 } // namespace plugin

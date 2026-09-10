@@ -99,6 +99,8 @@ public:
         std::string                 ownerId;
         std::string                 actionId;
         std::string                 argsJson;
+        /// 渲染时快照中的实例代次 (点击派发时复查; 重载同名插件后旧点击被丢弃)
+        uint64_t                    generation = 0;
         std::shared_ptr<ftxui::Box> box;
     };
 

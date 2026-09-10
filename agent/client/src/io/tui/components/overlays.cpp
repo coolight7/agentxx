@@ -1867,6 +1867,10 @@ CustomOverlay::CustomOverlay(
         const auto& theme = *ctx_.theme;
         auto        reg   = ctx_.pluginManager ? ctx_.pluginManager->uiRegistrySnapshot() : nullptr;
         const auto* regPtr = reg.get();
+        // 点击派发时复查实例代次: overlay 打开后插件被重载, 旧按钮不得转交新实例
+        if (regPtr) {
+            ownerGeneration_ = regPtr->generationOf(ownerPlugin_);
+        }
         Elements    els;
         hits_.clear();
         if (items_.is_array()) {
@@ -2004,7 +2008,8 @@ bool CustomOverlay::OnEvent(Event event) {
                         ownerPlugin_,
                         AGENTXX_CLIENT_OVERLAY_OWNER,
                         h.actionId,
-                        h.argsJson
+                        h.argsJson,
+                        ownerGeneration_
                     );
                 }
                 ctx_.postRedraw();

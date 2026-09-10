@@ -39,6 +39,58 @@ const agentxx::plugin::ClientToolDecor*
     return nullptr;
 }
 
+/// 工具语义渲染统一入口 (UI 线程):
+/// - decor / 预设模版由宿主直接计算 (纯宿主数据)
+/// - 自定义 renderer 只读 [ClientToolRenderCache] 的语义快照; 未命中时提交一次
+///   后台渲染请求, 本帧用通用回退; 结果写入缓存后 adapter 触发重绘, 下一帧
+///   由缓存命中上屏 (不在 UI 线程执行插件回调, plugin.md 第 8.2 节)
+agentxx::plugin::ClientToolRenderResult queryToolRender(
+    const TUICtx&      ctx,
+    const TUIRenderState& st,
+    std::string_view   toolCallId,
+    std::string_view   toolName,
+    std::string_view   argsJson,
+    std::string_view   resultText,
+    bool               isFinished,
+    bool               isError,
+    int                maxWidth
+) {
+    namespace plugin = agentxx::plugin;
+    auto cache = ctx.pluginManager ? ctx.pluginManager->toolRenderCache() : nullptr;
+    auto res   = plugin::renderClientTool(
+        st.pluginRegistry.get(),
+        cache.get(),
+        toolCallId,
+        toolName,
+        argsJson,
+        resultText,
+        isFinished,
+        isError,
+        maxWidth
+    );
+    if (!res.pendingRender || !ctx.pluginManager) {
+        return res;
+    }
+    plugin::ClientToolRenderRequest req;
+    req.toolCallId = std::string{toolCallId};
+    req.toolName   = std::string{toolName};
+    req.argsJson   = std::string{argsJson};
+    req.resultText = std::string{resultText};
+    req.isFinished = isFinished;
+    req.isError    = isError;
+    req.maxWidth   = maxWidth;
+    // 同一输入特征的重复请求在缓存内去重; UI 线程与 client io 线程为同一线程时
+    // 请求会内联执行完成, 此时直接使用刚写入的结果
+    if (auto entry = ctx.pluginManager->requestToolRender(req); entry && entry->matched) {
+        res.matched       = true;
+        res.pendingRender = false;
+        res.displayName   = entry->displayName;
+        res.summary       = entry->summary;
+        res.items         = entry->items;
+    }
+    return res;
+}
+
 /// 渲染 markdown 为 ftxui Element; 其中 ```mermaid 代码块由 DomBuilder 渲染为
 /// 状态图 (见 markdown::build_code_block), 其余按 markdown 主题渲染
 std::pair<Element, std::unique_ptr<markdown::DomBuilder>> renderMarkdown(
@@ -690,6 +742,18 @@ uint64_t MessageListComponent::itemKey(size_t index) {
             if (const auto* d = findToolDecor(st, m.tool ? m.tool->toolCallId : std::string{})) {
                 h = combine(h, d->version);
             }
+            // 自定义 renderer 的语义结果异步写入缓存 (client io 线程): 版本号变化
+            // 触发该块重建, 从"通用回退"切换为插件语义内容
+            if (ctx_.pluginManager && m.tool) {
+                const auto cache = ctx_.pluginManager->toolRenderCache();
+                h = combine(
+                    h,
+                    cache->version(agentxx::plugin::ClientToolRenderRequest::keyFor(
+                        m.tool->toolCallId,
+                        m.tool->toolName
+                    ))
+                );
+            }
         }
         return h;
     }
@@ -765,8 +829,9 @@ size_t MessageListComponent::estimateHeight(size_t index, int width) {
                 }
                 const bool finished  = msg.tool && msg.tool->toolFinished;
                 const bool isError   = finished && isToolResultError(msg.tool->toolResult);
-                auto       renderRes = agentxx::plugin::renderClientTool(
-                    st.pluginRegistry.get(),
+                auto       renderRes = queryToolRender(
+                    ctx_,
+                    st,
                     msg.tool ? msg.tool->toolCallId : "",
                     msg.tool ? msg.tool->toolName : "",
                     msg.text,
@@ -1512,8 +1577,9 @@ Element MessageListComponent::buildMessageBlock(
             const bool isError  = finished && isToolResultError(msg.tool->toolResult);
 
             // 统一工具特化渲染查询 (包含动态 per-call decor 与按 tool_name 注册的渲染器/模版)
-            auto renderRes = agentxx::plugin::renderClientTool(
-                ctx_.frameState->pluginRegistry.get(),
+            auto renderRes = queryToolRender(
+                ctx_,
+                *ctx_.frameState,
                 msg.tool->toolCallId,
                 msg.tool->toolName,
                 msg.text,
@@ -1832,13 +1898,14 @@ void MessageListComponent::appendDecorItems(
                           ? ctx_.frameState->pluginRegistry.get()
                           : nullptr;
 
-    auto hit = [this, &plugin, &ownerId](std::string actionId, std::string argsJson) {
+    auto hit = [this, &plugin, &ownerId, reg](std::string actionId, std::string argsJson) {
         DecorHitBox hb;
-        hb.plugin   = plugin;
-        hb.ownerId  = ownerId;
-        hb.actionId = std::move(actionId);
-        hb.argsJson = std::move(argsJson);
-        hb.box      = std::make_shared<Box>();
+        hb.plugin     = plugin;
+        hb.ownerId    = ownerId;
+        hb.actionId   = std::move(actionId);
+        hb.argsJson   = std::move(argsJson);
+        hb.generation = reg ? reg->generationOf(plugin) : 0;
+        hb.box        = std::make_shared<Box>();
         decorHits_.push_back(std::move(hb));
         return decorHits_.back().box;
     };
@@ -1931,7 +1998,7 @@ bool MessageListComponent::handleDecorButtonClick(const Mouse& mouse) {
             continue;
         }
         if (auto mgr = ctx_.pluginManager) {
-            mgr->dispatchAction(h.plugin, h.ownerId, h.actionId, h.argsJson);
+            mgr->dispatchAction(h.plugin, h.ownerId, h.actionId, h.argsJson, h.generation);
         }
         return true;
     }

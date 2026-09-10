@@ -182,6 +182,17 @@ public:
         });
     }
 
+    // ---- 工具语义渲染 (自定义 renderer 在 client io 线程执行, 结果写入缓存) ----
+    void onToolRenderUpdated(
+        const std::string& /*toolCallId*/,
+        const std::string& /*toolName*/
+    ) override {
+        // 消息块缓存 key 含渲染缓存版本号, 触发重绘即可让语义内容上屏
+        if (auto tui = tui_.lock()) {
+            tui->requestRedraw();
+        }
+    }
+
 private:
 
     std::weak_ptr<TUIClientAgentIO> tui_;
