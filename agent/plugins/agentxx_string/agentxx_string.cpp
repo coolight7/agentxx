@@ -20,12 +20,8 @@ Operates on in-memory text content (not files).)";
 
 struct StringPluginCtx : public PluginBase {};
 
-AGENTXX_PLUGIN_AGENT_EXPORT(
-    StringPluginCtx,
-    "agentxx_string",
-    "1.0.0",
-    "String tools: regex operations and html to markdown conversion",
-    [](StringPluginCtx& ctx) -> int32_t {
+/// 注册事务 (start 的实际内容)。
+static int32_t stringSetup(StringPluginCtx& ctx) {
         // 1. html_to_markdown
         auto html2mdSchema
             = ctx.schema(kNameHtml2Md)
@@ -94,6 +90,48 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
             }
         );
 
+    return 0;
+}
+
+static void* stringStart(
+    StringPluginCtx& ctx, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString* error
+) {
+    if (!notify) {
+        if (error) {
+            agentxx::plugin::PluginString::set(
+                ctx.host, error, "agentxx_string start: notify required"
+            );
+        }
+        return nullptr;
+    }
+    if (stringSetup(ctx) != 0) {
+        if (error) {
+            agentxx::plugin::PluginString::set(
+                ctx.host, error, "agentxx_string start: registration failed"
+            );
+        }
+        return nullptr;
+    }
+    notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+    return nullptr;
+}
+
+static void* stringStop(
+    StringPluginCtx&, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString*
+) {
+    notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+    return nullptr;
+}
+
+AGENTXX_PLUGIN_AGENT_LIFECYCLE_EXPORT(StringPluginCtx, stringStart, stringStop)
+
+AGENTXX_PLUGIN_AGENT_EXPORT(
+    StringPluginCtx,
+    "agentxx_string",
+    "1.0.0",
+    "String tools: regex operations and html to markdown conversion",
+    [](StringPluginCtx&) -> int32_t {
+        // create 只构造上下文; 工具注册在 start 事务中执行。
         return 0;
     }
 );

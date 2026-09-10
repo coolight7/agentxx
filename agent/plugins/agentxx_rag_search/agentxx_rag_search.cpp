@@ -25,12 +25,8 @@ struct RagPluginCtx : public PluginBase {
     std::unique_ptr<VectorStore> store;
 };
 
-AGENTXX_PLUGIN_AGENT_EXPORT(
-    RagPluginCtx,
-    "agentxx_rag_search",
-    "1.0.0",
-    "RAG semantic search over configured docs paths (embedding based)",
-    [](RagPluginCtx& ctx) -> int32_t {
+/// 注册事务 (start 的实际内容): 读取配置、构建索引并注册检索工具。
+static int32_t ragSetup(RagPluginCtx& ctx) {
         if (!ctx.iface.model || !ctx.iface.model->get_config) {
             ctx.log.warn(fmt::format(
                 "agentxx_rag_search: host model iface unavailable, `{}` not registered",
@@ -155,6 +151,48 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
             }
         );
 
+    return 0;
+}
+
+static void* ragStart(
+    RagPluginCtx& ctx, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString* error
+) {
+    if (!notify) {
+        if (error) {
+            agentxx::plugin::PluginString::set(
+                ctx.host, error, "agentxx_rag_search start: notify required"
+            );
+        }
+        return nullptr;
+    }
+    if (ragSetup(ctx) != 0) {
+        if (error) {
+            agentxx::plugin::PluginString::set(
+                ctx.host, error, "agentxx_rag_search start: registration failed"
+            );
+        }
+        return nullptr;
+    }
+    notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+    return nullptr;
+}
+
+static void* ragStop(
+    RagPluginCtx&, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString*
+) {
+    notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+    return nullptr;
+}
+
+AGENTXX_PLUGIN_AGENT_LIFECYCLE_EXPORT(RagPluginCtx, ragStart, ragStop)
+
+AGENTXX_PLUGIN_AGENT_EXPORT(
+    RagPluginCtx,
+    "agentxx_rag_search",
+    "1.0.0",
+    "RAG semantic search over configured docs paths (embedding based)",
+    [](RagPluginCtx&) -> int32_t {
+        // create 只构造上下文; 索引构建与工具注册在 start 事务中执行。
         return 0;
     }
 );

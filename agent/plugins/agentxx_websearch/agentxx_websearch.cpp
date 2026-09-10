@@ -37,12 +37,8 @@ struct WebsearchPluginCtx : public PluginBase {
     bool              use_model_search = false;
 };
 
-AGENTXX_PLUGIN_AGENT_EXPORT(
-    WebsearchPluginCtx,
-    "agentxx_websearch",
-    "1.0.0",
-    "Web access tools: HTTP fetch, Markdown fetch, and web search",
-    ([](WebsearchPluginCtx& ctx) -> int32_t {
+/// 注册事务 (start 的实际内容): 读取宿主配置并注册三个工具。
+static int32_t websearchSetup(WebsearchPluginCtx& ctx) {
         if (ctx.iface.model && ctx.iface.model->get_config) {
             AgentxxPluginString json{nullptr, 0};
             ctx.iface.model->get_config(ctx.host, &json);
@@ -245,6 +241,48 @@ When resolving relative links found in the returned Markdown, combine them with 
             );
         }
 
+    return 0;
+}
+
+static void* websearchStart(
+    WebsearchPluginCtx& ctx, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString* error
+) {
+    if (!notify) {
+        if (error) {
+            agentxx::plugin::PluginString::set(
+                ctx.host, error, "agentxx_websearch start: notify required"
+            );
+        }
+        return nullptr;
+    }
+    if (websearchSetup(ctx) != 0) {
+        if (error) {
+            agentxx::plugin::PluginString::set(
+                ctx.host, error, "agentxx_websearch start: registration failed"
+            );
+        }
+        return nullptr;
+    }
+    notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+    return nullptr;
+}
+
+static void* websearchStop(
+    WebsearchPluginCtx&, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString*
+) {
+    notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+    return nullptr;
+}
+
+AGENTXX_PLUGIN_AGENT_LIFECYCLE_EXPORT(WebsearchPluginCtx, websearchStart, websearchStop)
+
+AGENTXX_PLUGIN_AGENT_EXPORT(
+    WebsearchPluginCtx,
+    "agentxx_websearch",
+    "1.0.0",
+    "Web access tools: HTTP fetch, Markdown fetch, and web search",
+    ([](WebsearchPluginCtx&) -> int32_t {
+        // create 只构造上下文; 工具注册与配置读取在 start 事务中执行。
         return 0;
     })
 );

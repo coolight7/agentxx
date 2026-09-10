@@ -224,6 +224,9 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
 5. **统一异步操作模型 (两件套 start/cancel)**：
    - 工具/钩子/能力均为 `start` (IO 线程非阻塞启动) + `cancel` (协作式) 两件套，终结经 `AgentxxPluginOperatorNotify.done(status,payload)` 恰好一次上报
    - `Task` 协程帧先销毁后 `done` 上报，支持 `offload` 阻塞池委托与 `call_tool`/`invoke_cap` 锚定互调
+   - hook / capability 的 SDK helper 按**返回类型严格分发**：返回 `void`/字符串的同步业务在
+     调用内完成；返回 `Task<T>` 的异步业务由统一 root adapter 收束（provider 句柄可取消，
+     完成通知在协程真正结束后发出，输入视图由拥有型 `Request` 保证跨挂起点有效）
 
 **后台任务 spawn (宿主托管)**：`spawn` 启动的后台协作任务 (如周期采集 `while(!cancelled()) { offload; sleep; }`) 自 API v1 起注册到宿主 `agentxx.agent.tasks` 接口表，与工具/能力 op 同构管理：
 
@@ -355,6 +358,8 @@ Agentxx 仅维护单一 C++ 插件基础设施；JS 脚本插件经内置 `agent
 
 - **统一插件模型**：所有插件都是 C++ 插件；JS 插件表现为标准 C++ 动态库外壳 (如 `example_js`) 附带 `plugin.js`
 - **执行流程**：宿主加载 JS 插件壳 → 壳在 `create` 阶段调用 `interpreter.js` 能力将 `plugin.js` 交给 QuickJS 引擎 → 引擎在专用线程中解析并执行脚本，将脚本中声明的工具/钩子反向注册到宿主
+- **`agentxx.callTool` 始终返回 Promise**：命中本引擎工具时同线程执行并把结果/内部 Promise 链到外层 Promise；命中宿主插件工具时经 `call_tool_async` 异步互调，完成/失败/取消事件投递回 JS 线程 settle。JS 线程不会同步等待宿主，A/B 脚本互调不存在线程自锁
+- **脚本初始化是注册事务**：脚本顶层注册的工具/钩子/订阅/资源/定时器在顶层异常或脚本卸载时统一回滚（先撤销宿主注册，再释放 JSContext），不留悬垂 user_data；`hookStart` 与能力 `unload` 的完成通知在 JS 执行真正结束后发出
 - 可自研脚本引擎插件 (Python/Lua 等) 替换或扩充脚本能力
 
 ---

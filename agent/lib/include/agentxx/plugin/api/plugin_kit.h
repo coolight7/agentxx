@@ -3300,11 +3300,49 @@ inline void hook(Ctx& ctx, AgentxxPluginHookPoint point, HookFn&& fn) {
     }
 }
 
+namespace detail {
+
+/// 按可调用性选择能力业务签名：fn(ctx, caller, method, args) /
+/// fn(ctx, method, args) / fn(method, args)。
+/// 返回类型原样转发：同步能力返回字符串，异步能力返回 `Task<T>`
+/// （与 [invokeHook] 相同的严格分发策略）。
+template<typename CapFn, typename Ctx>
+inline decltype(auto) invokeCap(
+    CapFn&                    fn,
+    Ctx&                      ctx,
+    const AgentxxPluginHost*  caller,
+    std::string_view          method,
+    std::string_view          args
+) {
+    if constexpr (std::is_invocable_v<
+                      CapFn,
+                      Ctx&,
+                      const AgentxxPluginHost*,
+                      std::string_view,
+                      std::string_view>) {
+        return fn(ctx, caller, method, args);
+    } else if constexpr (std::is_invocable_v<CapFn, Ctx&, std::string_view, std::string_view>) {
+        return fn(ctx, method, args);
+    } else {
+        return fn(method, args);
+    }
+}
+
+} // namespace detail
+
 template<typename Ctx, typename CapFn>
 inline void capability(Ctx& ctx, std::string_view capName, CapFn&& fn) {
     struct CapShim {
         Ctx*                ctx = nullptr;
         std::decay_t<CapFn> fn;
+    };
+
+    /// 异步能力的 provider 句柄：拥有输入 Request，并由 promise.opCleanup_ 回收。
+    struct CapJob {
+        CapShim*                           shim = nullptr;
+        std::shared_ptr<std::atomic<bool>> cancelFlag;
+        void*                              coroAddr = nullptr;
+        detail::RootRequest                request;
     };
 
     auto shim = ctx.storeShim(std::make_unique<CapShim>(CapShim{&ctx, std::forward<CapFn>(fn)}));
@@ -3322,39 +3360,114 @@ inline void capability(Ctx& ctx, std::string_view capName, CapFn&& fn) {
                AgentxxPluginString*               error_out) -> void* {
                 auto* shim = static_cast<CapShim*>(user_data);
                 (void)error_out;
+                if (!shim || !shim->ctx) {
+                    detail::CompletionGuard guard(notify);
+                    guard.failed("capability context released");
+                    return nullptr;
+                }
                 // 能力入参纳入拥有型 Request：业务只读到 Request 拥有的
                 // method/args（F13），不再依赖宿主借用缓冲区。
                 auto request = detail::RootRequest::forCapability(
-                    shim && shim->ctx ? shim->ctx->host : nullptr,
+                    shim->ctx->host,
                     method,
                     args_json
                 );
-                detail::CompletionGuard guard(notify);
-                try {
-                    std::string res;
-                    if constexpr (std::is_invocable_v<
-                                      CapFn,
-                                      Ctx&,
-                                      const AgentxxPluginHost*,
-                                      std::string_view,
-                                      std::string_view>) {
-                        res = shim->fn(*shim->ctx, caller_host, request.capMethod(), request.args());
-                    } else if constexpr (std::is_invocable_v<
-                                             CapFn,
-                                             Ctx&,
-                                             std::string_view,
-                                             std::string_view>) {
-                        res = shim->fn(*shim->ctx, request.capMethod(), request.args());
-                    } else {
-                        res = shim->fn(request.capMethod(), request.args());
+
+                using CapRet = decltype(detail::invokeCap(
+                    shim->fn,
+                    *shim->ctx,
+                    caller_host,
+                    std::string_view{},
+                    std::string_view{}
+                ));
+                // 同步能力: void 或字符串类返回值；其余 (Task<T>) 走异步路径。
+                constexpr bool kSyncCap = std::is_void_v<CapRet>
+                                          || std::is_convertible_v<CapRet, std::string_view>;
+                if constexpr (kSyncCap) {
+                    /// 同步能力：调用返回即完成；异常统一映射为终态。
+                    detail::CompletionGuard guard(notify);
+                    try {
+                        if constexpr (std::is_void_v<CapRet>) {
+                            detail::invokeCap(
+                                shim->fn,
+                                *shim->ctx,
+                                caller_host,
+                                request.capMethod(),
+                                request.args()
+                            );
+                            guard.ok();
+                        } else {
+                            guard.ok(detail::invokeCap(
+                                shim->fn,
+                                *shim->ctx,
+                                caller_host,
+                                request.capMethod(),
+                                request.args()
+                            ));
+                        }
+                    } catch (...) {
+                        guard.fromCurrentException();
                     }
-                    guard.ok(res);
-                } catch (...) {
-                    guard.fromCurrentException();
+                    return nullptr;
+                } else {
+                    /// Task<T> 能力：由 promise 在协程结束后收束完成通知，
+                    /// 返回 Job 作为宿主可取消的 provider 句柄。
+                    auto* job = new CapJob{
+                        shim,
+                        std::make_shared<std::atomic<bool>>(false),
+                        nullptr,
+                        std::move(request)
+                    };
+                    auto task = detail::invokeCap(
+                        shim->fn,
+                        *shim->ctx,
+                        caller_host,
+                        job->request.capMethod(),
+                        job->request.args()
+                    );
+                    if (!task.handle_) {
+                        delete job;
+                        detail::CompletionGuard guard(notify);
+                        guard.failed("capability returned an empty task");
+                        return nullptr;
+                    }
+                    auto  h      = task.handle_;
+                    task.handle_ = nullptr;
+                    auto& p      = h.promise();
+                    p.notify_ = notify ? *notify : AgentxxPluginOperatorNotify{nullptr, nullptr};
+                    p.host_   = job->request.host;
+                    p.cancelFlag_ = job->cancelFlag;
+                    try {
+                        h.resume();
+                    } catch (...) {
+                        p.set_exception(std::current_exception());
+                    }
+                    if (h.done()) {
+                        detail::finishIfDone(h);
+                        delete job;
+                        return nullptr;
+                    }
+                    job->coroAddr = h.address();
+                    p.opCleanup_  = [job]() { delete job; };
+                    return job;
                 }
-                return nullptr;
             },
-            nullptr,
+            [](void* user_data, void* op) {
+                (void)user_data;
+                if (!op) {
+                    return;
+                }
+                auto* job = static_cast<CapJob*>(op);
+                if (job->cancelFlag) {
+                    job->cancelFlag->store(true, std::memory_order_release);
+                }
+                if (job->coroAddr) {
+                    auto handle = std::coroutine_handle<detail::PromiseBase<void>>::from_address(
+                        job->coroAddr
+                    );
+                    handle.promise().cancel_outstanding();
+                }
+            },
             shim
         );
     }

@@ -31,6 +31,10 @@ struct CapturedRegistration {
     bool                  hasTool = false;
     AgentxxPluginHookSpec hook{};
     bool                  hasHook = false;
+    AgentxxPluginCapabilityStartFunction capStart = nullptr;
+    AgentxxPluginOperatorCancelFunction  capCancel = nullptr;
+    void*                                capUd     = nullptr;
+    bool                                 hasCapability = false;
 };
 
 CapturedRegistration g_captured;
@@ -55,6 +59,20 @@ int32_t AGENTXX_PLUGIN_CALL
     return 0;
 }
 
+int32_t AGENTXX_PLUGIN_CALL fakeRegisterCapabilityEx(
+    const AgentxxPluginHost*,
+    const AgentxxPluginStringView*,
+    AgentxxPluginCapabilityStartFunction start,
+    AgentxxPluginOperatorCancelFunction  cancel,
+    void*                                ctx
+) {
+    g_captured.capStart      = start;
+    g_captured.capCancel     = cancel;
+    g_captured.capUd         = ctx;
+    g_captured.hasCapability = true;
+    return 0;
+}
+
 const AgentxxPluginToolsIface g_fakeTools = {
     /* version */ AGENTXX_PLUGIN_IFACE_AGENT_TOOLS_VERSION,
     /* struct_size */ sizeof(AgentxxPluginToolsIface),
@@ -71,6 +89,17 @@ const AgentxxPluginHooksIface g_fakeHooks = {
     /* unregister_hook */ nullptr,
 };
 
+const AgentxxPluginCapabilitiesIface g_fakeCapabilities = {
+    /* version */ AGENTXX_PLUGIN_IFACE_AGENT_CAPABILITIES_VERSION,
+    /* struct_size */ sizeof(AgentxxPluginCapabilitiesIface),
+    /* register_capability */ nullptr,
+    /* register_capability_ex */ fakeRegisterCapabilityEx,
+    /* unregister_capability */ nullptr,
+    /* has_capability */ nullptr,
+    /* invoke_capability_async */ nullptr,
+    /* op_cancel */ nullptr,
+};
+
 const void* AGENTXX_PLUGIN_CALL
     fakeQueryInterface(const AgentxxPluginHost*, const AgentxxPluginStringView* iid) {
     if (!iid || !iid->data) {
@@ -82,6 +111,9 @@ const void* AGENTXX_PLUGIN_CALL
     }
     if (name == AGENTXX_PLUGIN_IFACE_AGENT_HOOKS) {
         return &g_fakeHooks;
+    }
+    if (name == AGENTXX_PLUGIN_IFACE_AGENT_CAPABILITIES) {
+        return &g_fakeCapabilities;
     }
     return nullptr;
 }
@@ -319,6 +351,90 @@ TestResult testPluginSdk() {
         finishRoot<Task<void>::promise_type>(handle);
         XX_TEST_EXPECT_EQ(probe.calls, 1);
         XX_TEST_EXPECT_EQ(probe.status, AGENTXX_PLUGIN_OPERATOR_OK);
+    }
+
+    /// capability: 同步字符串能力 + 异步 Task<string> 能力 (统一 root adapter)。
+    {
+        SdkCtx ctx;
+        ctx.init(&host);
+        g_captured = CapturedRegistration{};
+        agentxx::plugin::capability(
+            ctx,
+            "test.cap.sync",
+            [](SdkCtx&, std::string_view method, std::string_view args) -> std::string {
+                return fmt::format(R"({{"method":"{}","args":{}}})", method, args);
+            }
+        );
+        XX_TEST_EXPECT_TRUE(g_captured.hasCapability);
+
+        NotifyProbe probe;
+        auto        notify = probe.notify();
+        auto        method = PluginStringView::fromCstr("ping");
+        auto        args   = PluginStringView::fromCstr(R"({"n":1})");
+        void*       op = g_captured.capStart(
+            g_captured.capUd,
+            nullptr,
+            &method,
+            &args,
+            &notify,
+            nullptr
+        );
+        XX_TEST_EXPECT_TRUE(op == nullptr); ///< 同步完成不返回句柄
+        XX_TEST_EXPECT_EQ(probe.calls, 1);
+        XX_TEST_EXPECT_EQ(probe.status, AGENTXX_PLUGIN_OPERATOR_OK);
+        XX_TEST_EXPECT_TRUE(probe.payload.find("ping") != std::string::npos);
+    }
+    {
+        bool                    released = false;
+        std::coroutine_handle<> handle{};
+        bool                    finished = false;
+
+        struct AsyncBox {
+            bool*                    released = nullptr;
+            std::coroutine_handle<>* handle   = nullptr;
+            bool*                    finished = nullptr;
+        } box{&released, &handle, &finished};
+
+        SdkCtx ctx;
+        ctx.init(&host);
+        g_captured = CapturedRegistration{};
+        agentxx::plugin::capability(
+            ctx,
+            "test.cap.async",
+            [&box](SdkCtx&, std::string_view method, std::string_view) -> Task<std::string> {
+                co_await Gate{box.released, box.handle};
+                *box.finished = true;
+                co_return fmt::format("done:{}", method);
+            }
+        );
+        XX_TEST_EXPECT_TRUE(g_captured.hasCapability);
+        XX_TEST_EXPECT_TRUE(g_captured.capCancel != nullptr);
+
+        NotifyProbe probe;
+        auto        notify = probe.notify();
+        auto        method = PluginStringView::fromCstr("async-ping");
+        auto        args   = PluginStringView::fromCstr("{}");
+        void*       op = g_captured.capStart(
+            g_captured.capUd,
+            nullptr,
+            &method,
+            &args,
+            &notify,
+            nullptr
+        );
+        XX_TEST_EXPECT_TRUE(op != nullptr); ///< 未完成 -> provider 句柄
+        XX_TEST_EXPECT_EQ(probe.calls, 0);  ///< 不得提前完成
+        XX_TEST_EXPECT_FALSE(finished);
+
+        // 借用缓冲区 (method/args 视图) 失效后协程仍能完成 (Request 拥有输入)。
+        released = true;
+        XX_TEST_EXPECT_TRUE(handle != nullptr);
+        handle.resume();
+        XX_TEST_EXPECT_TRUE(finished);
+        finishRoot<Task<std::string>::promise_type>(handle);
+        XX_TEST_EXPECT_EQ(probe.calls, 1);
+        XX_TEST_EXPECT_EQ(probe.status, AGENTXX_PLUGIN_OPERATOR_OK);
+        XX_TEST_EXPECT_TRUE(probe.payload.find("done:async-ping") != std::string::npos);
     }
     return result;
 }

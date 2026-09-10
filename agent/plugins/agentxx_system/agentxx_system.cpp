@@ -15,18 +15,53 @@ constexpr std::string_view kDepictDatetime = "Get the current date, time, and Un
 
 struct SysPluginCtx : public PluginBase {};
 
+/// 注册事务 (start 的实际内容)。
+static int32_t sysSetup(SysPluginCtx& ctx) {
+    auto schema = ctx.schema(kNameDatetime).build();
+
+    fast_tool(ctx, kNameDatetime, kDepictDatetime, schema, [](std::string_view) -> std::string {
+        return currentDatetimeExecute();
+    });
+    return 0;
+}
+
+static void* sysStart(
+    SysPluginCtx& ctx, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString* error
+) {
+    if (!notify) {
+        if (error) {
+            agentxx::plugin::PluginString::set(
+                ctx.host, error, "agentxx_system start: notify required"
+            );
+        }
+        return nullptr;
+    }
+    if (sysSetup(ctx) != 0) {
+        if (error) {
+            agentxx::plugin::PluginString::set(
+                ctx.host, error, "agentxx_system start: registration failed"
+            );
+        }
+        return nullptr;
+    }
+    notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+    return nullptr;
+}
+
+static void* sysStop(SysPluginCtx&, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString*) {
+    notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+    return nullptr;
+}
+
+AGENTXX_PLUGIN_AGENT_LIFECYCLE_EXPORT(SysPluginCtx, sysStart, sysStop)
+
 AGENTXX_PLUGIN_AGENT_EXPORT(
     SysPluginCtx,
     "agentxx_system",
     "1.0.0",
     "System info tools: current date/time with Unix timestamp",
-    [](SysPluginCtx& ctx) -> int32_t {
-        auto schema = ctx.schema(kNameDatetime).build();
-
-        fast_tool(ctx, kNameDatetime, kDepictDatetime, schema, [](std::string_view) -> std::string {
-            return currentDatetimeExecute();
-        });
-
+    [](SysPluginCtx&) -> int32_t {
+        // create 只构造上下文; 工具注册在 start 事务中执行。
         return 0;
     }
 );
