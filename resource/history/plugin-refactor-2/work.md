@@ -2,15 +2,16 @@
 
 > 事实来源：设计定稿是 `resource/history/plugin-refactor-2/plugin.md`（Reset-v1 方案、R0-R6 阶段、F/P 问题编号、测试矩阵）。本文件只记录进度、提交边界、验证结果和待办；与 plugin.md 冲突时以 plugin.md 为准。
 >
-> 本文件更新时间：2026-09-11（P1-3 提交，即当前 HEAD）。**状态：Reset-v1 未完成。**
-> 当前重构进度 = 九个提交：`3a4497ba`（R1-1 Runtime / Operation）、`f861bcf9`（fix-build）、
+> 本文件更新时间：2026-09-11（P2-1a 提交，即当前 HEAD）。**状态：Reset-v1 未完成。**
+> 当前重构进度 = 十个提交：`3a4497ba`（R1-1 Runtime / Operation）、`f861bcf9`（fix-build）、
 > `b2b5114a`（Operation/Runtime 可靠性、加载事务与关闭、owner 顺序、ABI v1 / SDK 推进）、
 > `c2869f07`（P0-1 宿主控制块 / 迟到调用安全失败 / 注册执行期复查，见第 3.4 节）、
 > `8c717236`（P0-2 Operation 终态与取消线性化，见第 3.5 节）、
 > `aa4b33ff`（P1-2 C17 ABI 编译期检查与接口表严格协商，见第 3.6 节）、
 > P1-1 提交（SDK 拥有型 Request / 统一 root adapter / hook 同步异步分发，见第 3.7 节）、
 > P1-4 提交（启用/禁用 start-stop 事务、prompt 贡献模型、依赖级联，见第 3.8 节）、
-> P1-3 提交（Client 工具语义渲染缓存、动作代次、client 侧启停事务与依赖级联，见第 3.9 节）。
+> P1-3 提交（Client 工具语义渲染缓存、动作代次、client 侧启停事务与依赖级联，见第 3.9 节）、
+> P2-1a 提交（example_plugin 双端 start/stop 迁移 + SDK client 生命周期导出宏 + 导出符号白名单脚本，见第 3.10 节）。
 > 工作树在该提交后是**干净的**；本文档自身也已包含在最新提交中。
 > 已完成/待完成对照见第 5、6 节，内容明细见第 3、4 节。
 
@@ -81,7 +82,7 @@ ASAN_OPTIONS=detect_leaks=1:halt_on_error=0 timeout 1500s \
 | R3 ABI v1 / SDK | 大幅推进，未完成 | 接口表 `struct_size` + SDK 严格校验、opaque CancelToken、scheduler v1（删 `pump_io`/`cancel_sleep`/`volatile`）、tasks handle 语义、SDK scheduler/offload 迁移已在 `b2b5114a` 落地；`c2869f07` 统一了 `host.opaque` 令牌语义（令牌=控制块地址，永不复用）；P1-2 提交补齐 C17 ABI 编译期检查与 C/C++ 布局对照、接口表严格协商回归；仍缺 SDK `Request` 输入所有权、统一 root adapter、hook `Task<void>` 区分、导出符号检查与 C++ 反例编译测试 |
 | R4 内置插件 / JS / 平台 | 少量迁移 | 4 个内置插件已迁到 CancelToken 新签名；`f861bcf9` 修了平台插件构建；仍缺其余插件迁移、JS 事务/Promise、Windows 平台 gate |
 | R5 Client / 依赖 / prompt | 基本完成（P1-3 / P1-4） | 事件逐 callback 复查 alive、renderer lease、动作派发校验已落地；prompt contribution（F20）与 agent 侧依赖级联（F09）由 P1-4 落地；语义 renderer cache、动作代次、client 侧启停事务与依赖级联由 P1-3 落地；仍缺 UI 侧的"旧快照模块级"端到端用例（现有用例在 manager 层驱动） |
-| R6 验证 / 文档 / 发布审查 | 部分完成 | P1-2 提交完成 C17 ABI 编译期检查；仍缺导出符号检查、全模块/UBSan/TSan/Windows 验证；`docs/zh-cn/design/plugins.md` 未更新 |
+| R6 验证 / 文档 / 发布审查 | 部分完成 | P1-2 完成 C17 ABI 编译期检查；P2-1a 完成导出符号白名单脚本（16 库全绿）；仍缺全模块/UBSan/TSan/Windows 验证与 `docs/zh-cn/design/plugins.md` 更新 |
 
 结论：不能把当前状态写成“Reset-v1 完成”。下一阶段建议见第 9 节。
 
@@ -109,8 +110,10 @@ ASAN_OPTIONS=detect_leaks=1:halt_on_error=0 timeout 1500s \
 提交 8（P1-4）  重构插件框架-P1-4 启用/禁用事务与 prompt 贡献模型
                           (2026-09-11, 5 文件；见第 3.8 节)
 提交 9（P1-3）  重构插件框架-P1-3 Client 语义渲染缓存与动作代次
-                          (2026-09-11, 9 文件；见第 3.9 节)
-工作树          干净（无修改、无 untracked）；origin/main 停在 f861bcf9，提交 3-9 均未推送
+                          (2026-09-11, 12 文件；见第 3.9 节)
+提交 10（P2-1a）重构插件框架-P2-1a example_plugin 双端 start/stop 迁移与导出符号校验
+                          (2026-09-11, 7 文件；见第 3.10 节)
+工作树          干净（无修改、无 untracked）；origin/main 停在 f861bcf9，提交 3-10 均未推送
 ```
 
 `b2b5114a` 就是此前工作树里的全部增量，代码与验证记录一一对应（未做任何额外改动）；
@@ -393,6 +396,43 @@ graph/UI 注册记录在失败回滚中的显式断言。
 `renderClientTool`）；语义缓存目前按 (key, 输入特征) 无上限增长（会话切换会清空，
 但仍可考虑按容量淘汰）；`onToolRenderUpdated` 每次重绘整表，未做按块精确失效。
 
+### 3.10 P2-1a 提交：example_plugin 双端 start/stop 迁移与导出符号校验（R4/R6）
+
+7 文件（`agent/plugins/example_plugin/example_plugin.cpp`、
+`agent/lib/include/agentxx/plugin/api/plugin_kit.h`、新增
+`agent/script/check_plugin_exports.sh`、`test_plugins.cpp`、`test_plugin_resources.cpp`、
+`test_client_plugins.cpp` + 本文档）。要点：
+
+- **example_plugin 迁移为 Reset-v1 正例（plugin.md 第 5.2 / 9 节）**：
+  - agent 侧：`create` 只构造上下文 + 查询接口；新增 `exampleAgentSetup()`（原
+    create 内的工具/hook/事件/能力/prompt 注册）、`exampleAgentStart()`（注册事务，
+    失败返回 NULL + error 由宿主回滚）、`exampleAgentStop()`；
+    用 `AGENTXX_PLUGIN_AGENT_LIFECYCLE_EXPORT` 生成 noexcept trampoline。
+  - client 侧：`create` 只构造；`exampleClientSetup()`/`exampleClientStart()`/
+    `exampleClientStop()` 承载状态栏项/面板/Info 段落/命令/事件订阅；`destroy`
+    不再调用宿主注册接口（只记日志 + 释放内存），注册撤销统一由宿主在 stop 后
+    执行。
+  - 由此**真实 DSO 走通**：加载 create→start、disable→stop、enable→stop+start、
+    unload→stop→destroy 四条路径；此前只有测试内伪实例覆盖这些事务。
+- **SDK 补齐 client 生命周期导出宏**：新增
+  `AGENTXX_PLUGIN_CLIENT_LIFECYCLE_EXPORT(CtxType, StartFn, StopFn)`（与 agent 侧
+  对称，含最外层异常兜底），避免插件手写 `agentxx_plugin_client_start/stop`
+  trampoline。
+- **导出符号白名单脚本（R6）**：新增 `agent/script/check_plugin_exports.sh`，
+  用 `nm -D --defined-only` 遍历插件动态库，要求只导出
+  `agentxx_plugin_{agent,client}_{get_info,create,start,stop,destroy}`。当前 16 个
+  插件库全部通过（每库 3/6/10 个符号，无第三方静态依赖符号泄漏）；脚本对普通
+  动态库（含第三方库）会判失败，负路径已用系统库验证。
+- **测试适配（启用改为异步 start 事务）**：`plugins` 第 7 项与 H4 用例、
+  `plugin_resources` 资源恢复用例、`client_plugins` 第 6 项与动作绑定用例改为
+  "enable 后等待注册恢复"（轮询上限 200×5ms），并在 client 动作用例中重新绑定
+  测试自有的 action handler（它不属于插件 start 事务）。
+
+仍属 P2-1 未做：example_resources / example_graph_node 迁移；string/math/system
+签名校准；websearch/rag/planning 接入 CancelToken；system_monitor/codegraph 多实例
+专项；JS（`callTool` Promise、删除 1ms 轮询、顶层异常事务、rejection/timeout 映射）；
+Windows 平台 gate（本机无 Windows 工具链，未验证）。
+
 ---
 
 ## 4. `b2b5114a` 内容明细（已提交，按阶段归类）
@@ -480,11 +520,14 @@ graph/UI 注册记录在失败回滚中的显式断言。
 | P1-4 生命周期 Operation 状态门禁 | 完成 | `OpCore::create` 只对业务操作检查 `enabled`/可注册状态，生命周期操作放行 Closing、拒绝 Closed |
 | R2 owner 顺序（BaseAgent / AgentHost / Client runner） | 完成 | 见 4.2 节 |
 | R2 Client semantic renderer cache | 完成 | `ClientToolRenderCache` + `requestToolRender`/`performToolRender`：插件 renderer 只在 client io 线程执行，UI 只读宿主语义快照（第 3.9 节） |
+| P2-1a example_plugin 双端 start/stop 迁移 | 完成 | 第 3.10 节（真实 DSO 走通 create/start/stop/destroy 四条路径） |
+| P2-1a SDK client 生命周期导出宏 | 完成 | `AGENTXX_PLUGIN_CLIENT_LIFECYCLE_EXPORT`（第 3.10 节） |
+| R6 导出符号白名单检查 | 完成 | `agent/script/check_plugin_exports.sh`；16 个插件库只导出入口符号（第 3.10、7.7 节） |
 | R2/R5 client 侧 enable/disable 事务与依赖级联 | 完成 | `stopForDisable`/`startForEnable`/`restoreHostSideUiRegistrations` + 递归级联（第 3.9 节） |
 | F03 旧 Client UI 快照调用已销毁 renderer | 完成 | 缓存条目按插件失效 + 版本号递增；旧快照只能回退通用渲染（第 3.9 节用例） |
 | R5 动作代次 | 完成 | `ClientUiRegistry::instanceGenerations` + `dispatchAction(..., generation)` 复查（第 3.9 节用例） |
 | F02/F03/F04/F16/F17/F21、P0-C | 未完成或仅部分 | 见第 6、8 节（F19/F20 已完成，见第 3.7、3.8 节） |
-| R6 验证 / 文档 | 未开始 | 见第 6、7 节 |
+| R6 验证 / 文档 | 部分完成 | 导出符号白名单脚本已落地并全绿（第 3.10 / 7.7 节）；仍缺全模块 UBSan/TSan/Windows 验证与 `docs/zh-cn/design/plugins.md` 更新 |
 
 ---
 
@@ -813,7 +856,43 @@ plugin_multi_instance client_plugins --fail-fast` = 526+29+328+83+29+374
 未做人工 TUI 会话走查（无显示环境），语义渲染路径由 `client_plugins` 用例覆盖。
 日志：`/tmp/p13-sweep-1.log`。
 
-### 7.7 `b2b5114a` 的历史验证结果
+### 7.7 P2-1a 提交的回归
+
+```bash
+cmake --build agent/build/linux-debug --target agentxx_test_repo -j12
+cmake --build agent/build/linux-debug --target agentxx_client_repo -j12
+./agent/script/check_plugin_exports.sh        # 新增: 导出符号白名单
+ASAN_OPTIONS=detect_leaks=1:halt_on_error=0 timeout 1500s \
+  agent/build/linux-debug/exec/agentxx_test \
+  ffi_c_api agent_host subagent_tool subagent_bus plugin_sdk plugin_runtime plugins \
+  plugin_resources plugin_multi_instance client_plugins agent memgrowth --fail-fast
+```
+
+```text
+ffi_c_api             117 passed / 0 failed
+plugin_runtime        526 passed / 0 failed
+plugin_sdk             29 passed / 0 failed
+subagent_bus           21 passed / 0 failed
+subagent_tool         122 passed / 0 failed
+agent_host             95 passed / 0 failed
+plugins               328 passed / 0 failed
+plugin_resources       83 passed / 0 failed
+plugin_multi_instance  29 passed / 0 failed
+client_plugins        375 passed / 0 failed
+agent                  91 passed / 0 failed
+memgrowth              15 passed / 0 failed
+合计                 1831 passed / 0 failed   （exit=0）
+```
+
+导出符号检查：
+
+```text
+[check_plugin_exports] OK: 16 plugin libraries export only entry symbols
+```
+
+日志：`/tmp/p21-sweep-1.log`。
+
+### 7.8 `b2b5114a` 的历史验证结果
 
 以下结果测自 `b2b5114a`（同样为 ASan + LSan、`--fail-fast` 的扩展回归）：
 
@@ -878,13 +957,15 @@ client_plugins 309 / agent 91 / memgrowth 15   合计 1338 passed / 0 failed
 5. ~~P1-4 启用/禁用事务与 prompt 贡献模型~~：agent 侧已完成（第 3.8 节）。
 6. ~~P1-3 Client 语义模型（renderer cache / 动作代次）+ client 侧 enable/disable 事务
    与依赖级联~~：已完成（第 3.9 节）。
-7. P2-1 / P2-2 内置插件与 JS 迁移、平台与文档收尾（含 `docs/zh-cn/design/plugins.md`）：
-   - example_plugin / example_resources / example_graph_node 迁移为 start/stop 事务正例；
+7. P2-1a（example_plugin 双端 start/stop 迁移 + SDK client 生命周期宏 + 导出符号脚本）：
+   已完成（第 3.10 节）。
+8. P2-1 剩余 / P2-2 收尾：
+   - example_resources / example_graph_node 迁移为 start/stop 事务正例；
    - string/math/system 校准 SDK 签名；websearch/rag/planning 接入 CancelToken；
-     system_monitor/codegraph 多实例与后台采样；
+     system_monitor/codegraph 多实例与后台采样专项；
    - JS：`callTool` 返回 Promise、删除 1ms 轮询、顶层异常事务、rejection/timeout 映射；
-   - Windows 平台 gate（screen_capture/computer_use/text_selection_monitor）与符号白名单检查；
-   - 更新 `docs/zh-cn/design/plugins.md`。
+   - Windows 平台 gate（screen_capture/computer_use/text_selection_monitor）：需 Windows 工具链；
+   - `docs/zh-cn/design/plugins.md` 按 Reset-v1 重写；UBSan/TSan 定向回归。
 
 每一步完成后：跑对应模块回归，更新本文件第 1、5、6、7 节，再提交。
 

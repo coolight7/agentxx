@@ -93,7 +93,15 @@ static void AGENTXX_PLUGIN_CALL on_client_hello(const AgentxxPluginStringView*, 
     });
 }
 
-/// ---------------- entry / unload ----------------
+/// ---------------- 生命周期 (Reset-v1) ----------------
+///
+/// 入口语义 (见 plugin.md 第 5.2 / 7.2 节):
+/// - `create`: 只分配上下文、查询接口、初始化纯本地字段; 不提交任何运行时注册,
+///   不启动不受托管的线程。
+/// - `start`: 在宿主 IO 线程执行注册事务 (工具/hook/事件/能力/prompt); 失败时
+///   返回 NULL + error, 宿主按"拒绝"处理并回滚已生效的注册。
+/// - `stop`: 在实例停用/关闭时给出完成信号 (本插件没有自管线程/定时器)。
+/// - `destroy`: 只释放本地内存; 不创建异步工作、不调用宿主注册接口。
 
 extern "C" AGENTXX_PLUGIN_EXPORT int
     agentxx_plugin_agent_create(const AgentxxPluginHost* host, void** plugin_ctx) {
@@ -111,112 +119,161 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
             ctx->init(host);
             raw = ctx.get();
 
+            // create 只做构造与接口查询: 注册事务由 start 执行
             if (!ctx->iface.tools || !ctx->iface.tools->register_tool || !ctx->iface.events) {
                 return -1;
             }
-
-            // 1.1 echo: 快同步内联工具 (fast_tool)
-            agentxx::plugin::fast_tool(
-                *ctx,
-                "example_echo",
-                "Echo the input arguments back as JSON (example plugin tool).",
-                R"({"type":"object","properties":{},"additionalProperties":true})",
-                [](AgentCtx& c, std::string_view args, std::string_view tid) -> std::string {
-                    return fmt::format(
-                        R"({{"echo": {},"sessionId": {}}})",
-                        args.empty() ? "{}" : args,
-                        c.jsonEscape(tid)
-                    );
-                }
-            );
-
-            // 1.2 caller: 锚定 Task 协程互调工具 (tool + call_tool)
-            agentxx::plugin::tool(
-                *ctx,
-                "example_caller",
-                "Call example_echo via call_tool to demonstrate plugin interop.",
-                R"({"type":"object","properties":{},"additionalProperties":true})",
-                [](AgentCtx& c, std::string_view args, agentxx::plugin::OpCtl ctl
-                ) -> agentxx::plugin::Task<std::string> {
-                    std::string resp = co_await agentxx::plugin::call_tool(
-                        c,
-                        "example_echo",
-                        args,
-                        ctl.threadId
-                    );
-                    co_return fmt::format(R"({{"via_call_tool": {}}})", resp);
-                }
-            );
-
-            // 1.3 sleeper: 锚定 Task 协程 sleep 工具 (tool + sleep)
-            agentxx::plugin::tool(
-                *ctx,
-                "example_sleep",
-                "Sleep duration_ms milliseconds then return (slow plugin tool).",
-                R"({"type":"object","properties":{"durationMs":{"type":"integer"}}})",
-                [](AgentCtx& c, std::string_view args, agentxx::plugin::OpCtl ctl
-                ) -> agentxx::plugin::Task<std::string> {
-                    int ms = 200;
-                    try {
-                        auto j = agentxx::util::Json::parse(args);
-                        if (j.contains("durationMs") && j["durationMs"].is_number()) {
-                            ms = j["durationMs"].get<int>();
-                        }
-                    } catch (...) {
-                    }
-                    co_await agentxx::plugin::sleep(c, ms > 0 ? ms : 0);
-                    ctl.throw_if_cancelled();
-                    co_return fmt::format(R"({{"slept_ms": {}}})", ms);
-                }
-            );
-
-            // 2. 钩子 (agent_start)
-            if (ctx->iface.hooks && ctx->iface.hooks->register_hook) {
-                agentxx::plugin::hook(
-                    *ctx,
-                    AGENTXX_PLUGIN_HOOK_AGENT_START,
-                    [](AgentCtx& c, AgentxxPluginHookPoint, std::string_view) {
-                        c.log.info("example hook: agent_start fired");
-                    }
-                );
-            }
-
-            // 3. 事件订阅
-            auto topic1 = agentxx::plugin::PluginStringView::fromCstr("demo.topic");
-            ctx->iface.events->subscribe(host, &topic1, on_demo_event, ctx.get());
-            auto topic2
-                = agentxx::plugin::PluginStringView::fromCstr("client.example_plugin.hello");
-            ctx->iface.events->subscribe(host, &topic2, on_client_hello, ctx.get());
-
-            // 4. 能力
-            if (ctx->iface.capabilities && ctx->iface.capabilities->register_capability) {
-                auto capSv = agentxx::plugin::PluginStringView::fromCstr("example.demo");
-                ctx->iface.capabilities->register_capability(host, &capSv);
-            }
-
-            // 5. 提示词读写
-            if (ctx->iface.prompt && ctx->iface.prompt->get_prompt
-                && ctx->iface.prompt->set_prompt) {
-                AgentxxPluginString full{nullptr, 0};
-                ctx->iface.prompt->get_prompt(host, &full);
-                if (full.data) {
-                    std::string prompt(full.data, static_cast<size_t>(full.size));
-                    agentxx::plugin::PluginString::free(host, &full);
-                    if (prompt.find("\"example_echo\"") == std::string::npos) {
-                        const char* promptJson
-                            = R"({"toolPrompt":{"example_echo":{"depict":"Echo the input arguments back as JSON (example plugin tool).","args":{}}}})";
-                        auto promptSv = agentxx::plugin::PluginStringView::fromCstr(promptJson);
-                        ctx->iface.prompt->set_prompt(host, &promptSv);
-                    }
-                }
-            }
-
-            ctx->log.info("example plugin loaded");
             *plugin_ctx = ctx.release();
             return 0;
         }
     );
 }
+
+/// 注册事务 (start 的实际内容): 任一步骤失败返回 -1, 由宿主回滚已生效的注册。
+static int exampleAgentSetup(AgentCtx& ctx) {
+    const AgentxxPluginHost* host = ctx.host;
+    // 1.1 echo: 快同步内联工具 (fast_tool)
+    agentxx::plugin::fast_tool(
+        ctx,
+        "example_echo",
+        "Echo the input arguments back as JSON (example plugin tool).",
+        R"({"type":"object","properties":{},"additionalProperties":true})",
+        [](AgentCtx& c, std::string_view args, std::string_view tid) -> std::string {
+            return fmt::format(
+                R"({{"echo": {},"sessionId": {}}})",
+                args.empty() ? "{}" : args,
+                c.jsonEscape(tid)
+            );
+        }
+    );
+
+    // 1.2 caller: 锚定 Task 协程互调工具 (tool + call_tool)
+    agentxx::plugin::tool(
+        ctx,
+        "example_caller",
+        "Call example_echo via call_tool to demonstrate plugin interop.",
+        R"({"type":"object","properties":{},"additionalProperties":true})",
+        [](AgentCtx& c, std::string_view args, agentxx::plugin::OpCtl ctl
+        ) -> agentxx::plugin::Task<std::string> {
+            std::string resp = co_await agentxx::plugin::call_tool(
+                c,
+                "example_echo",
+                args,
+                ctl.threadId
+            );
+            co_return fmt::format(R"({{"via_call_tool": {}}})", resp);
+        }
+    );
+
+    // 1.3 sleeper: 锚定 Task 协程 sleep 工具 (tool + sleep)
+    agentxx::plugin::tool(
+        ctx,
+        "example_sleep",
+        "Sleep duration_ms milliseconds then return (slow plugin tool).",
+        R"({"type":"object","properties":{"durationMs":{"type":"integer"}}})",
+        [](AgentCtx& c, std::string_view args, agentxx::plugin::OpCtl ctl
+        ) -> agentxx::plugin::Task<std::string> {
+            int ms = 200;
+            try {
+                auto j = agentxx::util::Json::parse(args);
+                if (j.contains("durationMs") && j["durationMs"].is_number()) {
+                    ms = j["durationMs"].get<int>();
+                }
+            } catch (...) {
+            }
+            co_await agentxx::plugin::sleep(c, ms > 0 ? ms : 0);
+            ctl.throw_if_cancelled();
+            co_return fmt::format(R"({{"slept_ms": {}}})", ms);
+        }
+    );
+
+    // 2. 钩子 (agent_start)
+    if (ctx.iface.hooks && ctx.iface.hooks->register_hook) {
+        agentxx::plugin::hook(
+            ctx,
+            AGENTXX_PLUGIN_HOOK_AGENT_START,
+            [](AgentCtx& c, AgentxxPluginHookPoint, std::string_view) {
+                c.log.info("example hook: agent_start fired");
+            }
+        );
+    }
+
+    // 3. 事件订阅
+    auto topic1 = agentxx::plugin::PluginStringView::fromCstr("demo.topic");
+    ctx.iface.events->subscribe(host, &topic1, on_demo_event, &ctx);
+    auto topic2
+        = agentxx::plugin::PluginStringView::fromCstr("client.example_plugin.hello");
+    ctx.iface.events->subscribe(host, &topic2, on_client_hello, &ctx);
+
+    // 4. 能力
+    if (ctx.iface.capabilities && ctx.iface.capabilities->register_capability) {
+        auto capSv = agentxx::plugin::PluginStringView::fromCstr("example.demo");
+        ctx.iface.capabilities->register_capability(host, &capSv);
+    }
+
+    // 5. 提示词读写
+    if (ctx.iface.prompt && ctx.iface.prompt->get_prompt
+        && ctx.iface.prompt->set_prompt) {
+        AgentxxPluginString full{nullptr, 0};
+        ctx.iface.prompt->get_prompt(host, &full);
+        if (full.data) {
+            std::string prompt(full.data, static_cast<size_t>(full.size));
+            agentxx::plugin::PluginString::free(host, &full);
+            if (prompt.find("\"example_echo\"") == std::string::npos) {
+                const char* promptJson
+                    = R"({"toolPrompt":{"example_echo":{"depict":"Echo the input arguments back as JSON (example plugin tool).","args":{}}}})";
+                auto promptSv = agentxx::plugin::PluginStringView::fromCstr(promptJson);
+                ctx.iface.prompt->set_prompt(host, &promptSv);
+            }
+        }
+    }
+
+    return 0;
+}
+
+static void* exampleAgentStart(
+    AgentCtx&                          ctx,
+    const AgentxxPluginOperatorNotify* notify,
+    AgentxxPluginString*               error
+) {
+    if (!notify) {
+        if (error) {
+            agentxx::plugin::PluginString::set(
+                ctx.host,
+                error,
+                "example_plugin start: notify required"
+            );
+        }
+        return nullptr;
+    }
+    if (exampleAgentSetup(ctx) != 0) {
+        if (error) {
+            agentxx::plugin::PluginString::set(
+                ctx.host,
+                error,
+                "example_plugin start: registration transaction failed"
+            );
+        }
+        return nullptr;
+    }
+    ctx.log.info("example plugin started");
+    notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+    return nullptr;
+}
+
+static void* exampleAgentStop(
+    AgentCtx&,
+    const AgentxxPluginOperatorNotify* notify,
+    AgentxxPluginString*
+) {
+    // 本插件没有自管线程/定时器: stop 只给出完成信号。注册记录 (工具/hook/能力/
+    // 订阅/prompt 贡献) 由宿主在 stop 后统一撤销, 这里不重复反注册, 避免与宿主
+    // 的清理交叉。
+    notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+    return nullptr;
+}
+
+AGENTXX_PLUGIN_AGENT_LIFECYCLE_EXPORT(AgentCtx, exampleAgentStart, exampleAgentStop)
 
 extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_agent_destroy(void* plugin_ctx) {
     auto* ctx = static_cast<AgentCtx*>(plugin_ctx);
@@ -444,6 +501,141 @@ static void AGENTXX_PLUGIN_CALL
     }
 }
 
+/// client 侧生命周期事务 (与 agent 侧对称):
+/// - create 只构造上下文与接口查询;
+/// - start 注册状态栏项/面板/Info 段落/命令/事件订阅;
+/// - stop 撤销上述注册 (句柄置空, 可重复调用);
+/// - destroy 只释放本地内存。
+static int exampleClientSetup(ClientCtx& ctx) {
+    const AgentxxPluginHost* host = ctx.host;
+    ctx.ui = ctx.iface.ui;
+    auto sidSv  = agentxx::plugin::PluginStringView::fromCstr("example_plugin.turns");
+    auto initSv = agentxx::plugin::PluginStringView::fromCstr(R"({"text":"turns: 0"})");
+    ctx.status_item = ctx.ui && ctx.ui->register_status_item
+                           ? ctx.ui->register_status_item(host, &sidSv, &initSv, 0, 10)
+                           : nullptr;
+
+    auto pidSv   = agentxx::plugin::PluginStringView::fromCstr("example_plugin.panel");
+    auto ppropSv = agentxx::plugin::PluginStringView::fromCstr(R"({"title":"Example"})");
+    ctx.panel   = ctx.ui && ctx.ui->register_panel
+                       ? ctx.ui->register_panel(host, &pidSv, &ppropSv)
+                       : nullptr;
+
+    auto iidSv = agentxx::plugin::PluginStringView::fromCstr("example_plugin.info");
+    auto ipropSv
+        = agentxx::plugin::PluginStringView::fromCstr(R"({"title":"Example Info"})");
+    ctx.info_section = ctx.ui && ctx.ui->register_info_section
+                            ? ctx.ui->register_info_section(host, &iidSv, &ipropSv)
+                            : nullptr;
+
+    if (!ctx.ui || !ctx.ui->register_command) {
+        return -1;
+    }
+    auto cmd1NameSv = agentxx::plugin::PluginStringView::fromCstr("example");
+    auto cmd1DescSv = agentxx::plugin::PluginStringView::fromCstr(
+        "Send a message from the example plugin"
+    );
+    if (ctx.ui->register_command(
+            host,
+            &cmd1NameSv,
+            &cmd1DescSv,
+            example_cmd_execute,
+            &ctx
+        )
+        != 0) {
+        return -1;
+    }
+    auto cmd2NameSv = agentxx::plugin::PluginStringView::fromCstr("example_toast");
+    auto cmd2DescSv
+        = agentxx::plugin::PluginStringView::fromCstr("Show a toast from the example plugin"
+        );
+    if (ctx.ui->register_command(
+            host,
+            &cmd2NameSv,
+            &cmd2DescSv,
+            example_toast_execute,
+            &ctx
+        )
+        != 0) {
+        return -1;
+    }
+
+    if (!ctx.iface.events || !ctx.iface.events->subscribe) {
+        return -1;
+    }
+    if (!ctx.iface.events
+             ->subscribe(host, AGENTXX_CLIENT_EVT_READY, on_client_ready, &ctx)) {
+        return -1;
+    }
+    if (!ctx.iface.events->subscribe(
+            host,
+            AGENTXX_CLIENT_EVT_TURN_END,
+            on_client_turn_end,
+            &ctx
+        )) {
+        return -1;
+    }
+    if (!ctx.iface.events->subscribe(
+            host,
+            AGENTXX_CLIENT_EVT_PLUGIN_DATA,
+            on_client_plugin_data,
+            &ctx
+        )) {
+        return -1;
+    }
+
+    if (ctx.iface.log && ctx.iface.log->log) {
+        auto msgSv
+            = agentxx::plugin::PluginStringView::fromCstr("example client plugin loaded");
+        ctx.iface.log->log(host, 2, &msgSv);
+    }
+    return 0;
+}
+
+static void* exampleClientStart(
+    ClientCtx&                         ctx,
+    const AgentxxPluginOperatorNotify* notify,
+    AgentxxPluginString*               error
+) {
+    if (!notify) {
+        if (error) {
+            agentxx::plugin::PluginString::set(
+                ctx.host,
+                error,
+                "example_plugin client start: notify required"
+            );
+        }
+        return nullptr;
+    }
+    if (exampleClientSetup(ctx) != 0) {
+        if (error) {
+            agentxx::plugin::PluginString::set(
+                ctx.host,
+                error,
+                "example_plugin client start: registration transaction failed"
+            );
+        }
+        return nullptr;
+    }
+    if (ctx.iface.log && ctx.iface.log->log) {
+        auto msgSv = agentxx::plugin::PluginStringView::fromCstr("example client plugin started");
+        ctx.iface.log->log(ctx.host, 2, &msgSv);
+    }
+    notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+    return nullptr;
+}
+
+static void* exampleClientStop(
+    ClientCtx&,
+    const AgentxxPluginOperatorNotify* notify,
+    AgentxxPluginString*
+) {
+    // UI 注册与事件订阅由宿主在本事务后统一撤销 (宿主记录里已保存), 这里只给
+    // 完成信号; 插件自身没有线程/定时器需要回收。
+    notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+    return nullptr;
+}
+
 extern "C" AGENTXX_PLUGIN_EXPORT int
     agentxx_plugin_client_create(const AgentxxPluginHost* host, void** plugin_ctx) {
     ClientCtx* raw = nullptr;
@@ -461,91 +653,17 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
             ctx->ui = ctx->iface.ui;
             raw     = ctx.get();
 
-            auto sidSv  = agentxx::plugin::PluginStringView::fromCstr("example_plugin.turns");
-            auto initSv = agentxx::plugin::PluginStringView::fromCstr(R"({"text":"turns: 0"})");
-            ctx->status_item = ctx->ui && ctx->ui->register_status_item
-                                   ? ctx->ui->register_status_item(host, &sidSv, &initSv, 0, 10)
-                                   : nullptr;
-
-            auto pidSv   = agentxx::plugin::PluginStringView::fromCstr("example_plugin.panel");
-            auto ppropSv = agentxx::plugin::PluginStringView::fromCstr(R"({"title":"Example"})");
-            ctx->panel   = ctx->ui && ctx->ui->register_panel
-                               ? ctx->ui->register_panel(host, &pidSv, &ppropSv)
-                               : nullptr;
-
-            auto iidSv = agentxx::plugin::PluginStringView::fromCstr("example_plugin.info");
-            auto ipropSv
-                = agentxx::plugin::PluginStringView::fromCstr(R"({"title":"Example Info"})");
-            ctx->info_section = ctx->ui && ctx->ui->register_info_section
-                                    ? ctx->ui->register_info_section(host, &iidSv, &ipropSv)
-                                    : nullptr;
-
-            if (!ctx->ui || !ctx->ui->register_command) {
-                return -1;
-            }
-            auto cmd1NameSv = agentxx::plugin::PluginStringView::fromCstr("example");
-            auto cmd1DescSv = agentxx::plugin::PluginStringView::fromCstr(
-                "Send a message from the example plugin"
-            );
-            if (ctx->ui->register_command(
-                    host,
-                    &cmd1NameSv,
-                    &cmd1DescSv,
-                    example_cmd_execute,
-                    ctx.get()
-                )
-                != 0) {
-                return -1;
-            }
-            auto cmd2NameSv = agentxx::plugin::PluginStringView::fromCstr("example_toast");
-            auto cmd2DescSv
-                = agentxx::plugin::PluginStringView::fromCstr("Show a toast from the example plugin"
-                );
-            if (ctx->ui->register_command(
-                    host,
-                    &cmd2NameSv,
-                    &cmd2DescSv,
-                    example_toast_execute,
-                    ctx.get()
-                )
-                != 0) {
-                return -1;
-            }
-
+            // create 只做构造与接口查询: UI 注册事务由 start 执行
             if (!ctx->iface.events || !ctx->iface.events->subscribe) {
                 return -1;
-            }
-            if (!ctx->iface.events
-                     ->subscribe(host, AGENTXX_CLIENT_EVT_READY, on_client_ready, ctx.get())) {
-                return -1;
-            }
-            if (!ctx->iface.events->subscribe(
-                    host,
-                    AGENTXX_CLIENT_EVT_TURN_END,
-                    on_client_turn_end,
-                    ctx.get()
-                )) {
-                return -1;
-            }
-            if (!ctx->iface.events->subscribe(
-                    host,
-                    AGENTXX_CLIENT_EVT_PLUGIN_DATA,
-                    on_client_plugin_data,
-                    ctx.get()
-                )) {
-                return -1;
-            }
-
-            if (ctx->iface.log && ctx->iface.log->log) {
-                auto msgSv
-                    = agentxx::plugin::PluginStringView::fromCstr("example client plugin loaded");
-                ctx->iface.log->log(host, 2, &msgSv);
             }
             *plugin_ctx = ctx.release();
             return 0;
         }
     );
 }
+
+AGENTXX_PLUGIN_CLIENT_LIFECYCLE_EXPORT(ClientCtx, exampleClientStart, exampleClientStop)
 
 extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_client_destroy(void* plugin_ctx) {
     auto* ctx = static_cast<ClientCtx*>(plugin_ctx);
@@ -554,24 +672,8 @@ extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_client_destroy(void* plugin
             delete ctx;
             return;
         }
-        if (ctx->ui && ctx->ui->unregister_command) {
-            auto n1 = agentxx::plugin::PluginStringView::fromCstr("example");
-            ctx->ui->unregister_command(ctx->host, &n1);
-            auto n2 = agentxx::plugin::PluginStringView::fromCstr("example_toast");
-            ctx->ui->unregister_command(ctx->host, &n2);
-        }
-        if (ctx->status_item && ctx->ui && ctx->ui->unregister_status_item) {
-            ctx->ui->unregister_status_item(ctx->host, ctx->status_item);
-            ctx->status_item = nullptr;
-        }
-        if (ctx->panel && ctx->ui && ctx->ui->unregister_panel) {
-            ctx->ui->unregister_panel(ctx->host, ctx->panel);
-            ctx->panel = nullptr;
-        }
-        if (ctx->info_section && ctx->ui && ctx->ui->unregister_info_section) {
-            ctx->ui->unregister_info_section(ctx->host, ctx->info_section);
-            ctx->info_section = nullptr;
-        }
+        // UI 注册与事件订阅在 stop 事务后由宿主统一撤销 (见 exampleClientStop):
+        // destroy 只释放本地内存, 不再调用宿主注册接口。
         if (ctx->iface.log && ctx->iface.log->log) {
             auto msgSv
                 = agentxx::plugin::PluginStringView::fromCstr("example client plugin unloaded");

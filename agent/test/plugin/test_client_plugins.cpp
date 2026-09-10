@@ -683,6 +683,10 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
     XX_TEST_EXPECT_EQ(adapter->sendCount(), 1); // 未增加
 
     mgr->enable("example_plugin");
+    // 启用走 client start 事务 (client io 线程异步执行): 等待 UI 注册恢复
+    for (int i = 0; i < 200 && !mgr->hasCommand("example"); ++i) {
+        co_await sleepMs(5);
+    }
     {
         auto reg    = mgr->uiRegistrySnapshot();
         bool hasCmd = false, hasStatus = false, hasInfo = false;
@@ -1624,6 +1628,15 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                     XX_TEST_EXPECT_FALSE(any);
                 }
                 mgr->enable("example_plugin");
+                // 启用走 client start 事务 (client io 线程异步执行): 等插件自身注册恢复;
+                // 测试手动绑定的处理器不属于插件 start 事务, 需要重新绑定
+                for (int i = 0; i < 200 && !mgr->hasCommand("example"); ++i) {
+                    co_await sleepMs(5);
+                }
+                XX_TEST_EXPECT_EQ(
+                    ui->bind_action_handler(exInst->hostView(), &secSv, exactFn, &hitsExact),
+                    0
+                );
                 {
                     auto reg = mgr->uiRegistrySnapshot();
                     bool any = false;

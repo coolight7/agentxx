@@ -485,6 +485,10 @@ mcp:
 
         // ---- enable: 恢复生效 ----
         ctx->pluginManager->enable(ownerName);
+        // 启用走 start 事务 (IO 线程异步执行): 等宿主侧资源重新生效
+        for (int i = 0; i < 200 && !contains(skillMw->skillDirPathList(), absSkill); ++i) {
+            co_await sleepMs(5);
+        }
         XX_TEST_EXPECT_TRUE(contains(skillMw->skillDirPathList(), absSkill));
         XX_TEST_EXPECT_TRUE(contains(memMw->memoryFilePathList(), absMem));
 

@@ -350,6 +350,10 @@ asio::awaitable<TestResult> run_plugin_tests() {
         XX_TEST_EXPECT_FALSE(inst->enabled);
 
         ctx->pluginManager->enable("example_plugin");
+        // 启用是 start 事务 (投递到所属 IO 线程执行): 等待插件重新声明注册
+        for (int i = 0; i < 200 && !ctx->toolRegistry->contains("example_echo"); ++i) {
+            co_await sleepMs(5);
+        }
         XX_TEST_EXPECT_TRUE(ctx->toolRegistry->contains("example_echo"));
         XX_TEST_EXPECT_TRUE(ctx->toolRegistry->contains("example_caller"));
         XX_TEST_EXPECT_TRUE(inst->middleware != nullptr);
@@ -726,6 +730,10 @@ asio::awaitable<TestResult> run_plugin_tests() {
             XX_TEST_EXPECT_TRUE(inst24->hookRegistrations.size() == size_t{1});
             // 启用: 钩子按注册记录重建中间件
             ctx->pluginManager->enable("example_plugin");
+            // 启用走 start 事务 (IO 线程异步执行): 等待插件重新注册钩子
+            for (int i = 0; i < 200 && inst24->middleware == nullptr; ++i) {
+                co_await sleepMs(5);
+            }
             XX_TEST_EXPECT_TRUE(inst24->middleware != nullptr);
             XX_TEST_EXPECT_FALSE(inst24->middleware->disabled);
             const auto& handles = ctx->middlewareHandleContext->handles;

@@ -3995,5 +3995,65 @@ private:
             delete ctx;                                                                     \
     }
 
+/// Client 侧的可选 start/stop 导出 (与
+/// [AGENTXX_PLUGIN_AGENT_LIFECYCLE_EXPORT] 对称):
+/// - `StartFn` / `StopFn` 形如 `void*(CtxType&, const AgentxxPluginOperatorNotify*,
+///   AgentxxPluginString*)`;
+/// - 只导出 client 入口的插件用它把 UI 注册事务放进 start、撤销放进 stop;
+///   使用 `AGENTXX_PLUGIN_CLIENT_EXPORT` 的插件不导出这两个符号 (legacy 路径)。
+#define AGENTXX_PLUGIN_CLIENT_LIFECYCLE_EXPORT(CtxType, StartFn, StopFn)                   \
+    extern "C" AGENTXX_PLUGIN_EXPORT void* agentxx_plugin_client_start(                    \
+        void* plugin_ctx, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString* err \
+    ) {                                                                                     \
+        auto* ctx = static_cast<CtxType*>(plugin_ctx);                                      \
+        try {                                                                               \
+            if (!ctx) {                                                                     \
+                if (err)                                                                    \
+                    agentxx::plugin::PluginString::set(                                     \
+                        nullptr, err, "client plugin start: null context"                   \
+                    );                                                                      \
+                return nullptr;                                                             \
+            }                                                                               \
+            return (StartFn)(*ctx, notify, err);                                            \
+        } catch (const std::exception& e) {                                                 \
+            if (err)                                                                        \
+                agentxx::plugin::PluginString::set(                                         \
+                    ctx ? ctx->host : nullptr, err, e.what()                                \
+                );                                                                          \
+        } catch (...) {                                                                     \
+            if (err)                                                                        \
+                agentxx::plugin::PluginString::set(                                         \
+                    ctx ? ctx->host : nullptr, err, "client plugin start threw"             \
+                );                                                                          \
+        }                                                                                   \
+        return nullptr;                                                                     \
+    }                                                                                       \
+    extern "C" AGENTXX_PLUGIN_EXPORT void* agentxx_plugin_client_stop(                     \
+        void* plugin_ctx, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString* err \
+    ) {                                                                                     \
+        auto* ctx = static_cast<CtxType*>(plugin_ctx);                                      \
+        try {                                                                               \
+            if (!ctx) {                                                                     \
+                if (err)                                                                    \
+                    agentxx::plugin::PluginString::set(                                     \
+                        nullptr, err, "client plugin stop: null context"                    \
+                    );                                                                      \
+                return nullptr;                                                             \
+            }                                                                               \
+            return (StopFn)(*ctx, notify, err);                                             \
+        } catch (const std::exception& e) {                                                 \
+            if (err)                                                                        \
+                agentxx::plugin::PluginString::set(                                         \
+                    ctx ? ctx->host : nullptr, err, e.what()                                \
+                );                                                                          \
+        } catch (...) {                                                                     \
+            if (err)                                                                        \
+                agentxx::plugin::PluginString::set(                                         \
+                    ctx ? ctx->host : nullptr, err, "client plugin stop threw"              \
+                );                                                                          \
+        }                                                                                   \
+        return nullptr;                                                                     \
+    }
+
 } // namespace plugin
 } // namespace agentxx
