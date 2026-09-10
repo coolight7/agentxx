@@ -142,7 +142,7 @@ typedef struct AgentxxOverlaySpec {
 
 typedef struct AgentxxClientUiIface {
     int32_t  version; ///< 必须 == AGENTXX_IFACE_CLIENT_UI_VERSION
-    uint32_t _reserved;
+    uint32_t struct_size;
 
     /* ---- 状态栏项 ---- */
     /// 注册状态栏项; 返回句柄 (宿主持有; 卸载自动清理)
@@ -326,7 +326,7 @@ typedef struct AgentxxClientUiIface {
 
 typedef struct AgentxxClientEventsIface {
     int32_t  version; ///< 必须 == AGENTXX_IFACE_CLIENT_EVENTS_VERSION
-    uint32_t _reserved;
+    uint32_t struct_size;
 
     /// 订阅 client 事件 (payload JSON 字符串; 卸载自动退订); event 为
     /// AgentxxClientEvent 枚举值; 失败返回 NULL
@@ -346,7 +346,7 @@ typedef struct AgentxxClientEventsIface {
 
 typedef struct AgentxxClientSessionIface {
     int32_t  version; ///< 必须 == AGENTXX_IFACE_CLIENT_SESSION_VERSION
-    uint32_t _reserved;
+    uint32_t struct_size;
 
     /// 当前 client 状态 JSON 快照 (host->alloc):
     /// {"sessionId","connState","model","models":[],"isStreaming",
@@ -379,7 +379,7 @@ typedef struct AgentxxClientSessionIface {
 
 typedef struct AgentxxClientWireIface {
     int32_t  version; ///< 必须 == AGENTXX_IFACE_CLIENT_WIRE_VERSION
-    uint32_t _reserved;
+    uint32_t struct_size;
 
     /// 发送事件到 agent 侧: 服务端发布到事件总线 topic `client.{插件名}.{event}`
     /// (agent 侧同名插件可订阅; 载荷 JSON 原样透传, 语义由插件定义)
@@ -398,7 +398,7 @@ typedef struct AgentxxClientWireIface {
 
 typedef struct AgentxxClientSelfIface {
     int32_t  version; ///< 必须 == AGENTXX_IFACE_CLIENT_SELF_VERSION
-    uint32_t _reserved;
+    uint32_t struct_size;
 
     /// 本插件信息 JSON {"name","version","description","path"}
     /// (加载时常用: 从 path 推导资源目录; host->alloc)
@@ -440,7 +440,7 @@ typedef struct AgentxxClientSelfIface {
 
 typedef struct AgentxxClientJsonIface {
     int32_t  version; ///< 必须 == AGENTXX_IFACE_CLIENT_JSON_VERSION
-    uint32_t _reserved;
+    uint32_t struct_size;
 
     /// 从 JSON 字符串提取指定 key 的字符串值 (宿主解析; 结果 host->alloc)
     int32_t(AGENTXX_PLUGIN_CALL* json_get_string)(
@@ -464,7 +464,7 @@ typedef struct AgentxxClientJsonIface {
 
 typedef struct AgentxxClientLogIface {
     int32_t  version; ///< 必须 == AGENTXX_IFACE_CLIENT_LOG_VERSION
-    uint32_t _reserved;
+    uint32_t struct_size;
 
     /// 日志 (线程安全; 0=trace 1=debug 2=info 3=warn 4=error)
     void(AGENTXX_PLUGIN_CALL*
@@ -495,6 +495,8 @@ typedef void(AGENTXX_PLUGIN_CALL* AgentxxClientPluginDestroyFn)(void* plugin_ctx
 
 #define AGENTXX_PLUGIN_CLIENT_SYMBOL_GET_INFO "agentxx_plugin_client_get_info"
 #define AGENTXX_PLUGIN_CLIENT_SYMBOL_CREATE   "agentxx_plugin_client_create"
+#define AGENTXX_PLUGIN_CLIENT_SYMBOL_START    "agentxx_plugin_client_start"
+#define AGENTXX_PLUGIN_CLIENT_SYMBOL_STOP     "agentxx_plugin_client_stop"
 #define AGENTXX_PLUGIN_CLIENT_SYMBOL_DESTROY  "agentxx_plugin_client_destroy"
 
 #pragma pack(pop)

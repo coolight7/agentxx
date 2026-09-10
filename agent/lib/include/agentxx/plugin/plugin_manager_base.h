@@ -45,6 +45,7 @@
 #include <memory>
 #include <string>
 #include <string_view>
+#include <set>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -57,6 +58,9 @@
 #else
 #include <dlfcn.h>
 #endif
+
+struct AgentxxPluginOperatorHandle;
+struct AgentxxPluginOperationCompletionEndpoint;
 
 namespace agentxx {
 namespace plugin {
@@ -84,6 +88,7 @@ struct PluginInstanceBase {
     void*                    pluginCtx = nullptr; ///< entry 输出的插件私有上下文
     bool                     enabled   = true; ///< 是否启用 (禁用: 注册摘除/命令停用)
     bool userDisabled    = false; ///< 是否被用户显式禁用 (区别于级联禁用)
+    bool blockedByDependencies = false; ///< 是否因必选依赖不可用而级联禁用
     bool unloadRequested = false; ///< 已请求卸载 (防重复)
     /// create 是否成功产出可销毁的 pluginCtx。
     bool pluginCreated   = false;
@@ -91,6 +96,27 @@ struct PluginInstanceBase {
     bool pluginDestroyed = false;
     /// 同步关闭发现活动 lease 时，等待最后一个 lease 释放后再执行 destroy。
     bool destroyDeferred = false;
+    /// Optional Reset-v1 lifecycle hooks discovered beside create/destroy.
+    /// Legacy plugins keep these null and retain their create-time setup.
+    AgentxxPluginStartFn lifecycleStart = nullptr;
+    AgentxxPluginStopFn  lifecycleStop  = nullptr;
+    /// 实例已经完全激活 (start 事务成功, 或该插件没有 start 导出)。
+    /// 只有为 true 的实例才需要 (且必须) 先执行 stop 才能 destroy/dlclose。
+    bool lifecycleStarted = false;
+    bool lifecycleStopped = false;
+
+    /// stop 事务仍待执行。同步关闭路径无法等待该事务，因此必须保留实例、
+    /// 上下文与动态库，交由仍运行的异步 owner (unloadAsync/shutdownAsync) 收尾。
+    bool lifecycleStopPending() const noexcept {
+        return lifecycleStop != nullptr && lifecycleStarted && !lifecycleStopped;
+    }
+
+    std::vector<std::shared_ptr<::AgentxxPluginOperatorHandle>> operatorHandles;
+    std::vector<std::shared_ptr<::AgentxxPluginOperationCompletionEndpoint>> completionEndpoints;
+    std::vector<std::shared_ptr<::AgentxxPluginOperatorHandle>> outstandingOps;
+
+    /// 由实例创建路径设置，供只拿到裸指针的宿主回调升级 owner。
+    std::weak_ptr<PluginInstanceBase> ownerSelf;
 
     /// Reset-v1 宿主生命周期。实例对象本身只保存业务注册信息；所有跨线程
     /// 执行都通过 lifetime lease 保证 stop/destroy/dlclose 前已经返回。
@@ -112,11 +138,30 @@ struct PluginInstanceBase {
     /// 伪实例仍更新兼容 inflight 字段。
     struct InflightGuard {
         PluginInstanceBase* inst = nullptr;
+        std::shared_ptr<PluginInstanceBase> owner;
         InstanceLease       lease;
         bool                legacy = false;
 
+        explicit InflightGuard(
+            std::shared_ptr<PluginInstanceBase> i,
+            bool allowClosing = false
+        ) :
+            inst(i.get()),
+            owner(std::move(i)),
+            lease(inst ? InstanceLease::acquire(inst->lifetime, allowClosing) : InstanceLease{}) {
+            if (inst && inst->lifetime) {
+                if (lease) {
+                    inst->inflight.fetch_add(1, std::memory_order_acq_rel);
+                }
+            } else if (inst) {
+                legacy = true;
+                inst->inflight.fetch_add(1, std::memory_order_acq_rel);
+            }
+        }
+
         explicit InflightGuard(PluginInstanceBase* i, bool allowClosing = false) :
             inst(i),
+            owner(i ? i->ownerSelf.lock() : nullptr),
             lease(i ? InstanceLease::acquire(i->lifetime, allowClosing) : InstanceLease{}) {
             if (inst && inst->lifetime) {
                 if (lease) {
@@ -175,12 +220,44 @@ public:
         return it == plugins_.end() ? nullptr : it->second;
     }
 
+    /// 是否仍有未安全关闭的实例 (stop 未完成 / lease 未归零 / destroy 未执行)。
+    /// 用于 owner 在停止 executor、销毁 agent 或进程退出前自检关闭链路是否走完。
+    bool hasPendingClose() const {
+        for (const auto& [name, inst] : plugins_) {
+            (void)name;
+            if (!inst || !inst->pluginDestroyed) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /// 预占插件名称，覆盖 Loading 期间的并发重复加载。
+    /// 调用方必须在加载成功或失败时调用 releasePluginName()。
+    bool reservePluginName(std::string_view name) {
+        if (name.empty() || plugins_.find(name) != plugins_.end()
+            || loadingNames_.find(name) != loadingNames_.end()) {
+            return false;
+        }
+        loadingNames_.emplace(name);
+        return true;
+    }
+
+    void releasePluginName(std::string_view name) {
+        loadingNames_.erase(name);
+    }
+
+    bool isPluginNameLoading(std::string_view name) const {
+        return loadingNames_.find(name) != loadingNames_.end();
+    }
+
     // ==================== io 线程投递 ====================
 
     void setIoExecutor(asio::any_io_executor ex) {
         ioExecutor_ = std::move(ex);
         if (ioExecutor_) {
             ioThreadId_.store(std::this_thread::get_id(), std::memory_order_release);
+            replayRuntimeActions(runtime_);
         } else {
             ioThreadId_.store(std::thread::id{}, std::memory_order_release);
         }
@@ -188,7 +265,14 @@ public:
 
     bool isIoThread() const {
         const auto tid = ioThreadId_.load(std::memory_order_acquire);
-        return ioExecutor_ && tid != std::thread::id{} && tid == std::this_thread::get_id();
+        // A stopped io_context cannot safely execute an inline operation even
+        // when the last thread that bound the executor happens to be calling
+        // now.  Treat it as unavailable so synchronous ABI callers fail fast
+        // instead of running against a closed runtime.
+        if (!ioExecutor_ || runtimeExecutorStopped(ioExecutor_)) {
+            return false;
+        }
+        return tid != std::thread::id{} && tid == std::this_thread::get_id();
     }
 
     /// 投递到所属 IO executor。闭包自身必须拥有执行所需状态；这里不再维护
@@ -199,8 +283,7 @@ public:
         }
         if (isIoThread()) {
             fn();
-        } else if (ioExecutor_) {
-            asio::post(ioExecutor_, [runtime = runtime_, fn = std::move(fn)]() mutable {
+        } else if (!enqueueRuntimeAction(runtime_, [runtime = runtime_, fn = std::move(fn)]() mutable {
                 runtime->ioThreadId.store(std::this_thread::get_id(), std::memory_order_release);
                 try {
                     fn();
@@ -209,9 +292,11 @@ public:
                 } catch (...) {
                     XX_LOGW("Plugin IO task threw unknown exception");
                 }
-            });
-        } else {
-            throw std::runtime_error("plugin runtime has no IO executor");
+            }, false)) {
+            if (!ioExecutor_) {
+                throw std::runtime_error("plugin runtime has no IO executor");
+            }
+            throw std::runtime_error("plugin runtime IO executor is stopped");
         }
     }
 
@@ -220,8 +305,7 @@ public:
         if (!fn) {
             return;
         }
-        if (ioExecutor_) {
-            asio::post(ioExecutor_, [runtime = runtime_, fn = std::move(fn)]() mutable {
+        if (!enqueueRuntimeAction(runtime_, [runtime = runtime_, fn = std::move(fn)]() mutable {
                 runtime->ioThreadId.store(std::this_thread::get_id(), std::memory_order_release);
                 try {
                     fn();
@@ -230,9 +314,11 @@ public:
                 } catch (...) {
                     XX_LOGW("Plugin asynchronous IO task threw unknown exception");
                 }
-            });
-        } else {
-            throw std::runtime_error("plugin runtime has no IO executor");
+            }, false)) {
+            if (!ioExecutor_) {
+                throw std::runtime_error("plugin runtime has no IO executor");
+            }
+            throw std::runtime_error("plugin runtime IO executor is stopped");
         }
     }
 
@@ -281,12 +367,24 @@ protected:
     }
 
     std::shared_ptr<InstanceLifetime> makeLifetime(std::string name) {
-        return std::make_shared<InstanceLifetime>(ioExecutor_, std::move(name), nextGeneration());
+        std::weak_ptr<PluginRuntime> runtime = runtime_;
+        return std::make_shared<InstanceLifetime>(
+            ioExecutor_,
+            std::move(name),
+            nextGeneration(),
+            [runtime = std::move(runtime)](std::function<void()> fn) mutable {
+                if (auto state = runtime.lock()) {
+                    return enqueueRuntimeAction(state, std::move(fn), true);
+                }
+                return false;
+            }
+        );
     }
 
     std::shared_ptr<PluginRuntime> runtime_ = std::make_shared<PluginRuntime>();
     asio::any_io_executor& ioExecutor_ = runtime_->executor;
     std::atomic<std::thread::id>& ioThreadId_ = runtime_->ioThreadId;
+    std::set<std::string, std::less<>> loadingNames_;
 };
 
 // =====================================================================

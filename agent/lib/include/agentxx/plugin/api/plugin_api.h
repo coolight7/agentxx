@@ -114,6 +114,24 @@ typedef void(AGENTXX_PLUGIN_CALL* AgentxxPluginOperatorCallback)(
 /// 异步调用句柄 (仅用于取消; 不可轮询/收尸; 宿主托管生命周期)
 typedef struct AgentxxPluginOperatorHandle AgentxxPluginOperatorHandle;
 
+/// 不透明协作式取消令牌。
+/// 令牌只在当前受管工作函数执行期间有效；插件不得保存该指针。
+typedef struct AgentxxPluginCancelToken AgentxxPluginCancelToken;
+typedef int32_t(AGENTXX_PLUGIN_CALL* AgentxxPluginCancelIsRequestedFn)(
+    const AgentxxPluginCancelToken* token
+);
+
+struct AgentxxPluginCancelToken {
+    AgentxxPluginCancelIsRequestedFn is_requested;
+    void*                            host_ud;
+};
+
+static inline int32_t agentxx_plugin_cancel_is_requested(
+    const AgentxxPluginCancelToken* token
+) {
+    return token && token->is_requested ? token->is_requested(token) : 0;
+}
+
 /// 协作式取消请求函数 (【宿主 io 线程调用】, 非阻塞):
 typedef void(AGENTXX_PLUGIN_CALL* AgentxxPluginOperatorCancelFunction)(void* user_data, void* op);
 
@@ -218,7 +236,7 @@ struct AgentxxPluginHost {
 
 typedef struct AgentxxPluginToolsIface {
     int32_t  version; ///< 必须 == AGENTXX_PLUGIN_IFACE_AGENT_TOOLS_VERSION
-    uint32_t _reserved;
+    uint32_t struct_size; ///< sizeof(AgentxxPluginToolsIface) or a larger known table
 
     /// 注册工具 (io 线程约束, 非 io 线程由宿主投递同步等待)
     /// `return`: 0 成功, 非 0 冲突或失败
@@ -253,7 +271,7 @@ typedef struct AgentxxPluginToolsIface {
 
 typedef struct AgentxxPluginHooksIface {
     int32_t  version; ///< 必须 == AGENTXX_PLUGIN_IFACE_AGENT_HOOKS_VERSION
-    uint32_t _reserved;
+    uint32_t struct_size;
 
     int32_t(AGENTXX_PLUGIN_CALL* register_hook)(
         const AgentxxPluginHost*     host,
@@ -269,7 +287,7 @@ typedef struct AgentxxPluginHooksIface {
 
 typedef struct AgentxxPluginEventsIface {
     int32_t  version; ///< 必须 == AGENTXX_PLUGIN_IFACE_AGENT_EVENTS_VERSION
-    uint32_t _reserved;
+    uint32_t struct_size;
 
     AgentxxPluginSubscription*(AGENTXX_PLUGIN_CALL* subscribe)(
         const AgentxxPluginHost*       host,
@@ -292,7 +310,7 @@ typedef struct AgentxxPluginEventsIface {
 
 typedef struct AgentxxPluginCapabilitiesIface {
     int32_t  version; ///< 必须 == AGENTXX_PLUGIN_IFACE_AGENT_CAPABILITIES_VERSION
-    uint32_t _reserved;
+    uint32_t struct_size;
 
     int32_t(AGENTXX_PLUGIN_CALL* register_capability)(
         const AgentxxPluginHost*       host,
@@ -333,31 +351,33 @@ typedef struct AgentxxPluginCapabilitiesIface {
 
 typedef struct AgentxxPluginSchedulerIface {
     int32_t  version; ///< 必须 == AGENTXX_PLUGIN_IFACE_AGENT_SCHEDULER_VERSION
-    uint32_t _reserved;
+    uint32_t struct_size;
 
     int32_t(AGENTXX_PLUGIN_CALL* is_io_thread)(const AgentxxPluginHost* host);
-    void(AGENTXX_PLUGIN_CALL* post_to_io)(
+    int32_t(AGENTXX_PLUGIN_CALL* post_to_io)(
         const AgentxxPluginHost* host,
         void(AGENTXX_PLUGIN_CALL* fn)(void* ud),
         void* ud
     );
-    void(AGENTXX_PLUGIN_CALL* pump_io)(const AgentxxPluginHost* host);
-    void*(AGENTXX_PLUGIN_CALL* sleep)(
+    AgentxxPluginOperatorHandle*(AGENTXX_PLUGIN_CALL* sleep)(
         const AgentxxPluginHost* host,
         int64_t                  ms,
-        void(AGENTXX_PLUGIN_CALL* cb)(void* ud),
-        void* ud
+        AgentxxPluginOperatorCallback cb,
+        void*                         ud,
+        AgentxxPluginString*          error_out
     );
-    void(AGENTXX_PLUGIN_CALL* cancel_sleep)(const AgentxxPluginHost* host, void* timer);
+    void(AGENTXX_PLUGIN_CALL* op_cancel)(AgentxxPluginOperatorHandle* op);
 
-    void(AGENTXX_PLUGIN_CALL* offload)(
+    AgentxxPluginOperatorHandle*(AGENTXX_PLUGIN_CALL* offload)(
         const AgentxxPluginHost* host,
-        volatile int32_t*        cancel_flag,
         void*(AGENTXX_PLUGIN_CALL*
-                  work)(void* ud, volatile int32_t* cancel_flag, AgentxxPluginString* error_out),
+                  work)(void* ud, const AgentxxPluginCancelToken* token,
+                        AgentxxPluginString* error_out),
         void(AGENTXX_PLUGIN_CALL*
-                 done)(void* ud, void* result, const AgentxxPluginStringView* error),
-        void* ud
+                 done)(void* ud, int32_t status, void* result,
+                       const AgentxxPluginStringView* error),
+        void*                ud,
+        AgentxxPluginString* error_out
     );
 } AgentxxPluginSchedulerIface;
 
@@ -368,7 +388,7 @@ typedef struct AgentxxPluginSchedulerIface {
 
 typedef struct AgentxxPluginSessionIface {
     int32_t  version; ///< 必须 == AGENTXX_PLUGIN_IFACE_AGENT_SESSION_VERSION
-    uint32_t _reserved;
+    uint32_t struct_size;
 
     /// 读取会话级 share_store 条目 (仅 io 线程); 返回 0 成功, out 接收数据 (host->alloc)
     int32_t(AGENTXX_PLUGIN_CALL* get_share_store)(
@@ -397,7 +417,7 @@ typedef struct AgentxxPluginSessionIface {
 
 typedef struct AgentxxPluginsIface {
     int32_t  version; ///< 必须 == AGENTXX_PLUGIN_IFACE_AGENT_PLUGINS_VERSION
-    uint32_t _reserved;
+    uint32_t struct_size;
 
     int32_t(AGENTXX_PLUGIN_CALL* list_plugins)(
         const AgentxxPluginHost* host,
@@ -421,7 +441,7 @@ typedef struct AgentxxPluginsIface {
 
 typedef struct AgentxxPluginConfigIface {
     int32_t  version; ///< 必须 == AGENTXX_PLUGIN_IFACE_AGENT_CONFIG_VERSION
-    uint32_t _reserved;
+    uint32_t struct_size;
 
     /// 宿主 AgentConfig 关键字段 JSON (io 线程; host->alloc):
     /// {"dataDir": "...", "projectRoot": "..."(可为空), "platform":
@@ -478,7 +498,7 @@ typedef struct AgentxxPluginConfigIface {
 
 typedef struct AgentxxPluginModelIface {
     int32_t  version; ///< 必须 == AGENTXX_PLUGIN_IFACE_AGENT_MODEL_VERSION
-    uint32_t _reserved;
+    uint32_t struct_size;
     /// 宿主主模型及关联配置 JSON (io 线程; host->alloc; 未装配返回空串):
     int32_t(AGENTXX_PLUGIN_CALL* get_config)(
         const AgentxxPluginHost* host,
@@ -493,7 +513,7 @@ typedef struct AgentxxPluginModelIface {
 
 typedef struct AgentxxPluginCancelIface {
     int32_t  version; ///< 必须 == AGENTXX_PLUGIN_IFACE_AGENT_CANCEL_VERSION
-    uint32_t _reserved;
+    uint32_t struct_size;
     /// 查询会话当前轮次是否已取消 (advisory 定位; 权威通知始终是 cancel 回调)
 
     int32_t(AGENTXX_PLUGIN_CALL* is_cancelled)(
@@ -509,7 +529,7 @@ typedef struct AgentxxPluginCancelIface {
 
 typedef struct AgentxxPluginPromptIface {
     int32_t  version; ///< 必须 == AGENTXX_PLUGIN_IFACE_AGENT_PROMPT_VERSION
-    uint32_t _reserved;
+    uint32_t struct_size;
 
     int32_t(AGENTXX_PLUGIN_CALL* get_prompt)(
         const AgentxxPluginHost* host,
@@ -528,7 +548,7 @@ typedef struct AgentxxPluginPromptIface {
 
 typedef struct AgentxxPluginJsonIface {
     int32_t  version; ///< 必须 == AGENTXX_PLUGIN_IFACE_AGENT_JSON_VERSION
-    uint32_t _reserved;
+    uint32_t struct_size;
 
     int32_t(AGENTXX_PLUGIN_CALL* json_get_string)(
         const AgentxxPluginHost*       host,
@@ -550,7 +570,7 @@ typedef struct AgentxxPluginJsonIface {
 
 typedef struct AgentxxPluginLogIface {
     int32_t  version; ///< 必须 == AGENTXX_PLUGIN_IFACE_AGENT_LOG_VERSION
-    uint32_t _reserved;
+    uint32_t struct_size;
 
     void(AGENTXX_PLUGIN_CALL*
              log)(const AgentxxPluginHost* host, int32_t level, const AgentxxPluginStringView* msg);
@@ -563,7 +583,7 @@ typedef struct AgentxxPluginLogIface {
 
 typedef struct AgentxxPluginResourcesIface {
     int32_t  version; ///< 必须 == AGENTXX_PLUGIN_IFACE_AGENT_RESOURCES_VERSION
-    uint32_t _reserved;
+    uint32_t struct_size;
 
     int32_t(AGENTXX_PLUGIN_CALL* register_skill_dir)(
         const AgentxxPluginHost*       host,
@@ -642,7 +662,7 @@ typedef struct AgentxxPluginGraphNodeTypeSpec {
 
 typedef struct AgentxxPluginGraphIface {
     int32_t  version; ///< 必须 == AGENTXX_PLUGIN_IFACE_AGENT_GRAPH_VERSION
-    uint32_t _reserved;
+    uint32_t struct_size;
 
     /// 注册节点类型 (io 线程约束, 非 io 线程由宿主投递同步等待)
     /// `return`: 类型名冲突返回非 0
@@ -681,13 +701,13 @@ typedef struct AgentxxPluginGraphIface {
 
 typedef struct AgentxxPluginTasksIface {
     int32_t  version; ///< 必须 == AGENTXX_PLUGIN_IFACE_AGENT_TASKS_VERSION
-    uint32_t _reserved;
+    uint32_t struct_size;
 
     /// 注册后台任务 (io 线程约束, 非 io 线程由宿主投递同步等待)。宿主记录
     /// 句柄 (可取消/跟踪完成/持 inflight), 插件协程最终结束时经 *notify
     /// 上报 (恰好一次) → 宿主回收句柄。
     /// - cancel_fn/cancel_ud: 宿主卸载取消时回调 (宿主 io 线程, 协作式):
-    ///   置 cancelFlag + 唤醒挂起的 sleep/offload; 不可取消可传 NULL
+    ///   唤醒并停止任务; 不可取消可传 NULL
     /// - notify: 【出参】宿主填写的完成通知器 (AgentxxPluginOperatorNotify 值
     ///   拷贝); 插件协程结束 (帧销毁后) 经 notify.done 恰好一次上报 → 宿主
     ///   guard.reset + 回收句柄。以 const 指针形式入参无法回填 —— 宿主只能
@@ -721,8 +741,24 @@ typedef int32_t(AGENTXX_PLUGIN_CALL* AgentxxPluginCreateFn)(
 );
 typedef void(AGENTXX_PLUGIN_CALL* AgentxxPluginDestroyFn)(void* plugin_ctx);
 
+/// Optional instance lifecycle hooks. The host invokes start after create and
+/// stop during Closing, both on the plugin IO executor. A NULL hook preserves
+/// the synchronous behavior of existing Reset-v1 plugins.
+typedef void*(AGENTXX_PLUGIN_CALL* AgentxxPluginStartFn)(
+    void*                              plugin_ctx,
+    const AgentxxPluginOperatorNotify* notify,
+    AgentxxPluginString*               error_out
+);
+typedef void*(AGENTXX_PLUGIN_CALL* AgentxxPluginStopFn)(
+    void*                              plugin_ctx,
+    const AgentxxPluginOperatorNotify* notify,
+    AgentxxPluginString*               error_out
+);
+
 #define AGENTXX_PLUGIN_AGENT_SYMBOL_GET_INFO "agentxx_plugin_agent_get_info"
 #define AGENTXX_PLUGIN_AGENT_SYMBOL_CREATE   "agentxx_plugin_agent_create"
+#define AGENTXX_PLUGIN_AGENT_SYMBOL_START    "agentxx_plugin_agent_start"
+#define AGENTXX_PLUGIN_AGENT_SYMBOL_STOP     "agentxx_plugin_agent_stop"
 #define AGENTXX_PLUGIN_AGENT_SYMBOL_DESTROY  "agentxx_plugin_agent_destroy"
 
 /// 内置插件描述 (编译进 libagentxx 的插件; 静态数组, 进程生命周期有效)
@@ -731,6 +767,8 @@ typedef struct AgentxxPluginBuiltinInfo {
     AgentxxPluginGetInfoFn get_info; ///< 可空 (加载前元信息校验, 与 dlsym 可选符号同语义)
     AgentxxPluginCreateFn create; ///< 必需 (实例创建, 与 agentxx_plugin_agent_create 同契约)
     AgentxxPluginDestroyFn destroy; ///< 可空 (实例销毁, 与 agentxx_plugin_agent_destroy 同契约)
+    AgentxxPluginStartFn start; ///< 可空 (create 后的注册/启动事务)
+    AgentxxPluginStopFn stop; ///< 可空 (关闭事务, destroy 前调用)
 } AgentxxPluginBuiltinInfo;
 
 // 与 BuiltinPluginInfo 同步生成于

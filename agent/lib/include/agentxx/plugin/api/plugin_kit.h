@@ -36,6 +36,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <variant>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -213,6 +214,19 @@ public:
         return from(h, &svAbi);
     }
 
+    /// Replace an ABI string and release an existing host allocation first.
+    static void set(
+        const AgentxxPluginHost* h, AgentxxPluginString* out, std::string_view sv
+    ) noexcept {
+        if (!out) {
+            return;
+        }
+        if (out->data) {
+            free(h, out);
+        }
+        *out = from(h, sv);
+    }
+
     /// 从 std::string_view 经宿主 alloc 构造 RAII 对象
     static PluginString create(const AgentxxPluginHost* h, std::string_view sv) {
         return PluginString(h, from(h, sv));
@@ -332,12 +346,26 @@ public:
 
 /// 查询宿主接口表并转型 (原 AGENTXX_PLUGIN_QUERY_IFACE 宏)
 template<typename Iface>
+const Iface* validateInterface(const void* raw) noexcept {
+    if (!raw) {
+        return nullptr;
+    }
+    const auto* iface = static_cast<const Iface*>(raw);
+    // Reset-v1 interface tables all use exact version 1 and expose their
+    // complete byte size. A short or newer-incompatible table is unusable.
+    if (iface->version != 1 || iface->struct_size < sizeof(Iface)) {
+        return nullptr;
+    }
+    return iface;
+}
+
+template<typename Iface>
 const Iface* queryInterface(const AgentxxPluginHost* host, std::string_view iid) noexcept {
     if (!host || !host->vtable || !host->vtable->query_interface || iid.empty()) {
         return nullptr;
     }
     AgentxxPluginStringView sv = PluginStringView::from(iid.data(), iid.size());
-    return static_cast<const Iface*>(host->vtable->query_interface(host, &sv));
+    return validateInterface<Iface>(host->vtable->query_interface(host, &sv));
 }
 
 template<typename Iface>
@@ -346,7 +374,7 @@ const Iface*
     if (!host || !host->vtable || !host->vtable->query_interface || PluginStringView::empty(iid)) {
         return nullptr;
     }
-    return static_cast<const Iface*>(host->vtable->query_interface(host, &iid));
+    return validateInterface<Iface>(host->vtable->query_interface(host, &iid));
 }
 
 template<typename Iface>
@@ -355,7 +383,7 @@ const Iface* queryInterface(const AgentxxPluginHost* host, const char* iid) noex
         return nullptr;
     }
     AgentxxPluginStringView sv = PluginStringView::fromCstr(iid);
-    return static_cast<const Iface*>(host->vtable->query_interface(host, &sv));
+    return validateInterface<Iface>(host->vtable->query_interface(host, &sv));
 }
 
 /* ==================== 接口表聚合 (原 plugin_iface_helper.h 实体, 并入 kit) ==================== */
@@ -1184,6 +1212,11 @@ inline void finishIfDone(std::coroutine_handle<Promise> h) {
         return;
     }
     auto& p = h.promise();
+    // 子 Task 在 final_suspend 已通过 continuation 恢复父协程；父协程的
+    // await_resume 负责读取结果并销毁子帧。这里不能走 root notify/destroy。
+    if (p.continuation_) {
+        return;
+    }
 
     int32_t     status = AGENTXX_PLUGIN_OPERATOR_OK;
     std::string errPayload;
@@ -1243,12 +1276,25 @@ struct PromiseBase {
     std::function<void()>              outstandingCancel_{nullptr};
     std::exception_ptr                 exception_{nullptr};
     std::function<void()>              opCleanup_{nullptr};
+    std::coroutine_handle<>            continuation_{};
 
     std::suspend_always initial_suspend() noexcept {
         return {};
     }
 
-    std::suspend_always final_suspend() noexcept {
+    struct FinalAwaiter {
+        bool await_ready() const noexcept { return false; }
+
+        template<typename Promise>
+        std::coroutine_handle<> await_suspend(std::coroutine_handle<Promise> h) const noexcept {
+            auto continuation = h.promise().continuation_;
+            return continuation ? continuation : std::noop_coroutine();
+        }
+
+        void await_resume() const noexcept {}
+    };
+
+    FinalAwaiter final_suspend() noexcept {
         return {};
     }
 
@@ -1335,6 +1381,36 @@ struct Task {
 
     Task(const Task&)            = delete;
     Task& operator=(const Task&) = delete;
+
+    struct Awaiter {
+        std::coroutine_handle<promise_type> handle;
+
+        bool await_ready() const noexcept { return !handle || handle.done(); }
+
+        std::coroutine_handle<> await_suspend(std::coroutine_handle<> parent) {
+            handle.promise().continuation_ = parent;
+            return handle;
+        }
+
+        T await_resume() {
+            auto h = std::exchange(handle, {});
+            if (!h) {
+                return T{};
+            }
+            if (h.promise().has_exception()) {
+                auto exception = h.promise().exception();
+                h.destroy();
+                std::rethrow_exception(exception);
+            }
+            T result = std::move(h.promise().result());
+            h.destroy();
+            return result;
+        }
+    };
+
+    Awaiter operator co_await() && noexcept {
+        return Awaiter{std::exchange(handle_, {})};
+    }
 };
 
 template<>
@@ -1373,6 +1449,33 @@ struct Task<void> {
 
     Task(const Task&)            = delete;
     Task& operator=(const Task&) = delete;
+
+    struct Awaiter {
+        std::coroutine_handle<promise_type> handle;
+
+        bool await_ready() const noexcept { return !handle || handle.done(); }
+
+        std::coroutine_handle<> await_suspend(std::coroutine_handle<> parent) {
+            handle.promise().continuation_ = parent;
+            return handle;
+        }
+
+        void await_resume() {
+            auto h = std::exchange(handle, {});
+            if (h && h.promise().has_exception()) {
+                auto exception = h.promise().exception();
+                h.destroy();
+                std::rethrow_exception(exception);
+            }
+            if (h) {
+                h.destroy();
+            }
+        }
+    };
+
+    Awaiter operator co_await() && noexcept {
+        return Awaiter{std::exchange(handle_, {})};
+    }
 };
 
 /* ==================== 插件实例上下文基类 ==================== */
@@ -1709,22 +1812,41 @@ struct SleepAwaiter {
     const AgentxxPluginHost*           host;
     const AgentxxPluginSchedulerIface* sched;
     int64_t                            ms;
-    void*                              timer = nullptr;
+    AgentxxPluginOperatorHandle*       operation = nullptr;
+    std::string                        error;
 
-    bool await_ready() const noexcept {
-        return ms <= 0 || !sched || !sched->sleep;
+    bool await_ready() noexcept {
+        if (ms <= 0) {
+            return true;
+        }
+        if (!sched || !sched->sleep) {
+            error = "scheduler sleep is unavailable";
+            return true;
+        }
+        return false;
     }
 
     template<typename Promise>
-    void await_suspend(std::coroutine_handle<Promise> h) {
+    bool await_suspend(std::coroutine_handle<Promise> h) {
         auto& p = h.promise();
-        timer   = sched->sleep(
+        AgentxxPluginString errorOut{};
+        operation = sched->sleep(
             host,
             ms,
-            [](void* ud) {
-                auto  handle = std::coroutine_handle<Promise>::from_address(ud);
+            [](void* ud, int32_t status, const AgentxxPluginStringView* payload) {
+                auto handle = std::coroutine_handle<Promise>::from_address(ud);
                 auto& prom   = handle.promise();
                 prom.clear_outstanding();
+                if (status == AGENTXX_PLUGIN_OPERATOR_CANCELLED) {
+                    prom.set_exception(std::make_exception_ptr(
+                        CancelledException("sleep cancelled")
+                    ));
+                } else if (status == AGENTXX_PLUGIN_OPERATOR_FAILED) {
+                    auto message = PluginStringView::str(payload);
+                    prom.set_exception(std::make_exception_ptr(std::runtime_error(
+                        message.empty() ? "sleep failed" : std::string(message)
+                    )));
+                }
                 try {
                     handle.resume();
                 } catch (...) {
@@ -1732,29 +1854,45 @@ struct SleepAwaiter {
                 }
                 finishIfDone(handle);
             },
-            h.address()
+            h.address(),
+            &errorOut
         );
-        p.set_outstanding([host = this->host, sched = this->sched, timer = this->timer]() {
-            if (sched && sched->cancel_sleep && timer) {
-                sched->cancel_sleep(host, timer);
+        if (!operation) {
+            error = PluginStringView::str(&errorOut);
+            PluginString::free(host, &errorOut);
+            return false;
+        }
+        p.set_outstanding([sched = this->sched, operation = this->operation]() {
+            if (sched && sched->op_cancel && operation) {
+                sched->op_cancel(operation);
             }
         });
+        return true;
     }
 
-    void await_resume() const noexcept {}
+    void await_resume() const {
+        if (!error.empty()) {
+            throw std::runtime_error(error);
+        }
+    }
 };
 
 struct YieldAwaiter {
     const AgentxxPluginHost*           host;
     const AgentxxPluginSchedulerIface* sched;
+    std::string                        error;
 
-    bool await_ready() const noexcept {
-        return !sched || !sched->post_to_io;
+    bool await_ready() noexcept {
+        if (!sched || !sched->post_to_io) {
+            error = "scheduler yield is unavailable";
+            return true;
+        }
+        return false;
     }
 
     template<typename Promise>
-    void await_suspend(std::coroutine_handle<Promise> h) {
-        sched->post_to_io(
+    bool await_suspend(std::coroutine_handle<Promise> h) {
+        auto status = sched->post_to_io(
             host,
             [](void* ud) {
                 auto handle = std::coroutine_handle<Promise>::from_address(ud);
@@ -1767,55 +1905,71 @@ struct YieldAwaiter {
             },
             h.address()
         );
+        if (status != 0) {
+            error = "scheduler yield: failed to post to IO";
+            return false;
+        }
+        return true;
     }
 
-    void await_resume() const noexcept {}
+    void await_resume() const {
+        if (!error.empty()) {
+            throw std::runtime_error(error);
+        }
+    }
 };
 
 template<typename WorkFn>
 struct OffloadAwaiter {
-    using ResultType = std::decay_t<std::invoke_result_t<WorkFn, volatile int32_t*>>;
+    using ResultType = std::decay_t<
+        std::invoke_result_t<WorkFn, const AgentxxPluginCancelToken*>>;
 
     const AgentxxPluginHost*           host;
     const AgentxxPluginSchedulerIface* sched;
     WorkFn                             work;
-    volatile int32_t                   cancelFlag = 0;
     std::exception_ptr                 exPtr      = nullptr;
-    std::optional<ResultType>          result;
+    std::conditional_t<std::is_void_v<ResultType>, std::monostate, std::optional<ResultType>>
+        result;
+    AgentxxPluginOperatorHandle* operation = nullptr;
+    int32_t                      status = AGENTXX_PLUGIN_OPERATOR_OK;
+    std::string                  error;
 
-    bool await_ready() const noexcept {
-        return !sched || !sched->offload;
+    bool await_ready() noexcept {
+        if (!sched || !sched->offload) {
+            error = "scheduler offload is unavailable";
+            return true;
+        }
+        return false;
     }
 
     template<typename Promise>
-    void await_suspend(std::coroutine_handle<Promise> h) {
+    bool await_suspend(std::coroutine_handle<Promise> h) {
         auto& p   = h.promise();
         coroAddr_ = h.address();
-        p.set_outstanding([this]() {
-            this->cancelFlag = 1;
-        });
-
-        sched->offload(
+        AgentxxPluginString errorOut{};
+        operation = sched->offload(
             host,
-            &cancelFlag,
-            [](void* ud, volatile int32_t* cflag, AgentxxPluginString* error_out) -> void* {
+            [](void* ud, const AgentxxPluginCancelToken* token, AgentxxPluginString* error_out)
+                -> void* {
                 auto* self = static_cast<OffloadAwaiter*>(ud);
                 try {
                     if constexpr (std::is_void_v<ResultType>) {
-                        self->work(cflag);
+                        self->work(token);
                     } else {
-                        self->result = self->work(cflag);
+                        self->result = self->work(token);
                     }
+                } catch (const CancelledException&) {
+                    self->exPtr = std::current_exception();
                 } catch (...) {
                     self->exPtr = std::current_exception();
                 }
                 (void)error_out;
                 return nullptr;
             },
-            [](void* ud, void* res, const AgentxxPluginStringView* err) {
-                (void)res;
-                (void)err;
+            [](void* ud, int32_t status, void*, const AgentxxPluginStringView* err) {
                 auto* self   = static_cast<OffloadAwaiter*>(ud);
+                self->status = status;
+                self->error = PluginStringView::str(err);
                 auto  handle = std::coroutine_handle<Promise>::from_address(self->coroAddr_);
                 auto& prom   = handle.promise();
                 prom.clear_outstanding();
@@ -1826,13 +1980,31 @@ struct OffloadAwaiter {
                 }
                 finishIfDone(handle);
             },
-            this
+            this,
+            &errorOut
         );
+        if (!operation) {
+            error = PluginStringView::str(&errorOut);
+            PluginString::free(host, &errorOut);
+            return false;
+        }
+        p.set_outstanding([sched = this->sched, operation = this->operation]() {
+            if (sched && sched->op_cancel && operation) {
+                sched->op_cancel(operation);
+            }
+        });
+        return true;
     }
 
     ResultType await_resume() {
+        if (!error.empty() && status == AGENTXX_PLUGIN_OPERATOR_FAILED) {
+            throw std::runtime_error(error);
+        }
         if (exPtr) {
             std::rethrow_exception(exPtr);
+        }
+        if (status == AGENTXX_PLUGIN_OPERATOR_CANCELLED) {
+            throw CancelledException("offload cancelled");
         }
         if constexpr (!std::is_void_v<ResultType>) {
             return std::move(*result);
@@ -1866,7 +2038,7 @@ inline void resumeCoroutine(const AgentxxPluginHost* host, std::coroutine_handle
             };
 
             auto* d = new ResumeData{handle};
-            ifs.scheduler->post_to_io(
+            const auto status = ifs.scheduler->post_to_io(
                 host,
                 [](void* ud) {
                     auto* d = static_cast<ResumeData*>(ud);
@@ -1880,7 +2052,10 @@ inline void resumeCoroutine(const AgentxxPluginHost* host, std::coroutine_handle
                 },
                 d
             );
-            return;
+            if (status == 0) {
+                return;
+            }
+            delete d;
         }
     }
     try {
@@ -2234,10 +2409,11 @@ inline void spawnTaskImpl(Ctx& ctx, Fn&& fn) {
     std::weak_ptr<PluginBase::SpawnRecord> recWeak = rec;
 
     AgentxxPluginOperatorNotify hostNotify{nullptr, nullptr};
+    AgentxxPluginOperatorHandle* taskHandle = nullptr;
     if (ctx.iface.tasks && ctx.iface.tasks->register_task) {
         AgentxxPluginOperatorNotify  notify{nullptr, nullptr};
         AgentxxPluginString          err{nullptr, 0};
-        AgentxxPluginOperatorHandle* h = ctx.iface.tasks->register_task(
+        taskHandle = ctx.iface.tasks->register_task(
             ctx.host,
             [](void* ud, void*) {
                 auto* r = static_cast<PluginBase::SpawnRecord*>(ud);
@@ -2255,23 +2431,25 @@ inline void spawnTaskImpl(Ctx& ctx, Fn&& fn) {
             &notify,
             &err
         );
-        if (h) {
+        if (taskHandle) {
             hostNotify = notify;
         } else {
             if (err.data) {
                 ctx.log.warn(fmt::format(
-                    "spawn: register_task failed (task runs unmanaged): {}",
+                    "spawn: register_task failed: {}",
                     std::string_view{err.data, static_cast<size_t>(err.size)}
                 ));
                 if (ctx.host) {
                     PluginString::free(ctx.host, &err);
                 }
             } else {
-                ctx.log.warn("spawn: register_task failed (task runs unmanaged)");
+                ctx.log.warn("spawn: register_task failed");
             }
+            return;
         }
     } else {
-        ctx.log.warn("spawn: host has no agentxx.agent.tasks iface (task runs unmanaged)");
+        ctx.log.warn("spawn: host has no agentxx.agent.tasks iface");
+        return;
     }
 
     auto starter = [&ctx, fn, cancelFlag, recWeak, hostNotify]() {
@@ -2306,7 +2484,7 @@ inline void spawnTaskImpl(Ctx& ctx, Fn&& fn) {
     ctx.spawns_.push_back(rec);
     if (ctx.iface.scheduler && ctx.iface.scheduler->post_to_io) {
         auto* raw = rec.get();
-        ctx.iface.scheduler->post_to_io(
+        const auto status = ctx.iface.scheduler->post_to_io(
             ctx.host,
             [](void* ud) {
                 auto* rec = static_cast<PluginBase::SpawnRecord*>(ud);
@@ -2316,6 +2494,13 @@ inline void spawnTaskImpl(Ctx& ctx, Fn&& fn) {
             },
             raw
         );
+        if (status != 0 && hostNotify.done) {
+            auto message = PluginStringView::fromCstr("spawn: failed to post task to IO");
+            hostNotify.done(hostNotify.host_ud, AGENTXX_PLUGIN_OPERATOR_FAILED, &message);
+        }
+    } else if (hostNotify.done) {
+        auto message = PluginStringView::fromCstr("spawn: scheduler unavailable");
+        hostNotify.done(hostNotify.host_ud, AGENTXX_PLUGIN_OPERATOR_FAILED, &message);
     }
 }
 
@@ -2595,10 +2780,10 @@ inline void blocking_tool(
         std::string                 tcid;
         std::string                 workDir;
         std::string                 argsJson;
-        volatile int32_t            cancelFlag = 0;
         std::string                 resultPayload;
         std::string                 errorPayload;
         bool                        isCancelled = false;
+        AgentxxPluginOperatorHandle* offloadHandle = nullptr;
     };
 
     AgentxxPluginToolSpec spec{};
@@ -2627,12 +2812,11 @@ inline void blocking_tool(
         );
         std::string workDirCache;
         std::string argsJsonCache;
-        int32_t     initCancelFlag = 0;
         if (shim && shim->ctx) {
             workDirCache  = shim->ctx->workDir(tidStr);
             argsJsonCache = shim->ctx->argsJson();
             if (!tidStr.empty() && shim->ctx->cancelRegistry.isCancelled(tidStr)) {
-                initCancelFlag = 1;
+                shim->ctx->cancelRegistry.cancel(tidStr);
             }
         }
         auto* job = new Job{
@@ -2649,18 +2833,18 @@ inline void blocking_tool(
             ),
             .workDir       = std::move(workDirCache),
             .argsJson      = std::move(argsJsonCache),
-            .cancelFlag    = initCancelFlag,
             .resultPayload = {},
             .errorPayload  = {},
             .isCancelled   = false
         };
 
+        AgentxxPluginString scheduleError{};
         if (shim && shim->ctx && shim->ctx->iface.scheduler
             && shim->ctx->iface.scheduler->offload) {
-            shim->ctx->iface.scheduler->offload(
+            job->offloadHandle = shim->ctx->iface.scheduler->offload(
                 shim->ctx->host,
-                &job->cancelFlag,
-                [](void* ud, volatile int32_t* cflag, AgentxxPluginString* err_out) -> void* {
+                [](void* ud, const AgentxxPluginCancelToken* token, AgentxxPluginString* err_out)
+                    -> void* {
                     (void)err_out;
                     auto* j = static_cast<Job*>(ud);
                     try {
@@ -2670,16 +2854,16 @@ inline void blocking_tool(
                                           std::string_view,
                                           std::string_view,
                                           std::string_view,
-                                          volatile int32_t*>) {
+                                          const AgentxxPluginCancelToken*>) {
                             j->resultPayload
-                                = j->shim->fn(*j->shim->ctx, j->args, j->tid, j->workDir, cflag);
+                                = j->shim->fn(*j->shim->ctx, j->args, j->tid, j->workDir, token);
                         } else if constexpr (std::is_invocable_v<
                                                  BlockFn,
                                                  Ctx&,
                                                  std::string_view,
                                                  std::string_view,
-                                                 volatile int32_t*>) {
-                            j->resultPayload = j->shim->fn(*j->shim->ctx, j->args, j->tid, cflag);
+                                                 const AgentxxPluginCancelToken*>) {
+                            j->resultPayload = j->shim->fn(*j->shim->ctx, j->args, j->tid, token);
                         } else if constexpr (std::is_invocable_v<
                                                  BlockFn,
                                                  Ctx&,
@@ -2692,13 +2876,13 @@ inline void blocking_tool(
                                                  BlockFn,
                                                  Ctx&,
                                                  std::string_view,
-                                                 volatile int32_t*>) {
-                            j->resultPayload = j->shim->fn(*j->shim->ctx, j->args, cflag);
+                                                 const AgentxxPluginCancelToken*>) {
+                            j->resultPayload = j->shim->fn(*j->shim->ctx, j->args, token);
                         } else if constexpr (std::is_invocable_v<
                                                  BlockFn,
                                                  std::string_view,
-                                                 volatile int32_t*>) {
-                            j->resultPayload = j->shim->fn(j->args, cflag);
+                                                 const AgentxxPluginCancelToken*>) {
+                            j->resultPayload = j->shim->fn(j->args, token);
                         } else if constexpr (std::is_invocable_v<
                                                  BlockFn,
                                                  Ctx&,
@@ -2720,10 +2904,10 @@ inline void blocking_tool(
                     }
                     return nullptr;
                 },
-                [](void* ud, void* res, const AgentxxPluginStringView* err) {
+                [](void* ud, int32_t status, void* res, const AgentxxPluginStringView* err) {
                     (void)res;
                     auto*                   j       = static_cast<Job*>(ud);
-                    int32_t                 st      = AGENTXX_PLUGIN_OPERATOR_OK;
+                    int32_t                 st      = status;
                     AgentxxPluginStringView payload = PluginStringView::from(nullptr, 0);
 
                     if (!PluginStringView::empty(err)) {
@@ -2739,7 +2923,7 @@ inline void blocking_tool(
                             j->errorPayload.data(),
                             j->errorPayload.size()
                         );
-                    } else if (j->isCancelled || j->cancelFlag != 0) {
+                    } else if (st == AGENTXX_PLUGIN_OPERATOR_CANCELLED || j->isCancelled) {
                         st = AGENTXX_PLUGIN_OPERATOR_CANCELLED;
                     } else {
                         st      = AGENTXX_PLUGIN_OPERATOR_OK;
@@ -2752,11 +2936,42 @@ inline void blocking_tool(
                     if (j->notify.done) {
                         j->notify.done(j->notify.host_ud, st, &payload);
                     }
-
+                    // OpCore::onEndpointDone 先在当前调用内线性化
+                    // completionSubmitted_，因此 notify.done 返回后，宿主
+                    // cancel 入口不会再把这个 provider handle 交回插件。
+                    // 这使得 Job 可以在这里直接回收，不依赖第二个异步
+                    // post，也不会留下自引用控制块泄漏。
                     delete j;
                 },
-                job
+                job,
+                &scheduleError
             );
+            if (!job->offloadHandle) {
+                if (scheduleError.data) {
+                    if (error_out) {
+                        *error_out = scheduleError;
+                        scheduleError = {};
+                    } else {
+                        PluginString::free(shim->ctx->host, &scheduleError);
+                    }
+                } else if (error_out) {
+                    *error_out = PluginString::fromCstr(
+                        shim->ctx->host,
+                        "blocking tool: scheduler offload rejected"
+                    );
+                }
+                delete job;
+                return nullptr;
+            }
+        } else {
+            if (error_out && shim && shim->ctx) {
+                *error_out = PluginString::fromCstr(
+                    shim->ctx->host,
+                    "blocking tool: scheduler offload unavailable"
+                );
+            }
+            delete job;
+            return nullptr;
         }
         return job;
     };
@@ -2767,7 +2982,11 @@ inline void blocking_tool(
             return;
         }
         auto* job       = static_cast<Job*>(op);
-        job->cancelFlag = 1;
+        if (job->offloadHandle && job->shim && job->shim->ctx
+            && job->shim->ctx->iface.scheduler
+            && job->shim->ctx->iface.scheduler->op_cancel) {
+            job->shim->ctx->iface.scheduler->op_cancel(job->offloadHandle);
+        }
         if (job->shim && job->shim->ctx && !job->tid.empty()) {
             job->shim->ctx->cancelRegistry.cancel(job->tid);
         }
@@ -3467,6 +3686,46 @@ private:
         auto* ctx = static_cast<CtxType*>(plugin_ctx);                                           \
         if (ctx)                                                                                 \
             delete ctx;                                                                          \
+    }
+
+/// Optional lifecycle export helpers. The setup expression is intentionally
+/// separate from the legacy create macro so existing plugins keep their
+/// create-time registration behavior while new plugins can opt into a
+/// start/stop transaction without hand-writing ABI trampolines.
+#define AGENTXX_PLUGIN_AGENT_LIFECYCLE_EXPORT(CtxType, StartFn, StopFn)                         \
+    extern "C" AGENTXX_PLUGIN_EXPORT void* agentxx_plugin_agent_start(                       \
+        void* plugin_ctx, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString* err  \
+    ) {                                                                                         \
+        auto* ctx = static_cast<CtxType*>(plugin_ctx);                                          \
+        try {                                                                                   \
+            if (!ctx) {                                                                         \
+                if (err) agentxx::plugin::PluginString::set(nullptr, err, "plugin start: null context"); \
+                return nullptr;                                                                \
+            }                                                                                   \
+            return (StartFn)(*ctx, notify, err);                                                \
+        } catch (const std::exception& e) {                                                     \
+            if (err) agentxx::plugin::PluginString::set(ctx ? ctx->host : nullptr, err, e.what()); \
+        } catch (...) {                                                                         \
+            if (err) agentxx::plugin::PluginString::set(ctx ? ctx->host : nullptr, err, "plugin start threw"); \
+        }                                                                                       \
+        return nullptr;                                                                         \
+    }                                                                                           \
+    extern "C" AGENTXX_PLUGIN_EXPORT void* agentxx_plugin_agent_stop(                        \
+        void* plugin_ctx, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString* err  \
+    ) {                                                                                         \
+        auto* ctx = static_cast<CtxType*>(plugin_ctx);                                          \
+        try {                                                                                   \
+            if (!ctx) {                                                                         \
+                if (err) agentxx::plugin::PluginString::set(nullptr, err, "plugin stop: null context"); \
+                return nullptr;                                                                \
+            }                                                                                   \
+            return (StopFn)(*ctx, notify, err);                                                 \
+        } catch (const std::exception& e) {                                                     \
+            if (err) agentxx::plugin::PluginString::set(ctx ? ctx->host : nullptr, err, e.what()); \
+        } catch (...) {                                                                         \
+            if (err) agentxx::plugin::PluginString::set(ctx ? ctx->host : nullptr, err, "plugin stop threw"); \
+        }                                                                                       \
+        return nullptr;                                                                         \
     }
 
 #define AGENTXX_PLUGIN_CLIENT_EXPORT(CtxType, Name, Ver, Desc, ...)                         \

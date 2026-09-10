@@ -39,7 +39,18 @@ struct RuntimeFixture {
         inst->self = inst;
         inst->manager = manager;
         inst->host.opaque = inst.get();
-        inst->lifetime = std::make_shared<InstanceLifetime>(io.get_executor(), inst->name, generation);
+        const std::weak_ptr<PluginRuntime> runtime = manager->runtime();
+        inst->lifetime = std::make_shared<InstanceLifetime>(
+            io.get_executor(),
+            inst->name,
+            generation,
+            [runtime](std::function<void()> fn) {
+                if (auto state = runtime.lock()) {
+                    return enqueueRuntimeAction(state, std::move(fn), true);
+                }
+                return false;
+            }
+        );
         inst->lifetime->setState(PluginInstanceState::Ready);
         manager->plugins_.emplace(inst->name, inst);
         return inst;
@@ -47,7 +58,13 @@ struct RuntimeFixture {
     std::shared_ptr<OpCore> operation() {
         return OpCore::create(manager->runtime(), provider, caller, "runtime regression");
     }
-    void drain() { io.restart(); io.poll(); }
+    void drain() {
+        io.restart();
+        io.poll();
+        // io_context becomes stopped after an empty poll. Keep the fixture's
+        // normal state distinct from an explicit stop used by fault tests.
+        io.restart();
+    }
 };
 
 struct CallbackState {
@@ -90,6 +107,31 @@ AgentxxPluginToolSpec fakeTool(void* ud, bool reject) {
         };
     }
     return spec;
+}
+
+/// 生命周期 hook 探针: 记录 stop/destroy 实际调用次数。
+int gLifecycleStops    = 0;
+int gLifecycleDestroys = 0;
+
+void* AGENTXX_PLUGIN_CALL fakeStopHook(
+    void*, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString*
+) {
+    ++gLifecycleStops;
+    notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+    return nullptr;
+}
+
+void AGENTXX_PLUGIN_CALL fakeDestroyHook(void* ud) {
+    ++*static_cast<int*>(ud);
+}
+
+/// 装配一个“激活且导出 stop”的伪实例: destroy 计数挂在 pluginCtx 上。
+void installLifecycleHooks(PluginInstance& inst, int* destroys) {
+    inst.lifecycleStop   = &fakeStopHook;
+    inst.lifecycleStarted = true;
+    inst.pluginCreated    = true;
+    inst.builtinUnload    = &fakeDestroyHook;
+    inst.pluginCtx        = destroys;
 }
 } // namespace
 
@@ -373,10 +415,16 @@ TestResult testPluginRuntime() {
     {
         RuntimeFixture f;
         int calls = 0;
-        auto callback = +[](void* ud) { ++*static_cast<int*>(ud); };
+        auto callback = +[](void* ud, int32_t, const AgentxxPluginStringView*) {
+            ++*static_cast<int*>(ud);
+        };
+        AgentxxPluginString error{};
         bool allAccepted = true;
         for (int i = 0; i < 1000; ++i) {
-            allAccepted = (f.manager->sleep(f.provider.get(), 0, callback, &calls) != nullptr) && allAccepted;
+            allAccepted = (f.manager->sleep(f.provider.get(), 0, callback, &calls, &error) != nullptr)
+                && allAccepted;
+            hostMemoryFree(error.data);
+            error = {};
         }
         XX_TEST_EXPECT_TRUE(allAccepted);
         XX_TEST_EXPECT_EQ(f.provider->lifetime->leaseCount(), size_t{1000});
@@ -385,9 +433,9 @@ TestResult testPluginRuntime() {
         XX_TEST_EXPECT_EQ(calls, 1000);
         XX_TEST_EXPECT_TRUE(f.provider->sleepTimers.empty());
         XX_TEST_EXPECT_TRUE(f.manager->runtime()->operations.empty());
-        auto* timer = f.manager->sleep(f.provider.get(), 60000, callback, &calls);
-        f.manager->cancelSleep(f.provider.get(), timer);
-        f.manager->cancelSleep(f.provider.get(), timer);
+        auto* timer = f.manager->sleep(f.provider.get(), 60000, callback, &calls, &error);
+        cancelPluginOperation(timer);
+        cancelPluginOperation(timer);
         f.provider->lifetime->requestClose();
         f.drain();
         XX_TEST_EXPECT_EQ(calls, 1001);
@@ -417,16 +465,17 @@ TestResult testPluginRuntime() {
     {
         RuntimeFixture f;
         struct State { int work = 0; int done = 0; std::string error; } state;
-        f.manager->offload(f.provider.get(), nullptr,
-            +[](void* ud, volatile int32_t*, AgentxxPluginString*) -> void* {
+        AgentxxPluginString error{};
+        f.manager->offload(f.provider.get(),
+            +[](void* ud, const AgentxxPluginCancelToken*, AgentxxPluginString*) -> void* {
                 ++static_cast<State*>(ud)->work;
                 return nullptr;
             },
-            +[](void* ud, void*, const AgentxxPluginStringView* error) {
+            +[](void* ud, int32_t, void*, const AgentxxPluginStringView* error) {
                 auto& state = *static_cast<State*>(ud);
                 ++state.done;
                 state.error = svToStr(error);
-            }, &state);
+            }, &state, &error);
         XX_TEST_EXPECT_EQ(state.done, 0);
         f.drain();
         XX_TEST_EXPECT_EQ(state.work, 0);
@@ -435,28 +484,124 @@ TestResult testPluginRuntime() {
         XX_TEST_EXPECT_TRUE(f.manager->runtime()->operations.empty());
     }
 
+    /// executor 停止期间完成包必须保留，恢复并重新绑定 executor 后只提交一次。
+    {
+        RuntimeFixture f;
+        CallbackState cb{.fixture = &f};
+        auto op = f.operation();
+        op->accept();
+        op->setCallback(CallbackState::done, &cb);
+        auto notify = op->notify();
+
+        f.io.stop();
+        std::thread worker([notify] {
+            auto payload = std::string{"completion after restart"};
+            auto view = strToSv(payload);
+            notify.done(notify.host_ud, AGENTXX_PLUGIN_OPERATOR_OK, &view);
+        });
+        worker.join();
+        XX_TEST_EXPECT_FALSE(op->completed());
+        XX_TEST_EXPECT_EQ(cb.calls, 0);
+
+        f.io.restart();
+        f.manager->setIoExecutor(f.io.get_executor());
+        f.drain();
+        XX_TEST_EXPECT_TRUE(op->completed());
+        XX_TEST_EXPECT_EQ(cb.calls, 1);
+        XX_TEST_EXPECT_EQ(cb.status, AGENTXX_PLUGIN_OPERATOR_OK);
+        XX_TEST_EXPECT_EQ(cb.payload, "completion after restart");
+        XX_TEST_EXPECT_TRUE(f.manager->runtime()->operations.empty());
+    }
+
+    /// executor 停止期间的取消请求不能丢失；恢复后取消和同步 done 仍 exactly-once。
+    {
+        RuntimeFixture f;
+        CallbackState cb{.fixture = &f};
+        auto op = f.operation();
+        auto notify = op->notify();
+        int cancels = 0;
+        op->accept([&] {
+            ++cancels;
+            notify.done(notify.host_ud, AGENTXX_PLUGIN_OPERATOR_CANCELLED, nullptr);
+        });
+        op->setCallback(CallbackState::done, &cb);
+
+        f.io.stop();
+        cancelPluginOperation(op->handle());
+        XX_TEST_EXPECT_EQ(cancels, 0);
+        XX_TEST_EXPECT_FALSE(op->completed());
+
+        f.io.restart();
+        f.manager->setIoExecutor(f.io.get_executor());
+        f.drain();
+        XX_TEST_EXPECT_EQ(cancels, 1);
+        XX_TEST_EXPECT_TRUE(op->completed());
+        XX_TEST_EXPECT_EQ(cb.calls, 1);
+        XX_TEST_EXPECT_EQ(cb.status, AGENTXX_PLUGIN_OPERATOR_CANCELLED);
+        XX_TEST_EXPECT_TRUE(f.manager->runtime()->operations.empty());
+    }
+
+    /// 最后一个 lease 在 executor 停止期间释放时，idle cleanup 也必须在恢复后执行一次。
+    {
+        RuntimeFixture f;
+        auto lease = InstanceLease::acquire(f.provider->lifetime);
+        XX_TEST_EXPECT_TRUE(static_cast<bool>(lease));
+        f.provider->lifetime->requestClose();
+        bool cleaned = false;
+        XX_TEST_EXPECT_TRUE(f.provider->lifetime->setIdleCleanup([&] { cleaned = true; }));
+
+        f.io.stop();
+        lease.reset();
+        XX_TEST_EXPECT_FALSE(cleaned);
+        f.io.restart();
+        f.manager->setIoExecutor(f.io.get_executor());
+        f.drain();
+        XX_TEST_EXPECT_TRUE(cleaned);
+        XX_TEST_EXPECT_EQ(f.provider->lifetime->leaseCount(), size_t{0});
+    }
+
+    /// executor 已停止时，跨线程同步 ABI 调用必须快速失败，不能永久等待 future。
+    {
+        RuntimeFixture f;
+        f.io.stop();
+        std::promise<bool> returned;
+        std::thread worker([&] {
+            try {
+                (void)ioCallSync<int>(&*f.manager, [] { return 7; });
+                returned.set_value(false);
+            } catch (const std::exception&) {
+                returned.set_value(true);
+            } catch (...) {
+                returned.set_value(true);
+            }
+        });
+        worker.join();
+        XX_TEST_EXPECT_TRUE(returned.get_future().get());
+    }
+
     /// 真实 worker 由事件释放；Closing 期间不能提前 idle，done 在 IO 调用。
     {
         auto ctx = std::make_shared<agentxx::agent::AgentContext>();
         RuntimeFixture f(ctx);
+        AgentxxPluginString error{};
         struct State {
             std::promise<void> started, release;
             bool done = false, protectedDuringCallback = false, onIo = false;
             RuntimeFixture* fixture;
         } state{.fixture = &f};
-        f.manager->offload(f.provider.get(), nullptr,
-            +[](void* ud, volatile int32_t*, AgentxxPluginString*) -> void* {
+        f.manager->offload(f.provider.get(),
+            +[](void* ud, const AgentxxPluginCancelToken*, AgentxxPluginString*) -> void* {
                 auto& state = *static_cast<State*>(ud);
                 state.started.set_value();
                 state.release.get_future().wait();
                 return ud;
             },
-            +[](void* ud, void* value, const AgentxxPluginStringView*) {
+            +[](void* ud, int32_t status, void* value, const AgentxxPluginStringView*) {
                 auto& state = *static_cast<State*>(ud);
-                state.done = value == ud;
+                state.done = status == AGENTXX_PLUGIN_OPERATOR_OK && value == ud;
                 state.onIo = state.fixture->manager->isIoThread();
                 state.protectedDuringCallback = state.fixture->provider->lifetime->leaseCount() == 1;
-            }, &state);
+            }, &state, &error);
         state.started.get_future().wait();
         f.provider->lifetime->requestClose();
         XX_TEST_EXPECT_EQ(f.provider->lifetime->leaseCount(), size_t{1});
@@ -466,6 +611,78 @@ TestResult testPluginRuntime() {
         XX_TEST_EXPECT_TRUE(state.done && state.onIo && state.protectedDuringCallback);
         XX_TEST_EXPECT_TRUE(f.manager->runtime()->operations.empty());
         XX_TEST_EXPECT_EQ(f.provider->lifetime->leaseCount(), size_t{0});
+    }
+
+    /// stop 事务未完成时, 同步 shutdownAll 不得 destroy/dlclose: 实例、上下文与
+    /// 动态库全部保留, 状态标记 CloseFailed, 交由仍在运行的 owner 收尾。
+    {
+        RuntimeFixture f;
+        gLifecycleStops    = 0;
+        gLifecycleDestroys = 0;
+        installLifecycleHooks(*f.provider, &gLifecycleDestroys);
+        auto lease = InstanceLease::acquire(f.provider->lifetime);
+        XX_TEST_EXPECT_TRUE(static_cast<bool>(lease));
+
+        f.manager->shutdownAll();
+        XX_TEST_EXPECT_EQ(gLifecycleStops, 0);
+        XX_TEST_EXPECT_EQ(gLifecycleDestroys, 0);
+        XX_TEST_EXPECT_EQ(f.provider->lifetime->state(), PluginInstanceState::CloseFailed);
+        XX_TEST_EXPECT_TRUE(f.manager->find("provider") != nullptr);
+        XX_TEST_EXPECT_TRUE(f.manager->hasPendingClose());
+
+        // 最后一个 lease 释放 (含 idle 通知) 之后仍然不许 destroy。
+        lease.reset();
+        f.drain();
+        XX_TEST_EXPECT_EQ(gLifecycleDestroys, 0);
+        XX_TEST_EXPECT_TRUE(f.manager->find("provider") != nullptr);
+    }
+
+    /// shutdownAsync 是唯一能推进 stop 的 owner 路径: stop 恰好一次, 随后 destroy
+    /// 恰好一次, 实例与动态库收尾后从表中移除。
+    {
+        RuntimeFixture f;
+        gLifecycleStops    = 0;
+        gLifecycleDestroys = 0;
+        installLifecycleHooks(*f.provider, &gLifecycleDestroys);
+
+        auto closed = asio::co_spawn(
+            f.io, f.manager->shutdownAsync(std::chrono::seconds{5}), asio::use_future
+        );
+        f.io.run();
+        XX_TEST_EXPECT_TRUE(closed.get());
+        XX_TEST_EXPECT_EQ(gLifecycleStops, 1);
+        XX_TEST_EXPECT_EQ(gLifecycleDestroys, 1);
+        XX_TEST_EXPECT_EQ(f.provider->lifetime->state(), PluginInstanceState::Closed);
+        XX_TEST_EXPECT_TRUE(f.manager->find("provider") == nullptr);
+        XX_TEST_EXPECT_FALSE(f.manager->hasPendingClose());
+    }
+
+    /// 无 stop 导出的 legacy 插件仍走同步关闭 (新守卫不能变成无条件泄漏)。
+    {
+        RuntimeFixture f;
+        gLifecycleDestroys = 0;
+        f.provider->pluginCreated = true;
+        f.provider->builtinUnload = &fakeDestroyHook;
+        f.provider->pluginCtx     = &gLifecycleDestroys;
+
+        f.manager->shutdownAll();
+        XX_TEST_EXPECT_EQ(gLifecycleDestroys, 1);
+        XX_TEST_EXPECT_TRUE(f.manager->find("provider") == nullptr);
+        XX_TEST_EXPECT_FALSE(f.manager->hasPendingClose());
+    }
+
+    /// 析构兜底: stop 从未执行时绝不调用插件 destroy。
+    {
+        gLifecycleDestroys = 0;
+        auto inst          = std::make_shared<PluginInstance>("dtor_pending_stop");
+        inst->lifecycleStop    = &fakeStopHook;
+        inst->lifecycleStarted = true;
+        inst->pluginCreated    = true;
+        inst->builtinUnload    = &fakeDestroyHook;
+        inst->pluginCtx        = &gLifecycleDestroys;
+        XX_TEST_EXPECT_TRUE(inst->lifecycleStopPending());
+        inst.reset();
+        XX_TEST_EXPECT_EQ(gLifecycleDestroys, 0);
     }
     return result;
 }

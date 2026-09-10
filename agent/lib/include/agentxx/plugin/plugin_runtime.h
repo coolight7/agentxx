@@ -5,16 +5,21 @@
 #include "agentxx/util/log.h"
 #include "asio/as_tuple.hpp"
 #include "asio/awaitable.hpp"
+#include "asio/execution.hpp"
+#include "asio/io_context.hpp"
 #include "asio/post.hpp"
 #include "asio/steady_timer.hpp"
 #include "asio/use_awaitable.hpp"
 
+#include <algorithm>
 #include <atomic>
 #include <cassert>
 #include <chrono>
+#include <deque>
 #include <functional>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <utility>
@@ -23,6 +28,23 @@
 namespace agentxx::plugin {
 
 using RuntimeErrorCode = util::AsioErrorCode;
+
+struct PluginRuntime;
+
+/// A runtime-owned action may be observed by both an old executor queue and a
+/// replay on a newly attached executor. The claim bit makes that race
+/// exactly-once without requiring cancellation of an already posted handler.
+struct RuntimeAction {
+    std::atomic<bool> claimed{false};
+    std::function<void()> fn;
+};
+
+bool enqueueRuntimeAction(
+    const std::shared_ptr<PluginRuntime>& runtime,
+    std::function<void()> fn,
+    bool retainWhenStopped
+) noexcept;
+void replayRuntimeActions(const std::shared_ptr<PluginRuntime>& runtime) noexcept;
 
 enum class PluginInstanceState : uint32_t {
     Loading,
@@ -51,8 +73,21 @@ inline const char* pluginInstanceStateName(PluginInstanceState state) noexcept {
 /// - 最后一个 lease 释放后向 IO 线程投递一次通知，唤醒全部 idle 等待者。
 class InstanceLifetime : public std::enable_shared_from_this<InstanceLifetime> {
 public:
+    using ActionEnqueuer = std::function<bool(std::function<void()>)>;
+
     InstanceLifetime(asio::any_io_executor executor, std::string name, uint64_t generation) :
         executor_(std::move(executor)), name_(std::move(name)), generation_(generation) {}
+
+    InstanceLifetime(
+        asio::any_io_executor executor,
+        std::string           name,
+        uint64_t              generation,
+        ActionEnqueuer        enqueue
+    ) :
+        executor_(std::move(executor)),
+        name_(std::move(name)),
+        generation_(generation),
+        enqueue_(std::move(enqueue)) {}
 
     InstanceLifetime(const InstanceLifetime&) = delete;
     InstanceLifetime& operator=(const InstanceLifetime&) = delete;
@@ -92,7 +127,23 @@ public:
     /// 已经开始关闭但自身 owner 即将析构的场景；动作执行前会从 lifetime
     /// 中取出，避免 lifetime 与插件实例形成永久循环引用。
     bool setIdleCleanup(std::function<void()> cleanup) {
-        if (!cleanup || idleCleanup_) {
+        if (!cleanup || idleCleanup_ || idleCleanupRegistered_) {
+            return false;
+        }
+        idleCleanupRegistered_ = true;
+        // 关闭请求与最后一个 lease 释放在同一 IO 线程串行时通常不会走到这里，
+        // 但保留这个分支可处理调用方观察到 idle 后才登记收尾的边界。
+        if (leaseCount() == 0) {
+            idleCleanup_ = std::move(cleanup);
+            const auto weakSelf = weak_from_this();
+            if (enqueueAction([weakSelf] {
+                    if (auto self = weakSelf.lock()) {
+                        self->publishIdle();
+                    }
+                })) {
+                return true;
+            }
+            XX_LOGE("Plugin `{}` failed to publish idle cleanup", name_);
             return false;
         }
         idleCleanup_ = std::move(cleanup);
@@ -100,7 +151,10 @@ public:
     }
 
     /// 仅供测试/直接收尾路径取消尚未执行的 idle 动作。
-    void clearIdleCleanup() noexcept { idleCleanup_ = {}; }
+    void clearIdleCleanup() noexcept {
+        idleCleanup_ = {};
+        idleCleanupRegistered_ = false;
+    }
 
     /// `lifecycle`: 仅 IO 线程用于宿主显式 start/stop 调用；不得供新业务操作使用。
     bool tryAcquire(bool lifecycle = false) noexcept {
@@ -120,33 +174,14 @@ public:
         const auto previous = leases_.fetch_sub(1, std::memory_order_acq_rel);
         assert((previous & kCountMask) != 0);
         if ((previous & kCountMask) == 1) {
-            try {
-                asio::post(executor_, [self = shared_from_this()] {
-                    if (self->leaseCount() != 0) {
-                        return;
+            const auto weakSelf = weak_from_this();
+            if (!enqueueAction([weakSelf] {
+                    if (auto self = weakSelf.lock()) {
+                        self->publishIdle();
                     }
-                    auto waiters = std::move(self->idleWaiters_);
-                    self->idleWaiters_.clear();
-                    for (const auto& weak : waiters) {
-                        if (auto waiter = weak.lock()) {
-                            waiter->idle = true;
-                            waiter->timer.cancel();
-                        }
-                    }
-                    auto cleanup = std::move(self->idleCleanup_);
-                    self->idleCleanup_ = {};
-                    if (cleanup) {
-                        try {
-                            cleanup();
-                        } catch (const std::exception& e) {
-                            XX_LOGE("Plugin `{}` idle cleanup threw: {}", self->name_, e.what());
-                        } catch (...) {
-                            XX_LOGE("Plugin `{}` idle cleanup threw unknown exception", self->name_);
-                        }
-                    }
-                });
-            } catch (...) {
-                // 不从释放 lease 的 worker 线程调用任何插件代码。
+                })) {
+                // 不从释放 lease 的 worker 线程调用任何插件代码。若 executor
+                // 停止，runtime action 会保留闭包并在恢复时重放。
                 XX_LOGE("Plugin `{}` failed to publish idle event", name_);
             }
         }
@@ -181,6 +216,56 @@ private:
     };
     static constexpr uint64_t kNoAdmission = uint64_t{1} << 63;
     static constexpr uint64_t kCountMask = kNoAdmission - 1;
+
+    bool enqueueAction(std::function<void()> fn) noexcept {
+        if (enqueue_) {
+            return enqueue_(std::move(fn));
+        }
+        try {
+            if (!executor_) {
+                return false;
+            }
+            asio::post(executor_, [fn = std::move(fn)]() mutable {
+                try {
+                    fn();
+                } catch (const std::exception& e) {
+                    XX_LOGE("Plugin idle action threw: {}", e.what());
+                } catch (...) {
+                    XX_LOGE("Plugin idle action threw unknown exception");
+                }
+            });
+            return true;
+        } catch (...) {
+            return false;
+        }
+    }
+
+    bool publishIdle() noexcept {
+        if (leaseCount() != 0) {
+            return true;
+        }
+        auto waiters = std::move(idleWaiters_);
+        idleWaiters_.clear();
+        for (const auto& weak : waiters) {
+            if (auto waiter = weak.lock()) {
+                waiter->idle = true;
+                waiter->timer.cancel();
+            }
+        }
+        auto cleanup = std::move(idleCleanup_);
+        idleCleanup_ = {};
+        if (cleanup) {
+            try {
+                cleanup();
+            } catch (const std::exception& e) {
+                XX_LOGE("Plugin `{}` idle cleanup threw: {}", name_, e.what());
+            } catch (...) {
+                XX_LOGE("Plugin `{}` idle cleanup threw unknown exception", name_);
+            }
+        }
+        return true;
+    }
+
     asio::any_io_executor executor_;
     std::string name_;
     uint64_t generation_;
@@ -188,6 +273,8 @@ private:
     std::atomic<uint64_t> leases_{0};
     std::vector<std::weak_ptr<IdleWaiter>> idleWaiters_;
     std::function<void()> idleCleanup_;
+    ActionEnqueuer enqueue_;
+    bool idleCleanupRegistered_ = false;
 };
 
 class InstanceLease {
@@ -227,9 +314,125 @@ struct OpCore;
 struct PluginRuntime {
     asio::any_io_executor executor;
     std::atomic<std::thread::id> ioThreadId{};
+    /// 正常路径只在 IO 线程访问；executor 停止后，完成线程仍可能需要
+    /// 收束一个已接受 Operation，因此为这条故障路径提供最小互斥保护。
+    mutable std::mutex operationsMutex;
     std::map<uint64_t, std::shared_ptr<OpCore>> operations;
+    mutable std::mutex pendingMutex;
+    std::deque<std::shared_ptr<RuntimeAction>> pendingActions;
     uint64_t nextOperationId = 1;
     uint64_t nextGeneration = 1;
 };
+
+inline bool runtimeExecutorStopped(const asio::any_io_executor& executor) noexcept {
+    if (!executor) {
+        return true;
+    }
+    try {
+        // A direct io_context executor is the runtime's supported binding.
+        // Type-erased execution_context is not polymorphic, so do not use
+        // RTTI here. Unknown executor adapters remain usable; their owner is
+        // responsible for rebinding before a synchronous call is made.
+        if (const auto* ioExecutor = executor.target<asio::io_context::executor_type>()) {
+            return ioExecutor->context().stopped();
+        }
+    } catch (...) {
+        return true;
+    }
+    return false;
+}
+
+inline void runRuntimeAction(
+    const std::weak_ptr<PluginRuntime>&    weakRuntime,
+    const std::shared_ptr<RuntimeAction>&  action
+) noexcept {
+    if (!action || action->claimed.exchange(true, std::memory_order_acq_rel)) {
+        return;
+    }
+    if (auto runtime = weakRuntime.lock()) {
+        std::lock_guard lock(runtime->pendingMutex);
+        std::erase(runtime->pendingActions, action);
+    }
+    try {
+        if (action->fn) {
+            action->fn();
+        }
+    } catch (const std::exception& e) {
+        XX_LOGE("Plugin runtime action threw: {}", e.what());
+    } catch (...) {
+        XX_LOGE("Plugin runtime action threw unknown exception");
+    }
+}
+
+inline bool enqueueRuntimeAction(
+    const std::shared_ptr<PluginRuntime>& runtime,
+    std::function<void()> fn,
+    bool retainWhenStopped
+) noexcept {
+    if (!runtime || !fn) {
+        return false;
+    }
+    auto action = std::make_shared<RuntimeAction>();
+    action->fn = std::move(fn);
+    auto executor = runtime->executor;
+    if (!executor) {
+        if (!retainWhenStopped) {
+            return false;
+        }
+        std::lock_guard lock(runtime->pendingMutex);
+        runtime->pendingActions.push_back(action);
+        return true;
+    }
+    if (!retainWhenStopped && runtimeExecutorStopped(executor)) {
+        return false;
+    }
+    // Register reliable actions before posting. An io_context can transition
+    // to stopped between the probe and asio::post (and a naturally idle
+    // context also reports stopped); the posted handler and this pending
+    // record then race safely through RuntimeAction::claimed.
+    if (retainWhenStopped) {
+        std::lock_guard lock(runtime->pendingMutex);
+        runtime->pendingActions.push_back(action);
+    }
+    try {
+        const std::weak_ptr<PluginRuntime> weakRuntime = runtime;
+        asio::post(executor, [weakRuntime, action] { runRuntimeAction(weakRuntime, action); });
+        return true;
+    } catch (...) {
+        if (retainWhenStopped) {
+            std::lock_guard lock(runtime->pendingMutex);
+            if (std::find(runtime->pendingActions.begin(), runtime->pendingActions.end(), action)
+                == runtime->pendingActions.end()) {
+                runtime->pendingActions.push_back(std::move(action));
+            }
+            return true;
+        }
+        return false;
+    }
+}
+
+inline void replayRuntimeActions(const std::shared_ptr<PluginRuntime>& runtime) noexcept {
+    if (!runtime || !runtime->executor || runtimeExecutorStopped(runtime->executor)) {
+        return;
+    }
+    std::vector<std::shared_ptr<RuntimeAction>> pending;
+    {
+        std::lock_guard lock(runtime->pendingMutex);
+        pending.reserve(runtime->pendingActions.size());
+        for (const auto& action : runtime->pendingActions) {
+            if (action && !action->claimed.load(std::memory_order_acquire)) {
+                pending.push_back(action);
+            }
+        }
+    }
+    for (const auto& action : pending) {
+        try {
+            const std::weak_ptr<PluginRuntime> weakRuntime = runtime;
+            asio::post(runtime->executor, [weakRuntime, action] {
+                runRuntimeAction(weakRuntime, action);
+            });
+        } catch (...) { /* retain the action for the next executor binding */ }
+    }
+}
 
 } // namespace agentxx::plugin

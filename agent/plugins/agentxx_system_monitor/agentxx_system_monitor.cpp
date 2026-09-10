@@ -177,14 +177,13 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
                     }
                     c->iface.scheduler->offload(
                         c->host,
-                        nullptr,
-                        [](void* ud, volatile int32_t*, AgentxxPluginString*) -> void* {
+                        [](void* ud, const AgentxxPluginCancelToken*, AgentxxPluginString*) -> void* {
                             auto* c = static_cast<SysMonCtx*>(ud);
                             return new CpuGpuUsage(c->querySync());
                         },
-                        [](void* ud, void* res, const AgentxxPluginStringView*) {
+                        [](void* ud, int32_t status, void* res, const AgentxxPluginStringView*) {
                             auto* c = static_cast<SysMonCtx*>(ud);
-                            if (res && c && c->host && c->iface.events
+                            if (status == AGENTXX_PLUGIN_OPERATOR_OK && res && c && c->host && c->iface.events
                                 && c->iface.events->publish) {
                                 auto*       u    = static_cast<CpuGpuUsage*>(res);
                                 std::string json = usageToJson(*u);
@@ -193,9 +192,12 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
                                 auto jsonSv = PluginStringView::from(json.data(), json.size());
                                 c->iface.events->publish(c->host, &topicSv, &jsonSv);
                                 delete u;
+                            } else {
+                                delete static_cast<CpuGpuUsage*>(res);
                             }
                         },
-                        c
+                        c,
+                        nullptr
                     );
                 },
                 &ctx
@@ -206,7 +208,7 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
         ctx.spawn([](SysMonCtx& c, OpCtl ctl) -> Task<void> {
             while (!ctl.cancelled()) {
                 if (c.usageEnabled.load(std::memory_order_relaxed)) {
-                    auto usage = co_await offload(c, [&](volatile int*) {
+                    auto usage = co_await offload(c, [&](const AgentxxPluginCancelToken*) {
                         return c.querySync();
                     });
                     if (ctl.cancelled()) {

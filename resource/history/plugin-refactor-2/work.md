@@ -1,407 +1,338 @@
-# 插件框架重构交接摘要
+# 插件框架 Reset-v1 重构交接摘要（进度 / 提交边界 / 验证事实）
 
-> 本文件是当前工作树的事实交接记录，供下一 session 继续实施。
-> 最终设计事实来源仍为 `resource/history/plugin-refactor-2/plugin.md`。
-> Reset-v1 尚未完成，本文件中“已实现”只表示代码中已经存在，不能等同于最终方案验收通过。
+> 事实来源：设计定稿是 `resource/history/plugin-refactor-2/plugin.md`（Reset-v1 方案、R0-R6 阶段、F/P 问题编号、测试矩阵）。本文件只记录进度、提交边界、验证结果和待办；与 plugin.md 冲突时以 plugin.md 为准。
+>
+> 本文件更新时间：2026-09-11。**状态：Reset-v1 未完成。** 当前仓库 = 两个重构提交（`3a4497ba`、`f861bcf9`）+ 一份较大的未提交工作树增量。提交与未提交内容的分工见第 3、4 节；已完成/待完成对照见第 5、6 节。
 
-## 1. 当前结论
+---
 
-- 任务仍处于 **R1 Runtime / Operation 部分实现** 阶段，R2-R6 尚未完成。
-- 在本 session 开始前，Linux Debug 构建成功，插件专项回归为 **829 passed / 0 failed**。
-- 本 session 后又修改了生命周期、完成端点和析构相关代码；这些修改尚未通过构建和测试。
-- 当前最后一次构建失败，失败原因是 `agent/lib/include/agentxx/plugin/op_driver.h` 中 `OpCore::wait()` 被放在 `private` 区域，而 `awaitPluginOp()` 仍从类外调用它。
-- 因此，当前工作树不能宣称“已构建通过”或“测试通过”。下一 session 必须先恢复编译，再验证本 session 的新增修改。
-- 没有创建本阶段提交。
+## 0. 新会话执行须知
 
-## 2. 工作树保护规则
-
-下一 session 开始先执行：
+### 0.1 第一步：确认状态
 
 ```bash
 cd /home/coolight/program/agentxx
 git status --short --branch
-git diff --check
+git log --oneline -6
 git diff --stat
 git diff --cached --stat
+git diff --check
 ```
 
-必须保留、不得覆盖或回退的用户/无关修改：
+阅读顺序：
 
-```text
-TODOS.md
-agentxx-config.yaml
-resource/history/plugin-refactor-2/index.md
-```
+1. `plugin.md`（方案、R1-R6 验收标准、第 11 节测试矩阵）
+2. 本文件第 1 节（总览）、第 4 节（未提交增量）、第 5 节（已完成）、第 6 节（待完成）、第 9 节（下一步）
+3. `git show 3a4497ba`、`git show f861bcf9`；未提交增量用 `git diff`（当前 `git diff --cached` 为空）
 
-当前工作树同时存在 staged 和 unstaged 修改。不要使用 `git reset --hard`、`git checkout --` 或清空整个 build 目录。下一 session 需要分别阅读 `git diff --cached` 与 `git diff`，确认哪些是前一 session 的重构内容、哪些是本 session 的未验证增量。
+### 0.2 工作树保护规则（不得违反）
 
-当前主要重构文件包括：
+- 禁止 `git reset --hard`、`git checkout --`、清空 build 目录或批量删除测试。
+- 当前未提交增量是继续中的重构成果，不是脏数据；不要为了“干净”而丢弃。
+- 用户相关文件：`TODOS.md` 仍是未提交的用户修改（不要顺手提交或回退）；`agentxx-config.yaml`、`resource/history/plugin-refactor-2/index.md` 已随 `3a4497ba` 入库。
+- 提交时只包含本任务相关文件，不要把 `TODOS.md` 等用户改动一起提交。
 
-```text
-agent/lib/include/agentxx/plugin/op_driver.h
-agent/lib/include/agentxx/plugin/plugin_common.h
-agent/lib/include/agentxx/plugin/plugin_manager.h
-agent/lib/include/agentxx/plugin/plugin_manager_base.h
-agent/lib/include/agentxx/plugin/plugin_runtime.h
-agent/lib/include/agentxx/plugin/client_plugin_manager.h
-agent/lib/src/plugins/plugin_manager_adapters.cpp
-agent/lib/src/plugins/plugin_manager_capability.cpp
-agent/lib/src/plugins/plugin_manager_lifecycle.cpp
-agent/lib/src/plugins/plugin_manager_scheduler.cpp
-agent/lib/src/plugins/plugin_manager_tasks.cpp
-agent/lib/src/plugins/plugin_manager_vtable.cpp
-agent/lib/src/plugins/client_plugin_manager.cpp
-agent/test/plugin/test_plugin_runtime.cpp
-agent/test/plugin/test_plugin_runtime.h
-agent/test/plugin/test_plugins.cpp
-agent/test/test.cpp
-```
-
-## 3. 可靠的验证记录
-
-### 3.1 已成功验证的中间版本
-
-在本 session 当前这批生命周期/完成端点修改之前，执行过：
+### 0.3 构建与测试基线
 
 ```bash
-cmake --build agent/build/linux-debug -j2
+# 构建（高并行；GCC 16.1 偶发 ICE 时直接重试同一构建目录，不要清空 build）
+cmake --build agent/build/linux-debug --target agentxx_test_repo -j12
+
+# 插件专项
+timeout 600s agent/build/linux-debug/exec/agentxx_test \
+  plugin_runtime plugins plugin_resources plugin_multi_instance client_plugins --fail-fast
+
+# 含 ffi / host / subagent 的扩展回归（ASan + LSan）
+ASAN_OPTIONS=detect_leaks=1:halt_on_error=0 timeout 1500s \
+  agent/build/linux-debug/exec/agentxx_test \
+  ffi_c_api agent_host subagent_tool subagent_bus plugin_runtime plugins \
+  plugin_resources plugin_multi_instance client_plugins agent memgrowth --fail-fast
 ```
 
-构建成功，相关日志：
+当前结果与日志见第 7 节；二进制 `agent/build/linux-debug/exec/agentxx_test` 比最新源码新，构建是最新的。
+
+---
+
+## 1. 状态总览（对照 plugin.md 第 10 节的 R0-R6）
+
+| 阶段 | 状态 | 事实依据 |
+|---|---|---|
+| R0 契约冻结 | 完成 | `plugin.md` 定稿；本文件只做进度记录 |
+| R1 Runtime / Operation | 基本完成，待收尾 | `plugin_runtime.h`/`op_driver.h` 已重写并提交（`3a4497ba`）；未提交增量补齐完成端点、executor 停止重放、`ioCallSync` 快速失败、idle/lease 守卫；仍缺 cancel/done 线性化收敛、完成投递失败路径、故障注入矩阵 |
+| R2 加载事务 / 异步关闭 | 部分完成 | 名称预占、`Loading/Ready/Closing/CloseFailed`、`create/start/stop/destroy`、`shutdownAsync`、owner 顺序、`GraphTypeSlot` 已落地（未提交）；仍缺 Client semantic renderer cache、prompt contribution、enable/disable 事务化、注册事务全覆盖与回滚测试 |
+| R3 ABI v1 / SDK | 大幅推进，未完成 | 接口表 `struct_size` + SDK 严格校验、opaque CancelToken、scheduler v1（删 `pump_io`/`cancel_sleep`/`volatile`）、tasks handle 语义、SDK scheduler/offload 迁移已落地（未提交）；仍缺 SDK `Request` 输入所有权、统一 root adapter、hook `Task<void>` 区分、C17/ABI layout 与正反例编译测试、导出符号检查 |
+| R4 内置插件 / JS / 平台 | 少量迁移 | 4 个内置插件已迁到 CancelToken 新签名；`f861bcf9` 修了平台插件构建；仍缺其余插件迁移、JS 事务/Promise、Windows 平台 gate |
+| R5 Client / 依赖 / prompt | 部分完成 | 事件逐 callback 复查 alive、renderer lease、`blockedByDependencies`、动作派发校验已落地；仍缺语义 renderer cache 与代次、动作代次、prompt 多 owner 合成、enable/disable 事务与依赖恢复测试 |
+| R6 验证 / 文档 / 发布审查 | 未开始 | 未跑全模块/UBSan/TSan/Windows；未做导出符号与 C17 ABI 检查；`docs/zh-cn/design/plugins.md` 未更新 |
+
+结论：不能把当前状态写成“Reset-v1 完成”。下一阶段建议见第 9 节。
+
+---
+
+## 2. 提交边界与工作树状态
 
 ```text
-/tmp/agentxx-reset-v1-next-build.log
+基线（重构前）   a805f9cb  --
+提交 1          3a4497ba  重构插件框架-R1-1 Runtime / Operation 部分实现   (2026-09-09 14:00 +0800)
+提交 2          f861bcf9  重构插件框架-fix-build                          (2026-09-09 18:32 +0800)
+工作树          未提交增量（31 文件，+2676/-585），详见第 4 节
 ```
 
-随后执行：
+当前 `git status`：`TODOS.md` + 重构相关文件为未 staged 修改；`git diff --cached` 为空；无 untracked 文件。
+
+---
+
+## 3. 已提交内容明细
+
+### 3.1 `3a4497ba` 重构插件框架-R1-1 Runtime / Operation 部分实现
+
+21 文件，+2193/-1121。核心是把插件异步执行收敛到统一的 Operation/Lifetime：
+
+- 新增 `agent/lib/include/agentxx/plugin/plugin_runtime.h`：`PluginInstanceState`（Loading/Ready/Disabled/Closing/Closed/CloseFailed）、`InstanceLifetime`（原子 state + admission 位 + lease count + `waitIdleUntil` 事件式等待）、`InstanceLease`、`PluginRuntime`（executor、IO thread id、Operation 表）。
+- 重写 `agent/lib/include/agentxx/plugin/op_driver.h`：`OpCore` 统一 start/done/cancel/句柄回收，provider/caller 双 lease，完成 payload 拥有化后再进 IO 线程发布。
+- `plugin_manager_base.h` / `plugin_common.h`：删除 `ioTasks_` 二级队列与捕获裸 `this` 的投递，`waitInflightZero` 改为 idle 事件等待。
+- `plugin_manager_scheduler.cpp`（post/sleep/offload 接入 OpCore）、`plugin_manager_tasks.cpp`（`register_task` 返回宿主托管 handle + `cancel_task`）、`plugin_manager_capability.cpp`（provider start 在 IO 线程、输入拥有化）、`plugin_manager_adapters.cpp`、`plugin_manager_lifecycle.cpp`（`pluginCreated/pluginDestroyed/destroyDeferred` + lease 守卫）、`plugin_manager_vtable.cpp`、`client_plugin_manager.{h,cpp}` 同步接入。
+- 新测试 `agent/test/plugin/test_plugin_runtime.{h,cpp}`（472 行）并注册到 `agent/test/test.cpp`；`test_plugins.cpp` 两处宿主协程内同步 `engine->run()` 改为 `co_await engine->run_async()`。
+- 同提交还包含既有用户文件改动：`TODOS.md`、`agentxx-config.yaml`、`resource/history/plugin-refactor-2/index.md`，以及本文件的初版（407 行）。
+
+注意：R1-1 之后没有再产生提交；旧文档中“未创建提交”的说法已过期。
+
+### 3.2 `f861bcf9` 重构插件框架-fix-build
+
+8 文件，+100/-23，全部是构建/平台修复，不含框架语义变化：
+
+- `plugin_kit.h`：`util::insertOrAssignHeterogeneous` 替代异构 map 直接下标赋值，并补 include。
+- `util/json.h`：补 `<ostream>`。
+- `agentxx_rag_search/CMakeLists.txt`：补 `html2md` 依赖（含 builtin 传递）。
+- `agentxx_audio_stream.cpp`：`AudioDataSource source_` 改为实例成员，`start` 失败不再记录为运行中。
+- `agentxx_computer_use/ui_control.cpp`、`agentxx_execute_command.cpp`（setup 抽函数）、`agentxx_screen_capture.cpp`：平台入口/编译修复。
+- `agent/test/plugin/test_text_selection_monitor.cpp`：+33 行测试。
+
+---
+
+## 4. 未提交增量明细（按阶段归类）
+
+范围：31 文件，+2676/-585。以下按 plugin.md 的阶段归类，便于继续推进。
+
+### 4.1 R1 收尾（Operation / Runtime 可靠性）
+
+- `plugin_runtime.h`：新增 `RuntimeAction` 待办队列与 `enqueueRuntimeAction()`；executor 停止期间的完成/取消/idle 动作不丢失，executor 重绑后重放；`runtimeExecutorStopped()` 直接识别 `asio::io_context::executor_type`（不能用 `dynamic_cast`，Boost Asio 的 `execution_context` 不是多态类型）。
+- `op_driver.h`：新增 `AgentxxPluginOperationCompletionEndpoint`（宿主 tombstone，迟到 `done` 只丢弃不 UAF）；完成提交 exactly-once；callback 与内部 completion handler 异常隔离；取消请求在 executor 停止时可重放。
+- `plugin_manager_base.h`：`isIoThread()` 在 direct io_context 已停止时返回 false；`ioCallSync()` 在 runtime 不可用时快速失败（不再永久等 future）；新增 `ioExecutor()`、`hasPendingClose()`、`lifecycleStopPending()`。
+- `plugin_manager_vtable.cpp` / `plugin_manager_scheduler.cpp` / `plugin_manager_adapters.cpp`：适配新 scheduler/tasks ABI、填充 `struct_size`、GraphTypeSlot 注册与冲突拒绝。
+- 测试：`agent/test/plugin/test_plugin_runtime.cpp` +249 行（1000 并发完成、done/cancel 竞速、executor 停止重放、exactly-once、`ioCallSync` 快速失败、stop 未完成时禁止 destroy/dlclose、client 侧镜像守卫）。
+
+### 4.2 R2 加载事务 / 关闭 / owner 顺序
+
+- 生命周期入口：`AgentxxPluginStartFn/StopFn`、`agentxx_plugin_agent_start/stop`、`agentxx_plugin_client_start/stop`、内置插件 `start/stop` 字段；`plugin_manager_lifecycle.cpp` 与 `client_plugin_manager.cpp` 在 create 后调 start、Closing 时调 stop；`lifecycleStarted` 语义为“实例已激活”（无 start 导出的 legacy 插件在 Ready 前置位）。
+- 名称预占：`reservePluginName()/releasePluginName()/isPluginNameLoading()`（`plugin_manager_base.h`），重复加载在 Loading 阶段被拒绝。
+- 关闭：`unloadAsyncUntil()` 共享绝对 deadline；agent/client `shutdownAsync()`；失败置 `CloseFailed` 且可重试；同步 `shutdownAll()`/idle cleanup/实例析构在 stop 未完成或 lease 非零时不再 destroy/dlclose（保留 ctx 与 DSO 并报错）。
+- owner 顺序：`BaseAgent::shutdownAsync()`（`base_agent.cpp:1112`，投递到插件管理器自己的 executor）、`AgentContext::shutdownPluginsAsync()` 与析构自检、`AgentHost::destroyAgentAsync()`（`agent_host.cpp:975`，先子后父）与同步 `destroyAgent` 告警、`FfiAgentRuntime::stopInternal()` 在停止 agent ioCtx 前 await 关闭（`ffi_runtime.cpp:540`）、`mode_runners.cpp` 本地 CLI/TUI 退出前 `shutdownAgentPlugins()` + client `shutdownAsync()`。
+- Graph：`GraphTypeSlot` + `PluginGraphNode` 代次校验（`plugin_graph_node.{h,cpp}`），旧节点在卸载/重载后返回“插件已关闭/代次失效”，不调用插件回调。
+- Client：`unloadAsyncUntil`/`shutdownAsync`/renderer lease/`dispatchEvent` 逐 callback 复查。
+
+本轮发现的真实缺陷并已修复：`BaseAgent::shutdownAsync` 原先投递到 `ioCtx`，而宿主持有调用方 executor 直跑的子代理（engine 直跑）其自身 `ioCtx` 从未 `run()`，导致 `agent_host` 模块永久挂起；改为投递 `pluginManager->ioExecutor()` 后 `agent_host` 95/0 通过。
+
+### 4.3 R3 ABI v1 / SDK（推进最多的一块）
+
+- 接口表：全部 `_reserved` 改为 `struct_size`（`plugin_api.h`、`client_plugin_api.h`），宿主 vtable 填充 `sizeof(表)`，SDK 侧严格校验 `version == 1 && struct_size >= sizeof(Iface)`（`plugin_kit.h:356`）；插件 `get_info().api_version` 要求精确相等（agent/client 加载路径）。
+- 取消：新增 opaque `AgentxxPluginCancelToken` + `agentxx_plugin_cancel_is_requested()`；删除 ABI 层的 `volatile int32_t* cancel_flag`。
+- Scheduler v1：`post_to_io` 返回状态、`sleep` 返回 Operation handle、通用 `op_cancel`、`offload` 工作函数接收 CancelToken，删除 `pump_io` / `cancel_sleep`。
+- Tasks：`register_task` 返回宿主托管 handle + `cancel_task`（handle 语义在 `3a4497ba` 已入库）；SDK `spawn` 在无 tasks 表时明确失败，不再 unmanaged 降级。
+- SDK：scheduler/offload/sleep/yield/call/cap 迁移到新 ABI；`OffloadAwaiter` 用 `std::monostate` 支持 `offload<void>`；`Task` 子任务 continuation 已接通。
+
+### 4.4 R4 内置插件 / 平台
+
+- 已迁移到 CancelToken/新 offload 签名：`agentxx_filesystem`、`agentxx_codegraph`、`agentxx_execute_command`、`agentxx_system_monitor`。
+- 平台构建修复已入库（见 3.2 节）；JS 系列、example_*、websearch/rag/planning 等尚未迁移。
+
+### 4.5 R5 Client / 依赖
+
+- `dispatchEvent`：快照后逐 callback 复查 `alive`/`enabled`/lifetime 并持 lease（同轮退订安全）。
+- renderer：`ClientToolRendererLease`（alive + weak instance），UI 路径调用前复查 lease/实例状态。
+- 动作派发：命中绑定前复查插件存在/启用/绑定快照一致。
+- `blockedByDependencies` 字段落地，disable 级联标记、enable 清除。
+
+### 4.6 测试
+
+- `test_plugin_runtime.cpp`：109 → 128（本工作树最新）
+- `test_client_plugins.cpp`：300 → 309
+- 其余模块数量见第 7 节。
+
+---
+
+## 5. 已完成任务对照（plugin.md R1-R6 / F、P 编号）
+
+| 编号 / 条目 | 状态 | 位置 / 证据 |
+|---|---|---|
+| F01 互调 start 拒绝不回调、登记回滚 | 完成 | `op_driver.h` + `test_plugin_runtime` 拒绝用例 |
+| F05 `shutdownAll` 不等待后台任务 | 结构层完成 | `InstanceLifetime` lease + idle 事件 + `shutdownAsync`；专项“shutdown 中后台 Task 挂起”测试仍缺 |
+| F06 互调 start 在 IO 线程 | 完成 | `plugin_manager_capability.cpp` + `postToIo`/`ioCallSync` |
+| F07 caller/provider 双 lease | 完成 | `OpCore` 的 provider_/caller_ guard |
+| F08 sleep/post/offload 纳入 Operation 与回收 | 完成 | `plugin_manager_scheduler.cpp` + 测试 |
+| F10 工具冲突不得写入实例记录 | 完成 | `plugin_manager_adapters.cpp` registerTool 返回值为唯一依据 |
+| F13 SDK 借用参数跨挂起 | 未完成 | 仍无 `Request` 拥有模型（R3 待办） |
+| F14 完成后再 cancel 不调用插件 | 完成 | `handle->completed` + `cancelFn` 失效 |
+| F15 管理器销毁后队列 lambda 不访问裸 this | 部分完成 | 业务投递已改为拥有闭包；vtable 闭包仍捕获裸 `inst`/`mgr`（见第 8 节） |
+| F18 Client 同轮派发复查 alive | 完成 | `client_plugin_manager.cpp:1511` dispatchEvent |
+| P0 完成协议（拥有完成包、IO 线程一次性提交） | 完成 | `op_driver.h` commit 路径 + 完成端点 tombstone |
+| P0 opaque CancelToken | 完成 | `plugin_api.h` + SDK 调用方 |
+| P1-A 接口表严格协商 | agent/client 接口表完成 | `struct_size` 填充 + SDK 校验 + `api_version` 精确匹配 |
+| P1-B 名称预占 / Loading 不可调用 | 完成 | `reservePluginName` + state 门禁 |
+| P1-C GraphTypeSlot | 首版完成，缺测试 | `plugin_graph_node.h` + `plugin_manager_adapters.cpp`；缺旧节点/重载专项测试 |
+| R2 owner 顺序（BaseAgent / AgentHost / Client runner） | 完成 | 见 4.2 节 |
+| R2 Client semantic renderer cache | 未完成 | renderer 仍在 UI 线程同步调用（有 lease 保护） |
+| R2/R5 prompt contribution | 未完成 | 仍是“备份后无条件写回”模型 |
+| F02/F03/F04/F16/F17/F19/F20/F21、P0-C | 未完成或仅部分 | 见第 6、8 节 |
+| R6 验证 / 文档 | 未开始 | 见第 6、7 节 |
+
+---
+
+## 6. 待完成任务（按优先级，含验收要求）
+
+### P0-1 宿主控制块：让迟到插件调用安全失败（R2/R3 交叉）
+
+现状：宿主交给插件的 `host` 结构位于 `PluginInstance` 对象内部，`host->opaque` 直接是实例裸指针（`plugin_manager_vtable.cpp:17`、`client_plugin_manager.cpp:1566`）；vtable 闭包还捕获裸 `inst`/`mgr`（agent 侧 `instOf/mgrOf` 共 84 处调用点）。
+
+要求：
+
+- `host` 视图移到宿主控制块（进程级稳定地址），`opaque` 改为一次性令牌；注销后查询返回“实例不存在”，vtable 一律安全失败（返回非 0 / NULL + error）。
+- vtable 投递闭包改为持有 `shared_ptr<Instance/Manager>` 与 admission lease，使 unload 的 `waitInflightZero` 覆盖排队阶段。
+- 注册类入口在执行时复查实例状态（Closing 后不再登记）。
+- 回归：卸载/重载后调用旧 host 指针不崩溃；排队中的注册在卸载后被拒绝。
+
+### P0-2 Operation 终态与取消线性化（R1 收尾）
+
+- `OpCore::submitMutex_` 仍为 `recursive_mutex`：cancel 持锁调用插件、worker done 同时取锁，需要无死锁线性化协议（或明确单线程化）。
+- 完成投递失败（executor 停止且无法重放）时的可观察终态尚未定义。
+- 裸 handle 失效语义（旧调用方持 handle 迟到调用）需要与 P0-1 一并收敛。
+- 验收：plugin.md 第 11.2 节的 1-10 全部成为自动化测试（当前覆盖第 1/2/3/4/7 条的一部分）。
+
+### P1-1 SDK Request 与统一 root adapter（R3）
+
+- 建立每次 root 操作的拥有型 `Request`（args/session/call_id/method + token 视图 + ctx lifetime），`std::string_view` 只在 Request 生命周期内有效（F13）。
+- tool/hook/capability/graph/spawn 复用同一 root adapter（当前各自一套 Job/shim）。
+- hook helper 按 callable 返回类型严格区分同步 `void` 与 `Task<void>`（F19）。
+- `Task<T>`/`Task<void>`/`offload<void>` 组合、异常与取消传播的正反例编译测试。
+
+### P1-2 C ABI v1 编译期与运行期检查（R3/R6）
+
+- C17 `-pedantic-errors` 包含两个 ABI 头：`sizeof`/`offsetof`/对齐/调用约定断言。
+- 未知/短接口表、NULL 必需函数、API 版本不匹配的安全拒绝测试。
+- 导出符号只包含规定入口；第三方静态依赖符号保持隐藏。
+
+### P1-3 Client semantic renderer cache 与动作代次（R2/R5）
+
+- renderer 结果改为 Client IO 线程计算的宿主语义快照（displayName/summary/items + generation），UI 只读 cache；旧 snapshot 失效直接通用回退（F03、plugin.md 第 8.2 节）。
+- 动作点击携带 plugin/generation/owner，IO 线程复查后决定丢弃或派发（plugin.md 第 8.3 节）。
+- 回归：保留旧 renderer snapshot、旧 action 点击、重载同名插件。
+
+### P1-4 注册事务与启停事务（R2/R5）
+
+- create/start 失败必须回滚工具/hook/capability/event/resource/prompt/graph/UI 全部注册；当前只覆盖工具与部分资源。
+- `enable/disable` 改为 start/stop 事务（现在仍是“重新 register 已保存工具”的旧模型）。
+- prompt contribution 改为 owner + generation + key 合成（F20）。
+- 依赖：三级/菱形禁用-恢复、userDisabled 与 blockedByDependencies 区分测试（F09）。
+
+### P2-1 R4 插件迁移收尾
+
+按 plugin.md 第 9 节顺序：example_plugin / example_resources / example_graph_node → string/math/system → websearch/rag/planning → system_monitor/codegraph 多实例 → JS（`callTool` Promise、删除 1ms 轮询、顶层异常事务、rejection/timeout 映射）→ Windows 平台 gate。
+
+### P2-2 R6 验证与文档
+
+- 全模块回归、ASan/UBSan/TSan 定向、Windows 编译与专项、多实例矩阵。
+- 更新 `docs/zh-cn/design/plugins.md` 与测试说明。
+- 明确“已验证平台”，不得用 Linux 结果替代 Windows/Android。
+
+---
+
+## 7. 验证记录（本工作树最新）
+
+构建：
 
 ```bash
-timeout 180s agent/build/linux-debug/exec/agentxx_test \
-  plugin_runtime plugins plugin_multi_instance plugin_resources client_plugins --fail-fast
+cmake --build agent/build/linux-debug --target agentxx_test_repo -j12
+# 成功；二进制 agent/build/linux-debug/exec/agentxx_test 比最新源码更新
 ```
 
-实际结果：
-
-```text
-plugin_runtime          89 passed / 0 failed
-plugins                328 passed / 0 failed
-plugin_resources        83 passed / 0 failed
-plugin_multi_instance   29 passed / 0 failed
-client_plugins         300 passed / 0 failed
-合计                   829 passed / 0 failed
-```
-
-日志：
-
-```text
-/tmp/agentxx-reset-v1-next-regression.log
-/tmp/agentxx-reset-v1-next-regression.exit  # 内容为 0
-```
-
-该结果不能代表当前工作树，因为之后追加的修改没有重新通过构建。
-
-### 3.2 当前失败构建
-
-最后执行：
+扩展回归（ASan + LSan 开启，`--fail-fast`）：
 
 ```bash
-cmake --build agent/build/linux-debug -j2
+ASAN_OPTIONS=detect_leaks=1:halt_on_error=0 timeout 1500s \
+  agent/build/linux-debug/exec/agentxx_test \
+  ffi_c_api agent_host subagent_tool subagent_bus plugin_runtime plugins \
+  plugin_resources plugin_multi_instance client_plugins agent memgrowth --fail-fast
 ```
-
-日志和退出码：
 
 ```text
-/tmp/agentxx-reset-v1-continue-build-5.log
-/tmp/agentxx-reset-v1-continue-build-5.exit  # 内容为 2
+ffi_c_api             117 passed / 0 failed
+plugin_runtime        128 passed / 0 failed
+subagent_bus           21 passed / 0 failed
+subagent_tool         122 passed / 0 failed
+agent_host             95 passed / 0 failed
+plugins               328 passed / 0 failed
+plugin_resources       83 passed / 0 failed
+plugin_multi_instance  29 passed / 0 failed
+client_plugins        309 passed / 0 failed
+agent                  91 passed / 0 failed
+memgrowth              15 passed / 0 failed
+合计                 1338 passed / 0 failed
 ```
 
-当前直接错误：
+无 ASan/LSan 报告；`git diff --check` 通过。日志：
 
 ```text
-agent/lib/include/agentxx/plugin/op_driver.h:283:
-  OpCore::wait() is private within this context
-agent/lib/include/agentxx/plugin/op_driver.h:423:
-  co_await core->wait()
+/tmp/agentxx-reset-v1-sweep-2.log        # 上述 1338/0 总回归（交接前最后一次复跑）
+/tmp/agentxx-reset-v1-sweep-1.log        # 同命令的一次更早运行，结果相同
+/tmp/agentxx-reset-v1-dtor-asan-1.log    # 插件专项 ASan（877/0，BaseAgent 修复前）
+/tmp/agentxx-reset-v1-dtor-client-1.log  # client 守卫回归
+/tmp/agentxx-reset-v1-agenthost-2.log    # agent_host 95/0（BaseAgent executor 修复后）
 ```
 
-修复方式应是将 `wait()` 恢复为 `OpCore` 的 public 方法，或明确设计 friend；优先保持原有接口意图，移除误插入的 `private:` 边界。修复后先只重建，不要同时继续扩展功能。
+未验证（不得当作已通过）：
 
-### 3.3 静态检查
+- 全模块 `agentxx_test` 全量运行；UBSan/TSan；Windows/Android 构建与专项；
+- C17 ABI layout、短表/NULL 表、导出符号检查；
+- Client semantic renderer / 动作代次 / prompt contribution / 依赖恢复；
+- `docs/zh-cn/design/plugins.md` 未更新。
 
-最近一次 `git diff --check` 通过。当前没有在本 session 的未验证修改上重新完成构建后的测试。
+---
 
-已知验证范围只有 Linux Debug 现有 ASan 配置；没有完成 UBSan、TSan、Windows、Android、全模块回归或最终 C ABI 检查。
+## 8. 已知风险与遗留缺陷（开工前必读）
 
-## 4. 前一阶段已经实现的内容
+1. host opaque / vtable 裸指针（最高优先级）：见 P0-1。当前卸载后迟到调用仍可能 UAF。
+2. 同步析构兜底会保留 DSO：stop 未完成或 lease 非零时实例保持 `CloseFailed` 并保留 ctx/DSO（日志明确报错）。这是安全兜底而非最终形态，依赖 owner 先 await `shutdownAsync`。`AgentHost::destroyAgent`（同步）只告警不阻断，新代码应使用 `destroyAgentAsync`。
+3. renderer 仍在调用线程同步执行：有 lease/alive 复查，但不符合 plugin.md 第 8.2 节的语义 cache 模型。
+4. Operation 取消/终态未收敛：`recursive_mutex` 协议、投递失败终态、裸 handle 失效语义。
+5. 注册/启停事务不完整：enable/disable 旧模型、prompt contribution、注册失败回滚覆盖面。
+6. 无 ABI 编译期检查：任何 ABI 改动目前只靠运行期测试兜底。
 
-### 4.1 Runtime / lifetime 初版
+---
 
-新增 `agent/lib/include/agentxx/plugin/plugin_runtime.h`，包含：
+## 9. 下一步执行顺序（建议）
 
-- `PluginInstanceState`：`Loading`、`Ready`、`Disabled`、`Closing`、`Closed`、`CloseFailed`。
-- `InstanceLifetime`：executor、generation、原子状态、admission 位和 lease count。
-- `InstanceLease`：移动式 RAII lease。
-- `PluginRuntime`：executor、IO thread id、Operation map、Operation/generation 序号。
-- admission 位与 lease count 使用一次 CAS，关闭与跨线程获取之间没有显式空窗。
-- `waitIdleUntil()` 使用绝对 deadline 和事件式 idle 唤醒，不使用退避轮询。
+1. 先按 0.3 节复跑构建 + 专项回归，确认基线（应仍是 1338/0）。
+2. P0-1 宿主控制块（agent 侧先，client 侧随后）：收益最大，且是 F02/F15 与“迟到调用安全失败”的共同前置。
+3. P0-2 Operation 终态/取消线性化：补 plugin.md 第 11.2 节的故障注入测试。
+4. P1-1 SDK Request + 统一 root adapter（F13/F19），随后 P1-2 C17 ABI 测试。
+5. P1-3 / P1-4 Client 语义模型与注册、启停事务。
+6. P2-1 / P2-2 内置插件与 JS 迁移、平台与文档收尾。
 
-`PluginInstanceBase::InflightGuard` 已优先使用 lifetime lease，同时维护兼容性的 `inflight` 计数；没有 lifetime 的测试伪实例保留旧计数路径。
+每一步完成后：跑对应模块回归，更新本文件第 1、5、6、7 节，再提交。
 
-### 4.2 OpCore 统一异步操作模型
+---
 
-`op_driver.h` 已将工具/能力/task/scheduler 的主要宿主操作统一到 `OpCore`：
+## 10. 提交要求
 
-- provider/caller 双方 guard。
-- `Accepted`、`Running`、`Cancelling`、`Completed`、`Rejected` 状态。
-- 拥有结果的 `CompletionPacket`，完成 payload 在进入 IO executor 前复制为 `std::string`。
-- 完成提交、callback、内部 completion handler、Operation 登记和 lease 清理集中处理。
-- 同步 `done + NULL` 可被接受；真正拒绝不进入 callback。
-- 取消等待不会立即释放 runtime 对尚未完成 Operation 的持有。
-- 外部 callback 抛异常不会跳过内部 completion handler。
-- `cancelPluginOperation()` 会先获取 handle 的 shared ownership，再向 executor 投递取消请求。
-
-当前 `op_driver.h` 仍需审查：
-
-- `wait()` 的访问级别当前错误，导致编译失败。
-- `submitMutex_` 仍为 `recursive_mutex`，cancel 可能持锁进入插件，worker done 也会获取该锁，潜在死锁协议尚未最终收敛。
-- `asio::post()` 投递失败时，当前逻辑不能保证已接受 Operation 进入可观察终态。
-- handle 的外部 raw 指针在 Operation 回收后仍可能被旧调用方使用，`shared_from_this()` 本身不能修复一个已失效的 raw handle。
-- 当前完成端点增量尚未通过构建/测试，见第 5 节。
-
-### 4.3 IO 投递基础设施
-
-`plugin_manager_base.h` / `plugin_common.h` 已做以下改动：
-
-- 删除基类二级 IO 任务队列及其 mutex。
-- IO 投递闭包使用共享 runtime 和拥有的 callable。
-- `postToIoAsync()` 恒异步；当前 IO 线程的 `postToIo()` 仍可直接执行，重入语义还未完全禁止。
-- `ioCallSync` 使用 shared promise 和拥有的 callable，不再捕获栈上 promise/fn 引用。
-- `waitInflightZero()` 改为使用 lifetime idle 事件。
-
-尚未解决 executor 已停止时同步等待 future 可能永久等待的问题。
-
-### 4.4 Scheduler / capability / task 适配
-
-已修改：
-
-- `plugin_manager_scheduler.cpp`：post、sleep、offload 接入 OpCore。
-- sleep 使用活动 Operation handle 索引，完成和取消统一清理。
-- offload 任务从排队到 worker 返回再到 IO callback 均持有 Operation 生命周期。
-- 无 thread pool、worker 异常和投递异常会尝试提交失败完成，不再静默挂起。
-- `plugin_manager_capability.cpp`：工具/能力 provider start 经 IO executor 执行，输入字符串拥有化，callback 可为空，provider/caller guard 覆盖排队及执行。
-- `plugin_manager_tasks.cpp`：`registerTask` 接入统一 Operation，cancel_fn 和 cancel_ud 由 Operation 保护。
-- `plugin_manager_vtable.cpp`：post/sleep/offload 等入口补充排队阶段 admission guard。
-
-这些适配仍依赖旧 scheduler/task ABI；`pump_io`、`volatile cancel_flag`、旧 void 返回和旧 SDK awaiter 尚未移除。
-
-### 4.5 注册、工具和 subscription
-
-已有：
-
-- tool registry 冲突检查失败时不写入实例工具记录。
-- subscription 控制块保存 weak instance、alive 标志和订阅记录。
-- callback 前检查 alive、实例、enabled、lifetime，再取得 guard。
-- unsubscribe 先失效再退订，减少同轮回调和重复退订风险。
-- `detachAll()` 只请求活动 Operation 取消，不提前清空活动记录；终态 commit 负责唯一回收。
-
-还没有完成旧 ABI handle 的全生命周期安全失败语义，也没有完成 Client 同轮事件、generation 和 action 代次协议。
-
-### 4.6 测试和图调用修正
-
-新增：
+- 提交信息使用 `重构插件框架-<修改内容总结>`。
+- 阶段提交说明必须写明“Reset-v1 未完成”，不要把阶段成果写成整体完成。
+- 提交前：`git diff --check`、构建、相关模块回归；确认 `TODOS.md`、`agentxx-config.yaml`、`index.md` 等用户文件不被误纳入。
+- 建议的下一步提交边界（对应 plugin.md 第 10 节）：
 
 ```text
-agent/test/plugin/test_plugin_runtime.cpp
-agent/test/plugin/test_plugin_runtime.h
+1. 重构插件框架-R1-2 Operation 终态与取消收敛
+2. 重构插件框架-R2-1 宿主控制块与安全失败
+3. 重构插件框架-R2-2 注册事务与异步关闭补全
+4. 重构插件框架-R3-1 SDK Request 与统一 root adapter
+5. 重构插件框架-R4-1 内置插件迁移
 ```
-
-并注册到 `agent/test/test.cpp`。runtime 测试覆盖同步完成、拒绝、payload ownership、取消/重复完成、caller/provider lease、idle deadline、工具互调、并发 Operation、sleep 清理、无线程池失败和部分关闭竞速。
-
-`test_plugins.cpp` 两处宿主协程内的同步 `engine->run()` 改成 `co_await engine->run_async()`，避免同步嵌套 executor 阻塞插件完成包投递。
-
-此前通过的 `plugin_runtime` 数量是 89，不是更早版本的 1074 或 1814；后续新增/合并测试尚未在当前工作树上重新通过。
-
-## 5. 本 session 新增但未验证的修改
-
-本 session 为处理“同步 shutdown 可能绕过 lease 直接 destroy/dlclose”尝试加入以下代码：
-
-### 5.1 destroy 状态字段
-
-`PluginInstanceBase` 增加：
-
-- `pluginCreated`
-- `pluginDestroyed`
-- `destroyDeferred`
-
-加载 create 成功且产生 `pluginCtx` 时设置 `pluginCreated`。
-
-### 5.2 Agent/Client destroyPlugin
-
-Agent `PluginInstance` 和 Client `ClientPluginInstance` 增加 `destroyPlugin()`：
-
-- 已 destroy 时直接返回。
-- 有活动 lifetime lease 时不调用插件 destroy，记录 deferred。
-- 无 create context 时标记为已处理。
-- destroy 回调异常被捕获，不继续向上抛出。
-- manager 的同步 shutdown 和异步 unload 改为通过该方法销毁。
-
-### 5.3 completion endpoint 初版
-
-尝试在 `plugin_manager.h` 增加宿主拥有的 `AgentxxPluginOperationCompletionEndpoint`：
-
-- endpoint 由 Operation 创建，内部 weak 指向 `OpCore`。
-- 实例保存 endpoint tombstone 到实例销毁。
-- `notify.host_ud` 改为 endpoint 地址，endpoint 找不到 Operation 时只丢弃迟到 done。
-- OpCore 仍保留一套旧 `onDone(OpCore*)` 静态函数，需下一 session 审查是否应删除，避免继续保留裸指针入口。
-
-### 5.4 当前未验证增量中的明确缺陷/风险
-
-这是下一 session 的优先修复清单，不能把本节当成已完成：
-
-1. **当前首先编译失败**：`OpCore::wait()` 位于 private 区域。
-2. **析构仍可能关闭活动 DSO**：`PluginInstance::~PluginInstance()` 和 `ClientPluginInstance::~ClientPluginInstance()` 调用 `destroyPlugin()` 后，无论返回值都继续 `NativeLoader::close(dlHandle)`。如果 lease 仍活动，`destroyPlugin()` 返回 false，但析构仍会 `dlclose`，P0 UAF 风险未解决。
-3. **同步 manager 析构仍无 owner 等待协议**：`shutdownAll()` 发现活动 lease 时保留实例表，但 manager 自身随后析构，实例最终析构仍会触发上述问题；`unloadRequested` 也可能阻止后续重试。
-4. **没有真正的 idle cleanup 接线**：`InstanceLifetime` 增加了一次性 `idleCleanup` 字段和 idle 回调执行逻辑，但 manager/实例尚未安全注册和使用它；不能据此认为同步关闭会在最后 lease 释放后自动完成。
-5. **`operatorHandles` 字段当前未形成完整所有权协议**：它是本 session 的尝试性增量，尚未接入所有 Operation 路径，需要删除或完整设计后再保留。
-6. **completion endpoint 的实例 tombstone 清理、跨 owner 的并发访问和 DSO 关闭顺序尚未测试**。endpoint 指针必须在所有插件可能调用 `notify.done` 的时间内有效；仅保存 `shared_ptr` 不足以保证插件代码本身未被 dlclose。
-7. **create 返回 0 但 pluginCtx 为空的语义尚未确认**：当前以 `pluginCtx != nullptr` 判断 `pluginCreated`，需要按最终 Reset-v1 ABI 明确无上下文插件是否允许。
-8. **destroy 回调缺失、destroy 抛异常以及 builtin unload 的行为仍需要统一契约**。
-
-建议下一 session 先修正并重建，再决定保留还是撤销这些未验证增量；不要在当前编译失败状态继续迁移业务插件。
-
-## 6. 核心未完成问题
-
-### 6.1 P0 生命周期
-
-当前仍存在：
-
-```text
-PluginManager::~PluginManager()
-  -> shutdownAll()
-  -> shutdownPlugin()
-  -> 可能 destroy
-AgentContext::~AgentContext()
-  -> pluginManager->shutdownAll()
-ClientPluginManager::~ClientPluginManager()
-  -> shutdownAll()
-PluginInstance::~PluginInstance()
-  -> dlclose
-```
-
-需要实现真正的 `shutdownAsync()` / Client 对应接口，并调整 owner 顺序：
-
-- 先停止接收新工作和新 admission。
-- 取消/等待全部已接受 Operation、callback、worker、timer、JS/平台线程。
-- 执行 stop，等待 stop 完成。
-- 再调用 destroy，最后关闭动态库。
-- owner 的 executor、IO context、blocking pool 在插件关闭完成前不能停止。
-- 析构路径只能处理已经 Closed 的实例；无法安全关闭时保留 runtime/module 并记录 CloseFailed，不能强制 destroy/dlclose。
-
-重点 owner：`AgentContext`、`BaseAgent`、`AgentHost::destroyAgent`、`mode_runners.cpp`、Client manager 和 Client runner。
-
-### 6.2 R1 Operation / cancel
-
-仍待完成：
-
-- completion 投递失败时的可观察终态和关闭策略。
-- raw handle 失效后的取消安全语义。
-- cancel 与 done 的无死锁线性化协议。
-- callback 返回前保持 caller/provider lease。
-- done 不等于插件 worker/自建线程已经返回的场景。
-- 排队取消、blocking pool 限额和 executor 停止。
-- 错误状态的结构化传递。
-- 故障注入、重复 done、取消后 done、关闭中排队等竞态测试。
-
-### 6.3 R2 事务加载/异步关闭
-
-尚未实现：
-
-- Loading 名称预占和并发重复加载拒绝。
-- `get_info/create/start/stop/destroy` 新生命周期。
-- create/start 注册事务和失败回滚。
-- tool/hook/capability/event/resource/prompt/graph/UI 的统一 transaction。
-- Agent/Client `shutdownAsync`。
-- 依赖关闭失败传播和可重试 CloseFailed。
-
-### 6.4 R3 ABI/SDK
-
-仍是旧实现，未完成：
-
-- C ABI version/struct_size/短表/NULL 必需函数检查。
-- opaque CancelToken，删除 volatile cancel、pump_io、cancel_sleep。
-- 统一 scheduler/tasks Operation ABI。
-- C17 layout/offsetof/调用约定测试。
-- 类型安全 `Task<T>`、`Task<void>`、offload<void>、root adapter。
-- 删除任意 PromiseBase/协程帧强转、unmanaged spawn、借用输入跨挂起。
-
-### 6.5 R4-R6
-
-尚未完成：
-
-- 内置插件和 JS 迁移。
-- GraphTypeSlot 代次间接层。
-- Client semantic renderer/cache、action generation、事件同轮退订。
-- 依赖恢复、prompt contribution。
-- Windows/Android 平台迁移。
-- 全量构建、ASan/UBSan/TSan、Windows、纯 C ABI、导出符号和文档审查。
-
-## 7. 下一 session 推荐执行顺序
-
-### 第一步：恢复编译
-
-修复 `OpCore::wait()` public/private 误放置：
-
-```bash
-# 修复后
-cmake --build agent/build/linux-debug -j2 \
-  > /tmp/agentxx-reset-v1-next-build.log 2>&1
-status=$?
-printf '%s\n' "$status" > /tmp/agentxx-reset-v1-next-build.exit
-```
-
-若再次出现零字节 `.o` / `mold unknown file type`，只检查并删除对应零字节构建产物后重建，不要清空 build。
-
-### 第二步：审查本 session 未验证增量
-
-优先处理第 5.4 节：
-
-- `destroyPlugin()` 返回 false 时禁止析构路径 dlclose。
-- 解决 manager destructor 与 deferred instance 的所有权，不能只把实例留在即将析构的 map 中。
-- 要么接通 idle cleanup 和 owner 保活，要么暂时撤掉不完整字段，按 R2 重新实现。
-- completion endpoint 不能保留裸 OpCore completion 入口；完成端点、Operation、插件 DSO 的三者生命周期需要统一。
-- 删除或完整接入未使用的 `operatorHandles`。
-
-### 第三步：重新验证当前增量
-
-```bash
-timeout 90s agent/build/linux-debug/exec/agentxx_test \
-  plugin_runtime --fail-fast
-
-timeout 180s agent/build/linux-debug/exec/agentxx_test \
-  plugin_runtime plugins plugin_multi_instance plugin_resources client_plugins --fail-fast
-```
-
-只有当前工作树重新构建并通过后，才能更新本文件中的验证数字。不要沿用 829/0 作为当前版本的结果。
-
-### 第四步：继续 R1/R2
-
-推荐顺序：
-
-1. 完成 Operation completion/cancel/handle 协议。
-2. 建立真正 async shutdown、stop 和 owner 退出顺序。
-3. 加入真实 DSO unload 并发测试、CloseFailed retry、executor stop、依赖级联失败测试。
-4. 再开始严格 ABI、SDK 和内置插件迁移。
-
-## 8. 最终提交要求
-
-本阶段未提交。后续若达到可提交阶段：
-
-- 先构建、运行相关测试和 `git diff --check`。
-- 再审查 staged/unstaged diff，确认 `TODOS.md`、`agentxx-config.yaml`、`index.md` 没有被纳入重构提交。
-- 提交消息必须使用：
-
-```text
-重构插件框架-{修改内容总结}
-```
-
-- 若只是阶段性 R1/R2 提交，提交说明必须明确 Reset-v1 尚未完成，不要把阶段成果标记为整体重构完成。

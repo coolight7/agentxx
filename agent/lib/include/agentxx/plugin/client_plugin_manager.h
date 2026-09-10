@@ -10,6 +10,7 @@
 #include "asio/awaitable.hpp"
 #include "asio/thread_pool.hpp"
 #include <atomic>
+#include <chrono>
 #include <functional>
 #include <map>
 #include <memory>
@@ -25,6 +26,14 @@ namespace plugin {
 
 class ClientPluginManager;
 class PluginUiAdapter;
+class ClientPluginInstance;
+
+/// 自定义 renderer 的宿主控制块。UI 线程可能还持有旧 COW 快照；关闭时先
+/// 失效控制块，旧快照只能回退，不能再跳入已经卸载的插件代码。
+struct ClientToolRendererLease {
+    std::weak_ptr<ClientPluginInstance> instance;
+    std::atomic<bool>                    alive{true};
+};
 
 /// 状态栏项注册记录 (UI 注册表快照条目; 所有字段为宿主拷贝, 可跨线程读取)
 struct ClientStatusItem {
@@ -88,6 +97,7 @@ struct ClientToolRenderReg {
     std::string         toolName;
     AgentxxToolRenderFn renderFn = nullptr;
     void*               userData = nullptr;
+    std::shared_ptr<ClientToolRendererLease> lease;
     std::string         templateJson;
     std::string         templateDisplayName;
     std::string         templateSummaryKey;
@@ -198,6 +208,8 @@ public:
 
     /// 管理器弱引用 (host vtable 回调取用)
     std::weak_ptr<ClientPluginManager> manager{};
+    /// 与公共实例控制块对齐，供 Client 裸指针回调升级 owner。
+    std::weak_ptr<ClientPluginInstance> self{};
 
     explicit ClientPluginInstance(std::string in_name) :
         PluginInstanceBase(std::move(in_name)) {}
@@ -292,7 +304,11 @@ public:
     );
 
     /// 卸载插件 (按名称; 等全部执行中回调完成后才 dlclose)
-    asio::awaitable<bool> unloadAsync(std::string_view name);
+    asio::awaitable<bool>
+        unloadAsync(std::string_view name, std::chrono::milliseconds timeout = std::chrono::seconds{10});
+    /// 在 client IO executor 仍运行时等待所有插件安全关闭。
+    asio::awaitable<bool>
+        shutdownAsync(std::chrono::milliseconds timeout = std::chrono::seconds{30});
 
     /// 禁用插件 (UI 项摘除/命令停用; 立即生效)
     /// - 级联: 必选依赖本插件的插件一同禁用 (依赖者先禁用)
@@ -621,6 +637,11 @@ private:
     /// - 依赖图级联 (先子后父): 脚本类插件 (depends 引擎) 先卸载, 引擎最后
     ///   dlclose, 与 agent 侧 shutdownPlugin 语义一致
     void shutdownClientPlugin(const std::shared_ptr<ClientPluginInstance>& inst);
+
+    asio::awaitable<bool> unloadAsyncUntil(
+        std::string name,
+        std::chrono::steady_clock::time_point deadline
+    );
 
     /// 事件分发: 遍历全部插件订阅, 匹配 event → InflightGuard → handler
     /// (io 线程; payload 为宿主构造的 JSON 字符串)

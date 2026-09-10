@@ -11,6 +11,9 @@
 - 忽略空字符串、" " 的 content tui 渲染
 - 统一 tui 按钮内容风格为 [ xxx ]、提示风格为 ( xxx )
 - 检查文件输入是否为 tui 选择路径，发送给 server-io 前转换为 data-url，以便适配分离进程支持
+- wiki 记忆、项目结构
+- 多次压缩后崩溃
+- 崩溃后session数据丢失
 
 - 调整 tui 亮色配置
 - SVG绘制支持

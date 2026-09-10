@@ -12,6 +12,7 @@
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
 #include "asio/post.hpp"
+#include "asio/use_future.hpp"
 #include "fmt/format.h"
 #include <atomic>
 #include <chrono>
@@ -536,6 +537,25 @@ void FfiAgentRuntime::stopInternal() {
     util::LogDispatcher::instance().removeSink(logSink_);
 
     // 5) 停止并 join Server-IO 线程
+    //    插件关闭必须先于此完成: shutdownAsync 在 agent IO 线程上 stop →
+    //    等 lease 归零 → destroy/dlclose。executor 一旦停止就只能走同步析构
+    //    兜底 (实例保留 CloseFailed, 动态库不卸载)。
+    if (agent_ && serverIoCtx_ && !serverIoCtx_->stopped()) {
+        try {
+            auto closed = asio::co_spawn(
+                serverIoCtx_->get_executor(),
+                agent_->shutdownAsync(std::chrono::seconds{20}),
+                asio::use_future
+            );
+            if (closed.wait_for(std::chrono::seconds{25}) != std::future_status::ready) {
+                XX_LOGW("[ffi] stop: plugin shutdown did not finish within 25s");
+            } else if (!closed.get()) {
+                XX_LOGW("[ffi] stop: plugin shutdown incomplete; instances kept as CloseFailed");
+            }
+        } catch (const std::exception& e) {
+            XX_LOGW("[ffi] stop: plugin shutdown threw: {}", e.what());
+        }
+    }
     if (serverIoCtx_) {
         serverWorkGuard_.reset();
         serverIoCtx_->stop();

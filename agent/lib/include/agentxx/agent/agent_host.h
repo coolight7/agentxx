@@ -3,6 +3,7 @@
 #include "agentxx/agent/base_agent.h"
 #include "agentxx/event/event_host.h"
 #include "asio/io_context.hpp"
+#include <chrono>
 #include <functional>
 #include <map>
 #include <memory>
@@ -149,6 +150,12 @@ public:
 
     /// 移除 agent 节点 (递归移除其全部子节点), 释放独立 AgentContext
     void destroyAgent(std::string_view agentId);
+
+    /// 等待 agent 所属 IO executor 完成插件关闭后再移除节点。
+    asio::awaitable<bool> destroyAgentAsync(
+        std::string_view agentId,
+        std::chrono::milliseconds timeout = std::chrono::seconds{30}
+    );
 
     /// 当前运行中的子代理数量
     size_t runningSubagents() const;

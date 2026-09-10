@@ -79,14 +79,14 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
                std::string_view  args_json,
                std::string_view  tid,
                std::string_view  workDir,
-               volatile int32_t* cancel) {
+               const AgentxxPluginCancelToken* cancel) {
                 ArgReader args(args_json);
                 auto      path = args.require<std::string>("path");
                 if (!args.ok()) {
                     return args.errorMessage();
                 }
                 return fileListExecute(args.raw(), std::string(workDir), [&] {
-                    return (cancel && *cancel != 0) || c.sessionCancelled(tid);
+                    return agentxx_plugin_cancel_is_requested(cancel) != 0 || c.sessionCancelled(tid);
                 });
             }
         );
@@ -116,14 +116,14 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
                std::string_view  args_json,
                std::string_view  tid,
                std::string_view  workDir,
-               volatile int32_t* cancel) {
+               const AgentxxPluginCancelToken* cancel) {
                 ArgReader args(args_json);
                 auto      path = args.require<std::string>("path");
                 if (!args.ok()) {
                     return args.errorMessage();
                 }
                 return fileReadExecute(args.raw(), std::string(workDir), [&] {
-                    return (cancel && *cancel != 0) || c.sessionCancelled(tid);
+                    return agentxx_plugin_cancel_is_requested(cancel) != 0 || c.sessionCancelled(tid);
                 });
             }
         );
@@ -156,7 +156,7 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
                std::string_view  args_json,
                std::string_view  tid,
                std::string_view  workDir,
-               volatile int32_t* cancel) {
+               const AgentxxPluginCancelToken* cancel) {
                 ArgReader args(args_json);
                 auto      path    = args.require<std::string>("path");
                 auto      content = args.require<std::string>("content");
@@ -164,7 +164,7 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
                     return args.errorMessage();
                 }
                 return fileWriteExecute(args.raw(), std::string(workDir), [&] {
-                    return (cancel && *cancel != 0) || c.sessionCancelled(tid);
+                    return agentxx_plugin_cancel_is_requested(cancel) != 0 || c.sessionCancelled(tid);
                 });
             }
         );
@@ -200,7 +200,7 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
                std::string_view  args_json,
                std::string_view  tid,
                std::string_view  workDir,
-               volatile int32_t* cancel) {
+               const AgentxxPluginCancelToken* cancel) {
                 ArgReader args(args_json);
                 auto      path   = args.require<std::string>("path");
                 auto      oldStr = args.require<std::string>("old_str");
@@ -209,7 +209,7 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
                     return args.errorMessage();
                 }
                 return fileEditExecute(args.raw(), std::string(workDir), [&] {
-                    return (cancel && *cancel != 0) || c.sessionCancelled(tid);
+                    return agentxx_plugin_cancel_is_requested(cancel) != 0 || c.sessionCancelled(tid);
                 });
             }
         );
@@ -256,14 +256,14 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
                std::string_view  args_json,
                std::string_view  tid,
                std::string_view  workDir,
-               volatile int32_t* cancel) {
+               const AgentxxPluginCancelToken* cancel) {
                 ArgReader args(args_json);
                 auto      patterns = args.require<std::vector<std::string>>("file_patterns");
                 if (!args.ok()) {
                     return args.errorMessage();
                 }
                 return fileGlobExecute(args.raw(), std::string(workDir), [&] {
-                    return (cancel && *cancel != 0) || c.sessionCancelled(tid);
+                    return agentxx_plugin_cancel_is_requested(cancel) != 0 || c.sessionCancelled(tid);
                 });
             }
         );
@@ -323,14 +323,14 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
                std::string_view  args_json,
                std::string_view  tid,
                std::string_view  workDir,
-               volatile int32_t* cancel) {
+               const AgentxxPluginCancelToken* cancel) {
                 ArgReader args(args_json);
                 auto      patterns = args.require<std::vector<std::string>>("file_patterns");
                 if (!args.ok()) {
                     return args.errorMessage();
                 }
                 return fileGrepExecute(args.raw(), std::string(workDir), [&] {
-                    return (cancel && *cancel != 0) || c.sessionCancelled(tid);
+                    return agentxx_plugin_cancel_is_requested(cancel) != 0 || c.sessionCancelled(tid);
                 });
             }
         );

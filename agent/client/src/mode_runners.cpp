@@ -136,6 +136,24 @@ static TUITheme resolveTuiTheme() {
                                                                            : TUITheme::darkTheme();
 }
 
+/// agent 侧插件关闭必须先于 agent io_context 停止: 派发到 agent IO executor
+/// 等待 stop → lease 归零 → destroy/dlclose 全链路完成。失败只记录日志 ——
+/// 未完成的实例会保持 CloseFailed 并保留上下文/动态库，越权 dlclose 更危险。
+static asio::awaitable<void> shutdownAgentPlugins(std::shared_ptr<agent::CodeAgent> agent) {
+    if (!agent || !agent->ioCtx) {
+        co_return;
+    }
+    try {
+        if (!co_await asio::co_spawn(
+                agent->ioCtx->get_executor(), agent->shutdownAsync(), asio::use_awaitable
+            )) {
+            XX_LOGW("[local] agent plugin shutdown incomplete; instances marked CloseFailed");
+        }
+    } catch (const std::exception& e) {
+        XX_LOGW("[local] agent plugin shutdown threw: {}", e.what());
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Local unified DIRECT (ChannelAgentIOTransport 直连 TUI ↔ SessionServerAgentIO)
 // ---------------------------------------------------------------------------
@@ -317,6 +335,8 @@ static asio::awaitable<void>
         timer.expires_after(std::chrono::milliseconds(20));
         co_await timer.async_wait(asio::use_awaitable);
     }
+    co_await shutdownAgentPlugins(agent);
+    co_await pluginMgr->shutdownAsync();
 }
 
 void runLocalCliUnified(std::shared_ptr<agent::CodeAgent> agent, ClientPluginConfigs plugins) {
@@ -379,6 +399,8 @@ static asio::awaitable<void> runLocalTuiUnifiedAsync(
         timer.expires_after(std::chrono::milliseconds(20));
         co_await timer.async_wait(asio::use_awaitable);
     }
+    co_await shutdownAgentPlugins(agent);
+    co_await pluginMgr->shutdownAsync();
 }
 
 void runLocalTuiUnified(
@@ -434,6 +456,7 @@ static asio::awaitable<void> runRemoteCliAsync(
     bool ok = co_await transport->connect(hello);
     if (!ok) {
         XX_LOGE("[remote_cli] connection failed");
+        co_await pluginMgr->shutdownAsync();
         co_return;
     }
 
@@ -465,6 +488,7 @@ static asio::awaitable<void> runRemoteCliAsync(
         io->sendToPeer(agent::WireUserInput{sessionId, *input});
     }
     transport->close();
+    co_await pluginMgr->shutdownAsync();
 }
 
 void runRemoteCli(
@@ -563,6 +587,7 @@ static asio::awaitable<void> runRemoteTuiAsync(
         // 用户在连接失败 (或等待重试) 期间退出了 TUI: 停止并退出, 不进入会话
         XX_LOGW("[remote_tui] quit before connection established");
         io->stop();
+        co_await pluginMgr->shutdownAsync();
         co_return;
     }
 
@@ -595,6 +620,7 @@ static asio::awaitable<void> runRemoteTuiAsync(
     }
     io->transport()->close();
     io->stop();
+    co_await pluginMgr->shutdownAsync();
 }
 
 void runRemoteTui(

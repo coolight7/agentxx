@@ -33,7 +33,6 @@ struct PluginCtx : public agentxx::plugin::PluginBase {
     std::thread                                                 warmup;
     std::atomic<bool>                                           stop{false};
     std::string                                                 projectRoot;
-    volatile int                                                snapshot_cancel_flag = 0;
 
     ~PluginCtx() {
         if (warmup.joinable()) {
@@ -638,7 +637,9 @@ static void registerAllTools(PluginCtx& ctx) {
     }
 }
 
-static void snapshotQueryDone(void* ud, void* result, const AgentxxPluginStringView* error) {
+static void snapshotQueryDone(
+    void* ud, int32_t status, void* result, const AgentxxPluginStringView* error
+) {
     (void)error;
     auto* ctx   = static_cast<PluginCtx*>(ud);
     auto* files = static_cast<int64_t*>(result);
@@ -647,7 +648,8 @@ static void snapshotQueryDone(void* ud, void* result, const AgentxxPluginStringV
             pluginLog(ctx ? ctx->host : nullptr, ctx ? ctx->iface.log : nullptr, 4, m ? m : "");
         },
         [&] {
-            if (ctx && ctx->host && ctx->iface.events && ctx->iface.events->publish) {
+            if (status == AGENTXX_PLUGIN_OPERATOR_OK && ctx && ctx->host && ctx->iface.events
+                && ctx->iface.events->publish) {
                 codegraph::Json j = codegraph::Json::object();
                 j["loaded"]       = true;
                 if (!ctx->projectRoot.empty()) {
@@ -680,7 +682,9 @@ static void snapshotQueryDone(void* ud, void* result, const AgentxxPluginStringV
     }
 }
 
-static void* snapshotQueryWork(void* ud, volatile int*, AgentxxPluginString*) {
+static void* snapshotQueryWork(
+    void* ud, const AgentxxPluginCancelToken*, AgentxxPluginString*
+) {
     auto* ctx = static_cast<PluginCtx*>(ud);
     return agentxx::plugin::guardCall(
         [ctx](const char* m) noexcept {
@@ -716,10 +720,10 @@ static void AGENTXX_PLUGIN_CALL on_client_attached(const AgentxxPluginStringView
             }
             ctx->iface.scheduler->offload(
                 ctx->host,
-                &ctx->snapshot_cancel_flag,
                 snapshotQueryWork,
                 snapshotQueryDone,
-                ctx
+                ctx,
+                nullptr
             );
         }
     );

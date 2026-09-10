@@ -27,11 +27,27 @@ int64_t steadyNowMs() {
 
 AgentContext::AgentContext() = default;
 
+asio::awaitable<bool>
+    AgentContext::shutdownPluginsAsync(std::chrono::milliseconds timeout) {
+    if (!pluginManager) {
+        co_return true;
+    }
+    co_return co_await pluginManager->shutdownAsync(timeout);
+}
+
 AgentContext::~AgentContext() {
     // 插件系统先卸载全部插件, 断开中间件↔实例循环引用
     // (handles 由 middlewareHandleContext 持有, 其析构晚于 pluginManager)
     if (pluginManager) {
         pluginManager->shutdownAll();
+        if (pluginManager->hasPendingClose()) {
+            // 析构无法等待异步 stop 事务: 这些实例保持 CloseFailed 并保留
+            // 上下文/动态库。owner 应在停止 IO executor 前 await shutdownAsync()。
+            XX_LOGW(
+                "AgentContext destroyed with plugins still closing; owner should await "
+                "agent->shutdownAsync() before stopping the agent IO executor"
+            );
+        }
     }
 }
 

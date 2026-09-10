@@ -19,6 +19,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <thread>
 #include <utility>
 
 namespace agentxx::plugin {
@@ -29,7 +30,7 @@ struct OpDrive {
 };
 
 using OpErrorCode = util::AsioErrorCode;
-using OpGuardPtr = std::shared_ptr<PluginInstance::InflightGuard>;
+using OpGuardPtr = std::shared_ptr<PluginInstanceBase::InflightGuard>;
 
 /// 状态只在 IO 线程访问。同步拒绝不进入完成回调协议。
 enum class PluginOperationState { Accepted, Running, Cancelling, Completed, Rejected };
@@ -43,8 +44,8 @@ struct OpCore : std::enable_shared_from_this<OpCore> {
     /// 创建时先登记到 runtime，再交给插件。等待者取消不影响 runtime 的持有。
     static std::shared_ptr<OpCore> create(
         std::shared_ptr<PluginRuntime> runtime,
-        const std::shared_ptr<PluginInstance>& provider,
-        const std::shared_ptr<PluginInstance>& caller,
+        const std::shared_ptr<PluginInstanceBase>& provider,
+        const std::shared_ptr<PluginInstanceBase>& caller,
         std::string label,
         bool lifecycle = false
     ) {
@@ -53,7 +54,7 @@ struct OpCore : std::enable_shared_from_this<OpCore> {
             throw std::runtime_error("plugin operation rejected: provider is closed or disabled");
         }
         auto core = std::shared_ptr<OpCore>(new OpCore(std::move(runtime), std::move(label)));
-        core->provider_ = std::make_shared<PluginInstance::InflightGuard>(provider, lifecycle);
+        core->provider_ = std::make_shared<PluginInstanceBase::InflightGuard>(provider, lifecycle);
         if (!*core->provider_) {
             throw std::runtime_error("plugin operation rejected: provider is closing");
         }
@@ -61,7 +62,7 @@ struct OpCore : std::enable_shared_from_this<OpCore> {
             if (!caller->enabled) {
                 throw std::runtime_error("plugin operation rejected: caller is disabled");
             }
-            core->caller_ = std::make_shared<PluginInstance::InflightGuard>(caller, lifecycle);
+            core->caller_ = std::make_shared<PluginInstanceBase::InflightGuard>(caller, lifecycle);
             if (!*core->caller_) {
                 throw std::runtime_error("plugin operation rejected: caller is closing");
             }
@@ -72,6 +73,7 @@ struct OpCore : std::enable_shared_from_this<OpCore> {
         core->completionEndpoint_->operation = core;
         core->handle_->completionEndpoint = core->completionEndpoint_;
         core->handle_->caller = caller ? caller : provider;
+        core->handle_->runtime = core->runtime_;
         core->handle_->executor = core->runtime_->executor;
         core->handle_->cancelFn = [weak = std::weak_ptr<OpCore>(core)] {
             if (auto operation = weak.lock()) {
@@ -80,10 +82,15 @@ struct OpCore : std::enable_shared_from_this<OpCore> {
         };
         core->id_ = core->runtime_->nextOperationId++;
         try {
+            std::lock_guard runtimeLock(core->runtime_->operationsMutex);
             core->runtime_->operations.emplace(core->id_, core);
+            // ABI 句柄是调用方可持有的裸指针；活动索引移除后仍保留宿主
+            // tombstone，迟到 cancel 只会观察 completed，不访问已释放对象。
+            provider->operatorHandles.push_back(core->handle_);
             provider->outstandingOps.push_back(core->handle_);
             provider->completionEndpoints.push_back(core->completionEndpoint_);
             if (caller && caller != provider) {
+                caller->operatorHandles.push_back(core->handle_);
                 caller->outstandingOps.push_back(core->handle_);
                 caller->completionEndpoints.push_back(core->completionEndpoint_);
             }
@@ -97,10 +104,12 @@ struct OpCore : std::enable_shared_from_this<OpCore> {
     AgentxxPluginOperatorHandle* handle() const noexcept { return handle_.get(); }
     uint64_t id() const noexcept { return id_; }
     const std::string& label() const noexcept { return label_; }
-    PluginOperationState state() const noexcept { return state_; }
+    PluginOperationState state() const noexcept {
+        return state_.load(std::memory_order_acquire);
+    }
     int32_t status() const noexcept { return completion_.status; }
     const std::string& payload() const noexcept { return completion_.payload; }
-    bool completed() const noexcept { return state_ == PluginOperationState::Completed; }
+    bool completed() const noexcept { return state() == PluginOperationState::Completed; }
 
     void setCallback(AgentxxPluginOperatorCallback cb, void* ud) noexcept {
         callback_ = cb;
@@ -150,8 +159,10 @@ struct OpCore : std::enable_shared_from_this<OpCore> {
             reject();
             return false;
         }
-        state_ = PluginOperationState::Running;
-        if (handle_->cancelled.load(std::memory_order_acquire)) {
+        if (!completed() && state() != PluginOperationState::Rejected) {
+            state_.store(PluginOperationState::Running, std::memory_order_release);
+        }
+        if (!completed() && handle_->cancelled.load(std::memory_order_acquire)) {
             cancel();
         }
         return true;
@@ -164,22 +175,49 @@ struct OpCore : std::enable_shared_from_this<OpCore> {
                 cancel();
             }
         };
-        state_ = PluginOperationState::Running;
+        state_.store(PluginOperationState::Running, std::memory_order_release);
     }
 
     /// 仅 IO 线程。提交完成和调用 cancel 互斥；同步 cancel→done 可重入。
     /// worker 必须持有自己的输入，且不得在提交 done 之前释放 cancel userdata。
     void cancel() noexcept {
-        std::lock_guard lock(submitMutex_);
-        if (completionSubmitted_ || state_ == PluginOperationState::Completed
-            || state_ == PluginOperationState::Rejected || state_ == PluginOperationState::Cancelling) {
+        const auto tid = runtime_ ? runtime_->ioThreadId.load(std::memory_order_acquire)
+                                  : std::thread::id{};
+        if (!runtime_ || tid == std::thread::id{} || tid != std::this_thread::get_id()) {
+            auto self = shared_from_this();
+            if (!enqueueRuntimeAction(runtime_, [self] { self->cancelOnIo(); }, true)) {
+                XX_LOGW(
+                    "Plugin operation `{}` cancellation could not reach its IO executor",
+                    label_
+                );
+            }
             return;
         }
-        state_ = PluginOperationState::Cancelling;
-        handle_->cancelled.store(true, std::memory_order_release);
+        cancelOnIo();
+    }
+
+private:
+    void cancelOnIo() noexcept {
+        std::function<void(void*)> cancel;
+        void*                     providerHandle = nullptr;
+        {
+            std::lock_guard lock(submitMutex_);
+            const auto state = state_.load(std::memory_order_acquire);
+            if (completionSubmitted_ || state == PluginOperationState::Completed
+                || state == PluginOperationState::Rejected
+                || state == PluginOperationState::Cancelling) {
+                return;
+            }
+            state_.store(PluginOperationState::Cancelling, std::memory_order_release);
+            handle_->cancelled.store(true, std::memory_order_release);
+            cancel         = drive_.cancel;
+            providerHandle = providerHandle_;
+        }
         try {
-            if (drive_.cancel) {
-                drive_.cancel(providerHandle_);
+            // 不在提交锁内进入插件。插件可能同步调用 notify.done，完成端点
+            // 必须能够重新获取同一把锁，否则 cancel/done 会形成自锁。
+            if (cancel) {
+                cancel(providerHandle);
             }
         } catch (const std::exception& e) {
             XX_LOGW("Plugin operation `{}` cancel threw: {}", label_, e.what());
@@ -187,6 +225,8 @@ struct OpCore : std::enable_shared_from_this<OpCore> {
             XX_LOGW("Plugin operation `{}` cancel threw unknown exception", label_);
         }
     }
+
+public:
 
     bool submitted() const {
         std::lock_guard lock(submitMutex_);
@@ -199,19 +239,12 @@ struct OpCore : std::enable_shared_from_this<OpCore> {
             std::lock_guard lock(submitMutex_);
             completionSubmitted_ = true;
         }
-        state_ = PluginOperationState::Rejected;
+        state_.store(PluginOperationState::Rejected, std::memory_order_release);
         callback_ = nullptr;
         callbackUd_ = nullptr;
         completionHandler_ = {};
         drive_ = {};
         releaseRecords();
-    }
-
-    /// 完成端点使用 weak_ptr，不依赖插件继续持有/调用 OpCore 裸指针。
-    static void AGENTXX_PLUGIN_CALL onDone(
-        void* ud, int32_t status, const AgentxxPluginStringView* payload
-    ) noexcept {
-        onDoneCore(static_cast<OpCore*>(ud), status, payload);
     }
 
     /// notify 的 host_ud 只指向宿主拥有的完成端点；Operation 已回收时，
@@ -223,7 +256,7 @@ struct OpCore : std::enable_shared_from_this<OpCore> {
         if (!endpoint) {
             return;
         }
-        if (auto operation = endpoint->operation.lock()) {
+        if (auto operation = endpoint->takeOperation()) {
             onDoneCore(operation.get(), status, payload);
         } else {
             XX_LOGW("Late plugin completion ignored after operation cleanup");
@@ -234,7 +267,6 @@ struct OpCore : std::enable_shared_from_this<OpCore> {
         return {&OpCore::onEndpointDone, completionEndpoint_.get()};
     }
 
-private:
     static void onDoneCore(
         OpCore* self, int32_t status, const AgentxxPluginStringView* payload
     ) noexcept {
@@ -262,24 +294,29 @@ private:
                 // 先置位再投递，避免两个 worker 同时完成时重复接受。
                 self->completionSubmitted_ = true;
             }
-            try {
-                asio::post(
-                    self->runtime_->executor,
-                    [keep, packet = std::move(packet)]() mutable {
-                        keep->commit(std::move(packet));
+            auto completion = std::make_shared<std::function<void()>>(
+                [weak = std::weak_ptr<OpCore>(keep), packet = std::move(packet)]() mutable {
+                    if (auto operation = weak.lock()) {
+                        operation->commit(std::move(packet));
                     }
-                );
-            } catch (...) {
-                // executor 已停止时不能从完成线程调用插件 callback。保留 runtime
-                // 和 lease，关闭路径会报告 CloseFailed，而不是提前 dlclose。
-                XX_LOGE("Unable to enqueue plugin completion; runtime retains the operation");
+                }
+            );
+            if (!enqueueRuntimeAction(
+                    self->runtime_,
+                    [completion] { (*completion)(); },
+                    true
+                )) {
+                // Never invoke plugin or caller code from this completion
+                // thread. The runtime retains accepted actions while its IO
+                // executor is stopped.
+                XX_LOGE("Unable to enqueue plugin completion; runtime is unavailable");
             }
         } catch (...) {
             XX_LOGE("Plugin completion endpoint failed unexpectedly");
         }
     }
 
-    public:
+public:
     /// 一个 Operation 只有一个 await 等待者；完成处理器与等待者可同时使用。
     asio::awaitable<void> wait() {
         if (completed()) {
@@ -298,11 +335,11 @@ private:
 
     /// 唯一终态入口：复制结果→失效取消→回调→清理记录/lease→唤醒等待者。
     void commit(CompletionPacket packet) {
-        if (completed() || state_ == PluginOperationState::Rejected) {
+        if (completed() || state() == PluginOperationState::Rejected) {
             return;
         }
         completion_ = std::move(packet);
-        state_ = PluginOperationState::Completed;
+        state_.store(PluginOperationState::Completed, std::memory_order_release);
         handle_->completed.store(true, std::memory_order_release);
         providerHandle_ = nullptr;
         auto callback = std::exchange(callback_, nullptr);
@@ -329,22 +366,33 @@ private:
         }
         completionHandler_ = {};
         drive_ = {};
+        if (completionEndpoint_) {
+            completionEndpoint_->releaseOperation();
+        }
         releaseRecords();
         finished_.cancel();
     }
 
-    void releaseRecords() {
+    void releaseRecords(bool eraseActive = true) {
+        if (completionEndpoint_) {
+            completionEndpoint_->releaseOperation();
+        }
         if (handle_) {
             handle_->completed.store(true, std::memory_order_release);
-            auto erase = [this](const OpGuardPtr& guard) {
-                if (guard && guard->inst) {
-                    std::erase(guard->inst->outstandingOps, handle_);
-                }
-            };
-            erase(provider_);
-            erase(caller_);
+            if (eraseActive) {
+                auto erase = [this](const OpGuardPtr& guard) {
+                    if (guard && guard->inst) {
+                        std::erase(guard->inst->outstandingOps, handle_);
+                    }
+                };
+                erase(provider_);
+                erase(caller_);
+            }
         }
-        runtime_->operations.erase(id_);
+        {
+            std::lock_guard lock(runtime_->operationsMutex);
+            runtime_->operations.erase(id_);
+        }
         caller_.reset();
         provider_.reset();
     }
@@ -352,7 +400,7 @@ private:
     std::shared_ptr<PluginRuntime> runtime_;
     uint64_t id_ = 0;
     std::string label_;
-    PluginOperationState state_ = PluginOperationState::Accepted;
+    std::atomic<PluginOperationState> state_{PluginOperationState::Accepted};
     mutable std::recursive_mutex submitMutex_;
     bool completionSubmitted_ = false;
     CompletionPacket completion_;
@@ -372,16 +420,40 @@ inline void cancelPluginOperation(AgentxxPluginOperatorHandle* handle) noexcept 
     if (!handle) {
         return;
     }
+    std::shared_ptr<AgentxxPluginOperatorHandle> keep;
     try {
-        auto keep = handle->shared_from_this();
-        asio::post(keep->executor, [keep] {
-            if (!keep->completed.load(std::memory_order_acquire) && keep->cancelFn) {
-                keep->cancelFn();
-            }
-        });
+        keep = handle->shared_from_this();
+        if (enqueueRuntimeAction(
+                keep->runtime.lock(),
+                [keep] {
+                    if (!keep->completed.load(std::memory_order_acquire) && keep->cancelFn) {
+                        keep->cancelFn();
+                    }
+                },
+                true
+            )) {
+            return;
+        }
     } catch (...) {
-        XX_LOGE("Unable to enqueue plugin cancellation");
+        // Fall through to the diagnostic below. Calling plugin code here
+        // would violate the ABI's IO-thread contract.
     }
+    if (keep) {
+        if (auto runtime = keep->runtime.lock()) {
+            if (enqueueRuntimeAction(
+                    runtime,
+                    [keep] {
+                        if (!keep->completed.load(std::memory_order_acquire) && keep->cancelFn) {
+                            keep->cancelFn();
+                        }
+                    },
+                    true
+                )) {
+                return;
+            }
+        }
+    }
+    XX_LOGE("Unable to enqueue plugin cancellation");
 }
 
 struct PluginOpAwaitArgs {
@@ -440,6 +512,62 @@ inline asio::awaitable<std::string> awaitPluginOp(PluginOpAwaitArgs args) {
         throw std::runtime_error(core->payload().empty() ? "plugin operation failed" : core->payload());
     }
     co_return core->payload();
+}
+
+/// Invoke an optional Reset-v1 instance lifecycle hook through the same
+/// completion protocol as tools and capabilities. The hook is called while a
+/// lifecycle lease is held, and its completion is always observed on the
+/// manager's IO executor before the caller proceeds to the next phase.
+template<typename HookFn>
+inline asio::awaitable<bool> awaitPluginLifecycle(
+    const std::shared_ptr<PluginRuntime>& runtime,
+    const std::shared_ptr<PluginInstanceBase>& instance,
+    void* pluginCtx,
+    HookFn hook,
+    std::string_view label,
+    std::string& error
+) {
+    error.clear();
+    if (!hook || !runtime || !instance) {
+        co_return true;
+    }
+    std::shared_ptr<OpCore> core;
+    try {
+        core = OpCore::create(runtime, instance, nullptr, std::string(label), true);
+        OpDrive drive;
+        drive.start = [hook, pluginCtx](const auto* notify, auto* errorOut) -> void* {
+            return hook(pluginCtx, notify, errorOut);
+        };
+        if (!core->start(std::move(drive), error)) {
+            co_return false;
+        }
+        try {
+            co_await core->wait();
+        } catch (const std::exception& e) {
+            error = e.what();
+            co_return false;
+        } catch (...) {
+            error = "plugin lifecycle wait failed";
+            co_return false;
+        }
+        if (core->status() != AGENTXX_PLUGIN_OPERATOR_OK) {
+            error = core->payload().empty() ? "plugin lifecycle hook failed" : core->payload();
+            co_return false;
+        }
+        co_return true;
+    } catch (const std::exception& e) {
+        if (core && !core->submitted()) {
+            core->reject();
+        }
+        error = e.what();
+        co_return false;
+    } catch (...) {
+        if (core && !core->submitted()) {
+            core->reject();
+        }
+        error = "plugin lifecycle hook failed unexpectedly";
+        co_return false;
+    }
 }
 
 } // namespace agentxx::plugin

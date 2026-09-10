@@ -567,66 +567,65 @@ static int32_t AGENTXX_PLUGIN_CALL
     });
 }
 
-static void* AGENTXX_PLUGIN_CALL xx_sleep(
-    const AgentxxPluginHost* host,
-    int64_t                  ms,
-    void(AGENTXX_PLUGIN_CALL* cb)(void* ud),
-    void* ud
+static ::AgentxxPluginOperatorHandle* AGENTXX_PLUGIN_CALL xx_sleep(
+    const AgentxxPluginHost*       host,
+    int64_t                        ms,
+    AgentxxPluginOperatorCallback  cb,
+    void*                          ud,
+    AgentxxPluginString*           error_out
 ) {
-    return agentxx::plugin::guardVtableCall<void*>(nullptr, [&]() -> void* {
+    return agentxx::plugin::guardVtableCall<::AgentxxPluginOperatorHandle*>(nullptr, [&]() {
         auto mgr  = mgrOf(host);
         auto inst = instOf(host);
         if (!mgr || !inst || !cb) {
-            return static_cast<void*>(nullptr);
+            hostMemorySetString(error_out, "scheduler sleep: plugin runtime unavailable");
+            return static_cast<::AgentxxPluginOperatorHandle*>(nullptr);
         }
         auto manager = inst->manager.lock();
         auto admission = std::make_shared<PluginInstance::InflightGuard>(inst->self.lock());
         if (!*admission) {
-            return nullptr;
+            hostMemorySetString(error_out, "scheduler sleep: plugin is closing");
+            return static_cast<::AgentxxPluginOperatorHandle*>(nullptr);
         }
-        return ioCallSync<void*>(manager.get(), [manager, admission, ms, cb, ud]() {
-            return manager->sleep(admission->inst.get(), ms, cb, ud);
-        });
+        return ioCallSync<::AgentxxPluginOperatorHandle*>(
+            manager.get(),
+            [manager, admission, ms, cb, ud, error_out]() {
+                return manager->sleep(admission->inst.get(), ms, cb, ud, error_out);
+            }
+        );
     });
 }
 
-static void AGENTXX_PLUGIN_CALL xx_cancel_sleep(const AgentxxPluginHost* host, void* timer) {
-    agentxx::plugin::guardVtableCallVoid([&]() {
-        auto mgr  = mgrOf(host);
-        auto inst = instOf(host);
-        if (!mgr || !inst || !timer) {
-            return;
-        }
-        auto mgrPtr  = mgr;
-        auto instPtr = inst;
-        ioCallSyncVoid(mgrPtr, [mgrPtr, instPtr, timer]() {
-            mgrPtr->cancelSleep(instPtr, timer);
-        });
-    });
-}
-
-static void AGENTXX_PLUGIN_CALL xx_offload(
+static ::AgentxxPluginOperatorHandle* AGENTXX_PLUGIN_CALL xx_offload(
     const AgentxxPluginHost* host,
-    volatile int32_t*        cancel_flag,
-    void*(AGENTXX_PLUGIN_CALL*
-              work)(void* ud, volatile int32_t* cancel_flag, AgentxxPluginString* error_out),
-    void(AGENTXX_PLUGIN_CALL* done)(void* ud, void* result, const AgentxxPluginStringView* error),
-    void* ud
+    void*(AGENTXX_PLUGIN_CALL* work)(
+        void*, const AgentxxPluginCancelToken*, AgentxxPluginString*
+    ),
+    void(AGENTXX_PLUGIN_CALL* done)(
+        void*, int32_t, void*, const AgentxxPluginStringView*
+    ),
+    void*                ud,
+    AgentxxPluginString* error_out
 ) {
-    agentxx::plugin::guardVtableCallVoid([&]() {
+    return agentxx::plugin::guardVtableCall<::AgentxxPluginOperatorHandle*>(nullptr, [&]() {
         auto mgr  = mgrOf(host);
         auto inst = instOf(host);
         if (!mgr || !inst || !work) {
-            return;
+            hostMemorySetString(error_out, "scheduler offload: plugin runtime unavailable");
+            return static_cast<::AgentxxPluginOperatorHandle*>(nullptr);
         }
         auto manager = inst->manager.lock();
         auto admission = std::make_shared<PluginInstance::InflightGuard>(inst->self.lock());
         if (!*admission) {
-            return;
+            hostMemorySetString(error_out, "scheduler offload: plugin is closing");
+            return static_cast<::AgentxxPluginOperatorHandle*>(nullptr);
         }
-        ioCallSyncVoid(manager.get(), [manager, admission, cancel_flag, work, done, ud] {
-            manager->offload(admission->inst.get(), cancel_flag, work, done, ud);
-        });
+        return ioCallSync<::AgentxxPluginOperatorHandle*>(
+            manager.get(),
+            [manager, admission, work, done, ud, error_out]() {
+                return manager->offload(admission->inst.get(), work, done, ud, error_out);
+            }
+        );
     });
 }
 
@@ -635,32 +634,29 @@ static int32_t AGENTXX_PLUGIN_CALL xx_is_io_thread(const AgentxxPluginHost* host
     return (mgr && mgr->isIoThread()) ? 1 : 0;
 }
 
-static void AGENTXX_PLUGIN_CALL xx_post_to_io(
+static int32_t AGENTXX_PLUGIN_CALL xx_post_to_io(
     const AgentxxPluginHost* host,
     void(AGENTXX_PLUGIN_CALL* fn)(void* ud),
     void* ud
 ) {
-    agentxx::plugin::guardVtableCallVoid([&]() {
+    return agentxx::plugin::guardVtableCall<int32_t>(-1, [&]() -> int32_t {
         auto* inst = instOf(host);
         auto mgr = inst ? inst->manager.lock() : nullptr;
         auto owner = inst ? inst->self.lock() : nullptr;
         if (!mgr || !owner || !fn) {
-            return;
+            return -1;
         }
         auto admission = std::make_shared<PluginInstance::InflightGuard>(owner);
         if (!*admission) {
-            return;
+            return -1;
         }
-        ioCallSyncVoid(mgr.get(), [mgr, admission, fn, ud] {
-            mgr->postCallback(admission->inst.get(), fn, ud);
-        });
+        return ioCallSync<int32_t>(
+            mgr.get(),
+            [mgr, admission, fn, ud]() -> int32_t {
+                return mgr->postCallback(admission->inst.get(), fn, ud) ? 0 : -1;
+            }
+        );
     });
-}
-
-static void AGENTXX_PLUGIN_CALL xx_pump_io(const AgentxxPluginHost* host) {
-    // Reset-v1 不允许插件主动驱动宿主事件循环。旧字段在 ABI 迁移完成前保留
-    // 为安全 no-op，下一阶段从 Scheduler 表删除。
-    (void)host;
 }
 
 static void AGENTXX_PLUGIN_CALL
@@ -1150,7 +1146,7 @@ static int32_t AGENTXX_PLUGIN_CALL
 
 static const AgentxxPluginToolsIface g_ifaceTools = {
     /* version */ AGENTXX_PLUGIN_IFACE_AGENT_TOOLS_VERSION,
-    /* _reserved */ 0,
+    /* struct_size */ sizeof(AgentxxPluginToolsIface),
     /* register_tool */ xx_register_tool,
     /* unregister_tool */ xx_unregister_tool,
     /* call_tool_async */ xx_call_tool_async,
@@ -1159,14 +1155,14 @@ static const AgentxxPluginToolsIface g_ifaceTools = {
 
 static const AgentxxPluginHooksIface g_ifaceHooks = {
     /* version */ AGENTXX_PLUGIN_IFACE_AGENT_HOOKS_VERSION,
-    /* _reserved */ 0,
+    /* struct_size */ sizeof(AgentxxPluginHooksIface),
     /* register_hook */ xx_register_hook,
     /* unregister_hook */ xx_unregister_hook,
 };
 
 static const AgentxxPluginEventsIface g_ifaceEvents = {
     /* version */ AGENTXX_PLUGIN_IFACE_AGENT_EVENTS_VERSION,
-    /* _reserved */ 0,
+    /* struct_size */ sizeof(AgentxxPluginEventsIface),
     /* subscribe */ xx_subscribe,
     /* unsubscribe */ xx_unsubscribe,
     /* publish */ xx_publish,
@@ -1174,7 +1170,7 @@ static const AgentxxPluginEventsIface g_ifaceEvents = {
 
 static const AgentxxPluginCapabilitiesIface g_ifaceCapabilities = {
     /* version */ AGENTXX_PLUGIN_IFACE_AGENT_CAPABILITIES_VERSION,
-    /* _reserved */ 0,
+    /* struct_size */ sizeof(AgentxxPluginCapabilitiesIface),
     /* register_capability */ xx_register_capability,
     /* register_capability_ex */ xx_register_capability_ex,
     /* unregister_capability */ xx_unregister_capability,
@@ -1185,18 +1181,17 @@ static const AgentxxPluginCapabilitiesIface g_ifaceCapabilities = {
 
 static const AgentxxPluginSchedulerIface g_ifaceScheduler = {
     /* version */ AGENTXX_PLUGIN_IFACE_AGENT_SCHEDULER_VERSION,
-    /* _reserved */ 0,
+    /* struct_size */ sizeof(AgentxxPluginSchedulerIface),
     /* is_io_thread */ xx_is_io_thread,
     /* post_to_io */ xx_post_to_io,
-    /* pump_io */ xx_pump_io,
     /* sleep */ xx_sleep,
-    /* cancel_sleep */ xx_cancel_sleep,
+    /* op_cancel */ xx_op_cancel,
     /* offload */ xx_offload,
 };
 
 static const AgentxxPluginSessionIface g_ifaceSession = {
     /* version */ AGENTXX_PLUGIN_IFACE_AGENT_SESSION_VERSION,
-    /* _reserved */ 0,
+    /* struct_size */ sizeof(AgentxxPluginSessionIface),
     /* get_share_store */ xx_get_share_store,
     /* emit_message_tip */ xx_emit_message_tip,
     /* add_share_store */ xx_add_share_store,
@@ -1204,7 +1199,7 @@ static const AgentxxPluginSessionIface g_ifaceSession = {
 
 static const AgentxxPluginsIface g_ifacePlugins = {
     /* version */ AGENTXX_PLUGIN_IFACE_AGENT_PLUGINS_VERSION,
-    /* _reserved */ 0,
+    /* struct_size */ sizeof(AgentxxPluginsIface),
     /* list_plugins */ xx_list_plugins,
     /* get_plugin */ xx_get_plugin,
     /* get_own_info */ xx_get_own_info,
@@ -1212,7 +1207,7 @@ static const AgentxxPluginsIface g_ifacePlugins = {
 
 static const AgentxxPluginConfigIface g_ifaceConfig = {
     /* version */ AGENTXX_PLUGIN_IFACE_AGENT_CONFIG_VERSION,
-    /* _reserved */ 0,
+    /* struct_size */ sizeof(AgentxxPluginConfigIface),
     /* get_config */ xx_get_config,
     /* get_plugin_args */ xx_get_plugin_args,
     /* get_tool_prompt */ xx_get_tool_prompt,
@@ -1224,27 +1219,27 @@ static const AgentxxPluginConfigIface g_ifaceConfig = {
 
 static const AgentxxPluginPromptIface g_ifacePrompt = {
     /* version */ AGENTXX_PLUGIN_IFACE_AGENT_PROMPT_VERSION,
-    /* _reserved */ 0,
+    /* struct_size */ sizeof(AgentxxPluginPromptIface),
     /* get_prompt */ xx_get_prompt,
     /* set_prompt */ xx_set_prompt,
 };
 
 static const AgentxxPluginJsonIface g_ifaceJson = {
     /* version */ AGENTXX_PLUGIN_IFACE_AGENT_JSON_VERSION,
-    /* _reserved */ 0,
+    /* struct_size */ sizeof(AgentxxPluginJsonIface),
     /* json_get_string */ xx_json_get_string,
     /* json_escape */ xx_json_escape,
 };
 
 static const AgentxxPluginLogIface g_ifaceLog = {
     /* version */ AGENTXX_PLUGIN_IFACE_AGENT_LOG_VERSION,
-    /* _reserved */ 0,
+    /* struct_size */ sizeof(AgentxxPluginLogIface),
     /* log */ xx_log,
 };
 
 static const AgentxxPluginResourcesIface g_ifaceResources = {
     /* version */ AGENTXX_PLUGIN_IFACE_AGENT_RESOURCES_VERSION,
-    /* _reserved */ 0,
+    /* struct_size */ sizeof(AgentxxPluginResourcesIface),
     /* register_skill_dir */ xx_register_skill_dir,
     /* unregister_skill_dir */ xx_unregister_skill_dir,
     /* register_memory_file */ xx_register_memory_file,
@@ -1256,19 +1251,19 @@ static const AgentxxPluginResourcesIface g_ifaceResources = {
 
 static const AgentxxPluginModelIface g_ifaceModel = {
     /* version */ AGENTXX_PLUGIN_IFACE_AGENT_MODEL_VERSION,
-    /* _reserved */ 0,
+    /* struct_size */ sizeof(AgentxxPluginModelIface),
     /* get_config */ xx_model_get_config,
 };
 
 static const AgentxxPluginCancelIface g_ifaceCancel = {
     /* version */ AGENTXX_PLUGIN_IFACE_AGENT_CANCEL_VERSION,
-    /* _reserved */ 0,
+    /* struct_size */ sizeof(AgentxxPluginCancelIface),
     /* is_cancelled */ xx_cancel_is_cancelled,
 };
 
 static const AgentxxPluginGraphIface g_ifaceGraph = {
     /* version */ AGENTXX_PLUGIN_IFACE_AGENT_GRAPH_VERSION,
-    /* _reserved */ 0,
+    /* struct_size */ sizeof(AgentxxPluginGraphIface),
     /* register_node_type */ xx_register_node_type,
     /* unregister_node_type */ xx_unregister_node_type,
     /* get_graph_json */ xx_get_graph_json,
@@ -1278,7 +1273,7 @@ static const AgentxxPluginGraphIface g_ifaceGraph = {
 
 static const AgentxxPluginTasksIface g_ifaceTasks = {
     /* version */ AGENTXX_PLUGIN_IFACE_AGENT_TASKS_VERSION,
-    /* _reserved */ 0,
+    /* struct_size */ sizeof(AgentxxPluginTasksIface),
     /* register_task */ xx_register_task,
     /* cancel_task */ xx_op_cancel,
 };
@@ -1666,7 +1661,7 @@ int PluginManager::setPromptJson(PluginInstance* inst, AgentxxPluginStringView p
             return -1;
         }
 
-        if (!inst->promptBackup.backedUpSystem) {
+        if (j.contains("systemPrompt") && !inst->promptBackup.backedUpSystem) {
             inst->promptBackup.backedUpSystem = true;
             inst->promptBackup.systemPrompt   = c->agentConfig->prompt.systemPrompt;
         }
@@ -1711,6 +1706,32 @@ int PluginManager::setPromptJson(PluginInstance* inst, AgentxxPluginStringView p
         }
 
         c->agentConfig->prompt.mergeFromJson(j);
+        if (j.contains("systemPrompt")) {
+            inst->promptBackup.appliedSystemPrompt = c->agentConfig->prompt.systemPrompt;
+        }
+        for (const auto& [key, _] : inst->promptBackup.appendSystemPrompts) {
+            auto it = c->agentConfig->prompt.appendSystemPrompts.find(key);
+            if (it != c->agentConfig->prompt.appendSystemPrompts.end()) {
+                inst->promptBackup.appliedAppendSystemPrompts[key] = it->second;
+            } else {
+                inst->promptBackup.appliedAppendSystemPrompts[key] = std::nullopt;
+            }
+        }
+        for (const auto& [toolName, _] : inst->promptBackup.toolPrompt) {
+            auto it = c->agentConfig->prompt.toolPrompt.find(toolName);
+            if (it == c->agentConfig->prompt.toolPrompt.end()) {
+                inst->promptBackup.appliedToolPromptJson[toolName] = std::nullopt;
+            } else {
+                agentxx::util::Json toolJson = agentxx::util::Json::object();
+                toolJson["depict"] = it->second.depict;
+                agentxx::util::Json args = agentxx::util::Json::object();
+                for (const auto& [key, value] : it->second.args) {
+                    args[key] = value;
+                }
+                toolJson["args"] = std::move(args);
+                inst->promptBackup.appliedToolPromptJson[toolName] = toolJson.dump();
+            }
+        }
         return 0;
     } catch (...) {
         return -1;
@@ -1728,26 +1749,61 @@ void PluginManager::restorePromptBackup(PluginInstance* inst) {
     auto& pb = inst->promptBackup;
 
     if (pb.backedUpSystem) {
-        pb.backedUpSystem                   = false;
-        c->agentConfig->prompt.systemPrompt = pb.systemPrompt.value_or("");
+        if (!pb.appliedSystemPrompt.has_value()
+            || c->agentConfig->prompt.systemPrompt == *pb.appliedSystemPrompt) {
+            c->agentConfig->prompt.systemPrompt = pb.systemPrompt.value_or("");
+        }
+        pb.backedUpSystem = false;
     }
     for (const auto& [key, orig] : pb.appendSystemPrompts) {
-        if (orig.has_value()) {
-            c->agentConfig->prompt.appendSystemPrompts[key] = *orig;
-        } else {
-            c->agentConfig->prompt.appendSystemPrompts.erase(key);
+        const auto applied = pb.appliedAppendSystemPrompts.find(key);
+        auto current = c->agentConfig->prompt.appendSystemPrompts.find(key);
+        const bool unchanged = applied == pb.appliedAppendSystemPrompts.end()
+            || (applied->second.has_value() && current != c->agentConfig->prompt.appendSystemPrompts.end()
+                && current->second == *applied->second)
+            || (!applied->second.has_value() && current == c->agentConfig->prompt.appendSystemPrompts.end());
+        if (unchanged) {
+            if (orig.has_value()) {
+                c->agentConfig->prompt.appendSystemPrompts[key] = *orig;
+            } else {
+                c->agentConfig->prompt.appendSystemPrompts.erase(key);
+            }
         }
     }
     pb.appendSystemPrompts.clear();
+    pb.appliedAppendSystemPrompts.clear();
+    pb.appliedSystemPrompt.reset();
 
     for (const auto& [toolName, origPrompt] : pb.toolPrompt) {
-        if (origPrompt.has_value()) {
-            c->agentConfig->prompt.toolPrompt[toolName] = *origPrompt;
-        } else {
-            c->agentConfig->prompt.toolPrompt.erase(toolName);
+        bool unchanged = true;
+        auto applied = pb.appliedToolPromptJson.find(toolName);
+        auto current = c->agentConfig->prompt.toolPrompt.find(toolName);
+        if (applied != pb.appliedToolPromptJson.end()) {
+            if (!applied->second.has_value()) {
+                unchanged = current == c->agentConfig->prompt.toolPrompt.end();
+            } else if (current == c->agentConfig->prompt.toolPrompt.end()) {
+                unchanged = false;
+            } else {
+                agentxx::util::Json toolJson = agentxx::util::Json::object();
+                toolJson["depict"] = current->second.depict;
+                agentxx::util::Json args = agentxx::util::Json::object();
+                for (const auto& [key, value] : current->second.args) {
+                    args[key] = value;
+                }
+                toolJson["args"] = std::move(args);
+                unchanged = toolJson.dump() == *applied->second;
+            }
+        }
+        if (unchanged) {
+            if (origPrompt.has_value()) {
+                c->agentConfig->prompt.toolPrompt[toolName] = *origPrompt;
+            } else {
+                c->agentConfig->prompt.toolPrompt.erase(toolName);
+            }
         }
     }
     pb.toolPrompt.clear();
+    pb.appliedToolPromptJson.clear();
     pb.backedUpTools.clear();
 }
 

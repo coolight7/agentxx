@@ -15,6 +15,7 @@
 #include "agentxx/util/string_util.h"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
+#include "asio/use_awaitable.hpp"
 #include "fmt/format.h"
 #include "neograph/graph/compiler.h"
 #include "neograph/graph/validator.h"
@@ -1106,6 +1107,24 @@ asio::awaitable<BaseAgent::TurnResult> BaseAgent::runTurnAsync(
 
 BaseAgent::~BaseAgent() {
     engine = nullptr;
+}
+
+asio::awaitable<bool> BaseAgent::shutdownAsync(std::chrono::milliseconds timeout) {
+    if (!agentContext || !agentContext->pluginManager) {
+        co_return true;
+    }
+    // stop 事务必须跑在插件管理器注册的 IO executor 上 (init 时绑定), 不能想当然
+    // 用 ioCtx: 宿主 spawn 的子代理在调用方 executor 上直跑 (engine 直跑),
+    // 其自身 ioCtx 从未 run(); 投递到那里会让 shutdownAsync 永久挂起。
+    // 调用方可能来自任意 executor, 因此这里只借用管理器的 executor 执行事务。
+    if (const auto& pluginEx = agentContext->pluginManager->ioExecutor()) {
+        co_return co_await asio::co_spawn(
+            pluginEx,
+            agentContext->shutdownPluginsAsync(timeout),
+            asio::use_awaitable
+        );
+    }
+    co_return co_await agentContext->shutdownPluginsAsync(timeout);
 }
 
 neograph::graph::GraphEngine* BaseAgent::getEngine() {

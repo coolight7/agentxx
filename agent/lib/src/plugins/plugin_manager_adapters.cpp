@@ -391,12 +391,30 @@ int PluginManager::registerGraphNodeType(
         return -1;
     }
     std::string type{spec->type.data, spec->type.size};
-    if (ctx->graphRegistry->contains_type(type)) {
-        XX_LOGW("Plugin `{}` graph node type `{}` conflicts with existing type", inst->name, type);
-        return -1;
-    }
     auto shared = inst->self.lock();
     if (!shared) {
+        return -1;
+    }
+    auto slotIt = graphTypeSlots_.find(type);
+    if (slotIt == graphTypeSlots_.end()) {
+        if (ctx->graphRegistry->contains_type(type)) {
+            XX_LOGW("Plugin `{}` graph node type `{}` conflicts with existing type", inst->name, type);
+            return -1;
+        }
+        slotIt = graphTypeSlots_.emplace(type, std::make_shared<GraphTypeSlot>()).first;
+    }
+    auto slot = slotIt->second;
+    // GraphRegistry 不提供删除类型，slot 是同名类型的唯一间接层。
+    // 活跃 slot 仍由另一实例占用时不能覆盖它，否则旧图节点和新插件会
+    // 在同一个类型名下交叉运行。只有失效 slot 才允许被重载复用。
+    const auto slotSnapshot = slot->snapshot();
+    if (slotSnapshot.active && slotSnapshot.instance
+        && slotSnapshot.instance.get() != shared.get()) {
+        XX_LOGW(
+            "Plugin `{}` graph node type `{}` is already active in another plugin",
+            inst->name,
+            type
+        );
         return -1;
     }
     // 记录注册 (卸载/禁用时清理; 注册表本身无法删除类型, 清理仅移出实例表,
@@ -419,46 +437,46 @@ int PluginManager::registerGraphNodeType(
         spec->config_schema_json.data
             ? std::string{spec->config_schema_json.data, spec->config_schema_json.size}
             : std::string{},
+        slot,
     });
+    auto& registration = inst->graphNodeTypes.back();
+    AgentxxPluginGraphNodeTypeSpec slotSpec{};
+    slotSpec.type = agentxx::plugin::PluginStringView::from(
+        registration.type.data(), registration.type.size()
+    );
+    slotSpec.run_start = registration.run_start;
+    slotSpec.run_cancel = registration.run_cancel;
+    slotSpec.user_data = registration.user_data;
+    slotSpec.config_schema_json = agentxx::plugin::PluginStringView::from(
+        registration.config_schema_json.data(), registration.config_schema_json.size()
+    );
+    slot->activate(shared, slotSpec, inst->lifetime ? inst->lifetime->generation() : 0);
 
     // 注册到 per-agent GraphRegistry: 工厂经 weak_ptr 保活, 实例释放后
     // create 抛错 (引擎不会在卸载后重新编译图, 防御性处理)
-    std::weak_ptr<PluginInstance> weakInst = shared;
-    ctx->graphRegistry->register_type(
-        type,
-        [weakInst,
-         type](const std::string& name, const neograph::json& config, const neograph::graph::NodeContext&) {
-            auto instPtr = weakInst.lock();
-            if (!instPtr || !instPtr->enabled) {
-                throw std::runtime_error(
-                    fmt::format("graph node type `{}`: plugin instance released or disabled", type)
-                );
-            }
-            // 找到对应注册 (按类型名; 若已被替换则用最新)
-            const PluginInstance::GraphNodeTypeRegistration* reg = nullptr;
-            for (const auto& r : instPtr->graphNodeTypes) {
-                if (r.type == type) {
-                    reg = &r;
-                    break;
+    if (!ctx->graphRegistry->contains_type(type)) {
+        ctx->graphRegistry->register_type(
+            type,
+            [slot,
+             type](const std::string& name, const neograph::json& config, const neograph::graph::NodeContext&) {
+                auto snapshot = slot->snapshot();
+                if (!snapshot.active || !snapshot.instance || !snapshot.instance->enabled
+                    || !snapshot.spec.run_start) {
+                    throw std::runtime_error(
+                        fmt::format("graph node type `{}`: plugin instance is unavailable", type)
+                    );
                 }
-            }
-            if (!reg || !reg->run_start) {
-                throw std::runtime_error(
-                    fmt::format("graph node type `{}`: registration not found", type)
+                return std::make_unique<PluginGraphNode>(
+                    name,
+                    config.dump(),
+                    snapshot.instance,
+                    snapshot.spec,
+                    slot,
+                    snapshot.generation
                 );
             }
-            AgentxxPluginGraphNodeTypeSpec spec{};
-            spec.type       = agentxx::plugin::PluginStringView::from(type.data(), type.size());
-            spec.run_start  = reg->run_start;
-            spec.run_cancel = reg->run_cancel;
-            spec.user_data  = reg->user_data;
-            spec.config_schema_json = agentxx::plugin::PluginStringView::from(
-                reg->config_schema_json.data(),
-                reg->config_schema_json.size()
-            );
-            return std::make_unique<PluginGraphNode>(name, config.dump(), instPtr, spec);
-        }
-    );
+        );
+    }
     XX_LOGI("Plugin `{}` registered graph node type `{}`", inst->name, type);
     return 0;
 }
@@ -482,6 +500,9 @@ int PluginManager::unregisterGraphNodeType(PluginInstance* inst, AgentxxPluginSt
             typeStr
         );
         return -1;
+    }
+    if (it->slot) {
+        it->slot->invalidate(inst);
     }
     inst->graphNodeTypes.erase(it);
     // GraphRegistry 无删除 API: 仅移出实例注册表; 若引擎尚未编译 (插件加载

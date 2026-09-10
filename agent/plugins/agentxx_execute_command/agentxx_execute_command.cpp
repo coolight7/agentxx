@@ -52,10 +52,10 @@ static int32_t setupExecPlugin(ExecPluginCtx& ctx) {
                std::string_view  args_json,
                std::string_view  tid,
                std::string_view  workDir,
-               volatile int32_t* cancel_flag) -> std::string {
+               const AgentxxPluginCancelToken* cancel_token) -> std::string {
                 ArgReader   args(args_json);
                 std::string tidStr(tid);
-                if (cancel_flag && *cancel_flag != 0) {
+                if (agentxx_plugin_cancel_is_requested(cancel_token)) {
                     c.cancelRegistry.cancel(tidStr);
                 }
                 StoreFn storeFn = nullptr;
@@ -74,8 +74,8 @@ static int32_t setupExecPlugin(ExecPluginCtx& ctx) {
                             result = co_await windowsExecuteAsync(
                                 args.raw(),
                                 std::string(workDir),
-                                [&c, tidStr, cancel_flag]() -> bool {
-                                    if (cancel_flag && *cancel_flag != 0)
+                                [&c, tidStr, cancel_token]() -> bool {
+                                    if (agentxx_plugin_cancel_is_requested(cancel_token))
                                         return true;
                                     return c.cancelRegistry.isCancelled(tidStr);
                                 },
@@ -105,14 +105,14 @@ static int32_t setupExecPlugin(ExecPluginCtx& ctx) {
                std::string_view  args_json,
                std::string_view  tid,
                std::string_view  workDir,
-               volatile int32_t* cancel_flag) -> std::string {
+               const AgentxxPluginCancelToken* cancel_token) -> std::string {
                 ArgReader   args(args_json);
                 std::string tidStr(tid);
-                if (cancel_flag && *cancel_flag != 0) {
+                if (agentxx_plugin_cancel_is_requested(cancel_token)) {
                     c.cancelRegistry.cancel(tidStr);
                 }
-                auto isCancelled = [&c, tidStr, cancel_flag]() -> bool {
-                    if (cancel_flag && *cancel_flag != 0)
+                auto isCancelled = [&c, tidStr, cancel_token]() -> bool {
+                    if (agentxx_plugin_cancel_is_requested(cancel_token))
                         return true;
                     return c.cancelRegistry.isCancelled(tidStr);
                 };
@@ -151,10 +151,10 @@ static int32_t setupExecPlugin(ExecPluginCtx& ctx) {
                std::string_view  args_json,
                std::string_view  tid,
                std::string_view  workDir,
-               volatile int32_t* cancel_flag) -> std::string {
+               const AgentxxPluginCancelToken* cancel_token) -> std::string {
                 ArgReader   args(args_json);
                 std::string tidStr(tid);
-                if (cancel_flag && *cancel_flag != 0) {
+                if (agentxx_plugin_cancel_is_requested(cancel_token)) {
                     c.cancelRegistry.cancel(tidStr);
                 }
                 StoreFn storeFn = nullptr;
@@ -173,8 +173,8 @@ static int32_t setupExecPlugin(ExecPluginCtx& ctx) {
                             result = co_await bashExecuteAsync(
                                 args.raw(),
                                 std::string(workDir),
-                                [&c, tidStr, cancel_flag]() -> bool {
-                                    if (cancel_flag && *cancel_flag != 0)
+                                [&c, tidStr, cancel_token]() -> bool {
+                                    if (agentxx_plugin_cancel_is_requested(cancel_token))
                                         return true;
                                     return c.cancelRegistry.isCancelled(tidStr);
                                 },
@@ -204,14 +204,14 @@ static int32_t setupExecPlugin(ExecPluginCtx& ctx) {
                std::string_view  args_json,
                std::string_view  tid,
                std::string_view  workDir,
-               volatile int32_t* cancel_flag) -> std::string {
+               const AgentxxPluginCancelToken* cancel_token) -> std::string {
                 ArgReader   args(args_json);
                 std::string tidStr(tid);
-                if (cancel_flag && *cancel_flag != 0) {
+                if (agentxx_plugin_cancel_is_requested(cancel_token)) {
                     c.cancelRegistry.cancel(tidStr);
                 }
-                auto isCancelled = [&c, tidStr, cancel_flag]() -> bool {
-                    if (cancel_flag && *cancel_flag != 0)
+                auto isCancelled = [&c, tidStr, cancel_token]() -> bool {
+                    if (agentxx_plugin_cancel_is_requested(cancel_token))
                         return true;
                     return c.cancelRegistry.isCancelled(tidStr);
                 };

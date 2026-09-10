@@ -34,6 +34,13 @@ namespace {
 // 本模块测试计数器 (仅本编译单元可见; 不经头文件 extern 导出)
 int g_client_plugin_passed = 0;
 int g_client_plugin_failed = 0;
+
+/// 同步关闭路径无法等待 stop 事务: 该 hook 只用于断言“未被调用”。
+void* AGENTXX_PLUGIN_CALL fakeClientStopHook(
+    void*, const AgentxxPluginOperatorNotify*, AgentxxPluginString*
+) {
+    return nullptr;
+}
 } // namespace
 
 // 断言计数宏覆盖: 将 test_framework.h 的 XX_TEST_EXPECT_* 映射到本模块计数器
@@ -1792,6 +1799,51 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             auto el3 = renderPluginDiff("p", "a\n", "b\n", TUITheme::darkTheme(), 120);
             XX_TEST_EXPECT_TRUE(static_cast<bool>(el3));
         }
+    }
+
+    // ---- 22. 同步关闭不得绕过 stop: 实例、上下文与 DSO 保留 + CloseFailed ----
+    {
+        asio::io_context syncIo;
+        auto syncMgr = std::make_shared<agentxx::plugin::ClientPluginManager>(syncIo.get_executor());
+        auto fake = std::make_shared<agentxx::plugin::ClientPluginInstance>("fake_pending_stop");
+        fake->lifecycleStop    = &fakeClientStopHook;
+        fake->lifecycleStarted = true;
+        fake->pluginCreated    = true;
+        fake->manager          = syncMgr;
+        fake->self             = fake;
+        fake->lifetime         = std::make_shared<agentxx::plugin::InstanceLifetime>(
+            syncIo.get_executor(), fake->name, uint64_t{1}
+        );
+        fake->lifetime->setState(agentxx::plugin::PluginInstanceState::Ready);
+        syncMgr->plugins_.emplace(fake->name, fake);
+
+        XX_TEST_EXPECT_TRUE(fake->lifecycleStopPending());
+        syncMgr->shutdownAll();
+        XX_TEST_EXPECT_TRUE(syncMgr->find("fake_pending_stop") != nullptr);
+        XX_TEST_EXPECT_EQ(
+            static_cast<int>(fake->lifetime->state()),
+            static_cast<int>(agentxx::plugin::PluginInstanceState::CloseFailed)
+        );
+        XX_TEST_EXPECT_FALSE(fake->pluginDestroyed);
+        XX_TEST_EXPECT_TRUE(syncMgr->hasPendingClose());
+
+        // 无 stop 导出的 legacy 实例仍走同步关闭, 不因新守卫变成无条件泄漏。
+        auto legacy = std::make_shared<agentxx::plugin::ClientPluginInstance>("fake_legacy");
+        legacy->manager  = syncMgr;
+        legacy->self     = legacy;
+        legacy->lifetime = std::make_shared<agentxx::plugin::InstanceLifetime>(
+            syncIo.get_executor(), legacy->name, uint64_t{2}
+        );
+        legacy->lifetime->setState(agentxx::plugin::PluginInstanceState::Ready);
+        legacy->pluginCreated = true;
+        syncMgr->plugins_.emplace(legacy->name, legacy);
+
+        syncMgr->shutdownAll();
+        XX_TEST_EXPECT_TRUE(syncMgr->find("fake_legacy") == nullptr);
+        XX_TEST_EXPECT_TRUE(legacy->pluginDestroyed);
+        // stop 未完成的实例仍然保留, 不能因其它实例关闭成功而被清理。
+        XX_TEST_EXPECT_TRUE(syncMgr->find("fake_pending_stop") != nullptr);
+        XX_TEST_EXPECT_TRUE(syncMgr->hasPendingClose());
     }
 
     co_return TestResult{g_client_plugin_passed, g_client_plugin_failed};

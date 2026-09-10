@@ -4,6 +4,7 @@
 #include "agentxx/agent/code_agent.h"
 #include "agentxx/event/event_stream.h"
 #include "agentxx/protocol/a2a_client.h"
+#include "agentxx/plugin/plugin_manager.h"
 #include "agentxx/tools/subagent.h"
 #include "agentxx/util/container_util.h"
 #include "agentxx/util/exception.h"
@@ -486,13 +487,12 @@ asio::awaitable<events::RespSubagentBatchItem> AgentHost::spawnOneTask(
         bool                       sharedSession = false;
         bool                       done          = false;
 
-        void cleanup() {
+        void releaseAccounting() {
             if (done) {
                 return;
             }
             done = true;
             if (host) {
-                host->destroyAgent(agentId);
                 if (!sharedSession) {
                     util::eraseHeterogeneous(host->sessionDepth_, subagentSessionId);
                 }
@@ -503,12 +503,14 @@ asio::awaitable<events::RespSubagentBatchItem> AgentHost::spawnOneTask(
         }
 
         ~SpawnCleanup() {
-            cleanup();
+            // 节点释放由 spawnOneTask 在所属 IO executor 上显式 await；
+            // 析构只负责预算计数，避免同步 reset 仍在运行的 AgentContext。
+            releaseAccounting();
         }
     } cleanup{shared_from_this(), agentId, subagentSessionId, sameContext};
 
     // ---- 运行 (engine 直跑: 保留调用方 executor, 无锁交错) ----
-    co_return co_await agentxx::util::catchErrorAsync<events::RespSubagentBatchItem>(
+    auto response = co_await agentxx::util::catchErrorAsync<events::RespSubagentBatchItem>(
         [&]() -> asio::awaitable<events::RespSubagentBatchItem> {
             co_await subagent->init();
 
@@ -739,6 +741,13 @@ asio::awaitable<events::RespSubagentBatchItem> AgentHost::spawnOneTask(
         // 传入取消令牌: operation_aborted 按取消语义处理
         cancelToken
     );
+    if (cleanup.host) {
+        if (!co_await cleanup.host->destroyAgentAsync(agentId)) {
+            XX_LOGE("AgentHost: deferred shutdown failed for agent `{}`", agentId);
+        }
+    }
+    cleanup.releaseAccounting();
+    co_return response;
 }
 
 asio::awaitable<events::RespSubagentBatch> AgentHost::spawnBatch(
@@ -947,11 +956,44 @@ void AgentHost::destroyAgent(std::string_view agentId) {
         destroyAgent(child->agentId);
     }
     if (auto node = registry_.get(agentId)) {
+        if (node->agent && node->agent->agentContext && node->agent->agentContext->pluginManager
+            && node->agent->agentContext->pluginManager->hasPendingClose()) {
+            // 同步路径无法等待 stop 事务: 实例会保留 CloseFailed, 不 dlclose。
+            XX_LOGW(
+                "AgentHost: destroying agent `{}` with pending plugin shutdown; prefer "
+                "co_await destroyAgentAsync()",
+                agentId
+            );
+        }
         registry_.remove(agentId);
         // node->agent.reset() 释放独立 AgentContext / engine / SessionStore,
         // 该 agent 的全部会话与中间件状态随析构整体释放
         node->agent.reset();
     }
+}
+
+asio::awaitable<bool> AgentHost::destroyAgentAsync(
+    std::string_view agentId, std::chrono::milliseconds timeout
+) {
+    // Children must close before their parent so dependency/session callbacks
+    // cannot observe a parent context that has already been destroyed.
+    for (auto& child : registry_.childrenOf(agentId)) {
+        if (!co_await destroyAgentAsync(child->agentId, timeout)) {
+            co_return false;
+        }
+    }
+
+    auto node = registry_.get(agentId);
+    if (!node || !node->agent) {
+        co_return true;
+    }
+    if (!co_await node->agent->shutdownAsync(timeout)) {
+        XX_LOGE("AgentHost: plugin shutdown failed for agent `{}`", agentId);
+        co_return false;
+    }
+    registry_.remove(agentId);
+    node->agent.reset();
+    co_return true;
 }
 
 } // namespace agent

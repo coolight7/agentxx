@@ -10,13 +10,16 @@
 #include "asio/steady_timer.hpp"
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <functional>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace agentxx {
@@ -36,6 +39,7 @@ class CapabilityRegistry;
 class PluginMiddlewareHandle;
 class PluginTool;
 class PluginInstance;
+struct GraphTypeSlot;
 struct OpCore;
 
 } // namespace plugin
@@ -43,12 +47,30 @@ struct OpCore;
 
 /// 完成通知端点独立于 OpCore 保存，避免插件违约在 Operation 回收后再次
 /// 调用 notify.done 时解引用已经释放的 OpCore。端点由句柄 tombstone 保活。
+///
+/// endpoint 在操作完成前强持有 OpCore。这样即使 manager/runtime 先析构，
+/// 插件仍持有 notify.host_ud 时也不会落到已经释放的 OpCore；第一次完成会
+/// 原子化地取走这份强引用，随后由完成包继续保活到 IO 提交结束。
 struct AgentxxPluginOperationCompletionEndpoint {
-    std::weak_ptr<agentxx::plugin::OpCore> operation;
+    std::mutex                              mutex;
+    std::shared_ptr<agentxx::plugin::OpCore> operation;
+
+    std::shared_ptr<agentxx::plugin::OpCore> takeOperation() noexcept {
+        std::lock_guard lock(mutex);
+        return std::exchange(operation, {});
+    }
+
+    void releaseOperation() noexcept {
+        std::lock_guard lock(mutex);
+        operation.reset();
+    }
 };
 
 struct AgentxxPluginOperatorHandle : std::enable_shared_from_this<AgentxxPluginOperatorHandle> {
-    std::weak_ptr<agentxx::plugin::PluginInstance> caller;
+    std::weak_ptr<agentxx::plugin::PluginInstanceBase> caller;
+    /// Runtime used to retain an IO-bound cancellation request if its executor
+    /// is temporarily stopped while the operation is still accepted.
+    std::weak_ptr<agentxx::plugin::PluginRuntime> runtime;
     asio::any_io_executor                          executor;
     std::function<void()>                          cancelFn;
     std::shared_ptr<AgentxxPluginOperationCompletionEndpoint> completionEndpoint;
@@ -107,12 +129,16 @@ public:
         AgentxxPluginGraphNodeRunCancelFn run_cancel = nullptr;
         void*                             user_data  = nullptr;
         std::string                       config_schema_json;
+        std::shared_ptr<GraphTypeSlot>     slot;
     };
 
     struct PromptBackup {
         std::optional<std::string>                                     systemPrompt;
+        std::optional<std::string>                                     appliedSystemPrompt;
         std::map<std::string, std::optional<std::string>, std::less<>> appendSystemPrompts;
+        std::map<std::string, std::optional<std::string>, std::less<>> appliedAppendSystemPrompts;
         std::map<std::string, std::optional<agentxx::agent::ToolPrompt>, std::less<>> toolPrompt;
+        std::map<std::string, std::optional<std::string>, std::less<>> appliedToolPromptJson;
         std::vector<std::string>                                                      backedUpTools;
         bool backedUpSystem = false;
     };
@@ -121,16 +147,10 @@ public:
     std::vector<HookRegistration>                           hookRegistrations;
     std::vector<std::shared_ptr<AgentxxPluginSubscription>> subscriptions;
     std::vector<std::shared_ptr<AgentxxPluginSubscription>> subscriptionHandles;
-    /// 该操作句柄由实例保活到实例安全销毁；outstandingOps 只表示当前活动操作。
-    std::vector<std::shared_ptr<AgentxxPluginOperatorHandle>> operatorHandles;
-    /// Operation 完成端点的宿主 tombstone。操作提交后仍保留到实例销毁，
-    /// 违约的迟到 done 只会命中空 weak_ptr，不会访问已释放的 OpCore。
-    std::vector<std::shared_ptr<AgentxxPluginOperationCompletionEndpoint>> completionEndpoints;
     std::vector<CapabilityRegistration>                     capabilityRegistrations;
     std::vector<GraphNodeTypeRegistration>                  graphNodeTypes;
     /// 活跃 sleep 使用 Operation 句柄索引；完成回调开始前移除，取消查询 O(1)。
     std::unordered_map<void*, std::shared_ptr<AgentxxPluginOperatorHandle>> sleepTimers;
-    std::vector<std::shared_ptr<AgentxxPluginOperatorHandle>>    outstandingOps;
     PromptBackup                                                 promptBackup;
 
     std::shared_ptr<PluginMiddlewareHandle>  middleware = nullptr;
@@ -306,7 +326,12 @@ public:
         const plugin::PluginManifestInterfaces& interfaces = {}
     );
 
-    asio::awaitable<bool> unloadAsync(std::string_view name);
+    asio::awaitable<bool>
+        unloadAsync(std::string_view name, std::chrono::milliseconds timeout = std::chrono::seconds{30});
+    /// 在所属 IO executor 仍运行时等待所有实例安全关闭。
+    /// 失败实例保留 context/DSO，可再次调用本方法重试。
+    asio::awaitable<bool>
+        shutdownAsync(std::chrono::milliseconds timeout = std::chrono::seconds{30});
     void                  disable(std::string_view name);
     void                  enable(std::string_view name);
     void                  flushPendingCleanup();
@@ -466,17 +491,23 @@ public:
         PluginInstance* inst, void(AGENTXX_PLUGIN_CALL* fn)(void*), void* ud
     );
 
-    void*
-         sleep(PluginInstance* inst, int64_t ms, void(AGENTXX_PLUGIN_CALL* cb)(void* ud), void* ud);
-    void cancelSleep(PluginInstance* inst, void* timer);
-    void offload(
-        PluginInstance*   inst,
-        volatile int32_t* cancel_flag,
+    AgentxxPluginOperatorHandle* sleep(
+        PluginInstance*               inst,
+        int64_t                       ms,
+        AgentxxPluginOperatorCallback cb,
+        void*                         ud,
+        AgentxxPluginString*          error_out
+    );
+    AgentxxPluginOperatorHandle* offload(
+        PluginInstance* inst,
         void*(AGENTXX_PLUGIN_CALL*
-                  work)(void* ud, volatile int32_t* cancel_flag, AgentxxPluginString* error_out),
+                  work)(void* ud, const AgentxxPluginCancelToken* token,
+                        AgentxxPluginString* error_out),
         void(AGENTXX_PLUGIN_CALL*
-                 done)(void* ud, void* result, const AgentxxPluginStringView* error),
-        void* ud
+                 done)(void* ud, int32_t status, void* result,
+                       const AgentxxPluginStringView* error),
+        void*                ud,
+        AgentxxPluginString* error_out
     );
 
     AgentxxPluginOperatorHandle* callToolAsync(
@@ -641,9 +672,15 @@ private:
 
     void shutdownPlugin(const std::shared_ptr<PluginInstance>& inst);
 
+    asio::awaitable<bool> unloadAsyncUntil(
+        std::string name,
+        std::chrono::steady_clock::time_point deadline
+    );
+
     std::weak_ptr<agentxx::agent::AgentContext> agentContext_;
     std::shared_ptr<ToolRegistry>               registry_;
     std::shared_ptr<CapabilityRegistry>         capabilities_;
+    std::map<std::string, std::shared_ptr<GraphTypeSlot>, std::less<>> graphTypeSlots_;
     size_t                                      runningTurns_ = 0;
 };
 

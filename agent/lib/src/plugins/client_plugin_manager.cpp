@@ -10,6 +10,7 @@
 #include "agentxx/plugin/client_plugin_manager.h"
 #include "agentxx/plugin/plugin_common.h"
 #include "agentxx/plugin/plugin_manager.h" /* NativeLoader (平台 dlopen 封装) */
+#include "agentxx/plugin/op_driver.h"
 #include "agentxx/util/container_util.h"
 
 #include "agentxx/agent/io/wire_protocol.h"
@@ -24,6 +25,7 @@
 #include "asio/use_awaitable.hpp"
 #include "fmt/format.h"
 #include "fmt/ranges.h"
+#include <algorithm>
 #include <chrono>
 #include <cstring>
 #include <filesystem>
@@ -155,7 +157,24 @@ bool parseCommandAction(const std::string& jsonText, std::string& action) {
 // =====================================================================
 
 ClientPluginInstance::~ClientPluginInstance() {
-    destroyPlugin();
+    if (lifecycleStopPending()) {
+        // stop 从未执行：destroy 会看到不完整的插件状态。析构只能保留上下文
+        // 与 DSO (宁可泄漏也不能 dlclose 后让残留回调跳入已卸载代码)。
+        XX_LOGE(
+            "[client_plugin] `{}` destroyed with lifecycle stop pending; keeping plugin "
+            "context and DSO loaded (owner must call shutdownAsync before destruction)",
+            name
+        );
+        return;
+    }
+    if (!destroyPlugin()) {
+        XX_LOGE(
+            "[client_plugin] `{}` destroyed while {} lease(s) remain; refusing to dlclose",
+            name,
+            lifetime ? lifetime->leaseCount() : inflight.load(std::memory_order_acquire)
+        );
+        return;
+    }
     if (dlHandle) {
         NativeLoader::close(dlHandle);
         dlHandle = nullptr;
@@ -222,6 +241,12 @@ ClientPluginManager::ClientPluginManager(asio::any_io_executor ex) :
 
 ClientPluginManager::~ClientPluginManager() {
     shutdownAll();
+    if (hasPendingClose()) {
+        XX_LOGW(
+            "[client_plugin] manager destroyed with pending plugin shutdown; owner should "
+            "await shutdownAsync() before stopping the client IO executor"
+        );
+    }
     if (pool_) {
         pool_->join();
     }
@@ -336,9 +361,9 @@ asio::awaitable<std::shared_ptr<ClientPluginInstance>> ClientPluginManager::load
             XX_LOGW("[client_plugin] `{}` get_info threw unknown exception", path);
         }
         if (info) {
-            if (info->api_version < AGENTXX_CLIENT_PLUGIN_API_VERSION) {
+            if (info->api_version != AGENTXX_CLIENT_PLUGIN_API_VERSION) {
                 XX_LOGE(
-                    "[client_plugin] `{}` api_version {} mismatch (host expects >= {})",
+                    "[client_plugin] `{}` api_version {} mismatch (host expects {})",
                     path,
                     info->api_version,
                     AGENTXX_CLIENT_PLUGIN_API_VERSION
@@ -358,9 +383,9 @@ asio::awaitable<std::shared_ptr<ClientPluginInstance>> ClientPluginManager::load
         name = pluginNameFromPath(libPath);
     }
 
-    // 已存在同名插件: 拒绝 (防重复加载)
-    if (plugins_.count(name) > 0) {
-        XX_LOGE("[client_plugin] duplicate plugin name `{}`", name);
+    // 预占名称覆盖 entry 在线程池运行期间的并发重复加载。
+    if (!reservePluginName(name)) {
+        XX_LOGE("[client_plugin] duplicate or currently loading plugin name `{}`", name);
         NativeLoader::close(handle);
         co_return nullptr;
     }
@@ -384,6 +409,7 @@ asio::awaitable<std::shared_ptr<ClientPluginInstance>> ClientPluginManager::load
                 name,
                 "missing required interfaces: " + missing
             );
+            releasePluginName(name);
             NativeLoader::close(handle);
             co_return nullptr;
         }
@@ -401,6 +427,14 @@ asio::awaitable<std::shared_ptr<ClientPluginInstance>> ClientPluginManager::load
     std::string entryErr;
     auto        entryFn = reinterpret_cast<AgentxxClientPluginCreateFn>(
         NativeLoader::sym(handle, AGENTXX_PLUGIN_CLIENT_SYMBOL_CREATE, entryErr)
+    );
+    std::string lifecycleErr;
+    auto lifecycleStart = reinterpret_cast<AgentxxPluginStartFn>(
+        NativeLoader::sym(handle, AGENTXX_PLUGIN_CLIENT_SYMBOL_START, lifecycleErr)
+    );
+    lifecycleErr.clear();
+    auto lifecycleStop = reinterpret_cast<AgentxxPluginStopFn>(
+        NativeLoader::sym(handle, AGENTXX_PLUGIN_CLIENT_SYMBOL_STOP, lifecycleErr)
     );
     if (!entryFn) {
         // 接口声明意图预检: manifest 声明依赖 client 侧接口却未导出
@@ -423,6 +457,7 @@ asio::awaitable<std::shared_ptr<ClientPluginInstance>> ClientPluginManager::load
                 entryErr
             );
         }
+        releasePluginName(name);
         NativeLoader::close(handle);
         co_return nullptr;
     }
@@ -431,6 +466,7 @@ asio::awaitable<std::shared_ptr<ClientPluginInstance>> ClientPluginManager::load
     for (const auto& d : depends) {
         if (plugins_.count(d) == 0) {
             XX_LOGE("[client_plugin] `{}` depends on missing plugin `{}`", name, d);
+            releasePluginName(name);
             NativeLoader::close(handle);
             co_return nullptr;
         }
@@ -451,10 +487,14 @@ asio::awaitable<std::shared_ptr<ClientPluginInstance>> ClientPluginManager::load
     inst->args            = cfg ? cfg->args : agentxx::util::Json::object();
     inst->configPath      = cfg ? cfg->configPath : std::string{};
     inst->dlHandle        = handle;
+    inst->lifecycleStart  = lifecycleStart;
+    inst->lifecycleStop   = lifecycleStop;
     inst->depends         = std::move(depends);
     inst->optionalDepends = std::move(optionalDepends);
     inst->interfaces      = std::move(interfaces);
     inst->manager         = weak_from_this();
+    inst->self            = inst;
+    inst->ownerSelf       = inst;
     inst->host.opaque     = inst.get();
     inst->host.vtable     = hostVtable();
 
@@ -472,9 +512,7 @@ asio::awaitable<std::shared_ptr<ClientPluginInstance>> ClientPluginManager::load
         [inst, entryFn]() -> asio::awaitable<int> {
             try {
                 const auto rc = entryFn(&inst->host, &inst->pluginCtx);
-                if (rc == 0 && inst->pluginCtx != nullptr) {
-                    inst->pluginCreated = true;
-                }
+                inst->pluginCreated = (inst->pluginCtx != nullptr);
                 co_return rc;
             } catch (const std::exception& e) {
                 XX_LOGE("[client_plugin] `{}` entry threw: {}", inst->name, e.what());
@@ -487,24 +525,60 @@ asio::awaitable<std::shared_ptr<ClientPluginInstance>> ClientPluginManager::load
     if (rc != 0) {
         XX_LOGE("[client_plugin] `{}` entry failed (rc={})", name, rc);
         detachAll(inst.get(), false);
+        inst->destroyPlugin();
+        releasePluginName(name);
         // inst 随局部释放析构 → ~ClientPluginInstance → dlclose
         co_return nullptr;
     }
 
+    if (inst->lifecycleStart) {
+        std::string startError;
+        if (!co_await awaitPluginLifecycle(
+                runtime(), inst, inst->pluginCtx, inst->lifecycleStart,
+                "client plugin start", startError
+            )) {
+            XX_LOGE("[client_plugin] `{}` start failed: {}", name, startError);
+            detachAll(inst.get(), false);
+            inst->destroyPlugin();
+            releasePluginName(name);
+            if (inst->dlHandle) {
+                NativeLoader::close(inst->dlHandle);
+                inst->dlHandle = nullptr;
+            }
+            co_return nullptr;
+        }
+    }
+    // 无 start 导出的插件在 create 之后即已激活：此后 destroy 前必须先 stop。
+    inst->lifecycleStarted = true;
+
     inst->lifetime->setState(PluginInstanceState::Ready);
     util::insertHeterogeneous(plugins_, std::string{name}, inst);
+    releasePluginName(name);
     XX_LOGI("[client_plugin] loaded: {} ({})", name, version);
     co_return inst;
 }
 
-asio::awaitable<bool> ClientPluginManager::unloadAsync(std::string_view name) {
+asio::awaitable<bool> ClientPluginManager::unloadAsync(
+    std::string_view name, std::chrono::milliseconds timeout
+) {
+    const auto deadline = std::chrono::steady_clock::now() + std::max(timeout, std::chrono::milliseconds::zero());
+    co_return co_await unloadAsyncUntil(std::string{name}, deadline);
+}
+
+asio::awaitable<bool> ClientPluginManager::unloadAsyncUntil(
+    std::string name, std::chrono::steady_clock::time_point deadline
+) {
     auto inst = find(name);
     if (!inst) {
         XX_LOGW("[client_plugin] unload: not found `{}`", name);
         co_return false;
     }
     if (inst->unloadRequested) {
-        co_return false;
+        // 允许异步 owner 关闭接管同步 shutdownAll 留下的 Closing 实例。
+        if (!inst->lifetime || !inst->lifetime->closeRequested()) {
+            co_return false;
+        }
+        inst->unloadRequested = false;
     }
     inst->unloadRequested = true;
     if (inst->lifetime) {
@@ -514,15 +588,36 @@ asio::awaitable<bool> ClientPluginManager::unloadAsync(std::string_view name) {
     // 级联: 必选依赖者先卸载 (先子后父) —— 与 agent 侧 unloadAsync 一致
     for (const auto& child : collectReverseRequiredDeps(plugins_, std::string{name}, true)) {
         XX_LOGI("[client_plugin] unload `{}` cascades unload of dependent `{}`", name, child);
-        co_await unloadAsync(child);
+        if (!co_await unloadAsyncUntil(child, deadline)) {
+            co_return false;
+        }
     }
 
     // 摘除注册 (adapter 通知 UI 移除; 彻底清理) —— 先于等待, 插件卸载期间
     // 不再收到任何回调
     detachAll(inst.get(), false);
 
+    if (inst->lifecycleStopPending()) {
+        std::string stopError;
+        if (!co_await awaitPluginLifecycle(
+                runtime(), inst, inst->pluginCtx, inst->lifecycleStop,
+                "client plugin stop", stopError
+            )) {
+            inst->unloadRequested = false;
+            if (inst->lifetime) {
+                inst->lifetime->setState(PluginInstanceState::CloseFailed);
+            }
+            XX_LOGE("[client_plugin] `{}` stop failed: {}", inst->name, stopError);
+            co_return false;
+        }
+        inst->lifecycleStopped = true;
+    }
+
     // 等未返回的回调归零 (超时放弃: 保持已 detach 状态, 复位可稍后重试)
-    if (!co_await waitInflightZero(inst, std::chrono::seconds{10})) {
+    const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::max(deadline - std::chrono::steady_clock::now(), std::chrono::steady_clock::duration::zero())
+    );
+    if (!co_await waitInflightZero(inst, remaining)) {
         inst->unloadRequested = false;
         if (inst->lifetime) {
             inst->lifetime->setState(PluginInstanceState::CloseFailed);
@@ -549,6 +644,27 @@ asio::awaitable<bool> ClientPluginManager::unloadAsync(std::string_view name) {
     co_return true;
 }
 
+asio::awaitable<bool>
+    ClientPluginManager::shutdownAsync(std::chrono::milliseconds timeout) {
+    std::vector<std::string> names;
+    names.reserve(plugins_.size());
+    for (const auto& [name, inst] : plugins_) {
+        (void)inst;
+        names.push_back(name);
+    }
+
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    bool       allClosed = true;
+    for (const auto& name : names) {
+        if (!find(name)) {
+            continue;
+        }
+        const bool closed = co_await unloadAsyncUntil(name, deadline);
+        allClosed         = closed && allClosed;
+    }
+    co_return allClosed && plugins_.empty();
+}
+
 void ClientPluginManager::disableImpl(std::string_view name, bool userInitiated) {
     auto inst = find(name);
     if (!inst || !inst->enabled) {
@@ -556,6 +672,9 @@ void ClientPluginManager::disableImpl(std::string_view name, bool userInitiated)
     }
     if (userInitiated) {
         inst->userDisabled = true;
+        inst->blockedByDependencies = false;
+    } else {
+        inst->blockedByDependencies = true;
     }
     inst->enabled = false;
     if (inst->lifetime) {
@@ -591,6 +710,7 @@ void ClientPluginManager::enableImpl(std::string_view name, bool userInitiated) 
     if (userInitiated) {
         inst->userDisabled = false;
     }
+    inst->blockedByDependencies = false;
 
     // 级联启用依赖者 (先父后子)
     for (const auto& d : inst->depends) {
@@ -713,7 +833,11 @@ void ClientPluginManager::enableImpl(std::string_view name, bool userInitiated) 
         uiRegistry_ = std::move(cur);
     }
     // 工具特化渲染器恢复 (直接写回注册表)
-    for (const auto& reg : inst->toolRenderRegs) {
+    for (auto& stored : inst->toolRenderRegs) {
+        auto reg       = stored;
+        reg.lease      = std::make_shared<ClientToolRendererLease>();
+        reg.lease->instance = inst->self;
+        stored.lease   = reg.lease;
         std::lock_guard<std::mutex> lock(uiMutex_);
         auto                        cur = std::make_shared<ClientUiRegistry>(*uiRegistry_);
         bool                        dup = false;
@@ -865,19 +989,78 @@ void ClientPluginManager::shutdownAll() {
     // 清空实例表，否则最后一个 lease 释放后将失去可重试的关闭入口。
 }
 
+namespace {
+
+/// Client manager 的同步析构也必须把 DSO 留到所有回调返回之后。
+void deferClientPluginShutdown(const std::shared_ptr<ClientPluginInstance>& inst) {
+    if (!inst || !inst->lifetime) {
+        return;
+    }
+    if (!inst->lifetime->setIdleCleanup([inst] {
+            if (inst->lifecycleStopPending()) {
+                inst->lifetime->setState(PluginInstanceState::CloseFailed);
+                XX_LOGE(
+                    "[client_plugin] `{}` idle cleanup: lifecycle stop still pending; "
+                    "keeping context and DSO",
+                    inst->name
+                );
+                return;
+            }
+            if (!inst->destroyPlugin()) {
+                XX_LOGE(
+                    "[client_plugin] `{}` idle cleanup still has active leases",
+                    inst->name
+                );
+                return;
+            }
+            inst->lifetime->setState(PluginInstanceState::Closed);
+            // 只删除仍指向这个 generation 的实例，避免迟到的旧 cleanup
+            // 误删同名重载实例。
+            if (auto manager = inst->manager.lock()) {
+                auto it = manager->plugins_.find(inst->name);
+                if (it != manager->plugins_.end() && it->second == inst) {
+                    manager->plugins_.erase(it);
+                }
+            }
+        })) {
+        XX_LOGW("[client_plugin] `{}` already has an idle cleanup", inst->name);
+    }
+}
+
+} // namespace
+
 void ClientPluginManager::shutdownClientPlugin(const std::shared_ptr<ClientPluginInstance>& inst) {
     if (!inst || inst->unloadRequested) {
         return;
     }
     inst->unloadRequested = true;
+    if (inst->lifetime) {
+        // 先关闭 admission，再摘除 UI/事件注册。否则同步析构窗口内仍
+        // 可能有新的事件、命令或 renderer 取得 lease，导致 destroy/dlclose
+        // 的等待条件不断被重新打开。
+        inst->lifetime->requestClose();
+    }
     // 先递归卸载必选依赖本插件的插件 (先子后父)
     for (const auto& dep : collectReverseRequiredDeps(plugins_, inst->name, false)) {
         auto depInst = find(dep);
-        if (depInst && !depInst->unloadRequested) {
+        if (depInst) {
             shutdownClientPlugin(depInst);
         }
     }
     detachAll(inst.get(), false);
+    // stop 事务尚未完成时不能 destroy/dlclose：同步路径无法等待该事务，
+    // 只能保留实例并标记 CloseFailed，等待 shutdownAsync/unloadAsync 收尾。
+    if (inst->lifecycleStopPending()) {
+        if (inst->lifetime) {
+            inst->lifetime->setState(PluginInstanceState::CloseFailed);
+        }
+        XX_LOGE(
+            "[client_plugin] `{}` shutdown deferred: lifecycle stop pending; call "
+            "shutdownAsync before destroying the owner",
+            inst->name
+        );
+        return;
+    }
     // 同步析构路径不能绕过活动 lease。注册已摘除，但插件上下文和 DSO
     // 必须保留到所有已经接受的回调返回；调用方可稍后通过 unloadAsync 重试。
     if (inst->lifetime && inst->lifetime->leaseCount() != 0) {
@@ -886,6 +1069,7 @@ void ClientPluginManager::shutdownClientPlugin(const std::shared_ptr<ClientPlugi
             inst->name,
             inst->lifetime->leaseCount()
         );
+        deferClientPluginShutdown(inst);
         return;
     }
     inst->destroyPlugin();
@@ -979,7 +1163,7 @@ void ClientPluginManager::invokeCommand(const std::string& name, const std::stri
         return;
     }
 
-    PluginInstanceBase::InflightGuard guard(inst.get());
+    PluginInstanceBase::InflightGuard guard(inst->self.lock());
     AgentxxPluginString               err{nullptr, 0};
     AgentxxPluginString               out{nullptr, 0};
     try {
@@ -1214,6 +1398,13 @@ void ClientPluginManager::detachAll(ClientPluginInstance* inst, bool keepInfo) {
     if (!inst) {
         return;
     }
+    // 先使所有旧 COW 快照中的自定义 renderer 失效；UI 线程即使还持有
+    // 快照也只能回退通用展示，不能在 dlclose 后调用插件函数指针。
+    for (auto& renderer : inst->toolRenderRegs) {
+        if (renderer.lease) {
+            renderer.lease->alive.store(false, std::memory_order_release);
+        }
+    }
     // 从 UI 注册表摘除 (adapter 通知)
     {
         std::lock_guard<std::mutex> lock(uiMutex_);
@@ -1323,7 +1514,7 @@ void ClientPluginManager::dispatchEvent(int event, const std::string& payloadJso
     // 快照订阅列表 (shared_ptr 副本: 派发中退订/卸载不会使后续回调悬垂;
     // 订阅对象被 impl 句柄/派发副本保活, alive 位标记已退订)
     struct SubRef {
-        ClientPluginInstance*                               inst;
+        std::weak_ptr<ClientPluginInstance>                  inst;
         std::shared_ptr<ClientPluginInstance::Subscription> sub;
     };
 
@@ -1335,12 +1526,22 @@ void ClientPluginManager::dispatchEvent(int event, const std::string& payloadJso
         }
         for (const auto& s : inst->subscriptions) {
             if (s->alive && s->event == event) {
-                refs.push_back(SubRef{inst.get(), s});
+                refs.push_back(SubRef{inst, s});
             }
         }
     }
     for (const auto& ref : refs) {
-        PluginInstanceBase::InflightGuard guard(ref.inst);
+        // 前一个 handler 可能在同轮内退订此项、禁用或卸载所属插件。
+        // 每次开始 callback 前都重新检查当前订阅和实例状态。
+        auto inst = ref.inst.lock();
+        if (!ref.sub || !ref.sub->alive || !inst || !inst->enabled || !inst->lifetime
+            || !inst->lifetime->acceptsOperations()) {
+            continue;
+        }
+        PluginInstanceBase::InflightGuard guard(inst);
+        if (!guard || !ref.sub->alive || !inst->enabled || !inst->lifetime->acceptsOperations()) {
+            continue;
+        }
         // C ABI 回调异常兜底: 单个插件 handler 违约不得打断整轮派发
         // (影响其他订阅者与 client io 事件循环)
         try {
@@ -1348,9 +1549,9 @@ void ClientPluginManager::dispatchEvent(int event, const std::string& payloadJso
                 = agentxx::plugin::PluginStringView::from(payloadJson.data(), payloadJson.size());
             ref.sub->handler(&payloadSv, ref.sub->ud);
         } catch (const std::exception& e) {
-            XX_LOGW("[client_plugin] `{}` event handler threw: {}", ref.inst->name, e.what());
+            XX_LOGW("[client_plugin] `{}` event handler threw: {}", inst->name, e.what());
         } catch (...) {
-            XX_LOGW("[client_plugin] `{}` event handler threw unknown exception", ref.inst->name);
+            XX_LOGW("[client_plugin] `{}` event handler threw unknown exception", inst->name);
         }
     }
 }
@@ -2068,7 +2269,7 @@ void AGENTXX_PLUGIN_CALL xx_cclose_overlay(const AgentxxPluginHost* host) {
 static const AgentxxClientUiIface* clientUiIface() {
     static const AgentxxClientUiIface table = {
         /* version */ AGENTXX_IFACE_CLIENT_UI_VERSION,
-        /* _reserved */ 0,
+        /* struct_size */ sizeof(AgentxxClientUiIface),
         /* register_status_item */ xx_cregister_status_item,
         /* update_status_item */ xx_cupdate_status_item,
         /* unregister_status_item */ xx_cunregister_status_item,
@@ -2096,14 +2297,14 @@ static const AgentxxClientUiIface* clientUiIface() {
 
 const AgentxxClientEventsIface g_clientIfaceEvents = {
     /* version */ AGENTXX_IFACE_CLIENT_EVENTS_VERSION,
-    /* _reserved */ 0,
+    /* struct_size */ sizeof(AgentxxClientEventsIface),
     /* subscribe */ xx_csubscribe,
     /* unsubscribe */ xx_cunsubscribe,
 };
 
 const AgentxxClientSessionIface g_clientIfaceSession = {
     /* version */ AGENTXX_IFACE_CLIENT_SESSION_VERSION,
-    /* _reserved */ 0,
+    /* struct_size */ sizeof(AgentxxClientSessionIface),
     /* get_client_state */ xx_cget_client_state,
     /* send_user_input */ xx_csend_user_input,
     /* request_cancel */ xx_crequest_cancel,
@@ -2111,13 +2312,13 @@ const AgentxxClientSessionIface g_clientIfaceSession = {
 
 const AgentxxClientWireIface g_clientIfaceWire = {
     /* version */ AGENTXX_IFACE_CLIENT_WIRE_VERSION,
-    /* _reserved */ 0,
+    /* struct_size */ sizeof(AgentxxClientWireIface),
     /* send_plugin_data */ xx_csend_plugin_data,
 };
 
 const AgentxxClientSelfIface g_clientIfaceSelf = {
     /* version */ AGENTXX_IFACE_CLIENT_SELF_VERSION,
-    /* _reserved */ 0,
+    /* struct_size */ sizeof(AgentxxClientSelfIface),
     /* get_own_info */ xx_cget_own_info,
     /* get_plugin_args */ xx_cget_plugin_args,
     /* get_plugin_config_path */ xx_cget_plugin_config_path,
@@ -2127,14 +2328,14 @@ const AgentxxClientSelfIface g_clientIfaceSelf = {
 
 const AgentxxClientJsonIface g_clientIfaceJson = {
     /* version */ AGENTXX_IFACE_CLIENT_JSON_VERSION,
-    /* _reserved */ 0,
+    /* struct_size */ sizeof(AgentxxClientJsonIface),
     /* json_get_string */ xx_cjson_get_string,
     /* json_escape */ xx_cjson_escape,
 };
 
 const AgentxxClientLogIface g_clientIfaceLog = {
     /* version */ AGENTXX_IFACE_CLIENT_LOG_VERSION,
-    /* _reserved */ 0,
+    /* struct_size */ sizeof(AgentxxClientLogIface),
     /* log */ xx_clog,
 };
 
@@ -2903,6 +3104,10 @@ int ClientPluginManager::registerToolRenderer(
     reg.toolName = tname;
     reg.renderFn = spec->render_fn;
     reg.userData = spec->user_data;
+    if (reg.renderFn) {
+        reg.lease           = std::make_shared<ClientToolRendererLease>();
+        reg.lease->instance = inst->self;
+    }
 
     if (!spec->render_fn && !agentxx::plugin::PluginStringView::empty(&spec->template_json)) {
         reg.templateJson = svToStr(spec->template_json);
@@ -2924,6 +3129,9 @@ int ClientPluginManager::registerToolRenderer(
         bool                        replaced = false;
         for (auto& r : cur->toolRenderers) {
             if (r.plugin == inst->name && r.toolName == tname) {
+                if (r.lease) {
+                    r.lease->alive.store(false, std::memory_order_release);
+                }
                 r        = reg;
                 replaced = true;
                 break;
@@ -2938,6 +3146,9 @@ int ClientPluginManager::registerToolRenderer(
     bool replacedInst = false;
     for (auto& r : inst->toolRenderRegs) {
         if (r.toolName == tname) {
+            if (r.lease) {
+                r.lease->alive.store(false, std::memory_order_release);
+            }
             r            = reg;
             replacedInst = true;
             break;
@@ -2957,6 +3168,11 @@ int ClientPluginManager::unregisterToolRenderer(
         return -1;
     }
     const std::string tname = svToStr(tool_name);
+    for (auto& r : inst->toolRenderRegs) {
+        if (r.toolName == tname && r.lease) {
+            r.lease->alive.store(false, std::memory_order_release);
+        }
+    }
     {
         std::lock_guard<std::mutex> lock(uiMutex_);
         auto                        cur = std::make_shared<ClientUiRegistry>(*uiRegistry_);
@@ -3142,7 +3358,7 @@ void ClientPluginManager::dispatchAction(
                 return;
             }
         }
-        PluginInstanceBase::InflightGuard guard(inst.get());
+        PluginInstanceBase::InflightGuard guard(inst->self.lock());
         AgentxxUiActionContext            ctx{};
         ctx.version     = 1;
         ctx.owner_id    = agentxx::plugin::PluginStringView::from(ownerId.data(), ownerId.size());
@@ -3230,6 +3446,23 @@ ClientToolRenderResult renderClientTool(
         for (const auto& r : reg->toolRenderers) {
             if (r.toolName == toolName) {
                 if (r.renderFn) {
+                    std::shared_ptr<ClientPluginInstance> owner;
+                    if (r.lease) {
+                        if (!r.lease->alive.load(std::memory_order_acquire)) {
+                            continue;
+                        }
+                        owner = r.lease->instance.lock();
+                        if (!owner || !owner->enabled || !owner->lifetime
+                            || !owner->lifetime->acceptsOperations()) {
+                            continue;
+                        }
+                    }
+                    PluginInstanceBase::InflightGuard guard(owner);
+                    if (r.lease && (!guard || !r.lease->alive.load(std::memory_order_acquire)
+                                    || !owner->enabled
+                                    || !owner->lifetime->acceptsOperations())) {
+                        continue;
+                    }
                     AgentxxToolRenderInput input{};
                     input.version      = 1;
                     input.tool_call_id = agentxx::plugin::PluginStringView::from(

@@ -15,13 +15,28 @@ PluginGraphNode::PluginGraphNode(
     std::string_view                name,
     std::string_view                configJson,
     std::shared_ptr<PluginInstance> instance,
-    AgentxxPluginGraphNodeTypeSpec  spec
+    AgentxxPluginGraphNodeTypeSpec  spec,
+    std::shared_ptr<GraphTypeSlot>  slot,
+    uint64_t                        generation
 ) :
     name_(name),
     configJson_(configJson),
     type_(spec.type.data ? std::string{spec.type.data, spec.type.size} : std::string{}),
+    configSchemaJson_(
+        spec.config_schema_json.data
+            ? std::string{spec.config_schema_json.data, spec.config_schema_json.size}
+            : std::string{}
+    ),
     instance_(std::move(instance)),
-    spec_(spec) {}
+    spec_(spec),
+    slot_(std::move(slot)),
+    generation_(generation) {
+    spec_.type = agentxx::plugin::PluginStringView::from(type_.data(), type_.size());
+    spec_.config_schema_json = agentxx::plugin::PluginStringView::from(
+        configSchemaJson_.data(),
+        configSchemaJson_.size()
+    );
+}
 
 PluginGraphNode::~PluginGraphNode() = default;
 
@@ -37,7 +52,22 @@ asio::awaitable<neograph::graph::NodeOutput> PluginGraphNode::run(neograph::grap
     if (!inst->enabled) {
         throw std::runtime_error(fmt::format("graph node `{}`: plugin disabled", name_));
     }
-    if (!spec_.run_start) {
+    if (inst->lifetime && !inst->lifetime->acceptsOperations()) {
+        throw std::runtime_error(fmt::format("graph node `{}`: plugin is closing", name_));
+    }
+
+    auto spec = spec_;
+    if (slot_) {
+        auto snapshot = slot_->snapshot();
+        if (!snapshot.active || !snapshot.instance || snapshot.instance.get() != inst.get()
+            || snapshot.generation != generation_) {
+            throw std::runtime_error(
+                fmt::format("graph node `{}`: plugin generation is no longer active", name_)
+            );
+        }
+        spec = snapshot.spec;
+    }
+    if (!spec.run_start) {
         throw std::runtime_error(fmt::format("graph node `{}`: null run_start callback", name_));
     }
 
@@ -46,7 +76,6 @@ asio::awaitable<neograph::graph::NodeOutput> PluginGraphNode::run(neograph::grap
     const std::string configJson = configJson_;
 
     auto       ex       = co_await asio::this_coro::executor;
-    auto       spec     = spec_;
     auto       instKeep = inst;
     const auto nodeName = name_;
     const auto threadId = in.ctx.thread_id;
