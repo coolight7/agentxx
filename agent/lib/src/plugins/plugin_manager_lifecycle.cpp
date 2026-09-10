@@ -597,6 +597,11 @@ asio::awaitable<void> PluginManager::stopForDisable(std::shared_ptr<PluginInstan
     if (!inst || !inst->lifecycleStopPending()) {
         co_return;
     }
+    // 实例已经开始关闭时, stop 由卸载路径负责补齐；这里再发一次会与
+    // unload 的 stop/destroy 交错。
+    if (inst->lifetime && inst->lifetime->closeRequested()) {
+        co_return;
+    }
     if (inst->enabled) {
         // 等待期间用户又启用了该插件：本次 stop 作废。
         co_return;
@@ -622,6 +627,12 @@ asio::awaitable<void> PluginManager::startForEnable(std::shared_ptr<PluginInstan
     if (!inst || !inst->lifecycleStart) {
         co_return;
     }
+    // enable 事务可能落后于 unload: 关闭/已关闭的实例不得被重新置为 Ready
+    // (InstanceLifetime::setState 明确禁止 Closed 重新打开)。
+    if (!inst->lifetime || inst->lifetime->closeRequested()
+        || inst->lifetime->state() == PluginInstanceState::Closed) {
+        co_return;
+    }
     if (!inst->enabled) {
         co_return;
     }
@@ -645,6 +656,11 @@ asio::awaitable<void> PluginManager::startForEnable(std::shared_ptr<PluginInstan
         // 等待 stop 期间用户又禁用了该插件。
         co_return;
     }
+    if (inst->lifetime->closeRequested()
+        || inst->lifetime->state() == PluginInstanceState::Closed) {
+        // 等待 stop 期间实例开始关闭: 不再 start。
+        co_return;
+    }
 
     std::string error;
     if (!co_await awaitPluginLifecycle(
@@ -654,7 +670,7 @@ asio::awaitable<void> PluginManager::startForEnable(std::shared_ptr<PluginInstan
         // 卸载或下次启用时先 stop 清理，符合 plugin.md 第 7.2 节回滚顺序。
         inst->enabled = false;
         inst->blockedByDependencies = false;
-        if (inst->lifetime) {
+        if (inst->lifetime && !inst->lifetime->closeRequested()) {
             inst->lifetime->setState(PluginInstanceState::Disabled);
         }
         detachInstanceRegistrations(inst.get());
@@ -666,7 +682,7 @@ asio::awaitable<void> PluginManager::startForEnable(std::shared_ptr<PluginInstan
     if (auto c = agentContext_.lock(); c && c->resourceApplier) {
         c->resourceApplier->setOwnerEnabled(inst->name, true);
     }
-    if (inst->lifetime) {
+    if (inst->lifetime && !inst->lifetime->closeRequested()) {
         inst->lifetime->setState(PluginInstanceState::Ready);
     }
     XX_LOGI("Plugin `{}` restarted after enable", inst->name);

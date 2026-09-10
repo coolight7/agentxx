@@ -2,9 +2,13 @@
 
 #include "agentxx/agent/context.h"
 #include "agentxx/plugin/op_driver.h"
+#include "agentxx/plugin/plugin_graph_node.h"
 #include "asio/co_spawn.hpp"
 #include "asio/io_context.hpp"
 #include "asio/use_future.hpp"
+#include "neograph/graph/run_context.h"
+#include "neograph/graph/state.h"
+#include "neograph/graph/types.h"
 
 #include <barrier>
 #include <cstddef>
@@ -115,6 +119,25 @@ struct CallbackState {
             state.protectedDuringCallback = state.fixture->provider->lifetime->leaseCount() != 0
                 && state.fixture->caller->lifetime->leaseCount() != 0;
         }
+    }
+};
+
+/// plugin.md 11.2-8/9 探针：记录取消 → 恢复 → 完成 → 回调 → 销毁的实际顺序，
+/// 并证明回调返回前不会调用插件 destroy。
+struct ShutdownOrderProbe {
+    std::vector<std::string>* order   = nullptr;
+    PluginInstance*           provider = nullptr;
+    PluginManager*            manager  = nullptr;
+    bool                      destroyDuringCallback = false;
+    bool                      onIo                  = false;
+
+    static void AGENTXX_PLUGIN_CALL record(void* ud, int32_t, const AgentxxPluginStringView*) {
+        auto& probe = *static_cast<ShutdownOrderProbe*>(ud);
+        if (probe.order) {
+            probe.order->push_back("callback");
+        }
+        probe.destroyDuringCallback = probe.provider && probe.provider->pluginDestroyed;
+        probe.onIo                  = probe.manager && probe.manager->isIoThread();
     }
 };
 
@@ -1246,6 +1269,316 @@ TestResult testPluginRuntime() {
         XX_TEST_EXPECT_TRUE(f.provider->toolNames.empty());
         f.drain();
         XX_TEST_EXPECT_EQ(f.provider->lifetime->leaseCount(), size_t{0});
+    }
+
+    /// plugin.md 11.2-5: caller 卸载与 provider 未完成互调 —— 正在关闭的 caller
+    /// 不能提前 destroy/dlclose：卸载等待其 lease 超时进入 CloseFailed 并保留
+    /// 上下文；provider 完成后 callback 仍持有 caller lease，callback 返回后
+    /// 才允许收尾（重试成功）。
+    {
+        RuntimeFixture f;
+        CallbackState  cb{.fixture = &f};
+        int            callerDestroys = 0;
+        installLifecycleHooks(*f.caller, &callerDestroys);
+
+        auto op = f.operation();
+        op->accept();
+        op->setCallback(CallbackState::done, &cb);
+        XX_TEST_EXPECT_FALSE(op->completed());
+        XX_TEST_EXPECT_EQ(f.caller->lifetime->leaseCount(), size_t{1});
+
+        // provider 未完成时 caller 开始关闭: 等待 lease 超时 -> CloseFailed,
+        // 插件上下文与动态库保留 (destroy 未调用)。
+        bool firstUnload = true;
+        asio::co_spawn(
+            f.io,
+            [&]() -> asio::awaitable<void> {
+                firstUnload = co_await f.manager->unloadAsync("caller", 0ms);
+            },
+            asio::detached
+        );
+        f.drainAll();
+        XX_TEST_EXPECT_FALSE(firstUnload);
+        XX_TEST_EXPECT_EQ(f.caller->lifetime->state(), PluginInstanceState::CloseFailed);
+        XX_TEST_EXPECT_EQ(callerDestroys, 0);
+        XX_TEST_EXPECT_FALSE(f.caller->pluginDestroyed);
+        XX_TEST_EXPECT_EQ(f.caller->lifetime->leaseCount(), size_t{1});
+
+        // provider 完成: callback 必须在 caller lease 保护下于 IO 线程执行。
+        auto notify = op->notify();
+        notify.done(notify.host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+        f.drainAll();
+        XX_TEST_EXPECT_EQ(cb.calls, 1);
+        XX_TEST_EXPECT_TRUE(cb.protectedDuringCallback && cb.onIo);
+        XX_TEST_EXPECT_EQ(f.caller->lifetime->leaseCount(), size_t{0});
+        XX_TEST_EXPECT_EQ(callerDestroys, 0);
+
+        // 现在才能完成 caller 的关闭 (可重试), destroy 恰好一次。
+        bool secondUnload = false;
+        asio::co_spawn(
+            f.io,
+            [&]() -> asio::awaitable<void> {
+                secondUnload = co_await f.manager->unloadAsync("caller", 500ms);
+            },
+            asio::detached
+        );
+        f.drainAll();
+        XX_TEST_EXPECT_TRUE(secondUnload);
+        XX_TEST_EXPECT_EQ(callerDestroys, 1);
+        XX_TEST_EXPECT_TRUE(f.caller->pluginDestroyed);
+        XX_TEST_EXPECT_EQ(f.caller->lifetime->state(), PluginInstanceState::Closed);
+        XX_TEST_EXPECT_TRUE(f.manager->find("caller") == nullptr);
+    }
+
+    /// plugin.md 11.2-8: shutdown 中后台 Task 挂起 —— 取消唤醒协程、协程返回前
+    /// 提交 exactly-once done、回调返回且 lease 归零后才执行 destroy。
+    /// 顺序: cancel → resume/done → callback → completion → destroy。
+    {
+        RuntimeFixture f;
+        int            destroys = 0;
+        installLifecycleHooks(*f.provider, &destroys);
+        std::vector<std::string> order;
+        ShutdownOrderProbe       probe{
+            .order = &order, .provider = f.provider.get(), .manager = f.manager.get()
+        };
+        auto op     = f.operation();
+        auto notify = op->notify();
+        // 模拟挂起的后台任务: 取消只负责唤醒, 任务在自己的线程上恢复并提交 done。
+        std::promise<void> cancelSignal;
+        auto               cancelFuture = cancelSignal.get_future();
+        // 测试确认"卸载仍停在 lease 等待上"之前, 任务不提交 done。
+        std::promise<void> allowDone;
+        auto               allowDoneFuture = allowDone.get_future();
+        std::thread        task([&] {
+            cancelFuture.wait();
+            order.push_back("resumed");
+            allowDoneFuture.wait();
+            notify.done(notify.host_ud, AGENTXX_PLUGIN_OPERATOR_CANCELLED, nullptr);
+            order.push_back("doneSubmitted");
+        });
+        op->accept([&] {
+            order.push_back("cancel");
+            cancelSignal.set_value();
+        });
+        op->setCallback(ShutdownOrderProbe::record, &probe);
+        op->setCompletionHandler([&](int32_t, std::string_view) { order.push_back("completion"); });
+        XX_TEST_EXPECT_EQ(f.provider->lifetime->leaseCount(), size_t{1});
+
+        bool unloaded = false;
+        asio::co_spawn(
+            f.io,
+            [&]() -> asio::awaitable<void> {
+                unloaded = co_await f.manager->unloadAsync("provider", 5s);
+            },
+            asio::detached
+        );
+        f.drainAll();
+        // 关闭先取消后台任务 (detachAll → cancel), 任务尚未退出: 卸载停在
+        // lease 等待上, destroy 未发生。
+        XX_TEST_EXPECT_FALSE(unloaded);
+        XX_TEST_EXPECT_FALSE(f.provider->pluginDestroyed);
+        XX_TEST_EXPECT_EQ(destroys, 0);
+        XX_TEST_EXPECT_EQ(op->state(), PluginOperationState::Cancelling);
+        XX_TEST_EXPECT_FALSE(order.empty());
+        XX_TEST_EXPECT_EQ(order[0], std::string{"cancel"});
+
+        // 任务在自有线程恢复并提交 done; 宿主回收 lease 与句柄, 卸载随后继续。
+        allowDone.set_value();
+        task.join();
+        f.drainAll();
+        XX_TEST_EXPECT_TRUE(op->completed());
+        XX_TEST_EXPECT_EQ(op->status(), AGENTXX_PLUGIN_OPERATOR_CANCELLED);
+        XX_TEST_EXPECT_TRUE(probe.onIo);
+        XX_TEST_EXPECT_FALSE(probe.destroyDuringCallback);
+        XX_TEST_EXPECT_EQ(order.size(), size_t{5});
+        XX_TEST_EXPECT_EQ(order[0], std::string{"cancel"});
+        XX_TEST_EXPECT_EQ(order[1], std::string{"resumed"});
+        XX_TEST_EXPECT_EQ(order[2], std::string{"doneSubmitted"});
+        XX_TEST_EXPECT_EQ(order[3], std::string{"callback"});
+        XX_TEST_EXPECT_EQ(order[4], std::string{"completion"});
+        XX_TEST_EXPECT_EQ(f.provider->lifetime->leaseCount(), size_t{0});
+
+        // lease 归零后销毁才发生 (destroy 不能早于 callback 与 done)。
+        XX_TEST_EXPECT_TRUE(unloaded);
+        XX_TEST_EXPECT_EQ(destroys, 1);
+        XX_TEST_EXPECT_TRUE(f.provider->pluginDestroyed);
+        XX_TEST_EXPECT_EQ(f.provider->lifetime->state(), PluginInstanceState::Closed);
+        XX_TEST_EXPECT_TRUE(f.manager->find("provider") == nullptr);
+    }
+
+    /// plugin.md 11.2-9: 卸载超时后立即重试 —— 未完成的插件执行不能被跳过;
+    /// 重试继续等待同一 lease, 只有执行真正退出 (done 提交) 后才 destroy/dlclose。
+    {
+        RuntimeFixture f;
+        int            destroys = 0;
+        installLifecycleHooks(*f.provider, &destroys);
+        auto op = f.operation();
+        op->accept();
+        XX_TEST_EXPECT_EQ(f.provider->lifetime->leaseCount(), size_t{1});
+
+        bool first = true;
+        asio::co_spawn(
+            f.io,
+            [&]() -> asio::awaitable<void> {
+                first = co_await f.manager->unloadAsync("provider", 0ms);
+            },
+            asio::detached
+        );
+        f.drainAll();
+        XX_TEST_EXPECT_FALSE(first);
+        XX_TEST_EXPECT_EQ(f.provider->lifetime->state(), PluginInstanceState::CloseFailed);
+        XX_TEST_EXPECT_EQ(destroys, 0);
+        XX_TEST_EXPECT_FALSE(f.provider->pluginDestroyed);
+        XX_TEST_EXPECT_EQ(f.manager->runtime()->operations.size(), size_t{1});
+
+        // 超时后立即重试: 执行仍在运行, 第二次卸载依然只能拒绝收尾。
+        bool second = true;
+        asio::co_spawn(
+            f.io,
+            [&]() -> asio::awaitable<void> {
+                second = co_await f.manager->unloadAsync("provider", 0ms);
+            },
+            asio::detached
+        );
+        f.drainAll();
+        XX_TEST_EXPECT_FALSE(second);
+        XX_TEST_EXPECT_EQ(destroys, 0);
+        XX_TEST_EXPECT_FALSE(f.provider->pluginDestroyed);
+        XX_TEST_EXPECT_FALSE(op->completed());
+
+        // 插件执行最终退出 (worker 线程提交完成包)。
+        auto notify = op->notify();
+        std::thread worker([notify] {
+            notify.done(notify.host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+        });
+        worker.join();
+        f.drainAll();
+        XX_TEST_EXPECT_TRUE(op->completed());
+        XX_TEST_EXPECT_EQ(f.provider->lifetime->leaseCount(), size_t{0});
+        XX_TEST_EXPECT_EQ(destroys, 0);
+
+        // 执行完全退出后重试成功; destroy 只在此时发生。
+        bool third = false;
+        asio::co_spawn(
+            f.io,
+            [&]() -> asio::awaitable<void> {
+                third = co_await f.manager->unloadAsync("provider", 500ms);
+            },
+            asio::detached
+        );
+        f.drainAll();
+        XX_TEST_EXPECT_TRUE(third);
+        XX_TEST_EXPECT_EQ(destroys, 1);
+        XX_TEST_EXPECT_TRUE(f.provider->pluginDestroyed);
+        XX_TEST_EXPECT_EQ(f.provider->lifetime->state(), PluginInstanceState::Closed);
+        XX_TEST_EXPECT_TRUE(f.manager->find("provider") == nullptr);
+    }
+
+    /// P1-C/F04: GraphTypeSlot 代次 —— 编译后的旧节点在卸载/重载后只返回
+    /// "插件已关闭/代次失效", 不调用任何插件回调; 同一实例重新注册类型也只会
+    /// 使旧节点失效, 新编译的节点才使用新回调, 旧节点不得转交新实例。
+    {
+        RuntimeFixture f;
+        auto           slot     = std::make_shared<GraphTypeSlot>();
+        std::string    typeName = "slot_graph_type";
+        int            callsOld = 0, callsNew = 0;
+        auto           makeSpec = [&](int* counter) {
+            AgentxxPluginGraphNodeTypeSpec spec{};
+            spec.type      = strToSv(typeName);
+            spec.user_data = counter;
+            spec.run_start = +[](void* ud, const AgentxxPluginStringView*, const AgentxxPluginStringView*,
+                                 const AgentxxPluginStringView*, const AgentxxPluginStringView*,
+                                 const AgentxxPluginOperatorNotify* notify, AgentxxPluginString*) -> void* {
+                ++*static_cast<int*>(ud);
+                auto payload = PluginStringView::fromCstr("{}");
+                notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, &payload);
+                return nullptr;
+            };
+            return spec;
+        };
+        neograph::graph::GraphState   state;
+        neograph::graph::RunContext   runCtx;
+        auto                          runNode = [&](const std::shared_ptr<PluginGraphNode>& node) -> std::string {
+            auto future = asio::co_spawn(
+                f.io,
+                [&]() -> asio::awaitable<std::string> {
+                    try {
+                        co_await node->run(neograph::graph::NodeInput{state, runCtx});
+                        co_return std::string{};
+                    } catch (const std::exception& e) {
+                        co_return std::string{e.what()};
+                    }
+                },
+                asio::use_future
+            );
+            for (int i = 0; i < 200 && future.wait_for(std::chrono::milliseconds{0})
+                                         != std::future_status::ready; ++i) {
+                f.io.restart();
+                f.io.poll();
+            }
+            if (future.wait_for(std::chrono::milliseconds{0}) != std::future_status::ready) {
+                return "<timeout>";
+            }
+            return future.get();
+        };
+
+        // 注册有效时节点正常执行插件回调。
+        auto specOld = makeSpec(&callsOld);
+        slot->activate(f.provider, specOld, f.provider->lifetime->generation());
+        auto oldNode = std::make_shared<PluginGraphNode>(
+            "slot_old", "{}", f.provider, specOld, slot, slot->snapshot().generation
+        );
+        XX_TEST_EXPECT_EQ(callsOld, 0);
+        XX_TEST_EXPECT_TRUE(runNode(oldNode).empty());
+        XX_TEST_EXPECT_EQ(callsOld, 1);
+
+        // 同一实例重新注册类型: 旧节点代次失效, 不调用旧/新回调。
+        auto specNew = makeSpec(&callsNew);
+        slot->activate(f.provider, specNew, f.provider->lifetime->generation());
+        auto err = runNode(oldNode);
+        XX_TEST_EXPECT_TRUE(err.find("generation") != std::string::npos);
+        XX_TEST_EXPECT_EQ(callsOld, 1);
+        XX_TEST_EXPECT_EQ(callsNew, 0);
+
+        // 新代次编译的节点正常执行新回调。
+        auto newNode = std::make_shared<PluginGraphNode>(
+            "slot_new", "{}", f.provider, specNew, slot, slot->snapshot().generation
+        );
+        XX_TEST_EXPECT_TRUE(runNode(newNode).empty());
+        XX_TEST_EXPECT_EQ(callsNew, 1);
+
+        // 卸载 (invalidate + Closing): 新旧节点都只返回插件已关闭, 不再进入插件。
+        slot->invalidate(f.provider.get());
+        f.provider->lifetime->requestClose();
+        err = runNode(newNode);
+        XX_TEST_EXPECT_TRUE(
+            err.find("closing") != std::string::npos || err.find("generation") != std::string::npos
+        );
+        XX_TEST_EXPECT_EQ(callsNew, 1);
+
+        // 重载同名 type (新实例 + 新代次): 旧节点不得转交新实例的回调。
+        auto provider2   = f.instance("provider2", 42);
+        int  callsReload = 0;
+        auto specReload  = makeSpec(&callsReload);
+        slot->activate(provider2, specReload, provider2->lifetime->generation());
+        err = runNode(oldNode);
+        XX_TEST_EXPECT_TRUE(
+            err.find("closing") != std::string::npos || err.find("generation") != std::string::npos
+        );
+        err = runNode(newNode);
+        XX_TEST_EXPECT_TRUE(
+            err.find("closing") != std::string::npos || err.find("generation") != std::string::npos
+        );
+        XX_TEST_EXPECT_EQ(callsReload, 0);
+        XX_TEST_EXPECT_EQ(callsOld, 1);
+        XX_TEST_EXPECT_EQ(callsNew, 1);
+
+        // 新实例上的新节点正常工作。
+        auto reloadNode = std::make_shared<PluginGraphNode>(
+            "slot_reload", "{}", provider2, specReload, slot, slot->snapshot().generation
+        );
+        XX_TEST_EXPECT_TRUE(runNode(reloadNode).empty());
+        XX_TEST_EXPECT_EQ(callsReload, 1);
     }
     return result;
 }

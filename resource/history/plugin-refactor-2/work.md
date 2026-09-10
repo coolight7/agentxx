@@ -2,8 +2,8 @@
 
 > 事实来源：设计定稿是 `resource/history/plugin-refactor-2/plugin.md`（Reset-v1 方案、R0-R6 阶段、F/P 问题编号、测试矩阵）。本文件只记录进度、提交边界、验证结果和待办；与 plugin.md 冲突时以 plugin.md 为准。
 >
-> 本文件更新时间：2026-09-11（P2-1c 提交，即当前 HEAD）。**状态：Reset-v1 未完成。**
-> 当前重构进度 = 十二个提交：`3a4497ba`（R1-1 Runtime / Operation）、`f861bcf9`（fix-build）、
+> 本文件更新时间：2026-09-11（R1-2 生命周期回归补全提交）。**状态：Reset-v1 未完成。**
+> 当前重构进度 = 十三个提交：`3a4497ba`（R1-1 Runtime / Operation）、`f861bcf9`（fix-build）、
 > `b2b5114a`（Operation/Runtime 可靠性、加载事务与关闭、owner 顺序、ABI v1 / SDK 推进）、
 > `c2869f07`（P0-1 宿主控制块 / 迟到调用安全失败 / 注册执行期复查，见第 3.4 节）、
 > `8c717236`（P0-2 Operation 终态与取消线性化，见第 3.5 节）、
@@ -13,7 +13,8 @@
 > P1-3 提交（Client 工具语义渲染缓存、动作代次、client 侧启停事务与依赖级联，见第 3.9 节）、
 > P2-1a 提交（example_plugin 双端 start/stop 迁移 + SDK client 生命周期导出宏 + 导出符号白名单脚本，见第 3.10 节）、
 > P2-1b 提交（JS Promise 终态映射 / 事件式等待 + 设计文档 Reset-v1 章节，见第 3.11 节）、
-> P2-1c 提交（多实例可变静态审计 + 文档例外说明，见第 3.12 节）。
+> P2-1c 提交（多实例可变静态审计 + 文档例外说明，见第 3.12 节）、
+> R1-2 提交（plugin.md 11.2 用例 5/8/9 + GraphTypeSlot 代次用例 + enable/unload 竞态守卫，见第 3.13 节）。
 > 工作树在该提交后是**干净的**；本文档自身也已包含在最新提交中。
 > 已完成/待完成对照见第 5、6 节，内容明细见第 3、4 节。
 
@@ -79,7 +80,7 @@ ASAN_OPTIONS=detect_leaks=1:halt_on_error=0 timeout 1500s \
 | 阶段 | 状态 | 事实依据 |
 |---|---|---|
 | R0 契约冻结 | 完成 | `plugin.md` 定稿；本文件只做进度记录 |
-| R1 Runtime / Operation | 基本完成（P0-2 已落地） | `plugin_runtime.h`/`op_driver.h` 已重写并提交（`3a4497ba`）；`b2b5114a` 补齐完成端点、executor 停止重放、`ioCallSync` 快速失败、idle/lease 守卫；`c2869f07` 把 vtable 投递闭包纳入 admission lease；P0-2 提交把 cancel/done 的线性化协议写成显式约束（普通 mutex）、定义完成投递失败的可观察终态并补竞速/重放回归；仍缺 plugin.md 第 11.2 节中 5/8/9 条（caller 卸载保护、shutdown 中后台 Task、超时后立即 unload）的独立用例 |
+| R1 Runtime / Operation | 基本完成（P0-2 / R1-2 已落地） | `plugin_runtime.h`/`op_driver.h` 已重写并提交（`3a4497ba`）；`b2b5114a` 补齐完成端点、executor 停止重放、`ioCallSync` 快速失败、idle/lease 守卫；`c2869f07` 把 vtable 投递闭包纳入 admission lease；P0-2 提交把 cancel/done 的线性化协议写成显式约束（普通 mutex）、定义完成投递失败的可观察终态并补竞速/重放回归；R1-2 提交补齐 plugin.md 第 11.2 节 5/8/9 条独立用例与 GraphTypeSlot 代次用例（见第 3.13 节） |
 | R2 加载事务 / 异步关闭 | 大部分完成（P0-1 / P1-3 / P1-4） | 名称预占、`Loading/Ready/Closing/CloseFailed`、`create/start/stop/destroy`、`shutdownAsync`、owner 顺序、`GraphTypeSlot` 已在 `b2b5114a` 落地；P0-1 补齐宿主控制块、迟到调用安全失败、注册执行期复查；P1-4 完成 agent 侧 start/stop 事务；P1-3 完成 Client 语义渲染缓存（插件 renderer 只在 client io 线程执行）与 client 侧启停事务；仍缺加载期 start 失败的真实 DSO 回滚用例 |
 | R3 ABI v1 / SDK | 大部分完成 | 接口表 `struct_size` + SDK 严格校验、opaque CancelToken、scheduler v1（删 `pump_io`/`cancel_sleep`/`volatile`）、tasks handle 语义、SDK scheduler/offload 迁移已在 `b2b5114a` 落地；`c2869f07` 统一 `host.opaque` 令牌；P1-2 补 C17 ABI 编译期检查 + 接口表严格协商；P1-1 补 SDK 拥有型 `Request`、统一 root adapter、hook 同步/异步分发；P2-1a 补 client 生命周期导出宏；仍缺 capability 异步业务、graph node 纳入 SDK adapter、C++ 反例编译测试 |
 | R4 内置插件 / JS / 平台 | 部分完成 | 4 个内置插件已迁到 CancelToken 新签名；`f861bcf9` 修平台插件构建；P2-1a 把 example_plugin 迁移为双端 start/stop 正例；P2-1b 完成 JS Promise 拒绝/超时/取消的终态映射与事件式等待；P2-1c 完成可变静态审计；仍缺 example_resources/example_graph_node 迁移、`callTool` Promise 化、脚本顶层异常事务、Windows 平台 gate |
@@ -119,7 +120,10 @@ ASAN_OPTIONS=detect_leaks=1:halt_on_error=0 timeout 1500s \
                           (2026-09-11, 5 文件；见第 3.11 节)
 提交 12（P2-1c）重构插件框架-P2-1c 多实例可变静态审计
                           (2026-09-11, 3 文件；见第 3.12 节)
-工作树          干净（无修改、无 untracked）；origin/main 停在 f861bcf9，提交 3-12 均未推送
+提交 12.1      重构插件框架-状态总览对齐 P2-1 进展 (`1561a11b`, 仅本文档)
+提交 13（R1-2）重构插件框架-R1-2 生命周期回归补全与启停/卸载竞态修复
+                          (2026-09-11, 3 文件；见第 3.13 节)
+工作树          干净（无修改、无 untracked）；origin/main 停在 f861bcf9，提交 3-13 均未推送
 ```
 
 `b2b5114a` 就是此前工作树里的全部增量，代码与验证记录一一对应（未做任何额外改动）；
@@ -485,6 +489,33 @@ JS 线程 settle”（当前仍是同步驱动，只是不再把拒绝当成功�
   - 其余 `static` 均为无状态函数/常量或 `static constexpr`，符合铁律。
 - 文档：`docs/zh-cn/design/plugins.md` 第 3 节补充"进程级单调计数器"唯一例外说明。
 
+### 3.13 R1-2 提交：11.2 剩余用例与代次失效回归（R1/R2 收尾）
+
+3 文件（`agent/test/plugin/test_plugin_runtime.cpp`、
+`agent/lib/src/plugins/plugin_manager_lifecycle.cpp` + 本文档）。要点：
+
+- **plugin.md 11.2 用例 5（caller 卸载与 provider 未完成互调）**：
+  provider 未完成时卸载 caller，等 idle 超时进入 CloseFailed 并保留 ctx/destroy 未调用；
+  provider 完成后 callback 仍持有 caller lease（`protectedDuringCallback`）并在 IO 线程
+  返回；随后重试卸载成功，destroy 恰好一次。
+- **11.2 用例 8（shutdown 中后台 Task 挂起）**：卸载先经 `detachAll → cancel`
+  请求取消（不会提前 destroy），任务在自有线程恢复并提交 done；断言顺序为
+  `cancel → resumed → doneSubmitted → callback(completion) → destroy`，
+  callback 返回前 `pluginDestroyed == false`，lease 归零后才 destroy/Closed/移除。
+- **11.2 用例 9（超时后立即重试卸载）**：0ms 超时进入 CloseFailed 后立即重试仍是拒绝
+  （不跳过 lease、不 destroy）；插件执行真正退出并提交完成包后，第三次卸载才
+  destroy 成功。
+- **P1-C/F04 GraphTypeSlot 代次失效用例**：注册有效时节点正常执行；同一实例重新注册
+  类型后旧节点返回 "generation is no longer active" 且不调用任何回调；卸载后新旧节点
+  只返回插件已关闭；同名 type 重载到新实例后旧节点不转交新实例，仅新代次节点可执行。
+- **修复真实竞态（测试暴露）**：`startForEnable` / `stopForDisable` 是投递到 IO 的
+  异步事务，可能落后于 `unloadAsync`。原实现会在实例 Closed 后调用
+  `setState(Ready)`（触发 `InstanceLifetime::setState` 断言）或在 Closing 期间改写状态。
+  现在两处事务在进入与每个 await 之后复查 `closeRequested()/Closed`，关闭期间不启动
+  start、不覆盖 Closing 状态；stop 由卸载路径补齐。复现方式：连续运行
+  `plugin_runtime plugin_sdk plugins`（修复前一次复现 SIGABRT，修复后 3 次复跑全绿）。
+- 回归（`plugin_runtime` 526 → 600 断言）：新增 74 项断言（用例 5/8/9 与 GraphTypeSlot）。
+
 ---
 
 ## 4. `b2b5114a` 内容明细（已提交，按阶段归类）
@@ -544,7 +575,7 @@ JS 线程 settle”（当前仍是同步驱动，只是不再把拒绝当成功�
 | 编号 / 条目 | 状态 | 位置 / 证据 |
 |---|---|---|
 | F01 互调 start 拒绝不回调、登记回滚 | 完成 | `op_driver.h` + `test_plugin_runtime` 拒绝用例 |
-| F05 `shutdownAll` 不等待后台任务 | 结构层完成 | `InstanceLifetime` lease + idle 事件 + `shutdownAsync`；专项“shutdown 中后台 Task 挂起”测试仍缺 |
+| F05 `shutdownAll` 不等待后台任务 | 完成 | `InstanceLifetime` lease + idle 事件 + `shutdownAsync`；R1-2 用例 8 覆盖 shutdown 中挂起后台 Task 的 cancel→resume→done→destroy 顺序（第 3.13 节） |
 | F06 互调 start 在 IO 线程 | 完成 | `plugin_manager_capability.cpp` + `postToIo`/`ioCallSync` |
 | F07 caller/provider 双 lease | 完成 | `OpCore` 的 provider_/caller_ guard |
 | F08 sleep/post/offload 纳入 Operation 与回收 | 完成 | `plugin_manager_scheduler.cpp` + 测试 |
@@ -558,7 +589,7 @@ JS 线程 settle”（当前仍是同步驱动，只是不再把拒绝当成功�
 | P0 opaque CancelToken | 完成 | `plugin_api.h` + SDK 调用方 |
 | P1-A 接口表严格协商 | agent/client 接口表完成 | `struct_size` 填充 + SDK 校验 + `api_version` 精确匹配 |
 | P1-B 名称预占 / Loading 不可调用 | 完成 | `reservePluginName` + state 门禁；P0-1 补齐注册类入口的执行期复查 |
-| P1-C GraphTypeSlot | 首版完成，缺测试 | `plugin_graph_node.h` + `plugin_manager_adapters.cpp`；缺旧节点/重载专项测试 |
+| P1-C GraphTypeSlot | 完成 | `plugin_graph_node.h` + `plugin_manager_adapters.cpp`；R1-2 用例覆盖旧节点代次失效、卸载后安全失败与同名重载不转交新实例（第 3.13 节） |
 | P0-1 宿主控制块 / 迟到调用安全失败 / 注册执行期复查 | 完成 | `PluginHostControl`（`plugin_manager_base.h`）+ `hostView()`/`retireHostControl()` + `enterPluginHost()` + `ioCallSyncKeep`；回归见 `test_plugin_runtime` 新增 3 组用例（第 3.4、7 节） |
 | P0-2 cancel/done 线性化协议 | 完成 | `op_driver.h` 普通 mutex + 契约注释；32 轮并发竞速用例（第 3.5 节） |
 | P0-2 完成投递失败的可观察终态 | 完成 | `OpCore::completionPending()` + `PluginRuntime::pendingOperationSummary()`；CloseFailed 日志输出阻塞操作（第 3.5 节） |
@@ -601,9 +632,10 @@ JS 线程 settle”（当前仍是同步驱动，只是不再把拒绝当成功�
 
 已于第 3.5 节的提交落地（契约注释、可观察终态、竞速回归）。遗留：
 
-- 验收要求 plugin.md 第 11.2 节 1-10 全部自动化。当前覆盖 1/2/3/4/6/7/10 的大部分；
-  仍缺 5（caller 卸载与 provider 未完成互调）、8（shutdown 中挂起后台 Task 的
-  cancel→resume→done→destroy→dlclose 顺序）、9（timeout 后立即 unload）的独立用例。
+- 验收要求 plugin.md 第 11.2 节 1-10 全部自动化。R1-2 提交已补齐 5（caller 卸载与
+  provider 未完成互调）、8（shutdown 中挂起后台 Task 的
+  cancel→resume→done→destroy 顺序）、9（timeout 后立即重试 unload）的独立用例（第 3.13 节）；
+  1-4/6/7/10 的既有覆盖见第 3.5 节。
 - 关闭超时目前只输出未终结 Operation 摘要（`label#id`）。若要更强的取证，可在
   摘要里带上每个 Operation 的 `completionPending()` 标记与等待时长。
 
@@ -999,6 +1031,39 @@ ASAN_OPTIONS=detect_leaks=1:halt_on_error=0 timeout 1500s \
 
 日志：`/tmp/p21c-sweep-1.log`。
 
+### 7.11 R1-2 提交的回归
+
+```bash
+cmake --build agent/build/linux-debug --target agentxx_test_repo -j12
+ASAN_OPTIONS=detect_leaks=1:halt_on_error=0 timeout 1500s \
+  agent/build/linux-debug/exec/agentxx_test \
+  ffi_c_api agent_host subagent_tool subagent_bus plugin_sdk plugin_runtime plugins \
+  plugin_resources plugin_multi_instance client_plugins agent memgrowth --fail-fast
+```
+
+```text
+ffi_c_api             117 passed / 0 failed
+plugin_runtime        600 passed / 0 failed     # R1-2 新增 74 断言（用例 5/8/9 + GraphTypeSlot）
+plugin_sdk             29 passed / 0 failed
+subagent_bus           21 passed / 0 failed
+subagent_tool         122 passed / 0 failed
+agent_host             95 passed / 0 failed
+plugins               331 passed / 0 failed
+plugin_resources       83 passed / 0 failed
+plugin_multi_instance  29 passed / 0 failed
+client_plugins        375 passed / 0 failed
+agent                  91 passed / 0 failed
+memgrowth              15 passed / 0 failed
+合计                 1908 passed / 0 failed   （exit=0）
+```
+
+竞态修复复跑（ASan 关闭泄漏检测以缩短时间）：
+`plugin_runtime plugin_sdk plugins plugin_resources plugin_multi_instance
+client_plugins --fail-fast` 连续 3 次均为 1447 passed / 0 failed /
+exit=0（修复前同一组合出现一次 `InstanceLifetime::setState` 断言 SIGABRT；
+日志 `/tmp/p3-repro1.log`、`/tmp/p3-rerun{1,2,3}.log`）。扩展回归日志
+`/tmp/p3-r1b-sweep.log`。
+
 ### 7.10 `b2b5114a` 的历史验证结果
 
 以下结果测自 `b2b5114a`（同样为 ASan + LSan、`--fail-fast` 的扩展回归）：
@@ -1053,12 +1118,13 @@ client_plugins 309 / agent 91 / memgrowth 15   合计 1338 passed / 0 failed
 
 ## 9. 下一步执行顺序（建议）
 
-1. 以当前 HEAD（P1-3 提交）为起点，按 0.3 节复跑构建 + 扩展回归，确认基线（应为 1830/0）。
+1. ~~基线复跑~~：确认 1834/0（P2-1c 提交状态）。
 2. ~~P0-1 宿主控制块~~、~~P0-2 Operation 终态~~：已完成（第 3.4 / 3.5 节）。
    可选收尾：client 侧"旧 host 指针在卸载后安全失败"的专项用例；订阅句柄与
-   GraphTypeSlot 旧节点的"代次失效 + 迟到调用"独立用例（机制已具备）。
-3. plugin.md 第 11.2 节剩余用例：5（caller 卸载与 provider 未完成互调）、
-   8（shutdown 中挂起后台 Task 的顺序）、9（timeout 后立即 unload）。
+   GraphTypeSlot 旧节点的"代次失效 + 迟到调用"独立用例（机制已具备）：
+   GraphTypeSlot 用例已在 R1-2 提交补齐（第 3.13 节），client 侧旧 host / 订阅句柄
+   用例仍可选。
+3. ~~plugin.md 第 11.2 节剩余用例 5/8/9~~：已在 R1-2 提交补齐（第 3.13 节）。
 4. ~~P1-1 SDK Request + 统一 root adapter（F13/F19）~~：主体已完成（第 3.7 节）。
    遗留 capability 异步业务、graph node 纳入 adapter、正反例编译测试。
 5. ~~P1-4 启用/禁用事务与 prompt 贡献模型~~：agent 侧已完成（第 3.8 节）。
@@ -1068,7 +1134,8 @@ client_plugins 309 / agent 91 / memgrowth 15   合计 1338 passed / 0 failed
    已完成（第 3.10 节）。
 8. ~~P2-1b（JS Promise 终态映射 + 设计文档 Reset-v1 章节）~~：已完成（第 3.11 节）。
 9. P2-1 剩余 / P2-2 收尾：
-   - example_resources / example_graph_node 迁移为 start/stop 事务正例；
+   - ~~example_resources / example_graph_node 迁移为 start/stop 事务正例~~：
+     已在 R4-1 提交落地（细节随 R4-1 提交补入本文档）；
    - string/math/system 校准 SDK 签名；websearch/rag/planning 接入 CancelToken；
      system_monitor/codegraph 多实例与后台采样专项；
    - JS 剩余：`callTool` 改为始终返回 Promise（完成/失败/取消事件回投 JS 线程 settle）、
