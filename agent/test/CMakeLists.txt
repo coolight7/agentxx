@@ -59,11 +59,30 @@ file(GLOB test_plugin_SOURCES
 	CONFIGURE_DEPENDS
 	"${CMAKE_CURRENT_SOURCE_DIR}/plugin/*.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/plugin/*.cc" "${CMAKE_CURRENT_SOURCE_DIR}/plugin/*.cxx"
 )
+# C17 ABI 检查翻译单元: 必须用 C 编译器 (而不是 C++) 编译, 且开启 -pedantic-errors,
+# 才能证明 plugin_api.h / client_plugin_api.h 是真正的纯 C 头 (见 plugin.md 11.1)
+file(GLOB test_plugin_C_SOURCES
+	CONFIGURE_DEPENDS
+	"${CMAKE_CURRENT_SOURCE_DIR}/plugin/*.c"
+)
 target_sources(agentxx_test PRIVATE
 	${test_root_SOURCES}
 	${test_core_SOURCES}
 	${test_plugin_SOURCES}
+	${test_plugin_C_SOURCES}
 )
+if(test_plugin_C_SOURCES)
+	if(XX_IS_MSVC_D)
+		# MSVC 没有 -pedantic-errors; /W4 下同样禁止隐式声明等违规写法
+		set_source_files_properties(${test_plugin_C_SOURCES} PROPERTIES
+			COMPILE_OPTIONS "/std:c17;/W4"
+		)
+	else()
+		set_source_files_properties(${test_plugin_C_SOURCES} PROPERTIES
+			COMPILE_OPTIONS "-std=c17;-pedantic-errors;-Wall;-Wextra"
+		)
+	endif()
+endif()
 # include path: 根目录 (test_framework.h 等共享头) + core/ + plugin/ + client/
 # 使 test.cpp 的 #include "test_xxx.h" 与子目录测试的
 # #include "test_framework.h" 均无需改动路径

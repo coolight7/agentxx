@@ -7,6 +7,7 @@
 #include "asio/use_future.hpp"
 
 #include <barrier>
+#include <cstddef>
 #include <future>
 #include <thread>
 
@@ -19,6 +20,12 @@ namespace agentxx::plugin {
 const void* AGENTXX_PLUGIN_CALL
     xx_query_interface(const AgentxxPluginHost*, const AgentxxPluginStringView* iid);
 } // namespace agentxx::plugin
+
+/// C17 ABI 检查翻译单元（test_plugin_abi_c17.c）导出的对照入口。
+/// - `agentxx_test_abi_value`：C 侧看到的 sizeof/offsetof/版本号（编号见表）
+/// - `agentxx_test_abi_c_probe`：C 侧自检，0 表示通过
+extern "C" uint64_t agentxx_test_abi_value(int32_t id);
+extern "C" int32_t  agentxx_test_abi_c_probe(void);
 
 namespace agentxx::test {
 namespace {
@@ -137,6 +144,25 @@ void* AGENTXX_PLUGIN_CALL fakeStopHook(
 void AGENTXX_PLUGIN_CALL fakeDestroyHook(void* ud) {
     ++*static_cast<int*>(ud);
 }
+
+/// P1-A 接口表严格协商探针：伪装宿主只返回一张可控接口表，用于验证 SDK 对
+/// version / struct_size / NULL 表的拒绝行为（plugin.md 第 11.1 节）。
+struct FakeIfaceHost {
+    AgentxxPluginHost              host{};
+    const AgentxxPluginToolsIface* table = nullptr;
+};
+
+const void* AGENTXX_PLUGIN_CALL
+    fakeIfaceQuery(const AgentxxPluginHost* host, const AgentxxPluginStringView*) {
+    auto* self = static_cast<FakeIfaceHost*>(host ? host->opaque : nullptr);
+    return self ? static_cast<const void*>(self->table) : nullptr;
+}
+
+const AgentxxHostVtable g_fakeIfaceVtable = {
+    /* alloc */ nullptr,
+    /* free */ nullptr,
+    /* query_interface */ fakeIfaceQuery,
+};
 
 /// 装配一个“激活且导出 stop”的伪实例: destroy 计数挂在 pluginCtx 上。
 void installLifecycleHooks(PluginInstance& inst, int* destroys) {
@@ -753,6 +779,72 @@ TestResult testPluginRuntime() {
         XX_TEST_EXPECT_TRUE(inst->lifecycleStopPending());
         inst.reset();
         XX_TEST_EXPECT_EQ(gLifecycleDestroys, 0);
+    }
+
+    /// R3/P1-2: C17 ABI 编译期检查的 C++ 侧对照 —— C 翻译单元（-std=c17
+    /// -pedantic-errors）与 C++ 看到的布局和版本号必须逐项一致；编号表见
+    /// test_plugin_abi_c17.c。
+    {
+        XX_TEST_EXPECT_EQ(agentxx_test_abi_c_probe(), 0);
+        struct AbiExpectation {
+            int32_t  id;
+            uint64_t expected;
+        };
+        const AbiExpectation expectations[] = {
+            {1, sizeof(AgentxxPluginStringView)},
+            {2, offsetof(AgentxxPluginStringView, size)},
+            {3, sizeof(AgentxxPluginHost)},
+            {4, offsetof(AgentxxPluginHost, opaque)},
+            {5, sizeof(AgentxxHostVtable)},
+            {6, sizeof(AgentxxPluginToolSpec)},
+            {7, offsetof(AgentxxPluginToolSpec, execute_start)},
+            {8, sizeof(AgentxxPluginHookSpec)},
+            {9, sizeof(AgentxxPluginOperatorNotify)},
+            {10, sizeof(AgentxxPluginToolsIface)},
+            {11, offsetof(AgentxxPluginToolsIface, struct_size)},
+            {12, sizeof(AgentxxPluginSchedulerIface)},
+            {13, sizeof(AgentxxPluginTasksIface)},
+            {14, sizeof(AgentxxClientUiIface)},
+            {15, AGENTXX_PLUGIN_API_VERSION},
+            {16, AGENTXX_CLIENT_PLUGIN_API_VERSION},
+            {17, AGENTXX_PLUGIN_IFACE_AGENT_TOOLS_VERSION},
+        };
+        for (const auto& item : expectations) {
+            XX_TEST_EXPECT_EQ(agentxx_test_abi_value(item.id), item.expected);
+        }
+        // 未登记的编号必须返回哨兵值（C 侧同样断言）。
+        XX_TEST_EXPECT_EQ(agentxx_test_abi_value(9999), UINT64_MAX);
+    }
+
+    /// R3/P1-A: 接口表严格协商 —— 版本不为 1、struct_size 过短、NULL 表都必须被
+    /// SDK 拒绝；只有 version == 1 且 struct_size 覆盖完整表才可用。
+    {
+        AgentxxPluginStringView toolsIid
+            = PluginStringView::fromCstr(AGENTXX_PLUGIN_IFACE_AGENT_TOOLS);
+        const auto* realTools = static_cast<const AgentxxPluginToolsIface*>(
+            agentxx::plugin::xx_query_interface(nullptr, &toolsIid)
+        );
+        XX_TEST_EXPECT_TRUE(realTools != nullptr);
+
+        FakeIfaceHost fake;
+        fake.host.vtable = &g_fakeIfaceVtable;
+        fake.host.opaque = &fake;
+
+        fake.table = realTools;
+        XX_TEST_EXPECT_TRUE(AgentIfaces::query(&fake.host).tools != nullptr);
+
+        AgentxxPluginToolsIface badVersion = *realTools;
+        badVersion.version = AGENTXX_PLUGIN_IFACE_AGENT_TOOLS_VERSION + 1;
+        fake.table         = &badVersion;
+        XX_TEST_EXPECT_TRUE(AgentIfaces::query(&fake.host).tools == nullptr);
+
+        AgentxxPluginToolsIface shortTable = *realTools;
+        shortTable.struct_size             = static_cast<uint32_t>(sizeof(AgentxxPluginToolsIface) - 8);
+        fake.table                         = &shortTable;
+        XX_TEST_EXPECT_TRUE(AgentIfaces::query(&fake.host).tools == nullptr);
+
+        fake.table = nullptr;
+        XX_TEST_EXPECT_TRUE(AgentIfaces::query(&fake.host).tools == nullptr);
     }
 
     /// P0-1: 宿主控制块 —— 实例关闭后，插件保存的旧 host 指针仍然可读，但所有

@@ -2,11 +2,12 @@
 
 > 事实来源：设计定稿是 `resource/history/plugin-refactor-2/plugin.md`（Reset-v1 方案、R0-R6 阶段、F/P 问题编号、测试矩阵）。本文件只记录进度、提交边界、验证结果和待办；与 plugin.md 冲突时以 plugin.md 为准。
 >
-> 本文件更新时间：2026-09-11（P0-2 提交，即当前 HEAD）。**状态：Reset-v1 未完成。**
-> 当前重构进度 = 五个提交：`3a4497ba`（R1-1 Runtime / Operation）、`f861bcf9`（fix-build）、
+> 本文件更新时间：2026-09-11（P1-2 提交，即当前 HEAD）。**状态：Reset-v1 未完成。**
+> 当前重构进度 = 六个提交：`3a4497ba`（R1-1 Runtime / Operation）、`f861bcf9`（fix-build）、
 > `b2b5114a`（Operation/Runtime 可靠性、加载事务与关闭、owner 顺序、ABI v1 / SDK 推进）、
 > `c2869f07`（P0-1 宿主控制块 / 迟到调用安全失败 / 注册执行期复查，见第 3.4 节）、
-> P0-2 提交（Operation 终态与取消线性化，见第 3.5 节）。
+> `8c717236`（P0-2 Operation 终态与取消线性化，见第 3.5 节）、
+> P1-2 提交（C17 ABI 编译期检查与接口表严格协商回归，见第 3.6 节）。
 > 工作树在该提交后是**干净的**；本文档自身也已包含在最新提交中。
 > 已完成/待完成对照见第 5、6 节，内容明细见第 3、4 节。
 
@@ -30,9 +31,10 @@ git diff --check
 1. `plugin.md`（方案、R1-R6 验收标准、第 11 节测试矩阵）
 2. 本文件第 1 节（总览）、第 3.4/3.5 节（P0-1 / P0-2 明细）、第 4 节（`b2b5114a` 明细）、
    第 5 节（已完成）、第 6 节（待完成）、第 9 节（下一步）
-3. `git show 3a4497ba`、`git show f861bcf9`、`git show b2b5114a`、`git show c2869f07`、`git show HEAD`
+3. `git show 3a4497ba`、`git show f861bcf9`、`git show b2b5114a`、`git show c2869f07`、
+   `git show 8c717236`、`git show HEAD`
 
-预期看到的状态：`main` 比 `origin/main` 领先 3（`b2b5114a`、P0-1、P0-2 均尚未推送），
+预期看到的状态：`main` 比 `origin/main` 领先 4（`b2b5114a`、P0-1、P0-2、P1-2 均尚未推送），
 工作树无修改、无 untracked 文件。
 
 ### 0.2 工作树保护规则（不得违反）
@@ -73,10 +75,10 @@ ASAN_OPTIONS=detect_leaks=1:halt_on_error=0 timeout 1500s \
 | R0 契约冻结 | 完成 | `plugin.md` 定稿；本文件只做进度记录 |
 | R1 Runtime / Operation | 基本完成（P0-2 已落地） | `plugin_runtime.h`/`op_driver.h` 已重写并提交（`3a4497ba`）；`b2b5114a` 补齐完成端点、executor 停止重放、`ioCallSync` 快速失败、idle/lease 守卫；`c2869f07` 把 vtable 投递闭包纳入 admission lease；P0-2 提交把 cancel/done 的线性化协议写成显式约束（普通 mutex）、定义完成投递失败的可观察终态并补竞速/重放回归；仍缺 plugin.md 第 11.2 节中 5/8/9 条（caller 卸载保护、shutdown 中后台 Task、超时后立即 unload）的独立用例 |
 | R2 加载事务 / 异步关闭 | 部分完成（P0-1 已落地） | 名称预占、`Loading/Ready/Closing/CloseFailed`、`create/start/stop/destroy`、`shutdownAsync`、owner 顺序、`GraphTypeSlot` 已在 `b2b5114a` 落地；P0-1 提交补齐宿主控制块、迟到调用安全失败、注册执行期复查；仍缺 Client semantic renderer cache、prompt contribution、enable/disable 事务化、注册事务全覆盖与回滚测试 |
-| R3 ABI v1 / SDK | 大幅推进，未完成 | 接口表 `struct_size` + SDK 严格校验、opaque CancelToken、scheduler v1（删 `pump_io`/`cancel_sleep`/`volatile`）、tasks handle 语义、SDK scheduler/offload 迁移已在 `b2b5114a` 落地；P0-1 提交统一了 `host.opaque` 令牌语义（令牌=控制块地址，永不复用）；仍缺 SDK `Request` 输入所有权、统一 root adapter、hook `Task<void>` 区分、C17/ABI layout 与正反例编译测试、导出符号检查 |
+| R3 ABI v1 / SDK | 大幅推进，未完成 | 接口表 `struct_size` + SDK 严格校验、opaque CancelToken、scheduler v1（删 `pump_io`/`cancel_sleep`/`volatile`）、tasks handle 语义、SDK scheduler/offload 迁移已在 `b2b5114a` 落地；`c2869f07` 统一了 `host.opaque` 令牌语义（令牌=控制块地址，永不复用）；P1-2 提交补齐 C17 ABI 编译期检查与 C/C++ 布局对照、接口表严格协商回归；仍缺 SDK `Request` 输入所有权、统一 root adapter、hook `Task<void>` 区分、导出符号检查与 C++ 反例编译测试 |
 | R4 内置插件 / JS / 平台 | 少量迁移 | 4 个内置插件已迁到 CancelToken 新签名；`f861bcf9` 修了平台插件构建；仍缺其余插件迁移、JS 事务/Promise、Windows 平台 gate |
 | R5 Client / 依赖 / prompt | 部分完成 | 事件逐 callback 复查 alive、renderer lease、`blockedByDependencies`、动作派发校验已落地；仍缺语义 renderer cache 与代次、动作代次、prompt 多 owner 合成、enable/disable 事务与依赖恢复测试 |
-| R6 验证 / 文档 / 发布审查 | 未开始 | 未跑全模块/UBSan/TSan/Windows；未做导出符号与 C17 ABI 检查；`docs/zh-cn/design/plugins.md` 未更新 |
+| R6 验证 / 文档 / 发布审查 | 部分完成 | P1-2 提交完成 C17 ABI 编译期检查；仍缺导出符号检查、全模块/UBSan/TSan/Windows 验证；`docs/zh-cn/design/plugins.md` 未更新 |
 
 结论：不能把当前状态写成“Reset-v1 完成”。下一阶段建议见第 9 节。
 
@@ -97,7 +99,9 @@ ASAN_OPTIONS=detect_leaks=1:halt_on_error=0 timeout 1500s \
                           `c2869f07` (2026-09-11, 16 文件；见第 3.4 节)
 提交 5（P0-2）  重构插件框架-P0-2 Operation 终态与取消线性化
                           (2026-09-11, 5 文件；见第 3.5 节)
-工作树          干净（无修改、无 untracked）；origin/main 停在 f861bcf9，提交 3/4/5 均未推送
+提交 6（P1-2）  重构插件框架-P1-2 C17 ABI 编译期检查与接口表严格协商
+                          (2026-09-11, 4 文件；见第 3.6 节)
+工作树          干净（无修改、无 untracked）；origin/main 停在 f861bcf9，提交 3-6 均未推送
 ```
 
 `b2b5114a` 就是此前工作树里的全部增量，代码与验证记录一一对应（未做任何额外改动）；
@@ -228,6 +232,29 @@ Operation cancel/done 线性化（P0-2）、SDK `Request` 所有权（P1-1）。
 仍未覆盖（下一阶段）：plugin.md 第 11.2 节第 5/8/9 条（caller 卸载保护、
 shutdown 中挂起后台 Task、超时后立即 unload 的独立用例）。
 
+### 3.6 P1-2 提交：C17 ABI 编译期检查与接口表严格协商（R3/R6）
+
+4 文件（新增 `agent/test/plugin/test_plugin_abi_c17.c`、修改 `agent/test/CMakeLists.txt`、
+`test_plugin_runtime.cpp`、本文档）。要点：
+
+- **纯 C17 翻译单元**（新文件）：用 C 编译器（`-std=c17 -pedantic-errors -Wall -Wextra`）
+  包含 `plugin_api.h` + `client_plugin_api.h`，证明 ABI 头不依赖 C++ 语法；文件内用
+  `_Static_assert` 固定：全局版本必须为 1、18 张跨边界结构体全部 8 字节对齐、
+  `AgentxxPluginStringView`/`AgentxxPluginString` 的 `data`/`size` 偏移、
+  `AgentxxPluginHost.vtable` 首字段、`AgentxxHostVtable` 三项顺序、各接口表
+  `version`/`struct_size` 前两字段布局；另声明四个入口函数指针类型（create/start/
+  stop/destroy）验证调用约定宏在 C 下可用。
+- **C/C++ 布局对照**：C 侧 `agentxx_test_abi_value(id)` 暴露 17 项
+  `sizeof`/`offsetof`/版本号，C++ 测试逐项比对（编号表写在 C 文件里，新增 ABI 字段时
+  两边同步更新）；未知编号必须返回 `UINT64_MAX` 哨兵。
+- **接口表严格协商回归**：新增伪装宿主（`FakeIfaceHost` + `g_fakeIfaceVtable`，
+  `query_interface` 返回可控表），验证 SDK 拒绝 `version != 1`、`struct_size <
+  sizeof(Iface)` 与 NULL 表，只接受完整且版本精确匹配的表（plugin.md 第 11.1 节）。
+- **构建接线**：`agent/test/CMakeLists.txt` 增加 `plugin/*.c` glob 与按文件编译选项
+  （GCC/Clang `-std=c17 -pedantic-errors -Wall -Wextra`；MSVC `/std:c17 /W4`）。
+
+仍未做：C++ 反例编译测试（错误 hook 签名等必须编译失败）、导出符号白名单检查。
+
 ---
 
 ## 4. `b2b5114a` 内容明细（已提交，按阶段归类）
@@ -305,6 +332,8 @@ shutdown 中挂起后台 Task、超时后立即 unload 的独立用例）。
 | P0-2 cancel/done 线性化协议 | 完成 | `op_driver.h` 普通 mutex + 契约注释；32 轮并发竞速用例（第 3.5 节） |
 | P0-2 完成投递失败的可观察终态 | 完成 | `OpCore::completionPending()` + `PluginRuntime::pendingOperationSummary()`；CloseFailed 日志输出阻塞操作（第 3.5 节） |
 | P0-2 裸 handle 失效语义 | 完成 | `AgentxxPluginOperatorHandle` tombstone（`completed` 置位后 cancel 空操作）+ 终态后重复 cancel 用例 |
+| P1-2 C17 ABI 编译期检查 | 完成 | 新增 `test_plugin_abi_c17.c`（`-std=c17 -pedantic-errors`）+ C/C++ 17 项布局对照（第 3.6 节） |
+| P1-2 接口表严格协商回归 | 完成 | 伪装宿主用例：version/struct_size/NULL 表必须被 SDK 拒绝（第 3.6 节） |
 | R2 owner 顺序（BaseAgent / AgentHost / Client runner） | 完成 | 见 4.2 节 |
 | R2 Client semantic renderer cache | 未完成 | renderer 仍在 UI 线程同步调用（有 lease 保护） |
 | R2/R5 prompt contribution | 未完成 | 仍是“备份后无条件写回”模型 |
@@ -342,11 +371,19 @@ shutdown 中挂起后台 Task、超时后立即 unload 的独立用例）。
 - hook helper 按 callable 返回类型严格区分同步 `void` 与 `Task<void>`（F19）。
 - `Task<T>`/`Task<void>`/`offload<void>` 组合、异常与取消传播的正反例编译测试。
 
-### P1-2 C ABI v1 编译期与运行期检查（R3/R6）
+### P1-2 C ABI v1 编译期与运行期检查（R3/R6）—— 大体完成
 
-- C17 `-pedantic-errors` 包含两个 ABI 头：`sizeof`/`offsetof`/对齐/调用约定断言。
-- 未知/短接口表、NULL 必需函数、API 版本不匹配的安全拒绝测试。
-- 导出符号只包含规定入口；第三方静态依赖符号保持隐藏。
+已于第 3.6 节的提交落地：
+
+- C17 `-pedantic-errors` 包含两个 ABI 头：`sizeof`/`offsetof`/对齐/调用约定断言（完成）。
+- 未知/短接口表、NULL 表的安全拒绝（完成）；API 版本不匹配的加载期拒绝已有用例
+  （`b2b5114a` 的“api_version 精确相等”路径）。
+
+遗留：
+
+- C++ 反例编译测试（错误 hook 返回类型、跨边界传 STL/协程句柄必须编译失败）——
+  需要“预期编译失败”的测试机制（脚本或 CMake 试验性编译）。
+- 导出符号白名单检查（第三方静态依赖符号必须隐藏）——需要 `nm`/`objdump` 脚本。
 
 ### P1-3 Client semantic renderer cache 与动作代次（R2/R5）
 
@@ -459,7 +496,41 @@ client_plugins` 合计 1164 passed / 0 failed。日志：
 构建期间遇到一次 GCC 16.1 ICE（`agent/client/src/io/tui/tui_log_sink.cpp`），
 按 AGENTS.md 的约定重跑同一构建即通过（未改动该文件）。
 
-### 7.3 `b2b5114a` 的历史验证结果
+### 7.3 P1-2 提交的回归
+
+```bash
+# 构建（C17 检查翻译单元按 test/CMakeLists.txt 的按文件选项编译）：
+#   /usr/local/bin/cc ... -std=c17 -pedantic-errors -Wall -Wextra -c test_plugin_abi_c17.c
+cmake --build agent/build/linux-debug --target agentxx_test_repo -j12
+ASAN_OPTIONS=detect_leaks=1:halt_on_error=0 timeout 1500s \
+  agent/build/linux-debug/exec/agentxx_test \
+  ffi_c_api agent_host subagent_tool subagent_bus plugin_runtime plugins \
+  plugin_resources plugin_multi_instance client_plugins agent memgrowth --fail-fast
+```
+
+```text
+ffi_c_api             117 passed / 0 failed
+plugin_runtime        439 passed / 0 failed     # 415 -> 439（ABI 对照 19 + 协商 5）
+subagent_bus           21 passed / 0 failed
+subagent_tool         122 passed / 0 failed
+agent_host             95 passed / 0 failed
+plugins               328 passed / 0 failed
+plugin_resources       83 passed / 0 failed
+plugin_multi_instance  29 passed / 0 failed
+client_plugins        309 passed / 0 failed
+agent                  91 passed / 0 failed
+memgrowth              15 passed / 0 failed
+合计                 1649 passed / 0 failed
+```
+
+插件专项（同提交）：`plugin_runtime plugins plugin_resources plugin_multi_instance
+client_plugins` 合计 1188 passed / 0 failed。日志：
+
+```text
+/tmp/agentxx-p12-sweep-1.log   # 1649/0（扩展回归）
+```
+
+### 7.4 `b2b5114a` 的历史验证结果
 
 以下结果测自 `b2b5114a`（同样为 ASan + LSan、`--fail-fast` 的扩展回归）：
 
@@ -498,19 +569,21 @@ client_plugins 309 / agent 91 / memgrowth 15   合计 1338 passed / 0 failed
    `pendingOperationSummary()` 可观察终态、终态后 cancel 空操作）。仍缺的是 11.2 节
    第 5/8/9 条独立用例（见第 3.5、6 节）。
 5. 注册/启停事务不完整：enable/disable 旧模型、prompt contribution、注册失败回滚覆盖面。
-6. 无 ABI 编译期检查：任何 ABI 改动目前只靠运行期测试兜底。
+6. ~~无 ABI 编译期检查~~：P1-2 已加入 C17 `-pedantic-errors` 编译期断言与 C/C++
+   布局对照。仍未做的是 C++ 反例编译测试与导出符号白名单检查（见第 3.6、6 节）。
 
 ---
 
 ## 9. 下一步执行顺序（建议）
 
-1. 以当前 HEAD（P0-2 提交）为起点，按 0.3 节复跑构建 + 扩展回归，确认基线（应仍是 1625/0）。
+1. 以当前 HEAD（P1-2 提交）为起点，按 0.3 节复跑构建 + 扩展回归，确认基线（应仍是 1649/0）。
 2. ~~P0-1 宿主控制块~~、~~P0-2 Operation 终态~~：已完成（第 3.4 / 3.5 节）。
    可选收尾：client 侧"旧 host 指针在卸载后安全失败"的专项用例；订阅句柄与
    GraphTypeSlot 旧节点的"代次失效 + 迟到调用"独立用例（机制已具备）。
 3. plugin.md 第 11.2 节剩余用例：5（caller 卸载与 provider 未完成互调）、
    8（shutdown 中挂起后台 Task 的顺序）、9（timeout 后立即 unload）。
-4. P1-1 SDK Request + 统一 root adapter（F13/F19），随后 P1-2 C17 ABI 与导出符号检查。
+4. P1-1 SDK Request + 统一 root adapter（F13/F19）—— 这是 R3 剩下的主体；
+   之后补 P1-2 遗留的 C++ 反例编译测试与导出符号白名单检查。
 5. P1-3 / P1-4 Client 语义模型（renderer cache/动作代次）与注册、启停事务。
 6. P2-1 / P2-2 内置插件与 JS 迁移、平台与文档收尾（含 `docs/zh-cn/design/plugins.md`）。
 
