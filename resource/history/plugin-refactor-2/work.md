@@ -2,8 +2,8 @@
 
 > 事实来源：设计定稿是 `resource/history/plugin-refactor-2/plugin.md`（Reset-v1 方案、R0-R6 阶段、F/P 问题编号、测试矩阵）。本文件只记录进度、提交边界、验证结果和待办；与 plugin.md 冲突时以 plugin.md 为准。
 >
-> 本文件更新时间：2026-09-11（P2-1b 提交，即当前 HEAD）。**状态：Reset-v1 未完成。**
-> 当前重构进度 = 十一个提交：`3a4497ba`（R1-1 Runtime / Operation）、`f861bcf9`（fix-build）、
+> 本文件更新时间：2026-09-11（P2-1c 提交，即当前 HEAD）。**状态：Reset-v1 未完成。**
+> 当前重构进度 = 十二个提交：`3a4497ba`（R1-1 Runtime / Operation）、`f861bcf9`（fix-build）、
 > `b2b5114a`（Operation/Runtime 可靠性、加载事务与关闭、owner 顺序、ABI v1 / SDK 推进）、
 > `c2869f07`（P0-1 宿主控制块 / 迟到调用安全失败 / 注册执行期复查，见第 3.4 节）、
 > `8c717236`（P0-2 Operation 终态与取消线性化，见第 3.5 节）、
@@ -12,7 +12,8 @@
 > P1-4 提交（启用/禁用 start-stop 事务、prompt 贡献模型、依赖级联，见第 3.8 节）、
 > P1-3 提交（Client 工具语义渲染缓存、动作代次、client 侧启停事务与依赖级联，见第 3.9 节）、
 > P2-1a 提交（example_plugin 双端 start/stop 迁移 + SDK client 生命周期导出宏 + 导出符号白名单脚本，见第 3.10 节）、
-> P2-1b 提交（JS Promise 终态映射 / 事件式等待 + 设计文档 Reset-v1 章节，见第 3.11 节）。
+> P2-1b 提交（JS Promise 终态映射 / 事件式等待 + 设计文档 Reset-v1 章节，见第 3.11 节）、
+> P2-1c 提交（多实例可变静态审计 + 文档例外说明，见第 3.12 节）。
 > 工作树在该提交后是**干净的**；本文档自身也已包含在最新提交中。
 > 已完成/待完成对照见第 5、6 节，内容明细见第 3、4 节。
 
@@ -116,7 +117,9 @@ ASAN_OPTIONS=detect_leaks=1:halt_on_error=0 timeout 1500s \
                           (2026-09-11, 7 文件；见第 3.10 节)
 提交 11（P2-1b）重构插件框架-P2-1b JS Promise 终态映射与设计文档更新
                           (2026-09-11, 5 文件；见第 3.11 节)
-工作树          干净（无修改、无 untracked）；origin/main 停在 f861bcf9，提交 3-11 均未推送
+提交 12（P2-1c）重构插件框架-P2-1c 多实例可变静态审计
+                          (2026-09-11, 3 文件；见第 3.12 节)
+工作树          干净（无修改、无 untracked）；origin/main 停在 f861bcf9，提交 3-12 均未推送
 ```
 
 `b2b5114a` 就是此前工作树里的全部增量，代码与验证记录一一对应（未做任何额外改动）；
@@ -466,6 +469,21 @@ Windows 平台 gate（本机无 Windows 工具链，未验证）。
 JS 线程 settle”（当前仍是同步驱动，只是不再把拒绝当成功）；脚本顶层异常的事务化回滚；
 `hookStart` 仍是投递即完成（不等 JS 执行结果）。以上需要重构 JS 执行模型，风险较高，
 留给后续会话。
+
+### 3.12 P2-1c 提交：多实例可变静态审计（R4）
+
+3 文件（`agentxx_javascript_engine.cpp`、`docs/zh-cn/design/plugins.md` + 本文档）。
+要点：
+
+- 审计全部内置插件的可变 `static`（多实例三铁律第 1 条）：
+  - 修复：`agentxx_javascript_engine` 的 `jsCapStart("load")` 活动 op 占位句柄原为
+    函数级 `static int`，改为实例成员 `capOpToken_`（`capOpToken()` 访问器），
+    同一动态库多实例并存时不再共享可变静态存储；
+  - 保留并写入文档例外：`agentxx_filesystem` 的编辑临时文件名序号
+    `static std::atomic<uint64_t> s_editTmpSeq`（只增不减、只用于唯一性，
+    改为每实例计数反而会造成两实例同名临时文件冲突）；
+  - 其余 `static` 均为无状态函数/常量或 `static constexpr`，符合铁律。
+- 文档：`docs/zh-cn/design/plugins.md` 第 3 节补充"进程级单调计数器"唯一例外说明。
 
 ---
 
@@ -962,7 +980,26 @@ QuickJS job，等待谓词会落到下一个定时器（本机实测为 30s 的�
 在 > 0 时 `continue`。日志：`/tmp/p21b-sweep-1.log`（失败排查过程在
 `/tmp/js-fail*.log`）。
 
-### 7.9 `b2b5114a` 的历史验证结果
+### 7.9 P2-1c 提交的回归
+
+```bash
+cmake --build agent/build/linux-debug --target agentxx_test_repo -j12
+agent/build/linux-debug/exec/agentxx_test plugins plugin_multi_instance ffi_c_api --fail-fast
+ASAN_OPTIONS=detect_leaks=1:halt_on_error=0 timeout 1500s \
+  agent/build/linux-debug/exec/agentxx_test \
+  ffi_c_api agent_host subagent_tool subagent_bus plugin_sdk plugin_runtime plugins \
+  plugin_resources plugin_multi_instance client_plugins agent memgrowth --fail-fast
+./agent/script/check_plugin_exports.sh
+```
+
+```text
+合计 1834 passed / 0 failed（exit=0；同上表逐模块结果）
+[check_plugin_exports] OK: 16 plugin libraries export only entry symbols
+```
+
+日志：`/tmp/p21c-sweep-1.log`。
+
+### 7.10 `b2b5114a` 的历史验证结果
 
 以下结果测自 `b2b5114a`（同样为 ASan + LSan、`--fail-fast` 的扩展回归）：
 

@@ -199,6 +199,9 @@ public:
         return engineHost_;
     }
 
+    /// 能力 "load" 的活动 op 占位句柄 (每实例独立; 仅作不透明非空 token)
+    void* capOpToken() { return &capOpToken_; }
+
 private:
 
     /// 宿主 log 接口表缓存 (setEngineHost 装配; 随实例生死)
@@ -979,6 +982,9 @@ private:
     bool                              stop_ = false;
 
     std::chrono::steady_clock::time_point taskStart_;
+
+    /// 能力 "load" 的活动 op 占位 token (宿主只当不透明非空句柄; 每实例独立)
+    int capOpToken_ = 0;
 
     /// 定时器集合版本号: 注册/清除/执行都会递增, 作为等待条件的唤醒依据
     /// (只做"是否变化"判断, 不承载业务语义)
@@ -1891,9 +1897,10 @@ static void* AGENTXX_PLUGIN_CALL jsCapStart(
                 })) {
                 return setErr("interpreter.js engine stopped");
             }
-            // 活动 op 占位 (宿主只等完成通知; execute_poll 留 NULL)
-            static int kCapOpSentinel = 0;
-            return &kCapOpSentinel;
+            // 活动 op 占位 (宿主只等完成通知; execute_poll 留 NULL)。
+            // 用实例成员地址而非函数级 static: 同一动态库多实例并存时
+            // 每个实例各自持有稳定地址, 不共享可变静态存储。
+            return engine->capOpToken();
         }
 
         if (methodStr == "unload") {
